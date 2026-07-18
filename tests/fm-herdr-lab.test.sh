@@ -20,13 +20,34 @@ cat > "$FAKEBIN/herdr" <<'SH'
 set -eu
 printf '%s\n' "$*" >> "$FM_FAKE_HERDR_LOG"
 state=$FM_FAKE_HERDR_STATE
-last=
+
+args=("$@")
+delimiter_index=-1
+idx=0
 for arg in "$@"; do
-  previous=$last
-  last=$arg
+  if [ "$arg" = -- ] && [ "$delimiter_index" -lt 0 ]; then
+    delimiter_index=$idx
+  fi
+  idx=$((idx + 1))
 done
-[ "${previous:-}" = --session ] || { echo "fake herdr: missing trailing --session" >&2; exit 90; }
-session=$last
+
+if [ "$delimiter_index" -ge 0 ]; then
+  before_index=$((delimiter_index - 2))
+  if [ "$before_index" -lt 0 ] || [ "${args[$before_index]}" != --session ]; then
+    echo "fake herdr: --session must sit immediately before the child-argv delimiter" >&2
+    exit 90
+  fi
+  session=${args[$((delimiter_index - 1))]}
+else
+  last=
+  previous=
+  for arg in "$@"; do
+    previous=$last
+    last=$arg
+  done
+  [ "${previous:-}" = --session ] || { echo "fake herdr: missing trailing --session" >&2; exit 90; }
+  session=$last
+fi
 default_socket=$(cat "$state/default-socket")
 lab_state=absent
 [ ! -f "$state/$session" ] || lab_state=$(cat "$state/$session")
@@ -234,6 +255,88 @@ SH
   pass "fm-herdr-lab: timed-out provisioning cancels the launch before teardown"
 }
 
+test_agent_start_places_session_before_delimiter() {
+  local name="fm-lab-agent-start-$$" status=0 call_line before_snapshot after_snapshot
+  : > "$FAKE_LOG"
+  run_with_fake fm_herdr_lab_provision "$name" || fail "provision failed"
+  before_snapshot=$(cat "$TRIPWIRES/$name.fleet-state.json")
+
+  run_with_fake fm_herdr_lab_cli "$name" agent start probe -- claude --model sonnet >/dev/null \
+    || fail "agent start with a child-argv delimiter was refused"
+  call_line=$(grep -F "agent start probe" "$FAKE_LOG")
+  [ "$call_line" = "agent start probe --session $name -- claude --model sonnet" ] \
+    || fail "Herdr did not receive --session immediately before the child-argv delimiter: $call_line"
+
+  after_snapshot=$(FM_HERDR_LAB_STATE_DIR="$TRIPWIRES" run_with_fake fm_herdr_lab_fleet_state "$name")
+  [ "$before_snapshot" = "$after_snapshot" ] \
+    || fail "live-default snapshot changed across the fake agent-start lifecycle"
+
+  run_with_fake fm_herdr_lab_teardown "$name" || fail "teardown after agent start failed"
+  pass "fm-herdr-lab: agent start places --session before the child-argv delimiter and never touches the live default"
+}
+
+test_child_argv_never_receives_session_selector() {
+  local name="fm-lab-child-argv-$$" call_line session_count
+  : > "$FAKE_LOG"
+  run_with_fake fm_herdr_lab_provision "$name" || fail "provision failed"
+  run_with_fake fm_herdr_lab_cli "$name" agent start probe -- echo --session sneaky >/dev/null \
+    || fail "agent start with a child argument that merely contains the word session was refused"
+  call_line=$(grep -F "agent start probe" "$FAKE_LOG")
+  [ "$call_line" = "agent start probe --session $name -- echo --session sneaky" ] \
+    || fail "child argv was altered before reaching Herdr: $call_line"
+  session_count=$(printf '%s\n' "$call_line" | grep -o -- "--session $name" | wc -l | tr -d ' ')
+  [ "$session_count" = 1 ] \
+    || fail "the lab selector leaked into the child argv instead of appearing exactly once before --: $call_line"
+  run_with_fake fm_herdr_lab_teardown "$name" || fail "teardown after child-argv test failed"
+  pass "fm-herdr-lab: a child argv containing the literal string --session passes through untouched instead of being treated as the lab selector"
+}
+
+test_child_argv_own_delimiter_passes_through() {
+  local name="fm-lab-child-delim-$$" call_line
+  : > "$FAKE_LOG"
+  run_with_fake fm_herdr_lab_provision "$name" || fail "provision failed"
+  run_with_fake fm_herdr_lab_cli "$name" agent start probe -- npm run build -- --flag >/dev/null \
+    || fail "agent start with a child command carrying its own -- delimiter was refused"
+  call_line=$(grep -F "agent start probe" "$FAKE_LOG")
+  [ "$call_line" = "agent start probe --session $name -- npm run build -- --flag" ] \
+    || fail "child argv with its own -- was altered before reaching Herdr: $call_line"
+  run_with_fake fm_herdr_lab_teardown "$name" || fail "teardown after child-delimiter test failed"
+  pass "fm-herdr-lab: a child command with its own -- passes through untouched after the first delimiter"
+}
+
+test_unsafe_delimiter_shapes_never_invoke_herdr() {
+  local name="fm-lab-delimiter-shapes-$$" status=0 before after
+  run_with_fake fm_herdr_lab_provision "$name" || fail "provision failed"
+  : > "$FAKE_LOG"
+
+  before=$(wc -l < "$FAKE_LOG")
+  run_with_fake fm_herdr_lab_cli "$name" session list -- probe >/dev/null 2>&1 || status=$?
+  expect_code 1 "$status" "a delimiter on a command other than agent start must be refused"
+  after=$(wc -l < "$FAKE_LOG")
+  [ "$before" = "$after" ] || fail "a non-agent-start delimiter reached Herdr instead of being refused first"
+
+  status=0
+  run_with_fake fm_herdr_lab_cli "$name" agent start probe >/dev/null 2>&1 || status=$?
+  expect_code 1 "$status" "agent start without an explicit child-argv delimiter must be refused"
+  after=$(wc -l < "$FAKE_LOG")
+  [ "$before" = "$after" ] || fail "agent start without a delimiter reached Herdr instead of being refused first"
+
+  status=0
+  run_with_fake fm_herdr_lab_cli "$name" agent start probe -- >/dev/null 2>&1 || status=$?
+  expect_code 1 "$status" "agent start with an empty child command must be refused"
+  after=$(wc -l < "$FAKE_LOG")
+  [ "$before" = "$after" ] || fail "agent start with an empty child command reached Herdr instead of being refused first"
+
+  status=0
+  run_with_fake fm_herdr_lab_cli "$name" agent start --some-flag -- claude >/dev/null 2>&1 || status=$?
+  expect_code 1 "$status" "an option immediately before the child-argv delimiter must be refused"
+  after=$(wc -l < "$FAKE_LOG")
+  [ "$before" = "$after" ] || fail "an option before the delimiter reached Herdr instead of being refused first; a value-taking option could swallow the injected --session"
+
+  run_with_fake fm_herdr_lab_teardown "$name" || fail "teardown after unsafe-shape test failed"
+  pass "fm-herdr-lab: ambiguous or unsafe child-argv shapes are refused before any Herdr call"
+}
+
 test_refuses_unsafe_names
 test_provision_run_and_guarded_teardown
 test_missing_tripwire_blocks_destruction
@@ -241,3 +344,7 @@ test_changed_default_trips_after_teardown
 test_stopped_owned_lab_can_reprovision
 test_failed_delete_retains_tripwire
 test_timed_out_provision_cancels_late_launch
+test_agent_start_places_session_before_delimiter
+test_child_argv_never_receives_session_selector
+test_child_argv_own_delimiter_passes_through
+test_unsafe_delimiter_shapes_never_invoke_herdr
