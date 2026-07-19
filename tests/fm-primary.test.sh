@@ -170,12 +170,22 @@ test_visible_role_marks_only_current_surface() {
 }
 
 test_shim_install_safety() {
-  local shimdir="$TMP_ROOT/shims" out status=0
+  local shimdir="$TMP_ROOT/shims" chain="$TMP_ROOT/relative-chain" out status=0
   out=$(FM_PRIMARY_SHIM_DIR="$shimdir" "$ROOT/bin/fm-primary.sh" --install-shim)
   [ -L "$shimdir/firstmate" ] || fail "opt-in shim was not installed"
   [ "$(readlink "$shimdir/firstmate")" = "$ROOT/bin/fm-primary.sh" ] || fail "shim target is wrong"
-  assert_contains "$(FM_PRIMARY_SHIM_DIR="$shimdir" "$ROOT/bin/fm-primary.sh" --install-shim)" 'already installed' \
-    "exact shim reinstall was not idempotent"
+  out=$(PATH="$FAKEBIN:$PATH" FM_HOME="$HOME_FIX" FM_PRIMARY_DRY_RUN=1 \
+    FM_PRIMARY_TEST_LOG="$LOG" FM_KIMI_SOURCE_HOME="$KIMI_SOURCE" "$shimdir/firstmate" kimi)
+  assert_contains "$out" "root=$ROOT" "installed shim did not launch from the tracked root"
+  assert_contains "$out" 'profile=kimi-k3' "installed shim did not expand the Kimi alias"
+  assert_contains "$out" "'kimi' '--model' 'kimi-code/k3' '--yolo'" \
+    "installed shim did not reach the Kimi primary launch path"
+  mkdir -p "$chain"
+  ln -s "../$(basename "$shimdir")/firstmate" "$chain/firstmate"
+  out=$(PATH="$FAKEBIN:$PATH" FM_HOME="$HOME_FIX" FM_PRIMARY_DRY_RUN=1 "$chain/firstmate" pi)
+  assert_contains "$out" "root=$ROOT" "relative chained shim did not resolve the tracked root"
+  assert_contains "$(FM_PRIMARY_SHIM_DIR="$shimdir" "$shimdir/firstmate" --install-shim)" 'already installed' \
+    "exact shim reinstall through the installed command was not idempotent"
   rm "$shimdir/firstmate"
   printf 'unrelated\n' > "$shimdir/firstmate"
   out=$(FM_PRIMARY_SHIM_DIR="$shimdir" "$ROOT/bin/fm-primary.sh" --install-shim 2>&1) || status=$?

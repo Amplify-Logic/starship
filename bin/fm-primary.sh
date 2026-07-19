@@ -24,11 +24,12 @@
 # They never change config/crew-harness, config/secondmate-harness, dispatch
 # profiles, or fm-spawn's independently verified worker-adapter set.
 #
-# Every launch resolves the repository root from this tracked script, changes
-# to that root, refuses another live Firstmate lock holder, checks the selected
-# CLI and its tracked primary integrations, marks only the current terminal
-# surface, then execs the CLI so sessions persist normally and the CLI exit
-# status is returned with no launcher process left behind.
+# Every launch dereferences up to 40 absolute or relative symlink hops from the
+# invoked command, resolves the repository root from the resulting tracked
+# script, changes to that root, refuses another live Firstmate lock holder,
+# checks the selected CLI and its tracked primary integrations, marks only the
+# current terminal surface, then execs the CLI so sessions persist normally and
+# the CLI exit status is returned with no launcher process left behind.
 #
 # Kimi 0.27.0 is primary-only.
 # The launcher requires that exact empirically verified version and builds a
@@ -51,8 +52,27 @@
 #   as the captain's FIRSTMATE.
 set -u
 
-SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
-FM_ROOT=$(CDPATH='' cd -- "$SCRIPT_DIR/.." && pwd -P)
+resolve_script_path() {
+  local source=$1 dir target hops=0
+  while [ -L "$source" ]; do
+    hops=$((hops + 1))
+    if [ "$hops" -gt 40 ]; then
+      printf 'fm-primary: refusing to resolve more than 40 symlink hops: %s\n' "$1" >&2
+      return 1
+    fi
+    dir=$(CDPATH='' cd -P -- "$(dirname -- "$source")" && pwd -P) || return 1
+    target=$(readlink "$source") || return 1
+    case "$target" in
+      /*) source=$target ;;
+      *) source=$dir/$target ;;
+    esac
+  done
+  printf '%s\n' "$source"
+}
+
+SCRIPT_PATH=$(resolve_script_path "${BASH_SOURCE[0]}") || exit 1
+SCRIPT_DIR=$(CDPATH='' cd -P -- "$(dirname -- "$SCRIPT_PATH")" && pwd -P)
+FM_ROOT=$(CDPATH='' cd -P -- "$SCRIPT_DIR/.." && pwd -P)
 FM_HOME=${FM_HOME:-$FM_ROOT}
 STATE=${FM_STATE_OVERRIDE:-$FM_HOME/state}
 DATA=${FM_DATA_OVERRIDE:-$FM_HOME/data}
