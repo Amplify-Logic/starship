@@ -111,7 +111,33 @@ The classifier deliberately reports `unknown` for `node`/`python`/`python3` rath
 Practical effect: a dead `pi` secondmate is not auto-healed by the liveness sweep today; it is reported as `skipped: liveness probe inconclusive` instead, which still surfaces it for a human to act on.
 Resolving this would need either a `pi`-specific env marker inspectable from outside the process (mirroring `PI_CODING_AGENT=true`, which `bin/fm-harness.sh` already uses for self-detection but which is not readable from a different process without deeper introspection) or accepting the argument-inspection fragility - not attempted here.
 
+### `cursor` resolves the same `node` case through argv (2026-07-19)
+
+`cursor` (Cursor CLI `agent` 2026.07.16-899851b) lands in the same `node` bucket - its `~/.local/bin/agent` wrapper `exec -a`s a bundled Node app, so `pane_current_command` reads `node`:
+
+```
+$ tmux display-message -p -t <pane> '#{pane_current_command}'
+node
+```
+
+Unlike `pi`, it is attributable: `exec -a` rewrites argv[0], but the VERSIONED bundle path survives as an argument, so the pane's own argv carries an unambiguous marker with no child-process walk:
+
+```
+$ ps -o args= -p <pane_pid>
+/Users/.../.local/bin/agent --use-system-ca /Users/.../cursor-agent/versions/2026.07.16-899851b/index.js --yolo
+```
+
+`fm_backend_tmux_agent_alive` therefore inspects argv for the `node` COMM only, returning `alive` on a `cursor-agent` match. This is the "argument introspection" the `pi` gap above declined, applied narrowly where the marker is specific rather than generic. Verified live 2026-07-19 with the dead-shell control unchanged:
+
+```
+comm=node
+agent_alive=alive     # live cursor pane
+shell_verdict=dead    # bare zsh pane, unchanged
+```
+
+Any other bare `node` still returns `unknown`, so the correctness bar above holds: an unresolvable case is never treated as confidently dead. `pi` is unaffected and remains `unknown`.
+
 ## Limitations
 
 None specific to tmux for the reference path itself - it is the fully verified reference backend, while Orca and cmux are the backends without secondmate support.
-The agent-liveness probe above has one known gap (`pi`'s generic `node` process name, see above).
+The agent-liveness probe above has one known gap (`pi`'s generic `node` process name, see above; `cursor` shares the `node` COMM but is resolved through argv).

@@ -162,6 +162,15 @@ fm_backend_tmux_agent_alive() {  # <target>
     '') printf 'unknown' ;;
     *claude*|*codex*|*opencode*|*grok*) printf 'alive' ;;
     zsh|bash|sh|dash|ash|ksh|mksh|tcsh|csh|fish) printf 'dead' ;;
+    node*)
+      # A bare "node" is normally `unknown` (pi's launcher execs into a generic
+      # node with nothing to attribute it back to pi - see "Known gaps"). cursor
+      # is the exception: fm_tmux_pane_is_cursor (bin/fm-tmux-lib.sh) resolves
+      # it through the versioned cursor-agent bundle path that survives in argv
+      # ("exec -a" rewrites argv[0] but the index.js path argument does not).
+      # Anything else with a node COMM stays `unknown` - never inferred dead.
+      if fm_tmux_pane_is_cursor "$target"; then printf 'alive'; else printf 'unknown'; fi
+      ;;
     *) printf 'unknown' ;;
   esac
 }

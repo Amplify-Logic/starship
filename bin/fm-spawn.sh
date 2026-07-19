@@ -33,7 +33,7 @@
 #   profile consultation. A --secondmate spawn is exempt and resolves the SECONDMATE
 #   harness (config/secondmate-harness -> config/crew-harness -> own), so the
 #   secondmate-vs-crewmate split is DURABLE across every respawn (recovery,
-#   /updatefirstmate, restart). A bare adapter name (claude|codex|opencode|pi|grok)
+#   /updatefirstmate, restart). A bare adapter name (claude|codex|opencode|pi|grok|cursor)
 #   overrides it for this spawn (either kind). A non-flag string containing
 #   whitespace is treated as a RAW launch command - the escape hatch for verifying
 #   new adapters.
@@ -297,7 +297,7 @@ FIRSTMATE_HOME=
 
 if [ "$KIND" = secondmate ]; then
   case "${POS[1]:-}" in
-    ''|claude|codex|opencode|pi|grok)
+    ''|claude|codex|opencode|pi|grok|cursor)
       ARG3=${POS[1]:-}
       ;;
     *' '*)
@@ -358,6 +358,20 @@ launch_template() {
     # launch command - it is a Stop-event hook installed below (global hook +
     # per-task pointer), so the template is identical for ship/scout/secondmate.
     grok) printf '%s' 'grok --always-approve __MODELFLAG____EFFORTFLAG__"$(cat __BRIEF__)"' ;;
+    # cursor (Cursor CLI, the `agent` binary): a positional prompt starts the
+    # supervised interactive session. --yolo (alias of --force, "Run Everything")
+    # auto-approves every tool execution, verified to run fully unattended; it is
+    # the targeted equivalent of claude's --dangerously-skip-permissions.
+    # --workspace pins the workspace to the task worktree so the agent can never
+    # resolve a different root, and NO -w/--worktree flag is passed: worktree
+    # allocation is strictly opt-in on this CLI, so firstmate's own isolated copy
+    # stays the only one (verified 2026-07-19: ~/.cursor/worktrees gained no entry
+    # across every launch). cursor's turn-end signal does NOT ride the launch
+    # command - it is a `stop` hook in <worktree>/.cursor/hooks.json written
+    # below, so the template is identical for ship/scout/secondmate.
+    # Effort is folded into the MODEL ID by cursor_model_with_effort (this CLI has
+    # no effort flag), so there is no __EFFORTFLAG__ here by design.
+    cursor) printf '%s' 'agent --yolo --workspace __WORKTREE__ __MODELFLAG__"$(cat __BRIEF__)"' ;;
     *) return 1 ;;
   esac
 }
@@ -441,11 +455,36 @@ shell_quote() {
   printf "'"
 }
 
+# cursor_model_with_effort: cursor is the one verified adapter with NO effort
+# flag - the Cursor CLI encodes reasoning effort as a SUFFIX on the model id
+# (cursor-grok-4.5-low|-medium|-high), verified 2026-07-19 on Cursor CLI
+# 2026.07.16-899851b. So the effort axis is resolved into the model id here
+# rather than emitted as a flag.
+# An explicit model that ALREADY carries a tier suffix wins and effort is left
+# out of the launch (still recorded in meta), so a captain naming an exact model
+# id is never silently retiered. xhigh and max have no cursor equivalent, so they
+# cap at high per the harness-adapters effort-fallback rule rather than being
+# dropped silently.
+cursor_model_with_effort() {  # <model> <effort>
+  local model=$1 effort=$2 tier
+  [ -n "$model" ] && [ "$model" != default ] || return 0
+  case "$model" in
+    *-low|*-medium|*-high|*-low-fast|*-medium-fast|*-high-fast|*'['*)
+      printf '%s' "$model"; return 0 ;;
+  esac
+  case "$effort" in
+    low|medium|high) tier=$effort ;;
+    xhigh|max) tier=high ;;
+    *) printf '%s' "$model"; return 0 ;;
+  esac
+  printf '%s-%s' "$model" "$tier"
+}
+
 model_flag_for_harness() {
   local harness=$1 model=$2
   [ -n "$model" ] && [ "$model" != default ] || return 0
   case "$harness" in
-    claude|codex|opencode|pi|grok)
+    claude|codex|opencode|pi|grok|cursor)
       printf -- '--model %s ' "$(shell_quote "$model")"
       ;;
   esac
@@ -952,6 +991,27 @@ EOF
     codex*)
       # codex: turn-end rides the launch command via -c notify=[...] and __TURNEND__.
       ;;
+    cursor*)
+      # cursor fires a `stop` hook at every turn boundary (verified live
+      # 2026-07-19 on Cursor CLI 2026.07.16-899851b: two turns produced exactly
+      # two hook invocations). Unlike grok, PROJECT hooks need no separate
+      # hook-trust grant beyond the workspace trust the spawn already clears, so
+      # the per-task hook stays inside the worktree - the least invasive accurate
+      # mechanism, with no global file and no write into the captain's ~/.cursor.
+      #
+      # WARNING (verified from the shipped bundle): cursor ALSO ingests
+      # claude-format hooks from .claude/settings.json and .claude/settings.local.json,
+      # mapping claude's `Stop` onto its own `stop`. The worktree is disposable and
+      # firstmate only writes .claude/settings.local.json for a claude spawn, so the
+      # two never collide per task - but never launch cursor from the firstmate
+      # PRIMARY checkout, whose .claude/settings.json Stop hook would then run
+      # firstmate's own turn-end guard inside a worker session.
+      mkdir -p "$WT/.cursor"
+      cat > "$WT/.cursor/hooks.json" <<EOF
+{"version":1,"hooks":{"stop":[{"type":"command","command":"touch '$TURNEND'"}]}}
+EOF
+      exclude_path '.cursor/hooks.json'
+      ;;
     grok*)
       # grok fires a Stop hook at every turn boundary (verified, grok 0.2.73), the
       # clean equivalent of codex's notify= and pi's turn_end. But grok only loads
@@ -1077,8 +1137,15 @@ sq_turnend=$(shell_quote "$TURNEND")
 sq_piext=$(shell_quote "$STATE/$ID.pi-ext.ts")
 sq_piturnend=$(shell_quote "$PROJ_ABS/.pi/extensions/fm-primary-turnend-guard.ts")
 sq_piwatch=$(shell_quote "$PROJ_ABS/.pi/extensions/fm-primary-pi-watch.ts")
-MODELFLAG=$(model_flag_for_harness "$HARNESS" "$MODEL")
+# cursor has no effort flag: fold the effort axis into the model id before the
+# model flag is rendered (see cursor_model_with_effort).
+LAUNCH_MODEL=$MODEL
+if [ "$HARNESS" = cursor ]; then
+  LAUNCH_MODEL=$(cursor_model_with_effort "$MODEL" "$EFFORT")
+fi
+MODELFLAG=$(model_flag_for_harness "$HARNESS" "$LAUNCH_MODEL")
 EFFORTFLAG=$(effort_flag_for_harness "$HARNESS" "$EFFORT")
+LAUNCH=${LAUNCH//__WORKTREE__/$(shell_quote "$WT")}
 LAUNCH=${LAUNCH//__MODELFLAG__/$MODELFLAG}
 LAUNCH=${LAUNCH//__EFFORTFLAG__/$EFFORTFLAG}
 LAUNCH=${LAUNCH//__BRIEF__/$sq_brief}

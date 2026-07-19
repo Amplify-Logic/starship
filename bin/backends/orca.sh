@@ -263,7 +263,7 @@ fm_backend_orca_read_text_paged() {  # <terminal-id> <limit>
 }
 
 FM_BACKEND_ORCA_COMPOSER_LINES=${FM_BACKEND_ORCA_COMPOSER_LINES:-200}
-FM_BACKEND_ORCA_IDLE_RE=${FM_BACKEND_ORCA_IDLE_RE:-'^Type a message\.\.\.$'}
+FM_BACKEND_ORCA_IDLE_RE=${FM_BACKEND_ORCA_IDLE_RE:-$FM_COMPOSER_IDLE_RE_DEFAULT}
 
 # fm_backend_orca_composer_state: classify the composer's own bordered row as
 # empty|pending|unknown. Real text stays pending, including a slash-command

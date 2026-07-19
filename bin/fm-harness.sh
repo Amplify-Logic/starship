@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Detect the agent harness this process tree runs on.
-# Usage: fm-harness.sh                  print own harness: claude|codex|opencode|pi|grok|kimi|unknown
+# Usage: fm-harness.sh                  print own harness: claude|codex|opencode|pi|grok|kimi|cursor|unknown
 #        fm-harness.sh crew             print the effective CREWMATE harness
 #                                        (config/crew-harness; "default" resolves to own)
 #        fm-harness.sh secondmate       print the harness the PRIMARY uses to launch
@@ -32,6 +32,15 @@ detect_own() {
   # fm-primary.sh injects this stable child-process marker because Kimi 0.27.0
   # does not publish an unambiguous native marker of its own.
   [ "${FM_PRIMARY_HARNESS:-}" = "kimi" ] && { echo kimi; return; }
+  # cursor (Cursor CLI, the `agent` binary) sets CURSOR_AGENT=1 for its child/tool
+  # processes (verified 2026-07-19 on 2026.07.16-899851b via `env` inside a cursor
+  # shell call). This MUST be tested before CLAUDECODE: cursor is
+  # claude-compatible and does not clear an INHERITED CLAUDECODE=1, so a cursor
+  # worker spawned from a firstmate running on claude sees both markers, and
+  # CLAUDECODE-first would misreport that pane as claude. CURSOR_AGENT is only
+  # ever set by cursor itself, so cursor-first is the unambiguous order.
+  # cursor is a WORKER-only adapter; see the harness-adapters skill.
+  [ "${CURSOR_AGENT:-}" = "1" ] && { echo cursor; return; }
   [ "${CLAUDECODE:-}" = "1" ] && { echo claude; return; }
   [ "${PI_CODING_AGENT:-}" = "true" ] && { echo pi; return; }
   # grok sets GROK_AGENT=1 for its child/tool processes (verified, grok 0.2.73).
@@ -53,6 +62,9 @@ detect_own() {
         # Bare interpreter: match the harness name in its script path.
         args=$(ps -o args= -p "$pid" 2>/dev/null)
         case "$args" in
+          # Matched before *claude*: the cursor-agent bundle path is the specific
+          # signal, and a cursor process tree can carry claude-compatible paths.
+          *cursor-agent*) echo cursor; return ;;
           *claude*) echo claude; return ;;
           *codex*) echo codex; return ;;
           *opencode*) echo opencode; return ;;

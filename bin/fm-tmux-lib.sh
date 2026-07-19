@@ -48,8 +48,14 @@
 
 # Busy footers per harness (mirror fm-watch.sh). claude/codex: "esc to
 # interrupt"; opencode: "esc interrupt"; pi: "Working..."; grok: "Ctrl+c:cancel"
-# (grok's mid-turn cancel hint, shown iff a turn is running - verified grok 0.2.73).
-FM_TMUX_BUSY_REGEX_DEFAULT='esc (to )?interrupt|Working\.\.\.|Ctrl\+c:cancel'
+# (grok's mid-turn cancel hint, shown iff a turn is running - verified grok 0.2.73);
+# cursor: "ctrl+c to stop" (verified 2026-07-19, Cursor CLI 2026.07.16-899851b).
+# cursor's SPINNER VERB is deliberately NOT matched: it changes with the phase
+# ("Working" while reasoning, "Running" during a tool call), so matching the verb
+# reads a tool-executing pane as idle and trips premature stale detection. The
+# footer hint is the phase-stable, ASCII, locale-safe signal, and it is absent
+# when idle.
+FM_TMUX_BUSY_REGEX_DEFAULT='esc (to )?interrupt|Working\.\.\.|Ctrl\+c:cancel|ctrl\+c to stop'
 
 # fm_tmux_strip_ghost: thin adapter over the shared, fleet-wide ghost extractor
 # fm_composer_strip_ghost (bin/fm-composer-lib.sh). It drops de-emphasised
@@ -85,10 +91,73 @@ fm_tmux_strip_ghost() { fm_composer_strip_ghost; }
 # (bin/fm-composer-lib.sh). The bordered flag is what lets a bordered `│ > │`
 # (claude's own idle composer) read empty while a bare, unbordered `$ ` dead-shell
 # prompt reads unknown.
+# fm_tmux_pane_is_cursor: 0 iff <target>'s foreground process is POSITIVELY
+# identified as the Cursor CLI. Cursor's ~/.local/bin/agent wrapper execs a
+# bundled Node app, so the pane COMM is a bare "node"; the versioned
+# cursor-agent bundle path survives in argv (verified 2026-07-19, Cursor CLI
+# 2026.07.16-899851b: `ps -o args=` shows .../cursor-agent/versions/<v>/index.js
+# while pane_current_command reads "node"). This is the same marker
+# fm_backend_tmux_agent_alive (bin/backends/tmux.sh) resolves liveness through.
+# An unreadable pane or an unmatched argv is NOT cursor - identification fails
+# toward the generic (non-cursor) path.
+fm_tmux_pane_is_cursor() {  # <target>
+  local target=$1 comm pid args
+  comm=$(tmux display-message -p -t "$target" '#{pane_current_command}' 2>/dev/null) || return 1
+  comm=${comm#-}
+  case "$comm" in node*) ;; *) return 1 ;; esac
+  pid=$(tmux display-message -p -t "$target" '#{pane_pid}' 2>/dev/null) || return 1
+  [ -n "$pid" ] || return 1
+  args=$(ps -o args= -p "$pid" 2>/dev/null) || return 1
+  case "$args" in *cursor-agent*) return 0 ;; esac
+  return 1
+}
+
+# fm_tmux_cursor_composer_row: 0-indexed row of a cursor (Cursor CLI) composer,
+# found STRUCTURALLY rather than through tmux's #{cursor_y}. Prints nothing when
+# <target> is not a positively-identified cursor pane, or when the pane holds no
+# cursor composer.
+#
+# WHY (verified 2026-07-19, Cursor CLI 2026.07.16-899851b, tmux 3.6a): cursor
+# parks the terminal cursor in its bottom status area, NOT in the composer. A
+# pane with "→ some real unsubmitted text" on row 15 reported #{cursor_y}=20 (the
+# cwd/status row). Reading the cursor_y row therefore finds an EMPTY status line
+# and classifies a composer holding real unsubmitted text as `empty` - a
+# FALSE-EMPTY, which is the dangerous direction: bin/fm-supervise-daemon.sh reads
+# emptiness to pick a safe injection target, so an away-mode escalation would be
+# typed on top of text already sitting in the composer. This is the same
+# cursor_y-row-selection class as the grok residual gap documented in the
+# harness-adapters skill, but several rows off instead of one.
+#
+# cursor always draws its composer as a "→ " prefixed row (both the idle
+# placeholder and real typed input), so the last such row is the composer. This
+# mirrors the herdr adapter's structural composer scan, which is why herdr is
+# unaffected by the same quirk.
+#
+# SCOPE: the scan runs ONLY on a pane fm_tmux_pane_is_cursor positively
+# identifies. Other harnesses' OUTPUT may legitimately contain "→ "-prefixed
+# lines (e.g. arrow bullets in a claude answer), and an unscoped scan would
+# redirect classification from the real (empty) composer onto that output row -
+# a false-pending that defers away-mode escalations and makes fm-send report a
+# swallowed Enter. Every non-cursor or unidentifiable pane keeps the plain
+# #{cursor_y} behaviour.
+fm_tmux_cursor_composer_row() {  # <target>
+  local target=$1 plain n
+  fm_tmux_pane_is_cursor "$target" || return 0
+  plain=$(tmux capture-pane -p -t "$target" 2>/dev/null) || return 0
+  n=$(printf '%s\n' "$plain" | grep -nE '^[[:space:]]*→ ' | tail -1 | cut -d: -f1)
+  [ -n "$n" ] || return 0
+  printf '%s' "$((n - 1))"
+}
+
 fm_tmux_composer_state() {  # <target> -> empty|pending|unknown
-  local target=$1 cy raw plain stripped bordered=0
+  local target=$1 cy raw plain stripped bordered=0 crow
   cy=$(tmux display-message -p -t "$target" '#{cursor_y}' 2>/dev/null) || { printf 'unknown'; return 0; }
   case "$cy" in ''|*[!0-9]*) printf 'unknown'; return 0 ;; esac
+  # cursor's composer is not on the cursor_y row (see above): prefer its
+  # structurally-located row. The scan is scoped to positively-identified
+  # cursor panes, so every other harness keeps the cursor_y row untouched.
+  crow=$(fm_tmux_cursor_composer_row "$target")
+  [ -z "$crow" ] || cy=$crow
   raw=$(tmux capture-pane -e -p -t "$target" -S "$cy" -E "$cy" 2>/dev/null) || { printf 'unknown'; return 0; }
   # bordered: from the plain row (borders survive an all-ANSI strip).
   plain=$(printf '%s\n' "$raw" | fm_composer_strip_ansi)
@@ -114,7 +183,7 @@ fm_tmux_composer_state() {  # <target> -> empty|pending|unknown
      && printf '%s' "$stripped" | grep -qiE "${FM_BUSY_REGEX:-$FM_TMUX_BUSY_REGEX_DEFAULT}"; then
     printf 'empty'; return 0
   fi
-  fm_composer_classify_content "$bordered" "$stripped" "${FM_COMPOSER_IDLE_RE:-}" insensitive "$plain"
+  fm_composer_classify_content "$bordered" "$stripped" "${FM_COMPOSER_IDLE_RE:-$FM_COMPOSER_IDLE_RE_DEFAULT}" insensitive "$plain"
 }
 
 # fm_pane_input_pending: 0 (pending) if the cursor line holds real unsubmitted

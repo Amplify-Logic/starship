@@ -159,6 +159,18 @@ fm_composer_strip_ghost() {
   '
 }
 
+# FM_COMPOSER_IDLE_RE_DEFAULT: the fleet-wide default idle-placeholder regex, one
+# alternation covering every verified harness that renders placeholder text in an
+# otherwise-empty composer. A harness only ever draws its OWN placeholder, so a
+# shared alternation is safe and keeps the four adapters from drifting into
+# per-backend copies (the drift this owner exists to stop).
+#   grok:   "Type a message..."
+#   cursor: "Add a follow-up" after a completed turn, "Plan, search, build
+#           anything" in a fresh session; both rendered after a "→ " glyph that
+#           fm_composer_classify_content's prompt-glyph strip does not cover.
+# Verified live 2026-07-19 against grok 0.2.103 and Cursor CLI 2026.07.16-899851b.
+FM_COMPOSER_IDLE_RE_DEFAULT=${FM_COMPOSER_IDLE_RE_DEFAULT:-'^Type a message\.\.\.$|^(→ )?(Add a follow-up|Plan, search, build anything)$'}
+
 # fm_composer_classify_content: the single shared composer-content verdict.
 #   <bordered> 1 when <content> came from a genuine agent-composer container (a
 #              bordered composer box, or a structurally-identified bare AGENT
@@ -169,7 +181,19 @@ fm_composer_strip_ghost() {
 #   [idle_re]  optional per-harness idle-placeholder regex (e.g. grok's
 #              "Type a message...") that reads as empty; matched both before and
 #              after a leading prompt glyph is stripped, so a pattern written
-#              with or without the glyph both land.
+#              with or without the glyph both land. It is ALSO matched against
+#              <plain_content>, because a harness may style its placeholder so
+#              that part of it survives ghost-stripping: cursor draws the
+#              terminal cursor as a REVERSE-VIDEO cell (SGR 7) over the
+#              placeholder's FIRST character, and reverse video is neither
+#              dim/faint nor a dark foreground, so fm_composer_strip_ghost keeps
+#              that one bright character. An idle cursor composer therefore
+#              reduces to a lone "A" (from "Add a follow-up") and would classify
+#              as `pending` - every idle cursor pane permanently deferring
+#              away-mode escalations, the exact wedge this owner exists to
+#              prevent. Matching the placeholder on the PLAIN row is the
+#              styling-independent signal. See docs/cursor-harness.md
+#              (2026-07-19) for the captured escape sequence.
 fm_composer_idle_matches() {
   local content=$1 idle_re=$2 idle_case=$3
   [ -n "$idle_re" ] || return 1
@@ -203,6 +227,12 @@ fm_composer_classify_content() {  # <bordered> <content> [idle_re] [idle_case] [
   [ -n "$content" ] || { printf 'empty'; return 0; }
   # Known idle placeholder (matched before a leading glyph is stripped).
   if fm_composer_idle_matches "$content" "$idle_re" "$idle_case"; then
+    printf 'empty'; return 0
+  fi
+  # Same placeholder, matched against the PLAIN row: covers a harness whose
+  # placeholder styling leaves a fragment behind after ghost-stripping (cursor's
+  # reverse-video cursor cell; see the header note).
+  if fm_composer_idle_matches "$plain_content" "$idle_re" "$idle_case"; then
     printf 'empty'; return 0
   fi
   # Strip a leading prompt glyph, then re-judge the remainder.
