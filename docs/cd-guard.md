@@ -74,9 +74,10 @@ It does not permit `cd /home/project`, because an absolute-path `cd` remains a p
 
 ## Transport and fail-open behavior
 
-`bin/fm-cd-pretool-check.sh` supports all five harness entry shapes used by the tracked adapters:
+`bin/fm-cd-pretool-check.sh` supports all six primary harness entry shapes used by the tracked adapters:
 
 - Claude sends stdin JSON at `.tool_input.command` and adds `--claude` to preserve Claude's stderr-only deny requirement.
+- Kimi sends the same snake-case stdin shape at `.tool_input.command`; its managed primary plugin uses the same stderr-only `--claude` transport because Kimi also blocks on exit 2.
 - Codex sends stdin JSON at `.tool_input.command` without `--claude`.
 - Grok sends stdin JSON at `.toolInput.command`.
 - OpenCode sends the exact command string through `--command <exact string>`.
@@ -113,6 +114,7 @@ The cd-guard never duplicates shell lexing; it adds only the cd-specific decisio
 | Harness | Entry | Adapter behavior on checker exit 2 |
 | --- | --- | --- |
 | Claude | `.claude/settings.json` PreToolUse Bash hook forwarding stdin with `--claude` | Blocks the tool call; stderr deny object, stdout empty. |
+| Kimi | Managed primary plugin PreToolUse Bash hook forwarding stdin with `--claude` | Blocks the tool call; the stderr deny object enters model context, stdout empty. |
 | Codex | `.codex/hooks.json` PreToolUse hook that anchors from `pwd -P`, verifies the hook-loaded firstmate root, and forwards the payload | Blocks on exit 2 and displays stderr. |
 | Grok | `.grok/hooks/fm-primary-cd-check.json` PreToolUse hook anchored on `${GROK_WORKSPACE_ROOT:-}` | Consumes the stdout `decision=deny` object. |
 | OpenCode | `.opencode/plugins/fm-primary-cd-check.js` `tool.execute.before` | Throws, which surfaces as the failed tool result. |
@@ -126,6 +128,7 @@ Every shell variable reference in the Grok hook command carries an inline defaul
 `tests/fm-cd-pretool-check.test.sh` owns the acceptance matrix.
 Every block and allow case runs through Codex-shaped stdin, Claude-shaped stdin, Grok-shaped stdin, OpenCode-shaped CLI, and Pi-shaped CLI entry forms.
 The suite also proves the end-to-end cwd-leak regression (a firstmate-owned backlog write leaking into a project clone, then denied at the exact command), the checkout scoping (fires in a git-cloned secondmate fixture, inert in a crewmate/scout linked worktree, inert outside a firstmate checkout, inert outside a git repo), the fail-open transport behavior, the prefilter fast path, the policy CLI output contract, and the per-harness wiring.
+`tests/fm-primary.test.sh` verifies that the managed Kimi plugin registers the shared Claude-shaped checker as a blockable PreToolUse hook.
 
 Run:
 
@@ -161,3 +164,23 @@ OPENCODE_CONFIG_CONTENT='{"permission":{"*":"allow"}}' opencode run --print-logs
 pi -p -e .pi/extensions/fm-primary-turnend-guard.ts --no-context-files --no-session "$PROMPT"
 grok --trust -p "$PROMPT" --permission-mode bypassPermissions --output-format plain
 ```
+
+## Kimi Code 0.27.0 live validation, 2026-07-19
+
+The Kimi check used a plain scratch Firstmate clone, an isolated Kimi home, and a named non-default Herdr lab.
+The plain-clone shape matters because this guard is intentionally inert in a linked crewmate worktree.
+
+Kimi issued this exact Bash call:
+
+```sh
+cd /tmp
+```
+
+The persisted wire recorded the exact call and tool result:
+
+```json
+{"name":"Bash","args":{"command":"cd /tmp"}}
+{"output":"{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\"},\"systemMessage\":\"[persistent-cd] a persistent top-level directory change in the primary firstmate checkout is blocked; it would move the shell out of the home so a later firstmate-owned command runs inside a project clone. Reach the target without moving the shell - use git -C <dir> or an absolute path on the command itself - or scope the cd to a subshell like (cd <dir> && ...).\"}","isError":true}
+```
+
+The Kimi TUI labeled the call as failed, and the model reported the `persistent-cd` deny without retrying through another command shape.

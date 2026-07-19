@@ -46,7 +46,7 @@ The default path remains local-only; live GitHub enrichment exists only behind t
 Optional X mode integrates with the watcher only after explicit opt-in; [configuration.md](configuration.md#x-mode-env) owns its generated-artifact and dispatch mechanics.
 
 At session start, `bin/fm-session-start.sh` emits exactly one primary-harness supervision block rendered by `bin/fm-supervision-instructions.sh` from `docs/supervision-protocols/`.
-That block owns the live wait shape for the running primary harness: Claude and Grok use background-notify cycles, Codex uses bounded foreground checkpoints, Pi uses its two tracked primary extensions, and OpenCode uses its TUI plugin.
+That block owns the live wait shape for the running primary harness: Claude, Grok, and Kimi use background-notify cycles, Codex uses bounded foreground checkpoints, Pi uses its two tracked primary extensions, and OpenCode uses its TUI plugin.
 `bin/fm-watch-arm.sh` remains the verified arm wrapper for protocols that call it; it forks the watcher as a tracked child, verifies it is genuinely alive with a fresh liveness beacon, and prints exactly one honest status line (`started` / `attached` / restart-only `healthy` / `FAILED`, the last exiting non-zero).
 On `attached` it stays live until that existing cycle ends so background-notify harnesses do not get an empty false wake from a healthy no-op exit.
 Its `--restart` mode signals only the watcher recorded in the current home's `state/.watch.lock`, so restarting one home cannot kill sibling secondmate watchers.
@@ -54,6 +54,7 @@ A pull-based guard (`bin/fm-guard.sh`) warns through supervision tool output if 
 The drain script calls that guard after emptying the queue, which avoids repeating the queued-wakes warning for records it just consumed while still warning on stale watcher liveness.
 It leads with a prominent bordered tangle banner, while `bin/fm-guard.sh` owns the stale-watcher banner/reminder policy so repeated guarded commands stay noisy without reprinting the full watcher-down banner in the same episode.
 On every verified primary harness, tracked hook integration gives the primary session a push-based backstop: when work is in flight and no identity-matched watcher lock with a fresh beacon is live, direct Stop hooks block and passive turn-end hooks force one bounded follow-up.
+Kimi's managed primary plugin uses a blockable native Stop hook and a background Bash completion notification for the normal wake path.
 The guard covers the main primary and genuinely marked secondmate homes, exempts child crewmate/scout worktrees, is loop-safe per harness, and is documented in [turnend-guard.md](turnend-guard.md).
 
 A presence-gated sub-supervisor (`bin/fm-supervise-daemon.sh`) extends this for walk-away supervision: the `/afk` skill starts it through the tracked foreground helper `bin/fm-afk-start.sh`, after which the watcher reverts to daemon-managed one-shot mode and the daemon self-handles routine wakes in bash.
@@ -68,6 +69,68 @@ Unsupported supervisor backends refuse at daemon startup.
 Stalled escalation delivery writes `state/.subsuper-inject-wedged` and attempts a configured backend-independent active alert after `FM_MAX_DEFER_SECS` instead of silently deferring forever.
 On an unmarked return, `bin/fm-afk-return.sh` owns ordered shutdown, durable catch-up evidence, and the fail-closed gate that keeps ordinary work behind every live firstmate-actionable blocker.
 `fm-send.sh` selects a pre-Enter popup-settle for slash commands and for codex `$...` skill invocations using metadata-routed target `harness=` values, then adds its own `FM_SEND_SETTLE` pause after successful text sends so immediate peeks catch the receiving turn starting; the sub-supervisor uses only the shared submit core and does not pay that post-submit pause.
+
+### Kimi primary validation record, 2026-07-19
+
+Kimi Code 0.27.0 was validated as a primary only, using Herdr 0.7.4 in a generated non-default session, isolated Firstmate and Kimi homes, and a plain scratch clone.
+Every operator Herdr call used the landed `bin/fm-herdr-lab.sh`; no probe ran in the captain's `default` session.
+Kimi worker support was not tested or enabled.
+
+The installed CLI advertised these exact permission choices:
+
+```text
+-y, --yolo  Automatically approve all actions.
+--auto      Start in auto permission mode.
+```
+
+The primary launched through `bin/fm-primary.sh kimi-k3`, and the TUI showed `Model: K3`, `Version: 0.27.0`, and `yolo`.
+No safer full-bypass flag was advertised, so the profile uses `--yolo` rather than inferring behavior from `--auto`.
+The launcher-exported `FM_PRIMARY_HARNESS=kimi` marker survived into Bash children: `bin/fm-harness.sh` printed `kimi`, and `bin/fm-lock.sh status` printed `lock: held by live harness pid 66965` in the first isolated run.
+The model also loaded the root `AGENTS.md`, followed its captain-address and skill-loading instructions, and ran the one-shot session start before answering.
+
+The real dispatch command was:
+
+```sh
+bin/fm-spawn.sh kimi-worker-e2e "$FM_HOME/projects/kimi-worker-lab" --harness codex --backend herdr
+```
+
+Its exact safe spawn fields were:
+
+```text
+harness=codex
+kind=ship
+mode=local-only
+backend=herdr
+herdr_session=fm-lab-firstmate-kimi-p-62465-19108
+```
+
+The Codex worker ran in a Treehouse worktree distinct from the project root, accepted its first-run trust dialog, left the project clean, and wrote:
+
+```text
+working: isolated Kimi-primary dispatch probe
+done: isolated worker completed without project changes
+```
+
+The already-armed Kimi watcher delivered that status through a background-task completion notification.
+Kimi drained the wake, reconciled `state: done · source: status-log · isolated worker completed without project changes`, and then answered a new captain input with exactly `RESPONSIVE_AFTER_WAKE`.
+Guarded `fm-teardown.sh kimi-worker-e2e` removed the metadata, returned the clean worktree, terminated the Codex process, and made the recorded endpoint return `agent_not_found`.
+
+Foreground Kimi turns produced Herdr `working` and `idle` events around actual submission and settlement.
+Herdr status is activity reporting only for Kimi: a live background Bash task can keep activity working, and `agent_session` can lag after `/new` or `/sessions` changes the in-process Kimi session.
+Support was therefore established from persisted Kimi context records, hook results, watcher notifications, process inspection, and model behavior, never from Herdr status alone.
+
+`ctrl+c` interrupted a live `sleep 60` Bash call and the TUI printed `Interrupted by user` without exiting the primary.
+`/exit` closed the pane, left no Kimi child or launcher helper process, and changed the isolated lock status to `stale (pid 13478 dead or not a harness)`.
+A fresh launcher invocation accepted that stale lock, `/sessions` resumed the durable session, and session start ran under a new Kimi pid before the model returned `REOPEN_RESUME_OK`.
+
+The teardown tripwire's final exact safe session summary was:
+
+```text
+[{"name":"default","default":true,"running":true}]
+lab_absent_default_invariant
+```
+
+The focused hook evidence is recorded in [arm-pretool-check.md](arm-pretool-check.md), [cd-guard.md](cd-guard.md), [sessionstart-nudge.md](sessionstart-nudge.md), and [turnend-guard.md](turnend-guard.md).
 
 ## Runtime session backends
 

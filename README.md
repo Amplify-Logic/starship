@@ -58,7 +58,7 @@ Full detail on every feature lives in [docs/architecture.md](docs/architecture.m
 
 ### Requirements
 
-- A verified agent harness: Claude Code, Grok, Pi, Codex, or OpenCode.
+- A verified agent harness: Claude Code, Grok, Pi, Codex, OpenCode, or Kimi Code as a primary-only runtime.
 - Git and the GitHub CLI, authenticated through `gh auth login`.
 - tmux, for the reference session backend.
 
@@ -72,6 +72,7 @@ All three have verified turn-end guard paths when launched with their documented
 Pick whichever one matches your subscription and workflow.
 
 Codex and OpenCode are also verified and supported as primary harnesses; Codex uses bounded foreground checkpoints, and OpenCode uses a TUI plugin, so both carry more harness-specific supervision tradeoffs than the three co-primaries.
+Kimi Code 0.27.0 is verified as a primary-only runtime pinned to K3; it is not an `fm-spawn` worker adapter.
 
 ### Install and launch
 
@@ -81,7 +82,20 @@ git clone https://github.com/kunchenguid/firstmate
 cd firstmate
 ```
 
-Then launch one of the co-primary harnesses; AGENTS.md takes over from there:
+The guarded profile launcher owns convenient primary aliases and automatic permission bypass:
+
+```sh
+bin/fm-primary.sh pi
+bin/fm-primary.sh claude-fable
+bin/fm-primary.sh codex
+bin/fm-primary.sh kimi-k3
+```
+
+`bin/fm-primary.sh --help` is the single owner of every profile's exact flags, including the other verified OpenCode and Grok primaries.
+`bin/fm-primary.sh --install-shim` can expose `firstmate <profile>` through `~/.local/bin`; it refuses to replace any different file or symlink.
+The launcher resolves this tracked root from its own path, refuses another live Firstmate session, and keeps worker selection independent.
+
+Existing direct launch commands remain supported; AGENTS.md takes over from there:
 
 **Claude Code**
 
@@ -192,7 +206,7 @@ Firstmate's skills live in two separate places with different audiences:
 - [docs/cmux-backend.md](docs/cmux-backend.md) - setup guide for the experimental cmux backend, plus its verification notes and known gaps.
 - [docs/codex-app-backend.md](docs/codex-app-backend.md) - Codex App backend boundary, evidence, and rollout contract.
 - [docs/turnend-guard.md](docs/turnend-guard.md) - the primary session's structural "no turn ends blind" backstop: verified per-harness hook mechanisms, scoping, loop safety, and fail-open tradeoffs.
-- [docs/supervision-protocols/](docs/supervision-protocols/) - rendered primary-harness watcher protocols for Claude, Codex, OpenCode, Pi, Grok, and unknown harness fallback.
+- [docs/supervision-protocols/](docs/supervision-protocols/) - rendered primary-harness watcher protocols for Claude, Codex, OpenCode, Pi, Grok, Kimi, and unknown harness fallback.
 - [docs/scripts.md](docs/scripts.md) - the `bin/` toolbelt reference.
 - [`AGENTS.md`](AGENTS.md) - the distro's always-loaded operating contract and routing index for conditional procedures.
 - [CONTRIBUTING.md](CONTRIBUTING.md) - how to contribute, including the dev/test commands.

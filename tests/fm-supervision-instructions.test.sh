@@ -91,6 +91,19 @@ test_grok_command_sources_effective_config() {
   pass "grok rendered command sources the effective x-mode config"
 }
 
+test_kimi_is_background_notify_without_worker_dispatch() {
+  local out
+  out=$("$RENDER" --harness kimi)
+  assert_contains "$out" "Mode: Kimi background-notify supervision." "Kimi snippet missing"
+  assert_contains "$out" 'run_in_background=true' "Kimi snippet lacks its native background Bash task"
+  assert_contains "$out" 'disable_timeout=true' "Kimi watcher task is not persistent"
+  assert_contains "$out" 'synthetic User notification' "Kimi completion wake delivery is undocumented"
+  assert_contains "$out" "not Kimi's Agent or AgentSwarm" "Kimi primary supervision accidentally implies worker dispatch support"
+  out=$("$RENDER" --harness kimi --repair-line)
+  assert_contains "$out" 'Kimi Bash tool call' "Kimi repair line does not name the verified mechanism"
+  pass "kimi supervision uses background Bash completion notify without claiming Kimi worker support"
+}
+
 test_pi_snippet_uses_effective_extension_path() {
   local home out turnend watch
   home="$TMP_ROOT/pi-home"
@@ -113,4 +126,5 @@ test_conditional_stanzas
 test_repair_lines
 test_grok_is_background_notify
 test_grok_command_sources_effective_config
+test_kimi_is_background_notify_without_worker_dispatch
 test_pi_snippet_uses_effective_extension_path

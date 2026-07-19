@@ -1,6 +1,6 @@
 ---
 name: harness-adapters
-description: Agent-only reference for firstmate harness operations. Use before spawning or recovering a crewmate or secondmate, handling a trust dialog, sending a harness-specific skill invocation, interrupting or exiting an agent, resuming an exited agent, or verifying a new harness adapter. Contains verified facts for claude, codex, opencode, pi, and grok.
+description: Agent-only reference for firstmate harness operations. Use before spawning or recovering a crewmate or secondmate, handling a trust dialog, sending a harness-specific skill invocation, interrupting or exiting an agent, resuming an exited agent, or verifying a new harness adapter. Contains verified worker facts for claude, codex, opencode, pi, and grok, plus Kimi primary-only facts.
 user-invocable: false
 metadata:
   internal: true
@@ -51,7 +51,7 @@ Use that value for interrupt, exit, resume, and skill-invocation facts.
 ## Primary turn-end guard
 
 Every verified primary harness has an empirically validated hook path for the "no turn ends blind" guard.
-`claude` and `codex` block directly through Stop hooks that preserve exit status 2 and stderr from `bin/fm-turnend-guard.sh`.
+`claude`, `codex`, and the Kimi primary block directly through Stop hooks that preserve exit status 2 and the reason from `bin/fm-turnend-guard.sh`.
 `opencode`, `pi`, and `grok` expose passive lifecycle callbacks for this purpose, so their tracked primary adapters force one bounded follow-up or resume when the shared predicate blocks.
 The exact hook files, commands, validation transcripts, scoping rules, and fail-open tradeoffs are owned by `docs/turnend-guard.md`.
 When changing any primary turn-end hook, validate the real harness behavior in a scratch project or throwaway home before trusting it, then update that doc and the relevant concise fact below.
@@ -59,7 +59,7 @@ When changing any primary turn-end hook, validate the real harness behavior in a
 ## Primary pre-arm (PreToolUse) seatbelt
 
 Every verified primary harness also has a wired PreToolUse-equivalent hook that denies a watcher-arm anti-pattern (shell `&`, truncating pipe, bundling, broad `pkill -f fm-watch`) before it runs.
-`claude` and `codex` block directly through PreToolUse hooks; `grok` blocks the same way but requires every `$VAR` reference in its hook `command` string to carry an inline `:-default` or it fails to launch the hook entirely.
+`claude`, `codex`, and the Kimi primary block directly through PreToolUse hooks; `grok` blocks the same way but requires every `$VAR` reference in its hook `command` string to carry an inline `:-default` or it fails to launch the hook entirely.
 `opencode` and `pi` block by throwing from `tool.execute.before` / returning `{block: true}` from `tool_call`.
 The exact hook files, commands, output-shaping quirks (Claude Code only honors the deny when stdout is empty), and validation transcripts are owned by `docs/arm-pretool-check.md`.
 When changing any primary PreToolUse hook, validate the real harness behavior in a scratch project before trusting it, then update that doc.
@@ -75,16 +75,37 @@ Full mechanics, scoping, dated commands, payloads, and fail-open evidence live i
 - `opencode`: verified on 1.17.18; `session.created` plus `client.session.promptAsync` starts the nudge turn in the TUI, while `opencode run` remains fail-open headless.
 - `pi`: verified native `session_start`; the existing primary extension handles `startup`, `new`, and `resume` and uses `pi.sendMessage` to inject context without racing a positional launch prompt.
 - `grok`: the 0.2.103 project `SessionStart` event fires with `source=new`, but stdout does not reach model context; the tracked project hook remains fail-open, and a global token-guarded fallback requires a captain decision.
+- `kimi`: verified on 0.27.0; ordinary SessionStart hook stdout is discarded, so the managed plugin's native `sessionStart.skill` carries the nudge into model context on startup, resume, and `/new`.
 
 ## Primary watcher supervision
 
 At session start, `bin/fm-session-start.sh` prints exactly one watcher supervision block for the detected primary harness.
 Do not substitute another harness's wait shape when resuming supervision.
 Claude and Grok use tracked background-notify cycles around `bin/fm-watch-arm.sh`.
+Kimi uses its built-in background Bash tool with `run_in_background=true` and `disable_timeout=true`; completion returns as a synthetic User notification to the same main session.
 Codex uses bounded foreground checkpoints through `bin/fm-watch-checkpoint.sh` because Codex cannot reason while a foreground tool call is running.
 OpenCode uses `.opencode/plugins/fm-primary-watch-arm.js`, which coordinates with the turn-end guard plugin and wakes the TUI with `client.session.promptAsync`.
 Pi uses the tracked `.pi/extensions/fm-primary-turnend-guard.ts` plus the tracked `.pi/extensions/fm-primary-pi-watch.ts`, both project-local extensions Pi auto-discovers once trusted.
 When changing any primary watcher adapter, update `docs/supervision-protocols/`, `docs/turnend-guard.md` if a shared idle or turn-end hook changed, and the relevant concise fact below.
+
+## Kimi primary-only boundary
+
+Kimi Code support is pinned to 0.27.0 and K3 through `bin/fm-primary.sh kimi-k3` with `--yolo`.
+The launcher supplies `FM_PRIMARY_HARNESS=kimi` because Kimi does not expose a stable native child-process marker.
+Its isolated managed plugin owns native session-start skill injection plus blockable PreToolUse and Stop hooks without editing the operator's source Kimi home.
+Do not pass `kimi` to `fm-spawn` or infer worker support from primary support.
+Kimi worker launch, liveness, trust, turn-end, interrupt, resume, and teardown remain unverified and out of scope.
+
+Live Kimi primary facts, verified on Kimi Code 0.27.0 in the isolated 2026-07-19 Herdr lab:
+
+- Foreground turns move Herdr from `working` to `idle`, but Kimi background Bash tasks also count as activity, so never treat Herdr status alone as conversational settlement or proof of supervision.
+- Herdr's detected `agent_session` can lag after Kimi switches sessions in-process; durable Kimi session state and the TUI are authoritative for `/new` and `/sessions` outcomes.
+- Interrupt a running turn with `ctrl+c`.
+- Exit cleanly with `/exit`.
+- Resume inside the TUI with `/sessions`; startup CLI flags `--session [id]` and `--continue` also exist, but `bin/fm-primary.sh` deliberately keeps profile and resume selection separate.
+- A fresh launcher invocation accepts the dead prior pid as a stale lock, and the resumed session re-acquires the lock under the new Kimi pid.
+- Kimi's built-in Bash background task is the only verified watcher host; do not use Kimi `Agent`, `AgentSwarm`, or similar subagent surfaces as Firstmate workers.
+- `docs/architecture.md` owns the dated end-to-end evidence, while the four lifecycle guard docs own their exact hook transcripts.
 
 ## Launch profile axes
 

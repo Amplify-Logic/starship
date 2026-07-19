@@ -47,8 +47,10 @@ All verified primary harnesses have a tracked integration:
 - `grok`: `.grok/hooks/fm-primary-turnend-guard.json` registers a `Stop` hook that invokes `bin/fm-turnend-guard-grok.sh`.
   The adapter runs the shared guard and, when it returns 2, invokes `grok --resume <sessionId> -p <guard-reason>` with `GROK_TURNEND_GUARD_ACTIVE=1`.
   It does not pass `--permission-mode`, so the passive Stop hook cannot grant stronger tool permissions than Grok's resumed-session default.
+- `kimi`: `bin/fm-primary.sh` installs a managed Kimi plugin in an isolated `KIMI_CODE_HOME` with a native blockable `Stop` hook invoking `bin/fm-turnend-guard.sh`.
+  Kimi 0.27.0 maps hook exit 2 to a blocked stop, appends the hook reason into model context, and allows exactly one guarded continuation through `stop_hook_active`.
 
-Claude and Codex support a direct blocking Stop hook.
+Claude, Codex, and Kimi support a direct blocking Stop hook.
 For those harnesses, exit status 2 plus stderr from `bin/fm-turnend-guard.sh` blocks the stop and feeds the reason back into the model.
 Both payloads include `stop_hook_active`; when it is true, the shared guard exits 0 so the harness can end after one forced continuation.
 
@@ -145,8 +147,34 @@ So the model was re-invoked solely by the background task's completion while idl
 This matches the harness tool contract that a `run_in_background` task "keeps running across turns and re-invokes you when it exits", and reproduces the 11s latency the task audit measured independently on the same harness version.
 No Herdr command was issued and no fleet state was touched; the experiment wrote only to the session scratchpad, which was discarded.
 
+### 2026-07-19: Kimi Code 0.27.0 blocking Stop and wake
+
+The Kimi run used a plain scratch Firstmate clone, isolated homes, and a guarded named Herdr lab.
+An empty scratch `state/turnend-probe.meta` made the shared predicate report one task in flight while no watcher lock existed.
+Kimi first answered `TURNEND_PROBE`, then its managed Stop hook exited 2 and appended this exact persisted message as a `system_trigger` named `stop_hook`:
+
+```text
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+●  TURN WOULD END BLIND - SUPERVISION IS OFF
+●  1 task(s) in flight, but no live watcher holds this home lock (last beat: never).
+●  resume supervision with bin/fm-watch-arm.sh as one Kimi Bash tool call using run_in_background=true and disable_timeout=true, never shell &.
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+The same logical turn continued, drained the queue, and launched `bin/fm-watch-arm.sh` through Kimi's background Bash API.
+When the watcher exited on a status signal, Kimi persisted this notification origin:
+
+```json
+{"kind":"background_task","taskId":"bash-wx40akje","status":"completed","notificationId":"task:bash-wx40akje:completed"}
+```
+
+The notification re-invoked the model with zero new operator input.
+Kimi read the task output, drained the queued wake, reconciled the status, and re-armed a fresh watcher.
+The normal worker trial repeated that path with a real isolated Codex worker and then accepted a new prompt whose exact response was `RESPONSIVE_AFTER_WAKE`.
+
 ## Tests
 
-`tests/fm-turnend-guard.test.sh` covers the shared predicate, primary scoping (including a secondmate's own home being guarded like the main primary while its child worktrees stay exempt), `FM_HOME` and `FM_STATE_OVERRIDE` precedence, Pi logical-run latch behavior for no-tool and multi-tool runs, fail-open behavior without `jq`, tracked hook registration for all five harnesses, and the Grok adapter's forced-resume loop guard and permission-mode regression.
+`tests/fm-turnend-guard.test.sh` covers the shared predicate, primary scoping (including a secondmate's own home being guarded like the main primary while its child worktrees stay exempt), `FM_HOME` and `FM_STATE_OVERRIDE` precedence, Pi logical-run latch behavior for no-tool and multi-tool runs, fail-open behavior without `jq`, tracked hook registration for the five repository-native adapters, and the Grok adapter's forced-resume loop guard and permission-mode regression.
+`tests/fm-primary.test.sh` verifies the managed Kimi Stop hook registration and primary-only boundary.
 The default behavior suite does not invoke live language-model harnesses.
 `FM_PI_LIVE_E2E=1 tests/fm-pi-primary-live-e2e.test.sh` opts into the isolated interactive Pi regression recorded above.

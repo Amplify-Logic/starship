@@ -24,6 +24,7 @@ Every path exits 0, including malformed state and adapter errors, because Claude
 | OpenCode | `.opencode/plugins/fm-primary-sessionstart-nudge.js` listens for `session.created`, runs the wrapper once per session id, and calls `client.session.promptAsync` only when the wrapper prints a nudge. | Verified in the interactive TUI on OpenCode 1.17.18 and intentionally fail-open in headless `opencode run`. |
 | Pi | `.pi/extensions/fm-primary-turnend-guard.ts` handles `session_start` reasons `startup`, `new`, and `resume`, then injects the wrapper output with `pi.sendMessage`. | The custom message enters model context without racing an initial positional prompt, and the changed extension passes strict TypeScript checking on Pi 0.80.10. |
 | Grok | `.grok/hooks/fm-primary-sessionstart-nudge.json` registers a project `SessionStart` hook and invokes the wrapper through inline-defaulted `${GROK_WORKSPACE_ROOT:-}`. | The project event fires on Grok 0.2.103, but hook stdout does not reach model context, so this path is documented fail-open. |
+| Kimi | `bin/fm-primary.sh` installs an isolated managed plugin whose native `sessionStart.skill` contains the nudge. | Kimi 0.27.0 discards ordinary SessionStart hook stdout; the native plugin skill is injected into model context on startup, resume, and `/new`. |
 
 The OpenCode nudge runs only on `session.created`.
 The watcher-arm and turn-end guard plugins run later on `session.idle`, and the turn-end guard continues to let the watcher coordinator act first, so the three plugins do not race for one lifecycle event.
@@ -103,9 +104,56 @@ The corrected live smoke command was `pi -p -e .pi/extensions/fm-primary-turnend
 Observed output was `PI_SMOKE_DONE`, and `session-start-ran` was present, proving the injected custom message reached the model and was obeyed before the positional prompt.
 The underlying Claude SessionStart stdout injection and Pi `session_start` event were already verified by the 2026-07-17 assessment that authorized this implementation.
 
+### Kimi Code 0.27.0
+
+The Kimi run used a plain scratch Firstmate clone, isolated `FM_HOME` and `KIMI_CODE_HOME` directories, and a named non-default Herdr session on 2026-07-19.
+Every Herdr operator call went through `fm-herdr-lab.sh`, and the guarded teardown left the running `default` session byte-identical to its pre-provision tripwire.
+
+The exact launch shape was:
+
+```sh
+"$HERDR_LAB_HELPER" run "$HERDR_LAB_SESSION" agent start LAB-FIRSTMATE-PLAIN \
+  --cwd "$SCRATCH_ROOT" --no-focus \
+  --env "FM_HOME=$SCRATCH_HOME" \
+  --env "FM_KIMI_SOURCE_HOME=$ISOLATED_KIMI_SOURCE" \
+  --env 'FM_KIMI_BIN=/Users/you/.kimi-code/bin/kimi' \
+  --env 'FM_PRIMARY_VISIBLE_PREFIX=LAB' \
+  -- "$SCRATCH_ROOT/bin/fm-primary.sh" kimi-k3
+```
+
+The startup TUI printed these exact safe fields:
+
+```text
+Model:     K3
+Version:   0.27.0
+yolo  K3 thinking: max
+```
+
+On the first prompt, Kimi ran `bin/fm-session-start.sh` before replying and printed:
+
+```text
+• Primary harness: kimi
+• Lock: acquired — held by this session (pid 13478)
+```
+
+`/new` created `session_f03d64aa-8cda-46c1-a9e3-f45bc7ecef48`, reset displayed context to `0% (0/256k)`, and the next turn ran the nudge command before returning `NEW_SESSION_NUDGE_OK`.
+`/sessions`, followed by selecting the earlier session, printed `Resumed session (session_04558657-d3b3-48f0-9f6f-c9a97985f8d0).`, and the resumed turn ran the nudge command before returning `RESUME_NUDGE_OK`.
+After `/exit` closed the Kimi process, a fresh launcher invocation accepted the stale lock, `/sessions` resumed that same durable session, and the first turn returned `REOPEN_RESUME_OK` after running session start under the new pid.
+
+The two non-empty session wires contained exactly one native plugin reminder and one exact nudge apiece:
+
+```text
+session_04558657-d3b3-48f0-9f6f-c9a97985f8d0 plugin_session_start_records=1 exact_nudge_records=1
+session_f03d64aa-8cda-46c1-a9e3-f45bc7ecef48 plugin_session_start_records=1 exact_nudge_records=1
+```
+
+Resume replays the existing reminder into model context instead of appending a duplicate record.
+This is why the managed plugin uses native `sessionStart.skill`; Kimi's ordinary `SessionStart` command hook executes, but its stdout is not a model-context transport.
+
 ## Regression coverage
 
 `tests/fm-sessionstart-nudge.test.sh` proves wrapper silence for both gate signals, an unmarked linked worktree, a missing state directory, and an already-owned lock.
 It proves exact one-line output for a plain primary and a marked linked secondmate primary.
 It also verifies tracked wrapper registration for Claude, Codex, OpenCode, Pi, and Grok.
+`tests/fm-primary.test.sh` verifies the isolated managed Kimi plugin's native session-start skill and primary-only registration path.
 `tests/fm-turnend-guard.test.sh` continues to cover the same shared primary scope through the turn-end path.
