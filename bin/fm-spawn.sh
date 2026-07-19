@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Spawn a direct report: a crewmate in a treehouse or Orca worktree, or a
 # secondmate in its isolated firstmate home.
-# Usage: fm-spawn.sh <task-id> <project-dir> [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] [--scout]
+# Usage: fm-spawn.sh <task-id> <project-dir> [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] [--outcome <text>] [--scout]
 #        fm-spawn.sh <task-id> [<firstmate-home>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] --secondmate
 #   --harness <name> is the explicit per-spawn harness/profile adapter. The old
 #   positional harness arg still works for back-compat.
@@ -50,6 +50,9 @@
 #   material, so the secondmate's OWN crewmates inherit primary config and the
 #   secondmate receives the primary's read-only shared captain-preference file
 #   (fm-config-inherit-lib.sh).
+#   --outcome records an explicit concise human task outcome for supported
+#   presentation surfaces; otherwise fm-task-outcome.sh resolves the structured
+#   backlog title and then its documented safe fallback.
 #   --scout records kind=scout in the task's meta (report deliverable, scratch worktree;
 #   see AGENTS.md task lifecycle); --secondmate records kind=secondmate and launches in a
 #   provisioned firstmate home; the default is kind=ship.
@@ -60,7 +63,7 @@
 # Batch dispatch: pass one or more `id=repo` pairs instead of a single <id> <project>, e.g.
 #     fm-spawn.sh fix-a-k3=projects/foo add-b-q7=projects/bar [--scout]
 #   Each pair re-execs this script in single-task mode, so the single path stays the only
-#   source of truth; shared --scout/--harness/--model/--effort/--backend applies to every pair.
+#   source of truth; shared --scout/--harness/--model/--effort/--backend/--outcome applies to every pair.
 #   If config/crew-dispatch.json exists, shared --harness is required for crewmate
 #   and scout batches. The loop lives here, in bash, so callers never hand-write a
 #   multi-task shell loop (the tool shell is zsh, which does not word-split unquoted
@@ -119,10 +122,12 @@ HARNESS_ARG=
 MODEL=
 EFFORT=
 BACKEND_ARG=
+OUTCOME=
 HARNESS_SET=0
 MODEL_SET=0
 EFFORT_SET=0
 BACKEND_SET=0
+OUTCOME_SET=0
 POS=()
 want_value=
 for a in "$@"; do
@@ -135,6 +140,7 @@ for a in "$@"; do
       model) MODEL=$a; MODEL_SET=1 ;;
       effort) EFFORT=$a; EFFORT_SET=1 ;;
       backend) BACKEND_ARG=$a; BACKEND_SET=1 ;;
+      outcome) OUTCOME=$a; OUTCOME_SET=1 ;;
       *) echo "error: internal parser state for --$want_value" >&2; exit 1 ;;
     esac
     want_value=
@@ -151,6 +157,8 @@ for a in "$@"; do
     --effort=*) EFFORT=${a#--effort=}; EFFORT_SET=1 ;;
     --backend) want_value=backend ;;
     --backend=*) BACKEND_ARG=${a#--backend=}; BACKEND_SET=1 ;;
+    --outcome) want_value=outcome ;;
+    --outcome=*) OUTCOME=${a#--outcome=}; OUTCOME_SET=1 ;;
     *) POS+=("$a") ;;
   esac
 done
@@ -159,6 +167,7 @@ done
 [ "$MODEL_SET" -eq 0 ] || [ -n "$MODEL" ] || { echo "error: --model requires a non-empty value" >&2; exit 1; }
 [ "$EFFORT_SET" -eq 0 ] || [ -n "$EFFORT" ] || { echo "error: --effort requires a non-empty value" >&2; exit 1; }
 [ "$BACKEND_SET" -eq 0 ] || [ -n "$BACKEND_ARG" ] || { echo "error: --backend requires a non-empty value" >&2; exit 1; }
+[ "$OUTCOME_SET" -eq 0 ] || [ -n "$OUTCOME" ] || { echo "error: --outcome requires a non-empty value" >&2; exit 1; }
 case "$EFFORT" in
   ''|low|medium|high|xhigh|max) ;;
   *) echo "error: --effort must be one of low, medium, high, xhigh, max" >&2; exit 1 ;;
@@ -262,6 +271,7 @@ if [ "${#POS[@]}" -gt 0 ] && [ "${POS[0]}" != "$idpart" ] && case "$idpart" in *
   [ -z "$MODEL" ] || shared_args+=(--model "$MODEL")
   [ -z "$EFFORT" ] || shared_args+=(--effort "$EFFORT")
   [ -z "$BACKEND_ARG" ] || shared_args+=(--backend "$BACKEND_ARG")
+  [ -z "$OUTCOME" ] || shared_args+=(--outcome "$OUTCOME")
   for pair in "${POS[@]}"; do
     case "$pair" in
       *=*) : ;;
@@ -666,10 +676,12 @@ real_path_or_raw() {  # <path>
 
 # Session-provider container-ensure + task creation. tmux stays exactly as P1
 # left it (same session-name / new-window sequence, see bin/backends/tmux.sh);
-# a herdr spawn goes through the version-gated, workspace-per-HOME,
-# tab-per-task sequence in bin/backends/herdr.sh instead (D4/D5 as refined by
-# docs/herdr-backend.md's "workspace-per-home" pass, AGENTS.md task
-# herdr-sm-spaces-k4). Both branches converge on the same $T ("target") string
+# a Herdr worker spawn goes through the version-gated project-workspace,
+# tab-per-task sequence in bin/backends/herdr.sh.
+# Workspace identity uses physical home/project metadata tokens while mutable
+# labels carry human presentation.
+# Secondmate primary panes retain the legacy home workspace shape.
+# Both branches converge on the same $T ("target") string
 # that every downstream operation (send/capture/kill) already treats as opaque
 # per-backend routing (fm_backend_resolve_selector).
 validate_spawn_worktree() {  # <source> <inspect-target>
@@ -717,10 +729,30 @@ case "$BACKEND" in
     # after each prefixed simple-command call) so the secondmate's tab lands
     # in the secondmate's own workspace, not the primary's "firstmate" one.
     HERDR_LABEL_HOME=$FM_HOME
+    HERDR_PROJECT_KEY=
+    HERDR_PROJECT_NAME=
+    HERDR_PRESENTATION=0
+    if fm_backend_herdr_presentation_capable; then
+      HERDR_PRESENTATION=1
+    fi
+    TASK_OUTCOME=$(FM_HOME="$FM_HOME" FM_DATA_OVERRIDE="$DATA" \
+      "$FM_ROOT/bin/fm-task-outcome.sh" "$ID" "$OUTCOME")
+    HERDR_TAB_TITLE="WORKER · $TASK_OUTCOME · 🟡 WAITING"
     if [ "$KIND" = secondmate ]; then
       HERDR_LABEL_HOME=$PROJ_ABS
+      HERDR_CONTAINER_RAW=$(FM_HOME="$HERDR_LABEL_HOME" fm_backend_herdr_container_ensure "$PROJ_ABS") || exit 1
+      HERDR_TAB_TITLE=$W
+    elif [ "$HERDR_PRESENTATION" -eq 1 ]; then
+      HERDR_PROJECT_KEY=$PROJ_ABS_REAL
+      HERDR_PROJECT_NAME=$("$FM_ROOT/bin/fm-project-display-name.sh" "$(basename "$PROJ_ABS_REAL")")
+      HERDR_CONTAINER_RAW=$(FM_HOME="$HERDR_LABEL_HOME" \
+        FM_HERDR_PROJECT_KEY="$HERDR_PROJECT_KEY" \
+        FM_HERDR_PROJECT_LABEL="$HERDR_PROJECT_NAME" \
+        fm_backend_herdr_container_ensure "$PROJ_ABS") || exit 1
+    else
+      HERDR_TAB_TITLE=$W
+      HERDR_CONTAINER_RAW=$(FM_HOME="$HERDR_LABEL_HOME" fm_backend_herdr_container_ensure "$PROJ_ABS") || exit 1
     fi
-    HERDR_CONTAINER_RAW=$(FM_HOME="$HERDR_LABEL_HOME" fm_backend_herdr_container_ensure "$PROJ_ABS") || exit 1
     # fm_backend_herdr_container_ensure echoes "<session>:<workspace_id>\t<seeded_default_tab_id>"
     # (the second field empty when this call ADOPTED a pre-existing workspace
     # rather than creating a fresh one). Split on the guaranteed single tab
@@ -731,7 +763,9 @@ case "$BACKEND" in
     HERDR_SEEDED_DEFAULT_TAB_ID=${HERDR_CONTAINER_RAW#*$'\t'}
     HERDR_SES=${CONTAINER%%:*}
     HERDR_WORKSPACE_ID=${CONTAINER#*:}
-    HERDR_TASK_IDS=$(FM_HOME="$HERDR_LABEL_HOME" fm_backend_herdr_create_task "$CONTAINER" "$W" "$PROJ_ABS" "$HERDR_SEEDED_DEFAULT_TAB_ID") || exit 1
+    HERDR_TOKEN_TASK_ID=$ID
+    [ "$HERDR_PRESENTATION" -eq 1 ] || HERDR_TOKEN_TASK_ID=
+    HERDR_TASK_IDS=$(FM_HOME="$HERDR_LABEL_HOME" fm_backend_herdr_create_task "$CONTAINER" "$HERDR_TAB_TITLE" "$PROJ_ABS" "$HERDR_SEEDED_DEFAULT_TAB_ID" "$HERDR_TOKEN_TASK_ID") || exit 1
     read -r HERDR_TAB_ID HERDR_PANE_ID <<EOF
 $HERDR_TASK_IDS
 EOF
@@ -1008,6 +1042,12 @@ META_WINDOW=$T
     echo "herdr_workspace_id=$HERDR_WORKSPACE_ID"
     echo "herdr_tab_id=$HERDR_TAB_ID"
     echo "herdr_pane_id=$HERDR_PANE_ID"
+    if [ "$KIND" != secondmate ] && [ "$HERDR_PRESENTATION" -eq 1 ]; then
+      echo "herdr_workspace_managed=1"
+      echo "herdr_project_key=$HERDR_PROJECT_KEY"
+      echo "herdr_project_name=$HERDR_PROJECT_NAME"
+      echo "outcome=$TASK_OUTCOME"
+    fi
   fi
   if [ "$BACKEND" = zellij ]; then
     echo "zellij_session=$ZELLIJ_SES"
@@ -1028,6 +1068,9 @@ META_WINDOW=$T
   fi
 } > "$STATE/$ID.meta"
 [ "$BACKEND" = orca ] && ORCA_ABORT_CLEANUP=0
+if [ "$BACKEND" = herdr ] && [ "${HERDR_PRESENTATION:-0}" -eq 1 ]; then
+  "$FM_ROOT/bin/fm-visible-status.sh" "$ID" >/dev/null 2>&1 || true
+fi
 
 sq_brief=$(shell_quote "$BRIEF")
 sq_turnend=$(shell_quote "$TURNEND")

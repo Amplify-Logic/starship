@@ -318,6 +318,10 @@ if [ "$PRIMARY_HARNESS" = pi ]; then
     printf 'PI_WATCH_EXTENSION: not loaded - approve Pi project trust once per clone, then restart plain pi so %s and %s auto-load for turn-end guard and background wake coverage; use -e %s -e %s only if project hooks are not trusted\n' "$PI_TURNEND_EXT" "$PI_EXT" "$PI_TURNEND_EXT" "$PI_EXT"
   fi
 fi
+# Recovery is a bounded presentation refresh point only for the session owner.
+# A lock-refused read-only session must not mutate Herdr presentation.
+# Projection is best-effort and never affects durable task control.
+[ "$READ_ONLY" -eq 1 ] || "$SCRIPT_DIR/fm-visible-status.sh" --all >/dev/null 2>&1 || true
 "$SCRIPT_DIR/fm-supervision-instructions.sh" \
   --harness "$PRIMARY_HARNESS" \
   --read-only "$READ_ONLY" \

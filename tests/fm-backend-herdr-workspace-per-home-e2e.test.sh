@@ -1,33 +1,13 @@
 #!/usr/bin/env bash
-# tests/fm-backend-herdr-workspace-per-home-e2e.test.sh - mandatory ISOLATED
-# end-to-end real-herdr test for the P3 "workspace-per-home" pass (AGENTS.md
-# task herdr-sm-spaces-k4). Drives the REAL bin/fm-spawn.sh and
-# bin/fm-teardown.sh (not just adapter primitives), because the requirement
-# under test - a --secondmate spawn's tab landing in the secondmate's OWN
-# herdr workspace, and a crewmate spawned FROM a secondmate home landing there
-# too - only exists at fm-spawn.sh's own home-shadowing logic (the herdr case
-# arm) and at fm_backend_herdr_workspace_label's FM_HOME read; neither is
-# exercised by the adapter-primitive smoke test.
-#
-# Mirrors tests/fm-backend-autodetect-smoke.test.sh's isolated-session
-# convention: a private throwaway HERDR_SESSION (never the captain's
-# default), scratch FM_HOME(s), and scratch local-only projects.
-#
-# Safety (2026-07-02 incident, see tests/herdr-test-safety.sh): cleanup uses
-# ONLY herdr_safe_stop_and_delete, never a bare/inline-prefixed `herdr server
-# stop`.
-#
-# Covers, at minimum (per the task brief):
-#   - a primary-shaped home (no .fm-secondmate-home marker) spawning a
-#     crewmate into the "firstmate" workspace
-#   - a secondmate-shaped home (with .fm-secondmate-home) getting its own
-#     labeled workspace when the PRIMARY spawns it (fm-spawn.sh's FM_HOME
-#     shadow for --secondmate)
-#   - a crewmate spawned FROM that secondmate-shaped home (the secondmate
-#     running its OWN fm-spawn.sh) landing in the secondmate's own workspace -
-#     this exact path has never run before this test
-#   - teardown closing the right tab (and no other)
-#   - list-live recovery seeing only its own home's tabs, for both homes
+# Mandatory isolated real-Herdr end-to-end coverage for project workspaces
+# across primary and secondmate homes.
+# It drives real spawn and cleanup, verifies compact physical ownership tokens,
+# preserves the secondmate primary's legacy home workspace, and proves a
+# secondmate-owned project worker lands in a distinct human project workspace.
+# Recovery combines only the active home's managed and legacy rows, and cleanup
+# closes only recorded pane ids.
+# The generated non-default session is provisioned, inspected, and removed only
+# through bin/fm-herdr-lab.sh.
 set -u
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -62,16 +42,21 @@ command -v treehouse >/dev/null 2>&1 || { echo "skip: treehouse not found (requi
 # poll.
 TMP_ROOT=$(mktemp -d "$(cd "${TMPDIR:-/tmp}" && pwd -P)/fm-herdr-e2e.XXXXXX")
 SESSION="fm-lab-herdr-e2e-$$"
+HERDR_LAB_HELPER=${HERDR_LAB_HELPER:-$ROOT/bin/fm-herdr-lab.sh}
 export HERDR_SESSION="$SESSION"
-WT1=; WT2=
+WT1=; WT2=; SESSION_READY=0
 cleanup_all() {
   [ -n "$WT1" ] && command -v treehouse >/dev/null 2>&1 && treehouse return --force "$WT1" >/dev/null 2>&1
   [ -n "$WT2" ] && command -v treehouse >/dev/null 2>&1 && treehouse return --force "$WT2" >/dev/null 2>&1
-  herdr_safe_stop_and_delete "$SESSION"
+  if [ "$SESSION_READY" -eq 1 ]; then
+    "$HERDR_LAB_HELPER" teardown "$SESSION" >/dev/null 2>&1 || true
+    SESSION_READY=0
+  fi
   rm -rf "$TMP_ROOT"
 }
 trap cleanup_all EXIT
-fm_herdr_lab_prepare "$SESSION" || fail "could not prepare isolated Herdr lab session"
+"$HERDR_LAB_HELPER" provision "$SESSION" || fail "could not provision isolated Herdr lab session"
+SESSION_READY=1
 
 # shellcheck source=bin/fm-backend.sh
 . "$ROOT/bin/fm-backend.sh"
@@ -123,11 +108,20 @@ sleep 1
 CM1_CAPTURE=$(fm_backend_herdr_capture "$SESSION:$CM1_PANE" 30) || fail "capture failed on cm1's pane"
 assert_contains_local "$CM1_CAPTURE" "primary-crew-ok" "cm1's raw launch command did not run in its herdr pane"
 
-CM1_WSID=$(herdr pane get "$CM1_PANE" --session "$SESSION" 2>/dev/null | jq -r '.result.pane.workspace_id // empty')
+CM1_WSID=$("$HERDR_LAB_HELPER" run "$SESSION" pane get "$CM1_PANE" 2>/dev/null | jq -r '.result.pane.workspace_id // empty')
 [ -n "$CM1_WSID" ] || fail "could not read cm1's pane workspace_id"
-CM1_WS_LABEL=$(herdr workspace list --session "$SESSION" 2>&1 | jq -r --arg id "$CM1_WSID" '.result.workspaces[]? | select(.workspace_id == $id) | .label')
-[ "$CM1_WS_LABEL" = "firstmate" ] || fail "a primary-shaped home's crewmate should land in the 'firstmate' workspace, got '$CM1_WS_LABEL'"
-pass "real herdr E2E: the primary-shaped home's crewmate landed in the 'firstmate' workspace"
+CM1_WORKSPACES=$("$HERDR_LAB_HELPER" run "$SESSION" workspace list 2>&1)
+CM1_WS_LABEL=$(printf '%s' "$CM1_WORKSPACES" | jq -r --arg id "$CM1_WSID" '.result.workspaces[]? | select(.workspace_id == $id) | .label')
+assert_contains_local "$CM1_WS_LABEL" "Scratch Project 1" "a primary-shaped home's crewmate should land in its human project workspace"
+CM1_WS_OWNER=$(printf '%s' "$CM1_WORKSPACES" | jq -r --arg id "$CM1_WSID" '.result.workspaces[]? | select(.workspace_id == $id) | .tokens.fm_owner')
+CM1_WS_PROJECT=$(printf '%s' "$CM1_WORKSPACES" | jq -r --arg id "$CM1_WSID" '.result.workspaces[]? | select(.workspace_id == $id) | .tokens.fm_project')
+CM1_OWNER_PATH=$(cd "$PRIMARY_HOME" && pwd -P)
+CM1_PROJECT_PATH=$(cd "$PROJ1" && pwd -P)
+CM1_OWNER_TOKEN="path-v1:$(printf '%s' "$CM1_OWNER_PATH" | git -C "$ROOT" hash-object --stdin)"
+CM1_PROJECT_TOKEN="path-v1:$(printf '%s' "$CM1_PROJECT_PATH" | git -C "$ROOT" hash-object --stdin)"
+[ "$CM1_WS_OWNER" = "$CM1_OWNER_TOKEN" ] || fail "cm1 workspace owner token mismatch: got '$CM1_WS_OWNER'"
+[ "$CM1_WS_PROJECT" = "$CM1_PROJECT_TOKEN" ] || fail "cm1 workspace project token mismatch: got '$CM1_WS_PROJECT'"
+pass "real herdr E2E: the primary-shaped home's crewmate landed in its token-owned human project workspace"
 
 # --- 2. the PRIMARY spawns a secondmate: its tab lands in the SECONDMATE's own space ---
 # (fm-spawn.sh's herdr case arm shadows FM_HOME to the secondmate's home for
@@ -149,12 +143,19 @@ SM_PANE=$(grep '^herdr_pane_id=' "$SM_META" | cut -d= -f2-)
 [ -n "$SM_PANE" ] || fail "e2esm1 meta missing herdr_pane_id"
 pass "real herdr E2E: the primary spawns a --secondmate task on the herdr backend"
 
-SM_WSID=$(herdr pane get "$SM_PANE" --session "$SESSION" 2>/dev/null | jq -r '.result.pane.workspace_id // empty')
+SM_WSID=$("$HERDR_LAB_HELPER" run "$SESSION" pane get "$SM_PANE" 2>/dev/null | jq -r '.result.pane.workspace_id // empty')
 [ -n "$SM_WSID" ] || fail "could not read e2esm1's pane workspace_id"
 [ "$SM_WSID" != "$CM1_WSID" ] || fail "the secondmate's tab must NOT land in the primary's workspace, but it shares $CM1_WSID"
-SM_WS_LABEL=$(herdr workspace list --session "$SESSION" 2>&1 | jq -r --arg id "$SM_WSID" '.result.workspaces[]? | select(.workspace_id == $id) | .label')
+SM_WS_LABEL=$("$HERDR_LAB_HELPER" run "$SESSION" workspace list 2>&1 | jq -r --arg id "$SM_WSID" '.result.workspaces[]? | select(.workspace_id == $id) | .label')
 [ "$SM_WS_LABEL" = "2ndmate-e2esm1" ] || fail "a --secondmate spawn should land in '2ndmate-<id>', got '$SM_WS_LABEL'"
-pass "real herdr E2E: a --secondmate spawn by the PRIMARY lands in the SECONDMATE's own labeled workspace, distinct from the primary's"
+SM_TAB=$("$HERDR_LAB_HELPER" run "$SESSION" pane list --workspace "$SM_WSID" 2>/dev/null \
+  | jq -r --arg pane "$SM_PANE" '.result.panes[]? | select(.pane_id == $pane) | .tab_id' | head -1)
+[ -n "$SM_TAB" ] || fail "could not resolve e2esm1's tab id"
+SM_TAB_LABEL=$("$HERDR_LAB_HELPER" run "$SESSION" tab list --workspace "$SM_WSID" 2>/dev/null \
+  | jq -r --arg id "$SM_TAB" '.result.tabs[]? | select(.tab_id == $id) | .label')
+[ "$SM_TAB_LABEL" = "fm-e2esm1" ] \
+  || fail "the secondmate primary tab must keep its legacy fm-<id> title after the spawn-time presentation refresh, got '$SM_TAB_LABEL'"
+pass "real herdr E2E: a --secondmate spawn by the PRIMARY lands in the SECONDMATE's own labeled workspace with its legacy fm-<id> tab, distinct from the primary's"
 
 # --- 3. a crewmate spawned FROM the secondmate-shaped home lands in the SAME
 # secondmate workspace (this exact path has never run before this test) -----
@@ -178,10 +179,12 @@ sleep 1
 CM2_CAPTURE=$(fm_backend_herdr_capture "$SESSION:$CM2_PANE" 30) || fail "capture failed on cm2's pane"
 assert_contains_local "$CM2_CAPTURE" "sm-crew-ok" "cm2's raw launch command did not run in its herdr pane"
 
-CM2_WSID=$(herdr pane get "$CM2_PANE" --session "$SESSION" 2>/dev/null | jq -r '.result.pane.workspace_id // empty')
-[ "$CM2_WSID" = "$SM_WSID" ] || fail "a crewmate spawned FROM the secondmate home should land in the SAME workspace as the secondmate's own task ($SM_WSID), got '$CM2_WSID'"
-[ "$CM2_WSID" != "$CM1_WSID" ] || fail "a crewmate spawned FROM the secondmate home must NOT land in the primary's workspace"
-pass "real herdr E2E: a crewmate spawned FROM the secondmate-shaped home lands in the secondmate's OWN workspace - falls out of per-home resolution, no glue needed"
+CM2_WSID=$("$HERDR_LAB_HELPER" run "$SESSION" pane get "$CM2_PANE" 2>/dev/null | jq -r '.result.pane.workspace_id // empty')
+[ "$CM2_WSID" != "$SM_WSID" ] || fail "a secondmate-owned project worker must not share the secondmate primary's legacy home workspace"
+[ "$CM2_WSID" != "$CM1_WSID" ] || fail "a crewmate spawned FROM the secondmate home must NOT land in the primary's project workspace"
+CM2_WS_LABEL=$("$HERDR_LAB_HELPER" run "$SESSION" workspace list 2>&1 | jq -r --arg id "$CM2_WSID" '.result.workspaces[]? | select(.workspace_id == $id) | .label')
+assert_contains_local "$CM2_WS_LABEL" "Scratch Project 2" "secondmate-owned worker did not receive its human project workspace"
+pass "real herdr E2E: a worker spawned from a secondmate home lands in that home's token-owned project workspace"
 
 # --- 4. list-live recovery: each home sees only its own tabs ---------------
 
@@ -195,7 +198,7 @@ SM_LIVE=$(FM_HOME="$SM_HOME" fm_backend_herdr_list_live "$SESSION")
 assert_contains_local "$SM_LIVE" "fm-e2esm1" "the secondmate home's list_live did not see its own task"
 assert_contains_local "$SM_LIVE" "fm-cm2" "the secondmate home's list_live did not see the crewmate spawned from it"
 assert_not_contains_local "$SM_LIVE" "fm-cm1" "the secondmate home's list_live must not see the primary's task"
-pass "real herdr E2E: list_live from the secondmate's own context sees only tasks in the secondmate's own workspace (both its own tab and its crewmate's)"
+pass "real herdr E2E: list_live from the secondmate context combines its legacy primary and token-owned project workspaces"
 
 # --- 5. teardown closes the RIGHT tab, and no other ------------------------
 
@@ -206,13 +209,13 @@ FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$PRIMARY_HOME/state" FM_DATA_OVERRID
 rc=$?
 [ "$rc" -eq 0 ] || fail "fm-teardown.sh failed for the primary-shaped crewmate cm1"$'\n'"$(cat "$TD1_OUT")"
 [ -f "$CM1_META" ] && fail "fm-teardown.sh did not remove cm1's meta"
-if herdr pane get "$CM1_PANE" --session "$SESSION" >/dev/null 2>&1; then
+if "$HERDR_LAB_HELPER" run "$SESSION" pane get "$CM1_PANE" >/dev/null 2>&1; then
   fail "fm-teardown.sh did not close cm1's pane"
 fi
-if ! herdr pane get "$SM_PANE" --session "$SESSION" >/dev/null 2>&1; then
+if ! "$HERDR_LAB_HELPER" run "$SESSION" pane get "$SM_PANE" >/dev/null 2>&1; then
   fail "tearing down cm1 must not have closed the secondmate's OWN pane (wrong tab closed)"
 fi
-if ! herdr pane get "$CM2_PANE" --session "$SESSION" >/dev/null 2>&1; then
+if ! "$HERDR_LAB_HELPER" run "$SESSION" pane get "$CM2_PANE" >/dev/null 2>&1; then
   fail "tearing down cm1 must not have closed cm2's pane (wrong tab closed)"
 fi
 WT1=
@@ -225,10 +228,10 @@ FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$SM_HOME/state" FM_DATA_OVERRIDE="$S
 rc=$?
 [ "$rc" -eq 0 ] || fail "fm-teardown.sh failed for the secondmate-owned crewmate cm2"$'\n'"$(cat "$TD2_OUT")"
 [ -f "$CM2_META" ] && fail "fm-teardown.sh did not remove cm2's meta"
-if herdr pane get "$CM2_PANE" --session "$SESSION" >/dev/null 2>&1; then
+if "$HERDR_LAB_HELPER" run "$SESSION" pane get "$CM2_PANE" >/dev/null 2>&1; then
   fail "fm-teardown.sh did not close cm2's pane"
 fi
-if ! herdr pane get "$SM_PANE" --session "$SESSION" >/dev/null 2>&1; then
+if ! "$HERDR_LAB_HELPER" run "$SESSION" pane get "$SM_PANE" >/dev/null 2>&1; then
   fail "tearing down cm2 must not have closed the secondmate's OWN pane (wrong tab closed)"
 fi
 WT2=

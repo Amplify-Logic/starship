@@ -96,10 +96,12 @@ save() { local tmp="$STATE.tmp.$$"; cat > "$tmp" && mv "$tmp" "$STATE"; }
 cmd=${1:-}; sub=${2:-}
 ws=""; label=""
 args=("$@")
+tokens=()
 for ((i=0; i<${#args[@]}; i++)); do
   case "${args[$i]}" in
     --workspace) ws=${args[$((i+1))]:-} ;;
     --label) label=${args[$((i+1))]:-} ;;
+    --token) tokens+=("${args[$((i+1))]:-}") ;;
   esac
 done
 
@@ -114,8 +116,8 @@ case "$cmd $sub" in
     n=$(jq_state -r '.next'); wsid="w$n"; dn=$((n + 1))
     jq_state --arg wsid "$wsid" --arg wlabel "$label" \
       --arg tabid "$wsid:t$dn" --arg paneid "$wsid:p$dn" \
-      '.workspaces += [{workspace_id:$wsid, label:$wlabel}]
-       | .tabs += [{tab_id:$tabid, label:"1", workspace_id:$wsid, pane_id:$paneid}]
+      '.workspaces += [{workspace_id:$wsid, label:$wlabel, tokens:{}}]
+       | .tabs += [{tab_id:$tabid, label:"1", workspace_id:$wsid, pane_id:$paneid, tokens:{}}]
        | .next = (.next + 2)' | save
     printf '{"result":{"workspace":{"workspace_id":"%s","label":"%s"},"tab":{"tab_id":"%s"},"root_pane":{"pane_id":"%s"}}}\n' \
       "$wsid" "$label" "$wsid:t$dn" "$wsid:p$dn"
@@ -126,12 +128,38 @@ case "$cmd $sub" in
   "tab create")
     n=$(jq_state -r '.next'); tabid="$ws:t$n"; paneid="$ws:p$n"
     jq_state --arg w "$ws" --arg wlabel "$label" --arg tabid "$tabid" --arg paneid "$paneid" \
-      '.tabs += [{tab_id:$tabid, label:$wlabel, workspace_id:$w, pane_id:$paneid}]
+      '.tabs += [{tab_id:$tabid, label:$wlabel, workspace_id:$w, pane_id:$paneid, tokens:{}}]
        | .next = (.next + 1)' | save
     printf '{"result":{"tab":{"tab_id":"%s"},"root_pane":{"pane_id":"%s"}}}\n' "$tabid" "$paneid"
     ;;
   "pane list")
-    jq_state --arg w "$ws" '{result:{panes:[.tabs[]|select(.workspace_id==$w)|{pane_id:.pane_id, tab_id:.tab_id}]}}'
+    jq_state --arg w "$ws" '{result:{panes:[.tabs[]|select(.workspace_id==$w)|{pane_id:.pane_id, tab_id:.tab_id, tokens:(.tokens // {})}]}}'
+    ;;
+  "workspace report-metadata")
+    target=${3:-}
+    for token in "${tokens[@]}"; do
+      key=${token%%=*}; value=${token#*=}
+      jq_state --arg id "$target" --arg key "$key" --arg value "$value" \
+        '.workspaces |= map(if .workspace_id == $id then (.tokens[$key] = $value) else . end)' | save
+    done
+    ;;
+  "pane report-metadata")
+    target=${3:-}
+    for token in "${tokens[@]}"; do
+      key=${token%%=*}; value=${token#*=}
+      jq_state --arg id "$target" --arg key "$key" --arg value "$value" \
+        '.tabs |= map(if .pane_id == $id then (.tokens[$key] = $value) else . end)' | save
+    done
+    ;;
+  "workspace rename")
+    target=${3:-}; new_label=${4:-}
+    jq_state --arg id "$target" --arg label "$new_label" \
+      '.workspaces |= map(if .workspace_id == $id then .label = $label else . end)' | save
+    ;;
+  "tab rename")
+    target=${3:-}; new_label=${4:-}
+    jq_state --arg id "$target" --arg label "$new_label" \
+      '.tabs |= map(if .tab_id == $id then .label = $label else . end)' | save
     ;;
   "pane close")
     pane=${3:-}
@@ -2037,6 +2065,84 @@ test_wait_transition_clean_timeout_returns_1() {
   pass "fm_backend_herdr_wait_transition: stock macOS Bash clean timeout closes fd 9 and returns 1"
 }
 
+herdr_test_path_token() {  # <path>
+  local physical
+  physical=$(cd "$1" && pwd -P)
+  printf 'path-v1:%s' "$(printf '%s' "$physical" | git -C "$ROOT" hash-object --stdin)"
+}
+
+test_managed_workspace_identity_uses_hidden_physical_tokens() {
+  local dir fb home_a home_b project state out
+  dir="$TMP_ROOT/managed-workspace-identity"; mkdir -p "$dir"
+  fb=$(make_herdr_statefake "$dir")
+  state="$dir/state.json"
+  home_a="$dir/home-a"; home_b="$dir/home-b"; project="$dir/project"
+  mkdir -p "$home_a" "$home_b" "$project"
+  jq --arg a "$(herdr_test_path_token "$home_a")" \
+    --arg b "$(herdr_test_path_token "$home_b")" \
+    --arg p "$(herdr_test_path_token "$project")" \
+    '.workspaces = [
+      {workspace_id:"ours",label:"City Guide",tokens:{fm_owner:$a,fm_project:$p}},
+      {workspace_id:"theirs",label:"City Guide",tokens:{fm_owner:$b,fm_project:$p}}
+    ]' "$state" > "$state.tmp" && mv "$state.tmp" "$state"
+  out=$(PATH="$fb:$PATH" FM_HERDR_LOG="$dir/log" FM_FAKE_HERDR_STATE="$state" \
+    FM_HOME="$home_a" FM_HERDR_PROJECT_KEY="$(cd "$project" && pwd -P)" \
+    FM_HERDR_PROJECT_LABEL='City Guide' \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_workspace_find lab' "$ROOT")
+  [ "$out" = ours ] || fail "managed workspace lookup adopted by label or another home's token: '$out'"
+  pass 'managed Herdr workspace lookup uses hidden physical home/project tokens, never its human label'
+}
+
+test_managed_task_identity_allows_shared_titles_and_recovers_hidden_ids() {
+  local dir fb state home project first second live
+  dir="$TMP_ROOT/managed-task-identity"; mkdir -p "$dir"
+  fb=$(make_herdr_statefake "$dir")
+  state="$dir/state.json"; home="$dir/home"; project="$dir/project"
+  mkdir -p "$home" "$project"; : > "$dir/log"
+  jq --arg owner "$(herdr_test_path_token "$home")" \
+    --arg project "$(herdr_test_path_token "$project")" \
+    '.workspaces=[{workspace_id:"w1",label:"City Guide",tokens:{fm_owner:$owner,fm_project:$project}}]' \
+    "$state" > "$state.tmp" && mv "$state.tmp" "$state"
+  first=$(PATH="$fb:$PATH" FM_HERDR_LOG="$dir/log" FM_FAKE_HERDR_STATE="$state" FM_HOME="$home" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_create_task lab:w1 "WORKER · Same outcome · 🟡 WAITING" /tmp "" task-one' "$ROOT")
+  second=$(PATH="$fb:$PATH" FM_HERDR_LOG="$dir/log" FM_FAKE_HERDR_STATE="$state" FM_HOME="$home" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_create_task lab:w1 "WORKER · Same outcome · 🟡 WAITING" /tmp "" task-two' "$ROOT")
+  [ -n "$first" ] && [ -n "$second" ] && [ "$first" != "$second" ] \
+    || fail 'managed tasks with the same human title did not retain distinct stable ids'
+  live=$(PATH="$fb:$PATH" FM_HERDR_LOG="$dir/log" FM_FAKE_HERDR_STATE="$state" FM_HOME="$home" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_list_live lab' "$ROOT")
+  assert_contains "$live" $'fm-task-one' 'list_live did not recover first hidden task id'
+  assert_contains "$live" $'fm-task-two' 'list_live did not recover second hidden task id'
+  pass 'managed Herdr tasks use hidden ids, allow duplicate human outcomes, and recover both rows'
+}
+
+test_list_live_hidden_legacy_and_other_home_boundary() {
+  local dir fb state home other project live
+  dir="$TMP_ROOT/list-live-mixed"; mkdir -p "$dir"
+  fb=$(make_herdr_statefake "$dir")
+  state="$dir/state.json"; home="$dir/home"; other="$dir/other"; project="$dir/project"
+  mkdir -p "$home" "$other" "$project"; : > "$dir/log"
+  jq --arg owner "$(herdr_test_path_token "$home")" \
+    --arg other "$(herdr_test_path_token "$other")" \
+    --arg project "$(herdr_test_path_token "$project")" '
+    .workspaces=[
+      {workspace_id:"managed",label:"Shared Human Name",tokens:{fm_owner:$owner,fm_project:$project}},
+      {workspace_id:"foreign",label:"Shared Human Name",tokens:{fm_owner:$other,fm_project:$project}},
+      {workspace_id:"legacy",label:"firstmate",tokens:{}}
+    ] |
+    .tabs=[
+      {tab_id:"managed:t1",pane_id:"managed:p1",workspace_id:"managed",label:"WORKER · New · WORKING",tokens:{fm_task_id:"new-task"}},
+      {tab_id:"foreign:t1",pane_id:"foreign:p1",workspace_id:"foreign",label:"WORKER · Foreign · WORKING",tokens:{fm_task_id:"foreign-task"}},
+      {tab_id:"legacy:t1",pane_id:"legacy:p1",workspace_id:"legacy",label:"fm-legacy-task",tokens:{}}
+    ]' "$state" > "$state.tmp" && mv "$state.tmp" "$state"
+  live=$(PATH="$fb:$PATH" FM_HERDR_LOG="$dir/log" FM_FAKE_HERDR_STATE="$state" FM_HOME="$home" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_list_live lab' "$ROOT")
+  assert_contains "$live" 'fm-new-task' 'new hidden task token was not recovered'
+  assert_contains "$live" 'fm-legacy-task' 'legacy visible fm-id fallback was not recovered'
+  assert_not_contains "$live" 'foreign-task' "another home's token-owned workspace was claimed"
+  pass 'list_live supports hidden and legacy recovery while refusing another home workspace'
+}
+
 # shellcheck source=bin/fm-backend.sh
 . "$ROOT/bin/fm-backend.sh"
 
@@ -2072,6 +2178,9 @@ test_create_task_creates_and_parses_ids
 test_create_task_creates_with_no_focus_flag
 test_workspace_find_matches_only_this_homes_own_label
 test_list_live_scoped_to_this_homes_workspace_only
+test_managed_workspace_identity_uses_hidden_physical_tokens
+test_managed_task_identity_allows_shared_titles_and_recovers_hidden_ids
+test_list_live_hidden_legacy_and_other_home_boundary
 test_parse_target
 test_normalize_key
 test_capture_calls_pane_read

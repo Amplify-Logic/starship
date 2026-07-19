@@ -639,6 +639,7 @@ handle_push_transition() {  # <backend> <session> <record>
   [ -n "$pane_id" ] || { sleep 1; return; }
   window="$session:$pane_id"
   task=$(window_to_task "$window" "$STATE")
+  "$SCRIPT_DIR/fm-visible-status.sh" "$task" >/dev/null 2>&1 || true
   if status_is_paused "$(last_status_line "$STATE/$task.status")"; then
     triage_log "absorbed push $to (declared pause, awaiting external): $window"
     fm_backend_commit_transition "$backend" "$STATE" "$session" "$record" || exit 1
@@ -783,6 +784,9 @@ while :; do
   if [ -n "$pending" ]; then
     sleep "$SIGNAL_GRACE"
     pending=$(printf '%s\n%s' "$pending" "$(scan_signals)")
+    # Status writes and turn-end markers are bounded authoritative-state
+    # refresh points for captain-facing Herdr presentation.
+    "$SCRIPT_DIR/fm-visible-status.sh" --all >/dev/null 2>&1 || true
     files=""
     while IFS=$(printf '\t') read -r sf sig f; do
       [ -n "$sf" ] || continue
