@@ -92,6 +92,7 @@ exit 0
 SH
   chmod +x "$fakebin/tmux"
   chmod +x "$fakebin/treehouse"
+  fm_fake_exit0 "$fakebin" codex
   : > "$dir/tmux.log"
   printf '%s\n' "$fakebin"
 }

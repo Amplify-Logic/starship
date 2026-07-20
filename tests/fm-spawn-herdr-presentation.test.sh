@@ -141,6 +141,7 @@ case "$cmd $sub" in
 esac
 SH
 chmod +x "$FAKEBIN/herdr" "$FAKEBIN/treehouse"
+fm_fake_exit0 "$FAKEBIN" pi codex
 
 make_project() {  # <slug>
   local dir="$TMP_ROOT/$1"

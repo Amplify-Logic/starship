@@ -319,17 +319,26 @@ fm_backend_required_tools() {  # <backend>
   esac
 }
 
+# fm_backend_resolve_executable: resolve <tool> with the same backend-specific
+# lookup used by bootstrap dependency detection.
+# Most tools use PATH, while adapters with a supported non-PATH location own
+# that fallback themselves.
+fm_backend_resolve_executable() {  # <backend> <tool>
+  local backend=$1 tool=$2
+  case "$backend:$tool" in
+    cmux:cmux)
+      fm_backend_source cmux >/dev/null 2>&1 || return 1
+      fm_backend_cmux_bin
+      ;;
+    *) command -v "$tool" ;;
+  esac
+}
+
 fm_backend_required_tool_available() {  # <backend> <tool>
   local backend=$1 tool=$2 required
   required=$(fm_backend_required_tools "$backend") || return 1
   fm_backend_list_contains "$required" "$tool" || return 1
-  case "$backend:$tool" in
-    cmux:cmux)
-      fm_backend_source cmux >/dev/null 2>&1 || return 1
-      fm_backend_cmux_bin >/dev/null 2>&1
-      ;;
-    *) command -v "$tool" >/dev/null 2>&1 ;;
-  esac
+  fm_backend_resolve_executable "$backend" "$tool" >/dev/null 2>&1
 }
 
 # fm_meta_get: the LAST value of `key=` in <meta-file>, or empty (never

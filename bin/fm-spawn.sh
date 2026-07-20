@@ -37,6 +37,15 @@
 #   overrides it for this spawn (either kind). A non-flag string containing
 #   whitespace is treated as a RAW launch command - the escape hatch for verifying
 #   new adapters.
+#   Before creating any task endpoint, every verified adapter resolves the first
+#   executable in its launch template through the backend's shared executable
+#   resolver and requires its cheap --version probe to succeed. The probe runs
+#   with stdin closed and is bounded by a portable timeout (default 10 seconds,
+#   override with FM_SPAWN_PROBE_TIMEOUT_SECS=<positive integer seconds>); a
+#   probe that times out refuses the spawn loudly, naming the binary and knob.
+#   Raw launch commands are exempt because arbitrary shell syntax can depend on
+#   pane-only aliases, functions, or setup that cannot be resolved safely without
+#   executing the unverified command; the escape hatch therefore stays explicit.
 #   config/secondmate-harness may also carry an optional model and effort as extra
 #   whitespace-separated tokens ("<harness> [<model>] [<effort>]"). For a
 #   --secondmate spawn, those tokens apply only when this spawn also resolves its
@@ -376,13 +385,99 @@ launch_template() {
   esac
 }
 
+launch_binary_from_command() {  # <launch-command>
+  local launch_command=$1 word
+  local -a words
+  read -r -a words <<< "$launch_command"
+  for word in "${words[@]}"; do
+    case "$word" in
+      [A-Za-z_]*=*) continue ;;
+      *) printf '%s\n' "$word"; return 0 ;;
+    esac
+  done
+  return 1
+}
+
+launch_binary_install_hint() {  # <binary>
+  case "$1" in
+    claude) printf '%s' 'npm install -g @anthropic-ai/claude-code' ;;
+    codex) printf '%s' 'npm install -g @openai/codex' ;;
+    opencode) printf '%s' 'npm install -g opencode-ai' ;;
+    pi) printf '%s' 'npm install -g @mariozechner/pi-coding-agent' ;;
+    grok) printf '%s' 'curl -fsSL https://x.ai/cli/install.sh | bash' ;;
+    agent) printf '%s' 'curl https://cursor.com/install -fsS | bash' ;;
+    *) return 1 ;;
+  esac
+}
+
+run_version_probe() {  # <resolved-binary> <timeout-secs>
+  local resolved=$1 timeout_secs=$2 pid waited=0 limit
+  set -m
+  "$resolved" --version </dev/null >/dev/null 2>&1 &
+  pid=$!
+  set +m
+  limit=$((timeout_secs * 10))
+  while kill -0 "$pid" 2>/dev/null; do
+    if [ "$waited" -ge "$limit" ]; then
+      kill -- -"$pid" 2>/dev/null
+      local grace=0
+      while kill -0 "$pid" 2>/dev/null && [ "$grace" -lt 20 ]; do
+        sleep 0.1
+        grace=$((grace + 1))
+      done
+      kill -9 -- -"$pid" 2>/dev/null
+      wait "$pid" 2>/dev/null
+      return 124
+    fi
+    sleep 0.1
+    waited=$((waited + 1))
+  done
+  wait "$pid"
+}
+
+preflight_verified_launch_binary() {  # <backend> <harness> <launch-command>
+  local backend=$1 harness=$2 launch_command=$3 binary resolved hint probe_rc
+  local timeout_secs=${FM_SPAWN_PROBE_TIMEOUT_SECS:-10}
+  case "$timeout_secs" in
+    ''|0|*[!0-9]*)
+      echo "error: FM_SPAWN_PROBE_TIMEOUT_SECS must be a positive integer number of seconds (got '${FM_SPAWN_PROBE_TIMEOUT_SECS:-}'); refusing before creating a task endpoint" >&2
+      return 1
+      ;;
+  esac
+  binary=$(launch_binary_from_command "$launch_command") || {
+    echo "error: harness '$harness' launch template has no executable; refusing before creating a task endpoint" >&2
+    return 1
+  }
+  hint=$(launch_binary_install_hint "$binary") || {
+    echo "error: harness '$harness' launch binary '$binary' has no install hint; refusing before creating a task endpoint" >&2
+    return 1
+  }
+  if ! resolved=$(fm_backend_resolve_executable "$backend" "$binary" 2>/dev/null); then
+    echo "error: harness '$harness' launch binary '$binary' was not found (install: $hint); refusing before creating a task endpoint" >&2
+    return 1
+  fi
+  run_version_probe "$resolved" "$timeout_secs"
+  probe_rc=$?
+  if [ "$probe_rc" -eq 124 ]; then
+    echo "error: harness '$harness' launch binary '$binary' --version probe timed out after ${timeout_secs}s (raise with FM_SPAWN_PROBE_TIMEOUT_SECS); refusing before creating a task endpoint" >&2
+    return 1
+  fi
+  if [ "$probe_rc" -ne 0 ]; then
+    echo "error: harness '$harness' launch binary '$binary' failed its --version probe (reinstall: $hint); refusing before creating a task endpoint" >&2
+    return 1
+  fi
+}
+
+RAW_LAUNCH=0
 case "$ARG3" in
   *' '*)  # raw launch command (unverified-adapter escape hatch)
     LAUNCH=$ARG3
-    HARNESS=""
-    for word in $LAUNCH; do
-      case "$word" in [A-Za-z_]*=*) continue ;; *) HARNESS=$(basename "$word"); break ;; esac
-    done
+    RAW_LAUNCH=1
+    RAW_BINARY=$(launch_binary_from_command "$LAUNCH") || {
+      echo "error: raw launch command has no executable" >&2
+      exit 1
+    }
+    HARNESS=$(basename "$RAW_BINARY")
     ;;
   '')
     # No explicit harness: resolve from config. A secondmate AGENT launches on the
@@ -411,6 +506,9 @@ case "$ARG3" in
     LAUNCH=$(launch_template "$HARNESS" "$KIND") || { echo "error: unknown harness '$HARNESS'; pass a raw launch command to use an unverified adapter" >&2; exit 1; }
     ;;
 esac
+if [ "$RAW_LAUNCH" -eq 0 ]; then
+  preflight_verified_launch_binary "$BACKEND" "$HARNESS" "$LAUNCH" || exit 1
+fi
 
 # config/secondmate-harness may carry optional model/effort tokens alongside the
 # harness ("<harness> [<model>] [<effort>]"). They apply only when this is a

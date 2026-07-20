@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # Behavior tests for fm-spawn.sh batch dispatch (`id=repo` pairs).
 #
-# These exercise argument routing only: each spawn attempt fails fast at the
-# missing-brief check, which is reached before any tmux/treehouse side effect, so
-# the tests create no windows or worktrees. FM_SPAWN_NO_GUARD=1 keeps them off the
-# live watcher guard / state. Parser and path-scoping cases are table-driven; the
-# only behavior asserted on its own is "a multi-pair batch does not stop after the
-# first failure".
+# These exercise argument routing only: each spawn attempt passes the launch
+# preflight with a fake codex binary, then fails before any tmux/treehouse side
+# effect, so the tests create no windows or worktrees.
+# FM_SPAWN_NO_GUARD=1 keeps them off the live watcher guard and state.
+# Parser and path-scoping cases are table-driven.
+# The only behavior asserted on its own is that a multi-pair batch does not stop
+# after the first failure.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -14,6 +15,8 @@ set -u
 
 SPAWN="$ROOT/bin/fm-spawn.sh"
 TMP_ROOT=$(fm_test_tmproot fm-spawn-batch)
+FAKEBIN=$(fm_fakebin "$TMP_ROOT/tools")
+fm_fake_exit0 "$FAKEBIN" codex
 export FM_BACKEND=tmux
 
 # Clear ambient firstmate overrides so the behavior test owns its environment.
@@ -25,7 +28,8 @@ run_spawn() {
     FM_PROJECTS_OVERRIDE='' \
     FM_CONFIG_OVERRIDE='' \
     FM_SPAWN_NO_GUARD=1 \
-    "$SPAWN" "$@" 2>&1
+    PATH="$FAKEBIN:$PATH" \
+    "$SPAWN" "$@" --harness codex 2>&1
 }
 
 # Every pair in a batch is dispatched even though the first one fails; the loop
@@ -81,12 +85,12 @@ test_projects_path_scoping() {
     if [ "$use_override" = yes ]; then
       out=$(FM_ROOT_OVERRIDE='' FM_STATE_OVERRIDE='' FM_DATA_OVERRIDE='' FM_CONFIG_OVERRIDE='' \
         FM_HOME="$home" FM_PROJECTS_OVERRIDE="$projects" FM_SPAWN_NO_GUARD=1 \
-        "$SPAWN" "$id" projects/alpha codex 2>&1)
+        PATH="$FAKEBIN:$PATH" "$SPAWN" "$id" projects/alpha codex 2>&1)
     else
       mkdir -p "$home/projects/alpha"
       out=$(FM_ROOT_OVERRIDE='' FM_STATE_OVERRIDE='' FM_DATA_OVERRIDE='' FM_PROJECTS_OVERRIDE='' FM_CONFIG_OVERRIDE='' \
         FM_HOME="$home" FM_SPAWN_NO_GUARD=1 \
-        "$SPAWN" "$id" projects/alpha codex 2>&1)
+        PATH="$FAKEBIN:$PATH" "$SPAWN" "$id" projects/alpha codex 2>&1)
     fi
     status=$?
     [ "$status" -ne 0 ] || fail "$label: spawn with missing brief should fail"
