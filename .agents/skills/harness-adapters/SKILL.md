@@ -91,6 +91,12 @@ OpenCode uses `.opencode/plugins/fm-primary-watch-arm.js`, which coordinates wit
 Pi uses the tracked `.pi/extensions/fm-primary-turnend-guard.ts` plus the tracked `.pi/extensions/fm-primary-pi-watch.ts`, both project-local extensions Pi auto-discovers once trusted.
 When changing any primary watcher adapter, update `docs/supervision-protocols/`, `docs/turnend-guard.md` if a shared idle or turn-end hook changed, and the relevant concise fact below.
 
+## Primary status bar
+
+`docs/status-bar.md` is the single owner of the shared field order, semantics, thresholds, colors, placeholders, adapter surfaces, and verification evidence.
+Claude uses its native tracked project status-line command, Pi uses its native tracked custom-footer extension, and Kimi 0.27.0 uses a guarded one-row tmux companion because its plugin API cannot render the native footer.
+Cursor remains worker-only, so no captain-facing Cursor status renderer or primary launcher exists.
+
 ## Kimi primary-only boundary
 
 Kimi Code support is pinned to 0.27.0 and K3 through `bin/fm-primary.sh kimi-k3` with `--yolo`.

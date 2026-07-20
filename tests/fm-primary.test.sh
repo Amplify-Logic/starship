@@ -224,6 +224,29 @@ test_kimi_primary_only_profile() {
   pass "fm-primary: Kimi is pinned, isolated, lifecycle-integrated, and remains primary-only"
 }
 
+test_kimi_tmux_companion_status_bar() {
+  local out
+  : > "$LOG"
+  env -u HERDR_ENV -u HERDR_SESSION -u HERDR_PANE_ID \
+    PATH="$FAKEBIN:$PATH" \
+    TERM=dumb \
+    FM_HOME="$HOME_FIX" \
+    FM_PRIMARY_TEST_LOG="$LOG" \
+    FM_KIMI_SOURCE_HOME="$KIMI_SOURCE" \
+    TMUX_PANE=%42 \
+    "$ROOT/bin/fm-primary.sh" kimi-k3
+  out=$(cat "$LOG")
+  assert_contains "$out" 'argv=<split-window><-d><-v><-l><1><-t><%42>' \
+    "Kimi primary did not add a detached one-row tmux companion"
+  assert_contains "$out" "$ROOT/bin/fm-status-bar.sh" \
+    "Kimi tmux companion does not invoke the canonical status renderer"
+  assert_contains "$out" '--adapter kimi' "Kimi tmux companion omitted its adapter"
+  assert_contains "$out" '--model kimi-code/k3' "Kimi tmux companion omitted the pinned model"
+  assert_contains "$out" '--effort --' "Kimi tmux companion did not preserve unavailable effort"
+  assert_contains "$out" "--follow-pane '%42'" "Kimi tmux companion does not follow the primary pane"
+  pass "fm-primary: Kimi gets a scoped tmux companion without replacing native controls"
+}
+
 test_kimi_version_doctor_and_symlink_refusals() {
   local out rc=0 unsafe_home="$TMP_ROOT/unsafe-home" sentinel="$TMP_ROOT/sentinel-config"
   out=$(PATH="$FAKEBIN:$PATH" \
@@ -330,6 +353,7 @@ test_exec_environment_and_exit_status
 test_visible_role_marks_only_current_surface
 test_shim_install_safety
 test_kimi_primary_only_profile
+test_kimi_tmux_companion_status_bar
 test_kimi_version_doctor_and_symlink_refusals
 test_kimi_corrupt_source_registry_atomicity
 test_lab_role_guard

@@ -18,6 +18,9 @@
 #                 opencode
 #   grok          grok --permission-mode bypassPermissions
 #   kimi-k3       kimi --model kimi-code/k3 --yolo
+#                 Inside tmux, the launcher adds a detached one-row companion
+#                 that renders docs/status-bar.md without replacing Kimi's
+#                 native footer or controls.
 #
 # Aliases: claude -> claude-fable; kimi -> kimi-k3.
 # The aliases are primary-launch conveniences only.
@@ -27,9 +30,10 @@
 # Every launch dereferences up to 40 absolute or relative symlink hops from the
 # invoked command, resolves the repository root from the resulting tracked
 # script, changes to that root, refuses another live Firstmate lock holder,
-# checks the selected CLI and its tracked primary integrations, marks only the
-# current terminal surface, then execs the CLI so sessions persist normally and
-# the CLI exit status is returned with no launcher process left behind.
+# checks the selected CLI and its tracked primary integrations, installs only
+# that profile's guarded status-bar surface, marks only the current terminal
+# surface, then execs the CLI so sessions persist normally and the CLI exit
+# status is returned with no launcher process left behind.
 #
 # Kimi 0.27.0 is primary-only.
 # The launcher requires that exact empirically verified version and builds a
@@ -182,6 +186,18 @@ mark_current_surface() {
   fi
 }
 
+install_primary_status_bar() {
+  local command
+  [ "$PROFILE" = kimi-k3 ] || return 0
+  [ -n "${TMUX_PANE:-}" ] || return 0
+  require_command tmux
+  command="exec env FM_HOME=$(shell_quote "$FM_HOME") FM_PRIMARY_HARNESS=kimi $(shell_quote "$FM_ROOT/bin/fm-status-bar.sh") --adapter kimi --model kimi-code/k3 --effort -- --follow-pane $(shell_quote "$TMUX_PANE")"
+  tmux split-window -d -v -l 1 -t "$TMUX_PANE" -c "$FM_ROOT" "$command" >/dev/null 2>&1 || {
+    printf 'fm-primary: Kimi status companion unavailable; continuing with the native TUI\n' >&2
+    return 0
+  }
+}
+
 prepare_kimi_home() {
   local source_home managed plugin skills installed source_installed now item tmp_installed tmp_merged tmp_plugin path
   source_home=${FM_KIMI_SOURCE_HOME:-${KIMI_CODE_HOME:-$HOME/.kimi-code}}
@@ -294,12 +310,20 @@ verify_integrations() {
     pi)
       require_file .pi/extensions/fm-primary-turnend-guard.ts
       require_file .pi/extensions/fm-primary-pi-watch.ts
+      require_file .pi/extensions/fm-primary-status-bar.ts
+      require_file bin/fm-status-bar.sh
       ;;
     claude-fable)
       require_file .claude/settings.json
+      require_file bin/fm-status-bar.sh
       require_command jq
-      jq -e '.hooks.SessionStart and .hooks.PreToolUse and .hooks.Stop' "$FM_ROOT/.claude/settings.json" >/dev/null 2>&1 \
-        || die "Claude primary hooks are incomplete"
+      jq -e '
+        .hooks.SessionStart
+        and .hooks.PreToolUse
+        and .hooks.Stop
+        and (.statusLine.command | contains("bin/fm-status-bar.sh --adapter claude"))
+      ' "$FM_ROOT/.claude/settings.json" >/dev/null 2>&1 \
+        || die "Claude primary integrations are incomplete"
       ;;
     codex)
       require_file .codex/hooks.json
@@ -321,6 +345,7 @@ verify_integrations() {
       require_file .grok/hooks/fm-primary-turnend-guard.json
       ;;
     kimi-k3)
+      require_file bin/fm-status-bar.sh
       prepare_kimi_home
       ;;
   esac
@@ -404,6 +429,7 @@ fi
 mark_current_surface
 export FM_PRIMARY_HARNESS=${PROFILE%%-*}
 export FM_PRIMARY_ROLE=$role
+install_primary_status_bar
 case "$PROFILE" in
   opencode)
     export OPENCODE_CONFIG_CONTENT='{"permission":{"*":"allow"}}'

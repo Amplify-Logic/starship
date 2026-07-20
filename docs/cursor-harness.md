@@ -373,8 +373,8 @@ no supported status-line, footer, or terminal-UI API.**
   `commands`, `agents`, skills, and MCP servers. None of these contribute footer
   or status-line content.
 
-Status-bar parity on cursor therefore cannot use a native API and would need a
-different mechanism. Nothing was implemented for it here.
+Status-bar parity on cursor therefore cannot use a native API and would need a different mechanism.
+The canonical decision is now owned by [`status-bar.md`](status-bar.md): Cursor remains worker-only, so a captain-facing renderer is not applicable and no guarded primary launcher exists on which to install an outer line.
 
 ## 9. Model and effort mapping
 
