@@ -297,6 +297,24 @@ test_sweep_respawns_confirmed_dead_secondmate() {
   pass "sweep: a confirmed-dead secondmate endpoint is killed and respawned"
 }
 
+test_sweep_treats_cursor_as_verified_for_dead_secondmate() {
+  local w fb tmuxfb log out
+  w=$(new_world sweep-dead-cursor)
+  add_sm_home "$w" sm1 firstmate:fm-sm1 cursor
+  fb=$(make_toolchain "$w"); tmuxfb=$(make_liveness_tmux "$w")
+  log="$w/calls.log"; : > "$log"
+
+  out=$(run_bootstrap "$tmuxfb:$fb" "$w/home" zsh "$log")
+
+  assert_not_contains "$out" "SECONDMATE_LIVENESS: secondmate sm1: skipped: liveness probe inconclusive" \
+    "the verified cursor harness should preserve a confident-dead probe reading"
+  assert_contains "$(cat "$log")" "kill-window -t firstmate:fm-sm1" \
+    "a confirmed-dead cursor secondmate should have its stale endpoint killed"
+  assert_contains "$(cat "$log")" "new-window" \
+    "a confirmed-dead cursor secondmate should be relaunched"
+  pass "sweep: cursor is accepted as a verified secondmate harness"
+}
+
 test_sweep_leaves_alive_secondmate_untouched() {
   local w fb tmuxfb log out
   w=$(new_world sweep-alive)
@@ -405,6 +423,7 @@ test_tmux_agent_alive_classifies
 test_herdr_agent_alive_maps_pane_agent_state
 test_agent_alive_dispatcher_routes_and_falls_back
 test_sweep_respawns_confirmed_dead_secondmate
+test_sweep_treats_cursor_as_verified_for_dead_secondmate
 test_sweep_leaves_alive_secondmate_untouched
 test_sweep_never_acts_on_inconclusive_reading
 test_sweep_never_acts_on_unverified_harness_dead_reading
