@@ -350,7 +350,7 @@ ambiguous reading.
 | Backend | Applicability | Basis |
 |---|---|---|
 | tmux | verified | reference backend; probe extended and tested live above |
-| herdr | composer-safe, liveness unverified | herdr uses a STRUCTURAL composer scan, so the `cursor_y` defect cannot occur, and it shares `fm_composer_strip_ghost` + the shared idle default, so the placeholder fix applies. Its own agent-liveness path was not exercised against cursor. |
+| herdr | composer-safe; busy/blocked corroborated | herdr uses a STRUCTURAL composer scan, so the `cursor_y` defect cannot occur, and it shares `fm_composer_strip_ghost` + the shared idle default, so the placeholder fix applies. Native `blocked` / idle readings are corroborated against the rendered busy footer (`ctrl+c to stop`) before immediate waiting-on-human escalation or poll-path idle (regression: 2026-07-19 `default:wP:p4`; `tests/fm-backend-herdr.test.sh`, `tests/fm-supervision-events.test.sh`). Process-level agent-alive still follows herdr's registered `agent get` path, not tmux argv introspection. |
 | zellij / orca / cmux | not verified for cursor | orca and cmux read a PLAIN (unstyled) screen, so they never see the reverse-video cell and rely on the shared idle-placeholder match, which now covers cursor's two placeholders. No cursor session was run on any of the three. |
 
 These are marked on inspection of each integration surface, not assumption. Only

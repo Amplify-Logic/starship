@@ -61,10 +61,10 @@ case "$cmd $sub" in
   'workspace list') query '{result:{workspaces:.workspaces}}' ;;
   'workspace create')
     n=$(query -r .next); ws="w$n"; tab="$ws:t1"; pane="$ws:p1"
-    query --arg ws "$ws" --arg label "$label" --arg tab "$tab" --arg pane "$pane" --arg cwd "$cwd" '
+    query --arg ws "$ws" --arg lbl "$label" --arg tab "$tab" --arg pane "$pane" --arg cwd "$cwd" '
       .next += 1 |
-      .workspaces += [{workspace_id:$ws,label:$label,tokens:{}}] |
-      .tabs += [{workspace_id:$ws,tab_id:$tab,pane_id:$pane,label:"1",cwd:$cwd,tokens:{}}]' | save
+      .workspaces += [{workspace_id:$ws,"label":$lbl,tokens:{}}] |
+      .tabs += [{workspace_id:$ws,tab_id:$tab,pane_id:$pane,"label":"1",cwd:$cwd,tokens:{}}]' | save
     jq -n --arg ws "$ws" --arg tab "$tab" --arg pane "$pane" \
       '{result:{workspace:{workspace_id:$ws},tab:{tab_id:$tab},root_pane:{pane_id:$pane}}}'
     ;;
@@ -86,9 +86,9 @@ case "$cmd $sub" in
   'tab list') query --arg ws "$workspace" '{result:{tabs:[.tabs[]|select(.workspace_id==$ws)]}}' ;;
   'tab create')
     n=$(query -r .next); tab="$workspace:t$n"; pane="$workspace:p$n"
-    query --arg ws "$workspace" --arg tab "$tab" --arg pane "$pane" --arg label "$label" --arg cwd "$cwd" '
+    query --arg ws "$workspace" --arg tab "$tab" --arg pane "$pane" --arg lbl "$label" --arg cwd "$cwd" '
       .next += 1 |
-      .tabs += [{workspace_id:$ws,tab_id:$tab,pane_id:$pane,label:$label,cwd:$cwd,tokens:{}}]' | save
+      .tabs += [{workspace_id:$ws,tab_id:$tab,pane_id:$pane,"label":$lbl,cwd:$cwd,tokens:{}}]' | save
     jq -n --arg tab "$tab" --arg pane "$pane" '{result:{tab:{tab_id:$tab},root_pane:{pane_id:$pane}}}'
     ;;
   'tab rename')

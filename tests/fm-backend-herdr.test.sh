@@ -1877,6 +1877,80 @@ test_apply_transition_blocked_requires_commit_to_dedupe() {
   pass "fm_backend_herdr_apply_transition: blocked dedupe starts only after explicit commit"
 }
 
+# Regression (2026-07-19, default:wP:p4): herdr reported agent_status=blocked
+# while a cursor worker was mid-turn with the busy footer "ctrl+c to stop".
+# That false blocked fired an immediate "waiting on human" stale wake. The
+# busy footer is the phase-stable signal (docs/cursor-harness.md); the spinner
+# verb must not be the match (it flips Working/Running mid-turn).
+test_capture_shows_busy_matches_cursor_ctrl_c_to_stop() {
+  local dir log resp fb rc
+  dir="$TMP_ROOT/capture-busy-cursor"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  # Verbatim busy footer shape from docs/cursor-harness.md (wP:p4 incident).
+  printf '  → Add a follow-up                                          ctrl+c to stop\n' > "$resp/1.out"
+  fb=$(make_herdr_fakebin "$dir")
+  PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_capture_shows_busy default wP:p4' "$ROOT"
+  rc=$?
+  [ "$rc" = 0 ] || fail "cursor busy footer 'ctrl+c to stop' must match, got rc $rc"
+  pass "fm_backend_herdr_capture_shows_busy: cursor mid-turn footer (ctrl+c to stop) reads busy"
+}
+
+test_capture_shows_busy_idle_cursor_not_busy() {
+  local dir log resp fb rc
+  dir="$TMP_ROOT/capture-idle-cursor"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  printf '  → Add a follow-up\n\n  Cursor Grok 4.5 Low · 7%%                                   Run Everything\n' > "$resp/1.out"
+  fb=$(make_herdr_fakebin "$dir")
+  PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_capture_shows_busy default wP:p4' "$ROOT"
+  rc=$?
+  [ "$rc" -ne 0 ] || fail "idle cursor pane must not match the busy footer"
+  pass "fm_backend_herdr_capture_shows_busy: idle cursor pane (no ctrl+c to stop) is not busy"
+}
+
+test_capture_shows_busy_ignores_spinner_verb_alone() {
+  local dir log resp fb rc
+  dir="$TMP_ROOT/capture-spinner-only"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  # Spinner verb alone must NOT be busy: it changes mid-turn (Working/Running).
+  printf '⠠⠛ Running  67 tokens\n' > "$resp/1.out"
+  fb=$(make_herdr_fakebin "$dir")
+  PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_capture_shows_busy default wP:p4' "$ROOT"
+  rc=$?
+  [ "$rc" -ne 0 ] || fail "spinner verb 'Running' alone must not count as busy"
+  pass "fm_backend_herdr_capture_shows_busy: spinner verb alone is not the busy signal"
+}
+
+test_apply_transition_busy_cursor_footer_absorbs_blocked() {
+  local dir state rec out rc marker
+  dir="$TMP_ROOT/apply-blocked-busy-cursor"; state="$dir/state"; mkdir -p "$state"
+  # Same pane id shape as the observed false-blocked incident (default:wP:p4).
+  rec=$(bash -c '. "$0/bin/fm-transition-lib.sh"; fm_transition_record wP:p4 wP "" blocked cursor' "$ROOT")
+  marker="$state/.herdr-escalated-default_wP_p4"
+  out=$(bash -c '
+    . "$0/bin/backends/herdr.sh"
+    fm_backend_herdr_capture_shows_busy() { return 0; }
+    fm_backend_herdr_apply_transition "$1" "$2" "$3"
+  ' "$ROOT" "$state" default "$rec"); rc=$?
+  [ "$rc" = 1 ] || fail "blocked+busy-footer must not be actionable (expect rc 1), got $rc"
+  [ -z "$out" ] || fail "blocked+busy-footer must print nothing, got '$out'"
+  [ ! -e "$marker" ] || fail "busy-footer absorb must not leave an escalation marker"
+  pass "fm_backend_herdr_apply_transition: blocked with cursor busy footer (wP:p4) is absorbed, not actionable"
+}
+
+test_apply_transition_idle_cursor_blocked_still_actionable() {
+  local dir state rec out rc
+  dir="$TMP_ROOT/apply-blocked-idle-cursor"; state="$dir/state"; mkdir -p "$state"
+  rec=$(bash -c '. "$0/bin/fm-transition-lib.sh"; fm_transition_record wP:p4 wP "" blocked cursor' "$ROOT")
+  out=$(bash -c '
+    . "$0/bin/backends/herdr.sh"
+    fm_backend_herdr_capture_shows_busy() { return 1; }
+    fm_backend_herdr_apply_transition "$1" "$2" "$3"
+  ' "$ROOT" "$state" default "$rec"); rc=$?
+  [ "$rc" = 0 ] || fail "blocked with idle pane (no busy footer) must stay actionable, got rc $rc"
+  case "$out" in *blocked*) : ;; *) fail "idle-pane blocked must still print the record, got '$out'" ;; esac
+  pass "fm_backend_herdr_apply_transition: blocked with idle cursor pane remains actionable (waiting on human)"
+}
+
 test_apply_transition_working_clears_marker() {
   local dir state blocked working marker rc
   dir="$TMP_ROOT/apply-working"; state="$dir/state"; mkdir -p "$state"
@@ -2237,6 +2311,11 @@ test_scripts_route_explicit_target_through_meta_backend
 test_normalize_event_leaves_from_empty
 test_escalation_marker_keys_like_watcher
 test_apply_transition_blocked_requires_commit_to_dedupe
+test_capture_shows_busy_matches_cursor_ctrl_c_to_stop
+test_capture_shows_busy_idle_cursor_not_busy
+test_capture_shows_busy_ignores_spinner_verb_alone
+test_apply_transition_busy_cursor_footer_absorbs_blocked
+test_apply_transition_idle_cursor_blocked_still_actionable
 test_apply_transition_working_clears_marker
 test_clear_transition_removes_task_marker
 test_apply_transition_defer_and_fallback_are_noops

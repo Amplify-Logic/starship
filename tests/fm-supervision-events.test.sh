@@ -78,6 +78,46 @@ fi
 grep -q 'absorbed push' "$STATE_DIR/.watch-triage.log" 2>/dev/null || fail "the paused absorb should be logged to the triage log"
 pass "handle_push_transition: a declared-pause crew is absorbed (no fast wake), left to the poll loop's long cadence"
 
+# --- handle_push_transition: busy cursor footer absorbs false blocked (wP:p4) -
+
+reset_state
+fm_write_meta "$STATE_DIR/tk-cursor.meta" "window=default:wP:p4" "backend=herdr" "kind=ship" "harness=cursor"
+# shellcheck disable=SC2329  # invoked indirectly by handle_push_transition
+fm_backend_capture() {
+  # Verbatim busy footer from the 2026-07-19 default:wP:p4 false-blocked incident.
+  printf '  → Add a follow-up                                          ctrl+c to stop\n'
+}
+handle_push_transition herdr default "$(fm_transition_record wP:p4 wP "" blocked cursor)"
+if [ -e "$STATE_DIR/.wake-queue" ] && grep -q 'stale' "$STATE_DIR/.wake-queue"; then
+  fail "a busy cursor pane must NOT get waiting-on-human escalation: $(cat "$STATE_DIR/.wake-queue")"
+fi
+[ ! -s "$WAKE_LOG" ] || fail "a busy cursor pane must not wake the supervisor from the blocked fast-path"
+[ ! -e "$STATE_DIR/.herdr-escalated-default_wP_p4" ] || fail "busy-footer absorb must not commit the dedupe marker"
+grep -q 'busy footer, not waiting on human' "$STATE_DIR/.watch-triage.log" 2>/dev/null \
+  || fail "the busy-footer absorb should be logged to the triage log"
+pass "handle_push_transition: busy cursor footer (ctrl+c to stop on wP:p4) absorbs false blocked"
+
+reset_state
+fm_write_meta "$STATE_DIR/tk-cursor-idle.meta" "window=default:wP:p4" "backend=herdr" "kind=ship" "harness=cursor"
+fm_backend_capture() {
+  printf '  → Add a follow-up\n\n  Cursor Grok 4.5 Low · 7%%                                   Run Everything\n'
+}
+handle_push_transition herdr default "$(fm_transition_record wP:p4 wP "" blocked cursor)"
+[ -e "$STATE_DIR/.wake-queue" ] || fail "an idle cursor pane that is blocked must still escalate"
+grep -q 'herdr: agent blocked' "$STATE_DIR/.wake-queue" || fail "idle-pane blocked must name waiting-on-human cause"
+[ -s "$WAKE_LOG" ] || fail "idle-pane blocked must wake the supervisor"
+pass "handle_push_transition: idle cursor pane with blocked still escalates as waiting on human"
+
+# --- window_is_busy: herdr idle is corroborated by the busy footer -----------
+
+reset_state
+fm_backend_busy_state() { printf 'idle'; }
+window_is_busy "default:wP:p4" $'  → Add a follow-up                                          ctrl+c to stop\n' \
+  || fail "herdr idle + cursor busy footer must read busy on the poll path"
+window_is_busy "default:wP:p4" $'  → Add a follow-up\n\n  Cursor Grok 4.5 Low · 7%\n' \
+  && fail "herdr idle + idle cursor pane must not read busy"
+pass "window_is_busy: herdr idle is corroborated by the pane busy footer (cursor ctrl+c to stop)"
+
 # --- event_wait_or_sleep: secondmate windows are excluded from the pane list --
 
 reset_state

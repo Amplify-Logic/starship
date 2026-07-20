@@ -185,17 +185,20 @@ hash_pane() {
 # window_is_busy: 0 (busy) iff the task's harness is actively working. Prefers
 # a backend's native semantic busy state (fm_backend_busy_state - herdr's
 # agent.get; herdr-addendum "busy state" row, "the first backend where
-# fm_session_busy_state gets real semantics"); falls back to the existing
-# pane-tail regex ONLY when the backend reports unknown (tmux always does, so
-# its path is unchanged byte-for-byte). <tail40> is the same bounded capture
-# already read for hashing, so this adds no extra backend calls on the
-# regex-fallback path.
+# fm_session_busy_state gets real semantics"). A bare `busy` verdict is trusted
+# outright. Both `idle` and unknown/unparseable fall through to the shared
+# pane-tail regex over <tail40> - the same corroboration crew_pane_is_busy and
+# the away-mode daemon already apply. Herdr maps blocked->idle and can also
+# report idle while a long foreground tool call (or a busy cursor turn with
+# "ctrl+c to stop") is still in progress; trusting idle outright skipped that
+# corroboration and let healthy workers look idle on the poll path. <tail40>
+# is the same bounded capture already read for hashing, so the corroboration
+# adds no extra backend calls.
 window_is_busy() {  # <window> <tail40>
   local w=$1 tail40=$2 bs
   bs=$(fm_backend_busy_state "$(window_backend "$w")" "$w" 2>/dev/null)
   case "$bs" in
     busy) return 0 ;;
-    idle) return 1 ;;
     *)
       printf '%s' "$tail40" | grep -v '^[[:space:]]*$' | tail -6 | grep -qiE "$BUSY_REGEX"
       ;;
@@ -630,13 +633,16 @@ event_wait_or_sleep() {
 # the backend returned. Maps the pane back to its window and task, applies the
 # declared-pause exemption (a crew waiting on a known external dependency is not
 # a surprise block - absorb it on the poll loop's long pause cadence instead),
-# and otherwise enqueues an immediate `stale` wake and wakes the supervisor. The
-# `stale` kind is deliberate: the supervisor's handler for it ("peek the pane to
-# diagnose") is exactly right for a blocked crew, and the drain/dedupe/guard
-# machinery already understands it (queued by key=window, so a later poll-path
-# stale for the same pane collapses on drain).
+# corroborates against the rendered busy footer (herdr can report blocked while
+# a harness is mid-turn - cursor's "ctrl+c to stop" on default:wP:p4, 2026-07-19;
+# a genuine human-blocked pane has no busy banner), and otherwise enqueues an
+# immediate `stale` wake and wakes the supervisor. The `stale` kind is
+# deliberate: the supervisor's handler for it ("peek the pane to diagnose") is
+# exactly right for a blocked crew, and the drain/dedupe/guard machinery already
+# understands it (queued by key=window, so a later poll-path stale for the same
+# pane collapses on drain).
 handle_push_transition() {  # <backend> <session> <record>
-  local backend=$1 session=$2 record=$3 pane_id to window task reason
+  local backend=$1 session=$2 record=$3 pane_id to window task reason tail40
   pane_id=$(fm_transition_pane_id "$record")
   to=$(fm_transition_to_status "$record")
   [ -n "$pane_id" ] || { sleep 1; return; }
@@ -646,6 +652,16 @@ handle_push_transition() {  # <backend> <session> <record>
   if status_is_paused "$(last_status_line "$STATE/$task.status")"; then
     triage_log "absorbed push $to (declared pause, awaiting external): $window"
     fm_backend_commit_transition "$backend" "$STATE" "$session" "$record" || exit 1
+    return
+  fi
+  # Defense-in-depth for direct callers and any path that surfaces blocked
+  # without apply_transition's busy-footer gate: absorb mid-turn busy panes
+  # without committing the dedupe marker so a later genuine blocked (no busy
+  # footer) can still escalate on reconcile.
+  tail40=$(fm_backend_capture "$backend" "$window" 40 2>/dev/null) || tail40=""
+  if [ -n "$tail40" ] && printf '%s' "$tail40" | grep -v '^[[:space:]]*$' | tail -6 \
+       | grep -qiE "$BUSY_REGEX"; then
+    triage_log "absorbed push $to (busy footer, not waiting on human): $window"
     return
   fi
   reason="stale: $window (herdr: agent $to - waiting on human, escalated immediately, not via wedge timer)"

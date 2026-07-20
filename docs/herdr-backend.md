@@ -848,6 +848,15 @@ The luminance rule assumes a dark terminal theme (the fleet reality); the SGR-2 
 **Resolved: backend-independent wedge alarm.** The max-defer wedge alarm (`inject_wedge_alarm`, `bin/fm-supervise-daemon.sh`) formerly alarmed into the void because its only active signal was a tmux client status-line flash, skipped for herdr, leaving only the passive `state/.subsuper-inject-wedged` marker.
 It now also attempts a configurable active alert independent of the supervisor backend; [`wedge-alarm.md`](wedge-alarm.md) owns its channels and verification evidence.
 
+## Incident (2026-07-19): cursor mid-turn reported as blocked (waiting on human)
+
+Herdr's native `agent_status` reported `blocked` for a healthy cursor worker on `default:wP:p4` while the pane still showed the mid-turn footer `ctrl+c to stop`.
+The push path treated that as actionable and fired an immediate stale wake (`herdr: agent blocked - waiting on human`) instead of absorbing a busy turn.
+Cursor's spinner verb (`Working` / `Running`) is not a safe busy signal - it changes mid-turn - so corroboration matches only the stable footer hint, the same `FM_BUSY_REGEX` entry documented in [`cursor-harness.md`](cursor-harness.md).
+
+**Fix:** `fm_backend_herdr_capture_shows_busy` + `fm_backend_herdr_apply_transition` refuse to surface `blocked` while the busy footer is present; `handle_push_transition` applies the same check as defense-in-depth; `window_is_busy` corroborates native `idle` (herdr maps `blocked` to idle) against the pane-tail regex so the poll path agrees.
+An idle cursor pane with no busy footer still escalates as waiting on human.
+
 ## Native `pane.agent_status_changed` push escalation (immediate blocked wake)
 
 Herdr exposes a native, push-based agent-state event stream, and firstmate folds it into the watcher so a crew entering `blocked` (waiting on the human at a permission/trust dialog, an interactive menu, or a wedged prompt) wakes its supervisor sub-second instead of after the ~240s stale-pane wedge timer.
@@ -856,7 +865,9 @@ This is the follow-up the former "No `events.subscribe` native push" gap note de
 **Mechanism (one owner per contract).**
 `bin/fm-transition-lib.sh` owns the backend-neutral normalized-transition record shape and the single-owner status->action policy table (`fm_transition_policy`: `blocked`=actionable, `working`=absorb-and-clear-dedupe, `idle`/`done`=defer, anything else=fall back to polling).
 `bin/backends/herdr.sh` (`fm_backend_herdr_wait_transition`) subscribes to `pane.agent_status_changed` for this home's herdr panes over ONE raw `AF_UNIX` connection via `bin/backends/herdr-eventwait.py`, subscribing to ALL statuses (so `working` edges clear the per-pane dedupe marker) and returning the first fresh `blocked` edge; after the subscription acknowledgement it level-reconciles each pane's current state while the stream remains live, so a pane that went blocked during the gap is caught once and transitions during reconciliation are buffered.
-`bin/fm-watch.sh` splices this in as the watcher's terminal wait (`event_wait_or_sleep`, replacing the blind `sleep POLL` for push-capable homes): on a returned `blocked` it maps `pane_id -> <session>:<pane_id> -> task`, exempts `kind=secondmate` endpoints and declared `paused:` waits, and enqueues an immediate `stale` wake.
+`bin/fm-watch.sh` splices this in as the watcher's terminal wait (`event_wait_or_sleep`, replacing the blind `sleep POLL` for push-capable homes): on a returned `blocked` it maps `pane_id -> <session>:<pane_id> -> task`, exempts `kind=secondmate` endpoints and declared `paused:` waits, corroborates against the rendered busy footer (so a mid-turn worker is not treated as waiting on human), and enqueues an immediate `stale` wake only when the pane is truly blocked.
+`fm_backend_herdr_apply_transition` applies the same busy-footer gate before surfacing a blocked edge, so a false native `blocked` during a healthy turn never reaches the watcher.
+Regression coverage: `tests/fm-backend-herdr.test.sh` and `tests/fm-supervision-events.test.sh` (2026-07-19 `default:wP:p4` cursor busy footer `ctrl+c to stop`).
 There is no second watcher process: the reader is a short-lived subprocess of the single watcher, so the "exactly one live supervision cycle" invariant and every guard/beacon/arm/turn-end mechanism are unchanged.
 
 **Polling is the permanent fail-closed backstop.**

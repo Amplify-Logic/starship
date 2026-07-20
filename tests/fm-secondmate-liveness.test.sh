@@ -169,7 +169,10 @@ test_agent_alive_dispatcher_routes_and_falls_back() {
 make_toolchain() {
   local dir=$1 fakebin
   fakebin=$(fm_fakebin "$dir")
-  fm_fake_exit0 "$fakebin" node gh-axi chrome-devtools-axi lavish-axi
+  # claude/codex/agent: the respawn path's launch preflight probes the resolved
+  # harness binary's --version before creating an endpoint; the sweep tests
+  # exercise claude-, codex-, and cursor-harness (binary: agent) secondmates.
+  fm_fake_exit0 "$fakebin" node gh-axi chrome-devtools-axi lavish-axi claude codex agent
   cat > "$fakebin/gh" <<'SH'
 #!/usr/bin/env bash
 exit 0

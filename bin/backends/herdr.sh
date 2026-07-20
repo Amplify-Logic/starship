@@ -1369,12 +1369,33 @@ fm_backend_herdr_escalation_marker() {  # <state_dir> <window>
   printf '%s/%s%s' "$state" "$FM_BACKEND_HERDR_ESCALATED_PREFIX" "$key"
 }
 
+# fm_backend_herdr_capture_shows_busy: 0 iff <session>:<pane_id>'s rendered
+# tail matches the shared busy-pane signature (FM_BUSY_REGEX / the same default
+# as bin/fm-tmux-lib.sh and bin/fm-watch.sh, including cursor's "ctrl+c to
+# stop"). Used to corroborate a native `blocked` reading before treating it as
+# "waiting on human": herdr can report blocked while a harness is mid-turn
+# (observed 2026-07-19 on default:wP:p4 with a busy cursor footer), the same
+# class as idle-during-long-tool-call (docs/herdr-backend.md). Capture failure
+# or a missing busy footer returns 1 (not busy) so a genuine human-blocked
+# pane still escalates; an unreadable pane fails toward escalation, not
+# toward suppressing it.
+fm_backend_herdr_capture_shows_busy() {  # <session> <pane_id>
+  local session=$1 pane_id=$2 tail
+  local re="${FM_BUSY_REGEX:-esc (to )?interrupt|Working\.\.\.|Ctrl\+c:cancel|ctrl\+c to stop}"
+  tail=$(fm_backend_herdr_capture "${session}:${pane_id}" 40 2>/dev/null) || return 1
+  printf '%s' "$tail" | grep -v '^[[:space:]]*$' | tail -6 | grep -qiE "$re"
+}
+
 # fm_backend_herdr_apply_transition: route one normalized record through the
 # shared policy table, maintaining the per-pane dedupe marker under <state_dir>.
 # On a fresh `actionable` (blocked) edge - policy actionable AND no marker yet -
 # it prints the record on stdout and returns 0 (the caller stops and hands the
 # record up). The caller commits the marker only after handling the record.
-# `absorb` (working) clears the marker and
+# A fresh blocked edge whose pane still renders a busy footer is NOT actionable:
+# absorb it (clear any marker, return 1) so the watcher never fires the
+# immediate "waiting on human" stale wake for a healthy mid-turn worker; when
+# the busy footer clears and status is still blocked, the next reconcile can
+# escalate. `absorb` (working) clears the marker and
 # returns 1. `defer`/`fallback`, and an already-marked `actionable`, return 1
 # with no output. <session> reconstructs the window ("<session>:<pane_id>") for
 # the marker key, matching the watcher's own key scheme.
@@ -1389,6 +1410,10 @@ fm_backend_herdr_apply_transition() {  # <state_dir> <session> <record>
   case "$action" in
     actionable)
       if [ ! -e "$marker" ]; then
+        if fm_backend_herdr_capture_shows_busy "$session" "$pane_id"; then
+          rm -f "$marker" 2>/dev/null || true
+          return 1
+        fi
         printf '%s' "$record"
         return 0
       fi
