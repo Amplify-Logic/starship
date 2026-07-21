@@ -345,6 +345,44 @@ test_fast_variant_is_never_implicit() {
   pass "cursor fast variants are never selected implicitly by the effort axis"
 }
 
+# --- 4b. live footer model identity (model-label-truth) ---------------------
+
+# shellcheck source=bin/fm-cursor-model-lib.sh
+. "$ROOT/bin/fm-cursor-model-lib.sh"
+
+test_parse_footer_model_from_idle_capture() {
+  local out
+  out=$(fm_cursor_parse_footer_model "$(printf 'READY1\n\n  → Add a follow-up\n\n  Cursor Grok 4.5 Medium Fast · 7%%                                   Run Everything\n')")
+  [ "$out" = 'Cursor Grok 4.5 Medium Fast' ] \
+    || fail "idle footer model parse failed: '$out'"
+  out=$(fm_cursor_parse_footer_model "$(printf '  → Add a follow-up                                          ctrl+c to stop\n')")
+  [ -z "$out" ] || fail "busy footer must not invent a model, got '$out'"
+  pass "cursor footer parser reads idle model labels and ignores busy panes"
+}
+
+test_catalog_has_model_and_equivalence() {
+  local catalog
+  catalog="$TMP_ROOT/models.txt"
+  cat > "$catalog" <<'EOF'
+Available models
+cursor-grok-4.5-medium-fast - Cursor Grok 4.5 Medium Fast
+gpt-5.6-sol-xhigh - GPT-5.6 Sol 1M Extra High
+EOF
+  FM_CURSOR_MODEL_CATALOG="$catalog" fm_cursor_catalog_has_model gpt-5.6-sol-xhigh \
+    || fail "known catalog id should match"
+  if FM_CURSOR_MODEL_CATALOG="$catalog" fm_cursor_catalog_has_model definitely-not-a-real-model-xyz; then
+    fail "unknown catalog id must not match"
+  fi
+  FM_CURSOR_MODEL_CATALOG="$catalog" fm_cursor_models_equivalent \
+    cursor-grok-4.5-medium-fast 'Cursor Grok 4.5 Medium Fast' \
+    || fail "id and matching footer display should be equivalent"
+  if FM_CURSOR_MODEL_CATALOG="$catalog" fm_cursor_models_equivalent \
+    gpt-5.6-sol-xhigh 'Cursor Grok 4.5 Medium Fast'; then
+    fail "sol-xhigh must not be equivalent to a Grok footer (atelier mismatch shape)"
+  fi
+  pass "cursor catalog membership and requested-vs-live equivalence"
+}
+
 # --- 5. liveness ------------------------------------------------------------
 
 test_liveness_uses_argv_for_node_comm() {
@@ -385,7 +423,10 @@ test_cursor_env_marker_beats_inherited_claudecode() {
 
 test_claude_detection_unregressed() {
   local out
-  out=$(CLAUDECODE=1 "$ROOT/bin/fm-harness.sh")
+  # Unset CURSOR_AGENT explicitly: this suite itself often runs inside a cursor
+  # worker whose ambient CURSOR_AGENT=1 would otherwise make the probe report
+  # cursor even when the test only sets CLAUDECODE=1.
+  out=$(env -u CURSOR_AGENT CLAUDECODE=1 "$ROOT/bin/fm-harness.sh")
   [ "$out" = claude ] || fail "claude detection regressed: '$out'"
   pass "claude detection is unchanged when CURSOR_AGENT is absent"
 }
@@ -426,6 +467,8 @@ test_effort_folds_into_model_id
 test_effort_above_ceiling_caps_at_high
 test_explicit_tiered_model_is_never_retiered
 test_fast_variant_is_never_implicit
+test_parse_footer_model_from_idle_capture
+test_catalog_has_model_and_equivalence
 test_liveness_uses_argv_for_node_comm
 test_unattributable_node_stays_unknown
 test_cursor_env_marker_beats_inherited_claudecode

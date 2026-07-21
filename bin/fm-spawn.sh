@@ -43,6 +43,14 @@
 #   with stdin closed and is bounded by a portable timeout (default 10 seconds,
 #   override with FM_SPAWN_PROBE_TIMEOUT_SECS=<positive integer seconds>); a
 #   probe that times out refuses the spawn loudly, naming the binary and knob.
+#   For cursor, the effort axis is folded into the launch model id (see
+#   cursor_model_with_effort) and that launch id is what meta model= records.
+#   When agent --list-models (or FM_CURSOR_MODEL_CATALOG) is available, an
+#   unknown cursor model id refuses the spawn before any endpoint is created,
+#   because a missing/invalid --model leaves the worker on the account default
+#   in ~/.cursor/cli-config.json while meta would still claim the requested id
+#   (bin/fm-cursor-model-lib.sh; docs/cursor-harness.md). Herdr presentation
+#   separately prefers the live pane footer model over meta when readable.
 #   Raw launch commands are exempt because arbitrary shell syntax can depend on
 #   pane-only aliases, functions, or setup that cannot be resolved safely without
 #   executing the unverified command; the escape hatch therefore stays explicit.
@@ -120,6 +128,8 @@ SUB_HOME_MARKER=".fm-secondmate-home"
 . "$SCRIPT_DIR/fm-gate-refuse-lib.sh"
 # shellcheck source=bin/fm-pr-lib.sh
 . "$SCRIPT_DIR/fm-pr-lib.sh"
+# shellcheck source=bin/fm-cursor-model-lib.sh
+. "$SCRIPT_DIR/fm-cursor-model-lib.sh"
 # Fail closed before any fleet mutation: a no-mistakes gate agent must never spawn
 # a direct report (see bin/fm-gate-refuse-lib.sh).
 fm_refuse_if_gate_agent
@@ -259,7 +269,7 @@ orca_spawn_abort_cleanup() {
   fi
   return "$status"
 }
-trap orca_spawn_abort_cleanup EXIT
+trap 'orca_spawn_abort_cleanup || :; fm_cursor_catalog_cache_cleanup' EXIT
 
 # Batch dispatch (see header): when the first positional is an `id=repo` pair, treat every
 # positional as one and spawn each by re-execing this script in single-task mode. We use
@@ -577,6 +587,32 @@ cursor_model_with_effort() {  # <model> <effort>
   esac
   printf '%s-%s' "$model" "$tier"
 }
+
+# Resolve the cursor launch model id early (effort folded into the id) so meta
+# and the catalog preflight both see the same token that --model will receive.
+# Acceptance is exact catalog membership: the Cursor CLI itself refuses unknown
+# ids ("Cannot use this model: ..."), so a bare base id (e.g. cursor-grok-4.5)
+# is valid only when `agent --list-models` lists it - some models are listed
+# bare (gpt-5.2, composer-2.5), others only tier-suffixed. No prefix/parent
+# acceptance, so we never record a meta model the CLI would reject.
+LAUNCH_MODEL=$MODEL
+if [ "$HARNESS" = cursor ]; then
+  LAUNCH_MODEL=$(cursor_model_with_effort "$MODEL" "$EFFORT")
+  if [ -n "$LAUNCH_MODEL" ] && [ "$LAUNCH_MODEL" != default ]; then
+    set +e
+    fm_cursor_catalog_has_model "$LAUNCH_MODEL"
+    cursor_model_rc=$?
+    set -e
+    case "$cursor_model_rc" in
+      0) ;;
+      1)
+        echo "error: cursor model '$LAUNCH_MODEL' is not in \`agent --list-models\` (or FM_CURSOR_MODEL_CATALOG); refusing spawn so meta cannot claim a model the worker will not run. The account default in ~/.cursor/cli-config.json would be used instead." >&2
+        exit 1
+        ;;
+      *) ;; # catalog unavailable: soft-skip (stub agent in tests, offline)
+    esac
+  fi
+fi
 
 model_flag_for_harness() {
   local harness=$1 model=$2
@@ -1189,7 +1225,17 @@ META_WINDOW=$T
   echo "mode=$MODE"
   echo "yolo=$YOLO"
   echo "tasktmp=$TASK_TMP"
-  echo "model=${MODEL:-default}"
+  # cursor records the folded launch model id (what --model actually receives).
+  # When that differs from the intake model token, model_requested= keeps the
+  # pre-fold value for audit.
+  if [ "$HARNESS" = cursor ] && [ -n "$LAUNCH_MODEL" ]; then
+    echo "model=$LAUNCH_MODEL"
+    if [ -n "$MODEL" ] && [ "$MODEL" != default ] && [ "$MODEL" != "$LAUNCH_MODEL" ]; then
+      echo "model_requested=$MODEL"
+    fi
+  else
+    echo "model=${MODEL:-default}"
+  fi
   echo "effort=${EFFORT:-default}"
   # backend= is written only for a non-default (non-tmux) backend, so the
   # default path's meta stays byte-identical (absent backend= means tmux;
@@ -1235,12 +1281,7 @@ sq_turnend=$(shell_quote "$TURNEND")
 sq_piext=$(shell_quote "$STATE/$ID.pi-ext.ts")
 sq_piturnend=$(shell_quote "$PROJ_ABS/.pi/extensions/fm-primary-turnend-guard.ts")
 sq_piwatch=$(shell_quote "$PROJ_ABS/.pi/extensions/fm-primary-pi-watch.ts")
-# cursor has no effort flag: fold the effort axis into the model id before the
-# model flag is rendered (see cursor_model_with_effort).
-LAUNCH_MODEL=$MODEL
-if [ "$HARNESS" = cursor ]; then
-  LAUNCH_MODEL=$(cursor_model_with_effort "$MODEL" "$EFFORT")
-fi
+# LAUNCH_MODEL was resolved earlier (cursor effort fold + catalog preflight).
 MODELFLAG=$(model_flag_for_harness "$HARNESS" "$LAUNCH_MODEL")
 EFFORTFLAG=$(effort_flag_for_harness "$HARNESS" "$EFFORT")
 LAUNCH=${LAUNCH//__WORKTREE__/$(shell_quote "$WT")}

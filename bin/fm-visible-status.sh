@@ -13,6 +13,11 @@
 # Project workspaces retain their human project name and add prioritized task
 # counts.
 #
+# For cursor workers, runtime/model prefers the live idle-footer model parsed
+# from the pane (bin/fm-cursor-model-lib.sh) over meta model= when readable, and
+# records model_live= on the task meta when the live label differs from the
+# recorded spawn model. Busy panes without a model footer keep the meta value.
+#
 # This is presentation only.
 # Every operational action continues to use recorded Herdr ids.
 # Herdr API failures are therefore best-effort and never make task control fail.
@@ -34,6 +39,8 @@ SOURCE=firstmate-worker-visible-v1
 # with fm-spawn.sh's herdr arm.
 # shellcheck source=bin/backends/herdr.sh
 . "$SCRIPT_DIR/backends/herdr.sh"
+# shellcheck source=bin/fm-cursor-model-lib.sh
+. "$SCRIPT_DIR/fm-cursor-model-lib.sh"
 
 usage() {
   sed -n '2,/^set -u$/s/^# \{0,1\}//p' "$0"
@@ -127,11 +134,71 @@ state_rank() {  # <visible-state>
   esac
 }
 
+# cursor_pane_capture: plain-text pane tail for live model parsing.
+# FM_VISIBLE_PANE_CAPTURE overrides the capture (tests); otherwise reads the
+# herdr pane via the shared backend helper.
+cursor_pane_capture() {  # <session> <pane>
+  local session=$1 pane=$2
+  if [ -n "${FM_VISIBLE_PANE_CAPTURE:-}" ]; then
+    printf '%s' "$FM_VISIBLE_PANE_CAPTURE"
+    return 0
+  fi
+  if [ -n "${FM_VISIBLE_PANE_CAPTURE_FILE:-}" ] && [ -f "$FM_VISIBLE_PANE_CAPTURE_FILE" ]; then
+    cat "$FM_VISIBLE_PANE_CAPTURE_FILE"
+    return 0
+  fi
+  [ -n "$session" ] && [ -n "$pane" ] || return 1
+  fm_backend_herdr_capture "${session}:${pane}" 40 2>/dev/null
+}
+
+# record_model_live: upsert model_live=<token> on <meta> when the live label
+# differs from the recorded spawn model. No-op when they already match or the
+# live token is empty. Best-effort: never fails the presentation refresh.
+record_model_live() {  # <meta> <live-token> <recorded-model>
+  local meta=$1 live=$2 recorded=$3 tmp
+  [ -n "$live" ] || return 0
+  [ -f "$meta" ] || return 0
+  if [ -n "$recorded" ] && [ "$recorded" != default ] \
+    && fm_cursor_models_equivalent "$recorded" "$live"; then
+    # Clear a stale model_live= from an earlier mismatch once they agree again.
+    if grep -q '^model_live=' "$meta" 2>/dev/null; then
+      tmp=$(mktemp "$meta.XXXXXX") || return 0
+      grep -v '^model_live=' "$meta" > "$tmp" 2>/dev/null || { rm -f "$tmp"; return 0; }
+      mv "$tmp" "$meta"
+    fi
+    return 0
+  fi
+  if [ "$(meta_value "$meta" model_live)" = "$live" ]; then
+    return 0
+  fi
+  tmp=$(mktemp "$meta.XXXXXX") || return 0
+  grep -v '^model_live=' "$meta" > "$tmp" 2>/dev/null || { rm -f "$tmp"; return 0; }
+  printf 'model_live=%s\n' "$live" >> "$tmp"
+  mv "$tmp" "$meta"
+}
+
 runtime_text() {  # <meta>
-  local harness model
+  local harness model live session pane cap display label
   harness=$(meta_value "$1" harness)
   model=$(meta_value "$1" model)
   [ -n "$harness" ] || harness=unknown
+  if [ "$harness" = cursor ]; then
+    session=$(meta_value "$1" herdr_session)
+    pane=$(meta_value "$1" herdr_pane_id)
+    cap=$(cursor_pane_capture "$session" "$pane" 2>/dev/null || true)
+    display=$(fm_cursor_parse_footer_model "$cap")
+    if [ -n "$display" ]; then
+      label=$(fm_cursor_runtime_label "$display")
+      record_model_live "$1" "$label" "$model"
+      printf '%s/%s' "$harness" "$label"
+      return 0
+    fi
+    live=$(meta_value "$1" model_live)
+    if [ -n "$live" ]; then
+      printf '%s/%s' "$harness" "$live"
+      return 0
+    fi
+  fi
   if [ -n "$model" ] && [ "$model" != default ]; then
     printf '%s/%s' "$harness" "$model"
   else

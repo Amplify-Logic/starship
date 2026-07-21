@@ -347,6 +347,58 @@ test_pi_threads_model_and_max_effort() {
   pass "pi receives --model and --thinking max profile flags"
 }
 
+write_cursor_catalog() {  # <path>
+  cat > "$1" <<'EOF'
+Available models
+cursor-grok-4.5-medium - Cursor Grok 4.5 Medium
+cursor-grok-4.5-medium-fast - Cursor Grok 4.5 Medium Fast
+gpt-5.6-sol-xhigh - GPT-5.6 Sol 1M Extra High
+EOF
+}
+
+test_cursor_records_folded_launch_model_and_threads_flag() {
+  local rec id out status launch catalog
+  id=profile-cursor-fold-c1
+  rec=$(make_spawn_case profile-cursor-fold cursor "$id")
+  read_case_record "$rec"
+  catalog="$CASE_DIR/cursor-models.txt"
+  write_cursor_catalog "$catalog"
+
+  out=$(FM_CURSOR_MODEL_CATALOG="$catalog" \
+    run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
+    "$id" "$PROJ_DIR" --model cursor-grok-4.5 --effort medium)
+  status=$?
+  expect_code 0 "$status" "cursor spawn with known folded model should succeed"
+  assert_meta_profile "$HOME_DIR/state/$id.meta" cursor cursor-grok-4.5-medium medium
+  assert_grep "model_requested=cursor-grok-4.5" "$HOME_DIR/state/$id.meta" \
+    "cursor meta missing model_requested for pre-fold intake id"
+  launch=$(cat "$LAUNCH_LOG")
+  assert_contains "$launch" "agent --yolo --workspace" "cursor launch missing --yolo/--workspace"
+  assert_contains "$launch" "--model 'cursor-grok-4.5-medium'" \
+    "cursor launch did not receive the folded model id"
+  pass "cursor records and launches the folded model id"
+}
+
+test_cursor_refuses_unknown_catalog_model() {
+  local rec id out status catalog
+  id=profile-cursor-unknown-c2
+  rec=$(make_spawn_case profile-cursor-unknown cursor "$id")
+  read_case_record "$rec"
+  catalog="$CASE_DIR/cursor-models.txt"
+  write_cursor_catalog "$catalog"
+
+  out=$(FM_CURSOR_MODEL_CATALOG="$catalog" \
+    run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
+    "$id" "$PROJ_DIR" --model definitely-not-a-real-model-xyz 2>&1) || status=$?
+  status=${status:-0}
+  expect_code 1 "$status" "cursor spawn with unknown model must refuse before launch"
+  assert_contains "$out" "not in \`agent --list-models\`" \
+    "unknown cursor model refusal did not name the catalog check"
+  [ ! -f "$HOME_DIR/state/$id.meta" ] \
+    || fail "refused cursor spawn must not write task meta"
+  pass "cursor refuses unknown catalog models before creating an endpoint"
+}
+
 test_batch_forwards_shared_profile_flags() {
   local rec id1 id2 out status
   id1=profile-batch-a-z9
@@ -398,6 +450,8 @@ test_grok_omits_invalid_max_reasoning_effort
 test_grok_omits_invalid_xhigh_reasoning_effort
 test_opencode_threads_model_and_ignores_effort_axis
 test_pi_threads_model_and_max_effort
+test_cursor_records_folded_launch_model_and_threads_flag
+test_cursor_refuses_unknown_catalog_model
 test_batch_forwards_shared_profile_flags
 test_active_dispatch_profile_does_not_block_secondmate_launch
 

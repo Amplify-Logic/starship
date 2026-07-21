@@ -210,9 +210,75 @@ test_genuine_primary_and_lab_are_structural() {
   pass 'primary boundary: only the primary launcher emits FIRSTMATE and guarded experiments remain LAB'
 }
 
+test_cursor_live_footer_relabels_runtime_over_meta() {
+  local wt catalog out meta
+  wt=$(make_worktree cursor-live fm/cursor-live-m1)
+  catalog="$TMP_ROOT/cursor-models.txt"
+  cat > "$catalog" <<'EOF'
+Available models
+cursor-grok-4.5-medium-fast - Cursor Grok 4.5 Medium Fast
+gpt-5.6-sol-xhigh - GPT-5.6 Sol 1M Extra High
+EOF
+  # Meta claims sol-xhigh (the atelier-local-services-run-d1 shape); the pane
+  # footer shows the account-default Grok the worker actually ran.
+  write_task cursor-live /projects/atelier Atelier w3 t7 w3:p7 "$wt" scout cursor gpt-5.6-sol-xhigh
+  meta="$HOME_FIX/state/cursor-live.meta"
+  printf 'cursor-live=working\n' >> "$STATES"
+  : > "$LOG"
+  PATH="$FAKEBIN:$PATH" \
+    FM_HOME="$HOME_FIX" \
+    FM_VISIBLE_STATE_FILE="$STATES" \
+    FM_VISIBLE_HERDR_LOG="$LOG" \
+    FM_BACKEND_HERDR_PRESENTATION_FORCE=1 \
+    FM_CURSOR_MODEL_CATALOG="$catalog" \
+    FM_VISIBLE_PANE_CAPTURE=$'READY1\n\n  → Add a follow-up\n\n  Cursor Grok 4.5 Medium Fast · 7%                                   Run Everything\n' \
+    HERDR_ENV=1 \
+    HERDR_SESSION=fm-lab-visible \
+    "$ROOT/bin/fm-visible-status.sh" cursor-live
+  out=$(cat "$LOG")
+  assert_contains "$out" '--display-agent cursor/cursor-grok-4.5-medium-fast · fm/cursor-live-m1' \
+    'cursor live footer did not replace the recorded spawn model in the label'
+  assert_not_contains "$out" 'gpt-5.6-sol-xhigh' \
+    'recorded spawn model leaked into the cursor live label'
+  assert_grep 'model_live=cursor-grok-4.5-medium-fast' "$meta" \
+    'model_live was not recorded when the pane disagreed with meta'
+  assert_grep 'model=gpt-5.6-sol-xhigh' "$meta" \
+    'live relabel must preserve the original model= audit value'
+  pass 'visible status: cursor live footer relabels runtime over meta model='
+}
+
+test_cursor_busy_pane_keeps_meta_model() {
+  local wt catalog out
+  wt=$(make_worktree cursor-busy fm/cursor-busy-m2)
+  catalog="$TMP_ROOT/cursor-models-busy.txt"
+  cat > "$catalog" <<'EOF'
+Available models
+gpt-5.6-sol-xhigh - GPT-5.6 Sol 1M Extra High
+EOF
+  write_task cursor-busy /projects/atelier Atelier w3 t8 w3:p8 "$wt" ship cursor gpt-5.6-sol-xhigh
+  printf 'cursor-busy=working\n' >> "$STATES"
+  : > "$LOG"
+  PATH="$FAKEBIN:$PATH" \
+    FM_HOME="$HOME_FIX" \
+    FM_VISIBLE_STATE_FILE="$STATES" \
+    FM_VISIBLE_HERDR_LOG="$LOG" \
+    FM_BACKEND_HERDR_PRESENTATION_FORCE=1 \
+    FM_CURSOR_MODEL_CATALOG="$catalog" \
+    FM_VISIBLE_PANE_CAPTURE=$'  → Add a follow-up                                          ctrl+c to stop\n  1 task\n' \
+    HERDR_ENV=1 \
+    HERDR_SESSION=fm-lab-visible \
+    "$ROOT/bin/fm-visible-status.sh" cursor-busy
+  out=$(cat "$LOG")
+  assert_contains "$out" '--display-agent cursor/gpt-5.6-sol-xhigh · fm/cursor-busy-m2' \
+    'busy cursor pane without a model footer must keep the meta model label'
+  pass 'visible status: busy cursor pane without footer model keeps meta'
+}
+
 test_tasks_projects_axes_and_states
 test_legacy_refresh_and_primary_boundary
 test_secondmate_keeps_legacy_presentation
 test_incapable_build_projects_nothing
 test_cleanup_keeps_stable_target_fallback
 test_genuine_primary_and_lab_are_structural
+test_cursor_live_footer_relabels_runtime_over_meta
+test_cursor_busy_pane_keeps_meta_model

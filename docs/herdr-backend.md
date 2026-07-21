@@ -31,7 +31,8 @@ No first-run provisioning is needed beyond having `herdr` and `jq` on `PATH`; fi
 
 Watching and attaching: new managed workers are grouped into one Herdr workspace per physical Firstmate home and physical project.
 The workspace shows the human project name plus prioritized aggregate state, and each task tab reads `WORKER · <human outcome> · <authoritative state>`.
-The grouped Agents detail row shows the recorded runtime/model and the branch read from the task's isolated copy, or `detached` for a detached scout.
+The grouped Agents detail row shows the runtime/model and the branch read from the task's isolated copy, or `detached` for a detached scout.
+For cursor workers, runtime/model prefers the live idle-footer model from the pane over `meta model=` when readable (`bin/fm-visible-status.sh`, `bin/fm-cursor-model-lib.sh`).
 You do not need to attach for routine supervision: from an active firstmate session, `bin/fm-peek.sh fm-<id>` reads a task's pane without attaching, and `FM_HOME=<this-firstmate-home> bin/fm-send.sh fm-<id> "<text>"` steers it unless `FM_HOME` is already set to the active firstmate home.
 
 Verify it works by spawning a trivial task with `--backend herdr` and confirming the task's meta records the stable Herdr ids plus `herdr_workspace_managed=1`, `herdr_project_key=`, `herdr_project_name=`, and `outcome=`.
@@ -123,7 +124,7 @@ A task's visible tab title is separate from its durable identity.
 New panes carry hidden `fm_task_id`, while the recorded workspace, tab, and pane ids remain the operational targets.
 The tab reads `WORKER · <human outcome> · <authoritative state>`.
 `bin/fm-task-outcome.sh` owns outcome precedence: explicit `fm-spawn.sh --outcome`, structured backlog title, then a safe humanized task-id fallback.
-`bin/fm-visible-status.sh` reads runtime/model from task metadata, branch or detached state from the recorded isolated copy, and lifecycle state from `bin/fm-crew-state.sh`.
+`bin/fm-visible-status.sh` reads runtime/model from task metadata (and, for cursor, from the live pane footer when present), branch or detached state from the recorded isolated copy, and lifecycle state from `bin/fm-crew-state.sh`.
 It never derives lifecycle state from the append-only status tail or Herdr's native activity alone.
 
 ### Legacy home labels

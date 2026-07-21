@@ -93,6 +93,36 @@ That same file carries `attribution.attributeCommitsToAgent: true` and
 as a commit co-author, so a cursor worker committing in a firstmate-governed repo
 must not rely on Cursor's own attribution defaults.
 
+### Model identity vs label truth (verified 2026-07-21)
+
+Incident shape (atelier-local-services-run-d1, 2026-07-20): herdr presentation
+showed `cursor/gpt-5.6-sol-xh...` from `state/<id>.meta` `model=` while the pane
+footer showed `Cursor Grok 4.5 Medium Fast`.
+
+Re-checked on Cursor CLI `2026.07.17-3e2a980`:
+
+| Probe | Result |
+|---|---|
+| `agent --print --mode ask --model definitely-not-a-real-model-xyz ...` | exit 1; stderr lists available models. **Not** a silent fallback. |
+| `agent --print --mode ask --model gpt-5.6-sol-xhigh ...` | exit 0; answer returned; `~/.cursor/cli-config.json` updated to sol. |
+| `agent about` / idle footer | show the account-default display name when no effective `--model` applies. |
+
+So an unrecognized id does **not** quietly become the account default on this CLI.
+The lying label is still possible when the worker ends up on a different live model
+than meta recorded (missing `--model`, account-default inheritance, or a later
+runtime substitution such as a third-party pool exhaustion while meta still
+carries the requested id). Firstmate's defenses:
+
+1. `fm-spawn` folds cursor effort into the launch model id, records that launch id
+   as `model=` (with `model_requested=` when it differs), and refuses unknown ids
+   when `agent --list-models` / `FM_CURSOR_MODEL_CATALOG` is available
+   (`bin/fm-cursor-model-lib.sh`).
+2. `fm-visible-status.sh` prefers the idle pane footer model over meta for cursor
+   workers, and writes `model_live=` when they disagree.
+
+Regression coverage: `tests/fm-cursor-adapter.test.sh`,
+`tests/fm-visible-status.test.sh`, `tests/fm-spawn-dispatch-profile.test.sh`.
+
 ## 3. Busy and idle pane signatures
 
 Busy (verbatim, mid tool call):

@@ -287,6 +287,8 @@ For the effort-in-model-id axis, see the [launch-profile-axes table](#launch-pro
 
 **`--model` mutates account-global state.** It persists as the default in `~/.cursor/cli-config.json`, so always pass `--model` explicitly rather than relying on the default. That file also enables Cursor's own commit/PR agent attribution, which must never produce an agent co-author in a firstmate repo.
 
+**Model label truth.** `fm-spawn` records the folded launch model id and refuses unknown catalog ids when `agent --list-models` is available. Herdr presentation (`fm-visible-status.sh`) prefers the live idle-footer model over meta for cursor workers (`bin/fm-cursor-model-lib.sh`; evidence in `docs/cursor-harness.md`). Busy panes without a model footer keep meta.
+
 Turn-end hook: cursor fires a native `stop` hook per turn. `fm-spawn` writes `<worktree>/.cursor/hooks.json` and gitignores it via `info/exclude`, the same shape as the claude and opencode worktree hooks. Unlike grok, project hooks need NO separate hook-trust grant beyond the workspace trust the spawn already clears.
 
 **Cursor executes claude-format hooks** from `.claude/settings.json` and `.claude/settings.local.json`, mapping `Stop` onto its own `stop`. Disposable worktrees never collide, but never launch cursor from the firstmate PRIMARY checkout, whose `.claude/settings.json` Stop hook would run firstmate's turn-end guard inside a worker session.
