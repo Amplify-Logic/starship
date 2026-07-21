@@ -908,6 +908,9 @@ run_teardown_case() {
 }
 
 test_teardown_conformance_old_vs_new() {
+  # The scout teardown gate delegates to fm-decision-hold.sh, which requires a
+  # compatible tasks-axi; without it there is nothing to assert here.
+  command -v tasks-axi >/dev/null 2>&1 || { echo "skip: tasks-axi not found (scout teardown decision gate)"; return 0; }
   local old_bin fb proj wt id
   local state_old state_new config_old config_new data log_old log_new out_old out_new rc_old rc_new
   old_bin=$(build_old_bin teardown-old)

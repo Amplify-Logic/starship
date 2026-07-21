@@ -715,7 +715,7 @@ exit 2
 EOF
   chmod +x "$worktree_dir/bin/fm-turnend-guard.sh"
   # Runtime module-format warnings are host noise; this assertion owns plugin output only.
-  out=$(NODE_NO_WARNINGS=1 PLUGIN="$plugin" DIRECTORY="$wrong_dir" WORKTREE="$worktree_dir" node 2>&1 <<'EOF'
+  out=$(NODE_NO_WARNINGS=1 PLUGIN="$plugin" DIRECTORY="$wrong_dir" WORKTREE="$worktree_dir" node --input-type=module 2>&1 <<'EOF'
 import { pathToFileURL } from "node:url";
 
 const mod = await import(pathToFileURL(process.env.PLUGIN).href);
@@ -745,7 +745,18 @@ EOF
   pass ".opencode primary plugin: guard path is anchored to worktree, not directory"
 }
 
+# The Pi extension is TypeScript; loading it from node requires a runtime with
+# type stripping (node >= 22.18). Older hosts cannot exercise it at all.
+node_can_import_ts() {
+  local probe="$TMP_ROOT/.ts-probe.ts"
+  printf 'export const ok: number = 1;\n' > "$probe"
+  PROBE="$probe" node --input-type=module -e \
+    'import { pathToFileURL } from "node:url"; await import(pathToFileURL(process.env.PROBE).href);' \
+    >/dev/null 2>&1
+}
+
 test_pi_extension_forces_followup() {
+  node_can_import_ts || { echo "skip: node runtime cannot import TypeScript extensions"; return 0; }
   local ext content
   ext="$ROOT/.pi/extensions/fm-primary-turnend-guard.ts"
   [ -f "$ext" ] || fail "tracked pi primary extension is missing"
@@ -767,6 +778,7 @@ test_pi_extension_forces_followup() {
 }
 
 test_pi_extension_injects_once_per_logical_agent_run() {
+  node_can_import_ts || { echo "skip: node runtime cannot import TypeScript extensions"; return 0; }
   local repo home ext log out status
   repo="$TMP_ROOT/pi-logical-run-root"
   home="$TMP_ROOT/pi-logical-run-home"
@@ -829,6 +841,7 @@ EOF
 }
 
 test_pi_extension_retries_after_followup_delivery_failure() {
+  node_can_import_ts || { echo "skip: node runtime cannot import TypeScript extensions"; return 0; }
   local repo home ext out status
   repo="$TMP_ROOT/pi-delivery-failure-root"
   home="$TMP_ROOT/pi-delivery-failure-home"

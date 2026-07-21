@@ -782,6 +782,9 @@ test_target_exists_rejects_orca_error_json() {
 }
 
 test_scout_teardown_removes_orca_worktree_via_helper() {
+  # The scout teardown gate delegates to fm-decision-hold.sh, which requires a
+  # compatible tasks-axi; without it there is nothing to assert here.
+  command -v tasks-axi >/dev/null 2>&1 || { echo "skip: tasks-axi not found (scout teardown decision gate)"; return 0; }
   local proj wt data state config id out rc neutral
   id="orcateardownz3"
   proj="$TMP_ROOT/teardown-project"
@@ -817,6 +820,9 @@ test_scout_teardown_removes_orca_worktree_via_helper() {
 }
 
 test_scout_teardown_refuses_orca_id_path_mismatch() {
+  # The scout teardown gate delegates to fm-decision-hold.sh, which requires a
+  # compatible tasks-axi; without it there is nothing to assert here.
+  command -v tasks-axi >/dev/null 2>&1 || { echo "skip: tasks-axi not found (scout teardown decision gate)"; return 0; }
   local proj wt other_wt data state config id out rc neutral
   id="orcascoutmismatchz5"
   proj="$TMP_ROOT/scout-mismatch-project"
@@ -856,6 +862,9 @@ test_scout_teardown_refuses_orca_id_path_mismatch() {
 }
 
 test_teardown_removes_orca_worktree_when_path_missing() {
+  # The scout teardown gate delegates to fm-decision-hold.sh, which requires a
+  # compatible tasks-axi; without it there is nothing to assert here.
+  command -v tasks-axi >/dev/null 2>&1 || { echo "skip: tasks-axi not found (scout teardown decision gate)"; return 0; }
   local proj wt data state config id out rc neutral
   id="orcamissingpathz7"
   proj="$TMP_ROOT/missing-path-project"
@@ -889,6 +898,10 @@ test_teardown_removes_orca_worktree_when_path_missing() {
 }
 
 test_teardown_preserves_metadata_when_orca_remove_error_json() {
+
+  # The scout teardown gate delegates to fm-decision-hold.sh, which requires a
+  # compatible tasks-axi; without it there is nothing to assert here.
+  command -v tasks-axi >/dev/null 2>&1 || { echo "skip: tasks-axi not found (scout teardown decision gate)"; return 0; }
   local proj wt data state config id out rc neutral
   id="orcaremoveerrz2"
   proj="$TMP_ROOT/remove-error-project"
@@ -920,6 +933,10 @@ test_teardown_preserves_metadata_when_orca_remove_error_json() {
 }
 
 test_scout_teardown_refuses_orca_missing_report_when_path_missing() {
+
+  # The scout teardown gate delegates to fm-decision-hold.sh, which requires a
+  # compatible tasks-axi; without it there is nothing to assert here.
+  command -v tasks-axi >/dev/null 2>&1 || { echo "skip: tasks-axi not found (scout teardown decision gate)"; return 0; }
   local proj wt data state config id out rc neutral
   id="orcanoreportz4"
   proj="$TMP_ROOT/missing-report-project"
@@ -1091,6 +1108,10 @@ test_ship_teardown_refuses_orca_id_path_mismatch() {
 }
 
 test_teardown_refuses_orca_missing_worktree_id() {
+
+  # The scout teardown gate delegates to fm-decision-hold.sh, which requires a
+  # compatible tasks-axi; without it there is nothing to assert here.
+  command -v tasks-axi >/dev/null 2>&1 || { echo "skip: tasks-axi not found (scout teardown decision gate)"; return 0; }
   local proj wt data state config id out rc neutral
   id="orcamissingidz5"
   proj="$TMP_ROOT/missing-id-project"
@@ -1122,6 +1143,10 @@ test_teardown_refuses_orca_missing_worktree_id() {
 }
 
 test_teardown_removes_orca_worktree_without_terminal_handle() {
+
+  # The scout teardown gate delegates to fm-decision-hold.sh, which requires a
+  # compatible tasks-axi; without it there is nothing to assert here.
+  command -v tasks-axi >/dev/null 2>&1 || { echo "skip: tasks-axi not found (scout teardown decision gate)"; return 0; }
   local proj wt data state config id out rc neutral
   id="orcanotermz0"
   proj="$TMP_ROOT/no-terminal-project"
