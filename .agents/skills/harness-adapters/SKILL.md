@@ -1,6 +1,6 @@
 ---
 name: harness-adapters
-description: Agent-only reference for firstmate harness operations. Use before spawning or recovering a crewmate or secondmate, handling a trust dialog, sending a harness-specific skill invocation, interrupting or exiting an agent, resuming an exited agent, or verifying a new harness adapter. Contains verified worker facts for claude, codex, opencode, pi, grok, and cursor, plus Kimi primary-only facts.
+description: Agent-only reference for firstmate harness operations. Use before spawning or recovering a crewmate or secondmate, handling a trust dialog, sending a harness-specific skill invocation, interrupting or exiting an agent, resuming an exited agent, or verifying a new harness adapter. Contains verified worker facts for claude, codex, opencode, pi, grok, and cursor, plus Kimi primary-only facts and the partial worker refuse-dispatch record.
 user-invocable: false
 metadata:
   internal: true
@@ -97,15 +97,33 @@ When changing any primary watcher adapter, update `docs/supervision-protocols/`,
 Claude uses its native tracked project status-line command, Pi uses its native tracked custom-footer extension, and Kimi 0.27.0 uses a guarded one-row tmux companion because its plugin API cannot render the native footer.
 Cursor remains worker-only, so no captain-facing Cursor status renderer or primary launcher exists.
 
-## Kimi primary-only boundary
+## Kimi primary-only boundary (worker dispatch refused)
 
 Kimi Code support is pinned to 0.27.0 and K3 through `bin/fm-primary.sh kimi-k3` with `--yolo`.
 The launcher supplies `FM_PRIMARY_HARNESS=kimi` because Kimi does not expose a stable native child-process marker.
 Its isolated managed plugin owns native session-start skill injection plus blockable PreToolUse and Stop hooks without editing the operator's source Kimi home.
 Do not pass `kimi` to `fm-spawn` or infer worker support from primary support.
-Kimi worker launch, liveness, trust, turn-end, interrupt, resume, and teardown remain unverified and out of scope.
+Worker dispatch stays refused until a complete worker certification lands: `kimi` is not in `fm-spawn`'s verified worker set, and partial evidence must not be treated as authorization to launch crewmates or secondmates on it.
 
-Live Kimi primary facts, verified on Kimi Code 0.27.0 in the isolated 2026-07-19 Herdr lab:
+`docs/kimi-harness.md` owns the dated partial WORKER lab record (2026-07-21, Kimi Code 0.27.0, isolated Herdr lab).
+
+Partial worker surfaces verified live on that date (not enough for dispatch):
+
+| Fact | Value |
+|---|---|
+| Launch / autonomy | `kimi --yolo --model kimi-code/k3` (TUI: `Version: 0.27.0`, `Model: K3`, `yolo`). No positional interactive brief; `--prompt` cannot combine with `--yolo`. |
+| Trust | No trust dialog on a fresh git worktree. |
+| Composer | Bordered idle `> ` classifies `empty`; typed text classifies `pending`; bare `>` is `unknown`. No `FM_COMPOSER_IDLE_RE` override. |
+| Exit | `/exit` (one Enter through slash autocomplete closes the pane). |
+| Resume | `kimi --yolo --model kimi-code/k3 --continue` restores the durable session for that cwd. |
+
+Worker surfaces explicitly UNVERIFIED on 2026-07-21 because every model call returned billing-cycle `403 You've reached your usage limit for this billing cycle`:
+
+- Busy-pane signature for watcher / tmux defaults (do not copy another harness's busy regex).
+- Interrupt of a running turn (do not copy primary interrupt facts into the worker record).
+- Crewmate turn-end hook path (Stop never fired in the worker lab).
+
+Live Kimi primary facts, verified on Kimi Code 0.27.0 in the isolated 2026-07-19 Herdr lab (primary only; not worker authorization):
 
 - Foreground turns move Herdr from `working` to `idle`, but Kimi background Bash tasks also count as activity, so never treat Herdr status alone as conversational settlement or proof of supervision.
 - Herdr's detected `agent_session` can lag after Kimi switches sessions in-process; durable Kimi session state and the TUI are authoritative for `/new` and `/sessions` outcomes.
@@ -114,7 +132,7 @@ Live Kimi primary facts, verified on Kimi Code 0.27.0 in the isolated 2026-07-19
 - Resume inside the TUI with `/sessions`; startup CLI flags `--session [id]` and `--continue` also exist, but `bin/fm-primary.sh` deliberately keeps profile and resume selection separate.
 - A fresh launcher invocation accepts the dead prior pid as a stale lock, and the resumed session re-acquires the lock under the new Kimi pid.
 - Kimi's built-in Bash background task is the only verified watcher host; do not use Kimi `Agent`, `AgentSwarm`, or similar subagent surfaces as Firstmate workers.
-- `docs/architecture.md` owns the dated end-to-end evidence, while the four lifecycle guard docs own their exact hook transcripts.
+- `docs/architecture.md` owns the dated end-to-end primary evidence, while the four lifecycle guard docs own their exact hook transcripts.
 
 ## Launch profile axes
 

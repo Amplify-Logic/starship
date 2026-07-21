@@ -155,6 +155,7 @@ Load `harness-adapters` before every spawn or recovery and before trust handling
 The verified worker adapters are `claude`, `codex`, `opencode`, `pi`, `grok`, and `cursor`; never dispatch on an unverified adapter.
 `cursor` is worker-only, the mirror of the Kimi primary-only boundary; never launch a primary on it.
 Kimi Code 0.27.0 is verified only as a primary through `bin/fm-primary.sh kimi-k3`; never pass it to `fm-spawn`.
+Partial worker lab evidence (2026-07-21) lives in `docs/kimi-harness.md`; busy signature, interrupt, and turn-end remain unverified, so worker dispatch stays refused.
 If configured harness data names an unverified adapter, report it and fall back only to a verified adapter rather than launching it.
 
 `docs/configuration.md` owns dispatch-profile and runtime-backend schemas, `bin/fm-dispatch-select.sh` owns selector mechanics, `bin/fm-harness.sh` owns static resolution, and `bin/fm-spawn.sh` owns launch flags and fail-closed validation.
