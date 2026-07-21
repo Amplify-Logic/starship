@@ -38,6 +38,12 @@ fm_handoff_active_path() {
   printf '%s\n' "$STATE/.primary-active"
 }
 
+# Durable context-window sample written by fm-status-bar.sh so the handoff
+# supervisor can evaluate the context axis out-of-band from the live pane.
+fm_handoff_context_path() {
+  printf '%s\n' "$STATE/.primary-context"
+}
+
 fm_handoff_coord_lock() {
   printf '%s\n' "$STATE/.primary-handoff.lock"
 }
@@ -50,17 +56,23 @@ fm_handoff_session_lock() {
 # Sets FM_HANDOFF_MODE to enabled|disabled.
 # Returns 0 even when disabled; non-zero only on malformed enabled config.
 # Must not be called inside a command substitution: the globals are the API.
+#
+# Dual trigger axes (both opt-in under enabled:true):
+#   threshold_percent_remaining  - quota remaining; absent defaults to 15
+#   threshold_context_percent_used - context USED percent; absent/null disables
+#     the context axis entirely (quota-only behavior, as before this axis existed)
 fm_handoff_load_config() {
-  local path json
+  local path json ctx_raw
   path=$(fm_handoff_config_path)
   # Intentional globals consumed by fm-primary-handoff.sh.
   FM_HANDOFF_MODE=disabled
   FM_HANDOFF_THRESHOLD=15
+  FM_HANDOFF_CONTEXT_USED_THRESHOLD=
   FM_HANDOFF_POLL_SECONDS=60
   FM_HANDOFF_COOLDOWN_SECONDS=300
   FM_HANDOFF_CHAIN_JSON='[]'
-  export FM_HANDOFF_MODE FM_HANDOFF_THRESHOLD FM_HANDOFF_POLL_SECONDS \
-    FM_HANDOFF_COOLDOWN_SECONDS FM_HANDOFF_CHAIN_JSON
+  export FM_HANDOFF_MODE FM_HANDOFF_THRESHOLD FM_HANDOFF_CONTEXT_USED_THRESHOLD \
+    FM_HANDOFF_POLL_SECONDS FM_HANDOFF_COOLDOWN_SECONDS FM_HANDOFF_CHAIN_JSON
   [ -f "$path" ] || return 0
   command -v jq >/dev/null 2>&1 || {
     fm_handoff_log "jq required to read $path"
@@ -78,6 +90,17 @@ fm_handoff_load_config() {
   FM_HANDOFF_THRESHOLD=$(printf '%s\n' "$json" | jq -r '.threshold_percent_remaining // 15')
   FM_HANDOFF_POLL_SECONDS=$(printf '%s\n' "$json" | jq -r '.poll_seconds // 60')
   FM_HANDOFF_COOLDOWN_SECONDS=$(printf '%s\n' "$json" | jq -r '.cooldown_seconds // 300')
+  # Context axis: absent or null means disabled. Explicit 0 is valid (always fire).
+  ctx_raw=$(printf '%s\n' "$json" | jq -r '
+    if (.threshold_context_percent_used | type) == "number"
+      then (.threshold_context_percent_used | floor | tostring)
+      elif (.threshold_context_percent_used | type) == "string"
+        and (.threshold_context_percent_used | test("^[0-9]+$"))
+      then .threshold_context_percent_used
+      else ""
+      end
+  ')
+  FM_HANDOFF_CONTEXT_USED_THRESHOLD=$ctx_raw
   FM_HANDOFF_CHAIN_JSON=$(printf '%s\n' "$json" | jq -c '
     (.chain // ["claude-fable","pi","codex","kimi-k3"])
     | if type == "array" and length > 0 then . else empty end
@@ -86,10 +109,18 @@ fm_handoff_load_config() {
     return 1
   }
   case "$FM_HANDOFF_THRESHOLD" in ''|*[!0-9]*) FM_HANDOFF_THRESHOLD=15 ;; esac
+  case "$FM_HANDOFF_CONTEXT_USED_THRESHOLD" in
+    ''|*[!0-9]*) FM_HANDOFF_CONTEXT_USED_THRESHOLD= ;;
+    *)
+      if [ "$FM_HANDOFF_CONTEXT_USED_THRESHOLD" -gt 100 ]; then
+        FM_HANDOFF_CONTEXT_USED_THRESHOLD=100
+      fi
+      ;;
+  esac
   case "$FM_HANDOFF_POLL_SECONDS" in ''|*[!0-9]*) FM_HANDOFF_POLL_SECONDS=60 ;; esac
   case "$FM_HANDOFF_COOLDOWN_SECONDS" in ''|*[!0-9]*) FM_HANDOFF_COOLDOWN_SECONDS=300 ;; esac
-  export FM_HANDOFF_MODE FM_HANDOFF_THRESHOLD FM_HANDOFF_POLL_SECONDS \
-    FM_HANDOFF_COOLDOWN_SECONDS FM_HANDOFF_CHAIN_JSON
+  export FM_HANDOFF_MODE FM_HANDOFF_THRESHOLD FM_HANDOFF_CONTEXT_USED_THRESHOLD \
+    FM_HANDOFF_POLL_SECONDS FM_HANDOFF_COOLDOWN_SECONDS FM_HANDOFF_CHAIN_JSON
   return 0
 }
 
@@ -152,7 +183,7 @@ fm_handoff_read_kv_file() {
         key=${line%%=*}
         value=${line#*=}
         case "$key" in
-          schema|phase|from|to|reason|token|outgoing_pid|incoming_pid|started_at|updated_at|error|profile|pid|completed_at|cooldown_until)
+          schema|phase|from|to|reason|token|outgoing_pid|incoming_pid|started_at|updated_at|error|profile|pid|completed_at|cooldown_until|trigger|remaining_percent|used_percent)
             printf -v "$key" '%s' "$value"
             ;;
         esac
@@ -192,6 +223,7 @@ fm_handoff_write_record() {
     "from=${from:-}" \
     "to=${to:-}" \
     "reason=${reason:-}" \
+    "trigger=${trigger:-}" \
     "token=${token:-}" \
     "outgoing_pid=${outgoing_pid:-}" \
     "incoming_pid=${incoming_pid:-}" \
@@ -209,6 +241,7 @@ fm_handoff_read_record() {
   from=''
   to=''
   reason=''
+  trigger=''
   token=''
   outgoing_pid=''
   incoming_pid=''
@@ -217,6 +250,76 @@ fm_handoff_read_record() {
   completed_at=''
   cooldown_until=''
   fm_handoff_read_kv_file "$path"
+}
+
+# Persist a context-window sample for the handoff supervisor.
+# remaining_percent is the Claude/status-bar remaining_percentage (0-100).
+# used_percent is derived as 100 - remaining so the config axis can speak in
+# "context used" terms without the status bar changing its display contract.
+# Best-effort: never fails the caller (status-bar render must stay inert-safe).
+fm_handoff_write_context_sample() {
+  local remaining=$1 path now used
+  path=$(fm_handoff_context_path)
+  case "$remaining" in
+    ''|--|*[!0-9]*) return 0 ;;
+  esac
+  if [ "$remaining" -gt 100 ]; then
+    remaining=100
+  fi
+  used=$((100 - remaining))
+  now=$(fm_handoff_now)
+  mkdir -p "$(dirname -- "$path")" 2>/dev/null || return 0
+  fm_handoff_write_kv_file "$path" \
+    "schema=fm-primary-context.v1" \
+    "remaining_percent=$remaining" \
+    "used_percent=$used" \
+    "updated_at=$now" 2>/dev/null || return 0
+  return 0
+}
+
+# Print used_percent from the durable sample, or "na".
+fm_handoff_context_used_percent() {
+  local path used
+  if [ -n "${FM_HANDOFF_CONTEXT_USED:-}" ]; then
+    printf '%s\n' "$FM_HANDOFF_CONTEXT_USED"
+    return 0
+  fi
+  path=$(fm_handoff_context_path)
+  [ -f "$path" ] || { printf 'na\n'; return 0; }
+  used=$(awk -F= '$1 == "used_percent" { print $2; exit }' "$path")
+  case "$used" in
+    ''|*[!0-9]*) printf 'na\n' ;;
+    *) printf '%s\n' "$used" ;;
+  esac
+}
+
+# Return 0 when context USED is at or above the configured threshold.
+# Disabled (empty threshold) or missing sample => not over threshold.
+fm_handoff_context_over_threshold() {
+  local threshold=${1:-$FM_HANDOFF_CONTEXT_USED_THRESHOLD} used
+  case "$threshold" in ''|*[!0-9]*) return 1 ;; esac
+  used=$(fm_handoff_context_used_percent)
+  case "$used" in
+    na|'') return 1 ;;
+    *) awk -v u="$used" -v t="$threshold" 'BEGIN { exit ((u + 0 >= t + 0) ? 0 : 1) }' ;;
+  esac
+}
+
+# Away-mode owns supervision; refuse automated rotation while state/.afk exists.
+fm_handoff_afk_active() {
+  [ -e "$STATE/.afk" ]
+}
+
+# True when a prior handoff record is mid-flight (not terminal).
+fm_handoff_rotation_in_progress() {
+  local path phase
+  path=$(fm_handoff_state_path)
+  [ -f "$path" ] || return 1
+  phase=$(awk -F= '$1 == "phase" { print $2; exit }' "$path")
+  case "$phase" in
+    planning|flushing|releasing|launching) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
 fm_handoff_clear_record() {

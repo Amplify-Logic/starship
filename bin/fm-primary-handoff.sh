@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Quota-aware automated primary orchestrator handoff.
+# Quota- and context-aware automated primary orchestrator handoff.
 #
 # Usage:
 #   fm-primary-handoff.sh status
@@ -15,23 +15,37 @@
 #
 # Commands:
 #   status   Print config, active profile, session lock, and handoff record.
-#   check    One evaluation: if enabled and over threshold, run execute.
+#   check    One evaluation: if enabled and a trigger fires, run execute.
 #   execute  Run the atomic handoff protocol once (manual or from check/run).
 #   run      Polling supervisor loop (single-instance per FM_HOME).
 #
-# Auto-rotation (check/run) only triggers for quota-monitored providers:
-# claude, codex, grok. When the active primary is pi, kimi-k3, or opencode,
-# min_remaining is "na" and check never auto-hands-off; use `execute --force`
-# (or wait until a monitored provider is active again). Accepted limitation.
+# Trigger axes (both under enabled:true):
+#   quota   - threshold_percent_remaining vs quota-axi (claude/codex/grok only)
+#   context - threshold_context_percent_used vs state/.primary-context
+#             (written by fm-status-bar.sh). Context triggers SAME-RUNTIME
+#             rotation (from == to) so a fresh empty session takes over.
+# Quota still walks the configured chain to the next distinct profile.
+# When both fire, quota (cross-runtime) wins because same-runtime refresh
+# cannot restore provider quota.
+#
+# Auto-rotation (check/run) only fires quota for quota-monitored providers:
+# claude, codex, grok. Context can fire for any profile that has a durable
+# context sample. When neither axis has a usable signal, check never
+# auto-hands-off; use `execute --force`. Accepted limitation.
+#
+# Safety refusals (unless --force): away mode (state/.afk), cooldown, and an
+# already in-progress rotation phase.
 #
 # State:
 #   state/.primary-active     written by fm-primary.sh on real launches
+#   state/.primary-context    durable context sample from fm-status-bar.sh
 #   state/.primary-handoff    durable phase record for in-flight/completed handoff
 #   state/.primary-handoff.lock          coordination lock (wake-lib portable lock)
 #   state/.primary-handoff-daemon.lock   run-loop singleton
 #
 # Test seams:
 #   FM_HANDOFF_QUOTA_JSON / FM_HANDOFF_QUOTA_AXI
+#   FM_HANDOFF_CONTEXT_USED (override durable context used_percent)
 #   FM_HANDOFF_SIGNAL_CMD / FM_HANDOFF_WAIT_DEAD_CMD / FM_HANDOFF_LAUNCH_CMD
 #   FM_HANDOFF_INJECT_FAIL=flush|signal|wait_dead|release|pre_launch|launch|post_launch
 #   FM_HANDOFF_WAIT_DEAD_SECS / FM_HANDOFF_NOW / FM_HANDOFF_SKIP_CLI_CHECK
@@ -57,11 +71,16 @@ usage() {
 }
 
 cmd_status() {
-  local active lock_status
+  local active lock_status ctx_used
   fm_handoff_load_config || exit 1
   printf 'config: %s\n' "$FM_HANDOFF_MODE"
   if [ "$FM_HANDOFF_MODE" = enabled ]; then
     printf 'threshold_percent_remaining: %s\n' "$FM_HANDOFF_THRESHOLD"
+    if [ -n "$FM_HANDOFF_CONTEXT_USED_THRESHOLD" ]; then
+      printf 'threshold_context_percent_used: %s\n' "$FM_HANDOFF_CONTEXT_USED_THRESHOLD"
+    else
+      printf 'threshold_context_percent_used: disabled\n'
+    fi
     printf 'chain: %s\n' "$FM_HANDOFF_CHAIN_JSON"
   fi
   if active=$(fm_handoff_read_active_profile 2>/dev/null); then
@@ -69,6 +88,8 @@ cmd_status() {
   else
     printf 'active_profile: unknown\n'
   fi
+  ctx_used=$(fm_handoff_context_used_percent)
+  printf 'context_used_percent: %s\n' "$ctx_used"
   lock_status=$(FM_HOME="$FM_HOME" "$FM_ROOT/bin/fm-lock.sh" status)
   printf '%s\n' "$lock_status"
   if [ -f "$(fm_handoff_state_path)" ]; then
@@ -112,6 +133,7 @@ cmd_execute() {
   from=''
   to=''
   reason=''
+  trigger=''
   token=''
   outgoing_pid=''
   incoming_pid=''
@@ -157,6 +179,7 @@ cmd_execute() {
     # --force with disabled/absent config still needs a chain for next-profile.
     FM_HANDOFF_MODE=enabled
     FM_HANDOFF_THRESHOLD=${FM_HANDOFF_THRESHOLD:-15}
+    FM_HANDOFF_CONTEXT_USED_THRESHOLD=${FM_HANDOFF_CONTEXT_USED_THRESHOLD:-}
     FM_HANDOFF_COOLDOWN_SECONDS=${FM_HANDOFF_COOLDOWN_SECONDS:-300}
     FM_HANDOFF_CHAIN_JSON=${FM_HANDOFF_CHAIN_JSON:-'["claude-fable","pi","codex","kimi-k3"]'}
   fi
@@ -169,6 +192,18 @@ cmd_execute() {
   fi
   # shellcheck disable=SC2064
   trap 'fm_lock_release "'"$coord"'" 2>/dev/null || true' EXIT
+
+  if fm_handoff_afk_active && [ "$force" -ne 1 ]; then
+    fm_handoff_log "away mode active (state/.afk); refusing handoff"
+    release_coord
+    return 0
+  fi
+
+  if fm_handoff_rotation_in_progress && [ "$force" -ne 1 ]; then
+    fm_handoff_log "handoff already in progress; refusing overlapping rotation"
+    release_coord
+    return 1
+  fi
 
   if fm_handoff_in_cooldown && [ "$force" -ne 1 ]; then
     fm_handoff_log "handoff cooldown active; skipping"
@@ -212,7 +247,18 @@ cmd_execute() {
   outgoing_pid=$FM_HANDOFF_LIVE_HOLDER_PID
 
   remaining=$(fm_handoff_min_remaining_for_profile "$active")
-  reason=${reason_arg:-quota:min_remaining=$remaining}
+  if [ -n "$reason_arg" ]; then
+    reason=$reason_arg
+  elif [ "$active" = "$next" ]; then
+    reason="context:used=$(fm_handoff_context_used_percent)"
+  else
+    reason="quota:min_remaining=$remaining"
+  fi
+  case "$reason" in
+    context:*) trigger=context ;;
+    quota:*) trigger=quota ;;
+    *) trigger=manual ;;
+  esac
   token=$(printf '%s-%s' "$(fm_handoff_now)" "$outgoing_pid")
   started_at=$(fm_handoff_now)
   phase=planning
@@ -310,17 +356,25 @@ cmd_execute() {
   cooldown_until=$((completed_at + FM_HANDOFF_COOLDOWN_SECONDS))
   fm_handoff_write_record
   fm_handoff_write_active "$next" "$incoming_pid"
-  fm_handoff_log "handed off primary $from -> $to (reason=$reason)"
+  fm_handoff_log "handed off primary $from -> $to (reason=$reason trigger=$trigger)"
   printf 'handed_off: %s -> %s\n' "$from" "$to"
   release_coord
   return 0
 }
 
 cmd_check() {
-  local active remaining
+  local active remaining ctx_used
   fm_handoff_load_config || return 1
   if [ "$FM_HANDOFF_MODE" != enabled ]; then
     printf 'handoff: disabled\n'
+    return 0
+  fi
+  if fm_handoff_afk_active; then
+    printf 'handoff: afk\n'
+    return 0
+  fi
+  if fm_handoff_rotation_in_progress; then
+    printf 'handoff: in_progress\n'
     return 0
   fi
   if fm_handoff_in_cooldown; then
@@ -332,14 +386,29 @@ cmd_check() {
     return 0
   }
   remaining=$(fm_handoff_min_remaining_for_profile "$active")
-  if ! fm_handoff_over_threshold "$active"; then
-    printf 'handoff: ok profile=%s min_remaining=%s threshold=%s\n' \
+  ctx_used=$(fm_handoff_context_used_percent)
+
+  # Quota wins when both fire: same-runtime refresh cannot restore quota.
+  if fm_handoff_over_threshold "$active"; then
+    printf 'handoff: threshold crossed profile=%s min_remaining=%s threshold=%s\n' \
       "$active" "$remaining" "$FM_HANDOFF_THRESHOLD"
-    return 0
+    cmd_execute --from "$active" --reason "quota:min_remaining=$remaining"
+    return $?
   fi
-  printf 'handoff: threshold crossed profile=%s min_remaining=%s threshold=%s\n' \
-    "$active" "$remaining" "$FM_HANDOFF_THRESHOLD"
-  cmd_execute --from "$active" --reason "quota:min_remaining=$remaining"
+
+  if fm_handoff_context_over_threshold; then
+    printf 'handoff: context threshold crossed profile=%s used=%s threshold=%s\n' \
+      "$active" "$ctx_used" "$FM_HANDOFF_CONTEXT_USED_THRESHOLD"
+    # Same-runtime: exit and respawn the same profile for a fresh session.
+    cmd_execute --from "$active" --to "$active" \
+      --reason "context:used=$ctx_used"
+    return $?
+  fi
+
+  printf 'handoff: ok profile=%s min_remaining=%s context_used=%s quota_threshold=%s context_threshold=%s\n' \
+    "$active" "$remaining" "$ctx_used" "$FM_HANDOFF_THRESHOLD" \
+    "${FM_HANDOFF_CONTEXT_USED_THRESHOLD:-disabled}"
+  return 0
 }
 
 cmd_run() {
@@ -357,7 +426,7 @@ cmd_run() {
   fi
   # shellcheck disable=SC2064
   trap 'fm_lock_release "'"$daemon_lock"'" 2>/dev/null || true' EXIT
-  fm_handoff_log "run loop started poll=${FM_HANDOFF_POLL_SECONDS}s threshold=${FM_HANDOFF_THRESHOLD}"
+  fm_handoff_log "run loop started poll=${FM_HANDOFF_POLL_SECONDS}s quota_threshold=${FM_HANDOFF_THRESHOLD} context_threshold=${FM_HANDOFF_CONTEXT_USED_THRESHOLD:-disabled}"
   while :; do
     fm_handoff_load_config || exit 1
     [ "$FM_HANDOFF_MODE" = enabled ] || {

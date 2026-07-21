@@ -147,6 +147,16 @@ CONTEXT_REMAINING=$(normalize_percent "$CONTEXT_REMAINING")
 QUOTA_USED=$(normalize_percent "$QUOTA_USED")
 COST=$(normalize_cost "$COST")
 
+# Persist context remaining for the primary-handoff supervisor (context axis).
+# Display semantics above are unchanged; this is out-of-band plumbing only.
+# Best-effort: never fail the status-bar render.
+if [ "$CONTEXT_REMAINING" != -- ]; then
+  # shellcheck source=bin/fm-primary-handoff-lib.sh
+  . "$FM_ROOT/bin/fm-primary-handoff-lib.sh" 2>/dev/null \
+    && fm_handoff_write_context_sample "$CONTEXT_REMAINING" 2>/dev/null \
+    || true
+fi
+
 G=$'\033[92m'
 Y=$'\033[93m'
 R=$'\033[91m'

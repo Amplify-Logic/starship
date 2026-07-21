@@ -1,21 +1,57 @@
 # Primary orchestrator handoff
 
-Quota-aware automated rotation of the Firstmate primary orchestrator.
+Quota- and context-aware automated rotation of the Firstmate primary orchestrator.
 Opt-in only: absent or disabled `config/primary-handoff` leaves every existing primary launch path unchanged.
 
 `bin/fm-primary-handoff.sh` and its header own the exact commands, flags, state fields, and test seams.
-This document owns the atomic-lock protocol, the never-two-holders invariant, and the failure-mode catalog.
+This document owns the atomic-lock protocol, the never-two-holders invariant, the dual trigger axes, and the failure-mode catalog.
 
 ## Why
 
-A long-running primary can exhaust a provider's short-window quota while the fleet's durable state remains healthy.
+A long-running primary can exhaust a provider's short-window quota, or fill its model context window until every request re-bills a huge resident prompt.
 Restart is already a non-event: backlog, task meta, wake queue, and PR polls live on disk under `FM_HOME`.
-Handoff reuses that property: flush durable intent, release the session lock only after the outgoing harness is dead, then launch the next verified primary profile through `bin/fm-primary.sh`.
+Handoff reuses that property: flush durable intent, release the session lock only after the outgoing harness is dead, then launch a primary profile through `bin/fm-primary.sh`.
+
+Measured context cost (fleet learning, 2026-07-19): most primary-session spend is re-billing resident context on every request.
+Keeping sessions short and rotating before context balloons past roughly half used is the top cost lever this feature automates.
 
 ## Configuration
 
 Local, gitignored `config/primary-handoff` is a JSON object.
 See [`docs/examples/primary-handoff.json`](examples/primary-handoff.json) and the "Primary orchestrator handoff" section of [`configuration.md`](configuration.md).
+
+Two independent trigger axes share one rotation protocol:
+
+| Axis | Config field | Signal | Default when `enabled: true` | Rotation target |
+| --- | --- | --- | --- | --- |
+| Quota | `threshold_percent_remaining` | `quota-axi` min general-window remaining | `15` | Next distinct profile in `chain` |
+| Context | `threshold_context_percent_used` | `state/.primary-context` used percent | absent = axis disabled | Same profile (fresh session) |
+
+Captain target for the context axis: rotate near ~50% context used (`"threshold_context_percent_used": 50`).
+Absent or null `threshold_context_percent_used` leaves quota-only behavior exactly as before the context axis existed.
+
+## Context signal plumbing
+
+Claude Code already feeds `context_window.remaining_percentage` into the status-line command.
+`bin/fm-status-bar.sh` parses that field for display and, without changing captain-facing display semantics, also writes a durable sample to `state/.primary-context`:
+
+```text
+schema=fm-primary-context.v1
+remaining_percent=<0-100>
+used_percent=<100 - remaining>
+updated_at=<epoch>
+```
+
+The handoff supervisor reads `used_percent` out-of-band.
+Test seam: `FM_HANDOFF_CONTEXT_USED` overrides the durable sample.
+
+## Same-runtime vs cross-runtime
+
+- **Context trigger** chooses `from == to`: the outgoing primary exits and the same runtime profile respawns with an empty context window.
+  Worker panes are independent backend endpoints; they keep running and report through durable `state/<id>.status` and `.meta`.
+  The incoming primary picks them up through ordinary session-start reconciliation (restart is a non-event).
+- **Quota trigger** still walks `chain` to the next distinct usable profile (cross-runtime).
+- When both axes fire on the same check, **quota wins**: a same-runtime refresh cannot restore provider quota.
 
 ## Atomic-lock handoff protocol
 
@@ -26,8 +62,8 @@ Phases recorded in `state/.primary-handoff`:
 
 1. **planning** - Acquire the handoff coordination lock (`state/.primary-handoff.lock`).
    Read `state/.primary-active` and the live session-lock holder.
-   Choose the next profile in the configured chain.
-   Persist the durable intent (`from`, `to`, `token`, `outgoing_pid`) before touching the outgoing process.
+   Choose the target profile (same-runtime for context, next chain profile for quota, or explicit `--to`).
+   Persist the durable intent (`from`, `to`, `trigger`, `token`, `outgoing_pid`) before touching the outgoing process.
 2. **flushing** - Hold the wake-queue lock briefly so no mid-append wake record is lost, then release it.
    Durable fleet records are already on disk; this step only serializes the last queue write and stamps the handoff record.
    The session lock remains held by the outgoing harness.
@@ -39,6 +75,7 @@ Phases recorded in `state/.primary-handoff`:
    Launch the incoming profile through `bin/fm-primary.sh` (or the test launch seam).
 5. **complete** - Observe a new live session-lock holder distinct from the outgoing PID, or accept a successful launch seam result in tests.
    Record cooldown metadata so the supervisor does not thrash.
+   The incoming primary's ordinary session-start path re-arms the watcher / supervision cycle; a rotation that left the fleet unwatched would be a regression.
 
 The coordination lock serializes concurrent supervisors.
 The session lock transfer is strictly ordered: outgoing death, then stale release, then incoming acquire via ordinary `fm-session-start.sh` / `fm-lock.sh` acquire inside the new primary session.
@@ -58,18 +95,45 @@ outgoing holds lock
         |
    launch incoming primary (launching)
         |
-   incoming session-start acquires lock
+   incoming session-start acquires lock + re-arms supervision
         |
    complete + cooldown
 ```
+
+## Safety refusals
+
+Unless `execute --force`:
+
+- **Away mode** (`state/.afk`): refuse.
+  The away daemon owns supervision then; rotating the primary would fight that ownership.
+- **In-progress rotation**: refuse when `state/.primary-handoff` phase is `planning`, `flushing`, `releasing`, or `launching`.
+- **Cooldown**: skip after a completed handoff until `cooldown_until`.
+  Prevents a primary that starts already above threshold from busy-loop rotating.
+
+## In-flight captain decisions (conversation-only state)
+
+Rotation destroys conversation-only state in the outgoing primary pane.
+Anything the orchestrator has not yet written to a durable record (backlog hold, task status, captain preference file, wake queue) is lost.
+
+Chosen tradeoff:
+
+1. Prefer **flushing and deferring** over rotating through an unsafe moment (afk, in-progress, cooldown).
+2. The flush gate serializes the durable wake queue so wakes arriving during rotation are not lost.
+3. Do **not** invent a heuristic for "mid-chat undecided thought": that state is undetectable and must stay the operator's responsibility.
+4. After rotation, the incoming primary reconciles from disk only.
+   Escalate or re-ask any captain decision that never landed in a durable record.
 
 ## Failure modes
 
 | Failure | Detection | Response | Lock invariant |
 | --- | --- | --- | --- |
 | Feature disabled / config absent | Config read | No-op exit 0 | Untouched |
-| Quota probe missing or unparseable | `quota-axi` / fixture | No handoff; log and keep outgoing | Untouched |
-| Current profile not over threshold | Metric compare | No handoff | Untouched |
+| Quota probe missing or unparseable | `quota-axi` / fixture | No quota handoff; context axis may still fire | Untouched |
+| Context sample missing | No `state/.primary-context` / override | No context handoff | Untouched |
+| Current profile not over either threshold | Metric compare | No handoff | Untouched |
+| Away mode active | `state/.afk` | Refuse (unless `--force`) | Untouched |
+| Cooldown active | `cooldown_until` | Skip | Untouched |
+| Rotation already in progress | Non-terminal phase | Refuse overlapping execute | Untouched |
 | No next profile in chain / CLI missing | Chain walk | Abort planning; keep outgoing | Untouched |
 | Crash during planning before intent publish | Missing or partial record | Next check starts clean | Outgoing still holds |
 | Crash during flushing | Phase `flushing` | Resume refuses launch until release completes; may retry flush | Outgoing still holds |
@@ -91,13 +155,14 @@ When handoff is disabled or `config/primary-handoff` is absent, `fm-primary.sh` 
 Only when the config exists with `enabled: true` does `fm-primary.sh` write the lightweight `state/.primary-active` marker on real launches so the supervisor can see which profile is live.
 That marker is not a lock and never authorizes mutation.
 
-## Quota-monitored providers only
+## Quota-monitored providers only (quota axis)
 
-Auto-rotation via `check`/`run` only triggers for quota-monitored providers: claude, codex, and grok.
-When the active primary is pi, kimi-k3, or opencode, no quota source exists, `min_remaining` reports `na`, and `check` never auto-hands-off.
-Operators must run `fm-primary-handoff.sh execute --force` (or wait until a monitored provider is active again) to rotate off an unmonitored provider.
+Auto-rotation via `check`/`run` only triggers the **quota** axis for quota-monitored providers: claude, codex, and grok.
+When the active primary is pi, kimi-k3, or opencode, no quota source exists, `min_remaining` reports `na`, and the quota axis never auto-hands-off.
+The **context** axis can still fire for any profile that has a durable context sample.
+Operators must run `fm-primary-handoff.sh execute --force` (or wait until a monitored provider is active again) to force a quota-style chain walk off an unmonitored provider.
 This is an accepted limitation, not a bug.
 
 ## Testing
 
-`tests/fm-primary-handoff.test.sh` exercises the happy path, disabled no-op, and failure-injection cases that prove the never-two-holders invariant across flush, signal, wait, release, and launch failures.
+`tests/fm-primary-handoff.test.sh` exercises the happy path, disabled no-op, context-threshold detection, same-runtime rotation, afk refusal, cooldown, workers-survive, watcher re-arm, wake durability across flush, and failure-injection cases that prove the never-two-holders invariant across flush, signal, wait, release, and launch failures.

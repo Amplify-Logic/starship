@@ -432,7 +432,7 @@ fi
 mark_current_surface
 export FM_PRIMARY_HARNESS=${PROFILE%%-*}
 export FM_PRIMARY_ROLE=$role
-# When optional quota-aware handoff is enabled, record the live profile so the
+# When optional primary handoff is enabled, record the live profile so the
 # supervisor can rotate without guessing from process args (docs/primary-handoff.md).
 # Absent or disabled config/primary-handoff leaves this path inert.
 if [ -f "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}/primary-handoff" ] \

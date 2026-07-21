@@ -1,6 +1,7 @@
 {
   "enabled": true,
   "threshold_percent_remaining": 15,
+  "threshold_context_percent_used": 50,
   "poll_seconds": 60,
   "cooldown_seconds": 300,
   "chain": ["claude-fable", "pi", "codex", "kimi-k3"]

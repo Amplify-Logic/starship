@@ -122,6 +122,7 @@ test_claude_payload_adapter_and_primary_guard() {
   out=$(printf '%s' "$input" | \
     PATH="$FAKEBIN:$PATH" \
     FM_HOME="$HOME_FIX" \
+    FM_PRIMARY_HARNESS='' \
     FM_STATUS_BAR_NOW=1000 \
     "$ROOT/bin/fm-status-bar.sh" --adapter claude)
   [ -z "$out" ] || fail "Claude status bar rendered outside the guarded primary launcher"

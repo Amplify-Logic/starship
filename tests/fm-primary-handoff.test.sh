@@ -15,7 +15,20 @@ LAUNCH_LOG="$TMP_ROOT/launch.log"
 
 write_enabled_config() {
   local threshold=${1:-15}
-  cat > "$HOME_FIX/config/primary-handoff" <<JSON
+  local context_used=${2:-}
+  if [ -n "$context_used" ]; then
+    cat > "$HOME_FIX/config/primary-handoff" <<JSON
+{
+  "enabled": true,
+  "threshold_percent_remaining": $threshold,
+  "threshold_context_percent_used": $context_used,
+  "poll_seconds": 60,
+  "cooldown_seconds": 300,
+  "chain": ["claude-fable", "pi", "codex", "kimi-k3"]
+}
+JSON
+  else
+    cat > "$HOME_FIX/config/primary-handoff" <<JSON
 {
   "enabled": true,
   "threshold_percent_remaining": $threshold,
@@ -24,6 +37,18 @@ write_enabled_config() {
   "chain": ["claude-fable", "pi", "codex", "kimi-k3"]
 }
 JSON
+  fi
+}
+
+write_context_sample() {
+  local remaining=$1
+  local used=$((100 - remaining))
+  cat > "$HOME_FIX/state/.primary-context" <<EOF
+schema=fm-primary-context.v1
+remaining_percent=$remaining
+used_percent=$used
+updated_at=1
+EOF
 }
 
 write_quota() {
@@ -85,9 +110,20 @@ cleanup_holders() {
     wait "$FAKE_INCOMING_PID" 2>/dev/null || true
     FAKE_INCOMING_PID=
   fi
+  if [ -n "${FAKE_WORKER_PID:-}" ]; then
+    kill "$FAKE_WORKER_PID" 2>/dev/null || true
+    wait "$FAKE_WORKER_PID" 2>/dev/null || true
+    FAKE_WORKER_PID=
+  fi
   rm -f "$HOME_FIX/state/.lock" "$HOME_FIX/state/.primary-handoff" \
     "$HOME_FIX/state/.primary-handoff.flush" \
-    "$HOME_FIX/state/.primary-active"
+    "$HOME_FIX/state/.primary-active" \
+    "$HOME_FIX/state/.primary-context" \
+    "$HOME_FIX/state/.last-watcher-beat" \
+    "$HOME_FIX/state/.afk" \
+    "$HOME_FIX/state/.wake-queue" \
+    "$HOME_FIX/state/worker1.meta" \
+    "$HOME_FIX/state/worker1.status"
 }
 trap 'cleanup_holders; fm_test_cleanup' EXIT
 
@@ -125,12 +161,14 @@ wait_dead_ok() {
 launch_incoming() {
   local profile=$1
   printf 'launch %s\n' "$profile" >> "$LAUNCH_LOG"
-  # Args must match fm-lock.sh HARNESS_RE (pi is anchored as ^pi$, so use codex).
+  # Args must match fm-lock.sh HARNESS_RE (pi is anchored as ^pi$, so use codex/claude).
   # Detach stdio so command-substitution callers are not held open.
-  bash -c 'while :; do sleep 5; done' codex-primary-handoff-incoming \
+  bash -c 'while :; do sleep 5; done' claude-primary-handoff-incoming \
     </dev/null >/dev/null 2>&1 &
   FAKE_INCOMING_PID=$!
   printf '%s\n' "$FAKE_INCOMING_PID" > "$HOME_FIX/state/.lock"
+  # Simulate the incoming primary re-arming supervision after session-start.
+  : > "$HOME_FIX/state/.last-watcher-beat"
   return 0
 }
 
@@ -399,6 +437,237 @@ test_concurrent_coordination_lock() {
   pass "coordination lock serializes supervisors without dual session-lock holders"
 }
 
+test_context_threshold_detection() {
+  local out status=0
+  : > "$LAUNCH_LOG"
+  # Quota comfortably under threshold so only context can fire.
+  write_enabled_config 15 50
+  write_quota "$TMP_ROOT/quota.json" 80
+  write_context_sample 40
+  write_active claude-fable
+  start_fake_holder
+  out=$(run_execute "$ROOT/bin/fm-primary-handoff.sh" check 2>&1) || status=$?
+  expect_code 0 "$status" "context threshold check should succeed: $out"
+  assert_contains "$out" 'context threshold crossed' "should report context threshold"
+  assert_contains "$out" 'handed_off: claude-fable -> claude-fable' "context should same-runtime rotate"
+  assert_contains "$(cat "$LAUNCH_LOG")" 'launch claude-fable' "should launch same profile"
+  assert_contains "$(cat "$HOME_FIX/state/.primary-handoff")" 'trigger=context' "record trigger should be context"
+  assert_never_two
+  cleanup_holders
+  pass "context threshold detection triggers same-runtime rotation"
+}
+
+test_context_under_threshold_noop() {
+  local out status=0
+  : > "$LAUNCH_LOG"
+  write_enabled_config 15 50
+  write_quota "$TMP_ROOT/quota.json" 80
+  write_context_sample 60
+  write_active claude-fable
+  start_fake_holder
+  out=$(run_execute "$ROOT/bin/fm-primary-handoff.sh" check 2>&1) || status=$?
+  expect_code 0 "$status" "under-context-threshold check should succeed"
+  assert_contains "$out" 'handoff: ok' "should report ok"
+  assert_not_contains "$(cat "$LAUNCH_LOG")" 'launch' "must not launch under context threshold"
+  [ "$(live_holder_count)" = 1 ] || fail "under-context-threshold must keep outgoing"
+  cleanup_holders
+  pass "check is a no-op when context used is below threshold"
+}
+
+test_same_runtime_rotation_via_execute() {
+  local out status=0 record
+  : > "$SIGNAL_LOG"
+  : > "$LAUNCH_LOG"
+  write_enabled_config 15 50
+  write_quota "$TMP_ROOT/quota.json" 80
+  write_active claude-fable
+  start_fake_holder
+  out=$(run_execute "$ROOT/bin/fm-primary-handoff.sh" execute \
+    --from claude-fable --to claude-fable --reason 'context:used=55' 2>&1) || status=$?
+  expect_code 0 "$status" "same-runtime execute should succeed: $out"
+  assert_contains "$out" 'handed_off: claude-fable -> claude-fable' "same-runtime handoff line"
+  assert_contains "$(cat "$LAUNCH_LOG")" 'launch claude-fable' "incoming same profile"
+  record=$(cat "$HOME_FIX/state/.primary-handoff")
+  assert_contains "$record" 'from=claude-fable' "from wrong"
+  assert_contains "$record" 'to=claude-fable' "to wrong"
+  assert_contains "$record" 'trigger=context' "trigger wrong"
+  assert_contains "$(cat "$HOME_FIX/state/.primary-active")" 'profile=claude-fable' "active stays same profile"
+  assert_never_two
+  cleanup_holders
+  pass "same-runtime execute rotates claude -> claude with one live holder"
+}
+
+test_afk_refusal() {
+  local out status=0
+  : > "$LAUNCH_LOG"
+  write_enabled_config 15 50
+  write_quota "$TMP_ROOT/quota.json" 5
+  write_context_sample 10
+  write_active claude-fable
+  start_fake_holder
+  : > "$HOME_FIX/state/.afk"
+  out=$(run_execute "$ROOT/bin/fm-primary-handoff.sh" check 2>&1) || status=$?
+  expect_code 0 "$status" "afk check should soft-skip"
+  assert_contains "$out" 'handoff: afk' "should report afk"
+  assert_not_contains "$(cat "$LAUNCH_LOG")" 'launch' "afk must not launch"
+  [ "$(live_holder_count)" = 1 ] || fail "afk must keep outgoing lock"
+  cleanup_holders
+  pass "away mode refuses automated rotation"
+}
+
+test_cooldown_prevents_busy_loop() {
+  local out status=0 now
+  : > "$LAUNCH_LOG"
+  write_enabled_config 15 50
+  write_quota "$TMP_ROOT/quota.json" 5
+  write_context_sample 10
+  write_active claude-fable
+  now=1000
+  cat > "$HOME_FIX/state/.primary-handoff" <<EOF
+schema=fm-primary-handoff.v1
+phase=complete
+from=claude-fable
+to=claude-fable
+reason=context:used=60
+trigger=context
+token=1
+outgoing_pid=1
+incoming_pid=2
+started_at=1
+updated_at=1
+error=
+completed_at=900
+cooldown_until=2000
+EOF
+  start_fake_holder
+  out=$(
+    FM_HANDOFF_NOW=$now \
+    run_execute "$ROOT/bin/fm-primary-handoff.sh" check 2>&1
+  ) || status=$?
+  expect_code 0 "$status" "cooldown check should soft-skip"
+  assert_contains "$out" 'handoff: cooldown' "should report cooldown"
+  assert_not_contains "$(cat "$LAUNCH_LOG")" 'launch' "cooldown must not launch"
+  [ "$(live_holder_count)" = 1 ] || fail "cooldown must keep outgoing"
+  cleanup_holders
+  pass "cooldown prevents busy-loop rotation when already over threshold"
+}
+
+test_workers_survive_rotation() {
+  local out status=0
+  : > "$SIGNAL_LOG"
+  : > "$LAUNCH_LOG"
+  write_enabled_config 15 50
+  write_quota "$TMP_ROOT/quota.json" 80
+  write_context_sample 40
+  write_active claude-fable
+  start_fake_holder
+  # Worker is an independent live process with durable ownership records.
+  bash -c 'while :; do sleep 5; done' worker-survives-handoff \
+    </dev/null >/dev/null 2>&1 &
+  FAKE_WORKER_PID=$!
+  cat > "$HOME_FIX/state/worker1.meta" <<EOF
+window=worker1
+worktree=/tmp/worker1
+project=demo
+harness=claude
+kind=crewmate
+mode=scout
+yolo=0
+EOF
+  printf 'working: before rotation\n' > "$HOME_FIX/state/worker1.status"
+  out=$(run_execute "$ROOT/bin/fm-primary-handoff.sh" check 2>&1) || status=$?
+  expect_code 0 "$status" "workers-survive check should succeed: $out"
+  assert_contains "$out" 'handed_off: claude-fable -> claude-fable' "should rotate"
+  kill -0 "$FAKE_WORKER_PID" 2>/dev/null || fail "worker process must still be live after rotation"
+  [ -f "$HOME_FIX/state/worker1.meta" ] || fail "worker meta must remain"
+  assert_contains "$(cat "$HOME_FIX/state/worker1.meta")" 'project=demo' "worker ownership meta must remain"
+  assert_contains "$(cat "$HOME_FIX/state/worker1.status")" 'working: before rotation' "worker status must remain"
+  assert_never_two
+  cleanup_holders
+  pass "workers live before rotation remain live and owned after it"
+}
+
+test_watcher_rearmed_after_handoff() {
+  local out status=0
+  : > "$SIGNAL_LOG"
+  : > "$LAUNCH_LOG"
+  write_enabled_config 15 50
+  write_quota "$TMP_ROOT/quota.json" 80
+  write_context_sample 40
+  write_active claude-fable
+  start_fake_holder
+  [ ! -f "$HOME_FIX/state/.last-watcher-beat" ] || fail "precondition: no watcher beat before launch"
+  out=$(run_execute "$ROOT/bin/fm-primary-handoff.sh" check 2>&1) || status=$?
+  expect_code 0 "$status" "watcher-rearm check should succeed: $out"
+  [ -f "$HOME_FIX/state/.last-watcher-beat" ] || fail "incoming launch must re-arm watcher beat"
+  assert_never_two
+  cleanup_holders
+  pass "incoming primary re-arms supervision beacon after handoff"
+}
+
+test_wakes_survive_flush() {
+  local out status=0 wake_line
+  : > "$SIGNAL_LOG"
+  : > "$LAUNCH_LOG"
+  write_enabled_config 15 50
+  write_quota "$TMP_ROOT/quota.json" 80
+  write_context_sample 40
+  write_active claude-fable
+  start_fake_holder
+  # Pre-seed a durable wake; flush must not drop it.
+  # shellcheck source=bin/fm-wake-lib.sh
+  . "$ROOT/bin/fm-wake-lib.sh"
+  STATE="$HOME_FIX/state"
+  FM_WAKE_QUEUE="$STATE/.wake-queue"
+  FM_WAKE_QUEUE_LOCK="$STATE/.wake-queue.lock"
+  fm_wake_append signal worker1 'pre-rotation wake' || fail "could not seed wake"
+  wake_line=$(cat "$HOME_FIX/state/.wake-queue")
+  assert_contains "$wake_line" 'pre-rotation wake' "seed wake missing"
+  out=$(run_execute "$ROOT/bin/fm-primary-handoff.sh" check 2>&1) || status=$?
+  expect_code 0 "$status" "wake-survival check should succeed: $out"
+  [ -f "$HOME_FIX/state/.primary-handoff.flush" ] || fail "flush marker missing"
+  assert_contains "$(cat "$HOME_FIX/state/.wake-queue")" 'pre-rotation wake' "wake must survive flush/rotation"
+  assert_never_two
+  cleanup_holders
+  pass "durable wakes arriving before/during rotation are not lost"
+}
+
+test_status_bar_persists_context_sample() {
+  local input out
+  rm -f "$HOME_FIX/state/.primary-context"
+  input='{"model":{"display_name":"Claude Fable"},"effort":{"level":"high"},"context_window":{"remaining_percentage":48.2},"rate_limits":{"five_hour":{"used_percentage":12.9}},"cost":{"total_cost_usd":1.0}}'
+  out=$(
+    printf '%s' "$input" | FM_HOME="$HOME_FIX" FM_PRIMARY_HARNESS=claude \
+      "$ROOT/bin/fm-status-bar.sh" --adapter claude
+  )
+  [ -n "$out" ] || fail "status bar should still render"
+  [ -f "$HOME_FIX/state/.primary-context" ] || fail "status bar must persist context sample"
+  assert_contains "$(cat "$HOME_FIX/state/.primary-context")" 'remaining_percent=48' "remaining wrong"
+  assert_contains "$(cat "$HOME_FIX/state/.primary-context")" 'used_percent=52' "used wrong"
+  # Display still shows remaining, not used - do not restyle.
+  assert_contains "$out" '🧠48%' "display remaining semantics must be unchanged"
+  cleanup_holders
+  pass "status bar persists context sample without changing display semantics"
+}
+
+test_context_axis_absent_is_quota_only() {
+  local out status=0
+  : > "$LAUNCH_LOG"
+  # No threshold_context_percent_used field: context sample must be ignored.
+  write_enabled_config 15
+  write_quota "$TMP_ROOT/quota.json" 80
+  write_context_sample 10
+  write_active claude-fable
+  start_fake_holder
+  out=$(run_execute "$ROOT/bin/fm-primary-handoff.sh" check 2>&1) || status=$?
+  expect_code 0 "$status" "quota-only check should succeed"
+  assert_contains "$out" 'handoff: ok' "should report ok when only context is hot but axis disabled"
+  assert_contains "$out" 'context_threshold=disabled' "should report context axis disabled"
+  assert_not_contains "$(cat "$LAUNCH_LOG")" 'launch' "disabled context axis must not launch"
+  cleanup_holders
+  pass "absent context threshold leaves quota-only behavior"
+}
+
 test_disabled_is_noop
 test_happy_path_atomic_handoff
 test_flush_failure_keeps_outgoing_lock
@@ -411,5 +680,15 @@ test_check_triggers_when_over_threshold
 test_check_ok_when_under_threshold
 test_primary_unchanged_when_handoff_disabled
 test_concurrent_coordination_lock
+test_context_threshold_detection
+test_context_under_threshold_noop
+test_same_runtime_rotation_via_execute
+test_afk_refusal
+test_cooldown_prevents_busy_loop
+test_workers_survive_rotation
+test_watcher_rearmed_after_handoff
+test_wakes_survive_flush
+test_status_bar_persists_context_sample
+test_context_axis_absent_is_quota_only
 
 printf 'All primary-handoff tests passed.\n'

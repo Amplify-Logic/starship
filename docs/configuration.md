@@ -193,22 +193,29 @@ For Pi secondmate launches, `fm-spawn.sh` starts Pi with `-e` pointed at the sec
 
 ## Primary orchestrator handoff (config/primary-handoff)
 
-`config/primary-handoff` is an optional local, gitignored JSON file that enables quota-aware automated rotation of the Firstmate primary orchestrator.
+`config/primary-handoff` is an optional local, gitignored JSON file that enables automated rotation of the Firstmate primary orchestrator on two independent axes: provider quota and model-context used.
 Absent or `"enabled": false` is a complete no-op: `bin/fm-primary.sh` launch behavior is unchanged and `bin/fm-primary-handoff.sh` exits without touching the session lock.
-When enabled, `bin/fm-primary-handoff.sh` monitors the active primary's provider quota through `quota-axi` and, when the minimum general-window `percentRemaining` is at or below `threshold_percent_remaining`, hands the primary role to the next profile in `chain` through the atomic-lock protocol in [`docs/primary-handoff.md`](primary-handoff.md).
+When enabled, `bin/fm-primary-handoff.sh` evaluates:
+
+- **Quota** - when the minimum general-window `percentRemaining` from `quota-axi` is at or below `threshold_percent_remaining`, rotate to the next profile in `chain`.
+- **Context** - when durable context used (from `state/.primary-context`, written by `bin/fm-status-bar.sh`) is at or above `threshold_context_percent_used`, rotate to the **same** profile for a fresh empty session.
+  Absent or null `threshold_context_percent_used` disables the context axis only.
+
+Both axes share the atomic-lock protocol in [`docs/primary-handoff.md`](primary-handoff.md).
 See [`docs/examples/primary-handoff.json`](examples/primary-handoff.json) for a starting point.
 
 ```json
 {
   "enabled": true,
   "threshold_percent_remaining": 15,
+  "threshold_context_percent_used": 50,
   "poll_seconds": 60,
   "cooldown_seconds": 300,
   "chain": ["claude-fable", "pi", "codex", "kimi-k3"]
 }
 ```
 
-This section owns the config schema; `bin/fm-primary-handoff.sh` owns commands and test seams; `docs/primary-handoff.md` owns the lock-transfer protocol and failure modes.
+This section owns the config schema; `bin/fm-primary-handoff.sh` owns commands and test seams; `docs/primary-handoff.md` owns the lock-transfer protocol, same-runtime mode, and failure modes.
 The feature is not inherited by secondmate homes.
 
 ## Crew dispatch profiles (config/crew-dispatch.json)
