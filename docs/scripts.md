@@ -8,6 +8,8 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | Script                   | Purpose                                                                              |
 | ------------------------ | ------------------------------------------------------------------------------------ |
 | `fm-primary.sh`          | Launch a verified primary profile from the tracked root, owning profile aliases and bypass flags |
+| `fm-primary-handoff.sh`  | Optional quota-aware primary orchestrator handoff (docs/primary-handoff.md)          |
+| `fm-primary-handoff-lib.sh` | Shared handoff state-machine and never-two-holders helpers                        |
 | `fm-status-bar.sh`       | Render the canonical guarded primary status bar and Kimi tmux companion              |
 | `fm-session-start.sh`    | Compose lock, bootstrap, and wake drain into the single ordered session-start digest |
 | `fm-sessionstart-nudge.sh` | Print the native session-start hook nudge when the primary has not already run the digest |

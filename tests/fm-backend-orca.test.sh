@@ -36,6 +36,14 @@ fi
 exit 0
 SH
   chmod +x "$fb/orca"
+  # fm-spawn preflights the harness launch binary via PATH; stub it so these
+  # tests stay deterministic on hosts without a real claude CLI installed.
+  cat > "$fb/claude" <<'SH'
+#!/usr/bin/env bash
+echo "fake-claude 0.0.0"
+exit 0
+SH
+  chmod +x "$fb/claude"
   printf '%s\n' "$fb"
 }
 

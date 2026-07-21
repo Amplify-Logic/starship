@@ -206,6 +206,7 @@ Firstmate's skills live in two separate places with different audiences:
 - [docs/cmux-backend.md](docs/cmux-backend.md) - setup guide for the experimental cmux backend, plus its verification notes and known gaps.
 - [docs/codex-app-backend.md](docs/codex-app-backend.md) - Codex App backend boundary, evidence, and rollout contract.
 - [docs/cursor-harness.md](docs/cursor-harness.md) - Cursor CLI worker-adapter verification evidence, limitations, and the worker-only boundary.
+- [docs/primary-handoff.md](docs/primary-handoff.md) - optional quota-aware primary orchestrator rotation, atomic session-lock handoff, and failure modes.
 - [docs/status-bar.md](docs/status-bar.md) - the canonical primary status-bar fields, thresholds, placeholders, adapter surfaces, and verification evidence.
 - [docs/turnend-guard.md](docs/turnend-guard.md) - the primary session's structural "no turn ends blind" backstop: verified per-harness hook mechanisms, scoping, loop safety, and fail-open tradeoffs.
 - [docs/supervision-protocols/](docs/supervision-protocols/) - rendered primary-harness watcher protocols for Claude, Codex, OpenCode, Pi, Grok, Kimi, and unknown harness fallback.

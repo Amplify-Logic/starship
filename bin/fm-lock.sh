@@ -3,8 +3,12 @@
 # Writes the harness (agent) process PID found by walking the shell's ancestry,
 # which lives as long as the firstmate session - unlike the transient subshell
 # PID of any one tool call, which is dead moments after it is written.
-# Usage: fm-lock.sh           acquire; exit 1 if another live session holds it
-#        fm-lock.sh status    print holder and liveness; always exits 0
+# Usage: fm-lock.sh              acquire; exit 1 if another live session holds it
+#        fm-lock.sh status       print holder and liveness; always exits 0
+#        fm-lock.sh release-stale
+#          Remove state/.lock only when the recorded holder is dead or not a
+#          harness. Refuse while a live harness still holds it. Used by
+#          bin/fm-primary-handoff.sh after the outgoing primary has exited.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -46,6 +50,26 @@ if [ "${1:-}" = "status" ]; then
   if [ ! -f "$LOCK" ]; then echo "lock: free"; exit 0; fi
   old=$(cat "$LOCK")
   if holder_alive "$old"; then echo "lock: held by live harness pid $old"; else echo "lock: stale (pid $old dead or not a harness)"; fi
+  exit 0
+fi
+
+if [ "${1:-}" = "release-stale" ]; then
+  if [ ! -f "$LOCK" ]; then
+    echo "lock: free"
+    exit 0
+  fi
+  old=$(cat "$LOCK")
+  if holder_alive "$old"; then
+    echo "error: refusing to release a live firstmate session lock (pid $old)" >&2
+    exit 1
+  fi
+  current=$(cat "$LOCK" 2>/dev/null || true)
+  if [ "$current" != "$old" ]; then
+    echo "error: lock holder changed to pid ${current:-none} during release-stale; refusing" >&2
+    exit 1
+  fi
+  rm -f "$LOCK"
+  echo "lock released: stale holder pid $old"
   exit 0
 fi
 

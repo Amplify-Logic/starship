@@ -190,6 +190,26 @@ The inherited-local-material contract is owned by `secondmate-provisioning`; for
 For grok, `fm-spawn.sh` installs one firstmate-owned global turn-end hook under `$GROK_HOME/hooks/`, or `~/.grok/hooks/` when `GROK_HOME` is unset, and drops a per-task `.fm-grok-turnend` pointer in the worktree, with teardown removing the task token and pointer.
 For Pi secondmate launches, `fm-spawn.sh` starts Pi with `-e` pointed at the secondmate home's own tracked `.pi/extensions/fm-primary-pi-watch.ts` and `.pi/extensions/fm-primary-turnend-guard.ts`, both already present from the secondmate home's git worktree.
 
+## Primary orchestrator handoff (config/primary-handoff)
+
+`config/primary-handoff` is an optional local, gitignored JSON file that enables quota-aware automated rotation of the Firstmate primary orchestrator.
+Absent or `"enabled": false` is a complete no-op: `bin/fm-primary.sh` launch behavior is unchanged and `bin/fm-primary-handoff.sh` exits without touching the session lock.
+When enabled, `bin/fm-primary-handoff.sh` monitors the active primary's provider quota through `quota-axi` and, when the minimum general-window `percentRemaining` is at or below `threshold_percent_remaining`, hands the primary role to the next profile in `chain` through the atomic-lock protocol in [`docs/primary-handoff.md`](primary-handoff.md).
+See [`docs/examples/primary-handoff.json`](examples/primary-handoff.json) for a starting point.
+
+```json
+{
+  "enabled": true,
+  "threshold_percent_remaining": 15,
+  "poll_seconds": 60,
+  "cooldown_seconds": 300,
+  "chain": ["claude-fable", "pi", "codex", "kimi-k3"]
+}
+```
+
+This section owns the config schema; `bin/fm-primary-handoff.sh` owns commands and test seams; `docs/primary-handoff.md` owns the lock-transfer protocol and failure modes.
+The feature is not inherited by secondmate homes.
+
 ## Crew dispatch profiles (config/crew-dispatch.json)
 
 `config/crew-dispatch.json` is an optional local, gitignored file containing natural-language rules that firstmate reads before dispatching a crewmate or scout.

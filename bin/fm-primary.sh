@@ -34,6 +34,9 @@
 # that profile's guarded status-bar surface, marks only the current terminal
 # surface, then execs the CLI so sessions persist normally and the CLI exit
 # status is returned with no launcher process left behind.
+# When local config/primary-handoff is present and enabled, a real launch also
+# writes state/.primary-active for bin/fm-primary-handoff.sh; disabled or absent
+# config leaves that marker unwritten (docs/primary-handoff.md).
 #
 # Kimi 0.27.0 is primary-only.
 # The launcher requires that exact empirically verified version and builds a
@@ -429,6 +432,20 @@ fi
 mark_current_surface
 export FM_PRIMARY_HARNESS=${PROFILE%%-*}
 export FM_PRIMARY_ROLE=$role
+# When optional quota-aware handoff is enabled, record the live profile so the
+# supervisor can rotate without guessing from process args (docs/primary-handoff.md).
+# Absent or disabled config/primary-handoff leaves this path inert.
+if [ -f "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}/primary-handoff" ] \
+  && command -v jq >/dev/null 2>&1 \
+  && jq -e '.enabled == true' "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}/primary-handoff" >/dev/null 2>&1; then
+  {
+    printf 'schema=fm-primary-active.v1\n'
+    printf 'profile=%s\n' "$PROFILE"
+    printf 'pid=\n'
+    printf 'started_at=%s\n' "$(date +%s)"
+    printf 'updated_at=%s\n' "$(date +%s)"
+  } > "$STATE/.primary-active"
+fi
 install_primary_status_bar
 case "$PROFILE" in
   opencode)
