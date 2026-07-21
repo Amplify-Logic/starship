@@ -16,7 +16,14 @@
 #                 "NUDGE_SECONDMATES: secondmate <id>: send failed: <reason>",
 #                 "BOOTSTRAP_INFO: nudged fm-<id> with '<message>'",
 #                 "SECONDMATE_LIVENESS: secondmate <id>: skipped: <reason>|respawn failed: <reason>",
+#                 "UPSTREAM: <N> commits behind <remote>/<branch> (<url>) - <subjects>",
 #                 "FMX: X mode on ..." or "FMX: X mode off ...".
+#          UPSTREAM is detect-only and silent when there is no upstream remote,
+#          origin and upstream share a URL (not a fork), the home is a secondmate,
+#          the network is unavailable, or HEAD already contains the upstream tip.
+#          It never merges and never touches projects/; see bin/fm-upstream-lib.sh.
+#          Surrounding tooling (no-mistakes, treehouse) is out of scope here - those
+#          already surface their own version gaps through MISSING / their CLIs.
 #          When a RUNNING secondmate worktree is fast-forwarded to firstmate's
 #          own current default-branch commit (a purely LOCAL fast-forward, never
 #          an origin fetch) AND its loaded instruction surface (AGENTS.md, bin/,
@@ -100,6 +107,8 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 . "$SCRIPT_DIR/fm-x-lib.sh"
 # shellcheck source=bin/fm-backend.sh disable=SC1091
 . "$SCRIPT_DIR/fm-backend.sh"
+# shellcheck source=bin/fm-upstream-lib.sh disable=SC1091
+. "$SCRIPT_DIR/fm-upstream-lib.sh"
 
 fleet_sync_origin_backed_project_count() {
   local count proj
@@ -800,6 +809,9 @@ if [ "${FM_BOOTSTRAP_VERBOSE_FACTS:-0}" = 1 ] \
   && ! fm_backlog_backend_manual "$CONFIG" && fm_tasks_axi_compatible; then
   echo "BOOTSTRAP_INFO: tasks-axi available"
 fi
+# Read-only fork drift check: surfaces commits on the configured upstream remote
+# that this home lacks. Silent when not a fork / offline / current. Never merges.
+fm_upstream_check "$FM_ROOT" "$FM_HOME"
 if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then
   secondmate_sync
   secondmate_liveness_sweep
