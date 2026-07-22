@@ -43,6 +43,9 @@
 #   with stdin closed and is bounded by a portable timeout (default 10 seconds,
 #   override with FM_SPAWN_PROBE_TIMEOUT_SECS=<positive integer seconds>); a
 #   probe that times out refuses the spawn loudly, naming the binary and knob.
+#   The treehouse-get worktree settle loop is hard-bounded (default 60 polls,
+#   1s sleep); FM_SPAWN_SETTLE_MAX_POLLS and FM_SPAWN_SETTLE_SLEEP shorten that
+#   bound for tests without risking an unbounded wait.
 #   For cursor, the effort axis is folded into the launch model id (see
 #   cursor_model_with_effort) and that launch id is what meta model= records.
 #   When agent --list-models (or FM_CURSOR_MODEL_CATALOG) is available, an
@@ -1050,16 +1053,57 @@ if [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
   # Compare against PROJ_ABS_REAL (physical), not PROJ_ABS: a symlinked project
   # prefix would otherwise make the pane's OS-level cwd read differ from
   # PROJ_ABS on the very first poll, before the pane has actually moved.
-  for _ in $(seq 1 60); do
+  #
+  # A single read that already differs from PROJ_ABS_REAL is not proof the pane
+  # settled there: on some tmux/WSL setups a brand-new window's pane_current_path
+  # transiently reports an unrelated stale path (seen live as another real git
+  # checkout entirely) before the shell catches up with treehouse get's cd. That
+  # stale path still passes the PROJ_ABS_REAL comparison and validate_spawn_worktree
+  # below (it resolves to a real, distinct worktree top-level too), so accepting it
+  # on one read alone silently records the wrong worktree= in state/<id>.meta. Require
+  # two consecutive reads to agree on the same non-project path before accepting it;
+  # a mismatch just becomes the new candidate rather than resetting the wait, so a
+  # pane that is already settled by the first real read only costs the one existing
+  # inter-poll sleep as confirmation, not a whole extra cycle on top.
+  #
+  # Bound is hard: at most FM_SPAWN_SETTLE_MAX_POLLS polls (default 60) with
+  # FM_SPAWN_SETTLE_SLEEP seconds between them (default 1; 0 allowed for tests).
+  # Stability never reached still fails cleanly here - never hangs.
+  settle_max_polls=${FM_SPAWN_SETTLE_MAX_POLLS:-60}
+  settle_sleep=${FM_SPAWN_SETTLE_SLEEP:-1}
+  case "$settle_max_polls" in
+    ''|0|*[!0-9]*)
+      echo "error: FM_SPAWN_SETTLE_MAX_POLLS must be a positive integer (got '${FM_SPAWN_SETTLE_MAX_POLLS:-}'); refusing before waiting on treehouse get" >&2
+      exit 1
+      ;;
+  esac
+  case "$settle_sleep" in
+    ''|*[!0-9]*)
+      echo "error: FM_SPAWN_SETTLE_SLEEP must be a non-negative integer number of seconds (got '${FM_SPAWN_SETTLE_SLEEP:-}'); refusing before waiting on treehouse get" >&2
+      exit 1
+      ;;
+  esac
+  candidate=""
+  for _ in $(seq 1 "$settle_max_polls"); do
     p=$(spawn_current_path "$WT_TARGET" || true)
-    if [ -n "$p" ] && [ "$(real_path_or_raw "$p")" != "$PROJ_ABS_REAL" ]; then
-      WT="$p"
-      break
+    if [ -n "$p" ]; then
+      p_real=$(real_path_or_raw "$p")
+      if [ "$p_real" != "$PROJ_ABS_REAL" ]; then
+        if [ -n "$candidate" ] && [ "$p_real" = "$candidate" ]; then
+          WT="$p"
+          break
+        fi
+        candidate="$p_real"
+      else
+        candidate=""
+      fi
+    else
+      candidate=""
     fi
-    sleep 1
+    sleep "$settle_sleep"
   done
   if [ -z "$WT" ]; then
-    echo "error: treehouse get did not enter a worktree within 60s; inspect window $T" >&2
+    echo "error: treehouse get did not enter a worktree within ${settle_max_polls} poll(s); inspect window $T" >&2
     exit 1
   fi
 
