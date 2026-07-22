@@ -8,7 +8,7 @@ This file is the single owner of the Firstmate primary status-bar contract.
 After ANSI styling is removed, every renderer uses this field order:
 
 ```text
-⚓ <model>·<effort> │ 🧠<context-remaining> ⚡<provider-quota-used> │ 🚢<active> ⏸<paused> ⚠<attention> │ 👁 <supervision> │ $<session-cost> │ 💤<afk>
+⚓ <model>·<effort> │ 🧠<context-used> ⚡<provider-quota-used> │ 🚢<active> ⏸<paused> ⚠<attention> │ 👁 <supervision> │ $<session-cost> │ 💤<afk>
 ```
 
 The separator is one space, a dim `│`, and one space.
@@ -18,7 +18,7 @@ Width-constrained surfaces clip or truncate the canonical line without wrapping 
 | Field | Meaning | Placeholder |
 | --- | --- | --- |
 | `⚓ model·effort` | The active model and reasoning or thinking effort reported by the orchestrator. | `--` for either unavailable value. |
-| `🧠 context` | The integer percentage of the model context window remaining. | `--` when the orchestrator does not expose current context use. |
+| `🧠 context` | The integer percentage of the model context window already used. | `--` when the orchestrator does not expose current context use. |
 | `⚡ quota` | The integer percentage of the provider's short-window quota already used. | `--` when the provider or orchestrator does not expose quota. |
 | `🚢 active` | Ordinary task records currently owned by this Firstmate home, excluding persistent second mates. | `0` when no ordinary tasks exist. |
 | `⏸ paused` | Active tasks whose latest non-empty event declares a bounded external wait. | `0` when none are paused. |
@@ -39,7 +39,7 @@ Green is ANSI 92, yellow is ANSI 93, red is ANSI 91, cyan is ANSI 96, dim is ANS
 
 | Metric | Green | Yellow | Red |
 | --- | --- | --- | --- |
-| Context remaining | 30 through 100 percent. | 15 through 29 percent. | 0 through 14 percent. |
+| Context used | 0 through 70 percent. | 71 through 85 percent. | 86 through 100 percent. |
 | Provider quota used | 0 through 69 percent. | 70 through 89 percent. | 90 through 100 percent. |
 | Supervision freshness | Beacon age below 180 seconds. | Not used. | Beacon age of 180 seconds or more, or a missing or unreadable beacon. |
 
@@ -54,8 +54,8 @@ Unavailable provider metrics are dim and never silently converted to zero.
 ### Claude Code
 
 Tracked `.claude/settings.json` registers `bin/fm-status-bar.sh --adapter claude` through Claude's native `statusLine` command API.
-The command consumes Claude's model, effort, context-remaining, five-hour quota, and cumulative-cost JSON fields.
-When context-remaining is numeric, the renderer also persists a durable sample to `state/.primary-context` for the optional primary-handoff context axis (see [`docs/primary-handoff.md`](primary-handoff.md)); captain-facing display semantics are unchanged.
+The command consumes Claude's model, effort, context-used (`context_window.used_percentage`, falling back to deriving used from `remaining_percentage` when used is absent), five-hour quota, and cumulative-cost JSON fields.
+When context used is numeric, the renderer also persists a durable sample to `state/.primary-context` for the optional primary-handoff context axis (see [`docs/primary-handoff.md`](primary-handoff.md)), deriving remaining as `100 - used` for the sample API.
 The renderer emits nothing unless `bin/fm-primary.sh` supplied `FM_PRIMARY_HARNESS=claude`.
 This keeps the tracked project setting inert for an unguarded manual Claude launch.
 
@@ -93,7 +93,7 @@ The next guarded Claude, Pi, or Kimi primary launch loads the tracked integratio
 
 ## Verification record
 
-The adapter contract was checked on 2026-07-19 with Claude Code's project status-line payload shape, Kimi Code 0.27.0, Pi 0.80.10, Cursor CLI 2026.07.16-899851b, and tmux 3.6a.
+The adapter contract was checked on 2026-07-21 with Claude Code's project status-line payload shape, Kimi Code 0.27.0, Pi 0.80.10, Cursor CLI 2026.07.17-3e2a980, and tmux 3.6a.
 The installed Pi documentation and example at `examples/extensions/custom-footer.ts` show `ctx.ui.setFooter()`, `render(width)`, and `truncateToWidth()`.
 The installed Kimi help and public 0.27.0 plugin documentation expose lifecycle hooks but no footer renderer.
 The installed Cursor help exposes plugin directories but no status-line configuration or footer renderer.
@@ -113,7 +113,7 @@ Observed version output:
 ```text
 0.80.10
 0.27.0
-2026.07.16-899851b
+2026.07.17-3e2a980
 ```
 
 Claude's adapter was exercised directly with the same JSON shape supplied to the native status-line command:
@@ -122,7 +122,7 @@ Claude's adapter was exercised directly with the same JSON shape supplied to the
 tmp_root=$(mktemp -d "${TMPDIR:-/tmp}/fm-status-claude-live.XXXXXX")
 mkdir -p "$tmp_root/state"
 : > "$tmp_root/state/.last-watcher-beat"
-printf '%s' '{"model":{"display_name":"Claude Fable"},"effort":{"level":"high"},"context_window":{"remaining_percentage":64.8},"rate_limits":{"five_hour":{"used_percentage":12.9}},"cost":{"total_cost_usd":2.345}}' |
+printf '%s' '{"model":{"display_name":"Claude Fable"},"effort":{"level":"high"},"context_window":{"used_percentage":35.2,"remaining_percentage":64.8},"rate_limits":{"five_hour":{"used_percentage":12.9}},"cost":{"total_cost_usd":2.345}}' |
   env FM_PRIMARY_HARNESS=claude FM_HOME="$tmp_root" bin/fm-status-bar.sh --adapter claude |
   perl -pe 's/\e\[[0-9;]*m//g'
 rm -rf "$tmp_root"
@@ -131,7 +131,7 @@ rm -rf "$tmp_root"
 Observed output:
 
 ```text
-⚓ Claude Fable·high │ 🧠64% ⚡12% │ 🚢0 ⏸0 ⚠0 │ 👁 1s │ $2.35 │ 💤--
+⚓ Claude Fable·high │ 🧠35% ⚡12% │ 🚢0 ⏸0 ⚠0 │ 👁 0s │ $2.35 │ 💤--
 ```
 
 Pi's installed extension was loaded in a real 140-column Pi TUI with an isolated configuration and no model login:
@@ -154,7 +154,7 @@ rm -rf "$tmp_root"
 The TUI listed `fm-primary-status-bar.ts` under loaded extensions and rendered:
 
 ```text
-⚓ unknown·off │ 🧠-- ⚡-- │ 🚢0 ⏸0 ⚠0 │ 👁 3s │ $0.00 │ 💤--
+⚓ unknown·off │ 🧠-- ⚡-- │ 🚢0 ⏸0 ⚠0 │ 👁 4s │ $0.00 │ 💤--
 ```
 
 A 48-column rerun stayed on one row and ended at `👁 NO-WA`, confirming that Pi truncates the ANSI line to the supplied render width instead of wrapping it.

@@ -35,8 +35,9 @@ function sessionCost(ctx: ExtensionContext): number {
 
 function renderCanonicalStatus(pi: ExtensionAPI, ctx: ExtensionContext): string {
   const usage = ctx.getContextUsage();
-  const remaining =
-    usage?.percent == null ? "--" : String(Math.max(0, Math.min(100, Math.floor(100 - usage.percent))));
+  // Pi's percent is already context used (0-100); pass it through unchanged.
+  const used =
+    usage?.percent == null ? "--" : String(Math.max(0, Math.min(100, Math.floor(usage.percent))));
   const result = spawnSync(
     renderer,
     [
@@ -46,8 +47,8 @@ function renderCanonicalStatus(pi: ExtensionAPI, ctx: ExtensionContext): string 
       ctx.model?.id || "--",
       "--effort",
       String(pi.getThinkingLevel?.() || "--"),
-      "--context-remaining",
-      remaining,
+      "--context-used",
+      used,
       "--quota-used",
       "--",
       "--cost",

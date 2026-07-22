@@ -4,7 +4,7 @@
 # Usage:
 #   fm-status-bar.sh --adapter claude
 #   fm-status-bar.sh --adapter pi --model MODEL --effort LEVEL \
-#     --context-remaining PERCENT --quota-used PERCENT --cost USD
+#     --context-used PERCENT --quota-used PERCENT --cost USD
 #   fm-status-bar.sh --adapter kimi --model MODEL --effort LEVEL \
 #     --follow-pane TMUX_PANE
 #
@@ -30,7 +30,7 @@ STATE=${FM_STATE_OVERRIDE:-$FM_HOME/state}
 ADAPTER=
 MODEL=--
 EFFORT=--
-CONTEXT_REMAINING=--
+CONTEXT_USED=--
 QUOTA_USED=--
 COST=--
 FOLLOW_PANE=
@@ -52,9 +52,9 @@ while [ "$#" -gt 0 ]; do
       EFFORT=$2
       shift 2
       ;;
-    --context-remaining)
+    --context-used)
       [ "$#" -ge 2 ] || exit 0
-      CONTEXT_REMAINING=$2
+      CONTEXT_USED=$2
       shift 2
       ;;
     --quota-used)
@@ -118,13 +118,16 @@ normalize_cost() {
 if [ "$ADAPTER" = claude ]; then
   input=$(cat 2>/dev/null || printf '')
   if command -v jq >/dev/null 2>&1; then
-    IFS=$'\t' read -r MODEL EFFORT CONTEXT_REMAINING QUOTA_USED COST <<EOF
+    IFS=$'\t' read -r MODEL EFFORT CONTEXT_USED QUOTA_USED COST <<EOF
 $(printf '%s' "$input" | jq -r '
   [
     (.model.display_name // .model.id // "--" | tostring),
     (.effort.level // "--" | tostring),
-    (if (.context_window.remaining_percentage | type) == "number"
-      then (.context_window.remaining_percentage | floor)
+    (if (.context_window.used_percentage | type) == "number"
+      then (.context_window.used_percentage | floor)
+      elif (.context_window.remaining_percentage | type) == "number"
+      then ((100 - (.context_window.remaining_percentage | floor)) |
+        if . < 0 then 0 elif . > 100 then 100 else . end)
       else "--"
       end),
     (if (.rate_limits.five_hour.used_percentage | type) == "number"
@@ -143,17 +146,18 @@ fi
 
 MODEL=$(sanitize_label "$MODEL")
 EFFORT=$(sanitize_label "$EFFORT")
-CONTEXT_REMAINING=$(normalize_percent "$CONTEXT_REMAINING")
+CONTEXT_USED=$(normalize_percent "$CONTEXT_USED")
 QUOTA_USED=$(normalize_percent "$QUOTA_USED")
 COST=$(normalize_cost "$COST")
 
-# Persist context remaining for the primary-handoff supervisor (context axis).
-# Display semantics above are unchanged; this is out-of-band plumbing only.
+# Persist a context sample for the primary-handoff supervisor (context axis).
+# Display shows used %; the sample API still takes remaining and derives used.
 # Best-effort: never fail the status-bar render.
-if [ "$CONTEXT_REMAINING" != -- ]; then
+if [ "$CONTEXT_USED" != -- ]; then
+  context_remaining=$((100 - CONTEXT_USED))
   # shellcheck source=bin/fm-primary-handoff-lib.sh
   . "$FM_ROOT/bin/fm-primary-handoff-lib.sh" 2>/dev/null \
-    && fm_handoff_write_context_sample "$CONTEXT_REMAINING" 2>/dev/null \
+    && fm_handoff_write_context_sample "$context_remaining" 2>/dev/null \
     || true
 fi
 
@@ -225,13 +229,16 @@ render_once() {
   separator=" ${D}│${X} "
   anchor="${BOLD}⚓ ${MODEL}${X}${D}·${X}${EFFORT}"
 
-  if [ "$CONTEXT_REMAINING" = -- ]; then
+  if [ "$CONTEXT_USED" = -- ]; then
     context_part="${D}🧠--${X}"
   else
+    # Used thresholds invert the prior remaining bands: green while low,
+    # yellow above 70% used (was under 30% remaining), red above 85% used
+    # (was under 15% remaining).
     context_color=$G
-    [ "$CONTEXT_REMAINING" -ge 30 ] || context_color=$Y
-    [ "$CONTEXT_REMAINING" -ge 15 ] || context_color=$R
-    context_part="${context_color}🧠${CONTEXT_REMAINING}%${X}"
+    [ "$CONTEXT_USED" -le 70 ] || context_color=$Y
+    [ "$CONTEXT_USED" -le 85 ] || context_color=$R
+    context_part="${context_color}🧠${CONTEXT_USED}%${X}"
   fi
 
   if [ "$QUOTA_USED" = -- ]; then

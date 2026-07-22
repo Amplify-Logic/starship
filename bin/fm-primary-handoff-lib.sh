@@ -253,9 +253,8 @@ fm_handoff_read_record() {
 }
 
 # Persist a context-window sample for the handoff supervisor.
-# remaining_percent is the Claude/status-bar remaining_percentage (0-100).
-# used_percent is derived as 100 - remaining so the config axis can speak in
-# "context used" terms without the status bar changing its display contract.
+# Callers pass remaining_percent (0-100); used_percent is derived as 100 - remaining.
+# The status bar displays used % and derives remaining as 100 - used before calling.
 # Best-effort: never fails the caller (status-bar render must stay inert-safe).
 fm_handoff_write_context_sample() {
   local remaining=$1 path now used

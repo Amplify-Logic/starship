@@ -644,10 +644,10 @@ test_status_bar_persists_context_sample() {
   [ -f "$HOME_FIX/state/.primary-context" ] || fail "status bar must persist context sample"
   assert_contains "$(cat "$HOME_FIX/state/.primary-context")" 'remaining_percent=48' "remaining wrong"
   assert_contains "$(cat "$HOME_FIX/state/.primary-context")" 'used_percent=52' "used wrong"
-  # Display still shows remaining, not used - do not restyle.
-  assert_contains "$out" '🧠48%' "display remaining semantics must be unchanged"
+  # Display shows used % (rising); sample still stores remaining and derived used.
+  assert_contains "$out" '🧠52%' "display must show context used derived from remaining"
   cleanup_holders
-  pass "status bar persists context sample without changing display semantics"
+  pass "status bar persists context sample while displaying used percent"
 }
 
 test_context_axis_absent_is_quota_only() {

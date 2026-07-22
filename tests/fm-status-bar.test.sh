@@ -29,7 +29,7 @@ render() {
       --adapter pi \
       --model "${1:-Opus}" \
       --effort "${2:-high}" \
-      --context-remaining "${3:---}" \
+      --context-used "${3:---}" \
       --quota-used "${4:---}" \
       --cost "${5:---}"
 }
@@ -55,16 +55,21 @@ test_contract_order_and_fleet_projection() {
 
 test_threshold_colors_and_placeholders() {
   local out
-  out=$(render Opus high 30 69 0)
-  assert_contains "$out" $'\033[92m🧠30%' "30% context remaining is not bright green"
+  # Context-used thresholds invert the prior remaining bands: green at/under 70%,
+  # yellow at 71-85% (was under 30% remaining), red at 86%+ (was under 15%).
+  out=$(render Opus high 70 69 0)
+  assert_contains "$out" $'\033[92m🧠70%' "70% context used is not bright green"
   assert_contains "$out" $'\033[92m⚡69%' "69% quota used is not bright green"
 
-  out=$(render Opus high 15 70 0)
-  assert_contains "$out" $'\033[93m🧠15%' "15% context remaining is not bright yellow"
+  out=$(render Opus high 71 70 0)
+  assert_contains "$out" $'\033[93m🧠71%' "71% context used is not bright yellow"
   assert_contains "$out" $'\033[93m⚡70%' "70% quota used is not bright yellow"
 
-  out=$(render Opus high 14 90 0)
-  assert_contains "$out" $'\033[91m🧠14%' "14% context remaining is not bright red"
+  out=$(render Opus high 85 70 0)
+  assert_contains "$out" $'\033[93m🧠85%' "85% context used is not bright yellow"
+
+  out=$(render Opus high 86 90 0)
+  assert_contains "$out" $'\033[91m🧠86%' "86% context used is not bright red"
   assert_contains "$out" $'\033[91m⚡90%' "90% quota used is not bright red"
 
   out=$(render Opus high -- -- -- | strip_ansi)
@@ -97,7 +102,7 @@ test_no_watch_is_bright_red_when_missing_or_stale() {
 
 test_claude_payload_adapter_and_primary_guard() {
   local input out
-  input='{"model":{"display_name":"Claude Fable"},"effort":{"level":"high"},"context_window":{"remaining_percentage":64.8},"rate_limits":{"five_hour":{"used_percentage":12.9}},"cost":{"total_cost_usd":2.345}}'
+  input='{"model":{"display_name":"Claude Fable"},"effort":{"level":"high"},"context_window":{"used_percentage":35.2,"remaining_percentage":64.8},"rate_limits":{"five_hour":{"used_percentage":12.9}},"cost":{"total_cost_usd":2.345}}'
   out=$(printf '%s' "$input" | \
     PATH="$FAKEBIN:$PATH" \
     FM_HOME="$HOME_FIX" \
@@ -105,8 +110,17 @@ test_claude_payload_adapter_and_primary_guard() {
     FM_STATUS_BAR_NOW=1000 \
     "$ROOT/bin/fm-status-bar.sh" --adapter claude | strip_ansi)
   assert_contains "$out" '⚓ Claude Fable·high' "Claude adapter did not normalize model and effort"
-  assert_contains "$out" '🧠64% ⚡12%' "Claude adapter did not normalize context remaining and provider quota"
+  assert_contains "$out" '🧠35% ⚡12%' "Claude adapter did not prefer context used over remaining"
   assert_contains "$out" "\$2.35" "Claude adapter did not normalize session cost"
+
+  input='{"model":{"display_name":"Claude Fable"},"effort":{"level":"high"},"context_window":{"remaining_percentage":64.8}}'
+  out=$(printf '%s' "$input" | \
+    PATH="$FAKEBIN:$PATH" \
+    FM_HOME="$HOME_FIX" \
+    FM_PRIMARY_HARNESS=claude \
+    FM_STATUS_BAR_NOW=1000 \
+    "$ROOT/bin/fm-status-bar.sh" --adapter claude | strip_ansi)
+  assert_contains "$out" '🧠36%' "Claude adapter did not derive context used from remaining when used is absent"
 
   input='{"model":{"display_name":"Bad\u0007Model"},"effort":{"level":"high"}}'
   out=$(printf '%s' "$input" | \

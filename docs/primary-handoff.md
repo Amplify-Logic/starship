@@ -32,13 +32,13 @@ Absent or null `threshold_context_percent_used` leaves quota-only behavior exact
 
 ## Context signal plumbing
 
-Claude Code already feeds `context_window.remaining_percentage` into the status-line command.
-`bin/fm-status-bar.sh` parses that field for display and, without changing captain-facing display semantics, also writes a durable sample to `state/.primary-context`:
+Claude Code feeds context-window percentages into the status-line command.
+`bin/fm-status-bar.sh` displays context used (preferring `used_percentage`, else deriving used from `remaining_percentage`) and also writes a durable sample to `state/.primary-context`:
 
 ```text
 schema=fm-primary-context.v1
-remaining_percent=<0-100>
-used_percent=<100 - remaining>
+remaining_percent=<100 - used>
+used_percent=<0-100>
 updated_at=<epoch>
 ```
 
