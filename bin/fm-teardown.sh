@@ -78,6 +78,8 @@
 # is present; teardown clears only a provably stale lock, then re-runs the safety
 # checks before any destructive return. Teardown output notes every wait, retry, and
 # removal so the operator can see what happened.
+# On successful ship/scout cleanup, teardown appends one capability outcome line to
+# data/capability-outcomes.log (bin/fm-capability-lib.sh owns the wire format).
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -98,6 +100,8 @@ SUB_HOME_MARKER=".fm-secondmate-home"
 . "$SCRIPT_DIR/fm-gate-refuse-lib.sh"
 # shellcheck source=bin/fm-pr-lib.sh
 . "$SCRIPT_DIR/fm-pr-lib.sh"
+# shellcheck source=bin/fm-capability-lib.sh
+. "$SCRIPT_DIR/fm-capability-lib.sh"
 if [ "$#" -lt 1 ] || ! fm_task_id_path_safe "$1"; then
   echo "error: invalid teardown request" >&2
   exit 2
@@ -132,6 +136,10 @@ KIND=$(grep '^kind=' "$META" | cut -d= -f2- || true)
 [ -n "$KIND" ] || KIND=ship
 MODE=$(grep '^mode=' "$META" | cut -d= -f2- || true)
 [ -n "$MODE" ] || MODE=no-mistakes
+HARNESS=$(grep '^harness=' "$META" | cut -d= -f2- || true)
+MODEL=$(grep '^model=' "$META" | cut -d= -f2- || true)
+EFFORT=$(grep '^effort=' "$META" | cut -d= -f2- || true)
+TASK_TYPE=$(grep '^task_type=' "$META" | cut -d= -f2- || true)
 
 default_branch() {
   local ref branch
@@ -1139,6 +1147,8 @@ fm_backend_clear_transition "$BACKEND" "$STATE" "$T" || true
 # Read before the state-file rm below; empty (pre-fix tasks without tasktmp=) is a no-op.
 [ -n "$TASK_TMP" ] && rm -rf "$TASK_TMP"
 remove_pr_poll_artifacts "$STATE" "$ID" || exit 1
+# Record capability evidence before meta disappears (ship/scout only; best-effort).
+fm_capability_record_teardown "$KIND" "$FORCE" "$HARNESS" "$MODEL" "$EFFORT" "$TASK_TYPE"
 rm -f "$STATE/$ID.status" "$STATE/$ID.turn-ended" "$STATE/$ID.meta" "$STATE/$ID.pi-ext.ts" "$STATE/$ID.grok-turnend-token"
 "$FM_ROOT/bin/fm-visible-status.sh" --all >/dev/null 2>&1 || true
 if [ "$KIND" != scout ] && [ "$KIND" != secondmate ] && [ "$MODE" != local-only ]; then

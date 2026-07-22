@@ -1,11 +1,20 @@
 #!/usr/bin/env bash
 # Resolve one already-matched crew-dispatch rule to a concrete profile.
 # Usage:
-#   fm-dispatch-select.sh [--select <strategy>] [--quota-json <file>] [<rule-or-use-json>]
+#   fm-dispatch-select.sh [--select <strategy>] [--quota-json <file>]
+#                         [--task-type <slug>] [<rule-or-use-json>]
 #
 # Input may be a full rule object with `use` and optional `select`, a single
 # profile object, or an ordered array of profile objects.
 # Output is one compact JSON profile object on stdout.
+#
+# Capability evidence (optional --task-type) layers ON the cost-allowed profile
+# set from the input rule: it never invents a harness outside that set and never
+# bypasses crew-dispatch / third-party-model guards. bin/fm-capability-lib.sh
+# owns the outcome-log wire format, 7-day window, capability-recent ranking, and
+# advisory scout-tax suggestion. When --task-type is set, CAPABILITY_EVIDENCE
+# lines are printed on stderr for firstmate; ~10% of those dispatches may also
+# print one CAPABILITY_SCOUT_TAX suggestion without changing stdout selection.
 #
 # quota-balanced is deterministic, and this header is the single owner of its
 # contract:
@@ -29,11 +38,20 @@
 # quota-balanced uses quota-axi --json unless --quota-json supplies a fixture.
 # FM_DISPATCH_QUOTA_AXI overrides the quota command.
 # FM_DISPATCH_STALE_CLEAR_MARGIN overrides the default 20 point stale margin.
+#
+# capability-recent ranks the cost-allowed profile array by recent green density
+# for --task-type (see fm-capability-lib.sh). Absent --task-type it degrades to
+# the first profile. Absent select still means first array element.
 set -u
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=bin/fm-capability-lib.sh
+. "$SCRIPT_DIR/fm-capability-lib.sh"
 
 STALE_CLEAR_MARGIN=${FM_DISPATCH_STALE_CLEAR_MARGIN:-20}
 SELECT_OVERRIDE=
 QUOTA_JSON_FILE=
+TASK_TYPE=
 ARGS=()
 
 usage() {
@@ -66,6 +84,15 @@ while [ "$#" -gt 0 ]; do
       ;;
     --quota-json=*)
       QUOTA_JSON_FILE=${1#--quota-json=}
+      shift
+      ;;
+    --task-type)
+      [ "$#" -gt 1 ] || { echo "error: --task-type requires a value" >&2; exit 2; }
+      TASK_TYPE=$2
+      shift 2
+      ;;
+    --task-type=*)
+      TASK_TYPE=${1#--task-type=}
       shift
       ;;
     -h|--help)
@@ -127,40 +154,65 @@ if [ -z "$select_strategy" ]; then
   ' 2>/dev/null || true)
 fi
 
+emit_capability_advisories() {
+  local selected=$1
+  [ -n "$TASK_TYPE" ] || return 0
+  fm_capability_surface_evidence "$TASK_TYPE"
+  fm_capability_maybe_scout_tax "$TASK_TYPE" "$selected" "$profiles_json"
+}
+
+if [ "$select_strategy" = capability-recent ]; then
+  if [ -z "$TASK_TYPE" ]; then
+    log "capability-recent without --task-type; using first profile"
+    selected=$(first_profile)
+  else
+    selected=$(fm_capability_pick_profile "$TASK_TYPE" "$profiles_json") \
+      || selected=$(first_profile)
+  fi
+  emit_capability_advisories "$selected"
+  printf '%s\n' "$selected"
+  exit 0
+fi
+
 if [ "$select_strategy" != quota-balanced ]; then
   if [ -n "$select_strategy" ]; then
     log "unknown select strategy '$select_strategy'; using first profile"
   fi
-  first_profile
+  selected=$(first_profile)
+  emit_capability_advisories "$selected"
+  printf '%s\n' "$selected"
   exit 0
 fi
+
+finish_with_first() {
+  selected=$(first_profile)
+  emit_capability_advisories "$selected"
+  printf '%s\n' "$selected"
+  exit 0
+}
 
 if [ -n "$QUOTA_JSON_FILE" ]; then
   if ! quota_json=$(cat "$QUOTA_JSON_FILE" 2>/dev/null); then
     log "cannot read quota JSON; using first profile"
-    first_profile
-    exit 0
+    finish_with_first
   fi
 else
   quota_cmd=${FM_DISPATCH_QUOTA_AXI:-quota-axi}
   if ! command -v "$quota_cmd" >/dev/null 2>&1; then
     log "quota-axi missing; using first profile"
-    first_profile
-    exit 0
+    finish_with_first
   fi
   quota_json=$("$quota_cmd" --json 2>/dev/null)
   quota_status=$?
   if [ "$quota_status" -ne 0 ]; then
     log "quota-axi exited $quota_status; using first profile"
-    first_profile
-    exit 0
+    finish_with_first
   fi
 fi
 
 if ! printf '%s\n' "$quota_json" | jq -e 'type == "object" and (.providers | type) == "array"' >/dev/null 2>&1; then
   log "quota-axi returned unparseable JSON; using first profile"
-  first_profile
-  exit 0
+  finish_with_first
 fi
 
 selection=$(printf '%s\n' "$quota_json" | jq -ec \
@@ -224,11 +276,15 @@ selection=$(printf '%s\n' "$quota_json" | jq -ec \
     end
 ' 2>/dev/null) || {
   log "quota-axi data could not be evaluated; using first profile"
-  first_profile
+  selected=$(first_profile)
+  emit_capability_advisories "$selected"
+  printf '%s\n' "$selected"
   exit 0
 }
 
 if [ "$(printf '%s\n' "$selection" | jq -r '.fallback')" = true ]; then
   log "$(printf '%s\n' "$selection" | jq -r '.reason'); using first profile"
 fi
-printf '%s\n' "$selection" | jq -c '.profile'
+selected=$(printf '%s\n' "$selection" | jq -c '.profile')
+emit_capability_advisories "$selected"
+printf '%s\n' "$selected"

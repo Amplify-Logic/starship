@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Spawn a direct report: a crewmate in a treehouse or Orca worktree, or a
 # secondmate in its isolated firstmate home.
-# Usage: fm-spawn.sh <task-id> <project-dir> [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] [--outcome <text>] [--scout]
+# Usage: fm-spawn.sh <task-id> <project-dir> [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] [--outcome <text>] [--task-type <slug>] [--scout]
 #        fm-spawn.sh <task-id> [<firstmate-home>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] --secondmate
 #   --harness <name> is the explicit per-spawn harness/profile adapter. The old
 #   positional harness arg still works for back-compat.
@@ -73,6 +73,8 @@
 #   --outcome records an explicit concise human task outcome for supported
 #   presentation surfaces; otherwise fm-task-outcome.sh resolves the structured
 #   backlog title and then its documented safe fallback.
+#   --task-type records an optional capability-learning slug in meta task_type=
+#   (no '|' or newlines); teardown logs it, and absent it falls back to kind.
 #   --scout records kind=scout in the task's meta (report deliverable, scratch worktree;
 #   see AGENTS.md task lifecycle); --secondmate records kind=secondmate and launches in a
 #   provisioned firstmate home; the default is kind=ship.
@@ -83,7 +85,7 @@
 # Batch dispatch: pass one or more `id=repo` pairs instead of a single <id> <project>, e.g.
 #     fm-spawn.sh fix-a-k3=projects/foo add-b-q7=projects/bar [--scout]
 #   Each pair re-execs this script in single-task mode, so the single path stays the only
-#   source of truth; shared --scout/--harness/--model/--effort/--backend/--outcome applies to every pair.
+#   source of truth; shared --scout/--harness/--model/--effort/--backend/--outcome/--task-type applies to every pair.
 #   If config/crew-dispatch.json exists, shared --harness is required for crewmate
 #   and scout batches. The loop lives here, in bash, so callers never hand-write a
 #   multi-task shell loop (the tool shell is zsh, which does not word-split unquoted
@@ -107,7 +109,7 @@ set -eu
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
-  sed -n '2,78p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,80p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 case "${1:-}" in
@@ -145,11 +147,13 @@ MODEL=
 EFFORT=
 BACKEND_ARG=
 OUTCOME=
+TASK_TYPE=
 HARNESS_SET=0
 MODEL_SET=0
 EFFORT_SET=0
 BACKEND_SET=0
 OUTCOME_SET=0
+TASK_TYPE_SET=0
 POS=()
 want_value=
 for a in "$@"; do
@@ -163,6 +167,7 @@ for a in "$@"; do
       effort) EFFORT=$a; EFFORT_SET=1 ;;
       backend) BACKEND_ARG=$a; BACKEND_SET=1 ;;
       outcome) OUTCOME=$a; OUTCOME_SET=1 ;;
+      task-type) TASK_TYPE=$a; TASK_TYPE_SET=1 ;;
       *) echo "error: internal parser state for --$want_value" >&2; exit 1 ;;
     esac
     want_value=
@@ -181,6 +186,8 @@ for a in "$@"; do
     --backend=*) BACKEND_ARG=${a#--backend=}; BACKEND_SET=1 ;;
     --outcome) want_value=outcome ;;
     --outcome=*) OUTCOME=${a#--outcome=}; OUTCOME_SET=1 ;;
+    --task-type) want_value=task-type ;;
+    --task-type=*) TASK_TYPE=${a#--task-type=}; TASK_TYPE_SET=1 ;;
     *) POS+=("$a") ;;
   esac
 done
@@ -190,6 +197,15 @@ done
 [ "$EFFORT_SET" -eq 0 ] || [ -n "$EFFORT" ] || { echo "error: --effort requires a non-empty value" >&2; exit 1; }
 [ "$BACKEND_SET" -eq 0 ] || [ -n "$BACKEND_ARG" ] || { echo "error: --backend requires a non-empty value" >&2; exit 1; }
 [ "$OUTCOME_SET" -eq 0 ] || [ -n "$OUTCOME" ] || { echo "error: --outcome requires a non-empty value" >&2; exit 1; }
+[ "$TASK_TYPE_SET" -eq 0 ] || [ -n "$TASK_TYPE" ] || { echo "error: --task-type requires a non-empty value" >&2; exit 1; }
+if [ -n "$TASK_TYPE" ]; then
+  case "$TASK_TYPE" in
+    *'|'*) echo "error: --task-type must not contain '|'" >&2; exit 1 ;;
+  esac
+  case "$TASK_TYPE" in
+    *$'\n'*|*$'\r'*) echo "error: --task-type must not contain newlines" >&2; exit 1 ;;
+  esac
+fi
 case "$EFFORT" in
   ''|low|medium|high|xhigh|max) ;;
   *) echo "error: --effort must be one of low, medium, high, xhigh, max" >&2; exit 1 ;;
@@ -294,6 +310,7 @@ if [ "${#POS[@]}" -gt 0 ] && [ "${POS[0]}" != "$idpart" ] && case "$idpart" in *
   [ -z "$EFFORT" ] || shared_args+=(--effort "$EFFORT")
   [ -z "$BACKEND_ARG" ] || shared_args+=(--backend "$BACKEND_ARG")
   [ -z "$OUTCOME" ] || shared_args+=(--outcome "$OUTCOME")
+  [ -z "$TASK_TYPE" ] || shared_args+=(--task-type "$TASK_TYPE")
   for pair in "${POS[@]}"; do
     case "$pair" in
       *=*) : ;;
@@ -1281,6 +1298,7 @@ META_WINDOW=$T
     echo "model=${MODEL:-default}"
   fi
   echo "effort=${EFFORT:-default}"
+  [ -z "$TASK_TYPE" ] || echo "task_type=$TASK_TYPE"
   # backend= is written only for a non-default (non-tmux) backend, so the
   # default path's meta stays byte-identical (absent backend= means tmux;
   # data/fm-backend-design-d7's P1 compatibility contract).

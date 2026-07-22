@@ -10,7 +10,7 @@ The shared orchestrator behavior lives in [`AGENTS.md`](../AGENTS.md) - edit it 
 
 This section is the single owner of the top-level operational-home layout; producer script headers and their help own exact child-file fields and mutation contracts.
 The tracked code root contains the shared instruction, skill, documentation, workflow, and `bin/` surfaces, while each effective `FM_HOME` contains private operational directories.
-`data/` holds durable private fleet records such as the project and secondmate registries, captain preferences, optional shared captain preferences, learnings, backlog, briefs, and scout reports.
+`data/` holds durable private fleet records such as the project and secondmate registries, captain preferences, optional shared captain preferences, learnings, backlog, briefs, scout reports, and the optional capability outcome log.
 `state/` holds volatile runtime records such as task metadata, append-only status events, endpoint signals, watcher and wake-queue coordination, away-mode state, and generated X-mode artifacts.
 `config/` holds local gitignored operating choices, and `projects/` holds the local project clones that Firstmate reads but changes only through the guarded exceptions in `AGENTS.md`.
 Porting a home to a second machine - which material is portable, which is machine-local, and the explicit private-git sync - is owned by [`docs/porting.md`](porting.md) and `bin/fm-home-port.sh`.
@@ -246,12 +246,13 @@ This section is the single owner of the canonical schema and its per-field seman
 Per rule, `when` and `use` are required.
 `use` may be a single profile object or an ordered array of profile objects; the single-object form stays fully backward-compatible, and every profile needs `harness`.
 `use.model`, `use.effort`, and `why` are optional.
-`select` is optional and currently supports `quota-balanced`.
+`select` is optional and currently supports `quota-balanced` and `capability-recent`.
 Absent `select` means use the first array element, or the only object in the single-object form; the first array element is the deterministic tie-break and the ultimate fallback.
 `default` is optional.
 An omitted model or effort means the selected harness uses its own default for that axis.
 If a selected profile carries an effort value the chosen harness does not accept, `fm-spawn.sh` records the requested `effort=` in task meta for traceability but omits the launch flag, and bootstrap reports the invalid harness/effort pair as a `CREW_DISPATCH` diagnostic when it is visible in the file.
 `quota-balanced` selection is deterministic and implemented by `bin/fm-dispatch-select.sh`, whose header owns the general-window rules, the 20 point stale-clear freshness margin, vendor-availability handling, and the degrade-to-first-element fallbacks; quota trouble never blocks dispatch.
+`capability-recent` ranks the same cost-allowed `use` array by recent green density from the capability outcome log; see "Capability outcome log" below.
 See [`docs/examples/crew-dispatch.json`](examples/crew-dispatch.json) for a starting point to copy into local `config/crew-dispatch.json`.
 When the file exists, bootstrap validates it with `jq`.
 Valid files stay silent by default; with `FM_BOOTSTRAP_VERBOSE_FACTS=1`, bootstrap emits `BOOTSTRAP_INFO: crew dispatch active config/crew-dispatch.json` plus one `BOOTSTRAP_INFO:` fact per rule and default profile.
@@ -259,6 +260,29 @@ Malformed JSON, an unverified harness, a malformed array profile, an unknown `se
 If no dispatch rule fits, firstmate uses the dispatch profile `default` when present, then falls back to `config/crew-harness`.
 Because the spawn backstop is gated by file presence, any fallback path after a missing match, validation error, or missing `jq` still passes a resolved harness explicitly until the file is fixed or removed.
 Secondmate homes inherit this file from the primary, so a secondmate's own crewmates apply the same dispatch profile behavior.
+
+## Capability outcome log (data/capability-outcomes.log)
+
+Firstmate records how each harness/model/effort combination performs per task type so dispatch can consult recent evidence without replacing cost rules.
+`bin/fm-capability-lib.sh` owns the wire format, the 7-day recency window, ranking, and the advisory scout-tax suggestion.
+`bin/fm-teardown.sh` appends one line on successful ship or scout cleanup (not secondmate), and `bin/fm-dispatch-select.sh --task-type <slug>` surfaces the window for that slug.
+The log is a captain-inspectable plain-text file under the home's private `data/`; there is no new runtime dependency.
+
+Each append-only line is:
+
+```text
+<unix-epoch>|<task-type>|<harness>|<model>|<effort>|<outcome>
+```
+
+`outcome` is `green` for a normal landed teardown or `discarded` for `--force`.
+`task-type` comes from meta `task_type=` when `fm-spawn.sh --task-type <slug>` recorded it, otherwise from `kind` (`ship` or `scout`).
+Fields never contain `|` or newlines.
+
+Cost rules in `config/crew-dispatch.json` always win: evidence only ranks or advises within the already cost-filtered `use` array and never bypasses the third-party-model guard.
+With `--task-type`, dispatch-select prints `CAPABILITY_EVIDENCE:` lines on stderr for firstmate.
+About 10% of those dispatches may also print one `CAPABILITY_SCOUT_TAX:` suggestion naming a different allowed profile; that suggestion is advisory and never changes the selected stdout profile.
+`select: capability-recent` makes ranking choose the best recent green density inside the allowed array; absent samples, it keeps the first profile.
+Overrides for tests and ops live under Environment variables (`FM_CAPABILITY_*`).
 
 ## Toolchain
 
@@ -383,6 +407,12 @@ FM_STATE_OVERRIDE=       # alternate state dir, mainly for tests
 FM_DATA_OVERRIDE=        # alternate data dir, mainly for tests
 FM_PROJECTS_OVERRIDE=    # alternate projects dir, mainly for tests
 FM_CONFIG_OVERRIDE=      # alternate config dir, mainly for tests
+FM_CAPABILITY_LOG=       # override path for data/capability-outcomes.log, mainly for tests
+FM_CAPABILITY_NOW=       # unix epoch "now" for the capability recency window, mainly for tests
+FM_CAPABILITY_WINDOW_SECS=604800  # capability evidence recency window (7 days)
+FM_CAPABILITY_SCOUT_TAX= # 0 disables scout-tax advisories; 1 forces one when multiple allowed profiles exist
+FM_CAPABILITY_SCOUT_TAX_RATE=10  # percent chance (0-100) a dispatch with --task-type emits CAPABILITY_SCOUT_TAX
+FM_CAPABILITY_SCOUT_ROLL= # deterministic 0-99 roll replacing $RANDOM for scout-tax tests
 FM_PROC_ROOT_OVERRIDE=   # alternate /proc root for the Linux process-identity read in fm-wake-lib.sh, mainly for tests
 FM_BACKEND=             # optional runtime backend override for new spawns; tmux/herdr/zellij/orca/cmux support ship/scout spawns, codex-app is not accepted
 HERDR_SESSION=default  # herdr-only: named session for normal backend ops; not enough for destructive cleanup (docs/herdr-backend.md)
