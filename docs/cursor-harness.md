@@ -16,7 +16,7 @@ decision. Regression coverage is `tests/fm-cursor-adapter.test.sh`.
 | Cursor CLI (`agent`) | `2026.07.16-899851b` |
 | Model | Cursor Grok 4.5 (`cursor-grok-4.5-{low,medium,high}`) |
 | tmux | 3.6a |
-| Account | Cursor Pro, `captain@example.com` |
+| Account | Cursor Pro, `your.email@example.com` |
 
 `agent` resolves to `~/.local/bin/agent`, a bash wrapper that `exec -a`s a bundled
 Node app at `~/.local/share/cursor-agent/versions/<version>/index.js`. That detail
@@ -36,7 +36,7 @@ $ agent --version
 2026.07.16-899851b
 
 $ agent status
-✓ Logged in as captain@example.com
+✓ Logged in as your.email@example.com
 ```
 
 All six Grok 4.5 ids are live:
@@ -95,7 +95,7 @@ must not rely on Cursor's own attribution defaults.
 
 ### Model identity vs label truth (verified 2026-07-21)
 
-Incident shape (atelier-local-services-run-d1, 2026-07-20): herdr presentation
+Incident shape (sample-local-services-run-d1, 2026-07-20): herdr presentation
 showed `cursor/gpt-5.6-sol-xh...` from `state/<id>.meta` `model=` while the pane
 footer showed `Cursor Grok 4.5 Medium Fast`.
 
@@ -251,7 +251,7 @@ cannot clear the interactive dialog. Trust is stored as
 
 Pre-seeding that file would avoid the keystroke, but the slug is truncated and
 hashed for long paths (observed:
-`private-tmp-claude-501-Users-you-treehouse-s-5009b96`), so reproducing it
+`private-tmp-claude-501-Users-<you>-treehouse-s-5009b96`), so reproducing it
 means reimplementing an unspecified internal hash inside the captain's `~/.cursor`.
 The keystroke path is the least invasive mechanism and matches how claude, codex,
 and pi trust dialogs are already handled, so firstmate accepts the dialog rather

@@ -15,8 +15,6 @@ set -eu
 slug=${1:?usage: fm-project-display-name.sh <project-slug>}
 
 case "$slug" in
-  city-guide) printf '%s\n' 'City Guide' ;;
-  atelier) printf '%s\n' 'Atelier' ;;
   api-platform) printf '%s\n' 'API Platform' ;;
   starship|firstmate) printf '%s\n' 'Starship' ;;
   *)

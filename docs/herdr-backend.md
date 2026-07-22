@@ -18,7 +18,7 @@ Firstmate only drives the `herdr` CLI as a separate process, which carries no AG
 
 Prerequisites:
 
-- `herdr` itself, protocol 14 or newer (0.7.1 and 0.7.3 verified) - see [herdr.dev](https://herdr.dev) for install instructions.
+- `herdr` itself - core adapter floor is protocol 14 (0.7.1 verified); grouped-panes human presentation needs protocol 16 (0.7.3/0.7.4 verified) - see [herdr.dev](https://herdr.dev) for install instructions.
 - `jq`, required to parse herdr's JSON output: `brew install jq` (or your platform's package manager).
 - The universal firstmate prerequisites - a verified crew harness plus the required toolchain, owned by [`docs/configuration.md`](configuration.md) ("Harness support", "Toolchain"); treehouse still provides the worktree, herdr only provides the session.
 
@@ -77,10 +77,10 @@ PASS
 tests/fm-teardown.test.sh && tests/fm-crew-state.test.sh
 PASS
 
-HERDR_LAB_HELPER=/Users/you/starship/bin/fm-herdr-lab.sh tests/fm-backend-herdr-workspace-per-home-e2e.test.sh
+HERDR_LAB_HELPER=$HOME/starship/bin/fm-herdr-lab.sh tests/fm-backend-herdr-workspace-per-home-e2e.test.sh
 PASS
 
-FM_HERDR_WORKER_PRESENTATION_E2E=1 HERDR_LAB_HELPER=/Users/you/starship/bin/fm-herdr-lab.sh tests/fm-herdr-worker-presentation-e2e.test.sh
+FM_HERDR_WORKER_PRESENTATION_E2E=1 HERDR_LAB_HELPER=$HOME/starship/bin/fm-herdr-lab.sh tests/fm-herdr-worker-presentation-e2e.test.sh
 PASS
 
 set -o pipefail; for test_file in tests/*.test.sh; do printf '\\n===== %s =====\\n' "$test_file"; "$test_file"; done 2>&1 | tee /tmp/firstmate-herdr-naming-full-suite.log
@@ -118,7 +118,7 @@ The human project label is mutable presentation and may include prioritized aggr
 
 The project display name comes from `bin/fm-project-display-name.sh`, the single resolver owner.
 It has explicit brand and acronym casing overrides and labels its generic title-cased result as a synthesized fallback rather than claiming a repository basename is authoritative human naming.
-`city-guide` resolves to `City Guide`, and `atelier` resolves to `Atelier`.
+`sample-product` resolves to `Sample Product`, and `api-platform` resolves to `API Platform` via its explicit override.
 
 A task's visible tab title is separate from its durable identity.
 New panes carry hidden `fm_task_id`, while the recorded workspace, tab, and pane ids remain the operational targets.
@@ -679,7 +679,7 @@ codex --version
 Output:
 
 ```text
-{"client":{"version":"0.7.3","channel":"stable","protocol":16,"binary":"/etc/profiles/per-user/kunchen/bin/herdr","session":null},"server":{"status":"running","running":true,"version":"0.7.3","protocol":16,"capabilities":{"live_handoff":true,"detached_server_daemon":false},"compatible":true,"socket":"/Users/kunchen/.config/herdr/herdr.sock","session":null,"restart_needed":false}}
+{"client":{"version":"0.7.3","channel":"stable","protocol":16,"binary":"/usr/local/bin/herdr","session":null},"server":{"status":"running","running":true,"version":"0.7.3","protocol":16,"capabilities":{"live_handoff":true,"detached_server_daemon":false},"compatible":true,"socket":"$HOME/.config/herdr/herdr.sock","session":null,"restart_needed":false}}
 codex-cli 0.142.1
 ```
 

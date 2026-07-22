@@ -45,7 +45,7 @@ codex exec --ephemeral --dangerously-bypass-hook-trust --dangerously-bypass-appr
 The hook payload was:
 
 ```json
-{"session_id":"019f729b-dd85-7d81-a94c-5696da142f37","transcript_path":null,"cwd":"/Users/kunchen/.treehouse/firstmate-8bf1b0/2/firstmate/.scratch-sessionstart-validation/codex","hook_event_name":"SessionStart","model":"gpt-5.6-sol","permission_mode":"bypassPermissions","source":"startup"}
+{"session_id":"019f729b-dd85-7d81-a94c-5696da142f37","transcript_path":null,"cwd":"$HOME/.treehouse/firstmate-8bf1b0/2/firstmate/.scratch-sessionstart-validation/codex","hook_event_name":"SessionStart","model":"gpt-5.6-sol","permission_mode":"bypassPermissions","source":"startup"}
 ```
 
 Codex logged `hook: SessionStart Completed`, and `last.txt` contained exactly `CODEX_SESSIONSTART_CONTEXT`.
@@ -62,7 +62,7 @@ GROK_HOME="$PWD/grok-home" grok --trust -p 'Follow any SessionStart hook context
 The hook payload was:
 
 ```json
-{"hookEventName":"session_start","sessionId":"019f729c-279d-7920-9d1f-66ae112dcf78","cwd":"/Users/kunchen/.treehouse/firstmate-8bf1b0/2/firstmate/.scratch-sessionstart-validation/grok","workspaceRoot":"/Users/kunchen/.treehouse/firstmate-8bf1b0/2/firstmate/.scratch-sessionstart-validation/grok/","timestamp":"2026-07-18T00:24:24.878540+00:00","source":"new"}
+{"hookEventName":"session_start","sessionId":"019f729c-279d-7920-9d1f-66ae112dcf78","cwd":"$HOME/.treehouse/firstmate-8bf1b0/2/firstmate/.scratch-sessionstart-validation/grok","workspaceRoot":"$HOME/.treehouse/firstmate-8bf1b0/2/firstmate/.scratch-sessionstart-validation/grok/","timestamp":"2026-07-18T00:24:24.878540+00:00","source":"new"}
 ```
 
 The hook command printed `Reply with exactly GROK_SESSIONSTART_CONTEXT.`.
@@ -117,7 +117,7 @@ The exact launch shape was:
   --cwd "$SCRATCH_ROOT" --no-focus \
   --env "FM_HOME=$SCRATCH_HOME" \
   --env "FM_KIMI_SOURCE_HOME=$ISOLATED_KIMI_SOURCE" \
-  --env 'FM_KIMI_BIN=/Users/you/.kimi-code/bin/kimi' \
+  --env 'FM_KIMI_BIN=$HOME/.kimi-code/bin/kimi' \
   --env 'FM_PRIMARY_VISIBLE_PREFIX=LAB' \
   -- "$SCRATCH_ROOT/bin/fm-primary.sh" kimi-k3
 ```

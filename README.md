@@ -78,7 +78,7 @@ Kimi Code 0.27.0 is verified as a primary-only runtime pinned to K3; it is not a
 
 ```sh
 gh auth login
-git clone https://github.com/kunchenguid/firstmate
+git clone https://github.com/Amplify-Logic/firstmate
 cd firstmate
 ```
 

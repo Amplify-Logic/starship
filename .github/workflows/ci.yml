@@ -114,3 +114,15 @@ jobs:
             printf '%s\n' "$tracked"
             exit 1
           fi
+
+  leak-guard:
+    name: Public-repo leak guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Fail on email, absolute home paths, or live-token shapes
+        run: |
+          set -eu
+          # Single owner: bin/fm-leak-guard.sh (email + /Users/<name> + live-token shapes).
+          # tests/ fixtures and the pattern-owning scripts are allowlisted inside the script.
+          bin/fm-leak-guard.sh

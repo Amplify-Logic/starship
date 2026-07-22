@@ -421,7 +421,7 @@ data/secondmates.md
 .DS_Store
 EOF
   cat > "$stage/README.md" <<'EOF'
-# firstmate-portable
+# portable-firstmate-home
 
 Captain-private portable Firstmate home material.
 
@@ -430,7 +430,7 @@ Tracked here: `data/captain.md`, `data/learnings.md`, `data/backlog.md`, optiona
 Never store `.env`, API credentials, `state/`, or `projects/` here.
 
 Sync is explicit and captain-triggered via `bin/fm-home-port.sh` in the firstmate repo.
-See `docs/porting.md` in Amplify-Logic/firstmate.
+See `docs/porting.md` in your firstmate clone.
 EOF
 }
 
@@ -556,8 +556,8 @@ print_login_checklist() {
   cat <<'EOF'
 
 HARNESS_LOGINS (interactive; cannot be automated):
-  1. gh auth status          - confirm Amplify-Logic GitHub auth
-  2. claude                  - Claude Code login (Company alternate account if used)
+  1. gh auth status          - confirm GitHub CLI auth for the account that owns the private portable transport
+  2. claude                  - Claude Code login (alternate-account isolation under state/ if used)
   3. agent / cursor-agent    - Cursor CLI login
   4. codex                   - Codex CLI login
   5. kimi                    - Kimi Code login (if used as primary)

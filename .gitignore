@@ -17,3 +17,10 @@ config/x-mode.env
 config/cmux-socket-password
 config/wedge-alarm
 config/primary-handoff
+# Generated per-task hook artifacts (also written into each task worktree's
+# .git/info/exclude by fm-spawn). Tracked here so a primary checkout cannot
+# accidentally stage them into a PR.
+.claude/settings.local.json
+.cursor/hooks.json
+.opencode/plugins/fm-turn-end.js
+.fm-grok-turnend
