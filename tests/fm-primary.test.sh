@@ -24,6 +24,10 @@ if [ "${1:-}" = --version ] && [ "$(basename "$0")" = kimi ]; then
   printf '%s\n' "${FM_PRIMARY_TEST_KIMI_VERSION:-0.27.0}"
   exit 0
 fi
+if [ "${1:-}" = --version ] && [ "$(basename "$0")" = agent ]; then
+  printf '%s\n' "${FM_PRIMARY_TEST_CURSOR_VERSION:-2026.07.20-8cc9c0b}"
+  exit 0
+fi
 if [ "${1:-}" = doctor ] && [ "$(basename "$0")" = kimi ]; then
   printf 'doctor KIMI_CODE_HOME=%s\n' "${KIMI_CODE_HOME:-}" >> "$FM_PRIMARY_TEST_LOG"
   exit "${FM_PRIMARY_TEST_DOCTOR_EXIT:-0}"
@@ -41,7 +45,7 @@ exit "${FM_PRIMARY_TEST_EXIT:-0}"
 SH
   chmod +x "$FAKEBIN/$1"
 }
-for cli in pi claude codex opencode grok kimi herdr tmux; do make_cli "$cli"; done
+for cli in pi claude codex opencode grok kimi agent herdr tmux; do make_cli "$cli"; done
 
 dry() { # <profile>
   ( cd "$TMP_ROOT" && \
@@ -58,7 +62,8 @@ test_profiles_and_root() {
   help=$("$ROOT/bin/fm-primary.sh" --help)
   assert_contains "$help" 'claude-fable' "help omitted the Claude Fable profile"
   assert_contains "$help" 'kimi-k3' "help omitted the Kimi K3 profile"
-  assert_contains "$help" 'Aliases: claude -> claude-fable; kimi -> kimi-k3.' "help omitted exact alias ownership"
+  assert_contains "$help" 'cursor-grok' "help omitted the Cursor Grok profile"
+  assert_contains "$help" 'Aliases: claude -> claude-fable; kimi -> kimi-k3; cursor -> cursor-grok.' "help omitted exact alias ownership"
   assert_contains "$help" 'Pi has no permission system' "help did not explain Pi's no-bypass posture"
   out=$(dry pi)
   assert_contains "$out" "root=$ROOT" "Pi profile did not resolve the tracked root from another cwd"
@@ -77,6 +82,10 @@ test_profiles_and_root() {
   assert_contains "$out" "'opencode'" "OpenCode verified primary profile is missing"
   out=$(dry grok)
   assert_contains "$out" "'grok' '--permission-mode' 'bypassPermissions'" "Grok verified primary bypass is wrong"
+  out=$(dry cursor-grok)
+  assert_contains "$out" "'agent' '--yolo' '--model' 'cursor-grok-4.5-high'" \
+    "Cursor Grok profile did not pin yolo and the high-tier model id"
+  [ "$(dry cursor)" = "$out" ] || fail "Cursor alias did not expand exactly to cursor-grok"
   pass "fm-primary: profiles expand exact flags and always launch from the tracked root"
 }
 
@@ -346,6 +355,38 @@ test_lab_role_guard() {
   pass "fm-primary: LAB role cannot appear as FIRSTMATE or run in default Herdr"
 }
 
+test_cursor_grok_primary_profile() {
+  local out status=0
+  out=$(dry cursor-grok)
+  assert_contains "$out" "profile=cursor-grok" "Cursor dry-run omitted profile"
+  assert_contains "$out" "'agent' '--yolo' '--model' 'cursor-grok-4.5-high'" \
+    "Cursor primary argv is wrong"
+  assert_not_contains "$out" 'status-bar' "Cursor primary invented a status-bar install"
+  : > "$LOG"
+  ( cd "$TMP_ROOT" && \
+    env -u HERDR_ENV -u HERDR_SESSION -u HERDR_PANE_ID -u TMUX_PANE \
+      PATH="$FAKEBIN:$PATH" \
+      TERM=dumb \
+      FM_HOME="$HOME_FIX" \
+      FM_PRIMARY_TEST_LOG="$LOG" \
+      "$ROOT/bin/fm-primary.sh" cursor-grok )
+  out=$(cat "$LOG")
+  assert_contains "$out" 'cli=agent' "Cursor primary did not exec agent"
+  assert_contains "$out" 'harness=cursor' "Cursor primary did not export FM_PRIMARY_HARNESS=cursor"
+  assert_contains "$out" 'argv=<--yolo><--model><cursor-grok-4.5-high>' \
+    "Cursor primary lost yolo or the high model id"
+  status=0
+  out=$(PATH="$FAKEBIN:$PATH" \
+    FM_HOME="$HOME_FIX" \
+    FM_PRIMARY_DRY_RUN=1 \
+    FM_PRIMARY_TEST_CURSOR_VERSION=2026.07.16-899851b \
+    "$ROOT/bin/fm-primary.sh" cursor-grok 2>&1) || status=$?
+  [ "$status" -ne 0 ] || fail "unverified Cursor CLI version was accepted"
+  assert_contains "$out" 'verified only for 2026.07.20-8cc9c0b; found 2026.07.16-899851b' \
+    "Cursor version refusal was unclear"
+  pass "fm-primary: Cursor Grok is pinned, lifecycle-integrated, and version-gated"
+}
+
 test_profiles_and_root
 test_unknown_dependency_and_integration_refusals
 test_active_lock_refusal
@@ -357,3 +398,4 @@ test_kimi_tmux_companion_status_bar
 test_kimi_version_doctor_and_symlink_refusals
 test_kimi_corrupt_source_registry_atomicity
 test_lab_role_guard
+test_cursor_grok_primary_profile

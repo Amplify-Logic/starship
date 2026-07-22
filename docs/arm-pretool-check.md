@@ -159,6 +159,7 @@ Prose may improve without changing adapter behavior.
 | --- | --- | --- |
 | Codex | `.tool_input.command` | The `.codex/hooks.json` command forwards the complete stdin payload and Codex blocks on exit 2. |
 | Claude | `.tool_input.command` | `.claude/settings.json` forwards stdin with `--claude`, leaving stdout empty and returning the stderr deny object. |
+| Cursor | `.tool_input.command` (Claude-mapped `preToolUse`) | Same `--claude` transport via tracked `.claude/settings.json`; Cursor CLI `2026.07.20-8cc9c0b` fired Claude-format PreToolUse in the 2026-07-22 primary lab. |
 | Kimi | `.tool_input.command` | The managed primary plugin forwards stdin with `--claude`; Kimi blocks the Bash call on exit 2 and places the stderr reason in model context. |
 | Grok | `.toolInput.command` | `.grok/hooks/fm-primary-pretool-check.json` forwards stdin and Grok consumes the stdout `decision=deny` object. |
 | OpenCode | `output.args.command` | `.opencode/plugins/fm-primary-pretool-check.js` passes one `--command` argument and throws only for exit 2. |

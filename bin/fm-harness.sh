@@ -32,6 +32,7 @@ detect_own() {
   # fm-primary.sh injects this stable child-process marker because Kimi 0.27.0
   # does not publish an unambiguous native marker of its own.
   [ "${FM_PRIMARY_HARNESS:-}" = "kimi" ] && { echo kimi; return; }
+  [ "${FM_PRIMARY_HARNESS:-}" = "cursor" ] && { echo cursor; return; }
   # cursor (Cursor CLI, the `agent` binary) sets CURSOR_AGENT=1 for its child/tool
   # processes (verified 2026-07-19 on 2026.07.16-899851b via `env` inside a cursor
   # shell call). This MUST be tested before CLAUDECODE: cursor is
@@ -39,7 +40,8 @@ detect_own() {
   # worker spawned from a firstmate running on claude sees both markers, and
   # CLAUDECODE-first would misreport that pane as claude. CURSOR_AGENT is only
   # ever set by cursor itself, so cursor-first is the unambiguous order.
-  # cursor is a WORKER-only adapter; see the harness-adapters skill.
+  # Cursor is verified as both a WORKER adapter and a PRIMARY profile
+  # (bin/fm-primary.sh cursor-grok); see the harness-adapters skill.
   [ "${CURSOR_AGENT:-}" = "1" ] && { echo cursor; return; }
   [ "${CLAUDECODE:-}" = "1" ] && { echo claude; return; }
   [ "${PI_CODING_AGENT:-}" = "true" ] && { echo pi; return; }

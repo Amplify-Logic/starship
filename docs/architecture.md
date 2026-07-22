@@ -46,7 +46,7 @@ The default path remains local-only; live GitHub enrichment exists only behind t
 Optional X mode integrates with the watcher only after explicit opt-in; [configuration.md](configuration.md#x-mode-env) owns its generated-artifact and dispatch mechanics.
 
 At session start, `bin/fm-session-start.sh` emits exactly one primary-harness supervision block rendered by `bin/fm-supervision-instructions.sh` from `docs/supervision-protocols/`.
-That block owns the live wait shape for the running primary harness: Claude, Grok, and Kimi use background-notify cycles, Codex uses bounded foreground checkpoints, Pi uses its two tracked primary extensions, and OpenCode uses its TUI plugin.
+That block owns the live wait shape for the running primary harness: Claude, Grok, Kimi, and Cursor use background-notify cycles, Codex uses bounded foreground checkpoints, Pi uses its two tracked primary extensions, and OpenCode uses its TUI plugin.
 `bin/fm-watch-arm.sh` remains the verified arm wrapper for protocols that call it; it forks the watcher as a tracked child, verifies it is genuinely alive with a fresh liveness beacon, and prints exactly one honest status line (`started` / `attached` / restart-only `healthy` / `FAILED`, the last exiting non-zero).
 On `attached` it stays live until that existing cycle ends so background-notify harnesses do not get an empty false wake from a healthy no-op exit.
 Its `--restart` mode signals only the watcher recorded in the current home's `state/.watch.lock`, so restarting one home cannot kill sibling secondmate watchers.
@@ -133,6 +133,23 @@ lab_absent_default_invariant
 ```
 
 The focused hook evidence is recorded in [arm-pretool-check.md](arm-pretool-check.md), [cd-guard.md](cd-guard.md), [sessionstart-nudge.md](sessionstart-nudge.md), and [turnend-guard.md](turnend-guard.md).
+
+### Cursor primary validation record, 2026-07-22
+
+Cursor CLI (`agent`) `2026.07.20-8cc9c0b` was validated as a primary through `bin/fm-primary.sh cursor-grok` (`agent --yolo --model cursor-grok-4.5-high`), using Herdr 0.7.4 in a generated non-default session and an isolated Firstmate-shaped scratch clone.
+Every operator Herdr call used `bin/fm-herdr-lab.sh`; no probe ran in the captain's `default` session.
+Worker adapter behavior was not changed.
+
+| Mechanism | Result |
+|---|---|
+| session-start | PASS (Claude-format `SessionStart` from `.claude/settings.json`) |
+| turn-end / Stop | FAIL (Stop did not fire after completed TUI turns on this CLI version) |
+| PreToolUse seatbelt | PASS (Claude-format `PreToolUse`; `fm-arm-pretool-check.sh --claude` denies backgrounded watcher arm) |
+| supervision protocol | PASS (`docs/supervision-protocols/cursor.md`) |
+| session lock | PASS (shared lock + launcher refusal) |
+| status-bar | DOCUMENTED-GAP (no third-party status-line API) |
+
+Full command transcripts and limitations live in [cursor-harness.md](cursor-harness.md).
 
 ## Runtime session backends
 

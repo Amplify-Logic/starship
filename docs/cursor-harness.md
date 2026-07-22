@@ -22,12 +22,12 @@ decision. Regression coverage is `tests/fm-cursor-adapter.test.sh`.
 Node app at `~/.local/share/cursor-agent/versions/<version>/index.js`. That detail
 is load-bearing for the liveness probe below.
 
-## Scope: worker only
+## Scope: worker and primary
 
-Cursor is verified as a WORKER (crewmate/scout) adapter only. Primary-orchestrator
-support was NOT verified: no session-start nudge, turn-end guard, PreToolUse
-seatbelt, or watcher supervision protocol was validated for a firstmate running ON
-cursor. Do not treat worker verification as primary support.
+Cursor is verified as a WORKER (crewmate/scout) adapter and, separately, as a PRIMARY orchestrator through `bin/fm-primary.sh cursor-grok`.
+Worker facts below remain authoritative for `fm-spawn`.
+Primary certification evidence is in "Primary orchestrator certification" later in this document.
+Never treat worker verification alone as primary support, and never launch a cursor WORKER from the firstmate primary checkout (that checkout's `.claude/settings.json` is the primary's hook surface).
 
 ## 1. Identity, authentication, and models
 
@@ -404,7 +404,7 @@ no supported status-line, footer, or terminal-UI API.**
   or status-line content.
 
 Status-bar parity on cursor therefore cannot use a native API and would need a different mechanism.
-The canonical decision is now owned by [`status-bar.md`](status-bar.md): Cursor remains worker-only, so a captain-facing renderer is not applicable and no guarded primary launcher exists on which to install an outer line.
+The canonical decision is now owned by [`status-bar.md`](status-bar.md): Cursor primary is certified, but with no third-party status-line API the guarded launcher installs no companion bar.
 
 ## 9. Model and effort mapping
 
@@ -439,8 +439,8 @@ a task worktree. The proven values for firstmate to apply after merge:
 
 ## Known limitations
 
-1. **Primary support is unverified.** Worker only; see "Scope" above.
-2. **A live `fm-spawn` end-to-end run was not performed from this task.** Spawning
+1. **Primary Stop hooks failed on Cursor CLI `2026.07.20-8cc9c0b`.** SessionStart and PreToolUse from `.claude/settings.json` fired in the isolated primary lab; native and Claude-mapped `stop`/`Stop` did not fire after completed TUI turns (and not after `/exit` in one probe). Worker-era stop evidence on `2026.07.16-899851b` still stands for per-task `.cursor/hooks.json` touch hooks, but the primary turn-end guard cannot be claimed as blocking on `2026.07.20-8cc9c0b`. Rely on background-notify supervision; treat Stop wiring as best-effort until re-verified.
+2. **A live `fm-spawn` end-to-end run was not performed from the original worker task.** Spawning
    allocates a real pooled treehouse worktree and writes live fleet state outside
    the task worktree, which a crewmate must not do. Every underlying behaviour was
    verified by raw launches instead, and the launch template, hook install,
@@ -450,9 +450,29 @@ a task worktree. The proven values for firstmate to apply after merge:
 3. **Trust costs a keystroke and up to ~30s on every spawn** (section 4).
 4. **`--model` mutates the account-global default** (section 2).
 5. **Resume fails open into a fresh session from the wrong cwd** (section 5).
-6. **Cursor executes claude-format hooks**, so cursor must never be launched from
-   the firstmate primary checkout (section 6).
+6. **Cursor executes claude-format hooks**, so cursor WORKERS must never be launched from
+   the firstmate primary checkout (section 6). Launching cursor as the PRIMARY from that checkout is intentional.
 7. **Liveness is verified on tmux only** (section 7).
-8. Herdr in this lab was 0.7.4, not the 0.7.3 assumed when the task was written;
-   no Herdr lifecycle operation was needed, so the guarded lab was never
-   provisioned and the captain's `default` session was never touched.
+8. Herdr in the worker lab was 0.7.4, not the 0.7.3 assumed when that task was written;
+   the primary lab also used Herdr 0.7.4 with `bin/fm-herdr-lab.sh`.
+
+## Primary orchestrator certification
+
+**Verified 2026-07-22** on Cursor CLI (`agent`) `2026.07.20-8cc9c0b`, Herdr 0.7.4, isolated non-default lab session via `bin/fm-herdr-lab.sh` (never the live `default` session).
+
+Guarded launcher profile: `bin/fm-primary.sh cursor-grok` → `agent --yolo --model cursor-grok-4.5-high`.
+Effort ceiling on cursor is `high` (`xhigh`/`max` fold to high), so the profile pins `-high`.
+`FM_PRIMARY_HARNESS=cursor` is exported for stable detection.
+Worker adapter behavior is intentionally unchanged.
+
+| Mechanism | Result | Evidence |
+|---|---|---|
+| session-start | PASS | Interactive launch fired Claude-format `SessionStart` from `.claude/settings.json` (`CLAUDE_SESSION_START` log). Native `.cursor/hooks.json` `sessionStart` did not fire in the same run. |
+| turn-end / Stop | FAIL | After completed TUI turns (`INTERACTIVE_OK`, `STOP_PROBE_OK`), neither native `stop` nor Claude `Stop` appended logs. `--print` mode also never invoked stop. Wiring retained in tracked `.claude/settings.json` for when upstream restores stop. |
+| PreToolUse seatbelt | PASS | Claude-format `PreToolUse` fired on Shell (`CLAUDE_PRETOOL`). `bin/fm-arm-pretool-check.sh --claude` returns exit 2 with `[watcher-background]` for a backgrounded watcher arm. |
+| supervision protocol | PASS | `docs/supervision-protocols/cursor.md` rendered by `bin/fm-supervision-instructions.sh --harness cursor`. |
+| session lock | PASS | Shared `bin/fm-lock.sh` + `fm-primary` active-session refusal (profile-agnostic; covered by `tests/fm-primary.test.sh`). |
+| status-bar | DOCUMENTED-GAP | No third-party status-line API (section 8); launcher installs no companion pane. |
+
+`--print` / `--mode ask` is not a valid primary hook lab: stop hooks did not run there even when the TUI path was under test.
+Keep primary hook probes on an interactive Cursor TUI inside the isolated Herdr lab.

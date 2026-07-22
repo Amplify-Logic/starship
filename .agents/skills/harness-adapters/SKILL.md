@@ -1,6 +1,6 @@
 ---
 name: harness-adapters
-description: Agent-only reference for firstmate harness operations. Use before spawning or recovering a crewmate or secondmate, handling a trust dialog, sending a harness-specific skill invocation, interrupting or exiting an agent, resuming an exited agent, or verifying a new harness adapter. Contains verified worker facts for claude, codex, opencode, pi, grok, and cursor, plus Kimi primary-only facts and the partial worker refuse-dispatch record.
+description: Agent-only reference for firstmate harness operations. Use before spawning or recovering a crewmate or secondmate, handling a trust dialog, sending a harness-specific skill invocation, interrupting or exiting an agent, resuming an exited agent, or verifying a new harness adapter. Contains verified worker facts for claude, codex, opencode, pi, grok, and cursor; Cursor and Kimi primary facts; and the Kimi partial worker refuse-dispatch record.
 user-invocable: false
 metadata:
   internal: true
@@ -31,7 +31,8 @@ The primary-session watcher wake protocols are rendered from `docs/supervision-p
 The supervision knowledge lives here: busy signature, exit command, interrupt, dialogs, resume behavior, skill invocation, and quirks.
 
 The verified WORKER adapters are `claude`, `codex`, `opencode`, `pi`, `grok`, and `cursor`.
-`cursor` is worker-only: primary-orchestrator support was never verified, so never launch a firstmate primary on it and never infer primary support from worker support, exactly as with the Kimi boundary in reverse.
+`cursor` is also verified as a PRIMARY through `bin/fm-primary.sh cursor-grok` (Cursor CLI `2026.07.20-8cc9c0b`, 2026-07-22 lab); never infer worker facts from primary facts or the reverse.
+Kimi remains primary-only: never launch a firstmate primary on an unverified adapter, and never pass `kimi` to `fm-spawn`.
 
 Never dispatch a crewmate or secondmate on an unverified adapter.
 If `config/crew-harness` or `config/secondmate-harness` names an unverified adapter, tell the captain under `AGENTS.md` section 9 that the requested worker runtime is not verified yet, use firstmate's own verified runtime for current work, and ask only whether to verify the requested runtime before future use.
@@ -95,7 +96,7 @@ When changing any primary watcher adapter, update `docs/supervision-protocols/`,
 
 `docs/status-bar.md` is the single owner of the shared field order, semantics, thresholds, colors, placeholders, adapter surfaces, and verification evidence.
 Claude uses its native tracked project status-line command, Pi uses its native tracked custom-footer extension, and Kimi 0.27.0 uses a guarded one-row tmux companion because its plugin API cannot render the native footer.
-Cursor remains worker-only, so no captain-facing Cursor status renderer or primary launcher exists.
+Cursor primary is certified, but Cursor CLI exposes no third-party status-line API, so `bin/fm-primary.sh cursor-grok` installs no companion bar.
 
 ## Kimi primary-only boundary (worker dispatch refused)
 
@@ -281,10 +282,15 @@ The model arms through `fm_watch_arm_pi`, never a foreground bash arm; the watch
 `bin/fm-session-start.sh` reports when the live Pi session has not loaded both the turn-end guard and watcher extensions, and points at plain `pi` after project trust as the fix, with `-e` as a trust-free fallback.
 When a secondmate is launched on Pi, `fm-spawn.sh --secondmate` launches Pi with both `-e .pi/extensions/fm-primary-turnend-guard.ts` and `-e .pi/extensions/fm-primary-pi-watch.ts`, both already present in the secondmate home's git worktree.
 
-## cursor (VERIFIED 2026-07-19, Cursor CLI `agent` 2026.07.16-899851b) - WORKER ONLY
+## cursor (WORKER verified 2026-07-19 on `2026.07.16-899851b`; PRIMARY certified 2026-07-22 on `2026.07.20-8cc9c0b`)
 
 Cursor CLI (the `agent` binary), running Cursor Grok 4.5.
-Launch with a positional prompt: `agent --yolo --workspace <worktree> --model <id> "$(cat <brief>)"`.
+Primary launch: `bin/fm-primary.sh cursor-grok` → `agent --yolo --model cursor-grok-4.5-high` with `FM_PRIMARY_HARNESS=cursor`.
+Primary hooks reuse tracked `.claude/settings.json` (Cursor maps `SessionStart`/`PreToolUse`/`Stop`).
+Lab result on `2026.07.20-8cc9c0b`: SessionStart and PreToolUse PASS; Stop FAIL (did not fire after TUI turn end).
+Supervision protocol: `docs/supervision-protocols/cursor.md` (background-notify).
+Status bar: documented gap (no third-party API).
+Worker launch with a positional prompt: `agent --yolo --workspace <worktree> --model <id> "$(cat <brief>)"`.
 For the effort-in-model-id axis, see the [launch-profile-axes table](#launch-profile-axes).
 `docs/cursor-harness.md` owns the dated evidence, exact output, and every limitation; the facts below are the operating summary.
 
@@ -309,7 +315,8 @@ For the effort-in-model-id axis, see the [launch-profile-axes table](#launch-pro
 
 Turn-end hook: cursor fires a native `stop` hook per turn. `fm-spawn` writes `<worktree>/.cursor/hooks.json` and gitignores it via `info/exclude`, the same shape as the claude and opencode worktree hooks. Unlike grok, project hooks need NO separate hook-trust grant beyond the workspace trust the spawn already clears.
 
-**Cursor executes claude-format hooks** from `.claude/settings.json` and `.claude/settings.local.json`, mapping `Stop` onto its own `stop`. Disposable worktrees never collide, but never launch cursor from the firstmate PRIMARY checkout, whose `.claude/settings.json` Stop hook would run firstmate's turn-end guard inside a worker session.
+**Cursor executes claude-format hooks** from `.claude/settings.json` and `.claude/settings.local.json`, mapping `Stop` onto its own `stop`. Disposable worktrees never collide, but never launch a cursor WORKER from the firstmate PRIMARY checkout, whose `.claude/settings.json` Stop hook is the primary's turn-end surface.
+Launching cursor as the PRIMARY from that checkout is the guarded `fm-primary.sh cursor-grok` path.
 
 **Composer classification needed two cursor-specific fixes** (both in the shared owners, both regression-covered by `tests/fm-cursor-adapter.test.sh`): cursor draws the terminal cursor as a REVERSE-VIDEO cell over the idle placeholder's first character, which survives ghost-stripping and made an idle pane read `pending`; and `#{cursor_y}` points at cursor's bottom status area rather than the composer, which made real unsubmitted text read `empty` - a false-empty the away-mode injector would have typed over. The composer row is now found structurally (the last `→ ` row) on the tmux path, scoped to panes positively identified as cursor (`node` COMM + `cursor-agent` argv, the liveness marker) so arrow-prefixed lines in another harness's output can never redirect classification off that pane's real composer row.
 

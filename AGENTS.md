@@ -153,7 +153,7 @@ A silent bootstrap section needs no action; for any printed actionable diagnosti
 
 Load `harness-adapters` before every spawn or recovery and before trust handling, skill invocation, interrupt, exit, resume, or adapter verification.
 The verified worker adapters are `claude`, `codex`, `opencode`, `pi`, `grok`, and `cursor`; never dispatch on an unverified adapter.
-`cursor` is worker-only, the mirror of the Kimi primary-only boundary; never launch a primary on it.
+`cursor` is verified as a worker and, separately, as a primary through `bin/fm-primary.sh cursor-grok`; never infer one role from the other.
 Kimi Code 0.27.0 is verified only as a primary through `bin/fm-primary.sh kimi-k3`; never pass it to `fm-spawn`.
 Partial worker lab evidence (2026-07-21) lives in `docs/kimi-harness.md`; busy signature, interrupt, and turn-end remain unverified, so worker dispatch stays refused.
 If configured harness data names an unverified adapter, report it and fall back only to a verified adapter rather than launching it.

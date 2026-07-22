@@ -21,8 +21,15 @@
 #                 Inside tmux, the launcher adds a detached one-row companion
 #                 that renders docs/status-bar.md without replacing Kimi's
 #                 native footer or controls.
+#   cursor-grok   agent --yolo --model cursor-grok-4.5-high
+#                 Cursor has no effort flag; the high tier is a model-id suffix.
+#                 xhigh/max fold to high, so this profile pins -high.
+#                 Primary lifecycle hooks reuse tracked .claude/settings.json
+#                 (Cursor maps SessionStart/PreToolUse/Stop onto its native
+#                 events). There is no third-party status-line API, so no
+#                 companion status bar is installed.
 #
-# Aliases: claude -> claude-fable; kimi -> kimi-k3.
+# Aliases: claude -> claude-fable; kimi -> kimi-k3; cursor -> cursor-grok.
 # The aliases are primary-launch conveniences only.
 # They never change config/crew-harness, config/secondmate-harness, dispatch
 # profiles, or fm-spawn's independently verified worker-adapter set.
@@ -47,6 +54,12 @@
 # sessionStart.skill is the model-context nudge on startup, resume, and /new.
 # Its hooks provide blockable PreToolUse and Stop integration.
 # The source Kimi home and its live config are never edited.
+#
+# Cursor CLI primary support is pinned to the empirically verified agent
+# version recorded below and in docs/cursor-harness.md.
+# Worker adapter behavior is unchanged; this profile certifies PRIMARY only.
+# Never launch a cursor WORKER from the primary checkout (that checkout's
+# .claude/settings.json Stop wiring is for the primary session).
 #
 # --install-shim creates ~/.local/bin/firstmate as a symlink to this command.
 # It is idempotent only for that exact symlink and refuses every other existing
@@ -84,6 +97,7 @@ FM_HOME=${FM_HOME:-$FM_ROOT}
 STATE=${FM_STATE_OVERRIDE:-$FM_HOME/state}
 DATA=${FM_DATA_OVERRIDE:-$FM_HOME/data}
 KIMI_VALIDATED_VERSION=0.27.0
+CURSOR_VALIDATED_VERSION=2026.07.20-8cc9c0b
 
 usage() {
   sed -n '2,/^set -u$/s/^# \{0,1\}//p' "$0"
@@ -351,6 +365,17 @@ verify_integrations() {
       require_file bin/fm-status-bar.sh
       prepare_kimi_home
       ;;
+    cursor-grok)
+      require_file .claude/settings.json
+      require_file docs/supervision-protocols/cursor.md
+      require_command jq
+      jq -e '
+        .hooks.SessionStart
+        and .hooks.PreToolUse
+        and .hooks.Stop
+      ' "$FM_ROOT/.claude/settings.json" >/dev/null 2>&1 \
+        || die "Cursor primary integrations are incomplete (need SessionStart, PreToolUse, and Stop in .claude/settings.json)"
+      ;;
   esac
 }
 
@@ -367,10 +392,11 @@ esac
 case "$PROFILE" in
   claude) PROFILE=claude-fable ;;
   kimi) PROFILE=kimi-k3 ;;
+  cursor) PROFILE=cursor-grok ;;
 esac
 case "$PROFILE" in
-  pi|claude-fable|codex|opencode|grok|kimi-k3) ;;
-  *) die "unknown or unverified primary profile '$PROFILE' (verified: pi claude-fable codex opencode grok kimi-k3)" ;;
+  pi|claude-fable|codex|opencode|grok|kimi-k3|cursor-grok) ;;
+  *) die "unknown or unverified primary profile '$PROFILE' (verified: pi claude-fable codex opencode grok kimi-k3 cursor-grok)" ;;
 esac
 
 validate_visible_prefix
@@ -384,6 +410,7 @@ case "$PROFILE" in
   opencode) CLI=opencode ;;
   grok) CLI=grok ;;
   kimi-k3) CLI=${FM_KIMI_BIN:-kimi} ;;
+  cursor-grok) CLI=${FM_CURSOR_BIN:-agent} ;;
 esac
 require_command "$CLI"
 verify_integrations
@@ -394,6 +421,12 @@ if [ "$PROFILE" = kimi-k3 ]; then
     || die "Kimi primary support is verified only for $KIMI_VALIDATED_VERSION; found ${version:-unknown}"
   KIMI_CODE_HOME="$KIMI_PRIMARY_HOME" "$CLI" doctor >/dev/null 2>&1 \
     || die "managed Kimi primary integration failed 'kimi doctor'"
+fi
+
+if [ "$PROFILE" = cursor-grok ]; then
+  version=$("$CLI" --version 2>/dev/null | head -1 | tr -d '\r')
+  [ "$version" = "$CURSOR_VALIDATED_VERSION" ] \
+    || die "Cursor primary support is verified only for $CURSOR_VALIDATED_VERSION; found ${version:-unknown}"
 fi
 
 cd "$FM_ROOT" || die "could not enter tracked Starship root: $FM_ROOT"
@@ -417,6 +450,9 @@ case "$PROFILE" in
     ;;
   kimi-k3)
     argv=("$CLI" --model kimi-code/k3 --yolo)
+    ;;
+  cursor-grok)
+    argv=("$CLI" --yolo --model cursor-grok-4.5-high)
     ;;
 esac
 
@@ -455,6 +491,10 @@ case "$PROFILE" in
   kimi-k3)
     export KIMI_CODE_HOME=$KIMI_PRIMARY_HOME
     export FM_PRIMARY_HARNESS=kimi
+    exec "${argv[@]}"
+    ;;
+  cursor-grok)
+    export FM_PRIMARY_HARNESS=cursor
     exec "${argv[@]}"
     ;;
   *) exec "${argv[@]}" ;;

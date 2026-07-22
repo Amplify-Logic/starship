@@ -49,6 +49,8 @@ All verified primary harnesses have a tracked integration:
   It does not pass `--permission-mode`, so the passive Stop hook cannot grant stronger tool permissions than Grok's resumed-session default.
 - `kimi`: `bin/fm-primary.sh` installs a managed Kimi plugin in an isolated `KIMI_CODE_HOME` with a native blockable `Stop` hook invoking `bin/fm-turnend-guard.sh`.
   Kimi 0.27.0 maps hook exit 2 to a blocked stop, appends the hook reason into model context, and allows exactly one guarded continuation through `stop_hook_active`.
+- `cursor`: tracked `.claude/settings.json` registers the same `Stop` command Cursor maps onto native `stop`.
+  Primary lab on Cursor CLI `2026.07.20-8cc9c0b` (2026-07-22) did **not** observe Stop firing after completed TUI turns, so treat this as wired-but-unverified-blocking and rely on background-notify supervision plus pull-based `fm-guard.sh` until re-certified.
 
 Claude, Codex, and Kimi support a direct blocking Stop hook.
 For those harnesses, exit status 2 plus stderr from `bin/fm-turnend-guard.sh` blocks the stop and feeds the reason back into the model.

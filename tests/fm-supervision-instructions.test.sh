@@ -104,6 +104,19 @@ test_kimi_is_background_notify_without_worker_dispatch() {
   pass "kimi supervision uses background Bash completion notify without claiming Kimi worker support"
 }
 
+test_cursor_is_background_notify() {
+  local out
+  out=$("$RENDER" --harness cursor)
+  assert_contains "$out" "Mode: Cursor background-notify supervision." "cursor snippet missing"
+  assert_contains "$out" "Cursor Agent background shell task" "cursor snippet lacks background shell wake path"
+  assert_contains "$out" "bin/fm-watch-arm.sh" "cursor snippet missing watcher arm"
+  assert_contains "$out" "preToolUse" "cursor snippet does not document Claude-mapped PreToolUse seatbelt"
+  assert_not_contains "$out" "foreground checkpoint" "cursor snippet must not be Codex-style foreground checkpoint"
+  out=$("$RENDER" --harness cursor --repair-line)
+  assert_contains "$out" "Cursor Agent background shell task" "cursor repair line is not background-notify shaped"
+  pass "cursor supervision is Claude-shaped background notify with documented Stop gap"
+}
+
 test_pi_snippet_uses_effective_extension_path() {
   local home out turnend watch
   home="$TMP_ROOT/pi-home"
@@ -127,4 +140,5 @@ test_repair_lines
 test_grok_is_background_notify
 test_grok_command_sources_effective_config
 test_kimi_is_background_notify_without_worker_dispatch
+test_cursor_is_background_notify
 test_pi_snippet_uses_effective_extension_path

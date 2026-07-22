@@ -89,6 +89,7 @@ bin/fm-primary.sh pi
 bin/fm-primary.sh claude-fable
 bin/fm-primary.sh codex
 bin/fm-primary.sh kimi-k3
+bin/fm-primary.sh cursor-grok
 ```
 
 `bin/fm-primary.sh --help` is the single owner of every profile's exact flags, including the other verified OpenCode and Grok primaries.
@@ -206,7 +207,7 @@ Firstmate's skills live in two separate places with different audiences:
 - [docs/orca-backend.md](docs/orca-backend.md) - setup guide for the experimental Orca backend, plus its lifecycle notes and known gaps.
 - [docs/cmux-backend.md](docs/cmux-backend.md) - setup guide for the experimental cmux backend, plus its verification notes and known gaps.
 - [docs/codex-app-backend.md](docs/codex-app-backend.md) - Codex App backend boundary, evidence, and rollout contract.
-- [docs/cursor-harness.md](docs/cursor-harness.md) - Cursor CLI worker-adapter verification evidence, limitations, and the worker-only boundary.
+- [docs/cursor-harness.md](docs/cursor-harness.md) - Cursor CLI worker and primary verification evidence, limitations, and role boundaries.
 - [docs/kimi-harness.md](docs/kimi-harness.md) - Kimi Code partial worker-lab verification record; worker dispatch stays refused until the remaining surfaces are captured live.
 - [docs/primary-handoff.md](docs/primary-handoff.md) - optional quota-aware primary orchestrator rotation, atomic session-lock handoff, and failure modes.
 - [docs/status-bar.md](docs/status-bar.md) - the canonical primary status-bar fields, thresholds, placeholders, adapter surfaces, and verification evidence.

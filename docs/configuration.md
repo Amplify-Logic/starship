@@ -168,13 +168,13 @@ The full cmux home label also includes a short hash of the resolved `FM_ROOT` pa
 ## Harness support
 
 claude, codex, opencode, pi, and grok are empirically verified as both primary and worker adapters.
-cursor is empirically verified as a worker adapter only; never launch a primary on it (see [`docs/cursor-harness.md`](cursor-harness.md)).
+cursor is empirically verified as a worker adapter and, separately, as a primary through `bin/fm-primary.sh cursor-grok` (see [`docs/cursor-harness.md`](cursor-harness.md)).
 Kimi Code 0.27.0 is empirically verified only as a primary runtime; `fm-spawn` deliberately rejects Kimi workers.
 The verified adapter knowledge - busy signatures, interrupt and exit commands, skill-invocation syntax, and per-harness quirks - lives in [`.agents/skills/harness-adapters/SKILL.md`](../.agents/skills/harness-adapters/SKILL.md).
 Launch mechanics, including the verified command templates, live in [`bin/fm-spawn.sh`](../bin/fm-spawn.sh).
 Primary-session turn-end guard integrations for verified harnesses are tracked as repo-level hook files and documented in [`docs/turnend-guard.md`](turnend-guard.md).
 Primary-session watcher wake protocols are rendered at session start by [`bin/fm-supervision-instructions.sh`](../bin/fm-supervision-instructions.sh) from [`docs/supervision-protocols/`](supervision-protocols/).
-Claude, Grok, and Kimi use background-notify cycles, Codex uses bounded foreground checkpoints, Pi uses its two tracked primary extensions, and OpenCode uses its TUI plugin.
+Claude, Grok, Kimi, and Cursor use background-notify cycles, Codex uses bounded foreground checkpoints, Pi uses its two tracked primary extensions, and OpenCode uses its TUI plugin.
 `bin/fm-primary.sh --help` owns primary profile aliases, model pins, and permission-bypass flags.
 `config/crew-harness` is a local, gitignored file containing one adapter name for crewmate and scout launches.
 When it is absent or contains `default`, crewmates mirror the firstmate's own harness.
