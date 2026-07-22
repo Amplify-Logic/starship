@@ -17,13 +17,22 @@
 #   fm-home-port.sh push --remote OWNER/REPO|URL [--home DIR] [--create-private]
 #   fm-home-port.sh pull --remote OWNER/REPO|URL [--home DIR]
 #   fm-home-port.sh bootstrap --portable-repo OWNER/REPO|URL [--home DIR]
-#   fm-home-port.sh scan PATH...
+#   fm-home-port.sh scan [--warn-machine-local] PATH...
+#   fm-home-port.sh verify [--home DIR]
 #   fm-home-port.sh --help
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
+
+# shellcheck source=bin/fm-leak-lib.sh disable=SC1091
+. "$SCRIPT_DIR/fm-leak-lib.sh"
+# shellcheck source=bin/fm-backend.sh disable=SC1091
+. "$SCRIPT_DIR/fm-backend.sh"
+
+# Verified worker harness names (same set as crew-dispatch validation).
+FM_PORT_VERIFIED_HARNESSES="claude codex opencode pi grok cursor"
 
 usage() {
   cat <<'EOF'
@@ -33,12 +42,20 @@ Usage:
   fm-home-port.sh push --remote OWNER/REPO|URL [--home DIR] [--create-private]
   fm-home-port.sh pull --remote OWNER/REPO|URL [--home DIR]
   fm-home-port.sh bootstrap --portable-repo OWNER/REPO|URL [--home DIR]
-  fm-home-port.sh scan PATH...
+  fm-home-port.sh scan [--warn-machine-local] PATH...
+  fm-home-port.sh verify [--home DIR]
   fm-home-port.sh --help
 
 Port captain-private portable Firstmate material between machines through an
 explicit, captain-triggered private-git sync. Secrets, state/, and projects/
 never port; see docs/porting.md.
+
+scan runs the credential scan (non-zero on SECRET_HIT).
+--warn-machine-local adds an advisory email /Users/<name> pass that never
+changes the exit code; patterns are owned by bin/fm-leak-lib.sh (shared with CI).
+
+verify runs the destination readiness checks from docs/porting.md plus
+config/backend and config/crew-harness presence checks.
 
 Environment:
   FM_HOME             active firstmate home (default: tracked root)
@@ -215,16 +232,203 @@ copy_portable_tree() {
 }
 
 cmd_scan() {
-  local path rc=0
-  [ $# -ge 1 ] || die "scan requires at least one PATH"
-  for path in "$@"; do
+  local path rc=0 warn_machine_local=0
+  local -a paths=()
+
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --warn-machine-local)
+        warn_machine_local=1
+        shift
+        ;;
+      --)
+        shift
+        while [ $# -gt 0 ]; do
+          paths+=("$1")
+          shift
+        done
+        ;;
+      -*)
+        die "unknown scan option: $1"
+        ;;
+      *)
+        paths+=("$1")
+        shift
+        ;;
+    esac
+  done
+
+  [ "${#paths[@]}" -ge 1 ] || die "scan requires at least one PATH"
+  for path in "${paths[@]}"; do
     if scan_path "$path"; then
       printf 'SCAN_CLEAN: %s\n' "$path"
     else
       rc=1
     fi
+    if [ "$warn_machine_local" -eq 1 ]; then
+      # Advisory only: report hits, never change the exit code.
+      if fm_leak_scan_machine_local "$path"; then
+        printf 'MACHINE_LOCAL_CLEAN: %s\n' "$path"
+      else
+        printf 'MACHINE_LOCAL_WARN: %s (rewrite absolute paths / emails before trusting the port; see docs/porting.md)\n' "$path"
+      fi
+    fi
   done
   return "$rc"
+}
+
+# Map a verified worker harness to its launch binary on PATH.
+harness_launch_binary() {
+  case "$1" in
+    claude) printf 'claude\n' ;;
+    codex) printf 'codex\n' ;;
+    opencode) printf 'opencode\n' ;;
+    pi) printf 'pi\n' ;;
+    grok) printf 'grok\n' ;;
+    cursor) printf 'agent\n' ;;
+    *) return 1 ;;
+  esac
+}
+
+is_verified_harness() {
+  local name=$1 h
+  for h in $FM_PORT_VERIFIED_HARNESSES; do
+    [ "$h" = "$name" ] && return 0
+  done
+  return 1
+}
+
+# Destination readiness checks from docs/porting.md plus backend/harness gates.
+# Prints VERIFY_PASS / VERIFY_FAIL per check; exits non-zero when any fails.
+cmd_verify() {
+  local home=$FM_HOME failed=0
+  local backend crew binary tool missing_tools bootstrap_out
+  local -a actionable=()
+
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --home)
+        [ $# -ge 2 ] || die "--home requires a directory"
+        home=$2
+        shift 2
+        ;;
+      *)
+        die "unknown verify option: $1"
+        ;;
+    esac
+  done
+
+  home=$(resolve_home "$home")
+
+  verify_pass() {
+    printf 'VERIFY_PASS: %s - %s\n' "$1" "$2"
+  }
+  verify_fail() {
+    printf 'VERIFY_FAIL: %s - %s\n' "$1" "$2"
+    failed=1
+  }
+
+  # 1. Portable captain files present
+  if [ -f "$home/data/captain.md" ] && [ -f "$home/data/learnings.md" ] && [ -f "$home/data/backlog.md" ]; then
+    verify_pass portable-files "data/captain.md, data/learnings.md, data/backlog.md present"
+  else
+    verify_fail portable-files "missing one or more of data/captain.md, data/learnings.md, data/backlog.md"
+  fi
+
+  # 2. .env was not imported (port never carries it; local creation is fine)
+  if [ -e "$home/.env" ]; then
+    verify_pass env "local .env present (port never imports .env; treat as machine-local)"
+  else
+    verify_pass env "no .env present"
+  fi
+
+  # 3. Machine-local dirs exist (empty is fine)
+  if [ -d "$home/state" ] && [ -d "$home/projects" ]; then
+    verify_pass local-dirs "state/ and projects/ present"
+  else
+    verify_fail local-dirs "state/ and projects/ must exist (empty is fine); recreate with mkdir -p"
+  fi
+
+  # 4. Bootstrap detect-only is clean of unresolved actionable lines
+  if [ -x "$FM_ROOT/bin/fm-bootstrap.sh" ]; then
+    bootstrap_out=$(
+      FM_HOME="$home" FM_BOOTSTRAP_DETECT_ONLY=1 "$FM_ROOT/bin/fm-bootstrap.sh" 2>&1 || true
+    )
+    while IFS= read -r line; do
+      case "$line" in
+        MISSING:*|MISSING_MANUAL:*|NEEDS_GH_AUTH|BACKEND_INVALID:*|CREW_DISPATCH:*)
+          actionable+=("$line")
+          ;;
+      esac
+    done <<< "$bootstrap_out"
+    if [ "${#actionable[@]}" -eq 0 ]; then
+      verify_pass bootstrap "no unresolved MISSING / NEEDS_GH_AUTH / BACKEND_INVALID / CREW_DISPATCH lines"
+    else
+      verify_fail bootstrap "unresolved bootstrap lines: ${actionable[*]}"
+    fi
+  else
+    verify_fail bootstrap "fm-bootstrap.sh not found under $FM_ROOT/bin"
+  fi
+
+  # 5. Captain preferences and learnings are non-empty (session-start would show them)
+  if [ -s "$home/data/captain.md" ] && [ -s "$home/data/learnings.md" ]; then
+    verify_pass digest-inputs "captain.md and learnings.md are non-empty for the session-start digest"
+  else
+    verify_fail digest-inputs "captain.md and/or learnings.md empty; session-start digest would not show preferences"
+  fi
+
+  # config/backend: known name and required tools present when set
+  if [ -f "$home/config/backend" ]; then
+    backend=$(tr -d '[:space:]' < "$home/config/backend" || true)
+    if [ -z "$backend" ]; then
+      verify_fail backend "config/backend is empty"
+    elif ! fm_backend_is_known "$backend"; then
+      verify_fail backend "config/backend='$backend' is not a known backend (known: $FM_BACKEND_KNOWN)"
+    else
+      missing_tools=
+      for tool in $(fm_backend_required_tools "$backend"); do
+        if ! fm_backend_required_tool_available "$backend" "$tool"; then
+          missing_tools="${missing_tools}${missing_tools:+ }$tool"
+        fi
+      done
+      if [ -z "$missing_tools" ]; then
+        verify_pass backend "config/backend=$backend is known and required tools are present"
+      else
+        verify_fail backend "config/backend=$backend is known but missing tools: $missing_tools"
+      fi
+    fi
+  else
+    verify_pass backend "config/backend absent (runtime auto-detect / default)"
+  fi
+
+  # config/crew-harness: verified worker harness and launch binary present when set
+  if [ -f "$home/config/crew-harness" ]; then
+    crew=$(tr -d '[:space:]' < "$home/config/crew-harness" || true)
+    if [ -z "$crew" ] || [ "$crew" = "default" ]; then
+      verify_pass crew-harness "config/crew-harness is default/absent-equivalent"
+    elif ! is_verified_harness "$crew"; then
+      verify_fail crew-harness "config/crew-harness='$crew' is not a verified worker harness (verified: $FM_PORT_VERIFIED_HARNESSES)"
+    else
+      binary=$(harness_launch_binary "$crew")
+      if command -v "$binary" >/dev/null 2>&1; then
+        verify_pass crew-harness "config/crew-harness=$crew is verified and launch binary '$binary' is on PATH"
+      else
+        verify_fail crew-harness "config/crew-harness=$crew is verified but launch binary '$binary' is not on PATH"
+      fi
+    fi
+  else
+    verify_pass crew-harness "config/crew-harness absent (mirrors primary harness)"
+  fi
+
+  # 6. Aggregate readiness before real work (after every mechanical check)
+  if [ "$failed" -eq 0 ]; then
+    verify_pass ready "destination checks passed; complete interactive harness logins before dispatching real work"
+    printf 'VERIFY_OK: %s\n' "$home"
+    return 0
+  fi
+  verify_fail ready "one or more checks failed; do not dispatch real work yet"
+  printf 'VERIFY_FAILED: %s\n' "$home" >&2
+  return 1
 }
 
 cmd_export() {
@@ -626,7 +830,7 @@ main() {
       usage
       exit 0
       ;;
-    export|import|push|pull|bootstrap|scan)
+    export|import|push|pull|bootstrap|scan|verify)
       cmd=$1
       shift
       "cmd_$cmd" "$@"

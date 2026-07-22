@@ -1,17 +1,19 @@
 #!/usr/bin/env bash
 # Scan tracked files for captain-private PII and live-token shapes.
 #
-# Single owner of the public-repo leak guard used by CI.
+# CI entry point for the public-repo leak guard.
+# Pattern ownership for email and /Users/<name> lives in bin/fm-leak-lib.sh
+# (shared with fm-home-port.sh --warn-machine-local).
 # Fails when a tracked file (outside the explicit allowlist) contains:
 #   - a real email address (placeholder domains are allowed)
 #   - a macOS absolute home path (/Users/<name>/...)
 #   - a live-token shape matching the portable-home credential scan
 #
-# The credential half reuses the same token regex as scan_path() in
+# The credential half reuses the same token regex family as scan_path() in
 # bin/fm-home-port.sh so both gates stay aligned.
 # tests/ fixtures that intentionally embed synthetic tokens are allowlisted.
-# This script and bin/fm-home-port.sh are allowlisted because they embed the
-# token regex as a pattern string.
+# This script, bin/fm-leak-lib.sh, and bin/fm-home-port.sh are allowlisted
+# because they embed pattern strings.
 #
 # Usage:
 #   fm-leak-guard.sh              scan the whole tracked tree (what CI runs)
@@ -21,6 +23,9 @@ set -eu
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT" || exit 1
 
+# shellcheck source=bin/fm-leak-lib.sh disable=SC1091
+. "$ROOT/bin/fm-leak-lib.sh"
+
 # Credential half - same live-token shapes as scan_path() in bin/fm-home-port.sh.
 # Assignment forms (FMX_PAIRING_TOKEN= / CMUX_SOCKET_PASSWORD=) require a
 # non-empty literal value here so documenting the env var name, or passing
@@ -28,9 +33,6 @@ cd "$ROOT" || exit 1
 # name-only match because any presence in a bundle is refuse-worthy.
 # shellcheck disable=SC2016
 TOKEN_PATTERN='(FMX_PAIRING_TOKEN[[:space:]]*=[[:space:]]*['\''\"]?[A-Za-z0-9._-]{8,}|(^|[^A-Za-z0-9_])(ghp_|gho_|ghu_|ghs_|ghr_|github_pat_)[A-Za-z0-9_]{20,}|sk-ant-[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}|BEGIN (RSA |OPENSSH |EC |DSA )?PRIVATE KEY|api[_-]?key[[:space:]]*[=:][[:space:]]*['\''\"]?[A-Za-z0-9_-]{20,}|CMUX_SOCKET_PASSWORD[[:space:]]*=[[:space:]]*['\''\"]?[A-Za-z0-9._-]{8,})'
-
-EMAIL_PATTERN='[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}'
-USERS_PATH_PATTERN='/Users/[A-Za-z_][A-Za-z0-9_-]*/'
 
 # Paths relative to repo root that may contain synthetic fixtures or the
 # pattern definitions themselves.
@@ -40,17 +42,7 @@ is_allowlisted() {
     tests/*|tests) return 0 ;;
     bin/fm-home-port.sh|./bin/fm-home-port.sh) return 0 ;;
     bin/fm-leak-guard.sh|./bin/fm-leak-guard.sh) return 0 ;;
-  esac
-  return 1
-}
-
-# Placeholder / non-personal email shapes that docs and fixtures may use.
-is_allowed_email() {
-  local email=$1
-  case "$email" in
-    git@github.com) return 0 ;;
-    *@example.com|*@example.org|*@example.net|*@example.invalid|*@example.test) return 0 ;;
-    *@localhost|*@local.test) return 0 ;;
+    bin/fm-leak-lib.sh|./bin/fm-leak-lib.sh) return 0 ;;
   esac
   return 1
 }
@@ -84,27 +76,27 @@ scan_file() {
     done < <(grep -En "$TOKEN_PATTERN" "$file" 2>/dev/null | head -5)
   fi
 
-  # Absolute macOS home paths
-  if grep -EIq "$USERS_PATH_PATTERN" "$file" 2>/dev/null; then
+  # Absolute macOS home paths (shared pattern owner: fm-leak-lib.sh)
+  if grep -EIq "$FM_LEAK_USERS_PATH_PATTERN" "$file" 2>/dev/null; then
     while IFS= read -r line; do
       report_hit users-path "$rel" "$line"
-    done < <(grep -En "$USERS_PATH_PATTERN" "$file" 2>/dev/null | head -5)
+    done < <(grep -En "$FM_LEAK_USERS_PATH_PATTERN" "$file" 2>/dev/null | head -5)
   fi
 
   # Email addresses (filter placeholders and git@ SSH URLs)
-  if grep -EIq "$EMAIL_PATTERN" "$file" 2>/dev/null; then
+  if grep -EIq "$FM_LEAK_EMAIL_PATTERN" "$file" 2>/dev/null; then
     while IFS= read -r line; do
       local emails
-      emails=$(printf '%s\n' "$line" | grep -Eo "$EMAIL_PATTERN" || true)
+      emails=$(printf '%s\n' "$line" | grep -Eo "$FM_LEAK_EMAIL_PATTERN" || true)
       local email
       while IFS= read -r email; do
         [ -n "$email" ] || continue
-        if ! is_allowed_email "$email"; then
+        if ! fm_leak_is_allowed_email "$email"; then
           report_hit email "$rel" "$line"
           break
         fi
       done <<< "$emails"
-    done < <(grep -En "$EMAIL_PATTERN" "$file" 2>/dev/null | head -20)
+    done < <(grep -En "$FM_LEAK_EMAIL_PATTERN" "$file" 2>/dev/null | head -20)
   fi
 }
 

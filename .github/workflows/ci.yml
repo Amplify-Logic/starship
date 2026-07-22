@@ -123,6 +123,7 @@ jobs:
       - name: Fail on email, absolute home paths, or live-token shapes
         run: |
           set -eu
-          # Single owner: bin/fm-leak-guard.sh (email + /Users/<name> + live-token shapes).
-          # tests/ fixtures and the pattern-owning scripts are allowlisted inside the script.
+          # CI entry: bin/fm-leak-guard.sh. Email + /Users/<name> patterns owned by
+          # bin/fm-leak-lib.sh (shared with fm-home-port.sh --warn-machine-local).
+          # tests/ fixtures and the pattern-owning scripts are allowlisted inside the guard.
           bin/fm-leak-guard.sh

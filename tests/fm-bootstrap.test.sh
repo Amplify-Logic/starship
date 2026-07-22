@@ -789,6 +789,50 @@ ROWS
   pass "bootstrap validates crew-dispatch.json and reports malformed or unverified configs"
 }
 
+test_manifest_writes_resolved_tool_versions() {
+  local case_dir fakebin home out
+  case_dir="$TMP_ROOT/manifest-ok"
+  mkdir -p "$case_dir"
+  fakebin=$(make_fake_toolchain "$case_dir")
+  home="$case_dir/home"
+  mkdir -p "$home/config"
+  printf 'tmux\n' > "$home/config/backend"
+  out=$(
+    PATH="$fakebin:$BASE_PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
+      FM_FAKE_TREEHOUSE_LEASE_HELP=1 \
+      "$ROOT/bin/fm-bootstrap.sh" manifest
+  ) || fail "manifest should exit 0, got: $out"
+  assert_contains "$out" 'backend=tmux' "manifest missing backend=tmux"
+  assert_contains "$out" 'generated=' "manifest missing generated= stamp"
+  assert_contains "$out" 'no-mistakes=no-mistakes version v1.31.2' "manifest missing no-mistakes version"
+  assert_contains "$out" 'tasks-axi=0.1.1' "manifest missing tasks-axi version"
+  assert_contains "$out" 'tmux=' "manifest missing tmux line"
+  assert_contains "$out" 'git=' "manifest missing git line"
+  pass "manifest writes resolved backend and tool versions"
+}
+
+test_manifest_reports_missing_tools() {
+  local case_dir fakebin home out
+  case_dir="$TMP_ROOT/manifest-missing"
+  mkdir -p "$case_dir"
+  fakebin=$(fm_fakebin "$case_dir")
+  # Intentionally omit most tools so the manifest records MISSING.
+  fm_fake_exit0 "$fakebin" node
+  home="$case_dir/home"
+  mkdir -p "$home/config"
+  printf 'tmux\n' > "$home/config/backend"
+  out=$(
+    PATH="$fakebin:$BASE_PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
+      "$ROOT/bin/fm-bootstrap.sh" manifest
+  ) || fail "manifest should exit 0 even when tools are missing, got: $out"
+  assert_contains "$out" 'backend=tmux' "manifest missing backend line"
+  # Assert tools that are never on the stock BASE_PATH, so a real host tmux/git
+  # cannot accidentally satisfy the line.
+  assert_contains "$out" 'no-mistakes=MISSING' "manifest should mark absent no-mistakes as MISSING"
+  assert_contains "$out" 'gh-axi=MISSING' "manifest should mark absent gh-axi as MISSING"
+  pass "manifest reports MISSING for absent tools"
+}
+
 test_bootstrap_reporting
 test_no_mistakes_min_version
 test_git_is_required_with_supported_install_instruction
@@ -810,3 +854,5 @@ test_routine_bootstrap_contract_runs_under_system_bash
 test_bootstrap_info_is_no_load_and_actionable_lines_trigger
 test_crew_dispatch_active_rules_are_verbose_bootstrap_info
 test_crew_dispatch_validation
+test_manifest_writes_resolved_tool_versions
+test_manifest_reports_missing_tools

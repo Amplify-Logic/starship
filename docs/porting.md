@@ -30,9 +30,30 @@ Each machine holds its own.
 `bin/fm-home-port.sh` refuses to include them and fails loudly rather than silently skipping, so a future operator cannot assume they came across.
 It also scans exported material for accidentally embedded credentials before writing or pushing a bundle.
 
+## Step zero: push from the main machine first
+
+Before the destination runs bootstrap against the private transport, the main machine must push portable material at least once:
+
+```sh
+bin/fm-home-port.sh push --remote <owner>/<portable-repo> [--create-private]
+```
+
+Otherwise the destination pull finds an empty transport and the first-run handoff fails for a chicken-and-egg reason, not a real porting bug.
+
+Optional fidelity aid on both machines after the toolchain is installed:
+
+```sh
+bin/fm-bootstrap.sh manifest
+```
+
+Compare the two manifests to catch tool-version drift before trusting the port.
+
 ## One-command handoff
 
-Prerequisite on the destination machine: GitHub CLI already authenticated to the account that owns your private portable transport (`gh auth status`).
+Prerequisites:
+
+1. Step zero above has already populated the private transport from the main machine.
+2. On the destination machine: GitHub CLI already authenticated to the account that owns your private portable transport (`gh auth status`).
 
 Paste **one** command into a terminal, substituting your tracked firstmate clone URL and private portable repo:
 
@@ -121,21 +142,42 @@ Portable prose may still mention the other machine's paths (for example an old `
 After import, rewrite those to the new machine's home.
 Never copy the credential directory itself across machines.
 
+After a pull or import, run an advisory machine-local scan so path and email rewrites are not a hand hunt:
+
+```sh
+bin/fm-home-port.sh scan --warn-machine-local /path/to/exported-or-home-data
+```
+
+That pass reports emails and `/Users/<name>/` paths using the same pattern owner as the public-repo CI leak guard (`bin/fm-leak-lib.sh`).
+It never fails the scan by itself; only embedded credentials change the exit code.
+
 ## Verify before trusting the port
 
-1. `test -f data/captain.md && test -f data/learnings.md && test -f data/backlog.md`
-2. `test ! -e .env` unless this machine created its own deliberately
-3. `test -d state && test -d projects` (empty is fine)
-4. `bin/fm-bootstrap.sh` prints no unresolved actionable `MISSING:` / `NEEDS_GH_AUTH` lines you have not accepted
-5. Start a primary (`bin/fm-primary.sh` profile of choice); confirm the session-start digest shows captain preferences and learnings
-6. Only then dispatch real work
+Run the destination readiness command (owns the mechanical checks below plus `config/backend` / `config/crew-harness` presence):
+
+```sh
+bin/fm-home-port.sh verify
+```
+
+It reports `VERIFY_PASS` / `VERIFY_FAIL` per check and exits non-zero when any check fails.
+The checks are:
+
+1. `data/captain.md`, `data/learnings.md`, and `data/backlog.md` are present.
+2. `.env` was not imported (absent, or a local file this machine created).
+3. `state/` and `projects/` exist (empty is fine).
+4. `bin/fm-bootstrap.sh` prints no unresolved actionable `MISSING:` / `NEEDS_GH_AUTH` lines you have not accepted.
+5. Captain preferences and learnings are non-empty inputs for the session-start digest (then start a primary of choice and confirm the digest visually).
+6. Only then dispatch real work.
+
+Also: when `config/backend` or `config/crew-harness` is set, verify confirms the backend is known with its tools present and the harness is a verified worker with its launch binary on `PATH`.
 
 ## Local export/import (USB or review)
 
 ```sh
 bin/fm-home-port.sh export --dest /tmp/fm-portable-staging
 bin/fm-home-port.sh import --source /tmp/fm-portable-staging --home /path/to/new-home
-bin/fm-home-port.sh scan /tmp/fm-portable-staging
+bin/fm-home-port.sh scan --warn-machine-local /tmp/fm-portable-staging
+bin/fm-home-port.sh verify --home /path/to/new-home
 ```
 
 ## Related owners
