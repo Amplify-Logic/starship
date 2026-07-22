@@ -44,6 +44,9 @@ echo "fake-claude 0.0.0"
 exit 0
 SH
   chmod +x "$fb/claude"
+  # Scout teardown → fm-decision-hold verify needs a compatible tasks-axi on PATH
+  # when the gate runs with a sanitized PATH (no host nvm tasks-axi).
+  fm_install_compatible_tasks_axi "$fb"
   printf '%s\n' "$fb"
 }
 

@@ -572,6 +572,75 @@ pane_input_pending() {  # <target> [backend]
   [ "$(fm_backend_composer_state "$backend" "$target" 2>/dev/null)" = pending ]
 }
 
+# probe_delivery_channel: refuse to advertise away-mode supervision when the
+# supervisor pane's composer classifier cannot affirmatively see an injectable
+# surface. Returns 0 when delivery is structurally possible (composer empty or
+# pending - pending is deferrable, not permanently broken). When the pane is
+# mid-turn (busy) the probe cannot read a composer, so it DEFERS: it sets
+# PROBE_DEFERRED=1 and returns 0, and the main loop re-runs the identical
+# bounded probe on the first idle cycle (away mode is normally started by
+# firstmate from inside its own turn, so busy-at-start is the common path and
+# skipping there would make the self-test vacuous). Returns 1 on idle+unknown:
+# that is the silent permanent non-delivery failure mode from 2026-07-20/21
+# (1630 deferred injects, 0 successful deliveries). On refusal the caller must
+# clear state/.afk so the home does not claim supervision while none can land.
+# FM_AFK_SKIP_DELIVERY_PROBE=1 skips the read for harnesses that start the
+# daemon against a stub pane with no real composer (unit/e2e topology only).
+probe_delivery_channel() {  # <backend> <target>
+  local backend=$1 target=$2 composer attempt
+  [ "${FM_AFK_SKIP_DELIVERY_PROBE:-0}" = 1 ] && { PROBE_DEFERRED=0; return 0; }
+  if pane_is_busy "$target" "$backend"; then
+    PROBE_DEFERRED=1
+    return 0
+  fi
+  PROBE_DEFERRED=0
+  for attempt in 1 2 3; do
+    composer=$(fm_backend_composer_state "$backend" "$target" 2>/dev/null || printf 'unknown')
+    case "$composer" in
+      empty|pending) return 0 ;;
+    esac
+    [ "$attempt" -lt 3 ] && sleep "${FM_AFK_PROBE_RETRY_SLEEP:-2}"
+  done
+  echo "error: away-mode delivery channel unusable: supervisor composer reads '${composer}' while idle (need empty or pending). Refusing to enter away mode so supervision is not falsely advertised." >&2
+  return 1
+}
+
+# run_deferred_delivery_probe: settle a probe that was deferred because the
+# supervisor pane was mid-turn at startup. No-op unless PROBE_DEFERRED=1. While
+# the pane is still busy it stays deferred (no unbounded work: one cheap busy
+# read per loop cycle). On the first idle cycle it runs the same bounded probe;
+# a refusal is as loud as a startup refusal - away mode is cleared and the
+# daemon exits rather than claim supervision it cannot deliver.
+run_deferred_delivery_probe() {  # <backend> <target> <state> <lock> <pidfile>
+  local backend=$1 target=$2 state=$3 lock=$4 pidfile=$5
+  [ "${PROBE_DEFERRED:-0}" = 1 ] || return 0
+  if pane_is_busy "$target" "$backend"; then
+    return 0
+  fi
+  if ! probe_delivery_channel "$backend" "$target"; then
+    if [ -n "${WATCHER_PID:-}" ]; then
+      kill "$WATCHER_PID" 2>/dev/null || true
+      wait "$WATCHER_PID" 2>/dev/null || true
+      WATCHER_PID=""
+    fi
+    startup_abort "$state" "$lock" "$pidfile" \
+      "deferred delivery probe refused (backend=$backend target=$target)"
+  fi
+  log "deferred delivery probe passed (backend=$backend target=$target)"
+}
+
+# startup_abort: shared failure path for daemon startup refusals. Clears
+# state/.afk when present so a refused start cannot leave the home advertising
+# away-mode supervision with no live daemon.
+startup_abort() {  # <state> <lock> <pidfile> <log-message>
+  local state=$1 lock=$2 pidfile=$3 msg=$4
+  log "$msg"
+  rm -f "$state/.afk" 2>/dev/null || true
+  fm_lock_release "$lock" 2>/dev/null || true
+  rm -f "$pidfile" 2>/dev/null || true
+  exit 1
+}
+
 task_window_backend() {  # <window> <state>
   local win=$1 state=$2 task meta
   task=$(window_to_task "$win" "$state")
@@ -1305,10 +1374,8 @@ fm_super_main() {
   # for, instead of a confusing "does not resolve to a tmux pane" error.
   if ! fm_backend_list_contains "$FM_SUPERVISOR_SUPPORTED_BACKENDS" "$BACKEND"; then
     echo "error: away-mode daemon does not support supervisor backend '$BACKEND' yet (supported: $FM_SUPERVISOR_SUPPORTED_BACKENDS); set FM_SUPERVISOR_BACKEND=tmux|herdr and FM_SUPERVISOR_TARGET to run firstmate's own pane under a supported backend" >&2
-    log "startup failed: unsupported supervisor backend '$BACKEND' (source=$backend_source)"
-    fm_lock_release "$LOCK" 2>/dev/null || true
-    rm -f "$PIDFILE" 2>/dev/null || true
-    exit 1
+    startup_abort "$STATE" "$LOCK" "$PIDFILE" \
+      "startup failed: unsupported supervisor backend '$BACKEND' (source=$backend_source)"
   fi
 
   # --- auto-discover the supervisor target (the pane running firstmate) -----
@@ -1343,10 +1410,17 @@ fm_super_main() {
   # '#{pane_id}'` call as before.
   if ! fm_backend_target_exists "$BACKEND" "$TARGET"; then
     echo "error: supervisor target '$TARGET' does not resolve to a $BACKEND pane; set FM_SUPERVISOR_TARGET" >&2
-    log "startup failed: target '$TARGET' not found (backend=$BACKEND)"
-    fm_lock_release "$LOCK" 2>/dev/null || true
-    rm -f "$PIDFILE" 2>/dev/null || true
-    exit 1
+    startup_abort "$STATE" "$LOCK" "$PIDFILE" \
+      "startup failed: target '$TARGET' not found (backend=$BACKEND)"
+  fi
+
+  # --- delivery-channel self-test: refuse to advertise away mode when the
+  # supervisor composer classifier cannot see an injectable surface while idle.
+  # Silent permanent non-delivery (idle+unknown forever) is worse than a loud
+  # refusal to start; see probe_delivery_channel.
+  if ! probe_delivery_channel "$BACKEND" "$TARGET"; then
+    startup_abort "$STATE" "$LOCK" "$PIDFILE" \
+      "startup failed: delivery probe refused (backend=$BACKEND target=$TARGET)"
   fi
 
   local afk_status="off"
@@ -1415,6 +1489,9 @@ fm_super_main() {
       sleep "$INJECT_FAIL_SLEEP"
       continue
     fi
+
+    # --- settle a startup probe deferred by a mid-turn supervisor pane ------
+    run_deferred_delivery_probe "$BACKEND" "$TARGET" "$STATE" "$LOCK" "$PIDFILE"
 
     # --- (re)start watcher if it has exited --------------------------------
     if [ -z "${WATCHER_PID:-}" ] || ! kill -0 "${WATCHER_PID:-}" 2>/dev/null; then

@@ -889,6 +889,9 @@ set -u
 exit 0
 SH
   chmod +x "$fb/tmux" "$fb/treehouse"
+  # Scout teardown → fm-decision-hold verify needs a compatible tasks-axi on PATH
+  # when the gate runs with a sanitized PATH (no host nvm tasks-axi).
+  fm_install_compatible_tasks_axi "$fb"
   printf '%s\n' "$fb"
 }
 

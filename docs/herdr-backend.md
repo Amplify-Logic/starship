@@ -398,6 +398,39 @@ Unit coverage in `tests/fm-backend-herdr.test.sh` pins the exact idle and pendin
 The existing tmux injection E2E remains the transport-parity proof for type-once, verified-submit behavior.
 The wedge alarm remains defense in depth and is not the primary delivery path.
 
+## Incident (2026-07-21): Claude framed composer wiped by Pi separator heuristic
+
+Away-mode delivery on this home's Claude-on-Herdr primary never succeeded.
+`state/.supervise-daemon.log` across four daemon runs since 2026-07-19 recorded 1630 `inject deferred` lines, 76 undelivered-escalation wedge alarms, 9 buffered escalates, and 0 successful injects.
+Every deferral used the same reason: `supervisor composer not confirmed-empty (state=unknown: ...)`.
+The captain relied on away mode overnight 2026-07-20/21 and received nothing for 4.5 hours (last wedge age 16309s) while finished jobs sat idle.
+Machine sleep and fleet failure were ruled out (`pmset` last real sleep 2026-07-18; fleet kept working).
+
+**Live capture of the idle primary (`default:wT:p1`, Herdr 0.7.4, Claude Code, custom Firstmate statusLine):**
+
+```text
+───…─── FIRSTMATE ──
+❯
+───…───
+  ⚓ Opus 4.8·high │ 🧠67% ⚡14% │ …
+  ⏵⏵ bypass permissions on · 1 shell · ← for agents
+```
+
+`agent get` reported `claude` / `idle`.
+The bare `❯` row was found, then discarded: the Pi incomplete-separator path treated the full-width bottom `─` frame as proof the generic row was stale and forced `found=0` → `unknown`.
+Earlier Claude fixtures used short `──────` rows (<8 chars), so they never tripped `fm_backend_herdr_pi_separator_row` and never exposed the wipe.
+The custom statusLine and bypass-permissions footer sit below that frame; they were not themselves misclassified as bordered composers (interior `│` only).
+
+**Fix:**
+
+1. Wipe a generic match on a lower unmatched separator only when that match was `bordered` (stale decorative box).
+   Keep a bare agent glyph (`❯`/`›`) even when Claude/Codex frame it with full-width rules.
+2. Daemon startup runs `probe_delivery_channel`: refuse to enter away mode (and clear `state/.afk`) when the idle supervisor composer reads `unknown`, so silent permanent non-delivery cannot advertise itself as active supervision.
+   `empty` and `pending` pass; mid-turn busy defers the check; `FM_AFK_SKIP_DELIVERY_PROBE=1` remains for stub-pane topology tests.
+
+Regression coverage: `tests/fm-backend-herdr.test.sh` (`test_composer_state_claude_framed_bare_prompt_with_statusline_is_empty`, pending twin) and `tests/fm-daemon.test.sh` (probe accept/refuse/skip, `startup_abort` clears `.afk`).
+Live re-check after the wipe fix: `fm_backend_herdr_composer_state default:wT:p1` → `empty`.
+
 ## Verified bug: `pane read --lines N` returns empty for small N
 
 This was the most significant finding of this verification pass.

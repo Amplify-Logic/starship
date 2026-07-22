@@ -236,11 +236,14 @@ fm_composer_classify_content() {  # <bordered> <content> [idle_re] [idle_case] [
     printf 'empty'; return 0
   fi
   # Strip a leading prompt glyph, then re-judge the remainder.
+  # Use literal multibyte removals for ❯/›: under LC_ALL=C, ${var#??} /
+  # ${var#?} walk bytes, so two ?'s only eat the first two UTF-8 bytes of ❯
+  # (U+276F = e2 9d af) and leave a mangled remainder that never matches the
+  # idle placeholder (composer-lib / cmux / herdr "got pending" under C).
   case "$content" in
-    # Remove the exact glyph bytes, never a fixed character count: under a byte
-    # locale (LC_ALL=C) a multibyte glyph like ❯ is 3 bytes, so ${content#??}
-    # would leave a stray byte behind and every idle placeholder after a glyph
-    # would misread as pending.
+    '❯ '*) content=${content#'❯ '} ;;
+    '› '*) content=${content#'› '} ;;
+    '> '*|'$ '*|'% '*|'# '*) content=${content#??} ;;
     '❯'*) content=${content#'❯'} ;;
     '›'*) content=${content#'›'} ;;
     '>'*|'$'*|'%'*|'#'*) content=${content#?} ;;

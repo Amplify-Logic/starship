@@ -1653,6 +1653,143 @@ test_inject_msg_defers_on_dead_shell_unknown() {
   pass "inject_msg: defers on a dead-shell/unreadable composer (unknown), never typing the escalation into a shell"
 }
 
+test_probe_delivery_channel_accepts_empty_and_pending() {
+  (
+    pane_is_busy() { return 1; }
+    fm_backend_composer_state() { printf 'empty'; }
+    probe_delivery_channel herdr default:w1:p2 || fail "empty composer must pass the delivery probe"
+    fm_backend_composer_state() { printf 'pending'; }
+    probe_delivery_channel herdr default:w1:p2 || fail "pending composer must pass the delivery probe (deferrable, not permanently broken)"
+  ) || fail "probe accept subshell failed"
+  pass "probe_delivery_channel: accepts empty and pending supervisor composers"
+}
+
+test_probe_delivery_channel_refuses_idle_unknown() {
+  local out
+  (
+    pane_is_busy() { return 1; }
+    fm_backend_composer_state() { printf 'unknown'; }
+    if FM_AFK_PROBE_RETRY_SLEEP=0 probe_delivery_channel herdr default:wT:p1; then
+      fail "idle+unknown must refuse the delivery probe"
+    fi
+  ) || fail "probe refuse subshell failed"
+  out=$(
+    pane_is_busy() { return 1; }
+    fm_backend_composer_state() { printf 'unknown'; }
+    FM_AFK_PROBE_RETRY_SLEEP=0 probe_delivery_channel herdr default:wT:p1 2>&1 || true
+  )
+  assert_contains "$out" "delivery channel unusable" "probe refusal did not explain the delivery failure"
+  pass "probe_delivery_channel: refuses idle+unknown so away mode cannot falsely advertise delivery"
+}
+
+test_probe_delivery_channel_retries_transient_unknown() {
+  local dir reads
+  dir=$(make_supercase probe-retry-transient)
+  (
+    pane_is_busy() { return 1; }
+    fm_backend_composer_state() {
+      echo x >> "$dir/reads"
+      if [ "$(wc -l < "$dir/reads")" -ge 2 ]; then printf 'empty'; else printf 'unknown'; fi
+    }
+    FM_AFK_PROBE_RETRY_SLEEP=0 probe_delivery_channel herdr default:w1:p2 \
+      || fail "a transient unknown that then reads empty must pass the delivery probe"
+  ) || fail "probe transient-retry subshell failed"
+  reads=$(wc -l < "$dir/reads")
+  [ "$reads" -eq 2 ] || fail "probe should stop retrying once the composer reads empty (got $reads reads)"
+  (
+    pane_is_busy() { return 1; }
+    fm_backend_composer_state() { echo x >> "$dir/reads2"; printf 'unknown'; }
+    if FM_AFK_PROBE_RETRY_SLEEP=0 probe_delivery_channel herdr default:w1:p2; then
+      fail "persistent unknown must still refuse after bounded retries"
+    fi
+  ) || fail "probe persistent-unknown subshell failed"
+  reads=$(wc -l < "$dir/reads2")
+  [ "$reads" -eq 3 ] || fail "probe retries must be bounded at 3 reads (got $reads)"
+  pass "probe_delivery_channel: bounded retries pass a transient unknown and still refuse a persistent one"
+}
+
+test_probe_delivery_channel_skips_when_busy_or_override() {
+  (
+    pane_is_busy() { return 0; }
+    fm_backend_composer_state() { fail "composer_state must not be consulted while busy"; }
+    probe_delivery_channel herdr default:w1:p2 || fail "busy supervisor must defer the probe"
+    [ "${PROBE_DEFERRED:-0}" = 1 ] || fail "busy supervisor must mark the probe deferred, not passed"
+  ) || fail "probe busy subshell failed"
+  (
+    pane_is_busy() { fail "busy check must not run when probe is skipped"; }
+    FM_AFK_SKIP_DELIVERY_PROBE=1 probe_delivery_channel herdr default:w1:p2 \
+      || fail "FM_AFK_SKIP_DELIVERY_PROBE=1 must skip the probe"
+    [ "${PROBE_DEFERRED:-0}" = 0 ] || fail "explicit skip must not leave a deferred probe pending"
+  ) || fail "probe skip subshell failed"
+  pass "probe_delivery_channel: defers while busy and skips when FM_AFK_SKIP_DELIVERY_PROBE=1"
+}
+
+test_deferred_delivery_probe_runs_on_first_idle() {
+  local dir out
+  dir=$(make_supercase probe-deferred-idle)
+  mkdir -p "$dir/state"
+  : > "$dir/state/.afk"
+  (
+    log() { :; }
+    busy=0
+    pane_is_busy() { return "$busy"; }
+    fm_backend_composer_state() { printf 'empty'; }
+    probe_delivery_channel herdr default:w1:p2 || fail "busy start must defer, not refuse"
+    run_deferred_delivery_probe herdr default:w1:p2 "$dir/state" "$dir/lock" "$dir/pid"
+    [ "${PROBE_DEFERRED:-0}" = 1 ] || fail "probe must stay deferred while the pane is still busy"
+    busy=1
+    run_deferred_delivery_probe herdr default:w1:p2 "$dir/state" "$dir/lock" "$dir/pid"
+    [ "${PROBE_DEFERRED:-0}" = 0 ] || fail "first idle cycle must settle the deferred probe"
+    run_deferred_delivery_probe herdr default:w1:p2 "$dir/state" "$dir/lock" "$dir/pid"
+  ) || fail "deferred probe idle subshell failed"
+  out=$(
+    log() { :; }
+    busy=0
+    pane_is_busy() { return "$busy"; }
+    fm_backend_composer_state() { printf 'unknown'; }
+    FM_AFK_PROBE_RETRY_SLEEP=0 probe_delivery_channel herdr default:w1:p2 || echo "UNEXPECTED-STARTUP-REFUSAL"
+    busy=1
+    FM_AFK_PROBE_RETRY_SLEEP=0 run_deferred_delivery_probe herdr default:w1:p2 "$dir/state" "$dir/lock" "$dir/pid" 2>&1
+    echo "NOT-REACHED"
+  ) || true
+  assert_contains "$out" "delivery channel unusable" "deferred probe failure must refuse loudly"
+  case "$out" in *NOT-REACHED*) fail "deferred probe refusal must abort the daemon" ;; esac
+  [ -e "$dir/state/.afk" ] && fail "deferred probe refusal must clear state/.afk"
+  (
+    log() { :; }
+    pane_is_busy() { return 1; }
+    fm_backend_composer_state() { printf 'unknown'; }
+    PROBE_DEFERRED=1
+    sleep 30 & WATCHER_PID=$!
+    echo "$WATCHER_PID" > "$dir/watcher.pid"
+    FM_AFK_PROBE_RETRY_SLEEP=0 run_deferred_delivery_probe herdr default:w1:p2 \
+      "$dir/state" "$dir/lock" "$dir/pid" >/dev/null 2>&1
+  ) || true
+  kill -0 "$(cat "$dir/watcher.pid")" 2>/dev/null \
+    && fail "deferred probe refusal must not orphan the watcher child"
+  pass "deferred delivery probe: runs on first idle after a busy start, refuses loudly, and reaps the watcher"
+}
+
+test_startup_abort_clears_afk_flag() {
+  local dir state lock pidfile
+  dir=$(make_supercase startup-abort-clears-afk)
+  state="$dir/state"
+  lock="$state/.supervise-daemon.lock"
+  pidfile="$state/.supervise-daemon.pid"
+  mkdir -p "$lock"
+  date '+%s' > "$state/.afk"
+  printf '1\n' > "$pidfile"
+  (
+    log() { :; }
+    fm_lock_release() { :; }
+    ( startup_abort "$state" "$lock" "$pidfile" "startup failed: delivery probe refused" )
+    true
+  )
+  [ ! -e "$state/.afk" ] || fail "startup_abort must clear state/.afk so refused starts do not advertise supervision"
+  [ ! -e "$pidfile" ] || fail "startup_abort must remove the pidfile"
+  pass "startup_abort: clears state/.afk on refused daemon start"
+}
+
 test_afk_start_refuses_when_flag_cannot_be_written
 test_afk_start_ignores_stale_pidfile_without_lock
 test_afk_start_reclaims_stale_daemon_lock_reused_pid
@@ -1748,3 +1885,9 @@ test_inject_msg_herdr_composer_guard_defers
 test_inject_msg_herdr_pane_gone_defers
 test_inject_msg_herdr_submits_through_backend_dispatch
 test_inject_msg_defers_on_dead_shell_unknown
+test_probe_delivery_channel_accepts_empty_and_pending
+test_probe_delivery_channel_refuses_idle_unknown
+test_probe_delivery_channel_retries_transient_unknown
+test_probe_delivery_channel_skips_when_busy_or_override
+test_deferred_delivery_probe_runs_on_first_idle
+test_startup_abort_clears_afk_flag

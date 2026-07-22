@@ -963,6 +963,50 @@ test_composer_state_pi_incomplete_separator_below_stale_generic_is_unknown() {
   pass "fm_backend_herdr_composer_state: an incomplete lower Pi separator cannot inherit a stale empty row"
 }
 
+# Overnight 2026-07-20/21 shape: Claude frames its bare ❯ with FULL-WIDTH
+# horizontal rules (>=8 ─, which triggers the Pi separator finder), a labeled
+# top rule that is NOT a pure separator, the custom Firstmate statusLine, and
+# Claude's "bypass permissions" footer. Before the fix, the Pi "lower unmatched
+# separator wipes generic" heuristic cleared the live ❯ and returned unknown
+# forever - 1630 deferred injects, 0 deliveries.
+test_composer_state_claude_framed_bare_prompt_with_statusline_is_empty() {
+  local dir log resp fb out sep_top sep_bot
+  dir="$TMP_ROOT/composer-claude-framed-statusline"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  # 40 box-drawing dashes: full-width enough to trip FM_BACKEND_HERDR_PI separator detection.
+  sep_bot=$(printf '\xe2\x94\x80%.0s' $(seq 1 40))
+  sep_top="${sep_bot} FIRSTMATE ${sep_bot}"
+  {
+    printf 'transcript line\n'
+    printf '%s\n' "$sep_top"
+    printf '\xe2\x9d\xaf\n'   # bare ❯
+    printf '%s\n' "$sep_bot"
+    printf '  \xe2\x9a\x93 Opus 4.8\xc2\xb7high \xe2\x94\x82 \xf0\x9f\xa7\xa0 67%% \xe2\x94\x82 \xe2\x9a\xa1 14%%\n'
+    printf '  \xe2\x8f\xb5\xe2\x8f\xb5 bypass permissions on \xc2\xb7 1 shell \xc2\xb7 \xe2\x86\x90 for agents\n'
+  } > "$resp/1.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_composer_state default:wT:p1' "$ROOT" )
+  [ "$out" = empty ] || fail "idle Claude framed by full-width separators + statusLine + bypass footer must read empty (overnight delivery wedge), got '$out'"
+  pass "fm_backend_herdr_composer_state: Claude bare ❯ framed by full-width separators under a custom statusLine reads empty"
+}
+
+test_composer_state_claude_framed_bare_prompt_with_real_text_is_pending() {
+  local dir log resp fb out sep_bot
+  dir="$TMP_ROOT/composer-claude-framed-pending"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  sep_bot=$(printf '\xe2\x94\x80%.0s' $(seq 1 40))
+  {
+    printf '%s\n' "$sep_bot"
+    printf '\xe2\x9d\xaf half-typed escalation\n'
+    printf '%s\n' "$sep_bot"
+    printf '  bypass permissions on\n'
+  } > "$resp/1.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_composer_state default:wT:p1' "$ROOT" )
+  [ "$out" = pending ] || fail "real text in a Claude framed bare composer must still read pending, got '$out'"
+  pass "fm_backend_herdr_composer_state: real text in a Claude framed bare composer still reads pending"
+}
+
 test_composer_state_pi_separator_requires_safe_native_identity() {
   local dir log resp fb out status case_id idx=0
   for case_id in working non-pi unreadable over-tall; do
@@ -2275,6 +2319,8 @@ test_composer_state_unknown_when_no_composer_row_found
 test_composer_state_pi_separator_idle_is_empty
 test_composer_state_pi_separator_real_text_is_pending
 test_composer_state_pi_incomplete_separator_below_stale_generic_is_unknown
+test_composer_state_claude_framed_bare_prompt_with_statusline_is_empty
+test_composer_state_claude_framed_bare_prompt_with_real_text_is_pending
 test_composer_state_pi_separator_requires_safe_native_identity
 test_composer_state_claude_unbordered_prompt_is_empty
 test_composer_state_claude_unbordered_prompt_is_pending

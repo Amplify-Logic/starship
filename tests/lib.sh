@@ -88,6 +88,56 @@ fm_fakebin() {
   printf '%s\n' "$fakebin"
 }
 
+# fm_install_compatible_tasks_axi <fakebin-dir>: drop a PATH stub that satisfies
+# bin/fm-tasks-axi-lib.sh's fm_tasks_axi_compatible probe AND
+# bin/fm-decision-hold.sh's require_tasks_axi (hold --help exposes --kind captain).
+# Scout teardown success fixtures need this when the host PATH is sanitized
+# (e.g. no-mistakes gate worktrees without nvm), otherwise decision-hold refuses
+# with "compatible tasks-axi is required" before the adapter-under-test runs.
+fm_install_compatible_tasks_axi() {
+  local fb=$1
+  mkdir -p "$fb"
+  cat > "$fb/tasks-axi" <<'SH'
+#!/usr/bin/env bash
+set -u
+case "${1:-}" in
+  --version)
+    printf '%s\n' '0.2.3'
+    exit 0
+    ;;
+  update)
+    if [ "${2:-}" = --help ]; then
+      printf '%s\n' 'usage: tasks-axi update <id> [flags]'
+      printf '%s\n' '  --body-file <path>'
+      printf '%s\n' '  --archive-body'
+      exit 0
+    fi
+    ;;
+  mv)
+    if [ "${2:-}" = --help ]; then
+      printf '%s\n' 'usage: tasks-axi mv <id> [<id>...] --to <path-or-dir>'
+      exit 0
+    fi
+    ;;
+  hold)
+    if [ "${2:-}" = --help ]; then
+      printf '%s\n' 'usage: tasks-axi hold <id> [flags]'
+      printf '%s\n' '  --kind captain'
+      printf '%s\n' '  --reason <text>'
+      exit 0
+    fi
+    ;;
+  show)
+    # No durable holds in these fixtures: absent task is fine for verify with
+    # decisions_reviewed=1 and empty decision_keys.
+    exit 1
+    ;;
+esac
+exit 0
+SH
+  chmod +x "$fb/tasks-axi"
+}
+
 fm_fake_exit0() {
   local fakebin=$1 tool
   shift
