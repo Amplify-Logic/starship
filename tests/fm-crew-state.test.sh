@@ -12,7 +12,8 @@
 #   (a) active run-step is authoritative                          -> run-step
 #   (b) needs-decision/blocked log + resumed run = SUPERSEDED     -> run-step
 #   (c) genuine parked run + needs-decision log = NOT superseded  -> run-step
-#   (d) terminal run-step (passed/failed) is authoritative        -> run-step
+#   (d) terminal run-step (passed/failed) is authoritative          -> run-step
+#       EXCEPT newer paused:/blocked: after terminal failed wins by recency
 #   (e) cross-branch attribution: this branch's own run found via list lookup
 #   (f) no run + busy pane                                        -> pane
 #   (g) no run + idle pane falls to the status-log verb           -> status-log
@@ -676,6 +677,73 @@ test_terminal_failed() {
   pass "terminal failed run is authoritative"
 }
 
+# Declared-pause-lost regression (2026-07-21): a terminal failed run-step must
+# not outrank a NEWER paused: status line. Recency wins so crew_absorb_class
+# returns paused (long resurface) instead of none (bare stale every poll).
+test_newer_paused_after_terminal_failed() {
+  reset_fakes
+  local d short out absorb back
+  d=$(new_case newer-paused-after-failed)
+  make_repo_on_branch "$d/wt" fm/feat-pause-after-fail
+  short=$(git -C "$d/wt" rev-parse --short=7 HEAD)
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/pause-after-fail.meta" "window=fm:fm-pause-after-fail" "worktree=$d/wt" "kind=ship"
+  printf 'failed: session quota wall\npaused: waiting for quota reset before retry\n' \
+    > "$d/state/pause-after-fail.status"
+  # Status file mtime is "now"; the matching failed run ended yesterday.
+  back=$(( $(date +%s) - 86400 ))
+  FM_FAKE_AXI_STATUS="$(run_failed fm/feat-pause-after-fail)"
+  FM_FAKE_RUNS_LIST="$(cat <<EOF
+  failed     fm/feat-pause-after-fail ${short}  $(date -r "$back" '+%Y-%m-%d %H:%M' 2>/dev/null || date -d "@$back" '+%Y-%m-%d %H:%M')
+EOF
+)"
+  FM_FAKE_BUSY=0
+  out=$(run_crew_state "$d" pause-after-fail)
+  assert_contains "$out" "state: paused" "newer paused: after failed run -> paused"
+  assert_contains "$out" "source: status-log" "newer paused: is status-log sourced"
+  assert_contains "$out" "terminal run superseded by newer status-log" "detail names the recency override"
+  assert_not_contains "$out" "state: failed" "failed run must not outrank the newer pause"
+  absorb=$(
+    PATH="$d/fakebin:$PATH" FM_STATE_OVERRIDE="$d/state" FM_CREW_STATE_BIN="$CREW_STATE" \
+      bash -c '. "'"$ROOT"'/bin/fm-classify-lib.sh"; crew_absorb_class pause-after-fail'
+  )
+  [ "$absorb" = paused ] || fail "crew_absorb_class expected paused after newer pause, got '$absorb'"
+  pass "newer paused: after a terminal failed run is classified paused (absorbed, not none)"
+}
+
+# Control: a failed run that is still the newest signal (no newer pause) keeps
+# failed / none so a genuine failure still surfaces.
+test_terminal_failed_without_newer_pause_still_surfaces() {
+  reset_fakes
+  local d short out absorb back
+  d=$(new_case failed-newest-no-newer-pause)
+  make_repo_on_branch "$d/wt" fm/feat-failed-newest
+  short=$(git -C "$d/wt" rev-parse --short=7 HEAD)
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/failed-newest.meta" "window=fm:fm-failed-newest" "worktree=$d/wt" "kind=ship"
+  # Older pause still last in the log, but the failed run ended AFTER it.
+  printf 'paused: holding before the run that later failed\n' > "$d/state/failed-newest.status"
+  back=$(( $(date +%s) - 86400 ))
+  if [ "$(uname)" = Darwin ]; then touch -mt "$(date -r "$back" '+%Y%m%d%H%M.%S')" "$d/state/failed-newest.status"
+  else touch -m -d "@$back" "$d/state/failed-newest.status"; fi
+  FM_FAKE_AXI_STATUS="$(run_failed fm/feat-failed-newest)"
+  FM_FAKE_RUNS_LIST="$(cat <<EOF
+  failed     fm/feat-failed-newest ${short}  $(date '+%Y-%m-%d %H:%M')
+EOF
+)"
+  FM_FAKE_BUSY=0
+  out=$(run_crew_state "$d" failed-newest)
+  assert_contains "$out" "state: failed" "failed run newer than pause -> failed"
+  assert_contains "$out" "source: run-step" "failed run newer than pause stays run-step"
+  assert_not_contains "$out" "state: paused" "older pause must not outrank a newer failed run"
+  absorb=$(
+    PATH="$d/fakebin:$PATH" FM_STATE_OVERRIDE="$d/state" FM_CREW_STATE_BIN="$CREW_STATE" \
+      bash -c '. "'"$ROOT"'/bin/fm-classify-lib.sh"; crew_absorb_class failed-newest'
+  )
+  [ "$absorb" = none ] || fail "crew_absorb_class expected none for newest failed run, got '$absorb'"
+  pass "failed run-step that is newest (older pause only) still surfaces as failed/none"
+}
+
 # (e) cross-branch attribution: `axi status` returns ANOTHER branch's run (the
 # routine case once more than one crew validates the same underlying repo
 # concurrently - they share ONE no-mistakes repo registration), so the helper
@@ -1252,6 +1320,8 @@ test_top_level_fixing_ci_running_after_green_stays_working
 test_top_level_fixing_done_log_stays_working
 test_terminal_passed
 test_terminal_failed
+test_newer_paused_after_terminal_failed
+test_terminal_failed_without_newer_pause_still_surfaces
 test_cross_branch_attribution_via_runs_list
 test_cross_branch_attribution_picks_most_recent_row
 test_coarse_run_does_not_probe_other_branch_ci_log_for_ready_status

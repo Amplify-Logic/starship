@@ -35,6 +35,11 @@
 #      checks" from "checks green, waiting on merge" (see nm_ci_checks_state) -
 #      a ci-step log-tail check overrides working -> done once checks read
 #      green, so a green PR is never silently read as still-validating.
+#      AND except recency against a newer declared pause/block: when the last
+#      well-formed status line is paused: or blocked: and is newer than a
+#      terminal failed/cancelled run-step, the status log wins (live 2026-07-21
+#      declared-pause-lost incident). A failed run that is still the newest
+#      signal keeps failed.
 #   3. Reconcile the status log: if its last line says needs-decision/blocked but
 #      the run-step shows the run moved on, the log is deterministically stale and
 #      is flagged superseded. A genuinely parked run plus a needs-decision log
@@ -71,8 +76,8 @@ LOG="$STATE/$ID.status"
 NM_TIMEOUT=${FM_CREW_STATE_NM_TIMEOUT:-10}
 case "$NM_TIMEOUT" in ''|*[!0-9]*) NM_TIMEOUT=10 ;; esac
 # How many of the most recent `no-mistakes runs` rows the cross-branch fallback
-# (nm_runs_status_for_branch, below) scans. Generous enough to still find a
-# branch's own run on a busy multi-crew fleet without listing the entire
+# (nm_runs_status_and_epoch_for_branch, below) scans. Generous enough to still
+# find a branch's own run on a busy multi-crew fleet without listing the entire
 # history every call.
 FM_CREW_STATE_RUNS_LIMIT=${FM_CREW_STATE_RUNS_LIMIT:-200}
 case "$FM_CREW_STATE_RUNS_LIMIT" in ''|*[!0-9]*) FM_CREW_STATE_RUNS_LIMIT=200 ;; esac
@@ -167,11 +172,11 @@ pane_readable() {  # <target>
 # tmux's regex-only reader would correctly report. Trusting herdr's `idle`
 # outright (skipping that corroboration) is what let a still-working crew read
 # as not-busy here, and - combined with a no-mistakes run-step lookup that also
-# missed attribution (see nm_runs_status_for_branch) - as not provably working in
-# fm-classify-lib.sh, triggering an immediate (non-wedge) stale wake instead of
-# the absorb-then-escalate path. A genuinely human-blocked agent (a permission
-# dialog, not mid-tool-call) does not render the busy banner, so this
-# corroboration does not mask that case: it stays correctly not-busy.
+# missed attribution (see nm_runs_status_and_epoch_for_branch) - as not
+# provably working in fm-classify-lib.sh, triggering an immediate (non-wedge)
+# stale wake instead of the absorb-then-escalate path. A genuinely human-blocked
+# agent (a permission dialog, not mid-tool-call) does not render the busy banner,
+# so this corroboration does not mask that case: it stays correctly not-busy.
 crew_pane_is_busy() {  # <target>
   case "$TASK_BACKEND" in
     tmux) fm_pane_is_busy "$1" ;;
@@ -375,10 +380,27 @@ nm_ci_checks_state() {
 # spaces (verified: no quoting, so splitting on the first two whitespace runs
 # is exact) - but branch + coarse status is exactly what this predicate needs:
 # is a run for THIS branch active right now. Echoes the first (most recent)
-# matching row's status word (running/completed/cancelled/failed), or empty
-# when the branch has no run within FM_CREW_STATE_RUNS_LIMIT rows.
-nm_runs_status_for_branch() {  # <branch>
-  local branch=$1 out row st rest br sha
+# matching row's status word (running/completed/cancelled/failed) plus a TAB and
+# optional end-time epoch from the date column, or empty when the branch has no
+# run within FM_CREW_STATE_RUNS_LIMIT rows.
+# Parse a `no-mistakes runs` date column ("YYYY-MM-DD HH:MM") to epoch seconds.
+# Empty on failure so callers can fall back without treating parse errors as "old".
+nm_parse_runs_date_epoch() {  # <YYYY-MM-DD> <HH:MM>
+  local day=$1 clock=$2
+  [ -n "$day" ] && [ -n "$clock" ] || return 0
+  case "$day" in [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) ;; *) return 0 ;; esac
+  case "$clock" in [0-9][0-9]:[0-9][0-9]) ;; *) return 0 ;; esac
+  if [ "$(uname -s 2>/dev/null)" = Darwin ]; then
+    date -j -f '%Y-%m-%d %H:%M' "$day $clock" '+%s' 2>/dev/null || true
+  else
+    date -d "$day $clock" '+%s' 2>/dev/null || true
+  fi
+}
+
+# Echo "status<TAB>epoch" for the newest head-matching runs-list row for <branch>,
+# or empty when none. Epoch may be empty when the date column is missing/unparseable.
+nm_runs_status_and_epoch_for_branch() {  # <branch>
+  local branch=$1 out row st rest br sha day clock epoch
   out=$(nm_run runs --limit "$FM_CREW_STATE_RUNS_LIMIT")
   [ -n "$out" ] || return 0
   while IFS= read -r row; do
@@ -391,17 +413,69 @@ nm_runs_status_for_branch() {  # <branch>
     rest=${rest#* }
     rest=$(trim "$rest")
     sha=${rest%% *}
+    rest=${rest#* }
+    rest=$(trim "$rest")
+    day=${rest%% *}
+    rest=${rest#* }
+    rest=$(trim "$rest")
+    clock=${rest%% *}
     if [ "$br" = "$branch" ]; then
       # Same code-identity rule as axi status: skip a same-branch row whose
       # short-sha does not match this worktree (rewritten or advanced tip).
       if ! nm_coarse_head_matches_worktree "$sha"; then
         continue
       fi
-      printf '%s' "$st"
+      epoch=$(nm_parse_runs_date_epoch "$day" "$clock")
+      printf '%s\t%s' "$st" "$epoch"
       return 0
     fi
   done <<< "$out"
   return 0
+}
+
+# Epoch mtime of this crew's status log, or empty when unreadable.
+status_log_mtime_epoch() {
+  [ -f "$LOG" ] || return 0
+  if [ "$(uname -s 2>/dev/null)" = Darwin ]; then
+    stat -f %m "$LOG" 2>/dev/null || true
+  else
+    stat -c %Y "$LOG" 2>/dev/null || true
+  fi
+}
+
+# 0 when the status log's last paused:/blocked: line is newer than the terminal
+# failed/cancelled run we attributed. Recency, not source rank, decides.
+# When the run's end time cannot be determined, a trailing paused:/blocked: is
+# treated as newer (the worker's last append after observing the failure).
+status_log_newer_than_terminal_run() {
+  local log_epoch run_epoch pair field
+  case "$LOG_VERB" in
+    paused|blocked) ;;
+    *) return 1 ;;
+  esac
+  log_epoch=$(status_log_mtime_epoch)
+  case "$log_epoch" in ''|*[!0-9]*) return 1 ;; esac
+
+  run_epoch=""
+  # Prefer an explicit axi-status timestamp when the CLI exposes one.
+  for field in ended_at finished_at updated_at completed_at; do
+    run_epoch=$(strip_quotes "$(nm_field "$field")")
+    case "$run_epoch" in ''|*[!0-9]*) run_epoch="" ;; *) break ;; esac
+  done
+  # Otherwise use the matching `no-mistakes runs` date (full and coarse paths).
+  if [ -z "$run_epoch" ] && [ -n "$CREW_BRANCH" ]; then
+    if [ -n "${COARSE_RUN_EPOCH:-}" ]; then
+      run_epoch=$COARSE_RUN_EPOCH
+    else
+      pair=$(nm_runs_status_and_epoch_for_branch "$CREW_BRANCH")
+      run_epoch=${pair#*$'\t'}
+      case "$run_epoch" in ''|*[!0-9]*) run_epoch="" ;; esac
+    fi
+  fi
+  if [ -z "$run_epoch" ]; then
+    return 0
+  fi
+  [ "$log_epoch" -gt "$run_epoch" ]
 }
 
 # CREW_BRANCH is empty at detached HEAD (a just-spawned crew, or a scout's
@@ -452,6 +526,7 @@ HAVE_RUN=0
 # run-step block below skips the TOON field parsing entirely for this crew.
 RUN_SOURCE=full
 COARSE_STATUS=""
+COARSE_RUN_EPOCH=""
 # Scouts and secondmates never drive a no-mistakes validation of their own
 # worktree, so skip the lookup for them and read state from pane/log directly.
 if [ "$KIND" = ship ] && [ -n "$CREW_BRANCH" ] && command -v no-mistakes >/dev/null 2>&1; then
@@ -468,8 +543,11 @@ if [ "$KIND" = ship ] && [ -n "$CREW_BRANCH" ] && command -v no-mistakes >/dev/n
       # primary call means the CLI itself did not respond, so retrying it
       # immediately with a second bounded call would just double the wait
       # for no better answer.
-      COARSE_STATUS=$(nm_runs_status_for_branch "$CREW_BRANCH")
-      if [ -n "$COARSE_STATUS" ]; then
+      coarse_pair=$(nm_runs_status_and_epoch_for_branch "$CREW_BRANCH")
+      if [ -n "$coarse_pair" ]; then
+        COARSE_STATUS=${coarse_pair%%$'\t'*}
+        COARSE_RUN_EPOCH=${coarse_pair#*$'\t'}
+        case "$COARSE_RUN_EPOCH" in ''|*[!0-9]*) COARSE_RUN_EPOCH="" ;; esac
         HAVE_RUN=1
         RUN_SOURCE=coarse
       fi
@@ -589,6 +667,22 @@ if [ "$HAVE_RUN" = 1 ]; then
           RUN_DETAIL="$RUN_DETAIL${SEP}status-log superseded (run $RUN_STATE)"
         fi
       fi
+      ;;
+  esac
+
+  # Recency override: a terminal failed/cancelled run must not outrank a newer
+  # declared pause or block. Without this, crew_absorb_class returns none and
+  # the watcher floods bare stale: wakes every poll (declared-pause-lost).
+  case "$RUN_STATE" in
+    failed)
+      case "$LOG_VERB" in
+        paused|blocked)
+          if status_log_newer_than_terminal_run; then
+            emit "$(map_log_state "$LOG_LINE")" status-log \
+              "$(status_line_note "$LOG_LINE")${SEP}terminal run superseded by newer status-log"
+          fi
+          ;;
+      esac
       ;;
   esac
 
