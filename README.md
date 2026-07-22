@@ -24,6 +24,8 @@
   <img alt="firstmate - talk to one agent, ship with a crew" src="assets/banner.png" width="100%" />
 </p>
 
+<p align="center"><strong>Never done this before?</strong> Start with <a href="ONBOARDING.md">ONBOARDING.md</a>.</p>
+
 ## What it is
 
 You can run one coding agent easily.
@@ -198,6 +200,7 @@ Firstmate's skills live in two separate places with different audiences:
 
 ## Documentation
 
+- [ONBOARDING.md](ONBOARDING.md) - blank Mac to a running first mate that can dispatch workers (beginner walkthrough).
 - [docs/architecture.md](docs/architecture.md) - how the crew, supervision, worktrees, secondmates, and project modes work.
 - [docs/adhd.md](docs/adhd.md) - ADHD divergent-ideation front-end: usage, reversible install/uninstall, and cost policy.
 - [docs/configuration.md](docs/configuration.md) - environment variables, `FM_HOME`, runtime backend selection, optional X mode, the files you set, and harness support.
