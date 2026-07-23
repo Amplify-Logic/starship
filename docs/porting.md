@@ -159,11 +159,11 @@ Run the destination readiness command (owns the mechanical checks below plus `co
 bin/fm-home-port.sh verify
 ```
 
-It reports `VERIFY_PASS` / `VERIFY_FAIL` per check and exits non-zero when any check fails.
+It reports `VERIFY_PASS` / `VERIFY_FAIL` / `VERIFY_INFO` per check and exits non-zero when any check fails.
 The checks are:
 
 1. `data/captain.md`, `data/learnings.md`, and `data/backlog.md` are present.
-2. `.env` was not imported (absent, or a local file this machine created).
+2. `.env` was not imported (informational only - the port refuses `.env` by construction; absent or a local file both report `VERIFY_INFO`).
 3. `state/` and `projects/` exist (empty is fine).
 4. `bin/fm-bootstrap.sh` prints no unresolved actionable `MISSING:` / `NEEDS_GH_AUTH` lines you have not accepted.
 5. Captain preferences and learnings are non-empty inputs for the session-start digest (then start a primary of choice and confirm the digest visually).

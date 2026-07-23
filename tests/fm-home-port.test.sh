@@ -252,6 +252,7 @@ test_verify_passes_ready_home() {
   out=$(PATH="$fakebin:$BASE_PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" "$PORT" verify --home "$home" 2>&1) || rc=$?
   [ "$rc" -eq 0 ] || fail "verify should pass a ready home, got rc=$rc out=$out"
   assert_contains "$out" 'VERIFY_PASS: portable-files' "portable-files should pass"
+  assert_contains "$out" 'VERIFY_INFO: env' "env check is informational (port refuses .env by construction)"
   assert_contains "$out" 'VERIFY_PASS: backend' "backend should pass"
   assert_contains "$out" 'VERIFY_PASS: crew-harness' "crew-harness should pass"
   assert_contains "$out" 'VERIFY_OK:' "expected VERIFY_OK summary"

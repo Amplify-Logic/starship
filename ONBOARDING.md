@@ -135,6 +135,7 @@ herdr status --json 2>/dev/null | jq -r '.client.protocol // empty'
 
 You should see: `16` (or higher).
 If that command prints nothing, run `herdr update` or reinstall 0.7.4+ from herdr.dev, then re-check.
+If `jq` is not installed yet, skip this check - the first mate installs `jq` later, and the preflight checkpoint treats a missing `jq` as an advisory rather than a failure.
 
 ### 2.6 Clone firstmate (do not launch yet)
 
@@ -181,10 +182,10 @@ If you launch firstmate from inside Herdr later, it auto-selects Herdr and says 
 
 Stay in Terminal.
 Do **not** start Claude yet.
-Paste this whole block, then fix every ❌ until the block prints only ✅ lines.
+Paste this whole block, then fix every ❌ until the block prints no ❌ lines (✅ and optional ⚠️ advisory lines are fine).
 
 ```sh
-cd ~/starship || { echo "❌ clone missing - re-run step 2.6"; exit 1; }
+if cd ~/starship; then
 
 ok() { echo "✅ $1"; }
 bad() { echo "❌ $1"; echo "   fix: $2"; }
@@ -212,24 +213,32 @@ fi
 # Herdr is optional - skip path is tmux (the first mate can install tmux later).
 if command -v herdr >/dev/null; then
   ver=$(herdr --version 2>/dev/null | head -1)
-  proto=$(herdr status --json 2>/dev/null | jq -r '.client.protocol // empty' 2>/dev/null || true)
-  case "$proto" in
-    ''|*[!0-9]*) bad "Herdr protocol" "herdr update  (need 0.7.4+ / protocol 16); got version=[$ver] protocol=[$proto]" ;;
-    *)
-      if [ "$proto" -ge 16 ]; then ok "Herdr $ver (protocol $proto)"
-      else bad "Herdr too old (protocol $proto)" "herdr update  (need protocol 16+; 0.7.4+)"; fi
-      ;;
-  esac
+  if command -v jq >/dev/null; then
+    proto=$(herdr status --json 2>/dev/null | jq -r '.client.protocol // empty' 2>/dev/null || true)
+    case "$proto" in
+      ''|*[!0-9]*) bad "Herdr protocol" "herdr update  (need 0.7.4+ / protocol 16); got version=[$ver] protocol=[$proto]" ;;
+      *)
+        if [ "$proto" -ge 16 ]; then ok "Herdr $ver (protocol $proto)"
+        else bad "Herdr too old (protocol $proto)" "herdr update  (need protocol 16+; 0.7.4+)"; fi
+        ;;
+    esac
+  else
+    echo "⚠️  Herdr protocol not checkable yet - fine, the first mate installs jq later (got version=[$ver])"
+  fi
 else
   echo "⚠️  Herdr not installed - OK if you chose tmux (step 2.5 skip). Say 'use tmux' after launch."
+fi
+
+else
+  echo "❌ clone missing - re-run step 2.6"
 fi
 ```
 
 You should see: a checklist of ✅ lines for Homebrew, git, node, gh, gh login, claude, and the clone.
-Herdr shows ✅ with protocol 16+, or the ⚠️ skip line if you chose tmux.
+Herdr shows ✅ with protocol 16+, the ⚠️ advisory when `jq` is not installed yet, or the ⚠️ skip line if you chose tmux.
 
 **Re-run this checkpoint after every fix.**
-Only when it is green, continue to step 4.
+Only when it has no ❌ lines, continue to step 4.
 
 ---
 
@@ -311,7 +320,7 @@ The finish line is a **slug round-trip**: a real worker, in an isolated copy, wr
 2. Type (paste your slug in place of `YOUR-SLUG`):
 
 ```text
-Dispatch a short test worker whose only job is to write the exact slug YOUR-SLUG into a file named onboarding-slug.txt inside its isolated worktree, then report done and quote the slug back to me. Do not change any project code.
+Dispatch a short test worker - use this firstmate folder itself for the test - whose only job is to write the exact slug YOUR-SLUG into a file named onboarding-slug.txt inside its isolated worktree, then report done and quote the slug back to me. Do not change any project code.
 ```
 
 3. Wait for the report.
@@ -323,6 +332,8 @@ done - wrote YOUR-SLUG to onboarding-slug.txt
 ```
 
 (or the same slug quoted in the first mate's plain-English summary)
+
+It may ask which project - answer: this folder (the firstmate checkout itself).
 
 That one green line proves the whole stack end to end: spawn, isolated copy, agent login, and the report channel.
 When your slug comes back, your setup is genuinely finished.

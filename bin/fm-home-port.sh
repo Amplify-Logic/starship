@@ -299,7 +299,7 @@ is_verified_harness() {
 }
 
 # Destination readiness checks from docs/porting.md plus backend/harness gates.
-# Prints VERIFY_PASS / VERIFY_FAIL per check; exits non-zero when any fails.
+# Prints VERIFY_PASS / VERIFY_FAIL / VERIFY_INFO per check; exits non-zero when any fails.
 cmd_verify() {
   local home=$FM_HOME failed=0
   local backend crew binary tool missing_tools bootstrap_out
@@ -327,6 +327,9 @@ cmd_verify() {
     printf 'VERIFY_FAIL: %s - %s\n' "$1" "$2"
     failed=1
   }
+  verify_info() {
+    printf 'VERIFY_INFO: %s - %s\n' "$1" "$2"
+  }
 
   # 1. Portable captain files present
   if [ -f "$home/data/captain.md" ] && [ -f "$home/data/learnings.md" ] && [ -f "$home/data/backlog.md" ]; then
@@ -335,11 +338,11 @@ cmd_verify() {
     verify_fail portable-files "missing one or more of data/captain.md, data/learnings.md, data/backlog.md"
   fi
 
-  # 2. .env was not imported (port never carries it; local creation is fine)
+  # 2. .env note (informational: port refuses .env by construction; local creation is fine)
   if [ -e "$home/.env" ]; then
-    verify_pass env "local .env present (port never imports .env; treat as machine-local)"
+    verify_info env "local .env present (port never imports .env; treat as machine-local)"
   else
-    verify_pass env "no .env present"
+    verify_info env "no .env present (port never imports .env)"
   fi
 
   # 3. Machine-local dirs exist (empty is fine)
