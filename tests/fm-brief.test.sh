@@ -384,6 +384,31 @@ test_scout_and_secondmate_scaffold() {
   pass "fm-brief: scout and secondmate code paths still scaffold well-formed briefs"
 }
 
+# Ship and scout Rules must point workers at the isolated browsing helper.
+test_ship_and_scout_point_at_isolated_browsing() {
+  local home id brief
+  home="$TMP_ROOT/browse-wire-home"
+  mkdir -p "$home/data"
+  for kind in ship scout; do
+    id="brief-browse-wire-$kind"
+    if [ "$kind" = scout ]; then
+      FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" firstmate --scout >/dev/null 2>&1
+    else
+      FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" firstmate >/dev/null 2>&1
+    fi
+    brief="$home/data/$id/brief.md"
+    assert_grep "bin/fm-browse-session.sh start <task-id>" "$brief" \
+      "$kind brief missing isolated browsing start helper"
+    assert_grep "stop <task-id> --purge" "$brief" \
+      "$kind brief missing isolated browsing stop --purge"
+    assert_grep "docs/worker-browsing.md" "$brief" \
+      "$kind brief missing pointer to docs/worker-browsing.md"
+    assert_grep "never attaches to the captain's own Chrome" "$brief" \
+      "$kind brief missing never-attach-to-captain-Chrome hard rule"
+  done
+  pass "fm-brief.sh: ship and scout scaffolds point at isolated browsing"
+}
+
 test_script_parses
 test_help_includes_entire_header
 test_ship_modes_generate_clean_briefs
@@ -399,3 +424,4 @@ test_secondmate_marked_request_reporting_contract
 test_pause_verb_override_renders_all_brief_scaffolds
 test_scout_and_secondmate_load_decision_hold_policy
 test_scout_and_secondmate_scaffold
+test_ship_and_scout_point_at_isolated_browsing
