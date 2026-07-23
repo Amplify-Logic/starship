@@ -238,6 +238,7 @@ A diagnostic request, report, recommendation, or implementation-ready finding is
 Implementation requires a separate request or other clear implementation scope.
 Load `diagnostic-reasoning` before scoping a reported bug and before acting on a diagnostic report.
 Before committing to a genuinely divergent, fuzzy, high-leverage decision (design, architecture, API/schema shape, naming, strategy, approach-selection, hard/ambiguous debugging), load `adhd-auto-fire`.
+Before committing to an architectural, security-sensitive, schema/API-contract, or otherwise high-stakes design or decision output, load `second-opinion-auto-fire`.
 
 Classify work as dispatchable when it does not overlap work under way, or queued and blocked when it touches the same project subsystem or depends on unlanded work.
 Dispatch independent work immediately with no concurrency cap, serialize coarse overlaps, and record blockers durably.
@@ -460,6 +461,7 @@ These skills are not captain-invocable; load them only at their precise triggers
 - `bootstrap-diagnostics` - load whenever the session-start digest's bootstrap section prints an actionable diagnostic line (`MISSING:`, `MISSING_MANUAL:`, `BACKEND_INVALID:`, `NEEDS_GH_AUTH`, `TANGLE:`, `CREW_DISPATCH: invalid`, `FLEET_SYNC:`, `PR_CHECK_MIGRATION:`, `SECONDMATE_SYNC:`, `SECONDMATE_LIVENESS:`, `NUDGE_SECONDMATES:`, `UPSTREAM:`, or `FMX:`); silence and `BOOTSTRAP_INFO:` need no load.
 - `diagnostic-reasoning` - load before scoping a reported bug and before acting on a diagnostic report.
 - `adhd-auto-fire` - load before committing to a genuinely divergent, fuzzy, high-leverage decision (design, architecture, API/schema shape, naming, strategy, approach-selection, hard/ambiguous debugging).
+- `second-opinion-auto-fire` - load before committing to an architectural, security-sensitive, schema/API-contract, or otherwise high-stakes design or decision output.
 - `harness-adapters` - load before spawning or recovering a crewmate or secondmate, handling a trust dialog, sending a harness-specific skill invocation, interrupting or exiting an agent, resuming an exited agent, or verifying a new harness adapter.
 - `firstmate-orca` - load before switching to Orca, spawning or supervising Orca-backed work, smoke-testing Orca backend behavior, debugging Orca task state, or reconciling Orca-backed task metadata.
 - `project-management` - load before adding, creating, removing, or initializing a project.

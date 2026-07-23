@@ -22,6 +22,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-backlog-handoff.sh`  | Validate and delegate queued backlog-item moves into a secondmate home               |
 | `fm-decision-hold.sh`    | Create, verify, complete, and resolve durable captain-held decisions                 |
 | `fm-adhd.sh`             | Bounded ADHD divergent-ideation wrapper; writes distilled CLI output and refuses when `adhd` is absent (docs/adhd.md) |
+| `fm-second-opinion.sh`   | Bounded rival-model second-opinion wrapper; hostile review via Pi, neutral cwd, Codex quota floor (docs/second-opinion.md) |
 | `fm-browse-session.sh`   | Isolated per-task chrome-devtools-axi sessions with per-task profiles; never attaches to the captain's Chrome (docs/worker-browsing.md) |
 | `fm-action-gateway.sh`   | Stub outward-action gateway: validate ActionRequest, durable audit append, always confirm-first, no execution (docs/action-gateway.md) |
 | `fm-brief.sh`            | Scaffold ship, scout, secondmate-charter, and Herdr-lab briefs                       |
