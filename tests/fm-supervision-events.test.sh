@@ -78,6 +78,30 @@ fi
 grep -q 'absorbed push' "$STATE_DIR/.watch-triage.log" 2>/dev/null || fail "the paused absorb should be logged to the triage log"
 pass "handle_push_transition: a declared-pause crew is absorbed (no fast wake), left to the poll loop's long cadence"
 
+# --- handle_push_transition: absorb captain-held idle cursor (park churn) -----
+# A DONE-but-captain-held crew sits at an idle Cursor/herdr composer. Herdr
+# reports that as blocked (waiting on human). Without the park exemption, every
+# fresh watcher cycle level-reconciles that blocked edge into an immediate stale
+# wake and forces re-arm churn. The idle pane is expected; absorb like paused.
+
+reset_state
+fm_write_meta "$STATE_DIR/tk-park.meta" "window=default:wP:p4" "backend=herdr" "kind=ship" "harness=cursor"
+printf 'captain-held [key=merge]: PR waiting for captain approval\n' > "$STATE_DIR/tk-park.status"
+# shellcheck disable=SC2329  # invoked indirectly by handle_push_transition
+fm_backend_capture() {
+  printf '  → Add a follow-up\n\n  Cursor Grok 4.5 Low · 7%%                                   Run Everything\n'
+}
+handle_push_transition herdr default "$(fm_transition_record wP:p4 wP "" blocked cursor)"
+if [ -e "$STATE_DIR/.wake-queue" ] && grep -q 'stale' "$STATE_DIR/.wake-queue"; then
+  fail "a captain-held idle pane must NOT be fast-escalated as waiting on human: $(cat "$STATE_DIR/.wake-queue")"
+fi
+[ ! -s "$WAKE_LOG" ] || fail "a captain-held idle pane must not wake the supervisor from the event fast-path"
+[ -e "$STATE_DIR/.herdr-escalated-default_wP_p4" ] \
+  || fail "captain-held absorb must commit the dedupe marker so reconnect reconcile cannot re-arm-churn"
+grep -q 'absorbed push' "$STATE_DIR/.watch-triage.log" 2>/dev/null \
+  || fail "the captain-held absorb should be logged to the triage log"
+pass "handle_push_transition: a captain-held idle cursor pane is absorbed (no park-churn stale wake)"
+
 # --- handle_push_transition: busy cursor footer absorbs false blocked (wP:p4) -
 
 reset_state

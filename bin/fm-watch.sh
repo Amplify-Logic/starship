@@ -671,26 +671,28 @@ event_wait_or_sleep() {
 
 # handle_push_transition: act on a fresh actionable (blocked) transition record
 # the backend returned. Maps the pane back to its window and task, applies the
-# declared-pause exemption (a crew waiting on a known external dependency is not
-# a surprise block - absorb it on the poll loop's long pause cadence instead),
-# corroborates against the rendered busy footer (herdr can report blocked while
-# a harness is mid-turn - cursor's "ctrl+c to stop" on default:wP:p4, 2026-07-19;
-# a genuine human-blocked pane has no busy banner), and otherwise enqueues an
-# immediate `stale` wake and wakes the supervisor. The `stale` kind is
-# deliberate: the supervisor's handler for it ("peek the pane to diagnose") is
-# exactly right for a blocked crew, and the drain/dedupe/guard machinery already
-# understands it (queued by key=window, so a later poll-path stale for the same
-# pane collapses on drain).
+# park exemption (a declared paused: wait OR a captain-held: transfer is not a
+# surprise block - the idle pane is expected; absorb it and leave rechecks to
+# the poll loop's long pause cadence instead of forcing a re-arm), corroborates
+# against the rendered busy footer (herdr can report blocked while a harness is
+# mid-turn - cursor's "ctrl+c to stop" on default:wP:p4, 2026-07-19; a genuine
+# human-blocked pane has no busy banner), and otherwise enqueues an immediate
+# `stale` wake and wakes the supervisor. The `stale` kind is deliberate: the
+# supervisor's handler for it ("peek the pane to diagnose") is exactly right for
+# a blocked crew, and the drain/dedupe/guard machinery already understands it
+# (queued by key=window, so a later poll-path stale for the same pane collapses
+# on drain).
 handle_push_transition() {  # <backend> <session> <record>
-  local backend=$1 session=$2 record=$3 pane_id to window task reason tail40
+  local backend=$1 session=$2 record=$3 pane_id to window task reason tail40 last
   pane_id=$(fm_transition_pane_id "$record")
   to=$(fm_transition_to_status "$record")
   [ -n "$pane_id" ] || { sleep 1; return; }
   window="$session:$pane_id"
   task=$(window_to_task "$window" "$STATE")
   "$SCRIPT_DIR/fm-visible-status.sh" "$task" >/dev/null 2>&1 || true
-  if status_is_paused "$(last_status_line "$STATE/$task.status")"; then
-    triage_log "absorbed push $to (declared pause, awaiting external): $window"
+  last=$(last_status_line "$STATE/$task.status")
+  if status_is_paused_or_captain_held "$last"; then
+    triage_log "absorbed push $to (parked status, awaiting external or captain): $window"
     fm_backend_commit_transition "$backend" "$STATE" "$session" "$record" || exit 1
     return
   fi
