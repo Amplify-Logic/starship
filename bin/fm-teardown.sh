@@ -1146,6 +1146,12 @@ fm_backend_clear_transition "$BACKEND" "$STATE" "$T" || true
 # Remove the per-task temp root (/tmp/fm-<id>/, incl. its gotmp/) recorded by spawn.
 # Read before the state-file rm below; empty (pre-fix tasks without tasktmp=) is a no-op.
 [ -n "$TASK_TMP" ] && rm -rf "$TASK_TMP"
+# Best-effort: close the isolated browse session and purge state/browse/<id>/.
+# Session close never blocks teardown (docs/worker-browsing.md).
+if [ -x "$FM_ROOT/bin/fm-browse-session.sh" ]; then
+  "$FM_ROOT/bin/fm-browse-session.sh" stop "$ID" --purge >/dev/null 2>&1 || true
+fi
+rm -rf "$STATE/browse/$ID"
 remove_pr_poll_artifacts "$STATE" "$ID" || exit 1
 # Record capability evidence before meta disappears (ship/scout only; best-effort).
 fm_capability_record_teardown "$KIND" "$FORCE" "$HARNESS" "$MODEL" "$EFFORT" "$TASK_TYPE"
