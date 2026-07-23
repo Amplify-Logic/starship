@@ -13,7 +13,8 @@
 #
 # Reviewer registry (data-driven; add rows without changing callers):
 #   sol  -> pi --print --model openai-codex/gpt-5.6-sol --thinking xhigh
-# Only `sol` is verified. Unknown names refuse loudly.
+#   k3   -> kimi --model kimi-code/k3 --prompt <hostile-review-prompt>
+# Only `sol` and `k3` are verified. Unknown names refuse loudly.
 #
 # Never sets or requires ANTHROPIC_API_KEY or OPENAI_API_KEY; strips ambient ones
 # so the Pi -> Codex/OpenAI subscription path stays in force.
@@ -61,7 +62,7 @@ refuse_missing_cli() {
   local name=$1
   cat <<EOF >&2
 fm-second-opinion: reviewer binary not found on PATH: ${name}
-Install or restore the fleet Pi dependency, then retry.
+Install or restore the reviewer CLI (Pi for sol, kimi for k3), then retry.
 See docs/second-opinion.md.
 EOF
   exit 127
@@ -77,8 +78,15 @@ resolve_reviewer() {
       REVIEWER_BIN_NAME=pi
       REVIEWER_ARGS=(--print --model openai-codex/gpt-5.6-sol --thinking xhigh)
       ;;
+    k3)
+      # Kimi Code K3 via non-interactive --prompt (PROMPT is the next argv after
+      # --prompt). Must run from a neutral cwd like sol - never the proposal repo.
+      REVIEWER_LABEL='k3'
+      REVIEWER_BIN_NAME=kimi
+      REVIEWER_ARGS=(--model kimi-code/k3 --prompt)
+      ;;
     *)
-      fail "unknown reviewer: $1 (verified: sol)"
+      fail "unknown reviewer: $1 (verified: sol, k3)"
       ;;
   esac
 }
@@ -118,6 +126,8 @@ codex_general_remaining() {
 
 check_quota_floor() {
   local remaining floor
+  # Codex subscription floor applies only to the sol reviewer path.
+  [ "$REVIEWER_LABEL" = sol ] || return 0
   floor=$FM_SECOND_OPINION_QUOTA_FLOOR
   remaining=$(codex_general_remaining)
   case "$remaining" in

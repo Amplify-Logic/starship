@@ -33,7 +33,7 @@
 #   profile consultation. A --secondmate spawn is exempt and resolves the SECONDMATE
 #   harness (config/secondmate-harness -> config/crew-harness -> own), so the
 #   secondmate-vs-crewmate split is DURABLE across every respawn (recovery,
-#   /updatefirstmate, restart). A bare adapter name (claude|codex|opencode|pi|grok|cursor)
+#   /updatefirstmate, restart). A bare adapter name (claude|codex|opencode|pi|grok|cursor|kimi)
 #   overrides it for this spawn (either kind). A non-flag string containing
 #   whitespace is treated as a RAW launch command - the escape hatch for verifying
 #   new adapters.
@@ -336,7 +336,7 @@ FIRSTMATE_HOME=
 
 if [ "$KIND" = secondmate ]; then
   case "${POS[1]:-}" in
-    ''|claude|codex|opencode|pi|grok|cursor)
+    ''|claude|codex|opencode|pi|grok|cursor|kimi)
       ARG3=${POS[1]:-}
       ;;
     *' '*)
@@ -411,6 +411,13 @@ launch_template() {
     # Effort is folded into the MODEL ID by cursor_model_with_effort (this CLI has
     # no effort flag), so there is no __EFFORTFLAG__ here by design.
     cursor) printf '%s' 'agent --yolo --workspace __WORKTREE__ __MODELFLAG__"$(cat __BRIEF__)"' ;;
+    # kimi (Kimi Code CLI): --yolo auto-approves tool execution (TUI footer token
+    # `yolo`, verified 2026-07-21/2026-07-23 on 0.27.0). Cannot combine --prompt
+    # with --yolo, and there is no positional interactive brief, so the brief is
+    # delivered after the TUI settles (post-launch send below). Turn-end is a
+    # Stop hook in a per-task isolated KIMI_CODE_HOME (project hooks do not load;
+    # verified 2026-07-23). Default model is kimi-code/k3 via __MODELFLAG__.
+    kimi) printf '%s' 'KIMI_CODE_HOME=__KIMIHOME__ kimi --yolo __MODELFLAG__' ;;
     *) return 1 ;;
   esac
 }
@@ -436,6 +443,7 @@ launch_binary_install_hint() {  # <binary>
     pi) printf '%s' 'npm install -g @mariozechner/pi-coding-agent' ;;
     grok) printf '%s' 'curl -fsSL https://x.ai/cli/install.sh | bash' ;;
     agent) printf '%s' 'curl https://cursor.com/install -fsS | bash' ;;
+    kimi) printf '%s' 'curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash' ;;
     *) return 1 ;;
   esac
 }
@@ -616,6 +624,10 @@ cursor_model_with_effort() {  # <model> <effort>
 # bare (gpt-5.2, composer-2.5), others only tier-suffixed. No prefix/parent
 # acceptance, so we never record a meta model the CLI would reject.
 LAUNCH_MODEL=$MODEL
+# kimi worker default model matches the verified primary pin (kimi-code/k3).
+if [ "$HARNESS" = kimi ] && { [ -z "$LAUNCH_MODEL" ] || [ "$LAUNCH_MODEL" = default ]; }; then
+  LAUNCH_MODEL=kimi-code/k3
+fi
 if [ "$HARNESS" = cursor ]; then
   LAUNCH_MODEL=$(cursor_model_with_effort "$MODEL" "$EFFORT")
   if [ -n "$LAUNCH_MODEL" ] && [ "$LAUNCH_MODEL" != default ]; then
@@ -638,7 +650,7 @@ model_flag_for_harness() {
   local harness=$1 model=$2
   [ -n "$model" ] && [ "$model" != default ] || return 0
   case "$harness" in
-    claude|codex|opencode|pi|grok|cursor)
+    claude|codex|opencode|pi|grok|cursor|kimi)
       printf -- '--model %s ' "$(shell_quote "$model")"
       ;;
   esac
@@ -1259,6 +1271,55 @@ EOF
   esac
 fi
 
+# kimi isolated worker home (always): auth + config for KIMI_CODE_HOME. Stop
+# turn-end hook only for non-secondmate (same skip as other harness turn-end hooks).
+if [ "$HARNESS" = kimi ] && [ "$RAW_LAUNCH" -eq 0 ]; then
+  # kimi fires a native Stop hook at every turn boundary (verified 2026-07-23
+  # on Kimi Code 0.27.0: UserPromptSubmit then Stop with stop_hook_active=false
+  # after a completed TUI turn). Project-local config/plugin hooks under the
+  # worktree do NOT load (same lab: marker stayed empty). Hooks live in
+  # KIMI_CODE_HOME/config.toml, so fm-spawn builds a per-task isolated home
+  # under state/ (never edits the captain's ~/.kimi-code), links auth from the
+  # source home, and installs one Stop command that touches TURNEND.
+  KIMI_WORKER_HOME="$STATE_REAL/$ID.kimi-home"
+  KIMI_SOURCE_HOME=${FM_KIMI_SOURCE_HOME:-${KIMI_CODE_HOME:-$HOME/.kimi-code}}
+  mkdir -p "$KIMI_WORKER_HOME/hooks"
+  if [ -f "$KIMI_SOURCE_HOME/config.toml" ]; then
+    # Strip source [[hooks]] blocks so captain/herdr hooks are not duplicated
+    # into the worker home; keep providers/models/auth settings.
+    awk '
+      BEGIN { skip=0 }
+      /^\[\[hooks\]\]/ { skip=1; next }
+      skip==1 {
+        if ($0 ~ /^\[/ && $0 !~ /^\[\[hooks\]\]/) { skip=0; print; }
+        next
+      }
+      { print }
+    ' "$KIMI_SOURCE_HOME/config.toml" > "$KIMI_WORKER_HOME/config.toml"
+  else
+    : > "$KIMI_WORKER_HOME/config.toml"
+  fi
+  for _kimi_link in credentials oauth device_id; do
+    if [ -e "$KIMI_SOURCE_HOME/$_kimi_link" ] && [ ! -e "$KIMI_WORKER_HOME/$_kimi_link" ]; then
+      ln -s "$KIMI_SOURCE_HOME/$_kimi_link" "$KIMI_WORKER_HOME/$_kimi_link"
+    fi
+  done
+  if [ "$KIND" != secondmate ]; then
+    cat > "$KIMI_WORKER_HOME/hooks/fm-turn-end.sh" <<EOF
+#!/usr/bin/env bash
+touch $(shell_quote "$TURNEND") 2>/dev/null || true
+exit 0
+EOF
+    chmod +x "$KIMI_WORKER_HOME/hooks/fm-turn-end.sh"
+    {
+      printf '\n[[hooks]]\n'
+      printf 'event = "Stop"\n'
+      printf 'command = "bash %s"\n' "$(shell_quote "$KIMI_WORKER_HOME/hooks/fm-turn-end.sh")"
+      printf 'timeout = 10\n'
+    } >> "$KIMI_WORKER_HOME/config.toml"
+  fi
+fi
+
 # Per-project delivery mode + yolo flag (bin/fm-project-mode.sh; the project-management skill and AGENTS.md task lifecycle).
 # Recorded in meta so fm-teardown's safety check and the validate/merge stages can
 # branch on them. Mode governs ship tasks; a scout's deliverable is a report, not a
@@ -1294,6 +1355,8 @@ META_WINDOW=$T
     if [ -n "$MODEL" ] && [ "$MODEL" != default ] && [ "$MODEL" != "$LAUNCH_MODEL" ]; then
       echo "model_requested=$MODEL"
     fi
+  elif [ "$HARNESS" = kimi ] && [ -n "$LAUNCH_MODEL" ]; then
+    echo "model=$LAUNCH_MODEL"
   else
     echo "model=${MODEL:-default}"
   fi
@@ -1354,6 +1417,10 @@ LAUNCH=${LAUNCH//__TURNEND__/$sq_turnend}
 LAUNCH=${LAUNCH//__PIEXT__/$sq_piext}
 LAUNCH=${LAUNCH//__PITURNEND__/$sq_piturnend}
 LAUNCH=${LAUNCH//__PIWATCH__/$sq_piwatch}
+if [ "$HARNESS" = kimi ] && [ "$RAW_LAUNCH" -eq 0 ]; then
+  sq_kimihome=$(shell_quote "$STATE_REAL/$ID.kimi-home")
+  LAUNCH=${LAUNCH//__KIMIHOME__/$sq_kimihome}
+fi
 if [ "$KIND" = secondmate ]; then
   sq_home=$(shell_quote "$PROJ_ABS")
   LAUNCH="FM_ROOT_OVERRIDE= FM_STATE_OVERRIDE= FM_DATA_OVERRIDE= FM_PROJECTS_OVERRIDE= FM_CONFIG_OVERRIDE= FM_HOME=$sq_home $LAUNCH"
@@ -1366,5 +1433,13 @@ sleep 0.3
 spawn_send_literal "$T" "$LAUNCH"
 sleep 0.3
 spawn_send_key "$T" Enter
+# kimi: no positional interactive brief and --prompt cannot combine with --yolo
+# (verified 2026-07-21/2026-07-23). Deliver the brief after the TUI settles.
+if [ "$HARNESS" = kimi ] && [ "$RAW_LAUNCH" -eq 0 ]; then
+  sleep "${FM_KIMI_BRIEF_SETTLE_SECS:-2}"
+  spawn_send_literal "$T" "$(cat "$BRIEF")"
+  sleep 0.5
+  spawn_send_key "$T" Enter
+fi
 
 echo "spawned $ID harness=$HARNESS kind=$KIND mode=$MODE yolo=$YOLO window=$META_WINDOW worktree=$WT"

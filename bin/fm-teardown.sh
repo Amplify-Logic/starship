@@ -1014,6 +1014,7 @@ cleanup_firstmate_home_children() {
     remove_grok_turnend_auth "$sub_state" "$child_id"
     remove_pr_poll_artifacts "$sub_state" "$child_id" || return 1
     rm -f "$sub_state/$child_id.status" "$sub_state/$child_id.turn-ended" "$sub_state/$child_id.meta" "$sub_state/$child_id.pi-ext.ts" "$sub_state/$child_id.grok-turnend-token"
+    rm -rf "$sub_state/$child_id.kimi-home"
   done
 }
 
@@ -1156,6 +1157,7 @@ remove_pr_poll_artifacts "$STATE" "$ID" || exit 1
 # Record capability evidence before meta disappears (ship/scout only; best-effort).
 fm_capability_record_teardown "$KIND" "$FORCE" "$HARNESS" "$MODEL" "$EFFORT" "$TASK_TYPE"
 rm -f "$STATE/$ID.status" "$STATE/$ID.turn-ended" "$STATE/$ID.meta" "$STATE/$ID.pi-ext.ts" "$STATE/$ID.grok-turnend-token"
+rm -rf "$STATE/$ID.kimi-home"
 "$FM_ROOT/bin/fm-visible-status.sh" --all >/dev/null 2>&1 || true
 if [ "$KIND" != scout ] && [ "$KIND" != secondmate ] && [ "$MODE" != local-only ]; then
   "$FM_ROOT/bin/fm-fleet-sync.sh" "$PROJ" || true

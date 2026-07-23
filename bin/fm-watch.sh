@@ -118,7 +118,11 @@ SIGNAL_GRACE=${FM_SIGNAL_GRACE:-30}   # seconds to linger after a signal so trai
 # cursor: "ctrl+c to stop" (verified 2026-07-19, Cursor CLI 2026.07.16-899851b).
 # cursor's spinner VERB is deliberately not matched - it changes mid-turn
 # ("Working" -> "Running" during a tool call) while the footer hint stays put.
-BUSY_REGEX=${FM_BUSY_REGEX:-'esc (to )?interrupt|Working\.\.\.|Ctrl\+c:cancel|ctrl\+c to stop'}
+# kimi: "thinking..." (reasoning phase) or "Running a command" (tool phase);
+# verified 2026-07-23 on Kimi Code 0.27.0. Do NOT match bare "thinking" - the idle
+# footer is "K3 thinking: max/high" and would false-positive. Moon-phase spinner
+# glyphs alone are not matched (not ASCII-stable).
+BUSY_REGEX=${FM_BUSY_REGEX:-'esc (to )?interrupt|Working\.\.\.|Ctrl\+c:cancel|ctrl\+c to stop|thinking\.\.\.|Running a command'}
 # Always-on wake triage: most wakes during a long crew validation are benign (a
 # working: note or turn-end while a pipeline runs, a no-change heartbeat). Rather
 # than wake firstmate's LLM for each, this watcher classifies every wake in bash

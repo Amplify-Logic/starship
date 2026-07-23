@@ -232,7 +232,8 @@ test_verify_fails_unknown_backend_and_unverified_harness() {
   local home="$TMP_ROOT/verify-bad-config" out rc=0 fakebin
   seed_home "$home"
   printf 'not-a-backend\n' > "$home/config/backend"
-  printf 'kimi\n' > "$home/config/crew-harness"
+  # kimi is a verified worker (2026-07-23); use a deliberately unverified name here.
+  printf 'spaceship\n' > "$home/config/crew-harness"
   rm -f "$home/config/crew-dispatch.json"
   fakebin=$(make_verify_fakebin "$TMP_ROOT/verify-bad-config-bin")
   out=$(PATH="$fakebin:$BASE_PATH" FM_ROOT_OVERRIDE="$ROOT" "$PORT" verify --home "$home" 2>&1) || rc=$?

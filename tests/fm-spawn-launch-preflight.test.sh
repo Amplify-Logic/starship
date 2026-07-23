@@ -3,7 +3,7 @@
 #
 # These tests use a fake tmux endpoint and real isolated git worktrees.
 # The missing-binary case asserts refusal before tmux is touched or task meta is written.
-# The healthy cases assert all six verified launch templates still reach the normal spawn path.
+# The healthy cases assert all seven verified launch templates still reach the normal spawn path.
 # Raw launch commands remain exempt because arbitrary shell syntax cannot be resolved reliably without executing it.
 set -u
 
@@ -104,6 +104,8 @@ test_missing_verified_binary_refuses_before_endpoint_creation() {
 
 test_present_verified_binaries_spawn_as_before() {
   local harness launch_binary out status
+  # kimi post-launch brief settle is irrelevant to preflight; keep the suite fast.
+  export FM_KIMI_BRIEF_SETTLE_SECS=0
   while IFS='|' read -r harness launch_binary; do
     make_spawn_case "present-$harness" "$harness" "$launch_binary"
 
@@ -123,8 +125,9 @@ opencode|opencode
 pi|pi
 grok|grok
 cursor|agent
+kimi|kimi
 EOF
-  pass "all six verified adapters preflight and spawn normally when their binaries are present"
+  pass "all seven verified adapters preflight and spawn normally when their binaries are present"
 }
 
 test_raw_launch_command_remains_exempt() {

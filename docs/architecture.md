@@ -85,9 +85,9 @@ On an unmarked return, `bin/fm-afk-return.sh` owns ordered shutdown, durable cat
 
 Kimi Code 0.27.0 was validated as a primary only, using Herdr 0.7.4 in a generated non-default session, isolated Firstmate and Kimi homes, and a plain scratch clone.
 Every operator Herdr call used the landed `bin/fm-herdr-lab.sh`; no probe ran in the captain's `default` session.
-Kimi worker support was not tested or enabled.
-A later partial worker lab (2026-07-21) recorded launch, composer, exit, and resume only.
-Busy signature, interrupt, and turn-end stayed UNVERIFIED under a billing-cycle `403`, and worker dispatch remains refused — see `docs/kimi-harness.md`.
+Kimi worker support was not tested in that primary lab.
+A later partial worker lab (2026-07-21) recorded launch, composer, exit, and resume only; busy, interrupt, and turn-end stayed blocked by a billing-cycle `403`.
+Worker certification completed 2026-07-23 on Kimi Code 0.27.0 — see `docs/kimi-harness.md`.
 
 The installed CLI advertised these exact permission choices:
 

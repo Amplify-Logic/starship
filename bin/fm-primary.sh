@@ -45,7 +45,8 @@
 # writes state/.primary-active for bin/fm-primary-handoff.sh; disabled or absent
 # config leaves that marker unwritten (docs/primary-handoff.md).
 #
-# Kimi 0.27.0 is primary-only.
+# Kimi 0.27.0 is verified as a PRIMARY here and, separately, as a WORKER via
+# fm-spawn --harness kimi (docs/kimi-harness.md, 2026-07-23).
 # The launcher requires that exact empirically verified version and builds a
 # persistent isolated KIMI_CODE_HOME under this Firstmate home's data directory.
 # It copies the selected source config, links only required authentication and

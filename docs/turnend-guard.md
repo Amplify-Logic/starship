@@ -178,6 +178,7 @@ The normal worker trial repeated that path with a real isolated Codex worker and
 ## Tests
 
 `tests/fm-turnend-guard.test.sh` covers the shared predicate, primary scoping (including a secondmate's own home being guarded like the main primary while its child worktrees stay exempt), `FM_HOME` and `FM_STATE_OVERRIDE` precedence, Pi logical-run latch behavior for no-tool and multi-tool runs, fail-open behavior without `jq`, tracked hook registration for the five repository-native adapters, and the Grok adapter's forced-resume loop guard and permission-mode regression.
-`tests/fm-primary.test.sh` verifies the managed Kimi Stop hook registration and primary-only boundary.
+`tests/fm-primary.test.sh` verifies the managed Kimi Stop hook registration and primary lifecycle boundary.
+`tests/fm-kimi-worker.test.sh` covers the separate worker Stop-hook home under `state/<id>.kimi-home`.
 The default behavior suite does not invoke live language-model harnesses.
 `FM_PI_LIVE_E2E=1 tests/fm-pi-primary-live-e2e.test.sh` opts into the isolated interactive Pi regression recorded above.

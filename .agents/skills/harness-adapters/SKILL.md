@@ -1,6 +1,6 @@
 ---
 name: harness-adapters
-description: Agent-only reference for firstmate harness operations. Use before spawning or recovering a crewmate or secondmate, handling a trust dialog, sending a harness-specific skill invocation, interrupting or exiting an agent, resuming an exited agent, or verifying a new harness adapter. Contains verified worker facts for claude, codex, opencode, pi, grok, and cursor; Cursor and Kimi primary facts; and the Kimi partial worker refuse-dispatch record.
+description: Agent-only reference for firstmate harness operations. Use before spawning or recovering a crewmate or secondmate, handling a trust dialog, sending a harness-specific skill invocation, interrupting or exiting an agent, resuming an exited agent, or verifying a new harness adapter. Contains verified worker facts for claude, codex, opencode, pi, grok, cursor, and kimi; Cursor and Kimi primary facts.
 user-invocable: false
 metadata:
   internal: true
@@ -30,9 +30,9 @@ The primary-session "no turn ends blind" guard contract and harness hook install
 The primary-session watcher wake protocols are rendered from `docs/supervision-protocols/` by `bin/fm-supervision-instructions.sh`.
 The supervision knowledge lives here: busy signature, exit command, interrupt, dialogs, resume behavior, skill invocation, and quirks.
 
-The verified WORKER adapters are `claude`, `codex`, `opencode`, `pi`, `grok`, and `cursor`.
+The verified WORKER adapters are `claude`, `codex`, `opencode`, `pi`, `grok`, `cursor`, and `kimi`.
 `cursor` is also verified as a PRIMARY through `bin/fm-primary.sh cursor-grok` (Cursor CLI `2026.07.20-8cc9c0b`, 2026-07-22 lab); never infer worker facts from primary facts or the reverse.
-Kimi remains primary-only: never launch a firstmate primary on an unverified adapter, and never pass `kimi` to `fm-spawn`.
+Kimi is verified as a PRIMARY through `bin/fm-primary.sh kimi-k3` and, separately, as a WORKER through `fm-spawn --harness kimi` (Kimi Code 0.27.0, 2026-07-23 lab); never infer one role from the other.
 
 Never dispatch a crewmate or secondmate on an unverified adapter.
 If `config/crew-harness` or `config/secondmate-harness` names an unverified adapter, tell the captain under `AGENTS.md` section 9 that the requested worker runtime is not verified yet, use firstmate's own verified runtime for current work, and ask only whether to verify the requested runtime before future use.
@@ -110,33 +110,29 @@ When changing any primary watcher adapter, update `docs/supervision-protocols/`,
 Claude uses its native tracked project status-line command, Pi uses its native tracked custom-footer extension, and Kimi 0.27.0 uses a guarded one-row tmux companion because its plugin API cannot render the native footer.
 Cursor primary is certified, but Cursor CLI exposes no third-party status-line API, so `bin/fm-primary.sh cursor-grok` installs no companion bar.
 
-## Kimi primary-only boundary (worker dispatch refused)
+## Kimi worker + primary (WORKER verified 2026-07-23 on 0.27.0; PRIMARY certified 2026-07-19)
 
-Kimi Code support is pinned to 0.27.0 and K3 through `bin/fm-primary.sh kimi-k3` with `--yolo`.
-The launcher supplies `FM_PRIMARY_HARNESS=kimi` because Kimi does not expose a stable native child-process marker.
+Kimi Code support is pinned for PRIMARY launch through `bin/fm-primary.sh kimi-k3` with `--yolo` on exactly 0.27.0.
+The primary launcher supplies `FM_PRIMARY_HARNESS=kimi` because Kimi does not expose a stable native child-process marker.
 Its isolated managed plugin owns native session-start skill injection plus blockable PreToolUse and Stop hooks without editing the operator's source Kimi home.
-Do not pass `kimi` to `fm-spawn` or infer worker support from primary support.
-Worker dispatch stays refused until a complete worker certification lands: `kimi` is not in `fm-spawn`'s verified worker set, and partial evidence must not be treated as authorization to launch crewmates or secondmates on it.
 
-`docs/kimi-harness.md` owns the dated partial WORKER lab record (2026-07-21, Kimi Code 0.27.0, isolated Herdr lab).
-
-Partial worker surfaces verified live on that date (not enough for dispatch):
+Worker launch: `KIMI_CODE_HOME=<state>/<id>.kimi-home kimi --yolo --model kimi-code/k3`.
+`--prompt` cannot combine with `--yolo`, and there is no positional interactive brief, so `fm-spawn` delivers the brief after the TUI settles.
+`docs/kimi-harness.md` owns the dated worker evidence.
 
 | Fact | Value |
 |---|---|
-| Launch / autonomy | `kimi --yolo --model kimi-code/k3` (TUI: `Version: 0.27.0`, `Model: K3`, `yolo`). No positional interactive brief; `--prompt` cannot combine with `--yolo`. |
+| Busy-pane signature | `thinking...` (reasoning) or `Running a command` (tool). Do NOT match bare `thinking` - idle footer is `K3 thinking: max/high`. |
+| Exit command | `/exit` (one Enter through slash autocomplete closes the pane). |
+| Interrupt | single `Ctrl+C` (cancels the turn; pane survives; prints `Interrupted by user`). |
+| Autonomy | `--yolo` (footer token `yolo`). |
+| Resume | `kimi --yolo --model kimi-code/k3 --continue` |
 | Trust | No trust dialog on a fresh git worktree. |
 | Composer | Bordered idle `> ` classifies `empty`; typed text classifies `pending`; bare `>` is `unknown`. No `FM_COMPOSER_IDLE_RE` override. |
-| Exit | `/exit` (one Enter through slash autocomplete closes the pane). |
-| Resume | `kimi --yolo --model kimi-code/k3 --continue` restores the durable session for that cwd. |
+| Turn-end | Native `Stop` hook in per-task isolated `KIMI_CODE_HOME/config.toml` (project worktree hooks do not load). |
+| Liveness | `pane_current_command` / process name `kimi` (argv0 `kimi-code`); tmux marks `*kimi*` alive. |
 
-Worker surfaces explicitly UNVERIFIED on 2026-07-21 because every model call returned billing-cycle `403 You've reached your usage limit for this billing cycle`:
-
-- Busy-pane signature for watcher / tmux defaults (do not copy another harness's busy regex).
-- Interrupt of a running turn (do not copy primary interrupt facts into the worker record).
-- Crewmate turn-end hook path (Stop never fired in the worker lab).
-
-Live Kimi primary facts, verified on Kimi Code 0.27.0 in the isolated 2026-07-19 Herdr lab (primary only; not worker authorization):
+Live Kimi primary facts, verified on Kimi Code 0.27.0 in the isolated 2026-07-19 Herdr lab (primary role; still authoritative for primary supervision):
 
 - Foreground turns move Herdr from `working` to `idle`, but Kimi background Bash tasks also count as activity, so never treat Herdr status alone as conversational settlement or proof of supervision.
 - Herdr's detected `agent_session` can lag after Kimi switches sessions in-process; durable Kimi session state and the TUI are authoritative for `/new` and `/sessions` outcomes.
@@ -170,6 +166,7 @@ The supported launch-profile flags below are verified locally; each row records 
 | pi | `--model <model>` | `--thinking <low\|medium\|high\|xhigh\|max>` | Verified 2026-07-13 on Pi 0.80.6. `pi --help` advertises `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`; `pi --print --model openai-codex/gpt-5.6-sol --thinking max 'Reply with exactly OK.'` completed successfully. |
 | opencode | `--model <provider/model>` | none for firstmate's interactive launch | Verified on opencode 1.17.6. `opencode run` has `--variant`, but firstmate launches the interactive `opencode --prompt` path, which has no verified effort flag. |
 | cursor | `--model <model>` | none - effort is a SUFFIX on the model id | Verified 2026-07-19 on Cursor CLI 2026.07.16-899851b. This CLI has no effort flag: `low\|medium\|high` map to `cursor-grok-4.5-{low,medium,high}`, all three exercised end to end. `fm-spawn`'s `cursor_model_with_effort` folds the axis in; `xhigh`/`max` cap at `high`, an already-tiered or `[...]`-parameterized model id is never retiered, and `-fast` variants are a separate cost/speed choice never selected implicitly. |
+| kimi | `--model <model>` | none for firstmate's interactive launch | Verified 2026-07-23 on Kimi Code 0.27.0. Launch is `KIMI_CODE_HOME=... kimi --yolo --model kimi-code/k3`; brief is delivered after TUI settle. No verified effort flag on the interactive path. |
 
 When a requested effort value is outside the harness-specific accepted set, `fm-spawn` records the requested `effort=` in meta but emits no effort flag for that harness.
 This preserves launch success instead of passing a known-bad value.

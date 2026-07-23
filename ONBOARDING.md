@@ -391,12 +391,11 @@ Once a tool is on your machine and logged in, your first mate will start choosin
 | **Cursor CLI** (`agent`) | Cheap, fast workers on Grok 4.5 / Composer | Cursor Pro |
 | **Codex** (`codex`) | Another strong worker; kept available for testing | OpenAI |
 | **Pi** (`pi`) | Worker, and the second-opinion checker path | Bring-your-own key |
-| **Kimi** (`kimi`) | An economical orchestrator - **runs the show, does not do worker jobs** | Moonshot |
+| **Kimi** (`kimi`) | Economical orchestrator and verified K3 worker | Moonshot |
 | **Grok** (`grok`) | Another orchestrator option | xAI |
 | **opencode** | Another worker option | Provider-dependent |
 
-**Kimi is orchestrator-only** - firstmate will refuse to hand it worker jobs.
-That is expected, not a fault.
+Kimi can run the primary session and also take worker jobs via `fm-spawn --harness kimi` (Kimi Code 0.27.0, K3).
 
 If you later want a **second Claude login** without disturbing your main one: make a folder, set `CLAUDE_CONFIG_DIR` to it, and log in there.
 Credentials come from logging in on that machine - a config directory is **never copied between machines**.

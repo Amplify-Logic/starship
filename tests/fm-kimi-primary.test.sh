@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Kimi primary detection and worker-boundary regressions.
+# Kimi primary detection and primary/worker role separation regressions.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -17,15 +17,16 @@ test_stable_primary_marker_wins() {
   pass "fm-harness: stable Kimi marker detects the primary while configured worker selection stays separate"
 }
 
-test_worker_set_remains_closed() {
-  local usage known
+test_worker_set_includes_kimi() {
+  local usage
   usage=$(sed -n '1,90p' "$ROOT/bin/fm-spawn.sh")
-  known=$(grep '^KNOWN_HARNESSES=' "$ROOT/bin/fm-spawn.sh" || true)
-  assert_contains "$usage" 'claude|codex|opencode|pi|grok' "documented verified worker set changed unexpectedly"
-  assert_not_contains "$usage" 'claude|codex|opencode|pi|grok|kimi' "Kimi leaked into the documented worker set"
-  assert_not_contains "$known" 'kimi' "Kimi leaked into fm-spawn's accepted worker set"
-  pass "fm-spawn: Kimi primary support does not accept Kimi workers"
+  assert_contains "$usage" 'claude|codex|opencode|pi|grok|cursor|kimi' \
+    "documented verified worker set missing kimi"
+  assert_grep "kimi) printf '%s' 'KIMI_CODE_HOME=__KIMIHOME__ kimi --yolo __MODELFLAG__'" \
+    "$ROOT/bin/fm-spawn.sh" \
+    "fm-spawn missing kimi worker launch template"
+  pass "fm-spawn: Kimi is a verified worker while primary detection stays separate"
 }
 
 test_stable_primary_marker_wins
-test_worker_set_remains_closed
+test_worker_set_includes_kimi

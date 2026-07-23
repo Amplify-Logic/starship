@@ -166,13 +166,13 @@ test_unknown_reviewer_refused() {
     PATH="$fakebin:$BASE_PATH" \
     FM_SECOND_OPINION_QUOTA_JSON="$TMP/unknown/quota.json" \
     env -u FM_SECOND_OPINION_BIN \
-      "$SO_SH" --out "$TMP/unknown/out.md" --reviewer kimi -- "should refuse" 2>&1
+      "$SO_SH" --out "$TMP/unknown/out.md" --reviewer not-a-real-reviewer -- "should refuse" 2>&1
   )
   rc=$?
   set -e
 
   expect_code 1 "$rc" "unknown-reviewer exit"
-  assert_contains "$out" 'unknown reviewer: kimi' \
+  assert_contains "$out" 'unknown reviewer: not-a-real-reviewer' \
     "unknown-reviewer: refusal message"
   assert_absent "$TMP/unknown/out.md" \
     "unknown-reviewer: must not write --out"

@@ -32,7 +32,7 @@ FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 . "$SCRIPT_DIR/fm-backend.sh"
 
 # Verified worker harness names (same set as crew-dispatch validation).
-FM_PORT_VERIFIED_HARNESSES="claude codex opencode pi grok cursor"
+FM_PORT_VERIFIED_HARNESSES="claude codex opencode pi grok cursor kimi"
 
 usage() {
   cat <<'EOF'
