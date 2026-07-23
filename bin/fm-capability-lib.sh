@@ -17,13 +17,14 @@
 #     cost-filtered profile set; this lib never invents a harness outside it and
 #     never bypasses third-party-model / crew-dispatch guards.
 #   - select=capability-recent ranks allowed profiles by green density
-#     (green / (green+discarded)) in the window; ties keep input order; no
-#     samples for a task-type keep the first profile.
+#     (green / (green+discarded)) in the window; a sampled profile outranks an
+#     earlier unsampled one only when density > 0; all-zero or absent evidence
+#     keeps input (configured) order; no samples for a task-type keep the first.
 #   - Scout tax (~10%): advisory CAPABILITY_SCOUT_TAX stderr suggestion of a
 #     different allowed profile; never changes the selected stdout profile.
 #     FM_CAPABILITY_SCOUT_TAX=0 disables; =1 forces; otherwise a roll
 #     FM_CAPABILITY_SCOUT_ROLL (0-99) or $RANDOM%100 fires when roll <
-#     FM_CAPABILITY_SCOUT_TAX_RATE (default 10).
+#     FM_CAPABILITY_SCOUT_TAX_RATE (default 10, clamped to 0-100).
 #   - FM_CAPABILITY_NOW overrides "now" as a unix epoch for tests.
 #   - Portable on bash 3.2 (no associative arrays); aggregation uses awk.
 #
@@ -207,13 +208,15 @@ fm_capability_clean_profile_at() {
 }
 
 # Given a jq profile array JSON and task-type, print the best profile JSON by
-# recent green density among the cost-allowed profiles. Profiles with no samples
-# rank after any sampled profile (scout tax owns exploration). Ties keep input
-# order. No samples at all keeps the first profile. Args: task-type profiles_json
+# recent green density among the cost-allowed profiles. A sampled profile may
+# outrank an earlier unsampled profile only when its density is greater than 0;
+# all-zero evidence keeps input (configured) order. Ties among positive-density
+# profiles prefer higher total, then earlier index. No samples at all keeps the
+# first profile. Args: task-type profiles_json
 fm_capability_pick_profile() {
   local task_type=$1 profiles_json=$2
   local summary count idx harness model effort density total
-  local best_json best_density best_index best_total lookup
+  local best_json best_density best_index best_total lookup pick
 
   summary=$(fm_capability_summarize "$task_type")
   count=$(printf '%s\n' "$profiles_json" | jq 'length')
@@ -237,9 +240,22 @@ fm_capability_pick_profile() {
     lookup=$(fm_capability_lookup_density "$summary" "$harness" "$model" "$effort")
     density=${lookup%% *}
     total=${lookup#* }
-    if [ "$density" -gt "$best_density" ] \
-      || { [ "$density" -eq "$best_density" ] && [ "$total" -gt "$best_total" ]; } \
-      || { [ "$density" -eq "$best_density" ] && [ "$total" -eq "$best_total" ] && [ "$idx" -lt "$best_index" ]; }; then
+    pick=0
+    if [ "$density" -gt 0 ]; then
+      if [ "$best_density" -le 0 ] || [ "$density" -gt "$best_density" ]; then
+        pick=1
+      elif [ "$density" -eq "$best_density" ] && [ "$total" -gt "$best_total" ]; then
+        pick=1
+      elif [ "$density" -eq "$best_density" ] && [ "$total" -eq "$best_total" ] \
+        && [ "$idx" -lt "$best_index" ]; then
+        pick=1
+      fi
+    elif [ -z "$best_json" ] || { [ "$best_density" -le 0 ] && [ "$idx" -lt "$best_index" ]; }; then
+      # No positive evidence: keep configured input order (do not let 0%-green
+      # beat an earlier untried profile).
+      pick=1
+    fi
+    if [ "$pick" -eq 1 ]; then
       best_density=$density
       best_total=$total
       best_index=$idx
@@ -269,6 +285,9 @@ fm_capability_maybe_scout_tax() {
   case "$rate" in
     ''|*[!0-9]*) rate=10 ;;
   esac
+  if [ "$rate" -gt 100 ]; then
+    rate=100
+  fi
   if [ "$force" != 1 ] && [ "$force" != true ] && [ "$force" != yes ] && [ "$force" != on ]; then
     if [ -n "${FM_CAPABILITY_SCOUT_ROLL:-}" ]; then
       roll=$FM_CAPABILITY_SCOUT_ROLL

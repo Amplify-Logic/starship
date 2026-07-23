@@ -161,7 +161,7 @@ If configured harness data names an unverified adapter, report it and fall back 
 
 `docs/configuration.md` owns dispatch-profile and runtime-backend schemas, `bin/fm-dispatch-select.sh` owns selector mechanics, `bin/fm-harness.sh` owns static resolution, and `bin/fm-spawn.sh` owns launch flags and fail-closed validation.
 When dispatch profiles exist, consult them at every crewmate or scout intake and pass the resolved concrete profile required by `fm-spawn`.
-Capability evidence in `data/capability-outcomes.log` layers on those cost rules only: pass `--task-type` into `fm-dispatch-select.sh`, treat `CAPABILITY_EVIDENCE` and `CAPABILITY_SCOUT_TAX` as advisory unless the rule selects `capability-recent`, and never bypass the third-party-model guard (`docs/configuration.md` "Capability outcome log").
+Capability evidence in `data/capability-outcomes.log` layers on those cost rules only: pass `--task-type` into `fm-dispatch-select.sh` and record the same slug at spawn via `fm-spawn.sh --task-type`, treat `CAPABILITY_EVIDENCE` and `CAPABILITY_SCOUT_TAX` as advisory unless the rule selects `capability-recent`, and never bypass the third-party-model guard (`docs/configuration.md` "Capability outcome log").
 Routing precedence is an explicit per-task captain override, then the best-fit configured rule, then the configured default, then the static crewmate harness.
 The generic effort fallback and its precedence are owned by `harness-adapters`: explicit captain and standing configured effort win; otherwise use low for well-understood explicit work, xhigh for ambiguous investigation or design, intermediate levels proportionally, and never max without explicit captain preference.
 Do not add model-specific versions of that policy.

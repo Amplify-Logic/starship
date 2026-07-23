@@ -281,7 +281,7 @@ Fields never contain `|` or newlines.
 Cost rules in `config/crew-dispatch.json` always win: evidence only ranks or advises within the already cost-filtered `use` array and never bypasses the third-party-model guard.
 With `--task-type`, dispatch-select prints `CAPABILITY_EVIDENCE:` lines on stderr for firstmate.
 About 10% of those dispatches may also print one `CAPABILITY_SCOUT_TAX:` suggestion naming a different allowed profile; that suggestion is advisory and never changes the selected stdout profile.
-`select: capability-recent` makes ranking choose the best recent green density inside the allowed array; absent samples, it keeps the first profile.
+`select: capability-recent` makes ranking choose the best recent green density inside the allowed array; a sampled profile outranks an earlier unsampled one only when density is greater than 0, and absent or all-zero evidence keeps configured input order.
 Overrides for tests and ops live under Environment variables (`FM_CAPABILITY_*`).
 
 ## Toolchain

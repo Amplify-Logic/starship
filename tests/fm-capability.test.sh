@@ -119,6 +119,48 @@ test_first_profile_unchanged_without_capability_select() {
   pass "absent select keeps first-profile selection with evidence only advisory"
 }
 
+test_zero_green_sampled_does_not_beat_earlier_untried() {
+  rm -f "$FM_CAPABILITY_LOG"
+  FM_CAPABILITY_NOW=1700000000
+  # Three discarded codex runs => 0% green; claude is untried and configured first.
+  fm_capability_log_append bugfix codex gpt-5.5 high discarded
+  fm_capability_log_append bugfix codex gpt-5.5 high discarded
+  fm_capability_log_append bugfix codex gpt-5.5 high discarded
+
+  local profiles out
+  profiles='[{"harness":"claude","model":"sonnet","effort":"high"},{"harness":"codex","model":"gpt-5.5","effort":"high"}]'
+  out=$(FM_CAPABILITY_SCOUT_TAX=0 "$ROOT/bin/fm-dispatch-select.sh" \
+    --select capability-recent \
+    --task-type bugfix \
+    "$profiles" 2>/dev/null)
+  [ "$out" = '{"harness":"claude","model":"sonnet","effort":"high"}' ] \
+    || fail "0%-green sampled must not beat earlier untried profile, got: $out"
+  pass "0%-green sampled keeps configured order over earlier untried"
+}
+
+test_scout_tax_rate_clamped_to_100() {
+  rm -f "$FM_CAPABILITY_LOG"
+  FM_CAPABILITY_NOW=1700000000
+  fm_capability_log_append clamp-tax claude sonnet high green
+
+  local profiles out err
+  profiles='[{"harness":"claude","model":"sonnet","effort":"high"},{"harness":"codex","model":"gpt-5.5","effort":"high"}]'
+  # Rate > 100 must clamp; roll 99 fires only when rate is treated as >= 100.
+  out=$(FM_CAPABILITY_SCOUT_TAX='' \
+    FM_CAPABILITY_SCOUT_TAX_RATE=999 \
+    FM_CAPABILITY_SCOUT_ROLL=99 \
+    "$ROOT/bin/fm-dispatch-select.sh" \
+    --select capability-recent \
+    --task-type clamp-tax \
+    "$profiles" 2>"$TMP_ROOT/clamp.err")
+  err=$(cat "$TMP_ROOT/clamp.err")
+  [ "$out" = '{"harness":"claude","model":"sonnet","effort":"high"}' ] \
+    || fail "scout tax clamp must not change stdout, got: $out"
+  assert_contains "$err" 'CAPABILITY_SCOUT_TAX: task-type=clamp-tax consider' \
+    "rate above 100 must clamp to 100 so roll 99 still fires"
+  pass "scout tax rate above 100 clamps to 100"
+}
+
 test_reject_pipe_in_fields() {
   rm -f "$FM_CAPABILITY_LOG"
   if fm_capability_log_append 'bad|type' cursor grok medium green 2>/dev/null; then
@@ -134,6 +176,8 @@ test_summarize_green_density
 test_record_teardown_outcomes
 test_capability_recent_select_and_scout_tax_advisory
 test_first_profile_unchanged_without_capability_select
+test_zero_green_sampled_does_not_beat_earlier_untried
+test_scout_tax_rate_clamped_to_100
 test_reject_pipe_in_fields
 
 echo "# all fm-capability tests passed"
