@@ -180,6 +180,87 @@ SH
   pass "fm-lint.sh passes a clean fixture"
 }
 
+# Install a PATH-shadowing shellcheck that reports the pinned version and exits 0
+# on lint, so fixture repos can exercise the exec-bit invariant without a real
+# ShellCheck install or a real script corpus.
+install_pinned_shellcheck_stub() {
+  local fakebin=$1
+  cat > "$fakebin/shellcheck" <<SH
+#!/usr/bin/env bash
+if [ "\$1" = "--version" ]; then
+  printf 'ShellCheck - shell script analysis tool\\nversion: ${REQUIRED}\\nlicense: x\\nwebsite: y\\n'
+  exit 0
+fi
+exit 0
+SH
+  chmod +x "$fakebin/shellcheck"
+}
+
+# Build a minimal firstmate-shaped git repo under <repo> with one tests/*.test.sh
+# entry at the requested index mode (100644 or 100755), plus a copy of fm-lint.sh.
+make_execbit_fixture_repo() {
+  local repo=$1 mode=$2
+  local test_path="tests/mode-fixture.test.sh"
+  mkdir -p "$repo/bin/backends" "$repo/tests"
+  cp "$LINT" "$repo/bin/fm-lint.sh"
+  chmod +x "$repo/bin/fm-lint.sh"
+  # Keep the canonical shellcheck globs from expanding to literal unmatched paths.
+  printf '#!/usr/bin/env bash\ntrue\n' > "$repo/bin/dummy.sh"
+  printf '#!/usr/bin/env bash\ntrue\n' > "$repo/bin/backends/dummy.sh"
+  chmod +x "$repo/bin/dummy.sh" "$repo/bin/backends/dummy.sh"
+  printf '#!/usr/bin/env bash\ntrue\n' > "$repo/$test_path"
+  if [ "$mode" = "100755" ]; then
+    chmod +x "$repo/$test_path"
+  else
+    chmod a-x "$repo/$test_path"
+  fi
+  git -C "$repo" init -q
+  fm_git_identity
+  git -C "$repo" add bin/fm-lint.sh bin/dummy.sh bin/backends/dummy.sh "$test_path"
+  if [ "$mode" = "100755" ]; then
+    git -C "$repo" update-index --chmod=+x "$test_path"
+  else
+    git -C "$repo" update-index --chmod=-x "$test_path"
+  fi
+  local got
+  got=$(git -C "$repo" ls-files -s -- "$test_path" | awk '{print $1}')
+  [ "$got" = "$mode" ] || fail "fixture index mode for $test_path was $got, want $mode"
+}
+
+test_rejects_non_executable_tracked_test() {
+  local tmp repo fakebin out rc
+  tmp=$(fm_test_tmproot fm-lint-execbit-bad)
+  repo="$tmp/repo"
+  fakebin=$(fm_fakebin "$tmp")
+  install_pinned_shellcheck_stub "$fakebin"
+  make_execbit_fixture_repo "$repo" "100644"
+  rc=0
+  out=$(PATH="$fakebin:$PATH" "$repo/bin/fm-lint.sh" 2>&1) || rc=$?
+  [ "$rc" -ne 0 ] || fail "fm-lint.sh accepted a 100644 tests/*.test.sh index entry"$'\n'"$out"
+  assert_contains "$out" "tests/mode-fixture.test.sh" \
+    "fm-lint.sh did not name the non-executable tracked test"
+  assert_contains "$out" "100644" \
+    "fm-lint.sh did not report the bad index mode"
+  assert_contains "$out" "chmod +x tests/mode-fixture.test.sh" \
+    "fm-lint.sh did not name the exact chmod +x repair"
+  pass "fm-lint.sh fails when a tracked tests/*.test.sh is mode 100644"
+}
+
+test_accepts_executable_tracked_test() {
+  local tmp repo fakebin out rc
+  tmp=$(fm_test_tmproot fm-lint-execbit-good)
+  repo="$tmp/repo"
+  fakebin=$(fm_fakebin "$tmp")
+  install_pinned_shellcheck_stub "$fakebin"
+  make_execbit_fixture_repo "$repo" "100755"
+  rc=0
+  out=$(PATH="$fakebin:$PATH" "$repo/bin/fm-lint.sh" 2>&1) || rc=$?
+  [ "$rc" -eq 0 ] || fail "fm-lint.sh rejected a 100755 tests/*.test.sh index entry"$'\n'"$out"
+  assert_not_contains "$out" "chmod +x" \
+    "fm-lint.sh printed a chmod repair on a clean executable index"
+  pass "fm-lint.sh passes when tracked tests/*.test.sh entries are mode 100755"
+}
+
 test_owner_exists_and_executable
 test_owner_defines_canonical_set
 test_ci_invokes_the_owner
@@ -190,3 +271,5 @@ test_rejects_wrong_shellcheck_version
 test_catches_a_real_lint_defect
 test_ignores_ambient_shellcheck_opts
 test_clean_fixture_passes
+test_rejects_non_executable_tracked_test
+test_accepts_executable_tracked_test

@@ -25,6 +25,12 @@
 # finding at default severity is enforced.
 # The local == CI parity contract is asserted by tests/fm-lint.test.sh.
 #
+# Test executable-bit invariant: the no-argument path also requires every
+# tracked `tests/*.test.sh` to be mode 100755 in the git index. A 100644 entry
+# can pass `bash tests/foo.test.sh` (what fm-test-run.sh uses) yet fail CI with
+# exit 126 when something executes the file directly. This check fails loudly
+# with the exact `chmod +x` repair and never auto-chmods.
+#
 # Usage:
 #   fm-lint.sh                    lint the canonical file set (what both gates run)
 #   fm-lint.sh <path>...          lint only the given paths with the same config
@@ -32,9 +38,10 @@
 #   fm-lint.sh --required-version print the pinned ShellCheck version and exit
 #                                  (CI reads this to install the exact same one)
 #
-# Exit status is ShellCheck's own on a lint run, so a caller (CI or the gate)
-# fails exactly when ShellCheck reports a finding; a version mismatch or a
-# missing ShellCheck fails before linting with a distinct message.
+# Exit status is ShellCheck's own on a clean lint run, so a caller (CI or the
+# gate) fails exactly when ShellCheck reports a finding; a version mismatch, a
+# missing ShellCheck, or a non-executable tracked test fails before ShellCheck
+# with a distinct message.
 set -eu
 
 # The single source of the pinned ShellCheck version. Bump here and CI follows
@@ -70,6 +77,25 @@ fi
 if [ "$#" -gt 0 ]; then
   exec shellcheck --norc "$@"
 fi
+
+# Fail closed on tracked tests that lack the git executable bit. Do not repair
+# here: auto-chmod would hide the bad commit that CI exit 126 already punished.
+check_test_exec_bits() {
+  local mode path bad=0
+  # Quoted pathspec so git matches tests/*.test.sh rather than the shell.
+  while read -r mode _ _ path; do
+    [ -n "${path:-}" ] || continue
+    if [ "$mode" != "100755" ]; then
+      printf 'fm-lint.sh: %s is mode %s in the git index; expected 100755.\n' \
+        "$path" "$mode" >&2
+      printf 'fm-lint.sh: repair with: chmod +x %s\n' "$path" >&2
+      bad=1
+    fi
+  done < <(git ls-files -s -- 'tests/*.test.sh')
+  [ "$bad" -eq 0 ]
+}
+
+check_test_exec_bits || exit 1
 
 # Canonical file set: the ONE authoritative definition. Callers reference this
 # script; they never re-spell these globs.
