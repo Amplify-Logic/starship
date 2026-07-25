@@ -33,6 +33,6 @@ A live marker at `state/browse/<task-id>/session.live` records an active session
 ## Action-gateway seam
 
 Workers and browsing code that need an outward action should emit an ActionRequest through `bin/fm-action-gateway.sh` rather than acting directly.
-This slice's gateway is a stub: it validates, appends a durable audit record, and always returns `confirm-first`.
-It never executes an action.
+Workers may only `prepare`; captain-privilege approval and `gate-check` are the choke-point before any future outward effect.
+Execution remains unwired in this slice.
 The schema and choke-point contract live in [`docs/action-gateway.md`](action-gateway.md).
