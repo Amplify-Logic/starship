@@ -24,6 +24,7 @@ seed_home() {
   printf 'herdr\n' > "$home/config/backend"
   printf 'cursor\n' > "$home/config/crew-harness"
   printf '{ "default": { "harness": "cursor" } }\n' > "$home/config/crew-dispatch.json"
+  printf '{ "enabled": true }\n' > "$home/config/primary-handoff"
 }
 
 # Minimal toolchain so verify's bootstrap detect-only check can pass under PATH.
@@ -83,6 +84,7 @@ test_export_copies_portable_only() {
   printf 'live-pane\n' > "$home/state/task.meta"
   printf 'clone\n' > "$home/projects/README"
   printf 'registry\n' > "$home/data/projects.md"
+  printf 'synthetic-capability-proof\n' > "$home/config/action-captain-secret"
   mkdir -p "$dest"
 
   local out
@@ -90,6 +92,7 @@ test_export_copies_portable_only() {
   assert_contains "$out" 'REFUSED: .env' "export did not loudly refuse .env"
   assert_contains "$out" 'REFUSED: state/' "export did not loudly refuse state/"
   assert_contains "$out" 'REFUSED: projects/' "export did not loudly refuse projects/"
+  assert_contains "$out" 'REFUSED: config/action-captain-secret' "export did not loudly refuse action capability secret"
   assert_contains "$out" 'PORTABLE: data/captain.md' "export missed captain.md"
   assert_contains "$out" 'EXPORT_OK:' "export missed EXPORT_OK"
 
@@ -97,7 +100,9 @@ test_export_copies_portable_only() {
   assert_present "$dest/data/learnings.md" "learnings.md not exported"
   assert_present "$dest/data/backlog.md" "backlog.md not exported"
   assert_present "$dest/config/backend" "backend not exported"
+  assert_present "$dest/config/primary-handoff" "manifest-declared primary handoff config not exported"
   assert_absent "$dest/.env" ".env must not be exported"
+  assert_absent "$dest/config/action-captain-secret" "action capability secret must not be exported"
   assert_absent "$dest/state" "state/ must not be exported"
   assert_absent "$dest/projects" "projects/ must not be exported"
   assert_absent "$dest/data/projects.md" "projects.md must not be exported"

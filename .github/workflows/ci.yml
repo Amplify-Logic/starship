@@ -34,6 +34,28 @@ jobs:
       - name: Prove complete regression partition
         run: bin/fm-test-run.sh --check-coverage
 
+  fork-surface:
+    name: Declared fork surface
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Assert every required declared capability surface
+        run: bin/fm-fork-surface.sh check
+      - name: Fail on changed source without test ownership
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BASE_SHA: ${{ github.event.before }}
+        run: |
+          set -eu
+          base=$PR_BASE_SHA
+          [ -n "$base" ] || base=$PUSH_BASE_SHA
+          if [ -z "$base" ] || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+            base=HEAD^
+          fi
+          bin/fm-test-run.sh --list --changed --base "$base" >/dev/null
+
   # Two duration-balanced portable parallel shards of the Phase 2 proven-isolated
   # set only. Composition owner: bin/fm-test-run.sh (docs/fm-test-portable-shards.md).
   tests-portable-parallel-1:

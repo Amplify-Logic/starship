@@ -19,6 +19,8 @@
 #   fm-home-port.sh bootstrap --portable-repo OWNER/REPO|URL [--home DIR]
 #   fm-home-port.sh scan [--warn-machine-local] PATH...
 #   fm-home-port.sh verify [--home DIR]
+#   fm-home-port.sh portable-config-files
+#   fm-home-port.sh refused-path PATH
 #   fm-home-port.sh --help
 set -eu
 
@@ -44,6 +46,8 @@ Usage:
   fm-home-port.sh bootstrap --portable-repo OWNER/REPO|URL [--home DIR]
   fm-home-port.sh scan [--warn-machine-local] PATH...
   fm-home-port.sh verify [--home DIR]
+  fm-home-port.sh portable-config-files
+  fm-home-port.sh refused-path PATH
   fm-home-port.sh --help
 
 Port captain-private portable Firstmate material between machines through an
@@ -90,14 +94,32 @@ PORTABLE_DATA_FILES=(
   data/backlog.md
 )
 
-PORTABLE_CONFIG_FILES=(
+# Keep this fallback in sync with `fm-fork-surface.sh port-allowlist` so a
+# checkout predating the manifest remains portable. The manifest is the live
+# owner whenever it is present.
+FALLBACK_PORTABLE_CONFIG_FILES=(
   config/backend
   config/crew-harness
   config/crew-dispatch.json
   config/secondmate-harness
   config/backlog-backend
   config/wedge-alarm
+  config/primary-handoff
 )
+PORTABLE_CONFIG_FILES=("${FALLBACK_PORTABLE_CONFIG_FILES[@]}")
+
+load_manifest_portable_config_files() {
+  local declared rel
+  [ -f "$FM_ROOT/fork-surface.conf" ] || return 0
+  [ -x "$FM_ROOT/bin/fm-fork-surface.sh" ] \
+    || die "fork-surface.conf exists but bin/fm-fork-surface.sh is not executable"
+  declared=$("$FM_ROOT/bin/fm-fork-surface.sh" port-allowlist) \
+    || die "fork-surface config declaration is invalid"
+  PORTABLE_CONFIG_FILES=()
+  while IFS= read -r rel; do
+    [ -n "$rel" ] && PORTABLE_CONFIG_FILES+=("$rel")
+  done <<<"$declared"
+}
 
 # Names that always refuse if requested or found under an export source tree
 # that tried to include them. Presence in the home during a normal allowlist
@@ -135,6 +157,7 @@ is_refused_relpath() {
     [ "$base" = "$name" ] && return 0
   done
   case "$rel" in
+    config/action-captain-secret|./config/action-captain-secret) return 0 ;;
     config/cmux-socket-password|./config/cmux-socket-password) return 0 ;;
     config/x-mode.env|./config/x-mode.env) return 0 ;;
     data/projects.md|./data/projects.md) return 0 ;;
@@ -186,6 +209,10 @@ announce_standing_refusals() {
   fi
   if [ -d "$home/projects" ]; then
     refuse "projects/ - machine-local clones; re-clone on the destination via project-management"
+    refused=1
+  fi
+  if [ -e "$home/config/action-captain-secret" ]; then
+    refuse "config/action-captain-secret - per-person capability proof; never port"
     refused=1
   fi
   if [ -e "$home/config/cmux-socket-password" ]; then
@@ -833,7 +860,16 @@ main() {
       usage
       exit 0
       ;;
+    portable-config-files)
+      [ $# -eq 1 ] || die "portable-config-files takes no arguments"
+      printf '%s\n' "${FALLBACK_PORTABLE_CONFIG_FILES[@]}"
+      ;;
+    refused-path)
+      [ $# -eq 2 ] || die "refused-path requires one repo-relative path"
+      is_refused_relpath "$2"
+      ;;
     export|import|push|pull|bootstrap|scan|verify)
+      load_manifest_portable_config_files
       cmd=$1
       shift
       "cmd_$cmd" "$@"
