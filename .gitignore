@@ -8,15 +8,7 @@ data/
 __pycache__/
 *.pyc
 .env
-config/crew-harness
-config/crew-dispatch.json
-config/secondmate-harness
-config/backlog-backend
-config/backend
-config/x-mode.env
-config/cmux-socket-password
-config/wedge-alarm
-config/primary-handoff
+config/
 # Generated per-task hook artifacts (also written into each task worktree's
 # .git/info/exclude by fm-spawn). Tracked here so a primary checkout cannot
 # accidentally stage them into a PR.

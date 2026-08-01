@@ -440,7 +440,7 @@ launch_binary_install_hint() {  # <binary>
     claude) printf '%s' 'npm install -g @anthropic-ai/claude-code' ;;
     codex) printf '%s' 'npm install -g @openai/codex' ;;
     opencode) printf '%s' 'npm install -g opencode-ai' ;;
-    pi) printf '%s' 'npm install -g @mariozechner/pi-coding-agent' ;;
+    pi) printf '%s' 'npm install -g @earendil-works/pi-coding-agent' ;;
     grok) printf '%s' 'curl -fsSL https://x.ai/cli/install.sh | bash' ;;
     agent) printf '%s' 'curl https://cursor.com/install -fsS | bash' ;;
     kimi) printf '%s' 'curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash' ;;

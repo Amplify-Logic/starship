@@ -170,7 +170,7 @@ The full cmux home label also includes a short hash of the resolved `FM_ROOT` pa
 
 claude, codex, opencode, pi, and grok are empirically verified as both primary and worker adapters.
 cursor is empirically verified as a worker adapter and, separately, as a primary through `bin/fm-primary.sh cursor-grok` (see [`docs/cursor-harness.md`](cursor-harness.md)).
-Kimi Code 0.27.0 is empirically verified only as a primary runtime; `fm-spawn` deliberately rejects Kimi workers.
+Kimi Code 0.27.0 is empirically verified as a primary runtime through `bin/fm-primary.sh kimi-k3` and, separately, as a worker adapter that `fm-spawn` accepts via `--harness kimi` (see [`docs/kimi-harness.md`](kimi-harness.md)).
 The verified adapter knowledge - busy signatures, interrupt and exit commands, skill-invocation syntax, and per-harness quirks - lives in [`.agents/skills/harness-adapters/SKILL.md`](../.agents/skills/harness-adapters/SKILL.md).
 Launch mechanics, including the verified command templates, live in [`bin/fm-spawn.sh`](../bin/fm-spawn.sh).
 Primary-session turn-end guard integrations for verified harnesses are tracked as repo-level hook files and documented in [`docs/turnend-guard.md`](turnend-guard.md).
