@@ -188,7 +188,7 @@ crew_pane_is_busy() {  # <target>
         *)
           tail40=$(fm_backend_capture "$TASK_BACKEND" "$1" 40 "$EXPECTED_LABEL" 2>/dev/null) || return 1
           printf '%s' "$tail40" | grep -v '^[[:space:]]*$' | tail -6 \
-            | grep -qiE "${FM_BUSY_REGEX:-$FM_TMUX_BUSY_REGEX_DEFAULT}"
+            | grep -qiE "${FM_BUSY_REGEX:-$FM_BUSY_REGEX_DEFAULT}"
           ;;
       esac
       ;;

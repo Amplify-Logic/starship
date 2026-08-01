@@ -1235,6 +1235,85 @@ test_afk_present_reverts_watcher_to_one_shot() {
   pass "with .afk present the watcher reverts to one-shot so the daemon owns triage (no double-triage)"
 }
 
+# Herdr liveness fake for the stale-path three-way regression. It exposes a
+# stable pane capture plus one of working, idle, or no registered agent while
+# keeping every call inside the unit fixture.
+make_herdr_liveness_fake() {  # <fakebin>
+  cat > "$1/herdr" <<'SH'
+#!/usr/bin/env bash
+set -u
+case "${1:-} ${2:-}" in
+  "status --json")
+    printf '{"client":{"version":"0.7.1","protocol":14},"server":{"running":true}}\n'
+    ;;
+  "pane read")
+    cat "${FM_FAKE_HERDR_CAPTURE:?}"
+    ;;
+  "pane get")
+    printf '{"result":{"pane":{"pane_id":"w1:p1"}}}\n'
+    ;;
+  "agent get")
+    if [ "${FM_FAKE_HERDR_STATUS:-}" = bare ]; then
+      printf '{"error":{"code":"agent_not_found"}}\n'
+    else
+      printf '{"result":{"agent":{"agent_status":"%s"}}}\n' "${FM_FAKE_HERDR_STATUS:-idle}"
+    fi
+    ;;
+esac
+exit 0
+SH
+  chmod +x "$1/herdr"
+}
+
+test_herdr_stale_three_way_liveness() {
+  local dir state fakebin capture out window pid key
+  window="default:w1:p1"
+
+  dir=$(make_case herdr-live-busy); state="$dir/state"; fakebin="$dir/fakebin"
+  make_herdr_liveness_fake "$fakebin"
+  capture="$dir/pane.txt"; out="$dir/watch.out"
+  printf 'thinking...\n' > "$capture"
+  fm_write_meta "$state/live.meta" "window=$window" "backend=herdr" "kind=ship"
+  PATH="$fakebin:$PATH" FM_FAKE_HERDR_CAPTURE="$capture" FM_FAKE_HERDR_STATUS=working \
+    FM_STATE_OVERRIDE="$state" FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
+    "$WATCH" > "$out" &
+  pid=$!
+  wait_live "$pid" 35 || fail "live Herdr agent mid-turn was not classified busy: $(cat "$out")"
+  reap "$pid"
+
+  dir=$(make_case herdr-finished-idle); state="$dir/state"; fakebin="$dir/fakebin"
+  make_herdr_liveness_fake "$fakebin"
+  capture="$dir/pane.txt"; out="$dir/watch.out"
+  printf 'finished\n❯ \n' > "$capture"
+  fm_write_meta "$state/finished.meta" "window=$window" "backend=herdr" "kind=ship"
+  PATH="$fakebin:$PATH" FM_FAKE_HERDR_CAPTURE="$capture" FM_FAKE_HERDR_STATUS=idle \
+    FM_STATE_OVERRIDE="$state" FM_STALE_ESCALATE_SECS=0 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  wait_live "$pid" 45 || fail "finished Herdr agent at its idle composer escalated: $(cat "$out")"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  [ ! -e "$state/.stale-since-$key" ] || { reap "$pid"; fail "finished idle agent started a wedge timer"; }
+  grep -F "possible wedge" "$out" >/dev/null && { reap "$pid"; fail "finished idle agent produced a wedge escalation"; }
+  grep -F "registered agent idle at composer" "$state/.watch-triage.log" >/dev/null \
+    || { reap "$pid"; fail "finished idle agent was not recorded as the healthy idle class"; }
+  reap "$pid"
+
+  dir=$(make_case herdr-bare-shell); state="$dir/state"; fakebin="$dir/fakebin"
+  make_herdr_liveness_fake "$fakebin"
+  capture="$dir/pane.txt"; out="$dir/watch.out"
+  printf 'shell only\n$ \n' > "$capture"
+  fm_write_meta "$state/bare.meta" "window=$window" "backend=herdr" "kind=ship"
+  PATH="$fakebin:$PATH" FM_FAKE_HERDR_CAPTURE="$capture" FM_FAKE_HERDR_STATUS=bare \
+    FM_STATE_OVERRIDE="$state" FM_STALE_ESCALATE_SECS=999 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  wait_for_exit "$pid" 50 || { reap "$pid"; fail "bare Herdr shell was not surfaced as gone"; }
+  grep -Fx "stale: $window" "$out" >/dev/null || fail "bare shell did not take the immediate gone path: $(cat "$out")"
+  grep -F "possible wedge" "$out" >/dev/null && fail "bare shell was mislabeled as a possible wedge"
+
+  pass "Herdr stale triage distinguishes busy agent, healthy finished-idle agent, and gone bare shell without wedging the finish"
+}
+
 # A paused pane can first appear as a changed hash. In AFK mode that initial path
 # must still hand off the plain window identity to the daemon, rather than running
 # the normal-mode pause re-surface and decorating the stale identity.
@@ -1289,6 +1368,7 @@ test_stale_terminal_status_overridden_by_active_run
 test_nonterminal_stale_provably_working_absorbed_then_escalated
 test_wedge_escalation_marks_demand_deep_inspection_after_threshold
 test_wedge_escalation_resets_when_pane_becomes_active
+test_herdr_stale_three_way_liveness
 test_nonterminal_stale_not_working_surfaced
 test_nonterminal_stale_paused_absorbed_then_resurfaced
 test_exited_declared_pause_is_bounded_but_live_gate_surfaces

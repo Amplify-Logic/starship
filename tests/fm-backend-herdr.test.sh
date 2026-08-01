@@ -1964,6 +1964,26 @@ test_capture_shows_busy_ignores_spinner_verb_alone() {
   pass "fm_backend_herdr_capture_shows_busy: spinner verb alone is not the busy signal"
 }
 
+test_capture_shows_busy_matches_kimi_without_idle_false_positive() {
+  local name text expected dir log resp fb rc
+  for name in thinking command idle; do
+    case "$name" in
+      thinking) text='thinking...'; expected=0 ;;
+      command) text='Running a command'; expected=0 ;;
+      idle) text='K3 thinking: max/high'; expected=1 ;;
+    esac
+    dir="$TMP_ROOT/capture-kimi-$name"; mkdir -p "$dir/responses"
+    log="$dir/log"; resp="$dir/responses"; : > "$log"
+    printf '%s\n' "$text" > "$resp/1.out"
+    fb=$(make_herdr_fakebin "$dir")
+    rc=0
+    PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+      bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_capture_shows_busy default wK:p3' "$ROOT" || rc=$?
+    [ "$rc" = "$expected" ] || fail "Kimi capture '$text' returned $rc, expected $expected"
+  done
+  pass "fm_backend_herdr_capture_shows_busy: Kimi reasoning/tool phases are busy and K3 thinking level is idle"
+}
+
 test_apply_transition_busy_cursor_footer_absorbs_blocked() {
   local dir state rec out rc marker
   dir="$TMP_ROOT/apply-blocked-busy-cursor"; state="$dir/state"; mkdir -p "$state"
@@ -2360,6 +2380,7 @@ test_apply_transition_blocked_requires_commit_to_dedupe
 test_capture_shows_busy_matches_cursor_ctrl_c_to_stop
 test_capture_shows_busy_idle_cursor_not_busy
 test_capture_shows_busy_ignores_spinner_verb_alone
+test_capture_shows_busy_matches_kimi_without_idle_false_positive
 test_apply_transition_busy_cursor_footer_absorbs_blocked
 test_apply_transition_idle_cursor_blocked_still_actionable
 test_apply_transition_working_clears_marker

@@ -71,7 +71,7 @@ While `agent_status=working` on a real K3 turn, the pane showed two ASCII-stable
 Idle footer remains `yolo  K3 thinking: max` (or `high`).
 That idle string contains `thinking` but not `thinking...`, so the busy regex must match the ellipsis form only.
 
-Wired into `FM_BUSY_REGEX` / `FM_TMUX_BUSY_REGEX_DEFAULT` as:
+Wired into the shared `FM_BUSY_REGEX_DEFAULT` (overridable with `FM_BUSY_REGEX`) as:
 
 ```text
 thinking\.\.\.|Running a command

@@ -20,13 +20,27 @@ test_kimi_launch_template_in_fm_spawn() {
 }
 
 test_kimi_busy_regex_wired() {
-  local watch="$ROOT/bin/fm-watch.sh"
-  local tmuxlib="$ROOT/bin/fm-tmux-lib.sh"
-  assert_grep 'thinking\.\.\.|Running a command' "$watch" \
-    "fm-watch.sh missing kimi busy signatures"
-  assert_grep 'thinking\.\.\.|Running a command' "$tmuxlib" \
-    "fm-tmux-lib.sh missing kimi busy signatures"
-  pass "kimi busy signatures wired into watch/tmux defaults"
+  local busy="$ROOT/bin/fm-busy-lib.sh"
+  local literal_count
+  # shellcheck source=bin/fm-busy-lib.sh
+  . "$busy"
+  assert_grep 'thinking\.\.\.|Running a command' "$busy" \
+    "shared busy default is missing Kimi signatures"
+  assert_grep 'FM_BUSY_REGEX_DEFAULT' "$ROOT/bin/fm-watch.sh" \
+    "fm-watch.sh does not use the shared busy default"
+  assert_grep 'FM_BUSY_REGEX_DEFAULT' "$ROOT/bin/fm-tmux-lib.sh" \
+    "fm-tmux-lib.sh does not use the shared busy default"
+  assert_grep 'FM_BUSY_REGEX_DEFAULT' "$ROOT/bin/backends/herdr.sh" \
+    "Herdr busy corroboration does not use the shared default"
+  literal_count=$(grep -R '^FM_BUSY_REGEX_DEFAULT=' "$ROOT/bin" | wc -l | tr -d '[:space:]')
+  [ "$literal_count" = 1 ] || fail "busy default is defined $literal_count times, expected exactly once"
+  printf 'thinking...\n' | grep -qiE "$FM_BUSY_REGEX_DEFAULT" \
+    || fail "Kimi reasoning signature did not match"
+  printf 'Running a command\n' | grep -qiE "$FM_BUSY_REGEX_DEFAULT" \
+    || fail "Kimi tool signature did not match"
+  printf 'K3 thinking: max/high\n' | grep -qiE "$FM_BUSY_REGEX_DEFAULT" \
+    && fail "Kimi idle footer false-matched the busy default"
+  pass "one shared busy default matches both Kimi busy phases but not its idle footer"
 }
 
 test_kimi_harness_doc_marks_verified() {

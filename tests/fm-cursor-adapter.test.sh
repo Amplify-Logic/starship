@@ -252,31 +252,28 @@ test_grok_placeholder_still_empty() {
 test_busy_regex_matches_footer_not_spinner_verb() {
   # Verbatim busy footer, and the two spinner verbs seen in one turn.
   printf '  → Add a follow-up                    ctrl+c to stop\n' \
-    | grep -qiE "$FM_TMUX_BUSY_REGEX_DEFAULT" \
+    | grep -qiE "$FM_BUSY_REGEX_DEFAULT" \
     || fail "busy footer 'ctrl+c to stop' did not match the busy regex"
   # The verb alone must NOT be the signal: matching it would read a
   # tool-executing pane as idle when the verb flips Working -> Running.
-  printf '⠠⠛ Running  67 tokens\n' | grep -qiE "$FM_TMUX_BUSY_REGEX_DEFAULT" \
+  printf '⠠⠛ Running  67 tokens\n' | grep -qiE "$FM_BUSY_REGEX_DEFAULT" \
     && fail "spinner verb 'Running' must not be the busy signal on its own"
   # An idle cursor footer must not match.
   printf '  Cursor Grok 4.5 Low · 7%%            Run Everything\n' \
-    | grep -qiE "$FM_TMUX_BUSY_REGEX_DEFAULT" \
+    | grep -qiE "$FM_BUSY_REGEX_DEFAULT" \
     && fail "idle cursor status line matched the busy regex"
   pass "cursor busy signature is the stable footer hint, not the spinner verb"
 }
 
 test_watch_and_tmux_busy_regexes_agree() {
-  local watch_re
-  watch_re=$(grep -m1 '^BUSY_REGEX=' "$ROOT/bin/fm-watch.sh")
-  case "$watch_re" in
+  # shellcheck disable=SC2016  # inspect the literal source expression
+  assert_grep 'BUSY_REGEX=${FM_BUSY_REGEX:-$FM_BUSY_REGEX_DEFAULT}' "$ROOT/bin/fm-watch.sh" \
+    "fm-watch.sh does not consume the shared busy default"
+  case "$FM_BUSY_REGEX_DEFAULT" in
     *'ctrl\+c to stop'*) : ;;
-    *) fail "bin/fm-watch.sh BUSY_REGEX is missing cursor's footer: $watch_re" ;;
+    *) fail "FM_BUSY_REGEX_DEFAULT is missing cursor's footer" ;;
   esac
-  case "$FM_TMUX_BUSY_REGEX_DEFAULT" in
-    *'ctrl\+c to stop'*) : ;;
-    *) fail "FM_TMUX_BUSY_REGEX_DEFAULT is missing cursor's footer" ;;
-  esac
-  pass "fm-watch.sh and fm-tmux-lib.sh busy signatures both carry cursor"
+  pass "fm-watch.sh and fm-tmux-lib.sh consume the shared cursor signature"
 }
 
 # --- 4. launch flags and the effort-in-model axis ---------------------------

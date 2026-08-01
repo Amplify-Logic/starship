@@ -6,9 +6,12 @@
 # is absorbed only when the crew shows POSITIVE evidence it is still working (an
 # actively-running no-mistakes step, or a backend busy signal), and surfaced
 # otherwise, so a crew that finishes (or stops and waits) without a current
-# working signal is never silently swallowed. A declared external-wait pause is
-# the separate idle absorb case and re-surfaces only on its long bounded cadence,
-# although its initial no-verb status signal still surfaces in normal mode.
+# working signal is never silently swallowed. A registered Herdr agent resting
+# at idle/done is the backend-proved healthy-finish exception: its stale pane is
+# absorbed without a wedge timer, while its status/turn-end signals still carry
+# the outcome. A declared external-wait pause is the separate idle absorb case
+# and re-surfaces only on its long bounded cadence, although its initial no-verb
+# status signal still surfaces in normal mode.
 # While state/.afk exists, the daemon owns triage and this watcher queues and exits
 # on every wake. Printed reason lines:
 #   signal: <file>...      status/turn-end signals, surfaced when a listed status
@@ -23,8 +26,11 @@
 #                          re-surface cadence, never as a wedge. Only when neither
 #                          absorb class applies does the log's last line decide:
 #                          terminal (captain-relevant) or non-terminal (no verb),
-#                          both surfaced at once. A provably-working stale past the
-#                          wedge threshold also surfaces, with an "escalation N"
+#                          both surfaced at once. A registered Herdr agent at its
+#                          idle/done composer is healthy and starts no wedge timer;
+#                          a confirmed agent-less shell follows the actionable
+#                          stale path. A provably-working stale past the wedge
+#                          threshold also surfaces, with an "escalation N"
 #                          count in the reason; at FM_WEDGE_DEMAND_INSPECT_COUNT
 #                          consecutive escalations on the SAME pane, the reason
 #                          also carries a "demand-deep-inspection" marker so the
@@ -49,6 +55,9 @@ mkdir -p "$STATE"
 
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
+# Shared harness busy-footer signatures.
+# shellcheck source=bin/fm-busy-lib.sh
+. "$SCRIPT_DIR/fm-busy-lib.sh"
 # Shared wake classifier (captain-relevant verbs + signal/stale/heartbeat
 # predicates), the SAME library the away-mode daemon uses, so the triage policy
 # has one definition.
@@ -122,7 +131,7 @@ SIGNAL_GRACE=${FM_SIGNAL_GRACE:-30}   # seconds to linger after a signal so trai
 # verified 2026-07-23 on Kimi Code 0.27.0. Do NOT match bare "thinking" - the idle
 # footer is "K3 thinking: max/high" and would false-positive. Moon-phase spinner
 # glyphs alone are not matched (not ASCII-stable).
-BUSY_REGEX=${FM_BUSY_REGEX:-'esc (to )?interrupt|Working\.\.\.|Ctrl\+c:cancel|ctrl\+c to stop|thinking\.\.\.|Running a command'}
+BUSY_REGEX=${FM_BUSY_REGEX:-$FM_BUSY_REGEX_DEFAULT}
 # Always-on wake triage: most wakes during a long crew validation are benign (a
 # working: note or turn-end while a pipeline runs, a no-change heartbeat). Rather
 # than wake firstmate's LLM for each, this watcher classifies every wake in bash
@@ -135,8 +144,9 @@ BUSY_REGEX=${FM_BUSY_REGEX:-'esc (to )?interrupt|Working\.\.\.|Ctrl\+c:cancel|ct
 # busy pane is SURFACED, so a finish reported only through interactive pane menus
 # (no done: status) is never swallowed. An ACTIONABLE wake (a captain-relevant
 # signal, a no-verb signal whose crew is not provably working, any check, a stale
-# pane whose crew is not provably working, a provably-working stale past the
-# threshold, or anything unknown) is written to the durable queue and exits, which
+# pane whose crew is not provably working (except a backend-proved registered
+# idle/done agent), a provably-working stale past the threshold, or anything
+# unknown) is written to the durable queue and exits, which
 # is what wakes the LLM through the background-task completion. The same classifier
 # (fm-classify-lib.sh) backs the away-mode daemon; while state/.afk exists the
 # daemon owns triage, so this watcher reverts to one-shot (enqueue + exit on every
@@ -208,6 +218,34 @@ window_is_busy() {  # <window> <tail40>
     *)
       printf '%s' "$tail40" | grep -v '^[[:space:]]*$' | tail -6 | grep -qiE "$BUSY_REGEX"
       ;;
+  esac
+}
+
+# window_liveness_state: distinguish a busy turn, a registered agent resting at
+# its idle composer, and a confidently agent-less endpoint. Semantic `blocked`
+# remains attention-worthy so the poll path still backs up Herdr's push stream.
+# Backends without a recovery-grade classifier report unknown and retain the
+# existing stale policy.
+window_liveness_state() {  # <window> <tail40>
+  local w=$1 tail40=$2 backend agent_state agent_status
+  if window_is_busy "$w" "$tail40"; then
+    printf 'busy'
+    return 0
+  fi
+  backend=$(window_backend "$w")
+  agent_state=$(fm_backend_agent_state "$backend" "$w" 2>/dev/null)
+  case "$agent_state" in
+    alive)
+      agent_status=$(fm_backend_agent_status "$backend" "$w" 2>/dev/null)
+      case "$agent_status" in
+        working) printf 'busy' ;;
+        idle|done) printf 'finished-idle' ;;
+        blocked) printf 'attention' ;;
+        *) printf 'unknown' ;;
+      esac
+      ;;
+    dead|missing) printf 'gone' ;;
+    *) printf 'unknown' ;;
   esac
 }
 
@@ -897,7 +935,9 @@ EOF
   fi
 
   # Layer 1 backbone: pane staleness. Two consecutive identical hashes with no busy
-  # signature means the crewmate finished, is waiting, or is wedged. Each distinct
+  # signature need semantic liveness classification: a registered idle/done Herdr
+  # agent is a healthy finish, while an agent-less shell is gone and ambiguous
+  # backends retain the existing stopped/waiting/wedged policy. Each distinct
   # stale hash is surfaced, absorbed, or timed toward escalation once (.stale-*
   # remembers the hash already classified).
   while IFS= read -r w; do
@@ -926,13 +966,18 @@ EOF
     if [ "$h" = "$prev" ]; then
       n=$(( $(cat "$cf" 2>/dev/null || echo 0) + 1 ))
       echo "$n" > "$cf"
-      # Busy match: a backend's native semantic state when available (herdr),
-      # else the last 6 non-blank lines only (the TUI footer area, where every
-      # verified harness renders its busy indicator) so busy-looking strings
-      # in displayed content cannot suppress stale detection.
-      if [ "$n" -ge 2 ] && ! window_is_busy "$w" "$tail40"; then
+      # Prefer semantic liveness after the pane has held one stable hash. A
+      # registered Herdr agent at idle/done is a healthy finished worker, not a
+      # wedge; a bare shell remains gone and follows the actionable stale path.
+      # Busy corroboration still includes the shared footer regex.
+      liveness=$(window_liveness_state "$w" "$tail40")
+      if [ "$n" -ge 2 ] && [ "$liveness" = finished-idle ]; then
+        clear_pause_tracking "$w"
+        rm -f "$ssf" "$ewf"
+        triage_log "absorbed stale (registered agent idle at composer, healthy finish): $w"
+      elif [ "$n" -ge 2 ] && [ "$liveness" != busy ]; then
         # The pane is idle/stale at hash $h. Triage decides whether this wakes
-        # firstmate. Detection itself is unchanged from above.
+        # firstmate. A confidently gone agent follows this path immediately.
         if [ "$kind" = secondmate ]; then
           case "$(pause_state_class "$w" "$task")" in
             paused) handle_paused_stale "$w" "$task" "$h" ;;

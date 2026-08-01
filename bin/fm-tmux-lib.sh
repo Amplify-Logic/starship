@@ -59,17 +59,9 @@
 
 # shellcheck source=bin/fm-composer-lib.sh
 . "$(dirname -- "${BASH_SOURCE[0]}")/fm-composer-lib.sh"
-
-# Busy footers per harness (mirror fm-watch.sh). claude/codex: "esc to
-# interrupt"; opencode: "esc interrupt"; pi: "Working..."; grok: "Ctrl+c:cancel"
-# (grok's mid-turn cancel hint, shown iff a turn is running - verified grok 0.2.73);
-# cursor: "ctrl+c to stop" (verified 2026-07-19, Cursor CLI 2026.07.16-899851b).
-# cursor's SPINNER VERB is deliberately NOT matched: it changes with the phase
-# ("Working" while reasoning, "Running" during a tool call), so matching the verb
-# reads a tool-executing pane as idle and trips premature stale detection. The
-# footer hint is the phase-stable, ASCII, locale-safe signal, and it is absent
-# when idle.
-FM_TMUX_BUSY_REGEX_DEFAULT='esc (to )?interrupt|Working\.\.\.|Ctrl\+c:cancel|ctrl\+c to stop|thinking\.\.\.|Running a command'
+# Shared busy-footer signatures, including Kimi's reasoning and tool phases.
+# shellcheck source=bin/fm-busy-lib.sh
+. "$(dirname -- "${BASH_SOURCE[0]}")/fm-busy-lib.sh"
 
 # fm_tmux_strip_ghost: thin adapter over the shared, fleet-wide ghost extractor
 # fm_composer_strip_ghost (bin/fm-composer-lib.sh). It drops de-emphasised
@@ -194,7 +186,7 @@ fm_tmux_composer_state() {  # <target> -> empty|pending|unknown
   # A busy footer landing on the cursor line is not pending input (tmux-specific:
   # only tmux captures the raw cursor row, which may BE the footer).
   if [ -n "$stripped" ] \
-     && printf '%s' "$stripped" | grep -qiE "${FM_BUSY_REGEX:-$FM_TMUX_BUSY_REGEX_DEFAULT}"; then
+     && printf '%s' "$stripped" | grep -qiE "${FM_BUSY_REGEX:-$FM_BUSY_REGEX_DEFAULT}"; then
     printf 'empty'; return 0
   fi
   fm_composer_classify_content "$bordered" "$stripped" "${FM_COMPOSER_IDLE_RE:-$FM_COMPOSER_IDLE_RE_DEFAULT}" insensitive "$plain"
@@ -213,7 +205,7 @@ fm_pane_is_busy() {  # <target>
   local win=$1 tail40
   tail40=$(tmux capture-pane -p -t "$win" -S -40 2>/dev/null) || return 1
   printf '%s' "$tail40" | grep -v '^[[:space:]]*$' | tail -6 \
-    | grep -qiE "${FM_BUSY_REGEX:-$FM_TMUX_BUSY_REGEX_DEFAULT}"
+    | grep -qiE "${FM_BUSY_REGEX:-$FM_BUSY_REGEX_DEFAULT}"
 }
 
 # fm_tmux_submit_core: type <text> into <target> ONCE, then submit with Enter,

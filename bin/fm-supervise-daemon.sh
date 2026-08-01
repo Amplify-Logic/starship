@@ -193,7 +193,7 @@ WEDGE_ALARM_NOTIFIER_PID=
 # status_is_captain_relevant, window_to_task, scan_captain_relevant_statuses) now
 # live in bin/fm-classify-lib.sh, shared with the always-on watcher.
 # Composer-empty detection and the tmux busy-footer fallback live in
-# bin/fm-tmux-lib.sh (FM_TMUX_BUSY_REGEX_DEFAULT / fm_tmux_composer_state);
+# bin/fm-busy-lib.sh (FM_BUSY_REGEX_DEFAULT) and bin/fm-tmux-lib.sh;
 # FM_BUSY_REGEX still overrides the fallback busy set here, as before.
 INJECT_FAIL_SLEEP_DEFAULT=30
 INJECT_CONFIRM_RETRIES_DEFAULT=3
@@ -568,7 +568,7 @@ pane_is_busy() {  # <target> [backend]
   esac
   tail40=$(fm_backend_capture "$backend" "$target" 40 2>/dev/null) || return 1
   printf '%s' "$tail40" | grep -v '^[[:space:]]*$' | tail -6 \
-    | grep -qiE "${FM_BUSY_REGEX:-$FM_TMUX_BUSY_REGEX_DEFAULT}"
+    | grep -qiE "${FM_BUSY_REGEX:-$FM_BUSY_REGEX_DEFAULT}"
 }
 
 # pane_input_pending: the standalone "is there real unsubmitted text" predicate,
@@ -671,7 +671,7 @@ stale_window_is_busy() {  # <window> <state>
     busy) return 0 ;;
   esac
   printf '%s' "$tail40" | grep -v '^[[:space:]]*$' | tail -6 \
-    | grep -qiE "${FM_BUSY_REGEX:-$FM_TMUX_BUSY_REGEX_DEFAULT}"
+    | grep -qiE "${FM_BUSY_REGEX:-$FM_BUSY_REGEX_DEFAULT}"
 }
 
 escalate_add() {  # <state> <distilled-item>
