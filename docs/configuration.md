@@ -24,6 +24,20 @@ Wake, watcher, away-mode, and X-specific state mechanics remain with their named
 `AGENTS.md` retains the run-once and read-once operator rules, lock-refusal safety, installation consent, and direct-report recovery boundaries because those facts apply at every session start.
 Ordinary dead-direct-report recovery is owned by `stuck-crewmate-recovery`, while persistent-secondmate recovery is owned by `secondmate-provisioning`.
 
+## Standing upstream watch (config/upstream-watch)
+
+`bin/fm-upstream-watch.sh run` writes dated reports, its watermark, and a standalone bare git cache under private gitignored `data/upstream-watch/`.
+The cache shares neither objects nor refs with the live checkout, and every network fetch runs inside that cache.
+`bin/fm-upstream-watch-generate.sh` is the fetch-free report generator that a future private-repository workflow can call without retaining the local delivery.
+Reports contain only public upstream commit data and tracked fork-surface information, never captain preferences, backlog contents, project records, or other private operational context.
+The session-start bootstrap section prints `UPSTREAM_REPORT: new private report at <path>` until the report is read and acknowledged with `bin/fm-upstream-watch.sh acknowledge <path>`.
+
+`bin/fm-upstream-watch-schedule.sh` owns the inspectable macOS launchd schedule.
+Run `render` to inspect the complete definition, `install` to write and load it, `status` to print the installed file and live status, or `remove` to unload it.
+The default cadence is 604800 seconds (weekly).
+Set `interval_seconds = N` in private `config/upstream-watch`, or export `FM_UPSTREAM_WATCH_INTERVAL_SECONDS=N`, to override it.
+The generator and delivery scripts never port, merge, rebase, or publish anything.
+
 ## Backlog backend (.tasks.toml / config/backlog-backend)
 
 The tracked `.tasks.toml` pins the default `tasks-axi` markdown backend to `data/backlog.md`, with `done_keep = 10` and an archive at `data/done-archive.md`.
@@ -477,6 +491,7 @@ FM_UPSTREAM_REMOTE=upstream    # remote probed by bootstrap's read-only fork-dri
 FM_UPSTREAM_LS_TIMEOUT=3       # seconds allowed for the fork-drift ls-remote probe before it silently gives up
 FM_UPSTREAM_FETCH_TIMEOUT=5    # seconds allowed for the bounded tracking-ref-only fetch that lists commit subjects
 FM_UPSTREAM_SUBJECT_LIMIT=8    # max upstream commit subjects listed on the UPSTREAM: line
+FM_UPSTREAM_WATCH_INTERVAL_SECONDS=604800  # launchd standing-watch cadence; private config/upstream-watch interval_seconds is the file form
 FM_STALE_WORKTREE_LOCK_AGE_SECS=30       # min mtime age before fm-teardown.sh treats a leftover worktree git index.lock as provably stale
 FM_TREEHOUSE_RETURN_LOCK_RETRIES=3        # retries after a treehouse return fails on the transient git index.lock signature
 FM_TREEHOUSE_RETURN_LOCK_RETRY_WAIT_SECS=1 # seconds fm-teardown.sh waits before each retry after that signature

@@ -2,7 +2,7 @@
 name: bootstrap-diagnostics
 description: >-
   Agent-only handling playbook for session-start bootstrap diagnostics.
-  Use whenever the session-start digest's bootstrap section prints an actionable diagnostic line - MISSING, MISSING_MANUAL, BACKEND_INVALID, NEEDS_GH_AUTH, TANGLE, CREW_DISPATCH invalid, FLEET_SYNC, PR_CHECK_MIGRATION, SECONDMATE_SYNC, SECONDMATE_LIVENESS, NUDGE_SECONDMATES, TOOLCHAIN_DRIFT, UPSTREAM, or FMX - or when a standalone bin/fm-bootstrap.sh run prints one of those lines.
+  Use whenever the session-start digest's bootstrap section prints an actionable diagnostic line - MISSING, MISSING_MANUAL, BACKEND_INVALID, NEEDS_GH_AUTH, TANGLE, CREW_DISPATCH invalid, FLEET_SYNC, PR_CHECK_MIGRATION, SECONDMATE_SYNC, SECONDMATE_LIVENESS, NUDGE_SECONDMATES, TOOLCHAIN_DRIFT, UPSTREAM, UPSTREAM_REPORT, or FMX - or when a standalone bin/fm-bootstrap.sh run prints one of those lines.
   A silent bootstrap section, or a BOOTSTRAP_INFO fact, means no skill load.
 user-invocable: false
 metadata:
@@ -62,5 +62,9 @@ When any diagnostic needs captain attention, report the plain consequence and re
   Do not merge, rebase, or fast-forward from upstream yourself; `/updatefirstmate` and `bin/fm-update.sh` only advance from origin and cannot deliver upstream work on a fork.
   Wait for an explicit captain decision on whether and how to take the upstream commits.
   Absence of this line is normal for a non-fork home, an offline probe, or a current tip - never invent drift.
+- `UPSTREAM_REPORT: new private report at <path>` - the standing weekly upstream watch produced a new private report.
+  Read the report, relay only its new gains and named fork collisions, and make no porting change without a separate captain decision.
+  After reading, run `bin/fm-upstream-watch.sh acknowledge <path>` so the same report does not surface at later session starts.
+  A one-line "nothing to do" report needs only that one-line outcome, never padding from older reports.
 - `FMX: X mode on ...` / `FMX: X mode off ...` - bootstrap confirmed or removed the local X-mode poll artifacts (`docs/configuration.md` "X mode (.env)").
   Only when a running watcher needs the cadence transition applied immediately, restart the home-scoped watcher through the emitted harness supervision protocol; bootstrap deliberately never restarts the watcher itself.

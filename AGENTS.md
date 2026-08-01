@@ -459,7 +459,7 @@ It performs guarded fast-forward updates of firstmate and registered secondmate 
 
 These skills are not captain-invocable; load them only at their precise triggers.
 
-- `bootstrap-diagnostics` - load whenever the session-start digest's bootstrap section prints an actionable diagnostic line (`MISSING:`, `MISSING_MANUAL:`, `BACKEND_INVALID:`, `NEEDS_GH_AUTH`, `TANGLE:`, `CREW_DISPATCH: invalid`, `FLEET_SYNC:`, `PR_CHECK_MIGRATION:`, `SECONDMATE_SYNC:`, `SECONDMATE_LIVENESS:`, `NUDGE_SECONDMATES:`, `UPSTREAM:`, or `FMX:`); silence and `BOOTSTRAP_INFO:` need no load.
+- `bootstrap-diagnostics` - load whenever the session-start digest's bootstrap section prints an actionable diagnostic line (`MISSING:`, `MISSING_MANUAL:`, `BACKEND_INVALID:`, `NEEDS_GH_AUTH`, `TANGLE:`, `CREW_DISPATCH: invalid`, `FLEET_SYNC:`, `PR_CHECK_MIGRATION:`, `SECONDMATE_SYNC:`, `SECONDMATE_LIVENESS:`, `NUDGE_SECONDMATES:`, `UPSTREAM:`, `UPSTREAM_REPORT:`, or `FMX:`); silence and `BOOTSTRAP_INFO:` need no load.
 - `diagnostic-reasoning` - load before scoping a reported bug and before acting on a diagnostic report.
 - `adhd-auto-fire` - load before committing to a genuinely divergent, fuzzy, high-leverage decision (design, architecture, API/schema shape, naming, strategy, approach-selection, hard/ambiguous debugging).
 - `second-opinion-auto-fire` - load before committing to an architectural, security-sensitive, schema/API-contract, or otherwise high-stakes design or decision output.

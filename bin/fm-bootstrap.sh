@@ -20,6 +20,7 @@
 #                  <version> (<evidence>) - <why>",
 #                 "UPSTREAM: <N> commits behind <remote>/<branch> (<url>)
 #                  [- <R> upstream commits, <D> already delivered here] - <subjects>",
+#                 "UPSTREAM_REPORT: new private report at <path>",
 #                 "FMX: X mode on ..." or "FMX: X mode off ...".
 #          TOOLCHAIN_DRIFT compares docs/toolchain-manifest.tsv against PATH and
 #          prints one line per runtime whose installed version differs from the
@@ -39,6 +40,9 @@
 #          clause reports the raw and delivered figures whenever the ledger
 #          accounted for anything, and a fully delivered delta is silent.
 #          It never merges and never touches projects/; see bin/fm-upstream-lib.sh.
+#          UPSTREAM_REPORT is the read-only pending-report check owned by
+#          bin/fm-upstream-watch.sh. The weekly job writes only private data/;
+#          acknowledge the report after reading it so later sessions stay quiet.
 #          Surrounding tooling (no-mistakes, treehouse) is out of scope here - those
 #          already surface their own version gaps through MISSING / their CLIs.
 #          When a RUNNING secondmate worktree is fast-forwarded to firstmate's
@@ -881,6 +885,11 @@ fm_toolchain_check "$FM_ROOT"
 # that this home lacks, minus the commits the derived ported ledger accounts for.
 # Silent when not a fork / offline / current. Never merges.
 fm_upstream_check "$FM_ROOT" "$FM_HOME"
+# Read-only pending-report check for the standing private upstream watch.
+# Generation, watermarking, acknowledgement, and path validation remain owned
+# by fm-upstream-watch.sh rather than being reimplemented here.
+[ ! -x "$SCRIPT_DIR/fm-upstream-watch.sh" ] \
+  || "$SCRIPT_DIR/fm-upstream-watch.sh" pending
 if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then
   secondmate_sync
   secondmate_liveness_sweep
