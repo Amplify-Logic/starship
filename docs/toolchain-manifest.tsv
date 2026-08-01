@@ -1,0 +1,38 @@
+# Firstmate toolchain manifest: the certified version of each agent runtime,
+# why that version is the pin, and where its certification evidence lives.
+#
+# Read by fm_toolchain_check (bin/fm-toolchain-lib.sh), which compares each row
+# against PATH reality at session start and prints one TOOLCHAIN_DRIFT: line per
+# mismatch. That header owns the comparison and the fail-open contract; this
+# file owns only the rows.
+#
+# Tab-separated, five columns, one runtime per row:
+#
+#   runtime	command	certified	why	evidence
+#
+# runtime    manifest key, and the name shown in the diagnostic line.
+# command    the PATH binary probed with --version.
+# certified  the newest version this repo carries certification evidence for.
+# why        one line on what that pin buys, for the reader deciding what to do.
+# evidence   tracked path holding the certification record.
+#
+# Blank lines and lines starting with # are ignored. No column may contain a tab.
+#
+# RULE: certified is transcribed from tracked evidence, never guessed, and a
+# runtime is listed only once its --version output has been parsed on a real
+# machine. Recording a version nobody verified would rebuild the exact blindness
+# this manifest exists to remove.
+#
+# Deliberately absent, pending a machine that has them installed:
+#   opencode - certified 1.17.18 (docs/watcher-continuity.md), but the local
+#              install is broken (postinstall never ran, no platform binary), so
+#              its --version output could not be parsed here.
+#   grok     - certified 0.2.103 (docs/watcher-continuity.md), not installed here.
+# Add either row after verifying its probe output on a machine that has it.
+
+# runtime	command	certified	why	evidence
+claude	claude	2.1.217	Claude Code is the default crewmate harness and self-updates on the latest channel; the subagent-guard deny keys and turn-end continuity were certified here	docs/subagent-guard.md
+codex	codex	0.144.4	Codex native SessionStart stdout injection and the one-second foreground checkpoint path were certified on this build	docs/sessionstart-nudge.md
+kimi	kimi	0.27.0	bin/fm-primary.sh pins the Kimi primary to exact string equality with this version, so drift takes the certified primary down rather than degrading it	docs/kimi-harness.md
+cursor	agent	2026.07.20-8cc9c0b	Cursor primary SessionStart and PreToolUse were certified on this build while Stop remained unverified; the captain cost stop froze it here	docs/cursor-harness.md
+pi	pi	0.80.10	Pi primary turn-end extension, watcher continuity, and strict TypeScript checking were certified on this build	docs/watcher-continuity.md

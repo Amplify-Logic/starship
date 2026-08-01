@@ -1,0 +1,22 @@
+# Upstream commits this fork has already delivered, or deliberately declined,
+# that its commit history cannot prove on its own.
+#
+# Read by fm_upstream_undelivered (bin/fm-upstream-lib.sh), which owns the
+# format and the surrounding derivation. That header is the contract; this file
+# is only the reviewable escape hatch it refers to.
+#
+# One record per line:
+#
+#   <upstream-sha>  <ported|not-ported>  <evidence>
+#
+# <upstream-sha> may be abbreviated and matches the upstream commit by prefix.
+# <evidence> is free text and must name the fork commit or PR that settles it.
+# Blank lines and lines starting with # are ignored. An override always beats
+# the derived classes, so `not-ported` is also how a false positive is retired.
+#
+# DO NOT list a commit whose port the derivation already finds - a fork commit
+# body quoting the upstream subject with its `(#<pr>)`, or quoting the upstream
+# sha, needs no record here and a duplicate would only rot. Add a record only
+# when a port left no machine-readable trace at all.
+
+3f9e70e275663c033f9cd12ee7ae3c3598d1894c  ported  fork 4768a69 (Amplify-Logic/firstmate #24) hand-integrated upstream's two-consecutive-identical non-project path requirement into this fork's settle loop, keeping fork-only stable window-id targeting and PROJ_ABS_REAL physical compares; the body describes the integration but names neither the upstream sha nor upstream PR #765

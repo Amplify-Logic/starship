@@ -16,11 +16,28 @@
 #                 "NUDGE_SECONDMATES: secondmate <id>: send failed: <reason>",
 #                 "BOOTSTRAP_INFO: nudged fm-<id> with '<message>'",
 #                 "SECONDMATE_LIVENESS: secondmate <id>: skipped: <reason>|respawn failed: <reason>",
-#                 "UPSTREAM: <N> commits behind <remote>/<branch> (<url>) - <subjects>",
+#                 "TOOLCHAIN_DRIFT: <runtime> installed <version>, certified
+#                  <version> (<evidence>) - <why>",
+#                 "UPSTREAM: <N> commits behind <remote>/<branch> (<url>)
+#                  [- <R> upstream commits, <D> already delivered here] - <subjects>",
 #                 "FMX: X mode on ..." or "FMX: X mode off ...".
+#          TOOLCHAIN_DRIFT compares docs/toolchain-manifest.tsv against PATH and
+#          prints one line per runtime whose installed version differs from the
+#          version this repo carries certification evidence for. It FAILS OPEN:
+#          it reports and never blocks a launch, never installs, and never pins,
+#          because every certified runtime here self-updates and a strict gate in
+#          front of a self-updating binary is a scheduled outage. It is silent for
+#          a matching runtime, an absent binary (MISSING already owns that), and
+#          an unparseable --version; see bin/fm-toolchain-lib.sh.
 #          UPSTREAM is detect-only and silent when there is no upstream remote,
 #          origin and upstream share a URL (not a fork), the home is a secondmate,
 #          the network is unavailable, or HEAD already contains the upstream tip.
+#          Its count is the raw upstream delta MINUS the commits this fork has
+#          already delivered, derived from port references in the fork's own
+#          commit history plus a reviewable override ledger, so the number falls
+#          as batches land instead of only ever rising; the optional accounting
+#          clause reports the raw and delivered figures whenever the ledger
+#          accounted for anything, and a fully delivered delta is silent.
 #          It never merges and never touches projects/; see bin/fm-upstream-lib.sh.
 #          Surrounding tooling (no-mistakes, treehouse) is out of scope here - those
 #          already surface their own version gaps through MISSING / their CLIs.
@@ -114,6 +131,8 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 . "$SCRIPT_DIR/fm-backend.sh"
 # shellcheck source=bin/fm-upstream-lib.sh disable=SC1091
 . "$SCRIPT_DIR/fm-upstream-lib.sh"
+# shellcheck source=bin/fm-toolchain-lib.sh disable=SC1091
+. "$SCRIPT_DIR/fm-toolchain-lib.sh"
 
 fleet_sync_origin_backed_project_count() {
   local count proj
@@ -854,8 +873,13 @@ if [ "${FM_BOOTSTRAP_VERBOSE_FACTS:-0}" = 1 ] \
   && ! fm_backlog_backend_manual "$CONFIG" && fm_tasks_axi_compatible; then
   echo "BOOTSTRAP_INFO: tasks-axi available"
 fi
+# Read-only runtime drift check: compares docs/toolchain-manifest.tsv against
+# PATH. Detection only - it reports and never blocks a launch; see
+# bin/fm-toolchain-lib.sh for why a strict gate is the wrong shape here.
+fm_toolchain_check "$FM_ROOT"
 # Read-only fork drift check: surfaces commits on the configured upstream remote
-# that this home lacks. Silent when not a fork / offline / current. Never merges.
+# that this home lacks, minus the commits the derived ported ledger accounts for.
+# Silent when not a fork / offline / current. Never merges.
 fm_upstream_check "$FM_ROOT" "$FM_HOME"
 if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then
   secondmate_sync

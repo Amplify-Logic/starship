@@ -2,7 +2,7 @@
 name: bootstrap-diagnostics
 description: >-
   Agent-only handling playbook for session-start bootstrap diagnostics.
-  Use whenever the session-start digest's bootstrap section prints an actionable diagnostic line - MISSING, MISSING_MANUAL, BACKEND_INVALID, NEEDS_GH_AUTH, TANGLE, CREW_DISPATCH invalid, FLEET_SYNC, PR_CHECK_MIGRATION, SECONDMATE_SYNC, SECONDMATE_LIVENESS, NUDGE_SECONDMATES, UPSTREAM, or FMX - or when a standalone bin/fm-bootstrap.sh run prints one of those lines.
+  Use whenever the session-start digest's bootstrap section prints an actionable diagnostic line - MISSING, MISSING_MANUAL, BACKEND_INVALID, NEEDS_GH_AUTH, TANGLE, CREW_DISPATCH invalid, FLEET_SYNC, PR_CHECK_MIGRATION, SECONDMATE_SYNC, SECONDMATE_LIVENESS, NUDGE_SECONDMATES, TOOLCHAIN_DRIFT, UPSTREAM, or FMX - or when a standalone bin/fm-bootstrap.sh run prints one of those lines.
   A silent bootstrap section, or a BOOTSTRAP_INFO fact, means no skill load.
 user-invocable: false
 metadata:
@@ -48,8 +48,17 @@ When any diagnostic needs captain attention, report the plain consequence and re
   Investigate the reason because that secondmate is not guaranteed live.
 - `NUDGE_SECONDMATES: secondmate <id>: send failed: <reason>` - the secondmate sweep fast-forwarded a running secondmate home and its loaded instruction surface (`AGENTS.md`, `bin/`, or `.agents/skills/`) changed, but the deterministic `fm-send.sh fm-<id>` re-read nudge failed.
   Inspect the reason, keep the pending marker under `state/.secondmate-nudge-pending/` intact, and rerun session start after the endpoint or metadata issue is fixed so bootstrap can retry the exact same marked send.
+- `TOOLCHAIN_DRIFT: <runtime> installed <version>, certified <version> (<evidence>) - <why>` - an agent runtime on PATH is not the build this repo carries certification evidence for.
+  It is a report, not a gate: nothing is blocked, no launch was refused, and work continues on the drifted build.
+  Do not install, downgrade, or pin anything in response; the line exists so a human decides between re-certifying against the new build and pinning the old one.
+  Batch it into the next natural reply unless the drifted runtime is the one a task is about to depend on, or the line names a runtime whose certified pin is enforced elsewhere (`bin/fm-primary.sh` refuses a Kimi primary that is not its exact certified version, so Kimi drift means that certified path is down right now).
+  Report it to the captain as the concrete consequence - which runtime is running past the evidence, and what that evidence covered - never as a version-number dump.
+  Absence of this line means every listed runtime matched, was not installed, or printed no readable version; it is never a claim that a runtime was verified.
 - `UPSTREAM: <N> commits behind <remote>/<branch> (<url>) - <subjects>` - this home is a fork whose configured upstream has commits the local checkout lacks.
-  Tell the captain the commit count, the upstream URL, and the listed subjects so they can judge urgency.
+  `<N>` is what is genuinely still outstanding: the raw upstream delta minus the commits this fork has already delivered.
+  When the line carries an `<R> upstream commits, <D> already delivered here` clause, the ledger accounted for `<D>` of them, and the listed subjects are only the outstanding ones.
+  Tell the captain the outstanding count, the upstream URL, and the listed subjects so they can judge urgency; the raw figure is bookkeeping and rarely worth relaying.
+  A commit the fork has delivered without leaving any machine-readable reference belongs in `docs/upstream-ported-ledger.txt` as one reviewable record, which is also how a wrong match is retired; never replace the derivation with a stored total.
   Do not merge, rebase, or fast-forward from upstream yourself; `/updatefirstmate` and `bin/fm-update.sh` only advance from origin and cannot deliver upstream work on a fork.
   Wait for an explicit captain decision on whether and how to take the upstream commits.
   Absence of this line is normal for a non-fork home, an offline probe, or a current tip - never invent drift.
