@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Behavior tests for bin/fm-browse-session.sh: naming, profile isolation,
-# purge, and never-auto-connect guard logic (chrome-devtools-axi stubbed).
+# Behavior tests for bin/fm-browse-session.sh: headed visibility, naming,
+# profile isolation, purge, and captain-Chrome guards (axi stubbed).
 set -u
 
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
-BROWSE_SH="$ROOT/bin/fm-browse-session.sh"
+BROWSE_SH="${FM_BROWSE_SH_UNDER_TEST:-$ROOT/bin/fm-browse-session.sh}"
 TMP=$(fm_test_tmproot fm-browse-session)
 BASE_PATH=${FM_TEST_BASE_PATH:-/usr/bin:/bin:/usr/sbin:/sbin}
 HOME_DIR="$TMP/home"
@@ -23,6 +23,7 @@ set -u
 log=${FM_BROWSE_TEST_LOG:?}
 {
   printf 'argv=%s\n' "$*"
+  printf 'HEADED=%s\n' "${CHROME_DEVTOOLS_AXI_HEADED-<unset>}"
   printf 'SESSION=%s\n' "${CHROME_DEVTOOLS_AXI_SESSION-<unset>}"
   printf 'USER_DATA_DIR=%s\n' "${CHROME_DEVTOOLS_AXI_USER_DATA_DIR-<unset>}"
   if [ -n "${CHROME_DEVTOOLS_AXI_AUTO_CONNECT+x}" ]; then
@@ -91,6 +92,7 @@ test_start_names_session_and_isolates_profile() {
 
   set +e
   out=$(
+    CHROME_DEVTOOLS_AXI_HEADED=0 \
     CHROME_DEVTOOLS_AXI_AUTO_CONNECT=1 \
     CHROME_DEVTOOLS_AXI_BROWSER_URL=http://127.0.0.1:9222 \
       run_browse "$fakebin" "$log" start "$id" 2>&1
@@ -101,6 +103,8 @@ test_start_names_session_and_isolates_profile() {
   profile="$STATE_DIR/browse/$id/profile"
   [ -d "$profile" ] || fail "start did not create isolated profile dir"
   [ -f "$STATE_DIR/browse/$id/session.live" ] || fail "start did not write live marker"
+  assert_contains "$(cat "$log")" 'HEADED=1' \
+    "headed mode is forced despite ambient=0"
   assert_contains "$(cat "$log")" "SESSION=$id" "named session equals task id"
   assert_contains "$(cat "$log")" "USER_DATA_DIR=$profile" "profile dir isolation"
   assert_contains "$(cat "$log")" 'AUTO_CONNECT=<unset>' \
@@ -109,7 +113,33 @@ test_start_names_session_and_isolates_profile() {
     "never-auto-connect: BROWSER_URL stripped despite ambient attach URL"
   assert_contains "$(cat "$log")" 'argv=start' "start invokes axi start"
   assert_contains "$out" "session=$id" "start reports session"
-  pass "start names the session and isolates the profile without auto-connect"
+  pass "start forces headed mode and isolates the named task profile"
+}
+
+test_every_axi_invocation_strips_captain_chrome_inputs() {
+  local fakebin log recorded auto_count url_count
+  fakebin=$(fm_fakebin "$TMP/attach-guard")
+  install_axi_stub "$fakebin"
+  log="$TMP/attach-guard/axi.log"
+  : > "$log"
+
+  CHROME_DEVTOOLS_AXI_AUTO_CONNECT=unsafe-auto-connect \
+  CHROME_DEVTOOLS_AXI_BROWSER_URL=http://127.0.0.1:9222 \
+    run_browse "$fakebin" "$log" start task-attach-guard >/dev/null
+  CHROME_DEVTOOLS_AXI_AUTO_CONNECT=unsafe-auto-connect \
+  CHROME_DEVTOOLS_AXI_BROWSER_URL=http://127.0.0.1:9222 \
+    run_browse "$fakebin" "$log" stop task-attach-guard --purge >/dev/null
+
+  recorded=$(cat "$log")
+  assert_not_contains "$recorded" 'AUTO_CONNECT=unsafe-auto-connect' \
+    "AUTO_CONNECT must never reach axi"
+  assert_not_contains "$recorded" 'BROWSER_URL=http://127.0.0.1:9222' \
+    "BROWSER_URL must never reach axi"
+  auto_count=$(grep -c '^AUTO_CONNECT=<unset>$' "$log")
+  url_count=$(grep -c '^BROWSER_URL=<unset>$' "$log")
+  [ "$auto_count" -eq 2 ] || fail "AUTO_CONNECT was not stripped from every axi call"
+  [ "$url_count" -eq 2 ] || fail "BROWSER_URL was not stripped from every axi call"
+  pass "start and stop always strip both captain-Chrome attach inputs"
 }
 
 test_two_tasks_get_distinct_profiles() {
@@ -183,6 +213,7 @@ test_axi_absent_refuses() {
 test_help_exits_zero
 test_invalid_task_id_refuses
 test_start_names_session_and_isolates_profile
+test_every_axi_invocation_strips_captain_chrome_inputs
 test_two_tasks_get_distinct_profiles
 test_stop_retains_profile_purge_removes
 test_teardown_source_purges_browse_dir

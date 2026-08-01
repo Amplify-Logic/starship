@@ -1,8 +1,9 @@
 # Worker browsing (isolated eyes)
 
-Firstmate gives each worker an isolated browser session so browsing never shares cookies, logins, or history with the captain or with other tasks.
+Firstmate gives each worker a visible, isolated browser session so browsing never shares cookies, logins, or history with the captain or with other tasks.
+The captain can watch the headed Chrome window, but watching never counts as approval for an outward action.
 `chrome-devtools-axi` owns browsing mechanics.
-`bin/fm-browse-session.sh` owns naming, isolation, and cleanup only.
+`bin/fm-browse-session.sh` owns headed visibility, naming, isolation, and cleanup only.
 
 ## Never touch the captain's Chrome
 
@@ -19,7 +20,7 @@ fm-browse-session.sh stop <task-id> [--purge]
 fm-browse-session.sh list
 ```
 
-- `start` launches or connects a named `chrome-devtools-axi` session keyed to the task id (`CHROME_DEVTOOLS_AXI_SESSION=<task-id>`), backed by the per-task profile directory above.
+- `start` launches a headed, named `chrome-devtools-axi` session keyed to the task id (`CHROME_DEVTOOLS_AXI_HEADED=1` and `CHROME_DEVTOOLS_AXI_SESSION=<task-id>`), backed by the per-task profile directory above.
 - `stop` closes the session and leaves the profile unless `--purge` removes `state/browse/<task-id>/`.
 - `list` prints live named sessions recorded for this home (`task_id=… session=… profile=…`).
 - Task ids must satisfy the same path-safe alphabet as other firstmate task ids and the axi session-name rules (1-64 chars from `[A-Za-z0-9._-]`, not dots-only).

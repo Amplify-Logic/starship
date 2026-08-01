@@ -7,7 +7,8 @@
 # not shared identity or cache-coherency schemes (see docs/worker-browsing.md).
 #
 # chrome-devtools-axi owns browsing mechanics; this script owns naming,
-# isolation, and cleanup only.
+# headed visibility, isolation, and cleanup only.
+# Worker sessions are always headed via CHROME_DEVTOOLS_AXI_HEADED=1.
 # Named sessions use CHROME_DEVTOOLS_AXI_SESSION=<task-id>.
 # Profiles use CHROME_DEVTOOLS_AXI_USER_DATA_DIR=$STATE/browse/<task-id>/profile.
 # Ambient CHROME_DEVTOOLS_AXI_AUTO_CONNECT and CHROME_DEVTOOLS_AXI_BROWSER_URL are
@@ -46,8 +47,9 @@ usage: fm-browse-session.sh start <task-id>
        fm-browse-session.sh list
        fm-browse-session.sh -h|--help
 
-Isolated per-task chrome-devtools-axi sessions with per-task profile dirs under
-state/browse/<task-id>/profile. Never attaches to the captain's Chrome.
+Visible, isolated per-task chrome-devtools-axi sessions with per-task profile
+folders under state/browse/<task-id>/profile. Never attaches to the captain's
+Chrome.
 See docs/worker-browsing.md.
 EOF
 }
@@ -115,6 +117,7 @@ run_axi_isolated() {
   # Explicitly defeat ambient attach-to-existing-browser knobs.
   env -u CHROME_DEVTOOLS_AXI_AUTO_CONNECT \
       -u CHROME_DEVTOOLS_AXI_BROWSER_URL \
+      CHROME_DEVTOOLS_AXI_HEADED=1 \
       CHROME_DEVTOOLS_AXI_SESSION="$id" \
       CHROME_DEVTOOLS_AXI_USER_DATA_DIR="$profile" \
       "$axi" "$@"
