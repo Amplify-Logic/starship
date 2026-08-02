@@ -1,0 +1,47 @@
+{
+  "schema": "fm-worker-boundary-source.v1",
+  "privileged_paths": [
+    {
+      "kind": "executable",
+      "install_path": "${REPO}/bin/fm-action-gateway.sh",
+      "ancestor_check_source": null
+    },
+    {
+      "kind": "config",
+      "install_path": "${REPO}/config/action-captain-secret",
+      "ancestor_check_source": null
+    },
+    {
+      "kind": "state",
+      "install_path": "${REPO}/data/action-gateway/",
+      "ancestor_check_source": null
+    }
+  ],
+  "privileged_sources": [
+    "bin/fm-action-gateway.sh"
+  ],
+  "forbidden_production_trust_env": [
+    "FM_ACTION_AUDIT_LOG",
+    "FM_ACTION_GATEWAY_ROOT",
+    "FM_ACTION_CAPTAIN_SECRET",
+    "FM_DATA_OVERRIDE",
+    "FM_ACTION_GATEWAY_NOW"
+  ],
+  "required_socket_purposes": [
+    "dispatch",
+    "inference",
+    "prepare",
+    "approval",
+    "execution"
+  ],
+  "sockets": [],
+  "launcher_attestation": {
+    "ambient_fallback": false,
+    "close_inherited_descriptors": true,
+    "container_capabilities": [],
+    "container_network": "none",
+    "container_read_only_root": true,
+    "mode": "restricted",
+    "worker_uid": "fm-worker"
+  }
+}

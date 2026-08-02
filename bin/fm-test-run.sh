@@ -126,6 +126,7 @@ family_for_basename() {
     fm-pi-primary-types.test.sh|\
     fm-send-popup-settle.test.sh|fm-send-settle.test.sh|fm-stow-contract.test.sh|\
     fm-supervision-instructions.test.sh|fm-tmux-submit-busy.test.sh|fm-transition-lib.test.sh|\
+    fm-worker-boundary-regression.test.sh|\
     fm-test-run.test.sh|fm-test-isolation-proof.test.sh)
       printf '%s\n' pure-contract-unit
       ;;
@@ -688,7 +689,10 @@ families_for_changed_path() {
     bin/fm-decision-hold.sh|bin/fm-decision-surface.*|bin/fm-supervision*|bin/fm-transition-lib.sh|\
     bin/fm-tmux-lib.sh|bin/fm-marker-lib.sh|bin/fm-tasks-axi-lib.sh|\
     bin/fm-primary-scope-lib.sh|bin/fm-project-mode.sh|bin/fm-promote.sh|\
-    bin/fm-ff-lib.sh|bin/fm-gotmp*|bin/*pretool*)
+    bin/fm-ff-lib.sh|bin/fm-gotmp*|bin/*pretool*|\
+    bin/fm-worker-boundary-regression.sh|docs/fm-worker-boundary-source.json)
+      # The source manifest is the behaviour-bearing input to the boundary pack's
+      # installation invariants, not prose, so it selects the same lane.
       printf '%s\n' pure-contract-unit
       ;;
     .github/workflows/ci.yml|.no-mistakes.yaml)

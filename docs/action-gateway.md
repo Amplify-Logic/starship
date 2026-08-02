@@ -114,7 +114,7 @@ Rules:
 
 - Workers emit ActionRequests through this broker; they do not hold execute authority.
 - `gate-check --digest` fails closed unless the digest is currently `approved` by a distinct attributable approver.
-- Production path overrides (`FM_ACTION_AUDIT_LOG`, `FM_ACTION_GATEWAY_ROOT`, `FM_DATA_OVERRIDE`, `FM_ACTION_GATEWAY_NOW`, `FM_ACTION_CAPTAIN_SECRET`) require `FM_ACTION_GATEWAY_TEST=1`.
+- Production path overrides (`FM_ACTION_AUDIT_LOG`, `FM_ACTION_GATEWAY_ROOT`, `FM_DATA_OVERRIDE`, `FM_ACTION_GATEWAY_NOW`, `FM_ACTION_CAPTAIN_SECRET`) require `FM_ACTION_GATEWAY_TEST=1`. This list owns that set; `forbidden_production_trust_env` in `docs/fm-worker-boundary-source.json` is the machine-readable mirror the worker-boundary pack scans privileged sources for, so extend both together.
 - Audit log and inbox files are created mode `0600` under `data/action-gateway/` (mode `0700`).
 - Failure to verify an approval refuses rather than proceeds.
 - Full OS/network credential isolation for workers remains future work; this slice makes the broker the only supported approval and gate path and keeps execution unwired.
