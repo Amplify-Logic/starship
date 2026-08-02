@@ -26,6 +26,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-second-opinion.sh`   | Bounded rival-model second-opinion wrapper; hostile review via Pi, neutral cwd, Codex quota floor (docs/second-opinion.md) |
 | `fm-browse-session.sh`   | Isolated per-task chrome-devtools-axi sessions with per-task profiles; never attaches to the captain's Chrome (docs/worker-browsing.md) |
 | `fm-action-gateway.sh`   | Privilege-separated confirm-first action broker: digest-bound captain approval, locked state machine, hard spend/messaging ceilings, execution stubbed (docs/action-gateway.md) |
+| `fm-action-gateway-v2.py` | Exercise gateway v2 strict parsing, immutable plans, SQLite state, and narrow peer-authenticated protocols in unprivileged test mode with all execution disabled (docs/action-gateway-v2.md) |
 | `fm-worker-boundary-regression.sh` | Run the synthetic unprivileged adversarial isolation pack for ambient, restricted-account, and nested-container targets (docs/worker-boundary-regression.md) |
 | `fm-brief.sh`            | Scaffold ship, scout, secondmate-charter, and Herdr-lab briefs                       |
 | `fm-herdr-lab.sh`        | Provision and guardedly operate an isolated, never-default Herdr lab session         |

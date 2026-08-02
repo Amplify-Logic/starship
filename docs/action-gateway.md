@@ -143,4 +143,5 @@ Mutating commands print `key=value` lines (at least `decision=` and `state=`) on
 ## Future work
 
 OS/network capability separation for workers, a privileged executor that performs the exact digested action, broader allowlists, anomaly detection, and watchdog demotion signals remain future work.
+The first slice of that separation exists as an unprivileged, execution-disabled v2 broker that leaves this one unchanged; see [`docs/action-gateway-v2.md`](action-gateway-v2.md).
 Browser isolation itself remains independent of consent tiers; see [`docs/worker-browsing.md`](worker-browsing.md).

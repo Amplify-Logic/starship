@@ -29,6 +29,7 @@ A resource ceiling is only recognized from a signal kill, because an ordinary no
 The gateway request probes likewise report `NO_BASELINE` when the gateway rejects the valid baseline request, since rejections prove nothing once nothing is accepted.
 The gateway database, inbox, and audit boundaries carry the same requirement: they report `NO_BASELINE` without an accepted baseline request and `NO_CANARY` when the state the baseline should have written is missing or empty, because an unreadable path that was never created denies nothing.
 The harness verifies those state canaries itself before the payload is asked to reach them, and its verdict is not overridable by the payload result.
+A gateway that answers `inspect-test-paths` declares its own database, approval-state, and audit paths, so `gateway.inbox-read` follows the declared approval state instead of assuming a filesystem approval file that gateway v2 no longer writes.
 
 The committed source manifest intentionally describes the current workspace gateway and ambient launcher.
 It therefore remains red until the fixed-path runner, gateway channels, artifact importer, and trusted installation verifier replace those sources.
@@ -56,7 +57,8 @@ The adapter must not grant host-path access merely because the hostile fixture n
 
 Use `--artifact-adapter PATH` when the quarantine importer exists.
 The importer passes only when it rejects each hostile archive, imports nothing, and leaves the synthetic outside canary unchanged.
-Use `--gateway PATH` for a command-compatible gateway test adapter when gateway v2 replaces the current shell broker.
+Use `--gateway PATH` for a command-compatible gateway test adapter; without it the pack measures the landed `bin/fm-action-gateway.sh` broker.
+`bin/fm-action-gateway-v2.py` is the current such adapter and is scored by this pack under a temporary root ([`docs/action-gateway-v2.md`](action-gateway-v2.md)).
 Use `--source-manifest PATH` for the reviewed installation manifest and `--attestation PATH` for trusted launcher output.
 
 ## Source manifest contract

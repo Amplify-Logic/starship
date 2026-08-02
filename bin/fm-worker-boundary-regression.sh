@@ -39,6 +39,15 @@ The artifact adapter is invoked as:
   ADAPTER --input ARCHIVE --destination DIRECTORY
 It passes only when it rejects the archive and leaves the synthetic outside canary unchanged.
 
+The gateway under test is invoked as:
+  GATEWAY prepare < REQUEST
+  GATEWAY status --digest DIGEST
+  GATEWAY inspect-test-paths   (optional, probed once the baseline request is accepted)
+inspect-test-paths must print one JSON object with schema fm.gateway-test-paths.v2.
+Its string database, approval_state, and audit members name the state the baseline wrote.
+The state canaries follow those declared paths, so a gateway that keeps no filesystem approval
+file is still scored, and a gateway that fails or answers otherwise keeps the default layout.
+
 Every source-manifest privileged path must declare kind executable, config, or state
 and an install_path under one of these approved system prefixes:
   /Library/PrivilegedHelperTools/firstmate/   /Library/LaunchDaemons/
@@ -531,6 +540,30 @@ def gateway_probes(gateway: Path, root: Path) -> Tuple[Dict[str, str], Dict[str,
         "gateway_audit": str(state / "action-audit.log"),
         "gateway_inbox": str(state / "captain-inbox" / f"{digest}.approval"),
     }
+    if first.returncode == 0:
+        inspected = subprocess.run(
+            [str(gateway), "inspect-test-paths"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            env=env,
+            timeout=8,
+            check=False,
+        )
+        if inspected.returncode == 0:
+            try:
+                declared_paths = json.loads(inspected.stdout)
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                declared_paths = None
+            if (
+                isinstance(declared_paths, dict)
+                and declared_paths.get("schema") == "fm.gateway-test-paths.v2"
+                and all(isinstance(declared_paths.get(key), str) for key in ("database", "approval_state", "audit"))
+            ):
+                paths = {
+                    "gateway_database": declared_paths["database"],
+                    "gateway_audit": declared_paths["audit"],
+                    "gateway_inbox": declared_paths["approval_state"],
+                }
 
     malformed = invoke_gateway(gateway, env, b'{"task_id":')
     replay = invoke_gateway(gateway, env, first_raw)
