@@ -45,10 +45,25 @@
 # writes state/.primary-active for bin/fm-primary-handoff.sh; disabled or absent
 # config leaves that marker unwritten (docs/primary-handoff.md).
 #
-# Kimi 0.27.0 is verified as a PRIMARY here and, separately, as a WORKER via
+# Kimi is verified as a PRIMARY here and, separately, as a WORKER via
 # fm-spawn --harness kimi (docs/kimi-harness.md, 2026-07-23).
-# The launcher requires that exact empirically verified version and builds a
-# persistent isolated KIMI_CODE_HOME under this Firstmate home's data directory.
+# Two builds are accepted without a warning, and they are deliberately different
+# values: KIMI_CERTIFIED_VERSION is the last full primary certification, which is
+# what docs/toolchain-manifest.tsv's kimi row transcribes, and
+# KIMI_VALIDATED_VERSION is the newer build whose primary hook mechanics were
+# re-verified without a full certification. Both are named below, and the launch
+# check is set membership rather than one equality: once those two legitimately
+# differ, a single exact-match test cannot express "unevidenced" and would always
+# report one of the two accepted builds as unevidenced.
+# Any other installed version WARNS and launches anyway; it does not block.
+# Kimi ships a self-updater, so an exact-equality gate in front of it turned
+# every publisher release into an unscheduled outage of the certified primary
+# rather than a merely uncertified one - the same reasoning bin/fm-toolchain-lib.sh
+# applies fleet-wide. The functional gate that remains is `kimi doctor` against
+# the managed home, which fails the launch when the integration is actually
+# broken instead of when a version string merely moved.
+# The launcher builds a persistent isolated KIMI_CODE_HOME under this Firstmate
+# home's data directory.
 # It copies the selected source config, links only required authentication and
 # user-resource paths, and installs a managed Firstmate plugin there.
 # Kimi's ordinary SessionStart hook discards stdout; the plugin's native
@@ -97,7 +112,19 @@ FM_ROOT=$(CDPATH='' cd -P -- "$SCRIPT_DIR/.." && pwd -P)
 FM_HOME=${FM_HOME:-$FM_ROOT}
 STATE=${FM_STATE_OVERRIDE:-$FM_HOME/state}
 DATA=${FM_DATA_OVERRIDE:-$FM_HOME/data}
-KIMI_VALIDATED_VERSION=0.27.0
+# The two Kimi builds this repo carries primary evidence for; running either one
+# is quiet, anything else warns and still launches. Both are literal constants,
+# never parsed from docs/toolchain-manifest.tsv, because the launcher does not
+# otherwise read that file. `kimi doctor` against the managed home is the
+# functional gate that can still fail a launch.
+# Last full primary certification, transcribed by the manifest's kimi row.
+KIMI_CERTIFIED_VERSION=0.27.0
+# Newest build with primary hook evidence but no full certification
+# (docs/kimi-harness.md), so it reads differently from the certified build above
+# on purpose rather than as a drift bug.
+KIMI_VALIDATED_VERSION=0.31.1
+# Cursor stays an exact-match block: its Stop turn-end hook is unverified
+# (docs/cursor-harness.md), so drift there is not merely uncertified.
 CURSOR_VALIDATED_VERSION=2026.07.20-8cc9c0b
 
 usage() {
@@ -418,8 +445,17 @@ verify_integrations
 
 if [ "$PROFILE" = kimi-k3 ]; then
   version=$("$CLI" --version 2>/dev/null | head -1)
-  [ "$version" = "$KIMI_VALIDATED_VERSION" ] \
-    || die "Kimi primary support is verified only for $KIMI_VALIDATED_VERSION; found ${version:-unknown}"
+  case $version in
+    "$KIMI_CERTIFIED_VERSION")
+      printf 'fm-primary: Kimi %s is the certified primary build (docs/kimi-harness.md)\n' \
+        "$KIMI_CERTIFIED_VERSION" >&2 ;;
+    "$KIMI_VALIDATED_VERSION")
+      printf 'fm-primary: Kimi %s is the newest-evidence build: hooks re-verified 2026-08-04, not a full certification (docs/kimi-harness.md)\n' \
+        "$KIMI_VALIDATED_VERSION" >&2 ;;
+    *)
+      printf 'fm-primary: Kimi primary carries evidence for %s (certified) and %s (newest evidence); found %s (docs/kimi-harness.md) - launching anyway\n' \
+        "$KIMI_CERTIFIED_VERSION" "$KIMI_VALIDATED_VERSION" "${version:-unknown}" >&2 ;;
+  esac
   KIMI_CODE_HOME="$KIMI_PRIMARY_HOME" "$CLI" doctor >/dev/null 2>&1 \
     || die "managed Kimi primary integration failed 'kimi doctor'"
 fi

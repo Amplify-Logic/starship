@@ -91,7 +91,7 @@ Full mechanics, scoping, dated commands, payloads, and fail-open evidence live i
 - `opencode`: verified on 1.17.18; `session.created` plus `client.session.promptAsync` starts the nudge turn in the TUI, while `opencode run` remains fail-open headless.
 - `pi`: verified native `session_start`; the existing primary extension handles `startup`, `new`, and `resume` and uses `pi.sendMessage` to inject context without racing a positional launch prompt.
 - `grok`: the 0.2.103 project `SessionStart` event fires with `source=new`, but stdout does not reach model context; the tracked project hook remains fail-open, and a global token-guarded fallback requires a captain decision.
-- `kimi`: verified on 0.27.0; ordinary SessionStart hook stdout is discarded, so the managed plugin's native `sessionStart.skill` carries the nudge into model context on startup, resume, and `/new`.
+- `kimi`: verified on 0.27.0 and re-verified on 0.31.1 (2026-08-04); ordinary SessionStart hook stdout is discarded, so the managed plugin's native `sessionStart.skill` carries the nudge into model context on startup, resume, and `/new`.
 
 ## Primary watcher supervision
 
@@ -112,7 +112,10 @@ Cursor primary is certified, but Cursor CLI exposes no third-party status-line A
 
 ## Kimi worker + primary (WORKER verified 2026-07-23 on 0.27.0; PRIMARY certified 2026-07-19)
 
-Kimi Code support is pinned for PRIMARY launch through `bin/fm-primary.sh kimi-k3` with `--yolo` on exactly 0.27.0.
+Kimi Code PRIMARY launch runs through `bin/fm-primary.sh kimi-k3` with `--yolo`.
+`bin/fm-primary.sh` accepts two builds without a warning: `KIMI_CERTIFIED_VERSION` 0.27.0, the last full primary certification, and `KIMI_VALIDATED_VERSION` 0.31.1, the newest build whose hook mechanics were re-verified without a full certification.
+Any other build warns and launches; it does not block, because Kimi ships a self-updater.
+`kimi doctor` against the managed home is the functional gate that can still fail a launch.
 The primary launcher supplies `FM_PRIMARY_HARNESS=kimi` because Kimi does not expose a stable native child-process marker.
 Its isolated managed plugin owns native session-start skill injection plus blockable PreToolUse and Stop hooks without editing the operator's source Kimi home.
 

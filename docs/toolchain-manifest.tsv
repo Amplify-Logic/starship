@@ -21,18 +21,27 @@
 # RULE: certified is transcribed from tracked evidence, never guessed, and a
 # runtime is listed only once its --version output has been parsed on a real
 # machine. Recording a version nobody verified would rebuild the exact blindness
-# this manifest exists to remove.
+# this manifest exists to remove. A dated re-verification of one behavior on a
+# newer build is not a certification and does not move this column; only a
+# certification record in the evidence path does.
 #
-# Deliberately absent, pending a machine that has them installed:
-#   opencode - certified 1.17.18 (docs/watcher-continuity.md), but the local
-#              install is broken (postinstall never ran, no platform binary), so
-#              its --version output could not be parsed here.
-#   grok     - certified 0.2.103 (docs/watcher-continuity.md), not installed here.
-# Add either row after verifying its probe output on a machine that has it.
+# Deliberately absent, pending a machine that has it installed:
+#   grok - certified 0.2.103 (docs/watcher-continuity.md), not installed here.
+#          The x.ai installer left a truncated 59170816-byte download under
+#          ~/.grok/downloads and an empty ~/.grok/bin, so no binary runs and no
+#          --version output could be parsed on this machine.
+# Add the row after verifying its probe output on a machine that has it.
+#
+# This machine does have an opencode platform binary, contrary to the note that
+# stood here before: the global install is unusable only because its postinstall
+# never ran, which is a wiring defect and not a missing build.
+# The opencode row's certified version is transcribed from
+# docs/watcher-continuity.md.
 
 # runtime	command	certified	why	evidence
 claude	claude	2.1.217	Claude Code is the default crewmate harness and self-updates on the latest channel; the subagent-guard deny keys and turn-end continuity were certified here	docs/subagent-guard.md
 codex	codex	0.144.4	Codex native SessionStart stdout injection and the one-second foreground checkpoint path were certified on this build	docs/sessionstart-nudge.md
-kimi	kimi	0.27.0	bin/fm-primary.sh pins the Kimi primary to exact string equality with this version, so drift takes the certified primary down rather than degrading it	docs/kimi-harness.md
+kimi	kimi	0.27.0	the last build carrying a full primary certification; 0.31.1 re-verified three hook mechanisms but never exercised watcher protocol, supervision protocol, resume, or interrupt, and bin/fm-primary.sh accepts both evidenced builds quietly, warns on any other and blocks on none, so this line reports an uncertified build and not an outage	docs/kimi-harness.md
 cursor	agent	2026.07.20-8cc9c0b	Cursor primary SessionStart and PreToolUse were certified on this build while Stop remained unverified; the captain cost stop froze it here	docs/cursor-harness.md
 pi	pi	0.80.10	Pi primary turn-end extension, watcher continuity, and strict TypeScript checking were certified on this build	docs/watcher-continuity.md
+opencode	opencode	1.17.18	OpenCode primary watcher re-arm after an actionable child close was certified on this build; opencode auto-upgrades itself in the background, so drift here is expected rather than alarming	docs/watcher-continuity.md

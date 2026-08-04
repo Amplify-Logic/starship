@@ -718,7 +718,9 @@ families_for_changed_path() {
     tests/*)
       printf '%s\n' "__unmapped__:$path"
       ;;
-    README.md|LICENSE|assets/*|docs/*|.gitignore)
+    README.md|ONBOARDING.md|LICENSE|assets/*|docs/*|.gitignore)
+      # Documentation-only prose with no behavior test owner (see the
+      # onboarding-guide capability in fork-surface.conf).
       ;;
     *)
       families_for_test_reference "$path" \

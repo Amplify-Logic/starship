@@ -23,8 +23,13 @@
 # after spawn - so an installed version is not a stable fact even within one
 # session. A strict equality gate in front of a self-updating binary converts
 # every publisher release into an unscheduled fleet outage, which is exactly
-# what bin/fm-primary.sh's exact-match Kimi pin already does: it is the reason a
-# certified primary path is down rather than merely uncertified.
+# what bin/fm-primary.sh's exact-match Kimi pin used to do: it took the
+# certified primary down rather than leaving it merely uncertified, and it
+# stayed down once the pinned build no longer existed on disk. That gate now
+# accepts every build it holds primary evidence for, warns on the rest, and
+# launches either way, on this same reasoning; bin/fm-primary.sh owns it.
+# Cursor keeps its exact-match block deliberately, because its Stop turn-end
+# hook is unverified rather than merely drifted (docs/cursor-harness.md).
 #
 # The failure this check exists to prevent is the opposite one - silence. Every
 # other certified runtime drifted past its certification with nothing noticing,

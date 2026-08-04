@@ -395,7 +395,8 @@ Once a tool is on your machine and logged in, your first mate will start choosin
 | **Grok** (`grok`) | Another orchestrator option | xAI |
 | **opencode** | Another worker option | Provider-dependent |
 
-Kimi can run the primary session and also take worker jobs via `fm-spawn --harness kimi` (Kimi Code 0.27.0, K3).
+Kimi can run the primary session and also take worker jobs via `fm-spawn --harness kimi` (K3 model).
+Install the current Kimi Code: the launcher never refuses a newer build over its version, and it prints one line at startup saying what evidence this repo has for the build you are running.
 
 If you later want a **second Claude login** without disturbing your main one: make a folder, set `CLAUDE_CONFIG_DIR` to it, and log in there.
 Credentials come from logging in on that machine - a config directory is **never copied between machines**.

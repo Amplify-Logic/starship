@@ -45,6 +45,9 @@ TMP_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/fm-gotmp-tests.XXXXXX")
 # state and helper scripts inside it. Stub the helper scripts fm-teardown calls so no
 # live tmux/treehouse/fleet state is touched. A nonexistent worktree path makes both
 # `if [ -d "$WT" ]` guards skip, so teardown runs straight to the cleanup + state rm.
+# Every fixture goes through here, so a newly required sibling is added once.
+# An empty <tasktmp> writes a meta with no tasktmp= line at all, which is what a
+# pre-fix task's meta looks like; it is not the same as an empty tasktmp= value.
 make_fake_root() {
   local id=$1 tasktmp=$2
   local fake="$TMP_ROOT/$id"
@@ -59,6 +62,9 @@ make_fake_root() {
   ln -s "$ROOT/bin/backends/tmux.sh" "$fake/bin/backends/tmux.sh"
   ln -s "$ROOT/bin/fm-tmux-lib.sh" "$fake/bin/fm-tmux-lib.sh"
   ln -s "$ROOT/bin/fm-composer-lib.sh" "$fake/bin/fm-composer-lib.sh"
+  # fm-busy-lib.sh: fm-tmux-lib.sh has sourced it since #51, so the fake root
+  # needs it for the same reason it needs fm-composer-lib.sh.
+  ln -s "$ROOT/bin/fm-busy-lib.sh" "$fake/bin/fm-busy-lib.sh"
   # fm-lock-lib.sh: teardown sources it for the shared lock-staleness proof.
   ln -s "$ROOT/bin/fm-lock-lib.sh" "$fake/bin/fm-lock-lib.sh"
   # fm-gate-refuse-lib.sh: teardown sources it before any fleet mutation.
@@ -85,7 +91,8 @@ SH
 fm_tasks_axi_backend_available() { return 1; }
 SH
   # Meta with a nonexistent worktree so the dirty/treehouse blocks skip.
-  cat > "$fake/state/$id.meta" <<META
+  {
+    cat <<META
 window=fakeses:fm-$id
 worktree=$TMP_ROOT/nonexistent-worktree-$id
 project=$TMP_ROOT/nonexistent-project-$id
@@ -93,8 +100,11 @@ harness=claude
 kind=ship
 mode=no-mistakes
 yolo=off
-tasktmp=$tasktmp
 META
+    if [ -n "$tasktmp" ]; then
+      printf 'tasktmp=%s\n' "$tasktmp"
+    fi
+  } > "$fake/state/$id.meta"
   printf '%s' "$fake"
 }
 
@@ -155,43 +165,11 @@ test_teardown_skips_gracefully_without_tasktmp() {
   # Backward compat: a meta from a pre-fix task has no tasktmp= line. Teardown must
   # not error and must not remove anything.
   local id=td-absent-z3
-  local fake="$TMP_ROOT/$id-root"
-  mkdir -p "$fake/bin/backends" "$fake/state"
-  ln -s "$TEARDOWN" "$fake/bin/fm-teardown.sh"
-  ln -s "$ROOT/bin/fm-backend.sh" "$fake/bin/fm-backend.sh"
-  ln -s "$ROOT/bin/backends/tmux.sh" "$fake/bin/backends/tmux.sh"
-  ln -s "$ROOT/bin/fm-tmux-lib.sh" "$fake/bin/fm-tmux-lib.sh"
-  ln -s "$ROOT/bin/fm-composer-lib.sh" "$fake/bin/fm-composer-lib.sh"
-  ln -s "$ROOT/bin/fm-lock-lib.sh" "$fake/bin/fm-lock-lib.sh"
-  # fm-gate-refuse-lib.sh: teardown sources it before any fleet mutation.
-  ln -s "$ROOT/bin/fm-gate-refuse-lib.sh" "$fake/bin/fm-gate-refuse-lib.sh"
-  # fm-pr-lib.sh: teardown uses its canonical task-ID validator for poll cleanup.
-  ln -s "$ROOT/bin/fm-pr-lib.sh" "$fake/bin/fm-pr-lib.sh"
-  # fm-capability-lib.sh: teardown records capability outcomes before meta removal.
-  ln -s "$ROOT/bin/fm-capability-lib.sh" "$fake/bin/fm-capability-lib.sh"
-  cat > "$fake/bin/fm-guard.sh" <<'SH'
-#!/usr/bin/env bash
-exit 0
-SH
-  chmod +x "$fake/bin/fm-guard.sh"
-  cat > "$fake/bin/fm-fleet-sync.sh" <<'SH'
-#!/usr/bin/env bash
-exit 0
-SH
-  chmod +x "$fake/bin/fm-fleet-sync.sh"
-  cat > "$fake/bin/fm-tasks-axi-lib.sh" <<'SH'
-fm_tasks_axi_backend_available() { return 1; }
-SH
-  # No tasktmp= line at all.
-  cat > "$fake/state/$id.meta" <<META
-window=fakeses:fm-$id
-worktree=$TMP_ROOT/nonexistent-wt-$id
-project=$TMP_ROOT/nonexistent-proj-$id
-harness=claude
-kind=ship
-mode=no-mistakes
-yolo=off
-META
+  local fake
+  # The empty tasktmp argument is what leaves the tasktmp= line out entirely.
+  fake=$(make_fake_root "$id" "")
+  grep -q '^tasktmp=' "$fake/state/$id.meta" \
+    && fail "precondition: meta must have no tasktmp= line at all"
   FM_HOME="$fake" bash "$fake/bin/fm-teardown.sh" "$id" >/dev/null 2>&1 \
     || fail "teardown exited non-zero when tasktmp= was absent"
   pass "fm-teardown skips gracefully when tasktmp= is absent (backward compat)"

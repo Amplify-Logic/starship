@@ -21,7 +21,7 @@ make_cli() { # <name>
   cat > "$FAKEBIN/$1" <<'SH'
 #!/usr/bin/env bash
 if [ "${1:-}" = --version ] && [ "$(basename "$0")" = kimi ]; then
-  printf '%s\n' "${FM_PRIMARY_TEST_KIMI_VERSION:-0.27.0}"
+  printf '%s\n' "${FM_PRIMARY_TEST_KIMI_VERSION:-0.31.1}"
   exit 0
 fi
 if [ "${1:-}" = --version ] && [ "$(basename "$0")" = agent ]; then
@@ -265,8 +265,50 @@ test_kimi_version_doctor_and_symlink_refusals() {
     FM_PRIMARY_TEST_KIMI_VERSION=0.28.0 \
     FM_KIMI_SOURCE_HOME="$KIMI_SOURCE" \
     "$ROOT/bin/fm-primary.sh" kimi-k3 2>&1) || rc=$?
-  [ "$rc" -ne 0 ] || fail "unverified Kimi version was accepted"
-  assert_contains "$out" 'verified only for 0.27.0; found 0.28.0' "Kimi version refusal was unclear"
+  # Kimi ships a self-updater, so a build with no primary evidence warns and
+  # launches; only the functional doctor check below still fails a launch closed.
+  [ "$rc" -eq 0 ] || fail "drifted Kimi version blocked the launch instead of warning"
+  assert_contains "$out" 'carries evidence for 0.27.0 (certified) and 0.31.1 (newest evidence); found 0.28.0' \
+    "the unevidenced-Kimi warning did not name both accepted builds"
+  assert_contains "$out" 'launching anyway' "Kimi drift warning did not say the launch proceeds"
+  assert_contains "$out" 'kimi-code/k3' "drifted Kimi did not reach its launch command"
+
+  # Both evidenced builds are accepted: neither may be reported as unevidenced,
+  # because a warning against the fully certified build trains operators to
+  # ignore the warning entirely.
+  rc=0
+  out=$(PATH="$FAKEBIN:$PATH" \
+    FM_HOME="$HOME_FIX" \
+    FM_PRIMARY_DRY_RUN=1 \
+    FM_PRIMARY_TEST_LOG="$LOG" \
+    FM_PRIMARY_TEST_KIMI_VERSION=0.27.0 \
+    FM_KIMI_SOURCE_HOME="$KIMI_SOURCE" \
+    "$ROOT/bin/fm-primary.sh" kimi-k3 2>&1) || rc=$?
+  [ "$rc" -eq 0 ] || fail "the certified Kimi build 0.27.0 did not launch"
+  assert_contains "$out" '0.27.0 is the certified primary build' \
+    "the certified Kimi build was not identified as certified"
+  case $out in
+    *'launching anyway'*) fail "the certified Kimi build was warned about as unevidenced" ;;
+  esac
+  assert_contains "$out" 'kimi-code/k3' "the certified Kimi build did not reach its launch command"
+
+  rc=0
+  out=$(PATH="$FAKEBIN:$PATH" \
+    FM_HOME="$HOME_FIX" \
+    FM_PRIMARY_DRY_RUN=1 \
+    FM_PRIMARY_TEST_LOG="$LOG" \
+    FM_PRIMARY_TEST_KIMI_VERSION=0.31.1 \
+    FM_KIMI_SOURCE_HOME="$KIMI_SOURCE" \
+    "$ROOT/bin/fm-primary.sh" kimi-k3 2>&1) || rc=$?
+  [ "$rc" -eq 0 ] || fail "the newest-evidence Kimi build 0.31.1 did not launch"
+  assert_contains "$out" '0.31.1 is the newest-evidence build' \
+    "the newest-evidence Kimi build was not identified as such"
+  assert_contains "$out" 'not a full certification' \
+    "the newest-evidence Kimi build was passed off as fully certified"
+  case $out in
+    *'launching anyway'*) fail "the newest-evidence Kimi build was warned about as unevidenced" ;;
+  esac
+  assert_contains "$out" 'kimi-code/k3' "the newest-evidence Kimi build did not reach its launch command"
 
   rc=0
   out=$(PATH="$FAKEBIN:$PATH" \
@@ -293,7 +335,7 @@ test_kimi_version_doctor_and_symlink_refusals() {
   assert_contains "$out" 'managed Kimi integration file is an unrelated symlink' \
     "managed Kimi symlink refusal was unclear"
   [ "$(cat "$sentinel")" = 'do-not-overwrite' ] || fail "managed Kimi setup overwrote the symlink target"
-  pass "fm-primary: Kimi version, doctor, and managed-path checks fail closed"
+  pass "fm-primary: both evidenced Kimi builds are quiet, others warn, doctor and managed-path checks fail closed"
 }
 
 test_kimi_corrupt_source_registry_atomicity() {
