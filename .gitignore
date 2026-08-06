@@ -8,7 +8,9 @@ data/
 __pycache__/
 *.pyc
 .env
-config/
+# Captain-private local operating choices; never published. Anchored to the
+# repo root so a config-named directory elsewhere in the tree stays visible.
+/config/
 # Generated per-task hook artifacts (also written into each task worktree's
 # .git/info/exclude by fm-spawn). Tracked here so a primary checkout cannot
 # accidentally stage them into a PR.

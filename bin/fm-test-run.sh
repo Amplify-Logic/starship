@@ -718,7 +718,19 @@ families_for_changed_path() {
     tests/*)
       printf '%s\n' "__unmapped__:$path"
       ;;
-    README.md|ONBOARDING.md|LICENSE|assets/*|docs/*|.gitignore)
+    .gitignore)
+      # Not prose: the tracked ignore file has behaviour owners that assert on
+      # its contents, so an ignore-only change still selects them. The complete
+      # owner set is the two direct readers (config/ category coverage and the
+      # secondmate seed-marker line), the upstream-watch private-report
+      # assertion, and the fork-surface check whose config/secret knob pass
+      # requires every declared knob path to be ignored.
+      printf '%s\n' "__script__:fm-gitignore-config.test.sh"
+      printf '%s\n' "__script__:fm-secondmate-sync.test.sh"
+      printf '%s\n' "__script__:fm-upstream-watch.test.sh"
+      printf '%s\n' "__script__:fm-fork-surface.test.sh"
+      ;;
+    README.md|ONBOARDING.md|LICENSE|assets/*|docs/*)
       # Documentation-only prose with no behavior test owner (see the
       # onboarding-guide capability in fork-surface.conf).
       ;;
