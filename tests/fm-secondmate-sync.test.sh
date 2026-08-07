@@ -548,6 +548,68 @@ test_bootstrap_nudge_retry_refuses_changed_home() {
   pass "T8e bootstrap nudge retry refuses a changed home instead of guessing"
 }
 
+# --- T8g/T8h: a refused registry symlink is NAMED on the listing and retry paths
+# The live listing and the nudge retry both fall back to the registry only when a
+# meta lacks home=; a symlinked registry must surface its refusal by name there,
+# never read as "no home" or as a generic registry error.
+test_live_listing_names_refused_registry_symlink() {
+  local w err out refusal
+  w=$(new_world listing-symlink-registry)
+  {
+    printf 'window=firstmate:fm-sm-a\n'
+    printf 'kind=secondmate\n'
+  } > "$w/home/state/sm-a.meta"
+  {
+    printf 'window=firstmate:fm-sm-b\n'
+    printf 'kind=secondmate\n'
+  } > "$w/home/state/sm-b.meta"
+  printf -- '- sm-a - domain (home: %s/sm-a; scope: x; projects: p; added 2026-08-07)\n' "$w" \
+    > "$w/registry-target.md"
+  ln -s "$w/registry-target.md" "$w/home/data/secondmates.md"
+  refusal="secondmate registry is unavailable or unsafe: $w/home/data/secondmates.md (registry is a symlink and is refused)"
+  err="$w/listing.err"
+
+  out=$(live_secondmate_meta_records "$w/home/state" "$w/home/data/secondmates.md" 2>"$err")
+
+  assert_contains "$out" "sm-a||firstmate:fm-sm-a|" \
+    "listing should still enumerate a meta whose home stays unresolved"
+  assert_contains "$(cat "$err")" "$refusal" "listing did not name the refused registry symlink"
+  [ "$(grep -cF "$refusal" "$err")" -eq 1 ] \
+    || fail "registry refusal should be reported once per listing, got: $(cat "$err")"
+  pass "T8g live listing names a refused registry symlink once per listing"
+}
+
+test_bootstrap_nudge_retry_names_refused_registry_symlink() {
+  local w c1 fakebin out marker refusal
+  w=$(new_world nudge-symlink-registry)
+  c1=$(head_of "$w/main")
+  add_sm_worktree "$w" sm-instr "$c1"
+  bump_primary "$w" instr
+  fakebin=$(make_fake_toolchain "$w")
+
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$w/home" FM_ROOT_OVERRIDE="$w/main" \
+    FM_SEND_SETTLE=0 FM_FAKE_TMUX_FAIL_LITERAL=1 \
+    "$ROOT/bin/fm-bootstrap.sh" 2>/dev/null)
+  assert_contains "$out" "NUDGE_SECONDMATES: secondmate sm-instr: send failed:" \
+    "precondition: first nudge should fail"
+  marker="$w/home/state/.secondmate-nudge-pending/sm-instr.pending"
+  assert_present "$marker" "precondition: failed nudge should leave marker"
+
+  grep -v '^home=' "$w/home/state/sm-instr.meta" > "$w/home/state/sm-instr.meta.tmp"
+  mv "$w/home/state/sm-instr.meta.tmp" "$w/home/state/sm-instr.meta"
+  printf -- '- sm-instr - domain (home: %s/sm-instr; scope: x; projects: p; added 2026-08-07)\n' "$w" \
+    > "$w/registry-target.md"
+  ln -s "$w/registry-target.md" "$w/home/data/secondmates.md"
+  refusal="secondmate registry is unavailable or unsafe: $w/home/data/secondmates.md (registry is a symlink and is refused)"
+
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$w/home" FM_ROOT_OVERRIDE="$w/main" \
+    FM_SEND_SETTLE=0 "$ROOT/bin/fm-bootstrap.sh" 2>/dev/null)
+  assert_contains "$out" "NUDGE_SECONDMATES: secondmate sm-instr: send failed: $refusal" \
+    "nudge retry did not name the refused registry symlink"
+  assert_present "$marker" "refused registry retry should keep the marker for operator inspection"
+  pass "T8h bootstrap nudge retry names a refused registry symlink"
+}
+
 # --- T8b: stale herdr nudge failures retry through current fm-<id> metadata ---
 # Reproduces the 2026-07-07 session-start bug: secondmate_sync used to print raw
 # backend targets (default:w9:pY) that liveness respawn immediately replaced
@@ -856,6 +918,8 @@ test_bootstrap_nudge_retry_rejects_malformed_marker_id
 test_bootstrap_nudge_failure_records_retry_marker
 test_bootstrap_nudge_retry_is_idempotent
 test_bootstrap_nudge_retry_refuses_changed_home
+test_live_listing_names_refused_registry_symlink
+test_bootstrap_nudge_retry_names_refused_registry_symlink
 test_nudge_retry_uses_fresh_herdr_endpoint_after_respawn
 test_bootstrap_sweep_surfaces_skipped_home
 test_spawn_fast_forwards_before_launch

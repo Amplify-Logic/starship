@@ -25,6 +25,8 @@
 # shared default branch or any other worktree's checkout.
 
 SUB_HOME_MARKER="${SUB_HOME_MARKER:-.fm-secondmate-home}"
+# shellcheck source=bin/fm-secondmate-registry-lib.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-secondmate-registry-lib.sh"
 
 # --- helpers ---------------------------------------------------------------
 
@@ -231,26 +233,14 @@ dirty_status() {
   fi
 }
 
-secondmate_registry_field() {
-  local reg=$1 id=$2 key=$3 line value
-  [ -f "$reg" ] || return 1
-  line=$(grep -E "^- $id( |$)" "$reg" | tail -1 || true)
-  [ -n "$line" ] || return 1
-  case "$key" in
-    home) value=$(printf '%s\n' "$line" | sed -n 's/.*(home:[[:space:]]*\([^;)]*\);.*/\1/p' | sed 's/[[:space:]]*$//') ;;
-    projects) value=$(printf '%s\n' "$line" | sed -n 's/.*; projects:[[:space:]]*\([^;)]*\); added .*/\1/p' | sed 's/[[:space:]]*$//') ;;
-    *) return 1 ;;
-  esac
-  [ -n "$value" ] || return 1
-  printf '%s\n' "$value"
-}
-
 # List this home's LIVE secondmate direct reports from state/<id>.meta records.
 # The meta file is the liveness signal; data/secondmates.md is only the fallback
 # for durable fields such as home= when an older/incomplete meta lacks them.
 # Output is pipe-delimited: id|home|window|meta-file.
 live_secondmate_meta_records() {
-  local state=$1 registry=${2:-} meta id home window
+  local state=$1 registry=${2:-} meta id home window registry_rc
+  # The refusal is reported once per listing, not once per secondmate.
+  local fm_ff_registry_warned=
   [ -d "$state" ] || return 0
   for meta in "$state"/*.meta; do
     [ -f "$meta" ] || continue
@@ -258,7 +248,14 @@ live_secondmate_meta_records() {
     id=$(basename "$meta" .meta)
     home=$(grep '^home=' "$meta" 2>/dev/null | tail -1 | cut -d= -f2- || true)
     if [ -z "$home" ] && [ -n "$registry" ]; then
-      home=$(secondmate_registry_field "$registry" "$id" home || true)
+      registry_rc=0
+      home=$(secondmate_registry_field "$registry" "$id" home) || registry_rc=$?
+      # Falling through with an empty home would report every secondmate as
+      # unregistered when the registry itself is what was refused.
+      if [ "$registry_rc" -eq 2 ] && [ -z "$fm_ff_registry_warned" ]; then
+        fm_ff_registry_warned=1
+        secondmate_registry_symlink_refusal "$registry" >&2
+      fi
     fi
     window=$(grep '^window=' "$meta" 2>/dev/null | tail -1 | cut -d= -f2- || true)
     printf '%s|%s|%s|%s\n' "$id" "$home" "$window" "$meta"

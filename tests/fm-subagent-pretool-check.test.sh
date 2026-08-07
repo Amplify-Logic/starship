@@ -31,6 +31,12 @@ DELEGATION_TOOLS='Task Agent Workflow RemoteTrigger Monitor ScheduleWakeup SendM
 # Tools that must stay available: denying these would break ordinary work.
 PRESERVED_TOOLS='Bash Edit Read Write Skill ToolSearch WebFetch WebSearch NotebookEdit ReportFindings DesignSync PushNotification'
 
+# Session-local todo-list tools match a delegation stem but create no runnable work.
+PLAN_ONLY_TOOLS='TaskCreate TaskUpdate'
+
+# Exact-match regressions: every near miss remains runnable delegation and denied.
+PLAN_ONLY_NEAR_MISSES='TaskCreateAgent TaskCreateWorktree TaskUpdateAgent RemoteTaskCreate Task TaskCreator'
+
 run_tool() {
   local tool=$1 rc=0
   shift
@@ -80,7 +86,7 @@ test_guard_denies_every_currently_known_delegation_tool() {
   local tool
   for tool in $DELEGATION_TOOLS; do
     case "$tool" in
-      TaskOutput|TaskStop|TaskGet|TaskList|CronList) continue ;;
+      TaskOutput|TaskStop|TaskGet|TaskList|CronList|TaskCreate|TaskUpdate) continue ;;
     esac
     expect_deny "known delegation tool" "$tool"
   done
@@ -110,6 +116,22 @@ test_guard_allows_ordinary_and_observe_only_tools() {
     expect_allow "observe-or-stop tool" "$tool"
   done
   pass "the guard leaves ordinary tools and observe-or-stop operations alone"
+}
+
+test_guard_allows_session_local_todo_tools() {
+  local tool
+  for tool in $PLAN_ONLY_TOOLS; do
+    expect_allow "session-local todo tool" "$tool"
+  done
+  pass "the guard leaves the session-local todo list alone"
+}
+
+test_plan_only_exclusion_is_exact_name() {
+  local tool
+  for tool in $PLAN_ONLY_NEAR_MISSES; do
+    expect_deny "plan-only near miss" "$tool"
+  done
+  pass "the plan-only exclusion releases only the two exact todo tool names"
 }
 
 test_guard_never_classifies_mcp_tools() {
@@ -280,6 +302,8 @@ test_tracked_settings_do_not_ship_permissions_deny
 test_guard_denies_every_currently_known_delegation_tool
 test_guard_denies_hypothetical_future_tools
 test_guard_allows_ordinary_and_observe_only_tools
+test_guard_allows_session_local_todo_tools
+test_plan_only_exclusion_is_exact_name
 test_guard_never_classifies_mcp_tools
 test_scout_entry_point_named_when_present
 test_escape_hatch_allows_deliberate_use

@@ -37,6 +37,7 @@
 #                                  (developer convenience; the gates never pass args)
 #   fm-lint.sh --required-version print the pinned ShellCheck version and exit
 #                                  (CI reads this to install the exact same one)
+#   fm-lint.sh --list-files       print the canonical shell file set and exit
 #
 # Exit status is ShellCheck's own on a clean lint run, so a caller (CI or the
 # gate) fails exactly when ShellCheck reports a finding; a version mismatch, a
@@ -58,6 +59,29 @@ if [ "${1:-}" = "--required-version" ]; then
   exit 0
 fi
 
+LIST_FILES=0
+if [ "${1:-}" = "--list-files" ]; then
+  LIST_FILES=1
+  shift
+  [ "$#" -eq 0 ] || {
+    printf 'fm-lint.sh: --list-files does not accept explicit paths.\n' >&2
+    exit 2
+  }
+fi
+
+CANONICAL=1
+if [ "$#" -gt 0 ]; then
+  ROOTS=("$@")
+  CANONICAL=0
+else
+  ROOTS=(bin/*.sh bin/backends/*.sh tests/*.sh)
+fi
+
+if [ "$LIST_FILES" -eq 1 ]; then
+  printf '%s\n' "${ROOTS[@]}"
+  exit 0
+fi
+
 # Enforce the pin so local and CI resolve the identical rule set.
 if ! command -v shellcheck >/dev/null 2>&1; then
   printf 'fm-lint.sh: ShellCheck not found; install ShellCheck %s for CI parity.\n' \
@@ -72,10 +96,6 @@ if [ "$resolved" != "$REQUIRED_SHELLCHECK" ]; then
   printf 'fm-lint.sh: ShellCheck %s required for CI parity, found %s. Install %s.\n' \
     "$REQUIRED_SHELLCHECK" "$resolved" "$REQUIRED_SHELLCHECK" >&2
   exit 1
-fi
-
-if [ "$#" -gt 0 ]; then
-  exec shellcheck --norc "$@"
 fi
 
 # Fail closed on tracked tests that lack the git executable bit. Do not repair
@@ -95,8 +115,10 @@ check_test_exec_bits() {
   [ "$bad" -eq 0 ]
 }
 
-check_test_exec_bits || exit 1
+if [ "$CANONICAL" -eq 1 ]; then
+  check_test_exec_bits || exit 1
+fi
 
-# Canonical file set: the ONE authoritative definition. Callers reference this
-# script; they never re-spell these globs.
-exec shellcheck --norc bin/*.sh bin/backends/*.sh tests/*.sh
+# Canonical file set: the ONE authoritative definition. Callers consume it
+# through this script or --list-files; they never re-spell the inventory.
+exec shellcheck --norc "${ROOTS[@]}"

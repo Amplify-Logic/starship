@@ -52,14 +52,19 @@ agent  subagent  task  workflow  cron  schedul  worktree
 delegate  spawn  dispatch  handoff  remote  sendmessage  monitor
 ```
 
-Two exclusions keep the shape test from producing false positives.
+Three exclusions keep the shape test from producing false positives.
 
 - A name beginning `mcp__` is never classified.
   An MCP server chooses its own tool names, a task or agent noun there is common, and it has no bearing on fleet dispatch.
-- The exact names `taskoutput`, `taskstop`, `taskget`, `tasklist`, `cronlist`, `bashoutput`, and `killshell` are allowed.
+- `OBSERVE_ONLY_TOOLS` allows the exact names `taskoutput`, `taskstop`, `taskget`, `tasklist`, `cronlist`, `bashoutput`, and `killshell`.
   These observe or stop work that already exists rather than creating it, and denying them at this layer could strand already-running work with no way to inspect or end it.
   A Claude primary's optional local deny list may still remove them from the schema.
   The shipped guard stays narrower on purpose so it can never be the reason a runaway task cannot be stopped.
+- `PLAN_ONLY_TOOLS` allows the exact names `taskcreate` and `taskupdate`.
+  These write only the harness's session-local todo list, which has no executor and cannot spawn an agent, allocate a worktree, register a schedule, or outlive the session.
+  They remain separate from the observe-or-stop list because they do write, but their `task` stem is a false positive for the runnable delegation this guard owns.
+
+Both lists match complete normalized tool names rather than substrings, so names such as `TaskCreateAgent` and `RemoteTaskCreate` remain denied.
 
 The shipped guard fires on every delegation-shaped name that reaches it, including future names that no deny list knows about yet.
 That future-name behavior is the reason the tracked matcher must match all tools and let the script filter.
@@ -84,10 +89,8 @@ Claude primaries should add this deny list in untracked per-home local settings,
       "CronCreate",
       "CronDelete",
       "CronList",
-      "TaskCreate",
       "TaskGet",
       "TaskList",
-      "TaskUpdate",
       "TaskStop",
       "TaskOutput"
     ]
@@ -110,6 +113,8 @@ The width of the list remains a captain-owned decision, because denying some of 
 Keep it as one flat local array that is reviewable at a glance and narrowable in one line.
 In particular `TaskOutput`, `TaskStop`, `TaskGet`, `TaskList`, and `CronList` only observe or stop work that already exists, but the recommended local deny list still removes them by default.
 The hook deliberately allows those names, so the shipped guard can never strand a runaway task with no way to inspect or end it.
+It also allows `TaskCreate` and `TaskUpdate`, so the guard cannot prevent a primary from maintaining its session-local plan when no delegation power is involved.
+The recommended local deny list omits those two todo tools for the same reason.
 
 `permissions.allow` is a pre-approval list, not an availability list, so there is no fail-closed positive allowlist available.
 That is why any fixed deny list is fail-open against future tools and why the shape-based guard still exists.
@@ -176,7 +181,7 @@ Applicability turns on one question: does the harness expose built-in delegation
 
 | Harness | Delegation surface | Status |
 | --- | --- | --- |
-| Claude | 18 known tools, listed above | Scoped guard wired and live-verified upstream; untracked local deny list verified and recommended. |
+| Claude | 16 known runnable delegation tools, listed above | Scoped guard wired and live-verified upstream; untracked local deny list verified and recommended. |
 | Cursor | present (Task / agent surfaces) | Wired through the same tracked `.claude/settings.json` PreToolUse entry Claude uses; live denial of Cursor Task/Agent under matcher `.*` is **unverified** in this port. See below. |
 | Codex | none | Not applicable, verified empirically below. Codex 0.144.1 exposes no subagent, sub-task, or delegated-agent tool, so there is nothing to remove or intercept. `.codex/hooks.json` is unchanged. |
 | Grok | present, exact tokens unconfirmed | Not wired pending live verification. See below. |
@@ -304,8 +309,8 @@ This distinction matters when reading the next result: a tool absent from a plai
 
 ### Local deny-list hardening
 
-Run in a scratch firstmate-shaped project containing `AGENTS.md`, `state/`, a full copy of `bin/`, and a Claude settings file containing the recommended local deny-list JSON above.
-The result validates the recommended local deny-list JSON above, not tracked repo state.
+Run in a scratch firstmate-shaped project containing `AGENTS.md`, `state/`, a full copy of `bin/`, and a Claude settings file containing the then-recommended 18-name local deny list: the JSON above plus `TaskCreate` and `TaskUpdate`, which the plan-only allowance has since dropped from the recommendation.
+The result validates the local deny-list mechanism, not tracked repo state.
 Asking for deferred entries explicitly returned:
 
 ```text
@@ -363,7 +368,7 @@ The live consequence is confirmed by the shipped-guard result above: Claude hono
 ## Automated validation
 
 `tests/fm-subagent-pretool-check.test.sh` owns the acceptance matrix and is registered in the `pure-contract-unit` family in `bin/fm-test-run.sh`.
-It covers the tracked Claude settings boundary that forbids a `permissions` key; the match-all Claude hook registration; denial of every work-creating delegation tool by shape; denial of twelve hypothetical future tool names that appear on no list; the observe-or-stop and MCP exclusions; the scout-present and scout-absent message variants; the escape hatch including its fail-closed values; inertness in a linked task worktree and in a non-firstmate repo; in-scope enforcement for a marked secondmate home; both stdin transports; the empty-stdout requirement; fail-open transport behavior; and the preserved `Bash` seatbelts and `Stop` guard.
+It covers the tracked Claude settings boundary that forbids a `permissions` key; the match-all Claude hook registration; denial of every work-creating delegation tool by shape; denial of twelve hypothetical future tool names that appear on no list; the observe-or-stop, plan-only, and MCP exclusions; exact plan-only matching against near-miss names; the scout-present and scout-absent message variants; the escape hatch including its fail-closed values; inertness in a linked task worktree and in a non-firstmate repo; in-scope enforcement for a marked secondmate home; both stdin transports; the empty-stdout requirement; fail-open transport behavior; and the preserved `Bash` seatbelts and `Stop` guard.
 
 Run:
 

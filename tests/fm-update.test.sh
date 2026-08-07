@@ -291,6 +291,24 @@ test_unsafe_secondmate_home_skipped_before_git_update() {
   pass "T11 unsafe secondmate home is not fast-forwarded"
 }
 
+# --- T12: a symlinked registry backstop refuses loudly, naming the symlink --
+test_symlinked_registry_backstop_refused() {
+  local w out rc=0
+  w=$(new_world t12)
+  add_sm "$w" sm1
+  printf -- '- reg1 - domain (home: %s/reg1; scope: x; projects: p; added 2026-06-23)\n' "$w" \
+    > "$w/real-registry.md"
+  ln -s "$w/real-registry.md" "$w/home/data/secondmates.md"
+  bump_origin "$w" instr
+
+  out=$(FM_ROOT_OVERRIDE="$w/main" FM_HOME="$w/home" "$UPDATE" 2>&1) || rc=$?
+
+  [ "$rc" -ne 0 ] || fail "update followed a symlinked registry"
+  assert_contains "$out" "secondmate registry is unavailable or unsafe: $w/home/data/secondmates.md (registry is a symlink and is refused)" \
+    "backstop refusal did not name the symlinked registry"
+  pass "T12 symlinked registry backstop refuses and names the symlink"
+}
+
 test_updates_main_and_secondmate
 test_reread_gate_is_instruction_only
 test_dirty_secondmate_skipped
@@ -300,5 +318,6 @@ test_registry_backstop_dedup_and_self_exclusion
 test_firstmate_wrong_branch_skipped
 test_firstmate_detached_head_skipped
 test_unsafe_secondmate_home_skipped_before_git_update
+test_symlinked_registry_backstop_refused
 
 echo "# all fm-update tests passed"

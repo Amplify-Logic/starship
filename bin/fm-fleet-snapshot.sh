@@ -708,6 +708,25 @@ registry_secondmates_json() {
     observed=$6
     parse_filter=$7
     output_filter=$8
+    registry_lib=$9
+    # One owner for the registry grammar: a hand-maintained second copy here
+    # drifted from the shared parser and reported lines the parser rejects as
+    # healthy bindings.
+    . "$registry_lib" || exit 3
+    registry_records_tsv() {
+      while IFS= read -r line || [ -n "$line" ]; do
+        # A prefix test, not a case: bash mis-scans a case pattern's ")" inside
+        # this heredoc-in-command-substitution and treats it as the closing paren.
+        [ "${line#- }" != "$line" ] || continue
+        if secondmate_registry_parse_line "$line"; then
+          printf '%s\t%s\t\n' "$SECONDMATE_REGISTRY_ID" "$SECONDMATE_REGISTRY_HOME"
+        else
+          malformed_id=${line#- }
+          malformed_id=${malformed_id%% *}
+          printf '%s\t\t%s\n' "$malformed_id" "malformed secondmate registry entry"
+        fi
+      done
+    }
     content=$(LC_ALL=C head -c "$((max_bytes + 1))" "$f" || exit 3; printf "\036") || exit 3
     content=${content%$'\036'}
     bytes=$(printf "%s" "$content" | LC_ALL=C wc -c | tr -d " ")
@@ -735,7 +754,8 @@ registry_secondmates_json() {
     else
       lines_in_window=0
     fi
-    records=$(printf "%s\n" "$window" | jq -Rn "$parse_filter") || exit 3
+    records_tsv=$(printf "%s\n" "$window" | registry_records_tsv) || exit 3
+    records=$(printf "%s" "$records_tsv" | jq -Rn "$parse_filter") || exit 3
     records_in_window=$(printf "%s" "$records" | jq "length") || exit 3
     records_truncated=false
     if [ "$records_in_window" -gt "$max_records" ]; then records_truncated=true; fi
@@ -751,12 +771,14 @@ BASH
   )
   parse_filter=$(cat <<'JQ'
       [ inputs
-        | select(startswith("- "))
-        | (capture("^- (?<id>[^[:space:]]+)")?) as $id
-        | select($id != null)
-        | (capture("\\(home:[[:space:]]*(?<home>[^;)]*);")?) as $home
-        | {id:$id.id,home:($home.home // null),registered:true,
-           registry_error:(if $home == null or ($home.home | length) == 0 then "registry entry has no home" else null end)} ]
+        | select(length > 0)
+        | split("\t")
+        | (.[1] // "") as $home
+        | (.[2] // "") as $err
+        | {id:(.[0] // ""),home:(if $home == "" then null else $home end),registered:true,
+           registry_error:(if $err != "" then $err
+                           elif $home == "" then "registry entry has no home"
+                           else null end)} ]
       | group_by(.id)
       | map(if length > 1 then .[0] + {registry_error:"duplicate secondmate id in registry"} else .[0] end)
 JQ
@@ -777,7 +799,7 @@ JQ
   out=$(run_timed "$FM_SNAPSHOT_REGISTRY_TIMEOUT" bash -c "$script" \
     fm-secondmate-registry "$reg" "$FM_SNAPSHOT_REGISTRY_LINES" \
     "$FM_SNAPSHOT_REGISTRY_BYTES" "$FM_SNAPSHOT_REGISTRY_RECORDS" "$reg" "$SNAPSHOT_NOW" \
-    "$parse_filter" "$output_filter" 2>/dev/null)
+    "$parse_filter" "$output_filter" "$SCRIPT_DIR/fm-secondmate-registry-lib.sh" 2>/dev/null)
   rc=$?
   if [ "$rc" -eq 0 ] && printf '%s' "$out" | jq -e '
     .available == true and (.records | type) == "array"
@@ -1113,8 +1135,8 @@ secondmate_current_json() {  # <parent-tasks-json>
          terminal_evidence:$terminal,contradiction:$contradiction}')
     else
       if [ -n "$event_raw" ]; then
-        provenance=parent-event-fallback
-        freshness=historical-event
+        provenance='parent-event-fallback'
+        freshness='historical-event'
       else
         provenance=unknown
         freshness=unknown

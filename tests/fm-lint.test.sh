@@ -21,8 +21,6 @@ LINT="$ROOT/bin/fm-lint.sh"
 CI="$ROOT/.github/workflows/ci.yml"
 NM="$ROOT/.no-mistakes.yaml"
 INSTALLER="$ROOT/bin/fm-install-shellcheck.sh"
-# The authoritative file set the one owner must run.
-CANON='shellcheck --norc bin/*.sh bin/backends/*.sh tests/*.sh'
 # The pinned version, read from the single source (the one owner itself).
 REQUIRED=$("$LINT" --required-version)
 
@@ -40,13 +38,40 @@ test_owner_exists_and_executable() {
 }
 
 test_owner_defines_canonical_set() {
-  assert_grep "$CANON" "$LINT" "fm-lint.sh must run the canonical shellcheck file set"
-  # It must not weaken CI: no severity downgrade and no blanket disable/exclude
-  # that would hide findings CI fails on.
-  assert_no_grep '--severity' "$LINT" "fm-lint.sh must not lower severity below the CI default"
-  assert_no_grep '--exclude' "$LINT" "fm-lint.sh must not blanket-exclude checks CI enforces"
-  [ "$(grep -Fc 'exec shellcheck --norc' "$LINT")" -eq 2 ] || fail "both lint modes must ignore ambient ShellCheck configuration"
-  pass "fm-lint.sh is the sole authoritative definition at CI-default severity"
+  local listed expected
+  listed=$("$LINT" --list-files | LC_ALL=C sort)
+  # The owner globs these directories, and a glob includes symlinked scripts.
+  # Plain -type f would omit them and false-fail the moment a symlinked test is
+  # added, which tests/fm-gotmp.test.sh already does for bin/ siblings.
+  expected=$(find -L bin bin/backends tests -maxdepth 1 \( -type f -o -type l \) -name '*.sh' -print | LC_ALL=C sort)
+  [ "$listed" = "$expected" ] || fail "fm-lint.sh --list-files omitted canonical shell files"
+  pass "fm-lint.sh owns the complete canonical shell inventory"
+}
+
+# The canonical-set assertion above legitimately replaced a source grep, but the
+# two guards that kept bin/fm-lint.sh from lowering severity below the CI default
+# or blanket-excluding checks CI enforces were dropped with nothing in their
+# place. Prove that contract through the real lint interface instead: a fixture
+# carrying a default-severity finding must still fail.
+test_default_severity_still_fails() {
+  if ! pinned_ready; then
+    pass "SKIP (ShellCheck $REQUIRED not resolved): default-severity guard"
+    return
+  fi
+  local tmp fixture out rc=0
+  tmp=$(fm_test_tmproot fm-lint-severity)
+  mkdir -p "$tmp"
+  fixture="$tmp/severity-fixture.sh"
+  # SC2034 is a warning, below ShellCheck's "error" severity: it is exactly what
+  # a lowered --severity or a blanket --exclude would silently stop reporting.
+  printf '%s\n' '#!/usr/bin/env bash' 'unused_variable=1' > "$fixture"
+  out=$("$LINT" "$fixture" 2>&1) || rc=$?
+  [ "$rc" -ne 0 ] || fail "fm-lint.sh accepted a default-severity finding; severity or exclusions were weakened"
+  case "$out" in
+    *SC2034*) ;;
+    *) fail "fm-lint.sh did not report the default-severity finding: $out" ;;
+  esac
+  pass "fm-lint.sh still fails on a default-severity finding"
 }
 
 test_ci_invokes_the_owner() {
@@ -54,6 +79,14 @@ test_ci_invokes_the_owner() {
   # Guard against regression to an inline re-spelling of the command.
   assert_no_grep 'run: shellcheck' "$CI" "CI must call fm-lint.sh, not re-spell shellcheck inline"
   pass "CI lint job calls the one-owner script, not an inline command"
+}
+
+test_list_files_rejects_explicit_paths() {
+  local out rc=0
+  out=$("$LINT" --list-files bin/fm-brief.sh 2>&1) || rc=$?
+  expect_code 2 "$rc" "--list-files with explicit paths must be rejected"
+  assert_contains "$out" "does not accept explicit paths" "--list-files rejection must explain the conflict"
+  pass "fm-lint.sh keeps canonical inventory listing separate from explicit-path linting"
 }
 
 test_nomistakes_invokes_the_owner() {
@@ -263,7 +296,9 @@ test_accepts_executable_tracked_test() {
 
 test_owner_exists_and_executable
 test_owner_defines_canonical_set
+test_default_severity_still_fails
 test_ci_invokes_the_owner
+test_list_files_rejects_explicit_paths
 test_nomistakes_invokes_the_owner
 test_pins_an_explicit_version
 test_ci_installs_and_logs_the_pinned_version

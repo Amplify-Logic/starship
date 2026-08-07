@@ -109,6 +109,59 @@ EOF
   pass "seed allows overlapping project clone lists and drops the owns/owner routing"
 }
 
+test_home_seed_validate_rejects_unparseable_registry_entry() {
+  local home err
+  home="$TMP_ROOT/unparseable-registry-home"
+  err="$TMP_ROOT/unparseable-registry.err"
+  mkdir -p "$home/data"
+  printf '%s\n' '- broken - prose (home: /tmp/child; scope: missing projects and date)' > "$home/data/secondmates.md"
+  if FM_HOME="$home" "$ROOT/bin/fm-home-seed.sh" validate >/dev/null 2>"$err"; then
+    fail "home-seed validation accepted an operationally unparseable registry record"
+  fi
+  assert_grep 'malformed secondmate registry entry' "$err" \
+    "home-seed validation did not explain the malformed registry record"
+  pass "home-seed validation rejects unparseable registry records"
+}
+
+test_home_seed_refuses_broken_registry_symlink() {
+  local home sub err target
+  home="$TMP_ROOT/broken-registry-symlink-home"
+  sub="$TMP_ROOT/broken-registry-symlink-subhome"
+  err="$TMP_ROOT/broken-registry-symlink.err"
+  target="$home/data/missing-secondmates.md"
+  mkdir -p "$home/data" "$home/state" "$home/projects"
+  ln -s "$target" "$home/data/secondmates.md"
+  if FM_HOME="$home" "$ROOT/bin/fm-home-seed.sh" validate >/dev/null 2>"$err"; then
+    fail "home-seed validation accepted a broken registry symlink"
+  fi
+  assert_grep 'secondmate registry is unavailable or unsafe' "$err" \
+    "home-seed validation did not explain the broken registry symlink"
+  if FM_HOME="$home" FM_SECONDMATE_CHARTER='design domain' \
+    "$ROOT/bin/fm-home-seed.sh" design "$sub" alpha >/dev/null 2>"$err"; then
+    fail "home seeding accepted a broken registry symlink"
+  fi
+  [ -L "$home/data/secondmates.md" ] || fail "home seeding replaced the broken registry symlink"
+  [ ! -e "$target" ] || fail "home seeding wrote through the broken registry symlink"
+  [ ! -e "$sub" ] || fail "home seeding provisioned a home before registry refusal"
+  pass "home seeding refuses broken registry symlinks before provisioning"
+}
+
+test_home_seed_validate_enforces_isolated_homes() {
+  local home child err
+  home="$TMP_ROOT/isolated-registry-home"
+  child="$home/nested-secondmate"
+  err="$TMP_ROOT/isolated-registry.err"
+  mkdir -p "$home/data"
+  printf -- '- nested - nested domain (home: %s; scope: nested; projects: alpha; added 2026-07-30)\n' \
+    "$child" > "$home/data/secondmates.md"
+  if FM_HOME="$home" "$ROOT/bin/fm-home-seed.sh" validate >/dev/null 2>"$err"; then
+    fail "home-seed validation accepted a secondmate nested inside the active home"
+  fi
+  assert_grep 'is not isolated from the active firstmate home or code root' "$err" \
+    "home-seed validation did not explain the isolated-home violation"
+  pass "home-seed validation preserves this fork's isolated secondmate homes"
+}
+
 test_home_seed_validate_rejects_duplicate_homes() {
   local home subhome subhome_abs err
   home="$TMP_ROOT/duplicate-home"
@@ -442,6 +495,33 @@ test_home_seed_no_projects_end_to_end() {
   proj_val=$(grep '^projects=' "$meta" | head -1 | cut -d= -f2-)
   [ -z "$proj_val" ] || fail "project-less spawn recorded a non-empty projects meta: '$proj_val'"
   pass "home seeding scaffolds, registers, and spawns a project-less home end to end"
+}
+
+test_secondmate_spawn_resolves_punctuated_registry_projects() {
+  local home sub sub_abs fakebin log meta projects
+  home="$TMP_ROOT/punctuated-spawn-home"
+  sub="$TMP_ROOT/punctuated-spawn-subhome"
+  mkdir -p "$home/data" "$home/state" "$home/config" "$home/projects"
+  mkdir -p "$sub/data" "$sub/state" "$sub/config" "$sub/projects"
+  mark_firstmate_home "$sub"
+  printf 'punctuated\n' > "$sub/.fm-secondmate-home"
+  printf '# Charter\n\nHandled work.\n' > "$sub/data/charter.md"
+  sub_abs=$(cd "$sub" && pwd -P)
+  printf -- '- punctuated - launch notes (parenthetical); summary detail (home: %s; scope: launch (child); semicolon is valid; projects: alpha, beta; added 2026-07-30)\n' \
+    "$sub_abs" > "$home/data/secondmates.md"
+  FM_HOME="$home" "$ROOT/bin/fm-home-seed.sh" validate >/dev/null \
+    || fail "home-seed validation rejected punctuated registry fields before spawn"
+  fakebin=$(make_fake_tmux "$TMP_ROOT/punctuated-spawn-fake")
+  log="$TMP_ROOT/punctuated-spawn-fake/tmux.log"
+  PATH="$fakebin:$PATH" FM_HOME="$home" FM_FAKE_TMUX_LOG="$log" \
+    FM_FAKE_TMUX_CAPTURE="$TMP_ROOT/punctuated-spawn-fake/pane.txt" \
+    "$ROOT/bin/fm-spawn.sh" punctuated codex --secondmate >/dev/null 2>&1 \
+    || fail "secondmate spawn failed for punctuated registry fields"
+  meta="$home/state/punctuated.meta"
+  projects=$(grep '^projects=' "$meta" | cut -d= -f2-)
+  [ "$projects" = 'alpha, beta' ] \
+    || fail "secondmate spawn resolved the wrong projects field: '$projects'"
+  pass "secondmate spawn resolves punctuated registry fields"
 }
 
 test_home_seed_refuses_projectful_reused_charter_for_projectless_home() {
@@ -1316,6 +1396,53 @@ EOF
   pass "secondmate teardown retires empty homes and releases routing"
 }
 
+test_secondmate_teardown_refuses_ambiguous_and_mismatched_registry_bindings() {
+  local case_name home sub other fakebin log err meta_before registry_before
+  for case_name in duplicate-id duplicate-home home-mismatch; do
+    home="$TMP_ROOT/teardown-binding-$case_name-home"
+    sub="$TMP_ROOT/teardown-binding-$case_name-sub"
+    other="$TMP_ROOT/teardown-binding-$case_name-other"
+    mkdir -p "$home/state" "$home/data" "$sub/state" "$sub/data" "$sub/config" "$sub/projects" "$other"
+    printf 'domain\n' > "$sub/.fm-secondmate-home"
+    fm_write_secondmate_meta "$home/state/domain.meta" "$sub"
+    case "$case_name" in
+      duplicate-id)
+        cat > "$home/data/secondmates.md" <<EOF
+- domain - primary route (home: $sub; scope: valid (scope); punctuation; projects: alpha; added 2026-07-30)
+- domain - duplicate route (home: $other; scope: duplicate; projects: beta; added 2026-07-30)
+EOF
+        ;;
+      duplicate-home)
+        cat > "$home/data/secondmates.md" <<EOF
+- domain - primary route (home: $sub; scope: valid (scope); punctuation; projects: alpha; added 2026-07-30)
+- other - duplicate home route (home: $sub; scope: duplicate; projects: beta; added 2026-07-30)
+EOF
+        ;;
+      home-mismatch)
+        printf -- '- domain - mismatched route (home: %s; scope: valid (scope); punctuation; projects: alpha; added 2026-07-30)\n' \
+          "$other" > "$home/data/secondmates.md"
+        ;;
+    esac
+    meta_before="$TMP_ROOT/teardown-binding-$case_name.meta.before"
+    registry_before="$TMP_ROOT/teardown-binding-$case_name.registry.before"
+    cp "$home/state/domain.meta" "$meta_before"
+    cp "$home/data/secondmates.md" "$registry_before"
+    fakebin=$(make_fake_tmux "$TMP_ROOT/teardown-binding-$case_name-fake")
+    log="$TMP_ROOT/teardown-binding-$case_name-fake/tmux.log"
+    err="$TMP_ROOT/teardown-binding-$case_name.err"
+    if PATH="$fakebin:$PATH" FM_HOME="$home" FM_FAKE_TMUX_LOG="$log" \
+      FM_FAKE_TMUX_CAPTURE="$TMP_ROOT/teardown-binding-$case_name-fake/pane.txt" \
+      "$ROOT/bin/fm-teardown.sh" domain --force >/dev/null 2>"$err"; then
+      fail "secondmate teardown accepted $case_name registry binding"
+    fi
+    [ -d "$sub" ] || fail "secondmate teardown removed the home after $case_name refusal"
+    cmp -s "$meta_before" "$home/state/domain.meta" || fail "secondmate teardown changed metadata after $case_name refusal"
+    cmp -s "$registry_before" "$home/data/secondmates.md" || fail "secondmate teardown changed registry after $case_name refusal"
+    grep -F 'kill-window' "$log" >/dev/null && fail "secondmate teardown killed an endpoint before $case_name refusal"
+  done
+  pass "secondmate teardown refuses ambiguous and identity-mismatched registry bindings"
+}
+
 test_secondmate_teardown_refuses_failed_leased_home_return() {
   local home subhome subhome_abs fakebin log fmroot err rc
   home="$TMP_ROOT/teardown-return-fail-home"
@@ -2045,6 +2172,45 @@ test_secondmate_charter_brief_is_idle_by_default() {
   pass "secondmate charter brief is idle by default and does not self-initiate work"
 }
 
+# A symlinked registry must be NAMED as the refused cause on every read path,
+# never degraded to a generic error or reported as an unregistered/homeless id.
+test_symlinked_registry_read_paths_name_the_symlink() {
+  local home fakebin log err out rc refusal
+  home="$TMP_ROOT/symlinked-registry-read-home"
+  mkdir -p "$home/data" "$home/state"
+  printf -- '- domain - feature work (home: /tmp/nowhere; scope: feature work; projects: alpha; added 2026-08-07)\n' \
+    > "$TMP_ROOT/symlinked-registry-real.md"
+  ln -s "$TMP_ROOT/symlinked-registry-real.md" "$home/data/secondmates.md"
+  refusal="secondmate registry is unavailable or unsafe: $home/data/secondmates.md (registry is a symlink and is refused)"
+
+  fakebin=$(make_fake_tmux "$TMP_ROOT/symlinked-registry-fake")
+  log="$TMP_ROOT/symlinked-registry-fake/tmux.log"
+  err="$TMP_ROOT/symlinked-registry-read.err"
+  if PATH="$fakebin:$PATH" FM_HOME="$home" FM_FAKE_TMUX_LOG="$log" \
+    FM_FAKE_TMUX_CAPTURE="$TMP_ROOT/symlinked-registry-fake/pane.txt" \
+    "$ROOT/bin/fm-spawn.sh" domain codex --secondmate >/dev/null 2>"$err"; then
+    fail "secondmate spawn resolved a home through a symlinked registry"
+  fi
+  grep -F "$refusal" "$err" >/dev/null || fail "spawn did not name the symlinked registry"
+  if grep -F 'no firstmate home supplied or registered' "$err" >/dev/null; then
+    fail "spawn reported a missing home instead of the registry refusal"
+  fi
+
+  cat > "$home/data/backlog.md" <<'EOF'
+## Queued
+- [ ] item-a - queued work (repo: alpha)
+EOF
+  rc=0
+  out=$(FM_HOME="$home" "$ROOT/bin/fm-backlog-handoff.sh" domain item-a 2>&1) || rc=$?
+  [ "$rc" -ne 0 ] || fail "backlog handoff read a symlinked registry"
+  printf '%s\n' "$out" | grep -F "$refusal" >/dev/null \
+    || fail "backlog handoff did not name the symlinked registry"
+  if printf '%s\n' "$out" | grep -F 'has no home' >/dev/null; then
+    fail "backlog handoff reported no home instead of the registry refusal"
+  fi
+  pass "spawn and backlog handoff name a refused symlinked registry"
+}
+
 test_backlog_handoff_aborts_safely() {
   # The happy move (verbatim into the Queued section, out-of-scope left alone,
   # idempotent re-run) is asserted in the lifecycle e2e. Here: every refusal path
@@ -2167,6 +2333,9 @@ EOF
 test_fm_home_parameterization
 test_lock_status_is_per_home
 test_seed_allows_overlapping_clones_and_drops_owner
+test_home_seed_validate_rejects_unparseable_registry_entry
+test_home_seed_refuses_broken_registry_symlink
+test_home_seed_validate_enforces_isolated_homes
 test_home_seed_validate_rejects_duplicate_homes
 test_home_seed_validate_rejects_duplicate_ids
 test_home_seed_validate_rejects_nested_homes
@@ -2179,6 +2348,7 @@ test_home_seed_refuses_missing_filled_charter
 test_home_seed_refuses_placeholder_charter
 test_home_seed_refuses_empty_charter_fields
 test_home_seed_no_projects_end_to_end
+test_secondmate_spawn_resolves_punctuated_registry_projects
 test_home_seed_refuses_projectful_reused_charter_for_projectless_home
 test_home_seed_refuses_projectless_conversion_of_populated_home
 test_home_seed_refuses_projectless_home_with_uninspectable_projects
@@ -2205,12 +2375,136 @@ test_secondmate_spawn_requires_seeded_matching_home
 test_secondmate_spawn_refuses_operational_dirs_outside_subhome
 test_fm_send_refuses_bare_window_without_home_meta
 test_secondmate_teardown_retires_empty_home
+test_secondmate_teardown_refuses_ambiguous_and_mismatched_registry_bindings
 test_secondmate_teardown_refuses_failed_leased_home_return
 test_secondmate_teardown_removes_plain_clone_home_without_treehouse_return
 test_secondmate_force_teardown_discards_child_work
 test_secondmate_force_teardown_refuses_child_quarantine_symlink
 test_secondmate_force_teardown_preserves_child_on_unproven_lock
 test_secondmate_force_teardown_allows_operational_dir_symlinks_inside_home
+# Ruling A/E: a defect in an UNRELATED registry entry must not block work on a
+# healthy secondmate. Refusing here would force hand deletion outside the guard.
+test_secondmate_teardown_tolerates_unrelated_malformed_entry() {
+  local home subhome fakebin err log
+  home="$TMP_ROOT/unrelated-malformed-home"
+  subhome="$TMP_ROOT/unrelated-malformed-subhome"
+  err="$TMP_ROOT/unrelated-malformed.err"
+  mkdir -p "$home/state" "$home/data" "$subhome/state"
+  printf 'domain\n' > "$subhome/.fm-secondmate-home"
+  cat > "$home/state/domain.meta" <<EOF
+window=firstmate:fm-domain
+worktree=$subhome
+project=$subhome
+harness=echo
+kind=secondmate
+mode=secondmate
+yolo=off
+home=$subhome
+projects=alpha
+EOF
+  cat > "$home/data/secondmates.md" <<EOF
+- domain - design domain (home: $subhome; scope: design domain; projects: alpha; added 2026-06-22)
+- legacy - a hand-edited entry missing its structured suffix
+- gone - vanished domain (home: $TMP_ROOT/no-such-home/deeper; scope: gone; projects: beta; added 2026-06-22)
+EOF
+  fakebin=$(make_fake_tmux "$TMP_ROOT/unrelated-malformed-fake")
+  log="$TMP_ROOT/unrelated-malformed-fake/tmux.log"
+  if ! PATH="$fakebin:$PATH" FM_HOME="$home" FM_FAKE_TMUX_LOG="$log" FM_FAKE_TMUX_CAPTURE="$TMP_ROOT/unrelated-malformed-fake/pane.txt" \
+    "$ROOT/bin/fm-teardown.sh" domain >/dev/null 2>"$err"; then
+    fail "teardown of a healthy secondmate was blocked by unrelated registry entries"$'\n'"$(cat "$err")"
+  fi
+  [ ! -d "$subhome" ] || fail "teardown left the healthy secondmate home in place"
+  pass "secondmate teardown ignores defects in unrelated registry entries"
+}
+
+# Ruling B: the on-disk marker already proves ownership, so a home whose entry
+# was removed early stays removable through the guard.
+test_secondmate_teardown_accepts_marker_proven_unregistered_home() {
+  local home subhome fakebin err log
+  home="$TMP_ROOT/marker-proven-home"
+  subhome="$TMP_ROOT/marker-proven-subhome"
+  err="$TMP_ROOT/marker-proven.err"
+  mkdir -p "$home/state" "$home/data" "$subhome/state"
+  printf 'domain\n' > "$subhome/.fm-secondmate-home"
+  cat > "$home/state/domain.meta" <<EOF
+window=firstmate:fm-domain
+worktree=$subhome
+project=$subhome
+harness=echo
+kind=secondmate
+mode=secondmate
+yolo=off
+home=$subhome
+projects=alpha
+EOF
+  printf '# Secondmates\n' > "$home/data/secondmates.md"
+  fakebin=$(make_fake_tmux "$TMP_ROOT/marker-proven-fake")
+  log="$TMP_ROOT/marker-proven-fake/tmux.log"
+  if ! PATH="$fakebin:$PATH" FM_HOME="$home" FM_FAKE_TMUX_LOG="$log" FM_FAKE_TMUX_CAPTURE="$TMP_ROOT/marker-proven-fake/pane.txt" \
+    "$ROOT/bin/fm-teardown.sh" domain >/dev/null 2>"$err"; then
+    fail "teardown refused a marker-proven home whose registry entry was already removed"$'\n'"$(cat "$err")"
+  fi
+  [ ! -d "$subhome" ] || fail "teardown left the marker-proven home in place"
+  pass "secondmate teardown accepts a marker-proven home with no registry entry"
+}
+
+# Only the ABSENT binding is tolerated: one that exists and points elsewhere is
+# still a contradiction and must refuse.
+test_secondmate_teardown_refuses_contradicting_registry_binding() {
+  local home subhome elsewhere fakebin err log
+  home="$TMP_ROOT/contradicting-home"
+  subhome="$TMP_ROOT/contradicting-subhome"
+  elsewhere="$TMP_ROOT/contradicting-elsewhere"
+  err="$TMP_ROOT/contradicting.err"
+  mkdir -p "$home/state" "$home/data" "$subhome/state" "$elsewhere"
+  printf 'domain\n' > "$subhome/.fm-secondmate-home"
+  cat > "$home/state/domain.meta" <<EOF
+window=firstmate:fm-domain
+worktree=$subhome
+project=$subhome
+harness=echo
+kind=secondmate
+mode=secondmate
+yolo=off
+home=$subhome
+projects=alpha
+EOF
+  cat > "$home/data/secondmates.md" <<EOF
+- domain - design domain (home: $elsewhere; scope: design domain; projects: alpha; added 2026-06-22)
+EOF
+  fakebin=$(make_fake_tmux "$TMP_ROOT/contradicting-fake")
+  log="$TMP_ROOT/contradicting-fake/tmux.log"
+  if PATH="$fakebin:$PATH" FM_HOME="$home" FM_FAKE_TMUX_LOG="$log" FM_FAKE_TMUX_CAPTURE="$TMP_ROOT/contradicting-fake/pane.txt" \
+    "$ROOT/bin/fm-teardown.sh" domain >/dev/null 2>"$err"; then
+    fail "teardown accepted a home that the registry binds elsewhere"
+  fi
+  [ -d "$subhome" ] || fail "teardown removed the home after a contradicting-binding refusal"
+  grep -F 'is registered at' "$err" >/dev/null || fail "teardown did not explain the contradicting registry binding"
+  pass "secondmate teardown refuses a home the registry binds elsewhere"
+}
+
+# Ruling C: the snapshot must not report as healthy a line the shared parser
+# rejects. One owner for the grammar, no second copy to drift.
+test_fleet_snapshot_agrees_with_shared_registry_parser() {
+  local home out
+  home="$TMP_ROOT/snapshot-agreement-home"
+  mkdir -p "$home/state" "$home/data" "$TMP_ROOT/snapshot-agreement-good"
+  cat > "$home/data/secondmates.md" <<EOF
+- design - ui work (home: $TMP_ROOT/snapshot-agreement-good; scope: ui; projects: alpha; added 2026-07-30)
+- my id - bad id charset (home: /h; scope: s; projects: p; added 2026-07-30)
+- empty - empty scope (home: /h2; scope: ; projects: p; added 2026-07-30)
+EOF
+  out=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    "$ROOT/bin/fm-fleet-snapshot.sh" 2>/dev/null) || fail "fleet snapshot failed to run"
+  printf '%s' "$out" | grep -F '"/h"' >/dev/null \
+    && fail "snapshot reported a home for an id the shared parser rejects"
+  printf '%s' "$out" | grep -F '"/h2"' >/dev/null \
+    && fail "snapshot reported a home for an empty-scope entry the shared parser rejects"
+  printf '%s' "$out" | grep -F 'malformed secondmate registry entry' >/dev/null \
+    || fail "snapshot did not flag the entries the shared parser rejects"
+  pass "fleet snapshot and the shared registry parser agree on rejected entries"
+}
+
 test_secondmate_force_teardown_refuses_operational_dir_symlink_outside_home
 test_secondmate_teardown_refuses_registered_nested_home
 test_secondmate_teardown_refuses_child_registry_nested_home
@@ -2219,7 +2513,12 @@ test_secondmate_force_teardown_refuses_child_active_home_descendant
 test_secondmate_force_teardown_refuses_child_repo_descendant
 test_secondmate_force_teardown_refuses_unregistered_child_worktree
 test_secondmate_teardown_path_boundary_matrix
+test_secondmate_teardown_tolerates_unrelated_malformed_entry
+test_secondmate_teardown_accepts_marker_proven_unregistered_home
+test_secondmate_teardown_refuses_contradicting_registry_binding
+test_fleet_snapshot_agrees_with_shared_registry_parser
 test_secondmate_idle_pane_is_not_stale
 test_secondmate_charter_brief_is_idle_by_default
+test_symlinked_registry_read_paths_name_the_symlink
 test_backlog_handoff_aborts_safely
 test_backlog_handoff_refuses_done_items_and_non_secondmate_homes

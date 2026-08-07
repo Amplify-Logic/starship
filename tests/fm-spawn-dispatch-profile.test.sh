@@ -80,10 +80,22 @@ make_seeded_secondmate_home() {
   printf 'charter for %s\n' "$id" > "$home/data/charter.md"
 }
 
+SPAWN_HOMES_FILE=$(fm_test_tmproot fm-spawn-profile-homes)/homes
+mkdir -p "$(dirname "$SPAWN_HOMES_FILE")"
+: > "$SPAWN_HOMES_FILE"
+trap 'clear_spawn_task_tmps' EXIT
+
+register_spawn_home() {
+  printf '%s\n' "$( (CDPATH='' cd -- "$1" 2>/dev/null && pwd -P) || printf '%s' "$1")" >> "$SPAWN_HOMES_FILE"
+}
+
 run_spawn() {
   local home=$1 wt=$2 fakebin=$3 launchlog=$4
   shift 4
   : > "$launchlog"
+  # Every spawn creates a task temp root outside this suite's TMP_ROOT, so
+  # remember the home and clear those roots on exit however the run ends.
+  register_spawn_home "$home"
   FM_ROOT_OVERRIDE='' FM_HOME="$home" \
     FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
     FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
@@ -105,8 +117,31 @@ assert_meta_profile() {
   assert_grep "effort=$effort" "$meta" "meta missing effort=$effort"
 }
 
+# The temp root is spawn's own published value, not a spelling this test repeats.
+spawn_task_tmp_from_meta() {
+  grep '^tasktmp=' "$1" 2>/dev/null | tail -1 | cut -d= -f2- || true
+}
+
+# Clear the task temp roots of every spawn this suite performed. Reading the
+# root back from each meta keeps the test honest: it never repeats spawn's own
+# spelling of the path, so a leaked directory from an earlier failed run cannot
+# make an assertion pass spuriously.
+clear_spawn_task_tmps() {
+  local home meta root
+  [ -f "$SPAWN_HOMES_FILE" ] || return 0
+  while IFS= read -r home || [ -n "$home" ]; do
+    [ -d "$home/state" ] || continue
+    for meta in "$home"/state/*.meta; do
+      [ -f "$meta" ] || continue
+      root=$(spawn_task_tmp_from_meta "$meta")
+      case "$root" in ''|/) continue ;; esac
+      rm -rf "$root"
+    done
+  done < "$SPAWN_HOMES_FILE"
+}
+
 test_no_profile_keeps_claude_launch_unchanged() {
-  local rec id out status expected launch
+  local rec id out status expected launch task_tmp
   id=profile-off-z1
   rec=$(make_spawn_case profile-off claude "$id")
   read_case_record "$rec"
@@ -116,11 +151,123 @@ test_no_profile_keeps_claude_launch_unchanged() {
   expect_code 0 "$status" "claude spawn without profile flags should succeed"
   assert_contains "$out" "spawned $id harness=claude" "spawn did not report claude"
   assert_meta_profile "$HOME_DIR/state/$id.meta" claude default default
+  task_tmp=$(spawn_task_tmp_from_meta "$HOME_DIR/state/$id.meta")
+  [ -n "$task_tmp" ] || fail "spawn meta did not record the task temp root"
+  [ -d "$task_tmp/gotmp" ] || fail "spawn did not create the task Go temp directory"
 
   launch=$(cat "$LAUNCH_LOG")
   expected="CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions \"\$(cat '$HOME_DIR/data/$id/brief.md')\""
   [ "$launch" = "$expected" ] || fail "no-profile claude launch changed"$'\n'"expected: $expected"$'\n'"actual:   $launch"
-  pass "no --model/--effort records defaults and keeps the claude launch byte-identical"
+  pass "no-profile spawn preserves the launch and publishes its task temp root"
+}
+
+test_relative_home_overrides_launch_with_absolute_cross_process_paths() {
+  local rec id out status launch home_real
+  id=profile-relative-paths-z1b
+  rec=$(make_spawn_case profile-relative-paths pi "$id")
+  read_case_record "$rec"
+  register_spawn_home "$HOME_DIR"
+  home_real=$(cd "$HOME_DIR" && pwd -P)
+  mkdir -p "$CASE_DIR/cdpath/home/state" "$CASE_DIR/cdpath/home/data"
+  : > "$LAUNCH_LOG"
+
+  out=$(
+    cd "$CASE_DIR" || exit 1
+    CDPATH="$CASE_DIR/cdpath" FM_ROOT_OVERRIDE='' FM_HOME=home \
+      FM_STATE_OVERRIDE=home/state FM_DATA_OVERRIDE=home/data \
+      FM_PROJECTS_OVERRIDE=home/projects FM_CONFIG_OVERRIDE=home/config \
+      FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$WT_DIR" TMUX="fake,1,0" \
+      CLAUDE_CONFIG_DIR='' FM_FAKE_LAUNCH_LOG="$LAUNCH_LOG" \
+      GROK_HOME=home/grok-home PATH="$FAKEBIN_DIR:$PATH" \
+      "$SPAWN" "$id" "$PROJ_DIR" 2>&1
+  )
+  status=$?
+  expect_code 0 "$status" "spawn with relative home overrides should succeed"
+  launch=$(cat "$LAUNCH_LOG")
+  assert_contains "$launch" "-e '$home_real/state/$id.pi-ext.ts'" \
+    "relative FM_STATE_OVERRIDE leaked into Pi's cross-process extension path"
+  assert_contains "$launch" "'$home_real/data/$id/brief.md'" \
+    "relative FM_DATA_OVERRIDE leaked into the cross-process brief path"
+  pass "relative home overrides ignore CDPATH and become absolute before spawn launch construction"
+}
+
+test_home_defaults_preserve_absolute_or_resolve_relative_paths() {
+  local rec relative_id absolute_id out status launch home_real linked_home
+  relative_id=profile-relative-home-defaults-z1c
+  absolute_id=profile-absolute-home-defaults-z1d
+  rec=$(make_spawn_case profile-home-defaults pi "$relative_id" "$absolute_id")
+  read_case_record "$rec"
+  register_spawn_home "$HOME_DIR"
+  home_real=$(cd "$HOME_DIR" && pwd -P)
+
+  : > "$LAUNCH_LOG"
+  out=$(
+    cd "$CASE_DIR" || exit 1
+    FM_ROOT_OVERRIDE='' FM_HOME=home \
+      FM_STATE_OVERRIDE='' FM_DATA_OVERRIDE='' \
+      FM_PROJECTS_OVERRIDE=home/projects FM_CONFIG_OVERRIDE=home/config \
+      FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$WT_DIR" TMUX="fake,1,0" \
+      CLAUDE_CONFIG_DIR='' FM_FAKE_LAUNCH_LOG="$LAUNCH_LOG" \
+      GROK_HOME=home/grok-home PATH="$FAKEBIN_DIR:$PATH" \
+      "$SPAWN" "$relative_id" "$PROJ_DIR" 2>&1
+  )
+  status=$?
+  expect_code 0 "$status" "spawn with relative FM_HOME defaults should succeed"
+  launch=$(cat "$LAUNCH_LOG")
+  assert_contains "$launch" "-e '$home_real/state/$relative_id.pi-ext.ts'" \
+    "relative FM_HOME leaked into Pi's default cross-process extension path"
+  assert_contains "$launch" "'$home_real/data/$relative_id/brief.md'" \
+    "relative FM_HOME leaked into the default cross-process brief path"
+
+  linked_home="$CASE_DIR/home-link"
+  ln -s "$HOME_DIR" "$linked_home"
+  : > "$LAUNCH_LOG"
+  out=$(
+    FM_ROOT_OVERRIDE='' FM_HOME="$linked_home" \
+      FM_STATE_OVERRIDE='' FM_DATA_OVERRIDE='' \
+      FM_PROJECTS_OVERRIDE="$linked_home/projects" FM_CONFIG_OVERRIDE="$linked_home/config" \
+      FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$WT_DIR" TMUX="fake,1,0" \
+      CLAUDE_CONFIG_DIR='' FM_FAKE_LAUNCH_LOG="$LAUNCH_LOG" \
+      GROK_HOME="$linked_home/grok-home" PATH="$FAKEBIN_DIR:$PATH" \
+      "$SPAWN" "$absolute_id" "$PROJ_DIR" 2>&1
+  )
+  status=$?
+  expect_code 0 "$status" "spawn with absolute symlink-spelled FM_HOME defaults should succeed"
+  launch=$(cat "$LAUNCH_LOG")
+  assert_contains "$launch" "-e '$linked_home/state/$absolute_id.pi-ext.ts'" \
+    "absolute FM_HOME spelling changed in Pi's default cross-process extension path"
+  assert_contains "$launch" "'$linked_home/data/$absolute_id/brief.md'" \
+    "absolute FM_HOME spelling changed in the default cross-process brief path"
+  pass "FM_HOME defaults resolve relative paths and preserve absolute spellings"
+}
+
+test_unresolvable_relative_overrides_fail_loudly() {
+  local rec id out status
+  id=profile-unresolvable-paths-z1d
+  rec=$(make_spawn_case profile-unresolvable-paths pi "$id")
+  read_case_record "$rec"
+
+  out=$(cd "$CASE_DIR" && FM_ROOT_OVERRIDE='' FM_HOME=missing-home \
+    FM_STATE_OVERRIDE='' FM_DATA_OVERRIDE='' "$SPAWN" "$id" "$PROJ_DIR" 2>&1)
+  status=$?
+  expect_code 1 "$status" "spawn with an unresolvable relative home should fail"
+  assert_contains "$out" "FM_HOME directory cannot be resolved: missing-home" \
+    "spawn did not name the unresolvable FM_HOME"
+
+  out=$(cd "$CASE_DIR" && FM_ROOT_OVERRIDE='' FM_HOME=home \
+    FM_STATE_OVERRIDE=missing-state FM_DATA_OVERRIDE=home/data "$SPAWN" "$id" "$PROJ_DIR" 2>&1)
+  status=$?
+  expect_code 1 "$status" "spawn with an unresolvable relative state override should fail"
+  assert_contains "$out" "FM_STATE_OVERRIDE directory cannot be resolved: missing-state" \
+    "spawn did not name the unresolvable FM_STATE_OVERRIDE"
+
+  out=$(cd "$CASE_DIR" && FM_ROOT_OVERRIDE='' FM_HOME=home \
+    FM_STATE_OVERRIDE=home/state FM_DATA_OVERRIDE=missing-data "$SPAWN" "$id" "$PROJ_DIR" 2>&1)
+  status=$?
+  expect_code 1 "$status" "spawn with an unresolvable relative data override should fail"
+  assert_contains "$out" "FM_DATA_OVERRIDE directory cannot be resolved: missing-data" \
+    "spawn did not name the unresolvable FM_DATA_OVERRIDE"
+  pass "unresolvable relative spawn overrides fail with named diagnostics"
 }
 
 test_active_dispatch_profile_requires_explicit_harness_for_ship() {
@@ -437,6 +584,9 @@ test_active_dispatch_profile_does_not_block_secondmate_launch() {
 }
 
 test_no_profile_keeps_claude_launch_unchanged
+test_relative_home_overrides_launch_with_absolute_cross_process_paths
+test_home_defaults_preserve_absolute_or_resolve_relative_paths
+test_unresolvable_relative_overrides_fail_loudly
 test_active_dispatch_profile_requires_explicit_harness_for_ship
 test_active_dispatch_profile_requires_explicit_harness_for_scout
 test_active_dispatch_profile_allows_explicit_harness

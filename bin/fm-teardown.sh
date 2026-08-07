@@ -84,7 +84,13 @@ set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
-FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
+# shellcheck source=bin/fm-path-lib.sh disable=SC1091
+. "$SCRIPT_DIR/fm-path-lib.sh"
+# The registry isolation check resolves the active home and the code root, and
+# its resolver refuses a relative path, so a relative FM_HOME or FM_ROOT_OVERRIDE
+# would otherwise refuse every guarded secondmate and child home removal.
+FM_ROOT=$(fm_path_require_directory FM_ROOT "$FM_ROOT") || exit 1
+FM_HOME=$(fm_path_require_directory FM_HOME "${FM_HOME:-$FM_ROOT}") || exit 1
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
@@ -102,6 +108,8 @@ SUB_HOME_MARKER=".fm-secondmate-home"
 . "$SCRIPT_DIR/fm-pr-lib.sh"
 # shellcheck source=bin/fm-capability-lib.sh
 . "$SCRIPT_DIR/fm-capability-lib.sh"
+# shellcheck source=bin/fm-secondmate-registry-lib.sh
+. "$SCRIPT_DIR/fm-secondmate-registry-lib.sh"
 if [ "$#" -lt 1 ] || ! fm_task_id_path_safe "$1"; then
   echo "error: invalid teardown request" >&2
   exit 2
@@ -426,10 +434,6 @@ backlog_refresh_reminder() {
   else
     printf '%s\n' "Backlog: $ID just finished. Update data/backlog.md - move $ID to Done as the TOP row of that section and record its completion date there (merged, reported, or done YYYY-MM-DD), because Recently Landed ranks a dated completion above an undated one and breaks same-day ties on that top-of-Done position; keep Done newest-first and to the 10 most recent, then re-scan Queued and dispatch only work whose blockers are gone and date is due."
   fi
-}
-
-registry_home_for_line() {
-  sed -n 's/^[^(]*(home: \([^;)]*\);.*/\1/p'
 }
 
 path_is_ancestor_of() {
@@ -784,16 +788,23 @@ validate_removal_target() {
   printf '%s\n' "$abs_target"
 }
 
+# This scan only asks whether any registered home sits inside the removal
+# target, so an unrelated entry that cannot be parsed or resolved is skipped
+# rather than refusing the whole teardown. Refusing on somebody else's bad line
+# would force the operator into hand deletion outside every guard.
 registered_descendant_home_for_removal() {
   local reg=$1 target=$2 line id registered_home registered_abs
   [ -f "$reg" ] || return 1
-  while IFS= read -r line; do
+  if ! secondmate_registry_validate_bindings "$reg" secondmate_registry_path_key '' '' '' '' scoped; then
+    echo "REFUSED: $SECONDMATE_REGISTRY_ERROR" >&2
+    return 2
+  fi
+  while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in
       "- "*)
-        id=${line#- }
-        id=${id%% *}
-        registered_home=$(printf '%s\n' "$line" | registry_home_for_line)
-        [ -n "$registered_home" ] || continue
+        secondmate_registry_parse_line "$line" || continue
+        id=$SECONDMATE_REGISTRY_ID
+        registered_home=$SECONDMATE_REGISTRY_HOME
         registered_abs=$(removal_target_abs_path "$registered_home" 2>/dev/null || true)
         [ -n "$registered_abs" ] || continue
         [ "$registered_abs" = "$target" ] && continue
@@ -805,6 +816,17 @@ registered_descendant_home_for_removal() {
     esac
   done < "$reg"
   return 1
+}
+
+# Absence of a registered descendant is the scan's rc=1 and is tolerated;
+# rc=2 is a refused registry and must keep refusing.
+descendant_conflict_for() {
+  local reg=$1 target=$2 conflict rc=0
+  conflict=$(registered_descendant_home_for_removal "$reg" "$target") || rc=$?
+  case "$rc" in
+    0|1) printf '%s\n' "$conflict" ;;
+    *) return 1 ;;
+  esac
 }
 
 validate_firstmate_operational_dirs_for_removal() {
@@ -868,7 +890,8 @@ safe_rm_rf_child_worktree() {
 }
 
 validate_firstmate_home_for_removal() {
-  local home=$1 label=$2 expected_id=${3:-} abs_home_path marker_id conflict child_id child_home
+  local home=$1 label=$2 expected_id=${3:-} registry=${4:-$SECONDMATE_REG}
+  local abs_home_path marker_id conflict child_id child_home
   [ -n "$home" ] || return 0
   [ -e "$home" ] || return 0
   abs_home_path=$(validate_removal_target "$home" "$label") || return 1
@@ -882,11 +905,29 @@ validate_firstmate_home_for_removal() {
       echo "REFUSED: unsafe $label removal target $home is marked for secondmate ${marker_id:-unknown}, expected $expected_id" >&2
       return 1
     fi
+    # The marker above already proved this home belongs to $expected_id, so a
+    # missing registry entry - deregistered early, or orphaned by a partial
+    # decommission - must not strand the home outside guarded cleanup. Scoped
+    # validation tolerates only that absent-binding case: a binding that exists
+    # and points elsewhere still refuses, as does a defect of this entry.
+    # $registry is the parent home's own registry for a nested secondmate, which
+    # is where nested entries actually live.
+    if [ -e "$registry" ] || [ -L "$registry" ]; then
+      if ! secondmate_registry_validate_bindings "$registry" secondmate_registry_path_key "$expected_id" "$abs_home_path" "$FM_HOME" "$FM_ROOT" scoped; then
+        case "$SECONDMATE_REGISTRY_ERROR" in
+          overlapping\ secondmate\ home\ assignment:*)
+            echo "REFUSED: unsafe $label removal target $home contains registered secondmate home; $SECONDMATE_REGISTRY_ERROR" >&2
+            ;;
+          *) echo "REFUSED: $SECONDMATE_REGISTRY_ERROR" >&2 ;;
+        esac
+        return 1
+      fi
+    fi
   fi
   validate_firstmate_operational_dirs_for_removal "$abs_home_path" "$label" || return 1
-  conflict=$(registered_descendant_home_for_removal "$SECONDMATE_REG" "$abs_home_path" || true)
+  conflict=$(descendant_conflict_for "$SECONDMATE_REG" "$abs_home_path") || return 1
   if [ -z "$conflict" ]; then
-    conflict=$(registered_descendant_home_for_removal "$abs_home_path/data/secondmates.md" "$abs_home_path" || true)
+    conflict=$(descendant_conflict_for "$abs_home_path/data/secondmates.md" "$abs_home_path") || return 1
   fi
   if [ -n "$conflict" ]; then
     IFS=$'\t' read -r child_id child_home <<EOF
@@ -899,10 +940,10 @@ EOF
 }
 
 remove_firstmate_home() {
-  local home=$1 label=$2 expected_id=${3:-} abs_home_path
+  local home=$1 label=$2 expected_id=${3:-} registry=${4:-$SECONDMATE_REG} abs_home_path
   [ -n "$home" ] || return 0
   [ -e "$home" ] || return 0
-  abs_home_path=$(validate_firstmate_home_for_removal "$home" "$label" "$expected_id") || return 1
+  abs_home_path=$(validate_firstmate_home_for_removal "$home" "$label" "$expected_id" "$registry") || return 1
   [ -n "$abs_home_path" ] || return 0
   if firstmate_home_has_treehouse_slot "$abs_home_path"; then
     command -v treehouse >/dev/null 2>&1 || {
@@ -933,7 +974,9 @@ validate_firstmate_home_children_removal() {
     if [ "$child_kind" = secondmate ]; then
       child_home=$(meta_value "$child_meta" home)
       [ -n "$child_home" ] || child_home=$child_wt
-      validate_firstmate_home_for_removal "$child_home" "child firstmate home" "$child_id" >/dev/null || return 1
+      # A nested secondmate is registered in its parent home's registry, never
+      # in the top-level one, so validate the child against that file.
+      validate_firstmate_home_for_removal "$child_home" "child firstmate home" "$child_id" "$home/data/secondmates.md" >/dev/null || return 1
       validate_firstmate_home_children_removal "$child_home" || return 1
     elif [ "$child_backend" = orca ]; then
       child_orca_worktree_id=$(require_orca_worktree_id "$child_meta") || return 1
@@ -986,7 +1029,7 @@ cleanup_firstmate_home_children() {
       [ -n "$child_home" ] || child_home=$child_wt
       if [ -n "$child_home" ] && [ -d "$child_home" ]; then
         cleanup_firstmate_home_children "$child_home"
-        remove_firstmate_home "$child_home" "child firstmate home" "$child_id"
+        remove_firstmate_home "$child_home" "child firstmate home" "$child_id" "$home/data/secondmates.md"
       fi
     elif [ "$child_backend" = orca ]; then
       if [ -n "$child_wt" ] && [ -d "$child_wt" ]; then

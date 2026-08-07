@@ -114,6 +114,42 @@ ROWS
   pass "C1 fm-harness.sh secondmate-model/secondmate-effort resolve the optional tokens; bare harness stays empty (backward-compat)"
 }
 
+test_dash_leading_process_names_are_basename_operands() {
+  local dir fakebin got err
+  dir="$TMP_ROOT/dash-leading-process-names"
+  fakebin=$(fm_fakebin "$dir")
+  cat > "$fakebin/ps" <<'SH'
+#!/usr/bin/env bash
+set -u
+field= pid=
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -o) field=$2; shift 2 ;;
+    -p) pid=$2; shift 2 ;;
+    *) shift ;;
+  esac
+done
+case "$pid:$field" in
+  $$:comm=) printf '%s\n' '-zsh' ;;
+  $$:ppid=) printf '%s\n' 4242 ;;
+  4242:comm=) printf '%s\n' '/opt/test/bin/codex' ;;
+  4242:args=) printf '%s\n' 'codex' ;;
+  4242:ppid=) printf '%s\n' 1 ;;
+  *:comm=) printf '%s\n' '-zsh' ;;
+  *:args=) printf '%s\n' '-zsh' ;;
+  *:ppid=) printf '%s\n' 4242 ;;
+esac
+SH
+  chmod +x "$fakebin/ps"
+
+  err="$dir/fm-harness.err"
+  got=$(env -u CLAUDECODE -u PI_CODING_AGENT -u GROK_AGENT -u CURSOR_AGENT \
+    PATH="$fakebin:$BASE_PATH" "$ROOT/bin/fm-harness.sh" 2>"$err")
+  [ "$got" = codex ] || fail "dash-leading shell ancestry resolved '$got', expected codex"
+  [ ! -s "$err" ] || fail "fm-harness wrote basename option noise for literal -zsh: $(cat "$err")"
+  pass "harness identity treats dash-leading process names as operands"
+}
+
 # ===========================================================================
 # B) propagate_inheritable_config unit behavior
 # ===========================================================================
@@ -1020,6 +1056,7 @@ test_config_push_exits_nonzero_on_copy_error() {
 
 test_harness_resolution
 test_secondmate_model_effort_tokens
+test_dash_leading_process_names_are_basename_operands
 test_propagate_lib
 test_spawn_split_and_inherit
 test_spawn_backward_compat_crew_fallback
