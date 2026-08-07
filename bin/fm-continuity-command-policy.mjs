@@ -3,15 +3,29 @@
 //
 // The shared Lexer, program splitter, and command-position resolver remain owned
 // by fm-arm-command-policy.mjs. This policy only identifies executed firstmate
-// fleet scripts and divides them into recovery commands (wake drain, watcher
-// arm, and fail-closed teardown) versus every other bin/fm-*.sh command. Unparseable or opaque dynamic
-// commands fail open so this gate can never become a blanket shell block.
+// fleet scripts and divides them into recovery commands (session start, wake
+// drain, watcher arm, and fail-closed teardown) versus every other bin/fm-*.sh
+// command. Unparseable or opaque dynamic commands fail open so this gate can
+// never become a blanket shell block.
+//
+// Classification is lexical: only a statically visible executed command word is
+// matched against RECOVERY_SCRIPTS. A bin/fm-bootstrap.sh command word therefore
+// stays denied wherever it executes, including when it is bundled after
+// fm-session-start.sh. The fm-bootstrap.sh that fm-session-start.sh runs as its
+// own subprocess is not a command word here and is allowed along with its
+// composing script, whose header documents that it acquires the per-home session
+// lock before those mutating sweeps run.
 
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Lexer, commandPosition, splitProgram } from "./fm-arm-command-policy.mjs";
 
-const RECOVERY_SCRIPTS = new Set(["fm-wake-drain.sh", "fm-watch-arm.sh", "fm-teardown.sh"]);
+const RECOVERY_SCRIPTS = new Set([
+  "fm-session-start.sh",
+  "fm-wake-drain.sh",
+  "fm-watch-arm.sh",
+  "fm-teardown.sh",
+]);
 
 function parseArguments(argv) {
   const result = { command: "", root: "" };

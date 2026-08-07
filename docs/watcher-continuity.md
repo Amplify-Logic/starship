@@ -19,7 +19,12 @@ After the configured retry bound is exhausted, it delivers the original wake wit
 This is deliberate Option B ordering: the fleet is protected before the model handles the wake whenever restoration succeeds, but the model is never left blind when it does not.
 
 Claude retains its native tracked background-task completion path.
-Its new PreToolUse continuity gate allows wake drain, arm recovery, and independently fail-closed teardown, but refuses other fleet commands while tasks are in flight and no identity-matched live watcher holds the home lock.
+Its new PreToolUse continuity gate allows session start, wake drain, arm recovery, and independently fail-closed teardown, but refuses other fleet commands while tasks are in flight and no identity-matched live watcher holds the home lock.
+Allowing `bin/fm-session-start.sh` stops the gate self-blocking the one command AGENTS.md section 3 mandates as a session's first, since a fresh session has tasks in flight and no live watcher by definition.
+The deny guidance keeps the two entry points distinct rather than pointing every denial at a once-per-session command: `bin/fm-wake-drain.sh` is the action that is always safe mid-session, and `bin/fm-session-start.sh` is named only when the hook process's own ancestry does not already hold the home session lock.
+That is a two-branch guidance text, not two decisions: a session that already holds the lock is told to drain, tear down, and re-arm without being pointed back at an out-of-contract mid-session re-run, while a genuine pre-lock session still gets the session-start clause.
+The ancestry test is `fm_session_lock_in_ancestry()` in `bin/fm-primary-scope-lib.sh`, one owner shared with `bin/fm-sessionstart-nudge.sh` so the nudge and this gate cannot drift on what "already ran session start" means.
+The recovery set is keyed on the executed command word, so a direct `bin/fm-bootstrap.sh` stays denied while the `bin/fm-bootstrap.sh` that `bin/fm-session-start.sh` runs inside its own process is allowed with it; session start acquires the per-home session lock first, and holding that lock is what gates bootstrap's mutating sweeps.
 Allowing an ordinary literal teardown prevents a terminal wake from creating a recovery circle: forced or dynamically constructed teardown remains blocked, ordinary teardown itself still refuses dirty, unlanded, incomplete-scout, and unresolved-decision cases, and the turn-end guard continues to require supervision for any tasks left in flight.
 Codex retains its bounded foreground checkpoint protocol.
 Grok retains its tracked background-task notification protocol.
@@ -27,6 +32,24 @@ No adapter starts a replacement with shell `&`.
 
 The existing turn-end guard implementation and adapters are unchanged.
 They remain the final backstop rather than the normal continuity mechanism.
+
+## Known limitation
+
+The session-start allowance is not restricted to a genuinely first invocation, and this gate's allow/deny decision does not try to detect one.
+`bin/fm-lock.sh` treats a recorded holder PID equal to the current harness PID as a successful re-acquire, so a mid-session re-run of `bin/fm-session-start.sh` — not only the fresh case where no lock exists yet — also passes this gate, acquires the lock, and runs bootstrap's five mutating sweeps.
+The gate's own trigger condition is watcher liveness, which is independent of session-lock ownership, so the classification does not distinguish the two cases from where it sits.
+The deny guidance does distinguish them with `fm_session_lock_in_ancestry()`, so a session that already holds the lock is no longer told about session start at all.
+Applying that same ancestry test to the allow/deny classification is beyond this fix's risk budget: it is a deliberate scope deferral rather than a technical limitation, and remains a deferred follow-up.
+
+That is accepted rather than patched now, for two reasons.
+The session lock, not watcher liveness, is the actual mutation authority for those sweeps.
+And "run session-start exactly once per session" is a behavioral contract owned and enforced by AGENTS.md and agent discipline, not by a PreToolUse gate; a half-enforced first-invocation check here would be less trustworthy than this stated limitation.
+
+A re-run does exceed the documented contract, so the blast radius is stated plainly rather than minimized.
+AGENTS.md section 3 scopes session start to once per session, and `bin/fm-bootstrap.sh`'s secondmate liveness sweep scopes itself to "session start (reboot/restart) only" with a mid-session secondmate death explicitly out of scope.
+The practical consequence is that this gate transitively permits mutations it denies when invoked directly.
+The most destructive of them is that sweep's own recovery action: for any secondmate whose liveness probe reads confidently dead, it runs `fm_backend_kill` and then respawns through `bin/fm-spawn.sh <id> --secondmate` (`bin/fm-bootstrap.sh:447-448`).
+It also includes the `bin/fm-visible-status.sh --all` Herdr presentation projection, whose cursor-worker `model_live=` meta write is owned by [`cursor-harness.md`](cursor-harness.md), and the secondmate reread nudges that bootstrap performs inside its own process.
 
 ## Arm-layer cycle contract
 
@@ -48,6 +71,7 @@ Only the watcher process touches `state/.last-watcher-beat`; no helper process c
 `tests/fm-pi-watch-extension.test.sh` simulates actionable and empty child closes against the actual Pi and OpenCode close handlers, blocks prompt delivery to prove the successor launches first, verifies single-flight behavior, changes the session lock before close to prove ownership is rechecked, and hangs each successor arm to prove bounded fallback delivery includes the typed restoration failure.
 `tests/fm-watcher-lock.test.sh` covers verified-successor attach, the typed self-eviction failure, bounded and successor-linked lifecycle rows, and a SIGSTOP counterfactual that distinguishes a live PID from a stale beacon before classifying termination.
 `tests/fm-continuity-pretool-check.test.sh` proves the Claude gate rejects only non-recovery fleet execution in the precise unhealthy state and preserves the existing Stop registration.
+It also asserts both guidance branches verbatim, and that a session holding the home lock still gets the identical allow/deny decisions, so the ancestry test can only ever change guidance text.
 
 ## Sanitized live evidence, 2026-07-17
 
@@ -67,7 +91,10 @@ grok 0.2.103 (89c3d36fb6f1) [stable]
 ```
 
 Claude ran an arm fixture through its native tracked background option, observed background completion, allowed the wake drain, and refused the next unrelated fleet command before its body executed.
-The captured system message exactly named `[watcher-continuity]`, `bin/fm-wake-drain.sh`, tracked Claude re-arm through `bin/fm-watch-arm.sh`, and the blocked `fm-crew-state.sh` command.
+That run's captured system message named `[watcher-continuity]`, `bin/fm-wake-drain.sh`, tracked Claude re-arm through `bin/fm-watch-arm.sh`, and the blocked `fm-crew-state.sh` command.
+The recovery guidance has since gained the conditional session-start clause described above, so the string this gate emits today for a pre-lock session is longer than the one that dated run recorded.
+`tests/fm-claude-continuity-live-e2e.test.sh` asserts both current strings verbatim and is the place to read them: the credentialed turn covers the pre-lock branch, and a direct lab invocation with a recorded lock holder covers the lock-held branch.
+Refreshing this dated capture would take a fresh credentialed run of that opt-in test.
 Command: `FM_CLAUDE_LIVE_E2E=1 tests/fm-claude-continuity-live-e2e.test.sh`.
 Observed result: `ok - Claude 2.1.214 (Claude Code) live E2E refused only the post-completion fleet command with exact re-arm guidance`.
 

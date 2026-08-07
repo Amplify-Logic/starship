@@ -41,7 +41,7 @@ expect_deny() {
   [ ! -s "$OUT" ] || fail "$label deny wrote stdout: $(cat "$OUT")"
   jq -e '.hookSpecificOutput.hookEventName == "PreToolUse" and .hookSpecificOutput.permissionDecision == "deny"' "$ERR" >/dev/null 2>&1 \
     || fail "$label deny omitted Claude's permission decision: $(cat "$ERR")"
-  [ -n "$expected" ] || expected="[watcher-continuity] tasks are in flight and no live watcher holds this home lock; drain wakes with bin/fm-wake-drain.sh, use fail-closed bin/fm-teardown.sh for completed tasks when needed, then re-arm with bin/fm-watch-arm.sh as a tracked Claude background task before running other fleet commands (blocked: $blocked)"
+  [ -n "$expected" ] || expected="[watcher-continuity] tasks are in flight and no live watcher holds this home lock; drain wakes with bin/fm-wake-drain.sh, the safe mid-session action; run the once-per-session bin/fm-session-start.sh instead only if you have not already run it earlier this session; use fail-closed bin/fm-teardown.sh for completed tasks when needed, then re-arm with bin/fm-watch-arm.sh as a tracked Claude background task before running other fleet commands (blocked: $blocked)"
   actual=$(jq -r '.systemMessage' "$ERR")
   [ "$actual" = "$expected" ] || fail "$label recovery guidance changed: $actual"
 }
@@ -52,6 +52,7 @@ test_gate_scope_and_recovery_exceptions() {
 
   expect_allow "ordinary shell command" 'git status --short'
   expect_allow "fleet-script text as data" "rg -n 'bin/fm-send.sh' docs"
+  expect_allow "session start recovery" 'bin/fm-session-start.sh'
   expect_allow "wake drain recovery" 'bin/fm-wake-drain.sh'
   expect_allow "watch arm recovery" 'bin/fm-watch-arm.sh'
   expect_allow "drain then arm recovery" 'bin/fm-wake-drain.sh; bin/fm-watch-arm.sh'
@@ -63,8 +64,36 @@ test_gate_scope_and_recovery_exceptions() {
   expect_deny "dynamic teardown mode is not recovery" 'bin/fm-teardown.sh task "$TEARDOWN_MODE"' 'fm-teardown.sh' "$unsafe_teardown_reason"
   expect_deny "unrelated fleet command" 'bin/fm-crew-state.sh task' 'fm-crew-state.sh'
   expect_deny "recovery bundled with unrelated fleet command" 'bin/fm-wake-drain.sh; bin/fm-send.sh task hi' 'fm-send.sh'
+  # The two denies below, read together with the "session start recovery" allow
+  # above, assert the direct-versus-transitive bootstrap boundary so no one
+  # assertion reads as contradicting another. The gate classifies the
+  # command words it is handed, so every bin/fm-bootstrap.sh in executed
+  # position denies, bundled after session start or nested in a literal shell
+  # payload alike. The bin/fm-bootstrap.sh that the allowed
+  # bin/fm-session-start.sh above runs inside its own process is not a command
+  # word this gate sees; permitting it is inherent to allowing the composing
+  # recovery script, not a classifier feature, and fm-session-start.sh gates
+  # those mutating sweeps on first holding the per-home session lock.
   expect_deny "literal nested fleet command" "bash -lc 'bin/fm-bootstrap.sh'" 'fm-bootstrap.sh'
+  expect_deny "direct bootstrap bundled after session start" 'bin/fm-session-start.sh; bin/fm-bootstrap.sh' 'fm-bootstrap.sh'
   pass "continuity gate allows recovery and ordinary commands but denies only other fleet execution"
+}
+
+# Every deny above ran with no state/.lock at all, the genuine pre-lock case, so
+# each asserted the guidance that names the once-per-session entry point. With
+# this test's own pid recorded as the lock holder, the gate's ancestry walk
+# resolves the holder inside the hook's own process ancestry and drops that
+# clause instead of inviting an out-of-contract mid-session re-run.
+test_lock_holding_session_gets_guidance_without_session_start() {
+  local held_reason
+  printf '%s\n' "$$" > "$STATE/.lock"
+  held_reason='[watcher-continuity] tasks are in flight and no live watcher holds this home lock; drain wakes with bin/fm-wake-drain.sh, the safe mid-session action; use fail-closed bin/fm-teardown.sh for completed tasks when needed, then re-arm with bin/fm-watch-arm.sh as a tracked Claude background task before running other fleet commands (blocked: fm-crew-state.sh)'
+  expect_deny "lock-holding session guidance" 'bin/fm-crew-state.sh task' 'fm-crew-state.sh' "$held_reason"
+  # The ancestry walk scopes guidance text only: the classification is unchanged,
+  # so session start stays allowed exactly as it is without the lock.
+  expect_allow "session start while holding the lock" 'bin/fm-session-start.sh'
+  rm -f "$STATE/.lock"
+  pass "continuity gate omits the session-start clause for a session that already holds the home lock"
 }
 
 test_live_lock_allows_fleet_command_even_with_stale_beacon() {
@@ -120,6 +149,7 @@ test_claude_hook_registration_preserves_stop_backstop() {
 }
 
 test_gate_scope_and_recovery_exceptions
+test_lock_holding_session_gets_guidance_without_session_start
 test_live_lock_allows_fleet_command_even_with_stale_beacon
 test_child_worktree_and_malformed_input_fail_open
 test_claude_hook_registration_preserves_stop_backstop
