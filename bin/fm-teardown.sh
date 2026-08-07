@@ -424,7 +424,7 @@ backlog_refresh_reminder() {
     esac
     printf '%s\n' "Backlog: $ID just finished. Run $done_cmd, then run tasks-axi ready for dependency-cleared candidates, check date gates, and dispatch only work whose blockers are gone and date is due."
   else
-    printf '%s\n' "Backlog: $ID just finished. Update data/backlog.md - move $ID to Done, keep Done to the 10 most recent, then re-scan Queued and dispatch only work whose blockers are gone and date is due."
+    printf '%s\n' "Backlog: $ID just finished. Update data/backlog.md - move $ID to Done as the TOP row of that section and record its completion date there (merged, reported, or done YYYY-MM-DD), because Recently Landed ranks a dated completion above an undated one and breaks same-day ties on that top-of-Done position; keep Done newest-first and to the 10 most recent, then re-scan Queued and dispatch only work whose blockers are gone and date is due."
   fi
 }
 

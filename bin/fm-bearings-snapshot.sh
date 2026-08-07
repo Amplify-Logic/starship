@@ -30,7 +30,15 @@
 # The default landed baseline is balanced across homes: each home keeps its internal
 # newest-first ordering, homes iterate in deterministic id order, sparse homes do not
 # waste capacity, and --all-landed switches back to the complete global newest-first
-# order.
+# order. Balance alone would drop the newest completion in the fleet once there are
+# more homes than the overall cap has slots, so the merge reserves a leading slot for
+# every home whose newest dated completion - the row bin/fm-landed-lib.sh ranks first
+# in that home, published with recency_rank 1 - carries the fleet's newest completion
+# date, and balances the rest. Completion dates are day-granularity and nothing in
+# the system records anything finer, so a same-date cross-home tie reserves EVERY
+# tied home's newest row rather than letting home-id order cut a later-sorting
+# home's just-finished completion; only a cap with fewer slots than tied homes can
+# still drop one, and omitted[] discloses it.
 #
 # Flags:
 #   (default)        compact projection, TOON, local-only
@@ -53,6 +61,9 @@ set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FLEET="$SCRIPT_DIR/fm-fleet-snapshot.sh"
+# shellcheck source=bin/fm-landed-lib.sh
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/fm-landed-lib.sh"  # landed_newest_first + landed_recency_key: shared completion-recency ordering
 
 # Bounds (overridable for tests / large fleets).
 FM_BEARINGS_LANDED=${FM_BEARINGS_LANDED:-6}
@@ -102,9 +113,11 @@ Default fields: schema, home, generated, prs, in_flight{id,kind,state,doing},
   unhealthy_endpoints{...} (only when non-empty), omitted{surface,reveal}.
 landed merges this home's Done with registered secondmate homes' Done, bounded by
   a per-home cap (FM_BEARINGS_LANDED_PER_HOME) and an overall cap (FM_BEARINGS_LANDED),
-  with omitted[] disclosure. Default selection is balanced across deterministic home
-  order while preserving each home's internal newest-first order; sparse homes do
-  not waste capacity. --all-landed reveals the full global newest-first set.
+  with omitted[] disclosure. Default selection reserves a leading slot for every home
+  whose newest dated completion carries the fleet's newest completion date, then
+  balances the rest across deterministic home order while preserving each home's
+  internal newest-first order; sparse homes do not waste capacity. --all-landed
+  reveals the full global newest-first set.
 For every registered secondmate, validated structured state from its own home is
   authoritative. Parent events and bounded terminal reads are labeled fallback or
   contradiction evidence and never become current work.
@@ -293,30 +306,39 @@ MODEL=$(printf '%s' "$SNAP" | jq \
   --argjson pr_repos_shown "$PR_REPOS_SHOWN" \
   --argjson pr_rows_capped "$PR_ROWS_CAPPED" \
   --argjson pr_rows_min_total "$PR_ROWS_MIN_TOTAL" \
-  --argjson candidate_prs "$CANDIDATE_PRS" '
+  --argjson candidate_prs "$CANDIDATE_PRS" "$(fm_landed_jq_prelude)"'
   def trunc($n): if . == null then null else
     (tostring | gsub("\\s+"; " ") | if (length > $n) then (.[:$n] + "…") else . end) end;
   def round_robin_landed($n):
     . as $groups
+    | ($groups | length) as $g
     | [range(0; (($groups | map(length) | max) // 0)) as $i
        | $groups[]
        | select(length > $i)
-       | .[$i]][:$n];
+       | .[$i]] as $merged
+    | $merged[:$g] as $heads
+    | ([$heads[] | .completion.date // "" | select(. != "")] | max) as $top_date
+    | (if $top_date == null then $merged
+       else [$heads[] | select((.completion.date // "") == $top_date)]
+            + [$heads[] | select((.completion.date // "") != $top_date)]
+            + $merged[$g:]
+       end)[:$n];
   ($fields | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(. != ""))) as $fl
   | (($fl | index("bodies")) != null) as $f_bodies
   | (($fl | index("paths")) != null) as $f_paths
   | (($fl | index("actions")) != null) as $f_actions
   | (($fl | index("endpoints")) != null) as $f_endpoints
   | ([ .backlog.records[] | select(.state == "done" and .structured and .kind != "captain")
-       | {id, title, pr_url, report_path, local_note, completion, home:"(main)", home_id:"(main)"} ]) as $main_done
+       | {id, title, pr_url, report_path, local_note, completion, order,
+          home:"(main)", home_id:"(main)"} ]) as $main_done
   | ((.secondmate_landed.records) // []) as $mate_done
   | ($main_done + $mate_done) as $all_landed_rows
   | ([ $all_landed_rows | group_by(.home_id)[]
-       | sort_by([(.completion.date // ""), .id]) | reverse
+       | landed_newest_first
        | (if $all_landed == 1 then . else .[:$landed_per_home_n] end) ]) as $per_home_groups
   | ($per_home_groups | add // []) as $per_home_capped
   | ([ $all_landed_rows | group_by(.home_id)[] | select(length > $landed_per_home_n) ] | length) as $home_cap_dropped
-  | ($per_home_capped | sort_by([(.completion.date // ""), .id]) | reverse) as $landed_sorted
+  | ($per_home_capped | landed_newest_first) as $landed_sorted
   | (if $all_landed == 1 then $landed_sorted else ($per_home_groups | round_robin_landed($landed_n)) end) as $done
   | ($done | map(.id)) as $done_ids
   | ([.tasks[] | select(.kind != "secondmate") | .id]) as $live_ids

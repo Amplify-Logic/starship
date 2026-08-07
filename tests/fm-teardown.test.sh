@@ -61,6 +61,12 @@ TMP_ROOT=$(fm_test_tmproot fm-teardown-tests)
 REAL_GIT_FOR_TEST=$(command -v git)
 export REAL_GIT_FOR_TEST
 
+# The manual-backlog reminder's Done-pruning bound, asserted in BOTH directions: the
+# manual prompt must always carry it and the tasks-axi-compatible prompt must never
+# carry it. A reworded reminder then fails the positive assertion loudly instead of
+# leaving the negative guard matching a string that no longer exists anywhere.
+MANUAL_DONE_PRUNE_SENTINEL='to the 10 most recent'
+
 # Build a fresh sandbox for one test case. Sets up:
 #   $CASE/state/        - firstmate state dir (with a fresh watcher beacon)
 #   $CASE/fakebin/      - mocks for treehouse, tmux (PATH-prepended by caller)
@@ -528,7 +534,7 @@ test_teardown_prompts_tasks_axi_done_when_compatible() {
     || fail "teardown did not prompt tasks-axi ready: $out"
   printf '%s\n' "$out" | grep -F 'check date gates' >/dev/null \
     || fail "teardown did not preserve date-gate check: $out"
-  printf '%s\n' "$out" | grep -F 'keep Done to the 10 most recent' >/dev/null \
+  printf '%s\n' "$out" | grep -F "$MANUAL_DONE_PRUNE_SENTINEL" >/dev/null \
     && fail "teardown kept manual Done pruning in compatible tasks-axi prompt: $out"
   pass "teardown prompts tasks-axi backlog refresh when compatible"
 }
@@ -544,6 +550,15 @@ test_teardown_manual_backend_prompts_hand_edit_even_when_tasks_axi_present() {
   out=$(run_teardown "$case_dir") || fail "teardown failed with manual backlog backend"
   printf '%s\n' "$out" | grep -F 'Update data/backlog.md - move task-x1 to Done' >/dev/null \
     || fail "teardown did not prompt manual backlog update under opt-out: $out"
+  # The landed ordering ranks a dated completion above an undated one and breaks
+  # same-day ties on top-of-Done position (bin/fm-landed-lib.sh), so a hand edit that
+  # appends an undated row would re-create the defect that ordering fixes.
+  printf '%s\n' "$out" | grep -F 'TOP row of that section' >/dev/null \
+    || fail "manual backlog prompt did not require top-of-Done placement: $out"
+  printf '%s\n' "$out" | grep -F 'record its completion date' >/dev/null \
+    || fail "manual backlog prompt did not require a completion date: $out"
+  printf '%s\n' "$out" | grep -F "$MANUAL_DONE_PRUNE_SENTINEL" >/dev/null \
+    || fail "manual backlog prompt lost its Done-pruning bound, so the tasks-axi guard is dead: $out"
   printf '%s\n' "$out" | grep -F 'tasks-axi done' >/dev/null \
     && fail "teardown prompted tasks-axi despite manual backend opt-out: $out"
   pass "teardown honors config/backlog-backend=manual even when tasks-axi is compatible"

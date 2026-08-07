@@ -15,6 +15,7 @@ HARNESS="$ROOT/.agents/skills/harness-adapters/SKILL.md"
 CODEXAPP="$ROOT/.agents/skills/firstmate-codexapp/SKILL.md"
 FMX="$ROOT/.agents/skills/fmx-respond/SKILL.md"
 UPDATE="$ROOT/.agents/skills/updatefirstmate/SKILL.md"
+BEARINGS="$ROOT/.agents/skills/bearings/SKILL.md"
 
 section_9() {
   awk '
@@ -123,13 +124,59 @@ test_outward_facing_skill_points_reference_section_9_owner() {
     "X reply safety does not state that it supplements section 9"
   assert_grep "under \`AGENTS.md\` section 9 without firstmate's internal vocabulary" "$UPDATE" \
     "Firstmate update reporting does not reference section 9"
+  assert_grep "The chat follows \`AGENTS.md\` section 9" "$BEARINGS" \
+    "the bearings chat digest does not reference section 9"
   pass "outward-facing skill handoffs point to the section 9 owner"
+}
+
+# The pure-upstream trial (data/fm-upstream-trial-verdict-v2/report.md) recorded two
+# captain-facing wording failures alongside the completion-truth defect: internal
+# mechanics leaking into the visible surface, and an "all clear" announced while a
+# completion problem was still unresolved. Bearings is the surface that reports fleet
+# outcomes, so it is where both rules have to hold.
+test_bearings_forbids_premature_all_clear() {
+  assert_grep "Never render an all-clear verdict while anything is unresolved." "$BEARINGS" \
+    "bearings does not forbid a premature all-clear verdict"
+  assert_grep "CLAIM ABOUT FLEET WORK OUTCOMES" "$BEARINGS" \
+    "bearings does not scope the ban to verdicts and work-outcome claims"
+  assert_grep "Do not turn an unavailable or unreadable state into a verdict that work is fine" "$BEARINGS" \
+    "bearings treats unreadable state as an all-clear"
+  # The ban must not swallow the always-render rule: a truthful empty-state sentence
+  # for one section is a fact about that section, not an all-clear about the fleet,
+  # so suppressing it would trade one trust failure for another.
+  assert_grep "A section's own empty-state sentence is not such a verdict" "$BEARINGS" \
+    "bearings lets the all-clear ban suppress a factual empty-state sentence"
+  assert_grep "Every section ALWAYS renders, even when empty, with its short empty-state sentence" "$BEARINGS" \
+    "bearings dropped the always-render empty-state rule"
+  pass "bearings forbids a premature all-clear verdict without suppressing empty-state facts"
+}
+
+test_bearings_guarantees_completion_truth() {
+  assert_grep "including one recorded seconds ago" "$BEARINGS" \
+    "bearings does not require completions recorded up to report time"
+  assert_grep "always keeps a slot and the cap can never be what drops it" "$BEARINGS" \
+    "bearings does not pin the cap direction that keeps the newest completion visible"
+  assert_grep "fm-landed-lib.sh" "$BEARINGS" \
+    "bearings does not point at the ordering owner"
+  # The guarantee has to be scoped to what the ordering can actually deliver: an
+  # undated Done row can rotate out under the cap, a completion never recorded into
+  # Done cannot appear at all, and only rows at the fleet's newest completion date
+  # are reserved against the cap once there are more homes than slots. An
+  # unconditional promise would tell the agent to trust the list in exactly the
+  # cases it is known to be incomplete.
+  assert_grep "recorded with its completion date" "$BEARINGS" \
+    "bearings promises completion truth without scoping it to a recorded completion date"
+  assert_grep "Three gaps sit outside that guarantee" "$BEARINGS" \
+    "bearings does not name the gaps its ordering cannot cover"
+  assert_grep "more homes than the cap has slots" "$BEARINGS" \
+    "bearings does not name the home-count gap, so a capacity drop reads as a recording failure"
+  pass "bearings scopes the completion-truth guarantee to what the ordering delivers"
 }
 
 test_section_9_owner_is_not_duplicated_into_skills() {
   local duplicate_count file
   duplicate_count=0
-  for file in "$BOOTSTRAP" "$AFK" "$DECISION" "$RECOVERY" "$HARNESS" "$CODEXAPP" "$UPDATE"; do
+  for file in "$BOOTSTRAP" "$AFK" "$DECISION" "$RECOVERY" "$HARNESS" "$CODEXAPP" "$UPDATE" "$BEARINGS"; do
     if grep -Fq "When evidence uses an internal label, rewrite it before sending:" "$file"; then
       duplicate_count=$((duplicate_count + 1))
     fi
@@ -145,3 +192,5 @@ test_mapping_list_covers_high_risk_internal_families
 test_verbatim_internal_evidence_is_rejected_from_chat
 test_outward_facing_skill_points_reference_section_9_owner
 test_section_9_owner_is_not_duplicated_into_skills
+test_bearings_forbids_premature_all_clear
+test_bearings_guarantees_completion_truth
