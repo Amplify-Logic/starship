@@ -148,6 +148,7 @@ fm_supervision_status "$STATE" "$GRACE"
 in_flight=$FM_SUP_IN_FLIGHT
 watcher_fresh=$FM_SUP_WATCHER_FRESH
 beacon_desc=$FM_SUP_BEACON_DESC
+outage_summary=$FM_SUP_OUTAGE_SUMMARY
 if [ "$in_flight" -eq 0 ]; then
   # Leave the unhealthy state (no work riding on the watcher): clear so a later
   # in-flight + stale combination is a fresh episode even if the beacon is still
@@ -187,7 +188,8 @@ if [ "$watcher_fresh" = false ]; then
     {
       printf '●%s\n' "$rule"
       printf '●  WATCHER DOWN - SUPERVISION IS OFF\n'
-      printf '●  %s task(s) in flight, but no watcher has a fresh beacon (last beat: %s, grace %ss).\n' "$in_flight" "$beacon_desc" "$GRACE"
+      printf '●  %s\n' "$outage_summary"
+      printf '●  No watcher has a fresh beacon (last beat: %s; grace: %ss).\n' "$beacon_desc" "$GRACE"
       if [ "$READ_ONLY" -eq 1 ]; then
         printf '●  This read-only session should report the lapse, not repair it.\n'
       else
@@ -198,8 +200,8 @@ if [ "$watcher_fresh" = false ]; then
       printf '●%s\n' "$rule"
     } >&2
   else
-    printf 'WARNING: watcher still down (same stale episode; last beat: %s, grace %ss) - full banner already printed this episode.\n' \
-      "$beacon_desc" "$GRACE" >&2
+    printf 'WARNING: watcher still down (same stale episode; last beat: %s; grace: %ss). %s The full banner already printed this episode.\n' \
+      "$beacon_desc" "$GRACE" "$outage_summary" >&2
   fi
 else
   # Healthy again while work is still in flight: end the episode so a later

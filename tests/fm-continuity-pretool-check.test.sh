@@ -41,7 +41,7 @@ expect_deny() {
   [ ! -s "$OUT" ] || fail "$label deny wrote stdout: $(cat "$OUT")"
   jq -e '.hookSpecificOutput.hookEventName == "PreToolUse" and .hookSpecificOutput.permissionDecision == "deny"' "$ERR" >/dev/null 2>&1 \
     || fail "$label deny omitted Claude's permission decision: $(cat "$ERR")"
-  [ -n "$expected" ] || expected="[watcher-continuity] tasks are in flight and no live watcher holds this home lock; drain wakes with bin/fm-wake-drain.sh, the safe mid-session action; run the once-per-session bin/fm-session-start.sh instead only if you have not already run it earlier this session; use fail-closed bin/fm-teardown.sh for completed tasks when needed, then re-arm with bin/fm-watch-arm.sh as a tracked Claude background task before running other fleet commands (blocked: $blocked)"
+  [ -n "$expected" ] || expected="[watcher-continuity] SUPERVISION OUTAGE: down for unknown duration (unknown since when; watcher beat file missing or unreadable); 1 task(s) in flight: task. No live watcher holds this home lock. Drain wakes with bin/fm-wake-drain.sh, the safe mid-session action; run the once-per-session bin/fm-session-start.sh instead only if you have not already run it earlier this session; use fail-closed bin/fm-teardown.sh for completed tasks when needed, then re-arm with bin/fm-watch-arm.sh as a tracked Claude background task before running other fleet commands (blocked: $blocked)"
   actual=$(jq -r '.systemMessage' "$ERR")
   [ "$actual" = "$expected" ] || fail "$label recovery guidance changed: $actual"
 }
@@ -57,7 +57,7 @@ test_gate_scope_and_recovery_exceptions() {
   expect_allow "watch arm recovery" 'bin/fm-watch-arm.sh'
   expect_allow "drain then arm recovery" 'bin/fm-wake-drain.sh; bin/fm-watch-arm.sh'
   expect_allow "fail-closed teardown recovery" 'bin/fm-teardown.sh task'
-  unsafe_teardown_reason='[watcher-continuity] tasks are in flight and no live watcher holds this home lock; during recovery only the ordinary literal bin/fm-teardown.sh is allowed, so drop --force and any shell-expanded arguments and retry the literal invocation (blocked: fm-teardown.sh)'
+  unsafe_teardown_reason='[watcher-continuity] SUPERVISION OUTAGE: down for unknown duration (unknown since when; watcher beat file missing or unreadable); 1 task(s) in flight: task. No live watcher holds this home lock. During recovery only the ordinary literal bin/fm-teardown.sh is allowed, so drop --force and any shell-expanded arguments and retry the literal invocation (blocked: fm-teardown.sh)'
   expect_deny "forced teardown is not recovery" 'bin/fm-teardown.sh task --force' 'fm-teardown.sh' "$unsafe_teardown_reason"
   expect_deny "nested forced teardown is not recovery" "bash -lc 'bin/fm-teardown.sh task --force'" 'fm-teardown.sh' "$unsafe_teardown_reason"
   # shellcheck disable=SC2016  # single quotes are deliberate: "$TEARDOWN_MODE" is literal test data (an unsafe shell-expanded arg the gate must deny), not an expansion here
@@ -87,13 +87,26 @@ test_gate_scope_and_recovery_exceptions() {
 test_lock_holding_session_gets_guidance_without_session_start() {
   local held_reason
   printf '%s\n' "$$" > "$STATE/.lock"
-  held_reason='[watcher-continuity] tasks are in flight and no live watcher holds this home lock; drain wakes with bin/fm-wake-drain.sh, the safe mid-session action; use fail-closed bin/fm-teardown.sh for completed tasks when needed, then re-arm with bin/fm-watch-arm.sh as a tracked Claude background task before running other fleet commands (blocked: fm-crew-state.sh)'
+  held_reason='[watcher-continuity] SUPERVISION OUTAGE: down for unknown duration (unknown since when; watcher beat file missing or unreadable); 1 task(s) in flight: task. No live watcher holds this home lock. Drain wakes with bin/fm-wake-drain.sh, the safe mid-session action; use fail-closed bin/fm-teardown.sh for completed tasks when needed, then re-arm with bin/fm-watch-arm.sh as a tracked Claude background task before running other fleet commands (blocked: fm-crew-state.sh)'
   expect_deny "lock-holding session guidance" 'bin/fm-crew-state.sh task' 'fm-crew-state.sh' "$held_reason"
   # The ancestry walk scopes guidance text only: the classification is unchanged,
   # so session start stays allowed exactly as it is without the lock.
   expect_allow "session start while holding the lock" 'bin/fm-session-start.sh'
   rm -f "$STATE/.lock"
   pass "continuity gate omits the session-start clause for a session that already holds the home lock"
+}
+
+test_deny_quantifies_stale_outage_and_names_every_task() {
+  local rc=0 actual
+  printf 'project=fixture\n' > "$STATE/task2.meta"
+  touch -t 202001010000 "$STATE/.last-watcher-beat"
+  run_command 'bin/fm-crew-state.sh task' || rc=$?
+  [ "$rc" -eq 2 ] || fail "stale outage must deny an unrelated fleet command, got exit $rc"
+  actual=$(jq -r '.systemMessage' "$ERR")
+  assert_contains "$actual" 'SUPERVISION OUTAGE: down for at least ' "continuity denial omitted the computed outage duration"
+  assert_contains "$actual" '2 task(s) in flight: task, task2' "continuity denial omitted the in-flight count or task identities"
+  rm -f "$STATE/task2.meta" "$STATE/.last-watcher-beat"
+  pass "continuity denial quantifies a stale outage and names every task in flight"
 }
 
 test_live_lock_allows_fleet_command_even_with_stale_beacon() {
@@ -150,6 +163,7 @@ test_claude_hook_registration_preserves_stop_backstop() {
 
 test_gate_scope_and_recovery_exceptions
 test_lock_holding_session_gets_guidance_without_session_start
+test_deny_quantifies_stale_outage_and_names_every_task
 test_live_lock_allows_fleet_command_even_with_stale_beacon
 test_child_worktree_and_malformed_input_fail_open
 test_claude_hook_registration_preserves_stop_backstop

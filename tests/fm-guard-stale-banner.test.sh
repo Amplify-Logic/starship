@@ -78,6 +78,10 @@ test_repeated_same_episode_prints_reminder_only() {
     || fail "second stale call repeated the full banner: $out2"
   assert_contains "$out2" "full banner already printed this episode" \
     "second stale call did not print the concise reminder"
+  assert_contains "$out2" 'down for unknown duration (unknown since when; watcher beat file missing or unreadable)' \
+    "same-episode reminder hid the unknown outage duration"
+  assert_contains "$out2" '1 task(s) in flight: task' \
+    "same-episode reminder omitted the in-flight count or task identity"
   marker="$(case_home "$dir")/state/.guard-watcher-stale-banner"
   assert_present "$marker" "stale banner marker was not written under the owning home"
   lines=$(awk 'END { print NR + 0 }' "$marker")

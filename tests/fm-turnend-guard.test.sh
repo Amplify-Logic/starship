@@ -40,8 +40,14 @@ test_predicate_unhealthy_no_beacon() {
   fm_supervision_unhealthy "$state" 300 || fail "predicate did not fire: in-flight task, beacon never seen"
   [ "$FM_SUP_IN_FLIGHT" -eq 1 ] || fail "expected 1 in-flight, got $FM_SUP_IN_FLIGHT"
   [ "$FM_SUP_WATCHER_FRESH" = false ] || fail "beacon absent must not read as fresh"
-  [ "$FM_SUP_BEACON_DESC" = never ] || fail "beacon description should be 'never', got $FM_SUP_BEACON_DESC"
-  pass "fm_supervision_unhealthy: true with in-flight task and no beacon ever"
+  [ "$FM_SUP_BEACON_DESC" = 'unknown since when (watcher beat file missing or unreadable)' ] \
+    || fail "missing beacon description did not say when became unknown: $FM_SUP_BEACON_DESC"
+  [ "$FM_SUP_IN_FLIGHT_IDS" = task1 ] || fail "missing-beacon task list omitted task1: $FM_SUP_IN_FLIGHT_IDS"
+  assert_contains "$FM_SUP_OUTAGE_SUMMARY" 'down for unknown duration (unknown since when; watcher beat file missing or unreadable)' \
+    "missing beacon summary hid the unknown outage duration"
+  assert_contains "$FM_SUP_OUTAGE_SUMMARY" '1 task(s) in flight: task1' \
+    "missing beacon summary omitted the in-flight count or identity"
+  pass "fm_supervision_unhealthy: true with explicit unknown duration and task identity when no beacon exists"
 }
 
 test_predicate_unhealthy_stale_beacon() {
@@ -52,6 +58,32 @@ test_predicate_unhealthy_stale_beacon() {
   fm_supervision_unhealthy "$state" 300 || fail "predicate did not fire: in-flight task, beacon far outside grace"
   [ "$FM_SUP_WATCHER_FRESH" = false ] || fail "an ancient beacon must not read as fresh"
   pass "fm_supervision_unhealthy: true with in-flight task and a beacon far outside the grace window"
+}
+
+test_predicate_unreadable_beacon_age_is_explicitly_unknown() {
+  local state="$TMP_ROOT/pred-unreadable/state" original
+  mkdir -p "$state"
+  : > "$state/task1.meta"
+  : > "$state/.last-watcher-beat"
+  original=$(declare -f fm_sup_stat_mtime)
+  fm_sup_stat_mtime() { return 1; }
+  fm_supervision_unhealthy "$state" 300 || fail "predicate treated an unreadable beacon timestamp as healthy"
+  eval "$original"
+  assert_contains "$FM_SUP_OUTAGE_SUMMARY" 'unknown since when; watcher beat file missing or unreadable' \
+    "unreadable beacon summary hid the unknown outage duration"
+  pass "fm_supervision_unhealthy: unreadable beacon age is explicit rather than silent or zero"
+}
+
+test_predicate_future_beacon_is_unknown_not_fresh() {
+  local state="$TMP_ROOT/pred-future/state"
+  mkdir -p "$state"
+  : > "$state/task1.meta"
+  touch -t 209901010000 "$state/.last-watcher-beat"
+  fm_supervision_unhealthy "$state" 300 || fail "predicate treated a future-dated beacon as healthy"
+  [ "$FM_SUP_WATCHER_FRESH" = false ] || fail "future-dated beacon must never read as fresh"
+  assert_contains "$FM_SUP_OUTAGE_SUMMARY" 'unknown since when; watcher beat timestamp is' \
+    "future-dated beacon was presented as a known outage duration"
+  pass "fm_supervision_unhealthy: unsupported future beacon evidence never renders as protected"
 }
 
 test_predicate_healthy_fresh_beacon() {
@@ -275,11 +307,16 @@ test_hook_blocks_when_unhealthy_in_primary() {
   local dir out status
   dir=$(make_primary_dir "$TMP_ROOT/hook-block")
   : > "$dir/state/task1.meta"
+  : > "$dir/state/task2.meta"
   out=$(run_hook "$dir" false); status=$?
   expect_code 2 "$status" "hook must block (exit 2) when in-flight work has no live watcher"
   assert_contains "$out" "$REQUIRED_REASON" "block reason must contain the exact required instruction"
   assert_contains "$out" "TURN WOULD END BLIND" "block banner must read as an alarm"
-  pass "fm-turnend-guard: blocks with the exact required reason in the primary when unhealthy"
+  assert_contains "$out" 'SUPERVISION OUTAGE: down for unknown duration (unknown since when; watcher beat file missing or unreadable)' \
+    "block banner omitted the explicit unknown outage duration"
+  assert_contains "$out" '2 task(s) in flight: task1, task2' \
+    "block banner omitted the in-flight count or task identities"
+  pass "fm-turnend-guard: blocks with quantified outage evidence and task identities in the primary"
 }
 
 test_hook_blocks_from_fm_home_state() {
@@ -917,6 +954,8 @@ test_grok_hook_invokes_adapter() {
 test_predicate_healthy_no_inflight
 test_predicate_unhealthy_no_beacon
 test_predicate_unhealthy_stale_beacon
+test_predicate_unreadable_beacon_age_is_explicitly_unknown
+test_predicate_future_beacon_is_unknown_not_fresh
 test_predicate_healthy_fresh_beacon
 test_predicate_queue_pending_flag
 test_hook_silent_when_no_work_in_flight

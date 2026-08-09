@@ -95,7 +95,8 @@ rule='━━━━━━━━━━━━━━━━━━━━━━━━�
 {
   printf '●%s\n' "$rule"
   printf '●  TURN WOULD END BLIND - SUPERVISION IS OFF\n'
-  printf '●  %s task(s) in flight, but no live watcher holds this home lock (last beat: %s).\n' "$FM_SUP_IN_FLIGHT" "$FM_SUP_BEACON_DESC"
+  printf '●  %s\n' "$FM_SUP_OUTAGE_SUMMARY"
+  printf '●  No live watcher holds this home lock (last beat: %s; grace: %ss).\n' "$FM_SUP_BEACON_DESC" "$GRACE"
   printf '●  %s\n' "$REASON"
   printf '●%s\n' "$rule"
 } >&2

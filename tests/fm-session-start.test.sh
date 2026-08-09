@@ -364,6 +364,10 @@ EOF
   assert_contains "$out" "Skipping every mutating step" "read-only banner did not explain what was skipped"
   assert_contains "$out" "skipped (read-only session)" "wake-queue section did not report itself skipped"
   assert_contains "$out" "WATCHER DOWN - SUPERVISION IS OFF" "read-only guard did not surface watcher-liveness alarm"
+  assert_contains "$out" 'down for unknown duration (unknown since when; watcher beat file missing or unreadable)' \
+    "read-only session-start banner hid the unknown outage duration"
+  assert_contains "$out" '1 task(s) in flight: sm-x' \
+    "read-only session-start banner omitted the in-flight count or task identity"
   assert_contains "$out" "queued wakes pending - left untouched for the session holding the fleet lock" "read-only guard did not leave queued wakes to the lock holder"
   assert_contains "$out" "TANGLE: primary checkout on feature branch 'fm/read-only-tangle'" "read-only bootstrap did not surface the tangle diagnostic"
   assert_contains "$out" "read-only session must leave restore work" "read-only tangle diagnostic did not explain restore ownership"

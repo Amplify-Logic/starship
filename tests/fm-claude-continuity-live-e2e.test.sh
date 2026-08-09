@@ -37,6 +37,7 @@ cp "$ROOT/bin/fm-continuity-command-policy.mjs" "$PROJECT/bin/fm-continuity-comm
 # The clone carries committed libs; the gate's scope predicates must come from
 # the working tree like the two files above, or the lab exercises stale sourcing.
 cp "$ROOT/bin/fm-primary-scope-lib.sh" "$PROJECT/bin/fm-primary-scope-lib.sh"
+cp "$ROOT/bin/fm-supervision-lib.sh" "$PROJECT/bin/fm-supervision-lib.sh"
 mkdir -p "$HOME_DIR/state" "$HOME_DIR/config"
 printf 'project=fixture\n' > "$HOME_DIR/state/claude-e2e.meta"
 
@@ -87,7 +88,7 @@ PROMPT='Use Bash with run_in_background=true to run exactly `bin/fm-watch-arm.sh
 [ -f "$HOME_DIR/state/claude-arm-ran" ] || fail "Claude did not run the tracked background arm fixture"
 [ -f "$HOME_DIR/state/claude-drain-ran" ] || fail "Claude continuity gate blocked the allowed wake drain"
 [ ! -f "$HOME_DIR/state/claude-forbidden-ran" ] || fail "Claude continuity gate allowed an unrelated fleet command"
-GUIDANCE='[watcher-continuity] tasks are in flight and no live watcher holds this home lock; drain wakes with bin/fm-wake-drain.sh, the safe mid-session action; run the once-per-session bin/fm-session-start.sh instead only if you have not already run it earlier this session; use fail-closed bin/fm-teardown.sh for completed tasks when needed, then re-arm with bin/fm-watch-arm.sh as a tracked Claude background task before running other fleet commands (blocked: fm-crew-state.sh)'
+GUIDANCE='[watcher-continuity] SUPERVISION OUTAGE: down for unknown duration (unknown since when; watcher beat file missing or unreadable); 1 task(s) in flight: claude-e2e. No live watcher holds this home lock. Drain wakes with bin/fm-wake-drain.sh, the safe mid-session action; run the once-per-session bin/fm-session-start.sh instead only if you have not already run it earlier this session; use fail-closed bin/fm-teardown.sh for completed tasks when needed, then re-arm with bin/fm-watch-arm.sh as a tracked Claude background task before running other fleet commands (blocked: fm-crew-state.sh)'
 grep -F "$GUIDANCE" "$TRANSCRIPT" >/dev/null || fail "Claude transcript omitted the exact continuity recovery guidance"
 
 # The credentialed turn above ran with no state/.lock in the lab home, the
@@ -103,7 +104,7 @@ FM_HOME="$HOME_DIR" FM_ROOT_OVERRIDE="$PROJECT" FM_STATE_OVERRIDE="$HOME_DIR/sta
   "$PROJECT/bin/fm-continuity-pretool-check.sh" --command 'bin/fm-crew-state.sh claude-e2e' \
   2> "$LOCK_HELD_ERR" || LOCK_HELD_RC=$?
 [ "$LOCK_HELD_RC" -eq 2 ] || fail "lab hook must still deny an unrelated fleet command while this session holds the lock, got exit $LOCK_HELD_RC"
-LOCK_HELD_GUIDANCE='[watcher-continuity] tasks are in flight and no live watcher holds this home lock; drain wakes with bin/fm-wake-drain.sh, the safe mid-session action; use fail-closed bin/fm-teardown.sh for completed tasks when needed, then re-arm with bin/fm-watch-arm.sh as a tracked Claude background task before running other fleet commands (blocked: fm-crew-state.sh)'
+LOCK_HELD_GUIDANCE='[watcher-continuity] SUPERVISION OUTAGE: down for unknown duration (unknown since when; watcher beat file missing or unreadable); 1 task(s) in flight: claude-e2e. No live watcher holds this home lock. Drain wakes with bin/fm-wake-drain.sh, the safe mid-session action; use fail-closed bin/fm-teardown.sh for completed tasks when needed, then re-arm with bin/fm-watch-arm.sh as a tracked Claude background task before running other fleet commands (blocked: fm-crew-state.sh)'
 grep -F "$LOCK_HELD_GUIDANCE" "$LOCK_HELD_ERR" >/dev/null \
   || fail "lab hook omitted the exact lock-held continuity guidance: $(cat "$LOCK_HELD_ERR")"
 

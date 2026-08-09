@@ -120,12 +120,12 @@ REASON_CODE=${REST#*"$TAB"}
 [ "$REASON_CODE" != "$REST" ] || REASON_CODE=""
 case "$REASON_CODE" in
   unsafe-teardown)
-    REASON="[watcher-continuity] tasks are in flight and no live watcher holds this home lock; during recovery only the ordinary literal bin/fm-teardown.sh is allowed, so drop --force and any shell-expanded arguments and retry the literal invocation (blocked: $BLOCKED_SCRIPT)"
+    REASON="[watcher-continuity] $FM_SUP_OUTAGE_SUMMARY No live watcher holds this home lock. During recovery only the ordinary literal bin/fm-teardown.sh is allowed, so drop --force and any shell-expanded arguments and retry the literal invocation (blocked: $BLOCKED_SCRIPT)"
     ;;
   *)
     SESSION_START_CLAUSE=" run the once-per-session bin/fm-session-start.sh instead only if you have not already run it earlier this session;"
     fm_session_lock_in_ancestry "$STATE" && SESSION_START_CLAUSE=""
-    REASON="[watcher-continuity] tasks are in flight and no live watcher holds this home lock; drain wakes with bin/fm-wake-drain.sh, the safe mid-session action;$SESSION_START_CLAUSE use fail-closed bin/fm-teardown.sh for completed tasks when needed, then re-arm with bin/fm-watch-arm.sh as a tracked Claude background task before running other fleet commands (blocked: $BLOCKED_SCRIPT)"
+    REASON="[watcher-continuity] $FM_SUP_OUTAGE_SUMMARY No live watcher holds this home lock. Drain wakes with bin/fm-wake-drain.sh, the safe mid-session action;$SESSION_START_CLAUSE use fail-closed bin/fm-teardown.sh for completed tasks when needed, then re-arm with bin/fm-watch-arm.sh as a tracked Claude background task before running other fleet commands (blocked: $BLOCKED_SCRIPT)"
     ;;
 esac
 ESCAPED=$(printf '%s' "$REASON" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr '\n' ' ')

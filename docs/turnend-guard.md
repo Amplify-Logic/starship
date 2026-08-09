@@ -31,6 +31,8 @@ If work is in flight, it requires `fm_watcher_healthy <state-dir> <watch-path> [
 That is the same identity-matched live lock and fresh beacon check used by `bin/fm-watch-arm.sh`.
 A stale beacon blocks even if a watcher pid is still live.
 A fresh leftover beacon blocks if the watcher lock is missing, dead, or identity-mismatched.
+When the predicate blocks, the alarm uses the canonical summary from `bin/fm-supervision-lib.sh` to state the outage duration derived from `state/.last-watcher-beat`, the in-flight task count, and every task ID.
+Missing, unreadable, unsupported, or future-dated beacon evidence is unhealthy and produces explicit unknown-duration and unknown-start wording rather than a healthy claim or a zero duration.
 
 `FM_STATE_OVERRIDE` wins over `FM_HOME/state`, and `FM_HOME` wins over repo-root `state/`.
 `FM_GUARD_GRACE` controls the beacon freshness window and defaults to 300 seconds.

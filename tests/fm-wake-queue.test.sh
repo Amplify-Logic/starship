@@ -223,8 +223,13 @@ test_drain_asserts_watcher_liveness() {
   state="$dir/state"
   err="$dir/drain.err"
   printf 'window=test:fm-x\nkind=ship\n' > "$state/x.meta"
+  printf 'window=test:fm-y\nkind=scout\n' > "$state/y.meta"
   FM_STATE_OVERRIDE="$state" "$DRAIN" >/dev/null 2> "$err" || fail "drain failed while asserting liveness"
   grep -F 'WATCHER DOWN' "$err" >/dev/null || fail "drain did not surface the watcher-down banner with work in flight and no live watcher"
+  grep -F 'down for unknown duration (unknown since when; watcher beat file missing or unreadable)' "$err" >/dev/null \
+    || fail "drain watcher-down banner hid the unknown outage duration"
+  grep -F '2 task(s) in flight: x, y' "$err" >/dev/null \
+    || fail "drain watcher-down banner omitted the in-flight count or task identities"
   : > "$err"
   touch "$state/.last-watcher-beat"
   FM_STATE_OVERRIDE="$state" FM_GUARD_GRACE=300 "$DRAIN" >/dev/null 2> "$err" || fail "drain failed with a fresh beacon"

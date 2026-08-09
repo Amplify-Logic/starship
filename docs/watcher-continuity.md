@@ -30,8 +30,9 @@ Codex retains its bounded foreground checkpoint protocol.
 Grok retains its tracked background-task notification protocol.
 No adapter starts a replacement with shell `&`.
 
-The existing turn-end guard implementation and adapters are unchanged.
-They remain the final backstop rather than the normal continuity mechanism.
+The existing turn-end guard adapters are unchanged, while the shared guard alarm now uses the canonical outage summary from `bin/fm-supervision-lib.sh`.
+The Claude continuity denial uses that same summary, so both surfaces name every in-flight task and report elapsed time from `state/.last-watcher-beat`, or explicitly report an unknown duration and unknown start when the beacon evidence is missing, unreadable, unsupported, or future-dated.
+The turn-end guard remains the final backstop rather than the normal continuity mechanism.
 
 ## Known limitation
 
