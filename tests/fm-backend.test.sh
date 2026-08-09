@@ -116,7 +116,9 @@ BASE_REF=$(resolve_base_ref) \
 # siblings cover main-only deps a branch baseline may not have yet.
 OLD_BIN_UNCHANGED_SIBLINGS="fm-gate-refuse-lib.sh fm-guard.sh fm-lock-lib.sh fm-tasks-axi-lib.sh fm-pr-lib.sh fm-tangle-lib.sh fm-tmux-lib.sh fm-composer-lib.sh fm-busy-lib.sh fm-marker-lib.sh fm-wake-lib.sh fm-classify-lib.sh fm-supervision-lib.sh fm-ff-lib.sh fm-secondmate-registry-lib.sh fm-config-inherit-lib.sh fm-project-mode.sh fm-harness.sh fm-crew-state.sh fm-decision-hold.sh fm-backend.sh fm-capability-lib.sh"
 # A pull-request merge may add a new main-only dependency that the branch's older baseline does not have yet.
-OLD_BIN_OPTIONAL_SIBLINGS="fm-pending-reply-lib.sh"
+# fm-path-lib.sh: sourced by fm-spawn.sh and fm-teardown.sh since the durable-path
+# normalization landed; optional so trees whose baseline predates it still build.
+OLD_BIN_OPTIONAL_SIBLINGS="fm-pending-reply-lib.sh fm-path-lib.sh"
 OLD_BIN_REFACTORED="fm-send.sh fm-peek.sh fm-watch.sh fm-spawn.sh fm-teardown.sh"
 
 build_old_bin() {  # <name> -> echoes root dir (root/bin/<script> is the entry point)

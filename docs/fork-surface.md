@@ -33,6 +33,8 @@ The command never fetches.
 
 The check validates the schema and commit references, requires declared files according to each core or team capability's `assert` mode, verifies their proving tests and CI jobs, evaluates their optional anchors, and asserts ownership of every tracked path absent from the base snapshot.
 Every `commits` entry must resolve in this repository's history, and because pull requests land squashed, a capability records the squash-merge commit on the default branch rather than the pre-merge branch commit that stops resolving once the branch is merged.
+A capability introduced by an unmerged pull request cannot yet know that commit, so it records the branch commit that introduces it, marks that line as pre-merge, and is repaired to the squash-merge commit immediately after landing.
+It never records an unrelated commit that happens to resolve, because `check` only proves that a reference exists and cannot detect misattributed provenance.
 Declared personal paths are checked for unique ownership when present but may be absent.
 It also requires secret config to stay ignored and refused by home porting, and requires portable config declarations to agree with the home-port fallback.
 Failures name the capability and concrete repair instead of modifying the tree.
