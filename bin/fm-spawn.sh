@@ -148,6 +148,8 @@ SUB_HOME_MARKER=".fm-secondmate-home"
 . "$SCRIPT_DIR/fm-pr-lib.sh"
 # shellcheck source=bin/fm-cursor-model-lib.sh
 . "$SCRIPT_DIR/fm-cursor-model-lib.sh"
+# shellcheck source=bin/fm-worktree-lease-lib.sh
+. "$SCRIPT_DIR/fm-worktree-lease-lib.sh"
 # Fail closed before any fleet mutation: a no-mistakes gate agent must never spawn
 # a direct report (see bin/fm-gate-refuse-lib.sh).
 fm_refuse_if_gate_agent
@@ -301,7 +303,7 @@ orca_spawn_abort_cleanup() {
   fi
   return "$status"
 }
-trap 'orca_spawn_abort_cleanup || :; fm_cursor_catalog_cache_cleanup' EXIT
+trap 'fm_worktree_claim_allocation_cancel; orca_spawn_abort_cleanup || :; fm_cursor_catalog_cache_cleanup' EXIT
 
 # Batch dispatch (see header): when the first positional is an `id=repo` pair, treat every
 # positional as one and spawn each by re-execing this script in single-task mode. We use
@@ -1024,6 +1026,7 @@ EOF
     T="$CMUX_WORKSPACE_ID:$CMUX_SURFACE_ID"
     ;;
   orca)
+    fm_worktree_claim_allocation_begin "$STATE"
     set +e
     ORCA_WT_RAW=$(fm_backend_orca_worktree_create "$PROJ_ABS" "$W")
     ORCA_WT_STATUS=$?
@@ -1091,6 +1094,7 @@ spawn_send_key() {  # <target> <key>
   esac
 }
 if [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
+  fm_worktree_claim_allocation_begin "$STATE"
   spawn_send_text_line "$WT_TARGET" 'treehouse get'
 
   # Wait for the treehouse subshell: the pane's cwd moves from the project to the worktree.
@@ -1156,6 +1160,16 @@ if [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
   fi
 
   validate_spawn_worktree "treehouse get" "$T"
+fi
+
+# The provider assignment is authoritative: clear an older task's durable claim
+# before this task records the newly assigned path. fm-worktree-lease-lib owns
+# the return/allocation race and its state-local serialization.
+if [ "$KIND" != secondmate ]; then
+  fm_worktree_claim_acquired "$STATE" "$ID" "$WT" || {
+    echo "error: cannot reconcile the worktree lease for $WT; refusing to launch with conflicting task records" >&2
+    exit 1
+  }
 fi
 
 # Per-task temp root: /tmp/fm-<id>/ with Go's build temp nested at gotmp/. Go won't

@@ -68,6 +68,8 @@ SH
   ln -s "$ROOT/bin/fm-pr-lib.sh" "$fake/bin/fm-pr-lib.sh"
   # fm-capability-lib.sh: teardown records capability outcomes before meta removal.
   ln -s "$ROOT/bin/fm-capability-lib.sh" "$fake/bin/fm-capability-lib.sh"
+  ln -s "$ROOT/bin/fm-worktree-lease-lib.sh" "$fake/bin/fm-worktree-lease-lib.sh"
+  ln -s "$ROOT/bin/fm-wake-lib.sh" "$fake/bin/fm-wake-lib.sh"
   ln -s "$ROOT/bin/fm-secondmate-registry-lib.sh" "$fake/bin/fm-secondmate-registry-lib.sh"
   ln -s "$ROOT/bin/fm-path-lib.sh" "$fake/bin/fm-path-lib.sh"
   ln -s "$ROOT/bin/fm-busy-lib.sh" "$fake/bin/fm-busy-lib.sh"

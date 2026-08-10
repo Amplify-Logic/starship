@@ -89,7 +89,11 @@ exit 0
 SH
   cat > "$fakebin/tmux" <<'SH'
 #!/usr/bin/env bash
-# tmux kill-window etc.: succeed silently.
+# Optionally snapshot task metadata when endpoint cleanup begins. This observes
+# the post-return/pre-final-cleanup handoff without changing teardown timing.
+if [ "${1:-}" = kill-window ] && [ -n "${FM_META_OBSERVE:-}" ] && [ -n "${FM_META_SNAPSHOT:-}" ]; then
+  cp "$FM_META_OBSERVE" "$FM_META_SNAPSHOT"
+fi
 exit 0
 SH
   # Default gh-axi mock: no PR is associated with the branch, and viewing any PR
@@ -518,6 +522,62 @@ test_local_only_fork_remote_allows() {
   expect_code 0 "$rc" "fork-allow: teardown should succeed when HEAD is on a fork remote"
   ! grep -q REFUSED "$case_dir/stderr" || fail "fork-allow: teardown printed a REFUSED line"
   pass "local-only worktree with HEAD on a fork remote is torn down (fix holds)"
+}
+
+test_return_clears_worktree_claim_before_later_cleanup() {
+  local case_dir snapshot rc
+  case_dir=$(make_case return-clears-claim)
+  write_meta "$case_dir" no-mistakes ship
+  snapshot="$case_dir/post-return.meta"
+
+  set +e
+  FM_META_OBSERVE="$case_dir/state/task-x1.meta" \
+    FM_META_SNAPSHOT="$snapshot" \
+    run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "return-clears-claim: teardown should succeed"
+  assert_present "$snapshot" "return-clears-claim: endpoint cleanup did not observe metadata"
+  [ "$(grep '^worktree=' "$snapshot")" = 'worktree=' ] \
+    || fail "return-clears-claim: returned worktree remained durably claimed"
+  assert_grep "worktree_released_path=$case_dir/wt" "$snapshot" \
+    "return-clears-claim: released path evidence was not retained"
+  pass "treehouse return clears the durable path claim before later cleanup"
+}
+
+test_return_serializes_concurrent_allocation() {
+  local case_dir entered release allocation_done teardown_pid allocation_pid rc
+  case_dir=$(make_case return-allocation-race)
+  write_meta "$case_dir" no-mistakes ship
+  entered="$case_dir/return-entered"
+  release="$case_dir/allow-return"
+  allocation_done="$case_dir/allocation-done"
+  cat > "$case_dir/fakebin/treehouse" <<'SH'
+#!/usr/bin/env bash
+: > "$FM_RETURN_ENTERED"
+while [ ! -e "$FM_ALLOW_RETURN" ]; do sleep 0.01; done
+SH
+  chmod +x "$case_dir/fakebin/treehouse"
+
+  FM_RETURN_ENTERED="$entered" FM_ALLOW_RETURN="$release" \
+    run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" &
+  teardown_pid=$!
+  while [ ! -e "$entered" ]; do sleep 0.01; done
+  FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$case_dir/state" \
+    bash -c '. "$FM_ROOT_OVERRIDE/bin/fm-worktree-lease-lib.sh"; fm_worktree_claim_allocation_begin "$FM_STATE_OVERRIDE"; : > "$2"; fm_worktree_claim_acquired "$FM_STATE_OVERRIDE" task-new "$1"' \
+      _ "$case_dir/wt" "$allocation_done" &
+  allocation_pid=$!
+  sleep 0.05
+  [ ! -e "$allocation_done" ] \
+    || fail "return-allocation-race: allocation completed while provider return was in progress"
+  : > "$release"
+  wait "$teardown_pid"
+  rc=$?
+  expect_code 0 "$rc" "return-allocation-race: teardown should complete"
+  wait "$allocation_pid" || fail "return-allocation-race: allocation reconciliation failed"
+  assert_present "$allocation_done" "return-allocation-race: allocation did not resume after return"
+  pass "provider return and concurrent allocation are serialized by the lease owner"
 }
 
 test_teardown_prompts_tasks_axi_done_when_compatible() {
@@ -1279,6 +1339,8 @@ SH
 }
 
 test_local_only_fork_remote_allows
+test_return_clears_worktree_claim_before_later_cleanup
+test_return_serializes_concurrent_allocation
 test_teardown_prompts_tasks_axi_done_when_compatible
 test_teardown_manual_backend_prompts_hand_edit_even_when_tasks_axi_present
 test_local_only_truly_unpushed_refuses

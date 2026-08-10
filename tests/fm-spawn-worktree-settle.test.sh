@@ -14,6 +14,8 @@
 #   2. A single matching read followed by a different path is NOT accepted.
 #   3. A pane that never settles fails cleanly at a short overridden bound
 #      (never hangs toward the production 60s default).
+#   4. A newly leased pool slot invalidates an older task's durable claim to
+#      that same path before the new task records its claim.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -202,11 +204,41 @@ test_single_then_different_read_is_not_accepted() {
   pass "a single-then-different path sequence is not accepted and fails at the short bound"
 }
 
+# Reproduce a dirty handoff: an old task record survives while treehouse hands
+# its pool slot to this spawn. The allocator handoff must leave only one owner.
+test_reused_pool_slot_clears_stale_durable_claim() {
+  local rec id old_id out status old_meta new_meta
+  id=settle-reused-slot-z4
+  old_id=settle-old-owner-z0
+  rec=$(make_settle_case settle-reused-slot "$id" 0)
+  read_settle_record "$rec"
+  old_meta="$HOME_DIR/state/$old_id.meta"
+  new_meta="$HOME_DIR/state/$id.meta"
+  fm_write_meta "$old_meta" \
+    "window=firstmate:fm-$old_id" \
+    "worktree=$WT_DIR" \
+    "project=$PROJ_DIR" \
+    "kind=ship"
+
+  out=$(run_settle_spawn "$id" FM_SPAWN_SETTLE_SLEEP=0)
+  status=$?
+  expect_code 0 "$status" "spawn should accept the pool's reassigned worktree"
+  assert_grep "worktree=$WT_DIR" "$new_meta" \
+    "new task did not record the reassigned pool slot"
+  assert_no_grep "worktree=$WT_DIR" "$old_meta" \
+    "old task still claims the pool slot after it was leased to a new task"
+  [ "$(grep '^worktree=' "$old_meta")" = 'worktree=' ] \
+    || fail "old task's stale worktree claim was not explicitly cleared"
+  assert_grep "worktree_reassigned_to=$id" "$old_meta" \
+    "old task does not record which new lease invalidated its claim"
+  pass "a reused pool slot cannot remain claimed by an older task record"
+}
+
 # Never settles (always the project path): must fail at the overridden bound
 # without approaching the production 60s wait.
 test_never_settles_fails_at_short_bound() {
   local rec id out status start end elapsed
-  id=settle-never-z4
+  id=settle-never-z5
   rec=$(make_settle_case settle-never "$id" 0)
   read_settle_record "$rec"
 
@@ -232,6 +264,7 @@ test_never_settles_fails_at_short_bound() {
 test_single_stale_first_read_is_not_accepted
 test_already_settled_pane_costs_one_confirm_sleep
 test_single_then_different_read_is_not_accepted
+test_reused_pool_slot_clears_stale_durable_claim
 test_never_settles_fails_at_short_bound
 
 echo "# all fm-spawn-worktree-settle tests passed"

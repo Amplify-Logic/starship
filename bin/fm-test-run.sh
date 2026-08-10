@@ -668,6 +668,10 @@ families_for_changed_path() {
       # scripts that read them.
       printf '%s\n' session-bootstrap
       ;;
+    bin/fm-worktree-lease-lib.sh)
+      printf '%s\n' backend-dispatch
+      printf '%s\n' pr-forge
+      ;;
     bin/fm-pr-*|bin/fm-merge-local.sh|bin/fm-teardown.sh|bin/fm-review-diff.sh|\
     bin/fm-x-*|bin/fm-check*)
       printf '%s\n' pr-forge

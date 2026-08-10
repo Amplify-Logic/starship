@@ -35,6 +35,8 @@ check_required_surface_deletion_fails() {
   local repo out rc=0
   repo="$TMP_ROOT/required-delete"
   git clone -q "$ROOT" "$repo" || fail "could not clone fork-surface fixture"
+  cp "$ROOT/fork-surface.conf" "$repo/fork-surface.conf" \
+    || fail "could not copy current fork-surface manifest into fixture"
   git -C "$repo" rm -q bin/fm-leak-guard.sh || fail "could not remove required fixture surface"
   out=$(cd "$repo" && bin/fm-fork-surface.sh check 2>&1) || rc=$?
   [ "$rc" -ne 0 ] || fail "required surface deletion must fail"
@@ -48,6 +50,8 @@ check_personal_surface_deletion_is_optional() {
   local repo out
   repo="$TMP_ROOT/personal-delete"
   git clone -q "$ROOT" "$repo" || fail "could not clone personal-surface fixture"
+  cp "$ROOT/fork-surface.conf" "$repo/fork-surface.conf" \
+    || fail "could not copy current fork-surface manifest into fixture"
   git -C "$repo" rm -q bin/fm-adhd.sh docs/adhd.md .agents/skills/adhd/SKILL.md \
     .agents/skills/adhd-auto-fire/SKILL.md tests/fm-adhd.test.sh \
     || fail "could not remove personal fixture surface"
