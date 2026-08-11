@@ -33,7 +33,7 @@
 #   profile consultation. A --secondmate spawn is exempt and resolves the SECONDMATE
 #   harness (config/secondmate-harness -> config/crew-harness -> own), so the
 #   secondmate-vs-crewmate split is DURABLE across every respawn (recovery,
-#   /updatefirstmate, restart). A bare adapter name (claude|codex|opencode|pi|grok|cursor|kimi)
+#   /updatefirstmate, restart). A bare adapter name (claude|codex|opencode|pi|grok|cursor|kimi|prime-agent)
 #   overrides it for this spawn (either kind). A non-flag string containing
 #   whitespace is treated as a RAW launch command - the escape hatch for verifying
 #   new adapters.
@@ -54,6 +54,20 @@
 #   in ~/.cursor/cli-config.json while meta would still claim the requested id
 #   (bin/fm-cursor-model-lib.sh; docs/cursor-harness.md). Herdr presentation
 #   separately prefers the live pane footer model over meta when readable.
+#   For prime-agent, the launch is fully contained per task: the template sets
+#   PRIME_AGENT_CODING_AGENT_DIR and PRIME_AGENT_KERNEL_VENV into
+#   state/<id>.prime-agent-home (the kernel venv otherwise lands hardcoded in
+#   ~/.prime/agent/) and gives the task its own daemon via --daemon-socket
+#   (the default daemon socket is per-USER shared, so a bare `shutdown --force`
+#   would kill other tasks' agents - teardown stops only this task's sessions
+#   and supervisor). Its model route is validated before any endpoint is
+#   created: subscription-quota routes only (opencode free models,
+#   openai-codex/* subscription OAuth); anthropic/* is refused because it bills
+#   per-token extra usage even on a Pro/Max OAuth login (verified $0.1845 for a
+#   one-liner, data/fm-prime-agent-trial-t1, docs/prime-agent-harness.md). An
+#   absent --model folds to the verified-free opencode/deepseek-v4-flash-free -
+#   the CLI's own default is a PAID route (verified: a model-less run 401s on
+#   the free Zen key).
 #   Raw launch commands are exempt because arbitrary shell syntax can depend on
 #   pane-only aliases, functions, or setup that cannot be resolved safely without
 #   executing the unverified command; the escape hatch therefore stays explicit.
@@ -98,6 +112,11 @@
 #                  written by this script; outside the worktree to avoid pi's trust gate)
 #     __PITURNEND__ absolute path to .pi/extensions/fm-primary-turnend-guard.ts in a pi secondmate home
 #     __PIWATCH__   absolute path to .pi/extensions/fm-primary-pi-watch.ts in a pi secondmate home
+#     __PASTATE__   absolute path to state/<task-id>.prime-agent-home (prime-agent
+#                   containment: agent dir, kernel-venv/, daemon.sock all live here)
+#     __PRIMEEXT__  absolute path to state/<task-id>.prime-ext.ts (prime-agent
+#                   turn-end extension, written by this script; same pi-fork
+#                   extension API, kept outside the worktree like pi's)
 # Per-harness turn-end hooks are installed automatically; some live outside the worktree.
 # grok uses a firstmate-owned global hook under ${GROK_HOME:-$HOME/.grok}/hooks
 # plus a gitignored .fm-grok-turnend worktree pointer and a state token.
@@ -351,7 +370,7 @@ FIRSTMATE_HOME=
 
 if [ "$KIND" = secondmate ]; then
   case "${POS[1]:-}" in
-    ''|claude|codex|opencode|pi|grok|cursor|kimi)
+    ''|claude|codex|opencode|pi|grok|cursor|kimi|prime-agent)
       ARG3=${POS[1]:-}
       ;;
     *' '*)
@@ -433,6 +452,20 @@ launch_template() {
     # Stop hook in a per-task isolated KIMI_CODE_HOME (project hooks do not load;
     # verified 2026-07-23). Default model is kimi-code/k3 via __MODELFLAG__.
     kimi) printf '%s' 'KIMI_CODE_HOME=__KIMIHOME__ kimi --yolo __MODELFLAG__' ;;
+    # prime-agent (Prime Intellect, a hard fork of pi; worker adapter verified
+    # 2026-08-07 on v0.7.0): a positional brief starts the supervised session,
+    # exactly like pi. Containment is mandatory and per-task: both env vars go
+    # into state/<id>.prime-agent-home (the kernel venv is hardcoded to
+    # ~/.prime/agent/kernel-venv without PRIME_AGENT_KERNEL_VENV) and the task
+    # gets its own daemon socket - the default daemon socket is per-user SHARED,
+    # so without --daemon-socket one task's `list`/`stop` would see and hit
+    # another task's agents. No trust dialog exists (pi's trust mechanism was
+    # removed upstream), so the pi-style turn-end extension loads with -e and
+    # no gate. --model is always explicit: the CLI's own default is a paid
+    # route, and the route guard below refuses per-token-billed models before
+    # any endpoint exists. Effort maps to --thinking (off|minimal|low|medium|
+    # high|xhigh|max per --help; xhigh exercised live).
+    prime-agent) printf '%s' 'PRIME_AGENT_CODING_AGENT_DIR=__PASTATE__ PRIME_AGENT_KERNEL_VENV=__PASTATE__/kernel-venv prime-agent --daemon-socket __PASTATE__/daemon.sock -e __PRIMEEXT__ __MODELFLAG____EFFORTFLAG__"$(cat __BRIEF__)"' ;;
     *) return 1 ;;
   esac
 }
@@ -459,6 +492,7 @@ launch_binary_install_hint() {  # <binary>
     grok) printf '%s' 'curl -fsSL https://x.ai/cli/install.sh | bash' ;;
     agent) printf '%s' 'curl https://cursor.com/install -fsS | bash' ;;
     kimi) printf '%s' 'curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash' ;;
+    prime-agent) printf '%s' 'curl -fsSL https://app.primeintellect.ai/prime-agent/install.sh | sh' ;;
     *) return 1 ;;
   esac
 }
@@ -632,6 +666,65 @@ LAUNCH_MODEL=$MODEL
 if [ "$HARNESS" = kimi ] && { [ -z "$LAUNCH_MODEL" ] || [ "$LAUNCH_MODEL" = default ]; }; then
   LAUNCH_MODEL=kimi-code/k3
 fi
+# prime_agent_model_route_ok <model>: the captain's hard constraint for
+# prime-agent is subscription-quota routes only, NEVER per-token API billing
+# (data/fm-prime-agent-trial-t1, 2026-08-06, v0.7.0):
+#   - opencode (OpenCode Zen) ids big-pickle and *-free are the zero-cost set;
+#     every other Zen id needs paid per-token billing (verified: 401
+#     CreditsError "No payment method" for opencode/gpt-5.6-sol).
+#   - openai-codex/* rides the ChatGPT Plus/Pro Codex subscription OAuth.
+#   - anthropic/* bills per-token extra usage even on a Claude Pro/Max OAuth
+#     login (verified: $0.1845 for a one-line probe) - always refused.
+prime_agent_model_route_ok() {  # <model>
+  case "$1" in
+    opencode/big-pickle|opencode/*-free) return 0 ;;
+    openai-codex/*) return 0 ;;
+  esac
+  return 1
+}
+if [ "$HARNESS" = prime-agent ]; then
+  # The CLI's own default model is a PAID route (verified: a model-less launch
+  # 401s on the free Zen key), so an absent --model folds to the verified-free
+  # Zen model rather than inheriting the CLI default.
+  if [ -z "$LAUNCH_MODEL" ] || [ "$LAUNCH_MODEL" = default ]; then
+    LAUNCH_MODEL=opencode/deepseek-v4-flash-free
+  fi
+  if ! prime_agent_model_route_ok "$LAUNCH_MODEL"; then
+    echo "error: prime-agent model '$LAUNCH_MODEL' is not a subscription-quota route; allowed: opencode/big-pickle, opencode/*-free (OpenCode Zen free models), openai-codex/* (ChatGPT Plus/Pro Codex subscription OAuth). anthropic/* bills per-token extra usage even on Claude Pro/Max OAuth (verified \$0.1845 for a one-liner). Refusing before creating a task endpoint" >&2
+    exit 1
+  fi
+  # The per-task daemon socket lives at $STATE/<id>.prime-agent-home/daemon.sock
+  # and AF_UNIX sockets cap sun_path at 104 bytes (hit live in the test lab on
+  # macOS's deep TMPDIR). Refuse an over-long path here, before any endpoint,
+  # rather than letting the daemon fail to bind at worker runtime. The launch
+  # substitutes the PHYSICAL state path (STATE_REAL, pwd -P), so the guard must
+  # measure that, not the logical $STATE: symlink canonicalization can add more
+  # bytes than any slack (e.g. /tmp -> /private/tmp adds 8). $STATE may not
+  # exist yet (its mkdir happens later), so resolve the nearest existing
+  # ancestor and re-append the missing tail. The 30 covers
+  # "/<id>.prime-agent-home/daemon.sock" minus the id itself plus the
+  # separators; the 100 threshold keeps a few spare bytes under 104.
+  pa_state_phys=$STATE
+  pa_state_tail=
+  while [ -n "$pa_state_phys" ] && [ ! -d "$pa_state_phys" ]; do
+    pa_state_tail="/${pa_state_phys##*/}$pa_state_tail"
+    pa_state_phys=${pa_state_phys%/*}
+  done
+  if [ -n "$pa_state_phys" ]; then
+    pa_state_phys=$(cd "$pa_state_phys" 2>/dev/null && pwd -P) || pa_state_phys=${STATE%"$pa_state_tail"}
+  fi
+  if [ "$pa_state_phys" = / ]; then
+    pa_state_phys=
+  fi
+  pa_state_phys=$pa_state_phys$pa_state_tail
+  if [ -z "$pa_state_phys" ]; then
+    pa_state_phys=$STATE
+  fi
+  if [ $(( ${#pa_state_phys} + ${#ID} + 30 )) -gt 100 ]; then
+    echo "error: prime-agent daemon socket path '$pa_state_phys/$ID.prime-agent-home/daemon.sock' risks exceeding the 104-byte AF_UNIX limit; use a shorter task id or state home" >&2
+    exit 1
+  fi
+fi
 if [ "$HARNESS" = cursor ]; then
   LAUNCH_MODEL=$(cursor_model_with_effort "$MODEL" "$EFFORT")
   if [ -n "$LAUNCH_MODEL" ] && [ "$LAUNCH_MODEL" != default ]; then
@@ -654,7 +747,7 @@ model_flag_for_harness() {
   local harness=$1 model=$2
   [ -n "$model" ] && [ "$model" != default ] || return 0
   case "$harness" in
-    claude|codex|opencode|pi|grok|cursor|kimi)
+    claude|codex|opencode|pi|grok|cursor|kimi|prime-agent)
       printf -- '--model %s ' "$(shell_quote "$model")"
       ;;
   esac
@@ -689,6 +782,13 @@ effort_flag_for_harness() {
     pi)
       # Pi 0.80.6 accepts the full shared effort vocabulary, including max, through
       # its --thinking flag.
+      case "$effort" in
+        low|medium|high|xhigh|max) printf -- '--thinking %s ' "$(shell_quote "$effort")" ;;
+      esac
+      ;;
+    prime-agent)
+      # prime-agent's --thinking accepts the full shared vocabulary plus
+      # off/minimal (per v0.7.0 --help; xhigh exercised live 2026-08-07).
       case "$effort" in
         low|medium|high|xhigh|max) printf -- '--thinking %s ' "$(shell_quote "$effort")" ;;
       esac
@@ -1228,6 +1328,22 @@ export default function (pi: any) {
 }
 EOF
       ;;
+    prime-agent*)
+      # Same pi-fork extension API (pi.on("turn_end")), verified live on v0.7.0
+      # (2026-08-07: a -e extension touched the marker at every turn boundary).
+      # prime-agent removed pi's project-trust mechanism entirely, so there is
+      # no trust gate either way; the extension still lives in state/ (outside
+      # the worktree) so it cannot pollute the task's git state, matching pi.
+      cat > "$STATE/$ID.prime-ext.ts" <<EOF
+// Firstmate turn-end signal; written by fm-spawn.
+// "turn_end" fires after each completed turn (not "agent_end", which fires
+// only when the whole run exits): the watcher needs every turn boundary.
+import { execFile } from "node:child_process";
+export default function (pi: any) {
+  pi.on("turn_end", () => execFile("touch", ["$TURNEND"]));
+}
+EOF
+      ;;
     codex*)
       # codex: turn-end rides the launch command via -c notify=[...] and __TURNEND__.
       ;;
@@ -1353,6 +1469,24 @@ EOF
   fi
 fi
 
+# prime-agent per-task containment home (always): the launch template points
+# PRIME_AGENT_CODING_AGENT_DIR / PRIME_AGENT_KERNEL_VENV / --daemon-socket here
+# so sessions, auth copies, logs, daemon state, and the kernel venv never land
+# in the captain's ~/.prime/agent (the kernel venv path is hardcoded upstream
+# without the env override; both verified 2026-08-07 on v0.7.0). Auth rides a
+# symlink to the operator's existing auth.json (token refreshes then propagate
+# back, the same posture as the kimi worker-home credential links); absent one,
+# the worker's first run needs an interactive /login, which is an operator
+# setup step, not a spawn blocker.
+if [ "$HARNESS" = prime-agent ] && [ "$RAW_LAUNCH" -eq 0 ]; then
+  PA_WORKER_HOME="$STATE_REAL/$ID.prime-agent-home"
+  PA_SOURCE_HOME=${FM_PRIME_AGENT_SOURCE_HOME:-$HOME/.prime/agent}
+  mkdir -p "$PA_WORKER_HOME"
+  if [ -f "$PA_SOURCE_HOME/auth.json" ] && [ ! -e "$PA_WORKER_HOME/auth.json" ]; then
+    ln -s "$PA_SOURCE_HOME/auth.json" "$PA_WORKER_HOME/auth.json"
+  fi
+fi
+
 # Per-project delivery mode + yolo flag (bin/fm-project-mode.sh; the project-management skill and AGENTS.md task lifecycle).
 # Recorded in meta so fm-teardown's safety check and the validate/merge stages can
 # branch on them. Mode governs ship tasks; a scout's deliverable is a report, not a
@@ -1387,6 +1521,10 @@ META_WINDOW=$T
       echo "model_requested=$MODEL"
     fi
   elif [ "$HARNESS" = kimi ] && [ -n "$LAUNCH_MODEL" ]; then
+    echo "model=$LAUNCH_MODEL"
+  elif [ "$HARNESS" = prime-agent ] && [ -n "$LAUNCH_MODEL" ]; then
+    # prime-agent folds an absent --model to the verified-free Zen route, so
+    # meta records the validated launch id exactly like kimi's pinned default.
     echo "model=$LAUNCH_MODEL"
   else
     echo "model=${MODEL:-default}"
@@ -1437,6 +1575,8 @@ sq_turnend=$(shell_quote "$TURNEND")
 sq_piext=$(shell_quote "$STATE/$ID.pi-ext.ts")
 sq_piturnend=$(shell_quote "$PROJ_ABS/.pi/extensions/fm-primary-turnend-guard.ts")
 sq_piwatch=$(shell_quote "$PROJ_ABS/.pi/extensions/fm-primary-pi-watch.ts")
+sq_pastate=$(shell_quote "$STATE_REAL/$ID.prime-agent-home")
+sq_primeext=$(shell_quote "$STATE/$ID.prime-ext.ts")
 # LAUNCH_MODEL was resolved earlier (cursor effort fold + catalog preflight).
 MODELFLAG=$(model_flag_for_harness "$HARNESS" "$LAUNCH_MODEL")
 EFFORTFLAG=$(effort_flag_for_harness "$HARNESS" "$EFFORT")
@@ -1448,6 +1588,8 @@ LAUNCH=${LAUNCH//__TURNEND__/$sq_turnend}
 LAUNCH=${LAUNCH//__PIEXT__/$sq_piext}
 LAUNCH=${LAUNCH//__PITURNEND__/$sq_piturnend}
 LAUNCH=${LAUNCH//__PIWATCH__/$sq_piwatch}
+LAUNCH=${LAUNCH//__PASTATE__/$sq_pastate}
+LAUNCH=${LAUNCH//__PRIMEEXT__/$sq_primeext}
 if [ "$HARNESS" = kimi ] && [ "$RAW_LAUNCH" -eq 0 ]; then
   sq_kimihome=$(shell_quote "$STATE_REAL/$ID.kimi-home")
   LAUNCH=${LAUNCH//__KIMIHOME__/$sq_kimihome}

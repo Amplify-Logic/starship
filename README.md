@@ -60,7 +60,7 @@ Full detail on every feature lives in [docs/architecture.md](docs/architecture.m
 
 ### Requirements
 
-- A verified agent harness: Claude Code, Grok, Pi, Codex, OpenCode, Cursor CLI, or Kimi Code (primary and worker).
+- A verified agent harness: Claude Code, Grok, Pi, Codex, OpenCode, Cursor CLI, or Kimi Code; Prime Agent v0.7.0 is also verified as a worker-only harness.
 - Git and the GitHub CLI, authenticated through `gh auth login`.
 - tmux, for the reference session backend.
 
@@ -76,6 +76,7 @@ Pick whichever one matches your subscription and workflow.
 Codex and OpenCode are also verified and supported as primary harnesses; Codex uses bounded foreground checkpoints, and OpenCode uses a TUI plugin, so both carry more harness-specific supervision tradeoffs than the three co-primaries.
 Kimi Code 0.27.0 is verified as a primary through `bin/fm-primary.sh kimi-k3` and as a worker through `fm-spawn --harness kimi` (see [docs/kimi-harness.md](docs/kimi-harness.md)).
 Primary launch is quiet on 0.27.0 and on the newer 0.31.1 whose hook mechanics were re-verified, warns on a build carrying no primary evidence, and never blocks on the version alone, so a newer Kimi still starts.
+Prime Agent v0.7.0 is verified only as a worker through `fm-spawn --harness prime-agent`; its spawn guard permits subscription-quota routes only (see [docs/prime-agent-harness.md](docs/prime-agent-harness.md)).
 
 ### Install and launch
 

@@ -160,16 +160,20 @@ fm_backend_tmux_agent_alive() {  # <target>
   comm=${comm#-}
   case "$comm" in
     '') printf 'unknown' ;;
-    *claude*|*codex*|*opencode*|*grok*|*kimi*) printf 'alive' ;;
+    *claude*|*codex*|*opencode*|*grok*|*kimi*|*prime-agent*) printf 'alive' ;;
     zsh|bash|sh|dash|ash|ksh|mksh|tcsh|csh|fish) printf 'dead' ;;
     node*)
       # A bare "node" is normally `unknown` (pi's launcher execs into a generic
       # node with nothing to attribute it back to pi - see "Known gaps"). cursor
-      # is the exception: fm_tmux_pane_is_cursor (bin/fm-tmux-lib.sh) resolves
+      # is one exception: fm_tmux_pane_is_cursor (bin/fm-tmux-lib.sh) resolves
       # it through the versioned cursor-agent bundle path that survives in argv
       # ("exec -a" rewrites argv[0] but the index.js path argument does not).
-      # Anything else with a node COMM stays `unknown` - never inferred dead.
-      if fm_tmux_pane_is_cursor "$target"; then printf 'alive'; else printf 'unknown'; fi
+      # prime-agent is the other: its CLI sets process.title = "prime-agent",
+      # so the foreground node's argv reads "prime-agent" and
+      # fm_tmux_pane_is_prime_agent resolves it the same way (verified
+      # 2026-08-07, v0.7.0). Anything else with a node COMM stays `unknown` -
+      # never inferred dead.
+      if fm_tmux_pane_is_cursor "$target" || fm_tmux_pane_is_prime_agent "$target"; then printf 'alive'; else printf 'unknown'; fi
       ;;
     *) printf 'unknown' ;;
   esac

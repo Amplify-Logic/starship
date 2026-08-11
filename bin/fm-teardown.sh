@@ -206,6 +206,103 @@ remove_grok_turnend_auth() {
   rm -f "$hooks_dir/$token"
 }
 
+# prime-agent daemon-aware stop: the TUI is only a client; the agent runs in a
+# per-session daemon worker that SURVIVES /quit, pane kill, and terminal loss
+# (verified 2026-08-07, v0.7.0), so killing the window never stops the agent.
+# Every prime-agent task has its own daemon socket inside its containment home
+# (state/<id>.prime-agent-home/daemon.sock, set by fm-spawn's launch template).
+# Sequence, each step load-bearing and verified: stop this task's sessions
+# through its own socket (the public `prime-agent shutdown` is NEVER used - it
+# rejects socket flags and sweeps EVERY discovered daemon on the machine),
+# wait for the sessions to close, TERM the session workers (a live worker
+# watches its supervisor and launches a replacement when it dies), then TERM
+# the task's supervisor, identified by the socket it listens on because its
+# argv is title-rewritten to bare "prime-agent". All steps are best-effort: a
+# missing binary, socket, or supervisor must never block teardown (the
+# worktree checks above remain the landed-work authority).
+prime_agent_daemon_stop() {  # <state-dir> <id>
+  local state_dir=$1 id=$2 pastate sock ids sid sup
+  pastate="$state_dir/$id.prime-agent-home"
+  # Resolve symlinks (macOS /tmp -> /private/tmp): lsof prints a unix socket's
+  # sun_path exactly as the binding process passed to bind(), and fm-spawn
+  # substitutes the PHYSICAL state path (STATE_REAL) into --daemon-socket, so
+  # the supervisor binds the physical form and the task path must be resolved
+  # the same way to match its listener. Worker sockets below are the opposite
+  # case - see the LOGICAL $TMPDIR note there.
+  [ -d "$pastate" ] && pastate=$(cd "$pastate" && pwd -P)
+  sock="$pastate/daemon.sock"
+  [ -S "$sock" ] || return 0
+  command -v prime-agent >/dev/null 2>&1 || return 0
+  ids=$(PRIME_AGENT_CODING_AGENT_DIR="$pastate" prime-agent list --daemon-socket "$sock" 2>/dev/null \
+    | awk '{for (i = 1; i <= NF; i++) if ($i ~ /^[0-9a-f]{12}$/) print $i}' || true)
+  for sid in $ids; do
+    PRIME_AGENT_CODING_AGENT_DIR="$pastate" prime-agent stop "$sid" --daemon-socket "$sock" >/dev/null 2>&1 || true
+  done
+  # Wait for the sessions to actually close (stop is asynchronous; bounded
+  # ~5s, a stubborn worker must never hang teardown).
+  local tries hash wsock wpid
+  tries=0
+  while [ "$tries" -lt 50 ]; do
+    ids=$(PRIME_AGENT_CODING_AGENT_DIR="$pastate" prime-agent list --daemon-socket "$sock" 2>/dev/null \
+      | awk '{for (i = 1; i <= NF; i++) if ($i ~ /^[0-9a-f]{12}$/) print $i}' || true)
+    [ -n "$ids" ] || break
+    sleep 0.1
+    tries=$((tries + 1))
+  done
+  # Kill the session WORKER processes before the supervisor: a live worker
+  # watches its supervisor and launches a replacement when it dies (verified
+  # 2026-08-07, v0.7.0 - TERMing the supervisor first left a resurrected
+  # state dir behind). Worker sockets are namespaced by this task's
+  # supervisor hash: $TMPDIR/prime-agent-<uid>/worker-<hash>-*.sock, the hash
+  # recoverable from the task's own .supervisor-launch-<hash>.lock dir, so
+  # the match stays scoped to this task even on a shared tmpdir.
+  command -v lsof >/dev/null 2>&1 || return 0
+  hash=
+  for wsock in "$pastate"/.supervisor-launch-*.lock; do
+    [ -e "$wsock" ] || continue
+    hash=${wsock##*/.supervisor-launch-}
+    hash=${hash%.lock}
+    break
+  done
+  if [ -n "$hash" ]; then
+    local wdir
+    # LOGICAL $TMPDIR, only the trailing slash stripped - never resolve this
+    # physically. prime-agent binds worker sockets under Node's os.tmpdir(),
+    # i.e. $TMPDIR verbatim, and lsof prints sun_path exactly as bound (lab
+    # 2026-08-07: /var/folders/.../prime-agent-501/worker-*.sock, no /private
+    # prefix). A physically resolved wdir would silently no-op the worker
+    # kill on macOS. Asymmetric with the supervisor socket above, which IS
+    # physical because fm-spawn passes the resolved STATE_REAL path.
+    wdir="${TMPDIR:-/tmp}"
+    wdir="${wdir%/}/prime-agent-$(id -u)"
+    for wsock in "$wdir"/worker-"$hash"-*.sock; do
+      [ -S "$wsock" ] || continue
+      for wpid in $(lsof -U 2>/dev/null | awk -v s="$wsock" '$NF == s {print $2}' | sort -u); do
+        kill "$wpid" 2>/dev/null || true
+        # Wait for the worker to exit (bounded ~5s) before the supervisor is
+        # touched, so its watchdog can never observe the supervisor's death.
+        tries=0
+        while kill -0 "$wpid" 2>/dev/null && [ "$tries" -lt 50 ]; do
+          sleep 0.1
+          tries=$((tries + 1))
+        done
+      done
+    done
+  fi
+  # The supervisor lingers idle after its last session stops (verified); TERM
+  # it by socket ownership, scoped to this task's own socket path only, then
+  # wait for it to exit (bounded ~5s) so nothing outlives the state cleanup.
+  for sup in $(lsof -U 2>/dev/null | awk -v s="$sock" '$NF == s {print $2}' | sort -u); do
+    kill "$sup" 2>/dev/null || true
+    tries=0
+    while kill -0 "$sup" 2>/dev/null && [ "$tries" -lt 50 ]; do
+      sleep 0.1
+      tries=$((tries + 1))
+    done
+  done
+  return 0
+}
+
 validate_pr_poll_cleanup() {
   local state_dir=$1 id=$2 quarantine state_device artifact has_artifact=0
   fm_task_id_path_safe "$id" || return 0
@@ -1020,7 +1117,7 @@ validate_firstmate_home_children_removal() {
 }
 
 cleanup_firstmate_home_children() {
-  local home=$1 sub_state child_meta child_id child_t child_wt child_proj child_kind child_home child_backend child_orca_worktree_id child_return_rc
+  local home=$1 sub_state child_meta child_id child_t child_wt child_proj child_kind child_home child_backend child_harness child_orca_worktree_id child_return_rc
   sub_state="$home/state"
   [ -d "$sub_state" ] || return 0
   for child_meta in "$sub_state"/*.meta; do
@@ -1030,6 +1127,7 @@ cleanup_firstmate_home_children() {
     child_proj=$(meta_value "$child_meta" project)
     child_kind=$(meta_value "$child_meta" kind)
     [ -n "$child_kind" ] || child_kind=ship
+    child_harness=$(meta_value "$child_meta" harness)
     child_backend=$(fm_backend_of_meta "$child_meta")
     if [ "$child_backend" = orca ]; then
       child_t=$(meta_value "$child_meta" terminal)
@@ -1081,10 +1179,13 @@ cleanup_firstmate_home_children() {
         safe_rm_rf_child_worktree "$child_wt" "$child_proj"
       fi
     fi
+    if [ "$child_harness" = prime-agent ]; then
+      prime_agent_daemon_stop "$sub_state" "$child_id" || true
+    fi
     remove_grok_turnend_auth "$sub_state" "$child_id"
     remove_pr_poll_artifacts "$sub_state" "$child_id" || return 1
-    rm -f "$sub_state/$child_id.status" "$sub_state/$child_id.turn-ended" "$sub_state/$child_id.meta" "$sub_state/$child_id.pi-ext.ts" "$sub_state/$child_id.grok-turnend-token"
-    rm -rf "$sub_state/$child_id.kimi-home"
+    rm -f "$sub_state/$child_id.status" "$sub_state/$child_id.turn-ended" "$sub_state/$child_id.meta" "$sub_state/$child_id.pi-ext.ts" "$sub_state/$child_id.prime-ext.ts" "$sub_state/$child_id.grok-turnend-token"
+    rm -rf "$sub_state/$child_id.kimi-home" "$sub_state/$child_id.prime-agent-home"
   done
 }
 
@@ -1192,6 +1293,14 @@ if [ "$BACKEND" != orca ]; then
   "$FM_ROOT/bin/fm-visible-status.sh" --clear "$ID" >/dev/null 2>&1 || true
   fm_backend_kill "$BACKEND" "$T" "$(meta_value "$META" zellij_tab_id)" "fm-$ID" 2>/dev/null || true
 fi
+# Daemon-aware stop for prime-agent, AFTER the endpoint is dead: the TUI client
+# auto-relaunches its daemon supervisor on reconnect (verified 2026-08-07,
+# v0.7.0 - a stop issued before the window kill left a relaunched supervisor
+# behind), so the endpoint must be killed first; then this stops the task's
+# sessions and supervisor through its own per-task daemon socket.
+if [ "$HARNESS" = prime-agent ]; then
+  prime_agent_daemon_stop "$STATE" "$ID" || true
+fi
 if [ "$KIND" = secondmate ]; then
   [ -n "$HOME_PATH" ] || HOME_PATH=$WT
   remove_firstmate_home "$HOME_PATH" "secondmate home" "$ID"
@@ -1211,8 +1320,8 @@ rm -rf "$STATE/browse/$ID"
 remove_pr_poll_artifacts "$STATE" "$ID" || exit 1
 # Record capability evidence before meta disappears (ship/scout only; best-effort).
 fm_capability_record_teardown "$KIND" "$FORCE" "$HARNESS" "$MODEL" "$EFFORT" "$TASK_TYPE"
-rm -f "$STATE/$ID.status" "$STATE/$ID.turn-ended" "$STATE/$ID.meta" "$STATE/$ID.pi-ext.ts" "$STATE/$ID.grok-turnend-token"
-rm -rf "$STATE/$ID.kimi-home"
+rm -f "$STATE/$ID.status" "$STATE/$ID.turn-ended" "$STATE/$ID.meta" "$STATE/$ID.pi-ext.ts" "$STATE/$ID.prime-ext.ts" "$STATE/$ID.grok-turnend-token"
+rm -rf "$STATE/$ID.kimi-home" "$STATE/$ID.prime-agent-home"
 "$FM_ROOT/bin/fm-visible-status.sh" --all >/dev/null 2>&1 || true
 if [ "$KIND" != scout ] && [ "$KIND" != secondmate ] && [ "$MODE" != local-only ]; then
   "$FM_ROOT/bin/fm-fleet-sync.sh" "$PROJ" || true

@@ -20,9 +20,9 @@ test_stable_primary_marker_wins() {
 test_worker_set_still_includes_cursor() {
   local usage accepted
   usage=$(sed -n '1,90p' "$ROOT/bin/fm-spawn.sh")
-  # Full verified worker set: claude,codex,opencode,pi,grok,cursor,kimi (kimi added 2026-07-23).
-  accepted=$(grep -E "^\s+''\|claude\|codex\|opencode\|pi\|grok\|cursor\|kimi\)" "$ROOT/bin/fm-spawn.sh" || true)
-  assert_contains "$usage" 'claude|codex|opencode|pi|grok|cursor|kimi' "documented verified worker set lost cursor"
+  # Full verified worker set: claude,codex,opencode,pi,grok,cursor,kimi (kimi added 2026-07-23),prime-agent (added 2026-08-07).
+  accepted=$(grep -E "^\s+''\|claude\|codex\|opencode\|pi\|grok\|cursor\|kimi\|prime-agent\)" "$ROOT/bin/fm-spawn.sh" || true)
+  assert_contains "$usage" 'claude|codex|opencode|pi|grok|cursor|kimi|prime-agent' "documented verified worker set lost an adapter"
   assert_contains "$accepted" 'cursor' "fm-spawn lost cursor from the accepted worker harness case"
   assert_contains "$accepted" 'kimi' "fm-spawn lost kimi from the accepted worker harness case"
   pass "fm-spawn: Cursor primary support does not remove Cursor workers"

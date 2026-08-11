@@ -149,7 +149,22 @@ shell_verdict=dead    # bare zsh pane, unchanged
 
 Any other bare `node` still returns `unknown`, so the correctness bar above holds: an unresolvable case is never treated as confidently dead. `pi` is unaffected and remains `unknown`.
 
+### `prime-agent` resolves the `node` case through its rewritten title (2026-08-07)
+
+`prime-agent` (v0.7.0) sets `process.title = "prime-agent"` (`packages/coding-agent/src/cli-main.ts`), so the pane COMM reads `node` while the foreground node's own `ps` comm/args read `prime-agent`:
+
+```
+$ tmux display-message -p -t <pane> '#{pane_current_command}'
+node
+$ ps -o args= -p <foreground-node-pid>
+prime-agent
+```
+
+The foreground node sits a few launches below the pane pid (login shell -> treehouse subshell -> launcher -> node), so `fm_tmux_pane_is_prime_agent` (bin/fm-tmux-lib.sh) walks the descendant tree (bounded at five levels) looking for a `prime-agent` argv, and `fm_backend_tmux_agent_alive` returns `alive` on that match.
+Verified live 2026-08-07 through the real `fm-spawn` launch: `agent_alive=alive` on the worker pane, `unknown` on an unattributable bare node (regression-covered by tests/fm-prime-agent-adapter.test.sh).
+The same positive identification scopes the composer reader: only an identified prime-agent pane may treat a bare `>` row as its agent composer (the shared dead-shell rule stays intact for every other pane).
+
 ## Limitations
 
 None specific to tmux for the reference path itself - it is the fully verified reference backend, while Orca and cmux are the backends without secondmate support.
-The agent-liveness probe above has one known gap (`pi`'s generic `node` process name, see above; `cursor` shares the `node` COMM but is resolved through argv).
+The agent-liveness probe above has one known gap (`pi`'s generic `node` process name, see above; `cursor` and `prime-agent` share the `node` COMM but are resolved through argv).

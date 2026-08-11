@@ -155,6 +155,45 @@ fm_tmux_cursor_composer_row() {  # <target>
   printf '%s' "$((n - 1))"
 }
 
+# fm_tmux_pane_is_prime_agent: 0 iff <target>'s foreground process is
+# POSITIVELY identified as a prime-agent (Prime Intellect) TUI. The CLI sets
+# process.title = "prime-agent", so the pane COMM is a bare "node" while the
+# foreground process's argv/comm reads "prime-agent" (verified 2026-08-07,
+# v0.7.0, macOS: pane_current_command=node, `ps -o args=` on the foreground
+# child prints "prime-agent"). Same node+argv resolution class as cursor above.
+# An unreadable pane or an unmatched argv is NOT prime-agent - identification
+# fails toward the generic path, so a dead shell is never promoted to an agent
+# composer. Note the real agent work happens in a daemon worker OUTSIDE this
+# pane (daemon persistence, see the harness-adapters skill); this identifies
+# the attached TUI client only.
+fm_tmux_pane_is_prime_agent() {  # <target>
+  local target=$1 comm pid args child
+  comm=$(tmux display-message -p -t "$target" '#{pane_current_command}' 2>/dev/null) || return 1
+  comm=${comm#-}
+  case "$comm" in node*) ;; *) return 1 ;; esac
+  pid=$(tmux display-message -p -t "$target" '#{pane_pid}' 2>/dev/null) || return 1
+  [ -n "$pid" ] || return 1
+  # The pane's own pid is the login shell; the foreground node (the TUI
+  # client) sits a few launches below it (treehouse subshell -> launcher shim
+  # -> node, which rewrites its title/argv to "prime-agent"; verified
+  # 2026-08-07, v0.7.0). Walk the descendant tree, bounded at five levels.
+  local pids="$pid" frontier="$pid" next p c
+  for _ in 1 2 3 4 5; do
+    next=
+    for p in $frontier; do
+      for c in $(pgrep -P "$p" 2>/dev/null); do next="$next $c"; done
+    done
+    [ -n "$next" ] || break
+    pids="$pids$next"
+    frontier=$next
+  done
+  for child in $pids; do
+    args=$(ps -o args= -p "$child" 2>/dev/null) || continue
+    case "$args" in *prime-agent*) return 0 ;; esac
+  done
+  return 1
+}
+
 fm_tmux_composer_state() {  # <target> -> empty|pending|unknown
   local target=$1 cy raw plain stripped bordered=0 crow
   cy=$(tmux display-message -p -t "$target" '#{cursor_y}' 2>/dev/null) || { printf 'unknown'; return 0; }
@@ -172,6 +211,19 @@ fm_tmux_composer_state() {  # <target> -> empty|pending|unknown
   case "$plain" in
     '│'*'│'|'┃'*'┃'|'|'*'|') bordered=1 ;;
   esac
+  # prime-agent draws a BARE ` > ` composer (no box border). Its placeholder is
+  # dark-truecolor ghost text, so a verified-idle prime-agent composer
+  # ghost-strips to the lone `>` glyph - which the shared safety rule reads as
+  # a dead-shell prompt (unknown) on an unbordered row, deferring every
+  # away-mode escalation forever (verified 2026-08-07, v0.7.0). On a pane
+  # POSITIVELY identified as prime-agent (node COMM + prime-agent argv) that
+  # bare glyph row is the structurally-identified AGENT prompt row, which
+  # fm_composer_classify_content's contract counts as bordered=1. The scoped
+  # identification is what keeps a real dead shell (COMM is then the shell,
+  # not node) on the safe unknown path.
+  if [ "$bordered" != 1 ] && fm_tmux_pane_is_prime_agent "$target"; then
+    bordered=1
+  fi
   # content: from the ghost-stripped row (real typed text only).
   stripped=$(printf '%s\n' "$raw" | fm_composer_strip_ghost)
   stripped="${stripped#"${stripped%%[![:space:]]*}"}"

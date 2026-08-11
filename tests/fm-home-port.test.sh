@@ -31,7 +31,7 @@ seed_home() {
 make_verify_fakebin() {
   local dir=$1 fakebin
   fakebin=$(fm_fakebin "$dir")
-  fm_fake_exit0 "$fakebin" tmux node git gh-axi chrome-devtools-axi lavish-axi agent
+  fm_fake_exit0 "$fakebin" tmux node git gh-axi chrome-devtools-axi lavish-axi agent prime-agent
   cat > "$fakebin/gh" <<'SH'
 #!/usr/bin/env bash
 [ "${1:-}" = auth ] && [ "${2:-}" = status ] && exit 0
@@ -265,6 +265,20 @@ test_verify_passes_ready_home() {
   pass "verify passes a ready destination home"
 }
 
+test_verify_accepts_prime_agent_worker() {
+  local home="$TMP_ROOT/verify-prime-agent" out rc=0 fakebin
+  seed_home "$home"
+  printf 'tmux\n' > "$home/config/backend"
+  printf 'prime-agent\n' > "$home/config/crew-harness"
+  rm -f "$home/config/crew-dispatch.json"
+  fakebin=$(make_verify_fakebin "$TMP_ROOT/verify-prime-agent-bin")
+  out=$(PATH="$fakebin:$BASE_PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" "$PORT" verify --home "$home" 2>&1) || rc=$?
+  [ "$rc" -eq 0 ] || fail "verify should accept prime-agent as a ready worker harness, got rc=$rc out=$out"
+  assert_contains "$out" "VERIFY_PASS: crew-harness - config/crew-harness=prime-agent is verified and launch binary 'prime-agent' is on PATH" \
+    "prime-agent crew-harness should resolve to its launch binary"
+  pass "verify accepts prime-agent and checks its launch binary"
+}
+
 test_export_copies_portable_only
 test_export_refuses_explicit_env_include
 test_scan_detects_embedded_secret
@@ -277,5 +291,6 @@ test_scan_warn_machine_local_does_not_mask_secrets
 test_verify_fails_missing_portable_files
 test_verify_fails_unknown_backend_and_unverified_harness
 test_verify_passes_ready_home
+test_verify_accepts_prime_agent_worker
 
 echo "# all fm-home-port tests passed"

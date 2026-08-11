@@ -20,7 +20,7 @@ test_stable_primary_marker_wins() {
 test_worker_set_includes_kimi() {
   local usage
   usage=$(sed -n '1,90p' "$ROOT/bin/fm-spawn.sh")
-  assert_contains "$usage" 'claude|codex|opencode|pi|grok|cursor|kimi' \
+  assert_contains "$usage" 'claude|codex|opencode|pi|grok|cursor|kimi|prime-agent' \
     "documented verified worker set missing kimi"
   assert_grep "kimi) printf '%s' 'KIMI_CODE_HOME=__KIMIHOME__ kimi --yolo __MODELFLAG__'" \
     "$ROOT/bin/fm-spawn.sh" \

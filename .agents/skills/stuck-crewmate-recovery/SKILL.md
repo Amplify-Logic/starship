@@ -47,4 +47,6 @@ Escalate in order:
    Genuine wedging means looping, unresponsive, repeating the same obstacle, or truly dead.
    A low context reading is not wedging; modern harnesses auto-compact and keep going.
    The worktree and commits persist, so relaunch is cheap.
+   For a prime-agent worker, remember its daemon persistence: `/quit` or a dead pane only detaches the TUI client - the agent keeps running in the task's daemon.
+   Before any relaunch, check `prime-agent list --daemon-socket state/<id>.prime-agent-home/daemon.sock` (run with `PRIME_AGENT_CODING_AGENT_DIR` set to that same directory) and stop leftovers with `prime-agent stop <session-id> --daemon-socket <same socket>`; never use bare `prime-agent shutdown`, which sweeps every prime-agent daemon on the machine, including other tasks'.
 5. If a second relaunch fails too, write `failed` to the backlog and tell the captain the plain failure, preserved work, and consequence using `AGENTS.md` section 9; do not mention metadata, harness, window, or worktree unless the path itself is needed for action.

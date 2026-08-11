@@ -168,8 +168,13 @@ fm_composer_strip_ghost() {
 #   cursor: "Add a follow-up" after a completed turn, "Plan, search, build
 #           anything" in a fresh session; both rendered after a "→ " glyph that
 #           fm_composer_classify_content's prompt-glyph strip does not cover.
+#   prime-agent: rotating `Try "<suggestion>"` tips after its `> ` prompt glyph
+#           (verified 2026-08-07, v0.7.0: ` >   Try "add tests for @<filepath>"`).
+#           The placeholder is dark-truecolor de-emphasised, so the styled tmux
+#           path already drops it in fm_composer_strip_ghost; this pattern is the
+#           plain-row backstop (styling surprises and the plain-read backends).
 # Verified live 2026-07-19 against grok 0.2.103 and Cursor CLI 2026.07.16-899851b.
-FM_COMPOSER_IDLE_RE_DEFAULT=${FM_COMPOSER_IDLE_RE_DEFAULT:-'^Type a message\.\.\.$|^(→ )?(Add a follow-up|Plan, search, build anything)$'}
+FM_COMPOSER_IDLE_RE_DEFAULT=${FM_COMPOSER_IDLE_RE_DEFAULT:-'^Type a message\.\.\.$|^(→ )?(Add a follow-up|Plan, search, build anything)$|^(> *)?Try ".*"$'}
 
 # fm_composer_classify_content: the single shared composer-content verdict.
 #   <bordered> 1 when <content> came from a genuine agent-composer container (a

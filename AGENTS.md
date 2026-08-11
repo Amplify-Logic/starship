@@ -154,7 +154,8 @@ A silent bootstrap section needs no action; for any printed actionable diagnosti
 ## 4. Harness and runtime dispatch
 
 Load `harness-adapters` before every spawn or recovery and before trust handling, skill invocation, interrupt, exit, resume, or adapter verification.
-The verified worker adapters are `claude`, `codex`, `opencode`, `pi`, `grok`, and `cursor`; never dispatch on an unverified adapter.
+The verified worker adapters are `claude`, `codex`, `opencode`, `pi`, `grok`, `cursor`, `kimi`, and `prime-agent`; never dispatch on an unverified adapter.
+`prime-agent` is worker-only, pinned at v0.7.0, and its daemon persistence means a dead pane is not a stopped worker; `fm-spawn` refuses per-token-billed model routes for it.
 `cursor` is verified as a worker and, separately, as a primary through `bin/fm-primary.sh cursor-grok`; never infer one role from the other.
 Kimi Code 0.27.0 is the certified primary through `bin/fm-primary.sh kimi-k3` and a verified worker through `fm-spawn --harness kimi`; primary launch is quiet on 0.27.0 and on the re-verified 0.31.1, warns on any build with no primary evidence, and blocks on none of them.
 Worker evidence (busy signature, interrupt, turn-end Stop hook) lives in `docs/kimi-harness.md` (2026-07-23).

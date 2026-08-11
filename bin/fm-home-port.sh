@@ -34,7 +34,7 @@ FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 . "$SCRIPT_DIR/fm-backend.sh"
 
 # Verified worker harness names (same set as crew-dispatch validation).
-FM_PORT_VERIFIED_HARNESSES="claude codex opencode pi grok cursor kimi"
+FM_PORT_VERIFIED_HARNESSES="claude codex opencode pi grok cursor kimi prime-agent"
 
 usage() {
   cat <<'EOF'
@@ -313,6 +313,7 @@ harness_launch_binary() {
     pi) printf 'pi\n' ;;
     grok) printf 'grok\n' ;;
     cursor) printf 'agent\n' ;;
+    prime-agent) printf 'prime-agent\n' ;;
     *) return 1 ;;
   esac
 }

@@ -1,6 +1,6 @@
 ---
 name: harness-adapters
-description: Agent-only reference for firstmate harness operations. Use before spawning or recovering a crewmate or secondmate, handling a trust dialog, sending a harness-specific skill invocation, interrupting or exiting an agent, resuming an exited agent, or verifying a new harness adapter. Contains verified worker facts for claude, codex, opencode, pi, grok, cursor, and kimi; Cursor and Kimi primary facts.
+description: Agent-only reference for firstmate harness operations. Use before spawning or recovering a crewmate or secondmate, handling a trust dialog, sending a harness-specific skill invocation, interrupting or exiting an agent, resuming an exited agent, or verifying a new harness adapter. Contains verified worker facts for claude, codex, opencode, pi, grok, cursor, kimi, and prime-agent; Cursor and Kimi primary facts.
 user-invocable: false
 metadata:
   internal: true
@@ -30,7 +30,7 @@ The primary-session "no turn ends blind" guard contract and harness hook install
 The primary-session watcher wake protocols are rendered from `docs/supervision-protocols/` by `bin/fm-supervision-instructions.sh`.
 The supervision knowledge lives here: busy signature, exit command, interrupt, dialogs, resume behavior, skill invocation, and quirks.
 
-The verified WORKER adapters are `claude`, `codex`, `opencode`, `pi`, `grok`, `cursor`, and `kimi`.
+The verified WORKER adapters are `claude`, `codex`, `opencode`, `pi`, `grok`, `cursor`, `kimi`, and `prime-agent`.
 `cursor` is also verified as a PRIMARY through `bin/fm-primary.sh cursor-grok` (Cursor CLI `2026.07.20-8cc9c0b`, 2026-07-22 lab); never infer worker facts from primary facts or the reverse.
 Kimi is verified as a PRIMARY through `bin/fm-primary.sh kimi-k3` and, separately, as a WORKER through `fm-spawn --harness kimi` (Kimi Code 0.27.0, 2026-07-23 lab); never infer one role from the other.
 
@@ -170,6 +170,7 @@ The supported launch-profile flags below are verified locally; each row records 
 | opencode | `--model <provider/model>` | none for firstmate's interactive launch | Verified on opencode 1.17.6. `opencode run` has `--variant`, but firstmate launches the interactive `opencode --prompt` path, which has no verified effort flag. |
 | cursor | `--model <model>` | none - effort is a SUFFIX on the model id | Verified 2026-07-19 on Cursor CLI 2026.07.16-899851b. This CLI has no effort flag: `low\|medium\|high` map to `cursor-grok-4.5-{low,medium,high}`, all three exercised end to end. `fm-spawn`'s `cursor_model_with_effort` folds the axis in; `xhigh`/`max` cap at `high`, an already-tiered or `[...]`-parameterized model id is never retiered, and `-fast` variants are a separate cost/speed choice never selected implicitly. |
 | kimi | `--model <model>` | none for firstmate's interactive launch | Verified 2026-07-23 on Kimi Code 0.27.0. Launch is `KIMI_CODE_HOME=... kimi --yolo --model kimi-code/k3`; brief is delivered after TUI settle. No verified effort flag on the interactive path. |
+| prime-agent | `--model <provider/model>` | `--thinking <low\|medium\|high\|xhigh\|max>` | Verified 2026-08-07 on v0.7.0. `--help` advertises `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`; `--thinking xhigh` exercised live. `--model` is always emitted explicitly: the CLI's own default is a paid route, and `fm-spawn` refuses non-subscription-quota routes (see the prime-agent section). |
 
 When a requested effort value is outside the harness-specific accepted set, `fm-spawn` records the requested `effort=` in meta but emits no effort flag for that harness.
 This preserves launch success instead of passing a known-bad value.
@@ -185,6 +186,7 @@ Natural language is acceptable if uncertain.
 - pi: no separate verified skill invocation beyond normal command behavior; use natural language if the exact skill command is uncertain.
 - cursor: `/<skill>`, for example `/no-mistakes`. Typing `/` opens an autocomplete popup, but unlike grok and codex the FIRST Enter both completes and EXECUTES the highlighted entry (verified: `/ex` plus one Enter ran `/exit`). There is no two-Enter hazard; the inverse risk is that a partially typed command runs whichever entry is highlighted, so send the full command name.
 - grok: `/<skill>`, for example `/no-mistakes` (same form as claude). Verified end to end: grok discovers the user-level `no-mistakes` skill, `/no-mistakes` invokes it, and grok drives a real `no-mistakes axi run`. Like codex's `$`/`/` popups, typing `/<skill>` opens grok's slash-autocomplete, so a too-fast Enter selects the popup entry instead of sending, and for an argument-taking command (like `/no-mistakes`'s optional task-first argument) that first Enter only expands the popup selection into an argument-hint placeholder rather than submitting - a genuine second Enter is required (see the grok section below for the 2026-07-03 incident and fix). `fm_tmux_submit_core`'s retried Enter (used by `fm-send` on the tmux backend) already handles this correctly by reading the cursor row; the herdr backend needed a dedicated fix (`fm_backend_herdr_composer_state`, docs/herdr-backend.md) because its prior delta-based verification false-positived on that same popup-close content change.
+- prime-agent: `/` slash commands exist and extensions can register commands, but no-mistakes invocation is NOT verified on v0.7.0; use natural language if the exact skill command is uncertain.
 
 ## claude (VERIFIED)
 
@@ -355,6 +357,45 @@ Backend applicability: tmux is verified. herdr is composer-safe by construction 
 Liveness: cursor's wrapper execs node, so `#{pane_current_command}` is `node`; `bin/backends/tmux.sh` resolves that through argv, where the versioned `cursor-agent/.../index.js` path survives `exec -a`, and returns `alive`. Any other bare node stays `unknown`, never dead.
 
 No status-line, footer, or terminal-UI API exists for third parties (only plugins contributing hooks/commands/agents/skills/MCP), so cross-orchestrator status-bar parity cannot use a native cursor API.
+
+## prime-agent (WORKER verified 2026-08-07 on v0.7.0, source tag be9e2fa)
+
+Prime Agent (Prime Intellect), a hard fork of pi whose TUI is a thin client over a per-session daemon worker.
+`docs/prime-agent-harness.md` owns the dated evidence, exact commands, and raw output; the facts below are the operating summary.
+Pin the version: the project releases daily and ships no npm package (install is the release installer or a source build).
+
+| Fact | Value |
+|---|---|
+| Busy-pane signature | `(Waiting\|Thinking\|Executing) · [0-9]+s` - a braille-spinner row in the MESSAGES area (`⠴ Waiting · 0s`, `⠏ Thinking · 3s · ↓ 52 tokens`, `⠹ Executing · 19s · ↑ 111 tokens`). Never match the bare state word (model prose can contain `Thinking`) and never the footer. `Operation aborted · Ns` (post-interrupt) is deliberately not matched. In the shared `FM_BUSY_REGEX_DEFAULT`. |
+| Exit command | `/quit` - cleanly DETACHES the client and prints `Resume this session with: prime-agent --resume <session-id>`. The agent KEEPS RUNNING in the daemon. |
+| Interrupt | single `Ctrl+C` (verified: `Operation aborted · 2s`, pane and process survive, composer idle) |
+| Autonomy | `--autonomous` (+ `--autonomous-max-turns/-max-continuations/-max-tokens/-timeout-ms`, repeatable `--autonomous-gate`); budget exhaustion exits 1 with a clear stderr reason, natural stop exits 0 |
+| Env marker | `PRIME_AGENT_INTERNAL_DAEMON_WORKER`, `PRIME_AGENT_CODING_AGENT_DIR`, `PRIME_AGENT_KERNEL_VENV`, `PRIME_AGENT_LAUNCHER_PATH`, `PRIME_AGENT_BUILD_ID`. It ALSO sets `PI_CODING_AGENT=true` (inherited from pi), so `bin/fm-harness.sh` tests the PRIME_AGENT_* markers FIRST - same shape as CURSOR_AGENT before CLAUDECODE. |
+| Resume | `prime-agent -c` or `-r <session-id>` (id printed on /quit, shown in `list`); restores the daemon-backed session with full context |
+| Trust | None - pi's trust mechanism was removed upstream; no dialog on first launch in a fresh directory |
+| Turn-end | pi-fork extension API: `pi.on("turn_end")` via `-e <path>` (verified live: marker touched at every turn boundary). No hooks.json - "hooks have been renamed to extensions". `fm-spawn` writes `state/<id>.prime-ext.ts` outside the worktree. |
+| Liveness | pane COMM is `node` but the CLI sets `process.title = "prime-agent"`, so the foreground node's argv/comm reads `prime-agent` (verified on macOS). tmux liveness resolves node+argv exactly like cursor. The real agent lives in a daemon worker OUTSIDE the pane. |
+| Launch | `PRIME_AGENT_CODING_AGENT_DIR=<task state> PRIME_AGENT_KERNEL_VENV=<task state>/kernel-venv prime-agent --daemon-socket <task state>/daemon.sock -e <turn-end ext> --model <validated route> [--thinking <effort>] "$(cat <brief>)"` (a positional brief starts the session, like pi). |
+
+**Daemon persistence changes supervision semantics.** The agent survives `/quit`, pane kill, and terminal loss (verified: `prime-agent list` showed the detached session with 0 clients after the TUI exited).
+A dead pane is NOT a stopped worker.
+`fm-spawn` gives every task its own daemon socket because the default socket is per-USER shared (`$TMPDIR/prime-agent-<uid>/daemon.sock`): without it, one task's `list`/`stop` sees and hits every task's agents, and a bare `prime-agent shutdown --force` sweeps ALL discovered daemons (it rejects socket flags).
+Management commands take the socket flag AFTER the subcommand (`prime-agent list --daemon-socket <path>`, `prime-agent stop <id> --daemon-socket <path>`); a flag before the subcommand is misparsed as a positional prompt (verified: it launched a run on the PAID default model and 401'd).
+Teardown order is load-bearing (all verified 2026-08-07): the TUI client auto-relaunches its daemon supervisor on reconnect, so `fm-teardown` runs the daemon stop only AFTER the endpoint is dead; a live session worker watches its supervisor and launches a REPLACEMENT when it dies, so workers are killed before the supervisor (worker sockets are namespaced by the task's supervisor hash, `$TMPDIR/prime-agent-<uid>/worker-<hash>-*.sock`, the hash recovered from the task's `.supervisor-launch-<hash>.lock`); the supervisor itself lingers after its last session stops and is TERM'd by the socket it listens on (its argv is title-rewritten to bare `prime-agent`, so the socket is the only ownership handle).
+
+**Containment needs BOTH env vars** (fm-spawn's template sets them): `PRIME_AGENT_CODING_AGENT_DIR` relocates sessions/auth/logs/daemon state; the kernel venv is hardcoded to `~/.prime/agent/kernel-venv` unless `PRIME_AGENT_KERNEL_VENV` is set (verified: an ipykernel ran from the task-contained venv and no `~/.prime` existed after the lab).
+Auth is `<agentDir>/auth.json`; fm-spawn symlinks the operator's `~/.prime/agent/auth.json` (override `FM_PRIME_AGENT_SOURCE_HOME`) so token refreshes propagate, the same posture as the kimi worker-home links.
+
+**Model routes are quota-guarded at spawn.** Subscription-quota routes only: `opencode/big-pickle`, `opencode/*-free` (OpenCode Zen free models), and `openai-codex/*` (ChatGPT Plus/Pro Codex subscription OAuth).
+`anthropic/*` is REFUSED: it bills per-token extra usage even on a Claude Pro/Max OAuth login (verified $0.1845 for a one-line probe, trial leg 2).
+Every other `opencode/*` id needs paid Zen billing (verified: 401 CreditsError on `opencode/gpt-5.6-sol`).
+An absent `--model` folds to `opencode/deepseek-v4-flash-free` because the CLI's own default is a paid route.
+The guard is `prime_agent_model_route_ok` in `bin/fm-spawn.sh`, regression-covered by `tests/fm-prime-agent-adapter.test.sh`.
+
+**Composer.** Idle composer is a BARE ` > ` row with a rotating dark-truecolor ghost placeholder (` >   Try "add tests for @<filepath>"`; fg 38;2;113;113;122, under the ghost-luminance ceiling, so the shared stripper already drops it; the `Try "..."` pattern is also in the shared idle regex as the plain-row backstop).
+The stripped row reduces to the lone `>` glyph, which the shared dead-shell rule would read `unknown` - so the tmux composer reader promotes the row to a structurally-identified agent prompt row ONLY on panes positively identified as prime-agent (node COMM + prime-agent argv), the same scoping class as cursor's structural fix.
+
+Backend applicability: tmux only. herdr, zellij, orca, and cmux were not exercised with prime-agent.
 
 ## grok (VERIFIED 2026-06-29, grok 0.2.73; slash-submit re-verified 2026-07-03 on 0.2.82; reasoning-effort ceiling re-verified 2026-07-13 on 0.2.99; exit paths re-verified upstream 2026-07-19 on grok 0.2.103)
 

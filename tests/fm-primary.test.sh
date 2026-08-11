@@ -228,7 +228,7 @@ test_kimi_primary_only_profile() {
   jq -e '.plugins | map(.id) | contains(["operator-plugin", "firstmate-primary"])' \
     "$managed/plugins/installed.json" >/dev/null 2>&1 \
     || fail "managed Kimi registry did not preserve the operator's existing plugins"
-  assert_contains "$(sed -n '1,90p' "$ROOT/bin/fm-spawn.sh")" 'claude|codex|opencode|pi|grok|cursor|kimi' \
+  assert_contains "$(sed -n '1,90p' "$ROOT/bin/fm-spawn.sh")" 'claude|codex|opencode|pi|grok|cursor|kimi|prime-agent' \
     "documented verified worker set missing kimi after worker certification"
   pass "fm-primary: Kimi is pinned, isolated, lifecycle-integrated, and worker-certified separately"
 }

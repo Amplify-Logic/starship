@@ -3,7 +3,7 @@
 #
 # These tests use a fake tmux endpoint and real isolated git worktrees.
 # The missing-binary case asserts refusal before tmux is touched or task meta is written.
-# The healthy cases assert all seven verified launch templates still reach the normal spawn path.
+# The healthy cases assert all eight verified launch templates still reach the normal spawn path.
 # Raw launch commands remain exempt because arbitrary shell syntax cannot be resolved reliably without executing it.
 set -u
 
@@ -14,7 +14,7 @@ SPAWN="$ROOT/bin/fm-spawn.sh"
 TMP_ROOT=$(fm_test_tmproot fm-spawn-launch-preflight)
 
 make_spawn_case() {
-  local name=$1 harness=$2 launch_binary=${3:-}
+  local name=$1 harness=$2 launch_binary=${3:-} short_state=${4:-}
   CASE_DIR="$TMP_ROOT/$name"
   HOME_DIR="$CASE_DIR/home"
   PROJ_DIR="$CASE_DIR/project"
@@ -24,8 +24,23 @@ make_spawn_case() {
   PROBE_LOG="$CASE_DIR/probe.log"
   ID="preflight-$name"
   FAKEBIN_DIR=$(fm_fakebin "$CASE_DIR")
+  STATE_DIR_SHORT=
 
-  mkdir -p "$HOME_DIR/data/$ID" "$HOME_DIR/projects" "$HOME_DIR/state" "$HOME_DIR/config"
+  mkdir -p "$HOME_DIR/data/$ID" "$HOME_DIR/projects" "$HOME_DIR/config"
+  if [ "$short_state" = 1 ]; then
+    # prime-agent's per-task daemon socket lives under the state dir and AF_UNIX
+    # caps sun_path at 104 bytes, so a TMPDIR-anchored state home is a REAL
+    # runtime refusal on macOS, not a test artifact. These cases get a short
+    # state dir, symlinked so $HOME_DIR/state assertions keep working. The
+    # guard measures the PHYSICAL path (/tmp resolves to /private/tmp on
+    # macOS), so the template must stay short enough for the longest case id
+    # after that resolution.
+    STATE_DIR_SHORT=$(mktemp -d /tmp/pa.XXXXXX)
+    FM_TEST_CLEANUP_DIRS+=("$STATE_DIR_SHORT")
+    ln -s "$STATE_DIR_SHORT" "$HOME_DIR/state"
+  else
+    mkdir -p "$HOME_DIR/state"
+  fi
   printf '%s\n' "$harness" > "$HOME_DIR/config/crew-harness"
   printf 'brief for %s\n' "$ID" > "$HOME_DIR/data/$ID/brief.md"
   fm_git_worktree "$PROJ_DIR" "$WT_DIR" "wt-$name"
@@ -73,11 +88,12 @@ SH
 
 run_spawn() {
   FM_ROOT_OVERRIDE='' FM_HOME="$HOME_DIR" \
-    FM_STATE_OVERRIDE="$HOME_DIR/state" FM_DATA_OVERRIDE="$HOME_DIR/data" \
+    FM_STATE_OVERRIDE="${STATE_DIR_SHORT:-$HOME_DIR/state}" FM_DATA_OVERRIDE="$HOME_DIR/data" \
     FM_PROJECTS_OVERRIDE="$HOME_DIR/projects" FM_CONFIG_OVERRIDE="$HOME_DIR/config" \
     FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$WT_DIR" TMUX="fake,1,0" \
     FM_FAKE_ENDPOINT_LOG="$ENDPOINT_LOG" FM_FAKE_LAUNCH_LOG="$LAUNCH_LOG" \
     FM_FAKE_PROBE_LOG="$PROBE_LOG" GROK_HOME="$HOME_DIR/grok-home" \
+    FM_PRIME_AGENT_SOURCE_HOME="$HOME_DIR/no-prime-home" \
     PATH="$FAKEBIN_DIR:/usr/bin:/bin" "$SPAWN" "$@" 2>&1
 }
 
@@ -103,11 +119,11 @@ test_missing_verified_binary_refuses_before_endpoint_creation() {
 }
 
 test_present_verified_binaries_spawn_as_before() {
-  local harness launch_binary out status
+  local harness launch_binary short_state out status
   # kimi post-launch brief settle is irrelevant to preflight; keep the suite fast.
   export FM_KIMI_BRIEF_SETTLE_SECS=0
-  while IFS='|' read -r harness launch_binary; do
-    make_spawn_case "present-$harness" "$harness" "$launch_binary"
+  while IFS='|' read -r harness launch_binary short_state; do
+    make_spawn_case "present-$harness" "$harness" "$launch_binary" "$short_state"
 
     out=$(run_spawn "$ID" "$PROJ_DIR")
     status=$?
@@ -119,15 +135,16 @@ test_present_verified_binaries_spawn_as_before() {
     assert_present "$HOME_DIR/state/$ID.meta" "$harness healthy spawn did not write task meta"
     cleanup_task_tmp "$ID"
   done <<'EOF'
-claude|claude
-codex|codex
-opencode|opencode
-pi|pi
-grok|grok
-cursor|agent
-kimi|kimi
+claude|claude|
+codex|codex|
+opencode|opencode|
+pi|pi|
+grok|grok|
+cursor|agent|
+kimi|kimi|
+prime-agent|prime-agent|1
 EOF
-  pass "all seven verified adapters preflight and spawn normally when their binaries are present"
+  pass "all eight verified adapters preflight and spawn normally when their binaries are present"
 }
 
 test_raw_launch_command_remains_exempt() {
@@ -266,6 +283,62 @@ test_invalid_probe_timeout_knob_refuses() {
   pass "invalid probe timeout knob is refused before endpoint creation"
 }
 
+test_prime_agent_default_model_folds_to_free_route() {
+  local out status launch
+  make_spawn_case pa-default prime-agent prime-agent 1
+
+  out=$(run_spawn "$ID" "$PROJ_DIR")
+  status=$?
+
+  expect_code 0 "$status" "prime-agent spawn with no --model should succeed"
+  launch=$(cat "$LAUNCH_LOG")
+  # The CLI's own default is a PAID route (verified 2026-08-07: a model-less
+  # launch 401s on the free Zen key), so fm-spawn always emits an explicit
+  # validated --model; absent --model folds to the verified-free Zen model.
+  assert_contains "$launch" "--model 'opencode/deepseek-v4-flash-free'" \
+    "prime-agent launch did not carry the folded free default model"
+  assert_contains "$launch" "PRIME_AGENT_CODING_AGENT_DIR=" "prime-agent launch lost its containment agent dir"
+  assert_contains "$launch" "PRIME_AGENT_KERNEL_VENV=" "prime-agent launch lost its kernel-venv containment"
+  assert_contains "$launch" "--daemon-socket" "prime-agent launch lost its per-task daemon socket"
+  assert_grep "model=opencode/deepseek-v4-flash-free" "$HOME_DIR/state/$ID.meta" \
+    "prime-agent meta did not record the folded launch model"
+  cleanup_task_tmp "$ID"
+  pass "prime-agent absent --model folds to the verified-free route, contained and socket-scoped"
+}
+
+test_prime_agent_billed_route_refused_before_endpoint_creation() {
+  local out status model
+  for model in anthropic/claude-opus-5 anthropic/claude-pro-max opencode/gpt-5.6-sol openai/gpt-5; do
+    make_spawn_case "pa-billed-$(printf '%s' "$model" | tr '/.' '--')" prime-agent prime-agent 1
+
+    out=$(run_spawn "$ID" "$PROJ_DIR" --model "$model")
+    status=$?
+
+    expect_code 1 "$status" "billed/unverified prime-agent route $model should fail"
+    assert_contains "$out" \
+      "error: prime-agent model '$model' is not a subscription-quota route" \
+      "refusal for $model did not name the route guard"
+    [ ! -s "$ENDPOINT_LOG" ] || fail "billed-route refusal for $model touched tmux before failing"
+    assert_absent "$HOME_DIR/state/$ID.meta" "billed-route refusal for $model wrote task meta"
+  done
+  pass "prime-agent per-token-billed and unverified routes are refused before endpoint creation"
+}
+
+test_prime_agent_subscription_routes_pass_the_guard() {
+  local out status model
+  for model in opencode/big-pickle opencode/deepseek-v4-flash-free openai-codex/gpt-5.6-sol; do
+    make_spawn_case "pa-ok-$(printf '%s' "$model" | tr '/.' '--')" prime-agent prime-agent 1
+
+    out=$(run_spawn "$ID" "$PROJ_DIR" --model "$model")
+    status=$?
+
+    expect_code 0 "$status" "subscription-quota prime-agent route $model should spawn"
+    assert_contains "$out" "spawned $ID harness=prime-agent" "$model did not reach the healthy spawn path"
+    cleanup_task_tmp "$ID"
+  done
+  pass "prime-agent subscription-quota routes pass the guard"
+}
+
 test_missing_verified_binary_refuses_before_endpoint_creation
 test_present_verified_binaries_spawn_as_before
 test_raw_launch_command_remains_exempt
@@ -274,5 +347,8 @@ test_sigterm_ignoring_probe_is_killed_after_grace
 test_timed_out_probe_leaves_no_wrapper_descendants
 test_probe_closes_stdin
 test_invalid_probe_timeout_knob_refuses
+test_prime_agent_default_model_folds_to_free_route
+test_prime_agent_billed_route_refused_before_endpoint_creation
+test_prime_agent_subscription_routes_pass_the_guard
 
 echo "# all fm-spawn launch-preflight tests passed"

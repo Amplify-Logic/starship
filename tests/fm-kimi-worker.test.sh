@@ -13,7 +13,7 @@ test_kimi_launch_template_in_fm_spawn() {
     "kimi template missing isolated KIMI_CODE_HOME"
   # case lists must include kimi alongside the prior verified set
   local case_lists
-  case_lists=$(grep -cF 'claude|codex|opencode|pi|grok|cursor|kimi)' "$spawn" || true)
+  case_lists=$(grep -cF 'claude|codex|opencode|pi|grok|cursor|kimi|prime-agent)' "$spawn" || true)
   [ "$case_lists" -ge 2 ] || \
     fail "fm-spawn verified-adapter case lists missing kimi"
   pass "fm-spawn accepts kimi as a verified worker"
@@ -60,7 +60,7 @@ test_kimi_harness_doc_marks_verified() {
 test_harness_adapters_lists_kimi_worker() {
   local skill="$ROOT/.agents/skills/harness-adapters/SKILL.md"
   # shellcheck disable=SC2016  # backticks must stay literal in the skill prose
-  assert_grep 'The verified WORKER adapters are `claude`, `codex`, `opencode`, `pi`, `grok`, `cursor`, and `kimi`' "$skill" \
+  assert_grep 'The verified WORKER adapters are `claude`, `codex`, `opencode`, `pi`, `grok`, `cursor`, `kimi`, and `prime-agent`' "$skill" \
     "verified WORKER adapter list missing kimi"
   assert_grep 'thinking...' "$skill" "harness-adapters missing kimi busy fact"
   assert_grep 'Running a command' "$skill" "harness-adapters missing kimi tool-busy fact"

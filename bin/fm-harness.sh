@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Detect the agent harness this process tree runs on.
-# Usage: fm-harness.sh                  print own harness: claude|codex|opencode|pi|grok|kimi|cursor|unknown
+# Usage: fm-harness.sh                  print own harness: claude|codex|opencode|pi|grok|kimi|cursor|prime-agent|unknown
 #        fm-harness.sh crew             print the effective CREWMATE harness
 #                                        (config/crew-harness; "default" resolves to own)
 #        fm-harness.sh secondmate       print the harness the PRIMARY uses to launch
@@ -42,6 +42,24 @@ detect_own() {
   # ever set by cursor itself, so cursor-first is the unambiguous order.
   # Cursor is verified as both a WORKER adapter and a PRIMARY profile
   # (bin/fm-primary.sh cursor-grok); see the harness-adapters skill.
+  # prime-agent (Prime Intellect, a hard fork of pi) sets PI_CODING_AGENT=true
+  # for its children (inherited from pi), so it must be tested before the
+  # PI_CODING_AGENT marker below or a prime-agent worker misreports as pi and
+  # gets steered with pi's vocabulary; and like cursor it does not clear an
+  # INHERITED CLAUDECODE=1, so it must also precede the claude marker. Its own
+  # markers - PRIME_AGENT_INTERNAL_DAEMON_WORKER (set by the daemon worker),
+  # PRIME_AGENT_CODING_AGENT_DIR / PRIME_AGENT_KERNEL_VENV (set by firstmate's
+  # containment launch wrapper), PRIME_AGENT_LAUNCHER_PATH / PRIME_AGENT_BUILD_ID
+  # (set by the prime-agent.sh launcher) - are only ever set by prime-agent or
+  # its launch wrapper, so prime-agent-first is unambiguous, the same shape as
+  # CURSOR_AGENT below (verified 2026-08-06, v0.7.0; data/fm-prime-agent-trial-t1).
+  if [ -n "${PRIME_AGENT_INTERNAL_DAEMON_WORKER:-}" ] || \
+     [ -n "${PRIME_AGENT_CODING_AGENT_DIR:-}" ] || \
+     [ -n "${PRIME_AGENT_KERNEL_VENV:-}" ] || \
+     [ -n "${PRIME_AGENT_LAUNCHER_PATH:-}" ] || \
+     [ -n "${PRIME_AGENT_BUILD_ID:-}" ]; then
+    echo prime-agent; return
+  fi
   [ "${CURSOR_AGENT:-}" = "1" ] && { echo cursor; return; }
   [ "${CLAUDECODE:-}" = "1" ] && { echo claude; return; }
   [ "${PI_CODING_AGENT:-}" = "true" ] && { echo pi; return; }
@@ -54,6 +72,7 @@ detect_own() {
   for _ in 1 2 3 4 5 6 7 8; do
     comm=$(ps -o comm= -p "$pid" 2>/dev/null) || break
     case "$(basename -- "$comm")" in
+      *prime-agent*) echo prime-agent; return ;;
       *claude*) echo claude; return ;;
       *codex*) echo codex; return ;;
       *opencode*) echo opencode; return ;;
@@ -67,6 +86,10 @@ detect_own() {
           # Matched before *claude*: the cursor-agent bundle path is the specific
           # signal, and a cursor process tree can carry claude-compatible paths.
           *cursor-agent*) echo cursor; return ;;
+          # prime-agent's CLI sets process.title, so its node tree carries the
+          # prime-agent launcher/script path in argv; match it before the bare
+          # pi patterns, which its pi-fork ancestry could otherwise trip.
+          *prime-agent*) echo prime-agent; return ;;
           *claude*) echo claude; return ;;
           *codex*) echo codex; return ;;
           *opencode*) echo opencode; return ;;

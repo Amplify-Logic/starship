@@ -188,6 +188,7 @@ The full cmux home label also includes a short hash of the resolved `FM_ROOT` pa
 claude, codex, opencode, pi, and grok are empirically verified as both primary and worker adapters.
 cursor is empirically verified as a worker adapter and, separately, as a primary through `bin/fm-primary.sh cursor-grok` (see [`docs/cursor-harness.md`](cursor-harness.md)).
 Kimi Code 0.27.0 is empirically certified as a primary runtime through `bin/fm-primary.sh kimi-k3` and, separately, verified as a worker adapter that `fm-spawn` accepts via `--harness kimi` (see [`docs/kimi-harness.md`](kimi-harness.md)).
+prime-agent (Prime Intellect, a pi hard fork) is verified as a worker adapter only, pinned at v0.7.0, with per-task containment and daemon-aware teardown (see [`docs/prime-agent-harness.md`](prime-agent-harness.md)); `fm-spawn` refuses per-token-billed model routes for it.
 Because Kimi ships a self-updater, that primary launch warns instead of blocking when the running build is neither of the two evidenced builds recorded in `bin/fm-primary.sh`, the certified 0.27.0 and the newer re-verified 0.31.1; `kimi doctor` against the managed home remains the functional gate.
 The verified adapter knowledge - busy signatures, interrupt and exit commands, skill-invocation syntax, and per-harness quirks - lives in [`.agents/skills/harness-adapters/SKILL.md`](../.agents/skills/harness-adapters/SKILL.md).
 Launch mechanics, including the verified command templates, live in [`bin/fm-spawn.sh`](../bin/fm-spawn.sh).
