@@ -337,8 +337,12 @@ It emits `SECONDMATE_SYNC:` only when a home was skipped for an actionable sync 
 When a running home advances and its loaded instruction surface (`AGENTS.md`, `bin/`, or `.agents/skills/`) changed, bootstrap sends the re-read nudge itself through the stable `fm-<id>` selector and reports the exact completed send as `BOOTSTRAP_INFO:`.
 If that send fails, bootstrap keeps an idempotent retry marker and emits `NUDGE_SECONDMATES:` with the failure reason.
 The same bootstrap run emits `SECONDMATE_LIVENESS:` only when a live secondmate endpoint is skipped or respawn fails; already-live and successfully respawned endpoints are handled silently.
-For a mid-session inherited local-material edit where tracked-file sync and reread nudges are not needed, run `bin/fm-config-push.sh`.
-It uses the same live secondmate discovery and propagation helper as bootstrap, prints each live home's `crew-dispatch.json`, `crew-harness`, `backlog-backend`, and `data/captain-shared.md` result as `pushed`, `unchanged`, `skipped`, or `error`, and exits non-zero only for real propagation errors.
+For a mid-session inherited local-material edit where tracked-file sync is not needed, run `bin/fm-config-push.sh`.
+It uses the same live secondmate discovery and propagation helper as bootstrap, prints each live home's `crew-dispatch.json`, `crew-harness`, `backlog-backend`, and `data/captain-shared.md` result as `pushed`, `unchanged`, `skipped`, or `error`, and exits non-zero for real propagation errors or config-reread delivery failures.
+When allowlisted config changes for an already-running home, it sends only a self-describing reread imperative naming the private exact-content instruction owned by `secondmate-provisioning`; unchanged config sends no message unless an earlier generation remains pending.
+The locked bootstrap inheritance pass uses the same per-home changed-set and reread path for already-running homes, with exact post-write bytes pinned before instruction assembly so later retries never rebuild a generation from mutable destination files.
+Each of those writers waits a bounded `FM_CONFIG_INHERIT_LOCK_WAIT_SECS` for the destination home's inheritance lock; a home whose lock is still held by a running spawn or push is reported as a `CONFIG_REREAD:` send failure and retried from its pending generation on the next run instead of blocking the sweep.
+The routed receiver message is a distinct self-describing imperative that tells the secondmate to re-read and apply the exact contents from the named private instruction path, while `CONFIG_REREAD:` remains reserved for sender-side failure diagnostics.
 That live discovery starts from `state/*.meta` records with `kind=secondmate`; `data/secondmates.md` only backfills `home=` for older or incomplete meta records.
 Skipped items, such as a destination checkout that does not yet gitignore the item, are visible warnings but not hard failures.
 
@@ -471,6 +475,7 @@ FMX_X_THREAD_MAX=25     # maximum messages in one auto-split reply thread
 FMX_FOLLOWUP_MAX_AGE_SECS=604800   # local window for posting X-mode completion follow-ups (7 days)
 FMX_FOLLOWUP_MAX_COUNT=3   # local cap on X-mode completion follow-ups per linked mention
 FM_LOCK_STALE_AFTER=2   # seconds before dead-pid lock records can be reclaimed; mid-acquire locks keep at least 2s grace
+FM_CONFIG_INHERIT_LOCK_WAIT_SECS=30   # bounded wait for a secondmate home's inheritance lock before bootstrap, fm-config-push, or spawn reports it instead of blocking; blank, zero, or non-numeric resets to 30
 FM_GUARD_GRACE=300      # seconds before guard warnings, arm health checks, and the primary turn-end guard treat a watcher beacon as stale
 FM_ARM_CONFIRM_TIMEOUT=10   # seconds fm-watch-arm waits to confirm a fresh watcher before reporting FAILED
 FM_ARM_ATTACH_POLL=0.5  # seconds between checks while fm-watch-arm is attached to an existing healthy watcher cycle

@@ -73,10 +73,10 @@ a false exit is self-correcting (the captain re-runs `/afk`).
 
 ## Orthogonal to approval authority
 
-afk changes how aggressively firstmate surfaces things, **not who approves
-what**. "Away" never means "approves more." A PR ready for merge, a
-needs-decision finding, or anything destructive still waits for the captain's
-explicit word - the daemon just batches the notification.
+afk changes how aggressively firstmate surfaces things, **not who approves what**.
+"Away" never means "approves more" or "approves less."
+While away mode is active, a PR ready for merge, a needs-decision finding, or anything destructive, irreversible, or security-sensitive still waits for the captain's explicit word, whatever authority `AGENTS.md` section 7 configures and whatever the project's `yolo` posture is.
+The daemon only batches the notification.
 
 ## Sentinel marker contract
 

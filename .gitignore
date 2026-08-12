@@ -18,3 +18,4 @@ __pycache__/
 .cursor/hooks.json
 .opencode/plugins/fm-turn-end.js
 .fm-grok-turnend
+.fm-lint-parity.*

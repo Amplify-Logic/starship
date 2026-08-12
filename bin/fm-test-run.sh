@@ -117,7 +117,8 @@ now_ms() {
 # unclassified so new tests are still runnable and visible in summaries.
 family_for_basename() {
   case "$1" in
-    fm-action-gateway-v2.test.sh|fm-arm-pretool-check.test.sh|fm-brief.test.sh|fm-captain-translation-contract.test.sh|\
+    fm-action-gateway-v2.test.sh|fm-arm-pretool-check.test.sh|fm-ask-user-authority.test.sh|\
+    fm-brief.test.sh|fm-captain-translation-contract.test.sh|\
     fm-cd-pretool-check.test.sh|fm-composer-ghost.test.sh|fm-composer-lib.test.sh|\
     fm-continuity-pretool-check.test.sh|fm-crew-state.test.sh|fm-decision-hold-lifecycle.test.sh|\
     fm-decision-surface.test.sh|fm-dispatch-select.test.sh|fm-ensure-agents-md.test.sh|fm-grok-harness.test.sh|\

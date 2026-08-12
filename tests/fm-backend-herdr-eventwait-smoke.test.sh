@@ -35,7 +35,7 @@ cleanup_all() {
 trap cleanup_all EXIT
 fm_herdr_lab_prepare "$SESSION" || fail "could not prepare the isolated Herdr lab session"
 
-# shellcheck source=bin/fm-backend.sh
+# shellcheck source=/dev/null
 . "$ROOT/bin/fm-backend.sh"
 fm_backend_source herdr || fail "fm_backend_source herdr failed"
 
@@ -115,7 +115,7 @@ pass "real herdr ($HERDR_VERSION): a driven idle->blocked transition returns the
 # handle_push_transition enqueues without exiting the test.
 export FM_STATE_OVERRIDE="$STATE"
 export FM_ROOT_OVERRIDE="$ROOT"
-# shellcheck source=bin/fm-watch.sh
+# shellcheck source=/dev/null
 . "$ROOT/bin/fm-watch.sh"
 wake() { return 0; }
 handle_push_transition herdr "$SESSION" "$REC"

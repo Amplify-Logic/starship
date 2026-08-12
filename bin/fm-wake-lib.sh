@@ -384,11 +384,28 @@ fm_lock_try_acquire() {
   return "$rc"
 }
 
+# fm_lock_acquire_wait <lockdir> [timeout-seconds]
+# Without a positive timeout this waits indefinitely and always returns 0.
+# fm_lock_try_acquire only steals from a dead holder, so a caller that must not
+# block behind a live-but-wedged holder passes a bound and handles the failure:
+# with a positive timeout this returns 1 once the deadline passes.
 fm_lock_acquire_wait() {
-  local lockdir=$1
+  local lockdir=$1 timeout=${2:-} deadline
+  case "$timeout" in
+    ''|*[!0-9]*) timeout=0 ;;
+  esac
+  if [ "$timeout" -le 0 ]; then
+    while ! fm_lock_try_acquire "$lockdir"; do
+      sleep 0.1
+    done
+    return 0
+  fi
+  deadline=$(($(date +%s) + timeout))
   while ! fm_lock_try_acquire "$lockdir"; do
+    [ "$(date +%s)" -lt "$deadline" ] || return 1
     sleep 0.1
   done
+  return 0
 }
 
 fm_lock_release() {

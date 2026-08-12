@@ -19,7 +19,7 @@ BRIEF="$ROOT/bin/fm-brief.sh"
 
 test_new_skill_metadata_and_triggers() {
   local skill name count
-  for pair in "diagnostic-reasoning:$DIAG" "project-management:$PROJECT"; do
+  for pair in "diagnostic-reasoning:$DIAG" "project-management:$PROJECT" "ask-user-authority:$ROOT/.agents/skills/ask-user-authority/SKILL.md"; do
     name=${pair%%:*}
     skill=${pair#*:}
     assert_present "$skill" "$name skill is missing"
@@ -33,9 +33,9 @@ test_new_skill_metadata_and_triggers() {
     "diagnostic skill metadata lost its precise load trigger"
   assert_grep '`diagnostic-reasoning` - load before scoping a reported bug and before acting on a diagnostic report.' "$ROOT/AGENTS.md" \
     "AGENTS.md lost the diagnostic-reasoning trigger"
-  assert_grep 'Use before adding, creating, removing, or initializing a project.' "$PROJECT" \
+  assert_grep 'Use before adding, cloning, creating, registering, removing, or initializing a project.' "$PROJECT" \
     "project-management skill metadata lost its precise load trigger"
-  assert_grep '`project-management` - load before adding, creating, removing, or initializing a project.' "$ROOT/AGENTS.md" \
+  assert_grep '`project-management` - load before adding, cloning, creating, registering, removing, or initializing a project.' "$ROOT/AGENTS.md" \
     "AGENTS.md lost the project-management trigger"
   pass "new internal skills have one precise AGENTS.md trigger each"
 }
@@ -71,7 +71,10 @@ test_project_management_owner_covers_guarded_operations() {
     'Creating a GitHub repository is outward-facing.' \
     "captain's explicit consent" \
     'Never issue a raw removal command from Firstmate.' \
-    'no-mistakes init && no-mistakes doctor'; do
+    'no-mistakes init && no-mistakes doctor' \
+    'inspect the authoritative `data/secondmates.md` routing table' \
+    'If no second mates are registered or no scope fits, continue in the main home' \
+    'route privileged outward actions through the action gateway'; do
     assert_grep "$phrase" "$PROJECT" "project-management owner is missing '$phrase'"
   done
   pass "project-management owns registry, delivery posture, consent, initialization, and removal safety"
@@ -109,7 +112,11 @@ test_shared_authoring_requirements_are_owned() {
     "coding guidance lost deterministic idempotent enforcement"
   assert_grep "critical safety, routing, startup, and supervision infrastructure" "$CODING" \
     "coding guidance lost the critical infrastructure scope"
-  pass "firstmate-coding-guidelines owns compatibility review and deterministic enforcement"
+  assert_grep "Keep current guidance separate from verification evidence" "$CODING" \
+    "coding guidance lost the current-guidance/evidence boundary"
+  assert_grep "Task chronology, branches, temporary paths, failed hypotheses" "$CODING" \
+    "coding guidance lost private task-evidence placement"
+  pass "firstmate-coding-guidelines owns compatibility, enforcement, and evidence placement"
 }
 
 test_secondmate_registry_contract_stays_concise() {
@@ -177,7 +184,7 @@ test_compressed_agents_owner_map() {
     "AGENTS.md lost the session-start owner pointer"
   assert_grep '`docs/configuration.md` owns dispatch-profile and runtime-backend schemas' "$AGENTS" \
     "AGENTS.md lost the dispatch-schema owner pointer"
-  assert_grep 'That skill owns registry syntax, delivery-mode selection' "$AGENTS" \
+  assert_grep 'That skill owns registry syntax, secondmate-scope intake, delivery-mode selection' "$AGENTS" \
     "AGENTS.md lost the project-management owner pointer"
   assert_grep 'The delivery lifecycle is an always-loaded operational contract' "$AGENTS" \
     "AGENTS.md no longer owns the delivery lifecycle"
@@ -190,6 +197,31 @@ test_compressed_agents_owner_map() {
   assert_grep '`docs/configuration.md` owns activation, generated state, cadence, wire protocol' "$AGENTS" \
     "AGENTS.md lost the X-mode mechanics owner pointer"
   pass "compressed AGENTS.md records the approved one-owner map"
+}
+
+test_intake_reuses_evidence_and_parallelizes_safe_work() {
+  for phrase in \
+    'consult existing reports and established evidence' \
+    'keep bounded research inside that task' \
+    'unresolved uncertainty could materially change whether or what to build' \
+    'relay it without a design-only scout' \
+    'ask one concise implementation question when useful' \
+    'Never both present a likely-enough solution' \
+    'overlap as a risk signal rather than an automatic reason to wait' \
+    'independently implemented and validated' \
+    'selected delivery path can reconcile ordinary rebases or conflicts' \
+    'Serialize only for a true semantic dependency' \
+    'shared mutable external state' \
+    'incompatible concurrent migration' \
+    'Same-file editing alone is insufficient' \
+    'genuine blockers remain durable'; do
+    assert_grep "$phrase" "$AGENTS" "intake contract lost '$phrase'"
+  done
+  assert_grep 'dispatch isolated work immediately with no concurrency cap' "$AGENTS" \
+    "intake contract lost unbounded safe parallel dispatch"
+  assert_grep 'Implementation requires a separate request or other clear implementation scope.' "$AGENTS" \
+    "intake changes weakened implementation authority"
+  pass "intake reuses evidence, reserves scouts for useful uncertainty, and parallelizes safe work"
 }
 
 test_compressed_agents_retains_authority_and_supervision_safety() {
@@ -229,4 +261,5 @@ test_shared_authoring_requirements_are_owned
 test_secondmate_registry_contract_stays_concise
 test_state_startup_and_ordinary_recovery_placement
 test_compressed_agents_owner_map
+test_intake_reuses_evidence_and_parallelizes_safe_work
 test_compressed_agents_retains_authority_and_supervision_safety

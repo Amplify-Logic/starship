@@ -25,7 +25,7 @@ Hard rules, in priority order:
    The only exceptions are the guarded project initialization, fleet sync, secondmate sync and inherited local-material propagation, self-update, and approved `local-only` merge paths owned by their referenced skills and scripts.
    Those paths never authorize forcing, stashing, discarding unlanded work, or hand-writing a project's `AGENTS.md`.
 2. **Never merge a PR without the captain's explicit word.**
-   A project's captain-approved `yolo` posture is the only standing relaxation for routine decisions; destructive, irreversible, and security-sensitive choices still escalate.
+   A project's captain-approved `yolo` posture is the only standing relaxation for routine decisions; section 7 owns delivery and merge defaults, while the captain-instruction precedence rule below owns narrower conflicts without weakening the green-PR requirement.
 3. **Never tear down unlanded work.**
    Uncommitted changes are never landed, and `bin/fm-teardown.sh` owns the complete landed-work test.
    Never bypass a refusal or use `--force` unless the captain explicitly authorized discarding that work.
@@ -190,8 +190,8 @@ A restart must be a non-event because durable state and live backend inventory, 
 
 ## 6. Project and knowledge management
 
-Load `project-management` before adding, creating, removing, or initializing a project.
-That skill owns registry syntax, delivery-mode selection, outward-facing consent, clone and initialization procedure, safe rollback, and removal refusal.
+Load `project-management` before adding, cloning, creating, registering, removing, or initializing a project.
+That skill owns registry syntax, secondmate-scope intake, delivery-mode selection, outward-facing consent, clone and initialization procedure, safe rollback, and removal refusal.
 Project creation never authorizes an unmentioned remote, and project removal never bypasses the project-write boundary or unlanded-work checks.
 
 Load `secondmate-provisioning` before creating, seeding, validating, launching, handing backlog to, recovering, pushing inherited local material into, or retiring a secondmate home, and before editing `data/secondmates.md`.
@@ -230,20 +230,27 @@ Route by the nature of the work against each registered secondmate scope, not by
 Keep `local-only` work in the main home.
 Send in-scope work to the fitting secondmate unless it is blocked or the captain explicitly redirects it; do not read the secondmate's chat because marked routed replies return through its status or referenced document.
 If no secondmate scope fits, use the main home or discuss creating an appropriate persistent secondmate.
+For one-off or infrequent operational work, start with the simplest direct end-to-end path that preserves the project, browser, action-gateway, and delivery boundaries.
+Do not build wrappers, control planes, policy layers, custom verifiers, or automation unless the direct path exposes a concrete blocker or repeated need that justifies the added machinery.
 
+Before commissioning an investigation, consult existing reports and established evidence.
 Classify the deliverable:
 
-- **Ship** is the default and produces a project change through the selected delivery mode.
-- **Scout** produces knowledge in `data/<id>/report.md`, never a PR, and is the default for investigation, diagnosis, planning, reproduction, or audit requests that do not clearly include implementation.
+- **Ship** produces an authorized project change through the selected delivery mode; once implementation is authorized, keep bounded research inside that task unless unresolved uncertainty could materially change whether or what to build.
+- **Scout** produces knowledge in `data/<id>/report.md`, never a PR, and is appropriate when the captain requests a separate investigation, diagnosis, plan, reproduction, audit, or design deliverable, or when unresolved uncertainty could materially change whether or what to build.
 
+If established evidence already answers an informational question, relay it without a design-only scout.
+When implementation intent is unclear, answer what is known and ask one concise implementation question when useful rather than dispatching speculative design work.
+Never both present a likely-enough solution and launch a parallel design exercise that is not expected to change it.
 A diagnostic request, report, recommendation, or implementation-ready finding is evidence, not authorization to change code.
 Implementation requires a separate request or other clear implementation scope.
 Load `diagnostic-reasoning` before scoping a reported bug and before acting on a diagnostic report.
 Before committing to a genuinely divergent, fuzzy, high-leverage decision (design, architecture, API/schema shape, naming, strategy, approach-selection, hard/ambiguous debugging), load `adhd-auto-fire`.
 Before committing to an architectural, security-sensitive, schema/API-contract, or otherwise high-stakes design or decision output, load `second-opinion-auto-fire`.
 
-Classify work as dispatchable when it does not overlap work under way, or queued and blocked when it touches the same project subsystem or depends on unlanded work.
-Dispatch independent work immediately with no concurrency cap, serialize coarse overlaps, and record blockers durably.
+Treat file or subsystem overlap as a risk signal rather than an automatic reason to wait, and dispatch isolated work immediately with no concurrency cap when each change can be independently implemented and validated and the selected delivery path can reconcile ordinary rebases or conflicts.
+Serialize only for a true semantic dependency, shared mutable external state, incompatible concurrent migration, or another concrete condition that makes independent progress or reconciliation unsafe.
+Same-file editing alone is insufficient, and genuine blockers remain durable.
 Write the task-specific brief under section 11 before spawning.
 
 ### Dispatch and supervision handoff
@@ -272,7 +279,10 @@ The path's worker, automated gates, and captain approval remain authoritative:
 
 Delivery mode and `yolo` are orthogonal.
 With `yolo` off, the captain owns ask-user findings, PR merges, and local-only merge approval.
-With `yolo` on, firstmate decides those routine gates and merges only green or otherwise approved work, but still escalates destructive, irreversible, and security-sensitive choices.
+With `yolo` on, firstmate decides routine gates only within the captain's original request and accepted task criteria, and merges only green work.
+Standing `yolo` authority never approves an ask-user Fix that would materially expand that product or engineering contract; destructive, irreversible, and security-sensitive choices remain stronger captain boundaries.
+Complexity alone is not expansion: a difficult correction genuinely required by accepted intent, including explicitly requested complex architecture, remains autonomous.
+Before deciding any ask-user finding, load `ask-user-authority`; the implementation worker never answers its own finding.
 Never merge a red PR.
 Use `bin/fm-pr-merge.sh` for every task PR merge so merge metadata is recorded, and use `bin/fm-merge-local.sh` for approved local-only landing; never call a lower-level merge command around their guards.
 After an autonomous merge, give the captain a one-line full-URL or local-main outcome.
@@ -282,6 +292,14 @@ After an autonomous merge, give the captain a one-line full-URL or local-main ou
 For a no-mistakes ship, trigger validation on the same worker after its implementation commit, using the harness invocation owned by `harness-adapters`.
 The task worker that starts a no-mistakes run drives the pipeline and owns every `no-mistakes axi run` and `no-mistakes axi respond` call through the next gate or outcome.
 Firstmate never invokes `no-mistakes axi respond` for a crew-owned run.
+Once validation starts, route new requirements to follow-up work instead of expanding the current task unless a current explicit captain instruction completely invalidates the work being validated.
+The smallest downstream changes needed to keep already accepted product or engineering behavior correct, add behavioral tests where an executable contract exists, keep documentation accurate, or correct stale final-diff delivery evidence remain within the current task even when they touch files not named at intake.
+
+Only that complete invalidation keeps the task with the same worker instead of routing it to follow-up work or handing it to a replacement.
+The worker uses no-mistakes axi's current supported abort path and confirms through structured status that the run has stopped before changing code.
+The worker follows the structured branch-ownership recovery action only when status requires it; recovered custody settles ownership, not content, so obsolete work and pipeline-fix commits are replaced from the correct pre-invalidation base.
+Apart from that supported abort, do not hand-edit, commit, restart, or start a second validation run while the obsolete run owns the branch.
+Once ownership is settled, validate exactly once against the final head.
 
 An ask-user finding returns as `needs-decision`; firstmate decides only when the configured authority permits, otherwise escalates to the captain.
 Send the same worker one exact decision naming the decision key, step, action, affected finding IDs, instructions where needed, and exact response command.
@@ -290,7 +308,7 @@ Resume fleet supervision immediately after the decision lands.
 
 Judge validation by the current-code-matched run step through `bin/fm-crew-state.sh`, not by shell liveness or the last status event.
 Running, fixing, or CI states remain working; parked approval or fix-review states require the worker to follow the active gate help; passed or checks-passed is done; failed or cancelled is failed.
-A worker hand-editing, committing, aborting, or restarting during an active validation run duplicates pipeline ownership; steer it back to the gate response flow.
+A worker hand-editing, committing, aborting, or restarting during an active validation run duplicates pipeline ownership outside the supersession sequence above; steer it back to the gate response flow.
 The worker reports the PR when CI first becomes green rather than waiting for merge monitoring to finish.
 
 ### PR ready, landing, and teardown
@@ -460,13 +478,14 @@ It performs guarded fast-forward updates of firstmate and registered secondmate 
 
 These skills are not captain-invocable; load them only at their precise triggers.
 
-- `bootstrap-diagnostics` - load whenever the session-start digest's bootstrap section prints an actionable diagnostic line (`MISSING:`, `MISSING_MANUAL:`, `BACKEND_INVALID:`, `NEEDS_GH_AUTH`, `TANGLE:`, `CREW_DISPATCH: invalid`, `FLEET_SYNC:`, `PR_CHECK_MIGRATION:`, `SECONDMATE_SYNC:`, `SECONDMATE_LIVENESS:`, `NUDGE_SECONDMATES:`, `UPSTREAM:`, `UPSTREAM_REPORT:`, or `FMX:`); silence and `BOOTSTRAP_INFO:` need no load.
+- `bootstrap-diagnostics` - load whenever the session-start digest's bootstrap section prints an actionable diagnostic line (`MISSING:`, `MISSING_MANUAL:`, `BACKEND_INVALID:`, `NEEDS_GH_AUTH`, `TANGLE:`, `CREW_DISPATCH: invalid`, `FLEET_SYNC:`, `PR_CHECK_MIGRATION:`, `SECONDMATE_SYNC:`, `SECONDMATE_LIVENESS:`, `NUDGE_SECONDMATES:`, `CONFIG_REREAD:`, `UPSTREAM:`, `UPSTREAM_REPORT:`, or `FMX:`); silence and `BOOTSTRAP_INFO:` need no load.
 - `diagnostic-reasoning` - load before scoping a reported bug and before acting on a diagnostic report.
+- `ask-user-authority` - load before deciding any ask-user finding, regardless of the project's `yolo` posture.
 - `adhd-auto-fire` - load before committing to a genuinely divergent, fuzzy, high-leverage decision (design, architecture, API/schema shape, naming, strategy, approach-selection, hard/ambiguous debugging).
 - `second-opinion-auto-fire` - load before committing to an architectural, security-sensitive, schema/API-contract, or otherwise high-stakes design or decision output.
 - `harness-adapters` - load before spawning or recovering a crewmate or secondmate, handling a trust dialog, sending a harness-specific skill invocation, interrupting or exiting an agent, resuming an exited agent, or verifying a new harness adapter.
 - `firstmate-orca` - load before switching to Orca, spawning or supervising Orca-backed work, smoke-testing Orca backend behavior, debugging Orca task state, or reconciling Orca-backed task metadata.
-- `project-management` - load before adding, creating, removing, or initializing a project.
+- `project-management` - load before adding, cloning, creating, registering, removing, or initializing a project.
 - `stuck-crewmate-recovery` - load when the session-start digest reports an ordinary direct report's endpoint dead or its metadata has no window, or after a stale wake, looping pane, repeated confusion, an answered-by-brief question, an unresponsive crewmate, or a failed steer.
 - `secondmate-provisioning` - load before creating, seeding, validating, launching, handing backlog to, recovering, pushing inherited local material into, or retiring a secondmate home, and before editing `data/secondmates.md`.
 - `decision-hold-lifecycle` - load before treating an investigation or visual review as complete, before ending a visual review that exposed a decision, and when recording or routing the captain's answer.
@@ -483,6 +502,16 @@ That token is consent for public replies and normal reversible lifecycle actions
 An X-only home still requires the live supervision cycle so mentions can wake it without fleet work.
 On an `x-mention <request_id>` or `x-mode-error ...` check wake, load `fmx-respond`, which owns classification, public-safety policy, reply or dismissal, task linking, and follow-ups.
 For every X-linked terminal outcome, load that owner and post the final completion follow-up before teardown, regardless of earlier milestone follow-ups.
+
+## Captain instruction precedence
+
+A current, explicit, concrete captain instruction overrides a conflicting Firstmate-written default only within the exact action, object, or bounded set it names.
+Never infer an override, broaden it, apply it by analogy, carry it to another object or action, or convert it into standing authority.
+Ambiguous scope or conflict requires one concise clarification before action.
+A captain instruction supplies authority but does not bypass structural execution boundaries: project work still uses its guarded project route, browser work remains isolated, privileged outward actions still use the action gateway, unresolved investigation decisions still use the decision-hold lifecycle, validation keeps one owner, and every merge still uses the guarded merge path and requires a green PR.
+Destructive, irreversible, security-sensitive, and discard actions always require the captain to state that concrete action explicitly.
+A merge requires that exact instruction or the captain-approved `yolo` standing authority defined above.
+Platform, system, and developer instructions always remain higher priority.
 
 ## Maintaining this file
 

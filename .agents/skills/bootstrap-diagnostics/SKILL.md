@@ -2,7 +2,7 @@
 name: bootstrap-diagnostics
 description: >-
   Agent-only handling playbook for session-start bootstrap diagnostics.
-  Use whenever the session-start digest's bootstrap section prints an actionable diagnostic line - MISSING, MISSING_MANUAL, BACKEND_INVALID, NEEDS_GH_AUTH, TANGLE, CREW_DISPATCH invalid, FLEET_SYNC, PR_CHECK_MIGRATION, SECONDMATE_SYNC, SECONDMATE_LIVENESS, NUDGE_SECONDMATES, TOOLCHAIN_DRIFT, UPSTREAM, UPSTREAM_REPORT, or FMX - or when a standalone bin/fm-bootstrap.sh run prints one of those lines.
+  Use whenever the session-start digest's bootstrap section prints an actionable diagnostic line - MISSING, MISSING_MANUAL, BACKEND_INVALID, NEEDS_GH_AUTH, TANGLE, CREW_DISPATCH invalid, FLEET_SYNC, PR_CHECK_MIGRATION, SECONDMATE_SYNC, SECONDMATE_LIVENESS, NUDGE_SECONDMATES, CONFIG_REREAD, TOOLCHAIN_DRIFT, UPSTREAM, UPSTREAM_REPORT, or FMX - or when a standalone bin/fm-bootstrap.sh run prints one of those lines.
   A silent bootstrap section, or a BOOTSTRAP_INFO fact, means no skill load.
 user-invocable: false
 metadata:
@@ -48,6 +48,9 @@ When any diagnostic needs captain attention, report the plain consequence and re
   Investigate the reason because that secondmate is not guaranteed live.
 - `NUDGE_SECONDMATES: secondmate <id>: send failed: <reason>` - the secondmate sweep fast-forwarded a running secondmate home and its loaded instruction surface (`AGENTS.md`, `bin/`, or `.agents/skills/`) changed, but the deterministic `fm-send.sh fm-<id>` re-read nudge failed.
   Inspect the reason, keep the pending marker under `state/.secondmate-nudge-pending/` intact, and rerun session start after the endpoint or metadata issue is fixed so bootstrap can retry the exact same marked send.
+- `CONFIG_REREAD: secondmate <id>: send failed: <reason>` - inherited config changed for a live secondmate home, but its distinct self-describing exact-content reread imperative was not delivered, so that secondmate is still running on its previous inherited config.
+  The generation stays pending on disk for the next bootstrap or `bin/fm-config-push.sh` retry; leave it in place, fix the named cause (an unavailable endpoint, a full retry queue, or a per-home inheritance lock still held by a running spawn or push), and treat that home's inherited settings as stale until a later run reports no failure.
+  `secondmate-provisioning` owns the reread delivery contract itself.
 - `TOOLCHAIN_DRIFT: <runtime> installed <version>, certified <version> (<evidence>) - <why>` - an agent runtime on PATH is not the build this repo carries certification evidence for.
   It is a report, not a gate: nothing is blocked, no launch was refused, and work continues on the drifted build.
   Do not install, downgrade, or pin anything in response; the line exists so a human decides between re-certifying against the new build and pinning the old one.

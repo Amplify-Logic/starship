@@ -2,8 +2,8 @@
 name: project-management
 description: >-
   Agent-only procedure for Firstmate project management.
-  Use before adding, creating, removing, or initializing a project.
-  Owns project add, create, clone, remove, initialization, registry, delivery-mode, autonomy, and outward-consent decisions.
+  Use before adding, cloning, creating, registering, removing, or initializing a project.
+  Owns project add, create, clone, remove, initialization, registry, delivery-mode, autonomy, routing, and outward-consent decisions.
 user-invocable: false
 metadata:
   internal: true
@@ -11,7 +11,7 @@ metadata:
 
 # project-management
 
-Use this procedure before adding, creating, removing, or initializing a project.
+Use this procedure before adding, cloning, creating, registering, removing, or initializing a project.
 This skill is the single owner of Firstmate's project-management procedure.
 It does not replace `secondmate-provisioning`, which owns project clones inside persistent secondmate homes.
 
@@ -21,6 +21,12 @@ Projects live flat under `projects/`, and `data/projects.md` is the private flee
 Use the registry format and parser contract owned by the header of `bin/fm-project-mode.sh`.
 Keep each registry description useful for identifying the project, but keep delivery posture, captain-private state, and detailed project knowledge in their existing designated homes.
 Do not turn the registry into project documentation.
+
+Before adding, cloning, creating, or registering a project in the main home, inspect the authoritative `data/secondmates.md` routing table and judge every registered natural-language `scope:` against the proposed project or domain.
+If a scope owns that domain, route the operation or work there instead of creating a duplicate main-home clone.
+Absence from `data/projects.md` is not evidence that no second mate owns the domain.
+If no second mates are registered or no scope fits, continue in the main home; if an owning second mate cannot accept the route, report the concrete blocker or obtain an explicit captain redirection rather than silently duplicating the project.
+Keep `local-only` projects in the main home under the always-loaded routing rule.
 
 Resolve the project name, destination, delivery mode, and autonomy posture before changing local or remote state.
 Keep a newly added clone and its registry entry consistent, and roll back only artifacts created by the incomplete operation when a later initialization step fails and that rollback is safe.
@@ -36,7 +42,12 @@ Choose the delivery mode when adding or creating the project:
 
 The optional `+yolo` posture changes routine approval authority but does not change the delivery mode.
 Default it off, and enable it only on the captain's explicit instruction.
-Destructive, irreversible, and security-sensitive decisions still require captain approval when it is on.
+`AGENTS.md` section 7 owns the complete authority boundary and exceptions when it is on.
+
+A current concrete captain approval settles only the exact project operation, project, remote, visibility, delivery posture, or other bounded scope it names.
+Do not ask again for a value the captain already supplied, but do not infer omitted values or broaden that approval.
+Approval never changes the execution boundary: use only the guarded project paths authorized by `AGENTS.md`, and route privileged outward actions through the action gateway when its operation registry covers them.
+If no guarded path exists for the approved operation, report that implementation gap rather than performing a raw project write.
 
 ## Add or clone an existing project
 

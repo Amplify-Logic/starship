@@ -23,10 +23,14 @@ Before writing a new fact anywhere in this repo, ask where it belongs, in this o
    If yes: `AGENTS.md`, inline.
 2. Does the agent need it only in a nameable situation - a spawn, a recovery, a specific wake type, a specific lifecycle step?
    If yes: an agent-only skill under `.agents/skills/`, plus a one-line trigger pointer left inline in `AGENTS.md` (usually section 13).
-3. Is it human/reference detail - a wire format, a verification record, a mechanism narrative, an incident writeup?
-   If yes: `docs/`.
-4. Is it mechanics - exact flags, exact commands, exact paths?
-   If yes: the script's own header comment plus its `--help` output, not prose in `AGENTS.md` or a skill.
+3. Is it current public product, setup, operator reference, or stable maintainer architecture?
+   If yes: the most specific current-behavior owner under `README.md`, `CONTRIBUTING.md`, or `docs/`.
+4. Is it active reusable verification for a current guarantee?
+   If yes: keep the dated version, exact commands, and exact output in the relevant verification section or record, with the current-behavior owner pointing to it rather than copying it.
+5. Is it task or incident evidence - chronology, transcripts, temporary paths, failed hypotheses, or one-off delivery proof?
+   If yes: keep it in the private task report or PR evidence after distilling every unique current fact into its authoritative owner.
+6. Is it mechanics - exact flags, exact commands, exact paths?
+   If yes: the script's own header comment plus its `--help` output, not prose in `AGENTS.md`, a skill, or a second documentation owner.
 
 Stop at the first tier that answers yes.
 Do not place a fact at a more convenient tier than the one this tree gives you.
@@ -74,6 +78,15 @@ Mark an axis not applicable only after inspecting its integration surface, and u
 For critical safety, routing, startup, and supervision infrastructure, prefer deterministic and idempotent enforcement over relying on agent memory alone.
 Keep instructions as the authority and discovery layer, but make repeated execution converge safely and make invalid or unsafe states fail closed wherever the runtime can enforce them.
 
+## Documentation change review
+
+Keep current guidance separate from verification evidence.
+Current owners describe supported behavior, setup, stable invariants, concise rationale, limits, and the entry point for reproducing evidence.
+Verification records may retain dates, versions, exact commands, and exact output needed to support an active guarantee, but they do not own current operating policy.
+Task chronology, branches, temporary paths, failed hypotheses, and delivery transcripts stay in private task reports or PR evidence by default.
+Before deleting or moving tracked evidence, verify that every unique current safety fact has an authoritative owner and a focused regression pointer.
+After documentation and review fixes, inspect the complete branch diff again rather than only the latest commit.
+
 ## Repo style rules
 
 - Put one full sentence per line in tracked Markdown.
@@ -84,6 +97,6 @@ Keep instructions as the authority and discovery layer, but make repeated execut
 - Run `bin/fm-lint.sh` before treating a script change as done; it is the single owner of the lint definition (file set, config, and pinned shellcheck version) that CI and the no-mistakes pre-push gate both invoke, and it refuses to run under any other shellcheck version.
 - Colocate tests with the existing pattern in `tests/`, name them `<subject>.test.sh`, and extend an existing script rather than inventing a new runner.
 - Prefer behavior through an executable or public interface over assertions on implementation-source bytes; retain source assertions only when a declared fork capability has no executable boundary that can prove its integration contract.
-- A backend-verification doc (`docs/*-backend.md`) records empirical facts, not assumptions.
-- Include the date, version, exact commands run, and exact output.
-- Write incidents the same way, as evidence, not narrative alone.
+- A verification record captures empirical facts, not assumptions or operating policy.
+- Include the date, version, exact commands run, and exact output needed to support the active guarantee.
+- Keep incident chronology and delivery evidence in private task reports or PR evidence unless a concise rationale is required to maintain a current safety boundary.

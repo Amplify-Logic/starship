@@ -159,6 +159,8 @@ SUB_HOME_MARKER=".fm-secondmate-home"
 . "$SCRIPT_DIR/fm-secondmate-registry-lib.sh"
 # shellcheck source=bin/fm-config-inherit-lib.sh
 . "$SCRIPT_DIR/fm-config-inherit-lib.sh"
+# shellcheck source=bin/fm-wake-lib.sh
+. "$SCRIPT_DIR/fm-wake-lib.sh"
 # shellcheck source=bin/fm-backend.sh
 . "$SCRIPT_DIR/fm-backend.sh"
 # shellcheck source=bin/fm-gate-refuse-lib.sh
@@ -273,6 +275,8 @@ fi
 ORCA_ABORT_CLEANUP=0
 ORCA_WORKTREE_ID=
 ORCA_TERMINAL=
+CONFIG_INHERIT_LOCK=
+CONFIG_INHERIT_LOCK_HELD=0
 
 parse_orca_worktree_result() {
   local raw=$1 rest
@@ -293,6 +297,10 @@ parse_orca_worktree_result() {
 
 orca_spawn_abort_cleanup() {
   local status=$?
+  if [ "$CONFIG_INHERIT_LOCK_HELD" = 1 ]; then
+    CONFIG_INHERIT_LOCK_HELD=0
+    fm_lock_release "$CONFIG_INHERIT_LOCK" || true
+  fi
   [ "$ORCA_ABORT_CLEANUP" = 1 ] || return "$status"
   ORCA_ABORT_CLEANUP=0
   if [ -n "${ORCA_TERMINAL:-}" ]; then
@@ -943,6 +951,19 @@ if [ "$KIND" = secondmate ]; then
     SECONDMATE_PROJECTS=$SECONDMATE_REGISTRY_MATCH_PROJECTS
   fi
   WT="$PROJ_ABS"
+  mkdir -p "$PROJ_ABS/state" || {
+    echo "error: could not create secondmate state directory for $PROJ_ABS" >&2
+    exit 1
+  }
+  CONFIG_INHERIT_LOCK=$(fm_config_inherit_lock_path "$PROJ_ABS") || {
+    echo "error: could not resolve secondmate inheritance lock for $PROJ_ABS" >&2
+    exit 1
+  }
+  if ! fm_lock_acquire_wait "$CONFIG_INHERIT_LOCK" "$FM_CONFIG_INHERIT_LOCK_WAIT_SECS"; then
+    echo "error: could not acquire secondmate inheritance lock for $PROJ_ABS within ${FM_CONFIG_INHERIT_LOCK_WAIT_SECS}s" >&2
+    exit 1
+  fi
+  CONFIG_INHERIT_LOCK_HELD=1
   # Local-HEAD sync: before launch, fast-forward this secondmate's worktree to the
   # PRIMARY checkout's current default-branch commit, so a freshly spawned or
   # recovery-respawned secondmate always runs the primary's version (AGENTS.md
@@ -1613,6 +1634,18 @@ if [ "$HARNESS" = kimi ] && [ "$RAW_LAUNCH" -eq 0 ]; then
   spawn_send_literal "$T" "$(cat "$BRIEF")"
   sleep 0.5
   spawn_send_key "$T" Enter
+fi
+
+if [ "$KIND" = secondmate ]; then
+  if ! fm_config_reread_discard_pending "$PROJ_ABS" "$ID" "$FM_HOME"; then
+    if fm_config_reread_quarantine_pending "$PROJ_ABS" "$ID" "$FM_HOME"; then
+      echo "CONFIG_REREAD: secondmate $ID: quarantined pre-relaunch generations after cleanup failure (destination=$(fm_config_reread_quarantine_root "$PROJ_ABS") source=$(fm_config_reread_quarantine_root "$FM_HOME"))" >&2
+    else
+      echo "CONFIG_REREAD: secondmate $ID: cleanup failed; pre-relaunch generations were force-cleared where possible (destination=$PROJ_ABS source=$FM_HOME)" >&2
+    fi
+  fi
+  CONFIG_INHERIT_LOCK_HELD=0
+  fm_lock_release "$CONFIG_INHERIT_LOCK" || true
 fi
 
 echo "spawned $ID harness=$HARNESS kind=$KIND mode=$MODE yolo=$YOLO window=$META_WINDOW worktree=$WT"
