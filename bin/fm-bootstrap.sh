@@ -132,6 +132,8 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 . "$SCRIPT_DIR/fm-ff-lib.sh"
 # shellcheck source=bin/fm-config-inherit-lib.sh disable=SC1091
 . "$SCRIPT_DIR/fm-config-inherit-lib.sh"
+# shellcheck source=bin/fm-startup-memory-budget-lib.sh disable=SC1091
+. "$SCRIPT_DIR/fm-startup-memory-budget-lib.sh"
 # shellcheck source=bin/fm-x-lib.sh disable=SC1091
 . "$SCRIPT_DIR/fm-x-lib.sh"
 # shellcheck source=bin/fm-backend.sh disable=SC1091
@@ -293,7 +295,7 @@ secondmate_sync() {
       echo "NUDGE_SECONDMATES: secondmate $id: send failed: cannot record retry marker"
       return 0
     fi
-    if out=$(FM_HOME="$FM_HOME" FM_ROOT_OVERRIDE="$FM_ROOT" FM_STATE_OVERRIDE="$STATE" "$SCRIPT_DIR/fm-send.sh" "$selector" "$SECOND_MATE_NUDGE_MESSAGE" 2>&1); then
+    if out=$(FM_PENDING_REPLY_EXPECT_REPORT=0 FM_HOME="$FM_HOME" FM_ROOT_OVERRIDE="$FM_ROOT" FM_STATE_OVERRIDE="$STATE" "$SCRIPT_DIR/fm-send.sh" "$selector" "$SECOND_MATE_NUDGE_MESSAGE" 2>&1); then
       rm -f "$marker"
       echo "BOOTSTRAP_INFO: nudged $selector with '$SECOND_MATE_NUDGE_MESSAGE'"
     else
@@ -361,7 +363,7 @@ secondmate_sync() {
         echo "NUDGE_SECONDMATES: secondmate $id: send failed: retry target is not at recorded instruction commit"
         continue
       }
-      if out=$(FM_HOME="$FM_HOME" FM_ROOT_OVERRIDE="$FM_ROOT" FM_STATE_OVERRIDE="$STATE" "$SCRIPT_DIR/fm-send.sh" "$selector" "$SECOND_MATE_NUDGE_MESSAGE" 2>&1); then
+      if out=$(FM_PENDING_REPLY_EXPECT_REPORT=0 FM_HOME="$FM_HOME" FM_ROOT_OVERRIDE="$FM_ROOT" FM_STATE_OVERRIDE="$STATE" "$SCRIPT_DIR/fm-send.sh" "$selector" "$SECOND_MATE_NUDGE_MESSAGE" 2>&1); then
         rm -f "$marker"
         echo "BOOTSTRAP_INFO: nudged $selector with '$SECOND_MATE_NUDGE_MESSAGE'"
       else
@@ -833,6 +835,15 @@ crew_dispatch_validate() {
   fi
 }
 
+startup_memory_budget_setup() {
+  if [ -e "$FM_HOME/.fm-secondmate-home" ] || [ -L "$FM_HOME/.fm-secondmate-home" ]; then
+    return 0
+  fi
+  if ! fm_startup_memory_budget_materialize "$CONFIG"; then
+    echo "STARTUP_MEMORY_BUDGET: invalid config/$FM_STARTUP_MEMORY_BUDGET_FILE - $FM_STARTUP_MEMORY_BUDGET_ERROR"
+  fi
+}
+
 if [ "${1:-}" = "install" ]; then
   shift
   [ $# -gt 0 ] || { echo "usage: fm-bootstrap.sh install <tool>..." >&2; exit 1; }
@@ -894,6 +905,7 @@ fi
 # runnable. Detect-only sessions never touch state.
 if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then
   "$SCRIPT_DIR/fm-pr-check-migrate.sh" || true
+  startup_memory_budget_setup
 fi
 
 if [ "$BACKEND_VALID" -eq 0 ]; then

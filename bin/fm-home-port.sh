@@ -103,6 +103,7 @@ FALLBACK_PORTABLE_CONFIG_FILES=(
   config/crew-dispatch.json
   config/secondmate-harness
   config/backlog-backend
+  config/startup-memory-budget
   config/wedge-alarm
   config/primary-handoff
 )

@@ -13,12 +13,14 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-status-bar.sh`       | Render the canonical guarded primary status bar and Kimi tmux companion              |
 | `fm-session-start.sh`    | Compose lock, bootstrap, and wake drain into the single ordered session-start digest |
 | `fm-sessionstart-nudge.sh` | Print the native session-start hook nudge when the primary has not already run the digest |
+| `fm-operational-input.sh` | Construct and parse the canonical cross-language operational-input protocol |
 | `fm-bootstrap.sh`        | Detect toolchain and fleet problems, run the locked session-start sweeps, and install approved tools |
 | `fm-fleet-sync.sh`       | Refresh project clones with safe fast-forwards, self-heals, `STUCK:` reports, branch pruning, and bounded recovery from an orphaned `.git/packed-refs.lock` |
 | `fm-fleet-snapshot.sh`   | Print the read-only structured fleet snapshot JSON (schema `fm-fleet-snapshot.v1`)   |
 | `fm-fleet-view.sh`       | Render the fleet snapshot as a human Markdown view                                   |
 | `fm-bearings-snapshot.sh` | Project the fleet snapshot to the compact TOON bearings view; local-only unless `--include-prs` |
 | `fm-landed-lib.sh`       | Shared newest-first completion-recency ordering for every capped landed surface       |
+| `fm-startup-memory-budget.sh` | Validate and report the bounded startup-memory allowance and current usage |
 | `fm-update.sh`           | Fast-forward-only self-update of firstmate and secondmate homes from origin          |
 | `fm-backlog-handoff.sh`  | Validate and delegate queued backlog-item moves into a secondmate home               |
 | `fm-decision-hold.sh`    | Create, verify, complete, and resolve durable captain-held decisions                 |
@@ -67,7 +69,9 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-project-display-name.sh` | Resolve a project slug to its human display name with explicit brand overrides and a synthesized fallback |
 | `fm-merge-local.sh`      | Fast-forward a `local-only` project's local default branch after approval            |
 | `fm-review-diff.sh`      | Review a crewmate branch or resolved PR head against the authoritative base          |
-| `fm-marker-lib.sh`       | Shared from-firstmate request marker, detector, and idempotent transformation         |
+| `fm-marker-lib.sh`       | Compatibility entry point for the from-firstmate carrier owned by `fm-operational-input.sh` |
+| `fm-pending-reply-lib.sh` | Parent-owned secondmate pending-reply expectations, recovery, and one-shot escalation |
+| `fm-secondmate-report.sh` | Append a correlated parent status or document-pointer report                         |
 | `fm-gate-refuse-lib.sh`  | Shared no-mistakes gate-context refusal for fleet lifecycle entrypoints               |
 | `fm-watch-arm.sh`        | Verified home-scoped watcher arm wrapper with loud cycle endings and bounded lifecycle ledger |
 | `fm-watch-checkpoint.sh` | Run one bounded foreground watcher checkpoint for Codex-style supervision            |
@@ -90,6 +94,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-path-lib.sh`         | Shared normalization of relative durable directory inputs to absolute paths          |
 | `fm-lock-lib.sh`         | Shared "is this git lock provably abandoned?" proof used by teardown and fleet-sync   |
 | `fm-config-inherit-lib.sh` | Shared primary-to-secondmate inherited local-material propagation and config-reread delivery |
+| `fm-startup-memory-budget-lib.sh` | Safe startup-memory budget parsing, publication, and estimation primitives    |
 | `fm-tasks-axi-lib.sh`    | Shared backlog-backend selector and `tasks-axi` compatibility probe                  |
 | `fm-wake-drain.sh`       | Atomically drain queued watcher wakes, emit bounded best-effort status-event annotations, then assert watcher liveness |
 | `fm-wake-lib.sh`         | Shared durable wake queue, portable locks, and watcher identity/health helpers       |

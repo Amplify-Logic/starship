@@ -118,7 +118,7 @@ OLD_BIN_UNCHANGED_SIBLINGS="fm-gate-refuse-lib.sh fm-guard.sh fm-lock-lib.sh fm-
 # A pull-request merge may add a new main-only dependency that the branch's older baseline does not have yet.
 # fm-path-lib.sh: sourced by fm-spawn.sh and fm-teardown.sh since the durable-path
 # normalization landed; optional so trees whose baseline predates it still build.
-OLD_BIN_OPTIONAL_SIBLINGS="fm-pending-reply-lib.sh fm-path-lib.sh fm-worktree-lease-lib.sh"
+OLD_BIN_OPTIONAL_SIBLINGS="fm-operational-input.sh fm-pending-reply-lib.sh fm-path-lib.sh fm-worktree-lease-lib.sh"
 OLD_BIN_REFACTORED="fm-send.sh fm-peek.sh fm-watch.sh fm-spawn.sh fm-teardown.sh"
 
 build_old_bin() {  # <name> -> echoes root dir (root/bin/<script> is the entry point)

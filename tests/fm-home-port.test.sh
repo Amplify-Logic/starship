@@ -25,6 +25,7 @@ seed_home() {
   printf 'cursor\n' > "$home/config/crew-harness"
   printf '{ "default": { "harness": "cursor" } }\n' > "$home/config/crew-dispatch.json"
   printf '{ "enabled": true }\n' > "$home/config/primary-handoff"
+  printf '7500\n' > "$home/config/startup-memory-budget"
 }
 
 # Minimal toolchain so verify's bootstrap detect-only check can pass under PATH.
@@ -101,6 +102,7 @@ test_export_copies_portable_only() {
   assert_present "$dest/data/backlog.md" "backlog.md not exported"
   assert_present "$dest/config/backend" "backend not exported"
   assert_present "$dest/config/primary-handoff" "manifest-declared primary handoff config not exported"
+  assert_present "$dest/config/startup-memory-budget" "manifest-declared startup-memory budget not exported"
   assert_absent "$dest/.env" ".env must not be exported"
   assert_absent "$dest/config/action-captain-secret" "action capability secret must not be exported"
   assert_absent "$dest/state" "state/ must not be exported"

@@ -112,6 +112,8 @@ SUB_HOME_MARKER=".fm-secondmate-home"
 . "$SCRIPT_DIR/fm-worktree-lease-lib.sh"
 # shellcheck source=bin/fm-secondmate-registry-lib.sh
 . "$SCRIPT_DIR/fm-secondmate-registry-lib.sh"
+# shellcheck source=bin/fm-pending-reply-lib.sh
+. "$SCRIPT_DIR/fm-pending-reply-lib.sh"
 if [ "$#" -lt 1 ] || ! fm_task_id_path_safe "$1"; then
   echo "error: invalid teardown request" >&2
   exit 2
@@ -1184,6 +1186,7 @@ cleanup_firstmate_home_children() {
     fi
     remove_grok_turnend_auth "$sub_state" "$child_id"
     remove_pr_poll_artifacts "$sub_state" "$child_id" || return 1
+    fm_pending_reply_remove_task "$sub_state" "$child_id"
     rm -f "$sub_state/$child_id.status" "$sub_state/$child_id.turn-ended" "$sub_state/$child_id.meta" "$sub_state/$child_id.pi-ext.ts" "$sub_state/$child_id.prime-ext.ts" "$sub_state/$child_id.grok-turnend-token"
     rm -rf "$sub_state/$child_id.kimi-home" "$sub_state/$child_id.prime-agent-home"
   done
@@ -1318,6 +1321,7 @@ if [ -x "$FM_ROOT/bin/fm-browse-session.sh" ]; then
 fi
 rm -rf "$STATE/browse/$ID"
 remove_pr_poll_artifacts "$STATE" "$ID" || exit 1
+fm_pending_reply_remove_task "$STATE" "$ID"
 # Record capability evidence before meta disappears (ship/scout only; best-effort).
 fm_capability_record_teardown "$KIND" "$FORCE" "$HARNESS" "$MODEL" "$EFFORT" "$TASK_TYPE"
 rm -f "$STATE/$ID.status" "$STATE/$ID.turn-ended" "$STATE/$ID.meta" "$STATE/$ID.pi-ext.ts" "$STATE/$ID.prime-ext.ts" "$STATE/$ID.grok-turnend-token"

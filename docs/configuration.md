@@ -11,7 +11,7 @@ The shared orchestrator behavior lives in [`AGENTS.md`](../AGENTS.md) - edit it 
 This section is the single owner of the top-level operational-home layout; producer script headers and their help own exact child-file fields and mutation contracts.
 The tracked code root contains the shared instruction, skill, documentation, workflow, and `bin/` surfaces, while each effective `FM_HOME` contains private operational directories.
 `data/` holds durable private fleet records such as the project and secondmate registries, captain preferences, optional shared captain preferences, learnings, backlog, briefs, scout reports, the optional capability outcome log, and the optional action-gateway state root under `data/action-gateway/` (`docs/action-gateway.md`).
-`state/` holds volatile runtime records such as task metadata, append-only status events, endpoint signals, watcher and wake-queue coordination, away-mode state, generated X-mode artifacts, and per-task isolated browse profiles under `state/browse/<task-id>/` (`docs/worker-browsing.md`).
+`state/` holds volatile runtime records such as task metadata, append-only status events, endpoint signals, watcher and wake-queue coordination, away-mode state, generated X-mode artifacts, parent-owned secondmate pending replies under `state/pending-replies/`, and per-task isolated browse profiles under `state/browse/<task-id>/` (`docs/worker-browsing.md`).
 `config/` holds local gitignored operating choices, and `projects/` holds the local project clones that Firstmate reads but changes only through the guarded exceptions in `AGENTS.md`.
 Porting a home to a second machine - which material is portable, which is machine-local, and the explicit private-git sync - is owned by [`docs/porting.md`](porting.md) and `bin/fm-home-port.sh`.
 
@@ -98,7 +98,7 @@ Use the guarded cleanup path described in [`docs/zellij-backend.md`](zellij-back
 cmux has no session layer at all - one workspace per task, in whatever cmux window is open - and its socket password (when configured) is read from local, gitignored `config/cmux-socket-password` under the effective config directory, never committed.
 The caller-facing label remains `fm-<id>`, but the actual cmux workspace title is scoped by the active `FM_HOME` readable label plus a short hash of the resolved `FM_ROOT` path as `fm-<home-label>-<id>`.
 Test cleanup must use the guarded path described in [`docs/cmux-backend.md`](cmux-backend.md)'s "Test safety" section, never enumerate-and-close every workspace.
-The `config/backend` file is not inherited by secondmate homes.
+`config/backend` is inherited into secondmate homes under the primary-authoritative contract owned by [`secondmate-provisioning`](../.agents/skills/secondmate-provisioning/SKILL.md).
 
 ## Away-mode supervisor backend (FM_SUPERVISOR_BACKEND / FM_SUPERVISOR_TARGET)
 
@@ -141,6 +141,20 @@ Shared captain preferences that apply across secondmate domains live only in the
 Fleet-local operational facts and gotchas live locally in `data/learnings.md`; it is gitignored and printed after the captain-preference files in the session-start context digest.
 The file is created lazily on first learning and follows the same dated, evidence-backed, curated style as `data/captain.md`: inspect the current file first, then rewrite or prune stale entries instead of appending forever.
 There is no shared learnings file by captain decision.
+
+## Startup memory budget (config/startup-memory-budget)
+
+`config/startup-memory-budget` is the primary-authoritative per-home allowance for `data/captain.md`, `data/captain-shared.md`, and `data/learnings.md` together.
+The locked mutable bootstrap path creates the visible default of `7500` estimated tokens in a primary home when the file is absent.
+To select another allowance, replace the primary home's file with one positive base-10 integer followed by exactly one newline.
+The next locked bootstrap convergence or `bin/fm-config-push.sh` propagates it to registered secondmates.
+A secondmate does not create an independent default.
+Malformed, multi-line, symlinked, hardlinked, special, or otherwise unsafe values are rejected rather than treated as a default.
+Use `bin/fm-startup-memory-budget.sh read` to validate and print the effective value, or `bin/fm-startup-memory-budget.sh report` to account for the three files.
+The stable estimate is `ceil(UTF-8 bytes / 3)` per file, a conservative local approximation rather than a provider-exact tokenizer.
+An inherited `data/captain-shared.md` counts in a secondmate's total but remains primary-owned and read-only there.
+The internal `/stow` skill curates only editable local files in that case and reports when the primary-owned shared file alone exceeds the allowance.
+The helper's header owns exact parsing, publication, and report output mechanics.
 
 ## Secondmate routes (data/secondmates.md)
 
@@ -338,7 +352,7 @@ When a running home advances and its loaded instruction surface (`AGENTS.md`, `b
 If that send fails, bootstrap keeps an idempotent retry marker and emits `NUDGE_SECONDMATES:` with the failure reason.
 The same bootstrap run emits `SECONDMATE_LIVENESS:` only when a live secondmate endpoint is skipped or respawn fails; already-live and successfully respawned endpoints are handled silently.
 For a mid-session inherited local-material edit where tracked-file sync is not needed, run `bin/fm-config-push.sh`.
-It uses the same live secondmate discovery and propagation helper as bootstrap, prints each live home's `crew-dispatch.json`, `crew-harness`, `backlog-backend`, and `data/captain-shared.md` result as `pushed`, `unchanged`, `skipped`, or `error`, and exits non-zero for real propagation errors or config-reread delivery failures.
+It uses the same live secondmate discovery and propagation helper as bootstrap, prints each live home's `crew-dispatch.json`, `crew-harness`, `backlog-backend`, `backend`, `startup-memory-budget`, and `data/captain-shared.md` result as `pushed`, `unchanged`, `skipped`, or `error`, and exits non-zero for real propagation errors or config-reread delivery failures.
 When allowlisted config changes for an already-running home, it sends only a self-describing reread imperative naming the private exact-content instruction owned by `secondmate-provisioning`; unchanged config sends no message unless an earlier generation remains pending.
 The locked bootstrap inheritance pass uses the same per-home changed-set and reread path for already-running homes, with exact post-write bytes pinned before instruction assembly so later retries never rebuild a generation from mutable destination files.
 Each of those writers waits a bounded `FM_CONFIG_INHERIT_LOCK_WAIT_SECS` for the destination home's inheritance lock; a home whose lock is still held by a running spawn or push is reported as a `CONFIG_REREAD:` send failure and retried from its pending generation on the next run instead of blocking the sweep.
@@ -517,6 +531,7 @@ GROK_HOME=              # optional Grok config home for firstmate's global grok 
 FM_SEND_RETRIES=3       # fm-send Enter-retry attempts after typing the line once
 FM_SEND_SLEEP=0.4       # seconds between fm-send submit checks
 FM_SEND_SETTLE=1        # seconds fm-send waits after a successful text submit; 0 disables
+FM_PENDING_REPLY_GRACE_SECS=120   # seconds after marked secondmate delivery before a completed turn without a correlated parent report can trigger one repost request
 # sub-supervisor (bin/fm-supervise-daemon.sh); presence-gated via /afk
 FM_SUPERVISOR_BACKEND=             # optional supervisor pane backend override; tmux/herdr only, otherwise detects $TMUX_PANE then HERDR_ENV/HERDR_PANE_ID before tmux fallback
 FM_SUPERVISOR_TARGET=              # optional supervisor pane target override; tmux target or herdr <session>:<pane-id>, otherwise auto-detected

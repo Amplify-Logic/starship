@@ -117,6 +117,7 @@
 #     __PRIMEEXT__  absolute path to state/<task-id>.prime-ext.ts (prime-agent
 #                   turn-end extension, written by this script; same pi-fork
 #                   extension API, kept outside the worktree like pi's)
+#     __OPINPUT__   absolute path to the canonical operational-input encoder
 # Per-harness turn-end hooks are installed automatically; some live outside the worktree.
 # grok uses a firstmate-owned global hook under ${GROK_HOME:-$HOME/.grok}/hooks
 # plus a gitignored .fm-grok-turnend worktree pointer and a state token.
@@ -415,20 +416,20 @@ launch_template() {
     # does NOT suppress the interactive ghost text (verified empirically), so the env
     # var is the correct control. The dim-aware composer reader in fm-tmux-lib.sh is
     # the defense-in-depth backstop for any pane this flag cannot reach.
-    claude) printf '%s' 'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions __MODELFLAG____EFFORTFLAG__"$(cat __BRIEF__)"' ;;
+    claude) printf '%s' 'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions __MODELFLAG____EFFORTFLAG____ENCODED_BRIEF__' ;;
     codex)
       if [ "$kind" = secondmate ]; then
-        printf '%s' 'codex __MODELFLAG____EFFORTFLAG__--dangerously-bypass-approvals-and-sandbox "$(cat __BRIEF__)"'
+        printf '%s' 'codex __MODELFLAG____EFFORTFLAG__--dangerously-bypass-approvals-and-sandbox __ENCODED_BRIEF__'
       else
-        printf '%s' 'codex __MODELFLAG____EFFORTFLAG__--dangerously-bypass-approvals-and-sandbox -c "notify=[\"bash\",\"-c\",\"touch __TURNEND__\"]" "$(cat __BRIEF__)"'
+        printf '%s' 'codex __MODELFLAG____EFFORTFLAG__--dangerously-bypass-approvals-and-sandbox -c "notify=[\"bash\",\"-c\",\"touch __TURNEND__\"]" __ENCODED_BRIEF__'
       fi
       ;;
-    opencode) printf '%s' 'OPENCODE_CONFIG_CONTENT='\''{"permission":{"*":"allow"}}'\'' opencode __MODELFLAG__--prompt "$(cat __BRIEF__)"' ;;
+    opencode) printf '%s' 'OPENCODE_CONFIG_CONTENT='\''{"permission":{"*":"allow"}}'\'' opencode __MODELFLAG__--prompt __ENCODED_BRIEF__' ;;
     pi)
       if [ "$kind" = secondmate ]; then
-        printf '%s' 'pi __MODELFLAG____EFFORTFLAG__-e __PITURNEND__ -e __PIWATCH__ "$(cat __BRIEF__)"'
+        printf '%s' 'pi __MODELFLAG____EFFORTFLAG__-e __PITURNEND__ -e __PIWATCH__ __ENCODED_BRIEF__'
       else
-        printf '%s' 'pi __MODELFLAG____EFFORTFLAG__-e __PIEXT__ "$(cat __BRIEF__)"'
+        printf '%s' 'pi __MODELFLAG____EFFORTFLAG__-e __PIEXT__ __ENCODED_BRIEF__'
       fi
       ;;
     # grok (Grok Build TUI): a positional prompt starts the supervised interactive
@@ -438,7 +439,7 @@ launch_template() {
     # --dangerously-skip-permissions. grok's turn-end signal does NOT ride the
     # launch command - it is a Stop-event hook installed below (global hook +
     # per-task pointer), so the template is identical for ship/scout/secondmate.
-    grok) printf '%s' 'grok --always-approve __MODELFLAG____EFFORTFLAG__"$(cat __BRIEF__)"' ;;
+    grok) printf '%s' 'grok --always-approve __MODELFLAG____EFFORTFLAG____ENCODED_BRIEF__' ;;
     # cursor (Cursor CLI, the `agent` binary): a positional prompt starts the
     # supervised interactive session. --yolo (alias of --force, "Run Everything")
     # auto-approves every tool execution, verified to run fully unattended; it is
@@ -452,7 +453,7 @@ launch_template() {
     # below, so the template is identical for ship/scout/secondmate.
     # Effort is folded into the MODEL ID by cursor_model_with_effort (this CLI has
     # no effort flag), so there is no __EFFORTFLAG__ here by design.
-    cursor) printf '%s' 'agent --yolo --workspace __WORKTREE__ __MODELFLAG__"$(cat __BRIEF__)"' ;;
+    cursor) printf '%s' 'agent --yolo --workspace __WORKTREE__ __MODELFLAG____ENCODED_BRIEF__' ;;
     # kimi (Kimi Code CLI): --yolo auto-approves tool execution (TUI footer token
     # `yolo`, verified 2026-07-21/2026-07-23 on 0.27.0). Cannot combine --prompt
     # with --yolo, and there is no positional interactive brief, so the brief is
@@ -473,7 +474,7 @@ launch_template() {
     # route, and the route guard below refuses per-token-billed models before
     # any endpoint exists. Effort maps to --thinking (off|minimal|low|medium|
     # high|xhigh|max per --help; xhigh exercised live).
-    prime-agent) printf '%s' 'PRIME_AGENT_CODING_AGENT_DIR=__PASTATE__ PRIME_AGENT_KERNEL_VENV=__PASTATE__/kernel-venv prime-agent --daemon-socket __PASTATE__/daemon.sock -e __PRIMEEXT__ __MODELFLAG____EFFORTFLAG__"$(cat __BRIEF__)"' ;;
+    prime-agent) printf '%s' 'PRIME_AGENT_CODING_AGENT_DIR=__PASTATE__ PRIME_AGENT_KERNEL_VENV=__PASTATE__/kernel-venv prime-agent --daemon-socket __PASTATE__/daemon.sock -e __PRIMEEXT__ __MODELFLAG____EFFORTFLAG____ENCODED_BRIEF__' ;;
     *) return 1 ;;
   esac
 }
@@ -999,6 +1000,8 @@ else
   BRIEF="$DATA/$ID/brief.md"
 fi
 [ -f "$BRIEF" ] || { echo "error: no brief at $BRIEF" >&2; exit 1; }
+ENCODED_BRIEF=$("$FM_ROOT/bin/fm-operational-input.sh" encode launch-brief < "$BRIEF") \
+  || { echo "error: launch brief could not be encoded; refusing to start $ID" >&2; exit 1; }
 
 # PROJ_ABS can still carry a symlinked path component (e.g. macOS's /tmp ->
 # /private/tmp) when it came from the ship/scout branch's logical `pwd` above.
@@ -1598,12 +1601,15 @@ sq_piturnend=$(shell_quote "$PROJ_ABS/.pi/extensions/fm-primary-turnend-guard.ts
 sq_piwatch=$(shell_quote "$PROJ_ABS/.pi/extensions/fm-primary-pi-watch.ts")
 sq_pastate=$(shell_quote "$STATE_REAL/$ID.prime-agent-home")
 sq_primeext=$(shell_quote "$STATE/$ID.prime-ext.ts")
+sq_opinput=$(shell_quote "$FM_ROOT/bin/fm-operational-input.sh")
+sq_encoded_brief=$(shell_quote "$ENCODED_BRIEF")
 # LAUNCH_MODEL was resolved earlier (cursor effort fold + catalog preflight).
 MODELFLAG=$(model_flag_for_harness "$HARNESS" "$LAUNCH_MODEL")
 EFFORTFLAG=$(effort_flag_for_harness "$HARNESS" "$EFFORT")
 LAUNCH=${LAUNCH//__WORKTREE__/$(shell_quote "$WT")}
 LAUNCH=${LAUNCH//__MODELFLAG__/$MODELFLAG}
 LAUNCH=${LAUNCH//__EFFORTFLAG__/$EFFORTFLAG}
+LAUNCH=${LAUNCH//__ENCODED_BRIEF__/$sq_encoded_brief}
 LAUNCH=${LAUNCH//__BRIEF__/$sq_brief}
 LAUNCH=${LAUNCH//__TURNEND__/$sq_turnend}
 LAUNCH=${LAUNCH//__PIEXT__/$sq_piext}
@@ -1611,6 +1617,7 @@ LAUNCH=${LAUNCH//__PITURNEND__/$sq_piturnend}
 LAUNCH=${LAUNCH//__PIWATCH__/$sq_piwatch}
 LAUNCH=${LAUNCH//__PASTATE__/$sq_pastate}
 LAUNCH=${LAUNCH//__PRIMEEXT__/$sq_primeext}
+LAUNCH=${LAUNCH//__OPINPUT__/$sq_opinput}
 if [ "$HARNESS" = kimi ] && [ "$RAW_LAUNCH" -eq 0 ]; then
   sq_kimihome=$(shell_quote "$STATE_REAL/$ID.kimi-home")
   LAUNCH=${LAUNCH//__KIMIHOME__/$sq_kimihome}
@@ -1631,7 +1638,7 @@ spawn_send_key "$T" Enter
 # (verified 2026-07-21/2026-07-23). Deliver the brief after the TUI settles.
 if [ "$HARNESS" = kimi ] && [ "$RAW_LAUNCH" -eq 0 ]; then
   sleep "${FM_KIMI_BRIEF_SETTLE_SECS:-2}"
-  spawn_send_literal "$T" "$(cat "$BRIEF")"
+  spawn_send_literal "$T" "$ENCODED_BRIEF"
   sleep 0.5
   spawn_send_key "$T" Enter
 fi

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Static regression tests for the captain-facing plain-English translation
 # contract owned by AGENTS.md section 9.
+# shellcheck disable=SC2016
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -16,6 +17,8 @@ CODEXAPP="$ROOT/.agents/skills/firstmate-codexapp/SKILL.md"
 FMX="$ROOT/.agents/skills/fmx-respond/SKILL.md"
 UPDATE="$ROOT/.agents/skills/updatefirstmate/SKILL.md"
 BEARINGS="$ROOT/.agents/skills/bearings/SKILL.md"
+AHOY="$ROOT/.agents/skills/ahoy/SKILL.md"
+README="$ROOT/README.md"
 
 section_9() {
   awk '
@@ -101,6 +104,35 @@ test_verbatim_internal_evidence_is_rejected_from_chat() {
   pass "captain chat rejects verbatim internal evidence while private reports stay precise"
 }
 
+test_routine_no_action_response_is_event_scoped() {
+  local contract
+  contract=$(section_9)
+  assert_contains "$contract" 'reply exactly `Captain, shipshape.` without characterizing the visible session' \
+    "section 9 does not require the exact event-scoped routine no-action response"
+  assert_not_contains "$contract" 'Captain, no decision is needed.' \
+    "section 9 implies the visible session has no unrelated open decisions"
+  pass "routine no-action response is exact and scoped to its event"
+}
+
+test_ahoy_contract() {
+  assert_present "$AHOY" "ahoy skill is missing"
+  assert_grep 'name: ahoy' "$AHOY" "ahoy skill metadata has the wrong name"
+  assert_grep 'user-invocable: true' "$AHOY" "ahoy skill is not user-invocable"
+  assert_grep '  internal: true' "$AHOY" "ahoy skill is not internal"
+  [ ! -e "$ROOT/skills/ahoy" ] || fail "ahoy must not exist in the public installer-facing skills directory"
+  assert_grep '| `/ahoy`' "$README" "README built-in skills table does not list /ahoy"
+  assert_grep '[`../bearings/SKILL.md`](../bearings/SKILL.md)' "$AHOY" \
+    "first-message fallback does not delegate to Bearings"
+  assert_grep 'session-history-only' "$AHOY" "later Ahoy recaps are not limited to visible history"
+  assert_grep 'every explicit captain decision that remains unanswered' "$AHOY" \
+    "Ahoy does not preserve visibly unanswered decisions"
+  assert_grep 'address the captain directly at least once' "$AHOY" \
+    "Ahoy does not enforce the direct-address contract"
+  assert_grep 'Use the captain'"'"'s project language' "$AHOY" \
+    "Ahoy does not require captain-facing outcome language"
+  pass "ahoy is internal, visible-history-only, decision-aware, and captain-facing"
+}
+
 test_outward_facing_skill_points_reference_section_9_owner() {
   assert_grep "using \`AGENTS.md\` section 9's captain-facing translation contract" "$BOOTSTRAP" \
     "bootstrap diagnostics do not reference section 9 at captain handoff"
@@ -176,7 +208,7 @@ test_bearings_guarantees_completion_truth() {
 test_section_9_owner_is_not_duplicated_into_skills() {
   local duplicate_count file
   duplicate_count=0
-  for file in "$BOOTSTRAP" "$AFK" "$DECISION" "$RECOVERY" "$HARNESS" "$CODEXAPP" "$UPDATE" "$BEARINGS"; do
+  for file in "$BOOTSTRAP" "$AFK" "$DECISION" "$RECOVERY" "$HARNESS" "$CODEXAPP" "$UPDATE" "$BEARINGS" "$AHOY"; do
     if grep -Fq "When evidence uses an internal label, rewrite it before sending:" "$file"; then
       duplicate_count=$((duplicate_count + 1))
     fi
@@ -190,6 +222,8 @@ test_scout_remains_allowed_house_vocabulary
 test_compressed_safety_labels_have_plain_renderings
 test_mapping_list_covers_high_risk_internal_families
 test_verbatim_internal_evidence_is_rejected_from_chat
+test_routine_no_action_response_is_event_scoped
+test_ahoy_contract
 test_outward_facing_skill_points_reference_section_9_owner
 test_section_9_owner_is_not_duplicated_into_skills
 test_bearings_forbids_premature_all_clear

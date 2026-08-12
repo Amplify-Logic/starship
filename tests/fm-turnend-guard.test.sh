@@ -120,6 +120,7 @@ install_guard_scripts() {
   mkdir -p "$dir/bin"
   cp "$ROOT/bin/fm-turnend-guard.sh" "$dir/bin/fm-turnend-guard.sh"
   cp "$ROOT/bin/fm-turnend-guard-grok.sh" "$dir/bin/fm-turnend-guard-grok.sh"
+  cp "$ROOT/bin/fm-operational-input.sh" "$dir/bin/fm-operational-input.sh"
   cp "$ROOT/bin/fm-supervision-instructions.sh" "$dir/bin/fm-supervision-instructions.sh"
   cp "$ROOT/bin/fm-harness.sh" "$dir/bin/fm-harness.sh"
   cp "$ROOT/bin/fm-primary-scope-lib.sh" "$dir/bin/fm-primary-scope-lib.sh"
@@ -127,7 +128,7 @@ install_guard_scripts() {
   cp "$ROOT/bin/fm-wake-lib.sh" "$dir/bin/fm-wake-lib.sh"
   mkdir -p "$dir/docs"
   cp -R "$ROOT/docs/supervision-protocols" "$dir/docs/supervision-protocols"
-  chmod +x "$dir/bin/fm-turnend-guard.sh" "$dir/bin/fm-turnend-guard-grok.sh" "$dir/bin/fm-supervision-instructions.sh" "$dir/bin/fm-harness.sh"
+  chmod +x "$dir/bin/fm-turnend-guard.sh" "$dir/bin/fm-turnend-guard-grok.sh" "$dir/bin/fm-operational-input.sh" "$dir/bin/fm-supervision-instructions.sh" "$dir/bin/fm-harness.sh"
 }
 
 mark_codex_hook_root() {
@@ -834,8 +835,10 @@ test_pi_extension_injects_once_per_logical_agent_run() {
   home="$TMP_ROOT/pi-logical-run-home"
   ext="$repo/.pi/extensions/fm-primary-turnend-guard.ts"
   log="$TMP_ROOT/pi-logical-run-guard.log"
-  mkdir -p "$repo/.pi/extensions" "$repo/bin" "$home/state"
+  mkdir -p "$repo/.pi/extensions/lib" "$repo/bin" "$home/state"
   cp "$ROOT/.pi/extensions/fm-primary-turnend-guard.ts" "$ext"
+  cp "$ROOT/.pi/extensions/lib/fm-operational-input.ts" "$repo/.pi/extensions/lib/"
+  cp "$ROOT/bin/fm-operational-input.sh" "$repo/bin/"
   cat > "$repo/bin/fm-turnend-guard.sh" <<'SH'
 #!/usr/bin/env bash
 cat >/dev/null
@@ -898,8 +901,10 @@ test_pi_extension_retries_after_followup_delivery_failure() {
   repo="$TMP_ROOT/pi-delivery-failure-root"
   home="$TMP_ROOT/pi-delivery-failure-home"
   ext="$repo/.pi/extensions/fm-primary-turnend-guard.ts"
-  mkdir -p "$repo/.pi/extensions" "$repo/bin" "$home/state"
+  mkdir -p "$repo/.pi/extensions/lib" "$repo/bin" "$home/state"
   cp "$ROOT/.pi/extensions/fm-primary-turnend-guard.ts" "$ext"
+  cp "$ROOT/.pi/extensions/lib/fm-operational-input.ts" "$repo/.pi/extensions/lib/"
+  cp "$ROOT/bin/fm-operational-input.sh" "$repo/bin/"
   cat > "$repo/bin/fm-turnend-guard.sh" <<'SH'
 #!/usr/bin/env bash
 cat >/dev/null

@@ -12,6 +12,11 @@ test_stow_skill_task_note_contract() {
   assert_grep 'tasks-axi update <id> --body-file <path>' "$stow" "stow skill does not require task body replacement"
   assert_grep '--archive-body' "$stow" "stow skill does not document recoverable task body archival"
   assert_grep 'Never append.' "$stow" "stow skill does not forbid append-first task notes"
+  assert_grep 'one or more actions for captain preferences, shared preferences, and local learnings' "$stow" \
+    "stow receipt must name human outcomes instead of storage paths"
+  # shellcheck disable=SC2016 # Backticks are literal tracked prose.
+  assert_grep 'translate paths, storage mechanics, and workflow labels through `AGENTS.md` section 9' "$stow" \
+    "stow receipt must translate internal storage mechanics"
   assert_no_grep 'carry that context into the replacement body' "$stow" "stow skill still preserves archive-only context in the replacement body"
   pass "stow skill task-note contract includes recoverable body archival"
 }

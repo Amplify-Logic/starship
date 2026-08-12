@@ -73,6 +73,11 @@ SH
   ln -s "$ROOT/bin/fm-secondmate-registry-lib.sh" "$fake/bin/fm-secondmate-registry-lib.sh"
   ln -s "$ROOT/bin/fm-path-lib.sh" "$fake/bin/fm-path-lib.sh"
   ln -s "$ROOT/bin/fm-busy-lib.sh" "$fake/bin/fm-busy-lib.sh"
+  # Pending-reply lifecycle is outside this temp-root test. Teardown only needs
+  # its task cleanup entry point for this fixture.
+  cat > "$fake/bin/fm-pending-reply-lib.sh" <<'SH'
+fm_pending_reply_remove_task() { return 0; }
+SH
   # fm-guard.sh: stub (teardown calls it with `|| true`).
   cat > "$fake/bin/fm-guard.sh" <<'SH'
 #!/usr/bin/env bash

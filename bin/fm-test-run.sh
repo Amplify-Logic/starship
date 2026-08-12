@@ -125,7 +125,7 @@ family_for_basename() {
     fm-read.test.sh|\
     fm-herdr-lab.test.sh|fm-instruction-owners.test.sh|fm-lint.test.sh|fm-fork-surface.test.sh|\
     fm-install-herdr.test.sh|fm-nm-test-contract.test.sh|fm-no-mistakes-ownership.test.sh|\
-    fm-pi-primary-types.test.sh|\
+    fm-pi-primary-types.test.sh|fm-operational-input.test.sh|\
     fm-send-popup-settle.test.sh|fm-send-settle.test.sh|fm-stow-contract.test.sh|\
     fm-supervision-instructions.test.sh|fm-tmux-submit-busy.test.sh|fm-transition-lib.test.sh|\
     fm-worker-boundary-regression.test.sh|\
@@ -146,7 +146,8 @@ family_for_basename() {
       ;;
     fm-backlog-handoff.test.sh|fm-secondmate-harness.test.sh|fm-secondmate-lifecycle-e2e.test.sh|\
     fm-secondmate-liveness.test.sh|fm-secondmate-safety.test.sh|fm-secondmate-sync.test.sh|\
-    fm-send-secondmate-marker.test.sh|fm-shared-captain-inheritance.test.sh)
+    fm-pending-reply.test.sh|fm-send-secondmate-marker.test.sh|fm-shared-captain-inheritance.test.sh|\
+    fm-startup-memory-budget.test.sh)
       printf '%s\n' secondmate
       ;;
     fm-bootstrap.test.sh|fm-fleet-sync.test.sh|fm-gate-refuse.test.sh|fm-gotmp.test.sh|\
@@ -173,7 +174,7 @@ family_for_basename() {
     fm-afk-inject-e2e.test.sh|fm-afk-return.test.sh)
       printf '%s\n' afk
       ;;
-    fm-bearings-snapshot.test.sh|fm-fleet-snapshot-view.test.sh|\
+    fm-bearings-skill.test.sh|fm-bearings-snapshot.test.sh|fm-fleet-snapshot-view.test.sh|\
     fm-landed-completion-truth.test.sh)
       printf '%s\n' snapshot-bearings
       ;;
@@ -656,7 +657,7 @@ families_for_changed_path() {
       printf '%s\n' afk
       ;;
     bin/fm-secondmate*|bin/fm-home-seed.sh|bin/fm-backlog-handoff.sh|\
-    bin/fm-config-inherit-lib.sh|bin/fm-config-push.sh|bin/fm-shared*)
+    bin/fm-config-inherit-lib.sh|bin/fm-config-push.sh|bin/fm-pending-reply-lib.sh|bin/fm-shared*)
       printf '%s\n' secondmate
       ;;
     bin/fm-session-start.sh|bin/fm-bootstrap.sh|bin/fm-fleet-sync.sh|\
@@ -686,6 +687,10 @@ families_for_changed_path() {
     bin/fm-landed-lib.sh)
       printf '%s\n' snapshot-bearings
       ;;
+    bin/fm-startup-memory-budget.sh|bin/fm-startup-memory-budget-lib.sh)
+      printf '%s\n' secondmate
+      printf '%s\n' session-bootstrap
+      ;;
     bin/fm-install-herdr.sh|bin/fm-install-treehouse.sh|bin/fm-herdr-ci-cleanup.sh)
       printf '%s\n' pure-contract-unit
       # Pin or cleanup changes also select the real-Herdr family so the required
@@ -695,7 +700,7 @@ families_for_changed_path() {
     bin/fm-lint.sh|bin/fm-install-shellcheck.sh|\
     bin/fm-brief.sh|bin/fm-ensure-agents-md.sh|bin/fm-crew-state.sh|\
     bin/fm-decision-hold.sh|bin/fm-decision-surface.*|bin/fm-read.*|bin/fm-supervision*|bin/fm-transition-lib.sh|\
-    bin/fm-tmux-lib.sh|bin/fm-marker-lib.sh|bin/fm-tasks-axi-lib.sh|\
+    bin/fm-tmux-lib.sh|bin/fm-marker-lib.sh|bin/fm-operational-input.sh|bin/fm-tasks-axi-lib.sh|\
     bin/fm-primary-scope-lib.sh|bin/fm-project-mode.sh|bin/fm-promote.sh|\
     bin/fm-ff-lib.sh|bin/fm-gotmp*|bin/*pretool*|\
     bin/fm-worker-boundary-regression.sh|docs/fm-worker-boundary-source.json)

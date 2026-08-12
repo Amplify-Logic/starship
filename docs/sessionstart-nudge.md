@@ -2,7 +2,7 @@
 
 AGENTS.md section 3 remains the single authoritative behavioral contract for session start.
 The tracked native adapters are an enforcement layer that injects one instruction and never runs the digest, lock acquisition, bootstrap sweeps, wake drain, or supervision arm itself.
-The injected line is exactly ``Run `bin/fm-session-start.sh` now, exactly once, before executing any other instructions.``
+The injected body is exactly ``Run `bin/fm-session-start.sh` now, exactly once, before executing any other instructions.`` inside the canonical typed `session-start` operational envelope.
 
 ## Shared wrapper and safety
 

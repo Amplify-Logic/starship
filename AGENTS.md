@@ -67,7 +67,8 @@ config/crew-harness  crewmate harness override; LOCAL, gitignored; absent or "de
 config/crew-dispatch.json  optional crewmate dispatch profiles; LOCAL, gitignored; firstmate-maintained but human-editable natural-language rules that choose a per-task harness/model/effort profile (section 4). Inherited by secondmate homes
 config/secondmate-harness  harness the PRIMARY uses to launch SECONDMATE agents, optionally followed by a model and effort token on the same line ("<harness> [<model>] [<effort>]"; section 4); LOCAL, gitignored; absent or "default" harness falls back to config/crew-harness then firstmate's own. The primary's own setting; NOT inherited into secondmate homes (secondmates do not spawn secondmates)
 config/backlog-backend  backlog backend override; LOCAL, gitignored; absent or "tasks-axi" = default tasks-axi backend, "manual" = force routine backlog updates to hand-editing; inherited by secondmate homes (section 10)
-config/backend  runtime session-provider backend override for new tasks; LOCAL, gitignored; absent = falls through to runtime auto-detection (the runtime firstmate itself is executing inside), then tmux; tmux is the verified reference backend (docs/tmux-backend.md), while herdr, zellij, orca, and cmux are experimental spawn backends (docs/herdr-backend.md, docs/zellij-backend.md, docs/orca-backend.md, docs/cmux-backend.md) - herdr and cmux can also be selected by runtime auto-detection, zellij and orca never are (always explicit), and codex-app is not accepted; see docs/codex-app-backend.md; not inherited into secondmate homes
+config/backend  runtime session-provider backend override for new tasks; LOCAL, gitignored; absent = falls through to runtime auto-detection (the runtime firstmate itself is executing inside), then tmux; tmux is the verified reference backend (docs/tmux-backend.md), while herdr, zellij, orca, and cmux are experimental spawn backends (docs/herdr-backend.md, docs/zellij-backend.md, docs/orca-backend.md, docs/cmux-backend.md) - herdr and cmux can also be selected by runtime auto-detection, zellij and orca never are (always explicit), and codex-app is not accepted; see docs/codex-app-backend.md; inherited by secondmate homes under the primary-authoritative contract in secondmate-provisioning
+config/startup-memory-budget  primary-authoritative per-home startup-memory budget; LOCAL, gitignored, materialized as 7,500 estimated tokens by locked primary bootstrap and inherited into secondmate homes; see docs/configuration.md "Startup memory budget"
 config/cmux-socket-password  optional cmux control-socket password; LOCAL, gitignored; read fresh on every cmux CLI call and passed through without ever overriding an operator's own ambient CMUX_SOCKET_PASSWORD when absent (docs/cmux-backend.md "Setup")
 config/wedge-alarm  optional away-mode wedge-alarm active-alert directives; LOCAL, gitignored; absent means auto (macOS Notification Center when available); see docs/wedge-alarm.md
 config/primary-handoff  optional quota- and context-aware primary orchestrator rotation; LOCAL, gitignored; absent or enabled:false leaves primary launch unchanged; see docs/primary-handoff.md
@@ -96,6 +97,7 @@ state/               volatile runtime signals; gitignored
   .pr-check-migration.log  private per-task outcomes distinguishing rebuilt or canonically registered replacement polls, quarantined unarmed polls, and incomplete migrations
   .pr-check-migration-scan-v1  private marker proving the non-executing scan disabled every unsafe legacy check; .pr-check-migration-v1 separately records completed private repairs
   x-watch.check.sh   generated X-mode relay poll shim; present only when opted in (section 14)
+  pending-replies/   parent-owned secondmate pending-reply records for correlated delivery, recovery, and one-shot escalation; bin/fm-pending-reply-lib.sh
   x-inbox/           generated X-mode pending mention payloads; fmx-respond drains it (section 14)
   x-context/         generated X-mode durable per-request reply context and one-wake offer markers, keyed by request_id; survives inbox cleanup and expires within seven days (section 14; bin/fm-x-lib.sh)
   x-outbox/          generated X-mode dry-run reply and dismiss previews; inspect it when FMX_DRY_RUN is set (section 14)
@@ -262,6 +264,7 @@ A persistent secondmate is recorded in the secondmate registry and runtime state
 
 Steer a worker with short single-line messages through fail-closed `fm-send`; put long instructions in a file.
 A secondmate's routed reply returns through status or a document pointer, not by firstmate peeking into its chat.
+`bin/fm-pending-reply-lib.sh` owns correlation, one automatic repost request, liveness-aware dead-agent escalation, and resolution for marked secondmate requests.
 Supervise all live work under section 8.
 
 ### Selected delivery path and approval authority
@@ -374,10 +377,10 @@ Harness-aware turn-end guards are structural backstops, not permission to omit t
 
 ### Away-mode stub
 
-Invoke the `/afk` skill when the captain says `/afk`, says they are going afk, `state/.afk` exists, an incoming message starts with `FM_INJECT_MARK`, or any `state/.subsuper-*` marker is involved.
+Invoke the `/afk` skill when the captain says `/afk`, says they are going afk, `state/.afk` exists, an incoming message starts with the current operational-input prefix or legacy `FM_INJECT_MARK`, or any `state/.subsuper-*` marker is involved.
 The skill owns the daemon procedure; these safety facts remain inline:
 
-- Every daemon injection starts with `FM_INJECT_MARK` plus U+2063 INVISIBLE SEPARATOR, which distinguishes internal escalation from captain input.
+- Every current daemon injection uses the `away-supervisor` kind from `bin/fm-operational-input.sh` after `FM_OPERATIONAL_PREFIX` (U+2063 INVISIBLE SEPARATOR followed by `FIRSTMATE_OP: `), while the `/afk` skill owns legacy bare-marker compatibility.
 - While `state/.afk` exists, the daemon owns supervision; do not arm a separate watcher.
 - A marked message while away mode is active is internal escalation and does not exit away mode.
 - A message beginning `/afk` refreshes away mode.
@@ -428,6 +431,7 @@ Reach the captain immediately for:
 - A needed credential or login.
 
 Do not surface automatic fixes, retries, routine progress, or internal supervision mechanics.
+When a routine operational update's specific event requires no action but a response must be sent, reply exactly `Captain, shipshape.` without characterizing the visible session's unrelated decisions.
 Batch non-urgent updates into the next natural reply.
 Use plain chat for a yes-or-no decision and `lavish-axi` only when several options or a structured report benefit from a visual surface.
 Whenever a PR is mentioned, include its full `https://...` URL before any shorthand reference.
@@ -478,7 +482,7 @@ It performs guarded fast-forward updates of firstmate and registered secondmate 
 
 These skills are not captain-invocable; load them only at their precise triggers.
 
-- `bootstrap-diagnostics` - load whenever the session-start digest's bootstrap section prints an actionable diagnostic line (`MISSING:`, `MISSING_MANUAL:`, `BACKEND_INVALID:`, `NEEDS_GH_AUTH`, `TANGLE:`, `CREW_DISPATCH: invalid`, `FLEET_SYNC:`, `PR_CHECK_MIGRATION:`, `SECONDMATE_SYNC:`, `SECONDMATE_LIVENESS:`, `NUDGE_SECONDMATES:`, `CONFIG_REREAD:`, `UPSTREAM:`, `UPSTREAM_REPORT:`, or `FMX:`); silence and `BOOTSTRAP_INFO:` need no load.
+- `bootstrap-diagnostics` - load whenever the session-start digest's bootstrap section prints an actionable diagnostic line (`MISSING:`, `MISSING_MANUAL:`, `BACKEND_INVALID:`, `NEEDS_GH_AUTH`, `TANGLE:`, `STARTUP_MEMORY_BUDGET:`, `CREW_DISPATCH: invalid`, `FLEET_SYNC:`, `PR_CHECK_MIGRATION:`, `SECONDMATE_SYNC:`, `SECONDMATE_LIVENESS:`, `NUDGE_SECONDMATES:`, `CONFIG_REREAD:`, `UPSTREAM:`, `UPSTREAM_REPORT:`, or `FMX:`); silence and `BOOTSTRAP_INFO:` need no load.
 - `diagnostic-reasoning` - load before scoping a reported bug and before acting on a diagnostic report.
 - `ask-user-authority` - load before deciding any ask-user finding, regardless of the project's `yolo` posture.
 - `adhd-auto-fire` - load before committing to a genuinely divergent, fuzzy, high-leverage decision (design, architecture, API/schema shape, naming, strategy, approach-selection, hard/ambiguous debugging).

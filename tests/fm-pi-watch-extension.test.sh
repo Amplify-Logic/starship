@@ -14,8 +14,10 @@ export NODE_NO_WARNINGS=1
 
 install_pi_watch_extension_fixture() {
   local repo=$1
-  mkdir -p "$repo/.pi/extensions" "$repo/node_modules/typebox"
+  mkdir -p "$repo/.pi/extensions/lib" "$repo/bin" "$repo/node_modules/typebox"
   cp "$EXT" "$repo/.pi/extensions/fm-primary-pi-watch.ts"
+  cp "$ROOT/.pi/extensions/lib/fm-operational-input.ts" "$repo/.pi/extensions/lib/"
+  cp "$ROOT/bin/fm-operational-input.sh" "$repo/bin/"
   cat > "$repo/node_modules/typebox/package.json" <<'JSON'
 {"name":"typebox","type":"module","exports":"./index.js"}
 JSON
@@ -907,10 +909,11 @@ test_opencode_plugin_package_boundary_is_explicit_esm() {
   local fixture plugin out status
   fixture="$TMP_ROOT/opencode-esm-boundary/.opencode"
   plugin="$fixture/plugins/fm-primary-watch-arm.js"
-  mkdir -p "$fixture/plugins"
+  mkdir -p "$fixture/plugins/lib"
   printf '%s\n' '{"dependencies":{}}' > "$fixture/package.json"
   cp "$ROOT/.opencode/plugins/package.json" "$fixture/plugins/package.json"
   cp "$ROOT/.opencode/plugins/fm-primary-watch-arm.js" "$plugin"
+  cp "$ROOT/.opencode/plugins/lib/fm-operational-input.js" "$fixture/plugins/lib/"
   out=$(PLUGIN="$plugin" node --input-type=module 2>&1 <<'EOF'
 import { pathToFileURL } from "node:url";
 await import(pathToFileURL(process.env.PLUGIN).href);

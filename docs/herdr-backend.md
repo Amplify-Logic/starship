@@ -369,7 +369,8 @@ A working Pi, a pending middle row, a missing or non-Pi identity, an incomplete 
 The extracted content still routes through the shared `bin/fm-composer-lib.sh` decision owner.
 
 Making the Pi composer injectable exposed the already-proven terminal-control hazard from the 2026-07-13 incident: Herdr consumed a leading ASCII `0x1f`, so Pi received `Supervisor escalate...` without the away marker.
-`FM_INJECT_MARK` now uses a bare leading U+2063 INVISIBLE SEPARATOR, while the from-firstmate marker remains a visible label followed by U+2063, so their full prefixes stay distinct.
+At the time of this reproduction, `FM_INJECT_MARK` used a bare leading U+2063 INVISIBLE SEPARATOR, while the from-firstmate marker remained a visible label followed by U+2063, so their full prefixes stayed distinct.
+`bin/fm-operational-input.sh` owns current operational-input construction, while the `/afk` skill owns the daemon's stay-away handling and legacy bare-marker compatibility.
 U+2063 has no normal keyboard keystroke and the real post-fix Pi prompt capture retained its `e281a3` prefix byte-exact.
 
 The return half of the same reproduction showed that separate `stop` and `wake-drain` calls left policy ownership to the operator and allowed an ordinary Bearings request to begin while the live blocker remained open.
@@ -615,7 +616,8 @@ Guarded teardown confirms the default-session fleet tripwire is unchanged.
 On a herdr-based fleet (firstmate itself running with `HERDR_ENV=1`, no `$TMUX_PANE`), this failed outright at startup: `TMUX_PANE` is unset, so discovery fell through to the legacy `firstmate:0` fallback, which then failed the tmux pane-exists probe and refused to start.
 
 The fix is transport-layer only - discovery, injection, and the busy/composer guards now dispatch through the SAME `bin/fm-backend.sh` primitives every other backend-aware script already uses (`fm_backend_target_exists`, `fm_backend_busy_state`, `fm_backend_capture`, `fm_backend_send_text_submit`, and the new `fm_backend_composer_state` dispatcher added alongside this work).
-Classification policy, batching, the max-defer escape, the `FM_INJECT_MARK` sentinel contract, locks, and wake-queue handling are all unchanged.
+At the time of this transport fix, classification policy, batching, the max-defer escape, the then-current sentinel contract, locks, and wake-queue handling were unchanged.
+`bin/fm-operational-input.sh` owns the current input protocol.
 
 **Discovery.** `FM_SUPERVISOR_TARGET` remains the explicit override, now accepting either a tmux target or a herdr `"<session>:<pane-id>"` target.
 A new `FM_SUPERVISOR_BACKEND` override (`tmux`|`herdr`) resolves independently, mirroring `bin/fm-backend.sh`'s own `fm_backend_detect`: `$TMUX_PANE` set selects tmux (even nested inside herdr, matching the innermost-first rule); `$HERDR_ENV=1` with `$HERDR_PANE_ID` present selects herdr, composing the target as `"${HERDR_SESSION:-default}:${HERDR_PANE_ID}"`; absent both, the daemon falls back to tmux/`firstmate:0`, byte-identical to its pre-herdr-support behavior.
