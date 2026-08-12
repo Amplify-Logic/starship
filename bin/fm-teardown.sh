@@ -106,6 +106,8 @@ SUB_HOME_MARKER=".fm-secondmate-home"
 . "$SCRIPT_DIR/fm-gate-refuse-lib.sh"
 # shellcheck source=bin/fm-pr-lib.sh
 . "$SCRIPT_DIR/fm-pr-lib.sh"
+# shellcheck source=bin/fm-public-followup-lib.sh
+. "$SCRIPT_DIR/fm-public-followup-lib.sh"
 # shellcheck source=bin/fm-capability-lib.sh
 . "$SCRIPT_DIR/fm-capability-lib.sh"
 # shellcheck source=bin/fm-worktree-lease-lib.sh
@@ -152,6 +154,74 @@ HARNESS=$(grep '^harness=' "$META" | cut -d= -f2- || true)
 MODEL=$(grep '^model=' "$META" | cut -d= -f2- || true)
 EFFORT=$(grep '^effort=' "$META" | cut -d= -f2- || true)
 TASK_TYPE=$(grep '^task_type=' "$META" | cut -d= -f2- || true)
+PUBLIC_FOLLOWUP_HOME=$FM_HOME
+PUBLIC_FOLLOWUP_STATE=$STATE
+PUBLIC_FOLLOWUP_WORK_HOME=main
+PUBLIC_FOLLOWUP_PARENT_UNRESOLVED=0
+PUBLIC_FOLLOWUP_PARENT_RELAY_ACTIVE=0
+PUBLIC_FOLLOWUP_RELAY_ACTIVE=0
+public_followup_resolve_primary_home() {
+  local parent=$1 child=$2 id=$3 parent_meta registry meta_home
+  fm_pf_home_id_valid "secondmate:$id" || return 1
+  case "$parent" in /*) ;; *) return 1 ;; esac
+  parent=$(CDPATH='' cd -- "$parent" 2>/dev/null && pwd -P) || return 1
+  child=$(CDPATH='' cd -- "$child" 2>/dev/null && pwd -P) || return 1
+  [ "$parent" != "$child" ] || return 1
+  [ -f "$child/$SUB_HOME_MARKER" ] && [ ! -L "$child/$SUB_HOME_MARKER" ] || return 1
+  [ "$(sed -n '1p' "$child/$SUB_HOME_MARKER" 2>/dev/null)" = "$id" ] || return 1
+  parent_meta="$parent/state/$id.meta"
+  if [ -e "$parent_meta" ]; then
+    [ -f "$parent_meta" ] && [ ! -L "$parent_meta" ] || return 1
+    [ "$(fm_meta_get "$parent_meta" kind)" = secondmate ] || return 1
+    meta_home=$(fm_meta_get "$parent_meta" home)
+    meta_home=$(CDPATH='' cd -- "$meta_home" 2>/dev/null && pwd -P) || return 1
+    [ "$meta_home" = "$child" ] || return 1
+  fi
+  registry="$parent/data/secondmates.md"
+  if [ -e "$registry" ] || [ -L "$registry" ]; then
+    secondmate_registry_validate_bindings "$registry" secondmate_registry_path_key \
+      "$id" "$child" "$parent" "$FM_ROOT" scoped || return 1
+  fi
+  printf '%s\n' "$parent"
+}
+if [ -f "$FM_HOME/$SUB_HOME_MARKER" ]; then
+  SECOND_MATE_ID=$(sed -n '1p' "$FM_HOME/$SUB_HOME_MARKER")
+  # A marked child enters the primary-binding path only when the authoritative
+  # parent relay is active, so an inert child retains the established path.
+  if [ -n "${FM_PUBLIC_FOLLOWUP_PRIMARY_HOME:-}" ]; then
+    if fm_pf_relay_active "$FM_PUBLIC_FOLLOWUP_PRIMARY_HOME"; then
+      PUBLIC_FOLLOWUP_PARENT_RELAY_ACTIVE=1
+    fi
+  fi
+  if [ "$PUBLIC_FOLLOWUP_PARENT_RELAY_ACTIVE" = 1 ]; then
+    PUBLIC_FOLLOWUP_PARENT_UNRESOLVED=1
+    if fm_pf_home_id_valid "secondmate:$SECOND_MATE_ID"; then
+      PUBLIC_FOLLOWUP_WORK_HOME="secondmate:$SECOND_MATE_ID"
+      if PUBLIC_FOLLOWUP_HOME=$(public_followup_resolve_primary_home \
+          "${FM_PUBLIC_FOLLOWUP_PRIMARY_HOME:-}" "$FM_HOME" "$SECOND_MATE_ID"); then
+        PUBLIC_FOLLOWUP_STATE="$PUBLIC_FOLLOWUP_HOME/state"
+        PUBLIC_FOLLOWUP_PARENT_UNRESOLVED=0
+        if [ "$FORCE" != "--force" ] \
+          && fm_pf_relay_active "$PUBLIC_FOLLOWUP_HOME"; then
+          PUBLIC_FOLLOWUP_RELAY_ACTIVE=1
+        fi
+      else
+        PUBLIC_FOLLOWUP_HOME=
+        PUBLIC_FOLLOWUP_STATE=
+      fi
+    fi
+  else
+    PUBLIC_FOLLOWUP_HOME=
+    PUBLIC_FOLLOWUP_STATE=
+  fi
+elif [ "$KIND" = secondmate ]; then
+  PUBLIC_FOLLOWUP_WORK_HOME="secondmate:$ID"
+  if [ "$FORCE" != "--force" ] && fm_pf_relay_active "$FM_HOME"; then
+    PUBLIC_FOLLOWUP_RELAY_ACTIVE=1
+  fi
+elif [ "$FORCE" != "--force" ] && fm_pf_relay_active "$FM_HOME"; then
+  PUBLIC_FOLLOWUP_RELAY_ACTIVE=1
+fi
 
 default_branch() {
   local ref branch
@@ -1237,6 +1307,25 @@ if [ "$KIND" = scout ] && [ "$FORCE" != "--force" ]; then
       FM_CONFIG_OVERRIDE="$CONFIG" "$SCRIPT_DIR/fm-decision-hold.sh" verify "$ID" >/dev/null; then
     echo "REFUSED: scout task $ID has not passed the unresolved-decision completion gate." >&2
     echo "Inventory its report and any visual review through bin/fm-decision-hold.sh before teardown." >&2
+    exit 1
+  fi
+fi
+
+# Refuse cleanup while this exact task still backs an owed public reply.
+# Relay-disabled homes stop at the activation predicate without a backlog call.
+if [ "$FORCE" != "--force" ] && [ "$PUBLIC_FOLLOWUP_PARENT_UNRESOLVED" = 1 ]; then
+  echo "REFUSED: cannot resolve the primary home for marked secondmate $SECOND_MATE_ID; refusing cleanup without its durable parent binding." >&2
+  exit 1
+fi
+if [ "$FORCE" != "--force" ] \
+  && [ -n "$PUBLIC_FOLLOWUP_STATE" ] \
+  && [ "$PUBLIC_FOLLOWUP_RELAY_ACTIVE" = 1 ] \
+  && fm_pf_has_registrations "$PUBLIC_FOLLOWUP_STATE"; then
+  if ! PUBLIC_FOLLOWUP_BLOCKING=$(FM_HOME="$PUBLIC_FOLLOWUP_HOME" FM_STATE_OVERRIDE="$PUBLIC_FOLLOWUP_STATE" \
+      "$SCRIPT_DIR/fm-public-followup.sh" guard-work "$PUBLIC_FOLLOWUP_WORK_HOME" "$ID" 2>/dev/null); then
+    echo "REFUSED: task $ID still owes a public reply through the myfirstmate relay." >&2
+    printf '%s\n' "$PUBLIC_FOLLOWUP_BLOCKING" >&2
+    echo "Deliver it with bin/fm-public-followup.sh deliver <obligation-id>, waive it with tasks-axi public-followup waive, or use --force after explicit discard approval." >&2
     exit 1
   fi
 fi

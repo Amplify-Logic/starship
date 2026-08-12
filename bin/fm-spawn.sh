@@ -168,6 +168,8 @@ SUB_HOME_MARKER=".fm-secondmate-home"
 . "$SCRIPT_DIR/fm-gate-refuse-lib.sh"
 # shellcheck source=bin/fm-pr-lib.sh
 . "$SCRIPT_DIR/fm-pr-lib.sh"
+# shellcheck source=bin/fm-public-followup-lib.sh
+. "$SCRIPT_DIR/fm-public-followup-lib.sh"
 # shellcheck source=bin/fm-cursor-model-lib.sh
 . "$SCRIPT_DIR/fm-cursor-model-lib.sh"
 # shellcheck source=bin/fm-worktree-lease-lib.sh
@@ -1624,6 +1626,10 @@ if [ "$HARNESS" = kimi ] && [ "$RAW_LAUNCH" -eq 0 ]; then
 fi
 if [ "$KIND" = secondmate ]; then
   sq_home=$(shell_quote "$PROJ_ABS")
+  if fm_pf_relay_active "$FM_HOME"; then
+    sq_primary_home=$(shell_quote "$FM_HOME")
+    LAUNCH="FM_PUBLIC_FOLLOWUP_PRIMARY_HOME=$sq_primary_home $LAUNCH"
+  fi
   LAUNCH="FM_ROOT_OVERRIDE= FM_STATE_OVERRIDE= FM_DATA_OVERRIDE= FM_PROJECTS_OVERRIDE= FM_CONFIG_OVERRIDE= FM_HOME=$sq_home $LAUNCH"
 fi
 # Export GOTMPDIR into the crewmate's pane shell so the agent and every child

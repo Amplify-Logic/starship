@@ -66,6 +66,9 @@ SH
   ln -s "$ROOT/bin/fm-gate-refuse-lib.sh" "$fake/bin/fm-gate-refuse-lib.sh"
   # fm-pr-lib.sh: teardown uses its canonical task-ID validator for poll cleanup.
   ln -s "$ROOT/bin/fm-pr-lib.sh" "$fake/bin/fm-pr-lib.sh"
+  # Public follow-up activation stays inert here, but teardown sources both files.
+  ln -s "$ROOT/bin/fm-public-followup-lib.sh" "$fake/bin/fm-public-followup-lib.sh"
+  ln -s "$ROOT/bin/fm-x-lib.sh" "$fake/bin/fm-x-lib.sh"
   # fm-capability-lib.sh: teardown records capability outcomes before meta removal.
   ln -s "$ROOT/bin/fm-capability-lib.sh" "$fake/bin/fm-capability-lib.sh"
   ln -s "$ROOT/bin/fm-worktree-lease-lib.sh" "$fake/bin/fm-worktree-lease-lib.sh"
