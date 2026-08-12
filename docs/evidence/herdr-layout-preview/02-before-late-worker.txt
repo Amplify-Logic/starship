@@ -1,0 +1,21 @@
+BEFORE - after an eighth worker starts for a project that already has workers
+-----------------------------------------------------------------------------
+WORKSPACE  City Guide · 🟣 1 NEEDS YOU · 🔴 1 FAILED · 🔵 2 WORKING
+  TAB      WORKER · Validate GPS triggers across all seven city stops · 🔵 WORKING
+  DETAIL   pi/gpt-5.6 · detached
+  TAB      WORKER · Decide the harbour-loop audio cut · 🟣 NEEDS YOU
+  DETAIL   claude/opus-5 · fm/journey-route-audio-q2
+  TAB      WORKER · Speed up the offline map tiles · 🔵 WORKING
+  DETAIL   codex/gpt-5.6 · fm/journey-tile-cache-r3
+  TAB      WORKER · Fix the crash on the last booking step · 🔴 FAILED
+  DETAIL   claude/opus-5 · fm/journey-checkout-crash-t9
+WORKSPACE  Atelier · 🟣 1 NEEDS YOU · 🔴 1 FAILED
+  TAB      WORKER · Decide the onboarding welcome copy · 🟣 NEEDS YOU
+  DETAIL   claude/opus-5 · fm/atelier-onboarding-copy-k4
+  TAB      WORKER · Retry the nightly artwork export · 🔴 FAILED
+  DETAIL   pi/gpt-5.6 · fm/atelier-export-retry-m1
+WORKSPACE  API Platform · 🟠 1 BLOCKED · 🟢 1 READY
+  TAB      WORKER · Stop rate limits dropping webhook deliveries · 🟠 BLOCKED
+  DETAIL   claude/opus-5 · fm/api-platform-rate-limit-c7
+  TAB      WORKER · Audit the public schema for breaking changes · 🟢 READY
+  DETAIL   codex/gpt-5.6 · detached

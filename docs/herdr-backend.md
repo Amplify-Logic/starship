@@ -96,6 +96,24 @@ set -o pipefail; for test_file in tests/*.test.sh; do printf '\\n===== %s =====\
 PASS - 84/84 test scripts completed, 0 not-ok results, 6 documented opt-in skips
 ```
 
+### Workspace ordering is creation order and cannot be changed - 2026-08-03
+
+Verified with Herdr 0.7.4 on macOS 25.5.0 in generated non-`default` lab sessions, through `bin/fm-herdr-lab.sh` only.
+`herdr workspace --help` exposes `list`, `create`, `get`, `focus`, `rename`, `report-metadata` and `close`, and no reorder, move, sort, or parent operation.
+`workspace list` returns workspaces in creation order, and each carries the creation ordinal as `number`.
+Creating `Alpha`, then `Beta`, then `Alpha-late` reported:
+
+```text
+w1	Alpha
+w2	Beta
+w3	Alpha-late
+```
+
+A workspace created later therefore always appears last, never beside an earlier workspace it is related to.
+Any presentation that encodes a relationship in adjacency - upstream's `└ ` child rows included - separates from its parent as soon as one arrives out of order.
+`bin/fm-visible-status.sh`'s project workspaces are unaffected, because a task joins an existing project workspace as a tab instead of creating a row.
+The staged consequence at fleet scale is captured in [`docs/herdr-layout-preview.md`](herdr-layout-preview.md), reproducible with `FM_HERDR_LAYOUT_PREVIEW_E2E=1 HERDR_LAB_HELPER=$HOME/starship/bin/fm-herdr-lab.sh tests/fm-herdr-layout-preview-e2e.test.sh`.
+
 ## Status: experimental
 
 Herdr is experimental, exactly like every non-tmux backend in this design.
@@ -124,6 +142,9 @@ The adapter binds a newly created workspace once with hidden `fm_owner` and `fm_
 Each token is a versioned Git object hash of the complete physical path, keeping the immutable identity below Herdr's metadata value limit without storing a truncatable raw path.
 Workspace lookup exact-matches both tokens and never identifies or adopts managed work by its visible label.
 The human project label is mutable presentation and may include prioritized aggregate state without weakening ownership.
+
+This container shape is what [`docs/herdr-layout-preview.md`](herdr-layout-preview.md) proposes replacing with upstream's one-workspace-per-worker unit.
+That preview is unapproved and changes nothing here until the captain accepts it.
 
 The project display name comes from `bin/fm-project-display-name.sh`, the single resolver owner.
 It has explicit brand and acronym casing overrides and labels its generic title-cased result as a synthesized fallback rather than claiming a repository basename is authoritative human naming.

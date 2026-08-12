@@ -1,0 +1,32 @@
+AFTER-A - after an eighth worker starts for a project whose header row is at the top
+------------------------------------------------------------------------------------
+WORKSPACE  City Guide · 🟣 1 NEEDS YOU · 🔴 1 FAILED · 🔵 2 WORKING
+  TAB      City Guide
+WORKSPACE  └ Validate GPS triggers across all seven city stops · 🔵 WORKING
+  TAB      WORKER · Validate GPS triggers across all seven city stops · 🔵 WORKING
+  DETAIL   pi/gpt-5.6 · detached
+WORKSPACE  └ Decide the harbour-loop audio cut · 🟣 NEEDS YOU
+  TAB      WORKER · Decide the harbour-loop audio cut · 🟣 NEEDS YOU
+  DETAIL   claude/opus-5 · fm/journey-route-audio-q2
+WORKSPACE  └ Speed up the offline map tiles · 🔵 WORKING
+  TAB      WORKER · Speed up the offline map tiles · 🔵 WORKING
+  DETAIL   codex/gpt-5.6 · fm/journey-tile-cache-r3
+WORKSPACE  Atelier · 🟣 1 NEEDS YOU · 🔴 1 FAILED
+  TAB      Atelier
+WORKSPACE  └ Decide the onboarding welcome copy · 🟣 NEEDS YOU
+  TAB      WORKER · Decide the onboarding welcome copy · 🟣 NEEDS YOU
+  DETAIL   claude/opus-5 · fm/atelier-onboarding-copy-k4
+WORKSPACE  └ Retry the nightly artwork export · 🔴 FAILED
+  TAB      WORKER · Retry the nightly artwork export · 🔴 FAILED
+  DETAIL   pi/gpt-5.6 · fm/atelier-export-retry-m1
+WORKSPACE  API Platform · 🟠 1 BLOCKED · 🟢 1 READY
+  TAB      API Platform
+WORKSPACE  └ Stop rate limits dropping webhook deliveries · 🟠 BLOCKED
+  TAB      WORKER · Stop rate limits dropping webhook deliveries · 🟠 BLOCKED
+  DETAIL   claude/opus-5 · fm/api-platform-rate-limit-c7
+WORKSPACE  └ Audit the public schema for breaking changes · 🟢 READY
+  TAB      WORKER · Audit the public schema for breaking changes · 🟢 READY
+  DETAIL   codex/gpt-5.6 · detached
+WORKSPACE  └ Fix the crash on the last booking step · 🔴 FAILED
+  TAB      WORKER · Fix the crash on the last booking step · 🔴 FAILED
+  DETAIL   claude/opus-5 · fm/journey-checkout-crash-t9

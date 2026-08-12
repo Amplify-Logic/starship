@@ -41,6 +41,10 @@ SOURCE=firstmate-worker-visible-v1
 . "$SCRIPT_DIR/backends/herdr.sh"
 # shellcheck source=bin/fm-cursor-model-lib.sh
 . "$SCRIPT_DIR/fm-cursor-model-lib.sh"
+# fm_visible_state, fm_visible_icon and fm_visible_aggregate own the
+# captain-facing state vocabulary shared with the layout preview.
+# shellcheck source=bin/fm-visible-format-lib.sh
+. "$SCRIPT_DIR/fm-visible-format-lib.sh"
 
 usage() {
   sed -n '2,/^set -u$/s/^# \{0,1\}//p' "$0"
@@ -97,41 +101,6 @@ canonical_state() {  # <id>
     "$SCRIPT_DIR/fm-crew-state.sh" "$id" 2>/dev/null || true)
   line=${line#state: }
   printf '%s' "${line%% · *}"
-}
-
-visible_state() {  # <canonical-state>
-  case "$1" in
-    parked) printf 'NEEDS YOU' ;;
-    failed) printf 'FAILED' ;;
-    blocked) printf 'BLOCKED' ;;
-    working) printf 'WORKING' ;;
-    paused) printf 'WAITING' ;;
-    done) printf 'READY' ;;
-    *) printf 'WAITING' ;;
-  esac
-}
-
-state_icon() {  # <visible-state>
-  case "$1" in
-    'NEEDS YOU') printf '🟣' ;;
-    FAILED) printf '🔴' ;;
-    BLOCKED) printf '🟠' ;;
-    WORKING) printf '🔵' ;;
-    WAITING) printf '🟡' ;;
-    READY) printf '🟢' ;;
-  esac
-}
-
-state_rank() {  # <visible-state>
-  case "$1" in
-    'NEEDS YOU') printf 1 ;;
-    FAILED) printf 2 ;;
-    BLOCKED) printf 3 ;;
-    WORKING) printf 4 ;;
-    WAITING) printf 5 ;;
-    READY) printf 6 ;;
-    *) printf 7 ;;
-  esac
 }
 
 # cursor_pane_capture: plain-text pane tail for live model parsing.
@@ -219,17 +188,15 @@ herdr_call() {  # <session> <args...>
 }
 
 project_stats() {  # <project-key>
-  local key=$1 meta id state rank
-  local needs=0 failed=0 blocked=0 working=0 waiting=0 ready=0 best=99
+  local key=$1 meta id state
+  local needs=0 failed=0 blocked=0 working=0 waiting=0 ready=0
   for meta in "$STATE"/*.meta; do
     [ -f "$meta" ] || continue
     [ "$(meta_value "$meta" backend)" = herdr ] || continue
     [ "$(meta_value "$meta" herdr_workspace_managed)" = 1 ] || continue
     [ "$(project_key "$meta")" = "$key" ] || continue
     id=$(basename "$meta" .meta)
-    state=$(visible_state "$(canonical_state "$id")")
-    rank=$(state_rank "$state")
-    [ "$rank" -ge "$best" ] || best=$rank
+    state=$(fm_visible_state "$(canonical_state "$id")")
     case "$state" in
       'NEEDS YOU') needs=$((needs + 1)) ;;
       FAILED) failed=$((failed + 1)) ;;
@@ -242,27 +209,6 @@ project_stats() {  # <project-key>
   printf '%s %s %s %s %s %s' "$needs" "$failed" "$blocked" "$working" "$waiting" "$ready"
 }
 
-aggregate_text() {  # <stats>
-  local needs failed blocked working waiting ready part icon count label text=
-  read -r needs failed blocked working waiting ready <<EOF
-$1
-EOF
-  for part in \
-    "🟣:$needs:NEEDS YOU" \
-    "🔴:$failed:FAILED" \
-    "🟠:$blocked:BLOCKED" \
-    "🔵:$working:WORKING" \
-    "🟡:$waiting:WAITING" \
-    "🟢:$ready:READY"; do
-    IFS=: read -r icon count label <<EOF
-$part
-EOF
-    [ "$count" -gt 0 ] || continue
-    text="${text}${text:+ · }$icon $count $label"
-  done
-  printf '%s' "${text:-no tasks}"
-}
-
 update_project() {  # <meta>
   local meta=$1 session workspace key name stats aggregate
   [ "$(meta_value "$meta" herdr_workspace_managed)" = 1 ] || return 0
@@ -272,7 +218,7 @@ update_project() {  # <meta>
   name=$(project_name "$meta")
   [ -n "$session" ] && [ -n "$workspace" ] && [ -n "$key" ] && [ -n "$name" ] || return 0
   stats=$(project_stats "$key")
-  aggregate=$(aggregate_text "$stats")
+  aggregate=$(fm_visible_aggregate "$stats")
   herdr_call "$session" workspace rename "$workspace" "$name · $aggregate" >/dev/null 2>&1 || true
 }
 
@@ -286,8 +232,8 @@ update_task() {  # <task-id>
   tab=$(meta_value "$meta" herdr_tab_id)
   pane=$(meta_value "$meta" herdr_pane_id)
   [ -n "$session" ] && [ -n "$tab" ] && [ -n "$pane" ] || return 0
-  state=$(visible_state "$(canonical_state "$id")")
-  icon=$(state_icon "$state")
+  state=$(fm_visible_state "$(canonical_state "$id")")
+  icon=$(fm_visible_icon "$state")
   outcome=$(human_outcome "$id" "$meta")
   runtime=$(runtime_text "$meta")
   branch=$(actual_branch "$(meta_value "$meta" worktree)")

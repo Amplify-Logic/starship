@@ -642,6 +642,10 @@ families_for_changed_path() {
       printf '%s\n' backend-dispatch
       printf '%s\n' real-herdr-gated
       ;;
+    bin/fm-visible-format-lib.sh)
+      printf '%s\n' "__script__:fm-visible-status.test.sh"
+      printf '%s\n' "__script__:fm-herdr-layout-preview-e2e.test.sh"
+      ;;
     bin/fm-watch*|bin/fm-wake*|\
     bin/fm-classify-lib.sh|bin/fm-daemon*|bin/fm-turnend-guard*|bin/fm-guard.sh)
       printf '%s\n' watcher-wake-lock
