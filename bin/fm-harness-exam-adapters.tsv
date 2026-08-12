@@ -1,0 +1,10 @@
+# Native worker-runtime exam expectations.
+# One tab-separated row per adapter.
+# adapter	binary	autonomy_flag	busy_regex	interrupt_keys	interrupt_regex	exit_command	resume_mode	alive_verdict	comm_regex	argv_regex	hook_kind	default_model	startup_dialog
+claude	claude	--dangerously-skip-permissions	esc to interrupt	Escape	Interrupted|interrupted|stopped	/exit	--continue	alive	claude	claude	claude	-	optional
+codex	codex	--dangerously-bypass-approvals-and-sandbox	esc to interrupt	Escape	Interrupted|interrupted|stopped	/quit	session-id	alive	codex	codex	codex	-	optional
+opencode	opencode	OPENCODE_CONFIG_CONTENT=.*permission	esc interrupt	Escape,Escape	Interrupted|interrupted|aborted|stopped	/exit	--continue	alive	opencode	opencode	opencode	-	none
+pi	pi	implicit: no permission system	Working\.\.\.	Escape	Interrupted|interrupted|cancelled|canceled	/quit	--continue	unknown	node	pi-coding-agent|/pi([ /]|$)	pi	-	optional
+grok	grok	--always-approve	Ctrl\+c:cancel	C-c	Interrupted|interrupted|cancelled|canceled	/exit	--continue	alive	grok	grok	grok	-	none
+cursor	agent	--yolo	ctrl\+c to stop	C-c	Interrupted|interrupted|cancelled|canceled|stopped	/quit	cursor-id	alive	node	cursor-agent/.*/index\.js|cursor-agent	cursor	cursor-grok-4.5-high	required
+kimi	kimi	--yolo	thinking\.\.\.|Running a command	C-c	Interrupted by user	/exit	--continue	alive	kimi	kimi-code|/kimi([ /]|$)	kimi	kimi-code/k3	none
