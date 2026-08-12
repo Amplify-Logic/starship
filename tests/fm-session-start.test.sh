@@ -291,6 +291,84 @@ write_pi_loaded_markers() {
 
 # --- context digest: absent vs empty vs present -----------------------------
 
+test_disarmed_host_sentinel_is_loudly_surfaced() {
+  local rec root home fakebin out
+  rec=$(new_world sentinel-disarmed)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+  cat > "$home/state/.supervision-sentinel.disarmed" <<EOF
+state=disarmed
+disarmed_at=1234
+home=$home
+EOF
+
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_contains "$out" 'HOST SUPERVISION SENTINEL - DISARMED' "session start hid the durable sentinel disarm"
+  assert_contains "$out" 'Host-level watcher-outage detection is deliberately disabled for this home.' "session start did not explain the unmonitored state"
+  assert_contains "$out" 'bin/fm-supervision-sentinel.sh enable' "session start omitted the deliberate re-enable action"
+  assert_contains "$out" 'disarmed_at=1234' "session start did not include the durable disarm evidence"
+  pass "session start: durable host-sentinel disarm is loud and actionable"
+}
+
+test_suppressed_host_sentinel_registration_is_loudly_surfaced() {
+  local rec root home fakebin out
+  rec=$(new_world sentinel-arm-failed)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+  # A live cooldown: this home has no host-level outage detection and will not
+  # even retry for another 900s, which must be as loud as a deliberate disarm.
+  cat > "$home/state/.supervision-sentinel.arm-failure" <<EOF
+state=arm-failed
+failures=3
+failed_at=1234
+retry_after_secs=900
+retry_at=$(( $(date +%s) + 900 ))
+home=$home
+recover=bin/fm-supervision-sentinel.sh enable
+EOF
+
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_contains "$out" 'HOST SUPERVISION SENTINEL - REGISTRATION FAILED' "session start hid a suppressed host registration"
+  assert_contains "$out" 'Host-level watcher-outage detection is NOT active for this home' "session start did not state the unmonitored consequence"
+  assert_contains "$out" 'Automatic retry is suppressed for another ' "session start omitted the retry-suppression window"
+  assert_contains "$out" 'bin/fm-supervision-sentinel.sh enable' "session start omitted the explicit safe recovery action"
+  assert_contains "$out" 'failures=3' "session start did not include the durable failure evidence"
+
+  # An expired cooldown must read differently: monitoring is still down, but the
+  # next watcher or away-mode entry will retry on its own.
+  printf 'state=arm-failed\nfailures=1\nfailed_at=1\nretry_after_secs=60\nretry_at=2\n' > "$home/state/.supervision-sentinel.arm-failure"
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_contains "$out" 'HOST SUPERVISION SENTINEL - REGISTRATION FAILED' "an expired cooldown stopped being reported"
+  assert_contains "$out" 'retry cooldown has expired' "session start did not distinguish an expired cooldown from a live one"
+
+  # A clock rollback or a restored state volume puts retry_at far beyond the window
+  # recorded beside it. The arm path treats that as suppressing nothing, so the
+  # banner must not advertise an enormous suppression interval it will not honor.
+  cat > "$home/state/.supervision-sentinel.arm-failure" <<EOF
+state=arm-failed
+failures=2
+failed_at=1
+retry_after_secs=60
+retry_at=$(( $(date +%s) + 86400 ))
+EOF
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_contains "$out" 'HOST SUPERVISION SENTINEL - REGISTRATION FAILED' "a stale retry deadline stopped being reported"
+  assert_contains "$out" 'retry deadline is stale' "session start presented a stale deadline as an active suppression window"
+  assert_contains "$out" 'It suppresses nothing' "session start did not say a stale deadline will not delay the next retry"
+  assert_not_contains "$out" 'suppressed for another 86400s' "session start printed a suppression window the arm path would ignore"
+
+  rm -f "$home/state/.supervision-sentinel.arm-failure"
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_not_contains "$out" 'HOST SUPERVISION SENTINEL - REGISTRATION FAILED' "session start reported a registration failure with no durable record"
+  pass "session start: a suppressing host-sentinel registration cooldown is loud, timed, and actionable"
+}
+
 test_context_digest_absent_empty_present() {
   local rec root home fakebin out
   rec=$(new_world context-digest)
@@ -907,6 +985,8 @@ EOF
   pass "session start rejects Pi loaded markers from previous sessions"
 }
 
+test_disarmed_host_sentinel_is_loudly_surfaced
+test_suppressed_host_sentinel_registration_is_loudly_surfaced
 test_context_digest_absent_empty_present
 test_lock_refusal_read_only_path
 test_output_ordering_diagnostics_lead

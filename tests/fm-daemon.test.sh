@@ -1847,7 +1847,130 @@ test_startup_abort_clears_afk_flag() {
   pass "startup_abort: clears state/.afk on refused daemon start"
 }
 
+# The away daemon writes this ledger and bin/fm-afk-return.sh parses it, so the
+# tab-separated row shape is a contract between two files. Whether a host alarm
+# covered an away stretch is not re-derivable afterwards, so the record must stay
+# append-only and must survive text a detail string could otherwise break.
+test_sentinel_gap_append_records_a_parseable_row_per_transition() {
+  local dir ledger rows at status detail
+  dir=$(make_supercase sentinel-gap-ledger)
+  ledger="$dir/state/$FM_SUP_AWAY_GAP_NAME"
+
+  sentinel_gap_append "$ledger" unavailable 'launchd registration failed while away'
+  sentinel_gap_append "$ledger" restored $'restored after\t4200s\nand 9 attempts'
+  rows=$(wc -l < "$ledger" | tr -d '[:space:]')
+  [ "$rows" -eq 2 ] || fail "one transition per row was not preserved ($rows rows): $(cat "$ledger")"
+
+  IFS="$(printf '\t')" read -r at status detail < "$ledger"
+  [ "$status" = unavailable ] || fail "the first row lost its status field: $(head -1 "$ledger")"
+  assert_contains "$at" "$(date '+%Y-%m-%dT')" "the first row carries no ISO timestamp: $at"
+  [ "$detail" = 'launchd registration failed while away' ] || fail "the first row lost its detail: $detail"
+
+  IFS="$(printf '\t')" read -r at status detail < <(tail -n 1 "$ledger")
+  [ "$status" = restored ] || fail "the second row lost its status field: $(tail -n 1 "$ledger")"
+  [ "$detail" = 'restored after 4200s and 9 attempts' ] \
+    || fail "embedded tabs/newlines were not flattened out of the detail field: $detail"
+  pass "sentinel_gap_append: one parseable away host-alarm row per transition, tab/newline safe"
+}
+
+# arm_host_sentinel is defined inside fm_super_main, so the away loop's dispatch
+# on the arm exit status is exercised by evaluating its extracted body against a
+# stub sentinel rather than by pattern-matching the source. The latch, ledger,
+# and backoff consequences of each exit class are the contract the return
+# catch-up depends on.
+run_away_arm_dispatch() { # <dir> <stub-exit> <stub-msg> <gap-open> <gap-since> <failures> <retry-delay>
+  local dir=$1 stub_exit=$2 stub_msg=$3 gap_open=$4 gap_since=$5 failures=$6 delay=$7 body
+  body=$(/usr/bin/awk '/^  arm_host_sentinel\(\) \{$/ { p = 1 } p { print } p && /^  \}$/ { exit }' "$DAEMON")
+  [ -n "$body" ] || return 1
+  cat > "$dir/stub-sentinel.sh" <<SH
+#!/usr/bin/env bash
+[ -n '$stub_msg' ] && printf '%s\n' '$stub_msg' >&2
+exit $stub_exit
+SH
+  chmod +x "$dir/stub-sentinel.sh"
+  (
+    STATE="$dir/state"
+    WATCH="$dir/stub-sentinel.sh"
+    FM_HOME="$dir"
+    LOG="$dir/state/daemon.log"
+    SENTINEL="$dir/stub-sentinel.sh"
+    SENTINEL_GAP="$dir/state/$FM_SUP_AWAY_GAP_NAME"
+    SENTINEL_ARMED=0
+    SENTINEL_UNSUPPORTED=0
+    SENTINEL_NOOP_LOGGED=0
+    SENTINEL_GAP_OPEN=$gap_open
+    SENTINEL_GAP_SINCE=$gap_since
+    SENTINEL_ARM_FAILURES=$failures
+    SENTINEL_NEXT_ATTEMPT=0
+    SENTINEL_RETRY_BASE=5
+    SENTINEL_RETRY_MAX=40
+    SENTINEL_RETRY_DELAY=$delay
+    fm_watcher_healthy() { return 0; }
+    eval "$body"
+    arm_host_sentinel 2>/dev/null
+    printf 'armed=%s gap_open=%s failures=%s delay=%s\n' \
+      "$SENTINEL_ARMED" "$SENTINEL_GAP_OPEN" "$SENTINEL_ARM_FAILURES" "$SENTINEL_RETRY_DELAY" > "$dir/dispatch.result"
+  )
+}
+
+test_away_arm_dispatch_latches_only_verified_and_never_ledgers_a_noop() {
+  local dir ledger result
+  dir=$(make_supercase away-arm-dispatch)
+  ledger="$dir/state/$FM_SUP_AWAY_GAP_NAME"
+
+  # The home was disarmed mid-away while a gap was open: the deliberate no-op
+  # must keep the gap open with no restored row, so the return catch-up still
+  # reports the unprotected stretch, and must not spend failures or backoff.
+  sentinel_gap_append "$ledger" unavailable 'host outage alarms unavailable while away'
+  run_away_arm_dispatch "$dir" "$FM_SUP_SENTINEL_NOOP_EXIT" 'deliberately disarmed for this home' 1 100 3 20 \
+    || fail "could not drive the away arm dispatcher for the open-gap no-op"
+  result=$(cat "$dir/dispatch.result")
+  assert_contains "$result" 'armed=0' "a deliberate no-op latched a deliberately unprotected home as armed"
+  assert_contains "$result" 'gap_open=1' "a deliberate no-op closed an open host-alarm gap"
+  assert_contains "$result" 'failures=3' "a deliberate no-op advanced the arm-failure count"
+  assert_contains "$result" 'delay=20' "a deliberate no-op advanced the retry backoff"
+  [ "$(wc -l < "$ledger" | tr -d '[:space:]')" -eq 1 ] \
+    || fail "a deliberate no-op appended a ledger row: $(cat "$ledger")"
+  assert_no_grep restored "$ledger" "a deliberate no-op claimed the unprotected stretch was restored"
+
+  # Only a verified registration closes the gap, and it does so with the
+  # restored row the return catch-up folds in.
+  run_away_arm_dispatch "$dir" 0 '' 1 100 3 20 \
+    || fail "could not drive the away arm dispatcher for the verified registration"
+  result=$(cat "$dir/dispatch.result")
+  assert_contains "$result" 'armed=1' "a verified registration did not latch"
+  assert_contains "$result" 'gap_open=0' "a verified registration did not close the open gap"
+  [ "$(wc -l < "$ledger" | tr -d '[:space:]')" -eq 2 ] \
+    || fail "a verified registration did not append exactly one restored row: $(cat "$ledger")"
+  assert_contains "$(tail -n 1 "$ledger")" restored "the closing row is not a restored transition: $(tail -n 1 "$ledger")"
+  assert_contains "$(tail -n 1 "$ledger")" '3 failed registration attempt(s)' \
+    "the restored row lost its attempt evidence: $(tail -n 1 "$ledger")"
+
+  # A deliberate no-op with no gap open appends nothing at all.
+  rm -f "$ledger"
+  run_away_arm_dispatch "$dir" "$FM_SUP_SENTINEL_NOOP_EXIT" 'deliberately disarmed for this home' 0 0 0 5 \
+    || fail "could not drive the away arm dispatcher for the gapless no-op"
+  result=$(cat "$dir/dispatch.result")
+  assert_contains "$result" 'armed=0' "a gapless no-op latched as armed"
+  assert_contains "$result" 'gap_open=0' "a gapless no-op opened a gap"
+  [ ! -e "$ledger" ] || fail "a deliberate no-op wrote a ledger row on a home with no open gap: $(cat "$ledger")"
+
+  # A genuine failure still opens the gap, appends its unavailable row, and
+  # backs off - proving the dispatcher under eval is the one the daemon runs.
+  run_away_arm_dispatch "$dir" 1 'launchd registration failed' 0 0 0 5 \
+    || fail "could not drive the away arm dispatcher for the genuine failure"
+  result=$(cat "$dir/dispatch.result")
+  assert_contains "$result" 'armed=0' "a failed registration latched as armed"
+  assert_contains "$result" 'gap_open=1' "a failed registration did not open a gap"
+  assert_contains "$result" 'failures=1' "a failed registration was not counted"
+  assert_contains "$result" 'delay=10' "a failed registration did not double the retry backoff"
+  assert_contains "$(tail -n 1 "$ledger")" unavailable "a failed registration did not append its unavailable row"
+  pass "away arm dispatch: only a verified registration latches and ledgers; a deliberate no-op leaves gap, count, and backoff untouched"
+}
+
 test_afk_start_refuses_when_flag_cannot_be_written
+test_sentinel_gap_append_records_a_parseable_row_per_transition
+test_away_arm_dispatch_latches_only_verified_and_never_ledgers_a_noop
 test_afk_start_ignores_stale_pidfile_without_lock
 test_afk_start_reclaims_stale_daemon_lock_reused_pid
 test_daemon_state_root_uses_fm_home

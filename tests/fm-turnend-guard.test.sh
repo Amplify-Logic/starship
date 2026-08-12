@@ -83,6 +83,7 @@ test_predicate_future_beacon_is_unknown_not_fresh() {
   [ "$FM_SUP_WATCHER_FRESH" = false ] || fail "future-dated beacon must never read as fresh"
   assert_contains "$FM_SUP_OUTAGE_SUMMARY" 'unknown since when; watcher beat timestamp is' \
     "future-dated beacon was presented as a known outage duration"
+  assert_contains "$FM_SUP_BEACON_DESC" 'in the future' "future-dated beacon description omitted the clock-skew evidence"
   pass "fm_supervision_unhealthy: unsupported future beacon evidence never renders as protected"
 }
 
@@ -126,9 +127,12 @@ install_guard_scripts() {
   cp "$ROOT/bin/fm-primary-scope-lib.sh" "$dir/bin/fm-primary-scope-lib.sh"
   cp "$ROOT/bin/fm-supervision-lib.sh" "$dir/bin/fm-supervision-lib.sh"
   cp "$ROOT/bin/fm-wake-lib.sh" "$dir/bin/fm-wake-lib.sh"
+  # The guard resolves the sentinel next to itself, so a fixture without this
+  # copy would silently skip the marker-only outage note entirely.
+  cp "$ROOT/bin/fm-supervision-sentinel.sh" "$dir/bin/fm-supervision-sentinel.sh"
   mkdir -p "$dir/docs"
   cp -R "$ROOT/docs/supervision-protocols" "$dir/docs/supervision-protocols"
-  chmod +x "$dir/bin/fm-turnend-guard.sh" "$dir/bin/fm-turnend-guard-grok.sh" "$dir/bin/fm-operational-input.sh" "$dir/bin/fm-supervision-instructions.sh" "$dir/bin/fm-harness.sh"
+  chmod +x "$dir/bin/fm-turnend-guard.sh" "$dir/bin/fm-turnend-guard-grok.sh" "$dir/bin/fm-operational-input.sh" "$dir/bin/fm-supervision-instructions.sh" "$dir/bin/fm-harness.sh" "$dir/bin/fm-supervision-sentinel.sh"
 }
 
 mark_codex_hook_root() {
@@ -203,6 +207,30 @@ run_hook() {
   local dir=$1 stop_active=$2 home
   home=$(cd "$dir" && pwd)
   printf '{"stop_hook_active":%s}' "$stop_active" | CLAUDECODE=1 FM_HOME="$home" bash "$dir/bin/fm-turnend-guard.sh" 2>&1
+}
+
+# The suite-wide FM_SUPERVISION_SENTINEL_MODE=off keeps ordinary fixtures from
+# touching launchd at all, which also means the ordinary run_hook above never
+# reaches the sentinel. This variant enables the real marker-only path and points
+# every active channel at an on-disk recorder, so a hook that crossed the
+# external-alert boundary would leave evidence instead of passing silently.
+run_hook_with_sentinel() {
+  local dir=$1 recorder=$2 home
+  home=$(cd "$dir" && pwd)
+  printf '{"stop_hook_active":false}' | CLAUDECODE=1 FM_HOME="$home" \
+    FM_SUPERVISION_SENTINEL_MODE=auto \
+    FM_WEDGE_ALARM_CHANNEL=osascript \
+    FM_WEDGE_ALARM_EXEC="$recorder" \
+    bash "$dir/bin/fm-turnend-guard.sh" 2>&1
+}
+
+make_alert_recorder() {
+  local path=$1 log=$2
+  cat > "$path" <<SH
+#!/usr/bin/env bash
+printf '%s\t%s\n' "\$1" "\$2" >> "$log"
+SH
+  chmod +x "$path"
 }
 
 nonexistent_pid() {
@@ -572,14 +600,72 @@ test_hook_silent_without_stdin() {
 }
 
 test_hook_runs_fast() {
-  local dir start elapsed_s
+  local dir recorder log start elapsed_s
   dir=$(make_primary_dir "$TMP_ROOT/hook-timing")
+  recorder="$TMP_ROOT/hook-timing-recorder"
+  log="$TMP_ROOT/hook-timing-alerts.log"
+  make_alert_recorder "$recorder" "$log"
   : > "$dir/state/task1.meta"
+  # Time the REAL marker-writing path, not a mode=off short-circuit: this is the
+  # work a Stop hook must finish inside its harness timeout or lose the block.
   start=$SECONDS
-  run_hook "$dir" false >/dev/null
+  run_hook_with_sentinel "$dir" "$recorder" >/dev/null
   elapsed_s=$((SECONDS - start))
+  [ -s "$dir/state/.supervision-outage-alarm" ] \
+    || fail "timing case did not exercise the real sentinel marker write"
   [ "$elapsed_s" -lt 10 ] || fail "hook took ${elapsed_s}s, expected well under a second (generous 10s CI margin)"
-  pass "fm-turnend-guard: runs well under the generous timing margin (${elapsed_s}s)"
+  pass "fm-turnend-guard: real marker-writing path runs well under the generous timing margin (${elapsed_s}s)"
+}
+
+test_hook_never_waits_on_external_alert_delivery() {
+  local dir recorder log out status marker
+  dir=$(make_primary_dir "$TMP_ROOT/hook-marker-only")
+  recorder="$TMP_ROOT/hook-marker-only-recorder"
+  log="$TMP_ROOT/hook-marker-only-alerts.log"
+  make_alert_recorder "$recorder" "$log"
+  : > "$dir/state/task1.meta"
+  : > "$dir/state/task2.meta"
+  marker="$dir/state/.supervision-outage-alarm"
+
+  out=$(run_hook_with_sentinel "$dir" "$recorder"); status=$?
+  expect_code 2 "$status" "hook must still block when the sentinel actually records the outage"
+  assert_contains "$out" "$REQUIRED_REASON" "block reason must survive the sentinel note"
+  assert_contains "$out" "TURN WOULD END BLIND" "block banner must remain the authoritative signal"
+  [ ! -e "$log" ] || fail "turn-end guard crossed the external-alert boundary: $(cat "$log")"
+  [ -s "$marker" ] || fail "turn-end guard did not record the durable outage evidence"
+  assert_contains "$(cat "$marker")" 'SUPERVISION DOWN: 2 task(s) in flight' "guard marker omitted the in-flight count"
+  assert_contains "$(cat "$marker")" 'delivery=pending' "guard claimed a delivery it must leave to the host check"
+  assert_contains "$(cat "$marker")" 'attempt_at=0' "guard left a delivery lease the host check must wait out"
+  [ ! -e "$dir/state/.supervision-sentinel-last-check" ] \
+    || fail "turn-end guard forged the launchd host-liveness proof"
+  [ ! -e "$dir/state/.supervision-sentinel.plist" ] \
+    || fail "turn-end guard registered a host service"
+
+  # A recovered fleet goes silent again with the sentinel still enabled.
+  rm -f "$dir/state/task1.meta" "$dir/state/task2.meta"
+  out=$(run_hook_with_sentinel "$dir" "$recorder"); status=$?
+  expect_code 0 "$status" "hook must exit 0 once nothing is in flight"
+  [ -z "$out" ] || fail "hook produced output after recovery: $out"
+  [ ! -e "$log" ] || fail "recovered turn end still reached an external channel: $(cat "$log")"
+  pass "fm-turnend-guard: blocks and records durable evidence without any notifier work"
+}
+
+test_hook_respects_durable_sentinel_disarm() {
+  local dir recorder log out status
+  dir=$(make_primary_dir "$TMP_ROOT/hook-disarmed")
+  recorder="$TMP_ROOT/hook-disarmed-recorder"
+  log="$TMP_ROOT/hook-disarmed-alerts.log"
+  make_alert_recorder "$recorder" "$log"
+  : > "$dir/state/task1.meta"
+  printf 'state=disarmed\n' > "$dir/state/.supervision-sentinel.disarmed"
+
+  out=$(run_hook_with_sentinel "$dir" "$recorder"); status=$?
+  expect_code 2 "$status" "a disarmed host sentinel must never weaken the in-harness block"
+  assert_contains "$out" "$REQUIRED_REASON" "disarmed-home block lost its recovery instruction"
+  [ ! -e "$log" ] || fail "a disarmed home still reached an external channel: $(cat "$log")"
+  [ ! -e "$dir/state/.supervision-outage-alarm" ] \
+    || fail "a deliberately disarmed home still accumulated host-sentinel evidence"
+  pass "fm-turnend-guard: durable disarm silences the sentinel but not the guard"
 }
 
 test_grok_adapter_forces_one_resume_when_unhealthy() {
@@ -986,6 +1072,8 @@ test_hook_silent_in_crewmate_worktree
 test_hook_silent_without_jq
 test_hook_silent_without_stdin
 test_hook_runs_fast
+test_hook_never_waits_on_external_alert_delivery
+test_hook_respects_durable_sentinel_disarm
 test_grok_adapter_forces_one_resume_when_unhealthy
 test_grok_adapter_loop_guard_skips_resume
 test_settings_hook_uses_claude_project_dir

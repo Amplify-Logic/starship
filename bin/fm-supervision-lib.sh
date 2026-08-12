@@ -99,3 +99,91 @@ fm_supervision_unhealthy() {
   fm_supervision_status "$@"
   [ "$FM_SUP_IN_FLIGHT" -gt 0 ] && [ "$FM_SUP_WATCHER_FRESH" = false ]
 }
+
+# Canonical basename of the durable host-sentinel registration-failure record.
+# Every producer and consumer derives its path from this, so the filename is
+# spelled exactly once in the tree.
+FM_SUP_ARM_RECORD_NAME=.supervision-sentinel.arm-failure
+
+# Canonical basename of the durable host-sentinel deliberate-disarm record,
+# shared for the same reason: the session-start banner and the sentinel must
+# never disagree about which file marks a deliberately disarmed home.
+# shellcheck disable=SC2034 # Read by callers after sourcing.
+FM_SUP_DISARM_RECORD_NAME=.supervision-sentinel.disarmed
+
+# Exit status `bin/fm-supervision-sentinel.sh arm` uses for a positively proven
+# missing HOST capability, as distinct from a failed registration attempt (exit 1).
+# A caller may stop retrying only on this status. Giving up on an ambiguous error
+# would silently abandon a recoverable outage backstop, so anything short of
+# specific evidence that this host lacks a capability stays transient and keeps its
+# retry schedule.
+# shellcheck disable=SC2034 # Read by callers after sourcing.
+FM_SUP_SENTINEL_UNSUPPORTED_EXIT=3
+
+# Exit status `bin/fm-supervision-sentinel.sh arm` uses for a deliberate no-op:
+# a durably disarmed home, FM_SUPERVISION_SENTINEL_MODE=off, or a non-primary
+# scope. The sentinel declined on purpose rather than tried and lost, so a
+# caller must neither treat the home as protected nor spend failure evidence,
+# retries, or backoff on it; exit 0 is reserved for a verified registration.
+# shellcheck disable=SC2034 # Read by callers after sourcing.
+FM_SUP_SENTINEL_NOOP_EXIT=4
+
+# Canonical basename of the durable away-mode host-alarm availability ledger:
+# one tab-separated `<iso-timestamp> <unavailable|restored> <detail>` row per
+# transition, appended by the away daemon and folded into the return catch-up by
+# bin/fm-afk-return.sh. An away stretch with no host alarm is not re-derivable
+# after the fact, so this record is historical evidence: only the return catch-up
+# that surfaces it may clear it, never a fresh away entry.
+# shellcheck disable=SC2034 # Read by callers after sourcing.
+FM_SUP_AWAY_GAP_NAME=.supervision-sentinel.away-gap
+
+# fm_supervision_arm_failure_status <state-dir>
+# Reads the durable host-sentinel registration-failure record and populates:
+#   FM_SUP_ARM_RECORD       resolved path of the record, set whether or not it exists
+#   FM_SUP_ARM_FAILED       true/false - the record exists at all
+#   FM_SUP_ARM_FAILURES     recorded consecutive failure count (0 when unreadable)
+#   FM_SUP_ARM_RETRY_IN     seconds the retry cooldown still suppresses registration
+#   FM_SUP_ARM_RETRY_STALE  true/false - the deadline is unusable, so it suppresses nothing
+#
+# One snapshot answers every question about the record, so a caller reads the file
+# once per operation instead of re-deriving fields through separate wrappers.
+#
+# The cooldown counts only while retry_at is in the future AND no further away
+# than the retry_after_secs recorded atomically beside it. A wall-clock rollback,
+# or a state volume restored from a machine whose clock ran ahead, therefore reads
+# as stale evidence that suppresses nothing rather than an enormous fake
+# suppression window. Both bin/fm-supervision-sentinel.sh (which enforces the
+# cooldown) and bin/fm-session-start.sh (which reports it) call this, so the
+# displayed window and the enforced window cannot drift apart.
+# Always returns 0; callers read the vars.
+fm_supervision_arm_failure_status() {
+  local state=$1 at after now remaining
+  FM_SUP_ARM_RECORD="$state/$FM_SUP_ARM_RECORD_NAME"
+  FM_SUP_ARM_FAILED=false
+  FM_SUP_ARM_FAILURES=0
+  FM_SUP_ARM_RETRY_IN=0
+  FM_SUP_ARM_RETRY_STALE=false
+  [ -f "$FM_SUP_ARM_RECORD" ] || return 0
+  # shellcheck disable=SC2034 # Read by callers after sourcing.
+  FM_SUP_ARM_FAILED=true
+
+  FM_SUP_ARM_FAILURES=$(awk -F= '$1 == "failures" { print $2; exit }' "$FM_SUP_ARM_RECORD" 2>/dev/null || true)
+  case "$FM_SUP_ARM_FAILURES" in ''|*[!0-9]*) FM_SUP_ARM_FAILURES=0 ;; esac
+
+  at=$(awk -F= '$1 == "retry_at" { print $2; exit }' "$FM_SUP_ARM_RECORD" 2>/dev/null || true)
+  after=$(awk -F= '$1 == "retry_after_secs" { print $2; exit }' "$FM_SUP_ARM_RECORD" 2>/dev/null || true)
+  case "$at" in ''|*[!0-9]*) FM_SUP_ARM_RETRY_STALE=true; return 0 ;; esac
+  case "$after" in ''|*[!0-9]*) FM_SUP_ARM_RETRY_STALE=true; return 0 ;; esac
+
+  now=$(date +%s)
+  [ "$now" -lt "$at" ] || return 0
+  remaining=$((at - now))
+  if [ "$remaining" -gt "$after" ]; then
+    # shellcheck disable=SC2034 # Read by callers after sourcing.
+    FM_SUP_ARM_RETRY_STALE=true
+    return 0
+  fi
+  # shellcheck disable=SC2034 # Read by callers after sourcing.
+  FM_SUP_ARM_RETRY_IN=$remaining
+  return 0
+}

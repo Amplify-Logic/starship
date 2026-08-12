@@ -133,7 +133,7 @@ family_for_basename() {
       printf '%s\n' pure-contract-unit
       ;;
     fm-daemon.test.sh|fm-guard-stale-banner.test.sh|fm-pi-watch-extension.test.sh|\
-    fm-supervision-events.test.sh|fm-turnend-guard.test.sh|fm-wake-daemon-lifecycle-e2e.test.sh|\
+    fm-supervision-events.test.sh|fm-supervision-sentinel.test.sh|fm-turnend-guard.test.sh|fm-wake-daemon-lifecycle-e2e.test.sh|\
     fm-wake-queue.test.sh|fm-watch-checkpoint.test.sh|fm-watch-triage.test.sh|\
     fm-watcher-lock.test.sh)
       printf '%s\n' watcher-wake-lock
@@ -645,6 +645,18 @@ families_for_changed_path() {
     bin/fm-visible-format-lib.sh)
       printf '%s\n' "__script__:fm-visible-status.test.sh"
       printf '%s\n' "__script__:fm-herdr-layout-preview-e2e.test.sh"
+      ;;
+    # Shared supervision core. `case` is first-match, so these paths must name
+    # every family they need: the later bin/fm-supervision* branch can no longer
+    # contribute its pure-contract-unit coverage. Both are listed together
+    # because every consumer of the library is also a consumer of the sentinel's
+    # record format - the turn-end and continuity guards (watcher-wake-lock,
+    # pure-contract-unit) and the session-start registration banner
+    # (session-bootstrap) - so the two must never select different families.
+    bin/fm-supervision-lib.sh|bin/fm-supervision-sentinel.sh)
+      printf '%s\n' watcher-wake-lock
+      printf '%s\n' pure-contract-unit
+      printf '%s\n' session-bootstrap
       ;;
     bin/fm-watch*|bin/fm-wake*|\
     bin/fm-classify-lib.sh|bin/fm-daemon*|bin/fm-turnend-guard*|bin/fm-guard.sh)

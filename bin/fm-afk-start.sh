@@ -30,6 +30,12 @@
 # Do not wrap this in `nohup ... &`: Codex/herdr can reap fire-and-forget shell
 # children after the tool call returns, while a tracked background terminal stays
 # attached and has a real lifecycle.
+# The macOS host-level outage sentinel is armed by the daemon this entry execs,
+# once that daemon has observed an identity-matched live watcher with a fresh
+# beacon. launchd owns that read-mostly alarm outside this process tree, so a
+# harness reap of the daemon cannot silence its own detector. Registering here
+# instead would make the launchd job's own immediate first check alert on the
+# very outage away mode is starting up to end.
 set -eu
 
 FM_AFK_START_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

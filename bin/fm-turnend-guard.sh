@@ -85,6 +85,16 @@ fm_supervision_status "$STATE" "$GRACE"
 [ "$FM_SUP_IN_FLIGHT" -gt 0 ] || exit 0
 fm_watcher_healthy "$STATE" "$WATCH" "$GRACE" "$FM_HOME" && exit 0
 
+# Record the outage for the host sentinel with local writes only. This hook must
+# never cross the active-channel boundary: notifier delivery is bounded per
+# channel but not in aggregate, and a Stop hook that outruns its harness timeout
+# loses the block below - the exact backstop this is meant to strengthen. The
+# scheduled launchd check owns external delivery; the stderr block is authoritative.
+SENTINEL="$SCRIPT_DIR/fm-supervision-sentinel.sh"
+if [ -x "$SENTINEL" ]; then
+  "$SENTINEL" note-outage >/dev/null 2>&1 || true
+fi
+
 afk=0
 [ -e "$STATE/.afk" ] && afk=1
 x_mode=0

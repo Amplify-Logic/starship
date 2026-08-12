@@ -12,16 +12,24 @@ PRIMARY="$TMP_ROOT/primary"
 STATE="$PRIMARY/state"
 OUT="$TMP_ROOT/out"
 ERR="$TMP_ROOT/err"
+NOTIFY="$TMP_ROOT/notify"
+NOTIFY_LOG="$TMP_ROOT/notify.log"
 
 mkdir -p "$PRIMARY/bin" "$STATE"
 printf '# fixture\n' > "$PRIMARY/AGENTS.md"
 git -C "$PRIMARY" init -q
+cat > "$NOTIFY" <<SH
+#!/usr/bin/env bash
+printf '%s\t%s\n' "\$1" "\$2" >> "$NOTIFY_LOG"
+SH
+chmod +x "$NOTIFY"
 
 run_command() {
   local command=$1 rc=0
   : > "$OUT"
   : > "$ERR"
   FM_ROOT_OVERRIDE="$PRIMARY" FM_HOME="$PRIMARY" FM_STATE_OVERRIDE="$STATE" \
+    FM_SUPERVISION_SENTINEL_MODE=auto FM_WEDGE_ALARM_CHANNEL=osascript FM_WEDGE_ALARM_EXEC="$NOTIFY" \
     "$CHECK" --command "$command" > "$OUT" 2> "$ERR" || rc=$?
   return "$rc"
 }
@@ -57,6 +65,20 @@ test_gate_scope_and_recovery_exceptions() {
   expect_allow "watch arm recovery" 'bin/fm-watch-arm.sh'
   expect_allow "drain then arm recovery" 'bin/fm-wake-drain.sh; bin/fm-watch-arm.sh'
   expect_allow "fail-closed teardown recovery" 'bin/fm-teardown.sh task'
+  # The session-start disarm banner names exactly one host-sentinel command, so
+  # exactly that literal invocation is a recovery exception and nothing else is.
+  expect_allow "exact sentinel enable improves recovery" 'bin/fm-supervision-sentinel.sh enable'
+  expect_allow "nested exact sentinel enable improves recovery" "bash -lc 'bin/fm-supervision-sentinel.sh enable'"
+  unsafe_sentinel_reason='[watcher-continuity] SUPERVISION OUTAGE: down for unknown duration (unknown since when; watcher beat file missing or unreadable); 1 task(s) in flight: task. During recovery only the literal bin/fm-supervision-sentinel.sh enable is allowed; arm, disarm, check, and every other host-sentinel invocation stays blocked until supervision is healthy (blocked: fm-supervision-sentinel.sh)'
+  expect_deny "sentinel disarm reduces safety" 'bin/fm-supervision-sentinel.sh disarm' 'fm-supervision-sentinel.sh' "$unsafe_sentinel_reason"
+  expect_deny "sentinel arm is not explicit enable" 'bin/fm-supervision-sentinel.sh arm' 'fm-supervision-sentinel.sh' "$unsafe_sentinel_reason"
+  expect_deny "sentinel check is not explicit enable" 'bin/fm-supervision-sentinel.sh check' 'fm-supervision-sentinel.sh' "$unsafe_sentinel_reason"
+  expect_deny "sentinel scheduled check is not explicit enable" 'bin/fm-supervision-sentinel.sh scheduled-check' 'fm-supervision-sentinel.sh' "$unsafe_sentinel_reason"
+  expect_deny "bare sentinel is not explicit enable" 'bin/fm-supervision-sentinel.sh' 'fm-supervision-sentinel.sh' "$unsafe_sentinel_reason"
+  expect_deny "sentinel enable with extra args is not exact" 'bin/fm-supervision-sentinel.sh enable now' 'fm-supervision-sentinel.sh' "$unsafe_sentinel_reason"
+  expect_deny "over-argued sentinel enable is not recovery" 'bin/fm-supervision-sentinel.sh enable disarm' 'fm-supervision-sentinel.sh' "$unsafe_sentinel_reason"
+  # shellcheck disable=SC2016 # Literal dynamic mode is test input and must stay denied.
+  expect_deny "dynamic sentinel mode is not exact" 'bin/fm-supervision-sentinel.sh "$MODE"' 'fm-supervision-sentinel.sh' "$unsafe_sentinel_reason"
   unsafe_teardown_reason='[watcher-continuity] SUPERVISION OUTAGE: down for unknown duration (unknown since when; watcher beat file missing or unreadable); 1 task(s) in flight: task. No live watcher holds this home lock. During recovery only the ordinary literal bin/fm-teardown.sh is allowed, so drop --force and any shell-expanded arguments and retry the literal invocation (blocked: fm-teardown.sh)'
   expect_deny "forced teardown is not recovery" 'bin/fm-teardown.sh task --force' 'fm-teardown.sh' "$unsafe_teardown_reason"
   expect_deny "nested forced teardown is not recovery" "bash -lc 'bin/fm-teardown.sh task --force'" 'fm-teardown.sh' "$unsafe_teardown_reason"
@@ -76,7 +98,9 @@ test_gate_scope_and_recovery_exceptions() {
   # those mutating sweeps on first holding the per-home session lock.
   expect_deny "literal nested fleet command" "bash -lc 'bin/fm-bootstrap.sh'" 'fm-bootstrap.sh'
   expect_deny "direct bootstrap bundled after session start" 'bin/fm-session-start.sh; bin/fm-bootstrap.sh' 'fm-bootstrap.sh'
-  pass "continuity gate allows recovery and ordinary commands but denies only other fleet execution"
+  [ ! -e "$NOTIFY_LOG" ] || fail "continuity hook blocked on an external alert channel: $(cat "$NOTIFY_LOG")"
+  assert_contains "$(cat "$STATE/.supervision-outage-alarm")" 'delivery=pending' "continuity hook did not leave host-owned external delivery pending"
+  pass "continuity gate allows exact recovery and ordinary commands, denies other fleet execution, and leaves external alerts to the host"
 }
 
 # Every deny above ran with no state/.lock at all, the genuine pre-lock case, so
@@ -109,8 +133,8 @@ test_deny_quantifies_stale_outage_and_names_every_task() {
   pass "continuity denial quantifies a stale outage and names every task in flight"
 }
 
-test_live_lock_allows_fleet_command_even_with_stale_beacon() {
-  local holder identity rc=0
+test_live_lock_with_stale_beacon_still_denies_fleet_command() {
+  local holder identity rc=0 actual
   sleep 300 &
   holder=$!
   identity=$(FM_STATE_OVERRIDE="$STATE" bash -c '. "$1"; fm_pid_identity "$2"' _ "$ROOT/bin/fm-wake-lib.sh" "$holder") \
@@ -125,9 +149,12 @@ test_live_lock_allows_fleet_command_even_with_stale_beacon() {
   run_command 'bin/fm-crew-state.sh task' || rc=$?
   kill "$holder" 2>/dev/null || true
   wait "$holder" 2>/dev/null || true
-  [ "$rc" -eq 0 ] || fail "identity-matched live lock must allow fleet command even when its beacon is stale"
-  [ ! -s "$ERR" ] || fail "live-lock allow wrote stderr: $(cat "$ERR")"
-  pass "continuity gate classifies the lock by live PID identity rather than beacon age"
+  [ "$rc" -eq 2 ] || fail "identity-matched live lock with a stale beacon must deny fleet work, got $rc"
+  actual=$(jq -r '.systemMessage' "$ERR")
+  assert_contains "$actual" 'SUPERVISION OUTAGE: down for at least ' "stale-beacon denial omitted the unambiguous alarm"
+  assert_contains "$actual" 'since the last watcher beat' "stale-beacon denial omitted the outage age evidence"
+  assert_contains "$actual" '1 task(s) in flight: task' "stale-beacon denial omitted the in-flight task identity"
+  pass "continuity gate requires both the identity-matched live lock and a fresh beacon"
 }
 
 test_child_worktree_and_malformed_input_fail_open() {
@@ -164,6 +191,6 @@ test_claude_hook_registration_preserves_stop_backstop() {
 test_gate_scope_and_recovery_exceptions
 test_lock_holding_session_gets_guidance_without_session_start
 test_deny_quantifies_stale_outage_and_names_every_task
-test_live_lock_allows_fleet_command_even_with_stale_beacon
+test_live_lock_with_stale_beacon_still_denies_fleet_command
 test_child_worktree_and_malformed_input_fail_open
 test_claude_hook_registration_preserves_stop_backstop

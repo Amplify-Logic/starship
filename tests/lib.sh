@@ -34,6 +34,10 @@ FM_TEST_LIB_SOURCED=1
 # strips this to verify real refusal.
 export FM_GATE_REFUSE_BYPASS=1
 
+# Never let a behavior fixture register a real per-home launchd sentinel.
+# The sentinel's own suite overrides this and uses a fake launchctl transport.
+export FM_SUPERVISION_SENTINEL_MODE=off
+
 # Resolve the repo root from this library's own location. Consumed by sourcing
 # test files, not by this library, so it reads as "unused" here.
 # shellcheck disable=SC2034

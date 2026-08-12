@@ -61,6 +61,10 @@ Claude keeps its tracked background-task protocol and adds a narrow PreToolUse c
 The existing turn-end guard adapters remain the final backstop for all verified primary harness protocols.
 Its `--restart` mode signals only the watcher recorded in the current home's `state/.watch.lock`, so restarting one home cannot kill sibling secondmate watchers.
 A pull-based guard (`bin/fm-guard.sh`) warns through supervision tool output if the primary checkout is tangled, or if tasks are in flight and that watcher stops running or queued wakes are waiting to be drained.
+On macOS, `bin/fm-supervision-sentinel.sh` adds a per-home launchd check outside the harness process tree and reuses the active channels in [`wedge-alarm.md`](wedge-alarm.md) when the watcher lock or beacon becomes unhealthy.
+Repeated alerts for one continuous outage back off exponentially while changed outage evidence resets that schedule, and deliberate home-scoped `disarm` remains visible in every session-start digest until an explicit verified `enable`.
+In-harness guards only record the shared outage marker; the scheduled host check is the sole owner of external alert delivery.
+It alarms only and never starts, stops, or signals a supervision process.
 The drain script calls that guard after emptying the queue, which avoids repeating the queued-wakes warning for records it just consumed while still warning on stale watcher liveness.
 It leads with a prominent bordered tangle banner, while `bin/fm-guard.sh` owns the stale-watcher banner/reminder policy so repeated guarded commands stay noisy without reprinting the full watcher-down banner in the same episode.
 The pull-based guard, Claude continuity gate, and turn-end guard all render the canonical outage summary owned by `bin/fm-supervision-lib.sh`: elapsed time from `state/.last-watcher-beat`, the in-flight task count, and every task ID, with explicit unknown-duration and unknown-start wording whenever the beacon evidence cannot prove a time.

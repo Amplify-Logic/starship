@@ -30,7 +30,9 @@
 #   2. bootstrap      - detect-only diagnostics always run. The five
 #                       MUTATING sweeps (legacy PR-check migration, secondmate
 #                       fast-forward, secondmate liveness, X-mode artifact writes, fleet sync) run only
-#                       when this session actually holds the lock.
+#                       when this session actually holds the lock. A durable
+#                       host-sentinel disarm is then surfaced loudly in both
+#                       locked and read-only sessions.
 #   3. wake-drain     - mutates the durable wake queue, so it also only runs
 #                       when locked.
 #   4. context digest - data/projects.md, data/secondmates.md, data/captain.md,
@@ -102,6 +104,8 @@ PRIMARY_HARNESS=$("$SCRIPT_DIR/fm-harness.sh" 2>/dev/null || printf unknown)
 . "$SCRIPT_DIR/fm-tasks-axi-lib.sh"
 # shellcheck source=bin/fm-public-followup-lib.sh
 . "$SCRIPT_DIR/fm-public-followup-lib.sh"
+# shellcheck source=bin/fm-supervision-lib.sh
+. "$SCRIPT_DIR/fm-supervision-lib.sh"
 
 STATUS_TAIL=${FM_SESSION_START_STATUS_TAIL:-5}
 case "$STATUS_TAIL" in ''|*[!0-9]*) STATUS_TAIL=5 ;; esac
@@ -275,6 +279,33 @@ if [ -n "$BOOT_OUT" ]; then
   printf '%s\n' "$BOOT_OUT"
 else
   printf '(silent - all good)\n'
+fi
+if [ -f "$STATE/$FM_SUP_DISARM_RECORD_NAME" ]; then
+  subsection "HOST SUPERVISION SENTINEL - DISARMED"
+  printf 'Host-level watcher-outage detection is deliberately disabled for this home.\n'
+  printf 'It will remain disabled until the session owner explicitly runs bin/fm-supervision-sentinel.sh enable.\n'
+  cat "$STATE/$FM_SUP_DISARM_RECORD_NAME"
+fi
+# A failed registration SUPPRESSES further launchd retries for a growing cooldown,
+# so it disables host monitoring just as effectively as a deliberate disarm. It
+# must be as loud, or the accidental unmonitored state stays invisible while the
+# deliberate one is announced.
+fm_supervision_arm_failure_status "$STATE"
+if [ "$FM_SUP_ARM_FAILED" = true ]; then
+  subsection "HOST SUPERVISION SENTINEL - REGISTRATION FAILED"
+  printf 'Host-level watcher-outage detection is NOT active for this home: launchd registration failed.\n'
+  if [ "$FM_SUP_ARM_RETRY_IN" -gt 0 ]; then
+    printf 'Automatic retry is suppressed for another %ss, and this home has no host-level outage detection until it succeeds.\n' \
+      "$FM_SUP_ARM_RETRY_IN"
+  elif [ "$FM_SUP_ARM_RETRY_STALE" = true ]; then
+    printf 'The recorded retry deadline is stale (unreadable, or further out than its own recorded window after a clock change or a restored state volume).\n'
+    printf 'It suppresses nothing: the next bin/fm-watch-arm.sh, or the away daemon once it observes a healthy watcher, will attempt registration again.\n'
+  else
+    printf 'The retry cooldown has expired; the next bin/fm-watch-arm.sh, or the away daemon once it observes a healthy watcher, will attempt registration again.\n'
+  fi
+  printf 'Run bin/fm-supervision-sentinel.sh enable to retry immediately; it bypasses the cooldown and clears this record only after a verified host check.\n'
+  printf 'The in-harness turn-end and continuity guards still block a blind turn end meanwhile.\n'
+  cat "$FM_SUP_ARM_RECORD"
 fi
 
 # --- 3. wake-drain -------------------------------------------------------

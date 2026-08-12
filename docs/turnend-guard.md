@@ -15,6 +15,10 @@ On 2026-07-04, that exact gap left a parked no-mistakes gate unwatched for about
 
 `bin/fm-turnend-guard.sh` closes the gap by checking the primary's own turn-end path.
 When tasks are in flight and there is no live identity-matched watcher with a fresh beacon, a harness hook must either block the turn end or force a bounded follow-up turn that tells the primary to repair the missing or failed watcher cycle using the recovery instruction in its emitted session-start protocol.
+Before rendering that guidance, the guard invokes `bin/fm-supervision-sentinel.sh note-outage`, which records the durable outage marker the host sentinel later alerts on.
+That mode performs local writes only.
+A hook must never wait on external-channel delivery: per-channel notifier timeouts are not bounded in aggregate, and a Stop hook that outruns its harness timeout would lose the very block it exists to render.
+External delivery through the channels owned by [`wedge-alarm.md`](wedge-alarm.md) belongs solely to the scheduled launchd check, and the blocking stderr banner is authoritative regardless.
 
 ## Shared Predicate
 
@@ -181,6 +185,8 @@ The normal worker trial repeated that path with a real isolated Codex worker and
 ## Tests
 
 `tests/fm-turnend-guard.test.sh` covers the shared predicate, primary scoping (including a secondmate's own home being guarded like the main primary while its child worktrees stay exempt), `FM_HOME` and `FM_STATE_OVERRIDE` precedence, Pi logical-run latch behavior for no-tool and multi-tool runs, fail-open behavior without `jq`, tracked hook registration for the five repository-native adapters, and the Grok adapter's forced-resume loop guard and permission-mode regression.
+The guard's own suite exercises that call with the sentinel actually enabled and every active channel pointed at an on-disk recorder, proving the block still renders, the durable marker lands with `delivery=pending`, no channel fires, no launchd liveness proof is forged, and a durable disarm silences the sentinel without weakening the block.
+`tests/fm-supervision-sentinel.test.sh` covers the shared active-alert path without posting a real notification.
 `tests/fm-primary.test.sh` verifies the managed Kimi Stop hook registration and primary lifecycle boundary.
 `tests/fm-kimi-worker.test.sh` covers the separate worker Stop-hook home under `state/<id>.kimi-home`.
 The default behavior suite does not invoke live language-model harnesses.

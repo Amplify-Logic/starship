@@ -19,6 +19,7 @@ install_runner() {  # <case-dir>
   cp "$ROOT/bin/fm-afk-return.sh" "$dir/bin/"
   cp "$ROOT/bin/fm-wake-lib.sh" "$dir/bin/"
   cp "$ROOT/bin/fm-classify-lib.sh" "$dir/bin/"
+  cp "$ROOT/bin/fm-supervision-lib.sh" "$dir/bin/"
   cat > "$dir/bin/fm-afk-launch.sh" <<'SH'
 #!/usr/bin/env bash
 [ "${1:-}" = stop ] || exit 2
@@ -120,6 +121,58 @@ test_return_gate_orders_catchup_before_bearings() {
   pass "return catch-up precedes Bearings, owns live blocker remediation, preserves evidence once, and clears idempotently"
 }
 
+# An away stretch the host outage alarm did not cover cannot be re-derived once
+# the daemon is gone, so the daemon's ledger is historical evidence: the return
+# catch-up reports it even after it was repaired, and only a completed catch-up
+# may clear it.
+test_away_host_alarm_gaps_reach_return_catchup() {
+  local dir out rc gate ledger
+  dir="$TMP_ROOT/host-alarm"
+  install_runner "$dir"
+  ledger="$dir/home/state/.supervision-sentinel.away-gap"
+  date +%s > "$dir/home/state/.afk"
+  : > "$dir/home/state/.fake-drain"
+  {
+    printf '2026-07-27T02:00:00+0200\tunavailable\thost outage alarms unavailable: launchd registration failed for this home while away\n'
+    printf '2026-07-27T03:10:00+0200\trestored\thost outage alarms restored after 4200s unavailable and 9 failed launchd registration attempt(s)\n'
+  } > "$ledger"
+
+  out=$(run_return "$dir" begin) || fail "return begin failed with no live blocker: $out"
+  assert_contains "$out" 'catch-up host-alarm: host outage alarms unavailable' \
+    "a repaired away host-alarm gap was not surfaced after return"
+  assert_contains "$out" 'restored after 4200s unavailable and 9 failed' \
+    "the away host-alarm gap did not report how long it lasted or how many attempts it cost"
+  [ ! -e "$ledger" ] || fail "a fully surfaced host-alarm ledger was not cleared by the completed catch-up"
+
+  # A stretch that never closed must reach the fail-closed gate and survive there:
+  # nothing else can reconstruct it after the away daemon is gone.
+  printf '2026-07-27T04:00:00+0200\tunavailable\thost outage alarms unavailable: launchd registration failed for this home while away\n' > "$ledger"
+  seed_live_blocker "$dir" herdr synthetic-dependency
+  date +%s > "$dir/home/state/.afk"
+  set +e
+  out=$(run_return "$dir" begin)
+  rc=$?
+  set -e
+  [ "$rc" -eq 3 ] || fail "return begin should gate on a live blocker (rc=$rc): $out"
+  gate="$dir/home/state/.afk-return-catchup"
+  grep -F $'evidence\thost-alarm\thost outage alarms unavailable' "$gate" >/dev/null \
+    || fail "an unclosed away host-alarm gap was not retained in the durable gate"
+  [ -e "$ledger" ] || fail "a blocked catch-up cleared the host-alarm ledger before ordinary work was allowed"
+
+  # A host that can never run the scheduled check is the same class of evidence:
+  # the away session was unprotected, and catch-up must say so rather than stay
+  # silent because nothing "failed".
+  printf 'resolved [key=synthetic-dependency]: refreshed the synthetic token\n' >> "$dir/home/state/repair-task.status"
+  printf '2026-07-27T05:00:00+0200\tunsupported\thost outage alarms were UNAVAILABLE for this entire away session and only the in-session turn-end and continuity guards applied\n' > "$ledger"
+  out=$(run_return "$dir" check) || fail "resolved blocker did not clear return catch-up: $out"
+  assert_contains "$out" 'catch-up host-alarm: host outage alarms were UNAVAILABLE for this entire away session' \
+    "an unsupported host rendered as protected: its away session reported no host-alarm evidence at all"
+  assert_contains "$out" 'only the in-session turn-end and continuity guards applied' \
+    "the unsupported away session did not state which protection actually applied"
+  [ ! -e "$ledger" ] || fail "a completed catch-up left the surfaced host-alarm ledger behind"
+  pass "away host-alarm gaps, including a permanently unsupported host, reach the return catch-up before it clears them"
+}
+
 test_explicit_reclassification_requires_durable_reason() {
   local backend dir out rc
   for backend in tmux herdr; do
@@ -210,6 +263,7 @@ test_check_retries_recorded_terminal_teardown() {
 }
 
 test_return_gate_orders_catchup_before_bearings
+test_away_host_alarm_gaps_reach_return_catchup
 test_explicit_reclassification_requires_durable_reason
 test_captain_decision_does_not_masquerade_as_firstmate_blocker
 test_away_reentry_refuses_pending_return_gate

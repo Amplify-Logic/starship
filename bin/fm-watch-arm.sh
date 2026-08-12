@@ -17,6 +17,12 @@
 # docs/arm-pretool-check.md for the blessed tree and deny reason codes. It is a
 # pre-execution seatbelt, not a substitute for the verification here.
 #
+# Once it has OBSERVED a healthy watcher, this script idempotently arms the macOS
+# host-level outage sentinel (`bin/fm-supervision-sentinel.sh`). launchd owns that
+# read-mostly fallback outside the harness process tree, so it can alert on a stale
+# beacon even if this arm process and its watcher child are reaped together. The
+# sentinel never starts or signals supervision processes.
+#
 # This script forks the watcher as a tracked child, then VERIFIES the outcome
 # before it settles in. It confirms a watcher process is genuinely alive AND the
 # liveness beacon (state/.last-watcher-beat) is fresh within FM_GUARD_GRACE (the
@@ -62,8 +68,11 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
+# shellcheck source=bin/fm-supervision-lib.sh
+. "$SCRIPT_DIR/fm-supervision-lib.sh"
 
 WATCH="$SCRIPT_DIR/fm-watch.sh"
+SENTINEL="$SCRIPT_DIR/fm-supervision-sentinel.sh"
 WATCH_LOCK="$STATE/.watch.lock"
 BEAT="$STATE/.last-watcher-beat"
 # "Fresh" reuses the guard's threshold so there is one definition of liveness.
@@ -240,12 +249,14 @@ report_attached() {
   local age
   age=$(fm_path_age "$BEAT")
   echo "watcher: attached pid=$HEALTHY_PID (beacon ${age}s)"
+  arm_host_sentinel
 }
 
 report_healthy() {
   local age
   age=$(fm_path_age "$BEAT")
   echo "watcher: healthy pid=$HEALTHY_PID (beacon ${age}s)"
+  arm_host_sentinel
 }
 
 # Give a successor the same bounded confirmation window used for a fresh child.
@@ -337,6 +348,38 @@ case "${1:-}" in
   --restart) mode=restart ;;
   *) echo "usage: $(basename "$0") [--restart]" >&2; exit 2 ;;
 esac
+
+# Host-sentinel registration, at most once per arm and only from a path that has
+# already observed and reported a healthy watcher (see report_attached,
+# report_healthy, and the started line below).
+#
+# Ordering is the whole point. The generated launchd job sets RunAtLoad, so a
+# bootstrap or kickstart runs a scheduled host check immediately; registering
+# before this arm has confirmed a watcher would make that first check see in-flight
+# work with no healthy watcher and deliver a real SUPERVISION DOWN alert for the
+# very outage this arm is in the middle of ending - every reboot, since the
+# gui/<uid> agent is gone while task metadata survives. The alarm's premise is that
+# supervision was healthy and then stopped, so a home this arm never saw healthy has
+# no outage to report and simply stays unregistered until some arm does see one.
+#
+# Registration is otherwise best-effort for portability: the ordinary watcher
+# remains the primary mechanism on unsupported hosts, and a supported host that
+# cannot retain the launchd service gets an explicit warning. Argv is validated
+# above, so a usage error still has no registration or notification side effect.
+sentinel_armed=0
+arm_host_sentinel() {
+  local rc=0
+  [ "$sentinel_armed" -eq 0 ] || return 0
+  sentinel_armed=1
+  [ -x "$SENTINEL" ] || return 0
+  "$SENTINEL" arm || rc=$?
+  [ "$rc" -eq 0 ] && return 0
+  # A deliberate no-op (durably disarmed home, sentinel mode off, non-primary
+  # scope) already reported itself if it had anything to say; it is not the
+  # unavailable-alarm failure this warning names.
+  [ "$rc" -eq "$FM_SUP_SENTINEL_NOOP_EXIT" ] && return 0
+  echo "watcher: WARNING - host-level supervision-outage alarm is unavailable" >&2
+}
 
 if [ "$mode" = restart ]; then
   # Home-scoped stop: only the watcher pid recorded in THIS home's lock.
@@ -480,6 +523,7 @@ while :; do
       cycle_refresh_lock_before
       cycle_mark_predecessor_successor "started:$child"
       echo "watcher: started pid=$child (beacon fresh)"
+      arm_host_sentinel
       wait "$child"
       rc=$?
       owned_child_finished "$rc"

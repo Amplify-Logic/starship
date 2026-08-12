@@ -110,14 +110,19 @@ That keeps a tmux pane nested inside herdr on the tmux transport, matching the r
 Target detection uses `FM_SUPERVISOR_TARGET`, then `$TMUX_PANE`, then `"${HERDR_SESSION:-default}:${HERDR_PANE_ID}"` under herdr, then the legacy `firstmate:0` tmux fallback with a warning.
 Selecting any other supervisor backend, including `zellij`, `orca`, or `cmux`, refuses at daemon startup instead of trying tmux injection primitives against a non-tmux pane.
 
-## Away-mode wedge alarm channels (config/wedge-alarm)
+## Supervision active alert channels (config/wedge-alarm)
 
 When away-mode injection wedges past `FM_MAX_DEFER_SECS`, the sub-supervisor raises a loud, rate-limited alarm.
-Beyond the durable `state/.subsuper-inject-wedged` marker and the tmux status-line flash, it attempts a configured backend-independent active alert that can reach the captain even when every pane and its backend status-line is unreadable.
+The host-level macOS sentinel uses the same channels when tasks are in flight without a healthy identity-matched watcher lock and beacon.
+Beyond the durable alarm markers and the tmux status-line flash available to the injection case, these backend-independent alerts can reach the captain even when every pane and its backend status-line is unreadable.
+In-harness turn-end and continuity guards write only the pending marker and return their own loud banner immediately; the independent scheduled host check exclusively owns external-channel delivery.
 `config/wedge-alarm` (local, gitignored) lists channel directives, one per non-empty, non-comment line; every listed non-`off` channel fires, best-effort.
 `FM_WEDGE_ALARM_CHANNEL` overrides the file with a single directive.
 Directives are `off` (a position-independent kill switch that disables every active alert), `auto`/`default`, `osascript` (macOS Notification Center banner), `herdr` (herdr UI notification), and `command:<cmd>` (run `<cmd>` via `sh -c`, summary on `$1` and stdin).
-An absent file means `auto`, i.e. default-on on macOS: the alarm exists precisely so a wedged away-mode primary is never silent, and it fires at most once per max-defer window after a genuine wedge.
+An absent file means `auto`, i.e. default-on on macOS: a supervision outage must not be silent.
+The injection alarm fires at most once per max-defer window after a genuine wedge, while one continuous watcher outage repeats after five minutes by default and then backs off exponentially to a one-hour cap.
+A watcher that recovers and is reaped again starts a new outage episode, which resets that backoff and alerts on the next host check.
+Failed watcher-outage delivery remains pending and retries after a short claim lease; only successful delivery advances that backoff.
 A missing or failing channel logs and falls through to the next, never crashing the daemon.
 See [`wedge-alarm.md`](wedge-alarm.md) for the channel reference and macOS verification evidence, and [`examples/wedge-alarm`](examples/wedge-alarm) for a copyable config.
 
@@ -514,7 +519,7 @@ FMX_FOLLOWUP_MAX_COUNT=3   # local cap on X-mode completion follow-ups per linke
 FM_PF_RETRY_BACKOFF_SECS=900   # seconds before retrying a promised-public-reply delivery after a retryable error
 FM_LOCK_STALE_AFTER=2   # seconds before dead-pid lock records can be reclaimed; mid-acquire locks keep at least 2s grace
 FM_CONFIG_INHERIT_LOCK_WAIT_SECS=30   # bounded wait for a secondmate home's inheritance lock before bootstrap, fm-config-push, or spawn reports it instead of blocking; blank, zero, or non-numeric resets to 30
-FM_GUARD_GRACE=300      # seconds before guard warnings, arm health checks, and the primary turn-end guard treat a watcher beacon as stale
+FM_GUARD_GRACE=300      # seconds before guard warnings, arm health checks, and the primary turn-end guard treat a watcher beacon as stale; IN-SESSION ONLY - the scheduled host sentinel deliberately ignores it and always uses the durable 300s default pinned in its launchd manifest, so an ambient override cannot change a loaded service's identity or its outage threshold (docs/wedge-alarm.md)
 FM_ARM_CONFIRM_TIMEOUT=10   # seconds fm-watch-arm waits to confirm a fresh watcher before reporting FAILED; the default is 30 on Git Bash/MSYS
 FM_ARM_ATTACH_POLL=0.5  # seconds between checks while fm-watch-arm is attached to an existing healthy watcher cycle
 FM_OPENCODE_ARM_READY_TIMEOUT_MS=12000   # milliseconds the OpenCode primary watcher plugin waits for an arm attempt to report started, healthy, wake, or failure; the default is 35000 on Windows
@@ -562,14 +567,23 @@ FM_SUPERVISOR_TARGET=              # optional supervisor pane target override; t
 FM_INJECT_SKIP=heartbeat           # |-prefixes force-self-handled bypassing classification; empty disables
 FM_ESCALATE_BATCH_SECS=90          # buffer window for batched escalation digests; 0 = flush immediately
 FM_MAX_DEFER_SECS=300              # max buffered escalation age before retry plus wedge alarm; 0 disables
-FM_WEDGE_ALARM_CHANNEL=            # override config/wedge-alarm with one active-alert directive for the wedge alarm; off|auto|osascript|herdr|command:<cmd>; absent = auto (macOS -> an OS notification)
+FM_WEDGE_ALARM_CHANNEL=            # override config/wedge-alarm with one supervision active-alert directive; off|auto|osascript|herdr|command:<cmd>; absent = auto (macOS -> an OS notification)
 FM_WEDGE_ALARM_EXEC=              # notifier seam: route every channel (osascript, herdr, command:) through this command as `<cmd> <channel> <summary>`; "discard" fires nothing; unset in production; the daemon defaults it to "discard" when sourced so no test posts a real notification (docs/wedge-alarm.md)
+FM_SUPERVISION_SENTINEL_MODE=      # `off` disables automatic host registration/checks in this process; use the explicit sentinel `disarm` command to uninstall an already-loaded service durably
+FM_SENTINEL_INTERVAL_SECS=         # launchd stale-beacon check interval; default 60, minimum 15
+FM_SENTINEL_REALARM_SECS=          # ALERT schedule only: first repeat-alert delay during one continuous outage; default 300, minimum 60
+FM_SENTINEL_MAX_REALARM_SECS=      # ALERT schedule only: cap for exponentially backed-off repeat alerts; default 3600, minimum 300
+FM_SENTINEL_ARM_RETRY_SECS=        # REGISTRATION schedule only: cooldown before a failed launchd registration is retried; default 60, minimum 15
+FM_SENTINEL_ARM_RETRY_MAX_SECS=    # REGISTRATION schedule only: cap for the exponentially backed-off registration retry; default 3600, minimum 60
+FM_SENTINEL_CLAIM_LEASE_SECS=      # retry lease after an in-progress or failed alert delivery; default 30, minimum 1
+FM_SENTINEL_CHECK_WAIT_SECS=       # bounded wait for a registration's first launchd-spawned check; default 15, minimum 1
 FM_WEDGE_ALARM_TIMEOUT_SECS=10    # maximum seconds for each osascript, herdr, override, or command: notifier before its watchdog terminates it and continues to the next channel; invalid or zero values use 10
 FM_INJECT_FAIL_SLEEP=30            # seconds to back off when the supervisor pane is unavailable
 FM_INJECT_CONFIRM_RETRIES=3        # daemon Enter-retry attempts after typing a digest once
 FM_INJECT_CONFIRM_SLEEP=0.5        # seconds between daemon submit checks
 FM_HEARTBEAT_SCAN_SECS=300         # cadence of the catch-all status scan for missed captain verbs
-FM_HOUSEKEEPING_TICK=15            # seconds between batch-flush, stale/pause-recheck, and scan passes
+FM_HOUSEKEEPING_TICK=15            # seconds between batch-flush, stale/pause-recheck, and scan passes; also the away daemon's host-sentinel registration cadence and the gate on its watcher-health probe
+FM_AFK_SENTINEL_RETRY_MAX_SECS=300 # cap on the away daemon's host-sentinel registration retry backoff (starts at one housekeeping tick and doubles); only a verified registration stops the retries, and a positively unsupported host stops them while recording that the away session had in-session guards only
 FM_CRASH_THRESHOLD=10              # watcher crashes allowed inside FM_CRASH_WINDOW before daemon backoff
 FM_CRASH_WINDOW=60                 # seconds in the crash-loop detection window
 FM_CRASH_BACKOFF=60                # seconds to wait after crossing the crash threshold
