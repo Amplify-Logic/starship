@@ -132,14 +132,17 @@ $ tmux display-message -p -t <pane> '#{pane_current_command}'
 node
 ```
 
-Unlike `pi`, it is attributable: `exec -a` rewrites argv[0], but the VERSIONED bundle path survives as an argument, so the pane's own argv carries an unambiguous marker with no child-process walk:
+Unlike `pi`, it is attributable: `exec -a` rewrites argv[0], but the VERSIONED bundle path survives as an argument, so the Cursor process argv carries an unambiguous marker:
 
 ```
-$ ps -o args= -p <pane_pid>
+$ ps -o args= -p <cursor-process-pid>
 /Users/.../.local/bin/agent --use-system-ca /Users/.../cursor-agent/versions/2026.07.16-899851b/index.js --yolo
 ```
 
-`fm_backend_tmux_agent_alive` therefore inspects argv for the `node` COMM only, returning `alive` on a `cursor-agent` match. This is the "argument introspection" the `pi` gap above declined, applied narrowly where the marker is specific rather than generic. Verified live 2026-07-19 with the dead-shell control unchanged:
+`fm-spawn` creates a pane-owned login shell and types the launch command into it, so `#{pane_pid}` is that shell rather than Cursor.
+`fm_backend_tmux_agent_alive` therefore walks the pane process and its descendants, then returns `alive` only when a `node` process has the `cursor-agent` argv marker.
+This is the "argument introspection" the `pi` gap above declined, applied narrowly where the marker is specific rather than generic.
+The Cursor marker was verified live on 2026-07-19, and the descendant walk was corrected and verified against a task-shaped pane on 2026-08-13 with the dead-shell control unchanged:
 
 ```
 comm=node

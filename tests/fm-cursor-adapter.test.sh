@@ -293,42 +293,109 @@ test_launch_template_flags() {
 }
 
 # cursor_model_with_effort lives in fm-spawn.sh, which is a script rather than a
-# sourceable library, so extract just that function to exercise it directly.
-run_model_with_effort() {  # <model> <effort>
-  sed -n '/^cursor_model_with_effort() {/,/^}/p' "$ROOT/bin/fm-spawn.sh" \
-    > "$TMP_ROOT/mwe.sh"
-  bash -c ". '$TMP_ROOT/mwe.sh'; cursor_model_with_effort '$1' '$2'"
+# sourceable library, so extract it (and the catalog probe it calls) to exercise
+# them directly.
+#
+# The catalog is ALWAYS pinned to a fixture path so the tier ladder is decided by
+# the fixture rather than by whichever Cursor build the test machine has
+# installed. A path that does not exist is the deterministic "catalog
+# unavailable" case: fm_cursor_list_models_text returns non-zero without ever
+# shelling out to `agent`.
+CATALOG_45="" CATALOG_46=""
+
+run_model_with_effort() {  # <model> <effort> <catalog-file>
+  { sed -n '/^cursor_model_tier_offered() {/,/^}/p' "$ROOT/bin/fm-spawn.sh"
+    sed -n '/^cursor_model_with_effort() {/,/^}/p' "$ROOT/bin/fm-spawn.sh"
+  } > "$TMP_ROOT/mwe.sh"
+  FM_CURSOR_MODEL_CATALOG="$3" bash -c \
+    ". '$ROOT/bin/fm-cursor-model-lib.sh'; . '$TMP_ROOT/mwe.sh'; cursor_model_with_effort '$1' '$2'"
+}
+
+# Grok 4.5: the ladder verified 2026-07-19, which stops at -high.
+write_catalog_45() {
+  CATALOG_45="$TMP_ROOT/catalog-4.5.txt"
+  cat > "$CATALOG_45" <<'EOF'
+Available models
+cursor-grok-4.5-low - Cursor Grok 4.5 Low
+cursor-grok-4.5-medium - Cursor Grok 4.5 Medium
+cursor-grok-4.5-high - Cursor Grok 4.5
+cursor-grok-4.5-high-fast - Cursor Grok 4.5 Fast
+EOF
+}
+
+# Grok 4.6: verbatim ids from `agent --list-models` on Cursor CLI
+# 2026.08.11-e8db854 (2026-08-13), which DO include an -xhigh tier.
+write_catalog_46() {
+  CATALOG_46="$TMP_ROOT/catalog-4.6.txt"
+  cat > "$CATALOG_46" <<'EOF'
+Available models
+cursor-grok-4.6-low - Cursor Grok 4.6 Low
+cursor-grok-4.6-low-fast - Cursor Grok 4.6 Low Fast
+cursor-grok-4.6-medium - Cursor Grok 4.6 Medium
+cursor-grok-4.6-medium-fast - Cursor Grok 4.6 Medium Fast
+cursor-grok-4.6-high - Cursor Grok 4.6
+cursor-grok-4.6-high-fast - Cursor Grok 4.6 Fast
+cursor-grok-4.6-xhigh - Cursor Grok 4.6 Extra High
+cursor-grok-4.6-xhigh-fast - Cursor Grok 4.6 Extra High Fast
+EOF
 }
 
 test_effort_folds_into_model_id() {
   local out
-  out=$(run_model_with_effort cursor-grok-4.5 low)
+  out=$(run_model_with_effort cursor-grok-4.5 low "$CATALOG_45")
   [ "$out" = "cursor-grok-4.5-low" ] || fail "low did not fold into model id: '$out'"
-  out=$(run_model_with_effort cursor-grok-4.5 medium)
+  out=$(run_model_with_effort cursor-grok-4.5 medium "$CATALOG_45")
   [ "$out" = "cursor-grok-4.5-medium" ] || fail "medium did not fold into model id: '$out'"
-  out=$(run_model_with_effort cursor-grok-4.5 high)
+  out=$(run_model_with_effort cursor-grok-4.5 high "$CATALOG_45")
   [ "$out" = "cursor-grok-4.5-high" ] || fail "high did not fold into model id: '$out'"
   pass "cursor effort axis folds into the model id (low/medium/high)"
 }
 
 test_effort_above_ceiling_caps_at_high() {
   local out
-  # cursor exposes no xhigh/max tier; the harness-adapters fallback caps at the
-  # highest supported non-max level rather than dropping the intent silently.
+  # Grok 4.5 has no xhigh tier, so the harness-adapters fallback caps at the
+  # highest tier that model really has rather than dropping the intent silently.
   for e in xhigh max; do
-    out=$(run_model_with_effort cursor-grok-4.5 "$e")
-    [ "$out" = "cursor-grok-4.5-high" ] || fail "effort '$e' did not cap at high: '$out'"
+    out=$(run_model_with_effort cursor-grok-4.5 "$e" "$CATALOG_45")
+    [ "$out" = "cursor-grok-4.5-high" ] || fail "effort '$e' did not cap at high on a 4.5 catalog: '$out'"
   done
-  pass "cursor caps xhigh/max at its highest real tier (high)"
+  # An unreadable catalog takes the same conservative floor: -high is the tier
+  # every verified cursor model has, so it can never be a fabricated id.
+  for e in xhigh max; do
+    out=$(run_model_with_effort cursor-grok-4.6 "$e" "$TMP_ROOT/no-such-catalog.txt")
+    [ "$out" = "cursor-grok-4.6-high" ] || fail "effort '$e' without a catalog did not fall back to high: '$out'"
+  done
+  pass "cursor caps xhigh/max at high when the model (or the catalog) offers no xhigh"
+}
+
+test_effort_uses_xhigh_when_the_model_offers_it() {
+  local out
+  # Grok 4.6 (2026-08-12) added -xhigh, so capping it at -high would silently
+  # under-tier every xhigh/max request against a model that can serve it.
+  for e in xhigh max; do
+    out=$(run_model_with_effort cursor-grok-4.6 "$e" "$CATALOG_46")
+    [ "$out" = "cursor-grok-4.6-xhigh" ] || fail "effort '$e' did not reach the real xhigh tier: '$out'"
+  done
+  # The lower tiers are unaffected by the ladder being longer.
+  out=$(run_model_with_effort cursor-grok-4.6 high "$CATALOG_46")
+  [ "$out" = "cursor-grok-4.6-high" ] || fail "high must stay high on a model with xhigh: '$out'"
+  pass "cursor xhigh/max resolve to a real -xhigh tier when the model has one"
 }
 
 test_explicit_tiered_model_is_never_retiered() {
   local out
   # A captain naming an exact model id wins over the effort axis.
-  out=$(run_model_with_effort cursor-grok-4.5-high low)
+  out=$(run_model_with_effort cursor-grok-4.5-high low "$CATALOG_45")
   [ "$out" = "cursor-grok-4.5-high" ] || fail "explicit tiered model was retiered: '$out'"
-  out=$(run_model_with_effort cursor-grok-4.5-medium-fast high)
+  out=$(run_model_with_effort cursor-grok-4.5-medium-fast high "$CATALOG_45")
   [ "$out" = "cursor-grok-4.5-medium-fast" ] || fail "explicit fast variant was retiered: '$out'"
+  # -xhigh does NOT end in -high, so it needs its own passthrough: without one
+  # an explicit xhigh id became "cursor-grok-4.6-xhigh-high", an id no catalog
+  # lists, and the spawn preflight refused the task outright.
+  out=$(run_model_with_effort cursor-grok-4.6-xhigh high "$CATALOG_46")
+  [ "$out" = "cursor-grok-4.6-xhigh" ] || fail "explicit xhigh model was retiered: '$out'"
+  out=$(run_model_with_effort cursor-grok-4.6-xhigh-fast low "$CATALOG_46")
+  [ "$out" = "cursor-grok-4.6-xhigh-fast" ] || fail "explicit xhigh fast variant was retiered: '$out'"
   pass "an explicit tiered/fast cursor model id is never silently retiered"
 }
 
@@ -336,7 +403,9 @@ test_fast_variant_is_never_implicit() {
   local out
   # Fast is a separate cost/speed choice: the effort axis must never select it.
   for e in low medium high xhigh max; do
-    out=$(run_model_with_effort cursor-grok-4.5 "$e")
+    out=$(run_model_with_effort cursor-grok-4.5 "$e" "$CATALOG_45")
+    case "$out" in *-fast) fail "effort '$e' implicitly selected a fast variant: '$out'" ;; esac
+    out=$(run_model_with_effort cursor-grok-4.6 "$e" "$CATALOG_46")
     case "$out" in *-fast) fail "effort '$e' implicitly selected a fast variant: '$out'" ;; esac
   done
   pass "cursor fast variants are never selected implicitly by the effort axis"
@@ -460,8 +529,11 @@ test_grok_placeholder_still_empty
 test_busy_regex_matches_footer_not_spinner_verb
 test_watch_and_tmux_busy_regexes_agree
 test_launch_template_flags
+write_catalog_45
+write_catalog_46
 test_effort_folds_into_model_id
 test_effort_above_ceiling_caps_at_high
+test_effort_uses_xhigh_when_the_model_offers_it
 test_explicit_tiered_model_is_never_retiered
 test_fast_variant_is_never_implicit
 test_parse_footer_model_from_idle_capture

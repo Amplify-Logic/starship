@@ -21,9 +21,10 @@
 #                 Inside tmux, the launcher adds a detached one-row companion
 #                 that renders docs/status-bar.md without replacing Kimi's
 #                 native footer or controls.
-#   cursor-grok   agent --yolo --model cursor-grok-4.5-high
-#                 Cursor has no effort flag; the high tier is a model-id suffix.
-#                 xhigh/max fold to high, so this profile pins -high.
+#   cursor-grok   agent --yolo --model cursor-grok-4.6-high
+#                 Cursor has no effort flag; the tier is a model-id suffix.
+#                 Grok 4.6 also offers -xhigh, so -high here is a deliberate
+#                 cost choice rather than the ceiling it was on Grok 4.5.
 #                 Primary lifecycle hooks reuse tracked .claude/settings.json
 #                 (Cursor maps SessionStart/PreToolUse/Stop onto its native
 #                 events). There is no third-party status-line API, so no
@@ -71,8 +72,10 @@
 # Its hooks provide blockable PreToolUse and Stop integration.
 # The source Kimi home and its live config are never edited.
 #
-# Cursor CLI primary support is pinned to the empirically verified agent
-# version recorded below and in docs/cursor-harness.md.
+# Cursor CLI primary support records the empirically certified agent version
+# below and in docs/cursor-harness.md; any other build warns and launches.
+# The launch check that can still refuse is an explicitly logged-out CLI, which
+# would otherwise boot the primary to a login screen.
 # Worker adapter behavior is unchanged; this profile certifies PRIMARY only.
 # Never launch a cursor WORKER from the primary checkout (that checkout's
 # .claude/settings.json Stop wiring is for the primary session).
@@ -123,9 +126,14 @@ KIMI_CERTIFIED_VERSION=0.27.0
 # (docs/kimi-harness.md), so it reads differently from the certified build above
 # on purpose rather than as a drift bug.
 KIMI_VALIDATED_VERSION=0.31.1
-# Cursor stays an exact-match block: its Stop turn-end hook is unverified
-# (docs/cursor-harness.md), so drift there is not merely uncertified.
-CURSOR_VALIDATED_VERSION=2026.07.20-8cc9c0b
+# Cursor's exact-match BLOCK existed only because its Stop turn-end hook was
+# unverified on 2026.07.20-8cc9c0b, which made drift there unsafe rather than
+# merely uncertified. Stop now fires (docs/cursor-harness.md, re-certified
+# 2026-08-13 on the build below), so cursor joins the fleet-wide rule that
+# bin/fm-toolchain-lib.sh applies: an unrecognized build warns and still
+# launches, instead of turning every publisher release into an unscheduled
+# outage of the certified primary.
+CURSOR_CERTIFIED_VERSION=2026.08.11-e8db854
 
 usage() {
   sed -n '2,/^set -u$/s/^# \{0,1\}//p' "$0"
@@ -462,8 +470,17 @@ fi
 
 if [ "$PROFILE" = cursor-grok ]; then
   version=$("$CLI" --version 2>/dev/null | head -1 | tr -d '\r')
-  [ "$version" = "$CURSOR_VALIDATED_VERSION" ] \
-    || die "Cursor primary support is verified only for $CURSOR_VALIDATED_VERSION; found ${version:-unknown}"
+  if [ "$version" != "$CURSOR_CERTIFIED_VERSION" ]; then
+    printf 'fm-primary: Cursor primary is certified on %s; found %s (docs/cursor-harness.md) - launching anyway\n' \
+      "$CURSOR_CERTIFIED_VERSION" "${version:-unknown}" >&2
+  fi
+  # Only an EXPLICIT negative blocks: "Not logged in" contains "logged in", and
+  # an unreadable status is not evidence of a logged-out CLI.
+  cursor_status=$("$CLI" status 2>/dev/null | head -5)
+  case "$cursor_status" in
+    *'Not logged in'*|*'not logged in'*)
+      die "Cursor CLI is not logged in ('$CLI status'); the primary would boot to its login screen instead of a session" ;;
+  esac
 fi
 
 cd "$FM_ROOT" || die "could not enter tracked Starship root: $FM_ROOT"
@@ -489,7 +506,7 @@ case "$PROFILE" in
     argv=("$CLI" --model kimi-code/k3 --yolo)
     ;;
   cursor-grok)
-    argv=("$CLI" --yolo --model cursor-grok-4.5-high)
+    argv=("$CLI" --yolo --model cursor-grok-4.6-high)
     ;;
 esac
 

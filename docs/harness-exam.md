@@ -36,6 +36,8 @@ A successful run exits zero only when all eight probes pass.
 
 A failed or missing observation exits nonzero and remains visible in the scorecard.
 
+Exit code 3 is separate: it means the lab home was not authenticated, so nothing was scored at all.
+
 ## Isolation and credentials
 
 Each run creates a fresh git repository and a private Unix home beneath a temporary lab directory.
@@ -54,7 +56,21 @@ The isolated copies are read-only and never write token refreshes back to the so
 
 Claude receives a read-only copy of the home-root `.claude.json` account and onboarding state, so the lab home does not boot as a first-run install, plus `.claude/.credentials.json` when that file-based token exists.
 
-On macOS the Claude OAuth token lives in the login keychain, which the OS scopes to the user session rather than to `HOME`, so the lab runtime reaches that same keychain item in place instead of through an isolated file copy.
+The macOS login keychain is resolved from `HOME`, not from the user session.
+
+Verified 2026-08-13 on macOS 25.5.0: under a fresh `HOME`, `security default-keychain` reports "A default keychain could not be found" and `security list-keychains` falls back to `/Library/Keychains/System.keychain` alone.
+
+So an adapter whose credential lives only in the login keychain boots LOGGED OUT inside the lab, and no file copy can bridge it.
+
+That applies to cursor, whose token is the keychain item `cursor-access-token` (`~/.cursor/auth.json` does not exist on current builds, and `cli-config.json` carries identity without a token), and to claude on a macOS install with no `.claude/.credentials.json`.
+
+`--share-login-keychain` links the source home's `~/Library/Keychains` into the lab home for those adapters.
+
+It is off by default and is the one bridge that is not a read-only copy: the lab runtime reaches the real login keychain through that link and can rewrite the items it owns, so it stays a deliberate operator choice rather than a silent default.
+
+An unauthenticated lab is refused rather than scored.
+
+The run stops with exit code 3 and writes `evidence/00-auth-blocked.txt`, because an unauthenticated runtime parks on its login screen and every probe would time out into eight recorded failures - a false negative from a tool whose whole job is deciding whether a build still behaves.
 
 Kimi receives a dedicated `KIMI_CODE_HOME`, and source hook blocks are removed before the exam hook is installed.
 

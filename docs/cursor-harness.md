@@ -9,14 +9,20 @@ one owner; the exact launch flags live in `bin/fm-spawn.sh`. This document is th
 EVIDENCE: dated commands, verbatim output, and the limitations behind each
 decision. Regression coverage is `tests/fm-cursor-adapter.test.sh`.
 
-**Verified 2026-07-19** on:
+**PRIMARY certified and WORKER partially re-verified 2026-08-13** on:
 
 | Component | Version |
 |---|---|
-| Cursor CLI (`agent`) | `2026.07.16-899851b` |
-| Model | Cursor Grok 4.5 (`cursor-grok-4.5-{low,medium,high}`) |
+| Cursor CLI (`agent`) | `2026.08.11-e8db854` |
+| Model | Cursor Grok 4.6 (`cursor-grok-4.6-{low,medium,high,xhigh}`, each with a `-fast` variant) |
 | tmux | 3.6a |
-| Account | Cursor Pro, `your.email@example.com` |
+| macOS | 25.5.0 |
+
+The original certification was **2026-07-19** on Cursor CLI `2026.07.16-899851b` with Grok 4.5, and the first primary certification was 2026-07-22 on `2026.07.20-8cc9c0b`.
+
+Sections below carry the date of the evidence they rest on; anything marked 2026-08-13 supersedes the earlier reading.
+
+The 2026-08-13 re-certification changed four operating facts and found three defects in firstmate's own tooling; "What the re-certification changed" at the end of this document is the summary.
 
 `agent` resolves to `~/.local/bin/agent`, a bash wrapper that `exec -a`s a bundled
 Node app at `~/.local/share/cursor-agent/versions/<version>/index.js`. That detail
@@ -25,6 +31,7 @@ is load-bearing for the liveness probe below.
 ## Scope: worker and primary
 
 Cursor is verified as a WORKER (crewmate/scout) adapter and, separately, as a PRIMARY orchestrator through `bin/fm-primary.sh cursor-grok`.
+As of the 2026-08-13 re-certification the primary role is fully certified on the current build, while the worker role stands at six of the exam's eight probes with exit and resume carried by direct evidence instead.
 Worker facts below remain authoritative for `fm-spawn`.
 Primary certification evidence is in "Primary orchestrator certification" later in this document.
 Never treat worker verification alone as primary support, and never launch a cursor WORKER from the firstmate primary checkout (that checkout's `.claude/settings.json` is the primary's hook surface).
@@ -33,23 +40,53 @@ Never treat worker verification alone as primary support, and never launch a cur
 
 ```
 $ agent --version
-2026.07.16-899851b
+2026.08.11-e8db854
 
 $ agent status
 ✓ Logged in as your.email@example.com
 ```
 
-All six Grok 4.5 ids are live:
+Grok 4.6 shipped 2026-08-12 and exposes **eight** ids, including a tier Grok 4.5 never had (verified 2026-08-13):
 
 ```
-$ agent --list-models | grep -i grok
-cursor-grok-4.5-high - Cursor Grok 4.5
-cursor-grok-4.5-high-fast - Cursor Grok 4.5 Fast
-cursor-grok-4.5-low - Cursor Grok 4.5 Low
-cursor-grok-4.5-low-fast - Cursor Grok 4.5 Low Fast
-cursor-grok-4.5-medium - Cursor Grok 4.5 Medium
-cursor-grok-4.5-medium-fast - Cursor Grok 4.5 Medium Fast
+$ agent --list-models | grep -i grok-4.6
+cursor-grok-4.6-low - Cursor Grok 4.6 Low
+cursor-grok-4.6-low-fast - Cursor Grok 4.6 Low Fast
+cursor-grok-4.6-medium - Cursor Grok 4.6 Medium
+cursor-grok-4.6-medium-fast - Cursor Grok 4.6 Medium Fast
+cursor-grok-4.6-high - Cursor Grok 4.6
+cursor-grok-4.6-high-fast - Cursor Grok 4.6 Fast
+cursor-grok-4.6-xhigh - Cursor Grok 4.6 Extra High
+cursor-grok-4.6-xhigh-fast - Cursor Grok 4.6 Extra High Fast
 ```
+
+The six Grok 4.5 ids recorded on 2026-07-19 are still live alongside them.
+
+### Where the credential actually lives (verified 2026-08-13)
+
+There is no `~/.cursor/auth.json` on this build.
+
+`~/.cursor/cli-config.json` carries identity only - its `authInfo` holds `authId`, `displayName`, `email`, and `userId`, and no token.
+
+The credential is the macOS **login keychain** item `cursor-access-token` (with `cursor-refresh-token` and `cursor-user`).
+
+The login keychain is resolved from `HOME`, not from the user session, so any isolated-`HOME` lab starts logged out:
+
+```
+$ HOME=$(mktemp -d) security default-keychain
+security: SecKeychainCopyDefault: A default keychain could not be found.
+
+$ HOME=$(mktemp -d) agent status
+Not logged in
+
+$ agent status                      # same binary, real HOME
+✓ Logged in as your.email@example.com
+```
+
+Linking `~/Library/Keychains` into the isolated home restores authentication, which is what `bin/fm-harness-exam.sh --share-login-keychain` does; `docs/harness-exam.md` owns that contract.
+
+`cli-config.json` also changed shape: the selected model is now `{"modelId": "grok-4.6", ...}` plus a `selectedModel.parameters` list carrying `effort` and `fast`, rather than a single suffixed id.
+Firstmate does not read that file, so this is recorded as context for the account-default hazard below, not as a dependency.
 
 `--list-models` also advertises a parameterized override form
 (`--model 'claude-opus-4-8[context=1m,effort=high,fast=false]'`). The explicit
@@ -269,12 +306,31 @@ than writing to Cursor's own state.
 Interrupting mid-tool-call left `$ sleep 45 && echo SLEPT Cancelled • 28s` and
 returned the pane to idle with the busy footer gone.
 
-Exit prints the resume line and the pane goes dead with status 0:
+On 2026-07-19 exit printed the resume line and the pane went dead with status 0:
 
 ```
 To resume this session: agent --resume=a06b82e5-bfdb-4003-b545-4248b7539e98
 Pane is dead (status 0, Sun Jul 19 14:14:36 2026)
 ```
+
+### The resume line is gone (verified 2026-08-13)
+
+On `2026.08.11-e8db854`, `/quit` still exits cleanly and returns the pane to its shell, but prints no resume line.
+
+A full scrollback capture after exit (`tmux capture-pane -p -S -120`) contained no `agent --resume=` text at all, while the chat itself was still written to disk:
+
+```
+$ ls ~/.cursor/chats/12bb2dd5e49e2b5a6a3b674257ae65f4/
+c2bb28b1-351f-4aef-8a5d-5afb18ce6541
+```
+
+Resuming with that id from the original working directory restored the prior conversation, so the capability is intact and only its DISCOVERY changed.
+
+Recovery must therefore read the chat id from `~/.cursor/chats/<workspace-hash>/<chatId>/` rather than scraping exit output.
+
+The resume also showed the workspace trust dialog again, so a recovery relaunch must expect it rather than treating it as a failed resume.
+
+Anything that scrapes the printed line - including this repo's own exam resume probe - now finds nothing.
 
 **Resume is workspace-scoped, and fails silently.** Chats are stored under
 `~/.cursor/chats/<workspace-hash>/<chatId>/`, so resuming the same id from a
@@ -371,6 +427,45 @@ agent_alive=alive
 shell_verdict=dead
 ```
 
+### The argv lookup used the wrong process (found and fixed 2026-08-13)
+
+That 2026-07-19 reading came from a lab where `agent` was the pane's own command.
+
+Firstmate never spawns that shape: `fm_backend_tmux_create_task` opens a bare window on the login shell and `spawn_send_literal` types the launch line into it, so the runtime is a CHILD of the pane shell.
+
+`#{pane_current_command}` reports the foreground process, but `#{pane_pid}` reports the pane's own process, and the identity check read argv from `#{pane_pid}` alone.
+
+Measured on a task-shaped pane (Cursor CLI `2026.08.11-e8db854`):
+
+```
+pane_current_command = node
+pane_pid             = 39955
+ps -o args= $pane_pid = bash --noprofile --norc         # no cursor-agent match
+first descendant argv = /Users/.../.local/bin/agent --use-system-ca .../cursor-agent/versions/2026.08.11-e8db854/index.js --yolo ...
+```
+
+So `fm_tmux_pane_is_cursor` returned false for every real cursor task pane on tmux, with two consequences.
+
+Liveness fell back to `unknown` instead of `alive`, and - the dangerous one - the structural composer scan from section 3 never engaged, so classification fell back to the very `#{cursor_y}` path that scan exists to replace:
+
+```
+# same pane, real unsubmitted text in the composer
+cursor_y             = 23
+row at cursor_y      = []                               # empty status row -> FALSE-EMPTY
+structural row       = 18
+composer at row 18   = [  → some real unsubmitted text]
+```
+
+A false-empty is what `bin/fm-supervise-daemon.sh` reads when picking an injection target, so an away-mode escalation could have been typed on top of pending input - exactly the wedge class the section 3 work was meant to close.
+
+`fm_tmux_pane_argv_matches` (`bin/fm-tmux-lib.sh`) now walks the pane process and its descendants, bounded at five levels, and both cursor and prime-agent identify through it.
+
+`fm_tmux_pane_is_prime_agent` already walked descendants for this same reason (2026-08-07); that walk is now the one shared owner rather than a second copy.
+
+After the fix, on the same task-shaped pane: `pane_is_cursor=yes`, `agent_alive=alive`, `composer_state=empty` when idle and `pending` with text typed.
+
+This is why limitation 2 below (no live `fm-spawn` end-to-end run) mattered: every underlying behaviour was verified in a shape firstmate does not actually produce.
+
 Any other bare `node` still returns `unknown` and is never inferred dead, so the
 secondmate-liveness sweep (which respawns only on `dead`) cannot act on an
 ambiguous reading.
@@ -409,7 +504,7 @@ The canonical decision is now owned by [`status-bar.md`](status-bar.md): Cursor 
 ## 9. Model and effort mapping
 
 Cursor is the one verified adapter with **no effort flag**: reasoning effort is a
-SUFFIX on the model id. All three tiers were exercised end to end and each
+SUFFIX on the model id. All three tiers were exercised end to end on 2026-07-19 and each
 returned a correct answer, with the footer confirming the resolved model:
 
 | Requested effort | Model id | Footer |
@@ -418,10 +513,29 @@ returned a correct answer, with the footer confirming the resolved model:
 | medium | `cursor-grok-4.5-medium` | `Cursor Grok 4.5 Medium` |
 | high | `cursor-grok-4.5-high` | `Cursor Grok 4.5` |
 
-`xhigh` and `max` have no cursor tier and cap at `high`, per the effort-fallback
-rule in the `harness-adapters` skill, rather than being dropped silently. An
-explicit model id that already carries a tier (or a `[...]` parameterized form)
+An explicit model id that already carries a tier (or a `[...]` parameterized form)
 wins and is never retiered.
+
+### The tier ladder is per-model, not fixed (corrected 2026-08-13)
+
+"`xhigh` and `max` have no cursor tier" was true of Grok 4.5 and is false of Grok 4.6, which ships `cursor-grok-4.6-xhigh` and `cursor-grok-4.6-xhigh-fast`.
+
+Capping at `high` unconditionally produced two wrong launches, both reproduced against `cursor_model_with_effort` before the fix:
+
+| Input | Was | Now |
+|---|---|---|
+| `cursor-grok-4.6` + effort `xhigh` | `cursor-grok-4.6-high` (silently under-tiered) | `cursor-grok-4.6-xhigh` |
+| `cursor-grok-4.6-xhigh` + effort `high` | `cursor-grok-4.6-xhigh-high` (no such id) | `cursor-grok-4.6-xhigh` |
+
+The second was the worse one: `-xhigh` does not end in `-high`, so it missed the already-tiered passthrough, and the fabricated id then failed the catalog preflight and refused the spawn outright.
+
+A captain naming the exact `-xhigh` id could not dispatch at all.
+
+`xhigh` and `max` now resolve against `agent --list-models`: the real `-xhigh` tier when that model has one, `-high` otherwise, and `-high` when the catalog cannot be read, since `-high` is the tier every verified cursor model has.
+
+Fast variants remain a separate cost choice that the effort axis never selects.
+
+Regression coverage pins both ladders from catalog fixtures rather than from whichever build the test machine has installed (`tests/fm-cursor-adapter.test.sh`).
 
 **Fast variants are a separate cost/speed choice and are never selected
 implicitly.** `cursor-grok-4.5-*-fast` is only ever used when named explicitly.
@@ -434,45 +548,115 @@ a task worktree. The proven values for firstmate to apply after merge:
 | Axis | Value |
 |---|---|
 | harness | `cursor` |
-| model | `cursor-grok-4.5` (the effort axis appends the tier) |
-| effort | `low` \| `medium` \| `high` (`xhigh`/`max` cap at `high`) |
+| model | `cursor-grok-4.6` (the effort axis appends the tier) |
+| effort | `low` \| `medium` \| `high` \| `xhigh` (`max` folds to `xhigh` on 4.6) |
+
+One live rule needs correcting rather than extending: the standing crew default records that
+`cursor-grok-4.6-high-fast` is "the ONLY 4.6 id offered - the `-fast` suffix is therefore not an implicit
+cost upgrade but the only route to the model the captain named".
+
+That was true when the rule was written and is false as of 2026-08-13: all eight Grok 4.6 ids are live,
+including the non-fast `cursor-grok-4.6-high`.
+
+The `-fast` choice may still be the right one, but it is now a deliberate cost/speed decision that needs
+the captain's word rather than a workaround justified by an absent alternative.
 
 ## Known limitations
 
-1. **Primary Stop hooks failed on Cursor CLI `2026.07.20-8cc9c0b`.** SessionStart and PreToolUse from `.claude/settings.json` fired in the isolated primary lab; native and Claude-mapped `stop`/`Stop` did not fire after completed TUI turns (and not after `/exit` in one probe). Worker-era stop evidence on `2026.07.16-899851b` still stands for per-task `.cursor/hooks.json` touch hooks, but the primary turn-end guard cannot be claimed as blocking on `2026.07.20-8cc9c0b`. Rely on background-notify supervision; treat Stop wiring as best-effort until re-verified.
-2. **A live `fm-spawn` end-to-end run was not performed from the original worker task.** Spawning
+1. ~~**Primary Stop hooks failed on Cursor CLI `2026.07.20-8cc9c0b`.**~~ RESOLVED 2026-08-13: on `2026.08.11-e8db854` a single completed TUI turn fired Claude-format `Stop`, native `stop`, native `beforeSubmitPrompt`, and `PreToolUse` together. See "Primary orchestrator certification".
+2. **A live `fm-spawn` end-to-end run has still not been performed.** Spawning
    allocates a real pooled treehouse worktree and writes live fleet state outside
-   the task worktree, which a crewmate must not do. Every underlying behaviour was
-   verified by raw launches instead, and the launch template, hook install,
-   liveness, composer, and effort mapping are covered by
-   `tests/fm-cursor-adapter.test.sh`. The first supervised `fm-spawn --harness
-   cursor` dispatch remains firstmate's gate before routing volume to it.
+   the task worktree, which a crewmate must not do. This gap is what hid the
+   pane-identity defect in section 7 for three weeks: every 2026-07-19 probe ran
+   against a raw launch where `agent` was the pane's own process, a shape
+   `fm-spawn` never produces. The 2026-08-13 re-certification closed that
+   specific hole by measuring a task-shaped pane directly, but the first
+   supervised `fm-spawn --harness cursor` dispatch remains firstmate's gate
+   before routing volume to it.
 3. **Trust costs a keystroke and up to ~30s on every spawn** (section 4).
 4. **`--model` mutates the account-global default** (section 2).
 5. **Resume fails open into a fresh session from the wrong cwd** (section 5).
 6. **Cursor executes claude-format hooks**, so cursor WORKERS must never be launched from
    the firstmate primary checkout (section 6). Launching cursor as the PRIMARY from that checkout is intentional.
 7. **Liveness is verified on tmux only** (section 7).
-8. Herdr in the worker lab was 0.7.4, not the 0.7.3 assumed when that task was written;
-   the primary lab also used Herdr 0.7.4 with `bin/fm-herdr-lab.sh`.
+8. Herdr in the 2026-07-19 worker lab was 0.7.4, not the 0.7.3 assumed when that task was written;
+   the 2026-07-22 primary lab also used Herdr 0.7.4 with `bin/fm-herdr-lab.sh`.
+   The 2026-08-13 re-certification used tmux only, so the herdr readings above are not re-confirmed on this build.
+9. **The exam cannot drive cursor's exit and resume probes on this build** (see "What the re-certification changed").
+   `/quit` and `--resume` both work when driven directly, but under `docs/harness-exam.md`'s own rule a version
+   counts as re-verified only at eight passes, so the worker role stands at six with two probes carried by
+   direct evidence instead.
 
 ## Primary orchestrator certification
 
-**Verified 2026-07-22** on Cursor CLI (`agent`) `2026.07.20-8cc9c0b`, Herdr 0.7.4, isolated non-default lab session via `bin/fm-herdr-lab.sh` (never the live `default` session).
+**Re-certified 2026-08-13** on Cursor CLI (`agent`) `2026.08.11-e8db854`, in an isolated tmux lab with a private HOME and a throwaway workspace (never the primary checkout).
 
-Guarded launcher profile: `bin/fm-primary.sh cursor-grok` → `agent --yolo --model cursor-grok-4.5-high`.
-Effort ceiling on cursor is `high` (`xhigh`/`max` fold to high), so the profile pins `-high`.
+Guarded launcher profile: `bin/fm-primary.sh cursor-grok` → `agent --yolo --model cursor-grok-4.6-high`.
 `FM_PRIMARY_HARNESS=cursor` is exported for stable detection.
 Worker adapter behavior is intentionally unchanged.
 
+Grok 4.6 also offers `-xhigh`, so `-high` is now a deliberate cost choice rather than the ceiling it was on Grok 4.5.
+
 | Mechanism | Result | Evidence |
 |---|---|---|
-| session-start | PASS | Interactive launch fired Claude-format `SessionStart` from `.claude/settings.json` (`CLAUDE_SESSION_START` log). Native `.cursor/hooks.json` `sessionStart` did not fire in the same run. |
-| turn-end / Stop | FAIL | After completed TUI turns (`INTERACTIVE_OK`, `STOP_PROBE_OK`), neither native `stop` nor Claude `Stop` appended logs. `--print` mode also never invoked stop. Wiring retained in tracked `.claude/settings.json` for when upstream restores stop. |
-| PreToolUse seatbelt | PASS | Claude-format `PreToolUse` fired on Shell (`CLAUDE_PRETOOL`). `bin/fm-arm-pretool-check.sh --claude` returns exit 2 with `[watcher-background]` for a backgrounded watcher arm. |
+| session-start | PASS | Claude-format `SessionStart` from `.claude/settings.json` fired on interactive launch. |
+| turn-end / Stop | **PASS (was FAIL)** | One completed TUI turn appended to all four hook logs: Claude-format `Stop` AND native `.cursor/hooks.json` `stop`, plus native `beforeSubmitPrompt`. This is the mechanism that did not fire on `2026.07.20-8cc9c0b`. |
+| PreToolUse seatbelt | PASS | Claude-format `PreToolUse` fired on the shell tool call in the same turn. |
 | supervision protocol | PASS | `docs/supervision-protocols/cursor.md` rendered by `bin/fm-supervision-instructions.sh --harness cursor`. |
-| session lock | PASS | Shared `bin/fm-lock.sh` + `fm-primary` active-session refusal (profile-agnostic; covered by `tests/fm-primary.test.sh`). |
+| session lock | PASS | Shared `bin/fm-lock.sh` + `fm-primary` active-session refusal (profile-agnostic; `tests/fm-primary.test.sh`). |
 | status-bar | DOCUMENTED-GAP | No third-party status-line API (section 8); launcher installs no companion pane. |
 
-`--print` / `--mode ask` is not a valid primary hook lab: stop hooks did not run there even when the TUI path was under test.
-Keep primary hook probes on an interactive Cursor TUI inside the isolated Herdr lab.
+The 2026-07-22 reading is superseded: the primary turn-end guard can now be claimed as wired rather than best-effort.
+
+### The version gate no longer blocks
+
+The old launcher refused any build but `2026.07.20-8cc9c0b`, and that exact-match block existed only because Stop was unverified there.
+
+On the installed build the launcher therefore refused to start at all:
+
+```
+$ FM_PRIMARY_DRY_RUN=1 bin/fm-primary.sh cursor-grok
+fm-primary: Cursor primary support is verified only for 2026.07.20-8cc9c0b; found 2026.08.11-e8db854
+```
+
+Cursor self-updates, so an equality gate in front of it turns every publisher release into an unscheduled outage of the certified primary rather than a merely uncertified one - the reasoning `bin/fm-toolchain-lib.sh` already applies fleet-wide, and the same change Kimi received.
+
+An unrecognized build now warns and launches.
+The check that can still refuse is an explicitly logged-out CLI, because that would boot the primary to a login screen instead of a session; an unreadable `agent status` is not treated as evidence of being logged out.
+
+`--print` / `--mode ask` is still not a valid primary hook lab.
+Keep primary hook probes on an interactive Cursor TUI in an isolated lab.
+
+## What the re-certification changed (2026-08-13)
+
+Scope: Cursor CLI `2026.08.11-e8db854` with Grok 4.6, both roles, requested by the captain on 2026-08-13.
+
+### Roles
+
+**PRIMARY: certified.**
+Every mechanism was verified directly, including the `Stop` turn-end hook that failed on the previously certified build.
+The launcher also stopped refusing to start: it had hard-blocked every build but `2026.07.20-8cc9c0b`, so Cursor's own auto-update had already made `bin/fm-primary.sh cursor-grok` unlaunchable before this work began.
+
+**WORKER: six of eight exam probes pass.**
+Autonomy, composer, busy, interrupt, turn-end, and liveness pass on `bin/fm-harness-exam.sh`.
+Exit and resume do not, and `docs/harness-exam.md` requires eight for a version to be called re-verified, so the worker role is deliberately NOT claimed as a full eight-point re-verification.
+Both underlying capabilities were confirmed by hand: `/quit` returned the pane to its shell, and `agent --resume=<chatId>` restored a prior conversation.
+The resume probe cannot pass as written because this build no longer prints the resume id it scrapes.
+The exit probe's failure is not explained: `/quit` executed reliably when typed by hand at the same idle state, and neither waiting for the turn to end nor lengthening the settle before Enter made the probe drive it.
+
+### Runtime behaviour that changed
+
+1. **Grok 4.6 added an `-xhigh` tier**, so cursor's effort ladder is per-model rather than capped at `-high` for every model.
+2. **Exit no longer prints the resume id**, so recovery must read it from `~/.cursor/chats/<workspace-hash>/`.
+3. **Credentials moved out of reach of an isolated `HOME`**: the token is a login-keychain item, and the login keychain is `HOME`-relative.
+4. **`cli-config.json` records the model as a base id plus parameters** rather than one suffixed id.
+
+### Defects found in firstmate's own tooling
+
+These were pre-existing and are the reason a routine re-certification took three labs.
+
+1. **Cursor panes were never identified on tmux.** The argv check read `#{pane_pid}`, which is the login shell in every pane `fm-spawn` creates, so liveness degraded to `unknown` and - the dangerous one - the structural composer scan never engaged, leaving real unsubmitted text classifiable as `empty` for the away-mode injector. Section 7 carries the measurement.
+2. **The exam scored an unauthenticated lab as eight runtime failures.** A setup gap read as a total runtime regression; it now stops with its own exit code and no scorecard.
+3. **The exam's own hook path silently disabled the hook it was testing.** `LAB_ROOT` inherited the trailing slash from macOS `TMPDIR`, and Cursor does not execute a hook command whose path contains `//`, so the turn-end probe failed while the mechanism worked. Normalizing the path turned that probe green.
+
+Defect 1 is the one that mattered beyond this task: it affected live cursor workers on the tmux backend, not just the lab.

@@ -28,8 +28,9 @@
 # stayed down once the pinned build no longer existed on disk. That gate now
 # accepts every build it holds primary evidence for, warns on the rest, and
 # launches either way, on this same reasoning; bin/fm-primary.sh owns it.
-# Cursor keeps its exact-match block deliberately, because its Stop turn-end
-# hook is unverified rather than merely drifted (docs/cursor-harness.md).
+# Cursor follows the same warn-and-launch rule now that its Stop turn-end hook
+# is certified; an explicitly logged-out Cursor CLI remains a launch refusal
+# because it would open a login screen instead of a primary session.
 #
 # The failure this check exists to prevent is the opposite one - silence. Every
 # other certified runtime drifted past its certification with nothing noticing,

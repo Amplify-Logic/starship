@@ -28,6 +28,10 @@ if [ "${1:-}" = --version ] && [ "$(basename "$0")" = agent ]; then
   printf '%s\n' "${FM_PRIMARY_TEST_CURSOR_VERSION:-2026.07.20-8cc9c0b}"
   exit 0
 fi
+if [ "${1:-}" = status ] && [ "$(basename "$0")" = agent ]; then
+  printf '%s\n' "${FM_PRIMARY_TEST_CURSOR_STATUS:-✓ Logged in as exam@example.invalid}"
+  exit 0
+fi
 if [ "${1:-}" = doctor ] && [ "$(basename "$0")" = kimi ]; then
   printf 'doctor KIMI_CODE_HOME=%s\n' "${KIMI_CODE_HOME:-}" >> "$FM_PRIMARY_TEST_LOG"
   exit "${FM_PRIMARY_TEST_DOCTOR_EXIT:-0}"
@@ -83,7 +87,7 @@ test_profiles_and_root() {
   out=$(dry grok)
   assert_contains "$out" "'grok' '--permission-mode' 'bypassPermissions'" "Grok verified primary bypass is wrong"
   out=$(dry cursor-grok)
-  assert_contains "$out" "'agent' '--yolo' '--model' 'cursor-grok-4.5-high'" \
+  assert_contains "$out" "'agent' '--yolo' '--model' 'cursor-grok-4.6-high'" \
     "Cursor Grok profile did not pin yolo and the high-tier model id"
   [ "$(dry cursor)" = "$out" ] || fail "Cursor alias did not expand exactly to cursor-grok"
   pass "fm-primary: profiles expand exact flags and always launch from the tracked root"
@@ -401,7 +405,7 @@ test_cursor_grok_primary_profile() {
   local out status=0
   out=$(dry cursor-grok)
   assert_contains "$out" "profile=cursor-grok" "Cursor dry-run omitted profile"
-  assert_contains "$out" "'agent' '--yolo' '--model' 'cursor-grok-4.5-high'" \
+  assert_contains "$out" "'agent' '--yolo' '--model' 'cursor-grok-4.6-high'" \
     "Cursor primary argv is wrong"
   assert_not_contains "$out" 'status-bar' "Cursor primary invented a status-bar install"
   : > "$LOG"
@@ -415,18 +419,33 @@ test_cursor_grok_primary_profile() {
   out=$(cat "$LOG")
   assert_contains "$out" 'cli=agent' "Cursor primary did not exec agent"
   assert_contains "$out" 'harness=cursor' "Cursor primary did not export FM_PRIMARY_HARNESS=cursor"
-  assert_contains "$out" 'argv=<--yolo><--model><cursor-grok-4.5-high>' \
+  assert_contains "$out" 'argv=<--yolo><--model><cursor-grok-4.6-high>' \
     "Cursor primary lost yolo or the high model id"
+  # An uncertified build WARNS and still launches. Cursor self-updates, so an
+  # exact-match block turned every publisher release into an outage of the
+  # certified primary rather than a merely uncertified one.
   status=0
   out=$(PATH="$FAKEBIN:$PATH" \
     FM_HOME="$HOME_FIX" \
     FM_PRIMARY_DRY_RUN=1 \
     FM_PRIMARY_TEST_CURSOR_VERSION=2026.07.16-899851b \
     "$ROOT/bin/fm-primary.sh" cursor-grok 2>&1) || status=$?
-  [ "$status" -ne 0 ] || fail "unverified Cursor CLI version was accepted"
-  assert_contains "$out" 'verified only for 2026.07.20-8cc9c0b; found 2026.07.16-899851b' \
-    "Cursor version refusal was unclear"
-  pass "fm-primary: Cursor Grok is pinned, lifecycle-integrated, and version-gated"
+  [ "$status" -eq 0 ] || fail "an uncertified Cursor build must warn, not block the primary"
+  assert_contains "$out" 'certified on 2026.08.11-e8db854; found 2026.07.16-899851b' \
+    "Cursor version warning was unclear"
+  assert_contains "$out" "'agent' '--yolo' '--model' 'cursor-grok-4.6-high'" \
+    "Cursor primary did not launch after the version warning"
+  # An explicitly logged-out CLI still refuses: the primary would otherwise boot
+  # to a login screen instead of a session.
+  status=0
+  out=$(PATH="$FAKEBIN:$PATH" \
+    FM_HOME="$HOME_FIX" \
+    FM_PRIMARY_DRY_RUN=1 \
+    FM_PRIMARY_TEST_CURSOR_STATUS='Not logged in' \
+    "$ROOT/bin/fm-primary.sh" cursor-grok 2>&1) || status=$?
+  [ "$status" -ne 0 ] || fail "a logged-out Cursor CLI was accepted as a primary"
+  assert_contains "$out" 'not logged in' "Cursor logged-out refusal was unclear"
+  pass "fm-primary: Cursor Grok is pinned, lifecycle-integrated, version-warned, and login-gated"
 }
 
 test_profiles_and_root

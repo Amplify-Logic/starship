@@ -660,6 +660,14 @@ shell_quote() {
   printf "'"
 }
 
+# cursor_model_tier_offered: 0 when "<base>-<tier>" is a real catalog id.
+# Called only from an `if` condition, so errexit stays suspended for the
+# legitimate non-zero returns of fm_cursor_catalog_has_model (1 absent,
+# 2 catalog unavailable), both of which mean "do not use this tier".
+cursor_model_tier_offered() {  # <base-model> <tier>
+  fm_cursor_catalog_has_model "$1-$2"
+}
+
 # cursor_model_with_effort: cursor is the one verified adapter with NO effort
 # flag - the Cursor CLI encodes reasoning effort as a SUFFIX on the model id
 # (cursor-grok-4.5-low|-medium|-high), verified 2026-07-19 on Cursor CLI
@@ -667,19 +675,31 @@ shell_quote() {
 # rather than emitted as a flag.
 # An explicit model that ALREADY carries a tier suffix wins and effort is left
 # out of the launch (still recorded in meta), so a captain naming an exact model
-# id is never silently retiered. xhigh and max have no cursor equivalent, so they
-# cap at high per the harness-adapters effort-fallback rule rather than being
-# dropped silently.
+# id is never silently retiered.
+#
+# The tier LADDER is model-dependent, not fixed: Grok 4.5 stops at -high, while
+# Grok 4.6 (2026-08-12) added -xhigh and -xhigh-fast, verified 2026-08-13 on
+# Cursor CLI 2026.08.11-e8db854. So xhigh and max resolve against the live
+# catalog and only fall back to -high when this model has no -xhigh, instead of
+# capping every model at -high and silently under-tiering the ones that do.
+# An unreadable catalog also falls back to -high, which is the tier every
+# verified cursor model has.
 cursor_model_with_effort() {  # <model> <effort>
   local model=$1 effort=$2 tier
   [ -n "$model" ] && [ "$model" != default ] || return 0
   case "$model" in
-    *-low|*-medium|*-high|*-low-fast|*-medium-fast|*-high-fast|*'['*)
+    *-low|*-medium|*-high|*-xhigh|*-low-fast|*-medium-fast|*-high-fast|*-xhigh-fast|*'['*)
       printf '%s' "$model"; return 0 ;;
   esac
   case "$effort" in
     low|medium|high) tier=$effort ;;
-    xhigh|max) tier=high ;;
+    xhigh|max)
+      if cursor_model_tier_offered "$model" xhigh; then
+        tier=xhigh
+      else
+        tier=high
+      fi
+      ;;
     *) printf '%s' "$model"; return 0 ;;
   esac
   printf '%s-%s' "$model" "$tier"

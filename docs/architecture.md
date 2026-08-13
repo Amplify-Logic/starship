@@ -153,7 +153,9 @@ lab_absent_default_invariant
 
 The focused hook evidence is recorded in [arm-pretool-check.md](arm-pretool-check.md), [cd-guard.md](cd-guard.md), [sessionstart-nudge.md](sessionstart-nudge.md), and [turnend-guard.md](turnend-guard.md).
 
-### Cursor primary validation record, 2026-07-22
+### Superseded Cursor primary validation record, 2026-07-22
+
+This record preserves the earlier evidence; [cursor-harness.md](cursor-harness.md) owns the current 2026-08-13 primary certification and explains why the old Stop failure and exact-version launch block no longer apply.
 
 Cursor CLI (`agent`) `2026.07.20-8cc9c0b` was validated as a primary through `bin/fm-primary.sh cursor-grok` (`agent --yolo --model cursor-grok-4.5-high`), using Herdr 0.7.4 in a generated non-default session and an isolated Firstmate-shaped scratch clone.
 Every operator Herdr call used `bin/fm-herdr-lab.sh`; no probe ran in the captain's `default` session.

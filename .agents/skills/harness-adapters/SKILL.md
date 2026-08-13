@@ -31,7 +31,7 @@ The primary-session watcher wake protocols are rendered from `docs/supervision-p
 The supervision knowledge lives here: busy signature, exit command, interrupt, dialogs, resume behavior, skill invocation, and quirks.
 
 The verified WORKER adapters are `claude`, `codex`, `opencode`, `pi`, `grok`, `cursor`, `kimi`, and `prime-agent`.
-`cursor` is also verified as a PRIMARY through `bin/fm-primary.sh cursor-grok` (Cursor CLI `2026.07.20-8cc9c0b`, 2026-07-22 lab); never infer worker facts from primary facts or the reverse.
+`cursor` is also certified as a PRIMARY through `bin/fm-primary.sh cursor-grok` (Cursor CLI `2026.08.11-e8db854`, 2026-08-13 lab); never infer worker facts from primary facts or the reverse.
 Kimi is verified as a PRIMARY through `bin/fm-primary.sh kimi-k3` and, separately, as a WORKER through `fm-spawn --harness kimi` (Kimi Code 0.27.0, 2026-07-23 lab); never infer one role from the other.
 
 Never dispatch a crewmate or secondmate on an unverified adapter.
@@ -169,7 +169,7 @@ The supported launch-profile flags below are verified locally; each row records 
 | grok | `--model <model>` | `--reasoning-effort <low\|medium\|high>` | Verified on grok 0.2.99 (2026-07-13). `--effort` is an alias, but firstmate's profile axis is reasoning effort. As of 0.2.99 the ceiling is `high`; both `xhigh` and `max` are rejected with `use one of: high, medium, low`, so firstmate omits them. |
 | pi | `--model <model>` | `--thinking <low\|medium\|high\|xhigh\|max>` | Verified 2026-07-13 on Pi 0.80.6. `pi --help` advertises `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`; `pi --print --model openai-codex/gpt-5.6-sol --thinking max 'Reply with exactly OK.'` completed successfully. |
 | opencode | `--model <provider/model>` | none for firstmate's interactive launch | Verified on opencode 1.17.6. `opencode run` has `--variant`, but firstmate launches the interactive `opencode --prompt` path, which has no verified effort flag. |
-| cursor | `--model <model>` | none - effort is a SUFFIX on the model id | Verified 2026-07-19 on Cursor CLI 2026.07.16-899851b. This CLI has no effort flag: `low\|medium\|high` map to `cursor-grok-4.5-{low,medium,high}`, all three exercised end to end. `fm-spawn`'s `cursor_model_with_effort` folds the axis in; `xhigh`/`max` cap at `high`, an already-tiered or `[...]`-parameterized model id is never retiered, and `-fast` variants are a separate cost/speed choice never selected implicitly. |
+| cursor | `--model <model>` | none - effort is a SUFFIX on the model id | Verified 2026-07-19, tier ladder corrected 2026-08-13. This CLI has no effort flag: `low\|medium\|high` map to `<model>-{low,medium,high}`. The ladder is PER-MODEL: Grok 4.5 stops at `-high`, Grok 4.6 also offers `-xhigh`. `fm-spawn`'s `cursor_model_with_effort` folds the axis in and resolves `xhigh`/`max` against `agent --list-models` - the real `-xhigh` when that model has one, `-high` otherwise or when the catalog is unreadable. An already-tiered (including `-xhigh`) or `[...]`-parameterized model id is never retiered, and `-fast` variants are a separate cost/speed choice never selected implicitly. |
 | kimi | `--model <model>` | none for firstmate's interactive launch | Verified 2026-07-23 on Kimi Code 0.27.0. Launch is `KIMI_CODE_HOME=... kimi --yolo --model kimi-code/k3`; brief is delivered after TUI settle. No verified effort flag on the interactive path. |
 | prime-agent | `--model <provider/model>` | `--thinking <low\|medium\|high\|xhigh\|max>` | Verified 2026-08-07 on v0.7.0. `--help` advertises `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`; `--thinking xhigh` exercised live. `--model` is always emitted explicitly: the CLI's own default is a paid route, and `fm-spawn` refuses non-subscription-quota routes (see the prime-agent section). |
 
@@ -315,12 +315,13 @@ The model arms through `fm_watch_arm_pi`, never a foreground bash arm; the watch
 `bin/fm-session-start.sh` reports when the live Pi session has not loaded both the turn-end guard and watcher extensions, and points at plain `pi` after project trust as the fix, with `-e` as a trust-free fallback.
 When a secondmate is launched on Pi, `fm-spawn.sh --secondmate` launches Pi with both `-e .pi/extensions/fm-primary-turnend-guard.ts` and `-e .pi/extensions/fm-primary-pi-watch.ts`, both already present in the secondmate home's git worktree.
 
-## cursor (WORKER verified 2026-07-19 on `2026.07.16-899851b`; PRIMARY certified 2026-07-22 on `2026.07.20-8cc9c0b`)
+## cursor (PRIMARY certified; WORKER partially re-verified 2026-08-13 on `2026.08.11-e8db854`, Grok 4.6)
 
-Cursor CLI (the `agent` binary), running Cursor Grok 4.5.
-Primary launch: `bin/fm-primary.sh cursor-grok` → `agent --yolo --model cursor-grok-4.5-high` with `FM_PRIMARY_HARNESS=cursor`.
+Cursor CLI (the `agent` binary), running Cursor Grok 4.6.
+Primary launch: `bin/fm-primary.sh cursor-grok` → `agent --yolo --model cursor-grok-4.6-high` with `FM_PRIMARY_HARNESS=cursor`.
 Primary hooks reuse tracked `.claude/settings.json` (Cursor maps `SessionStart`/`PreToolUse`/`Stop`).
-Lab result on `2026.07.20-8cc9c0b`: SessionStart and PreToolUse PASS; Stop FAIL (did not fire after TUI turn end).
+All three fire on this build, so the primary turn-end guard is wired rather than best-effort; the `Stop` FAIL recorded on `2026.07.20-8cc9c0b` is superseded.
+An uncertified build now WARNS and launches instead of blocking; the launcher still refuses an explicitly logged-out CLI.
 Supervision protocol: `docs/supervision-protocols/cursor.md` (background-notify).
 Status bar: documented gap (no third-party API).
 Worker launch with a positional prompt: `agent --yolo --workspace <worktree> --model <id> "$(cat <brief>)"`.
@@ -330,7 +331,7 @@ For the effort-in-model-id axis, see the [launch-profile-axes table](#launch-pro
 | Fact | Value |
 |---|---|
 | Busy-pane signature | `ctrl+c to stop` (the footer hint, shown iff a turn is running). Do NOT match the spinner verb: it changes mid-turn (`⠰⠳ Working` while reasoning, `⠠⠛ Running` during a tool call), so matching the verb reads a tool-executing pane as idle. ASCII, avoiding the braille spinner's locale fragility. |
-| Exit command | `/quit` or `/exit` (both "Exit"), clean status 0. Prints `To resume this session: agent --resume=<chatId>`. |
+| Exit command | `/quit` or `/exit` (both "Exit"), clean status 0. Read the chat id from `~/.cursor/chats/<workspace-hash>/<chatId>/` for recovery. |
 | Interrupt | single `Ctrl+C` (cancels the turn, pane survives) |
 | Autonomy | `--yolo` (alias of `--force`, "Run Everything"); auto-approves every tool execution, verified fully unattended |
 | Env marker | `CURSOR_AGENT=1`. Cursor does NOT clear an inherited `CLAUDECODE=1`, so `bin/fm-harness.sh` tests `CURSOR_AGENT` FIRST - otherwise a cursor worker spawned from a claude-hosted firstmate misreports as claude and gets steered with claude's vocabulary. |
@@ -340,7 +341,9 @@ For the effort-in-model-id axis, see the [launch-profile-axes table](#launch-pro
 
 **Trust dialog on EVERY spawn.** "⚠ Workspace Trust Required" blocks startup in any untrusted directory, and every task worktree is a fresh path. Accept with a single `Enter` (or `a`), then verify the brief started processing. It can take ~15-30s to appear - longer than other harnesses - so do not conclude a launch failed before then. `--trust` is `--print`-only and cannot clear it.
 
-**Resume is workspace-scoped and fails open.** Chats live under `~/.cursor/chats/<workspace-hash>/<chatId>/`, so resuming from the wrong cwd silently opens a FRESH session instead of erroring. Recovery must relaunch resume with the task worktree as cwd. From the right cwd it restores the conversation and model with no trust prompt.
+**Resume is workspace-scoped and fails open.** Chats live under `~/.cursor/chats/<workspace-hash>/<chatId>/`, so resuming from the wrong cwd silently opens a FRESH session instead of erroring. Recovery must relaunch resume with the task worktree as cwd. From the right cwd it restores the conversation.
+
+**Exit no longer prints the resume id** (2026-08-13, `2026.08.11-e8db854`). `/quit` exits cleanly with status 0, but the "To resume this session: agent --resume=<chatId>" line the 2026-07-19 build printed is gone. Recovery must read the chat id from `~/.cursor/chats/<workspace-hash>/<chatId>/` instead of from exit output, and a resume may show the trust dialog again. Never recover a cursor worker by scraping a resume line that will not be there.
 
 **`--model` mutates account-global state.** It persists as the default in `~/.cursor/cli-config.json`, so always pass `--model` explicitly rather than relying on the default. That file also enables Cursor's own commit/PR agent attribution, which must never produce an agent co-author in a firstmate repo.
 

@@ -56,11 +56,11 @@ All verified primary harnesses have a tracked integration:
 - `kimi`: `bin/fm-primary.sh` installs a managed Kimi plugin in an isolated `KIMI_CODE_HOME` with a native blockable `Stop` hook invoking `bin/fm-turnend-guard.sh`.
   Kimi 0.27.0 maps hook exit 2 to a blocked stop, appends the hook reason into model context, and allows exactly one guarded continuation through `stop_hook_active`.
 - `cursor`: tracked `.claude/settings.json` registers the same `Stop` command Cursor maps onto native `stop`.
-  Primary lab on Cursor CLI `2026.07.20-8cc9c0b` (2026-07-22) did **not** observe Stop firing after completed TUI turns, so treat this as wired-but-unverified-blocking and rely on background-notify supervision plus pull-based `fm-guard.sh` until re-certified.
+  Primary lab on Cursor CLI `2026.08.11-e8db854` (2026-08-13) observed the Claude-format Stop hook after a completed interactive TUI turn, superseding the failure on `2026.07.20-8cc9c0b`; `docs/cursor-harness.md` carries the certification evidence.
 
-Claude, Codex, and Kimi support a direct blocking Stop hook.
+Claude, Codex, Cursor, and Kimi support a direct blocking Stop hook.
 For those harnesses, exit status 2 plus stderr from `bin/fm-turnend-guard.sh` blocks the stop and feeds the reason back into the model.
-Both payloads include `stop_hook_active`; when it is true, the shared guard exits 0 so the harness can end after one forced continuation.
+Their payloads include `stop_hook_active`; when it is true, the shared guard exits 0 so the harness can end after one forced continuation.
 
 OpenCode, Pi, and Grok expose passive lifecycle callbacks for this purpose.
 Their adapters fail open at the hook boundary to avoid corrupting a user session, but they force one follow-up turn when the shared predicate blocks.

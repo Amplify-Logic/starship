@@ -19,4 +19,5 @@ Cursor Agent's background shell completion is the wake mechanism.
 The watcher itself remains `bin/fm-watch.sh`, and `bin/fm-watch-arm.sh` is only the verified background arm wrapper.
 Re-arm attaches to an existing healthy cycle when one is already present, so the background task stays live until that cycle ends.
 Tracked `.claude/settings.json` also wires SessionStart, PreToolUse, and Stop for this primary.
-On Cursor CLI `2026.07.20-8cc9c0b`, SessionStart and PreToolUse fire; Stop did not fire after completed TUI turns in the primary lab, so do not treat Stop alone as the wake path.
+Cursor CLI `2026.08.11-e8db854` fires all three after completed interactive TUI turns, including the blockable Stop turn-end guard; the background shell completion remains the supervision wake mechanism.
+See `docs/cursor-harness.md` for the certification evidence and the superseded `2026.07.20-8cc9c0b` Stop failure.

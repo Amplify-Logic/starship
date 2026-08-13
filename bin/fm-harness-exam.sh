@@ -27,7 +27,15 @@
 #   --timeout <secs>    Per-wait timeout, default 45.
 #   --keep-lab          Keep the throwaway HOME and repository after the run.
 #   --source-home <dir> Read credential bridges from this home, default $HOME.
+#   --share-login-keychain
+#                       Link the source home's macOS login keychain into the lab
+#                       home. Required for adapters whose only credential lives
+#                       there (cursor, and claude on macOS). Off by default.
 #   --help              Print this help.
+#
+# Exit codes:
+#   0 all eight probes passed, 1 a probe failed, 2 usage or setup error,
+#   3 the lab home is not authenticated so nothing was scored.
 #
 # Safety:
 # The autonomy probes deliberately use each adapter's unattended flag, but the
@@ -36,6 +44,8 @@
 # from --source-home into the isolated home.
 # Those copies are read-only, so the runtime cannot write back to the source
 # credential files.
+# --share-login-keychain is the one exception and is therefore opt-in: it links
+# the real login keychain, which the lab runtime can then read and rewrite.
 # The script never updates a runtime, writes configuration, session, or artifact
 # state into the source home, or uses the ambient tmux server.
 
@@ -53,6 +63,7 @@ BUSY_SECONDS=${FM_HARNESS_EXAM_BUSY_SECONDS:-20}
 BUSY_SECONDS_MIN=10
 STARTUP_DIALOG_LIMIT=4
 KEEP_LAB=0
+SHARE_LOGIN_KEYCHAIN=0
 MODEL=""
 OUTPUT=""
 SOURCE_HOME=${HOME:-}
@@ -137,17 +148,38 @@ copy_readonly_if_present() {
   chmod -R a-w "$destination"
 }
 
+# bridge_login_keychain: make the source home's macOS login keychain reachable
+# from the lab home, for adapters whose only credential lives there.
+#
+# The login keychain is HOME-RELATIVE, not session-scoped: `security
+# default-keychain` under a fresh HOME reports "A default keychain could not be
+# found" and `list-keychains` falls back to /Library/Keychains/System.keychain
+# alone (verified 2026-08-13, macOS 25.5.0). So a keychain-authenticated runtime
+# boots LOGGED OUT inside the lab, and no file copy can bridge it.
+#
+# This is deliberately opt-in and off by default, because it is the one bridge
+# that is not a read-only copy: the lab runtime reaches the captain's REAL login
+# keychain through this link and can refresh or rewrite the items it owns there.
+# Every other bridge keeps the "never writes back to the source home" guarantee.
+bridge_login_keychain() {
+  local source="$SOURCE_HOME/Library/Keychains"
+  [ "$SHARE_LOGIN_KEYCHAIN" = 1 ] || return 0
+  [ -d "$source" ] || return 0
+  mkdir -p "$LAB_HOME/Library"
+  ln -s "$source" "$LAB_HOME/Library/Keychains"
+}
+
 prepare_credential_bridges() {
+  bridge_login_keychain
   case "$ADAPTER" in
     claude)
       # The home-root ~/.claude.json holds account and onboarding state;
       # without it the lab boots as a first-run install and parks on
       # onboarding instead of reaching the probes.
       copy_readonly_if_present "$SOURCE_HOME/.claude.json" "$LAB_HOME/.claude.json"
-      # File-based OAuth tokens exist only on Linux installs; macOS keeps
-      # them in the login keychain, which securityd scopes to the user
-      # session rather than to HOME, so the lab runtime reaches the same
-      # keychain item without any file bridge.
+      # File-based OAuth tokens exist only on Linux installs. On macOS the token
+      # lives in the login keychain, which the lab home cannot reach without
+      # --share-login-keychain (see bridge_login_keychain).
       copy_readonly_if_present "$SOURCE_HOME/.claude/.credentials.json" "$LAB_HOME/.claude/.credentials.json"
       ;;
     codex)
@@ -162,12 +194,62 @@ prepare_credential_bridges() {
       copy_readonly_if_present "$SOURCE_HOME/.grok/credentials" "$LAB_HOME/.grok/credentials"
       ;;
     cursor)
+      # ~/.cursor/auth.json does not exist on current builds: cli-config.json
+      # carries only identity (authInfo has authId/displayName/email/userId and
+      # no token), and the credential itself is the login-keychain item
+      # cursor-access-token. Cursor therefore needs --share-login-keychain.
       copy_readonly_if_present "$SOURCE_HOME/.cursor/cli-config.json" "$LAB_HOME/.cursor/cli-config.json"
       copy_readonly_if_present "$SOURCE_HOME/.cursor/auth.json" "$LAB_HOME/.cursor/auth.json"
       ;;
     kimi) ;;
     *) return 1 ;;
   esac
+}
+
+# lab_login_state: does the ADAPTER consider the LAB HOME authenticated?
+# Prints logged-in, logged-out, or unknown. Only adapters with a cheap
+# non-interactive auth probe are classified; every other adapter stays
+# `unknown` and its run proceeds exactly as before.
+lab_login_state() {
+  local out
+  case "$ADAPTER" in
+    cursor)
+      out=$(HOME="$LAB_HOME" "$BINARY" status 2>&1 | head -5 || true)
+      case "$out" in
+        *'Not logged in'*|*'not logged in'*) printf 'logged-out' ;;
+        *'Logged in'*|*'logged in'*) printf 'logged-in' ;;
+        *) printf 'unknown' ;;
+      esac
+      ;;
+    *) printf 'unknown' ;;
+  esac
+}
+
+# lab_auth_gate: refuse to score an unauthenticated lab.
+#
+# An unauthenticated runtime parks on its login screen, so every probe times
+# out and the scorecard reads as eight runtime failures. That is a FALSE
+# NEGATIVE certification - the dangerous direction for a tool whose whole job
+# is deciding whether a build still behaves - so a setup gap stops the run
+# with its own exit code instead of being scored.
+lab_auth_gate() {
+  local state
+  state=$(lab_login_state)
+  printf '%s\n' "$state" > "$ARTIFACTS/00-lab-auth-state.txt"
+  [ "$state" = logged-out ] || return 0
+  {
+    printf 'adapter=%s\n' "$ADAPTER"
+    printf 'lab_home=%s\n' "$LAB_HOME"
+    printf 'share_login_keychain=%s\n' "$SHARE_LOGIN_KEYCHAIN"
+    printf 'state=logged-out\n'
+  } > "$ARTIFACTS/00-auth-blocked.txt"
+  echo "error: the exam lab home is not authenticated for '$ADAPTER', so no probe result would mean anything" >&2
+  if [ "$SHARE_LOGIN_KEYCHAIN" != 1 ]; then
+    echo "hint: this adapter authenticates through the macOS login keychain, which is HOME-relative and therefore absent from the lab home; re-run with --share-login-keychain to let the lab reach the real login keychain" >&2
+  else
+    echo "hint: --share-login-keychain was set but the lab is still logged out; check that the source home is logged in ($BINARY status)" >&2
+  fi
+  return 1
 }
 
 write_hook_recorder() {
@@ -712,7 +794,13 @@ probe_liveness() {
 }
 
 probe_exit() {
-  local deadline=$((SECONDS + TIMEOUT)) verdict
+  local deadline verdict
+  # Wait for the previous turn to finish first. An exit command typed while a
+  # turn is still running is swallowed as follow-up text rather than executed
+  # (observed on cursor: "/quit" was appended to the running prompt and the
+  # runtime stayed live), which scores a working exit path as a failure.
+  wait_for pane_text_does_not_match "$BUSY_REGEX" >/dev/null 2>&1 || true
+  deadline=$((SECONDS + TIMEOUT))
   capture_pane 07-before-exit 100
   tmux send-keys -t "$TARGET" -l "$EXIT_COMMAND"
   sleep 1.2
@@ -820,6 +908,13 @@ prepare_run() {
   RESULTS_TSV="$OUTPUT/.results.tsv"
   : > "$RESULTS_TSV"
   LAB_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/fm-harness-exam.$ADAPTER.XXXXXX")
+  # Squeeze repeated slashes: macOS TMPDIR already ends in "/", so the raw path
+  # carries a "T//" that ends up inside generated hook commands. Cursor's hook
+  # runner silently does not execute a command path containing "//" - the stop
+  # hook simply never fired, which the turn-end probe then reported as a runtime
+  # regression (verified 2026-08-13: the same recorder at the same location fired
+  # as soon as the path was normalized).
+  LAB_ROOT=$(printf '%s' "$LAB_ROOT" | tr -s '/')
   LAB_HOME="$LAB_ROOT/home"
   WORKSPACE="$LAB_ROOT/workspace"
   HOOK_MARKER="$LAB_ROOT/turn-ended"
@@ -834,6 +929,7 @@ prepare_run() {
   git -C "$WORKSPACE" add README.md
   git -C "$WORKSPACE" -c user.name='Firstmate Exam' -c user.email='exam@example.invalid' commit -qm initial
   prepare_credential_bridges || return 1
+  lab_auth_gate || return 3
   prepare_hook || return 1
   VERSION=$("$BINARY" --version 2>&1 | head -1 || true)
   [ -n "$VERSION" ] || VERSION=unknown
@@ -844,7 +940,11 @@ prepare_run() {
 }
 
 run_exam() {
-  if ! prepare_run; then return 2; fi
+  local prepare_rc=0
+  prepare_run || prepare_rc=$?
+  # 3 is the setup-blocker code from lab_auth_gate: no scorecard is written,
+  # because an unauthenticated lab produces no evidence worth scoring.
+  [ "$prepare_rc" = 0 ] || { [ "$prepare_rc" = 3 ] && return 3; return 2; }
   build_launch_command 0 || return 2
   printf '%s\n' "$LAUNCH_CMD" > "$ARTIFACTS/00-launch-command.txt"
   if ! launch_runtime main "$LAUNCH_CMD"; then
@@ -910,6 +1010,7 @@ parse_args() {
         shift 2
         ;;
       --keep-lab) KEEP_LAB=1; shift ;;
+      --share-login-keychain) SHARE_LOGIN_KEYCHAIN=1; shift ;;
       --source-home)
         [ "$#" -ge 2 ] || { echo "error: --source-home requires a directory" >&2; return 2; }
         SOURCE_HOME=$2

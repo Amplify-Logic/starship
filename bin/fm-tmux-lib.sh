@@ -97,6 +97,42 @@ fm_tmux_strip_ghost() { fm_composer_strip_ghost; }
 # (bin/fm-composer-lib.sh). The bordered flag is what lets a bordered `│ > │`
 # (claude's own idle composer) read empty while a bare, unbordered `$ ` dead-shell
 # prompt reads unknown.
+# fm_tmux_pane_argv_matches: 0 iff <target>'s own process, or any descendant of
+# it within five levels, carries <glob> in argv.
+#
+# #{pane_current_command} reports the pane's FOREGROUND process, but #{pane_pid}
+# is the pane's OWN process. Those are the same only when the runtime was exec'd
+# as the pane command. Every firstmate task pane takes the other shape:
+# fm_backend_tmux_create_task opens a bare window on the login shell and
+# spawn_send_literal TYPES the launch line into it, so the runtime is a child of
+# that shell and matching argv on #{pane_pid} alone never sees it (verified
+# 2026-08-13 on a task-shaped pane: pane_current_command=node while
+# `ps -o args= -p $pane_pid` read "bash --noprofile --norc").
+# Bounded at five levels because a launcher shim, a treehouse subshell, and the
+# runtime itself can each add a level.
+fm_tmux_pane_argv_matches() {  # <target> <argv-glob>
+  local target=$1 pattern=$2 pid args pids frontier next p c
+  pid=$(tmux display-message -p -t "$target" '#{pane_pid}' 2>/dev/null) || return 1
+  [ -n "$pid" ] || return 1
+  pids="$pid"
+  frontier="$pid"
+  for _ in 1 2 3 4 5; do
+    next=
+    for p in $frontier; do
+      for c in $(pgrep -P "$p" 2>/dev/null); do next="$next $c"; done
+    done
+    [ -n "$next" ] || break
+    pids="$pids$next"
+    frontier=$next
+  done
+  for p in $pids; do
+    args=$(ps -o args= -p "$p" 2>/dev/null) || continue
+    # shellcheck disable=SC2254  # the glob is the caller's argv pattern
+    case "$args" in $pattern) return 0 ;; esac
+  done
+  return 1
+}
+
 # fm_tmux_pane_is_cursor: 0 iff <target>'s foreground process is POSITIVELY
 # identified as the Cursor CLI. Cursor's ~/.local/bin/agent wrapper execs a
 # bundled Node app, so the pane COMM is a bare "node"; the versioned
@@ -107,15 +143,11 @@ fm_tmux_strip_ghost() { fm_composer_strip_ghost; }
 # An unreadable pane or an unmatched argv is NOT cursor - identification fails
 # toward the generic (non-cursor) path.
 fm_tmux_pane_is_cursor() {  # <target>
-  local target=$1 comm pid args
+  local target=$1 comm
   comm=$(tmux display-message -p -t "$target" '#{pane_current_command}' 2>/dev/null) || return 1
   comm=${comm#-}
   case "$comm" in node*) ;; *) return 1 ;; esac
-  pid=$(tmux display-message -p -t "$target" '#{pane_pid}' 2>/dev/null) || return 1
-  [ -n "$pid" ] || return 1
-  args=$(ps -o args= -p "$pid" 2>/dev/null) || return 1
-  case "$args" in *cursor-agent*) return 0 ;; esac
-  return 1
+  fm_tmux_pane_argv_matches "$target" '*cursor-agent*'
 }
 
 # fm_tmux_cursor_composer_row: 0-indexed row of a cursor (Cursor CLI) composer,
@@ -167,31 +199,14 @@ fm_tmux_cursor_composer_row() {  # <target>
 # pane (daemon persistence, see the harness-adapters skill); this identifies
 # the attached TUI client only.
 fm_tmux_pane_is_prime_agent() {  # <target>
-  local target=$1 comm pid args child
+  local target=$1 comm
   comm=$(tmux display-message -p -t "$target" '#{pane_current_command}' 2>/dev/null) || return 1
   comm=${comm#-}
   case "$comm" in node*) ;; *) return 1 ;; esac
-  pid=$(tmux display-message -p -t "$target" '#{pane_pid}' 2>/dev/null) || return 1
-  [ -n "$pid" ] || return 1
-  # The pane's own pid is the login shell; the foreground node (the TUI
-  # client) sits a few launches below it (treehouse subshell -> launcher shim
-  # -> node, which rewrites its title/argv to "prime-agent"; verified
-  # 2026-08-07, v0.7.0). Walk the descendant tree, bounded at five levels.
-  local pids="$pid" frontier="$pid" next p c
-  for _ in 1 2 3 4 5; do
-    next=
-    for p in $frontier; do
-      for c in $(pgrep -P "$p" 2>/dev/null); do next="$next $c"; done
-    done
-    [ -n "$next" ] || break
-    pids="$pids$next"
-    frontier=$next
-  done
-  for child in $pids; do
-    args=$(ps -o args= -p "$child" 2>/dev/null) || continue
-    case "$args" in *prime-agent*) return 0 ;; esac
-  done
-  return 1
+  # The foreground node sits a few launches below the pane's shell (treehouse
+  # subshell -> launcher shim -> node, which rewrites its title/argv to
+  # "prime-agent"; verified 2026-08-07, v0.7.0).
+  fm_tmux_pane_argv_matches "$target" '*prime-agent*'
 }
 
 fm_tmux_composer_state() {  # <target> -> empty|pending|unknown
