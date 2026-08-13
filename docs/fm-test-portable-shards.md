@@ -1,7 +1,7 @@
-# Firstmate portable test shards (Phase 4)
+# Firstmate portable test shards (Phase 4 parallel, serial re-shard)
 
-This document records how the two portable parallel CI shards were balanced from measured evidence.
-Composition and execution are owned by `bin/fm-test-run.sh` (`--lane portable-parallel-1` / `portable-parallel-2` / `portable-serial`).
+This document records how the portable parallel CI shards and the later serial re-shard were balanced from measured evidence.
+Composition and execution are owned by `bin/fm-test-run.sh` (`--lane portable-parallel-1` / `portable-parallel-2` / `portable-serial-1` / `portable-serial-2`; `portable-serial` remains the local remainder union).
 The proven-isolated candidate set remains owned by `bin/fm-test-isolation-proof.sh`.
 
 ## Inputs
@@ -61,11 +61,38 @@ Shard execution order is longest-first so wall-clock tracks the balanced sum.
 
 Exact ordered membership is the heredoc lists in `bin/fm-test-run.sh` (`list_portable_parallel_1` / `list_portable_parallel_2`).
 
-## Portable serial remainder
+## Portable serial shards
 
-`portable-serial` is every `tests/*.test.sh` that is neither proven-isolated nor `real-herdr-gated`.
+`portable-serial` is the local remainder alias: every `tests/*.test.sh` that is neither proven-isolated nor `real-herdr-gated`.
 That keeps watcher, lock, AFK, real tmux, daemon, secondmate lifecycle, bootstrap, live-harness opt-in (default skip), GUI backends, and other stateful or unproven work serial.
-Measured serial remainder wall (from the same Phase 1 artifacts, excluding Herdr) is about **13 minutes**.
+CI does not run that alias as one job.
+It runs two LPT-balanced serial shards of the same remainder.
+
+Five successful main `fm-test-timing-portable-serial` artifacts from 2026-08-13/14 were used (workflow runs 31660022545, 31663580449, 31679450074, 31744799083, 31744805387).
+Unsharded remainder walls on those runs were 19m09s, 19m26s, 19m53s, 19m35s, and 20m07s against the original 20m cap.
+
+Mean per-script `duration_ms` across those artifacts, longest-processing-time onto two workers:
+
+| Lane | Script count | Sum of means |
+|---|---:|---:|
+| `portable-serial-1` | 48 | 591542 ms (~9.86 min) |
+| `portable-serial-2` | 48 | 591522 ms (~9.86 min) |
+| imbalance | | 19 ms |
+
+Slowest remainder scripts by that mean (these stay serial; none moved to the proven-isolated parallel set):
+
+| duration_ms (avg) | script |
+|---:|---|
+| 173794 | `tests/fm-pr-check-security.test.sh` |
+| 129943 | `tests/fm-secondmate-harness.test.sh` |
+| 101133 | `tests/fm-watch-triage.test.sh` |
+| 99974 | `tests/fm-watcher-lock.test.sh` |
+| 61257 | `tests/fm-bearings-snapshot.test.sh` |
+
+No suite moved into the parallel set.
+The Phase 2 isolation-proof candidate list is unchanged, and these remainder scripts still carry shared lock, watcher, AFK, tmux, daemon, or other serial-family contracts.
+Exact ordered membership is the heredoc lists in `bin/fm-test-run.sh` (`list_portable_serial_1` / `list_portable_serial_2`).
+A new `tests/*.test.sh` that is not proven-isolated must be added to one of those lists or the coverage guard fails.
 
 ## Coverage guard
 
@@ -73,15 +100,16 @@ Measured serial remainder wall (from the same Phase 1 artifacts, excluding Herdr
 
 1. The two portable parallel shards are a partition of the proven-isolated set.
 2. Proven-isolated embeds match `bin/fm-test-isolation-proof.sh --list`.
-3. Union of portable parallel shards + portable serial + real-Herdr family equals the complete `tests/*.test.sh` inventory.
-4. Those four partitions are pairwise disjoint (no missing scripts, no duplicates).
+3. The two portable serial shards are a partition of the serial remainder.
+4. Union of portable parallel shards + portable serial shards + real-Herdr family equals the complete `tests/*.test.sh` inventory.
+5. Those five partitions are pairwise disjoint (no missing scripts, no duplicates).
 
 CI runs that guard as a required job (`test-coverage`).
 
 ## Timing artifacts
 
-Every portable shard, the portable serial lane, and the Herdr lane upload their runner-generated timing JSON even when the behavior run reports failures.
-The dependent aggregate job runs after all four lanes, combines every available lane JSON through `bin/fm-test-run.sh --aggregate-json`, and uploads one summary artifact for critical-path review.
+Every portable parallel shard, both portable serial shards, and the Herdr lane upload their runner-generated timing JSON even when the behavior run reports failures.
+The dependent aggregate job runs after all five lanes, combines every available lane JSON through `bin/fm-test-run.sh --aggregate-json`, and uploads one summary artifact for critical-path review.
 The workflow in `.github/workflows/ci.yml` owns the exact artifact names and aggregation wiring.
 
 ## Local entry points
@@ -94,7 +122,7 @@ The workflow in `.github/workflows/ci.yml` owns the exact artifact names and agg
 | Job | timeout-minutes | Rationale |
 |---|---:|---|
 | portable parallel 1/2 | 10 | Measured shard sum ~1 min; hang tripwire with margin |
-| portable serial | 30 | Hang tripwire above the measured 19m10s baseline and the change's previously unmeasured tail |
+| portable serial 1/2 | 20 | Hang tripwire above the measured ~9.86 min LPT shard wall, restoring the original 20m cap with headroom |
 | Herdr | 40 | Unchanged hang tripwire for the real-Herdr lane |
 
 Timeouts remain hang tripwires, not expected healthy ends of green suites.
@@ -104,4 +132,4 @@ Do not raise them as a substitute for green results, retries, or weaker assertio
 
 - Does not expand the proven-isolated set without a new concurrent isolation proof.
 - Does not parallelize watcher, AFK, real Herdr, real tmux, or other stateful families.
-- Does not start rollout verification; that waits until this PR is green and merged.
+- Does not delete or skip tests to buy wall-clock.

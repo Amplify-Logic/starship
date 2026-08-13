@@ -8,7 +8,7 @@
 #   fm-test-run.sh --all
 #   fm-test-run.sh --family <name>
 #   fm-test-run.sh --changed [--base <git-ref>]
-#   fm-test-run.sh --lane portable-parallel-1|portable-parallel-2|portable-serial
+#   fm-test-run.sh --lane portable-parallel-1|portable-parallel-2|portable-serial-1|portable-serial-2|portable-serial
 #   fm-test-run.sh --proven-isolated
 #   fm-test-run.sh tests/<name>.test.sh [more scripts...]
 #
@@ -59,7 +59,8 @@
 # Family labels, the changed-file map, and production portable-shard composition
 # live in this script only (one owner). The proven-isolated candidate set remains
 # owned by bin/fm-test-isolation-proof.sh; portable parallel shards are a
-# duration-balanced partition of that exact set (see docs/fm-test-portable-shards.md).
+# duration-balanced partition of that exact set, and portable serial shards are a
+# duration-balanced partition of the remainder (see docs/fm-test-portable-shards.md).
 # --changed is conservative: it over-selects related families rather than
 # under-selecting, and never expands to the complete suite unless --all.
 set -eu
@@ -226,6 +227,8 @@ list_known_lanes() {
   cat <<'EOF'
 portable-parallel-1
 portable-parallel-2
+portable-serial-1
+portable-serial-2
 portable-serial
 real-herdr-gated
 EOF
@@ -314,6 +317,118 @@ tests/fm-no-mistakes-ownership.test.sh
 EOF
 }
 
+# Portable serial shard 1: LPT balance of the serial remainder using mean
+# duration_ms from five main CI portable-serial timing artifacts (runs
+# 31660022545, 31663580449, 31679450074, 31744799083, 31744805387 on
+# 2026-08-13/14; docs/fm-test-portable-shards.md). Execution order is
+# longest first so wall-clock stays near the balanced sum.
+list_portable_serial_1() {
+  cat <<'EOF'
+tests/fm-pr-check-security.test.sh
+tests/fm-watcher-lock.test.sh
+tests/fm-spawn-dispatch-profile.test.sh
+tests/fm-afk-inject-e2e.test.sh
+tests/fm-public-followup.test.sh
+tests/fm-secondmate-safety.test.sh
+tests/fm-wake-queue.test.sh
+tests/fm-spawn-agent-up.test.sh
+tests/fm-backend.test.sh
+tests/fm-fleet-sync.test.sh
+tests/fm-action-gateway-v2.test.sh
+tests/fm-backend-orca.test.sh
+tests/fm-secondmate-sync.test.sh
+tests/fm-primary-handoff.test.sh
+tests/fm-tangle-guard.test.sh
+tests/fm-decision-surface.test.sh
+tests/fm-fork-surface.test.sh
+tests/fm-secondmate-lifecycle-e2e.test.sh
+tests/fm-startup-memory-budget.test.sh
+tests/fm-action-gateway.test.sh
+tests/fm-backend-zellij.test.sh
+tests/fm-landed-completion-truth.test.sh
+tests/fm-gate-refuse.test.sh
+tests/fm-guard-stale-banner.test.sh
+tests/fm-turnend-guard.test.sh
+tests/fm-send-secondmate-marker.test.sh
+tests/fm-update.test.sh
+tests/fm-afk-return.test.sh
+tests/fm-present.test.sh
+tests/fm-supervision-events.test.sh
+tests/fm-read.test.sh
+tests/fm-test-isolation-proof.test.sh
+tests/fm-upstream-watch.test.sh
+tests/fm-gotmp.test.sh
+tests/fm-toolchain-drift.test.sh
+tests/fm-sessionstart-nudge.test.sh
+tests/fm-operational-input.test.sh
+tests/fm-project-presentation.test.sh
+tests/fm-bearings-skill.test.sh
+tests/fm-kimi-worker.test.sh
+tests/fm-adhd.test.sh
+tests/fm-kimi-primary.test.sh
+tests/fm-backend-cmux-smoke.test.sh
+tests/fm-herdr-layout-preview-e2e.test.sh
+tests/fm-backend-zellij-smoke.test.sh
+tests/fm-opencode-primary-live-e2e.test.sh
+tests/fm-claude-continuity-live-e2e.test.sh
+tests/fm-pi-primary-live-e2e.test.sh
+EOF
+}
+
+# Portable serial shard 2: the complementary LPT half of the serial remainder.
+list_portable_serial_2() {
+  cat <<'EOF'
+tests/fm-secondmate-harness.test.sh
+tests/fm-watch-triage.test.sh
+tests/fm-bearings-snapshot.test.sh
+tests/fm-spawn-launch-preflight.test.sh
+tests/fm-worker-boundary-regression.test.sh
+tests/fm-supervision-sentinel.test.sh
+tests/fm-teardown.test.sh
+tests/fm-bootstrap.test.sh
+tests/fm-harness-exam.test.sh
+tests/fm-daemon.test.sh
+tests/fm-pending-reply.test.sh
+tests/fm-pi-watch-extension.test.sh
+tests/fm-chart-room.test.sh
+tests/fm-spawn-herdr-presentation.test.sh
+tests/fm-session-start.test.sh
+tests/fm-secondmate-liveness.test.sh
+tests/fm-fleet-snapshot-view.test.sh
+tests/fm-prime-agent-adapter.test.sh
+tests/fm-primary.test.sh
+tests/fm-spawn-worktree-settle.test.sh
+tests/fm-wake-daemon-lifecycle-e2e.test.sh
+tests/fm-watch-checkpoint.test.sh
+tests/fm-continuity-pretool-check.test.sh
+tests/fm-shared-captain-inheritance.test.sh
+tests/fm-visible-status.test.sh
+tests/fm-backlog-handoff.test.sh
+tests/fm-backend-cmux.test.sh
+tests/fm-home-port.test.sh
+tests/fm-upstream-ledger.test.sh
+tests/fm-subagent-pretool-check.test.sh
+tests/fm-cursor-adapter.test.sh
+tests/fm-upstream.test.sh
+tests/fm-status-bar.test.sh
+tests/fm-capability.test.sh
+tests/fm-overlay.test.sh
+tests/fm-backend-tmux-smoke.test.sh
+tests/fm-browse-session.test.sh
+tests/fm-second-opinion.test.sh
+tests/fm-ask-user-authority.test.sh
+tests/fm-install-herdr.test.sh
+tests/no-mistakes-required-workflow.test.sh
+tests/fm-afk-pi-herdr-return-e2e.test.sh
+tests/fm-cursor-primary.test.sh
+tests/fm-gitignore-config.test.sh
+tests/fm-send-secondmate-marker-herdr-e2e.test.sh
+tests/fm-herdr-worker-presentation-e2e.test.sh
+tests/fm-grok-continuity-live-e2e.test.sh
+tests/fm-codex-continuity-live-e2e.test.sh
+EOF
+}
+
 is_proven_isolated_script() {
   local want=$1 line
   while IFS= read -r line; do
@@ -347,10 +462,25 @@ select_lane() {
         found=1
       done < <(list_portable_parallel_2)
       ;;
+    portable-serial-1)
+      while IFS= read -r s; do
+        [ -n "$s" ] || continue
+        add_script "$s"
+        found=1
+      done < <(list_portable_serial_1)
+      ;;
+    portable-serial-2)
+      while IFS= read -r s; do
+        [ -n "$s" ] || continue
+        add_script "$s"
+        found=1
+      done < <(list_portable_serial_2)
+      ;;
     portable-serial)
-      # Everything in the complete suite that is not proven-isolated and not
-      # real-herdr-gated. Watcher/lock/AFK/tmux/daemon/ambiguous/stateful work
-      # stays here, serial only.
+      # Local remainder union: everything in the complete suite that is not
+      # proven-isolated and not real-herdr-gated. CI runs the two LPT serial
+      # shards instead of this alias. Watcher/lock/AFK/tmux/daemon/ambiguous
+      # /stateful work stays here, serial only.
       while IFS= read -r s; do
         [ -n "$s" ] || continue
         base=$(basename "$s")
@@ -404,15 +534,36 @@ run_coverage_guard() {
     return 1
   fi
 
-  # Serial + Herdr lane listings without disturbing a caller's selection.
+  list_portable_serial_1 | LC_ALL=C sort -u >"$tmp/ser1"
+  list_portable_serial_2 | LC_ALL=C sort -u >"$tmp/ser2"
+  cat "$tmp/ser1" "$tmp/ser2" | LC_ALL=C sort | uniq -d >"$tmp/serial_dups"
+  if [ -s "$tmp/serial_dups" ]; then
+    log "coverage guard: portable serial shards share scripts:"
+    cat "$tmp/serial_dups" >&2
+    rm -rf "$tmp"
+    return 1
+  fi
+  cat "$tmp/ser1" "$tmp/ser2" | LC_ALL=C sort -u >"$tmp/serial"
+
+  # Serial remainder (dynamic) must equal the two explicit LPT serial shards.
   saved_scripts=("${SCRIPTS[@]+"${SCRIPTS[@]}"}")
   SCRIPTS=()
   select_lane portable-serial
-  printf '%s\n' "${SCRIPTS[@]+"${SCRIPTS[@]}"}" | LC_ALL=C sort -u >"$tmp/serial"
+  printf '%s\n' "${SCRIPTS[@]+"${SCRIPTS[@]}"}" | LC_ALL=C sort -u >"$tmp/serial_remainder"
   SCRIPTS=()
   select_family real-herdr-gated
   printf '%s\n' "${SCRIPTS[@]+"${SCRIPTS[@]}"}" | LC_ALL=C sort -u >"$tmp/herdr"
   SCRIPTS=("${saved_scripts[@]+"${saved_scripts[@]}"}")
+
+  missing=$(comm -23 "$tmp/serial_remainder" "$tmp/serial" || true)
+  extra=$(comm -13 "$tmp/serial_remainder" "$tmp/serial" || true)
+  if [ -n "$missing" ] || [ -n "$extra" ]; then
+    log "coverage guard: portable serial shards must equal the serial remainder"
+    [ -z "$missing" ] || { log "missing from serial shards:"; printf '%s\n' "$missing" >&2; }
+    [ -z "$extra" ] || { log "extra beyond serial remainder:"; printf '%s\n' "$extra" >&2; }
+    rm -rf "$tmp"
+    return 1
+  fi
 
   for pair in "shards_union:serial" "shards_union:herdr" "serial:herdr"; do
     a=${pair%%:*}
@@ -438,7 +589,7 @@ run_coverage_guard() {
   missing=$(comm -23 "$tmp/all" "$tmp/union" || true)
   extra=$(comm -13 "$tmp/all" "$tmp/union" || true)
   if [ -n "$missing" ] || [ -n "$extra" ]; then
-    log "coverage guard: union of portable shards + portable serial + Herdr must equal tests/*.test.sh"
+    log "coverage guard: union of portable shards + portable serial shards + Herdr must equal tests/*.test.sh"
     [ -z "$missing" ] || { log "missing from union:"; printf '%s\n' "$missing" >&2; }
     [ -z "$extra" ] || { log "extra beyond inventory:"; printf '%s\n' "$extra" >&2; }
     rm -rf "$tmp"
@@ -455,10 +606,12 @@ run_coverage_guard() {
     fi
   fi
 
-  printf 'FM_TEST_COVERAGE ok total=%s parallel=%s serial=%s herdr=%s\n' \
+  printf 'FM_TEST_COVERAGE ok total=%s parallel=%s serial=%s serial1=%s serial2=%s herdr=%s\n' \
     "$(wc -l <"$tmp/all" | tr -d ' ')" \
     "$(wc -l <"$tmp/shards_union" | tr -d ' ')" \
     "$(wc -l <"$tmp/serial" | tr -d ' ')" \
+    "$(wc -l <"$tmp/ser1" | tr -d ' ')" \
+    "$(wc -l <"$tmp/ser2" | tr -d ' ')" \
     "$(wc -l <"$tmp/herdr" | tr -d ' ')"
   rm -rf "$tmp"
   return 0

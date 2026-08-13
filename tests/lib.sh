@@ -42,8 +42,9 @@ export FM_SUPERVISION_SENTINEL_MODE=off
 # real agent to own the endpoint after launch, and a fake tmux or herdr reports a
 # liveness answer the shared owner cannot attribute, so every fixture spawn pays
 # the production pacing before proceeding - measured at ~21s on one spawn-heavy
-# file alone, which is what pushed the portable-serial lane past its 20m hang
-# tripwire. Production pacing is unaffected: this is the suite's own knob, set
+# file alone, which is what pushed the former unsharded portable-serial CI lane
+# past its 20m hang tripwire. Production pacing is unaffected: this is the
+# suite's own knob, set
 # once here rather than in each of the ~38 files that drive a real spawn, exactly
 # as the two exports above are. A test that needs a specific bound (the agent-up
 # suite itself) still sets FM_SPAWN_AGENT_UP_SLEEP / _MAX_POLLS explicitly.

@@ -371,8 +371,13 @@ test_ci_and_docs_call_the_owner() {
     || fail "CI must define portable parallel shard 1"
   grep -Fq 'tests-portable-parallel-2:' "$CI" \
     || fail "CI must define portable parallel shard 2"
-  grep -Fq 'tests-portable-serial:' "$CI" \
-    || fail "CI must define the portable serial lane"
+  grep -Fq 'tests-portable-serial-1:' "$CI" \
+    || fail "CI must define portable serial shard 1"
+  grep -Fq 'tests-portable-serial-2:' "$CI" \
+    || fail "CI must define portable serial shard 2"
+  if grep -Eq '^  tests-portable-serial:' "$CI"; then
+    fail "CI must not keep the unsharded tests-portable-serial job"
+  fi
   grep -Fq 'bin/fm-test-run.sh --lane portable-parallel-1' "$CI" \
     || fail "CI shard 1 must invoke --lane portable-parallel-1"
   grep -Fq 'bin/fm-test-run.sh --lane portable-parallel-2' "$CI" \
@@ -389,8 +394,23 @@ test_ci_and_docs_call_the_owner() {
     printf '%s\n' "$job_body" | grep -Fq 'tasks-axi --version' \
       || fail "CI portable parallel shard $shard must verify tasks-axi"
   done
-  grep -Fq 'bin/fm-test-run.sh --lane portable-serial' "$CI" \
-    || fail "CI portable serial must invoke --lane portable-serial"
+  grep -Fq 'bin/fm-test-run.sh --lane portable-serial-1' "$CI" \
+    || fail "CI serial shard 1 must invoke --lane portable-serial-1"
+  grep -Fq 'bin/fm-test-run.sh --lane portable-serial-2' "$CI" \
+    || fail "CI serial shard 2 must invoke --lane portable-serial-2"
+  for shard in 1 2; do
+    job_body=$(awk -v job="  tests-portable-serial-$shard:" '
+      $0 == job { in_job=1; next }
+      in_job && /^  [a-zA-Z0-9_-]+:/ { exit }
+      in_job { print }
+    ' "$CI")
+    printf '%s\n' "$job_body" | grep -Fq 'timeout-minutes: 20' \
+      || fail "CI portable serial shard $shard hang tripwire must be timeout-minutes: 20"
+    printf '%s\n' "$job_body" | grep -Fq 'npm install -g tasks-axi' \
+      || fail "CI portable serial shard $shard must install tasks-axi"
+    printf '%s\n' "$job_body" | grep -Fq 'command -v tmux' \
+      || fail "CI portable serial shard $shard must require tmux"
+  done
   grep -Fq 'bin/fm-test-run.sh --check-coverage' "$CI" \
     || fail "CI must run the coverage guard"
   grep -Fq 'tests-herdr:' "$CI" \
@@ -407,10 +427,11 @@ test_ci_and_docs_call_the_owner() {
     || fail "Herdr CI job must use bounded lab cleanup"
   grep -Fq 'tests-timing-aggregate:' "$CI" \
     || fail "CI must aggregate per-lane timing artifacts"
-  grep -Fq 'timeout-minutes: 30' "$CI" \
-    || fail "portable serial hang tripwire must be timeout-minutes: 30"
   grep -Fq 'timeout-minutes: 10' "$CI" \
     || fail "portable parallel shards must keep a hang tripwire (10m)"
+  if grep -Eq 'timeout-minutes: 30' "$CI"; then
+    fail "unsharded 30m portable-serial tripwire must not remain after serial re-shard"
+  fi
   # Interim full-suite 25m portable timeout must not remain after sharding.
   if grep -Eq 'timeout-minutes: 25' "$CI"; then
     fail "CI still has interim timeout-minutes: 25 after portable sharding"
@@ -443,38 +464,51 @@ test_ci_and_docs_call_the_owner() {
 }
 
 test_portable_shard_union_and_coverage_guard() {
-  local s1 s2 proven serial herdr all_count union_count overlap out first
+  local s1 s2 ser1 ser2 proven serial herdr all_count union_count overlap out first
   s1=$("$RUNNER" --list --lane portable-parallel-1)
   s2=$("$RUNNER" --list --lane portable-parallel-2)
+  ser1=$("$RUNNER" --list --lane portable-serial-1)
+  ser2=$("$RUNNER" --list --lane portable-serial-2)
   proven=$("$RUNNER" --list --proven-isolated)
   serial=$("$RUNNER" --list --lane portable-serial)
   herdr=$("$RUNNER" --list --family real-herdr-gated)
   [ -n "$s1" ] && [ -n "$s2" ] || fail "portable parallel shards must be non-empty"
-  # Shards disjoint.
+  [ -n "$ser1" ] && [ -n "$ser2" ] || fail "portable serial shards must be non-empty"
+  # Parallel shards disjoint.
   overlap=$(comm -12 <(printf '%s\n' "$s1" | LC_ALL=C sort) <(printf '%s\n' "$s2" | LC_ALL=C sort) || true)
   [ -z "$overlap" ] || fail "portable parallel shards overlap: $overlap"
-  # Union of shards equals proven-isolated.
+  # Serial shards disjoint.
+  overlap=$(comm -12 <(printf '%s\n' "$ser1" | LC_ALL=C sort) <(printf '%s\n' "$ser2" | LC_ALL=C sort) || true)
+  [ -z "$overlap" ] || fail "portable serial shards overlap: $overlap"
+  # Union of parallel shards equals proven-isolated.
   [ "$(printf '%s\n' "$s1" "$s2" | LC_ALL=C sort -u)" = \
     "$(printf '%s\n' "$proven" | LC_ALL=C sort -u)" ] \
     || fail "shard union must equal proven-isolated set"
+  # Union of serial shards equals the serial remainder alias.
+  [ "$(printf '%s\n' "$ser1" "$ser2" | LC_ALL=C sort -u)" = \
+    "$(printf '%s\n' "$serial" | LC_ALL=C sort -u)" ] \
+    || fail "serial shard union must equal portable-serial remainder"
   # No herdr in portable lanes.
-  printf '%s\n' "$s1" "$s2" "$serial" | grep -Fq 'tests/fm-backend-herdr-smoke.test.sh' \
+  printf '%s\n' "$s1" "$s2" "$ser1" "$ser2" | grep -Fq 'tests/fm-backend-herdr-smoke.test.sh' \
     && fail "portable lanes must not include real-herdr-gated smoke"
   printf '%s\n' "$herdr" | grep -Fq 'tests/fm-backend-herdr-smoke.test.sh' \
     || fail "herdr family must include smoke"
   out=$("$RUNNER" --check-coverage)
   assert_contains "$out" "FM_TEST_COVERAGE ok" "coverage guard success marker"
   all_count=$("$RUNNER" --list --all | wc -l | tr -d ' ')
-  union_count=$(printf '%s\n' "$s1" "$s2" "$serial" "$herdr" | LC_ALL=C sort -u | wc -l | tr -d ' ')
+  union_count=$(printf '%s\n' "$s1" "$s2" "$ser1" "$ser2" "$herdr" | LC_ALL=C sort -u | wc -l | tr -d ' ')
   [ "$union_count" = "$all_count" ] \
     || fail "union of lanes ($union_count) must equal --all ($all_count)"
-  # No duplicates across the four partitions.
-  [ "$(printf '%s\n' "$s1" "$s2" "$serial" "$herdr" | LC_ALL=C sort | uniq -d | wc -l | tr -d ' ')" = "0" ] \
+  # No duplicates across the five partitions.
+  [ "$(printf '%s\n' "$s1" "$s2" "$ser1" "$ser2" "$herdr" | LC_ALL=C sort | uniq -d | wc -l | tr -d ' ')" = "0" ] \
     || fail "lanes must not duplicate scripts"
-  # LPT order: first script of shard 1 is the longest proven script.
+  # LPT order: first script of parallel shard 1 is the longest proven script.
   first=$(printf '%s\n' "$s1" | head -n 1)
   [ "$first" = "tests/fm-arm-pretool-check.test.sh" ] \
     || fail "shard 1 must start with longest proven script, got $first"
+  first=$(printf '%s\n' "$ser1" | head -n 1)
+  [ "$first" = "tests/fm-pr-check-security.test.sh" ] \
+    || fail "serial shard 1 must start with longest serial script, got $first"
   pass "portable shard union, disjointness, and coverage guard hold"
 }
 

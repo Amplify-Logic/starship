@@ -24,8 +24,9 @@ jobs:
       # re-spell the shellcheck command here; keep CI and the pre-push gate on it.
       - run: bin/fm-lint.sh
 
-  # Deterministic proof that portable parallel shards + portable serial + Herdr
-  # equal the complete tests/*.test.sh inventory with no missing or duplicates.
+  # Deterministic proof that portable parallel shards + portable serial shards
+  # + Herdr equal the complete tests/*.test.sh inventory with no missing or
+  # duplicates.
   test-coverage:
     name: Test coverage guard
     runs-on: ubuntu-latest
@@ -124,27 +125,19 @@ jobs:
           path: ${{ runner.temp }}/fm-test/fm-test-timing-portable-parallel-2.json
           if-no-files-found: warn
 
-  # Required portable serial remainder: watcher, lock, AFK, tmux, daemon,
-  # ambiguous, and other stateful tests. Real Herdr stays in tests-herdr.
-  tests-portable-serial:
-    name: Behavior portable serial
+  # Required portable serial remainder, split into two duration-balanced
+  # serial lanes (watcher, lock, AFK, tmux, daemon, ambiguous, stateful).
+  # Real Herdr stays in tests-herdr. Composition owner: bin/fm-test-run.sh.
+  tests-portable-serial-1:
+    name: Behavior portable serial 1
     runs-on: ubuntu-latest
-    # Cap is a hang tripwire above observed p99 script cost and suite wall, not
-    # the expected healthy end. The former "~13 min wall" claim was stale: this
-    # lane measured 19m10s on main at fe7161d and 17m46s on
-    # fm/fm-chart-room-build-b4, both WITHOUT the agent-up spawn change, already
-    # at 89-96 percent of the former 20m cap. That is a pre-existing capacity
-    # problem, exposed rather than introduced by one ~27s test file added here.
-    # At a 20m cap this lane was then cancelled at exactly 20m00s, so its true
-    # wall is above 20m but UNMEASURED - the job was killed, not timed. The cap
-    # therefore has to clear an unknown tail rather than a measured one: 30m
-    # covers the 19m10s baseline plus this change, the ~8 percent spread between
-    # the two samples above, and that unmeasured overshoot.
-    # 25m is deliberately not used: the retired interim full-suite timeout of
-    # that exact value is guarded against in tests/fm-test-run.test.sh.
-    # A full re-shard, which would cut this lane rather than widen its tripwire,
-    # is tracked as its own task.
-    timeout-minutes: 30
+    # Hang tripwire above the measured ~9.86 min LPT shard wall (mean of five
+    # main portable-serial timing artifacts on 2026-08-13/14), not the expected
+    # healthy end. 20m restores the original cap now that the ~19-20 min
+    # remainder is two balanced serial lanes. 25m is deliberately not used:
+    # the retired interim full-suite timeout of that exact value is guarded
+    # against in tests/fm-test-run.test.sh.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
         with:
@@ -167,18 +160,58 @@ jobs:
           set -eu
           npm install -g tasks-axi
           tasks-axi --version
-      - name: Run portable serial remainder
+      - name: Run portable serial shard 1
         run: |
           set -eu
           mkdir -p "$RUNNER_TEMP/fm-test"
-          bin/fm-test-run.sh --lane portable-serial \
-            --json "$RUNNER_TEMP/fm-test/fm-test-timing-portable-serial.json"
-      - name: Upload portable serial timing artifact
+          bin/fm-test-run.sh --lane portable-serial-1 \
+            --json "$RUNNER_TEMP/fm-test/fm-test-timing-portable-serial-1.json"
+      - name: Upload portable serial shard 1 timing artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: fm-test-timing-portable-serial
-          path: ${{ runner.temp }}/fm-test/fm-test-timing-portable-serial.json
+          name: fm-test-timing-portable-serial-1
+          path: ${{ runner.temp }}/fm-test/fm-test-timing-portable-serial-1.json
+          if-no-files-found: warn
+
+  tests-portable-serial-2:
+    name: Behavior portable serial 2
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Install pinned ShellCheck
+        run: |
+          set -eu
+          bin/fm-install-shellcheck.sh "$RUNNER_TEMP/bin"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Require tmux for e2e tests
+        run: |
+          set -eu
+          command -v tmux >/dev/null || {
+            echo "::error::tmux is required for real afk injection e2e coverage"
+            exit 1
+          }
+          tmux -V
+      - name: Install tasks-axi for backlog-handoff delegation
+        run: |
+          set -eu
+          npm install -g tasks-axi
+          tasks-axi --version
+      - name: Run portable serial shard 2
+        run: |
+          set -eu
+          mkdir -p "$RUNNER_TEMP/fm-test"
+          bin/fm-test-run.sh --lane portable-serial-2 \
+            --json "$RUNNER_TEMP/fm-test/fm-test-timing-portable-serial-2.json"
+      - name: Upload portable serial shard 2 timing artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fm-test-timing-portable-serial-2
+          path: ${{ runner.temp }}/fm-test/fm-test-timing-portable-serial-2.json
           if-no-files-found: warn
 
   # Required real-Herdr lane: pinned install, serial real-herdr-gated family,
@@ -306,7 +339,8 @@ jobs:
     needs:
       - tests-portable-parallel-1
       - tests-portable-parallel-2
-      - tests-portable-serial
+      - tests-portable-serial-1
+      - tests-portable-serial-2
       - tests-herdr
     if: always()
     steps:
