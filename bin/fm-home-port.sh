@@ -106,6 +106,7 @@ FALLBACK_PORTABLE_CONFIG_FILES=(
   config/startup-memory-budget
   config/wedge-alarm
   config/primary-handoff
+  config/upstream-watch
 )
 PORTABLE_CONFIG_FILES=("${FALLBACK_PORTABLE_CONFIG_FILES[@]}")
 

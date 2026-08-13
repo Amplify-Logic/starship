@@ -86,6 +86,7 @@ test_export_copies_portable_only() {
   printf 'clone\n' > "$home/projects/README"
   printf 'registry\n' > "$home/data/projects.md"
   printf 'synthetic-capability-proof\n' > "$home/config/action-captain-secret"
+  printf 'interval_seconds = 604800\n' > "$home/config/upstream-watch"
   mkdir -p "$dest"
 
   local out
@@ -103,12 +104,27 @@ test_export_copies_portable_only() {
   assert_present "$dest/config/backend" "backend not exported"
   assert_present "$dest/config/primary-handoff" "manifest-declared primary handoff config not exported"
   assert_present "$dest/config/startup-memory-budget" "manifest-declared startup-memory budget not exported"
+  assert_present "$dest/config/upstream-watch" "manifest-declared upstream-watch config not exported"
   assert_absent "$dest/.env" ".env must not be exported"
   assert_absent "$dest/config/action-captain-secret" "action capability secret must not be exported"
   assert_absent "$dest/state" "state/ must not be exported"
   assert_absent "$dest/projects" "projects/ must not be exported"
   assert_absent "$dest/data/projects.md" "projects.md must not be exported"
   pass "export copies portable allowlist and loudly refuses machine-local/secrets"
+}
+
+test_export_skips_absent_upstream_watch() {
+  local home="$TMP_ROOT/export-no-watch"
+  local dest="$TMP_ROOT/export-no-watch-dest"
+  seed_home "$home"
+  mkdir -p "$dest"
+
+  local out
+  out=$("$PORT" export --home "$home" --dest "$dest" 2>&1) \
+    || fail "export without optional upstream-watch failed: $out"
+  assert_contains "$out" 'EXPORT_OK:' "export without upstream-watch missed EXPORT_OK"
+  assert_absent "$dest/config/upstream-watch" "absent optional upstream-watch must not be invented"
+  pass "export skips absent optional upstream-watch"
 }
 
 test_export_refuses_explicit_env_include() {
@@ -324,6 +340,7 @@ test_verify_completes_for_every_verified_harness() {
 }
 
 test_export_copies_portable_only
+test_export_skips_absent_upstream_watch
 test_export_refuses_explicit_env_include
 test_scan_detects_embedded_secret
 test_scan_detects_secret_without_leading_space

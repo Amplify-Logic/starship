@@ -19,7 +19,7 @@ check_current_manifest() {
 }
 
 check_queries() {
-  local out
+  local out fallback
   out=$("$SURFACE" list --topology herdr-topology) || fail "topology query failed"
   assert_contains "$out" $'herdr-worker-presentation\t' "Herdr topology query"
   out=$("$SURFACE" list --config) || fail "config query failed"
@@ -27,7 +27,12 @@ check_queries() {
   assert_contains "$out" 'config/action-captain-secret' "config query misses action secret"
   out=$("$SURFACE" port-allowlist) || fail "port allowlist query failed"
   assert_contains "$out" 'config/primary-handoff' "port allowlist misses primary handoff"
+  assert_contains "$out" 'config/upstream-watch' "port allowlist misses upstream-watch"
   assert_not_contains "$out" 'action-captain-secret' "port allowlist must exclude secrets"
+  fallback=$("$ROOT/bin/fm-home-port.sh" portable-config-files) \
+    || fail "home-port fallback allowlist query failed"
+  [ "$(printf '%s\n' "$out" | LC_ALL=C sort)" = "$(printf '%s\n' "$fallback" | LC_ALL=C sort)" ] \
+    || fail "declared port-allowlist and home-port fallback disagree"
   pass "list, topology, config, and port queries expose declared data"
 }
 
