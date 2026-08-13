@@ -38,6 +38,17 @@ export FM_GATE_REFUSE_BYPASS=1
 # The sentinel's own suite overrides this and uses a fake launchctl transport.
 export FM_SUPERVISION_SENTINEL_MODE=off
 
+# Drop the agent-up wait's inter-poll pacing for the suite. fm-spawn waits for a
+# real agent to own the endpoint after launch, and a fake tmux or herdr reports a
+# liveness answer the shared owner cannot attribute, so every fixture spawn pays
+# the production pacing before proceeding - measured at ~21s on one spawn-heavy
+# file alone, which is what pushed the portable-serial lane past its 20m hang
+# tripwire. Production pacing is unaffected: this is the suite's own knob, set
+# once here rather than in each of the ~38 files that drive a real spawn, exactly
+# as the two exports above are. A test that needs a specific bound (the agent-up
+# suite itself) still sets FM_SPAWN_AGENT_UP_SLEEP / _MAX_POLLS explicitly.
+export FM_SPAWN_AGENT_UP_SLEEP=0
+
 # Resolve the repo root from this library's own location. Consumed by sourcing
 # test files, not by this library, so it reads as "unused" here.
 # shellcheck disable=SC2034

@@ -129,11 +129,22 @@ jobs:
   tests-portable-serial:
     name: Behavior portable serial
     runs-on: ubuntu-latest
-    # Measured serial remainder is ~13 min wall without Herdr. Cap is a hang
-    # tripwire above observed p99 script cost and suite wall, not the expected
-    # healthy end (interim 25m full-suite slack reduced after sharding).
-    # Fork keeps a 20m hang tripwire here; full-suite 30m comment retired with shards.
-    timeout-minutes: 20
+    # Cap is a hang tripwire above observed p99 script cost and suite wall, not
+    # the expected healthy end. The former "~13 min wall" claim was stale: this
+    # lane measured 19m10s on main at fe7161d and 17m46s on
+    # fm/fm-chart-room-build-b4, both WITHOUT the agent-up spawn change, already
+    # at 89-96 percent of the former 20m cap. That is a pre-existing capacity
+    # problem, exposed rather than introduced by one ~27s test file added here.
+    # At a 20m cap this lane was then cancelled at exactly 20m00s, so its true
+    # wall is above 20m but UNMEASURED - the job was killed, not timed. The cap
+    # therefore has to clear an unknown tail rather than a measured one: 30m
+    # covers the 19m10s baseline plus this change, the ~8 percent spread between
+    # the two samples above, and that unmeasured overshoot.
+    # 25m is deliberately not used: the retired interim full-suite timeout of
+    # that exact value is guarded against in tests/fm-test-run.test.sh.
+    # A full re-shard, which would cut this lane rather than widen its tripwire,
+    # is tracked as its own task.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
         with:

@@ -46,6 +46,26 @@
 #   The treehouse-get worktree settle loop is hard-bounded (default 60 polls,
 #   1s sleep); FM_SPAWN_SETTLE_MAX_POLLS and FM_SPAWN_SETTLE_SLEEP shorten that
 #   bound for tests without risking an unbounded wait.
+#   After the launch command is submitted, the spawn waits for a real agent to
+#   own the endpoint before it reports success or delivers a post-launch brief,
+#   reading the shared liveness owner (fm_backend_agent_state) rather than
+#   sleeping and hoping. The wait is hard-bounded the same way (default 60
+#   polls, 1s sleep; FM_SPAWN_AGENT_UP_MAX_POLLS and FM_SPAWN_AGENT_UP_SLEEP),
+#   and every refusal names both the polls it actually performed and that bound.
+#   A pane still proven to be a bare shell at the bound refuses loudly instead
+#   of leaving the brief spilled into that shell, and a structurally gone
+#   endpoint refuses on its FIRST read rather than waiting out a bound whose
+#   answer can never change. Nothing is torn down either way, so the task stays
+#   recoverable in place and the refusal prints the exact recovery for THIS
+#   task, in one of three shapes: a one-line file-pointer relaunch for an
+#   adapter whose launch line can carry a brief; a two-step
+#   launch-then-file-pointer delivery for one that cannot (kimi, which has no
+#   positional interactive brief); and a fully-flagged re-spawn command carrying
+#   this task's own kind and resolved axes when the endpoint itself is gone.
+#   A backend with no liveness reader at all (zellij, orca, cmux) cannot RUN the
+#   check, and an unsupported check must never remove a spawn that worked
+#   before, so those proceed exactly as they did and warn once on stderr rather
+#   than refusing.
 #   For cursor, the effort axis is folded into the launch model id (see
 #   cursor_model_with_effort) and that launch id is what meta model= records.
 #   When agent --list-models (or FM_CURSOR_MODEL_CATALOG) is available, an
@@ -129,7 +149,7 @@ set -eu
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
-  sed -n '2,80p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,100p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 case "${1:-}" in
@@ -1054,6 +1074,29 @@ validate_spawn_worktree() {  # <source> <inspect-target>
   fi
 }
 
+# The agent-up wait's bound is validated HERE, before the endpoint exists and
+# before anything has been typed into it, for the same reason the worktree
+# settle bound below is validated before its first send: a malformed knob
+# discovered only after the launch line (which carries the brief for every
+# adapter but kimi) has been submitted would refuse a spawn whose agent is
+# already up and working on the task.
+SPAWN_AGENT_UP_POLLS=${FM_SPAWN_AGENT_UP_MAX_POLLS:-60}
+SPAWN_AGENT_UP_SLEEP_S=${FM_SPAWN_AGENT_UP_SLEEP:-1}
+if [ "$RAW_LAUNCH" -eq 0 ]; then
+  case "$SPAWN_AGENT_UP_POLLS" in
+    ''|0|*[!0-9]*)
+      echo "error: FM_SPAWN_AGENT_UP_MAX_POLLS must be a positive integer (got '${FM_SPAWN_AGENT_UP_MAX_POLLS:-}'); refusing before waiting for the agent to start" >&2
+      exit 1
+      ;;
+  esac
+  case "$SPAWN_AGENT_UP_SLEEP_S" in
+    ''|*[!0-9]*)
+      echo "error: FM_SPAWN_AGENT_UP_SLEEP must be a non-negative integer number of seconds (got '${FM_SPAWN_AGENT_UP_SLEEP:-}'); refusing before waiting for the agent to start" >&2
+      exit 1
+      ;;
+  esac
+fi
+
 W="fm-$ID"
 case "$BACKEND" in
   tmux)
@@ -1608,30 +1651,251 @@ sq_encoded_brief=$(shell_quote "$ENCODED_BRIEF")
 # LAUNCH_MODEL was resolved earlier (cursor effort fold + catalog preflight).
 MODELFLAG=$(model_flag_for_harness "$HARNESS" "$LAUNCH_MODEL")
 EFFORTFLAG=$(effort_flag_for_harness "$HARNESS" "$EFFORT")
-LAUNCH=${LAUNCH//__WORKTREE__/$(shell_quote "$WT")}
-LAUNCH=${LAUNCH//__MODELFLAG__/$MODELFLAG}
-LAUNCH=${LAUNCH//__EFFORTFLAG__/$EFFORTFLAG}
-LAUNCH=${LAUNCH//__ENCODED_BRIEF__/$sq_encoded_brief}
-LAUNCH=${LAUNCH//__BRIEF__/$sq_brief}
-LAUNCH=${LAUNCH//__TURNEND__/$sq_turnend}
-LAUNCH=${LAUNCH//__PIEXT__/$sq_piext}
-LAUNCH=${LAUNCH//__PITURNEND__/$sq_piturnend}
-LAUNCH=${LAUNCH//__PIWATCH__/$sq_piwatch}
-LAUNCH=${LAUNCH//__PASTATE__/$sq_pastate}
-LAUNCH=${LAUNCH//__PRIMEEXT__/$sq_primeext}
-LAUNCH=${LAUNCH//__OPINPUT__/$sq_opinput}
-if [ "$HARNESS" = kimi ] && [ "$RAW_LAUNCH" -eq 0 ]; then
-  sq_kimihome=$(shell_quote "$STATE_REAL/$ID.kimi-home")
-  LAUNCH=${LAUNCH//__KIMIHOME__/$sq_kimihome}
-fi
-if [ "$KIND" = secondmate ]; then
-  sq_home=$(shell_quote "$PROJ_ABS")
-  if fm_pf_relay_active "$FM_HOME"; then
-    sq_primary_home=$(shell_quote "$FM_HOME")
-    LAUNCH="FM_PUBLIC_FOLLOWUP_PRIMARY_HOME=$sq_primary_home $LAUNCH"
+# spawn_render_launch: render the harness launch template into the concrete
+# pane command, substituting <brief-arg> for __ENCODED_BRIEF__. The brief
+# argument is a PARAMETER rather than a baked-in step so one renderer produces
+# both the real launch and the file-pointer recovery launch printed by
+# spawn_refuse_agent_never_started: the recovery command firstmate is told to
+# send is then byte-identical to the real one except for that single argument,
+# and the two cannot drift apart as adapters change.
+LAUNCH_TEMPLATE=$LAUNCH
+spawn_render_launch() {  # <shell-quoted-brief-arg>
+  local brief_arg=$1 rendered=$LAUNCH_TEMPLATE sq_kimihome sq_home sq_primary_home
+  rendered=${rendered//__WORKTREE__/$(shell_quote "$WT")}
+  rendered=${rendered//__MODELFLAG__/$MODELFLAG}
+  rendered=${rendered//__EFFORTFLAG__/$EFFORTFLAG}
+  rendered=${rendered//__ENCODED_BRIEF__/$brief_arg}
+  rendered=${rendered//__BRIEF__/$sq_brief}
+  rendered=${rendered//__TURNEND__/$sq_turnend}
+  rendered=${rendered//__PIEXT__/$sq_piext}
+  rendered=${rendered//__PITURNEND__/$sq_piturnend}
+  rendered=${rendered//__PIWATCH__/$sq_piwatch}
+  rendered=${rendered//__PASTATE__/$sq_pastate}
+  rendered=${rendered//__PRIMEEXT__/$sq_primeext}
+  rendered=${rendered//__OPINPUT__/$sq_opinput}
+  if [ "$HARNESS" = kimi ] && [ "$RAW_LAUNCH" -eq 0 ]; then
+    sq_kimihome=$(shell_quote "$STATE_REAL/$ID.kimi-home")
+    rendered=${rendered//__KIMIHOME__/$sq_kimihome}
   fi
-  LAUNCH="FM_ROOT_OVERRIDE= FM_STATE_OVERRIDE= FM_DATA_OVERRIDE= FM_PROJECTS_OVERRIDE= FM_CONFIG_OVERRIDE= FM_HOME=$sq_home $LAUNCH"
-fi
+  if [ "$KIND" = secondmate ]; then
+    sq_home=$(shell_quote "$PROJ_ABS")
+    if fm_pf_relay_active "$FM_HOME"; then
+      sq_primary_home=$(shell_quote "$FM_HOME")
+      rendered="FM_PUBLIC_FOLLOWUP_PRIMARY_HOME=$sq_primary_home $rendered"
+    fi
+    rendered="FM_ROOT_OVERRIDE= FM_STATE_OVERRIDE= FM_DATA_OVERRIDE= FM_PROJECTS_OVERRIDE= FM_CONFIG_OVERRIDE= FM_HOME=$sq_home $rendered"
+  fi
+  printf '%s' "$rendered"
+}
+LAUNCH=$(spawn_render_launch "$sq_encoded_brief")
+# --- agent-up verification ---------------------------------------------------
+#
+# Until an agent actually owns the endpoint, the pane is still a plain shell,
+# and everything typed into it is SHELL input. That is the dead-pane brief
+# spill (recorded 2026-08-12, reproduced across claude, pi, and cursor targets
+# on herdr): the launch line - which carries the brief for every verified
+# adapter except kimi - lands in a shell that never starts the agent, the brief
+# becomes zsh `quote>` continuation soup, and the pane still LOOKS alive, so a
+# later fm-send happily "succeeds" into that same shell. The failure was silent
+# because nothing between "Enter was sent" and "spawned <id>" ever asked
+# whether an agent had appeared.
+#
+# The check reads the SHARED liveness owner (fm_backend_agent_state in
+# bin/fm-backend.sh, which routes tmux through pane-command identification and
+# herdr through its structured agent registry) rather than adding a
+# spawn-local sleep-and-hope or a second liveness state machine.
+SPAWN_AGENT_UP_LAST_STATE=
+SPAWN_AGENT_UP_BOUND_DESC=
+SPAWN_AGENT_UP_POLLS_DONE=0
+
+# spawn_wait_agent_up <target> <strict>: bounded wait for a real agent to own
+# <target>. Hard bound: at most FM_SPAWN_AGENT_UP_MAX_POLLS reads (default 60)
+# with FM_SPAWN_AGENT_UP_SLEEP seconds between them (default 1; 0 allowed for
+# tests), both validated before the endpoint was ever touched, so it never
+# waits unbounded and always terminates. The default matches the worktree
+# settle bound above and is deliberately generous: a healthy agent that is
+# merely slow to appear must never be refused, while the cost of the full bound
+# is only ever paid by a spawn that already failed.
+#
+# The return codes separate a check that RAN AND FAILED from one that could not
+# run at all, because only the first is grounds for refusing healthy work:
+#   0  an agent is proven up.
+#   1  the bound ran out with the endpoint still not hosting an agent (for a
+#      strict caller, still unreadable counts) - the check ran and failed.
+#   2  this backend/harness pair cannot attribute the pane's process, so
+#      nothing is proven either way.
+#   3  the endpoint is structurally GONE, which is terminal on the first read.
+#   4  this backend has no liveness reader at all, so the check is UNSUPPORTED
+#      rather than failed.
+# The caller picks how much proof it needs:
+#   strict=1 (a brief is about to be TYPED into the pane) demands a positive
+#            `alive`; a bare shell and an unreadable pane both fail, because
+#            typing into either of them is the spill itself.
+#   strict=0 (the brief already rode the launch line) refuses only on a PROVEN
+#            agent-less endpoint, so a harness whose process cannot be
+#            attributed from outside the pane (pi's generic node on tmux) keeps
+#            behaving exactly as before instead of failing on a signal that was
+#            never available.
+# `unverified` (zellij, orca, cmux) is a static backend capability, not a
+# transient read, so polling it again can never change the answer and the wait
+# ends on the first one; an unsupported check must never remove a capability
+# that worked before, so both callers then PROCEED - the strict one only after
+# saying out loud that it could not verify. `missing` is terminal in the other
+# direction: herdr reports it only for a structurally gone pane, and a gone
+# pane can never come back and host an agent, so waiting out the bound would
+# only delay a failure that the first read already proved. An `unreadable` read
+# may be a one-off CLI hiccup, so a non-strict caller wants two consecutive
+# ones before treating it as this pair's standing answer - the same
+# two-consecutive-reads discipline the worktree settle loop above uses.
+spawn_wait_agent_up() {  # <target> <strict>
+  local target=$1 strict=$2 polls=$SPAWN_AGENT_UP_POLLS sleep_s=$SPAWN_AGENT_UP_SLEEP_S attempt=0 state inconclusive=0
+  SPAWN_AGENT_UP_BOUND_DESC="${polls} poll(s) x ${sleep_s}s"
+  SPAWN_AGENT_UP_POLLS_DONE=0
+  while [ "$attempt" -lt "$polls" ]; do
+    state=$(fm_backend_agent_state "$BACKEND" "$target")
+    SPAWN_AGENT_UP_LAST_STATE=$state
+    attempt=$((attempt + 1))
+    SPAWN_AGENT_UP_POLLS_DONE=$attempt
+    case "$state" in
+      alive) return 0 ;;
+      missing) return 3 ;;
+      unverified) return 4 ;;
+      unreadable)
+        inconclusive=$((inconclusive + 1))
+        if [ "$strict" != 1 ] && [ "$inconclusive" -ge 2 ]; then return 2; fi
+        ;;
+      *)
+        # dead: a bare shell still owns the pane, and a healthy agent that is
+        # merely slow to appear replaces it, so keep waiting for the bound.
+        inconclusive=0
+        ;;
+    esac
+    [ "$attempt" -lt "$polls" ] || break
+    sleep "$sleep_s"
+  done
+  return 1
+}
+
+# spawn_refuse_agent_never_started <launch|brief>: the loud, recoverable end of
+# a spill. Nothing is torn down - the meta, the worktree lease, and the brief
+# all survive - so the task can be recovered in place, and the message carries
+# the exact recovery rather than leaving firstmate to reconstruct it: interrupt
+# twice, then relaunch in a shape that POINTS AT the brief file. That
+# file-pointer recovery is the one recorded as working every time, and it is
+# rendered from this task's own launch template, so it is the real command for
+# this harness, model, and effort, not a generic hint.
+#
+# The recovery has two shapes because the adapters do. A template carrying
+# __ENCODED_BRIEF__ takes the pointer as its brief argument, so ONE line both
+# launches and briefs. A template without it (kimi, which has no positional
+# interactive brief and cannot combine --prompt with --yolo) physically cannot
+# accept a brief on its launch line, so printing a single command there would
+# print one that silently starts an agent with no brief at all. That case gets
+# an explicit TWO-STEP recovery instead: launch the TUI, then deliver the
+# pointer into it as a separate fm-send text delivery.
+spawn_print_in_pane_recovery() {
+  local pointer sq_pointer recovery sq_home sq_send
+  pointer="Read $BRIEF and execute it fully. Work in the current directory - it is your isolated task worktree."
+  sq_pointer=$(shell_quote "$pointer")
+  sq_home=$(shell_quote "$FM_HOME")
+  sq_send=$(shell_quote "$FM_ROOT/bin/fm-send.sh")
+  echo "Recover it without retyping the brief through the shell:"
+  echo "  1. Interrupt the pane twice: FM_HOME=$sq_home $sq_send $(shell_quote "$ID") --key C-c (run it twice)"
+  case "$LAUNCH_TEMPLATE" in
+    *__ENCODED_BRIEF__*)
+      recovery=$(spawn_render_launch "$sq_pointer")
+      echo "  2. Send this ONE-LINE relaunch to the same pane; it points at the brief file instead of pasting it:"
+      echo "       cd $(shell_quote "$WT") && $recovery"
+      ;;
+    *)
+      recovery=$(spawn_render_launch "")
+      echo "  2. Start $HARNESS in the same pane. It cannot take a brief on its launch line at all, so this command carries none and step 3 delivers the brief separately:"
+      echo "       cd $(shell_quote "$WT") && $recovery"
+      echo "  3. Wait for the TUI to accept input, then deliver the brief as a FILE POINTER into it:"
+      echo "       FM_HOME=$sq_home $sq_send $(shell_quote "$ID") $sq_pointer"
+      ;;
+  esac
+}
+
+spawn_refuse_agent_never_started() {  # <phase>
+  local phase=$1
+  {
+    echo "error: $ID: no agent is running in $T after $SPAWN_AGENT_UP_POLLS_DONE of $SPAWN_AGENT_UP_BOUND_DESC (last liveness read: ${SPAWN_AGENT_UP_LAST_STATE:-none}); refusing to report this spawn as started"
+    if [ "$phase" = brief ]; then
+      echo "The brief was NOT delivered: typing it into a pane that is still a plain shell is the dead-pane spill, where the brief becomes shell input and no agent ever reads it."
+    else
+      echo "The launch command carries the brief, so it went into a pane that is still a plain shell: the brief becomes shell continuation input, no agent starts, and the pane keeps looking alive."
+    fi
+    echo "Nothing was torn down. $ID keeps its worktree ($WT), its brief ($BRIEF), and its durable record ($STATE/$ID.meta), so it is recoverable in place."
+    spawn_print_in_pane_recovery
+    echo "Never paste a multi-line brief inline through a shell: that is what spills."
+  } >&2
+  exit 1
+}
+
+# spawn_render_respawn_command: the command that re-creates THIS task, rendered
+# from its own resolved kind and axes so it can be copied and run as printed.
+# A bare `fm-spawn.sh <id> <path>` would re-resolve the harness from config and
+# the backend from detection, and would come back kind=ship: a scout would
+# silently return as a crewmate, and a secondmate home would be treated as an
+# ordinary project and get a crewmate spawned into it. PROJ_ABS is already the
+# right positional for either kind - the project dir for ship/scout, the
+# validated firstmate home for a secondmate.
+spawn_render_respawn_command() {
+  local cmd sq_home sq_spawn
+  sq_home=$(shell_quote "$FM_HOME")
+  sq_spawn=$(shell_quote "$FM_ROOT/bin/fm-spawn.sh")
+  cmd="FM_HOME=$sq_home $sq_spawn $(shell_quote "$ID") $(shell_quote "$PROJ_ABS")"
+  case "$KIND" in
+    scout) cmd="$cmd --scout" ;;
+    secondmate) cmd="$cmd --secondmate" ;;
+  esac
+  cmd="$cmd --harness $(shell_quote "$HARNESS") --backend $(shell_quote "$BACKEND")"
+  [ -z "$MODEL" ] || cmd="$cmd --model $(shell_quote "$MODEL")"
+  [ -z "$EFFORT" ] || cmd="$cmd --effort $(shell_quote "$EFFORT")"
+  [ -z "$OUTCOME" ] || cmd="$cmd --outcome $(shell_quote "$OUTCOME")"
+  [ -z "$TASK_TYPE" ] || cmd="$cmd --task-type $(shell_quote "$TASK_TYPE")"
+  printf '%s' "$cmd"
+}
+
+spawn_warn_unverified_delivery() {  # <unreadable|unsupported>
+  local reason=$1 sq_home sq_peek
+  sq_home=$(shell_quote "$FM_HOME")
+  sq_peek=$(shell_quote "$FM_ROOT/bin/fm-peek.sh")
+  {
+    echo "warning: $ID: this spawn could not confirm that $HARNESS actually owns the $BACKEND pane before the brief was delivered, so the brief may have gone into a shell."
+    case "$reason" in
+      unsupported) echo "The $BACKEND backend cannot report agent liveness for the $HARNESS harness at all; delivery proceeded UNVERIFIED." ;;
+      unreadable) echo "The $BACKEND pane could not be read for the $HARNESS harness; delivery proceeded UNVERIFIED." ;;
+    esac
+    echo "If the brief does not land, peek with: FM_HOME=$sq_home $sq_peek $(shell_quote "$ID")"
+    echo "If it is sitting at a shell rather than an agent:"
+    spawn_print_in_pane_recovery
+  } >&2
+}
+
+# spawn_refuse_endpoint_missing <launch|brief>: the endpoint is structurally
+# gone, not merely agent-less. No further polling can undo that, so this fires
+# on the first read rather than waiting out the bound, and the recovery is a
+# RE-SPAWN: telling anyone to interrupt and relaunch inside a pane that no
+# longer exists is a dead instruction. Like the refusal above it tears nothing
+# down, so the re-spawn reuses this task's existing brief.
+spawn_refuse_endpoint_missing() {  # <phase>
+  local phase=$1
+  {
+    echo "error: $ID: the endpoint $T is gone (liveness read: ${SPAWN_AGENT_UP_LAST_STATE:-missing}) after $SPAWN_AGENT_UP_POLLS_DONE of $SPAWN_AGENT_UP_BOUND_DESC; refusing to report this spawn as started"
+    if [ "$phase" = brief ]; then
+      echo "The brief was NOT delivered: there is no pane left to deliver it into."
+    else
+      echo "The launch command carried the brief into an endpoint that no longer exists, so no agent ever read it."
+    fi
+    echo "Nothing was torn down. $ID keeps its worktree ($WT), its brief ($BRIEF), and its durable record ($STATE/$ID.meta)."
+    echo "A gone endpoint can never come back and host an agent, so do NOT relaunch into it - there is nothing there to interrupt or type into. RE-SPAWN the task onto a fresh endpoint instead, with this exact command; the existing brief ($BRIEF) is reused as is:"
+    echo "       $(spawn_render_respawn_command)"
+  } >&2
+  exit 1
+}
+
 # Export GOTMPDIR into the crewmate's pane shell so the agent and every child
 # process (go build, go test, ...) inherit it. Sent before the launch command so
 # the env is set when the agent starts; the brief sleep lets the export land.
@@ -1640,13 +1904,43 @@ sleep 0.3
 spawn_send_literal "$T" "$LAUNCH"
 sleep 0.3
 spawn_send_key "$T" Enter
-# kimi: no positional interactive brief and --prompt cannot combine with --yolo
-# (verified 2026-07-21/2026-07-23). Deliver the brief after the TUI settles.
-if [ "$HARNESS" = kimi ] && [ "$RAW_LAUNCH" -eq 0 ]; then
-  sleep "${FM_KIMI_BRIEF_SETTLE_SECS:-2}"
-  spawn_send_literal "$T" "$ENCODED_BRIEF"
-  sleep 0.5
-  spawn_send_key "$T" Enter
+# A raw launch command is the escape hatch for an UNVERIFIED adapter, which may
+# legitimately never register as a recognized agent, so it keeps the old
+# unverified behavior rather than being refused for an unmet expectation.
+if [ "$RAW_LAUNCH" -eq 0 ]; then
+  agent_up_rc=0
+  if [ "$HARNESS" = kimi ]; then
+    # kimi has no positional interactive brief and cannot combine --prompt with
+    # --yolo (verified 2026-07-21/2026-07-23), so its brief is a SEPARATE
+    # delivery into the agent's own composer - the one path where firstmate
+    # types the brief itself. Prove the agent owns the pane before typing.
+    spawn_wait_agent_up "$T" 1 || agent_up_rc=$?
+    case "$agent_up_rc" in
+      0) ;;
+      3) spawn_refuse_endpoint_missing brief ;;
+      4)
+        # An UNSUPPORTED check is not a failed one, and it must not take away a
+        # spawn that worked before this gate existed. Proceed on the old
+        # sleep-and-type path, but say so once and loudly.
+        spawn_warn_unverified_delivery unsupported
+        ;;
+      *) spawn_refuse_agent_never_started brief ;;
+    esac
+    # Liveness only proves the process is up; the TUI still needs a beat before
+    # it accepts input, which is what this settle has always been for.
+    sleep "${FM_KIMI_BRIEF_SETTLE_SECS:-2}"
+    spawn_send_literal "$T" "$ENCODED_BRIEF"
+    sleep 0.5
+    spawn_send_key "$T" Enter
+  else
+    spawn_wait_agent_up "$T" 0 || agent_up_rc=$?
+    case "$agent_up_rc" in
+      1) spawn_refuse_agent_never_started launch ;;
+      2) spawn_warn_unverified_delivery unreadable ;;
+      3) spawn_refuse_endpoint_missing launch ;;
+      4) spawn_warn_unverified_delivery unsupported ;;
+    esac
+  fi
 fi
 
 if [ "$KIND" = secondmate ]; then

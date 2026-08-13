@@ -54,6 +54,9 @@ set -u
 printf '%s\n' "$*" >> "${FM_FAKE_ENDPOINT_LOG:?}"
 case "$*" in
   *"#{pane_current_path}"*) printf '%s\n' "${FM_FAKE_PANE_PATH:-}"; exit 0 ;;
+  # The launched harness owns the pane once it starts, which is what fm-spawn's
+  # agent-up check reads before it reports success or types a post-launch brief.
+  *"#{pane_current_command}"*) printf '%s\n' "${FM_FAKE_PANE_COMMAND:-firstmate}"; exit 0 ;;
 esac
 case "${1:-}" in
   display-message) printf 'firstmate\n'; exit 0 ;;
@@ -75,6 +78,10 @@ SH
   chmod +x "$FAKEBIN_DIR/tmux"
   fm_fake_exit0 "$FAKEBIN_DIR" treehouse
 
+  # Once the launch lands, the harness binary is the pane's foreground command.
+  # kimi needs that to be readable: its brief is typed into the agent after the
+  # launch, so fm-spawn refuses to deliver it until liveness is proven.
+  export FM_FAKE_PANE_COMMAND="$launch_binary"
   if [ -n "$launch_binary" ]; then
     cat > "$FAKEBIN_DIR/$launch_binary" <<'SH'
 #!/usr/bin/env bash
@@ -91,6 +98,7 @@ run_spawn() {
     FM_STATE_OVERRIDE="${STATE_DIR_SHORT:-$HOME_DIR/state}" FM_DATA_OVERRIDE="$HOME_DIR/data" \
     FM_PROJECTS_OVERRIDE="$HOME_DIR/projects" FM_CONFIG_OVERRIDE="$HOME_DIR/config" \
     FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$WT_DIR" TMUX="fake,1,0" \
+    FM_FAKE_PANE_COMMAND="${FM_FAKE_PANE_COMMAND:-}" FM_SPAWN_AGENT_UP_SLEEP=0 \
     FM_FAKE_ENDPOINT_LOG="$ENDPOINT_LOG" FM_FAKE_LAUNCH_LOG="$LAUNCH_LOG" \
     FM_FAKE_PROBE_LOG="$PROBE_LOG" GROK_HOME="$HOME_DIR/grok-home" \
     FM_PRIME_AGENT_SOURCE_HOME="$HOME_DIR/no-prime-home" \

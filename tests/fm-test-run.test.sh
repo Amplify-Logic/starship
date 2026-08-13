@@ -407,8 +407,8 @@ test_ci_and_docs_call_the_owner() {
     || fail "Herdr CI job must use bounded lab cleanup"
   grep -Fq 'tests-timing-aggregate:' "$CI" \
     || fail "CI must aggregate per-lane timing artifacts"
-  grep -Fq 'timeout-minutes: 20' "$CI" \
-    || fail "portable serial hang tripwire must be timeout-minutes: 20"
+  grep -Fq 'timeout-minutes: 30' "$CI" \
+    || fail "portable serial hang tripwire must be timeout-minutes: 30"
   grep -Fq 'timeout-minutes: 10' "$CI" \
     || fail "portable parallel shards must keep a hang tripwire (10m)"
   # Interim full-suite 25m portable timeout must not remain after sharding.

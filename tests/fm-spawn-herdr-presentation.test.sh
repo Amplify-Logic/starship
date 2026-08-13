@@ -136,7 +136,7 @@ case "$cmd $sub" in
     query --arg id "$target" '.tabs |= map(select(.pane_id != $id))' | save
     ;;
   'pane read'|'pane send-text'|'pane send-keys') : ;;
-  'agent get') printf '{"result":{"agent":{"agent":"pi","agent_status":"idle"}}\n' ;;
+  'agent get') printf '{"result":{"agent":{"agent":"pi","agent_status":"idle"}}}\n' ;;
   *) : ;;
 esac
 SH
