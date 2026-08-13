@@ -40,7 +40,8 @@
 #     escalated only after it has been idle for STALE_ESCALATE_SECS
 #     (configurable), rechecked once. A wedged crewmate is therefore detected
 #     within STALE_ESCALATE_SECS + a tick, never lost. A declared pause instead
-#     gets its own longer PAUSE_RESURFACE_SECS recheck, never a wedge escalation.
+#     gets its own longer recheck cadence (the pause knobs below), never a wedge
+#     escalation.
 #     Crewmates are autonomous, so a delayed stale response does not stall a
 #     healthy crewmate's own progress.
 #     Buffered escalation delivery also has a max-defer alarm: if a digest stays
@@ -86,6 +87,9 @@
 #                                   as a possible wedge (default 240)
 #          FM_PAUSE_RESURFACE_SECS  idle seconds before a declared external wait
 #                                   re-surfaces as a recheck (default 3600)
+#          FM_PAUSE_CAPTAIN_RESURFACE_SECS
+#                                   idle seconds before a captain-named wait
+#                                   re-surfaces (default 28800)
 #          FM_ESCALATE_BATCH_SECS   buffer window for batched escalation
 #                                   digests; 0 = flush immediately (default 90)
 #          FM_HEARTBEAT_SCAN_SECS   cadence for the catch-all status scan
@@ -474,8 +478,9 @@ stale_marker_remove() {  # <window> <state>
 }
 
 # Pause marker: state/.subsuper-paused-<key> holds the epoch a declared pause was
-# first observed idle. Housekeeping ages it against PAUSE_RESURFACE_SECS (much
-# longer than a wedge) and re-surfaces the pause once per window. Recording is
+# first observed idle. Housekeeping ages it against that wait's re-surface cadence
+# (much longer than a wedge) and re-surfaces the pause once per window, sharing one
+# recheck with any other due wait naming the same blocker. Recording is
 # create-if-absent so the timestamp is stable across a churny idle pane (many
 # distinct stale hashes map to one marker), keeping the cadence hash-immune.
 pause_marker_record() {  # <window> <state> - create if absent
@@ -1030,6 +1035,37 @@ _oldest_line_age() {  # <buf> -> seconds since the oldest buffered item first ar
   fi
 }
 
+# Digest wording for one grouped blocker. The grouping itself is pause_due_fold
+# in bin/fm-classify-lib.sh, shared with the watcher.
+_pause_recheck_line() {  # <count> <max-age> <note> <windows> <gated>
+  local count=$1 max_age=$2 note=$3 wins=$4 gated=$5 line
+  if [ "$count" -eq 1 ]; then
+    line="paused ${max_age}s (awaiting external, recheck whether the wait still holds): $wins"
+  else
+    line="paused ${max_age}s (awaiting external, $count tasks sharing one wait, recheck whether the wait still holds): $note [$wins]"
+  fi
+  if [ "$gated" = 1 ]; then
+    line="$line (cannot clear until the captain acts)"
+  fi
+  printf '%s\n' "$line"
+}
+
+# Escalate one item per distinct blocker, then reset every grouped marker so the
+# window repeats. The markers are stamped only after the digest lines are in the
+# buffer: a failed escalate_add must not silence a due wait for a whole window.
+_pause_recheck_flush() {  # <state> <due-file>
+  local state=$1 due=$2 line marker
+  [ -s "$due" ] || return 0
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    escalate_add "$state" "$line" || return 1
+  done < <(pause_due_fold "$due" _pause_recheck_line)
+  while IFS= read -r marker; do
+    [ -n "$marker" ] || continue
+    _now > "$marker"
+  done < <(pause_due_markers "$due")
+}
+
 # --- housekeeping (runs every tick while the watcher is mid-cycle) ----------
 # Four cheap jobs, each guarded so an empty/quiet fleet costs near zero:
 #  1) batch flush: if the escalation buffer's oldest content is older than
@@ -1039,13 +1075,14 @@ _oldest_line_age() {  # <buf> -> seconds since the oldest buffered item first ar
 #     Never silently defer forever.
 #  2) stale recheck: for each pending stale marker past STALE_ESCALATE_SECS,
 #     re-peek the pane; still idle -> escalate (wedge); resumed -> clear marker.
-#  2b) pause re-surface: for each declared-pause marker past PAUSE_RESURFACE_SECS,
-#     re-peek; busy/gone -> clear; still idle + still paused -> escalate a recheck
-#     digest and reset the window (repeating bounded re-surface, never a wedge).
+#  2b) pause re-surface: for each declared-pause marker past its cadence,
+#     re-peek; busy/gone -> clear; still idle + still paused -> record a due
+#     recheck. Due waits that share one blocking reason escalate as one item.
 #  3) heartbeat scan: every HEARTBEAT_SCAN_SECS, grep state/*.status for a
 #     captain-relevant line the per-wake classifier missed and escalate it.
 housekeeping() {  # <state>
   local state=$1 now due f key task win marker age last max_defer oldest pause_secs
+  local pause_due pause_floor pause_captain_secs
   now=$(_now)
   migrate_watcher_pause_markers "$state"
 
@@ -1108,12 +1145,22 @@ housekeeping() {  # <state>
   done
 
   # (2b) pause re-surface recheck. A DECLARED external-wait pause idles by design,
-  # so it is rechecked on a much longer cadence than a wedge (PAUSE_RESURFACE_SECS)
-  # and never escalated as one - but it MUST re-surface, so a forgotten pause cannot
+  # so it is rechecked on a much longer cadence than a wedge (PAUSE_RESURFACE_SECS,
+  # or PAUSE_CAPTAIN_RESURFACE_SECS when the wait names a captain decision) and
+  # never escalated as one - but it MUST re-surface, so a forgotten pause cannot
   # rot invisibly. Past the window: busy (resumed) or gone -> drop; still idle and
-  # still declaring the pause -> escalate a recheck digest and reset the marker so
-  # the window repeats.
-  pause_secs=${FM_PAUSE_RESURFACE_SECS:-$FM_PAUSE_RESURFACE_SECS_DEFAULT}
+  # still declaring the pause -> record a due recheck. Due waits that share one
+  # blocking reason escalate as a single item; distinct reasons stay separate.
+  # Each grouped marker resets so the window repeats.
+  #
+  # Cheapest gate first: no marker can be due before the shorter of the two
+  # cadences, and that bound is pure arithmetic. Only markers that already
+  # cleared it pay for pause_resurface_secs_for_line, which forks.
+  pause_floor=${FM_PAUSE_RESURFACE_SECS:-$FM_PAUSE_RESURFACE_SECS_DEFAULT}
+  pause_captain_secs=${FM_PAUSE_CAPTAIN_RESURFACE_SECS:-$FM_PAUSE_CAPTAIN_RESURFACE_SECS_DEFAULT}
+  [ "$pause_captain_secs" -lt "$pause_floor" ] && pause_floor=$pause_captain_secs
+  pause_due="$state/.subsuper-pause-due.$$"
+  rm -f "$pause_due"
   for marker in "$state"/.subsuper-paused-*; do
     [ -e "$marker" ] || continue
     key="${marker##*.subsuper-paused-}"
@@ -1128,6 +1175,8 @@ housekeeping() {  # <state>
       continue
     fi
     age=$(( now - $(cat "$marker" 2>/dev/null || echo "$now") ))
+    [ "$age" -ge "$pause_floor" ] || continue
+    pause_secs=$(pause_resurface_secs_for_line "$last")
     [ "$age" -ge "$pause_secs" ] || continue
     stale_window_is_busy "$win" "$state"
     case "$?" in
@@ -1136,14 +1185,15 @@ housekeeping() {  # <state>
       *)
         last=$(last_status_line "$state/$task.status")
         if [ -n "$last" ] && status_is_paused "$last"; then
-          escalate_add "$state" "paused ${age}s (awaiting external, recheck whether the wait still holds): $win"
-          _now > "$marker"
+          pause_due_append "$pause_due" "$last" "$age" "$win" "$marker"
         else
           rm -f "$marker"
         fi
         ;;
     esac
   done
+  _pause_recheck_flush "$state" "$pause_due"
+  rm -f "$pause_due"
 
   # (3) heartbeat scan (catch-all for a captain-relevant status the per-wake
   #     classifier may have missed). Cheap: status files only, no tmux. The

@@ -794,6 +794,61 @@ unit_flag_write_failure_aborts() {
   rm -rf "$st"
 }
 
+# Documented daemon knobs must appear in the fresh-terminal command when set in
+# the launcher process, and stay absent when unset, so exporting them before
+# calling the launcher actually reaches the daemon.
+unit_daemon_cmd_forwards_documented_knobs() {
+  local st cmd
+  st=$(mktemp -d "${TMPDIR:-/tmp}/fm-afk-knobs.XXXXXX")
+  mkdir -p "$st/state"
+  cmd=$(
+    FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" \
+      FM_PAUSE_RESURFACE_SECS=7200 FM_STALE_ESCALATE_SECS=99 \
+      FM_ESCALATE_BATCH_SECS=5 FM_MAX_DEFER_SECS=11 FM_INJECT_SKIP=heartbeat \
+      bash -c '. "$1"; fm_afk_launch_daemon_cmd captain:0 tmux' _ "$LAUNCH"
+  )
+  printf '%s' "$cmd" | grep -Fq 'FM_HOME=' || fail "daemon cmd omitted FM_HOME"
+  printf '%s' "$cmd" | grep -Fq 'FM_SUPERVISOR_TARGET=' || fail "daemon cmd omitted FM_SUPERVISOR_TARGET"
+  printf '%s' "$cmd" | grep -Fq 'FM_SUPERVISOR_BACKEND=' || fail "daemon cmd omitted FM_SUPERVISOR_BACKEND"
+  printf '%s' "$cmd" | grep -Fq 'FM_PAUSE_RESURFACE_SECS=7200' \
+    || fail "set FM_PAUSE_RESURFACE_SECS was not forwarded: $cmd"
+  printf '%s' "$cmd" | grep -Fq 'FM_STALE_ESCALATE_SECS=99' \
+    || fail "set FM_STALE_ESCALATE_SECS was not forwarded: $cmd"
+  printf '%s' "$cmd" | grep -Fq 'FM_ESCALATE_BATCH_SECS=5' \
+    || fail "set FM_ESCALATE_BATCH_SECS was not forwarded: $cmd"
+  printf '%s' "$cmd" | grep -Fq 'FM_MAX_DEFER_SECS=11' \
+    || fail "set FM_MAX_DEFER_SECS was not forwarded: $cmd"
+  printf '%s' "$cmd" | grep -Fq 'FM_INJECT_SKIP=heartbeat' \
+    || fail "set FM_INJECT_SKIP was not forwarded: $cmd"
+  cmd=$(
+    FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" \
+      bash -c '. "$1"; unset FM_PAUSE_RESURFACE_SECS FM_STALE_ESCALATE_SECS; fm_afk_launch_daemon_cmd captain:0 tmux' _ "$LAUNCH"
+  )
+  printf '%s' "$cmd" | grep -Fq 'FM_PAUSE_RESURFACE_SECS=' \
+    && fail "unset FM_PAUSE_RESURFACE_SECS was forwarded: $cmd"
+  printf '%s' "$cmd" | grep -Fq 'FM_STALE_ESCALATE_SECS=' \
+    && fail "unset FM_STALE_ESCALATE_SECS was forwarded: $cmd"
+  if FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" FM_PAUSE_RESURFACE_SECS=7200 bash -c '
+    . "$1"
+    tmux() {
+      [ "$1" = new-session ] || return 1
+      printf "%s" "$5" > "$FM_HOME/created-cmd"
+      return 1
+    }
+    ! fm_afk_launch_create_tmux captain:0 tmux
+  ' _ "$LAUNCH"; then
+    cmd=$(cat "$st/created-cmd" 2>/dev/null || true)
+    if printf '%s' "$cmd" | grep -Fq 'FM_PAUSE_RESURFACE_SECS=7200'; then
+      pass "launcher forwards documented daemon knobs into the fresh-terminal command"
+    else
+      fail "tmux launch command did not forward FM_PAUSE_RESURFACE_SECS: $cmd"
+    fi
+  else
+    fail "tmux launch helper did not run far enough to capture the daemon command"
+  fi
+  rm -rf "$st"
+}
+
 # ---------------------------------------------------------------------------
 # E2E herdr: topology invariant.
 # ---------------------------------------------------------------------------
@@ -923,6 +978,7 @@ unit_clear_failure_aborts_entry
 unit_confirmed_absence_succeeds
 unit_incomplete_restore_retains_backup
 unit_flag_write_failure_aborts
+unit_daemon_cmd_forwards_documented_knobs
 e2e_herdr
 e2e_tmux
 

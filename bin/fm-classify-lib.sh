@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Shared wake classifier: the common source of truth for captain-relevant status
-# tests, declared-external-wait vocabulary, and the working/paused absorb
-# classification that makes no-verb signal and stale-pane wakes safe to absorb.
+# tests, declared-external-wait vocabulary, the declared-pause recheck cadence and
+# shared-blocker grouping fold, and the working/paused absorb classification that
+# makes no-verb signal and stale-pane wakes safe to absorb.
 # Sourced by BOTH the always-on watcher
 # (bin/fm-watch.sh) and the away-mode daemon (bin/fm-supervise-daemon.sh) so the
 # overlapping triage policy lives in one place instead of two copies that can
@@ -13,7 +14,10 @@
 # daemon keeps its escalation-digest seen-markers; the watcher keeps its .seen-*
 # signatures).
 #
-# The one exception is the absorb classification (crew_absorb_class and its
+# The pause-due helpers are the narrow exception to "reads only": they append to
+# and re-read the work file the caller names, and touch nothing else.
+#
+# The other exception is the absorb classification (crew_absorb_class and its
 # working/paused wrappers). It is NOT a pure status-file read: it reuses
 # bin/fm-crew-state.sh, which may make a bounded no-mistakes call, to decide
 # whether a crew that just stopped its turn or went stale is working, deliberately
@@ -63,8 +67,12 @@ FM_CLASSIFY_PAUSED_VERB_DEFAULT='paused'
 # invisibly - it re-surfaces once for a recheck every window. One hour by default;
 # both consumers read FM_PAUSE_RESURFACE_SECS with this default so the cadence has
 # one owner.
-# shellcheck disable=SC2034 # Read by the watcher and daemon (fm-watch.sh, fm-supervise-daemon.sh), not this lib.
 FM_PAUSE_RESURFACE_SECS_DEFAULT=3600
+# A wait that names an explicit captain decision cannot clear until the captain
+# acts, so the ordinary hourly recheck would only repeat the same escalation.
+# Eight hours by default; both consumers read FM_PAUSE_CAPTAIN_RESURFACE_SECS
+# with this default so that longer cadence has one owner.
+FM_PAUSE_CAPTAIN_RESURFACE_SECS_DEFAULT=28800
 
 # The resolution verb and durable-backlog-transfer verb that CLOSE a keyed
 # status decision opened by needs-decision or blocked. See status_open_decisions
@@ -172,6 +180,116 @@ status_line_note() {  # <status-line> -> text after the first colon, trimmed
     *) printf '%s' "$1" ;;
   esac
 }
+
+# Normalized grouping key for a declared-pause reason: lowercase, collapsed
+# whitespace. Identical blockers written with different casing still share one
+# recheck; distinct notes stay distinct. An empty note yields an empty key.
+status_pause_reason_key() {  # <status-line> -> grouping key
+  local n
+  n=$(status_line_note "$1")
+  n=$(printf '%s' "$n" | LC_ALL=C tr '[:upper:]' '[:lower:]' | LC_ALL=C tr -s '[:space:]' ' ')
+  n=${n#"${n%%[![:space:]]*}"}
+  n=${n%"${n##*[![:space:]]}"}
+  printf '%s' "$n"
+}
+
+# 0 if the wait names an explicit captain decision, including a captain-held
+# transfer. Those waits cannot clear until the captain acts.
+status_pause_is_captain_gated() {  # <status-line>
+  local verb key
+  verb=$(status_line_verb "$1")
+  [ "$verb" = "${FM_CLASSIFY_CAPTAIN_HELD_VERB:-$FM_CLASSIFY_CAPTAIN_HELD_VERB_DEFAULT}" ] && return 0
+  key=$(status_pause_reason_key "$1")
+  [ -n "$key" ] || return 1
+  printf '%s' "$key" | grep -qiE '(^|[^[:alnum:]])captain([^[:alnum:]]|$)'
+}
+
+# Seconds before this declared wait re-surfaces. Captain-gated waits use the
+# longer cadence; every other pause uses the ordinary one.
+pause_resurface_secs_for_line() {  # <status-line> -> seconds
+  if status_pause_is_captain_gated "$1"; then
+    printf '%s\n' "${FM_PAUSE_CAPTAIN_RESURFACE_SECS:-$FM_PAUSE_CAPTAIN_RESURFACE_SECS_DEFAULT}"
+  else
+    printf '%s\n' "${FM_PAUSE_RESURFACE_SECS:-$FM_PAUSE_RESURFACE_SECS_DEFAULT}"
+  fi
+}
+
+# --- declared-pause recheck grouping ---------------------------------------
+# Both supervisors gather the pauses that are due for a recheck into a TSV work
+# file and report one item per distinct blocker. The record format and the
+# group-by-reason fold have a single owner here, so the watcher and the daemon
+# cannot drift apart; each caller supplies only its own wording and decides for
+# itself when the throttles are safe to commit.
+#
+# Record: <reason-key>\t<age>\t<window>\t<throttle-marker>\t<display-note>\t<gated>
+pause_due_append() {  # <due-file> <status-line> <age> <window> <throttle-marker>
+  local due=$1 last=$2 age=$3 win=$4 marker=$5 reason_key display gated
+  reason_key=$(status_pause_reason_key "$last")
+  [ -n "$reason_key" ] || reason_key="unspecified wait"
+  display=$(status_line_note "$last" | LC_ALL=C tr '\t\r\n' '   ')
+  display=${display#"${display%%[![:space:]]*}"}
+  display=${display%"${display##*[![:space:]]}"}
+  [ -n "$display" ] || display=$reason_key
+  gated=0
+  status_pause_is_captain_gated "$last" && gated=1
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$reason_key" "$age" "$win" "$marker" "$display" "$gated" >> "$due"
+}
+
+# The throttle marker / window of every due record, one per line, so a caller
+# can commit its re-surface state after - never before - its report is durable.
+pause_due_markers() {  # <due-file>
+  [ -s "$1" ] || return 0
+  cut -f4 "$1"
+}
+pause_due_windows() {  # <due-file>
+  [ -s "$1" ] || return 0
+  cut -f3 "$1"
+}
+
+# One formatted line per distinct blocker. <formatter> is invoked as
+#   <formatter> <count> <max-age> <note> <windows> <gated>
+# and prints that caller's wording; the grouping decision itself lives here.
+#
+# The reported window list and its count are per distinct WINDOW, not per record.
+# Several records can name one backend window - the daemon keys its throttles per
+# task, so two tasks sharing a window legitimately hold two markers - and a window
+# named twice would report as "2 tasks sharing one wait: [w, w]". Age, note and
+# gating still fold over every record, and pause_due_markers stays whole, so each
+# caller commits every throttle it collected regardless of this collapse.
+pause_due_fold() {  # <due-file> <formatter>
+  local due=$1 fmt=$2 rkey wins count max_age note gated seen_wins
+  local rec rec_us k age_i win_i display_i gated_flag
+  [ -s "$due" ] || return 0
+  while IFS= read -r rkey; do
+    [ -n "$rkey" ] || continue
+    wins=""; count=0; max_age=0; note=""; gated=0; seen_wins=
+    while IFS= read -r rec; do
+      [ -n "$rec" ] || continue
+      # Tab is IFS-whitespace, so IFS=<tab> read collapses consecutive tabs and
+      # shifts later fields when the display note is empty. ASCII US is not
+      # whitespace, so empty fields survive the split.
+      rec_us=${rec//$'\t'/$'\037'}
+      IFS=$'\037' read -r k age_i win_i _ display_i gated_flag <<< "$rec_us"
+      [ "$k" = "$rkey" ] || continue
+      [ "$age_i" -gt "$max_age" ] && max_age=$age_i
+      [ -n "$note" ] || note=$display_i
+      [ "$gated_flag" = 1 ] && gated=1
+      case "$seen_wins" in
+        *"|$win_i|"*) continue ;;
+      esac
+      seen_wins="$seen_wins|$win_i|"
+      count=$((count + 1))
+      if [ -z "$wins" ]; then
+        wins=$win_i
+      else
+        wins="$wins, $win_i"
+      fi
+    done < "$due"
+    "$fmt" "$count" "$max_age" "$note" "$wins" "$gated"
+  done < <(cut -f1 "$due" | awk 'NF && !seen[$0]++')
+}
+
 _fm_decision_key() {  # <status-line> -> key slug, or "default" when no token
   local prefix=${1%%:*} k
   case "$prefix" in

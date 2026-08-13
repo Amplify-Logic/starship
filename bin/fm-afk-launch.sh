@@ -43,6 +43,8 @@
 # terminal (default bin/fm-afk-start.sh), so a topology test can run a harmless
 # placeholder instead of a real daemon. FM_SUPERVISOR_TARGET/FM_SUPERVISOR_BACKEND
 # override the captured captain pane/backend (an isolated lab pane in tests).
+# Documented daemon tuning variables that are set in this process are forwarded
+# into the fresh terminal; see fm_afk_launch_daemon_cmd.
 set -u
 
 FM_AFK_LAUNCH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -136,6 +138,55 @@ fm_afk_launch_usage() {
 # daemon entry; a test overrides it with a harmless placeholder.
 fm_afk_launch_entry_cmd() {
   printf '%s' "${FM_AFK_LAUNCH_ENTRY:-$FM_ROOT/bin/fm-afk-start.sh}"
+}
+
+# Documented daemon tuning variables forwarded into the fresh terminal.
+# The new pane inherits nothing from the launcher process, so exporting these
+# before calling start only reaches the daemon when this command copies the
+# ones that are set here. FM_HOME / FM_SUPERVISOR_TARGET / FM_SUPERVISOR_BACKEND
+# are always set; the rest are omitted when unset so daemon defaults apply.
+FM_AFK_LAUNCH_DAEMON_KNOBS="
+FM_INJECT_SKIP
+FM_STALE_ESCALATE_SECS
+FM_PAUSE_RESURFACE_SECS
+FM_PAUSE_CAPTAIN_RESURFACE_SECS
+FM_ESCALATE_BATCH_SECS
+FM_HEARTBEAT_SCAN_SECS
+FM_HOUSEKEEPING_TICK
+FM_AFK_SENTINEL_RETRY_MAX_SECS
+FM_BUSY_REGEX
+FM_COMPOSER_IDLE_RE
+FM_MAX_DEFER_SECS
+FM_WEDGE_ALARM_CHANNEL
+FM_WEDGE_ALARM_EXEC
+FM_WEDGE_ALARM_TIMEOUT_SECS
+FM_WEDGE_ALARM_TITLE
+FM_WEDGE_ALARM_LOG_FILE
+FM_INJECT_CONFIRM_RETRIES
+FM_INJECT_CONFIRM_SLEEP
+FM_INJECT_FAIL_SLEEP
+FM_LOG_MAX_BYTES
+FM_LOG_KEEP_LINES
+FM_CRASH_THRESHOLD
+FM_CRASH_WINDOW
+FM_CRASH_BACKOFF
+FM_CRASH_NORMAL_SLEEP
+FM_STATE_OVERRIDE
+FM_SUPERVISION_SENTINEL_MODE
+"
+
+fm_afk_launch_daemon_cmd() {  # <captain-target> <captain-backend>
+  local captain_target=$1 captain_backend=$2 entry cmd var
+  entry=$(fm_afk_launch_entry_cmd)
+  cmd=$(printf 'exec env FM_HOME=%q FM_SUPERVISOR_TARGET=%q FM_SUPERVISOR_BACKEND=%q' \
+    "$FM_HOME" "$captain_target" "$captain_backend")
+  for var in $FM_AFK_LAUNCH_DAEMON_KNOBS; do
+    [ -n "$var" ] || continue
+    if [ -n "${!var+x}" ]; then
+      cmd=$(printf '%s %s=%q' "$cmd" "$var" "${!var}")
+    fi
+  done
+  printf '%s %q' "$cmd" "$entry"
 }
 
 fm_afk_launch_record_write() {  # <backend> <target> <extra>
@@ -367,7 +418,7 @@ fm_afk_launch_restore_backup() {  # <backup> <had-afk>
 # dedicated background workspace (--no-focus) holds exactly one tab/pane; it
 # never touches the captain's active tab. Prints the record line on success.
 fm_afk_launch_create_herdr() {  # <captain-target> <captain-backend>
-  local captain_target=$1 captain_backend=$2 session out wsid pane entry cmd label recovered create_result
+  local captain_target=$1 captain_backend=$2 session out wsid pane cmd label recovered create_result
   session=${captain_target%%:*}
   if [ -z "$session" ] || [ "$session" = "$captain_target" ]; then
     fm_afk_launch_log "cannot derive herdr session from captain target '$captain_target'"
@@ -398,9 +449,7 @@ fm_afk_launch_create_herdr() {  # <captain-target> <captain-backend>
     }
     IFS=$'\t' read -r wsid pane <<< "$recovered"
   fi
-  entry=$(fm_afk_launch_entry_cmd)
-  cmd=$(printf 'exec env FM_HOME=%q FM_SUPERVISOR_TARGET=%q FM_SUPERVISOR_BACKEND=%q %q' \
-    "$FM_HOME" "$captain_target" "$captain_backend" "$entry")
+  cmd=$(fm_afk_launch_daemon_cmd "$captain_target" "$captain_backend")
   if ! fm_afk_launch_record_write herdr "$session:$pane" "$wsid"; then
     fm_afk_launch_log "failed to persist herdr daemon terminal record; closing $session:$pane"
     fm_afk_launch_close_terminal herdr "$session:$pane"
@@ -421,13 +470,11 @@ fm_afk_launch_create_herdr() {  # <captain-target> <captain-backend>
 # captain's window). tmux pane ids are server-global, so the daemon reaches the
 # captain pane by its %id from this separate session.
 fm_afk_launch_create_tmux() {  # <captain-target> <captain-backend>
-  local captain_target=$1 captain_backend=$2 session entry cmd hash nonce
+  local captain_target=$1 captain_backend=$2 session cmd hash nonce
   hash=$(printf '%s' "$FM_HOME" | cksum | cut -d' ' -f1)
   nonce="$$-${RANDOM:-0}-$(date '+%s')"
   session="fm-afk-daemon-$hash-$nonce"
-  entry=$(fm_afk_launch_entry_cmd)
-  cmd=$(printf 'exec env FM_HOME=%q FM_SUPERVISOR_TARGET=%q FM_SUPERVISOR_BACKEND=%q %q' \
-    "$FM_HOME" "$captain_target" "$captain_backend" "$entry")
+  cmd=$(fm_afk_launch_daemon_cmd "$captain_target" "$captain_backend")
   if ! fm_afk_launch_record_write tmux "$session" ""; then
     fm_afk_launch_log "failed to persist planned tmux daemon session '$session'"
     return 1

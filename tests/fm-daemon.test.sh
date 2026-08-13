@@ -296,6 +296,106 @@ test_housekeeping_paused_resurfaces_and_resets() {
   pass "housekeeping re-surfaces a stale declared pause on the long cadence and resets its window"
 }
 
+# Several declared pauses that share one blocker must escalate as one digest
+# item. A distinct reason stays its own item. Each marker still resets.
+test_housekeeping_paused_groups_shared_reason() {
+  local dir state fakebin pane n line
+  dir=$(make_supercase paused-group)
+  state="$dir/state"; fakebin="$dir/fakebin"
+  pane="$dir/pane.txt"
+  printf 'idle prompt $\n' > "$pane"
+  seed_daemon_pause() {
+    local task=$1 win=$2 note=$3
+    printf 'window=%s\nkind=ship\n' "$win" > "$state/$task.meta"
+    printf 'paused: %s\n' "$note" > "$state/$task.status"
+    echo $(( $(date +%s) - 5000 )) > "$state/.subsuper-paused-$(printf '%s' "$task" | tr ':/.' '___')"
+  }
+  seed_daemon_pause merge-a "sess:fm-merge-a" "waiting for the captain merge decision"
+  seed_daemon_pause merge-b "sess:fm-merge-b" "Waiting  for the  captain merge decision"
+  seed_daemon_pause merge-c "sess:fm-merge-c" "waiting for the captain merge decision"
+  seed_daemon_pause up-d "sess:fm-up-d" "holding for the upstream tool release"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="sess:fm-merge-a" FM_FAKE_TMUX_CAPTURE="$pane" \
+    FM_STATE_OVERRIDE="$state" FM_PAUSE_RESURFACE_SECS=240 FM_PAUSE_CAPTAIN_RESURFACE_SECS=240 \
+    housekeeping "$state"
+  [ -s "$state/.subsuper-escalations" ] || fail "grouped pause rechecks produced no escalation"
+  n=$(grep -c . "$state/.subsuper-escalations" || true)
+  [ "$n" -eq 2 ] || fail "shared-reason pauses produced $n escalation lines, not one per distinct reason"
+  line=$(grep -F "sharing one wait" "$state/.subsuper-escalations" || true)
+  [ -n "$line" ] || fail "shared-reason pauses did not escalate as one grouped item"
+  printf '%s' "$line" | grep -F "sess:fm-merge-a" >/dev/null || fail "grouped item omitted merge-a"
+  printf '%s' "$line" | grep -F "sess:fm-merge-b" >/dev/null || fail "grouped item omitted merge-b"
+  printf '%s' "$line" | grep -F "sess:fm-merge-c" >/dev/null || fail "grouped item omitted merge-c"
+  printf '%s' "$line" | grep -F "sess:fm-up-d" >/dev/null && fail "distinct-reason pause was folded into the shared group"
+  grep -F "sess:fm-up-d" "$state/.subsuper-escalations" >/dev/null \
+    || fail "distinct-reason pause was not escalated on its own"
+  grep -F "possible wedge" "$state/.subsuper-escalations" >/dev/null \
+    && fail "grouped pause recheck was mislabeled a possible wedge"
+  age_a=$(( $(date +%s) - $(cat "$state/.subsuper-paused-merge-a" 2>/dev/null || echo 0) ))
+  age_b=$(( $(date +%s) - $(cat "$state/.subsuper-paused-merge-b" 2>/dev/null || echo 0) ))
+  age_c=$(( $(date +%s) - $(cat "$state/.subsuper-paused-merge-c" 2>/dev/null || echo 0) ))
+  [ "$age_a" -lt 60 ] && [ "$age_b" -lt 60 ] && [ "$age_c" -lt 60 ] \
+    || fail "grouped pause markers were not reset for the next window"
+  pass "housekeeping re-surfaces shared-reason pauses as one item and keeps distinct reasons separate"
+}
+
+# Two tasks can resolve to ONE backend window. Their throttles are task-keyed, so
+# both markers exist and both must reset, but the digest must name that window
+# once rather than reporting "2 tasks sharing one wait" against a single pane.
+test_housekeeping_paused_dedupes_shared_window() {
+  local dir state fakebin pane line win task age_one age_two
+  dir=$(make_supercase paused-dup-window)
+  state="$dir/state"; fakebin="$dir/fakebin"
+  pane="$dir/pane.txt"
+  win="sess:fm-dup"
+  printf 'idle prompt $\n' > "$pane"
+  for task in dup-one dup-two; do
+    printf 'window=%s\nkind=ship\n' "$win" > "$state/$task.meta"
+    printf 'paused: holding for the upstream tool release\n' > "$state/$task.status"
+    echo $(( $(date +%s) - 5000 )) > "$state/.subsuper-paused-$task"
+  done
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$win" FM_FAKE_TMUX_CAPTURE="$pane" \
+    FM_STATE_OVERRIDE="$state" FM_PAUSE_RESURFACE_SECS=240 housekeeping "$state"
+  [ -s "$state/.subsuper-escalations" ] || fail "the shared-window pause produced no escalation"
+  line=$(grep -F "awaiting external" "$state/.subsuper-escalations" || true)
+  [ -n "$line" ] || fail "the shared-window pause was not re-surfaced as an awaiting-external recheck"
+  printf '%s' "$line" | grep -F "sharing one wait" >/dev/null \
+    && fail "two markers on one window reported as separate tasks: $line"
+  [ "$(printf '%s' "$line" | grep -o -F "$win" | grep -c .)" -eq 1 ] \
+    || fail "one window was named more than once in the digest: $line"
+  age_one=$(( $(date +%s) - $(cat "$state/.subsuper-paused-dup-one" 2>/dev/null || echo 0) ))
+  age_two=$(( $(date +%s) - $(cat "$state/.subsuper-paused-dup-two" 2>/dev/null || echo 0) ))
+  [ "$age_one" -lt 60 ] || fail "the first task-keyed marker was not reset for the next window"
+  [ "$age_two" -lt 60 ] \
+    || fail "collapsing the window list orphaned the second task-keyed marker, which would re-fire every tick"
+  pass "housekeeping reports one window once while resetting every task-keyed pause marker"
+}
+
+# A wait that names an explicit captain decision uses the longer cadence, so an
+# age past the ordinary hour still does not re-surface until the captain window.
+test_housekeeping_captain_gated_pause_uses_longer_cadence() {
+  local dir state fakebin pane key
+  dir=$(make_supercase paused-captain-cadence)
+  state="$dir/state"; fakebin="$dir/fakebin"
+  pane="$dir/pane.txt"
+  printf 'idle prompt $\n' > "$pane"
+  printf 'window=%s\nkind=ship\n' "sess:fm-held-cap" > "$state/held-cap.meta"
+  printf 'paused: waiting for the captain merge decision on open PRs\n' > "$state/held-cap.status"
+  key=$(printf '%s' "held-cap" | tr ':/.' '___')
+  echo $(( $(date +%s) - 5000 )) > "$state/.subsuper-paused-$key"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="sess:fm-held-cap" FM_FAKE_TMUX_CAPTURE="$pane" \
+    FM_STATE_OVERRIDE="$state" FM_PAUSE_RESURFACE_SECS=240 FM_PAUSE_CAPTAIN_RESURFACE_SECS=999999 \
+    housekeeping "$state"
+  [ -s "$state/.subsuper-escalations" ] && fail "a captain-gated pause re-surfaced on the ordinary cadence"
+  : > "$state/.subsuper-escalations"
+  echo $(( $(date +%s) - 5000 )) > "$state/.subsuper-paused-$key"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="sess:fm-held-cap" FM_FAKE_TMUX_CAPTURE="$pane" \
+    FM_STATE_OVERRIDE="$state" FM_PAUSE_RESURFACE_SECS=999999 FM_PAUSE_CAPTAIN_RESURFACE_SECS=240 \
+    housekeeping "$state"
+  grep -F "awaiting external" "$state/.subsuper-escalations" >/dev/null 2>&1 \
+    || fail "a captain-gated pause did not re-surface once past its own longer cadence"
+  pass "housekeeping holds a captain-gated pause to the longer cadence"
+}
+
 # A pause whose pane became busy again (the crew resumed) drops its marker without
 # escalating, exactly like a resumed wedge.
 test_housekeeping_paused_resumed_cleared() {
@@ -1989,6 +2089,9 @@ test_housekeeping_seeds_pause_marker_from_status
 test_housekeeping_persistent_stale_escalates
 test_housekeeping_resumed_stale_cleared
 test_housekeeping_paused_resurfaces_and_resets
+test_housekeeping_paused_groups_shared_reason
+test_housekeeping_paused_dedupes_shared_window
+test_housekeeping_captain_gated_pause_uses_longer_cadence
 test_housekeeping_paused_resumed_cleared
 test_housekeeping_paused_unpaused_cleared
 test_housekeeping_stale_marker_transitions_to_pause

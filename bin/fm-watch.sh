@@ -23,8 +23,11 @@
 #                          line, since the crew's own log gets no new entry once
 #                          firstmate hands it to a no-mistakes validation. A declared
 #                          external-wait pause is absorbed instead with its own long
-#                          re-surface cadence, never as a wedge. Only when neither
-#                          absorb class applies does the log's last line decide:
+#                          re-surface cadence, never as a wedge; one re-surface
+#                          reports every wait that is due, grouped by blocking
+#                          reason, so the queued wake names the trigger window
+#                          while its reason stands for all of them. Only when
+#                          neither absorb class applies does the log's last line decide:
 #                          terminal (captain-relevant) or non-terminal (no verb),
 #                          both surfaced at once. A registered Herdr agent at its
 #                          idle/done composer is healthy and starts no wedge timer;
@@ -160,9 +163,9 @@ STALE_ESCALATE_SECS=${FM_STALE_ESCALATE_SECS:-240}  # idle secs before a provabl
 # pane is absorbed rather than wedge-escalated.
 # A captain-held or paused crew whose agent has confidently exited uses the same
 # bounded cadence, while a live or ambiguously read agent still surfaces once.
-# These cases re-surface once for a recheck every PAUSE_RESURFACE_SECS - far
-# longer than the wedge threshold, but finite so a forgotten hold cannot rot invisibly.
-PAUSE_RESURFACE_SECS=${FM_PAUSE_RESURFACE_SECS:-$FM_PAUSE_RESURFACE_SECS_DEFAULT}
+# These cases re-surface once for a recheck every pause_resurface_secs_for_line
+# window - far longer than the wedge threshold, but finite so a forgotten hold
+# cannot rot invisibly. Captain-named waits use the longer captain cadence.
 TRIAGE_LOG="$STATE/.watch-triage.log"
 TRIAGE_LOG_MAX_BYTES=${FM_WATCH_TRIAGE_LOG_MAX_BYTES:-262144}
 # Consecutive event-path failures (fm_backend_wait_transition returning 2 -
@@ -357,18 +360,107 @@ wedge_timer_check() {  # <window> <since-file> <triage-label> <escalation-count-
   esac
 }
 
+# Collect every declared pause that is due for re-surface into the shared TSV
+# work file. bin/fm-classify-lib.sh owns the record format and the fold, so the
+# watcher and the away-mode daemon group identically. EVERY due task is appended,
+# including several that resolve to one backend window: collapsing a window is the
+# fold's job, and filtering here would hide the older task's age and its blocker
+# from the group the fold builds.
+pause_recheck_collect_due() {  # <due-file>
+  local due=$1 meta task win last statusf mtime age rf rf_age pause_secs
+  rm -f "$due"
+  for meta in "$STATE"/*.meta; do
+    [ -e "$meta" ] || continue
+    task=$(basename "$meta"); task=${task%.meta}
+    win=$(fm_backend_target_of_meta "$meta")
+    [ -n "$win" ] || continue
+    last=$(last_status_line "$STATE/$task.status")
+    status_is_paused_or_captain_held "$last" || continue
+    statusf="$STATE/$task.status"
+    mtime=$(stat_mtime "$statusf")
+    case "$mtime" in ''|*[!0-9]*) mtime=$(date +%s) ;; esac
+    age=$(( $(date +%s) - mtime ))
+    rf="$STATE/.paused-resurfaced-$(printf '%s' "$win" | tr ':/.' '___')"
+    rf_age=$(age_of "$rf")
+    pause_secs=$(pause_resurface_secs_for_line "$last")
+    [ "$age" -ge "$pause_secs" ] && [ "$rf_age" -ge "$pause_secs" ] || continue
+    pause_due_append "$due" "$last" "$age" "$win" "$rf"
+  done
+}
+
+# Wake wording for one grouped blocker. A lone due pause keeps the historical
+# single-window phrasing so existing triage stays stable.
+pause_recheck_wake_line() {  # <count> <max-age> <note> <windows> <gated>
+  local count=$1 max_age=$2 note=$3 wins=$4 gated=$5 line
+  if [ "$count" -eq 1 ]; then
+    line="stale: $wins (paused ${max_age}s, awaiting external - declared pause, rechecked on a long cadence not a wedge; confirm the wait still holds)"
+  else
+    line="stale: $count tasks sharing one wait (paused, awaiting external - declared pause, rechecked on a long cadence not a wedge; confirm the wait still holds): $note [$wins]"
+  fi
+  if [ "$gated" = 1 ]; then
+    line="$line (cannot clear until the captain acts)"
+  fi
+  printf '%s\n' "$line"
+}
+
+# One wake reason for the whole due set: shared-reason waits become a single
+# item, distinct reasons join with " | ". An empty due set (the trigger raced a
+# status write, or was classified paused from crew state alone) falls back to
+# the historical single-window wording for the trigger.
+pause_recheck_reason_for_due() {  # <trigger-window> <due-file>
+  local trigger=$1 due=$2 line parts=""
+  if [ ! -s "$due" ]; then
+    printf 'stale: %s (paused, awaiting external - declared pause, rechecked on a long cadence not a wedge; confirm the wait still holds)' "$trigger"
+    return 0
+  fi
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    if [ -z "$parts" ]; then
+      parts=$line
+    else
+      parts="$parts | $line"
+    fi
+  done < <(pause_due_fold "$due" pause_recheck_wake_line)
+  printf '%s' "$parts"
+}
+
+# Stamp the re-surface throttle for every window this recheck covers and put
+# each on the bounded pause cadence. Called ONLY once the wake is durably
+# queued, so a failed enqueue cannot silence a due wait for a full window. The
+# trigger is always throttled - it is what the wake is keyed on - whether or not
+# the sweep saw it, so a trigger the sweep missed cannot re-fire every poll.
+pause_recheck_commit_due() {  # <due-file> <fallback-marker>
+  local due=$1 fallback=$2 now marker win
+  now=$(date +%s)
+  printf '%s\n' "$now" > "$fallback"
+  if [ ! -s "$due" ]; then
+    return 0
+  fi
+  while IFS= read -r marker; do
+    [ -n "$marker" ] || continue
+    printf '%s\n' "$now" > "$marker"
+  done < <(pause_due_markers "$due")
+  while IFS= read -r win; do
+    [ -n "$win" ] || continue
+    : > "$STATE/.paused-$(printf '%s' "$win" | tr ':/.' '___')"
+  done < <(pause_due_windows "$due")
+}
+
 # Absorb a stale pane under a declared external-wait pause (paused:) or a
 # dead-agent captain-held transfer, and re-surface it once every
-# PAUSE_RESURFACE_SECS for a recheck so it cannot rot invisibly. Called on any
-# stale poll once pause_state_class permits the bounded cadence, so it must be
-# cheap: it NEVER re-reads crew state. The re-surface age is anchored on the
-# status file mtime, not a per-hash marker, so a churny idle pane (a ticking
+# pause_resurface_secs_for_line window for a recheck so it cannot rot invisibly.
+# Called on any stale poll once pause_state_class permits the bounded cadence, so
+# it must be cheap: it NEVER re-reads crew state. The re-surface age is anchored
+# on the status file mtime, not a per-hash marker, so a churny idle pane (a ticking
 # clock, a token counter) cannot keep resetting the cadence the way a hash-tied
 # timer would. A .paused-resurfaced-<key> throttle marker records the last
 # re-surface epoch so, once past the window, it fires once per window rather than
-# every poll. Advances the stale suppressor to <hash> and flags the key paused.
+# every poll. One re-surface covers every wait that is due fleet-wide, grouped by
+# blocking reason, and throttles all of them, so a shared blocker costs one wake
+# instead of one per task. Advances the stale suppressor to <hash> and flags the
+# key paused.
 handle_paused_stale() {  # <window> <task> <hash>
-  local win=$1 task=$2 h=$3 key statusf mtime age rf rf_age reason
+  local win=$1 task=$2 h=$3 key statusf mtime age rf rf_age reason last pause_secs due
   key=$(printf '%s' "$win" | tr ':/.' '___')
   printf '%s' "$h" > "$STATE/.stale-$key"
   : > "$STATE/.paused-$key"
@@ -379,10 +471,15 @@ handle_paused_stale() {  # <window> <task> <hash>
   age=$(( $(date +%s) - mtime ))
   rf="$STATE/.paused-resurfaced-$key"
   rf_age=$(age_of "$rf")   # 999999 when no prior re-surface
-  if [ "$age" -ge "$PAUSE_RESURFACE_SECS" ] && [ "$rf_age" -ge "$PAUSE_RESURFACE_SECS" ]; then
-    reason="stale: $win (paused ${age}s, awaiting external - declared pause, rechecked on a long cadence not a wedge; confirm the wait still holds)"
-    fm_wake_append stale "$win" "$reason" || exit 1
-    date +%s > "$rf"
+  last=$(last_status_line "$statusf")
+  pause_secs=$(pause_resurface_secs_for_line "$last")
+  if [ "$age" -ge "$pause_secs" ] && [ "$rf_age" -ge "$pause_secs" ]; then
+    due="$STATE/.paused-recheck-due.$$"
+    pause_recheck_collect_due "$due"
+    reason=$(pause_recheck_reason_for_due "$win" "$due")
+    fm_wake_append stale "$win" "$reason" || { rm -f "$due"; exit 1; }
+    pause_recheck_commit_due "$due" "$rf"
+    rm -f "$due"
     wake "$reason"
   fi
   triage_log "absorbed stale (paused, awaiting external, age ${age}s): $win"
@@ -1046,7 +1143,7 @@ EOF
           #     genuinely frozen run still escalates past STALE_ESCALATE_SECS;
           #   - paused: the crew declared an external wait, or a declared pause or
           #     captain hold is paired with a confidently dead agent, so absorb on
-          #     the long PAUSE_RESURFACE_SECS cadence instead of wedge-escalating;
+          #     the long declared-pause re-surface cadence instead of wedge-escalating;
           #   - none: no running pipeline, idle pane, no busy signature, no declared
           #     pause - the crew has STOPPED. Surface immediately so firstmate peeks
           #     (it may be done via an interactive menu that wrote no done: status,
