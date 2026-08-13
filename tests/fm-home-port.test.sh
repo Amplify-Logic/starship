@@ -281,6 +281,48 @@ test_verify_accepts_prime_agent_worker() {
   pass "verify accepts prime-agent and checks its launch binary"
 }
 
+# Names come from FM_PORT_VERIFIED_HARNESSES so a new verified harness without a
+# launch-binary mapping is caught here instead of as a silent mid-verify death.
+port_verified_harnesses() {
+  local names
+  names=$(awk -F'"' '/^FM_PORT_VERIFIED_HARNESSES=/{print $2; exit}' "$PORT")
+  [ -n "$names" ] || fail "could not read FM_PORT_VERIFIED_HARNESSES from $PORT"
+  printf '%s\n' "$names"
+}
+
+test_verify_completes_for_every_verified_harness() {
+  local names harness home out rc fakebin
+  names=$(port_verified_harnesses)
+  fakebin=$(make_verify_fakebin "$TMP_ROOT/verify-every-harness-bin")
+  # Identity-named stubs cover mappings like kimi -> kimi; cursor still uses
+  # `agent`, which make_verify_fakebin already installs.
+  # shellcheck disable=SC2086
+  fm_fake_exit0 "$fakebin" $names
+
+  for harness in $names; do
+    home="$TMP_ROOT/verify-harness-$harness"
+    seed_home "$home"
+    printf 'tmux\n' > "$home/config/backend"
+    printf '%s\n' "$harness" > "$home/config/crew-harness"
+    rm -f "$home/config/crew-dispatch.json"
+    rc=0
+    out=$(PATH="$fakebin:$BASE_PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" "$PORT" verify --home "$home" 2>&1) || rc=$?
+    case "$out" in
+      *"VERIFY_PASS: crew-harness"*|*"VERIFY_FAIL: crew-harness"*) ;;
+      *)
+        fail "verify for crew-harness=$harness died without VERIFY_PASS/VERIFY_FAIL (rc=$rc): $out"
+        ;;
+    esac
+    case "$out" in
+      *"VERIFY_OK:"*|*"VERIFY_FAILED:"*) ;;
+      *)
+        fail "verify for crew-harness=$harness died without a ready aggregate (rc=$rc): $out"
+        ;;
+    esac
+  done
+  pass "verify completes for every FM_PORT_VERIFIED_HARNESSES name"
+}
+
 test_export_copies_portable_only
 test_export_refuses_explicit_env_include
 test_scan_detects_embedded_secret
@@ -294,5 +336,6 @@ test_verify_fails_missing_portable_files
 test_verify_fails_unknown_backend_and_unverified_harness
 test_verify_passes_ready_home
 test_verify_accepts_prime_agent_worker
+test_verify_completes_for_every_verified_harness
 
 echo "# all fm-home-port tests passed"

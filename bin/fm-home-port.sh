@@ -314,6 +314,7 @@ harness_launch_binary() {
     pi) printf 'pi\n' ;;
     grok) printf 'grok\n' ;;
     cursor) printf 'agent\n' ;;
+    kimi) printf 'kimi\n' ;;
     prime-agent) printf 'prime-agent\n' ;;
     *) return 1 ;;
   esac
