@@ -32,6 +32,10 @@
 #   7. A structurally gone endpoint (fake Herdr's pane_not_found) refuses on the
 #      first read rather than waiting out a bound that can never change, and
 #      tells the caller to re-spawn rather than to relaunch into a dead pane.
+#   8. On herdr the launch stops pasting the brief through the pane at all and
+#      carries a one-line pointer at the brief file instead, for the launch-line
+#      adapters and for kimi's separate delivery alike - the fix for the
+#      first-attempt spawn failures recorded in docs/herdr-backend.md.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -475,9 +479,19 @@ test_unverified_non_kimi_backend_still_spawns_and_warns() {
 }
 
 # make_herdr_case <name> <harness> <launch-binary>: a fake Herdr CLI holding its
-# workspace/tab/pane state in one JSON file. It drops the task's pane the moment
-# the launch Enter is sent, which is exactly herdr's pane_not_found shape and
-# the only way to reach the `missing` state - tmux has no equivalent.
+# workspace/tab/pane state in one JSON file. By default it drops the task's pane
+# the moment the launch Enter is sent, which is exactly herdr's pane_not_found
+# shape and the only way to reach the `missing` state - tmux has no equivalent.
+#
+# Two env switches turn the same fake into a HEALTHY herdr endpoint, which is
+# what the brief-delivery cases below need:
+#   FM_FAKE_HERDR_KEEP_PANE=1   the pane survives the launch Enter.
+#   FM_FAKE_HERDR_AGENT=<status> `agent get` reports a registered agent at that
+#                                status instead of agent_not_found.
+# Every `pane send-text` payload is also written verbatim to its own numbered
+# file under $HERDR_SENDTEXT_DIR, because what this suite has to assert about
+# the launch is a property of the exact bytes typed into the pane - including
+# whether they contain a newline - which the shared arg log cannot preserve.
 make_herdr_case() {  # <name> <harness> <launch-binary>
   local name=$1 harness=$2 launch_binary=$3 fakebin
   CASE_DIR="$TMP_ROOT/$name"
@@ -487,11 +501,13 @@ make_herdr_case() {  # <name> <harness> <launch-binary>
   HERDR_LOG="$CASE_DIR/herdr.log"
   HERDR_GONE_MARK="$CASE_DIR/pane-gone"
   HERDR_WT_ROOT="$CASE_DIR/worktrees"
+  HERDR_SENDTEXT_DIR="$CASE_DIR/sendtext"
   ID="agentup-$name"
   fakebin=$(fm_fakebin "$CASE_DIR")
   FAKEBIN_DIR=$fakebin
 
-  mkdir -p "$HOME_DIR/data/$ID" "$HOME_DIR/projects" "$HOME_DIR/config" "$HOME_DIR/state" "$HERDR_WT_ROOT"
+  mkdir -p "$HOME_DIR/data/$ID" "$HOME_DIR/projects" "$HOME_DIR/config" "$HOME_DIR/state" \
+    "$HERDR_WT_ROOT" "$HERDR_SENDTEXT_DIR"
   printf '%s\n' "$harness" > "$HOME_DIR/config/crew-harness"
   printf 'brief for %s\nsecond line of the brief\n' "$ID" > "$HOME_DIR/data/$ID/brief.md"
   fm_git_init_commit "$PROJ_DIR"
@@ -595,11 +611,27 @@ case "$cmd $sub" in
     fi
     ;;
   'pane send-keys')
-    # Submitting the launch is where this pane structurally disappears.
-    : > "$gone"
+    # Submitting the launch is where this pane structurally disappears, unless
+    # the case asked for a healthy endpoint.
+    [ "${FM_FAKE_HERDR_KEEP_PANE:-0}" = 1 ] || : > "$gone"
     ;;
-  'pane send-text') : ;;
-  'agent get') printf '{"error":{"code":"agent_not_found"}}\n' ;;
+  'pane send-text')
+    dir=${FM_FAKE_HERDR_SENDTEXT:-}
+    if [ -n "$dir" ]; then
+      n=$(( $(cat "$dir/.count" 2>/dev/null || echo 0) + 1 ))
+      echo "$n" > "$dir/.count"
+      printf '%s' "${4:-}" > "$dir/$n"
+    fi
+    ;;
+  'agent get')
+    if [ "${FM_FAKE_HERDR_UNREADABLE:-0}" = 1 ] && [ ! -f "$gone" ]; then
+      printf '{"error":{"code":"unexpected_agent_error"}}\n'
+    elif [ -n "${FM_FAKE_HERDR_AGENT:-}" ] && [ ! -f "$gone" ]; then
+      jq -n --arg s "$FM_FAKE_HERDR_AGENT" '{result:{agent:{agent_status:$s}}}'
+    else
+      printf '{"error":{"code":"agent_not_found"}}\n'
+    fi
+    ;;
   *) : ;;
 esac
 SH
@@ -614,6 +646,15 @@ SH
 }
 
 run_herdr_spawn() {  # <extra-spawn-args...>
+  run_herdr_spawn_as claude "$@"
+}
+
+# run_herdr_spawn_as <harness> <extra-spawn-args...>: the same runner with the
+# harness as a parameter, so a case can drive the launch-line adapters and kimi
+# (whose brief is a separate post-launch delivery) through one fixture.
+run_herdr_spawn_as() {  # <harness> <extra-spawn-args...>
+  local harness=$1
+  shift
   env \
     FM_ROOT_OVERRIDE='' \
     FM_HOME="$HOME_DIR" \
@@ -624,13 +665,20 @@ run_herdr_spawn() {  # <extra-spawn-args...>
     FM_SPAWN_NO_GUARD=1 \
     FM_SPAWN_AGENT_UP_SLEEP=0 \
     FM_SPAWN_AGENT_UP_MAX_POLLS=40 \
+    FM_KIMI_BRIEF_SETTLE_SECS=0 \
     FM_FAKE_HERDR_STATE="$HERDR_STATE_FILE" \
     FM_FAKE_HERDR_LOG="$HERDR_LOG" \
     FM_FAKE_HERDR_GONE_MARK="$HERDR_GONE_MARK" \
+    FM_FAKE_HERDR_SENDTEXT="$HERDR_SENDTEXT_DIR" \
     FM_FAKE_WT_ROOT="$HERDR_WT_ROOT" \
     HERDR_SESSION="fm-agentup-fake" \
     PATH="$FAKEBIN_DIR:$PATH" \
-    "$SPAWN" "$ID" "$PROJ_DIR" --harness claude --backend herdr "$@" 2>&1
+    "$SPAWN" "$ID" "$PROJ_DIR" --harness "$harness" --backend herdr "$@" 2>&1
+}
+
+# The Nth `pane send-text` payload, exactly as it was typed into the pane.
+herdr_sent_text() {  # <n>
+  cat "$HERDR_SENDTEXT_DIR/$1"
 }
 
 # A structurally gone pane can never come back and host an agent, so polling it
@@ -647,6 +695,12 @@ test_missing_endpoint_refuses_on_the_first_read() {
 
   expect_code 1 "$status" "a spawn whose endpoint vanished should refuse"$'\n'"$out"
   assert_contains "$out" "is gone" "refusal did not say the endpoint was gone"
+  assert_contains "$out" "carried only a one-line pointer into an endpoint" \
+    "refusal did not describe the pointer carried into the missing endpoint"
+  assert_contains "$out" "the brief itself was not pasted and remains untouched" \
+    "refusal did not say the brief remained untouched"
+  assert_not_contains "$out" "launch command carried the brief" \
+    "refusal claimed the missing endpoint received the inline brief"
   assert_contains "$out" "RE-SPAWN the task onto a fresh endpoint" \
     "refusal did not tell the caller to re-spawn"
   assert_not_contains "$out" "--key C-c" \
@@ -662,6 +716,27 @@ test_missing_endpoint_refuses_on_the_first_read() {
     || fail "a gone endpoint was polled $polls_after times out of a 40-poll bound instead of refusing on the first read"
   cleanup_task_tmp "$ID"
   pass "a structurally gone endpoint refuses on the first read and asks for a re-spawn"
+}
+
+test_herdr_unreadable_warning_describes_pointer_delivery() {
+  local out status
+  command -v jq >/dev/null 2>&1 || { echo 'skip: jq not found (required by the herdr adapter)'; return 0; }
+  make_herdr_case herdr-unreadable claude claude
+
+  out=$(FM_FAKE_HERDR_KEEP_PANE=1 FM_FAKE_HERDR_UNREADABLE=1 run_herdr_spawn)
+  status=$?
+
+  expect_code 0 "$status" "a herdr spawn with unreadable liveness should proceed with a warning"$'\n'"$out"
+  assert_contains "$out" "before the brief pointer was delivered" \
+    "warning did not identify pointer delivery"
+  assert_contains "$out" "the one-line pointer may have gone into a shell" \
+    "warning did not describe the unverified pointer risk"
+  assert_contains "$out" "the brief itself was not pasted and remains untouched" \
+    "warning did not say the brief remained untouched"
+  assert_not_contains "$out" "the brief may have gone into a shell" \
+    "warning claimed the inline brief may have entered the shell"
+  cleanup_task_tmp "$ID"
+  pass "a herdr unreadable warning describes pointer delivery"
 }
 
 # The re-spawn command must BE the command to run. A bare `fm-spawn.sh <id>
@@ -686,6 +761,116 @@ test_missing_endpoint_respawn_command_carries_kind_and_axes() {
   pass "the re-spawn command carries this task's own kind and resolved axes"
 }
 
+# --- brief delivery shape on herdr -------------------------------------------
+#
+# The bug these pin (2026-08-13/2026-08-14, herdr backend): the launch line
+# carried the WHOLE brief as its prompt argument, so spawning typed a
+# multi-kilobyte, multi-line payload into a pane that was still a plain shell.
+# Five consecutive first attempts - three cursor, two claude - left the launch
+# unexecuted with the brief spilled behind it as quote continuation and failed
+# the agent-up gate; the one-line file-pointer relaunch came up six of six.
+# The property that matters is therefore about the exact bytes typed: on herdr
+# the launch must be ONE line that names the brief file, never the brief.
+#
+# assert_herdr_pointer_delivery <payload> <what>: the shared shape assertion.
+assert_herdr_pointer_delivery() {  # <payload> <what>
+  local payload=$1 what=$2
+  case "$payload" in
+    *$'\n'*) fail "the $what typed into the herdr pane still contains a newline, so it is a multi-line paste through the pane: $payload" ;;
+  esac
+  # The whole instruction, not just its opening: a crewmate pointer has to keep
+  # telling the agent it is in a disposable worktree, which is the isolation
+  # fact the pasted brief used to carry for it.
+  assert_contains "$payload" \
+    "Read $HOME_DIR/data/$ID/brief.md and execute it fully. Work in the current directory - it is your isolated task worktree." \
+    "the $what does not point the agent at its brief file and its worktree"
+  assert_not_contains "$payload" "second line of the brief" \
+    "the $what still pastes the brief body instead of pointing at its file"
+  assert_contains "$payload" "FIRSTMATE_OP: v1 launch-brief:" \
+    "the $what is not encoded as canonical launch-brief input"
+}
+
+test_herdr_launch_points_at_the_brief_file_instead_of_pasting_it() {
+  local out status launch
+  command -v jq >/dev/null 2>&1 || { echo 'skip: jq not found (required by the herdr adapter)'; return 0; }
+  make_herdr_case herdr-pointer claude claude
+
+  out=$(FM_FAKE_HERDR_KEEP_PANE=1 FM_FAKE_HERDR_AGENT=working run_herdr_spawn)
+  status=$?
+
+  expect_code 0 "$status" "a healthy herdr spawn should succeed"$'\n'"$out"
+  assert_contains "$out" "spawned $ID harness=claude" "healthy herdr spawn did not report success"
+  launch=$(herdr_sent_text 1)
+  assert_herdr_pointer_delivery "$launch" "launch line"
+  # The harness keeps its own verified launch shape; only the brief ARGUMENT changed.
+  assert_contains "$launch" "CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions" \
+    "the launch line no longer renders this harness's own verified template"
+  cleanup_task_tmp "$ID"
+  pass "a herdr launch carries a one-line pointer at the brief file, not the brief"
+}
+
+# cursor is the adapter this failure was first reported on, and its template is
+# the one carrying an extra --workspace argument ahead of the brief.
+test_herdr_cursor_launch_points_at_the_brief_file() {
+  local out status launch
+  command -v jq >/dev/null 2>&1 || { echo 'skip: jq not found (required by the herdr adapter)'; return 0; }
+  make_herdr_case herdr-pointer-cursor cursor agent
+
+  out=$(FM_FAKE_HERDR_KEEP_PANE=1 FM_FAKE_HERDR_AGENT=working run_herdr_spawn_as cursor)
+  status=$?
+
+  expect_code 0 "$status" "a healthy cursor spawn on herdr should succeed"$'\n'"$out"
+  assert_contains "$out" "spawned $ID harness=cursor" "healthy cursor herdr spawn did not report success"
+  launch=$(herdr_sent_text 1)
+  assert_herdr_pointer_delivery "$launch" "cursor launch line"
+  assert_contains "$launch" "agent --yolo --workspace " \
+    "the cursor launch line no longer renders its own verified template"
+  cleanup_task_tmp "$ID"
+  pass "a cursor launch on herdr carries the brief pointer and keeps its own launch flags"
+}
+
+# kimi's launch line cannot carry a brief at all, so its brief is a SEPARATE
+# send into the agent's own composer - the one delivery the launch-line change
+# above does not reach. That send is the same multi-line paste hazard, so it
+# has to become the same pointer.
+test_herdr_kimi_post_launch_brief_is_a_pointer() {
+  local out status brief_send
+  command -v jq >/dev/null 2>&1 || { echo 'skip: jq not found (required by the herdr adapter)'; return 0; }
+  make_herdr_case herdr-pointer-kimi kimi kimi
+
+  out=$(FM_FAKE_HERDR_KEEP_PANE=1 FM_FAKE_HERDR_AGENT=idle run_herdr_spawn_as kimi)
+  status=$?
+
+  expect_code 0 "$status" "a healthy kimi spawn on herdr should succeed"$'\n'"$out"
+  assert_contains "$out" "spawned $ID harness=kimi" "healthy kimi herdr spawn did not report success"
+  # Payload 1 is the launch (no brief on kimi's line), payload 2 the brief.
+  brief_send=$(herdr_sent_text 2)
+  assert_herdr_pointer_delivery "$brief_send" "kimi post-launch brief delivery"
+  cleanup_task_tmp "$ID"
+  pass "kimi's separate post-launch brief delivery on herdr is a pointer too"
+}
+
+# The refusal has to stay TRUE for the shape it is describing. Under pointer
+# delivery nothing spilled, so a message insisting the brief became shell
+# continuation input would send the reader looking for damage that is not there.
+test_herdr_refusal_does_not_claim_a_spill_that_cannot_happen() {
+  local out status
+  command -v jq >/dev/null 2>&1 || { echo 'skip: jq not found (required by the herdr adapter)'; return 0; }
+  make_herdr_case herdr-pointer-refusal claude claude
+
+  out=$(FM_FAKE_HERDR_KEEP_PANE=1 run_herdr_spawn FM_SPAWN_AGENT_UP_MAX_POLLS=2)
+  status=$?
+
+  expect_code 1 "$status" "a herdr pane still hosting no agent should refuse"$'\n'"$out"
+  assert_contains "$out" "no agent is running" "refusal did not say the agent never started"
+  assert_contains "$out" "carried only a one-line pointer at the brief file" \
+    "refusal did not say the launch carried a pointer rather than the brief"
+  assert_not_contains "$out" "the brief becomes shell continuation input" \
+    "refusal claimed a brief spill that pointer delivery cannot produce"
+  cleanup_task_tmp "$ID"
+  pass "a herdr refusal describes pointer delivery instead of claiming a spill"
+}
+
 test_kimi_brief_is_typed_only_after_the_agent_is_up
 test_dead_shell_refuses_before_typing_the_brief
 test_kimi_refusal_prints_a_two_step_file_pointer_recovery
@@ -696,6 +881,11 @@ test_invalid_bound_knobs_are_refused
 test_unverified_liveness_backend_still_spawns_and_warns
 test_unverified_non_kimi_backend_still_spawns_and_warns
 test_missing_endpoint_refuses_on_the_first_read
+test_herdr_unreadable_warning_describes_pointer_delivery
 test_missing_endpoint_respawn_command_carries_kind_and_axes
+test_herdr_launch_points_at_the_brief_file_instead_of_pasting_it
+test_herdr_cursor_launch_points_at_the_brief_file
+test_herdr_kimi_post_launch_brief_is_a_pointer
+test_herdr_refusal_does_not_claim_a_spill_that_cannot_happen
 
 echo "# all fm-spawn-agent-up tests passed"

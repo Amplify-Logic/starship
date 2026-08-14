@@ -1008,6 +1008,28 @@ On entry the launcher drops the prior session's artifacts when the daemon is not
 This never drops a genuinely-pending escalation: the durable record is `state/.wake-queue` plus each crew's `state/<id>.status`, and any still-true condition is re-escalated by the daemon's heartbeat catch-all scan.
 Covered by the unit cases in `tests/fm-afk-launch.test.sh` (clear-on-fresh-entry vs refresh, and the stop ordering asserting the daemon saw `state/.afk` present at SIGTERM).
 
+## Incident (2026-08-13/2026-08-14): first-attempt spawns failed the agent-up gate because the launch pasted the whole brief through the pane shell
+
+Five consecutive first-attempt spawns on this backend failed `bin/fm-spawn.sh`'s agent-up gate: three cursor, then two claude.
+Each one refused with `no agent is running in <window> after 60 of 60 poll(s) x 1s (last liveness read: dead)`, and each pane showed the launch line sitting in a plain shell with the brief spilled behind it as quote continuation, so the launch never ran as a command and no agent ever started.
+The same tasks came up processing within seconds on the one-line file-pointer relaunch the refusal already prints as its recovery: six of six, across both harnesses.
+
+The gate itself was right, and it is unchanged.
+What was wrong is what the launch typed.
+Until an agent owns the pane, the launch line is shell input, and it carried the WHOLE encoded brief as its prompt argument: a multi-kilobyte, multi-line paste (this repo's own brief scaffold renders roughly 10KB across roughly 95 lines) in which every newline is a submit into whatever is reading the pane.
+Delivering a brief that way is a bet that a terminal, a shell, and a line editor all keep about 10KB of open quoted continuation intact, and on this backend that bet lost reliably.
+The first report named cursor because cursor spawns were the frequent victims, but the claude failures the following night establish it as a launch-delivery property of the backend, not of any harness.
+
+**Fix:** on herdr only, the launch line carries a one-line pointer at the brief FILE rather than the brief, and the agent reads it.
+The choice is a BACKEND decision in `bin/fm-spawn.sh` (`BRIEF_DELIVERY`), so every adapter keeps its own verified launch template and only the brief ARGUMENT changes; kimi, whose launch line cannot carry a brief at all, gets the same pointer as its separate post-launch delivery.
+The pointer is still built through `bin/fm-operational-input.sh`, so what the agent receives stays typed `launch-brief` input.
+Every other backend, tmux included, still delivers the brief inline and is byte-unchanged.
+`spawn_brief_pointer` is the single owner of the pointer text, shared with the printed recovery, so the launch and its recovery cannot come to name different files.
+
+**Regression coverage:** `tests/fm-spawn-agent-up.test.sh`'s brief-delivery section drives the real `bin/fm-spawn.sh` against a healthy fake herdr endpoint and asserts the exact bytes typed into the pane for claude, cursor, and kimi: one line, no newline, naming the brief file, never containing the brief body, and still carrying each harness's own launch flags.
+Confirmed to reproduce the original shape against the pre-fix script (force `BRIEF_DELIVERY=inline` and rerun: `not ok - the launch line typed into the herdr pane still contains a newline, so it is a multi-line paste through the pane`, printing the two-line launch payload).
+`tests/fm-backend-herdr.test.sh`, `tests/fm-spawn-herdr-presentation.test.sh`, `tests/fm-spawn-dispatch-profile.test.sh`, `tests/fm-spawn-batch.test.sh`, `tests/fm-spawn-launch-preflight.test.sh`, `tests/fm-spawn-worktree-settle.test.sh`, `tests/fm-operational-input.test.sh`, `tests/fm-secondmate-lifecycle-e2e.test.sh`, and `tests/fm-cursor-adapter.test.sh` stay green, and `bin/fm-lint.sh` is clean on the changed files.
+
 ## Known gaps and follow-up notes
 
 - **RESOLVED: worktree-discovery isolation guard's symlinked-project-prefix false refusal.** Originally discovered while building the runtime-backend-auto-detection real smoke test (`tests/fm-backend-autodetect-smoke.test.sh`), which needed a scratch project.

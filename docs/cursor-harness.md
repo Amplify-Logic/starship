@@ -277,6 +277,10 @@ Two operational consequences:
 - **It is slow.** The dialog took roughly 15-27 seconds to render in this lab,
   noticeably longer than other harnesses, so a post-spawn peek must allow for that
   before concluding the launch failed.
+- **OPEN (observed once, 2026-08-13, herdr backend): accepting trust can leave the launch prompt sitting unsubmitted in the composer.**
+  One spawn started the agent normally but its positional prompt stayed pending in the composer until a manual Enter was sent, which is not how a positional prompt behaves on a launch with no trust gate.
+  The likely reading is that the dialog defers the auto-submit and the keystroke that accepts trust only closes the dialog.
+  Not reproduced since, and not fixed in code: after accepting a cursor trust dialog, confirm the prompt actually submitted rather than assuming it did, and send one Enter if it did not.
 
 `--trust` exists but is documented and verified as `--print`/headless only, so it
 cannot clear the interactive dialog. Trust is stored as
