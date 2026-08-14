@@ -1338,6 +1338,71 @@ SH
   pass "herdr teardown removes pane-owned escalation dedupe state"
 }
 
+# The captain-held dead-agent one-shot is recorded under TWO namespaces, the
+# watcher's window-keyed .captain-held-surfaced-<window> and away mode's
+# task-keyed .subsuper-captain-held-surfaced-<task>. Both modes read both, and
+# the away-mode daemon's housekeeping sweep only runs while a supervision daemon
+# is up, so teardown has to collect them or a fleet that never enters AFK
+# orphans them forever. Hold ids are deterministic, so a task recreated under
+# the same id that re-opens the same decision key folds to a byte-identical
+# digest: a survivor in either namespace would suppress its dead-agent surface
+# permanently, which is exactly the silent suppression this work removes.
+test_teardown_clears_captain_held_one_shot_markers() {
+  local case_dir win key watcher_key digest hold out
+  case_dir=$(make_case captain-held-marker-cleanup)
+  write_meta "$case_dir" local-only ship
+  win=$(grep '^window=' "$case_dir/state/task-x1.meta" | cut -d= -f2-)
+  key=$(printf '%s' task-x1 | tr ':/.' '___')
+  watcher_key=$(printf '%s' "$win" | tr ':/.' '___')
+  hold='captain-held [key=api-shape]: tracked by held-route-teardown'
+  printf '%s\n' "$hold" > "$case_dir/state/task-x1.status"
+  digest=$(bash -c '. "$1"; status_open_captain_holds "$2"' _ \
+    "$ROOT/bin/fm-classify-lib.sh" "$case_dir/state/task-x1.status")
+  [ -n "$digest" ] || fail "captain-held-marker-cleanup: the hold fixture did not fold open"
+  # The dead-agent surface that wrote both markers, before the task is retired.
+  printf '%s' "$digest" > "$case_dir/state/.subsuper-captain-held-surfaced-$key"
+  printf '%s' "$digest" > "$case_dir/state/.captain-held-surfaced-$watcher_key"
+
+  run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr" \
+    || fail "captain-held-marker-cleanup: forced teardown failed: $(cat "$case_dir/stderr")"
+  [ ! -e "$case_dir/state/.subsuper-captain-held-surfaced-$key" ] \
+    || fail "captain-held-marker-cleanup: teardown left the task-keyed one-shot marker behind"
+  [ ! -e "$case_dir/state/.captain-held-surfaced-$watcher_key" ] \
+    || fail "captain-held-marker-cleanup: teardown left the window-keyed one-shot marker behind"
+
+  # A same-id relaunch re-opens the same decision key, so its fold digest is
+  # byte-identical to the swept one: the new dead agent must still surface.
+  fm_write_meta "$case_dir/state/task-x1.meta" \
+    "window=$win" "worktree=$case_dir/wt" "project=$case_dir/project" \
+    "kind=ship" "mode=local-only"
+  printf '%s\n' "$hold" > "$case_dir/state/task-x1.status"
+  cat > "$case_dir/fakebin/tmux" <<'SH'
+#!/usr/bin/env bash
+set -u
+case "${1:-}" in
+  display-message)
+    case "$*" in *pane_current_command*) printf 'zsh\n'; exit 0 ;; esac
+    exit 1 ;;
+esac
+exit 1
+SH
+  chmod +x "$case_dir/fakebin/tmux"
+  cat > "$case_dir/fakebin/fm-crew-state.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'state: stopped · source: pane · bare shell\n'
+SH
+  chmod +x "$case_dir/fakebin/fm-crew-state.sh"
+  out=$(PATH="$case_dir/fakebin:$PATH" FM_STATE_OVERRIDE="$case_dir/state" \
+    FM_CREW_STATE_BIN="$case_dir/fakebin/fm-crew-state.sh" \
+    bash -c '. "$1" >/dev/null 2>&1; classify_stale "$2" "$3"' _ \
+    "$ROOT/bin/fm-supervise-daemon.sh" "$win" "$case_dir/state")
+  case "$out" in
+    escalate\|*"agent exited"*) ;;
+    *) fail "captain-held-marker-cleanup: a re-opened hold after teardown was suppressed by a stale marker: $out" ;;
+  esac
+  pass "teardown collects both captain-held one-shot namespaces so a same-id relaunch still surfaces"
+}
+
 test_local_only_fork_remote_allows
 test_return_clears_worktree_claim_before_later_cleanup
 test_return_serializes_concurrent_allocation
@@ -1349,6 +1414,7 @@ test_no_mistakes_origin_remote_allows
 test_no_mistakes_truly_unpushed_refuses
 test_local_only_force_overrides_unpushed
 test_herdr_teardown_clears_escalation_marker
+test_teardown_clears_captain_held_one_shot_markers
 test_squash_merged_branch_deleted_allows
 test_squash_merged_pr_allows_when_head_ancestor_of_pr_head
 test_no_pr_recorded_discovers_merged_pr_by_branch_allows

@@ -400,9 +400,61 @@ classify_signal() {  # <reason-after-colon> <state>
 # first sight of a non-terminal stale it returns "self" and the caller records a
 # timestamp marker; persistence is escalated by housekeeping's recheck, not here.
 classify_stale() {  # <window> <state>
-  local win=$1 state=$2 task last seen
+  local win=$1 state=$2 task last seen alive digest surf_win surf_task
   task=$(window_to_task "$win" "$state")
   last=$(last_status_line "$state/$task.status")
+  # An open captain-held transfer is checked BEFORE the last-line pause test,
+  # matching the watcher's handle_paused_stale precedence: a stream with an
+  # open hold plus a NEWER trailing paused: line gets hold quiet-state (no
+  # bounded re-surface) in both modes. The fold is only a declared wait while
+  # the last line still belongs to the declared-wait stream (paused,
+  # captain-held, or a resolved: line masking a sibling hold); any other newer
+  # verb (working:, done:, failed:) supersedes the quiet-state, so a
+  # provably-working crew behind a stale hold line keeps its wedge timer and a
+  # malformed hold line (an invalid key slug) falls through to normal stale
+  # handling instead of silently swallowing a dead agent behind an empty-digest
+  # sentinel.
+  digest=$(status_open_captain_holds "$state/$task.status")
+  if [ -n "$digest" ] && status_declared_wait "$state/$task.status"; then
+    # An open captain-held transfer is a declared wait (fm-classify-lib.sh owns
+    # the policy; status_open_captain_holds is the stream-truth fold, so a
+    # still-open hold b keeps its quiet state even when a trailing resolved:
+    # line for hold a is the last line, and a resolved hold loses quiet state
+    # immediately). The idle pane is expected, so it is never a wedge and never
+    # re-surfaced on the pause cadence. Away mode keeps NORMAL-MODE PARITY: a
+    # hold is routing state, not a liveness exemption, so a crew that is
+    # provably working (a validating run or busy pane behind a stale hold line)
+    # falls through to the transient-stale handling below and keeps its wedge
+    # timer - only a crew that is NOT provably working absorbs. Live vs dead is
+    # told apart by fm_backend_agent_alive, never by the status verb: a healthy
+    # idle pane absorbs with no marker of either kind; a confidently dead agent
+    # escalates once per open-hold state, and handle_wake records the
+    # .subsuper-captain-held-surfaced-<task> marker (keyed on the fold digest,
+    # mirroring the watcher's .captain-held-surfaced-<window> marker) only
+    # AFTER the escalation is durably buffered, so a pane-content change cannot
+    # re-alert forever and a daemon death cannot swallow the surface.
+    if [ "$(crew_absorb_class "$task")" = working ]; then
+      : # fall through to the transient/terminal stale handling below
+    else
+      alive=$(fm_backend_agent_alive "$(task_window_backend "$win" "$state")" "$win" 2>/dev/null) || alive=unknown
+      if [ "$alive" = dead ]; then
+        # One surface per hold state GLOBALLY across supervision modes: absorb
+        # when either the away-mode marker or the watcher's normal-mode marker
+        # already holds this fold digest, so switching between normal and AFK
+        # supervision cannot re-escalate the same unchanged dead agent.
+        { IFS= read -r surf_win; IFS= read -r surf_task; } < <(captain_held_surfaced_markers "$state" "$win" "$task")
+        if [ "$(cat "$surf_task" 2>/dev/null || true)" != "$digest" ] \
+          && [ "$(cat "$surf_win" 2>/dev/null || true)" != "$digest" ]; then
+          printf 'escalate|captain-held, agent exited (work at risk once the answer lands): %s' "$(printf '%s' "$digest" | tr '\n' ' ')"
+        else
+          printf 'absorb|captain-held (declared wait), absorbed (dead agent already surfaced): %s' "$last"
+        fi
+      else
+        printf 'absorb|captain-held (declared wait), absorbed: %s' "$last"
+      fi
+      return
+    fi
+  fi
   if [ -n "$last" ] && status_is_paused "$last"; then
     # A DECLARED external-wait pause (fm-classify-lib.sh): an idle pane is EXPECTED,
     # so this is not a wedge. The caller records a pause marker (long re-surface
@@ -420,7 +472,7 @@ classify_stale() {  # <window> <state>
     # captain lines without those verbs keep the terminal escalate/dedupe path.
     if ! status_is_terminal_verb "$last"; then
       case "$(status_line_verb "$last")" in
-        working|resolved|captain-held)
+        working|resolved)
           printf 'self|transient stale (%s): %s' "$win" "$last"
           return
           ;;
@@ -496,6 +548,13 @@ pause_marker_remove() {  # <window> <state>
   rm -f "$state/.subsuper-paused-$key"
 }
 
+reconcile_captain_held_surfaced() {  # <state-dir> <window> <task> <fold-state>
+  local state=$1 win=$2 task=$3 fold=$4 surf surf_away
+  { IFS= read -r surf; IFS= read -r surf_away; } \
+    < <(captain_held_surfaced_markers "$state" "$win" "$task")
+  reconcile_captain_held_surfaced_markers "$fold" "$surf" "$surf_away"
+}
+
 clear_pause_tracking() {  # <window> <state>
   local win=$1 state=$2 task key watcher_key
   task=$(window_to_task "$win" "$state")
@@ -507,17 +566,47 @@ clear_pause_tracking() {  # <window> <state>
 }
 
 reconcile_pause_tracking() {  # <window> <state> <last-status-line>
-  local win=$1 state=$2 last=$3 task key marker watcher_key
+  local win=$1 state=$2 last=$3 task key marker watcher_key digest
   task=$(window_to_task "$win" "$state")
   key=$(_stale_key "$task")
   marker="$state/.subsuper-paused-$key"
   watcher_key=$(_stale_key "$win")
-  if status_is_paused "$last"; then
+  digest=$(status_open_captain_holds "$state/$task.status")
+  # The hold branch is gated on the SHARED declared-wait predicate
+  # (status_declared_wait, fm-classify-lib.sh's one owner), exactly like
+  # classify_stale and the watcher's handle_paused_stale: quiet-state applies
+  # only while the last line still belongs to the hold stream. A newer
+  # working:/done:/failed: line supersedes the hold, so a provably-working crew
+  # behind a stale hold line keeps its wedge marker and a terminal failed run
+  # is never masked by routing state.
+  if [ -n "$digest" ] && status_declared_wait "$state/$task.status"; then
+    # An open captain-held transfer is a declared wait (fm-classify-lib.sh's
+    # status_open_captain_holds fold, stream truth): it never wedge-ages and
+    # never re-surfaces on any cadence. Check it BEFORE the paused verb so a
+    # held stream with a newer trailing paused: line is governed by the hold
+    # policy (classify_stale's hold branch runs first too), never the bounded
+    # awaiting-external cadence. Clear any tracking of either kind so a leftover
+    # marker cannot age it into a false possible-wedge escalation or an
+    # awaiting-external recheck. The watcher's .captain-held-surfaced-<window>
+    # one-shot and this daemon's .subsuper-captain-held-surfaced-<task> one-shot
+    # are NOT cleared here: a hold that is still open must keep its dead-agent
+    # surface one-shot, or the daemon would re-alert an agent the watcher
+    # already surfaced in normal mode.
+    clear_pause_tracking "$win" "$state"
+  elif status_is_paused "$last"; then
     stale_marker_remove "$win" "$state"
     pause_marker_record "$win" "$state"
   elif [ -e "$marker" ] || [ -e "$state/.paused-$watcher_key" ]; then
     clear_pause_tracking "$win" "$state"
   fi
+  # A dead-agent one-shot marker outlives its hold otherwise: hold ids are
+  # deterministic, so a hold resolved and later re-opened for the same key
+  # yields an identical fold digest and the stale marker would suppress the new
+  # hold's surface (and the files accumulate). Sweep BOTH namespaces whenever
+  # the fold no longer has an open hold - a marker left in either one is read by
+  # both modes, so an asymmetric sweep just moves the suppression instead of
+  # ending it.
+  reconcile_captain_held_surfaced "$state" "$win" "$task" "$digest"
 }
 
 migrate_watcher_pause_markers() {  # <state>
@@ -1081,7 +1170,7 @@ _pause_recheck_flush() {  # <state> <due-file>
 #  3) heartbeat scan: every HEARTBEAT_SCAN_SECS, grep state/*.status for a
 #     captain-relevant line the per-wake classifier missed and escalate it.
 housekeeping() {  # <state>
-  local state=$1 now due f key task win marker age last max_defer oldest pause_secs
+  local state=$1 now due f key task win marker age last max_defer oldest pause_secs surf
   local pause_due pause_floor pause_captain_secs
   now=$(_now)
   migrate_watcher_pause_markers "$state"
@@ -1129,9 +1218,21 @@ housekeeping() {  # <state>
     fi
     task=$(window_to_task "$win" "$state")
     last=$(last_status_line "$state/$task.status")
-    if [ -n "$last" ] && status_is_paused "$last"; then
-      reconcile_pause_tracking "$win" "$state" "$last"
-      continue
+    # A declared wait - a paused: external wait OR an open captain-held
+    # transfer (fm-classify-lib.sh's status_declared_wait / status_open_captain_holds
+    # fold is the one owner of the vocabulary) - must never age into a possible-
+    # wedge escalation. reconcile parks a paused: wait on the long re-surface
+    # cadence and clears tracking for an open hold. PARITY: a provably-working
+    # crew behind a stale hold line is NOT a declared wait for the wedge timer
+    # (a hold is routing state, not a liveness exemption), so it falls through
+    # and its marker ages normally - the same guard the watcher applies.
+    if status_declared_wait "$state/$task.status"; then
+      if [ "$(crew_absorb_class "$task")" = working ]; then
+        : # working crew keeps its wedge timer; let the marker age below
+      else
+        reconcile_pause_tracking "$win" "$state" "$last"
+        continue
+      fi
     fi
     age=$(( now - $(cat "$marker" 2>/dev/null || echo "$now") ))
     [ "$age" -ge "${FM_STALE_ESCALATE_SECS:-$STALE_ESCALATE_SECS_DEFAULT}" ] || continue
@@ -1142,6 +1243,40 @@ housekeeping() {  # <state>
       *) escalate_add "$state" "stale persisted ${age}s (possible wedge): $win"
          stale_marker_remove "$win" "$state" ;;
     esac
+  done
+
+  # (1c) dead-agent one-shot markers must not outlive their hold: hold ids are
+  # deterministic, so a hold resolved and later re-opened for the same key
+  # yields an identical fold digest, and a stale marker would suppress the new
+  # hold's surface (and the files accumulate). This is the ONLY collector for
+  # either namespace, so it globs BOTH: a surface writes the window-keyed and
+  # the task-keyed marker together and both modes read both, so a sweep that
+  # visits one namespace alone just moves the suppression to the other. An
+  # orphan whose window no longer resolves is dropped by whichever pass finds
+  # it, which is why the torn-down case needs both globs rather than a paired
+  # removal: with the task gone there is nothing left to derive the twin from.
+  for surf in "$state"/.subsuper-captain-held-surfaced-* "$state"/.captain-held-surfaced-*; do
+    [ -e "$surf" ] || continue
+    # The marker suffix is _stale_key(<task> or <window>) (tr ':/.' '___'), which
+    # is lossy for ids containing '.' (allowed by the slug charset). Resolve the
+    # window the same way loop (2b) does so $state/$task.status resolves even for
+    # such ids; an unresolvable marker is orphaned and swept.
+    case "$surf" in
+      *.subsuper-captain-held-surfaced-*)
+        key="${surf##*.subsuper-captain-held-surfaced-}"
+        win=$(window_for_task "$key" "$state" 2>/dev/null || true)
+        ;;
+      *)
+        key="${surf##*.captain-held-surfaced-}"
+        win=$(window_for_window_key "$key" "$state" 2>/dev/null || true)
+        ;;
+    esac
+    if [ -z "$win" ]; then
+      rm -f "$surf"; continue
+    fi
+    task=$(window_to_task "$win" "$state")
+    reconcile_captain_held_surfaced "$state" "$win" "$task" \
+      "$(status_open_captain_holds "$state/$task.status")"
   done
 
   # (2b) pause re-surface recheck. A DECLARED external-wait pause idles by design,
@@ -1225,6 +1360,24 @@ window_for_task() {  # <task-key> [state]
   for w in $(tmux list-windows -a -F '#{session_name}:#{window_name}' 2>/dev/null | grep ':fm-' || true); do
     t=$(window_to_task "$w" "$state")
     [ "$(_stale_key "$t")" = "$key" ] && { printf '%s' "$w"; return 0; }
+  done
+  return 1
+}
+
+# The window-keyed sibling of window_for_task: find a recorded or live window
+# target whose own _stale_key matches the marker key. The watcher keys its
+# dead-agent one-shot by WINDOW, so the (1c) sweep needs this reverse lookup to
+# tell a marker whose hold is still open from an orphan whose task is gone.
+window_for_window_key() {  # <window-key> [state]
+  local key=$1 state=${2:-$(_state_root)} meta w
+  for meta in "$state"/*.meta; do
+    [ -e "$meta" ] || continue
+    w=$(fm_backend_target_of_meta "$meta")
+    [ -n "$w" ] || continue
+    [ "$(_stale_key "$w")" = "$key" ] && { printf '%s' "$w"; return 0; }
+  done
+  for w in $(tmux list-windows -a -F '#{session_name}:#{window_name}' 2>/dev/null | grep ':fm-' || true); do
+    [ "$(_stale_key "$w")" = "$key" ] && { printf '%s' "$w"; return 0; }
   done
   return 1
 }
@@ -1339,7 +1492,7 @@ is_wake_reason() {  # <reason>
 # --- dispatch one wake reason to self-handle or escalate --------------------
 # Side effects: logging, marker records, escalation buffer appends.
 handle_wake() {  # <reason> <state>
-  local reason=$1 state=$2 decision action distilled task last
+  local reason=$1 state=$2 decision action distilled task last digest m
   local kind="" arg=""
   if should_force_self "$reason"; then
     log "wake force-self (FM_INJECT_SKIP): $reason"
@@ -1349,6 +1502,11 @@ handle_wake() {  # <reason> <state>
     signal:*) kind=signal; arg="${reason#signal: }"
               decision=$(classify_signal "$arg" "$state") ;;
     stale:*)  kind=stale; arg="${reason#stale: }"
+              # The watcher emits annotated stale reasons ("<window> (detail)")
+              # for its direct stale surfaces, and classification plus the
+              # marker keys need the bare window, so parse the annotation off
+              # before the shared owner sees it.
+              arg="${arg%% (*}"
               decision=$(classify_stale "$arg" "$state") ;;
     check:*)  decision=$(classify_check "$reason") ;;
     heartbeat|heartbeat:*) decision=$(classify_heartbeat) ;;
@@ -1365,6 +1523,22 @@ handle_wake() {  # <reason> <state>
       # housekeeping re-escalates the same pane as a false wedge later.
       [ "$kind" = "stale" ] && stale_marker_remove "$arg" "$state"
       mark_escalated_seen "$kind" "$arg" "$state"
+      # A confidently dead agent under a captain-held transfer escalates once:
+      # record the one-shot marker only AFTER the escalation is durably buffered
+      # (enqueue-before-suppress, the same ordering the watcher uses), so a
+      # daemon death between the buffer append and the marker cannot swallow the
+      # only dead-agent surface - the next wake re-escalates instead of reading
+      # "already surfaced".
+      case "$distilled" in
+        "captain-held, agent exited"*)
+          task=$(window_to_task "$arg" "$state")
+          digest=$(status_open_captain_holds "$state/$task.status")
+          while IFS= read -r m; do
+            [ -n "$m" ] || continue
+            printf '%s' "$digest" > "$m"
+          done < <(captain_held_surfaced_markers "$state" "$arg" "$task")
+          ;;
+      esac
       [ "${FM_ESCALATE_BATCH_SECS:-$ESCALATE_BATCH_SECS_DEFAULT}" -le 0 ] && { escalate_flush "$state" || true; }
       ;;
     pause)
@@ -1377,6 +1551,20 @@ handle_wake() {  # <reason> <state>
         pause_marker_record "$arg" "$state"
       fi
       log "self-handle (paused): $reason -> $distilled"
+      ;;
+    absorb)
+      # An open captain-held transfer is a declared wait (fm-classify-lib.sh
+      # owns the policy): absorb with NO persistence marker of either kind - a
+      # .subsuper-stale-* marker would age it into a false possible-wedge
+      # escalation and a .subsuper-paused-* marker would re-surface a nag only
+      # the captain's answer can clear. classify_stale already split live vs
+      # dead, the provably-working parity case, and the dead-agent one-shot, so
+      # this branch must not re-read the status file or re-run the verb test.
+      if [ "$kind" = "stale" ]; then
+        pause_marker_remove "$arg" "$state"
+        stale_marker_remove "$arg" "$state"
+      fi
+      log "self-handle (absorb): $reason -> $distilled"
       ;;
     *)
       # Transient (non-terminal) stale: record/refresh the wedge marker so
@@ -1395,7 +1583,7 @@ handle_wake() {  # <reason> <state>
             _clear_wedge=1
           else
             case "$(status_line_verb "$last")" in
-              working|resolved|captain-held) _clear_wedge=0 ;;
+              working|resolved) _clear_wedge=0 ;;
               *) _clear_wedge=1 ;;
             esac
           fi

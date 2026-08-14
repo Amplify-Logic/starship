@@ -950,14 +950,20 @@ test_pause_due_fold_dedupes_shared_window() {
   pass "pause_due_fold counts distinct windows while exposing every throttle marker"
 }
 
-# A captain-held crew can leave a stable backend endpoint after its agent exits.
-# fm-crew-state then authoritatively reports stopped rather than paused, but the
-# confirmed-dead agent plus the declared wait or captain-held transfer must retain
-# bounded pause handling.
-# A still-live agent at an external-decision gate is the disconfirming case: it
-# must surface once, while the unchanged hash must not append the same wake on
-# every watcher re-arm.
-test_exited_declared_pause_is_bounded_but_live_gate_surfaces() {
+# The two declared-wait verbs (fm-classify-lib.sh owns the vocabulary) differ in
+# their re-surface policy, and this test pins the difference:
+#   - paused:   a bounded external wait that can clear on its own. A dead-agent
+#               paused: pane re-surfaces on the bounded pause cadence so the
+#               recheck can detect the wait clearing while the crew still idles.
+#   - captain-held: clears only when the captain answers, so it NEVER re-surfaces
+#               on any cadence - a periodic nag would re-train readers to ignore
+#               the digest. A HEALTHY idle pane (live agent) absorbs completely
+#               silently; a CONFIDENTLY DEAD agent surfaces exactly once, because
+#               the work is lost the moment the answer arrives (the hold must
+#               not suppress that reading). Live vs dead is told apart by
+#               fm_backend_agent_alive, never by the status verb, and neither
+#               case ever wedge-ages or repeats.
+test_declared_wait_policies_paused_bounded_captain_held_silent() {
   local dir state fakebin out capture_file statusf window key pane_hash sig pid back round wakes bare
   dir=$(make_case exited-declared-pause); state="$dir/state"; fakebin="$dir/fakebin"
   out="$dir/watch.out"; capture_file="$dir/pane.txt"; statusf="$state/held.status"
@@ -1006,15 +1012,35 @@ test_exited_declared_pause_is_bounded_but_live_gate_surfaces() {
   pane_hash=$(hash_text "idle bare shell after captain-held transfer")
   printf '%s' "$pane_hash" > "$state/.hash-$key"
   printf '1\n' > "$state/.count-$key"
-  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
-    FM_FAKE_TMUX_CURRENT_COMMAND=zsh FM_FAKE_CREW_STATE='state: stopped · source: pane · bare shell' \
-    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
-    FM_PAUSE_RESURFACE_SECS=240 FM_PAUSE_CAPTAIN_RESURFACE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
-    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
-  pid=$!
-  wait_for_exit "$pid" 40 || fail "captain-held dead-agent pane did not re-surface on the bounded cadence"
+  # The dead agent plus the captain-held transfer is a declared wait: the hold
+  # suppresses the REPEATING nag, never the dead reading, so the exited agent
+  # surfaces EXACTLY once (with the loss-risk reason) and then stays silent
+  # across unchanged polls - no stopped-crew stale, no bounded re-surface, and
+  # never a wedge. The captain-gated cadence is configured short here so the only
+  # thing holding a re-surface back is the verb policy itself.
+  round=1
+  while [ "$round" -le 4 ]; do
+    PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+      FM_FAKE_TMUX_CURRENT_COMMAND=zsh FM_FAKE_CREW_STATE='state: stopped · source: pane · bare shell' \
+      FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+      FM_PAUSE_RESURFACE_SECS=240 FM_PAUSE_CAPTAIN_RESURFACE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+      FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" >> "$out" &
+    pid=$!
+    if wait_live "$pid" 15; then reap "$pid"; else wait "$pid" || fail "captain-held dead-agent watcher round $round failed"; fi
+    round=$((round + 1))
+  done
+  wakes=$(awk -F '\t' -v w="$window" '$3 == "stale" && $4 == w { n++ } END { print n + 0 }' "$state/.wake-queue" 2>/dev/null || true)
+  case "$wakes" in ''|*[!0-9]*) wakes=0 ;; esac
+  [ "$wakes" -eq 1 ] || fail "dead-agent captain-held surfaced $wakes stale wakes, expected exactly one"
+  grep -F "agent exited" "$state/.wake-queue" >/dev/null \
+    || fail "dead-agent captain-held's one surface did not carry the loss-risk reason"
+  bare=$(awk -F '\t' -v w="$window" '$3 == "stale" && $4 == w && $5 == "stale: " w { n++ } END { print n + 0 }' "$state/.wake-queue" 2>/dev/null || true)
+  case "$bare" in ''|*[!0-9]*) bare=0 ;; esac
+  [ "$bare" -eq 0 ] || fail "dead-agent captain-held surfaced as $bare bare stopped-crew stale wakes"
   grep -F "awaiting external" "$state/.wake-queue" >/dev/null \
-    || fail "captain-held dead-agent pane surfaced as a stopped crew"
+    && fail "dead-agent captain-held was re-surfaced on the pause cadence"
+  grep -F "possible wedge" "$state/.wake-queue" >/dev/null \
+    && fail "dead-agent captain-held was escalated as a possible wedge"
 
   dir=$(make_case alive-decision-gate); state="$dir/state"; fakebin="$dir/fakebin"
   out="$dir/watch.out"; capture_file="$dir/pane.txt"; statusf="$state/gate.status"
@@ -1058,7 +1084,403 @@ test_exited_declared_pause_is_bounded_but_live_gate_surfaces() {
   bare=$(awk -F '\t' -v w="$window" '$3 == "stale" && $4 == w && $5 == "stale: " w { n++ } END { print n + 0 }' "$state/.wake-queue")
   [ "$wakes" -eq 1 ] || fail "live external-decision gate should surface once, got $wakes wakes"
   [ "$bare" -eq 1 ] || fail "live external-decision gate lost its immediate bare stale surface"
-  pass "exited declared-pause and captain-held panes use bounded pause cadence while a live decision gate still surfaces once"
+
+  # A LIVE agent under a captain-held transfer is a healthy parked crew at the
+  # decision gate: it absorbs completely SILENTLY - the decision is durably
+  # tracked in the backlog, so there is nothing to report until the captain
+  # answers, and a stale peek would be noise. Never a wedge, never a pause
+  # re-surface, and no dead-agent surface (the agent is alive).
+  dir=$(make_case live-captain-held); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"; statusf="$state/gate.status"
+  window="test:fm-gate"
+  printf 'idle at the captain-decision gate\n' > "$capture_file"
+  printf 'window=%s\nkind=ship\nharness=grok\nbackend=tmux\n' "$window" > "$state/gate.meta"
+  printf 'captain-held [key=route]: tracked by held-decision-route\n' > "$statusf"
+  back=$(( $(date +%s) - 500 ))
+  if [ "$(uname)" = Darwin ]; then touch -mt "$(date -r "$back" '+%Y%m%d%H%M.%S')" "$statusf"
+  else touch -m -d "@$back" "$statusf"; fi
+  sig=$(seen_sig "$statusf"); printf '%s' "$sig" > "$state/.seen-gate_status"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  pane_hash=$(hash_text "idle at the captain-decision gate")
+  printf '%s' "$pane_hash" > "$state/.hash-$key"
+  printf '1\n' > "$state/.count-$key"
+  round=1
+  while [ "$round" -le 5 ]; do
+    PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+      FM_FAKE_TMUX_CURRENT_COMMAND=grok FM_FAKE_CREW_STATE='state: paused · source: status-log · captain-held [key=route]: tracked by held-decision-route' \
+      FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_PAUSE_RESURFACE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+      FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" >> "$out" &
+    pid=$!
+    if wait_live "$pid" 15; then reap "$pid"; else wait "$pid" || fail "live captain-held watcher round $round failed"; fi
+    round=$((round + 1))
+  done
+  wakes=$(awk -F '\t' -v w="$window" '$3 == "stale" && $4 == w { n++ } END { print n + 0 }' "$state/.wake-queue" 2>/dev/null || true)
+  case "$wakes" in ''|*[!0-9]*) wakes=0 ;; esac
+  [ "$wakes" -eq 0 ] || fail "healthy idle captain-held surfaced $wakes stale wakes, expected silence"
+  grep -F "agent exited" "$state/.wake-queue" >/dev/null \
+    && fail "healthy idle captain-held was surfaced as a dead agent"
+  grep -F "awaiting external" "$state/.wake-queue" >/dev/null \
+    && fail "live captain-held gate was re-surfaced on the pause cadence"
+  grep -F "possible wedge" "$state/.wake-queue" >/dev/null \
+    && fail "live captain-held gate was escalated as a possible wedge"
+  [ -e "$state/.paused-$key" ] || fail "live captain-held gate lost its declared-wait marker"
+  pass "declared-wait policies: paused: is bounded, captain-held absorbs silently when healthy and surfaces a dead agent once"
+}
+
+# Cross-mode single surface: away mode records its dead-agent one-shot in
+# .subsuper-captain-held-surfaced-<task>; normal mode must not surface the same
+# unchanged hold state a second time when supervision hands back after AFK.
+test_captain_held_dead_agent_away_marker_absorbs_in_normal_mode() {
+  local dir state fakebin out capture_file statusf window key pane_hash sig pid round wakes digest
+  dir=$(make_case away-surfaced-captain-held); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"; statusf="$state/held.status"
+  window="test:fm-held"
+  printf 'idle bare shell after captain-held transfer\n' > "$capture_file"
+  printf 'window=%s\nkind=ship\nharness=grok\nbackend=tmux\n' "$window" > "$state/held.meta"
+  printf 'captain-held [key=route]: tracked by held-decision-route\n' > "$statusf"
+  back=$(( $(date +%s) - 500 ))
+  if [ "$(uname)" = Darwin ]; then touch -mt "$(date -r "$back" '+%Y%m%d%H%M.%S')" "$statusf"
+  else touch -m -d "@$back" "$statusf"; fi
+  sig=$(seen_sig "$statusf"); printf '%s' "$sig" > "$state/.seen-held_status"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  pane_hash=$(hash_text "idle bare shell after captain-held transfer")
+  printf '%s' "$pane_hash" > "$state/.hash-$key"
+  printf '1\n' > "$state/.count-$key"
+  # Away mode already surfaced this exact hold state: its task-keyed marker
+  # holds the fold digest, so normal mode must absorb silently.
+  digest=$(bash -c '. "$1"; status_open_captain_holds "$2"' _ \
+    "$ROOT/bin/fm-classify-lib.sh" "$statusf")
+  printf '%s' "$digest" > "$state/.subsuper-captain-held-surfaced-held"
+  : > "$state/.paused-$key"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_FAKE_TMUX_CURRENT_COMMAND=zsh FM_FAKE_CREW_STATE='state: working · source: run-step · validating (running)' \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_STALE_ESCALATE_SECS=999 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" >> "$out" &
+  pid=$!
+  wait_numeric_file "$state/.stale-since-$key" 20 \
+    || { reap "$pid"; fail "working reconciliation did not resume wedge tracking"; }
+  reap "$pid"
+  [ "$(cat "$state/.subsuper-captain-held-surfaced-held" 2>/dev/null || true)" = "$digest" ] \
+    || fail "working reconciliation cleared the unchanged hold's one-shot marker"
+  rm -f "$state/.stale-since-$key"
+  round=1
+  while [ "$round" -le 2 ]; do
+    PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+      FM_FAKE_TMUX_CURRENT_COMMAND=zsh FM_FAKE_CREW_STATE='state: stopped · source: pane · bare shell' \
+      FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_PAUSE_RESURFACE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+      FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" >> "$out" &
+    pid=$!
+    if wait_live "$pid" 15; then reap "$pid"; else wait "$pid" || fail "captain-held away-surfaced watcher round $round failed"; fi
+    round=$((round + 1))
+  done
+  wakes=$(awk -F '\t' -v w="$window" '$3 == "stale" && $4 == w { n++ } END { print n + 0 }' "$state/.wake-queue" 2>/dev/null || true)
+  case "$wakes" in ''|*[!0-9]*) wakes=0 ;; esac
+  [ "$wakes" -eq 0 ] || fail "normal mode re-surfaced a dead-agent hold away mode already surfaced ($wakes wakes)"
+  grep -F "agent exited" "$state/.wake-queue" >/dev/null \
+    && fail "normal mode re-emitted the loss-risk reason for an away-surfaced hold"
+  pass "a dead-agent captain-held hold already surfaced in away mode absorbs in normal mode"
+}
+
+# One-shot markers must never outlive their hold, in EITHER namespace. Normal
+# mode records the dead-agent surface under .captain-held-surfaced-<window> and
+# away mode under .subsuper-captain-held-surfaced-<task>, both modes write both
+# and read both, so a sweep that clears only one leaves a survivor that
+# suppresses the next surface for good. Hold ids are deterministic, so a key
+# resolved and then re-opened folds to the SAME digest: this drives one pure
+# normal-mode stream (surface, resolve, re-open) and asserts the re-opened hold
+# surfaces again.
+test_reopened_hold_surfaces_despite_the_previous_one_shot() {
+  local dir state fakebin out capture_file statusf window key pane_hash pid held wakes phase back
+  dir=$(make_case reopened-hold-one-shot); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"; statusf="$state/held.status"
+  window="test:fm-held"
+  printf 'idle bare shell after the captain-held transfer\n' > "$capture_file"
+  printf 'window=%s\nkind=ship\nharness=grok\nbackend=tmux\n' "$window" > "$state/held.meta"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  pane_hash=$(hash_text "idle bare shell after the captain-held transfer")
+  printf '%s' "$pane_hash" > "$state/.hash-$key"
+  printf '1\n' > "$state/.count-$key"
+  held='captain-held [key=route]: tracked by held-decision-route'
+  # Phase 1 opens the hold, phase 2 retires it, phase 3 re-opens the SAME key so
+  # the fold digest matches phase 1 exactly. Each phase back-dates the status
+  # file and re-primes the .seen-* signature so only the stale path runs.
+  for phase in 1 2 3; do
+    case "$phase" in
+      1) printf '%s\n' "$held" > "$statusf" ;;
+      2) printf 'resolved [key=route]: retired by fm-decision-hold (held-decision-route)\n' >> "$statusf"
+         rm -f "$state/.paused-$key"
+         printf 'window=%s\nkind=ship\nharness=grok\nbackend=tmux\n' "$window" > "$state/held.meta" ;;
+      3) printf '%s\n' "$held" >> "$statusf"
+         printf 'window=%s\nkind=ship\nharness=grok\nbackend=tmux\n' "$window" > "$state/held.meta" ;;
+    esac
+    back=$(( $(date +%s) - 500 ))
+    if [ "$(uname)" = Darwin ]; then touch -mt "$(date -r "$back" '+%Y%m%d%H%M.%S')" "$statusf"
+    else touch -m -d "@$back" "$statusf"; fi
+    printf '%s' "$(seen_sig "$statusf")" > "$state/.seen-held_status"
+    PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+      FM_FAKE_TMUX_CURRENT_COMMAND=zsh FM_FAKE_CREW_STATE="$(if [ "$phase" = 2 ]; then printf 'state: finished-idle · source: herdr · idle'; else printf 'state: stopped · source: pane · bare shell'; fi)" \
+      FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_PAUSE_RESURFACE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+      FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" >> "$out" &
+    pid=$!
+    if wait_live "$pid" 20; then reap "$pid"; else wait "$pid" || fail "reopened-hold watcher phase $phase failed"; fi
+    if [ "$phase" = 1 ]; then
+      grep -F "agent exited" "$state/.wake-queue" >/dev/null \
+        || fail "the first open hold did not surface its dead agent"
+    fi
+    if [ "$phase" = 2 ]; then
+      [ ! -e "$state/.captain-held-surfaced-$key" ] \
+        || fail "a resolved hold kept the watcher's window-keyed one-shot marker"
+      [ ! -e "$state/.subsuper-captain-held-surfaced-held" ] \
+        || fail "a resolved hold kept the away-mode task-keyed one-shot marker"
+    fi
+  done
+  wakes=$(grep -cF "agent exited" "$state/.wake-queue" 2>/dev/null || true)
+  case "$wakes" in ''|*[!0-9]*) wakes=0 ;; esac
+  [ "$wakes" -eq 2 ] \
+    || fail "a re-opened hold with an identical digest surfaced $wakes dead-agent wakes, expected 2"
+  pass "a re-opened captain-held hold is not suppressed by a one-shot marker of either namespace"
+}
+
+test_resolved_hold_busy_pane_clears_both_one_shots() {
+  local dir state fakebin out capture_file statusf window key pid
+  dir=$(make_case resolved-hold-busy); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"; statusf="$state/held.status"
+  window="test:fm-held"
+  printf 'active tool output after the hold resolved\n' > "$capture_file"
+  printf 'window=%s\nkind=ship\nharness=grok\nbackend=tmux\n' "$window" > "$state/held.meta"
+  printf 'captain-held [key=route]: tracked by held-decision-route\nresolved [key=route]: retired by fm-decision-hold (held-decision-route)\n' > "$statusf"
+  printf '%s' "$(seen_sig "$statusf")" > "$state/.seen-held_status"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  printf 'old-digest' > "$state/.captain-held-surfaced-$key"
+  printf 'old-digest' > "$state/.subsuper-captain-held-surfaced-held"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_FAKE_TMUX_CURRENT_COMMAND=node FM_FAKE_CREW_STATE='state: working · source: run-step · active' \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  if wait_live "$pid" 15; then reap "$pid"; else wait "$pid" || fail "resolved-hold busy watcher failed"; fi
+  [ ! -e "$state/.captain-held-surfaced-$key" ] \
+    || fail "a busy pane retained the resolved hold's window marker"
+  [ ! -e "$state/.subsuper-captain-held-surfaced-held" ] \
+    || fail "a busy pane retained the resolved hold's task marker"
+  pass "a busy pane cannot strand either one-shot after its hold resolves"
+}
+
+# The captain-held quiet-state fold is STREAM-TRUTH (fm-classify-lib.sh owns the
+# policy): a captain-held line opens its key, an explicit resolved: line closes
+# it, and the declared-wait gate follows the fold only while the last line still
+# belongs to the hold stream. This pins the fold contract directly so the
+# watcher and daemon consumers inherit it.
+test_status_open_captain_holds_fold_is_stream_truth() {
+  local dir state f
+  dir=$(make_case fold-captain-holds); state="$dir/state"; f="$state/t.status"
+  printf 'captain-held [key=a]: tracked by held-a\n' > "$f"
+  status_has_open_captain_hold "$f" || fail "a lone captain-held line must fold open"
+  status_declared_wait "$f" || fail "a lone captain-held line must be a declared wait"
+  printf 'resolved [key=a]: retired by fm-decision-hold (held-a)\n' >> "$f"
+  [ -z "$(status_open_captain_holds "$f")" ] || fail "a resolved hold must fold closed"
+  status_has_open_captain_hold "$f" && fail "a resolved hold must not be an open hold"
+  status_declared_wait "$f" && fail "a resolved hold must not be a declared wait"
+  # Multi-hold: hold b stays open when only a resolved. The trailing resolved:
+  # line is still part of the hold stream, so the declared-wait gate stays true
+  # (a last-line test would misread it as "no hold").
+  printf 'captain-held [key=a]: tracked by held-a\ncaptain-held [key=b]: tracked by held-b\nresolved [key=a]: retired\n' > "$f"
+  status_has_open_captain_hold "$f" || fail "hold b must stay open when only a resolved"
+  status_declared_wait "$f" || fail "a still-open hold b must remain a declared wait"
+  printf 'resolved [key=b]: retired\n' >> "$f"
+  [ -z "$(status_open_captain_holds "$f")" ] || fail "resolving b must close the last open hold"
+  status_declared_wait "$f" && fail "an all-resolved stream must not be a declared wait"
+  # A non-hold line supersedes quiet-state even while the fold is open: a crew
+  # that moved on to a newer verb is no longer silently absorbed by the hold.
+  printf 'captain-held [key=a]: tracked by held-a\nworking: still churning\n' > "$f"
+  status_declared_wait "$f" && fail "a newer working: line must supersede the hold quiet-state"
+  pass "captain-held quiet-state is stream-truth: resolved: closes a key, open siblings and non-hold supersession behave"
+}
+
+# The closing `resolved [key=<k>]:` line fm-decision-hold.sh appends when it
+# retires a hold is an event ABOUT THE HOLD, not a fresh statement of what the
+# crew is doing. It must not mask a still-valid paused: declaration that came
+# before it, or the pane ages straight back into the false possible-wedge alarm
+# this branch exists to kill. The look-back skips ONLY resolve-verb lines, so a
+# newer real verb still supersedes the pause.
+test_closing_resolved_line_does_not_mask_a_declared_pause() {
+  local dir state f
+  dir=$(make_case resolved-masks-pause); state="$dir/state"; f="$state/p.status"
+  printf 'captain-held [key=a]: tracked by held-a\npaused: waiting on the upstream release\nresolved [key=a]: retired by fm-decision-hold (held-a)\n' > "$f"
+  [ -z "$(status_open_captain_holds "$f")" ] \
+    || fail "the closing resolved: line must close the only open hold"
+  status_declared_wait "$f" \
+    || fail "a hold's closing resolved: line masked the still-valid paused: declaration"
+  printf 'paused: waiting on the upstream release\nworking: back on it\nresolved [key=a]: retired\n' > "$f"
+  status_declared_wait "$f" \
+    && fail "a newer working: line must still supersede the declared pause"
+  printf 'captain-held [key=a]: tracked by held-a\nresolved [key=a]: retired\n' > "$f"
+  status_declared_wait "$f" \
+    && fail "a fully resolved hold with no pause behind it must not be a declared wait"
+  printf 'paused [key=release]: waiting on the upstream release\nresolved [key=release]: upstream landed\n' > "$f"
+  status_declared_wait "$f" \
+    && fail "an ordinary keyed resolved: transition must close its paused: activity"
+  pass "a hold's closing resolved: line does not mask a preceding declared pause"
+}
+
+# A malformed [key=...] token in the POST-COLON position folds under the default
+# key exactly as it did before post-colon extraction existed: the line is a real
+# decision, just malformed keyed, so it must not vanish from the open-decision
+# set (the lost-open-decision failure the fold exists to prevent).
+test_postcolon_invalid_key_folds_under_default() {
+  local dir state f open
+  dir=$(make_case postcolon-bad-key); state="$dir/state"; f="$state/d.status"
+  printf 'needs-decision: [key=bad key] pick one\n' > "$f"
+  open=$(status_open_decisions "$f")
+  printf '%s' "$open" | grep -F $'default\tneeds-decision\t' >/dev/null \
+    || fail "a malformed post-colon key vanished from the open-decision set: $open"
+  pass "an invalid post-colon key folds under default instead of dropping the decision"
+}
+
+# The captain's ruling restored the prefix-only key read: legacy post-colon
+# keyed lines (`needs-decision: [key=q1] pick one`) keep folding under the
+# default key exactly as they always did, so a keyless `resolved:` still closes
+# them. A stream that only ever resolves the default key can never strand an
+# open decision under a key no one resolves (the quiet-state-never-outlives-its
+# hold bug class this branch exists to kill).
+test_postcolon_keyed_lines_stay_under_default_key() {
+  local dir state f open
+  dir=$(make_case postcolon-legacy-default); state="$dir/state"; f="$state/l.status"
+  printf 'needs-decision: [key=q1] pick one\n' > "$f"
+  open=$(status_open_decisions "$f")
+  printf '%s' "$open" | grep -F $'default\tneeds-decision\t' >/dev/null \
+    || fail "a post-colon keyed needs-decision must fold under default: $open"
+  printf 'resolved: pick one answered\n' >> "$f"
+  [ -z "$(status_open_decisions "$f")" ] || fail "a keyless resolved: must close the default fold"
+  pass "post-colon keyed lines stay under the default key and a keyless resolved: closes them"
+}
+
+# Ruling: quiet treatment must never outlive the hold. Once resolve appends its
+# closing resolved: line (fm-decision-hold.sh), the stopped crew's pane returns
+# to NORMAL stale handling: the watcher surfaces it as a bare stopped-crew
+# stale instead of absorbing it behind the retired hold.
+test_resolved_hold_returns_pane_to_normal_stale_handling() {
+  local dir state fakebin out capture_file statusf window key pane_hash sig pid round wakes bare
+  dir=$(make_case resolved-hold-stale); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"; statusf="$state/held.status"
+  window="test:fm-held"
+  printf 'idle bare shell after the hold resolved\n' > "$capture_file"
+  printf 'window=%s\nkind=ship\nharness=grok\nbackend=tmux\n' "$window" > "$state/held.meta"
+  printf 'captain-held [key=route]: tracked by held-decision-route\nresolved [key=route]: retired by fm-decision-hold (held-decision-route)\n' > "$statusf"
+  back=$(( $(date +%s) - 500 ))
+  if [ "$(uname)" = Darwin ]; then touch -mt "$(date -r "$back" '+%Y%m%d%H%M.%S')" "$statusf"
+  else touch -m -d "@$back" "$statusf"; fi
+  sig=$(seen_sig "$statusf"); printf '%s' "$sig" > "$state/.seen-held_status"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  pane_hash=$(hash_text "idle bare shell after the hold resolved")
+  printf '%s' "$pane_hash" > "$state/.hash-$key"
+  printf '1\n' > "$state/.count-$key"
+  # With the hold retired the pane is a plain stopped crew: it surfaces a bare
+  # stale wake on first sight (never absorbed, never a wedge label), then stays
+  # quiet across unchanged polls via the suppressor.
+  round=1
+  while [ "$round" -le 4 ]; do
+    PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+      FM_FAKE_TMUX_CURRENT_COMMAND=zsh FM_FAKE_CREW_STATE='state: stopped · source: pane · bare shell' \
+      FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_PAUSE_RESURFACE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+      FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" >> "$out" &
+    pid=$!
+    if wait_live "$pid" 15; then reap "$pid"; else wait "$pid" || fail "resolved-hold watcher round $round failed"; fi
+    round=$((round + 1))
+  done
+  wakes=$(awk -F '\t' -v w="$window" '$3 == "stale" && $4 == w { n++ } END { print n + 0 }' "$state/.wake-queue" 2>/dev/null || true)
+  case "$wakes" in ''|*[!0-9]*) wakes=0 ;; esac
+  [ "$wakes" -eq 1 ] || fail "resolved hold surfaced $wakes stale wakes, expected one bare surface"
+  bare=$(awk -F '\t' -v w="$window" '$3 == "stale" && $4 == w && $5 == "stale: " w { n++ } END { print n + 0 }' "$state/.wake-queue" 2>/dev/null || true)
+  case "$bare" in ''|*[!0-9]*) bare=0 ;; esac
+  [ "$bare" -eq 1 ] || fail "resolved hold lost its bare stopped-crew surface (got $bare)"
+  grep -F "agent exited" "$state/.wake-queue" >/dev/null \
+    && fail "a resolved hold must not carry the dead-agent loss-risk surface"
+  grep -F "possible wedge" "$state/.wake-queue" >/dev/null \
+    && fail "a resolved hold's surface was escalated as a possible wedge"
+  pass "after resolve emits its closing line the stopped crew surfaces normally again"
+}
+
+# Stream-truth through the watcher: a trailing resolved: line for hold a must
+# NOT mask a still-open hold b. The pane stays silently absorbed behind b (the
+# captain still owes the b decision) until b is resolved too.
+test_multihold_resolved_one_keeps_quiet_state() {
+  local dir state fakebin out capture_file statusf window key pane_hash sig pid round wakes
+  dir=$(make_case multihold-quiet); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"; statusf="$state/gate.status"
+  window="test:fm-gate"
+  printf 'idle at the captain-decision gate\n' > "$capture_file"
+  printf 'window=%s\nkind=ship\nharness=grok\nbackend=tmux\n' "$window" > "$state/gate.meta"
+  printf 'captain-held [key=route]: tracked by held-decision-route\ncaptain-held [key=access]: tracked by held-decision-access\nresolved [key=route]: retired by fm-decision-hold (held-decision-route)\n' > "$statusf"
+  back=$(( $(date +%s) - 500 ))
+  if [ "$(uname)" = Darwin ]; then touch -mt "$(date -r "$back" '+%Y%m%d%H%M.%S')" "$statusf"
+  else touch -m -d "@$back" "$statusf"; fi
+  sig=$(seen_sig "$statusf"); printf '%s' "$sig" > "$state/.seen-gate_status"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  pane_hash=$(hash_text "idle at the captain-decision gate")
+  printf '%s' "$pane_hash" > "$state/.hash-$key"
+  printf '1\n' > "$state/.count-$key"
+  round=1
+  while [ "$round" -le 5 ]; do
+    PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+      FM_FAKE_TMUX_CURRENT_COMMAND=grok FM_FAKE_CREW_STATE='state: paused · source: status-log · captain-held [key=access]: tracked by held-decision-access' \
+      FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_PAUSE_RESURFACE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+      FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" >> "$out" &
+    pid=$!
+    if wait_live "$pid" 15; then reap "$pid"; else wait "$pid" || fail "multihold watcher round $round failed"; fi
+    round=$((round + 1))
+  done
+  wakes=$(awk -F '\t' -v w="$window" '$3 == "stale" && $4 == w { n++ } END { print n + 0 }' "$state/.wake-queue" 2>/dev/null || true)
+  case "$wakes" in ''|*[!0-9]*) wakes=0 ;; esac
+  [ "$wakes" -eq 0 ] || fail "still-open hold b surfaced $wakes stale wakes, expected silence behind the open hold"
+  [ -e "$state/.paused-$key" ] || fail "still-open hold b lost its declared-wait marker"
+  pass "a trailing resolved: line for one hold does not retire a sibling still-open hold"
+}
+
+# A malformed hold line (invalid key slug, so the fold never opens) is NOT a
+# declared wait: the watcher must fall back to NORMAL stale handling instead of
+# silently absorbing the crew forever. The paused verdict that crew state
+# reports for such a line comes only from the captain-held -> paused mapping
+# (status_is_paused on the last line is false, so handle_paused_stale's paused
+# branch would swallow it); the fix overrides that verdict so a dead or idle
+# agent surfaces a bare stale wake once, then stays quiet.
+test_malformed_hold_surfaces_normal_stale() {
+  local dir state fakebin out capture_file statusf window key pane_hash sig pid round wakes bare
+  dir=$(make_case malformed-hold-stale); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"; statusf="$state/bad.status"
+  window="test:fm-bad"
+  printf 'idle at a bogus decision gate\n' > "$capture_file"
+  printf 'window=%s\nkind=ship\nharness=grok\nbackend=tmux\n' "$window" > "$state/bad.meta"
+  printf 'captain-held [key=bad key]: tracked by held-bad\n' > "$statusf"
+  back=$(( $(date +%s) - 500 ))
+  if [ "$(uname)" = Darwin ]; then touch -mt "$(date -r "$back" '+%Y%m%d%H%M.%S')" "$statusf"
+  else touch -m -d "@$back" "$statusf"; fi
+  sig=$(seen_sig "$statusf"); printf '%s' "$sig" > "$state/.seen-bad_status"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  pane_hash=$(hash_text "idle at a bogus decision gate")
+  printf '%s' "$pane_hash" > "$state/.hash-$key"
+  printf '1\n' > "$state/.count-$key"
+  round=1
+  while [ "$round" -le 4 ]; do
+    PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+      FM_FAKE_TMUX_CURRENT_COMMAND=zsh FM_FAKE_CREW_STATE='state: paused · source: pane · bare shell' \
+      FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_PAUSE_RESURFACE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+      FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" >> "$out" &
+    pid=$!
+    if wait_live "$pid" 15; then reap "$pid"; else wait "$pid" || fail "malformed-hold watcher round $round failed"; fi
+    round=$((round + 1))
+  done
+  wakes=$(awk -F '\t' -v w="$window" '$3 == "stale" && $4 == w { n++ } END { print n + 0 }' "$state/.wake-queue" 2>/dev/null || true)
+  case "$wakes" in ''|*[!0-9]*) wakes=0 ;; esac
+  [ "$wakes" -eq 1 ] || fail "malformed hold surfaced $wakes stale wakes, expected one bare surface"
+  bare=$(awk -F '\t' -v w="$window" '$3 == "stale" && $4 == w && $5 == "stale: " w { n++ } END { print n + 0 }' "$state/.wake-queue" 2>/dev/null || true)
+  case "$bare" in ''|*[!0-9]*) bare=0 ;; esac
+  [ "$bare" -eq 1 ] || fail "malformed hold lost its normal stopped-crew surface (got $bare)"
+  grep -F "agent exited" "$state/.wake-queue" >/dev/null \
+    && fail "a malformed hold must not carry the dead-agent loss-risk surface"
+  grep -F "possible wedge" "$state/.wake-queue" >/dev/null \
+    && fail "a malformed hold's surface was escalated as a possible wedge"
+  pass "a malformed hold line gets normal stale handling instead of a silent absorb"
 }
 
 test_secondmate_paused_resurfaces_in_normal_mode() {
@@ -1112,6 +1534,53 @@ test_secondmate_nonpaused_stale_remains_suppressed() {
   [ ! -s "$out" ] || { reap "$pid"; fail "ordinary secondmate stale pane printed a wake reason: $(cat "$out")"; }
   reap "$pid"
   pass "a non-paused secondmate retains normal stale suppression"
+}
+
+test_secondmate_captain_held_dead_agent_surfaces_once() {
+  local dir state fakebin out capture_file statusf window key pane_hash sig pid round wakes bare
+  dir=$(make_case secondmate-captain-held-dead); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"; statusf="$state/secondmate-hold.status"
+  window="test:fm-secondmate-hold"
+  printf 'idle bare shell after a captain-held transfer
+' > "$capture_file"
+  printf 'window=%s\nkind=secondmate\n' "$window" > "$state/secondmate-hold.meta"
+  printf 'captain-held [key=hold-shape]: tracked by held-route
+' > "$statusf"
+  back=$(( $(date +%s) - 500 ))
+  if [ "$(uname)" = Darwin ]; then touch -mt "$(date -r "$back" '+%Y%m%d%H%M.%S')" "$statusf"
+  else touch -m -d "@$back" "$statusf"; fi
+  sig=$(seen_sig "$statusf"); printf '%s' "$sig" > "$state/.seen-secondmate-hold_status"
+  key=$(printf '%s' "$window" | tr '.:/' '___')
+  pane_hash=$(hash_text "idle bare shell after a captain-held transfer")
+  printf '%s' "$pane_hash" > "$state/.hash-$key"
+  printf '1\n' > "$state/.count-$key"
+  # A captain-held secondmate is a declared wait like any other crew: the hold
+  # must reach the dead-agent one-shot handling instead of being skipped as an
+  # unrelated idle secondmate. A confidently dead agent surfaces exactly once,
+  # then stays silent across unchanged polls.
+  round=1
+  while [ "$round" -le 4 ]; do
+    PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+      FM_FAKE_TMUX_CURRENT_COMMAND=zsh FM_FAKE_CREW_STATE='state: stopped · source: pane · bare shell' \
+      FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_PAUSE_RESURFACE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+      FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" >> "$out" &
+    pid=$!
+    if wait_live "$pid" 15; then reap "$pid"; else wait "$pid" || fail "captain-held secondmate dead-agent watcher round $round failed"; fi
+    round=$((round + 1))
+  done
+  wakes=$(awk -F '\t' -v w="$window" '$3 == "stale" && $4 == w { n++ } END { print n + 0 }' "$state/.wake-queue" 2>/dev/null || true)
+  case "$wakes" in ''|*[!0-9]*) wakes=0 ;; esac
+  [ "$wakes" -eq 1 ] || fail "dead-agent captain-held secondmate surfaced $wakes stale wakes, expected exactly one"
+  grep -F "agent exited" "$state/.wake-queue" >/dev/null \
+    || fail "dead-agent captain-held secondmate's one surface did not carry the loss-risk reason"
+  bare=$(awk -F '\t' -v w="$window" '$3 == "stale" && $4 == w && $5 == "stale: " w { n++ } END { print n + 0 }' "$state/.wake-queue" 2>/dev/null || true)
+  case "$bare" in ''|*[!0-9]*) bare=0 ;; esac
+  [ "$bare" -eq 0 ] || fail "dead-agent captain-held secondmate surfaced as $bare bare stopped-crew stale wakes"
+  grep -F "awaiting external" "$state/.wake-queue" >/dev/null \
+    && fail "dead-agent captain-held secondmate was re-surfaced on the pause cadence"
+  grep -F "possible wedge" "$state/.wake-queue" >/dev/null \
+    && fail "dead-agent captain-held secondmate was framed as a wedge"
+  pass "a confidently dead secondmate under a captain-held transfer surfaces once, never wedge-aged"
 }
 
 test_secondmate_unpause_clears_pause_tracking() {
@@ -1688,9 +2157,20 @@ test_paused_recheck_throttles_a_trigger_missing_from_the_due_set
 test_pause_due_fold_is_shared_and_groups_by_reason
 test_pause_due_fold_preserves_empty_notes
 test_pause_due_fold_dedupes_shared_window
-test_exited_declared_pause_is_bounded_but_live_gate_surfaces
+test_declared_wait_policies_paused_bounded_captain_held_silent
+test_captain_held_dead_agent_away_marker_absorbs_in_normal_mode
+test_reopened_hold_surfaces_despite_the_previous_one_shot
+test_resolved_hold_busy_pane_clears_both_one_shots
+test_status_open_captain_holds_fold_is_stream_truth
+test_closing_resolved_line_does_not_mask_a_declared_pause
+test_postcolon_keyed_lines_stay_under_default_key
+test_postcolon_invalid_key_folds_under_default
+test_resolved_hold_returns_pane_to_normal_stale_handling
+test_multihold_resolved_one_keeps_quiet_state
+test_malformed_hold_surfaces_normal_stale
 test_secondmate_paused_resurfaces_in_normal_mode
 test_secondmate_nonpaused_stale_remains_suppressed
+test_secondmate_captain_held_dead_agent_surfaces_once
 test_secondmate_unpause_clears_pause_tracking
 test_nonterminal_stale_pause_transitions_reclassify_unchanged_hash
 test_nonterminal_paused_rechecks_authoritative_state

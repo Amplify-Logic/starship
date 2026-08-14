@@ -744,6 +744,45 @@ EOF
   pass "failed run-step that is newest (older pause only) still surfaces as failed/none"
 }
 
+# A captain-held transfer is ROUTING state, never a fact: it must never mask the
+# terminal failure it follows. The failed run wins and the hold is reported
+# ALONGSIDE it, so a crew whose pipeline failed and then had its decision
+# transferred reads failed + hold, never a healthy paused. This is the same
+# trust rule the whole captain-held fix exists to protect: reporting a failed
+# run as paused would hide the failure from every state reader (bearings,
+# supervision, the watcher's absorb classification), which is the exact class
+# of false assurance the false wedge alarm caused.
+test_captain_held_after_terminal_failed_reports_failed_with_hold() {
+  reset_fakes
+  local d short out absorb back
+  d=$(new_case captain-held-after-failed)
+  make_repo_on_branch "$d/wt" fm/feat-hold-after-fail
+  short=$(git -C "$d/wt" rev-parse --short=7 HEAD)
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/hold-after-fail.meta" "window=fm:fm-hold-after-fail" "worktree=$d/wt" "kind=ship"
+  # The hold line is NEWER than the failed run, yet it must not supersede it.
+  printf 'failed: session quota wall\ncaptain-held [key=quota]: tracked by held-quota-1\n' \
+    > "$d/state/hold-after-fail.status"
+  back=$(( $(date +%s) - 86400 ))
+  FM_FAKE_AXI_STATUS="$(run_failed fm/feat-hold-after-fail)"
+  FM_FAKE_RUNS_LIST="$(cat <<EOF
+  failed     fm/feat-hold-after-fail ${short}  $(date -r "$back" '+%Y-%m-%d %H:%M' 2>/dev/null || date -d "@$back" '+%Y-%m-%d %H:%M')
+EOF
+)"
+  FM_FAKE_BUSY=0
+  out=$(run_crew_state "$d" hold-after-fail)
+  assert_contains "$out" "state: failed" "a hold must not mask the failed run"
+  assert_contains "$out" "source: run-step" "hold-after-fail stays run-step sourced"
+  assert_contains "$out" "tracked by held-quota-1" "the hold is mentioned alongside the failure"
+  assert_not_contains "$out" "state: paused" "a hold after a failed run must never read as paused"
+  absorb=$(
+    PATH="$d/fakebin:$PATH" FM_STATE_OVERRIDE="$d/state" FM_CREW_STATE_BIN="$CREW_STATE" \
+      bash -c '. "'"$ROOT"'/bin/fm-classify-lib.sh"; crew_absorb_class hold-after-fail'
+  )
+  [ "$absorb" = none ] || fail "crew_absorb_class expected none for a hold-masked failure, got '$absorb'"
+  pass "a captain-held line after a terminal failed run reports failed with the hold alongside"
+}
+
 # (e) cross-branch attribution: `axi status` returns ANOTHER branch's run (the
 # routine case once more than one crew validates the same underlying repo
 # concurrently - they share ONE no-mistakes repo registration), so the helper
@@ -977,6 +1016,26 @@ test_no_run_idle_pane_paused() {
   assert_contains "$out" "source: status-log" "idle pause -> status-log source"
   assert_contains "$out" "holding for the upstream tool release" "the pause reason is carried in the detail"
   pass "no run + idle pane on a paused: status reports state: paused with its reason"
+}
+
+# (g'') no run + idle pane on a verified captain-held transfer -> state: paused,
+# exactly like a declared external-wait pause: the transfer is a declared wait
+# (fm-classify-lib.sh), so a supervisor reading the crew must see a declared
+# pause rather than a wedge-suspect unknown.
+test_no_run_idle_pane_captain_held() {
+  reset_fakes
+  local d; d=$(new_case captain-held)
+  make_repo_on_branch "$d/wt" fm/feat-held
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-held.meta" "window=fm:fm-feat-held" "worktree=$d/wt" "kind=ship"
+  printf 'captain-held [key=q1]: tracked by held-q1\n' > "$d/state/feat-held.status"
+  FM_FAKE_AXI_STATUS=""
+  FM_FAKE_BUSY=0
+  local out; out=$(run_crew_state "$d" feat-held)
+  assert_contains "$out" "state: paused" "captain-held log -> paused"
+  assert_contains "$out" "source: status-log" "idle captain-held -> status-log source"
+  assert_contains "$out" "tracked by held-q1" "the hold id is carried in the detail"
+  pass "no run + idle pane on a captain-held: transfer reports state: paused with its hold id"
 }
 
 test_no_run_idle_pane_custom_paused_verb() {
@@ -1322,6 +1381,7 @@ test_terminal_passed
 test_terminal_failed
 test_newer_paused_after_terminal_failed
 test_terminal_failed_without_newer_pause_still_surfaces
+test_captain_held_after_terminal_failed_reports_failed_with_hold
 test_cross_branch_attribution_via_runs_list
 test_cross_branch_attribution_picks_most_recent_row
 test_coarse_run_does_not_probe_other_branch_ci_log_for_ready_status
@@ -1333,6 +1393,7 @@ test_no_run_herdr_idle_agent_status_and_idle_pane_stays_idle
 test_no_run_idle_pane_uses_log
 test_no_run_idle_pane_uses_keyed_log
 test_no_run_idle_pane_paused
+test_no_run_idle_pane_captain_held
 test_no_run_idle_pane_custom_paused_verb
 test_no_run_idle_secondmate_resolved_event_not_state
 test_dead_window_ignores_stale_status_log

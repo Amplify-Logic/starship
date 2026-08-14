@@ -71,6 +71,9 @@ SH
   ln -s "$ROOT/bin/fm-x-lib.sh" "$fake/bin/fm-x-lib.sh"
   # fm-capability-lib.sh: teardown records capability outcomes before meta removal.
   ln -s "$ROOT/bin/fm-capability-lib.sh" "$fake/bin/fm-capability-lib.sh"
+  # fm-classify-lib.sh: the one owner of the captain-held one-shot marker paths
+  # teardown removes alongside the task's other volatile state.
+  ln -s "$ROOT/bin/fm-classify-lib.sh" "$fake/bin/fm-classify-lib.sh"
   ln -s "$ROOT/bin/fm-worktree-lease-lib.sh" "$fake/bin/fm-worktree-lease-lib.sh"
   ln -s "$ROOT/bin/fm-wake-lib.sh" "$fake/bin/fm-wake-lib.sh"
   ln -s "$ROOT/bin/fm-secondmate-registry-lib.sh" "$fake/bin/fm-secondmate-registry-lib.sh"

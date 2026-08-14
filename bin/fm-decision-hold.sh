@@ -275,7 +275,7 @@ command_hold() {
 }
 
 command_complete() {
-  local origin=${1:-} meta previous='' supplied='' keys='' key status_file open raw_open key_seen=0 has_meta=0
+  local origin=${1:-} meta previous='' supplied='' keys='' key status_file open raw_open key_seen=0 has_meta=0 id show state
   [ "$#" -ge 2 ] || { usage >&2; exit 2; }
   validate_slug origin-id "$origin"
   shift
@@ -318,16 +318,40 @@ $open
 EOF
 
   if [ "$has_meta" = 1 ]; then
+    # Preflight BEFORE attesting completion in the metadata: an open status
+    # decision whose durable hold is DONE is a re-use (the crew wrote a fresh
+    # needs-decision under a retired key). Refusing after the meta append would
+    # leave decisions_reviewed=1 and the updated key inventory behind, which a
+    # later verify could accept as durably-resolved keys and allow teardown
+    # past the fresh open decision.
+    while IFS=$'\t' read -r key _verb _summary; do
+      [ -n "$key" ] || continue
+      list_has_key "$keys" "$key" || continue
+      id=$(hold_id "$origin" "$key")
+      show=$(task_show "$id") || fail "captain decision $id is absent from $FM_HOME/data/backlog.md"
+      state=$(show_field "$show" state)
+      [ "$state" != "done" ] || fail "captain decision $id is already durably resolved; use a new decision key for a new decision"
+    done <<EOF
+$raw_open
+EOF
+
     if [ "$(meta_value "$meta" decisions_reviewed)" != 1 ] || [ "$previous" != "$keys" ]; then
       printf 'decisions_reviewed=1\ndecision_keys=%s\n' "$keys" >> "$meta"
     fi
 
     # Transfer any still-open status decision to its durable backlog owner so the
-    # live status fold does not duplicate the same Captain's Call item.
+    # live status fold does not duplicate the same Captain's Call item. The
+    # preflight above already refused a done (re-used) key before the metadata
+    # attestation; this loop keeps the same guard as defense-in-depth against a
+    # durable-state race between the preflight and the append.
     while IFS=$'\t' read -r key _verb _summary; do
       [ -n "$key" ] || continue
       list_has_key "$keys" "$key" || continue
-      printf 'captain-held [key=%s]: tracked by %s\n' "$key" "$(hold_id "$origin" "$key")" >> "$status_file"
+      id=$(hold_id "$origin" "$key")
+      show=$(task_show "$id") || fail "captain decision $id is absent from $FM_HOME/data/backlog.md"
+      state=$(show_field "$show" state)
+      [ "$state" != "done" ] || fail "captain decision $id is already durably resolved; use a new decision key for a new decision"
+      printf 'captain-held [key=%s]: tracked by %s\n' "$key" "$id" >> "$status_file"
       key_seen=1
     done <<EOF
 $raw_open
@@ -367,8 +391,27 @@ EOF
   printf 'verified: %s unresolved-decision inventory\n' "$origin"
 }
 
+# Retire the captain-held quiet-state from the origin status stream: a hold
+# that ends must end its quiet treatment (standing ruling - quiet treatment must
+# never outlive the hold). status_open_captain_holds closes this key on the
+# appended resolved: line, so the watcher and away-mode daemon stop treating the
+# pane as a declared wait immediately, even before the crew writes its next
+# status line. The append is guarded on the status file existing (the transfer
+# line itself is only written by `complete` when a meta exists) and is
+# idempotent: a repeated append for an already-closed hold just re-closes the
+# key in the fold. Called from BOTH resolve completion paths (the idempotent
+# early return and the main close), so an interrupted resolve that later re-runs
+# still retires the quiet-state it closed.
+retire_origin_hold_status() {  # <origin> <key> <hold-id>
+  local origin=$1 key=$2 id=$3
+  if [ -f "$STATE/$origin.status" ]; then
+    printf '%s [key=%s]: retired by fm-decision-hold (%s)\n' \
+      "${FM_CLASSIFY_RESOLVE_VERB:-$FM_CLASSIFY_RESOLVE_VERB_DEFAULT}" "$key" "$id" >> "$STATE/$origin.status"
+  fi
+}
+
 command_resolve() {
-  local origin=${1:-} key=${2:-} decision_file='' id='' decision='' decision_digest='' body='' routed='' routed_csv='' dep show blocked state hold_show hold_body resolution_recorded=0
+  local origin=${1:-} key=${2:-} decision_file='' id='' decision='' decision_digest='' body='' routed='' routed_csv='' dep show blocked state hold_show hold_body resolution_recorded=0 hold_fold decision_open
   [ "$#" -ge 2 ] || { usage >&2; exit 2; }
   shift 2
   while [ "$#" -gt 0 ]; do
@@ -397,6 +440,25 @@ command_resolve() {
     hold_show=$(task_show "$id")
     hold_body=$(show_field "$hold_show" body)
     verify_resolution_identity "$id" "$hold_body" "$decision_digest" "$routed_csv"
+    # Idempotent retry: retire the quiet-state only while the captain-held
+    # transfer this resolution owns is still open in the origin status fold
+    # (the interrupted-resolve case: the durable updates landed but the closing
+    # line never did) AND no fresh decision has since re-opened the key. A
+    # completed resolve already closed the transfer, so a re-run must not emit
+    # again: a crew that reused the key in a fresh needs-decision would
+    # otherwise see the NEW decision silently closed by the old resolution's
+    # closing line. The decision-fold check covers the interrupted-then-reused
+    # case: the old transfer still folds open, but the new needs-decision is
+    # open in status_open_decisions, so retiring would close it. Both folds are
+    # fm-classify-lib.sh's one shared owner; key is a validated slug, so the
+    # key field matches are exact.
+    hold_fold=$(status_open_captain_holds "$STATE/$origin.status")
+    decision_open=$(status_open_decisions "$STATE/$origin.status")
+    if [ -n "$hold_fold" ] \
+      && printf '%s\n' "$hold_fold" | cut -f1 | grep -qxF "$key" \
+      && ! printf '%s\n' "$decision_open" | cut -f1 | grep -qxF "$key"; then
+      retire_origin_hold_status "$origin" "$key" "$id"
+    fi
     printf 'resolved: %s\n' "$id"
     return 0
   fi
@@ -450,6 +512,18 @@ command_resolve() {
   done
   tasks_axi "done" "$id" >/dev/null || fail "could not close resolved captain hold $id"
   verify_hold_resolved "$id" || fail "captain hold $id did not retain its durable resolution record"
+  # A live origin may have re-opened the key in a fresh needs-decision while
+  # the durable updates ran. The closing line drops the key from both folds,
+  # so withhold it when the key is open in status_open_decisions at retire
+  # time: the normal flow has the key closed by its captain-held line, so an
+  # open key here means a fresh decision superseded the one being resolved and
+  # must stay visible. Mirrors the retry path's decision-fold check.
+  decision_open=$(status_open_decisions "$STATE/$origin.status")
+  if printf '%s\n' "$decision_open" | cut -f1 | grep -qxF "$key"; then
+    printf 'warning: origin re-opened decision key %s during resolution; closing line withheld\n' "$key" >&2
+  else
+    retire_origin_hold_status "$origin" "$key" "$id"
+  fi
   printf 'resolved: %s -> %s\n' "$id" "$routed"
 }
 

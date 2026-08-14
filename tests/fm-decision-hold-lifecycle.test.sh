@@ -276,6 +276,248 @@ EOF
   pass "captain holds are idempotent, distinct, teardown-safe, Bearings-visible, and durably routed before close"
 }
 
+# Ruling: quiet treatment must never outlive the hold. resolve retires the
+# captain-held quiet-state from the origin status stream: after the hold closes
+# it appends `resolved [key=<key>]: retired by fm-decision-hold (<hold-id>)`,
+# and the status_open_captain_holds fold closes that key. Without the emit the
+# last status line would stay `captain-held:` forever, so both supervision
+# consumers would keep the idle pane silently absorbed after the captain
+# already answered.
+test_resolve_emits_closing_status_line_retiring_the_hold() {
+  local home id hold open
+  home=$(make_home resolve-emits-closing)
+  id=sample-emit-review
+  mkdir -p "$home/data/$id"
+  tasks_in "$home" add "$id" "Emit review" --kind scout --repo sample --start >/dev/null \
+    || fail "could not create origin fixture"
+  write_origin_meta "$home" "$id"
+  printf 'needs-decision [key=emit]: choose the emit shape\n' > "$home/state/$id.status"
+  hold=$(run_decisions "$home" hold "$id" emit \
+    --title "Choose the emit shape" --reason "captain emit pending" --repo sample) \
+    || fail "could not register emit hold"
+  run_decisions "$home" complete "$id" emit >/dev/null \
+    || fail "completion gate failed"
+  grep -F "captain-held [key=emit]:" "$home/state/$id.status" >/dev/null \
+    || fail "complete did not transfer the decision to a captain-held status line"
+  tasks_in "$home" add emit-dep "Emit dependent" --kind ship --repo sample >/dev/null \
+    || fail "could not create dependent"
+  tasks_in "$home" block emit-dep --by "$hold" >/dev/null || fail "could not block dependent"
+  printf 'Use the compact emit shape.\n' > "$home/emit-decision.txt"
+  run_decisions "$home" resolve "$id" emit --decision-file "$home/emit-decision.txt" \
+    --routed-to emit-dep >/dev/null || fail "resolve failed"
+  grep -F "resolved [key=emit]: retired by fm-decision-hold ($hold)" "$home/state/$id.status" >/dev/null \
+    || fail "resolve did not append the closing resolved: line"
+  # The idempotent early return (a re-run of an already-resolved hold) must NOT
+  # emit again once the transfer is closed: a crew that reused the key would
+  # otherwise see the new decision closed by the old resolution's closing line.
+  # It retires only the interrupted case (durable resolved, closing line never
+  # landed - the transfer still folds open), reproduced below by removing the
+  # closing line.
+  run_decisions "$home" resolve "$id" emit --decision-file "$home/emit-decision.txt" \
+    --routed-to emit-dep >/dev/null || fail "idempotent resolve re-run failed"
+  lines=$(grep -cF "retired by fm-decision-hold ($hold)" "$home/state/$id.status")
+  [ "$lines" -eq 1 ] || fail "idempotent re-run re-emitted the closing line after the transfer closed (count $lines)"
+  grep -vF "retired by fm-decision-hold" "$home/state/$id.status" > "$home/state/$id.status.tmp" \
+    && mv "$home/state/$id.status.tmp" "$home/state/$id.status"
+  run_decisions "$home" resolve "$id" emit --decision-file "$home/emit-decision.txt" \
+    --routed-to emit-dep >/dev/null || fail "interrupted-resolve re-run failed"
+  lines=$(grep -cF "retired by fm-decision-hold ($hold)" "$home/state/$id.status")
+  [ "$lines" -ge 1 ] || fail "interrupted-resolve re-run did not retire the still-open transfer"
+  # The last line is now resolved:, so the single-line quiet-state predicates
+  # are false, and the stream fold has no open holds either.
+  open=$(bash -c '. "$1"; status_open_captain_holds "$2"' _ \
+    "$ROOT/bin/fm-classify-lib.sh" "$home/state/$id.status")
+  [ -z "$open" ] || fail "resolved hold still folds open: $open"
+  pass "resolve appends a closing resolved: line so quiet treatment cannot outlive the hold"
+}
+
+# Ruling (resolved-retry-closes-new-decision): an idempotent resolve re-run must
+# not emit the closing resolved: line when the crew has since reused the key in
+# a fresh needs-decision - the old resolution would silently close the new
+# decision in the status fold, hiding it from supervision.
+test_resolve_retry_does_not_close_a_reused_key() {
+  local home id hold lines open
+  home=$(make_home reused-retry)
+  id=sample-retry-review
+  mkdir -p "$home/data/$id"
+  tasks_in "$home" add "$id" "Retry review" --kind scout --repo sample --start >/dev/null \
+    || fail "could not create origin fixture"
+  write_origin_meta "$home" "$id"
+  printf 'needs-decision [key=retry]: pick the first shape\n' > "$home/state/$id.status"
+  hold=$(run_decisions "$home" hold "$id" retry \
+    --title "Pick the first shape" --reason "captain retry pending" --repo sample) \
+    || fail "could not register retry hold"
+  run_decisions "$home" complete "$id" retry >/dev/null \
+    || fail "completion gate failed"
+  tasks_in "$home" add retry-dep "Retry dependent" --kind ship --repo sample >/dev/null \
+    || fail "could not create dependent"
+  tasks_in "$home" block retry-dep --by "$hold" >/dev/null || fail "could not block dependent"
+  printf 'Use the first shape.\n' > "$home/retry-decision.txt"
+  run_decisions "$home" resolve "$id" retry --decision-file "$home/retry-decision.txt" \
+    --routed-to retry-dep >/dev/null || fail "resolve failed"
+  # The crew re-uses the retired key for a new question.
+  printf 'needs-decision [key=retry]: pick a NEW shape\n' >> "$home/state/$id.status"
+  run_decisions "$home" resolve "$id" retry --decision-file "$home/retry-decision.txt" \
+    --routed-to retry-dep >/dev/null || fail "old resolve retry failed"
+  lines=$(grep -cF "retired by fm-decision-hold" "$home/state/$id.status" || true)
+  [ "$lines" -eq 1 ] || fail "old resolve retry re-emitted the closing line over the reused key (count $lines)"
+  open=$(bash -c '. "$1"; status_open_decisions "$2"' _ \
+    "$ROOT/bin/fm-classify-lib.sh" "$home/state/$id.status")
+  printf '%s\n' "$open" | cut -f1 | grep -qxF "retry" \
+    || fail "the reused decision was closed by the old resolve retry: $(printf '%s' "$open" | tr '\n' ' ')"
+  pass "an old resolve retry cannot close a re-used decision key"
+}
+
+# Ruling (resolve-retry-closes-new-decision-after-interruption): when a resolve
+# was INTERRUPTED (durable resolved, closing status line never landed) and the
+# crew then reuses the key in a fresh needs-decision, the old transfer still
+# folds open - the retry must still NOT retire it, or the closing line would
+# silently close the new decision.
+test_resolve_retry_interrupted_then_reused_does_not_close_decision() {
+  local home id hold lines open
+  home=$(make_home interrupted-reused-retry)
+  id=sample-inter-retry
+  mkdir -p "$home/data/$id"
+  tasks_in "$home" add "$id" "Inter retry review" --kind scout --repo sample --start >/dev/null \
+    || fail "could not create origin fixture"
+  write_origin_meta "$home" "$id"
+  printf 'needs-decision [key=inter]: pick the first shape\n' > "$home/state/$id.status"
+  hold=$(run_decisions "$home" hold "$id" inter \
+    --title "Pick the first shape" --reason "captain inter pending" --repo sample) \
+    || fail "could not register inter hold"
+  run_decisions "$home" complete "$id" inter >/dev/null \
+    || fail "completion gate failed"
+  tasks_in "$home" add inter-dep "Inter dependent" --kind ship --repo sample >/dev/null \
+    || fail "could not create dependent"
+  tasks_in "$home" block inter-dep --by "$hold" >/dev/null || fail "could not block dependent"
+  printf 'Use the first shape.\n' > "$home/inter-decision.txt"
+  run_decisions "$home" resolve "$id" inter --decision-file "$home/inter-decision.txt" \
+    --routed-to inter-dep >/dev/null || fail "resolve failed"
+  # Simulate the interruption: the durable resolution landed but the closing
+  # status line never did, so the captain-held transfer still folds open.
+  grep -vF "retired by fm-decision-hold" "$home/state/$id.status" > "$home/state/$id.status.tmp" \
+    && mv "$home/state/$id.status.tmp" "$home/state/$id.status"
+  # The crew then reuses the retired key for a new question.
+  printf 'needs-decision [key=inter]: pick a NEW shape\n' >> "$home/state/$id.status"
+  run_decisions "$home" resolve "$id" inter --decision-file "$home/inter-decision.txt" \
+    --routed-to inter-dep >/dev/null || fail "interrupted-then-reused retry failed"
+  lines=$(grep -cF "retired by fm-decision-hold" "$home/state/$id.status" || true)
+  [ "$lines" -eq 0 ] || fail "the retry retired the reused decision (retired count $lines)"
+  open=$(bash -c '. "$1"; status_open_decisions "$2"' _ \
+    "$ROOT/bin/fm-classify-lib.sh" "$home/state/$id.status")
+  printf '%s\n' "$open" | cut -f1 | grep -qxF "inter" \
+    || fail "the reused decision was closed by the interrupted retry: $(printf '%s' "$open" | tr '\n' ' ')"
+  pass "an interrupted resolve retry cannot close a decision re-opened under the same key"
+}
+
+# Ruling (resolve-race-closes-reused-decision): a live origin that re-opens the
+# same key in a fresh needs-decision WHILE the initial resolve's durable updates
+# are running must not have that new decision closed by the resolve's closing
+# line. The guard takes no snapshot: it re-reads status_open_decisions AFTER the
+# durable updates and withholds the closing line whenever the key is open at
+# retire time. The normal flow has the key already closed by its captain-held
+# line, so an open key there means a fresh decision superseded the one being
+# resolved; the durable resolution still lands.
+test_resolve_does_not_close_a_reopened_key() {
+  local home id hold lines open show
+  home=$(make_home reopened-key-race)
+  id=sample-race-review
+  mkdir -p "$home/data/$id"
+  tasks_in "$home" add "$id" "Race review" --kind scout --repo sample --start >/dev/null \
+    || fail "could not create origin fixture"
+  write_origin_meta "$home" "$id"
+  printf 'needs-decision [key=race]: pick the first shape\n' > "$home/state/$id.status"
+  hold=$(run_decisions "$home" hold "$id" race \
+    --title "Pick the race shape" --reason "captain race pending" --repo sample) \
+    || fail "could not register race hold"
+  tasks_in "$home" add race-dep "Race dependent" --kind ship --repo sample >/dev/null \
+    || fail "could not create dependent"
+  tasks_in "$home" block race-dep --by "$hold" >/dev/null || fail "could not block dependent"
+  # A live origin re-opens the key while the resolve's durable updates run: the
+  # fake tasks-axi appends the fresh needs-decision on the resolve's first
+  # update call, between verify_hold_active and the closing line.
+  cat > "$home/fakebin/tasks-axi" <<'EOF'
+#!/usr/bin/env bash
+if [ "${1:-}" = update ]; then
+  printf 'needs-decision [key=race]: pick a NEW shape (re-opened mid-resolution)\n' >> "$FM_STATE_OVERRIDE/sample-race-review.status"
+fi
+exec "$REAL_TASKS_AXI" "$@"
+EOF
+  chmod +x "$home/fakebin/tasks-axi"
+  printf 'Use the first shape.\n' > "$home/race-decision.txt"
+  run_decisions "$home" resolve "$id" race --decision-file "$home/race-decision.txt" \
+    --routed-to race-dep >/dev/null || fail "initial resolve failed"
+  lines=$(grep -cF "retired by fm-decision-hold" "$home/state/$id.status" || true)
+  [ "$lines" -eq 0 ] || fail "resolve closed a key re-opened mid-resolution (retired count $lines)"
+  open=$(bash -c '. "$1"; status_open_decisions "$2"' _ \
+    "$ROOT/bin/fm-classify-lib.sh" "$home/state/$id.status")
+  printf '%s\n' "$open" | cut -f1 | grep -qxF "race" \
+    || fail "the re-opened decision was hidden by the initial resolve: $(printf '%s' "$open" | tr '\n' ' ')"
+  show=$(tasks_in "$home" show "$hold" --full)
+  assert_contains "$show" "state: done" "durable resolution did not land despite the withheld closing line"
+  pass "an initial resolve cannot close a key re-opened while it was routing"
+}
+
+# Ruling (quiet-state-regrant-via-resolved-hold): a crew that re-uses a
+# previously-resolved decision key in a NEW needs-decision line must not get a
+# fresh captain-held transfer pointing at the RETIRED backlog item - that would
+# silently regrant the hold quiet-state to a done hold whose compensating
+# controls (the active-hold captain return flow) never fire, letting the new
+# decision rot invisibly. complete refuses loudly, mirroring command_hold, so
+# the crew switches to a new key and the status line stays captain-relevant.
+test_complete_refuses_reused_resolved_decision_key() {
+  local home id hold lines open meta_before
+  home=$(make_home reused-resolved-key)
+  id=sample-reuse-review
+  mkdir -p "$home/data/$id"
+  tasks_in "$home" add "$id" "Reuse review" --kind scout --repo sample --start >/dev/null \
+    || fail "could not create origin fixture"
+  write_origin_meta "$home" "$id"
+  printf 'needs-decision [key=reuse]: pick the first shape\n' > "$home/state/$id.status"
+  hold=$(run_decisions "$home" hold "$id" reuse \
+    --title "Pick the first shape" --reason "captain reuse pending" --repo sample) \
+    || fail "could not register reuse hold"
+  run_decisions "$home" complete "$id" reuse >/dev/null \
+    || fail "completion gate failed"
+  printf 'Use the first shape.\n' > "$home/reuse-decision.txt"
+  tasks_in "$home" add reuse-dep "Reuse dependent" --kind ship --repo sample >/dev/null \
+    || fail "could not create dependent"
+  tasks_in "$home" block reuse-dep --by "$hold" >/dev/null || fail "could not block dependent"
+  run_decisions "$home" resolve "$id" reuse --decision-file "$home/reuse-decision.txt" \
+    --routed-to reuse-dep >/dev/null || fail "resolve failed"
+  # The crew re-uses the retired key for a new question and adds a brand-new
+  # decision too (held like any new decision); the old status stream already
+  # closed reuse with the resolve emit, so the reuse line re-opens it and the
+  # fresh line opens a new key.
+  printf 'needs-decision [key=reuse]: pick a NEW shape\n' >> "$home/state/$id.status"
+  printf 'needs-decision [key=fresh]: pick a fresh shape\n' >> "$home/state/$id.status"
+  run_decisions "$home" hold "$id" fresh \
+    --title "Pick the fresh shape" --reason "captain fresh pending" --repo sample >/dev/null \
+    || fail "could not register fresh hold"
+  meta_before=$(cat "$home/state/$id.meta")
+  before=$(grep -cF "captain-held [key=reuse]:" "$home/state/$id.status")
+  if run_decisions "$home" complete "$id" reuse fresh > "$home/reuse-complete.out" 2> "$home/reuse-complete.err"; then
+    after=$(grep -cF "captain-held [key=reuse]:" "$home/state/$id.status")
+    [ "$after" -gt "$before" ] \
+      && fail "re-used resolved key re-opened the fold (captain-held count $before -> $after) before the guard"
+    fail "complete accepted a re-used resolved decision key"
+  fi
+  grep -F "captain decision $hold is already durably resolved; use a new decision key" "$home/reuse-complete.err" >/dev/null \
+    || fail "complete refused without the new-key message: $(cat "$home/reuse-complete.err")"
+  after=$(grep -cF "captain-held [key=reuse]:" "$home/state/$id.status")
+  [ "$after" -eq "$before" ] || fail "the refused complete appended a captain-held transfer anyway"
+  # The refusal must happen BEFORE the metadata attestation: a failed complete
+  # may not leave decisions_reviewed=1 and an updated key inventory that a
+  # later verify could accept as durably-resolved and allow teardown past the
+  # fresh open decision.
+  [ "$(cat "$home/state/$id.meta")" = "$meta_before" ] \
+    || fail "the refused complete mutated the completion metadata: $(cat "$home/state/$id.meta")"
+  open=$(bash -c '. "$1"; status_open_captain_holds "$2"' _ \
+    "$ROOT/bin/fm-classify-lib.sh" "$home/state/$id.status")
+  [ -z "$open" ] || fail "the refused complete left the hold fold open: $open"
+  pass "complete refuses a re-used resolved decision key so quiet-state cannot regrant"
+}
+
 test_scout_teardown_always_requires_inventory_verification() {
   local home id
   home=$(make_home unconditional-teardown)
@@ -554,6 +796,11 @@ test_uninventoried_report_decision_refuses_completion
 
 test_scout_teardown_always_requires_inventory_verification
 test_structured_holds_survive_teardown_and_route_resolution
+test_resolve_emits_closing_status_line_retiring_the_hold
+test_resolve_retry_does_not_close_a_reused_key
+test_resolve_retry_interrupted_then_reused_does_not_close_decision
+test_resolve_does_not_close_a_reopened_key
+test_complete_refuses_reused_resolved_decision_key
 test_origin_slug_validation_precedes_path_construction
 test_visual_review_uses_shared_completion_owner
 test_none_inventory_and_resolved_prose_do_not_create_holds

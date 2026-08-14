@@ -116,6 +116,8 @@ SUB_HOME_MARKER=".fm-secondmate-home"
 . "$SCRIPT_DIR/fm-secondmate-registry-lib.sh"
 # shellcheck source=bin/fm-pending-reply-lib.sh
 . "$SCRIPT_DIR/fm-pending-reply-lib.sh"
+# shellcheck source=bin/fm-classify-lib.sh
+. "$SCRIPT_DIR/fm-classify-lib.sh"
 if [ "$#" -lt 1 ] || ! fm_task_id_path_safe "$1"; then
   echo "error: invalid teardown request" >&2
   exit 2
@@ -426,6 +428,28 @@ validate_pr_poll_cleanup() {
       return 1
     fi
   done
+}
+
+# Collect the task's captain-held dead-agent one-shot markers, both namespaces.
+# PLACEMENT: teardown, deliberately, because it is the smallest home that always
+# runs. The away-mode daemon's housekeeping (1c) glob sweep is the only other
+# collector and it only runs while a supervision daemon is up, so a fleet that
+# never enters AFK would orphan these markers forever. That matters more than an
+# ordinary leak: hold ids are deterministic, so a task later recreated under the
+# same id that re-opens the same decision key folds to a byte-identical digest,
+# and the orphaned marker would suppress its dead-agent surface permanently -
+# the exact silent suppression the captain-held work exists to remove. Teardown
+# already owns this task's volatile state next to $ID.status and $ID.meta, and
+# it has the recorded window in hand, so the window-keyed twin stays reachable
+# and no glob sweep is needed here. Both paths come from
+# fm-classify-lib.sh's captain_held_surfaced_markers, the ONE owner of the
+# namespace pair, so the write, sweep, and teardown sites cannot drift apart.
+remove_captain_held_surfaced_markers() {  # <state-dir> <task-id> <window>
+  local state_dir=$1 id=$2 win=$3 m
+  while IFS= read -r m; do
+    [ -n "$m" ] || continue
+    rm -f "$m"
+  done < <(captain_held_surfaced_markers "$state_dir" "$win" "$id")
 }
 
 remove_pr_poll_artifacts() {
@@ -1257,6 +1281,7 @@ cleanup_firstmate_home_children() {
     remove_grok_turnend_auth "$sub_state" "$child_id"
     remove_pr_poll_artifacts "$sub_state" "$child_id" || return 1
     fm_pending_reply_remove_task "$sub_state" "$child_id"
+    remove_captain_held_surfaced_markers "$sub_state" "$child_id" "$child_t"
     rm -f "$sub_state/$child_id.status" "$sub_state/$child_id.turn-ended" "$sub_state/$child_id.meta" "$sub_state/$child_id.pi-ext.ts" "$sub_state/$child_id.prime-ext.ts" "$sub_state/$child_id.grok-turnend-token"
     rm -rf "$sub_state/$child_id.kimi-home" "$sub_state/$child_id.prime-agent-home"
   done
@@ -1413,6 +1438,7 @@ remove_pr_poll_artifacts "$STATE" "$ID" || exit 1
 fm_pending_reply_remove_task "$STATE" "$ID"
 # Record capability evidence before meta disappears (ship/scout only; best-effort).
 fm_capability_record_teardown "$KIND" "$FORCE" "$HARNESS" "$MODEL" "$EFFORT" "$TASK_TYPE"
+remove_captain_held_surfaced_markers "$STATE" "$ID" "$T"
 rm -f "$STATE/$ID.status" "$STATE/$ID.turn-ended" "$STATE/$ID.meta" "$STATE/$ID.pi-ext.ts" "$STATE/$ID.prime-ext.ts" "$STATE/$ID.grok-turnend-token"
 rm -rf "$STATE/$ID.kimi-home" "$STATE/$ID.prime-agent-home"
 "$FM_ROOT/bin/fm-visible-status.sh" --all >/dev/null 2>&1 || true

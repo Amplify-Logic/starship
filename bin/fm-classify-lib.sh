@@ -1,12 +1,63 @@
 #!/usr/bin/env bash
 # Shared wake classifier: the common source of truth for captain-relevant status
-# tests, declared-external-wait vocabulary, the declared-pause recheck cadence and
+# tests, the declared-wait vocabulary, the declared-pause recheck cadence and
 # shared-blocker grouping fold, and the working/paused absorb classification that
 # makes no-verb signal and stale-pane wakes safe to absorb.
 # Sourced by BOTH the always-on watcher
 # (bin/fm-watch.sh) and the away-mode daemon (bin/fm-supervise-daemon.sh) so the
 # overlapping triage policy lives in one place instead of two copies that can
 # drift apart.
+#
+# The declared-wait vocabulary has two verbs, and their re-surface policy differs
+# deliberately. This block is the ONE owner of the captain-held policy; the
+# watcher, daemon, and crew-state consumers point here instead of restating it.
+#   - paused:   a bounded external wait expected to clear on its own (an upstream
+#               release, a rate-limit reset). The stale path absorbs it but
+#               re-surfaces it once per FM_PAUSE_RESURFACE_SECS so the recheck
+#               can detect the wait clearing while the crew still idles.
+#   - captain-held: a decision the captain owes (fm-decision-hold.sh). It also
+#               absorbs, and it never re-surfaces on any cadence: only the
+#               captain's answer clears it, so nothing a recheck can observe
+#               changes, and a periodic nag would train the reader to ignore the
+#               digest - the same harm a false wedge alarm causes.
+#               - A HEALTHY idle pane (live agent) absorbs silently on the STALE
+#                 path; its no-verb SIGNAL path still surfaces a newly written
+#                 hold line once in normal mode, exactly like paused:.
+#               - A CONFIDENTLY DEAD agent surfaces exactly once, because the
+#                 work is lost the moment the answer arrives - precisely when it
+#                 hurts most. Live vs dead is told apart by fm_backend_agent_alive,
+#                 never by the status verb.
+#               - Neither repeats and neither wedge-ages.
+#   - Neither verb is a wedge: an idle pane under either is expected, and an idle
+#               pane with NO declared wait still escalates on
+#               FM_STALE_ESCALATE_SECS. A provably-working crew behind a stale
+#               hold line is NOT a declared wait either: a hold is routing state,
+#               not a liveness exemption, so a working crew keeps its wedge timer
+#               in both normal and away mode (the daemon's classify_stale checks
+#               crew_absorb_class before absorbing, mirroring the watcher).
+#
+# Quiet treatment must never outlive the hold that justified it (the standing
+# 2026-08-05 ruling): the quiet-state is STREAM-TRUTH, not the last status line.
+# fm-decision-hold.sh resolve appends a closing resolved [key=<k>]: line to the
+# origin status file when it retires a hold, and status_open_captain_holds folds
+# the stream (a captain-held line opens its key, a resolved: line closes it), so
+# a still-open hold keeps its quiet state even when a later resolved: line masks
+# it, and a resolved hold loses quiet state immediately even before the crew
+# writes its next status line. Consumers that decide quiet-state call
+# status_has_open_captain_hold / status_declared_wait with the status file;
+# single-line contexts keep status_is_captain_held.
+# A captain-held one-shot marker lives exactly as long as its hold fold is open.
+# Every cleanup path must preserve both marker namespaces while the fold is open
+# and clear both through captain_held_surfaced_markers when it closes: clearing
+# early permits a second contractually one-shot alert, while clearing late can
+# suppress a later hold that reuses the same key.
+#
+# The silence of a healthy captain-held pane cannot rot the decision invisibly:
+# the transfer is durably recorded in the backlog (fm-decision-hold.sh) and the
+# captain's return flow surfaces it. Note the teardown unresolved-decision gate
+# is SCOUT-ONLY (fm-teardown.sh runs fm-decision-hold.sh verify only for scout
+# tasks), so a ship task carries no such gate; the durable backlog record and
+# the return flow are the compensating controls that apply to both kinds.
 #
 # Most functions are pure, side-effect-free reads of status files: each takes
 # what it needs as arguments and touches no globals beyond the optional
@@ -61,12 +112,26 @@ FM_CLASSIFY_CAPTAIN_RE_DEFAULT='done:|needs-decision:|blocked:|failed:|PR ready|
 # drift between the two consumers. FM_CLASSIFY_PAUSED_VERB overrides it.
 FM_CLASSIFY_PAUSED_VERB_DEFAULT='paused'
 
-# Bounded re-surface cadence for a declared pause or a dead-agent captain hold.
+# The captain-held verb. Firstmate appends
+#   captain-held [key=<slug>]: tracked by <hold-id>
+# when a task's still-open decision is transferred to its durable backlog owner
+# (fm-decision-hold.sh). It is a DECLARED wait like paused:, but it is NOT a
+# bounded external wait, so it never re-surfaces on a cadence; the full policy
+# (live vs dead, stream-truth retirement, provably-working parity, scout-only
+# teardown note) lives in the header block above - the ONE owner. The verb
+# constant itself (FM_CLASSIFY_CAPTAIN_HELD_VERB_DEFAULT) has ONE assignment,
+# with its decision-closing siblings below (FM_CLASSIFY_RESOLVE_VERB_DEFAULT),
+# and FM_CLASSIFY_CAPTAIN_HELD_VERB overrides it. Consumers use
+# status_is_captain_held / status_is_paused_or_captain_held for single lines and
+# status_has_open_captain_hold / status_declared_wait for quiet-state decisions.
+
+# Bounded re-surface cadence for a declared external-wait pause (paused:).
 # Far longer than the wedge threshold (FM_STALE_ESCALATE_SECS, default 240s), it
-# avoids nagging a deliberate wait while ensuring a forgotten hold cannot rot
-# invisibly - it re-surfaces once for a recheck every window. One hour by default;
-# both consumers read FM_PAUSE_RESURFACE_SECS with this default so the cadence has
-# one owner.
+# avoids nagging a deliberate wait while ensuring a wait that cleared on its own
+# cannot rot invisibly - it re-surfaces once for a recheck every window. One hour
+# by default; both consumers read FM_PAUSE_RESURFACE_SECS with this default so
+# the cadence has one owner. A captain-held transfer does NOT re-surface on this
+# cadence - see FM_CLASSIFY_CAPTAIN_HELD_VERB_DEFAULT for that decision.
 FM_PAUSE_RESURFACE_SECS_DEFAULT=3600
 # A wait that names an explicit captain decision cannot clear until the captain
 # acts, so the ordinary hourly recheck would only repeat the same escalation.
@@ -78,6 +143,9 @@ FM_PAUSE_CAPTAIN_RESURFACE_SECS_DEFAULT=28800
 # status decision opened by needs-decision or blocked. See status_open_decisions
 # below for the status-fold contract. The transfer verb is written only after
 # fm-decision-hold.sh has verified the corresponding captain-held backlog item.
+# This is the ONE assignment of FM_CLASSIFY_CAPTAIN_HELD_VERB_DEFAULT; the
+# declared-wait policy for that verb (silent absorb, never wedge-aged) lives in
+# the captain-held block above.
 FM_CLASSIFY_RESOLVE_VERB_DEFAULT='resolved'
 FM_CLASSIFY_CAPTAIN_HELD_VERB_DEFAULT='captain-held'
 
@@ -112,7 +180,10 @@ status_is_captain_relevant() {
   status_is_paused "$line" && return 1
   verb=$(status_line_verb "$line")
   case "$verb" in
-    working|resolved|captain-held|"${FM_CLASSIFY_PAUSED_VERB:-$FM_CLASSIFY_PAUSED_VERB_DEFAULT}")
+    working|\
+    "${FM_CLASSIFY_RESOLVE_VERB:-$FM_CLASSIFY_RESOLVE_VERB_DEFAULT}"|\
+    "${FM_CLASSIFY_CAPTAIN_HELD_VERB:-$FM_CLASSIFY_CAPTAIN_HELD_VERB_DEFAULT}"|\
+    "${FM_CLASSIFY_PAUSED_VERB:-$FM_CLASSIFY_PAUSED_VERB_DEFAULT}")
       return 1
       ;;
   esac
@@ -135,17 +206,38 @@ status_is_paused() {  # <status-line>
   [ "$verb" = "${FM_CLASSIFY_PAUSED_VERB:-$FM_CLASSIFY_PAUSED_VERB_DEFAULT}" ]
 }
 
-# 0 if a status line declares either an external-wait pause or a verified
-# captain-held transfer.
-# Both declarations can intentionally leave an exited crew's endpoint idle, so
-# the watcher applies its bounded pause cadence when agent death confirms that
-# no live decision gate is being silenced.
-status_is_paused_or_captain_held() {  # <status-line>
+# 0 if a status line's leading verb is the captain-held transfer verb
+# (captain-held [key=<slug>]: <note>). The declared-wait sibling of
+# status_is_paused: never wedge-aged, but absorbed without the bounded re-surface
+# (see FM_CLASSIFY_CAPTAIN_HELD_VERB_DEFAULT for the cadence call).
+status_is_captain_held() {  # <status-line>
   local line=$1 verb
-  status_is_paused "$line" && return 0
   [ -n "$line" ] || return 1
   verb=$(status_line_verb "$line")
   [ "$verb" = "${FM_CLASSIFY_CAPTAIN_HELD_VERB:-$FM_CLASSIFY_CAPTAIN_HELD_VERB_DEFAULT}" ]
+}
+
+# 0 if a status line's leading verb is the resolve verb (resolved: <how>). The
+# decision-closing sibling of status_is_captain_held: an explicit resolution
+# retires the hold (fm-decision-hold.sh resolve appends this line), closing the
+# key in the status_open_captain_holds fold.
+status_is_resolved() {  # <status-line>
+  local line=$1 verb
+  [ -n "$line" ] || return 1
+  verb=$(status_line_verb "$line")
+  [ "$verb" = "${FM_CLASSIFY_RESOLVE_VERB:-$FM_CLASSIFY_RESOLVE_VERB_DEFAULT}" ]
+}
+
+# 0 if a status line declares either an external-wait pause or a verified
+# captain-held transfer. This is the shared "declared wait" predicate: a crew (or
+# firstmate steering it) deliberately parked an idle pane, so neither the watcher
+# nor the away-mode daemon may age it into a possible-wedge escalation. The two
+# verbs differ only in their re-surface policy (status_is_paused re-surfaces on
+# the bounded pause cadence; status_is_captain_held absorbs silently); consumers
+# read that difference from the library, never by hardcoding a verb literal.
+status_is_paused_or_captain_held() {  # <status-line>
+  status_is_paused "$1" && return 0
+  status_is_captain_held "$1"
 }
 
 # --- durable keyed decisions ------------------------------------------------
@@ -292,6 +384,12 @@ pause_due_fold() {  # <due-file> <formatter>
 
 _fm_decision_key() {  # <status-line> -> key slug, or "default" when no token
   local prefix=${1%%:*} k
+  # A keyed decision carries its key in the verb prefix (`needs-decision [key=q1]:
+  # note`, the fm-decision-hold resolve emit `resolved [key=q1]: note`). A
+  # `[key=...]` token after the colon or deeper in the note prose is free text,
+  # never a key: reverting to the prefix-only read keeps legacy post-colon-keyed
+  # lines (`needs-decision: [key=q1] pick one`) folding under the default key
+  # exactly as they always did, so a keyless `resolved:` still closes them.
   case "$prefix" in
     *\[key=*\]*)
       k=${prefix#*\[key=}
@@ -351,6 +449,160 @@ status_open_decisions() {  # <status-file>
   printf '%s' "$open"
 }
 
+# Fold the captain-held transfer stream into the set of holds whose quiet
+# treatment is still justified. A `captain-held [key=<k>]:` line OPENS its key;
+# only an explicit `resolved [key=<k>]:` line CLOSES it (fm-decision-hold.sh
+# resolve appends exactly that when it retires a hold), so quiet treatment can
+# never outlive the hold that justified it (the standing ruling). This is the
+# STREAM-TRUTH quiet-state read: a last-line test cannot represent "hold b is
+# still open after hold a resolved" - the trailing resolved: line would mask the
+# still-open hold b. Prints one TAB-separated "<key>\t<note>" line per
+# still-open hold in stream order; prints nothing when none are open. Pure read
+# of the file, no globals beyond the resolve/held verb overrides.
+status_open_captain_holds() {  # <status-file>
+  local f=$1 line verb key held resolve open='' note
+  [ -f "$f" ] || return 0
+  held=${FM_CLASSIFY_CAPTAIN_HELD_VERB:-$FM_CLASSIFY_CAPTAIN_HELD_VERB_DEFAULT}
+  # Cheap pre-gate, one fork instead of the fold's several command substitutions
+  # per line. Every quiet-state consumer runs this on a HOT path (the watcher's
+  # handle_paused_stale on each stale poll, the daemon's classify_stale and
+  # reconcile_pause_tracking on each stale wake), and the overwhelming majority
+  # of status files carry no hold at all. A key can only open on a line whose
+  # verb is the held verb, so a file with no occurrence of that verb anywhere
+  # folds to the empty set by construction: skipping the fold here is exact, not
+  # an approximation. A false hit (the verb appearing in prose) just runs the
+  # fold and still returns the same answer.
+  grep -qF -e "$held" -- "$f" 2>/dev/null || return 0
+  resolve=${FM_CLASSIFY_RESOLVE_VERB:-$FM_CLASSIFY_RESOLVE_VERB_DEFAULT}
+  while IFS= read -r line || [ -n "$line" ]; do
+    verb=$(status_line_verb "$line")
+    key=$(_fm_decision_key "$line") || continue
+    case "$verb" in
+      "$held")
+        note=$(status_line_note "$line")
+        open=$(_fm_decision_drop "$open" "$key")
+        [ -n "$open" ] && open="${open}"$'\n'
+        open="${open}${key}"$'\t'"${note}"$'\n'
+        ;;
+      "$resolve")
+        open=$(_fm_decision_drop "$open" "$key")
+        ;;
+    esac
+  done < "$f"
+  printf '%s' "$open"
+}
+
+# 0 if the status file has at least one open captain-held transfer (stream
+# truth, not the last line): quiet treatment is justified only while a hold is
+# actually open. Consumers that decide quiet-state (watcher stale absorb, daemon
+# classify_stale and housekeeping) call this with the task's status file;
+# single-line contexts keep status_is_captain_held.
+status_has_open_captain_hold() {  # <status-file>
+  [ -n "$(status_open_captain_holds "$1")" ]
+}
+
+# The two paths that record the ONE dead-agent surface of a captain-held hold
+# state. It is a single logical fact kept under two namespaces, because the two
+# supervision modes key it differently: the always-on watcher by WINDOW
+# (.captain-held-surfaced-<window>) and the away-mode daemon by TASK
+# (.subsuper-captain-held-surfaced-<task>). Both modes WRITE both and READ both,
+# so both must also be SWEPT together the moment a hold closes: hold ids are
+# deterministic, so a key that is resolved and later re-opened folds to the SAME
+# digest, and a survivor in either namespace would suppress the new hold's
+# surface for good. This function is the ONE owner of that namespace pair and
+# prints the two paths, one per line.
+captain_held_surfaced_markers() {  # <state-dir> <window> <task>
+  local state=$1 win=$2 task=$3
+  printf '%s/.captain-held-surfaced-%s\n' "$state" "$(printf '%s' "$win" | tr ':/.' '___')"
+  printf '%s/.subsuper-captain-held-surfaced-%s\n' "$state" "$(printf '%s' "$task" | tr ':/.' '___')"
+}
+
+reconcile_captain_held_surfaced_markers() {  # <fold-state> <window-marker> <task-marker>
+  local fold=$1 window_marker=$2 task_marker=$3
+  [ -n "$fold" ] || rm -f "$window_marker" "$task_marker"
+}
+
+# The last non-blank status line that is NOT a closing resolve-verb line. The
+# `resolved [key=<k>]:` line fm-decision-hold.sh appends when it retires a hold
+# is an event ABOUT THE HOLD, not a fresh statement of what the crew is doing,
+# so status_declared_wait looks back past it to find the crew's own last word.
+# Only status_declared_wait's look-back branch calls this, and only when the
+# last line IS such a line and no hold is left open, so the per-line verb parse
+# stays off the hot path.
+_fm_last_non_resolve_line() {  # <status-file>
+  local f=$1 line resolve out=''
+  [ -e "$f" ] || return 0
+  resolve=${FM_CLASSIFY_RESOLVE_VERB:-$FM_CLASSIFY_RESOLVE_VERB_DEFAULT}
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "${line//[[:space:]]/}" in '') continue ;; esac
+    [ "$(status_line_verb "$line")" = "$resolve" ] && continue
+    out=$line
+  done < "$f"
+  printf '%s' "$out"
+}
+
+_fm_last_resolve_closed_captain_hold() {  # <status-file>
+  local f=$1 line verb key held resolve open='' stripped closed=1
+  [ -f "$f" ] || return 1
+  held=${FM_CLASSIFY_CAPTAIN_HELD_VERB:-$FM_CLASSIFY_CAPTAIN_HELD_VERB_DEFAULT}
+  resolve=${FM_CLASSIFY_RESOLVE_VERB:-$FM_CLASSIFY_RESOLVE_VERB_DEFAULT}
+  while IFS= read -r line || [ -n "$line" ]; do
+    stripped=${line//[[:space:]]/}
+    [ -n "$stripped" ] || continue
+    closed=1
+    verb=$(status_line_verb "$line")
+    key=$(_fm_decision_key "$line") || continue
+    case "$verb" in
+      "$held")
+        open=$(_fm_decision_drop "$open" "$key")
+        [ -n "$open" ] && open="${open}"$'\n'
+        open="${open}${key}"$'\t\n'
+        ;;
+      "$resolve")
+        case "$open" in
+          *$'\n'"$key"$'\t'*|"$key"$'\t'*) closed=0 ;;
+        esac
+        open=$(_fm_decision_drop "$open" "$key")
+        ;;
+    esac
+  done < "$f"
+  return "$closed"
+}
+
+# 0 when the task is currently a declared wait. A resolve line is looked past
+# only when it actually closed an open captain-held transfer; an ordinary
+# paused-to-resolved activity transition ends the pause. The captain-held half
+# is STREAM-TRUTH: quiet
+# treatment applies only while the hold stream is open AND the effective last
+# line still belongs to it - a captain-held line, or a resolved: line that masks
+# a still-open hold (hold b open under a trailing resolved: for hold a). The
+# paused: half is last-line with the hold-retirement look-back: a later real
+# event supersedes a pause, but the closing line fm-decision-hold.sh appends when it
+# retires a sibling hold must not mask a still-valid paused: declaration, or the
+# pane ages straight back into the false possible-wedge alarm. Any other newer
+# line (working:, done:, failed:, needs-decision:) supersedes the quiet-state, so
+# a stopped crew behind an open hold still gets normal stale handling unless it
+# is provably working (the parity guard in the consumers). This is the outer
+# gate the watcher and daemon use before entering declared-wait handling; it
+# reads the status FILE, not a single line.
+status_declared_wait() {  # <status-file>
+  local f=$1 last
+  last=$(last_status_line "$f")
+  status_is_paused "$last" && return 0
+  # A captain-held last line is a declared wait only while its fold is open: a
+  # VALID hold line always opens its key, and requiring the fold guards the
+  # malformed case (an invalid key slug) so a confidently dead agent behind such
+  # a line still gets normal stale handling instead of being silently absorbed
+  # behind an empty fold digest.
+  status_is_captain_held "$last" && status_has_open_captain_hold "$f" && return 0
+  status_is_resolved "$last" || return 1
+  status_has_open_captain_hold "$f" && return 0
+  _fm_last_resolve_closed_captain_hold "$f" || return 1
+  # The trailing resolve-verb line closed the last open hold, so it decided
+  # nothing about the crew: fall back to the effective last line. A preceding
+  # paused: declaration still holds; any other verb still supersedes it.
+  status_is_paused "$(_fm_last_non_resolve_line "$f")"
+}
 # Fold material routed-work phases in the same keyed event stream.
 # A working or declared-pause event opens or replaces one phase for its key.
 # A later done, failed, needs-decision, blocked, or resolved event carrying that
@@ -439,8 +691,14 @@ signal_reason_is_actionable() {  # <file> ...
 #   working - an actively-running no-mistakes step (running/fixing/ci) or a busy
 #             pane; the crew is legitimately mid-work on a static-looking pane
 #             (e.g. waiting on CI);
-#   paused  - the crew's authoritative current state is a declared external-wait
-#             pause (paused:), which is EXPECTED to idle;
+#   paused  - the crew's authoritative current state is a DECLARED WAIT, which is
+#             EXPECTED to idle. The token covers the whole declared-wait verb set
+#             (bin/fm-crew-state.sh's map_log_state routes both through
+#             status_is_paused_or_captain_held): a bounded external-wait pause
+#             (paused:) AND a verified captain-held transfer. Consumers that must
+#             tell the two apart read the verb from this library rather than
+#             inferring it from this token - the watcher's malformed-hold guard
+#             depends on exactly that distinction;
 #   none    - neither, so the wake must surface (a stopped/finished/parked/failed/
 #             torn-down/unknown crew, or an unreadable verdict).
 # One fm-crew-state.sh read serves BOTH absorb reasons at once. Reading the state

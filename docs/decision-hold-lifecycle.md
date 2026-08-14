@@ -18,6 +18,7 @@ A post-teardown visual review can complete against the surviving report and dura
 It accepts `--none` as an explicit semantic inventory result, not as inferred absence.
 It verifies every listed identity against tasks-axi before recording completion.
 For an open keyed status decision, it appends a `captain-held [key=<key>]: ...` transfer event only after the matching backlog hold is durable.
+It refuses the whole completion, before recording any attestation, when a still-open status decision reuses a key whose durable hold is already Done, so a genuinely new decision takes a new key instead of silently reviving a retired hold.
 `bin/fm-classify-lib.sh` recognizes that transfer as closing the live status copy without claiming that the captain has answered it.
 
 Scout teardown calls the script's read-only `verify` subcommand after checking for the report and before removing any source state.
@@ -25,7 +26,9 @@ The `--force` path remains the explicit captain-approved discard escape hatch.
 
 The `resolve` subcommand requires a decision file and at least one existing dependent task whose structured `blocked-by` edge points to the hold.
 It records the decision digest and routed task identities as a retry identity in the hold body, clears each dependency edge through tasks-axi, and marks the hold Done only after those writes succeed.
+It then appends a keyed `resolved:` event to the origin status stream so the shared classifier retires the transfer's quiet state immediately.
 An exact retry can finish a partial routing operation, while a changed decision or routed-task set is rejected.
+A retry appends a missing closing event only when the old transfer remains open and no fresh decision has reused its key.
 A failed intermediate step leaves the hold open.
 
 ## Structured read surfaces
