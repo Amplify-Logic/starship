@@ -10,6 +10,7 @@ set -u
 
 WATCH="$ROOT/bin/fm-watch.sh"
 WATCH_ARM="$ROOT/bin/fm-watch-arm.sh"
+MIGRATE="$ROOT/bin/fm-pr-check-migrate.sh"
 DRAIN="$ROOT/bin/fm-wake-drain.sh"
 LIB="$ROOT/bin/fm-wake-lib.sh"
 
@@ -997,7 +998,7 @@ test_arm_waits_for_peer_beacon_after_child_stands_down() {
 }
 
 test_arm_fails_loud_when_no_fresh_watcher_confirmable() {
-  local dir state fakebin armout live armpid status
+  local dir state fakebin armout live dead_migration armpid status
   dir=$(make_case arm-failed-stale)
   state="$dir/state"
   fakebin="$dir/fakebin"
@@ -1011,6 +1012,11 @@ test_arm_fails_loud_when_no_fresh_watcher_confirmable() {
   mkdir "$state/.watch.lock"
   printf '%s\n' "$live" > "$state/.watch.lock/pid"
   touch -t 200001010000 "$state/.last-watcher-beat"
+  # A migration progress record left behind by a killed sweep names a dead pid.
+  # It must buy no extra confirmation time and must not rewrite this failure as
+  # a migration-in-progress one: the answer here is still a missing watcher.
+  dead_migration=$(dead_pid)
+  printf '%s\n' "$dead_migration" > "$state/.pr-check-migration.progress.$dead_migration"
   PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_POLL=5 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 FM_ARM_CONFIRM_TIMEOUT=3 "$WATCH_ARM" > "$armout" &
   armpid=$!
   wait_for_exit "$armpid" 120
@@ -1018,12 +1024,242 @@ test_arm_fails_loud_when_no_fresh_watcher_confirmable() {
   [ "$status" -ne 124 ] || fail "arm never returned for an unconfirmable watcher"
   [ "$status" -ne 0 ] || fail "arm exited zero when no fresh watcher could be confirmed"
   grep -F 'watcher: FAILED' "$armout" >/dev/null || fail "arm did not print a typed FAILED line"
+  ! grep -qF 'PR check migration still running' "$armout" \
+    || fail "arm blamed a dead migration record for a genuinely missing watcher"
   ! grep -qE 'watcher: (healthy|attached)' "$armout" || fail "arm reported attached/healthy off a stale beacon"
   ! grep -qF 'watcher: started' "$armout" || fail "arm falsely reported started"
   is_live_non_zombie "$live" || fail "arm killed the unrelated live lock holder"
   kill "$live" 2>/dev/null || true
   wait "$live" 2>/dev/null || true
   pass "arm reports FAILED and exits non-zero when no fresh watcher can be confirmed"
+}
+
+# A live process the migration must accept as this home's watcher, and which
+# ignores the TERM the migration sends to pause it. That parks a REAL migration
+# in its bounded watcher-pause loop, so a test gets a deterministic window in
+# which a genuine sweep is in flight and the watcher cannot yet take the lock.
+seed_term_proof_recorded_watcher() {  # <dir> <state> -> peer pid
+  local dir=$1 state=$2 peer identity
+  # Detach the peer from this function's stdout: callers read the pid through a
+  # command substitution, which would otherwise block until the peer exits.
+  bash -c 'trap "" TERM; sleep 60' >/dev/null 2>&1 &
+  peer=$!
+  identity=$(FM_STATE_OVERRIDE="$state" bash -c '. "$1"; fm_pid_identity "$2"' _ "$LIB" "$peer") || return 1
+  mkdir -p "$state/.watch.lock"
+  printf '%s\n' "$peer" > "$state/.watch.lock/pid"
+  printf '%s\n' "$dir" > "$state/.watch.lock/fm-home"
+  printf '%s\n' "$WATCH" > "$state/.watch.lock/watcher-path"
+  printf '%s\n' "$identity" > "$state/.watch.lock/pid-identity"
+  printf '%s\n' "$peer"
+}
+
+seed_slow_stopping_recorded_watcher() {  # <dir> <state> -> peer pid
+  local dir=$1 state=$2 peer identity
+  bash -c 'trap "sleep 2; exit 0" TERM; while :; do :; done' >/dev/null 2>&1 &
+  peer=$!
+  identity=$(FM_STATE_OVERRIDE="$state" bash -c '. "$1"; fm_pid_identity "$2"' _ "$LIB" "$peer") || return 1
+  mkdir -p "$state/.watch.lock"
+  printf '%s\n' "$peer" > "$state/.watch.lock/pid"
+  printf '%s\n' "$dir" > "$state/.watch.lock/fm-home"
+  printf '%s\n' "$WATCH" > "$state/.watch.lock/watcher-path"
+  printf '%s\n' "$identity" > "$state/.watch.lock/pid-identity"
+  printf '%s\n' "$peer"
+}
+
+# Owner staging dirs in the watch lock's namespace: two that no lock points at
+# and that are provably abandoned, and two that must survive a startup sweep.
+seed_lock_owner_dirs() {  # <state>
+  local state=$1
+  mkdir "$state/.watch.lock.owner.deadpid" "$state/.watch.lock.owner.agednopid" \
+    "$state/.watch.lock.owner.freshnopid" "$state/.watch.lock.owner.livepid"
+  printf '%s\n' "$(dead_pid)" > "$state/.watch.lock.owner.deadpid/pid"
+  printf '%s\n' "$$" > "$state/.watch.lock.owner.livepid/pid"
+  touch -t 200001010000 "$state/.watch.lock.owner.agednopid"
+}
+
+assert_lock_owner_dirs_swept() {  # <state> <label>
+  local state=$1 label=$2
+  [ ! -e "$state/.watch.lock.owner.deadpid" ] \
+    || fail "$label left an owner staging dir recording a dead holder"
+  [ ! -e "$state/.watch.lock.owner.agednopid" ] \
+    || fail "$label left an aged owner staging dir with no recorded holder"
+  [ -d "$state/.watch.lock.owner.freshnopid" ] \
+    || fail "$label reclaimed an owner staging dir belonging to an acquire still in flight"
+  [ -d "$state/.watch.lock.owner.livepid" ] \
+    || fail "$label reclaimed an owner staging dir recording a live holder"
+}
+
+test_startup_reclaims_orphaned_lock_owner_dirs() {
+  local dir state fakebin out armout wpid armpid i lock_pid
+  # The arm row uses the ATTACH path: a healthy watcher already holds the
+  # singleton, so the arm forks nothing and only its own startup sweep can have
+  # touched these artifacts. The watch row covers the watcher's own entry point.
+  dir=$(make_case orphan-owners-arm)
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  out="$dir/watch.out"
+  armout="$dir/arm.out"
+  mark_pr_check_migration_complete "$state"
+  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_POLL=5 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  wpid=$!
+  i=0
+  while [ "$i" -lt 80 ]; do
+    [ "$(cat "$state/.watch.lock/pid" 2>/dev/null || true)" = "$wpid" ] && [ -e "$state/.last-watcher-beat" ] && break
+    sleep 0.1
+    i=$((i + 1))
+  done
+  [ "$(cat "$state/.watch.lock/pid" 2>/dev/null || true)" = "$wpid" ] || fail "seed watcher did not take the lock"
+  seed_lock_owner_dirs "$state"
+  # A generous mid-acquire window keeps the in-flight fixture unambiguous under
+  # load; the aged and dead-holder artifacts stay reclaimable regardless.
+  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_LOCK_STALE_AFTER=60 FM_ARM_ATTACH_POLL=0.1 FM_ARM_CONFIRM_TIMEOUT=1 "$WATCH_ARM" > "$armout" &
+  armpid=$!
+  i=0
+  while [ "$i" -lt 80 ]; do
+    grep -qF "watcher: attached pid=$wpid" "$armout" 2>/dev/null && break
+    sleep 0.1
+    i=$((i + 1))
+  done
+  grep -qF "watcher: attached pid=$wpid" "$armout" || fail "arm did not attach to the healthy watcher: $(cat "$armout")"
+  assert_lock_owner_dirs_swept "$state" "arm startup"
+  [ "$(cat "$state/.watch.lock/pid" 2>/dev/null || true)" = "$wpid" ] \
+    || fail "arm startup sweep disturbed the healthy watcher's own lock"
+  is_live_non_zombie "$wpid" || fail "arm startup sweep killed the healthy watcher"
+  kill "$armpid" "$wpid" 2>/dev/null || true
+  wait "$armpid" 2>/dev/null || true
+  wait "$wpid" 2>/dev/null || true
+
+  dir=$(make_case orphan-owners-watch)
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  out="$dir/watch.out"
+  mark_pr_check_migration_complete "$state"
+  seed_lock_owner_dirs "$state"
+  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_LOCK_STALE_AFTER=60 FM_POLL=5 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  wpid=$!
+  i=0
+  while [ "$i" -lt 80 ]; do
+    lock_pid=$(cat "$state/.watch.lock/pid" 2>/dev/null || true)
+    [ "$lock_pid" = "$wpid" ] && break
+    sleep 0.1
+    i=$((i + 1))
+  done
+  [ "$(cat "$state/.watch.lock/pid" 2>/dev/null || true)" = "$wpid" ] || fail "watcher did not take the lock"
+  assert_lock_owner_dirs_swept "$state" "watcher startup"
+  kill "$wpid" 2>/dev/null || true
+  wait "$wpid" 2>/dev/null || true
+  pass "watcher and arm startup reclaim abandoned lock owner staging dirs and keep the ones still in use"
+}
+
+test_arm_extends_confirmation_window_while_migration_sweeps() {
+  local dir state fakebin armout peer armpid status started elapsed
+  dir=$(make_case arm-migration-window)
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  armout="$dir/arm.out"
+  # No migration markers, so the forked watcher must take the FULL sweep before
+  # it can publish a lock or a beacon - the pre-lock work that outlived the
+  # confirmation window in the field. The TERM-proof recorded watcher parks that
+  # sweep for its bounded pause loop, longer than the window under test.
+  peer=$(seed_term_proof_recorded_watcher "$dir" "$state") || fail "could not seed a TERM-proof recorded watcher"
+  started=$(date +%s)
+  PATH="$fakebin:$PATH" FM_HOME="$dir" FM_POLL=5 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
+    FM_ARM_CONFIRM_TIMEOUT=2 FM_ARM_MIGRATION_GRACE=1 "$WATCH_ARM" > "$armout" &
+  armpid=$!
+  wait_for_exit "$armpid" 200
+  status=$?
+  elapsed=$(( $(date +%s) - started ))
+  kill -KILL "$peer" 2>/dev/null || true
+  wait "$peer" 2>/dev/null || true
+  [ "$status" -ne 124 ] || fail "arm never returned while a migration sweep was running"
+  [ "$status" -ne 0 ] || fail "arm exited zero without confirming a watcher"
+  [ "$elapsed" -ge 3 ] \
+    || fail "arm gave up after ${elapsed}s instead of extending its 2s window for the running sweep"
+  grep -qF 'watcher: FAILED - PR check migration still running pid=' "$armout" \
+    || fail "arm did not name the running migration as the cause: $(cat "$armout")"
+  ! grep -qF 'watcher: FAILED - no live watcher with a fresh beacon' "$armout" \
+    || fail "arm reported the generic no-beacon failure while a migration sweep was running"
+  grep -q 'reason=migration-in-progress' "$state/.watch-cycle-exits.log" \
+    || fail "migration-stalled cycle was not classified in the lifecycle ledger"
+  pass "arm extends its confirmation window for a running migration sweep and names it instead of blaming the beacon"
+}
+
+test_arm_keeps_extension_after_migration_finishes() {
+  local dir state fakebin armout peer armpid i lock_pid
+  dir=$(make_case arm-post-migration-window)
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  armout="$dir/arm.out"
+  peer=$(seed_slow_stopping_recorded_watcher "$dir" "$state") \
+    || fail "could not seed a slowly stopping recorded watcher"
+  PATH="$fakebin:$PATH" FM_HOME="$dir" FM_POLL=5 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
+    FM_ARM_CONFIRM_TIMEOUT=1 FM_ARM_MIGRATION_GRACE=5 "$WATCH_ARM" > "$armout" &
+  armpid=$!
+  i=0
+  while [ "$i" -lt 100 ]; do
+    grep -qF 'watcher: started pid=' "$armout" 2>/dev/null && break
+    sleep 0.1
+    i=$((i + 1))
+  done
+  lock_pid=$(cat "$state/.watch.lock/pid" 2>/dev/null || true)
+  grep -qF "watcher: started pid=$lock_pid (beacon fresh)" "$armout" \
+    || fail "arm dropped its extension when the migration finished: $(cat "$armout")"
+  ! grep -qF 'watcher: FAILED' "$armout" || fail "arm timed out after a completed migration sweep"
+  kill "$armpid" "$lock_pid" "$peer" 2>/dev/null || true
+  wait "$armpid" 2>/dev/null || true
+  wait "$peer" 2>/dev/null || true
+  pass "arm preserves a bounded confirmation interval after a long migration sweep finishes"
+}
+
+test_arm_recovers_from_interrupted_migration_sweep() {
+  local dir state fakebin armout peer migrate_pid progress orphan armpid i lock_pid
+  dir=$(make_case arm-interrupted-migration)
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  armout="$dir/arm.out"
+  peer=$(seed_term_proof_recorded_watcher "$dir" "$state") || fail "could not seed a TERM-proof recorded watcher"
+  FM_HOME="$dir" "$MIGRATE" --checks-safe > "$dir/migrate.out" 2>&1 &
+  migrate_pid=$!
+  progress="$state/.pr-check-migration.progress.$migrate_pid"
+  i=0
+  while [ "$i" -lt 200 ] && [ ! -f "$progress" ]; do
+    sleep 0.05
+    i=$((i + 1))
+  done
+  [ "$(cat "$progress" 2>/dev/null || true)" = "$migrate_pid" ] \
+    || fail "migration did not publish an in-flight record naming the sweep process"
+  kill -KILL "$migrate_pid" 2>/dev/null || fail "could not interrupt the migration sweep"
+  wait "$migrate_pid" 2>/dev/null || true
+  kill -KILL "$peer" 2>/dev/null || true
+  wait "$peer" 2>/dev/null || true
+  # What the interrupt leaves behind: no completion marker, an in-flight record
+  # naming a dead pid, a lock recording a dead holder, and an owner staging dir
+  # nothing points at. Re-arming must still reach a confirmed watcher.
+  [ ! -e "$state/.pr-check-migration-v1" ] || fail "interrupted sweep left a completion marker"
+  [ -f "$progress" ] || fail "interrupted sweep left no in-flight record"
+  orphan="$state/.watch.lock.owner.interrupted"
+  mkdir "$orphan"
+  printf '%s\n' "$(dead_pid)" > "$orphan/pid"
+  PATH="$fakebin:$PATH" FM_HOME="$dir" FM_POLL=5 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH_ARM" > "$armout" &
+  armpid=$!
+  i=0
+  while [ "$i" -lt 200 ]; do
+    grep -qF 'watcher: started pid=' "$armout" 2>/dev/null && break
+    sleep 0.1
+    i=$((i + 1))
+  done
+  lock_pid=$(cat "$state/.watch.lock/pid" 2>/dev/null || true)
+  grep -qF "watcher: started pid=$lock_pid (beacon fresh)" "$armout" \
+    || fail "arm did not confirm a watcher after an interrupted migration sweep: $(cat "$armout")"
+  ! grep -qF 'watcher: FAILED' "$armout" || fail "arm reported a failure after an interrupted migration sweep"
+  [ ! -e "$orphan" ] || fail "arm left the interrupted sweep's orphaned owner staging dir in place"
+  ! compgen -G "$state/.pr-check-migration.progress.*" >/dev/null \
+    || fail "completed sweep left an in-flight record behind"
+  grep -qx fm-pr-check-migration-v1 "$state/.pr-check-migration-v1" \
+    || fail "re-arming did not repair the interrupted migration's completion marker"
+  kill "$armpid" "$lock_pid" 2>/dev/null || true
+  wait "$armpid" 2>/dev/null || true
+  pass "arm recovers from an interrupted migration sweep without a confirmation timeout"
 }
 
 test_cycle_exit_ledger_links_successor_and_stays_bounded() {
@@ -1288,5 +1524,9 @@ test_arm_hup_cleans_child_and_temp_output
 test_arm_propagates_immediate_wake_before_confirmation
 test_arm_waits_for_peer_beacon_after_child_stands_down
 test_arm_fails_loud_when_no_fresh_watcher_confirmable
+test_startup_reclaims_orphaned_lock_owner_dirs
+test_arm_extends_confirmation_window_while_migration_sweeps
+test_arm_keeps_extension_after_migration_finishes
+test_arm_recovers_from_interrupted_migration_sweep
 test_cycle_exit_ledger_links_successor_and_stays_bounded
 test_stopped_watcher_is_live_but_stale_then_exit_is_classified

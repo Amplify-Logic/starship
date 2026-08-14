@@ -527,6 +527,7 @@ FM_LOCK_STALE_AFTER=2   # seconds before dead-pid lock records can be reclaimed;
 FM_CONFIG_INHERIT_LOCK_WAIT_SECS=30   # bounded wait for a secondmate home's inheritance lock before bootstrap, fm-config-push, or spawn reports it instead of blocking; blank, zero, or non-numeric resets to 30
 FM_GUARD_GRACE=300      # seconds before guard warnings, arm health checks, and the primary turn-end guard treat a watcher beacon as stale; IN-SESSION ONLY - the scheduled host sentinel deliberately ignores it and always uses the durable 300s default pinned in its launchd manifest, so an ambient override cannot change a loaded service's identity or its outage threshold (docs/wedge-alarm.md)
 FM_ARM_CONFIRM_TIMEOUT=10   # seconds fm-watch-arm waits to confirm a fresh watcher before reporting FAILED; the default is 30 on Git Bash/MSYS
+FM_ARM_MIGRATION_GRACE=120   # extra seconds fm-watch-arm allows past FM_ARM_CONFIRM_TIMEOUT while a PR check migration sweep is provably running; past it the arm reports the migration, not a missing beacon
 FM_ARM_ATTACH_POLL=0.5  # seconds between checks while fm-watch-arm is attached to an existing healthy watcher cycle
 FM_OPENCODE_ARM_READY_TIMEOUT_MS=12000   # milliseconds the OpenCode primary watcher plugin waits for an arm attempt to report started, healthy, wake, or failure; the default is 35000 on Windows
 FM_PI_ARM_READY_TIMEOUT_MS=12000   # milliseconds after first successor stdout that the Pi watcher extension waits for started or attached; the default is 35000 on Windows

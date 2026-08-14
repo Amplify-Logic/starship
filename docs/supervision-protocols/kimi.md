@@ -9,7 +9,7 @@ When this session owns supervision and away mode is not active:
    A shell `&`, a truncating pipe, or bundling is denied automatically by the managed Kimi plugin's PreToolUse seatbelt (`bin/fm-arm-pretool-check.sh`).
 6. Treat `watcher: started ...` and `watcher: attached ...` as proof that one live cycle exists.
    On attach, the background task stays live until that existing cycle ends; it does not exit immediately.
-7. Treat `watcher: FAILED - no live watcher with a fresh beacon` as an alarm and repair it before ending the turn.
+7. Treat any `watcher: FAILED ...` result as an alarm and repair it before ending the turn.
 8. Kimi delivers a completed background Bash task back to the same main session as a synthetic User notification.
    On that notification, drain queued wakes, handle `signal`, `stale`, `check`, or `heartbeat`, then arm one fresh background task if work remains.
 9. If a forced restart is genuinely needed, run `bin/fm-watch-arm.sh --restart` through the same Kimi background Bash mechanism.

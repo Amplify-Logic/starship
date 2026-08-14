@@ -859,6 +859,13 @@ if [ "${BASH_SOURCE[0]}" != "$0" ]; then
   return 0
 fi
 
+# Startup hygiene before the migration competes for the same lock: a process
+# killed mid-run (an interrupted migration sweep is the observed case) can leave
+# a lock recording a dead holder and an unreferenced owner staging dir that
+# nothing else ever revisits. Reclaim touches neither a live holder nor an
+# acquire still in flight.
+fm_lock_reclaim_orphans "$WATCH_LOCK"
+
 # Before acquiring the watcher lock or enumerating any runnable check, replace
 # or quarantine checks created by older versions. The migration compares bytes
 # and reads data only; it never invokes legacy check files through Bash.

@@ -5,6 +5,10 @@
 # and registered custom checks remain armed, and every other task poll is
 # quarantined for private review. A current X-mode shim is preserved by exact
 # content, while the recognized older byte-static shim is refreshed in place.
+# A run that takes the full sweep publishes state/.pr-check-migration.progress.<pid>
+# naming that sweep process for as long as it runs, so
+# bin/fm-watch-arm.sh can tell a slow sweep apart from a watcher that will never
+# appear. Records are advisory: readers must check each recorded pid is alive.
 # Usage: fm-pr-check-migrate.sh [--checks-safe]
 set -u
 
@@ -263,6 +267,39 @@ fi
 # shellcheck source=bin/fm-wake-lib.sh disable=SC1091
 . "$SCRIPT_DIR/fm-wake-lib.sh"
 
+# From here on this run takes the full sweep: it excludes the recorded watcher,
+# holds the watch lock, and byte-compares every check. That is measured in
+# seconds, and a watcher started by bin/fm-watch-arm.sh cannot publish its lock
+# or beacon until it finishes, so the arm needs to tell this work apart from a
+# watcher that will never appear. Publish a live progress record naming this
+# process for the whole sweep. It is advisory evidence only: a failure to write
+# it must never stop the migration, and a stale record left by a killed sweep
+# names a dead pid, which every reader must check before trusting it.
+PROGRESS="$STATE/.pr-check-migration.progress.${BASHPID:-$$}"
+progress_clear() {
+  rm -f -- "$PROGRESS" 2>/dev/null || true
+}
+progress_publish() {
+  local tmp record pid
+  for record in "$STATE"/.pr-check-migration.progress.*; do
+    [ -e "$record" ] || continue
+    pid=$(cat "$record" 2>/dev/null || true)
+    fm_pid_alive "$pid" && continue
+    rm -f -- "$record" 2>/dev/null || true
+  done
+  tmp=$(mktemp "$STATE/.fm-pr-check-progress.XXXXXX" 2>/dev/null) || return 0
+  if printf '%s\n' "${BASHPID:-$$}" > "$tmp" 2>/dev/null \
+    && chmod 0600 "$tmp" 2>/dev/null \
+    && mv -f -- "$tmp" "$PROGRESS" 2>/dev/null; then
+    return 0
+  fi
+  rm -f -- "$tmp" 2>/dev/null || true
+  return 0
+}
+progress_publish
+trap progress_clear EXIT
+trap 'exit 1' HUP INT TERM
+
 stopped_watcher=0
 pid=$(cat "$WATCH_LOCK/pid" 2>/dev/null || true)
 if fm_pid_alive "$pid"; then
@@ -315,6 +352,7 @@ MIGRATION_OBLIGATION_TMP=
 MIGRATION_QUARANTINE_TMP=
 MIGRATION_X_SHIM_TMP=
 migration_cleanup() {
+  progress_clear
   fm_pr_poll_cleanup
   [ -z "$MIGRATION_X_SHIM_TMP" ] || rm -f -- "$MIGRATION_X_SHIM_TMP"
   [ -z "$MIGRATION_QUARANTINE_TMP" ] || rm -f -- "$MIGRATION_QUARANTINE_TMP"

@@ -368,6 +368,71 @@ fm_lock_try_reclaim_flat() {
   return "$rc"
 }
 
+# Drop a lock whose recorded holder is provably dead, WITHOUT taking it. The
+# acquire path already steals from a dead holder, so this exists for the startup
+# callers that only read the lock (the arm's health check) and would otherwise
+# leave a dead holder sitting in the state directory looking like a live one.
+# It reuses the steal path's staleness proof, so a live holder and a holder
+# still mid-acquire are never touched, and fm_lock_remove_stale_path refuses to
+# unlink a lock some other process legitimately re-created meanwhile.
+fm_lock_reclaim_dead_holder() {
+  local lockdir=$1 primary_owner cur
+  { [ -e "$lockdir" ] || [ -L "$lockdir" ]; } || return 1
+  primary_owner=
+  if [ -L "$lockdir" ]; then
+    primary_owner=$(fm_lock_link_owner "$lockdir" 2>/dev/null || true)
+  fi
+  cur=$(cat "$lockdir/pid" 2>/dev/null || true)
+  fm_lock_recheck_stale_owner "$lockdir" "$primary_owner" "$cur" || return 1
+  fm_lock_remove_stale_path "$lockdir" "$primary_owner" "$cur"
+}
+
+# Remove "<lockdir>.owner.XXXXXX" staging dirs that no lock points at and whose
+# recorded holder is dead. A process killed between fm_lock_owner_dir's mktemp
+# and its own discard leaves one behind for good: nothing else ever revisits it,
+# so it outlives every later acquire and misrepresents a dead pid as a lock
+# holder during diagnosis. The steal mutex's staging dirs share the namespace,
+# so both are swept. A dir with no recorded pid yet belongs to an acquire still
+# in flight until it ages past the same mid-acquire window the steal path uses.
+fm_lock_reclaim_orphan_owners() {
+  local lockdir=$1 lock_abs primary_owner steal_owner dir dir_pid min_age
+  lock_abs=$(fm_lock_abs_path "$lockdir") || return 0
+  # Compare canonically: the swept names come from a resolved parent, so a link
+  # recorded under any other spelling of the same dir must still count as held.
+  primary_owner=$(fm_lock_link_owner "$lockdir" 2>/dev/null || true)
+  [ -z "$primary_owner" ] || primary_owner=$(fm_canonical_path "$primary_owner" 2>/dev/null || printf '%s' "$primary_owner")
+  steal_owner=$(fm_lock_link_owner "$lockdir.steal" 2>/dev/null || true)
+  [ -z "$steal_owner" ] || steal_owner=$(fm_canonical_path "$steal_owner" 2>/dev/null || printf '%s' "$steal_owner")
+  min_age=$FM_LOCK_STALE_AFTER
+  [ "$min_age" -ge 2 ] || min_age=2
+  for dir in "$lock_abs".owner.* "$lock_abs".steal.owner.*; do
+    [ -d "$dir" ] && [ ! -L "$dir" ] || continue
+    [ "$dir" != "$primary_owner" ] || continue
+    [ "$dir" != "$steal_owner" ] || continue
+    dir_pid=$(cat "$dir/pid" 2>/dev/null || true)
+    case "$dir_pid" in
+      ''|*[!0-9]*)
+        [ "$(fm_path_age "$dir")" -ge "$min_age" ] || continue
+        ;;
+      *)
+        ! fm_pid_alive "$dir_pid" || continue
+        ;;
+    esac
+    fm_lock_discard_owner "$dir"
+  done
+  return 0
+}
+
+# fm_lock_reclaim_orphans <lockdir>: startup hygiene for a supervision lock.
+# A holder killed mid-run leaves a dead-pid lock, a dead-pid staging dir, or
+# both; an interrupted PR check migration left exactly that pair behind while
+# supervision was down. Callers run this before they read or take the lock.
+fm_lock_reclaim_orphans() {
+  local lockdir=$1
+  fm_lock_reclaim_dead_holder "$lockdir" || true
+  fm_lock_reclaim_orphan_owners "$lockdir"
+}
+
 fm_lock_try_acquire() {
   local lockdir=$1 pid steal rc steal_owner
   FM_LOCK_HELD_PID=

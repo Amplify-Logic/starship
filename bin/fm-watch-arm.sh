@@ -37,6 +37,10 @@
 #   watcher: FAILED - cycle ended without an actionable reason
 #                                                        - a clean cycle ended with no wake and no
 #                                                          verified healthy successor
+#   watcher: FAILED - PR check migration still running pid=<N>, watcher not confirmed yet
+#                                                        - the pre-lock migration sweep outlasted
+#                                                          even the extended window; the sweep, not
+#                                                          a missing watcher, is the cause
 # It NEVER reports started/attached/healthy off a stale beacon or a dead/reused pid: a
 # stale-beacon or dead-pid holder either self-heals (the fresh child steals the
 # dead lock per the singleton self-eviction/steal path and is confirmed) or this
@@ -85,6 +89,17 @@ case "${OSTYPE:-}" in
   *) ARM_CONFIRM_DEFAULT=10 ;;
 esac
 CONFIRM_TIMEOUT=${FM_ARM_CONFIRM_TIMEOUT:-$ARM_CONFIRM_DEFAULT}
+# A watcher runs the non-executing PR check migration BEFORE it can take the
+# lock or beat, so a full sweep (seconds, and unbounded in the number of checks
+# it compares) sits inside the confirmation window. Killing the child at the
+# ordinary deadline turns a healthy start into a generic failure and leaves the
+# migration interrupted again, which is what made one interrupted sweep cost 30
+# minutes of supervision. While the sweep is provably running, extend the window
+# by this much instead of TERMing the child. The bound still applies: a sweep
+# that outlasts it fails with its own distinct reason, never silently.
+MIGRATION_PROGRESS_PREFIX="$STATE/.pr-check-migration.progress."
+MIGRATION_GRACE=${FM_ARM_MIGRATION_GRACE:-120}
+case "$MIGRATION_GRACE" in ''|*[!0-9]*) MIGRATION_GRACE=120 ;; esac
 # Poll interval while attached to an existing healthy watcher.
 ATTACH_POLL=${FM_ARM_ATTACH_POLL:-0.5}
 CYCLE_LOG="$STATE/.watch-cycle-exits.log"
@@ -245,6 +260,23 @@ healthy_watcher() {
   HEALTHY_PID=$FM_WATCHER_HEALTHY_PID
 }
 
+# The migration publishes its own pid for the life of a full sweep. A record a
+# killed sweep left behind names a dead pid, so liveness is the whole test: a
+# stale record must never buy a dead sweep more of the confirmation window.
+MIGRATION_SWEEP_PID=
+migration_sweeping() {
+  local record pid
+  MIGRATION_SWEEP_PID=
+  for record in "$MIGRATION_PROGRESS_PREFIX"*; do
+    [ -e "$record" ] || continue
+    pid=$(cat "$record" 2>/dev/null || true)
+    fm_pid_alive "$pid" || continue
+    MIGRATION_SWEEP_PID=$pid
+    return 0
+  done
+  return 1
+}
+
 report_attached() {
   local age
   age=$(fm_path_age "$BEAT")
@@ -348,6 +380,13 @@ case "${1:-}" in
   --restart) mode=restart ;;
   *) echo "usage: $(basename "$0") [--restart]" >&2; exit 2 ;;
 esac
+
+# Startup hygiene before this arm reads or takes the singleton: a process killed
+# mid-run (an interrupted migration sweep is the observed case) can leave a lock
+# recording a dead holder and an unreferenced owner staging dir that nothing
+# else ever revisits. Reclaim touches neither a live holder nor an acquire still
+# in flight.
+fm_lock_reclaim_orphans "$WATCH_LOCK"
 
 # Host-sentinel registration, at most once per arm and only from a path that has
 # already observed and reported a healthy watcher (see report_attached,
@@ -517,6 +556,10 @@ owned_child_finished() {
 # until some other watcher legitimately holds the singleton (a startup race), or
 # until the child gives up. Only then print the honest line.
 deadline=$(( $(date +%s) + CONFIRM_TIMEOUT ))
+migration_deadline=$(( deadline + MIGRATION_GRACE ))
+migration_stalled=0
+migration_seen=0
+migration_post_deadline=0
 while :; do
   if healthy_watcher; then
     if [ "$HEALTHY_PID" = "$child" ]; then
@@ -552,7 +595,27 @@ while :; do
     owned_child_finished "$rc"
     exit $?
   fi
-  [ "$(date +%s)" -ge "$deadline" ] && break
+  now=$(date +%s)
+  migration_running=0
+  migration_sweeping && migration_running=1
+  if [ "$migration_running" -eq 1 ]; then
+    migration_seen=1
+    migration_post_deadline=0
+  elif [ "$migration_seen" -eq 1 ] && [ "$migration_post_deadline" -eq 0 ]; then
+    migration_post_deadline=$(( now + CONFIRM_TIMEOUT ))
+    [ "$migration_post_deadline" -le "$migration_deadline" ] || migration_post_deadline=$migration_deadline
+  fi
+  if [ "$now" -ge "$deadline" ]; then
+    if [ "$migration_running" -eq 1 ]; then
+      # The child is healthy and blocked on the pre-lock sweep, not missing.
+      [ "$now" -lt "$migration_deadline" ] && { sleep 0.2; continue; }
+      migration_stalled=1
+    elif [ "$migration_post_deadline" -gt "$now" ]; then
+      sleep 0.2
+      continue
+    fi
+    break
+  fi
   sleep 0.2
 done
 
@@ -561,6 +624,13 @@ print_watch_output "$child_out"
 cleanup_child
 wait "$child" 2>/dev/null
 rc=$?
+if [ "$migration_stalled" -eq 1 ]; then
+  # Name the real cause. The generic beacon wording sent the last operator
+  # hunting an external killer while a legitimate sweep was still running.
+  cycle_log_append "$rc" "$(cycle_signal_name "$rc")" migration-in-progress none
+  echo "watcher: FAILED - PR check migration still running pid=$MIGRATION_SWEEP_PID, watcher not confirmed yet"
+  exit 1
+fi
 cycle_log_append "$rc" "$(cycle_signal_name "$rc")" confirmation-timeout none
 echo "watcher: FAILED - no live watcher with a fresh beacon"
 exit 1
