@@ -558,22 +558,41 @@ exit 1
 SH
   cat >"$repo/$a" <<'SH'
 #!/usr/bin/env bash
-sleep 0.5
-touch "$SCHED_EVIDENCE/slow-done"
+# Occupy a worker slot until the replacement fixture starts. Bounded marker
+# waits replace wall-clock sleeps so load cannot invert 0.5s vs 0.05s.
+touch "$SCHED_EVIDENCE/slow-running"
+n=0
+while [ ! -e "$SCHED_EVIDENCE/release-slow" ]; do
+  sleep 0.01
+  n=$((n + 1))
+  if [ "$n" -ge 2000 ]; then
+    echo "not ok - slow fixture timed out waiting for replacement to start"
+    exit 1
+  fi
+done
 echo "ok - slow fixture"
 SH
   cat >"$repo/$b" <<'SH'
 #!/usr/bin/env bash
-sleep 0.05
+n=0
+while [ ! -e "$SCHED_EVIDENCE/slow-running" ]; do
+  sleep 0.01
+  n=$((n + 1))
+  if [ "$n" -ge 2000 ]; then
+    echo "not ok - fast fixture timed out waiting for slow to occupy a slot"
+    exit 1
+  fi
+done
 echo "ok - fast fixture"
 SH
   cat >"$repo/$c" <<'SH'
 #!/usr/bin/env bash
-if [ -e "$SCHED_EVIDENCE/slow-done" ]; then
-  echo "not ok - scheduler waited for oldest worker"
+if [ ! -e "$SCHED_EVIDENCE/slow-running" ]; then
+  echo "not ok - replacement started before slow occupied a slot"
   exit 1
 fi
 echo "ok - replacement fixture started before slow fixture finished"
+touch "$SCHED_EVIDENCE/release-slow"
 SH
   chmod +x "$runner" "$repo/$a" "$repo/$b" "$repo/$c" "$fake_bin/stat"
   set +e
@@ -610,6 +629,13 @@ SH
   set -e
   [ "$rc" -eq 2 ] || fail "jobs with non-proven fail fixture must refuse before run, got $rc"
 
+  # Later cases must not inherit the hold-until-release slow fixture.
+  cat >"$repo/$a" <<'SH'
+#!/usr/bin/env bash
+echo "ok - slow fixture"
+SH
+  chmod +x "$repo/$a"
+
   # Parallel failure propagation stays inside the private runner fixture.
   cat >"$repo/$b" <<'SH'
 #!/usr/bin/env bash
@@ -617,7 +643,6 @@ echo "not ok - deliberate proven-set fail"
 exit 1
 SH
   chmod +x "$repo/$b"
-  rm -f "$evidence/slow-done"
   set +e
   SCHED_EVIDENCE="$evidence" "$runner" --jobs 2 "$a" "$b" >"$tmp/out4" 2>"$tmp/err4"
   rc=$?

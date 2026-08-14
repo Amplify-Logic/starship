@@ -12,7 +12,9 @@ A failed follow-up never cancels continuity restoration.
 ## Actionable wake ordering
 
 After an actionable Pi or OpenCode child close, the adapter starts and verifies one singleton successor before it delivers the original wake.
-It waits at most one readiness timeout per attempt, then sends TERM and waits a bounded retirement confirmation before the next lock-verified exponential retry.
+OpenCode waits at most one readiness timeout per attempt.
+Pi first allows a bounded spawn grace for the successor's first stdout, then starts its readiness timeout so process-launch latency does not consume the readiness budget.
+After either adapter's bound expires, it sends TERM and waits a bounded retirement confirmation before the next lock-verified exponential retry.
 If the unready arm does not retire within that bound, the adapter keeps ownership, starts no overlapping retry, and delivers the typed fallback immediately.
 When that retained arm later closes, its actual close is classified as a new supervised event without replaying the earlier fallback.
 After the configured retry bound is exhausted, it delivers the original wake with a typed continuity-restoration failure even if every successor arm hung without reporting readiness.

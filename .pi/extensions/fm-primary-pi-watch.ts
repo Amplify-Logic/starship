@@ -39,6 +39,7 @@ const armReadyTimeoutMs = positiveInteger(
   "FM_PI_ARM_READY_TIMEOUT_MS",
   process.platform === "win32" ? 35000 : 12000,
 );
+const armSpawnGraceMs = positiveInteger("FM_PI_ARM_SPAWN_GRACE_MS", armReadyTimeoutMs);
 const armRetireTimeoutMs = positiveInteger("FM_WATCH_ARM_RETIRE_TIMEOUT_MS", 1000);
 
 let child: ChildProcess | null = null;
@@ -173,12 +174,32 @@ export default function (pi: ExtensionAPI) {
     const readiness = armReadiness.get(armChild);
     if (!readiness) return Promise.resolve(false);
     return new Promise((resolveReady) => {
-      const timer = setTimeout(() => resolveReady(false), armReadyTimeoutMs);
-      timer.unref();
-      void readiness.then((ready) => {
-        clearTimeout(timer);
+      let finished = false;
+      let readyTimer: ReturnType<typeof setTimeout> | null = null;
+      let spawnTimer: ReturnType<typeof setTimeout> | null = null;
+      const finish = (ready: boolean): void => {
+        if (finished) return;
+        finished = true;
+        if (readyTimer) clearTimeout(readyTimer);
+        if (spawnTimer) clearTimeout(spawnTimer);
         resolveReady(ready);
-      });
+      };
+      const startReadyTimer = (): void => {
+        if (finished) return;
+        if (spawnTimer) {
+          clearTimeout(spawnTimer);
+          spawnTimer = null;
+        }
+        if (readyTimer) clearTimeout(readyTimer);
+        readyTimer = setTimeout(() => finish(false), armReadyTimeoutMs);
+        readyTimer.unref();
+      };
+      // Silent children still expire at spawn grace (default: ready timeout).
+      // First stdout starts the ready budget so spawn latency does not consume it.
+      spawnTimer = setTimeout(() => finish(false), armSpawnGraceMs);
+      spawnTimer.unref();
+      armChild.stdout?.once("data", startReadyTimer);
+      void readiness.then((ready) => finish(ready));
     });
   }
 
