@@ -669,6 +669,11 @@ footer{padding:0 28px 24px;color:var(--ink-soft);font-size:12.5px}
 @media(max-width:640px){header,section.call,main,footer{padding-left:16px;padding-right:16px}section.port{margin-left:16px;margin-right:16px}}
 `;
 
+// Compass rose on parchment: gold north-south, teal east-west. Three chart-room
+// colors, geometric so the mark stays crisp at 16x16 on a dark browser tab.
+const FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><rect width="16" height="16" rx="3" fill="#efe7d5"/><path fill="#9a7b2d" d="M8 1.5 9.4 8 8 14.5 6.6 8Z"/><path fill="#0e7c86" d="M1.5 8 8 6.6 14.5 8 8 9.4Z"/><circle cx="8" cy="8" r="1.25" fill="#efe7d5"/></svg>`;
+const FAVICON_HREF = `data:image/svg+xml,${encodeURIComponent(FAVICON_SVG)}`;
+
 function shell({ title, body, nav = "", script = "" }) {
   return `<!doctype html>
 <html lang="en">
@@ -676,6 +681,7 @@ function shell({ title, body, nav = "", script = "" }) {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${escapeHtml(title)}</title>
+<link rel="icon" type="image/svg+xml" href="${FAVICON_HREF}">
 <style>${CSS}</style>
 </head>
 <body>
@@ -1100,8 +1106,12 @@ async function serve(home, port) {
     }
     const url = new URL(request.url, `http://${LOOPBACK}`);
     if (url.pathname === "/favicon.ico") {
-      response.writeHead(204, { "cache-control": "no-store" });
-      response.end();
+      response.writeHead(200, {
+        "content-type": "image/svg+xml; charset=utf-8",
+        "cache-control": "no-store",
+        "x-content-type-options": "nosniff",
+      });
+      response.end(request.method === "HEAD" ? undefined : FAVICON_SVG);
       return;
     }
     // Load and derive per request: no cache, so a link followed hours later is

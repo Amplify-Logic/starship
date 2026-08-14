@@ -242,6 +242,19 @@ test_every_view_is_reachable_and_nothing_is_a_dead_end() {
   pass "home, goal map, node, goal and report views all render with no dead rows"
 }
 
+test_every_page_carries_the_map_favicon() {
+  local page view
+  mkdir -p "$HOME_DIR/data/alpha-run-foundation-a1"
+  printf '# Foundation\n\nWhat was found.\n' > "$HOME_DIR/data/alpha-run-foundation-a1/report.md"
+  for view in / /p/alpha /p/alpha/node/alpha-decision-d1 /report/alpha-run-foundation-a1 /p/nowhere; do
+    page=$(chart render "$view") || true
+    assert_contains "$page" 'rel="icon"' "view $view has no favicon link"
+    assert_contains "$page" 'type="image/svg+xml"' "view $view favicon is not served as SVG"
+    assert_contains "$page" "data:image/svg+xml," "view $view favicon is not an inline SVG data URI"
+  done
+  pass "every served page carries an inline map favicon"
+}
+
 # The show-more row only means something if the overflow rows are hidden in the
 # first place, and that is a cascade property rather than a markup one: the rows
 # carry class "folded" either way. An earlier build's hide rule lost to
@@ -492,6 +505,7 @@ test_captain_calls_are_separated_from_parked_work
 test_a_project_is_claimed_by_its_own_name_and_its_aliases
 test_a_project_without_a_charter_still_renders
 test_every_view_is_reachable_and_nothing_is_a_dead_end
+test_every_page_carries_the_map_favicon
 test_a_folded_row_is_hidden_until_its_bucket_is_opened
 test_unknown_addresses_refuse_plainly
 test_a_record_that_cannot_be_read_stays_visible_and_marked
