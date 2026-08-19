@@ -103,7 +103,7 @@ Names never overwrite; the directory is quarantined storage only.
 The server does not execute, decode, or otherwise parse image contents beyond the magic-byte sniff.
 Nothing else in the bridge process writes outside `bridge/` and this inbox.
 
-The glance page exposes a phone-first file input (`accept` images, `capture` allowed) and submit control, a success or failure message, and the count of photos received today (UTC date of `received_at`).
+The glance page exposes a phone-first file input (`accept` images, no `capture` attribute so iOS Safari offers Photo Library as well as Take Photo) and submit control, a success or failure message, and the count of photos received today (UTC date of `received_at`).
 Existing `form-action 'self'` and `connect-src 'self'` CSP directives cover the form and `fetch`; scripts and styles stay nonce-based.
 
 There is still no approve, answer, merge, or spawn control on this page.

@@ -310,7 +310,10 @@ test_auth_cookie_headers_and_isolation() {
   assert_contains "$(cat "$body")" "Summary only. Do not approve from this page." \
     "glance page missing the summary-only warning"
   assert_contains "$(cat "$body")" "Send a photo" "glance page missing the photo drop"
-  assert_contains "$(cat "$body")" "capture=\"environment\"" "photo input must allow camera capture"
+  assert_contains "$(cat "$body")" 'accept="image/jpeg,image/png,image/webp,image/heic,image/heif,image/*"' \
+    "photo input must keep the image accept list"
+  assert_not_contains "$(cat "$body")" "capture=" \
+    "photo input must omit capture so iOS offers the camera roll"
   assert_contains "$(cat "$body")" 'action="/upload"' "photo form must post to /upload"
   assert_not_contains "$(cat "$body")" "http-equiv=\"refresh\"" "page must not use meta-refresh"
   jar=$home/cookies.txt

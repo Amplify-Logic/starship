@@ -1138,7 +1138,7 @@ def glance_html(nonce: str) -> str:
 <h2>Send a photo</h2>
 <form id="photo-form" method="post" action="/upload" enctype="multipart/form-data">
   <label for="photo">Photo</label>
-  <input id="photo" name="photo" type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif,image/*" capture="environment">
+  <input id="photo" name="photo" type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif,image/*">
   <button type="submit">Send photo</button>
 </form>
 <p class="meta" id="photo-count">Photos received today: 0</p>
