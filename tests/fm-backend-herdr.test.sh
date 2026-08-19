@@ -245,6 +245,20 @@ test_version_check_refuses_missing_herdr() {
   pass "fm_backend_herdr_version_check: refuses loudly when herdr is not installed"
 }
 
+test_server_ensure_fails_fast_when_herdr_missing() {
+  local dir out status started elapsed
+  dir="$TMP_ROOT/server-ensure-missing"; mkdir -p "$dir/empty-fakebin"
+  started=$(python3 -c 'import time; print(time.monotonic())')
+  out=$( PATH="$dir/empty-fakebin:/usr/bin:/bin" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_server_ensure missinglab' "$ROOT" 2>&1 )
+  status=$?
+  elapsed=$(python3 -c "import time; print(time.monotonic() - $started)")
+  [ "$status" -ne 0 ] || fail "server_ensure should refuse when herdr is not installed: $out"
+  python3 -c "import sys; sys.exit(0 if float(sys.argv[1]) < 2 else 1)" "$elapsed" \
+    || fail "server_ensure hung ${elapsed}s when herdr was missing: $out"
+  pass "fm_backend_herdr_server_ensure: fails immediately when herdr is not installed"
+}
+
 # --- workspace_label: per-firstmate-HOME resolution (P3, herdr-sm-spaces-k4) -
 
 test_workspace_label_primary_home_no_marker() {
@@ -2287,6 +2301,7 @@ test_list_live_hidden_legacy_and_other_home_boundary() {
 test_version_check_accepts_current_protocol
 test_version_check_refuses_old_protocol
 test_version_check_refuses_missing_herdr
+test_server_ensure_fails_fast_when_herdr_missing
 test_workspace_label_primary_home_no_marker
 test_workspace_label_secondmate_home_uses_marker_id
 test_workspace_label_secondmate_marker_trims_whitespace

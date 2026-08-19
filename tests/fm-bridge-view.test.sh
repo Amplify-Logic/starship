@@ -967,6 +967,203 @@ PY
   pass "failed inbox pair publication leaves no partial upload"
 }
 
+test_photos_received_today_counts_utc_sidecars() {
+  local home output
+  home=$(make_home photo-count)
+  output=$(python3 - "$ROOT/bin/fm-bridge-view.py" "$home" <<'PY'
+import importlib.util, json, pathlib, sys, time
+spec = importlib.util.spec_from_file_location("fm_bridge_view", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+home = pathlib.Path(sys.argv[2])
+inbox = module.ensure_inbox_dir(home)
+today = time.strftime("%Y-%m-%d", time.gmtime())
+yesterday = "1999-01-01"
+(inbox / "today.json").write_text(json.dumps({
+    "received_at": today + "T16:39:18Z",
+    "original_name": "one.jpg",
+    "size": 4,
+    "content_type": "image/jpeg",
+}))
+stem = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+(inbox / (stem + "-deadbeef.json")).write_text("{}\n")
+(inbox / "old.json").write_text(json.dumps({"received_at": yesterday + "T00:00:00Z"}))
+count = module.photos_received_today(home)
+if count != 2:
+    raise SystemExit("expected 2 of today's sidecars, got %s" % count)
+PY
+  ) || fail "photos_received_today failed: $output"
+  pass "photos_received_today counts today's sidecars by received_at and filename date"
+}
+
+test_child_path_resolves_tool_dirs_without_hardcoded_nvm() {
+  local home output
+  home=$(make_home child-path)
+  mkdir -p "$home/.local/bin" "$home/.nvm/versions/node/v99.0.0/bin"
+  printf '#!/bin/sh\nexit 0\n' > "$home/.local/bin/herdr"
+  printf '#!/bin/sh\nexit 0\n' > "$home/.nvm/versions/node/v99.0.0/bin/tasks-axi"
+  printf '#!/bin/sh\nexit 0\n' > "$home/.nvm/versions/node/v99.0.0/bin/node"
+  chmod +x "$home/.local/bin/herdr" "$home/.nvm/versions/node/v99.0.0/bin/tasks-axi" \
+    "$home/.nvm/versions/node/v99.0.0/bin/node"
+  output=$(python3 - "$ROOT/bin/fm-bridge-view.py" "$home" <<'PY'
+import importlib.util, pathlib, sys
+spec = importlib.util.spec_from_file_location("fm_bridge_view", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+home = sys.argv[2]
+resolved = module.resolve_child_path(source_path="/usr/bin:/bin", home=home)
+if "/v99.0.0/bin" not in resolved:
+    raise SystemExit("nvm bin missing from resolved PATH: %s" % resolved)
+if ".local/bin" not in resolved:
+    raise SystemExit("local bin missing from resolved PATH: %s" % resolved)
+if "v22.23.1" in resolved:
+    raise SystemExit("hardcoded nvm version leaked into PATH: %s" % resolved)
+PY
+  ) || fail "resolve_child_path failed: $output"
+  pass "child PATH resolves HOME tool dirs without a hardcoded nvm version"
+}
+
+test_observation_error_fails_fast_and_keeps_photo_count() {
+  local home fakebin fixture port cookie hdr body started elapsed
+  home=$(make_home obs-error)
+  fakebin=$(make_fakebin "$home")
+  fixture=$home/root
+  mkdir -p "$fixture/bin"
+  cat > "$fixture/bin/fm-bearings-snapshot.sh" <<'SH'
+#!/usr/bin/env bash
+echo "missing tool: herdr" >&2
+exit 1
+SH
+  chmod +x "$fixture/bin/fm-bearings-snapshot.sh"
+  init_passcode "$home" >/dev/null
+  python3 - "$ROOT/bin/fm-bridge-view.py" "$home" <<'PY'
+import importlib.util, pathlib, sys
+spec = importlib.util.spec_from_file_location("fm_bridge_view", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+home = pathlib.Path(sys.argv[2])
+module.write_inbox_pair(home, b"\xff\xd8\xff\xd9", "one.jpg", "image/jpeg", "jpeg")
+module.write_inbox_pair(home, b"\xff\xd8\xff\xd9", "two.jpg", "image/jpeg", "jpeg")
+PY
+  log=$home/bridge-serve.log
+  : > "$log"
+  FM_BRIDGE_VIEW_TEST=1 FM_BRIDGE_VIEW_LAUNCHCTL="$fakebin/launchctl" \
+    PATH="$fakebin:$PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$fixture" \
+    "$BRIDGE" serve --host "$HOST_NAME" --port 0 >"$log" 2>&1 &
+  BRIDGE_PIDS+=("$!")
+  port=$(wait_listening "$log")
+  cookie=$(bridge_cookie "$home" "$port")
+  hdr=$home/page.hdr; body=$home/page.body
+  curl_bridge "$port" / "$hdr" "$body" --header "Cookie: $cookie"
+  node - "$body" <<'JS' || fail "initial observation error did not render unreachable state"
+const fs = require('fs');
+const vm = require('vm');
+
+const page = fs.readFileSync(process.argv[2], 'utf8');
+const match = page.match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/);
+if (!match) throw new Error('page script not found');
+
+const elements = {};
+for (const id of ['needs', 'underway', 'finished', 'waiting']) {
+  elements[id] = {textContent: 'Loading…', innerHTML: ''};
+}
+elements.stale = {
+  classList: {
+    active: false,
+    toggle(name, on) {
+      if (name === 'on') this.active = on;
+    }
+  }
+};
+elements['photo-count'] = {textContent: 'Photos received today: 0'};
+
+const context = vm.createContext({
+  AbortController,
+  console,
+  document: {
+    hidden: false,
+    addEventListener() {},
+    getElementById(id) { return elements[id] || null; }
+  },
+  fetch: async () => ({
+    ok: false,
+    status: 503,
+    json: async () => ({error: 'snapshot failed', photos_today: 2})
+  }),
+  setInterval() {},
+  setTimeout,
+  clearTimeout,
+  window: {addEventListener() {}}
+});
+
+vm.runInContext(match[1], context);
+(async () => {
+  await vm.runInContext('refresh()', context);
+  for (const id of ['needs', 'underway', 'finished', 'waiting']) {
+    if (!elements[id].innerHTML.includes('Cannot reach the desk.')) {
+      throw new Error(`${id} remained ${elements[id].textContent}`);
+    }
+    if (elements[id].innerHTML.includes('Loading')) {
+      throw new Error(`${id} remained loading`);
+    }
+  }
+  if (!elements.stale.classList.active) throw new Error('unreachable overlay is not active');
+  if (elements['photo-count'].textContent !== 'Photos received today: 2') {
+    throw new Error('photo count from error response was not rendered');
+  }
+})().catch((error) => {
+  console.error(error.message);
+  process.exitCode = 1;
+});
+JS
+  hdr=$home/obs.hdr; body=$home/obs.body
+  started=$(python3 -c 'import time; print(time.monotonic())')
+  curl_bridge "$port" /api/observation "$hdr" "$body" --header "Cookie: $cookie"
+  elapsed=$(python3 -c "import time; print(time.monotonic() - $started)")
+  assert_contains "$(head -n 1 "$hdr")" "503" "broken snapshot must return 503: $(cat "$body")"
+  printf '%s' "$(cat "$body")" | jq -e '.photos_today == 2 and .error' >/dev/null \
+    || fail "503 must keep today's photo count: $(cat "$body")"
+  python3 -c "import sys; sys.exit(0 if float(sys.argv[1]) < 8 else 1)" "$elapsed" \
+    || fail "observation 503 hung ${elapsed}s: $(cat "$body")"
+  pass "observation errors fail fast and render the unreachable client state"
+}
+
+test_scrubbed_snapshot_with_herdr_meta_fails_fast() {
+  local home output
+  home=$(make_home scrubbed-herdr)
+  mkdir -p "$home/projects/ship-wt"
+  fm_write_meta "$home/state/herdr-task.meta" \
+    "window=default:w1:p2" \
+    "worktree=$home/projects/ship-wt" \
+    "project=firstmate" \
+    "harness=codex" \
+    "kind=ship" \
+    "backend=herdr"
+  output=$(python3 - "$ROOT/bin/fm-bridge-view.py" "$home" "$ROOT" <<'PY'
+import importlib.util, pathlib, sys, time
+spec = importlib.util.spec_from_file_location("fm_bridge_view", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+module.CHILD_PATH = module.BASE_CHILD_PATH
+home = pathlib.Path(sys.argv[2])
+root = pathlib.Path(sys.argv[3])
+started = time.monotonic()
+outcome = "ok"
+try:
+    module.run_snapshot(home, root)
+except RuntimeError as exc:
+    outcome = str(exc)
+elapsed = time.monotonic() - started
+if elapsed >= 8:
+    raise SystemExit("scrubbed snapshot hung %.2fs: %s" % (elapsed, outcome))
+if "timed out" in outcome:
+    raise SystemExit("scrubbed snapshot timed out: %s" % outcome)
+print("elapsed=%.2f outcome=%s" % (elapsed, outcome.splitlines()[0][:120]))
+PY
+  ) || fail "scrubbed herdr snapshot did not fail fast: $output"
+  pass "scrubbed-env snapshot with a herdr task succeeds or fails fast"
+}
+
 test_bind_is_loopback_constant
 test_funnel_on_refuses_to_serve
 test_funnel_off_serve_starts
@@ -986,3 +1183,7 @@ test_unauthenticated_upload_rejected
 test_upload_rejects_oversize_non_image_and_rates
 test_inbox_unique_names_never_overwrite
 test_inbox_pair_failure_leaves_no_partial_upload
+test_photos_received_today_counts_utc_sidecars
+test_child_path_resolves_tool_dirs_without_hardcoded_nvm
+test_observation_error_fails_fast_and_keeps_photo_count
+test_scrubbed_snapshot_with_herdr_meta_fails_fast

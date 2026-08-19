@@ -25,6 +25,7 @@ import os
 import re
 import secrets
 import selectors
+import shutil
 import signal
 import socket
 import subprocess
@@ -86,7 +87,89 @@ SNIFF_TO_EXT = {"jpeg": "jpg", "png": "png", "webp": "webp", "heic": "heic"}
 GITHUB_PR_RE = re.compile(r"^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/[0-9]+$")
 IPV4_RE = re.compile(r"^\d{1,3}(?:\.\d{1,3}){3}$")
 HOST_LABEL_RE = re.compile(r"^[A-Za-z0-9.-]+(?::\d+)?$")
-CHILD_PATH = "/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/opt/homebrew/bin"
+ISO_DAY_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})")
+FILENAME_DAY_RE = re.compile(r"^(\d{4})(\d{2})(\d{2})T")
+BASE_CHILD_PATH = "/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/opt/homebrew/bin"
+CHILD_PATH_TOOLS = (
+    "jq",
+    "git",
+    "tmux",
+    "herdr",
+    "no-mistakes",
+    "tasks-axi",
+    "gh",
+    "node",
+    "timeout",
+    "gtimeout",
+    "perl",
+)
+
+
+def _append_unique_dir(dirs: List[str], seen: set[str], candidate: str) -> None:
+    if not candidate:
+        return
+    resolved = os.path.abspath(candidate)
+    if resolved in seen or not os.path.isdir(resolved):
+        return
+    seen.add(resolved)
+    dirs.append(resolved)
+
+
+def _nvm_bin_from_home(home: str) -> str:
+    versions = os.path.join(home, ".nvm", "versions", "node")
+    named: List[str] = []
+    with_axi = ""
+    if os.path.isdir(versions):
+        try:
+            children = os.listdir(versions)
+        except OSError:
+            children = []
+        for name in sorted(children):
+            bin_dir = os.path.join(versions, name, "bin")
+            if not os.path.isdir(bin_dir):
+                continue
+            named.append(bin_dir)
+            if os.path.isfile(os.path.join(bin_dir, "tasks-axi")):
+                with_axi = bin_dir
+    if with_axi:
+        return with_axi
+    if named:
+        return named[-1]
+    env_bin = os.environ.get("NVM_BIN", "").strip()
+    if env_bin and os.path.isdir(env_bin):
+        return env_bin
+    return ""
+
+
+def resolve_child_path(source_path: Optional[str] = None, home: Optional[str] = None) -> str:
+    """Build a scrubbed PATH that still locates snapshot tools.
+
+    Keep the base system dirs, then add only the directories of tools the
+    snapshot actually needs, resolved from HOME and the parent PATH. Never
+    copy the rest of the parent environment.
+    """
+    home_path = home if home is not None else os.environ.get("HOME", "")
+    user_dirs: List[str] = []
+    seen: set[str] = set()
+    if home_path:
+        _append_unique_dir(user_dirs, seen, os.path.join(home_path, ".local", "bin"))
+        _append_unique_dir(user_dirs, seen, _nvm_bin_from_home(home_path))
+    search = BASE_CHILD_PATH
+    if source_path is None:
+        source_path = os.environ.get("PATH", "")
+    if source_path:
+        search = source_path + ":" + BASE_CHILD_PATH
+    for tool in CHILD_PATH_TOOLS:
+        found = shutil.which(tool, path=search)
+        if found:
+            _append_unique_dir(user_dirs, seen, os.path.dirname(found))
+    base_dirs: List[str] = []
+    for part in BASE_CHILD_PATH.split(":"):
+        _append_unique_dir(base_dirs, seen, part)
+    return ":".join(user_dirs + base_dirs)
+
+
+CHILD_PATH = resolve_child_path()
 
 TEST_MODE = os.environ.get("FM_BRIDGE_VIEW_TEST") == "1"
 
@@ -301,6 +384,22 @@ def extract_upload(content_type: str, body: bytes) -> Optional[Tuple[bytes, str,
     return None
 
 
+def sidecar_received_day(path: Path, name: str) -> str:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        data = None
+    if isinstance(data, dict):
+        received = str(data.get("received_at") or "").strip()
+        match = ISO_DAY_RE.match(received)
+        if match:
+            return match.group(1)
+    match = FILENAME_DAY_RE.match(name)
+    if match:
+        return f"{match.group(1)}-{match.group(2)}-{match.group(3)}"
+    return ""
+
+
 def photos_received_today(home: Path) -> int:
     inbox = inbox_dir(home)
     if not inbox.is_dir() or inbox.is_symlink():
@@ -317,14 +416,7 @@ def photos_received_today(home: Path) -> int:
         path = inbox / name
         if path.is_symlink() or not path.is_file():
             continue
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeError, json.JSONDecodeError):
-            continue
-        if not isinstance(data, dict):
-            continue
-        received = str(data.get("received_at") or "")
-        if received.startswith(today):
+        if sidecar_received_day(path, name) == today:
             count += 1
     return count
 
@@ -956,7 +1048,7 @@ form.logout button { width: auto; min-height: 2rem; padding: 0.3rem 0.7rem; back
 PAGE_JS = """
 const STALE_MS = %d * 1000;
 const REFRESH_MS = %d * 1000;
-let lastSuccess = Date.now();
+let lastSuccess = 0;
 function esc(value) {
   return String(value).replace(/[&<>"']/g, function(ch) {
     return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]);
@@ -966,6 +1058,19 @@ function setStale(on) {
   const el = document.getElementById('stale');
   if (!el) return;
   el.classList.toggle('on', on);
+}
+function setPhotoCount(n) {
+  const count = document.getElementById('photo-count');
+  if (count) count.textContent = 'Photos received today: ' + n;
+}
+function markBucketsUnreachable() {
+  ['needs','underway','finished','waiting'].forEach(function(id) {
+    const root = document.getElementById(id);
+    if (!root) return;
+    if (root.textContent.indexOf('Loading') !== -1) {
+      root.innerHTML = '<p class="empty">Cannot reach the desk.</p>';
+    }
+  });
 }
 function dotClass(name) {
   if (name === 'Needs you') return 'needs';
@@ -1012,8 +1117,7 @@ function apply(data) {
   renderBucket('underway', data.under_way, 'Nothing is under way.');
   renderBucket('finished', data.just_finished, 'No recent completions.');
   renderBucket('waiting', data.waiting, 'Nothing is waiting.');
-  const count = document.getElementById('photo-count');
-  if (count) count.textContent = 'Photos received today: ' + (data.photos_today || 0);
+  setPhotoCount(data.photos_today != null ? data.photos_today : 0);
 }
 async function sendPhoto(ev) {
   ev.preventDefault();
@@ -1045,10 +1149,7 @@ async function sendPhoto(ev) {
     status.className = 'ok';
     status.textContent = 'Photo received.';
     input.value = '';
-    const count = document.getElementById('photo-count');
-    if (count && payload.received_today != null) {
-      count.textContent = 'Photos received today: ' + payload.received_today;
-    }
+    if (payload.received_today != null) setPhotoCount(payload.received_today);
   } catch (err) {
     status.className = 'warn';
     status.textContent = 'Send failed.';
@@ -1057,6 +1158,7 @@ async function sendPhoto(ev) {
 function tickObserved() {
   const age = document.getElementById('observed');
   if (!age) return;
+  if (!lastSuccess) return;
   const seconds = Math.max(0, Math.round((Date.now() - lastSuccess) / 1000));
   age.textContent = 'Observed ' + seconds + ' seconds ago';
   if (Date.now() - lastSuccess > STALE_MS) setStale(true);
@@ -1067,10 +1169,17 @@ async function refresh() {
     const timer = setTimeout(function() { ctl.abort(); }, 10000);
     const res = await fetch('/api/observation', { credentials: 'same-origin', cache: 'no-store', signal: ctl.signal });
     clearTimeout(timer);
+    const payload = await res.json().catch(function() { return {}; });
+    if (payload && payload.photos_today != null) setPhotoCount(payload.photos_today);
     if (!res.ok) throw new Error('status ' + res.status);
-    apply(await res.json());
+    apply(payload);
   } catch (err) {
-    tickObserved();
+    if (!lastSuccess) {
+      setStale(true);
+      markBucketsUnreachable();
+    } else {
+      tickObserved();
+    }
   }
 }
 document.addEventListener('DOMContentLoaded', function() {
@@ -1132,8 +1241,8 @@ def glance_html(nonce: str) -> str:
   <h1>Starship</h1>
   <form class="logout" method="post" action="/logout"><button type="submit">Log out</button></form>
 </header>
-<p class="meta"><span id="desk">Desk reachable</span> · <span id="mailbox">Mailbox…</span></p>
-<p class="meta" id="observed">Observed just now</p>
+<p class="meta"><span id="desk">Checking the desk</span> · <span id="mailbox">Mailbox…</span></p>
+<p class="meta" id="observed">Observing…</p>
 <p class="warn">Summary only. Do not approve from this page.</p>
 <h2>Send a photo</h2>
 <form id="photo-form" method="post" action="/upload" enctype="multipart/form-data">
@@ -1342,12 +1451,18 @@ class BridgeHandler(BaseHTTPRequestHandler):
             if not self._authed():
                 self._send(401, b'{"error":"unauthorized"}\n', "application/json")
                 return
+            photos_today = photos_received_today(STATE.home)
             try:
                 payload = STATE.cache.get()
             except Exception as exc:
-                self._send(503, json.dumps({"error": "desk unreachable", "detail": str(exc)}).encode("utf-8"), "application/json")
+                body = json.dumps({
+                    "error": "desk unreachable",
+                    "detail": str(exc),
+                    "photos_today": photos_today,
+                }).encode("utf-8")
+                self._send(503, body, "application/json")
                 return
-            payload["photos_today"] = photos_received_today(STATE.home)
+            payload["photos_today"] = photos_today
             body = json.dumps(payload).encode("utf-8")
             self._send(200, body, "application/json")
             return

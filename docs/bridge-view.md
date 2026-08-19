@@ -75,17 +75,20 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.firstmate.bridge-vie
 The page calls `bin/fm-bearings-snapshot.sh --json --passive-view`.
 That named Bearings mode is allowed while away mode is on; ordinary `/bearings` chat still refuses until return catch-up finishes.
 The server caches one observation for about 30 seconds, runs one refresh at a time, and caps subprocess time and output size.
+The snapshot child keeps a scrubbed environment (no parent secrets) but resolves tool directories at server start from HOME and the parent PATH, including `~/.local/bin` and a discovered nvm node bin, so CLIs such as herdr and tasks-axi are found without a version-specific hardcoded path.
+A missing session-provider CLI must fail immediately rather than polling; the snapshot either returns glance data or a 503 with a clear error within seconds.
 It never takes the session lock, never drains wakes, and never writes backlog or state.
 Photo drops are the exception write path documented below; observation GETs still only read.
+A 503 still includes today's photo count from inbox sidecars so the counter does not depend on glance data loading.
 
 The client refreshes every 30 seconds and also refreshes on `pageshow` and when a hidden tab becomes visible.
 The four buckets show at most 5 Needs you, 8 Under way, 6 Just finished, and 5 Waiting in the wings rows, with an honest `N more` count for omitted rows.
+If the first observation request fails, the buckets replace "Loading…" with "Cannot reach the desk" immediately and the full-page overlay appears.
+If refreshes stop for 90 seconds after a successful load, the already-open tab overlays "Cannot reach the desk" from the client clock.
+Last-good on the server cannot save a tab that never hears back.
 
 The mailbox indicator is a local listen or launchd check.
 It must never call `GET /v1/announcements`, because that call marks announcements delivered.
-
-If refreshes stop for 90 seconds, the already-open tab overlays "Cannot reach the desk" from the client clock.
-Last-good on the server cannot save a tab that never hears back.
 
 ## Writes
 
@@ -103,7 +106,7 @@ Names never overwrite; the directory is quarantined storage only.
 The server does not execute, decode, or otherwise parse image contents beyond the magic-byte sniff.
 Nothing else in the bridge process writes outside `bridge/` and this inbox.
 
-The glance page exposes a phone-first file input (`accept` images, no `capture` attribute so iOS Safari offers Photo Library as well as Take Photo) and submit control, a success or failure message, and the count of photos received today (UTC date of `received_at`).
+The glance page exposes a phone-first file input (`accept` images, no `capture` attribute so iOS Safari offers Photo Library as well as Take Photo) and submit control, a success or failure message, and the count of photos received today (UTC date of `received_at`, falling back to the timestamped sidecar filename when that field is absent or unreadable).
 Existing `form-action 'self'` and `connect-src 'self'` CSP directives cover the form and `fetch`; scripts and styles stay nonce-based.
 
 There is still no approve, answer, merge, or spawn control on this page.
