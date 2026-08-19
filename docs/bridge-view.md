@@ -25,8 +25,13 @@ The salted scrypt hash lives at `bridge/passcode.hash` inside a mode-0700 `bridg
 Sessions live in `bridge/sessions.json`.
 Logs go to `bridge/bridge.log`, not into `state/`.
 
-`config/bridge-view` may contain `host=<magicdns-name>` for Host and login Origin checks.
+`config/bridge-view` may contain `host=<magicdns-name>` for Host and POST CSRF checks.
 `FM_BRIDGE_VIEW_HOST` overrides that file.
+Login and other POST writes require CSRF proof on top of Host.
+When the browser sends `Origin`, it must match `https://<host>` (or that host on port 443) exactly.
+iPhone Safari omits `Origin` on this same-origin form POST, so a missing Origin is accepted only when `Sec-Fetch-Site` is `same-origin` or `none`, or when `Referer` is an `https` URL whose host matches the expected Serve name.
+A present but wrong Origin is always rejected.
+Error responses drain a bounded unread request body (or close the connection) so a keep-alive socket does not treat leftover POST bytes as the next request line.
 
 Initialize once:
 
@@ -86,7 +91,7 @@ Last-good on the server cannot save a tab that never hears back.
 Login and logout POSTs remain the authentication writes.
 The only other write path is an authenticated photo drop.
 
-`POST /upload` requires the same session cookie plus Host and Origin checks as login.
+`POST /upload` requires the same session cookie plus Host and CSRF checks as login.
 The body may be `multipart/form-data` with a `photo` file field, or a raw image body whose `Content-Type` is one of `image/jpeg`, `image/png`, `image/webp`, `image/heic`, or `image/heif`.
 The server accepts those declared types only after magic-byte sniffing (JPEG, PNG, WebP, HEIC/HEIF); a matching header is not enough.
 The request is capped at 15 MB and returns 413 when larger or 415 when the type or magic bytes are not an allowed image.

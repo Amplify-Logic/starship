@@ -22,7 +22,7 @@
 # Environment:
 #   FM_HOME                 private Firstmate home; defaults to this repository root
 #   FM_BRIDGE_VIEW_PORT     dedicated IPv4 loopback port; defaults to 8766
-#   FM_BRIDGE_VIEW_HOST     expected Serve MagicDNS hostname (Host/Origin checks)
+#   FM_BRIDGE_VIEW_HOST     expected Serve MagicDNS hostname (Host/POST CSRF checks)
 #   FM_BRIDGE_VIEW_TEST     set to 1 only in the behavior suite
 set -eu
 

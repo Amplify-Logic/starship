@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Behavior tests for the phone bridge view: loopback bind, Tailscale Funnel
-# refusal, Host/Origin checks, session cookie isolation from port 8765, read-only
-# snapshot subprocess, away-mode passive refresh, auth headers, and authenticated
-# photo drops into the quarantined inbox.
+# refusal, Host/Origin checks including Safari form POSTs that omit Origin,
+# session cookie isolation from port 8765, read-only snapshot subprocess,
+# away-mode passive refresh, auth headers, authenticated photo drops into
+# the quarantined inbox, and keep-alive body drain after early error returns.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -367,6 +368,175 @@ PY
   curl_bridge "$port" /api/observation "$hdr" "$body" --header "Cookie: ${cookie%%;*}"
   assert_contains "$(head -n 1 "$hdr")" "401" "revoked session must be rejected"
   pass "passcode login, security headers, host-only cookie, and revoke all work"
+}
+
+test_safari_login_without_origin_and_keepalive_body_drain() {
+  local home fakebin port pass hdr body cookie output
+  home=$(make_home safari-login)
+  fakebin=$(make_fakebin "$home")
+  pass=$(init_passcode "$home")
+  port=$(start_bridge "$home" "$fakebin")
+
+  hdr=$home/safari.hdr; body=$home/safari.body
+  curl_bridge "$port" /login "$hdr" "$body" \
+    --header "Sec-Fetch-Site: same-origin" \
+    --data "passcode=$pass"
+  assert_contains "$(head -n 1 "$hdr")" "303" \
+    "Safari same-origin login without Origin must succeed"
+  cookie=$(awk 'tolower($1)=="set-cookie:" {print substr($0, index($0,$2)); exit}' "$hdr")
+  [ -n "$cookie" ] || fail "Safari-shaped login did not set a session cookie"
+
+  hdr=$home/safari-none.hdr; body=$home/safari-none.body
+  curl_bridge "$port" /login "$hdr" "$body" \
+    --header "Sec-Fetch-Site: none" \
+    --data "passcode=$pass"
+  assert_contains "$(head -n 1 "$hdr")" "303" \
+    "absent Origin with Sec-Fetch-Site none must succeed"
+
+  hdr=$home/safari-referer.hdr; body=$home/safari-referer.body
+  curl_bridge "$port" /login "$hdr" "$body" \
+    --header "Referer: $ORIGIN/" \
+    --data "passcode=$pass"
+  assert_contains "$(head -n 1 "$hdr")" "303" \
+    "absent Origin with https Referer to the expected host must succeed"
+
+  hdr=$home/no-proof.hdr; body=$home/no-proof.body
+  curl_bridge "$port" /login "$hdr" "$body" \
+    --data "passcode=$pass"
+  assert_contains "$(head -n 1 "$hdr")" "403" \
+    "absent Origin without same-origin proof must be rejected"
+
+  hdr=$home/http-referer.hdr; body=$home/http-referer.body
+  curl_bridge "$port" /login "$hdr" "$body" \
+    --header "Referer: http://$HOST_NAME/" \
+    --data "passcode=$pass"
+  assert_contains "$(head -n 1 "$hdr")" "403" \
+    "absent Origin with http Referer must be rejected"
+
+  hdr=$home/wrong-origin.hdr; body=$home/wrong-origin.body
+  curl_bridge "$port" /login "$hdr" "$body" \
+    --header "Origin: https://evil.example" \
+    --header "Sec-Fetch-Site: same-origin" \
+    --data "passcode=$pass"
+  assert_contains "$(head -n 1 "$hdr")" "403" \
+    "present but wrong Origin must be rejected even with Sec-Fetch-Site"
+
+  output=$(python3 - "$HOST_NAME" "$port" "$pass" <<'PY'
+import socket
+import sys
+import threading
+import time
+
+host, port, password = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+body = ("passcode=" + password).encode("utf-8")
+
+
+def recv_http(sock):
+    data = b""
+    while b"\r\n\r\n" not in data:
+        chunk = sock.recv(4096)
+        if not chunk:
+            break
+        data += chunk
+    if b"\r\n\r\n" not in data:
+        raise SystemExit("incomplete HTTP response: %r" % (data[:200],))
+    header, rest = data.split(b"\r\n\r\n", 1)
+    length = 0
+    for line in header.split(b"\r\n"):
+        if line.lower().startswith(b"content-length:"):
+            length = int(line.split(b":", 1)[1].strip())
+    while len(rest) < length:
+        chunk = sock.recv(4096)
+        if not chunk:
+            break
+        rest += chunk
+    return header, rest[:length]
+
+
+sock = socket.create_connection(("127.0.0.1", port), timeout=8)
+try:
+    sock.sendall(
+        (
+            "GET / HTTP/1.1\r\n"
+            "Host: %s\r\n"
+            "Connection: keep-alive\r\n"
+            "\r\n" % host
+        ).encode("ascii")
+    )
+    header, _ = recv_http(sock)
+    status = header.split(b"\r\n", 1)[0]
+    if b" 200 " not in status:
+        raise SystemExit("expected initial 200, got %r" % (status,))
+    sock.sendall(
+        (
+            "POST /login HTTP/1.1\r\n"
+            "Host: %s\r\n"
+            "Content-Type: application/x-www-form-urlencoded\r\n"
+            "Content-Length: %d\r\n"
+            "Connection: keep-alive\r\n"
+            "\r\n" % (host, len(body))
+        ).encode("ascii")
+        + body
+    )
+    header, _ = recv_http(sock)
+    status = header.split(b"\r\n", 1)[0]
+    if b" 403 " not in status:
+        raise SystemExit("expected 403 on unproven login, got %r" % (status,))
+    sock.sendall(
+        (
+            "GET / HTTP/1.1\r\n"
+            "Host: %s\r\n"
+            "Connection: close\r\n"
+            "\r\n" % host
+        ).encode("ascii")
+    )
+    header, _ = recv_http(sock)
+    status = header.split(b"\r\n", 1)[0]
+    if b" 400 " in status or b" 501 " in status:
+        raise SystemExit("keep-alive follow-up parsed as garbage: %r" % (status,))
+    if b" 200 " not in status:
+        raise SystemExit("expected 200 on drained follow-up GET, got %r" % (status,))
+finally:
+    sock.close()
+
+sock = socket.create_connection(("127.0.0.1", port), timeout=4)
+try:
+    sock.sendall(
+        (
+            "POST /login HTTP/1.1\r\n"
+            "Host: %s\r\n"
+            "Content-Type: application/x-www-form-urlencoded\r\n"
+            "Content-Length: 4096\r\n"
+            "Connection: keep-alive\r\n"
+            "\r\n"
+            "passcode=x" % host
+        ).encode("ascii")
+    )
+    started = time.monotonic()
+
+    def drip_body():
+        try:
+            for _ in range(12):
+                time.sleep(0.4)
+                sock.sendall(b"x")
+        except OSError:
+            pass
+
+    threading.Thread(target=drip_body, daemon=True).start()
+    header, _ = recv_http(sock)
+    elapsed = time.monotonic() - started
+    status = header.split(b"\r\n", 1)[0]
+    if b" 403 " not in status:
+        raise SystemExit("expected 403 on incomplete unproven login, got %r" % (status,))
+    if b"connection: close" not in header.lower():
+        raise SystemExit("incomplete body response did not close the connection")
+    if elapsed >= 2.5:
+        raise SystemExit("slow-drip body held the handler for %.2f seconds" % elapsed)
+finally:
+    sock.close()
+PY
+  ) || fail "keep-alive body after 403 was not drained: $output"
+  pass "Safari-shaped login without Origin works and 403 drains the body"
 }
 
 test_snapshot_subprocess_does_not_write_fleet_state() {
@@ -784,6 +954,7 @@ test_funnel_off_legacy_serve_output_starts
 test_unverifiable_funnel_refuses_to_serve
 test_lan_and_unauthorized_hosts_are_rejected
 test_auth_cookie_headers_and_isolation
+test_safari_login_without_origin_and_keepalive_body_drain
 test_snapshot_subprocess_does_not_write_fleet_state
 test_snapshot_output_is_bounded_during_capture
 test_snapshot_requests_all_in_flight_rows
