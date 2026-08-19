@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# fm-bridge-view.sh - captain's phone-first read-only fleet page.
+# fm-bridge-view.sh - captain's phone-first fleet page.
 #
 # Serves one small Python 3 standard-library HTTP server on IPv4 loopback and
 # exposes it on the tailnet with Tailscale Serve HTTPS. It never binds
 # 0.0.0.0, never enables Funnel, and never writes backlog or fleet state.
 # The observation is `fm-bearings-snapshot.sh --json --passive-view`.
+# Authenticated photo drops are the only extra write path and land in
+# data/bridge-inbox/.
 #
 # The bind address is the literal 127.0.0.1 constant in bin/fm-bridge-view.py
 # and there is no flag or environment variable that widens it.

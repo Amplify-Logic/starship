@@ -1,13 +1,14 @@
 # Starship bridge view
 
-The captain's phone-first read-only fleet page.
-`bin/fm-bridge-view.sh` and `bin/fm-bridge-view.py` own commands, bind, auth, and snapshot mechanics; read the script header before first use.
+The captain's phone-first fleet page.
+`bin/fm-bridge-view.sh` and `bin/fm-bridge-view.py` own commands, bind, auth, snapshot, and photo-drop mechanics; read the script header before first use.
 
 ## What it is
 
 A glance of what needs the captain, what is under way, what just finished, and what is waiting.
 It is an observation of durable fleet records, not a place to approve, answer, merge, or spawn.
 Tapping a GitHub pull-request link is the only outbound jump, and those URLs are allowlisted.
+The same authenticated page also accepts one-tap photo drops from the captain's phone.
 
 The page is served from the Mac on IPv4 loopback and published on the tailnet with **Tailscale Serve HTTPS**.
 It never uses Tailscale Funnel and never binds `0.0.0.0`.
@@ -69,6 +70,7 @@ The page calls `bin/fm-bearings-snapshot.sh --json --passive-view`.
 That named Bearings mode is allowed while away mode is on; ordinary `/bearings` chat still refuses until return catch-up finishes.
 The server caches one observation for about 30 seconds, runs one refresh at a time, and caps subprocess time and output size.
 It never takes the session lock, never drains wakes, and never writes backlog or state.
+Photo drops are the exception write path documented below; observation GETs still only read.
 
 The client refreshes every 30 seconds and also refreshes on `pageshow` and when a hidden tab becomes visible.
 The four buckets show at most 5 Needs you, 8 Under way, 6 Just finished, and 5 Waiting in the wings rows, with an honest `N more` count for omitted rows.
@@ -81,5 +83,21 @@ Last-good on the server cannot save a tab that never hears back.
 
 ## Writes
 
-Slice 1 permits only read-only GETs and the login and logout POSTs needed for authentication.
-There is no approve, answer, merge, or spawn control on this page.
+Login and logout POSTs remain the authentication writes.
+The only other write path is an authenticated photo drop.
+
+`POST /upload` requires the same session cookie plus Host and Origin checks as login.
+The body may be `multipart/form-data` with a `photo` file field, or a raw image body whose `Content-Type` is one of `image/jpeg`, `image/png`, `image/webp`, `image/heic`, or `image/heif`.
+The server accepts those declared types only after magic-byte sniffing (JPEG, PNG, WebP, HEIC/HEIF); a matching header is not enough.
+The request is capped at 15 MB and returns 413 when larger or 415 when the type or magic bytes are not an allowed image.
+The per-session rolling-hour limit counts authenticated, non-empty attempts within that cap, including attempts later rejected as unsupported, and returns 429 after 30 such attempts.
+
+Files land under `data/bridge-inbox/` (created mode 0700) with a unique timestamped name such as `20260819T113530Z-<hex>.jpg` and a sibling `.json` sidecar recording `received_at`, `original_name`, `size`, and `content_type`.
+Names never overwrite; the directory is quarantined storage only.
+The server does not execute, decode, or otherwise parse image contents beyond the magic-byte sniff.
+Nothing else in the bridge process writes outside `bridge/` and this inbox.
+
+The glance page exposes a phone-first file input (`accept` images, `capture` allowed) and submit control, a success or failure message, and the count of photos received today (UTC date of `received_at`).
+Existing `form-action 'self'` and `connect-src 'self'` CSP directives cover the form and `fetch`; scripts and styles stay nonce-based.
+
+There is still no approve, answer, merge, or spawn control on this page.

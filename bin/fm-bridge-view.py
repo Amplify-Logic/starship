@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Starship bridge view: read-only phone page on IPv4 loopback.
+"""Starship bridge view: phone page on IPv4 loopback.
 
 The bind address is the literal LOOPBACK constant. There is no flag or
 environment variable that widens it. Tailscale Serve publishes HTTPS in
@@ -8,6 +8,8 @@ front of this process; Funnel stays off.
 This process never takes the session lock, never drains wakes, and never
 writes backlog or fleet state. Session and passcode files live under the
 home's 0700 bridge/ directory. Logs also go there, not into state/.
+The only extra write path is authenticated photo drops into
+data/bridge-inbox/ (mode 0700 quarantined storage).
 """
 
 from __future__ import annotations
@@ -35,7 +37,7 @@ from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 LOOPBACK = "127.0.0.1"
 DEFAULT_PORT = 8766
@@ -57,6 +59,29 @@ STALE_CLIENT_SECONDS = 90
 REFRESH_CLIENT_SECONDS = 30
 MAILBOX_PORT = 8765
 MAILBOX_LAUNCHD = "com.firstmate.glasses-voice-mailbox"
+UPLOAD_MAX_BYTES = 15 * 1024 * 1024
+UPLOAD_RATE_LIMIT = 30
+UPLOAD_RATE_WINDOW_SECONDS = 3600
+UPLOAD_FIELD = "photo"
+ALLOWED_CONTENT_TYPES = {
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "image/heic",
+    "image/heif",
+}
+HEIF_BRANDS = {
+    b"heic",
+    b"heix",
+    b"heif",
+    b"heis",
+    b"heim",
+    b"mif1",
+    b"msf1",
+    b"hevc",
+    b"hevx",
+}
+SNIFF_TO_EXT = {"jpeg": "jpg", "png": "png", "webp": "webp", "heic": "heic"}
 GITHUB_PR_RE = re.compile(r"^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/[0-9]+$")
 IPV4_RE = re.compile(r"^\d{1,3}(?:\.\d{1,3}){3}$")
 HOST_LABEL_RE = re.compile(r"^[A-Za-z0-9.-]+(?::\d+)?$")
@@ -132,6 +157,238 @@ def write_private(path: Path, data: bytes) -> None:
     finally:
         os.close(fd)
     os.chmod(path, 0o600)
+
+
+def inbox_dir(home: Path) -> Path:
+    return home / "data" / "bridge-inbox"
+
+
+def ensure_inbox_dir(home: Path) -> Path:
+    path = inbox_dir(home)
+    if path.exists() and path.is_symlink():
+        raise RuntimeError("bridge inbox path is a symlink")
+    path.mkdir(mode=0o700, parents=True, exist_ok=True)
+    os.chmod(path, 0o700)
+    return path
+
+
+def normalize_content_type(value: str) -> str:
+    return value.split(";", 1)[0].strip().lower()
+
+
+def sniff_image(data: bytes) -> Optional[str]:
+    if len(data) >= 3 and data[:3] == b"\xff\xd8\xff":
+        return "jpeg"
+    if len(data) >= 8 and data[:8] == b"\x89PNG\r\n\x1a\n":
+        return "png"
+    if len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "webp"
+    if len(data) >= 12 and data[4:8] == b"ftyp":
+        brands = {data[8:12]}
+        offset = 16
+        while offset + 4 <= min(len(data), 64):
+            brands.add(data[offset : offset + 4])
+            offset += 4
+        if brands & HEIF_BRANDS:
+            return "heic"
+    return None
+
+
+def safe_original_name(name: str) -> str:
+    cleaned = name.replace("\\", "/").replace("\x00", "")
+    base = Path(cleaned).name.strip()
+    if not base or base in {".", ".."}:
+        return "photo"
+    return base[:200]
+
+
+def _multipart_boundary(content_type: str) -> Optional[bytes]:
+    parts = [item.strip() for item in content_type.split(";")]
+    if not parts or parts[0].lower() != "multipart/form-data":
+        return None
+    for item in parts[1:]:
+        if item.lower().startswith("boundary="):
+            value = item.split("=", 1)[1].strip().strip('"')
+            if value:
+                try:
+                    return value.encode("ascii")
+                except UnicodeEncodeError:
+                    return None
+    return None
+
+
+def _disposition_filename(disposition: str) -> str:
+    match = re.search(r"filename\*=(?:UTF-8''|utf-8'')([^;]+)", disposition, re.I)
+    if match:
+        return unquote(match.group(1).strip().strip('"'))
+    match = re.search(r'filename="([^"]*)"', disposition, re.I)
+    if match:
+        return match.group(1)
+    match = re.search(r"filename=([^;]+)", disposition, re.I)
+    if match:
+        return match.group(1).strip().strip('"')
+    return ""
+
+
+def _disposition_name(disposition: str) -> str:
+    match = re.search(r'name="([^"]*)"', disposition, re.I)
+    if match:
+        return match.group(1)
+    match = re.search(r"name=([^;]+)", disposition, re.I)
+    if match:
+        return match.group(1).strip().strip('"')
+    return ""
+
+
+def parse_multipart_photo(content_type: str, body: bytes) -> Optional[Tuple[bytes, str, str]]:
+    boundary = _multipart_boundary(content_type)
+    if not boundary:
+        return None
+    delim = b"--" + boundary
+    index = body.find(delim)
+    if index == -1:
+        return None
+    chunks = body[index:].split(delim)
+    for chunk in chunks:
+        if chunk in (b"", b"--", b"--\r\n", b"--\n"):
+            continue
+        if chunk.startswith(b"--"):
+            continue
+        if chunk.startswith(b"\r\n"):
+            chunk = chunk[2:]
+        elif chunk.startswith(b"\n"):
+            chunk = chunk[1:]
+        header_end = chunk.find(b"\r\n\r\n")
+        sep_len = 4
+        if header_end == -1:
+            header_end = chunk.find(b"\n\n")
+            sep_len = 2
+        if header_end == -1:
+            continue
+        header_blob = chunk[:header_end].decode("utf-8", "replace")
+        payload = chunk[header_end + sep_len :]
+        if payload.endswith(b"\r\n"):
+            payload = payload[:-2]
+        elif payload.endswith(b"\n"):
+            payload = payload[:-1]
+        disposition = ""
+        part_type = ""
+        for line in header_blob.splitlines():
+            lower = line.lower()
+            if lower.startswith("content-disposition:"):
+                disposition = line.split(":", 1)[1].strip()
+            elif lower.startswith("content-type:"):
+                part_type = line.split(":", 1)[1].strip()
+        field = _disposition_name(disposition)
+        filename = _disposition_filename(disposition)
+        if field != UPLOAD_FIELD:
+            continue
+        return (
+            payload,
+            safe_original_name(filename or "photo"),
+            normalize_content_type(part_type),
+        )
+    return None
+
+
+def extract_upload(content_type: str, body: bytes) -> Optional[Tuple[bytes, str, str]]:
+    normalized = normalize_content_type(content_type)
+    if normalized == "multipart/form-data":
+        return parse_multipart_photo(content_type, body)
+    if normalized in ALLOWED_CONTENT_TYPES:
+        return body, "photo", normalized
+    return None
+
+
+def photos_received_today(home: Path) -> int:
+    inbox = inbox_dir(home)
+    if not inbox.is_dir() or inbox.is_symlink():
+        return 0
+    today = time.strftime("%Y-%m-%d", time.gmtime())
+    count = 0
+    try:
+        names = os.listdir(inbox)
+    except OSError:
+        return 0
+    for name in names:
+        if not name.endswith(".json") or name.startswith("."):
+            continue
+        path = inbox / name
+        if path.is_symlink() or not path.is_file():
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        received = str(data.get("received_at") or "")
+        if received.startswith(today):
+            count += 1
+    return count
+
+
+def write_inbox_pair(home: Path, payload: bytes, original_name: str, content_type: str, kind: str) -> str:
+    inbox = ensure_inbox_dir(home)
+    ext = SNIFF_TO_EXT[kind]
+    sidecar = {
+        "received_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "original_name": original_name,
+        "size": len(payload),
+        "content_type": content_type,
+    }
+    sidecar_bytes = json.dumps(sidecar, indent=2, sort_keys=True).encode("utf-8") + b"\n"
+    for _ in range(16):
+        stem = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()) + "-" + secrets.token_hex(8)
+        dest = inbox / f"{stem}.{ext}"
+        side = inbox / f"{stem}.json"
+        if dest.exists() or side.exists() or dest.is_symlink() or side.is_symlink():
+            continue
+        stage = inbox / f".{stem}.{os.getpid()}.{secrets.token_hex(4)}.stage"
+        tmp = stage / f"photo.{ext}"
+        tmp_json = stage / "sidecar.json"
+        staged = False
+        published_side = False
+        published_dest = False
+        try:
+            stage.mkdir(mode=0o700)
+            staged = True
+            write_private(tmp, payload)
+            write_private(tmp_json, sidecar_bytes)
+            os.link(tmp_json, side)
+            published_side = True
+            os.link(tmp, dest)
+            published_dest = True
+        except FileExistsError:
+            continue
+        except OSError:
+            raise
+        finally:
+            if not published_dest and published_side:
+                try:
+                    side.unlink()
+                except FileNotFoundError:
+                    pass
+            if published_dest and not published_side:
+                try:
+                    dest.unlink()
+                except FileNotFoundError:
+                    pass
+            if staged:
+                try:
+                    tmp.unlink()
+                except FileNotFoundError:
+                    pass
+                try:
+                    tmp_json.unlink()
+                except FileNotFoundError:
+                    pass
+                try:
+                    stage.rmdir()
+                except FileNotFoundError:
+                    pass
+        return stem
+    raise RuntimeError("could not allocate a unique inbox name")
 
 
 def scrypt_hash(password: str, salt: bytes) -> bytes:
@@ -258,6 +515,41 @@ class SessionStore:
     def revoke_all(self) -> None:
         with self._locked():
             self._save({"sessions": {}})
+
+    def record_upload(self, token: str) -> str:
+        """Record one upload attempt. Returns ok, limited, or invalid."""
+        if not token:
+            return "invalid"
+        now = int(time.time())
+        window_start = now - UPLOAD_RATE_WINDOW_SECONDS
+        with self._locked():
+            data = self._load()
+            row = data["sessions"].get(token)
+            if not isinstance(row, dict):
+                return "invalid"
+            expires = int(row.get("expires") or 0)
+            if expires <= now:
+                data["sessions"].pop(token, None)
+                self._save(data)
+                return "invalid"
+            raw_times = row.get("uploads") or []
+            times: List[int] = []
+            if isinstance(raw_times, list):
+                for item in raw_times:
+                    try:
+                        stamp = int(item)
+                    except (TypeError, ValueError):
+                        continue
+                    if stamp > window_start:
+                        times.append(stamp)
+            if len(times) >= UPLOAD_RATE_LIMIT:
+                row["uploads"] = times
+                self._save(data)
+                return "limited"
+            times.append(now)
+            row["uploads"] = times
+            self._save(data)
+            return "ok"
 
 
 def omitted_total(omitted: List[Dict[str, Any]], prefix: str, shown: int) -> int:
@@ -646,6 +938,9 @@ input, button {
 input { background: #1b2220; color: inherit; margin: 0.8rem 0; }
 button { background: #d7e0d8; color: #101418; font-weight: 600; }
 .note { color: #9aa7a0; font-size: 0.9rem; }
+.ok { color: #34d399; font-size: 0.95rem; margin: 0.4rem 0 0; }
+#photo-form { margin: 1.1rem 0 0.4rem; }
+#photo-form label { display: block; margin-bottom: 0.35rem; }
 #stale {
   display: none; position: fixed; inset: 0; background: #101418;
   color: #f2f4f3; align-items: center; justify-content: center;
@@ -716,6 +1011,47 @@ function apply(data) {
   renderBucket('underway', data.under_way, 'Nothing is under way.');
   renderBucket('finished', data.just_finished, 'No recent completions.');
   renderBucket('waiting', data.waiting, 'Nothing is waiting.');
+  const count = document.getElementById('photo-count');
+  if (count) count.textContent = 'Photos received today: ' + (data.photos_today || 0);
+}
+async function sendPhoto(ev) {
+  ev.preventDefault();
+  const input = document.getElementById('photo');
+  const status = document.getElementById('photo-result');
+  if (!input || !status) return;
+  if (!input.files || !input.files.length) {
+    status.className = 'warn';
+    status.textContent = 'Choose a photo first.';
+    return;
+  }
+  status.className = 'note';
+  status.textContent = 'Sending photo…';
+  try {
+    const body = new FormData();
+    body.append('photo', input.files[0]);
+    const res = await fetch('/upload', {
+      method: 'POST',
+      body: body,
+      credentials: 'same-origin',
+      cache: 'no-store'
+    });
+    const payload = await res.json().catch(function() { return {}; });
+    if (!res.ok) {
+      status.className = 'warn';
+      status.textContent = payload.error || ('Send failed (' + res.status + ')');
+      return;
+    }
+    status.className = 'ok';
+    status.textContent = 'Photo received.';
+    input.value = '';
+    const count = document.getElementById('photo-count');
+    if (count && payload.received_today != null) {
+      count.textContent = 'Photos received today: ' + payload.received_today;
+    }
+  } catch (err) {
+    status.className = 'warn';
+    status.textContent = 'Send failed.';
+  }
 }
 function tickObserved() {
   const age = document.getElementById('observed');
@@ -742,6 +1078,8 @@ document.addEventListener('DOMContentLoaded', function() {
   setInterval(tickObserved, 1000);
   document.addEventListener('visibilitychange', function() { if (!document.hidden) refresh(); });
   window.addEventListener('pageshow', function() { refresh(); });
+  const form = document.getElementById('photo-form');
+  if (form) form.addEventListener('submit', sendPhoto);
 });
 """ % (STALE_CLIENT_SECONDS, REFRESH_CLIENT_SECONDS)
 
@@ -796,6 +1134,14 @@ def glance_html(nonce: str) -> str:
 <p class="meta"><span id="desk">Desk reachable</span> · <span id="mailbox">Mailbox…</span></p>
 <p class="meta" id="observed">Observed just now</p>
 <p class="warn">Summary only. Do not approve from this page.</p>
+<h2>Send a photo</h2>
+<form id="photo-form" method="post" action="/upload" enctype="multipart/form-data">
+  <label for="photo">Photo</label>
+  <input id="photo" name="photo" type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif,image/*" capture="environment">
+  <button type="submit">Send photo</button>
+</form>
+<p class="meta" id="photo-count">Photos received today: 0</p>
+<p id="photo-result" class="note"></p>
 <h2>Needs you</h2>
 <div id="needs"><p class="empty">Loading…</p></div>
 <h2>Under way</h2>
@@ -930,16 +1276,80 @@ class BridgeHandler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self._send(503, json.dumps({"error": "desk unreachable", "detail": str(exc)}).encode("utf-8"), "application/json")
                 return
+            payload["photos_today"] = photos_received_today(STATE.home)
             body = json.dumps(payload).encode("utf-8")
             self._send(200, body, "application/json")
             return
         self._send(404, b"not found\n", "text/plain; charset=utf-8")
+
+    def _json_error(self, code: int, message: str, extra: Optional[List[Tuple[str, str]]] = None) -> None:
+        body = json.dumps({"error": message}).encode("utf-8") + b"\n"
+        self._send(code, body, "application/json", extra=extra)
+
+    def _handle_upload(self) -> None:
+        if not self._origin_ok():
+            self._send(403, b"forbidden\n", "text/plain; charset=utf-8")
+            return
+        token = self._session()
+        if not STATE.sessions.valid(token):
+            self._json_error(401, "unauthorized")
+            return
+        length_header = self.headers.get("Content-Length")
+        if length_header is None or not str(length_header).strip().isdigit():
+            self._json_error(400, "missing content length")
+            return
+        length = int(length_header)
+        if length > UPLOAD_MAX_BYTES:
+            self._json_error(413, "too large", extra=[("Connection", "close")])
+            return
+        if length <= 0:
+            self._json_error(400, "empty body")
+            return
+        rate = STATE.sessions.record_upload(token)
+        if rate == "invalid":
+            self._json_error(401, "unauthorized")
+            return
+        if rate == "limited":
+            self._json_error(429, "too many uploads")
+            return
+        raw = self.rfile.read(length) if length else b""
+        if len(raw) > UPLOAD_MAX_BYTES:
+            self._json_error(413, "too large")
+            return
+        content_type = self.headers.get("Content-Type") or ""
+        extracted = extract_upload(content_type, raw)
+        if extracted is None:
+            self._json_error(415, "unsupported media type")
+            return
+        payload, original_name, declared = extracted
+        if not payload:
+            self._json_error(415, "unsupported media type")
+            return
+        if declared not in ALLOWED_CONTENT_TYPES:
+            self._json_error(415, "unsupported media type")
+            return
+        kind = sniff_image(payload)
+        if kind is None:
+            self._json_error(415, "unsupported media type")
+            return
+        try:
+            write_inbox_pair(STATE.home, payload, original_name, declared, kind)
+        except Exception as exc:
+            self._json_error(500, str(exc) if TEST_MODE else "upload failed")
+            return
+        body = json.dumps(
+            {"ok": True, "received_today": photos_received_today(STATE.home)}
+        ).encode("utf-8")
+        self._send(200, body, "application/json")
 
     def do_POST(self) -> None:  # noqa: N802
         if STATE is None or not self._host_ok():
             self._send(403, b"forbidden\n", "text/plain; charset=utf-8")
             return
         parsed = urlparse(self.path)
+        if parsed.path == "/upload":
+            self._handle_upload()
+            return
         if parsed.path not in {"/login", "/logout"}:
             self._send(404, b"not found\n", "text/plain; charset=utf-8")
             return

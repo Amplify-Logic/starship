@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Behavior tests for the phone bridge view: loopback bind, Tailscale Funnel
 # refusal, Host/Origin checks, session cookie isolation from port 8765, read-only
-# snapshot subprocess, away-mode passive refresh, and auth headers.
+# snapshot subprocess, away-mode passive refresh, auth headers, and authenticated
+# photo drops into the quarantined inbox.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -167,6 +168,24 @@ curl_bridge() {  # <port> <path> <headers-file> <body-file> [curl args...]
     "http://127.0.0.1:${port}${path}"
 }
 
+bridge_cookie() {  # <home> <port>
+  local home=$1 port=$2 hdr body cookie pass
+  pass=$(cat "$home/data/bridge-view-passcode.txt")
+  hdr=$home/login-cookie.hdr
+  body=$home/login-cookie.body
+  curl_bridge "$port" /login "$hdr" "$body" \
+    --header "Origin: $ORIGIN" \
+    --data "passcode=$pass"
+  cookie=$(awk 'tolower($1)=="set-cookie:" {print substr($0, index($0,$2)); exit}' "$hdr")
+  [ -n "$cookie" ] || fail "login did not set a session cookie"
+  printf '%s\n' "${cookie%%;*}"
+}
+
+tiny_jpeg() {  # <path>
+  # Minimal JPEG SOI + marker so magic-byte sniffing accepts it.
+  printf '\xff\xd8\xff\xd9' > "$1"
+}
+
 test_bind_is_loopback_constant() {
   grep -q '^LOOPBACK = "127.0.0.1"$' "$ROOT/bin/fm-bridge-view.py" \
     || fail "bridge server lost the literal loopback bind constant"
@@ -288,6 +307,9 @@ test_auth_cookie_headers_and_isolation() {
   curl_bridge "$port" / "$hdr" "$body" --header "Cookie: ${cookie%%;*}"
   assert_contains "$(cat "$body")" "Summary only. Do not approve from this page." \
     "glance page missing the summary-only warning"
+  assert_contains "$(cat "$body")" "Send a photo" "glance page missing the photo drop"
+  assert_contains "$(cat "$body")" "capture=\"environment\"" "photo input must allow camera capture"
+  assert_contains "$(cat "$body")" 'action="/upload"' "photo form must post to /upload"
   assert_not_contains "$(cat "$body")" "http-equiv=\"refresh\"" "page must not use meta-refresh"
   jar=$home/cookies.txt
   curl -sS --max-time 8 --resolve "$HOST_NAME:$port:127.0.0.1" \
@@ -377,6 +399,7 @@ SH
   [ "$before" = "$after" ] || fail "observation mutated fleet files"
   assert_absent "$home/state/spy.log" "snapshot PATH spies were invoked"
   assert_absent "$home/state/.watch.lock" "bridge took a session lock"
+  assert_absent "$home/data/bridge-inbox" "observation must not create the photo inbox"
   pass "snapshot subprocess does not write fleet state or take the session lock"
 }
 
@@ -551,6 +574,209 @@ test_render_plist_keep_alive_pattern() {
   pass "launchd plist uses the KeepAlive pattern"
 }
 
+test_unauthenticated_upload_rejected() {
+  local home fakebin port hdr body inbox
+  home=$(make_home upload-unauth)
+  fakebin=$(make_fakebin "$home")
+  init_passcode "$home" >/dev/null
+  port=$(start_bridge "$home" "$fakebin")
+  tiny_jpeg "$home/ok.jpg"
+  hdr=$home/unauth.hdr; body=$home/unauth.body
+  curl_bridge "$port" /upload "$hdr" "$body" \
+    --header "Origin: $ORIGIN" \
+    -F "photo=@$home/ok.jpg;type=image/jpeg"
+  assert_contains "$(head -n 1 "$hdr")" "401" "unauthenticated upload must be rejected"
+  inbox=$home/data/bridge-inbox
+  if [ -d "$inbox" ]; then
+    [ -z "$(find "$inbox" -type f ! -name '.*' -print)" ] || fail "unauthenticated upload wrote an inbox file"
+  fi
+  pass "unauthenticated upload is rejected"
+}
+
+test_upload_rejects_oversize_non_image_and_rates() {
+  local home fakebin port cookie hdr body token sessions today count mode
+  home=$(make_home upload-reject)
+  fakebin=$(make_fakebin "$home")
+  init_passcode "$home" >/dev/null
+  port=$(start_bridge "$home" "$fakebin")
+  cookie=$(bridge_cookie "$home" "$port")
+
+  tiny_jpeg "$home/ok.jpg"
+  hdr=$home/ok.hdr; body=$home/ok.body
+  curl_bridge "$port" /upload "$hdr" "$body" \
+    --header "Origin: $ORIGIN" \
+    --header "Cookie: $cookie" \
+    -F "photo=@$home/ok.jpg;type=image/jpeg"
+  assert_contains "$(head -n 1 "$hdr")" "200" "valid jpeg upload must succeed: $(cat "$body")"
+  printf '%s' "$(cat "$body")" | jq -e '.ok == true and .received_today == 1' >/dev/null \
+    || fail "upload JSON missing ok/count: $(cat "$body")"
+  count=$(find "$home/data/bridge-inbox" -type f -name '*.jpg' | wc -l | tr -d ' ')
+  [ "$count" = 1 ] || fail "expected one jpeg in inbox, got $count"
+  count=$(find "$home/data/bridge-inbox" -type f -name '*.json' | wc -l | tr -d ' ')
+  [ "$count" = 1 ] || fail "expected one sidecar in inbox, got $count"
+  mode=$(python3 -c "import os,sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777))" "$home/data/bridge-inbox")
+  [ "$mode" = "0o700" ] || fail "inbox directory mode must be 0700, got $mode"
+  today=$(date -u +%Y-%m-%d)
+  python3 - "$home/data/bridge-inbox" "$today" <<'PY' || fail "sidecar contract mismatch"
+import json, pathlib, sys
+inbox, today = pathlib.Path(sys.argv[1]), sys.argv[2]
+sides = list(inbox.glob("*.json"))
+assert len(sides) == 1, sides
+data = json.loads(sides[0].read_text())
+for key in ("received_at", "original_name", "size", "content_type"):
+    assert key in data, data
+assert data["received_at"].startswith(today)
+assert data["content_type"] == "image/jpeg"
+assert data["original_name"] == "ok.jpg"
+assert data["size"] == 4
+images = list(inbox.glob("*.jpg"))
+assert images[0].read_bytes()[:3] == b"\xff\xd8\xff"
+PY
+
+  tiny_jpeg "$home/ok2.jpg"
+  hdr=$home/ok2.hdr; body=$home/ok2.body
+  curl_bridge "$port" /upload "$hdr" "$body" \
+    --header "Origin: $ORIGIN" \
+    --header "Cookie: $cookie" \
+    -F "photo=@$home/ok2.jpg;type=image/jpeg"
+  assert_contains "$(head -n 1 "$hdr")" "200" "second jpeg upload must succeed: $(cat "$body")"
+  count=$(find "$home/data/bridge-inbox" -type f -name '*.jpg' | wc -l | tr -d ' ')
+  [ "$count" = 2 ] || fail "expected two uniquely named jpegs, got $count"
+  count=$(find "$home/data/bridge-inbox" -type f -name '*.json' | wc -l | tr -d ' ')
+  [ "$count" = 2 ] || fail "expected two sidecars, got $count"
+  python3 - "$home/data/bridge-inbox" <<'PY' || fail "second upload overwrote the first"
+import pathlib, sys
+inbox = pathlib.Path(sys.argv[1])
+payloads = sorted(p.read_bytes() for p in inbox.glob("*.jpg"))
+assert len(payloads) == 2
+names = sorted(p.name for p in inbox.glob("*.jpg"))
+assert names[0] != names[1]
+PY
+
+  printf 'GIF89a not-an-image' > "$home/fake.jpg"
+  hdr=$home/magic.hdr; body=$home/magic.body
+  curl_bridge "$port" /upload "$hdr" "$body" \
+    --header "Origin: $ORIGIN" \
+    --header "Cookie: $cookie" \
+    -F "photo=@$home/fake.jpg;type=image/jpeg"
+  assert_contains "$(head -n 1 "$hdr")" "415" "non-image magic bytes must be rejected"
+  count=$(find "$home/data/bridge-inbox" -type f -name '*.jpg' | wc -l | tr -d ' ')
+  [ "$count" = 2 ] || fail "rejected upload must not write an image"
+
+  hdr=$home/oversize.hdr; body=$home/oversize.body
+  curl_bridge "$port" /upload "$hdr" "$body" \
+    --header "Origin: $ORIGIN" \
+    --header "Cookie: $cookie" \
+    --header "Content-Type: image/jpeg" \
+    --header "Content-Length: 15728641" \
+    --data-binary @/dev/null || true
+  assert_contains "$(head -n 1 "$hdr")" "413" "oversize upload must return 413: $(cat "$hdr" 2>/dev/null) $(cat "$body" 2>/dev/null)"
+
+  token=${cookie#*=}
+  sessions=$home/bridge/sessions.json
+  python3 - "$sessions" "$token" <<'PY'
+import json, pathlib, sys, time
+path = pathlib.Path(sys.argv[1])
+data = json.loads(path.read_text())
+now = int(time.time())
+data["sessions"][sys.argv[2]]["uploads"] = [now] * 30
+path.write_text(json.dumps(data))
+PY
+  tiny_jpeg "$home/rate.jpg"
+  hdr=$home/rate.hdr; body=$home/rate.body
+  curl_bridge "$port" /upload "$hdr" "$body" \
+    --header "Origin: $ORIGIN" \
+    --header "Cookie: $cookie" \
+    -F "photo=@$home/rate.jpg;type=image/jpeg"
+  assert_contains "$(head -n 1 "$hdr")" "429" "rate-limited upload must return 429: $(cat "$body")"
+  count=$(find "$home/data/bridge-inbox" -type f -name '*.jpg' | wc -l | tr -d ' ')
+  [ "$count" = 2 ] || fail "rate-limited upload wrote an inbox file"
+
+  hdr=$home/obs.hdr; body=$home/obs.body
+  curl_bridge "$port" /api/observation "$hdr" "$body" --header "Cookie: $cookie"
+  assert_contains "$(head -n 1 "$hdr")" "200" "observation after upload must still work"
+  printf '%s' "$(cat "$body")" | jq -e '.photos_today == 2' >/dev/null \
+    || fail "observation photos_today should be 2: $(cat "$body")"
+  pass "upload rejects oversize, non-image magic, and rate-limited sessions"
+}
+
+test_inbox_unique_names_never_overwrite() {
+  local home output
+  home=$(make_home inbox-unique)
+  mkdir -p "$home/data"
+  output=$(python3 - "$ROOT/bin/fm-bridge-view.py" "$home" <<'PY'
+import importlib.util, pathlib, sys
+spec = importlib.util.spec_from_file_location("fm_bridge_view", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+home = pathlib.Path(sys.argv[2])
+payload = b"\xff\xd8\xff\xd9"
+stems = []
+calls = {"hex8": 0}
+
+real_hex = module.secrets.token_hex
+
+def fake_hex(n):
+    if n == 8:
+        calls["hex8"] += 1
+        if calls["hex8"] <= 2:
+            return "aaaaaaaaaaaaaaaa"
+        return "bbbbbbbbbbbbbbbb"
+    return real_hex(n)
+
+module.secrets.token_hex = fake_hex
+stems.append(module.write_inbox_pair(home, payload, "one.jpg", "image/jpeg", "jpeg"))
+sentinel = home / "data" / "bridge-inbox" / f"{stems[0]}.jpg"
+original = sentinel.read_bytes()
+stems.append(module.write_inbox_pair(home, b"\xff\xd8\xff\xdb", "two.jpg", "image/jpeg", "jpeg"))
+if sentinel.read_bytes() != original:
+    raise SystemExit("first inbox object was overwritten")
+if stems[0] == stems[1]:
+    raise SystemExit("writer reused a name")
+inbox = home / "data" / "bridge-inbox"
+if len(list(inbox.glob("*.jpg"))) != 2:
+    raise SystemExit("expected two image files")
+PY
+  ) || fail "unique inbox naming failed: $output"
+  pass "inbox writes never overwrite an existing name"
+}
+
+test_inbox_pair_failure_leaves_no_partial_upload() {
+  local home output
+  home=$(make_home inbox-atomic)
+  mkdir -p "$home/data"
+  output=$(python3 - "$ROOT/bin/fm-bridge-view.py" "$home" <<'PY'
+import errno, importlib.util, pathlib, sys
+spec = importlib.util.spec_from_file_location("fm_bridge_view", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+home = pathlib.Path(sys.argv[2])
+real_link = module.os.link
+calls = 0
+
+def fail_image_publication(source, destination):
+    global calls
+    calls += 1
+    if calls == 2:
+        raise OSError(errno.ENOSPC, "simulated full inbox")
+    return real_link(source, destination)
+
+module.os.link = fail_image_publication
+try:
+    module.write_inbox_pair(home, b"\xff\xd8\xff\xd9", "one.jpg", "image/jpeg", "jpeg")
+except OSError as error:
+    if error.errno != errno.ENOSPC:
+        raise
+else:
+    raise SystemExit("pair publication unexpectedly succeeded")
+inbox = home / "data" / "bridge-inbox"
+if list(inbox.iterdir()):
+    raise SystemExit(f"partial upload or staged remnants remain: {list(inbox.iterdir())}")
+PY
+  ) || fail "failed inbox pair cleanup failed: $output"
+  pass "failed inbox pair publication leaves no partial upload"
+}
+
 test_bind_is_loopback_constant
 test_funnel_on_refuses_to_serve
 test_funnel_off_serve_starts
@@ -565,3 +791,7 @@ test_session_revoke_serializes_with_login_create
 test_away_mode_passive_refresh_works
 test_mailbox_listener_never_consumes_announcements
 test_render_plist_keep_alive_pattern
+test_unauthenticated_upload_rejected
+test_upload_rejects_oversize_non_image_and_rates
+test_inbox_unique_names_never_overwrite
+test_inbox_pair_failure_leaves_no_partial_upload
