@@ -23,7 +23,7 @@ Choose one before you treat a later pull as routine.
 | --- | --- | --- |
 | Tracked repo | `AGENTS.md`, `bin/`, skills, docs, workflows | `git clone` / `bin/fm-update.sh` |
 | Captain-private portable | The portable data files plus allowlisted non-secret `config/` files (see "Portable allowlist" below) | `bin/fm-home-port.sh` push/pull against a private transport |
-| Machine-local, never port | Secrets, `state/`, `projects/`, fleet registries, the capability outcome log, and anything naming an absolute path or a running process on one machine | Recreate on the destination; do not copy |
+| Machine-local, never port | Secrets, `state/`, `projects/`, `bridge/`, fleet registries, the capability outcome log, and anything naming an absolute path or a running process on one machine | Recreate on the destination; do not copy |
 
 Porting machine-local material causes real confusion: dead panes, wrong worktree bindings, and watcher locks that belong to another computer.
 
@@ -53,7 +53,7 @@ Each machine holds its own.
 `bin/fm-home-port.sh` refuses to include them and reports that refusal loudly rather than silently skipping, so a future operator cannot assume they came across.
 It also scans exported material for accidentally embedded credentials before writing or pushing a bundle.
 
-The standing loud-refusal set, when present in the source home, is `.env`, `state/`, `projects/`, `config/action-captain-secret`, `config/cmux-socket-password`, `config/x-mode.env`, `data/projects.md`, and `data/secondmates.md`.
+The standing loud-refusal set, when present in the source home, is `.env`, `state/`, `projects/`, `bridge/`, `config/action-captain-secret`, `config/cmux-socket-password`, `config/x-mode.env`, `data/projects.md`, `data/secondmates.md`, and `data/bridge-view-passcode.txt`.
 Export and push print a `REFUSED:` line for each of those that exists (or `REFUSED: (none present)` when none of them do).
 
 ## What export omits without a transcript line

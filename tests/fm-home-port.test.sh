@@ -86,6 +86,9 @@ test_export_copies_portable_only() {
   printf 'clone\n' > "$home/projects/README"
   printf 'registry\n' > "$home/data/projects.md"
   printf 'synthetic-capability-proof\n' > "$home/config/action-captain-secret"
+  mkdir -p "$home/bridge"
+  printf 'scrypt-hash\n' > "$home/bridge/passcode.hash"
+  printf 'one-shot-passcode\n' > "$home/data/bridge-view-passcode.txt"
   printf 'interval_seconds = 604800\n' > "$home/config/upstream-watch"
   mkdir -p "$dest"
 
@@ -95,6 +98,8 @@ test_export_copies_portable_only() {
   assert_contains "$out" 'REFUSED: state/' "export did not loudly refuse state/"
   assert_contains "$out" 'REFUSED: projects/' "export did not loudly refuse projects/"
   assert_contains "$out" 'REFUSED: config/action-captain-secret' "export did not loudly refuse action capability secret"
+  assert_contains "$out" 'REFUSED: bridge/' "export did not loudly refuse bridge secrets"
+  assert_contains "$out" 'REFUSED: data/bridge-view-passcode.txt' "export did not loudly refuse the one-shot bridge passcode"
   assert_contains "$out" 'PORTABLE: data/captain.md' "export missed captain.md"
   assert_contains "$out" 'EXPORT_OK:' "export missed EXPORT_OK"
 
@@ -107,6 +112,8 @@ test_export_copies_portable_only() {
   assert_present "$dest/config/upstream-watch" "manifest-declared upstream-watch config not exported"
   assert_absent "$dest/.env" ".env must not be exported"
   assert_absent "$dest/config/action-captain-secret" "action capability secret must not be exported"
+  assert_absent "$dest/bridge" "bridge/ must not be exported"
+  assert_absent "$dest/data/bridge-view-passcode.txt" "bridge passcode envelope must not be exported"
   assert_absent "$dest/state" "state/ must not be exported"
   assert_absent "$dest/projects" "projects/ must not be exported"
   assert_absent "$dest/data/projects.md" "projects.md must not be exported"

@@ -123,7 +123,7 @@ family_for_basename() {
     fm-cd-pretool-check.test.sh|fm-composer-ghost.test.sh|fm-composer-lib.test.sh|\
     fm-continuity-pretool-check.test.sh|fm-crew-state.test.sh|fm-decision-hold-lifecycle.test.sh|\
     fm-decision-surface.test.sh|fm-dispatch-select.test.sh|fm-ensure-agents-md.test.sh|fm-grok-harness.test.sh|\
-    fm-read.test.sh|fm-chart-room.test.sh|fm-overlay.test.sh|\
+    fm-read.test.sh|fm-chart-room.test.sh|fm-overlay.test.sh|fm-bridge-view.test.sh|\
     fm-herdr-lab.test.sh|fm-instruction-owners.test.sh|fm-lint.test.sh|fm-fork-surface.test.sh|\
     fm-install-herdr.test.sh|fm-nm-test-contract.test.sh|fm-no-mistakes-ownership.test.sh|\
     fm-pi-primary-types.test.sh|fm-operational-input.test.sh|\
@@ -391,6 +391,7 @@ tests/fm-daemon.test.sh
 tests/fm-pending-reply.test.sh
 tests/fm-pi-watch-extension.test.sh
 tests/fm-chart-room.test.sh
+tests/fm-bridge-view.test.sh
 tests/fm-spawn-herdr-presentation.test.sh
 tests/fm-session-start.test.sh
 tests/fm-secondmate-liveness.test.sh
@@ -869,7 +870,7 @@ families_for_changed_path() {
     bin/fm-lint.sh|bin/fm-install-shellcheck.sh|\
     bin/fm-brief.sh|bin/fm-ensure-agents-md.sh|bin/fm-crew-state.sh|\
     bin/fm-decision-hold.sh|bin/fm-decision-surface.*|bin/fm-read.*|bin/fm-supervision*|bin/fm-transition-lib.sh|\
-    bin/fm-chart-room.*|bin/fm-overlay.sh|\
+    bin/fm-chart-room.*|bin/fm-overlay.sh|bin/fm-bridge-view.*|\
     bin/fm-tmux-lib.sh|bin/fm-marker-lib.sh|bin/fm-operational-input.sh|bin/fm-tasks-axi-lib.sh|\
     bin/fm-primary-scope-lib.sh|bin/fm-project-mode.sh|bin/fm-promote.sh|\
     bin/fm-ff-lib.sh|bin/fm-gotmp*|bin/*pretool*|\

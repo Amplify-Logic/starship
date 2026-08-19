@@ -11,6 +11,8 @@ __pycache__/
 # Captain-private local operating choices; never published. Anchored to the
 # repo root so a config-named directory elsewhere in the tree stays visible.
 /config/
+# Phone-bridge passcode hash, sessions, and logs. Mode 0700 at runtime; never publish.
+/bridge/
 # Generated per-task hook artifacts (also written into each task worktree's
 # .git/info/exclude by fm-spawn). Tracked here so a primary checkout cannot
 # accidentally stage them into a PR.

@@ -7,8 +7,8 @@
 # docs/porting.md - this header owns exact flags, paths, and fail-closed rules.
 #
 # Captain decision 2026-07-21:
-#   - secrets (.env, live API credentials, cmux socket password) NEVER port
-#   - state/ and projects/ NEVER port (machine-local)
+#   - secrets (.env, live API credentials, cmux socket password, bridge passcode) NEVER port
+#   - state/, projects/, and bridge/ NEVER port (machine-local)
 #   - sync is explicit and captain-triggered, never silent two-way auto-sync
 #
 # Usage:
@@ -51,8 +51,8 @@ Usage:
   fm-home-port.sh --help
 
 Port captain-private portable Firstmate material between machines through an
-explicit, captain-triggered private-git sync. Secrets, state/, and projects/
-never port; see docs/porting.md.
+explicit, captain-triggered private-git sync. Secrets, state/, projects/, and
+bridge/ never port; see docs/porting.md.
 
 scan runs the credential scan (non-zero on SECRET_HIT).
 --warn-machine-local adds an advisory email /Users/<name> pass that never
@@ -136,6 +136,7 @@ REFUSED_BASENAMES=(
 REFUSED_PREFIXES=(
   state/
   projects/
+  bridge/
 )
 
 resolve_home() {
@@ -164,6 +165,7 @@ is_refused_relpath() {
     config/x-mode.env|./config/x-mode.env) return 0 ;;
     data/projects.md|./data/projects.md) return 0 ;;
     data/secondmates.md|./data/secondmates.md) return 0 ;;
+    data/bridge-view-passcode.txt|./data/bridge-view-passcode.txt) return 0 ;;
   esac
   return 1
 }
@@ -231,6 +233,14 @@ announce_standing_refusals() {
   fi
   if [ -e "$home/data/secondmates.md" ]; then
     refuse "data/secondmates.md - secondmate homes bind absolute paths; never port"
+    refused=1
+  fi
+  if [ -d "$home/bridge" ]; then
+    refuse "bridge/ - phone-page passcode hash and sessions; never port"
+    refused=1
+  fi
+  if [ -e "$home/data/bridge-view-passcode.txt" ]; then
+    refuse "data/bridge-view-passcode.txt - one-shot bridge passcode envelope; never port"
     refused=1
   fi
   # Loud refusal is mandatory whenever refused material exists, so a future

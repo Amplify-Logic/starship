@@ -1923,6 +1923,44 @@ test_chat_contract_four_sections() {
   pass "the /bearings skill states the four-section chat contract in order, with empty-states and the At Anchor exclusion"
 }
 
+test_in_flight_rows_carry_captain_facing_title() {
+  local home fakebin json
+  home=$(make_home titles); write_fixture "$home"
+  fakebin=$(make_fakebin "$home")
+  json=$(run "$home" "$fakebin" --json)
+  printf '%s' "$json" | jq -e '
+    (.in_flight | any(.[]; .id == "ship-task" and .title == "Ship the thing"))
+      and (.in_flight | all(has("title") and has("doing")))
+  ' >/dev/null || fail "in-flight rows must carry a captain-facing title: $json"
+  pass "in-flight rows include a captain-facing title beside internal doing"
+}
+
+test_ordinary_bearings_refuses_while_away_mode_is_on() {
+  local home fakebin rc err
+  home=$(make_home away-refuse); write_fixture "$home"
+  fakebin=$(make_fakebin "$home")
+  date '+%s' > "$home/state/.afk"
+  err=$(run "$home" "$fakebin" --json 2>&1 >/dev/null) && rc=0 || rc=$?
+  expect_code 3 "$rc" "ordinary bearings must refuse while away mode is on"
+  assert_contains "$err" "away mode is still active" "ordinary bearings must name the away-mode guard"
+  pass "ordinary Bearings still refuses during away mode"
+}
+
+test_passive_view_is_allowed_while_away_mode_is_on() {
+  local home fakebin json rc err
+  home=$(make_home away-passive); write_fixture "$home"
+  fakebin=$(make_fakebin "$home")
+  date '+%s' > "$home/state/.afk"
+  json=$(run "$home" "$fakebin" --json --passive-view); rc=$?
+  expect_code 0 "$rc" "passive-view must observe while away mode is on"
+  printf '%s' "$json" | jq -e '.schema == "fm-bearings.v1" and (.in_flight | length) > 0' >/dev/null \
+    || fail "passive-view must still emit a bearings observation: $json"
+  err=$(run "$home" "$fakebin" --json --passive-view --include-prs 2>&1 >/dev/null) && rc=0 || rc=$?
+  expect_code 2 "$rc" "passive-view must refuse live PR fetching"
+  assert_contains "$err" "local-only" "passive-view must stay local-only"
+  pass "passive-view refreshes while away mode is on, without live PR fetching"
+}
+
 test_domain_alpha_stale_parent_event_does_not_become_current_work
 test_gnu_stat_uses_file_formats_without_bsd_fallback_pollution
 test_parent_activity_evidence_is_bounded_and_disclosed
@@ -1954,6 +1992,9 @@ test_main_orphan_counterfactual_meta_clears_inventory_warning
 test_mixed_secondmate_roles_partial_state_and_captain_readiness
 test_main_captain_readiness_matches_secondmate_projection
 test_chat_contract_four_sections
+test_in_flight_rows_carry_captain_facing_title
+test_ordinary_bearings_refuses_while_away_mode_is_on
+test_passive_view_is_allowed_while_away_mode_is_on
 test_completed_scout_report_not_pending
 test_open_decision_surfaces_end_to_end
 test_report_pointers_surface
