@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Behavior tests for the phone bridge view: loopback bind, Tailscale Funnel
-# refusal, Host/Origin checks including Safari form POSTs that omit Origin,
-# session cookie isolation from port 8765, read-only snapshot subprocess,
-# away-mode passive refresh, auth headers, authenticated photo drops into
-# the quarantined inbox, and keep-alive body drain after early error returns.
+# refusal, Host/Origin checks including Safari form POSTs that omit Origin
+# or send Origin: null, session cookie isolation from port 8765, read-only
+# snapshot subprocess, away-mode passive refresh, auth headers, authenticated
+# photo drops into the quarantined inbox, and keep-alive body drain after
+# early error returns.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -420,6 +421,22 @@ test_safari_login_without_origin_and_keepalive_body_drain() {
     --data "passcode=$pass"
   assert_contains "$(head -n 1 "$hdr")" "403" \
     "present but wrong Origin must be rejected even with Sec-Fetch-Site"
+
+  hdr=$home/null-origin.hdr; body=$home/null-origin.body
+  curl_bridge "$port" /login "$hdr" "$body" \
+    --header "Origin: null" \
+    --header "Sec-Fetch-Site: same-origin" \
+    --header "Sec-Fetch-Mode: navigate" \
+    --data "passcode=$pass"
+  assert_contains "$(head -n 1 "$hdr")" "303" \
+    "Safari Origin null with same-origin fetch must succeed"
+
+  hdr=$home/null-origin-noproof.hdr; body=$home/null-origin-noproof.body
+  curl_bridge "$port" /login "$hdr" "$body" \
+    --header "Origin: null" \
+    --data "passcode=$pass"
+  assert_contains "$(head -n 1 "$hdr")" "403" \
+    "Origin null without same-origin proof must be rejected"
 
   output=$(python3 - "$HOST_NAME" "$port" "$pass" <<'PY'
 import socket

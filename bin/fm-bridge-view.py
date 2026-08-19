@@ -1207,12 +1207,13 @@ class BridgeHandler(BaseHTTPRequestHandler):
 
     def _origin_ok(self) -> bool:
         # When Origin is present it must match the expected Serve origin exactly.
-        # iPhone Safari omits Origin on same-origin form POST, so absence is not
-        # a CSRF failure by itself. Accept an absent Origin only when Fetch
-        # Metadata (Sec-Fetch-Site same-origin or none) or an https Referer to
-        # the expected host independently proves same-origin.
+        # iPhone Safari omits Origin on same-origin form POST, or sends the
+        # literal string "null" as privacy masking; treat both as absent.
+        # Accept an absent Origin only when Fetch Metadata (Sec-Fetch-Site
+        # same-origin or none) or an https Referer to the expected host
+        # independently proves same-origin.
         origin = (self.headers.get("Origin") or "").strip()
-        if origin:
+        if origin and origin.lower() != "null":
             return origin.rstrip("/").lower() in STATE.expected_origins()
         site = (self.headers.get("Sec-Fetch-Site") or "").strip().lower()
         if site in {"same-origin", "none"}:

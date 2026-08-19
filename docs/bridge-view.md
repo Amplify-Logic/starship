@@ -29,7 +29,8 @@ Logs go to `bridge/bridge.log`, not into `state/`.
 `FM_BRIDGE_VIEW_HOST` overrides that file.
 Login and other POST writes require CSRF proof on top of Host.
 When the browser sends `Origin`, it must match `https://<host>` (or that host on port 443) exactly.
-iPhone Safari omits `Origin` on this same-origin form POST, so a missing Origin is accepted only when `Sec-Fetch-Site` is `same-origin` or `none`, or when `Referer` is an `https` URL whose host matches the expected Serve name.
+iPhone Safari omits `Origin` on this same-origin form POST, or sends the literal string `null` as privacy masking.
+Both are treated as absent and accepted only when `Sec-Fetch-Site` is `same-origin` or `none`, or when `Referer` is an `https` URL whose host matches the expected Serve name.
 A present but wrong Origin is always rejected.
 Error responses drain a bounded unread request body (or close the connection) so a keep-alive socket does not treat leftover POST bytes as the next request line.
 
