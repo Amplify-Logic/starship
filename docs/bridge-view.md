@@ -83,9 +83,14 @@ Photo drops and hold-to-speak are the write paths documented below; observation 
 A 503 still includes today's photo count from inbox sidecars so the counter does not depend on glance data loading.
 
 The client refreshes every 30 seconds and also refreshes on `pageshow` and when a hidden tab becomes visible.
-The four buckets are Needs you, Under way, a collapsed Waiting section that expands to the full list, and Just finished.
+The four buckets are Needs you, Under way, Waiting, and Just finished.
+Needs you shows at most five items that need the captain now.
+Blocked, failed, or gate-parked live work leads the list.
+Parked holds, recorded duplicates, and retire candidates are excluded from that list by their backlog hold kind and hold reason, not by guessing from titles, and they remain reachable under Waiting.
+If more Needs-you items remain, a quiet "N more waiting on you - show all" control reveals the rest in one tap.
+Waiting is a set of per-project count chips for Atelier, Journey, Finances, Fleet, Glasses, and any other observed project, not a global wall of items.
+Each chip expands to that project's complete list in one tap.
 Item lines are short captain-facing titles; internal ids, paths, and repro strings are not used as the primary line.
-Waiting is not truncated with an "N more" remainder.
 If the first observation request fails, the buckets replace "Loading…" with "Cannot reach the desk" immediately and the full-page overlay appears.
 If refreshes stop for 90 seconds after a successful load, the already-open tab overlays "Cannot reach the desk" from the client clock.
 Last-good on the server cannot save a tab that never hears back.

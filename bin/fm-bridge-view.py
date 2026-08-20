@@ -57,6 +57,18 @@ SCRYPT_R = 8
 SCRYPT_P = 1
 SCRYPT_DKLEN = 32
 BUCKET_CAP_LANDED = 6
+NEEDS_YOU_CAP = 5
+DEFERRED_HOLD_KINDS = {"parked", "future", "load", "external"}
+DUPLICATE_REASON_RE = re.compile(r"(?i)\bduplicate\b")
+RETIRE_REASON_RE = re.compile(r"(?i)\bretir(?:e|ing|ement)\b")
+PARKED_REASON_RE = re.compile(r"(?i)\bparked\b")
+PROJECT_LABEL_RULES = (
+    (("atelier",), "Atelier"),
+    (("city-guide", "city-guide"), "Journey"),
+    (("household-finances",), "Finances"),
+    (("firstmate", "starship"), "Fleet"),
+    (("glasses-voice",), "Glasses"),
+)
 STALE_CLIENT_SECONDS = 90
 REFRESH_CLIENT_SECONDS = 30
 MAILBOX_PORT = 8765
@@ -770,6 +782,49 @@ def allowlisted_pr(url: str) -> Optional[str]:
     return None
 
 
+def hold_reason_of(row: Dict[str, Any]) -> str:
+    return str(row.get("hold_reason") or row.get("reason") or "").strip()
+
+
+def hold_is_deferred(row: Dict[str, Any]) -> bool:
+    kind = str(row.get("hold_kind") or "").strip().lower()
+    reason = hold_reason_of(row)
+    if kind in DEFERRED_HOLD_KINDS:
+        return True
+    if DUPLICATE_REASON_RE.search(reason) or RETIRE_REASON_RE.search(reason):
+        return True
+    return bool(PARKED_REASON_RE.search(reason))
+
+
+def project_label(repo: str, owner: str = "") -> str:
+    blob = " ".join(part for part in (repo, owner) if part).lower()
+    for needles, label in PROJECT_LABEL_RULES:
+        if any(needle in blob for needle in needles):
+            return label
+    token = re.sub(r"[^a-z0-9]+", " ", str(repo or "").rsplit("/", 1)[-1].lower()).strip()
+    if token:
+        return token[:1].upper() + token[1:]
+    return "Other"
+
+
+def waiting_groups(items: List[Dict[str, str]]) -> List[Dict[str, Any]]:
+    grouped: List[Dict[str, Any]] = []
+    index: Dict[str, int] = {}
+    for row in items:
+        label = str(row.get("project") or "Other")
+        item = {"title": row["title"], "dot": row.get("dot") or "Waiting"}
+        if "url" in row:
+            item["url"] = row["url"]
+        slot = index.get(label)
+        if slot is None:
+            index[label] = len(grouped)
+            grouped.append({"label": label, "count": 1, "items": [item]})
+        else:
+            grouped[slot]["items"].append(item)
+            grouped[slot]["count"] = len(grouped[slot]["items"])
+    return grouped
+
+
 def human_line(text: str, fallback: str = "") -> Optional[str]:
     cleaned = " ".join(str(text or "").split())
     if not cleaned:
@@ -883,11 +938,21 @@ def project_observation(model: Dict[str, Any]) -> Dict[str, Any]:
         gates = []
 
     stuck_states = {"blocked", "failed", "parked"}
-    needs_items: List[Dict[str, str]] = []
+    now_items: List[Dict[str, str]] = []
+    deferred_items: List[Dict[str, str]] = []
     for row in decisions:
         summary = human_line(str(row.get("summary") or ""), "Needs a decision")
-        if summary:
-            needs_items.append({"title": summary, "dot": "Needs you"})
+        if not summary:
+            continue
+        item = {"title": summary, "dot": "Needs you"}
+        if hold_is_deferred(row):
+            item["dot"] = "Waiting"
+            item["project"] = project_label(
+                str(row.get("repo") or ""), str(row.get("owner") or "")
+            )
+            deferred_items.append(item)
+        else:
+            now_items.append(item)
     stuck_items: List[Dict[str, str]] = []
     underway_items: List[Dict[str, str]] = []
     waiting_live: List[Dict[str, str]] = []
@@ -906,13 +971,19 @@ def project_observation(model: Dict[str, Any]) -> Dict[str, Any]:
         if state in stuck_states:
             stuck_items.append(item)
         elif state == "paused":
+            item["project"] = project_label(
+                str(row.get("repo") or ""), str(row.get("owner") or "")
+            )
             waiting_live.append(item)
         elif state == "unknown":
             unknown_live = True
             underway_items.append(item)
         else:
             underway_items.append(item)
-    needs_items.extend(stuck_items)
+
+    live_now = stuck_items + now_items
+    shown = live_now[:NEEDS_YOU_CAP]
+    rest = live_now[NEEDS_YOU_CAP:]
 
     landed_items: List[Dict[str, str]] = []
     for row in landed:
@@ -928,11 +999,22 @@ def project_observation(model: Dict[str, Any]) -> Dict[str, Any]:
 
     waiting_items: List[Dict[str, str]] = []
     waiting_items.extend(waiting_live)
+    waiting_items.extend(deferred_items)
     for row in gates:
         title = human_line(str(row.get("title") or ""), "")
         if not title:
             continue
-        waiting_items.append({"title": title, "dot": "Waiting"})
+        waiting_items.append(
+            {
+                "title": title,
+                "dot": "Waiting",
+                "project": project_label(
+                    str(row.get("repo") or ""), str(row.get("owner") or "")
+                ),
+            }
+        )
+    groups = waiting_groups(waiting_items)
+    waiting_listed = [item for group in groups for item in group["items"]]
 
     finished = landed_items[:BUCKET_CAP_LANDED]
     extra_landed = max(0, omitted_total(omitted, "landed", len(landed)) - len(landed))
@@ -940,10 +1022,20 @@ def project_observation(model: Dict[str, Any]) -> Dict[str, Any]:
 
     return {
         "generated": model.get("generated"),
-        "needs_you": {"items": needs_items, "more": 0, "incomplete": False},
+        "needs_you": {
+            "items": shown,
+            "rest": rest,
+            "more": len(rest),
+            "incomplete": False,
+        },
         "under_way": {"items": underway_items, "more": 0, "incomplete": unknown_live},
         "just_finished": {"items": finished, "more": finished_more, "incomplete": bool(extra_landed)},
-        "waiting": {"items": waiting_items, "more": 0, "incomplete": False},
+        "waiting": {
+            "items": waiting_listed,
+            "groups": groups,
+            "more": 0,
+            "incomplete": False,
+        },
         "incomplete": unknown_live,
     }
 
@@ -1229,20 +1321,35 @@ button { background: #d7e0d8; color: #101418; font-weight: 600; }
   margin: 0.6rem 0 0;
   font-size: 1.05rem;
 }
-details.waiting-fold {
-  margin: 0.2rem 0 0;
+.wait-chip, .more-fold {
+  margin: 0.35rem 0.4rem 0 0;
   border: 1px solid #2a3330;
-  border-radius: 0.5rem;
-  padding: 0.35rem 0.7rem 0.6rem;
+  border-radius: 999px;
+  padding: 0;
+  vertical-align: top;
 }
-details.waiting-fold > summary {
+.wait-chip { display: inline-block; }
+.more-fold { display: block; border-radius: 0.5rem; margin-left: 0; }
+.wait-chip > summary, .more-fold > summary {
   min-height: 2.75rem;
   display: flex;
   align-items: center;
   cursor: pointer;
   color: #c5d0c8;
   font-size: 0.95rem;
+  padding: 0.35rem 0.9rem;
+  list-style: none;
 }
+.wait-chip > summary::-webkit-details-marker,
+.more-fold > summary::-webkit-details-marker { display: none; }
+.wait-chip[open], .more-fold[open] {
+  display: block;
+  border-radius: 0.5rem;
+}
+.wait-chip[open] > summary, .more-fold[open] > summary {
+  border-bottom: 1px solid #2a3330;
+}
+.wait-chip ul, .more-fold ul { padding: 0 0.9rem 0.4rem; }
 #stale {
   display: none; position: fixed; inset: 0; background: #101418;
   color: #f2f4f3; align-items: center; justify-content: center;
@@ -1298,29 +1405,56 @@ function dotClass(name) {
   if (name === 'Stuck') return 'stuck';
   return 'under';
 }
+function itemLine(item) {
+  const title = esc(item.title || '');
+  const url = item.url || '';
+  const safeUrl = /^https:\\/\\/github\\.com\\/[A-Za-z0-9_.-]+\\/[A-Za-z0-9_.-]+\\/pull\\/[0-9]+$/.test(url) ? url : '';
+  const label = safeUrl
+    ? '<a href="' + safeUrl + '" rel="noreferrer">' + title + '</a>'
+    : title;
+  return '<li><span class="dot ' + dotClass(item.dot) + '"></span>' + label + '</li>';
+}
+function renderList(items) {
+  return '<ul>' + items.map(itemLine).join('') + '</ul>';
+}
 function renderBucket(id, bucket, emptyText) {
   const root = document.getElementById(id);
   if (!root || !bucket) return;
   const items = bucket.items || [];
-  const lines = items.map(function(item) {
-    const title = esc(item.title || '');
-    const url = item.url || '';
-    const safeUrl = /^https:\\/\\/github\\.com\\/[A-Za-z0-9_.-]+\\/[A-Za-z0-9_.-]+\\/pull\\/[0-9]+$/.test(url) ? url : '';
-    const label = safeUrl
-      ? '<a href="' + safeUrl + '" rel="noreferrer">' + title + '</a>'
-      : title;
-    return '<li><span class="dot ' + dotClass(item.dot) + '"></span>' + label + '</li>';
-  });
   let extra = '';
   if (!items.length) extra = '<p class="empty">' + emptyText + '</p>';
-  root.innerHTML = (lines.length ? '<ul>' + lines.join('') + '</ul>' : '') + extra;
+  root.innerHTML = (items.length ? renderList(items) : '') + extra;
+}
+function renderNeeds(bucket) {
+  const root = document.getElementById('needs');
+  if (!root || !bucket) return;
+  const items = bucket.items || [];
+  const rest = bucket.rest || [];
+  let html = items.length ? renderList(items) : '';
+  if (!items.length && !rest.length) {
+    html = '<p class="empty">Nothing needs you right now.</p>';
+  }
+  if (bucket.more) {
+    html += '<details class="more-fold"><summary>' + esc(String(bucket.more)) +
+      ' more waiting on you - show all</summary>' + renderList(rest) + '</details>';
+  }
+  root.innerHTML = html;
 }
 function renderWaiting(bucket) {
-  renderBucket('waiting', bucket, 'Nothing is waiting.');
-  const summary = document.getElementById('waiting-summary');
-  if (!summary) return;
-  const n = (bucket && bucket.items) ? bucket.items.length : 0;
-  summary.textContent = n ? ('Waiting · ' + n) : 'Waiting';
+  const root = document.getElementById('waiting');
+  if (!root || !bucket) return;
+  const groups = bucket.groups || [];
+  if (!groups.length) {
+    root.innerHTML = '<p class="empty">Nothing is waiting.</p>';
+    return;
+  }
+  root.innerHTML = groups.map(function(group) {
+    const label = esc(group.label || 'Other');
+    const items = group.items || [];
+    const n = group.count != null ? group.count : items.length;
+    return '<details class="wait-chip"><summary>' + label + ' ' + n +
+      '</summary>' + renderList(items) + '</details>';
+  }).join('');
 }
 function apply(data) {
   lastSuccess = Date.now();
@@ -1331,7 +1465,7 @@ function apply(data) {
   if (desk) desk.textContent = 'Desk reachable';
   const mail = document.getElementById('mailbox');
   if (mail) mail.textContent = data.mailbox_listener ? 'Mailbox on' : 'Mailbox listener off';
-  renderBucket('needs', data.needs_you, 'Nothing needs you right now.');
+  renderNeeds(data.needs_you);
   renderBucket('underway', data.under_way, 'Nothing is under way.');
   renderBucket('finished', data.just_finished, 'No recent completions.');
   renderWaiting(data.waiting);
@@ -1632,10 +1766,8 @@ def glance_html(nonce: str) -> str:
 <div id="needs"><p class="empty">Loading…</p></div>
 <h2>Under way</h2>
 <div id="underway"><p class="empty">Loading…</p></div>
-<details class="waiting-fold">
-  <summary id="waiting-summary">Waiting</summary>
-  <div id="waiting"><p class="empty">Loading…</p></div>
-</details>
+<h2>Waiting</h2>
+<div id="waiting"><p class="empty">Loading…</p></div>
 <h2>Talk</h2>
 <div id="speak-box">
   <label for="hold-speak">Hold to speak</label>
