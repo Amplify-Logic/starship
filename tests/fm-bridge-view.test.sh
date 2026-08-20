@@ -3,8 +3,10 @@
 # refusal, Host/Origin checks including Safari form POSTs that omit Origin
 # or send Origin: null, session cookie isolation from port 8765, read-only
 # snapshot subprocess, away-mode passive refresh, auth headers, authenticated
-# photo drops into the quarantined inbox, and keep-alive body drain after
-# early error returns.
+# photo drops into the quarantined inbox, multi-file Origin-null uploads,
+# hold-to-speak mailbox forwarding with the relay token kept server-side,
+# captain-facing glance titles, and keep-alive body drain after early error
+# returns.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -147,6 +149,7 @@ start_bridge() {  # <home> <fakebin>
   log=$home/bridge-serve.log
   : > "$log"
   FM_BRIDGE_VIEW_TEST=1 FM_BRIDGE_VIEW_LAUNCHCTL="$fakebin/launchctl" \
+    FM_BRIDGE_VIEW_MAILBOX_PORT="${FM_BRIDGE_VIEW_MAILBOX_PORT:-}" \
     PATH="$fakebin:$PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
     "$BRIDGE" serve --host "$HOST_NAME" --port 0 >"$log" 2>&1 &
   BRIDGE_PIDS+=("$!")
@@ -186,6 +189,11 @@ bridge_cookie() {  # <home> <port>
 tiny_jpeg() {  # <path>
   # Minimal JPEG SOI + marker so magic-byte sniffing accepts it.
   printf '\xff\xd8\xff\xd9' > "$1"
+}
+
+tiny_m4a() {  # <path>
+  # Minimal ISO BMFF ftyp/M4A so magic-byte sniffing treats it as mp4 audio.
+  printf '\x00\x00\x00\x18ftypM4A \x00\x00\x00\x00mp42isom' > "$1"
 }
 
 test_bind_is_loopback_constant() {
@@ -309,7 +317,30 @@ test_auth_cookie_headers_and_isolation() {
   curl_bridge "$port" / "$hdr" "$body" --header "Cookie: ${cookie%%;*}"
   assert_contains "$(cat "$body")" "Summary only. Do not approve from this page." \
     "glance page missing the summary-only warning"
-  assert_contains "$(cat "$body")" "Send a photo" "glance page missing the photo drop"
+  assert_contains "$(cat "$body")" "Send photos" "glance page missing the photo drop"
+  assert_contains "$(cat "$body")" "multiple" "photo input must accept several files"
+  assert_contains "$(cat "$body")" "Hold to speak" "glance page missing hold-to-speak"
+  assert_contains "$(cat "$body")" 'id="waiting-summary"' "waiting list must be collapsed"
+  python3 - "$body" <<'PY' || fail "captain glance sections are out of order"
+import pathlib
+import sys
+
+page = pathlib.Path(sys.argv[1]).read_text()
+markers = [
+    '<h2>Needs you</h2>',
+    '<h2>Under way</h2>',
+    '<summary id="waiting-summary">Waiting</summary>',
+    '<h2>Talk</h2>',
+    '<h2>Send photos</h2>',
+]
+positions = [page.index(marker) for marker in markers]
+if positions != sorted(positions):
+    raise SystemExit(1)
+PY
+  assert_not_contains "$(cat "$body")" "more waiting" "waiting list must not advertise a truncated remainder"
+  assert_not_contains "$(cat "$body")" "GLASSES_RELAY_TOKEN" "page must not mention the relay token"
+  assert_not_contains "$(cat "$body")" "relay-token" "page must not mention the relay token path"
+  assert_not_contains "$(cat "$body")" "Bearer " "page must not ship a bearer token"
   assert_contains "$(cat "$body")" 'accept="image/jpeg,image/png,image/webp,image/heic,image/heif,image/*"' \
     "photo input must keep the image accept list"
   assert_not_contains "$(cat "$body")" "capture=" \
@@ -625,7 +656,7 @@ PY
   pass "snapshot output is bounded during capture"
 }
 
-test_snapshot_requests_all_in_flight_rows() {
+test_snapshot_requests_complete_glance_rows() {
   local home fixture output
   home=$(make_home snapshot-all-in-flight)
   fixture=$home/root
@@ -633,7 +664,7 @@ test_snapshot_requests_all_in_flight_rows() {
   cat > "$fixture/bin/fm-bearings-snapshot.sh" <<'SH'
 #!/usr/bin/env bash
 case " $* " in
-  *' --all-in-flight '*) printf '%s\n' '{"schema":"fm-bearings.v1"}' ;;
+  *' --all-in-flight '*--all-queued*) printf '%s\n' '{"schema":"fm-bearings.v1"}' ;;
   *) exit 9 ;;
 esac
 SH
@@ -645,8 +676,85 @@ module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 module.run_snapshot(pathlib.Path(sys.argv[2]), pathlib.Path(sys.argv[3]))
 PY
-  ) || fail "bridge snapshot did not request every in-flight row: $output"
-  pass "snapshot requests all in-flight rows before bucket classification"
+  ) || fail "bridge snapshot did not request complete glance rows: $output"
+  pass "snapshot requests complete in-flight and waiting rows"
+}
+
+test_bridge_page_async_progress_and_release() {
+  local output
+  output=$(node - "$ROOT/bin/fm-bridge-view.py" <<'JS'
+const {execFileSync} = require('child_process');
+const vm = require('vm');
+const script = execFileSync('python3', ['-', process.argv[2]], {
+  input: `import importlib.util, sys
+spec = importlib.util.spec_from_file_location("bridge", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+print(module.PAGE_JS)
+`,
+  encoding: 'utf8'
+});
+
+let resolveMedia;
+let resolveUpload;
+let recorderCount = 0;
+let trackStopped = false;
+const elements = {
+  'hold-speak': {classList: {add() {}, remove() {}}, textContent: ''},
+  'speak-result': {className: '', textContent: ''},
+  'photo': {files: [{name: 'one.jpg'}], value: ''},
+  'photo-result': {className: '', textContent: ''}
+};
+const context = vm.createContext({
+  AbortController,
+  console,
+  document: {
+    hidden: false,
+    addEventListener() {},
+    getElementById(id) { return elements[id] || null; }
+  },
+  window: {addEventListener() {}},
+  navigator: {mediaDevices: {getUserMedia() {
+    return new Promise(resolve => { resolveMedia = resolve; });
+  }}},
+  MediaRecorder: class {
+    static isTypeSupported() { return true; }
+    constructor() { recorderCount += 1; }
+  },
+  FormData: class {append() {}},
+  fetch() { return new Promise(resolve => { resolveUpload = resolve; }); },
+  setInterval() {},
+  setTimeout,
+  clearTimeout
+});
+vm.runInContext(script, context);
+
+(async () => {
+  const start = vm.runInContext('startSpeak()', context);
+  await vm.runInContext('finishSpeak()', context);
+  resolveMedia({getTracks() { return [{stop() { trackStopped = true; }}]; }});
+  await start;
+  if (!trackStopped || recorderCount !== 0) {
+    throw new Error('release during microphone permission started recording');
+  }
+
+  const upload = vm.runInContext('sendPhotos({preventDefault() {}})', context);
+  await Promise.resolve();
+  if (elements['photo-result'].textContent !== 'Sending 1 of 1…') {
+    throw new Error('pending upload was reported as sent');
+  }
+  resolveUpload({ok: true, json: async () => ({received_today: 1})});
+  await upload;
+  if (elements['photo-result'].textContent !== 'Photo received.') {
+    throw new Error('successful upload did not finish its progress state');
+  }
+})().catch(error => {
+  console.error(error.message);
+  process.exitCode = 1;
+});
+JS
+  ) || fail "bridge page async state regression failed: $output"
+  pass "bridge page handles early release and honest upload progress"
 }
 
 test_session_revoke_serializes_with_login_create() {
@@ -1164,6 +1272,244 @@ PY
   pass "scrubbed-env snapshot with a herdr task succeeds or fails fast"
 }
 
+test_human_titles_drop_internal_primary_lines() {
+  local output
+  output=$(python3 - "$ROOT/bin/fm-bridge-view.py" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("fm_bridge_view", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+model = {
+    "generated": "now",
+    "omitted": [{"surface": "in_flight showing 8 of 80"}, {"surface": "gates showing 20 of 92"}],
+    "decisions_open": [{"summary": "Merge the bridge PR?"}],
+    "in_flight": [
+        {"state": "working", "title": "VoiceLoop tap trigger"},
+        {"state": "working", "title": "repro: env -i HOME=/tmp PATH=/usr/bin"},
+        {"state": "working", "title": "glasses-bridge-upgrades-b3"},
+    ],
+    "landed": [{"what": "Spoken updates on the glasses", "artifact": "https://github.com/kunchenguid/firstmate/pull/7"}],
+    "gates": [
+        {"title": "in-flight backlog item has no child metadata"},
+        {"title": "Always-on cloud, host+budget"},
+        {"title": "Queued follow-up after photos"},
+    ],
+}
+obs = module.project_observation(model)
+titles = [row["title"] for row in obs["under_way"]["items"]]
+waiting = [row["title"] for row in obs["waiting"]["items"]]
+if "VoiceLoop tap trigger" not in titles:
+    raise SystemExit("kept human in-flight title missing: %s" % titles)
+if any("repro:" in t or "env -i" in t for t in titles):
+    raise SystemExit("repro string leaked as a primary line: %s" % titles)
+if any(t == "glasses-bridge-upgrades-b3" for t in titles):
+    raise SystemExit("raw id leaked as a primary line: %s" % titles)
+if any("child metadata" in t for t in waiting):
+    raise SystemExit("inventory diagnostic leaked into waiting: %s" % waiting)
+if "Always-on cloud, host+budget" not in waiting or "Queued follow-up after photos" not in waiting:
+    raise SystemExit("human waiting titles dropped: %s" % waiting)
+if obs["waiting"]["more"] != 0:
+    raise SystemExit("waiting list still reports a truncated remainder")
+if obs["needs_you"]["items"][0]["title"] != "Merge the bridge PR?":
+    raise SystemExit("decision title changed: %s" % obs["needs_you"])
+print("ok")
+PY
+  ) || fail "human title projection failed: $output"
+  pass "glance titles stay human and drop internal primary lines"
+}
+
+test_multi_file_origin_null_uploads_are_atomic_and_partial() {
+  local home fakebin port cookie hdr body count
+  home=$(make_home multi-upload)
+  fakebin=$(make_fakebin "$home")
+  init_passcode "$home" >/dev/null
+  port=$(start_bridge "$home" "$fakebin")
+  cookie=$(bridge_cookie "$home" "$port")
+
+  tiny_jpeg "$home/one.jpg"
+  tiny_jpeg "$home/two.jpg"
+  hdr=$home/one.hdr; body=$home/one.body
+  curl_bridge "$port" /upload "$hdr" "$body" \
+    --header "Origin: null" \
+    --header "Sec-Fetch-Site: same-origin" \
+    --header "Cookie: $cookie" \
+    -F "photo=@$home/one.jpg;type=image/jpeg"
+  assert_contains "$(head -n 1 "$hdr")" "200" "first Origin-null photo must land: $(cat "$body")"
+
+  hdr=$home/two.hdr; body=$home/two.body
+  curl_bridge "$port" /upload "$hdr" "$body" \
+    --header "Origin: null" \
+    --header "Sec-Fetch-Site: same-origin" \
+    --header "Cookie: $cookie" \
+    -F "photo=@$home/two.jpg;type=image/jpeg"
+  assert_contains "$(head -n 1 "$hdr")" "200" "second Origin-null photo must land: $(cat "$body")"
+
+  printf 'GIF89a not-an-image' > "$home/bad.jpg"
+  hdr=$home/bad.hdr; body=$home/bad.body
+  curl_bridge "$port" /upload "$hdr" "$body" \
+    --header "Origin: null" \
+    --header "Sec-Fetch-Site: same-origin" \
+    --header "Cookie: $cookie" \
+    -F "photo=@$home/bad.jpg;type=image/jpeg"
+  assert_contains "$(head -n 1 "$hdr")" "415" "failed photo must be reported: $(cat "$body")"
+
+  count=$(find "$home/data/bridge-inbox" -type f -name '*.jpg' | wc -l | tr -d ' ')
+  [ "$count" = 2 ] || fail "partial failure aborted or dropped good photos, got $count"
+  count=$(find "$home/data/bridge-inbox" -type f -name '*.json' | wc -l | tr -d ' ')
+  [ "$count" = 2 ] || fail "expected two sidecars after partial failure, got $count"
+  python3 - "$home/data/bridge-inbox" <<'PY' || fail "multi-file inbox pairs were not atomic"
+import pathlib, sys
+inbox = pathlib.Path(sys.argv[1])
+stems = sorted(p.stem for p in inbox.glob("*.jpg"))
+sides = sorted(p.stem for p in inbox.glob("*.json"))
+assert stems == sides, (stems, sides)
+assert len(stems) == 2
+PY
+  pass "multi-file Origin-null uploads land as atomic pairs and report a failed photo"
+}
+
+test_unauthenticated_speak_rejected() {
+  local home fakebin port hdr body
+  home=$(make_home speak-unauth)
+  fakebin=$(make_fakebin "$home")
+  init_passcode "$home" >/dev/null
+  port=$(start_bridge "$home" "$fakebin")
+  tiny_m4a "$home/ask.m4a"
+  hdr=$home/unauth.hdr; body=$home/unauth.body
+  curl_bridge "$port" /speak "$hdr" "$body" \
+    --header "Origin: $ORIGIN" \
+    -F "audio=@$home/ask.m4a;type=audio/mp4"
+  assert_contains "$(head -n 1 "$hdr")" "401" "unauthenticated speak must be rejected"
+  pass "unauthenticated speak is rejected"
+}
+
+test_speak_origin_null_forwards_m4a_and_polls_text() {
+  local home fakebin port cookie hdr body mbport token request_id page
+  home=$(make_home speak-forward)
+  fakebin=$(make_fakebin "$home")
+  token="bridge-test-relay-token"
+  mkdir -p "$home/data/glasses-voice-runtime"
+  printf '%s\n' "$token" > "$home/data/glasses-voice-runtime/relay-token"
+  python3 - "$home" <<'PY' &
+import json, pathlib, sys
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import urlparse
+
+home = pathlib.Path(sys.argv[1])
+store = home / "mailbox-seen.json"
+page = home / "mailbox-page.txt"
+store.write_text("[]\n")
+
+class Handler(BaseHTTPRequestHandler):
+    def log_message(self, fmt, *args):
+        return
+
+    def _auth_ok(self):
+        return self.headers.get("Authorization") == "Bearer bridge-test-relay-token"
+
+    def _send(self, code, payload):
+        body = json.dumps(payload).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_POST(self):
+        length = int(self.headers.get("Content-Length") or 0)
+        raw = self.rfile.read(length) if length else b""
+        if not self._auth_ok():
+            self._send(401, {"error": "unauthorized"})
+            return
+        payload = json.loads(raw.decode("utf-8"))
+        seen = json.loads(store.read_text())
+        seen.append(payload)
+        store.write_text(json.dumps(seen))
+        self._send(202, {"request_id": payload["request_id"]})
+
+    def do_GET(self):
+        if not self._auth_ok():
+            self._send(401, {"error": "unauthorized"})
+            return
+        path = urlparse(self.path).path
+        prefix = "/v1/answers/"
+        if not path.startswith(prefix):
+            self._send(404, {"error": "not found"})
+            return
+        request_id = path[len(prefix):]
+        seen = json.loads(store.read_text())
+        if not seen or seen[0]["request_id"] != request_id:
+            self.send_response(204)
+            self.end_headers()
+            return
+        self._send(200, {
+            "kind": "voice-answer",
+            "contract_version": "1.0",
+            "request_id": request_id,
+            "answer_id": "11111111-1111-1111-1111-111111111111",
+            "created_at": "2026-08-20T10:00:00Z",
+            "text": "Lights are off.",
+            "audio": {"media_type": "audio/mpeg", "data_base64": "ZmFrZQ==", "filename": "reply.mp3"},
+        })
+
+server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+(home / "mb.port").write_text(str(server.server_address[1]))
+server.serve_forever()
+PY
+  BRIDGE_PIDS+=("$!")
+  n=0
+  while [ "$n" -lt 50 ] && [ ! -f "$home/mb.port" ]; do
+    sleep 0.1
+    n=$((n + 1))
+  done
+  [ -f "$home/mb.port" ] || fail "fake mailbox did not bind"
+  mbport=$(cat "$home/mb.port")
+  init_passcode "$home" >/dev/null
+  export FM_BRIDGE_VIEW_MAILBOX_PORT="$mbport"
+  port=$(start_bridge "$home" "$fakebin")
+  unset FM_BRIDGE_VIEW_MAILBOX_PORT
+  cookie=$(bridge_cookie "$home" "$port")
+  tiny_m4a "$home/ask.m4a"
+
+  hdr=$home/speak.hdr; body=$home/speak.body
+  curl_bridge "$port" /speak "$hdr" "$body" \
+    --header "Origin: null" \
+    --header "Sec-Fetch-Site: same-origin" \
+    --header "Cookie: $cookie" \
+    -F "audio=@$home/ask.m4a;type=audio/mp4"
+  assert_contains "$(head -n 1 "$hdr")" "200" "Safari-shaped m4a speak must succeed: $(cat "$body")"
+  printf '%s' "$(cat "$body")" | jq -e '.ok == true and .source == "bridge" and .request_id' >/dev/null \
+    || fail "speak JSON missing ok/source/request_id: $(cat "$body")"
+  request_id=$(printf '%s' "$(cat "$body")" | jq -r '.request_id')
+
+  python3 - "$home/mailbox-seen.json" "$token" <<'PY' || fail "mailbox did not receive bridge-marked m4a"
+import json, pathlib, sys, base64
+seen = json.loads(pathlib.Path(sys.argv[1]).read_text())
+assert len(seen) == 1, seen
+item = seen[0]
+audio = item["audio"]
+assert audio["filename"] == "bridge.m4a", audio
+assert audio["media_type"] == "audio/mp4", audio
+raw = base64.b64decode(audio["data_base64"])
+assert raw[4:8] == b"ftyp", raw[:16]
+assert "source" not in item
+PY
+
+  hdr=$home/answer.hdr; body=$home/answer.body
+  curl_bridge "$port" "/api/answer/$request_id" "$hdr" "$body" --header "Cookie: $cookie"
+  assert_contains "$(head -n 1 "$hdr")" "200" "answer poll must succeed: $(cat "$body")"
+  printf '%s' "$(cat "$body")" | jq -e '.pending == false and .text == "Lights are off."' >/dev/null \
+    || fail "answer text missing: $(cat "$body")"
+  assert_not_contains "$(cat "$body")" "data_base64" "answer poll must not leak audio bytes"
+  assert_not_contains "$(cat "$body")" "$token" "answer poll must not leak the relay token"
+
+  page=$home/page.body
+  hdr=$home/page.hdr
+  curl_bridge "$port" / "$hdr" "$page" --header "Cookie: $cookie"
+  assert_not_contains "$(cat "$page")" "$token" "glance HTML must not contain the relay token"
+  pass "hold-to-speak forwards Safari m4a server-side and returns answer text"
+}
+
 test_bind_is_loopback_constant
 test_funnel_on_refuses_to_serve
 test_funnel_off_serve_starts
@@ -1174,7 +1520,8 @@ test_auth_cookie_headers_and_isolation
 test_safari_login_without_origin_and_keepalive_body_drain
 test_snapshot_subprocess_does_not_write_fleet_state
 test_snapshot_output_is_bounded_during_capture
-test_snapshot_requests_all_in_flight_rows
+test_snapshot_requests_complete_glance_rows
+test_bridge_page_async_progress_and_release
 test_session_revoke_serializes_with_login_create
 test_away_mode_passive_refresh_works
 test_mailbox_listener_never_consumes_announcements
@@ -1187,3 +1534,7 @@ test_photos_received_today_counts_utc_sidecars
 test_child_path_resolves_tool_dirs_without_hardcoded_nvm
 test_observation_error_fails_fast_and_keeps_photo_count
 test_scrubbed_snapshot_with_herdr_meta_fails_fast
+test_human_titles_drop_internal_primary_lines
+test_multi_file_origin_null_uploads_are_atomic_and_partial
+test_unauthenticated_speak_rejected
+test_speak_origin_null_forwards_m4a_and_polls_text

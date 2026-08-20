@@ -8,8 +8,9 @@ front of this process; Funnel stays off.
 This process never takes the session lock, never drains wakes, and never
 writes backlog or fleet state. Session and passcode files live under the
 home's 0700 bridge/ directory. Logs also go there, not into state/.
-The only extra write path is authenticated photo drops into
-data/bridge-inbox/ (mode 0700 quarantined storage).
+Authenticated photo drops land in data/bridge-inbox/ (mode 0700
+quarantined storage). Authenticated hold-to-speak audio is forwarded
+into the local glasses mailbox; the relay token stays in this process.
 """
 
 from __future__ import annotations
@@ -33,6 +34,9 @@ import sys
 import threading
 import time
 import unicodedata
+import urllib.error
+import urllib.request
+import uuid
 from contextlib import contextmanager
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -52,19 +56,30 @@ SCRYPT_N = 2**14
 SCRYPT_R = 8
 SCRYPT_P = 1
 SCRYPT_DKLEN = 32
-BUCKET_CAP_NEEDS = 5
-BUCKET_CAP_UNDERWAY = 8
 BUCKET_CAP_LANDED = 6
-BUCKET_CAP_WAITING = 5
 STALE_CLIENT_SECONDS = 90
 REFRESH_CLIENT_SECONDS = 30
 MAILBOX_PORT = 8765
 MAILBOX_LAUNCHD = "com.firstmate.glasses-voice-mailbox"
+MAILBOX_TIMEOUT_SECONDS = 5
+RELAY_TOKEN_RELATIVE = Path("data") / "glasses-voice-runtime" / "relay-token"
 UPLOAD_MAX_BYTES = 15 * 1024 * 1024
+SPEAK_MAX_BYTES = 10 * 1024 * 1024
 BODY_DRAIN_TIMEOUT_SECONDS = 1.0
 UPLOAD_RATE_LIMIT = 30
+SPEAK_RATE_LIMIT = 30
 UPLOAD_RATE_WINDOW_SECONDS = 3600
 UPLOAD_FIELD = "photo"
+AUDIO_FIELD = "audio"
+REQUEST_ID_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+INTERNAL_LINE_RE = re.compile(
+    r"(?i)(no child metadata|main inventory|repro:\s*env\b|unreadable|"
+    r"truncated|SUPERSEDED|NOT REQUIRED|NOT-REQUIRED|\benv -i\b|"
+    r"/Users/|/home/|\bstate/|\.meta\b|worktree)"
+)
+IDISH_TITLE_RE = re.compile(r"^[A-Za-z0-9]+(?:-[A-Za-z0-9]+){2,}$")
 ALLOWED_CONTENT_TYPES = {
     "image/jpeg",
     "image/png",
@@ -84,6 +99,24 @@ HEIF_BRANDS = {
     b"hevx",
 }
 SNIFF_TO_EXT = {"jpeg": "jpg", "png": "png", "webp": "webp", "heic": "heic"}
+ALLOWED_AUDIO_TYPES = {
+    "audio/mp4",
+    "audio/m4a",
+    "audio/x-m4a",
+    "audio/aac",
+    "audio/mpeg",
+    "audio/wav",
+    "audio/x-wav",
+    "audio/webm",
+    "audio/ogg",
+    "video/mp4",
+}
+AUDIO_SNIFF_TO_MAILBOX = {
+    "mp4": ("audio/mp4", "bridge.m4a"),
+    "webm": ("audio/webm", "bridge.webm"),
+    "wav": ("audio/wav", "bridge.wav"),
+    "mpeg": ("audio/mpeg", "bridge.m4a"),
+}
 GITHUB_PR_RE = re.compile(r"^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/[0-9]+$")
 IPV4_RE = re.compile(r"^\d{1,3}(?:\.\d{1,3}){3}$")
 HOST_LABEL_RE = re.compile(r"^[A-Za-z0-9.-]+(?::\d+)?$")
@@ -278,6 +311,20 @@ def sniff_image(data: bytes) -> Optional[str]:
     return None
 
 
+def sniff_audio(data: bytes) -> Optional[str]:
+    if len(data) >= 12 and data[4:8] == b"ftyp":
+        return "mp4"
+    if len(data) >= 4 and data[:4] == b"\x1a\x45\xdf\xa3":
+        return "webm"
+    if len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WAVE":
+        return "wav"
+    if len(data) >= 3 and data[:3] == b"ID3":
+        return "mpeg"
+    if len(data) >= 2 and data[0] == 0xFF and (data[1] & 0xE0) == 0xE0:
+        return "mpeg"
+    return None
+
+
 def safe_original_name(name: str) -> str:
     cleaned = name.replace("\\", "/").replace("\x00", "")
     base = Path(cleaned).name.strip()
@@ -324,7 +371,9 @@ def _disposition_name(disposition: str) -> str:
     return ""
 
 
-def parse_multipart_photo(content_type: str, body: bytes) -> Optional[Tuple[bytes, str, str]]:
+def parse_multipart_field(
+    content_type: str, body: bytes, field_name: str, default_name: str
+) -> Optional[Tuple[bytes, str, str]]:
     boundary = _multipart_boundary(content_type)
     if not boundary:
         return None
@@ -365,14 +414,18 @@ def parse_multipart_photo(content_type: str, body: bytes) -> Optional[Tuple[byte
                 part_type = line.split(":", 1)[1].strip()
         field = _disposition_name(disposition)
         filename = _disposition_filename(disposition)
-        if field != UPLOAD_FIELD:
+        if field != field_name:
             continue
         return (
             payload,
-            safe_original_name(filename or "photo"),
+            safe_original_name(filename or default_name),
             normalize_content_type(part_type),
         )
     return None
+
+
+def parse_multipart_photo(content_type: str, body: bytes) -> Optional[Tuple[bytes, str, str]]:
+    return parse_multipart_field(content_type, body, UPLOAD_FIELD, "photo")
 
 
 def extract_upload(content_type: str, body: bytes) -> Optional[Tuple[bytes, str, str]]:
@@ -381,6 +434,15 @@ def extract_upload(content_type: str, body: bytes) -> Optional[Tuple[bytes, str,
         return parse_multipart_photo(content_type, body)
     if normalized in ALLOWED_CONTENT_TYPES:
         return body, "photo", normalized
+    return None
+
+
+def extract_audio(content_type: str, body: bytes) -> Optional[Tuple[bytes, str, str]]:
+    normalized = normalize_content_type(content_type)
+    if normalized == "multipart/form-data":
+        return parse_multipart_field(content_type, body, AUDIO_FIELD, "bridge.m4a")
+    if normalized in ALLOWED_AUDIO_TYPES or normalized.startswith("audio/"):
+        return body, "bridge.m4a", normalized
     return None
 
 
@@ -644,6 +706,41 @@ class SessionStore:
             self._save(data)
             return "ok"
 
+    def record_speak(self, token: str) -> str:
+        """Record one speak attempt. Returns ok, limited, or invalid."""
+        if not token:
+            return "invalid"
+        now = int(time.time())
+        window_start = now - UPLOAD_RATE_WINDOW_SECONDS
+        with self._locked():
+            data = self._load()
+            row = data["sessions"].get(token)
+            if not isinstance(row, dict):
+                return "invalid"
+            expires = int(row.get("expires") or 0)
+            if expires <= now:
+                data["sessions"].pop(token, None)
+                self._save(data)
+                return "invalid"
+            raw_times = row.get("speaks") or []
+            times: List[int] = []
+            if isinstance(raw_times, list):
+                for item in raw_times:
+                    try:
+                        stamp = int(item)
+                    except (TypeError, ValueError):
+                        continue
+                    if stamp > window_start:
+                        times.append(stamp)
+            if len(times) >= SPEAK_RATE_LIMIT:
+                row["speaks"] = times
+                self._save(data)
+                return "limited"
+            times.append(now)
+            row["speaks"] = times
+            self._save(data)
+            return "ok"
+
 
 def omitted_total(omitted: List[Dict[str, Any]], prefix: str, shown: int) -> int:
     for row in omitted:
@@ -673,6 +770,101 @@ def allowlisted_pr(url: str) -> Optional[str]:
     return None
 
 
+def human_line(text: str, fallback: str = "") -> Optional[str]:
+    cleaned = " ".join(str(text or "").split())
+    if not cleaned:
+        return fallback or None
+    if INTERNAL_LINE_RE.search(cleaned):
+        return None
+    stripped = re.sub(r"^[A-Za-z0-9]+(?:-[A-Za-z0-9]+){2,}\s+[-:]\s+", "", cleaned).strip()
+    candidate = stripped or cleaned
+    if IDISH_TITLE_RE.match(candidate):
+        return fallback or None
+    if len(candidate) > 80:
+        trimmed = candidate[:77].rsplit(" ", 1)[0]
+        candidate = (trimmed or candidate[:77]) + "…"
+    return candidate
+
+
+def mailbox_port() -> int:
+    port = MAILBOX_PORT
+    if TEST_MODE:
+        override = os.environ.get("FM_BRIDGE_VIEW_MAILBOX_PORT", "").strip()
+        if override.isdigit():
+            port = int(override)
+    return port
+
+
+def relay_token_path(home: Path) -> Path:
+    return home / RELAY_TOKEN_RELATIVE
+
+
+def load_relay_token(home: Path) -> str:
+    if TEST_MODE:
+        env = os.environ.get("GLASSES_RELAY_TOKEN", "").strip()
+        if env:
+            return env
+    path = relay_token_path(home)
+    if path.is_symlink() or not path.is_file():
+        return ""
+    try:
+        token = path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+    return token.splitlines()[0].strip() if token else ""
+
+
+def mailbox_request(
+    method: str, path: str, token: str, payload: Optional[Dict[str, Any]] = None
+) -> Tuple[int, Optional[Dict[str, Any]]]:
+    url = f"http://{LOOPBACK}:{mailbox_port()}{path}"
+    data = None if payload is None else json.dumps(payload).encode("utf-8")
+    headers = {"Authorization": "Bearer " + token}
+    if payload is not None:
+        headers["Content-Type"] = "application/json"
+    request = urllib.request.Request(url, data=data, headers=headers, method=method)
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    try:
+        with opener.open(request, timeout=MAILBOX_TIMEOUT_SECONDS) as response:
+            raw = response.read()
+            body = json.loads(raw) if raw else None
+            if body is not None and not isinstance(body, dict):
+                body = None
+            return response.status, body
+    except urllib.error.HTTPError as exc:
+        raw = b""
+        try:
+            raw = exc.read()
+        except OSError:
+            pass
+        body = None
+        if raw:
+            try:
+                parsed = json.loads(raw)
+                if isinstance(parsed, dict):
+                    body = parsed
+            except json.JSONDecodeError:
+                body = None
+        return exc.code, body
+    except urllib.error.URLError as exc:
+        raise RuntimeError("mailbox unreachable") from exc
+
+
+def build_voice_question(payload: bytes, media_type: str, filename: str) -> Dict[str, Any]:
+    encoded = base64.b64encode(payload).decode("ascii")
+    return {
+        "kind": "voice-question",
+        "contract_version": "1.0",
+        "request_id": str(uuid.uuid4()),
+        "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "audio": {
+            "media_type": media_type,
+            "data_base64": encoded,
+            "filename": filename,
+        },
+    }
+
+
 def project_observation(model: Dict[str, Any]) -> Dict[str, Any]:
     omitted = model.get("omitted") or []
     if not isinstance(omitted, list):
@@ -693,7 +885,7 @@ def project_observation(model: Dict[str, Any]) -> Dict[str, Any]:
     stuck_states = {"blocked", "failed", "parked"}
     needs_items: List[Dict[str, str]] = []
     for row in decisions:
-        summary = str(row.get("summary") or "").strip()
+        summary = human_line(str(row.get("summary") or ""), "Needs a decision")
         if summary:
             needs_items.append({"title": summary, "dot": "Needs you"})
     stuck_items: List[Dict[str, str]] = []
@@ -702,7 +894,14 @@ def project_observation(model: Dict[str, Any]) -> Dict[str, Any]:
     unknown_live = False
     for row in in_flight:
         state = str(row.get("state") or "")
-        title = str(row.get("title") or "").strip() or "Untitled work"
+        title = human_line(str(row.get("title") or ""), "")
+        if not title:
+            if state in stuck_states:
+                title = "Work needs you"
+            elif state == "paused":
+                title = "Work is waiting"
+            else:
+                title = "Work under way"
         item = {"title": title, "dot": map_dot(state)}
         if state in stuck_states:
             stuck_items.append(item)
@@ -717,7 +916,9 @@ def project_observation(model: Dict[str, Any]) -> Dict[str, Any]:
 
     landed_items: List[Dict[str, str]] = []
     for row in landed:
-        title = str(row.get("what") or "").strip() or "Finished work"
+        title = human_line(str(row.get("what") or ""), "Finished work")
+        if not title:
+            continue
         artifact = str(row.get("artifact") or "")
         pr = allowlisted_pr(artifact)
         item = {"title": title, "dot": "Ready"}
@@ -728,53 +929,27 @@ def project_observation(model: Dict[str, Any]) -> Dict[str, Any]:
     waiting_items: List[Dict[str, str]] = []
     waiting_items.extend(waiting_live)
     for row in gates:
-        title = str(row.get("title") or "").strip() or "Queued work"
+        title = human_line(str(row.get("title") or ""), "")
+        if not title:
+            continue
         waiting_items.append({"title": title, "dot": "Waiting"})
 
-    decisions_total = omitted_total(omitted, "decisions_open", len(decisions))
-    in_flight_total = omitted_total(omitted, "in_flight", len(in_flight))
-    landed_total = omitted_total(omitted, "landed", len(landed))
-    gates_total = omitted_total(omitted, "gates", len(gates))
-    extra_decisions = max(0, decisions_total - len(decisions))
-    extra_in_flight = max(0, in_flight_total - len(in_flight))
-    extra_landed = max(0, landed_total - len(landed))
-    extra_gates = max(0, gates_total - len(gates))
-
-    def cap(items: List[Dict[str, str]], limit: int, extra: int) -> Tuple[List[Dict[str, str]], int]:
-        more = extra + max(0, len(items) - limit)
-        return items[:limit], more
-
-    needs, needs_more = cap(needs_items, BUCKET_CAP_NEEDS, extra_decisions)
-    underway, underway_more = cap(underway_items, BUCKET_CAP_UNDERWAY, extra_in_flight)
-    finished, finished_more = cap(landed_items, BUCKET_CAP_LANDED, extra_landed)
-    waiting, waiting_more = cap(waiting_items, BUCKET_CAP_WAITING, extra_gates)
-
-    incomplete_reasons: List[str] = []
-    for row in omitted:
-        surface = str(row.get("surface") or "")
-        if "unreadable" in surface or "unavailable" in surface or "truncated" in surface:
-            incomplete_reasons.append(surface)
-        if "main in-flight" in surface or "unstructured current" in surface:
-            incomplete_reasons.append(surface)
-    if unknown_live:
-        incomplete_reasons.append("a live worker state is unknown")
+    finished = landed_items[:BUCKET_CAP_LANDED]
+    extra_landed = max(0, omitted_total(omitted, "landed", len(landed)) - len(landed))
+    finished_more = extra_landed + max(0, len(landed_items) - BUCKET_CAP_LANDED)
 
     return {
         "generated": model.get("generated"),
-        "needs_you": {"items": needs, "more": needs_more, "incomplete": bool(incomplete_reasons)},
-        "under_way": {"items": underway, "more": underway_more, "incomplete": unknown_live or bool(incomplete_reasons)},
+        "needs_you": {"items": needs_items, "more": 0, "incomplete": False},
+        "under_way": {"items": underway_items, "more": 0, "incomplete": unknown_live},
         "just_finished": {"items": finished, "more": finished_more, "incomplete": bool(extra_landed)},
-        "waiting": {"items": waiting, "more": waiting_more, "incomplete": bool(incomplete_reasons)},
-        "incomplete": bool(incomplete_reasons),
+        "waiting": {"items": waiting_items, "more": 0, "incomplete": False},
+        "incomplete": unknown_live,
     }
 
 
 def mailbox_listener_available() -> bool:
-    port = MAILBOX_PORT
-    if TEST_MODE:
-        override = os.environ.get("FM_BRIDGE_VIEW_MAILBOX_PORT", "").strip()
-        if override.isdigit():
-            port = int(override)
+    port = mailbox_port()
     launchctl = os.environ.get("FM_BRIDGE_VIEW_LAUNCHCTL", "launchctl")
     uid = os.getuid()
     try:
@@ -921,7 +1096,14 @@ def run_snapshot(home: Path, root: Path) -> Dict[str, Any]:
         "FM_ROOT_OVERRIDE": str(root),
     }
     proc = subprocess.Popen(
-        [str(script), "--json", "--passive-view", "--all-in-flight"],
+        [
+            str(script),
+            "--json",
+            "--passive-view",
+            "--all-in-flight",
+            "--all-decisions",
+            "--all-queued",
+        ],
         cwd=str(scratch),
         env=env,
         stdout=subprocess.PIPE,
@@ -1032,8 +1214,35 @@ input { background: #1b2220; color: inherit; margin: 0.8rem 0; }
 button { background: #d7e0d8; color: #101418; font-weight: 600; }
 .note { color: #9aa7a0; font-size: 0.9rem; }
 .ok { color: #34d399; font-size: 0.95rem; margin: 0.4rem 0 0; }
-#photo-form { margin: 1.1rem 0 0.4rem; }
-#photo-form label { display: block; margin-bottom: 0.35rem; }
+#photo-form, #speak-box { margin: 1.1rem 0 0.4rem; }
+#photo-form label, #speak-box label { display: block; margin-bottom: 0.35rem; }
+#hold-speak {
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  background: #6ea8fe;
+  color: #101418;
+}
+#hold-speak.held { background: #f87171; color: #101418; }
+#speak-answer {
+  white-space: pre-wrap;
+  margin: 0.6rem 0 0;
+  font-size: 1.05rem;
+}
+details.waiting-fold {
+  margin: 0.2rem 0 0;
+  border: 1px solid #2a3330;
+  border-radius: 0.5rem;
+  padding: 0.35rem 0.7rem 0.6rem;
+}
+details.waiting-fold > summary {
+  min-height: 2.75rem;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  color: #c5d0c8;
+  font-size: 0.95rem;
+}
 #stale {
   display: none; position: fixed; inset: 0; background: #101418;
   color: #f2f4f3; align-items: center; justify-content: center;
@@ -1049,6 +1258,14 @@ PAGE_JS = """
 const STALE_MS = %d * 1000;
 const REFRESH_MS = %d * 1000;
 let lastSuccess = 0;
+let speakBusy = false;
+let speakRecorder = null;
+let speakChunks = [];
+let speakStream = null;
+let speakPollTimer = 0;
+let speakHeld = false;
+let speakStarting = false;
+let speakPress = 0;
 function esc(value) {
   return String(value).replace(/[&<>"']/g, function(ch) {
     return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]);
@@ -1095,14 +1312,15 @@ function renderBucket(id, bucket, emptyText) {
     return '<li><span class="dot ' + dotClass(item.dot) + '"></span>' + label + '</li>';
   });
   let extra = '';
-  if (bucket.more > 0) extra += '<p class="more">' + bucket.more + ' more waiting</p>';
-  if (bucket.incomplete) extra += '<p class="incomplete">This list may be incomplete.</p>';
-  if (!items.length) {
-    extra = '<p class="' + (bucket.incomplete ? 'incomplete' : 'empty') + '">' +
-      (bucket.incomplete ? 'This list may be incomplete.' : emptyText) + '</p>' +
-      (bucket.more > 0 ? '<p class="more">' + bucket.more + ' more waiting</p>' : '');
-  }
+  if (!items.length) extra = '<p class="empty">' + emptyText + '</p>';
   root.innerHTML = (lines.length ? '<ul>' + lines.join('') + '</ul>' : '') + extra;
+}
+function renderWaiting(bucket) {
+  renderBucket('waiting', bucket, 'Nothing is waiting.');
+  const summary = document.getElementById('waiting-summary');
+  if (!summary) return;
+  const n = (bucket && bucket.items) ? bucket.items.length : 0;
+  summary.textContent = n ? ('Waiting · ' + n) : 'Waiting';
 }
 function apply(data) {
   lastSuccess = Date.now();
@@ -1116,25 +1334,97 @@ function apply(data) {
   renderBucket('needs', data.needs_you, 'Nothing needs you right now.');
   renderBucket('underway', data.under_way, 'Nothing is under way.');
   renderBucket('finished', data.just_finished, 'No recent completions.');
-  renderBucket('waiting', data.waiting, 'Nothing is waiting.');
+  renderWaiting(data.waiting);
   setPhotoCount(data.photos_today != null ? data.photos_today : 0);
 }
-async function sendPhoto(ev) {
-  ev.preventDefault();
-  const input = document.getElementById('photo');
-  const status = document.getElementById('photo-result');
-  if (!input || !status) return;
-  if (!input.files || !input.files.length) {
-    status.className = 'warn';
-    status.textContent = 'Choose a photo first.';
+function setSpeakStatus(kind, text) {
+  const status = document.getElementById('speak-result');
+  if (!status) return;
+  status.className = kind;
+  status.textContent = text;
+}
+function stopTracks() {
+  if (!speakStream) return;
+  speakStream.getTracks().forEach(function(track) { track.stop(); });
+  speakStream = null;
+}
+function pickRecorderType() {
+  if (typeof MediaRecorder === 'undefined') return '';
+  const types = ['audio/mp4', 'audio/aac', 'audio/webm;codecs=opus', 'audio/webm'];
+  for (let i = 0; i < types.length; i++) {
+    if (MediaRecorder.isTypeSupported(types[i])) return types[i];
+  }
+  return '';
+}
+async function startSpeak(ev) {
+  if (ev) ev.preventDefault();
+  if (speakBusy || speakRecorder || speakStarting) return;
+  speakHeld = true;
+  const press = ++speakPress;
+  const btn = document.getElementById('hold-speak');
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    setSpeakStatus('warn', 'This phone cannot record audio here.');
     return;
   }
-  status.className = 'note';
-  status.textContent = 'Sending photo…';
+  speakStarting = true;
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    if (!speakHeld || press !== speakPress) {
+      stream.getTracks().forEach(function(track) { track.stop(); });
+      return;
+    }
+    speakStream = stream;
+    speakChunks = [];
+    const mime = pickRecorderType();
+    speakRecorder = mime ? new MediaRecorder(speakStream, { mimeType: mime }) : new MediaRecorder(speakStream);
+    speakRecorder.addEventListener('dataavailable', function(event) {
+      if (event.data && event.data.size) speakChunks.push(event.data);
+    });
+    speakRecorder.start();
+    if (btn) {
+      btn.classList.add('held');
+      btn.textContent = 'Release to send';
+    }
+    setSpeakStatus('note', 'Listening…');
+  } catch (err) {
+    stopTracks();
+    speakRecorder = null;
+    setSpeakStatus('warn', 'Microphone was not available.');
+  } finally {
+    speakStarting = false;
+  }
+}
+async function finishSpeak(ev) {
+  if (ev) ev.preventDefault();
+  speakHeld = false;
+  const btn = document.getElementById('hold-speak');
+  const recorder = speakRecorder;
+  if (!recorder) return;
+  speakRecorder = null;
+  speakBusy = true;
+  const blob = await new Promise(function(resolve) {
+    recorder.addEventListener('stop', function() {
+      const type = recorder.mimeType || (speakChunks[0] && speakChunks[0].type) || 'audio/mp4';
+      resolve(new Blob(speakChunks, { type: type }));
+    });
+    try { recorder.stop(); } catch (err) { resolve(new Blob([], { type: 'audio/mp4' })); }
+  });
+  stopTracks();
+  if (btn) {
+    btn.classList.remove('held');
+    btn.textContent = 'Hold to speak';
+  }
+  if (!blob.size) {
+    speakBusy = false;
+    setSpeakStatus('warn', 'Nothing was recorded.');
+    return;
+  }
+  setSpeakStatus('note', 'Sending…');
   try {
     const body = new FormData();
-    body.append('photo', input.files[0]);
-    const res = await fetch('/upload', {
+    const name = blob.type.indexOf('webm') !== -1 ? 'bridge.webm' : 'bridge.m4a';
+    body.append('audio', blob, name);
+    const res = await fetch('/speak', {
       method: 'POST',
       body: body,
       credentials: 'same-origin',
@@ -1142,17 +1432,101 @@ async function sendPhoto(ev) {
     });
     const payload = await res.json().catch(function() { return {}; });
     if (!res.ok) {
-      status.className = 'warn';
-      status.textContent = payload.error || ('Send failed (' + res.status + ')');
+      speakBusy = false;
+      setSpeakStatus('warn', payload.error || ('Send failed (' + res.status + ')'));
       return;
     }
-    status.className = 'ok';
-    status.textContent = 'Photo received.';
-    input.value = '';
-    if (payload.received_today != null) setPhotoCount(payload.received_today);
+    setSpeakStatus('ok', 'Sent');
+    if (payload.request_id) pollAnswer(payload.request_id, 0);
+    else speakBusy = false;
   } catch (err) {
+    speakBusy = false;
+    setSpeakStatus('warn', 'Send failed.');
+  }
+}
+async function pollAnswer(requestId, attempt) {
+  if (speakPollTimer) clearTimeout(speakPollTimer);
+  try {
+    const res = await fetch('/api/answer/' + encodeURIComponent(requestId), {
+      credentials: 'same-origin',
+      cache: 'no-store'
+    });
+    const payload = await res.json().catch(function() { return {}; });
+    if (res.ok && payload && payload.text) {
+      const box = document.getElementById('speak-answer');
+      if (box) box.textContent = payload.text;
+      setSpeakStatus('ok', 'Answered');
+      speakBusy = false;
+      return;
+    }
+    if (res.ok && payload && payload.pending && attempt < 150) {
+      speakPollTimer = setTimeout(function() { pollAnswer(requestId, attempt + 1); }, 2000);
+      return;
+    }
+    if (attempt < 150 && (res.status === 204 || (payload && payload.pending))) {
+      speakPollTimer = setTimeout(function() { pollAnswer(requestId, attempt + 1); }, 2000);
+      return;
+    }
+    speakBusy = false;
+    if (!document.getElementById('speak-answer').textContent) {
+      setSpeakStatus('warn', 'No answer yet.');
+    }
+  } catch (err) {
+    if (attempt < 150) {
+      speakPollTimer = setTimeout(function() { pollAnswer(requestId, attempt + 1); }, 2000);
+      return;
+    }
+    speakBusy = false;
+    setSpeakStatus('warn', 'Could not read the answer.');
+  }
+}
+async function sendPhotos(ev) {
+  ev.preventDefault();
+  const input = document.getElementById('photo');
+  const status = document.getElementById('photo-result');
+  if (!input || !status) return;
+  const files = input.files ? Array.prototype.slice.call(input.files) : [];
+  if (!files.length) {
     status.className = 'warn';
-    status.textContent = 'Send failed.';
+    status.textContent = 'Choose a photo first.';
+    return;
+  }
+  const failed = [];
+  let sent = 0;
+  for (let i = 0; i < files.length; i++) {
+    status.className = 'note';
+    status.textContent = 'Sending ' + (i + 1) + ' of ' + files.length + '…';
+    try {
+      const body = new FormData();
+      body.append('photo', files[i]);
+      const res = await fetch('/upload', {
+        method: 'POST',
+        body: body,
+        credentials: 'same-origin',
+        cache: 'no-store'
+      });
+      const payload = await res.json().catch(function() { return {}; });
+      if (!res.ok) {
+        failed.push('Photo ' + (i + 1) + ': ' + (payload.error || ('failed (' + res.status + ')')));
+        continue;
+      }
+      sent += 1;
+      status.textContent = sent + ' of ' + files.length + ' sent';
+      if (payload.received_today != null) setPhotoCount(payload.received_today);
+    } catch (err) {
+      failed.push('Photo ' + (i + 1) + ': send failed');
+    }
+  }
+  input.value = '';
+  if (failed.length && failed.length === files.length) {
+    status.className = 'warn';
+    status.textContent = failed.join(' ');
+  } else if (failed.length) {
+    status.className = 'warn';
+    status.textContent = sent + ' of ' + files.length + ' sent. ' + failed.join(' ');
+  } else {
+    status.className = 'ok';
+    status.textContent = files.length === 1 ? 'Photo received.' : (files.length + ' of ' + files.length + ' sent');
   }
 }
 function tickObserved() {
@@ -1189,7 +1563,17 @@ document.addEventListener('DOMContentLoaded', function() {
   document.addEventListener('visibilitychange', function() { if (!document.hidden) refresh(); });
   window.addEventListener('pageshow', function() { refresh(); });
   const form = document.getElementById('photo-form');
-  if (form) form.addEventListener('submit', sendPhoto);
+  if (form) form.addEventListener('submit', sendPhotos);
+  const hold = document.getElementById('hold-speak');
+  if (hold) {
+    hold.addEventListener('pointerdown', function(ev) {
+      try { hold.setPointerCapture(ev.pointerId); } catch (err) {}
+      startSpeak(ev);
+    });
+    hold.addEventListener('pointerup', finishSpeak);
+    hold.addEventListener('pointercancel', finishSpeak);
+    hold.addEventListener('lostpointercapture', finishSpeak);
+  }
 });
 """ % (STALE_CLIENT_SECONDS, REFRESH_CLIENT_SECONDS)
 
@@ -1244,22 +1628,31 @@ def glance_html(nonce: str) -> str:
 <p class="meta"><span id="desk">Checking the desk</span> · <span id="mailbox">Mailbox…</span></p>
 <p class="meta" id="observed">Observing…</p>
 <p class="warn">Summary only. Do not approve from this page.</p>
-<h2>Send a photo</h2>
-<form id="photo-form" method="post" action="/upload" enctype="multipart/form-data">
-  <label for="photo">Photo</label>
-  <input id="photo" name="photo" type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif,image/*">
-  <button type="submit">Send photo</button>
-</form>
-<p class="meta" id="photo-count">Photos received today: 0</p>
-<p id="photo-result" class="note"></p>
 <h2>Needs you</h2>
 <div id="needs"><p class="empty">Loading…</p></div>
 <h2>Under way</h2>
 <div id="underway"><p class="empty">Loading…</p></div>
+<details class="waiting-fold">
+  <summary id="waiting-summary">Waiting</summary>
+  <div id="waiting"><p class="empty">Loading…</p></div>
+</details>
+<h2>Talk</h2>
+<div id="speak-box">
+  <label for="hold-speak">Hold to speak</label>
+  <button type="button" id="hold-speak">Hold to speak</button>
+  <p id="speak-result" class="note"></p>
+  <p id="speak-answer" class="meta"></p>
+</div>
+<h2>Send photos</h2>
+<form id="photo-form" method="post" action="/upload" enctype="multipart/form-data">
+  <label for="photo">Photos</label>
+  <input id="photo" name="photo" type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif,image/*" multiple>
+  <button type="submit">Send photos</button>
+</form>
+<p class="meta" id="photo-count">Photos received today: 0</p>
+<p id="photo-result" class="note"></p>
 <h2>Just finished</h2>
 <div id="finished"><p class="empty">Loading…</p></div>
-<h2>Waiting in the wings</h2>
-<div id="waiting"><p class="empty">Loading…</p></div>
 </main>
 </body>
 </html>
@@ -1466,6 +1859,36 @@ class BridgeHandler(BaseHTTPRequestHandler):
             body = json.dumps(payload).encode("utf-8")
             self._send(200, body, "application/json")
             return
+        if parsed.path.startswith("/api/answer/"):
+            if not self._authed():
+                self._send(401, b'{"error":"unauthorized"}\n', "application/json")
+                return
+            request_id = parsed.path[len("/api/answer/") :]
+            if not REQUEST_ID_RE.match(request_id):
+                self._json_error(404, "not found")
+                return
+            token = load_relay_token(STATE.home)
+            if not token:
+                self._json_error(503, "mailbox is not configured")
+                return
+            try:
+                status, payload = mailbox_request("GET", "/v1/answers/" + request_id, token)
+            except RuntimeError:
+                self._json_error(503, "mailbox unreachable")
+                return
+            if status == 204:
+                self._send(200, b'{"pending":true}\n', "application/json")
+                return
+            if status == 404:
+                self._json_error(404, "unknown request")
+                return
+            if status != 200 or not isinstance(payload, dict):
+                self._json_error(502, "mailbox error")
+                return
+            text = str(payload.get("text") or "").strip()
+            body = json.dumps({"pending": False, "text": text}).encode("utf-8")
+            self._send(200, body, "application/json")
+            return
         self._send(404, b"not found\n", "text/plain; charset=utf-8")
 
     def _json_error(self, code: int, message: str, extra: Optional[List[Tuple[str, str]]] = None) -> None:
@@ -1529,6 +1952,77 @@ class BridgeHandler(BaseHTTPRequestHandler):
         ).encode("utf-8")
         self._send(200, body, "application/json")
 
+    def _handle_speak(self) -> None:
+        if not self._origin_ok():
+            self._send(403, b"forbidden\n", "text/plain; charset=utf-8")
+            return
+        token = self._session()
+        if not STATE.sessions.valid(token):
+            self._json_error(401, "unauthorized")
+            return
+        length_header = self.headers.get("Content-Length")
+        if length_header is None or not str(length_header).strip().isdigit():
+            self._json_error(400, "missing content length")
+            return
+        length = int(length_header)
+        if length > SPEAK_MAX_BYTES:
+            self._json_error(413, "too large", extra=[("Connection", "close")])
+            return
+        if length <= 0:
+            self._json_error(400, "empty body")
+            return
+        rate = STATE.sessions.record_speak(token)
+        if rate == "invalid":
+            self._json_error(401, "unauthorized")
+            return
+        if rate == "limited":
+            self._json_error(429, "too many recordings")
+            return
+        raw = self.rfile.read(length) if length else b""
+        self._body_drained = True
+        if len(raw) > SPEAK_MAX_BYTES:
+            self._json_error(413, "too large")
+            return
+        content_type = self.headers.get("Content-Type") or ""
+        extracted = extract_audio(content_type, raw)
+        if extracted is None:
+            self._json_error(415, "unsupported media type")
+            return
+        payload, _original_name, declared = extracted
+        if not payload:
+            self._json_error(415, "unsupported media type")
+            return
+        kind = sniff_audio(payload)
+        if kind is None:
+            self._json_error(415, "unsupported media type")
+            return
+        mailbox_type, filename = AUDIO_SNIFF_TO_MAILBOX.get(kind, ("audio/mp4", "bridge.m4a"))
+        if declared in ALLOWED_AUDIO_TYPES and declared.startswith("audio/"):
+            mailbox_type = declared
+        relay = load_relay_token(STATE.home)
+        if not relay:
+            self._json_error(503, "mailbox is not configured")
+            return
+        question = build_voice_question(payload, mailbox_type, filename)
+        try:
+            status, reply = mailbox_request("POST", "/v1/questions", relay, question)
+        except RuntimeError:
+            self._json_error(503, "mailbox unreachable")
+            return
+        if status not in {200, 202}:
+            detail = "mailbox rejected the recording"
+            if TEST_MODE and isinstance(reply, dict) and reply.get("error"):
+                detail = str(reply.get("error"))
+            self._json_error(502, detail)
+            return
+        request_id = question["request_id"]
+        if isinstance(reply, dict) and reply.get("request_id"):
+            request_id = str(reply["request_id"])
+        body = json.dumps({"ok": True, "request_id": request_id, "source": "bridge"}).encode(
+            "utf-8"
+        )
+        self._send(200, body, "application/json")
+
     def do_POST(self) -> None:  # noqa: N802
         if STATE is None or not self._host_ok():
             self._send(403, b"forbidden\n", "text/plain; charset=utf-8")
@@ -1536,6 +2030,9 @@ class BridgeHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         if parsed.path == "/upload":
             self._handle_upload()
+            return
+        if parsed.path == "/speak":
+            self._handle_speak()
             return
         if parsed.path not in {"/login", "/logout"}:
             self._send(404, b"not found\n", "text/plain; charset=utf-8")

@@ -5,8 +5,9 @@
 # exposes it on the tailnet with Tailscale Serve HTTPS. It never binds
 # 0.0.0.0, never enables Funnel, and never writes backlog or fleet state.
 # The observation is `fm-bearings-snapshot.sh --json --passive-view`.
-# Authenticated photo drops are the only extra write path and land in
-# data/bridge-inbox/.
+# Authenticated photo drops land in data/bridge-inbox/. Authenticated
+# hold-to-speak audio is forwarded into the local glasses mailbox; the
+# relay token stays in this process and is never sent to the browser.
 #
 # The bind address is the literal 127.0.0.1 constant in bin/fm-bridge-view.py
 # and there is no flag or environment variable that widens it.
