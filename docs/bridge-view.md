@@ -126,6 +126,9 @@ The token is never written into HTML, JavaScript, or a response body.
 The audio filename is `bridge.m4a` (or `bridge.webm` / `bridge.wav`) so mailbox records are distinguishable from VoiceLoop captures.
 `GET /api/answer/<request_id>` is session-authenticated, polls `GET /v1/answers/<id>` on the mailbox, and returns JSON `{pending:true}` or `{text:"..."}` without audio bytes.
 The glance page has a press-and-hold microphone control; after send it shows `Sent` and renders answer text when it arrives.
+iPhone Safari `MediaRecorder` flushes `audio/mp4` in timeslice chunks; the page accumulates every `dataavailable` blob and builds the uploaded file in `onstop` after a final flush so a release cannot send only the last slice.
+A capture smaller than about 1 KB per second held (1 KB floor) stays in the failure state and never shows `Sent`.
+The bridge log records `speak audio bytes=` for each `/speak` request so a truncated upload is visible without opening the file.
 
 Existing `form-action 'self'` and `connect-src 'self'` CSP directives cover the form and `fetch`; scripts and styles stay nonce-based.
 

@@ -1365,12 +1365,16 @@ PAGE_JS = """
 const STALE_MS = %d * 1000;
 const REFRESH_MS = %d * 1000;
 let lastSuccess = 0;
+const SPEAK_TIMESLICE_MS = 1000;
+const SPEAK_MIN_BYTES_FLOOR = 1024;
+const SPEAK_MIN_BYTES_PER_SEC = 1024;
 let speakBusy = false;
 let speakRecorder = null;
 let speakChunks = [];
 let speakStream = null;
 let speakPollTimer = 0;
 let speakHeld = false;
+let speakHeldAt = 0;
 let speakStarting = false;
 let speakPress = 0;
 function esc(value) {
@@ -1509,12 +1513,19 @@ async function startSpeak(ev) {
     }
     speakStream = stream;
     speakChunks = [];
+    speakHeldAt = Date.now();
     const mime = pickRecorderType();
     speakRecorder = mime ? new MediaRecorder(speakStream, { mimeType: mime }) : new MediaRecorder(speakStream);
+    // iPhone Safari only keeps a short tail unless timeslice chunks are
+    // accumulated and the file is built in onstop after the last flush.
     speakRecorder.addEventListener('dataavailable', function(event) {
       if (event.data && event.data.size) speakChunks.push(event.data);
     });
-    speakRecorder.start();
+    try {
+      speakRecorder.start(SPEAK_TIMESLICE_MS);
+    } catch (err) {
+      speakRecorder.start();
+    }
     if (btn) {
       btn.classList.add('held');
       btn.textContent = 'Release to send';
@@ -1536,21 +1547,45 @@ async function finishSpeak(ev) {
   if (!recorder) return;
   speakRecorder = null;
   speakBusy = true;
+  const chunks = speakChunks;
+  const heldMs = speakHeldAt ? Math.max(0, Date.now() - speakHeldAt) : 0;
+  speakHeldAt = 0;
   const blob = await new Promise(function(resolve) {
+    let settled = false;
+    function finish() {
+      if (settled) return;
+      settled = true;
+      const type = recorder.mimeType || (chunks[0] && chunks[0].type) || 'audio/mp4';
+      resolve(new Blob(chunks, { type: type }));
+    }
     recorder.addEventListener('stop', function() {
-      const type = recorder.mimeType || (speakChunks[0] && speakChunks[0].type) || 'audio/mp4';
-      resolve(new Blob(speakChunks, { type: type }));
+      setTimeout(finish, 0);
     });
-    try { recorder.stop(); } catch (err) { resolve(new Blob([], { type: 'audio/mp4' })); }
+    try {
+      if (recorder.state && recorder.state !== 'recording') {
+        finish();
+      } else {
+        try {
+          if (typeof recorder.requestData === 'function') recorder.requestData();
+        } catch (err) {}
+        recorder.stop();
+      }
+    } catch (err) {
+      finish();
+    }
   });
   stopTracks();
   if (btn) {
     btn.classList.remove('held');
     btn.textContent = 'Hold to speak';
   }
-  if (!blob.size) {
+  const minBytes = Math.max(
+    SPEAK_MIN_BYTES_FLOOR,
+    Math.ceil(heldMs / 1000 * SPEAK_MIN_BYTES_PER_SEC)
+  );
+  if (!blob.size || blob.size < minBytes) {
     speakBusy = false;
-    setSpeakStatus('warn', 'Nothing was recorded.');
+    setSpeakStatus('warn', 'Recording was too small to send.');
     return;
   }
   setSpeakStatus('note', 'Sending…');
@@ -2121,6 +2156,7 @@ class BridgeHandler(BaseHTTPRequestHandler):
             self._json_error(415, "unsupported media type")
             return
         payload, _original_name, declared = extracted
+        self.log_message("speak audio bytes=%d", len(payload) if payload else 0)
         if not payload:
             self._json_error(415, "unsupported media type")
             return

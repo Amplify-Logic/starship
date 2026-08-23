@@ -761,6 +761,157 @@ JS
   pass "bridge page handles early release and honest upload progress"
 }
 
+test_bridge_page_speak_assembles_chunks_and_rejects_tiny() {
+  local output
+  output=$(node - "$ROOT/bin/fm-bridge-view.py" <<'JS'
+const {execFileSync} = require('child_process');
+const vm = require('vm');
+const {setTimeout: delay} = require('timers/promises');
+const script = execFileSync('python3', ['-', process.argv[2]], {
+  input: `import importlib.util, sys
+spec = importlib.util.spec_from_file_location("bridge", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+print(module.PAGE_JS)
+`,
+  encoding: 'utf8'
+});
+
+function chunk(size) {
+  return new Blob([new Uint8Array(size)], {type: 'audio/mp4'});
+}
+
+function makeRecorderClass(recorders, opts) {
+  return class MediaRecorder {
+    static isTypeSupported() { return true; }
+    constructor() {
+      this.mimeType = 'audio/mp4';
+      this.state = 'inactive';
+      this.listeners = {};
+      this.timeslice = 0;
+      this.requested = false;
+      recorders.push(this);
+    }
+    addEventListener(name, fn) {
+      (this.listeners[name] || (this.listeners[name] = [])).push(fn);
+    }
+    emit(name, event) {
+      (this.listeners[name] || []).forEach(fn => fn(event || {}));
+    }
+    start(timeslice) {
+      this.state = 'recording';
+      this.timeslice = timeslice;
+      (opts.onStartChunks || []).forEach(size => this.emit('dataavailable', {data: chunk(size)}));
+    }
+    requestData() { this.requested = true; }
+    stop() {
+      this.state = 'inactive';
+      this.emit('stop');
+      if (opts.lateChunk) this.emit('dataavailable', {data: chunk(opts.lateChunk)});
+    }
+  };
+}
+
+function pageContext({recorders, nowRef, uploaded, fetchImpl, recorderOpts}) {
+  const elements = {
+    'hold-speak': {classList: {add() {}, remove() {}}, textContent: 'Hold to speak'},
+    'speak-result': {className: '', textContent: ''},
+    'speak-answer': {textContent: ''}
+  };
+  return vm.createContext({
+    AbortController,
+    Blob,
+    console,
+    Date: {now() { return nowRef.value; }},
+    document: {
+      hidden: false,
+      addEventListener() {},
+      getElementById(id) { return elements[id] || null; }
+    },
+    window: {addEventListener() {}},
+    navigator: {mediaDevices: {getUserMedia() {
+      return Promise.resolve({getTracks() { return [{stop() {}}]; }});
+    }}},
+    MediaRecorder: makeRecorderClass(recorders, recorderOpts),
+    FormData: class {
+      append(key, value, name) { uploaded.push({key, value, name, size: value && value.size}); }
+    },
+    fetch: fetchImpl,
+    setInterval() {},
+    setTimeout,
+    clearTimeout,
+    elements
+  });
+}
+
+(async () => {
+  const recorders = [];
+  const uploaded = [];
+  const nowRef = {value: 1_000_000};
+  const context = pageContext({
+    recorders,
+    nowRef,
+    uploaded,
+    recorderOpts: {onStartChunks: [2000, 2000], lateChunk: 2500},
+    fetchImpl() {
+      return Promise.resolve({ok: true, json: async () => ({})});
+    }
+  });
+  vm.runInContext(script, context);
+  await vm.runInContext('startSpeak()', context);
+  if (!recorders[0] || recorders[0].timeslice !== 1000) {
+    throw new Error('recorder must start with a timeslice so Safari flushes chunks');
+  }
+  nowRef.value += 3000;
+  await vm.runInContext('finishSpeak()', context);
+  await delay(20);
+  if (!recorders[0].requested) {
+    throw new Error('release must request a final flush before stop');
+  }
+  if (uploaded.length !== 1 || uploaded[0].size !== 6500) {
+    throw new Error('upload must be every chunk including the post-stop flush, got ' + JSON.stringify(uploaded));
+  }
+  if (context.elements['speak-result'].textContent !== 'Sent' || context.elements['speak-result'].className !== 'ok') {
+    throw new Error('full capture must report Sent: ' + context.elements['speak-result'].textContent);
+  }
+
+  const tinyUploaded = [];
+  const tinyRecorders = [];
+  const tinyNow = {value: 2_000_000};
+  let spokeFetch = false;
+  const tiny = pageContext({
+    recorders: tinyRecorders,
+    nowRef: tinyNow,
+    uploaded: tinyUploaded,
+    recorderOpts: {onStartChunks: [400], lateChunk: 384},
+    fetchImpl() {
+      spokeFetch = true;
+      return Promise.resolve({ok: true, json: async () => ({})});
+    }
+  });
+  vm.runInContext(script, tiny);
+  await vm.runInContext('startSpeak()', tiny);
+  tinyNow.value += 8000;
+  await vm.runInContext('finishSpeak()', tiny);
+  await delay(20);
+  if (spokeFetch || tinyUploaded.length) {
+    throw new Error('undersized capture must not POST');
+  }
+  if (tiny.elements['speak-result'].className !== 'warn') {
+    throw new Error('undersized capture must use the failure state');
+  }
+  if (tiny.elements['speak-result'].textContent === 'Sent') {
+    throw new Error('undersized capture claimed Sent');
+  }
+})().catch(error => {
+  console.error(error.message);
+  process.exitCode = 1;
+});
+JS
+  ) || fail "bridge speak chunk assembly regression failed: $output"
+  pass "bridge speak uploads every chunk and rejects an undersized capture"
+}
+
 test_session_revoke_serializes_with_login_create() {
   local output
   output=$(python3 - "$ROOT/bin/fm-bridge-view.py" "$TMP_ROOT/session-race" <<'PY'
@@ -1776,6 +1927,9 @@ PY
     --header "Cookie: $cookie" \
     -F "audio=@$home/ask.m4a;type=audio/mp4"
   assert_contains "$(head -n 1 "$hdr")" "200" "Safari-shaped m4a speak must succeed: $(cat "$body")"
+  audio_bytes=$(wc -c < "$home/ask.m4a" | tr -d ' ')
+  grep -q "speak audio bytes=${audio_bytes}" "$home/bridge/bridge.log" \
+    || fail "bridge log must record extracted audio size: $(cat "$home/bridge/bridge.log")"
   printf '%s' "$(cat "$body")" | jq -e '.ok == true and .source == "bridge" and .request_id' >/dev/null \
     || fail "speak JSON missing ok/source/request_id: $(cat "$body")"
   request_id=$(printf '%s' "$(cat "$body")" | jq -r '.request_id')
@@ -1820,6 +1974,7 @@ test_snapshot_subprocess_does_not_write_fleet_state
 test_snapshot_output_is_bounded_during_capture
 test_snapshot_requests_complete_glance_rows
 test_bridge_page_async_progress_and_release
+test_bridge_page_speak_assembles_chunks_and_rejects_tiny
 test_session_revoke_serializes_with_login_create
 test_away_mode_passive_refresh_works
 test_mailbox_listener_never_consumes_announcements
