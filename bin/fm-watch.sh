@@ -78,8 +78,10 @@ mkdir -p "$STATE"
 # original regex path. A push-capable backend (herdr) additionally replaces this
 # watcher's blind terminal sleep with a bounded wait on its native event stream
 # (event_wait_or_sleep below), so a crew entering `blocked` wakes its supervisor
-# sub-second; the poll loop stays live every cycle as the permanent fail-closed
-# backstop. See bin/fm-backend.sh and docs/herdr-backend.md.
+# sub-second; the same wait is also interrupted by a glasses mailbox or bridge
+# inbox file event (bin/fm-file-event-lib.sh) so those checks do not sit until
+# the next CHECK_INTERVAL. The poll loop stays live every cycle as the
+# permanent fail-closed backstop. See bin/fm-backend.sh and docs/herdr-backend.md.
 # shellcheck source=bin/fm-backend.sh
 . "$SCRIPT_DIR/fm-backend.sh"
 # Shared normalized-transition accessors and the single-owner status->action
@@ -87,6 +89,11 @@ mkdir -p "$STATE"
 # the herdr subscriber writes them (bin/fm-transition-lib.sh).
 # shellcheck source=bin/fm-transition-lib.sh
 . "$SCRIPT_DIR/fm-transition-lib.sh"
+# Glasses mailbox/inbox file-event wait. Interrupts the terminal poll sleep so
+# a voice question or bridge photo does not sit until the next CHECK_INTERVAL
+# sweep. Path list and wait exit codes are owned by this library.
+# shellcheck source=bin/fm-file-event-lib.sh
+. "$SCRIPT_DIR/fm-file-event-lib.sh"
 # shellcheck source=bin/fm-pr-lib.sh
 . "$SCRIPT_DIR/fm-pr-lib.sh"
 # shellcheck source=bin/fm-x-lib.sh
@@ -116,9 +123,11 @@ WATCHER_STALE_GRACE=${FM_WATCHER_STALE_GRACE:-${FM_GUARD_GRACE:-300}}
 # token (e.g. the word "File" read as an unset variable), which silently kills the
 # watcher mid-cycle. Detect the platform once and pick the right form.
 if [ "$(uname)" = Darwin ]; then
+  STAT_STYLE=bsd
   stat_mtime() { stat -f %m "$1" 2>/dev/null; }        # epoch seconds of mtime
   stat_sig()   { stat -f '%z:%Fm' "$1" 2>/dev/null; }   # size:mtime signature
 else
+  STAT_STYLE=gnu
   stat_mtime() { stat -c %Y "$1" 2>/dev/null; }
   stat_sig()   { stat -c '%s:%Y' "$1" 2>/dev/null; }
 fi
@@ -825,16 +834,22 @@ heartbeat_scan_finds_actionable() {
 # with push-capable windows (herdr), it replaces the blind `sleep POLL` with a
 # bounded wait on the backend's native transition stream, so a crew going
 # `blocked` wakes the supervisor sub-second instead of after the stale-pane
-# wedge timer. For every other home - no push-capable window, backend not
-# capable, or the event path proven unreliable this process - it sleeps POLL,
-# byte-for-byte today's behavior. The poll loop above still runs every cycle, so
-# this only ever SHORTENS latency; it can never drop an escalation (the poll
-# loop is the permanent fail-closed backstop). This preserves the single live
-# supervision cycle: the reader is a short-lived subprocess of THIS watcher, not
-# a second watcher, so every guard/beacon/arm/turn-end mechanism is unchanged.
+# wedge timer. When default glasses watch paths exist (mailbox DB or bridge
+# inbox; bin/fm-file-event-lib.sh), the same wait is also interrupted by a
+# filesystem change so a voice question or photo does not sit until the next
+# CHECK_INTERVAL sweep. For every other home - no push-capable window, backend
+# not capable, or the event path proven unreliable this process - it sleeps
+# POLL, or file-waits POLL when glasses paths exist, byte-for-byte today's
+# behavior when those paths are absent. The poll loop above still runs every
+# cycle, so this only ever SHORTENS latency; it can never drop an escalation
+# (the poll loop is the permanent fail-closed backstop). This preserves the
+# single live supervision cycle: the reader is a short-lived subprocess of THIS
+# watcher, not a second watcher, so every guard/beacon/arm/turn-end mechanism
+# is unchanged.
 event_wait_or_sleep() {
-  local w b session first_backend="" first_session="" rec rc
+  local w b session first_backend="" first_session="" rec rc p
   local windows=()
+  local paths=()
   while IFS= read -r w; do
     b=$(window_backend "$w")
     fm_backend_has_push "$b" || continue
@@ -853,9 +868,17 @@ event_wait_or_sleep() {
     fi
     windows+=("$w")
   done < <(recorded_windows)
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    paths+=("$p")
+  done < <(fm_glasses_watch_paths "$FM_HOME")
 
   if [ "${#windows[@]}" -eq 0 ]; then
-    sleep "$POLL"
+    if [ "${#paths[@]}" -gt 0 ]; then
+      file_event_wait_or_sleep "${paths[@]}"
+    else
+      sleep "$POLL"
+    fi
     return
   fi
 
@@ -871,29 +894,192 @@ event_wait_or_sleep() {
     _event_cap_fails=0
   fi
   if [ "$_event_cap_ok" != 1 ]; then
-    sleep "$POLL"
+    if [ "${#paths[@]}" -gt 0 ]; then
+      file_event_wait_or_sleep "${paths[@]}"
+    else
+      sleep "$POLL"
+    fi
+    return
+  fi
+
+  if [ "${#paths[@]}" -gt 0 ]; then
+    EVENT_WAIT_WINDOWS=("${windows[@]}")
+    FILE_EVENT_PATHS=("${paths[@]}")
+    race_push_and_file_wait "$first_backend" "$first_session"
     return
   fi
 
   rec=$(FM_BACKEND_EVENTS_CAPABILITY_CONFIRMED=1 fm_backend_wait_transition "$first_backend" "$first_session" "$POLL" "$STATE" "${windows[@]}")
   rc=$?
+  apply_push_wait_result "$first_backend" "$first_session" "$rec" "$rc"
+}
+
+# file_event_sig: one-line signature of the current glasses watch paths so a
+# post-wait stat catch-up can expire .last-check even if the event waiter was
+# killed when a competing herdr wait returned first.
+file_event_sig() {  # <path>...
+  local p
+  for p in "$@"; do
+    if [ "$STAT_STYLE" = bsd ]; then
+      printf '%s:%s\n' "$p" "$(stat -f '%z:%Fm:%Fc' "$p" 2>/dev/null || printf missing)"
+    else
+      printf '%s:%s\n' "$p" "$(stat -c '%s:%y:%z' "$p" 2>/dev/null || printf missing)"
+    fi
+  done
+}
+
+# expire_check_sweep: make the next loop iteration run authenticated checks now
+# instead of waiting out CHECK_INTERVAL. Used when a glasses path changed.
+expire_check_sweep() {
+  rm -f "$STATE/.last-check"
+  triage_log "glasses file event; next cycle runs checks immediately"
+}
+
+# file_event_wait_or_sleep: replace sleep POLL with a bounded file wait when
+# glasses paths exist. A change expires the slow-check timer; an unusable
+# waiter falls back to sleep POLL.
+file_event_wait_or_sleep() {  # <path>...
+  local before after rc
+  [ "$#" -gt 0 ] || { sleep "$POLL"; return; }
+  before=$(file_event_sig "$@")
+  fm_file_event_wait "$POLL" "$@"
+  rc=$?
+  after=$(file_event_sig "$@")
+  if [ "$rc" -eq 0 ] || [ "$before" != "$after" ]; then
+    expire_check_sweep
+    return
+  fi
+  if [ "$rc" -eq 2 ]; then
+    sleep "$POLL"
+  fi
+}
+
+# fm_kill_pid_tree: stop a raced waiter and its descendants so a herdr socket
+# reader cannot outlive the cycle that lost the race.
+fm_kill_pid_tree() {  # <pid>
+  local pid=$1 child
+  [ -n "$pid" ] || return 0
+  while IFS= read -r child; do
+    [ -n "$child" ] || continue
+    fm_kill_pid_tree "$child"
+  done < <(pgrep -P "$pid" 2>/dev/null || true)
+  kill "$pid" 2>/dev/null || true
+}
+
+# apply_push_wait_result: the herdr-only half of event_wait_or_sleep, shared
+# with the file-event race so a herdr timeout/failure still follows the same
+# fail-closed disable rule.
+apply_push_wait_result() {  # <backend> <session> <record> <rc>
+  local backend=$1 session=$2 record=$3 rc=$4
   case "$rc" in
     0)
       _event_cap_fails=0
-      handle_push_transition "$first_backend" "$first_session" "$rec"
+      handle_push_transition "$backend" "$session" "$record"
       ;;
     2)
-      # Event path unusable this cycle (connect/subscribe failure). Sleep the
-      # budget and count toward the runtime-disable threshold; past it, drop to
-      # pure polling for the rest of this watcher process.
       _event_cap_fails=$((_event_cap_fails + 1))
       [ "$_event_cap_fails" -ge "$EVENT_CAP_FAIL_MAX" ] && _event_cap_ok=0
       sleep "$POLL"
       ;;
     *)
-      # 1: a clean full-budget wait with no actionable edge - the reader already
-      # blocked ~POLL, so just continue; the next cycle re-scans.
       _event_cap_fails=0
+      ;;
+  esac
+}
+
+# race_push_and_file_wait: run the herdr transition wait and the glasses file
+# wait together. The first completion unblocks this cycle. A file change (or a
+# post-wait signature change) expires .last-check. A herdr result is applied
+# only when the file waiter did not win, so an interrupted herdr reader is not
+# treated as a connect failure.
+# Reads EVENT_WAIT_WINDOWS and FILE_EVENT_PATHS because bash functions cannot
+# see the caller's local arrays.
+# Winner is a regular noclobber file, not a fifo: a fifo read is interrupted
+# by SIGCHLD when the other waiter exits, which dropped blocked escalations.
+race_push_and_file_wait() {  # <backend> <session>
+  local backend=$1 session=$2
+  local race_dir winner_file recfile herdr_rc_file file_rc_file winner fpid hpid
+  local file_rc=1 before after rec rc="" spins=0 poll_whole max_spins
+  local -a race_windows=("${EVENT_WAIT_WINDOWS[@]}")
+  local -a race_paths=("${FILE_EVENT_PATHS[@]}")
+  [ "${#race_windows[@]}" -gt 0 ] || return
+  [ "${#race_paths[@]}" -gt 0 ] || return
+
+  before=$(file_event_sig "${race_paths[@]}")
+  race_dir=$(mktemp -d "${TMPDIR:-/tmp}/fm-file-eventwait.XXXXXX") || {
+    file_event_wait_or_sleep "${race_paths[@]}"
+    return
+  }
+  winner_file="$race_dir/winner"
+  recfile="$race_dir/rec"
+  herdr_rc_file="$race_dir/herdr_rc"
+  file_rc_file="$race_dir/file_rc"
+
+  (
+    fm_file_event_wait "$POLL" "${race_paths[@]}"
+    rc=$?
+    printf '%s\n' "$rc" > "$file_rc_file"
+    if [ "$rc" -eq 0 ]; then
+      set -C
+      { printf 'file\n' > "$winner_file"; } 2>/dev/null || true
+    fi
+  ) &
+  fpid=$!
+  (
+    rec=$(FM_BACKEND_EVENTS_CAPABILITY_CONFIRMED=1 fm_backend_wait_transition \
+      "$backend" "$session" "$POLL" "$STATE" "${race_windows[@]}")
+    rc=$?
+    printf '%s' "$rec" > "$recfile"
+    printf '%s\n' "$rc" > "$herdr_rc_file"
+    set -C
+    { printf 'herdr:%s\n' "$rc" > "$winner_file"; } 2>/dev/null || true
+  ) &
+  hpid=$!
+
+  poll_whole=${POLL%%.*}
+  [[ "$poll_whole" =~ ^[0-9]+$ ]] || poll_whole=0
+  max_spins=$(((poll_whole + 3) * 20))
+  while [ ! -s "$winner_file" ]; do
+    if ! kill -0 "$fpid" 2>/dev/null && ! kill -0 "$hpid" 2>/dev/null; then
+      break
+    fi
+    command sleep 0.05
+    spins=$((spins + 1))
+    [ "$spins" -ge "$max_spins" ] && break
+  done
+  winner=$(cat "$winner_file" 2>/dev/null || true)
+  if [ "$winner" = herdr:2 ]; then
+    wait "$fpid" 2>/dev/null || true
+  else
+    fm_kill_pid_tree "$fpid"
+  fi
+  fm_kill_pid_tree "$hpid"
+  wait "$fpid" 2>/dev/null || true
+  wait "$hpid" 2>/dev/null || true
+  [ -f "$file_rc_file" ] && file_rc=$(cat "$file_rc_file")
+  winner=$(cat "$winner_file" 2>/dev/null || true)
+  rec=$(cat "$recfile" 2>/dev/null || true)
+  if [ -z "$winner" ] && [ -f "$herdr_rc_file" ]; then
+    winner="herdr:$(cat "$herdr_rc_file")"
+  fi
+  rm -rf "$race_dir"
+
+  after=$(file_event_sig "${race_paths[@]}")
+  if [ "$winner" = file ] || [ "$file_rc" -eq 0 ] || [ "$before" != "$after" ]; then
+    expire_check_sweep
+  fi
+  if [ "$winner" = file ]; then
+    return
+  fi
+  case "$winner" in
+    herdr:0|herdr:1)
+      rc=${winner#herdr:}
+      apply_push_wait_result "$backend" "$session" "$rec" "$rc"
+      ;;
+    herdr:2)
+      _event_cap_fails=$((_event_cap_fails + 1))
+      [ "$_event_cap_fails" -ge "$EVENT_CAP_FAIL_MAX" ] && _event_cap_ok=0
+      [ "$file_rc" -eq 2 ] && sleep "$POLL"
       ;;
   esac
 }
