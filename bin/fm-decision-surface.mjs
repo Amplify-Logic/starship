@@ -313,7 +313,7 @@ function renderHtml(manifest) {
     h1,h2,h3,h4,p { overflow-wrap:anywhere; }
     h1 { max-width:800px; margin:.15em 0; padding-bottom:.08em; font-size:clamp(2.5rem,7vw,5.8rem); line-height:1.12; letter-spacing:-.035em; }
     h2 { margin:0; font-size:2rem; line-height:1.2; }
-    h3 { margin:.5rem 0 .2rem; font-size:clamp(1.4rem,3vw,2rem); line-height:1.22; }
+    h3 { margin:.5rem 0 .2rem; font-size:clamp(1.4rem,3vw,2rem); line-height:1.34; padding-bottom:4px; }
     h4 { margin:0 0 .35rem; font-size:.78rem; text-transform:uppercase; letter-spacing:.12em; color:var(--sea); }
     .kicker,.domain-heading p { margin:0; color:var(--gold); text-transform:uppercase; letter-spacing:.18em; font-size:.76rem; font-weight:800; }
     .intro { max-width:760px; color:var(--muted); font-size:1.08rem; }

@@ -90,6 +90,10 @@ if (/https?:\/\//.test(html) || /<link\b[^>]*href=/.test(html) || /<script\b[^>]
 NODE
 pass "generator reconciles every captain hold and renders reason, options, recommendation, and groups"
 
+# A long two-line card title must keep clear separation from the identity element under it.
+assert_grep "h3 { margin:.5rem 0 .2rem; font-size:clamp(1.4rem,3vw,2rem); line-height:1.34; padding-bottom:4px; }" \
+  "$PAGE" "generated stylesheet lost the card heading overlap remedy"
+
 marker=$(node - "$PAGE" "$route_hold" <<'NODE'
 const fs = require("node:fs");
 const [page, holdId] = process.argv.slice(2);
