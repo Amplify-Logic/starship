@@ -15,17 +15,21 @@
 # bin/fm-session-start.sh runs inside its own process is allowed. That is not a
 # hole: session start takes the per-home session lock first, and holding that
 # lock is exactly what gates bootstrap's five mutating sweeps (see the ORDERING
-# header in fm-session-start.sh). The accepted limitation of that boundary is
-# owned by the "Known limitation" section of docs/watcher-continuity.md.
+# header in fm-session-start.sh). The first-run scoping of that boundary is
+# owned by the "Session-start first-run scoping" section of
+# docs/watcher-continuity.md.
 #
 # The deny guidance keeps the two entry points distinct. bin/fm-wake-drain.sh is
 # the action that is always safe mid-session; the once-per-session
-# bin/fm-session-start.sh (AGENTS.md section 3) is named only when this hook
-# process's own ancestry does not already hold the home session lock, so a
-# session that has already run it is never pointed back at an out-of-contract
-# mid-session re-run. That ancestry check (fm_session_lock_in_ancestry, shared
-# with bin/fm-sessionstart-nudge.sh) scopes guidance text only; the allow/deny
-# decision itself is owned entirely by the classifier and is never affected.
+# bin/fm-session-start.sh (AGENTS.md section 3) is both named and allowed only
+# while no live session holds the home session lock. The session-lock relation
+# (fm_session_lock_relation, shared with bin/fm-sessionstart-nudge.sh through
+# fm_session_lock_in_ancestry) is passed to the classifier: a live holder in
+# this hook's own ancestry means session start already ran in this session, a
+# live foreign holder means another session owns the home, and either relation
+# turns a session-start attempt into an ordinary gated fleet command denied
+# with the midsession-session-start guidance below. Only the lock-free relation
+# keeps session start a recovery command, exactly the genuine first run.
 #
 # The turn-end guard remains the final blocking backstop. This gate
 # closes the long-turn gap before another fleet mutation, but does not replace or
@@ -115,7 +119,8 @@ fi
 
 command -v node >/dev/null 2>&1 || exit 0
 [ -f "$POLICY" ] || exit 0
-CLASSIFICATION=$(node "$POLICY" --command "$COMMAND" --root "$FM_ROOT" 2>/dev/null) || exit 0
+LOCK_RELATION=$(fm_session_lock_relation "$STATE") || LOCK_RELATION=free
+CLASSIFICATION=$(node "$POLICY" --command "$COMMAND" --root "$FM_ROOT" --session-lock "$LOCK_RELATION" 2>/dev/null) || exit 0
 case "$CLASSIFICATION" in
   deny*) ;;
   *) exit 0 ;;
@@ -134,9 +139,17 @@ case "$REASON_CODE" in
   unsafe-sentinel)
     REASON="[watcher-continuity] $FM_SUP_OUTAGE_SUMMARY During recovery only the literal bin/fm-supervision-sentinel.sh enable is allowed; arm, disarm, check, and every other host-sentinel invocation stays blocked until supervision is healthy (blocked: $BLOCKED_SCRIPT)"
     ;;
+  midsession-session-start)
+    if [ "$LOCK_RELATION" = ancestry ]; then
+      HOLDER_CLAUSE="This session's own ancestry already holds the home session lock, so the once-per-session bin/fm-session-start.sh has already run here and a mid-session re-run is not a recovery action."
+    else
+      HOLDER_CLAUSE="Another live session holds the home session lock, so the once-per-session bin/fm-session-start.sh belongs to that session and is not a recovery action here."
+    fi
+    REASON="[watcher-continuity] $FM_SUP_OUTAGE_SUMMARY No live watcher holds this home lock. $HOLDER_CLAUSE Drain wakes with bin/fm-wake-drain.sh, the safe mid-session action; use fail-closed bin/fm-teardown.sh for completed tasks when needed, then re-arm with bin/fm-watch-arm.sh as a tracked Claude background task before running other fleet commands (blocked: $BLOCKED_SCRIPT)"
+    ;;
   *)
     SESSION_START_CLAUSE=" run the once-per-session bin/fm-session-start.sh instead only if you have not already run it earlier this session;"
-    fm_session_lock_in_ancestry "$STATE" && SESSION_START_CLAUSE=""
+    [ "$LOCK_RELATION" = free ] || SESSION_START_CLAUSE=""
     REASON="[watcher-continuity] $FM_SUP_OUTAGE_SUMMARY No live watcher holds this home lock. Drain wakes with bin/fm-wake-drain.sh, the safe mid-session action;$SESSION_START_CLAUSE use fail-closed bin/fm-teardown.sh for completed tasks when needed, then re-arm with bin/fm-watch-arm.sh as a tracked Claude background task before running other fleet commands (blocked: $BLOCKED_SCRIPT)"
     ;;
 esac

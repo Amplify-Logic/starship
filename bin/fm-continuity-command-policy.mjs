@@ -8,6 +8,14 @@
 // re-enable) versus every other bin/fm-*.sh command. Unparseable or opaque
 // dynamic commands fail open so this gate can never become a blanket shell block.
 //
+// The session-start allowance is scoped to a genuine first run by the caller's
+// --session-lock relation (bin/fm-primary-scope-lib.sh fm_session_lock_relation):
+// "free" keeps fm-session-start.sh a recovery command, while "ancestry" (this
+// session already acquired the home lock, so session start already ran here)
+// and "foreign" (another live session owns the home) both deny it with the
+// midsession-session-start code. An absent or unrecognized relation is treated
+// as "free" so a caller that predates the flag keeps today's behavior.
+//
 // Classification is lexical: only a statically visible executed command word is
 // matched against RECOVERY_SCRIPTS. A bin/fm-bootstrap.sh command word therefore
 // stays denied wherever it executes, including when it is bundled after
@@ -29,10 +37,12 @@ const RECOVERY_SCRIPTS = new Set([
 ]);
 
 function parseArguments(argv) {
-  const result = { command: "", root: "" };
+  const result = { command: "", root: "", "session-lock": "" };
   for (let index = 0; index < argv.length; index += 1) {
     const name = argv[index];
-    if (name !== "--command" && name !== "--root") throw new Error(`unknown argument: ${name}`);
+    if (name !== "--command" && name !== "--root" && name !== "--session-lock") {
+      throw new Error(`unknown argument: ${name}`);
+    }
     if (index + 1 >= argv.length) throw new Error(`${name} requires a value`);
     result[name.slice(2)] = argv[index + 1];
     index += 1;
@@ -145,21 +155,24 @@ function collectExecutedFleetScripts(command, root, depth = 0) {
   return scripts;
 }
 
-export function classifyContinuityCommand(command, root) {
+export function classifyContinuityCommand(command, root, sessionLock = "free") {
+  const lockHeld = sessionLock === "ancestry" || sessionLock === "foreign";
   const scripts = collectExecutedFleetScripts(command, root);
   const blocked = scripts.find(({ name, unsafeTeardown, unsafeSentinel }) =>
-    !RECOVERY_SCRIPTS.has(name) || unsafeTeardown || unsafeSentinel);
+    !RECOVERY_SCRIPTS.has(name) || unsafeTeardown || unsafeSentinel
+      || (name === "fm-session-start.sh" && lockHeld));
   if (!blocked) return { decision: "allow", script: "" };
   let code = "other-fleet";
   if (blocked.unsafeTeardown) code = "unsafe-teardown";
   else if (blocked.unsafeSentinel) code = "unsafe-sentinel";
+  else if (blocked.name === "fm-session-start.sh") code = "midsession-session-start";
   return { decision: "deny", script: blocked.name, code };
 }
 
 function main() {
   const args = parseArguments(process.argv.slice(2));
   if (!args.command || !args.root) return;
-  const result = classifyContinuityCommand(args.command, args.root);
+  const result = classifyContinuityCommand(args.command, args.root, args["session-lock"]);
   if (result.decision === "deny") process.stdout.write(`deny\t${result.script}\t${result.code}\n`);
 }
 
