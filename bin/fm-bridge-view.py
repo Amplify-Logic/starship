@@ -1794,15 +1794,6 @@ def glance_html(nonce: str) -> str:
   <h1>Starship</h1>
   <form class="logout" method="post" action="/logout"><button type="submit">Log out</button></form>
 </header>
-<p class="meta"><span id="desk">Checking the desk</span> · <span id="mailbox">Mailbox…</span></p>
-<p class="meta" id="observed">Observing…</p>
-<p class="warn">Summary only. Do not approve from this page.</p>
-<h2>Needs you</h2>
-<div id="needs"><p class="empty">Loading…</p></div>
-<h2>Under way</h2>
-<div id="underway"><p class="empty">Loading…</p></div>
-<h2>Waiting</h2>
-<div id="waiting"><p class="empty">Loading…</p></div>
 <h2>Talk</h2>
 <div id="speak-box">
   <label for="hold-speak">Hold to speak</label>
@@ -1818,6 +1809,15 @@ def glance_html(nonce: str) -> str:
 </form>
 <p class="meta" id="photo-count">Photos received today: 0</p>
 <p id="photo-result" class="note"></p>
+<p class="meta"><span id="desk">Checking the desk</span> · <span id="mailbox">Mailbox…</span></p>
+<p class="meta" id="observed">Observing…</p>
+<p class="warn">Summary only. Do not approve from this page.</p>
+<h2>Needs you</h2>
+<div id="needs"><p class="empty">Loading…</p></div>
+<h2>Under way</h2>
+<div id="underway"><p class="empty">Loading…</p></div>
+<h2>Waiting</h2>
+<div id="waiting"><p class="empty">Loading…</p></div>
 <h2>Just finished</h2>
 <div id="finished"><p class="empty">Loading…</p></div>
 </main>

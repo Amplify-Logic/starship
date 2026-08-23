@@ -10,6 +10,7 @@ It is an observation of durable fleet records, not a place to approve, merge, or
 Hold-to-speak is a second voice channel into firstmate; it does not answer Needs-you items from this page.
 Tapping a GitHub pull-request link is the only outbound jump, and those URLs are allowlisted.
 The same authenticated page also accepts photo drops from the captain's phone, including several photos in one picker session, and a hold-to-speak control that forwards audio into the local glasses mailbox.
+Those two controls sit at the top of the authenticated page, above the fleet glance, so they are reachable without scrolling on a phone.
 
 The page is served from the Mac on IPv4 loopback and published on the tailnet with **Tailscale Serve HTTPS**.
 It never uses Tailscale Funnel and never binds `0.0.0.0`.

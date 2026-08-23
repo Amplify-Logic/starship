@@ -331,11 +331,12 @@ import sys
 
 page = pathlib.Path(sys.argv[1]).read_text()
 markers = [
+    '<h2>Talk</h2>',
+    '<h2>Send photos</h2>',
     '<h2>Needs you</h2>',
     '<h2>Under way</h2>',
     '<h2>Waiting</h2>',
-    '<h2>Talk</h2>',
-    '<h2>Send photos</h2>',
+    '<h2>Just finished</h2>',
 ]
 positions = [page.index(marker) for marker in markers]
 if positions != sorted(positions):
