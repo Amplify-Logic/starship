@@ -79,7 +79,11 @@
 # checks before any destructive return. Teardown output notes every wait, retry, and
 # removal so the operator can see what happened.
 # On successful ship/scout cleanup, teardown appends one capability outcome line to
-# data/capability-outcomes.log (bin/fm-capability-lib.sh owns the wire format).
+# data/capability-outcomes.log. green means the task's validation passed on the
+# first try: the outcome is derived from the repo-scoped no-mistakes run records
+# for the task branch (gathered before destructive cleanup), never from the
+# teardown mode, and anything not derivable records unknown. bin/fm-capability-lib.sh
+# owns the wire format and outcome rules.
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -110,6 +114,8 @@ SUB_HOME_MARKER=".fm-secondmate-home"
 . "$SCRIPT_DIR/fm-public-followup-lib.sh"
 # shellcheck source=bin/fm-capability-lib.sh
 . "$SCRIPT_DIR/fm-capability-lib.sh"
+# shellcheck source=bin/fm-timeout-lib.sh
+. "$SCRIPT_DIR/fm-timeout-lib.sh"
 # shellcheck source=bin/fm-worktree-lease-lib.sh
 . "$SCRIPT_DIR/fm-worktree-lease-lib.sh"
 # shellcheck source=bin/fm-secondmate-registry-lib.sh
@@ -156,6 +162,43 @@ HARNESS=$(grep '^harness=' "$META" | cut -d= -f2- || true)
 MODEL=$(grep '^model=' "$META" | cut -d= -f2- || true)
 EFFORT=$(grep '^effort=' "$META" | cut -d= -f2- || true)
 TASK_TYPE=$(grep '^task_type=' "$META" | cut -d= -f2- || true)
+# Capability evidence gathering, best-effort and read-only, BEFORE any
+# destructive step: the task branch from the still-present worktree and the
+# recorded pipeline history from the repo-scoped no-mistakes run table (the
+# same durable record fm-crew-state.sh treats as the coarse run authority;
+# bounded probe via bin/fm-timeout-lib.sh). The worktree is the correct
+# working directory for that repo-scoped query and disappears below. Anything
+# unavailable degrades to outcome=unknown - never guessed, never fatal
+# (bin/fm-capability-lib.sh owns the outcome rules). The bound keeps very long
+# run histories honest-but-bounded: only the newest 200 recorded attempts are
+# considered.
+CAP_OUTCOME=
+CAP_FIX_ROUNDS=
+CAP_STEERS=
+if [ "$KIND" != secondmate ] && [ -n "$HARNESS" ]; then
+  if [ "$FORCE" != "--force" ]; then
+    CAP_OUTCOME=unknown
+  fi
+  CAP_BRANCH=
+  if [ -d "$WT" ]; then
+    CAP_BRANCH=$(git -C "$WT" rev-parse --abbrev-ref HEAD 2>/dev/null || true)
+    case "$CAP_BRANCH" in
+      ''|HEAD) CAP_BRANCH= ;;
+    esac
+  fi
+  if [ -n "$CAP_BRANCH" ] && [ "$FORCE" != "--force" ]; then
+    CAP_RUNS=$( ( cd "$WT" && fm_run_timeout 20 no-mistakes runs --limit 200 ) 2>/dev/null || true )
+    CAP_EVIDENCE=$(fm_capability_outcome_from_runs "$CAP_BRANCH" "$CAP_RUNS")
+    case "$CAP_EVIDENCE" in
+      *\|*)
+        CAP_OUTCOME=${CAP_EVIDENCE%%|*}
+        CAP_FIX_ROUNDS=${CAP_EVIDENCE#*|}
+        case "$CAP_FIX_ROUNDS" in ''|*[!0-9]*) CAP_FIX_ROUNDS= ;; esac
+        ;;
+      *) CAP_OUTCOME=$CAP_EVIDENCE ;;
+    esac
+  fi
+fi
 PUBLIC_FOLLOWUP_HOME=$FM_HOME
 PUBLIC_FOLLOWUP_STATE=$STATE
 PUBLIC_FOLLOWUP_WORK_HOME=main
@@ -1437,9 +1480,17 @@ rm -rf "$STATE/browse/$ID"
 remove_pr_poll_artifacts "$STATE" "$ID" || exit 1
 fm_pending_reply_remove_task "$STATE" "$ID"
 # Record capability evidence before meta disappears (ship/scout only; best-effort).
-fm_capability_record_teardown "$KIND" "$FORCE" "$HARNESS" "$MODEL" "$EFFORT" "$TASK_TYPE"
+# The steer counter is a volatile state file read here and removed below.
+if [ -f "$STATE/$ID.steers" ]; then
+  CAP_STEERS=$(grep -c . "$STATE/$ID.steers" 2>/dev/null || true)
+  case "$CAP_STEERS" in
+    ''|*[!0-9]*) CAP_STEERS= ;;
+  esac
+fi
+fm_capability_record_teardown "$KIND" "$FORCE" "$HARNESS" "$MODEL" "$EFFORT" \
+  "$TASK_TYPE" "$CAP_OUTCOME" "$CAP_FIX_ROUNDS" "$CAP_STEERS"
 remove_captain_held_surfaced_markers "$STATE" "$ID" "$T"
-rm -f "$STATE/$ID.status" "$STATE/$ID.turn-ended" "$STATE/$ID.meta" "$STATE/$ID.pi-ext.ts" "$STATE/$ID.prime-ext.ts" "$STATE/$ID.grok-turnend-token"
+rm -f "$STATE/$ID.status" "$STATE/$ID.turn-ended" "$STATE/$ID.meta" "$STATE/$ID.pi-ext.ts" "$STATE/$ID.prime-ext.ts" "$STATE/$ID.grok-turnend-token" "$STATE/$ID.steers"
 rm -rf "$STATE/$ID.kimi-home" "$STATE/$ID.prime-agent-home"
 "$FM_ROOT/bin/fm-visible-status.sh" --all >/dev/null 2>&1 || true
 if [ "$KIND" != scout ] && [ "$KIND" != secondmate ] && [ "$MODE" != local-only ]; then

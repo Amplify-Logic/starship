@@ -361,6 +361,7 @@ tests/fm-gotmp.test.sh
 tests/fm-toolchain-drift.test.sh
 tests/fm-sessionstart-nudge.test.sh
 tests/fm-operational-input.test.sh
+tests/fm-send-steer-count.test.sh
 tests/fm-project-presentation.test.sh
 tests/fm-bearings-skill.test.sh
 tests/fm-kimi-worker.test.sh

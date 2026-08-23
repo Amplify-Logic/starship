@@ -310,24 +310,31 @@ Secondmate homes inherit this file from the primary, so a secondmate's own crewm
 ## Capability outcome log (data/capability-outcomes.log)
 
 Firstmate records how each harness/model/effort combination performs per task type so dispatch can consult recent evidence without replacing cost rules.
-`bin/fm-capability-lib.sh` owns the wire format, the 7-day recency window, ranking, and the advisory scout-tax suggestion.
-`bin/fm-teardown.sh` appends one line on successful ship or scout cleanup (not secondmate), and `bin/fm-dispatch-select.sh --task-type <slug>` surfaces the window for that slug.
+`bin/fm-capability-lib.sh` owns the wire format, the outcome rules, the 7-day recency window, ranking, and the advisory scout-tax suggestion.
+`bin/fm-teardown.sh` appends one line on ship or scout cleanup (not secondmate), and `bin/fm-dispatch-select.sh --task-type <slug>` surfaces the window for that slug.
 The log is a captain-inspectable plain-text file under the home's private `data/`; there is no new runtime dependency.
 
 Each append-only line is:
 
 ```text
-<unix-epoch>|<task-type>|<harness>|<model>|<effort>|<outcome>
+<unix-epoch>|<task-type>|<harness>|<model>|<effort>|<outcome>[|<fix-rounds>[|<steers>]]
 ```
 
-`outcome` is `green` for a normal landed teardown or `discarded` for `--force`.
+`outcome` is derived from the task's recorded validation result at teardown, never from the teardown mode.
+`green` means validation passed on the first try: exactly one pipeline attempt is recorded for the task branch.
+`fixed` means validation passed only after earlier recorded attempts, and its `fix-rounds` field counts those earlier attempts.
+`failed` means validation ran but its newest recorded attempt never completed.
+`unknown` means no validation result was derivable (scout reports, direct-PR or local-only delivery, or unavailable run records).
+`discarded` records an approved `--force` teardown.
+The trailing counts are written only when derivable: `steers` counts confirmed supervisor sends recorded per task by `bin/fm-send.sh`, and an empty `fix-rounds` slot is retained when only `steers` is known.
+Older six-field lines without trailing counts stay valid, and readers treat missing counts as absent rather than guessing them.
 `task-type` comes from meta `task_type=` when `fm-spawn.sh --task-type <slug>` recorded it, otherwise from `kind` (`ship` or `scout`).
 Fields never contain `|` or newlines.
 
 Cost rules in `config/crew-dispatch.json` always win: evidence only ranks or advises within the already cost-filtered `use` array and never bypasses the third-party-model guard.
 With `--task-type`, dispatch-select prints `CAPABILITY_EVIDENCE:` lines on stderr for firstmate.
 About 10% of those dispatches may also print one `CAPABILITY_SCOUT_TAX:` suggestion naming a different allowed profile; that suggestion is advisory and never changes the selected stdout profile.
-`select: capability-recent` makes ranking choose the best recent green density inside the allowed array; a sampled profile outranks an earlier unsampled one only when density is greater than 0, and absent or all-zero evidence keeps configured input order.
+`select: capability-recent` makes ranking choose the best recent green density inside the allowed array, where green strictly means first-try passes; a sampled profile outranks an earlier unsampled one only when density is greater than 0, and absent or all-zero evidence keeps configured input order.
 Overrides for tests and ops live under Environment variables (`FM_CAPABILITY_*`).
 
 ## Toolchain

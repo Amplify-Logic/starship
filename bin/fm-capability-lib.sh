@@ -6,9 +6,25 @@
 # This header owns the wire format and selection contracts:
 #   - Log path: $FM_HOME/data/capability-outcomes.log (override: FM_CAPABILITY_LOG).
 #   - One append-only line per finished ship/scout teardown:
-#       <unix-epoch>|<task-type>|<harness>|<model>|<effort>|<outcome>
+#       <unix-epoch>|<task-type>|<harness>|<model>|<effort>|<outcome>[|<fix-rounds>[|<steers>]]
 #     Fields never contain '|' or newlines; invalid fields refuse the append.
-#   - Outcomes: green (normal landed teardown) or discarded (--force).
+#     The trailing counts are written only when derivable, each as one
+#     non-negative integer: fix-rounds is the number of earlier recorded
+#     pipeline attempts for the task's branch before its final attempt, and
+#     steers is the confirmed supervisor send count from state/<id>.steers.
+#     An absent fix-rounds count retains an empty field when steers is present;
+#     otherwise absent trailing counts are omitted, never guessed. Older
+#     six-field lines without them stay valid forever.
+#   - Outcomes (green means exactly what it claims):
+#       green     validation passed on the first recorded pipeline attempt
+#                 (fix-rounds 0)
+#       fixed     validation passed only after earlier recorded attempts
+#       failed    validation ran but its newest recorded attempt never
+#                 completed
+#       unknown   no validation result was derivable at teardown (scout
+#                 reports, direct-PR/local-only delivery, or unavailable run
+#                 records)
+#       discarded work was discarded by an approved --force teardown
 #   - Secondmate teardowns are not recorded (not a worker capability sample).
 #   - task-type is a free-form slug from meta task_type= when present, else kind
 #     (ship|scout). Firstmate should pass a stable slug at spawn for finer bins.
@@ -17,9 +33,10 @@
 #     cost-filtered profile set; this lib never invents a harness outside it and
 #     never bypasses third-party-model / crew-dispatch guards.
 #   - select=capability-recent ranks allowed profiles by green density
-#     (green / (green+discarded)) in the window; a sampled profile outranks an
-#     earlier unsampled one only when density > 0; all-zero or absent evidence
-#     keeps input (configured) order; no samples for a task-type keep the first.
+#     (first-try greens / all samples) in the window; a sampled profile
+#     outranks an earlier unsampled one only when density > 0; all-zero or
+#     absent evidence keeps input (configured) order; no samples for a
+#     task-type keep the first.
 #   - Scout tax (~10%): advisory CAPABILITY_SCOUT_TAX stderr suggestion of a
 #     different allowed profile; never changes the selected stdout profile.
 #     FM_CAPABILITY_SCOUT_TAX=0 disables; =1 forces; otherwise a roll
@@ -68,45 +85,102 @@ fm_capability_field_ok() {
 }
 
 # Append one outcome line. Args: task-type harness model effort outcome
+#   [fix-rounds] [steers]
+# Each count is optional: a non-empty value must be a non-negative integer.
+# An empty fix-rounds value retains its positional field when steers is present.
 # Best-effort: creates data/ as needed; returns non-zero on invalid fields or
 # write failure but never blocks teardown callers that ignore the status.
 fm_capability_log_append() {
   local task_type=$1 harness=$2 model=$3 effort=$4 outcome=$5
-  local log_path ts dir
+  local fix_rounds=${6:-} steers=${7:-}
+  local log_path ts dir line
   case "$outcome" in
-    green|discarded) ;;
+    green|fixed|failed|unknown|discarded) ;;
     *) return 1 ;;
   esac
   fm_capability_field_ok "$task_type" || return 1
   fm_capability_field_ok "$harness" || return 1
   fm_capability_field_ok "$model" || return 1
   fm_capability_field_ok "$effort" || return 1
+  case "$fix_rounds" in
+    '') ;;
+    *[!0-9]*) return 1 ;;
+  esac
+  case "$steers" in
+    '') ;;
+    *[!0-9]*) return 1 ;;
+  esac
   log_path=$(fm_capability_log_path)
   dir=$(dirname "$log_path")
   mkdir -p "$dir" || return 1
   ts=$(fm_capability_now)
   fm_capability_field_ok "$ts" || return 1
-  printf '%s|%s|%s|%s|%s|%s\n' "$ts" "$task_type" "$harness" "$model" "$effort" "$outcome" >> "$log_path"
+  line="$ts|$task_type|$harness|$model|$effort|$outcome"
+  case "$fix_rounds:$steers" in :) ;; *) line="$line|$fix_rounds" ;; esac
+  case "$steers" in '') ;; *) line="$line|$steers" ;; esac
+  printf '%s\n' "$line" >> "$log_path"
 }
 
-# Record teardown evidence from already-loaded meta fields.
-# Args: kind force_flag harness model effort [task_type]
-# force_flag is "--force" or empty. No-ops for secondmate and missing harness.
+# Derive the teardown capability outcome from captured `no-mistakes runs` text.
+# Args: branch runs-output (empty when unavailable). Rows are newest-first,
+# whitespace-separated: <status> <branch> <sha> <date> <time> [url]; only
+# completed/failed/cancelled rows for the branch are samples. Prints
+# "<outcome>|<fix-rounds>" where fix-rounds is empty when not derivable:
+#   - no row for the branch            -> unknown|      (never guessed)
+#   - newest attempt completed, first  -> green|0       (first try)
+#   - newest attempt completed, later  -> fixed|<earlier-attempt-count>
+#   - newest attempt not completed     -> failed|
+fm_capability_outcome_from_runs() {
+  local branch=$1 runs=$2
+  [ -n "$branch" ] || { printf 'unknown|\n'; return 0; }
+  printf '%s\n' "$runs" | awk -v want="$branch" '
+    ($1 == "completed" || $1 == "failed" || $1 == "cancelled") && $2 == want {
+      if (seen != 1) { first = $1; seen = 1 }
+      total++
+    }
+    END {
+      if (total == 0) { printf "unknown|\n"; exit }
+      if (first == "completed") {
+        if (total == 1) { printf "green|0\n" }
+        else { printf "fixed|%d\n", total - 1 }
+      } else {
+        printf "failed|\n"
+      }
+    }
+  '
+}
+
+# Record teardown evidence from already-loaded meta fields plus the derived
+# validation outcome. Args: kind force_flag harness model effort task_type
+#   outcome fix_rounds steers
+# force_flag is "--force" or empty: a forced discard always records discarded
+# without counts, whatever was derived. outcome must be one of the wire
+# outcomes whenever recording happens (the caller derives it from recorded
+# validation evidence); fix_rounds/steers are numeric strings or empty.
+# Unreadable or missing inputs skip the record rather than guess. No-ops for
+# secondmate and missing harness, and this function never fails its caller.
 fm_capability_record_teardown() {
   local kind=$1 force=$2 harness=$3 model=$4 effort=$5 task_type=${6:-}
-  local outcome
+  local outcome=${7:-} fix_rounds=${8:-} steers=${9:-}
   [ "$kind" = secondmate ] && return 0
   [ -n "$harness" ] || return 0
+  if [ "$force" = "--force" ]; then
+    outcome=discarded
+    fix_rounds=
+    steers=
+  fi
+  case "$outcome" in
+    green|fixed|failed|unknown|discarded) ;;
+    *) return 0 ;;
+  esac
+  case "$fix_rounds" in ''|*[!0-9]*) fix_rounds= ;; esac
+  case "$steers" in ''|*[!0-9]*) steers= ;; esac
   [ -n "$model" ] || model=default
   [ -n "$effort" ] || effort=default
   [ -n "$task_type" ] || task_type=$kind
   [ -n "$task_type" ] || task_type=ship
-  if [ "$force" = "--force" ]; then
-    outcome=discarded
-  else
-    outcome=green
-  fi
-  fm_capability_log_append "$task_type" "$harness" "$model" "$effort" "$outcome" || true
+  fm_capability_log_append "$task_type" "$harness" "$model" "$effort" \
+    "$outcome" "$fix_rounds" "$steers" || true
 }
 
 # Print recent matching lines for a task-type (stdout), one wire line each.
@@ -127,7 +201,9 @@ fm_capability_recent_lines() {
 # Summarize green density per harness|model|effort for a task-type.
 # Prints lines: <harness>|<model>|<effort>|<green>|<total>|<density_percent>
 # sorted by density desc, then total desc, then key asc. Density is integer
-# percent (green*100/total). Args: task-type
+# percent (green*100/total); green counts first-try passes only, while fixed,
+# failed, unknown, and discarded samples still count toward total.
+# Args: task-type
 fm_capability_summarize() {
   local task_type=$1
   fm_capability_recent_lines "$task_type" | awk -F'|' '

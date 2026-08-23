@@ -59,19 +59,106 @@ test_summarize_green_density() {
 
 test_record_teardown_outcomes() {
   rm -f "$FM_CAPABILITY_LOG"
-  fm_capability_record_teardown ship '' cursor grok medium bugfix
-  fm_capability_record_teardown ship --force cursor grok medium bugfix
-  fm_capability_record_teardown secondmate '' claude sonnet high ''
+  # Truegreen contract: the caller derives the outcome from recorded validation
+  # evidence; counts ride along only when derivable.
+  fm_capability_record_teardown ship '' cursor grok medium bugfix green 0 3
+  fm_capability_record_teardown ship '' cursor grok medium bugfix fixed 2 ''
+  fm_capability_record_teardown ship '' cursor grok medium bugfix failed '' 1
+  fm_capability_record_teardown scout '' claude sonnet high report unknown '' ''
+  fm_capability_record_teardown ship --force cursor grok medium bugfix green 0 3
+  fm_capability_record_teardown secondmate '' claude sonnet high '' unknown '' ''
   local body
   body=$(cat "$FM_CAPABILITY_LOG")
-  assert_contains "$body" '|bugfix|cursor|grok|medium|green' \
-    "normal teardown should log green with task_type"
-  assert_contains "$body" '|bugfix|cursor|grok|medium|discarded' \
-    "force teardown should log discarded"
+  assert_contains "$body" '|bugfix|cursor|grok|medium|green|0|3' \
+    "first-try pass should log green with both counts"
+  assert_contains "$body" '|bugfix|cursor|grok|medium|fixed|2' \
+    "pass after fix rounds should log fixed with its fix-round count"
+  assert_contains "$body" '|bugfix|cursor|grok|medium|failed||1' \
+    "a steer-only record should retain the empty fix-rounds slot"
   case "$body" in
-    *secondmate*|*'|claude|'*) fail "secondmate teardown must not write capability lines" ;;
+    *'|fixed|2|'*) fail "a fix-round-only record must omit the absent steer slot: $body" ;;
   esac
-  pass "teardown recorder writes green/discarded and skips secondmate"
+  assert_contains "$body" '|report|claude|sonnet|high|unknown' \
+    "underivable validation should log unknown without counts"
+  assert_contains "$body" '|bugfix|cursor|grok|medium|discarded' \
+    "force teardown should still log discarded"
+  local discarded_line
+  discarded_line=$(grep discarded "$FM_CAPABILITY_LOG")
+  case "$discarded_line" in
+    *'|discarded|0|3') fail "force teardown must not carry derived counts: $discarded_line" ;;
+  esac
+  case "$body" in
+    *secondmate*|*'|claude|sonnet|high|green'*) fail "secondmate teardown must not write capability lines" ;;
+  esac
+  pass "teardown recorder writes derived outcomes with optional counts and skips secondmate"
+}
+
+test_outcome_derivation_from_runs_rows() {
+  local got runs
+  # Rows are newest-first, matching `no-mistakes runs` output exactly.
+  runs='  completed    fm/task-x1 c301eb14  2026-08-20 17:12  https://github.com/example/repo/pull/9'
+  got=$(fm_capability_outcome_from_runs fm/task-x1 "$runs")
+  [ "$got" = 'green|0' ] || fail "single completed attempt should be green|0, got: $got"
+
+  runs='  completed    fm/task-x1 c301eb14  2026-08-20 17:12  https://github.com/example/repo/pull/9
+  failed       fm/task-x1 d7bf67d7  2026-08-14 03:37'
+  got=$(fm_capability_outcome_from_runs fm/task-x1 "$runs")
+  [ "$got" = 'fixed|1' ] || fail "completed after one earlier attempt should be fixed|1, got: $got"
+
+  runs='  completed    fm/task-x1 c301eb14  2026-08-20 17:12
+  failed       fm/task-x1 d7bf67d7  2026-08-14 03:37
+  cancelled    fm/task-x1 365e7449  2026-08-12 01:12
+  cancelled    fm/other-task 99e19551  2026-08-11 21:58
+  (171 more runs, use --limit to see more)'
+  got=$(fm_capability_outcome_from_runs fm/task-x1 "$runs")
+  [ "$got" = 'fixed|2' ] || fail "other branches and footer rows must be ignored, got: $got"
+
+  runs='  cancelled    fm/task-x1 365e7449  2026-08-12 01:12
+  failed       fm/task-x1 d7bf67d7  2026-08-14 03:37'
+  got=$(fm_capability_outcome_from_runs fm/task-x1 "$runs")
+  [ "$got" = 'failed|' ] || fail "no completed attempt should be failed, got: $got"
+
+  got=$(fm_capability_outcome_from_runs fm/task-x1 '')
+  [ "$got" = 'unknown|' ] || fail "empty run records must be unknown, got: $got"
+  got=$(fm_capability_outcome_from_runs '' '  completed fm/task-x1 a b c')
+  [ "$got" = 'unknown|' ] || fail "missing branch must be unknown, got: $got"
+  got=$(fm_capability_outcome_from_runs fm/task-x1 '  completed    fm/other x 2026-08-20 17:12')
+  [ "$got" = 'unknown|' ] || fail "unmatched branch must be unknown, got: $got"
+  pass "run-table derivation yields first-try green, fixed, failed, or unknown"
+}
+
+test_reader_handles_old_and_new_lines() {
+  rm -f "$FM_CAPABILITY_LOG"
+  FM_CAPABILITY_NOW=1700000000
+  # Old six-field wire format written by pre-truegreen teardowns, alongside
+  # new seven- and eight-field lines.
+  printf '%s\n' \
+    '1699999000|legacy|claude|sonnet|high|green' \
+    '1699999100|truegreen|claude|sonnet|high|green|0|4' \
+    '1699999200|truegreen|claude|sonnet|high|fixed|2' \
+    >> "$FM_CAPABILITY_LOG"
+
+  local recent summary out
+  recent=$(fm_capability_recent_lines truegreen)
+  assert_contains "$recent" '|claude|sonnet|high|green|0|4' \
+    "reader should return new eight-field lines intact"
+  summary=$(fm_capability_summarize truegreen)
+  assert_contains "$summary" 'claude|sonnet|high|1|2|50' \
+    "density must count only first-try greens over all samples"
+  summary=$(fm_capability_summarize legacy)
+  assert_contains "$summary" 'claude|sonnet|high|1|1|100' \
+    "old six-field lines must still parse and rank"
+
+  local profiles
+  profiles='[{"harness":"codex","model":"gpt-5.5","effort":"high"},{"harness":"claude","model":"sonnet","effort":"high"}]'
+  fm_capability_log_append truegreen codex gpt-5.5 high green 0 0
+  out=$(FM_CAPABILITY_SCOUT_TAX=0 "$ROOT/bin/fm-dispatch-select.sh" \
+    --select capability-recent \
+    --task-type truegreen \
+    "$profiles" 2>/dev/null)
+  [ "$out" = '{"harness":"codex","model":"gpt-5.5","effort":"high"}' ] \
+    || fail "capability-recent should rank on true greens across mixed-format lines, got: $out"
+  pass "reader handles old and new wire lines side by side"
 }
 
 test_capability_recent_select_and_scout_tax_advisory() {
@@ -174,6 +261,8 @@ test_reject_pipe_in_fields() {
 test_log_append_and_recent_window
 test_summarize_green_density
 test_record_teardown_outcomes
+test_outcome_derivation_from_runs_rows
+test_reader_handles_old_and_new_lines
 test_capability_recent_select_and_scout_tax_advisory
 test_first_profile_unchanged_without_capability_select
 test_zero_green_sampled_does_not_beat_earlier_untried

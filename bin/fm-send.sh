@@ -40,6 +40,12 @@
 # footer appears, so an immediate peek would otherwise see the stale idle pane.
 # The pause is fm-send-only; the shared submit core (used by the away-mode daemon,
 # which only needs "submitted") does not pay it, and the --key path is unaffected.
+#
+# Every confirmed text submit to a task-selector target appends one line to
+# state/<id>.steers, the per-task supervisor steer counter that teardown reads
+# for the capability outcome log and removes with the rest of the volatile
+# state. Best-effort only; explicit backend targets and the --key path never
+# write it.
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -292,6 +298,12 @@ else
       exit 1
       ;;
   esac
+  # Confirmed submit: record one steer line for task-selector targets so
+  # teardown can report how many supervisor sends the task received. The file
+  # lives with the task's other volatile state and is never read elsewhere.
+  if [ -n "$TARGET_SELECTOR" ]; then
+    printf 'steer\n' >> "$STATE/$(fm_send_id_from_meta "$TARGET_META").steers" 2>/dev/null || true
+  fi
   if [ -n "$PENDING_REPLY_CORR" ]; then
     if fm_pending_reply_confirm_delivery "$STATE" "$PENDING_REPLY_CORR"; then
       :

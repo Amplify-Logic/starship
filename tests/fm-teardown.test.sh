@@ -498,13 +498,31 @@ SH
 }
 
 # Run teardown with PATH mocking. Args: case_dir [extra args...]
+# FM_CAPABILITY_LOG is redirected into the case dir so capability outcome lines
+# land under test observation instead of any real home's data/ directory.
 run_teardown() {
   local case_dir=$1; shift
   FM_ROOT_OVERRIDE="$ROOT" \
   FM_STATE_OVERRIDE="$case_dir/state" \
   FM_CONFIG_OVERRIDE="$case_dir/config" \
+  FM_CAPABILITY_LOG="$case_dir/state/capability-outcomes.log" \
   PATH="$case_dir/fakebin:$PATH" \
     "$TEARDOWN" task-x1 "$@"
+}
+
+# Add a fake no-mistakes CLI whose `runs` subcommand prints the given rows file.
+# Anything else exits 0 silently. Args: case_dir rows_file
+add_no_mistakes_runs_fake() {
+  local case_dir=$1 rows=$2
+  cat > "$case_dir/fakebin/no-mistakes" <<SH
+#!/usr/bin/env bash
+if [ "\${1:-}" = runs ]; then
+  cat '$rows' 2>/dev/null || true
+  exit 0
+fi
+exit 0
+SH
+  chmod +x "$case_dir/fakebin/no-mistakes"
 }
 
 test_local_only_fork_remote_allows() {
@@ -682,6 +700,168 @@ test_no_mistakes_origin_remote_allows() {
   grep -F 'blockers are gone and date is due' "$case_dir/stdout" >/dev/null \
     || fail "nm-origin: teardown manual prompt did not preserve date-gate check"
   pass "no-mistakes worktree with HEAD on origin is torn down (no regression)"
+}
+
+# Add capability-recording meta keys to the task meta. Args: case_dir
+add_capability_meta() {
+  local case_dir=$1
+  printf '%s\n' \
+    'harness=claude' \
+    'model=sonnet' \
+    'effort=high' \
+    'task_type=truegreen-e2e' >> "$case_dir/state/task-x1.meta"
+}
+
+test_teardown_records_truegreen_capability_line() {
+  local case_dir rc rows log_line
+  case_dir=$(make_case truegreen)
+  write_meta "$case_dir" no-mistakes ship
+  add_capability_meta "$case_dir"
+  wt_commit "$case_dir" "shippable work"
+  git -C "$case_dir/wt" push -q origin fm/task-x1
+  git -C "$case_dir/project" fetch -q origin
+  # Exactly one recorded pipeline attempt for this branch: first-try green.
+  rows="$case_dir/rows.txt"
+  printf '%s\n' \
+    '  completed    fm/task-x1 c301eb14  2026-08-20 17:12  https://github.com/example/repo/pull/9' \
+    > "$rows"
+  add_no_mistakes_runs_fake "$case_dir" "$rows"
+  printf 'steer\nsteer\nsteer\n' > "$case_dir/state/task-x1.steers"
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "truegreen: teardown should succeed for landed work"
+  log_line=$(grep -F '|truegreen-e2e|claude|sonnet|high|' "$case_dir/state/capability-outcomes.log")
+  case "$log_line" in
+    *'|green|0|3') : ;;
+    *) fail "first-try pass must record green with fix-rounds 0 and steer count 3, got: $log_line" ;;
+  esac
+  [ ! -e "$case_dir/state/task-x1.steers" ] \
+    || fail "teardown must remove the volatile steer counter file"
+  pass "teardown derives first-try green from recorded runs and consumes the steer counter"
+}
+
+test_teardown_records_fixed_after_fix_rounds_not_green() {
+  local case_dir rc rows body
+  case_dir=$(make_case fixed-green)
+  write_meta "$case_dir" no-mistakes ship
+  add_capability_meta "$case_dir"
+  wt_commit "$case_dir" "shippable work"
+  git -C "$case_dir/wt" push -q origin fm/task-x1
+  git -C "$case_dir/project" fetch -q origin
+  # A failed attempt before the completing one: landed, but NOT first try.
+  rows="$case_dir/rows.txt"
+  printf '%s\n' \
+    '  completed    fm/task-x1 c301eb14  2026-08-20 17:12' \
+    '  failed       fm/task-x1 d7bf67d7  2026-08-14 03:37' \
+    '  cancelled    fm/other-task 99e19551  2026-08-11 21:58' \
+    > "$rows"
+  add_no_mistakes_runs_fake "$case_dir" "$rows"
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "fixed-green: teardown should succeed for landed work"
+  body=$(cat "$case_dir/state/capability-outcomes.log")
+  case "$body" in
+    *'|fixed|1') : ;;
+    *) fail "landed-after-fix-rounds must record fixed|1, got: $body" ;;
+  esac
+  case "$body" in
+    *'|green'*) fail "a late pass must never be recorded green: $body" ;;
+  esac
+  pass "teardown records fixed after fix rounds and keeps green first-try only"
+}
+
+test_teardown_records_failed_when_validation_never_completed() {
+  local case_dir rc rows body
+  case_dir=$(make_case failed-cap)
+  write_meta "$case_dir" no-mistakes ship
+  add_capability_meta "$case_dir"
+  wt_commit "$case_dir" "shippable work"
+  git -C "$case_dir/wt" push -q origin fm/task-x1
+  git -C "$case_dir/project" fetch -q origin
+  rows="$case_dir/rows.txt"
+  printf '%s\n' \
+    '  cancelled    fm/task-x1 365e7449  2026-08-12 01:12' \
+    '  failed       fm/task-x1 d7bf67d7  2026-08-14 03:37' \
+    > "$rows"
+  add_no_mistakes_runs_fake "$case_dir" "$rows"
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "failed-cap: teardown should succeed for landed work"
+  body=$(cat "$case_dir/state/capability-outcomes.log")
+  case "$body" in
+    *'|failed'*) : ;;
+    *) fail "never-completed validation must record failed, got: $body" ;;
+  esac
+  case "$body" in
+    *'|green'*|*'|fixed'*) fail "failed validation must not read as success: $body" ;;
+  esac
+  pass "teardown records failed when no pipeline attempt completed"
+}
+
+test_teardown_records_unknown_without_run_records() {
+  local case_dir rc body
+  case_dir=$(make_case unknown-cap)
+  write_meta "$case_dir" no-mistakes ship
+  add_capability_meta "$case_dir"
+  wt_commit "$case_dir" "shippable work"
+  git -C "$case_dir/wt" push -q origin fm/task-x1
+  git -C "$case_dir/project" fetch -q origin
+  # The fake CLI answers runs with nothing at all: unavailable evidence.
+  rows="$case_dir/rows.txt"
+  : > "$rows"
+  add_no_mistakes_runs_fake "$case_dir" "$rows"
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "unknown-cap: teardown should succeed for landed work"
+  body=$(cat "$case_dir/state/capability-outcomes.log")
+  case "$body" in
+    *'|unknown'*) : ;;
+    *) fail "missing run records must record unknown rather than guess, got: $body" ;;
+  esac
+  case "$body" in
+    *'|green'*) fail "absent evidence must never be recorded green: $body" ;;
+  esac
+  pass "teardown records unknown when validation evidence is absent"
+}
+
+test_teardown_records_unknown_without_branch_name() {
+  local case_dir rc body
+  case_dir=$(make_case unknown-detached-cap)
+  write_meta "$case_dir" no-mistakes ship
+  add_capability_meta "$case_dir"
+  wt_commit "$case_dir" "shippable detached work"
+  git -C "$case_dir/wt" push -q origin fm/task-x1
+  git -C "$case_dir/project" fetch -q origin
+  git -C "$case_dir/wt" checkout -q --detach
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "unknown-detached-cap: teardown should succeed for landed work"
+  body=$(cat "$case_dir/state/capability-outcomes.log")
+  case "$body" in
+    *'|truegreen-e2e|claude|sonnet|high|unknown') : ;;
+    *) fail "an unavailable branch name must record unknown, got: $body" ;;
+  esac
+  pass "teardown records unknown when the branch name is unavailable"
 }
 
 test_no_mistakes_truly_unpushed_refuses() {
@@ -1411,6 +1591,11 @@ test_teardown_manual_backend_prompts_hand_edit_even_when_tasks_axi_present
 test_local_only_truly_unpushed_refuses
 test_local_only_merged_to_local_main_allows
 test_no_mistakes_origin_remote_allows
+test_teardown_records_truegreen_capability_line
+test_teardown_records_fixed_after_fix_rounds_not_green
+test_teardown_records_failed_when_validation_never_completed
+test_teardown_records_unknown_without_run_records
+test_teardown_records_unknown_without_branch_name
 test_no_mistakes_truly_unpushed_refuses
 test_local_only_force_overrides_unpushed
 test_herdr_teardown_clears_escalation_marker
