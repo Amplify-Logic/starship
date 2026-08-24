@@ -111,8 +111,67 @@ fm_same_path() {
   [ "$canon_a" = "$canon_b" ]
 }
 
+# The watcher's terminal-delivery ledger. Before releasing its singleton lock
+# after printing an actionable reason, the watcher records that reason here with
+# its PID and process identity, so an arm that ATTACHED to the cycle (and holds
+# no handle on the watcher's stdout) can still report a delivered wake instead
+# of a false typed failure. Paths are defined once here because the watcher
+# publishes records and the arm reads them; both source this library.
+FM_WATCH_DELIVERY_PID=
+FM_WATCH_DELIVERY_IDENTITY=
+WATCH_DELIVERY_LOG="$STATE/.watch-deliveries.log"
+WATCH_DELIVERY_LOCK="$STATE/.watch-deliveries.lock"
+WATCH_DELIVERY_MAX_BYTES=${FM_WATCH_DELIVERY_MAX_BYTES:-65536}
+WATCH_DELIVERY_KEEP_LINES=${FM_WATCH_DELIVERY_KEEP_LINES:-64}
+case "$WATCH_DELIVERY_MAX_BYTES" in ''|*[!0-9]*|0) WATCH_DELIVERY_MAX_BYTES=65536 ;; esac
+case "$WATCH_DELIVERY_KEEP_LINES" in ''|*[!0-9]*|0) WATCH_DELIVERY_KEEP_LINES=64 ;; esac
+
+watch_delivery_clean_identity() {
+  printf '%s' "$1" | tr '\t\r\n' '   '
+}
+
+watch_delivery_clean_reason() {
+  printf '%s' "$1" | tr '\t\r\n' '   ' | cut -c1-4096
+}
+
+# Publish one delivery record under the bounded ledger lock. Best-effort: a
+# full lock, a logging failure, or a rotation hiccup never blocks the wake.
+watch_delivery_publish() {
+  local reason=$1 i size tmp raw
+  [ -n "$FM_WATCH_DELIVERY_PID" ] || return 0
+  [ -n "$FM_WATCH_DELIVERY_IDENTITY" ] || return 0
+  i=0
+  while ! fm_lock_try_acquire "$WATCH_DELIVERY_LOCK"; do
+    [ "$i" -lt 20 ] || return 0
+    sleep 0.02
+    i=$((i + 1))
+  done
+  printf '%s\t%s\t%s\n' \
+    "$FM_WATCH_DELIVERY_PID" \
+    "$(watch_delivery_clean_identity "$FM_WATCH_DELIVERY_IDENTITY")" \
+    "$(watch_delivery_clean_reason "$reason")" >> "$WATCH_DELIVERY_LOG" 2>/dev/null || true
+  size=$(wc -c < "$WATCH_DELIVERY_LOG" 2>/dev/null | tr -d '[:space:]')
+  case "$size" in
+    ''|*[!0-9]*) ;;
+    *)
+      if [ "$size" -ge "$WATCH_DELIVERY_MAX_BYTES" ]; then
+        tmp="$WATCH_DELIVERY_LOG.tmp.$FM_WATCH_DELIVERY_PID"
+        raw="$tmp.raw"
+        tail -n "$WATCH_DELIVERY_KEEP_LINES" "$WATCH_DELIVERY_LOG" 2>/dev/null \
+          | tail -c "$WATCH_DELIVERY_MAX_BYTES" > "$raw" 2>/dev/null \
+          && awk 'NR > 1 || /^[0-9]+\t/' "$raw" > "$tmp" 2>/dev/null \
+          && mv -f "$tmp" "$WATCH_DELIVERY_LOG" 2>/dev/null
+        rm -f "$tmp" "$raw" 2>/dev/null || true
+      fi
+      ;;
+  esac
+  fm_lock_release "$WATCH_DELIVERY_LOCK"
+}
+
+FM_WATCHER_MATCHED_IDENTITY=
 fm_watcher_lock_matches_pid() {
   local state=$1 watch_path=$2 pid=$3 home=${4:-$FM_HOME} lockdir lock_home lock_path lock_identity current_identity
+  FM_WATCHER_MATCHED_IDENTITY=
   lockdir="$state/.watch.lock"
   lock_home=$(cat "$lockdir/fm-home" 2>/dev/null || true)
   lock_path=$(cat "$lockdir/watcher-path" 2>/dev/null || true)
@@ -121,22 +180,103 @@ fm_watcher_lock_matches_pid() {
   fm_same_path "$lock_path" "$watch_path" || return 1
   [ -n "$lock_identity" ] || return 1
   current_identity=$(fm_pid_identity "$pid") || return 1
-  [ "$current_identity" = "$lock_identity" ]
+  [ "$current_identity" = "$lock_identity" ] || return 1
+  FM_WATCHER_MATCHED_IDENTITY=$lock_identity
 }
 
 FM_WATCHER_HEALTHY_PID=
+FM_WATCHER_HEALTHY_IDENTITY=
 fm_watcher_healthy() {
-  local state=$1 watch_path=$2 grace=${3:-${FM_GUARD_GRACE:-300}} home=${4:-$FM_HOME} lockdir beat pid age
+  local state=$1 watch_path=$2 grace=${3:-${FM_GUARD_GRACE:-300}} home=${4:-$FM_HOME} lockdir beat pid identity age
   FM_WATCHER_HEALTHY_PID=
+  FM_WATCHER_HEALTHY_IDENTITY=
   lockdir="$state/.watch.lock"
   beat="$state/.last-watcher-beat"
   pid=$(cat "$lockdir/pid" 2>/dev/null || true)
   fm_pid_alive "$pid" || return 1
   fm_watcher_lock_matches_pid "$state" "$watch_path" "$pid" "$home" || return 1
+  identity=$FM_WATCHER_MATCHED_IDENTITY
   age=$(fm_path_age "$beat")
   [ "$age" -lt "$grace" ] || return 1
   # shellcheck disable=SC2034 # Read by callers after fm_watcher_healthy returns.
   FM_WATCHER_HEALTHY_PID=$pid
+  # shellcheck disable=SC2034 # Read by callers after fm_watcher_healthy returns.
+  FM_WATCHER_HEALTHY_IDENTITY=$identity
+  return 0
+}
+
+# fm_watcher_healthy above is the PID-STRICT primitive: true only when a live,
+# identity-matched watcher PROCESS holds this home's lock with a fresh beacon.
+# The arm layer (bin/fm-watch-arm.sh) needs exactly that - it decides whether to
+# start, attach to, or replace a real watcher process, so a leftover beacon must
+# never satisfy it. bin/fm-turnend-guard.sh also keeps this strict check because
+# it fires at the turn boundary. The pull warning (bin/fm-guard.sh) fires
+# mid-turn, so it asks a model-aware question instead:
+
+# fm_supervision_model
+# Print the supervision model of this home's PRIMARY harness:
+#   autoarm     a between-turns arm owner re-arms at each turn end and the
+#               watcher exits on its wake, so it runs only BETWEEN turns;
+#               mid-turn a fresh beacon with no live watcher is healthy.
+#   persistent  the watcher runs as a tracked live process, so a live
+#               identity-matched pid is the real liveness signal.
+# FM_SUPERVISION_MODEL overrides detection (tests, and callers that already know
+# the harness). Otherwise bin/fm-harness.sh is the single detection owner.
+# This fork currently runs a persistent model for EVERY harness, Claude
+# included: its Claude continuity uses tracked background arms, not a Stop-hook
+# auto-arm, so detection maps claude to persistent here.
+fm_supervision_model() {
+  local harness
+  case "${FM_SUPERVISION_MODEL:-}" in
+    autoarm|persistent) printf '%s\n' "$FM_SUPERVISION_MODEL"; return 0 ;;
+  esac
+  harness=$("$FM_WAKE_LIB_DIR/fm-harness.sh" 2>/dev/null || printf unknown)
+  case "$harness" in
+    claude) printf 'persistent\n' ;;
+    *) printf 'persistent\n' ;;
+  esac
+}
+
+# fm_watcher_supervision_verdict <state> <watch-path> [grace] [home]
+# Model-aware "is supervision healthy right now" verdict for the pull warning
+# guard (bin/fm-guard.sh), NOT the arm layer or the turn-end guard. Sets:
+#   FM_WATCHER_VERDICT_OK      true when supervision is healthy for this model
+#   FM_WATCHER_VERDICT_REASON  when not ok, the true failing condition:
+#                              no-watcher   - a live watcher process is the real
+#                                             signal for this model but none holds
+#                                             the lock (the beacon is still fresh)
+#                              stale-beacon - the beacon is stale beyond grace or
+#                                             absent (a genuine supervision lapse)
+# autoarm: a fresh beacon within grace is healthy even with no live watcher,
+# because the watcher only runs between turns; only a stale beacon is a lapse.
+# persistent: require a live identity-matched watcher with a fresh beacon
+# (fm_watcher_healthy); a fresh leftover beacon with no live watcher is still down.
+# shellcheck disable=SC2034 # Read by callers after the function returns.
+FM_WATCHER_VERDICT_OK=false
+# shellcheck disable=SC2034 # Read by callers after the function returns.
+FM_WATCHER_VERDICT_REASON=stale-beacon
+fm_watcher_supervision_verdict() {
+  local state=$1 watch=$2 grace=${3:-${FM_GUARD_GRACE:-300}} home=${4:-$FM_HOME}
+  local beat age fresh=false
+  FM_WATCHER_VERDICT_OK=false
+  FM_WATCHER_VERDICT_REASON=stale-beacon
+  beat="$state/.last-watcher-beat"
+  age=$(fm_path_age "$beat")
+  case "$age" in
+    ''|*[!0-9]*) ;;
+    *) [ "$age" -lt "$grace" ] && fresh=true ;;
+  esac
+  if [ "$(fm_supervision_model)" = autoarm ]; then
+    [ "$fresh" = true ] && FM_WATCHER_VERDICT_OK=true
+    return 0
+  fi
+  if fm_watcher_healthy "$state" "$watch" "$grace" "$home"; then
+    # shellcheck disable=SC2034 # Read by callers after the function returns.
+    FM_WATCHER_VERDICT_OK=true
+  elif [ "$fresh" = true ]; then
+    # shellcheck disable=SC2034 # Read by callers after the function returns.
+    FM_WATCHER_VERDICT_REASON=no-watcher
+  fi
   return 0
 }
 

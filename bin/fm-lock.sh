@@ -3,6 +3,15 @@
 # Writes the harness (agent) process PID found by walking the shell's ancestry,
 # which lives as long as the firstmate session - unlike the transient subshell
 # PID of any one tool call, which is dead moments after it is written.
+# The written PID is the OUTERMOST pid of this session's contiguous harness
+# ancestry: a Claude hook several levels down its nested worker chain is reaped
+# moments after it returns, so only the topmost pid of the run reliably lives as
+# long as the session. Harness identity is read from executable-path components
+# and argv[0] as well as command basenames, because version-named per-session
+# install layouts identify nothing by basename alone (see
+# bin/fm-primary-scope-lib.sh, the single owner of that evidence).
+# A live lock held by a pid inside THIS session's own ancestry is recognized as
+# this session's own earlier acquisition and kept, never refused or rewritten.
 # Usage: fm-lock.sh              acquire; exit 1 if another live session holds it
 #        fm-lock.sh status       print holder and liveness; always exits 0
 #        fm-lock.sh release-stale
@@ -21,21 +30,7 @@ mkdir -p "$STATE"
 source "$SCRIPT_DIR/fm-primary-scope-lib.sh"
 
 harness_pid() {
-  local pid=$$ comm args
-  for _ in 1 2 3 4 5 6 7 8; do
-    comm=$(ps -o comm= -p "$pid" 2>/dev/null) || return 1
-    args=$(ps -o args= -p "$pid" 2>/dev/null)
-    if printf '%s' "$(basename -- "$comm")" | grep -qE "$FM_HARNESS_RE"; then
-      echo "$pid"; return 0
-    fi
-    # Bare interpreter (e.g. node): match the harness name in its script path.
-    case "$comm" in
-      *node*|*python*) printf '%s' "$args" | grep -qE "$FM_HARNESS_RE" && { echo "$pid"; return 0; } ;;
-    esac
-    pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')
-    [ -n "$pid" ] && [ "$pid" -gt 1 ] || return 1
-  done
-  return 1
+  fm_harness_ancestry_pid
 }
 
 if [ "${1:-}" = "status" ]; then
@@ -69,6 +64,12 @@ me=$(harness_pid) || { echo "error: cannot locate harness process in ancestry" >
 if [ -f "$LOCK" ]; then
   old=$(cat "$LOCK")
   if [ "$old" != "$me" ] && fm_harness_holder_alive "$old"; then
+    if fm_harness_ancestry_contains "$old"; then
+      # This session's own earlier acquisition, recorded from a different depth
+      # of the same harness run: recognize it as ours and keep its record.
+      echo "lock acquired: harness pid $old"
+      exit 0
+    fi
     echo "error: another live firstmate session holds the lock (pid $old); operate read-only until resolved" >&2
     exit 1
   fi

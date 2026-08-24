@@ -14,6 +14,11 @@ set -u
 CHECK="$ROOT/bin/fm-arm-pretool-check.sh"
 POLICY="$ROOT/bin/fm-arm-command-policy.mjs"
 
+# The matrix validates commands against THIS repo root: absolute x-mode source
+# paths are blessed only when they sit under the active home, so pin the home
+# to the root explicitly instead of relying on an unset ambient FM_HOME.
+export FM_HOME="$ROOT"
+
 # --- full cross-harness acceptance matrix ----------------------------------
 
 MATRIX_IDS=()

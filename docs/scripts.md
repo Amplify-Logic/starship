@@ -45,7 +45,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-test-run.sh`         | Behavior-test runner: selection, portable lanes, proven-isolated `--jobs`, coverage guard, timing/JSON |
 | `fm-test-isolation-proof.sh` | Phase 2 concurrent isolation proof and proven-isolated candidate set owner |
 | `fm-ensure-agents-md.sh` | Ensure a project's real `AGENTS.md`, its `CLAUDE.md` symlink, and the canonical self-governance section |
-| `fm-guard.sh`            | Warn on primary-checkout tangles, pending queued wakes, and stale watcher liveness   |
+| `fm-guard.sh`            | Warn on primary-checkout tangles, pending queued wakes, and unhealthy supervision    |
 | `fm-primary-scope-lib.sh` | Shared primary-home and session-lock-ancestry predicates for tracked hooks           |
 | `fm-turnend-guard.sh`    | Shared primary turn-end guard predicate so no turn ends blind (docs/turnend-guard.md) |
 | `fm-turnend-guard-grok.sh` | Grok Stop-hook adapter for the primary turn-end guard                              |
@@ -95,7 +95,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-upstream-lib.sh`     | Read-only fork upstream-drift detection, ledger-subtracted so the count falls as batches land (`UPSTREAM:`) |
 | `fm-toolchain-lib.sh`    | Read-only runtime version-drift detection against `docs/toolchain-manifest.tsv`, fail-open (`TOOLCHAIN_DRIFT:`) |
 | `fm-timeout-lib.sh`      | Shared portable wall-clock timeout for bounded read-only probes                      |
-| `fm-supervision-lib.sh`  | Shared in-flight-work-without-fresh-watcher-beacon predicate                         |
+| `fm-supervision-lib.sh`  | Shared in-flight supervision status and canonical outage-summary helpers             |
 | `fm-ff-lib.sh`           | Shared guarded fast-forward helper for origin pulls and local secondmate syncs       |
 | `fm-secondmate-registry-lib.sh` | Shared `data/secondmates.md` record parser and strict/scoped binding validator |
 | `fm-path-lib.sh`         | Shared normalization of relative durable directory inputs to absolute paths          |
@@ -103,7 +103,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-config-inherit-lib.sh` | Shared primary-to-secondmate inherited local-material propagation and config-reread delivery |
 | `fm-startup-memory-budget-lib.sh` | Safe startup-memory budget parsing, publication, and estimation primitives    |
 | `fm-tasks-axi-lib.sh`    | Shared backlog-backend selector and `tasks-axi` compatibility probe                  |
-| `fm-wake-drain.sh`       | Atomically drain queued watcher wakes, emit bounded best-effort status-event annotations, then assert watcher liveness |
+| `fm-wake-drain.sh`       | Atomically drain queued watcher wakes, emit bounded best-effort status-event annotations, then assert supervision health |
 | `fm-wake-lib.sh`         | Shared durable wake queue, portable locks, and watcher identity/health helpers       |
 | `fm-classify-lib.sh`     | Shared captain-relevant and declared-wait wake classification vocabulary, plus the declared-pause recheck cadence and shared-blocker grouping fold |
 | `fm-send.sh`             | Send one verified literal line or supported key through the target's recorded backend |

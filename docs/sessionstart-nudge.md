@@ -12,7 +12,8 @@ It shares `bin/fm-primary-scope-lib.sh` with `bin/fm-turnend-guard.sh`, so the t
 The Shared Predicate section of `docs/turnend-guard.md` remains authoritative for marker validation, plain-checkout detection, and the required firstmate-shaped paths.
 
 Before printing, the wrapper calls `fm_session_lock_in_ancestry()` from that shared lib, which reads `state/.lock` and walks at most eight parents from its own pid, matching `bin/fm-lock.sh` and Pi's `lockOwnership()` ancestry depth.
-If the lock names a live pid in that ancestry, session-start already ran in this harness session and the wrapper stays silent.
+The shared predicate recognizes harness identity from command basenames, exact executable-path or `argv[0]` components, and interpreter script arguments, then limits ownership to the current session's contiguous verified-harness ancestry.
+If the lock names the current process or a live holder in that ancestry, session-start already ran in this harness session and the wrapper stays silent.
 The underlying lock relation has one owner because a second consumer relies on the same answer: the Claude continuity PreToolUse gate uses it to classify session-start attempts and scope its deny guidance ([`watcher-continuity.md`](watcher-continuity.md)).
 Every path exits 0, including malformed state and adapter errors, because Claude SessionStart exit 2 blocks session initialization.
 

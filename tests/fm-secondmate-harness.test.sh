@@ -752,7 +752,6 @@ new_world() {
   local name=$1 dispatch_ignore=${2:-yes} w
   w="$TMP_ROOT/$name"
   mkdir -p "$w/home/state" "$w/home/data" "$w/home/config"
-  touch "$w/home/state/.last-watcher-beat"
   git init -q -b main "$w/main"
   {
     printf 'projects/\nstate/\ndata/\n.no-mistakes/\n'
@@ -766,6 +765,21 @@ new_world() {
   git -C "$w/main" add -A
   git -C "$w/main" commit -qm c1
   printf '%s\n' "$w"
+}
+
+# Record the suite shell as the home's genuinely live watcher holder, exactly as
+# the real singleton writes it, so the guard's identity-matched health
+# predicate sees a healthy watcher in fixtures that assert silent stderr.
+record_live_watcher_fixture() {
+  local home=$1 identity
+  identity=$(FM_STATE_OVERRIDE="$home/state" bash -c '. "$1"; fm_pid_identity "$2"' _ \
+    "$ROOT/bin/fm-wake-lib.sh" "$$") || fail "could not identify the live watcher fixture"
+  mkdir "$home/state/.watch.lock"
+  printf '%s\n' "$$" > "$home/state/.watch.lock/pid"
+  printf '%s\n' "$home" > "$home/state/.watch.lock/fm-home"
+  printf '%s\n' "$ROOT/bin/fm-watch.sh" > "$home/state/.watch.lock/watcher-path"
+  printf '%s\n' "$identity" > "$home/state/.watch.lock/pid-identity"
+  touch "$home/state/.last-watcher-beat"
 }
 
 # A live secondmate home as a DETACHED worktree of the primary at <commit>, with
@@ -1142,6 +1156,7 @@ test_config_push_propagates_reports_without_ff_or_nudge() {
   printf '{"default":{"harness":"codex"}}\n' > "$w/home/config/crew-dispatch.json"
   printf 'codex\n' > "$w/home/config/crew-harness"
   printf 'manual\n' > "$w/home/config/backlog-backend"
+  record_live_watcher_fixture "$w/home"
   err="$w/config-push-basic.err"
   log="$w/config-push-basic.tmux.log"
   out=$(run_config_push "$w" "$log" 2>"$err"); status=$?
@@ -1317,6 +1332,7 @@ test_config_reread_per_home_changed_sets_and_exact_bytes() {
     printf '%s\n' "shared secret preference body that must never appear in a config reread"
   } > "$w/home/data/captain-shared.md"
 
+  record_live_watcher_fixture "$w/home"
   log="$w/config-reread-per-home.tmux.log"
   err="$w/config-reread-per-home.err"
   out=$(run_config_push "$w" "$log" 2>"$err"); status=$?

@@ -100,10 +100,21 @@ test_missing_state_is_silent() {
 }
 
 test_owned_lock_is_silent() {
-  local root="$TMP_ROOT/already-ran"
+  local root="$TMP_ROOT/already-ran" fakebin out status=0
   make_primary "$root"
-  printf '%s\n' "$$" > "$root/state/.lock"
-  expect_silent_zero "owned lock nudge" run_nudge "$root"
+  fakebin=$(fm_fakebin "$root")
+  ln -s /bin/bash "$fakebin/claude"
+  # The lock is held by a live harness-named session process and the nudge runs
+  # as that session's own child, exactly as a mid-session rerun would.
+  # shellcheck disable=SC2016 # single quotes are deliberate: FM vars come from the environment
+  out=$(PATH="$fakebin:$PATH" NUDGE="$NUDGE" \
+    FM_GATE_REFUSE_BYPASS=0 FM_ROOT_OVERRIDE="$root" FM_HOME="$root" \
+    claude -c '
+      printf "%s\n" "$$" > "$FM_HOME/state/.lock"
+      "$NUDGE"
+    ' 2>&1) || status=$?
+  expect_code 0 "$status" "owned lock nudge must exit 0"
+  [ -z "$out" ] || fail "owned lock nudge must be silent, got: $out"
   pass "fm-sessionstart-nudge: a lock holder in process ancestry is already run"
 }
 

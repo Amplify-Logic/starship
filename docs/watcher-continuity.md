@@ -42,13 +42,13 @@ Neither hook forks a notifier, backgrounds notifier work, or waits on external-c
 
 The session-start allowance is scoped to a genuinely first invocation, closing the previously documented mid-session re-run gap.
 `bin/fm-lock.sh` treats a recorded holder PID equal to the current harness PID as a successful re-acquire, so before this scoping a mid-session re-run of `bin/fm-session-start.sh` also passed this gate, re-acquired the lock, and ran bootstrap's five mutating sweeps - including the secondmate liveness sweep's `fm_backend_kill` plus respawn recovery action, which `bin/fm-bootstrap.sh` scopes to "session start (reboot/restart) only".
-The gate now passes the shared session-lock relation (`fm_session_lock_relation()` in `bin/fm-primary-scope-lib.sh`, the same ancestry walk `bin/fm-sessionstart-nudge.sh` consumes through `fm_session_lock_in_ancestry()`) into `bin/fm-continuity-command-policy.mjs`.
+The gate now passes the shared session-lock relation (`fm_session_lock_relation()` in `bin/fm-primary-scope-lib.sh`, the same harness-identity and contiguous-ancestry predicate `bin/fm-sessionstart-nudge.sh` consumes through `fm_session_lock_in_ancestry()`) into `bin/fm-continuity-command-policy.mjs`.
 A lock-free home - no lock file, an unreadable or non-numeric holder, or a dead holder - keeps `bin/fm-session-start.sh` a recovery command, exactly the genuine first run including crash recovery over a stale lock.
-A live holder inside the hook's own ancestry means this session already ran session start, and a live holder outside it means another session owns the home; either way the attempt is denied with the canonical outage summary, and the deny guidance for other fleet commands stops naming the once-per-session entry point.
+A live holder matching the current process or its contiguous verified-harness ancestry means this session already ran session start, and a live harness holder outside it means another session owns the home; either way the attempt is denied with the canonical outage summary, and the deny guidance for other fleet commands stops naming the once-per-session entry point.
 The wake-drain, watcher-arm, ordinary literal teardown, and exact sentinel-enable allowances are independent of session-lock ownership and unchanged.
 
 The scoping is a gate over one harness's Bash tool calls, not the mutation authority itself: the session lock remains what actually gates bootstrap's mutating sweeps, and "run session-start exactly once per session" remains a behavioral contract owned by AGENTS.md section 3.
-The relation inherits the ancestry walk's own bounds - at most eight parents, matching `bin/fm-lock.sh` - and any unproven ownership of a live lock resolves to the foreign relation, which denies rather than allows.
+The relation inherits the ancestry walk's own bounds - at most eight parents, matching `bin/fm-lock.sh` - and recognizes version-named harness executables through exact path components or `argv[0]` while refusing to cross a non-harness gap into an unrelated ancestor session.
 
 ## Host-level outage sentinel
 
@@ -109,8 +109,11 @@ The launchd transport itself is covered by an opt-in real-`launchctl` smoke rath
 
 `bin/fm-watch-arm.sh` never returns a clean empty success.
 An actionable child output returns that reason normally.
-A zero/empty child return rechecks the home lock and beacon, attaches to a verified healthy successor when one exists, or emits `watcher: FAILED - cycle ended without an actionable reason` and exits nonzero.
-An attached arm follows verified identity-matched successors and reports the same typed failure if that chain ends without one.
+A zero/empty child return rechecks the home lock and beacon, attaches to a verified healthy successor when one exists, or resolves the close against the watcher's bounded terminal-delivery ledger.
+An attached arm follows verified identity-matched successors and resolves the same way when that chain ends without one, because it holds no handle on the watcher's stdout and cannot read the reason line itself.
+Before releasing its singleton lock after printing an actionable reason, the watcher records that reason with its PID and process identity in `state/.watch-deliveries.log`.
+A matching PID and identity lets an attached arm report the delivered reason and exit zero even after the durable wake queue was drained, while an unrelated queue producer or a recycled PID cannot satisfy the match.
+Only a cycle with no matching delivery record emits `watcher: FAILED - cycle ended without an actionable reason` and exits nonzero.
 
 A freshly started watcher runs the non-executing PR check migration before it can take the lock or beat, so a full sweep sits inside the confirmation window and publishes its own `state/.pr-check-migration.progress.<pid>` record.
 While that sweep is provably running the arm extends the window by `FM_ARM_MIGRATION_GRACE` instead of stopping its own healthy child, and a sweep that outlasts even the extension fails with `watcher: FAILED - PR check migration still running pid=<N>, watcher not confirmed yet` rather than the generic missing-beacon wording.

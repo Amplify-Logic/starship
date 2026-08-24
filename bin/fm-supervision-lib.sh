@@ -3,11 +3,14 @@
 # Usage: . bin/fm-supervision-lib.sh
 #
 # True exactly when a firstmate home has in-flight work (a state/<id>.meta
-# exists) but no watcher has a fresh liveness beacon (state/.last-watcher-beat,
-# touched every poll cycle, within the grace window). bin/fm-guard.sh uses this
-# grace-based warning predicate directly; bin/fm-turnend-guard.sh uses the status
-# fields here for its banner but performs its end-of-turn block decision with the
-# live watcher lock check in bin/fm-wake-lib.sh.
+# exists) but supervision is not healthy for the home's model. bin/fm-turnend-
+# guard.sh uses the PID-strict fm_watcher_healthy from bin/fm-wake-lib.sh for
+# its block decision. bin/fm-guard.sh uses the model-aware
+# fm_watcher_supervision_verdict (also in bin/fm-wake-lib.sh): under a
+# between-turns arm-owner model a fresh beacon with no live watcher is healthy,
+# while persistent-watcher models - this fork's default for every harness -
+# still require a live identity-matched watcher. The status fields here retain
+# the beacon-age details used in their messages.
 
 # Portable mtime; Linux stat lacks -f, macOS stat lacks -c.
 fm_sup_stat_mtime() {

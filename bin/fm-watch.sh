@@ -320,12 +320,20 @@ recorded_windows() {
 # Exit reporting a wake. Consecutive heartbeats with no other wake in between
 # mean an idle fleet, so the heartbeat interval backs off exponentially
 # (base * 2^streak, capped at HEARTBEAT_MAX); any real wake resets the cadence.
+# Before exiting, the reason is published to the terminal-delivery ledger
+# (bin/fm-wake-lib.sh) bound to this watcher's PID and process identity, so an
+# arm that attached to this cycle can report the delivered wake after the fact.
+# Signals are ignored during the print-and-publish window so a delivery record
+# is never truncated mid-write by the teardown traps.
 wake() {
   case "$1" in
     heartbeat*) echo $(( $(cat "$STATE/.heartbeat-streak" 2>/dev/null || echo 0) + 1 )) > "$STATE/.heartbeat-streak" ;;
     *) echo 0 > "$STATE/.heartbeat-streak" ;;
   esac
-  echo "$1"
+  trap '' HUP INT TERM
+  if echo "$1"; then
+    watch_delivery_publish "$1" || true
+  fi
   exit 0
 }
 
@@ -1183,7 +1191,9 @@ trap 'exit 1' HUP INT TERM
 WATCHER_PID=${BASHPID:-$$}
 printf '%s\n' "$FM_HOME" > "$WATCH_LOCK/fm-home" || true
 printf '%s\n' "$WATCH_PATH" > "$WATCH_LOCK/watcher-path" || true
-fm_pid_identity "$WATCHER_PID" > "$WATCH_LOCK/pid-identity" 2>/dev/null || true
+FM_WATCH_DELIVERY_PID=$WATCHER_PID
+FM_WATCH_DELIVERY_IDENTITY=$(fm_pid_identity "$WATCHER_PID" 2>/dev/null || true)
+printf '%s\n' "$FM_WATCH_DELIVERY_IDENTITY" > "$WATCH_LOCK/pid-identity" 2>/dev/null || true
 
 [ -e "$STATE/.last-heartbeat" ] || touch "$STATE/.last-heartbeat"
 

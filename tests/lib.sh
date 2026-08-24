@@ -38,6 +38,23 @@ export FM_GATE_REFUSE_BYPASS=1
 # The sentinel's own suite overrides this and uses a fake launchctl transport.
 export FM_SUPERVISION_SENTINEL_MODE=off
 
+# Supervision tests are hermetic by construction: no spawned watcher, arm,
+# daemon, or lock script may ever resolve a REAL firstmate home, even when the
+# invoking environment is itself a live firstmate lane that exports FM_HOME.
+# Every production entry point prefers an inherited FM_HOME over its
+# script-relative root, so one leaked value would silently rebind a fixture
+# watcher onto the primary home's state - stealing its watch lock, touching its
+# beat, and letting a fixture --restart TERM the real fleet watcher. Drop every
+# inherited operational-home variable at source time; suites that need one set
+# it explicitly AFTER sourcing this library, which is how every current suite
+# already works. The regression owner for this guarantee is
+# tests/fm-supervision-test-isolation.test.sh.
+FM_TEST_OPERATIONAL_ENV="FM_HOME FM_ROOT_OVERRIDE FM_STATE_OVERRIDE FM_WAKE_QUEUE FM_WAKE_QUEUE_LOCK"
+for _fm_test_var in $FM_TEST_OPERATIONAL_ENV; do
+  unset "$_fm_test_var" || true
+done
+unset _fm_test_var
+
 # Drop the agent-up wait's inter-poll pacing for the suite. fm-spawn waits for a
 # real agent to own the endpoint after launch, and a fake tmux or herdr reports a
 # liveness answer the shared owner cannot attribute, so every fixture spawn pays
@@ -75,8 +92,138 @@ pass() {
 
 FM_TEST_CLEANUP_DIRS=()
 
+# Hermetic operational home for EVERY suite. Combined with the inherited-env
+# unset above, a spawned watcher, arm, daemon, or lock script that omits
+# FM_STATE_OVERRIDE still resolves every FM_HOME-derived path into this suite's
+# own temp tree - never into a real firstmate home. A suite that needs a
+# different fixture home sets FM_HOME itself AFTER sourcing this library.
+# tests/fm-supervision-test-isolation.test.sh owns the regression coverage.
+FM_TEST_HERMETIC_HOME=$(mktemp -d "${TMPDIR:-/tmp}/fm-hermetic-home.XXXXXX")
+mkdir -p "$FM_TEST_HERMETIC_HOME/state"
+if [ "${#FM_TEST_CLEANUP_DIRS[@]}" -eq 0 ]; then
+  trap fm_test_cleanup EXIT
+fi
+FM_TEST_CLEANUP_DIRS+=("$FM_TEST_HERMETIC_HOME")
+FM_TEST_CLEANUP_REGISTRY="$FM_TEST_HERMETIC_HOME/cleanup-dirs"
+: > "$FM_TEST_CLEANUP_REGISTRY"
+export FM_HOME="$FM_TEST_HERMETIC_HOME"
+
+# Watchers, arms, and daemons spawned by a suite are tracked here and reaped by
+# the EXIT cleanup, so an ordinary suite exit can never leak a supervision
+# process that outlives its fixture. Tracking is cheap and idempotent; a pid
+# that already exited is skipped.
+FM_TEST_CHILD_PIDS=()
+
+# fm_test_track_pid <pid>: register a background child for cleanup reaping.
+fm_test_track_pid() {
+  local pid=$1
+  case "$pid" in
+    ''|*[!0-9]*) return 0 ;;
+  esac
+  FM_TEST_CHILD_PIDS+=("$pid")
+}
+
+# Print this shell's whole live descendant subtree, innermost generation last.
+# Scoped strictly to the calling test process's own tree: no command-name
+# patterns are ever matched, so a sibling firstmate home running the same
+# scripts can never be touched by a suite's teardown.
+fm_test_descendant_pids() {  # <pid>
+  local parent=$1 kid
+  for kid in $(pgrep -P "$parent" 2>/dev/null || true); do
+    case "$kid" in
+      ''|*[!0-9]*) continue ;;
+    esac
+    printf '%s\n' "$kid"
+    fm_test_descendant_pids "$kid"
+  done
+}
+
+# True when pid $1's command line references a path inside THIS repo worktree
+# or one of this suite's registered temp dirs. This is the ONLY kill authority
+# in test teardown: a descendant that fails the check - the primary home's own
+# live supervision among them, which shares every script name we use - is left
+# strictly alone.
+fm_test_pid_is_path_scoped() {  # <pid>
+  local pid=$1 cmd dir
+  [ -n "$pid" ] || return 1
+  cmd=$(LC_ALL=C ps -o command= -p "$pid" 2>/dev/null) || return 1
+  [ -n "$cmd" ] || return 1
+  case "$cmd" in
+    *"$ROOT"/*) return 0 ;;
+  esac
+  for dir in "${FM_TEST_CLEANUP_DIRS[@]:-}"; do
+    [ -n "$dir" ] || continue
+    case "$cmd" in
+      *"$dir"/*) return 0 ;;
+    esac
+  done
+  while IFS= read -r dir; do
+    [ -n "$dir" ] || continue
+    case "$cmd" in
+      *"$dir"/*) return 0 ;;
+    esac
+  done < "$FM_TEST_CLEANUP_REGISTRY"
+  return 1
+}
+
+fm_test_kill_scoped() {  # <-TERM|-KILL> <pid>...
+  local signal=$1 pid
+  shift
+  for pid in "$@"; do
+    [ -n "$pid" ] || continue
+    kill -0 "$pid" 2>/dev/null || continue
+    fm_test_pid_is_path_scoped "$pid" || continue
+    kill "$signal" "$pid" 2>/dev/null || true
+  done
+}
+
+# Stop every supervision process this suite spawned so no watcher, arm, or
+# daemon outlives its fixture. Candidates come from tracked pids and the
+# suite's own descendant tree, but EVERY kill is gated on fm_test_pid_is_path_
+# scoped: only processes whose command path lies inside this worktree or a
+# registered fixture temp dir are ever signalled. TERM first with a bounded
+# grace, then KILL whatever remains.
+fm_test_reap_children() {
+  local pid i alive
+  for pid in "${FM_TEST_CHILD_PIDS[@]:-}"; do
+    [ -n "$pid" ] || continue
+    fm_test_kill_scoped -TERM "$pid"
+  done
+  while IFS= read -r pid; do
+    [ -n "$pid" ] || continue
+    fm_test_kill_scoped -TERM "$pid"
+  done <<EOF
+$(fm_test_descendant_pids "${BASHPID:-$$}")
+EOF
+  i=0
+  while [ "$i" -lt 30 ]; do
+    alive=0
+    for pid in "${FM_TEST_CHILD_PIDS[@]:-}"; do
+      [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && alive=1
+    done
+    [ "$alive" -eq 1 ] || break
+    sleep 0.1
+    i=$((i + 1))
+  done
+  for pid in "${FM_TEST_CHILD_PIDS[@]:-}"; do
+    [ -n "$pid" ] || continue
+    fm_test_kill_scoped -KILL "$pid"
+  done
+  while IFS= read -r pid; do
+    [ -n "$pid" ] || continue
+    fm_test_kill_scoped -KILL "$pid"
+  done <<EOF
+$(fm_test_descendant_pids "${BASHPID:-$$}")
+EOF
+  return 0
+}
+
 fm_test_cleanup() {
   local d
+  fm_test_reap_children
+  while IFS= read -r d; do
+    [ -n "$d" ] && rm -rf "$d"
+  done < "$FM_TEST_CLEANUP_REGISTRY"
   for d in "${FM_TEST_CLEANUP_DIRS[@]:-}"; do
     [ -n "$d" ] && rm -rf "$d"
   done
@@ -89,6 +236,9 @@ fm_test_tmproot() {
     trap fm_test_cleanup EXIT
   fi
   FM_TEST_CLEANUP_DIRS+=("$root")
+  printf '%s\n' "$root" >> "$FM_TEST_CLEANUP_REGISTRY"
+  # shellcheck disable=SC2034 # Read by the caller after the registration.
+  FM_TEST_LAST_TMPROOT=$root
   printf '%s\n' "$root"
 }
 
