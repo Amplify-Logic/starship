@@ -136,7 +136,7 @@ family_for_basename() {
     fm-daemon.test.sh|fm-guard-stale-banner.test.sh|fm-pi-watch-extension.test.sh|\
     fm-file-eventwait.test.sh|fm-session-lock-ancestry.test.sh|\
     fm-supervision-events.test.sh|fm-supervision-sentinel.test.sh|fm-supervision-test-isolation.test.sh|fm-turnend-guard.test.sh|fm-wake-daemon-lifecycle-e2e.test.sh|\
-    fm-wake-queue.test.sh|fm-watch-arm.test.sh|fm-watch-checkpoint.test.sh|fm-watch-triage.test.sh|\
+    fm-wake-queue.test.sh|fm-watch-arm.test.sh|fm-watch-caffeinate.test.sh|fm-watch-checkpoint.test.sh|fm-watch-triage.test.sh|\
     fm-watcher-lock.test.sh)
       printf '%s\n' watcher-wake-lock
       ;;
@@ -355,6 +355,7 @@ tests/fm-update.test.sh
 tests/fm-afk-return.test.sh
 tests/fm-present.test.sh
 tests/fm-supervision-events.test.sh
+tests/fm-watch-caffeinate.test.sh
 tests/fm-file-eventwait.test.sh
 tests/fm-read.test.sh
 tests/fm-test-isolation-proof.test.sh

@@ -53,6 +53,9 @@
 # For normal supervision, resume the session-start primary-harness protocol
 # after each printed reason. Direct duplicate invocations of this script still
 # no-op through the watcher singleton lock.
+# On macOS the lock-owning process holds `caffeinate -ims -w <pid>` for its
+# whole lifetime so the machine cannot sleep between per-run assertions; a
+# non-owner never starts one, and the child dies with the watcher.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -1136,6 +1139,30 @@ handle_push_transition() {  # <backend> <session> <record>
   wake "$reason"
 }
 
+# Hold a macOS sleep assertion for this lock-owning watcher process.
+# Spawns `caffeinate -ims -w <pid>` as a child so the assertion dies with the
+# watcher and does not pile up across successor chains. No-op when caffeinate
+# is missing or the host is not Darwin. Idempotent inside one process, and
+# safe to re-call each poll cycle so a dead child is respawned.
+watch_hold_sleep_assertion() {  # <watcher-pid>
+  local target_pid=${1:-${BASHPID:-$$}}
+  [ "$(uname)" = Darwin ] || return 0
+  command -v caffeinate >/dev/null 2>&1 || return 0
+  if [ -n "${FM_WATCH_CAFFEINATE_PID:-}" ] && kill -0 "$FM_WATCH_CAFFEINATE_PID" 2>/dev/null; then
+    return 0
+  fi
+  caffeinate -ims -w "$target_pid" >/dev/null 2>&1 &
+  FM_WATCH_CAFFEINATE_PID=$!
+}
+
+watch_release_sleep_assertion() {
+  local pid=${FM_WATCH_CAFFEINATE_PID:-}
+  FM_WATCH_CAFFEINATE_PID=
+  [ -n "$pid" ] || return 0
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+}
+
 # --- Main entry: the runtime below runs only when this file is executed as a
 # script. When sourced (unit tests loading the functions above), return here
 # before acquiring the singleton lock or entering the blocking loop.
@@ -1181,6 +1208,7 @@ watcher_cleanup() {
   fm_active_check_stop || return 1
   fm_check_output_cleanup
   fm_custom_check_snapshot_cleanup
+  watch_release_sleep_assertion
   fm_lock_release "$WATCH_LOCK"
 }
 trap watcher_cleanup EXIT
@@ -1189,6 +1217,8 @@ trap 'exit 1' HUP INT TERM
 # ${BASHPID:-$$} from this same main shell). Read directly, never via a command
 # substitution, so it matches the stored holder pid for the self-eviction check.
 WATCHER_PID=${BASHPID:-$$}
+FM_WATCH_CAFFEINATE_PID=
+watch_hold_sleep_assertion "$WATCHER_PID"
 printf '%s\n' "$FM_HOME" > "$WATCH_LOCK/fm-home" || true
 printf '%s\n' "$WATCH_PATH" > "$WATCH_LOCK/watcher-path" || true
 FM_WATCH_DELIVERY_PID=$WATCHER_PID
@@ -1207,6 +1237,7 @@ while :; do
   if [ "$(cat "$WATCH_LOCK/pid" 2>/dev/null || true)" != "$WATCHER_PID" ]; then
     exit 0
   fi
+  watch_hold_sleep_assertion "$WATCHER_PID"
 
   # Liveness beacon for fm-guard.sh: a fresh mtime here means a watcher is
   # alive. Supervision scripts warn when this goes stale with tasks in flight.

@@ -376,4 +376,5 @@ Use `/stow` before an intentional reset when the conversation may hold durable k
 ## Development notes
 
 The current watcher reliability work combines always-on bash triage with a durable queue for actionable wakes, a race-proof singleton lock, duplicate self-eviction, drain-time liveness assertion, and a self-verifying tracked-child arm wrapper.
+On macOS the lock-owning watcher holds `caffeinate -ims` bound to its own pid for that process lifetime so the machine cannot sleep in the gaps between per-run assertions.
 The presence-gated sub-supervisor (`bin/fm-supervise-daemon.sh`) provides walk-away supervision via the `/afk` skill while reusing the same shared wake classifier as the always-on watcher.

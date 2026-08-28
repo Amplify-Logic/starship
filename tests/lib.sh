@@ -311,7 +311,10 @@ fm_test_kill_cleanup_dir_exes() {  # <-TERM|-KILL>
 # registered fixture temp dir are ever signalled. TERM first with a bounded
 # grace, then KILL whatever remains.
 fm_test_reap_children() {
-  local pid i alive
+  local pid i alive root_pid
+  # Capture before command substitution: inside $(...), BASHPID is the subshell
+  # so pgrep would miss this shell's background children (Linux bash 4+).
+  root_pid=${BASHPID:-$$}
   for pid in "${FM_TEST_CHILD_PIDS[@]:-}"; do
     [ -n "$pid" ] || continue
     fm_test_kill_scoped -TERM "$pid"
@@ -320,7 +323,7 @@ fm_test_reap_children() {
     [ -n "$pid" ] || continue
     fm_test_kill_scoped -TERM "$pid"
   done <<EOF
-$(fm_test_descendant_pids "${BASHPID:-$$}")
+$(fm_test_descendant_pids "$root_pid")
 EOF
   fm_test_kill_cleanup_dir_exes -TERM
   i=0
@@ -341,7 +344,7 @@ EOF
     [ -n "$pid" ] || continue
     fm_test_kill_scoped -KILL "$pid"
   done <<EOF
-$(fm_test_descendant_pids "${BASHPID:-$$}")
+$(fm_test_descendant_pids "$root_pid")
 EOF
   fm_test_kill_cleanup_dir_exes -KILL
   return 0
@@ -381,6 +384,40 @@ fm_fakebin() {
   local dir=$1 fakebin="$1/fakebin"
   mkdir -p "$fakebin"
   printf '%s\n' "$fakebin"
+}
+
+# fm_install_fake_caffeinate <fakebin>: drop a PATH stub that mimics
+# `caffeinate -ims -w <pid>` without touching the host sleep assertion.
+# It stays alive until the watched pid exits, or until it is killed.
+# When FM_FAKE_CAFFEINATE_LOG is set, each invocation appends
+# "<stub-pid> <args>" so tests can assert spawn and cleanup.
+fm_install_fake_caffeinate() {
+  local fakebin=$1
+  mkdir -p "$fakebin"
+  cat > "$fakebin/caffeinate" <<'SH'
+#!/usr/bin/env bash
+set -u
+if [ -n "${FM_FAKE_CAFFEINATE_LOG:-}" ]; then
+  printf '%s %s\n' "$$" "$*" >> "$FM_FAKE_CAFFEINATE_LOG"
+fi
+watched=
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -w)
+      shift
+      watched=${1:-}
+      ;;
+  esac
+  [ "$#" -gt 0 ] && shift
+done
+if [ -n "$watched" ]; then
+  while kill -0 "$watched" 2>/dev/null; do
+    sleep 0.05
+  done
+fi
+exit 0
+SH
+  chmod +x "$fakebin/caffeinate"
 }
 
 # fm_install_compatible_tasks_axi <fakebin-dir>: drop a PATH stub that satisfies

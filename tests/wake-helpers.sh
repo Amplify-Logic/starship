@@ -87,6 +87,7 @@ fi
 exit 1
 SH
   chmod +x "$fakebin/tmux"
+  fm_install_fake_caffeinate "$fakebin"
   make_fake_crew_state "$fakebin" >/dev/null
   printf '%s\n' "$dir"
 }
@@ -193,6 +194,7 @@ esac
 exit 1
 SH
   chmod +x "$fakebin/tmux"
+  fm_install_fake_caffeinate "$fakebin"
   printf '%s\n' "$dir"
 }
 
@@ -243,6 +245,7 @@ esac
 exit 1
 SH
   chmod +x "$fakebin/tmux"
+  fm_install_fake_caffeinate "$fakebin"
   printf '%s\n' "$dir"
 }
 
