@@ -126,10 +126,18 @@ fm_test_track_pid() {
 # Print this shell's whole live descendant subtree, innermost generation last.
 # Scoped strictly to the calling test process's own tree: no command-name
 # patterns are ever matched, so a sibling firstmate home running the same
-# scripts can never be touched by a suite's teardown.
+# scripts can never be touched by a suite's teardown. Prefer /proc children
+# on Linux; pgrep -P is the portable fallback.
 fm_test_descendant_pids() {  # <pid>
-  local parent=$1 kid
-  for kid in $(pgrep -P "$parent" 2>/dev/null || true); do
+  local parent=$1 kid kids
+  kids=
+  if [ -r "/proc/$parent/task/$parent/children" ]; then
+    kids=$(cat "/proc/$parent/task/$parent/children" 2>/dev/null || true)
+  fi
+  if [ -z "$kids" ]; then
+    kids=$(pgrep -P "$parent" 2>/dev/null || true)
+  fi
+  for kid in $kids; do
     case "$kid" in
       ''|*[!0-9]*) continue ;;
     esac
@@ -138,15 +146,81 @@ fm_test_descendant_pids() {  # <pid>
   done
 }
 
+# True when path $1 is this repo worktree or a registered fixture temp dir,
+# or a file inside one of those. Used by path-scoped teardown only.
+fm_test_path_is_scoped() {  # <path>
+  local path=$1 dir
+  [ -n "$path" ] || return 1
+  case "$path" in
+    "$ROOT"|"$ROOT"/*) return 0 ;;
+  esac
+  for dir in "${FM_TEST_CLEANUP_DIRS[@]:-}"; do
+    [ -n "$dir" ] || continue
+    case "$path" in
+      "$dir"|"$dir"/*) return 0 ;;
+    esac
+  done
+  while IFS= read -r dir; do
+    [ -n "$dir" ] || continue
+    case "$path" in
+      "$dir"|"$dir"/*) return 0 ;;
+    esac
+  done < "$FM_TEST_CLEANUP_REGISTRY"
+  return 1
+}
+
+# Untruncated argv for pid $1. Linux `ps -o command=` without -ww clips to
+# the window width (often 80), which drops the fixture path and makes
+# path-scoped teardown miss the child; /proc cmdline is the full argv.
+fm_test_pid_command_line() {  # <pid>
+  local pid=$1 cmd
+  [ -n "$pid" ] || return 1
+  if [ -r "/proc/$pid/cmdline" ]; then
+    cmd=$(tr '\0' ' ' < "/proc/$pid/cmdline")
+    cmd=${cmd%"${cmd##*[![:space:]]}"}
+    [ -n "$cmd" ] || return 1
+    printf '%s\n' "$cmd"
+    return 0
+  fi
+  cmd=$(LC_ALL=C ps -ww -o args= -p "$pid" 2>/dev/null) || return 1
+  [ -n "$cmd" ] || return 1
+  printf '%s\n' "$cmd"
+}
+
 # True when pid $1's command line references a path inside THIS repo worktree
 # or one of this suite's registered temp dirs. This is the ONLY kill authority
 # in test teardown: a descendant that fails the check - the primary home's own
 # live supervision among them, which shares every script name we use - is left
 # strictly alone.
 fm_test_pid_is_path_scoped() {  # <pid>
-  local pid=$1 cmd dir
+  local pid=$1 cmd dir arg fd target
   [ -n "$pid" ] || return 1
-  cmd=$(LC_ALL=C ps -o command= -p "$pid" 2>/dev/null) || return 1
+  if [ -r "/proc/$pid/cmdline" ]; then
+    while IFS= read -r -d '' arg || [ -n "${arg:-}" ]; do
+      fm_test_path_is_scoped "$arg" && return 0
+      arg=
+    done < "/proc/$pid/cmdline"
+    target=$(readlink "/proc/$pid/exe" 2>/dev/null || true)
+    target=${target% (deleted)}
+    fm_test_path_is_scoped "$target" && return 0
+    for fd in /proc/"$pid"/fd/*; do
+      [ -e "$fd" ] || continue
+      target=$(readlink "$fd" 2>/dev/null) || continue
+      for dir in "${FM_TEST_CLEANUP_DIRS[@]:-}"; do
+        [ -n "$dir" ] || continue
+        case "$target" in
+          "$dir"|"$dir"/*) return 0 ;;
+        esac
+      done
+      while IFS= read -r dir; do
+        [ -n "$dir" ] || continue
+        case "$target" in
+          "$dir"|"$dir"/*) return 0 ;;
+        esac
+      done < "$FM_TEST_CLEANUP_REGISTRY"
+    done
+  fi
+  cmd=$(fm_test_pid_command_line "$pid") || return 1
   [ -n "$cmd" ] || return 1
   case "$cmd" in
     *"$ROOT"/*) return 0 ;;
@@ -177,6 +251,59 @@ fm_test_kill_scoped() {  # <-TERM|-KILL> <pid>...
   done
 }
 
+# Linux: signal every process whose exe or cmdline references a registered
+# fixture temp dir. mktemp paths are unique to this suite, so this does not
+# need a parent-pid walk; pgrep -P misses some CI children and left the
+# isolation long-runner and busy-loop alive.
+fm_test_kill_cleanup_dir_exes() {  # <-TERM|-KILL>
+  local signal=$1 proc pid target dir cmd
+  [ -d /proc ] || return 0
+  for proc in /proc/[0-9]*; do
+    pid=${proc#/proc/}
+    case "$pid" in
+      ''|*[!0-9]*) continue ;;
+    esac
+    [ "$pid" = "${BASHPID:-$$}" ] && continue
+    target=$(readlink "$proc/exe" 2>/dev/null) || target=
+    target=${target%' (deleted)'}
+    cmd=
+    if [ -r "$proc/cmdline" ]; then
+      cmd=$(tr '\0' ' ' < "$proc/cmdline")
+      cmd=${cmd%"${cmd##*[![:space:]]}"}
+    fi
+    for dir in "${FM_TEST_CLEANUP_DIRS[@]:-}"; do
+      [ -n "$dir" ] || continue
+      case "$target" in
+        "$dir"|"$dir"/*)
+          kill "$signal" "$pid" 2>/dev/null || true
+          continue 2
+          ;;
+      esac
+      case "$cmd" in
+        *"$dir"/*)
+          kill "$signal" "$pid" 2>/dev/null || true
+          continue 2
+          ;;
+      esac
+    done
+    while IFS= read -r dir; do
+      [ -n "$dir" ] || continue
+      case "$target" in
+        "$dir"|"$dir"/*)
+          kill "$signal" "$pid" 2>/dev/null || true
+          break
+          ;;
+      esac
+      case "$cmd" in
+        *"$dir"/*)
+          kill "$signal" "$pid" 2>/dev/null || true
+          break
+          ;;
+      esac
+    done < "$FM_TEST_CLEANUP_REGISTRY"
+  done
+}
+
 # Stop every supervision process this suite spawned so no watcher, arm, or
 # daemon outlives its fixture. Candidates come from tracked pids and the
 # suite's own descendant tree, but EVERY kill is gated on fm_test_pid_is_path_
@@ -195,6 +322,7 @@ fm_test_reap_children() {
   done <<EOF
 $(fm_test_descendant_pids "${BASHPID:-$$}")
 EOF
+  fm_test_kill_cleanup_dir_exes -TERM
   i=0
   while [ "$i" -lt 30 ]; do
     alive=0
@@ -215,6 +343,7 @@ EOF
   done <<EOF
 $(fm_test_descendant_pids "${BASHPID:-$$}")
 EOF
+  fm_test_kill_cleanup_dir_exes -KILL
   return 0
 }
 

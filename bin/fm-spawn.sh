@@ -1158,7 +1158,12 @@ case "$BACKEND" in
     HERDR_TAB_TITLE="WORKER · $TASK_OUTCOME · 🟡 WAITING"
     if [ "$KIND" = secondmate ]; then
       HERDR_LABEL_HOME=$PROJ_ABS
-      HERDR_CONTAINER_RAW=$(FM_HOME="$HERDR_LABEL_HOME" fm_backend_herdr_container_ensure "$PROJ_ABS") || exit 1
+      # Clear, do not inherit: a herdr launching pane may already export an
+      # unrelated project's FM_HERDR_PROJECT_* into this process.
+      HERDR_CONTAINER_RAW=$(FM_HOME="$HERDR_LABEL_HOME" \
+        FM_HERDR_PROJECT_KEY='' \
+        FM_HERDR_PROJECT_LABEL='' \
+        fm_backend_herdr_container_ensure "$PROJ_ABS") || exit 1
       HERDR_TAB_TITLE=$W
     elif [ "$HERDR_PRESENTATION" -eq 1 ]; then
       HERDR_PROJECT_KEY=$PROJ_ABS_REAL
@@ -1169,7 +1174,10 @@ case "$BACKEND" in
         fm_backend_herdr_container_ensure "$PROJ_ABS") || exit 1
     else
       HERDR_TAB_TITLE=$W
-      HERDR_CONTAINER_RAW=$(FM_HOME="$HERDR_LABEL_HOME" fm_backend_herdr_container_ensure "$PROJ_ABS") || exit 1
+      HERDR_CONTAINER_RAW=$(FM_HOME="$HERDR_LABEL_HOME" \
+        FM_HERDR_PROJECT_KEY='' \
+        FM_HERDR_PROJECT_LABEL='' \
+        fm_backend_herdr_container_ensure "$PROJ_ABS") || exit 1
     fi
     # fm_backend_herdr_container_ensure echoes "<session>:<workspace_id>\t<seeded_default_tab_id>"
     # (the second field empty when this call ADOPTED a pre-existing workspace
@@ -1992,6 +2000,15 @@ spawn_refuse_endpoint_missing() {  # <phase>
 # process (go build, go test, ...) inherit it. Sent before the launch command so
 # the env is set when the agent starts; the brief sleep lets the export land.
 spawn_send_text_line "$T" "export GOTMPDIR=$TASK_TMP/gotmp"
+# Pin FM_HERDR_PROJECT_* to this task. A worker pane spawned inside herdr
+# otherwise inherits the launching environment, which can name a completely
+# unrelated project. Set the task's own project when herdr presentation
+# identity applies; otherwise clear both variables so they cannot leak.
+if [ "$BACKEND" = herdr ] && [ "$KIND" != secondmate ] && [ "${HERDR_PRESENTATION:-0}" -eq 1 ] && [ -n "${HERDR_PROJECT_KEY:-}" ]; then
+  spawn_send_text_line "$T" "export FM_HERDR_PROJECT_KEY=$(shell_quote "$HERDR_PROJECT_KEY") FM_HERDR_PROJECT_LABEL=$(shell_quote "$HERDR_PROJECT_NAME")"
+else
+  spawn_send_text_line "$T" "unset FM_HERDR_PROJECT_KEY FM_HERDR_PROJECT_LABEL"
+fi
 sleep 0.3
 spawn_send_literal "$T" "$LAUNCH"
 sleep 0.3

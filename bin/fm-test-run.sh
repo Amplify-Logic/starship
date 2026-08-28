@@ -399,6 +399,7 @@ tests/fm-pi-watch-extension.test.sh
 tests/fm-chart-room.test.sh
 tests/fm-bridge-view.test.sh
 tests/fm-spawn-herdr-presentation.test.sh
+tests/fm-spawn-herdr-env.test.sh
 tests/fm-session-start.test.sh
 tests/fm-secondmate-liveness.test.sh
 tests/fm-fleet-snapshot-view.test.sh

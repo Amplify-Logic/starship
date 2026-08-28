@@ -682,8 +682,9 @@ fm_backend_herdr_current_path() {  # <target>
 
 # fm_backend_herdr_send_text_line: send one line of TEXT then submit,
 # ATOMICALLY - mirrors tmux's `send-keys -t T text Enter`. Used for the fixed
-# spawn-time commands (treehouse get, the GOTMPDIR export). `pane run` types
-# the command and submits it in one call (verified).
+# spawn-time pane-run commands (treehouse get, the GOTMPDIR export, and the
+# FM_HERDR_PROJECT_* pin). `pane run` types the command and submits it in one
+# call (verified).
 fm_backend_herdr_send_text_line() {  # <target> <text>
   fm_backend_herdr_target_ready "$1" || return 1
   fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" pane run "$FM_BACKEND_HERDR_PANE" "$2" >/dev/null 2>&1
