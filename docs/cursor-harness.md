@@ -92,6 +92,21 @@ Firstmate does not read that file, so this is recorded as context for the accoun
 (`--model 'claude-opus-4-8[context=1m,effort=high,fast=false]'`). The explicit
 suffixed ids above are what firstmate uses: they are simpler and directly verified.
 
+### `--list-models` ANSI styling (verified 2026-08-28)
+
+Cursor CLI `2026.08.25-3e8eec8` styles catalog lines with CSI when colour is enabled (a TTY, or `FORCE_COLOR`):
+
+```
+$ FORCE_COLOR=1 agent --list-models | grep -F cursor-grok-4.6-high-fast | cat -v
+^[[36mcursor-grok-4.6-high-fast^[[39m ^[[2m- Cursor Grok 4.6 Fast^[[22m
+```
+
+The dim SGR sits between the space and the dash, so a literal ` - ` split never sees the separator.
+`fm-spawn` then refused a real catalog id as unknown.
+`bin/fm-cursor-model-lib.sh` strips CSI from catalog text before matching, via the shared `fm_composer_strip_ansi` (owned by `bin/fm-composer-lib.sh`).
+The `FM_CURSOR_MODEL_CATALOG` override still works: the file is read, then stripped.
+Regression coverage is the ANSI fixture in `tests/fm-cursor-adapter.test.sh`.
+
 ## 2. Launch, autonomy, and worktree containment
 
 The verified launch shape is the interactive one, with the brief as a positional

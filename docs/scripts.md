@@ -61,7 +61,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-capability-lib.sh`   | Append-only capability outcome log (green means first-try validation pass), 7-day reader, ranking, and advisory scout-tax helpers |
 | `fm-backend.sh`          | Runtime-backend selection, meta helpers, selector resolution, and operation dispatch |
 | `fm-backend-hometag-lib.sh` | Shared per-installation home-tag derivation for zellij tab and cmux workspace titles |
-| `fm-composer-lib.sh`     | Single fleet-wide owner of composer-content classification for all backends          |
+| `fm-composer-lib.sh`     | Single fleet-wide owner of composer-content classification for all backends, plus the shared `fm_composer_strip_ansi` CSI stripper |
 | `backends/tmux.sh`       | Verified tmux session-provider adapter                                               |
 | `backends/herdr.sh`      | Experimental herdr session-provider adapter                                          |
 | `backends/zellij.sh`     | Experimental zellij session-provider adapter                                         |

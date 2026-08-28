@@ -55,7 +55,10 @@
 # uses fm_composer_strip_ghost instead. Reads the styled text on stdin and prints
 # plain text (stdin-only, matching fm_composer_strip_ghost). The character class
 # includes ':' so an ITU colon-form SGR (38:2::r:g:b) is stripped whole, not left
-# with a dangling tail.
+# with a dangling tail. Also the fleet-wide CSI stripper outside the composer
+# pipeline: bin/fm-cursor-model-lib.sh sources this file to strip styled
+# `agent --list-models` catalog text (docs/cursor-harness.md), so the character
+# class is a shared contract - do not narrow it for composer-only needs.
 fm_composer_strip_ansi() {
   local esc; esc=$(printf '\033')
   LC_ALL=C sed "s/${esc}\\[[0-9;:?]*[[:alpha:]]//g"

@@ -449,6 +449,33 @@ EOF
   pass "cursor catalog membership and requested-vs-live equivalence"
 }
 
+test_catalog_has_model_through_ansi_color() {
+  local catalog out
+  catalog="$TMP_ROOT/models-ansi.txt"
+  # Verbatim CSI from Cursor CLI 2026.08.25-3e8eec8 `agent --list-models`
+  # (FORCE_COLOR=1, 2026-08-28): cyan id, then dim " - display". The dim SGR
+  # sits between the space and the dash, so a literal ` - ` split misses the id
+  # unless CSI is stripped first. A plain sibling line pins that unstyled
+  # catalogs keep working in the same file.
+  {
+    printf '%s\n' "${ESC}[2mAvailable models${ESC}[22m"
+    printf '\n'
+    printf '%s\n' "${ESC}[36mcursor-grok-4.6-high-fast${ESC}[39m ${ESC}[2m- Cursor Grok 4.6 Fast${ESC}[22m"
+    printf '%s\n' "cursor-grok-4.6-high - Cursor Grok 4.6"
+  } > "$catalog"
+  FM_CURSOR_MODEL_CATALOG="$catalog" fm_cursor_catalog_has_model cursor-grok-4.6-high-fast \
+    || fail "ANSI-colored catalog id should match after CSI strip"
+  FM_CURSOR_MODEL_CATALOG="$catalog" fm_cursor_catalog_has_model cursor-grok-4.6-high \
+    || fail "plain catalog id in a mixed ANSI file should still match"
+  if FM_CURSOR_MODEL_CATALOG="$catalog" fm_cursor_catalog_has_model definitely-not-a-real-model-xyz; then
+    fail "unknown id must still miss on an ANSI-colored catalog"
+  fi
+  out=$(FM_CURSOR_MODEL_CATALOG="$catalog" fm_cursor_catalog_display_for_id cursor-grok-4.6-high-fast)
+  [ "$out" = 'Cursor Grok 4.6 Fast' ] \
+    || fail "ANSI-colored catalog display lookup failed: '$out'"
+  pass "cursor catalog parser matches ids through ANSI-colored --list-models lines"
+}
+
 # --- 5. liveness ------------------------------------------------------------
 
 test_liveness_uses_argv_for_node_comm() {
@@ -538,6 +565,7 @@ test_explicit_tiered_model_is_never_retiered
 test_fast_variant_is_never_implicit
 test_parse_footer_model_from_idle_capture
 test_catalog_has_model_and_equivalence
+test_catalog_has_model_through_ansi_color
 test_liveness_uses_argv_for_node_comm
 test_unattributable_node_stays_unknown
 test_cursor_env_marker_beats_inherited_claudecode
