@@ -111,7 +111,7 @@ The request is capped at 15 MB and returns 413 when larger or 415 when the type 
 The per-session rolling-hour limit counts authenticated, non-empty attempts within that cap, including attempts later rejected as unsupported, and returns 429 after 30 such attempts.
 
 Files land under `data/bridge-inbox/` (created mode 0700) with a unique timestamped name such as `20260819T113530Z-<hex>.jpg` and a sibling `.json` sidecar recording `received_at`, `original_name`, `size`, and `content_type`.
-A write here, or to the glasses mailbox DB under `data/glasses-voice-runtime/`, interrupts the home watcher's terminal wait so the next check sweep can surface the photo or question immediately; `bin/fm-file-event-lib.sh` owns that wait.
+[`watcher-continuity.md`](watcher-continuity.md#filesystem-event-continuity) owns watcher latency and cross-cycle continuity for writes here and to the glasses mailbox DB under `data/glasses-voice-runtime/`.
 Names never overwrite; the directory is quarantined storage only.
 The server does not execute, decode, or otherwise parse image contents beyond the magic-byte sniff.
 The photo path writes only to `bridge/` and this inbox; hold-to-speak sends requests through the loopback mailbox API instead of writing mailbox state directly.
@@ -135,3 +135,26 @@ The bridge log records `speak audio bytes=` for each `/speak` request so a trunc
 Existing `form-action 'self'` and `connect-src 'self'` CSP directives cover the form and `fetch`; scripts and styles stay nonce-based.
 
 There is still no approve, merge, or spawn control on this page.
+
+## Watcher check
+
+The home-local registered watcher check is existence-only.
+It determines whether any mailbox row is unanswered with a read-only local database query, prints only `glasses question waiting` when one exists, and leaves transcription to the firstmate turn that handles the wake.
+It must not invoke `glasses-voice-pending`, OpenAI, or any other external transcription API inside the watcher check.
+This keeps the check compatible with glasses CLI versions both before and after an existence-only CLI flag is available.
+
+The mailbox half of the generated check is:
+
+```bash
+HOME_DIR=/absolute/path/to/firstmate-home
+MAILBOX="$HOME_DIR/data/glasses-voice-runtime/mailbox.db"
+if [ -f "$MAILBOX" ] && command -v sqlite3 >/dev/null 2>&1 \
+  && [ "$(sqlite3 -readonly "$MAILBOX" "SELECT 1 FROM requests WHERE state != 'answered' LIMIT 1;" 2>/dev/null)" = 1 ]; then
+  printf '%s\n' 'glasses question waiting'
+  exit 0
+fi
+```
+
+The same registered check may then apply the existing seen-marker comparison for `data/bridge-inbox/*.json`.
+After creating or changing the private mode-`0700` `state/<id>.check.sh`, bind its exact bytes with `bin/fm-check-register.sh <id>` before the watcher may execute it.
+Documentation-only delivery satisfies this repository task; swapping the live private check is a later operational step outside this repository.

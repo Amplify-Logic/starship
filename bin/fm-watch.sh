@@ -946,6 +946,36 @@ expire_check_sweep() {
   triage_log "glasses file event; next cycle runs checks immediately"
 }
 
+# glasses_file_event_catch_up: close the durable gap a live event waiter cannot
+# observe. On watcher start and at the top of every later loop (including after
+# a clean wait timeout), compare the current default watch paths with the last
+# completed authenticated-check sweep. A newer path expires that marker so the
+# check block in this same loop runs immediately. A missing marker is already
+# due and needs no mutation. The in-wait signature comparison below separately
+# covers a write that races this catch-up with waiter setup.
+glasses_file_event_catch_up() {
+  local path
+  local paths=()
+  while IFS= read -r path; do
+    [ -n "$path" ] || continue
+    paths+=("$path")
+  done < <(fm_glasses_watch_paths "$FM_HOME")
+  [ "${#paths[@]}" -gt 0 ] || return 1
+  fm_file_event_newer_than "$STATE/.last-check" "${paths[@]}" || return 1
+  expire_check_sweep
+}
+
+check_sweep_begin() {  # <pending-marker>
+  local pending_marker=$1
+  rm -f "$pending_marker"
+  touch "$pending_marker"
+}
+
+check_sweep_complete() {  # <pending-marker>
+  local pending_marker=$1
+  mv -f "$pending_marker" "$STATE/.last-check"
+}
+
 # file_event_wait_or_sleep: replace sleep POLL with a bounded file wait when
 # glasses paths exist. A change expires the slow-check timer; an unusable
 # waiter falls back to sleep POLL.
@@ -1209,6 +1239,7 @@ watcher_cleanup() {
   fm_check_output_cleanup
   fm_custom_check_snapshot_cleanup
   watch_release_sleep_assertion
+  [ -z "${CHECK_SWEEP_PENDING:-}" ] || rm -f "$CHECK_SWEEP_PENDING"
   fm_lock_release "$WATCH_LOCK"
 }
 trap watcher_cleanup EXIT
@@ -1219,6 +1250,7 @@ trap 'exit 1' HUP INT TERM
 WATCHER_PID=${BASHPID:-$$}
 FM_WATCH_CAFFEINATE_PID=
 watch_hold_sleep_assertion "$WATCHER_PID"
+CHECK_SWEEP_PENDING="$STATE/.last-check.pending.$WATCHER_PID"
 printf '%s\n' "$FM_HOME" > "$WATCH_LOCK/fm-home" || true
 printf '%s\n' "$WATCH_PATH" > "$WATCH_LOCK/watcher-path" || true
 FM_WATCH_DELIVERY_PID=$WATCHER_PID
@@ -1242,6 +1274,13 @@ while :; do
   # Liveness beacon for fm-guard.sh: a fresh mtime here means a watcher is
   # alive. Supervision scripts warn when this goes stale with tasks in flight.
   touch "$STATE/.last-watcher-beat"
+
+  check_sweep_begin "$CHECK_SWEEP_PENDING" || exit 1
+
+  # Catch mailbox/inbox writes that landed while no watcher was alive, during
+  # successor setup, or during the just-completed bounded wait. This runs before
+  # the slow-check cadence test, so expiring .last-check takes effect now.
+  glasses_file_event_catch_up || true
 
   # Resolve correlated secondmate reports, send at most one recovery request,
   # and escalate once when the answer still cannot reach the parent.
@@ -1292,17 +1331,19 @@ while :; do
       if [ -n "$out" ]; then
         reason="check: $c: $out"
         fm_wake_append check "$c" "$reason" || exit 1
-        touch "$STATE/.last-check"
+        check_sweep_complete "$CHECK_SWEEP_PENDING" || exit 1
         wake "$reason"
       fi
     done
     if [ -n "$rejected_checks" ]; then
       reason="check: rejected unauthenticated state checks:$rejected_checks"
       fm_wake_append check unauthenticated-state-checks "$reason" || exit 1
-      touch "$STATE/.last-check"
+      check_sweep_complete "$CHECK_SWEEP_PENDING" || exit 1
       wake "$reason"
     fi
-    touch "$STATE/.last-check"
+    check_sweep_complete "$CHECK_SWEEP_PENDING" || exit 1
+  else
+    rm -f "$CHECK_SWEEP_PENDING"
   fi
 
   # On the first changed signal, linger one grace period and re-scan before

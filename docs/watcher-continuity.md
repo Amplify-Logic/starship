@@ -128,6 +128,16 @@ The file is size-capped through `FM_WATCH_CYCLE_LOG_MAX_BYTES` and `FM_WATCH_CYC
 The default 300-second grace is unchanged.
 Only the watcher process touches `state/.last-watcher-beat`; the sentinel reads it but never touches it, so no helper process can make a wedged watcher appear healthy.
 
+## Filesystem-event continuity
+
+Glasses mailbox and bridge-inbox wakes survive the intentional one-shot watcher boundary through `state/.last-check`.
+On startup and at the top of every later watcher loop, including the loop after a bounded wait timeout, `bin/fm-watch.sh` asks `bin/fm-file-event-lib.sh` whether any current default watch path is newer than the last completed authenticated-check sweep.
+A newer path removes the marker before the cadence test, so authenticated checks run in that same loop instead of waiting for another filesystem event or the 300-second backstop.
+The live waiter still compares signatures around each bounded wait, which covers a write racing catch-up with waiter setup.
+Each watcher loop captures a private marker before filesystem catch-up and publishes that boundary only when an authenticated check sweep completes, so unchanged paths do not fire twice while a later write remains newer for the next loop or successor.
+This catch-up is part of the existing singleton watcher cycle and does not add another watcher, change lock ownership, or alter the one-actionable-reason exit contract.
+`docs/bridge-view.md` owns the separate glasses existence-only watcher-check guidance.
+
 ## Regression coverage
 
 `tests/fm-pi-watch-extension.test.sh` simulates actionable and empty child closes against the actual Pi and OpenCode close handlers, blocks prompt delivery to prove the successor launches first, verifies single-flight behavior, changes the session lock before close to prove ownership is rechecked, and hangs each successor arm to prove bounded fallback delivery includes the typed restoration failure.
@@ -137,6 +147,7 @@ It also asserts both guidance branches verbatim, allows a genuine first run over
 `tests/fm-supervision-sentinel.test.sh` proves six-task stale-beacon detection with a live identity-matched lock, active-alert content, failed-delivery retry, exponential repeat backoff for one continuous outage, an immediate reset when the episode evidence changes, recovery re-arming, marker-only guard notes that never reach a notifier, `check` staying marker-only while still reporting a verdict and exiting non-zero on a detected outage, every mode honoring a durable disarm, unclaimed evidence refreshing on a moved episode without disturbing a live claim, symlinked-versus-foreign home identity, host-only liveness proof, one-per-home launchd registration, the watcher arm registering the host service exactly once and only after it has observed a healthy watcher, away mode deferring that registration to the daemon that can observe one, a contended arm retrying the lock once and then naming the missing service or check evidence instead of reporting success, manifest reconciliation, per-home backoff instead of churn when a retained service never completes a check, a registration-retry schedule independent of the repeat-alert tunables, a failed `enable` preserving the escalating failure record, a retry deadline beyond its own recorded window reading as stale evidence that suppresses nothing, a generated manifest never carrying a notifier override, explicit durable disarm/re-enable, a one-minute cadence, an unambiguous OS title, and the absence of every automatic recovery command.
 `tests/fm-session-start.test.sh` proves both the deliberate disarm and the suppressed-registration cooldown reach every session-start digest with their timing and recovery command.
 `tests/fm-turnend-guard.test.sh` additionally runs the Stop hook with the sentinel enabled and every channel pointed at a recorder, proving the block still renders fast, the marker lands unclaimed, and no channel fires.
+`tests/fm-file-eventwait.test.sh` proves mailbox and inbox writes during a dead watcher or successor-arm gap expire the check marker on catch-up, unchanged paths do not double-fire, and a write hidden behind a clean wait timeout is recovered on the next loop.
 
 ## Sanitized live evidence, 2026-07-17
 
