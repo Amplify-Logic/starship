@@ -1,7 +1,8 @@
 # Action gateway v2 unprivileged test slice
 
 `bin/fm-action-gateway-v2.py` owns the gateway v2 parser, resolved-plan schema, SQLite state model, and prepare, approval, and execution channel schemas.
-The landed `bin/fm-action-gateway.sh` broker remains unchanged and stubbed.
+The landed `bin/fm-action-gateway.sh` broker is a separate program that stays stubbed: neither script references the other, so v2 adds no delegation path in either direction.
+The landed broker still evolves on its own for reasons unrelated to v2, and `tests/fm-action-gateway.test.sh` owns its behaviour.
 
 ## Delivered program slice
 

@@ -365,6 +365,62 @@ test_messaging_ceiling_non_graduatable() {
   pass "messaging hard ceiling stays confirm-first"
 }
 
+test_occ_registry_classifications() {
+  local out rc
+  reset_gw
+  out=$(valid_request device.config.push confirm-first '' idem-dcp nonce-dcp worker-dcp | run_worker prepare 2>&1)
+  assert_contains "$out" 'severity=irreversible' "device.config.push irreversible"
+  assert_contains "$out" 'decision=confirm-first' "device.config.push confirm-first"
+
+  reset_gw
+  out=$(valid_request device.firmware.push confirm-first '' idem-dfp nonce-dfp worker-dfp | run_worker prepare 2>&1)
+  assert_contains "$out" 'severity=irreversible' "device.firmware.push irreversible"
+
+  reset_gw
+  out=$(valid_request kb.fact.publish confirm-first '' idem-kfp nonce-kfp worker-kfp | run_worker prepare 2>&1)
+  assert_contains "$out" 'severity=external' "kb.fact.publish external"
+
+  reset_gw
+  out=$(valid_request course.publish confirm-first '' idem-cp nonce-cp worker-cp | run_worker prepare 2>&1)
+  assert_contains "$out" 'severity=external' "course.publish external"
+
+  reset_gw
+  out=$(valid_request sheet.write confirm-first '' idem-sw nonce-sw worker-sw | run_worker prepare 2>&1)
+  assert_contains "$out" 'severity=external' "sheet.write external"
+  pass "ops command center registry kinds classify at prepare"
+}
+
+test_classify_graduatable_query() {
+  local out rc
+  set +e
+  out=$("$GW_SH" classify --action-kind device.config.push 2>&1)
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "classify irreversible exit"
+  assert_contains "$out" 'action_kind=device.config.push' "classify names kind"
+  assert_contains "$out" 'severity=irreversible' "classify severity"
+  assert_contains "$out" 'graduatable=no' "irreversible is not graduatable"
+
+  out=$("$GW_SH" classify --action-kind email.send 2>&1)
+  assert_contains "$out" 'graduatable=no' "messaging is not graduatable"
+  assert_contains "$out" 'ceiling=messaging' "email.send ceiling"
+
+  out=$("$GW_SH" classify --action-kind crm.update 2>&1)
+  assert_contains "$out" 'severity=external' "crm.update external"
+  assert_contains "$out" 'graduatable=yes' "external without spend/messaging may graduate"
+
+  out=$("$GW_SH" classify --action-kind kb.fact.publish 2>&1)
+  assert_contains "$out" 'graduatable=yes' "kb.fact.publish may graduate"
+
+  set +e
+  out=$("$GW_SH" classify --action-kind not.registered 2>&1)
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "unknown kind classify exit"
+  assert_contains "$out" 'deny-by-default' "unknown kind refused"
+  pass "classify reuses the ceiling classifier for graduation"
+}
+
 test_crash_replay_defaults_to_confirm_first() {
   local out digest
   reset_gw
@@ -535,6 +591,8 @@ test_token_on_argv_rejected
 test_expiry_refused
 test_state_transitions_execute_stub_to_unknown
 test_messaging_ceiling_non_graduatable
+test_occ_registry_classifications
+test_classify_graduatable_query
 test_crash_replay_defaults_to_confirm_first
 test_illegal_transition_forged_approved_refused
 test_idempotency_key_conflict

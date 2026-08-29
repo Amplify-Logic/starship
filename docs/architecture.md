@@ -359,6 +359,12 @@ Fetches blocked by an orphaned `.git/packed-refs.lock` use bounded retries and r
 Local-only projects, clones without an origin remote, and fetch failures remain benign skips.
 The refresh also prunes local branches whose remote is gone and that no worktree still needs.
 
+## Ops command center
+
+Standing Orders, Watches, the Tray, and Errands are the ops command center object model.
+The tray is a read-only renderer over the action gateway; approval stays on the gateway's captain-role commands.
+See [`ops-command-center.md`](ops-command-center.md) for that model and [`action-gateway.md`](action-gateway.md) for the privilege boundary.
+
 ## Self-updates stay safe
 
 `/updatefirstmate` fast-forwards the running firstmate repo and registered secondmate homes from `origin`, then re-reads updated instructions and nudges updated secondmates without touching project clones.

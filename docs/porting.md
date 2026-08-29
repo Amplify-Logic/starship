@@ -69,6 +69,9 @@ Paths that behave this way today include, when present:
 - `data/done-archive.md`
 - `data/upstream-watch/`
 - `data/action-gateway/`
+- `data/orders/`
+- `data/errands/`
+- `data/ops/`
 - `data/harness-exam/`
 - per-task `data/<id>/` briefs and reports
 - any `config/` file the live allowlist command does not print

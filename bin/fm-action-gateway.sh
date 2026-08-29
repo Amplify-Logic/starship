@@ -18,6 +18,7 @@
 #   status  --digest H          replay log; print current state for digest
 #   gate-check --digest H       fail closed unless digest is approved (choke helper)
 #   replay                      rebuild all states; crash-safe confirm-first default
+#   classify --action-kind K    print severity, ceiling, and whether K is graduatable
 #   -h|--help
 #
 # Default (no command, stdin or --file): prepare.
@@ -51,6 +52,7 @@ usage: fm-action-gateway.sh prepare [--file <path>]
        fm-action-gateway.sh status --digest <hex>
        fm-action-gateway.sh gate-check --digest <hex>
        fm-action-gateway.sh replay
+       fm-action-gateway.sh classify --action-kind <kind>
        fm-action-gateway.sh -h|--help
 
 Privilege-separated confirm-first action broker: workers prepare requests;
@@ -133,7 +135,11 @@ OPERATION_REGISTRY = {
     "calendar.create": "external",
     "crm.update": "external",
     "file.write.remote": "external",
-    # irreversible: money or real-person messaging — structurally confirm-first
+    "kb.fact.publish": "external",
+    "course.publish": "external",
+    "sheet.write": "external",
+    # irreversible: money, real-person messaging, or customer-site device mutation
+    # — structurally confirm-first
     "purchase": "irreversible",
     "payment": "irreversible",
     "spend": "irreversible",
@@ -149,6 +155,8 @@ OPERATION_REGISTRY = {
     "social.post": "irreversible",
     "submission.send": "irreversible",
     "booking.request": "irreversible",
+    "device.config.push": "irreversible",
+    "device.firmware.push": "irreversible",
 }
 
 ALLOWED_TIERS = frozenset({"confirm-first", "autonomous", "sandbox"})
@@ -722,6 +730,29 @@ def cmd_prepare(cmd: dict, by_digest, by_idem, used_nonces):
     )
 
 
+def cmd_classify(cmd: dict) -> None:
+    """Registry-only: severity, ceiling, and whether this kind may graduate.
+
+    Reuses resolve_severity + classify_ceiling. Irreversible kinds and any
+    kind the ceiling classifier labels spend or messaging are non-graduatable.
+    Unknown kinds are refused (deny by default). No audit I/O.
+    """
+    kind = cmd.get("action_kind")
+    if not isinstance(kind, str) or not kind.strip():
+        fail("classify requires --action-kind")
+    kind = kind.strip()
+    severity = resolve_severity(kind)
+    ceiling = classify_ceiling(severity, kind, {})
+    if severity == "irreversible" or ceiling in {"spend", "messaging"}:
+        graduatable = "no"
+    else:
+        graduatable = "yes"
+    print(f"action_kind={kind}")
+    print(f"severity={severity}")
+    print(f"ceiling={ceiling or ''}")
+    print(f"graduatable={graduatable}")
+
+
 def cmd_show(cmd: dict, by_digest):
     digest = cmd.get("digest")
     if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
@@ -1042,6 +1073,11 @@ def main():
 
     op = cmd["op"]
 
+    # classify is a pure registry lookup: no lock, no audit I/O.
+    if op == "classify":
+        cmd_classify(cmd)
+        return
+
     def run():
         events = read_events(AUDIT_PATH)
         by_digest, by_idem, _used, used_nonces, crash_unknown = replay_states(events)
@@ -1262,6 +1298,29 @@ cmd_replay() {
   run_broker "$GW_ROOT" "$AUDIT_PATH" "$SECRET_PATH" "$cmd_json" || fail "replay failed"
 }
 
+cmd_classify() {
+  local kind='' cmd_json
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --action-kind)
+        [ "$#" -ge 2 ] || fail "--action-kind requires a value"
+        kind=$2
+        shift 2
+        ;;
+      -*)
+        fail "unknown flag: $1"
+        ;;
+      *)
+        fail "unexpected argument: $1"
+        ;;
+    esac
+  done
+  [ -n "$kind" ] || fail "classify requires --action-kind"
+  broker_paths
+  cmd_json=$(python3 -c 'import json,sys; print(json.dumps({"op":"classify","action_kind":sys.argv[1]}))' "$kind")
+  run_broker "$GW_ROOT" "$AUDIT_PATH" "$SECRET_PATH" "$cmd_json" || fail "classify failed"
+}
+
 main() {
   local op=''
 
@@ -1277,7 +1336,7 @@ main() {
       usage
       exit 0
       ;;
-    prepare|show|approve|execute|status|gate-check|replay)
+    prepare|show|approve|execute|status|gate-check|replay|classify)
       op=$1
       shift
       ;;
@@ -1301,6 +1360,7 @@ main() {
     status) cmd_status "$@" ;;
     gate-check) cmd_gate_check "$@" ;;
     replay) cmd_replay "$@" ;;
+    classify) cmd_classify "$@" ;;
   esac
 }
 

@@ -32,14 +32,23 @@ run_prepare() {
   "$GW" prepare
 }
 
-test_help_and_old_broker_untouched() {
-  local help landed=054aa7f
+test_help_and_old_broker_separate() {
+  local help
   help=$($GW --help)
   assert_contains "$help" 'sub-order items 1 through 4' "help scope"
   assert_contains "$help" 'no outward executor' "help execution boundary"
-  git -C "$ROOT" cat-file -e "$landed^{commit}" 2>/dev/null || fail "landed broker commit $landed must be reachable"
-  git -C "$ROOT" diff --quiet "$landed" -- bin/fm-action-gateway.sh || fail "landed broker must remain untouched since $landed"
-  pass "gateway v2 is separate and the landed broker remains untouched since $landed"
+  # v2 is a separate program, not a rewrite of the landed broker: neither script
+  # names the other, so v2 can neither delegate to nor be reached from the
+  # landed confirm-first broker. This used to be a whole-file freeze of
+  # bin/fm-action-gateway.sh against its landing commit, which made this file a
+  # veto on every later change to the landed broker. The landed broker's own
+  # behaviour - its registry, privilege separation, and stubbed executor - is
+  # owned by tests/fm-action-gateway.test.sh, so separation is all this asserts.
+  ! grep -q 'fm-action-gateway-v2' "$ROOT/bin/fm-action-gateway.sh" \
+    || fail "the landed broker must not reference gateway v2"
+  ! grep -q 'fm-action-gateway\.sh' "$GW" \
+    || fail "gateway v2 must not reference the landed broker"
+  pass "gateway v2 is a program separate from the landed broker"
 }
 
 test_strict_parser_rejections() {
@@ -488,7 +497,7 @@ JSON
   pass "production refuses the direct test adapter and has no caller-selected trust-state root"
 }
 
-test_help_and_old_broker_untouched
+test_help_and_old_broker_separate
 test_strict_parser_rejections
 test_canonicalization_matches_rfc8785
 test_closed_plan_resolution

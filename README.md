@@ -212,6 +212,7 @@ Firstmate's skills live in two separate places with different audiences:
 
 - [ONBOARDING.md](ONBOARDING.md) - blank Mac to a running first mate that can dispatch workers (beginner walkthrough).
 - [docs/architecture.md](docs/architecture.md) - how the crew, supervision, worktrees, secondmates, and project modes work.
+- [docs/ops-command-center.md](docs/ops-command-center.md) - standing orders, watches, the tray, and errands.
 - [docs/adhd.md](docs/adhd.md) - ADHD divergent-ideation front-end: usage, reversible install/uninstall, and cost policy.
 - [docs/configuration.md](docs/configuration.md) - environment variables, `FM_HOME`, runtime backend selection, optional X mode, the files you set, and harness support.
 - [docs/porting.md](docs/porting.md) - bring Firstmate up on a second machine and keep captain-private portable material in step with explicit push/pull.

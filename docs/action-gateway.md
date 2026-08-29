@@ -2,7 +2,7 @@
 
 The outward-action gateway is the single choke-point for worker side effects that leave the local machine or touch real people, money, or devices.
 This document owns the ActionRequest schema, the canonical digest, the privilege-separated approval model, the transactional state machine, the deny-by-default operation registry, and the non-graduatable policy floor.
-`bin/fm-action-gateway.sh` is the broker for this slice: prepare / show / approve / execute-stub / status / gate-check / replay, with durable append-only records and **no outward action execution**.
+`bin/fm-action-gateway.sh` is the broker for this slice, with durable append-only records and **no outward action execution**; the Broker commands section below owns the command list.
 
 ## Why this exists
 
@@ -63,7 +63,9 @@ Severity classes follow Atelier's tool taxonomy shape (`read` / `costly` / `exte
 | `external` | Writes to a third party on the captain's behalf | confirm-first in this slice |
 | `irreversible` | Money or real-person messaging / publishing | **structurally** confirm-first forever |
 
-Registered irreversible kinds include `purchase`, `payment`, `spend`, `transfer`, `checkout`, `ad.spend`, `email.send`, `message.send`, `sms.send`, `chat.send`, `notify.person`, `outreach.send`, `social.post`, `submission.send`, and `booking.request`.
+Registered irreversible kinds include `purchase`, `payment`, `spend`, `transfer`, `checkout`, `ad.spend`, `email.send`, `message.send`, `sms.send`, `chat.send`, `notify.person`, `outreach.send`, `social.post`, `submission.send`, `booking.request`, `device.config.push`, and `device.firmware.push`.
+Registered external kinds include `calendar.create`, `crm.update`, `file.write.remote`, `kb.fact.publish`, `course.publish`, and `sheet.write`.
+The deny-by-default registry in `bin/fm-action-gateway.sh` is the owner of that list; `classify --action-kind` reports severity, ceiling, and whether a kind is graduatable without duplicating it.
 No configuration, trusted-task-type rule, or escalation path may graduate spend or real-person messaging to autonomous.
 
 ## Canonical action digest
@@ -129,6 +131,7 @@ fm-action-gateway.sh execute --digest HEX                    # captain-only stub
 fm-action-gateway.sh status --digest HEX
 fm-action-gateway.sh gate-check --digest HEX
 fm-action-gateway.sh replay
+fm-action-gateway.sh classify --action-kind KIND             # registry lookup; no audit I/O
 ```
 
 Mutating commands print `key=value` lines (at least `decision=` and `state=`) only after the durable append succeeds.
