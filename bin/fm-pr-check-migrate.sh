@@ -9,6 +9,23 @@
 # naming that sweep process for as long as it runs, so
 # bin/fm-watch-arm.sh can tell a slow sweep apart from a watcher that will never
 # appear. Records are advisory: readers must check each recorded pid is alive.
+#
+# --checks-safe is the pre-lock gate that bin/fm-watch.sh and bin/fm-pr-check.sh
+# call before any check may run. It returns as soon as three fixed-cost checks
+# agree: the X shim needs no locked scan, the scan marker is valid, and neither
+# legacy noncanonical quarantine path is present. That marker is published only
+# after a full sweep verified every artifact under the watcher lock, so it is
+# earned evidence that no unsafe legacy check remains armed. Re-deriving that
+# verdict instead costs one hash per check file and grows with the fleet, and no
+# sweep is running to publish a progress record, so bin/fm-watch-arm.sh cannot
+# tell that work apart from a watcher that will never appear and kills a healthy
+# child at FM_ARM_CONFIRM_TIMEOUT. Reading the marker keeps the gate at a fixed
+# handful of stats. The watcher still authenticates every check again at
+# dispatch and refuses an unauthenticated one without execution, so a check that
+# rots after the marker was published is reported loudly rather than run.
+# An argument-less run is the deliberate full-verification path: it re-derives
+# the whole verdict and unarms what the gate only reported. bin/fm-bootstrap.sh
+# takes it once per session.
 # Usage: fm-pr-check-migrate.sh [--checks-safe]
 set -u
 
@@ -219,6 +236,20 @@ legacy_noncanonical_namespace_absent() {
   done
 }
 
+# O(1) marker read for the pre-lock gate: a fixed number of stats and one
+# single-line read, independent of how many checks the home holds. It is the
+# cheap standing-evidence form of scan_complete, which re-derives the same
+# verdict from every artifact and stays the authority under the watcher lock.
+# The gate pairs it with legacy_noncanonical_namespace_absent, which probes two
+# fixed paths and so keeps the same fixed cost.
+scan_marker_current() {
+  local state_device
+  [ -d "$STATE" ] && [ ! -L "$STATE" ] || return 1
+  state_device=$(fm_pr_file_device "$STATE") || return 1
+  fm_pr_private_file_valid "$SCAN_MARKER" 600 "$state_device" || return 1
+  scan_marker_content_valid "$SCAN_MARKER"
+}
+
 scan_complete() {
   local state_device
   [ -d "$STATE" ] && [ ! -L "$STATE" ] || return 1
@@ -259,9 +290,13 @@ x_shim_locked_scan_needed() {
 
 # Marker short-circuits apply only when generated artifact identities are current.
 # Otherwise watcher exclusion comes before every check scan and state mutation.
+# The pre-lock gate answers from the scan marker and the two fixed legacy paths,
+# so a home whose scan is recorded pays no per-check work; an argument-less run
+# still re-derives the whole verdict before it agrees the home needs nothing.
 if ! x_shim_locked_scan_needed; then
+  [ "$ALLOW_INCOMPLETE_REPAIRS" -eq 1 ] && scan_marker_current \
+    && legacy_noncanonical_namespace_absent && exit 0
   migration_complete && exit 0
-  [ "$ALLOW_INCOMPLETE_REPAIRS" -eq 1 ] && scan_complete && exit 0
 fi
 
 # shellcheck source=bin/fm-wake-lib.sh disable=SC1091

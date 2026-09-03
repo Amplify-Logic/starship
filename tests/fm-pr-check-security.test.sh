@@ -2084,6 +2084,65 @@ SH
   pass "legacy reserved obligations and delimiter-bearing task IDs retry without ambiguity"
 }
 
+test_prelock_gate_answers_from_the_scan_marker() {
+  local dir state before after started elapsed rc i budget
+  # bin/fm-watch-arm.sh confirms a freshly started watcher within
+  # FM_ARM_CONFIRM_TIMEOUT, 10 seconds by default, and the pre-lock gate runs
+  # inside that window without publishing a migration progress record the arm
+  # could extend for. Half the window is a generous ceiling for a gate that
+  # should cost a handful of stats.
+  budget=5
+  dir=$(make_case prelock-marker-gate)
+  state="$dir/home/state"
+  # A fleet's worth of unauthenticated task polls: re-deriving the scan verdict
+  # has to inspect every one of them, while reading the marker does not.
+  i=0
+  while [ "$i" -lt 25 ]; do
+    fm_write_meta "$state/task-$i.meta" \
+      "window=fm-task-$i" \
+      "pr=https://github.com/o/r/pull/$((i + 1))"
+    printf 'legacy poll bytes %s\n' "$i" > "$state/task-$i.check.sh"
+    chmod 0600 "$state/task-$i.check.sh"
+    i=$((i + 1))
+  done
+  printf '%s\n' fm-pr-check-migration-scan-v1 > "$state/.pr-check-migration-scan-v1"
+  chmod 0600 "$state/.pr-check-migration-scan-v1"
+  before=$(state_snapshot "$state")
+
+  started=$(date +%s)
+  set +e
+  FM_HOME="$dir/home" PATH="$BASE_PATH" "$MIGRATE" --checks-safe \
+    > "$dir/gate.out" 2> "$dir/gate.err"
+  rc=$?
+  set -e
+  elapsed=$(( $(date +%s) - started ))
+  after=$(state_snapshot "$state")
+
+  [ "$rc" -eq 0 ] || fail "pre-lock gate refused a home whose scan marker is current: $(cat "$dir/gate.err")"
+  [ "$before" = "$after" ] || fail "pre-lock gate swept state its scan marker already covered"
+  [ "$elapsed" -lt "$budget" ] \
+    || fail "pre-lock gate took ${elapsed}s, at or over the ${budget}s ceiling inside the arm confirmation window"
+
+  # Without that marker the gate still takes the full sweep.
+  dir=$(make_case prelock-unmarked-gate)
+  state="$dir/home/state"
+  fm_write_meta "$state/task-a.meta" \
+    'window=fm-task-a' \
+    'pr=https://github.com/o/r/pull/9'
+  printf 'legacy poll bytes\n' > "$state/task-a.check.sh"
+  chmod 0600 "$state/task-a.check.sh"
+  set +e
+  FM_HOME="$dir/home" PATH="$BASE_PATH" "$MIGRATE" --checks-safe \
+    > "$dir/sweep.out" 2> "$dir/sweep.err"
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || fail "unmarked home failed its full sweep: $(cat "$dir/sweep.err")"
+  assert_valid_scan_marker "$state/.pr-check-migration-scan-v1"
+  cmp -s "$POLL" "$state/task-a.check.sh" \
+    || fail "a missing scan marker did not trigger the sweep that rebuilds canonical polls"
+  pass "the pre-lock check gate reads the scan marker and sweeps only without it"
+}
+
 test_nonexecuting_migration() {
   local dir state marker x_before x_after snap_before snap_after rc
   dir=$(make_case migration)
@@ -2516,10 +2575,28 @@ SH
   assert_no_grep 'custom-replacement-ran' "$dir/watch-custom-replaced.out" \
     "watcher executed a custom check after its registered bytes changed"
   [ -e "$x_poll_marker" ] || fail "custom replacement rejection suppressed the trusted X poll"
+  assert_grep "check: rejected unauthenticated state checks: $state/b-custom.check.sh" \
+    "$dir/watch-custom-replaced.out" \
+    "watcher did not report the replaced custom check it refused to run"
+  # The pre-lock gate answers from the scan marker, so bytes replaced after that
+  # scan are refused at dispatch rather than quarantined at watcher start; the
+  # deliberate migration run is what unarms them from disk.
+  [ -e "$state/b-custom.check.sh" ] \
+    || fail "marker-aware scan removed a check the gate should have left to the deliberate run"
+  set +e
+  FM_HOME="$dir/home" FM_ROOT_OVERRIDE="$dir/root" PATH="$fakebin:$BASE_PATH" \
+    "$MIGRATE" > "$dir/migrate-replaced.out" 2> "$dir/migrate-replaced.err"
+  rc=$?
+  set -e
+  # This home still holds the unrepairable sidecar the fixture planted, so the
+  # deliberate run reports incomplete repairs while still unarming the check.
+  [ "$rc" -ne 0 ] || fail "deliberate migration run hid the fixture's unrepaired sidecar"
+  assert_grep 'migration did not complete safely' "$dir/migrate-replaced.err" \
+    "deliberate migration run did not surface its incomplete status"
   [ ! -e "$state/b-custom.check.sh" ] && [ ! -L "$state/b-custom.check.sh" ] \
-    || fail "marker-aware scan left the replaced custom check runnable"
+    || fail "deliberate migration run left the replaced custom check runnable"
   find "$state/.pr-check-quarantine" -name 'b-custom.check.*' -type f | grep . >/dev/null \
-    || fail "marker-aware scan did not quarantine the replaced custom check"
+    || fail "deliberate migration run did not quarantine the replaced custom check"
   printf '%s\n' '#!/usr/bin/env bash' "printf '%s\\n' forged-x-ran" > "$state/x-watch.check.sh"
   chmod 0700 "$state/x-watch.check.sh"
   rm -f "$state/.last-check" "$x_poll_marker"
@@ -2971,6 +3048,7 @@ test_replacement_provenance_negative_matrix
 test_complete_single_link_validation
 test_canonical_publication_failure_recovers_only_on_retry
 test_obligation_namespace_compatibility
+test_prelock_gate_answers_from_the_scan_marker
 test_nonexecuting_migration
 test_historical_x_shim_transition_matrix
 test_direct_registration_refreshes_v1_x_shim
