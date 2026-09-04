@@ -5,7 +5,7 @@
 # snapshot subprocess, away-mode passive refresh, auth headers, authenticated
 # photo drops into the quarantined inbox, multi-file Origin-null uploads,
 # hold-to-speak mailbox forwarding with the relay token kept server-side,
-# captain-facing glance titles, needs-you selection, waiting project chips, and keep-alive body drain after early error
+# captain-facing glance titles, pinned links, needs-you selection, waiting project chips, and keep-alive body drain after early error
 # returns.
 set -u
 
@@ -1287,6 +1287,53 @@ PY
   pass "child PATH resolves HOME tool dirs without a hardcoded nvm version"
 }
 
+test_glance_page_pinned_links() {
+  local home output
+  home=$(make_home pinned-links)
+  output=$(python3 - "$ROOT/bin/fm-bridge-view.py" "$home" <<'PY'
+import importlib.util, pathlib, sys
+spec = importlib.util.spec_from_file_location("fm_bridge_view", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+home = pathlib.Path(sys.argv[2])
+
+without = module.glance_html("nonce", home)
+baseline = module.glance_html("nonce")
+if without != baseline:
+    raise SystemExit("absent bridge-links file changed the rendered page")
+
+(home / "config" / "bridge-links").write_text("")
+if module.glance_html("nonce", home) != baseline:
+    raise SystemExit("empty bridge-links file changed the rendered page")
+
+(home / "config" / "bridge-links").write_text(
+    "Harbour phone build\thttps://harbour.example/build?mode=phone&v=1\n"
+    "Dell health\thttps://dell.example/health\n"
+    "Not secure\thttp://example.com\n"
+    "malformed line\n"
+    "<script>alert me</script>\thttps://example.com/?q=\"quoted\"&x=1\n"
+)
+rendered = module.glance_html("nonce", home)
+expected = [
+    '<a href="https://harbour.example/build?mode=phone&amp;v=1" target="_blank" rel="noopener noreferrer">Harbour phone build</a>',
+    '<a href="https://dell.example/health" target="_blank" rel="noopener noreferrer">Dell health</a>',
+    '&lt;script&gt;alert me&lt;/script&gt;',
+    'href="https://example.com/?q=&quot;quoted&quot;&amp;x=1"',
+]
+for value in expected:
+    if value not in rendered:
+        raise SystemExit("missing pinned-link rendering: %s" % value)
+if 'href="http://example.com"' in rendered or "malformed line" in rendered:
+    raise SystemExit("invalid pinned link was rendered")
+if rendered.count('target="_blank" rel="noopener noreferrer"') != 3:
+    raise SystemExit("unexpected pinned-link anchor count")
+if rendered.index('<nav class="bridge-links"') < rendered.index("</header>"):
+    raise SystemExit("pinned links were not rendered below the page header")
+PY
+  ) || fail "pinned links rendering failed: $output"
+  pass "glance page renders only escaped HTTPS pinned links"
+}
+
 test_observation_error_fails_fast_and_keeps_photo_count() {
   local home fakebin fixture port cookie hdr body started elapsed
   home=$(make_home obs-error)
@@ -1986,6 +2033,7 @@ test_inbox_unique_names_never_overwrite
 test_inbox_pair_failure_leaves_no_partial_upload
 test_photos_received_today_counts_utc_sidecars
 test_child_path_resolves_tool_dirs_without_hardcoded_nvm
+test_glance_page_pinned_links
 test_observation_error_fails_fast_and_keeps_photo_count
 test_scrubbed_snapshot_with_herdr_meta_fails_fast
 test_human_titles_drop_internal_primary_lines

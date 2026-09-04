@@ -246,6 +246,13 @@ When the file is present, its first line must trim to exactly one of `low`, `med
 Any other content, including an empty token, refuses rather than falling back.
 The file is not inherited by secondmate homes.
 
+## Bridge pinned links (config/bridge-links)
+
+`config/bridge-links` is an optional LOCAL, gitignored file containing one pinned bridge-page link per line as `<label><TAB><https-url>`.
+Blank lines and lines starting with `#` are ignored, and malformed entries or non-HTTPS URLs are skipped.
+`bin/fm-bridge-view.py` reads the file at render time, so changes appear on the next page refresh without restarting the service.
+The file is not inherited by secondmate homes.
+
 ## Primary orchestrator handoff (config/primary-handoff)
 
 `config/primary-handoff` is an optional local, gitignored JSON file that enables automated rotation of the Firstmate primary orchestrator on two independent axes: provider quota and model-context used.

@@ -1361,6 +1361,16 @@ form.logout { margin: 0; width: auto; }
 form.logout button { width: auto; min-height: 2rem; padding: 0.3rem 0.7rem; background: transparent; color: #c5d0c8; border-color: #3b4742; }
 """
 
+PINNED_LINKS_CSS = """
+.bridge-links { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0.7rem 0 1rem; }
+.bridge-links a {
+  display: flex; align-items: center; min-height: 2.75rem; width: 100%;
+  border: 1px solid #3b4742; border-radius: 0.5rem; padding: 0.6rem 0.8rem;
+  background: #1b2220; font-weight: 600; text-decoration: none;
+}
+@media (min-width: 36rem) { .bridge-links a { width: auto; } }
+"""
+
 PAGE_JS = """
 const STALE_MS = %d * 1000;
 const REFRESH_MS = %d * 1000;
@@ -1775,8 +1785,33 @@ def login_html(nonce: str, error: str = "") -> str:
 """
 
 
-def glance_html(nonce: str) -> str:
+def pinned_links_html(home: Path) -> str:
+    path = home / "config" / "bridge-links"
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError):
+        return ""
+    anchors = []
+    for line in lines:
+        if not line.strip() or line.startswith("#") or "\t" not in line:
+            continue
+        label, url = (part.strip() for part in line.split("\t", 1))
+        parsed = urlparse(url)
+        if not label or parsed.scheme != "https" or not parsed.netloc or any(char.isspace() for char in url):
+            continue
+        anchors.append(
+            f'<a href="{html.escape(url, quote=True)}" target="_blank" '
+            f'rel="noopener noreferrer">{html.escape(label)}</a>'
+        )
+    if not anchors:
+        return ""
+    return '\n<nav class="bridge-links" aria-label="Pinned links">' + "".join(anchors) + "</nav>"
+
+
+def glance_html(nonce: str, home: Optional[Path] = None) -> str:
     js = PAGE_JS
+    links = pinned_links_html(home) if home is not None else ""
+    css = PAGE_CSS + (PINNED_LINKS_CSS if links else "")
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1784,7 +1819,7 @@ def glance_html(nonce: str) -> str:
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="referrer" content="no-referrer">
 <title>STARSHIP</title>
-<style nonce="{nonce}">{PAGE_CSS}</style>
+<style nonce="{nonce}">{css}</style>
 <script nonce="{nonce}">{js}</script>
 </head>
 <body>
@@ -1793,7 +1828,7 @@ def glance_html(nonce: str) -> str:
 <header>
   <h1>Starship</h1>
   <form class="logout" method="post" action="/logout"><button type="submit">Log out</button></form>
-</header>
+</header>{links}
 <h2>Talk</h2>
 <div id="speak-box">
   <label for="hold-speak">Hold to speak</label>
@@ -2003,7 +2038,7 @@ class BridgeHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         if parsed.path == "/":
             if self._authed():
-                self._html(200, glance_html)
+                self._html(200, glance_html, home=STATE.home)
             else:
                 self._html(200, login_html)
             return
