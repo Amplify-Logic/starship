@@ -237,6 +237,15 @@ The inherited-local-material contract is owned by `secondmate-provisioning`; for
 For grok, `fm-spawn.sh` installs one firstmate-owned global turn-end hook under `$GROK_HOME/hooks/`, or `~/.grok/hooks/` when `GROK_HOME` is unset, and drops a per-task `.fm-grok-turnend` pointer in the worktree, with teardown removing the task token and pointer.
 For Pi secondmate launches, `fm-spawn.sh` starts Pi with `-e` pointed at the secondmate home's own tracked `.pi/extensions/fm-primary-pi-watch.ts` and `.pi/extensions/fm-primary-turnend-guard.ts`, both already present from the secondmate home's git worktree.
 
+## Primary effort (config/primary-effort)
+
+`config/primary-effort` is an optional local, gitignored one-token file that sets the Claude Fable 5.1 primary launch effort.
+`bin/fm-primary.sh` reads it only at launch.
+When the file is absent, the launcher uses `xhigh`.
+When the file is present, its first line must trim to exactly one of `low`, `medium`, `high`, `xhigh`, or `max`.
+Any other content, including an empty token, refuses rather than falling back.
+The file is not inherited by secondmate homes.
+
 ## Primary orchestrator handoff (config/primary-handoff)
 
 `config/primary-handoff` is an optional local, gitignored JSON file that enables automated rotation of the Firstmate primary orchestrator on two independent axes: provider quota and model-context used.

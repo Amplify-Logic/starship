@@ -10,8 +10,12 @@
 #   pi            pi --name FIRSTMATE
 #                 Pi has no permission system, so no bypass flag exists or is
 #                 needed.
-#   claude-fable  claude --model claude-fable-5 --effort high --name FIRSTMATE
+#   claude-fable  claude --model claude-fable-5-1 --effort <value> --name FIRSTMATE
 #                 --dangerously-skip-permissions
+#                 Effort is the first trimmed line of local gitignored
+#                 config/primary-effort when that file exists, otherwise xhigh.
+#                 Accepted tokens: low, medium, high, xhigh, max.
+#                 Any other content, including an empty token, refuses.
 #   codex         codex --dangerously-bypass-hook-trust
 #                 --dangerously-bypass-approvals-and-sandbox
 #   opencode      OPENCODE_CONFIG_CONTENT={"permission":{"*":"allow"}}
@@ -208,6 +212,27 @@ visible_role() {
   else
     printf 'FIRSTMATE'
   fi
+}
+
+# Resolve Claude Fable primary effort from local config/primary-effort.
+# An absent file defaults to xhigh. A present file must have a first line that
+# trims to exactly one accepted token; anything else, including an empty token,
+# refuses rather than falling back. Call this only for the claude-fable profile
+# so a bad file cannot block other primaries.
+resolve_claude_fable_effort() {
+  local file value
+  file="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}/primary-effort"
+  if [ ! -f "$file" ]; then
+    CLAUDE_FABLE_EFFORT=xhigh
+    return 0
+  fi
+  IFS= read -r value < "$file" || true
+  value=${value#"${value%%[![:space:]]*}"}
+  value=${value%"${value##*[![:space:]]}"}
+  case "$value" in
+    low|medium|high|xhigh|max) CLAUDE_FABLE_EFFORT=$value ;;
+    *) die "invalid effort in $file: '$value' (accepted: low medium high xhigh max)" ;;
+  esac
 }
 
 mark_current_surface() {
@@ -491,7 +516,9 @@ case "$PROFILE" in
     argv=(pi --name "$role")
     ;;
   claude-fable)
-    argv=(claude --model claude-fable-5 --effort high --name "$role" --dangerously-skip-permissions)
+    resolve_claude_fable_effort
+    argv=(claude --model claude-fable-5-1 --effort "$CLAUDE_FABLE_EFFORT" --name "$role" --dangerously-skip-permissions)
+    printf 'fm-primary: launching model claude-fable-5-1 at effort %s\n' "$CLAUDE_FABLE_EFFORT" >&2
     ;;
   codex)
     argv=(codex --dangerously-bypass-hook-trust --dangerously-bypass-approvals-and-sandbox)

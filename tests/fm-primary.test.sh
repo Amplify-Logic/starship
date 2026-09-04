@@ -75,8 +75,8 @@ test_profiles_and_root() {
   assert_not_contains "$out" 'permission' "Pi profile invented a permission bypass"
 
   out=$(dry claude-fable)
-  assert_contains "$out" "'claude' '--model' 'claude-fable-5' '--effort' 'high' '--name' 'FIRSTMATE' '--dangerously-skip-permissions'" \
-    "Claude Fable profile did not pin model, effort, role, and bypass"
+  assert_contains "$out" "'claude' '--model' 'claude-fable-5-1' '--effort' 'xhigh' '--name' 'FIRSTMATE' '--dangerously-skip-permissions'" \
+    "Claude Fable profile did not pin model, default effort, role, and bypass"
   [ "$(dry claude)" = "$out" ] || fail "Claude alias did not expand exactly to claude-fable"
 
   out=$(dry codex)
@@ -448,7 +448,55 @@ test_cursor_grok_primary_profile() {
   pass "fm-primary: Cursor Grok is pinned, lifecycle-integrated, version-warned, and login-gated"
 }
 
+test_claude_fable_effort() {
+  local out status=0 effort_file="$HOME_FIX/config/primary-effort"
+  mkdir -p "$HOME_FIX/config"
+
+  out=$(dry claude-fable 2>&1)
+  assert_contains "$out" "'--model' 'claude-fable-5-1'" \
+    "absent primary-effort did not launch claude-fable-5-1"
+  assert_contains "$out" "'--effort' 'xhigh'" \
+    "absent primary-effort did not default to xhigh"
+  assert_contains "$out" "launching model claude-fable-5-1 at effort xhigh" \
+    "absent primary-effort did not print the resolved model and effort"
+
+  printf 'high\n' > "$effort_file"
+  out=$(dry claude-fable 2>/dev/null)
+  assert_contains "$out" "'--effort' 'high'" \
+    "primary-effort high did not resolve to high"
+  assert_contains "$out" "'--model' 'claude-fable-5-1'" \
+    "primary-effort high lost the Fable 5.1 model pin"
+
+  printf '  high \n' > "$effort_file"
+  out=$(dry claude-fable 2>/dev/null)
+  assert_contains "$out" "'--effort' 'high'" \
+    "padded primary-effort high was not trimmed to high"
+
+  printf 'turbo\n' > "$effort_file"
+  status=0
+  out=$(dry claude-fable 2>&1) || status=$?
+  [ "$status" -ne 0 ] || fail "primary-effort turbo was accepted"
+  assert_contains "$out" "$effort_file" "invalid-effort refusal did not name the file"
+  assert_contains "$out" "turbo" "invalid-effort refusal did not name the bad value"
+  assert_contains "$out" "low medium high xhigh max" \
+    "invalid-effort refusal did not name the accepted set"
+  assert_not_contains "$out" "'--effort' 'xhigh'" \
+    "invalid-effort silently fell back to the default"
+
+  : > "$effort_file"
+  status=0
+  out=$(dry claude-fable 2>&1) || status=$?
+  [ "$status" -ne 0 ] || fail "empty primary-effort was accepted"
+  assert_contains "$out" "$effort_file" "empty-effort refusal did not name the file"
+  assert_contains "$out" "low medium high xhigh max" \
+    "empty-effort refusal did not name the accepted set"
+
+  rm -f "$effort_file"
+  pass "fm-primary: Claude Fable effort resolves, trims, and refuses invalid tokens"
+}
+
 test_profiles_and_root
+test_claude_fable_effort
 test_unknown_dependency_and_integration_refusals
 test_active_lock_refusal
 test_exec_environment_and_exit_status
