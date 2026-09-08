@@ -239,7 +239,7 @@ For Pi secondmate launches, `fm-spawn.sh` starts Pi with `-e` pointed at the sec
 
 ## Primary effort (config/primary-effort)
 
-`config/primary-effort` is an optional local, gitignored one-token file that sets the Claude Fable 5.1 primary launch effort.
+`config/primary-effort` is an optional local, gitignored one-token file that sets the launch effort for the `claude-fable` and `claude-opus` primary profiles.
 `bin/fm-primary.sh` reads it only at launch.
 When the file is absent, the launcher uses `xhigh`.
 When the file is present, its first line must trim to exactly one of `low`, `medium`, `high`, `xhigh`, or `max`.
@@ -273,7 +273,7 @@ See [`docs/examples/primary-handoff.json`](examples/primary-handoff.json) for a 
   "threshold_context_percent_used": 50,
   "poll_seconds": 60,
   "cooldown_seconds": 300,
-  "chain": ["claude-fable", "pi", "codex", "kimi-k3"]
+  "chain": ["claude-fable", "claude-opus"]
 }
 ```
 

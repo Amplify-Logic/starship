@@ -668,6 +668,80 @@ test_context_axis_absent_is_quota_only() {
   pass "absent context threshold leaves quota-only behavior"
 }
 
+write_exhausted_chain_config() {
+  cat > "$HOME_FIX/config/primary-handoff" <<JSON
+{
+  "enabled": true,
+  "threshold_percent_remaining": 15,
+  "threshold_context_percent_used": 50,
+  "poll_seconds": 60,
+  "cooldown_seconds": 300,
+  "chain": ["claude-fable", "claude-opus"]
+}
+JSON
+}
+
+test_check_stays_put_when_chain_exhausted() {
+  local out status=0
+  : > "$LAUNCH_LOG"
+  : > "$SIGNAL_LOG"
+  write_exhausted_chain_config
+  write_quota "$TMP_ROOT/quota.json" 10
+  write_context_sample 80
+  write_active claude-opus
+  start_fake_holder
+  out=$(run_execute "$ROOT/bin/fm-primary-handoff.sh" check 2>&1) || status=$?
+  expect_code 0 "$status" "exhausted-chain check must not fail: $out"
+  assert_contains "$out" 'handoff: chain exhausted profile=claude-opus' "should report chain exhausted"
+  assert_not_contains "$out" 'no usable next profile' "must not log a failure every poll"
+  assert_not_contains "$out" 'threshold crossed' "must not start a rotation without a successor"
+  assert_not_contains "$(cat "$LAUNCH_LOG")" 'launch' "must not launch when chain is exhausted"
+  [ "$(live_holder_count)" = 1 ] || fail "exhausted chain must keep the outgoing holder"
+  [ ! -f "$HOME_FIX/state/.primary-handoff" ] || \
+    assert_not_contains "$(cat "$HOME_FIX/state/.primary-handoff")" 'phase=failed' "must not record a failed phase"
+  cleanup_holders
+  pass "check stays put quietly when the chain has no distinct successor"
+}
+
+test_check_context_refresh_when_chain_exhausted() {
+  local out status=0
+  : > "$LAUNCH_LOG"
+  : > "$SIGNAL_LOG"
+  write_exhausted_chain_config
+  write_quota "$TMP_ROOT/quota.json" 10
+  write_context_sample 40
+  write_active claude-opus
+  start_fake_holder
+  out=$(run_execute "$ROOT/bin/fm-primary-handoff.sh" check 2>&1) || status=$?
+  expect_code 0 "$status" "exhausted-chain context refresh should succeed: $out"
+  assert_contains "$out" 'handoff: chain exhausted profile=claude-opus' "should report chain exhausted"
+  assert_contains "$out" 'context threshold crossed' "context axis must still fire"
+  assert_contains "$out" 'handed_off: claude-opus -> claude-opus' "should same-runtime refresh claude-opus"
+  assert_contains "$(cat "$LAUNCH_LOG")" 'launch claude-opus' "should relaunch the same profile"
+  assert_contains "$(cat "$HOME_FIX/state/.primary-handoff")" 'trigger=context' "record trigger should be context"
+  assert_not_contains "$out" 'no usable next profile' "must not log a quota failure"
+  assert_never_two
+  cleanup_holders
+  pass "exhausted chain still allows a same-profile context refresh"
+}
+
+test_claude_opus_chain_profile() {
+  local next opus_alias
+  next=$(
+    # shellcheck source=bin/fm-primary-handoff-lib.sh
+    . "$ROOT/bin/fm-primary-handoff-lib.sh"
+    FM_HANDOFF_SKIP_CLI_CHECK=1 fm_handoff_next_profile claude-fable '["claude-fable","claude-opus"]'
+  )
+  [ "$next" = claude-opus ] || fail "handoff chain did not accept claude-opus after claude-fable"
+  opus_alias=$(
+    # shellcheck source=bin/fm-primary-handoff-lib.sh
+    . "$ROOT/bin/fm-primary-handoff-lib.sh"
+    fm_handoff_normalize_profile opus
+  )
+  [ "$opus_alias" = claude-opus ] || fail "handoff did not normalize the opus launcher alias"
+  pass "handoff accepts claude-opus and the opus alias as launcher profiles"
+}
+
 test_disabled_is_noop
 test_happy_path_atomic_handoff
 test_flush_failure_keeps_outgoing_lock
@@ -690,5 +764,8 @@ test_watcher_rearmed_after_handoff
 test_wakes_survive_flush
 test_status_bar_persists_context_sample
 test_context_axis_absent_is_quota_only
+test_claude_opus_chain_profile
+test_check_stays_put_when_chain_exhausted
+test_check_context_refresh_when_chain_exhausted
 
 printf 'All primary-handoff tests passed.\n'

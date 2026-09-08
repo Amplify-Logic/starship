@@ -12,8 +12,11 @@
 #                 needed.
 #   claude-fable  claude --model claude-fable-5-1 --effort <value> --name FIRSTMATE
 #                 --dangerously-skip-permissions
-#                 Effort is the first trimmed line of local gitignored
-#                 config/primary-effort when that file exists, otherwise xhigh.
+#   claude-opus   claude --model claude-opus-5 --effort <value> --name FIRSTMATE
+#                 --dangerously-skip-permissions
+#                 Both Claude profiles use the first trimmed line of local
+#                 gitignored config/primary-effort when that file exists,
+#                 otherwise xhigh.
 #                 Accepted tokens: low, medium, high, xhigh, max.
 #                 Any other content, including an empty token, refuses.
 #   codex         codex --dangerously-bypass-hook-trust
@@ -34,7 +37,8 @@
 #                 events). There is no third-party status-line API, so no
 #                 companion status bar is installed.
 #
-# Aliases: claude -> claude-fable; kimi -> kimi-k3; cursor -> cursor-grok.
+# Aliases: claude -> claude-fable; opus -> claude-opus; kimi -> kimi-k3;
+# cursor -> cursor-grok.
 # The aliases are primary-launch conveniences only.
 # They never change config/crew-harness, config/secondmate-harness, dispatch
 # profiles, or fm-spawn's independently verified worker-adapter set.
@@ -214,23 +218,23 @@ visible_role() {
   fi
 }
 
-# Resolve Claude Fable primary effort from local config/primary-effort.
+# Resolve Claude primary effort from local config/primary-effort.
 # An absent file defaults to xhigh. A present file must have a first line that
 # trims to exactly one accepted token; anything else, including an empty token,
-# refuses rather than falling back. Call this only for the claude-fable profile
-# so a bad file cannot block other primaries.
-resolve_claude_fable_effort() {
+# refuses rather than falling back. Call this only for a Claude profile so a bad
+# file cannot block other primaries.
+resolve_claude_effort() {
   local file value
   file="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}/primary-effort"
   if [ ! -f "$file" ]; then
-    CLAUDE_FABLE_EFFORT=xhigh
+    CLAUDE_EFFORT=xhigh
     return 0
   fi
   IFS= read -r value < "$file" || true
   value=${value#"${value%%[![:space:]]*}"}
   value=${value%"${value##*[![:space:]]}"}
   case "$value" in
-    low|medium|high|xhigh|max) CLAUDE_FABLE_EFFORT=$value ;;
+    low|medium|high|xhigh|max) CLAUDE_EFFORT=$value ;;
     *) die "invalid effort in $file: '$value' (accepted: low medium high xhigh max)" ;;
   esac
 }
@@ -391,7 +395,7 @@ verify_integrations() {
       require_file .pi/extensions/fm-primary-status-bar.ts
       require_file bin/fm-status-bar.sh
       ;;
-    claude-fable)
+    claude-fable|claude-opus)
       require_file .claude/settings.json
       require_file bin/fm-status-bar.sh
       require_command jq
@@ -452,12 +456,13 @@ esac
 [ "$#" -eq 1 ] || die "profiles accept no extra arguments; use the launched CLI's normal resume UI"
 case "$PROFILE" in
   claude) PROFILE=claude-fable ;;
+  opus) PROFILE=claude-opus ;;
   kimi) PROFILE=kimi-k3 ;;
   cursor) PROFILE=cursor-grok ;;
 esac
 case "$PROFILE" in
-  pi|claude-fable|codex|opencode|grok|kimi-k3|cursor-grok) ;;
-  *) die "unknown or unverified primary profile '$PROFILE' (verified: pi claude-fable codex opencode grok kimi-k3 cursor-grok)" ;;
+  pi|claude-fable|claude-opus|codex|opencode|grok|kimi-k3|cursor-grok) ;;
+  *) die "unknown or unverified primary profile '$PROFILE' (verified: pi claude-fable claude-opus codex opencode grok kimi-k3 cursor-grok)" ;;
 esac
 
 validate_visible_prefix
@@ -466,7 +471,8 @@ refuse_active_session
 
 case "$PROFILE" in
   pi) CLI=pi ;;
-  claude-fable) CLI=claude ;;
+  claude-fable) CLI=claude; CLAUDE_MODEL=claude-fable-5-1 ;;
+  claude-opus) CLI=claude; CLAUDE_MODEL=claude-opus-5 ;;
   codex) CLI=codex ;;
   opencode) CLI=opencode ;;
   grok) CLI=grok ;;
@@ -515,10 +521,10 @@ case "$PROFILE" in
   pi)
     argv=(pi --name "$role")
     ;;
-  claude-fable)
-    resolve_claude_fable_effort
-    argv=(claude --model claude-fable-5-1 --effort "$CLAUDE_FABLE_EFFORT" --name "$role" --dangerously-skip-permissions)
-    printf 'fm-primary: launching model claude-fable-5-1 at effort %s\n' "$CLAUDE_FABLE_EFFORT" >&2
+  claude-fable|claude-opus)
+    resolve_claude_effort
+    argv=(claude --model "$CLAUDE_MODEL" --effort "$CLAUDE_EFFORT" --name "$role" --dangerously-skip-permissions)
+    printf 'fm-primary: launching model %s at effort %s\n' "$CLAUDE_MODEL" "$CLAUDE_EFFORT" >&2
     ;;
   codex)
     argv=(codex --dangerously-bypass-hook-trust --dangerously-bypass-approvals-and-sandbox)

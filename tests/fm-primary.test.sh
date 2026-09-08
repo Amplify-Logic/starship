@@ -65,9 +65,11 @@ test_profiles_and_root() {
   local out help
   help=$("$ROOT/bin/fm-primary.sh" --help)
   assert_contains "$help" 'claude-fable' "help omitted the Claude Fable profile"
+  assert_contains "$help" 'claude-opus' "help omitted the Claude Opus profile"
   assert_contains "$help" 'kimi-k3' "help omitted the Kimi K3 profile"
   assert_contains "$help" 'cursor-grok' "help omitted the Cursor Grok profile"
-  assert_contains "$help" 'Aliases: claude -> claude-fable; kimi -> kimi-k3; cursor -> cursor-grok.' "help omitted exact alias ownership"
+  assert_contains "$help" 'opus -> claude-opus' "help omitted the Opus alias"
+  assert_contains "$help" 'cursor -> cursor-grok.' "help omitted exact alias ownership"
   assert_contains "$help" 'Pi has no permission system' "help did not explain Pi's no-bypass posture"
   out=$(dry pi)
   assert_contains "$out" "root=$ROOT" "Pi profile did not resolve the tracked root from another cwd"
@@ -78,6 +80,11 @@ test_profiles_and_root() {
   assert_contains "$out" "'claude' '--model' 'claude-fable-5-1' '--effort' 'xhigh' '--name' 'FIRSTMATE' '--dangerously-skip-permissions'" \
     "Claude Fable profile did not pin model, default effort, role, and bypass"
   [ "$(dry claude)" = "$out" ] || fail "Claude alias did not expand exactly to claude-fable"
+
+  out=$(dry claude-opus)
+  assert_contains "$out" "'claude' '--model' 'claude-opus-5' '--effort' 'xhigh' '--name' 'FIRSTMATE' '--dangerously-skip-permissions'" \
+    "Claude Opus profile did not pin model, default effort, role, and bypass"
+  [ "$(dry opus)" = "$out" ] || fail "Opus alias did not expand exactly to claude-opus"
 
   out=$(dry codex)
   assert_contains "$out" "'codex' '--dangerously-bypass-hook-trust' '--dangerously-bypass-approvals-and-sandbox'" \
@@ -448,7 +455,7 @@ test_cursor_grok_primary_profile() {
   pass "fm-primary: Cursor Grok is pinned, lifecycle-integrated, version-warned, and login-gated"
 }
 
-test_claude_fable_effort() {
+test_claude_effort() {
   local out status=0 effort_file="$HOME_FIX/config/primary-effort"
   mkdir -p "$HOME_FIX/config"
 
@@ -467,14 +474,20 @@ test_claude_fable_effort() {
   assert_contains "$out" "'--model' 'claude-fable-5-1'" \
     "primary-effort high lost the Fable 5.1 model pin"
 
+  out=$(dry claude-opus 2>/dev/null)
+  assert_contains "$out" "'--effort' 'high'" \
+    "primary-effort high did not apply to Claude Opus"
+  assert_contains "$out" "'--model' 'claude-opus-5'" \
+    "primary-effort high lost the Opus 5 model pin"
+
   printf '  high \n' > "$effort_file"
-  out=$(dry claude-fable 2>/dev/null)
+  out=$(dry claude-opus 2>/dev/null)
   assert_contains "$out" "'--effort' 'high'" \
     "padded primary-effort high was not trimmed to high"
 
   printf 'turbo\n' > "$effort_file"
   status=0
-  out=$(dry claude-fable 2>&1) || status=$?
+  out=$(dry claude-opus 2>&1) || status=$?
   [ "$status" -ne 0 ] || fail "primary-effort turbo was accepted"
   assert_contains "$out" "$effort_file" "invalid-effort refusal did not name the file"
   assert_contains "$out" "turbo" "invalid-effort refusal did not name the bad value"
@@ -492,11 +505,11 @@ test_claude_fable_effort() {
     "empty-effort refusal did not name the accepted set"
 
   rm -f "$effort_file"
-  pass "fm-primary: Claude Fable effort resolves, trims, and refuses invalid tokens"
+  pass "fm-primary: Claude effort applies to Fable and Opus and refuses invalid tokens"
 }
 
 test_profiles_and_root
-test_claude_fable_effort
+test_claude_effort
 test_unknown_dependency_and_integration_refusals
 test_active_lock_refusal
 test_exec_environment_and_exit_status

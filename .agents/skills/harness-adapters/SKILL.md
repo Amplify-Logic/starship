@@ -31,6 +31,7 @@ The primary-session watcher wake protocols are rendered from `docs/supervision-p
 The supervision knowledge lives here: busy signature, exit command, interrupt, dialogs, resume behavior, skill invocation, and quirks.
 
 The verified WORKER adapters are `claude`, `codex`, `opencode`, `pi`, `grok`, `cursor`, `kimi`, and `prime-agent`.
+The verified PRIMARY profiles are `pi`, `claude-fable`, `claude-opus`, `codex`, `opencode`, `grok`, `kimi-k3`, and `cursor-grok`; `bin/fm-primary.sh` owns their exact launch mechanics.
 `cursor` is also certified as a PRIMARY through `bin/fm-primary.sh cursor-grok` (Cursor CLI `2026.08.11-e8db854`, 2026-08-13 lab); never infer worker facts from primary facts or the reverse.
 Kimi is verified as a PRIMARY through `bin/fm-primary.sh kimi-k3` and, separately, as a WORKER through `fm-spawn --harness kimi` (Kimi Code 0.27.0, 2026-07-23 lab); never infer one role from the other.
 

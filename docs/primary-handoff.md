@@ -19,6 +19,9 @@ Keeping sessions short and rotating before context balloons past roughly half us
 
 Local, gitignored `config/primary-handoff` is a JSON object.
 See [`docs/examples/primary-handoff.json`](examples/primary-handoff.json) and the "Primary orchestrator handoff" section of [`configuration.md`](configuration.md).
+The quota-rotation example uses `"chain": ["claude-fable", "claude-opus"]` so a Fable primary can hand off directly to Opus.
+Claude quota is read from the shared general windows (`five_hour`, `seven_day`) of the single `claude` provider, never from a model-specific window, so this chain rotates only when the shared five-hour or seven-day window crosses the threshold, not when a Fable-specific model window runs out.
+Both Claude profiles share that one provider, so after rotating to `claude-opus` no further quota rotation is expected: `check` reports `handoff: chain exhausted` and stays put quietly instead of failing on every poll, while the context axis can still refresh the same profile.
 
 Two independent trigger axes share one rotation protocol:
 
@@ -51,7 +54,8 @@ Test seam: `FM_HANDOFF_CONTEXT_USED` overrides the durable sample.
   Worker panes are independent backend endpoints; they keep running and report through durable `state/<id>.status` and `.meta`.
   The incoming primary picks them up through ordinary session-start reconciliation (restart is a non-event).
 - **Quota trigger** still walks `chain` to the next distinct usable profile (cross-runtime).
-- When both axes fire on the same check, **quota wins**: a same-runtime refresh cannot restore provider quota.
+  When no distinct usable successor exists (for example `claude-opus` at the end of the shared-provider Claude chain), `check` prints `handoff: chain exhausted ...` and does not enter a quota rotation or record a failure; it then evaluates the context axis as usual, so a same-profile refresh can still happen.
+- When both axes fire on the same check and a quota rotation is possible, **quota wins**: a same-runtime refresh cannot restore provider quota.
 
 ## Atomic-lock handoff protocol
 
@@ -129,6 +133,7 @@ Chosen tradeoff:
 | --- | --- | --- | --- |
 | Feature disabled / config absent | Config read | No-op exit 0 | Untouched |
 | Quota probe missing or unparseable | `quota-axi` / fixture | No quota handoff; context axis may still fire | Untouched |
+| Quota over threshold, no distinct successor in `chain` | `check` / `run` | `handoff: chain exhausted`, no quota rotation, no failure phase; context axis still evaluated | Untouched unless context axis fires |
 | Context sample missing | No `state/.primary-context` / override | No context handoff | Untouched |
 | Current profile not over either threshold | Metric compare | No handoff | Untouched |
 | Away mode active | `state/.afk` | Refuse (unless `--force`) | Untouched |
