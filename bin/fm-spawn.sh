@@ -817,9 +817,11 @@ effort_flag_for_harness() {
       esac
       ;;
     codex)
-      # The installed codex config schema uses model_reasoning_effort, and the
-      # bundled model catalog advertises low|medium|high|xhigh. Omit max rather
-      # than passing an unsupported value.
+      # The installed codex config schema uses model_reasoning_effort.
+      # The worker axis deliberately stops at xhigh pending the separate
+      # astra-max-effort follow-up.
+      # codex-cli 0.153.4 does advertise max, so that omission is a recorded
+      # choice rather than an absent capability.
       case "$effort" in
         low|medium|high|xhigh) printf -- '-c %s ' "$(shell_quote "model_reasoning_effort=\"$effort\"")" ;;
       esac

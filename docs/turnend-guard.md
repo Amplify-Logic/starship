@@ -89,6 +89,8 @@ Command run for root-signal probe: `codex exec --ephemeral --json --dangerously-
 Observed output: the first command printed `<scratch>/outside`, the second command printed `<scratch>`, the Stop hook process `pwd -P` printed `<scratch>`, payload `cwd` printed `<scratch>`, and `CODEX_PROJECT_DIR`, `CODEX_WORKSPACE_ROOT`, and `CODEX_CWD` were empty.
 The tracked command therefore treats hook process PWD as the hook-loaded firstmate root and does not let payload `cwd` choose an executable.
 It still passes the original payload to `bin/fm-turnend-guard.sh`, so the shared loop guard reads `stop_hook_active`.
+On 2026-09-09 the same tracked Stop hook still fired on codex-cli 0.153.4 during the Astra primary probes, logging `hook: Stop` and `hook: Stop Completed`.
+The exit-2 block itself was not re-exercised on that build, so the blocking record above stays pinned to 0.142.1.
 
 OpenCode 1.17.6 was validated with project plugins under scratch `.opencode/plugins/`.
 Hook file used: `.opencode/plugins/fm-smoke.js` for throw testing and `.opencode/plugins/fm-primary-turnend-guard.js` for follow-up testing.

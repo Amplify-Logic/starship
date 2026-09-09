@@ -172,11 +172,18 @@ fm_test_path_is_scoped() {  # <path>
 # Untruncated argv for pid $1. Linux `ps -o command=` without -ww clips to
 # the window width (often 80), which drops the fixture path and makes
 # path-scoped teardown miss the child; /proc cmdline is the full argv.
+#
+# Every /proc probe in this teardown path is best-effort and absorbs its own
+# failure. A pid can exit between the readability check and the read, which
+# fails the read with ESRCH or removes the entry outright, and a vanished pid is
+# simply not a kill candidate. Left unabsorbed, that race aborts teardown from
+# inside the EXIT trap of a suite running with errexit, so a file whose every
+# assertion passed still reports a non-zero exit.
 fm_test_pid_command_line() {  # <pid>
   local pid=$1 cmd
   [ -n "$pid" ] || return 1
   if [ -r "/proc/$pid/cmdline" ]; then
-    cmd=$(tr '\0' ' ' < "/proc/$pid/cmdline")
+    cmd=$(tr '\0' ' ' 2>/dev/null < "/proc/$pid/cmdline") || cmd=
     cmd=${cmd%"${cmd##*[![:space:]]}"}
     [ -n "$cmd" ] || return 1
     printf '%s\n' "$cmd"
@@ -199,7 +206,7 @@ fm_test_pid_is_path_scoped() {  # <pid>
     while IFS= read -r -d '' arg || [ -n "${arg:-}" ]; do
       fm_test_path_is_scoped "$arg" && return 0
       arg=
-    done < "/proc/$pid/cmdline"
+    done 2>/dev/null < "/proc/$pid/cmdline" || true
     target=$(readlink "/proc/$pid/exe" 2>/dev/null || true)
     target=${target% (deleted)}
     fm_test_path_is_scoped "$target" && return 0
@@ -268,7 +275,7 @@ fm_test_kill_cleanup_dir_exes() {  # <-TERM|-KILL>
     target=${target%' (deleted)'}
     cmd=
     if [ -r "$proc/cmdline" ]; then
-      cmd=$(tr '\0' ' ' < "$proc/cmdline")
+      cmd=$(tr '\0' ' ' 2>/dev/null < "$proc/cmdline") || cmd=
       cmd=${cmd%"${cmd##*[![:space:]]}"}
     fi
     for dir in "${FM_TEST_CLEANUP_DIRS[@]:-}"; do

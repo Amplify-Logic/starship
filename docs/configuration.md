@@ -246,6 +246,16 @@ When the file is present, its first line must trim to exactly one of `low`, `med
 Any other content, including an empty token, refuses rather than falling back.
 The file is not inherited by secondmate homes.
 
+## Primary Astra effort (config/astra-effort)
+
+`config/astra-effort` is an optional local, gitignored one-token file that sets the launch effort for the `astra` primary profile.
+`bin/fm-primary.sh` reads it only at launch.
+When the file is absent, the launcher uses `xhigh`.
+When the file is present, its first line must trim to exactly one of `low`, `medium`, `high`, or `xhigh`.
+`max` is not accepted, and that refusal is retained pending the separate follow-up astra-max-effort.
+Any other content, including an empty token, refuses rather than falling back.
+The file is not inherited by secondmate homes.
+
 ## Bridge pinned links (config/bridge-links)
 
 `config/bridge-links` is an optional LOCAL, gitignored file containing one pinned bridge-page link per line as `<label><TAB><https-url>`.

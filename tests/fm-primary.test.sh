@@ -32,6 +32,15 @@ if [ "${1:-}" = status ] && [ "$(basename "$0")" = agent ]; then
   printf '%s\n' "${FM_PRIMARY_TEST_CURSOR_STATUS:-✓ Logged in as exam@example.invalid}"
   exit 0
 fi
+if [ "${1:-}" = login ] && [ "${2:-}" = status ] && [ "$(basename "$0")" = codex ]; then
+  # Matches codex-cli 0.144.6: the status lands on stderr with empty stdout and
+  # a non-zero exit. An empty fixture stays a quiet, non-blocking probe.
+  if [ -n "${FM_PRIMARY_TEST_CODEX_LOGIN_STATUS:-}" ]; then
+    printf '%s\n' "$FM_PRIMARY_TEST_CODEX_LOGIN_STATUS" >&2
+    exit 1
+  fi
+  exit 0
+fi
 if [ "${1:-}" = doctor ] && [ "$(basename "$0")" = kimi ]; then
   printf 'doctor KIMI_CODE_HOME=%s\n' "${KIMI_CODE_HOME:-}" >> "$FM_PRIMARY_TEST_LOG"
   exit "${FM_PRIMARY_TEST_DOCTOR_EXIT:-0}"
@@ -68,6 +77,7 @@ test_profiles_and_root() {
   assert_contains "$help" 'claude-opus' "help omitted the Claude Opus profile"
   assert_contains "$help" 'kimi-k3' "help omitted the Kimi K3 profile"
   assert_contains "$help" 'cursor-grok' "help omitted the Cursor Grok profile"
+  assert_contains "$help" 'astra' "help omitted the Astra profile"
   assert_contains "$help" 'opus -> claude-opus' "help omitted the Opus alias"
   assert_contains "$help" 'cursor -> cursor-grok.' "help omitted exact alias ownership"
   assert_contains "$help" 'Pi has no permission system' "help did not explain Pi's no-bypass posture"
@@ -93,6 +103,9 @@ test_profiles_and_root() {
   assert_contains "$out" "'opencode'" "OpenCode verified primary profile is missing"
   out=$(dry grok)
   assert_contains "$out" "'grok' '--permission-mode' 'bypassPermissions'" "Grok verified primary bypass is wrong"
+  out=$(dry astra)
+  assert_contains "$out" "'codex' '--model' 'gpt-6-astra' '-c' 'model_reasoning_effort=\"xhigh\"' '--dangerously-bypass-hook-trust' '--dangerously-bypass-approvals-and-sandbox'" \
+    "Astra profile did not pin model, default effort, and Codex bypass flags"
   out=$(dry cursor-grok)
   assert_contains "$out" "'agent' '--yolo' '--model' 'cursor-grok-4.6-high'" \
     "Cursor Grok profile did not pin yolo and the high-tier model id"
@@ -508,8 +521,168 @@ test_claude_effort() {
   pass "fm-primary: Claude effort applies to Fable and Opus and refuses invalid tokens"
 }
 
+test_astra_primary_profile() {
+  local out status=0 probe_out probe_err
+  local effort_file="$HOME_FIX/config/astra-effort" override="$TMP_ROOT/astra-config"
+  mkdir -p "$HOME_FIX/config" "$override"
+
+  rm -f "$effort_file"
+  out=$(dry astra 2>&1)
+  assert_contains "$out" "profile=astra" "Astra dry-run omitted profile"
+  assert_contains "$out" "'--model' 'gpt-6-astra'" "absent astra-effort did not launch gpt-6-astra"
+  assert_contains "$out" 'model_reasoning_effort="xhigh"' "absent astra-effort did not default to xhigh"
+  assert_contains "$out" "'--dangerously-bypass-hook-trust'" "Astra dry-run lost hook-trust bypass"
+  assert_contains "$out" "'--dangerously-bypass-approvals-and-sandbox'" "Astra dry-run lost approvals-and-sandbox bypass"
+  assert_contains "$out" "launching model gpt-6-astra at effort xhigh" \
+    "absent astra-effort did not print the resolved model and effort"
+
+  printf 'high\n' > "$effort_file"
+  out=$(dry astra 2>/dev/null)
+  assert_contains "$out" 'model_reasoning_effort="high"' "astra-effort high did not resolve to high"
+  assert_contains "$out" "'--model' 'gpt-6-astra'" "astra-effort high lost the model pin"
+
+  for token in low medium xhigh; do
+    printf '%s\n' "$token" > "$effort_file"
+    out=$(dry astra 2>/dev/null)
+    assert_contains "$out" "model_reasoning_effort=\"$token\"" \
+      "astra-effort $token was not accepted"
+  done
+
+  printf 'medium\n' > "$override/astra-effort"
+  out=$(PATH="$FAKEBIN:$PATH" \
+    FM_HOME="$HOME_FIX" \
+    FM_CONFIG_OVERRIDE="$override" \
+    FM_PRIMARY_DRY_RUN=1 \
+    "$ROOT/bin/fm-primary.sh" astra 2>/dev/null)
+  assert_contains "$out" 'model_reasoning_effort="medium"' \
+    "FM_CONFIG_OVERRIDE astra-effort did not win"
+
+  printf '  high \n' > "$effort_file"
+  out=$(dry astra 2>/dev/null)
+  assert_contains "$out" 'model_reasoning_effort="high"' \
+    "padded astra-effort high was not trimmed to high"
+
+  printf 'max\n' > "$effort_file"
+  status=0
+  out=$(dry astra 2>&1) || status=$?
+  [ "$status" -ne 0 ] || fail "astra-effort max was accepted"
+  assert_contains "$out" "$effort_file" "max-effort refusal did not name the file"
+  assert_contains "$out" "max" "max-effort refusal did not name the bad value"
+  assert_contains "$out" "low medium high xhigh" "max-effort refusal did not name the accepted set"
+  assert_not_contains "$out" 'model_reasoning_effort="xhigh"' "max-effort silently fell back to the default"
+
+  : > "$effort_file"
+  status=0
+  out=$(dry astra 2>&1) || status=$?
+  [ "$status" -ne 0 ] || fail "empty astra-effort was accepted"
+  assert_contains "$out" "$effort_file" "empty astra-effort refusal did not name the file"
+
+  printf 'turbo\n' > "$effort_file"
+  status=0
+  out=$(dry astra 2>&1) || status=$?
+  [ "$status" -ne 0 ] || fail "astra-effort turbo was accepted"
+  assert_contains "$out" "turbo" "junk astra-effort refusal did not name the bad value"
+
+  rm -f "$effort_file"
+
+  status=0
+  out=$(PATH="$FAKEBIN:$PATH" FM_HOME="$HOME_FIX" "$ROOT/bin/fm-primary.sh" mystery 2>&1) || status=$?
+  [ "$status" -ne 0 ] || fail "unknown profile was accepted"
+  assert_contains "$out" 'astra' "unknown profile refusal omitted astra from the verified list"
+
+  : > "$LOG"
+  ( cd "$TMP_ROOT" && \
+    env -u HERDR_ENV -u HERDR_SESSION -u HERDR_PANE_ID -u TMUX_PANE \
+      PATH="$FAKEBIN:$PATH" \
+      TERM=dumb \
+      FM_HOME="$HOME_FIX" \
+      FM_PRIMARY_TEST_LOG="$LOG" \
+      "$ROOT/bin/fm-primary.sh" astra )
+  out=$(cat "$LOG")
+  assert_contains "$out" 'cli=codex' "Astra primary did not exec codex"
+  assert_contains "$out" 'harness=codex' "Astra primary did not export FM_PRIMARY_HARNESS=codex"
+  assert_contains "$out" 'argv=<--model><gpt-6-astra>' "Astra primary lost the model pin at exec"
+
+  # The gate can only be trusted if the fixture speaks the stream the real CLI
+  # speaks: stderr, with nothing at all on stdout.
+  probe_out=$(FM_PRIMARY_TEST_CODEX_LOGIN_STATUS='Not logged in' \
+    "$FAKEBIN/codex" login status 2>/dev/null) || true
+  [ -z "$probe_out" ] || \
+    fail "codex login status fixture put the logged-out message on stdout, unlike the real CLI"
+  probe_err=$(FM_PRIMARY_TEST_CODEX_LOGIN_STATUS='Not logged in' \
+    "$FAKEBIN/codex" login status 2>&1 >/dev/null) || true
+  assert_contains "$probe_err" 'Not logged in' \
+    "codex login status fixture did not report the logged-out state on stderr"
+
+  status=0
+  out=$(PATH="$FAKEBIN:$PATH" \
+    FM_HOME="$HOME_FIX" \
+    FM_PRIMARY_DRY_RUN=1 \
+    FM_PRIMARY_TEST_CODEX_LOGIN_STATUS='Not logged in' \
+    "$ROOT/bin/fm-primary.sh" astra 2>&1) || status=$?
+  [ "$status" -eq 0 ] || fail "logged-out Codex blocked astra dry-run"
+  assert_contains "$out" 'gpt-6-astra' "logged-out Codex hid astra dry-run argv"
+
+  status=0
+  out=$(
+    env -u HERDR_ENV -u HERDR_SESSION -u HERDR_PANE_ID -u TMUX_PANE \
+      PATH="$FAKEBIN:$PATH" \
+      TERM=dumb \
+      FM_HOME="$HOME_FIX" \
+      FM_PRIMARY_TEST_CODEX_LOGIN_STATUS='Not logged in' \
+      "$ROOT/bin/fm-primary.sh" astra 2>&1
+  ) || status=$?
+  [ "$status" -ne 0 ] || fail "a logged-out Codex CLI was accepted as an astra primary"
+  assert_contains "$out" 'not logged in' "Astra logged-out refusal was unclear"
+
+  status=0
+  out=$(
+    env -u HERDR_ENV -u HERDR_SESSION -u HERDR_PANE_ID -u TMUX_PANE \
+      PATH="$FAKEBIN:$PATH" \
+      TERM=dumb \
+      FM_HOME="$HOME_FIX" \
+      FM_PRIMARY_TEST_CODEX_LOGIN_STATUS='Not logged in' \
+      "$ROOT/bin/fm-primary.sh" codex 2>&1
+  ) || status=$?
+  [ "$status" -ne 0 ] || fail "a logged-out Codex CLI was accepted as a codex primary"
+  assert_contains "$out" 'not logged in' "Codex logged-out refusal was unclear"
+
+  # A banner-heavy build must not be able to push the negative out of reach.
+  status=0
+  out=$(
+    env -u HERDR_ENV -u HERDR_SESSION -u HERDR_PANE_ID -u TMUX_PANE \
+      PATH="$FAKEBIN:$PATH" \
+      TERM=dumb \
+      FM_HOME="$HOME_FIX" \
+      FM_PRIMARY_TEST_CODEX_LOGIN_STATUS=$'update available: 0.153.4\nrun codex --upgrade\nconfig key deprecated\nsee docs\nreading auth\nNot logged in' \
+      "$ROOT/bin/fm-primary.sh" astra 2>&1
+  ) || status=$?
+  [ "$status" -ne 0 ] || fail "a stderr preamble hid the logged-out Codex state from the astra gate"
+  assert_contains "$out" 'not logged in' "Astra logged-out refusal was unclear behind a preamble"
+
+  # A probe that fails for any other reason is not evidence of a logged-out CLI,
+  # so only the message may block and never the exit status.
+  : > "$LOG"
+  status=0
+  out=$(
+    env -u HERDR_ENV -u HERDR_SESSION -u HERDR_PANE_ID -u TMUX_PANE \
+      PATH="$FAKEBIN:$PATH" \
+      TERM=dumb \
+      FM_HOME="$HOME_FIX" \
+      FM_PRIMARY_TEST_LOG="$LOG" \
+      FM_PRIMARY_TEST_CODEX_LOGIN_STATUS='error: could not read auth.json' \
+      "$ROOT/bin/fm-primary.sh" astra 2>&1
+  ) || status=$?
+  [ "$status" -eq 0 ] || fail "an unreadable Codex login probe blocked the astra primary: $out"
+  assert_contains "$(cat "$LOG")" 'cli=codex' "an unreadable Codex login probe stopped the astra exec"
+
+  rm -f "$effort_file"
+  pass "fm-primary: astra pins gpt-6-astra, effort, Codex harness, and the Codex login gate"
+}
+
 test_profiles_and_root
 test_claude_effort
+test_astra_primary_profile
 test_unknown_dependency_and_integration_refusals
 test_active_lock_refusal
 test_exec_environment_and_exit_status

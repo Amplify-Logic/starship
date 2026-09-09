@@ -22,6 +22,7 @@ See [`docs/examples/primary-handoff.json`](examples/primary-handoff.json) and th
 The quota-rotation example uses `"chain": ["claude-fable", "claude-opus"]` so a Fable primary can hand off directly to Opus.
 Claude quota is read from the shared general windows (`five_hour`, `seven_day`) of the single `claude` provider, never from a model-specific window, so this chain rotates only when the shared five-hour or seven-day window crosses the threshold, not when a Fable-specific model window runs out.
 Both Claude profiles share that one provider, so after rotating to `claude-opus` no further quota rotation is expected: `check` reports `handoff: chain exhausted` and stays put quietly instead of failing on every poll, while the context axis can still refresh the same profile.
+The `astra` profile draws on the same single `codex` provider allowance as the `codex` profile, so a `"chain": ["codex", "astra"]` behaves the same way: one model switch, then `check` reports `handoff: chain exhausted` and stays put.
 
 Two independent trigger axes share one rotation protocol:
 

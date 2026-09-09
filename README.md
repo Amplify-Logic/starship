@@ -93,6 +93,7 @@ bin/fm-primary.sh pi
 bin/fm-primary.sh claude-fable
 bin/fm-primary.sh claude-opus
 bin/fm-primary.sh codex
+bin/fm-primary.sh astra
 bin/fm-primary.sh kimi-k3
 bin/fm-primary.sh cursor-grok
 ```

@@ -130,7 +130,7 @@ fm_handoff_normalize_profile() {
     opus) printf 'claude-opus\n' ;;
     kimi) printf 'kimi-k3\n' ;;
     cursor) printf 'cursor-grok\n' ;;
-    pi|claude-fable|claude-opus|codex|opencode|grok|kimi-k3|cursor-grok) printf '%s\n' "$1" ;;
+    pi|claude-fable|claude-opus|codex|astra|opencode|grok|kimi-k3|cursor-grok) printf '%s\n' "$1" ;;
     *) return 1 ;;
   esac
 }
@@ -139,7 +139,7 @@ fm_handoff_profile_cli() {
   case "$1" in
     pi) printf 'pi\n' ;;
     claude-fable|claude-opus) printf 'claude\n' ;;
-    codex) printf 'codex\n' ;;
+    codex|astra) printf 'codex\n' ;;
     opencode) printf 'opencode\n' ;;
     grok) printf 'grok\n' ;;
     kimi-k3) printf 'kimi\n' ;;
@@ -151,7 +151,7 @@ fm_handoff_profile_cli() {
 fm_handoff_profile_provider() {
   case "$1" in
     claude|claude-fable|claude-opus|opus) printf 'claude\n' ;;
-    codex) printf 'codex\n' ;;
+    codex|astra) printf 'codex\n' ;;
     grok) printf 'grok\n' ;;
     *) printf '\n' ;;
   esac

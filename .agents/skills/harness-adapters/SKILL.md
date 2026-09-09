@@ -31,7 +31,7 @@ The primary-session watcher wake protocols are rendered from `docs/supervision-p
 The supervision knowledge lives here: busy signature, exit command, interrupt, dialogs, resume behavior, skill invocation, and quirks.
 
 The verified WORKER adapters are `claude`, `codex`, `opencode`, `pi`, `grok`, `cursor`, `kimi`, and `prime-agent`.
-The verified PRIMARY profiles are `pi`, `claude-fable`, `claude-opus`, `codex`, `opencode`, `grok`, `kimi-k3`, and `cursor-grok`; `bin/fm-primary.sh` owns their exact launch mechanics.
+The verified PRIMARY profiles are `pi`, `claude-fable`, `claude-opus`, `codex`, `astra`, `opencode`, `grok`, `kimi-k3`, and `cursor-grok`; `bin/fm-primary.sh` owns their exact launch mechanics.
 `cursor` is also certified as a PRIMARY through `bin/fm-primary.sh cursor-grok` (Cursor CLI `2026.08.11-e8db854`, 2026-08-13 lab); never infer worker facts from primary facts or the reverse.
 Kimi is verified as a PRIMARY through `bin/fm-primary.sh kimi-k3` and, separately, as a WORKER through `fm-spawn --harness kimi` (Kimi Code 0.27.0, 2026-07-23 lab); never infer one role from the other.
 
@@ -166,7 +166,7 @@ The supported launch-profile flags below are verified locally; each row records 
 | Harness | Model flag | Effort flag | Notes |
 |---|---|---|---|
 | claude | `--model <model>` | `--effort <low\|medium\|high\|xhigh\|max>` | Verified on Claude Code 2.1.196. |
-| codex | `--model <model>` | `-c 'model_reasoning_effort="<low\|medium\|high\|xhigh>"'` | Verified on codex-cli 0.142.1. The installed binary schema contains `model_reasoning_effort`, the active config uses it, and the bundled model catalog advertises only low/medium/high/xhigh. `max` is omitted. |
+| codex | `--model <model>` | `-c 'model_reasoning_effort="<low\|medium\|high\|xhigh>"'` | Effort flag verified on codex-cli 0.142.1: the installed binary schema contains `model_reasoning_effort` and the active config uses it. Omitting `max` is an `fm-spawn` choice, not a catalog limit: codex-cli 0.153.4 advertises `max` and `ultra` as well, and `max` answers on the live route (see the codex section). The worker axis stays at low/medium/high/xhigh pending the separate astra-max-effort follow-up. |
 | grok | `--model <model>` | `--reasoning-effort <low\|medium\|high>` | Verified on grok 0.2.99 (2026-07-13). `--effort` is an alias, but firstmate's profile axis is reasoning effort. As of 0.2.99 the ceiling is `high`; both `xhigh` and `max` are rejected with `use one of: high, medium, low`, so firstmate omits them. |
 | pi | `--model <model>` | `--thinking <low\|medium\|high\|xhigh\|max>` | Verified 2026-07-13 on Pi 0.80.6. `pi --help` advertises `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`; `pi --print --model openai-codex/gpt-5.6-sol --thinking max 'Reply with exactly OK.'` completed successfully. |
 | opencode | `--model <provider/model>` | none for firstmate's interactive launch | Verified on opencode 1.17.6. `opencode run` has `--variant`, but firstmate launches the interactive `opencode --prompt` path, which has no verified effort flag. |
@@ -250,6 +250,27 @@ Verified on 2026-07-08: Codex runs the Stop hook command with process PWD set to
 The tracked hook anchors to `pwd -P`, verifies that root is firstmate-shaped and hook-bearing, and then invokes `bin/fm-turnend-guard.sh` with the original payload.
 Codex's primary watcher protocol is `bin/fm-watch-checkpoint.sh --seconds "${FM_CODEX_WATCH_CHECKPOINT:-180}"`, not `bin/fm-watch-arm.sh`.
 The checkpoint is deliberately foreground and bounded so Codex regains control regularly to process user messages and queued wakes.
+
+**Primary Astra profile (verified 2026-09-09, codex-cli 0.153.4).**
+`bin/fm-primary.sh astra` launches the Codex CLI with `--model gpt-6-astra` and exports `FM_PRIMARY_HARNESS=codex` so supervision uses the Codex checkpoint protocol unchanged.
+`gpt-6-astra` requires a Codex build whose model catalog carries that id.
+codex-cli 0.153.4 carries it, listed as `gpt-6-astra` and `openai.gpt-6-astra` with display name `GPT-6-Astra`.
+The model answers through `codex exec` at `model_reasoning_effort` low, medium, high, xhigh, and max.
+Every one of those levels was probed individually on 0.153.4, with the low probe returning `lowOK` and the medium probe returning `mediumOK`.
+Both launch bypass flags are accepted alongside `--model gpt-6-astra` and the effort override.
+A probe carrying `--dangerously-bypass-approvals-and-sandbox` at effort high returned `FLAGSOK`, and a probe carrying both `--dangerously-bypass-approvals-and-sandbox` and `--dangerously-bypass-hook-trust` together at effort high returned `BOTHOK`.
+The SessionStart hook fires: it ran `bin/fm-session-start.sh` and that digest appeared in the probe output.
+The Stop hook fires: the `BOTHOK` run printed `hook: Stop` and `hook: Stop Completed`.
+The SessionStart injection certified on 0.144.4 and the turn-end guard both survive the bump to 0.153.4.
+`bin/fm-primary.sh astra` still accepts low, medium, high, and xhigh only, so every token it resolves is individually proven on the live route.
+max answers too and stays deliberately refused pending the separate follow-up astra-max-effort.
+Every probe used `codex exec`, so the interactive primary launch path that `bin/fm-primary.sh astra` execs has not been exercised.
+Exercising it starts a real orchestrator session rather than a bounded probe.
+The bounded foreground watcher checkpoint that Codex primaries depend on has not been re-verified on 0.153.4.
+codex-cli 0.144.6 is confirmed not to carry `gpt-6-astra`.
+Its bundled catalog tops out at `gpt-5.6-luna` / `gpt-5.6-sol` / `gpt-5.6-terra`.
+0.153.4 is therefore a verified-good floor and not an established minimum.
+Which build between 0.144.6 and 0.153.4 first carries Astra is not established.
 
 ## opencode (VERIFIED 2026-06-11, v1.15.7-1.17.6; 1.18.4 busy-queue re-verified 2026-07-20)
 
