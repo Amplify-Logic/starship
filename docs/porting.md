@@ -68,6 +68,7 @@ Paths that behave this way today include, when present:
 - `data/goals/` (goal charters; see below)
 - `data/done-archive.md`
 - `data/upstream-watch/`
+- `data/morning-intake/` (this home's own local-day intake state; `docs/configuration.md` "Morning intake")
 - `data/action-gateway/`
 - `data/orders/`
 - `data/errands/`

@@ -154,6 +154,7 @@ family_for_basename() {
       printf '%s\n' secondmate
       ;;
     fm-bootstrap.test.sh|fm-fleet-sync.test.sh|fm-gate-refuse.test.sh|fm-gotmp.test.sh|\
+    fm-morning-intake.test.sh|\
     fm-session-start.test.sh|fm-sessionstart-nudge.test.sh|fm-tangle-guard.test.sh|\
     fm-toolchain-drift.test.sh|fm-update.test.sh|fm-upstream.test.sh|\
     fm-upstream-ledger.test.sh|fm-upstream-watch.test.sh)
@@ -362,6 +363,7 @@ tests/fm-file-eventwait.test.sh
 tests/fm-read.test.sh
 tests/fm-test-isolation-proof.test.sh
 tests/fm-upstream-watch.test.sh
+tests/fm-morning-intake.test.sh
 tests/fm-gotmp.test.sh
 tests/fm-toolchain-drift.test.sh
 tests/fm-sessionstart-nudge.test.sh
@@ -850,6 +852,7 @@ families_for_changed_path() {
     bin/fm-sessionstart-nudge.sh|bin/fm-tangle*|bin/fm-update.sh|\
     bin/fm-gate-refuse*|bin/fm-lock*|bin/fm-upstream-lib.sh|\
     bin/fm-upstream-watch*.sh|bin/fm-toolchain-lib.sh|bin/fm-timeout-lib.sh|\
+    bin/fm-morning-intake*.sh|\
     docs/toolchain-manifest.tsv|docs/upstream-ported-ledger.txt)
       # The two docs/ data files are behaviour-bearing inputs to the bootstrap
       # drift diagnostics, not prose, so they select the same lane as the

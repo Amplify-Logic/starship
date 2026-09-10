@@ -33,11 +33,42 @@ The cache shares neither objects nor refs with the live checkout, and every netw
 Reports contain only public upstream commit data and tracked fork-surface information, never captain preferences, backlog contents, project records, or other private operational context.
 The session-start bootstrap section prints `UPSTREAM_REPORT: new private report at <path>` until the report is read and acknowledged with `bin/fm-upstream-watch.sh acknowledge <path>`.
 
-`bin/fm-upstream-watch-schedule.sh` owns the inspectable macOS launchd schedule.
+`bin/fm-upstream-watch-schedule.sh` owns the inspectable macOS launchd schedule, written through the shared `bin/fm-launchd-schedule-lib.sh`.
 Run `render` to inspect the complete definition, `install` to write and load it, `status` to print the installed file and live status, or `remove` to unload it.
 The default cadence is 604800 seconds (weekly).
 Set `interval_seconds = N` in private `config/upstream-watch`, or export `FM_UPSTREAM_WATCH_INTERVAL_SECONDS=N`, to override it.
 The generator and delivery scripts never port, merge, rebase, or publish anything.
+
+## Morning intake (config/morning-intake)
+
+An opt-in, once-per-local-day gate for a scheduled daily intake and report.
+It ships inert: with no `enabled = true` line in private gitignored `config/morning-intake`, `bin/fm-morning-intake.sh` does nothing at all, so cloning this repo, seeding a secondmate home, or adding a device never enrols it.
+Each home and each device opts in separately.
+
+`bin/fm-morning-intake.sh` owns the local day, the start-of-morning threshold, deduplication, bounded retries, the visible failure state, and the completion watermark.
+Its header and `--help` own the exact commands, config keys and mechanics.
+A `timezone` that does not resolve on this host is refused rather than silently treated as UTC, which would move both the local day and the threshold.
+Every failure counts against the day's `max_attempts`, whether or not it was claimed first, and only `reset` gives a spent budget back.
+`run` is both the scheduled entry point and the retained manual command; `run --force` arms an intake outside the configured window.
+`--force` does not override the bounded budget: on a day whose attempts are spent it refuses and names `reset`, rather than arming a day `claim` would then refuse and waking the primary for it.
+It never reads a source system, spawns an agent, starts a session, or takes the per-home session lock, so it cannot compete with a live fleet.
+
+The completion watermark under private gitignored `data/morning-intake/` advances only in `complete`, and only after the named report is verified as a non-empty regular file inside the configured `report_dir`.
+A failed or partial intake therefore never marks the day done, which is what lets a corrected source message published after a same-day failure still be ingested while attempts remain.
+Reports and durable records survive both acknowledgement and schedule removal.
+
+Two delivery paths reach the orchestrator, and neither one starts a session.
+`arm-check` writes `state/<label>.check.sh` and binds it through `bin/fm-check-register.sh`, so a running watcher executes it on its slow cadence and wakes the live primary through the established check path.
+`arm-check` is idempotent: re-running it converges on the same registered state, and it rebinds a shim whose bytes no longer match the recorded binding.
+Nothing re-creates that shim on its own, so while an intake is armed or owed `pending` reports an absent or unregistered live check and names `arm-check` as the repair; detection stays read-only, so session start never writes into `state/` on a home it has not enrolled.
+With no session running, nothing is delivered when the job fires: the armed state is durable and the next session's bootstrap section surfaces it as `MORNING_INTAKE: ...`, so the intake is queued until firstmate next starts rather than running on its own.
+
+`bin/fm-morning-intake-schedule.sh` owns the inspectable macOS launchd schedule and refuses to install on a home that has not opted in.
+It shares the LaunchAgent writer in `bin/fm-launchd-schedule-lib.sh` with `bin/fm-upstream-watch-schedule.sh`, so both schedules render, validate and load the same way.
+Run `render` to inspect the complete definition, `install` to write it, load it and arm the live check, `status` to print the resolved knobs and installed file, or `remove` to unload it and disarm the check.
+`StartInterval` plus `RunAtLoad` is the whole trigger: launchd runs the job at login and then on the interval, and an interval that elapsed during sleep runs shortly after the machine wakes.
+That is why the intake is defined as the first available morning rather than a lid-open event; launchd exposes no such event here and none is claimed.
+The default cadence is 900 seconds, read back from the gate owner rather than parsed twice; set `interval_seconds = N` in `config/morning-intake` to change it.
 
 ## Backlog backend (.tasks.toml / config/backlog-backend)
 

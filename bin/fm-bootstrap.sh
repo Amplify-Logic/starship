@@ -23,6 +23,8 @@
 #                 "UPSTREAM: <N> commits behind <remote>/<branch> (<url>)
 #                  [- <R> upstream commits, <D> already delivered here] - <subjects>",
 #                 "UPSTREAM_REPORT: new private report at <path>",
+#                 "MORNING_INTAKE: <label> due|failed|complete ..." or
+#                 "MORNING_INTAKE: new <label> report at <path>",
 #                 "FMX: X mode on ..." or "FMX: X mode off ...".
 #          TOOLCHAIN_DRIFT compares docs/toolchain-manifest.tsv against PATH and
 #          prints one line per runtime whose installed version differs from the
@@ -42,6 +44,8 @@
 #          clause reports the raw and delivered figures whenever the ledger
 #          accounted for anything, and a fully delivered delta is silent.
 #          It never merges and never touches projects/; see bin/fm-upstream-lib.sh.
+#          MORNING_INTAKE is the read-only owed/failed/pending check owned by
+#          bin/fm-morning-intake.sh, silent unless this home opted in.
 #          UPSTREAM_REPORT is the read-only pending-report check owned by
 #          bin/fm-upstream-watch.sh. The weekly job writes only private data/;
 #          acknowledge the report after reading it so later sessions stay quiet.
@@ -1056,6 +1060,12 @@ fm_upstream_check "$FM_ROOT" "$FM_HOME"
 # by fm-upstream-watch.sh rather than being reimplemented here.
 [ ! -x "$SCRIPT_DIR/fm-upstream-watch.sh" ] \
   || "$SCRIPT_DIR/fm-upstream-watch.sh" pending
+# Read-only owed/failed/pending check for the opt-in morning intake. Inert on
+# every home without an `enabled = true` line in config/morning-intake, and the
+# local day, thresholds, retries and watermark all remain owned by
+# fm-morning-intake.sh rather than being reimplemented here.
+[ ! -x "$SCRIPT_DIR/fm-morning-intake.sh" ] \
+  || "$SCRIPT_DIR/fm-morning-intake.sh" pending
 if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then
   secondmate_liveness_sweep
   secondmate_sync

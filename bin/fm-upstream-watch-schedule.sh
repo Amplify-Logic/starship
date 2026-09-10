@@ -11,6 +11,8 @@
 # The schedule is intentionally visible, not an opaque cron entry.
 # `render` prints the complete plist, `status` prints its path and contents, and
 # `install` writes ~/Library/LaunchAgents/<label>.plist before loading it.
+# The LaunchAgent itself is written by the shared owner in
+# bin/fm-launchd-schedule-lib.sh; this script owns only the cadence.
 # The default interval is 604800 seconds (weekly).
 # Override it with FM_UPSTREAM_WATCH_INTERVAL_SECONDS or a private
 # config/upstream-watch line: `interval_seconds = N`.
@@ -58,102 +60,32 @@ interval_seconds() {
   printf '%s\n' "$value"
 }
 
-xml_escape() {
-  printf '%s' "$1" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/"/\&quot;/g; s/'"'"'/\&apos;/g'
+FM_LAUNCHD_STEM=upstream-watch
+FM_LAUNCHD_PROGRAM="$SCRIPT_DIR/fm-upstream-watch.sh"
+FM_LAUNCHD_PROGRAM_ARG=run
+FM_LAUNCHD_ROOT="$ROOT"
+FM_LAUNCHD_FM_HOME="$FM_HOME"
+FM_LAUNCHD_LOG_DIR="$DATA/upstream-watch"
+FM_LAUNCHD_AGENTS_DIR=${FM_UPSTREAM_WATCH_LAUNCH_AGENTS_DIR:-$HOME/Library/LaunchAgents}
+FM_LAUNCHD_LAUNCHCTL=${FM_UPSTREAM_WATCH_LAUNCHCTL:-launchctl}
+FM_LAUNCHD_REMOVE_NEEDS_DARWIN=true
+
+# shellcheck source=bin/fm-launchd-schedule-lib.sh disable=SC1091
+. "$SCRIPT_DIR/fm-launchd-schedule-lib.sh"
+
+fm_launchd_interval() {
+  interval_seconds
 }
 
-home_key=$(printf '%s' "$FM_HOME" | cksum | awk '{print $1}')
-LABEL="dev.firstmate.upstream-watch.$home_key"
-AGENTS_DIR=${FM_UPSTREAM_WATCH_LAUNCH_AGENTS_DIR:-$HOME/Library/LaunchAgents}
-PLIST="$AGENTS_DIR/$LABEL.plist"
-
-render() {
-  local interval root home program stdout stderr
-  interval=$(interval_seconds)
-  root=$(xml_escape "$ROOT")
-  home=$(xml_escape "$FM_HOME")
-  program=$(xml_escape "$SCRIPT_DIR/fm-upstream-watch.sh")
-  stdout=$(xml_escape "$DATA/upstream-watch/launchd.stdout.log")
-  stderr=$(xml_escape "$DATA/upstream-watch/launchd.stderr.log")
-  cat <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>$LABEL</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>$program</string>
-    <string>run</string>
-  </array>
-  <key>WorkingDirectory</key>
-  <string>$root</string>
-  <key>EnvironmentVariables</key>
-  <dict>
-    <key>FM_HOME</key>
-    <string>$home</string>
-    <key>FM_ROOT_OVERRIDE</key>
-    <string>$root</string>
-  </dict>
-  <key>StartInterval</key>
-  <integer>$interval</integer>
-  <key>RunAtLoad</key>
-  <true/>
-  <key>StandardOutPath</key>
-  <string>$stdout</string>
-  <key>StandardErrorPath</key>
-  <string>$stderr</string>
-</dict>
-</plist>
-EOF
-}
-
-install_schedule() {
-  local tmp domain
-  [ "$(uname)" = Darwin ] || die 'install requires macOS launchd; use render for an inspectable scheduler definition'
-  mkdir -p "$AGENTS_DIR" "$DATA/upstream-watch"
-  tmp=$(mktemp "$AGENTS_DIR/.upstream-watch.XXXXXX")
-  render >"$tmp"
-  chmod 600 "$tmp"
-  if command -v plutil >/dev/null 2>&1; then
-    plutil -lint "$tmp" >/dev/null || { rm -f "$tmp"; die 'rendered plist failed plutil validation'; }
-  fi
-  mv -f "$tmp" "$PLIST"
-  domain="gui/$(id -u)"
-  launchctl bootout "$domain/$LABEL" >/dev/null 2>&1 || true
-  launchctl bootstrap "$domain" "$PLIST"
-  printf 'installed: %s\n' "$PLIST"
+fm_launchd_status_detail() {
   printf 'interval_seconds: %s\n' "$(interval_seconds)"
-}
-
-status_schedule() {
-  printf 'plist: %s\n' "$PLIST"
-  printf 'interval_seconds: %s\n' "$(interval_seconds)"
-  if [ -f "$PLIST" ]; then
-    printf '%s\n' '--- installed definition ---'
-    cat "$PLIST"
-    if [ "$(uname)" = Darwin ]; then
-      printf '%s\n' '--- launchd status ---'
-      launchctl print "gui/$(id -u)/$LABEL" 2>&1 || true
-    fi
-  else
-    printf 'not installed; inspect the proposed definition with: %s render\n' "$0"
-  fi
-}
-
-remove_schedule() {
-  [ "$(uname)" = Darwin ] || die 'remove requires macOS launchd'
-  launchctl bootout "gui/$(id -u)/$LABEL" >/dev/null 2>&1 || true
-  rm -f "$PLIST"
-  printf 'removed: %s\n' "$PLIST"
 }
 
 case "${1:-}" in
-  render) [ "$#" -eq 1 ] || die 'render takes no arguments'; render ;;
-  install) [ "$#" -eq 1 ] || die 'install takes no arguments'; install_schedule ;;
-  status) [ "$#" -eq 1 ] || die 'status takes no arguments'; status_schedule ;;
-  remove) [ "$#" -eq 1 ] || die 'remove takes no arguments'; remove_schedule ;;
+  render) [ "$#" -eq 1 ] || die 'render takes no arguments'; fm_launchd_render ;;
+  install) [ "$#" -eq 1 ] || die 'install takes no arguments'; fm_launchd_install ;;
+  status) [ "$#" -eq 1 ] || die 'status takes no arguments'; fm_launchd_status ;;
+  remove) [ "$#" -eq 1 ] || die 'remove takes no arguments'; fm_launchd_remove ;;
   -h|--help) usage ;;
   '') usage; exit 2 ;;
   *) die "unknown command: $1" ;;

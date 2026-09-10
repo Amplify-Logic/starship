@@ -94,6 +94,9 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-supervisor-target-lib.sh` | Resolve the shared supervisor target and backend for the daemon and launcher       |
 | `fm-supervise-daemon.sh` | Presence-gated away-mode sub-supervisor: self-handle routine wakes, escalate batched digests, alert on failed delivery |
 | `fm-supervision-sentinel.sh` | Home-scoped macOS launchd outage sentinel that alarms outside the harness process tree and never restarts supervision (docs/watcher-continuity.md) |
+| `fm-morning-intake.sh`   | Opt-in once-per-local-day intake gate owning the local day, bounded retries, visible failure, and the completion watermark (docs/configuration.md "Morning intake") |
+| `fm-morning-intake-schedule.sh` | Render, install, inspect, and remove that intake's opt-in macOS launchd schedule and its live watcher check (docs/configuration.md "Morning intake") |
+| `fm-launchd-schedule-lib.sh` | Shared per-home LaunchAgent render, lint, load, and remove for this fork's scheduled owners |
 | `fm-crew-state.sh`       | Print one deterministic current-state line for a crew                                |
 | `fm-task-outcome.sh`     | Resolve a worker outcome from an explicit value, structured backlog title, or safe fallback |
 | `fm-visible-status.sh`   | Project authoritative worker details onto Herdr presentation metadata                |

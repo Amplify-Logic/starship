@@ -2,7 +2,7 @@
 name: bootstrap-diagnostics
 description: >-
   Agent-only handling playbook for session-start bootstrap diagnostics.
-  Use whenever the session-start digest's bootstrap section prints an actionable diagnostic line - MISSING, MISSING_MANUAL, BACKEND_INVALID, NEEDS_GH_AUTH, TANGLE, STARTUP_MEMORY_BUDGET, CREW_DISPATCH invalid, ACCOUNTS invalid, FLEET_SYNC, PR_CHECK_MIGRATION, SECONDMATE_SYNC, SECONDMATE_LIVENESS, NUDGE_SECONDMATES, CONFIG_REREAD, TOOLCHAIN_DRIFT, UPSTREAM, UPSTREAM_REPORT, or FMX - or when a standalone bin/fm-bootstrap.sh run prints one of those lines.
+  Use whenever the session-start digest's bootstrap section prints an actionable diagnostic line - MISSING, MISSING_MANUAL, BACKEND_INVALID, NEEDS_GH_AUTH, TANGLE, STARTUP_MEMORY_BUDGET, CREW_DISPATCH invalid, ACCOUNTS invalid, FLEET_SYNC, PR_CHECK_MIGRATION, SECONDMATE_SYNC, SECONDMATE_LIVENESS, NUDGE_SECONDMATES, CONFIG_REREAD, TOOLCHAIN_DRIFT, MORNING_INTAKE, UPSTREAM, UPSTREAM_REPORT, or FMX - or when a standalone bin/fm-bootstrap.sh run prints one of those lines.
   A silent bootstrap section, or a BOOTSTRAP_INFO fact, means no skill load.
 user-invocable: false
 metadata:
@@ -73,5 +73,15 @@ When any diagnostic needs captain attention, report the plain consequence and re
   Read the report, relay only its new gains and named fork collisions, and make no porting change without a separate captain decision.
   After reading, run `bin/fm-upstream-watch.sh acknowledge <path>` so the same report does not surface at later session starts.
   A one-line "nothing to do" report needs only that one-line outcome, never padding from older reports.
+- `MORNING_INTAKE: <label> due for <date> ...` - the opt-in morning intake is owed and nothing has taken it.
+  Take it with `bin/fm-morning-intake.sh claim`, perform the intake, and finish it with `complete --report <path>`; the day is not done until that call verifies the report.
+  If the intake cannot be completed, record `fail --reason <text>` rather than leaving it silently unclaimed, so the failure stays visible and the retry budget is honest.
+- `MORNING_INTAKE: <label> failed for <date> ...` - a previous attempt failed and the day is still owed while attempts remain.
+  Read the recorded reason before retrying, and treat an exhausted budget (`after N attempts`) as a captain-facing blocker rather than a line to retry past; `bin/fm-morning-intake.sh reset` clears the budget only for a deliberate fresh attempt.
+  A same-date failure never closes the day, so a corrected source message published after it must still be ingested.
+- `MORNING_INTAKE: <label> claim ... stalled ...` - an intake was taken but never completed within its window.
+  Reconcile what the previous attempt actually wrote before re-claiming, so a partial report is not silently treated as the day's deliverable.
+- `MORNING_INTAKE: new <label> report at <path>` - a completed intake is waiting to be read.
+  Read it, relay its findings rather than only that it finished, then run `bin/fm-morning-intake.sh acknowledge <path>` so the same report does not surface at later session starts.
 - `FMX: X mode on ...` / `FMX: X mode off ...` - bootstrap confirmed or removed the local X-mode poll artifacts (`docs/configuration.md` "X mode (.env)").
   Only when a running watcher needs the cadence transition applied immediately, restart the home-scoped watcher through the emitted harness supervision protocol; bootstrap deliberately never restarts the watcher itself.
