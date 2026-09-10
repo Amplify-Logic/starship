@@ -219,6 +219,8 @@ Firstmate's skills live in two separate places with different audiences:
 - [docs/adhd.md](docs/adhd.md) - ADHD divergent-ideation front-end: usage, reversible install/uninstall, and cost policy.
 - [docs/configuration.md](docs/configuration.md) - environment variables, `FM_HOME`, runtime backend selection, optional X mode, the files you set, and harness support.
 - [docs/porting.md](docs/porting.md) - bring Firstmate up on a second machine and keep captain-private portable material in step with explicit push/pull.
+- [docs/baby-menu-quota-widget.md](docs/baby-menu-quota-widget.md) - the tracked provider-quota menu-bar widget: install, the one machine-local setting, and the honesty rules it encodes.
+- [docs/desktop-companion.md](docs/desktop-companion.md) - set up a scoped visual companion in the desktop app, hand it a task, and read what is actually verified about that path.
 - [docs/wedge-alarm.md](docs/wedge-alarm.md) - configure active alerts for stuck away-mode delivery and host-detected watcher outages.
 - [docs/tmux-backend.md](docs/tmux-backend.md) - setup guide for the tmux reference backend: prerequisites, attaching, and watching crew windows.
 - [docs/herdr-backend.md](docs/herdr-backend.md) - setup guide for the experimental herdr backend, plus its verification notes and known gaps.
@@ -243,3 +245,5 @@ Contributions are welcome - see [CONTRIBUTING.md](CONTRIBUTING.md) for the workf
 ## License
 
 MIT - see [LICENSE](LICENSE).
+
+The vendor logos inlined in the tracked quota widget under `assets/baby-menu/` are third-party marks used to identify each vendor's own service, not code this project can relicense; [docs/baby-menu-quota-widget.md](docs/baby-menu-quota-widget.md) owns their provenance record and the obligations that come with carrying them.

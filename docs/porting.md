@@ -292,6 +292,37 @@ bin/fm-home-port.sh verify --home /path/to/new-home
 Import uses the same overwrite copy as pull.
 Do not import onto a home whose portable files you still need unless that overwrite is intended.
 
+## Desk setup on the second Mac
+
+Porting brings the repo and the captain's portable material across.
+Two things on the desk around Firstmate do not travel that way and are worth doing deliberately after the port: the quota panel and the desktop companion.
+
+What the repository carries, and what the laptop still has to do itself:
+
+| Carried by `git pull` | Only the laptop can do it |
+| --- | --- |
+| The quota widget's source and its installer | Installing the Baby Menu app itself, and running it once so it creates its home |
+| The companion setup template and prompt | Installing or updating the desktop app and CLIs through their own owners |
+| Every honesty rule the panel encodes | Enabling the Computer Use plugin and granting macOS Accessibility and Screen Recording |
+| The tests that hold those rules | Signing in to each Codex and Claude account separately |
+| Documented settings contracts | Writing this machine's own local settings values |
+
+App updates and macOS permissions cannot be delivered by a pull, and a subscription does not create a separate allowance per device - a second machine draws down the same windows as the first.
+
+The sequence, once the port itself is done:
+
+```sh
+bin/fm-bootstrap.sh                          # toolchain and auth diagnostics, then act on what it prints
+bin/fm-install-baby-menu-quota.sh            # after Baby Menu has been installed and run once
+cp ~/.baby-menu/weekly-quota.local.example.json ~/.baby-menu/weekly-quota.local.json  # only if a second Claude seat is signed in here
+bin/fm-home-port.sh verify                   # destination readiness
+```
+
+Optional per-machine operating choices - the primary profile, secondmate settings, backend, and routing - stay under this home's own `config/`, applied with the existing commands and schemas in [configuration.md](configuration.md).
+Keep the laptop's own fleet, backlog, and routing choices; a work hub's private configuration is that hub's, not a portable default.
+
+Detail lives with its owners: [baby-menu-quota-widget.md](baby-menu-quota-widget.md) and [desktop-companion.md](desktop-companion.md).
+
 ## Related owners
 
 - Operational home layout: `docs/configuration.md`
@@ -301,3 +332,5 @@ Do not import onto a home whose portable files you still need unless that overwr
 - Exact port flags, data-file list, and refuse list: `bin/fm-home-port.sh --help` and its header
 - Goal charter format: `docs/chart-room.md`
 - Capability outcome log format: `docs/configuration.md` ("Capability outcome log")
+- Quota panel and its installer: `docs/baby-menu-quota-widget.md`
+- Desktop companion setup and its verified limits: `docs/desktop-companion.md`

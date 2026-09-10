@@ -2,6 +2,9 @@
 
 Status: blocked for Firstmate as a selectable shell backend.
 The Codex Desktop host-tool loop works, including status-file writes, but Firstmate does not yet have a supported shell-callable bridge to those host tools.
+One piece of that bridge has since arrived: a documented CLI can queue a message into an existing session, so *send* is no longer missing.
+Creating a thread, reading live state, stopping a turn, and surviving an app restart remain unverified, so the backend status below is unchanged.
+[desktop-companion.md](desktop-companion.md) owns how to use the send path deliberately, including why an accepted message is not a completed one.
 
 This document replaces the earlier passive visible-thread ledger shape.
 A manual ledger is not a backend.
@@ -159,14 +162,19 @@ They can call `tmux`, `herdr`, `zellij`, primitive Orca CLI surfaces, and `cmux`
 The Codex Desktop host tools verified above are available to the Codex Desktop conversation, not to arbitrary Firstmate subprocesses.
 The missing piece is therefore a supported Codex Desktop transport that a Bash backend can call, not another Firstmate-local ledger.
 
-The available Codex CLI and app-server probes found useful pieces but not a supported visible-thread backend transport:
+Part of that transport now exists.
+A documented `codex queue` call delivers a message into an existing session and starts a turn on an idle one, with the session's own tool permissions intact, and a file the session writes is a working return path.
+That closes **send** only; see [desktop-companion.md](desktop-companion.md) for how to use it and for the accepted-versus-completed distinction that makes a queue receipt unusable as a delivery guarantee.
+
+The remaining Codex CLI and app-server probes found useful pieces but not a supported visible-thread backend transport:
 
 - `codex app-server --stdio` exposes JSON-RPC methods such as `thread/start`, `turn/start`, `thread/read`, and `thread/archive`.
 - A one-shot stdio probe could create a thread record, and `thread/archive` worked through that same stdio process.
 - The managed daemon path was unavailable in this Desktop install.
 - A raw proxy attempt against the Desktop control socket did not accept plain JSON-RPC framing.
 
-That is not enough to add `codex-app` to `FM_BACKEND_KNOWN` or `FM_BACKEND_SPAWN`.
+That is not enough to add `codex-app` to `FM_BACKEND_KNOWN` or `FM_BACKEND_SPAWN`, and neither is send on its own.
+Reading live state and stopping a turn have no supported shell-callable path today, and the private local databases that expose them are versioned and carry no stability contract, so a backend must not depend on them.
 A Firstmate backend must be able to create a thread, start or continue turns, read live state while turns run, and archive/stop the same endpoint through a Codex Desktop-supported shell-callable API.
 Shipping a local ledger would only record intentions; it would not supervise the actual Desktop thread.
 
