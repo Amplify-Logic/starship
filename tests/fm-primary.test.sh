@@ -51,6 +51,7 @@ printf 'harness=%s\n' "${FM_PRIMARY_HARNESS:-}" >> "$FM_PRIMARY_TEST_LOG"
 printf 'role=%s\n' "${FM_PRIMARY_ROLE:-}" >> "$FM_PRIMARY_TEST_LOG"
 printf 'kimi_home=%s\n' "${KIMI_CODE_HOME:-}" >> "$FM_PRIMARY_TEST_LOG"
 printf 'opencode_permissions=%s\n' "${OPENCODE_CONFIG_CONTENT:-}" >> "$FM_PRIMARY_TEST_LOG"
+printf 'claude_bg_shell_pressure_reap=%s\n' "${CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP:-}" >> "$FM_PRIMARY_TEST_LOG"
 printf 'argv=' >> "$FM_PRIMARY_TEST_LOG"
 printf '<%s>' "$@" >> "$FM_PRIMARY_TEST_LOG"
 printf '\n' >> "$FM_PRIMARY_TEST_LOG"
@@ -62,6 +63,7 @@ for cli in pi claude codex opencode grok kimi agent herdr tmux; do make_cli "$cl
 
 dry() { # <profile>
   ( cd "$TMP_ROOT" && \
+    env -u CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP \
     PATH="$FAKEBIN:$PATH" \
     FM_HOME="$HOME_FIX" \
     FM_PRIMARY_DRY_RUN=1 \
@@ -75,6 +77,7 @@ test_profiles_and_root() {
   help=$("$ROOT/bin/fm-primary.sh" --help)
   assert_contains "$help" 'claude-fable' "help omitted the Claude Fable profile"
   assert_contains "$help" 'claude-opus' "help omitted the Claude Opus profile"
+  assert_contains "$help" 'CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP' "help omitted the Claude background-shell pressure-reap export"
   assert_contains "$help" 'kimi-k3' "help omitted the Kimi K3 profile"
   assert_contains "$help" 'cursor-grok' "help omitted the Cursor Grok profile"
   assert_contains "$help" 'astra' "help omitted the Astra profile"
@@ -89,11 +92,18 @@ test_profiles_and_root() {
   out=$(dry claude-fable)
   assert_contains "$out" "'claude' '--model' 'claude-fable-5-1' '--effort' 'xhigh' '--name' 'FIRSTMATE' '--dangerously-skip-permissions'" \
     "Claude Fable profile did not pin model, default effort, role, and bypass"
+  assert_contains "$out" "CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1" \
+    "Claude Fable dry-run omitted the background-shell pressure-reap disable"
   [ "$(dry claude)" = "$out" ] || fail "Claude alias did not expand exactly to claude-fable"
+  out=$(dry pi)
+  assert_not_contains "$out" "CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP" \
+    "Pi dry-run leaked the Claude pressure-reap env line"
 
   out=$(dry claude-opus)
   assert_contains "$out" "'claude' '--model' 'claude-opus-5' '--effort' 'xhigh' '--name' 'FIRSTMATE' '--dangerously-skip-permissions'" \
     "Claude Opus profile did not pin model, default effort, role, and bypass"
+  assert_contains "$out" "CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1" \
+    "Claude Opus dry-run omitted the background-shell pressure-reap disable"
   [ "$(dry opus)" = "$out" ] || fail "Opus alias did not expand exactly to claude-opus"
 
   out=$(dry codex)
@@ -680,9 +690,56 @@ test_astra_primary_profile() {
   pass "fm-primary: astra pins gpt-6-astra, effort, Codex harness, and the Codex login gate"
 }
 
+test_claude_disables_bg_shell_pressure_reap() {
+  local out
+  : > "$LOG"
+  ( cd "$TMP_ROOT" && \
+    env -u HERDR_ENV -u HERDR_SESSION -u HERDR_PANE_ID -u TMUX_PANE \
+      -u CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP \
+      PATH="$FAKEBIN:$PATH" \
+      TERM=dumb \
+      FM_HOME="$HOME_FIX" \
+      FM_PRIMARY_TEST_LOG="$LOG" \
+      "$ROOT/bin/fm-primary.sh" claude-fable )
+  out=$(cat "$LOG")
+  assert_contains "$out" 'cli=claude' "Claude Fable primary did not exec claude"
+  assert_contains "$out" 'claude_bg_shell_pressure_reap=1' \
+    "Claude Fable primary did not export CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1"
+
+  : > "$LOG"
+  ( cd "$TMP_ROOT" && \
+    env -u HERDR_ENV -u HERDR_SESSION -u HERDR_PANE_ID -u TMUX_PANE \
+      -u CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP \
+      PATH="$FAKEBIN:$PATH" \
+      TERM=dumb \
+      FM_HOME="$HOME_FIX" \
+      FM_PRIMARY_TEST_LOG="$LOG" \
+      "$ROOT/bin/fm-primary.sh" claude-opus )
+  out=$(cat "$LOG")
+  assert_contains "$out" 'cli=claude' "Claude Opus primary did not exec claude"
+  assert_contains "$out" 'claude_bg_shell_pressure_reap=1' \
+    "Claude Opus primary did not export CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1"
+
+  : > "$LOG"
+  ( cd "$TMP_ROOT" && \
+    env -u HERDR_ENV -u HERDR_SESSION -u HERDR_PANE_ID -u TMUX_PANE \
+      -u CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP \
+      PATH="$FAKEBIN:$PATH" \
+      TERM=dumb \
+      FM_HOME="$HOME_FIX" \
+      FM_PRIMARY_TEST_LOG="$LOG" \
+      "$ROOT/bin/fm-primary.sh" pi )
+  out=$(cat "$LOG")
+  assert_contains "$out" 'cli=pi' "Pi primary did not exec pi"
+  assert_not_contains "$out" 'claude_bg_shell_pressure_reap=1' \
+    "Pi primary exported Claude's pressure-reap disable"
+  pass "fm-primary: Claude Fable and Opus disable background-shell pressure reap; other profiles do not"
+}
+
 test_profiles_and_root
 test_claude_effort
 test_astra_primary_profile
+test_claude_disables_bg_shell_pressure_reap
 test_unknown_dependency_and_integration_refusals
 test_active_lock_refusal
 test_exec_environment_and_exit_status

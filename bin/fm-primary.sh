@@ -19,6 +19,12 @@
 #                 otherwise xhigh.
 #                 Accepted tokens: low, medium, high, xhigh, max.
 #                 Any other content, including an empty token, refuses.
+#                 Exports CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1 so
+#                 Claude Code does not terminate the tracked watcher-arm
+#                 background shell on a memory-pressure signal once 30 minutes
+#                 have passed since the last user interaction
+#                 (docs/watcher-continuity.md). Requires Claude Code v2.1.193
+#                 or later.
 #   codex         codex --dangerously-bypass-hook-trust
 #                 --dangerously-bypass-approvals-and-sandbox
 #   astra         codex --model gpt-6-astra
@@ -106,7 +112,8 @@
 # file or symlink.
 #
 # Test seams:
-#   FM_PRIMARY_DRY_RUN=1 prints one shell-escaped argv line instead of exec.
+#   FM_PRIMARY_DRY_RUN=1 prints selected profile env lines and one
+#   shell-escaped argv line instead of exec.
 #   FM_PRIMARY_VISIBLE_PREFIX=LAB is accepted only inside a named fm-lab-*
 #   Herdr session and visibly prefixes the role so a lab can never masquerade
 #   as the captain's FIRSTMATE.
@@ -565,6 +572,11 @@ case "$PROFILE" in
     ;;
   claude-fable|claude-opus)
     resolve_claude_effort
+    # Vendor escape hatch (Claude Code v2.1.193+): without this, the
+    # primary reaps the tracked watcher-arm background shell on a
+    # memory-pressure signal once 30 minutes have passed since the last
+    # user interaction (docs/watcher-continuity.md).
+    export CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1
     argv=(claude --model "$CLAUDE_MODEL" --effort "$CLAUDE_EFFORT" --name "$role" --dangerously-skip-permissions)
     printf 'fm-primary: launching model %s at effort %s\n' "$CLAUDE_MODEL" "$CLAUDE_EFFORT" >&2
     ;;
@@ -595,6 +607,8 @@ if [ "${FM_PRIMARY_DRY_RUN:-0}" = 1 ]; then
   printf 'profile=%s\n' "$PROFILE"
   printf 'role=%s\n' "$role"
   [ "$PROFILE" != kimi-k3 ] || printf 'KIMI_CODE_HOME=%s\n' "$KIMI_PRIMARY_HOME"
+  [ -z "${CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP:-}" ] || \
+    printf 'CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=%s\n' "$CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP"
   print_argv "${argv[@]}"
   exit 0
 fi

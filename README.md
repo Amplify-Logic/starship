@@ -122,6 +122,7 @@ grok --trust
 pi
 ```
 
+For Claude Code, a direct launch must also export `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1` so the background watcher arm is not reaped mid-supervision; the launcher above sets it for you (see [docs/watcher-continuity.md](docs/watcher-continuity.md#claude-background-shell-pressure-reap)).
 For Grok, `--trust` is needed once per clone so project hooks and the turn-end guard load; `/hooks-trust` inside Grok works too.
 For Pi, approve the project trust prompt once per clone on first launch so both tracked `.pi/extensions/*.ts` files auto-load.
 

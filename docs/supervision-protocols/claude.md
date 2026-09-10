@@ -18,6 +18,7 @@ When this session owns supervision and away mode is not active:
 12. Do not send idle progress while the watcher is parked.
 
 Claude Code's background task completion is the wake mechanism.
+The primary launcher disables Claude Code's background-shell pressure reap so that arm can remain the live wait; see [`watcher-continuity.md`](../watcher-continuity.md#claude-background-shell-pressure-reap).
 The watcher itself remains `bin/fm-watch.sh`, and `bin/fm-watch-arm.sh` is only the verified background arm wrapper.
 Re-arm attaches to an existing healthy cycle when one is already present and follows its verified successor chain.
 See [`watcher-continuity.md`](../watcher-continuity.md) for the arm-layer successor and clean-close failure contract.

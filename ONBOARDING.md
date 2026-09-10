@@ -250,7 +250,7 @@ From `~/starship`:
 bin/fm-primary.sh claude
 ```
 
-If that refuses, run `claude` from `~/starship` instead.
+If that refuses, run `claude` from `~/starship` instead - a direct launch needs the one environment variable [README.md](README.md#install-and-launch) names for Claude Code.
 
 You should see: Claude Code opening inside the firstmate folder (not a bare shell error).
 

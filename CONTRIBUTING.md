@@ -11,6 +11,7 @@ Pushing through it runs an AI-driven review/test/lint pipeline in an isolated wo
 
 A GitHub Actions check (`Require no-mistakes`) runs on PRs targeting `main` and fails if the body is missing the deterministic signature that no-mistakes writes.
 It evaluates every PR opening and body edit independently, so a later edit cannot replace an earlier pending compliance check.
+Because it reads only the body, an edit that drops the `## Pipeline` section the pipeline wrote turns a passing check red on an unchanged head commit; keep that section when you rewrite a PR body, and restore it to make the check pass again.
 GitHub Actions and Dependabot are exempt so their automation keeps working, but regular contributor PRs without the signature will not be reviewed or merged.
 
 ## Workflow
