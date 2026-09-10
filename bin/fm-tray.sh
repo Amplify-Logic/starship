@@ -10,6 +10,11 @@
 # Commands:
 #   (default) [--order SLUG]  table of pending actions, oldest first, plus counts
 #   counts [--order SLUG]     counts line only: TRAY <n> · OLDEST <age>
+#   json [--order SLUG]       the same pending rows as a JSON array, oldest
+#                             first, for a renderer that regroups them (the
+#                             Action Deck pane groups by order); this is the
+#                             tray's structured form, so no other surface has to
+#                             re-fold the audit log or scrape the table columns
 #     --order SLUG keeps only requests whose ActionRequest domain is that slug
 #   show <digest>             full canonical action context (delegates to gateway)
 #   -h|--help
@@ -35,6 +40,7 @@ usage() {
   cat <<'EOF' >&2
 usage: fm-tray.sh [--order <slug>]
        fm-tray.sh counts [--order <slug>]
+       fm-tray.sh json [--order <slug>]
        fm-tray.sh show <digest>
        fm-tray.sh -h|--help
 
@@ -285,8 +291,10 @@ sys.exit(1)
 PY
 }
 
-cmd_table() {
-  local order='' json audit
+# The three read commands take exactly the same optional --order filter, so the
+# parse lives once here and each command differs only in how it renders the rows.
+pending_for_args() {
+  local order=''
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --order)
@@ -302,31 +310,23 @@ cmd_table() {
         ;;
     esac
   done
-  audit=$(audit_log_path)
-  json=$(pending_json "$audit" "$order")
+  pending_json "$(audit_log_path)" "$order"
+}
+
+cmd_table() {
+  local json
+  json=$(pending_for_args "$@") || exit 1
   render_table "$json"
 }
 
 cmd_counts() {
-  local order='' json audit
-  while [ "$#" -gt 0 ]; do
-    case "$1" in
-      --order)
-        [ "$#" -ge 2 ] || fail "--order requires a slug"
-        order=$2
-        shift 2
-        ;;
-      -*)
-        fail "unknown flag: $1"
-        ;;
-      *)
-        fail "unexpected argument: $1"
-        ;;
-    esac
-  done
-  audit=$(audit_log_path)
-  json=$(pending_json "$audit" "$order")
+  local json
+  json=$(pending_for_args "$@") || exit 1
   counts_line "$json"
+}
+
+cmd_json() {
+  pending_for_args "$@" || exit 1
 }
 
 cmd_show() {
@@ -357,6 +357,10 @@ main() {
     counts)
       shift
       cmd_counts "$@"
+      ;;
+    json)
+      shift
+      cmd_json "$@"
       ;;
     show)
       shift

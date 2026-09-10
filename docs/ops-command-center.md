@@ -1,6 +1,6 @@
 # Ops command center
 
-The ops command center is a Standing Order plus three organs built from primitives already in this repo.
+The ops command center is a Standing Order plus four organs built from primitives already in this repo.
 It adds no services, daemons, or databases.
 The adopted design and grafts are the rationale; this page is only the object model and the commands that implement slice 1.
 
@@ -22,6 +22,11 @@ The adopted design and grafts are the rationale; this page is only the object mo
   AGE is the headline: oldest first, expired marked.
   The tray never approves, executes, or mutates gateway state.
   Approval stays on `bin/fm-action-gateway.sh` captain-role commands.
+- **Deck** - the captain's private view, rendered by `bin/fm-deck.sh`.
+  It is a composition, not a source: staged actions come from the Tray grouped by Standing Order, and the remaining sections come from `data/backlog.md` through `tasks-axi`, task metadata and status folds through the shared helper libraries, and the manual inbox sweep at `data/loose-ends/latest.md`.
+  It holds no queue, no cache, and no state of its own beyond the frame it is drawing, and it never approves, merges, or answers a decision.
+  A missing or empty source renders an honest empty line rather than an error, because a pane that errors out is a pane the captain stops trusting.
+  The UNDER WAY state is a projection of the durable status fold, labelled as reported: `bin/fm-crew-state.sh` remains the owner of live current state, and the deck does not call it so a refresh stays well under a second.
 - **Errand** - a named connector job the primary runs itself because hosted connectors are invisible to workers.
   Prompt and output contract live at `data/errands/<slug>.md`; results land as dated snapshots under `data/ops/`.
   Slice 1 does not add an errand runner.
@@ -33,7 +38,9 @@ Exact flags, Status rewrite rules, and refusal text are owned by each script's h
 - `bin/fm-order.sh` - list, show, run, log-fire, arm, disarm, graduate.
   Arm, disarm, and graduate require `--by-captain`.
   Graduate calls `fm-action-gateway.sh classify` and refuses any kind that classifier treats as non-graduatable.
-- `bin/fm-tray.sh` - pending table, `counts` line (`TRAY <n> · OLDEST <age>`), and `show <digest>`.
+- `bin/fm-tray.sh` - pending table, `counts` line (`TRAY <n> · OLDEST <age>`), `json` (the same rows structured, for a renderer that regroups them), and `show <digest>`.
+- `bin/fm-deck.sh` - the private pane: default refresh, `--once` for one snapshot, `--interval <secs>`.
+  Its header owns the section list, the sources each section reads, and the line that registers it as a tab in the captain's Herdr workspace.
 
 New outward kinds for this slice live in the gateway's deny-by-default registry: `device.config.push` and `device.firmware.push` (irreversible), `kb.fact.publish`, `course.publish`, and `sheet.write` (external).
 See [`action-gateway.md`](action-gateway.md).

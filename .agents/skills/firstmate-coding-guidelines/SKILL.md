@@ -96,6 +96,9 @@ After documentation and review fixes, inspect the complete branch diff again rat
 - `bin/*.sh` and `bin/backends/*.sh` must pass `shellcheck`.
 - Run `bin/fm-lint.sh` before treating a script change as done; it is the single owner of the lint definition (file set, config, and pinned shellcheck version) that CI and the no-mistakes pre-push gate both invoke, and it refuses to run under any other shellcheck version.
 - Colocate tests with the existing pattern in `tests/`, name them `<subject>.test.sh`, and extend an existing script rather than inventing a new runner.
+- Never test a line for blankness with `${line//[[:space:]]/}` inside a per-line loop.
+- macOS ships bash 3.2, where that substitution is quadratic in the number of matches: one 3 KB line costs seconds, and the cost lands on whatever reads the file most often.
+- Use `_fm_line_is_blank` from `bin/fm-classify-lib.sh`, or its `case "$line" in *[![:space:]]*)` form, which stops at the first non-whitespace character.
 - Prefer behavior through an executable or public interface over assertions on implementation-source bytes; retain source assertions only when a declared fork capability has no executable boundary that can prove its integration contract.
 - A verification record captures empirical facts, not assumptions or operating policy.
 - Include the date, version, exact commands run, and exact output needed to support the active guarantee.

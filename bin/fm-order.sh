@@ -19,7 +19,7 @@
 # Object model: docs/ops-command-center.md.
 #
 # Commands:
-#   list
+#   list [--no-tray-depth]
 #   show <slug>
 #   run <slug>
 #   log-fire <slug>
@@ -57,7 +57,7 @@ CHECK_TIMEOUT="${FM_CHECK_TIMEOUT:-30}"
 
 usage() {
   cat <<'EOF' >&2
-usage: fm-order.sh list
+usage: fm-order.sh list [--no-tray-depth]
        fm-order.sh show <slug>
        fm-order.sh run <slug>
        fm-order.sh log-fire <slug>
@@ -67,6 +67,9 @@ usage: fm-order.sh list
        fm-order.sh -h|--help
 
 Standing Order operations over data/orders/<slug>.md.
+list --no-tray-depth omits the tray= field, for view callers that already
+read the tray themselves: the depth costs a full fold of the audit log per
+order, so a pane refreshing on a timer should not pay for it.
 arm/disarm/graduate require --by-captain (the captain's word; firstmate
 must not self-arm). Graduate refuses kinds the action gateway's ceiling
 classifier treats as non-graduatable. log-fire is a stdout filter for an
@@ -219,6 +222,10 @@ captain_date() {
   date -u +%Y-%m-%d
 }
 
+# The tray= field is computed per order and each one folds the whole action
+# audit log, so a caller that does not read it can ask for the listing without
+# it. The field is then absent rather than reported as unknown: '?' is what an
+# unreadable tray looks like, and a depth nobody asked for is neither.
 cmd_list() {
   local slug path line token depth fire
   [ "$#" -eq 0 ] || fail "list takes no arguments"
@@ -235,9 +242,13 @@ cmd_list() {
     line=$(status_line_of "$path")
     token=$(status_token "$line")
     [ -n "$token" ] || fail "order missing Status line: orders/${slug}.md"
-    depth=$(tray_depth_for "$slug")
     fire=$(last_fire_for "$slug")
-    printf '%s\t%s\ttray=%s\tlast_fire=%s\n' "$slug" "$line" "$depth" "$fire"
+    if [ "$NO_TRAY_DEPTH" = "1" ]; then
+      printf '%s\t%s\tlast_fire=%s\n' "$slug" "$line" "$fire"
+    else
+      depth=$(tray_depth_for "$slug")
+      printf '%s\t%s\ttray=%s\tlast_fire=%s\n' "$slug" "$line" "$depth" "$fire"
+    fi
   done
   shopt -u nullglob
   if [ "$found" -eq 0 ]; then
@@ -358,11 +369,16 @@ cmd_graduate() {
 
 parse_global() {
   BY_CAPTAIN=0
+  NO_TRAY_DEPTH=0
   POS=()
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --by-captain)
         BY_CAPTAIN=1
+        shift
+        ;;
+      --no-tray-depth)
+        NO_TRAY_DEPTH=1
         shift
         ;;
       -h|--help)

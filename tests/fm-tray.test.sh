@@ -121,6 +121,51 @@ test_order_filter_and_counts() {
   pass "order filter scopes table and counts"
 }
 
+# The structured form the Action Deck pane composes. It must carry the same rows
+# and the same oldest-first order as the table, so the pane can regroup them by
+# standing order without re-folding the audit log or scraping table columns.
+test_json_matches_the_table() {
+  local out rc digests
+  write_fixture_log
+  set +e
+  out=$(run_tray json 2>&1)
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "json exit"
+  digests=$(printf '%s' "$out" | python3 -c '
+import json, sys
+rows = json.load(sys.stdin)
+print(",".join(r["digest_short"] for r in rows))
+print(",".join(r["domain"] for r in rows))
+print(",".join(str(r["expired"]).lower() for r in rows))
+')
+  [ "$(printf '%s' "$digests" | sed -n 1p)" = "aaaaaaaaaaaa,cccccccccccc,dddddddddddd" ] \
+    || fail "json rows are not the table's oldest-first order, got: $digests"
+  [ "$(printf '%s' "$digests" | sed -n 2p)" = "fota,fota,proactive-outbound" ] \
+    || fail "json rows lost the order slug the pane groups by, got: $digests"
+  [ "$(printf '%s' "$digests" | sed -n 3p)" = "false,true,false" ] \
+    || fail "json rows lost the expiry verdict, got: $digests"
+
+  out=$(run_tray json --order proactive-outbound 2>&1)
+  assert_contains "$out" 'dddddddddddd' "filtered json keeps the matching card"
+  assert_not_contains "$out" 'aaaaaaaaaaaa' "filtered json drops other orders"
+
+  set +e
+  out=$(run_tray json --bogus 2>&1)
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "json rejects an unknown flag"
+  pass "tray json carries the table's rows, order, grouping key, and expiry"
+}
+
+test_json_empty_is_an_empty_array() {
+  local out
+  : > "$AUDIT"
+  out=$(run_tray json 2>&1)
+  [ "$out" = "[]" ] || fail "an empty tray must be an empty array, got: $out"
+  pass "tray json renders an empty tray as an empty array"
+}
+
 test_read_only_refuses_approve() {
   local out rc before after
   write_fixture_log
@@ -175,5 +220,7 @@ test_empty_tray_counts
 test_age_sort_and_expiry
 test_approved_omitted
 test_order_filter_and_counts
+test_json_matches_the_table
+test_json_empty_is_an_empty_array
 test_read_only_refuses_approve
 test_show_delegates_to_gateway

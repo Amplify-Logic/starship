@@ -361,8 +361,8 @@ The refresh also prunes local branches whose remote is gone and that no worktree
 
 ## Ops command center
 
-Standing Orders, Watches, the Tray, and Errands are the ops command center object model.
-The tray is a read-only renderer over the action gateway; approval stays on the gateway's captain-role commands.
+Standing Orders, Watches, the Tray, the Deck, and Errands are the ops command center object model.
+The tray is a read-only renderer over the action gateway and the deck a read-only composition over the tray and the records this home already keeps; approval stays on the gateway's captain-role commands.
 See [`ops-command-center.md`](ops-command-center.md) for that model and [`action-gateway.md`](action-gateway.md) for the privilege boundary.
 
 ## Self-updates stay safe

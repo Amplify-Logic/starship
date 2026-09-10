@@ -205,6 +205,37 @@ test_list_shows_status_tray_and_last_fire() {
   pass "list prints slug, Status, tray depth, and last fire"
 }
 
+# A view refreshing on a timer reads the tray itself; the per-order depth would
+# fold the whole action audit log again for every order, on every frame. The
+# depth-free listing must still carry what only this script parses - Status and
+# the last fire - and must not touch the action log at all.
+test_list_without_tray_depth_omits_the_depth() {
+  local out rc audit
+  write_order fixture-nodepth 'ARMED (captain 2026-08-28)'
+  set +e
+  out=$(run_order list --no-tray-depth 2>&1)
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "list --no-tray-depth exit"
+  assert_contains "$out" 'fixture-nodepth' "the depth-free listing names the slug"
+  assert_contains "$out" 'Status: ARMED' "the depth-free listing includes Status"
+  assert_contains "$out" 'last_fire=' "the depth-free listing includes last fire"
+  assert_not_contains "$out" 'tray=' "the depth-free listing still reported a tray depth"
+
+  # An unreadable action log is what a tray read would complain about; silence
+  # here is the proof that no fold happened.
+  audit="$DATA_DIR/action-gateway/action-audit.log"
+  printf 'not json\n' > "$audit"
+  set +e
+  out=$(run_order list --no-tray-depth 2>&1)
+  rc=$?
+  set -e
+  rm -f "$audit"
+  expect_code 0 "$rc" "list --no-tray-depth with corrupt audit exit"
+  assert_not_contains "$out" 'not JSON' "the depth-free listing still folded the action log"
+  pass "list --no-tray-depth keeps status and last fire without folding the tray"
+}
+
 test_status_token_any_case() {
   local out rc
   printf '%s\n%s\n' '# fixture-case' 'STATUS: DRAFT' > "$ORDERS/fixture-case.md"
@@ -453,6 +484,7 @@ test_graduate_external_kind_appends
 test_run_refuses_unregistered_check
 test_run_executes_registered_check
 test_list_shows_status_tray_and_last_fire
+test_list_without_tray_depth_omits_the_depth
 test_status_token_any_case
 test_arm_preserves_order_file_mode
 test_graduate_unknown_kind_names_deny_by_default

@@ -377,6 +377,7 @@ tests/fm-backend-zellij-smoke.test.sh
 tests/fm-opencode-primary-live-e2e.test.sh
 tests/fm-claude-continuity-live-e2e.test.sh
 tests/fm-pi-primary-live-e2e.test.sh
+tests/fm-deck.test.sh
 EOF
 }
 
@@ -810,6 +811,7 @@ families_for_changed_path() {
     bin/fm-visible-format-lib.sh)
       printf '%s\n' "__script__:fm-visible-status.test.sh"
       printf '%s\n' "__script__:fm-herdr-layout-preview-e2e.test.sh"
+      printf '%s\n' "__script__:fm-deck.test.sh"
       ;;
     # Shared supervision core. `case` is first-match, so these paths must name
     # every family they need: the later bin/fm-supervision* branch can no longer

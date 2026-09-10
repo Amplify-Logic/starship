@@ -191,6 +191,61 @@ EOF
   pass "classifier primitives: keyed decisions and activity phases, captain relevance, window-to-task, and overrides"
 }
 
+# The blank-line test every fold shares. It used to strip all whitespace out of
+# the line and test the remainder, which bash 3.2 evaluates in time quadratic in
+# the number of matches: a single long status note cost seconds, and the watcher
+# pays that on every stale poll. These assertions pin BOTH halves of the fix -
+# that every shape of blank line is still skipped and every non-blank line is
+# still folded, and that a pathological line stays fast enough that no consumer
+# can regress into the quadratic form again.
+test_blank_line_test_is_exact_and_constant_time() {
+  local dir state long open elapsed
+  dir=$(make_case classify-blank); state="$dir/state"
+
+  _fm_line_is_blank "" || fail "an empty line is not treated as blank"
+  _fm_line_is_blank "   " || fail "a spaces-only line is not treated as blank"
+  _fm_line_is_blank "$(printf '\t\t')" || fail "a tabs-only line is not treated as blank"
+  _fm_line_is_blank "$(printf ' \t ')" || fail "a mixed-whitespace line is not treated as blank"
+  _fm_line_is_blank "x" && fail "a non-blank line was treated as blank"
+  _fm_line_is_blank "  x  " && fail "a padded non-blank line was treated as blank"
+
+  # Blank lines of every shape between real events must not disturb the fold.
+  {
+    printf 'needs-decision [key=a]: pick one\n'
+    printf '   \n'
+    printf '\t\t\n'
+    printf '\n'
+    printf 'blocked [key=b]: stuck\n'
+    printf 'resolved [key=a]: chose two\n'
+  } > "$state/blank.status"
+  open=$(status_open_decisions "$state/blank.status")
+  printf '%s' "$open" | grep -F $'b\tblocked\tstuck' >/dev/null \
+    || fail "blank lines between events dropped an open decision"
+  printf '%s' "$open" | grep -F $'a\t' >/dev/null \
+    && fail "blank lines between events reopened a resolved decision"
+
+  # ~3 KB of realistic prose on one line, the shape that made the old form cost
+  # seconds per line. Ten of them must still fold well inside a second.
+  long=$(awk 'BEGIN { for (i = 0; i < 400; i++) printf "some status note words "; print "" }')
+  : > "$state/long.status"
+  for _ in 1 2 3 4 5 6 7 8 9; do
+    printf 'working: %s\n' "$long" >> "$state/long.status"
+  done
+  printf 'needs-decision [key=slow]: %s\n' "$long" >> "$state/long.status"
+  elapsed=$(
+    start=$(date +%s)
+    status_open_decisions "$state/long.status" >/dev/null
+    status_open_activities "$state/long.status" >/dev/null
+    status_declared_wait "$state/long.status" || true
+    printf '%s' "$(( $(date +%s) - start ))"
+  )
+  [ "$elapsed" -le 2 ] \
+    || fail "folding ten long status lines took ${elapsed}s; the blank-line test has regressed to the quadratic form"
+  status_open_decisions "$state/long.status" | grep -F $'slow\tneeds-decision' >/dev/null \
+    || fail "a decision on a long status line was not folded"
+  pass "blank-line test skips every blank shape and stays constant-time on long lines"
+}
+
 # crew_is_provably_working: the absorb-only-when-provably-working predicate. It is
 # benign (absorb) ONLY when fm-crew-state.sh reports the crew as working from an
 # actively-running pipeline step (source run-step) or a busy pane (source pane);
@@ -2131,6 +2186,7 @@ test_signal_reason_is_actionable_classifier
 test_stale_is_terminal_classifier
 test_scan_captain_relevant_statuses_classifier
 test_classifier_primitives
+test_blank_line_test_is_exact_and_constant_time
 test_crew_is_provably_working_classifier
 test_status_is_paused_classifier
 test_status_pause_reason_key
