@@ -10,7 +10,7 @@ The shared orchestrator behavior lives in [`AGENTS.md`](../AGENTS.md) - edit it 
 
 This section is the single owner of the top-level operational-home layout; producer script headers and their help own exact child-file fields and mutation contracts.
 The tracked code root contains the shared instruction, skill, documentation, workflow, and `bin/` surfaces, while each effective `FM_HOME` contains private operational directories.
-`data/` holds durable private fleet records such as the project and secondmate registries, captain preferences, optional shared captain preferences, learnings, backlog, briefs, scout reports, the optional capability outcome log, the optional per-project goal charters under `data/goals/` (`docs/chart-room.md`), the optional action-gateway state root under `data/action-gateway/` (`docs/action-gateway.md`), optional Standing Orders under `data/orders/` and Errand prompts under `data/errands/` (`docs/ops-command-center.md`), the local glasses mailbox runtime under `data/glasses-voice-runtime/` (`docs/bridge-view.md`), and the quarantined bridge photo inbox under `data/bridge-inbox/` (`docs/bridge-view.md`).
+`data/` holds durable private fleet records such as the project and secondmate registries, captain preferences, optional shared captain preferences, learnings, backlog, briefs, scout reports, the optional capability outcome log, the optional per-project goal charters under `data/goals/` (`docs/chart-room.md`), the optional action-gateway state root under `data/action-gateway/` (`docs/action-gateway.md`), optional Standing Orders under `data/orders/` and Errand prompts under `data/errands/` (`docs/ops-command-center.md`), the local glasses mailbox runtime under `data/glasses-voice-runtime/` (`docs/bridge-view.md`), the quarantined bridge photo inbox under `data/bridge-inbox/` (`docs/bridge-view.md`), and the isolated vendor account homes under `data/accounts/<vendor>/<name>/` ("Vendor account pinning" below).
 `state/` holds volatile runtime records such as task metadata, append-only status events, endpoint signals, watcher and wake-queue coordination, away-mode state, generated X-mode artifacts, parent-owned secondmate pending replies under `state/pending-replies/`, and per-task isolated browse profiles under `state/browse/<task-id>/` (`docs/worker-browsing.md`).
 `config/` holds local gitignored operating choices, and `projects/` holds the local project clones that Firstmate reads but changes only through the guarded exceptions in `AGENTS.md`.
 `bridge/` is a mode-0700 directory for the phone-page passcode hash, sessions, and logs (`docs/bridge-view.md`); it is not `data/` or `config/` because those directories are world-readable today.
@@ -332,6 +332,96 @@ Malformed JSON, an unverified harness, a malformed array profile, an unknown `se
 If no dispatch rule fits, firstmate uses the dispatch profile `default` when present, then falls back to `config/crew-harness`.
 Because the spawn backstop is gated by file presence, any fallback path after a missing match, validation error, or missing `jq` still passes a resolved harness explicitly until the file is fixed or removed.
 Secondmate homes inherit this file from the primary, so a secondmate's own crewmates apply the same dispatch profile behavior.
+
+## Vendor account pinning (config/accounts.json)
+
+`config/accounts.json` is an optional local, gitignored file that names the vendor accounts this machine can run work on.
+It is firstmate-maintained and human-editable, in the same spirit as `config/crew-dispatch.json`.
+This section is the single owner of its schema; `bin/fm-primary.sh` and `bin/fm-spawn.sh` own their own selection flags, and `bin/fm-account-lib.sh` owns the resolution contract.
+
+An absent file means one thing only: no pinning at all.
+Every primary launch and every spawn then uses whichever account is live in the ambient vendor home, exactly as it did before account pinning existed.
+That is the compatibility guarantee, and it is covered by tests in `tests/fm-primary.test.sh` and `tests/fm-spawn-account.test.sh`.
+
+```json
+{
+  "claude": {
+    "default": "team",
+    "accounts": {
+      "team": {"label": "Company Team (connectors)", "expect": "<that seat's organization id>"},
+      "max": {"label": "Personal Max"}
+    }
+  },
+  "codex": {
+    "default": "robin",
+    "accounts": {
+      "robin": {"label": "Robin personal"},
+      "alex": {"label": "Alex"}
+    }
+  }
+}
+```
+
+The only vendors with an account concept are `claude` and `codex`.
+Each account's isolated home is DERIVED as `data/accounts/<vendor>/<name>` and is never stored in the file, so the registry cannot point a launch at an arbitrary directory.
+A claude home is exported as `CLAUDE_CONFIG_DIR` and a codex home as `CODEX_HOME`.
+Account names are one path segment of letters, digits, dot, dash, or underscore, and must start with a letter or digit.
+`label` is optional prose for the captain.
+`default` is optional and names the account used when no account is selected explicitly; it must be one of that vendor's defined accounts.
+`expect` is optional and is described below.
+
+Selection is explicit and manual by design.
+`bin/fm-primary.sh <profile> --account <name>` pins a primary and `bin/fm-spawn.sh <id> <project> --account <name>` pins a worker, which records `account=` in that task's metadata.
+There is no automatic switching, no fallback to another account when one is exhausted, and no quota-driven selection: which account work runs on is a spend and data-boundary decision that belongs to the captain.
+For the same reason the pin survives recovery: when the session-start secondmate liveness sweep respawns a confidently dead secondmate, it reads `account=` back from that secondmate's metadata and passes it as `--account`, so a pinned secondmate can never come back on a different login.
+A secondmate with no recorded `account=` is respawned with no flag, exactly as before.
+
+Homes are created by `bin/fm-account.sh create <vendor> <name>`, which makes one empty directory and prints the login command for it.
+Firstmate never copies, links, or seeds a credential directory, `auth.json`, `.credentials.json`, or keychain entry from one account home to another or from the ambient home, and never runs a login itself.
+A pinned home that does not exist or is explicitly logged out refuses the launch and names the exact login command; that refusal is correct behavior.
+
+`expect` closes the silent-wrong-account hole.
+When an account declares it, the launch confirms the pinned home really resolves to that identity before anything runs on it, and refuses naming both the wanted and the actual identity when it does not.
+It is matched case-insensitively against any identity field the vendor reports, so an organization id, an organization name, an email, or a plan name all work.
+Two Claude seats can share one email address - the two on this machine do - so the organization id is the field that actually distinguishes them.
+An identity that cannot be read at all also refuses, because `expect` is a demand for proof rather than a preference.
+`expect` is only accepted for `claude`: `codex login status` reports no identity at all (verified codex-cli 0.153.4, 2026-09-09), so an `expect` on a codex account is reported as invalid rather than silently ignored.
+
+When the file exists, bootstrap validates it with `jq`.
+Valid files stay silent by default; with `FM_BOOTSTRAP_VERBOSE_FACTS=1`, bootstrap emits `BOOTSTRAP_INFO: account pinning active config/accounts.json` plus one fact per vendor.
+Malformed JSON, an unknown vendor, a malformed account, an unsafe account name, a non-string label, an empty or unverifiable `expect`, or a default naming an undefined account is reported as `ACCOUNTS: invalid config/accounts.json - ...`; missing `jq` is reported through the normal `MISSING: jq` install-consent flow.
+A file that exists but cannot be read never fails a launch that asked for no pin: the launch warns and continues on the ambient account, and only an explicit `--account` it cannot resolve refuses.
+
+### What is verified
+
+Both vendors isolate a login, by different mechanisms, and both were proven on this machine on 2026-09-09.
+
+Codex keeps its credential in the `auth.json` inside `CODEX_HOME`, so two codex accounts are two independent logged-in homes (codex-cli 0.153.4: the ambient home reported `Logged in using ChatGPT` while an override home reported `Not logged in`).
+
+Claude namespaces its macOS keychain item per config directory.
+Logging a second seat in under `CLAUDE_CONFIG_DIR` added a `Claude Code-credentials-<hash>` item beside the original `Claude Code-credentials` item and left the ambient seat untouched (claude 2.1.258).
+Both seats then reported `loggedIn: true` at the same time, and neither home held a `.credentials.json`, because the credential lives in that namespaced keychain item rather than in the config directory.
+So two Claude seats do coexist on one machine, and a pinned home is unauthenticated only until its own login.
+
+That same proof is why `expect` matters.
+The two seats on this machine share one email address and differ only in organization and plan: the ambient seat reported `subscriptionType: max` in a personal organization, and the pinned seat reported `subscriptionType: team` in the `Company` organization.
+An email would not have told them apart; the organization id does.
+
+`claude auth status` prints its JSON on stdout for both outcomes and exits 0 when logged in and 1 when logged out.
+Gate on the `loggedIn` field rather than the exit status, which cannot distinguish a logged-out home from a CLI that failed to answer.
+
+Quota monitoring follows a pin rather than reporting the ambient account.
+`quota-axi` 0.1.41 reads the pinned home's own credential for both vendors, and for a pinned Claude seat it finds that home's namespaced keychain item.
+A newly logged-in seat costs one keychain approval before its first read, reported as `keychain_prompt_required` with the remedy `quota-axi --allow-keychain-prompt`; that approval is the captain's to grant, and reads succeed without a prompt afterwards.
+Each seat then reports its own pools: on 2026-09-09 the two seats showed different session and weekly percentages, different reset times, and an extra-usage pool that only one of them has.
+
+Hosted connectors are per seat, which is the practical reason to pin one.
+Two workers launched at once on 2026-09-09, one pinned to the Team seat and one on the ambient Max seat, reported 38 and 4 connector tools respectively, and only the Team worker had the organization's Asana connector, which it called successfully.
+Account pinning cannot move a connector between seats; it only makes it possible to run on the seat that already has one.
+
+Secondmate homes do NOT inherit this file.
+Account homes are per-machine and per-login: the derived paths live under one home's own `data/`, and the credentials in them are physically tied to the logins performed on that machine.
+Copying the registry into another home would name accounts whose homes do not exist there and whose logins cannot be shared, so each home defines its own accounts or none at all.
 
 ## Capability outcome log (data/capability-outcomes.log)
 

@@ -32,6 +32,17 @@ if [ "${1:-}" = status ] && [ "$(basename "$0")" = agent ]; then
   printf '%s\n' "${FM_PRIMARY_TEST_CURSOR_STATUS:-✓ Logged in as exam@example.invalid}"
   exit 0
 fi
+if [ "${1:-}" = auth ] && [ "${2:-}" = status ] && [ "$(basename "$0")" = claude ]; then
+  # Shape verified on claude 2.1.258: JSON on stdout either way, exit 0 logged
+  # in and 1 logged out.
+  if [ -n "${FM_PRIMARY_TEST_LOGGED_OUT:-}" ]; then
+    printf '{\n  "loggedIn": false,\n  "authMethod": "none"\n}\n'
+    exit 1
+  fi
+  printf '{\n  "loggedIn": true,\n  "email": "seat@example.invalid",\n  "orgId": "%s"\n}\n' \
+    "${FM_PRIMARY_TEST_CLAUDE_ORG:-org-fake-0001}"
+  exit 0
+fi
 if [ "${1:-}" = login ] && [ "${2:-}" = status ] && [ "$(basename "$0")" = codex ]; then
   # Matches codex-cli 0.144.6: the status lands on stderr with empty stdout and
   # a non-zero exit. An empty fixture stays a quiet, non-blocking probe.
@@ -65,7 +76,7 @@ strip_ansi() {
   sed $'s/\033\\[[0-9;?]*[a-zA-Z]//g'
 }
 
-dry() { # <profile>
+dry() { # <profile> [<args>...]
   ( cd "$TMP_ROOT" && \
     env -u CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP \
     PATH="$FAKEBIN:$PATH" \
@@ -73,7 +84,19 @@ dry() { # <profile>
     FM_PRIMARY_DRY_RUN=1 \
     FM_PRIMARY_TEST_LOG="$LOG" \
     FM_KIMI_SOURCE_HOME="$KIMI_SOURCE" \
-    "$ROOT/bin/fm-primary.sh" "$1" )
+    "$ROOT/bin/fm-primary.sh" "$@" )
+}
+
+# live: the same launcher with NO dry-run seam, so everything below the dry-run
+# early exit runs - the credential gates included. The fake CLIs exec harmlessly
+# and log to $LOG, so a launch that passes every gate simply ends there.
+live() { # <profile> [<args>...]
+  ( cd "$TMP_ROOT" && \
+    PATH="$FAKEBIN:$PATH" \
+    FM_HOME="$HOME_FIX" \
+    FM_PRIMARY_TEST_LOG="$LOG" \
+    FM_KIMI_SOURCE_HOME="$KIMI_SOURCE" \
+    "$ROOT/bin/fm-primary.sh" "$@" )
 }
 
 test_profiles_and_root() {
@@ -928,6 +951,252 @@ test_astra_primary_profile() {
   rm -f "$effort_file"
   pass "fm-primary: astra pins gpt-6-astra, effort, Codex harness, and the Codex login gate"
 }
+# Named vendor account pinning. The compatibility guarantee comes first: with no
+# config/accounts.json every profile's argv and environment are exactly what they
+# were before account pinning existed.
+test_account_absent_registry_changes_nothing() {
+  local profile out registry="$HOME_FIX/config/accounts.json"
+  mkdir -p "$HOME_FIX/config"
+  rm -f "$registry"
+  for profile in pi claude-fable claude-opus codex opencode grok cursor-grok; do
+    out=$(dry "$profile" 2>/dev/null)
+    assert_not_contains "$out" 'account=' "$profile leaked an account line with no registry"
+    assert_not_contains "$out" 'CLAUDE_CONFIG_DIR' "$profile pinned a Claude home with no registry"
+    assert_not_contains "$out" 'CODEX_HOME' "$profile pinned a Codex home with no registry"
+  done
+  out=$(dry claude-fable 2>/dev/null)
+  assert_contains "$out" "'claude' '--model' 'claude-fable-5-1' '--effort' 'xhigh' '--name' 'FIRSTMATE' '--dangerously-skip-permissions'" \
+    "an absent registry changed the Claude Fable argv"
+  out=$(dry codex 2>/dev/null)
+  assert_contains "$out" "'codex' '--dangerously-bypass-hook-trust' '--dangerously-bypass-approvals-and-sandbox'" \
+    "an absent registry changed the Codex argv"
+  pass "fm-primary: an absent config/accounts.json leaves every profile byte-identical"
+}
+
+write_account_registry() {
+  mkdir -p "$HOME_FIX/config"
+  cat > "$HOME_FIX/config/accounts.json" <<'JSON'
+{
+  "claude": {
+    "default": "team",
+    "accounts": {
+      "team": {"label": "Company Team (connectors)"},
+      "max": {"label": "Personal Max"}
+    }
+  },
+  "codex": {
+    "default": "robin",
+    "accounts": {
+      "robin": {"label": "Robin personal"},
+      "alex": {"label": "Alex"}
+    }
+  }
+}
+JSON
+}
+
+test_account_selection_and_refusals() {
+  local out status registry="$HOME_FIX/config/accounts.json"
+  local claude_max="$HOME_FIX/data/accounts/claude/max"
+  local claude_team="$HOME_FIX/data/accounts/claude/team"
+  local codex_alex="$HOME_FIX/data/accounts/codex/alex"
+  write_account_registry
+  mkdir -p "$claude_max" "$claude_team" "$codex_alex"
+
+  # A valid pin exports the vendor's own isolation variable at the derived home.
+  out=$(dry claude-fable --account max 2>/dev/null)
+  assert_contains "$out" "account=max" "a valid Claude pin did not report the account"
+  assert_contains "$out" "CLAUDE_CONFIG_DIR=$claude_max" "a valid Claude pin did not export the derived home"
+  assert_not_contains "$out" 'CODEX_HOME' "a Claude pin exported a Codex home"
+
+  out=$(dry codex --account alex 2>/dev/null)
+  assert_contains "$out" "account=alex" "a valid Codex pin did not report the account"
+  assert_contains "$out" "CODEX_HOME=$codex_alex" "a valid Codex pin did not export the derived home"
+  assert_not_contains "$out" 'CLAUDE_CONFIG_DIR' "a Codex pin exported a Claude home"
+
+  # astra is a Codex-vendor profile, so it takes a codex account like codex does.
+  out=$(dry astra --account alex 2>/dev/null)
+  assert_contains "$out" "account=alex" "astra did not report the pinned Codex account"
+  assert_contains "$out" "CODEX_HOME=$codex_alex" "astra did not export the derived Codex home"
+  assert_contains "$out" "'--model' 'gpt-6-astra'" "pinning an account changed the astra model"
+
+  # The vendor default applies when the flag is omitted.
+  out=$(dry claude-opus 2>/dev/null)
+  assert_contains "$out" "account=team" "the Claude default account was not applied"
+  assert_contains "$out" "CLAUDE_CONFIG_DIR=$claude_team" "the Claude default did not export its derived home"
+
+  # The default is the only path that picks a name nobody typed, so it gets the
+  # same name rule: an unsafe default refuses with no --account flag anywhere.
+  printf '%s\n' '{"claude":{"default":"_team","accounts":{"_team":{}}}}' > "$registry"
+  status=0
+  out=$(dry claude-fable 2>&1) || status=$?
+  [ "$status" -ne 0 ] || fail "an unsafe vendor default was accepted"
+  assert_contains "$out" "invalid claude account name '_team'" "default refusal did not name the invalid account"
+  assert_not_contains "$out" 'CLAUDE_CONFIG_DIR' "an unsafe default still pinned a home"
+  write_account_registry
+
+  # An unknown name refuses and names the accounts that ARE defined.
+  status=0
+  out=$(dry claude-fable --account ghost 2>&1) || status=$?
+  [ "$status" -ne 0 ] || fail "an unknown account name was accepted"
+  assert_contains "$out" "unknown claude account 'ghost'" "refusal did not name the bad account"
+  assert_contains "$out" "team max" "refusal did not name the defined accounts"
+
+  # A profile whose vendor has no account concept refuses rather than ignoring.
+  for profile in pi opencode grok kimi-k3 cursor-grok; do
+    status=0
+    out=$(dry "$profile" --account max 2>&1) || status=$?
+    [ "$status" -ne 0 ] || fail "--account was silently ignored on $profile"
+    assert_contains "$out" "no vendor account to pin" "$profile refusal did not explain the missing account concept"
+  done
+
+  # Every OTHER extra argument still refuses with the original message.
+  for extra in --resume -c --continue --account-ish nonsense; do
+    status=0
+    out=$(dry claude-fable "$extra" 2>&1) || status=$?
+    [ "$status" -ne 0 ] || fail "extra argument '$extra' was accepted"
+    assert_contains "$out" "profiles accept no extra arguments; use the launched CLI's normal resume UI" \
+      "extra argument '$extra' lost the original refusal"
+  done
+  status=0
+  out=$(dry claude-fable --account 2>&1) || status=$?
+  [ "$status" -ne 0 ] || fail "--account without a name was accepted"
+  assert_contains "$out" "--account requires an account name" "bare --account lost its own message"
+
+  rm -f "$registry"
+  pass "fm-primary: --account selects, defaults, and refuses unknown names, vendorless profiles, and other arguments"
+}
+
+test_account_login_and_identity_gates() {
+  local out status registry="$HOME_FIX/config/accounts.json"
+  local claude_team="$HOME_FIX/data/accounts/claude/team"
+  write_account_registry
+  rm -rf "$claude_team"
+
+  # A home that does not exist yet refuses with the exact login command.
+  status=0
+  out=$(live claude-fable --account team 2>&1) || status=$?
+  [ "$status" -ne 0 ] || fail "a missing account home was accepted"
+  assert_contains "$out" "has no home yet" "refusal did not report the missing home"
+  assert_contains "$out" "CLAUDE_CONFIG_DIR=$claude_team claude" "refusal did not name the exact login command"
+
+  # An explicitly logged-out home refuses the same way, and copies nothing.
+  mkdir -p "$claude_team"
+  status=0
+  out=$( FM_PRIMARY_TEST_LOGGED_OUT=1 live claude-fable --account team 2>&1) || status=$?
+  [ "$status" -ne 0 ] || fail "a logged-out account home was accepted"
+  assert_contains "$out" "is not logged in" "refusal did not report the logged-out home"
+  assert_contains "$out" "CLAUDE_CONFIG_DIR=$claude_team claude" "logged-out refusal did not name the login command"
+  assert_contains "$out" "no credential is ever copied from another account" \
+    "logged-out refusal dropped the no-credential-copying rule"
+  [ -z "$(ls -A "$claude_team")" ] || fail "the account home was seeded with something"
+
+  # An expect identity is verified against the pinned home before exec.
+  cat > "$registry" <<'JSON'
+{
+  "claude": {
+    "accounts": {
+      "team": {"label": "Company Team", "expect": "org-team-0001"}
+    }
+  }
+}
+JSON
+  status=0
+  out=$( FM_PRIMARY_TEST_CLAUDE_ORG=org-personal-0002 live claude-fable --account team 2>&1) || status=$?
+  [ "$status" -ne 0 ] || fail "a pinned home signed in as another account was accepted"
+  assert_contains "$out" "expects 'org-team-0001'" "refusal did not name the expected identity"
+  assert_contains "$out" "org-personal-0002" "refusal did not name the actual identity"
+
+  # A matching identity launches, and the dry-run preview of the same pin still
+  # reports the derived home.
+  : > "$LOG"
+  status=0
+  ( FM_PRIMARY_TEST_CLAUDE_ORG=org-team-0001 live claude-fable --account team >/dev/null 2>&1 ) || status=$?
+  expect_code 0 "$status" "a matching identity refused its own launch"
+  assert_contains "$(cat "$LOG")" "cli=claude" "a matching identity never reached the CLI"
+  out=$( FM_PRIMARY_TEST_CLAUDE_ORG=org-team-0001 dry claude-fable --account team 2>/dev/null)
+  assert_contains "$out" "CLAUDE_CONFIG_DIR=$claude_team" "a matching identity did not launch pinned"
+
+  rm -f "$registry"
+  pass "fm-primary: a missing, logged-out, or wrong-identity account home refuses before launch"
+}
+
+# The account half of the dry-run contract, stated in the fm-primary header: a
+# preview shows argv BEFORE the pinned home's credential is inspected, so a
+# missing, logged-out, or wrong seat can never hide what would have been
+# launched. An unresolvable pin is a different thing - a bad request - and still
+# refuses. Other profiles' own login gates are out of scope here and keep their
+# existing placement.
+test_account_credential_gates_never_hide_dry_run_argv() {
+  local out status registry="$HOME_FIX/config/accounts.json"
+  local claude_team="$HOME_FIX/data/accounts/claude/team"
+  write_account_registry
+  rm -rf "$claude_team"
+
+  out=$(dry claude-fable --account team 2>&1)
+  status=$?
+  expect_code 0 "$status" "a missing account home hid the dry-run preview"
+  assert_contains "$out" "account=team" "the preview lost the account it would have used"
+  assert_contains "$out" "CLAUDE_CONFIG_DIR=$claude_team" "the preview lost the derived home"
+  assert_contains "$out" "'claude' '--model' 'claude-fable-5-1'" "the preview lost argv"
+
+  mkdir -p "$claude_team"
+  out=$( FM_PRIMARY_TEST_LOGGED_OUT=1 dry claude-fable --account team 2>&1)
+  status=$?
+  expect_code 0 "$status" "a logged-out account home hid the dry-run preview"
+  assert_contains "$out" "'claude' '--model' 'claude-fable-5-1'" "the logged-out preview lost argv"
+
+  cat > "$registry" <<'JSON'
+{
+  "claude": {
+    "accounts": {
+      "team": {"label": "Company Team", "expect": "org-team-0001"}
+    }
+  }
+}
+JSON
+  out=$( FM_PRIMARY_TEST_CLAUDE_ORG=org-personal-0002 dry claude-fable --account team 2>&1)
+  status=$?
+  expect_code 0 "$status" "a wrong-seat account home hid the dry-run preview"
+  assert_contains "$out" "'claude' '--model' 'claude-fable-5-1'" "the wrong-seat preview lost argv"
+
+  # Resolution refusals are NOT credential gates and still refuse in dry run.
+  write_account_registry
+  status=0
+  out=$(dry claude-fable --account ghost 2>&1) || status=$?
+  [ "$status" -ne 0 ] || fail "an unknown account still previewed argv"
+  assert_contains "$out" "unknown claude account 'ghost'" "unknown-account refusal was lost in dry run"
+  status=0
+  out=$(dry pi --account team 2>&1) || status=$?
+  [ "$status" -ne 0 ] || fail "a vendorless profile still previewed argv"
+  assert_contains "$out" "no vendor account to pin" "vendorless refusal was lost in dry run"
+
+  rm -f "$registry"
+  pass "fm-primary: dry run previews argv before the account credential gate, and still refuses an unresolvable pin"
+}
+
+# A broken registry is a diagnostic, not an outage: bootstrap reports it, an
+# explicit pin refuses, and a launch that asked for no pin still runs.
+test_account_invalid_registry_warns_without_crashing_a_launch() {
+  local out status registry="$HOME_FIX/config/accounts.json"
+  mkdir -p "$HOME_FIX/config"
+  printf '{"claude":' > "$registry"
+
+  out=$(dry claude-fable 2>&1)
+  status=$?
+  expect_code 0 "$status" "a malformed registry crashed an unpinned launch"
+  assert_contains "$out" "is not valid JSON" "a malformed registry did not warn"
+  assert_contains "$out" "'claude' '--model' 'claude-fable-5-1'" "a malformed registry changed the unpinned argv"
+  assert_not_contains "$out" 'CLAUDE_CONFIG_DIR' "a malformed registry still pinned a home"
+
+  status=0
+  out=$(dry claude-fable --account team 2>&1) || status=$?
+  [ "$status" -ne 0 ] || fail "a malformed registry still resolved an explicit pin"
+  assert_contains "$out" "cannot be resolved" "explicit pin refusal did not explain the unreadable registry"
+
+  rm -f "$registry"
+  pass "fm-primary: an unreadable registry warns and still launches, but refuses an explicit pin"
+}
 
 test_claude_disables_bg_shell_pressure_reap() {
   local out
@@ -979,6 +1248,11 @@ test_profiles_and_root
 test_claude_effort
 test_astra_primary_profile
 test_claude_disables_bg_shell_pressure_reap
+test_account_absent_registry_changes_nothing
+test_account_selection_and_refusals
+test_account_login_and_identity_gates
+test_account_credential_gates_never_hide_dry_run_argv
+test_account_invalid_registry_warns_without_crashing_a_launch
 test_unknown_dependency_and_integration_refusals
 test_active_lock_refusal
 test_exec_environment_and_exit_status

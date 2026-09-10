@@ -178,6 +178,30 @@ The supported launch-profile flags below are verified locally; each row records 
 When a requested effort value is outside the harness-specific accepted set, `fm-spawn` records the requested `effort=` in meta but emits no effort flag for that harness.
 This preserves launch success instead of passing a known-bad value.
 
+## Vendor account pinning (verified 2026-09-09)
+
+Only two harnesses have a vendor account concept, and each has its own isolation variable.
+A claude launch pins with `CLAUDE_CONFIG_DIR` and a codex launch with `CODEX_HOME`, both pointing at a home derived as `data/accounts/<vendor>/<name>`.
+`bin/fm-primary.sh <profile> --account <name>` pins a primary, `bin/fm-spawn.sh ... --account <name>` pins a worker and records `account=` in that task's metadata, and `docs/configuration.md` "Vendor account pinning" owns the registry schema.
+An absent `config/accounts.json` means no pinning at all, so every launch behaves exactly as it did before this existed.
+`--account` on a harness or profile with no vendor account concept refuses rather than being ignored.
+
+Never copy, link, or seed a credential directory, `auth.json`, `.credentials.json`, or keychain entry between account homes or from the ambient home.
+A fresh account home is empty and unauthenticated on purpose; the captain logs it in with the command `bin/fm-account.sh create <vendor> <name>` prints.
+A pinned home that is missing or explicitly logged out refuses the launch, and that refusal is the correct outcome.
+
+Operating facts that decide whether a pin can work at all:
+
+- codex isolates through the `auth.json` inside `CODEX_HOME`, so two codex accounts are two independent logins (codex-cli 0.153.4: ambient home `Logged in using ChatGPT`, override home `Not logged in`).
+- claude isolates through the macOS keychain, which it NAMESPACES per config directory. Logging a second seat in under `CLAUDE_CONFIG_DIR` added a `Claude Code-credentials-<hash>` item beside the original and left the ambient seat untouched (claude 2.1.258, proven 2026-09-09).
+- Two Claude seats therefore coexist: both reported `loggedIn: true` at the same time, and neither home held a `.credentials.json`. A pinned Claude home is unauthenticated only until its own login, which the captain performs.
+- Two seats can share one email. On this machine both seats sign in as the captain's single work address and differ only by organization and plan (ambient `max` in a personal org, pinned `team` in the work org), so match an `expect` on the organization id, never the email.
+- `claude auth status` prints JSON on stdout either way and exits 0 logged in, 1 logged out. Read the `loggedIn` field; the exit status cannot separate a logged-out home from a CLI that failed to answer.
+- `codex login status` prints `Logged in using ChatGPT` on stdout and `Not logged in` on stderr, and exposes no account identity at all.
+- Because codex reports no identity, an `expect` value is accepted only for claude accounts; on a codex account it is reported as invalid rather than matched against something invented. `quota-axi --provider codex` does report the identity of a pinned home and would be the surface to use if that check is ever wanted.
+- `quota-axi` 0.1.41 follows both pins rather than reporting the ambient account, and for a pinned Claude seat it finds that home's namespaced keychain item. A newly logged-in seat costs one keychain approval before its first read (`keychain_prompt_required`, remedy `quota-axi --allow-keychain-prompt`), which is the captain's to grant; reads are promptless afterwards, and each seat then shows its own session and weekly pools.
+- Hosted connectors are per seat, so a pinned worker gets that seat's connector tools and no others. Proven 2026-09-09 with two concurrent workers: the Team-pinned worker saw 38 connector tools and completed a live Asana read, while the ambient Max worker saw 4 and had no Asana tool at all. Pinning selects the seat that has a connector; it can never move one between seats.
+
 ## no-mistakes skill invocation
 
 Send the validation skill using the target harness's skill invocation form.

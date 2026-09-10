@@ -29,6 +29,10 @@
 #   - The sweep converges: once a secondmate reads alive, a later run never
 #     re-touches it (idempotent by construction, not by remembering what it
 #     already did).
+#   - A respawn preserves the vendor account the secondmate was pinned to:
+#     account= is read back from the meta and passed as --account, so recovery
+#     can never move a pinned secondmate onto a different login. A secondmate
+#     with no recorded account= respawns with no flag at all.
 #   - The sweep is skipped entirely under FM_BOOTSTRAP_DETECT_ONLY=1 (the
 #     read-only session path), matching the other mutating sweeps.
 #   - The sweep is naturally scoped to the primary: with no kind=secondmate
@@ -386,6 +390,52 @@ test_sweep_converges_no_retouch_once_alive() {
   pass "sweep: idempotent by construction - a live secondmate is never re-touched on a later run"
 }
 
+# Recovery must not move a pinned secondmate onto a different vendor login.
+# Which account a worker runs on is the captain's explicit spend and
+# data-boundary decision (docs/configuration.md), so the sweep carries account=
+# forward from the meta instead of letting fm-spawn re-resolve it to the vendor
+# default. The proof is the respawned meta: it still names the pinned account.
+test_sweep_respawn_preserves_the_pinned_account() {
+  local w fb tmuxfb log real_jq account_home
+  w=$(new_world sweep-account-pin)
+  add_sm_home "$w" sm1 firstmate:fm-sm1 codex
+  printf 'account=alex\n' >> "$w/home/state/sm1.meta"
+  printf '%s\n' '{"codex":{"default":"robin","accounts":{"robin":{},"alex":{}}}}' \
+    > "$w/home/config/accounts.json"
+  # Both homes exist and both answer "logged in", so nothing but the recorded
+  # pin can decide which one the respawn lands on.
+  account_home="$w/home/data/accounts/codex"
+  mkdir -p "$account_home/robin" "$account_home/alex"
+  fb=$(make_toolchain "$w"); tmuxfb=$(make_liveness_tmux "$w")
+  real_jq=$(command -v jq 2>/dev/null) || fail "jq is required to read config/accounts.json"
+  ln -sf "$real_jq" "$fb/jq"
+  log="$w/calls.log"; : > "$log"
+
+  run_bootstrap "$tmuxfb:$fb" "$w/home" zsh "$log" >/dev/null
+
+  assert_contains "$(cat "$log")" "new-window" "the pinned secondmate was never respawned"
+  assert_grep 'account=alex' "$w/home/state/sm1.meta" \
+    "the respawn dropped the pinned account and fell back to the vendor default"
+  pass "sweep: a respawned secondmate comes back on the account it was pinned to"
+}
+
+# The unpinned case must stay a complete no-op: no account= in the meta means no
+# --account flag, and the respawned meta records no account at all.
+test_sweep_respawn_without_a_pin_records_no_account() {
+  local w fb tmuxfb log
+  w=$(new_world sweep-account-unpinned)
+  add_sm_home "$w" sm1 firstmate:fm-sm1 codex
+  fb=$(make_toolchain "$w"); tmuxfb=$(make_liveness_tmux "$w")
+  log="$w/calls.log"; : > "$log"
+
+  run_bootstrap "$tmuxfb:$fb" "$w/home" zsh "$log" >/dev/null
+
+  assert_contains "$(cat "$log")" "new-window" "the unpinned secondmate was never respawned"
+  grep -q '^account=' "$w/home/state/sm1.meta" \
+    && fail "an unpinned respawn invented an account: $(grep '^account=' "$w/home/state/sm1.meta")"
+  pass "sweep: an unpinned secondmate respawns with no account flag and no account in its meta"
+}
+
 test_sweep_skipped_under_detect_only() {
   local w fb tmuxfb log out
   w=$(new_world sweep-detect-only)
@@ -431,6 +481,8 @@ test_sweep_leaves_alive_secondmate_untouched
 test_sweep_never_acts_on_inconclusive_reading
 test_sweep_never_acts_on_unverified_harness_dead_reading
 test_sweep_converges_no_retouch_once_alive
+test_sweep_respawn_preserves_the_pinned_account
+test_sweep_respawn_without_a_pin_records_no_account
 test_sweep_skipped_under_detect_only
 test_sweep_noop_with_no_secondmate_meta
 

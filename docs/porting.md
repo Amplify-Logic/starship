@@ -73,6 +73,7 @@ Paths that behave this way today include, when present:
 - `data/errands/`
 - `data/ops/`
 - `data/harness-exam/`
+- `data/accounts/` (isolated vendor account homes; per-machine by construction, and a codex home holds that login's `auth.json`)
 - per-task `data/<id>/` briefs and reports
 - any `config/` file the live allowlist command does not print
 
@@ -146,7 +147,7 @@ Do this, in order:
 1. Run `bin/fm-bootstrap.sh` and resolve every MISSING: / MISSING_MANUAL: / NEEDS_GH_AUTH line (ask before installing; reuse bootstrap, do not invent a parallel installer).
 2. Confirm portable files landed: data/captain.md, data/learnings.md, data/backlog.md, and config/backend plus config/crew-harness and config/crew-dispatch.json when present.
 3. Rewrite any absolute paths that still point at the other machine (especially CLAUDE_CONFIG_DIR under data/captain.md / data/learnings.md) to THIS machine's paths under ~/starship. Do not copy credential directories from the other machine.
-4. Recreate Claude alternate-account isolation if needed: mkdir -p state/claude-alt-account and document CLAUDE_CONFIG_DIR=$PWD/state/claude-alt-account for login on this machine. Credentials are obtained by interactive `claude` login on this machine only.
+4. Recreate named vendor accounts if needed: config/accounts.json and the account homes under data/accounts/ are per-machine and do not port. Declare the accounts this machine needs, run `bin/fm-account.sh create <vendor> <name>` for each, and log each one in here. Never copy a credential directory, auth.json, or .credentials.json from the other machine.
 5. Walk me through the interactive harness logins I must do myself, in this order: gh (already done), claude, Cursor CLI (agent), codex, kimi (if used), pi (if used). Do not claim you can automate those logins.
 6. Verify before real work: session-start digest loads captain preferences and learnings; bootstrap is clean of actionable missing tools; no .env was imported; state/ and projects/ are empty or local-only. Report what you verified and what still needs my interactive login.
 ```
@@ -234,7 +235,7 @@ Each harness keeps its own interactive login.
 Expect these, in order, on a fresh machine:
 
 1. **GitHub CLI** - `gh auth login`.
-2. **Claude Code** - run `claude` and complete its login; for an alternate account use a machine-local `CLAUDE_CONFIG_DIR` under this home's `state/` (pattern in `data/learnings.md`).
+2. **Claude Code** - run `claude` and complete its login; a second seat is a named account with its own derived home (`bin/fm-account.sh create claude <name>`, then log that home in separately - see `docs/configuration.md` "Vendor account pinning").
 3. **Cursor CLI** - run the Cursor agent CLI login for worker dispatch.
 4. **Codex** - run `codex` login when that pool is used.
 5. **Kimi Code** - login when using the Kimi primary.
@@ -245,7 +246,7 @@ The one-command bootstrap is successful when the portable material and toolchain
 
 ## Absolute paths
 
-Portable prose may still mention the other machine's paths (for example an old `CLAUDE_CONFIG_DIR=$HOME/starship/state/claude-alt-account` line).
+Portable prose may still mention the other machine's paths (for example a `$HOME/starship/data/accounts/claude/team` account home that exists only there).
 After import, rewrite those to the new machine's home.
 Never copy the credential directory itself across machines.
 

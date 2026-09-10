@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Spawn a direct report: a crewmate in a treehouse or Orca worktree, or a
 # secondmate in its isolated firstmate home.
-# Usage: fm-spawn.sh <task-id> <project-dir> [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] [--outcome <text>] [--task-type <slug>] [--scout]
-#        fm-spawn.sh <task-id> [<firstmate-home>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] --secondmate
+# Usage: fm-spawn.sh <task-id> <project-dir> [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] [--account <name>] [--outcome <text>] [--task-type <slug>] [--scout]
+#        fm-spawn.sh <task-id> [<firstmate-home>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] [--account <name>] --secondmate
 #   --harness <name> is the explicit per-spawn harness/profile adapter. The old
 #   positional harness arg still works for back-compat.
 #   --model <name> and --effort <low|medium|high|xhigh|max> are concrete profile
@@ -27,6 +27,20 @@
 #   A backend spawn refusal (missing dependency, version gate, unauthenticated
 #   socket, or unsupported secondmate mode) is terminal for that selected backend;
 #   callers must surface it instead of silently retrying another backend.
+#   --account <name> pins this worker to a NAMED VENDOR ACCOUNT: a claude harness
+#   runs on that account's CLAUDE_CONFIG_DIR home, a codex harness on its
+#   CODEX_HOME home, both derived as data/accounts/<vendor>/<name> from local
+#   gitignored config/accounts.json (docs/configuration.md owns that schema).
+#   The resolved name is recorded in meta as account=, and only when a pin
+#   actually applies, so an unpinned spawn's meta is unchanged. Without the flag
+#   the vendor default in that file applies; with NO such file there is no
+#   pinning at all and every spawn behaves exactly as it did before. --account on
+#   a harness with no vendor account concept, or on a raw launch command whose
+#   vendor cannot be known, refuses rather than being silently ignored, as does a
+#   name the registry does not define. A pinned home that does not exist, is
+#   explicitly logged out, or fails its declared expect identity refuses the
+#   spawn before any endpoint is created, naming the login command to run; no
+#   credential is ever copied between account homes.
 #   With no harness arg, a crewmate/scout spawn resolves the CREW harness only when
 #   config/crew-dispatch.json is absent. When that file exists, crewmate/scout
 #   spawns require an explicit harness so firstmate cannot silently skip dispatch
@@ -197,6 +211,8 @@ SUB_HOME_MARKER=".fm-secondmate-home"
 . "$SCRIPT_DIR/fm-cursor-model-lib.sh"
 # shellcheck source=bin/fm-worktree-lease-lib.sh
 . "$SCRIPT_DIR/fm-worktree-lease-lib.sh"
+# shellcheck source=bin/fm-account-lib.sh
+. "$SCRIPT_DIR/fm-account-lib.sh"
 # Fail closed before any fleet mutation: a no-mistakes gate agent must never spawn
 # a direct report (see bin/fm-gate-refuse-lib.sh).
 fm_refuse_if_gate_agent
@@ -208,12 +224,14 @@ HARNESS_ARG=
 MODEL=
 EFFORT=
 BACKEND_ARG=
+ACCOUNT=
 OUTCOME=
 TASK_TYPE=
 HARNESS_SET=0
 MODEL_SET=0
 EFFORT_SET=0
 BACKEND_SET=0
+ACCOUNT_SET=0
 OUTCOME_SET=0
 TASK_TYPE_SET=0
 POS=()
@@ -228,6 +246,7 @@ for a in "$@"; do
       model) MODEL=$a; MODEL_SET=1 ;;
       effort) EFFORT=$a; EFFORT_SET=1 ;;
       backend) BACKEND_ARG=$a; BACKEND_SET=1 ;;
+      account) ACCOUNT=$a; ACCOUNT_SET=1 ;;
       outcome) OUTCOME=$a; OUTCOME_SET=1 ;;
       task-type) TASK_TYPE=$a; TASK_TYPE_SET=1 ;;
       *) echo "error: internal parser state for --$want_value" >&2; exit 1 ;;
@@ -246,6 +265,8 @@ for a in "$@"; do
     --effort=*) EFFORT=${a#--effort=}; EFFORT_SET=1 ;;
     --backend) want_value=backend ;;
     --backend=*) BACKEND_ARG=${a#--backend=}; BACKEND_SET=1 ;;
+    --account) want_value=account ;;
+    --account=*) ACCOUNT=${a#--account=}; ACCOUNT_SET=1 ;;
     --outcome) want_value=outcome ;;
     --outcome=*) OUTCOME=${a#--outcome=}; OUTCOME_SET=1 ;;
     --task-type) want_value=task-type ;;
@@ -258,6 +279,7 @@ done
 [ "$MODEL_SET" -eq 0 ] || [ -n "$MODEL" ] || { echo "error: --model requires a non-empty value" >&2; exit 1; }
 [ "$EFFORT_SET" -eq 0 ] || [ -n "$EFFORT" ] || { echo "error: --effort requires a non-empty value" >&2; exit 1; }
 [ "$BACKEND_SET" -eq 0 ] || [ -n "$BACKEND_ARG" ] || { echo "error: --backend requires a non-empty value" >&2; exit 1; }
+[ "$ACCOUNT_SET" -eq 0 ] || [ -n "$ACCOUNT" ] || { echo "error: --account requires a non-empty value" >&2; exit 1; }
 [ "$OUTCOME_SET" -eq 0 ] || [ -n "$OUTCOME" ] || { echo "error: --outcome requires a non-empty value" >&2; exit 1; }
 [ "$TASK_TYPE_SET" -eq 0 ] || [ -n "$TASK_TYPE" ] || { echo "error: --task-type requires a non-empty value" >&2; exit 1; }
 if [ -n "$TASK_TYPE" ]; then
@@ -377,6 +399,7 @@ if [ "${#POS[@]}" -gt 0 ] && [ "${POS[0]}" != "$idpart" ] && case "$idpart" in *
   [ -z "$MODEL" ] || shared_args+=(--model "$MODEL")
   [ -z "$EFFORT" ] || shared_args+=(--effort "$EFFORT")
   [ -z "$BACKEND_ARG" ] || shared_args+=(--backend "$BACKEND_ARG")
+  [ -z "$ACCOUNT" ] || shared_args+=(--account "$ACCOUNT")
   [ -z "$OUTCOME" ] || shared_args+=(--outcome "$OUTCOME")
   [ -z "$TASK_TYPE" ] || shared_args+=(--task-type "$TASK_TYPE")
   for pair in "${POS[@]}"; do
@@ -629,6 +652,52 @@ case "$ARG3" in
 esac
 if [ "$RAW_LAUNCH" -eq 0 ]; then
   preflight_verified_launch_binary "$BACKEND" "$HARNESS" "$LAUNCH" || exit 1
+fi
+
+# --- named vendor account ----------------------------------------------------
+# Which LOGIN this worker runs on, resolved before any endpoint exists so a bad
+# pin costs nothing. bin/fm-account-lib.sh owns the registry contract, and an
+# absent config/accounts.json resolves to no pin at all - the launch, its env,
+# and its meta are then byte-identical to a spawn from before account pinning.
+ACCOUNT_VENDOR=
+ACCOUNT_NAME=
+ACCOUNT_HOME=
+ACCOUNT_ENV=
+if [ "$RAW_LAUNCH" -eq 1 ]; then
+  [ "$ACCOUNT_SET" -eq 0 ] || {
+    echo "error: --account cannot apply to a raw launch command; that escape hatch has no known vendor to pin" >&2
+    exit 1
+  }
+else
+  case "$HARNESS" in
+    claude) ACCOUNT_VENDOR=claude ;;
+    codex) ACCOUNT_VENDOR=codex ;;
+  esac
+fi
+if [ -n "$ACCOUNT_VENDOR" ]; then
+  fm_account_resolve "$CONFIG" "$DATA" "$ACCOUNT_VENDOR" "$ACCOUNT" || {
+    echo "error: $FM_ACCOUNT_ERROR" >&2
+    exit 1
+  }
+  [ -z "$FM_ACCOUNT_WARNING" ] || echo "warning: $FM_ACCOUNT_WARNING" >&2
+elif [ "$RAW_LAUNCH" -eq 0 ] && [ "$ACCOUNT_SET" -eq 1 ]; then
+  echo "error: harness '$HARNESS' has no vendor account to pin; --account applies to $(fm_account_vendors) harnesses only" >&2
+  exit 1
+fi
+if [ -n "$ACCOUNT_VENDOR" ] && [ -n "$FM_ACCOUNT_PIN_HOME" ]; then
+  ACCOUNT_NAME=$FM_ACCOUNT_PIN_NAME
+  ACCOUNT_HOME=$FM_ACCOUNT_PIN_HOME
+  ACCOUNT_ENV=$(fm_account_env_var "$ACCOUNT_VENDOR")
+  ACCOUNT_CLI=$(launch_binary_from_command "$LAUNCH") || ACCOUNT_CLI=$ACCOUNT_VENDOR
+  ACCOUNT_EXPECT=$(fm_account_expect "$(fm_account_registry_file "$CONFIG")" "$ACCOUNT_VENDOR" "$ACCOUNT_NAME")
+  # The missing-home / logged-out / wrong-seat gate lives in
+  # bin/fm-account-lib.sh, shared verbatim with bin/fm-primary.sh, so the same
+  # situation can never be refused in two different sets of words.
+  fm_account_require_usable "$ACCOUNT_VENDOR" "$ACCOUNT_HOME" "$ACCOUNT_CLI" "$ACCOUNT_NAME" \
+    "$ACCOUNT_EXPECT" "$FM_ROOT/bin/fm-account.sh create $ACCOUNT_VENDOR $ACCOUNT_NAME" || {
+    echo "error: $FM_ACCOUNT_ERROR" >&2
+    exit 1
+  }
 fi
 
 # config/secondmate-harness may carry optional model/effort tokens alongside the
@@ -1633,6 +1702,9 @@ META_WINDOW=$T
   fi
   echo "effort=${EFFORT:-default}"
   [ -z "$TASK_TYPE" ] || echo "task_type=$TASK_TYPE"
+  # account= appears only for a pinned spawn (absent means the ambient vendor
+  # home), so teardown and recovery can see which login the work ran on.
+  [ -z "$ACCOUNT_NAME" ] || echo "account=$ACCOUNT_NAME"
   # backend= is written only for a non-default (non-tmux) backend, so the
   # default path's meta stays byte-identical (absent backend= means tmux;
   # data/fm-backend-design-d7's P1 compatibility contract).
@@ -1724,6 +1796,9 @@ spawn_render_launch() {  # <shell-quoted-brief-arg>
   if [ "$HARNESS" = kimi ] && [ "$RAW_LAUNCH" -eq 0 ]; then
     sq_kimihome=$(shell_quote "$STATE_REAL/$ID.kimi-home")
     rendered=${rendered//__KIMIHOME__/$sq_kimihome}
+  fi
+  if [ -n "$ACCOUNT_HOME" ]; then
+    rendered="$ACCOUNT_ENV=$(shell_quote "$ACCOUNT_HOME") $rendered"
   fi
   if [ "$KIND" = secondmate ]; then
     sq_home=$(shell_quote "$PROJ_ABS")

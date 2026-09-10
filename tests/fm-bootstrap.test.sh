@@ -793,6 +793,86 @@ ROWS
   pass "bootstrap validates crew-dispatch.json and reports malformed or unverified configs"
 }
 
+test_accounts_validation() {
+  local label body expect mode case_dir fakebin out n
+  n=0
+  while IFS='^' read -r label body mode expect; do
+    [ -n "$label" ] || continue
+    n=$((n + 1))
+    case_dir="$TMP_ROOT/accounts-$n"
+    mkdir -p "$case_dir/home/config"
+    printf '%s\n' manual > "$case_dir/home/config/backlog-backend"
+    printf '%s\n' "$body" > "$case_dir/home/config/accounts.json"
+    fakebin=$(make_fake_toolchain "$case_dir")
+    add_real_jq "$fakebin"
+    out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+      FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
+    case "$mode" in
+      empty)
+        [ -z "$out" ] || fail "$label: expected silence, got: $out" ;;
+      exact)
+        [ "$out" = "$expect" ] || fail "$label: expected '$expect', got: $out" ;;
+      grep)
+        printf '%s\n' "$out" | grep -Fx "$expect" >/dev/null || fail "$label: missing '$expect' (got: $out)" ;;
+    esac
+  done <<'ROWS'
+valid registry is silent^{"claude":{"default":"team","accounts":{"team":{"label":"Company Team"},"max":{"label":"Personal Max"}}},"codex":{"default":"robin","accounts":{"robin":{}}}}^empty^
+malformed accounts config is flagged^{"claude":^exact^ACCOUNTS: invalid config/accounts.json - malformed JSON
+non-object top level is flagged^[]^exact^ACCOUNTS: invalid config/accounts.json - top-level value must be an object
+unknown vendor is flagged^{"gemini":{"accounts":{"a":{}}}}^exact^ACCOUNTS: invalid config/accounts.json - unknown vendor: gemini
+non-object vendor is flagged^{"claude":"team"}^exact^ACCOUNTS: invalid config/accounts.json - each vendor must be an object
+non-object accounts is flagged^{"claude":{"accounts":["team"]}}^exact^ACCOUNTS: invalid config/accounts.json - accounts must be an object
+non-object account is flagged^{"claude":{"accounts":{"team":"Company"}}}^exact^ACCOUNTS: invalid config/accounts.json - each account must be an object
+unsafe account name is flagged^{"claude":{"accounts":{"../escape":{}}}}^exact^ACCOUNTS: invalid config/accounts.json - invalid account name: ../escape
+leading-underscore account name is flagged^{"claude":{"accounts":{"_team":{}}}}^exact^ACCOUNTS: invalid config/accounts.json - invalid account name: _team
+non-string label is flagged^{"claude":{"accounts":{"team":{"label":5}}}}^exact^ACCOUNTS: invalid config/accounts.json - each label must be a string
+empty expect is flagged^{"claude":{"accounts":{"team":{"expect":""}}}}^exact^ACCOUNTS: invalid config/accounts.json - each expect must be a non-empty string
+unverifiable codex expect is flagged^{"codex":{"accounts":{"alex":{"expect":"alex@example.invalid"}}}}^exact^ACCOUNTS: invalid config/accounts.json - expect cannot be verified for this vendor: codex:alex
+claude expect is accepted^{"claude":{"accounts":{"team":{"expect":"org-team-0001"}}}}^empty^
+undefined default is flagged^{"claude":{"default":"ghost","accounts":{"team":{}}}}^exact^ACCOUNTS: invalid config/accounts.json - default names an account that is not defined: claude:ghost
+empty default is flagged^{"claude":{"default":"","accounts":{"team":{}}}}^exact^ACCOUNTS: invalid config/accounts.json - each default must be a non-empty account name
+ROWS
+  pass "bootstrap validates accounts.json and reports malformed, unsafe, or unverifiable entries"
+}
+
+test_accounts_active_registry_is_verbose_bootstrap_info() {
+  local case_dir fakebin out expect
+  case_dir="$TMP_ROOT/accounts-active"
+  mkdir -p "$case_dir/home/config"
+  printf '%s\n' manual > "$case_dir/home/config/backlog-backend"
+  printf '%s\n' '{"claude":{"default":"team","accounts":{"team":{},"max":{}}}}' \
+    > "$case_dir/home/config/accounts.json"
+  fakebin=$(make_fake_toolchain "$case_dir")
+  add_real_jq "$fakebin"
+
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
+  [ -z "$out" ] || fail "a valid account registry should be silent by default, got: $out"
+
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+    FM_BOOTSTRAP_VERBOSE_FACTS=1 FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
+  expect=$'BOOTSTRAP_INFO: account pinning active config/accounts.json\nBOOTSTRAP_INFO: claude accounts: team, max (default team)'
+  [ "$out" = "$expect" ] || fail "active accounts verbose info block mismatch"$'\n'"expected: $expect"$'\n'"actual:   $out"
+  pass "bootstrap surfaces an active account registry only as verbose BOOTSTRAP_INFO"
+}
+
+# An ABSENT registry is the compatibility guarantee: bootstrap must stay silent
+# and must not mention accounts at all.
+test_absent_accounts_registry_is_a_no_op() {
+  local case_dir fakebin out
+  case_dir="$TMP_ROOT/accounts-absent"
+  mkdir -p "$case_dir/home/config"
+  printf '%s\n' manual > "$case_dir/home/config/backlog-backend"
+  fakebin=$(make_fake_toolchain "$case_dir")
+  add_real_jq "$fakebin"
+
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+    FM_BOOTSTRAP_VERBOSE_FACTS=1 FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
+  assert_not_contains "$out" "ACCOUNTS" "an absent registry produced an accounts diagnostic"
+  assert_not_contains "$out" "account pinning active" "an absent registry claimed active account pinning"
+  pass "bootstrap treats an absent config/accounts.json as a complete no-op"
+}
+
 test_manifest_writes_resolved_tool_versions() {
   local case_dir fakebin home out
   case_dir="$TMP_ROOT/manifest-ok"
@@ -858,5 +938,8 @@ test_routine_bootstrap_contract_runs_under_system_bash
 test_bootstrap_info_is_no_load_and_actionable_lines_trigger
 test_crew_dispatch_active_rules_are_verbose_bootstrap_info
 test_crew_dispatch_validation
+test_accounts_validation
+test_accounts_active_registry_is_verbose_bootstrap_info
+test_absent_accounts_registry_is_a_no_op
 test_manifest_writes_resolved_tool_versions
 test_manifest_reports_missing_tools

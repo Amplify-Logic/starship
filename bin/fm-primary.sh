@@ -2,7 +2,7 @@
 # Launch a verified Firstmate primary profile from this tracked Starship root.
 #
 # Usage:
-#   fm-primary.sh <profile>
+#   fm-primary.sh <profile> [--account <name>]
 #   fm-primary.sh --install-shim
 #   fm-primary.sh --help
 #
@@ -51,6 +51,42 @@
 #                 (Cursor maps SessionStart/PreToolUse/Stop onto its native
 #                 events). There is no third-party status-line API, so no
 #                 companion status bar is installed.
+#
+# --account <name> is the ONLY extra argument a profile accepts; every other one
+# still refuses, because that refusal exists to keep resume arguments away from
+# the launched CLI.
+# It pins the launch to a NAMED VENDOR ACCOUNT: the Claude profiles take a claude
+# account, exported as CLAUDE_CONFIG_DIR, and the Codex-backed profiles codex and
+# astra take a codex account, exported as CODEX_HOME. A profile whose vendor has no account concept (pi,
+# opencode, grok, kimi-k3, cursor-grok) refuses --account rather than ignoring it.
+# Accounts are named in local, gitignored config/accounts.json (docs/configuration.md
+# owns that schema) and their homes are DERIVED as data/accounts/<vendor>/<name>,
+# never read from that file. Omitting the flag uses that vendor's default when the
+# file names one. With NO such file there is no pinning at all: every profile's
+# argv and environment are exactly what they were before account pinning existed.
+# A file that exists but cannot be read warns and launches on the ambient account,
+# and refuses only an explicit --account it cannot resolve.
+#
+# A pinned account home is created and logged in by the CAPTAIN, never by this
+# launcher: bin/fm-account.sh create <vendor> <name> makes the empty home and
+# prints the login command. No credential directory, auth.json, .credentials.json,
+# or keychain entry is ever copied, linked, or seeded between homes. A pinned home
+# that does not exist or is explicitly logged out refuses the launch and names the
+# exact login command to run; that refusal is the correct outcome, not a failure.
+# An account that declares an expect identity is verified against the home before
+# exec, and a mismatch refuses naming both the wanted and the actual identity, so
+# a pinned session can never silently run on another seat.
+#
+# Two Claude seats coexist on one machine, proven 2026-09-09 on claude 2.1.258 by
+# logging a second seat in: Claude Code NAMESPACES its keychain item per config
+# directory, so that login added "Claude Code-credentials-<hash>" beside the
+# original item and left the ambient seat untouched. Both then report logged in at
+# once, and neither home holds a .credentials.json. A pinned home is unauthenticated
+# only until its own login, which is why an unauthenticated pin refuses with the
+# login command instead of launching. Codex isolates a different way, through the
+# auth.json inside CODEX_HOME.
+# Two seats can share one email address, so an email is not enough to tell them
+# apart; the org and plan are. That is what an account's expect value is for.
 #
 # Aliases: claude -> claude-fable; opus -> claude-opus; kimi -> kimi-k3;
 # cursor -> cursor-grok.
@@ -114,6 +150,11 @@
 # Test seams:
 #   FM_PRIMARY_DRY_RUN=1 prints selected profile env lines and one
 #   shell-escaped argv line instead of exec.
+#   It exits before the ACCOUNT login and identity gates, so a pinned launch's
+#   preview always prints argv. The preview still resolves and prints the
+#   account, because an unresolvable pin is a bad request rather than a missing
+#   credential. This is a statement about account pinning only: the Codex and
+#   Cursor profiles keep their own login gates exactly where they already were.
 #   FM_PRIMARY_VISIBLE_PREFIX=LAB is accepted only inside a named fm-lab-*
 #   Herdr session and visibly prefixes the role so a lab can never masquerade
 #   as the captain's FIRSTMATE.
@@ -143,6 +184,9 @@ FM_ROOT=$(CDPATH='' cd -P -- "$SCRIPT_DIR/.." && pwd -P)
 FM_HOME=${FM_HOME:-$FM_ROOT}
 STATE=${FM_STATE_OVERRIDE:-$FM_HOME/state}
 DATA=${FM_DATA_OVERRIDE:-$FM_HOME/data}
+CONFIG=${FM_CONFIG_OVERRIDE:-$FM_HOME/config}
+# shellcheck source=bin/fm-account-lib.sh
+. "$SCRIPT_DIR/fm-account-lib.sh"
 # The two Kimi builds this repo carries primary evidence for; running either one
 # is quiet, anything else warns and still launches. Both are literal constants,
 # never parsed from docs/toolchain-manifest.tsv, because the launcher does not
@@ -285,6 +329,59 @@ resolve_astra_effort() {
     low|medium|high|xhigh) ASTRA_EFFORT=$value ;;
     *) die "invalid effort in $file: '$value' (accepted: low medium high xhigh)" ;;
   esac
+}
+
+# Map a profile onto the vendor whose named accounts it can be pinned to.
+# A profile with no vendor account concept has no mapping at all, so --account
+# on one refuses instead of being silently ignored.
+profile_account_vendor() {
+  case "$PROFILE" in
+    claude-fable|claude-opus) printf 'claude' ;;
+    codex|astra) printf 'codex' ;;
+    *) return 1 ;;
+  esac
+}
+
+# Resolve the account this launch runs on, if any (bin/fm-account-lib.sh owns
+# the registry contract). Sets ACCOUNT_NAME, ACCOUNT_HOME, ACCOUNT_ENV, and
+# ACCOUNT_VENDOR, all empty when no pin applies - which is exactly what an
+# absent config/accounts.json produces, leaving the launch unchanged.
+resolve_account() {
+  local vendor
+  ACCOUNT_VENDOR=
+  ACCOUNT_NAME=
+  ACCOUNT_HOME=
+  ACCOUNT_ENV=
+  ACCOUNT_EXPECT=
+  if ! vendor=$(profile_account_vendor); then
+    [ "$ACCOUNT_SET" -eq 0 ] \
+      || die "profile '$PROFILE' has no vendor account to pin; --account applies to $(fm_account_vendors) profiles only"
+    return 0
+  fi
+  # Called directly, never through command substitution: fm_account_resolve
+  # reports both its result and its refusal reason through globals.
+  fm_account_resolve "$CONFIG" "$DATA" "$vendor" "$ACCOUNT_ARG" || die "$FM_ACCOUNT_ERROR"
+  [ -z "$FM_ACCOUNT_WARNING" ] || printf 'fm-primary: %s\n' "$FM_ACCOUNT_WARNING" >&2
+  [ -n "$FM_ACCOUNT_PIN_HOME" ] || return 0
+  ACCOUNT_VENDOR=$vendor
+  ACCOUNT_NAME=$FM_ACCOUNT_PIN_NAME
+  ACCOUNT_HOME=$FM_ACCOUNT_PIN_HOME
+  ACCOUNT_ENV=$(fm_account_env_var "$vendor")
+  ACCOUNT_EXPECT=$(fm_account_expect "$(fm_account_registry_file "$CONFIG")" "$vendor" "$ACCOUNT_NAME")
+}
+
+# Refuse a pinned launch whose account home is missing, logged out, or signed in
+# as a different seat than the registry declares. bin/fm-account-lib.sh owns the
+# three-step gate and its wording so this launcher and bin/fm-spawn.sh cannot
+# drift apart; here it only supplies the profile's CLI and the create command,
+# and raises the refusal through this script's own die prefix. No credential is
+# ever copied, linked, or seeded from another home, so a refusal here is the
+# correct outcome rather than a failure to work around.
+require_account_usable() {
+  [ -n "$ACCOUNT_HOME" ] || return 0
+  fm_account_require_usable "$ACCOUNT_VENDOR" "$ACCOUNT_HOME" "$CLI" "$ACCOUNT_NAME" \
+    "$ACCOUNT_EXPECT" "$FM_ROOT/bin/fm-account.sh create $ACCOUNT_VENDOR $ACCOUNT_NAME" \
+    || die "$FM_ACCOUNT_ERROR"
 }
 
 mark_current_surface() {
@@ -585,7 +682,31 @@ case "$PROFILE" in
     exit 0
     ;;
 esac
-[ "$#" -eq 1 ] || die "profiles accept no extra arguments; use the launched CLI's normal resume UI"
+# One optional flag rides alongside a profile: --account <name>. Every other
+# extra argument still refuses, because that refusal exists to stop resume
+# arguments reaching the launched CLI.
+ACCOUNT_ARG=
+ACCOUNT_SET=0
+shift
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --account)
+      [ "$ACCOUNT_SET" -eq 0 ] || die "--account may be given only once"
+      [ "$#" -ge 2 ] || die "--account requires an account name"
+      ACCOUNT_ARG=$2
+      ACCOUNT_SET=1
+      shift 2
+      ;;
+    --account=*)
+      [ "$ACCOUNT_SET" -eq 0 ] || die "--account may be given only once"
+      ACCOUNT_ARG=${1#--account=}
+      ACCOUNT_SET=1
+      shift
+      ;;
+    *) die "profiles accept no extra arguments; use the launched CLI's normal resume UI" ;;
+  esac
+done
+[ "$ACCOUNT_SET" -eq 0 ] || [ -n "$ACCOUNT_ARG" ] || die "--account requires an account name"
 case "$PROFILE" in
   claude) PROFILE=claude-fable ;;
   opus) PROFILE=claude-opus ;;
@@ -598,6 +719,7 @@ case "$PROFILE" in
 esac
 
 validate_visible_prefix
+resolve_account
 mkdir -p "$STATE" "$DATA" || die "could not create Firstmate private state directories"
 refuse_active_session
 
@@ -613,6 +735,10 @@ case "$PROFILE" in
   cursor-grok) CLI=${FM_CURSOR_BIN:-agent} ;;
 esac
 require_command "$CLI"
+# Exported here, before the remaining profile checks, so anything this launcher
+# asks the CLI from now on answers for the PINNED home instead of the ambient
+# one. With no pin resolved this is a no-op and the environment is untouched.
+[ -z "$ACCOUNT_HOME" ] || export "$ACCOUNT_ENV=$ACCOUNT_HOME"
 verify_integrations
 
 if [ "$PROFILE" = kimi-k3 ]; then
@@ -693,9 +819,21 @@ if [ "${FM_PRIMARY_DRY_RUN:-0}" = 1 ]; then
   [ "$PROFILE" != kimi-k3 ] || printf 'KIMI_CODE_HOME=%s\n' "$KIMI_PRIMARY_HOME"
   [ -z "${CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP:-}" ] || \
     printf 'CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=%s\n' "$CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP"
+  if [ -n "$ACCOUNT_HOME" ]; then
+    printf 'account=%s\n' "$ACCOUNT_NAME"
+    printf '%s=%s\n' "$ACCOUNT_ENV" "$ACCOUNT_HOME"
+  fi
   print_argv "${argv[@]}"
   exit 0
 fi
+
+# The account login and identity gates sit below the dry-run exit, so a pinned
+# launch's preview still prints argv. Account RESOLUTION stays above it: which
+# account a launch would use is part of the preview, and an unresolvable pin is
+# a bad request rather than a missing credential. That ordering is this feature's
+# own; the Codex gate below and the Cursor gate above keep their pre-existing
+# placement, so this is not a fleet-wide promise about every credential check.
+require_account_usable
 
 if [ "$PROFILE" = codex ] || [ "$PROFILE" = astra ]; then
   # Only an EXPLICIT negative blocks: "Not logged in" contains "logged in", and

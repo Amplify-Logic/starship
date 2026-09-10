@@ -398,8 +398,8 @@ Once a tool is on your machine and logged in, your first mate will start choosin
 Kimi can run the primary session and also take worker jobs via `fm-spawn --harness kimi` (K3 model).
 Install the current Kimi Code: the launcher never refuses a newer build over its version, and it prints one line at startup saying what evidence this repo has for the build you are running.
 
-If you later want a **second Claude login** without disturbing your main one: make a folder, set `CLAUDE_CONFIG_DIR` to it, and log in there.
-Credentials come from logging in on that machine - a config directory is **never copied between machines**.
+If you later want a **second Claude login** (or a second OpenAI account) without disturbing your main one, your first mate names it in a local `config/accounts.json` and gives it its own isolated home, which you then log into and select per launch with `--account` - see [docs/configuration.md](docs/configuration.md) "Vendor account pinning".
+Each account is logged in on the machine that uses it - an account home is **never copied between machines** and never seeded from another account.
 
 ### More of the fleet
 
