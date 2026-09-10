@@ -26,6 +26,7 @@ The adopted design and grafts are the rationale; this page is only the object mo
   It is a composition, not a source: staged actions come from the Tray grouped by Standing Order, and the remaining sections come from `data/backlog.md` through `tasks-axi`, task metadata and status folds through the shared helper libraries, and the manual inbox sweep at `data/loose-ends/latest.md`.
   It holds no queue, no cache, and no state of its own beyond the frame it is drawing, and it never approves, merges, or answers a decision.
   A missing or empty source renders an honest empty line rather than an error, because a pane that errors out is a pane the captain stops trusting.
+  An unreadable backlog is not the same as an empty one: the pane says the backlog could not be read, and falls back to this home's own record of a finished worker's pull request rather than losing it, marked unconfirmed instead of reviewed and ready.
   The UNDER WAY state is a projection of the durable status fold, labelled as reported: `bin/fm-crew-state.sh` remains the owner of live current state, and the deck does not call it so a refresh stays well under a second.
 - **Errand** - a named connector job the primary runs itself because hosted connectors are invisible to workers.
   Prompt and output contract live at `data/errands/<slug>.md`; results land as dated snapshots under `data/ops/`.

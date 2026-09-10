@@ -12,8 +12,12 @@
 #                          expiry countdown)
 #   NEEDS YOU              parked and blocked work, pull requests that are ready
 #                          to review with their full URL, and durable captain
-#                          decisions; one row per worker, and a failed worker's
-#                          pull request is not ready to review
+#                          decisions; one row per worker, one row per pull
+#                          request however many records carry it, and a failed
+#                          worker's pull request is not ready to review. When
+#                          the backlog cannot be read at all, the section says
+#                          so and falls back to this home's own record of a
+#                          finished worker's pull request rather than dropping it
 #   LOOSE ENDS             data/loose-ends/latest.md, the manual inbox sweep
 #   UNDER WAY              one outcome line per recorded worker
 #   JUST IN                recent completions and findings
@@ -174,22 +178,45 @@ collect_orders() {
   "$SCRIPT_DIR/fm-order.sh" list --no-tray-depth 2>/dev/null || true
 }
 
+# Why the backlog read reports WHY it came back empty, and not just that it did:
+# an empty backlog and an unreadable one look identical downstream, and the pane
+# reads the two the same way - as "there is nothing here". That is a lie the
+# captain cannot see through, and it costs him a finished worker's pull request,
+# which the renderer deliberately lets the backlog row carry. The renderer turns
+# this token into the section's source-availability wording; the tokens are ok,
+# manual, no-tool, no-file and unreadable.
+BACKLOG_STATUS=ok
+
 collect_backlog() {
+  # Every frame answers for itself: a read that failed last time says nothing
+  # about this one, and a stale "unreadable" would keep the fallback rows and
+  # the source-availability wording on the pane long after the reader came back.
+  BACKLOG_STATUS=ok
   # Deliberately NOT fm_tasks_axi_backend_available: that probe shells out three
   # more times to confirm the MUTATION features (update --archive-body, atomic
   # multi-id mv) this pane will never use, and it is the single slowest thing in
   # a refresh. A view needs only "is this home's backlog readable this way", and
   # a `list` that fails anyway falls through to an honest empty section.
-  fm_backlog_backend_manual "$CONFIG" && return 0
-  command -v tasks-axi >/dev/null 2>&1 || return 0
-  [ -f "$DATA/backlog.md" ] || return 0
+  if fm_backlog_backend_manual "$CONFIG"; then
+    BACKLOG_STATUS=manual
+    return 0
+  fi
+  if ! command -v tasks-axi >/dev/null 2>&1; then
+    BACKLOG_STATUS=no-tool
+    return 0
+  fi
+  if [ ! -f "$DATA/backlog.md" ]; then
+    BACKLOG_STATUS=no-file
+    return 0
+  fi
   # --file pins the read to THIS home's backlog: without it tasks-axi resolves
   # its markdown path relative to the caller's directory, so the pane would show
   # whatever queue happened to sit under the shell's cwd. Same reason
   # bin/fm-backlog-handoff.sh passes it.
   tasks-axi list --file "$DATA/backlog.md" \
     --fields hold_kind,hold_reason,links,closed,blocked_by,held,priority \
-    2>/dev/null || true
+    2>/dev/null || BACKLOG_STATUS=unreadable
+  return 0
 }
 
 collect_loose_ends() {
@@ -359,6 +386,8 @@ emit_payload() {
   collect_orders
   printf '%s backlog\n' "$SECTION_MARK"
   collect_backlog
+  # After the collector, because that is what resolves BACKLOG_STATUS.
+  printf '%s backlog_status\n%s\n' "$SECTION_MARK" "$BACKLOG_STATUS"
   printf '%s tasks\n' "$SECTION_MARK"
   collect_tasks
   printf '%s loose_ends\n' "$SECTION_MARK"

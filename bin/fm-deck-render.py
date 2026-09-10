@@ -431,10 +431,50 @@ def build_staged(tray, orders, width):
 
 
 # What each row is asking of him, in the order he should work through it.
-NEEDS_RANK = {"answer": 0, "unblock": 1, "review": 2, "decide": 3}
+# "check" sits below "review" because it is the weaker ask of the two: a review
+# row is corroborated by a backlog this pane could actually read, and a check row
+# is this home's own record of a pull request with nothing to confirm it against.
+NEEDS_RANK = {"answer": 0, "unblock": 1, "review": 2, "check": 3, "decide": 4}
+
+# Why the backlog could not be read, in the captain's words. bin/fm-deck.sh's
+# collect_backlog owns these tokens; "ok" and anything unrecognised mean the
+# section says nothing extra, which is the normal case.
+BACKLOG_UNAVAILABLE = {
+    "manual": "the backlog is kept by hand here and this pane cannot read it",
+    "no-tool": "the backlog reader is not installed",
+    "no-file": "this home has no backlog file",
+    "unreadable": "the backlog could not be read",
+}
 
 
-def build_needs_you(tasks, backlog, limit, width):
+def backlog_note(status, width, fallback):
+    """What this section could NOT see, or [] when it saw everything.
+
+    Without it the pane reports an unreadable backlog exactly the way it reports
+    an empty one, and "nothing is waiting on you" becomes a claim the captain
+    has no way to doubt. Two lines rather than one because both halves have to
+    survive the clip: what is missing, and - only when a fallback row is
+    actually standing below it - how much that row is worth. Both lead with the
+    part that carries the doubt, because the clip eats the tail first.
+    """
+    reason = BACKLOG_UNAVAILABLE.get(status)
+    if not reason:
+        return []
+    limit = max(20, width - 4)
+    lines = ["  " + clip("%s, so rows it alone would raise are missing" % reason, limit)]
+    if fallback:
+        lines.append(
+            "  "
+            + clip(
+                "not confirmed here: the pull requests below come from this "
+                "home's own record",
+                limit,
+            )
+        )
+    return lines
+
+
+def build_needs_you(tasks, backlog, limit, width, backlog_status="ok"):
     """Everything that cannot move without him, most immediate first.
 
     A worker's own status note never reaches this pane. Those notes are written
@@ -442,6 +482,7 @@ def build_needs_you(tasks, backlog, limit, width):
     the work was commissioned for plus what is being asked of him. The detail
     lives one command away, on the decision surface.
     """
+    backlog_readable = backlog_status not in BACKLOG_UNAVAILABLE
     rows = []
     seen_ids = set()
 
@@ -458,15 +499,43 @@ def build_needs_you(tasks, backlog, limit, width):
     # re-raises the review this pass just withheld. A finished worker is the one
     # case the pass leaves untouched - its work IS ready to look at, and while
     # its backlog row is still in flight that row is what carries it here.
+    #
+    # Unless there is no backlog to read. Then no such row will ever arrive, the
+    # handover has nobody on the other end, and the finished work drops off the
+    # pane entirely - the one place it was certain to be looked at. So the pass
+    # falls back to this home's own record of the pull request and asks him to
+    # check it rather than presenting it as reviewed-and-ready: a recorded URL
+    # and a status line the worker wrote some time ago say the branch exists,
+    # not that its checks are green or that it is fit to merge.
+    #
+    # Recording a URL only claims it against the backlog; it never silences
+    # another worker. Where several records carry one pull request - the retry
+    # that is still running alongside the attempt that died on it - they collapse
+    # into a single row carrying the strongest ask any of them makes, so one pull
+    # request asks for one look without a dead or finished record speaking over a
+    # live one.
     pr_seen = set()
+    pr_rows = {}
     for task in tasks:
-        if not task["pr"] or task["state"] == "done":
+        if not task["pr"]:
+            continue
+        if task["state"] == "done" and backlog_readable:
             continue
         pr_seen.add(task["pr"])
         if task["state"] == "failed" or task["id"] in seen_ids:
             continue
-        rows.append(("review", task["outcome"], task["pr"], task["project"]))
-        seen_ids.add(task["id"])
+        label = "check" if task["state"] == "done" else "review"
+        strongest = pr_rows.get(task["pr"])
+        if strongest is None or NEEDS_RANK[label] < NEEDS_RANK[strongest[0][0]]:
+            pr_rows[task["pr"]] = (
+                (label, task["outcome"], task["pr"], task["project"]),
+                task["id"],
+            )
+    for row, task_id in pr_rows.values():
+        if task_id in seen_ids:
+            continue
+        rows.append(row)
+        seen_ids.add(task_id)
     for row in backlog:
         if row.get("state") == "done":
             continue
@@ -483,12 +552,16 @@ def build_needs_you(tasks, backlog, limit, width):
         rows.append(("decide", row.get("title", ""), "", row.get("repo", "")))
 
     if not rows:
-        return ["  nothing is waiting on you"], 0
+        note = backlog_note(backlog_status, width, False)
+        return note + ["  nothing is waiting on you"], 0
 
     rows.sort(key=lambda r: NEEDS_RANK.get(r[0], 9))
     shown = rows[:limit]
 
-    lines = []
+    # After the slice, and over the slice: "check" is the lowest-ranked ask, so
+    # it is the first row the limit drops, and a caveat about rows that are no
+    # longer on the pane points at nothing.
+    lines = backlog_note(backlog_status, width, any(r[0] == "check" for r in shown))
     for label, text, url, where in shown:
         where_text = (" · " + where) if where and where != "-" else ""
         lines.append(
@@ -644,11 +717,14 @@ def main():
     tray = parse_tray(sections.get("tray", ""))
     orders = parse_orders(sections.get("orders", ""))
     backlog = parse_backlog(sections.get("backlog", ""))
+    backlog_status = first_line(sections.get("backlog_status", "")) or "ok"
     tasks = parse_tasks(sections.get("tasks", ""))
     loose = parse_loose_ends(sections.get("loose_ends", ""))
 
     staged = build_staged(tray, orders, width)
-    needs_you, needs_count = build_needs_you(tasks, backlog, needs_limit, width)
+    needs_you, needs_count = build_needs_you(
+        tasks, backlog, needs_limit, width, backlog_status
+    )
     under_way = build_under_way(tasks, vocab, width)
     just_in = build_just_in(backlog, just_in_limit, width)
 
