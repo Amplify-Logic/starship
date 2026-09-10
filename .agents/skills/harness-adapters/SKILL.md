@@ -109,8 +109,9 @@ When changing any primary watcher adapter, update `docs/supervision-protocols/`,
 ## Primary status bar
 
 `docs/status-bar.md` is the single owner of the shared field order, semantics, thresholds, colors, placeholders, adapter surfaces, and verification evidence.
-Claude uses its native tracked project status-line command, Pi uses its native tracked custom-footer extension, and Kimi 0.27.0 uses a guarded one-row tmux companion because its plugin API cannot render the native footer.
-Cursor primary is certified, but Cursor CLI exposes no third-party status-line API, so `bin/fm-primary.sh cursor-grok` installs no companion bar.
+Claude uses its native tracked project status-line command and Pi its native tracked custom-footer extension.
+Kimi 0.27.0, Codex, and Astra use a guarded companion pane instead - tmux or herdr, whichever provider owns the terminal - because their own surfaces cannot carry the fleet fields.
+Cursor CLI 2026.09.08 does expose a native custom status line, but only in the USER config, so there is no tracked in-repo integration for it and activation is the opt-in `bin/fm-cursor-statusline.sh`.
 
 ## Kimi worker + primary (WORKER verified 2026-07-23 on 0.27.0; PRIMARY certified 2026-07-19)
 
@@ -382,7 +383,7 @@ Backend applicability: tmux is verified. herdr is composer-safe by construction 
 
 Liveness: cursor's wrapper execs node, so `#{pane_current_command}` is `node`; `bin/backends/tmux.sh` resolves that through argv, where the versioned `cursor-agent/.../index.js` path survives `exec -a`, and returns `alive`. Any other bare node stays `unknown`, never dead.
 
-No status-line, footer, or terminal-UI API exists for third parties (only plugins contributing hooks/commands/agents/skills/MCP), so cross-orchestrator status-bar parity cannot use a native cursor API.
+Status-line surface: plugins contribute hooks/commands/agents/skills/MCP and no footer content, but cursor 2026.09.08 has a separate user-config-only `statusLine` command key; `docs/status-bar.md` owns that contract and `bin/fm-cursor-statusline.sh` is the opt-in activation route.
 
 ## prime-agent (WORKER verified 2026-08-07 on v0.7.0, source tag be9e2fa)
 

@@ -502,8 +502,15 @@ tmux is claimed as verified for cursor.
 
 ## 8. Extension / status-line surface
 
-For the separately queued cross-orchestrator status-bar task: **Cursor CLI exposes
-no supported status-line, footer, or terminal-UI API.**
+**Superseded 2026-09-08.** [`status-bar.md`](status-bar.md) owns the current
+status-line contract for cursor: `2026.09.08-6caf4ff` DOES expose a supported
+custom status line, accepted only in the user-level `cli-config.json`, and
+`bin/fm-cursor-statusline.sh` is its opt-in activation route.
+
+The reading below is the earlier record, re-affirmed at the 2026-08-13
+re-certification on `2026.08.11-e8db854` and kept because it is why the contract
+originally excluded cursor from display. On those builds: **Cursor CLI exposed no
+supported status-line, footer, or terminal-UI API.**
 
 - `statusLine`, `statusLineNode`, and `statusLinePadding` appear in the shipped
   bundle only as internal TUI rendering identifiers. There is no configuration or
@@ -517,8 +524,8 @@ no supported status-line, footer, or terminal-UI API.**
   `commands`, `agents`, skills, and MCP servers. None of these contribute footer
   or status-line content.
 
-Status-bar parity on cursor therefore cannot use a native API and would need a different mechanism.
-The canonical decision is now owned by [`status-bar.md`](status-bar.md): Cursor primary is certified, but with no third-party status-line API the guarded launcher installs no companion bar.
+On those builds, status-bar parity on cursor therefore could not use a native API.
+The plugin surface above is unchanged; what the 2026-09-08 re-probe found is the separate `statusLine` user-config key, not a plugin contribution.
 
 ## 9. Model and effort mapping
 
@@ -623,7 +630,7 @@ Grok 4.6 also offers `-xhigh`, so `-high` is now a deliberate cost choice rather
 | PreToolUse seatbelt | PASS | Claude-format `PreToolUse` fired on the shell tool call in the same turn. |
 | supervision protocol | PASS | `docs/supervision-protocols/cursor.md` rendered by `bin/fm-supervision-instructions.sh --harness cursor`. |
 | session lock | PASS | Shared `bin/fm-lock.sh` + `fm-primary` active-session refusal (profile-agnostic; `tests/fm-primary.test.sh`). |
-| status-bar | DOCUMENTED-GAP | No third-party status-line API (section 8); launcher installs no companion pane. |
+| status-bar | DOCUMENTED-GAP on this build; superseded 2026-09-08 | No third-party status-line API on `2026.08.11-e8db854` (section 8). `2026.09.08-6caf4ff` does expose one; [`status-bar.md`](status-bar.md) owns the current contract and the opt-in installer. |
 
 The 2026-07-22 reading is superseded: the primary turn-end guard can now be claimed as wired rather than best-effort.
 

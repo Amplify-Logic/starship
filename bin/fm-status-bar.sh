@@ -6,12 +6,23 @@
 #   fm-status-bar.sh --adapter pi --model MODEL --effort LEVEL \
 #     --context-used PERCENT --quota-used PERCENT --cost USD
 #   fm-status-bar.sh --adapter kimi --model MODEL --effort LEVEL \
-#     --follow-pane TMUX_PANE
+#     --follow-pane PANE [--follow-backend tmux|herdr]
 #
 # Claude mode reads the native statusLine JSON payload from stdin.
+# Cursor mode reads Cursor CLI's native statusLine JSON payload from stdin.
 # Pi supplies its native footer metrics as normalized arguments.
-# Kimi's guarded primary launcher uses --follow-pane for a one-row tmux
-# companion because Kimi 0.27.0 has no third-party status-bar API.
+# Kimi and Codex use --follow-pane for a companion row because neither exposes
+# a third-party status-bar API that can carry Firstmate's fleet fields.
+# --follow-backend selects the session provider that owns the companion pane:
+# tmux (default) or herdr. Herdr panes are addressed by HERDR_PANE_ID.
+#
+# --role renders a compact account role beside the model. It is only ever a
+# verified label supplied by the launcher: --role, else FM_PRIMARY_ACCOUNT_ROLE
+# (which bin/fm-primary.sh sets for its companion panes), else the account
+# owner's own FM_ACCOUNT_NAME, which is what reaches the native Claude, Pi and
+# Cursor surfaces. This renderer only CONSUMES that resolution; bin/fm-account-*
+# owns it. An unknown account renders no label at all rather than a guess, and
+# an ID or email is never rendered.
 #
 # The complete field, threshold, color, placeholder, and adapter contract lives
 # in docs/status-bar.md.
@@ -33,7 +44,9 @@ EFFORT=--
 CONTEXT_USED=--
 QUOTA_USED=--
 COST=--
+ROLE=
 FOLLOW_PANE=
+FOLLOW_BACKEND=tmux
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -67,9 +80,19 @@ while [ "$#" -gt 0 ]; do
       COST=$2
       shift 2
       ;;
+    --role)
+      [ "$#" -ge 2 ] || exit 0
+      ROLE=$2
+      shift 2
+      ;;
     --follow-pane)
       [ "$#" -ge 2 ] || exit 0
       FOLLOW_PANE=$2
+      shift 2
+      ;;
+    --follow-backend)
+      [ "$#" -ge 2 ] || exit 0
+      FOLLOW_BACKEND=$2
       shift 2
       ;;
     *)
@@ -79,7 +102,11 @@ while [ "$#" -gt 0 ]; do
 done
 
 case "$ADAPTER" in
-  claude|pi|kimi) ;;
+  claude|pi|kimi|codex|cursor) ;;
+  *) exit 0 ;;
+esac
+case "$FOLLOW_BACKEND" in
+  tmux|herdr) ;;
   *) exit 0 ;;
 esac
 [ "${FM_PRIMARY_HARNESS:-}" = "$ADAPTER" ] || exit 0
@@ -115,6 +142,29 @@ normalize_cost() {
   esac
 }
 
+if [ "$ADAPTER" = cursor ]; then
+  # Cursor CLI 2026.09.08 statusLine command payload. It exposes model and
+  # context use but no provider quota and no session cost, so both stay unknown.
+  input=$(cat 2>/dev/null || printf '')
+  if command -v jq >/dev/null 2>&1; then
+    IFS=$'\t' read -r MODEL EFFORT CONTEXT_USED <<EOF
+$(printf '%s' "$input" | jq -r '
+  [
+    (.model.display_name // .model.id // "--" | tostring),
+    (.model.param_summary // "--" | tostring),
+    (if (.context_window.used_percentage | type) == "number"
+      then (.context_window.used_percentage | floor)
+      elif (.context_window.remaining_percentage | type) == "number"
+      then ((100 - (.context_window.remaining_percentage | floor)) |
+        if . < 0 then 0 elif . > 100 then 100 else . end)
+      else "--"
+      end)
+  ] | @tsv
+' 2>/dev/null)
+EOF
+  fi
+fi
+
 if [ "$ADAPTER" = claude ]; then
   input=$(cat 2>/dev/null || printf '')
   if command -v jq >/dev/null 2>&1; then
@@ -149,6 +199,21 @@ EFFORT=$(sanitize_label "$EFFORT")
 CONTEXT_USED=$(normalize_percent "$CONTEXT_USED")
 QUOTA_USED=$(normalize_percent "$QUOTA_USED")
 COST=$(normalize_cost "$COST")
+
+# A role label is optional presentation. It is rendered only when the launcher
+# supplied a verified one; an unknown account stays silent instead of guessing.
+# Only a short, entirely alphabetic role word is accepted. Everything else -
+# a bare numeric id, a UUID or any prefix of one, punctuation, spaces, or an
+# over-long value - is dropped rather than shortened, so no ID or email, and no
+# truncated fragment of one, can reach the status row.
+[ -n "$ROLE" ] || ROLE=${FM_PRIMARY_ACCOUNT_ROLE:-${FM_ACCOUNT_NAME:-}}
+if [ -n "$ROLE" ]; then
+  ROLE=$(sanitize_label "$ROLE")
+  case "$ROLE" in
+    *[!A-Za-z]*) ROLE= ;;
+    *) [ "${#ROLE}" -le 12 ] || ROLE= ;;
+  esac
+fi
 
 # Persist a context sample for the primary-handoff supervisor (context axis).
 # Display shows used %; the sample API still takes remaining and derives used.
@@ -228,6 +293,7 @@ render_once() {
   age=$(supervision_age)
   separator=" ${D}│${X} "
   anchor="${BOLD}⚓ ${MODEL}${X}${D}·${X}${EFFORT}"
+  [ -z "$ROLE" ] || anchor="${anchor} ${D}[${ROLE}]${X}"
 
   if [ "$CONTEXT_USED" = -- ]; then
     context_part="${D}🧠--${X}"
@@ -282,17 +348,50 @@ render_once() {
     "$separator" "$cost_part" "$separator$afk_part"
 }
 
+# companion_pane_alive: one cheap liveness read of the pane this companion is
+# attached to, for whichever session provider owns it. Both arms compare the
+# resolved id against the requested one so a provider that answers about a
+# DIFFERENT pane (or answers with nothing) is treated as gone rather than live.
+companion_pane_alive() {
+  local resolved
+  case "$FOLLOW_BACKEND" in
+    tmux)
+      resolved=$(tmux display-message -p -t "$FOLLOW_PANE" '#{pane_id}' 2>/dev/null) || return 1
+      ;;
+    herdr)
+      resolved=$(herdr --session "$FM_STATUS_HERDR_SESSION" pane get "$FOLLOW_PANE" 2>/dev/null \
+        | jq -r '.result.pane.pane_id // empty' 2>/dev/null) || return 1
+      ;;
+    *) return 1 ;;
+  esac
+  [ "$resolved" = "$FOLLOW_PANE" ]
+}
+
 if [ -n "$FOLLOW_PANE" ]; then
-  resolved_pane=
-  command -v tmux >/dev/null 2>&1 || exit 0
+  case "$FOLLOW_BACKEND" in
+    tmux) command -v tmux >/dev/null 2>&1 || exit 0 ;;
+    herdr)
+      command -v herdr >/dev/null 2>&1 || exit 0
+      command -v jq >/dev/null 2>&1 || exit 0
+      # Herdr panes are addressed within a session; fail closed rather than
+      # letting an unscoped call resolve against another session's pane.
+      FM_STATUS_HERDR_SESSION=${FM_STATUS_HERDR_SESSION:-${HERDR_SESSION:-default}}
+      [ -n "$FM_STATUS_HERDR_SESSION" ] || exit 0
+      ;;
+  esac
   # shellcheck disable=SC2329 # Invoked indirectly by the signal and exit traps.
   restore_terminal() {
     printf '\033[?25h\033[?7h'
   }
   trap restore_terminal EXIT HUP INT TERM
-  printf '\033[?25l\033[?7l'
-  while resolved_pane=$(tmux display-message -p -t "$FOLLOW_PANE" '#{pane_id}' 2>/dev/null) \
-    && [ "$resolved_pane" = "$FOLLOW_PANE" ]; do
+  # Autowrap off keeps the canonical line clipped to one row on a narrow
+  # companion instead of spilling onto the pane's second row.
+  # The one-time full clear removes whatever the provider left in the pane
+  # before this process took it over - herdr's `pane run` echoes the launch
+  # command into the pane's shell, and that line would otherwise sit below the
+  # status row for the life of the companion.
+  printf '\033[?25l\033[?7l\033[2J'
+  while companion_pane_alive; do
     printf '\033[H\033[2K'
     render_once
     sleep "${FM_STATUS_BAR_INTERVAL:-1}"

@@ -424,6 +424,7 @@ tests/fm-subagent-pretool-check.test.sh
 tests/fm-cursor-adapter.test.sh
 tests/fm-upstream.test.sh
 tests/fm-status-bar.test.sh
+tests/fm-cursor-statusline.test.sh
 tests/fm-capability.test.sh
 tests/fm-overlay.test.sh
 tests/fm-backend-tmux-smoke.test.sh
