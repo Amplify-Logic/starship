@@ -470,8 +470,11 @@ EOF
     envs="$envs FM_STATUS_HERDR_SESSION=$(shell_quote "$session")"
     command="exec env $envs $command --follow-pane $(shell_quote "$HERDR_PANE_ID") --follow-backend herdr"
     # Herdr's split ratio is the share the ORIGINAL pane keeps, so the agent
-    # pane needs the large share and the companion takes the remainder. The
-    # ratio floor is 0.1, which makes two rows the smallest companion.
+    # pane needs the large share and the companion takes the remainder. Herdr
+    # clamps that share to 0.9, so the companion floor is a TENTH OF THE TAB,
+    # not a fixed row count: two rows on a 23-row terminal, six on a 63-row one.
+    # A higher ratio is still requested so a future Herdr that raises the cap
+    # yields a smaller companion without another change here.
     #
     # The split response is the only authority for the pane this call created.
     # Both running the renderer and closing an unused companion use that exact

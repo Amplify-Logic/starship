@@ -392,8 +392,14 @@ if [ -n "$FOLLOW_PANE" ]; then
   # status row for the life of the companion.
   printf '\033[?25l\033[?7l\033[2J'
   while companion_pane_alive; do
-    printf '\033[H\033[2K'
-    render_once
+    # Collect the complete frame before any of it reaches the pane, then publish
+    # the row erase and the finished frame in a single write. Erasing first left
+    # the row visibly blank for the whole length of the collection, which is what
+    # made the companion appear to flicker once a second on a fleet large enough
+    # for the per-task collection to take a noticeable fraction of the interval.
+    # The erase still leads the frame, so a shorter row's stale tail is clipped.
+    frame=$(render_once)
+    printf '\033[H\033[2K%s' "$frame"
     sleep "${FM_STATUS_BAR_INTERVAL:-1}"
   done
   exit 0

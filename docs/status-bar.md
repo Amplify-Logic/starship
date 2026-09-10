@@ -166,6 +166,9 @@ Kimi, Codex, and Astra share one companion implementation rather than three.
 autowrap, clips the canonical line instead of wrapping it, and exits as soon as its exact primary pane is gone.
 It clears the whole pane once at startup, because `herdr pane run` echoes the launch command into the pane's
 shell before `exec` replaces it and that line would otherwise stay visible below the status row.
+Each refresh collects the whole row before any of it reaches the pane, then writes the single-row erase and
+the finished row together, so the row is never left blank while the next one is being collected.
+Every refresh publishes its row, so a resized or repainted companion recovers on the next tick.
 Only `tmux` and `herdr` are accepted; any other value renders nothing rather than guessing.
 
 `bin/fm-primary.sh` picks the provider that actually owns the terminal: `TMUX_PANE` selects tmux, and
@@ -175,8 +178,14 @@ resolve against another session's pane.
 Two Herdr details are load-bearing and were measured rather than assumed.
 `herdr pane split --ratio` is the share the ORIGINAL pane keeps, so the companion is created with a HIGH
 ratio and takes the remainder.
-The ratio is clamped to a 0.1 minimum, which makes two rows the smallest achievable companion, so the Herdr
-row is two rows tall where tmux uses one.
+Herdr clamps that share to 0.9, so the companion can never be smaller than a tenth of the tab.
+That floor is proportional rather than a fixed row count: it is two rows on a 23-row terminal and six rows on
+a 63-row one, where tmux pins its companion to exactly one row.
+Measured on herdr 0.7.4 (2026-09-10) in a disposable 64-row session: `pane split --ratio` at 0.9, 0.93, 0.95,
+0.98, 0.99 and 1.0 all recorded a 0.9 split and a 6-row companion, `pane resize --direction down` never went
+below that floor while `--direction up` grew the companion freely, and the internal `layout.set_split_ratio`
+RPC clamped to 0.9 as well.
+Herdr 0.7.4 therefore has no supported route to a one-row companion.
 
 If the session provider refuses the split, the guarded launch continues with the native TUI untouched rather
 than failing the primary.
@@ -314,7 +323,7 @@ Observed output:
 ⚓ kimi-code/k3·-- │ 🧠-- ⚡-- │ 🚢0 ⏸0 ⚠0 │ 👁 NO-WATCH -- │ $-- │ 💤--
 ```
 
-`tests/fm-status-bar.test.sh` passed canonical order, threshold, placeholder, supervision-alert, Claude-payload, Cursor-payload, account-role, control-byte sanitization, exact-pane cleanup on both companion providers, unverified-provider refusal, one-time pane clear, and guarded-installation cases.
+`tests/fm-status-bar.test.sh` passed canonical order, threshold, placeholder, supervision-alert, Claude-payload, Cursor-payload, account-role, control-byte sanitization, exact-pane cleanup on both companion providers, unverified-provider refusal, one-time pane clear, blank-free refresh, per-refresh row publication, and guarded-installation cases.
 `tests/fm-primary.test.sh` passed the guarded tmux and herdr companion cases - including the separated refused-split and split-named-no-pane outcomes, and cleanup of only the exact pane the split returned - alongside all existing launcher cases.
 `tests/fm-cursor-statusline.test.sh` passed the installer's single-key install, exact uninstall restore, foreign-status-line refusal in both directions, cross-checkout removal, invalid-config refusal, and credentials-untouched cases.
 `tests/fm-pi-primary-types.test.sh` reported an honest skip because the host TypeScript 4.9.5 cannot parse Pi 0.80.10's declarations, while the real Pi TUI loaded and ran the TypeScript extension.

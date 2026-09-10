@@ -427,6 +427,26 @@ SH
   chmod +x "$fakebin/caffeinate"
 }
 
+# fm_install_fake_tmux_pane <fakebin> <calls>: drop a PATH stub that answers the
+# status companion's pane probe with pane `%42` for the first <calls> calls and
+# fails afterwards, so a follow loop runs exactly <calls> refreshes and then
+# exits because its primary pane is gone. The call tally lives in the file named
+# by FM_STATUS_BAR_TMUX_COUNT, which the caller must point at a fresh path.
+fm_install_fake_tmux_pane() {
+  local fakebin=$1 calls=$2
+  mkdir -p "$fakebin"
+  cat > "$fakebin/tmux" <<SH
+#!/usr/bin/env bash
+count=0
+[ ! -f "\$FM_STATUS_BAR_TMUX_COUNT" ] || count=\$(<"\$FM_STATUS_BAR_TMUX_COUNT")
+count=\$((count + 1))
+printf '%s\n' "\$count" > "\$FM_STATUS_BAR_TMUX_COUNT"
+[ "\$count" -le $calls ] || exit 1
+printf '%s\n' '%42'
+SH
+  chmod +x "$fakebin/tmux"
+}
+
 # fm_install_compatible_tasks_axi <fakebin-dir>: drop a PATH stub that satisfies
 # bin/fm-tasks-axi-lib.sh's fm_tasks_axi_compatible probe AND
 # bin/fm-decision-hold.sh's require_tasks_axi (hold --help exposes --kind captain).

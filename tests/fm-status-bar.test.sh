@@ -34,6 +34,138 @@ render() {
       --cost "${5:---}"
 }
 
+# The companion must never publish a frame the collector has not filled in yet.
+# The probe is a fake `stat`, which the renderer calls while it is collecting:
+# it snapshots the bytes already written to the pane at that exact moment, so a
+# snapshot that ends with a bare row erase proves the row was blank on screen
+# for the whole length of the collection.
+test_companion_never_leaves_the_row_blank_while_collecting() {
+  local out_file="$TMP_ROOT/blank-out.raw" snap_dir="$TMP_ROOT/blank-snaps"
+  local count_file="$TMP_ROOT/blank-count" snap_count_file="$TMP_ROOT/blank-snap-count"
+  local refreshes=3 snap snaps blanked=
+
+  rm -rf "$snap_dir"
+  mkdir -p "$snap_dir"
+  : > "$out_file"
+  rm -f "$count_file" "$snap_count_file"
+  fm_install_fake_tmux_pane "$FAKEBIN" "$refreshes"
+  # Snapshots are numbered from a counter file rather than a timestamp: BSD
+  # `date` has no %N, so every probe call inside one second would otherwise
+  # write the same name and leave a single collection to stand for all of them.
+  cat > "$FAKEBIN/stat" <<'SH'
+#!/usr/bin/env bash
+if [ -n "${FM_STATUS_BAR_TEST_SNAPDIR:-}" ]; then
+  seq=0
+  [ ! -f "$FM_STATUS_BAR_TEST_SNAPCOUNT" ] || seq=$(<"$FM_STATUS_BAR_TEST_SNAPCOUNT")
+  seq=$((seq + 1))
+  printf '%s\n' "$seq" > "$FM_STATUS_BAR_TEST_SNAPCOUNT"
+  cp "$FM_STATUS_BAR_TEST_OUT" "$FM_STATUS_BAR_TEST_SNAPDIR/$seq.snap" 2>/dev/null
+fi
+printf '%s\n' "${FM_STATUS_BAR_TEST_BEAT_EPOCH:-900}"
+SH
+  chmod +x "$FAKEBIN/stat"
+  : > "$HOME_FIX/state/.last-watcher-beat"
+
+  # shellcheck disable=SC2094 # The probe reads the pane bytes written so far
+  # from the very file this run is writing; that is the measurement, not a bug.
+  PATH="$FAKEBIN:$PATH" \
+    FM_HOME="$HOME_FIX" \
+    FM_PRIMARY_HARNESS=kimi \
+    FM_STATUS_BAR_INTERVAL=0 \
+    FM_STATUS_BAR_TMUX_COUNT="$count_file" \
+    FM_STATUS_BAR_TEST_SNAPDIR="$snap_dir" \
+    FM_STATUS_BAR_TEST_SNAPCOUNT="$snap_count_file" \
+    FM_STATUS_BAR_TEST_OUT="$out_file" \
+    "$ROOT/bin/fm-status-bar.sh" \
+      --adapter kimi --model kimi-code/k3 --effort -- --follow-pane %42 \
+    > "$out_file"
+
+  # One snapshot per collection, or the check is narrower than it advertises.
+  snaps=$(find "$snap_dir" -name '*.snap' | wc -l | tr -d ' ')
+  [ "$snaps" -eq "$refreshes" ] \
+    || fail "the collection probe left $snaps snapshots for $refreshes refreshes, so the blank-frame check proved less than it claims"
+  for snap in "$snap_dir"/*.snap; do
+    case "$(cat "$snap")" in
+      *$'\033[2K') blanked=1 ;;
+    esac
+  done
+  [ -z "$blanked" ] \
+    || fail "the companion erased the row and left it blank while it collected the next frame"
+  assert_contains "$(cat "$out_file")" '⚓' "the companion stopped rendering the status row"
+  # The erase is what clips a shorter frame's stale tail, so it must survive -
+  # it just has to reach the pane in the same write as the frame it precedes.
+  assert_contains "$(cat "$out_file")" $'\033[H\033[2K\033[1m⚓' \
+    "the row erase no longer arrives together with the frame it introduces"
+  rm -f "$FAKEBIN/tmux"
+  pass "status bar: the companion never blanks its row while collecting a frame"
+}
+
+test_companion_publishes_every_refresh_to_the_pane() {
+  local out count_file="$TMP_ROOT/repeat-count" rows
+
+  : > "$HOME_FIX/state/.last-watcher-beat"
+
+  # A frozen clock and a frozen fleet make all three rows byte-identical, and
+  # every one of them must still be published. A settled fleet with no watcher
+  # beat holds every field constant, so a row published only when it changes is
+  # written once and stays clipped to the width it was written at - a companion
+  # widened after that would never recover the rest of the row.
+  rm -f "$count_file"
+  fm_install_fake_tmux_pane "$FAKEBIN" 3
+  cat > "$FAKEBIN/stat" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "${FM_STATUS_BAR_TEST_BEAT_EPOCH:-900}"
+SH
+  chmod +x "$FAKEBIN/stat"
+  out=$(PATH="$FAKEBIN:$PATH" \
+    FM_HOME="$HOME_FIX" \
+    FM_PRIMARY_HARNESS=kimi \
+    FM_STATUS_BAR_NOW=1000 \
+    FM_STATUS_BAR_INTERVAL=0 \
+    FM_STATUS_BAR_TMUX_COUNT="$count_file" \
+    "$ROOT/bin/fm-status-bar.sh" \
+      --adapter kimi --model kimi-code/k3 --effort -- --follow-pane %42)
+  rows=$(printf '%s' "$out" | grep -o '⚓' | wc -l | tr -d ' ')
+  [ "$rows" -eq 3 ] \
+    || fail "three refreshes published $rows unchanged rows instead of one row each"
+
+  # A clock that moves one second per refresh changes the supervision age, and
+  # every one of those changes must reach the pane.
+  rm -f "$count_file"
+  fm_install_fake_tmux_pane "$FAKEBIN" 3
+  cat > "$FAKEBIN/stat" <<'SH'
+#!/usr/bin/env bash
+epoch=900
+[ ! -f "$FM_STATUS_BAR_TEST_BEAT_FILE" ] || epoch=$(<"$FM_STATUS_BAR_TEST_BEAT_FILE")
+printf '%s\n' "$((epoch - 1))" > "$FM_STATUS_BAR_TEST_BEAT_FILE"
+printf '%s\n' "$epoch"
+SH
+  chmod +x "$FAKEBIN/stat"
+  rm -f "$TMP_ROOT/beat-epoch"
+  out=$(PATH="$FAKEBIN:$PATH" \
+    FM_HOME="$HOME_FIX" \
+    FM_PRIMARY_HARNESS=kimi \
+    FM_STATUS_BAR_NOW=1000 \
+    FM_STATUS_BAR_INTERVAL=0 \
+    FM_STATUS_BAR_TMUX_COUNT="$count_file" \
+    FM_STATUS_BAR_TEST_BEAT_FILE="$TMP_ROOT/beat-epoch" \
+    "$ROOT/bin/fm-status-bar.sh" \
+      --adapter kimi --model kimi-code/k3 --effort -- --follow-pane %42 | strip_ansi)
+  rows=$(printf '%s' "$out" | grep -o '⚓' | wc -l | tr -d ' ')
+  [ "$rows" -eq 3 ] \
+    || fail "three refreshes published $rows rows instead of one row each"
+  assert_contains "$out" '👁 100s' "the first supervision age never reached the pane"
+  assert_contains "$out" '👁 101s' "a changed supervision age never reached the pane"
+  assert_contains "$out" '👁 102s' "a changed supervision age never reached the pane"
+  rm -f "$FAKEBIN/tmux"
+  cat > "$FAKEBIN/stat" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "${FM_STATUS_BAR_TEST_BEAT_EPOCH:-900}"
+SH
+  chmod +x "$FAKEBIN/stat"
+  pass "status bar: the companion publishes a row on every refresh"
+}
+
 test_contract_order_and_fleet_projection() {
   local out
   fm_write_meta "$HOME_FIX/state/working.meta" "kind=crew"
@@ -292,16 +424,7 @@ SH
 
 test_companion_clears_the_whole_pane_once_at_startup() {
   local out count_file="$TMP_ROOT/clear-count"
-  cat > "$FAKEBIN/tmux" <<'SH'
-#!/usr/bin/env bash
-count=0
-[ ! -f "$FM_STATUS_BAR_TMUX_COUNT" ] || count=$(<"$FM_STATUS_BAR_TMUX_COUNT")
-count=$((count + 1))
-printf '%s\n' "$count" > "$FM_STATUS_BAR_TMUX_COUNT"
-[ "$count" -le 2 ] || exit 1
-printf '%s\n' '%42'
-SH
-  chmod +x "$FAKEBIN/tmux"
+  fm_install_fake_tmux_pane "$FAKEBIN" 2
   out=$(PATH="$FAKEBIN:$PATH" \
     FM_HOME="$HOME_FIX" \
     FM_PRIMARY_HARNESS=kimi \
@@ -309,8 +432,10 @@ SH
     FM_STATUS_BAR_TMUX_COUNT="$count_file" \
     "$ROOT/bin/fm-status-bar.sh" \
       --adapter kimi --model kimi-code/k3 --effort -- --follow-pane %42)
-  # A herdr companion is two rows tall and `pane run` echoes the launch command
-  # into the pane's shell, so the pane is cleared whole exactly once.
+  # Herdr clamps the split share to 0.9, so a companion is a proportional tenth
+  # of the tab - two rows on a 23-row terminal, six on a 63-row one - and `pane
+  # run` echoes the launch command into the pane's shell, so everything the
+  # provider left below the status row is cleared whole exactly once.
   assert_contains "$out" $'\033[2J' "the companion never cleared the pane it took over"
   [ "$(printf '%s' "$out" | grep -c $'\033\\[2J')" -eq 1 ] \
     || fail "the companion repeated the full-pane clear on every refresh"
@@ -370,5 +495,7 @@ test_cursor_payload_adapter_and_primary_guard
 test_account_role_label_is_verified_and_compact
 test_herdr_companion_exits_when_primary_pane_is_gone
 test_companion_clears_the_whole_pane_once_at_startup
+test_companion_never_leaves_the_row_blank_while_collecting
+test_companion_publishes_every_refresh_to_the_pane
 test_companion_backend_is_restricted_to_verified_providers
 test_tracked_adapter_wiring_and_cursor_boundary
