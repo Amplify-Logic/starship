@@ -78,7 +78,7 @@ fm_toolchain_parse_version() {
 fm_toolchain_installed_version() {
   local bin_name=$1 timeout_secs=$2 banner
   command -v "$bin_name" >/dev/null 2>&1 || return 0
-  banner=$(fm_run_timeout "$timeout_secs" "$bin_name" --version 2>/dev/null </dev/null || true)
+  banner=$(fm_run_timeout "$timeout_secs" "$bin_name" --version 2>/dev/null || true)
   [ -n "$banner" ] || return 0
   printf '%s\n' "$banner" | fm_toolchain_parse_version
 }

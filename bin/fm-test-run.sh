@@ -382,6 +382,7 @@ tests/fm-opencode-primary-live-e2e.test.sh
 tests/fm-claude-continuity-live-e2e.test.sh
 tests/fm-pi-primary-live-e2e.test.sh
 tests/fm-deck.test.sh
+tests/fm-timeout-lib.test.sh
 EOF
 }
 
