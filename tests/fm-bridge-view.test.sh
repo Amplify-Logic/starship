@@ -5,8 +5,8 @@
 # snapshot subprocess, away-mode passive refresh, auth headers, authenticated
 # photo drops into the quarantined inbox, multi-file Origin-null uploads,
 # hold-to-speak mailbox forwarding with the relay token kept server-side,
-# captain-facing glance titles, pinned links, needs-you selection, waiting project chips, and keep-alive body drain after early error
-# returns.
+# captain-facing glance titles, pinned links, needs-you selection, waiting project chips, keep-alive body drain after early error
+# returns, and the Action Deck page over bin/fm-deck.sh --json.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -2010,6 +2010,265 @@ PY
   pass "hold-to-speak forwards Safari m4a server-side and returns answer text"
 }
 
+# The Action Deck page: /deck and /api/deck sit behind the same session, Host
+# and header rules as the glance, render the fm-deck.v1 model bin/fm-deck.sh
+# --json emits (never a second derivation of "what needs him"), follow only
+# ordinary HTTPS links, and expose no approve, run, or merge control.
+install_deck_fixture() {  # <home> <fakebin>
+  local home=$1 fakebin=$2
+  cat > "$fakebin/tasks-axi" <<'SH'
+#!/usr/bin/env bash
+set -u
+[ "${1:-}" = list ] || exit 0
+printf 'count: 4\n'
+printf 'tasks[4]{id,state,kind,repo,title,hold_kind,hold_reason,links,closed,blocked_by,held,priority}:\n'
+printf '  review-task,in_flight,ship,firstmate,"Spoken updates on the glasses","-","-","pr:https://github.com/kunchenguid/firstmate/pull/9","-",none,no,"-"\n'
+printf '  lab-task,in_flight,ship,atelier,"Refresh the Atelier brand page","-","-","pr:https://gitlab.example/atelier/site/-/merge_requests/3","-",none,no,"-"\n'
+printf '  captain-q,queued,captain,firstmate,"Add Qwen to the fleet?",captain,"captain choice pending",none,"-",none,yes,"-"\n'
+printf '  done-scout,done,scout,firstmate,"Investigate the delta timeouts","-","-","report:data/done-scout/report.md",2026-09-01,none,no,"-"\n'
+SH
+  chmod +x "$fakebin/tasks-axi"
+  mkdir -p "$home/data/action-gateway" "$home/data/orders"
+  cat > "$home/data/action-gateway/action-audit.log" <<'JSONL'
+{"ts":1700000000,"event":"prepared","state":"prepared","request_id":"r-1","digest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","expires_at":4100000000,"requester_id":"worker-1","request":{"task_id":"t-1","domain":"fota","action_kind":"device.firmware.push","target":"device://867280068649789","parameters":{},"idempotency_key":"i-1","expires_at":4100000000,"nonce":"n-1","requester_id":"worker-1"}}
+JSONL
+  cat > "$home/data/orders/fota.md" <<'EOF'
+# Firmware rollout
+
+Status: ARMED (captain 2026-09-01)
+
+Watch: the canary fleet.
+EOF
+  fm_write_meta "$home/state/review-task.meta" \
+    "window=firstmate:fm-review-task" \
+    "project=firstmate" \
+    "kind=ship" \
+    "outcome=Spoken updates on the glasses" \
+    "pr=https://github.com/kunchenguid/firstmate/pull/9"
+  printf 'working: pushed the branch\n' > "$home/state/review-task.status"
+  fm_write_meta "$home/state/finished-task.meta" \
+    "window=firstmate:fm-finished-task" \
+    "project=firstmate" \
+    "kind=ship" \
+    "outcome=Photo drops from the phone"
+  printf 'done: landed\n' > "$home/state/finished-task.status"
+}
+
+test_deck_page_and_api() {
+  local home fakebin port cookie hdr body before after n
+  home=$(make_home deck)
+  fakebin=$(make_fakebin "$home")
+  install_deck_fixture "$home" "$fakebin"
+  init_passcode "$home" >/dev/null
+  port=$(start_bridge "$home" "$fakebin")
+  hdr=$home/deck.hdr; body=$home/deck.body
+
+  curl_bridge "$port" /deck "$hdr" "$body"
+  grep -q '^HTTP/1.1 200' "$hdr" || fail "unauthenticated /deck did not return the login page: $(cat "$hdr")"
+  grep -q 'action="/login"' "$body" || fail "unauthenticated /deck did not show Log in"
+  if grep -q 'id="staged"' "$body"; then fail "unauthenticated /deck leaked the deck page"; fi
+  curl_bridge "$port" /api/deck "$hdr" "$body"
+  grep -q '^HTTP/1.1 401' "$hdr" || fail "unauthenticated /api/deck was not 401: $(cat "$hdr")"
+
+  cookie=$(bridge_cookie "$home" "$port")
+  curl_bridge "$port" / "$hdr" "$body" --header "Cookie: $cookie"
+  grep -q 'href="/deck"' "$body" || fail "glance page has no Action Deck nav entry"
+
+  curl_bridge "$port" /deck "$hdr" "$body" --header "Cookie: $cookie"
+  grep -q '^HTTP/1.1 200' "$hdr" || fail "authenticated /deck failed: $(cat "$hdr")"
+  grep -q '<title>ACTION DECK</title>' "$body" || fail "deck page title missing"
+  grep -q 'href="/"' "$body" || fail "deck page has no way back to the glance"
+  grep -q 'id="staged"' "$body" || fail "deck page has no staged region"
+  grep -q 'id="decisions-section" hidden' "$body" || fail "held decisions are not folded away by default"
+  grep -q 'View only. Nothing on this page approves, runs, or merges.' "$body" || fail "deck page lacks the view-only line"
+  n=$(grep -o '<button' "$body" | wc -l | tr -d ' ')
+  [ "$n" = 1 ] || fail "deck page carries $n buttons; only Log out is allowed"
+  grep -qi 'content-security-policy:.*script-src .nonce-' "$hdr" || fail "deck page lacks the nonce CSP"
+
+  before=$(fingerprint "$home")
+  curl_bridge "$port" /api/deck "$hdr" "$body" --header "Cookie: $cookie"
+  after=$(fingerprint "$home")
+  grep -q '^HTTP/1.1 200' "$hdr" || fail "authenticated /api/deck failed: $(cat "$hdr"; cat "$body")"
+  grep -qi '^content-type: application/json' "$hdr" || fail "/api/deck is not JSON"
+  grep -qi '^cache-control: no-store' "$hdr" || fail "/api/deck is cacheable"
+  [ "$before" = "$after" ] || fail "reading /api/deck changed fleet records"
+
+  jq -e '.schema == "fm-deck.v1"' "$body" >/dev/null || fail "/api/deck is not the fm-deck.v1 model: $(cat "$body")"
+  jq -e '.ready == []' "$body" >/dev/null || fail "ready-to-run invented an action: $(cat "$body")"
+  jq -e '.ready_note | test("not wired")' "$body" >/dev/null || fail "ready note does not say running is unwired"
+  [ "$(jq -r '.staged.groups[0].order' "$body")" = fota ] || fail "staged group missing: $(cat "$body")"
+  [ "$(jq -r '.staged.groups[0].status' "$body")" = ARMED ] || fail "order status missing: $(cat "$body")"
+  [ "$(jq -r '.staged.groups[0].cards[0].action_kind' "$body")" = device.firmware.push ] || fail "staged card kind: $(cat "$body")"
+  [ "$(jq -r '.staged.groups[0].cards[0].target' "$body")" = 'device://867280068649789' ] || fail "staged card target: $(cat "$body")"
+  jq -e '.staged.groups[0].cards[0] | has("url") | not' "$body" >/dev/null || fail "a device:// target became a link"
+  jq -e '.staged.missing | test("captain secret") and test("executor")' "$body" >/dev/null || fail "staged cards do not say what is missing"
+
+  # Live asks and held decisions are two lists; a pull request appears once
+  # however many records carry it; only https links are followable.
+  [ "$(jq -r '[.asks[] | select(.url == "https://github.com/kunchenguid/firstmate/pull/9")] | length' "$body")" = 1 ] \
+    || fail "the shared pull request is not exactly one ask: $(cat "$body")"
+  [ "$(jq -r '[.asks[] | select(.url == "https://gitlab.example/atelier/site/-/merge_requests/3")] | length' "$body")" = 1 ] \
+    || fail "an ordinary https source link was not kept: $(cat "$body")"
+  [ "$(jq -r '.decisions | length' "$body")" = 1 ] || fail "one held decision: $(cat "$body")"
+  [ "$(jq -r '.decisions[0].ask' "$body")" = decide ] || fail "held decision ask: $(cat "$body")"
+  jq -e '[.asks[].ask] | index("decide") == null' "$body" >/dev/null || fail "a held decision leaked into live asks"
+  [ "$(jq -r '.counts.asks' "$body")" = "$(jq -r '.asks | length' "$body")" ] || fail "asks count disagrees"
+
+  # Completed work sits apart from work under way, and a local artifact is a
+  # reference, never a link.
+  [ "$(jq -r '[.under_way[].outcome] | index("Photo drops from the phone")' "$body")" = null ] || fail "a finished worker is listed as under way"
+  [ "$(jq -r '.finished[0].outcome' "$body")" = 'Photo drops from the phone' ] || fail "finished worker missing: $(cat "$body")"
+  [ "$(jq -r '.under_way[0].label' "$body")" = WORKING ] || fail "under-way label: $(cat "$body")"
+  [ "$(jq -r '.landed[0].ref' "$body")" = 'data/done-scout/report.md' ] || fail "report artifact is not a plain reference: $(cat "$body")"
+  jq -e '.landed[0] | has("url") | not' "$body" >/dev/null || fail "a data/ path became a link"
+  jq -e '[.asks[].title, .under_way[].outcome] | index("Investigate the delta timeouts") == null' "$body" >/dev/null \
+    || fail "completed work leaked into the actionable lists"
+  pass "deck page and api sit behind the session, render the deck model, vet links, and act on nothing"
+}
+
+test_deck_api_reports_desk_unreachable() {
+  local home fakebin fixture port cookie hdr body log
+  home=$(make_home deck-error)
+  fakebin=$(make_fakebin "$home")
+  fixture=$home/root
+  mkdir -p "$fixture/bin"
+  cat > "$fixture/bin/fm-deck.sh" <<'SH'
+#!/usr/bin/env bash
+echo "deck collector exploded" >&2
+exit 1
+SH
+  chmod +x "$fixture/bin/fm-deck.sh"
+  init_passcode "$home" >/dev/null
+  log=$home/bridge-serve.log
+  : > "$log"
+  FM_BRIDGE_VIEW_TEST=1 FM_BRIDGE_VIEW_LAUNCHCTL="$fakebin/launchctl" \
+    PATH="$fakebin:$PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$fixture" \
+    "$BRIDGE" serve --host "$HOST_NAME" --port 0 >"$log" 2>&1 &
+  BRIDGE_PIDS+=("$!")
+  port=$(wait_listening "$log")
+  cookie=$(bridge_cookie "$home" "$port")
+  hdr=$home/deck.hdr; body=$home/deck.body
+  curl_bridge "$port" /api/deck "$hdr" "$body" --header "Cookie: $cookie"
+  grep -q '^HTTP/1.1 503' "$hdr" || fail "a failing deck read was not 503: $(cat "$hdr")"
+  [ "$(jq -r '.error' "$body")" = 'desk unreachable' ] || fail "503 body: $(cat "$body")"
+  jq -e '.detail | test("deck collector exploded")' "$body" >/dev/null || fail "503 lost the reason: $(cat "$body")"
+  pass "a failing deck read is an honest 503 with its reason, not an empty deck"
+}
+
+test_deck_page_renders_states_without_run_controls() {
+  local output
+  output=$(node - "$ROOT/bin/fm-bridge-view.py" <<'JS'
+const {execFileSync} = require('child_process');
+const vm = require('vm');
+const script = execFileSync('python3', ['-', process.argv[2]], {
+  input: `import importlib.util, sys
+spec = importlib.util.spec_from_file_location("bridge", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+print(module.DECK_JS)
+`,
+  encoding: 'utf8'
+});
+const ids = ['ready', 'staged', 'asks', 'decisions', 'underway', 'landed', 'loose',
+  'ready-count', 'staged-count', 'asks-count', 'underway-count', 'landed-count',
+  'deck-observed', 'deck-counts', 'deck-error', 'decisions-section', 'loose-section'];
+const elements = {};
+for (const id of ids) elements[id] = {innerHTML: '', textContent: 'Loading…', hidden: false};
+let overlayOn = false;
+elements.stale = {classList: {toggle(name, on) { overlayOn = !!on; }}};
+const context = vm.createContext({
+  document: {hidden: false, addEventListener() {}, getElementById(id) { return elements[id] || null; }},
+  window: {addEventListener() {}}, Date, setInterval() {}, setTimeout, clearTimeout,
+  AbortController: class { constructor() { this.signal = {}; } abort() {} },
+  fetch: async function() {
+    return {ok: false, status: 503, json: async function() { return {error: 'desk unreachable', detail: 'deck collector exploded: tray log unreadable'}; }};
+  }
+});
+vm.runInContext(script, context);
+const apply = vm.runInContext('apply', context);
+apply({
+  home: 'Starship',
+  ready: [],
+  ready_note: 'Running from this page is not wired yet.',
+  staged: {
+    groups: [{order: 'fota', count: 1, oldest: '3d', status: 'ARMED', last_fire: '-', cards: [
+      {digest_short: 'aaaaaaaaaaaa', action_kind: 'device.firmware.push', target: 'device://867280068649789', requester_id: 'worker-1', age: '3d', expiry: 'expires in 2h', expired: false}
+    ]}],
+    quiet_orders: [{order: 'spares', status: 'DRAFT', last_fire: '-'}],
+    missing: 'Approval needs the captain secret on the desk.'
+  },
+  asks: [
+    {ask: 'review', title: 'Spoken updates on the glasses', project: 'firstmate', url: 'https://github.com/acme/alpha/pull/7'},
+    {ask: 'answer', title: 'Rework the beta importer <script>', project: 'Alpha'},
+    {ask: 'check', title: 'Photo drops', project: 'firstmate', ref: 'javascript:alert(1)'}
+  ],
+  decisions: [{ask: 'decide', title: 'Add Qwen to the fleet?', project: 'firstmate'}, {ask: 'decide', title: 'Authorise the Sweden field visit', project: 'Alpha'}],
+  backlog_reason: null,
+  unconfirmed: true,
+  under_way: [{outcome: 'Ship the alpha widget', project: 'Alpha', state: 'working', label: 'WORKING', heard_secs: 120}],
+  finished: [{outcome: 'Land the gamma migration', project: 'Alpha', state: 'done', label: 'READY', heard_secs: 3600}],
+  landed: [{closed: '2026-09-01', what: 'findings', title: 'Investigate the delta timeouts', ref: 'data/done-scout/report.md'}],
+  loose_ends: {path: 'data/loose-ends/latest.md', age_secs: 7200, title: 'Loose Ends - Thursday', total: 16, items: [{bucket: 'urgent', text: 'Reply to Jordan'}]},
+  counts: {asks: 3, decisions: 2, staged: 1, staged_oldest: '3d', under_way: 1, finished: 1, loose_ends: 16}
+});
+function must(cond, msg) { if (!cond) throw new Error(msg); }
+const all = ids.map(function(id) { return elements[id].innerHTML; }).join('\n');
+must(all.indexOf('<button') === -1, 'the deck rendered a button: ' + all);
+must(all.indexOf('javascript:') === -1, 'a non-https reference became a link: ' + all);
+must(elements.staged.innerHTML.indexOf('needs approval') !== -1, 'staged card lacks the approval badge: ' + elements.staged.innerHTML);
+must(elements.staged.innerHTML.indexOf('device.firmware.push') !== -1, 'staged card lacks its kind');
+must(elements.staged.innerHTML.indexOf('Not available here: Approval needs the captain secret') !== -1, 'staged section does not say what is missing');
+must(elements.staged.innerHTML.indexOf('Watching, nothing staged: spares DRAFT') !== -1, 'quiet order missing');
+must(elements.ready.innerHTML.indexOf('Nothing is ready to run from here.') !== -1, 'ready section is not honest: ' + elements.ready.innerHTML);
+must(elements.asks.innerHTML.indexOf('<a href="https://github.com/acme/alpha/pull/7" target="_blank" rel="noopener noreferrer">') !== -1, 'https ask link missing: ' + elements.asks.innerHTML);
+must(elements.asks.innerHTML.indexOf('&lt;script&gt;') !== -1, 'title was not escaped: ' + elements.asks.innerHTML);
+must(elements.asks.innerHTML.indexOf('Not confirmed here') !== -1, 'unconfirmed caveat missing');
+must(elements.asks.innerHTML.indexOf('Add Qwen') === -1, 'a held decision was listed as a live ask');
+must(elements['decisions-section'].hidden === false, 'held decisions section stayed hidden');
+must(elements.decisions.innerHTML.indexOf('2 held decisions') !== -1, 'held decisions fold missing: ' + elements.decisions.innerHTML);
+const uw = elements.underway.innerHTML;
+must(uw.indexOf('Ship the alpha widget') !== -1, 'under-way row missing');
+must(uw.indexOf('1 finished, awaiting cleanup') !== -1, 'finished fold missing: ' + uw);
+must(uw.indexOf('Land the gamma migration') > uw.indexOf('<details'), 'finished work rendered in the live list');
+must(elements.landed.innerHTML.indexOf('data/done-scout/report.md') !== -1 && elements.landed.innerHTML.indexOf('href="data/') === -1, 'report path rendered as a link');
+must(elements['loose-section'].hidden === false && elements.loose.innerHTML.indexOf('Reply to Jordan') !== -1, 'loose ends missing');
+must(elements['deck-counts'].textContent === '3 need you · 1 staged · 2 held decisions · 1 under way', 'counts line: ' + elements['deck-counts'].textContent);
+must(elements['deck-observed'].textContent.indexOf('Read at an unknown time') === 0, 'missing sample time not reported as unknown: ' + elements['deck-observed'].textContent);
+
+apply({home: 'Starship', read_at: Math.floor(Date.now() / 1000) - 42, server_unix: Math.floor(Date.now() / 1000), ready: [], staged: {groups: [], quiet_orders: []}, asks: [], decisions: [], under_way: [], finished: [], landed: [], loose_ends: null, counts: {}});
+must(/^Read 4[123] seconds ago · from the records Starship keeps$/.test(elements['deck-observed'].textContent), 'header age not taken from the collector sample: ' + elements['deck-observed'].textContent);
+vm.runInContext('tickObserved', context)();
+must(/^Read 4[123] seconds ago · from the records Starship keeps$/.test(elements['deck-observed'].textContent), 'tick did not keep the sampled age: ' + elements['deck-observed'].textContent);
+
+apply({home: 'Starship', ready: [], staged: {groups: [], quiet_orders: []}, asks: [], decisions: [], under_way: [], finished: [], landed: [], loose_ends: null, counts: {}});
+must(elements.staged.innerHTML.indexOf('Nothing is staged for you right now.') !== -1, 'empty staged copy');
+must(elements.asks.innerHTML.indexOf('Nothing is waiting on you.') !== -1, 'empty asks copy');
+must(elements.underway.innerHTML.indexOf('No work under way.') !== -1, 'empty under-way copy');
+must(elements.landed.innerHTML.indexOf('Nothing has landed recently.') !== -1, 'empty landed copy');
+must(elements['decisions-section'].hidden === true, 'empty held decisions section is not hidden');
+must(elements['loose-section'].hidden === true, 'absent sweep section is not hidden');
+
+for (const id of ['ready', 'staged', 'asks', 'underway', 'landed']) { elements[id].textContent = 'Loading…'; }
+vm.runInContext('markUnreachable', context)('deck collector exploded');
+must(elements.staged.innerHTML.indexOf('Cannot reach the desk.') !== -1, 'unreachable state not rendered');
+must(elements['deck-error'].textContent === 'deck collector exploded', 'error detail not shown');
+
+// A 503 on first load must leave the reason visible: no full-page overlay over it.
+vm.runInContext('lastSuccess = 0', context);
+for (const id of ['ready', 'staged', 'asks', 'underway', 'landed']) { elements[id].textContent = 'Loading…'; elements[id].innerHTML = ''; }
+elements['deck-error'].textContent = '';
+vm.runInContext('refresh', context)().then(function() {
+  must(overlayOn === false, 'first-load 503 raised the full-page overlay, hiding the reason');
+  must(elements['deck-observed'].textContent === 'Cannot reach the desk.', 'header did not report the unreachable desk: ' + elements['deck-observed'].textContent);
+  must(elements.ready.innerHTML.indexOf('Cannot reach the desk.') !== -1, 'regions did not report the unreachable desk');
+  must(elements['deck-error'].textContent === 'deck collector exploded: tray log unreadable', '503 reason not shown: ' + elements['deck-error'].textContent);
+}).catch(function(err) { console.error(err.message); process.exit(1); });
+JS
+  ) || fail "deck page rendering failed: $output"
+  pass "deck page renders staged, asks, held decisions, under way, landed and loose ends with no run control"
+}
+
+
 test_bind_is_loopback_constant
 test_funnel_on_refuses_to_serve
 test_funnel_off_serve_starts
@@ -2044,3 +2303,6 @@ test_observation_selects_and_groups_live_backlog
 test_multi_file_origin_null_uploads_are_atomic_and_partial
 test_unauthenticated_speak_rejected
 test_speak_origin_null_forwards_m4a_and_polls_text
+test_deck_page_and_api
+test_deck_api_reports_desk_unreachable
+test_deck_page_renders_states_without_run_controls

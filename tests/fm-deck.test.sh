@@ -1262,6 +1262,100 @@ EOF
   pass "the refresh loop redraws on its interval and re-reads records each frame"
 }
 
+# --json is the seam a second renderer reads: the bridge's /deck page shows this
+# model, so it has to carry every section the pane draws, apply the same
+# selection rules (one row per pull request, no completed work outside JUST IN,
+# a failed worker's pull request withheld), and reach a browser with the same
+# control-character scrub the terminal gets. The web page is presentation over
+# this model and never re-derives "what needs him" from the raw records.
+test_json_mode_emits_the_pane_as_one_model() {
+  local home fb out rc
+  command -v jq >/dev/null 2>&1 || { pass "skip: jq not found for the --json model test"; return 0; }
+  read -r home fb <<EOF
+$(full_home json)
+EOF
+  set +e
+  out=$(run_deck "$home" "$fb" --json 2>/dev/null)
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "--json exit"
+  printf '%s' "$out" | jq -e '.schema == "fm-deck.v1"' >/dev/null || fail "--json did not emit the fm-deck.v1 model: $out"
+
+  # Staged cards, grouped by order with the order's status alongside.
+  [ "$(printf '%s' "$out" | jq -r '.staged.groups | length')" = 2 ] || fail "expected two staged groups: $out"
+  [ "$(printf '%s' "$out" | jq -r '.staged.groups[0].order')" = proactive-outbound ] || fail "oldest group first: $out"
+  [ "$(printf '%s' "$out" | jq -r '.staged.groups[0].status')" = ARMED ] || fail "order status missing: $out"
+  [ "$(printf '%s' "$out" | jq -r '.staged.groups[0].cards | length')" = 2 ] || fail "two cards under the armed order: $out"
+  [ "$(printf '%s' "$out" | jq -r '.staged.groups[1].status')" = null ] || fail "a domain with no order file has null status: $out"
+  [ "$(printf '%s' "$out" | jq -r '[.staged.groups[].cards[] | select(.expired)] | length')" = 1 ] || fail "one expired card: $out"
+  [ "$(printf '%s' "$out" | jq -r '[.staged.groups[].cards[] | select(.expired)][0].expiry')" = EXPIRED ] || fail "expired card wording: $out"
+  printf '%s' "$out" | jq -e '.staged.quiet_orders[] | select(.order == "spares" and .status == "DRAFT")' >/dev/null \
+    || fail "a quiet order is listed as watching: $out"
+
+  # Needs-you rows: the same asks, one row per pull request, no completed work.
+  [ "$(printf '%s' "$out" | jq -r '[.needs_you.rows[] | select(.ask == "answer")] | length')" = 1 ] || fail "one answer row: $out"
+  [ "$(printf '%s' "$out" | jq -r '[.needs_you.rows[] | select(.ask == "unblock")] | length')" = 1 ] || fail "one unblock row: $out"
+  [ "$(printf '%s' "$out" | jq -r '[.needs_you.rows[] | select(.url == "https://github.com/acme/alpha/pull/7")] | length')" = 1 ] \
+    || fail "the shared pull request appears exactly once: $out"
+  [ "$(printf '%s' "$out" | jq -r '[.needs_you.rows[].url | select(. != "")] | length')" = \
+    "$(printf '%s' "$out" | jq -r '[.needs_you.rows[].url | select(. != "")] | unique | length')" ] \
+    || fail "duplicate pull request urls in needs_you: $out"
+  printf '%s' "$out" | jq -e '.needs_you.rows[] | select(.ask == "decide" and .title == "Authorise the Sweden field visit")' >/dev/null \
+    || fail "the captain hold is a decide row: $out"
+  [ "$(printf '%s' "$out" | jq -r '.counts.needs_you')" = "$(printf '%s' "$out" | jq -r '.needs_you.rows | length')" ] \
+    || fail "counts.needs_you disagrees with the rows: $out"
+  [ "$(printf '%s' "$out" | jq -r '.needs_you.backlog_status')" = ok ] || fail "backlog read normally: $out"
+  [ "$(printf '%s' "$out" | jq -r '.needs_you.backlog_reason')" = null ] || fail "no caveat when the backlog reads: $out"
+  printf '%s' "$out" | jq -e '[.needs_you.rows[], .under_way[]] | map(.title? // .outcome?) | index("Land the gamma migration") == null' >/dev/null \
+    || fail "completed work leaked out of just_in: $out"
+
+  # Under way carries the captain-facing label, never the worker's own note.
+  [ "$(printf '%s' "$out" | jq -r '.under_way | length')" = 3 ] || fail "one row per recorded worker: $out"
+  [ "$(printf '%s' "$out" | jq -r '.under_way[0].state')" = parked ] || fail "most urgent worker first: $out"
+  [ "$(printf '%s' "$out" | jq -r '.under_way[0].label')" = 'NEEDS YOU' ] || fail "visible label resolved: $out"
+  assert_not_contains "$out" 'no-mistakes run' "worker status note reached the model"
+  assert_not_contains "$out" 'worktree HEAD' "worker status note reached the model"
+
+  # Completions with their artifact, and the sweep with its bucketed items.
+  [ "$(printf '%s' "$out" | jq -r '.just_in | length')" = 2 ] || fail "two completions: $out"
+  [ "$(printf '%s' "$out" | jq -r '.just_in[0].artifact')" = 'https://github.com/acme/alpha/pull/4' ] || fail "merged artifact: $out"
+  [ "$(printf '%s' "$out" | jq -r '.just_in[1].what')" = findings ] || fail "a scout completion is findings: $out"
+  [ "$(printf '%s' "$out" | jq -r '.loose_ends.total')" -gt 0 ] || fail "loose ends total: $out"
+  printf '%s' "$out" | jq -e '.loose_ends.items[0].bucket == "urgent"' >/dev/null || fail "loose end bucket: $out"
+  pass "--json emits the whole pane as one fm-deck.v1 model with the pane's own selection rules"
+}
+
+test_json_mode_degrades_honestly_and_scrubs() {
+  local home fb out esc
+  command -v jq >/dev/null 2>&1 || { pass "skip: jq not found for the --json degradation test"; return 0; }
+  home=$(make_home json-empty)
+  fb=$(fm_fakebin "$home")
+  install_fake_tasks_axi "$fb" empty
+  out=$(run_deck "$home" "$fb" --json 2>/dev/null)
+  [ "$(printf '%s' "$out" | jq -r '.staged.groups | length')" = 0 ] || fail "empty staged: $out"
+  [ "$(printf '%s' "$out" | jq -r '.needs_you.rows | length')" = 0 ] || fail "empty needs_you: $out"
+  [ "$(printf '%s' "$out" | jq -r '.under_way | length')" = 0 ] || fail "empty under_way: $out"
+  [ "$(printf '%s' "$out" | jq -r '.just_in | length')" = 0 ] || fail "empty just_in: $out"
+  [ "$(printf '%s' "$out" | jq -r '.loose_ends')" = null ] || fail "no sweep is null, not an empty box: $out"
+  [ "$(printf '%s' "$out" | jq -r '.counts.staged')" = 0 ] || fail "zero staged count: $out"
+
+  # An unreadable backlog is reported as such, never as empty.
+  printf 'manual\n' > "$home/config/backlog-backend"
+  out=$(run_deck "$home" "$fb" --json 2>/dev/null)
+  [ "$(printf '%s' "$out" | jq -r '.needs_you.backlog_status')" = manual ] || fail "manual backlog status: $out"
+  printf '%s' "$out" | jq -e '.needs_you.backlog_reason | test("kept by hand")' >/dev/null || fail "manual backlog reason: $out"
+
+  # The same scrub the terminal gets, so a browser never receives a control
+  # byte, raw or as JSON's  escape.
+  esc=$(printf '\033')
+  out=$(render_payload "${esc}[2J" '\u001b[2J' | python3 "$RENDER" --json "$MARK")
+  assert_no_control_characters "$out" "--json let a control character through"
+  assert_not_contains "$out" '\u001b' "--json re-encoded a control character instead of dropping it"
+  assert_contains "$out" 'hubspot://note-1' "scrubbing dropped the target from the model"
+  pass "--json degrades to honest empties, names an unreadable backlog, and scrubs control characters"
+}
+
+
 test_help_exits_zero
 test_empty_home_renders_honest_empty_sections
 test_no_sources_at_all_still_renders
@@ -1293,5 +1387,7 @@ test_loose_ends_present_but_quiet
 test_counts_strip_summarizes_every_section
 test_manual_backlog_backend_degrades_honestly
 test_read_only_refuses_acting_verbs
+test_json_mode_emits_the_pane_as_one_model
+test_json_mode_degrades_honestly_and_scrubs
 test_interval_validation
 test_refresh_loop_redraws_and_reflects_changes

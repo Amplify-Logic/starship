@@ -11,6 +11,9 @@ home's 0700 bridge/ directory. Logs also go there, not into state/.
 Authenticated photo drops land in data/bridge-inbox/ (mode 0700
 quarantined storage). Authenticated hold-to-speak audio is forwarded
 into the local glasses mailbox; the relay token stays in this process.
+/deck and /api/deck serve the captain's Action Deck from one bounded
+`bin/fm-deck.sh --json` read behind the same session, Host and CSP
+boundary; they render records and act on nothing (docs/bridge-view.md).
 """
 
 from __future__ import annotations
@@ -50,6 +53,7 @@ SESSION_TTL_SECONDS = 7 * 24 * 60 * 60
 CACHE_TTL_SECONDS = 30
 SNAPSHOT_TIMEOUT_SECONDS = 20
 SNAPSHOT_MAX_BYTES = 1_000_000
+DECK_SCHEMA = "fm-deck.v1"
 COOKIE_NAME = "fm_bridge_sid"
 COOKIE_PATH = "/"
 SCRYPT_N = 2**14
@@ -135,8 +139,14 @@ HOST_LABEL_RE = re.compile(r"^[A-Za-z0-9.-]+(?::\d+)?$")
 ISO_DAY_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})")
 FILENAME_DAY_RE = re.compile(r"^(\d{4})(\d{2})(\d{2})T")
 BASE_CHILD_PATH = "/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/opt/homebrew/bin"
+# jq stays first: resolve_child_path admits each tool's directory once, in this
+# order, so the directory that supplies jq leads the child PATH. A fixture (or
+# a Homebrew install) that puts jq beside its own tmux keeps that tmux ahead of
+# the system one; python3 usually lives in /usr/bin and must not pull that
+# directory to the front.
 CHILD_PATH_TOOLS = (
     "jq",
+    "python3",
     "git",
     "tmux",
     "herdr",
@@ -1128,7 +1138,9 @@ def _kill_process_group(proc: subprocess.Popen[bytes]) -> None:
         pass
 
 
-def _bounded_process_output(proc: subprocess.Popen[bytes]) -> Tuple[bytes, bytes]:
+def _bounded_process_output(
+    proc: subprocess.Popen[bytes], label: str = "bearings snapshot"
+) -> Tuple[bytes, bytes]:
     selector = selectors.DefaultSelector()
     streams = {proc.stdout: bytearray(), proc.stderr: bytearray()}
     terminated = False
@@ -1142,12 +1154,12 @@ def _bounded_process_output(proc: subprocess.Popen[bytes]) -> Tuple[bytes, bytes
             if remaining <= 0:
                 _kill_process_group(proc)
                 terminated = True
-                raise RuntimeError("bearings snapshot timed out")
+                raise RuntimeError(f"{label} timed out")
             events = selector.select(remaining)
             if not events:
                 _kill_process_group(proc)
                 terminated = True
-                raise RuntimeError("bearings snapshot timed out")
+                raise RuntimeError(f"{label} timed out")
             for key, _ in events:
                 chunk = os.read(key.fileobj.fileno(), 65536)
                 if not chunk:
@@ -1157,13 +1169,13 @@ def _bounded_process_output(proc: subprocess.Popen[bytes]) -> Tuple[bytes, bytes
                 if sum(len(output) for output in streams.values()) > SNAPSHOT_MAX_BYTES:
                     _kill_process_group(proc)
                     terminated = True
-                    raise RuntimeError("bearings snapshot exceeded size cap")
+                    raise RuntimeError(f"{label} exceeded size cap")
         try:
             proc.wait(timeout=max(0.1, deadline - time.monotonic()))
         except subprocess.TimeoutExpired as exc:
             _kill_process_group(proc)
             terminated = True
-            raise RuntimeError("bearings snapshot timed out") from exc
+            raise RuntimeError(f"{label} timed out") from exc
     finally:
         selector.close()
         if not terminated:
@@ -1172,10 +1184,12 @@ def _bounded_process_output(proc: subprocess.Popen[bytes]) -> Tuple[bytes, bytes
     return bytes(streams.get(proc.stdout, b"")), bytes(streams.get(proc.stderr, b""))
 
 
-def run_snapshot(home: Path, root: Path) -> Dict[str, Any]:
-    script = root / "bin" / "fm-bearings-snapshot.sh"
-    if not script.is_file():
-        raise RuntimeError(f"bearings snapshot missing: {script}")
+def _child_scratch_and_env(home: Path, root: Path) -> Tuple[Path, Dict[str, str]]:
+    """The scrubbed environment every read-only child runs in.
+
+    No parent secrets reach the child: only PATH, HOME, a private TMPDIR, a C
+    locale, and the two firstmate roots the scripts need to find this home.
+    """
     scratch = Path(os.environ.get("TMPDIR") or "/tmp") / f"fm-bridge-view-{os.getpid()}"
     scratch.mkdir(mode=0o700, exist_ok=True)
     env = {
@@ -1187,7 +1201,37 @@ def run_snapshot(home: Path, root: Path) -> Dict[str, Any]:
         "FM_HOME": str(home),
         "FM_ROOT_OVERRIDE": str(root),
     }
+    return scratch, env
+
+
+def _run_json_child(argv: List[str], home: Path, root: Path, label: str) -> Dict[str, Any]:
+    scratch, env = _child_scratch_and_env(home, root)
     proc = subprocess.Popen(
+        argv,
+        cwd=str(scratch),
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
+    stdout, stderr = _bounded_process_output(proc, label)
+    if proc.returncode != 0:
+        err = (stderr or stdout).decode("utf-8", "replace").strip()
+        raise RuntimeError(err or f"{label} exited {proc.returncode}")
+    try:
+        model = json.loads(stdout.decode("utf-8"))
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"{label} was not JSON: {exc}") from exc
+    if not isinstance(model, dict):
+        raise RuntimeError(f"{label} schema mismatch")
+    return model
+
+
+def run_snapshot(home: Path, root: Path) -> Dict[str, Any]:
+    script = root / "bin" / "fm-bearings-snapshot.sh"
+    if not script.is_file():
+        raise RuntimeError(f"bearings snapshot missing: {script}")
+    model = _run_json_child(
         [
             str(script),
             "--json",
@@ -1196,26 +1240,200 @@ def run_snapshot(home: Path, root: Path) -> Dict[str, Any]:
             "--all-decisions",
             "--all-queued",
         ],
-        cwd=str(scratch),
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        start_new_session=True,
+        home,
+        root,
+        "bearings snapshot",
     )
-    stdout, stderr = _bounded_process_output(proc)
-    if proc.returncode != 0:
-        err = (stderr or stdout).decode("utf-8", "replace").strip()
-        raise RuntimeError(err or f"bearings snapshot exited {proc.returncode}")
-    try:
-        model = json.loads(stdout.decode("utf-8"))
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"bearings snapshot was not JSON: {exc}") from exc
-    if not isinstance(model, dict) or model.get("schema") != "fm-bearings.v1":
+    if model.get("schema") != "fm-bearings.v1":
         raise RuntimeError("bearings snapshot schema mismatch")
     return model
 
 
+def run_deck(home: Path, root: Path) -> Dict[str, Any]:
+    """One `fm-deck.sh --json` read: the Action Deck's own collection and
+    reading rules, so /deck and the terminal pane can never disagree."""
+    script = root / "bin" / "fm-deck.sh"
+    if not script.is_file():
+        raise RuntimeError(f"action deck missing: {script}")
+    model = _run_json_child([str(script), "--json"], home, root, "action deck")
+    if model.get("schema") != DECK_SCHEMA:
+        raise RuntimeError("action deck schema mismatch")
+    return model
+
+
+def safe_https(url: str) -> Optional[str]:
+    """An ordinary HTTPS link a browser may follow, else None.
+
+    The same rule the pinned links use: https scheme, a host, no whitespace.
+    Anything else - a tray target such as hubspot://note-1, a report path under
+    data/, a bare word - is shown as text, never as a link, so this page can
+    open nothing on the Mac's filesystem and nothing over another scheme.
+    """
+    value = str(url or "").strip()
+    if not value or len(value) > 2048 or any(char.isspace() for char in value):
+        return None
+    parsed = urlparse(value)
+    if parsed.scheme != "https" or not parsed.netloc:
+        return None
+    return value
+
+
+def _link_fields(value: str) -> Dict[str, str]:
+    """{"url": ...} for a followable link, {"ref": ...} for text to show."""
+    href = safe_https(value)
+    if href:
+        return {"url": href}
+    text = str(value or "").strip()
+    return {"ref": text} if text else {}
+
+
+# Live asks come from workers that are stopped right now; a held backlog
+# decision is a queue the captain works through when he chooses. The terminal
+# ranks both in one list and cuts it at a limit; the page keeps them apart so
+# thirty-nine standing decisions never read as thirty-nine things due today.
+LIVE_ASKS = ("answer", "unblock", "review", "check")
+
+
+def project_deck(model: Dict[str, Any]) -> Dict[str, Any]:
+    """Shape the fm-deck.v1 model for the browser: links vetted, asks split,
+    completed work kept apart, nothing invented."""
+    needs = model.get("needs_you") if isinstance(model.get("needs_you"), dict) else {}
+    asks: List[Dict[str, Any]] = []
+    decisions: List[Dict[str, Any]] = []
+    for row in needs.get("rows") or []:
+        if not isinstance(row, dict):
+            continue
+        item = {
+            "ask": str(row.get("ask") or ""),
+            "title": str(row.get("title") or ""),
+            "project": str(row.get("project") or ""),
+        }
+        item.update(_link_fields(str(row.get("url") or "")))
+        if item["ask"] in LIVE_ASKS:
+            asks.append(item)
+        else:
+            decisions.append(item)
+    staged = model.get("staged") if isinstance(model.get("staged"), dict) else {}
+    groups = []
+    for group in staged.get("groups") or []:
+        if not isinstance(group, dict):
+            continue
+        cards = []
+        for card in group.get("cards") or []:
+            if not isinstance(card, dict):
+                continue
+            cards.append(
+                {
+                    "digest_short": str(card.get("digest_short") or ""),
+                    "action_kind": str(card.get("action_kind") or "-"),
+                    "target": str(card.get("target") or "-"),
+                    "requester_id": str(card.get("requester_id") or "-"),
+                    "age": str(card.get("age") or "-"),
+                    "expiry": str(card.get("expiry") or ""),
+                    "expired": bool(card.get("expired")),
+                }
+            )
+        groups.append(
+            {
+                "order": str(group.get("order") or "-"),
+                "count": len(cards),
+                "oldest": str(group.get("oldest") or "-"),
+                "status": group.get("status"),
+                "last_fire": group.get("last_fire"),
+                "cards": cards,
+            }
+        )
+    under_way = []
+    finished = []
+    for row in model.get("under_way") or []:
+        if not isinstance(row, dict):
+            continue
+        item = {
+            "outcome": str(row.get("outcome") or ""),
+            "project": str(row.get("project") or ""),
+            "state": str(row.get("state") or "unknown"),
+            "label": str(row.get("label") or "WAITING"),
+            "heard_secs": row.get("heard_secs") if isinstance(row.get("heard_secs"), int) else -1,
+        }
+        item.update(_link_fields(str(row.get("pr") or "")))
+        (finished if item["state"] == "done" else under_way).append(item)
+    landed = []
+    for row in model.get("just_in") or []:
+        if not isinstance(row, dict):
+            continue
+        item = {
+            "closed": str(row.get("closed") or ""),
+            "what": str(row.get("what") or ""),
+            "title": str(row.get("title") or ""),
+            "project": str(row.get("project") or ""),
+        }
+        item.update(_link_fields(str(row.get("artifact") or "")))
+        landed.append(item)
+    loose = model.get("loose_ends") if isinstance(model.get("loose_ends"), dict) else None
+    loose_out = None
+    if loose is not None:
+        loose_out = {
+            "path": str(loose.get("path") or ""),
+            "age_secs": loose.get("age_secs") if isinstance(loose.get("age_secs"), int) else -1,
+            "title": str(loose.get("title") or ""),
+            "total": int(loose.get("total") or 0),
+            "items": [
+                {"bucket": str(i.get("bucket") or ""), "text": str(i.get("text") or "")}
+                for i in (loose.get("items") or [])
+                if isinstance(i, dict)
+            ],
+        }
+    counts = model.get("counts") if isinstance(model.get("counts"), dict) else {}
+    return {
+        "schema": DECK_SCHEMA,
+        "home": str(model.get("home") or "this home"),
+        "read_at": model.get("now"),
+        "ready": [],
+        "ready_note": (
+            "Running from this page is not wired yet. The desk records approvals "
+            "and decisions but has no executor, so nothing here is one click from happening."
+        ),
+        "staged": {
+            "groups": groups,
+            "quiet_orders": [
+                {
+                    "order": str(o.get("order") or "-"),
+                    "status": str(o.get("status") or "UNKNOWN"),
+                    "last_fire": str(o.get("last_fire") or "-"),
+                }
+                for o in (staged.get("quiet_orders") or [])
+                if isinstance(o, dict)
+            ],
+            "missing": (
+                "Approval needs the captain secret on the desk (fm-action-gateway.sh approve), "
+                "and no executor is wired for any action kind yet."
+            ),
+        },
+        "asks": asks,
+        "decisions": decisions,
+        "backlog_reason": needs.get("backlog_reason"),
+        "unconfirmed": bool(needs.get("unconfirmed")),
+        "under_way": under_way,
+        "finished": finished,
+        "landed": landed,
+        "loose_ends": loose_out,
+        "counts": {
+            "asks": len(asks),
+            "decisions": len(decisions),
+            "staged": int(counts.get("staged") or 0),
+            "staged_oldest": counts.get("staged_oldest"),
+            "under_way": len(under_way),
+            "finished": len(finished),
+            "loose_ends": counts.get("loose_ends"),
+        },
+    }
+
+
 class SnapshotCache:
+    """One cached observation: about CACHE_TTL_SECONDS old at most, one refresh
+    at a time, and a stale copy never served as fresh. Subclasses override
+    _load() to read a different surface with the same discipline."""
+
     def __init__(self, home: Path, root: Path) -> None:
         self.home = home
         self.root = root
@@ -1224,6 +1442,14 @@ class SnapshotCache:
         self.payload: Optional[Dict[str, Any]] = None
         self.fetched_at = 0.0
         self.error: Optional[str] = None
+
+    def _load(self, started: float) -> Dict[str, Any]:
+        model = run_snapshot(self.home, self.root)
+        observation = project_observation(model)
+        observation["mailbox_listener"] = mailbox_listener_available()
+        observation["read_started"] = model.get("generated")
+        observation["server_unix"] = int(started)
+        return observation
 
     def get(self) -> Dict[str, Any]:
         now = time.monotonic()
@@ -1236,16 +1462,19 @@ class SnapshotCache:
                 if self.payload is not None and now - self.fetched_at < CACHE_TTL_SECONDS:
                     return dict(self.payload)
             started = time.time()
-            model = run_snapshot(self.home, self.root)
-            observation = project_observation(model)
-            observation["mailbox_listener"] = mailbox_listener_available()
-            observation["read_started"] = model.get("generated")
-            observation["server_unix"] = int(started)
+            observation = self._load(started)
             with self.lock:
                 self.payload = observation
                 self.fetched_at = time.monotonic()
                 self.error = None
             return dict(observation)
+
+
+class DeckCache(SnapshotCache):
+    def _load(self, started: float) -> Dict[str, Any]:
+        deck = project_deck(run_deck(self.home, self.root))
+        deck["server_unix"] = int(started)
+        return deck
 
 
 def csp(nonce: str) -> str:
@@ -1359,6 +1588,9 @@ button { background: #d7e0d8; color: #101418; font-weight: 600; }
 header { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; }
 form.logout { margin: 0; width: auto; }
 form.logout button { width: auto; min-height: 2rem; padding: 0.3rem 0.7rem; background: transparent; color: #c5d0c8; border-color: #3b4742; }
+.page-nav { display: flex; gap: 0.4rem; margin: 0.5rem 0 0.2rem; font-size: 0.92rem; }
+.page-nav a, .page-nav span { display: inline-flex; align-items: center; min-height: 2.2rem; padding: 0.2rem 0.75rem; border-radius: 999px; border: 1px solid #3b4742; text-decoration: none; color: #c5d0c8; }
+.page-nav span[aria-current] { background: #1b2220; color: #f2f4f3; }
 """
 
 PINNED_LINKS_CSS = """
@@ -1828,7 +2060,8 @@ def glance_html(nonce: str, home: Optional[Path] = None) -> str:
 <header>
   <h1>Starship</h1>
   <form class="logout" method="post" action="/logout"><button type="submit">Log out</button></form>
-</header>{links}
+</header>
+<nav class="page-nav" aria-label="Pages"><span aria-current="page">Fleet glance</span><a href="/deck">Action Deck</a></nav>{links}
 <h2>Talk</h2>
 <div id="speak-box">
   <label for="hold-speak">Hold to speak</label>
@@ -1861,6 +2094,316 @@ def glance_html(nonce: str, home: Optional[Path] = None) -> str:
 """
 
 
+DECK_CSS = """
+h2 { display: flex; justify-content: space-between; align-items: baseline; gap: 0.6rem; }
+h2 .count { font-size: 0.8rem; letter-spacing: 0; text-transform: none; color: #9aa7a0; }
+.group-head { color: #c5d0c8; font-size: 0.92rem; margin: 0.8rem 0 0.2rem; }
+li.card { padding: 0.7rem 0; }
+.card-top { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.kind { font-weight: 600; }
+.badge { font-size: 0.72rem; letter-spacing: 0.06em; text-transform: uppercase; border-radius: 999px; padding: 0.1rem 0.55rem; border: 1px solid #3b4742; color: #c5d0c8; }
+.badge.approval { border-color: #c084fc; color: #c084fc; }
+.badge.expired { border-color: #f87171; color: #f87171; }
+.target { font-size: 0.95rem; color: #f2f4f3; overflow-wrap: anywhere; }
+.next { color: #c5d0c8; font-size: 0.92rem; margin: 0.3rem 0 0; }
+.ask { display: inline-block; min-width: 4.2rem; font-size: 0.72rem; letter-spacing: 0.06em; text-transform: uppercase; border-radius: 0.3rem; padding: 0.15rem 0.45rem; margin-right: 0.55rem; background: #1b2220; color: #c5d0c8; border: 1px solid #3b4742; text-align: center; vertical-align: middle; }
+.ask-answer, .ask-decide { border-color: #c084fc; color: #c084fc; }
+.ask-unblock { border-color: #fb923c; color: #fb923c; }
+.ask-review { border-color: #34d399; color: #34d399; }
+.ask-check { border-color: #fbbf24; color: #fbbf24; }
+.label { font-size: 0.72rem; letter-spacing: 0.06em; color: #9aa7a0; margin-right: 0.5rem; vertical-align: middle; }
+.where, .when, .what { color: #9aa7a0; font-size: 0.9rem; }
+.what { text-transform: uppercase; letter-spacing: 0.04em; font-size: 0.72rem; margin: 0 0.4rem; }
+.ref { color: #c5d0c8; font-size: 0.9rem; overflow-wrap: anywhere; }
+.bucket { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; color: #fbbf24; margin-right: 0.5rem; }
+#deck-error { color: #f87171; font-size: 0.92rem; overflow-wrap: anywhere; }
+section[hidden] { display: none; }
+a[target] { text-decoration-thickness: 1px; }
+@media (min-width: 36rem) { li { font-size: 1rem; } }
+"""
+
+DECK_JS = """
+const STALE_MS = %d * 1000;
+const REFRESH_MS = %d * 1000;
+let lastSuccess = 0;
+let sampledAt = 0;
+let readSource = '';
+const REGIONS = ['ready', 'staged', 'asks', 'decisions', 'underway', 'landed', 'loose'];
+function esc(value) {
+  return String(value).replace(/[&<>"']/g, function(ch) {
+    return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]);
+  });
+}
+function setStale(on) {
+  const el = document.getElementById('stale');
+  if (el) el.classList.toggle('on', on);
+}
+function setText(id, text) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = text;
+}
+function setHtml(id, html) {
+  const el = document.getElementById(id);
+  if (el) el.innerHTML = html;
+}
+function show(id, on) {
+  const el = document.getElementById(id);
+  if (el) el.hidden = !on;
+}
+function age(secs) {
+  if (secs == null || secs < 0) return '';
+  if (secs < 60) return secs + 's';
+  if (secs < 3600) return Math.floor(secs / 60) + 'm';
+  if (secs < 86400) return Math.floor(secs / 3600) + 'h';
+  return Math.floor(secs / 86400) + 'd';
+}
+function link(item, text) {
+  const label = esc(text);
+  if (item.url && /^https:\\/\\//.test(item.url)) {
+    return '<a href="' + esc(item.url) + '" target="_blank" rel="noopener noreferrer">' + label + '</a>';
+  }
+  return label;
+}
+function ref(item) {
+  if (item.url && /^https:\\/\\//.test(item.url)) {
+    return ' <a class="ref" href="' + esc(item.url) + '" target="_blank" rel="noopener noreferrer">' + esc(item.url) + '</a>';
+  }
+  if (item.ref) return ' <span class="ref">' + esc(item.ref) + '</span>';
+  return '';
+}
+function dotClass(state) {
+  return ({parked: 'needs', failed: 'failed', blocked: 'stuck', working: 'under', paused: 'wait', done: 'ready'})[state] || 'wait';
+}
+function markUnreachable(detail) {
+  REGIONS.forEach(function(id) {
+    const root = document.getElementById(id);
+    if (root && root.textContent.indexOf('Loading') !== -1) {
+      root.innerHTML = '<p class="empty">Cannot reach the desk.</p>';
+    }
+  });
+  setText('deck-observed', 'Cannot reach the desk.');
+  setText('deck-error', detail || '');
+}
+function renderReady(data) {
+  const items = data.ready || [];
+  let html = items.length ? '<ul>' + items.map(function(i) { return '<li>' + esc(i.title || '') + '</li>'; }).join('') + '</ul>'
+    : '<p class="empty">Nothing is ready to run from here.</p>';
+  if (data.ready_note) html += '<p class="note">' + esc(data.ready_note) + '</p>';
+  setHtml('ready', html);
+  setText('ready-count', items.length ? String(items.length) : '0');
+}
+function card(c) {
+  const badges = '<span class="badge approval">needs approval</span>' + (c.expired ? '<span class="badge expired">expired</span>' : '');
+  const facts = ['staged ' + esc(c.age) + ' ago', esc(c.expiry), 'requested by ' + esc(c.requester_id), 'id ' + esc(c.digest_short)].filter(Boolean).join(' · ');
+  return '<li class="card"><div class="card-top"><span class="kind">' + esc(c.action_kind) + '</span>' + badges + '</div>' +
+    '<div class="target">' + esc(c.target) + '</div>' +
+    '<p class="meta">' + facts + '</p>' +
+    '<p class="next">Next: review and approve on the desk. Nothing on this page runs it.</p></li>';
+}
+function renderStaged(data) {
+  const staged = data.staged || {};
+  const groups = staged.groups || [];
+  let html = '';
+  if (!groups.length) html = '<p class="empty">Nothing is staged for you right now.</p>';
+  groups.forEach(function(g) {
+    const context = g.status != null ? esc(g.status) + ', last ran ' + esc(g.last_fire || '-') : 'no standing order on file';
+    html += '<p class="group-head">' + esc(g.order) + ' · ' + g.count + ' waiting, oldest ' + esc(g.oldest) + ' · ' + context + '</p>';
+    html += '<ul>' + (g.cards || []).map(card).join('') + '</ul>';
+  });
+  if (groups.length && staged.missing) html += '<p class="incomplete">Not available here: ' + esc(staged.missing) + '</p>';
+  const quiet = staged.quiet_orders || [];
+  if (quiet.length) {
+    html += '<p class="note">Watching, nothing staged: ' + quiet.map(function(o) {
+      return esc(o.order) + ' ' + esc(o.status) + ' (ran ' + esc(o.last_fire) + ')';
+    }).join(' · ') + '</p>';
+  }
+  setHtml('staged', html);
+  const n = (data.counts && data.counts.staged) || 0;
+  setText('staged-count', n ? n + (data.counts.staged_oldest ? ', oldest ' + data.counts.staged_oldest : '') : '0');
+}
+function askLine(row) {
+  const where = row.project && row.project !== '-' ? ' <span class="where">· ' + esc(row.project) + '</span>' : '';
+  return '<li><span class="ask ask-' + esc(row.ask) + '">' + esc(row.ask) + '</span>' + link(row, row.title || '') + where + '</li>';
+}
+function renderAsks(data) {
+  const rows = data.asks || [];
+  let html = '';
+  if (data.backlog_reason) html += '<p class="incomplete">' + esc(data.backlog_reason) + ', so rows it alone would raise are missing.</p>';
+  if (data.unconfirmed) html += '<p class="incomplete">Not confirmed here: the pull requests marked check come from the record this home keeps, not from the backlog.</p>';
+  html += rows.length ? '<ul>' + rows.map(askLine).join('') + '</ul>' : '<p class="empty">Nothing is waiting on you.</p>';
+  setHtml('asks', html);
+  setText('asks-count', String(rows.length));
+}
+function renderDecisions(data) {
+  const rows = data.decisions || [];
+  show('decisions-section', rows.length > 0);
+  if (!rows.length) { setHtml('decisions', ''); return; }
+  setHtml('decisions', '<details class="more-fold"><summary>' + rows.length + ' held decisions - show all</summary><ul>' +
+    rows.map(askLine).join('') + '</ul></details><p class="note">A standing queue you work through when you choose, not obligations due today.</p>');
+}
+function workerLine(w) {
+  const heard = age(w.heard_secs);
+  const tail = [w.project && w.project !== '-' ? esc(w.project) : '', heard ? 'heard ' + heard + ' ago' : 'not reported yet'].filter(Boolean).join(' · ');
+  return '<li><span class="dot ' + dotClass(w.state) + '"></span><span class="label">' + esc(w.label) + '</span>' + link(w, w.outcome || '') +
+    ' <span class="where">· ' + tail + '</span></li>';
+}
+function renderUnderWay(data) {
+  const rows = data.under_way || [];
+  const finished = data.finished || [];
+  let html = rows.length ? '<ul>' + rows.map(workerLine).join('') + '</ul>' : '<p class="empty">No work under way.</p>';
+  if (finished.length) {
+    html += '<details class="more-fold"><summary>' + finished.length + ' finished, awaiting cleanup</summary><ul>' + finished.map(workerLine).join('') + '</ul></details>';
+  }
+  setHtml('underway', html);
+  setText('underway-count', String(rows.length));
+}
+function landedLine(r) {
+  return '<li><span class="when">' + esc(r.closed || '-') + '</span><span class="what">' + esc(r.what) + '</span>' + esc(r.title || '') + ref(r) + '</li>';
+}
+function renderLanded(data) {
+  const rows = data.landed || [];
+  setHtml('landed', rows.length ? '<ul>' + rows.map(landedLine).join('') + '</ul>' : '<p class="empty">Nothing has landed recently.</p>');
+  setText('landed-count', String(rows.length));
+}
+function renderLoose(data) {
+  const loose = data.loose_ends;
+  show('loose-section', !!loose);
+  if (!loose) { setHtml('loose', ''); return; }
+  const swept = age(loose.age_secs);
+  let head = loose.total + ' open' + (swept ? ' · swept ' + swept + ' ago' : '') + (loose.title ? ' · ' + esc(loose.title) : '');
+  const items = loose.items || [];
+  let body = items.length ? '<ul>' + items.map(function(i) {
+    return '<li><span class="bucket">' + esc(i.bucket) + '</span>' + esc(i.text) + '</li>';
+  }).join('') + '</ul>' : '<p class="empty">Nothing urgent or waiting on the last sweep.</p>';
+  if (loose.path) body += '<p class="note">Full sweep: <span class="ref">' + esc(loose.path) + '</span></p>';
+  setHtml('loose', '<details class="more-fold"><summary>' + head + '</summary>' + body + '</details>' +
+    '<p class="note">Manual inbox items from the last sweep, kept apart from automatable actions.</p>');
+}
+function apply(data) {
+  lastSuccess = Date.now();
+  setStale(false);
+  setText('deck-error', '');
+  const sample = Number(data.read_at) || Number(data.server_unix) || 0;
+  sampledAt = sample > 0 ? sample * 1000 : 0;
+  readSource = ' · from the records ' + (data.home || 'this home') + ' keeps';
+  setText('deck-observed', readLabel() + readSource);
+  const c = data.counts || {};
+  setText('deck-counts', [
+    (c.asks || 0) + ' need you',
+    (c.staged || 0) + ' staged',
+    (c.decisions || 0) + ' held decisions',
+    (c.under_way || 0) + ' under way'
+  ].join(' · '));
+  renderReady(data);
+  renderStaged(data);
+  renderAsks(data);
+  renderDecisions(data);
+  renderUnderWay(data);
+  renderLanded(data);
+  renderLoose(data);
+}
+function readLabel() {
+  if (!sampledAt) return 'Read at an unknown time';
+  const seconds = Math.max(0, Math.round((Date.now() - sampledAt) / 1000));
+  return seconds < 5 ? 'Read just now' : 'Read ' + seconds + ' seconds ago';
+}
+function tickObserved() {
+  if (!lastSuccess) return;
+  const el = document.getElementById('deck-observed');
+  if (el && sampledAt) el.textContent = readLabel() + readSource;
+  if (Date.now() - lastSuccess > STALE_MS) setStale(true);
+}
+async function refresh() {
+  let detail = '';
+  try {
+    const ctl = new AbortController();
+    // Longer than the server's own child timeout, so a slow but successful
+    // read is reported rather than abandoned; the server answers 503 with the
+    // reason when the read itself gives up.
+    const timer = setTimeout(function() { detail = 'timed out waiting for the desk'; ctl.abort(); }, 25000);
+    const res = await fetch('/api/deck', { credentials: 'same-origin', cache: 'no-store', signal: ctl.signal });
+    clearTimeout(timer);
+    const payload = await res.json().catch(function() { return {}; });
+    if (!res.ok) {
+      detail = payload && payload.detail ? String(payload.detail) : ('status ' + res.status);
+      throw new Error(detail);
+    }
+    apply(payload);
+  } catch (err) {
+    if (!lastSuccess) {
+      // No full-page overlay on a first-load failure: it would cover the
+      // collector's reason. The header and every region say the desk is
+      // unreachable and #deck-error carries the reason. The overlay is
+      // reserved for a tab whose refreshes stop after a successful load.
+      markUnreachable(detail);
+    } else {
+      tickObserved();
+    }
+  }
+}
+document.addEventListener('DOMContentLoaded', function() {
+  refresh();
+  setInterval(refresh, REFRESH_MS);
+  setInterval(tickObserved, 1000);
+  document.addEventListener('visibilitychange', function() { if (!document.hidden) refresh(); });
+  window.addEventListener('pageshow', function() { refresh(); });
+});
+""" % (STALE_CLIENT_SECONDS, REFRESH_CLIENT_SECONDS)
+
+
+def deck_html(nonce: str, home: Optional[Path] = None) -> str:
+    """The Action Deck page: /deck on the same session, same headers, same
+    outward-link rule as the glance. It renders the fm-deck.v1 model the
+    terminal pane renders and exposes no approve, run, or merge control."""
+    links = pinned_links_html(home) if home is not None else ""
+    css = PAGE_CSS + DECK_CSS + (PINNED_LINKS_CSS if links else "")
+    loading = '<p class="empty">Loading…</p>'
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="referrer" content="no-referrer">
+<title>ACTION DECK</title>
+<style nonce="{nonce}">{css}</style>
+<script nonce="{nonce}">{DECK_JS}</script>
+</head>
+<body>
+<div id="stale">Cannot reach the desk.</div>
+<main>
+<header>
+  <h1>Action Deck</h1>
+  <form class="logout" method="post" action="/logout"><button type="submit">Log out</button></form>
+</header>
+<nav class="page-nav" aria-label="Pages"><a href="/">Fleet glance</a><span aria-current="page">Action Deck</span></nav>{links}
+<p class="meta" id="deck-observed">Reading the desk…</p>
+<p class="meta" id="deck-counts"></p>
+<p id="deck-error"></p>
+<p class="warn">View only. Nothing on this page approves, runs, or merges.</p>
+<h2>Ready to run <span class="count" id="ready-count"></span></h2>
+<div id="ready">{loading}</div>
+<h2>Staged, needs your approval <span class="count" id="staged-count"></span></h2>
+<div id="staged">{loading}</div>
+<h2>Needs you <span class="count" id="asks-count"></span></h2>
+<div id="asks">{loading}</div>
+<section id="decisions-section" hidden>
+<h2>Held decisions</h2>
+<div id="decisions"></div>
+</section>
+<h2>Under way <span class="count" id="underway-count"></span></h2>
+<div id="underway">{loading}</div>
+<h2>Recently landed <span class="count" id="landed-count"></span></h2>
+<details class="more-fold"><summary>Show recent completions</summary><div id="landed">{loading}</div></details>
+<section id="loose-section" hidden>
+<h2>Loose ends</h2>
+<div id="loose"></div>
+</section>
+</main>
+</body>
+</html>
+"""
+
+
 class BridgeState:
     def __init__(self, home: Path, root: Path, expected_host: str) -> None:
         self.home = home
@@ -1868,6 +2411,7 @@ class BridgeState:
         self.expected_host = expected_host.lower()
         self.sessions = SessionStore(bridge_dir(home) / "sessions.json")
         self.cache = SnapshotCache(home, root)
+        self.deck = DeckCache(home, root)
         self.passcode_path = bridge_dir(home) / "passcode.hash"
         self.login_lock = threading.Lock()
 
@@ -2041,6 +2585,24 @@ class BridgeHandler(BaseHTTPRequestHandler):
                 self._html(200, glance_html, home=STATE.home)
             else:
                 self._html(200, login_html)
+            return
+        if parsed.path == "/deck":
+            if self._authed():
+                self._html(200, deck_html, home=STATE.home)
+            else:
+                self._html(200, login_html)
+            return
+        if parsed.path == "/api/deck":
+            if not self._authed():
+                self._send(401, b'{"error":"unauthorized"}\n', "application/json")
+                return
+            try:
+                payload = STATE.deck.get()
+            except Exception as exc:
+                body = json.dumps({"error": "desk unreachable", "detail": str(exc)}).encode("utf-8")
+                self._send(503, body, "application/json")
+                return
+            self._send(200, json.dumps(payload).encode("utf-8"), "application/json")
             return
         if parsed.path == "/api/observation":
             if not self._authed():

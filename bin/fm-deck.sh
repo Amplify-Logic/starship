@@ -42,6 +42,12 @@
 # Usage:
 #   fm-deck.sh [--interval <secs>]   refresh until interrupted (default 15)
 #   fm-deck.sh --once                print one snapshot and exit
+#   fm-deck.sh --json                print one snapshot as the fm-deck.v1 JSON
+#                                    model and exit: the same collection and
+#                                    the same reading rules as the pane, for a
+#                                    second renderer such as the bridge's
+#                                    /deck page (docs/bridge-view.md). Model
+#                                    fields are owned by bin/fm-deck-render.py
 #   fm-deck.sh -h|--help
 #
 # Environment:
@@ -102,6 +108,7 @@ usage() {
   cat <<'EOF' >&2
 usage: fm-deck.sh [--interval <secs>]
        fm-deck.sh --once
+       fm-deck.sh --json
        fm-deck.sh -h|--help
 
 The captain's private Action Deck pane: staged actions awaiting his click, what
@@ -398,13 +405,19 @@ render() {  # <interval-or-empty>
   emit_payload "$1" | python3 "$SCRIPT_DIR/fm-deck-render.py" "$SECTION_MARK"
 }
 
+# The same payload, presented as the structured model instead of a frame.
+render_json() {
+  emit_payload '' | python3 "$SCRIPT_DIR/fm-deck-render.py" --json "$SECTION_MARK"
+}
+
 main() {
-  local interval=$DEFAULT_INTERVAL once=0 frame
+  local interval=$DEFAULT_INTERVAL once=0 as_json=0 frame
 
   while [ "$#" -gt 0 ]; do
     case "$1" in
       -h|--help) usage; exit 0 ;;
       --once) once=1; shift ;;
+      --json) as_json=1; shift ;;
       --interval)
         [ "$#" -ge 2 ] || fail "--interval requires seconds"
         case "$2" in
@@ -423,6 +436,10 @@ main() {
 
   command -v python3 >/dev/null 2>&1 || fail "python3 not found"
 
+  if [ "$as_json" -eq 1 ]; then
+    render_json
+    return 0
+  fi
   if [ "$once" -eq 1 ]; then
     render ''
     return 0

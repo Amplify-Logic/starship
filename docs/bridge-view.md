@@ -134,7 +134,31 @@ The bridge log records `speak audio bytes=` for each `/speak` request so a trunc
 
 Existing `form-action 'self'` and `connect-src 'self'` CSP directives cover the form and `fetch`; scripts and styles stay nonce-based.
 
-There is still no approve, merge, or spawn control on this page.
+There is still no approve, merge, or spawn control on this page or on `/deck`.
+
+## Action Deck page (`/deck`)
+
+`/deck` is the private web rendering of the captain's Action Deck, on the same server, session cookie, Host check, security headers and loopback-plus-Serve publish path as the glance.
+The glance and the deck link to each other through a small page nav under each header.
+An unauthenticated `/deck` shows Log in; `/api/deck` answers 401.
+
+The page renders the `fm-deck.v1` model that `bin/fm-deck.sh --json` emits, so the web deck and the terminal pane read the same records through the same selection rules and can never answer "what needs you" differently.
+The server runs that read as a scrubbed, bounded child exactly like the bearings snapshot, caches one model for about 30 seconds, and returns 503 with the collector's own reason when the read fails; the page then shows "Cannot reach the desk" in the header and every region with that reason beneath, and does not raise the full-page overlay over it (the overlay is only for a tab whose refreshes stop after a successful load).
+`bin/fm-deck.sh`'s header owns what each section reads; `bin/fm-deck-render.py` owns the model's fields.
+
+What the page shows, and in this order: ready to run, staged actions that need approval, live asks that need the captain, held backlog decisions, work under way, recent completions, and the loose-ends sweep.
+Live asks (answer, unblock, review, check) are the headline; held backlog decisions are a separate collapsed queue with their own count, so standing holds never read as obligations due today.
+Finished workers and completed backlog items are folded away from the actionable lists.
+Loose ends are a collapsed fold labelled as manual inbox items, kept apart from automatable actions.
+
+The page acts on nothing.
+It carries no approve, run, or merge control, and "Ready to run" is honest about why it is empty: the action gateway records approvals and decisions but has no executor, and approval needs the captain secret on the desk.
+Each staged card says so beside its next step rather than showing a disabled or fake control.
+Wiring approval or execution into the page is a separate slice that must go through the gateway's own choke point and privilege separation, never through a new endpoint on this server.
+
+Outward links follow one rule for every row: an ordinary `https://` URL with a host and no whitespace is a clickable link that opens in a new tab with `noopener noreferrer`; anything else (a tray target such as `device://…`, a report path under `data/`, a bare token) is shown as text.
+The server applies that rule before the model reaches the browser, so the page can open nothing on the Mac's filesystem and nothing over another scheme.
+Every string in the model passes the same control-character scrub the terminal renderer applies.
 
 ## Watcher check
 

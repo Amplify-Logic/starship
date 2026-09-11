@@ -4,7 +4,8 @@
 # Serves one small Python 3 standard-library HTTP server on IPv4 loopback and
 # exposes it on the tailnet with Tailscale Serve HTTPS. It never binds
 # 0.0.0.0, never enables Funnel, and never writes backlog or fleet state.
-# The observation is `fm-bearings-snapshot.sh --json --passive-view`.
+# The observation is `fm-bearings-snapshot.sh --json --passive-view`; the
+# /deck page reads `fm-deck.sh --json` the same bounded way (docs/bridge-view.md).
 # Optional pinned links are read from config/bridge-links on every page render.
 # Authenticated photo drops land in data/bridge-inbox/. Authenticated
 # hold-to-speak audio is forwarded into the local glasses mailbox; the

@@ -40,7 +40,7 @@ Exact flags, Status rewrite rules, and refusal text are owned by each script's h
   Arm, disarm, and graduate require `--by-captain`.
   Graduate calls `fm-action-gateway.sh classify` and refuses any kind that classifier treats as non-graduatable.
 - `bin/fm-tray.sh` - pending table, `counts` line (`TRAY <n> · OLDEST <age>`), `json` (the same rows structured, for a renderer that regroups them), and `show <digest>`.
-- `bin/fm-deck.sh` - the private pane: default refresh, `--once` for one snapshot, `--interval <secs>`.
+- `bin/fm-deck.sh` - the private pane: default refresh, `--once` for one snapshot, `--interval <secs>`, and `--json` for the `fm-deck.v1` model the bridge's `/deck` page renders ([`bridge-view.md`](bridge-view.md#action-deck-page-deck)).
   Its header owns the section list, the sources each section reads, and the line that registers it as a tab in the captain's Herdr workspace.
 
 New outward kinds for this slice live in the gateway's deny-by-default registry: `device.config.push` and `device.firmware.push` (irreversible), `kb.fact.publish`, `course.publish`, and `sheet.write` (external).

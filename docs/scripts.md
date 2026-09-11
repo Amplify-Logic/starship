@@ -30,7 +30,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-decision-surface.sh` | Render, poll, and route the private loopback Lavish surface over captain decisions   |
 | `fm-read.sh`             | Render a Markdown path or task report as a private loopback Lavish reading page      |
 | `fm-chart-room.sh`       | Serve the private read-only chart room: fleet home, per-project goal maps, rendered fresh on every request (docs/chart-room.md) |
-| `fm-bridge-view.sh`      | Serve the captain's phone-first fleet glance, photo drop, and hold-to-speak on loopback behind Tailscale Serve (docs/bridge-view.md) |
+| `fm-bridge-view.sh`      | Serve the captain's phone-first fleet glance, the `/deck` Action Deck page, photo drop, and hold-to-speak on loopback behind Tailscale Serve (docs/bridge-view.md) |
 | `fm-overlay.sh`          | Open a Markdown view as an in-terminal Herdr overlay pane, degrading to a printed pointer to the same content; installs nothing and is called nowhere by default (docs/chart-room.md) |
 | `fm-present.sh`          | Present a captain-action artifact once per unchanged milestone through its existing local owner |
 | `fm-adhd.sh`             | Bounded ADHD divergent-ideation wrapper; writes distilled CLI output and refuses when `adhd` is absent (docs/adhd.md) |
@@ -39,7 +39,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-action-gateway.sh`   | Privilege-separated confirm-first action broker: digest-bound captain approval, locked state machine, hard spend/messaging ceilings, execution stubbed (docs/action-gateway.md) |
 | `fm-order.sh`            | Standing Order list/show/run/log-fire/arm/disarm/graduate over `data/orders/<slug>.md`; arming requires `--by-captain` (docs/ops-command-center.md) |
 | `fm-tray.sh`             | Read-only pending-action renderer over the action-gateway audit log; age is the headline; never approves (docs/ops-command-center.md) |
-| `fm-deck.sh`             | Refreshing captain-private Action Deck pane: what is waiting on the captain above the fold, then what is moving; composes records this home already keeps and mutates none of them (docs/ops-command-center.md) |
+| `fm-deck.sh`             | Refreshing captain-private Action Deck pane: what is waiting on the captain above the fold, then what is moving; composes records this home already keeps and mutates none of them; `--json` emits the same model for the bridge's `/deck` page (docs/ops-command-center.md, docs/bridge-view.md) |
 | `fm-action-gateway-v2.py` | Exercise gateway v2 strict parsing, immutable plans, SQLite state, and narrow peer-authenticated protocols in unprivileged test mode with all execution disabled (docs/action-gateway-v2.md) |
 | `fm-worker-boundary-regression.sh` | Run the synthetic unprivileged adversarial isolation pack for ambient, restricted-account, and nested-container targets (docs/worker-boundary-regression.md) |
 | `fm-harness-exam.sh`     | Re-verify one worker adapter's eight runtime properties against a real runtime in an isolated lab home and score them from outside the pane (docs/harness-exam.md) |

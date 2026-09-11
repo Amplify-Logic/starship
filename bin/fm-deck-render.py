@@ -5,6 +5,14 @@ bin/fm-deck.sh collects every source and pipes one sentinel-delimited payload
 here; this file is presentation only. It reads no files, runs no commands, and
 holds nothing between frames. Section semantics, source ownership, and the
 Herdr registration line live in bin/fm-deck.sh's header.
+
+Two renderings share one reading of the payload. The default draws the
+terminal frame. `--json` (before the sentinel) emits the same sections as one
+structured model, schema `fm-deck.v1`, so a second surface - the bridge's
+/deck page - shows exactly what the pane shows without re-deriving "what needs
+you" from the raw records. Every selection rule (which worker asks for what,
+which pull request is unconfirmed, which staged card is expired) lives in the
+*_rows and *_groups helpers below and is consumed by both renderings.
 """
 
 import csv
@@ -373,58 +381,96 @@ def parse_loose_ends(text):
 # --- section builders -------------------------------------------------------
 
 
-def build_staged(tray, orders, width):
-    """Staged actions awaiting his click, grouped by standing order."""
-    lines = []
-    if not tray:
-        lines.append("  nothing staged for you right now")
-    else:
-        groups = {}
-        for row in tray:
-            groups.setdefault(str(row.get("domain") or "-"), []).append(row)
-        # Oldest card first inside a group, and the group holding the oldest
-        # card first overall: age is the headline.
-        ordered = sorted(
-            groups.items(),
-            key=lambda kv: -max(to_int(r.get("age_secs"), 0) for r in kv[1]),
-        )
-        for slug, rows in ordered:
-            rows.sort(key=lambda r: -to_int(r.get("age_secs"), 0))
-            oldest = format_age(to_int(rows[0].get("age_secs"), -1))
-            order = orders.get(slug)
-            if order:
-                context = "%s · last ran %s" % (order["status"], order["last_fire"])
-            else:
-                context = "no standing order on file"
-            lines.append(
-                "  %s  —  %d waiting, oldest %s  ·  %s"
-                % (slug, len(rows), oldest, context)
+def expiry_text(row):
+    """One phrase for a staged card's expiry: EXPIRED, no expiry, expires in 2h."""
+    expiry = str(row.get("expiry") or "-")
+    if row.get("expired"):
+        return "EXPIRED"
+    if expiry == "-":
+        return "no expiry"
+    return "expires in " + expiry
+
+
+def staged_groups(tray, orders):
+    """Staged cards grouped by standing order, plus the orders with none.
+
+    Oldest card first inside a group, and the group holding the oldest card
+    first overall: age is the headline. Returns (groups, quiet_orders) where
+    each group is {"order", "count", "oldest", "status", "last_fire", "cards"}
+    with status and last_fire None when no standing order is on file.
+    """
+    grouped = {}
+    for row in tray:
+        grouped.setdefault(str(row.get("domain") or "-"), []).append(row)
+    ordered = sorted(
+        grouped.items(),
+        key=lambda kv: -max(to_int(r.get("age_secs"), 0) for r in kv[1]),
+    )
+    groups = []
+    for slug, rows in ordered:
+        rows = sorted(rows, key=lambda r: -to_int(r.get("age_secs"), 0))
+        order = orders.get(slug)
+        cards = []
+        for row in rows:
+            cards.append(
+                {
+                    "digest": str(row.get("digest") or ""),
+                    "digest_short": str(row.get("digest_short") or "")[:12],
+                    "action_kind": str(row.get("action_kind") or "-"),
+                    "target": str(row.get("target") or "-"),
+                    "requester_id": str(row.get("requester_id") or "-"),
+                    "age": str(row.get("age") or "-"),
+                    "age_secs": to_int(row.get("age_secs"), -1),
+                    "expiry": expiry_text(row),
+                    "expired": bool(row.get("expired")),
+                }
             )
-            for row in rows:
-                expiry = str(row.get("expiry") or "-")
-                if row.get("expired"):
-                    expiry_text = "EXPIRED"
-                elif expiry == "-":
-                    expiry_text = "no expiry"
-                else:
-                    expiry_text = "expires in " + expiry
-                lines.append(
-                    "      %s %s %s %s"
-                    % (
-                        pad(clip(row.get("age", "-"), 5), 5),
-                        pad(clip(expiry_text, 14), 14),
-                        pad(clip(row.get("action_kind", "-"), 22), 22),
-                        clip(row.get("target", "-"), max(10, width - 55)),
-                    )
-                )
+        groups.append(
+            {
+                "order": slug,
+                "count": len(cards),
+                "oldest": format_age(to_int(rows[0].get("age_secs"), -1)),
+                "status": order["status"] if order else None,
+                "last_fire": order["last_fire"] if order else None,
+                "cards": cards,
+            }
+        )
     quiet = [
-        o
+        {"order": o["slug"], "status": o["status"], "last_fire": o["last_fire"]}
         for slug, o in sorted(orders.items())
         if not any(str(r.get("domain")) == slug for r in tray)
     ]
+    return groups, quiet
+
+
+def build_staged(tray, orders, width):
+    """Staged actions awaiting his click, grouped by standing order."""
+    groups, quiet = staged_groups(tray, orders)
+    lines = []
+    if not groups:
+        lines.append("  nothing staged for you right now")
+    for group in groups:
+        if group["status"] is not None:
+            context = "%s · last ran %s" % (group["status"], group["last_fire"])
+        else:
+            context = "no standing order on file"
+        lines.append(
+            "  %s  —  %d waiting, oldest %s  ·  %s"
+            % (group["order"], group["count"], group["oldest"], context)
+        )
+        for card in group["cards"]:
+            lines.append(
+                "      %s %s %s %s"
+                % (
+                    pad(clip(card["age"], 5), 5),
+                    pad(clip(card["expiry"], 14), 14),
+                    pad(clip(card["action_kind"], 22), 22),
+                    clip(card["target"], max(10, width - 55)),
+                )
+            )
     if quiet:
         summary = " · ".join(
-            "%s %s (ran %s)" % (o["slug"], o["status"], o["last_fire"]) for o in quiet
+            "%s %s (ran %s)" % (o["order"], o["status"], o["last_fire"]) for o in quiet
         )
         lines.append("  watching, nothing staged: " + clip(summary, max(20, width - 30)))
     return lines
@@ -474,13 +520,14 @@ def backlog_note(status, width, fallback):
     return lines
 
 
-def build_needs_you(tasks, backlog, limit, width, backlog_status="ok"):
+def needs_you_rows(tasks, backlog, backlog_status="ok"):
     """Everything that cannot move without him, most immediate first.
 
-    A worker's own status note never reaches this pane. Those notes are written
-    for firstmate and carry pipeline vocabulary; the captain gets the outcome
-    the work was commissioned for plus what is being asked of him. The detail
-    lives one command away, on the decision surface.
+    Returns the sorted list of (ask, title, url, where) tuples both renderings
+    show. A worker's own status note never reaches either surface. Those notes
+    are written for firstmate and carry pipeline vocabulary; the captain gets
+    the outcome the work was commissioned for plus what is being asked of him.
+    The detail lives one command away, on the decision surface.
     """
     backlog_readable = backlog_status not in BACKLOG_UNAVAILABLE
     rows = []
@@ -551,11 +598,17 @@ def build_needs_you(tasks, backlog, limit, width, backlog_status="ok"):
             continue
         rows.append(("decide", row.get("title", ""), "", row.get("repo", "")))
 
+    rows.sort(key=lambda r: NEEDS_RANK.get(r[0], 9))
+    return rows
+
+
+def build_needs_you(tasks, backlog, limit, width, backlog_status="ok"):
+    """The NEEDS YOU section: needs_you_rows drawn to the frame width."""
+    rows = needs_you_rows(tasks, backlog, backlog_status)
     if not rows:
         note = backlog_note(backlog_status, width, False)
         return note + ["  nothing is waiting on you"], 0
 
-    rows.sort(key=lambda r: NEEDS_RANK.get(r[0], 9))
     shown = rows[:limit]
 
     # After the slice, and over the slice: "check" is the lowest-ranked ask, so
@@ -610,19 +663,40 @@ LABEL_COL = 11
 UNDER_WAY_FIXED = 2 + ICON_COL + 1 + LABEL_COL + 1 + 2 + PROJECT_COL + 1 + HEARD_COL
 
 
-def build_under_way(tasks, vocab, width):
-    if not tasks:
-        return ["  no work under way"]
+def under_way_rows(tasks, vocab):
+    """Every recorded worker, most urgent first, with its captain-facing label."""
     ordered = sorted(
         tasks, key=lambda t: (STATE_RANK.get(t["state"], 9), -t["heard"])
     )
+    rows = []
+    for task in ordered:
+        label, icon = vocab.get(task["state"], ("WAITING", "\U0001f7e1"))
+        rows.append(
+            {
+                "id": task["id"],
+                "kind": task["kind"],
+                "project": task["project"],
+                "outcome": task["outcome"],
+                "state": task["state"],
+                "label": label,
+                "icon": icon,
+                "heard_secs": task["heard"],
+                "pr": task["pr"],
+            }
+        )
+    return rows
+
+
+def build_under_way(tasks, vocab, width):
+    if not tasks:
+        return ["  no work under way"]
     # Fixed columns: he scans this section down the state dot, so the outcome
     # column cannot shift width from row to row.
     outcome_col = max(20, width - UNDER_WAY_FIXED)
     lines = []
-    for task in ordered:
-        label, icon = vocab.get(task["state"], ("WAITING", "\U0001f7e1"))
-        heard = format_age(task["heard"])
+    for task in under_way_rows(tasks, vocab):
+        label, icon = task["label"], task["icon"]
+        heard = format_age(task["heard_secs"])
         heard_text = ("heard %s ago" % heard) if heard != "-" else "not reported yet"
         lines.append(
             "  %s %s %s  %s %s"
@@ -645,13 +719,12 @@ def short_date(value):
         return value or "-"
 
 
-def build_just_in(backlog, limit, width):
+def just_in_rows(backlog):
+    """Completed backlog items, newest first, each with the artifact it left."""
     done = [r for r in backlog if r.get("state") == "done"]
-    if not done:
-        return ["  nothing has landed recently"]
     done.sort(key=lambda r: r.get("closed", ""), reverse=True)
-    lines = []
-    for row in done[:limit]:
+    rows = []
+    for row in done:
         links = row["link_map"]
         if "pr" in links:
             what, artifact = "merged", links["pr"]
@@ -659,16 +732,35 @@ def build_just_in(backlog, limit, width):
             what, artifact = "findings", links["report"]
         else:
             what, artifact = "settled", ""
+        rows.append(
+            {
+                "id": row.get("id", ""),
+                "closed": row.get("closed", ""),
+                "what": what,
+                "title": row.get("title", ""),
+                "artifact": artifact,
+                "project": row.get("repo", ""),
+            }
+        )
+    return rows
+
+
+def build_just_in(backlog, limit, width):
+    done = just_in_rows(backlog)
+    if not done:
+        return ["  nothing has landed recently"]
+    lines = []
+    for row in done[:limit]:
         lines.append(
             "  %s %s %s"
             % (
-                pad(short_date(row.get("closed", "")), 7),
-                pad(what, 9),
-                clip(row.get("title", ""), max(20, width - 21)),
+                pad(short_date(row["closed"]), 7),
+                pad(row["what"], 9),
+                clip(row["title"], max(20, width - 21)),
             )
         )
-        if artifact:
-            lines.append("          " + artifact)
+        if row["artifact"]:
+            lines.append("          " + row["artifact"])
     return lines
 
 
@@ -699,27 +791,127 @@ def heading(title, width):
     return label + "─" * max(0, width - display_width(label))
 
 
-def main():
-    mark = sys.argv[1] if len(sys.argv) > 1 else "__FM_DECK_SECTION__"
-    sections = parse_payload(sys.stdin, mark)
-
-    now = to_int(first_line(sections.get("now", "")), int(time.time()))
-    width = to_int(first_line(sections.get("width", "")), 100)
-    width = max(MIN_WIDTH, min(MAX_WIDTH, width))
-    home = first_line(sections.get("home", "")) or "this home"
-    interval = first_line(sections.get("interval", ""))
+def read_payload(stream, mark):
+    """Parse every section once, for whichever rendering is asked for."""
+    sections = parse_payload(stream, mark)
     limits = first_line(sections.get("limits", "")).split("\t")
-    just_in_limit = to_int(limits[0] if limits else "", JUST_IN_DEFAULT)
-    loose_limit = to_int(limits[1] if len(limits) > 1 else "", LOOSE_ENDS_DEFAULT)
-    needs_limit = to_int(limits[2] if len(limits) > 2 else "", NEEDS_YOU_DEFAULT)
+    return {
+        "now": to_int(first_line(sections.get("now", "")), int(time.time())),
+        "width": max(
+            MIN_WIDTH,
+            min(MAX_WIDTH, to_int(first_line(sections.get("width", "")), 100)),
+        ),
+        "home": first_line(sections.get("home", "")) or "this home",
+        "interval": first_line(sections.get("interval", "")),
+        "just_in_limit": to_int(limits[0] if limits else "", JUST_IN_DEFAULT),
+        "loose_limit": to_int(limits[1] if len(limits) > 1 else "", LOOSE_ENDS_DEFAULT),
+        "needs_limit": to_int(limits[2] if len(limits) > 2 else "", NEEDS_YOU_DEFAULT),
+        "vocab": parse_vocabulary(sections.get("vocabulary", "")),
+        "tray": parse_tray(sections.get("tray", "")),
+        "orders": parse_orders(sections.get("orders", "")),
+        "backlog": parse_backlog(sections.get("backlog", "")),
+        "backlog_status": first_line(sections.get("backlog_status", "")) or "ok",
+        "tasks": parse_tasks(sections.get("tasks", "")),
+        "loose": parse_loose_ends(sections.get("loose_ends", "")),
+    }
 
-    vocab = parse_vocabulary(sections.get("vocabulary", ""))
-    tray = parse_tray(sections.get("tray", ""))
-    orders = parse_orders(sections.get("orders", ""))
-    backlog = parse_backlog(sections.get("backlog", ""))
-    backlog_status = first_line(sections.get("backlog_status", "")) or "ok"
-    tasks = parse_tasks(sections.get("tasks", ""))
-    loose = parse_loose_ends(sections.get("loose_ends", ""))
+
+def scrub_deep(value):
+    """scrub() applied through a JSON model, so a browser renderer receives
+    the same control-character-free text the terminal does."""
+    if isinstance(value, str):
+        return scrub(value)
+    if isinstance(value, list):
+        return [scrub_deep(item) for item in value]
+    if isinstance(value, dict):
+        return {key: scrub_deep(item) for key, item in value.items()}
+    return value
+
+
+def build_model(payload):
+    """The `fm-deck.v1` structured model: the pane's sections, unclipped.
+
+    Limits are reported, not applied - a web renderer folds the remainder
+    instead of dropping it, so nothing that the terminal would count as
+    "+n more" goes missing here. `needs_you.rows` is the same sorted list the
+    terminal draws, `unconfirmed` mirrors the terminal's caveat about pull
+    requests that come from this home's own record, and completed work sits
+    only in `just_in` so a renderer cannot mistake it for something to act on.
+    """
+    tray = payload["tray"]
+    groups, quiet = staged_groups(tray, payload["orders"])
+    needs = needs_you_rows(payload["tasks"], payload["backlog"], payload["backlog_status"])
+    backlog_reason = BACKLOG_UNAVAILABLE.get(payload["backlog_status"])
+    loose = payload["loose"]
+    oldest = max((to_int(r.get("age_secs"), 0) for r in tray), default=-1)
+    model = {
+        "schema": "fm-deck.v1",
+        "now": payload["now"],
+        "home": payload["home"],
+        "limits": {
+            "needs_you": payload["needs_limit"],
+            "loose_ends": payload["loose_limit"],
+            "just_in": payload["just_in_limit"],
+        },
+        "counts": {
+            "needs_you": len(needs),
+            "staged": len(tray),
+            "staged_oldest": format_age(oldest) if tray else None,
+            "loose_ends": loose["total"] if loose is not None else None,
+            "under_way": len(payload["tasks"]),
+        },
+        "staged": {"groups": groups, "quiet_orders": quiet},
+        "needs_you": {
+            "rows": [
+                {"ask": ask, "title": title, "url": url, "project": where}
+                for ask, title, url, where in needs
+            ],
+            "backlog_status": payload["backlog_status"],
+            "backlog_reason": backlog_reason,
+            "unconfirmed": any(ask == "check" for ask, _t, _u, _w in needs),
+        },
+        "loose_ends": None
+        if loose is None
+        else {
+            "path": loose["path"],
+            "age_secs": loose["age"],
+            "title": loose["title"],
+            "total": loose["total"],
+            "items": [{"bucket": bucket, "text": text} for bucket, text in loose["items"]],
+        },
+        "under_way": under_way_rows(payload["tasks"], payload["vocab"]),
+        "just_in": just_in_rows(payload["backlog"]),
+    }
+    return scrub_deep(model)
+
+
+def main():
+    args = sys.argv[1:]
+    as_json = False
+    if args and args[0] == "--json":
+        as_json = True
+        args = args[1:]
+    mark = args[0] if args else "__FM_DECK_SECTION__"
+    payload = read_payload(sys.stdin, mark)
+
+    if as_json:
+        sys.stdout.write(json.dumps(build_model(payload), ensure_ascii=False) + "\n")
+        return
+
+    now = payload["now"]
+    width = payload["width"]
+    home = payload["home"]
+    interval = payload["interval"]
+    just_in_limit = payload["just_in_limit"]
+    loose_limit = payload["loose_limit"]
+    needs_limit = payload["needs_limit"]
+    vocab = payload["vocab"]
+    tray = payload["tray"]
+    orders = payload["orders"]
+    backlog = payload["backlog"]
+    backlog_status = payload["backlog_status"]
+    tasks = payload["tasks"]
+    loose = payload["loose"]
 
     staged = build_staged(tray, orders, width)
     needs_you, needs_count = build_needs_you(
