@@ -8,6 +8,9 @@
 #   - the lock-refusal read-only path: banner leads, every mutating step is
 #     skipped (including bootstrap's five mutating sweeps, verified by their
 #     ABSENCE), the digest still completes
+#   - one truthful banner headline per lock-failure cause - competing session,
+#     this session's own runtime unidentifiable, anything else - with identical
+#     read-only posture behind all three
 #   - output section ordering: diagnostics/banners lead, bulk file dumps follow
 #   - context-aware next-step guidance for read-only, AFK, X mode, and normal
 #     watcher ownership
@@ -156,6 +159,47 @@ SH
   printf '%s\n' "$harness" > "$fakebin/.harness-name"
 }
 
+# make_fake_ps_unidentifiable <fakebin>: every queried pid is an ordinary login
+# shell, so fm-lock.sh's ancestry walk finds no harness process at all and the
+# session cannot identify ITSELF. This is the shape the Cursor primary hit on
+# 2026-09-12 before its bundle path was recognized; no lock holder is involved.
+make_fake_ps_unidentifiable() {
+  local fakebin=$1
+  cat > "$fakebin/ps" <<'SH'
+#!/usr/bin/env bash
+set -u
+case "$*" in
+  *"comm="*) printf '%s\n' /bin/zsh; exit 0 ;;
+  *"args="*) printf '%s\n' -zsh; exit 0 ;;
+  *"ppid="*) printf '%s\n' 1; exit 0 ;;
+esac
+exit 1
+SH
+  chmod +x "$fakebin/ps"
+}
+
+# make_stubbed_lock_tree <dir> <exit-code>: a bin/ of symlinks to the real
+# scripts with ONE real stub in place of fm-lock.sh, plus a docs/ symlink so the
+# supervision block still renders. Echoes the session-start entrypoint to run.
+# The generic banner branch covers any FUTURE fm-lock.sh acquire failure, which
+# by definition no real failure produces yet, so the refusal has to be injected.
+make_stubbed_lock_tree() {  # <dir> <exit-code>
+  local dir=$1 code=$2 f
+  mkdir -p "$dir/bin"
+  for f in "$ROOT"/bin/*; do
+    ln -s "$f" "$dir/bin/${f##*/}"
+  done
+  ln -s "$ROOT/docs" "$dir/docs"
+  rm -f "$dir/bin/fm-lock.sh"
+  cat > "$dir/bin/fm-lock.sh" <<SH
+#!/usr/bin/env bash
+echo "error: the lock file could not be written" >&2
+exit $code
+SH
+  chmod +x "$dir/bin/fm-lock.sh"
+  printf '%s\n' "$dir/bin/fm-session-start.sh"
+}
+
 make_fake_ps_pi_holder() {
   local fakebin=$1 holder_pid=$2
   cat > "$fakebin/ps" <<SH
@@ -234,18 +278,30 @@ SH
   chmod +x "$fakebin/herdr"
 }
 
-# run_session_start <home> <root> <path>
+# run_session_start [--entry <script>] <home> <root> <path> [VAR=VALUE ...]
 # Drop every harness env marker from bin/fm-harness.sh detect_own so the
 # surrounding interactive shell cannot leak past the suite's fake ps harness.
-# Markers today: CLAUDECODE (claude), PI_CODING_AGENT (pi), GROK_AGENT (grok).
-# codex and opencode have no env markers (ancestry only). Without this, a local
-# claude/pi/grok session fails cases that pin a different fake harness while CI
-# (no ambient markers) still passes.
+# Markers today: CLAUDECODE (claude), PI_CODING_AGENT (pi), GROK_AGENT (grok),
+# CURSOR_AGENT (cursor), and FM_PRIMARY_HARNESS, which bin/fm-primary.sh exports
+# for every primary it launches and which detect_own reads ahead of any ancestry
+# walk. codex and opencode have no env markers (ancestry only).
+# Without this, running the suite from inside a real primary fails every case
+# that pins a different fake harness while CI (no ambient markers) still passes.
+# A case that needs a pinned runtime passes it as a trailing VAR=VALUE argument,
+# which lands after the -u flags and therefore survives the drop.
+# --entry runs a stand-in entrypoint, such as a stubbed bin/ tree, through this
+# one marker list so a case needing a different script never restates it.
 run_session_start() {
+  local entry=$SESSION_START
+  if [ "$1" = --entry ]; then
+    entry=$2
+    shift 2
+  fi
   local home=$1 root=$2 path=$3
-  env -u CLAUDECODE -u PI_CODING_AGENT -u GROK_AGENT \
-    FM_HOME="$home" FM_ROOT_OVERRIDE="$root" PATH="$path" \
-    "$SESSION_START"
+  shift 3
+  env -u CLAUDECODE -u PI_CODING_AGENT -u GROK_AGENT -u CURSOR_AGENT -u FM_PRIMARY_HARNESS \
+    FM_HOME="$home" FM_ROOT_OVERRIDE="$root" PATH="$path" "$@" \
+    "$entry"
 }
 
 hash_file_for_test() {
@@ -437,8 +493,11 @@ EOF
   wait "$holder_pid" 2>/dev/null || true
 
   expect_code 0 "$status" "fm-session-start.sh must exit 0 even on a lock refusal"
-  assert_contains "$out" "READ-ONLY SESSION" "read-only banner missing on lock refusal"
+  assert_contains "$out" "READ-ONLY SESSION - ANOTHER LIVE FIRSTMATE SESSION HOLDS THE FLEET LOCK" \
+    "read-only banner missing the competing-session headline on a genuine competing session"
   assert_contains "$out" "another live firstmate session holds the lock" "read-only banner did not surface fm-lock.sh's own error text"
+  assert_not_contains "$out" "COULD NOT IDENTIFY ITS OWN RUNTIME" \
+    "a genuine competing session was reported as an unidentifiable runtime"
   assert_contains "$out" "Skipping every mutating step" "read-only banner did not explain what was skipped"
   assert_contains "$out" "skipped (read-only session)" "wake-queue section did not report itself skipped"
   assert_contains "$out" "WATCHER DOWN - SUPERVISION IS OFF" "read-only guard did not surface watcher-liveness alarm"
@@ -446,9 +505,9 @@ EOF
     "read-only session-start banner hid the unknown outage duration"
   assert_contains "$out" '1 task(s) in flight: sm-x' \
     "read-only session-start banner omitted the in-flight count or task identity"
-  assert_contains "$out" "queued wakes pending - left untouched for the session holding the fleet lock" "read-only guard did not leave queued wakes to the lock holder"
+  assert_contains "$out" "queued wakes pending - this read-only session must leave them untouched; draining requires holding the fleet lock" "read-only guard did not leave queued wakes untouched without inventing a holder"
   assert_contains "$out" "TANGLE: primary checkout on feature branch 'fm/read-only-tangle'" "read-only bootstrap did not surface the tangle diagnostic"
-  assert_contains "$out" "read-only session must leave restore work" "read-only tangle diagnostic did not explain restore ownership"
+  assert_contains "$out" "this read-only session must not restore it; restoring requires holding the fleet lock" "read-only tangle diagnostic did not explain restore ownership"
   assert_contains "$out" "Stay read-only: do not arm" "read-only next step did not block direct watcher repair"
   assert_not_contains "$out" "drain them with bin/fm-wake-drain.sh" "read-only guard printed a mutating drain instruction"
   assert_not_contains "$out" "After draining queued wakes" "read-only guard printed a drain-then-rearm instruction"
@@ -471,6 +530,117 @@ EOF
   assert_contains "$out" "NEXT STEP" "closing reminder missing on the read-only path"
 
   pass "a lock refusal prints a loud read-only banner, skips every mutating step, and still completes the digest"
+}
+
+# --- lock-refusal banner: one truthful headline per cause ---------------------
+
+# The 2026-09-12 incident: a Cursor primary could not find its own runtime in
+# its ancestry, and the fixed "another live session holds the lock" headline
+# sent the captain closing sessions that were already closed. The read-only
+# posture is identical either way; only the diagnosis may differ.
+test_unidentified_runtime_banner_blames_no_other_session() {
+  local rec root home fakebin out status
+  rec=$(new_world unidentified-runtime)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_unidentifiable "$fakebin"
+
+  # No state/.lock at all: nothing holds this home, and nothing may claim one.
+  status=0
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH" FM_PRIMARY_HARNESS=cursor) || status=$?
+
+  expect_code 0 "$status" "fm-session-start.sh must exit 0 when the session cannot identify itself"
+  assert_contains "$out" "READ-ONLY SESSION - THIS SESSION COULD NOT IDENTIFY ITS OWN RUNTIME" \
+    "an unidentifiable runtime did not get its own headline"
+  assert_contains "$out" "Runtime: cursor." "the banner did not name the runtime it could determine"
+  assert_contains "$out" "NOTHING here says another session holds the lock" \
+    "the banner did not state that no competing session is known"
+  assert_not_contains "$out" "ANOTHER LIVE FIRSTMATE SESSION HOLDS THE FLEET LOCK" \
+    "a self-identification failure was reported as a competing session"
+  assert_not_contains "$out" "another live firstmate session holds the lock" \
+    "a self-identification failure surfaced a competing-session refusal message"
+
+  # Read-only posture is unchanged: no lock was taken and no mutating step ran.
+  [ ! -f "$home/state/.lock" ] || fail "an unidentifiable session recorded itself as the fleet lock holder"
+  assert_contains "$out" "Skipping every mutating step" "the unidentified-runtime banner did not explain what was skipped"
+  assert_contains "$out" "skipped (read-only session)" "wake-queue section did not report itself skipped"
+  assert_contains "$out" "stay queued; draining them requires holding the fleet lock" \
+    "the wake-queue skip line did not state the rule without asserting a holder"
+  assert_not_contains "$out" "whichever session holds the fleet lock" \
+    "the wake-queue skip line still presupposed that some session holds the lock"
+  assert_contains "$out" "MISSING: tasks-axi (install:" "detect-only bootstrap diagnostics did not run"
+  assert_not_contains "$out" "SECONDMATE_SYNC" "a mutating sweep ran while the session could not identify itself"
+  assert_contains "$out" "FLEET STATE" "fleet-state digest section missing"
+  assert_contains "$out" "NEXT STEP" "closing reminder missing"
+  assert_contains "$out" "runtime process in its own ancestry." \
+    "the next step did not state what the refusal actually establishes"
+  assert_contains "$out" "For context, the detected runtime is 'cursor'." \
+    "the next step did not carry the detected runtime as context"
+  assert_not_contains "$out" "not recognized by firstmate's session-lock" \
+    "the next step asserted an identity gap the refusal does not establish"
+  assert_not_contains "$out" "The session holding the lock owns mutable follow-up" \
+    "the next step handed follow-up to a session that does not exist"
+
+  pass "a session that cannot identify its own runtime says so, names the runtime, and blames no other session"
+}
+
+test_unidentified_runtime_banner_without_a_determinable_runtime() {
+  local rec root home fakebin out
+  rec=$(new_world unidentified-unknown)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_unidentifiable "$fakebin"
+
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+
+  assert_contains "$out" "READ-ONLY SESSION - THIS SESSION COULD NOT IDENTIFY ITS OWN RUNTIME" \
+    "an unidentifiable runtime did not get its own headline"
+  assert_contains "$out" "The runtime could not be determined either." \
+    "the banner invented a runtime name it could not determine"
+  assert_contains "$out" "For context, the runtime could not be determined either." \
+    "the next step invented a runtime name it could not determine"
+  assert_not_contains "$out" "ANOTHER LIVE FIRSTMATE SESSION HOLDS THE FLEET LOCK" \
+    "a self-identification failure was reported as a competing session"
+  [ ! -f "$home/state/.lock" ] || fail "an unidentifiable session recorded itself as the fleet lock holder"
+
+  pass "an unidentifiable runtime with no determinable name says that too, and still blames no other session"
+}
+
+test_other_lock_failure_gets_a_generic_truthful_banner() {
+  local rec root home fakebin entry out status
+  rec=$(new_world other-lock-failure)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+  entry=$(make_stubbed_lock_tree "$TMP_ROOT/other-lock-failure-tree" 9)
+
+  status=0
+  out=$(run_session_start --entry "$entry" "$home" "$root" "$fakebin:$BASE_PATH") || status=$?
+
+  expect_code 0 "$status" "fm-session-start.sh must exit 0 on any lock failure"
+  assert_contains "$out" "READ-ONLY SESSION - THE FLEET LOCK WAS NOT ACQUIRED" \
+    "an unclassified lock failure did not get a generic headline"
+  assert_contains "$out" "error: the lock file could not be written" \
+    "the generic banner did not surface the real refusal text"
+  assert_contains "$out" "nothing here assumes another one" \
+    "the generic banner did not say it was not inventing a cause"
+  assert_not_contains "$out" "ANOTHER LIVE FIRSTMATE SESSION HOLDS THE FLEET LOCK" \
+    "an unclassified lock failure was reported as a competing session"
+  assert_not_contains "$out" "COULD NOT IDENTIFY ITS OWN RUNTIME" \
+    "an unclassified lock failure was reported as a self-identification failure"
+  assert_contains "$out" "Skipping every mutating step" "the generic banner did not explain what was skipped"
+  assert_contains "$out" "skipped (read-only session)" "wake-queue section did not report itself skipped"
+  assert_contains "$out" "NEXT STEP" "closing reminder missing"
+  assert_not_contains "$out" "The session holding the lock owns mutable follow-up" \
+    "the next step handed follow-up to a session it has no evidence for"
+
+  pass "an unclassified lock failure gets a truthful generic banner that invents no cause"
 }
 
 # --- output ordering ----------------------------------------------------------
@@ -989,6 +1159,9 @@ test_disarmed_host_sentinel_is_loudly_surfaced
 test_suppressed_host_sentinel_registration_is_loudly_surfaced
 test_context_digest_absent_empty_present
 test_lock_refusal_read_only_path
+test_unidentified_runtime_banner_blames_no_other_session
+test_unidentified_runtime_banner_without_a_determinable_runtime
+test_other_lock_failure_gets_a_generic_truthful_banner
 test_output_ordering_diagnostics_lead
 test_herdr_backend_diagnostics_follow_real_session_start
 test_status_tail_bounding

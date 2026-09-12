@@ -36,6 +36,16 @@ FAKEBIN=$(fm_fakebin "$TMP_ROOT/harness-bin")
 ln -s /bin/bash "$FAKEBIN/claude"
 NAMED_CLAUDE="$FAKEBIN/claude"
 
+# Cursor's launcher is a generically named wrapper whose identity lives only in
+# the versioned cursor-agent bundle path it passes on. The e2e tree below runs
+# the bundle path itself, so the real lock run sees the real argv shape.
+CURSOR_BUNDLE_DIR="$TMP_ROOT/cursor-install/share/cursor-agent/versions/2026.09.10-fd3934a"
+mkdir -p "$CURSOR_BUNDLE_DIR" "$TMP_ROOT/cursor-install/bin"
+ln -s /bin/bash "$CURSOR_BUNDLE_DIR/index.js"
+BUNDLED_CURSOR="$CURSOR_BUNDLE_DIR/index.js"
+ln -s /bin/bash "$TMP_ROOT/cursor-install/bin/agent"
+GENERIC_AGENT="$TMP_ROOT/cursor-install/bin/agent"
+
 # --- unit layer: identity behind a deterministic process table ---------------
 
 # Run one library expression with <fakebin> shadowing ps. kill is stubbed so
@@ -227,6 +237,158 @@ SH
   pass "session-lock: a live version-named session holding the lock is not mistaken for a stale owner"
 }
 
+# --- cursor identity ---------------------------------------------------------
+
+# Cursor's launcher reports one of two command names - the generic
+# ~/.local/bin/agent wrapper, or the bare node its exec leaves behind under tmux
+# - and carries the versioned cursor-agent bundle path in its arguments either
+# way. Neither command name is identity, so the arguments are the whole evidence.
+write_cursor_ps() {  # <fakebin> <pid>
+  local fakebin=$1 pid=$2
+  cat > "$fakebin/ps" <<SH
+#!/usr/bin/env bash
+set -u
+field= pid=
+while [ "\$#" -gt 0 ]; do
+  case "\$1" in
+    -o) field=\$2; shift 2 ;;
+    -p) pid=\$2; shift 2 ;;
+    *) shift ;;
+  esac
+done
+bundle=/Users/u/.local/share/cursor-agent/versions/2026.09.10-fd3934a/index.js
+model=\${FM_TEST_CURSOR_MODEL:-cursor-grok-4.6-high}
+case "\$pid:\$field:\${FM_TEST_CURSOR_SHAPE:-wrapper}" in
+  $pid:comm=:wrapper) printf '%s\\n' /Users/u/.local/bin/agent ;;
+  $pid:comm=:tmux) printf '%s\\n' node ;;
+  $pid:args=:*) printf '/Users/u/.local/bin/agent --use-system-ca %s --yolo --model %s\\n' "\$bundle" "\$model" ;;
+  $pid:ppid=:*) printf '%s\\n' 1 ;;
+  *:comm=:*) printf '%s\\n' bash ;;
+  *:args=:*) printf '%s\\n' 'bash tests/run-one.sh' ;;
+  *:ppid=:*) printf '%s\\n' $pid ;;
+esac
+SH
+  chmod +x "$fakebin/ps"
+}
+
+test_cursor_primary_is_identified_in_both_shapes() {
+  local dir fakebin shape model got
+  dir="$TMP_ROOT/cursor-primary"
+  fakebin=$(fm_fakebin "$dir")
+  mkdir -p "$dir/state"
+  write_cursor_ps "$fakebin" 700
+  printf '700\n' > "$dir/state/.lock"
+
+  # cursor-grok-4.6-high is the certified primary profile's real model id; the
+  # second id carries no other harness name, so it proves the bundle path - not
+  # the incidental "grok" in the first - is what identifies the process.
+  for shape in wrapper tmux; do
+    for model in cursor-grok-4.6-high cursor-gpt-5.6-sol-high; do
+      got=$(FM_TEST_CURSOR_SHAPE="$shape" FM_TEST_CURSOR_MODEL="$model" \
+        lib_eval "$fakebin" 'fm_harness_ancestry_pid') \
+        || fail "$shape/$model: the cursor session was not found in the ancestry at all"
+      [ "$got" = 700 ] || fail "$shape/$model: ancestry resolved '$got', expected the cursor session pid 700"
+      FM_TEST_CURSOR_SHAPE="$shape" FM_TEST_CURSOR_MODEL="$model" \
+        lib_eval "$fakebin" 'fm_harness_holder_alive 700' \
+        || fail "$shape/$model: a live cursor session was not recognized as a harness"
+      FM_TEST_CURSOR_SHAPE="$shape" FM_TEST_CURSOR_MODEL="$model" \
+        lib_eval "$fakebin" "fm_session_lock_in_ancestry '$dir/state'" \
+        || fail "$shape/$model: the cursor session holding the lock did not recognize itself as the owner"
+    done
+  done
+  pass "session-lock: a Cursor primary is identified from its versioned bundle path in both process shapes"
+}
+
+test_cursor_is_never_read_as_claude() {
+  local got
+  # A cursor process whose own arguments mention claude - firstmate's checkout
+  # carries a .claude directory - must still not be read as a Claude session:
+  # FM_HARNESS_IS_CLAUDE drives the multi-pid ancestry walk, and a false 1 would
+  # let the walk climb past the cursor process into an unrelated ancestor.
+  got=$(lib_eval "$FAKEBIN" 'fm_harness_process_matches node "node /Users/u/.local/share/cursor-agent/versions/2026.09.10-fd3934a/index.js --add-dir /Users/u/starship/.claude" && printf %s "$FM_HARNESS_IS_CLAUDE"') \
+    || fail "a cursor process carrying a claude path in its arguments was not identified at all"
+  [ "$got" = 0 ] || fail "a cursor process was reported as Claude (FM_HARNESS_IS_CLAUDE=$got)"
+  pass "session-lock: a cursor process carrying a claude path is identified as a harness but never as Claude"
+}
+
+test_generic_agent_shapes_are_never_harness_processes() {
+  local dir fakebin shape
+  dir="$TMP_ROOT/generic-agent"
+  fakebin=$(fm_fakebin "$dir")
+  mkdir -p "$dir/state"
+  cat > "$fakebin/ps" <<'SH'
+#!/usr/bin/env bash
+set -u
+field= pid=
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -o) field=$2; shift 2 ;;
+    -p) pid=$2; shift 2 ;;
+    *) shift ;;
+  esac
+done
+case "$pid:$field:${FM_TEST_AGENT_SHAPE:-bare-agent}" in
+  820:comm=:bare-agent) printf '%s
+' /Users/u/.local/bin/agent ;;
+  820:args=:bare-agent) printf '%s
+' '/Users/u/.local/bin/agent --yolo --model cursor-grok-4.6-high' ;;
+  820:comm=:prime-agent) printf '%s
+' prime-agent ;;
+  820:args=:prime-agent) printf '%s
+' prime-agent ;;
+  820:comm=:cursor-hook) printf '%s
+' /Users/u/.cursor/hooks/notify.sh ;;
+  820:args=:cursor-hook) printf '%s
+' '/Users/u/.cursor/hooks/notify.sh --quiet' ;;
+  820:comm=:worktree) printf '%s
+' bash ;;
+  820:args=:worktree) printf '%s
+' 'bash /Users/u/.treehouse/cursor-agent/bin/build.sh' ;;
+  820:ppid=:*) printf '%s
+' 1 ;;
+  *:comm=:*) printf '%s
+' bash ;;
+  *:args=:*) printf '%s
+' 'bash tests/run-one.sh' ;;
+  *:ppid=:*) printf '%s
+' 820 ;;
+esac
+SH
+  chmod +x "$fakebin/ps"
+  printf '820\n' > "$dir/state/.lock"
+
+  # "agent" is a generic basename, and prime-agent rewrites its own process
+  # title to it, so positive cursor evidence - not the name - must be required.
+  for shape in bare-agent prime-agent cursor-hook worktree; do
+    if FM_TEST_AGENT_SHAPE="$shape" lib_eval "$fakebin" 'fm_harness_ancestry_pid'; then
+      fail "$shape: a process with no cursor bundle evidence was treated as a harness"
+    fi
+    if FM_TEST_AGENT_SHAPE="$shape" lib_eval "$fakebin" 'fm_harness_holder_alive 820'; then
+      fail "$shape: a process with no cursor bundle evidence passed the harness-liveness predicate"
+    fi
+    if FM_TEST_AGENT_SHAPE="$shape" lib_eval "$fakebin" "fm_session_lock_in_ancestry '$dir/state'"; then
+      fail "$shape: a process with no cursor bundle evidence claimed the home's session lock"
+    fi
+  done
+  pass "session-lock: a generic agent name, prime-agent, a ~/.cursor hook, and a cursor-agent-named worktree are not harness processes"
+}
+
+test_plain_cursor_name_entry_would_not_identify_cursor() {
+  # The tempting one-line "fix" - adding cursor to FM_HARNESS_NAMES - matches
+  # the real process nowhere, because the path components Cursor actually has
+  # are .cursor and cursor-agent, and neither equals cursor. Guarding this keeps
+  # a later edit from swapping the working evidence for the plausible-looking one.
+  local path
+  for path in /Users/u/.local/share/cursor-agent/versions/2026.09.10-fd3934a/index.js \
+              /Users/u/.local/bin/agent \
+              /Users/u/.cursor/hooks/notify.sh; do
+    if lib_eval "$FAKEBIN" "FM_HARNESS_NAMES+=(cursor); fm_harness_path_name '$path'"; then
+      fail "a plain 'cursor' name entry matched $path; the strict path-component rule has been widened"
+    fi
+  done
+  pass "session-lock: a plain 'cursor' name entry matches no real Cursor path and is not the fix"
+}
+
 # --- end-to-end layer: the real bin/fm-lock.sh in real process trees ---------
 
 install_lock_scripts() {
@@ -307,6 +469,37 @@ stored_lock_pid() {
   tr -d '[:space:]' < "$1/state/.lock" 2>/dev/null || true
 }
 
+test_e2e_cursor_session_claims_the_home() {
+  local dir session_pid
+  dir="$TMP_ROOT/e2e-cursor"
+  make_fixture_home "$dir"
+  run_fixture_tree "$dir" "$BUNDLED_CURSOR"
+  expect_code 0 "$(lock_rc "$dir")" "a Cursor primary must be able to acquire its home's lock"
+  session_pid=$(tr -d '[:space:]' < "$dir/state/session-pid")
+  [ -n "$session_pid" ] || fail "fixture did not record the session pid"
+  [ "$(stored_lock_pid "$dir")" = "$session_pid" ] \
+    || fail "the lock moved off the cursor session: expected $session_pid, got $(stored_lock_pid "$dir")"
+  pass "session-lock e2e: a Cursor primary claims the home under its own pid"
+}
+
+test_e2e_unidentified_runtime_refuses_with_its_own_exit_code() {
+  local dir
+  dir="$TMP_ROOT/e2e-unidentified"
+  make_fixture_home "$dir"
+  # The same generic wrapper name with NO bundle path in its arguments: the
+  # session cannot identify itself, which must refuse under its own exit code
+  # rather than the "another live session holds the lock" one, and must leave
+  # the lock untaken.
+  run_fixture_tree "$dir" "$GENERIC_AGENT"
+  expect_code 3 "$(lock_rc "$dir")" "an unidentifiable runtime must refuse under the unidentified-runtime exit code"
+  [ ! -f "$dir/state/.lock" ] || fail "an unidentifiable session still recorded itself as the lock holder"
+  grep -q "cannot identify this session's own harness process" "$dir/state/lock.out" \
+    || fail "the refusal did not name its real cause: $(cat "$dir/state/lock.out")"
+  grep -q "another live firstmate session" "$dir/state/lock.out" \
+    && fail "the refusal blamed a competing session: $(cat "$dir/state/lock.out")"
+  pass "session-lock e2e: an unidentifiable runtime refuses under its own exit code and blames no other session"
+}
+
 test_e2e_version_named_session_claims_the_home() {
   local dir session_pid
   dir="$TMP_ROOT/e2e-version-named"
@@ -361,9 +554,15 @@ test_e2e_daemon_parented_version_named_session_keeps_its_lock() {
 }
 
 test_version_named_session_is_identified_on_both_platforms
+test_cursor_primary_is_identified_in_both_shapes
+test_cursor_is_never_read_as_claude
+test_generic_agent_shapes_are_never_harness_processes
+test_plain_cursor_name_entry_would_not_identify_cursor
 test_ordinary_paths_are_never_harness_processes
 test_harness_beyond_a_gap_never_owns_the_lock
 test_competing_version_named_session_is_seen_as_live
+test_e2e_cursor_session_claims_the_home
+test_e2e_unidentified_runtime_refuses_with_its_own_exit_code
 test_e2e_version_named_session_claims_the_home
 test_e2e_daemon_parented_session_keeps_its_own_record
 test_e2e_daemon_parented_version_named_session_keeps_its_lock

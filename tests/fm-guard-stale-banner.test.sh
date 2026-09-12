@@ -215,6 +215,42 @@ test_queued_wake_warning_stays_independent() {
   pass "fm-guard stale banner: queued-wake warning remains independent"
 }
 
+# Read-only means "this session is not the lock owner", which is true whether a
+# foreign session holds the lock or this session could not identify its own
+# runtime at all (bin/fm-lock.sh exit 3). No read-only advisory may convert the
+# first statement into the second by asserting a holder that is not known to
+# exist: bin/fm-session-start.sh prints a truthful "none is known to" banner and
+# then runs this guard in the same digest.
+test_read_only_advisories_never_assert_a_lock_holder() {
+  local dir home out phrase
+  dir=$(make_guard_case read-only-no-phantom-holder)
+  home=$(case_home "$dir")
+  git init -q -b main "$(case_root "$dir")"
+  git -C "$(case_root "$dir")" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' \
+    commit -q --allow-empty -m init
+  git -C "$(case_root "$dir")" checkout -q -B fm/read-only-phantom
+  printf 'signal: %s/state/task.status\n' "$home" > "$home/state/.wake-queue"
+
+  out=$(run_guard_case_read_only "$dir")
+  assert_contains "$out" "WORKTREE TANGLE" "read-only guard dropped the tangle alarm"
+  assert_contains "$out" "This read-only session must not restore the primary; restoring requires holding the fleet lock." \
+    "read-only tangle line stopped saying what this session must not do"
+  assert_contains "$out" "queued wakes pending - this read-only session must leave them untouched; draining requires holding the fleet lock." \
+    "read-only queued-wake warning stopped saying what this session must not do"
+  assert_contains "$out" "This read-only session should report the lapse, not repair it." \
+    "read-only watcher-down line stopped saying what this session must not do"
+  assert_not_contains "$out" "drain them with bin/fm-wake-drain.sh" \
+    "read-only guard printed a mutating drain instruction"
+  assert_not_contains "$out" "checkout main" "read-only guard printed a state-changing restore command"
+  for phrase in \
+    "the session holding the fleet lock" \
+    "the session holding the lock" \
+    "another session holds"; do
+    assert_not_contains "$out" "$phrase" "read-only guard asserted a lock holder that is not known to exist"
+  done
+  pass "fm-guard: read-only advisories state the rule without asserting a lock holder"
+}
+
 test_read_only_before_writable_does_not_consume_full_banner() {
   local dir home marker lock out_ro out_rw
   dir=$(make_guard_case read-only-before-writable)
@@ -383,6 +419,7 @@ test_healthy_recovery_rearms_next_stale_episode
 test_concurrent_same_episode_prints_one_full_banner
 test_home_isolation
 test_queued_wake_warning_stays_independent
+test_read_only_advisories_never_assert_a_lock_holder
 test_read_only_before_writable_does_not_consume_full_banner
 test_read_only_during_episode_observes_without_mutating_marker
 test_healthy_read_only_does_not_clear_marker

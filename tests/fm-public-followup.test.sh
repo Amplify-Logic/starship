@@ -1067,7 +1067,7 @@ test_session_start_surfaces_only_when_owed() {
 }
 
 # Reconciling the registry against the backlog prunes registration records and
-# clears legacy X links, so it belongs to the session holding the fleet lock.
+# clears legacy X links, so it requires holding the fleet lock.
 # A lock-refused startup must therefore stay silent about public commitments and
 # leave the registry exactly as it found it, even for a record reconciliation
 # would otherwise drop.

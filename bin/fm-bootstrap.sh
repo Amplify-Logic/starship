@@ -105,8 +105,8 @@
 #          x_mode_setup, fleet_sync) while still printing every read-only detect line
 #          above; the TANGLE line switches to advisory-only wording with no
 #          checkout command. Used by
-#          fm-session-start.sh's read-only path when another live session holds
-#          the fleet lock, so a second concurrent session never race-mutates
+#          fm-session-start.sh's read-only path whenever this session does not
+#          hold the fleet lock, so a second concurrent session never race-mutates
 #          PR-check artifacts, secondmate homes, X-mode artifacts, project
 #          clones, or repair instructions.
 #          Unset/0 (the default) runs every sweep exactly as before - this flag
@@ -1031,7 +1031,7 @@ tangle_branch=$(fm_primary_tangle_branch "$FM_ROOT" 2>/dev/null || true)
 if [ -n "$tangle_branch" ]; then
   tangle_default=$(fm_default_branch "$FM_ROOT" 2>/dev/null || echo main)
   if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" = 1 ]; then
-    echo "TANGLE: primary checkout on feature branch '$tangle_branch' (expected '$tangle_default'); the work is safe on that ref - read-only session must leave restore work to the session holding the fleet lock"
+    echo "TANGLE: primary checkout on feature branch '$tangle_branch' (expected '$tangle_default'); the work is safe on that ref - this read-only session must not restore it; restoring requires holding the fleet lock"
   else
     echo "TANGLE: primary checkout on feature branch '$tangle_branch' (expected '$tangle_default'); the work is safe on that ref - restore the primary with: git -C $FM_ROOT checkout $tangle_default, then re-validate the branch in a proper worktree"
   fi

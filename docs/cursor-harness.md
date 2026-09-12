@@ -629,10 +629,31 @@ Grok 4.6 also offers `-xhigh`, so `-high` is now a deliberate cost choice rather
 | turn-end / Stop | **PASS (was FAIL)** | One completed TUI turn appended to all four hook logs: Claude-format `Stop` AND native `.cursor/hooks.json` `stop`, plus native `beforeSubmitPrompt`. This is the mechanism that did not fire on `2026.07.20-8cc9c0b`. |
 | PreToolUse seatbelt | PASS | Claude-format `PreToolUse` fired on the shell tool call in the same turn. |
 | supervision protocol | PASS | `docs/supervision-protocols/cursor.md` rendered by `bin/fm-supervision-instructions.sh --harness cursor`. |
-| session lock | PASS | Shared `bin/fm-lock.sh` + `fm-primary` active-session refusal (profile-agnostic; `tests/fm-primary.test.sh`). |
+| session lock | PARTIAL, corrected 2026-09-12 | Exercised here: `fm-primary`'s active-session refusal, which never calls `bin/fm-lock.sh` acquire (profile-agnostic; `tests/fm-primary.test.sh`). NOT exercised here: in-session acquisition, which was broken for every Cursor primary until 2026-09-12 - see below. |
 | status-bar | DOCUMENTED-GAP on this build; superseded 2026-09-08 | No third-party status-line API on `2026.08.11-e8db854` (section 8). `2026.09.08-6caf4ff` does expose one; [`status-bar.md`](status-bar.md) owns the current contract and the opt-in installer. |
 
 The 2026-07-22 reading is superseded: the primary turn-end guard can now be claimed as wired rather than best-effort.
+
+### The session lock was never exercised in-session (corrected 2026-09-12)
+
+The PASS above covered only the launcher's active-session refusal, which never runs `bin/fm-lock.sh` acquire.
+In-session acquisition was broken for every Cursor primary from this certification until 2026-09-12.
+
+`bin/fm-primary-scope-lib.sh` identified a harness by command basename or by an exact harness path component, and Cursor's launcher offers neither.
+On Cursor CLI `2026.09.10-fd3934a` the live primary reported:
+
+```
+$ ps -o comm= -p <primary pid>
+/Users/.../.local/bin/agent
+$ ps -o args= -p <primary pid>
+/Users/.../.local/bin/agent --use-system-ca /Users/.../.local/share/cursor-agent/versions/2026.09.10-fd3934a/index.js --yolo --model cursor-grok-4.6-high
+```
+
+The basename is the generic `agent`, and neither the command path nor `argv[0]` carries a harness path component, so `bin/fm-lock.sh` refused with its then-current `cannot locate harness process in ancestry` error and the session never acquired its home.
+The same blindness made a live Cursor primary invisible to `fm_harness_holder_alive`, so another primary could have claimed a home a Cursor session was still running - the collision the lock exists to prevent.
+
+The matcher now reads the versioned `cursor-agent` bundle path out of the process arguments, the same marker section 7's liveness probe resolves cursor through, and requires it as a whole path component because nothing gates this tier on a `node` command name.
+`tests/fm-session-lock-ancestry.test.sh` covers both of Cursor's process shapes, a bare `agent` name with no bundle evidence, a prime-agent title, a `~/.cursor` hook script, and a worktree named after cursor-agent.
 
 ### The version gate no longer blocks
 

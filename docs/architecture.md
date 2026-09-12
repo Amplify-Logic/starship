@@ -170,7 +170,7 @@ Worker adapter behavior was not changed.
 | turn-end / Stop | FAIL (Stop did not fire after completed TUI turns on this CLI version) |
 | PreToolUse seatbelt | PASS (Claude-format `PreToolUse`; `fm-arm-pretool-check.sh --claude` denies backgrounded watcher arm) |
 | supervision protocol | PASS (`docs/supervision-protocols/cursor.md`) |
-| session lock | PASS (shared lock + launcher refusal) |
+| session lock | PARTIAL - the launcher refusal only; see the corrected record in [cursor-harness.md](cursor-harness.md) |
 | status-bar | DOCUMENTED-GAP (no third-party status-line API) |
 
 Full command transcripts and limitations live in [cursor-harness.md](cursor-harness.md).
@@ -216,7 +216,7 @@ Only a named non-default branch checked out in `FM_ROOT` is a worktree tangle.
 
 `fm-tangle-lib.sh` resolves the default branch from `origin/HEAD`, then local `main` or `master`, and classifies that named non-default primary branch as the tangle.
 `fm-guard.sh` prints the repair command on the next mutable fleet action, while `bin/fm-session-start.sh` reports the same condition through bootstrap as a `TANGLE:` line at session start.
-If another live session holds the fleet lock, both surfaces keep the alarm but switch to read-only wording with no repair command.
+If this session does not hold the fleet lock, both surfaces keep the alarm but switch to read-only wording with no repair command.
 Ship briefs also tell the crewmate to verify `pwd -P` and `git rev-parse --show-toplevel` before creating `fm/<id>`, then stop with a blocked status if it landed in the primary checkout.
 
 ## No-mistakes gate authority boundary

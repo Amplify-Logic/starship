@@ -49,7 +49,7 @@ A live holder matching the current process or its contiguous verified-harness an
 The wake-drain, watcher-arm, ordinary literal teardown, and exact sentinel-enable allowances are independent of session-lock ownership and unchanged.
 
 The scoping is a gate over one harness's Bash tool calls, not the mutation authority itself: the session lock remains what actually gates bootstrap's mutating sweeps, and "run session-start exactly once per session" remains a behavioral contract owned by AGENTS.md section 3.
-The relation inherits the ancestry walk's own bounds - at most eight parents, matching `bin/fm-lock.sh` - and recognizes version-named harness executables through exact path components or `argv[0]` while refusing to cross a non-harness gap into an unrelated ancestor session.
+The relation inherits the ancestry walk's own bounds - at most eight parents, matching `bin/fm-lock.sh` - and recognizes harness identity through the evidence tiers `bin/fm-primary-scope-lib.sh` owns and documents, while refusing to cross a non-harness gap into an unrelated ancestor session.
 
 ## Claude background-shell pressure reap
 

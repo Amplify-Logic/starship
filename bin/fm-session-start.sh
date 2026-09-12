@@ -87,7 +87,11 @@
 #   Prints the full ordered digest to stdout and always exits 0: this is a
 #   reporting command, not a gate. A lock refusal is reported as a loud
 #   banner inline, never a silent failure or a non-zero exit that would make
-#   an agent skip the rest of the digest.
+#   an agent skip the rest of the digest. The banner headline states the cause
+#   fm-lock.sh reported (its header owns the acquire exit codes), because an
+#   agent acts on the headline: a session that could not identify its OWN
+#   runtime must never be told a competing session holds the fleet. The
+#   read-only posture is identical for every cause; only the diagnosis differs.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -252,13 +256,44 @@ LOCK_OUT=$("$SCRIPT_DIR/fm-lock.sh" 2>&1)
 LOCK_RC=$?
 printf '%s\n' "$LOCK_OUT"
 READ_ONLY=0
+# Which of fm-lock.sh's acquire failures this was, so the banner and the closing
+# next step can each state the real cause. bin/fm-lock.sh's header owns the code
+# meanings; nothing here re-derives them from its message text.
+LOCK_FAIL_KIND=none
 if [ "$LOCK_RC" -ne 0 ]; then
   READ_ONLY=1
+  case "$LOCK_RC" in
+    1) LOCK_FAIL_KIND=foreign ;;
+    3) LOCK_FAIL_KIND=unidentified ;;
+    *) LOCK_FAIL_KIND=other ;;
+  esac
   BAR='●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'
   {
     printf '%s\n' "$BAR"
-    printf '●  READ-ONLY SESSION - ANOTHER LIVE FIRSTMATE SESSION HOLDS THE FLEET LOCK\n'
-    printf '●  %s\n' "$LOCK_OUT"
+    case "$LOCK_FAIL_KIND" in
+      foreign)
+        printf '●  READ-ONLY SESSION - ANOTHER LIVE FIRSTMATE SESSION HOLDS THE FLEET LOCK\n'
+        printf '●  %s\n' "$LOCK_OUT"
+        ;;
+      unidentified)
+        printf '●  READ-ONLY SESSION - THIS SESSION COULD NOT IDENTIFY ITS OWN RUNTIME\n'
+        printf '●  %s\n' "$LOCK_OUT"
+        if [ "$PRIMARY_HARNESS" = unknown ]; then
+          printf '●  The runtime could not be determined either.\n'
+        else
+          printf '●  Runtime: %s.\n' "$PRIMARY_HARNESS"
+        fi
+        printf '●  NOTHING here says another session holds the lock, and none is known to.\n'
+        printf '●  This session could not find its own runtime process in its own ancestry, so\n'
+        printf '●  it cannot record a holder that outlives the moment. Do not tell the captain\n'
+        printf '●  a competing session owns the fleet, and do not close other sessions over it.\n'
+        ;;
+      *)
+        printf '●  READ-ONLY SESSION - THE FLEET LOCK WAS NOT ACQUIRED\n'
+        printf '●  %s\n' "$LOCK_OUT"
+        printf '●  The line above is the whole known cause; nothing here assumes another one.\n'
+        ;;
+    esac
     printf '●  Skipping every mutating step: PR-check migration, secondmate sync,\n'
     printf '●  X-mode artifacts, fleet sync, and wake-queue drain. Detect-only bootstrap\n'
     printf '●  diagnostics and the rest of this read-only-safe digest still ran below.\n'
@@ -312,15 +347,15 @@ fi
 # Drained records are this turn's first work queue (AGENTS.md section 8); the
 # drain also runs fm-guard.sh internally on the locked path, so the
 # tangle/watcher-liveness alarms land right here too, ahead of the bulk digest
-# below. The read-only path never touches the queue (another session
-# may be actively draining it) but still runs fm-guard.sh directly with
+# below. The read-only path never touches the queue (draining it requires
+# holding the lock) but still runs fm-guard.sh directly with
 # non-mutating advisory text, so the same alarms surface without repair
 # commands.
 subsection "WAKE QUEUE"
 if [ "$READ_ONLY" -eq 1 ]; then
   QLEN=0
   [ -s "$STATE/.wake-queue" ] && QLEN=$(grep -c . "$STATE/.wake-queue" 2>/dev/null || printf '0')
-  printf 'skipped (read-only session) - %s record(s) remain queued for the session holding the lock.\n' "$QLEN"
+  printf 'skipped (read-only session) - %s record(s) stay queued; draining them requires holding the fleet lock.\n' "$QLEN"
   GUARD_OUT=$(FM_GUARD_READ_ONLY=1 "$SCRIPT_DIR/fm-guard.sh" 2>&1)
   [ -n "$GUARD_OUT" ] && printf '%s\n' "$GUARD_OUT"
 else
@@ -425,8 +460,8 @@ fi
 
 # A promise to reply in a public thread must survive compaction and restart.
 # Both predicates stop at inert presence checks when this home has not opted in.
-# Reconciliation prunes registrations and clears legacy X links, so it belongs to
-# the session that holds the fleet lock and never to a read-only one.
+# Reconciliation prunes registrations and clears legacy X links, so it requires
+# holding the fleet lock and never runs in a read-only session.
 if [ "$READ_ONLY" -eq 0 ] && fm_pf_relay_active "$FM_HOME" \
   && { fm_pf_has_registrations "$STATE" || fm_pf_has_events "$STATE"; }; then
   PUBLIC_FOLLOWUP=$("$SCRIPT_DIR/fm-public-followup.sh" pending 2>/dev/null) || PUBLIC_FOLLOWUP=
@@ -444,10 +479,38 @@ section "NEXT STEP"
 if [ "$READ_ONLY" -eq 1 ]; then
   cat <<'EOF'
 This session did not acquire the fleet lock. Stay read-only: do not arm,
-drain, spawn, steer, merge, or repair fleet state from here. The session
-holding the lock owns mutable follow-up.
+drain, spawn, steer, merge, or repair fleet state from here.
+EOF
+  case "$LOCK_FAIL_KIND" in
+    foreign)
+      cat <<'EOF'
+The session holding the lock owns mutable follow-up.
 
 EOF
+      ;;
+    unidentified)
+      if [ "$PRIMARY_HARNESS" = unknown ]; then
+        LOCK_RUNTIME_PHRASE="the runtime could not be determined either"
+      else
+        LOCK_RUNTIME_PHRASE="the detected runtime is '$PRIMARY_HARNESS'"
+      fi
+      cat <<EOF
+Mutable follow-up waits until a session can identify itself here.
+Report what the banner states and no more: this session did not find its own
+runtime process in its own ancestry. What prevented that is not established
+here, and never report to the captain that another session holds the fleet.
+For context, $LOCK_RUNTIME_PHRASE.
+
+EOF
+      ;;
+    *)
+      cat <<'EOF'
+Mutable follow-up waits until the lock can be acquired. Report the cause exactly
+as the banner above states it, without assuming a competing session.
+
+EOF
+      ;;
+  esac
 elif [ "$AFK_PRESENT" -eq 1 ]; then
   cat <<'EOF'
 Away mode is active. Follow the supervision operating instructions block above:

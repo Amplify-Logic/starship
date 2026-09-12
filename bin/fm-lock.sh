@@ -12,12 +12,21 @@
 # bin/fm-primary-scope-lib.sh, the single owner of that evidence).
 # A live lock held by a pid inside THIS session's own ancestry is recognized as
 # this session's own earlier acquisition and kept, never refused or rewritten.
-# Usage: fm-lock.sh              acquire; exit 1 if another live session holds it
+# Usage: fm-lock.sh              acquire; see the acquire exit codes below
 #        fm-lock.sh status       print holder and liveness; always exits 0
 #        fm-lock.sh release-stale
 #          Remove state/.lock only when the recorded holder is dead or not a
 #          harness. Refuse while a live harness still holds it. Used by
 #          bin/fm-primary-handoff.sh after the outgoing primary has exited.
+#
+# Acquire exit codes, the single owner of what each refusal means. Every refusal
+# withholds the lock identically; only the diagnosis differs, and
+# bin/fm-session-start.sh renders each one under its own truthful headline
+# instead of blaming a competing session for every refusal:
+#   0  acquired, or this session's own earlier acquisition recognized
+#   1  another live firstmate session holds the lock
+#   3  this session's own harness process was not found in its own ancestry, so
+#      the session cannot identify itself and says nothing about any other one
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -60,7 +69,10 @@ if [ "${1:-}" = "release-stale" ]; then
   exit 0
 fi
 
-me=$(harness_pid) || { echo "error: cannot locate harness process in ancestry" >&2; exit 1; }
+me=$(harness_pid) || {
+  echo "error: cannot identify this session's own harness process in its ancestry; no claim is made about any other session" >&2
+  exit 3
+}
 if [ -f "$LOCK" ]; then
   old=$(cat "$LOCK")
   if [ "$old" != "$me" ] && fm_harness_holder_alive "$old"; then

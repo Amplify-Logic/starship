@@ -32,6 +32,30 @@ fm_harness_path_name() {  # <path>
   return 1
 }
 
+# True when argument string $1 carries the cursor-agent bundle path, the one
+# positive marker a Cursor CLI process shows under both of its verified shapes:
+# the ~/.local/bin/agent wrapper reports a generic "agent" basename, and under
+# tmux the wrapper's exec leaves a bare "node", while the versioned
+# cursor-agent bundle path survives in the arguments either way. That marker is
+# the same one fm_tmux_pane_is_cursor (bin/fm-tmux-lib.sh) owns the evidence for
+# and resolves cursor liveness through, and bin/fm-harness.sh reads.
+#
+# Matched as the WHOLE VERSIONED BUNDLE PATH, stricter than those two callers:
+# both of them gate the marker behind a bare-interpreter command name first, and
+# this tier has no such gate, so the path shape is all that keeps it from
+# widening. A bare "agent" basename is never sufficient on its own - it is a
+# generic name, and prime-agent rewrites its own process title to "prime-agent" -
+# and a firstmate worktree, branch, or task named after cursor-agent carries no
+# versioned bundle path and is correctly not a harness process. Identification
+# fails toward "not a harness" if Cursor ever drops the versioned install layout,
+# the same direction fm_tmux_pane_is_cursor already fails in.
+fm_harness_args_are_cursor() {  # <args>
+  case "$1" in
+    */cursor-agent/versions/*) return 0 ;;
+  esac
+  return 1
+}
+
 # True when the process described by command name $1 and full argument string $2
 # is a verified harness. Sets FM_HARNESS_IS_CLAUDE for the ancestry walk.
 #
@@ -42,7 +66,12 @@ fm_harness_path_name() {  # <path>
 #      argv[0] in `ps -o comm=`, while procps on Linux reports the kernel exec
 #      name and ignores argv[0] entirely, so a version-named Claude Code binary
 #      is identified by its install path on macOS and by argv[0] on Linux.
-#   3. a bare interpreter (node, python) running a harness script path.
+#   3. the versioned cursor-agent bundle path in the arguments, which is the
+#      only positive evidence Cursor's generically named wrapper carries. It is
+#      read before the interpreter tier below so a Cursor process is attributed
+#      to cursor rather than to another harness named incidentally in its own
+#      arguments, such as the model id in `--model cursor-grok-4.6-high`.
+#   4. a bare interpreter (node, python) running a harness script path.
 FM_HARNESS_IS_CLAUDE=0
 fm_harness_process_matches() {  # <comm> <args>
   local comm=$1 args=$2 base argv0 name
@@ -55,6 +84,9 @@ fm_harness_process_matches() {  # <comm> <args>
   argv0=${args%% *}
   if name=$(fm_harness_path_name "$comm") || name=$(fm_harness_path_name "$argv0"); then
     case "$name" in claude) FM_HARNESS_IS_CLAUDE=1 ;; esac
+    return 0
+  fi
+  if fm_harness_args_are_cursor "$args"; then
     return 0
   fi
   # Bare interpreter (e.g. node): match the harness name in its script path.

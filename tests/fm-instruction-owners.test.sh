@@ -245,6 +245,12 @@ test_compressed_agents_retains_authority_and_supervision_safety() {
     "AGENTS.md retained the weaker duplicate review prohibition"
   assert_no_grep 'firstmate reviews your branch' "$AGENTS" \
     "AGENTS.md retained a personal branch-review requirement"
+  assert_grep 'naming another live session only when that banner identifies one' "$AGENTS" \
+    "AGENTS.md lost the condition that gates naming a live lock holder"
+  assert_no_grep 'tell the captain another active session is managing the fleet' "$AGENTS" \
+    "AGENTS.md still orders blaming another session for every lock refusal"
+  assert_no_grep 'the queue is left untouched because another session owns it' "$AGENTS" \
+    "AGENTS.md still explains the untouched queue by a holder that may not exist"
   assert_no_grep 'firstmate reviews, captain approves' "$BRIEF" \
     "generated brief retained a stacked personal-review requirement"
   if grep -q "$(printf '\342\200\224')" "$AGENTS"; then

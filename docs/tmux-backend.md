@@ -123,6 +123,13 @@ The classifier deliberately reports `unknown` for `node`/`python`/`python3` rath
 Practical effect: a dead `pi` secondmate is not auto-healed by the liveness sweep today; it is reported as `skipped: liveness probe inconclusive` instead, which still surfaces it for a human to act on.
 Resolving this would need either a `pi`-specific env marker inspectable from outside the process (mirroring `PI_CODING_AGENT=true`, which `bin/fm-harness.sh` already uses for self-detection but which is not readable from a different process without deeper introspection) or accepting the argument-inspection fragility - not attempted here.
 
+### Known gap: `pi` is likely unidentifiable to the session-lock acquire path too (2026-09-12)
+
+Established by CODE INSPECTION ONLY, and not reproduced against a live Pi primary, because Pi is not installed on this host.
+`bin/fm-primary-scope-lib.sh` identifies a bare-interpreter process by matching `FM_HARNESS_RE` against its arguments, and that pattern carries `pi` only as `^pi$`, which the `node <path>/pi/bin/pi` argument shape a `#!/usr/bin/env node` script produces does not satisfy, so a Pi primary would be expected to fail `bin/fm-lock.sh` acquire with exit 3.
+This is not the cursor safety hole: the same file's looser holder-liveness match still recognizes a live Pi session through the `/pi/` path segment, so two sessions cannot both believe they own one home.
+The matcher was deliberately not widened for Pi here; that needs its own task with a measured Pi install shape.
+
 ### `cursor` resolves the same `node` case through argv (2026-07-19)
 
 `cursor` (Cursor CLI `agent` 2026.07.16-899851b) lands in the same `node` bucket - its `~/.local/bin/agent` wrapper `exec -a`s a bundled Node app, so `pane_current_command` reads `node`:
