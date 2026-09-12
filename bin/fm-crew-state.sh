@@ -28,6 +28,22 @@
 #      is an ancestor of the run head (pipeline fix commits advanced the run on
 #      the same line of history). Local work that advanced past the run head, or
 #      diverged from it, invalidates attribution.
+#      More than one recorded run can bind at once, so a LIVE run outranks a
+#      terminal FAILURE: a failed answer is provisional until the runs ledger has
+#      been asked whether this worktree also has a live run, and the ledger's own
+#      scan recognizes the pipeline's fix-round head even when this copy never
+#      fetched that object (nm_runs_status_and_epoch_for_branch owns that rule,
+#      including the exact-head anchor that keeps unrelated, rewritten, and stale
+#      same-branch runs rejected). Nothing displaces a run that finished
+#      passed/checks-passed - that is a result, not a corpse - on either route.
+#      That unverifiable live row is an INFERENCE bounded by the only evidence
+#      tied to it, the ledger's record of when that run STARTED: past
+#      FM_CREW_STATE_LIVE_ROW_MAX_AGE, with no usable date, or with no readable
+#      local clock, it reports unknown rather than claiming the crew works or
+#      that the replaced run died. The bound is a backstop against a row nobody
+#      reaped, not a verdict on how long a run may take - a run monitoring a
+#      green PR overnight keeps reading working. Runs this copy CAN resolve are
+#      never aged out.
 #      The run-step is AUTHORITATIVE: running/fixing -> working, ci -> working,
 #      awaiting_approval/fix_review -> parked (with gate findings), terminal
 #      passed/checks-passed -> done, failed/cancelled -> failed. EXCEPT: while
@@ -75,12 +91,31 @@ META="$STATE/$ID.meta"
 LOG="$STATE/$ID.status"
 NM_TIMEOUT=${FM_CREW_STATE_NM_TIMEOUT:-10}
 case "$NM_TIMEOUT" in ''|*[!0-9]*) NM_TIMEOUT=10 ;; esac
-# How many of the most recent `no-mistakes runs` rows the cross-branch fallback
-# (nm_runs_status_and_epoch_for_branch, below) scans. Generous enough to still
-# find a branch's own run on a busy multi-crew fleet without listing the entire
-# history every call.
+# How many of the most recent `no-mistakes runs` rows each ledger read
+# (nm_runs_status_and_epoch_for_branch, below) scans, whether it is the
+# cross-branch fallback or the live-run probe behind a terminal failure
+# (docs/configuration.md owns the setting). Generous enough to still find a
+# branch's own run on a busy multi-crew fleet without listing the entire history
+# every call.
 FM_CREW_STATE_RUNS_LIMIT=${FM_CREW_STATE_RUNS_LIMIT:-200}
 case "$FM_CREW_STATE_RUNS_LIMIT" in ''|*[!0-9]*) FM_CREW_STATE_RUNS_LIMIT=200 ;; esac
+# How old the ledger date of an UNVERIFIABLE live row may be before the anchored
+# pipeline-continuation inference stops claiming this crew is working
+# (nm_live_row_freshness, below; docs/configuration.md owns the setting).
+# The date is when the run STARTED, not when it ended (nm_parse_runs_date_epoch
+# states the evidence), and a healthy run stays `running` for its whole ci
+# monitor phase - until a captain merges the PR, which is routinely overnight and
+# can be a weekend. So this is a BACKSTOP against a row nobody ever reaps, NOT a
+# judgement about how long a run may legitimately take: three days is past any
+# plausible live run, which is exactly the point. Stated honestly, that makes the
+# rule weak for its purpose - it cannot tell a dead run from a slow one, and an
+# unreaped row still reads working for days before it expires - but a tighter
+# window would manufacture a false unknown for a crew that is genuinely working,
+# which is the same wrong reading this reader exists to prevent. ONLY this
+# inference is bounded - a run whose head this copy can resolve, and the `axi
+# status` answer itself, are never aged out.
+FM_CREW_STATE_LIVE_ROW_MAX_AGE=${FM_CREW_STATE_LIVE_ROW_MAX_AGE:-259200}
+case "$FM_CREW_STATE_LIVE_ROW_MAX_AGE" in ''|*[!0-9]*) FM_CREW_STATE_LIVE_ROW_MAX_AGE=259200 ;; esac
 SEP=' · '
 
 # Emit the one canonical line and exit 0. Detail is optional.
@@ -350,9 +385,79 @@ nm_ci_checks_state() {
     *) printf 'unknown' ;;
   esac
 }
-# Coarse fallback for cross-branch attribution. `no-mistakes axi status` (bare)
-# reports the active-or-most-recent run for the CURRENT branch when one
-# exists, else falls back to some other branch's run purely as informational
+# Full commit sha for a run-recorded sha-ish, or empty when this copy holds no
+# such object. ONE owner for that question: both head-binding rules and the
+# ledger scan below distinguish "resolves but is the wrong history" (a rewritten
+# or diverged tip, which must stay rejected) from "resolves to nothing here" (a
+# commit this copy simply never fetched, which proves nothing on its own).
+nm_resolve_commit() {  # <sha-ish>
+  local sha=${1:-}
+  [ -n "$sha" ] || return 0
+  git -C "$WT" rev-parse --verify --quiet "${sha}^{commit}" 2>/dev/null || true
+}
+
+# Liveness class of a run status word: live, failure, result, unverified, or
+# unknown. ONE owner of that vocabulary for every reader: the ledger's status
+# column (which emits running/completed/failed/cancelled), the `axi status`
+# outcome/status fields that share those words (nm_run_is_terminal_failure), and
+# the unverified-* synthetic words the anchored inference below emits when it
+# cannot stand behind its own answer - one per reason, all one class, since no
+# ledger word can collide with that prefix. failure and result are split because only a
+# FAILURE is ever displaced - a passed/checks-passed result is a verdict, not a
+# corpse - so no caller needs a second copy of the failed/cancelled list.
+nm_run_status_class() {  # <status-word>
+  case "${1:-}" in
+    running)                    printf 'live' ;;
+    failed|cancelled)           printf 'failure' ;;
+    completed)                  printf 'result' ;;
+    unverified-*)               printf 'unverified' ;;
+    *)                          printf 'unknown' ;;
+  esac
+}
+
+# Freshness verdict for the ledger date of a HELD live row (see the anchored
+# pipeline-continuation rule below): fresh, stale, undated, or local-clock.
+# HONEST SEMANTICS: the date column records when the run STARTED, so this bounds
+# how long ago that record was created, and nothing here observes the process.
+# A stale or undated verdict therefore means "this copy cannot stand behind the
+# inference", never "that run died" - callers represent every non-fresh verdict
+# as unknown rather than converting it into a failure. Clock skew that dates a
+# row in the future reads fresh rather than inventing an expiry.
+# The LOCAL clock is read first, and its failure gets its own verdict, because
+# the same `date` binary parses the row's date: a machine whose clock cannot be
+# read would otherwise report every row as a defective RECORD and send an
+# operator to the ledger for a fault that is entirely local.
+nm_live_row_freshness() {  # <epoch>
+  local epoch=${1:-} now
+  now=$(date +%s 2>/dev/null) || now=""
+  case "$now" in ''|*[!0-9]*) printf 'local-clock'; return ;; esac
+  case "$epoch" in ''|*[!0-9]*) printf 'undated'; return ;; esac
+  if [ "$((now - epoch))" -gt "$FM_CREW_STATE_LIVE_ROW_MAX_AGE" ]; then
+    printf 'stale'
+  else
+    printf 'fresh'
+  fi
+}
+
+# Unpack a "status<TAB>epoch" pair from nm_runs_status_and_epoch_for_branch into
+# NM_PAIR_STATUS and NM_PAIR_EPOCH. ONE owner of that format and of the epoch
+# sanity check, so no reader can feed a missing or unparseable date into a
+# numeric comparison: an epoch that is not all digits becomes empty.
+nm_read_runs_pair() {  # <pair>
+  local pair=${1:-}
+  NM_PAIR_STATUS=${pair%%$'\t'*}
+  case "$pair" in
+    *$'\t'*) NM_PAIR_EPOCH=${pair#*$'\t'} ;;
+    *)       NM_PAIR_EPOCH="" ;;
+  esac
+  case "$NM_PAIR_EPOCH" in ''|*[!0-9]*) NM_PAIR_EPOCH="" ;; esac
+}
+
+# Coarse ledger read, used for cross-branch attribution (this comment) and, since
+# the live-over-terminal rule, as the probe behind a terminal `axi status`
+# failure. `no-mistakes axi status` (bare) reports the active-or-most-recent run
+# for the CURRENT branch when one exists,
+# else falls back to some other branch's run purely as informational
 # display (verified empirically: querying a worktree with its own active run
 # reliably returns that run, even under concurrent load from several other
 # validating crews on the same underlying repo). A crew whose branch genuinely
@@ -378,11 +483,18 @@ nm_ci_checks_state() {
 # spaces (verified: no quoting, so splitting on the first two whitespace runs
 # is exact) - but branch + coarse status is exactly what this predicate needs:
 # is a run for THIS branch active right now. Echoes the first (most recent)
-# matching row's status word (running/completed/cancelled/failed) plus a TAB and
-# optional end-time epoch from the date column, or empty when the branch has no
-# run within FM_CREW_STATE_RUNS_LIMIT rows.
+# binding row's status word (running/completed/cancelled/failed) plus a TAB and
+# the optional start-time epoch from the date column, subject to the anchored
+# pipeline-continuation exception stated with the function below, or empty when
+# the branch has no run within FM_CREW_STATE_RUNS_LIMIT rows.
 # Parse a `no-mistakes runs` date column ("YYYY-MM-DD HH:MM") to epoch seconds.
 # Empty on failure so callers can fall back without treating parse errors as "old".
+# WHAT THAT DATE IS, established from recorded runs rather than assumed: run
+# 01M2AB3H8Y2AW1AVJDK0SH19G7 (fm/fm-cursor-lock-identity) is listed with date
+# 2026-09-12 10:17 while still `running` at about 10:19, its head later advanced
+# and its status later became failed, and its review step alone recorded
+# duration_ms 1767690 (~29.5 min), so 10:17 cannot be an end time. The column is
+# the run's START/creation time and does not move when the run later ends.
 nm_parse_runs_date_epoch() {  # <YYYY-MM-DD> <HH:MM>
   local day=$1 clock=$2
   [ -n "$day" ] && [ -n "$clock" ] || return 0
@@ -397,8 +509,48 @@ nm_parse_runs_date_epoch() {  # <YYYY-MM-DD> <HH:MM>
 
 # Echo "status<TAB>epoch" for the newest head-matching runs-list row for <branch>,
 # or empty when none. Epoch may be empty when the date column is missing/unparseable.
+# The status is a ledger word (running/completed/cancelled/failed), or one of the
+# synthetic unverified-* words the anchored rule below emits for an inference it
+# cannot stand behind; nm_run_status_class classifies both vocabularies.
+#
+# ANCHORED PIPELINE CONTINUATION (fm-crew-state-stale-run, live 2026-09-12).
+# The pipeline commits its fix rounds in its own gate repo, never in the task
+# worktree, so a healthy run's head is routinely an object this copy has never
+# fetched while the worktree still sits at the head it submitted. Rejecting
+# every unresolvable row outright let the scan walk on to an OLDER TERMINAL row
+# that ended at exactly that submitted head and report its terminal state as
+# current - an actively validating crew read `failed`.
+# A LIVE row whose head does not resolve here is therefore HELD rather than
+# skipped, and it is attributed only when the row immediately older on the same
+# branch is a terminal FAILURE that resolves to EXACTLY this worktree's HEAD:
+# that row is the failed submission this worktree made, so the live row above it
+# is that work still being validated. Nothing else widens - a held row whose
+# anchor fails is dropped and the scan continues exactly as before, a live row
+# that RESOLVES must still bind by the ordinary head rule, so a rewritten or
+# diverged tip stays rejected, an anchor that finished passed/checks-passed is a
+# result rather than a corpse and keeps its own verdict, and branch-name
+# coincidence never attributes a run on its own.
+#
+# The held row is an INFERENCE, not an observation: its head is an object this
+# copy does not have, so nothing here can see whether that run still breathes.
+# The ledger date of the held row is the only evidence tied to that exact run,
+# so the inference is bounded by it (nm_live_row_freshness). That date is the
+# run's START time, so the bound is only a backstop against a row nobody reaped -
+# deliberately set past any plausible live run, because a run legitimately stays
+# `running` through an overnight ci-monitor wait for a captain merge and must
+# keep reading working. A row past FM_CREW_STATE_LIVE_ROW_MAX_AGE, one this copy
+# cannot date, or a local clock this copy cannot read yields the matching
+# synthetic word (unverified-stale, unverified-undated, unverified-local-clock).
+# All three say "insufficient evidence" and are reported as unknown - a gate
+# process that died without reaping its row must not pin a crew as working
+# forever, and equally an unreaped row is no proof the run died, so the older
+# failure is not resurrected as the current state either. Only this inference is
+# bounded; a run whose head resolves here, and the `axi status` answer itself,
+# are never aged out.
 nm_runs_status_and_epoch_for_branch() {  # <branch>
   local branch=$1 out row st rest br sha day clock epoch
+  local held_st="" held_epoch="" local_full
+  local_full=$(git -C "$WT" rev-parse HEAD 2>/dev/null) || local_full=""
   out=$(nm_run runs --limit "$FM_CREW_STATE_RUNS_LIMIT")
   [ -n "$out" ] || return 0
   while IFS= read -r row; do
@@ -417,15 +569,34 @@ nm_runs_status_and_epoch_for_branch() {  # <branch>
     rest=${rest#* }
     rest=$(trim "$rest")
     clock=${rest%% *}
-    if [ "$br" = "$branch" ]; then
-      # Same code-identity rule as axi status: skip a same-branch row whose
-      # short-sha does not match this worktree (rewritten or advanced tip).
-      if ! nm_coarse_head_matches_worktree "$sha"; then
-        continue
+    [ "$br" = "$branch" ] || continue
+    epoch=$(nm_parse_runs_date_epoch "$day" "$clock")
+    if [ -n "$held_st" ]; then
+      # The row immediately older than a held live row is its only admissible
+      # anchor: only exact equality proves this worktree submitted it, and only
+      # a terminal FAILURE may be displaced by the row above it.
+      if [ -n "$local_full" ] && [ "$(nm_run_status_class "$st")" = failure ] \
+        && [ "$(nm_resolve_commit "$sha")" = "$local_full" ]; then
+        case "$(nm_live_row_freshness "$held_epoch")" in
+          fresh)       printf '%s\t%s' "$held_st" "$held_epoch" ;;
+          stale)       printf 'unverified-stale\t%s' "$held_epoch" ;;
+          local-clock) printf 'unverified-local-clock\t' ;;
+          *)           printf 'unverified-undated\t' ;;
+        esac
+        return 0
       fi
-      epoch=$(nm_parse_runs_date_epoch "$day" "$clock")
+      held_st=""
+      held_epoch=""
+    fi
+    # Same code-identity rule as axi status: a same-branch row whose short-sha
+    # does not bind to this worktree (rewritten or advanced tip) is not ours.
+    if nm_coarse_head_matches_worktree "$sha"; then
       printf '%s\t%s' "$st" "$epoch"
       return 0
+    fi
+    if [ "$(nm_run_status_class "$st")" = live ] && [ -z "$(nm_resolve_commit "$sha")" ]; then
+      held_st=$st
+      held_epoch=$epoch
     fi
   done <<< "$out"
   return 0
@@ -448,6 +619,13 @@ status_log_mtime_epoch() {
 # wins and the hold is reported alongside it - see the failed-run emit below).
 # When the run's end time cannot be determined, a trailing paused:/blocked: is
 # treated as newer (the worker's last append after observing the failure).
+# Accuracy note, no behaviour change: when no axi-status timestamp field exists
+# the runs-ledger fallback below supplies the run's START time, not its end
+# (nm_parse_runs_date_epoch), so this comparison can read a pause appended while
+# the run was still going as "newer" than the run. That is knowingly left exactly
+# as it was - the comparison predates the live-row rule, it is the 2026-07-21
+# declared-pause-lost fix's own behaviour, and swapping which timestamp it trusts
+# is a separate decision with its own incident history.
 status_log_newer_than_terminal_run() {
   local log_epoch run_epoch pair field
   if [ "$LOG_VERB" = blocked ]; then :
@@ -467,8 +645,8 @@ status_log_newer_than_terminal_run() {
       run_epoch=$COARSE_RUN_EPOCH
     else
       pair=$(nm_runs_status_and_epoch_for_branch "$CREW_BRANCH")
-      run_epoch=${pair#*$'\t'}
-      case "$run_epoch" in ''|*[!0-9]*) run_epoch="" ;; esac
+      nm_read_runs_pair "$pair"
+      run_epoch=$NM_PAIR_EPOCH
     fi
   fi
   if [ -z "$run_epoch" ]; then
@@ -503,6 +681,24 @@ nm_run_head_matches_worktree() {
   return 1
 }
 
+# 0 when the captured `axi status` run is a terminal FAILURE (failed/cancelled,
+# by outcome or by status - nm_run_status_class owns that word list for every
+# reader). Only that class is provisional against the ledger below: a failed
+# record can be the corpse of an attempt the pipeline has already replaced,
+# while a run that finished passed/checks-passed is a real result whose PR-ready
+# verdict must not be downgraded back to "validating". An outcome, once present,
+# is the whole answer; only a run with no outcome yet is judged by its status.
+nm_run_is_terminal_failure() {
+  local outcome status
+  outcome=$(strip_quotes "$(nm_field outcome)")
+  if [ -n "$outcome" ]; then
+    [ "$(nm_run_status_class "$outcome")" = failure ]
+    return
+  fi
+  status=$(strip_quotes "$(nm_field status)")
+  [ "$(nm_run_status_class "$status")" = failure ]
+}
+
 # Coarse runs-list rows are "<status> <branch> <short-sha> ...". 0 if the short
 # sha for this branch row matches the worktree head under the same rules as
 # nm_run_head_matches_worktree (equal, or local is ancestor of run tip).
@@ -510,7 +706,8 @@ nm_coarse_head_matches_worktree() {  # <short-sha>
   local run_head=$1 local_full run_full
   [ -n "$run_head" ] || return 1
   local_full=$(git -C "$WT" rev-parse HEAD 2>/dev/null) || return 1
-  run_full=$(git -C "$WT" rev-parse --verify "${run_head}^{commit}" 2>/dev/null) || return 1
+  run_full=$(nm_resolve_commit "$run_head")
+  [ -n "$run_full" ] || return 1
   [ "$run_full" = "$local_full" ] && return 0
   if git -C "$WT" merge-base --is-ancestor "$local_full" "$run_full" 2>/dev/null; then
     return 0
@@ -520,12 +717,17 @@ nm_coarse_head_matches_worktree() {  # <short-sha>
 
 HAVE_RUN=0
 # RUN_SOURCE distinguishes the two ways HAVE_RUN=1 can happen: "full" means
-# $RUN_OUT is real `axi status` TOON with step/gate detail; "coarse" means only
-# a bare status word came back from the runs-list fallback above, so the
-# run-step block below skips the TOON field parsing entirely for this crew.
+# $RUN_OUT is real `axi status` TOON with step/gate detail; "coarse" means the
+# state comes from a bare runs-list word instead, either because `axi status`
+# could not be attributed to this worktree at all or because a live ledger row
+# displaced its terminal failure (the live-over-terminal rule below). Either
+# way the run-step block skips the TOON field parsing entirely for this crew.
 RUN_SOURCE=full
 COARSE_STATUS=""
 COARSE_RUN_EPOCH=""
+# Set by nm_read_runs_pair, the single owner of the "status<TAB>epoch" format.
+NM_PAIR_STATUS=""
+NM_PAIR_EPOCH=""
 # Scouts and secondmates never drive a no-mistakes validation of their own
 # worktree, so skip the lookup for them and read state from pane/log directly.
 if [ "$KIND" = ship ] && [ -n "$CREW_BRANCH" ] && command -v no-mistakes >/dev/null 2>&1; then
@@ -534,6 +736,40 @@ if [ "$KIND" = ship ] && [ -n "$CREW_BRANCH" ] && command -v no-mistakes >/dev/n
     run_branch=$(strip_quotes "$(nm_field branch)")
     if [ -n "$run_branch" ] && [ "$run_branch" = "$CREW_BRANCH" ] && nm_run_head_matches_worktree; then
       HAVE_RUN=1
+      # Live-over-terminal (fm-crew-state-stale-run, live 2026-09-12). More than
+      # one recorded run can bind to this worktree at once: a run that died at
+      # the worktree's exact commit still binds by the equal-commit rule while
+      # the run that replaced it validates the pipeline's fix commits on the
+      # same branch. Bare `axi status` answers with one of them, so a terminal
+      # FAILURE here is provisional until the ledger has been asked whether this
+      # worktree also has a live run - reporting the corpse as current is what
+      # produced a wrong captain report, a wrong stuck-crew recovery, and a
+      # premature teardown attempt on a run that was still progressing.
+      # Only a live word displaces it; a failed run with no live sibling keeps
+      # its full `axi status` step and gate detail rather than degrading to the
+      # ledger, and the ledger's own answer for the terminal row pre-fills the
+      # epoch the recency override below would otherwise re-query.
+      if nm_run_is_terminal_failure; then
+        nm_read_runs_pair "$(nm_runs_status_and_epoch_for_branch "$CREW_BRANCH")"
+        case "$(nm_run_status_class "$NM_PAIR_STATUS")" in
+          live)
+            COARSE_STATUS=$NM_PAIR_STATUS
+            COARSE_RUN_EPOCH=$NM_PAIR_EPOCH
+            RUN_SOURCE=coarse
+            ;;
+          unverified)
+            # The ledger found a live row anchored to this worktree's failed
+            # submission but cannot vouch for it. Reporting the failure as
+            # current would assert a death this copy cannot see, so the crew
+            # reads unknown and surfaces instead of being absorbed either way.
+            COARSE_STATUS=$NM_PAIR_STATUS
+            RUN_SOURCE=coarse
+            ;;
+          failure|result)
+            COARSE_RUN_EPOCH=$NM_PAIR_EPOCH
+            ;;
+        esac
+      fi
     else
       # The active-or-most-recent run is for another branch, or same branch with
       # a rewritten/diverged head (the CLI is alive and answered; only the
@@ -544,9 +780,9 @@ if [ "$KIND" = ship ] && [ -n "$CREW_BRANCH" ] && command -v no-mistakes >/dev/n
       # for no better answer.
       coarse_pair=$(nm_runs_status_and_epoch_for_branch "$CREW_BRANCH")
       if [ -n "$coarse_pair" ]; then
-        COARSE_STATUS=${coarse_pair%%$'\t'*}
-        COARSE_RUN_EPOCH=${coarse_pair#*$'\t'}
-        case "$COARSE_RUN_EPOCH" in ''|*[!0-9]*) COARSE_RUN_EPOCH="" ;; esac
+        nm_read_runs_pair "$coarse_pair"
+        COARSE_STATUS=$NM_PAIR_STATUS
+        COARSE_RUN_EPOCH=$NM_PAIR_EPOCH
         HAVE_RUN=1
         RUN_SOURCE=coarse
       fi
@@ -570,12 +806,20 @@ if [ "$HAVE_RUN" = 1 ]; then
     # needs-decision/blocked status-log append (a captain-relevant VERB) is
     # surfaced through signal_reason_is_actionable regardless of this
     # coarse-vs-full distinction, so a real gate is never silently missed.
+    # The unverified-* words are not ledger status words: they are the anchored
+    # inference reporting that it cannot stand behind itself (see
+    # nm_runs_status_and_epoch_for_branch). Neither working nor failed is
+    # honest there, so the crew reads unknown and the detail names the gap.
     case "$COARSE_STATUS" in
-      running)   RUN_STATE=working; RUN_DETAIL="validating (background run)" ;;
-      completed) RUN_STATE="done";  RUN_DETAIL="run completed" ;;
-      failed)    RUN_STATE=failed;  RUN_DETAIL="run failed" ;;
-      cancelled) RUN_STATE=failed;  RUN_DETAIL="run cancelled" ;;
-      *)         RUN_STATE=unknown; RUN_DETAIL="runs list status: $COARSE_STATUS" ;;
+      running)            RUN_STATE=working; RUN_DETAIL="validating (background run)" ;;
+      completed)          RUN_STATE="done";  RUN_DETAIL="run completed" ;;
+      failed)             RUN_STATE=failed;  RUN_DETAIL="run failed" ;;
+      cancelled)          RUN_STATE=failed;  RUN_DETAIL="run cancelled" ;;
+      unverified-stale)   RUN_STATE=unknown; RUN_DETAIL="live run unverifiable: record started before the freshness bound" ;;
+      unverified-undated) RUN_STATE=unknown; RUN_DETAIL="live run unverifiable: record carries no usable date" ;;
+      unverified-local-clock)
+                          RUN_STATE=unknown; RUN_DETAIL="live run unverifiable: local clock unreadable here" ;;
+      *)                  RUN_STATE=unknown; RUN_DETAIL="runs list status: $COARSE_STATUS" ;;
     esac
   else
     status=$(strip_quotes "$(nm_field status)")
