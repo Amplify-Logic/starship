@@ -72,6 +72,7 @@ config/backend  runtime session-provider backend override for new tasks; LOCAL, 
 config/startup-memory-budget  primary-authoritative per-home startup-memory budget; LOCAL, gitignored, materialized as 7,500 estimated tokens by locked primary bootstrap and inherited into secondmate homes; see docs/configuration.md "Startup memory budget"
 config/cmux-socket-password  optional cmux control-socket password; LOCAL, gitignored; read fresh on every cmux CLI call and passed through without ever overriding an operator's own ambient CMUX_SOCKET_PASSWORD when absent (docs/cmux-backend.md "Setup")
 config/morning-intake  optional opt-in once-per-local-day morning intake gate; LOCAL, gitignored; absent or without `enabled = true` leaves the home inert, so no clone or device self-enrols; see docs/configuration.md "Morning intake"
+config/channel-intake  optional opt-in continuous channel intake gate; LOCAL, gitignored; absent or without `enabled = true` leaves the home inert, so no clone or device self-enrols; source identities live in its private inventory, never here; see docs/channel-intake.md
 config/wedge-alarm  optional supervision active-alert directives for away-mode injection wedges and host-detected watcher outages; LOCAL, gitignored; absent means auto (macOS Notification Center when available); see docs/wedge-alarm.md
 config/primary-handoff  optional quota- and context-aware primary orchestrator rotation; LOCAL, gitignored; absent or enabled:false leaves primary launch unchanged; see docs/primary-handoff.md
 config/primary-effort  optional Claude primary launch effort for claude-fable and claude-opus; LOCAL, gitignored; one of low, medium, high, xhigh, max; absent = xhigh; read only by bin/fm-primary.sh at launch; not inherited by secondmate homes; see docs/configuration.md
@@ -103,7 +104,7 @@ state/               volatile runtime signals; gitignored
   .pr-check-migration.log  private per-task outcomes distinguishing rebuilt or canonically registered replacement polls, quarantined unarmed polls, and incomplete migrations
   .pr-check-migration-scan-v1  private marker proving the non-executing scan disabled every unsafe legacy check; .pr-check-migration-v1 separately records completed private repairs; .pr-check-migration.progress.<pid> records each live full-migration sweep independently
   x-watch.check.sh   generated X-mode relay poll shim; present only when opted in (section 14)
-  <label>.check.sh   generated morning-intake poll shim; present only when that intake is armed (docs/configuration.md "Morning intake")
+  <label>.check.sh   generated morning-intake or channel-intake poll shim; present only when that intake is armed (docs/configuration.md "Morning intake"; docs/channel-intake.md)
   pending-replies/   parent-owned secondmate pending-reply records for correlated delivery, recovery, and one-shot escalation; bin/fm-pending-reply-lib.sh
   x-inbox/           generated X-mode pending mention payloads; fmx-respond drains it (section 14)
   x-context/         generated X-mode durable per-request reply context and one-wake offer markers, keyed by request_id; survives inbox cleanup and expires within seven days (section 14; bin/fm-x-lib.sh)

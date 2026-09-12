@@ -25,6 +25,10 @@
 #                 "UPSTREAM_REPORT: new private report at <path>",
 #                 "MORNING_INTAKE: <label> due|failed|complete ..." or
 #                 "MORNING_INTAKE: new <label> report at <path>",
+#                 "CHANNEL_INTAKE: <N> source(s) due ...", "<N> item(s) ready
+#                  to send|blocked, ...|held, ...", "source(s) reading
+#                  unknown ...", or
+#                  "<label> live check is absent|unregistered ...",
 #                 "FMX: X mode on ..." or "FMX: X mode off ...".
 #          TOOLCHAIN_DRIFT compares docs/toolchain-manifest.tsv against PATH and
 #          prints one line per runtime whose installed version differs from the
@@ -46,6 +50,12 @@
 #          It never merges and never touches projects/; see bin/fm-upstream-lib.sh.
 #          MORNING_INTAKE is the read-only owed/failed/pending check owned by
 #          bin/fm-morning-intake.sh, silent unless this home opted in.
+#          CHANNEL_INTAKE is the read-only due/ready/unknown check owned by
+#          bin/fm-channel-intake.sh, silent unless this home opted in. A source
+#          reading `unknown` did not complete its last read, which is not the
+#          same as nothing new, and a notification the gate refused or held is
+#          named as such rather than counted as quiet;
+#          docs/channel-intake.md owns the response.
 #          UPSTREAM_REPORT is the read-only pending-report check owned by
 #          bin/fm-upstream-watch.sh. The weekly job writes only private data/;
 #          acknowledge the report after reading it so later sessions stay quiet.
@@ -1066,6 +1076,12 @@ fm_upstream_check "$FM_ROOT" "$FM_HOME"
 # fm-morning-intake.sh rather than being reimplemented here.
 [ ! -x "$SCRIPT_DIR/fm-morning-intake.sh" ] \
   || "$SCRIPT_DIR/fm-morning-intake.sh" pending
+# Read-only due/ready/unknown check for the opt-in continuous channel intake.
+# Inert on every home without an `enabled = true` line in config/channel-intake,
+# and the cadence, per-source checkpoints, ledger and notification budget all
+# remain owned by fm-channel-intake.sh rather than being reimplemented here.
+[ ! -x "$SCRIPT_DIR/fm-channel-intake.sh" ] \
+  || "$SCRIPT_DIR/fm-channel-intake.sh" pending
 if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then
   secondmate_liveness_sweep
   secondmate_sync

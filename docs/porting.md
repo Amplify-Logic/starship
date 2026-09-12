@@ -69,6 +69,7 @@ Paths that behave this way today include, when present:
 - `data/done-archive.md`
 - `data/upstream-watch/`
 - `data/morning-intake/` (this home's own local-day intake state; `docs/configuration.md` "Morning intake")
+- `data/channel-intake/` (this home's own source inventory, per-source checkpoints and obligation ledger; `docs/channel-intake.md`)
 - `data/action-gateway/`
 - `data/orders/`
 - `data/errands/`

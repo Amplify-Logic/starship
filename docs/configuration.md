@@ -70,6 +70,32 @@ Run `render` to inspect the complete definition, `install` to write it, load it 
 That is why the intake is defined as the first available morning rather than a lid-open event; launchd exposes no such event here and none is claimed.
 The default cadence is 900 seconds, read back from the gate owner rather than parsed twice; set `interval_seconds = N` in `config/morning-intake` to change it.
 
+## Continuous channel intake (config/channel-intake)
+
+An opt-in, per-source repeat-poll gate and obligation ledger for continuous intake from already-enrolled channels.
+It ships inert: with no `enabled = true` line in private gitignored `config/channel-intake`, `bin/fm-channel-intake.sh` does nothing at all, so cloning this repo, seeding a secondmate home, or adding a device never enrols it.
+Each home and each device opts in separately.
+
+This is the repeat-poll sibling of the morning gate above, and it exists because that gate is once per local day: after a day completes its `run` returns early, so a shorter scheduler interval only re-checks a satisfied day gate.
+Everything else is deliberately the same discipline - a private mutex over its own record, durable armed state, one wake per armed cycle, the registered watcher check, and a watermark that advances only behind captured output.
+
+`bin/fm-channel-intake.sh` owns the cadence, the per-source checkpoints, deduplication, edit detection, backoff, the ledger, and the notification budget.
+Its header and `--help` own the exact commands, config keys and mechanics; `docs/channel-intake.md` owns the operator procedure, the source inventory format, and the disclosed detection limits.
+It never reads a source system, opens a network connection, sends a message, spawns an agent, or takes the per-home session lock, so it cannot compete with a live fleet.
+An orchestrator performs the authenticated connector read on its own path and reports back through `observe`, `complete` and `fail`.
+
+`interval_seconds` has a hard 300-second floor, because an awake laptop multiplies the cadence by every enrolled source.
+A source whose read failed backs off geometrically to `backoff_max_seconds` and reads `unknown`, never "nothing new".
+`notify-due` renders one grouped, rate-limited, quiet-hours-aware private payload and does not send it; the orchestrator sends it and confirms with `notify-sent`, so an interrupted send re-renders rather than being silently swallowed.
+Notifications are refused outright until `notify_recipient_verified = true`, which is set only after the recipient has been checked against the known captain account.
+Source identities live in the private inventory named by `sources_file`, never in this config file and never in the tracked repository; unknown config keys are refused rather than parked.
+
+`bin/fm-channel-intake-schedule.sh` owns the inspectable macOS launchd schedule under its own `channel-intake` agent label and refuses to install on a home that has not opted in.
+It shares the LaunchAgent writer in `bin/fm-launchd-schedule-lib.sh` with the morning-intake and upstream-watch schedules, so all three render, validate and load the same way.
+`StartInterval` plus `RunAtLoad` is the whole trigger, and a tick reads forward from each source's own checkpoint, so a sleep or offline gap is walked rather than skipped.
+The interval is a target detection latency and never an upper bound: sleep, offline stretches, backoff, quota and queue delay all add to it, and no instant or 24x7 availability is claimed.
+Removing the schedule disarms the live check and leaves the ledger in place, because an open obligation must survive an uninstall.
+
 ## Backlog backend (.tasks.toml / config/backlog-backend)
 
 The tracked `.tasks.toml` pins the default `tasks-axi` markdown backend to `data/backlog.md`, with `done_keep = 10` and an archive at `data/done-archive.md`.
