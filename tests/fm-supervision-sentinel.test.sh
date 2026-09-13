@@ -412,6 +412,127 @@ test_live_identity_matched_watcher_stays_silent() {
   pass "supervision sentinel: live identity-matched watcher with a fresh beacon stays silent"
 }
 
+# An armed glasses shift is work worth supervising even with no crew task in
+# flight: shift questions arrive as mailbox events, never as state/*.meta.
+test_armed_shift_with_no_crew_task_is_supervised() {
+  local home="$TMP_ROOT/shift" recorder="$TMP_ROOT/record-shift" log="$TMP_ROOT/shift-alerts.log" holder out status marker
+  make_primary "$home"
+  make_recorder "$recorder" "$log"
+  marker="$home/state/.supervision-outage-alarm"
+  # Armed means the record AND away mode: a shift's lifetime is contained inside
+  # away mode's, and a record without the flag is a stale leftover (below).
+  printf 'started_epoch=0\n' > "$home/state/.shift"
+  : > "$home/state/.afk"
+  sleep 60 &
+  holder=$!
+  install_stale_watcher_fixture "$home" "$holder" "$ROOT/bin/fm-watch.sh" || {
+    kill "$holder" 2>/dev/null || true
+    wait "$holder" 2>/dev/null || true
+    fail "could not identify the stale-shift watcher fixture"
+  }
+  touch -t 202001010000 "$home/state/.last-watcher-beat"
+
+  run_check "$home" "$recorder"
+  [ -s "$marker" ] || fail "an armed shift with a stale watcher did not write the durable outage marker"
+  [ "$(wc -l < "$log" | tr -d '[:space:]')" -eq 1 ] || fail "an armed shift with a stale watcher did not fire exactly one alert"
+  out=$(cat "$log")
+  assert_contains "$out" $'osascript\tSUPERVISION DOWN: glasses shift armed, no crew task in flight' \
+    "the shift alert did not keep the SUPERVISION DOWN prefix and name the shift: $out"
+  assert_not_contains "$out" '0 task(s) in flight' "the shift alert read as an idle home with zero tasks"
+  run_check "$home" "$recorder"
+  [ "$(wc -l < "$log" | tr -d '[:space:]')" -eq 1 ] || fail "one continuing shift outage alerted twice inside its backoff"
+
+  out=$(run_mode "$home" "$recorder" check); status=$?
+  expect_code 1 "$status" "the operator diagnostic must exit non-zero on a shift outage"
+  assert_contains "$out" 'SUPERVISION DOWN: glasses shift armed, no crew task in flight' "the diagnostic did not name the shift outage"
+
+  # With a crew task in flight beside the shift, the crew wording is untouched.
+  printf 'project=test\n' > "$home/state/task.meta"
+  rm -f "$marker"
+  out=$(run_mode "$home" "$recorder" check) || true
+  assert_contains "$out" 'SUPERVISION DOWN: 1 task(s) in flight' "an in-flight task beside an armed shift changed the crew-task wording"
+  assert_not_contains "$out" 'glasses shift' "an in-flight task beside an armed shift was reported as a shift outage"
+  rm -f "$home/state/task.meta" "$marker"
+
+  # Standing the shift down makes the home idle again: cleared, silent, OK.
+  rm -f "$home/state/.shift" "$home/state/.afk"
+  run_check "$home" "$recorder"
+  kill "$holder" 2>/dev/null || true
+  wait "$holder" 2>/dev/null || true
+  [ ! -e "$marker" ] || fail "standing the shift down did not clear the outage episode"
+  [ "$(wc -l < "$log" | tr -d '[:space:]')" -eq 1 ] || fail "a stood-down shift with no task in flight still alerted"
+  out=$(run_mode "$home" "$recorder" check); status=$?
+  expect_code 0 "$status" "no shift and no task must report OK"
+  assert_contains "$out" 'OK - no task metadata in flight and no glasses shift armed' "the idle verdict did not say neither condition holds"
+  pass "supervision sentinel: an armed shift with no crew task is supervised, alerts once, and goes idle when stood down"
+}
+
+# The real shift failure mode: the away daemon runs the watcher as its child, so
+# when the daemon dies no check runs at all and the host alarm is the only thing
+# left that can speak. No lock, a stale beat, a shift record: it must fire.
+# A shift record that outlived away mode is a stale leftover, not work to
+# supervise. bin/fm-afk-return.sh removes none of the shift's artifacts, so an
+# ordinary captain return leaves the record behind; supervising it would alert
+# on every idle evening and speak into a headset on a charger.
+test_a_shift_record_without_away_mode_is_not_supervised() {
+  local home="$TMP_ROOT/shift-stale" recorder="$TMP_ROOT/record-shift-stale" log="$TMP_ROOT/shift-stale-alerts.log" out status
+  make_primary "$home"
+  make_recorder "$recorder" "$log"
+  printf 'started_epoch=0\n' > "$home/state/.shift"
+  # No state/.afk: exactly what an away-mode return leaves behind.
+  touch -t 202001010000 "$home/state/.last-watcher-beat"
+
+  run_check "$home" "$recorder"
+  [ ! -s "$log" ] || fail "a stale shift record alerted: $(cat "$log")"
+  [ ! -e "$home/state/.supervision-outage-alarm" ] || fail "a stale shift record wrote an outage marker"
+
+  out=$(run_mode "$home" "$recorder" check); status=$?
+  expect_code 0 "$status" "a stale shift record must report OK, not an outage"
+  assert_contains "$out" 'OK - no task metadata in flight and no glasses shift armed' \
+    "the stale-record verdict did not report the home as having nothing to supervise: $out"
+  pass "supervision sentinel: a shift record that outlived away mode is not supervised"
+}
+
+test_dead_away_daemon_with_a_shift_armed_fires_the_host_alarm() {
+  local home="$TMP_ROOT/shift-dead" recorder="$TMP_ROOT/record-shift-dead" log="$TMP_ROOT/shift-dead-alerts.log" holder identity out
+  make_primary "$home"
+  make_recorder "$recorder" "$log"
+  printf 'started_epoch=0\n' > "$home/state/.shift"
+  : > "$home/state/.afk"
+  touch -t 202001010000 "$home/state/.last-watcher-beat"
+
+  run_check "$home" "$recorder"
+  [ "$(wc -l < "$log" | tr -d '[:space:]')" -eq 1 ] || fail "a dead away daemon with a shift armed did not fire the host alarm"
+  assert_contains "$(cat "$log")" 'SUPERVISION DOWN: glasses shift armed' "the dead-daemon alert did not name the armed shift"
+  assert_contains "$(cat "$log")" 'last watcher beat:' "the dead-daemon alert omitted the beacon evidence"
+  rm -f "$log" "$home/state/.supervision-outage-alarm"
+
+  # The same armed shift with a live identity-matched watcher stays silent and
+  # the OK report names the shift rather than a zero task count.
+  sleep 60 &
+  holder=$!
+  identity=$(FM_STATE_OVERRIDE="$home/state" bash -c '. "$1"; fm_pid_identity "$2"' _ "$ROOT/bin/fm-wake-lib.sh" "$holder") || {
+    kill "$holder" 2>/dev/null || true
+    wait "$holder" 2>/dev/null || true
+    fail "could not identify the healthy shift watcher fixture"
+  }
+  mkdir -p "$home/state/.watch.lock"
+  printf '%s\n' "$holder" > "$home/state/.watch.lock/pid"
+  printf '%s\n' "$home" > "$home/state/.watch.lock/fm-home"
+  printf '%s\n' "$ROOT/bin/fm-watch.sh" > "$home/state/.watch.lock/watcher-path"
+  printf '%s\n' "$identity" > "$home/state/.watch.lock/pid-identity"
+  touch "$home/state/.last-watcher-beat"
+  run_check "$home" "$recorder"
+  out=$(run_mode "$home" "$recorder" check) || fail "a healthily watched shift reported an outage: $out"
+  kill "$holder" 2>/dev/null || true
+  wait "$holder" 2>/dev/null || true
+  [ ! -e "$log" ] || fail "a healthily watched shift fired an alert: $(cat "$log")"
+  [ ! -e "$home/state/.supervision-outage-alarm" ] || fail "a healthily watched shift wrote an outage marker"
+  assert_contains "$out" 'OK - glasses shift armed, no crew task in flight with a live identity-matched watcher' \
+    "the healthy report did not name the armed shift: $out"
+  pass "supervision sentinel: a dead away daemon with a shift armed fires the host alarm, and a watched shift reports OK by name"
+}
+
 test_arm_registers_one_home_scoped_read_only_launchd_job() {
   local home="$TMP_ROOT/arm" fake="$TMP_ROOT/fake-launchctl" log="$TMP_ROOT/launchctl.log" loaded="$TMP_ROOT/loaded" checked plist calls
   make_primary "$home"
@@ -1163,6 +1284,9 @@ test_in_harness_modes_are_marker_only_and_honor_a_durable_disarm
 test_marker_only_evidence_refreshes_a_new_episode_but_never_a_claim
 test_symlinked_home_is_not_reported_as_an_outage
 test_live_identity_matched_watcher_stays_silent
+test_armed_shift_with_no_crew_task_is_supervised
+test_dead_away_daemon_with_a_shift_armed_fires_the_host_alarm
+test_a_shift_record_without_away_mode_is_not_supervised
 test_failed_alert_stays_pending_and_retries
 test_arm_registers_one_home_scoped_read_only_launchd_job
 test_unconverged_arm_backs_off_instead_of_churning_launchd

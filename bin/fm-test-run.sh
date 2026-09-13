@@ -352,6 +352,7 @@ tests/fm-backend-orca.test.sh
 tests/fm-secondmate-sync.test.sh
 tests/fm-primary-handoff.test.sh
 tests/fm-tangle-guard.test.sh
+tests/fm-shift.test.sh
 tests/fm-decision-surface.test.sh
 tests/fm-fork-surface.test.sh
 tests/fm-secondmate-lifecycle-e2e.test.sh
@@ -393,6 +394,7 @@ tests/fm-pi-primary-live-e2e.test.sh
 tests/fm-deck.test.sh
 tests/fm-timeout-lib.test.sh
 tests/fm-voice-relay.test.sh
+tests/fm-speak.test.sh
 EOF
 }
 

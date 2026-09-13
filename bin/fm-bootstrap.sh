@@ -157,6 +157,8 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 . "$SCRIPT_DIR/fm-upstream-lib.sh"
 # shellcheck source=bin/fm-toolchain-lib.sh disable=SC1091
 . "$SCRIPT_DIR/fm-toolchain-lib.sh"
+# shellcheck source=bin/fm-supervision-lib.sh disable=SC1091
+. "$SCRIPT_DIR/fm-supervision-lib.sh"
 
 fleet_sync_origin_backed_project_count() {
   local count proj
@@ -1056,6 +1058,18 @@ accounts_validate
 if [ "${FM_BOOTSTRAP_VERBOSE_FACTS:-0}" = 1 ] \
   && ! fm_backlog_backend_manual "$CONFIG" && fm_tasks_axi_compatible; then
   echo "BOOTSTRAP_INFO: tasks-axi available"
+fi
+# Read-only stale-shift check. bin/fm-afk-return.sh knows nothing about the
+# glasses shift and removes none of its artifacts, so an ordinary captain return
+# - or a reboot - leaves the shift record, its registered check and its
+# config/wedge-alarm block behind. Every read path now treats that leftover as
+# stale rather than armed, which stops the repeating spoken alarm, but the
+# artifacts are still on disk and the block still owns this home's alarm
+# channel until stop clears them. Nothing else in the tree surfaces that, so
+# this line is the only thing that will. Detection only: it never removes an
+# artifact, because teardown is bin/fm-shift.sh stop's alone.
+if fm_sup_shift_stale "$STATE"; then
+  echo "BOOTSTRAP_INFO: a glasses shift is still armed from an earlier session but away mode has ended; its self-check and alarm route are still in place - stand it down with: $FM_ROOT/bin/fm-shift.sh stop"
 fi
 # Read-only runtime drift check: compares docs/toolchain-manifest.tsv against
 # PATH. Detection only - it reports and never blocks a launch; see

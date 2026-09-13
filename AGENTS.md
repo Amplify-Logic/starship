@@ -73,6 +73,7 @@ config/startup-memory-budget  primary-authoritative per-home startup-memory budg
 config/cmux-socket-password  optional cmux control-socket password; LOCAL, gitignored; read fresh on every cmux CLI call and passed through without ever overriding an operator's own ambient CMUX_SOCKET_PASSWORD when absent (docs/cmux-backend.md "Setup")
 config/morning-intake  optional opt-in once-per-local-day morning intake gate; LOCAL, gitignored; absent or without `enabled = true` leaves the home inert, so no clone or device self-enrols; see docs/configuration.md "Morning intake"
 config/channel-intake  optional opt-in continuous channel intake gate; LOCAL, gitignored; absent or without `enabled = true` leaves the home inert, so no clone or device self-enrols; source identities live in its private inventory, never here; see docs/channel-intake.md
+config/speak  optional opt-in desk voice-out gate and `say` voice name; LOCAL, gitignored; absent or without `enabled = true` leaves the home silent, so no clone or device starts talking; see docs/configuration.md "Desk voice-out"
 config/wedge-alarm  optional supervision active-alert directives for away-mode injection wedges and host-detected watcher outages; LOCAL, gitignored; absent means auto (macOS Notification Center when available); see docs/wedge-alarm.md
 config/primary-handoff  optional quota- and context-aware primary orchestrator rotation; LOCAL, gitignored; absent or enabled:false leaves primary launch unchanged; see docs/primary-handoff.md
 config/primary-effort  optional Claude primary launch effort for claude-fable and claude-opus; LOCAL, gitignored; one of low, medium, high, xhigh, max; absent = xhigh; read only by bin/fm-primary.sh at launch; not inherited by secondmate homes; see docs/configuration.md
@@ -113,6 +114,7 @@ state/               volatile runtime signals; gitignored
   x-poll.error x-poll.claim-error  generated X-mode relay and offer-claim diagnostic dedupe markers
   .wake-queue        durable queued wakes: epoch<TAB>seq<TAB>kind<TAB>key<TAB>payload
   .afk               durable away-mode flag; present = sub-supervisor may inject escalations (set by /afk, cleared on user return)
+  .shift .shift-log .shift-mailbox-outage   armed glasses-shift record, its plain timestamped event log, and the self-check's outage episode marker; written by bin/fm-shift.sh start, stop, and its registered fm-shift check; stop removes `.shift` and `.shift-mailbox-outage` and leaves the append-only `.shift-log`, which spans shifts; while `.shift` exists AND away mode is active the host sentinel supervises the home even with no task in flight, and a record left behind once away mode ends is a stale shift that session start reports rather than a live one; never touch; see docs/shift-loop.md
   .watch.lock .wake-queue.lock watcher singleton and queue serialization locks
   .primary-active .primary-context .primary-handoff*   optional primary-handoff supervisor state (active profile, durable context sample, phase record); present only when config/primary-handoff enables it (docs/primary-handoff.md)
   .hash-* .count-* .stale-* .stale-since-* .paused-* .captain-held-surfaced-* .wedge-escalations-* .seen-* .hb-surfaced-* .last-* .heartbeat-streak   watcher internals; never touch
@@ -447,6 +449,8 @@ Batch non-urgent updates into the next natural reply.
 Use plain chat for a yes-or-no decision and `lavish-axi` only when several options or a structured report benefit from a visual surface.
 Whenever a PR is mentioned, include its full `https://...` URL before any shorthand reference.
 Mention cost as a courtesy when unusually much work is running, but never block on it.
+When this home has opted in to desk voice-out, also speak the outcome through `bin/fm-speak.sh` after sending a captain-facing reply, keeping the spoken line to the outcome and its consequence because the text reply remains the authoritative one.
+That path refuses anything that asks the captain to decide, so a merge, a spend, an outward action, or any other approval is still put to him in the reply rather than aloud.
 
 ## 10. Backlog contract
 
