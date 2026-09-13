@@ -155,6 +155,23 @@
 #   The brief placeholder receives one of two arguments, chosen by BACKEND, not by
 #   harness: the whole encoded brief inline (every backend but herdr), or a one-line
 #   pointer at the brief file (herdr). See "brief delivery shape" below for why.
+#   Context window (the exact per-harness mechanism; docs/configuration.md
+#   "Context window" carries the one-sentence evidence for each):
+#     claude  env prefix CLAUDE_CODE_AUTO_COMPACT_WINDOW=500000 on the launch
+#             line. The CLI reads that variable directly and it outranks the
+#             autoCompactWindow user setting, so the cap is per-launch and the
+#             captain's global config is never touched. The effective threshold
+#             is min(500000, the model's own maximum window).
+#     codex   launch-line override -c model_auto_compact_token_limit=500000.
+#             A -c override never touches ~/.codex/config.toml or a pinned
+#             account's config.toml.
+#     pi      nothing is passed: pi has no context-window or auto-compaction
+#             launch knob. Its threshold is the model's own context window minus
+#             compaction.reserveTokens, and reserveTokens is settings-file only.
+#     cursor  nothing is passed: the Cursor CLI exposes no context or
+#             compaction setting.
+#   Every other adapter (opencode, grok, kimi, prime-agent) is outside the
+#   captain's 2026-09-13 order and is deliberately unchanged.
 # Per-harness turn-end hooks are installed automatically; some live outside the worktree.
 # grok uses a firstmate-owned global hook under ${GROK_HOME:-$HOME/.grok}/hooks
 # plus a gitignored .fm-grok-turnend worktree pointer and a state token.
@@ -466,15 +483,30 @@ launch_template() {
     # does NOT suppress the interactive ghost text (verified empirically), so the env
     # var is the correct control. The dim-aware composer reader in fm-tmux-lib.sh is
     # the defense-in-depth backstop for any pane this flag cannot reach.
-    claude) printf '%s' 'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions __MODELFLAG____EFFORTFLAG____ENCODED_BRIEF__' ;;
+    # CLAUDE_CODE_AUTO_COMPACT_WINDOW=500000 caps this worker's auto-compaction
+    # window at 500k TOKENS (docs/configuration.md "Context window"). The CLI
+    # reads the variable directly and it beats the autoCompactWindow user
+    # setting, so the cap rides the launch and never touches the captain's
+    # global config. The effective threshold is still min(this value, the
+    # model's own maximum window), so a smaller model is capped by its model.
+    claude) printf '%s' 'CLAUDE_CODE_AUTO_COMPACT_WINDOW=500000 CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions __MODELFLAG____EFFORTFLAG____ENCODED_BRIEF__' ;;
+    # -c model_auto_compact_token_limit=500000 caps this worker's auto-compaction
+    # window at 500k TOKENS (docs/configuration.md "Context window"). It is a
+    # launch-line config override, so it never touches the captain's or a pinned
+    # account's config.toml. It sits AFTER the bypass flag purely so the two -c
+    # overrides read together; codex accepts -c in any position.
     codex)
       if [ "$kind" = secondmate ]; then
-        printf '%s' 'codex __MODELFLAG____EFFORTFLAG__--dangerously-bypass-approvals-and-sandbox __ENCODED_BRIEF__'
+        printf '%s' 'codex __MODELFLAG____EFFORTFLAG__--dangerously-bypass-approvals-and-sandbox -c model_auto_compact_token_limit=500000 __ENCODED_BRIEF__'
       else
-        printf '%s' 'codex __MODELFLAG____EFFORTFLAG__--dangerously-bypass-approvals-and-sandbox -c "notify=[\"bash\",\"-c\",\"touch __TURNEND__\"]" __ENCODED_BRIEF__'
+        printf '%s' 'codex __MODELFLAG____EFFORTFLAG__--dangerously-bypass-approvals-and-sandbox -c model_auto_compact_token_limit=500000 -c "notify=[\"bash\",\"-c\",\"touch __TURNEND__\"]" __ENCODED_BRIEF__'
       fi
       ;;
     opencode) printf '%s' 'OPENCODE_CONFIG_CONTENT='\''{"permission":{"*":"allow"}}'\'' opencode __MODELFLAG__--prompt __ENCODED_BRIEF__' ;;
+    # pi has NO context-window or auto-compaction launch knob: its threshold is
+    # the selected model's own context window minus compaction.reserveTokens,
+    # and reserveTokens lives only in a settings file (docs/configuration.md
+    # "Context window"). Nothing is added here on purpose.
     pi)
       if [ "$kind" = secondmate ]; then
         printf '%s' 'pi __MODELFLAG____EFFORTFLAG__-e __PITURNEND__ -e __PIWATCH__ __ENCODED_BRIEF__'
@@ -503,6 +535,8 @@ launch_template() {
     # below, so the template is identical for ship/scout/secondmate.
     # Effort is folded into the MODEL ID by cursor_model_with_effort (this CLI has
     # no effort flag), so there is no __EFFORTFLAG__ here by design.
+    # The Cursor CLI exposes no context-window or auto-compaction setting, so
+    # nothing is added here (docs/configuration.md "Context window").
     cursor) printf '%s' 'agent --yolo --workspace __WORKTREE__ __MODELFLAG____ENCODED_BRIEF__' ;;
     # kimi (Kimi Code CLI): --yolo auto-approves tool execution (TUI footer token
     # `yolo`, verified 2026-07-21/2026-07-23 on 0.27.0). Cannot combine --prompt

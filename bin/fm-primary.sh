@@ -10,6 +10,7 @@
 #   pi            pi --name FIRSTMATE
 #                 Pi has no permission system, so no bypass flag exists or is
 #                 needed.
+#                 No context-window flag either: see "Context window" below.
 #   claude-fable  claude --model claude-fable-5-1 --effort <value> --name FIRSTMATE
 #                 --dangerously-skip-permissions
 #   claude-opus   claude --model claude-opus-5 --effort <value> --name FIRSTMATE
@@ -25,12 +26,16 @@
 #                 have passed since the last user interaction
 #                 (docs/watcher-continuity.md). Requires Claude Code v2.1.193
 #                 or later.
+#                 Also exports CLAUDE_CODE_AUTO_COMPACT_WINDOW=500000; see
+#                 "Context window" below.
 #   codex         codex --dangerously-bypass-hook-trust
 #                 --dangerously-bypass-approvals-and-sandbox
+#                 -c model_auto_compact_token_limit=500000
 #   astra         codex --model gpt-6-astra
 #                 -c model_reasoning_effort="<value>"
 #                 --dangerously-bypass-hook-trust
 #                 --dangerously-bypass-approvals-and-sandbox
+#                 -c model_auto_compact_token_limit=500000
 #                 Uses the first trimmed line of local gitignored
 #                 config/astra-effort when that file exists, otherwise xhigh.
 #                 Accepted tokens: low, medium, high, xhigh. max is refused,
@@ -45,12 +50,45 @@
 #                 native footer or controls.
 #   cursor-grok   agent --yolo --model cursor-grok-4.6-high
 #                 Cursor has no effort flag; the tier is a model-id suffix.
+#                 It has no context-window flag either: see "Context window"
+#                 below.
 #                 Grok 4.6 also offers -xhigh, so -high here is a deliberate
 #                 cost choice rather than the ceiling it was on Grok 4.5.
 #                 Primary lifecycle hooks reuse tracked .claude/settings.json
 #                 (Cursor maps SessionStart/PreToolUse/Stop onto its native
 #                 events). There is no third-party status-line API, so no
 #                 companion status bar is installed.
+#   cursor-grok45 agent --yolo --model cursor-grok-4.5-high
+#                 The previous Grok generation, kept launchable beside the
+#                 certified cursor-grok profile rather than replacing it.
+#                 -high is the top tier the 4.5 family offers: `agent
+#                 --list-models` lists cursor-grok-4.5-high and its -fast
+#                 variant and no 4.5 xhigh id (confirmed 2026-09-13 on Cursor
+#                 CLI 2026.09.02-c22c1a3).
+#                 Identical launch mechanics to cursor-grok: the same
+#                 .claude/settings.json hook set, the same Cursor version
+#                 warning and login gate, the same session lock, the same
+#                 FM_PRIMARY_HARNESS=cursor, and no companion status bar.
+#                 The model id is the only difference.
+#
+# Context window (captain's order 2026-09-13: cap every future session at 500k
+# tokens so the orchestrator compacts itself). The exact per-harness mechanism,
+# with the one-sentence evidence for each in docs/configuration.md "Context
+# window":
+#   claude-fable / claude-opus  export CLAUDE_CODE_AUTO_COMPACT_WINDOW=500000.
+#     The CLI reads that variable directly and it outranks the autoCompactWindow
+#     user setting, so the cap rides the launch and the captain's global config
+#     is never touched. The effective threshold is min(500000, the model's own
+#     maximum window), which is also why a smaller model needs no special case.
+#   codex / astra  -c model_auto_compact_token_limit=500000 on the launch line.
+#     A -c override never touches ~/.codex/config.toml or a pinned account's
+#     config.toml, which is the whole reason it is passed here rather than set.
+#   pi  nothing is passed. Pi has no context-window or auto-compaction launch
+#     knob: its threshold is the selected model's own context window minus
+#     compaction.reserveTokens, and reserveTokens exists only in a settings file.
+#   cursor-grok  nothing is passed. The Cursor CLI exposes no context or
+#     compaction setting.
+# opencode, grok, and kimi-k3 are outside that order and are unchanged.
 #
 # --account <name> is the ONLY extra argument a profile accepts; every other one
 # still refuses, because that refusal exists to keep resume arguments away from
@@ -58,7 +96,8 @@
 # It pins the launch to a NAMED VENDOR ACCOUNT: the Claude profiles take a claude
 # account, exported as CLAUDE_CONFIG_DIR, and the Codex-backed profiles codex and
 # astra take a codex account, exported as CODEX_HOME. A profile whose vendor has no account concept (pi,
-# opencode, grok, kimi-k3, cursor-grok) refuses --account rather than ignoring it.
+# opencode, grok, kimi-k3, cursor-grok, cursor-grok45) refuses --account rather
+# than ignoring it.
 # Accounts are named in local, gitignored config/accounts.json (docs/configuration.md
 # owns that schema) and their homes are DERIVED as data/accounts/<vendor>/<name>,
 # never read from that file. Omitting the flag uses that vendor's default when the
@@ -89,7 +128,8 @@
 # apart; the org and plan are. That is what an account's expect value is for.
 #
 # Aliases: claude -> claude-fable; opus -> claude-opus; kimi -> kimi-k3;
-# cursor -> cursor-grok.
+# cursor -> cursor-grok. There is no alias for cursor-grok45; name it in full so
+# the previous Grok generation is never launched by accident.
 # The aliases are primary-launch conveniences only.
 # They never change config/crew-harness, config/secondmate-harness, dispatch
 # profiles, or fm-spawn's independently verified worker-adapter set.
@@ -662,7 +702,7 @@ verify_integrations() {
       require_file bin/fm-status-bar.sh
       prepare_kimi_home
       ;;
-    cursor-grok)
+    cursor-grok|cursor-grok45)
       require_file .claude/settings.json
       require_file docs/supervision-protocols/cursor.md
       require_command jq
@@ -717,8 +757,8 @@ case "$PROFILE" in
   cursor) PROFILE=cursor-grok ;;
 esac
 case "$PROFILE" in
-  pi|claude-fable|claude-opus|codex|astra|opencode|grok|kimi-k3|cursor-grok) ;;
-  *) die "unknown or unverified primary profile '$PROFILE' (verified: pi claude-fable claude-opus codex astra opencode grok kimi-k3 cursor-grok)" ;;
+  pi|claude-fable|claude-opus|codex|astra|opencode|grok|kimi-k3|cursor-grok|cursor-grok45) ;;
+  *) die "unknown or unverified primary profile '$PROFILE' (verified: pi claude-fable claude-opus codex astra opencode grok kimi-k3 cursor-grok cursor-grok45)" ;;
 esac
 
 validate_visible_prefix
@@ -735,7 +775,7 @@ case "$PROFILE" in
   opencode) CLI=opencode ;;
   grok) CLI=grok ;;
   kimi-k3) CLI=${FM_KIMI_BIN:-kimi} ;;
-  cursor-grok) CLI=${FM_CURSOR_BIN:-agent} ;;
+  cursor-grok|cursor-grok45) CLI=${FM_CURSOR_BIN:-agent} ;;
 esac
 require_command "$CLI"
 # Exported here, before the remaining profile checks, so anything this launcher
@@ -761,7 +801,7 @@ if [ "$PROFILE" = kimi-k3 ]; then
     || die "managed Kimi primary integration failed 'kimi doctor'"
 fi
 
-if [ "$PROFILE" = cursor-grok ]; then
+case "$PROFILE" in cursor-grok|cursor-grok45)
   version=$("$CLI" --version 2>/dev/null | head -1 | tr -d '\r')
   if [ "$version" != "$CURSOR_CERTIFIED_VERSION" ]; then
     printf 'fm-primary: Cursor primary is certified on %s; found %s (docs/cursor-harness.md) - launching anyway\n' \
@@ -774,7 +814,8 @@ if [ "$PROFILE" = cursor-grok ]; then
     *'Not logged in'*|*'not logged in'*)
       die "Cursor CLI is not logged in ('$CLI status'); the primary would boot to its login screen instead of a session" ;;
   esac
-fi
+  ;;
+esac
 
 cd "$FM_ROOT" || die "could not enter tracked Starship root: $FM_ROOT"
 role=$(visible_role)
@@ -790,15 +831,22 @@ case "$PROFILE" in
     # memory-pressure signal once 30 minutes have passed since the last
     # user interaction (docs/watcher-continuity.md).
     export CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1
+    # Cap this primary's auto-compaction window at 500k TOKENS so the
+    # orchestrator compacts itself instead of being managed by hand. The CLI
+    # reads this variable directly and it outranks the autoCompactWindow user
+    # setting, so the cap rides the launch and the captain's global config is
+    # never touched. The effective threshold is min(500000, the model's own
+    # maximum window).
+    export CLAUDE_CODE_AUTO_COMPACT_WINDOW=500000
     argv=(claude --model "$CLAUDE_MODEL" --effort "$CLAUDE_EFFORT" --name "$role" --dangerously-skip-permissions)
     printf 'fm-primary: launching model %s at effort %s\n' "$CLAUDE_MODEL" "$CLAUDE_EFFORT" >&2
     ;;
   codex)
-    argv=(codex --dangerously-bypass-hook-trust --dangerously-bypass-approvals-and-sandbox)
+    argv=(codex --dangerously-bypass-hook-trust --dangerously-bypass-approvals-and-sandbox -c model_auto_compact_token_limit=500000)
     ;;
   astra)
     resolve_astra_effort
-    argv=(codex --model gpt-6-astra -c "model_reasoning_effort=\"$ASTRA_EFFORT\"" --dangerously-bypass-hook-trust --dangerously-bypass-approvals-and-sandbox)
+    argv=(codex --model gpt-6-astra -c "model_reasoning_effort=\"$ASTRA_EFFORT\"" --dangerously-bypass-hook-trust --dangerously-bypass-approvals-and-sandbox -c model_auto_compact_token_limit=500000)
     printf 'fm-primary: launching model gpt-6-astra at effort %s\n' "$ASTRA_EFFORT" >&2
     ;;
   opencode)
@@ -813,6 +861,9 @@ case "$PROFILE" in
   cursor-grok)
     argv=("$CLI" --yolo --model cursor-grok-4.6-high)
     ;;
+  cursor-grok45)
+    argv=("$CLI" --yolo --model cursor-grok-4.5-high)
+    ;;
 esac
 
 if [ "${FM_PRIMARY_DRY_RUN:-0}" = 1 ]; then
@@ -822,6 +873,8 @@ if [ "${FM_PRIMARY_DRY_RUN:-0}" = 1 ]; then
   [ "$PROFILE" != kimi-k3 ] || printf 'KIMI_CODE_HOME=%s\n' "$KIMI_PRIMARY_HOME"
   [ -z "${CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP:-}" ] || \
     printf 'CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=%s\n' "$CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP"
+  [ -z "${CLAUDE_CODE_AUTO_COMPACT_WINDOW:-}" ] || \
+    printf 'CLAUDE_CODE_AUTO_COMPACT_WINDOW=%s\n' "$CLAUDE_CODE_AUTO_COMPACT_WINDOW"
   if [ -n "$ACCOUNT_HOME" ]; then
     printf 'account=%s\n' "$ACCOUNT_NAME"
     printf '%s=%s\n' "$ACCOUNT_ENV" "$ACCOUNT_HOME"
@@ -880,7 +933,7 @@ case "$PROFILE" in
     export FM_PRIMARY_HARNESS=kimi
     exec "${argv[@]}"
     ;;
-  cursor-grok)
+  cursor-grok|cursor-grok45)
     export FM_PRIMARY_HARNESS=cursor
     exec "${argv[@]}"
     ;;

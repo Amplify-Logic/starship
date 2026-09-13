@@ -31,7 +31,7 @@ The primary-session watcher wake protocols are rendered from `docs/supervision-p
 The supervision knowledge lives here: busy signature, exit command, interrupt, dialogs, resume behavior, skill invocation, and quirks.
 
 The verified WORKER adapters are `claude`, `codex`, `opencode`, `pi`, `grok`, `cursor`, `kimi`, and `prime-agent`.
-The verified PRIMARY profiles are `pi`, `claude-fable`, `claude-opus`, `codex`, `astra`, `opencode`, `grok`, `kimi-k3`, and `cursor-grok`; `bin/fm-primary.sh` owns their exact launch mechanics.
+The verified PRIMARY profiles are `pi`, `claude-fable`, `claude-opus`, `codex`, `astra`, `opencode`, `grok`, `kimi-k3`, `cursor-grok`, and `cursor-grok45`; `bin/fm-primary.sh` owns their exact launch mechanics.
 `cursor` is also certified as a PRIMARY through `bin/fm-primary.sh cursor-grok` (Cursor CLI `2026.08.11-e8db854`, 2026-08-13 lab); never infer worker facts from primary facts or the reverse.
 Kimi is verified as a PRIMARY through `bin/fm-primary.sh kimi-k3` and, separately, as a WORKER through `fm-spawn --harness kimi` (Kimi Code 0.27.0, 2026-07-23 lab); never infer one role from the other.
 
@@ -361,11 +361,13 @@ Pi's primary watcher protocol also requires the tracked `.pi/extensions/fm-prima
 The model arms through `fm_watch_arm_pi`, never a foreground bash arm; the watcher tool result and clean-exit fallback are owned by `docs/supervision-protocols/pi.md`.
 `bin/fm-session-start.sh` reports when the live Pi session has not loaded both the turn-end guard and watcher extensions, and points at plain `pi` after project trust as the fix, with `-e` as a trust-free fallback.
 When a secondmate is launched on Pi, `fm-spawn.sh --secondmate` launches Pi with both `-e .pi/extensions/fm-primary-turnend-guard.ts` and `-e .pi/extensions/fm-primary-pi-watch.ts`, both already present in the secondmate home's git worktree.
+The tracked `.pi/extensions/fm-calm.ts` adds the optional `/calm` presentation beside those two, verified loading with them on Pi 0.80.10 (2026-09-13); `docs/calm.md` owns its behavior and record.
 
 ## cursor (PRIMARY certified; WORKER partially re-verified 2026-08-13 on `2026.08.11-e8db854`, Grok 4.6)
 
 Cursor CLI (the `agent` binary), running Cursor Grok 4.6.
 Primary launch: `bin/fm-primary.sh cursor-grok` → `agent --yolo --model cursor-grok-4.6-high` with `FM_PRIMARY_HARNESS=cursor`.
+`bin/fm-primary.sh cursor-grok45` → `agent --yolo --model cursor-grok-4.5-high` keeps the previous Grok generation launchable with identical mechanics; it has no alias, and `cursor` still resolves to the certified 4.6 profile.
 Primary hooks reuse tracked `.claude/settings.json` (Cursor maps `SessionStart`/`PreToolUse`/`Stop`).
 All three fire on this build, so the primary turn-end guard is wired rather than best-effort; the `Stop` FAIL recorded on `2026.07.20-8cc9c0b` is superseded.
 An uncertified build now WARNS and launches instead of blocking; the launcher still refuses an explicitly logged-out CLI.

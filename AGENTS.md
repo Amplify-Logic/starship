@@ -79,6 +79,7 @@ config/primary-handoff  optional quota- and context-aware primary orchestrator r
 config/primary-effort  optional Claude primary launch effort for claude-fable and claude-opus; LOCAL, gitignored; one of low, medium, high, xhigh, max; absent = xhigh; read only by bin/fm-primary.sh at launch; not inherited by secondmate homes; see docs/configuration.md
 config/astra-effort  optional Astra primary launch effort; LOCAL, gitignored; one of low, medium, high, xhigh; absent = xhigh; read only by bin/fm-primary.sh at launch; not inherited by secondmate homes; see docs/configuration.md
 config/bridge-links  optional LOCAL, gitignored bridge-page pinned links; see docs/configuration.md
+config/calm  optional Pi primary Calm presentation preference; LOCAL, gitignored; `on`, `off`, or legacy `max` (restores as on); written by the `/calm` toggle, absent = off; see docs/configuration.md
 config/x-mode.env    generated X-mode watcher cadence; LOCAL, gitignored; source before arming watcher when present
 data/                personal fleet records; LOCAL, gitignored as a whole
   backlog.md         task queue, dependencies, history

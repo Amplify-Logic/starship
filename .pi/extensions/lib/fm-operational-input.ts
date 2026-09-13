@@ -19,7 +19,7 @@ export type FirstmateCurrentOperationalKind =
   (typeof FIRSTMATE_CURRENT_OPERATIONAL_KINDS)[number];
 
 function runOperationalInputCommand(
-  command: "encode" | "classify",
+  command: "encode" | "classify" | "kind",
   content: string,
   kind?: FirstmateCurrentOperationalKind,
 ): string | undefined {
@@ -30,7 +30,10 @@ function runOperationalInputCommand(
     maxBuffer: 1024 * 1024,
   });
   if (result.status !== 0) return undefined;
-  return command === "classify" ? result.stdout.replace(/\n$/, "") : result.stdout;
+  // Only encode returns a body that may legitimately end in a newline. Every
+  // other command prints exactly one value, so its trailing newline is framing
+  // rather than data (bin/fm-operational-input.sh owns that contract).
+  return command === "encode" ? result.stdout : result.stdout.replace(/\n$/, "");
 }
 
 export function encodeFirstmateOperationalInput(
@@ -46,4 +49,10 @@ export function encodeFirstmateOperationalInput(
 
 export function classifyFirstmateOperationalText(content: string): string | undefined {
   return runOperationalInputCommand("classify", content);
+}
+
+export function classifyFirstmateCurrentOperationalText(
+  content: string,
+): string | undefined {
+  return runOperationalInputCommand("kind", content);
 }

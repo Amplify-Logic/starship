@@ -260,7 +260,7 @@ test_dead_shell_refusal_is_recoverable_and_actionable() {
   assert_contains "$out" "--key C-c" "refusal did not say to interrupt the pane"
   assert_contains "$out" "Read $HOME_DIR/data/$ID/brief.md and execute it fully" \
     "refusal did not offer the file-pointer relaunch"
-  assert_contains "$out" "cd '$WT_DIR' && CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions" \
+  assert_contains "$out" "cd '$WT_DIR' && CLAUDE_CODE_AUTO_COMPACT_WINDOW=500000 CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions" \
     "recovery relaunch was not rendered from this task's own launch template"
   assert_not_contains "$out" "second line of the brief" \
     "the recovery relaunch pastes the brief inline instead of pointing at its file"
@@ -280,7 +280,7 @@ test_happy_path_launch_is_unchanged() {
 
   expect_code 0 "$status" "a healthy claude spawn should succeed"
   assert_contains "$out" "spawned $ID harness=claude" "healthy spawn did not report success"
-  assert_grep 'literal:CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions' \
+  assert_grep 'literal:CLAUDE_CODE_AUTO_COMPACT_WINDOW=500000 CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions' \
     "$EVENT_LOG" "the launch line was not sent unchanged"
   assert_grep 'second line of the brief' "$EVENT_LOG" \
     "the launch line no longer carries the brief"
