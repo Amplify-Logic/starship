@@ -90,6 +90,17 @@ test_changed_file_selection_is_conservative() {
   pass "changed-file selection stays conservative (never silent full suite)"
 }
 
+# The runner's reference fallback claims a source path as soon as any test file
+# names it as text, and this script is itself pure-contract-unit. Spelling the
+# two ops sources out here would therefore hand the upstream map a real owner
+# for them, which turns the fork registry's legitimate exclusive rows into
+# shadows and fork_registry_assert_no_shadow refuses the run. Assembling the
+# names keeps this script out of their ownership, so the registry rows stay the
+# only claim on them. This is the enforced form of the rule, not a style choice.
+OPS_SRC_EXT='sh'
+OPS_ORDER_SRC="bin/fm-order.$OPS_SRC_EXT"
+OPS_TRAY_SRC="bin/fm-tray.$OPS_SRC_EXT"
+
 init_changed_fixture_repo() {
   local repo=$1 script
   # This fixture copies the real tests/fork-test-registry.conf, so every script
@@ -131,6 +142,8 @@ init_changed_fixture_repo() {
     fm-primary.test.sh \
     fm-spawn-account.test.sh \
     fm-action-gateway-v2.test.sh \
+    fm-order.test.sh \
+    fm-tray.test.sh \
     fm-deck.test.sh \
     fm-project-presentation.test.sh \
     fm-bridge-view.test.sh \
@@ -148,6 +161,8 @@ init_changed_fixture_repo() {
   : >"$repo/bin/fm-supervisor-target-lib.sh"
   : >"$repo/bin/fm-visible-format-lib.sh"
   : >"$repo/bin/unmapped-source.sh"
+  : >"$repo/$OPS_ORDER_SRC"
+  : >"$repo/$OPS_TRAY_SRC"
   printf '# bin/fm-fork-surface.sh\n# bin/fm-leak-guard.sh\n' \
     >>"$repo/tests/fm-fork-surface.test.sh"
   # fm-brief.test.sh is in the runner's own pure-contract-unit map, so this
@@ -155,6 +170,14 @@ init_changed_fixture_repo() {
   printf '# bin/fm-fork-surface.sh\n' >>"$repo/tests/fm-brief.test.sh"
   printf '# bin/fm-fork-test-registry-lib.sh\n# bin/fm-visible-format-lib.sh\n' \
     >>"$repo/tests/fm-test-run.test.sh"
+  # Each ops suite names its own source, and the deck suite names both. The
+  # deck suite is unclassified in the runner's map, which the no-shadow
+  # assertion treats as no upstream answer, so the exclusive registry rows stay
+  # legitimate. The ops suites' own mentions are also the reference fallback
+  # the runner must still reach when the registry is absent.
+  printf '# %s\n' "$OPS_ORDER_SRC" >>"$repo/tests/fm-order.test.sh"
+  printf '# %s\n' "$OPS_TRAY_SRC" >>"$repo/tests/fm-tray.test.sh"
+  printf '# %s\n# %s\n' "$OPS_TRAY_SRC" "$OPS_ORDER_SRC" >>"$repo/tests/fm-deck.test.sh"
   printf '# .agents/skills/example/SKILL.md\n' >>"$repo/tests/fm-captain-translation-contract.test.sh"
   printf '# .claude/settings.json\n# .pi/extensions/fm-primary-turnend-guard.ts\n' \
     >>"$repo/tests/fm-cd-pretool-check.test.sh"
@@ -444,6 +467,93 @@ test_changed_dependency_selection_and_unmapped_failure() {
     || fail "unmapped changed source failure is not actionable: $(cat "$tmp/err")"
   rm -rf "$tmp"
   pass "changed selection covers dependents and fails closed for unmapped source"
+}
+
+# The ops command center has no hook in a core script, so its registry rows are
+# the whole integration and the degraded path is the registry's own absence.
+# The guarantee is that absence cannot break a changed run: without the registry
+# both ops sources fall to the runner's reference fallback rather than to
+# __unmapped__, which is the one answer a changed run dies on. With the registry
+# the rows are the complete answer, and they include the order suite as an owner
+# of the tray source, because the order script calls the tray script and no test
+# text names that dependency for the fallback to find.
+# Every phase asserts the runner's own exit code rather than merely succeeding or
+# merely failing, because a refusal and an accident such as a missing
+# interpreter are both non-zero and only the exact code tells them apart. Each
+# assertion below was confirmed to fail when the row or mention it pins is
+# removed, so none of them is vacuous.
+test_fork_registry_ops_rows_and_registry_absence() {
+  local tmp repo out rc
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-ops-rows.XXXXXX")
+  repo="$tmp/repo"
+  init_changed_fixture_repo "$repo"
+
+  printf '# fixture order change\n' >>"$repo/$OPS_ORDER_SRC"
+  set +e
+  out=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD 2>&1)
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "covers row for the order source must load"
+  assert_contains "$out" "tests/fm-order.test.sh" \
+    "covers row selects the order suite for its own source"
+  assert_not_contains "$out" "tests/fm-brief.test.sh" \
+    "covers row is the complete answer for the order source"
+  git -C "$repo" checkout -- "$OPS_ORDER_SRC"
+
+  printf '# fixture tray change\n' >>"$repo/$OPS_TRAY_SRC"
+  set +e
+  out=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD 2>&1)
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "covers rows for the tray source must load"
+  assert_contains "$out" "tests/fm-tray.test.sh" \
+    "covers row selects the tray suite for its own source"
+  assert_contains "$out" "tests/fm-order.test.sh" \
+    "the order suite is a declared owner of the tray source"
+  git -C "$repo" checkout -- "$OPS_TRAY_SRC"
+
+  # The same change in a checkout with no fork registry at all. The removal is
+  # committed so the tray source is again the only changed path, and the runner
+  # must still resolve it through its own reference fallback rather than die.
+  git -C "$repo" rm -q tests/fork-test-registry.conf
+  git -C "$repo" -c user.name=test -c user.email=test@example.invalid commit -qm no-registry
+  printf '# fixture tray change\n' >>"$repo/$OPS_TRAY_SRC"
+  set +e
+  out=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD 2>&1)
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "an absent fork registry must not break an ops-path change"
+  assert_not_contains "$out" "no changed-test mapping" \
+    "an absent fork registry must not leave an ops source unmapped"
+  assert_contains "$out" "tests/fm-tray.test.sh" \
+    "the reference fallback still reaches the tray suite with no registry"
+  git -C "$repo" checkout -- "$OPS_TRAY_SRC"
+
+  # The far side of that guarantee. The fallback only reaches the tray source
+  # because its own suite and the deck suite name it, so with the registry and
+  # every such mention gone the runner has no owner at all. It must then refuse
+  # with its own exit code 2 and say which path it could not map, never select
+  # nothing quietly.
+  local suite
+  for suite in fm-tray fm-deck; do
+    grep -v "$OPS_TRAY_SRC" "$repo/tests/$suite.test.sh" >"$repo/tests/$suite.trimmed"
+    mv "$repo/tests/$suite.trimmed" "$repo/tests/$suite.test.sh"
+    chmod +x "$repo/tests/$suite.test.sh"
+    git -C "$repo" add "tests/$suite.test.sh"
+  done
+  git -C "$repo" -c user.name=test -c user.email=test@example.invalid commit -qm no-mention
+  printf '# fixture tray change\n' >>"$repo/$OPS_TRAY_SRC"
+  set +e
+  out=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD 2>&1)
+  rc=$?
+  set -e
+  expect_code 2 "$rc" \
+    "an ops source with no registry row and no test mention must refuse with exit 2"
+  assert_contains "$out" "no changed-test mapping for source path" \
+    "the refusal names the path it could not map"
+
+  rm -rf "$tmp"
+  pass "ops command center rows select their declared owners, degrade to the reference fallback, and refuse with exit 2 when neither answers"
 }
 
 test_empty_selection_emits_summary() {
@@ -977,6 +1087,7 @@ test_changed_dependency_selection_and_unmapped_failure
 test_fork_registry_overlay
 test_fork_registry_shadow_and_glob_guards
 test_fork_registry_covers_accepts_only_absent_upstream_answers
+test_fork_registry_ops_rows_and_registry_absence
 test_empty_selection_emits_summary
 test_timing_markers_and_json
 test_aggregate_exit_behavior
