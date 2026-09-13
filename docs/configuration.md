@@ -174,6 +174,29 @@ That covers the `FM_SENTINEL_*` host-sentinel knobs - `FM_SUPERVISION_SENTINEL_M
 Allowlisted knobs that are unset are omitted so the daemon keeps its defaults.
 The harness-hosted `start-native` path needs no forwarding and is unaffected by the allowlist: the daemon inherits the launching session's environment directly.
 
+## Desk voice-out (config/speak)
+
+An opt-in, per-home and per-device gate for speaking a captain-facing outcome out of this machine's own speaker.
+It ships inert: with no `enabled = true` line in private gitignored `config/speak`, `bin/fm-speak.sh` makes no sound at all, so cloning this repo, seeding a secondmate home, or adding a device never makes it talk.
+
+This is a sink, not a companion.
+The spoken register - outcome first, two or three short sentences, about eight seconds, never a URL, path or id, and never a request for a spoken yes - is owned once by the glasses project's `announce` entry point, which already enforces it for the glasses loop.
+`bin/fm-speak.sh` shapes every line through that owner and refuses to speak when it cannot reach it, because speaking unshaped text would read a URL aloud.
+Reusing that owner is deliberate: a second copy of the register in this repository would drift from the one the glasses already speak.
+The practical consequence is that desk voice-out needs that project's local entry point present, and `FM_SPEAK_SHAPER` can name another one exposing the same `--dry-run <text>` contract.
+
+Because the register owner refuses text that asks the captain to decide, a merge, a spend, an outward action, or any other approval structurally cannot be put to him by voice; those stay in the reply he reads.
+Nothing here observes audio, so a successful call means the shaped line was handed to the speaker, never that it was produced or heard.
+
+Configuration is `key = value` lines; unknown keys are refused rather than ignored.
+`enabled` arms this home, and the optional `voice` names a `say` voice.
+The script's header and `--help` own the exact invocation, the environment overrides, and the exit codes.
+`AGENTS.md` section 9 owns when the orchestrator speaks.
+
+Each call is bounded on both halves so a captain-facing turn is never held open: the register call is waited on under a watchdog because its output is needed, and the speaker call is detached with its standard streams closed, so a caller capturing this script's output is never blocked by audio that is still playing.
+The two bounds are deliberately separate because they protect different things: `FM_SPEAK_SHAPER_TIMEOUT` bounds the waited-on register call and is therefore the worst case a turn can be held, while `FM_SPEAK_TIMEOUT` bounds only the detached speaker, stopping a runaway from holding the audio device without ever holding the caller.
+The script's header owns their defaults.
+
 ## Supervision active alert channels (config/wedge-alarm)
 
 When away-mode injection wedges past `FM_MAX_DEFER_SECS`, the sub-supervisor raises a loud, rate-limited alarm.

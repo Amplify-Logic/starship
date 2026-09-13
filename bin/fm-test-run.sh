@@ -385,6 +385,7 @@ tests/fm-pi-primary-live-e2e.test.sh
 tests/fm-deck.test.sh
 tests/fm-timeout-lib.test.sh
 tests/fm-voice-relay.test.sh
+tests/fm-speak.test.sh
 EOF
 }
 
