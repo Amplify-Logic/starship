@@ -166,8 +166,7 @@ family_for_basename() {
     fm-bootstrap.test.sh|fm-fleet-sync.test.sh|fm-gate-refuse.test.sh|fm-gotmp.test.sh|\
     fm-channel-intake.test.sh|fm-morning-intake.test.sh|\
     fm-session-start.test.sh|fm-sessionstart-nudge.test.sh|fm-tangle-guard.test.sh|\
-    fm-toolchain-drift.test.sh|fm-update.test.sh|fm-upstream.test.sh|\
-    fm-upstream-ledger.test.sh|fm-upstream-watch.test.sh)
+    fm-toolchain-drift.test.sh|fm-update.test.sh)
       printf '%s\n' session-bootstrap
       ;;
     fm-afk-pi-herdr-return-e2e.test.sh|fm-claude-continuity-live-e2e.test.sh|\
@@ -866,13 +865,13 @@ families_for_changed_path() {
       ;;
     bin/fm-session-start.sh|bin/fm-bootstrap.sh|bin/fm-fleet-sync.sh|\
     bin/fm-sessionstart-nudge.sh|bin/fm-tangle*|bin/fm-update.sh|\
-    bin/fm-gate-refuse*|bin/fm-lock*|bin/fm-upstream-lib.sh|\
-    bin/fm-upstream-watch*.sh|bin/fm-toolchain-lib.sh|bin/fm-timeout-lib.sh|\
+    bin/fm-gate-refuse*|bin/fm-lock*|\
+    bin/fm-toolchain-lib.sh|bin/fm-timeout-lib.sh|\
     bin/fm-morning-intake*.sh|\
-    docs/toolchain-manifest.tsv|docs/upstream-ported-ledger.txt)
-      # The two docs/ data files are behaviour-bearing inputs to the bootstrap
-      # drift diagnostics, not prose, so they select the same lane as the
-      # scripts that read them.
+    docs/toolchain-manifest.tsv)
+      # The docs/ data file is a behaviour-bearing input to the bootstrap drift
+      # diagnostics, not prose, so it selects the same lane as the scripts that
+      # read it.
       printf '%s\n' session-bootstrap
       ;;
     bin/fm-worktree-lease-lib.sh)
@@ -949,13 +948,11 @@ families_for_changed_path() {
     .gitignore)
       # Not prose: the tracked ignore file has behaviour owners that assert on
       # its contents, so an ignore-only change still selects them. The owners
-      # here are the two direct readers (config/ category coverage and the
-      # secondmate seed-marker line) plus the upstream-watch private-report
-      # assertion; a fork may declare further owners for this path in its test
-      # registry.
+      # here are the two direct readers, config/ category coverage and the
+      # secondmate seed-marker line; a fork may declare further owners for this
+      # path in its test registry.
       printf '%s\n' "__script__:fm-gitignore-config.test.sh"
       printf '%s\n' "__script__:fm-secondmate-sync.test.sh"
-      printf '%s\n' "__script__:fm-upstream-watch.test.sh"
       ;;
     README.md|ONBOARDING.md|LICENSE|assets/*|docs/*)
       # Documentation-only prose with no behavior test owner (see the

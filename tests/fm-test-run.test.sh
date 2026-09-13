@@ -92,6 +92,10 @@ test_changed_file_selection_is_conservative() {
 
 init_changed_fixture_repo() {
   local repo=$1 script
+  # This fixture copies the real tests/fork-test-registry.conf, so every script
+  # that registry registers must be created below. A registered script missing
+  # here makes fork_registry_apply fail closed and every selection in this
+  # fixture dies with exit 2, so a new registry row needs a new stub here.
   mkdir -p "$repo/bin" "$repo/tests"
   cp "$RUNNER" "$repo/bin/fm-test-run.sh"
   cp "$ROOT/bin/fm-fork-test-registry-lib.sh" "$repo/bin/fm-fork-test-registry-lib.sh"
@@ -118,6 +122,8 @@ init_changed_fixture_repo() {
     fm-gitignore-config.test.sh \
     fm-secondmate-sync.test.sh \
     fm-upstream-watch.test.sh \
+    fm-upstream.test.sh \
+    fm-upstream-ledger.test.sh \
     fm-backend-cmux.test.sh \
     fm-backend-zellij.test.sh \
     fm-backend-orca.test.sh; do
@@ -190,7 +196,7 @@ test_fork_registry_overlay() {
   assert_contains "$listed" "tests/fm-secondmate-sync.test.sh" \
     "adds row keeps the upstream seed-marker owner"
   assert_contains "$listed" "tests/fm-upstream-watch.test.sh" \
-    "adds row keeps the upstream private-report owner"
+    "adds row contributes the fork private-report owner"
   rm -f "$repo/.gitignore"
 
   mv "$repo/tests/fork-test-registry.conf" "$repo/tests/fork-test-registry.disabled"
