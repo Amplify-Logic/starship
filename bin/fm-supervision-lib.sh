@@ -140,6 +140,127 @@ FM_SUP_SENTINEL_NOOP_EXIT=4
 # shellcheck disable=SC2034 # Read by callers after sourcing.
 FM_SUP_AWAY_GAP_NAME=.supervision-sentinel.away-gap
 
+# Canonical basename of the armed glasses-shift record written by
+# bin/fm-shift.sh start and removed by bin/fm-shift.sh stop. While it exists the
+# host sentinel supervises the home even with no crew task in flight: a shift's
+# questions arrive as mailbox events, never as state/*.meta tasks, so the
+# in-flight count alone would read a dead watcher during a shift as idle.
+# shellcheck disable=SC2034 # Read by callers after sourcing.
+FM_SUP_SHIFT_RECORD_NAME=.shift
+
+# Canonical basename of the away-mode flag. A shift's lifetime is strictly
+# contained inside away mode's: bin/fm-shift.sh start establishes away mode
+# before it writes the shift record, and its stop tears no artifact down until
+# that flag is gone. Spelled once here so every reader of the pair agrees.
+# shellcheck disable=SC2034 # Read by callers after sourcing.
+FM_SUP_AFK_FLAG_NAME=.afk
+
+# fm_sup_shift_armed <state-dir>
+# THE single definition of "a glasses shift is armed": the shift record exists
+# AND away mode is still active. Both conditions, always, at every read site.
+#
+# Why both: bin/fm-afk-return.sh, the away-mode return owner, knows nothing about
+# the shift and removes nothing of its own, so an ordinary captain return leaves
+# the record, the registered check and the config/wedge-alarm block behind. A
+# read path testing the record alone then treats that leftover as a live shift:
+# the host sentinel keeps supervising an idle home and speaks a repeating
+# "supervision down" line into glasses that are on a charger. Requiring the flag
+# makes every read path agree with the write path that already assumed it.
+#
+# Having the record without the flag is a STALE shift, not an armed one, and it
+# is not nothing: the record and the alarm block are still on disk and still
+# need standing down. Callers that report state to a human must say so rather
+# than reporting simply "not armed" - fm_sup_shift_stale below is that question.
+fm_sup_shift_armed() {
+  local state=$1
+  [ -f "$state/$FM_SUP_SHIFT_RECORD_NAME" ] && [ -e "$state/$FM_SUP_AFK_FLAG_NAME" ]
+}
+
+# fm_sup_shift_stale <state-dir>
+# True when a shift record outlived away mode. The artifacts are still present
+# and still capture the home's alarm channel, so this is the state a human must
+# be told about and `bin/fm-shift.sh stop` is what clears it.
+fm_sup_shift_stale() {
+  local state=$1
+  [ -f "$state/$FM_SUP_SHIFT_RECORD_NAME" ] && [ ! -e "$state/$FM_SUP_AFK_FLAG_NAME" ]
+}
+
+# Canonical basename of the host sentinel's launchd-liveness proof: the epoch of
+# the last scheduled check that resolved this home. Only launchd's private entry
+# point writes it. A registration is verified, and a shift may rely on the host
+# alarm, only while this proof is recent.
+# shellcheck disable=SC2034 # Read by callers after sourcing.
+FM_SUP_LAST_CHECK_NAME=.supervision-sentinel-last-check
+
+# Canonical basename of the host sentinel's launchd job manifest. The interval
+# the loaded job actually runs on is recorded there and nowhere else, so every
+# reader derives the path from this name rather than spelling it again.
+# shellcheck disable=SC2034 # Read by callers after sourcing.
+FM_SUP_PLIST_NAME=.supervision-sentinel.plist
+
+# fm_supervision_loaded_interval <state-dir>
+# Print the check interval the registered launchd job runs on, read back from the
+# job manifest that registration wrote. The ambient FM_SENTINEL_INTERVAL_SECS of
+# whoever happens to be asking says nothing about the loaded job, so a read-only
+# surface that judged a liveness proof against it would refuse a home armed with a
+# non-default interval and offer a fix that changes nothing. Fails closed: a
+# manifest that is missing or carries no usable interval returns non-zero rather
+# than a guess, because the caller cannot then prove the job's schedule at all.
+fm_supervision_loaded_interval() {
+  local plist="$1/$FM_SUP_PLIST_NAME" interval
+  [ -f "$plist" ] || return 1
+  interval=$(awk '
+    /<key>StartInterval<\/key>/ { want = 1; next }
+    want && match($0, /<integer>[0-9]+<\/integer>/) {
+      print substr($0, RSTART + 9, RLENGTH - 19); exit
+    }
+    want { exit }' "$plist" 2>/dev/null) || return 1
+  case "$interval" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$interval" -gt 0 ] || return 1
+  printf '%s\n' "$interval"
+}
+
+# The launchctl the host sentinel registers and verifies through. Tests point it
+# at a fake so no sentinel path ever touches real launchd.
+fm_supervision_sentinel_launchctl() {
+  printf '%s\n' "${FM_SENTINEL_LAUNCHCTL:-/bin/launchctl}"
+}
+
+# fm_supervision_check_max_age <interval-seconds>
+# The oldest a launchd-liveness proof may be and still prove the host service can
+# observe this home: two scheduled intervals plus slack. The arm path and every
+# read-only surface that reports the sentinel as live use this one bound.
+fm_supervision_check_max_age() {
+  printf '%s\n' "$(( $1 * 2 + 15 ))"
+}
+
+# fm_supervision_missing_host_capability
+# Names the one host capability the sentinel needs and does not have, or exits
+# non-zero when the host can run the scheduled check at all. One place decides
+# what "unsupported" means, so the arm's exit status, the operator diagnostic,
+# the away-mode ledger, and the shift preflight can never disagree about it.
+#
+# Every branch is POSITIVE evidence of an absent capability, never a failed
+# attempt: an ambiguous error must stay transient, because a caller that stops
+# retrying on ambiguity abandons a backstop that would have recovered on its own.
+fm_supervision_missing_host_capability() {
+  local platform=${FM_SENTINEL_PLATFORM:-$(uname)} launchctl
+  if [ "$platform" != Darwin ]; then
+    printf 'this host runs %s and has no verified host scheduler for the sentinel (launchd is macOS-only)\n' "$platform"
+    return 0
+  fi
+  launchctl=$(fm_supervision_sentinel_launchctl)
+  if [ ! -x "$launchctl" ]; then
+    printf 'launchctl is missing at %s, so this host cannot register a scheduled check\n' "$launchctl"
+    return 0
+  fi
+  if [ ! -x /usr/bin/shasum ]; then
+    printf '/usr/bin/shasum is missing, so this host cannot derive a stable per-home service identity\n'
+    return 0
+  fi
+  return 1
+}
+
 # fm_supervision_arm_failure_status <state-dir>
 # Reads the durable host-sentinel registration-failure record and populates:
 #   FM_SUP_ARM_RECORD       resolved path of the record, set whether or not it exists

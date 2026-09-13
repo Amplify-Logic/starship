@@ -344,6 +344,7 @@ tests/fm-backend-orca.test.sh
 tests/fm-secondmate-sync.test.sh
 tests/fm-primary-handoff.test.sh
 tests/fm-tangle-guard.test.sh
+tests/fm-shift.test.sh
 tests/fm-decision-surface.test.sh
 tests/fm-fork-surface.test.sh
 tests/fm-secondmate-lifecycle-e2e.test.sh

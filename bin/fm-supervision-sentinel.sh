@@ -10,6 +10,12 @@
 # guards. It writes one durable outage marker and reuses config/wedge-alarm's
 # active channels for a loud notification.
 #
+# A home is worth supervising when a crew task is in flight (state/*.meta) OR
+# when a glasses shift is armed (the bin/fm-shift.sh record named by
+# FM_SUP_SHIFT_RECORD_NAME): shift questions arrive as mailbox events, not as
+# tasks, so without the second condition a watcher that died mid-shift would
+# read as idle. The crew-task path is unchanged by that second condition.
+#
 # This sentinel deliberately NEVER starts, stops, or signals a watcher or the
 # away-mode daemon. A generic host process cannot safely recreate a harness
 # completion notification or the daemon's supervisor-pane target. Automatic
@@ -110,9 +116,9 @@ FM_SENTINEL_STATE=$(cd "$FM_SENTINEL_STATE" 2>/dev/null && pwd -P) || exit 1
 FM_SENTINEL_MARKER="$FM_SENTINEL_STATE/.supervision-outage-alarm"
 FM_SENTINEL_ARM_LOCK="$FM_SENTINEL_STATE/.supervision-sentinel-arm.lock"
 FM_SENTINEL_CHECK_LOCK="$FM_SENTINEL_STATE/.supervision-sentinel-check.lock"
-FM_SENTINEL_PLIST="$FM_SENTINEL_STATE/.supervision-sentinel.plist"
+FM_SENTINEL_PLIST="$FM_SENTINEL_STATE/$FM_SUP_PLIST_NAME"
 FM_SENTINEL_LOADED_DIGEST="$FM_SENTINEL_STATE/.supervision-sentinel.loaded-digest"
-FM_SENTINEL_LAST_CHECK="$FM_SENTINEL_STATE/.supervision-sentinel-last-check"
+FM_SENTINEL_LAST_CHECK="$FM_SENTINEL_STATE/$FM_SUP_LAST_CHECK_NAME"
 FM_SENTINEL_DISARMED="$FM_SENTINEL_STATE/$FM_SUP_DISARM_RECORD_NAME"
 FM_SENTINEL_ARM_FAILURE="$FM_SENTINEL_STATE/$FM_SUP_ARM_RECORD_NAME"
 FM_SENTINEL_CLAIM_TOKEN=
@@ -220,30 +226,10 @@ fm_sentinel_wait_for_check() {
   done
 }
 
-# Names the one host capability this sentinel needs and does not have, or exits
-# non-zero when the host can run the scheduled check at all. One place decides what
-# "unsupported" means, so the arm's exit status, the operator diagnostic, and the
-# away-mode ledger can never disagree about it.
-#
-# Every branch is POSITIVE evidence of an absent capability, never a failed
-# attempt: an ambiguous error must stay transient, because a caller that stops
-# retrying on ambiguity abandons a backstop that would have recovered on its own.
+# The single owner of what "unsupported" means lives in fm-supervision-lib.sh so
+# the read-only shift preflight reports the same verdict as the arm path.
 fm_sentinel_missing_capability() {
-  local platform=${FM_SENTINEL_PLATFORM:-$(uname)} launchctl
-  if [ "$platform" != Darwin ]; then
-    printf 'this host runs %s and has no verified host scheduler for the sentinel (launchd is macOS-only)\n' "$platform"
-    return 0
-  fi
-  launchctl=$(fm_sentinel_launchctl)
-  if [ ! -x "$launchctl" ]; then
-    printf 'launchctl is missing at %s, so this host cannot register a scheduled check\n' "$launchctl"
-    return 0
-  fi
-  if [ ! -x /usr/bin/shasum ]; then
-    printf '/usr/bin/shasum is missing, so this host cannot derive a stable per-home service identity\n'
-    return 0
-  fi
-  return 1
+  fm_supervision_missing_host_capability
 }
 
 # One stdout line naming a missing host capability, on the diagnostic's verdict
@@ -262,7 +248,7 @@ fm_sentinel_domain() {
 }
 
 fm_sentinel_launchctl() {
-  printf '%s\n' "${FM_SENTINEL_LAUNCHCTL:-/bin/launchctl}"
+  fm_supervision_sentinel_launchctl
 }
 
 fm_sentinel_plist_env() { # <key> <value>
@@ -434,7 +420,7 @@ fm_sentinel_arm_registration() { # <launchctl> <domain> <label> <service> <inter
   # host monitoring works, and it costs no launchd mutation, so a healthy home
   # never consults the failure cooldown below.
   if [ "$loaded_digest" = "$digest" ] \
-    && fm_sentinel_service_verified "$launchctl" "$service" $((interval * 2 + 15)); then
+    && fm_sentinel_service_verified "$launchctl" "$service" "$(fm_supervision_check_max_age "$interval")"; then
     "$launchctl" enable "$service" >/dev/null 2>&1 || true
     fm_sentinel_clear_arm_failure
     return 0
@@ -494,7 +480,7 @@ fm_sentinel_arm() {
   domain=$(fm_sentinel_domain)
   service="$domain/$label"
 
-  max_check_age=$((interval * 2 + 15))
+  max_check_age=$(fm_supervision_check_max_age "$interval")
   if ! fm_lock_try_acquire "$FM_SENTINEL_ARM_LOCK"; then
     # Another home-scoped arm is already converging on the same launchd label.
     # Wait out the holder's OWN legitimate convergence bound - a bootout drain plus
@@ -783,9 +769,27 @@ fm_sentinel_record_check() {
   fi
 }
 
+# True when this home has nothing to supervise: no crew task in flight and no
+# armed glasses shift. Every in-flight gate below goes through this one
+# predicate so the claim and its post-claim revalidation can never disagree.
+fm_sentinel_idle() {
+  [ "$FM_SUP_IN_FLIGHT" -eq 0 ] && ! fm_sup_shift_armed "$FM_SENTINEL_STATE"
+}
+
+# What is being supervised, for the outage summary and the OK report. The
+# crew-task wording is byte-identical to what it always was; only a home with
+# zero tasks and an armed shift names the shift instead of "0 task(s)".
+fm_sentinel_workload() {
+  if [ "$FM_SUP_IN_FLIGHT" -eq 0 ]; then
+    printf 'glasses shift armed, no crew task in flight'
+  else
+    printf '%s task(s) in flight' "$FM_SUP_IN_FLIGHT"
+  fi
+}
+
 fm_sentinel_summary() {
-  printf 'SUPERVISION DOWN: %s task(s) in flight; last watcher beat: %s (grace %ss). No automatic restart was attempted; see %s\n' \
-    "$FM_SUP_IN_FLIGHT" "$FM_SUP_BEACON_DESC" "$FM_SENTINEL_GRACE" "$FM_SENTINEL_MARKER"
+  printf 'SUPERVISION DOWN: %s; last watcher beat: %s (grace %ss). No automatic restart was attempted; see %s\n' \
+    "$(fm_sentinel_workload)" "$FM_SUP_BEACON_DESC" "$FM_SENTINEL_GRACE" "$FM_SENTINEL_MARKER"
 }
 
 # Durable, notifier-free outage evidence for every marker-only mode.
@@ -914,10 +918,10 @@ fm_sentinel_check() { # <scheduled|diagnostic|note>
       "$FM_SENTINEL_DIR/fm-supervision-sentinel.sh"
     return 0
   fi
-  if [ "$FM_SUP_IN_FLIGHT" -eq 0 ]; then
+  if fm_sentinel_idle; then
     [ "$clear_on_recovery" -eq 0 ] || fm_sentinel_clear_alarm
     if [ "$report" -eq 1 ]; then
-      printf 'supervision sentinel: OK - no task metadata in flight for this home; nothing to supervise\n'
+      printf 'supervision sentinel: OK - no task metadata in flight and no glasses shift armed for this home; nothing to supervise\n'
       fm_sentinel_report_host_capability
       fm_sentinel_report_arm_state
     fi
@@ -926,8 +930,8 @@ fm_sentinel_check() { # <scheduled|diagnostic|note>
   if fm_watcher_healthy "$FM_SENTINEL_STATE" "$FM_SENTINEL_WATCH" "$FM_SENTINEL_GRACE" "$FM_HOME"; then
     [ "$clear_on_recovery" -eq 0 ] || fm_sentinel_clear_alarm
     if [ "$report" -eq 1 ]; then
-      printf 'supervision sentinel: OK - %s task(s) in flight with a live identity-matched watcher; last beat %s (grace %ss)\n' \
-        "$FM_SUP_IN_FLIGHT" "$FM_SUP_BEACON_DESC" "$FM_SENTINEL_GRACE"
+      printf 'supervision sentinel: OK - %s with a live identity-matched watcher; last beat %s (grace %ss)\n' \
+        "$(fm_sentinel_workload)" "$FM_SUP_BEACON_DESC" "$FM_SENTINEL_GRACE"
       fm_sentinel_report_host_capability
       fm_sentinel_report_arm_state
     fi
@@ -954,7 +958,7 @@ fm_sentinel_check() { # <scheduled|diagnostic|note>
   # A competing recovery may have landed after the claim. Revalidate before
   # crossing the active-alert boundary, and clear only this claim if healthy.
   fm_supervision_status "$FM_SENTINEL_STATE" "$FM_SENTINEL_GRACE"
-  if [ "$FM_SUP_IN_FLIGHT" -eq 0 ] || fm_watcher_healthy "$FM_SENTINEL_STATE" "$FM_SENTINEL_WATCH" "$FM_SENTINEL_GRACE" "$FM_HOME"; then
+  if fm_sentinel_idle || fm_watcher_healthy "$FM_SENTINEL_STATE" "$FM_SENTINEL_WATCH" "$FM_SENTINEL_GRACE" "$FM_HOME"; then
     [ -z "$FM_SENTINEL_CLAIM_TOKEN" ] || fm_sentinel_clear_alarm "$FM_SENTINEL_CLAIM_TOKEN"
     return 0
   fi

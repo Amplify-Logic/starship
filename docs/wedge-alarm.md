@@ -15,8 +15,8 @@ The classifier-side half of that incident shipped separately (PR #429); this is 
 The durable marker and the tmux flash are unchanged; the active alert is added alongside them.
 
 The same channel owner now carries host-level watcher-outage alarms from `bin/fm-supervision-sentinel.sh`.
-That sentinel is registered with macOS launchd by the always-on watcher arm and by the away-mode daemon, each only after it has observed a healthy watcher; it then runs outside the harness process tree once a minute and alerts when tasks are in flight without an identity-matched watcher lock and a fresh `state/.last-watcher-beat`.
-Every report says `SUPERVISION DOWN` and carries the beacon age, the grace window, and the in-flight task count.
+That sentinel is registered with macOS launchd by the always-on watcher arm and by the away-mode daemon, each only after it has observed a healthy watcher; it then runs outside the harness process tree once a minute and alerts when the home has work to supervise - a crew task in flight, or a glasses shift armed by `bin/fm-shift.sh` while away mode is still active - without an identity-matched watcher lock and a fresh `state/.last-watcher-beat`.
+Every report says `SUPERVISION DOWN` and carries the beacon age, the grace window, and what is being supervised: the in-flight task count, or the armed glasses shift when no crew task is in flight.
 The outage marker is `state/.supervision-outage-alarm`.
 The turn-end guard and Claude continuity gate write that marker through `note-outage`, a marker-only mode, and never fire a channel: an in-harness hook must return its blocking result immediately, so only the scheduled host check crosses this boundary.
 The operator-facing `check` mode is marker-only for the same reason, so `scheduled-check` really is the single owner of external delivery, and every mode returns early on a deliberately disarmed home.
@@ -49,6 +49,9 @@ Every invocation is also process-group bounded by `FM_WEDGE_ALARM_TIMEOUT_SECS` 
 On timeout or daemon shutdown, its watchdog terminates the notifier group, logs the timeout when applicable, and continues to the next configured channel.
 The AppleScript passes the summary as an `argv` item rather than interpolating it into the script source, so summary text can never break the notification.
 See `docs/examples/wedge-alarm` for a copyable starting config.
+`bin/fm-shift.sh` is the one tracked writer of this file: while a glasses shift is armed it keeps a sentinel-delimited block here that speaks the alarm into the captain's glasses, and removes exactly that block on stand-down (`docs/shift-loop.md`).
+That block carries an `auto` directive beside its `command:` one, because an absent file already means auto and a lone directive would switch this home's platform default channel off for every alarm.
+Its `command:` end exits non-zero whenever it did not actually speak, including when no shift is armed, so a block that outlives its shift counts as failed delivery and falls through rather than consuming the alarm.
 
 ## Host fallback and recovery boundary
 
