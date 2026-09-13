@@ -94,6 +94,8 @@ init_changed_fixture_repo() {
   local repo=$1 script
   mkdir -p "$repo/bin" "$repo/tests"
   cp "$RUNNER" "$repo/bin/fm-test-run.sh"
+  cp "$ROOT/bin/fm-fork-test-registry-lib.sh" "$repo/bin/fm-fork-test-registry-lib.sh"
+  cp "$ROOT/tests/fork-test-registry.conf" "$repo/tests/fork-test-registry.conf"
   chmod +x "$repo/bin/fm-test-run.sh"
   for script in \
     fm-brief.test.sh \
@@ -111,6 +113,11 @@ init_changed_fixture_repo() {
     fm-bearings-snapshot.test.sh \
     fm-visible-status.test.sh \
     fm-herdr-layout-preview-e2e.test.sh \
+    fm-fork-surface.test.sh \
+    fm-test-run.test.sh \
+    fm-gitignore-config.test.sh \
+    fm-secondmate-sync.test.sh \
+    fm-upstream-watch.test.sh \
     fm-backend-cmux.test.sh \
     fm-backend-zellij.test.sh \
     fm-backend-orca.test.sh; do
@@ -122,6 +129,9 @@ init_changed_fixture_repo() {
   : >"$repo/bin/fm-supervisor-target-lib.sh"
   : >"$repo/bin/fm-visible-format-lib.sh"
   : >"$repo/bin/unmapped-source.sh"
+  printf '# bin/fm-fork-surface.sh\n# bin/fm-leak-guard.sh\n' \
+    >>"$repo/tests/fm-fork-surface.test.sh"
+  printf '# bin/fm-fork-test-registry-lib.sh\n' >>"$repo/tests/fm-test-run.test.sh"
   printf '# .agents/skills/example/SKILL.md\n' >>"$repo/tests/fm-captain-translation-contract.test.sh"
   printf '# .claude/settings.json\n# .pi/extensions/fm-primary-turnend-guard.ts\n' \
     >>"$repo/tests/fm-cd-pretool-check.test.sh"
@@ -135,6 +145,148 @@ init_changed_fixture_repo() {
   git -C "$repo" init -q
   git -C "$repo" add .
   git -C "$repo" -c user.name=test -c user.email=test@example.invalid commit -qm baseline
+}
+
+test_fork_registry_overlay() {
+  local tmp repo listed out rc
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-fork-registry.XXXXXX")
+  repo="$tmp/repo"
+  init_changed_fixture_repo "$repo"
+
+  listed=$(cd "$repo" && bin/fm-test-run.sh --list --family pure-contract-unit) \
+    || { rm -rf "$tmp"; fail "fork registry family row must load"; }
+  assert_contains "$listed" "tests/fm-fork-surface.test.sh" \
+    "fork registry family row participates in family selection"
+
+  # Two rows match this path, and both must contribute. That the run resolves
+  # at all also shows the covers rows are exclusive: the runner's own map has
+  # no entry for this path, so falling through to it would fail as unmapped.
+  printf '# fixture registry change\n' >> "$repo/tests/fork-test-registry.conf"
+  listed=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD) \
+    || { rm -rf "$tmp"; fail "two rows for one path must load"; }
+  assert_contains "$listed" "tests/fm-test-run.test.sh" \
+    "first of two rows matching one path contributes its owner"
+  assert_contains "$listed" "tests/fm-fork-surface.test.sh" \
+    "second of two rows matching one path contributes its owner too"
+  git -C "$repo" checkout -- tests/fork-test-registry.conf
+
+  printf '# fixture source\n' > "$repo/bin/fm-fork-surface.sh"
+  listed=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD) \
+    || { rm -rf "$tmp"; fail "fork registry adds row on a mapped source must load"; }
+  assert_contains "$listed" "tests/fm-fork-surface.test.sh" \
+    "adds row contributes the fork owner for a mapped source"
+  assert_contains "$listed" "tests/fm-brief.test.sh" \
+    "adds row keeps the upstream family the reference fallback selects"
+  git -C "$repo" add bin/fm-fork-surface.sh
+  git -C "$repo" -c user.name=test -c user.email=test@example.invalid commit -qm fork-source
+
+  printf '# fixture ignore\n' > "$repo/.gitignore"
+  listed=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD) \
+    || { rm -rf "$tmp"; fail "fork registry adds row must load"; }
+  assert_contains "$listed" "tests/fm-fork-surface.test.sh" \
+    "adds row contributes the fork owner"
+  assert_contains "$listed" "tests/fm-gitignore-config.test.sh" \
+    "adds row keeps the upstream config owner"
+  assert_contains "$listed" "tests/fm-secondmate-sync.test.sh" \
+    "adds row keeps the upstream seed-marker owner"
+  assert_contains "$listed" "tests/fm-upstream-watch.test.sh" \
+    "adds row keeps the upstream private-report owner"
+  rm -f "$repo/.gitignore"
+
+  mv "$repo/tests/fork-test-registry.conf" "$repo/tests/fork-test-registry.disabled"
+  listed=$(cd "$repo" && bin/fm-test-run.sh --list --family pure-contract-unit) \
+    || { rm -rf "$tmp"; fail "missing fork registry must preserve the core runner"; }
+  assert_not_contains "$listed" "tests/fm-fork-surface.test.sh" \
+    "missing fork registry leaves fork-only tests unclassified"
+  mv "$repo/tests/fork-test-registry.disabled" "$repo/tests/fork-test-registry.conf"
+
+  printf 'family pure-contract-unit tests/fm-fork-surface.test.sh extra\n' \
+    > "$repo/tests/fork-test-registry.conf"
+  set +e
+  out=$(cd "$repo" && bin/fm-test-run.sh --list --all 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -eq 2 ] || { rm -rf "$tmp"; fail "malformed fork registry must fail with exit 2, got $rc"; }
+  assert_contains "$out" 'expected exactly three fields' \
+    "malformed fork registry failure is actionable"
+
+  rm -rf "$tmp"
+  pass "fork registry overlays family and path ownership and fails closed when malformed"
+}
+
+test_fork_registry_shadow_and_glob_guards() {
+  local tmp repo out rc
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-fork-guard.XXXXXX")
+  repo="$tmp/repo"
+  init_changed_fixture_repo "$repo"
+
+  # A covers row is exclusive, so claiming a path the runner's own map still
+  # owns would delete those owners with no error. The guard refuses the row.
+  printf 'covers tests/fork-test-registry.conf tests/fm-test-run.test.sh\n%s' \
+    'covers bin/fm-fork-surface.sh tests/fm-fork-surface.test.sh' \
+    > "$repo/tests/fork-test-registry.conf"
+  printf '# fixture source\n' > "$repo/bin/fm-fork-surface.sh"
+  set +e
+  out=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -eq 2 ] \
+    || { rm -rf "$tmp"; fail "shadowing covers row must fail with exit 2, got $rc"; }
+  assert_contains "$out" 'shadows the upstream owner' \
+    "shadowing covers row names the path it would silently take over"
+  rm -f "$repo/bin/fm-fork-surface.sh"
+
+  # The same row as adds is the supported way to add a fork owner there.
+  printf 'covers tests/fork-test-registry.conf tests/fm-test-run.test.sh\n%s' \
+    'adds bin/fm-fork-surface.sh tests/fm-fork-surface.test.sh' \
+    > "$repo/tests/fork-test-registry.conf"
+  printf '# fixture source\n' > "$repo/bin/fm-fork-surface.sh"
+  out=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD) \
+    || { rm -rf "$tmp"; fail "adds row on the same path must be accepted"; }
+  assert_contains "$out" "tests/fm-fork-surface.test.sh" \
+    "adds row is accepted where covers is refused"
+  rm -f "$repo/bin/fm-fork-surface.sh"
+
+  # A leading wildcard would claim every changed path in the repository.
+  printf 'covers * tests/fm-fork-surface.test.sh\n' \
+    > "$repo/tests/fork-test-registry.conf"
+  set +e
+  out=$(cd "$repo" && bin/fm-test-run.sh --list --all 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -eq 2 ] \
+    || { rm -rf "$tmp"; fail "bare glob must fail with exit 2, got $rc"; }
+  assert_contains "$out" 'unsafe repository path glob' \
+    "bare glob rejection is actionable"
+
+  # A family row returns before the runner's own map, so a row naming a script
+  # the runner already classifies would silently move it out of its family,
+  # and a row naming a family the runner does not list would hide it from
+  # --list-families and lane composition. Both are refused in every mode.
+  printf 'family secondmate tests/fm-brief.test.sh\n' \
+    > "$repo/tests/fork-test-registry.conf"
+  set +e
+  out=$(cd "$repo" && bin/fm-test-run.sh --list --all 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -eq 2 ] \
+    || { rm -rf "$tmp"; fail "re-homing family row must fail with exit 2, got $rc"; }
+  assert_contains "$out" 'already classifies as pure-contract-unit' \
+    "re-homing family row names the upstream family it would take the script from"
+
+  printf 'family fork-only tests/fm-fork-surface.test.sh\n' \
+    > "$repo/tests/fork-test-registry.conf"
+  set +e
+  out=$(cd "$repo" && bin/fm-test-run.sh --list-families 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -eq 2 ] \
+    || { rm -rf "$tmp"; fail "unlisted family row must fail with exit 2, got $rc"; }
+  assert_contains "$out" 'names a family the runner does not list: fork-only' \
+    "unlisted family row rejection is actionable"
+
+  rm -rf "$tmp"
+  pass "fork registry refuses shadowing covers rows, repository-wide globs, and unconfined family rows"
 }
 
 test_changed_dependency_selection_and_unmapped_failure() {
@@ -723,6 +875,8 @@ test_family_selection
 test_single_script_selection
 test_changed_file_selection_is_conservative
 test_changed_dependency_selection_and_unmapped_failure
+test_fork_registry_overlay
+test_fork_registry_shadow_and_glob_guards
 test_empty_selection_emits_summary
 test_timing_markers_and_json
 test_aggregate_exit_behavior

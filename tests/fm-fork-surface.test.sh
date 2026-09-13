@@ -11,6 +11,38 @@ TMP_ROOT=$(fm_test_tmproot fm-fork-surface)
 assert_present "$SURFACE" "bin/fm-fork-surface.sh is missing"
 [ -x "$SURFACE" ] || fail "bin/fm-fork-surface.sh must be executable"
 
+clone_current_tree() {
+  local repo=$1 patch untracked
+  git clone -q "$ROOT" "$repo" || fail "could not clone fork-surface fixture"
+  patch="$repo.patch"
+  if ! git -C "$ROOT" diff --cached --quiet HEAD; then
+    git -C "$ROOT" diff --cached --binary HEAD >"$patch" \
+      || fail "could not capture staged changes for fork-surface fixture"
+    git -C "$repo" apply --index <"$patch" \
+      || fail "could not apply staged changes to fork-surface fixture"
+  fi
+  if ! git -C "$ROOT" diff --quiet; then
+    git -C "$ROOT" diff --binary >"$patch" \
+      || fail "could not capture unstaged changes for fork-surface fixture"
+    git -C "$repo" apply <"$patch" \
+      || fail "could not apply unstaged changes to fork-surface fixture"
+  fi
+  rm -f "$patch"
+  # Untracked, non-ignored files are invisible to the index checks but visible
+  # to the anchor and workflow reads, so the fixture needs them to mirror ROOT.
+  # Null-delimited: a working tree may hold names with quotes, newlines, or
+  # non-ASCII bytes, and the line-delimited form silently mangles those into
+  # paths that do not exist.
+  while IFS= read -r -d '' untracked; do
+    [ -n "$untracked" ] || continue
+    [ -f "$ROOT/$untracked" ] || continue
+    mkdir -p "$repo/$(dirname "$untracked")" \
+      || fail "could not create fork-surface fixture directory for: $untracked"
+    cp -p "$ROOT/$untracked" "$repo/$untracked" \
+      || fail "could not copy untracked file into fork-surface fixture: $untracked"
+  done < <(git -C "$ROOT" ls-files --others --exclude-standard -z)
+}
+
 check_current_manifest() {
   local out
   out=$("$SURFACE" check 2>&1) || fail "current fork surface must pass: $out"
@@ -39,9 +71,7 @@ check_queries() {
 check_required_surface_deletion_fails() {
   local repo out rc=0
   repo="$TMP_ROOT/required-delete"
-  git clone -q "$ROOT" "$repo" || fail "could not clone fork-surface fixture"
-  cp "$ROOT/fork-surface.conf" "$repo/fork-surface.conf" \
-    || fail "could not copy current fork-surface manifest into fixture"
+  clone_current_tree "$repo"
   git -C "$repo" rm -q bin/fm-leak-guard.sh || fail "could not remove required fixture surface"
   out=$(cd "$repo" && bin/fm-fork-surface.sh check 2>&1) || rc=$?
   [ "$rc" -ne 0 ] || fail "required surface deletion must fail"
@@ -54,9 +84,7 @@ check_required_surface_deletion_fails() {
 check_personal_surface_deletion_is_optional() {
   local repo out
   repo="$TMP_ROOT/personal-delete"
-  git clone -q "$ROOT" "$repo" || fail "could not clone personal-surface fixture"
-  cp "$ROOT/fork-surface.conf" "$repo/fork-surface.conf" \
-    || fail "could not copy current fork-surface manifest into fixture"
+  clone_current_tree "$repo"
   git -C "$repo" rm -q bin/fm-adhd.sh docs/adhd.md .agents/skills/adhd/SKILL.md \
     .agents/skills/adhd-auto-fire/SKILL.md tests/fm-adhd.test.sh \
     || fail "could not remove personal fixture surface"
