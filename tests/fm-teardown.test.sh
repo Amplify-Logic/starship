@@ -542,6 +542,49 @@ test_local_only_fork_remote_allows() {
   pass "local-only worktree with HEAD on a fork remote is torn down (fix holds)"
 }
 
+# TD1 is a best-effort hook: teardown closes the isolated browse session when
+# the fork script is there, and must carry on without it. The purge of
+# state/browse/<id> is NOT best-effort though, it runs either way, so an absent
+# fork script must never leave a worker's browser profile behind.
+test_teardown_without_browse_session_still_purges_browse_state() {
+  local case_dir degraded entry rc
+  case_dir=$(make_case browse-absent)
+  write_meta "$case_dir" local-only ship
+  wt_commit "$case_dir" "fix the thing"
+  add_fork_with_pushed_branch "$case_dir"
+  mkdir -p "$case_dir/state/browse/task-x1"
+  : > "$case_dir/state/browse/task-x1/profile-marker"
+
+  # A faithful root with exactly one file missing, built by symlink so the real
+  # checkout is never mutated.
+  degraded="$case_dir/degraded-root"
+  mkdir -p "$degraded/bin"
+  for entry in "$ROOT"/*; do
+    [ "$(basename "$entry")" = bin ] || ln -s "$entry" "$degraded/$(basename "$entry")"
+  done
+  for entry in "$ROOT"/bin/*; do
+    [ "$(basename "$entry")" = fm-browse-session.sh ] \
+      || ln -s "$entry" "$degraded/bin/$(basename "$entry")"
+  done
+  [ ! -e "$degraded/bin/fm-browse-session.sh" ] \
+    || fail "browse-absent: the degraded root must not contain the fork script"
+
+  set +e
+  FM_ROOT_OVERRIDE="$degraded" \
+  FM_STATE_OVERRIDE="$case_dir/state" \
+  FM_CONFIG_OVERRIDE="$case_dir/config" \
+  FM_CAPABILITY_LOG="$case_dir/state/capability-outcomes.log" \
+  PATH="$case_dir/fakebin:$PATH" \
+    "$TEARDOWN" task-x1 > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "browse-absent: an absent fm-browse-session.sh must not block teardown"
+  [ ! -d "$case_dir/state/browse/task-x1" ] \
+    || fail "browse-absent: state/browse/<id> must be purged even with no fork script"
+  pass "teardown without bin/fm-browse-session.sh still completes and purges browse state"
+}
+
 test_return_clears_worktree_claim_before_later_cleanup() {
   local case_dir snapshot rc
   case_dir=$(make_case return-clears-claim)
@@ -1584,6 +1627,7 @@ SH
 }
 
 test_local_only_fork_remote_allows
+test_teardown_without_browse_session_still_purges_browse_state
 test_return_clears_worktree_claim_before_later_cleanup
 test_return_serializes_concurrent_allocation
 test_teardown_prompts_tasks_axi_done_when_compatible

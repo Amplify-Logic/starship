@@ -130,6 +130,7 @@ init_changed_fixture_repo() {
     fm-account.test.sh \
     fm-primary.test.sh \
     fm-spawn-account.test.sh \
+    fm-action-gateway-v2.test.sh \
     fm-primary-handoff.test.sh \
     fm-backend-cmux.test.sh \
     fm-backend-zellij.test.sh \

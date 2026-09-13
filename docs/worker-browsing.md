@@ -30,6 +30,7 @@ fm-browse-session.sh list
 Profiles live under the effective firstmate home: `state/browse/<task-id>/profile`.
 A live marker at `state/browse/<task-id>/session.live` records an active session for `list`.
 `bin/fm-teardown.sh` best-effort stops the session and purges `state/browse/<task-id>/` for the task being torn down; a session-close failure never blocks teardown.
+The purge runs even when `bin/fm-browse-session.sh` is absent, so an upstream checkout without the fork script still removes the profile; `tests/fm-teardown.test.sh` pins that degraded path.
 
 ## Action-gateway seam
 

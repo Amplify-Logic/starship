@@ -127,7 +127,7 @@ family_for_basename() {
   command -v fork_registry_family_for_basename >/dev/null 2>&1 \
     && fork_registry_family_for_basename "$1" && return 0
   case "$1" in
-    fm-action-gateway-v2.test.sh|fm-arm-pretool-check.test.sh|fm-ask-user-authority.test.sh|\
+    fm-arm-pretool-check.test.sh|fm-ask-user-authority.test.sh|\
     fm-brief.test.sh|fm-captain-translation-contract.test.sh|\
     fm-cd-pretool-check.test.sh|fm-composer-ghost.test.sh|fm-composer-lib.test.sh|\
     fm-continuity-pretool-check.test.sh|fm-crew-state.test.sh|fm-decision-hold-lifecycle.test.sh|\
