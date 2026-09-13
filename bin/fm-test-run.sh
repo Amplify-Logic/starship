@@ -830,11 +830,6 @@ families_for_changed_path() {
       printf '%s\n' backend-dispatch
       printf '%s\n' real-herdr-gated
       ;;
-    bin/fm-visible-format-lib.sh)
-      printf '%s\n' "__script__:fm-visible-status.test.sh"
-      printf '%s\n' "__script__:fm-herdr-layout-preview-e2e.test.sh"
-      printf '%s\n' "__script__:fm-deck.test.sh"
-      ;;
     # Shared supervision core. `case` is first-match, so these paths must name
     # every family they need: the later bin/fm-supervision* branch can no longer
     # contribute its pure-contract-unit coverage. Both are listed together

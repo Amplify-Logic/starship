@@ -153,7 +153,9 @@ It has explicit brand and acronym casing overrides and labels its generic title-
 A task's visible tab title is separate from its durable identity.
 New panes carry hidden `fm_task_id`, while the recorded workspace, tab, and pane ids remain the operational targets.
 The tab reads `WORKER · <human outcome> · <authoritative state>`.
+`bin/fm-visible-title.sh` is the single owner of that title format; both the spawn path and the `bin/fm-visible-status.sh` tab rename build the title through it, so the title a worker is spawned with and the title a later refresh renames it to cannot drift apart.
 `bin/fm-task-outcome.sh` owns outcome precedence: explicit `fm-spawn.sh --outcome`, structured backlog title, then a safe humanized task-id fallback.
+The spawn path calls the outcome resolver, the title owner, and the project display-name resolver only through guarded best-effort hooks: with those fork scripts absent a herdr spawn still succeeds and degrades to upstream's behavior, the opaque window name as the tab title, the plain directory basename as the project label, and an empty `outcome=` value in the task's meta (pinned by `tests/fm-spawn-herdr-presentation.test.sh`).
 `bin/fm-visible-status.sh` reads runtime/model from task metadata (and, for cursor, from the live pane footer when present), branch or detached state from the recorded isolated copy, and lifecycle state from `bin/fm-crew-state.sh`.
 It never derives lifecycle state from the append-only status tail or Herdr's native activity alone.
 

@@ -1199,9 +1199,22 @@ case "$BACKEND" in
     if fm_backend_herdr_presentation_capable; then
       HERDR_PRESENTATION=1
     fi
-    TASK_OUTCOME=$(FM_HOME="$FM_HOME" FM_DATA_OVERRIDE="$DATA" \
-      "$FM_ROOT/bin/fm-task-outcome.sh" "$ID" "$OUTCOME")
-    HERDR_TAB_TITLE="WORKER · $TASK_OUTCOME · 🟡 WAITING"
+    # Human presentation is fork-owned: the outcome recorded for this task and
+    # the tab title built from it. Upstream names a worker by its opaque window
+    # name and records no outcome, so with the fork scripts absent this falls
+    # back to exactly that. Both calls are guarded because this file runs under
+    # set -e, where an unguarded command substitution into a missing script
+    # aborts the whole spawn at 127 rather than degrading.
+    TASK_OUTCOME=
+    HERDR_TAB_TITLE=$W
+    if [ -x "$FM_ROOT/bin/fm-task-outcome.sh" ]; then
+      TASK_OUTCOME=$(FM_HOME="$FM_HOME" FM_DATA_OVERRIDE="$DATA" \
+        "$FM_ROOT/bin/fm-task-outcome.sh" "$ID" "$OUTCOME") || TASK_OUTCOME=
+    fi
+    if [ -n "$TASK_OUTCOME" ] && [ -x "$FM_ROOT/bin/fm-visible-title.sh" ]; then
+      HERDR_TAB_TITLE=$("$FM_ROOT/bin/fm-visible-title.sh" "$TASK_OUTCOME") \
+        || HERDR_TAB_TITLE=$W
+    fi
     if [ "$KIND" = secondmate ]; then
       HERDR_LABEL_HOME=$PROJ_ABS
       # Clear, do not inherit: a herdr launching pane may already export an
@@ -1213,7 +1226,13 @@ case "$BACKEND" in
       HERDR_TAB_TITLE=$W
     elif [ "$HERDR_PRESENTATION" -eq 1 ]; then
       HERDR_PROJECT_KEY=$PROJ_ABS_REAL
-      HERDR_PROJECT_NAME=$("$FM_ROOT/bin/fm-project-display-name.sh" "$(basename "$PROJ_ABS_REAL")")
+      # Same shape: the display name is fork-owned, and without it the label
+      # is the plain directory basename upstream would have used.
+      HERDR_PROJECT_NAME=$(basename "$PROJ_ABS_REAL")
+      if [ -x "$FM_ROOT/bin/fm-project-display-name.sh" ]; then
+        HERDR_PROJECT_NAME=$("$FM_ROOT/bin/fm-project-display-name.sh" "$HERDR_PROJECT_NAME") \
+          || HERDR_PROJECT_NAME=$(basename "$PROJ_ABS_REAL")
+      fi
       HERDR_CONTAINER_RAW=$(FM_HOME="$HERDR_LABEL_HOME" \
         FM_HERDR_PROJECT_KEY="$HERDR_PROJECT_KEY" \
         FM_HERDR_PROJECT_LABEL="$HERDR_PROJECT_NAME" \

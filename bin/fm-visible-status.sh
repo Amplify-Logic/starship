@@ -237,7 +237,9 @@ update_task() {  # <task-id>
   outcome=$(human_outcome "$id" "$meta")
   runtime=$(runtime_text "$meta")
   branch=$(actual_branch "$(meta_value "$meta" worktree)")
-  title="WORKER · $outcome · $icon $state"
+  # bin/fm-visible-title.sh is the single owner of this format, so the tab a
+  # worker is spawned with and the tab this refresh renames it to cannot drift.
+  title=$("$SCRIPT_DIR/fm-visible-title.sh" "$outcome" "$icon $state")
   detail="$runtime · $branch"
   herdr_call "$session" tab rename "$tab" "$title" >/dev/null 2>&1 || true
   herdr_call "$session" pane report-metadata "$pane" \
