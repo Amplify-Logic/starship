@@ -189,7 +189,7 @@ test_absent_registry_changes_nothing() {
 
   launch=$(cat "$LAUNCH_LOG")
   encoded=$("$ROOT/bin/fm-operational-input.sh" encode launch-brief < "$HOME_DIR/data/$id/brief.md")
-  expected="CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions '$encoded'"
+  expected="CLAUDE_CODE_AUTO_COMPACT_WINDOW=500000 CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions '$encoded'"
   [ "$launch" = "$expected" ] || fail "absent registry changed the claude launch line"$'\n'"expected: $expected"$'\n'"actual:   $launch"
   assert_no_grep 'account=' "$HOME_DIR/state/$id.meta" "absent registry still recorded an account in meta"
   assert_no_grep 'CLAUDE_CONFIG_DIR' "$LAUNCH_LOG" "absent registry still pinned a Claude home"
@@ -210,7 +210,7 @@ test_pinned_claude_account_exports_home_and_records_meta() {
   expect_code 0 "$status" "pinned claude spawn should succeed: $out"
   launch=$(cat "$LAUNCH_LOG")
   case "$launch" in
-    "CLAUDE_CONFIG_DIR='$home' CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude "*) ;;
+    "CLAUDE_CONFIG_DIR='$home' CLAUDE_CODE_AUTO_COMPACT_WINDOW=500000 CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude "*) ;;
     *) fail "pinned claude launch did not export the derived home first"$'\n'"actual: $launch" ;;
   esac
   assert_grep "account=max" "$HOME_DIR/state/$id.meta" "meta did not record the pinned account"

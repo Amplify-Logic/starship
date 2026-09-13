@@ -10,6 +10,7 @@
 #   pi            pi --name FIRSTMATE
 #                 Pi has no permission system, so no bypass flag exists or is
 #                 needed.
+#                 No context-window flag either: see "Context window" below.
 #   claude-fable  claude --model claude-fable-5-1 --effort <value> --name FIRSTMATE
 #                 --dangerously-skip-permissions
 #   claude-opus   claude --model claude-opus-5 --effort <value> --name FIRSTMATE
@@ -25,12 +26,16 @@
 #                 have passed since the last user interaction
 #                 (docs/watcher-continuity.md). Requires Claude Code v2.1.193
 #                 or later.
+#                 Also exports CLAUDE_CODE_AUTO_COMPACT_WINDOW=500000; see
+#                 "Context window" below.
 #   codex         codex --dangerously-bypass-hook-trust
 #                 --dangerously-bypass-approvals-and-sandbox
+#                 -c model_auto_compact_token_limit=500000
 #   astra         codex --model gpt-6-astra
 #                 -c model_reasoning_effort="<value>"
 #                 --dangerously-bypass-hook-trust
 #                 --dangerously-bypass-approvals-and-sandbox
+#                 -c model_auto_compact_token_limit=500000
 #                 Uses the first trimmed line of local gitignored
 #                 config/astra-effort when that file exists, otherwise xhigh.
 #                 Accepted tokens: low, medium, high, xhigh. max is refused,
@@ -45,6 +50,8 @@
 #                 native footer or controls.
 #   cursor-grok   agent --yolo --model cursor-grok-4.6-high
 #                 Cursor has no effort flag; the tier is a model-id suffix.
+#                 It has no context-window flag either: see "Context window"
+#                 below.
 #                 Grok 4.6 also offers -xhigh, so -high here is a deliberate
 #                 cost choice rather than the ceiling it was on Grok 4.5.
 #                 Primary lifecycle hooks reuse tracked .claude/settings.json
@@ -63,6 +70,25 @@
 #                 warning and login gate, the same session lock, the same
 #                 FM_PRIMARY_HARNESS=cursor, and no companion status bar.
 #                 The model id is the only difference.
+#
+# Context window (captain's order 2026-09-13: cap every future session at 500k
+# tokens so the orchestrator compacts itself). The exact per-harness mechanism,
+# with the one-sentence evidence for each in docs/configuration.md "Context
+# window":
+#   claude-fable / claude-opus  export CLAUDE_CODE_AUTO_COMPACT_WINDOW=500000.
+#     The CLI reads that variable directly and it outranks the autoCompactWindow
+#     user setting, so the cap rides the launch and the captain's global config
+#     is never touched. The effective threshold is min(500000, the model's own
+#     maximum window), which is also why a smaller model needs no special case.
+#   codex / astra  -c model_auto_compact_token_limit=500000 on the launch line.
+#     A -c override never touches ~/.codex/config.toml or a pinned account's
+#     config.toml, which is the whole reason it is passed here rather than set.
+#   pi  nothing is passed. Pi has no context-window or auto-compaction launch
+#     knob: its threshold is the selected model's own context window minus
+#     compaction.reserveTokens, and reserveTokens exists only in a settings file.
+#   cursor-grok  nothing is passed. The Cursor CLI exposes no context or
+#     compaction setting.
+# opencode, grok, and kimi-k3 are outside that order and are unchanged.
 #
 # --account <name> is the ONLY extra argument a profile accepts; every other one
 # still refuses, because that refusal exists to keep resume arguments away from
@@ -805,15 +831,22 @@ case "$PROFILE" in
     # memory-pressure signal once 30 minutes have passed since the last
     # user interaction (docs/watcher-continuity.md).
     export CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1
+    # Cap this primary's auto-compaction window at 500k TOKENS so the
+    # orchestrator compacts itself instead of being managed by hand. The CLI
+    # reads this variable directly and it outranks the autoCompactWindow user
+    # setting, so the cap rides the launch and the captain's global config is
+    # never touched. The effective threshold is min(500000, the model's own
+    # maximum window).
+    export CLAUDE_CODE_AUTO_COMPACT_WINDOW=500000
     argv=(claude --model "$CLAUDE_MODEL" --effort "$CLAUDE_EFFORT" --name "$role" --dangerously-skip-permissions)
     printf 'fm-primary: launching model %s at effort %s\n' "$CLAUDE_MODEL" "$CLAUDE_EFFORT" >&2
     ;;
   codex)
-    argv=(codex --dangerously-bypass-hook-trust --dangerously-bypass-approvals-and-sandbox)
+    argv=(codex --dangerously-bypass-hook-trust --dangerously-bypass-approvals-and-sandbox -c model_auto_compact_token_limit=500000)
     ;;
   astra)
     resolve_astra_effort
-    argv=(codex --model gpt-6-astra -c "model_reasoning_effort=\"$ASTRA_EFFORT\"" --dangerously-bypass-hook-trust --dangerously-bypass-approvals-and-sandbox)
+    argv=(codex --model gpt-6-astra -c "model_reasoning_effort=\"$ASTRA_EFFORT\"" --dangerously-bypass-hook-trust --dangerously-bypass-approvals-and-sandbox -c model_auto_compact_token_limit=500000)
     printf 'fm-primary: launching model gpt-6-astra at effort %s\n' "$ASTRA_EFFORT" >&2
     ;;
   opencode)
@@ -840,6 +873,8 @@ if [ "${FM_PRIMARY_DRY_RUN:-0}" = 1 ]; then
   [ "$PROFILE" != kimi-k3 ] || printf 'KIMI_CODE_HOME=%s\n' "$KIMI_PRIMARY_HOME"
   [ -z "${CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP:-}" ] || \
     printf 'CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=%s\n' "$CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP"
+  [ -z "${CLAUDE_CODE_AUTO_COMPACT_WINDOW:-}" ] || \
+    printf 'CLAUDE_CODE_AUTO_COMPACT_WINDOW=%s\n' "$CLAUDE_CODE_AUTO_COMPACT_WINDOW"
   if [ -n "$ACCOUNT_HOME" ]; then
     printf 'account=%s\n' "$ACCOUNT_NAME"
     printf '%s=%s\n' "$ACCOUNT_ENV" "$ACCOUNT_HOME"

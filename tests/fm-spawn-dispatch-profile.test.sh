@@ -157,7 +157,7 @@ test_no_profile_keeps_claude_launch_unchanged() {
 
   launch=$(cat "$LAUNCH_LOG")
   encoded=$("$ROOT/bin/fm-operational-input.sh" encode launch-brief < "$HOME_DIR/data/$id/brief.md")
-  expected="CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions '$encoded'"
+  expected="CLAUDE_CODE_AUTO_COMPACT_WINDOW=500000 CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions '$encoded'"
   [ "$launch" = "$expected" ] || fail "no-profile claude launch did not use the canonical launch kind"$'\n'"expected: $expected"$'\n'"actual:   $launch"
   pass "no-profile spawn types the launch instructions and publishes its task temp root"
 }
@@ -584,6 +584,81 @@ test_active_dispatch_profile_does_not_block_secondmate_launch() {
   pass "active crew-dispatch profile does not block secondmate launches"
 }
 
+# The captain's 2026-09-13 order: every FUTURE worker, scout and secondmate
+# launch caps its auto-compaction window at 500k tokens. This pins the exact
+# per-harness mechanism, including the two harnesses that deliberately get
+# nothing, so a later edit cannot quietly drop the cap or invent a knob the CLI
+# does not have. docs/configuration.md "Context window" carries the evidence.
+test_context_window_is_capped_at_500k() {
+  local rec id out status launch sm catalog
+
+  id='window-claude-w1'
+  rec=$(make_spawn_case window-claude claude "$id")
+  read_case_record "$rec"
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
+  status=$?
+  expect_code 0 "$status" "claude spawn should succeed: $out"
+  launch=$(cat "$LAUNCH_LOG")
+  case "$launch" in
+    "CLAUDE_CODE_AUTO_COMPACT_WINDOW=500000 "*) ;;
+    *) fail "claude launch did not lead with the 500k auto-compact window"$'\n'"actual: $launch" ;;
+  esac
+
+  id='window-codex-w2'
+  rec=$(make_spawn_case window-codex codex "$id")
+  read_case_record "$rec"
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
+  status=$?
+  expect_code 0 "$status" "codex spawn should succeed: $out"
+  launch=$(cat "$LAUNCH_LOG")
+  assert_contains "$launch" "-c model_auto_compact_token_limit=500000" \
+    "codex ship launch omitted the 500k auto-compact limit"
+  assert_contains "$launch" '-c "notify=' \
+    "codex ship launch lost its turn-end notify override"
+
+  # A secondmate runs its own home for weeks, so it needs the cap too, and its
+  # template is a separate branch from the ship one.
+  id='window-codex-sm-w3'
+  rec=$(make_spawn_case window-codex-sm codex "$id")
+  read_case_record "$rec"
+  sm="$CASE_DIR/secondmate-home"
+  make_seeded_secondmate_home "$sm" "$id"
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$sm" --secondmate)
+  status=$?
+  expect_code 0 "$status" "codex secondmate spawn should succeed: $out"
+  launch=$(cat "$LAUNCH_LOG")
+  assert_contains "$launch" "-c model_auto_compact_token_limit=500000" \
+    "codex secondmate launch omitted the 500k auto-compact limit"
+
+  # Pi has no context-window or auto-compaction launch knob, and the Cursor CLI
+  # exposes no context or compaction setting, so both launches stay bare.
+  id='window-pi-w4'
+  rec=$(make_spawn_case window-pi pi "$id")
+  read_case_record "$rec"
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
+  status=$?
+  expect_code 0 "$status" "pi spawn should succeed: $out"
+  launch=$(cat "$LAUNCH_LOG")
+  assert_not_contains "$launch" "AUTO_COMPACT" "pi launch invented a Claude auto-compact window"
+  assert_not_contains "$launch" "auto_compact" "pi launch invented a Codex auto-compact limit"
+  assert_not_contains "$launch" "reserveTokens" "pi launch invented a compaction reserve override"
+
+  id='window-cursor-w5'
+  rec=$(make_spawn_case window-cursor cursor "$id")
+  read_case_record "$rec"
+  catalog="$CASE_DIR/cursor-models.txt"
+  write_cursor_catalog "$catalog"
+  out=$(FM_CURSOR_MODEL_CATALOG="$catalog" \
+    run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
+  status=$?
+  expect_code 0 "$status" "cursor spawn should succeed: $out"
+  launch=$(cat "$LAUNCH_LOG")
+  assert_not_contains "$launch" "AUTO_COMPACT" "cursor launch invented a Claude auto-compact window"
+  assert_not_contains "$launch" "auto_compact" "cursor launch invented a Codex auto-compact limit"
+  assert_not_contains "$launch" "context=" "cursor launch invented a model context override"
+  pass "every launch template caps Claude and Codex at 500k and leaves Pi and Cursor bare"
+}
+
 test_no_profile_keeps_claude_launch_unchanged
 test_relative_home_overrides_launch_with_absolute_cross_process_paths
 test_home_defaults_preserve_absolute_or_resolve_relative_paths
@@ -603,6 +678,7 @@ test_opencode_threads_model_and_ignores_effort_axis
 test_pi_threads_model_and_max_effort
 test_cursor_records_folded_launch_model_and_threads_flag
 test_cursor_refuses_unknown_catalog_model
+test_context_window_is_capped_at_500k
 test_batch_forwards_shared_profile_flags
 test_active_dispatch_profile_does_not_block_secondmate_launch
 

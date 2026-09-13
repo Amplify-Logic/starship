@@ -62,7 +62,7 @@ tmux crewmates do not inherit the primary's `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSU
 `bin/backends/tmux.sh` creates the worker with `tmux new-window` and then send-keys, so the pane environment comes from the tmux server, not from the primary process.
 This home runs herdr, not tmux, and the herdr spawn path was not live-tested for this variable.
 From spawn code, `bin/fm-spawn.sh` does not put this variable on the herdr launch line and does not unset it.
-The Claude worker launch prefix only sets `CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false`.
+The Claude worker launch prefix sets `CLAUDE_CODE_AUTO_COMPACT_WINDOW=500000` and `CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false` (see `docs/configuration.md` "Context window").
 A herdr worker pane otherwise inherits the launching environment for `FM_HERDR_PROJECT_*`, which is why spawn pins or clears those two variables, but that is not evidence for this pressure-reap export.
 Whether a herdr crewmate receives the export is therefore untested.
 The spawn launch prefix omits `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP`, so a Claude secondmate running its own watcher on tmux stays reapable and can lose its arm the same way the primary did.

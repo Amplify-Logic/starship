@@ -63,6 +63,7 @@ printf 'role=%s\n' "${FM_PRIMARY_ROLE:-}" >> "$FM_PRIMARY_TEST_LOG"
 printf 'kimi_home=%s\n' "${KIMI_CODE_HOME:-}" >> "$FM_PRIMARY_TEST_LOG"
 printf 'opencode_permissions=%s\n' "${OPENCODE_CONFIG_CONTENT:-}" >> "$FM_PRIMARY_TEST_LOG"
 printf 'claude_bg_shell_pressure_reap=%s\n' "${CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP:-}" >> "$FM_PRIMARY_TEST_LOG"
+printf 'claude_auto_compact_window=%s\n' "${CLAUDE_CODE_AUTO_COMPACT_WINDOW:-}" >> "$FM_PRIMARY_TEST_LOG"
 printf 'argv=' >> "$FM_PRIMARY_TEST_LOG"
 printf '<%s>' "$@" >> "$FM_PRIMARY_TEST_LOG"
 printf '\n' >> "$FM_PRIMARY_TEST_LOG"
@@ -79,6 +80,7 @@ strip_ansi() {
 dry() { # <profile> [<args>...]
   ( cd "$TMP_ROOT" && \
     env -u CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP \
+    -u CLAUDE_CODE_AUTO_COMPACT_WINDOW \
     PATH="$FAKEBIN:$PATH" \
     FM_HOME="$HOME_FIX" \
     FM_PRIMARY_DRY_RUN=1 \
@@ -1311,7 +1313,83 @@ test_claude_disables_bg_shell_pressure_reap() {
   pass "fm-primary: Claude Fable and Opus disable background-shell pressure reap; other profiles do not"
 }
 
+# The captain's 2026-09-13 order: every FUTURE launch caps its auto-compaction
+# window at 500k tokens. This pins the exact per-harness mechanism, including
+# the two harnesses that deliberately get nothing, so a later edit cannot
+# quietly drop the cap or invent a knob that does not exist.
+test_context_window_is_capped_at_500k() {
+  local out profile
+  for profile in claude-fable claude-opus; do
+    out=$(dry "$profile")
+    assert_contains "$out" 'CLAUDE_CODE_AUTO_COMPACT_WINDOW=500000' \
+      "$profile dry-run omitted the 500k auto-compact window"
+  done
+
+  for profile in codex astra; do
+    out=$(dry "$profile")
+    assert_contains "$out" "'-c' 'model_auto_compact_token_limit=500000'" \
+      "$profile argv omitted the 500k auto-compact limit"
+  done
+
+  # Pi and Cursor expose no context or compaction knob, so their launches must
+  # stay bare rather than carry an invented one.
+  for profile in pi cursor-grok; do
+    out=$(dry "$profile")
+    assert_not_contains "$out" 'AUTO_COMPACT' \
+      "$profile invented a Claude auto-compact window"
+    assert_not_contains "$out" 'auto_compact' \
+      "$profile invented a Codex auto-compact limit"
+    assert_not_contains "$out" 'context=' \
+      "$profile invented a context-window flag"
+    assert_not_contains "$out" '--context' \
+      "$profile invented a --context flag"
+  done
+
+  # The real exec path, not just the preview: the launched CLI must actually see
+  # the variable in its environment.
+  : > "$LOG"
+  ( cd "$TMP_ROOT" && \
+    env -u HERDR_ENV -u HERDR_SESSION -u HERDR_PANE_ID -u TMUX_PANE \
+      -u CLAUDE_CODE_AUTO_COMPACT_WINDOW \
+      PATH="$FAKEBIN:$PATH" \
+      TERM=dumb \
+      FM_HOME="$HOME_FIX" \
+      FM_PRIMARY_TEST_LOG="$LOG" \
+      "$ROOT/bin/fm-primary.sh" claude-fable )
+  out=$(cat "$LOG")
+  assert_contains "$out" 'claude_auto_compact_window=500000' \
+    "the launched Claude primary did not inherit CLAUDE_CODE_AUTO_COMPACT_WINDOW=500000"
+
+  : > "$LOG"
+  ( cd "$TMP_ROOT" && \
+    env -u HERDR_ENV -u HERDR_SESSION -u HERDR_PANE_ID -u TMUX_PANE \
+      -u CLAUDE_CODE_AUTO_COMPACT_WINDOW \
+      PATH="$FAKEBIN:$PATH" \
+      TERM=dumb \
+      FM_HOME="$HOME_FIX" \
+      FM_PRIMARY_TEST_LOG="$LOG" \
+      "$ROOT/bin/fm-primary.sh" pi )
+  out=$(cat "$LOG")
+  assert_contains "$out" 'claude_auto_compact_window=' "Pi primary did not exec through the fake CLI"
+  assert_not_contains "$out" 'claude_auto_compact_window=500000' \
+    "the Pi primary leaked Claude's auto-compact window into its environment"
+
+  # --help is the launcher's own owner of launch mechanics, so the mechanism has
+  # to be readable there and not only in the source.
+  out=$("$ROOT/bin/fm-primary.sh" --help)
+  assert_contains "$out" 'CLAUDE_CODE_AUTO_COMPACT_WINDOW=500000' \
+    "help omitted the Claude auto-compact window"
+  assert_contains "$out" 'model_auto_compact_token_limit=500000' \
+    "help omitted the Codex auto-compact limit"
+  assert_contains "$out" 'Pi has no context-window or auto-compaction launch' \
+    "help did not state that Pi has no context-window knob"
+  assert_contains "$out" 'The Cursor CLI exposes no context or' \
+    "help did not state that Cursor has no context-window knob"
+  pass "fm-primary: Claude and Codex launches cap the window at 500k; Pi and Cursor stay bare"
+}
+
 test_profiles_and_root
+test_context_window_is_capped_at_500k
 test_claude_effort
 test_astra_primary_profile
 test_claude_disables_bg_shell_pressure_reap
