@@ -4,7 +4,11 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
+    # fm/replatform is the long-lived integration branch for the upstream
+    # re-platform. Its patch-group pull requests target it rather than main, so
+    # without it here they get no checks at all and a late fix after a base
+    # change would ship unverified.
+    branches: [main, fm/replatform]
 
 permissions:
   contents: read
