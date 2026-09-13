@@ -124,6 +124,9 @@ init_changed_fixture_repo() {
     fm-upstream-watch.test.sh \
     fm-upstream.test.sh \
     fm-upstream-ledger.test.sh \
+    fm-baby-menu-quota.test.sh \
+    fm-home-manifest.test.sh \
+    fm-bootstrap.test.sh \
     fm-backend-cmux.test.sh \
     fm-backend-zellij.test.sh \
     fm-backend-orca.test.sh; do

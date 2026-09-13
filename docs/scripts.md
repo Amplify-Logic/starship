@@ -79,6 +79,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `backends/cmux.sh`       | Experimental cmux session-provider adapter                                           |
 | `fm-config-push.sh`      | Push inherited local material to live secondmates and point changed config at its private exact-content reread |
 | `fm-home-port.sh`        | Export, import, push, pull, or bootstrap captain-private portable home material (docs/porting.md) |
+| `fm-home-manifest.sh`    | Print the environment-fidelity manifest of backend and tool versions that `fm-bootstrap.sh manifest` dispatches to (docs/porting.md) |
 | `fm-project-mode.sh`     | Resolve a project's delivery mode and `+yolo` flag from `data/projects.md`           |
 | `fm-project-display-name.sh` | Resolve a project slug to its human display name with explicit brand overrides and a synthesized fallback |
 | `fm-merge-local.sh`      | Fast-forward a `local-only` project's local default branch after approval            |

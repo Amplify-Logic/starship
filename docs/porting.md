@@ -117,6 +117,8 @@ bin/fm-bootstrap.sh manifest
 ```
 
 Compare the two manifests to catch tool-version drift before trusting the port.
+Bootstrap resolves the backend and tool set and dispatches to the fork-owned `bin/fm-home-manifest.sh`, whose header owns the output contract: backend first, a generated stamp, then sorted tool version lines, with `MISSING` for a tool absent from `PATH` and `unknown` for one that answers no version probe.
+The manifest carries tool versions only, never home content.
 
 ## One-command handoff
 

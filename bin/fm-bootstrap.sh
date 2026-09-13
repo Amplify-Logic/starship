@@ -964,43 +964,14 @@ if [ "${1:-}" = "install" ]; then
   exit 0
 fi
 
-# Resolve a one-line version string for environment-fidelity comparison.
-# Prefers --version, then -V, then version; falls back to "unknown" when the
-# binary exists but none of those probes produce a parseable first line.
-bootstrap_tool_version() {
-  local tool=$1 out=""
-  if ! command -v "$tool" >/dev/null 2>&1; then
-    printf 'MISSING\n'
-    return 0
-  fi
-  out=$("$tool" --version 2>/dev/null | head -n 1) || true
-  if [ -z "$out" ]; then
-    out=$("$tool" -V 2>/dev/null | head -n 1) || true
-  fi
-  if [ -z "$out" ]; then
-    out=$("$tool" version 2>/dev/null | head -n 1) || true
-  fi
-  if [ -z "$out" ]; then
-    printf 'unknown\n'
-    return 0
-  fi
-  printf '%s\n' "$out" | tr '\t' ' ' | sed 's/[[:space:]]\{1,\}/ /g; s/^[[:space:]]*//; s/[[:space:]]*$//'
-}
-
-if [ "${1:-}" = "manifest" ]; then
-  if [ "$#" -gt 1 ]; then
-    echo "usage: fm-bootstrap.sh manifest" >&2
-    exit 1
-  fi
-  # Stable ordering: backend first, then sorted unique tools from the resolved set.
-  printf 'backend=%s\n' "$BACKEND"
-  printf 'generated=%s\n' "$(date -u +%Y-%m-%dT%H:%MZ)"
-  # shellcheck disable=SC2086  # deliberate word-split of the resolved tool list
-  printf '%s\n' $TOOLS | sort -u | while IFS= read -r t; do
-    [ -n "$t" ] || continue
-    printf '%s=%s\n' "$t" "$(bootstrap_tool_version "$t")"
-  done
-  exit 0
+# The environment-fidelity manifest is fork-owned. Dispatch only on the
+# manifest subcommand, once the backend and tool set are resolved, and only
+# when the fork script is present; without it this file behaves exactly as it
+# would if the fork had never added the subcommand.
+# shellcheck disable=SC2086  # deliberate word-split of the resolved tool list
+if [ "${1:-}" = manifest ] && [ -x "$SCRIPT_DIR/fm-home-manifest.sh" ]; then
+  [ "$#" -eq 1 ] || { echo "usage: fm-bootstrap.sh manifest" >&2; exit 1; }
+  exec "$SCRIPT_DIR/fm-home-manifest.sh" "$BACKEND" $TOOLS
 fi
 
 # This is the first mutating sweep at a locked session boundary. It pauses an

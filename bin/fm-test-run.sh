@@ -135,7 +135,6 @@ family_for_basename() {
     fm-read.test.sh|fm-chart-room.test.sh|fm-overlay.test.sh|fm-bridge-view.test.sh|\
     fm-order.test.sh|fm-tray.test.sh|\
     fm-herdr-lab.test.sh|fm-instruction-owners.test.sh|fm-lint.test.sh|\
-    fm-baby-menu-quota.test.sh|\
     fm-install-herdr.test.sh|fm-nm-test-contract.test.sh|fm-no-mistakes-ownership.test.sh|\
     fm-pi-primary-types.test.sh|fm-operational-input.test.sh|\
     fm-send-popup-settle.test.sh|fm-send-settle.test.sh|fm-stow-contract.test.sh|\
@@ -402,6 +401,7 @@ EOF
 list_portable_serial_2() {
   cat <<'EOF'
 tests/fm-baby-menu-quota.test.sh
+tests/fm-home-manifest.test.sh
 tests/fm-secondmate-harness.test.sh
 tests/fm-watch-triage.test.sh
 tests/fm-supervision-test-isolation.test.sh
