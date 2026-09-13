@@ -27,6 +27,17 @@
 # The assertion reports that as a shadow, which is the intended loud failure,
 # but the fix is usually to stop naming the path in the test rather than to
 # widen the row.
+# Two upstream answers are treated as no answer at all. __unmapped__ is the
+# absence of a mapping: the runner's map has no case and no test text names
+# the path. A bare unclassified is the absence of a family: some test text
+# names the path, but the only scripts that do are ones the runner's own map
+# leaves unclassified, and the runner calls unmapped scripts unclassified
+# precisely so new tests stay runnable and visible in summaries. Neither
+# marker is ownership of anything, so a covers row on such a path is still a
+# legitimate override and is accepted. What that skip gives up is only a row
+# whose sole upstream owner would have been the unclassified family, which is
+# every arbitrary unmapped script rather than the owners of the path. A real
+# family or a script answer is still refused as a shadow.
 # A family row is confined the same way on the family dimension: it may name
 # only a family the runner already lists, and only a script the runner's own
 # map leaves unclassified. fork_registry_assert_family_confined proves both per
@@ -227,7 +238,9 @@ fork_registry_upstream_owners() { # <upstream-map-function> <path>
 # override's clothes, which is the one shape this grammar must refuse.
 # An __unmapped__ answer is not an owner:
 # it is upstream saying it has no mapping, which is exactly what a covers row is
-# for. Call this once from the changed-path selector, in the parent shell, so a
+# for. A bare unclassified answer is not an owner either: it is upstream saying
+# the only test text naming the path belongs to scripts it has no family for.
+# Call this once from the changed-path selector, in the parent shell, so a
 # failure can stop the run: from a process substitution an exit would only end
 # the subshell and the selection would silently continue. The check asks the
 # upstream map once per claimed path, so it costs about a second on a repository
@@ -249,7 +262,7 @@ fork_registry_assert_no_shadow() { # <upstream-map-function>
         while IFS= read -r owner; do
           [ -n "$owner" ] || continue
           case "$owner" in
-            __unmapped__:*) continue ;;
+            __unmapped__:*|unclassified) continue ;;
           esac
           script=${FORK_REGISTRY_COVER_SCRIPTS[$index]}
           fork_registry_error \

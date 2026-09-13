@@ -211,8 +211,10 @@ SUB_HOME_MARKER=".fm-secondmate-home"
 . "$SCRIPT_DIR/fm-cursor-model-lib.sh"
 # shellcheck source=bin/fm-worktree-lease-lib.sh
 . "$SCRIPT_DIR/fm-worktree-lease-lib.sh"
-# shellcheck source=bin/fm-account-lib.sh
-. "$SCRIPT_DIR/fm-account-lib.sh"
+# Vendor account pinning is fork-owned. Guarded so an absent library leaves this
+# file behaving exactly as it did before pinning existed.
+# shellcheck source=bin/fm-account-lib.sh disable=SC1091
+[ ! -r "$SCRIPT_DIR/fm-account-lib.sh" ] || . "$SCRIPT_DIR/fm-account-lib.sh"
 # Fail closed before any fleet mutation: a no-mistakes gate agent must never spawn
 # a direct report (see bin/fm-gate-refuse-lib.sh).
 fm_refuse_if_gate_agent
@@ -656,48 +658,21 @@ fi
 
 # --- named vendor account ----------------------------------------------------
 # Which LOGIN this worker runs on, resolved before any endpoint exists so a bad
-# pin costs nothing. bin/fm-account-lib.sh owns the registry contract, and an
-# absent config/accounts.json resolves to no pin at all - the launch, its env,
-# and its meta are then byte-identical to a spawn from before account pinning.
-ACCOUNT_VENDOR=
+# pin costs nothing. bin/fm-account-lib.sh owns the registry contract and every
+# refusal. With that library absent nothing is pinned, and the launch, its env,
+# and its meta are byte-identical to a spawn from before account pinning.
 ACCOUNT_NAME=
 ACCOUNT_HOME=
 ACCOUNT_ENV=
-if [ "$RAW_LAUNCH" -eq 1 ]; then
-  [ "$ACCOUNT_SET" -eq 0 ] || {
-    echo "error: --account cannot apply to a raw launch command; that escape hatch has no known vendor to pin" >&2
-    exit 1
-  }
+if command -v fm_account_spawn_pin >/dev/null 2>&1; then
+  ACCOUNT_CLI=$(launch_binary_from_command "$LAUNCH") || ACCOUNT_CLI=
+  fm_account_spawn_pin "$CONFIG" "$DATA" "$HARNESS" "$RAW_LAUNCH" "$ACCOUNT_SET" \
+    "$ACCOUNT" "$ACCOUNT_CLI" "$FM_ROOT" || exit 1
+  ACCOUNT_NAME=$FM_ACCOUNT_SPAWN_NAME
+  ACCOUNT_HOME=$FM_ACCOUNT_SPAWN_HOME
+  ACCOUNT_ENV=$FM_ACCOUNT_SPAWN_ENV
 else
-  case "$HARNESS" in
-    claude) ACCOUNT_VENDOR=claude ;;
-    codex) ACCOUNT_VENDOR=codex ;;
-  esac
-fi
-if [ -n "$ACCOUNT_VENDOR" ]; then
-  fm_account_resolve "$CONFIG" "$DATA" "$ACCOUNT_VENDOR" "$ACCOUNT" || {
-    echo "error: $FM_ACCOUNT_ERROR" >&2
-    exit 1
-  }
-  [ -z "$FM_ACCOUNT_WARNING" ] || echo "warning: $FM_ACCOUNT_WARNING" >&2
-elif [ "$RAW_LAUNCH" -eq 0 ] && [ "$ACCOUNT_SET" -eq 1 ]; then
-  echo "error: harness '$HARNESS' has no vendor account to pin; --account applies to $(fm_account_vendors) harnesses only" >&2
-  exit 1
-fi
-if [ -n "$ACCOUNT_VENDOR" ] && [ -n "$FM_ACCOUNT_PIN_HOME" ]; then
-  ACCOUNT_NAME=$FM_ACCOUNT_PIN_NAME
-  ACCOUNT_HOME=$FM_ACCOUNT_PIN_HOME
-  ACCOUNT_ENV=$(fm_account_env_var "$ACCOUNT_VENDOR")
-  ACCOUNT_CLI=$(launch_binary_from_command "$LAUNCH") || ACCOUNT_CLI=$ACCOUNT_VENDOR
-  ACCOUNT_EXPECT=$(fm_account_expect "$(fm_account_registry_file "$CONFIG")" "$ACCOUNT_VENDOR" "$ACCOUNT_NAME")
-  # The missing-home / logged-out / wrong-seat gate lives in
-  # bin/fm-account-lib.sh, shared verbatim with bin/fm-primary.sh, so the same
-  # situation can never be refused in two different sets of words.
-  fm_account_require_usable "$ACCOUNT_VENDOR" "$ACCOUNT_HOME" "$ACCOUNT_CLI" "$ACCOUNT_NAME" \
-    "$ACCOUNT_EXPECT" "$FM_ROOT/bin/fm-account.sh create $ACCOUNT_VENDOR $ACCOUNT_NAME" || {
-    echo "error: $FM_ACCOUNT_ERROR" >&2
-    exit 1
-  }
+  [ "$ACCOUNT_SET" -eq 0 ] || { echo "error: --account needs bin/fm-account-lib.sh" >&2; exit 1; }
 fi
 
 # config/secondmate-harness may carry optional model/effort tokens alongside the

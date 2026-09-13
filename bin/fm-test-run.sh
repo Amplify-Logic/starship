@@ -175,7 +175,7 @@ family_for_basename() {
       printf '%s\n' live-harness-optin
       ;;
     fm-backend-herdr.test.sh|fm-backend-tmux-smoke.test.sh|fm-backend.test.sh|\
-    fm-send-strict.test.sh|fm-spawn-account.test.sh|fm-spawn-batch.test.sh|\
+    fm-send-strict.test.sh|fm-spawn-batch.test.sh|\
     fm-spawn-dispatch-profile.test.sh|fm-spawn-worktree-settle.test.sh)
       printf '%s\n' backend-dispatch
       ;;
@@ -931,14 +931,6 @@ families_for_changed_path() {
     tests/lib.sh|tests/*-helpers.sh)
       families_for_test_reference "$(basename "$path")" \
         || printf '%s\n' "__unmapped__:$path"
-      ;;
-    bin/fm-account.sh|bin/fm-account-lib.sh)
-      # Account pinning has four owners: the helper's own suite, the two launch
-      # paths that resolve a pin, and bootstrap's registry validation.
-      printf '%s\n' "__script__:fm-account.test.sh"
-      printf '%s\n' "__script__:fm-primary.test.sh"
-      printf '%s\n' "__script__:fm-spawn-account.test.sh"
-      printf '%s\n' "__script__:fm-bootstrap.test.sh"
       ;;
     bin/*)
       families_for_test_reference "$(basename "$path")" \

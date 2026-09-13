@@ -127,6 +127,9 @@ init_changed_fixture_repo() {
     fm-baby-menu-quota.test.sh \
     fm-home-manifest.test.sh \
     fm-bootstrap.test.sh \
+    fm-account.test.sh \
+    fm-primary.test.sh \
+    fm-spawn-account.test.sh \
     fm-backend-cmux.test.sh \
     fm-backend-zellij.test.sh \
     fm-backend-orca.test.sh; do
@@ -140,6 +143,9 @@ init_changed_fixture_repo() {
   : >"$repo/bin/unmapped-source.sh"
   printf '# bin/fm-fork-surface.sh\n# bin/fm-leak-guard.sh\n' \
     >>"$repo/tests/fm-fork-surface.test.sh"
+  # fm-brief.test.sh is in the runner's own pure-contract-unit map, so this
+  # mention makes bin/fm-fork-surface.sh a path upstream genuinely owns.
+  printf '# bin/fm-fork-surface.sh\n' >>"$repo/tests/fm-brief.test.sh"
   printf '# bin/fm-fork-test-registry-lib.sh\n' >>"$repo/tests/fm-test-run.test.sh"
   printf '# .agents/skills/example/SKILL.md\n' >>"$repo/tests/fm-captain-translation-contract.test.sh"
   printf '# .claude/settings.json\n# .pi/extensions/fm-primary-turnend-guard.ts\n' \
@@ -296,6 +302,82 @@ test_fork_registry_shadow_and_glob_guards() {
 
   rm -rf "$tmp"
   pass "fork registry refuses shadowing covers rows, repository-wide globs, and unconfined family rows"
+}
+
+test_fork_registry_covers_accepts_only_absent_upstream_answers() {
+  local tmp repo out rc
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-fork-covers.XXXXXX")
+  repo="$tmp/repo"
+  init_changed_fixture_repo "$repo"
+
+  # A script the runner's own map leaves unclassified names a source as text,
+  # so the reference fallback answers unclassified for that source. That is the
+  # absence of a family, not an owner, and it must not turn a legitimate covers
+  # row into a shadow. Both stubs are committed so the only changed path below
+  # is the one each row claims.
+  printf '#!/usr/bin/env bash\n# bin/fm-covers-probe.sh\n' >"$repo/tests/fm-covers-probe.test.sh"
+  chmod +x "$repo/tests/fm-covers-probe.test.sh"
+  printf '# fixture source\n' >"$repo/bin/fm-covers-probe.sh"
+  git -C "$repo" add tests/fm-covers-probe.test.sh bin/fm-covers-probe.sh
+  git -C "$repo" -c user.name=test -c user.email=test@example.invalid commit -qm probe-stubs
+
+  # Upstream answers __unmapped__: no map case and no test text names the path.
+  printf 'covers tests/fork-test-registry.conf tests/fm-test-run.test.sh\n%s' \
+    'covers bin/unmapped-source.sh tests/fm-fork-surface.test.sh' \
+    > "$repo/tests/fork-test-registry.conf"
+  printf '# changed\n' >>"$repo/bin/unmapped-source.sh"
+  out=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD 2>&1) \
+    || { rm -rf "$tmp"; fail "covers row on an __unmapped__ path must be accepted: $out"; }
+  assert_contains "$out" "tests/fm-fork-surface.test.sh" \
+    "covers row on an __unmapped__ path selects the fork owner"
+  git -C "$repo" checkout -- bin/unmapped-source.sh
+
+  # Upstream answers a bare unclassified: only an unclassified script names it.
+  printf 'covers tests/fork-test-registry.conf tests/fm-test-run.test.sh\n%s' \
+    'covers bin/fm-covers-probe.sh tests/fm-fork-surface.test.sh' \
+    > "$repo/tests/fork-test-registry.conf"
+  printf '# changed\n' >>"$repo/bin/fm-covers-probe.sh"
+  out=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD 2>&1) \
+    || { rm -rf "$tmp"; fail "covers row on an unclassified path must be accepted: $out"; }
+  assert_contains "$out" "tests/fm-fork-surface.test.sh" \
+    "covers row on an unclassified path selects the fork owner"
+  assert_not_contains "$out" "tests/fm-covers-probe.test.sh" \
+    "covers row on an unclassified path is the complete answer for it"
+  git -C "$repo" checkout -- bin/fm-covers-probe.sh
+
+  # Upstream answers a real family: the fixture's fm-brief.test.sh is in the
+  # runner's own pure-contract-unit map and names bin/fm-fork-surface.sh.
+  printf 'covers tests/fork-test-registry.conf tests/fm-test-run.test.sh\n%s' \
+    'covers bin/fm-fork-surface.sh tests/fm-fork-surface.test.sh' \
+    > "$repo/tests/fork-test-registry.conf"
+  printf '# fixture source\n' >"$repo/bin/fm-fork-surface.sh"
+  set +e
+  out=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -eq 2 ] \
+    || { rm -rf "$tmp"; fail "covers row on a family-owned path must fail with exit 2, got $rc"; }
+  assert_contains "$out" 'shadows the upstream owner of bin/fm-fork-surface.sh: pure-contract-unit' \
+    "covers row on a family-owned path is refused as a shadow"
+  rm -f "$repo/bin/fm-fork-surface.sh"
+
+  # Upstream answers a script: .gitignore has two direct script owners.
+  printf 'covers tests/fork-test-registry.conf tests/fm-test-run.test.sh\n%s' \
+    'covers .gitignore tests/fm-fork-surface.test.sh' \
+    > "$repo/tests/fork-test-registry.conf"
+  printf '# fixture ignore\n' >"$repo/.gitignore"
+  set +e
+  out=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -eq 2 ] \
+    || { rm -rf "$tmp"; fail "covers row on a script-owned path must fail with exit 2, got $rc"; }
+  assert_contains "$out" 'shadows the upstream owner of .gitignore: __script__:fm-gitignore-config.test.sh' \
+    "covers row on a script-owned path is refused as a shadow"
+  rm -f "$repo/.gitignore"
+
+  rm -rf "$tmp"
+  pass "fork registry accepts covers rows only where upstream answers __unmapped__ or unclassified"
 }
 
 test_changed_dependency_selection_and_unmapped_failure() {
@@ -886,6 +968,7 @@ test_changed_file_selection_is_conservative
 test_changed_dependency_selection_and_unmapped_failure
 test_fork_registry_overlay
 test_fork_registry_shadow_and_glob_guards
+test_fork_registry_covers_accepts_only_absent_upstream_answers
 test_empty_selection_emits_summary
 test_timing_markers_and_json
 test_aggregate_exit_behavior
