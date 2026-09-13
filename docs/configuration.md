@@ -337,6 +337,15 @@ When the file is present, its first line must trim to exactly one of `low`, `med
 Any other content, including an empty token, refuses rather than falling back.
 The file is not inherited by secondmate homes.
 
+## Calm presentation (config/calm)
+
+`config/calm` is an optional LOCAL, gitignored one-token file recording whether the Pi primary's Calm presentation is on for this home.
+`.pi/extensions/fm-calm.ts` writes it whenever the captain runs `/calm`, and reads it when a Pi session starts.
+`on` restores Calm; `off` and an absent file both leave it off.
+A home upgraded from the removed third presentation level still holds `max`, which restores as `on`.
+Any other content restores as off rather than refusing, because a corrupt preference must never stop a primary from starting.
+[calm.md](calm.md) owns what the presentation actually does.
+
 ## Bridge pinned links (config/bridge-links)
 
 `config/bridge-links` is an optional LOCAL, gitignored file containing one pinned bridge-page link per line as `<label><TAB><https-url>`.

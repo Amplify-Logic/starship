@@ -128,7 +128,7 @@ family_for_basename() {
     fm-herdr-lab.test.sh|fm-instruction-owners.test.sh|fm-lint.test.sh|fm-fork-surface.test.sh|\
     fm-baby-menu-quota.test.sh|\
     fm-install-herdr.test.sh|fm-nm-test-contract.test.sh|fm-no-mistakes-ownership.test.sh|\
-    fm-pi-primary-types.test.sh|fm-operational-input.test.sh|\
+    fm-pi-primary-types.test.sh|fm-operational-input.test.sh|fm-calm-extension.test.sh|\
     fm-send-popup-settle.test.sh|fm-send-settle.test.sh|fm-stow-contract.test.sh|\
     fm-supervision-instructions.test.sh|fm-tmux-submit-busy.test.sh|fm-transition-lib.test.sh|\
     fm-worker-boundary-regression.test.sh|\
@@ -387,6 +387,7 @@ tests/fm-deck.test.sh
 tests/fm-timeout-lib.test.sh
 tests/fm-voice-relay.test.sh
 tests/fm-speak.test.sh
+tests/fm-calm-extension.test.sh
 EOF
 }
 
@@ -910,6 +911,14 @@ families_for_changed_path() {
     .github/workflows/ci.yml|.no-mistakes.yaml)
       printf '%s\n' pure-contract-unit
       printf '%s\n' real-herdr-gated
+      ;;
+    .pi/extensions/fm-calm.ts|.pi/extensions/lib/fm-calm-*.ts)
+      # The Calm lib modules are only reached through the fm-calm.ts factory,
+      # which the calm suite drives after copying the whole lib/ directory, so
+      # a by-path grep finds no owner for the two layout modules. Name both
+      # owners explicitly: the behaviour suite and the strict type check.
+      printf '%s\n' "__script__:fm-calm-extension.test.sh"
+      printf '%s\n' "__script__:fm-pi-primary-types.test.sh"
       ;;
     docs/fm-test-portable-shards.md|docs/fm-test-isolation-proof.md|\
     docs/fm-test-isolation-proof.json)

@@ -109,7 +109,10 @@ test_profiles_and_root() {
   assert_contains "$help" 'cursor-grok' "help omitted the Cursor Grok profile"
   assert_contains "$help" 'astra' "help omitted the Astra profile"
   assert_contains "$help" 'opus -> claude-opus' "help omitted the Opus alias"
+  assert_contains "$help" 'cursor-grok45' "help omitted the Cursor Grok 4.5 profile"
   assert_contains "$help" 'cursor -> cursor-grok.' "help omitted exact alias ownership"
+  assert_contains "$help" 'There is no alias for cursor-grok45' \
+    "help did not say the 4.5 profile is deliberately alias-free"
   assert_contains "$help" 'Pi has no permission system' "help did not explain Pi's no-bypass posture"
   out=$(dry pi)
   assert_contains "$out" "root=$ROOT" "Pi profile did not resolve the tracked root from another cwd"
@@ -147,6 +150,9 @@ test_profiles_and_root() {
   assert_contains "$out" "'agent' '--yolo' '--model' 'cursor-grok-4.6-high'" \
     "Cursor Grok profile did not pin yolo and the high-tier model id"
   [ "$(dry cursor)" = "$out" ] || fail "Cursor alias did not expand exactly to cursor-grok"
+  out=$(dry cursor-grok45)
+  assert_contains "$out" "'agent' '--yolo' '--model' 'cursor-grok-4.5-high'" \
+    "Cursor Grok 4.5 profile did not pin yolo and the 4.5 high-tier model id"
   pass "fm-primary: profiles expand exact flags and always launch from the tracked root"
 }
 
@@ -740,6 +746,67 @@ test_cursor_grok_primary_profile() {
   pass "fm-primary: Cursor Grok is pinned, lifecycle-integrated, version-warned, and login-gated"
 }
 
+# The 4.5 profile exists to keep the previous Grok generation launchable. It must
+# differ from the certified cursor-grok profile in the model id ALONE, so this
+# test compares the two launches field by field rather than re-asserting one
+# hardcoded expectation per mechanic.
+test_cursor_grok45_primary_profile() {
+  local out status=0 certified new
+  out=$(dry cursor-grok45)
+  assert_contains "$out" "profile=cursor-grok45" "Cursor 4.5 dry-run omitted profile"
+  assert_contains "$out" "'agent' '--yolo' '--model' 'cursor-grok-4.5-high'" \
+    "Cursor 4.5 primary argv is wrong"
+  assert_not_contains "$out" 'status-bar' "Cursor 4.5 primary invented a status-bar install"
+  assert_not_contains "$out" 'cursor-grok-4.6' "Cursor 4.5 primary leaked the 4.6 model id"
+
+  # Every launch field except the profile name and the model id must be identical
+  # to the certified profile's.
+  certified=$(dry cursor-grok | sed 's/cursor-grok-4\.6-high/MODEL/; s/^profile=.*/profile=PROFILE/')
+  new=$(dry cursor-grok45 | sed 's/cursor-grok-4\.5-high/MODEL/; s/^profile=.*/profile=PROFILE/')
+  [ "$certified" = "$new" ] || fail \
+    "cursor-grok45 diverges from cursor-grok beyond the model id: '$certified' vs '$new'"
+
+  : > "$LOG"
+  ( cd "$TMP_ROOT" && \
+    env -u HERDR_ENV -u HERDR_SESSION -u HERDR_PANE_ID -u TMUX_PANE \
+      PATH="$FAKEBIN:$PATH" \
+      TERM=dumb \
+      FM_HOME="$HOME_FIX" \
+      FM_PRIMARY_TEST_LOG="$LOG" \
+      "$ROOT/bin/fm-primary.sh" cursor-grok45 )
+  out=$(cat "$LOG")
+  assert_contains "$out" 'cli=agent' "Cursor 4.5 primary did not exec agent"
+  assert_contains "$out" 'harness=cursor' "Cursor 4.5 primary did not export FM_PRIMARY_HARNESS=cursor"
+  assert_contains "$out" 'argv=<--yolo><--model><cursor-grok-4.5-high>' \
+    "Cursor 4.5 primary lost yolo or the 4.5 model id"
+
+  # The shared Cursor gates apply unchanged: an uncertified build warns and
+  # still launches, and an explicitly logged-out CLI refuses.
+  status=0
+  out=$(PATH="$FAKEBIN:$PATH" \
+    FM_HOME="$HOME_FIX" \
+    FM_PRIMARY_DRY_RUN=1 \
+    FM_PRIMARY_TEST_CURSOR_VERSION=2026.07.16-899851b \
+    "$ROOT/bin/fm-primary.sh" cursor-grok45 2>&1) || status=$?
+  [ "$status" -eq 0 ] || fail "an uncertified Cursor build must warn, not block the 4.5 primary"
+  assert_contains "$out" 'certified on 2026.08.11-e8db854; found 2026.07.16-899851b' \
+    "Cursor 4.5 version warning was unclear"
+  status=0
+  out=$(PATH="$FAKEBIN:$PATH" \
+    FM_HOME="$HOME_FIX" \
+    FM_PRIMARY_DRY_RUN=1 \
+    FM_PRIMARY_TEST_CURSOR_STATUS='Not logged in' \
+    "$ROOT/bin/fm-primary.sh" cursor-grok45 2>&1) || status=$?
+  [ "$status" -ne 0 ] || fail "a logged-out Cursor CLI was accepted as the 4.5 primary"
+  assert_contains "$out" 'not logged in' "Cursor 4.5 logged-out refusal was unclear"
+
+  # `cursor` keeps resolving to the certified profile: adding a second Cursor
+  # profile must not move the alias.
+  assert_contains "$(dry cursor)" "'agent' '--yolo' '--model' 'cursor-grok-4.6-high'" \
+    "the cursor alias stopped resolving to the certified 4.6 profile"
+  pass "fm-primary: Cursor Grok 4.5 differs from the certified profile in the model id alone"
+}
+
 test_claude_effort() {
   local out status=0 effort_file="$HOME_FIX/config/primary-effort"
   mkdir -p "$HOME_FIX/config"
@@ -958,7 +1025,7 @@ test_account_absent_registry_changes_nothing() {
   local profile out registry="$HOME_FIX/config/accounts.json"
   mkdir -p "$HOME_FIX/config"
   rm -f "$registry"
-  for profile in pi claude-fable claude-opus codex opencode grok cursor-grok; do
+  for profile in pi claude-fable claude-opus codex opencode grok cursor-grok cursor-grok45; do
     out=$(dry "$profile" 2>/dev/null)
     assert_not_contains "$out" 'account=' "$profile leaked an account line with no registry"
     assert_not_contains "$out" 'CLAUDE_CONFIG_DIR' "$profile pinned a Claude home with no registry"
@@ -1043,7 +1110,7 @@ test_account_selection_and_refusals() {
   assert_contains "$out" "team max" "refusal did not name the defined accounts"
 
   # A profile whose vendor has no account concept refuses rather than ignoring.
-  for profile in pi opencode grok kimi-k3 cursor-grok; do
+  for profile in pi opencode grok kimi-k3 cursor-grok cursor-grok45; do
     status=0
     out=$(dry "$profile" --account max 2>&1) || status=$?
     [ "$status" -ne 0 ] || fail "--account was silently ignored on $profile"
@@ -1268,3 +1335,4 @@ test_kimi_version_doctor_and_symlink_refusals
 test_kimi_corrupt_source_registry_atomicity
 test_lab_role_guard
 test_cursor_grok_primary_profile
+test_cursor_grok45_primary_profile

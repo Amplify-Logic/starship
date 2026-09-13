@@ -623,6 +623,12 @@ Worker adapter behavior is intentionally unchanged.
 
 Grok 4.6 also offers `-xhigh`, so `-high` is now a deliberate cost choice rather than the ceiling it was on Grok 4.5.
 
+A second profile, `bin/fm-primary.sh cursor-grok45` → `agent --yolo --model cursor-grok-4.5-high`, keeps the previous Grok generation launchable.
+Every launch mechanic above is shared: the same `.claude/settings.json` hook set, the same version warning and login gate, the same session lock, and the same `FM_PRIMARY_HARNESS=cursor`.
+The model id is the only difference, and `-high` is the ceiling the 4.5 family offers.
+`cursor-grok45` deliberately has no alias, and `cursor` still resolves to the certified 4.6 profile.
+`agent --list-models` confirmed `cursor-grok-4.5-high` on `2026.09.02-c22c1a3` (2026-09-13).
+
 | Mechanism | Result | Evidence |
 |---|---|---|
 | session-start | PASS | Claude-format `SessionStart` from `.claude/settings.json` fired on interactive launch. |

@@ -130,7 +130,7 @@ fm_handoff_normalize_profile() {
     opus) printf 'claude-opus\n' ;;
     kimi) printf 'kimi-k3\n' ;;
     cursor) printf 'cursor-grok\n' ;;
-    pi|claude-fable|claude-opus|codex|astra|opencode|grok|kimi-k3|cursor-grok) printf '%s\n' "$1" ;;
+    pi|claude-fable|claude-opus|codex|astra|opencode|grok|kimi-k3|cursor-grok|cursor-grok45) printf '%s\n' "$1" ;;
     *) return 1 ;;
   esac
 }
@@ -143,7 +143,7 @@ fm_handoff_profile_cli() {
     opencode) printf 'opencode\n' ;;
     grok) printf 'grok\n' ;;
     kimi-k3) printf 'kimi\n' ;;
-    cursor-grok) printf 'agent\n' ;;
+    cursor-grok|cursor-grok45) printf 'agent\n' ;;
     *) return 1 ;;
   esac
 }
