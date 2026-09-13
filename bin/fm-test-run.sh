@@ -163,7 +163,7 @@ family_for_basename() {
       printf '%s\n' secondmate
       ;;
     fm-bootstrap.test.sh|fm-fleet-sync.test.sh|fm-gate-refuse.test.sh|fm-gotmp.test.sh|\
-    fm-channel-intake.test.sh|fm-morning-intake.test.sh|\
+    fm-channel-intake.test.sh|\
     fm-session-start.test.sh|fm-sessionstart-nudge.test.sh|fm-tangle-guard.test.sh|\
     fm-toolchain-drift.test.sh|fm-update.test.sh)
       printf '%s\n' session-bootstrap
@@ -864,7 +864,6 @@ families_for_changed_path() {
     bin/fm-sessionstart-nudge.sh|bin/fm-tangle*|bin/fm-update.sh|\
     bin/fm-gate-refuse*|bin/fm-lock*|\
     bin/fm-toolchain-lib.sh|bin/fm-timeout-lib.sh|\
-    bin/fm-morning-intake*.sh|\
     docs/toolchain-manifest.tsv)
       # The docs/ data file is a behaviour-bearing input to the bootstrap drift
       # diagnostics, not prose, so it selects the same lane as the scripts that
