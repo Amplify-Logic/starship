@@ -91,7 +91,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-watch-arm.sh`        | Verified home-scoped watcher arm wrapper with loud cycle endings and bounded lifecycle ledger |
 | `fm-watch-checkpoint.sh` | Run one bounded foreground watcher checkpoint for Codex-style supervision            |
 | `fm-watch.sh`            | Singleton-safe always-on watcher: absorb benign wakes, queue and exit on actionable ones; on macOS the lock owner holds a process-lifetime sleep assertion |
-| `fm-file-event-lib.sh`   | Default glasses mailbox/inbox watch paths and bounded file-event wait for the watcher |
+| `fm-file-event-lib.sh`   | Default glasses mailbox/inbox watch paths, the bounded file-event wait, and the watcher's forked terminal wait (hook W1) |
 | `fm-file-eventwait.py`   | Portable kqueue, inotify, or stat-backed implementation of the bounded file-event wait |
 | `fm-afk-start.sh`        | Run the common sourceable away-mode daemon entry in the foreground                      |
 | `fm-afk-launch.sh`       | Own away-mode entry, exit, rollback, and any backend terminal lifecycle                 |

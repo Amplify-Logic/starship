@@ -150,6 +150,7 @@ init_changed_fixture_repo() {
     fm-spawn-herdr-presentation.test.sh \
     fm-primary-handoff.test.sh \
     fm-morning-intake.test.sh \
+    fm-file-eventwait.test.sh \
     fm-backend-cmux.test.sh \
     fm-backend-zellij.test.sh \
     fm-backend-orca.test.sh; do
