@@ -291,6 +291,7 @@ For target project repos shipped through their own no-mistakes pipeline, commits
 The firstmate repo itself is the exception: its `.no-mistakes/` directory is local state, stays gitignored, and is rejected by CI if tracked.
 PR-based task merges go through `bin/fm-pr-merge.sh`, which records `pr=` and any available `pr_head=` through `bin/fm-pr-check.sh` before calling `gh-axi pr merge`.
 The helper requires a full `https://github.com/<owner>/<repo>/pull/<n>` URL, invokes `gh-axi pr merge <n> --repo <owner>/<repo>`, defaults to `--squash`, preserves explicit merge-method flags, and rejects malformed URLs or repo override flags before recording merge state.
+A squash merge also supplies its own commit body, because GitHub's default squash message reintroduces agent co-author trailers from the PR's commit list even when the branch tip carries none; the helper's header owns how that message is read and sanitized.
 A well-formed GitLab merge request URL can be monitored as documented in [`docs/gitlab-merge-watch.md`](gitlab-merge-watch.md), but the GitHub-only merge helper explicitly refuses it rather than sending it to the wrong forge.
 Teardown is fail-closed for ship worktrees: dirty worktrees refuse, and committed work must be landed before the worktree is returned.
 [`bin/fm-teardown.sh`](../bin/fm-teardown.sh)'s header owns the landed-work proofs, PR-discovery fallback, and stale-lock recovery procedure.
