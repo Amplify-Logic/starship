@@ -9,7 +9,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | ------------------------ | ------------------------------------------------------------------------------------ |
 | `fm-primary.sh`          | Launch a verified primary profile from the tracked root, owning profile aliases and bypass flags |
 | `fm-primary-handoff.sh`  | Optional quota- and context-aware primary orchestrator handoff (docs/primary-handoff.md) |
-| `fm-primary-handoff-lib.sh` | Shared handoff state-machine and never-two-holders helpers                        |
+| `fm-primary-handoff-lib.sh` | Shared handoff state-machine and never-two-holders helpers, also executed by `fm-lock.sh release-stale` for the stale-lock release decision |
 | `fm-account.sh`          | List and create the isolated vendor account homes named by `config/accounts.json`, printing the login command it never runs |
 | `fm-account-lib.sh`      | Shared named-account resolution, derived `data/accounts/<vendor>/<name>` homes, and the missing/logged-out/wrong-seat launch gate |
 | `fm-status-bar.sh`       | Render the canonical guarded primary status bar on native surfaces and on tmux or herdr companion panes (docs/status-bar.md) |

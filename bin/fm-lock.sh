@@ -49,24 +49,18 @@ if [ "${1:-}" = "status" ]; then
   exit 0
 fi
 
+# release-stale belongs to the fork's primary handoff, and this dispatch FAILS
+# CLOSED on purpose: with the fork file missing it refuses the release rather
+# than falling through, because the alternative is removing a lock a live
+# primary may still hold and putting two primaries on one home. That is the
+# declared exception to degrading to upstream behaviour, and it is stated here
+# at the call site rather than only in the fork file.
 if [ "${1:-}" = "release-stale" ]; then
-  if [ ! -f "$LOCK" ]; then
-    echo "lock: free"
-    exit 0
-  fi
-  old=$(cat "$LOCK")
-  if fm_harness_holder_alive "$old"; then
-    echo "error: refusing to release a live firstmate session lock (pid $old)" >&2
+  [ -x "$SCRIPT_DIR/fm-primary-handoff-lib.sh" ] || {
+    echo "error: release-stale needs bin/fm-primary-handoff-lib.sh" >&2
     exit 1
-  fi
-  current=$(cat "$LOCK" 2>/dev/null || true)
-  if [ "$current" != "$old" ]; then
-    echo "error: lock holder changed to pid ${current:-none} during release-stale; refusing" >&2
-    exit 1
-  fi
-  rm -f "$LOCK"
-  echo "lock released: stale holder pid $old"
-  exit 0
+  }
+  exec "$SCRIPT_DIR/fm-primary-handoff-lib.sh" release-stale "$LOCK"
 fi
 
 me=$(harness_pid) || {
