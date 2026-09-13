@@ -174,8 +174,12 @@ check_manifest() {
         ;;
       commits)
         for commit in $value; do
+          [ "$commit" != pre-merge ] || continue
           if ! printf '%s\n' "$commit" | grep -Eq '^[0-9a-f]{7,40}$' || ! git -C "$ROOT" cat-file -e "$commit^{commit}" 2>/dev/null; then
-            printf 'fm-fork-surface: %s: commits entry does not resolve at line %s: %s\n' "$id" "$line" "$commit" >&2
+            printf 'fm-fork-surface: %s: commits entry does not resolve at line %s: %s; record the squash-merge commit or pre-merge until it lands\n' "$id" "$line" "$commit" >&2
+            failures=$((failures + 1))
+          elif ! git -C "$ROOT" merge-base --is-ancestor "$commit" HEAD 2>/dev/null; then
+            printf 'fm-fork-surface: %s: commits entry is not an ancestor of the checked-out history at line %s: %s; a rebase or squash orphans a branch commit, so record the squash-merge commit or pre-merge until it lands\n' "$id" "$line" "$commit" >&2
             failures=$((failures + 1))
           fi
         done
