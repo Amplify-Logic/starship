@@ -101,6 +101,13 @@ Archiving can remove the thread from normal sidebar/project views, but it should
 For companion threads, archive the thread and report where the durable work landed.
 If there is a real Firstmate task record, leave teardown decisions to the normal Firstmate task flow instead of this skill.
 
+## Spoken Relay Freshness
+
+When the companion thread is used by voice, corrections and results arrive out of order and the classic failure is acting on or speaking an instruction the captain already replaced.
+Do not solve that in prompt text.
+`bin/fm-voice-relay.sh` owns the durable freshness, evidence, and presentation record, and `bin/fm-voice-relay-appserver.sh` owns steering a turn that is already running.
+Read `docs/desktop-companion.md` for what each guarantees and, in particular, for why schema support for `turn/steer` is not the same as that steer reaching the live desktop thread.
+
 ## Failure Signals
 
 - Missing Desktop project: ask the human to add the target project in Codex Desktop, or use a normal backend.

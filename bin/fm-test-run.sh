@@ -384,6 +384,7 @@ tests/fm-claude-continuity-live-e2e.test.sh
 tests/fm-pi-primary-live-e2e.test.sh
 tests/fm-deck.test.sh
 tests/fm-timeout-lib.test.sh
+tests/fm-voice-relay.test.sh
 EOF
 }
 
@@ -448,6 +449,7 @@ tests/fm-send-secondmate-marker-herdr-e2e.test.sh
 tests/fm-herdr-worker-presentation-e2e.test.sh
 tests/fm-grok-continuity-live-e2e.test.sh
 tests/fm-codex-continuity-live-e2e.test.sh
+tests/fm-voice-relay-appserver.test.sh
 EOF
 }
 

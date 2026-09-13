@@ -144,13 +144,25 @@ wait_listening() {  # <log>
   fail "bridge server did not print a loopback listener: $(cat "$log" 2>/dev/null)"
 }
 
+# HOME is pinned to the fixture home as well as PATH: resolve_child_path admits
+# $HOME/.local/bin and $HOME/.nvm/versions/node/*/bin ahead of the parent PATH,
+# so on a machine where the developer has a real tasks-axi installed under nvm
+# that binary would shadow this fixture's stub and the child would read the
+# machine's own backlog instead of the one the test wrote.
+#
+# NVM_BIN is cleared for the same reason, and pinning HOME alone is not enough:
+# when the pinned home has no .nvm tree at all, _nvm_bin_from_home falls back to
+# whatever NVM_BIN the developer's shell exports, which puts the machine's real
+# nvm bin - real tasks-axi included - at the FRONT of the child PATH again. An
+# nvm-loaded shell would then read the developer's own backlog through the
+# fixture's server.
 start_bridge() {  # <home> <fakebin>
   local home=$1 fakebin=$2 log
   log=$home/bridge-serve.log
   : > "$log"
   FM_BRIDGE_VIEW_TEST=1 FM_BRIDGE_VIEW_LAUNCHCTL="$fakebin/launchctl" \
     FM_BRIDGE_VIEW_MAILBOX_PORT="${FM_BRIDGE_VIEW_MAILBOX_PORT:-}" \
-    PATH="$fakebin:$PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
+    PATH="$fakebin:$PATH" HOME="$home" NVM_BIN='' FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
     "$BRIDGE" serve --host "$HOST_NAME" --port 0 >"$log" 2>&1 &
   BRIDGE_PIDS+=("$!")
   wait_listening "$log"

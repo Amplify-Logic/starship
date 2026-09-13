@@ -174,7 +174,8 @@ The remaining Codex CLI and app-server probes found useful pieces but not a supp
 - A raw proxy attempt against the Desktop control socket did not accept plain JSON-RPC framing.
 
 That is not enough to add `codex-app` to `FM_BACKEND_KNOWN` or `FM_BACKEND_SPAWN`, and neither is send on its own.
-Reading live state and stopping a turn have no supported shell-callable path today, and the private local databases that expose them are versioned and carry no stability contract, so a backend must not depend on them.
+The app-server protocol the same build speaks does define reading a thread and steering or interrupting a turn, and `bin/fm-voice-relay-appserver.sh` calls those methods from a shell, but no server reachable that way has been shown to own the live Desktop thread; [desktop-companion.md](desktop-companion.md) owns that schema-versus-reachability distinction.
+Until it is measured end to end, live state and turn control remain unusable for supervision, and the private local databases that expose them are versioned and carry no stability contract, so a backend must not depend on them.
 A Firstmate backend must be able to create a thread, start or continue turns, read live state while turns run, and archive/stop the same endpoint through a Codex Desktop-supported shell-callable API.
 Shipping a local ledger would only record intentions; it would not supervise the actual Desktop thread.
 
