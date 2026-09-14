@@ -180,22 +180,27 @@ An opt-in, per-home and per-device gate for speaking a captain-facing outcome ou
 It ships inert: with no `enabled = true` line in private gitignored `config/speak`, `bin/fm-speak.sh` makes no sound at all, so cloning this repo, seeding a secondmate home, or adding a device never makes it talk.
 
 This is a sink, not a companion.
-The spoken register - outcome first, two or three short sentences, about eight seconds, never a URL, path or id, and never a request for a spoken yes - is owned once by the glasses project's `announce` entry point, which already enforces it for the glasses loop.
+The spoken register - outcome first, two or three short sentences, never a URL, path or id, and never a request for a spoken yes - is owned once by the glasses project's `announce` entry point, which already enforces it for the glasses loop.
 `bin/fm-speak.sh` shapes every line through that owner and refuses to speak when it cannot reach it, because speaking unshaped text would read a URL aloud.
 Reusing that owner is deliberate: a second copy of the register in this repository would drift from the one the glasses already speak.
 The practical consequence is that desk voice-out needs that project's local entry point present, and `FM_SPEAK_SHAPER` can name another one exposing the same `--dry-run <text>` contract.
+
+**Deepgram preference.** When `DEEPGRAM_API_KEY` is set in the environment or this home's gitignored `.env`, `bin/fm-speak.sh` synthesizes through Deepgram Aura (`bin/fm-deepgram-tts.sh`, default model `aura-2-thalia-en`) and plays with `afplay`. macOS `say` remains the fallback when the key is absent or Deepgram fails. The key is never logged.
+When Deepgram is the intended sink, the script also points the glasses register owner at [`docs/examples/desk-speak-register.toml`](examples/desk-speak-register.toml) via `GLASSES_ANNOUNCE_CONFIG` (unless already set), raising the spoken budget from ~8s to **30 seconds** while keeping the same URL/path/id and decision refusals. Override with `FM_SPEAK_DEEPGRAM_REGISTER`, or keep the short cut with `FM_SPEAK_DEEPGRAM_REGISTER=` (empty).
 
 Because the register owner refuses text that asks the captain to decide, a merge, a spend, an outward action, or any other approval structurally cannot be put to him by voice; those stay in the reply he reads.
 Nothing here observes audio, so a successful call means the shaped line was handed to the speaker, never that it was produced or heard.
 
 Configuration is `key = value` lines; unknown keys are refused rather than ignored.
-`enabled` arms this home, and the optional `voice` names a `say` voice.
+`enabled` arms this home, and the optional `voice` names a `say` voice (ignored for Deepgram).
 The script's header and `--help` own the exact invocation, the environment overrides, and the exit codes.
 `AGENTS.md` section 9 owns when the orchestrator speaks.
+The Mac push-to-talk floater that feeds captain input into this home is documented in [`desk-floater.md`](desk-floater.md).
 
-Each call is bounded on both halves so a captain-facing turn is never held open: the register call is waited on under a watchdog because its output is needed, and the speaker call is detached with its standard streams closed, so a caller capturing this script's output is never blocked by audio that is still playing.
-The two bounds are deliberately separate because they protect different things: `FM_SPEAK_SHAPER_TIMEOUT` bounds the waited-on register call and is therefore the worst case a turn can be held, while `FM_SPEAK_TIMEOUT` bounds only the detached speaker, stopping a runaway from holding the audio device without ever holding the caller.
+Each call is bounded on both halves so a captain-facing turn is never held open: the register call is waited on under a watchdog because its output is needed, and speaker playback is detached with its standard streams closed (Deepgram synthesis is waited only for the network `--to` file, then playback is detached).
+The two bounds are deliberately separate because they protect different things: `FM_SPEAK_SHAPER_TIMEOUT` bounds the waited-on register call and is therefore the worst case a turn can be held, while `FM_SPEAK_TIMEOUT` bounds synthesis/playback runaways without ever holding the caller for the duration of the audio.
 The script's header owns their defaults.
+
 
 ## Supervision active alert channels (config/wedge-alarm)
 
@@ -744,6 +749,9 @@ FM_CREW_STATE_NM_TIMEOUT=10   # seconds allowed per no-mistakes query inside fm-
 FM_CREW_STATE_RUNS_LIMIT=200  # recent no-mistakes run rows scanned when axi status cannot be attributed to the current code, and when a terminal failure is checked for a live run on the same branch
 FM_CREW_STATE_LIVE_ROW_MAX_AGE=259200   # seconds a live run row whose head this copy cannot resolve stays trusted, measured from the run's recorded start; a backstop against a row nobody reaped, set past any plausible live run so a green PR-monitoring crew still reads working (bin/fm-crew-state.sh owns the rule)
 FM_CREW_STATE_BIN=bin/fm-crew-state.sh   # test override for the current-state reader used by working/paused watcher triage
+DEEPGRAM_API_KEY=       # desk voice: enables Deepgram Aura speak-out and floater speech-to-text; env or gitignored .env only, never logged (docs/desk-floater.md)
+DEEPGRAM_TTS_MODEL=aura-2-thalia-en   # Deepgram Aura voice for bin/fm-deepgram-tts.sh
+DEEPGRAM_STT_MODEL=nova-2   # Deepgram model for bin/fm-deepgram-stt.sh
 FMX_PAIRING_TOKEN=      # X mode pairing token; .env opt-in authorizes replies and eligible lifecycle actions
 FMX_RELAY_URL=https://myfirstmate.io   # optional X relay override, mainly for local relay development
 FMX_ENV_FILE=           # optional alternate .env file for direct X client invocations; bootstrap still checks $FM_HOME/.env

@@ -221,6 +221,7 @@ Firstmate's skills live in two separate places with different audiences:
 - [docs/configuration.md](docs/configuration.md) - environment variables, `FM_HOME`, runtime backend selection, optional X mode, the files you set, and harness support.
 - [docs/porting.md](docs/porting.md) - bring Firstmate up on a second machine and keep captain-private portable material in step with explicit push/pull.
 - [docs/baby-menu-quota-widget.md](docs/baby-menu-quota-widget.md) - the tracked provider-quota menu-bar widget: install, the one machine-local setting, and the honesty rules it encodes.
+- [docs/desk-floater.md](docs/desk-floater.md) - enable the Mac always-on-top push-to-talk floater: Deepgram speech-to-text into a durable captain-input mailbox, and Deepgram Aura speak-out with macOS `say` as the fallback.
 - [docs/desktop-companion.md](docs/desktop-companion.md) - set up a scoped visual companion in the desktop app, hand it a task, speak to it without acting on instructions it has already corrected, and read what is actually verified about that path.
 - [docs/wedge-alarm.md](docs/wedge-alarm.md) - configure active alerts for stuck away-mode delivery and host-detected watcher outages.
 - [docs/tmux-backend.md](docs/tmux-backend.md) - setup guide for the tmux reference backend: prerequisites, attaching, and watching crew windows.

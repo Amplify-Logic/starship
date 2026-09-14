@@ -17,6 +17,10 @@ set -u
 # shellcheck disable=SC1091
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
+# Ambient Deepgram keys must not divert these say-path fixtures.
+unset DEEPGRAM_API_KEY || true
+export FM_DEEPGRAM_ENV_FILE=/dev/null
+
 SPEAK="$ROOT/bin/fm-speak.sh"
 TMP_ROOT=$(fm_test_tmproot fm-speak)
 

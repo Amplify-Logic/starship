@@ -758,22 +758,32 @@ test_arm_self_eviction_is_loud_without_successor() {
   fakebin="$dir/fakebin"
   armout="$dir/arm.out"
   mark_pr_check_migration_complete "$state"
-  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_POLL=0.2 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 FM_ARM_CONFIRM_TIMEOUT=1 "$WATCH_ARM" > "$armout" &
+  # The confirm timeout is deliberately left at the arm's default: a one-second
+  # bound gave a loaded CI runner too little time to publish the fresh beacon,
+  # so the arm reported "no live watcher" before it could ever report "started".
+  # Confirmation speed is not what this test measures.
+  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_POLL=0.2 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH_ARM" > "$armout" &
   armpid=$!
   i=0
-  while [ "$i" -lt 80 ]; do
+  while [ "$i" -lt 150 ]; do
     grep -qF 'watcher: started pid=' "$armout" 2>/dev/null && break
+    is_live_non_zombie "$armpid" || break
     sleep 0.1
     i=$((i + 1))
   done
   watcher_pid=$(cat "$state/.watch.lock/pid" 2>/dev/null || true)
-  grep -qF "watcher: started pid=$watcher_pid" "$armout" || fail "arm did not start before self-eviction check"
+  if [ -z "$watcher_pid" ] || ! grep -qF "watcher: started pid=$watcher_pid" "$armout"; then
+    fail "arm did not start before self-eviction check: $(cat "$armout")"
+  fi
 
   # A live but identity-mismatched replacement lock makes the owned watcher
   # self-evict normally. With no verified successor, the arm must turn that
   # otherwise clean empty close into the typed nonzero failure.
   printf '%s\n' "$$" > "$state/.watch.lock/pid"
-  wait_for_exit "$armpid" 80
+  # Before it fails, the arm waits its full confirm bound (the default above,
+  # plus one rounding second) for a healthy successor. The exit wait must
+  # outlast that bound, or a correctly loud arm is reported as a timeout.
+  wait_for_exit "$armpid" 200
   status=$?
   [ "$status" -ne 0 ] && [ "$status" -ne 124 ] || fail "self-evicted arm did not fail nonzero (status $status)"
   grep -qF 'watcher: FAILED - cycle ended without an actionable reason' "$armout" || fail "self-evicted arm omitted the typed cycle-end failure"

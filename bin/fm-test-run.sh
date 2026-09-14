@@ -387,6 +387,7 @@ tests/fm-deck.test.sh
 tests/fm-timeout-lib.test.sh
 tests/fm-voice-relay.test.sh
 tests/fm-speak.test.sh
+tests/fm-deepgram-desk.test.sh
 tests/fm-calm-extension.test.sh
 EOF
 }
@@ -931,6 +932,12 @@ families_for_changed_path() {
     tests/lib.sh|tests/*-helpers.sh)
       families_for_test_reference "$(basename "$path")" \
         || printf '%s\n' "__unmapped__:$path"
+      ;;
+    desk-floater/Package.swift|desk-floater/Sources/*)
+      # The Swift floater is launched only through bin/fm-desk-floater.sh, so a
+      # by-path grep finds no owner for the package sources. Name the desk
+      # voice suite explicitly (see the desk-floater-voice capability).
+      printf '%s\n' "__script__:fm-deepgram-desk.test.sh"
       ;;
     bin/fm-account.sh|bin/fm-account-lib.sh)
       # Account pinning has four owners: the helper's own suite, the two launch
