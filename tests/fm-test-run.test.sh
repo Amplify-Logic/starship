@@ -101,6 +101,16 @@ OPS_SRC_EXT='sh'
 OPS_ORDER_SRC="bin/fm-order.$OPS_SRC_EXT"
 OPS_TRAY_SRC="bin/fm-tray.$OPS_SRC_EXT"
 
+# The captain's private surfaces are trapped the same way, so their names are
+# assembled here too. The chart-room engine is the sharpest case: no test text
+# names it anywhere in the repository, so its registry row is the only mapping
+# it has and spelling it out here would both invent an upstream owner and
+# shadow that row.
+DECK_SRC="bin/fm-deck.$OPS_SRC_EXT"
+CHART_SRC="bin/fm-chart-room.$OPS_SRC_EXT"
+CHART_ENGINE_EXT='mjs'
+CHART_ENGINE="bin/fm-chart-room.$CHART_ENGINE_EXT"
+
 init_changed_fixture_repo() {
   local repo=$1 script
   # This fixture copies the real tests/fork-test-registry.conf, so every script
@@ -150,6 +160,10 @@ init_changed_fixture_repo() {
     fm-spawn-herdr-presentation.test.sh \
     fm-primary-handoff.test.sh \
     fm-morning-intake.test.sh \
+    fm-decision-surface.test.sh \
+    fm-read.test.sh \
+    fm-chart-room.test.sh \
+    fm-overlay.test.sh \
     fm-file-eventwait.test.sh \
     fm-backend-cmux.test.sh \
     fm-backend-zellij.test.sh \
@@ -164,6 +178,9 @@ init_changed_fixture_repo() {
   : >"$repo/bin/unmapped-source.sh"
   : >"$repo/$OPS_ORDER_SRC"
   : >"$repo/$OPS_TRAY_SRC"
+  : >"$repo/$DECK_SRC"
+  : >"$repo/$CHART_SRC"
+  : >"$repo/$CHART_ENGINE"
   printf '# bin/fm-fork-surface.sh\n# bin/fm-leak-guard.sh\n' \
     >>"$repo/tests/fm-fork-surface.test.sh"
   # fm-brief.test.sh is in the runner's own pure-contract-unit map, so this
@@ -179,6 +196,15 @@ init_changed_fixture_repo() {
   printf '# %s\n' "$OPS_ORDER_SRC" >>"$repo/tests/fm-order.test.sh"
   printf '# %s\n' "$OPS_TRAY_SRC" >>"$repo/tests/fm-tray.test.sh"
   printf '# %s\n# %s\n' "$OPS_TRAY_SRC" "$OPS_ORDER_SRC" >>"$repo/tests/fm-deck.test.sh"
+  # The private surfaces, mirrored from the repository: the chart-room script is
+  # named by its own suite, the deck script by its own suite and by the bridge
+  # suite that serves it, and the chart-room engine by nothing at all. Those
+  # mentions are the reference fallback the runner must still reach when the
+  # registry is absent, and the engine's absence from them is why the registry
+  # row is its only mapping.
+  printf '# %s\n' "$CHART_SRC" >>"$repo/tests/fm-chart-room.test.sh"
+  printf '# %s\n' "$DECK_SRC" >>"$repo/tests/fm-deck.test.sh"
+  printf '# %s\n' "$DECK_SRC" >>"$repo/tests/fm-bridge-view.test.sh"
   printf '# .agents/skills/example/SKILL.md\n' >>"$repo/tests/fm-captain-translation-contract.test.sh"
   printf '# .claude/settings.json\n# .pi/extensions/fm-primary-turnend-guard.ts\n' \
     >>"$repo/tests/fm-cd-pretool-check.test.sh"
@@ -555,6 +581,118 @@ test_fork_registry_ops_rows_and_registry_absence() {
 
   rm -rf "$tmp"
   pass "ops command center rows select their declared owners, degrade to the reference fallback, and refuse with exit 2 when neither answers"
+}
+
+# The captain's private reading, decision, chart-room and Action Deck surfaces
+# have no hook in a core script either, so their registry rows are the whole
+# integration and the degraded path is again the registry's own absence. Two
+# things make this group's rows worth pinning beyond the ops group's.
+# The first is an owner upstream could never have found: the overlay helper asks
+# the chart-room script for a report's URL, so a chart-room change can break the
+# overlay suite, and the overlay suite never names that path as text. Its path is
+# deliberately not spelled out here for the same reason the ops sources are
+# assembled above: a literal mention in this pure-contract-unit script would hand
+# the upstream map a real owner and turn the group's exclusive row into a shadow.
+# The second is the chart-room engine, which no test text names anywhere. Its
+# registry row is the only mapping it has, so with the registry gone the runner
+# must refuse with its own exit code rather than select nothing quietly - and
+# that refusal is the honest far side of the degrade guarantee, not a gap in it.
+# Every phase asserts the runner's own exit code rather than merely succeeding
+# or merely failing, because a refusal and an accident such as a missing
+# interpreter are both non-zero and only the exact code tells them apart. Each
+# assertion below was confirmed to fail when the row or mention it pins is
+# removed, so none of them is vacuous.
+test_fork_registry_private_surface_rows_and_registry_absence() {
+  local tmp repo out rc
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-private-rows.XXXXXX")
+  repo="$tmp/repo"
+  init_changed_fixture_repo "$repo"
+
+  printf '# fixture chart-room change\n' >>"$repo/$CHART_SRC"
+  set +e
+  out=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD 2>&1)
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "covers rows for the chart-room source must load"
+  assert_contains "$out" "tests/fm-chart-room.test.sh" \
+    "covers row selects the chart room's own suite for its source"
+  assert_contains "$out" "tests/fm-overlay.test.sh" \
+    "the overlay suite is a declared owner of the chart-room source"
+  assert_not_contains "$out" "tests/fm-brief.test.sh" \
+    "covers rows are the complete answer for the chart-room source"
+  git -C "$repo" checkout -- "$CHART_SRC"
+
+  printf '# fixture chart-room engine change\n' >>"$repo/$CHART_ENGINE"
+  set +e
+  out=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD 2>&1)
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "the covers row must be the whole mapping for the chart-room engine"
+  assert_contains "$out" "tests/fm-chart-room.test.sh" \
+    "covers row selects the chart room's own suite for its engine"
+  assert_not_contains "$out" "tests/fm-brief.test.sh" \
+    "the engine's row is the complete answer for it"
+  git -C "$repo" checkout -- "$CHART_ENGINE"
+
+  # The deck script has two owners, its own suite and the bridge suite that
+  # serves the deck page from it, and the deck suite is the further owner of
+  # both ops sources that the ops rows deliberately left for this group.
+  printf '# fixture deck change\n' >>"$repo/$DECK_SRC"
+  set +e
+  out=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD 2>&1)
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "covers rows for the deck source must load"
+  assert_contains "$out" "tests/fm-deck.test.sh" \
+    "covers row selects the deck's own suite for its source"
+  assert_contains "$out" "tests/fm-bridge-view.test.sh" \
+    "the bridge suite is a declared owner of the deck source"
+  git -C "$repo" checkout -- "$DECK_SRC"
+
+  printf '# fixture tray change\n' >>"$repo/$OPS_TRAY_SRC"
+  set +e
+  out=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD 2>&1)
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "the deck row on the tray source must load"
+  assert_contains "$out" "tests/fm-deck.test.sh" \
+    "the deck suite is a declared owner of the tray source"
+  git -C "$repo" checkout -- "$OPS_TRAY_SRC"
+
+  # The same change in a checkout with no fork registry at all. The removal is
+  # committed so the chart-room source is again the only changed path, and the
+  # runner must still resolve it through its own reference fallback rather than
+  # die, because that suite names its own source.
+  git -C "$repo" rm -q tests/fork-test-registry.conf
+  git -C "$repo" -c user.name=test -c user.email=test@example.invalid commit -qm no-registry
+  printf '# fixture chart-room change\n' >>"$repo/$CHART_SRC"
+  set +e
+  out=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD 2>&1)
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "an absent fork registry must not break a chart-room change"
+  assert_not_contains "$out" "no changed-test mapping" \
+    "an absent fork registry must not leave the chart-room source unmapped"
+  assert_contains "$out" "tests/fm-chart-room.test.sh" \
+    "the reference fallback still reaches the chart room with no registry"
+  git -C "$repo" checkout -- "$CHART_SRC"
+
+  # The far side, and the reason the engine's row exists at all. Nothing names
+  # the engine as text, so with the registry gone the runner has no owner for it
+  # from any source. It must refuse with its own exit code 2 and say which path
+  # it could not map.
+  printf '# fixture chart-room engine change\n' >>"$repo/$CHART_ENGINE"
+  set +e
+  out=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD 2>&1)
+  rc=$?
+  set -e
+  expect_code 2 "$rc" \
+    "the chart-room engine with no registry row and no test mention must refuse with exit 2"
+  assert_contains "$out" "no changed-test mapping for source path" \
+    "the refusal names the path it could not map"
+
+  rm -rf "$tmp"
+  pass "private surface rows select their declared owners, degrade to the reference fallback, and refuse with exit 2 when neither answers"
 }
 
 test_empty_selection_emits_summary() {
@@ -1089,6 +1227,7 @@ test_fork_registry_overlay
 test_fork_registry_shadow_and_glob_guards
 test_fork_registry_covers_accepts_only_absent_upstream_answers
 test_fork_registry_ops_rows_and_registry_absence
+test_fork_registry_private_surface_rows_and_registry_absence
 test_empty_selection_emits_summary
 test_timing_markers_and_json
 test_aggregate_exit_behavior
