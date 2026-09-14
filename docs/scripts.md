@@ -31,6 +31,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-read.sh`             | Render a Markdown path or task report as a private loopback Lavish reading page      |
 | `fm-chart-room.sh`       | Serve the private read-only chart room: fleet home, per-project goal maps, rendered fresh on every request (docs/chart-room.md) |
 | `fm-bridge-view.sh`      | Serve the captain's phone-first fleet glance, the `/deck` Action Deck page, photo drop, and hold-to-speak on loopback behind Tailscale Serve (docs/bridge-view.md) |
+| `fm-bridge-fields.sh`    | Add the bridge's title, repo, hold kind and hold reason to a finished bearings model, so the projection itself carries none of them |
 | `fm-overlay.sh`          | Open a Markdown view as an in-terminal Herdr overlay pane, degrading to a printed pointer to the same content; installs nothing and is called nowhere by default (docs/chart-room.md) |
 | `fm-present.sh`          | Present a captain-action artifact once per unchanged milestone through its existing local owner |
 | `fm-speak.sh`            | Speak one captain-facing outcome line out of this machine's speaker, shaped by the glasses project's spoken-register owner; inert unless `config/speak` opts the home in (docs/configuration.md "Desk voice-out") |
