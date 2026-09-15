@@ -75,6 +75,7 @@ Phases recorded in `state/.primary-handoff`:
 3. **releasing** - Signal the outgoing harness PID, wait until it is not a live harness, then run `fm-lock.sh release-stale`.
    `release-stale` removes `state/.lock` only when the recorded holder is dead or not a harness.
    It refuses while a live harness still holds the lock.
+   The release decision lives in `bin/fm-primary-handoff-lib.sh`, which `fm-lock.sh` executes for that subcommand and without which it refuses the release rather than removing the lock.
 4. **launching** - Re-check the never-two-holders invariant.
    Refuse to launch if the session lock is still held by a live harness.
    Launch the incoming profile through `bin/fm-primary.sh` (or the test launch seam).
@@ -145,6 +146,7 @@ Chosen tradeoff:
 | Crash during flushing | Phase `flushing` | Resume refuses launch until release completes; may retry flush | Outgoing still holds |
 | Outgoing ignores signal / stays alive | Wait timeout | Phase `aborted`; never launch incoming | Outgoing still holds |
 | `release-stale` while live holder | `fm-lock.sh` refusal | Abort; never launch | Outgoing still holds |
+| `release-stale` with `bin/fm-primary-handoff-lib.sh` missing | `fm-lock.sh` refusal naming the file | Abort; never launch; lock left in place | Outgoing still holds |
 | Crash after release, before launch | Phase `releasing`/`launching`, lock free | Retry launch only; never recreate outgoing ownership | Zero live holders until incoming acquires |
 | Incoming launch fails | Launch non-zero | Phase `failed`; lock left free/stale for manual recovery | Still at most one holder (zero) |
 | Second supervisor races | Coordination lock | Loser exits without mutating session lock | Preserved by serialization |

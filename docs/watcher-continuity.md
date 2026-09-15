@@ -167,6 +167,9 @@ A newer path removes the marker before the cadence test, so authenticated checks
 The live waiter still compares signatures around each bounded wait, which covers a write racing catch-up with waiter setup.
 Each watcher loop captures a private marker before filesystem catch-up and publishes that boundary only when an authenticated check sweep completes, so unchanged paths do not fire twice while a later write remains newer for the next loop or successor.
 This catch-up is part of the existing singleton watcher cycle and does not add another watcher, change lock ownership, or alter the one-actionable-reason exit contract.
+Both the catch-up and the forked terminal wait are reached through guarded calls, so a checkout without `bin/fm-file-event-lib.sh` runs the watcher's own `event_wait_or_sleep` and its ordinary check cadence instead.
+`bin/fm-file-event-lib.sh` also checks that shape once each time it loads, which for the watcher is once per start and never per cycle: `fm_fork_assert_watcher_hook_shape` walks the watcher beside it, and if any fork call has escaped its guard or the terminal wait has lost its else branch it names the line on stderr and disables the override by replacing the fork's terminal wait with a direct call to the watcher's own `event_wait_or_sleep` and making the catch-up a no-op, so the watcher always still has a wait even when its call site is the thing that broke.
+`fm_fork_assert_watcher_hook_shape` is the single owner of that check, and `tests/fm-file-eventwait.test.sh` proves it by running the function against the real watcher and against deliberately broken copies that have lost a guard or the else branch.
 `docs/bridge-view.md` owns the separate glasses existence-only watcher-check guidance.
 
 ## Regression coverage
@@ -180,6 +183,7 @@ It also asserts both guidance branches verbatim, allows a genuine first run over
 `tests/fm-session-start.test.sh` proves both the deliberate disarm and the suppressed-registration cooldown reach every session-start digest with their timing and recovery command.
 `tests/fm-turnend-guard.test.sh` additionally runs the Stop hook with the sentinel enabled and every channel pointed at a recorder, proving the block still renders fast, the marker lands unclaimed, and no channel fires.
 `tests/fm-file-eventwait.test.sh` proves mailbox and inbox writes during a dead watcher or successor-arm gap expire the check marker on catch-up, unchanged paths do not double-fire, and a write hidden behind a clean wait timeout is recovered on the next loop.
+It also runs the watcher from a mirrored checkout with `bin/fm-file-event-lib.sh` removed and proves the fork wait and catch-up are undefined there, the watcher blind-sleeps its poll interval without expiring the slow-check timer, and stderr stays silent, with a counterfactual that deletes each guard to show those assertions fail.
 `tests/fm-primary.test.sh` proves both Claude primary launchers, including the `claude` and `opus` aliases, export `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1` into the launched process and that other profiles do not.
 
 ## Sanitized live evidence, 2026-07-17

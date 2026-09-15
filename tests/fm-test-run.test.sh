@@ -90,10 +90,37 @@ test_changed_file_selection_is_conservative() {
   pass "changed-file selection stays conservative (never silent full suite)"
 }
 
+# The runner's reference fallback claims a source path as soon as any test file
+# names it as text, and this script is itself pure-contract-unit. Spelling the
+# two ops sources out here would therefore hand the upstream map a real owner
+# for them, which turns the fork registry's legitimate exclusive rows into
+# shadows and fork_registry_assert_no_shadow refuses the run. Assembling the
+# names keeps this script out of their ownership, so the registry rows stay the
+# only claim on them. This is the enforced form of the rule, not a style choice.
+OPS_SRC_EXT='sh'
+OPS_ORDER_SRC="bin/fm-order.$OPS_SRC_EXT"
+OPS_TRAY_SRC="bin/fm-tray.$OPS_SRC_EXT"
+
+# The captain's private surfaces are trapped the same way, so their names are
+# assembled here too. The chart-room engine is the sharpest case: no test text
+# names it anywhere in the repository, so its registry row is the only mapping
+# it has and spelling it out here would both invent an upstream owner and
+# shadow that row.
+DECK_SRC="bin/fm-deck.$OPS_SRC_EXT"
+CHART_SRC="bin/fm-chart-room.$OPS_SRC_EXT"
+CHART_ENGINE_EXT='mjs'
+CHART_ENGINE="bin/fm-chart-room.$CHART_ENGINE_EXT"
+
 init_changed_fixture_repo() {
   local repo=$1 script
+  # This fixture copies the real tests/fork-test-registry.conf, so every script
+  # that registry registers must be created below. A registered script missing
+  # here makes fork_registry_apply fail closed and every selection in this
+  # fixture dies with exit 2, so a new registry row needs a new stub here.
   mkdir -p "$repo/bin" "$repo/tests"
   cp "$RUNNER" "$repo/bin/fm-test-run.sh"
+  cp "$ROOT/bin/fm-fork-test-registry-lib.sh" "$repo/bin/fm-fork-test-registry-lib.sh"
+  cp "$ROOT/tests/fork-test-registry.conf" "$repo/tests/fork-test-registry.conf"
   chmod +x "$repo/bin/fm-test-run.sh"
   for script in \
     fm-brief.test.sh \
@@ -111,6 +138,34 @@ init_changed_fixture_repo() {
     fm-bearings-snapshot.test.sh \
     fm-visible-status.test.sh \
     fm-herdr-layout-preview-e2e.test.sh \
+    fm-fork-surface.test.sh \
+    fm-test-run.test.sh \
+    fm-gitignore-config.test.sh \
+    fm-secondmate-sync.test.sh \
+    fm-upstream-watch.test.sh \
+    fm-upstream.test.sh \
+    fm-upstream-ledger.test.sh \
+    fm-baby-menu-quota.test.sh \
+    fm-home-manifest.test.sh \
+    fm-bootstrap.test.sh \
+    fm-account.test.sh \
+    fm-primary.test.sh \
+    fm-spawn-account.test.sh \
+    fm-action-gateway-v2.test.sh \
+    fm-order.test.sh \
+    fm-tray.test.sh \
+    fm-deck.test.sh \
+    fm-project-presentation.test.sh \
+    fm-bridge-view.test.sh \
+    fm-bearings-snapshot.test.sh \
+    fm-spawn-herdr-presentation.test.sh \
+    fm-primary-handoff.test.sh \
+    fm-morning-intake.test.sh \
+    fm-decision-surface.test.sh \
+    fm-read.test.sh \
+    fm-chart-room.test.sh \
+    fm-overlay.test.sh \
+    fm-file-eventwait.test.sh \
     fm-backend-cmux.test.sh \
     fm-backend-zellij.test.sh \
     fm-backend-orca.test.sh; do
@@ -122,6 +177,35 @@ init_changed_fixture_repo() {
   : >"$repo/bin/fm-supervisor-target-lib.sh"
   : >"$repo/bin/fm-visible-format-lib.sh"
   : >"$repo/bin/unmapped-source.sh"
+  : >"$repo/$OPS_ORDER_SRC"
+  : >"$repo/$OPS_TRAY_SRC"
+  : >"$repo/$DECK_SRC"
+  : >"$repo/$CHART_SRC"
+  : >"$repo/$CHART_ENGINE"
+  printf '# bin/fm-fork-surface.sh\n# bin/fm-leak-guard.sh\n' \
+    >>"$repo/tests/fm-fork-surface.test.sh"
+  # fm-brief.test.sh is in the runner's own pure-contract-unit map, so this
+  # mention makes bin/fm-fork-surface.sh a path upstream genuinely owns.
+  printf '# bin/fm-fork-surface.sh\n' >>"$repo/tests/fm-brief.test.sh"
+  printf '# bin/fm-fork-test-registry-lib.sh\n# bin/fm-visible-format-lib.sh\n' \
+    >>"$repo/tests/fm-test-run.test.sh"
+  # Each ops suite names its own source, and the deck suite names both. The
+  # deck suite is unclassified in the runner's map, which the no-shadow
+  # assertion treats as no upstream answer, so the exclusive registry rows stay
+  # legitimate. The ops suites' own mentions are also the reference fallback
+  # the runner must still reach when the registry is absent.
+  printf '# %s\n' "$OPS_ORDER_SRC" >>"$repo/tests/fm-order.test.sh"
+  printf '# %s\n' "$OPS_TRAY_SRC" >>"$repo/tests/fm-tray.test.sh"
+  printf '# %s\n# %s\n' "$OPS_TRAY_SRC" "$OPS_ORDER_SRC" >>"$repo/tests/fm-deck.test.sh"
+  # The private surfaces, mirrored from the repository: the chart-room script is
+  # named by its own suite, the deck script by its own suite and by the bridge
+  # suite that serves it, and the chart-room engine by nothing at all. Those
+  # mentions are the reference fallback the runner must still reach when the
+  # registry is absent, and the engine's absence from them is why the registry
+  # row is its only mapping.
+  printf '# %s\n' "$CHART_SRC" >>"$repo/tests/fm-chart-room.test.sh"
+  printf '# %s\n' "$DECK_SRC" >>"$repo/tests/fm-deck.test.sh"
+  printf '# %s\n' "$DECK_SRC" >>"$repo/tests/fm-bridge-view.test.sh"
   printf '# .agents/skills/example/SKILL.md\n' >>"$repo/tests/fm-captain-translation-contract.test.sh"
   printf '# .claude/settings.json\n# .pi/extensions/fm-primary-turnend-guard.ts\n' \
     >>"$repo/tests/fm-cd-pretool-check.test.sh"
@@ -135,6 +219,224 @@ init_changed_fixture_repo() {
   git -C "$repo" init -q
   git -C "$repo" add .
   git -C "$repo" -c user.name=test -c user.email=test@example.invalid commit -qm baseline
+}
+
+test_fork_registry_overlay() {
+  local tmp repo listed out rc
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-fork-registry.XXXXXX")
+  repo="$tmp/repo"
+  init_changed_fixture_repo "$repo"
+
+  listed=$(cd "$repo" && bin/fm-test-run.sh --list --family pure-contract-unit) \
+    || { rm -rf "$tmp"; fail "fork registry family row must load"; }
+  assert_contains "$listed" "tests/fm-fork-surface.test.sh" \
+    "fork registry family row participates in family selection"
+
+  # Two rows match this path, and both must contribute. That the run resolves
+  # at all also shows the covers rows are exclusive: the runner's own map has
+  # no entry for this path, so falling through to it would fail as unmapped.
+  printf '# fixture registry change\n' >> "$repo/tests/fork-test-registry.conf"
+  listed=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD) \
+    || { rm -rf "$tmp"; fail "two rows for one path must load"; }
+  assert_contains "$listed" "tests/fm-test-run.test.sh" \
+    "first of two rows matching one path contributes its owner"
+  assert_contains "$listed" "tests/fm-fork-surface.test.sh" \
+    "second of two rows matching one path contributes its owner too"
+  git -C "$repo" checkout -- tests/fork-test-registry.conf
+
+  printf '# fixture source\n' > "$repo/bin/fm-fork-surface.sh"
+  listed=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD) \
+    || { rm -rf "$tmp"; fail "fork registry adds row on a mapped source must load"; }
+  assert_contains "$listed" "tests/fm-fork-surface.test.sh" \
+    "adds row contributes the fork owner for a mapped source"
+  assert_contains "$listed" "tests/fm-brief.test.sh" \
+    "adds row keeps the upstream family the reference fallback selects"
+  git -C "$repo" add bin/fm-fork-surface.sh
+  git -C "$repo" -c user.name=test -c user.email=test@example.invalid commit -qm fork-source
+
+  printf '# fixture ignore\n' > "$repo/.gitignore"
+  listed=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD) \
+    || { rm -rf "$tmp"; fail "fork registry adds row must load"; }
+  assert_contains "$listed" "tests/fm-fork-surface.test.sh" \
+    "adds row contributes the fork owner"
+  assert_contains "$listed" "tests/fm-gitignore-config.test.sh" \
+    "adds row keeps the upstream config owner"
+  assert_contains "$listed" "tests/fm-secondmate-sync.test.sh" \
+    "adds row keeps the upstream seed-marker owner"
+  assert_contains "$listed" "tests/fm-upstream-watch.test.sh" \
+    "adds row contributes the fork private-report owner"
+  rm -f "$repo/.gitignore"
+
+  mv "$repo/tests/fork-test-registry.conf" "$repo/tests/fork-test-registry.disabled"
+  listed=$(cd "$repo" && bin/fm-test-run.sh --list --family pure-contract-unit) \
+    || { rm -rf "$tmp"; fail "missing fork registry must preserve the core runner"; }
+  assert_not_contains "$listed" "tests/fm-fork-surface.test.sh" \
+    "missing fork registry leaves fork-only tests unclassified"
+  mv "$repo/tests/fork-test-registry.disabled" "$repo/tests/fork-test-registry.conf"
+
+  printf 'family pure-contract-unit tests/fm-fork-surface.test.sh extra\n' \
+    > "$repo/tests/fork-test-registry.conf"
+  set +e
+  out=$(cd "$repo" && bin/fm-test-run.sh --list --all 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -eq 2 ] || { rm -rf "$tmp"; fail "malformed fork registry must fail with exit 2, got $rc"; }
+  assert_contains "$out" 'expected exactly three fields' \
+    "malformed fork registry failure is actionable"
+
+  rm -rf "$tmp"
+  pass "fork registry overlays family and path ownership and fails closed when malformed"
+}
+
+test_fork_registry_shadow_and_glob_guards() {
+  local tmp repo out rc
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-fork-guard.XXXXXX")
+  repo="$tmp/repo"
+  init_changed_fixture_repo "$repo"
+
+  # A covers row is exclusive, so claiming a path the runner's own map still
+  # owns would delete those owners with no error. The guard refuses the row.
+  printf 'covers tests/fork-test-registry.conf tests/fm-test-run.test.sh\n%s' \
+    'covers bin/fm-fork-surface.sh tests/fm-fork-surface.test.sh' \
+    > "$repo/tests/fork-test-registry.conf"
+  printf '# fixture source\n' > "$repo/bin/fm-fork-surface.sh"
+  set +e
+  out=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -eq 2 ] \
+    || { rm -rf "$tmp"; fail "shadowing covers row must fail with exit 2, got $rc"; }
+  assert_contains "$out" 'shadows the upstream owner' \
+    "shadowing covers row names the path it would silently take over"
+  rm -f "$repo/bin/fm-fork-surface.sh"
+
+  # The same row as adds is the supported way to add a fork owner there.
+  printf 'covers tests/fork-test-registry.conf tests/fm-test-run.test.sh\n%s' \
+    'adds bin/fm-fork-surface.sh tests/fm-fork-surface.test.sh' \
+    > "$repo/tests/fork-test-registry.conf"
+  printf '# fixture source\n' > "$repo/bin/fm-fork-surface.sh"
+  out=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD) \
+    || { rm -rf "$tmp"; fail "adds row on the same path must be accepted"; }
+  assert_contains "$out" "tests/fm-fork-surface.test.sh" \
+    "adds row is accepted where covers is refused"
+  rm -f "$repo/bin/fm-fork-surface.sh"
+
+  # A leading wildcard would claim every changed path in the repository.
+  printf 'covers * tests/fm-fork-surface.test.sh\n' \
+    > "$repo/tests/fork-test-registry.conf"
+  set +e
+  out=$(cd "$repo" && bin/fm-test-run.sh --list --all 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -eq 2 ] \
+    || { rm -rf "$tmp"; fail "bare glob must fail with exit 2, got $rc"; }
+  assert_contains "$out" 'unsafe repository path glob' \
+    "bare glob rejection is actionable"
+
+  # A family row returns before the runner's own map, so a row naming a script
+  # the runner already classifies would silently move it out of its family,
+  # and a row naming a family the runner does not list would hide it from
+  # --list-families and lane composition. Both are refused in every mode.
+  printf 'family secondmate tests/fm-brief.test.sh\n' \
+    > "$repo/tests/fork-test-registry.conf"
+  set +e
+  out=$(cd "$repo" && bin/fm-test-run.sh --list --all 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -eq 2 ] \
+    || { rm -rf "$tmp"; fail "re-homing family row must fail with exit 2, got $rc"; }
+  assert_contains "$out" 'already classifies as pure-contract-unit' \
+    "re-homing family row names the upstream family it would take the script from"
+
+  printf 'family fork-only tests/fm-fork-surface.test.sh\n' \
+    > "$repo/tests/fork-test-registry.conf"
+  set +e
+  out=$(cd "$repo" && bin/fm-test-run.sh --list-families 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -eq 2 ] \
+    || { rm -rf "$tmp"; fail "unlisted family row must fail with exit 2, got $rc"; }
+  assert_contains "$out" 'names a family the runner does not list: fork-only' \
+    "unlisted family row rejection is actionable"
+
+  rm -rf "$tmp"
+  pass "fork registry refuses shadowing covers rows, repository-wide globs, and unconfined family rows"
+}
+
+test_fork_registry_covers_accepts_only_absent_upstream_answers() {
+  local tmp repo out rc
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-fork-covers.XXXXXX")
+  repo="$tmp/repo"
+  init_changed_fixture_repo "$repo"
+
+  # A script the runner's own map leaves unclassified names a source as text,
+  # so the reference fallback answers unclassified for that source. That is the
+  # absence of a family, not an owner, and it must not turn a legitimate covers
+  # row into a shadow. Both stubs are committed so the only changed path below
+  # is the one each row claims.
+  printf '#!/usr/bin/env bash\n# bin/fm-covers-probe.sh\n' >"$repo/tests/fm-covers-probe.test.sh"
+  chmod +x "$repo/tests/fm-covers-probe.test.sh"
+  printf '# fixture source\n' >"$repo/bin/fm-covers-probe.sh"
+  git -C "$repo" add tests/fm-covers-probe.test.sh bin/fm-covers-probe.sh
+  git -C "$repo" -c user.name=test -c user.email=test@example.invalid commit -qm probe-stubs
+
+  # Upstream answers __unmapped__: no map case and no test text names the path.
+  printf 'covers tests/fork-test-registry.conf tests/fm-test-run.test.sh\n%s' \
+    'covers bin/unmapped-source.sh tests/fm-fork-surface.test.sh' \
+    > "$repo/tests/fork-test-registry.conf"
+  printf '# changed\n' >>"$repo/bin/unmapped-source.sh"
+  out=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD 2>&1) \
+    || { rm -rf "$tmp"; fail "covers row on an __unmapped__ path must be accepted: $out"; }
+  assert_contains "$out" "tests/fm-fork-surface.test.sh" \
+    "covers row on an __unmapped__ path selects the fork owner"
+  git -C "$repo" checkout -- bin/unmapped-source.sh
+
+  # Upstream answers a bare unclassified: only an unclassified script names it.
+  printf 'covers tests/fork-test-registry.conf tests/fm-test-run.test.sh\n%s' \
+    'covers bin/fm-covers-probe.sh tests/fm-fork-surface.test.sh' \
+    > "$repo/tests/fork-test-registry.conf"
+  printf '# changed\n' >>"$repo/bin/fm-covers-probe.sh"
+  out=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD 2>&1) \
+    || { rm -rf "$tmp"; fail "covers row on an unclassified path must be accepted: $out"; }
+  assert_contains "$out" "tests/fm-fork-surface.test.sh" \
+    "covers row on an unclassified path selects the fork owner"
+  assert_not_contains "$out" "tests/fm-covers-probe.test.sh" \
+    "covers row on an unclassified path is the complete answer for it"
+  git -C "$repo" checkout -- bin/fm-covers-probe.sh
+
+  # Upstream answers a real family: the fixture's fm-brief.test.sh is in the
+  # runner's own pure-contract-unit map and names bin/fm-fork-surface.sh.
+  printf 'covers tests/fork-test-registry.conf tests/fm-test-run.test.sh\n%s' \
+    'covers bin/fm-fork-surface.sh tests/fm-fork-surface.test.sh' \
+    > "$repo/tests/fork-test-registry.conf"
+  printf '# fixture source\n' >"$repo/bin/fm-fork-surface.sh"
+  set +e
+  out=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -eq 2 ] \
+    || { rm -rf "$tmp"; fail "covers row on a family-owned path must fail with exit 2, got $rc"; }
+  assert_contains "$out" 'shadows the upstream owner of bin/fm-fork-surface.sh: pure-contract-unit' \
+    "covers row on a family-owned path is refused as a shadow"
+  rm -f "$repo/bin/fm-fork-surface.sh"
+
+  # Upstream answers a script: .gitignore has two direct script owners.
+  printf 'covers tests/fork-test-registry.conf tests/fm-test-run.test.sh\n%s' \
+    'covers .gitignore tests/fm-fork-surface.test.sh' \
+    > "$repo/tests/fork-test-registry.conf"
+  printf '# fixture ignore\n' >"$repo/.gitignore"
+  set +e
+  out=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -eq 2 ] \
+    || { rm -rf "$tmp"; fail "covers row on a script-owned path must fail with exit 2, got $rc"; }
+  assert_contains "$out" 'shadows the upstream owner of .gitignore: __script__:fm-gitignore-config.test.sh' \
+    "covers row on a script-owned path is refused as a shadow"
+  rm -f "$repo/.gitignore"
+
+  rm -rf "$tmp"
+  pass "fork registry accepts covers rows only where upstream answers __unmapped__ or unclassified"
 }
 
 test_changed_dependency_selection_and_unmapped_failure() {
@@ -193,6 +495,205 @@ test_changed_dependency_selection_and_unmapped_failure() {
     || fail "unmapped changed source failure is not actionable: $(cat "$tmp/err")"
   rm -rf "$tmp"
   pass "changed selection covers dependents and fails closed for unmapped source"
+}
+
+# The ops command center has no hook in a core script, so its registry rows are
+# the whole integration and the degraded path is the registry's own absence.
+# The guarantee is that absence cannot break a changed run: without the registry
+# both ops sources fall to the runner's reference fallback rather than to
+# __unmapped__, which is the one answer a changed run dies on. With the registry
+# the rows are the complete answer, and they include the order suite as an owner
+# of the tray source, because the order script calls the tray script and no test
+# text names that dependency for the fallback to find.
+# Every phase asserts the runner's own exit code rather than merely succeeding or
+# merely failing, because a refusal and an accident such as a missing
+# interpreter are both non-zero and only the exact code tells them apart. Each
+# assertion below was confirmed to fail when the row or mention it pins is
+# removed, so none of them is vacuous.
+test_fork_registry_ops_rows_and_registry_absence() {
+  local tmp repo out rc
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-ops-rows.XXXXXX")
+  repo="$tmp/repo"
+  init_changed_fixture_repo "$repo"
+
+  printf '# fixture order change\n' >>"$repo/$OPS_ORDER_SRC"
+  set +e
+  out=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD 2>&1)
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "covers row for the order source must load"
+  assert_contains "$out" "tests/fm-order.test.sh" \
+    "covers row selects the order suite for its own source"
+  assert_not_contains "$out" "tests/fm-brief.test.sh" \
+    "covers row is the complete answer for the order source"
+  git -C "$repo" checkout -- "$OPS_ORDER_SRC"
+
+  printf '# fixture tray change\n' >>"$repo/$OPS_TRAY_SRC"
+  set +e
+  out=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD 2>&1)
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "covers rows for the tray source must load"
+  assert_contains "$out" "tests/fm-tray.test.sh" \
+    "covers row selects the tray suite for its own source"
+  assert_contains "$out" "tests/fm-order.test.sh" \
+    "the order suite is a declared owner of the tray source"
+  git -C "$repo" checkout -- "$OPS_TRAY_SRC"
+
+  # The same change in a checkout with no fork registry at all. The removal is
+  # committed so the tray source is again the only changed path, and the runner
+  # must still resolve it through its own reference fallback rather than die.
+  git -C "$repo" rm -q tests/fork-test-registry.conf
+  git -C "$repo" -c user.name=test -c user.email=test@example.invalid commit -qm no-registry
+  printf '# fixture tray change\n' >>"$repo/$OPS_TRAY_SRC"
+  set +e
+  out=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD 2>&1)
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "an absent fork registry must not break an ops-path change"
+  assert_not_contains "$out" "no changed-test mapping" \
+    "an absent fork registry must not leave an ops source unmapped"
+  assert_contains "$out" "tests/fm-tray.test.sh" \
+    "the reference fallback still reaches the tray suite with no registry"
+  git -C "$repo" checkout -- "$OPS_TRAY_SRC"
+
+  # The far side of that guarantee. The fallback only reaches the tray source
+  # because its own suite and the deck suite name it, so with the registry and
+  # every such mention gone the runner has no owner at all. It must then refuse
+  # with its own exit code 2 and say which path it could not map, never select
+  # nothing quietly.
+  local suite
+  for suite in fm-tray fm-deck; do
+    grep -v "$OPS_TRAY_SRC" "$repo/tests/$suite.test.sh" >"$repo/tests/$suite.trimmed"
+    mv "$repo/tests/$suite.trimmed" "$repo/tests/$suite.test.sh"
+    chmod +x "$repo/tests/$suite.test.sh"
+    git -C "$repo" add "tests/$suite.test.sh"
+  done
+  git -C "$repo" -c user.name=test -c user.email=test@example.invalid commit -qm no-mention
+  printf '# fixture tray change\n' >>"$repo/$OPS_TRAY_SRC"
+  set +e
+  out=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD 2>&1)
+  rc=$?
+  set -e
+  expect_code 2 "$rc" \
+    "an ops source with no registry row and no test mention must refuse with exit 2"
+  assert_contains "$out" "no changed-test mapping for source path" \
+    "the refusal names the path it could not map"
+
+  rm -rf "$tmp"
+  pass "ops command center rows select their declared owners, degrade to the reference fallback, and refuse with exit 2 when neither answers"
+}
+
+# The captain's private reading, decision, chart-room and Action Deck surfaces
+# have no hook in a core script either, so their registry rows are the whole
+# integration and the degraded path is again the registry's own absence. Two
+# things make this group's rows worth pinning beyond the ops group's.
+# The first is an owner upstream could never have found: the overlay helper asks
+# the chart-room script for a report's URL, so a chart-room change can break the
+# overlay suite, and the overlay suite never names that path as text. Its path is
+# deliberately not spelled out here for the same reason the ops sources are
+# assembled above: a literal mention in this pure-contract-unit script would hand
+# the upstream map a real owner and turn the group's exclusive row into a shadow.
+# The second is the chart-room engine, which no test text names anywhere. Its
+# registry row is the only mapping it has, so with the registry gone the runner
+# must refuse with its own exit code rather than select nothing quietly - and
+# that refusal is the honest far side of the degrade guarantee, not a gap in it.
+# Every phase asserts the runner's own exit code rather than merely succeeding
+# or merely failing, because a refusal and an accident such as a missing
+# interpreter are both non-zero and only the exact code tells them apart. Each
+# assertion below was confirmed to fail when the row or mention it pins is
+# removed, so none of them is vacuous.
+test_fork_registry_private_surface_rows_and_registry_absence() {
+  local tmp repo out rc
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-private-rows.XXXXXX")
+  repo="$tmp/repo"
+  init_changed_fixture_repo "$repo"
+
+  printf '# fixture chart-room change\n' >>"$repo/$CHART_SRC"
+  set +e
+  out=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD 2>&1)
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "covers rows for the chart-room source must load"
+  assert_contains "$out" "tests/fm-chart-room.test.sh" \
+    "covers row selects the chart room's own suite for its source"
+  assert_contains "$out" "tests/fm-overlay.test.sh" \
+    "the overlay suite is a declared owner of the chart-room source"
+  assert_not_contains "$out" "tests/fm-brief.test.sh" \
+    "covers rows are the complete answer for the chart-room source"
+  git -C "$repo" checkout -- "$CHART_SRC"
+
+  printf '# fixture chart-room engine change\n' >>"$repo/$CHART_ENGINE"
+  set +e
+  out=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD 2>&1)
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "the covers row must be the whole mapping for the chart-room engine"
+  assert_contains "$out" "tests/fm-chart-room.test.sh" \
+    "covers row selects the chart room's own suite for its engine"
+  assert_not_contains "$out" "tests/fm-brief.test.sh" \
+    "the engine's row is the complete answer for it"
+  git -C "$repo" checkout -- "$CHART_ENGINE"
+
+  # The deck script has two owners, its own suite and the bridge suite that
+  # serves the deck page from it, and the deck suite is the further owner of
+  # both ops sources that the ops rows deliberately left for this group.
+  printf '# fixture deck change\n' >>"$repo/$DECK_SRC"
+  set +e
+  out=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD 2>&1)
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "covers rows for the deck source must load"
+  assert_contains "$out" "tests/fm-deck.test.sh" \
+    "covers row selects the deck's own suite for its source"
+  assert_contains "$out" "tests/fm-bridge-view.test.sh" \
+    "the bridge suite is a declared owner of the deck source"
+  git -C "$repo" checkout -- "$DECK_SRC"
+
+  printf '# fixture tray change\n' >>"$repo/$OPS_TRAY_SRC"
+  set +e
+  out=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD 2>&1)
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "the deck row on the tray source must load"
+  assert_contains "$out" "tests/fm-deck.test.sh" \
+    "the deck suite is a declared owner of the tray source"
+  git -C "$repo" checkout -- "$OPS_TRAY_SRC"
+
+  # The same change in a checkout with no fork registry at all. The removal is
+  # committed so the chart-room source is again the only changed path, and the
+  # runner must still resolve it through its own reference fallback rather than
+  # die, because that suite names its own source.
+  git -C "$repo" rm -q tests/fork-test-registry.conf
+  git -C "$repo" -c user.name=test -c user.email=test@example.invalid commit -qm no-registry
+  printf '# fixture chart-room change\n' >>"$repo/$CHART_SRC"
+  set +e
+  out=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD 2>&1)
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "an absent fork registry must not break a chart-room change"
+  assert_not_contains "$out" "no changed-test mapping" \
+    "an absent fork registry must not leave the chart-room source unmapped"
+  assert_contains "$out" "tests/fm-chart-room.test.sh" \
+    "the reference fallback still reaches the chart room with no registry"
+  git -C "$repo" checkout -- "$CHART_SRC"
+
+  # The far side, and the reason the engine's row exists at all. Nothing names
+  # the engine as text, so with the registry gone the runner has no owner for it
+  # from any source. It must refuse with its own exit code 2 and say which path
+  # it could not map.
+  printf '# fixture chart-room engine change\n' >>"$repo/$CHART_ENGINE"
+  set +e
+  out=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD 2>&1)
+  rc=$?
+  set -e
+  expect_code 2 "$rc" \
+    "the chart-room engine with no registry row and no test mention must refuse with exit 2"
+  assert_contains "$out" "no changed-test mapping for source path" \
+    "the refusal names the path it could not map"
+
+  rm -rf "$tmp"
+  pass "private surface rows select their declared owners, degrade to the reference fallback, and refuse with exit 2 when neither answers"
 }
 
 test_empty_selection_emits_summary() {
@@ -723,6 +1224,11 @@ test_family_selection
 test_single_script_selection
 test_changed_file_selection_is_conservative
 test_changed_dependency_selection_and_unmapped_failure
+test_fork_registry_overlay
+test_fork_registry_shadow_and_glob_guards
+test_fork_registry_covers_accepts_only_absent_upstream_answers
+test_fork_registry_ops_rows_and_registry_absence
+test_fork_registry_private_surface_rows_and_registry_absence
 test_empty_selection_emits_summary
 test_timing_markers_and_json
 test_aggregate_exit_behavior

@@ -256,3 +256,50 @@ legacy_meta=$(cat "$HOME_FIX/state/journey-protocol14.meta")
 assert_contains "$legacy_meta" 'backend=herdr' 'protocol-14 fallback did not record its backend'
 assert_not_contains "$legacy_meta" 'herdr_workspace_managed' 'protocol-14 fallback claimed a managed workspace'
 pass 'fm-spawn fake Herdr E2E: a protocol-14 build spawns through the prior label-based flow untouched by presentation'
+
+# The presentation hooks are fork-owned, and this spawn path runs under set -e,
+# where an unguarded command substitution into a missing script aborts the whole
+# spawn at 127 rather than degrading. With the fork scripts gone a herdr spawn
+# must still succeed and simply fall back to upstream's opaque window name.
+# Built by symlink so the real checkout is never mutated.
+degraded="$TMP_ROOT/degraded-root"
+mkdir -p "$degraded/bin"
+for entry in "$ROOT"/*; do
+  [ "$(basename "$entry")" = bin ] || ln -s "$entry" "$degraded/$(basename "$entry")"
+done
+for entry in "$ROOT"/bin/*; do
+  case "$(basename "$entry")" in
+    fm-task-outcome.sh|fm-visible-title.sh|fm-project-display-name.sh|fm-visible-status.sh) ;;
+    *) ln -s "$entry" "$degraded/bin/$(basename "$entry")" ;;
+  esac
+done
+for missing in fm-task-outcome.sh fm-visible-title.sh fm-project-display-name.sh fm-visible-status.sh; do
+  [ ! -e "$degraded/bin/$missing" ] \
+    || fail "degraded root must not contain bin/$missing"
+done
+
+mkdir -p "$HOME_FIX/data/degraded-single"
+printf 'fake spawn instructions for degraded-single\n' \
+  > "$HOME_FIX/data/degraded-single/brief.md"
+
+PATH="$FAKEBIN:$PATH" \
+  FM_HOME="$HOME_FIX" \
+  FM_ROOT_OVERRIDE="$degraded" \
+  FM_SPAWN_NO_GUARD=1 \
+  FM_FAKE_HERDR_STATE="$HERDR_STATE" \
+  FM_FAKE_HERDR_LOG="$HERDR_LOG" \
+  FM_FAKE_WT_ROOT="$WT_ROOT" \
+  FM_VISIBLE_STATE_FILE="$TMP_ROOT/states" \
+  HERDR_SESSION=fm-lab-fake-presentation \
+  "$degraded/bin/fm-spawn.sh" degraded-single "$JOURNEY" --harness pi --backend herdr >/dev/null \
+  || fail 'a herdr spawn must still succeed with the fork presentation scripts absent'
+
+degraded_label=$(jq -r '.tabs[]|select(.tokens.fm_task_id=="degraded-single")|.label' "$HERDR_STATE")
+[ -n "$degraded_label" ] || fail 'degraded spawn produced no tab at all'
+case "$degraded_label" in
+  'WORKER · '*) fail "degraded spawn still rendered a fork title: $degraded_label" ;;
+esac
+assert_contains "$degraded_label" 'fm-degraded-single' \
+  'degraded spawn did not fall back to the upstream window name'
+pass 'a herdr spawn without the fork presentation scripts succeeds on upstream labels'
+

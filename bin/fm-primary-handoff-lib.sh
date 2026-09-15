@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Shared primary-orchestrator handoff helpers.
-# Sourced by bin/fm-primary-handoff.sh and tests.
+# Sourced by bin/fm-primary-handoff.sh and tests, and executed directly by
+# bin/fm-lock.sh for the release-stale subcommand the handoff needs.
 # docs/primary-handoff.md owns the protocol narrative; this file owns the
 # state-machine helpers and the never-two-live-holders assertion.
 #
@@ -550,3 +551,48 @@ fm_handoff_in_cooldown() {
   now=$(fm_handoff_now)
   [ "$now" -lt "$cooldown_until" ]
 }
+
+# Release the outgoing primary's lock once it is genuinely gone.
+#
+# The refusal is the whole point of the subcommand, so it lives here with the
+# decision rather than at the call site: a live holder keeps its lock, and a
+# holder that changes while this runs aborts the release, because removing a
+# lock a live primary still holds is what puts two primaries on one home.
+fm_handoff_release_stale() { # <lock-file>
+  local lock=${1:-} old current
+  [ -n "$lock" ] || { echo "error: release-stale needs a lock path" >&2; return 2; }
+  if [ ! -f "$lock" ]; then
+    echo "lock: free"
+    return 0
+  fi
+  old=$(cat "$lock")
+  if fm_harness_holder_alive "$old"; then
+    echo "error: refusing to release a live firstmate session lock (pid $old)" >&2
+    return 1
+  fi
+  current=$(cat "$lock" 2>/dev/null || true)
+  if [ "$current" != "$old" ]; then
+    echo "error: lock holder changed to pid ${current:-none} during release-stale; refusing" >&2
+    return 1
+  fi
+  rm -f "$lock"
+  echo "lock released: stale holder pid $old"
+  return 0
+}
+
+# Executed, not sourced: bin/fm-lock.sh execs this file for release-stale. Every
+# consumer that sources it gets the helpers above and nothing else.
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+  _fm_handoff_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  # shellcheck source=bin/fm-primary-scope-lib.sh
+  . "$_fm_handoff_dir/fm-primary-scope-lib.sh"
+  case "${1:-}" in
+    release-stale) shift; fm_handoff_release_stale "$@" ;;
+    *)
+      echo "usage: fm-primary-handoff-lib.sh release-stale <lock-file>" >&2
+      exit 2
+      ;;
+  esac
+  exit $?
+fi
+

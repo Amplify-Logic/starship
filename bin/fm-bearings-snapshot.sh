@@ -70,6 +70,10 @@
 # Output contract: `fm-bearings.v1`. Read-only; no locks, no mutation, no reports.
 # in_flight rows include a captain-facing `title` (backlog title, else a
 # non-id fallback). `doing` remains the internal current-state detail.
+# The bridge fields (`title`, `repo`, `hold_kind`, `hold_reason`, and the
+# secondmate `repo`) are added by bin/fm-bridge-fields.sh after the projection
+# below, in one guarded step before the format branch. With that script absent
+# the output is the projection alone and those fields are simply missing.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -417,41 +421,29 @@ MODEL=$(printf '%s' "$SNAP" | jq \
        | select(.backlog.current_role != "held" or .current_state.state == "working")
        | {id, kind,
         state: .current_state.state,
-        title: ((.backlog.title // "Untitled work") | trunc(90)),
         doing: ((.current_state.detail // "") as $d
                 | (if $d != "" then $d else (.hints.last_event_text // "") end) | trunc(90)),
-        owner:"(main)",
-        repo:((.backlog.repo // .project // null) | if . == null then null else trunc(120) end)
+        owner:"(main)"
       } ]
      + [ $secondmate_views[]
          | select(.bearings_state == "active_child_work")
          | {id,kind:"secondmate",state:.bearings_state,
-            title:"Second-mate work",
             doing:([.active_children[] | .id + ": " + (.doing // .state)] | join("; ") | trunc(90)),
-            owner:.id,
-            repo:(([.active_children[] | (.backlog.repo // .project // empty)] | unique) as $repos
-                  | if ($repos | length) == 1 then ($repos[0] | trunc(120)) else null end)} ]) as $in_flight_all
+            owner:.id} ]) as $in_flight_all
   | ([ .backlog.records[]
          | select(.structured and .captain_actionable == true)
          | {id,key:.id,verb:"captain-hold",
-            summary:((.title + ": " + .hold_reason) | trunc(90)),owner:"(main)",
-            hold_kind,hold_reason:((.hold_reason // null) | if . == null then null else trunc(160) end),
-            repo:((.repo // null) | if . == null then null else trunc(120) end)} ]
+            summary:((.title + ": " + .hold_reason) | trunc(90)),owner:"(main)"} ]
      + [ (.secondmate_current.records // [])[] as $m | $m.decisions_open[]?
          | select(.source == "backlog" and .verb == "captain-hold")
          | {id:($m.id + "/" + .id),key,verb,
-            summary:(((.summary // .id) + ": " + (.reason // "captain decision pending")) | trunc(90)),owner:$m.id,
-            hold_kind:(.hold_kind // null),
-            hold_reason:((.reason // null) | if . == null then null else trunc(160) end),
-            repo:((.repo // null) | if . == null then null else trunc(120) end)} ]) as $decisions_all
+            summary:(((.summary // .id) + ": " + (.reason // "captain decision pending")) | trunc(90)),owner:$m.id} ]) as $decisions_all
   | ((if (.main_inventory.valid == false) then
         [{id:"(main-inventory)",
           title:((.main_inventory.reason // "main inventory invalid") | trunc(60)),
           blocked_by:"-",
           reason:"main inventory",
-          owner:"(main)",
-          hold_kind:null,
-          repo:null}]
+          owner:"(main)"}]
       else [] end)
      + [ .backlog.records[]
          | . as $record
@@ -463,17 +455,14 @@ MODEL=$(printf '%s' "$SNAP" | jq \
                   or (((.body_excerpt // "") | test("SUPERSEDED|NOT REQUIRED|NOT-REQUIRED|DEFERRED"; "i")) | not))
          | {id, title:(.title | trunc(60)),
             blocked_by:((.unresolved_blocker_ids // []) | if length > 0 then join(",") else "-" end | trunc(120)),
-            reason:((.hold_reason // .blocked_reason // "-") | trunc(40)),owner:"(main)",
-            hold_kind,repo:((.repo // null) | if . == null then null else trunc(120) end)} ]
+            reason:((.hold_reason // .blocked_reason // "-") | trunc(40)),owner:"(main)"} ]
      + [ (.secondmate_current.records // [])[] as $m
          | select($m.provenance.selected == "structured-home")
          | $m.queued[]?
          | select(.captain_actionable != true)
          | {id,title:(.title | trunc(60)),
             blocked_by:((.unresolved_blocker_ids // []) | if length > 0 then join(",") else "-" end | trunc(120)),
-            reason:((.hold_reason // .blocked_reason // "-") | trunc(40)),owner:$m.id,
-            hold_kind:(.hold_kind // null),
-            repo:((.repo // null) | if . == null then null else trunc(120) end)} ]) as $gates_all
+            reason:((.hold_reason // .blocked_reason // "-") | trunc(40)),owner:$m.id} ]) as $gates_all
   | ([ .scout_reports[]
        | . as $r
        | select(($all_reports == 1) or (($rel_ids | index($r.id)) != null))
@@ -534,6 +523,27 @@ MODEL=$(printf '%s' "$SNAP" | jq \
         (if $include_prs == 1 and $pr_rows_capped > 0 then {surface:("candidate_prs showing \($candidate_prs | length) of at least \($pr_rows_min_total); capped in \($pr_rows_capped) repo(s)"), reveal:"raise FM_BEARINGS_PR_LIMIT"} else empty end),
         (if $include_prs == 1 then empty else {surface:"live PR discovery + checks", reveal:"--include-prs"} end) ]) }
 ') || { echo "fm-bearings-snapshot: projection failed" >&2; exit 1; }
+
+# The phone bridge's extra fields are fork-owned and are added here, after
+# upstream's projection has finished, so upstream's jq carries none of them.
+# Both output formats are fed from $MODEL, so enriching here reaches the JSON
+# and TOON forms identically. With the fork script absent the model is
+# upstream's exact projection, which is what the bridge degrades against.
+if [ -x "$SCRIPT_DIR/fm-bridge-fields.sh" ]; then
+  BRIDGE_SNAP=$(mktemp "${TMPDIR:-/tmp}/fm-bridge-snap.XXXXXX") || BRIDGE_SNAP=
+  if [ -n "$BRIDGE_SNAP" ]; then
+    printf '%s' "$SNAP" > "$BRIDGE_SNAP"
+    if BRIDGE_MODEL=$(printf '%s' "$MODEL" | "$SCRIPT_DIR/fm-bridge-fields.sh" "$BRIDGE_SNAP") \
+        && [ -n "$BRIDGE_MODEL" ]; then
+      MODEL=$BRIDGE_MODEL
+    else
+      # An absent enricher degrades silently on purpose. A present but broken
+      # one must not: the bridge would lose its fields with no signal at all.
+      echo "fm-bearings-snapshot: bridge enrichment failed, emitting upstream projection" >&2
+    fi
+    rm -f "$BRIDGE_SNAP"
+  fi
+fi
 
 if [ "$FORMAT" = json ]; then
   printf '%s\n' "$MODEL"

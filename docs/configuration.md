@@ -64,7 +64,7 @@ Nothing re-creates that shim on its own, so while an intake is armed or owed `pe
 With no session running, nothing is delivered when the job fires: the armed state is durable and the next session's bootstrap section surfaces it as `MORNING_INTAKE: ...`, so the intake is queued until firstmate next starts rather than running on its own.
 
 `bin/fm-morning-intake-schedule.sh` owns the inspectable macOS launchd schedule and refuses to install on a home that has not opted in.
-It shares the LaunchAgent writer in `bin/fm-launchd-schedule-lib.sh` with `bin/fm-upstream-watch-schedule.sh`, so both schedules render, validate and load the same way.
+It shares the LaunchAgent writer in `bin/fm-launchd-schedule-lib.sh` with `bin/fm-upstream-watch-schedule.sh` and `bin/fm-channel-intake-schedule.sh`, so all three schedules render, validate and load the same way.
 Run `render` to inspect the complete definition, `install` to write it, load it and arm the live check, `status` to print the resolved knobs and installed file, or `remove` to unload it and disarm the check.
 `StartInterval` plus `RunAtLoad` is the whole trigger: launchd runs the job at login and then on the interval, and an interval that elapsed during sleep runs shortly after the machine wakes.
 That is why the intake is defined as the first available morning rather than a lid-open event; launchd exposes no such event here and none is claimed.

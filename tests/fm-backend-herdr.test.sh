@@ -18,6 +18,14 @@ command -v jq >/dev/null 2>&1 || { echo "skip: jq not found (required by the her
 TMP_ROOT=$(fm_test_tmproot fm-backend-herdr-tests)
 export FM_BACKEND_HERDR_SUBMIT_MIN_SLEEP=0
 
+# A worker running inside a herdr-managed pane inherits FM_HERDR_PROJECT_LABEL
+# and FM_HERDR_PROJECT_KEY from that pane, and fm_backend_herdr_workspace_label
+# honours the label by design. Left set, they make the workspace-label and
+# container-reuse cases assert against the ambient project instead of the
+# fixture. CI never has them, so this only ever failed for a human or an agent
+# working inside herdr, which is precisely who runs this suite by hand.
+unset FM_HERDR_PROJECT_LABEL FM_HERDR_PROJECT_KEY
+
 # make_herdr_fakebin: a `herdr` stub that logs every invocation (one line,
 # unit-separated args, to $FM_HERDR_LOG) and returns the canned response for
 # that call read from $FM_HERDR_RESPONSES/<n>.out, consumed IN ORDER (call 1
@@ -207,6 +215,69 @@ herdr_env() {  # <name>
 }
 
 # --- version_check / tool_check ----------------------------------------------
+
+# H1: the fork refuses a missing herdr CLI before the bounded readiness poll.
+# Without it a scrubbed PATH costs ten seconds per live task, which is the
+# phone-bridge glance hang the fork fixed. The map records this as a temporary
+# compatibility carry, queued as a contribution, so it is pinned here to stay
+# correct until the creator accepts the equivalent and the fork drops it.
+#
+# The fakebin carries every tool the adapter needs and omits only herdr, so a
+# scrubbed PATH removes the thing under test rather than the shell. The guard's
+# own exit code (1) is asserted, never merely non-zero: 127 is also non-zero,
+# and that is exactly what an unlaunchable child would produce while the
+# adapter is never sourced. The case then proves it can fail: the same call
+# against a copy of the adapter with the guard lines stripped must NOT exit 1.
+test_missing_herdr_cli_refuses_before_the_readiness_poll() {
+  local dir fb tool stripped status err started ended elapsed stripped_status
+  dir="$TMP_ROOT/no-herdr"; mkdir -p "$dir"
+  fb="$dir/bin"; mkdir -p "$fb"
+  for tool in bash jq sed awk grep cat tr date sleep dirname; do
+    ln -s "$(command -v "$tool")" "$fb/$tool" \
+      || fail "H1 fixture: could not link $tool into the fakebin"
+  done
+  [ ! -e "$fb/herdr" ] || fail "H1 fixture: the fakebin must not contain herdr"
+
+  started=$(date +%s)
+  err=$(PATH="$fb" bash -c '. "$0/bin/backends/herdr.sh" || exit 99; fm_backend_herdr_cli fm-x1 status' "$ROOT" \
+    2>&1 >/dev/null)
+  status=$?
+  ended=$(date +%s)
+  expect_code 1 "$status" "fm_backend_herdr_cli must refuse via its own guard when the herdr CLI is absent"
+  [ -z "$err" ] || fail "fm_backend_herdr_cli with no herdr wrote to stderr (the adapter did not source cleanly?): $err"
+  elapsed=$((ended - started))
+  [ "$elapsed" -lt 5 ] \
+    || fail "fm_backend_herdr_cli took ${elapsed}s with no herdr; it must refuse, not poll"
+
+  started=$(date +%s)
+  err=$(PATH="$fb" bash -c '. "$0/bin/backends/herdr.sh" || exit 99; fm_backend_herdr_version_check' "$ROOT" \
+    2>&1 >/dev/null)
+  status=$?
+  ended=$(date +%s)
+  expect_code 1 "$status" "fm_backend_herdr_version_check must refuse via its own guard when the herdr CLI is absent"
+  assert_contains "$err" "'herdr' CLI is not installed" "version_check did not name the missing herdr CLI"
+  elapsed=$((ended - started))
+  [ "$elapsed" -lt 5 ] \
+    || fail "fm_backend_herdr_version_check took ${elapsed}s with no herdr; it must refuse, not poll"
+
+  # Mutation proof: strip the guard lines into a copy that resolves its shared
+  # libraries through the same relative layout, and show the pin discriminates.
+  stripped="$dir/stripped"; mkdir -p "$stripped/bin/backends"
+  for tool in fm-composer-lib.sh fm-busy-lib.sh fm-transition-lib.sh; do
+    ln -s "$ROOT/bin/$tool" "$stripped/bin/$tool"
+  done
+  grep -v -F 'command -v herdr >/dev/null 2>&1 || return 1' "$ROOT/bin/backends/herdr.sh" \
+    > "$stripped/bin/backends/herdr.sh"
+  cmp -s "$ROOT/bin/backends/herdr.sh" "$stripped/bin/backends/herdr.sh" \
+    && fail "H1 mutation: stripping the guard changed nothing; the guard pattern is stale"
+  PATH="$fb" bash -c '. "$0/bin/backends/herdr.sh" || exit 99; fm_backend_herdr_cli fm-x1 status' "$stripped" \
+    >/dev/null 2>&1
+  stripped_status=$?
+  [ "$stripped_status" -ne 99 ] || fail "H1 mutation: the stripped adapter copy did not source"
+  [ "$stripped_status" -ne 1 ] \
+    || fail "H1 mutation: fm_backend_herdr_cli still exits 1 with the guard stripped, so this pin cannot fail"
+  pass "a missing herdr CLI is refused before the readiness poll (guard exit 1 vs stripped $stripped_status)"
+}
 
 test_version_check_accepts_current_protocol() {
   local dir log resp fb status
@@ -2298,6 +2369,7 @@ test_list_live_hidden_legacy_and_other_home_boundary() {
 # shellcheck source=bin/fm-backend.sh
 . "$ROOT/bin/fm-backend.sh"
 
+test_missing_herdr_cli_refuses_before_the_readiness_poll
 test_version_check_accepts_current_protocol
 test_version_check_refuses_old_protocol
 test_version_check_refuses_missing_herdr

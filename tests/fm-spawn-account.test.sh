@@ -196,6 +196,50 @@ test_absent_registry_changes_nothing() {
   pass "fm-spawn: an absent config/accounts.json leaves the launch and meta unchanged"
 }
 
+# The degrade guarantee the guarded hook exists for: with bin/fm-account-lib.sh
+# absent, an unpinned spawn is byte-identical to one from before pinning
+# existed and prints no shell error, while an explicit --account is refused
+# rather than silently launched on the ambient login.
+test_absent_library_degrades_without_error() {
+  local rec id out status launch encoded expected bin
+  id=account-nolib-a8
+  rec=$(make_spawn_case account-nolib claude "$id")
+  read_case_record "$rec"
+  bin="$TMP_ROOT/account-nolib/bin"
+  cp -R "$ROOT/bin" "$bin"
+  rm -f "$bin/fm-account-lib.sh"
+  write_registry "$HOME_DIR"
+
+  out=$(SPAWN="$bin/fm-spawn.sh" run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
+  status=$?
+  expect_code 0 "$status" "claude spawn without the account library should succeed: $out"
+  assert_contains "$out" "spawned $id harness=claude" "spawn did not report claude"
+  assert_not_contains "$out" "fm-account-lib.sh" "an absent account library leaked a shell error"
+  assert_not_contains "$out" "No such file" "an absent account library leaked a shell error"
+
+  launch=$(cat "$LAUNCH_LOG")
+  encoded=$("$ROOT/bin/fm-operational-input.sh" encode launch-brief < "$HOME_DIR/data/$id/brief.md")
+  # This must stay byte-identical to the baseline in
+  # test_absent_registry_changes_nothing: that is the whole claim, so a change to
+  # the claude launch line has to land in both or this pin fails for the wrong
+  # reason.
+  expected="CLAUDE_CODE_AUTO_COMPACT_WINDOW=500000 CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions '$encoded'"
+  [ "$launch" = "$expected" ] || fail "absent account library changed the claude launch line"$'\n'"expected: $expected"$'\n'"actual:   $launch"
+  assert_no_grep 'account=' "$HOME_DIR/state/$id.meta" "absent account library still recorded an account in meta"
+  assert_no_grep 'CLAUDE_CONFIG_DIR' "$LAUNCH_LOG" "absent account library still pinned a Claude home"
+
+  id=account-nolib-a9
+  mkdir -p "$HOME_DIR/data/$id"
+  printf 'brief for %s\n' "$id" > "$HOME_DIR/data/$id/brief.md"
+  out=$(SPAWN="$bin/fm-spawn.sh" run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --account team)
+  status=$?
+  [ "$status" -ne 0 ] || fail "an explicit --account launched without the account library"
+  assert_contains "$out" "error: --account needs bin/fm-account-lib.sh" "refusal did not name the missing library"
+  [ -z "$(cat "$LAUNCH_LOG")" ] || fail "an explicit --account without the library still launched something"
+  assert_absent "$HOME_DIR/state/$id.meta" "a refused --account still created task metadata"
+  pass "fm-spawn: an absent bin/fm-account-lib.sh degrades silently and refuses an explicit --account"
+}
+
 test_pinned_claude_account_exports_home_and_records_meta() {
   local rec id out status launch home
   id=account-claude-a2
@@ -328,6 +372,7 @@ JSON
 }
 
 test_absent_registry_changes_nothing
+test_absent_library_degrades_without_error
 test_pinned_claude_account_exports_home_and_records_meta
 test_vendor_default_applies_without_the_flag
 test_unknown_account_refuses_and_names_the_defined_ones

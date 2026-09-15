@@ -9,7 +9,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | ------------------------ | ------------------------------------------------------------------------------------ |
 | `fm-primary.sh`          | Launch a verified primary profile from the tracked root, owning profile aliases and bypass flags |
 | `fm-primary-handoff.sh`  | Optional quota- and context-aware primary orchestrator handoff (docs/primary-handoff.md) |
-| `fm-primary-handoff-lib.sh` | Shared handoff state-machine and never-two-holders helpers                        |
+| `fm-primary-handoff-lib.sh` | Shared handoff state-machine and never-two-holders helpers, also executed by `fm-lock.sh release-stale` for the stale-lock release decision |
 | `fm-account.sh`          | List and create the isolated vendor account homes named by `config/accounts.json`, printing the login command it never runs |
 | `fm-account-lib.sh`      | Shared named-account resolution, derived `data/accounts/<vendor>/<name>` homes, and the missing/logged-out/wrong-seat launch gate |
 | `fm-status-bar.sh`       | Render the canonical guarded primary status bar on native surfaces and on tmux or herdr companion panes (docs/status-bar.md) |
@@ -31,6 +31,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-read.sh`             | Render a Markdown path or task report as a private loopback Lavish reading page      |
 | `fm-chart-room.sh`       | Serve the private read-only chart room: fleet home, per-project goal maps, rendered fresh on every request (docs/chart-room.md) |
 | `fm-bridge-view.sh`      | Serve the captain's phone-first fleet glance, the `/deck` Action Deck page, photo drop, and hold-to-speak on loopback behind Tailscale Serve (docs/bridge-view.md) |
+| `fm-bridge-fields.sh`    | Add the bridge's title, repo, hold kind and hold reason to a finished bearings model, so the projection itself carries none of them |
 | `fm-overlay.sh`          | Open a Markdown view as an in-terminal Herdr overlay pane, degrading to a printed pointer to the same content; installs nothing and is called nowhere by default (docs/chart-room.md) |
 | `fm-present.sh`          | Present a captain-action artifact once per unchanged milestone through its existing local owner |
 | `fm-speak.sh` | Speak one captain-facing outcome line out of this machine's speaker, shaped by the glasses spoken-register owner; prefers Deepgram Aura when DEEPGRAM_API_KEY is set, else macOS say; inert unless config/speak opts the home in (docs/configuration.md "Desk voice-out", docs/desk-floater.md) |
@@ -57,6 +58,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-install-baby-menu-quota.sh` | Install the tracked Baby Menu quota widget into a Baby Menu home, preserving other extensions and machine-local settings (docs/baby-menu-quota-widget.md) |
 | `fm-herdr-ci-cleanup.sh` | Snapshot and tear down only job-owned `fm-lab-*` sessions in the Herdr CI lane       |
 | `fm-test-run.sh`         | Behavior-test runner: selection, portable lanes, proven-isolated `--jobs`, coverage guard, timing/JSON |
+| `fm-fork-test-registry-lib.sh` | Parse `tests/fork-test-registry.conf` so fork-only test families and changed-path owners are declared there rather than in the runner; its header owns the row grammar and the missing-registry behavior |
 | `fm-test-isolation-proof.sh` | Phase 2 concurrent isolation proof and proven-isolated candidate set owner |
 | `fm-ensure-agents-md.sh` | Ensure a project's real `AGENTS.md`, its `CLAUDE.md` symlink, and the canonical self-governance section |
 | `fm-guard.sh`            | Warn on primary-checkout tangles, pending queued wakes, and unhealthy supervision    |
@@ -83,6 +85,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `backends/cmux.sh`       | Experimental cmux session-provider adapter                                           |
 | `fm-config-push.sh`      | Push inherited local material to live secondmates and point changed config at its private exact-content reread |
 | `fm-home-port.sh`        | Export, import, push, pull, or bootstrap captain-private portable home material (docs/porting.md) |
+| `fm-home-manifest.sh`    | Print the environment-fidelity manifest of backend and tool versions that `fm-bootstrap.sh manifest` dispatches to (docs/porting.md) |
 | `fm-project-mode.sh`     | Resolve a project's delivery mode and `+yolo` flag from `data/projects.md`           |
 | `fm-project-display-name.sh` | Resolve a project slug to its human display name with explicit brand overrides and a synthesized fallback |
 | `fm-merge-local.sh`      | Fast-forward a `local-only` project's local default branch after approval            |
@@ -94,7 +97,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-watch-arm.sh`        | Verified home-scoped watcher arm wrapper with loud cycle endings and bounded lifecycle ledger |
 | `fm-watch-checkpoint.sh` | Run one bounded foreground watcher checkpoint for Codex-style supervision            |
 | `fm-watch.sh`            | Singleton-safe always-on watcher: absorb benign wakes, queue and exit on actionable ones; on macOS the lock owner holds a process-lifetime sleep assertion |
-| `fm-file-event-lib.sh`   | Default glasses mailbox/inbox watch paths and bounded file-event wait for the watcher |
+| `fm-file-event-lib.sh`   | Default glasses mailbox/inbox watch paths, the bounded file-event wait, and the watcher's forked terminal wait (hook W1) |
 | `fm-file-eventwait.py`   | Portable kqueue, inotify, or stat-backed implementation of the bounded file-event wait |
 | `fm-afk-start.sh`        | Run the common sourceable away-mode daemon entry in the foreground                      |
 | `fm-afk-launch.sh`       | Own away-mode entry, exit, rollback, and any backend terminal lifecycle                 |
@@ -110,6 +113,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-launchd-schedule-lib.sh` | Shared per-home LaunchAgent render, lint, load, and remove for this fork's scheduled owners |
 | `fm-crew-state.sh`       | Print one deterministic current-state line for a crew                                |
 | `fm-task-outcome.sh`     | Resolve a worker outcome from an explicit value, structured backlog title, or safe fallback |
+| `fm-visible-title.sh`    | Build the human WORKER tab title from a resolved outcome and state label, the single owner of that format |
 | `fm-visible-status.sh`   | Project authoritative worker details onto Herdr presentation metadata                |
 | `fm-tangle-lib.sh`       | Shared default-branch resolution and primary-checkout tangle classification          |
 | `fm-upstream-lib.sh`     | Read-only fork upstream-drift detection, ledger-subtracted so the count falls as batches land (`UPSTREAM:`) |

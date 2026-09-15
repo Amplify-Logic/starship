@@ -9,7 +9,7 @@ The archived proof JSON below still records the Phase 2 proof-time flags (`produ
 
 - Harness: `bin/fm-test-isolation-proof.sh`
 - Contract tests: `tests/fm-test-isolation-proof.test.sh`
-- Family labels (Phase 1): `bin/fm-test-run.sh`
+- Family labels (Phase 1): `bin/fm-test-run.sh`, with fork-only labels declared in `tests/fork-test-registry.conf`
 - Timing evidence used for planning: CI artifact `fm-test-timing` from Phase 1 PR #825
 
 ## Proof posture

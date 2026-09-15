@@ -56,8 +56,10 @@
 # --fail-on-gate-skip token appears. Other gate skips (first meaningful line
 # matching ^skip:) remain successful and are counted as skipped_gate.
 #
-# Family labels, the changed-file map, and production portable-shard composition
-# live in this script only (one owner). The proven-isolated candidate set remains
+# Upstream family labels, the changed-file map, and production portable-shard
+# composition live in this script, while fork-only family and path ownership
+# lives in tests/fork-test-registry.conf behind a missing-safe hook.
+# The proven-isolated candidate set remains
 # owned by bin/fm-test-isolation-proof.sh; portable parallel shards are a
 # duration-balanced partition of that exact set, and portable serial shards are a
 # duration-balanced partition of the remainder (see docs/fm-test-portable-shards.md).
@@ -67,6 +69,11 @@ set -eu
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT" || exit 1
+
+# shellcheck source=bin/fm-fork-test-registry-lib.sh disable=SC1091
+[ ! -r "$ROOT/bin/fm-fork-test-registry-lib.sh" ] || . "$ROOT/bin/fm-fork-test-registry-lib.sh"
+FORK_REGISTRY=$ROOT/tests/fork-test-registry.conf
+command -v fork_registry_apply >/dev/null 2>&1 && [ -r "$FORK_REGISTRY" ] && fork_registry_apply "$FORK_REGISTRY"
 
 MODE=
 LIST_ONLY=0
@@ -117,16 +124,15 @@ now_ms() {
 # Primary family for one tests/*.test.sh basename. Unmapped scripts are
 # unclassified so new tests are still runnable and visible in summaries.
 family_for_basename() {
+  command -v fork_registry_family_for_basename >/dev/null 2>&1 \
+    && fork_registry_family_for_basename "$1" && return 0
   case "$1" in
-    fm-action-gateway-v2.test.sh|fm-arm-pretool-check.test.sh|fm-ask-user-authority.test.sh|\
+    fm-arm-pretool-check.test.sh|fm-ask-user-authority.test.sh|\
     fm-brief.test.sh|fm-captain-translation-contract.test.sh|\
     fm-cd-pretool-check.test.sh|fm-composer-ghost.test.sh|fm-composer-lib.test.sh|\
     fm-continuity-pretool-check.test.sh|fm-crew-state.test.sh|fm-decision-hold-lifecycle.test.sh|\
-    fm-decision-surface.test.sh|fm-dispatch-select.test.sh|fm-ensure-agents-md.test.sh|fm-grok-harness.test.sh|\
-    fm-read.test.sh|fm-chart-room.test.sh|fm-overlay.test.sh|fm-bridge-view.test.sh|\
-    fm-order.test.sh|fm-tray.test.sh|\
-    fm-herdr-lab.test.sh|fm-instruction-owners.test.sh|fm-lint.test.sh|fm-fork-surface.test.sh|\
-    fm-baby-menu-quota.test.sh|\
+    fm-dispatch-select.test.sh|fm-ensure-agents-md.test.sh|fm-grok-harness.test.sh|\
+    fm-herdr-lab.test.sh|fm-instruction-owners.test.sh|fm-lint.test.sh|\
     fm-install-herdr.test.sh|fm-nm-test-contract.test.sh|fm-no-mistakes-ownership.test.sh|\
     fm-pi-primary-types.test.sh|fm-operational-input.test.sh|fm-calm-extension.test.sh|\
     fm-send-popup-settle.test.sh|fm-send-settle.test.sh|fm-stow-contract.test.sh|\
@@ -136,7 +142,7 @@ family_for_basename() {
       printf '%s\n' pure-contract-unit
       ;;
     fm-daemon.test.sh|fm-guard-stale-banner.test.sh|fm-pi-watch-extension.test.sh|\
-    fm-file-eventwait.test.sh|fm-session-lock-ancestry.test.sh|\
+    fm-session-lock-ancestry.test.sh|\
     fm-supervision-events.test.sh|fm-supervision-sentinel.test.sh|fm-supervision-test-isolation.test.sh|fm-turnend-guard.test.sh|fm-wake-daemon-lifecycle-e2e.test.sh|\
     fm-wake-queue.test.sh|fm-watch-arm.test.sh|fm-watch-caffeinate.test.sh|fm-watch-checkpoint.test.sh|fm-watch-triage.test.sh|\
     fm-watcher-lock.test.sh)
@@ -155,10 +161,9 @@ family_for_basename() {
       printf '%s\n' secondmate
       ;;
     fm-bootstrap.test.sh|fm-fleet-sync.test.sh|fm-gate-refuse.test.sh|fm-gotmp.test.sh|\
-    fm-channel-intake.test.sh|fm-morning-intake.test.sh|\
+    fm-channel-intake.test.sh|\
     fm-session-start.test.sh|fm-sessionstart-nudge.test.sh|fm-tangle-guard.test.sh|\
-    fm-toolchain-drift.test.sh|fm-update.test.sh|fm-upstream.test.sh|\
-    fm-upstream-ledger.test.sh|fm-upstream-watch.test.sh)
+    fm-toolchain-drift.test.sh|fm-update.test.sh)
       printf '%s\n' session-bootstrap
       ;;
     fm-afk-pi-herdr-return-e2e.test.sh|fm-claude-continuity-live-e2e.test.sh|\
@@ -168,7 +173,7 @@ family_for_basename() {
       printf '%s\n' live-harness-optin
       ;;
     fm-backend-herdr.test.sh|fm-backend-tmux-smoke.test.sh|fm-backend.test.sh|\
-    fm-send-strict.test.sh|fm-spawn-account.test.sh|fm-spawn-batch.test.sh|\
+    fm-send-strict.test.sh|fm-spawn-batch.test.sh|\
     fm-spawn-dispatch-profile.test.sh|fm-spawn-worktree-settle.test.sh)
       printf '%s\n' backend-dispatch
       ;;
@@ -396,6 +401,7 @@ EOF
 list_portable_serial_2() {
   cat <<'EOF'
 tests/fm-baby-menu-quota.test.sh
+tests/fm-home-manifest.test.sh
 tests/fm-secondmate-harness.test.sh
 tests/fm-watch-triage.test.sh
 tests/fm-supervision-test-isolation.test.sh
@@ -785,6 +791,8 @@ families_for_test_reference() {
 # Never expands to the complete suite.
 families_for_changed_path() {
   local path=$1
+  command -v fork_registry_scripts_for_path >/dev/null 2>&1 \
+    && fork_registry_scripts_for_path "$path" && return 0
   case "$path" in
     tests/fm-test-run.test.sh)
       printf '%s\n' pure-contract-unit
@@ -798,8 +806,7 @@ families_for_changed_path() {
       # resolution in the caller; emit a marker family of __script__
       printf '%s\n' "__script__:$(basename "$path")"
       ;;
-    bin/fm-test-run.sh|bin/fm-test-isolation-proof.sh|bin/fm-fork-surface.sh|\
-    fork-surface.conf|fork-surface.upstream-base|docs/fork-surface.md)
+    bin/fm-test-run.sh|bin/fm-test-isolation-proof.sh)
       printf '%s\n' pure-contract-unit
       ;;
     bin/backends/herdr*|bin/fm-herdr-lab.sh|tests/herdr-test-safety.sh)
@@ -822,11 +829,6 @@ families_for_changed_path() {
     bin/fm-backend.sh|bin/fm-backend-hometag-lib.sh)
       printf '%s\n' backend-dispatch
       printf '%s\n' real-herdr-gated
-      ;;
-    bin/fm-visible-format-lib.sh)
-      printf '%s\n' "__script__:fm-visible-status.test.sh"
-      printf '%s\n' "__script__:fm-herdr-layout-preview-e2e.test.sh"
-      printf '%s\n' "__script__:fm-deck.test.sh"
       ;;
     # Shared supervision core. `case` is first-match, so these paths must name
     # every family they need: the later bin/fm-supervision* branch can no longer
@@ -860,13 +862,12 @@ families_for_changed_path() {
       ;;
     bin/fm-session-start.sh|bin/fm-bootstrap.sh|bin/fm-fleet-sync.sh|\
     bin/fm-sessionstart-nudge.sh|bin/fm-tangle*|bin/fm-update.sh|\
-    bin/fm-gate-refuse*|bin/fm-lock*|bin/fm-upstream-lib.sh|\
-    bin/fm-upstream-watch*.sh|bin/fm-toolchain-lib.sh|bin/fm-timeout-lib.sh|\
-    bin/fm-morning-intake*.sh|\
-    docs/toolchain-manifest.tsv|docs/upstream-ported-ledger.txt)
-      # The two docs/ data files are behaviour-bearing inputs to the bootstrap
-      # drift diagnostics, not prose, so they select the same lane as the
-      # scripts that read them.
+    bin/fm-gate-refuse*|bin/fm-lock*|\
+    bin/fm-toolchain-lib.sh|bin/fm-timeout-lib.sh|\
+    docs/toolchain-manifest.tsv)
+      # The docs/ data file is a behaviour-bearing input to the bootstrap drift
+      # diagnostics, not prose, so it selects the same lane as the scripts that
+      # read it.
       printf '%s\n' session-bootstrap
       ;;
     bin/fm-worktree-lease-lib.sh)
@@ -898,9 +899,8 @@ families_for_changed_path() {
       ;;
     bin/fm-lint.sh|bin/fm-install-shellcheck.sh|\
     bin/fm-brief.sh|bin/fm-ensure-agents-md.sh|bin/fm-crew-state.sh|\
-    bin/fm-decision-hold.sh|bin/fm-decision-surface.*|bin/fm-read.*|bin/fm-supervision*|bin/fm-transition-lib.sh|\
-    bin/fm-chart-room.*|bin/fm-overlay.sh|bin/fm-bridge-view.*|\
-    bin/fm-order.sh|bin/fm-tray.sh|\
+    bin/fm-decision-hold.sh|bin/fm-supervision*|bin/fm-transition-lib.sh|\
+    bin/fm-bridge-view.*|\
     bin/fm-tmux-lib.sh|bin/fm-marker-lib.sh|bin/fm-operational-input.sh|bin/fm-tasks-axi-lib.sh|\
     bin/fm-primary-scope-lib.sh|bin/fm-project-mode.sh|bin/fm-promote.sh|\
     bin/fm-ff-lib.sh|bin/fm-gotmp*|bin/*pretool*|\
@@ -939,14 +939,6 @@ families_for_changed_path() {
       # voice suite explicitly (see the desk-floater-voice capability).
       printf '%s\n' "__script__:fm-deepgram-desk.test.sh"
       ;;
-    bin/fm-account.sh|bin/fm-account-lib.sh)
-      # Account pinning has four owners: the helper's own suite, the two launch
-      # paths that resolve a pin, and bootstrap's registry validation.
-      printf '%s\n' "__script__:fm-account.test.sh"
-      printf '%s\n' "__script__:fm-primary.test.sh"
-      printf '%s\n' "__script__:fm-spawn-account.test.sh"
-      printf '%s\n' "__script__:fm-bootstrap.test.sh"
-      ;;
     bin/*)
       families_for_test_reference "$(basename "$path")" \
         || printf '%s\n' "__unmapped__:$path"
@@ -956,15 +948,12 @@ families_for_changed_path() {
       ;;
     .gitignore)
       # Not prose: the tracked ignore file has behaviour owners that assert on
-      # its contents, so an ignore-only change still selects them. The complete
-      # owner set is the two direct readers (config/ category coverage and the
-      # secondmate seed-marker line), the upstream-watch private-report
-      # assertion, and the fork-surface check whose config/secret knob pass
-      # requires every declared knob path to be ignored.
+      # its contents, so an ignore-only change still selects them. The owners
+      # here are the two direct readers, config/ category coverage and the
+      # secondmate seed-marker line; a fork may declare further owners for this
+      # path in its test registry.
       printf '%s\n' "__script__:fm-gitignore-config.test.sh"
       printf '%s\n' "__script__:fm-secondmate-sync.test.sh"
-      printf '%s\n' "__script__:fm-upstream-watch.test.sh"
-      printf '%s\n' "__script__:fm-fork-surface.test.sh"
       ;;
     README.md|ONBOARDING.md|LICENSE|assets/*|docs/*)
       # Documentation-only prose with no behavior test owner (see the
@@ -981,6 +970,10 @@ select_changed() {
   local base=$1 path entry fam script_name s
   local -a wanted_families=()
   local -a wanted_scripts=()
+
+  if command -v fork_registry_assert_no_shadow >/dev/null 2>&1; then
+    fork_registry_assert_no_shadow families_for_changed_path || exit 2
+  fi
 
   if ! git -C "$ROOT" rev-parse --verify "$base" >/dev/null 2>&1; then
     die "changed-file base ref not found: $base (pass --base <ref>)"
@@ -1284,6 +1277,10 @@ while [ "$#" -gt 0 ]; do
       ;;
   esac
 done
+
+if command -v fork_registry_assert_family_confined >/dev/null 2>&1; then
+  fork_registry_assert_family_confined family_for_basename list_known_families || exit 2
+fi
 
 if [ "$LIST_FAMILIES" -eq 1 ]; then
   list_known_families

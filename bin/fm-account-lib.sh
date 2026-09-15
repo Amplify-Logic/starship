@@ -347,3 +347,66 @@ fm_account_create_home() {  # <home>
   fi
   chmod 0700 "$home" 2>/dev/null || true
 }
+
+# Resolve the vendor account pin for one spawn, so the whole account concern is
+# one call from the spawn path instead of a block inside it.
+#
+# Sets FM_ACCOUNT_SPAWN_VENDOR, _NAME, _HOME and _ENV, all empty when nothing is
+# pinned. Prints the refusal and returns 1 when the request cannot be honoured,
+# so the caller can exit without restating any wording. The refusals are the
+# same ones fm_account_resolve and fm_account_require_usable already own, which
+# is what keeps a spawn and a primary launch from refusing the same situation in
+# two different sets of words.
+#
+# <cli-binary> is the binary the launch command actually runs; pass it empty to
+# fall back to the vendor name.
+fm_account_spawn_pin() { # <config> <data> <harness> <raw-launch> <account-set> <requested> <cli-binary> <create-root>
+  local config=$1 data=$2 harness=$3 raw_launch=$4 account_set=$5
+  local requested=$6 cli=$7 create_root=$8
+  local expect
+
+  FM_ACCOUNT_SPAWN_VENDOR=
+  FM_ACCOUNT_SPAWN_NAME=
+  FM_ACCOUNT_SPAWN_HOME=
+  FM_ACCOUNT_SPAWN_ENV=
+
+  if [ "$raw_launch" -eq 1 ]; then
+    [ "$account_set" -eq 0 ] || {
+      echo "error: --account cannot apply to a raw launch command; that escape hatch has no known vendor to pin" >&2
+      return 1
+    }
+  else
+    case "$harness" in
+      claude) FM_ACCOUNT_SPAWN_VENDOR=claude ;;
+      codex) FM_ACCOUNT_SPAWN_VENDOR=codex ;;
+    esac
+  fi
+
+  if [ -n "$FM_ACCOUNT_SPAWN_VENDOR" ]; then
+    fm_account_resolve "$config" "$data" "$FM_ACCOUNT_SPAWN_VENDOR" "$requested" || {
+      echo "error: $FM_ACCOUNT_ERROR" >&2
+      return 1
+    }
+    [ -z "$FM_ACCOUNT_WARNING" ] || echo "warning: $FM_ACCOUNT_WARNING" >&2
+  elif [ "$raw_launch" -eq 0 ] && [ "$account_set" -eq 1 ]; then
+    echo "error: harness '$harness' has no vendor account to pin; --account applies to $(fm_account_vendors) harnesses only" >&2
+    return 1
+  fi
+
+  [ -n "$FM_ACCOUNT_SPAWN_VENDOR" ] && [ -n "$FM_ACCOUNT_PIN_HOME" ] || return 0
+
+  FM_ACCOUNT_SPAWN_NAME=$FM_ACCOUNT_PIN_NAME
+  FM_ACCOUNT_SPAWN_HOME=$FM_ACCOUNT_PIN_HOME
+  FM_ACCOUNT_SPAWN_ENV=$(fm_account_env_var "$FM_ACCOUNT_SPAWN_VENDOR")
+  [ -n "$cli" ] || cli=$FM_ACCOUNT_SPAWN_VENDOR
+  expect=$(fm_account_expect "$(fm_account_registry_file "$config")" \
+    "$FM_ACCOUNT_SPAWN_VENDOR" "$FM_ACCOUNT_SPAWN_NAME")
+  fm_account_require_usable "$FM_ACCOUNT_SPAWN_VENDOR" "$FM_ACCOUNT_SPAWN_HOME" "$cli" \
+    "$FM_ACCOUNT_SPAWN_NAME" "$expect" \
+    "$create_root/bin/fm-account.sh create $FM_ACCOUNT_SPAWN_VENDOR $FM_ACCOUNT_SPAWN_NAME" || {
+    echo "error: $FM_ACCOUNT_ERROR" >&2
+    return 1
+  }
+  return 0
+}
+

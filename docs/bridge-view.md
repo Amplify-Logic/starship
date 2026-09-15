@@ -75,6 +75,8 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.firstmate.bridge-vie
 ## Observation
 
 The page calls `bin/fm-bearings-snapshot.sh --json --passive-view --all-in-flight --all-decisions --all-queued` so the waiting list is complete.
+The title, repo, hold kind, and hold reason the page reads are added to that model by `bin/fm-bridge-fields.sh` after the projection.
+When that script is absent the page receives the bare projection and its buckets degrade to the fields upstream emits.
 That named Bearings mode is allowed while away mode is on; ordinary `/bearings` chat still refuses until return catch-up finishes.
 The server caches one observation for about 30 seconds, runs one refresh at a time, and caps subprocess time and output size.
 The snapshot child keeps a scrubbed environment (no parent secrets) but resolves tool directories at server start from HOME and the parent PATH, including `~/.local/bin` and a discovered nvm node bin, so CLIs such as herdr and tasks-axi are found without a version-specific hardcoded path.

@@ -1001,7 +1001,7 @@ test_perl_fallback_bounds_github_call() {
   fakebin=$(make_fakebin "$home")
   toolbin="$home/toolbin"
   mkdir -p "$toolbin"
-  for cmd in bash dirname basename jq date sed git grep tail cut tr head sort wc perl sleep cat find; do
+  for cmd in bash dirname basename jq date sed git grep tail cut tr head sort wc perl sleep cat find mktemp rm; do
     ln -s "$(command -v "$cmd")" "$toolbin/$cmd"
   done
   started=$(date +%s)
@@ -1688,6 +1688,8 @@ EOF
   printf '%s' "$json" | jq -e '
     ([.in_flight[].id] | sort) == ["hibit", "home-assistant", "wheel"]
       and (.decisions_open | any(.id == "sshhip/reviewer-decision"))
+      and (.decisions_open[] | select(.id == "sshhip/reviewer-decision")
+        | .hold_reason == "choose reviewer remediation A or B")
       and (.decisions_open | any(.id == "home-assistant/captain-run") | not)
       and (.gates | any(.id == "production-observation" and .owner == "wheel"
         and .reason == "documented no live worker"))
@@ -1935,6 +1937,53 @@ test_in_flight_rows_carry_captain_facing_title() {
   pass "in-flight rows include a captain-facing title beside internal doing"
 }
 
+# B9: the bridge fields are fork-owned and added after upstream's projection.
+# Both halves matter. The present case fails if the hook is removed from
+# bin/fm-bearings-snapshot.sh, so this pin can fail; the absent case is the
+# degrade the bridge must survive, upstream's exact projection with no error.
+test_bridge_fields_are_fork_owned_and_degrade_to_upstream() {
+  local home fakebin json degraded entry stripped
+  home=$(make_home bridge-fields); write_fixture "$home"
+  # An unstructured main row projects with id null; the enricher must skip it
+  # rather than abort and silently drop every field.
+  sed -i.bak 's/^## Queued$/## Queued\
+free-form note without a checkbox/' "$home/data/backlog.md" && rm -f "$home/data/backlog.md.bak"
+  fakebin=$(make_fakebin "$home")
+
+  json=$(run "$home" "$fakebin" --json) || fail "bearings must succeed with the enricher present"
+  printf '%s' "$json" | jq -e '.omitted | any(.surface | startswith("main unstructured current backlog row(s)"))' >/dev/null \
+    || fail "fixture carries no unstructured main row, so the null-id path is untested: $json"
+  printf '%s' "$json" | jq -e '((.decisions_open | length) + (.gates | length)) > 0' >/dev/null \
+    || fail "fixture produced no decision or gate rows, so this pin would prove nothing"
+  printf '%s' "$json" | jq -e '[(.decisions_open[]?, .gates[]?) | has("hold_kind")] | all' >/dev/null \
+    || fail "enricher did not add hold_kind; is the fm-bridge-fields hook still in the snapshot?"
+  printf '%s' "$json" | jq -e '[.in_flight[]? | has("title")] | all' >/dev/null \
+    || fail "enricher did not add the in-flight title"
+
+  # A faithful root by symlink with only the enricher missing, so the real
+  # checkout is never mutated.
+  degraded="$TMP_ROOT/bridge-degraded"
+  mkdir -p "$degraded/bin"
+  for entry in "$ROOT"/*; do
+    [ "$(basename "$entry")" = bin ] || ln -s "$entry" "$degraded/$(basename "$entry")"
+  done
+  for entry in "$ROOT"/bin/*; do
+    [ "$(basename "$entry")" = fm-bridge-fields.sh ] \
+      || ln -s "$entry" "$degraded/bin/$(basename "$entry")"
+  done
+  [ ! -e "$degraded/bin/fm-bridge-fields.sh" ] \
+    || fail "the degraded root must not contain the enricher"
+
+  stripped=$(PATH="$fakebin:$PATH" FM_HOME="$home" FM_BEARINGS_NOW=2026-07-11T18:00:00Z \
+    NET_LOG="$home/net.log" "$degraded/bin/fm-bearings-snapshot.sh" --json) \
+    || fail "bearings must still succeed with the enricher absent"
+  printf '%s' "$stripped" | jq -e '.schema == "fm-bearings.v1"' >/dev/null \
+    || fail "the degraded model is not a valid bearings snapshot"
+  printf '%s' "$stripped" | jq -e '[(.decisions_open[]?, .gates[]?) | has("hold_kind")] | any | not' >/dev/null \
+    || fail "the degraded model still carries hold_kind, so the enricher is not its only source"
+  pass "bridge fields are added by the fork enricher and absent without it"
+}
+
 test_ordinary_bearings_refuses_while_away_mode_is_on() {
   local home fakebin rc err
   home=$(make_home away-refuse); write_fixture "$home"
@@ -1993,6 +2042,7 @@ test_mixed_secondmate_roles_partial_state_and_captain_readiness
 test_main_captain_readiness_matches_secondmate_projection
 test_chat_contract_four_sections
 test_in_flight_rows_carry_captain_facing_title
+test_bridge_fields_are_fork_owned_and_degrade_to_upstream
 test_ordinary_bearings_refuses_while_away_mode_is_on
 test_passive_view_is_allowed_while_away_mode_is_on
 test_completed_scout_report_not_pending
