@@ -23,8 +23,8 @@
 #   - Not an approval channel. The register owner refuses text that asks the
 #     captain to decide, so money, outward and destructive choices structurally
 #     cannot be put to him by voice. They stay in the terminal.
-#   - Not a listener. Speech in is whatever already types into the composer;
-#     this script only speaks out.
+#   - Not a listener. Speech in is the desk floater / glasses path; this script
+#     only speaks out. See docs/desk-floater.md for the push-to-talk inbox.
 #   - Not proof anything was heard. Exit 0 means the shaped line was handed to
 #     the speaker, never that audio was produced or that the captain heard it.
 #
@@ -33,7 +33,22 @@
 # repo, seeding a secondmate home, or adding a device never makes it talk.
 # Config is `key = value` lines; unknown keys are refused rather than ignored.
 #   enabled   true to arm this home (default false)
-#   voice     optional `say` voice name (default: the system voice)
+#   voice     optional `say` voice name (default: the system voice; ignored for
+#             Deepgram, which uses DEEPGRAM_TTS_MODEL instead)
+#
+# SPEAKER PREFERENCE: when DEEPGRAM_API_KEY is set in the environment or in this
+# home's gitignored .env, the shaped line is handed to Deepgram Aura first
+# (bin/fm-deepgram-tts.sh). macOS `say` remains the fallback when the key is
+# absent or Deepgram fails. The key is never logged.
+#
+# DEEPGRAM SPOKEN BOUND: when Deepgram is the intended sink, this script points
+# the glasses register owner at docs/examples/desk-speak-register.toml via
+# GLASSES_ANNOUNCE_CONFIG (unless that variable is already set). That example
+# keeps the same URL/path/id and decision refusals but raises the spoken budget
+# from ~8s (say-friendly) to 30s. Documented bound for Deepgram desk lines:
+# 30 seconds / about 78 words at 2.6 wps. Override the example path with
+# FM_SPEAK_DEEPGRAM_REGISTER, or keep an 8s cut by exporting
+# FM_SPEAK_DEEPGRAM_REGISTER= (empty) before calling.
 #
 # NEVER BLOCKS THE CALLER'S TURN. The register call is bounded and waited on
 # because its output is needed, so its bound is the worst case a captain-facing
@@ -48,6 +63,12 @@
 #   FM_SPEAK_SHAPER    register owner exposing the `--dry-run <text>` contract
 #                      (default: $FM_HOME/projects/glasses-voice/bin/announce)
 #   FM_SPEAK_SAY       speech binary (default: /usr/bin/say)
+#   FM_SPEAK_DEEPGRAM_TTS
+#                      Deepgram TTS helper (default: $ROOT/bin/fm-deepgram-tts.sh)
+#   FM_SPEAK_DEEPGRAM_REGISTER
+#                      optional GLASSES_ANNOUNCE_CONFIG path for the longer desk
+#                      register when Deepgram is available (default:
+#                      $ROOT/docs/examples/desk-speak-register.toml)
 #   FM_SPEAK_SHAPER_TIMEOUT
 #                      bounded seconds for the waited-on register call
 #                      (default 15)
@@ -72,11 +93,21 @@ DEFAULT_SPEAKER_TIMEOUT=60
 
 SHAPER="${FM_SPEAK_SHAPER:-$FM_HOME/projects/glasses-voice/bin/announce}"
 SAY_BIN="${FM_SPEAK_SAY:-/usr/bin/say}"
+DEEPGRAM_TTS="${FM_SPEAK_DEEPGRAM_TTS:-$ROOT/bin/fm-deepgram-tts.sh}"
+# Default longer desk register; empty FM_SPEAK_DEEPGRAM_REGISTER disables the bump.
+if [ "${FM_SPEAK_DEEPGRAM_REGISTER+x}" = x ]; then
+  DEEPGRAM_REGISTER=$FM_SPEAK_DEEPGRAM_REGISTER
+else
+  DEEPGRAM_REGISTER="$ROOT/docs/examples/desk-speak-register.toml"
+fi
 SHAPER_TIMEOUT="${FM_SPEAK_SHAPER_TIMEOUT:-$DEFAULT_SHAPER_TIMEOUT}"
 SPEAKER_TIMEOUT="${FM_SPEAK_TIMEOUT:-$DEFAULT_SPEAKER_TIMEOUT}"
 
 CFG_ENABLED=false
 CFG_VOICE=
+
+# shellcheck source=bin/fm-deepgram-lib.sh
+. "$ROOT/bin/fm-deepgram-lib.sh"
 
 usage() {
   awk '
@@ -186,11 +217,11 @@ run_bounded() {  # <seconds> <outfile> <errfile> <cmd...>
   return "$status"
 }
 
-# Hand the shaped line to the speaker and return immediately. The standard
+# Hand the shaped line to macOS `say` and return immediately. The standard
 # streams are closed before backgrounding: a caller reading this script through
 # a pipe or command substitution would otherwise stay blocked until the audio
 # finished, which is exactly the turn-blocking this script must never cause.
-speak_detached() {  # <textfile>
+speak_say_detached() {  # <textfile>
   local textfile=$1
   (
     local say_pid
@@ -205,6 +236,81 @@ speak_detached() {  # <textfile>
     kill "$WATCHDOG_PID" 2>/dev/null || true
     rm -f "$textfile"
   ) </dev/null >/dev/null 2>&1 &
+}
+
+# Prefer Deepgram when a key is available. Synthesis is waited on under the
+# speaker watchdog (network only, --to file); playback is then detached so the
+# caller's turn is never held open by audio. Returns 0 when Deepgram accepted
+# the line, 1 when the caller should use `say`.
+speak_deepgram_or_fail() {  # <textfile>
+  local textfile=$1 key audio status=0 afplay_bin out err
+  key=$(fm_deepgram_api_key)
+  [ -n "$key" ] || return 1
+  [ -x "$DEEPGRAM_TTS" ] || {
+    note "Deepgram TTS helper is not executable: $DEEPGRAM_TTS; falling back to say"
+    return 1
+  }
+  audio=$(mktemp "${TMPDIR:-/tmp}/fm-speak-dg.XXXXXX") || return 1
+  mv "$audio" "$audio.mp3"
+  audio=$audio.mp3
+  out=$(mktemp "${TMPDIR:-/tmp}/fm-speak-dg-out.XXXXXX") || { rm -f "$audio"; return 1; }
+  err=$(mktemp "${TMPDIR:-/tmp}/fm-speak-dg-err.XXXXXX") || { rm -f "$audio" "$out"; return 1; }
+  status=0
+  # Subshell keeps the key out of this shell; helper re-reads env/.env itself.
+  run_bounded "$SPEAKER_TIMEOUT" "$out" "$err" \
+    env DEEPGRAM_API_KEY="$key" "$DEEPGRAM_TTS" --to "$audio" -- "$(cat "$textfile")" \
+    || status=$?
+  rm -f "$out" "$err"
+  if [ "$status" -ne 0 ] || [ ! -s "$audio" ]; then
+    rm -f "$audio"
+    note "Deepgram TTS failed; falling back to macOS say"
+    return 1
+  fi
+  afplay_bin="${FM_DEEPGRAM_AFPLAY:-/usr/bin/afplay}"
+  if [ ! -x "$afplay_bin" ]; then
+    rm -f "$audio"
+    note "no afplay at $afplay_bin; falling back to say"
+    return 1
+  fi
+  (
+    local play_pid
+    "$afplay_bin" "$audio" &
+    play_pid=$!
+    start_watchdog "$SPEAKER_TIMEOUT" "$play_pid"
+    wait "$play_pid" 2>/dev/null || true
+    kill "$WATCHDOG_PID" 2>/dev/null || true
+    rm -f "$audio" "$textfile"
+  ) </dev/null >/dev/null 2>&1 &
+  return 0
+}
+
+speak_detached() {  # <textfile>
+  local textfile=$1
+  if speak_deepgram_or_fail "$textfile"; then
+    return 0
+  fi
+  # Deepgram path leaves the textfile in place for the say fallback.
+  [ -f "$textfile" ] || return 0
+  if [ ! -x "$SAY_BIN" ]; then
+    rm -f "$textfile"
+    die "no speech binary at $SAY_BIN (set FM_SPEAK_SAY)"
+  fi
+  speak_say_detached "$textfile"
+}
+
+# When Deepgram will be the sink, prefer the longer desk register example unless
+# GLASSES_ANNOUNCE_CONFIG is already set, or FM_SPEAK_DEEPGRAM_REGISTER is empty.
+maybe_apply_deepgram_register() {
+  local key
+  key=$(fm_deepgram_api_key)
+  [ -n "$key" ] || return 0
+  [ -n "${GLASSES_ANNOUNCE_CONFIG:-}" ] && return 0
+  [ -n "$DEEPGRAM_REGISTER" ] || return 0
+  [ -f "$DEEPGRAM_REGISTER" ] || {
+    note "Deepgram desk register example missing: $DEEPGRAM_REGISTER (continuing with the shaper default)"
+    return 0
+  }
+  export GLASSES_ANNOUNCE_CONFIG="$DEEPGRAM_REGISTER"
 }
 
 # --- main -------------------------------------------------------------------
@@ -240,9 +346,13 @@ main() {
 
   [ -x "$SHAPER" ] \
     || die "the spoken register owner is not executable: $SHAPER (set FM_SPEAK_SHAPER)"
-  if [ "$dry_run" != true ] && [ ! -x "$SAY_BIN" ]; then
-    die "no speech binary at $SAY_BIN (set FM_SPEAK_SAY)"
+  if [ "$dry_run" != true ]; then
+    if [ ! -x "$SAY_BIN" ] && [ -z "$(fm_deepgram_api_key)" ]; then
+      die "no speech binary at $SAY_BIN and no DEEPGRAM_API_KEY (set FM_SPEAK_SAY or the key)"
+    fi
   fi
+
+  maybe_apply_deepgram_register
 
   outfile=$(mktemp "${TMPDIR:-/tmp}/fm-speak-out.XXXXXX") || die "cannot create a temporary file"
   errfile=$(mktemp "${TMPDIR:-/tmp}/fm-speak-err.XXXXXX") || {

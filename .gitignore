@@ -21,3 +21,5 @@ __pycache__/
 .opencode/plugins/fm-turn-end.js
 .fm-grok-turnend
 .fm-lint-parity.*
+# SwiftPM build products for the desk floater.
+desk-floater/.build/
