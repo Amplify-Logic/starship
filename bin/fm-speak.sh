@@ -14,12 +14,12 @@
 #
 # WHAT THIS IS NOT:
 #   - Not a second owner of the spoken register. The register - outcome first,
-#     two or three short sentences, about eight seconds, never a URL, path or
-#     id, and never a request for a spoken yes - is owned once by the glasses
-#     project's announce entry point. This script shapes through that owner and
-#     refuses to speak if it cannot reach it, because speaking unshaped text
-#     would read a URL aloud, which is the one thing the register forbids
-#     outright.
+#     a few short sentences inside a bounded spoken length, never a URL, path
+#     or id, and never a request for a spoken yes - is owned once by the
+#     glasses project's announce entry point. This script shapes through that
+#     owner, selects the desk budget below, and refuses to speak if it cannot
+#     reach it, because speaking unshaped text would read a URL aloud, which
+#     is the one thing the register forbids outright.
 #   - Not an approval channel. The register owner refuses text that asks the
 #     captain to decide, so money, outward and destructive choices structurally
 #     cannot be put to him by voice. They stay in the terminal.
@@ -41,14 +41,19 @@
 # (bin/fm-deepgram-tts.sh). macOS `say` remains the fallback when the key is
 # absent or Deepgram fails. The key is never logged.
 #
-# DEEPGRAM SPOKEN BOUND: when Deepgram is the intended sink, this script points
-# the glasses register owner at docs/examples/desk-speak-register.toml via
-# GLASSES_ANNOUNCE_CONFIG (unless that variable is already set). That example
-# keeps the same URL/path/id and decision refusals but raises the spoken budget
-# from ~8s (say-friendly) to 30s. Documented bound for Deepgram desk lines:
-# 30 seconds / about 78 words at 2.6 wps. Override the example path with
-# FM_SPEAK_DEEPGRAM_REGISTER, or keep an 8s cut by exporting
-# FM_SPEAK_DEEPGRAM_REGISTER= (empty) before calling.
+# DESK SPOKEN BOUND: the register owner's own default budget is tuned for the
+# glasses, about eight seconds, and it truncates the shaped line before any
+# speaker sees it. At the desk that lands mid-message on an ordinary two- or
+# three-sentence outcome, so this script always points the register owner at
+# docs/examples/desk-speak-register.toml via GLASSES_ANNOUNCE_CONFIG. It is the
+# sink for the desk, not the glasses, so the budget follows the desk and not
+# whichever speaker ends up playing the line: the same 30 seconds applies to
+# Deepgram Aura and to macOS `say`. That example keeps the same URL/path/id and
+# decision refusals and raises the budget only: 30 seconds / about 78 words at
+# 2.6 wps. Two opt-outs remain. An already-set GLASSES_ANNOUNCE_CONFIG is never
+# overridden, and FM_SPEAK_DEEPGRAM_REGISTER= (empty) keeps the glasses
+# eight-second cut. That variable keeps its historical name because it is the
+# published opt-out; it is not a Deepgram gate and never was one.
 #
 # NEVER BLOCKS THE CALLER'S TURN. The register call is bounded and waited on
 # because its output is needed, so its bound is the worst case a captain-facing
@@ -66,9 +71,10 @@
 #   FM_SPEAK_DEEPGRAM_TTS
 #                      Deepgram TTS helper (default: $ROOT/bin/fm-deepgram-tts.sh)
 #   FM_SPEAK_DEEPGRAM_REGISTER
-#                      optional GLASSES_ANNOUNCE_CONFIG path for the longer desk
-#                      register when Deepgram is available (default:
-#                      $ROOT/docs/examples/desk-speak-register.toml)
+#                      GLASSES_ANNOUNCE_CONFIG path for the longer desk register,
+#                      applied to every desk line (default:
+#                      $ROOT/docs/examples/desk-speak-register.toml); set it
+#                      empty to keep the glasses eight-second cut
 #   FM_SPEAK_SHAPER_TIMEOUT
 #                      bounded seconds for the waited-on register call
 #                      (default 15)
@@ -96,9 +102,9 @@ SAY_BIN="${FM_SPEAK_SAY:-/usr/bin/say}"
 DEEPGRAM_TTS="${FM_SPEAK_DEEPGRAM_TTS:-$ROOT/bin/fm-deepgram-tts.sh}"
 # Default longer desk register; empty FM_SPEAK_DEEPGRAM_REGISTER disables the bump.
 if [ "${FM_SPEAK_DEEPGRAM_REGISTER+x}" = x ]; then
-  DEEPGRAM_REGISTER=$FM_SPEAK_DEEPGRAM_REGISTER
+  DESK_REGISTER=$FM_SPEAK_DEEPGRAM_REGISTER
 else
-  DEEPGRAM_REGISTER="$ROOT/docs/examples/desk-speak-register.toml"
+  DESK_REGISTER="$ROOT/docs/examples/desk-speak-register.toml"
 fi
 SHAPER_TIMEOUT="${FM_SPEAK_SHAPER_TIMEOUT:-$DEFAULT_SHAPER_TIMEOUT}"
 SPEAKER_TIMEOUT="${FM_SPEAK_TIMEOUT:-$DEFAULT_SPEAKER_TIMEOUT}"
@@ -298,19 +304,19 @@ speak_detached() {  # <textfile>
   speak_say_detached "$textfile"
 }
 
-# When Deepgram will be the sink, prefer the longer desk register example unless
-# GLASSES_ANNOUNCE_CONFIG is already set, or FM_SPEAK_DEEPGRAM_REGISTER is empty.
-maybe_apply_deepgram_register() {
-  local key
-  key=$(fm_deepgram_api_key)
-  [ -n "$key" ] || return 0
+# Every desk line gets the longer desk register, whichever speaker plays it: the
+# register owner truncates before playback, so gating this on the sink is what
+# made the same outcome finish through one speaker and stop mid-sentence through
+# the other. Skipped when GLASSES_ANNOUNCE_CONFIG is already set, or when
+# FM_SPEAK_DEEPGRAM_REGISTER is empty and the caller wants the glasses cut.
+apply_desk_register() {
   [ -n "${GLASSES_ANNOUNCE_CONFIG:-}" ] && return 0
-  [ -n "$DEEPGRAM_REGISTER" ] || return 0
-  [ -f "$DEEPGRAM_REGISTER" ] || {
-    note "Deepgram desk register example missing: $DEEPGRAM_REGISTER (continuing with the shaper default)"
+  [ -n "$DESK_REGISTER" ] || return 0
+  [ -f "$DESK_REGISTER" ] || {
+    note "desk register example missing: $DESK_REGISTER (continuing with the shaper default)"
     return 0
   }
-  export GLASSES_ANNOUNCE_CONFIG="$DEEPGRAM_REGISTER"
+  export GLASSES_ANNOUNCE_CONFIG="$DESK_REGISTER"
 }
 
 # --- main -------------------------------------------------------------------
@@ -352,7 +358,7 @@ main() {
     fi
   fi
 
-  maybe_apply_deepgram_register
+  apply_desk_register
 
   outfile=$(mktemp "${TMPDIR:-/tmp}/fm-speak-out.XXXXXX") || die "cannot create a temporary file"
   errfile=$(mktemp "${TMPDIR:-/tmp}/fm-speak-err.XXXXXX") || {

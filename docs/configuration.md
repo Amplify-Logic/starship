@@ -180,13 +180,16 @@ An opt-in, per-home and per-device gate for speaking a captain-facing outcome ou
 It ships inert: with no `enabled = true` line in private gitignored `config/speak`, `bin/fm-speak.sh` makes no sound at all, so cloning this repo, seeding a secondmate home, or adding a device never makes it talk.
 
 This is a sink, not a companion.
-The spoken register - outcome first, two or three short sentences, never a URL, path or id, and never a request for a spoken yes - is owned once by the glasses project's `announce` entry point, which already enforces it for the glasses loop.
+The spoken register - outcome first, a few short sentences inside a bounded spoken length, never a URL, path or id, and never a request for a spoken yes - is owned once by the glasses project's `announce` entry point, which already enforces it for the glasses loop.
 `bin/fm-speak.sh` shapes every line through that owner and refuses to speak when it cannot reach it, because speaking unshaped text would read a URL aloud.
 Reusing that owner is deliberate: a second copy of the register in this repository would drift from the one the glasses already speak.
 The practical consequence is that desk voice-out needs that project's local entry point present, and `FM_SPEAK_SHAPER` can name another one exposing the same `--dry-run <text>` contract.
 
 **Deepgram preference.** When `DEEPGRAM_API_KEY` is set in the environment or this home's gitignored `.env`, `bin/fm-speak.sh` synthesizes through Deepgram Aura (`bin/fm-deepgram-tts.sh`, default model `aura-2-thalia-en`) and plays with `afplay`. macOS `say` remains the fallback when the key is absent or Deepgram fails. The key is never logged.
-When Deepgram is the intended sink, the script also points the glasses register owner at [`docs/examples/desk-speak-register.toml`](examples/desk-speak-register.toml) via `GLASSES_ANNOUNCE_CONFIG` (unless already set), raising the spoken budget from ~8s to **30 seconds** while keeping the same URL/path/id and decision refusals. Override with `FM_SPEAK_DEEPGRAM_REGISTER`, or keep the short cut with `FM_SPEAK_DEEPGRAM_REGISTER=` (empty).
+**Desk spoken bound.** The register owner truncates before playback and its own default budget is the ~8s one tuned for the glasses, which cuts an ordinary desk outcome mid-message.
+So `bin/fm-speak.sh` points that owner at [`docs/examples/desk-speak-register.toml`](examples/desk-speak-register.toml) via `GLASSES_ANNOUNCE_CONFIG` (unless already set) for every desk line, raising the spoken budget to **30 seconds** while keeping the same URL/path/id and decision refusals.
+The bound belongs to the desk, not to the speaker, so it is the same for Deepgram Aura and for the `say` fallback.
+Override with `FM_SPEAK_DEEPGRAM_REGISTER`, or keep the short glasses cut with `FM_SPEAK_DEEPGRAM_REGISTER=` (empty); the variable keeps its historical name because it is the published opt-out.
 
 Because the register owner refuses text that asks the captain to decide, a merge, a spend, an outward action, or any other approval structurally cannot be put to him by voice; those stay in the reply he reads.
 Nothing here observes audio, so a successful call means the shaped line was handed to the speaker, never that it was produced or heard.

@@ -17,8 +17,10 @@ set -u
 # shellcheck disable=SC1091
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
-# Ambient Deepgram keys must not divert these say-path fixtures.
+# Ambient Deepgram keys must not divert these say-path fixtures, and an ambient
+# register choice would silently replace the one each case is asserting on.
 unset DEEPGRAM_API_KEY || true
+unset GLASSES_ANNOUNCE_CONFIG || true
 export FM_DEEPGRAM_ENV_FILE=/dev/null
 
 SPEAK="$ROOT/bin/fm-speak.sh"
@@ -96,6 +98,62 @@ speak() {  # <home> <args...>
     FM_SPEAK_TIMEOUT="${SPEAKER_TIMEOUT:-60}" "$SPEAK" "$@"
 }
 
+# A register owner that also enforces a spoken budget, the way the real one does:
+# it reads GLASSES_ANNOUNCE_CONFIG and cuts the line to seconds x words_per_second
+# words BEFORE returning it, which is where a desk line actually loses its
+# ending - nothing downstream of this ever sees the missing words. The fallback
+# numbers are the glasses announce defaults, so a case that asserts the full line
+# survived is asserting that fm-speak chose the desk register, not that this
+# stand-in is lenient.
+install_register_shaper() {  # <home>
+  local home=$1
+  cat > "$home/shaper" <<'EOF'
+#!/usr/bin/env bash
+# argv is: --dry-run <text>
+shift
+seconds=8
+wps=2.6
+if [ -n "${GLASSES_ANNOUNCE_CONFIG:-}" ] && [ -f "${GLASSES_ANNOUNCE_CONFIG:-}" ]; then
+  value=$(sed -n 's/^[[:space:]]*max_spoken_seconds[[:space:]]*=[[:space:]]*//p' \
+    "$GLASSES_ANNOUNCE_CONFIG" | head -1)
+  [ -z "$value" ] || seconds=$value
+  value=$(sed -n 's/^[[:space:]]*words_per_second[[:space:]]*=[[:space:]]*//p' \
+    "$GLASSES_ANNOUNCE_CONFIG" | head -1)
+  [ -z "$value" ] || wps=$value
+fi
+printf '%s\n' "$*" | awk -v s="$seconds" -v w="$wps" '
+  NR == 1 {
+    n = int(s * w)
+    if (n < 1 || NF <= n) { print; next }
+    out = $1
+    for (i = 2; i <= n; i++) out = out " " $i
+    print out
+    print "announce note: truncated to the spoken register" > "/dev/stderr"
+  }
+'
+EOF
+  chmod +x "$home/shaper"
+}
+
+# The desk budget is chosen from the environment before the register owner runs,
+# so a case that drives it has to set that environment on the call itself: a
+# `VAR=value func` assignment survives a bash function return and would leak the
+# case's register choice into every case after it.
+speak_env() {  # <home> <name=value> <args...>
+  local home=$1 assignment=$2
+  shift 2
+  env "$assignment" \
+    FM_HOME="$home" FM_SPEAK_SHAPER="$home/shaper" FM_SPEAK_SAY="$home/speaker" \
+    FM_SPEAK_SHAPER_TIMEOUT="${SHAPER_TIMEOUT:-15}" \
+    FM_SPEAK_TIMEOUT="${SPEAKER_TIMEOUT:-60}" "$SPEAK" "$@"
+}
+
+# Long enough to be cut by the glasses budget (8s x 2.6 wps = 20 words) and
+# short enough to survive the desk one (30s x 2.6 wps = 78 words). It is an
+# ordinary three-sentence outcome, which is the point: this is not an unusually
+# long line, it is the shape of the lines the captain was losing the end of.
+LONG_OUTCOME="The finances fix is on the branch and the checks came back green on the first run. The review found nothing to change. The pull request is waiting for your word before anything lands."
+
 # A register owner that never answers, for the bound cases.
 install_hung_shaper() {  # <home>
   printf '#!/usr/bin/env bash\nexec sleep 120\n' > "$1/shaper"
@@ -149,6 +207,64 @@ assert_stayed_silent() {  # <log> <msg>
 
 # A clone or a new device must never start talking on its own: opt-in is the
 # whole reason this can ship to every home without any of them making a sound.
+# The bug this repays: desk speech was left on the glasses budget whenever the
+# Deepgram key was not detected, so the same outcome finished through one sink
+# and stopped mid-sentence through the other. The desk budget belongs to the
+# desk, so it applies with no key present at all.
+test_a_desk_line_is_not_cut_by_the_glasses_budget() {
+  local home out spoken
+  home=$(new_home desk-budget "enabled = true")
+  install_register_shaper "$home"
+  install_speaker "$home" >/dev/null
+
+  out=$(speak "$home" "$LONG_OUTCOME" 2>&1) || fail "speak failed: $out"
+  wait_for_spoken "$home/spoken.log" "the shaped line never reached the speaker"
+  spoken=$(cat "$home/spoken.log")
+  assert_contains "$spoken" "before anything lands." "the line must reach the speaker whole"
+  case "$out" in
+    *truncated*) fail "the desk register must not truncate this line: $out" ;;
+  esac
+  pass "fm-speak: a multi-sentence desk line keeps its ending with no Deepgram key present"
+}
+
+# The published opt-out for anyone who wants the short glasses cut at the desk.
+test_an_empty_register_override_restores_the_glasses_cut() {
+  local home out spoken
+  home=$(new_home desk-budget-optout "enabled = true")
+  install_register_shaper "$home"
+  install_speaker "$home" >/dev/null
+
+  out=$(speak_env "$home" FM_SPEAK_DEEPGRAM_REGISTER= "$LONG_OUTCOME" 2>&1) \
+    || fail "speak failed: $out"
+  wait_for_spoken "$home/spoken.log" "the shaped line never reached the speaker"
+  spoken=$(cat "$home/spoken.log")
+  assert_contains "$out" "truncated" "the opt-out must still report the cut"
+  case "$spoken" in
+    *"anything lands"*) fail "the opt-out must keep the glasses cut: $spoken" ;;
+  esac
+  pass "fm-speak: an empty register override restores the glasses cut"
+}
+
+# A caller that has already chosen a register owns that choice: the desk default
+# is a default, not an override.
+test_an_already_chosen_register_is_never_replaced() {
+  local home out spoken
+  home=$(new_home desk-budget-preset "enabled = true")
+  install_register_shaper "$home"
+  install_speaker "$home" >/dev/null
+  printf '[register]\nmax_spoken_seconds = 4\nwords_per_second = 2.6\n' > "$home/own-register.toml"
+
+  out=$(speak_env "$home" GLASSES_ANNOUNCE_CONFIG="$home/own-register.toml" "$LONG_OUTCOME" 2>&1) \
+    || fail "speak failed: $out"
+  wait_for_spoken "$home/spoken.log" "the shaped line never reached the speaker"
+  spoken=$(cat "$home/spoken.log")
+  assert_contains "$spoken" "and the checks" "the caller's own budget must be the one applied"
+  case "$spoken" in
+    *green*) fail "the caller's own 4s budget was not applied: $spoken" ;;
+  esac
+  pass "fm-speak: a register the caller already chose is never replaced by the desk default"
+}
+
 test_a_home_that_never_opted_in_stays_silent() {
   local home out code
   home=$(new_home not-opted-in)
@@ -566,3 +682,6 @@ test_a_non_boolean_enabled_is_refused
 test_a_symlinked_config_is_refused
 test_blank_text_is_refused_before_anything_is_shaped
 test_no_temporary_files_are_left_behind
+test_a_desk_line_is_not_cut_by_the_glasses_budget
+test_an_empty_register_override_restores_the_glasses_cut
+test_an_already_chosen_register_is_never_replaced

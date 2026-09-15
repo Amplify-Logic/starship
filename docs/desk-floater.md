@@ -63,19 +63,23 @@ Drain prints each transcript as plain text (or `--print` for JSON) and moves
 the file to `processed/`. Treat the drained text as captain input in the
 primary conversation. Do not paste blindly into random terminals.
 
-## Deepgram speak-out bound
+## Desk speak-out bound
 
-When Deepgram is the preferred sink, `bin/fm-speak.sh` points the glasses
-spoken-register owner at
+The register owner truncates the shaped line before any speaker sees it, and
+its own default budget is the ~8s one tuned for the glasses, which cuts an
+ordinary two- or three-sentence desk outcome mid-message.
+So `bin/fm-speak.sh` points that owner at
 [`docs/examples/desk-speak-register.toml`](examples/desk-speak-register.toml)
-(via `GLASSES_ANNOUNCE_CONFIG`, unless already set). That example keeps the
-same URL/path/id and decision refusals but raises the spoken budget to
-**30 seconds** (about 78 words at 2.6 wps). macOS `say` remains the fallback
-when the key is absent or Deepgram fails; without Deepgram the register stays
-on the glasses ~8s default.
+(via `GLASSES_ANNOUNCE_CONFIG`, unless already set) for every desk line.
+That example keeps the same URL/path/id and decision refusals but raises the
+spoken budget to **30 seconds** (about 78 words at 2.6 wps).
+The budget belongs to the desk rather than to the speaker, so it is the same
+whether Deepgram Aura or the macOS `say` fallback plays the line.
 
 Override the example path with `FM_SPEAK_DEEPGRAM_REGISTER`, or keep the short
-cut by exporting `FM_SPEAK_DEEPGRAM_REGISTER=` (empty).
+glasses cut by exporting `FM_SPEAK_DEEPGRAM_REGISTER=` (empty).
+The variable keeps its historical name because it is the published opt-out; it
+has never been a Deepgram gate.
 
 TTS model default: `aura-2-thalia-en` (`DEEPGRAM_TTS_MODEL`).
 STT model default: `nova-2` (`DEEPGRAM_STT_MODEL`).

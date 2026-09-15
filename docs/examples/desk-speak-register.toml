@@ -1,13 +1,14 @@
-# Longer spoken-register budget for desk Deepgram TTS.
+# Longer spoken-register budget for desk speech.
 #
 # Same safety floor as the glasses announce defaults (strip URLs/paths/ids,
-# refuse decision-seeking lines). The spoken time budget is raised from ~8s
-# (comfortable for macOS `say`) to 30s because Deepgram Aura is the preferred
-# desk sink when DEEPGRAM_API_KEY is set.
+# refuse decision-seeking lines). The spoken time budget is raised from ~8s,
+# which is tuned for the glasses and cuts an ordinary desk outcome mid-message,
+# to 30s.
 #
-# fm-speak.sh exports GLASSES_ANNOUNCE_CONFIG to this file when Deepgram is
-# available, unless that variable is already set or FM_SPEAK_DEEPGRAM_REGISTER
-# is empty. Copy/adapt under a private path if you want a different budget.
+# fm-speak.sh exports GLASSES_ANNOUNCE_CONFIG to this file for every desk line,
+# whether Deepgram Aura or macOS `say` ends up playing it, unless that variable
+# is already set or FM_SPEAK_DEEPGRAM_REGISTER is empty. Copy/adapt under a
+# private path if you want a different budget.
 
 [register]
 max_spoken_seconds = 30
