@@ -41,6 +41,13 @@
 #                 Accepted tokens: low, medium, high, xhigh. max is refused,
 #                 and that refusal is retained pending the separate follow-up
 #                 astra-max-effort.
+#                 Adds -c model_context_window=<N> when local gitignored
+#                 config/astra-context selects a window. When
+#                 config/astra-compact-at sets a compaction point, that value
+#                 REPLACES the 500k default above; only one limit is ever
+#                 passed. Both files are absent by default, and with both
+#                 absent the launch is exactly the line shown above.
+#                 docs/configuration.md owns both schemas.
 #   opencode      OPENCODE_CONFIG_CONTENT={"permission":{"*":"allow"}}
 #                 opencode
 #   grok          grok --permission-mode bypassPermissions
@@ -322,6 +329,78 @@ visible_role() {
   fi
 }
 
+# chrome_role: the same identity as visible_role, compressed to a marker that
+# fits a border title alongside every canonical status field. The role is never
+# dropped - it leads the row, so it is the one part a clip cannot reach - and a
+# lab primary stays visibly a lab, which is a safety property rather than
+# decoration.
+chrome_role() {
+  if [ -n "${VISIBLE_PREFIX:-}" ]; then
+    printf '%s' "$VISIBLE_PREFIX"
+  else
+    printf 'FM'
+  fi
+}
+
+# Chrome mode's capability gate, local to this launcher on purpose.
+#
+# The protocol floor is only a CHEAP PRE-FILTER. Protocol 16 attests the
+# managed presentation surfaces the adapter uses - workspace/pane
+# report-metadata, hidden tokens, workspace/tab rename - and nothing more; the
+# three surfaces chrome mode actually depends on (report-metadata --ttl-ms,
+# pane get's resolved title, pane layout) are not covered by it, and the same
+# protocol number also matches older herdr builds. Passing the pre-filter
+# therefore proves nothing on its own.
+#
+# So the verdict is positive evidence, taken against the real pane, and nothing
+# is hidden until every part of it succeeds: the row is published, read back,
+# and required to match byte for byte, and the layout is required to return a
+# parseable pane count. Any failure leaves the companion visible with its
+# in-pane row as the only surface, which is exactly the pre-chrome behavior.
+FM_PRIMARY_HERDR_MIN_PRESENTATION_PROTOCOL=16
+FM_PRIMARY_CHROME_SOURCE=firstmate-primary-status-v1
+
+herdr_chrome_protocol_ok() {  # <session>
+  local protocol
+  protocol=$(herdr --session "$1" status --json 2>/dev/null \
+    | jq -r '.client.protocol // empty' 2>/dev/null)
+  case "$protocol" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$protocol" -ge "$FM_PRIMARY_HERDR_MIN_PRESENTATION_PROTOCOL" ]
+}
+
+# herdr_chrome_pane_count: the tab's pane count, or empty when `pane layout`
+# is missing, fails, or answers in a shape this launcher cannot read. Empty is
+# a capability failure, not a count of zero.
+herdr_chrome_pane_count() {  # <session> <pane>
+  local panes
+  panes=$(herdr --session "$1" pane layout --pane "$2" 2>/dev/null \
+    | jq -r '.result.layout.panes | length' 2>/dev/null)
+  case "$panes" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  printf '%s' "$panes"
+}
+
+# herdr_chrome_capable: publish, read back, and require an exact match.
+#
+# The probe row is the role marker the real row leads with, published under
+# chrome mode's own source with a short ttl, so a probe that is never followed
+# by a renderer expires on its own instead of freezing on the border. The
+# renderer replaces it within one refresh. Nothing else publishes a title
+# between these two calls: mark_current_surface has already run, and the
+# companion has not started yet.
+herdr_chrome_capable() {  # <session> <pane> <probe row>
+  local session=$1 pane=$2 probe=$3 stored
+  herdr --session "$session" pane report-metadata "$pane" \
+    --source "$FM_PRIMARY_CHROME_SOURCE" \
+    --title "$probe" \
+    --ttl-ms 5000 >/dev/null 2>&1 || return 1
+  stored=$(herdr --session "$session" pane get "$pane" 2>/dev/null \
+    | jq -r '.result.pane.title // empty' 2>/dev/null)
+  [ "$stored" = "$probe" ] || return 1
+  herdr_chrome_pane_count "$session" "$pane" >/dev/null
+}
+
 # Resolve Claude primary effort from local config/primary-effort.
 # An absent file defaults to xhigh. A present file must have a first line that
 # trims to exactly one accepted token; anything else, including an empty token,
@@ -369,6 +448,98 @@ resolve_astra_effort() {
     low|medium|high|xhigh) ASTRA_EFFORT=$value ;;
     *) die "invalid effort in $file: '$value' (accepted: low medium high xhigh)" ;;
   esac
+}
+
+# Resolve the Astra launch context window from local config/astra-context.
+#
+# Astra ships with a default window well below what this Codex installation can
+# actually grant it, and the larger window is only ever reached by asking for it
+# at launch. This resolver is how that ask becomes persistent and repeatable
+# instead of a private profile that only exists on one machine.
+#
+# An absent file changes nothing: no override is passed and Codex uses its own
+# catalog default, exactly as before this setting existed.
+# A present file's first line must trim to either `max` or a positive integer.
+#   max        -> the installed catalog's own max_context_window for the model
+#   <integer>  -> that exact window
+# Either way the value is checked against the installed catalog's ceiling and a
+# request above it REFUSES. The point of the setting is to reach the window this
+# installation actually supports; silently clamping a too-large number, or
+# passing one through, would both end in a launcher that claims a window the
+# provider never granted.
+# An unreadable or malformed catalog refuses `max` rather than inventing a
+# number, and refuses to validate an explicit one it cannot check.
+resolve_astra_context() {
+  local file value ceiling
+  ASTRA_CONTEXT_WINDOW=
+  file="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}/astra-context"
+  [ -f "$file" ] || return 0
+  IFS= read -r value < "$file" || true
+  value=${value#"${value%%[![:space:]]*}"}
+  value=${value%"${value##*[![:space:]]}"}
+  case "$value" in
+    ''|0|*[!0-9]*)
+      [ "$value" = max ] \
+        || die "invalid context window in $file: '$value' (accepted: max, or a positive integer)"
+      ;;
+  esac
+  ceiling=$(astra_catalog_max_context_window) \
+    || die "cannot read max_context_window for gpt-6-astra from the installed Codex model catalog, so $file cannot be honoured safely"
+  if [ "$value" = max ]; then
+    ASTRA_CONTEXT_WINDOW=$ceiling
+  else
+    [ "$value" -le "$ceiling" ] \
+      || die "context window $value in $file exceeds what this Codex installation grants gpt-6-astra ($ceiling); lower it or use 'max'"
+    ASTRA_CONTEXT_WINDOW=$value
+  fi
+}
+
+# The installed catalog's max_context_window for gpt-6-astra, or failure.
+# models_cache.json is Codex's own cache of what the provider currently grants
+# this installation, so it - not a remembered number and not the API model
+# page - is what decides the ceiling. The API maximum for a model and the window
+# a subscription CLI will actually open are different quantities.
+astra_catalog_max_context_window() {
+  local catalog value
+  catalog="${CODEX_HOME:-$HOME/.codex}/models_cache.json"
+  [ -f "$catalog" ] || return 1
+  command -v jq >/dev/null 2>&1 || return 1
+  value=$(jq -r '
+    [.models[]? | select(.slug == "gpt-6-astra") | .max_context_window]
+    | map(select(type == "number")) | first // empty
+  ' "$catalog" 2>/dev/null) || return 1
+  case "$value" in
+    ''|0|*[!0-9]*) return 1 ;;
+  esac
+  printf '%s' "$value"
+}
+
+# Resolve the Astra auto-compaction point from local config/astra-compact-at.
+#
+# Raising the window without moving this leaves Codex compacting where it always
+# did, so the extra room goes unused. The right value is an operational headroom
+# choice - how much of the window to spend before summarising - and nothing in
+# the catalog or the provider documentation prescribes one. So the launcher
+# never derives it: absent means no override at all, and the captain writes the
+# number they want.
+# A present value must be a positive integer strictly below the resolved window,
+# and it is only meaningful alongside one.
+resolve_astra_compact_at() {
+  local file value
+  ASTRA_COMPACT_AT=
+  file="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}/astra-compact-at"
+  [ -f "$file" ] || return 0
+  IFS= read -r value < "$file" || true
+  value=${value#"${value%%[![:space:]]*}"}
+  value=${value%"${value##*[![:space:]]}"}
+  case "$value" in
+    ''|0|*[!0-9]*) die "invalid compaction point in $file: '$value' (accepted: a positive integer)" ;;
+  esac
+  [ -n "$ASTRA_CONTEXT_WINDOW" ] \
+    || die "$file sets a compaction point but config/astra-context selects no window; set the window first"
+  [ "$value" -lt "$ASTRA_CONTEXT_WINDOW" ] \
+    || die "compaction point $value in $file is not below the selected context window $ASTRA_CONTEXT_WINDOW"
+  ASTRA_COMPACT_AT=$value
 }
 
 # Map a profile onto the vendor whose named accounts it can be pinned to.
@@ -502,13 +673,24 @@ EOF
   fi
 
   if [ -n "${HERDR_PANE_ID:-}" ] && command -v herdr >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
-    local session companion split_out
+    local session companion split_out panes chrome=0 zoomed=0
     session=${HERDR_SESSION:-default}
     # The companion follows the session it was launched from; a pane's
     # environment does not carry HERDR_SESSION, so re-deriving it inside the new
     # pane would silently fall back to 'default' and never resolve the primary.
     envs="$envs FM_STATUS_HERDR_SESSION=$(shell_quote "$session")"
     command="exec env $envs $command --follow-pane $(shell_quote "$HERDR_PANE_ID") --follow-backend herdr"
+    # Chrome mode: publish the canonical row onto the PRIMARY pane's own border
+    # title, which costs no rows, so the companion can be hidden by zoom and the
+    # captain gets its rows back. Measured on herdr 0.7.4: a pane with no split
+    # has no border at all, so the companion pane must keep existing for the
+    # border to exist - hiding it by zoom is the reclaim, not closing it.
+    # The in-pane row keeps being drawn as the fallback, so a home whose Herdr
+    # cannot carry the border row behaves exactly as it did before.
+    #
+    # Only the cheap protocol pre-filter can run here: the real evidence needs
+    # a border, and a border needs the split that has not happened yet.
+    herdr_chrome_protocol_ok "$session" && chrome=1
     # Herdr's split ratio is the share the ORIGINAL pane keeps, so the agent
     # pane needs the large share and the companion takes the remainder. Herdr
     # clamps that share to 0.9, so the companion floor is a TENTH OF THE TAB,
@@ -536,7 +718,43 @@ EOF
       printf 'fm-primary: herdr split the pane but did not name it, so no pane can be safely closed; the primary is sharing its tab with an empty pane\n' >&2
       return 0
     fi
+    # The border now exists, so chrome mode's verdict can be EVIDENCE rather
+    # than an inference from a protocol number: the row is published, read
+    # back, and required to match, and the layout is required to answer with a
+    # pane count. Only then is anything hidden. A failure at any step leaves
+    # the companion visible and its in-pane row as the only surface, which is
+    # the behavior that shipped before chrome mode.
+    if [ "$chrome" = 1 ] && herdr_chrome_capable "$session" "$HERDR_PANE_ID" "$(chrome_role)"; then
+      command="$command --chrome-pane $(shell_quote "$HERDR_PANE_ID")"
+      command="$command --chrome-role $(shell_quote "$(chrome_role)")"
+
+      # Zoom is applied exactly once, here, and only when this tab holds
+      # nothing but the primary and the companion just created - zooming a
+      # crowded tab would hide a co-tenant pane's live work. The renderer never
+      # re-applies it: it only releases this zoom if a third pane shows up
+      # later, so a captain who deliberately unzooms is not fought once a
+      # second.
+      #
+      # A refused zoom is not a failure. The companion keeps rendering its own
+      # row, which is the surface that shipped before chrome mode, so the only
+      # consequence is that the empty rows are not reclaimed.
+      panes=$(herdr_chrome_pane_count "$session" "$HERDR_PANE_ID") || panes=
+      if [ "$panes" = 2 ]; then
+        if herdr --session "$session" pane zoom "$HERDR_PANE_ID" --on >/dev/null 2>&1; then
+          zoomed=1
+          # The renderer releases only a zoom it is told this launcher applied,
+          # so it can never turn off a zoom that belongs to someone else.
+          command="$command --chrome-zoomed"
+        else
+          printf 'fm-primary: could not hide the status companion, so its rows stay visible; the status row itself is unaffected\n' >&2
+        fi
+      fi
+    fi
+
     herdr --session "$session" pane run "$companion" "$command" >/dev/null 2>&1 || {
+      # The zoom belongs to this launcher, so this launcher gives it back
+      # before the pane it was taken for goes away.
+      [ "$zoomed" = 0 ] || herdr --session "$session" pane zoom "$HERDR_PANE_ID" --off >/dev/null 2>&1
       if herdr --session "$session" pane close "$companion" >/dev/null 2>&1; then
         printf 'fm-primary: the status companion could not start; closed its pane %s and continued with the native TUI\n' \
           "$companion" >&2
@@ -544,6 +762,7 @@ EOF
         printf 'fm-primary: the status companion could not start and its pane %s could not be closed; the primary is sharing its tab with an empty pane\n' \
           "$companion" >&2
       fi
+      return 0
     }
     return 0
   fi
@@ -846,8 +1065,22 @@ case "$PROFILE" in
     ;;
   astra)
     resolve_astra_effort
-    argv=(codex --model gpt-6-astra -c "model_reasoning_effort=\"$ASTRA_EFFORT\"" --dangerously-bypass-hook-trust --dangerously-bypass-approvals-and-sandbox -c model_auto_compact_token_limit=500000)
+    resolve_astra_context
+    resolve_astra_compact_at
+    argv=(codex --model gpt-6-astra -c "model_reasoning_effort=\"$ASTRA_EFFORT\"" --dangerously-bypass-hook-trust --dangerously-bypass-approvals-and-sandbox)
+    [ -z "$ASTRA_CONTEXT_WINDOW" ] \
+      || argv+=(-c "model_context_window=$ASTRA_CONTEXT_WINDOW")
+    # The 500k cap is the default compaction point for every launch. A window
+    # selected through config/astra-context is only useful with a compaction
+    # point inside it, so config/astra-compact-at REPLACES the cap rather than
+    # adding a second limit: exactly one value is ever passed.
+    argv+=(-c "model_auto_compact_token_limit=${ASTRA_COMPACT_AT:-500000}")
     printf 'fm-primary: launching model gpt-6-astra at effort %s\n' "$ASTRA_EFFORT" >&2
+    if [ -n "$ASTRA_CONTEXT_WINDOW" ]; then
+      printf 'fm-primary: requesting context window %s%s (verify the first token_count model_context_window in the new session)\n' \
+        "$ASTRA_CONTEXT_WINDOW" \
+        "${ASTRA_COMPACT_AT:+, compacting at $ASTRA_COMPACT_AT}" >&2
+    fi
     ;;
   opencode)
     argv=(opencode)

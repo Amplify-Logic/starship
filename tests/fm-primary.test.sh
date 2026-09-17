@@ -368,6 +368,165 @@ SH
   pass "fm-primary: the tmux companion command the launcher builds actually renders"
 }
 
+test_herdr_chrome_hides_the_companion_only_on_an_uncrowded_tab() {
+  local calls="$TMP_ROOT/chrome-calls" cmd="$TMP_ROOT/chrome-cmd" title="$TMP_ROOT/chrome-title"
+  # make_cli replaces the shared fake, so it is written fresh before each launch.
+  write_chrome_herdr_fake() {
+    cat > "$FAKEBIN/herdr" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$FM_PRIMARY_TEST_CHROME_CALLS"
+if [ "${1:-}" = --session ]; then
+  shift 2
+fi
+case "${1:-} ${2:-}" in
+  "status --json")
+    printf '{"client":{"protocol":%s}}\n' "${FM_PRIMARY_TEST_CHROME_PROTOCOL:-16}"
+    exit 0
+    ;;
+esac
+[ "${1:-}" = pane ] || exit 0
+shift
+case "${1:-}" in
+  split) printf '{"result":{"pane":{"pane_id":"w1:p2"}}}\n' ;;
+  run) printf '%s\n' "$3" >> "$FM_PRIMARY_TEST_CHROME_CMD" ;;
+  layout)
+    [ "${FM_PRIMARY_TEST_CHROME_LAYOUT:-ok}" = ok ] || exit 1
+    printf '{"result":{"layout":{"panes":%s}}}\n' "$FM_PRIMARY_TEST_CHROME_PANES"
+    ;;
+  report-metadata)
+    # Record what the capability probe published, so `pane get` can answer with
+    # the stored title a real server would resolve for that pane.
+    while [ "$#" -gt 1 ]; do
+      if [ "$1" = --title ]; then
+        printf '%s' "$2" > "$FM_PRIMARY_TEST_CHROME_TITLE"
+        break
+      fi
+      shift
+    done
+    ;;
+  get)
+    stored=
+    [ ! -f "$FM_PRIMARY_TEST_CHROME_TITLE" ] || stored=$(<"$FM_PRIMARY_TEST_CHROME_TITLE")
+    case "${FM_PRIMARY_TEST_CHROME_READBACK:-match}" in
+      mismatch) stored="a-different-title" ;;
+      absent) stored= ;;
+    esac
+    printf '{"result":{"pane":{"pane_id":"w1:p1","title":"%s"}}}\n' "$stored"
+    ;;
+  zoom) ;;
+esac
+exit 0
+SH
+    chmod +x "$FAKEBIN/herdr"
+  }
+
+  launch_chrome_primary() {  # <panes json> [extra env assignments...]
+    write_chrome_herdr_fake
+    : > "$calls"; : > "$cmd"; rm -f "$title"
+    local panes=$1
+    shift
+    env -u HERDR_ENV -u TMUX_PANE \
+      PATH="$FAKEBIN:$PATH" TERM=dumb FM_HOME="$HOME_FIX" \
+      FM_PRIMARY_TEST_LOG="$LOG" \
+      FM_PRIMARY_TEST_CHROME_CALLS="$calls" \
+      FM_PRIMARY_TEST_CHROME_CMD="$cmd" \
+      FM_PRIMARY_TEST_CHROME_TITLE="$title" \
+      FM_PRIMARY_TEST_CHROME_PANES="$panes" \
+      HERDR_SESSION=fm-lab-status HERDR_PANE_ID=w1:p1 \
+      "$@" \
+      "$ROOT/bin/fm-primary.sh" codex
+    make_cli herdr
+  }
+
+  # An uncrowded tab: the primary and the companion just created, nothing else.
+  launch_chrome_primary '[{"pane_id":"w1:p1"},{"pane_id":"w1:p2"}]'
+
+  # Nothing is hidden on a protocol number alone: the launcher publishes the row
+  # to the primary's own border under chrome mode's source, with an expiry, and
+  # reads it back before it trusts any of it.
+  assert_contains "$(cat "$calls")" 'pane report-metadata w1:p1' \
+    "the launcher never published a probe row, so it hid the companion on no evidence"
+  assert_contains "$(cat "$calls")" '--source firstmate-primary-status-v1' \
+    "the probe row must use chrome mode's own source, never the launcher's supervision record"
+  assert_contains "$(cat "$calls")" '--ttl-ms' \
+    "a probe row with no expiry would freeze on the border if no renderer followed it"
+  assert_contains "$(cat "$calls")" 'pane get w1:p1' \
+    "the launcher never read the published row back, so the store was never proven"
+
+  assert_contains "$(cat "$cmd")" "--chrome-pane 'w1:p1'" \
+    "the launcher did not hand the companion the primary pane to decorate"
+  assert_contains "$(cat "$cmd")" "--chrome-role 'FM'" \
+    "the launcher did not hand the companion a visible role marker"
+  assert_contains "$(cat "$calls")" 'pane zoom w1:p1 --on' \
+    "the launcher never hid the companion, so its empty rows are not reclaimed"
+  [ "$(grep -c 'pane zoom' "$calls")" -eq 1 ] \
+    || fail "the launcher must zoom exactly once; repeating it would fight a deliberate unzoom"
+  # The renderer may only release a zoom this launcher actually applied.
+  assert_contains "$(cat "$cmd")" '--chrome-zoomed' \
+    "the launcher hid the companion without telling the renderer it owns that zoom"
+
+  # A crowded tab: something else already shares it, and zooming would hide
+  # that pane's live work, so the rows stay visible instead.
+  launch_chrome_primary '[{"pane_id":"w1:p1"},{"pane_id":"w1:p2"},{"pane_id":"w1:p9"}]'
+
+  assert_not_contains "$(cat "$calls")" 'pane zoom' \
+    "the launcher hid a tab that already had a co-tenant pane, which would hide its live work"
+  assert_contains "$(cat "$cmd")" "--chrome-pane 'w1:p1'" \
+    "the border row must still be published on a crowded tab; only the zoom is withheld"
+  assert_not_contains "$(cat "$cmd")" '--chrome-zoomed' \
+    "the renderer was armed to release a zoom the launcher never applied"
+
+  # A client that answers the protocol pre-filter but does not actually store
+  # the row: the readback disagrees, so nothing is hidden at all and the
+  # in-pane row stays the only surface, exactly as before chrome mode.
+  launch_chrome_primary '[{"pane_id":"w1:p1"},{"pane_id":"w1:p2"}]' \
+    FM_PRIMARY_TEST_CHROME_READBACK=mismatch
+  assert_not_contains "$(cat "$calls")" 'pane zoom' \
+    "the launcher hid the companion even though the border row did not read back"
+  assert_not_contains "$(cat "$cmd")" '--chrome-pane' \
+    "chrome mode stayed on for a client that never stored the published row"
+
+  # Same for a client whose `pane layout` cannot be read: the pane count is the
+  # other surface chrome mode depends on, so an unparseable answer is a refusal.
+  launch_chrome_primary '[{"pane_id":"w1:p1"},{"pane_id":"w1:p2"}]' \
+    FM_PRIMARY_TEST_CHROME_LAYOUT=broken
+  assert_not_contains "$(cat "$calls")" 'pane zoom' \
+    "the launcher hid the companion without a readable pane count"
+  assert_not_contains "$(cat "$cmd")" '--chrome-pane' \
+    "chrome mode stayed on for a client whose pane layout could not be read"
+
+  # Below the protocol pre-filter nothing is even probed.
+  launch_chrome_primary '[{"pane_id":"w1:p1"},{"pane_id":"w1:p2"}]' \
+    FM_PRIMARY_TEST_CHROME_PROTOCOL=15
+  assert_not_contains "$(cat "$calls")" 'pane report-metadata' \
+    "the launcher probed a client below the presentation protocol floor"
+  assert_not_contains "$(cat "$cmd")" '--chrome-pane' \
+    "chrome mode stayed on below the presentation protocol floor"
+  assert_contains "$(cat "$cmd")" '--follow-pane' \
+    "the companion must still render its in-pane row when chrome mode is off"
+
+  rm -f "$FAKEBIN/herdr"
+  pass "fm-primary: the companion is hidden only on proven capability and an uncrowded tab, and the zoom is applied once"
+}
+
+test_herdr_launcher_keeps_its_own_fm_root() {
+  # The launcher derives FM_ROOT from its own symlink-resolved script path and
+  # then uses it for the tracked-integration checks, the status-bar path it
+  # execs, the companion split's --cwd, and the cd before launching the agent.
+  # A sourced library that re-derives FM_ROOT from FM_ROOT_OVERRIDE would
+  # silently repoint every one of those at another tree.
+  local out
+  out=$(env -u HERDR_ENV -u TMUX_PANE -u HERDR_PANE_ID \
+    PATH="$FAKEBIN:$PATH" TERM=dumb FM_HOME="$HOME_FIX" \
+    FM_ROOT_OVERRIDE=/tmp/not-the-tracked-root \
+    FM_PRIMARY_TEST_LOG="$LOG" \
+    "$ROOT/bin/fm-primary.sh" codex 2>&1)
+
+  assert_not_contains "$out" '/tmp/not-the-tracked-root' \
+    "an ambient FM_ROOT_OVERRIDE displaced the launcher's own resolved root"
+  pass "fm-primary: the launcher's own FM_ROOT survives an ambient FM_ROOT_OVERRIDE"
+}
+
 test_herdr_companion_command_renders_in_the_pane_the_split_created() {
   local out="$TMP_ROOT/herdr-companion-out"
   : > "$out"
@@ -860,6 +1019,110 @@ test_claude_effort() {
 
   rm -f "$effort_file"
   pass "fm-primary: Claude effort applies to Fable and Opus and refuses invalid tokens"
+}
+
+# The extended Astra context window. The captain's installation grants Astra far
+# more context than its catalog default, but only if the launch asks; this is
+# that ask, made persistent and checked against what the installation actually
+# offers rather than against a remembered number or an API model page.
+test_astra_context_window_is_selectable_and_bounded_by_the_catalog() {
+  local out status=0 codex_home="$TMP_ROOT/astra-codex-home"
+  local ctx_file="$HOME_FIX/config/astra-context"
+  local compact_file="$HOME_FIX/config/astra-compact-at"
+  mkdir -p "$HOME_FIX/config" "$codex_home"
+  printf 'high\n' > "$HOME_FIX/config/astra-effort"
+  cat > "$codex_home/models_cache.json" <<'JSON'
+{"models":[{"slug":"gpt-6-astra","context_window":272000,"max_context_window":872000,
+"effective_context_window_percent":95},{"slug":"gpt-5.5","max_context_window":400000}]}
+JSON
+
+  astra_dry() {
+    ( cd "$TMP_ROOT" && \
+      env -u CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP \
+      PATH="$FAKEBIN:$PATH" \
+      FM_HOME="$HOME_FIX" \
+      FM_PRIMARY_DRY_RUN=1 \
+      FM_PRIMARY_TEST_LOG="$LOG" \
+      CODEX_HOME="$codex_home" \
+      "$ROOT/bin/fm-primary.sh" astra )
+  }
+
+  # Absent is a complete no-op: exactly the launch that shipped before.
+  rm -f "$ctx_file" "$compact_file"
+  out=$(astra_dry 2>&1)
+  assert_not_contains "$out" 'model_context_window' \
+    "an absent config/astra-context still changed the launch"
+  assert_contains "$out" 'model_reasoning_effort="high"' \
+    "an absent config/astra-context disturbed the resolved effort"
+
+  # max resolves to the installation's own ceiling, never to a remembered number.
+  printf 'max\n' > "$ctx_file"
+  out=$(astra_dry 2>&1)
+  assert_contains "$out" "'-c' 'model_context_window=872000'" \
+    "config/astra-context max did not resolve to the catalog ceiling"
+  assert_contains "$out" 'requesting context window 872000' \
+    "the resolved window was not reported for verification after launch"
+  assert_contains "$out" "'-c' 'model_auto_compact_token_limit=500000'" \
+    "selecting a window without config/astra-compact-at moved the 500k default"
+
+  # An explicit window at or below the ceiling is honoured verbatim.
+  printf '  400000  \n' > "$ctx_file"
+  out=$(astra_dry 2>&1)
+  assert_contains "$out" "'-c' 'model_context_window=400000'" \
+    "a padded explicit window was not trimmed and honoured"
+
+  # Above the ceiling REFUSES. Passing it through, or silently clamping it, would
+  # both leave the launcher asserting a window the provider never granted.
+  printf '1050000\n' > "$ctx_file"
+  status=0
+  out=$(astra_dry 2>&1) || status=$?
+  [ "$status" -ne 0 ] || fail "a context window above the installed ceiling was accepted"
+  assert_contains "$out" '872000' "the over-ceiling refusal did not name the real ceiling"
+  assert_not_contains "$out" "'-c' 'model_context_window=872000'" \
+    "an over-ceiling window was silently clamped instead of refused"
+
+  # An unreadable catalog refuses rather than guessing a ceiling.
+  printf 'max\n' > "$ctx_file"
+  status=0
+  out=$( ( cd "$TMP_ROOT" && env -u CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP \
+    PATH="$FAKEBIN:$PATH" FM_HOME="$HOME_FIX" FM_PRIMARY_DRY_RUN=1 \
+    FM_PRIMARY_TEST_LOG="$LOG" CODEX_HOME="$TMP_ROOT/no-such-codex-home" \
+    "$ROOT/bin/fm-primary.sh" astra ) 2>&1 ) || status=$?
+  [ "$status" -ne 0 ] || fail "an unreadable model catalog still resolved a context window"
+  assert_not_contains "$out" 'model_context_window=' \
+    "an unreadable catalog produced a context window anyway"
+
+  # A malformed value refuses instead of falling back to the default window.
+  printf 'wide\n' > "$ctx_file"
+  status=0
+  out=$(astra_dry 2>&1) || status=$?
+  [ "$status" -ne 0 ] || fail "a malformed config/astra-context was accepted"
+  assert_contains "$out" "$ctx_file" "the malformed-window refusal did not name the file"
+
+  # The compaction point is the captain's operational choice, never derived.
+  printf 'max\n' > "$ctx_file"
+  printf '750000\n' > "$compact_file"
+  out=$(astra_dry 2>&1)
+  assert_contains "$out" "'-c' 'model_auto_compact_token_limit=750000'" \
+    "an explicit compaction point did not reach the launch"
+  assert_not_contains "$out" 'model_auto_compact_token_limit=500000' \
+    "the explicit compaction point was added alongside the 500k default instead of replacing it"
+
+  printf '900000\n' > "$compact_file"
+  status=0
+  out=$(astra_dry 2>&1) || status=$?
+  [ "$status" -ne 0 ] || fail "a compaction point at or above the window was accepted"
+
+  # A compaction point with no window selected is a misconfiguration, not a hint.
+  rm -f "$ctx_file"
+  printf '750000\n' > "$compact_file"
+  status=0
+  out=$(astra_dry 2>&1) || status=$?
+  [ "$status" -ne 0 ] || fail "a compaction point without a selected window was accepted"
+
+  rm -f "$ctx_file" "$compact_file" "$HOME_FIX/config/astra-effort"
+  unset -f astra_dry
+  pass "fm-primary: the Astra context window is selectable, bounded by the installed catalog, and never invented"
 }
 
 test_astra_primary_profile() {
@@ -1392,6 +1655,7 @@ test_profiles_and_root
 test_context_window_is_capped_at_500k
 test_claude_effort
 test_astra_primary_profile
+test_astra_context_window_is_selectable_and_bounded_by_the_catalog
 test_claude_disables_bg_shell_pressure_reap
 test_account_absent_registry_changes_nothing
 test_account_selection_and_refusals
@@ -1407,6 +1671,8 @@ test_kimi_primary_only_profile
 test_kimi_tmux_companion_status_bar
 test_tmux_companion_command_renders_the_canonical_row
 test_herdr_companion_command_renders_in_the_pane_the_split_created
+test_herdr_chrome_hides_the_companion_only_on_an_uncrowded_tab
+test_herdr_launcher_keeps_its_own_fm_root
 test_herdr_split_outcomes_are_reported_separately
 test_herdr_cleanup_only_ever_closes_the_pane_the_split_named
 test_kimi_version_doctor_and_symlink_refusals

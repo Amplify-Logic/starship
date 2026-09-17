@@ -8,7 +8,7 @@ This file is the single owner of the Firstmate primary status-bar contract.
 After ANSI styling is removed, every renderer uses this field order:
 
 ```text
-⚓ <model>·<effort> [<account-role>] │ 🧠<context-used> ⚡<provider-quota-used> │ 🚢<active> ⏸<paused> ⚠<attention> │ 👁 <supervision> │ $<session-cost> │ 💤<afk>
+⚓ <model>·<effort> [<account-role>] │ 🧠<context-used> ⚡<provider-quota-used> │ 🚢<working> 🧪<validating> ⏸<paused> ⚠<attention> 📋<records> │ 👁 <supervision> │ $<session-cost> │ 💤<afk>
 ```
 
 The separator is one space, a dim `│`, and one space.
@@ -20,13 +20,54 @@ Width-constrained surfaces clip or truncate the canonical line without wrapping 
 | `⚓ model·effort` | The active model and reasoning or thinking effort reported by the orchestrator. | `--` for either unavailable value. |
 | `[account-role]` | A compact role word for the vendor account this primary is running on, attached to the model identity rather than forming its own group. | Omitted entirely when the account is unknown. |
 | `🧠 context` | The integer percentage of the model context window already used. | `--` when the orchestrator does not expose current context use. |
-| `⚡ quota` | The integer percentage of the provider's short-window quota already used. | `--` when the provider or orchestrator does not expose quota. |
-| `🚢 active` | Ordinary task records currently owned by this Firstmate home, excluding persistent second mates. | `0` when no ordinary tasks exist. |
-| `⏸ paused` | Active tasks whose latest non-empty event declares a bounded external wait. | `0` when none are paused. |
-| `⚠ attention` | Active tasks whose latest non-empty event requires action because it is a decision, blocker, or failure. | `0` when none need attention. |
+| `⚡ quota` | The integer percentage of the provider's binding quota window already used, immediately followed by a dim token naming the window or windows that bind it when the adapter knows them. | `--` when the provider or orchestrator does not expose quota, or exposes a figure whose windows cannot all be named. |
+| `🚢 working` | Tasks a live worker is busy on right now. | `--` while the fleet reading is unknown. |
+| `🧪 validating` | Tasks the validation pipeline is carrying. They are progressing, but no worker is typing at them. | `--` while the fleet reading is unknown. |
+| `⏸ paused` | Tasks in a declared bounded external wait. | `--` while the fleet reading is unknown. |
+| `⚠ attention` | Tasks that need Firstmate to act: a decision, a blocker, or a failure. | `--` while the fleet reading is unknown. |
+| `📋 records` | Ordinary task records in this home, excluding persistent second mates. Always exact, and deliberately not a claim about running workers. | `0` when no ordinary tasks exist. |
 | `👁 supervision` | Age in seconds of `state/.last-watcher-beat`. | Bright-red `NO-WATCH --` when the beacon is missing or unreadable. |
 | `$ cost` | Cumulative cost in US dollars for the current orchestrator session, rounded to two decimals. | `$--` when the orchestrator does not expose cost. |
 | `💤 AFK` | Whether the Firstmate home is in away mode. | Dim `💤--` when away mode is off. |
+
+## Fleet fields
+
+A task record outlives its worker, and `AGENTS.md` section 8 defines a status line as a wake EVENT rather than current state.
+Counting `state/*.meta` files as running workers, and folding each status log's last line into paused and attention, therefore reported records as live work in both directions at once: it overstated how much was running and understated how much needed attention.
+
+The four live fields come from `bin/fm-crew-state.sh`, the canonical current-state reader, folded by `bin/fm-fleet-status-lib.sh`.
+That library selects no run and re-implements no attribution; run selection stays with the canonical reader.
+The distinction between `🚢` and `🧪` is the reader's SOURCE, not its state word: `working · run-step` is the pipeline carrying a task, and `working · pane` is a worker busy on one.
+`⚠` covers `parked`, `blocked`, and `failed`, which are the states that need Firstmate rather than time.
+
+The four live fields are a single reading and share a single fate.
+A reading that is missing, incomplete, past its maximum age, malformed, or taken for a different set of tasks renders `--` in all four rather than a number in any.
+They are never reported as zero to stand in for "not read yet", because an idle fleet is a real state the captain has to be able to act on.
+`📋` is independent of all that: it counts records directly, so it stays exact even while the live fields are unknown.
+
+A canonical read consults the validation pipeline and costs about a second per task, which is three orders of magnitude more than the renderer's one-second frame.
+So the fold runs out of band: a frame reads the cache and starts at most one detached refresh, under a claim that a second frame cannot take and that a refresher which died without writing releases on its own.
+A frame never calls the canonical reader itself.
+`bin/fm-fleet-status-lib.sh`'s header owns the exact cache lifetimes and their environment seams, and `bin/fm-status-cache-lib.sh` owns the cache and freshness mechanics it shares with the Codex metrics supply.
+
+### The context sample and the handoff axis are separate decisions
+
+`state/.primary-context` is the primary-handoff supervisor's CONTEXT axis: a home with that axis enabled rotates its live primary once the sample crosses its threshold.
+The native Claude adapter has always fed it.
+The Codex companion deliberately does NOT, even though it now reads real context.
+Displaying a figure and using it to rotate a live primary are separate decisions, and only the first one is in this renderer's scope; a home that wants Codex-driven rotation needs a task that owns the handoff reader and its freshness semantics.
+
+The window token is dim and is a short length word such as `5h`, `wk`, or `24h`.
+It is part of the metric rather than decoration: the same percentage means something different
+against a five-hour allowance than against a weekly one, so an adapter that knows its window always
+names it, and a figure whose window cannot be named is withheld rather than shown bare.
+A provider can report more than one window binding at the same percentage, and then the token names
+them shortest-first, joined by `/` - `5h/wk`.
+A tie too wide for the token's eight-character bound collapses to its shortest binding window; the
+percentage stays the tied one, and the windows the token no longer spells out remain just as binding,
+so the shortest window's reset does not restore the whole allowance.
+Adapters whose payload carries no window - Claude, Pi, and Cursor - render the bare percentage their
+own contracts already specify, unchanged.
 
 The account role is dim and is a ROLE word such as `Team`, `Max`, or `Plus`.
 It is rendered only from a verified account name: an explicit `--role`, else `FM_PRIMARY_ACCOUNT_ROLE`
@@ -138,14 +179,73 @@ status_line_use_colors = true
 `model-with-reasoning` renders model and reasoning effort together; `context-used`, `five-hour-limit`, and
 `weekly-limit` are Codex's own context and usage-window items.
 Codex silently ignores an unrecognized item id, so a mistyped entry disappears rather than erroring.
+Each of Codex's own limit items is REMAINING-oriented and omits itself when the provider has not supplied
+that window, which is the opposite orientation from this row's USED percentages.
 
 Alongside that, `bin/fm-primary.sh` attaches the shared Firstmate companion row for the `codex` and `astra`
 profiles, carrying the fields Codex cannot show.
 The companion reports the model from the guarded profile - `gpt-6-astra` for `astra`, with the effort
-`config/astra-effort` resolved - while context, quota, and cost stay `--` because Codex exposes none of them
-to a companion process.
-Codex reports a single `all_models` availability scope, so Astra draws on the ordinary Codex windows: there is
-no separate Astra allowance, and none is displayed.
+`config/astra-effort` resolved - and supplies real context and quota figures of its own through
+[`bin/fm-codex-session-metrics-lib.sh`](../bin/fm-codex-session-metrics-lib.sh), which owns the mechanics.
+Session cost stays `--`: Codex's `estimated-thread-cost` item is Enterprise-workspace only and is not
+exposed to a companion process.
+
+Three different quantities are involved here, and the integration's correctness rests on not confusing
+them.
+
+**Context is per-session, so it is read from that exact session.** The followed pane resolves to its
+foreground Codex process, that process is asked which rollout file it currently holds OPEN, and only that
+file is read. Codex holds exactly one rollout open per thread, so the open descriptor is the process's own
+statement of which thread it is running. Nothing picks the newest file in the sessions tree, so a sibling
+Codex session - another primary, a worker, the desktop app - owns a different descriptor and can never be
+borrowed. No Codex process behind the pane, no rollout, or more than one rollout is a refusal.
+The figure is the last turn's prompt size against the context window that session itself reported, which
+are the same two numbers Codex's own `context-used` item is built from. The window is read from the session
+rather than from a model catalog, so no capacity is ever assumed. Compaction needs no special handling: a
+compacted thread's next event reports the smaller post-compaction prompt.
+
+**Provider quota is per-account, so it comes from the account owner.** `quota-axi` already resolves
+provider and account identity, and it is read strictly read-only with `--no-credential-refresh`, which
+keeps the read from delegating an expired session's renewal to the vendor CLI and surfacing a login prompt
+behind a status bar. The row consumes that owner's `all_models` effective availability and the window it
+reports as binding, converting its REMAINING percentage into this row's USED one. `quota-axi` names every
+window tied at the minimum remaining, so a tie is an ordinary state - an untouched account ties at 100%
+remaining, an exhausted one at 0% - and the tied figure is reported with every tied window named. All the
+tied window ids are retained in the reading and its cache even when the row's token has to be compact.
+Codex reports a single account-wide availability scope, so an Astra primary draws on the ordinary Codex
+windows rather than an allowance of its own, and none is displayed as though it had one.
+
+**The rollout's own `rate_limits` block is a third thing, and it is the trap this integration exists to
+avoid.** It is stamped with a limit identity - `limit_id` and `limit_name` - which is frequently not the
+running model's. A live `gpt-6-astra` primary was measured reporting `limit_id=codex_bengalfox`
+(GPT-5.3-Codex-Spark) at 0% used while the account's actual binding weekly window sat at 54% used.
+Reporting that 0% would tell the captain there is full headroom when there is not. The block is therefore
+not a quota source here at all, under any name. Filtering it by identity was tried and does not work: the
+block never states which account or which model allowance it describes, so nothing in it can establish the
+scope the row would be claiming, and a name-shaped rule mismatches exactly where it matters - the plain
+`codex` profile's own model string is a substring of `codex_bengalfox`, so it matches that very block.
+Quota comes from the account owner or it is unavailable. The rollout supplies context, and nothing else.
+
+Freshness and cost are bounded on every path. The session read is a local file read cached for 15 seconds,
+and it reads a bounded tail of the rollout that escalates from 256 KB while nothing is found and stops at
+32 MB or the file's own size, because a live rollout reaches hundreds of megabytes and the newest
+token-count event can sit far behind the end of it. A reading that cannot be refreshed inside that bound
+keeps its last known value for up to 15 minutes and then goes back to `--`, because a live session's
+occupancy does not become unknown the moment its newest event scrolls past the window - and never becomes
+zero. Candidate lines are selected on `payload.type` exactly, so conversation content that merely mentions
+the event name cannot stand in for a reading.
+
+The provider read is a subprocess, so a refresh never waits on it. On a cache miss the refresh starts one
+detached read, renders the `--` placeholder for that frame, and a later frame picks the answer up once it
+lands; its own 120-second cache and a 30-second in-flight lock bound how often that happens. A one-second
+companion refresh therefore performs no blocking subprocess work on any tick, and no credential is read, no
+credential refresh is delegated, and no token value is ever printed. Only metric metadata is parsed - token
+totals and the context window - and never conversation content.
+
+Every reading must be positively known or it is unavailable. A missing, malformed, expired, stale, or
+unattributable figure renders as the dim `--` placeholder and is never converted to `0`, because a
+confident zero on either metric is exactly the reading that would mislead. A genuine zero still renders as
+`0%`.
 
 ### opencode and grok - unverified
 
@@ -200,12 +300,123 @@ closing one of those would destroy live work.
 So when the response names no pane, nothing is closed at all; an unused pane is strictly better than a
 destroyed one.
 
+### Herdr chrome mode: reclaiming the companion's empty rows
+
+On a large tab the Herdr companion's proportional floor leaves the one-row status strip sitting in a
+six-row pane: a border, the status row, three empty rows, and a border.
+Chrome mode reclaims those rows without giving up any canonical field.
+
+The canonical row is published to the PRIMARY pane's own border title, where it costs no rows at all,
+and the companion pane is then hidden by zooming the primary.
+
+The shape is defined by measurement, not inference. Every fact below was captured on herdr 0.7.4
+through [`bin/fm-herdr-lab.sh`](../bin/fm-herdr-lab.sh) in a disposable `fm-lab-*` session, and
+[`tests/fm-status-chrome-herdr-lab-e2e.test.sh`](../tests/fm-status-chrome-herdr-lab-e2e.test.sh)
+re-runs the zoom, layout, and readback ones against the real binary:
+
+- **A pane with no split has no border whatsoever.** Neither `pane report-metadata --title` nor
+  `pane rename` renders anything on an unsplit pane. So the companion pane must keep EXISTING for a
+  border to exist; the reclaim is hiding it, never closing it. An earlier record that the companion
+  could be closed outright was measured with the split still present and is superseded here.
+- **With the split present, the primary's top border renders the row in full**, every canonical field
+  included, and it keeps refreshing while the primary is unfocused.
+- **Zooming the primary hides the companion and keeps that border title.** The primary occupies every
+  row through its own bottom border, the companion's box stops being rendered entirely, and the status
+  row still reads from the top border. This is the reclaim.
+- **Herdr truncates the border title itself, visibly**, appending its own ellipsis - verified at both
+  60 and 40 columns. Width is therefore Herdr's concern and this renderer does not second-guess it.
+- **`pane get` reads the published row back exactly.** `.result.pane.title` returns the string that
+  was published, and the last source to publish is the one it resolves. That readback is what makes
+  the capability gate below evidence rather than a guess.
+- **`pane layout` reports the pane count and the zoom flag independently.** A zoomed two-pane tab
+  still reports two panes with `zoomed: true`: zoom hides the companion without removing it, which is
+  exactly why the border survives.
+- **Herdr releases the zoom itself when a third pane appears.** Splitting a co-tenant into a zoomed
+  tab returns three panes and `zoomed: false` with no request from us, and `pane zoom --off` on an
+  already-unzoomed tab is accepted as a no-op (`reason: "already_unzoomed"`). So the renderer's
+  release is a cheap confirmation, not the thing keeping a co-tenant visible.
+
+The row is prefixed with a compact visible role marker, `FM` for an ordinary primary and `LAB` for a
+lab primary, so the guarded primary identity is not displaced by the status fields.
+The marker leads the row, which is also the one position a clip can never reach.
+
+Two guarantees are load-bearing:
+
+- **The border title is published under its own source**, `firstmate-primary-status-v1`, never the
+  launcher's `firstmate-primary-visible-v1`. Herdr REPLACES a source's entire metadata record on every
+  `report-metadata` call, so publishing under the launcher's source would wipe the primary's own
+  display-agent and supervision state labels on the first refresh. A separate source contributes only
+  this title and leaves the launcher's record resolving untouched.
+- **Herdr stores a border title clipped to 80 codepoints, silently.** The renderer therefore drops
+  whole fields from the right until the row fits and appends a visible marker, so the rightmost fields
+  can never disappear without a sign. Fields are dropped on the separator rather than by offset,
+  because the row is full of multibyte glyphs and an offset slice could split one; the last-resort
+  trim removes whole codepoints for the same reason.
+  That measurement does not depend on the ambient locale. `${#var}` counts codepoints under a UTF-8
+  `LC_CTYPE` and BYTES under `C`/`POSIX`, and neither the herdr server nor the shell it spawns the
+  companion in is guaranteed to carry a UTF-8 locale - the canonical row is 72 codepoints but 105
+  bytes, so a byte count would throw away three fields from a row that fits. The renderer forces `C`
+  for the measurement and counts codepoints directly, as every UTF-8 byte that is not a continuation
+  byte, which is the same answer on every host.
+
+The row is published with a `--ttl-ms` of two and a half refresh intervals, so a renderer that dies
+lets the border row expire instead of freezing a stale fleet count on the captain's screen.
+
+### The capability gate is positive evidence
+
+Nothing is hidden on the strength of a protocol number. The presentation protocol floor is only a
+cheap PRE-FILTER: protocol 16 attests the managed presentation surfaces the adapter uses, and none of
+the three chrome mode actually depends on - `report-metadata --ttl-ms`, `pane get`'s resolved title,
+and `pane layout` - and the same number also matches older herdr builds.
+
+So after the split exists, and before anything is hidden, `bin/fm-primary.sh` proves the surfaces
+against the real pane: it publishes the role marker to the border under chrome mode's own source with
+a short expiry, reads it back with `pane get` and requires an exact match, and requires `pane layout`
+to answer with a parseable pane count. Only when all three succeed does it pass `--chrome-pane` to the
+companion and consider hiding it. Any failure - a client that answers the pre-filter but does not
+store the row, or one whose layout cannot be read - leaves the companion visible with its in-pane row
+as the only surface, which is exactly the behavior that shipped before chrome mode. The probe row
+carries a short `--ttl-ms`, so a probe that no renderer ever follows expires instead of sitting on the
+border.
+
+This check is local to the launcher's Herdr arm on purpose. It is not a backend capability layer and
+not a general probe framework; it is the one thing that must be true before the captain's only
+pre-existing status surface is hidden.
+
+### The zoom is owned, and releasing it is one-way
+
+Zoom is applied exactly once, by `bin/fm-primary.sh`, and only when the tab holds nothing but the
+primary and the companion just created.
+When it applies that zoom it says so, by passing `--chrome-zoomed` to the companion, and that signal
+is the ONLY thing that arms the renderer's release watch. The launcher still passes `--chrome-pane` on
+a crowded tab - the border row is worth having either way - so without the signal the renderer would
+otherwise be releasing a zoom that belongs to someone else. If `pane run` then fails, the launcher
+releases its own zoom before closing the pane it was taken for.
+The renderer never re-applies the zoom: it only RELEASES, on a slow cadence, if a third pane later
+appears in that tab, and it stops checking once released.
+That keeps two properties at the same time - a co-tenant pane's live work is never hidden, and a
+captain who deliberately unzooms is not fought once a second.
+
+The fallback chain has no gap.
+The companion keeps drawing its own in-pane row exactly as before, so an unzoomed primary, a Herdr
+below the verified presentation protocol, a client that fails the capability probe, a refused zoom,
+and a failing metadata call all degrade to the surface that shipped before chrome mode - the only
+consequence is that the empty rows are not reclaimed.
+Chrome mode is also off entirely for tmux, and refuses a chrome pane that is the companion itself.
+
 ## Local activation after merge
 
 Claude's earlier prototype is local to the primary home's `.claude/settings.local.json`.
 After this change lands, remove only that local `statusLine` entry so it no longer overrides tracked `.claude/settings.json`.
 Do not copy a renderer into `state/` and do not edit `~/.claude`, `~/.kimi-code`, or `~/.pi`.
 The next guarded Claude, Pi, or Kimi primary launch loads the tracked integration automatically.
+
+Codex's native half needs no repeat edit once the `[tui]` block above is in `$CODEX_HOME/config.toml`,
+but a session must have LOADED it: `/statusline` inside a running TUI applies the selection to that
+session, while a session started before the block was written may not be showing it.
+Whether Codex reloads that file without a restart has not been established here, so neither behavior
+should be assumed; `/statusline` is the route that applies it either way, and it needs no relaunch.
+The companion's own fields need no activation at all - they follow the guarded launch.
 
 `~/.cursor` is the one carve-out, and only through `bin/fm-cursor-statusline.sh`.
 Cursor validates `statusLine` only in the user config, so there is no tracked in-repo integration to load;
@@ -214,6 +425,9 @@ timestamped backup, and `uninstall` restores the prior state.
 Editing `~/.cursor` by hand is still out of scope, and no other file under it is ever touched.
 
 ## Verification record
+
+Rows captured before 2026-09-12 show the fleet group as `🚢<active> ⏸<paused> ⚠<attention>`.
+That was the field shape on the day each of those runs was observed; the current shape is the one in the canonical line above, and those older captures are kept as the evidence they were rather than rewritten.
 
 The adapter contract was checked on 2026-07-21 with Claude Code's project status-line payload shape, Kimi Code 0.27.0, Pi 0.80.10, Cursor CLI 2026.07.17-3e2a980, and tmux 3.6a.
 The installed Pi documentation and example at `examples/extensions/custom-footer.ts` show `ctx.ui.setFooter()`, `render(width)`, and `truncateToWidth()`.
@@ -241,6 +455,46 @@ bash tests/fm-primary.test.sh
 bash tests/fm-pi-primary-types.test.sh
 bin/fm-lint.sh
 ```
+
+The Codex metric supply was added on 2026-09-10 against codex-cli 0.153.4, quota-axi 0.1.41, and herdr's
+`pane process-info`.
+The full `[tui].status_line` item enum was read from the shipped `codex-darwin-arm64` binary's string
+table, with no model request and no network call, confirming `model-with-reasoning`, `context-used`,
+`five-hour-limit`, and `weekly-limit` as real ids alongside `context-remaining`, `used-tokens`,
+`total-input-tokens`, `total-output-tokens`, `thread-credits`, `estimated-thread-cost`,
+`context-window-size`, `usage-limit`, `secondary-usage-limit`, `daily-limit`, `monthly-limit`, and
+`annual-limit`.
+
+The session binding and the misattribution were both measured on the live `gpt-6-astra` primary by
+read-only inspection: `herdr pane process-info` resolved the followed pane to the Codex process, `lsof`
+showed that process holding exactly one rollout open, and that rollout's newest token-count event reported
+`model_context_window=258400` with `rate_limits.limit_id=codex_bengalfox`
+(`limit_name=GPT-5.3-Codex-Spark`) at `primary.used_percent=0`.
+The independently read account state at the same time was 46% remaining on the binding weekly window, so
+the rollout's 0% was another model's allowance and not this primary's.
+The corrected reading for that primary was context 58% used and quota 55% used on the `wk` window, which
+agrees with the account owner rather than with the mismatched block.
+The reported context window also agrees with the cached `gpt-6-astra` catalog entry - `context_window`
+272000 at `effective_context_window_percent` 95 - so the figure rests on the session's own report and no
+larger capacity is claimed anywhere.
+
+`tests/fm-status-bar.test.sh` covers this supply with fixture rollouts and fixture provider reports only.
+It spawns no renderer against a live pane and signals no process, because the suite's isolation rule is
+that teardown matches exact child pids and never command-name patterns: a name pattern matching
+`fm-status-bar.sh` would also match a live captain's companion, whose command line is byte-identical to a
+fixture's.
+The registered cases are the measured misattribution and every other shape of rollout rate-limit block
+being refused as a quota source, current-session context across compaction, a token event buried beyond the
+first tail step still being found while a line that merely mentions the event name is not, an unrefreshable
+reading being kept only while it is young enough and then going back to unavailable rather than zero,
+malformed and absent and stale readings staying unavailable rather than zero, a genuine zero surviving
+those guards, a weekly-only provider limit, tied windows reported with every tied window named including a
+genuine tied 0% and a tied exhausted account, a wide tie collapsing to its shortest binding window, an
+unnameable window withheld on its own and inside a tie, single-versus-multiple open rollout resolution, a
+process-info answer about another pane resolving to nothing, a tmux pane resolving its Codex primary
+through a launcher shim and nothing else, a provider cache miss rendering a complete row instead of
+waiting on the read, and the window token reaching the Codex row without leaking into the Claude, Pi, or
+Cursor contracts.
 
 Observed version output on 2026-07-21:
 
@@ -328,3 +582,32 @@ Observed output:
 `tests/fm-cursor-statusline.test.sh` passed the installer's single-key install, exact uninstall restore, foreign-status-line refusal in both directions, cross-checkout removal, invalid-config refusal, and credentials-untouched cases.
 `tests/fm-pi-primary-types.test.sh` reported an honest skip because the host TypeScript 4.9.5 cannot parse Pi 0.80.10's declarations, while the real Pi TUI loaded and ran the TypeScript extension.
 `bin/fm-lint.sh` passed with the repository-pinned ShellCheck 0.11.0.
+
+### Truthful fleet fields, 2026-09-12
+
+Measured against the captain's own fleet on herdr 0.7.4, reading copies of `state/*.meta` and `state/*.status` so the live home was never written to.
+Thirteen ordinary task records; `bin/fm-crew-state.sh` read individually for each one.
+
+The old rule and the new one, folded over the identical data:
+
+```text
+old:  🚢13 ⏸3 ⚠0
+new:  🚢2 🧪1 ⏸2 ⚠5 📋13
+```
+
+Two workers were genuinely busy, one task was in the pipeline, two were in a declared wait, four runs had failed and one was parked at a review gate awaiting a decision.
+The old rule was wrong in both directions at once: it reported thirteen running workers where there were two, and reported that nothing needed attention while five tasks did.
+
+The complete row, rendered by `bin/fm-status-bar.sh` from that live data with the Codex supply bound to the captain's actual primary pane:
+
+```text
+⚓ gpt-6-astra·high │ 🧠82% ⚡9%wk │ 🚢2 🧪1 ⏸2 ⚠5 📋13 │ 👁 NO-WATCH 355s │ $-- │ 💤--
+```
+
+The `NO-WATCH` reading is an artifact of the copied beacon file, which does not advance; the live beacon was current throughout.
+
+Pointed at the companion pane instead of the primary, the Codex supply returned `--` for context rather than a number from another session, which is the no-borrowed-sibling rule doing its job on live data.
+
+`bin/fm-status-bar.sh` traps `TERM` with a handler that restores the terminal and does not exit, so its refresh loop survives a `timeout(1)` bound and every scoped signal short of `KILL`.
+Cleaning up a probe renderer therefore means enumerating the probe's own process tree by pid and asserting the live companion's pid is not in it.
+It must never mean matching on the command line: the captain's live companion runs a byte-identical one, which is how an earlier probe killed the captain's own status row.

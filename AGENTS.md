@@ -78,6 +78,7 @@ config/wedge-alarm  optional supervision active-alert directives for away-mode i
 config/primary-handoff  optional quota- and context-aware primary orchestrator rotation; LOCAL, gitignored; absent or enabled:false leaves primary launch unchanged; see docs/primary-handoff.md
 config/primary-effort  optional Claude primary launch effort for claude-fable and claude-opus; LOCAL, gitignored; one of low, medium, high, xhigh, max; absent = xhigh; read only by bin/fm-primary.sh at launch; not inherited by secondmate homes; see docs/configuration.md
 config/astra-effort  optional Astra primary launch effort; LOCAL, gitignored; one of low, medium, high, xhigh; absent = xhigh; read only by bin/fm-primary.sh at launch; not inherited by secondmate homes; see docs/configuration.md
+config/astra-context config/astra-compact-at  optional Astra primary context window and compaction point; LOCAL, gitignored; absent = Codex's own catalog default; a window above the installed catalog's max_context_window refuses; read only by bin/fm-primary.sh at launch; not inherited by secondmate homes; see docs/configuration.md
 config/bridge-links  optional LOCAL, gitignored bridge-page pinned links; see docs/configuration.md
 config/calm  optional Pi primary Calm presentation preference; LOCAL, gitignored; `on`, `off`, or legacy `max` (restores as on); written by the `/calm` toggle, absent = off; see docs/configuration.md
 config/x-mode.env    generated X-mode watcher cadence; LOCAL, gitignored; source before arming watcher when present
@@ -119,6 +120,7 @@ state/               volatile runtime signals; gitignored
   .shift .shift-log .shift-mailbox-outage   armed glasses-shift record, its plain timestamped event log, and the self-check's outage episode marker; written by bin/fm-shift.sh start, stop, and its registered fm-shift check; stop removes `.shift` and `.shift-mailbox-outage` and leaves the append-only `.shift-log`, which spans shifts; while `.shift` exists AND away mode is active the host sentinel supervises the home even with no task in flight, and a record left behind once away mode ends is a stale shift that session start reports rather than a live one; never touch; see docs/shift-loop.md
   .watch.lock .wake-queue.lock watcher singleton and queue serialization locks
   .primary-active .primary-context .primary-handoff*   optional primary-handoff supervisor state (active profile, durable context sample, phase record); present only when config/primary-handoff enables it (docs/primary-handoff.md)
+  .status-fleet-state* .status-codex-*   status-bar renderer caches and single-refresh claims for the canonical fleet fold and the Codex context/quota supply; never touch (docs/status-bar.md)
   .hash-* .count-* .stale-* .stale-since-* .paused-* .captain-held-surfaced-* .wedge-escalations-* .seen-* .hb-surfaced-* .last-* .heartbeat-streak   watcher internals; never touch
   .watch-triage.log  watcher's absorbed-wake debug log (size-capped); never relied on, safe to delete
   .last-watcher-beat watcher liveness beacon, touched every poll (including while absorbing benign wakes); guard scripts read it

@@ -557,6 +557,47 @@ The same guard is now a first-class production helper, `bin/fm-herdr-lab.sh`, no
 It provisions an isolated never-`default` lab session (names must start with `fm-lab-`), runs every task command through `run <session> ...` with a mandatory `--session` the helper places on every call (before any child-argv `--` delimiter for `agent start`, appended otherwise), and refuses caller-supplied `--session`, any leading option before the subcommand, every server or session-lifecycle subcommand, and any ambiguous child-argv delimiter shape, before invoking Herdr (the exact accepted/refused shapes are enumerated in the `bin/fm-herdr-lab.sh` header comment and pinned by `tests/fm-herdr-lab.test.sh`).
 Destructive teardown goes only through `teardown <session>` (or a deliberate mid-run `stop <session>`), each re-running the refuse-default check immediately before every stop and delete.
 It also adds a before/after fleet-state tripwire: `provision` records the live `default` session before creating the lab session, and `teardown` verifies that recorded state is byte-identical afterward before clearing it, treating any missing, stopped, or changed default session as a hard failure rather than a warning.
+### Rendered-screen inspection: `view`
+
+Herdr draws pane borders, border titles, and the agent sidebar in its TUI **client**, not in its server, so `pane read` - which returns terminal content - cannot observe any of them.
+`fm-herdr-lab.sh view <session> [--cols N] [--rows N] [--seconds N] [--format text|raw-bytes]` closes that gap: it attaches a throwaway client to one lab session on a synthetic pty of an exact size and feeds the client's own output through a terminal emulator.
+The default `text` format prints the rendered screen with row numbers; `raw-bytes` prints the client's own byte stream instead, because colour and erase behaviour live in the escape sequences and the rendered characters cannot show them.
+`bin/fm-herdr-lab-view.py` is the engine; `python3` and the `pyte` module are required, and the command refuses with a clear message rather than half-running when either is absent.
+
+It is a lab instrument, not a fleet operation, and it is deliberately not a session-lifecycle pass-through:
+
+- `view` accepts only `--cols`, `--rows` and `--seconds` - each a whole number inside a bounded range - and `--format`, which accepts only the two literal values. Any other argument is refused, so no Herdr subcommand can be smuggled through it.
+- The lab name is validated, this helper's own fleet-state tripwire must exist (so the session is one this helper provisioned), and `fm_herdr_lab_refuse_if_default` runs immediately before the client attaches - the same read-only hard guard the destructive paths use.
+- The engine re-validates the `fm-lab-` pattern and the literal `default` refusal independently of the caller, so it cannot be pointed at the live session even when invoked directly, and it builds the Herdr argv literally from that one validated name.
+- The engine strips **every** ambient `HERDR_*` variable from the client's environment. This is not cosmetic: `HERDR_SOCKET_PATH` points at the server owning the caller's own pane - the captain's live `default` server in normal use - so inheriting it would let an ambient value rather than the validated name decide which session gets attached. Stripping the prefix leaves the positional session name as the only selector, and it is also what lets the viewer run from inside a Herdr pane at all, since Herdr refuses a nested client when it sees the outer `HERDR_ENV`.
+- The caller's stdin is never wired to the pty, so no keystroke can reach the attached client; it only ever draws. The run is bounded by a capped duration, after which the client is signalled and reaped.
+
+Verified on herdr 0.7.4 (2026-09-10). What it established for the primary status surface, in a disposable session at 182x64, with the fleet-state tripwire clean before and after:
+
+| observation | result |
+|---|---|
+| unsplit pane, `report-metadata --title` | **no border and no title rendered at all** |
+| unsplit pane, `pane rename` label | no border and no label rendered |
+| split present, `report-metadata --title` | primary's top border renders the full canonical row |
+| split present, primary zoomed | companion hidden, all its rows reclaimed, border title still rendered |
+| refresh while the primary is unfocused | border row replaced live |
+| border title at 60 and 40 columns | Herdr truncates it itself, visibly, with its own ellipsis |
+| `title` / `display_agent` store | silently clipped to **80 codepoints**, no marker |
+| `report-metadata` across sources | each call REPLACES that source's whole record; tokens merge |
+| 20 sequential `report-metadata` calls | 0.23 s total, ~11 ms each |
+| `pane get` after `report-metadata --title` | `.result.pane.title` returns the published string exactly; the LAST source to publish is the one it resolves |
+| `pane layout` on a two-pane tab | `.result.layout.panes` has 2 entries, `.result.layout.zoomed` is `false` |
+| `pane zoom --on` | `.result.zoom.zoomed` is `true`; the pane COUNT is unchanged, so the companion still exists and the border survives |
+| `pane layout` while zoomed | still 2 panes, `zoomed` now `true` - the count and the flag are independent |
+| splitting a THIRD pane into a zoomed tab | Herdr releases the zoom **itself**: 3 panes, `zoomed` back to `false` |
+| `pane zoom --off` on an already-unzoomed tab | accepted and idempotent: `zoom_changed: false`, `reason: "already_unzoomed"` |
+
+The first row is why `bin/fm-status-bar.sh` chrome mode hides the companion pane by zoom instead of closing it: closing it removes the split, and removing the split removes the only border a title can render on.
+The `pane get` row is what makes chrome mode's capability gate evidence rather than inference: the launcher publishes the row, reads it back, and requires an exact match before it hides anything.
+The third-pane row is why the renderer's release is a confirmation rather than a rescue - Herdr already un-zooms when a co-tenant appears - and the idempotence row is why issuing that release costs nothing when it has already happened.
+[`docs/status-bar.md`](status-bar.md) owns the resulting contract.
+The zoom, layout, and readback rows are re-run against the real binary by [`tests/fm-status-chrome-herdr-lab-e2e.test.sh`](../tests/fm-status-chrome-herdr-lab-e2e.test.sh), which drives this same guarded lab and self-skips where `herdr`, `jq`, `python3`, or `pyte` is absent.
+
 Crewmate briefs for tasks that drive Herdr lifecycle get this exact contract embedded by scaffolding with `bin/fm-brief.sh --herdr-lab`; every crewmate brief scaffolded without the flag instead carries a loud not-enabled gate, because the scaffold cannot detect from the caller-supplied repo string whether the task will touch Herdr lifecycle.
 
 ## ID stability across a server restart
@@ -1035,8 +1076,40 @@ Every other backend, tmux included, still delivers the brief inline and is byte-
 Confirmed to reproduce the original shape against the pre-fix script (force `BRIEF_DELIVERY=inline` and rerun: `not ok - the launch line typed into the herdr pane still contains a newline, so it is a multi-line paste through the pane`, printing the two-line launch payload).
 `tests/fm-backend-herdr.test.sh`, `tests/fm-spawn-herdr-presentation.test.sh`, `tests/fm-spawn-dispatch-profile.test.sh`, `tests/fm-spawn-batch.test.sh`, `tests/fm-spawn-launch-preflight.test.sh`, `tests/fm-spawn-worktree-settle.test.sh`, `tests/fm-operational-input.test.sh`, `tests/fm-secondmate-lifecycle-e2e.test.sh`, and `tests/fm-cursor-adapter.test.sh` stay green, and `bin/fm-lint.sh` is clean on the changed files.
 
+## Pane rendering: what the isolated lab measured about this client's compositing and erase storage (2026-09-12, herdr 0.7.4)
+
+Measured in an isolated `fm-lab-*` session, with `bin/fm-herdr-lab.sh view --format raw-bytes` capturing exactly what Herdr's own client writes to a terminal.
+A probe pane emitted four sequences: a background colour set and then `ESC[2K` with no reset; the same with a reset first; a 256-colour background followed by `ESC[J`; and plain rows.
+
+Two measurements about this backend, recorded as observations and nothing more:
+
+- **This client re-emits rather than forwards.** Across 63 KB of capture it emitted exactly one erase, the initial clear, and re-rendered every cell run as a fully specified `ESC[0;39;48;5;<n>m` sequence. The pane's own escape sequences never reach the terminal; the client reads the cell grid and paints it.
+- **Cells erased while a background is set retain that background, and retain no glyphs.** The probe's un-reset `ESC[2K` rows came back as 212 runs carrying background colour 3, and the un-reset `ESC[J` came back as 593 runs carrying background colour 100. Those runs are empty: the erase removed the glyphs, and what survives in the buffer is the colour alone.
+
+**This probe does NOT reproduce the reported solid-rectangle symptom, and must not be cited as if it did.**
+In the report, selecting the affected region reveals its text and deselecting conceals it again, so the cells still hold their glyphs.
+Erased cells hold none, so there would be nothing for a selection to reveal.
+Background-colour erase is therefore disconfirmed as the mechanism behind that report, whatever else it explains.
+
+What is still open, stated plainly so it is not read as settled:
+
+- The **trigger** - what put the affected surface into that state - is unidentified.
+- The **masking condition** - whatever renders the glyphs invisible while they remain present and selectable - is separate from the trigger and is also unidentified.
+- The **visible symptom** - a solid block of colour over text that selection still exposes - is the only part directly observed, and only by the captain, at the time.
+- The **incident-time evidence is MISSING**: no capture of the affected surface exists from while the symptom was present, so nothing here is measured against the actual failure.
+- The **responsible component is UNRESOLVED.** No component is named. In particular, nothing above excludes this client: a small sample of well-formed probe input repainted faithfully is a statement about that sample, not a proof that the client cannot be causal under inputs nobody has captured.
+
+No terminal workaround, forced style reset around foreign output, or blanket terminal setting is warranted by any of this, and none has been applied.
+
+`view --format raw-bytes` (see [Rendered-screen inspection: `view`](#rendered-screen-inspection-view)) exists for exactly this class of question, and runs under the same bounds as the text format.
+
 ## Known gaps and follow-up notes
 
+- **A primary pane's published `display_agent` is a launch-time label, not current state.** `bin/fm-primary.sh`'s `mark_current_surface` reports the primary pane's `display_agent` once, at launch, as a fixed role-plus-`WAITING` string, and nothing updates it afterwards.
+  A sidebar reading that field therefore shows `WAITING` for the whole life of the pane, including while the harness running in it is actively working.
+  Separately, Herdr's own `agent_status` for such a pane has been observed disagreeing with the harness's own reported state, so the sidebar and the harness can differ for two independent reasons.
+  `bin/fm-crew-state.sh` is the canonical authority for a task's current state and is what any consumer should ask.
+  Resolving the PRIMARY's own live state is not decided here: it belongs to the run-state owner, and nothing in this document restates or re-implements state selection, mapping, or precedence.
 - **RESOLVED: worktree-discovery isolation guard's symlinked-project-prefix false refusal.** Originally discovered while building the runtime-backend-auto-detection real smoke test (`tests/fm-backend-autodetect-smoke.test.sh`), which needed a scratch project.
   `fm-spawn.sh`'s `PROJ_ABS` was a LOGICAL `cd && pwd` (symlink components kept), while herdr's `foreground_cwd` (and real tmux's `pane_current_path`, on the same OS-level cwd primitive) report the PHYSICALLY resolved path.
   When the project itself lived under a symlinked directory (e.g. macOS's `/tmp` -> `/private/tmp`), the very first worktree-discovery poll saw two different strings for the identical starting directory and the isolation guard false-refused the spawn as "not isolated" before `treehouse get` ever moved the pane - backend-agnostic, not specific to herdr.

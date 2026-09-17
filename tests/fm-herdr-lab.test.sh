@@ -337,6 +337,78 @@ test_unsafe_delimiter_shapes_never_invoke_herdr() {
   pass "fm-herdr-lab: ambiguous or unsafe child-argv shapes are refused before any Herdr call"
 }
 
+test_view_is_bounded_and_never_reaches_the_live_session() {
+  local name status=0 before after engine
+  name="fm-lab-view-$$"
+  engine="$(dirname "${BASH_SOURCE[0]}")/../bin/fm-herdr-lab-view.py"
+
+  # The literal default name and a non-lab name are refused by the same
+  # validator the destructive paths use, before anything is attached.
+  status=0
+  run_with_fake fm_herdr_lab_view default >/dev/null 2>&1 || status=$?
+  expect_code 1 "$status" "view must refuse the literal default session"
+  status=0
+  run_with_fake fm_herdr_lab_view arbitrary-session >/dev/null 2>&1 || status=$?
+  expect_code 1 "$status" "view must refuse a non-lab session name"
+
+  # A lab session this helper never provisioned has no tripwire, so it is not
+  # ours to attach to.
+  status=0
+  run_with_fake fm_herdr_lab_view "$name" >/dev/null 2>&1 || status=$?
+  expect_code 1 "$status" "view must refuse a lab session with no fleet-state tripwire"
+
+  run_with_fake fm_herdr_lab_provision "$name" || fail "provision failed"
+  : > "$FAKE_LOG"
+
+  # view forwards nothing to Herdr, so an unrecognized argument - especially one
+  # shaped like a lifecycle subcommand - is refused rather than passed along,
+  # and it never reaches Herdr at all.
+  before=$(wc -l < "$FAKE_LOG")
+  status=0
+  run_with_fake fm_herdr_lab_view "$name" session stop >/dev/null 2>&1 || status=$?
+  expect_code 1 "$status" "view must refuse arguments it does not own"
+  status=0
+  run_with_fake fm_herdr_lab_view "$name" --session other >/dev/null 2>&1 || status=$?
+  expect_code 1 "$status" "view must refuse a caller-supplied --session"
+  status=0
+  run_with_fake fm_herdr_lab_view "$name" --cols abc >/dev/null 2>&1 || status=$?
+  expect_code 1 "$status" "view must refuse a non-numeric geometry value"
+  status=0
+  run_with_fake fm_herdr_lab_view "$name" --cols >/dev/null 2>&1 || status=$?
+  expect_code 1 "$status" "view must refuse a geometry option with no value"
+  after=$(wc -l < "$FAKE_LOG")
+  [ "$before" = "$after" ] || fail "a refused view argument reached Herdr instead of being refused first"
+
+  run_with_fake fm_herdr_lab_teardown "$name" || fail "teardown after view test failed"
+
+  # The engine repeats the name guard independently of the helper, so a direct
+  # invocation cannot be pointed at the captain's live session either.
+  if command -v python3 >/dev/null 2>&1; then
+    status=0
+    python3 "$engine" --session default >/dev/null 2>&1 || status=$?
+    expect_code 2 "$status" "the view engine must refuse the default session on its own"
+    status=0
+    python3 "$engine" --session arbitrary >/dev/null 2>&1 || status=$?
+    expect_code 2 "$status" "the view engine must refuse a non-lab session on its own"
+    status=0
+    python3 "$engine" --session fm-lab-probe --cols 1 >/dev/null 2>&1 || status=$?
+    expect_code 2 "$status" "the view engine must refuse geometry outside its bounds"
+    # Every ambient HERDR_* variable is dropped, so an inherited socket path can
+    # never decide which server the client attaches to.
+    HERDR_SOCKET_PATH=/tmp/live-default.sock HERDR_ENV=1 python3 - "$engine" <<'PYCHECK' \
+      || fail "the view engine leaked an ambient HERDR_* variable into the client environment"
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("view", sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+env = mod.child_env(80, 24)
+sys.exit(1 if any(k.startswith("HERDR_") for k in env) else 0)
+PYCHECK
+  fi
+
+  pass "fm-herdr-lab: view is bounded, lab-only, and forwards nothing to Herdr"
+}
+
 test_refuses_unsafe_names
 test_provision_run_and_guarded_teardown
 test_missing_tripwire_blocks_destruction
@@ -348,3 +420,4 @@ test_agent_start_places_session_before_delimiter
 test_child_argv_never_receives_session_selector
 test_child_argv_own_delimiter_passes_through
 test_unsafe_delimiter_shapes_never_invoke_herdr
+test_view_is_bounded_and_never_reaches_the_live_session
