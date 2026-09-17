@@ -16,8 +16,8 @@ primary already running in this home.
 - Transcript delivery into a durable mailbox under the home
   (`state/desk-voice/inbox/`), plus a wake so the primary can see it.
 - Optional speak-back of Firstmate outcome lines through `bin/fm-speak.sh`,
-  which prefers Deepgram Aura when `DEEPGRAM_API_KEY` is configured and falls
-  back to macOS `say`.
+  which speaks through macOS `say` when `config/speak` names a `voice` and
+  through Deepgram Aura otherwise, each the fallback for the other.
 
 ## Enablement
 
@@ -74,7 +74,7 @@ So `bin/fm-speak.sh` points that owner at
 That example keeps the same URL/path/id and decision refusals but raises the
 spoken budget to **30 seconds** (about 78 words at 2.6 wps).
 The budget belongs to the desk rather than to the speaker, so it is the same
-whether Deepgram Aura or the macOS `say` fallback plays the line.
+whichever speaker plays the line, macOS `say` or Deepgram Aura.
 
 Override the example path with `FM_SPEAK_DEEPGRAM_REGISTER`, or keep the short
 glasses cut by exporting `FM_SPEAK_DEEPGRAM_REGISTER=` (empty).
@@ -99,4 +99,4 @@ STT model default: `nova-2` (`DEEPGRAM_STT_MODEL`).
 | `bin/fm-desk-voice.sh` | Inbox deliver / pending / drain |
 | `bin/fm-deepgram-stt.sh` | Audio file → transcript |
 | `bin/fm-deepgram-tts.sh` | Text → Deepgram Aura audio |
-| `bin/fm-speak.sh` | Captain-facing speak-out (Deepgram preferred, `say` fallback) |
+| `bin/fm-speak.sh` | Captain-facing speak-out (a named `voice` selects `say`, else Deepgram Aura; each the other's fallback) |

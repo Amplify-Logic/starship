@@ -75,6 +75,11 @@ install_speaker() {  # <home> [linger-seconds]
   local home=$1 linger=${2:-0}
   cat > "$home/speaker" <<EOF
 #!/usr/bin/env bash
+if [ "\${1:-}" = -v ] && [ "\${2:-}" = '?' ]; then
+  printf 'asked\n' >> "$home/voices.log"
+  [ ! -f "$home/voices" ] || cat "$home/voices"
+  exit \$(cat "$home/voices.status" 2>/dev/null || printf 0)
+fi
 printf 'argv: %s\n' "\$*" >> "$home/spoken.log"
 prev=
 for a in "\$@"; do
@@ -641,6 +646,70 @@ test_blank_text_is_refused_before_anything_is_shaped() {
   pass "fm-speak: blank text is refused before anything is shaped"
 }
 
+# A speaker that records the moment it finished, not just the moment it started.
+# Every other case here can settle for the handoff; this one has to know whether
+# the line reached its end, because that is the whole difference between a
+# captain who heard the outcome and a captain who heard half of it.
+install_finishing_speaker() {  # <home> <linger-seconds>
+  local home=$1 linger=$2
+  cat > "$home/speaker" <<EOF
+#!/usr/bin/env bash
+printf 'started\n' >> "$home/spoken.log"
+sleep $linger
+printf 'finished\n' >> "$home/spoken.log"
+EOF
+  chmod +x "$home/speaker"
+}
+
+# The cutoff the captain actually reported, and the one property the earlier
+# fixes to this script never covered. Closing the speaker's standard streams
+# detaches it from the caller's turn but leaves it in the caller's PROCESS
+# GROUP, and an agent harness reaps a finished command's process group when its
+# turn ends - which is precisely when firstmate speaks, right after a
+# captain-facing reply. So the audio was killed a moment after it started.
+#
+# The signature that made it visible is asserted here too: a speaker removes the
+# temporary file it was handed only after the line has finished, so a file left
+# behind is the same evidence as a sentence that stopped halfway.
+test_a_reap_of_the_callers_process_group_does_not_cut_the_line() {
+  local home scratch caller waited left
+  home=$(new_home group-reap "enabled = true")
+  install_shaper "$home" >/dev/null
+  install_finishing_speaker "$home" 4
+  scratch="$TMP_ROOT/group-reap-scratch"
+  mkdir -p "$scratch"
+
+  # Job control puts the stand-in caller in a process group of its own, so the
+  # reap below is aimed exactly where a harness aims it and can never reach this
+  # suite.
+  set -m
+  ( TMPDIR="$scratch" speak "$home" "The fix is green." >/dev/null 2>&1 ) &
+  caller=$!
+  set +m
+  wait "$caller" 2>/dev/null || true
+  wait_for_spoken "$home/spoken.log" "the speaker was never started"
+  kill -TERM "-$caller" 2>/dev/null || true
+
+  # The speaker writes its end marker and only then removes the file it was
+  # handed, so both halves of the signature have to be waited for together -
+  # counting the moment the marker lands would read a file the speaker is still
+  # a few milliseconds from cleaning up.
+  waited=0
+  left=1
+  while [ "$waited" -lt 50 ]; do
+    left=$(find "$scratch" -name 'fm-speak-*' 2>/dev/null | wc -l | tr -d ' ')
+    ! grep -q finished "$home/spoken.log" 2>/dev/null || [ "$left" != 0 ] || break
+    sleep 0.2
+    waited=$((waited + 1))
+  done
+  assert_grep finished "$home/spoken.log" \
+    "fm-speak: the line was cut short when the caller's process group was reaped"
+
+  [ "$left" = 0 ] \
+    || fail "fm-speak: a cut-short speaker left $left temporary file(s) behind"
+  pass "fm-speak: a reap of the caller's process group does not cut the line short"
+}
+
 test_no_temporary_files_are_left_behind() {
   local home scratch left
   home=$(new_home tempfiles "enabled = true")
@@ -682,6 +751,7 @@ test_a_non_boolean_enabled_is_refused
 test_a_symlinked_config_is_refused
 test_blank_text_is_refused_before_anything_is_shaped
 test_no_temporary_files_are_left_behind
+test_a_reap_of_the_callers_process_group_does_not_cut_the_line
 test_a_desk_line_is_not_cut_by_the_glasses_budget
 test_an_empty_register_override_restores_the_glasses_cut
 test_an_already_chosen_register_is_never_replaced

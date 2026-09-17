@@ -33,13 +33,32 @@
 # repo, seeding a secondmate home, or adding a device never makes it talk.
 # Config is `key = value` lines; unknown keys are refused rather than ignored.
 #   enabled   true to arm this home (default false)
-#   voice     optional `say` voice name (default: the system voice; ignored for
-#             Deepgram, which uses DEEPGRAM_TTS_MODEL instead)
+#   voice     optional `say` voice name (default: the system voice). Setting it
+#             also selects `say` as the speaker, since Deepgram cannot speak in
+#             it - see SPEAKER PREFERENCE below
 #
-# SPEAKER PREFERENCE: when DEEPGRAM_API_KEY is set in the environment or in this
-# home's gitignored .env, the shaped line is handed to Deepgram Aura first
-# (bin/fm-deepgram-tts.sh). macOS `say` remains the fallback when the key is
-# absent or Deepgram fails. The key is never logged.
+# SPEAKER PREFERENCE: naming a voice picks the speaker, because only one of them
+# can honour it. With a non-empty `voice` in config/speak the shaped line goes to
+# macOS `say` in that voice; Deepgram's voice comes from DEEPGRAM_TTS_MODEL and
+# ignores the key entirely, so a home that asked for a particular voice and got
+# Deepgram would simply not be heard in it. With no voice named, DEEPGRAM_API_KEY
+# in the environment or in this home's gitignored .env sends the line to Deepgram
+# Aura first (bin/fm-deepgram-tts.sh). Either way the other speaker remains the
+# fallback: Deepgram when there is no usable `say` binary, `say` when the key is
+# absent or Deepgram fails. That choice is made once, before the handoff, and is
+# never revisited afterwards: a speaker that fails once it has the line is not
+# re-spoken through the other one, because paid synthesis is not this script's
+# answer to a local speaker problem. A named voice is checked against the voices
+# `say` actually has before the line is handed over, because `say` substitutes a
+# voice it does not have and still exits 0 - so an unavailable voice would
+# otherwise be neither heard as asked for nor reported anywhere. A voice this
+# machine does not have is refused on stderr with exit 1, never quietly spoken in
+# some other voice and never swapped to Deepgram. A voice confirmed once is
+# remembered in state/speak-voice-confirmed, so only the first spoken line of a
+# home pays for that question; renaming the voice in config/speak asks it again.
+# The key is never logged, and this preference is about speech out only - the desk
+# floater's ears still use the same key for Deepgram transcription
+# (docs/desk-floater.md).
 #
 # DESK SPOKEN BOUND: the register owner's own default budget is tuned for the
 # glasses, about eight seconds, and it truncates the shaped line before any
@@ -58,11 +77,18 @@
 # NEVER BLOCKS THE CALLER'S TURN. The register call is bounded and waited on
 # because its output is needed, so its bound is the worst case a captain-facing
 # turn can be held: 15 seconds by default against an owner measured at about
-# one. The speaker call is bounded and detached, with its standard streams
-# closed, so a caller that captures this script's output is never held open by
-# audio that is still playing; its bound only stops a runaway from holding the
-# audio device. A speech error downstream of that handoff is unobservable here
+# one. The configured-voice check runs beside that call under a bound of its own
+# that starts when it does, so the two overlap rather than add up and the register
+# call stays the worst case. The speaker call is bounded and detached, with its
+# standard streams closed, so a caller that captures this script's output is
+# never held open by audio that is still playing; its bound only stops a runaway
+# from holding the audio device. A speech error downstream of that handoff is unobservable here
 # by design.
+#
+# NEVER SHARES THE CALLER'S PROCESS GROUP. Detaching the speaker from the
+# caller's streams is not enough to let a line finish: the speaker must also
+# leave the caller's process group, or anything that reaps that group takes the
+# audio with it. See detach_speaker for what that costs when it is missed.
 #
 # Environment overrides, for tests and unusual layouts:
 #   FM_SPEAK_SHAPER    register owner exposing the `--dry-run <text>` contract
@@ -79,12 +105,15 @@
 #                      bounded seconds for the waited-on register call
 #                      (default 15)
 #   FM_SPEAK_TIMEOUT   bounded seconds for the detached speaker (default 60)
+#   FM_STATE_OVERRIDE  state directory holding the confirmed-voice memory
+#                      (default: $FM_HOME/state)
 #
 # EXIT CODES (mirroring the register owner's own contract):
 #   0  handed to the speaker, printed under --dry-run, or this home is not
 #      opted in
 #   1  cannot speak: the register owner is unreachable, failed or exceeded its
-#      bound, the speech binary is missing, or the config is invalid
+#      bound, the speech binary is missing, the configured voice is not one
+#      this machine has, or the config is invalid
 #   2  refused by the register; nothing was spoken and the reason is reported
 set -eu
 
@@ -93,6 +122,8 @@ ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$ROOT}}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 CONFIG_FILE="$CONFIG/speak"
+STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
+VOICE_CONFIRMED_FILE="$STATE/speak-voice-confirmed"
 
 DEFAULT_SHAPER_TIMEOUT=15
 DEFAULT_SPEAKER_TIMEOUT=60
@@ -186,9 +217,12 @@ start_watchdog() {  # <seconds> <pid> [firedfile]
     sleep "$seconds" &
     timer=$!
     wait "$timer" 2>/dev/null || true
-    if kill "$pid" 2>/dev/null && [ -n "$fired" ]; then
-      : > "$fired"
-    fi
+    # Recorded before the kill, not after it: reaching this line means the bound
+    # elapsed (an earlier cancellation leaves through the TERM trap above), and
+    # the waiting caller wakes on the kill and can cancel this watchdog before a
+    # marker written afterwards would land.
+    [ -z "$fired" ] || : > "$fired"
+    kill "$pid" 2>/dev/null || true
   ) </dev/null >/dev/null 2>&1 &
   WATCHDOG_PID=$!
   # Drop the watchdog from the job table: killing it is the normal path, and
@@ -223,25 +257,69 @@ run_bounded() {  # <seconds> <outfile> <errfile> <cmd...>
   return "$status"
 }
 
-# Hand the shaped line to macOS `say` and return immediately. The standard
-# streams are closed before backgrounding: a caller reading this script through
-# a pipe or command substitution would otherwise stay blocked until the audio
-# finished, which is exactly the turn-blocking this script must never cause.
-speak_say_detached() {  # <textfile>
+# Hand one speaker body to the machine and return immediately, with its standard
+# streams closed and in a process group of its own.
+#
+# The closed streams are the turn-blocking boundary: a caller reading this script
+# through a pipe or command substitution would otherwise stay blocked until the
+# audio finished.
+#
+# The process group is a second and entirely separate boundary, and it is the one
+# the captain was losing the end of every spoken line to. A plain `&` leaves the
+# speaker in the process group of the command that spoke, so anything that reaps
+# that group reaps the audio with it. An agent harness reaps a finished command's
+# process group at the end of its turn, which is exactly when firstmate speaks -
+# right after a captain-facing reply - so the line was cut mid-sentence and the
+# temporary file was left behind every time. Job control gives the job its own
+# group, which a reap aimed at the caller cannot reach.
+detach_speaker() {  # <function> [args...]
+  local detached
+  set -m
+  "$@" </dev/null >/dev/null 2>&1 &
+  detached=$!
+  set +m
+  disown "$detached" 2>/dev/null || true
+}
+
+# Play one line under the speaker bound. Runs only inside detach_speaker, where
+# job control is on for the fork itself; it is turned back off here so the bound
+# below behaves exactly as it does everywhere else in this script. The player's
+# status is deliberately not reported upwards: no caller acts on it, because the
+# speaker chosen before the handoff is the only one that speaks this line.
+# shellcheck disable=SC2329 # Reached only through the speaker bodies below.
+play_bounded() {  # <cmd...>
+  local pid
+  set +m
+  "$@" &
+  pid=$!
+  start_watchdog "$SPEAKER_TIMEOUT" "$pid"
+  wait "$pid" 2>/dev/null || true
+  kill "$WATCHDOG_PID" 2>/dev/null || true
+}
+
+# The two speaker bodies. Each owns the temporary files it was handed and removes
+# them once the line has actually finished playing, so a file left behind is
+# itself the evidence that a speaker was cut short.
+# shellcheck disable=SC2329 # Invoked by name through detach_speaker.
+say_speaker() {  # <textfile>
   local textfile=$1
-  (
-    local say_pid
-    if [ -n "$CFG_VOICE" ]; then
-      "$SAY_BIN" -v "$CFG_VOICE" -f "$textfile" &
-    else
-      "$SAY_BIN" -f "$textfile" &
-    fi
-    say_pid=$!
-    start_watchdog "$SPEAKER_TIMEOUT" "$say_pid"
-    wait "$say_pid" 2>/dev/null || true
-    kill "$WATCHDOG_PID" 2>/dev/null || true
-    rm -f "$textfile"
-  ) </dev/null >/dev/null 2>&1 &
+  if [ -n "$CFG_VOICE" ]; then
+    play_bounded "$SAY_BIN" -v "$CFG_VOICE" -f "$textfile"
+  else
+    play_bounded "$SAY_BIN" -f "$textfile"
+  fi
+  rm -f "$textfile"
+}
+
+# shellcheck disable=SC2329 # Invoked by name through detach_speaker.
+audio_speaker() {  # <player> <audio> <textfile>
+  local player=$1 audio=$2 textfile=$3
+  play_bounded "$player" "$audio"
+  rm -f "$audio" "$textfile"
+}
+
+speak_say_detached() {  # <textfile>
+  detach_speaker say_speaker "$1"
 }
 
 # Prefer Deepgram when a key is available. Synthesis is waited on under the
@@ -278,20 +356,131 @@ speak_deepgram_or_fail() {  # <textfile>
     note "no afplay at $afplay_bin; falling back to say"
     return 1
   fi
-  (
-    local play_pid
-    "$afplay_bin" "$audio" &
-    play_pid=$!
-    start_watchdog "$SPEAKER_TIMEOUT" "$play_pid"
-    wait "$play_pid" 2>/dev/null || true
-    kill "$WATCHDOG_PID" 2>/dev/null || true
-    rm -f "$audio" "$textfile"
-  ) </dev/null >/dev/null 2>&1 &
+  detach_speaker audio_speaker "$afplay_bin" "$audio" "$textfile"
   return 0
+}
+
+# --- configured voice -------------------------------------------------------
+
+# `say` does not refuse a voice it does not have: it substitutes one and still
+# exits 0, so a misspelled `voice` would be answered in some other voice with
+# nothing said about it. Asking which voices exist is therefore done here, before
+# the handoff, because the detached speaker has no way back to the caller.
+#
+# Two things keep that question off the captain's turn. It is asked in the
+# background, under a bound that starts with it rather than when it is collected,
+# so it runs beside the register call and the two bounds overlap instead of
+# adding up: the register call remains the worst case a turn can be held. And a
+# voice this machine confirmed once is remembered, so only the first spoken line
+# of a home ever waits for the answer at all. Nothing here touches the network.
+VOICE_LIST_FILE=
+VOICE_LIST_PID=
+VOICE_LIST_GUARD=
+
+# The register can refuse or fail after the list was asked for, so the question
+# is cleaned up on the way out as well as on the way through: the file is dropped
+# and the bound that guards it is cancelled, because a watchdog left sleeping
+# outlives this script and its trap. An orphaned fm-speak temporary file is this
+# script's evidence that a speaker was cut short; asking `say` a question must
+# never spend that signal.
+# shellcheck disable=SC2329 # Invoked through the EXIT trap below.
+drop_voice_list() {
+  [ -z "$VOICE_LIST_GUARD" ] || kill "$VOICE_LIST_GUARD" 2>/dev/null || true
+  [ -z "$VOICE_LIST_FILE" ] || rm -f "$VOICE_LIST_FILE"
+  VOICE_LIST_GUARD=
+  VOICE_LIST_FILE=
+}
+trap drop_voice_list EXIT
+
+# Only a confirmed voice is remembered. A voice that was not found is re-asked
+# every line on purpose: the captain is being told about it every line too, and a
+# remembered "missing" would go on refusing after he installed it.
+voice_already_confirmed() {
+  [ -n "$CFG_VOICE" ] || return 1
+  [ -r "$VOICE_CONFIRMED_FILE" ] || return 1
+  [ "$(cat "$VOICE_CONFIRMED_FILE" 2>/dev/null)" = "$CFG_VOICE" ]
+}
+
+remember_confirmed_voice() {
+  mkdir -p "$STATE" 2>/dev/null || return 0
+  printf '%s\n' "$CFG_VOICE" > "$VOICE_CONFIRMED_FILE" 2>/dev/null || true
+}
+
+start_voice_list() {
+  [ -n "$CFG_VOICE" ] || return 0
+  [ -x "$SAY_BIN" ] || return 0
+  ! voice_already_confirmed || return 0
+  VOICE_LIST_FILE=$(mktemp "${TMPDIR:-/tmp}/fm-speak-voices.XXXXXX") || return 0
+  "$SAY_BIN" -v '?' </dev/null >"$VOICE_LIST_FILE" 2>/dev/null &
+  VOICE_LIST_PID=$!
+  start_watchdog "$SHAPER_TIMEOUT" "$VOICE_LIST_PID"
+  VOICE_LIST_GUARD=$WATCHDOG_PID
+}
+
+# True when the configured voice is one `say` listed. Anything short of a
+# complete answer - a lister that never ran, exited non-zero, or produced nothing
+# - means the question could not be answered rather than that the voice is
+# missing, so the line is still spoken. A list killed part-way has already flushed
+# whole blocks of the alphabet, so a name absent from it proves nothing; a killed
+# lister is caught by its non-zero status. This check exists to catch a name that
+# is clearly wrong, not to become a new way to lose a line.
+#
+# It must therefore match at least as loosely as `say` resolves, or it would
+# refuse a name `say` speaks perfectly well. `say` matches case-insensitively,
+# and it resolves a bare base name to its qualified voice: `Eddy` reaches
+# `Eddy (English (UK))` and `Ava` reaches `Ava (Premium)`, byte for byte. The
+# qualifier is stripped from the listed name only, never from the configured one,
+# because the resolution does not run the other way: `Zarvox (Premium)` does not
+# reach the listed `Zarvox`, it falls through to the substitute voice, and that
+# is a name worth refusing.
+#
+# Each listed line is `<name> <locale> # <sample>`, and the name itself can hold
+# spaces and brackets, so the locale and the sample are stripped from the end
+# rather than the name being read from the start.
+configured_voice_is_available() {
+  local available=0 status=0
+  [ -n "$VOICE_LIST_PID" ] || return 0
+  { wait "$VOICE_LIST_PID"; } 2>/dev/null || status=$?
+  kill "$VOICE_LIST_GUARD" 2>/dev/null || true
+  VOICE_LIST_GUARD=
+  VOICE_LIST_PID=
+  if [ "$status" -eq 0 ] && [ -s "$VOICE_LIST_FILE" ]; then
+    if awk -v want="$CFG_VOICE" '
+      BEGIN { want = tolower(want) }
+      {
+        name = $0
+        sub(/[[:space:]]*#.*$/, "", name)
+        sub(/[[:space:]]+[^[:space:]]+[[:space:]]*$/, "", name)
+        name = tolower(name)
+        base = name
+        sub(/[[:space:]]*\(.*\)$/, "", base)
+        if (name == want || base == want) { found = 1 }
+      }
+      END { exit found ? 0 : 1 }
+    ' "$VOICE_LIST_FILE"; then
+      remember_confirmed_voice
+    else
+      available=1
+    fi
+  fi
+  drop_voice_list
+  return "$available"
 }
 
 speak_detached() {  # <textfile>
   local textfile=$1
+  # A configured voice is a choice this script can only keep through `say`:
+  # Deepgram takes its voice from DEEPGRAM_TTS_MODEL and ignores the config key,
+  # so preferring Deepgram here would silently answer in a voice the home did not
+  # ask for. Deepgram stays the fallback for a host with no usable `say`.
+  if [ -n "$CFG_VOICE" ] && [ -x "$SAY_BIN" ]; then
+    if ! configured_voice_is_available; then
+      rm -f "$textfile"
+      die "say has no voice named '$CFG_VOICE' (config/speak); nothing was spoken"
+    fi
+    speak_say_detached "$textfile"
+    return 0
+  fi
   if speak_deepgram_or_fail "$textfile"; then
     return 0
   fi
@@ -359,6 +548,7 @@ main() {
   fi
 
   apply_desk_register
+  [ "$dry_run" = true ] || start_voice_list
 
   outfile=$(mktemp "${TMPDIR:-/tmp}/fm-speak-out.XXXXXX") || die "cannot create a temporary file"
   errfile=$(mktemp "${TMPDIR:-/tmp}/fm-speak-err.XXXXXX") || {
