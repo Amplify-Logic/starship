@@ -151,7 +151,18 @@ make_herdr_home() {  # <name> <project-slug> <task-id>
   proj="$TMP_ROOT/$name/$slug"
   mkdir -p "$home/state" "$home/data/$id" "$home/config" "$home/projects"
   fm_git_init_commit "$proj"
-  printf 'brief for %s\n' "$id" > "$home/data/$id/brief.md"
+  cat > "$home/data/$id/brief.md" <<BRIEF
+# Task
+
+## Captain's intent
+
+brief for $id
+
+## Firstmate spec
+
+Stay inside the task worktree.
+BRIEF
+  printf 'manual\n' > "$home/config/backlog-backend"
   touch "$home/state/.last-watcher-beat"
   printf '%s\n' "$home|$proj"
 }
@@ -163,7 +174,10 @@ herdr_pane_runs() {  # <log>
 run_herdr_spawn() {  # <home> <proj> <id> <fakebin> <state> <log> <wt-root> [extra env assignments...]
   local home=$1 proj=$2 id=$3 fakebin=$4 state=$5 log=$6 wt_root=$7
   shift 7
-  env \
+  # The ambient launcher identity of whatever runs this suite names a real
+  # workspace on the developer's own herdr server; scrub it so the spawn takes
+  # the label path this fixture models.
+  env -u HERDR_ENV -u HERDR_PANE_ID -u HERDR_TAB_ID -u HERDR_WORKSPACE_ID -u HERDR_SOCKET_PATH \
     PATH="$fakebin:$PATH" \
     FM_HOME="$home" \
     FM_ROOT_OVERRIDE="$ROOT" \
@@ -175,7 +189,7 @@ run_herdr_spawn() {  # <home> <proj> <id> <fakebin> <state> <log> <wt-root> [ext
     FM_HERDR_PROJECT_KEY="$LEAK_KEY" \
     FM_HERDR_PROJECT_LABEL="$LEAK_LABEL" \
     "$@" \
-    "$SPAWN" "$id" "$proj" --harness pi --backend herdr
+    "$SPAWN" "$id" "$proj" --harness pi --backend herdr --mode no-mistakes --yolo off
 }
 
 test_set_when_applicable_and_no_leak() {
@@ -260,7 +274,18 @@ test_cleared_when_not_applicable_tmux() {
   mkdir -p "$home/data/$id" "$home/projects" "$home/state" "$home/config"
   printf '%s\n' pi > "$home/config/crew-harness"
   fm_git_worktree "$proj" "$wt" "wt-$id"
-  printf 'brief for %s\n' "$id" > "$home/data/$id/brief.md"
+  cat > "$home/data/$id/brief.md" <<BRIEF
+# Task
+
+## Captain's intent
+
+brief for $id
+
+## Firstmate spec
+
+Stay inside the task worktree.
+BRIEF
+  printf 'manual\n' > "$home/config/backlog-backend"
   touch "$home/state/.last-watcher-beat"
   : > "$sendlog"
   cat > "$fakebin/tmux" <<'SH'
@@ -271,8 +296,22 @@ case "$*" in
 esac
 case "${1:-}" in
   display-message) printf 'firstmate\n'; exit 0 ;;
-  list-windows) exit 0 ;;
-  has-session|new-session|new-window|kill-window) exit 0 ;;
+  # The agent-up read checks the session inventory before it trusts a pane, so
+  # a created window has to show up in list-windows or every spawn reads as a
+  # gone endpoint.
+  list-windows)
+    [ -z "${FM_FAKE_WINDOW_LOG:-}" ] || [ ! -f "$FM_FAKE_WINDOW_LOG" ] || cat "$FM_FAKE_WINDOW_LOG"
+    exit 0 ;;
+  new-window)
+    if [ -n "${FM_FAKE_WINDOW_LOG:-}" ]; then
+      prev=""
+      for a in "$@"; do
+        [ "$prev" != "-n" ] || printf '%s\n' "$a" >> "$FM_FAKE_WINDOW_LOG"
+        prev=$a
+      done
+    fi
+    exit 0 ;;
+  has-session|new-session|kill-window) exit 0 ;;
   send-keys)
     if [ -n "${FM_FAKE_SEND_LOG:-}" ]; then
       printf '%s\n' "$*" >> "$FM_FAKE_SEND_LOG"
@@ -291,8 +330,9 @@ SH
       FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
       FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$wt" TMUX="fake,1,0" \
       FM_FAKE_SEND_LOG="$sendlog" PATH="$fakebin:$PATH" \
+      FM_FAKE_WINDOW_LOG="$home/state/.fake-windows" FM_SPAWN_AGENT_UP_SLEEP=0 \
       FM_HERDR_PROJECT_KEY="$LEAK_KEY" FM_HERDR_PROJECT_LABEL="$LEAK_LABEL" \
-      "$SPAWN" "$id" "$proj" --harness pi --backend tmux 2>&1
+      "$SPAWN" "$id" "$proj" --harness pi --backend tmux --mode no-mistakes --yolo off 2>&1
   )
   status=$?
   expect_code 0 "$status" "tmux spawn should succeed"$'\n'"$out"

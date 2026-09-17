@@ -114,7 +114,7 @@ test_watcher_with_no_overrides_resolves_only_the_hermetic_home() {
 }
 
 test_arm_restart_cannot_touch_a_foreign_home() {
-  local foreign foreign_state lockdir out stand_in arm_pid i
+  local foreign foreign_state lockdir out stand_in arm_pid i arm_home
   foreign=$(plant_foreign_home restart)
   foreign_state="$foreign/state"
   lockdir="$foreign_state/.watch.lock"
@@ -127,13 +127,19 @@ test_arm_restart_cannot_touch_a_foreign_home() {
   fm_test_track_pid "$stand_in"
   printf '%s\n' "$stand_in" > "$lockdir/pid"
 
-  # The arm runs against the suite's own (empty) hermetic home with no other
-  # overrides. A healthy child makes the arm block by design (it is a tracked
-  # background task whose completion is the next wake), so the test awaits the
-  # honest healthy report, asserts the foreign home was never touched WHILE the
-  # arm holds its live cycle, then stops the arm.
+  # The arm runs against an EMPTY home of its own, with no other overrides. The
+  # case before this one killed a watcher inside the shared hermetic home, which
+  # leaves that home's downtime marker behind; a watcher started over it
+  # correctly delivers a resurface wake and ends its cycle at once, so the arm
+  # would never reach the live cycle this case is about. A healthy child makes
+  # the arm block by design (it is a tracked background task whose completion is
+  # the next wake), so the test awaits the honest healthy report, asserts the
+  # foreign home was never touched WHILE the arm holds its live cycle, then
+  # stops the arm.
+  arm_home="$TMP_ROOT/arm-home"
+  mkdir -p "$arm_home/state"
   out="$TMP_ROOT/arm-restart.out"
-  PATH="$ISOLATION_FAKEBIN:$PATH" FM_ARM_CONFIRM_TIMEOUT=5 "$WATCH_ARM" --restart > "$out" 2>&1 &
+  PATH="$ISOLATION_FAKEBIN:$PATH" FM_HOME="$arm_home" FM_ARM_CONFIRM_TIMEOUT=5 "$WATCH_ARM" --restart > "$out" 2>&1 &
   arm_pid=$!
   fm_test_track_pid "$arm_pid"
 

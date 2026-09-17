@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Behavioral coverage for the visible startup-memory budget, its safe parser,
-# accounting command and primary-to-secondmate convergence.
+# accounting command, primary-to-secondmate convergence, and exact reread bytes.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -15,7 +15,22 @@ CONFIG_PUSH="$ROOT/bin/fm-config-push.sh"
 make_fake_toolchain() {
   local dir=$1 fakebin
   fakebin=$(fm_fakebin "$dir")
-  fm_fake_exit0 "$fakebin" node gh-axi chrome-devtools-axi lavish-axi quota-axi
+  fm_fake_exit0 "$fakebin" node chrome-devtools-axi
+  fm_fake_version_tool "$fakebin" lavish-axi FM_FAKE_LAVISH_AXI_VERSION 0.1.46
+  cat > "$fakebin/gh-axi" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = --version ]; then
+  printf '%s\n' '0.1.29'
+fi
+exit 0
+SH
+  cat > "$fakebin/quota-axi" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = --version ]; then
+  printf '%s\n' 'quota-axi 0.1.29 (fake)'
+fi
+exit 0
+SH
   cat > "$fakebin/gh" <<'SH'
 #!/usr/bin/env bash
 exit 0
@@ -29,13 +44,13 @@ SH
   cat > "$fakebin/no-mistakes" <<'SH'
 #!/usr/bin/env bash
 if [ "${1:-}" = --version ]; then
-  printf '%s\n' 'no-mistakes version v1.31.2 (fake)'
+  printf '%s\n' 'no-mistakes version v1.46.0 (fake)'
 fi
 SH
   cat > "$fakebin/tasks-axi" <<'SH'
 #!/usr/bin/env bash
 case "${1:-}:${2:-}" in
-  --version:*) printf '%s\n' '0.2.3' ;;
+  --version:*) printf '%s\n' '0.2.4' ;;
   update:--help) printf '%s\n' '--archive-body' ;;
   mv:--help) printf '%s\n' 'usage: tasks-axi mv <id> [<id>...]' ;;
 esac
@@ -47,7 +62,8 @@ case "$*" in
   *display-message*'#{pane_current_command}'*) printf '%s\n' codex ;;
   *display-message*'#{pane_id}'*) printf '%s\n' '%1' ;;
   *display-message*'#{cursor_y}'*) printf '%s\n' 0 ;;
-  *capture-pane*) printf '\n' ;;
+  *list-windows*) printf '%s\n' fm-sm ;;
+  *capture-pane*) printf '❯\n' ;;
 esac
 exit 0
 SH
@@ -213,14 +229,30 @@ new_propagation_world() {
   printf '%s|%s|%s\n' "$root" "$home" "$sm"
 }
 
+latest_reread_instruction() {
+  local home=$1 state path latest=
+  state=$(cd "$home/state" && pwd -P) || return 1
+  for path in "$state"/.fm-inherited-config-reread.*; do
+    case "$path" in *.pending) continue ;; esac
+    [ -f "$path" ] && [ ! -L "$path" ] || continue
+    latest=$path
+  done
+  [ -n "$latest" ] || return 1
+  printf '%s\n' "$latest"
+}
+
+inbox_record_body() {  # <record>
+  bash -c '. "$1"; fm_task_inbox_body "$2"' _ "$ROOT/bin/fm-task-inbox-lib.sh" "$1"
+}
+
 run_config_push() {
   local root=$1 home=$2 fakebin=$3 log=$4
   PATH="$fakebin:$BASE_PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$root" FM_SEND_SETTLE=0 \
     FM_FAKE_TMUX_LOG="$log" "$CONFIG_PUSH"
 }
 
-test_primary_budget_converges_with_safe_failures() {
-  local world="$TMP_ROOT/propagation" rec root home sm fakebin log out rc outside
+test_primary_budget_converges_with_exact_reread_and_safe_failures() {
+  local world="$TMP_ROOT/propagation" rec root home sm fakebin log out rc instruction expected outside
   mkdir -p "$world"
   rec=$(new_propagation_world "$world")
   root=${rec%%|*}
@@ -236,6 +268,21 @@ test_primary_budget_converges_with_safe_failures() {
     "config push did not report the new budget as inherited"
   [ "$(<"$sm/config/startup-memory-budget")" = 321 ] \
     || fail "secondmate did not receive the primary budget bytes"
+  instruction=$(latest_reread_instruction "$sm") || fail "budget propagation did not publish a reread instruction"
+  expected=$(printf '%s\n\n%s\n%s\n321\n%s' \
+    'These inherited config files changed. Re-read and apply their exact contents at every future intake. They are defaults/rules and do not remove your judgment to choose differently when warranted.' \
+    'config/startup-memory-budget' \
+    '-----BEGIN config/startup-memory-budget-----' \
+    '-----END config/startup-memory-budget-----')
+  [ "$(<"$instruction")" = "$expected" ] \
+    || fail "budget reread payload was not the exact destination bytes"
+  assert_contains "$(inbox_record_body "$home/state/sm.inbox/001.msg")" "CONFIG_REREAD: $instruction" \
+    "budget propagation did not enqueue the pointer to its exact reread generation"
+  assert_contains "$(<"$log")" "Firstmate instruction waiting: list " \
+    "budget propagation did not ring the durable inbox doorbell"
+  assert_contains "$(<"$log")" "/state/sm.inbox'/*.msg" \
+    "budget propagation doorbell did not identify the durable inbox"
+
   outside="$world/unsafe-budget"
   printf '555\n' > "$outside"
   rm -f "$sm/config/startup-memory-budget"
@@ -259,6 +306,10 @@ test_primary_budget_converges_with_safe_failures() {
     "primary absence was not reported as a converging removal"
   [ ! -e "$sm/config/startup-memory-budget" ] \
     || fail "primary absence did not remove the inherited budget"
+  instruction=$(latest_reread_instruction "$sm") || fail "budget absence did not publish a reread instruction"
+  assert_contains "$(<"$instruction")" $'-----BEGIN config/startup-memory-budget-----\nABSENT\n-----END config/startup-memory-budget-----' \
+    "budget absence reread did not use the explicit ABSENT payload"
+
   rm -f "$sm/config/startup-memory-budget"
   printf '555\n' > "$outside"
   ln -s "$outside" "$home/config/startup-memory-budget"
@@ -272,12 +323,12 @@ test_primary_budget_converges_with_safe_failures() {
   [ ! -e "$sm/config/startup-memory-budget" ] \
     || fail "unsafe primary budget changed the converged secondmate copy"
   [ "$(<"$outside")" = 555 ] || fail "unsafe primary budget handling changed its symlink target"
-  pass "budget propagation converges through config push with absence and safe rejection"
+  pass "budget propagation converges through config push with exact rereads, absence, and safe rejection"
 }
 
 test_primary_bootstrap_materializes_visible_default
 test_safe_parser_rejects_ambiguous_and_unsafe_values
 test_budget_accounting_reports_all_three_files_and_safe_failure
-test_primary_budget_converges_with_safe_failures
+test_primary_budget_converges_with_exact_reread_and_safe_failures
 
 echo '# all fm-startup-memory-budget tests passed'

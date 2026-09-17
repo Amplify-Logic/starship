@@ -70,18 +70,15 @@ Observed placeholder variants: `Try "add tests for @<filepath>"`, `Try "refactor
 
 One `Ctrl+C` mid-turn: the turn stopped with `Operation aborted · 2s`, the pane and process survived, and the composer returned to the idle placeholder.
 
-### Turn-end extension
+### Semantic busy-state and turn-end extension
 
-`state/<id>.prime-ext.ts` (the pi-fork extension API) loaded with `-e`:
+`bin/fm-spawn.sh` writes `state/<id>.prime-ext.ts` (the pi-fork extension API) and loads it with `-e`.
+It is Pi's per-task extension under the `prime-ext` source: `agent_start` records busy, `agent_settled` confirmed by `ctx.isIdle()` records idle, and `turn_end` touches the turn-ended marker as a wake notification rather than current state.
+The one deliberate omission from Pi's extension is the `codex-native:progress` marker, which prime-agent has no equivalent for.
+`bin/fm-busy-lib.sh` owns the contract and the per-harness source trust table; [architecture](architecture.md#busy-state-is-semantic-per-adapter) owns its boundaries.
+prime-agent removed pi's project-trust mechanism entirely, so there is no trust gate either way; the extension still lives in `state/` outside the worktree so it cannot pollute the task's git state.
 
-```ts
-import { execFile } from "node:child_process";
-export default function (pi: any) {
-  pi.on("turn_end", () => execFile("touch", ["<turn-end path>"]));
-}
-```
-
-Verified: the marker file appeared ~10s after a one-line prompt completed.
+Verified: the turn-ended marker appeared ~10s after a one-line prompt completed.
 
 ### Positional brief
 

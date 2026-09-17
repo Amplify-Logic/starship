@@ -25,6 +25,7 @@ If a Desktop-owned thread cannot write Firstmate status files, the backend canno
 ## Verified Desktop host-tool smoke
 
 Latest verified host-tool smoke date: 2026-07-06.
+[`verification/runtime-backends.md`](verification/runtime-backends.md#codex-app-host-tools) is the owner of the distilled sequence and the guarantee it establishes; the redacted raw exchange below is retained here only as the supporting evidence for that record.
 Environment: Codex Desktop host tools, local host, saved project `<FIRSTMATE_HOME>/projects/sift`, Desktop-owned worktree `<CODEX_DESKTOP_WORKTREE>`, Firstmate home `<FIRSTMATE_HOME>`.
 Local absolute path prefixes are redacted as `<FIRSTMATE_HOME>` and `<CODEX_DESKTOP_WORKTREE>`; file names, host-tool ids, thread ids, status lines, and report values are otherwise exact.
 

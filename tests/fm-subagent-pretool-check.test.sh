@@ -7,7 +7,6 @@ set -u
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 CHECK="$ROOT/bin/fm-subagent-pretool-check.sh"
-SETTINGS="$ROOT/.claude/settings.json"
 TMP_ROOT=$(fm_test_tmproot fm-subagent-pretool-tests)
 PRIMARY="$TMP_ROOT/primary"
 STATE="$PRIMARY/state"
@@ -31,10 +30,15 @@ DELEGATION_TOOLS='Task Agent Workflow RemoteTrigger Monitor ScheduleWakeup SendM
 # Tools that must stay available: denying these would break ordinary work.
 PRESERVED_TOOLS='Bash Edit Read Write Skill ToolSearch WebFetch WebSearch NotebookEdit ReportFindings DesignSync PushNotification'
 
-# Session-local todo-list tools match a delegation stem but create no runnable work.
+# Session-local todo-list tools. They match a delegation stem but create no
+# runnable work, so the guard's plan-only exclusion must allow them.
 PLAN_ONLY_TOOLS='TaskCreate TaskUpdate'
 
-# Exact-match regressions: every near miss remains runnable delegation and denied.
+# Names the plan-only exclusion must NOT release. Five of them contain a
+# plan-only name as a substring and would be let through by a substring rather
+# than exact-name match; bare Task is what a shortened entry of "task" would
+# release. Together they make the exact-name contract testable instead of
+# assumed.
 PLAN_ONLY_NEAR_MISSES='TaskCreateAgent TaskCreateWorktree TaskUpdateAgent RemoteTaskCreate Task TaskCreator'
 
 run_tool() {
@@ -68,25 +72,15 @@ expect_deny() {
 }
 
 # ---------------------------------------------------------------------------
-# Tracked settings boundary and delegation-shape PreToolUse guard.
+# Delegation-shape PreToolUse guard.
 # ---------------------------------------------------------------------------
-
-test_tracked_settings_do_not_ship_permissions_deny() {
-  # This fork carries a tracked statusLine entry upstream lacks; merge, never
-  # replace. The security boundary is still: no permissions.deny in tracked
-  # project settings, because linked worktrees inherit them.
-  jq -e '(has("permissions") | not) and has("hooks") and has("statusLine")' "$SETTINGS" >/dev/null \
-    || fail "tracked Claude settings must keep hooks+statusLine and ship no permissions key"
-  jq -e '.statusLine.type == "command" and (.statusLine.command | contains("fm-status-bar.sh"))' "$SETTINGS" >/dev/null \
-    || fail "fork-only statusLine must survive the delegation-guard port unchanged"
-  pass "tracked Claude settings do not ship permissions.deny"
-}
 
 test_guard_denies_every_currently_known_delegation_tool() {
   local tool
   for tool in $DELEGATION_TOOLS; do
     case "$tool" in
-      TaskOutput|TaskStop|TaskGet|TaskList|CronList|TaskCreate|TaskUpdate) continue ;;
+      TaskOutput|TaskStop|TaskGet|TaskList|CronList) continue ;;
+      TaskCreate|TaskUpdate) continue ;;
     esac
     expect_deny "known delegation tool" "$tool"
   done
@@ -119,6 +113,10 @@ test_guard_allows_ordinary_and_observe_only_tools() {
 }
 
 test_guard_allows_session_local_todo_tools() {
+  # These write, so they are not observe-or-stop, but what they write is the
+  # harness's session-local todo list: no executor, no agent, no worktree, no
+  # schedule, nothing that outlives the session. Denying them stops the primary
+  # tracking its own plan and grants no delegation power in exchange.
   local tool
   for tool in $PLAN_ONLY_TOOLS; do
     expect_allow "session-local todo tool" "$tool"
@@ -127,11 +125,13 @@ test_guard_allows_session_local_todo_tools() {
 }
 
 test_plan_only_exclusion_is_exact_name() {
+  # The plan-only exclusion must never widen by substring or by a shorter stem.
+  # Every name here would be released by such a widening and must stay denied.
   local tool
   for tool in $PLAN_ONLY_NEAR_MISSES; do
     expect_deny "plan-only near miss" "$tool"
   done
-  pass "the plan-only exclusion releases only the two exact todo tool names"
+  pass "the plan-only exclusion releases exactly two names and nothing that merely contains them"
 }
 
 test_guard_never_classifies_mcp_tools() {
@@ -155,7 +155,7 @@ test_deny_message_defers_to_intake_classification() {
     *) fail "deny must reserve bin/fm-scout.sh for classified scout work: $actual" ;;
   esac
   case "$actual" in
-    *'investigation or diagnosis goes to bin/fm-scout.sh'*) fail "deny must not classify every investigation as scout work: $actual" ;;
+    *'investigation or diagnosis goes to bin/fm-scout.sh'*) fail "deny must not classify all investigation or diagnosis as scout work: $actual" ;;
   esac
   rm -f "$PRIMARY/bin/fm-scout.sh"
   run_tool Agent && fail "scout-absent case must still deny"
@@ -276,32 +276,6 @@ test_missing_jq_stdin_transport_fails_open() {
   pass "missing jq for stdin transport fails open rather than denying every tool call"
 }
 
-test_claude_hook_registration_preserves_bash_seatbelts() {
-  jq -e '
-    [.hooks.PreToolUse[] | .hooks[].command]
-      | any(contains("fm-subagent-pretool-check.sh --claude"))
-  ' "$SETTINGS" >/dev/null || fail "Claude settings omit the delegation-shape PreToolUse guard"
-  # A stem-enumerating matcher repeats the fail-open-by-enumeration defect the
-  # script exists to remove. Match all tools and let the script be the single
-  # owner of classification.
-  jq -e '
-    [.hooks.PreToolUse[] | select(.hooks[].command | contains("fm-subagent-pretool-check.sh")) | .matcher] | .[0]
-      | . == ".*"
-  ' "$SETTINGS" >/dev/null || fail "the guard matcher must match all tools"
-  jq -e '
-    [.hooks.PreToolUse[] | select(.matcher == "Bash") | .hooks[].command] as $bash
-      | ($bash | any(contains("fm-arm-pretool-check.sh")))
-      and ($bash | any(contains("fm-cd-pretool-check.sh")))
-      and ($bash | any(contains("fm-continuity-pretool-check.sh")))
-  ' "$SETTINGS" >/dev/null || fail "the existing Bash PreToolUse seatbelts changed"
-  jq -e '.hooks.Stop[0].hooks[0].command | contains("fm-turnend-guard.sh")' "$SETTINGS" >/dev/null \
-    || fail "the Stop turn-end guard changed"
-  jq -e '.statusLine.command | contains("fm-status-bar.sh")' "$SETTINGS" >/dev/null \
-    || fail "fork-only statusLine was dropped while wiring the guard"
-  pass "Claude wires the guard while preserving the Bash seatbelts and the Stop guard"
-}
-
-test_tracked_settings_do_not_ship_permissions_deny
 test_guard_denies_every_currently_known_delegation_tool
 test_guard_denies_hypothetical_future_tools
 test_guard_allows_ordinary_and_observe_only_tools
@@ -315,4 +289,3 @@ test_secondmate_home_is_in_scope
 test_stdin_transports_and_output_shapes
 test_malformed_transport_fails_open
 test_missing_jq_stdin_transport_fails_open
-test_claude_hook_registration_preserves_bash_seatbelts

@@ -405,7 +405,7 @@ _fm_codex_quota_seam_reading() {
 # surface a login prompt behind a status bar. Only the detached warmer below
 # calls this; a render never does.
 #
-# The bound is fm_run_timeout, the declared single owner of that mechanism: it
+# The bound is fm_run_timed, the declared single owner of that mechanism: it
 # runs the probe in its own process group so a forking quota-axi leaves no
 # orphans behind, and it detaches stdin, which is load-bearing rather than tidy -
 # a vendor CLI that touches the terminal on stdin otherwise stops on SIGTTIN and
@@ -416,7 +416,7 @@ _fm_codex_quota_axi_reading() {
   command -v quota-axi >/dev/null 2>&1 || return 1
   out=$(mktemp "${TMPDIR:-/tmp}/fm-codex-quota.XXXXXX") || return 1
   limit=$(_fm_codex_ttl "${FM_CODEX_QUOTA_WAIT:-}" 10)
-  fm_run_timeout "$limit" quota-axi --provider codex --json --no-credential-refresh \
+  fm_run_timed "$limit" quota-axi --provider codex --json --no-credential-refresh \
     > "$out" 2>/dev/null
   status=$?
   json=

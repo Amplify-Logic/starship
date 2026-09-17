@@ -339,7 +339,16 @@ test_startup_wait_rejects_blank_boot_frame() {
     fail "a blank mid-boot frame was accepted as a settled composer"
   fi
   tmux kill-session -t "$SESSION" >/dev/null 2>&1 || true
-  TARGET=$(tmux new-session -dP -F '#{window_id}' -s "$SESSION" 'printf "│ > │"; sleep 30') \
+  # A COMPLETE boxed composer with the cursor parked on its content row. The
+  # shared composer owner (bin/fm-composer-lib.sh) needs a top border, a
+  # side-bordered content row and a bottom border before it calls a frame
+  # settled, and its strict blank-row rule rejects a cursor sitting on the blank
+  # line below the box - which is where a bare side-bordered row leaves it.
+  composer_frame='\342\225\255\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\225\256\n'
+  composer_frame+='\342\224\202 >        \342\224\202\n'
+  composer_frame+='\342\225\260\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\224\200\342\225\257\n'
+  composer_frame+='\033[2A\033[4G'
+  TARGET=$(tmux new-session -dP -F '#{window_id}' -s "$SESSION" "printf '%s' \"\$(printf '$composer_frame')\"; sleep 30") \
     || fail "could not start the rendered-composer pane"
   sleep 1
   if ! wait_for_composer; then

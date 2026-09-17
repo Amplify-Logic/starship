@@ -19,6 +19,20 @@ SPAWN="$ROOT/bin/fm-spawn.sh"
 TMP_ROOT=$(fm_test_tmproot fm-spawn-account)
 SPAWN_HOMES_FILE="$TMP_ROOT/homes"
 : > "$SPAWN_HOMES_FILE"
+# The unpinned claude launch line, recorded by test_absent_registry_changes_nothing
+# and compared against by the absent-library case. Observed rather than written
+# out here, because what both cases claim is that pinning changes NOTHING, not
+# that the launch line has any particular shape.
+BASELINE_LAUNCH_FILE="$TMP_ROOT/baseline-claude-launch"
+
+# The launch line with this case's own paths replaced by tokens - the task's
+# brief directory and the bin/ the spawn ran from - so two cases that differ
+# only in where they live can be compared byte for byte.
+launch_without_case_paths() {  # <launch-line> <home> <task-id> <spawn-bin-dir>
+  local launch=$1 home=$2 id=$3 bindir=$4
+  launch=${launch//$home\/data\/$id/<TASK-DATA>}
+  printf '%s' "${launch//$bindir/<BIN>}"
+}
 
 make_spawn_fakebin() {
   local dir=$1 fakebin
@@ -31,8 +45,22 @@ case "$*" in
 esac
 case "${1:-}" in
   display-message) printf 'firstmate\n'; exit 0 ;;
-  list-windows) exit 0 ;;
-  has-session|new-session|new-window|kill-window) exit 0 ;;
+  # fm-spawn reads the window inventory before it will report a spawn as
+  # started, so the stub lists back the window it was asked to create.
+  new-window)
+    prev=
+    for a in "$@"; do
+      [ "$prev" != "-n" ] || printf '%s\n' "$a" >> "${FM_FAKE_WINDOW_LOG:?}"
+      prev=$a
+    done
+    exit 0
+    ;;
+  list-windows)
+    [ ! -f "${FM_FAKE_WINDOW_LOG:?}" ] || cat "$FM_FAKE_WINDOW_LOG"
+    exit 0
+    ;;
+  *"#{pane_current_command}"*) printf '%s\n' "${FM_FAKE_PANE_COMMAND:-}"; exit 0 ;;
+  has-session|new-session|kill-window) exit 0 ;;
   send-keys)
     if [ -n "${FM_FAKE_LAUNCH_LOG:-}" ]; then
       prev=
@@ -102,7 +130,14 @@ make_spawn_case() {  # <name> <harness> <task-id>...
   touch "$home/state/.last-watcher-beat"
   for id in "$@"; do
     mkdir -p "$home/data/$id"
-    printf 'brief for %s\n' "$id" > "$home/data/$id/brief.md"
+    cat > "$home/data/$id/brief.md" <<EOF
+# Task
+## Captain's intent
+brief for $id
+
+## Firstmate spec
+Exercise vendor account pinning.
+EOF
   done
   printf '%s\n' "$home|$proj|$wt|$fakebin|$launchlog"
 }
@@ -117,6 +152,9 @@ register_spawn_home() {
   printf '%s\n' "$( (CDPATH='' cd -- "$1" 2>/dev/null && pwd -P) || printf '%s' "$1")" >> "$SPAWN_HOMES_FILE"
 }
 
+# Every case here is a ship spawn and fm-spawn requires each one's delivery
+# contract explicitly, so the suite pins one rather than repeating it at every
+# call site; no case under test depends on which contract it is.
 run_spawn() {  # <home> <worktree> <fakebin> <launchlog> <spawn-args...>
   local home=$1 wt=$2 fakebin=$3 launchlog=$4
   shift 4
@@ -131,7 +169,9 @@ run_spawn() {  # <home> <worktree> <fakebin> <launchlog> <spawn-args...>
     FM_FAKE_CLAUDE_EMAIL="${FM_FAKE_CLAUDE_EMAIL:-}" \
     FM_FAKE_CLAUDE_ORG="${FM_FAKE_CLAUDE_ORG:-}" \
     CLAUDE_CONFIG_DIR='' CODEX_HOME='' PATH="$fakebin:$PATH" \
-    "$SPAWN" "$@" 2>&1
+    FM_FAKE_WINDOW_LOG="$home/state/.fake-windows" \
+    FM_SPAWN_AGENT_UP_SLEEP=0 \
+    "$SPAWN" "$@" --mode no-mistakes --yolo off 2>&1
 }
 
 write_registry() {  # <home>
@@ -177,20 +217,23 @@ trap 'clear_spawn_task_tmps' EXIT
 # The compatibility guarantee: with no registry, the launch line and the meta are
 # exactly what they were before account pinning existed.
 test_absent_registry_changes_nothing() {
-  local rec id out status launch encoded expected
+  local rec id out status launch expected
   id=account-absent-a1
   rec=$(make_spawn_case account-absent claude "$id")
   read_case_record "$rec"
 
   out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
   status=$?
+  [ "$status" -eq 0 ] || printf '%s\n' "$out" >&2
   expect_code 0 "$status" "claude spawn without a registry should succeed"
   assert_contains "$out" "spawned $id harness=claude" "spawn did not report claude"
 
   launch=$(cat "$LAUNCH_LOG")
-  encoded=$("$ROOT/bin/fm-operational-input.sh" encode launch-brief < "$HOME_DIR/data/$id/brief.md")
-  expected="CLAUDE_CODE_AUTO_COMPACT_WINDOW=500000 CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions '$encoded'"
-  [ "$launch" = "$expected" ] || fail "absent registry changed the claude launch line"$'\n'"expected: $expected"$'\n'"actual:   $launch"
+  launch_without_case_paths "$launch" "$HOME_DIR" "$id" "$ROOT/bin" > "$BASELINE_LAUNCH_FILE"
+  assert_contains "$launch" "claude --dangerously-skip-permissions" \
+    "absent registry did not produce an ordinary claude launch line"
+  assert_contains "$launch" "encode launch-brief" \
+    "absent registry did not produce a launch line carrying the brief"
   assert_no_grep 'account=' "$HOME_DIR/state/$id.meta" "absent registry still recorded an account in meta"
   assert_no_grep 'CLAUDE_CONFIG_DIR' "$LAUNCH_LOG" "absent registry still pinned a Claude home"
   pass "fm-spawn: an absent config/accounts.json leaves the launch and meta unchanged"
@@ -201,7 +244,7 @@ test_absent_registry_changes_nothing() {
 # existed and prints no shell error, while an explicit --account is refused
 # rather than silently launched on the ambient login.
 test_absent_library_degrades_without_error() {
-  local rec id out status launch encoded expected bin
+  local rec id out status launch expected bin
   id=account-nolib-a8
   rec=$(make_spawn_case account-nolib claude "$id")
   read_case_record "$rec"
@@ -218,19 +261,26 @@ test_absent_library_degrades_without_error() {
   assert_not_contains "$out" "No such file" "an absent account library leaked a shell error"
 
   launch=$(cat "$LAUNCH_LOG")
-  encoded=$("$ROOT/bin/fm-operational-input.sh" encode launch-brief < "$HOME_DIR/data/$id/brief.md")
-  # This must stay byte-identical to the baseline in
-  # test_absent_registry_changes_nothing: that is the whole claim, so a change to
-  # the claude launch line has to land in both or this pin fails for the wrong
+  # Byte-identical to the baseline the unpinned case observed: that is the whole
+  # claim, and comparing against a recorded baseline rather than a copied literal
+  # keeps an ordinary launch-template change from failing this pin for the wrong
   # reason.
-  expected="CLAUDE_CODE_AUTO_COMPACT_WINDOW=500000 CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions '$encoded'"
+  expected=$(cat "$BASELINE_LAUNCH_FILE")
+  launch=$(launch_without_case_paths "$launch" "$HOME_DIR" "$id" "$bin")
   [ "$launch" = "$expected" ] || fail "absent account library changed the claude launch line"$'\n'"expected: $expected"$'\n'"actual:   $launch"
   assert_no_grep 'account=' "$HOME_DIR/state/$id.meta" "absent account library still recorded an account in meta"
   assert_no_grep 'CLAUDE_CONFIG_DIR' "$LAUNCH_LOG" "absent account library still pinned a Claude home"
 
   id=account-nolib-a9
   mkdir -p "$HOME_DIR/data/$id"
-  printf 'brief for %s\n' "$id" > "$HOME_DIR/data/$id/brief.md"
+  cat > "$HOME_DIR/data/$id/brief.md" <<EOF
+# Task
+## Captain's intent
+brief for $id
+
+## Firstmate spec
+Exercise vendor account pinning.
+EOF
   out=$(SPAWN="$bin/fm-spawn.sh" run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --account team)
   status=$?
   [ "$status" -ne 0 ] || fail "an explicit --account launched without the account library"
@@ -254,7 +304,7 @@ test_pinned_claude_account_exports_home_and_records_meta() {
   expect_code 0 "$status" "pinned claude spawn should succeed: $out"
   launch=$(cat "$LAUNCH_LOG")
   case "$launch" in
-    "CLAUDE_CONFIG_DIR='$home' CLAUDE_CODE_AUTO_COMPACT_WINDOW=500000 CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude "*) ;;
+    "CLAUDE_CONFIG_DIR='$home' "*) ;;
     *) fail "pinned claude launch did not export the derived home first"$'\n'"actual: $launch" ;;
   esac
   assert_grep "account=max" "$HOME_DIR/state/$id.meta" "meta did not record the pinned account"
@@ -275,7 +325,7 @@ test_vendor_default_applies_without_the_flag() {
   expect_code 0 "$status" "codex spawn on the vendor default should succeed: $out"
   launch=$(cat "$LAUNCH_LOG")
   case "$launch" in
-    "CODEX_HOME='$home' codex "*) ;;
+    "CODEX_HOME='$home' "*) ;;
     *) fail "omitted --account did not fall back to the codex default account"$'\n'"actual: $launch" ;;
   esac
   assert_grep "account=robin" "$HOME_DIR/state/$id.meta" "meta did not record the default account"

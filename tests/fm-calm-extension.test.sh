@@ -243,13 +243,18 @@ setCalmStockExportRendering(false);
 setCalmPresentation(false);
 
 const visible = (line) => line.replace(/\u001b\[\d+m/g, "");
+// The sprite the shared module draws today; the creator's own Pi Calm suite owns
+// the exhaustive geometry, so this fork suite only proves the module still loads
+// and animates the same boat the fork's /calm toggle installs.
+const SAIL = "\u25FF\u2502\u25E3";
+const HULL = "\u2572\u2581\u2581\u2581\u2571";
 const animation = createCalmWorkingShipAnimation();
 
 // A normal width draws the sail over the hull, both riding a full-width row.
 let frame = animation.render(40);
 assert.equal(frame.length, 2, "a normal width did not draw a sail row and a water row");
-assert.ok(visible(frame[1]).startsWith("\\__/"), `hull is not at the left edge: ${visible(frame[1])}`);
-assert.ok(visible(frame[0]).includes("<|"), `sail is missing on a rightward heading: ${visible(frame[0])}`);
+assert.ok(visible(frame[1]).startsWith(HULL), `hull is not at the left edge: ${visible(frame[1])}`);
+assert.ok(visible(frame[0]).includes(SAIL), `sail is missing over the hull: ${visible(frame[0])}`);
 // The water row fills the width exactly; the sail row rides above it and never
 // runs past the end of the track.
 assert.equal(visible(frame[1]).length, 40, `the water row did not fill the width: ${visible(frame[1]).length}`);
@@ -263,11 +268,12 @@ assert.equal(animation.position(), 0, "the boat moved on the very first tick");
 for (let i = 1; i < CALM_WORKING_SHIP_TICKS_PER_MOVE; i += 1) animation.tick();
 assert.equal(animation.position(), 1, "the boat did not advance one column on its cadence");
 
-// The boat bounces at the right edge and turns its sail with it.
+// The boat bounces at the right edge. The sprite is a fixed asymmetric sail, so
+// the heading is carried by direction() and the wave, not by a mirrored glyph.
 for (let i = 0; i < CALM_WORKING_SHIP_TICKS_PER_MOVE * 60; i += 1) animation.tick();
 frame = animation.render(40);
 assert.equal(animation.direction(), -1, "the boat did not turn at the right edge");
-assert.ok(visible(frame[0]).includes("|>"), `the sail did not turn with the boat: ${visible(frame[0])}`);
+assert.ok(visible(frame[0]).includes(SAIL), `the boat lost its fixed sail after turning: ${visible(frame[0])}`);
 assert.ok(animation.position() <= 40 - 4, "the boat sailed past the end of its track");
 
 // Hiding the boat freezes it; the next working period resumes from there.

@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
 # Behavior tests for fm-spawn.sh batch dispatch (`id=repo` pairs).
 #
-# These exercise argument routing only: each spawn attempt passes the launch
-# preflight with a fake codex binary, then fails before any tmux/treehouse side
-# effect, so the tests create no windows or worktrees.
-# FM_SPAWN_NO_GUARD=1 keeps them off the live watcher guard and state.
-# Parser and path-scoping cases are table-driven.
-# The only behavior asserted on its own is that a multi-pair batch does not stop
-# after the first failure.
+# These exercise argument routing only: each spawn attempt fails fast at the
+# missing-brief check, which is reached before any tmux/treehouse side effect, so
+# the tests create no windows or worktrees. FM_SPAWN_NO_GUARD=1 keeps them off the
+# live watcher guard / state. Parser and path-scoping cases are table-driven; the
+# only behavior asserted on its own is "a multi-pair batch does not stop after the
+# first failure".
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -15,8 +14,6 @@ set -u
 
 SPAWN="$ROOT/bin/fm-spawn.sh"
 TMP_ROOT=$(fm_test_tmproot fm-spawn-batch)
-FAKEBIN=$(fm_fakebin "$TMP_ROOT/tools")
-fm_fake_exit0 "$FAKEBIN" codex
 export FM_BACKEND=tmux
 
 # Clear ambient firstmate overrides so the behavior test owns its environment.
@@ -28,15 +25,20 @@ run_spawn() {
     FM_PROJECTS_OVERRIDE='' \
     FM_CONFIG_OVERRIDE='' \
     FM_SPAWN_NO_GUARD=1 \
-    PATH="$FAKEBIN:$PATH" \
-    "$SPAWN" "$@" --harness codex 2>&1
+    "$SPAWN" "$@" 2>&1
+}
+
+# Ship spawns carry an explicit delivery contract (AGENTS.md section 7); the
+# batch path takes one shared pair of flags for every pair.
+run_ship_spawn() {
+  run_spawn "$@" --mode no-mistakes --yolo off
 }
 
 # Every pair in a batch is dispatched even though the first one fails; the loop
 # must not stop early. This is the load-bearing batch guarantee, kept explicit.
 test_batch_dispatches_every_pair() {
   local out status
-  out=$(run_spawn nope-batch-a-z1=projects/none-a nope-batch-b-z2=projects/none-b)
+  out=$(run_ship_spawn nope-batch-a-z1=projects/none-a nope-batch-b-z2=projects/none-b)
   status=$?
   [ "$status" -ne 0 ] || fail "batch with missing briefs should exit non-zero"
   printf '%s\n' "$out" | grep -F 'batch: FAILED to spawn nope-batch-a-z1 (projects/none-a)' >/dev/null \
@@ -54,7 +56,7 @@ test_batch_mode_boundaries() {
   while IFS='|' read -r label batch expect args; do
     [ -n "$label" ] || continue
     # shellcheck disable=SC2086  # args is an intentional word-split arg list
-    out=$(run_spawn $args)
+    out=$(run_ship_spawn $args)
     status=$?
     [ "$status" -ne 0 ] || fail "$label: expected non-zero exit"
     if [ -n "$expect" ]; then
@@ -76,25 +78,37 @@ ROWS
 # A projects/ path is resolved through the firstmate home, never the caller cwd,
 # before the missing-brief check. One row per home-scoping override.
 test_projects_path_scoping() {
-  local label use_override id home projects out status expected
+  local label use_override id home projects out status expected fakebin
+  # These rows name a harness, and bin/fm-spawn.sh refuses a spawn whose launch
+  # binary is missing before it resolves the brief - earlier than the check these
+  # rows assert on, since the brief path is only known after project resolution.
+  # codex is present on a developer laptop and absent on every CI runner, so
+  # without this shim the case asserts the path scoping locally and the
+  # launch-binary refusal in CI.
+  fakebin="$TMP_ROOT/launch-bin"
+  fm_fake_launch_binary "$fakebin" codex
   while IFS='|' read -r label use_override id; do
     [ -n "$label" ] || continue
     home="$TMP_ROOT/$id home"
     projects="$TMP_ROOT/$id projects"
     mkdir -p "$home/data" "$projects/alpha"
+    git -C "$projects/alpha" init -q || fail "$label: could not initialize project fixture"
     if [ "$use_override" = yes ]; then
-      out=$(FM_ROOT_OVERRIDE='' FM_STATE_OVERRIDE='' FM_DATA_OVERRIDE='' FM_CONFIG_OVERRIDE='' \
+      # shellcheck disable=SC2031  # PATH is scoped to this one invocation on purpose.
+      out=$(PATH="$fakebin:$PATH" FM_ROOT_OVERRIDE='' FM_STATE_OVERRIDE='' FM_DATA_OVERRIDE='' FM_CONFIG_OVERRIDE='' \
         FM_HOME="$home" FM_PROJECTS_OVERRIDE="$projects" FM_SPAWN_NO_GUARD=1 \
-        PATH="$FAKEBIN:$PATH" "$SPAWN" "$id" projects/alpha codex 2>&1)
+        "$SPAWN" "$id" projects/alpha codex --mode no-mistakes --yolo off 2>&1)
     else
       mkdir -p "$home/projects/alpha"
-      out=$(FM_ROOT_OVERRIDE='' FM_STATE_OVERRIDE='' FM_DATA_OVERRIDE='' FM_PROJECTS_OVERRIDE='' FM_CONFIG_OVERRIDE='' \
+      git -C "$home/projects/alpha" init -q || fail "$label: could not initialize home project fixture"
+      # shellcheck disable=SC2031  # PATH is scoped to this one invocation on purpose.
+      out=$(PATH="$fakebin:$PATH" FM_ROOT_OVERRIDE='' FM_STATE_OVERRIDE='' FM_DATA_OVERRIDE='' FM_PROJECTS_OVERRIDE='' FM_CONFIG_OVERRIDE='' \
         FM_HOME="$home" FM_SPAWN_NO_GUARD=1 \
-        PATH="$FAKEBIN:$PATH" "$SPAWN" "$id" projects/alpha codex 2>&1)
+        "$SPAWN" "$id" projects/alpha codex --mode no-mistakes --yolo off 2>&1)
     fi
     status=$?
     [ "$status" -ne 0 ] || fail "$label: spawn with missing brief should fail"
-    expected="error: no brief at $home/data/$id/brief.md"
+    expected="error: task $id has no brief at inaccessible data path $home/data/$id/brief.md"
     printf '%s\n' "$out" | grep -F "$expected" >/dev/null \
       || fail "$label: projects/alpha was not resolved through the home before the brief check"
     printf '%s\n' "$out" | grep -F 'cd: projects/alpha' >/dev/null \
@@ -106,6 +120,41 @@ ROWS
   pass "projects/ paths are scoped through the firstmate home for single-task spawn"
 }
 
+# A ship batch carries one shared delivery contract. Missing flags must stop the
+# whole batch before any pair is dispatched, so a batch can never launch workers
+# whose delivery posture was never decided.
+test_batch_requires_the_shared_delivery_contract() {
+  local out status
+  out=$(run_spawn nope-batch-nomode-z9=projects/none-a nope-batch-nomode-z10=projects/none-b)
+  status=$?
+  [ "$status" -ne 0 ] || fail "a ship batch without --mode should exit non-zero"
+  printf '%s\n' "$out" | grep -F 'ship spawns require --mode' >/dev/null \
+    || fail "batch refusal did not name the missing delivery mode"
+  printf '%s\n' "$out" | grep -F 'batch:' >/dev/null \
+    && fail "batch dispatched pairs despite an undecided delivery contract"
+
+  out=$(run_spawn nope-batch-noyolo-z11=projects/none-a --mode direct-PR)
+  status=$?
+  [ "$status" -ne 0 ] || fail "a ship batch without --yolo should exit non-zero"
+  printf '%s\n' "$out" | grep -F 'ship spawns require --yolo' >/dev/null \
+    || fail "batch refusal did not name the missing merge posture"
+  pass "batch dispatch requires the shared ship delivery contract before any pair runs"
+}
+
+# A scout batch has no delivery contract to share, so the flags are refused rather
+# than accepted and ignored.
+test_scout_batch_refuses_delivery_flags() {
+  local out status
+  out=$(run_spawn nope-batch-scout-z12=projects/none-a --scout --mode direct-PR --yolo on)
+  status=$?
+  [ "$status" -ne 0 ] || fail "a scout batch carrying delivery flags should exit non-zero"
+  printf '%s\n' "$out" | grep -F 'applies only to ship spawns' >/dev/null \
+    || fail "scout batch did not refuse the delivery flags"
+  pass "scout batch refuses ship delivery flags instead of ignoring them"
+}
+
 test_batch_dispatches_every_pair
 test_batch_mode_boundaries
+test_batch_requires_the_shared_delivery_contract
+test_scout_batch_refuses_delivery_flags
 test_projects_path_scoping

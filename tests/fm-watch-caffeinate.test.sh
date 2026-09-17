@@ -298,12 +298,20 @@ test_successor_does_not_pile_up() {
   done
   [ "$(cat "$state/.watch.lock/pid" 2>/dev/null || true)" = "$pid1" ] \
     || fail "first watcher did not take the lock"
+  if [ "$(uname)" = Darwin ]; then
+    wait_until 100 log_has_w_pid "$pid1" "$log" \
+      || fail "first watcher did not spawn its own assertion: $(cat "$log")"
+  fi
   kill "$pid1" 2>/dev/null || true
   wait "$pid1" 2>/dev/null || true
   wait_until 40 zero_live_stubs "$log" \
     || fail "first watcher's assertion survived its exit"
 
-  PATH="$fakebin:$PATH" FM_HOME="$dir" \
+  # A real successor is armed by bin/fm-watch-arm.sh with
+  # FM_WATCH_HANDLING_SUCCESSOR=1, which is what keeps it in the poll loop
+  # instead of immediately delivering the predecessor's recovery resurface and
+  # standing down. Without that flag there is no successor to observe.
+  PATH="$fakebin:$PATH" FM_HOME="$dir" FM_WATCH_HANDLING_SUCCESSOR=1 \
     FM_STATE_OVERRIDE="$state" FM_POLL=5 FM_SIGNAL_GRACE=1 \
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$dir/second.out" 2>"$dir/second.err" &
   pid2=$!
@@ -319,7 +327,7 @@ test_successor_does_not_pile_up() {
   [ "$lock_pid" = "$pid2" ] || fail "successor watcher did not take the lock"
 
   if [ "$(uname)" = Darwin ]; then
-    wait_until 40 log_has_w_pid "$pid2" "$log" \
+    wait_until 100 log_has_w_pid "$pid2" "$log" \
       || fail "successor did not spawn a fresh assertion: $(cat "$log")"
     [ "$(live_stub_count "$log")" = 1 ] \
       || fail "successor chain piled up assertions: $(cat "$log")"

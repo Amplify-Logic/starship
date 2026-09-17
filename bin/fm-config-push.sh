@@ -3,18 +3,16 @@
 # Usage: fm-config-push.sh [--help]
 #
 # Mid-session convergence for inherited local material such as
-# config/crew-dispatch.json, config/backend, config/startup-memory-budget, or
-# data/captain-shared.md updates. This
-# discovers live secondmate homes from state/*.meta, backfills
+# config/crew-dispatch.json, config/backend, or data/captain-shared.md updates.
+# This discovers live secondmate homes from state/*.meta, backfills
 # home= from data/secondmates.md for older meta records, and reuses the same
 # propagation machinery as bootstrap, but deliberately does not
 # fast-forward tracked files.
 # After a successful per-home propagation that changes any allowlisted config/*
-# item, writes a generation-specific literal-content reread instruction and
-# sends a self-describing reread imperative to that live secondmate via fm-config-inherit-lib.sh
-# (fm_config_send_reread_nudge).
-# Unchanged config and data/captain-shared.md-only updates send no reread
-# message unless a previous send failure is pending for that home.
+# item, local routes receive the generation-specific literal-content pointer from
+# fm-config-inherit-lib.sh. Remote routes receive one durable marked reread nudge
+# through their SSH route. Unchanged config and data/captain-shared.md-only
+# updates send no reread unless a previous send failure is pending for that home.
 # Warnings-only skips exit 0; real propagation or reread-send errors exit non-zero.
 set -u
 
@@ -27,8 +25,8 @@ live secondmate home.
 
 This is local-material-only:
   - does not fast-forward tracked files
-  - after successful config/* changes, writes a generation-specific
-    literal-content reread instruction and sends a self-describing reread imperative
+  - after successful config/* changes, sends a local literal-content pointer or
+    one durable marked remote reread nudge
     (no message when config is unchanged unless a previous send failure is pending)
   - reports each live home and each inheritable item as pushed, unchanged,
     skipped, or error
@@ -72,10 +70,14 @@ SECONDMATES_MD="$DATA/secondmates.md"
 
 # shellcheck source=bin/fm-ff-lib.sh
 . "$SCRIPT_DIR/fm-ff-lib.sh"
+# shellcheck source=bin/fm-backend.sh
+. "$SCRIPT_DIR/fm-backend.sh"
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
 # shellcheck source=bin/fm-config-inherit-lib.sh
 . "$SCRIPT_DIR/fm-config-inherit-lib.sh"
+# shellcheck source=bin/fm-secondmate-nudge-lib.sh
+. "$SCRIPT_DIR/fm-secondmate-nudge-lib.sh"
 
 print_item_report() {
   local report=$1 item status reason
@@ -117,6 +119,57 @@ while IFS='|' read -r id home _window meta; do
     printf 'secondmate %s: skipped - no home= in %s and no registry home\n' "$id" "$meta"
     continue
   fi
+  remote_host=$(fm_meta_get "$meta" remote_host)
+  if [ -n "$remote_host" ]; then
+    printf 'secondmate %s (%s:%s):\n' "$id" "$remote_host" "$home"
+    remote_lock=$(fm_remote_inherit_transaction_lock_path "$STATE" "$id" 2>/dev/null || true)
+    if [ -z "$remote_lock" ] || ! fm_lock_acquire_wait "$remote_lock"; then
+      echo "  config-reread: transaction lock failed"
+      errors=1
+      continue
+    fi
+    remote_generation=$(fm_remote_inherit_generation_next "$STATE" "$id" 2>/dev/null || true)
+    if [ -z "$remote_generation" ]; then
+      echo "  config-reread: generation publication failed"
+      errors=1
+      fm_lock_release "$remote_lock" || true
+      continue
+    fi
+    remote_marker=$(fm_secondmate_nudge_marker_path "$STATE" "$id" 2>/dev/null || true)
+    remote_pending=0
+    if [ -f "$remote_marker" ] && [ "$(fm_meta_get "$remote_marker" remote)" = 1 ]; then remote_pending=1; fi
+    if ! fm_secondmate_nudge_write "$STATE" "$id" "$home" "" remote \
+      "$FM_REMOTE_SECOND_MATE_NUDGE_MESSAGE" 1; then
+      echo "  config-reread: retry marker failed"
+      errors=1
+      fm_lock_release "$remote_lock" || true
+      continue
+    fi
+    if remote_out=$(FM_CONFIG_INHERIT_LIVE=1 \
+      "$SCRIPT_DIR/fm-remote-inherit-push.sh" "$id" "$remote_generation" 2>&1); then
+      printf '%s\n' "$remote_out" | sed 's/^/  /'
+      remote_nudge=0
+      if printf '%s\n' "$remote_out" | grep -Eq '^(pushed|removed):'; then remote_nudge=1; fi
+      [ "$remote_pending" -eq 0 ] || remote_nudge=1
+      if [ "$remote_nudge" -eq 1 ]; then
+        if FM_HOME="$FM_HOME" FM_ROOT_OVERRIDE="$FM_ROOT" FM_STATE_OVERRIDE="$STATE" \
+          "$SCRIPT_DIR/fm-send.sh" "fm-$id" "$FM_REMOTE_SECOND_MATE_NUDGE_MESSAGE" >/dev/null 2>&1; then
+          rm -f -- "$remote_marker"
+          echo "  config-reread: sent"
+        else
+          echo "  config-reread: send failed; retry retained"
+          errors=1
+        fi
+      else
+        rm -f -- "$remote_marker"
+      fi
+    else
+      [ -z "$remote_out" ] || printf '%s\n' "$remote_out" | sed 's/^/  /'
+      errors=1
+    fi
+    fm_lock_release "$remote_lock" || true
+    continue
+  fi
   if ! validate_secondmate_home "$id" "$home"; then
     printf 'secondmate %s (%s): skipped - unsafe home: %s\n' "$id" "$home" "$VALIDATION_ERROR"
     continue
@@ -146,14 +199,14 @@ while IFS='|' read -r id home _window meta; do
     errors=1
     continue
   }
-  fm_lock_acquire_wait "$home_lock" "$FM_CONFIG_INHERIT_LOCK_WAIT_SECS" || {
-    echo "  config-reread: error - could not acquire per-home lock within ${FM_CONFIG_INHERIT_LOCK_WAIT_SECS}s"
+  fm_lock_acquire_wait "$home_lock" || {
+    echo "  config-reread: error - could not acquire per-home lock"
     errors=1
     continue
   }
-  if fm_config_reread_retry_queue_is_full "$FM_HOME" "$id" "$home_real"; then
+  if fm_config_reread_retry_queue_is_full "$FM_HOME" "$id"; then
     fm_config_reread_retry_pending "$id" "$home_real" || true
-    if fm_config_reread_retry_queue_is_full "$FM_HOME" "$id" "$home_real"; then
+    if fm_config_reread_retry_queue_is_full "$FM_HOME" "$id"; then
       echo "  config-reread: error - retry instruction queue is full"
       errors=1
       fm_lock_release "$home_lock" || true
@@ -168,16 +221,15 @@ while IFS='|' read -r id home _window meta; do
     continue
   }
   reports="$reports $report"
-  if FM_CONFIG_INHERIT_REPORT="$report" propagate_secondmate_inheritance "$FM_HOME" "$home_real" "$CONFIG" "$DATA"; then
+  if FM_CONFIG_INHERIT_REPORT="$report" FM_CONFIG_INHERIT_LIVE=1 \
+    propagate_secondmate_inheritance "$FM_HOME" "$home_real" "$CONFIG" "$DATA"; then
     :
   else
     errors=1
   fi
   print_item_report "$report"
   reread_pending=0
-  if fm_config_reread_has_pending "$home_real" \
-    || fm_config_reread_has_snapshot "$home_real" \
-    || fm_config_reread_has_staged "$FM_HOME" "$id"; then
+  if fm_config_reread_has_pending "$home_real" || fm_config_reread_has_staged "$FM_HOME" "$id"; then
     reread_pending=1
   fi
   if reread_out=$(FM_HOME="$FM_HOME" FM_ROOT_OVERRIDE="$FM_ROOT" \

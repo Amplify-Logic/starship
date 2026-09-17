@@ -969,7 +969,10 @@ def project_observation(model: Dict[str, Any]) -> Dict[str, Any]:
     unknown_live = False
     for row in in_flight:
         state = str(row.get("state") or "")
-        title = human_line(str(row.get("title") or ""), "")
+        # The projection owns the captain-facing name on an in-flight row.
+        # `title` is the older fork-enriched spelling and is still read so a
+        # snapshot from either shape renders the same.
+        title = human_line(str(row.get("name") or row.get("title") or ""), "")
         if not title:
             if state in stuck_states:
                 title = "Work needs you"

@@ -11,6 +11,15 @@ set -u
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 SPAWN="$ROOT/bin/fm-spawn.sh"
+# PATH is pinned narrow on purpose: the missing-binary case needs 'opencode' to
+# be genuinely absent whatever the developer has installed. node is the one
+# exception - a claude spawn pre-registers workspace trust through it - so the
+# single binary is linked into each case's fakebin rather than the npm bin
+# directory (which carries opencode) being put on PATH.
+NODE_BIN=$(command -v node 2>/dev/null || true)
+# Same reasoning for python3: the kimi turn-end hook validates config.toml with
+# tomllib, which macOS's /usr/bin/python3 does not carry.
+PYTHON3_BIN=$(command -v python3 2>/dev/null || true)
 TMP_ROOT=$(fm_test_tmproot fm-spawn-launch-preflight)
 
 make_spawn_case() {
@@ -22,11 +31,17 @@ make_spawn_case() {
   ENDPOINT_LOG="$CASE_DIR/endpoint.log"
   LAUNCH_LOG="$CASE_DIR/launch.log"
   PROBE_LOG="$CASE_DIR/probe.log"
+  WINDOW_LOG="$CASE_DIR/windows.log"
   ID="preflight-$name"
   FAKEBIN_DIR=$(fm_fakebin "$CASE_DIR")
   STATE_DIR_SHORT=
 
-  mkdir -p "$HOME_DIR/data/$ID" "$HOME_DIR/projects" "$HOME_DIR/config"
+  mkdir -p "$HOME_DIR/data/$ID" "$HOME_DIR/projects" "$HOME_DIR/config" "$HOME_DIR/user-home"
+  # A kimi spawn installs its global turn-end hook into the launching user's own
+  # Kimi config, and refuses when that config is absent; the pinned throwaway
+  # HOME above therefore gets a minimal one.
+  mkdir -p "$HOME_DIR/user-home/.kimi-code"
+  printf '# test config\n' > "$HOME_DIR/user-home/.kimi-code/config.toml"
   if [ "$short_state" = 1 ]; then
     # prime-agent's per-task daemon socket lives under the state dir and AF_UNIX
     # caps sun_path at 104 bytes, so a TMPDIR-anchored state home is a REAL
@@ -42,7 +57,14 @@ make_spawn_case() {
     mkdir -p "$HOME_DIR/state"
   fi
   printf '%s\n' "$harness" > "$HOME_DIR/config/crew-harness"
-  printf 'brief for %s\n' "$ID" > "$HOME_DIR/data/$ID/brief.md"
+  cat > "$HOME_DIR/data/$ID/brief.md" <<EOF
+# Task
+## Captain's intent
+brief for $ID
+
+## Firstmate spec
+Exercise the launch-binary preflight.
+EOF
   fm_git_worktree "$PROJ_DIR" "$WT_DIR" "wt-$name"
   touch "$HOME_DIR/state/.last-watcher-beat"
   : > "$ENDPOINT_LOG"
@@ -60,8 +82,23 @@ case "$*" in
 esac
 case "${1:-}" in
   display-message) printf 'firstmate\n'; exit 0 ;;
-  new-window) printf '@42\n'; exit 0 ;;
-  list-windows|has-session|new-session|set-window-option|kill-window) exit 0 ;;
+  new-window)
+    # Record the created window so list-windows can report it: fm-spawn's
+    # agent-up gate reads the window inventory before reporting a spawn as
+    # started, and a stub that lists nothing reads as a vanished endpoint.
+    prev=
+    for arg in "$@"; do
+      [ "$prev" != "-n" ] || printf '%s\n' "$arg" >> "${FM_FAKE_WINDOW_LOG:?}"
+      prev=$arg
+    done
+    printf '@42\n'
+    exit 0
+    ;;
+  list-windows)
+    [ ! -f "${FM_FAKE_WINDOW_LOG:?}" ] || cat "$FM_FAKE_WINDOW_LOG"
+    exit 0
+    ;;
+  has-session|new-session|set-window-option|kill-window) exit 0 ;;
   send-keys)
     prev=
     for arg in "$@"; do
@@ -77,6 +114,8 @@ exit 0
 SH
   chmod +x "$FAKEBIN_DIR/tmux"
   fm_fake_exit0 "$FAKEBIN_DIR" treehouse
+  [ -z "$NODE_BIN" ] || ln -sf "$NODE_BIN" "$FAKEBIN_DIR/node"
+  [ -z "$PYTHON3_BIN" ] || ln -sf "$PYTHON3_BIN" "$FAKEBIN_DIR/python3"
 
   # Once the launch lands, the harness binary is the pane's foreground command.
   # kimi needs that to be readable: its brief is typed into the agent after the
@@ -93,6 +132,9 @@ SH
   fi
 }
 
+# Every case here is a ship spawn, and fm-spawn requires each ship task's
+# delivery contract explicitly, so the suite pins one rather than repeating it
+# at eleven call sites; no case under test depends on which contract it is.
 run_spawn() {
   FM_ROOT_OVERRIDE='' FM_HOME="$HOME_DIR" \
     FM_STATE_OVERRIDE="${STATE_DIR_SHORT:-$HOME_DIR/state}" FM_DATA_OVERRIDE="$HOME_DIR/data" \
@@ -100,9 +142,11 @@ run_spawn() {
     FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$WT_DIR" TMUX="fake,1,0" \
     FM_FAKE_PANE_COMMAND="${FM_FAKE_PANE_COMMAND:-}" FM_SPAWN_AGENT_UP_SLEEP=0 \
     FM_FAKE_ENDPOINT_LOG="$ENDPOINT_LOG" FM_FAKE_LAUNCH_LOG="$LAUNCH_LOG" \
-    FM_FAKE_PROBE_LOG="$PROBE_LOG" GROK_HOME="$HOME_DIR/grok-home" \
+    FM_FAKE_PROBE_LOG="$PROBE_LOG" FM_FAKE_WINDOW_LOG="$WINDOW_LOG" \
+    GROK_HOME="$HOME_DIR/grok-home" \
     FM_PRIME_AGENT_SOURCE_HOME="$HOME_DIR/no-prime-home" \
-    PATH="$FAKEBIN_DIR:/usr/bin:/bin" "$SPAWN" "$@" 2>&1
+    HOME="$HOME_DIR/user-home" CLAUDE_CONFIG_DIR='' \
+    PATH="$FAKEBIN_DIR:/usr/bin:/bin" "$SPAWN" "$@" --mode no-mistakes --yolo off 2>&1
 }
 
 cleanup_task_tmp() {
@@ -136,6 +180,7 @@ test_present_verified_binaries_spawn_as_before() {
     out=$(run_spawn "$ID" "$PROJ_DIR")
     status=$?
 
+    [ "$status" -eq 0 ] || printf '%s\n' "$out" >&2
     expect_code 0 "$status" "present $harness launch binary should spawn"
     assert_contains "$out" "spawned $ID harness=$harness" "$harness spawn did not reach the healthy path"
     assert_grep "$launch_binary --version" "$PROBE_LOG" "$harness did not run the expected cheap version probe"
@@ -148,11 +193,48 @@ codex|codex|
 opencode|opencode|
 pi|pi|
 grok|grok|
-cursor|agent|
-kimi|kimi|
+cursor|cursor-agent|
 prime-agent|prime-agent|1
 EOF
-  pass "all eight verified adapters preflight and spawn normally when their binaries are present"
+  pass "the verified adapters preflight and spawn normally when their binaries are present"
+}
+
+# kimi is held out of the table above because its brief is delivered AFTER the
+# launch, through a TUI readiness gate that needs a full rendered-screen
+# fixture; tests/fm-kimi-harness.test.sh owns that. What belongs here is that
+# the preflight still probes kimi's binary and still lets the endpoint be
+# created, so the spawn's own later gate is what decides the outcome.
+test_kimi_preflights_and_reaches_its_own_post_launch_gate() {
+  local out
+  make_spawn_case present-kimi kimi kimi
+  out=$(run_spawn "$ID" "$PROJ_DIR") || true
+  assert_grep "kimi --version" "$PROBE_LOG" "kimi did not run the expected cheap version probe"
+  assert_grep "new-window" "$ENDPOINT_LOG" "kimi did not create the normal tmux endpoint"
+  assert_not_contains "$out" "refusing before creating a task endpoint"     "kimi was refused by the launch-binary preflight"
+  cleanup_task_tmp "$ID"
+  pass "kimi preflights its binary and reaches its own post-launch readiness gate"
+}
+
+# Every spawn-driving suite in this tree clears the preflight above with the
+# shared tests/lib.sh shim rather than a hand-rolled stub, so that helper is
+# what stands between those suites and the missing-binary refusal on any host
+# without the real CLI - which is every CI runner. Prove it against the same
+# preflight, on the same code path, as the refusal case above: identical
+# harness, identical fixture, the shim the only difference.
+test_shared_launch_binary_shim_clears_the_preflight() {
+  local out status
+  make_spawn_case shimmed-opencode opencode opencode
+  fm_fake_launch_binary "$FAKEBIN_DIR" opencode
+
+  out=$(run_spawn "$ID" "$PROJ_DIR")
+  status=$?
+
+  expect_code 0 "$status" "the shared launch-binary shim should clear the preflight"
+  assert_contains "$out" "spawned $ID harness=opencode" "shimmed launch binary did not reach the healthy spawn path"
+  assert_grep "new-window" "$ENDPOINT_LOG" "shimmed launch binary did not create the normal tmux endpoint"
+  assert_present "$HOME_DIR/state/$ID.meta" "shimmed launch binary did not write task meta"
+  cleanup_task_tmp "$ID"
+  pass "the shared launch-binary shim clears the preflight that refuses the same spawn without it"
 }
 
 test_raw_launch_command_remains_exempt() {
@@ -349,6 +431,8 @@ test_prime_agent_subscription_routes_pass_the_guard() {
 
 test_missing_verified_binary_refuses_before_endpoint_creation
 test_present_verified_binaries_spawn_as_before
+test_kimi_preflights_and_reaches_its_own_post_launch_gate
+test_shared_launch_binary_shim_clears_the_preflight
 test_raw_launch_command_remains_exempt
 test_hanging_version_probe_times_out_before_endpoint_creation
 test_sigterm_ignoring_probe_is_killed_after_grace

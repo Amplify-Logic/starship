@@ -1,6 +1,5 @@
-// Verified upstream against Pi 0.81.1 and 0.82.0, and in this fork against Pi 0.80.10,
-// all of which add the ordinary-user spacer and row together via
-// InteractiveMode.addMessageToChat. This adapter probes that exact method
+// Verified against Pi 0.81.1 and 0.82.0, which add the ordinary-user spacer and row
+// together via InteractiveMode.addMessageToChat. This adapter probes that exact method
 // and throws if it is missing; fm-calm.ts catches that and skips only this adapter with a
 // diagnostic instead of blocking Calm or Pi. It changes only that presentation and never
 // message delivery.

@@ -106,6 +106,16 @@ write_backlog() {  # <home> <row...>
     printf '## In flight\n\n## Queued\n\n## Done\n'
     printf '%s\n' "$@"
   } > "$home/data/backlog.md"
+  # A secondmate home's Done reaches the captain only through the summary ledger
+  # that home publishes for itself at state/home-summary.json; the parent reads
+  # the file and never re-derives the child's backlog. Republish it here through
+  # the same command the product uses after a backlog change, so these cases
+  # exercise the real publication path rather than a hand-built ledger.
+  [ -f "$home/.fm-secondmate-home" ] || return 0
+  FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    FM_CONFIG_OVERRIDE="$home/config" FM_PROJECTS_OVERRIDE="$home/projects" \
+    "$ROOT/bin/fm-home-summary-refresh.sh" \
+    || fail "a secondmate home could not publish its summary ledger: $home"
 }
 
 done_row() {  # <id> <title> <verb> <date-or-empty>

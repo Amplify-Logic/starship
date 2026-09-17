@@ -10,10 +10,8 @@ set -u
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 TMP_ROOT=$(fm_test_tmproot fm-fleet-status-lib)
-STATE="$TMP_ROOT/state"
-FLEET_FIX="$TMP_ROOT/fleet"
 BINDIR="$TMP_ROOT/bin"
-mkdir -p "$STATE" "$FLEET_FIX" "$BINDIR"
+mkdir -p "$BINDIR"
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 
@@ -59,16 +57,24 @@ cat "$FM_FLEET_FIXTURE/$1"
 SH
 chmod +x "$BINDIR/slow-crew-state"
 
-export FM_FLEET_FIXTURE="$FLEET_FIX"
-
 task() {  # <id> <kind> <canonical line>
   fm_write_meta "$STATE/$1.meta" "kind=$2"
   printf '%s\n' "$3" > "$FLEET_FIX/$1"
 }
 
+# Every case gets its own state directory, fixtures and call log. A detached
+# refresher outlives the frame that started it by design, so a case that leaves
+# one in flight would otherwise have it fold the NEXT case's fleet: reading that
+# case's tasks, appending to its call log, and publishing into its cache. The
+# reader calls and cached readings a case then sees belong to no case at all.
+FLEET_CASE=0
 reset_state() {
-  rm -f "$STATE"/*.meta "$STATE"/.status-fleet-state* 2>/dev/null || true
-  rm -f "$FLEET_FIX"/* 2>/dev/null || true
+  FLEET_CASE=$((FLEET_CASE + 1))
+  STATE="$TMP_ROOT/case$FLEET_CASE/state"
+  FLEET_FIX="$TMP_ROOT/case$FLEET_CASE/fleet"
+  CALLS="$TMP_ROOT/case$FLEET_CASE/calls"
+  mkdir -p "$STATE" "$FLEET_FIX"
+  export FM_FLEET_FIXTURE="$FLEET_FIX"
 }
 
 counts() {  # [env assignments already exported by the caller]
@@ -217,7 +223,7 @@ test_a_frame_never_calls_the_canonical_reader() {
   reset_state
   task one crew 'state: working · source: pane · harness busy'
   task two crew 'state: paused · source: status-log · upstream release'
-  export FM_FLEET_TEST_CALLS="$TMP_ROOT/calls"
+  export FM_FLEET_TEST_CALLS="$CALLS"
   : > "$FM_FLEET_TEST_CALLS"
 
   # A claimed refresh is already in flight, so this frame may not start one.
@@ -270,7 +276,7 @@ test_a_zero_record_fleet_reports_a_trusted_zero() {
 
   # And end to end through the cache, the way a frame actually reaches it: the
   # first frame starts the fold, and a later frame accepts its reading.
-  export FM_FLEET_TEST_CALLS="$TMP_ROOT/calls"
+  export FM_FLEET_TEST_CALLS="$CALLS"
   : > "$FM_FLEET_TEST_CALLS"
   FM_FLEET_STATE_READER="$BINDIR/counting-crew-state" counts >/dev/null
   waited=0
@@ -296,7 +302,7 @@ test_a_reader_that_drains_stdin_cannot_truncate_the_fold() {
   task two crew 'state: working · source: pane · harness busy'
   task three crew 'state: paused · source: status-log · upstream release'
   task four crew 'state: blocked · source: status-log · needs a credential'
-  export FM_FLEET_TEST_CALLS="$TMP_ROOT/calls"
+  export FM_FLEET_TEST_CALLS="$CALLS"
   : > "$FM_FLEET_TEST_CALLS"
 
   out=$(FM_FLEET_STATE_NO_CACHE=1 \
@@ -318,7 +324,7 @@ test_the_refresh_claim_covers_the_whole_refresh_bound() {
   local now started
   reset_state
   task one crew 'state: working · source: pane · harness busy'
-  export FM_FLEET_TEST_CALLS="$TMP_ROOT/calls"
+  export FM_FLEET_TEST_CALLS="$CALLS"
   : > "$FM_FLEET_TEST_CALLS"
   now=$(date +%s)
 

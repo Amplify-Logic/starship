@@ -3,11 +3,14 @@
 #
 # Usage: fm-bridge-fields.sh <fleet-snapshot-json-file> < model.json > enriched.json
 #
-# The phone bridge renders fields upstream's projection does not emit: a human
-# title, an owner, a repo, and the hold kind and reason behind a decision or a
-# gate. Those used to be edits scattered through upstream's jq program, which is
-# the shape that conflicts on every upstream change to it. They live here
-# instead, and bin/fm-bearings-snapshot.sh calls this in one guarded step.
+# The phone bridge renders fields upstream's projection does not emit: the hold
+# kind and reason behind a decision or a gate. In-flight rows are no longer
+# enriched here at all - upstream's own projection emits their captain-facing
+# `name` and `repo`, and a second copy written from this side would be the
+# duplicate that drifts. The hold fields used to be edits scattered through
+# upstream's jq program, which is the shape that conflicts on every upstream
+# change to it. They live here instead, and bin/fm-bearings-snapshot.sh calls
+# this in one guarded step.
 #
 # This reads the same fleet snapshot the projection read, so every value is
 # derived from the same source rather than recovered from the rendered model.
@@ -47,34 +50,24 @@ main() {
       (tostring | gsub("\\s+"; " ") | if (length > $n) then (.[:$n] + "\u2026") else . end) end;
     ($snap[0]) as $s
     # An unstructured main row carries id null, which from_entries rejects as a
-    # key; it can never be matched, so it is dropped rather than aborting.
+    # key; it can never be matched, so it is dropped rather than aborting. A
+    # PROJECTED row may carry a null id too - an action-free posture row is one -
+    # and indexing a map with null is a hard jq error, so every lookup below
+    # tests the id before it indexes. Losing every bridge field to one such row
+    # is exactly the silent degradation this script exists to prevent.
     | ([ $s.backlog.records[]? | select(.id != null) | {key: .id, value: .} ] | from_entries) as $main_rows
     | ([ ($s.secondmate_current.records // [])[] as $m
          | ($m.decisions_open // [])[] | {key: ($m.id + "/" + .id), value: .} ] | from_entries) as $sm_decisions
     | ([ ($s.secondmate_current.records // [])[] as $m
          | ($m.queued // [])[] | {key: ($m.id + "/" + .id), value: .} ] | from_entries) as $sm_queued
-    | ([ $s.tasks[]? | {key: .id, value: .} ] | from_entries) as $task_rows
-    | ([ ($s.secondmate_current.records // [])[] | {key: .id, value: .} ] | from_entries) as $sm_homes
-    | .in_flight = [ .in_flight[]
-        | . as $row
-        | if $row.owner == "(main)" and ($task_rows[$row.id] != null) then
-            ($task_rows[$row.id]) as $t
-            | $row + {title: (($t.backlog.title // "Untitled work") | trunc(90)),
-                      repo: (($t.backlog.repo // $t.project // null) | trunc(120))}
-          elif ($sm_homes[$row.owner] != null) then
-            ($sm_homes[$row.owner]) as $m
-            | $row + {title: "Second-mate work",
-                      repo: ((([ ($m.active_children // [])[] | (.backlog.repo // .project // empty) ] | unique)) as $repos
-                             | if ($repos | length) == 1 then ($repos[0] | trunc(120)) else null end)}
-          else $row end ]
     | .decisions_open = [ .decisions_open[]
         | . as $row
-        | if $row.owner == "(main)" and ($main_rows[$row.id] != null) then
+        | if $row.owner == "(main)" and $row.id != null and ($main_rows[$row.id] != null) then
             ($main_rows[$row.id]) as $r
             | $row + {hold_kind: $r.hold_kind,
                       hold_reason: (($r.hold_reason // null) | trunc(160)),
                       repo: (($r.repo // null) | trunc(120))}
-          elif ($sm_decisions[$row.id] != null) then
+          elif $row.id != null and ($sm_decisions[$row.id] != null) then
             ($sm_decisions[$row.id]) as $r
             | $row + {hold_kind: ($r.hold_kind // null),
                       hold_reason: (($r.reason // null) | trunc(160)),
@@ -83,7 +76,7 @@ main() {
     | .gates = [ .gates[]
         | . as $row
         | if $row.id == "(main-inventory)" then $row + {hold_kind: null, repo: null}
-          elif $row.owner == "(main)" and ($main_rows[$row.id] != null) then
+          elif $row.owner == "(main)" and $row.id != null and ($main_rows[$row.id] != null) then
             ($main_rows[$row.id]) as $r
             | $row + {hold_kind: $r.hold_kind, repo: (($r.repo // null) | trunc(120))}
           elif ($sm_queued[($row.owner // "") + "/" + ($row.id // "")] != null) then

@@ -546,10 +546,10 @@ composer_chrome_rendered() {
   local cy row
   cy=$(tmux display-message -p -t "$TARGET" '#{cursor_y}' 2>/dev/null) || return 1
   case "$cy" in ''|*[!0-9]*) return 1 ;; esac
-  if command -v fm_tmux_cursor_composer_row >/dev/null 2>&1; then
-    row=$(fm_tmux_cursor_composer_row "$TARGET" 2>/dev/null || true)
-    [ -z "$row" ] || cy=$row
-  fi
+  # The fork's fm_tmux_cursor_composer_row row lookup was retired with the shared
+  # composer owner's rewrite: bin/fm-composer-lib.sh classifies a whole screen and
+  # exposes no row accessor, so this reads the reported cursor row directly, which
+  # is what the retired guard already fell back to.
   row=$(tmux capture-pane -p -t "$TARGET" -S "$cy" -E "$cy" 2>/dev/null) || return 1
   [ -n "${row//[[:space:]]/}" ]
 }

@@ -2,20 +2,20 @@
 # Shared "supervision missing" predicate.
 # Usage: . bin/fm-supervision-lib.sh
 #
-# True exactly when a firstmate home has in-flight work (a state/<id>.meta
-# exists) but supervision is not healthy for the home's model. bin/fm-turnend-
-# guard.sh uses the PID-strict fm_watcher_healthy from bin/fm-wake-lib.sh for
-# its block decision. bin/fm-guard.sh uses the model-aware
-# fm_watcher_supervision_verdict (also in bin/fm-wake-lib.sh): under a
-# between-turns arm-owner model a fresh beacon with no live watcher is healthy,
-# while persistent-watcher models - this fork's default for every harness -
-# still require a live identity-matched watcher. The status fields here retain
+# Reports whether a firstmate home needs supervision (fm_supervision_status
+# below is the single owner of that condition set), and whether its watcher has
+# a fresh liveness beacon (state/.last-watcher-beat, touched every poll cycle,
+# within the grace window).
+# bin/fm-turnend-guard.sh uses the PID-strict fm_watcher_healthy from
+# bin/fm-wake-lib.sh for its block decision. bin/fm-guard.sh uses the model-aware
+# fm_watcher_supervision_verdict (also in bin/fm-wake-lib.sh), which owns what a
+# live watcher process means per supervision model. The status fields here retain
 # the beacon-age details used in their messages.
 
 # Portable mtime; Linux stat lacks -f, macOS stat lacks -c.
 fm_sup_stat_mtime() {
   if [ "$(uname)" = Darwin ]; then
-    stat -f %m "$1" 2>/dev/null
+    /usr/bin/stat -f %m "$1" 2>/dev/null
   else
     stat -c %Y "$1" 2>/dev/null
   fi
@@ -35,20 +35,44 @@ fm_sup_format_duration() {
 
 # fm_supervision_status <state-dir> [grace-seconds]
 # Populates, for the state dir at $1:
-#   FM_SUP_IN_FLIGHT          count of state/*.meta (in-flight tasks)
-#   FM_SUP_IN_FLIGHT_IDS      comma-separated task IDs derived from those files
-#   FM_SUP_WATCHER_FRESH      true/false - a watcher beacon within the grace window
-#   FM_SUP_BEACON_DESC        human-readable beacon age or explicit unknown state
-#   FM_SUP_OUTAGE_SUMMARY     canonical outage duration, count, and task-ID wording
-#   FM_SUP_QUEUE_PENDING      true/false - state/.wake-queue has unread records
+#   FM_SUP_IN_FLIGHT      count of state/*.meta (in-flight tasks)
+#   FM_SUP_IN_FLIGHT_IDS  those tasks' IDs, comma-separated, or "(none)"
+#   FM_SUP_SOURCES        count of registered process-to-event sources
+#   FM_SUP_CHECKS         count of registered custom checks: a state/<id>.check.sh
+#                         with the state/<id>.check-trust binding that
+#                         bin/fm-check-register.sh writes. Task PR polls carry no
+#                         such binding and are torn down with their task, and the
+#                         relay shim keeps its own trust path, so neither counts
+#                         here. Presence of the binding is the whole test: whether
+#                         those bytes are still the registered ones is the check
+#                         sweep's call at execution time, and a home whose check
+#                         no longer validates needs the watcher precisely so the
+#                         sweep can report the rejection instead of going quiet.
+#   FM_SUP_NEEDED         true/false - in-flight work, an X-mode relay poll, a
+#                         registered event source (a source is a wait on an
+#                         external process, not a task, so it has no metadata),
+#                         or a registered custom check
+#   FM_SUP_WATCHER_FRESH  true/false - a watcher beacon within the grace window
+#   FM_SUP_BEACON_DESC    human-readable beacon age, for banners ("never" if absent)
+#   FM_SUP_QUEUE_PENDING  true/false - state/.wake-queue has unread records
+#   FM_SUP_OUTAGE_SUMMARY one canonical sentence naming how long supervision has
+#                         been down and which tasks are exposed, spelled once
+#                         here so every surface that reports an outage - the
+#                         continuity pre-tool denial, the away-mode alarm, the
+#                         shift alarm - says the same thing. It is deliberately
+#                         longer and more explicit than FM_SUP_BEACON_DESC,
+#                         which stays a compact field for banners: a denial an
+#                         operator reads once, mid-incident, must not make them
+#                         infer the duration from "unknown".
 # grace-seconds defaults to $FM_GUARD_GRACE, then 300, matching fm-guard.sh.
 # Always returns 0; callers read the vars, or use fm_supervision_unhealthy below.
 fm_supervision_status() {
-  local state=$1 grace=${2:-${FM_GUARD_GRACE:-300}} meta id beat m now age duration
+  local state=$1 grace=${2:-${FM_GUARD_GRACE:-300}} meta source check id beat m age duration
   FM_SUP_IN_FLIGHT=0
   FM_SUP_IN_FLIGHT_IDS=
+  FM_SUP_NEEDED=false
   FM_SUP_WATCHER_FRESH=false
-  FM_SUP_BEACON_DESC='unknown since when (watcher beat file missing or unreadable)'
+  FM_SUP_BEACON_DESC=never
   FM_SUP_QUEUE_PENDING=false
 
   for meta in "$state"/*.meta; do
@@ -62,30 +86,52 @@ fm_supervision_status() {
       FM_SUP_IN_FLIGHT_IDS=$id
     fi
   done
+  # shellcheck disable=SC2034 # Read by callers after sourcing.
   [ -n "$FM_SUP_IN_FLIGHT_IDS" ] || FM_SUP_IN_FLIGHT_IDS='(none)'
+  FM_SUP_SOURCES=0
+  for source in "$state"/procevent/*.source; do
+    [ -e "$source" ] || continue
+    FM_SUP_SOURCES=$((FM_SUP_SOURCES + 1))
+  done
+  FM_SUP_CHECKS=0
+  for check in "$state"/*.check.sh; do
+    [ -e "$check" ] || continue
+    id=${check##*/}
+    id=${id%.check.sh}
+    if [ "$id" = x-watch ]; then
+      continue
+    fi
+    [ -e "$state/$id.check-trust" ] || continue
+    FM_SUP_CHECKS=$((FM_SUP_CHECKS + 1))
+  done
+  if [ "$FM_SUP_IN_FLIGHT" -gt 0 ] \
+    || [ -f "$state/x-watch.check.sh" ] \
+    || [ "$FM_SUP_SOURCES" -gt 0 ] \
+    || [ "$FM_SUP_CHECKS" -gt 0 ]; then
+    FM_SUP_NEEDED=true
+  fi
 
   duration='unknown duration (unknown since when; watcher beat file missing or unreadable)'
   beat="$state/.last-watcher-beat"
   if [ -e "$beat" ]; then
-    m=$(fm_sup_stat_mtime "$beat" || true)
-    now=$(date +%s 2>/dev/null || true)
-    case "$m:$now" in
-      *[!0-9:]*) ;;
-      :*|*:) ;;
-      *)
-        age=$((now - m))
-        if [ "$age" -lt 0 ]; then
-          age=$((-age))
-          FM_SUP_BEACON_DESC="unknown since when (watcher beat timestamp is $(fm_sup_format_duration "$age") in the future)"
-          duration="unknown duration (unknown since when; watcher beat timestamp is $(fm_sup_format_duration "$age") in the future)"
-        else
-          # shellcheck disable=SC2034 # Read by callers after sourcing.
-          FM_SUP_BEACON_DESC="$(fm_sup_format_duration "$age") ago"
-          duration="at least $(fm_sup_format_duration "$age") since the last watcher beat"
-          [ "$age" -lt "$grace" ] && FM_SUP_WATCHER_FRESH=true
-        fi
-        ;;
-    esac
+    m=$(fm_sup_stat_mtime "$beat")
+    if [ -n "$m" ]; then
+      age=$(( $(date +%s) - m ))
+      FM_SUP_BEACON_DESC="${age}s ago"
+      if [ "$age" -lt 0 ]; then
+        # A wall-clock rollback, or a state volume restored from a machine whose
+        # clock ran ahead, leaves a beat in the future. That is not an outage
+        # duration, so the summary says so rather than reporting a negative or
+        # enormous window.
+        duration="unknown duration (unknown since when; watcher beat timestamp is $(fm_sup_format_duration "$(( -age ))") in the future)"
+      else
+        duration="at least $(fm_sup_format_duration "$age") since the last watcher beat"
+        [ "$age" -lt "$grace" ] && FM_SUP_WATCHER_FRESH=true
+      fi
+    else
+      # shellcheck disable=SC2034 # Read by callers (fm-guard.sh) after sourcing.
+      FM_SUP_BEACON_DESC=unknown
+    fi
   fi
 
   # shellcheck disable=SC2034 # Read by callers after sourcing.
@@ -95,12 +141,19 @@ fm_supervision_status() {
   return 0
 }
 
+# fm_supervision_needed <state-dir> [grace-seconds]
+# Exit 0 (true) exactly when the home needs a watcher.
+fm_supervision_needed() {
+  fm_supervision_status "$@"
+  [ "$FM_SUP_NEEDED" = true ]
+}
+
 # fm_supervision_unhealthy <state-dir> [grace-seconds]
-# Exit 0 (true) exactly in the dangerous state: in-flight work exists and no
-# watcher has a fresh beacon. Exit 1 (false) otherwise, including zero in-flight.
+# Exit 0 (true) exactly when supervision is needed and no watcher has a fresh
+# beacon. Exit 1 (false) otherwise.
 fm_supervision_unhealthy() {
   fm_supervision_status "$@"
-  [ "$FM_SUP_IN_FLIGHT" -gt 0 ] && [ "$FM_SUP_WATCHER_FRESH" = false ]
+  [ "$FM_SUP_NEEDED" = true ] && [ "$FM_SUP_WATCHER_FRESH" = false ]
 }
 
 # Canonical basename of the durable host-sentinel registration-failure record.

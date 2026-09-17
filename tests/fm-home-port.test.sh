@@ -29,10 +29,29 @@ seed_home() {
 }
 
 # Minimal toolchain so verify's bootstrap detect-only check can pass under PATH.
+# Read a version floor from the script that owns it, so a floor bump in
+# bin/ never leaves these stubs behind reporting a version bootstrap now
+# rejects. The floors themselves are asserted by the suites that own them;
+# here they only have to be cleared.
+floor_of() {  # <bin-file> <constant>
+  local file=$1 name=$2 value
+  value=$(sed -n 's/^'"$name"'=\([0-9][0-9.]*\)$/\1/p' "$ROOT/bin/$file" | head -1)
+  [ -n "$value" ] || fail "could not read $name from bin/$file"
+  printf '%s\n' "$value"
+}
+
 make_verify_fakebin() {
   local dir=$1 fakebin
   fakebin=$(fm_fakebin "$dir")
-  fm_fake_exit0 "$fakebin" tmux node git gh-axi chrome-devtools-axi lavish-axi agent prime-agent
+  # Cursor ships its CLI as cursor-agent; `agent` is the legacy alias. A ready home
+  # has the real name installed, which is what bin/fm-bootstrap.sh resolves through
+  # fm_cursor_resolve_binary - a bare stub named `agent` proves nothing about Cursor
+  # and is correctly refused there.
+  fm_fake_exit0 "$fakebin" tmux node git chrome-devtools-axi agent cursor-agent prime-agent
+  fm_fake_version_tool "$fakebin" gh-axi FM_TEST_GH_AXI_VERSION "$(floor_of fm-bootstrap.sh GH_AXI_MIN)"
+  fm_fake_version_tool "$fakebin" lavish-axi FM_TEST_LAVISH_AXI_VERSION "$(floor_of fm-bootstrap.sh LAVISH_AXI_MIN)"
+  fm_fake_version_tool "$fakebin" quota-axi FM_TEST_QUOTA_AXI_VERSION "$(floor_of fm-quota-axi-lib.sh FM_QUOTA_AXI_MIN)"
+  fm_fake_version_tool "$fakebin" no-mistakes FM_TEST_NO_MISTAKES_VERSION "$(floor_of fm-bootstrap.sh NO_MISTAKES_MIN)"
   cat > "$fakebin/gh" <<'SH'
 #!/usr/bin/env bash
 [ "${1:-}" = auth ] && [ "${2:-}" = status ] && exit 0
@@ -48,32 +67,21 @@ fi
 exit 0
 SH
   chmod +x "$fakebin/treehouse"
-  cat > "$fakebin/no-mistakes" <<'SH'
+  cat > "$fakebin/tasks-axi" <<SH
 #!/usr/bin/env bash
-[ "${1:-}" = --version ] && { printf '%s\n' 'no-mistakes version v1.31.2 (fake)'; exit 0; }
-exit 0
-SH
-  chmod +x "$fakebin/no-mistakes"
-  cat > "$fakebin/tasks-axi" <<'SH'
-#!/usr/bin/env bash
-[ "${1:-}" = --version ] && { printf '%s\n' '0.1.1'; exit 0; }
-[ "${1:-}" = update ] && [ "${2:-}" = --help ] && {
-  printf '%s\n' 'usage: tasks-axi update'
-  printf '%s\n' '  --archive-body'
+[ "\${1:-}" = --version ] && { printf '%s\\n' '$(floor_of fm-tasks-axi-lib.sh FM_TASKS_AXI_MIN)'; exit 0; }
+[ "\${1:-}" = update ] && [ "\${2:-}" = --help ] && {
+  printf '%s\\n' 'usage: tasks-axi update'
+  printf '%s\\n' '  --archive-body'
   exit 0
 }
-[ "${1:-}" = mv ] && [ "${2:-}" = --help ] && {
-  printf '%s\n' 'usage: tasks-axi mv <id> [<id>...] --to <path-or-dir>'
+[ "\${1:-}" = mv ] && [ "\${2:-}" = --help ] && {
+  printf '%s\\n' 'usage: tasks-axi mv <id> [<id>...] --to <path-or-dir>'
   exit 0
 }
 exit 0
 SH
   chmod +x "$fakebin/tasks-axi"
-  cat > "$fakebin/quota-axi" <<'SH'
-#!/usr/bin/env bash
-exit 0
-SH
-  chmod +x "$fakebin/quota-axi"
   printf '%s\n' "$fakebin"
 }
 

@@ -1,97 +1,91 @@
-#!/usr/bin/env bash
-# Shared landed-recency ordering: the single source of truth for how completed
-# ("Done") backlog rows are ranked newest-first before any cap is applied.
+# shellcheck shell=bash
+# Shared "what belongs in Recently Landed" rule.
+# Usage: . bin/fm-landed-lib.sh; splice "$FM_LANDED_JQ_DEFS" ahead of a jq
+# program, then select backlog rows with `landed_record`.
 #
-# Sourced by BOTH the canonical snapshot (bin/fm-fleet-snapshot.sh, which ranks
-# each secondmate home's own Done roll-up) and the bearings projection
-# (bin/fm-bearings-snapshot.sh, which ranks this home's Done and the merged
-# cross-home set). Every landed surface caps its list, so the ordering decides
-# which rows survive. One copy of the rule keeps the two scripts from drifting
-# into disagreeing about which completion is the newest.
+# ONE OWNER for the landed selector. Recently Landed is assembled from two
+# separate jq programs - bin/fm-bearings-snapshot.sh projects this home's own
+# Done rows, and bin/fm-fleet-snapshot.sh projects each secondmate home's Done
+# rows into the roll-up that the same section merges in. Both answer the one
+# question "is this closed row a delivery the captain should see", so the rule
+# lives here and neither program restates it.
 #
-# WHY THIS IS A CORRECTNESS CONTRACT, NOT A PRESENTATION PREFERENCE
+# A closed row is never actively held: tasks-axi clears the held flag when a
+# task closes, but a non-release answer keeps hold-kind and the hold reason.
+# Merge approval removes those annotations through the release contract before
+# cleanup records the merged PR or local-only landing, so either artifact on a
+# Done captain-hold row is not a delivery. A scout's recorded report is its
+# delivery regardless of release state or other links in its title.
 #
-# A capped newest-first list is only truthful if the cap drops the OLDEST rows.
-# The previous key, `sort_by([(.completion.date // ""), .id]) | reverse`, broke
-# that invariant and hid a completion the captain had just watched finish:
-# completion dates are day-granularity, so every completion recorded on the same
-# day tied, and the tie was broken on `.id`, which is unrelated to recency. A
-# just-finished task with an alphabetically-low id therefore lost its place to
-# same-day completions that had finished earlier and was the first row the cap
-# discarded. That is the defect this rule fixes, and it is the only one: a
-# mis-ordering cannot empty a landed list, so an EMPTY landed section has a
-# different cause and is not addressed here.
+# The distinction that decides the section is delivery: Recently Landed is
+# merged PRs, completed scouts, and finished local-only merges. A closed row
+# whose artifact matches its merged or done completion verb is a delivery only
+# when it retains no captain-question provenance. A retained scout is identified
+# by its kind and recorded report because its title links do not change what it
+# delivers. A captain question remains kind captain when it closes, so it is
+# never rendered as shipped work even when its text names an artifact.
+# A local-only completion is a delivery whether or not its row carries a kind.
+# The retained hold-kind alone keeps answered calls out of the section.
+# Merged PRs and reported scouts remain distinct.
 #
-# THE RULE
-#
-# Rank dated rows above undated rows; within the dated set, rank by completion
-# date descending, then by recording position within the Done section, earliest
-# position first. Three properties make that truthful:
-#
-#   * DATED EVIDENCE WINS. An undated Done row sorts BELOW every dated row and is
-#     never re-dated as "now". An earlier approach dated undated rows as of the
-#     snapshot's generation time; that let a hand-edited or manual-backend home
-#     full of undated rows displace genuinely dated completions out of a capped
-#     list, which is the same trust failure inverted and is worse than an undated
-#     row sorting last. Undated rows tie-break among themselves by recording
-#     position, newest-first, exactly as dated rows do.
-#   * `order` is the row's 1-based position in the parsed backlog (assigned by
-#     fm-fleet-snapshot.sh's backlog_json). The Done section is maintained
-#     newest-first, so a LOWER order is MORE recent, which is why the key negates
-#     it. That depends on Done actually being written newest-first: `tasks-axi
-#     done` PREPENDS each completed row (verified against tasks-axi 0.2.3), and
-#     bin/fm-teardown.sh's manual-backlog instruction tells the captain to insert
-#     the finished row at the TOP of Done together with its completion date for
-#     the same reason.
-#   * Equal keys keep their INPUT order, because the sort is a stable ascending
-#     sort of the reversed input, re-reversed. The internal `order` field is never
-#     published: the fleet layer publishes `recency_rank` in its place, the row's
-#     1-based position in its OWN home's newest-first order, where 1 is that
-#     home's newest completion. The key falls back to `recency_rank` when `order`
-#     is absent, so a published row re-sorts to the same place and same-date rows
-#     keep real recency evidence across the publish boundary.
-#
-# A row that carries neither `order` nor `recency_rank` is treated as key 0, which
-# ranks it AHEAD of every row with a positive order or rank inside the same date
-# group; it does not keep its input position relative to those rows. Rows that
-# lack both tie, so they do keep their input order relative to each other. A
-# consumer that needs position-accurate ranking across rows must project one of
-# the two fields onto them.
-#
-# WHAT THIS GUARANTEES, AND WHAT IT DOES NOT
-#
-# With this ordering, the newest DATED completion in a home is always at index 0
-# of that home's group, so no per-home cap can discard it, and the cross-home merge
-# in bin/fm-bearings-snapshot.sh reserves a leading slot for every home whose
-# newest dated completion carries the fleet's newest completion date, so no overall
-# cap can discard a just-finished dated completion in favour of an older or undated
-# row, whichever home recorded it.
-# tests/fm-landed-completion-truth.test.sh pins both properties.
-#
-# The guarantee is scoped to a completion recorded as a structured
-# `- [x] <id> - <rest>` Done row carrying its completion date. Three cases sit
-# outside it: an undated row ranks below every dated one and can rotate out under
-# the cap, a completion never recorded into Done at all cannot appear at all, and a
-# row that does not carry the fleet's newest completion date can still rotate out
-# of a merged list once the fleet has more homes than the overall cap has slots,
-# because only rows at that newest date are reserved and the remaining slots are
-# shared across homes rather than filled strictly oldest-last. Completion dates are
-# day-granularity and nothing in the system records anything finer, so when more
-# homes tie at the newest date than the overall cap has slots, the later-sorting
-# tied homes still drop.
+# The backlog-selection compatibility fallback keeps a structured Done row
+# whose three parsed artifact fields are absent when it does not retain
+# hold-kind captain.
+# That preserves kindless rows closed before artifact-aware selection without
+# admitting answered captain calls or explicit reportless scouts.
+# Already-selected v1 secondmate landed rows may omit kind. For those rows,
+# landed_artifact preserves a report_path with a reported completion; this
+# display compatibility does not admit kindless reports from raw backlog rows.
+# tests/fm-bearings-snapshot.test.sh covers both fresh and cached v1 summaries.
 
-# Emits the jq prelude defining the library's TWO public entry points:
-# landed_newest_first, the newest-first ordering itself, and landed_recency_key,
-# the per-row sort key it ranks by, which callers use directly when they need to
-# locate or compare newest rows without re-sorting. Both are exported surface;
-# inlining or renaming either breaks callers that interpolate this prelude ahead
-# of their own program text, e.g. jq "$(fm_landed_jq_prelude)"'<program>'.
-fm_landed_jq_prelude() {
-  cat <<'JQ'
-def landed_recency_key:
-  (.completion.date // "") as $date
-  | [(if $date == "" then 0 else 1 end), $date, (0 - (.order // .recency_rank // 0))];
-def landed_newest_first:
-  reverse | sort_by(landed_recency_key) | reverse;
-JQ
-}
+# shellcheck disable=SC2034 # Output global, read by the sourcing caller.
+# shellcheck disable=SC2016  # jq program text: $date is a jq binding, not a shell expansion.
+FM_LANDED_JQ_DEFS='
+  # Ordering, kept beside the selector because every capped landed surface has
+  # to agree on which rows are newest before the cap drops any of them.
+  # landed_recency_key is exported surface too: callers that only need to locate
+  # or compare newest rows use it directly instead of re-sorting.
+  # A row with no completion date sorts below every dated row; ties break on the
+  # row order so a stable input stays stable.
+  def landed_recency_key:
+    (.completion.date // "") as $date
+    | [(if $date == "" then 0 else 1 end), $date, (0 - (.order // .recency_rank // 0))];
+  def landed_newest_first:
+    reverse | sort_by(landed_recency_key) | reverse;
+  def scout_report:
+    .kind == "scout"
+    and (.report_path // null) != null;
+  def landed_artifact:
+    if scout_report or (.kind == null and .completion.verb == "reported") then (.report_path // null)
+    elif .completion.verb == "merged" then (.pr_url // null)
+    elif .completion.verb == "done" then (.local_note // null)
+    else null
+    end;
+  # The kind-is-not-scout guards below and in the fallback are LOAD-BEARING:
+  # they keep an explicit scout that recorded no report out of Recently Landed.
+  # Without them such a row has none of the three artifacts, satisfies the
+  # compatibility fallback and renders as shipped work with an empty artifact.
+  # Pinned by tests/fm-captain-hold-lifecycle.test.sh on "released, retained, or
+  # rejected deliveries were misclassified".
+  def landed_delivery:
+    scout_report
+    or (.kind != "scout"
+      and .kind != "captain"
+      and .hold_kind != "captain"
+      and .completion.verb == "merged"
+      and (.pr_url // null) != null)
+    or (.kind != "scout"
+      and .kind != "captain"
+      and .hold_kind != "captain"
+      and .completion.verb == "done"
+      and (.local_note // null) != null);
+  def landed_record:
+    .state == "done" and .structured
+    and (landed_delivery
+      or (.kind != "scout"
+        and .kind != "captain"
+        and .hold_kind != "captain"
+        and (.pr_url // null) == null
+        and (.report_path // null) == null
+        and (.local_note // null) == null));
+'

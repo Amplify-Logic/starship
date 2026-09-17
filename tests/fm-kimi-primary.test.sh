@@ -5,9 +5,30 @@ set -u
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
+# A fake ps that reports a bash ancestor terminating at pid 1, so the ancestry
+# layer proves nothing and only the marker layer can answer. Marker-vs-ancestry
+# precedence itself is pinned by tests/fm-harness-precedence.test.sh; this suite
+# asserts only that the Kimi launch marker beats INHERITED runtime markers, which
+# is what it was written for and the one thing a live contradicting ancestor
+# would otherwise mask.
+blind_ancestry_bin() {  # <dir>
+  local fakebin
+  fakebin=$(fm_fakebin "$1")
+  cat > "$fakebin/ps" <<'SH'
+#!/usr/bin/env bash
+case "$*" in
+  *'ppid='*) printf '%s\n' 1 ;;
+  *) printf '%s\n' bash ;;
+esac
+SH
+  chmod +x "$fakebin/ps"
+  printf '%s\n' "$fakebin"
+}
+
 test_stable_primary_marker_wins() {
-  local out config
-  out=$(FM_PRIMARY_HARNESS=kimi CLAUDECODE=1 "$ROOT/bin/fm-harness.sh")
+  local out config blind
+  blind=$(blind_ancestry_bin "$(fm_test_tmproot fm-kimi-harness-blind)")
+  out=$(PATH="$blind:$PATH" FM_PRIMARY_HARNESS=kimi CLAUDECODE=1 "$ROOT/bin/fm-harness.sh")
   [ "$out" = kimi ] || fail "stable Kimi child marker did not win over inherited runtime markers (got $out)"
   config=$(fm_test_tmproot fm-kimi-harness-config)
   mkdir -p "$config"
@@ -17,16 +38,5 @@ test_stable_primary_marker_wins() {
   pass "fm-harness: stable Kimi marker detects the primary while configured worker selection stays separate"
 }
 
-test_worker_set_includes_kimi() {
-  local usage
-  usage=$(sed -n '1,90p' "$ROOT/bin/fm-spawn.sh")
-  assert_contains "$usage" 'claude|codex|opencode|pi|grok|cursor|kimi|prime-agent' \
-    "documented verified worker set missing kimi"
-  assert_grep "kimi) printf '%s' 'KIMI_CODE_HOME=__KIMIHOME__ kimi --yolo __MODELFLAG__'" \
-    "$ROOT/bin/fm-spawn.sh" \
-    "fm-spawn missing kimi worker launch template"
-  pass "fm-spawn: Kimi is a verified worker while primary detection stays separate"
-}
 
 test_stable_primary_marker_wins
-test_worker_set_includes_kimi

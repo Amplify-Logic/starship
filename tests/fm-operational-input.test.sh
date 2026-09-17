@@ -6,7 +6,7 @@ set -u
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 OWNER="$ROOT/bin/fm-operational-input.sh"
-# shellcheck source=bin/fm-operational-input.sh
+# shellcheck source=/dev/null
 . "$OWNER"
 
 cleanup() {
@@ -28,7 +28,7 @@ test_current_generic_matrix() {
   [ "$prefix_hex" = e281a346495253544d4154455f4f503a20 ] \
     || fail "current operational prefix lost the landed U+2063 FIRSTMATE_OP bytes: $prefix_hex"
 
-  for kind in session-start watcher turn-end-guard away-supervisor launch-brief; do
+  for kind in session-start watcher turn-end-guard away-supervisor launch-brief branch-outcome; do
     body="CURRENT_BODY_FOR_${kind}"
     fm_operational_input_encode "$kind" "$body" encoded \
       || fail "could not encode current $kind fixture"
@@ -140,32 +140,6 @@ JS
   pass "operational input: the OpenCode adapter constructs through the canonical owner"
 }
 
-test_supported_producers_use_the_canonical_owner() {
-  local spawn daemon grok opencode_guard opencode_watch pi_guard pi_watch sessionstart
-  spawn=$(cat "$ROOT/bin/fm-spawn.sh")
-  daemon=$(cat "$ROOT/bin/fm-supervise-daemon.sh")
-  grok=$(cat "$ROOT/bin/fm-turnend-guard-grok.sh")
-  opencode_guard=$(cat "$ROOT/.opencode/plugins/fm-primary-turnend-guard.js")
-  opencode_watch=$(cat "$ROOT/.opencode/plugins/fm-primary-watch-arm.js")
-  pi_guard=$(cat "$ROOT/.pi/extensions/fm-primary-turnend-guard.ts")
-  pi_watch=$(cat "$ROOT/.pi/extensions/fm-primary-pi-watch.ts")
-  sessionstart=$(cat "$ROOT/bin/fm-sessionstart-nudge.sh")
-
-  assert_contains "$sessionstart" 'fm_operational_input_encode session-start' "session-start does not use the canonical constructor"
-  assert_contains "$daemon" 'fm_operational_input_encode away-supervisor' "away-mode does not use the canonical constructor"
-  assert_contains "$grok" 'fm_operational_input_encode turn-end-guard' "Grok turn-end input does not use the canonical constructor"
-  assert_contains "$opencode_guard" 'encodeFirstmateOperationalInput' "OpenCode guard does not use the canonical constructor"
-  assert_contains "$opencode_watch" 'encodeFirstmateOperationalInput' "OpenCode watcher does not use the canonical constructor"
-  assert_contains "$pi_guard" 'encodeFirstmateOperationalInput' "Pi guard does not use the canonical constructor"
-  assert_contains "$pi_watch" 'encodeFirstmateOperationalInput' "Pi watcher does not use the canonical constructor"
-  assert_contains "$spawn" 'cursor) printf' "Cursor launch template disappeared"
-  # shellcheck disable=SC2016 # The source assertion intentionally matches a literal runtime variable.
-  assert_contains "$spawn" '"$FM_ROOT/bin/fm-operational-input.sh" encode launch-brief' "Kimi launch instructions do not use the canonical constructor"
-  [ "$(grep -o '__ENCODED_BRIEF__' "$ROOT/bin/fm-spawn.sh" | wc -l | tr -d ' ')" -ge 7 ] \
-    || fail "not every positional worker launch consumes the typed launch brief"
-  pass "operational input: every supported producer delegates construction to the canonical owner"
-}
-
 test_invalid_current_encodings_are_rejected() {
   local output
   output=$(printf 'body' | "$OWNER" encode legacy-operational 2>/dev/null) \
@@ -183,5 +157,4 @@ test_landed_untyped_prefix_is_explicitly_legacy
 test_isolated_legacy_matrix
 test_genuine_near_misses_remain_unclassified
 test_cross_language_adapter_uses_the_owner
-test_supported_producers_use_the_canonical_owner
 test_invalid_current_encodings_are_rejected

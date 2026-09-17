@@ -1,62 +1,141 @@
-# shellcheck shell=bash
-# Shared portable wall-clock timeout for bounded read-only probes.
-# Usage: . bin/fm-timeout-lib.sh
+#!/usr/bin/env bash
+# fm-timeout-lib.sh - the single owner of bounded command execution.
 #
-# fm_run_timeout <secs> <cmd...> runs <cmd...> under a <secs> wall-clock bound,
-# passing its stdout and stderr straight through. Exit status is the command's,
-# or 124 on timeout (the GNU timeout convention).
+# Sourced, never executed. Provides one hard-bound runner so no caller has to
+# re-derive the coreutils/BSD/perl selection, and so every bounded call in this
+# repo agrees on what "the bound was hit" means.
 #
-# STDIN IS ALWAYS /dev/null, and that is load-bearing rather than tidiness.
-# Every bound below runs the command in its own process group so a timeout can
-# kill the whole group, which also moves that command out of the terminal's
-# foreground process group.
-# A probed CLI that touches the terminal on stdin then takes SIGTTIN or SIGTTOU
-# and stops until the bound kills it, so the caller reads an EMPTY answer from a
-# perfectly healthy tool - but only when a terminal is attached, which is why
-# every non-interactive caller and test saw the probe pass.
-# That is what refused `firstmate claude` at its account seat check: the seat
-# proof read nothing and the launcher concluded it could not prove the seat.
-# Detaching stdin removes the terminal from the child entirely and keeps the
-# group-kill semantics that bound runaway children.
-# Every caller here is a read-only probe, so none of them has stdin to pass
-# through; bin/fm-toolchain-lib.sh carried this same redirect at its own call
-# site until the helper took ownership of it here.
+#   fm_timeout_mechanism
+#       Prints the mechanism fm_run_timed will use on this host: "timeout",
+#       "gtimeout", "perl", or "bash". Set FM_TIMEOUT_MECHANISM_OVERRIDE=bash
+#       to force the dependency-free fallback.
 #
-# Portability: prefers timeout(1), then gtimeout(1), then a perl fallback that
-# runs the child in its own process group and kills the group on alarm, so a
-# stock macOS box with neither coreutils binary is still bounded.
+#   fm_run_timed <seconds> <command> [args...]
+#       Runs the command with a hard bound. Exit status is the command's own,
+#       except 124, which means the bound was hit (GNU timeout's convention,
+#       reproduced by the perl and bash fallbacks).
 #
-# This is the one owner of that helper. Callers that need a bounded probe source
-# this file rather than open-coding a second background-wait loop.
+# A non-positive bound is not a bound: `timeout 0` and the perl fallback's
+# `alarm 0` both disable the deadline, so callers must reject 0 before calling.
+#
+# All four mechanisms terminate the whole process GROUP, not just the direct
+# child, so a hung grandchild (a vendor CLI spawned by a wrapper script, a git
+# fetch spawned by a sweep) cannot outlive the bound. GNU/BSD `timeout` does
+# this by default because it does not run the command in the foreground process
+# group; the perl fallback does it explicitly with setpgrp plus a negative pid,
+# and the bash fallback uses monitor mode to give the bounded child its own
+# process group before signaling its negative pid.
+set -u
 
-fm_run_timeout() {
-  local secs=$1
+fm_timeout_mechanism() {
+  if [ "${FM_TIMEOUT_MECHANISM_OVERRIDE:-}" = bash ]; then
+    printf 'bash\n'
+  elif command -v timeout >/dev/null 2>&1; then
+    printf 'timeout\n'
+  elif command -v gtimeout >/dev/null 2>&1; then
+    printf 'gtimeout\n'
+  elif command -v perl >/dev/null 2>&1; then
+    printf 'perl\n'
+  else
+    printf 'bash\n'
+  fi
+}
+
+fm_run_bash_timeout() {
+  local seconds=$1 command_status deadline_status child_pid watchdog_pid command_rc recorded_rc monitor_was_on=0
   shift
-  if command -v timeout >/dev/null 2>&1; then
-    timeout "$secs" "$@" </dev/null
-    return $?
+  command_status=$(mktemp "${TMPDIR:-/tmp}/fm-bash-timeout-command.XXXXXX" 2>/dev/null) || return 124
+  deadline_status="${command_status}.deadline"
+  case $- in *m*) monitor_was_on=1 ;; esac
+  set -m
+  (
+    set +m
+    "$@"
+    command_rc=$?
+    printf '%s\n' "$command_rc" > "$command_status"
+    exit "$command_rc"
+  ) &
+  child_pid=$!
+  (
+    set +m
+    sleep "$seconds"
+    printf 'expired\n' > "$deadline_status"
+    kill -TERM -- "-$child_pid" 2>/dev/null || true
+    sleep 0.2
+    kill -KILL -- "-$child_pid" 2>/dev/null || true
+    exit 124
+  ) &
+  watchdog_pid=$!
+  [ "$monitor_was_on" -eq 1 ] || set +m
+
+  if wait "$child_pid" 2>/dev/null; then
+    command_rc=0
+  else
+    command_rc=$?
   fi
-  if command -v gtimeout >/dev/null 2>&1; then
-    gtimeout "$secs" "$@" </dev/null
-    return $?
+  if [ -s "$deadline_status" ]; then
+    wait "$watchdog_pid" 2>/dev/null || true
+    command_rc=124
+  else
+    kill -TERM -- "-$watchdog_pid" 2>/dev/null || kill "$watchdog_pid" 2>/dev/null || true
+    wait "$watchdog_pid" 2>/dev/null || true
+    recorded_rc=$(cat "$command_status" 2>/dev/null || true)
+    case "$recorded_rc" in ''|*[!0-9]*) ;; *) command_rc=$recorded_rc ;; esac
   fi
-  perl -e '
-    my $seconds = shift;
-    my $pid = fork;
-    die "fork failed\n" unless defined $pid;
-    if (!$pid) {
-      setpgrp(0, 0);
-      exec @ARGV;
-      die "exec failed: $!\n";
-    }
-    local $SIG{ALRM} = sub {
-      kill "TERM", -$pid;
-      select undef, undef, undef, 0.2;
-      kill "KILL", -$pid;
-      exit 124;
-    };
-    alarm $seconds;
-    waitpid $pid, 0;
-    exit($? >> 8);
-  ' "$secs" "$@" </dev/null
+  rm -f "$command_status" "$deadline_status" 2>/dev/null || true
+  return "$command_rc"
+}
+
+fm_run_external_timeout() {
+  local runner=$1 seconds=$2 status_file runner_pid runner_rc command_rc
+  shift 2
+  status_file=$(mktemp "${TMPDIR:-/tmp}/fm-timeout-status.XXXXXX" 2>/dev/null) || return 124
+  # Run timeout asynchronously so its pid - also the process-group id created
+  # by GNU/BSD timeout without --foreground - remains available for cleanup.
+  # A shell wrapper can exit promptly on TERM while one of its descendants
+  # ignores TERM; timeout then considers the command finished and does not send
+  # its configured KILL. Explicitly reap that leftover group on a real timeout.
+  # shellcheck disable=SC2016  # Expansion is deliberately deferred to the child shell.
+  "$runner" -k 1 "$seconds" bash -c '
+    status_file=$1
+    shift
+    "$@"
+    command_rc=$?
+    printf "%s\n" "$command_rc" > "$status_file"
+    exit "$command_rc"
+  ' _ "$status_file" "$@" &
+  runner_pid=$!
+  if wait "$runner_pid"; then
+    runner_rc=0
+  else
+    runner_rc=$?
+  fi
+  command_rc=$(cat "$status_file" 2>/dev/null || true)
+  rm -f "$status_file" 2>/dev/null || true
+  case "$command_rc" in
+    ''|*[!0-9]*) ;;
+    *) [ "$command_rc" -le 255 ] && return "$command_rc" ;;
+  esac
+  case "$runner_rc" in
+    124|137)
+      kill -KILL -- "-$runner_pid" 2>/dev/null || true
+      return 124
+      ;;
+    *) return "$runner_rc" ;;
+  esac
+}
+
+fm_run_timed() {  # <seconds> <command...>
+  local seconds=$1
+  shift
+  case "$(fm_timeout_mechanism)" in
+    timeout) fm_run_external_timeout timeout "$seconds" "$@" ;;
+    gtimeout) fm_run_external_timeout gtimeout "$seconds" "$@" ;;
+    perl)
+      perl -e 'my $t = shift; my $pid = fork; die "fork failed" unless defined $pid; if (!$pid) { setpgrp(0, 0); exec @ARGV } local $SIG{ALRM} = sub { kill "TERM", -$pid; select undef, undef, undef, 0.2; kill "KILL", -$pid; exit 124 }; alarm $t; waitpid $pid, 0; exit($? >> 8)' \
+        "$seconds" "$@"
+      ;;
+    bash) fm_run_bash_timeout "$seconds" "$@" ;;
+    *) return 124 ;;
+  esac
 }

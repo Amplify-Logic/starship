@@ -1,6 +1,6 @@
-// Verified upstream against Pi 0.81.1 and 0.82.0, and in this fork against Pi 0.80.10,
-// all of which export AssistantMessageComponent with an updateContent method.
-// installCalmAssistantLayout() probes that exact method and throws if it is missing; fm-calm.ts catches that and skips only this adapter with a diagnostic
+// Verified against Pi 0.81.1 and 0.82.0, which export AssistantMessageComponent with an
+// updateContent method. installCalmAssistantLayout() probes that exact method and throws
+// if it is missing; fm-calm.ts catches that and skips only this adapter with a diagnostic
 // instead of blocking Calm or Pi.
 // This layout removes collapsed thinking and the mid-turn assistant text blocks
 // classified as "assistant-working-note" from a shallow presentation copy. The message

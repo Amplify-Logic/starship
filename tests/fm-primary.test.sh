@@ -297,8 +297,13 @@ test_kimi_primary_only_profile() {
   jq -e '.plugins | map(.id) | contains(["operator-plugin", "firstmate-primary"])' \
     "$managed/plugins/installed.json" >/dev/null 2>&1 \
     || fail "managed Kimi registry did not preserve the operator's existing plugins"
-  assert_contains "$(sed -n '1,90p' "$ROOT/bin/fm-spawn.sh")" 'claude|codex|opencode|pi|grok|cursor|kimi|prime-agent' \
-    "documented verified worker set missing kimi after worker certification"
+  # Membership, not the exact alternation: the upstream worker set grows, and
+  # pinning its literal spelling only reports that growth as a fork regression.
+  # What must not silently disappear is an adapter this fork certified itself.
+  for fm_worker in kimi cursor prime-agent; do
+    assert_contains "$("$ROOT/bin/fm-spawn.sh" --help 2>&1)" "$fm_worker" \
+      "documented verified worker set lost $fm_worker after worker certification"
+  done
   pass "fm-primary: Kimi is pinned, isolated, lifecycle-integrated, and worker-certified separately"
 }
 

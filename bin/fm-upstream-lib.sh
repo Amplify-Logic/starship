@@ -239,7 +239,7 @@ fm_upstream_check() {
 
   tip=$(
     GIT_TERMINAL_PROMPT=0 \
-      fm_run_timeout "$ls_timeout" \
+      fm_run_timed "$ls_timeout" \
       git -C "$dir" ls-remote --refs "$remote" "refs/heads/$branch" 2>/dev/null \
       | awk 'NR==1 { print $1; exit }'
   ) || true
@@ -255,7 +255,7 @@ fm_upstream_check() {
     # Bounded fetch into the remote-tracking ref only - never merges, never
     # touches local branches or projects/.
     if GIT_TERMINAL_PROMPT=0 \
-      fm_run_timeout "$fetch_timeout" \
+      fm_run_timed "$fetch_timeout" \
       git -C "$dir" fetch --no-tags --quiet "$remote" \
       "+refs/heads/$branch:$track_ref" >/dev/null 2>&1; then
       if git -C "$dir" cat-file -e "$tip^{commit}" 2>/dev/null; then

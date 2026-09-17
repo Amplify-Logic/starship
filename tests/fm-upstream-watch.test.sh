@@ -114,7 +114,7 @@ test_first_report_and_quiet_second_run() {
 }
 
 test_pending_bootstrap_surface_and_acknowledgement() {
-  local w report out
+  local w report out boot
   w="$TMP_ROOT/world"
   report=$(report_path "$w")
 
@@ -122,16 +122,24 @@ test_pending_bootstrap_surface_and_acknowledgement() {
   [ "$out" = "UPSTREAM_REPORT: new private report at $report" ] \
     || fail "pending diagnostic mismatch: $out"
 
-  # Session start composes bootstrap verbatim; pin the actual bootstrap owner
-  # invocation rather than adding another report channel to session-start.
-  assert_grep '"$SCRIPT_DIR/fm-upstream-watch.sh" pending' "$ROOT/bin/fm-bootstrap.sh" \
-    'bootstrap no longer surfaces the pending report'
-  assert_grep 'BOOT_OUT=$(FM_BOOTSTRAP_DETECT_ONLY=1 "$SCRIPT_DIR/fm-bootstrap.sh"' "$ROOT/bin/fm-session-start.sh" \
-    'session start no longer composes detect-only bootstrap output'
+  # Session start composes bootstrap's output verbatim, so driving bootstrap in
+  # the same detect-only mode session start uses is the observable proof that
+  # the pending report reaches the digest - rather than adding another report
+  # channel to session-start, or asserting against either script's source text.
+  boot=$(FM_HOME="$w/home" FM_ROOT_OVERRIDE="$w/fork" \
+    FM_BOOTSTRAP_DETECT_ONLY=1 FM_BOOTSTRAP_NETWORK=skip "$ROOT/bin/fm-bootstrap.sh" 2>&1)
+  assert_contains "$boot" "UPSTREAM_REPORT: new private report at $report" \
+    'detect-only bootstrap did not surface the pending report'
 
   FM_HOME="$w/home" FM_ROOT_OVERRIDE="$w/fork" "$WATCH" acknowledge "$report"
   out=$(FM_HOME="$w/home" FM_ROOT_OVERRIDE="$w/fork" "$WATCH" pending)
   [ -z "$out" ] || fail "acknowledged report still surfaced: $out"
+  # The same run after acknowledgement must go quiet, so the assertion above
+  # cannot pass on a bootstrap that surfaces the line unconditionally.
+  boot=$(FM_HOME="$w/home" FM_ROOT_OVERRIDE="$w/fork" \
+    FM_BOOTSTRAP_DETECT_ONLY=1 FM_BOOTSTRAP_NETWORK=skip "$ROOT/bin/fm-bootstrap.sh" 2>&1)
+  assert_not_contains "$boot" 'UPSTREAM_REPORT:' \
+    'bootstrap kept surfacing the report after acknowledgement'
   assert_present "$report" 'acknowledgement deleted the durable report'
 
   pass 'session-start bootstrap surfaces one pending report until explicit acknowledgement'

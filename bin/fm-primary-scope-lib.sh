@@ -4,102 +4,17 @@
 # whether this hook's own harness session already acquired that home's lock.
 # This file is sourced by hook entrypoints and has no side effects on source.
 
-# Known harness command names; extend when a new adapter is verified.
-FM_HARNESS_RE='claude|codex|opencode|grok|kimi|^pi$'
+# Harness identity - the command-name vocabulary, the ancestry walk, holder
+# liveness, and the per-process match - is owned by bin/fm-session-lock-lib.sh.
+# This file layers the fork's PRIMARY-SCOPE predicates on top of that owner: the
+# marker-or-plain-checkout test for a genuine firstmate primary home, the
+# session-lock ancestry relation, and the Cursor argument evidence the primary
+# handoff reads. Sourcing the owner here keeps one definition of each shared
+# function, so a hook that sources both files cannot get a different answer
+# depending on source order.
+# shellcheck source=bin/fm-session-lock-lib.sh
+. "${BASH_SOURCE%/*}/fm-session-lock-lib.sh"
 
-# The same harnesses as exact names. Keep in sync with FM_HARNESS_RE. Used only
-# for the stricter path evidence below, where the loose regex would also match
-# ordinary firstmate paths such as bin/fm-claude-stop-autoarm.sh.
-FM_HARNESS_NAMES=(claude codex opencode grok kimi pi)
-
-# Print the exact harness name carried by executable path $1 - its own basename
-# or any directory component - or return 1.
-#
-# This exists because Claude Code's native installer names the per-session
-# executable by its version (~/.local/share/claude/versions/2.1.220), so the
-# basename identifies nothing while the install path still says claude. Matching
-# whole path components only is what keeps that widening safe: an ordinary path
-# such as a firstmate hook script under ~/.claude/hooks has no "claude" path
-# component and is correctly not a harness process.
-fm_harness_path_name() {  # <path>
-  local path=$1 name
-  [ -n "$path" ] || return 1
-  for name in "${FM_HARNESS_NAMES[@]}"; do
-    case "/$path/" in
-      */"$name"/*) printf '%s' "$name"; return 0 ;;
-    esac
-  done
-  return 1
-}
-
-# True when argument string $1 carries the cursor-agent bundle path, the one
-# positive marker a Cursor CLI process shows under both of its verified shapes:
-# the ~/.local/bin/agent wrapper reports a generic "agent" basename, and under
-# tmux the wrapper's exec leaves a bare "node", while the versioned
-# cursor-agent bundle path survives in the arguments either way. That marker is
-# the same one fm_tmux_pane_is_cursor (bin/fm-tmux-lib.sh) owns the evidence for
-# and resolves cursor liveness through, and bin/fm-harness.sh reads.
-#
-# Matched as the WHOLE VERSIONED BUNDLE PATH, stricter than those two callers:
-# both of them gate the marker behind a bare-interpreter command name first, and
-# this tier has no such gate, so the path shape is all that keeps it from
-# widening. A bare "agent" basename is never sufficient on its own - it is a
-# generic name, and prime-agent rewrites its own process title to "prime-agent" -
-# and a firstmate worktree, branch, or task named after cursor-agent carries no
-# versioned bundle path and is correctly not a harness process. Identification
-# fails toward "not a harness" if Cursor ever drops the versioned install layout,
-# the same direction fm_tmux_pane_is_cursor already fails in.
-fm_harness_args_are_cursor() {  # <args>
-  case "$1" in
-    */cursor-agent/versions/*) return 0 ;;
-  esac
-  return 1
-}
-
-# True when the process described by command name $1 and full argument string $2
-# is a verified harness. Sets FM_HARNESS_IS_CLAUDE for the ancestry walk.
-#
-# Evidence, in order:
-#   1. the basename of the reported command name, against FM_HARNESS_RE.
-#   2. an exact harness component in that command path or in argv[0]. Both are
-#      needed because the two platforms report different things: macOS reports
-#      argv[0] in `ps -o comm=`, while procps on Linux reports the kernel exec
-#      name and ignores argv[0] entirely, so a version-named Claude Code binary
-#      is identified by its install path on macOS and by argv[0] on Linux.
-#   3. the versioned cursor-agent bundle path in the arguments, which is the
-#      only positive evidence Cursor's generically named wrapper carries. It is
-#      read before the interpreter tier below so a Cursor process is attributed
-#      to cursor rather than to another harness named incidentally in its own
-#      arguments, such as the model id in `--model cursor-grok-4.6-high`.
-#   4. a bare interpreter (node, python) running a harness script path.
-FM_HARNESS_IS_CLAUDE=0
-fm_harness_process_matches() {  # <comm> <args>
-  local comm=$1 args=$2 base argv0 name
-  FM_HARNESS_IS_CLAUDE=0
-  base=$(basename -- "$comm")
-  if printf '%s' "$base" | grep -qE "$FM_HARNESS_RE"; then
-    case "$base" in *claude*) FM_HARNESS_IS_CLAUDE=1 ;; esac
-    return 0
-  fi
-  argv0=${args%% *}
-  if name=$(fm_harness_path_name "$comm") || name=$(fm_harness_path_name "$argv0"); then
-    case "$name" in claude) FM_HARNESS_IS_CLAUDE=1 ;; esac
-    return 0
-  fi
-  if fm_harness_args_are_cursor "$args"; then
-    return 0
-  fi
-  # Bare interpreter (e.g. node): match the harness name in its script path.
-  case "$comm" in
-    *node*|*python*)
-      if printf '%s' "$args" | grep -qE "$FM_HARNESS_RE"; then
-        case "$args" in *claude*) FM_HARNESS_IS_CLAUDE=1 ;; esac
-        return 0
-      fi
-      ;;
-  esac
-  return 1
-}
 
 # Fork-preserving loose liveness evidence: before path-component identity
 # existed, holder liveness accepted any harness word anywhere in the command
@@ -129,41 +44,6 @@ fm_harness_holder_alive() {
   fm_harness_loose_args_match "$args"
 }
 
-# Walk this process's ancestry (at most eight parents, matching bin/fm-lock.sh
-# and Pi's lockOwnership()) and print this session's contiguous verified-harness
-# ancestry, innermost pid first, or return 1 when no ancestor is a harness.
-#
-# The walk climbs freely until the first harness match, because the caller is
-# normally an ordinary shell several levels below its session. After that first
-# match it stops at the first non-harness ancestor, so it can never cross a gap
-# into an unrelated harness further up the real process tree - for example the
-# live session that launched a test as its own subprocess.
-#
-# For every harness except Claude the innermost match is the session, which is
-# where e.g. Pi's shared signed-wrapper ancestry actually holds the lock. Claude
-# Code instead runs hooks several levels below the session inside its own nested
-# worker chain with no non-harness process between them, so which pid in that
-# run is the session cannot be read off the ancestry at all: the whole
-# contiguous run is reported and the callers decide what they need from it.
-fm_harness_ancestry_pids() {
-  local pid=$$ comm args extending=0 printed=0
-  for _ in 1 2 3 4 5 6 7 8; do
-    comm=$(ps -o comm= -p "$pid" 2>/dev/null) || break
-    args=$(ps -o args= -p "$pid" 2>/dev/null)
-    if fm_harness_process_matches "$comm" "$args"; then
-      printf '%s\n' "$pid"
-      printed=1
-      [ "$FM_HARNESS_IS_CLAUDE" -eq 1 ] || break
-      extending=1
-    elif [ "$extending" -eq 1 ]; then
-      break
-    fi
-    pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')
-    [ -n "$pid" ] && [ "$pid" -gt 1 ] || break
-  done
-  [ "$printed" -eq 1 ]
-}
-
 # True when $1 is one of this session's own contiguous harness ancestors.
 fm_harness_ancestry_contains() {  # <pid>
   local wanted=$1 pid pids
@@ -175,24 +55,6 @@ fm_harness_ancestry_contains() {  # <pid>
 $pids
 EOF
   return 1
-}
-
-# Print the one pid that identifies this session when the session lock is being
-# WRITTEN: the outermost pid of the contiguous run. That is the pid that lives
-# as long as the session - a Claude worker several levels in is reaped when its
-# hook returns, and a lock naming it would look stale moments later while the
-# session is still running. Every non-Claude harness reports a single pid, so
-# this is its innermost match unchanged.
-fm_harness_ancestry_pid() {
-  local pids pid outermost=''
-  pids=$(fm_harness_ancestry_pids) || return 1
-  while IFS= read -r pid; do
-    [ -n "$pid" ] && outermost=$pid
-  done <<EOF
-$pids
-EOF
-  [ -n "$outermost" ] || return 1
-  printf '%s\n' "$outermost"
 }
 
 # Return 0 when $1 carries a genuine secondmate-home marker.

@@ -1805,24 +1805,31 @@ for title in deferred:
         raise SystemExit("deferred hold leaked into needs you: %s" % title)
 if len(shown) != 5:
     raise SystemExit("needs you must cap at 5, got %s" % shown)
-if obs["needs_you"]["more"] != 1:
-    raise SystemExit("one live decision should remain behind show all, got %s" % obs["needs_you"])
-if "Fund worker capacity" not in " ".join(hidden):
-    raise SystemExit("capped decision missing from rest: %s" % hidden)
+# Any queued item held for the captain with a reason and no blockers is a live
+# captain call now, whatever the item's own kind, so the ship task held on a
+# captain call counts among them: seven live calls, five shown and two behind
+# show all.
+if obs["needs_you"]["more"] != 2:
+    raise SystemExit("two live decisions should remain behind show all, got %s" % obs["needs_you"])
+for title in ("Fund worker capacity", "Rotate finances secrets"):
+    if title not in " ".join(hidden):
+        raise SystemExit("capped decision missing from rest: %s, %s" % (title, hidden))
 counts = {group["label"]: group["count"] for group in obs["waiting"]["groups"]}
-if counts.get("Atelier") != 2:
+if counts.get("Atelier") != 1:
     raise SystemExit("Atelier waiting count wrong: %s" % obs["waiting"]["groups"])
 if counts.get("Journey") < 2:
     raise SystemExit("Journey waiting count wrong: %s" % obs["waiting"]["groups"])
-if counts.get("Finances") != 1:
-    raise SystemExit("Finances waiting count wrong: %s" % obs["waiting"]["groups"])
 if any(group["count"] != len(group["items"]) for group in obs["waiting"]["groups"]):
     raise SystemExit("waiting count does not match expanded items")
 for title in deferred:
     if not any(title in row for row in waiting):
         raise SystemExit("deferred hold missing from waiting: %s" % waiting)
-if not any("Waiting on the Atelier vendor" in row for row in waiting):
-    raise SystemExit("paused live work lost its repository group: %s" % waiting)
+# A declared `paused:` line is a wake event, not current state: an unverified
+# worker runtime reports unknown, so that row belongs under way rather than in a
+# waiting group. The page must still name it rather than dropping it.
+underway = [row["title"] for row in obs["under_way"]["items"]]
+if not any("Waiting on the Atelier vendor" in row for row in underway):
+    raise SystemExit("live work with an unreadable state vanished: %s" % underway)
 PY
   pass "live observation caps needs you and groups waiting by project"
 }

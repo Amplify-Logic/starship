@@ -84,7 +84,9 @@ export const FmPrimaryTurnendGuard = async ({ client, directory, worktree }) => 
         );
         await client.session.promptAsync({
           path: { id: sessionID },
-          body: { parts: [{ type: "text", text }] },
+          body: {
+            parts: [{ type: "text", text }],
+          },
         });
         skipNextIdle = true;
       } catch (error) {

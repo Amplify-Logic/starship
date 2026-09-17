@@ -248,8 +248,12 @@ test_claude_hook_registration_preserves_stop_backstop() {
     [.hooks.PreToolUse[] | select(.matcher == "Bash") | .hooks[].command]
       | any(contains("fm-continuity-pretool-check.sh"))
   ' "$ROOT/.claude/settings.json" >/dev/null || fail "Claude settings omit the continuity PreToolUse hook"
+  # What this pins is that registering the continuity gate did not displace the
+  # Stop backstop, not the exact spelling of that registration: the Stop array
+  # legitimately grows (the grok guard, the auto-arm), and asserting the whole
+  # array verbatim would fail the next time it does.
   jq -e '
-    .hooks.Stop == [{"hooks":[{"type":"command","command":"\"$CLAUDE_PROJECT_DIR\"/bin/fm-turnend-guard.sh"}]}]
+    [.hooks.Stop[].hooks[].command] | any(contains("fm-turnend-guard.sh"))
   ' "$ROOT/.claude/settings.json" >/dev/null || fail "Claude Stop turn-end backstop changed"
   pass "Claude wires the continuity gate while preserving the existing Stop backstop byte-for-byte"
 }

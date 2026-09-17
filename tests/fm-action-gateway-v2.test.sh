@@ -10,7 +10,13 @@ TMP=$(fm_test_tmproot fm-action-gateway-v2)
 export FM_ACTION_GATEWAY_TEST=1
 export TMPDIR="$TMP/runtime"
 mkdir -p "$TMPDIR"
-trap 'if [ -n "${SERVER_PID:-}" ]; then kill "$SERVER_PID" 2>/dev/null || true; wait "$SERVER_PID" 2>/dev/null || true; fi; rm -rf "$TMP"' EXIT
+# The peer-credential case binds real AF_UNIX sockets, whose path is capped at
+# 104 bytes on macOS and 108 on Linux. The shared fixture root resolves TMPDIR
+# to its physical path, which on macOS prefixes /private and leaves no room for
+# a channel socket underneath it, so the sockets get their own short root and
+# the same EXIT trap removes it.
+SOCKET_TMP=$(mktemp -d /tmp/fm-gw2.XXXXXX)
+trap 'if [ -n "${SERVER_PID:-}" ]; then kill "$SERVER_PID" 2>/dev/null || true; wait "$SERVER_PID" 2>/dev/null || true; fi; rm -rf "$TMP" "$SOCKET_TMP"' EXIT
 
 request() {
   local task=${1:-job-one} idem=${2:-idem-one} nonce=${3:-caller-nonce-one} params=${4:-'"recipient":"captain@exämple.test","subject":"Hello","body":"Exact bytes"'}
@@ -390,7 +396,7 @@ issue_cap() {
 test_distinct_peer_credential_protocols() {
   local cap bad_cap approval_cap execution_cap request_json prepare_payload response request_id digest
   reset_gateway
-  SOCKET_ROOT="$TMP/sockets"
+  SOCKET_ROOT="$SOCKET_TMP/s"
   mkdir -p "$SOCKET_ROOT"
   $GW serve --socket-root "$SOCKET_ROOT" >"$TMP/server.out" 2>"$TMP/server.err" &
   SERVER_PID=$!

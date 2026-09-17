@@ -86,10 +86,13 @@ test_ci_wires_installers_and_required_lane() {
     "portable CI must run parallel shard 1"
   assert_grep 'lane portable-parallel-2' "$CI" \
     "portable CI must run parallel shard 2"
-  assert_grep 'lane portable-serial-1' "$CI" \
-    "portable CI must run serial shard 1"
-  assert_grep 'lane portable-serial-2' "$CI" \
-    "portable CI must run serial shard 2"
+  # The serial lanes are a matrix job, so each shard's lane name is composed
+  # from its own matrix entry rather than written out once per shard.
+  # shellcheck disable=SC2016 # The workflow's own literal, matched verbatim.
+  assert_grep 'portable-serial-${{ matrix.shard }}of${{ strategy.job-total }}' "$CI" \
+    "portable CI must compose each serial shard lane from its matrix entry"
+  assert_grep 'shard: [1, 2, 3, 4, 5]' "$CI" \
+    "portable CI must run every serial shard"
   assert_grep 'fm-test-run.sh --check-coverage' "$CI" \
     "CI must prove portable lanes and Herdr partition the complete inventory"
   # Live harness credential tests must stay out of the default Herdr lane.

@@ -4,11 +4,11 @@
 # A firstmate primary that delegates through a harness's own delegation,
 # scheduling, or background-work tool creates work with no `state/<id>.meta` and
 # no `data/<id>/brief.md`. Only `bin/fm-spawn.sh` writes that metadata, and
-# every firstmate guard keys off it (bin/fm-supervision-lib.sh counts
-# `state/*.meta`; bin/fm-turnend-guard.sh exits silently at zero). So such work
-# is not merely unsupervised: it makes the whole guard stack structurally inert,
-# and it dies with the primary session instead of living in its own backend
-# session.
+# untracked project work contributes nothing to the in-flight branch of
+# bin/fm-supervision-lib.sh or bin/fm-turnend-guard.sh. So such work is not
+# merely unsupervised: absent an independent X-mode need, it makes the whole
+# guard stack structurally inert, and it dies with the primary session instead
+# of living in its own backend session.
 #
 # This scoped PreToolUse guard is the shipped mechanism.
 # Claude primaries should also use an untracked per-home local
@@ -65,11 +65,17 @@ DELEGATION_STEMS='agent subagent task workflow cron schedul worktree delegate sp
 # reason a runaway task cannot be stopped.
 OBSERVE_ONLY_TOOLS='taskoutput taskstop taskget tasklist cronlist bashoutput killshell'
 
-# Exact lowercase tool names that match a delegation stem but create no runnable
-# work.
-# These write only the harness's session-local todo list, which has no executor,
-# agent, worktree, schedule, or process that outlives the session.
-# Keep this separate from the observe-or-stop list because these tools do write.
+# Exact lowercase tool names that match a stem above but create no RUNNABLE
+# work. These write only the harness's session-local todo list, which has no
+# executor: it spawns no agent, allocates no worktree, registers no schedule,
+# and starts nothing that could outlive the session or escape a firstmate
+# guard. Denying them stops the primary tracking its own plan while granting no
+# delegation power, and the deny text would tell it to run bin/fm-brief.sh for a
+# todo entry, so the stem match here is a false positive rather than a policy.
+# This is a separate list from OBSERVE_ONLY_TOOLS on purpose: these tools WRITE,
+# so folding them into a list documented as observe-or-stop would make that
+# contract untrue. Both lists are exact-name, never substring, so neither can
+# widen by accident.
 PLAN_ONLY_TOOLS='taskcreate taskupdate'
 
 TOOL=""

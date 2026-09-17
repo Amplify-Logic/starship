@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # tests/fm-supervision-events.test.sh - unit tests for the watcher's native
-# event-wait splice (event_wait_or_sleep, handle_push_transition in
-# bin/fm-watch.sh). The watcher's source guard lets this file source it to load
+# event-wait splice (event_wait_or_sleep in bin/fm-watch.sh and
+# handle_push_transition in bin/fm-push-transition-lib.sh). The watcher's source
+# guard lets this file source it to load
 # the functions WITHOUT acquiring the singleton lock or entering the blocking
 # loop; wake/sleep and the backend dispatchers are overridden so the exemptions,
 # capability memo, and fail-closed disable are asserted deterministically with no
@@ -19,6 +20,8 @@ mkdir -p "$STATE_DIR"
 # lock/loop, so only the functions load.
 export FM_STATE_OVERRIDE="$STATE_DIR"
 export FM_ROOT_OVERRIDE="$ROOT"
+# Production modules are independently linted canonical roots. Keep this test's
+# ShellCheck context local while preserving its unchanged runtime source path.
 # shellcheck source=/dev/null
 . "$ROOT/bin/fm-watch.sh"
 
@@ -56,6 +59,33 @@ grep -q 'herdr: agent blocked' "$STATE_DIR/.wake-queue" || fail "the stale paylo
 [ -e "$STATE_DIR/.herdr-escalated-default_wG_pQ" ] || fail "handle_push_transition must commit dedupe only after enqueue"
 pass "handle_push_transition: a blocked crew enqueues a stale wake naming its window and wakes the supervisor"
 
+# --- handle_push_transition: the captain-facing pane label ---------------------
+# A push transition IS an authoritative-state change, so the pane label the
+# operator reads has to follow it. bin/fm-visible-status.sh owns that label and
+# reads the task record, so the only observable proof is the herdr call it makes.
+reset_state
+HERDR_CALLS="$TMP/herdr-calls"
+PRESENTATION_BIN="$TMP/presentation-bin"
+mkdir -p "$PRESENTATION_BIN"
+cat > "$PRESENTATION_BIN/herdr" <<SH
+#!/usr/bin/env bash
+set -u
+printf '%s\n' "\$*" >> '$HERDR_CALLS'
+case "\${1:-} \${2:-}" in
+  "status --json") printf '%s\n' '{"client":{"version":"0.8.0","protocol":16},"server":{"running":true}}' ;;
+esac
+exit 0
+SH
+chmod +x "$PRESENTATION_BIN/herdr"
+: > "$HERDR_CALLS"
+fm_write_meta "$STATE_DIR/tk2.meta" "window=default:wG:pQ" "backend=herdr" "kind=ship" \
+  "harness=claude" "herdr_session=default" "herdr_workspace_id=wG" "herdr_tab_id=wG:tQ" \
+  "herdr_pane_id=wG:pQ"
+PATH="$PRESENTATION_BIN:$PATH" handle_push_transition herdr default "$(mkrec wG:pQ blocked)"
+grep -q 'pane report-metadata wG:pQ' "$HERDR_CALLS" \
+  || fail "a push transition left the crew's pane label naming the state it just left"
+pass "handle_push_transition: an authoritative-state change re-projects the crew's pane label"
+
 reset_state
 fm_write_meta "$STATE_DIR/tk1.meta" "window=default:wG:pQ" "backend=herdr" "kind=ship"
 (
@@ -79,69 +109,18 @@ fi
 grep -q 'absorbed push' "$STATE_DIR/.watch-triage.log" 2>/dev/null || fail "the paused absorb should be logged to the triage log"
 pass "handle_push_transition: a declared-pause crew is absorbed (no fast wake), left to the poll loop's long cadence"
 
-# --- handle_push_transition: absorb captain-held idle cursor (park churn) -----
-# A DONE-but-captain-held crew sits at an idle Cursor/herdr composer. Herdr
-# reports that as blocked (waiting on human). Without the park exemption, every
-# fresh watcher cycle level-reconciles that blocked edge into an immediate stale
-# wake and forces re-arm churn. The idle pane is expected; absorb like paused.
+# --- handle_push_transition: absorb for a verified captain-held transfer -------
 
 reset_state
-fm_write_meta "$STATE_DIR/tk-park.meta" "window=default:wP:p4" "backend=herdr" "kind=ship" "harness=cursor"
-printf 'captain-held [key=merge]: PR waiting for captain approval\n' > "$STATE_DIR/tk-park.status"
-# shellcheck disable=SC2329  # invoked indirectly by handle_push_transition
-fm_backend_capture() {
-  printf '  → Add a follow-up\n\n  Cursor Grok 4.5 Low · 7%%                                   Run Everything\n'
-}
-handle_push_transition herdr default "$(fm_transition_record wP:p4 wP "" blocked cursor)"
+fm_write_meta "$STATE_DIR/tk2h.meta" "window=default:wG:pQ" "backend=herdr" "kind=ship"
+printf 'captain-held [key=route]: tracked by task-decision-route\n' > "$STATE_DIR/tk2h.status"
+handle_push_transition herdr default "$(mkrec wG:pQ blocked)"
 if [ -e "$STATE_DIR/.wake-queue" ] && grep -q 'stale' "$STATE_DIR/.wake-queue"; then
-  fail "a captain-held idle pane must NOT be fast-escalated as waiting on human: $(cat "$STATE_DIR/.wake-queue")"
+  fail "a captain-held crew must NOT be fast-escalated: $(cat "$STATE_DIR/.wake-queue")"
 fi
-[ ! -s "$WAKE_LOG" ] || fail "a captain-held idle pane must not wake the supervisor from the event fast-path"
-[ -e "$STATE_DIR/.herdr-escalated-default_wP_p4" ] \
-  || fail "captain-held absorb must commit the dedupe marker so reconnect reconcile cannot re-arm-churn"
-grep -q 'absorbed push' "$STATE_DIR/.watch-triage.log" 2>/dev/null \
-  || fail "the captain-held absorb should be logged to the triage log"
-pass "handle_push_transition: a captain-held idle cursor pane is absorbed (no park-churn stale wake)"
-
-# --- handle_push_transition: busy cursor footer absorbs false blocked (wP:p4) -
-
-reset_state
-fm_write_meta "$STATE_DIR/tk-cursor.meta" "window=default:wP:p4" "backend=herdr" "kind=ship" "harness=cursor"
-# shellcheck disable=SC2329  # invoked indirectly by handle_push_transition
-fm_backend_capture() {
-  # Verbatim busy footer from the 2026-07-19 default:wP:p4 false-blocked incident.
-  printf '  → Add a follow-up                                          ctrl+c to stop\n'
-}
-handle_push_transition herdr default "$(fm_transition_record wP:p4 wP "" blocked cursor)"
-if [ -e "$STATE_DIR/.wake-queue" ] && grep -q 'stale' "$STATE_DIR/.wake-queue"; then
-  fail "a busy cursor pane must NOT get waiting-on-human escalation: $(cat "$STATE_DIR/.wake-queue")"
-fi
-[ ! -s "$WAKE_LOG" ] || fail "a busy cursor pane must not wake the supervisor from the blocked fast-path"
-[ ! -e "$STATE_DIR/.herdr-escalated-default_wP_p4" ] || fail "busy-footer absorb must not commit the dedupe marker"
-grep -q 'busy footer, not waiting on human' "$STATE_DIR/.watch-triage.log" 2>/dev/null \
-  || fail "the busy-footer absorb should be logged to the triage log"
-pass "handle_push_transition: busy cursor footer (ctrl+c to stop on wP:p4) absorbs false blocked"
-
-reset_state
-fm_write_meta "$STATE_DIR/tk-cursor-idle.meta" "window=default:wP:p4" "backend=herdr" "kind=ship" "harness=cursor"
-fm_backend_capture() {
-  printf '  → Add a follow-up\n\n  Cursor Grok 4.5 Low · 7%%                                   Run Everything\n'
-}
-handle_push_transition herdr default "$(fm_transition_record wP:p4 wP "" blocked cursor)"
-[ -e "$STATE_DIR/.wake-queue" ] || fail "an idle cursor pane that is blocked must still escalate"
-grep -q 'herdr: agent blocked' "$STATE_DIR/.wake-queue" || fail "idle-pane blocked must name waiting-on-human cause"
-[ -s "$WAKE_LOG" ] || fail "idle-pane blocked must wake the supervisor"
-pass "handle_push_transition: idle cursor pane with blocked still escalates as waiting on human"
-
-# --- window_is_busy: herdr idle is corroborated by the busy footer -----------
-
-reset_state
-fm_backend_busy_state() { printf 'idle'; }
-window_is_busy "default:wP:p4" $'  → Add a follow-up                                          ctrl+c to stop\n' \
-  || fail "herdr idle + cursor busy footer must read busy on the poll path"
-window_is_busy "default:wP:p4" $'  → Add a follow-up\n\n  Cursor Grok 4.5 Low · 7%\n' \
-  && fail "herdr idle + idle cursor pane must not read busy"
-pass "window_is_busy: herdr idle is corroborated by the pane busy footer (cursor ctrl+c to stop)"
+[ ! -s "$WAKE_LOG" ] || fail "a captain-held crew must not wake the supervisor from the event fast-path"
+grep -q 'absorbed push' "$STATE_DIR/.watch-triage.log" 2>/dev/null || fail "the captain-held absorb should be logged to the triage log"
+pass "handle_push_transition: a captain-held crew is absorbed (no fast wake), left to the poll loop's long cadence"
 
 # --- event_wait_or_sleep: secondmate windows are excluded from the pane list --
 

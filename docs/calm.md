@@ -1,112 +1,60 @@
-# Calm mode
+# Pi Calm mode
 
-Calm is a Pi primary presentation toggle.
-It hides tool-call noise behind a small moving boat so the terminal shows the conversation rather than the machinery.
+Calm is a Pi-only conversation presentation toggle.
+It is off by default, and the last `/calm` choice persists for the effective Firstmate home across Pi session starts and resumes.
 
-`.pi/extensions/fm-calm.ts` owns when the presentation is installed and removed.
-`.pi/extensions/lib/fm-calm-working-ship.ts` owns the boat's geometry, cadence, and freeze/resume state.
-`.pi/extensions/lib/fm-calm-visibility.ts` owns which transcript rows Calm hides.
-`docs/configuration.md` owns the `config/calm` preference file.
-This document owns the captain-facing behavior and the verification record.
+While Calm is active and an agent run is under way, Calm hides Pi's built-in `Working...` row and shows a small two-row animated boat in its place, and no separate Calm status row is added.
+The water fills the usable width with low one-cell Unicode bars, using standard ANSI blue for troughs and cyan for crests.
+The asymmetric three-cell `◿│◣` sail is centered over the five-cell `╲▁▁▁╱` hull, with a smaller standard ANSI yellow quarter sail, a larger standard ANSI red right sail, and a blue zero-height interior that keeps the water visible through the boat.
+The boat is deliberately calm: it moves one column every 880ms, while the long smooth wave advances one quarter-cell every 220ms so the surface stays alive between boat steps.
+Deterministically varied half-waves stay between nine and thirteen cells, and the boat remains phase-locked inside a broad zero-height trough through movement and edge reversals.
+Every resize reflows the sprite without wrapping, and it disappears when the run settles, aborts, or fails.
+Within one Pi session and Calm extension lifetime, the next working period resumes the boat from its last rendered column and travel direction rather than restarting at the left edge.
+Hidden elapsed time does not advance the animation, and a resize while hidden clamps the frozen boat to the new width without changing its valid travel direction.
+A fresh Pi session or new Calm extension lifetime starts at the normal initial position.
+Very narrow terminals fall back to a smaller deterministic sprite.
+While Calm is off, Pi's stock working row is left exactly as Pi renders it.
+Calm hides collapsed thinking labels, mid-turn assistant working notes, the shells for the Pi built-in tool names Calm owns, the `fm_watch_arm_pi` and `fm_branch_outcomes` tool shells, and canonically classified Firstmate operational user rows.
+A mid-turn working note is assistant text in a message the model did not end its response with, identified by that message's own `stopReason` of `toolUse`, or of `length` with tool calls present.
+Hiding it removes the narration a model emits alongside its tool calls, while the genuine reply that ends a response stays visible.
+Text that is still streaming is never hidden, because suppressing it would also stop a genuine reply from streaming, so a working note is briefly visible before its row collapses.
+The narration is hidden only from the live transcript presentation, and remains in the message, model context, session storage, and `/export` artifacts.
+The operational inputs Calm classifies remain ordinary user-role messages, while Pi's transcript layout renders their complete rows at zero height.
+The session-start nudge remains on its existing non-displayed custom-message path.
 
-Calm was ported from upstream, whose `fm-calm.ts` and its four library modules this fork carries with the minimum adaptation needed to load beside `fm-primary-turnend-guard.ts` and `fm-primary-pi-watch.ts`.
+Outside Pi's same-name built-in override collision described below, Calm changes presentation only.
+Calm's built-in wrappers preserve Pi's execution behavior, and input delivery, ordering, model context, session storage, diagnostics, and `/export` and `/share` operation remain unchanged.
+Every hidden Firstmate input remains available to the model and in serialized session data and exported artifacts.
+Legacy operational custom messages remain in session data and Pi's sidebar tree, although the main HTML transcript may omit them.
+Toggling Calm off restores ordinary rendering, and `Ctrl+O` expansion state is preserved.
 
-## What the captain sees
+Pi's supported presentation API does not expose a global transcript filter.
+Expanded reasoning and its reserved spacing, built-in tool images, user-bash rows, skill and summary rows, generic status notices, and other arbitrary custom-tool or extension rows remain visible.
+These are supported-API boundaries rather than hidden-content failures.
 
-`/calm` toggles the presentation and the choice persists for the home, so the next Pi primary starts the way the last one ended.
+## Pi compatibility
 
-With Calm on:
+Calm has no numeric Pi version minimum or maximum and never refuses Pi solely because its version is newer than a previously verified version.
+The collapsed-thinking and operational-user-row presentation adapters probe the exact Pi API seam they patch when Calm loads.
+If Pi removes one of those seams, Calm logs a diagnostic naming the unavailable adapter and skips only that adapter; `/calm`, the other adapter, and unrelated Pi extensions remain available.
 
-- Tool calls, tool results, collapsed thinking, and mid-turn assistant working notes are hidden.
-- Operational input rows - the session-start, watcher, turn-end-guard, away-supervisor, and launch-brief messages Firstmate delivers to itself - are hidden.
-- The captain's own prompts and the agent's genuine replies stay exactly as they were.
-- While a run is active, Pi's stock `Working...` row is replaced by a boat sailing a rippling waterline. The water ripples every 220ms and the boat moves one column every fourth ripple, so it reads as calm rather than busy.
+Calm's built-in tool presentation (`bash`, `read`, `edit`, `write`, `grep`, `find`, `ls`) shares Pi's single, unmerged override slot per name with any other extension that overrides the same tool.
+While the persisted Calm preference is off, Calm registers none of those overrides and therefore contests no built-in tool name.
+The first time Calm turns on in a session that started off, it claims every built-in name no other extension already owns, leaves every contested tool intact and callable, and displays a prominent warning naming the tools it skipped.
+Tool-call rows already on screen before that first toggle do not retroactively collapse; later rows for the names Calm claimed use Calm presentation.
+When a session starts or reloads with Calm already on, Calm must instead register all seven overrides synchronously so Pi can render restored rows with them.
+Pi provides no ownership check early enough for that load-time path, and the first registrant wins the complete tool definition.
+If the other extension wins, a session-start console diagnostic names the tool and winning extension; if Calm wins, Pi does not expose the losing registration, so the other extension's override is unavailable and cannot be named.
 
-With Calm off, every row renders the way Pi renders it.
+[`calm-mode-feasibility.md`](calm-mode-feasibility.md) owns the version-scoped renderer taxonomy, built-in override constraints, and empirical evidence.
+[`configuration.md`](configuration.md#pi-calm-preference-configcalm) owns the persisted preference file and resolution rules.
+`.pi/extensions/lib/fm-calm-visibility.ts` owns the visibility policy, `.pi/extensions/lib/fm-calm-operational-user-layout.ts` owns the zero-height operational-user row adapter, and `.pi/extensions/lib/fm-calm-working-ship.ts` owns the animated working presentation.
 
-Two bounds are worth knowing:
+Regression entry points:
 
-- The first toggle in a session is not retroactive for tool rows Pi restored before Calm claimed the built-ins. Rows drawn after the toggle follow the new preference.
-- `/export` and `/share` render the stock transcript for that one export, so a shared session is never missing the work Calm was hiding. The stored preference is untouched.
-
-## Preference file
-
-The preference lives in this home's gitignored `config/calm`, holding `on` or `off`.
-A home upgraded from the removed third presentation level still holds `max`; that restores as `on` rather than silently dropping to `off`.
-An absent file means Calm is off.
-
-## Built-in tool ownership
-
-Pi registers one tool definition per name and the first registration wins, with no merge and no unregister.
-Calm presents the seven built-ins - `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls` - by re-registering them with its own render slots.
-
-A Calm-on home claims all seven synchronously at load, because restored rows capture the registry before `session_start` and a deferred claim would leave them rendering stock.
-A Calm-off home registers nothing, so a session that never turns Calm on creates no collision exposure at all.
-The first activation in a session that started off claims only the built-ins no other extension already owns, and says in a notice which ones it had to leave alone.
-
-## Presentation adapters degrade alone
-
-Collapsed thinking and the operational-input row are presented by patching two exact Pi APIs.
-Each adapter probes the method it patches and, if a future Pi removes it, prints a diagnostic and skips only itself.
-Calm and Pi keep working; that one presentation reverts to stock.
-
-## Verification record
-
-### Live Pi session, 2026-09-13, Pi 0.80.10
-
-Run in a throwaway project directory outside any Firstmate checkout, against an isolated `PI_CODING_AGENT_DIR` so the captain's own Pi state was untouched.
-The directory held exactly the tracked `.pi/extensions/` tree plus `bin/fm-operational-input.sh`, and one throwaway extension registering a local slow endpoint so a run stayed active long enough to watch the working row.
-
-Pi's startup banner listed every project extension loading together:
-
+```sh
+tests/fm-calm-pi-extension.test.sh
+tests/fm-pi-branch-extension.test.sh
+tests/fm-pi-primary-types.test.sh
+FM_PI_LIVE_E2E=1 tests/fm-pi-primary-live-e2e.test.sh
 ```
-[Extensions]
-  fm-calm.ts, fm-primary-pi-watch.ts, fm-primary-status-bar.ts, fm-primary-turnend-guard.ts,
-zz-verify-provider.ts
-```
-
-`/calm` was offered with its own description:
-
-```
-→ calm        [p] Toggle Firstmate's supported conversation-only transcript presentation.
-```
-
-Running it wrote `on` to the home's `config/calm`.
-A run with Calm off showed Pi's stock working row:
-
-```
- ⠴ Working...
-```
-
-The same run with Calm on showed the boat instead, advancing along the waterline between frames:
-
-```
-  <|
-~\__/~-~~~-~~~-~~~-~~~-~~~-~~~-~~~-~~~-~~~-~~~-~~~-~~~-~~~-~~~-~~~-~~~-~~~-~~~-~~~-~~~-~~~-~~~-~~~-~
-
-    <|
--~~\__/~-~~~-~~~-~~~-~~~-~~~-~~~-~~~-~~~-~~~-~~~-~~~-~~~-~~~-~~~-~~~-~~~-~~~-~~~-~~~-~~~-~~~-~~~-~~~
-
-       <|
--~~~-~\__/~~-~~~-~~~-~~~-~~~-~~~-~~~-~~~-~~~-~~~-~~~-~~~-~~~-~~~-~~~-~~~-~~~-~~~-~~~-~~~-~~~-~~~-~~~
-```
-
-Toggling `/calm` a second time wrote `off` and restored the stock row.
-
-The turn-end guard and watcher extensions stayed live in the same session, each writing its own load marker from the same Pi process id 18777:
-
-```
-$ head -c 78 state/.pi-turnend-extension-loaded
-sha256:499b3412a3de0c9e3f8cae3570323575f5c1f1a95c334103c5bf24b0745d9b15
-$ head -c 78 state/.pi-watch-extension-loaded
-sha256:206db8a9a3c7ea10c31efab13b8e474bc0923a2398f3399d999e8276059fd147
-```
-
-### Strict typecheck, 2026-09-13, TypeScript 5.9.3
-
-`tests/fm-pi-primary-types.test.sh` typechecks every tracked Pi extension, including the five ported Calm files, against the installed Pi declarations.
-It skips below TypeScript 5, and this machine's `tsc` is 4.9.5, so the same compiler options were run once by hand under TypeScript 5.9.3 against Pi 0.80.10 and reported no errors.
-
-### Behavior tests
-
-`tests/fm-calm-extension.test.sh` drives the real extension factory through a minimal host, and the visibility and working-boat modules directly, against the installed Pi package.

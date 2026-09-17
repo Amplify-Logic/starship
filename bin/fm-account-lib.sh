@@ -190,7 +190,7 @@ fm_account_logged_out() {  # <vendor> <home> <cli-binary>
       # that home is logged in and 1 when it is not (verified 2.1.258,
       # 2026-09-09). The exit status cannot separate a logged-out home from a CLI
       # that failed to answer, so the explicit loggedIn field is the signal.
-      out=$(CLAUDE_CONFIG_DIR="$home" fm_run_timeout 10 "$cli" auth status 2>/dev/null) || true
+      out=$(CLAUDE_CONFIG_DIR="$home" fm_run_timed 10 "$cli" auth status </dev/null 2>/dev/null) || true
       case "$out" in
         *'"loggedIn": false'*|*'"loggedIn":false'*) return 0 ;;
       esac
@@ -198,7 +198,7 @@ fm_account_logged_out() {  # <vendor> <home> <cli-binary>
     codex)
       # `codex login status` writes "Not logged in" to stderr and prints nothing
       # on stdout, so this must read both streams.
-      out=$(CODEX_HOME="$home" fm_run_timeout 10 "$cli" login status 2>&1) || true
+      out=$(CODEX_HOME="$home" fm_run_timed 10 "$cli" login status </dev/null 2>&1) || true
       case "$out" in
         *'Not logged in'*|*'not logged in'*) return 0 ;;
       esac
@@ -247,7 +247,7 @@ fm_account_identity() {  # <vendor> <home> <cli-binary>
   case "$vendor" in
     claude)
       command -v jq >/dev/null 2>&1 || return 1
-      out=$(CLAUDE_CONFIG_DIR="$home" fm_run_timeout 10 "$cli" auth status 2>/dev/null) || true
+      out=$(CLAUDE_CONFIG_DIR="$home" fm_run_timed 10 "$cli" auth status </dev/null 2>/dev/null) || true
       [ -n "$out" ] || return 1
       printf '%s' "$out" | jq -e -r '
         select(.loggedIn == true)

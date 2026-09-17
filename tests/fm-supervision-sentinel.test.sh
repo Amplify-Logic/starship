@@ -847,12 +847,34 @@ SH
   pass "supervision sentinel: disarm then enable restores host monitoring without forged liveness or external noise"
 }
 
+# A usage error must have no registration and no notification side effect. This
+# drives the real bin/fm-watch-arm.sh in a scratch tree whose sentinel records
+# every invocation, so the guarantee is observed rather than read out of the
+# source's line order.
 test_watch_arm_validates_arguments_before_sentinel_registration() {
-  local case_line arm_line
-  case_line=$(grep -nF "case \"\${1:-}\" in" "$ROOT/bin/fm-watch-arm.sh" | tail -1 | cut -d: -f1)
-  arm_line=$(grep -nF "\"\$SENTINEL\" arm" "$ROOT/bin/fm-watch-arm.sh" | head -1 | cut -d: -f1)
-  [ -n "$case_line" ] && [ -n "$arm_line" ] && [ "$case_line" -lt "$arm_line" ] \
-    || fail "watcher arm still registers the host service before rejecting bad argv"
+  local home="$TMP_ROOT/arm-argv" calls out rc
+  make_primary "$home"
+  home=$(cd "$home" && pwd -P)
+  calls="$home/sentinel-calls.log"
+  cp "$ROOT/bin/fm-watch-arm.sh" "$ROOT/bin/fm-wake-lib.sh" "$ROOT/bin/fm-supervision-lib.sh" "$home/bin/" \
+    || fail "could not stage the scratch watcher-arm tree"
+  cat > "$home/bin/fm-watch.sh" <<SH
+#!/usr/bin/env bash
+printf 'watcher-started\n' >> "$calls"
+SH
+  cat > "$home/bin/fm-supervision-sentinel.sh" <<SH
+#!/usr/bin/env bash
+printf 'sentinel-%s\n' "\${1:-}" >> "$calls"
+SH
+  chmod +x "$home/bin/fm-watch.sh" "$home/bin/fm-supervision-sentinel.sh"
+  printf 'project=test\n' > "$home/state/task.meta"
+
+  rc=0
+  out=$(FM_HOME="$home" "$home/bin/fm-watch-arm.sh" --not-a-real-flag 2>&1) || rc=$?
+  [ "$rc" -eq 2 ] || fail "an unrecognized argument was not a usage error (rc=$rc): $out"
+  assert_contains "$out" usage "the usage error did not name the accepted arguments: $out"
+  [ ! -e "$calls" ] \
+    || fail "rejecting bad argv still reached the host sentinel or the watcher: $(cat "$calls")"
   pass "supervision sentinel: watcher arm validates argv before host registration"
 }
 

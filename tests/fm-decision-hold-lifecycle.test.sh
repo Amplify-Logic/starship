@@ -67,7 +67,8 @@ EOF
     "project=$home/projects/sample" \
     "harness=codex" \
     "kind=scout" \
-    "mode=scout"
+    "mode=scout" \
+    "spawn_gen=spawn-decision-hold"
   printf 'done: report and visual review complete\n' > "$home/state/$id.status"
   cat > "$home/data/$id/report.md" <<'EOF'
 # Sample route review
@@ -115,7 +116,8 @@ write_origin_meta() {  # <home> <id> [kind]
     "project=$home/projects/sample" \
     "harness=codex" \
     "kind=$kind" \
-    "mode=$kind"
+    "mode=$kind" \
+    "spawn_gen=spawn-$id"
 }
 
 test_structured_holds_survive_teardown_and_route_resolution() {
@@ -166,7 +168,10 @@ EOF
   run_decisions "$home" complete "$id" route access >/dev/null \
     || fail "shared investigation completion gate failed"
   assert_grep "decisions_reviewed=1" "$home/state/$id.meta" "completion attestation missing"
-  assert_grep "decision_keys=access,route" "$home/state/$id.meta" "decision inventory was not deterministic"
+  # The collapse records each reviewed hold by its task id, which is what the
+  # captain-hold owner now hands out, rather than by the bare key it was raised under.
+  assert_grep "decision_keys=$access_hold,$route_hold" "$home/state/$id.meta" \
+    "decision inventory was not deterministic"
   open=$(bash -c '. "$1"; status_open_decisions "$2"' _ \
     "$ROOT/bin/fm-classify-lib.sh" "$home/state/$id.status")
   [ -z "$open" ] || fail "captain-held transfer did not close duplicate live status decisions: $open"
@@ -212,42 +217,15 @@ EOF
   tasks_in "$home" add sample-route-followup "Check the selected sample route" \
     --kind ship --repo sample --blocked-by "$route_hold" >/dev/null \
     || fail "could not create second dependent work fixture"
-  cat > "$home/fakebin/tasks-axi" <<'EOF'
-#!/usr/bin/env bash
-if [ "${1:-}" = unblock ] && [ "${2:-}" = sample-route-implementation ] \
-  && [ ! -f "$FM_HOME/unblock-failed-once" ]; then
-  : > "$FM_HOME/unblock-failed-once"
-  exit 1
-fi
-exec "$REAL_TASKS_AXI" "$@"
-EOF
-  chmod +x "$home/fakebin/tasks-axi"
-  if run_decisions "$home" resolve "$id" route --decision-file "$home/route-decision.txt" \
-    --routed-to sample-route-implementation --routed-to sample-route-followup \
-    > "$home/partial-route.out" 2> "$home/partial-route.err"; then
-    fail "resolution succeeded after a partial dependent-routing failure"
-  fi
-  show=$(tasks_in "$home" show "$route_hold" --full)
-  assert_contains "$show" "state: queued" "partial routing failure closed the hold"
-  show=$(tasks_in "$home" show sample-route-followup --full)
-  assert_contains "$show" "blocked: no" "partial routing fixture did not release its first dependent"
-  show=$(tasks_in "$home" show sample-route-implementation --full)
-  assert_contains "$show" "blocked: yes" "partial routing fixture unexpectedly released its second dependent"
-  if run_decisions "$home" resolve "$id" route --decision-file "$home/route-decision.txt" \
-    --routed-to sample-route-followup > "$home/reduced-retry.out" 2> "$home/reduced-retry.err"; then
-    fail "partial resolution retry accepted a reduced routed task set"
-  fi
-  printf 'Use route south for the sample system.\n' > "$home/changed-route-decision.txt"
-  if run_decisions "$home" resolve "$id" route --decision-file "$home/changed-route-decision.txt" \
-    --routed-to sample-route-implementation --routed-to sample-route-followup \
-    > "$home/partial-drifted-decision.out" 2> "$home/partial-drifted-decision.err"; then
-    fail "partial resolution retry accepted a different captain decision"
-  fi
-  tasks_in "$home" "done" sample-route-followup >/dev/null \
-    || fail "could not complete already-routed dependent work"
+  # The pre-collapse owner recorded the answer and then cleared each dependent's
+  # edge in its own tasks-axi call, so a failure between two dependents left a
+  # partial routing state this case used to drive and resume. Closing a captain
+  # hold now releases every dependent edge inside the same tasks-axi transition,
+  # so that partial window no longer exists and only the whole-resolution outcome
+  # is observable.
   run_decisions "$home" resolve "$id" route --decision-file "$home/route-decision.txt" \
     --routed-to sample-route-implementation --routed-to sample-route-followup >/dev/null \
-    || fail "could not resume and complete partial decision routing"
+    || fail "could not complete decision routing"
   run_decisions "$home" resolve "$id" route --decision-file "$home/route-decision.txt" \
     --routed-to sample-route-implementation --routed-to sample-route-followup >/dev/null \
     || fail "identical resolution retry was not idempotent"
@@ -263,7 +241,7 @@ EOF
   fi
   show=$(tasks_in "$home" show "$route_hold" --full)
   assert_contains "$show" "state: done" "resolved hold did not close"
-  assert_contains "$show" "Resolution recorded by fm-decision-hold" "resolved hold lost the decision record"
+  assert_contains "$show" "Resolution recorded by fm-captain-hold" "resolved hold lost the decision record"
   show=$(tasks_in "$home" show sample-route-implementation --full)
   assert_contains "$show" "blocked: no" "recorded decision did not release dependent work"
   json=$(run_bearings "$home") || fail "Bearings failed after decision resolution"
@@ -276,15 +254,15 @@ EOF
   pass "captain holds are idempotent, distinct, teardown-safe, Bearings-visible, and durably routed before close"
 }
 
-# Ruling: quiet treatment must never outlive the hold. resolve retires the
-# captain-held quiet-state from the origin status stream: after the hold closes
-# it appends `resolved [key=<key>]: retired by fm-decision-hold (<hold-id>)`,
-# and the status_open_captain_holds fold closes that key. Without the emit the
-# last status line would stay `captain-held:` forever, so both supervision
-# consumers would keep the idle pane silently absorbed after the captain
-# already answered.
-test_resolve_emits_closing_status_line_retiring_the_hold() {
-  local home id hold open
+# Ruling: quiet treatment must never outlive the hold. The decision collapse
+# moved that close from resolve to `complete`: the gate transfers every still-open
+# keyed status decision to its durable captain-held task with a
+# `captain-held [key=<key>]:` line, and the status_open_decisions fold closes that
+# key there (bin/fm-captain-hold.sh). Answering the hold later writes nothing
+# further to the status stream, so what must hold is that the transfer closes the
+# fold exactly once and no later resolve re-opens or re-closes it.
+test_complete_transfer_closes_the_keyed_decision() {
+  local home id hold lines open
   home=$(make_home resolve-emits-closing)
   id=sample-emit-review
   mkdir -p "$home/data/$id"
@@ -297,7 +275,7 @@ test_resolve_emits_closing_status_line_retiring_the_hold() {
     || fail "could not register emit hold"
   run_decisions "$home" complete "$id" emit >/dev/null \
     || fail "completion gate failed"
-  grep -F "captain-held [key=emit]:" "$home/state/$id.status" >/dev/null \
+  grep -F "captain-held [key=emit]: tracked by $hold" "$home/state/$id.status" >/dev/null \
     || fail "complete did not transfer the decision to a captain-held status line"
   tasks_in "$home" add emit-dep "Emit dependent" --kind ship --repo sample >/dev/null \
     || fail "could not create dependent"
@@ -305,36 +283,26 @@ test_resolve_emits_closing_status_line_retiring_the_hold() {
   printf 'Use the compact emit shape.\n' > "$home/emit-decision.txt"
   run_decisions "$home" resolve "$id" emit --decision-file "$home/emit-decision.txt" \
     --routed-to emit-dep >/dev/null || fail "resolve failed"
-  grep -F "resolved [key=emit]: retired by fm-decision-hold ($hold)" "$home/state/$id.status" >/dev/null \
-    || fail "resolve did not append the closing resolved: line"
-  # The idempotent early return (a re-run of an already-resolved hold) must NOT
-  # emit again once the transfer is closed: a crew that reused the key would
-  # otherwise see the new decision closed by the old resolution's closing line.
-  # It retires only the interrupted case (durable resolved, closing line never
-  # landed - the transfer still folds open), reproduced below by removing the
-  # closing line.
   run_decisions "$home" resolve "$id" emit --decision-file "$home/emit-decision.txt" \
     --routed-to emit-dep >/dev/null || fail "idempotent resolve re-run failed"
-  lines=$(grep -cF "retired by fm-decision-hold ($hold)" "$home/state/$id.status")
-  [ "$lines" -eq 1 ] || fail "idempotent re-run re-emitted the closing line after the transfer closed (count $lines)"
-  grep -vF "retired by fm-decision-hold" "$home/state/$id.status" > "$home/state/$id.status.tmp" \
-    && mv "$home/state/$id.status.tmp" "$home/state/$id.status"
-  run_decisions "$home" resolve "$id" emit --decision-file "$home/emit-decision.txt" \
-    --routed-to emit-dep >/dev/null || fail "interrupted-resolve re-run failed"
-  lines=$(grep -cF "retired by fm-decision-hold ($hold)" "$home/state/$id.status")
-  [ "$lines" -ge 1 ] || fail "interrupted-resolve re-run did not retire the still-open transfer"
-  # The last line is now resolved:, so the single-line quiet-state predicates
-  # are false, and the stream fold has no open holds either.
-  open=$(bash -c '. "$1"; status_open_captain_holds "$2"' _ \
+  lines=$(grep -cF "captain-held [key=emit]:" "$home/state/$id.status")
+  [ "$lines" -eq 1 ] || fail "the transfer close was written more than once (count $lines)"
+  open=$(bash -c '. "$1"; status_open_decisions "$2"' _ \
     "$ROOT/bin/fm-classify-lib.sh" "$home/state/$id.status")
   [ -z "$open" ] || fail "resolved hold still folds open: $open"
-  pass "resolve appends a closing resolved: line so quiet treatment cannot outlive the hold"
+  pass "the completion transfer closes the keyed decision so quiet treatment cannot outlive the hold"
 }
 
-# Ruling (resolved-retry-closes-new-decision): an idempotent resolve re-run must
-# not emit the closing resolved: line when the crew has since reused the key in
-# a fresh needs-decision - the old resolution would silently close the new
-# decision in the status fold, hiding it from supervision.
+# Ruling (resolved-retry-closes-new-decision): once the transfer has closed a
+# key, a crew that reuses it in a fresh needs-decision owns a new open decision,
+# and nothing about the old hold may close it. Under the collapse only `complete`
+# writes a close, so a later resolve of the retired hold must leave the status
+# stream untouched.
+#
+# The two sibling cases this ruling used to need - an INTERRUPTED resolve whose
+# closing line never landed, and a key re-opened mid-resolution between the hold
+# check and that line - were both windows in resolve's own emit. The emit is gone,
+# so neither window exists to reproduce.
 test_resolve_retry_does_not_close_a_reused_key() {
   local home id hold lines open
   home=$(make_home reused-retry)
@@ -359,8 +327,8 @@ test_resolve_retry_does_not_close_a_reused_key() {
   printf 'needs-decision [key=retry]: pick a NEW shape\n' >> "$home/state/$id.status"
   run_decisions "$home" resolve "$id" retry --decision-file "$home/retry-decision.txt" \
     --routed-to retry-dep >/dev/null || fail "old resolve retry failed"
-  lines=$(grep -cF "retired by fm-decision-hold" "$home/state/$id.status" || true)
-  [ "$lines" -eq 1 ] || fail "old resolve retry re-emitted the closing line over the reused key (count $lines)"
+  lines=$(grep -cF "captain-held [key=retry]:" "$home/state/$id.status")
+  [ "$lines" -eq 1 ] || fail "the old resolve retry wrote another close over the reused key (count $lines)"
   open=$(bash -c '. "$1"; status_open_decisions "$2"' _ \
     "$ROOT/bin/fm-classify-lib.sh" "$home/state/$id.status")
   printf '%s\n' "$open" | cut -f1 | grep -qxF "retry" \
@@ -368,103 +336,6 @@ test_resolve_retry_does_not_close_a_reused_key() {
   pass "an old resolve retry cannot close a re-used decision key"
 }
 
-# Ruling (resolve-retry-closes-new-decision-after-interruption): when a resolve
-# was INTERRUPTED (durable resolved, closing status line never landed) and the
-# crew then reuses the key in a fresh needs-decision, the old transfer still
-# folds open - the retry must still NOT retire it, or the closing line would
-# silently close the new decision.
-test_resolve_retry_interrupted_then_reused_does_not_close_decision() {
-  local home id hold lines open
-  home=$(make_home interrupted-reused-retry)
-  id=sample-inter-retry
-  mkdir -p "$home/data/$id"
-  tasks_in "$home" add "$id" "Inter retry review" --kind scout --repo sample --start >/dev/null \
-    || fail "could not create origin fixture"
-  write_origin_meta "$home" "$id"
-  printf 'needs-decision [key=inter]: pick the first shape\n' > "$home/state/$id.status"
-  hold=$(run_decisions "$home" hold "$id" inter \
-    --title "Pick the first shape" --reason "captain inter pending" --repo sample) \
-    || fail "could not register inter hold"
-  run_decisions "$home" complete "$id" inter >/dev/null \
-    || fail "completion gate failed"
-  tasks_in "$home" add inter-dep "Inter dependent" --kind ship --repo sample >/dev/null \
-    || fail "could not create dependent"
-  tasks_in "$home" block inter-dep --by "$hold" >/dev/null || fail "could not block dependent"
-  printf 'Use the first shape.\n' > "$home/inter-decision.txt"
-  run_decisions "$home" resolve "$id" inter --decision-file "$home/inter-decision.txt" \
-    --routed-to inter-dep >/dev/null || fail "resolve failed"
-  # Simulate the interruption: the durable resolution landed but the closing
-  # status line never did, so the captain-held transfer still folds open.
-  grep -vF "retired by fm-decision-hold" "$home/state/$id.status" > "$home/state/$id.status.tmp" \
-    && mv "$home/state/$id.status.tmp" "$home/state/$id.status"
-  # The crew then reuses the retired key for a new question.
-  printf 'needs-decision [key=inter]: pick a NEW shape\n' >> "$home/state/$id.status"
-  run_decisions "$home" resolve "$id" inter --decision-file "$home/inter-decision.txt" \
-    --routed-to inter-dep >/dev/null || fail "interrupted-then-reused retry failed"
-  lines=$(grep -cF "retired by fm-decision-hold" "$home/state/$id.status" || true)
-  [ "$lines" -eq 0 ] || fail "the retry retired the reused decision (retired count $lines)"
-  open=$(bash -c '. "$1"; status_open_decisions "$2"' _ \
-    "$ROOT/bin/fm-classify-lib.sh" "$home/state/$id.status")
-  printf '%s\n' "$open" | cut -f1 | grep -qxF "inter" \
-    || fail "the reused decision was closed by the interrupted retry: $(printf '%s' "$open" | tr '\n' ' ')"
-  pass "an interrupted resolve retry cannot close a decision re-opened under the same key"
-}
-
-# Ruling (resolve-race-closes-reused-decision): a live origin that re-opens the
-# same key in a fresh needs-decision WHILE the initial resolve's durable updates
-# are running must not have that new decision closed by the resolve's closing
-# line. The guard takes no snapshot: it re-reads status_open_decisions AFTER the
-# durable updates and withholds the closing line whenever the key is open at
-# retire time. The normal flow has the key already closed by its captain-held
-# line, so an open key there means a fresh decision superseded the one being
-# resolved; the durable resolution still lands.
-test_resolve_does_not_close_a_reopened_key() {
-  local home id hold lines open show
-  home=$(make_home reopened-key-race)
-  id=sample-race-review
-  mkdir -p "$home/data/$id"
-  tasks_in "$home" add "$id" "Race review" --kind scout --repo sample --start >/dev/null \
-    || fail "could not create origin fixture"
-  write_origin_meta "$home" "$id"
-  printf 'needs-decision [key=race]: pick the first shape\n' > "$home/state/$id.status"
-  hold=$(run_decisions "$home" hold "$id" race \
-    --title "Pick the race shape" --reason "captain race pending" --repo sample) \
-    || fail "could not register race hold"
-  tasks_in "$home" add race-dep "Race dependent" --kind ship --repo sample >/dev/null \
-    || fail "could not create dependent"
-  tasks_in "$home" block race-dep --by "$hold" >/dev/null || fail "could not block dependent"
-  # A live origin re-opens the key while the resolve's durable updates run: the
-  # fake tasks-axi appends the fresh needs-decision on the resolve's first
-  # update call, between verify_hold_active and the closing line.
-  cat > "$home/fakebin/tasks-axi" <<'EOF'
-#!/usr/bin/env bash
-if [ "${1:-}" = update ]; then
-  printf 'needs-decision [key=race]: pick a NEW shape (re-opened mid-resolution)\n' >> "$FM_STATE_OVERRIDE/sample-race-review.status"
-fi
-exec "$REAL_TASKS_AXI" "$@"
-EOF
-  chmod +x "$home/fakebin/tasks-axi"
-  printf 'Use the first shape.\n' > "$home/race-decision.txt"
-  run_decisions "$home" resolve "$id" race --decision-file "$home/race-decision.txt" \
-    --routed-to race-dep >/dev/null || fail "initial resolve failed"
-  lines=$(grep -cF "retired by fm-decision-hold" "$home/state/$id.status" || true)
-  [ "$lines" -eq 0 ] || fail "resolve closed a key re-opened mid-resolution (retired count $lines)"
-  open=$(bash -c '. "$1"; status_open_decisions "$2"' _ \
-    "$ROOT/bin/fm-classify-lib.sh" "$home/state/$id.status")
-  printf '%s\n' "$open" | cut -f1 | grep -qxF "race" \
-    || fail "the re-opened decision was hidden by the initial resolve: $(printf '%s' "$open" | tr '\n' ' ')"
-  show=$(tasks_in "$home" show "$hold" --full)
-  assert_contains "$show" "state: done" "durable resolution did not land despite the withheld closing line"
-  pass "an initial resolve cannot close a key re-opened while it was routing"
-}
-
-# Ruling (quiet-state-regrant-via-resolved-hold): a crew that re-uses a
-# previously-resolved decision key in a NEW needs-decision line must not get a
-# fresh captain-held transfer pointing at the RETIRED backlog item - that would
-# silently regrant the hold quiet-state to a done hold whose compensating
-# controls (the active-hold captain return flow) never fire, letting the new
-# decision rot invisibly. complete refuses loudly, mirroring command_hold, so
-# the crew switches to a new key and the status line stays captain-relevant.
 test_complete_refuses_reused_resolved_decision_key() {
   local home id hold lines open meta_before
   home=$(make_home reused-resolved-key)
@@ -512,9 +383,13 @@ test_complete_refuses_reused_resolved_decision_key() {
   # fresh open decision.
   [ "$(cat "$home/state/$id.meta")" = "$meta_before" ] \
     || fail "the refused complete mutated the completion metadata: $(cat "$home/state/$id.meta")"
-  open=$(bash -c '. "$1"; status_open_captain_holds "$2"' _ \
+  # The refusal must leave the re-used key OPEN: that is the whole point of
+  # sending the crew to a new key rather than granting quiet-state over a
+  # closed hold.
+  open=$(bash -c '. "$1"; status_open_decisions "$2"' _ \
     "$ROOT/bin/fm-classify-lib.sh" "$home/state/$id.status")
-  [ -z "$open" ] || fail "the refused complete left the hold fold open: $open"
+  printf '%s\n' "$open" | cut -f1 | grep -qxF "reuse" \
+    || fail "the refused complete closed the re-used decision instead of leaving it open: $open"
   pass "complete refuses a re-used resolved decision key so quiet-state cannot regrant"
 }
 
@@ -660,6 +535,10 @@ test_secondmate_hold_stays_in_authoritative_home() {
   cp "$ROOT/.tasks.toml" "$mate/.tasks.toml"
   printf '# Synthetic secondmate home\n' > "$mate/AGENTS.md"
   printf 'sample-mate\n' > "$mate/.fm-secondmate-home"
+  # A seeded home always carries its parent binding; teardown delivers the
+  # scout's final line through it before removing the record.
+  printf 'schema=fm-secondmate-parent.v1\nroute=local\nparent_home=%s\n' "$parent" \
+    > "$mate/.fm-secondmate-parent"
   cat > "$mate/data/backlog.md" <<'EOF'
 ## In flight
 
@@ -680,14 +559,16 @@ EOF
     || fail "secondmate-owned hold creation failed"
   run_decisions "$mate" complete "$origin" release >/dev/null \
     || fail "secondmate-owned completion failed"
-  run_teardown "$mate" "$origin" >/dev/null 2> "$mate/teardown.err" \
-    || fail "secondmate investigation teardown failed: $(cat "$mate/teardown.err")"
-  tasks_in "$mate" "done" "$origin" --report "data/$origin/report.md" --keep 0 >/dev/null
-
+  # The parent registers the mate before its children are ever torn down;
+  # teardown resolves that registration to deliver the scout's final line.
   printf -- '- sample-mate - synthetic scope (home: %s; scope: sample reviews; projects: sample; added 2026-07-14)\n' \
     "$mate" > "$parent/data/secondmates.md"
   fm_write_secondmate_meta "$parent/state/sample-mate.meta" "$mate" \
     "firstmate:fm-sample-mate" sample
+  run_teardown "$mate" "$origin" >/dev/null 2> "$mate/teardown.err" \
+    || fail "secondmate investigation teardown failed: $(cat "$mate/teardown.err")"
+  tasks_in "$mate" "done" "$origin" --report "data/$origin/report.md" --keep 0 >/dev/null
+
   json=$(run_bearings "$parent") || fail "parent Bearings could not read secondmate hold"
   printf '%s' "$json" | jq -e --arg hold "$hold" '
     .decisions_open | any(.owner == "sample-mate" and .verb == "captain-hold" and (.id | endswith($hold)))
@@ -796,10 +677,8 @@ test_uninventoried_report_decision_refuses_completion
 
 test_scout_teardown_always_requires_inventory_verification
 test_structured_holds_survive_teardown_and_route_resolution
-test_resolve_emits_closing_status_line_retiring_the_hold
+test_complete_transfer_closes_the_keyed_decision
 test_resolve_retry_does_not_close_a_reused_key
-test_resolve_retry_interrupted_then_reused_does_not_close_decision
-test_resolve_does_not_close_a_reopened_key
 test_complete_refuses_reused_resolved_decision_key
 test_origin_slug_validation_precedes_path_construction
 test_visual_review_uses_shared_completion_owner

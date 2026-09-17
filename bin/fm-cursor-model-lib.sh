@@ -59,13 +59,32 @@ EOF
 # shellcheck source=bin/fm-composer-lib.sh
 . "$(dirname -- "${BASH_SOURCE[0]}")/fm-composer-lib.sh"
 
-# fm_cursor_list_models_text: `agent --list-models` (or catalog override) with
-# CSI stripped. Prints catalog text on stdout. Returns non-zero when the
+# Which executable IS the Cursor CLI is owned once, by fm_cursor_resolve_binary
+# in bin/fm-cursor-lib.sh: cursor-agent then agent, on PATH then in
+# ~/.local/bin, each verified. A bare `command -v agent` here would be a second,
+# narrower rule, and a spawn whose launch binary came from the wider one would
+# read its catalog from a different place than it launches.
+# shellcheck source=bin/fm-cursor-lib.sh
+. "$(dirname -- "${BASH_SOURCE[0]}")/fm-cursor-lib.sh"
+
+# Bounded execution has one owner too, and it is the one with a mechanism on
+# every host: coreutils/BSD timeout where installed, perl next, and a
+# dependency-free bash floor. The budget stays FM_CURSOR_PROBE_TIMEOUT, so the
+# catalog read and the creator's executable probe answer to the same number.
+# shellcheck source=bin/fm-timeout-lib.sh
+. "$(dirname -- "${BASH_SOURCE[0]}")/fm-timeout-lib.sh"
+
+# fm_cursor_list_models_text: `<cursor-bin> --list-models` (or catalog override)
+# with CSI stripped. Prints catalog text on stdout. Returns non-zero when the
 # catalog cannot be read so callers can soft-skip rather than treat "empty"
 # as "no models exist".
 #
 # FM_CURSOR_MODEL_CATALOG, when set to an existing file path, is the sole
-# source (tests and offline checks). Otherwise runs `agent --list-models`.
+# source (tests and offline checks). Otherwise the catalog is read from the
+# executable the caller already resolved, and only from fm_cursor_resolve_binary
+# when the caller has none. A read that cannot complete within the bound is
+# "unavailable", never "the model is absent", so a stalled CLI falls back to the
+# safe tier instead of denying a model the catalog would have listed.
 # fm_cursor_catalog_cache_cleanup: remove this process's catalog cache dir.
 # Chained onto the EXIT trap at source time; callers that install their own
 # EXIT trap after sourcing must include this in it.
@@ -105,13 +124,14 @@ if [ "${_FM_CURSOR_CATALOG_CACHE_PID:-}" != "$$" ] \
   fi
 fi
 
-fm_cursor_list_models_text() {
-  local key=${FM_CURSOR_MODEL_CATALOG:-} text status cache stamp
+fm_cursor_list_models_text() {  # [<cursor-bin>]
+  local bin=${1:-} key=${FM_CURSOR_MODEL_CATALOG:-} text status cache stamp
   if [ -n "$key" ]; then
     [ -f "$key" ] || return 1
     stamp=$(stat -f '%m:%z' "$key" 2>/dev/null || stat -c '%Y:%s' "$key" 2>/dev/null) || stamp=''
     key="$key@$stamp"
   fi
+  key="$key|$bin"
   cache=''
   if [ -n "${_FM_CURSOR_CATALOG_CACHE_DIR:-}" ] && [ -d "$_FM_CURSOR_CATALOG_CACHE_DIR" ]; then
     cache="$_FM_CURSOR_CATALOG_CACHE_DIR/catalog"
@@ -132,8 +152,30 @@ fm_cursor_list_models_text() {
   text=''
   if [ -n "${FM_CURSOR_MODEL_CATALOG:-}" ]; then
     text=$(cat "$FM_CURSOR_MODEL_CATALOG" 2>/dev/null) && status=0
-  elif command -v agent >/dev/null 2>&1; then
-    text=$(agent --list-models 2>/dev/null) && status=0
+  else
+    [ -n "$bin" ] || bin=$(fm_cursor_resolve_binary 2>/dev/null) || bin=''
+    if [ -n "$bin" ] && [ -x "$bin" ]; then
+      # --list-models is an account-scoped network call, so the ONLY read here
+      # is a bounded one, and it fails closed: a bound that elapses (124) or a
+      # CLI that errors leaves the catalog unavailable, which the effort fold
+      # reads as "take the safe tier" rather than "this model is absent".
+      #
+      # The bound is fm_run_timed rather than the creator's
+      # fm_cursor_bounded_output because that helper needs a coreutils/BSD
+      # timeout binary and refuses outright without one. Refusing is the wrong
+      # answer here: this same read backs the live-model presentation in
+      # bin/fm-visible-status.sh, so on a host with no timeout installed - the
+      # captain's macOS home, where cursor is the primary - a permanent refusal
+      # would report a pane's real model as a mismatch against the model the
+      # task recorded. fm_run_timed is bounded on every host, so both callers
+      # get a real read.
+      #
+      # The budget comes from fm_cursor_probe_bound, which is where
+      # bin/fm-cursor-lib.sh reduces FM_CURSOR_PROBE_TIMEOUT to something that
+      # can actually bound a call, so this read and the creator's own probe
+      # cannot disagree about what the budget is.
+      text=$(fm_run_timed "$(fm_cursor_probe_bound)" "$bin" --list-models 2>/dev/null) && status=0
+    fi
   fi
   if [ -n "$text" ]; then
     text=$(printf '%s\n' "$text" | fm_composer_strip_ansi)
@@ -153,15 +195,20 @@ fm_cursor_list_models_text() {
   return "$status"
 }
 
-# fm_cursor_catalog_has_model: 0 if <model-id> appears as a catalog id (left of
-# " - "), 1 if the catalog loaded and the id is absent, 2 if the catalog is
+# fm_fork_cursor_catalog_has_model: 0 if <model-id> appears as a catalog id (left
+# of " - "), 1 if the catalog loaded and the id is absent, 2 if the catalog is
 # unavailable. Parameterized overrides ("id[context=1m,...]") match on the bare
 # id before '['.
-fm_cursor_catalog_has_model() {  # <model-id>
-  local want=$1 bare catalog line id
+#
+# The name carries the fork prefix because the creator's bin/fm-cursor-lib.sh
+# owns a different fm_cursor_catalog_has_model that reads catalog text from
+# STDIN and returns only 0/1. bin/fm-spawn.sh sources both libraries and uses
+# each contract at a different call site, so the two must not share a name.
+fm_fork_cursor_catalog_has_model() {  # <model-id> [<cursor-bin>]
+  local want=$1 bin=${2:-} bare catalog line id
   [ -n "$want" ] && [ "$want" != default ] || return 0
   bare=${want%%\[*}
-  catalog=$(fm_cursor_list_models_text) || return 2
+  catalog=$(fm_cursor_list_models_text "$bin") || return 2
   [ -n "$catalog" ] || return 2
   while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in

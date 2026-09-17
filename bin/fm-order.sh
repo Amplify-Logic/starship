@@ -281,7 +281,7 @@ cmd_run() {
     fail "registered check for order $slug failed snapshot checks"
   fi
   set +e
-  out=$(fm_run_timeout "$CHECK_TIMEOUT" bash "$FM_CUSTOM_CHECK_SNAPSHOT")
+  out=$(fm_run_timed "$CHECK_TIMEOUT" bash "$FM_CUSTOM_CHECK_SNAPSHOT" </dev/null)
   rc=$?
   set -e
   fm_custom_check_snapshot_cleanup

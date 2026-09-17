@@ -6,8 +6,11 @@
 # daemon owns triage and the watcher exits on every wake for the daemon to
 # classify. Reliability depends on arming through a mechanism that SURVIVES the
 # call and NOTIFIES on exit, so firstmate must run this script as the harness's
-# own tracked background task (e.g. run_in_background). Run it as its own
-# standalone background task, never bundled onto the tail of another command.
+# own tracked background task (e.g. run_in_background), or - for a Claude
+# primary - inside the Stop asyncRewake hook's foreground process tree
+# (bin/fm-claude-stop-autoarm.sh), where the harness owns the process group and
+# the hook's exit-2 rewake is the notification. Run it as its own standalone
+# background task, never bundled onto the tail of another command.
 # NEVER fire it and forget with a shell `&` inside another call: that backgrounded
 # child is reaped when the call returns, leaving NO watcher running and a false
 # "already running" off the dying process. That exact mistake silently took
@@ -17,12 +20,6 @@
 # docs/arm-pretool-check.md for the blessed tree and deny reason codes. It is a
 # pre-execution seatbelt, not a substitute for the verification here.
 #
-# Once it has OBSERVED a healthy watcher, this script idempotently arms the macOS
-# host-level outage sentinel (`bin/fm-supervision-sentinel.sh`). launchd owns that
-# read-mostly fallback outside the harness process tree, so it can alert on a stale
-# beacon even if this arm process and its watcher child are reaped together. The
-# sentinel never starts or signals supervision processes.
-#
 # This script forks the watcher as a tracked child, then VERIFIES the outcome
 # before it settles in. It confirms a watcher process is genuinely alive AND the
 # liveness beacon (state/.last-watcher-beat) is fresh within FM_GUARD_GRACE (the
@@ -31,28 +28,21 @@
 #   watcher: started pid=<N> (beacon fresh)              - it launched one and confirmed it
 #   watcher: attached pid=<N> (beacon <age>s)            - a live+fresh successor holds the lock;
 #                                                          this arm attaches and follows it
-#   watcher: healthy pid=<N> (beacon <age>s)             - restart mode found a live+fresh
-#                                                          watcher it did not own
 #   watcher: FAILED - no live watcher with a fresh beacon  - could not confirm one
 #   watcher: FAILED - cycle ended without an actionable reason
 #                                                        - a clean cycle ended with no wake and no
 #                                                          verified healthy successor
-#   watcher: FAILED - PR check migration still running pid=<N>, watcher not confirmed yet
-#                                                        - the pre-lock migration sweep outlasted
-#                                                          even the extended window; the sweep, not
-#                                                          a missing watcher, is the cause
 # It NEVER reports started/attached/healthy off a stale beacon or a dead/reused pid: a
 # stale-beacon or dead-pid holder either self-heals (the fresh child steals the
 # dead lock per the singleton self-eviction/steal path and is confirmed) or this
 # returns the FAILED line. On started it waits the child and propagates the wake
 # reason; on attached it stays live across identity-matched successors. A cycle
 # that ends with no reason line and no healthy successor is resolved against the
-# watcher's identity-bound delivery record (bin/fm-wake-lib.sh): a matching
-# record reports that wake and exits 0, and only a cycle that delivered nothing
-# is the typed nonzero failure. Neither is ever a clean empty completion. On
-# restart-only healthy it exits zero after the duplicate child stands down. On
-# FAILED it exits non-zero so the failure is loud. A live cycle already present
-# means re-arm attaches - do not start a second watcher.
+# watcher's identity-bound delivery record: a matching record reports that wake
+# and exits 0, and only a cycle that delivered nothing is the typed nonzero
+# failure. Neither is ever a clean empty completion. On FAILED it exits non-zero
+# so the failure is loud. A live cycle already present means re-arm attaches - do
+# not start a second watcher.
 #
 # Every observed watcher cycle appends one tab-separated lifecycle record to
 # state/.watch-cycle-exits.log. The arm layer owns that bounded ledger; it records
@@ -62,23 +52,43 @@
 # log and is never written here.
 #
 # --restart: stop ONLY this FM_HOME's watcher (the pid recorded in THIS home's
-# state/.watch.lock) and own a fresh cycle, or report restart-only healthy if a
-# live peer still holds the lock after the duplicate child stands down. It
+# state/.watch.lock) and own a fresh cycle, or attach if a verified live peer
+# wins the singleton while the duplicate child stands down. It
 # resolves and signals exactly that pid, so it can never touch another home's
 # watcher. NEVER `pkill -f
 # bin/fm-watch.sh`: that pattern matches every firstmate home's watcher
-# (secondmate homes run the same script) and would kill siblings. Restart never
-# takes the attach path.
+# (secondmate homes run the same script) and would kill siblings.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
-# shellcheck source=bin/fm-supervision-lib.sh
-. "$SCRIPT_DIR/fm-supervision-lib.sh"
+
+# The fork's host-level outage alarm: launchd owns a read-mostly fallback OUTSIDE
+# the harness process tree, so it can alert on a stale beacon even when this arm
+# process and its watcher child are reaped together. It never starts or signals
+# any supervision process. Sourced behind a guard so a copy without the fork
+# scripts still arms a watcher normally.
+# shellcheck source=bin/fm-supervision-lib.sh disable=SC1091
+[ ! -r "$SCRIPT_DIR/fm-supervision-lib.sh" ] || . "$SCRIPT_DIR/fm-supervision-lib.sh"
+SENTINEL="$SCRIPT_DIR/fm-supervision-sentinel.sh"
+
+sentinel_armed=0
+arm_host_sentinel() {
+  local rc=0
+  [ "$sentinel_armed" -eq 0 ] || return 0
+  sentinel_armed=1
+  [ -x "$SENTINEL" ] || return 0
+  "$SENTINEL" arm || rc=$?
+  [ "$rc" -eq 0 ] && return 0
+  # A deliberate no-op (durably disarmed home, sentinel mode off, non-primary
+  # scope) already reported itself if it had anything to say; it is not the
+  # unavailable-alarm failure this warning names.
+  [ "$rc" -eq "${FM_SUP_SENTINEL_NOOP_EXIT:-0}" ] && return 0
+  echo "watcher: WARNING - host-level supervision-outage alarm is unavailable" >&2
+}
 
 WATCH="$SCRIPT_DIR/fm-watch.sh"
-SENTINEL="$SCRIPT_DIR/fm-supervision-sentinel.sh"
 WATCH_LOCK="$STATE/.watch.lock"
 BEAT="$STATE/.last-watcher-beat"
 # "Fresh" reuses the guard's threshold so there is one definition of liveness.
@@ -91,17 +101,6 @@ case "${OSTYPE:-}" in
   *) ARM_CONFIRM_DEFAULT=10 ;;
 esac
 CONFIRM_TIMEOUT=${FM_ARM_CONFIRM_TIMEOUT:-$ARM_CONFIRM_DEFAULT}
-# A watcher runs the non-executing PR check migration BEFORE it can take the
-# lock or beat, so a full sweep (seconds, and unbounded in the number of checks
-# it compares) sits inside the confirmation window. Killing the child at the
-# ordinary deadline turns a healthy start into a generic failure and leaves the
-# migration interrupted again, which is what made one interrupted sweep cost 30
-# minutes of supervision. While the sweep is provably running, extend the window
-# by this much instead of TERMing the child. The bound still applies: a sweep
-# that outlasts it fails with its own distinct reason, never silently.
-MIGRATION_PROGRESS_PREFIX="$STATE/.pr-check-migration.progress."
-MIGRATION_GRACE=${FM_ARM_MIGRATION_GRACE:-120}
-case "$MIGRATION_GRACE" in ''|*[!0-9]*) MIGRATION_GRACE=120 ;; esac
 # Poll interval while attached to an existing healthy watcher.
 ATTACH_POLL=${FM_ARM_ATTACH_POLL:-0.5}
 CYCLE_LOG="$STATE/.watch-cycle-exits.log"
@@ -125,6 +124,9 @@ lock_snapshot() {
   identity=$(cat "$WATCH_LOCK/pid-identity" 2>/dev/null || true)
   printf 'pid:%s|identity:%s' "$(cycle_clean_field "${pid:-none}")" "$(cycle_clean_field "${identity:-none}")"
 }
+
+WATCH_DELIVERY_LOG="$STATE/.watch-deliveries.log"
+WATCH_DELIVERY_LOCK="$STATE/.watch-deliveries.lock"
 
 cycle_active=0
 cycle_watcher_pid=none
@@ -252,15 +254,14 @@ clear_stale_recorded_watcher_lock() {
   [ "$lock_home" = "$FM_HOME" ] || return 0
   [ "$lock_path" = "$WATCH" ] || return 0
   [ -n "$lock_identity" ] || return 0
-  fm_lock_remove_path "$WATCH_LOCK" || true
+  fm_recovery_transition "$STATE/.watcher-down" clear-stale-lock "$WATCH_LOCK" downtime
 }
 
 # A watcher is "healthy" iff the lock names a live process that is genuinely THIS
 # home's watcher (the identity match guards against a recycled/reused pid) AND the
-# liveness beacon is fresh within GRACE. Sets HEALTHY_PID and HEALTHY_IDENTITY on
-# success. This is the single honesty gate: a dead pid, a reused pid, or a stale
-# beacon all fail it, so this script can never report a watcher that is not really
-# there.
+# liveness beacon is fresh within GRACE. Sets HEALTHY_PID on success. This is the
+# single honesty gate: a dead pid, a reused pid, or a stale beacon all fail it, so
+# this script can never report a watcher that is not really there.
 HEALTHY_PID=
 HEALTHY_IDENTITY=
 healthy_watcher() {
@@ -271,35 +272,11 @@ healthy_watcher() {
   HEALTHY_IDENTITY=$FM_WATCHER_HEALTHY_IDENTITY
 }
 
-# The migration publishes its own pid for the life of a full sweep. A record a
-# killed sweep left behind names a dead pid, so liveness is the whole test: a
-# stale record must never buy a dead sweep more of the confirmation window.
-MIGRATION_SWEEP_PID=
-migration_sweeping() {
-  local record pid
-  MIGRATION_SWEEP_PID=
-  for record in "$MIGRATION_PROGRESS_PREFIX"*; do
-    [ -e "$record" ] || continue
-    pid=$(cat "$record" 2>/dev/null || true)
-    fm_pid_alive "$pid" || continue
-    MIGRATION_SWEEP_PID=$pid
-    return 0
-  done
-  return 1
-}
-
 report_attached() {
   local age
   age=$(fm_path_age "$BEAT")
+  arm_host_sentinel
   echo "watcher: attached pid=$HEALTHY_PID (beacon ${age}s)"
-  arm_host_sentinel
-}
-
-report_healthy() {
-  local age
-  age=$(fm_path_age "$BEAT")
-  echo "watcher: healthy pid=$HEALTHY_PID (beacon ${age}s)"
-  arm_host_sentinel
 }
 
 # Give a successor the same bounded confirmation window used for a fresh child.
@@ -323,10 +300,7 @@ fail_unexplained_cycle() {
 }
 
 # Close a cycle whose reason line this arm could not read against the bounded
-# terminal-delivery ledger the watcher publishes before releasing its lock
-# (bin/fm-wake-lib.sh owns the paths). An attached arm holds no handle on the
-# watcher's stdout, so a matching PID and identity record is its only evidence
-# that the cycle it observed actually delivered a wake.
+# terminal-delivery ledger the watcher publishes before releasing its lock.
 close_unobserved_cycle() {
   local i reason clean_identity record_pid record_identity record_reason
   clean_identity=$(printf '%s' "$cycle_watcher_identity" | tr '\t\r\n' '   ')
@@ -423,51 +397,40 @@ print_watch_output() {
   [ -s "$out" ] && cat "$out"
 }
 
+handling_successor_generation() {
+  [ -n "${FM_WATCH_PREDECESSOR_ARM_PID:-}" ] || return 0
+  fm_recovery_marker_snapshot "$STATE/.watcher-down" || return 1
+  case "$FM_RECOVERY_MARKER_TOKEN" in
+    pending:downtime:*|pending:handling:*|announced:downtime:*|announced:handling:*) printf '%s' "${FM_RECOVERY_MARKER_TOKEN##*:}" ;;
+    acked:*|'') ;;
+    *) return 1 ;;
+  esac
+}
+
 mode=arm
+handling_generation=
+handling_watcher_pid=
 case "${1:-}" in
   ''|arm|--arm) mode=arm ;;
   --restart) mode=restart ;;
-  *) echo "usage: $(basename "$0") [--restart]" >&2; exit 2 ;;
+  --handling-delivered)
+    mode=handling-delivered
+    handling_generation=${2:-}
+    [ "${3:-}" = --watcher-pid ] || { echo "watcher: invalid handling delivery confirmation" >&2; exit 2; }
+    handling_watcher_pid=${4:-}
+    case "$handling_generation" in ''|*[!A-Za-z0-9._-]*) echo "watcher: invalid recovery generation" >&2; exit 2 ;; esac
+    case "$handling_watcher_pid" in ''|*[!0-9]*) echo "watcher: invalid successor watcher pid" >&2; exit 2 ;; esac
+    [ "$#" -eq 4 ] || { echo "watcher: unexpected handling delivery arguments" >&2; exit 2; }
+    ;;
+  *) echo "usage: $(basename "$0") [--restart | --handling-delivered GENERATION --watcher-pid PID]" >&2; exit 2 ;;
 esac
 
-# Startup hygiene before this arm reads or takes the singleton: a process killed
-# mid-run (an interrupted migration sweep is the observed case) can leave a lock
-# recording a dead holder and an unreferenced owner staging dir that nothing
-# else ever revisits. Reclaim touches neither a live holder nor an acquire still
-# in flight.
-fm_lock_reclaim_orphans "$WATCH_LOCK"
-
-# Host-sentinel registration, at most once per arm and only from a path that has
-# already observed and reported a healthy watcher (see report_attached,
-# report_healthy, and the started line below).
-#
-# Ordering is the whole point. The generated launchd job sets RunAtLoad, so a
-# bootstrap or kickstart runs a scheduled host check immediately; registering
-# before this arm has confirmed a watcher would make that first check see in-flight
-# work with no healthy watcher and deliver a real SUPERVISION DOWN alert for the
-# very outage this arm is in the middle of ending - every reboot, since the
-# gui/<uid> agent is gone while task metadata survives. The alarm's premise is that
-# supervision was healthy and then stopped, so a home this arm never saw healthy has
-# no outage to report and simply stays unregistered until some arm does see one.
-#
-# Registration is otherwise best-effort for portability: the ordinary watcher
-# remains the primary mechanism on unsupported hosts, and a supported host that
-# cannot retain the launchd service gets an explicit warning. Argv is validated
-# above, so a usage error still has no registration or notification side effect.
-sentinel_armed=0
-arm_host_sentinel() {
-  local rc=0
-  [ "$sentinel_armed" -eq 0 ] || return 0
-  sentinel_armed=1
-  [ -x "$SENTINEL" ] || return 0
-  "$SENTINEL" arm || rc=$?
-  [ "$rc" -eq 0 ] && return 0
-  # A deliberate no-op (durably disarmed home, sentinel mode off, non-primary
-  # scope) already reported itself if it had anything to say; it is not the
-  # unavailable-alarm failure this warning names.
-  [ "$rc" -eq "$FM_SUP_SENTINEL_NOOP_EXIT" ] && return 0
-  echo "watcher: WARNING - host-level supervision-outage alarm is unavailable" >&2
-}
+if [ "$mode" = handling-delivered ]; then
+  fm_pid_alive "$handling_watcher_pid" \
+    && fm_watcher_lock_matches_pid "$STATE" "$WATCH" "$handling_watcher_pid" "$FM_HOME" \
+    && fm_recovery_marker_begin_handling "$STATE/.watcher-down" "$handling_generation"
+  exit $?
+fi
 
 if [ "$mode" = restart ]; then
   # Home-scoped stop: only the watcher pid recorded in THIS home's lock.
@@ -484,7 +447,10 @@ if [ "$mode" = restart ]; then
         i=$((i + 1))
       done
     else
-      clear_stale_recorded_watcher_lock
+      if ! clear_stale_recorded_watcher_lock; then
+        echo "watcher: FAILED - stale watcher recovery state could not be persisted" >&2
+        exit 1
+      fi
     fi
   fi
 fi
@@ -537,7 +503,11 @@ child_out=$(mktemp "$STATE/.watch-arm-output.XXXXXX") || {
   echo "watcher: FAILED - no live watcher with a fresh beacon"
   exit 1
 }
-"$WATCH" >"$child_out" &
+if [ -n "${FM_WATCH_PREDECESSOR_ARM_PID:-}" ]; then
+  FM_WATCH_HANDLING_SUCCESSOR=1 "$WATCH" >"$child_out" &
+else
+  "$WATCH" >"$child_out" &
+fi
 child=$!
 cycle_begin "$child" started "$(fm_pid_identity "$child" 2>/dev/null || true)"
 child_done=0
@@ -557,15 +527,6 @@ owned_child_finished() {
 
   if [ "$rc" -eq 0 ]; then
     if wait_for_healthy_successor; then
-      if [ "$mode" = restart ]; then
-        cycle_log_append "$rc" "$signal" unexpected-clean-exit "healthy:$HEALTHY_PID"
-        print_watch_output "$child_out"
-        rm -f "$child_out" 2>/dev/null || true
-        child=
-        child_out=
-        report_healthy
-        return 0
-      fi
       cycle_log_append "$rc" "$signal" unexpected-clean-exit "attached:$HEALTHY_PID"
       print_watch_output "$child_out"
       rm -f "$child_out" 2>/dev/null || true
@@ -607,34 +568,33 @@ owned_child_finished() {
 # Verify the outcome: poll until this child is the confirmed healthy watcher, or
 # until some other watcher legitimately holds the singleton (a startup race), or
 # until the child gives up. Only then print the honest line.
-deadline=$(( $(date +%s) + CONFIRM_TIMEOUT ))
-migration_deadline=$(( deadline + MIGRATION_GRACE ))
-migration_stalled=0
-migration_seen=0
-migration_post_deadline=0
+# date(1) exposes whole seconds. Keep the configured confirmation budget from
+# collapsing when startup begins just before the next second boundary.
+deadline=$(( $(date +%s) + CONFIRM_TIMEOUT + 1 ))
 while :; do
   if healthy_watcher; then
     if [ "$HEALTHY_PID" = "$child" ]; then
       cycle_refresh_lock_before
+      if ! handling_generation=$(handling_successor_generation); then
+        cleanup_child
+        wait "$child" 2>/dev/null || true
+        cycle_log_append 1 none handling-handoff-failed none
+        echo "watcher: FAILED - established successor could not inspect handling state"
+        exit 1
+      fi
       cycle_mark_predecessor_successor "started:$child"
-      echo "watcher: started pid=$child (beacon fresh)"
       arm_host_sentinel
+      if [ -n "$handling_generation" ]; then
+        echo "watcher: started pid=$child (beacon fresh) recovery-generation=$handling_generation"
+      else
+        echo "watcher: started pid=$child (beacon fresh)"
+      fi
       wait "$child"
       rc=$?
       owned_child_finished "$rc"
       exit $?
     fi
     # Another watcher won the singleton; our child stood down.
-    if [ "$mode" = restart ]; then
-      # Restart ownership contract: report the surviving peer as healthy and
-      # exit without attaching, so --restart never takes the attach path.
-      report_healthy
-      wait "$child" 2>/dev/null || true
-      rm -f "$child_out" 2>/dev/null || true
-      child=
-      child_out=
-      exit 0
-    fi
     wait "$child"
     rc=$?
     owned_child_finished "$rc"
@@ -647,27 +607,7 @@ while :; do
     owned_child_finished "$rc"
     exit $?
   fi
-  now=$(date +%s)
-  migration_running=0
-  migration_sweeping && migration_running=1
-  if [ "$migration_running" -eq 1 ]; then
-    migration_seen=1
-    migration_post_deadline=0
-  elif [ "$migration_seen" -eq 1 ] && [ "$migration_post_deadline" -eq 0 ]; then
-    migration_post_deadline=$(( now + CONFIRM_TIMEOUT ))
-    [ "$migration_post_deadline" -le "$migration_deadline" ] || migration_post_deadline=$migration_deadline
-  fi
-  if [ "$now" -ge "$deadline" ]; then
-    if [ "$migration_running" -eq 1 ]; then
-      # The child is healthy and blocked on the pre-lock sweep, not missing.
-      [ "$now" -lt "$migration_deadline" ] && { sleep 0.2; continue; }
-      migration_stalled=1
-    elif [ "$migration_post_deadline" -gt "$now" ]; then
-      sleep 0.2
-      continue
-    fi
-    break
-  fi
+  [ "$(date +%s)" -ge "$deadline" ] && break
   sleep 0.2
 done
 
@@ -676,13 +616,6 @@ print_watch_output "$child_out"
 cleanup_child
 wait "$child" 2>/dev/null
 rc=$?
-if [ "$migration_stalled" -eq 1 ]; then
-  # Name the real cause. The generic beacon wording sent the last operator
-  # hunting an external killer while a legitimate sweep was still running.
-  cycle_log_append "$rc" "$(cycle_signal_name "$rc")" migration-in-progress none
-  echo "watcher: FAILED - PR check migration still running pid=$MIGRATION_SWEEP_PID, watcher not confirmed yet"
-  exit 1
-fi
 cycle_log_append "$rc" "$(cycle_signal_name "$rc")" confirmation-timeout none
 echo "watcher: FAILED - no live watcher with a fresh beacon"
 exit 1

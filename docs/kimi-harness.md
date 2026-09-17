@@ -139,8 +139,9 @@ Stop stdin payload (verbatim):
 
 An interrupted turn fired `Interrupt` instead of `Stop` (expected).
 Project-local worktree config/plugin hooks did **not** fire (marker stayed empty when launched without the isolated `KIMI_CODE_HOME`).
-Consequence for `fm-spawn`: install a per-task isolated `state/<id>.kimi-home` with auth symlinks from the source Kimi home and a Stop hook that `touch`es `state/<id>.turn-ended`.
-Never edit the captain's `~/.kimi-code/config.toml` for worker turn-end.
+Consequence for `fm-spawn`: a Stop hook reachable from a worker worktree is the only way to raise `state/<id>.turn-ended`, and it cannot be a project-local one.
+The per-task isolated `KIMI_CODE_HOME` this evidence originally prescribed has been superseded: `bin/fm-kimi-turnend-hook.sh` now owns one marker-delimited Firstmate region in `$HOME/.kimi-code/config.toml`, a silent always-zero global hook, and a private token registry, and a worktree is bound to a task by its gitignored `.fm-kimi-turnend` pointer.
+That hook script is the sole writer of that config region; nothing else may edit the captain's `~/.kimi-code/config.toml` for worker turn-end.
 
 ### Process name / liveness (2026-07-23)
 

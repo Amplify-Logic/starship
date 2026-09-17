@@ -111,6 +111,7 @@ phase_seed() {
 }
 
 phase_spawn() {
+  local launch argv prompt recbin
   : > "$LOG"
   PATH="$FAKEBIN:$PATH" FM_HOME="$HOME_DIR" FM_CONFIG_OVERRIDE="$HOME_DIR/parent-config" \
     FM_FAKE_TMUX_LOG="$LOG" FM_FAKE_TMUX_CAPTURE="$PANE" \
@@ -127,8 +128,31 @@ phase_spawn() {
   assert_grep "FM_HOME='$SUB_ABS'" "$LOG" "secondmate launch did not set FM_HOME to the subhome"
   assert_grep 'FM_ROOT_OVERRIDE= FM_STATE_OVERRIDE= FM_DATA_OVERRIDE= FM_PROJECTS_OVERRIDE=' "$LOG" "launch did not clear operational overrides"
   assert_grep 'FM_CONFIG_OVERRIDE=' "$LOG" "launch did not clear the config override"
-  assert_grep 'FIRSTMATE_OP: v1 launch-brief:' "$LOG" "launch did not encode the charter as launch-brief operational input"
-  assert_grep 'customer onboarding charter' "$LOG" "launch did not use the persistent charter body"
+  # The launch line defers the brief to a `fm-operational-input.sh encode
+  # launch-brief` substitution the pane evaluates, so the envelope exists only
+  # once that line runs. Run the exact recorded line against a codex stub that
+  # records its argv, and assert the delivery contract on what the harness
+  # actually received rather than on the unexpanded line.
+  launch=$(sed -n 's/^send-keys -t [^ ]* -l //p' "$LOG")
+  [ -n "$launch" ] || fail "spawn typed no launch line into the pane"
+  recbin=$(fm_fakebin "$TMP_ROOT/launch-record")
+  argv="$TMP_ROOT/launch-record/argv.txt"
+  prompt="$TMP_ROOT/launch-record/brief.txt"
+  cat > "$recbin/codex" <<'SH'
+#!/usr/bin/env bash
+# fm-spawn --version-probes the launch binary, and that probe carries no brief.
+[ "${1:-}" != --version ] || exit 0
+printf '%s\n' "$@" > "$FM_FAKE_CODEX_ARGV"
+SH
+  chmod +x "$recbin/codex"
+  FM_FAKE_CODEX_ARGV="$argv" PATH="$recbin:$PATH" bash -c "$launch" \
+    || fail "could not consume the recorded secondmate launch command"
+  assert_present "$argv" "the launch command never reached the codex harness"
+  assert_grep 'FIRSTMATE_OP: v1 launch-brief:' "$argv" "launch did not encode the charter as launch-brief operational input"
+  sed -n '/FIRSTMATE_OP: v1 launch-brief:/,$p' "$argv" \
+    | "$ROOT/bin/fm-operational-input.sh" body > "$prompt" \
+    || fail "the harness did not receive a decodable launch-brief envelope"
+  assert_grep 'customer onboarding charter' "$prompt" "launch did not deliver the persistent charter body"
   assert_no_grep 'notify=' "$LOG" "secondmate codex launch included the parent turn-end notify hook"
   assert_no_grep 'turn-ended' "$LOG" "secondmate codex launch referenced a parent turn-ended signal"
   assert_no_grep 'treehouse get' "$LOG" "secondmate spawn ran a project treehouse get"
@@ -137,19 +161,27 @@ phase_spawn() {
 
 phase_send() {
   : > "$LOG"
+  printf '❯\n' > "$PANE"
   # The meta window (firstmate:fm-design) must win over a foreign same-named
-  # window returned by list-windows.
-  PATH="$FAKEBIN:$PATH" FM_HOME="$HOME_DIR" FM_FAKE_TMUX_WINDOW="other-session:fm-design" \
+  # window returned by list-windows. Include the recorded endpoint in the fake
+  # inventory so the recovery-grade liveness check can verify it exists.
+  PATH="$FAKEBIN:$PATH" FM_HOME="$HOME_DIR" FM_FAKE_TMUX_WINDOW="firstmate:fm-design
+other-session:fm-design" \
     FM_FAKE_TMUX_LOG="$LOG" FM_FAKE_TMUX_CAPTURE="$PANE" \
     "$ROOT/bin/fm-send.sh" fm-design 'route this work' >/dev/null 2>&1 \
     || fail "fm-send failed for a bare firstmate window with home metadata"
-  # design is a kind=secondmate target, so the request is prefixed with the
-  # from-firstmate marker (bin/fm-marker-lib.sh): the send targets the meta window
-  # AND carries the marker label, and the original payload still follows it.
-  assert_grep 'send-keys -t firstmate:fm-design -l [fm-from-firstmate]' "$LOG" "send did not use the window recorded in this home's meta, or did not mark the secondmate request"
-  assert_grep 'route this work' "$LOG" "the original request text did not survive the marker"
+  # design is a kind=secondmate target, so the durable inbox record carries the
+  # from-firstmate marker and original payload. The terminal receives only the
+  # constant doorbell, routed through this home's authoritative meta window.
+  local record="$HOME_DIR/state/design.inbox/001.msg" body
+  assert_present "$record" "send did not enqueue the secondmate request"
+  body=$(bash -c '. "$1"; fm_task_inbox_body "$2"' _ "$ROOT/bin/fm-task-inbox-lib.sh" "$record")
+  assert_contains "$body" '[fm-from-firstmate]' "the inbox request was not marked as from-firstmate"
+  assert_contains "$body" 'route this work' "the original request text did not survive the marker"
+  assert_grep 'send-keys -t firstmate:fm-design -l : Firstmate instruction waiting:' "$LOG" "send did not ring the window recorded in this home's meta"
+  assert_no_grep 'route this work' "$LOG" "send typed the payload instead of only the doorbell"
   assert_no_grep 'send-keys -t other-session:fm-design' "$LOG" "send targeted a foreign same-named window"
-  pass "send: a bare fm-<id> secondmate routes to the meta window with the from-firstmate marker"
+  pass "send: a bare fm-<id> secondmate enqueues a marked request and rings the meta window"
 }
 
 phase_handoff() {
@@ -172,7 +204,9 @@ phase_handoff() {
 - [x] old-task - shipped thing - local main (merged 2026-06-19)
 EOF
   local out before
-  out=$(FM_HOME="$HOME_DIR" "$ROOT/bin/fm-backlog-handoff.sh" design feat-x feat-y) \
+  out=$(PATH="$FAKEBIN:$PATH" FM_HOME="$HOME_DIR" FM_FAKE_TMUX_LOG="$LOG" \
+    FM_FAKE_TMUX_CAPTURE="$PANE" \
+    "$ROOT/bin/fm-backlog-handoff.sh" design feat-x feat-y) \
     || fail "handoff failed for in-scope items"
   assert_contains "$out" "handed off 2 item(s) to design" "handoff did not report the moved items"
 
@@ -188,7 +222,9 @@ EOF
 
   # Idempotent: a second handoff neither errors nor duplicates, and leaves main alone.
   before=$(cat "$HOME_DIR/data/backlog.md")
-  FM_HOME="$HOME_DIR" "$ROOT/bin/fm-backlog-handoff.sh" design feat-x feat-y >/dev/null 2>&1 \
+  PATH="$FAKEBIN:$PATH" FM_HOME="$HOME_DIR" FM_FAKE_TMUX_LOG="$LOG" \
+    FM_FAKE_TMUX_CAPTURE="$PANE" \
+    "$ROOT/bin/fm-backlog-handoff.sh" design feat-x feat-y >/dev/null 2>&1 \
     || fail "idempotent re-run failed"
   [ "$(grep -cF -- '- [ ] feat-x - add feature x (repo: alpha)' "$SUB/data/backlog.md")" -eq 1 ] \
     || fail "idempotent re-run duplicated feat-x in the subhome backlog"
@@ -197,9 +233,11 @@ EOF
 }
 
 phase_recovery() {
-  # Simulate a restart: drop the live meta, then respawn from the registry +
-  # persistent home (no explicit home argument).
+  # Simulate a restart: drop the live meta and the tmux window the restart took
+  # with it, then respawn from the registry + persistent home (no explicit home
+  # argument).
   rm -f "$HOME_DIR/state/design.meta"
+  fake_tmux_forget_window "$FAKEBIN" fm-design
   PATH="$FAKEBIN:$PATH" FM_HOME="$HOME_DIR" FM_FAKE_TMUX_LOG="$LOG" FM_FAKE_TMUX_CAPTURE="$PANE" \
     "$ROOT/bin/fm-spawn.sh" design "echo relaunch" --secondmate >/dev/null 2>&1 \
     || fail "recovery respawn failed"
@@ -211,7 +249,20 @@ phase_recovery() {
 }
 
 phase_teardown() {
-  local teardown_out
+  local teardown_out corr rec
+  corr=$(FM_HOME="$HOME_DIR" bash -c '
+    . "$1"
+    fm_pending_reply_create "$2" "$2/state" design "New routed work is in your backlog."
+  ' _ "$ROOT/bin/fm-pending-reply-lib.sh" "$HOME_DIR") \
+    || fail "could not seed receiver wake retirement state"
+  rec="$HOME_DIR/state/pending-replies/$corr"
+  FM_HOME="$HOME_DIR" bash -c '
+    . "$1"
+    fm_pending_reply_set "$2" phase resolved
+    fm_pending_reply_set "$2" delivered_epoch 1
+  ' _ "$ROOT/bin/fm-pending-reply-lib.sh" "$rec" \
+    || fail "could not settle receiver wake retirement state"
+  printf 'confirmed:%s\n' "$corr" > "$HOME_DIR/state/.backlog-handoff-design.wake-pending"
   : > "$LOG"
   teardown_out=$(PATH="$FAKEBIN:$PATH" FM_HOME="$HOME_DIR" FM_FAKE_TMUX_LOG="$LOG" FM_FAKE_TMUX_CAPTURE="$PANE" \
     "$ROOT/bin/fm-teardown.sh" design 2>&1) \
@@ -220,6 +271,9 @@ phase_teardown() {
     && fail "secondmate teardown emitted a main-backlog completion reminder"
   assert_absent "$SUB" "teardown did not remove the retired secondmate home"
   assert_absent "$HOME_DIR/state/design.meta" "teardown did not clear the parent meta"
+  assert_absent "$HOME_DIR/state/.backlog-handoff-design.wake-pending" \
+    "teardown left receiver wake state that could poison a replacement route"
+  assert_absent "$rec" "teardown left the retired receiver wake correlation"
   assert_no_grep '- design ' "$HOME_DIR/data/secondmates.md" "teardown did not remove the registry route"
   # The parent's source projects are untouched (no write through a parent home).
   assert_present "$HOME_DIR/projects/alpha" "teardown disturbed a parent project"

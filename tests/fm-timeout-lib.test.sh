@@ -77,7 +77,7 @@ probe_command() {
   # The single quotes are deliberate: this builds a shell snippet for the
   # pty child to expand, so nothing here may expand in this shell.
   # shellcheck disable=SC2016
-  printf '. %s/bin/fm-timeout-lib.sh; out=$(fm_run_timeout 5 bash %s); rc=$?; printf "OUT=[%%s] RC=%%s\\n" "$out" "$rc"' \
+  printf '. %s/bin/fm-timeout-lib.sh; out=$(fm_run_timed 5 bash %s </dev/null); rc=$?; printf "OUT=[%%s] RC=%%s\\n" "$out" "$rc"' \
     "$ROOT" "$PROBE"
 }
 
@@ -104,11 +104,11 @@ assert_contains "$fallback_out" 'OUT=[PROBE-OK] RC=0' \
 
 # --- 3. the bound still fires ------------------------------------------------
 . "$ROOT/bin/fm-timeout-lib.sh"
-fm_run_timeout 1 sleep 5 >/dev/null 2>&1
+fm_run_timed 1 sleep 5 </dev/null >/dev/null 2>&1
 expect_code 124 "$?" 'a command that outruns its bound must report the GNU timeout code'
 
 # --- 4. exit status passes through -------------------------------------------
-fm_run_timeout 5 sh -c 'exit 7' >/dev/null 2>&1
+fm_run_timed 5 sh -c 'exit 7' </dev/null >/dev/null 2>&1
 expect_code 7 "$?" 'a command that finishes inside its bound must report its own exit status'
 
 pass 'fm-timeout-lib bounds probes without stealing their answer'

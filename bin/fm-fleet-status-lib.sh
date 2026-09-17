@@ -201,7 +201,7 @@ _fm_fleet_refresh_detached() {  # <cache> <state-dir> <now> <reader>
     # shellcheck disable=SC2016 # $0..$3 are the INNER shell's positional
     # parameters, supplied after the -c script; expanding them here would bake
     # this shell's values into the script text instead of passing them.
-    reading=$(fm_run_timeout "$bound" bash -c '
+    reading=$(fm_run_timed "$bound" bash -c '
       . "$0"
       _fm_fleet_collect "$1" "$2" "$3"
     ' "$_FM_FLEET_LIB_DIR/fm-fleet-status-lib.sh" "$state" "$now" "$reader" 2>/dev/null) \

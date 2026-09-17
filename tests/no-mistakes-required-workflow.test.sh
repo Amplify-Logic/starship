@@ -7,20 +7,53 @@ set -u
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 WORKFLOW="$ROOT/.github/workflows/no-mistakes-required.yml"
-MARKER='Updates from [git push no-mistakes](https://github.com/kunchenguid/no-mistakes)'
 
-extract_signature_script() {
-  awk '
-    /^        run: \|$/ { capture=1; next }
-    capture && /^          / { sub(/^          /, ""); print; next }
-    capture { exit }
-  ' "$WORKFLOW"
+# The signature and attestation rules are no longer spelled in this workflow:
+# they live in the pinned shared action below, so nothing here can replay them.
+# tests/fm-no-mistakes-required.test.sh drives that action's real verifier and
+# pins the same SHA, which is what the gate contract below holds this workflow
+# to, so the two suites cannot drift apart silently.
+GATE_ACTION=kunchenguid/no-mistakes/.github/actions/require-no-mistakes
+GATE_ACTION_REF=32d396ac0f29135daf7fcb9964aba9d5f4e796d6
+
+command -v ruby >/dev/null 2>&1 \
+  || fail "ruby is required to parse .github/workflows/no-mistakes-required.yml as YAML"
+
+# The workflow is parsed as YAML and asked what GitHub would act on, rather than
+# how the file happens to be spelled. `on` is a YAML 1.1 boolean, so a workflow
+# document carries it under the `true` key.
+workflow_query() {
+  ruby -ryaml -e '
+doc = YAML.load_file(ARGV[0])
+trigger = doc.key?("on") ? doc.fetch("on") : doc.fetch(true)
+case ARGV[1]
+when "pull-request-types"
+  puts trigger.fetch("pull_request").fetch("types").join(" ")
+when "gate-step-uses"
+  doc.fetch("jobs").fetch("check").fetch("steps").each { |step| puts step.fetch("uses", "") }
+else
+  raise "unknown query: #{ARGV[1]}"
+end
+' "$WORKFLOW" "$1"
 }
 
-signature_result() {
-  local body=$1 script
-  script=$(extract_signature_script)
-  PR_NUMBER=418 PR_AUTHOR=synthetic-fork-contributor PR_BODY="$body" bash -c "$script" >/dev/null 2>&1
+test_gate_is_the_pinned_shared_action() {
+  local types uses action ref
+  types=$(workflow_query pull-request-types) || fail "could not read the workflow's pull_request types"
+  [ "$types" = "opened edited synchronize reopened" ] \
+    || fail "gate must run on opened, edited, synchronize and reopened, got: $types"
+
+  uses=$(workflow_query gate-step-uses) || fail "could not read the gate job's steps"
+  [ "$(printf '%s\n' "$uses" | grep -c .)" = 1 ] \
+    || fail "the gate job must verify through exactly one action, got: $uses"
+  action=${uses%@*}
+  ref=${uses##*@}
+  [ "$action" = "$GATE_ACTION" ] || fail "gate no longer verifies through $GATE_ACTION, got: $action"
+  [ "$ref" = "$GATE_ACTION_REF" ] \
+    || fail "gate action ref drifted from the SHA tests/fm-no-mistakes-required.test.sh exercises: $ref"
+  [ "${#ref}" = 40 ] && [ -z "${ref//[0-9a-f]/}" ] \
+    || fail "gate action must be pinned to an immutable 40-hex commit SHA, not a mutable tag: $ref"
+  pass "the gate verifies through the shared action pinned at an immutable commit SHA"
 }
 
 render_group() {
@@ -34,15 +67,6 @@ render_group() {
 render_run_name() {
   local action=$1 run_number=$2 run_id=$3
   printf 'PR #418 body compliance - %s - event %s (run %s)\n' "$action" "$run_number" "$run_id"
-}
-
-test_signature_sequence_at_fixed_head() {
-  signature_result "Synthetic body\n$MARKER" || fail "signed opened event must succeed"
-  if signature_result 'Synthetic unsigned edit'; then
-    fail "unsigned edited event must fail"
-  fi
-  signature_result "Synthetic signed edit\n$MARKER" || fail "signed edited event must succeed"
-  pass "fixed-head signed opened, unsigned edited, signed edited yields 0/1/0"
 }
 
 test_event_identity_contract() {
@@ -83,14 +107,13 @@ test_security_and_signature_contract_is_preserved() {
   assert_no_grep 'secrets.' "$WORKFLOW" "workflow must not read secrets"
   assert_no_grep 'actions/checkout' "$WORKFLOW" "workflow must not check out fork code"
   assert_grep 'name: PR must be raised via no-mistakes' "$WORKFLOW" "stable required check name changed"
-  assert_grep "$MARKER" "$WORKFLOW" "signature marker changed"
   assert_grep "github.event.pull_request.user.login != 'github-actions[bot]'" "$WORKFLOW" "github-actions bot exemption changed"
   assert_grep "github.event.pull_request.user.login != 'dependabot[bot]'" "$WORKFLOW" "dependabot bot exemption changed"
   assert_no_grep 'release-please[bot]' "$WORKFLOW" "Firstmate must not exempt release-please"
-  pass "fork, permission, check-name, marker, and bot-exemption contracts are preserved"
+  pass "fork, permission, check-name, and bot-exemption contracts are preserved"
 }
 
-test_signature_sequence_at_fixed_head
+test_gate_is_the_pinned_shared_action
 test_event_identity_contract
 test_run_names_are_ordered_and_unique
 test_security_and_signature_contract_is_preserved

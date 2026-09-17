@@ -1,11 +1,9 @@
 // Firstmate's home-persistent Pi transcript presentation toggle.
 //
-// Ported from upstream, which verified it against Pi 0.81.1, 0.82.0, and 0.84.4.
-// Verified in this fork against Pi 0.80.10, which exposes the same surface: built-in
-// ToolDefinitions, per-slot renderers, renderShell: "self", session_start replacement
-// reasons, agent_start and agent_settled, ExtensionUIContext.setToolsExpanded(),
-// setWorkingVisible(), setWidget() with a disposable component factory, and
-// setHiddenThinkingLabel().
+// Verified against Pi 0.81.1, 0.82.0, and 0.84.4, which expose built-in ToolDefinitions, per-slot
+// renderers, renderShell: "self", session_start replacement reasons, agent_start and
+// agent_settled, ExtensionUIContext.setToolsExpanded(), setWorkingVisible(), setWidget()
+// with a disposable component factory, and setHiddenThinkingLabel().
 // ./lib/fm-calm-working-ship.ts owns the animated working presentation this file
 // installs. The focused tests pin those assumptions but never reject a
 // newer Pi solely for its version. The collapsed-thinking and operational-user
@@ -18,8 +16,8 @@
 // unregister operation. Keep Calm-off registration empty; keep Calm-on load-time
 // registration synchronous because restored rows capture the registry before
 // session_start; and collision-check only the later first-activation path, when
-// getAllTools() is reliable. docs/calm.md owns the user-facing behavior, the
-// non-retroactive first-toggle bound, and this fork's verification record.
+// getAllTools() is reliable. docs/calm-mode-feasibility.md owns the Pi-source evidence
+// and docs/calm.md owns the user-facing behavior and non-retroactive first-toggle bound.
 import { randomUUID } from "node:crypto";
 import {
   mkdirSync,

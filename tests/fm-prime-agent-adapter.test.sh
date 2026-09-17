@@ -36,6 +36,8 @@ set -u
 
 # shellcheck source=bin/fm-tmux-lib.sh
 . "$ROOT/bin/fm-tmux-lib.sh"
+# shellcheck source=bin/fm-busy-lib.sh
+. "$ROOT/bin/fm-busy-lib.sh"
 
 TMP_ROOT=$(fm_test_tmproot fm-prime-agent-tests)
 
@@ -47,10 +49,11 @@ ESC=$(printf '\033')
 PA_IDLE_ROW="${ESC}[48;2;26;26;31m >  ${ESC}[7m ${ESC}[0m${ESC}[38;2;113;113;122m${ESC}[48;2;26;26;31mTry \"add tests for @<filepath>\"${ESC}[39m"
 
 # A fake tmux serving a single-row pane, in the same shape as the cursor suite:
-# FM_FAKE_PANE holds the pane, FM_FAKE_CY the cursor row, FM_FAKE_COMM the pane
-# COMM, and the companion fake ps prints FM_FAKE_ARGS so the pane's harness
-# identity (fm_tmux_pane_is_prime_agent: node COMM + prime-agent argv) is
-# test-controlled.
+# FM_FAKE_PANE holds the pane, FM_FAKE_CY the cursor row, and FM_FAKE_COMM the
+# pane's foreground COMM, while the companion fake ps serves the two reads the
+# shared foreground-process-group probe makes - the tty's process table and one
+# process's argv (FM_FAKE_ARGS) - so the pane's harness identity
+# (fm_tmux_pane_is_prime_agent: node COMM + prime-agent argv) is test-controlled.
 make_fake_tmux() {  # <dir>
   local dir=$1 fb="$1/fakebin"
   mkdir -p "$fb"
@@ -64,9 +67,12 @@ case "${1:-}" in
         *cursor_y*) printf '%s\n' "${FM_FAKE_CY:-0}"; exit 0 ;;
         *pane_pid*) printf '%s\n' "${FM_FAKE_PID:-4242}"; exit 0 ;;
         *pane_current_command*) printf '%s\n' "${FM_FAKE_COMM:-node}"; exit 0 ;;
+        *pane_tty*) printf '%s\n' "${FM_FAKE_TTY:-/dev/ttyfake}"; exit 0 ;;
       esac
     done
     printf 'fakepane\n'; exit 0 ;;
+  list-windows)
+    printf '%s\n' "${FM_FAKE_WINDOW:-pa}"; exit 0 ;;
   capture-pane)
     has_e=0; s=""; e=""
     prev=""
@@ -77,7 +83,11 @@ case "${1:-}" in
     done
     f="${FM_FAKE_PANE:-/dev/null}"
     out=$(cat "$f" 2>/dev/null)
-    if [ -n "$s" ] && [ -n "$e" ]; then
+    # `-E -` means "to the last line", which is how the real capture asks for
+    # the whole visible pane.
+    if [ -n "$s" ] && [ "$e" = "-" ]; then
+      out=$(printf '%s\n' "$out" | sed -n "$((s + 1)),\$p")
+    elif [ -n "$s" ] && [ -n "$e" ]; then
       out=$(printf '%s\n' "$out" | sed -n "$((s + 1)),$((e + 1))p")
     fi
     if [ "$has_e" = 1 ]; then
@@ -92,6 +102,14 @@ SH
   chmod +x "$fb/tmux"
   cat > "$fb/ps" <<'SH'
 #!/usr/bin/env bash
+# `ps -t <tty> -o pid=,pgid=,tpgid=,comm=` lists the tty's processes; the single
+# fake entry is a foreground one (pgid = tpgid) whose COMM is FM_FAKE_COMM.
+# `ps -p <pid> -o args=` then answers that process's argv from FM_FAKE_ARGS.
+for a in "$@"; do
+  case "$a" in
+    -t) printf '%s %s %s %s\n' "${FM_FAKE_PID:-4242}" 900 900 "${FM_FAKE_COMM:-node}"; exit 0 ;;
+  esac
+done
 printf '%s\n' "${FM_FAKE_ARGS:-}"
 SH
   chmod +x "$fb/ps"
@@ -100,15 +118,19 @@ SH
 
 # --- 1. env-marker precedence -------------------------------------------------
 
+# What this capability owns is the ENV-MARKER verdict: prime-agent inherits pi's
+# PI_CODING_AGENT=true for its children, so a marker read that answered pi would
+# steer a prime-agent worker with pi's vocabulary. The `marker` subcommand is
+# that read on its own; the full detection above it arbitrates the marker against
+# process ancestry, which is a separate contract and would otherwise let the
+# ancestry of whatever runs this suite decide the answer.
 test_prime_marker_beats_pi_marker() {
   local out marker
-  # Every PRIME_AGENT_* marker must outrank the inherited pi marker, whichever
-  # one a worker's environment happens to carry.
   for marker in PRIME_AGENT_INTERNAL_DAEMON_WORKER PRIME_AGENT_CODING_AGENT_DIR \
                 PRIME_AGENT_KERNEL_VENV PRIME_AGENT_LAUNCHER_PATH PRIME_AGENT_BUILD_ID; do
     out=$(env -u PRIME_AGENT_INTERNAL_DAEMON_WORKER -u PRIME_AGENT_CODING_AGENT_DIR \
           -u PRIME_AGENT_KERNEL_VENV -u PRIME_AGENT_LAUNCHER_PATH -u PRIME_AGENT_BUILD_ID \
-          "$marker"=1 PI_CODING_AGENT=true "$ROOT/bin/fm-harness.sh")
+          "$marker"=1 PI_CODING_AGENT=true "$ROOT/bin/fm-harness.sh" marker)
     [ "$out" = prime-agent ] || fail "$marker with PI_CODING_AGENT=true detected '$out', expected prime-agent"
   done
   pass "PRIME_AGENT_* markers outrank the inherited PI_CODING_AGENT=true"
@@ -118,44 +140,26 @@ test_pi_detection_unregressed() {
   local out
   out=$(env -u PRIME_AGENT_INTERNAL_DAEMON_WORKER -u PRIME_AGENT_CODING_AGENT_DIR \
         -u PRIME_AGENT_KERNEL_VENV -u PRIME_AGENT_LAUNCHER_PATH -u PRIME_AGENT_BUILD_ID \
-        -u CURSOR_AGENT -u CLAUDECODE PI_CODING_AGENT=true "$ROOT/bin/fm-harness.sh")
+        -u CURSOR_AGENT -u CLAUDECODE PI_CODING_AGENT=true "$ROOT/bin/fm-harness.sh" marker)
   [ "$out" = pi ] || fail "pi detection regressed: '$out'"
   pass "pi detection is unchanged when no PRIME_AGENT_* marker is present"
 }
 
-# --- 2. busy signature ---------------------------------------------------------
+# --- 2. busy state -------------------------------------------------------------
+#
+# Busy state is semantic now, not a rendered-row regex: an adapter publishes
+# events through bin/fm-busy-event.sh and bin/fm-busy-lib.sh folds them.
 
-test_busy_regex_matches_state_row_not_prose() {
-  # Verbatim busy rows from the lab and trial.
-  printf ' ⠴ Waiting · 0s\n' | grep -qiE "$FM_BUSY_REGEX_DEFAULT" \
-    || fail "busy row 'Waiting · 0s' did not match"
-  printf ' ⠏ Thinking · 3s · ↓ 52 tokens\n' | grep -qiE "$FM_BUSY_REGEX_DEFAULT" \
-    || fail "busy row 'Thinking · 3s' did not match"
-  printf ' ⠹ Executing · 19s · ↑ 111 tokens\n' | grep -qiE "$FM_BUSY_REGEX_DEFAULT" \
-    || fail "busy row 'Executing · 19s' did not match"
-  # The bare state word in model prose must NOT be the signal.
-  printf 'Let me explain Thinking processes\n' | grep -qiE "$FM_BUSY_REGEX_DEFAULT" \
-    && fail "bare 'Thinking' prose must not match the busy regex"
-  # The post-interrupt row is transient and the turn is over: not busy.
-  printf ' Operation aborted · 2s\n' | grep -qiE "$FM_BUSY_REGEX_DEFAULT" \
-    && fail "'Operation aborted · 2s' must not read as busy"
-  # The idle footer must not match either.
-  printf '← agents/resume  DeepSeek V4 Flash Free • high  ? for shortcuts\n' \
-    | grep -qiE "$FM_BUSY_REGEX_DEFAULT" \
-    && fail "idle prime-agent footer matched the busy regex"
-  pass "prime-agent busy signature is the state-word + seconds-suffix row"
+test_prime_agent_declares_a_semantic_busy_source() {
+  local sources
+  sources=$(fm_busy_sources_for_harness prime-agent)
+  case " $sources " in
+    *" prime-ext "*) ;;
+    *) fail "prime-agent declares no semantic busy source: '$sources'" ;;
+  esac
+  pass "prime-agent publishes semantic busy state through its own extension source"
 }
 
-test_busy_default_still_defined_once() {
-  local literal_count
-  assert_grep 'FM_BUSY_REGEX_DEFAULT' "$ROOT/bin/fm-watch.sh" \
-    "fm-watch.sh does not consume the shared busy default"
-  assert_grep 'FM_BUSY_REGEX_DEFAULT' "$ROOT/bin/fm-tmux-lib.sh" \
-    "fm-tmux-lib.sh does not consume the shared busy default"
-  literal_count=$(grep -R '^FM_BUSY_REGEX_DEFAULT=' "$ROOT/bin" | wc -l | tr -d '[:space:]')
-  [ "$literal_count" = 1 ] || fail "busy default is defined $literal_count times, expected exactly once"
-  pass "one shared busy default carries the prime-agent signature"
-}
 
 # --- 3. idle composer ----------------------------------------------------------
 
@@ -178,23 +182,34 @@ test_bare_glyph_unidentified_pane_stays_unknown() {
   pass "dead-shell safety rule intact for bare '>' on unidentified panes"
 }
 
-test_idle_placeholder_patterns_read_empty() {
-  local out
+test_idle_placeholder_is_covered_by_the_shared_idle_default() {
+  local tip out
   # Plain-row backstop (styling surprises, plain-read backends): the shared
-  # idle default covers the rotating Try "..." tips with or without the glyph.
-  out=$(fm_composer_classify_content 0 'Try "add tests for @<filepath>"' \
-        "$FM_COMPOSER_IDLE_RE_DEFAULT" insensitive '>   Try "add tests for @<filepath>"')
-  [ "$out" = empty ] || fail "placeholder content classified '$out', expected empty"
+  # idle default carries the arm that recognizes prime-agent's rotating
+  # Try "..." tips, with or without the leading glyph.
+  # The shared matcher is fed already-normalized content, so the tips are
+  # spelled here the way the classifier trims them.
+  for tip in 'Try "add tests for @<filepath>"' '>   Try "explain how @<filepath> works"'; do
+    fm_composer_idle_matches "$tip" "$FM_COMPOSER_IDLE_RE_DEFAULT" insensitive \
+      || fail "shared idle default does not cover prime-agent tip '$tip'"
+  done
+  # The verdict that match earns is the shared classifier's, not this adapter's:
+  # a plain read proves an empty composer only at a proven placeholder position.
+  # On a bare input row a plain read cannot tell the tip from typed text, so it
+  # stays safely unknown and the styled pane read below is what proves idle.
+  out=$(fm_composer_classify_content 1 '>   Try "add tests for @<filepath>"' \
+        "$FM_COMPOSER_IDLE_RE_DEFAULT" insensitive '>   Try "add tests for @<filepath>"' 1 0)
+  [ "$out" = empty ] || fail "plain placeholder-position tip classified '$out', expected empty"
   out=$(fm_composer_classify_content 0 ' >   Try "explain how @<filepath> works"' \
-        "$FM_COMPOSER_IDLE_RE_DEFAULT" insensitive ' >   Try "explain how @<filepath> works"')
-  [ "$out" = empty ] || fail "glyph-prefixed placeholder classified '$out', expected empty"
-  pass "prime-agent idle placeholder reads empty through the shared idle default"
+        "$FM_COMPOSER_IDLE_RE_DEFAULT" insensitive ' >   Try "explain how @<filepath> works"' 0 0)
+  [ "$out" = unknown ] || fail "plain bare-row tip classified '$out', expected unknown"
+  pass "prime-agent idle tips are covered by the shared idle default at a proven placeholder position"
 }
 
 test_idle_regex_does_not_swallow_real_text() {
   local out
   for txt in "refactor the auth module" 'Try "x" but keep going' "try the tests"; do
-    out=$(fm_composer_classify_content 1 "$txt" "$FM_COMPOSER_IDLE_RE_DEFAULT" insensitive "> $txt")
+    out=$(fm_composer_classify_content 1 "$txt" "$FM_COMPOSER_IDLE_RE_DEFAULT" insensitive "> $txt" 1 0)
     [ "$out" = pending ] || fail "real text '$txt' classified '$out', expected pending"
   done
   pass "prime-agent idle pattern is anchored: real text stays pending"
@@ -241,8 +256,12 @@ test_liveness_uses_argv_for_node_comm() {
   local d fb out
   d="$TMP_ROOT/pa-live"; mkdir -p "$d"
   fb=$(make_fake_tmux "$d")
+  # The recorded window is in the session inventory, so the foreground read is
+  # trusted; the pane COMM is the bare `node` prime-agent leaves behind and the
+  # verdict has to come from its rewritten argv.
   out=$(PATH="$fb:$PATH" FM_FAKE_COMM=node FM_FAKE_ARGS="prime-agent" \
-    bash -c ". '$ROOT/bin/fm-tmux-lib.sh'; . '$ROOT/bin/backends/tmux.sh'; fm_backend_tmux_agent_alive t" 2>/dev/null)
+    FM_BACKEND_LIB_DIR="$ROOT/bin" \
+    bash -c ". '$ROOT/bin/backends/tmux.sh'; fm_backend_tmux_agent_alive fm:pa" 2>/dev/null)
   [ "$out" = alive ] || fail "prime-agent pane (node comm + prime-agent argv) classified '$out', expected alive"
   pass "prime-agent liveness resolves through argv when COMM is a bare node"
 }
@@ -252,7 +271,8 @@ test_unattributable_node_stays_unknown() {
   d="$TMP_ROOT/pa-live2"; mkdir -p "$d"
   fb=$(make_fake_tmux "$d")
   out=$(PATH="$fb:$PATH" FM_FAKE_COMM=node FM_FAKE_ARGS="/usr/bin/node /opt/somewhere/index.js" \
-    bash -c ". '$ROOT/bin/fm-tmux-lib.sh'; . '$ROOT/bin/backends/tmux.sh'; fm_backend_tmux_agent_alive t" 2>/dev/null)
+    FM_BACKEND_LIB_DIR="$ROOT/bin" \
+    bash -c ". '$ROOT/bin/backends/tmux.sh'; fm_backend_tmux_agent_alive fm:pa" 2>/dev/null)
   [ "$out" = unknown ] || fail "unattributable node classified '$out', expected unknown"
   pass "a non-prime-agent bare node stays unknown, never dead"
 }
@@ -395,11 +415,10 @@ test_effort_maps_to_thinking_flag() {
 
 test_prime_marker_beats_pi_marker
 test_pi_detection_unregressed
-test_busy_regex_matches_state_row_not_prose
-test_busy_default_still_defined_once
+test_prime_agent_declares_a_semantic_busy_source
 test_placeholder_ghost_strips_to_bare_glyph
 test_bare_glyph_unidentified_pane_stays_unknown
-test_idle_placeholder_patterns_read_empty
+test_idle_placeholder_is_covered_by_the_shared_idle_default
 test_idle_regex_does_not_swallow_real_text
 test_identified_prime_agent_pane_idle_reads_empty
 test_unidentified_pane_same_row_is_not_promoted

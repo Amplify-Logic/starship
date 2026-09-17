@@ -1,9 +1,11 @@
 projects/
 state/
 data/
+scratchpad*
 .no-mistakes/
 .lavish/
 .fm-secondmate-home
+.fm-secondmate-parent
 .DS_Store
 __pycache__/
 *.pyc
@@ -23,3 +25,4 @@ __pycache__/
 .fm-lint-parity.*
 # SwiftPM build products for the desk floater.
 desk-floater/.build/
+.tools/

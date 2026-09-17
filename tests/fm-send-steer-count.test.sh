@@ -9,6 +9,11 @@
 #   2. Explicit backend targets never write a counter (no task identity).
 #   3. The --key path never counts.
 #   4. A swallowed Enter (pending verdict) is not a delivered steer and never counts.
+#
+# Plain text to a task selector rides the inbox plane, where the durable inbox
+# record IS the confirmed delivery, so case 4 steers with a slash command: a
+# harness-native invocation is the remaining text that must reach the target's
+# own parser, which keeps it on the typed plane where an Enter can be swallowed.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -19,9 +24,11 @@ SEND="$ROOT/bin/fm-send.sh"
 TMP_ROOT=$(fm_test_tmproot fm-send-steer-count)
 
 # The same hermetic submit stub used across the fm-send suites: display-message
-# yields a numeric cursor_y; capture-pane's FM_STEER_COMPOSER value decides the
-# verdict - an empty bordered composer reads "empty" (submit landed), a bordered
-# composer with text reads "pending" (Enter swallowed).
+# yields the cursor row of the composer's input line; capture-pane's
+# FM_STEER_COMPOSER value decides the verdict - an empty bordered composer reads
+# "empty" (submit landed), the same box holding text reads "pending" (Enter
+# swallowed). The box's borders must match the input row's width, which is what
+# makes the shape structurally proven rather than "pending-unproven".
 make_stubs() {  # <dir> -> echoes fakebin dir
   local dir=$1 fb="$1/fakebin"
   mkdir -p "$fb"
@@ -31,9 +38,15 @@ set -u
 case "${1:-}" in
   send-keys) exit 0 ;;
   display-message)
-    for a in "$@"; do case "$a" in *cursor_y*) printf '0\n'; exit 0 ;; esac; done
+    for a in "$@"; do case "$a" in *cursor_y*) printf '1\n'; exit 0 ;; esac; done
     printf 'fakepane\n'; exit 0 ;;
-  capture-pane) printf '%s\n' "${FM_STEER_COMPOSER:-$(printf '\xe2\x94\x82 \xe2\x94\x82')}"; exit 0 ;;
+  capture-pane)
+    if [ -n "${FM_STEER_COMPOSER:-}" ]; then
+      printf '%s\n' "$FM_STEER_COMPOSER"
+    else
+      printf '╭──────────╮\n│          │\n╰──────────╯\n'
+    fi
+    exit 0 ;;
   list-windows) exit 0 ;;
 esac
 exit 0
@@ -118,8 +131,10 @@ test_swallowed_enter_never_counts() {
   dir="$TMP_ROOT/pending"; mkdir -p "$dir"
   fb=$(make_stubs "$dir")
   home=$(setup_home pending)
-  FM_STEER_COMPOSER="$(printf '\xe2\x94\x82 leftover \xe2\x94\x82')" \
-    run_send "$fb" "$home" "build" "this enter will be swallowed"; rc=$?
+  FM_STEER_COMPOSER='╭──────────╮
+│ leftover │
+╰──────────╯' \
+    run_send "$fb" "$home" "build" "/this-enter-will-be-swallowed"; rc=$?
   [ "$rc" -ne 0 ] || fail "a swallowed Enter must fail the send loudly, got exit 0"
   [ ! -e "$home/state/build.steers" ] \
     || fail "a submit firstmate could not confirm must not count as a steer"

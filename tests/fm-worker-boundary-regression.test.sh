@@ -231,7 +231,7 @@ exit 0
 SH
 chmod +x "$ESCAPING_ADAPTER"
 set +e
-fm_run_timeout 90 "$PACK" --target native-account --launcher-adapter "$ESCAPING_ADAPTER" \
+fm_run_timed 90 "$PACK" --target native-account --launcher-adapter "$ESCAPING_ADAPTER" \
   --gateway "$STATELESS_GATEWAY" --report "$TMP/escaping.json" \
   >"$TMP/escaping.stdout" 2>"$TMP/escaping.stderr"
 escaping_rc=$?

@@ -148,39 +148,8 @@ The in-harness turn-end and continuity banners do not depend on any of it: they 
 
 ## Verification (macOS, darwin)
 
-Recorded 2026-07-10T12:41-0700 on macOS 26.5.2 (build 25F84), `osascript` at `/usr/bin/osascript`, `herdr` 0.7.3.
-This is the single bounded manual verification (two invocations, one per OS channel), labelled "FIRSTMATE TEST - IGNORE" so the banners are unmistakably harmless.
-These are the only verification commands that fire real notifications, and they are never run inside a test suite.
+[`verification/supervision.md`](verification/supervision.md#wedge-alarm-channels) is the owner of the bounded manual macOS and Herdr channel proof; it is not restated here.
 
-### osascript channel (manual verification of the argv-safe mechanism)
-
-```
-$ /usr/bin/osascript -e 'on run argv' \
-    -e 'display notification (item 1 of argv) with title "FIRSTMATE TEST - IGNORE" sound name "Basso"' \
-    -e 'end run' "FIRSTMATE TEST - IGNORE (wedge-alarm channel verification)"
-$ echo $?
-0
-```
-
-Exit 0; a Notification Center banner titled "FIRSTMATE TEST - IGNORE" was posted with the label as its body.
-Production now passes both body and title as argv items to the same AppleScript mechanism.
-The away-mode title is `firstmate: away-mode escalations WEDGED`, while the host sentinel uses `firstmate: SUPERVISION DOWN`.
-`tests/fm-supervision-sentinel.test.sh` verifies the two-item argv shape against a fake `osascript` and never posts a real banner.
-
-### herdr channel
-
-```
-$ herdr notification show "FIRSTMATE TEST - IGNORE" \
-    --body "FIRSTMATE TEST - IGNORE (wedge-alarm channel verification)" --sound request
-{"id":"cli:notification:show","result":{"reason":"shown","shown":true,"type":"notification_show"}}
-$ echo $?
-0
-```
-
-Exit 0; herdr reported `"shown":true`.
-The daemon redirects this stdout to `/dev/null` and treats a zero exit as success.
-
-### command channel dispatch (summary on $1 and stdin)
-
-The `command:` channel runs `sh -c "<cmd>" fm-wedge-alarm "<summary>"` with the summary also piped on stdin.
-`test_wedge_alarm_command_channel_receives_summary` deliberately unsets the seam for a safe file-writing command to verify this dispatch contract without a notification.
+Two alert titles ride that same argv-safe mechanism: away-mode escalations post `firstmate: away-mode escalations WEDGED`, and the host sentinel posts `firstmate: SUPERVISION DOWN`.
+`tests/fm-supervision-sentinel.test.sh` pins the two-item argv shape against a fake `osascript` and never posts a real banner.
+`tests/fm-daemon.test.sh` covers the safe `command:` dispatch contract, where the summary reaches both `$1` and stdin.

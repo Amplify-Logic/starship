@@ -19,23 +19,60 @@ make_fake_tmux() {
   local dir=$1 fakebin capture
   fakebin=$(fm_fakebin "$dir")
   capture="$dir/pane.txt"
-  printf 'idle prompt\n' > "$capture"
+  # A real, positively identified empty agent composer. A blank capture is
+  # deliberately unknown under the fleet-wide strict blank-row posture.
+  printf '❯\n' > "$capture"
   cat > "$fakebin/tmux" <<'SH'
 #!/usr/bin/env bash
 set -u
+# Windows this stub was asked to create. fm-spawn's agent-up gate reads the
+# window inventory back before it will report a spawn as started, so a window
+# that is created and never listed reads as a vanished endpoint. The inventory
+# lives beside the stub; a case that pins FM_FAKE_TMUX_WINDOW still decides
+# what list-windows reports.
+window_log=${0%/*}/.fake-windows
 case "${1:-}" in
-  has-session|new-session|new-window|send-keys|kill-window)
+  new-window)
+    printf '%s\n' "$*" >> "$FM_FAKE_TMUX_LOG"
+    prev=
+    for arg in "$@"; do
+      [ "$prev" != -n ] || printf '%s\n' "$arg" >> "$window_log"
+      prev=$arg
+    done
+    exit 0
+    ;;
+  has-session|new-session|send-keys|kill-window)
     printf '%s\n' "$*" >> "$FM_FAKE_TMUX_LOG"
     exit 0
     ;;
   list-windows)
-    if [ -n "${FM_FAKE_TMUX_WINDOW:-}" ]; then
-      printf '%s\n' "$FM_FAKE_TMUX_WINDOW"
-    fi
+    session=
+    prev=
+    for arg in "$@"; do
+      if [ "$prev" = -t ]; then session=$arg; break; fi
+      prev=$arg
+    done
+    while IFS= read -r recorded; do
+      [ -n "$recorded" ] || continue
+      if [ -z "$session" ]; then
+        printf '%s\n' "$recorded"
+        continue
+      fi
+      case "$recorded" in
+        "$session":*) printf '%s\n' "${recorded#*:}" ;;
+        *:*) ;;
+        *) printf '%s\n' "$recorded" ;;
+      esac
+    done <<EOF
+${FM_FAKE_TMUX_WINDOW:-$([ ! -f "$window_log" ] || cat "$window_log")}
+EOF
     exit 0
     ;;
   display-message)
-    printf 'firstmate\n'
+    case "$*" in
+      *'#{cursor_y}'*) printf '0\n' ;;
+      *) printf 'firstmate\n' ;;
+    esac
     exit 0
     ;;
   capture-pane)
@@ -95,6 +132,19 @@ SH
   fm_fake_exit0 "$fakebin" codex
   : > "$dir/tmux.log"
   printf '%s\n' "$fakebin"
+}
+
+# Retire a window from the fake tmux's inventory, the way a restarted tmux server
+# loses the windows it was holding. The inventory is what makes a created window
+# list back as live, so a case that simulates a restart has to retire it here as
+# well as dropping the durable meta; leaving it behind leaves a window that really
+# is live by the fixture's own account, which fm-spawn then correctly refuses to
+# spawn over.
+fake_tmux_forget_window() {  # <fakebin> <window-name>
+  local log=$1/.fake-windows
+  [ -f "$log" ] || return 0
+  grep -vxF -- "$2" "$log" > "$log.tmp" || :
+  mv "$log.tmp" "$log"
 }
 
 # A fake no-mistakes that touches .no-mistakes-init / .no-mistakes-doctor markers.

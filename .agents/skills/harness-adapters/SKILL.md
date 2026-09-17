@@ -1,6 +1,9 @@
 ---
 name: harness-adapters
-description: Agent-only reference for firstmate harness operations. Use before spawning or recovering a crewmate or secondmate, handling a trust dialog, sending a harness-specific skill invocation, interrupting or exiting an agent, resuming an exited agent, or verifying a new harness adapter. Contains verified worker facts for claude, codex, opencode, pi, grok, cursor, kimi, and prime-agent; Cursor and Kimi primary facts.
+description: >-
+  Agent-only reference for firstmate harness operations.
+  Use before spawning or recovering a crewmate or secondmate, handling a trust dialog, sending a harness-specific skill invocation, interrupting or exiting an agent, resuming an exited agent, or verifying a new harness adapter.
+  Contains verified facts for claude, codex, opencode, pi, pi-signed, grok, kimi, cursor, gemini, muse, rovo, omp, agy, and this fork's prime-agent; also this fork's Cursor and Kimi PRIMARY profiles.
 user-invocable: false
 metadata:
   internal: true
@@ -8,501 +11,93 @@ metadata:
 
 # harness-adapters
 
-Use this reference before any harness-specific firstmate operation: spawn, recovery, trust-dialog handling, skill invocation, interrupt, exit, resume, or adapter verification.
+This is the one skill, trigger, and routing owner for harness-specific Firstmate operations.
+Load this router first, then exactly the common reference and one harness reference selected below.
+When an action spans rows, load the union once rather than every reference.
+Files under `references/` are resources of this skill, not additional catalogued skills.
 
-Crewmates default to the same harness firstmate is running on unless `config/crew-harness` records an adapter name.
-Optional dispatch profiles in `config/crew-dispatch.json` can override that static default for one crewmate or scout dispatch by selecting concrete harness, model, and effort axes at intake.
-The captain may override that file at session start or later; a per-task instruction such as "run this one on codex" overrides it for that dispatch only.
-`default` means mirror firstmate's own harness.
+## Path contract
 
-Secondmates have their own harness knob, so a secondmate can run on a different adapter than crewmates.
-`config/secondmate-harness` is the harness the primary uses to launch SECONDMATE agents, resolved through the fallback chain `config/secondmate-harness` -> `config/crew-harness` -> firstmate's own.
-An absent or `default` `config/secondmate-harness` therefore behaves exactly as the crew harness did before this knob existed (secondmates launched on the crew harness); setting it splits the two.
-`config/crew-dispatch.json`, `config/crew-harness`, and `config/backlog-backend` are inherited by secondmate homes.
-This skill owns only the harness-relevant consequence: a secondmate's own crewmates use the primary's dispatch profiles and static harness value, while `config/secondmate-harness` is the primary's own setting and is never inherited - secondmates do not spawn secondmates.
-Inheritance copies the literal `config/crew-harness` file, so for a secondmate's own crewmates to run on the primary's crewmate harness the captain must set `config/crew-harness` to a concrete adapter name, such as `codex`.
-If `config/crew-harness` is unset or `default`, there is no concrete value to inherit, so the secondmate's own crewmates fall back to the secondmate's own/detected harness rather than the primary's effective crewmate harness.
-Inheritance also copies the literal `config/crew-dispatch.json` file, so secondmates apply the same best-fit profile rules for their own crewmates.
+The skill directory is the directory containing this `SKILL.md`.
+Resolve on-demand reference links and relative links to their executable, documentation, or sibling-skill owners against the skill directory, including links named by a nested reference.
+Operational paths keep the context named by their owner: `config/` and active-home settings belong to the active Firstmate home, `state/` belongs to that home, and project settings such as `.claude/settings.json` belong to the target project.
 
-Each adapter splits into mechanics and knowledge.
-The per-task mechanics, including launch command, autonomy flag, and crewmate turn-end hook, live in `bin/fm-spawn.sh`.
-The primary-session "no turn ends blind" guard contract and harness hook installation paths live in `docs/turnend-guard.md`.
-The primary-session watcher wake protocols are rendered from `docs/supervision-protocols/` by `bin/fm-supervision-instructions.sh`.
-The supervision knowledge lives here: busy signature, exit command, interrupt, dialogs, resume behavior, skill invocation, and quirks.
-
-The verified WORKER adapters are `claude`, `codex`, `opencode`, `pi`, `grok`, `cursor`, `kimi`, and `prime-agent`.
-The verified PRIMARY profiles are `pi`, `claude-fable`, `claude-opus`, `codex`, `astra`, `opencode`, `grok`, `kimi-k3`, `cursor-grok`, and `cursor-grok45`; `bin/fm-primary.sh` owns their exact launch mechanics.
-`cursor` is also certified as a PRIMARY through `bin/fm-primary.sh cursor-grok` (Cursor CLI `2026.08.11-e8db854`, 2026-08-13 lab); never infer worker facts from primary facts or the reverse.
-Kimi is verified as a PRIMARY through `bin/fm-primary.sh kimi-k3` and, separately, as a WORKER through `fm-spawn --harness kimi` (Kimi Code 0.27.0, 2026-07-23 lab); never infer one role from the other.
+## Non-negotiable safety
 
 Never dispatch a crewmate or secondmate on an unverified adapter.
-If `config/crew-harness` or `config/secondmate-harness` names an unverified adapter, tell the captain under `AGENTS.md` section 9 that the requested worker runtime is not verified yet, use firstmate's own verified runtime for current work, and ask only whether to verify the requested runtime before future use.
-Do not pause current work for that future-verification choice, and never launch an unverified adapter.
-If the captain asks for a new harness, propose verifying it first: spawn a trivial supervised task using `fm-spawn`'s raw-launch-command escape hatch, confirm every fact empirically, then record the mechanics in `fm-spawn`, the busy signature in `fm-watch.sh` and `fm-tmux-lib.sh` defaults, any needed `FM_COMPOSER_IDLE_RE` empty-composer override plus any novel bare agent prompt glyph in `bin/fm-composer-lib.sh`'s shared composer classifier (the one fleet-wide owner of the empty/dead-shell/pending decision, so a new harness's own idle composer is not misread as a dead shell), the tmux agent-process liveness classification in `bin/backends/tmux.sh` when the harness can launch a secondmate, and the verified knowledge here.
-Use `bin/fm-harness-exam.sh` and `docs/harness-exam.md` to re-verify any of the seven registered worker adapters against a real runtime before changing its certified version.
+If `config/crew-harness` or `config/secondmate-harness` names one, tell the captain under `../../../AGENTS.md` section 9 that the requested worker runtime is not verified, use firstmate's own verified runtime for current work, and ask only whether to verify the requested runtime for future work.
+Do not pause current work for that choice.
+
+On `unknown`, ask the captain instead of guessing.
+A current captain override beats detection, while a per-task override governs only that dispatch.
+For recovery and control, use the exact `harness=` in `state/<id>.meta`; never infer it from a model or provider.
+
+Deliver lifecycle actions only through `../../../bin/fm-control.sh <task-id> interrupt|exit|relaunch`.
+Never type an interrupt key or exit command through `fm-send`, where routing-marked lifecycle text becomes chat.
+Trust handling is complete only when inspection proves the target started processing its instructions; delivery success alone is not proof.
+Muse, Gemini, and AGY are verified only for crewmate and scout work, never a secondmate or primary.
 
 ## Detection
 
-`bin/fm-harness.sh` prints firstmate's own harness, using verified env markers first and then process ancestry.
-`bin/fm-harness.sh crew` resolves the effective crewmate harness from `config/crew-harness` (absent or `default` -> own).
-`bin/fm-harness.sh secondmate` resolves the secondmate-launch harness through the chain `config/secondmate-harness` -> `config/crew-harness` -> own, so an unset `config/secondmate-harness` matches the crew harness.
-`bin/fm-spawn.sh` uses `crew` mode for a crewmate/scout launch and `secondmate` mode for a `--secondmate` launch, re-resolving on every spawn so the split is durable across respawns; an explicit per-spawn harness arg overrides either.
-On `unknown`, ask the captain instead of guessing.
-A captain override always beats detection.
-When verifying a new adapter, record its env marker and command name in `bin/fm-harness.sh`.
-
-For stuck recovery, the target window's harness is recorded as `harness=` in `state/<id>.meta`.
-Use that value for interrupt, exit, resume, and skill-invocation facts.
-
-## Primary turn-end guard
-
-Every verified primary harness has an empirically validated hook path for the "no turn ends blind" guard.
-`claude`, `codex`, and the Kimi primary block directly through Stop hooks that preserve exit status 2 and the reason from `bin/fm-turnend-guard.sh`.
-`opencode`, `pi`, and `grok` expose passive lifecycle callbacks for this purpose, so their tracked primary adapters force one bounded follow-up or resume when the shared predicate blocks.
-The exact hook files, commands, validation transcripts, scoping rules, and fail-open tradeoffs are owned by `docs/turnend-guard.md`.
-When changing any primary turn-end hook, validate the real harness behavior in a scratch project or throwaway home before trusting it, then update that doc and the relevant concise fact below.
-
-## Primary pre-arm (PreToolUse) seatbelt
-
-Every verified primary harness also has a wired PreToolUse-equivalent hook that denies a watcher-arm anti-pattern (shell `&`, truncating pipe, bundling, broad `pkill -f fm-watch`) before it runs.
-`claude`, `codex`, and the Kimi primary block directly through PreToolUse hooks; `grok` blocks the same way but requires every `$VAR` reference in its hook `command` string to carry an inline `:-default` or it fails to launch the hook entirely.
-`opencode` and `pi` block by throwing from `tool.execute.before` / returning `{block: true}` from `tool_call`.
-The exact hook files, commands, output-shaping quirks (Claude Code only honors the deny when stdout is empty), and validation transcripts are owned by `docs/arm-pretool-check.md`.
-When changing any watcher-arm PreToolUse hook, validate the real harness behavior in a scratch project before trusting it, then update that doc.
-
-## Primary delegation-shape guard
-
-Claude exposes built-in delegation, scheduling, and worktree tools that a primary session can use to create work with no `state/<id>.meta`, which makes the whole guard stack inert because every guard counts that metadata.
-The shipped mechanism is `bin/fm-subagent-pretool-check.sh`, a primary-home PreToolUse guard that denies a delegation-SHAPED tool name.
-Claude primaries should also use an untracked per-home local `permissions.deny` list as hardening for known Claude delegation tools, because it removes them from the model's schema so they are never offered.
-That deny list must not ship in tracked `.claude/settings.json` because it is Claude-only rather than harness-agnostic, and because tracked project settings propagate into linked worktrees where they disarm legitimate crewmates.
-`docs/subagent-guard.md` owns the full contract, the local deny-list recommendation, the `FM_ALLOW_SUBAGENT=1` escape hatch, and the per-harness applicability review.
-
-Two verified facts worth pinning here.
-The subagent tool presents to the model as `Agent`, and on Claude Code 2.1.217 both `Agent` and `Task` work as `permissions.deny` keys, verified by an A/B with a nonsense-name control.
-`permissions.allow` is a pre-approval list rather than an availability list, so there is no fail-closed positive allowlist.
-
-## Primary session-start nudge
-
-AGENTS.md section 3 remains the behavioral owner for session start, while tracked native adapters invoke `bin/fm-sessionstart-nudge.sh` as an idempotent enforcement layer.
-The wrapper prints one canonically typed `session-start` instruction to run `bin/fm-session-start.sh`; it never runs the digest, wake drain, bootstrap sweeps, lock, or supervision arm itself.
-Full mechanics, scoping, dated commands, payloads, and fail-open evidence live in `docs/sessionstart-nudge.md`.
-
-- `claude`: verified native `SessionStart` stdout injection; `.claude/settings.json` matches `startup`, `resume`, and `clear`, but not `compact`.
-- `codex`: verified on 0.144.4; `.codex/hooks.json` receives `source=startup`, and wrapper stdout reaches model context.
-- `opencode`: verified on 1.17.18; `session.created` plus `client.session.promptAsync` starts the nudge turn in the TUI, while `opencode run` remains fail-open headless.
-- `pi`: verified native `session_start`; the existing primary extension handles `startup`, `new`, and `resume` and uses `pi.sendMessage` to inject context without racing a positional launch prompt.
-- `grok`: the 0.2.103 project `SessionStart` event fires with `source=new`, but stdout does not reach model context; the tracked project hook remains fail-open, and a global token-guarded fallback requires a captain decision.
-- `kimi`: verified on 0.27.0 and re-verified on 0.31.1 (2026-08-04); ordinary SessionStart hook stdout is discarded, so the managed plugin's native `sessionStart.skill` carries the nudge into model context on startup, resume, and `/new`.
-
-## Primary watcher supervision
-
-At session start, `bin/fm-session-start.sh` prints exactly one watcher supervision block for the detected primary harness.
-Do not substitute another harness's wait shape when resuming supervision.
-Claude and Grok use tracked background-notify cycles around `bin/fm-watch-arm.sh`.
-Kimi uses its built-in background Bash tool with `run_in_background=true` and `disable_timeout=true`; completion returns as a synthetic User notification to the same main session.
-Codex uses bounded foreground checkpoints through `bin/fm-watch-checkpoint.sh` because Codex cannot reason while a foreground tool call is running.
-OpenCode uses `.opencode/plugins/fm-primary-watch-arm.js`, which coordinates with the turn-end guard plugin and wakes the TUI with `client.session.promptAsync`.
-Pi uses the tracked `.pi/extensions/fm-primary-turnend-guard.ts` plus the tracked `.pi/extensions/fm-primary-pi-watch.ts`, both project-local extensions Pi auto-discovers once trusted.
-When changing any primary watcher adapter, update `docs/supervision-protocols/`, `docs/turnend-guard.md` if a shared idle or turn-end hook changed, and the relevant concise fact below.
-
-## Primary status bar
-
-`docs/status-bar.md` is the single owner of the shared field order, semantics, thresholds, colors, placeholders, adapter surfaces, and verification evidence.
-Claude uses its native tracked project status-line command and Pi its native tracked custom-footer extension.
-Kimi 0.27.0, Codex, and Astra use a guarded companion pane instead - tmux or herdr, whichever provider owns the terminal - because their own surfaces cannot carry the fleet fields.
-Cursor CLI 2026.09.08 does expose a native custom status line, but only in the USER config, so there is no tracked in-repo integration for it and activation is the opt-in `bin/fm-cursor-statusline.sh`.
-
-## Kimi worker + primary (WORKER verified 2026-07-23 on 0.27.0; PRIMARY certified 2026-07-19)
-
-Kimi Code PRIMARY launch runs through `bin/fm-primary.sh kimi-k3` with `--yolo`.
-`bin/fm-primary.sh` accepts two builds without a warning: `KIMI_CERTIFIED_VERSION` 0.27.0, the last full primary certification, and `KIMI_VALIDATED_VERSION` 0.31.1, the newest build whose hook mechanics were re-verified without a full certification.
-Any other build warns and launches; it does not block, because Kimi ships a self-updater.
-`kimi doctor` against the managed home is the functional gate that can still fail a launch.
-The primary launcher supplies `FM_PRIMARY_HARNESS=kimi` because Kimi does not expose a stable native child-process marker.
-Its isolated managed plugin owns native session-start skill injection plus blockable PreToolUse and Stop hooks without editing the operator's source Kimi home.
-
-Worker launch: `KIMI_CODE_HOME=<state>/<id>.kimi-home kimi --yolo --model kimi-code/k3`.
-`--prompt` cannot combine with `--yolo`, and there is no positional interactive brief, so `fm-spawn` delivers the brief after the TUI settles.
-`docs/kimi-harness.md` owns the dated worker evidence.
-
-| Fact | Value |
-|---|---|
-| Busy-pane signature | `thinking...` (reasoning) or `Running a command` (tool). Do NOT match bare `thinking` - idle footer is `K3 thinking: max/high`. |
-| Exit command | `/exit` (one Enter through slash autocomplete closes the pane). |
-| Interrupt | single `Ctrl+C` (cancels the turn; pane survives; prints `Interrupted by user`). |
-| Autonomy | `--yolo` (footer token `yolo`). |
-| Resume | `kimi --yolo --model kimi-code/k3 --continue` |
-| Trust | No trust dialog on a fresh git worktree. |
-| Composer | Bordered idle `> ` classifies `empty`; typed text classifies `pending`; bare `>` is `unknown`. No `FM_COMPOSER_IDLE_RE` override. |
-| Turn-end | Native `Stop` hook in per-task isolated `KIMI_CODE_HOME/config.toml` (project worktree hooks do not load). |
-| Liveness | `pane_current_command` / process name `kimi` (argv0 `kimi-code`); tmux marks `*kimi*` alive. |
-
-Live Kimi primary facts, verified on Kimi Code 0.27.0 in the isolated 2026-07-19 Herdr lab (primary role; still authoritative for primary supervision):
-
-- Foreground turns move Herdr from `working` to `idle`, but Kimi background Bash tasks also count as activity, so never treat Herdr status alone as conversational settlement or proof of supervision.
-- Herdr's detected `agent_session` can lag after Kimi switches sessions in-process; durable Kimi session state and the TUI are authoritative for `/new` and `/sessions` outcomes.
-- Interrupt a running turn with `ctrl+c`.
-- Exit cleanly with `/exit`.
-- Resume inside the TUI with `/sessions`; startup CLI flags `--session [id]` and `--continue` also exist, but `bin/fm-primary.sh` deliberately keeps profile and resume selection separate.
-- A fresh launcher invocation accepts the dead prior pid as a stale lock, and the resumed session re-acquires the lock under the new Kimi pid.
-- Kimi's built-in Bash background task is the only verified watcher host; do not use Kimi `Agent`, `AgentSwarm`, or similar subagent surfaces as Firstmate workers.
-- `docs/architecture.md` owns the dated end-to-end primary evidence, while the four lifecycle guard docs own their exact hook transcripts.
-
-## Launch profile axes
-
-`bin/fm-spawn.sh` accepts concrete `--harness`, `--model`, and `--effort` values chosen by firstmate at intake.
-Do not make the shell scripts parse or match natural-language dispatch rules.
-
-Effort precedence is an explicit per-task captain instruction first, then any applicable standing dispatch profile or secondmate pin, then the generic fallback below.
-Never replace an effort value supplied by either higher-precedence source.
-Use the fallback only when neither the captain nor applicable standing configuration specifies effort.
-Use `low` for well-understood work with an explicit bounded path and `xhigh` for ambiguous investigation or design.
-Choose intermediate levels proportionally as complexity, uncertainty, blast radius, or open-ended reasoning increases.
-When a verified adapter lacks `xhigh`, cap the choice at its highest supported non-`max` level rather than omitting the intended effort silently.
-Never select `max` from this fallback; use it only when the captain has explicitly expressed that per-task or standing preference.
-
-The supported launch-profile flags below are verified locally; each row records its evidence.
-
-| Harness | Model flag | Effort flag | Notes |
-|---|---|---|---|
-| claude | `--model <model>` | `--effort <low\|medium\|high\|xhigh\|max>` | Verified on Claude Code 2.1.196. |
-| codex | `--model <model>` | `-c 'model_reasoning_effort="<low\|medium\|high\|xhigh>"'` | Effort flag verified on codex-cli 0.142.1: the installed binary schema contains `model_reasoning_effort` and the active config uses it. Omitting `max` is an `fm-spawn` choice, not a catalog limit: codex-cli 0.153.4 advertises `max` and `ultra` as well, and `max` answers on the live route (see the codex section). The worker axis stays at low/medium/high/xhigh pending the separate astra-max-effort follow-up. |
-| grok | `--model <model>` | `--reasoning-effort <low\|medium\|high>` | Verified on grok 0.2.99 (2026-07-13). `--effort` is an alias, but firstmate's profile axis is reasoning effort. As of 0.2.99 the ceiling is `high`; both `xhigh` and `max` are rejected with `use one of: high, medium, low`, so firstmate omits them. |
-| pi | `--model <model>` | `--thinking <low\|medium\|high\|xhigh\|max>` | Verified 2026-07-13 on Pi 0.80.6. `pi --help` advertises `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`; `pi --print --model openai-codex/gpt-5.6-sol --thinking max 'Reply with exactly OK.'` completed successfully. |
-| opencode | `--model <provider/model>` | none for firstmate's interactive launch | Verified on opencode 1.17.6. `opencode run` has `--variant`, but firstmate launches the interactive `opencode --prompt` path, which has no verified effort flag. |
-| cursor | `--model <model>` | none - effort is a SUFFIX on the model id | Verified 2026-07-19, tier ladder corrected 2026-08-13. This CLI has no effort flag: `low\|medium\|high` map to `<model>-{low,medium,high}`. The ladder is PER-MODEL: Grok 4.5 stops at `-high`, Grok 4.6 also offers `-xhigh`. `fm-spawn`'s `cursor_model_with_effort` folds the axis in and resolves `xhigh`/`max` against `agent --list-models` - the real `-xhigh` when that model has one, `-high` otherwise or when the catalog is unreadable. An already-tiered (including `-xhigh`) or `[...]`-parameterized model id is never retiered, and `-fast` variants are a separate cost/speed choice never selected implicitly. |
-| kimi | `--model <model>` | none for firstmate's interactive launch | Verified 2026-07-23 on Kimi Code 0.27.0. Launch is `KIMI_CODE_HOME=... kimi --yolo --model kimi-code/k3`; brief is delivered after TUI settle. No verified effort flag on the interactive path. |
-| prime-agent | `--model <provider/model>` | `--thinking <low\|medium\|high\|xhigh\|max>` | Verified 2026-08-07 on v0.7.0. `--help` advertises `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`; `--thinking xhigh` exercised live. `--model` is always emitted explicitly: the CLI's own default is a paid route, and `fm-spawn` refuses non-subscription-quota routes (see the prime-agent section). |
-
-When a requested effort value is outside the harness-specific accepted set, `fm-spawn` records the requested `effort=` in meta but emits no effort flag for that harness.
-This preserves launch success instead of passing a known-bad value.
-
-## Vendor account pinning (verified 2026-09-09)
-
-Only two harnesses have a vendor account concept, and each has its own isolation variable.
-A claude launch pins with `CLAUDE_CONFIG_DIR` and a codex launch with `CODEX_HOME`, both pointing at a home derived as `data/accounts/<vendor>/<name>`.
-`bin/fm-primary.sh <profile> --account <name>` pins a primary, `bin/fm-spawn.sh ... --account <name>` pins a worker and records `account=` in that task's metadata, and `docs/configuration.md` "Vendor account pinning" owns the registry schema.
-An absent `config/accounts.json` means no pinning at all, so every launch behaves exactly as it did before this existed.
-`--account` on a harness or profile with no vendor account concept refuses rather than being ignored.
-
-Never copy, link, or seed a credential directory, `auth.json`, `.credentials.json`, or keychain entry between account homes or from the ambient home.
-A fresh account home is empty and unauthenticated on purpose; the captain logs it in with the command `bin/fm-account.sh create <vendor> <name>` prints.
-A pinned home that is missing or explicitly logged out refuses the launch, and that refusal is the correct outcome.
-
-Operating facts that decide whether a pin can work at all:
-
-- codex isolates through the `auth.json` inside `CODEX_HOME`, so two codex accounts are two independent logins (codex-cli 0.153.4: ambient home `Logged in using ChatGPT`, override home `Not logged in`).
-- claude isolates through the macOS keychain, which it NAMESPACES per config directory. Logging a second seat in under `CLAUDE_CONFIG_DIR` added a `Claude Code-credentials-<hash>` item beside the original and left the ambient seat untouched (claude 2.1.258, proven 2026-09-09).
-- Two Claude seats therefore coexist: both reported `loggedIn: true` at the same time, and neither home held a `.credentials.json`. A pinned Claude home is unauthenticated only until its own login, which the captain performs.
-- Two seats can share one email. On this machine both seats sign in as the captain's single work address and differ only by organization and plan (ambient `max` in a personal org, pinned `team` in the work org), so match an `expect` on the organization id, never the email.
-- `claude auth status` prints JSON on stdout either way and exits 0 logged in, 1 logged out. Read the `loggedIn` field; the exit status cannot separate a logged-out home from a CLI that failed to answer.
-- `codex login status` prints `Logged in using ChatGPT` on stdout and `Not logged in` on stderr, and exposes no account identity at all.
-- Because codex reports no identity, an `expect` value is accepted only for claude accounts; on a codex account it is reported as invalid rather than matched against something invented. `quota-axi --provider codex` does report the identity of a pinned home and would be the surface to use if that check is ever wanted.
-- `quota-axi` 0.1.41 follows both pins rather than reporting the ambient account, and for a pinned Claude seat it finds that home's namespaced keychain item. A newly logged-in seat costs one keychain approval before its first read (`keychain_prompt_required`, remedy `quota-axi --allow-keychain-prompt`), which is the captain's to grant; reads are promptless afterwards, and each seat then shows its own session and weekly pools.
-- Hosted connectors are per seat, so a pinned worker gets that seat's connector tools and no others. Proven 2026-09-09 with two concurrent workers: the Team-pinned worker saw 38 connector tools and completed a live Asana read, while the ambient Max worker saw 4 and had no Asana tool at all. Pinning selects the seat that has a connector; it can never move one between seats.
-
-## no-mistakes skill invocation
-
-Send the validation skill using the target harness's skill invocation form.
-Natural language is acceptable if uncertain.
-
-- claude: `/<skill>`, for example `/no-mistakes`.
-- codex: `$<skill>`, for example `$no-mistakes`; `/<skill>` is claude-only and codex rejects it as "Unrecognized command".
-- opencode: no separate verified skill invocation beyond normal slash-command behavior; use natural language if the exact skill command is uncertain.
-- pi: no separate verified skill invocation beyond normal command behavior; use natural language if the exact skill command is uncertain.
-- cursor: `/<skill>`, for example `/no-mistakes`. Typing `/` opens an autocomplete popup, but unlike grok and codex the FIRST Enter both completes and EXECUTES the highlighted entry (verified: `/ex` plus one Enter ran `/exit`). There is no two-Enter hazard; the inverse risk is that a partially typed command runs whichever entry is highlighted, so send the full command name.
-- grok: `/<skill>`, for example `/no-mistakes` (same form as claude). Verified end to end: grok discovers the user-level `no-mistakes` skill, `/no-mistakes` invokes it, and grok drives a real `no-mistakes axi run`. Like codex's `$`/`/` popups, typing `/<skill>` opens grok's slash-autocomplete, so a too-fast Enter selects the popup entry instead of sending, and for an argument-taking command (like `/no-mistakes`'s optional task-first argument) that first Enter only expands the popup selection into an argument-hint placeholder rather than submitting - a genuine second Enter is required (see the grok section below for the 2026-07-03 incident and fix). `fm_tmux_submit_core`'s retried Enter (used by `fm-send` on the tmux backend) already handles this correctly by reading the cursor row; the herdr backend needed a dedicated fix (`fm_backend_herdr_composer_state`, docs/herdr-backend.md) because its prior delta-based verification false-positived on that same popup-close content change.
-- prime-agent: `/` slash commands exist and extensions can register commands, but no-mistakes invocation is NOT verified on v0.7.0; use natural language if the exact skill command is uncertain.
-
-## claude (VERIFIED)
-
-| Fact | Value |
-|---|---|
-| Busy-pane signature | `esc to interrupt` |
-| Exit command | `/exit` |
-| Interrupt | single Escape |
-| Skill invocation | `/<skill>` (e.g. `/no-mistakes`) |
-
-First launch in a fresh worktree, or first ever on a machine, may show a trust or bypass-permissions confirmation.
-After every spawn, peek the pane within about 20 seconds.
-If such a dialog is showing, accept it from an active firstmate session using `FM_HOME=<this-firstmate-home> bin/fm-send.sh <window> --key Enter`, or the choice the dialog requires, unless `FM_HOME` is already set to the active firstmate home; verify the brief started processing.
-
-Claude renders a predicted-next-prompt suggestion as dim/faint text inside an otherwise-empty composer after a turn completes.
-A plain `tmux capture-pane` cannot tell that ghost text apart from typed text.
-Firstmate launches every claude crewmate and secondmate with `CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false`, scoped to firstmate-launched agents through `bin/fm-spawn.sh`, so it never touches the captain's global config.
-The CLI's `--prompt-suggestions` flag is print/SDK-mode only and does not suppress the interactive composer ghost text, verified empirically on v2.1.186.
-As defense in depth for any pane that flag cannot reach, including the captain's own firstmate composer that away-mode reads, the shared `fm_composer_strip_ghost` extractor in `bin/fm-composer-lib.sh` removes dim/faint SGR 2 ghost runs before pending-input classification on both ANSI-capable readers (tmux and herdr).
-Its broader dark-TRUECOLOR placeholder handling and dark-theme tradeoff are documented in `docs/herdr-backend.md`'s 2026-07-10 incident record.
-That styled capture is internal to the boolean detector only.
-`fm-peek` and every other human or LLM-facing capture path stays plain `tmux capture-pane` with no escape codes.
-
-**Primary-session guard fact (verified 2026-07-04, Claude Code 2.1.201; preserved 2026-07-08, Claude Code 2.1.204).**
-This is separate from the per-task crewmate turn-end hook above (that one just `touch`es a marker file in a task's own `.claude/settings.local.json`).
-The firstmate PRIMARY's own `.claude/settings.json` registers `bin/fm-turnend-guard.sh` as a Stop hook, and exiting with status 2 plus stderr reliably forces the model to continue.
-Claude Code's stdin payload to a Stop hook carries a `stop_hook_active` boolean that is `true` exactly when the current stop attempt is itself a forced continuation from an earlier block this turn; a hook can and should use that as its own loop-guard (always allow the stop when it is already `true`) rather than tracking state itself.
-A project-level `.claude/settings.json` only takes effect when Claude Code's project root is that exact directory - it does not walk up from a subdirectory looking for one, so firstmate launches the primary from the repo root.
-After those settings are loaded, hook command resolution is still cwd-sensitive because Claude Code runs commands through `/bin/sh` against the session's current cwd; keep the tracked command anchored through `"$CLAUDE_PROJECT_DIR"/bin/fm-turnend-guard.sh` and see `docs/turnend-guard.md` for the verified Stop-hook details.
-Claude Code's primary watcher protocol is the lowest-friction path: run `bin/fm-watch-arm.sh` as its own Claude Code background task and treat background-task completion as the wake.
-
-## codex (VERIFIED 2026-06-11, codex-cli 0.139.0)
-
-| Fact | Value |
-|---|---|
-| Busy-pane signature | `esc to interrupt` (shown as `• Working (Xs • esc to interrupt)`) |
-| Exit command | `/quit` (slash popup needs about 1 second between text and Enter; `fm-send` handles it) |
-| Interrupt | single Escape |
-| Skill invocation | `$<skill>` (e.g. `$no-mistakes`); `/<skill>` is claude-only and codex rejects it as "Unrecognized command" |
-
-A `$<skill>` invocation opens a `$`-autocomplete (skill) popup, the same hazard as the `/` slash popup: submitting too fast lets the popup swallow the Enter, so the invocation never lands.
-`fm-send` handles it the same way it handles `/` - it gives the popup a longer settle (1.2s) between typing and the first Enter, with the target backend's submit retry as the safety net - but the `$` settle is scoped to `harness=codex`, read from the target metadata for exact task ids or legacy `fm-<id>` labels.
-That scope matters because, unlike `/`, a leading `$` commonly starts ordinary text (`$5/month`, `$HOME`), so a universal `$` rule would needlessly slow plain steers to claude/opencode/pi; only a codex target receiving a `$...` message gets the popup-settle.
-An explicit `session:window` target has no meta, so its harness is unknown and treated as non-codex (the safe fast-path default).
-This is why the validation trigger (`$no-mistakes`) to a codex crew now lands on the first Enter instead of biting the popup.
-
-Directory trust dialog on first run per repo root: "Do you trust the contents of this directory?"
-Accept with Enter.
-The decision persists for the repo, so later worktrees of the same project skip it.
-
-Resume after exit with `codex resume <session-id>`.
-The session id is printed on quit.
-
-**Primary-session guard fact (verified 2026-07-08, codex-cli 0.142.1).**
-The firstmate PRIMARY's own `.codex/hooks.json` registers a Stop hook that pipes Codex's Stop payload to `bin/fm-turnend-guard.sh`.
-Codex Stop hooks block on exit 2 and expose `stop_hook_active` for the same one-block loop safety Claude uses.
-Codex's Stop payload includes `cwd`, but the tracked primary hook does not use it to choose the guard executable.
-Verified on 2026-07-08: Codex runs the Stop hook command with process PWD set to the hook-loaded project root, and no `CODEX_PROJECT_DIR`, `CODEX_WORKSPACE_ROOT`, or `CODEX_CWD` root variable is set.
-The tracked hook anchors to `pwd -P`, verifies that root is firstmate-shaped and hook-bearing, and then invokes `bin/fm-turnend-guard.sh` with the original payload.
-Codex's primary watcher protocol is `bin/fm-watch-checkpoint.sh --seconds "${FM_CODEX_WATCH_CHECKPOINT:-180}"`, not `bin/fm-watch-arm.sh`.
-The checkpoint is deliberately foreground and bounded so Codex regains control regularly to process user messages and queued wakes.
-
-**Primary Astra profile (verified 2026-09-09, codex-cli 0.153.4).**
-`bin/fm-primary.sh astra` launches the Codex CLI with `--model gpt-6-astra` and exports `FM_PRIMARY_HARNESS=codex` so supervision uses the Codex checkpoint protocol unchanged.
-`gpt-6-astra` requires a Codex build whose model catalog carries that id.
-codex-cli 0.153.4 carries it, listed as `gpt-6-astra` and `openai.gpt-6-astra` with display name `GPT-6-Astra`.
-The model answers through `codex exec` at `model_reasoning_effort` low, medium, high, xhigh, and max.
-Every one of those levels was probed individually on 0.153.4, with the low probe returning `lowOK` and the medium probe returning `mediumOK`.
-Both launch bypass flags are accepted alongside `--model gpt-6-astra` and the effort override.
-A probe carrying `--dangerously-bypass-approvals-and-sandbox` at effort high returned `FLAGSOK`, and a probe carrying both `--dangerously-bypass-approvals-and-sandbox` and `--dangerously-bypass-hook-trust` together at effort high returned `BOTHOK`.
-The SessionStart hook fires: it ran `bin/fm-session-start.sh` and that digest appeared in the probe output.
-The Stop hook fires: the `BOTHOK` run printed `hook: Stop` and `hook: Stop Completed`.
-The SessionStart injection certified on 0.144.4 and the turn-end guard both survive the bump to 0.153.4.
-`bin/fm-primary.sh astra` still accepts low, medium, high, and xhigh only, so every token it resolves is individually proven on the live route.
-max answers too and stays deliberately refused pending the separate follow-up astra-max-effort.
-Every probe used `codex exec`, so the interactive primary launch path that `bin/fm-primary.sh astra` execs has not been exercised.
-Exercising it starts a real orchestrator session rather than a bounded probe.
-The bounded foreground watcher checkpoint that Codex primaries depend on has not been re-verified on 0.153.4.
-codex-cli 0.144.6 is confirmed not to carry `gpt-6-astra`.
-Its bundled catalog tops out at `gpt-5.6-luna` / `gpt-5.6-sol` / `gpt-5.6-terra`.
-0.153.4 is therefore a verified-good floor and not an established minimum.
-Which build between 0.144.6 and 0.153.4 first carries Astra is not established.
-
-## opencode (VERIFIED 2026-06-11, v1.15.7-1.17.6; 1.18.4 busy-queue re-verified 2026-07-20)
-
-| Fact | Value |
-|---|---|
-| Busy-pane signature | `esc interrupt` (dotted spinner footer; note no "to") |
-| Exit command | `/exit` |
-| Interrupt | double Escape; known flaky while a long shell command runs, so a wedged pane may need `/exit` and relaunch |
-
-No trust dialog.
-Opencode can auto-upgrade itself in the background and the running TUI can exit mid-task, observed live from 1.15.7 to 1.17.3.
-If a pane shows the exit banner, relaunch with `--continue` to resume the session.
-`--prompt` does not auto-submit alongside `--continue`, so send the next instruction via `fm-send` once the TUI is up.
-
-**Busy-queued Enter (opencode 1.18.4, tmux backend fix, herdr known gap).**
-While opencode is mid-turn, the composer accepts Enter as a "send when the turn
-ends" keystroke but does not clear the typed text from the composer until the
-turn actually finishes.
-Without a fix, every `fm-send` to a busy opencode pane exits non-zero on a
-false "Enter swallowed", and every daemon escalation that lands while the
-primary is mid-turn is treated as wedged.
-The shared `fm_tmux_submit_enter_core` (`bin/fm-tmux-lib.sh`) now falls back
-to `fm_pane_is_busy` once the Enter-retry budget is spent: a busy pane means
-the Enter was accepted and queued (reported as `empty` so the caller does not
-re-send), while an idle pane keeps `pending` as a genuine swallow. The herdr
-adapter observes the same opencode behavior but needs a separate fix; it is
-recorded as a known gap in `docs/herdr-backend.md` rather than patched here,
-so the tmux adapter does not paper over a herdr-specific shape.
-Regression coverage: `tests/fm-tmux-submit-busy.test.sh` covers the four
-scenarios (busy + pending -> `empty`, idle + pending -> `pending`, busy +
-cleared -> `empty`, idle + cleared -> `empty`).
-
-**Primary-session guard fact (verified 2026-07-08, OpenCode 1.17.6).**
-The firstmate PRIMARY's own `.opencode/plugins/fm-primary-turnend-guard.js` listens for `session.idle`.
-Throwing from `session.idle` does not block `opencode run`, so the primary adapter treats the event as passive and uses `client.session.promptAsync` to force one follow-up turn when `bin/fm-turnend-guard.sh` returns 2.
-The companion `.opencode/plugins/fm-primary-watch-arm.js` owns normal TUI watcher wake supervision and coordinates with the guard plugin before the guard tries a blind-turn follow-up.
-The follow-up was verified in the interactive TUI; `opencode run` can exit before displaying a queued follow-up, so the adapter is fail-open in headless mode.
-
-## pi (VERIFIED 2026-06-11)
-
-| Fact | Value |
-|---|---|
-| Busy-pane signature | `Working...` (braille spinner prefix; no `esc to interrupt` text) |
-| Exit command | `/quit` |
-| Interrupt | single Escape |
-
-Pi has no permission system, so crewmates are always autonomous.
-Keep the brief as one positional argument.
-Multiple positional args become separate queued messages; `fm-spawn`'s template already does this correctly.
-
-Project trust dialog can appear on the first pi run in any not-yet-trusted directory, observed even on clean worktrees.
-Accept with Enter.
-The decision persists per path in `~/.pi/agent/trust.json`, so later spawns in the same worktree slot skip it.
-
-`fm-spawn` keeps the turn-end extension in `state/`, outside the worktree, because project-local extension files make the trust gate strictly worse and pollute the project.
-The extension must listen for pi's `turn_end` event, not `agent_end`, so the watcher wakes after each completed turn instead of only when the whole agent run exits.
-Pi sets `PI_CODING_AGENT=true` for its children; this is its harness-detection env marker.
-
-**Primary-session guard fact (verified 2026-07-09, Pi 0.80.5).**
-The firstmate PRIMARY's own `.pi/extensions/fm-primary-turnend-guard.ts` listens for logical-run `agent_settled`, not per-tool-loop `turn_end`, and uses `pi.sendUserMessage(..., { deliverAs: "followUp" })` to force one guarded follow-up when `bin/fm-turnend-guard.sh` returns 2.
-Without `deliverAs: "followUp"`, Pi rejects the send while the agent is still processing.
-Pi's primary watcher protocol also requires the tracked `.pi/extensions/fm-primary-pi-watch.ts` extension, same trust-once discovery as the turn-end guard.
-The model arms through `fm_watch_arm_pi`, never a foreground bash arm; the watcher tool result and clean-exit fallback are owned by `docs/supervision-protocols/pi.md`.
-`bin/fm-session-start.sh` reports when the live Pi session has not loaded both the turn-end guard and watcher extensions, and points at plain `pi` after project trust as the fix, with `-e` as a trust-free fallback.
-When a secondmate is launched on Pi, `fm-spawn.sh --secondmate` launches Pi with both `-e .pi/extensions/fm-primary-turnend-guard.ts` and `-e .pi/extensions/fm-primary-pi-watch.ts`, both already present in the secondmate home's git worktree.
-The tracked `.pi/extensions/fm-calm.ts` adds the optional `/calm` presentation beside those two, verified loading with them on Pi 0.80.10 (2026-09-13); `docs/calm.md` owns its behavior and record.
-
-## cursor (PRIMARY certified; WORKER partially re-verified 2026-08-13 on `2026.08.11-e8db854`, Grok 4.6)
-
-Cursor CLI (the `agent` binary), running Cursor Grok 4.6.
-Primary launch: `bin/fm-primary.sh cursor-grok` → `agent --yolo --model cursor-grok-4.6-high` with `FM_PRIMARY_HARNESS=cursor`.
-`bin/fm-primary.sh cursor-grok45` → `agent --yolo --model cursor-grok-4.5-high` keeps the previous Grok generation launchable with identical mechanics; it has no alias, and `cursor` still resolves to the certified 4.6 profile.
-Primary hooks reuse tracked `.claude/settings.json` (Cursor maps `SessionStart`/`PreToolUse`/`Stop`).
-All three fire on this build, so the primary turn-end guard is wired rather than best-effort; the `Stop` FAIL recorded on `2026.07.20-8cc9c0b` is superseded.
-An uncertified build now WARNS and launches instead of blocking; the launcher still refuses an explicitly logged-out CLI.
-Supervision protocol: `docs/supervision-protocols/cursor.md` (background-notify).
-Status bar: documented gap (no third-party API).
-Worker launch with a positional prompt: `agent --yolo --workspace <worktree> --model <id> "$(cat <brief>)"`.
-For the effort-in-model-id axis, see the [launch-profile-axes table](#launch-profile-axes).
-`docs/cursor-harness.md` owns the dated evidence, exact output, and every limitation; the facts below are the operating summary.
-
-| Fact | Value |
-|---|---|
-| Busy-pane signature | `ctrl+c to stop` (the footer hint, shown iff a turn is running). Do NOT match the spinner verb: it changes mid-turn (`⠰⠳ Working` while reasoning, `⠠⠛ Running` during a tool call), so matching the verb reads a tool-executing pane as idle. ASCII, avoiding the braille spinner's locale fragility. |
-| Exit command | `/quit` or `/exit` (both "Exit"), clean status 0. Read the chat id from `~/.cursor/chats/<workspace-hash>/<chatId>/` for recovery. |
-| Interrupt | single `Ctrl+C` (cancels the turn, pane survives) |
-| Autonomy | `--yolo` (alias of `--force`, "Run Everything"); auto-approves every tool execution, verified fully unattended |
-| Env marker | `CURSOR_AGENT=1`. Cursor does NOT clear an inherited `CLAUDECODE=1`, so `bin/fm-harness.sh` tests `CURSOR_AGENT` FIRST - otherwise a cursor worker spawned from a claude-hosted firstmate misreports as claude and gets steered with claude's vocabulary. |
-| Resume | `agent --resume=<chatId>`, **launched from the original worktree** |
-
-**Worktree containment.** Never pass `-w`/`--worktree`: cursor worktree allocation is opt-in, so firstmate's own isolated copy stays the only one (verified: `~/.cursor/worktrees/` gained no entry). `--workspace <worktree>` pins the root.
-
-**Trust dialog on EVERY spawn.** "⚠ Workspace Trust Required" blocks startup in any untrusted directory, and every task worktree is a fresh path. Accept with a single `Enter` (or `a`), then verify the brief started processing. It can take ~15-30s to appear - longer than other harnesses - so do not conclude a launch failed before then. `--trust` is `--print`-only and cannot clear it.
-
-**Resume is workspace-scoped and fails open.** Chats live under `~/.cursor/chats/<workspace-hash>/<chatId>/`, so resuming from the wrong cwd silently opens a FRESH session instead of erroring. Recovery must relaunch resume with the task worktree as cwd. From the right cwd it restores the conversation.
-
-**Exit no longer prints the resume id** (2026-08-13, `2026.08.11-e8db854`). `/quit` exits cleanly with status 0, but the "To resume this session: agent --resume=<chatId>" line the 2026-07-19 build printed is gone. Recovery must read the chat id from `~/.cursor/chats/<workspace-hash>/<chatId>/` instead of from exit output, and a resume may show the trust dialog again. Never recover a cursor worker by scraping a resume line that will not be there.
-
-**`--model` mutates account-global state.** It persists as the default in `~/.cursor/cli-config.json`, so always pass `--model` explicitly rather than relying on the default. That file also enables Cursor's own commit/PR agent attribution, which must never produce an agent co-author in a firstmate repo.
-
-**Model label truth.** `fm-spawn` records the folded launch model id and refuses unknown catalog ids when `agent --list-models` is available. Herdr presentation (`fm-visible-status.sh`) prefers the live idle-footer model over meta for cursor workers (`bin/fm-cursor-model-lib.sh`; evidence in `docs/cursor-harness.md`). Busy panes without a model footer keep meta.
-
-Turn-end hook: cursor fires a native `stop` hook per turn. `fm-spawn` writes `<worktree>/.cursor/hooks.json` and gitignores it via `info/exclude`, the same shape as the claude and opencode worktree hooks. Unlike grok, project hooks need NO separate hook-trust grant beyond the workspace trust the spawn already clears.
-
-**Cursor executes claude-format hooks** from `.claude/settings.json` and `.claude/settings.local.json`, mapping `Stop` onto its own `stop`. Disposable worktrees never collide, but never launch a cursor WORKER from the firstmate PRIMARY checkout, whose `.claude/settings.json` Stop hook is the primary's turn-end surface.
-Launching cursor as the PRIMARY from that checkout is the guarded `fm-primary.sh cursor-grok` path.
-
-**Composer classification needed two cursor-specific fixes** (both in the shared owners, both regression-covered by `tests/fm-cursor-adapter.test.sh`): cursor draws the terminal cursor as a REVERSE-VIDEO cell over the idle placeholder's first character, which survives ghost-stripping and made an idle pane read `pending`; and `#{cursor_y}` points at cursor's bottom status area rather than the composer, which made real unsubmitted text read `empty` - a false-empty the away-mode injector would have typed over. The composer row is now found structurally (the last `→ ` row) on the tmux path, scoped to panes positively identified as cursor (`node` COMM + `cursor-agent` argv, the liveness marker) so arrow-prefixed lines in another harness's output can never redirect classification off that pane's real composer row.
-
-Backend applicability: tmux is verified. herdr is composer-safe by construction (structural scan, shared idle default) but its liveness path is unverified for cursor; zellij, orca, and cmux were not exercised with cursor at all.
-
-Liveness: cursor's wrapper execs node, so `#{pane_current_command}` is `node`; `bin/backends/tmux.sh` resolves that through argv, where the versioned `cursor-agent/.../index.js` path survives `exec -a`, and returns `alive`. Any other bare node stays `unknown`, never dead.
-
-Status-line surface: plugins contribute hooks/commands/agents/skills/MCP and no footer content, but cursor 2026.09.08 has a separate user-config-only `statusLine` command key; `docs/status-bar.md` owns that contract and `bin/fm-cursor-statusline.sh` is the opt-in activation route.
-
-## prime-agent (WORKER verified 2026-08-07 on v0.7.0, source tag be9e2fa)
-
-Prime Agent (Prime Intellect), a hard fork of pi whose TUI is a thin client over a per-session daemon worker.
-`docs/prime-agent-harness.md` owns the dated evidence, exact commands, and raw output; the facts below are the operating summary.
-Pin the version: the project releases daily and ships no npm package (install is the release installer or a source build).
-
-| Fact | Value |
-|---|---|
-| Busy-pane signature | `(Waiting\|Thinking\|Executing) · [0-9]+s` - a braille-spinner row in the MESSAGES area (`⠴ Waiting · 0s`, `⠏ Thinking · 3s · ↓ 52 tokens`, `⠹ Executing · 19s · ↑ 111 tokens`). Never match the bare state word (model prose can contain `Thinking`) and never the footer. `Operation aborted · Ns` (post-interrupt) is deliberately not matched. In the shared `FM_BUSY_REGEX_DEFAULT`. |
-| Exit command | `/quit` - cleanly DETACHES the client and prints `Resume this session with: prime-agent --resume <session-id>`. The agent KEEPS RUNNING in the daemon. |
-| Interrupt | single `Ctrl+C` (verified: `Operation aborted · 2s`, pane and process survive, composer idle) |
-| Autonomy | `--autonomous` (+ `--autonomous-max-turns/-max-continuations/-max-tokens/-timeout-ms`, repeatable `--autonomous-gate`); budget exhaustion exits 1 with a clear stderr reason, natural stop exits 0 |
-| Env marker | `PRIME_AGENT_INTERNAL_DAEMON_WORKER`, `PRIME_AGENT_CODING_AGENT_DIR`, `PRIME_AGENT_KERNEL_VENV`, `PRIME_AGENT_LAUNCHER_PATH`, `PRIME_AGENT_BUILD_ID`. It ALSO sets `PI_CODING_AGENT=true` (inherited from pi), so `bin/fm-harness.sh` tests the PRIME_AGENT_* markers FIRST - same shape as CURSOR_AGENT before CLAUDECODE. |
-| Resume | `prime-agent -c` or `-r <session-id>` (id printed on /quit, shown in `list`); restores the daemon-backed session with full context |
-| Trust | None - pi's trust mechanism was removed upstream; no dialog on first launch in a fresh directory |
-| Turn-end | pi-fork extension API: `pi.on("turn_end")` via `-e <path>` (verified live: marker touched at every turn boundary). No hooks.json - "hooks have been renamed to extensions". `fm-spawn` writes `state/<id>.prime-ext.ts` outside the worktree. |
-| Liveness | pane COMM is `node` but the CLI sets `process.title = "prime-agent"`, so the foreground node's argv/comm reads `prime-agent` (verified on macOS). tmux liveness resolves node+argv exactly like cursor. The real agent lives in a daemon worker OUTSIDE the pane. |
-| Launch | `PRIME_AGENT_CODING_AGENT_DIR=<task state> PRIME_AGENT_KERNEL_VENV=<task state>/kernel-venv prime-agent --daemon-socket <task state>/daemon.sock -e <turn-end ext> --model <validated route> [--thinking <effort>] "$(cat <brief>)"` (a positional brief starts the session, like pi). |
-
-**Daemon persistence changes supervision semantics.** The agent survives `/quit`, pane kill, and terminal loss (verified: `prime-agent list` showed the detached session with 0 clients after the TUI exited).
-A dead pane is NOT a stopped worker.
-`fm-spawn` gives every task its own daemon socket because the default socket is per-USER shared (`$TMPDIR/prime-agent-<uid>/daemon.sock`): without it, one task's `list`/`stop` sees and hits every task's agents, and a bare `prime-agent shutdown --force` sweeps ALL discovered daemons (it rejects socket flags).
-Management commands take the socket flag AFTER the subcommand (`prime-agent list --daemon-socket <path>`, `prime-agent stop <id> --daemon-socket <path>`); a flag before the subcommand is misparsed as a positional prompt (verified: it launched a run on the PAID default model and 401'd).
-Teardown order is load-bearing (all verified 2026-08-07): the TUI client auto-relaunches its daemon supervisor on reconnect, so `fm-teardown` runs the daemon stop only AFTER the endpoint is dead; a live session worker watches its supervisor and launches a REPLACEMENT when it dies, so workers are killed before the supervisor (worker sockets are namespaced by the task's supervisor hash, `$TMPDIR/prime-agent-<uid>/worker-<hash>-*.sock`, the hash recovered from the task's `.supervisor-launch-<hash>.lock`); the supervisor itself lingers after its last session stops and is TERM'd by the socket it listens on (its argv is title-rewritten to bare `prime-agent`, so the socket is the only ownership handle).
-
-**Containment needs BOTH env vars** (fm-spawn's template sets them): `PRIME_AGENT_CODING_AGENT_DIR` relocates sessions/auth/logs/daemon state; the kernel venv is hardcoded to `~/.prime/agent/kernel-venv` unless `PRIME_AGENT_KERNEL_VENV` is set (verified: an ipykernel ran from the task-contained venv and no `~/.prime` existed after the lab).
-Auth is `<agentDir>/auth.json`; fm-spawn symlinks the operator's `~/.prime/agent/auth.json` (override `FM_PRIME_AGENT_SOURCE_HOME`) so token refreshes propagate, the same posture as the kimi worker-home links.
-
-**Model routes are quota-guarded at spawn.** Subscription-quota routes only: `opencode/big-pickle`, `opencode/*-free` (OpenCode Zen free models), and `openai-codex/*` (ChatGPT Plus/Pro Codex subscription OAuth).
-`anthropic/*` is REFUSED: it bills per-token extra usage even on a Claude Pro/Max OAuth login (verified $0.1845 for a one-line probe, trial leg 2).
-Every other `opencode/*` id needs paid Zen billing (verified: 401 CreditsError on `opencode/gpt-5.6-sol`).
-An absent `--model` folds to `opencode/deepseek-v4-flash-free` because the CLI's own default is a paid route.
-The guard is `prime_agent_model_route_ok` in `bin/fm-spawn.sh`, regression-covered by `tests/fm-prime-agent-adapter.test.sh`.
-
-**Composer.** Idle composer is a BARE ` > ` row with a rotating dark-truecolor ghost placeholder (` >   Try "add tests for @<filepath>"`; fg 38;2;113;113;122, under the ghost-luminance ceiling, so the shared stripper already drops it; the `Try "..."` pattern is also in the shared idle regex as the plain-row backstop).
-The stripped row reduces to the lone `>` glyph, which the shared dead-shell rule would read `unknown` - so the tmux composer reader promotes the row to a structurally-identified agent prompt row ONLY on panes positively identified as prime-agent (node COMM + prime-agent argv), the same scoping class as cursor's structural fix.
-
-Backend applicability: tmux only. herdr, zellij, orca, and cmux were not exercised with prime-agent.
-
-## grok (VERIFIED 2026-06-29, grok 0.2.73; slash-submit re-verified 2026-07-03 on 0.2.82; reasoning-effort ceiling re-verified 2026-07-13 on 0.2.99; exit paths re-verified upstream 2026-07-19 on grok 0.2.103)
-
-Grok Build TUI (`grok`), a Claude-Code-compatible CLI from xAI.
-Launch with a positional prompt: `grok --always-approve "$(cat <brief>)"`.
-For Grok's supported reasoning-effort values and omission behavior, see the [launch-profile-axes table](#launch-profile-axes).
-
-| Fact | Value |
-|---|---|
-| Busy-pane signature | `Ctrl+c:cancel` (the mid-turn cancel hint in grok's keybind bar, shown iff a turn is running; the spinner line is a braille glyph + `<status>… N.Ns` + `[stop]`, e.g. `⠹ Thinking… 1.1s … [stop]`). Idle keybind bar shows only `Shift+Tab:mode │ Ctrl+.:shortcuts`. The ASCII `Ctrl+c:cancel` is the busy regex (avoids locale fragility of matching braille). |
-| Exit command | `/exit` typed into the composer exits the TUI cleanly and prints `Resume this session with: grok --resume <session-id>`; `Ctrl+Q` double-press within 1000ms remains a fallback; `Ctrl+D` is the quit key in VS Code family terminals; `Ctrl+C` is the interrupt, not the exit. |
-| Interrupt | single `Ctrl+C` (cancels the current turn; the footer shows `Ctrl+c:cancel` mid-turn). `Esc` only moves focus to the scrollback, it does NOT interrupt. |
-| Skill invocation | `/<skill>` (e.g. `/no-mistakes`), same as claude. Opens a slash-autocomplete popup, so a too-fast Enter selects the popup entry instead of sending. For an argument-taking command that first Enter does not submit at all - it expands the selection into an argument-hint placeholder in the composer (e.g. `/compact` -> `/compact compaction instructions`, live-verified), leaving real text still sitting there unsubmitted; a genuine second Enter is required. `fm-send`'s retried Enter lands it on BOTH backends, but only because each backend's own submit-verification correctly recognizes that placeholder-filled text as still-pending - see the incident below. |
-| Autonomy | `--always-approve` (footer shows `· always-approve`); auto-approves every tool execution, verified to run fully unattended. `--permission-mode bypassPermissions` is the stronger equivalent. |
-| Env marker | `GROK_AGENT=1`, set for child/tool processes. grok does NOT set `CLAUDECODE` despite Claude compatibility, so the marker is unambiguous. |
-| Resume | `grok --resume <session-id>` (id printed on exit) or `grok -c` / `--continue` (most recent for the cwd); `--fork-session` branches a new session id. |
-
-**Incident (2026-07-03, herdr backend only, grok 0.2.82):** two grok/herdr crewmates were sent `/no-mistakes` via `fm-send`; both left it fully typed but unsubmitted in the composer for minutes (footer still `Enter:send`), and `fm-send` exited 0 with no error.
-Reproduced live: the herdr adapter's submit-verification at the time treated ANY pane-content change after Enter as "submitted", and the popup-close-with-placeholder-fill described above IS a visible content change even though nothing was actually sent.
-The tmux backend was never affected - `fm_tmux_composer_state` reads the actual cursor row, correctly sees the placeholder text as still-pending, and its retry loop already sends the needed second Enter.
-Fixed in the herdr adapter (`fm_backend_herdr_composer_state`, `bin/backends/herdr.sh`) by classifying the composer's own row structurally instead of diffing raw content; see `docs/herdr-backend.md`'s "Incident (2026-07-03)" section for the full account and `tests/fm-backend-herdr.test.sh` for the regression coverage.
-
-Startup dialog: the "Run Grok Build in a project directory?" project picker appears ONLY when grok is launched from a non-project directory (home, Desktop, Downloads, `/tmp`).
-`fm-spawn` launches inside the treehouse worktree (a git repo root), so the picker never appears and grok treats the worktree as a trusted project automatically - no post-launch keystroke is needed.
-Pin `[hints] project_picker_disabled = true` in `~/.grok/config.toml` if a non-project launch ever needs to skip it.
-
-**TRUECOLOR placeholder styling: covered (task afk-herdr-false-pending, 2026-07-10).**
-A freshly-dismissed, never-typed-into grok composer shows a placeholder ("Type a message...") styled with a dark 24-bit TRUECOLOR foreground, not the SGR-2 dim/faint attribute the ghost stripper originally detected.
-The shared ANSI-aware owner `fm_composer_strip_ghost` (`bin/fm-composer-lib.sh`) now drops a dark/muted truecolor foreground (perceived luminance below `FM_COMPOSER_GHOST_LUMA_MAX`, default 128) as well as dim/faint, so the placeholder is stripped and the row reads empty on both ANSI-capable backends (tmux and herdr route through the same owner).
-Verified live against grok 0.2.93: real input is the bright `38;2;224;222;244` (luminance ~225, kept), while grok's borders and placeholder/hint text are dark truecolor (`38;2;50;47;70` .. `38;2;110;106;134`, luminance ~51..110, dropped).
-This assumes a dark terminal theme, the fleet reality; the SGR-2 signal stays theme-independent.
-Regression coverage: `tests/fm-composer-ghost.test.sh` (`test_strip_ghost_drops_dark_truecolor_ghost`, `test_dark_truecolor_ghost_only_composer_is_not_pending`) and `tests/fm-backend-herdr.test.sh` (`test_composer_state_grok_dark_truecolor_placeholder_is_empty`, `test_composer_state_grok_bright_truecolor_real_text_is_pending`).
-
-**Residual gap, tmux-only (unfixed):**
-in that same pristine placeholder-only state, tmux's own `#{cursor_y}` points at the composer box's BOTTOM BORDER row, one row below the actual text row (the box appears to render one row lower before any real typing starts); once real text is typed the cursor correctly aligns with the text row again.
-This is a row-SELECTION quirk, orthogonal to the styling fix above, and affects only the tmux path (herdr uses a structural composer-row scan, not `cursor_y`, so it is unaffected).
-A correct fix needs a row-window read near `cursor_y` rather than the single `cursor_y` row.
-In practice `fm-spawn` launches grok with the brief as its initial prompt, so a live task's composer is never observed in this pristine pre-typing state - but this is unverified for every path (e.g. a steer sent before grok's first real turn settles) and needs dedicated investigation before relying on it.
-
-Turn-end hook: grok fires a `Stop` hook at every turn boundary, giving firstmate a precise per-turn wake instead of only stale-pane detection.
-grok loads PROJECT hooks (`<worktree>/.grok/hooks/`, `<worktree>/.claude/settings.local.json`) only after the folder is granted hook-trust in `~/.grok/trusted_folders.toml`, which is not automatic and which firstmate will not establish by editing grok's own managed trust store.
-GLOBAL hooks in `~/.grok/hooks/` are always trusted and load on first launch.
-So `fm-spawn` installs ONE firstmate-owned global hook, `~/.grok/hooks/fm-turn-end.json`, plus the companion `~/.grok/hooks/fm-turn-end.sh`, guarded as a no-op for every non-firstmate grok session.
-Its `Stop` command fires only when the current workspace holds a `.fm-grok-turnend` token pointer that matches the firstmate-owned hook registry under `~/.grok/hooks/fm-turn-end.d/`.
-`fm-spawn` writes that per-task pointer (`<worktree>/.fm-grok-turnend`, gitignored via git info/exclude like the other harnesses' worktree hook files) and a matching registry entry naming this task's `state/<id>.turn-ended`.
-The hook reads `$GROK_WORKSPACE_ROOT`, which is always set for hooks and equals the worktree.
-This keeps the hook outside the worktree, needs no trust grant, and writes only firstmate-owned files.
-`fm-teardown` removes the worktree pointer as part of the provider-return operation governed by `bin/fm-worktree-lease-lib.sh`.
-Secondmate spawns skip the pointer (idle panes are healthy, no stale-pane detection for them).
-
-**Primary-session guard fact (verified 2026-07-08, Grok 0.2.91).**
-The firstmate PRIMARY's own `.grok/hooks/fm-primary-turnend-guard.json` invokes `bin/fm-turnend-guard-grok.sh`.
-Grok Stop hooks are passive for this purpose: exit 2 does not make the model continue.
-The adapter therefore runs the shared predicate and, when it returns 2, forces one same-session follow-up with `grok --resume <sessionId> -p <guard-reason>` while setting `GROK_TURNEND_GUARD_ACTIVE=1` so the nested Stop hook does not recurse.
-It does not pass `--permission-mode`, so the passive hook cannot escalate the primary session's tool permissions.
-Project-local Grok hooks require folder trust, verified with launch-time `--trust`; if the primary firstmate checkout is not trusted for Grok hooks, this primary guard fails open and `fm-guard.sh` remains the next-command alarm.
-Grok's primary watcher protocol is Claude-shaped background-notify around `bin/fm-watch-arm.sh`; the passive Stop hook is only a backstop for blind turn ends.
+`../../../bin/fm-harness.sh` prints firstmate's own harness from verified environment markers and process ancestry, and owns how they combine.
+A marker names its harness, but a structural ancestor of a different harness outranks it, because a marker is ordinary environment state a child or a multiplexer can retain while ancestry is what proves who owns the process tree.
+Only `FM_PI_HARNESS=pi-signed` at the launch boundary together with `PI_CODING_AGENT=true` selects Pi-signed; shared unmarked launcher ancestry remains Pi.
+omp publishes no marker of its own; `FM_OMP_HARNESS=omp` is Firstmate's launch marker and the anchored process name `omp` is its ancestry evidence, as `references/harness/omp.md` records.
+`../../../bin/fm-spawn.sh` owns worker marker establishment, while the README launch command owns the signed-primary boundary.
+`../../../bin/fm-harness.sh crew` resolves `config/crew-harness`, where absent or `default` means firstmate's own harness.
+`../../../bin/fm-harness.sh secondmate` resolves `config/secondmate-harness` -> `config/crew-harness` -> firstmate's own harness.
+`../../../bin/fm-spawn.sh` re-resolves on every spawn, and an explicit per-spawn argument wins for that spawn.
+A new adapter's verified marker and command name must land in `../../../bin/fm-harness.sh`.
+
+## Operation-to-reference matrix
+
+Every emitted plan appends the selected or recorded harness reference after the named common references.
+The `harness-adapter-routing-v1` object is the machine-readable and human-visible selection contract: choose the operation, choose the scenario within it, then append the selected harness reference.
+`default` is the normal scenario when no narrower scenario applies.
+Kimi establishes its upstream primary boundary in its selected harness reference; this fork certifies Kimi and Cursor PRIMARY profiles of its own through `bin/fm-primary.sh`, and each harness reference states which role its facts cover.
+Muse and Gemini follow Non-negotiable safety above.
+A new tool remains undispatchable until the `verify` plan, its harness entry, every named owner, and the live checks land.
+
+```json harness-adapter-routing-v1
+{
+  "operations": {
+    "start": {
+      "default": ["references/common/dispatch.md", "references/common/model-and-effort.md"],
+      "trust-dialog": ["references/common/control-and-recovery.md"]
+    },
+    "trust": {"default": ["references/common/control-and-recovery.md"]},
+    "skill": {"default": ["references/common/control-and-recovery.md"]},
+    "interrupt": {"default": ["references/common/control-and-recovery.md"]},
+    "exit": {"default": ["references/common/control-and-recovery.md"]},
+    "resume": {"default": ["references/common/control-and-recovery.md"]},
+    "recovery": {
+      "default": ["references/common/control-and-recovery.md"],
+      "replacement-profile": ["references/common/control-and-recovery.md", "references/common/dispatch.md", "references/common/model-and-effort.md"],
+      "secondmate": ["references/common/control-and-recovery.md", "references/common/primary-hooks.md"],
+      "replacement-secondmate": ["references/common/control-and-recovery.md", "references/common/dispatch.md", "references/common/model-and-effort.md", "references/common/primary-hooks.md"]
+    },
+    "primary": {"default": ["references/common/primary-hooks.md"]},
+    "model-effort": {
+      "default": ["references/common/model-and-effort.md"],
+      "configured-profile": ["references/common/model-and-effort.md", "references/common/dispatch.md"]
+    },
+    "verify": {"default": ["references/common/dispatch.md", "references/common/control-and-recovery.md", "references/common/primary-hooks.md", "references/common/model-and-effort.md"]}
+  },
+  "harnesses": {
+    "claude": "references/harness/claude.md",
+    "codex": "references/harness/codex.md",
+    "opencode": "references/harness/opencode.md",
+    "pi": "references/harness/pi.md",
+    "pi-signed": "references/harness/pi.md",
+    "prime-agent": "references/harness/prime-agent.md",
+    "grok": "references/harness/grok.md",
+    "kimi": "references/harness/kimi.md",
+    "cursor": "references/harness/cursor.md",
+    "gemini": "references/harness/gemini.md",
+    "muse": "references/harness/muse.md",
+    "rovo": "references/harness/rovo.md",
+    "omp": "references/harness/omp.md",
+    "agy": "references/harness/agy.md"
+  }
+}
+```

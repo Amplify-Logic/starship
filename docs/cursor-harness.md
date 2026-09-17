@@ -166,9 +166,14 @@ runtime substitution such as a third-party pool exhaustion while meta still
 carries the requested id). Firstmate's defenses:
 
 1. `fm-spawn` folds cursor effort into the launch model id, records that launch id
-   as `model=` (with `model_requested=` when it differs), and refuses unknown ids
-   when `agent --list-models` / `FM_CURSOR_MODEL_CATALOG` is available
-   (`bin/fm-cursor-model-lib.sh`).
+   as `model=` (with `model_requested=` when it differs), and refuses the folded id
+   when the live catalog loads and does not carry it (`bin/fm-cursor-model-lib.sh`).
+   The catalog is read from the same executable the spawn resolved and will launch
+   (`cursor-agent`, else legacy `agent`, per `fm_cursor_resolve_binary`), or from
+   `FM_CURSOR_MODEL_CATALOG` when that override names a file. The read is bounded by
+   `FM_CURSOR_PROBE_TIMEOUT`, and a read that times out or errors leaves the catalog
+   *unavailable*, which never refuses a spawn - only a catalog that loaded and lacks
+   the id does.
 2. `fm-visible-status.sh` prefers the idle pane footer model over meta for cursor
    workers, and writes `model_live=` when they disagree.
 
@@ -557,7 +562,7 @@ The second was the worse one: `-xhigh` does not end in `-high`, so it missed the
 
 A captain naming the exact `-xhigh` id could not dispatch at all.
 
-`xhigh` and `max` now resolve against `agent --list-models`: the real `-xhigh` tier when that model has one, `-high` otherwise, and `-high` when the catalog cannot be read, since `-high` is the tier every verified cursor model has.
+`xhigh` and `max` now resolve against the live catalog read from the resolved cursor binary (section 2): the real `-xhigh` tier when that model has one, `-high` otherwise, and `-high` when the catalog cannot be read, since `-high` is the tier every verified cursor model has.
 
 Fast variants remain a separate cost choice that the effort axis never selects.
 
