@@ -19,6 +19,21 @@ REAL_GIT=$(command -v git)
 OTHER_PID=
 RECOVERY_WORKER_PID=
 REPEAT_WORKER_PID=
+STALE_LOCK_WORKER_PID=
+LIVE_LOCK_WORKER_PID=
+LIVE_LOCK_CHALLENGER_PID=
+LIVE_CLAIM_WORKER_PID=
+SCRATCH_FAIL_WORKER_PID=
+LATE_QUARANTINE_WORKER_PID=
+LATE_QUARANTINE_PROCESS_PID=
+FINISHED_RECLAIM_WORKER_PID=
+FINISHED_RECLAIM_OWNER_PID=
+SHUTDOWN_TEMP_WORKER_PID=
+SWEPT_QUARANTINE_WORKER_PID=
+DRIFT_OWNER_PID=
+DRIFT_HEARTBEAT_PID=
+DRIFT_CHALLENGER_PID=
+ABANDONED_CLAIM_WORKER_PID=
 RESTART_SUPERVISOR_PID=
 mkdir -p "$REMOTE_ROOT/bin" "$REMOTE_HOME" "$ACCOUNT_HOME" "$RUNTIME_BIN"
 # worker.pid records the serving child, not its restart supervisor, so stopping
@@ -28,6 +43,21 @@ cleanup_remote_job_fixture() {
   [ -z "$OTHER_PID" ] || kill "$OTHER_PID" 2>/dev/null || true
   [ -z "$RECOVERY_WORKER_PID" ] || kill "$RECOVERY_WORKER_PID" 2>/dev/null || true
   [ -z "$REPEAT_WORKER_PID" ] || kill "$REPEAT_WORKER_PID" 2>/dev/null || true
+  [ -z "$STALE_LOCK_WORKER_PID" ] || kill "$STALE_LOCK_WORKER_PID" 2>/dev/null || true
+  [ -z "$LIVE_LOCK_WORKER_PID" ] || kill "$LIVE_LOCK_WORKER_PID" 2>/dev/null || true
+  [ -z "$LIVE_LOCK_CHALLENGER_PID" ] || kill "$LIVE_LOCK_CHALLENGER_PID" 2>/dev/null || true
+  [ -z "$DRIFT_HEARTBEAT_PID" ] || kill "$DRIFT_HEARTBEAT_PID" 2>/dev/null || true
+  [ -z "$DRIFT_OWNER_PID" ] || kill "$DRIFT_OWNER_PID" 2>/dev/null || true
+  [ -z "$DRIFT_CHALLENGER_PID" ] || kill "$DRIFT_CHALLENGER_PID" 2>/dev/null || true
+  [ -z "$ABANDONED_CLAIM_WORKER_PID" ] || kill "$ABANDONED_CLAIM_WORKER_PID" 2>/dev/null || true
+  [ -z "$LIVE_CLAIM_WORKER_PID" ] || kill "$LIVE_CLAIM_WORKER_PID" 2>/dev/null || true
+  [ -z "$SCRATCH_FAIL_WORKER_PID" ] || kill "$SCRATCH_FAIL_WORKER_PID" 2>/dev/null || true
+  [ -z "$LATE_QUARANTINE_WORKER_PID" ] || kill -KILL "$LATE_QUARANTINE_WORKER_PID" 2>/dev/null || true
+  [ -z "$LATE_QUARANTINE_PROCESS_PID" ] || kill "$LATE_QUARANTINE_PROCESS_PID" 2>/dev/null || true
+  [ -z "$FINISHED_RECLAIM_WORKER_PID" ] || kill -KILL "$FINISHED_RECLAIM_WORKER_PID" 2>/dev/null || true
+  [ -z "$FINISHED_RECLAIM_OWNER_PID" ] || kill "$FINISHED_RECLAIM_OWNER_PID" 2>/dev/null || true
+  [ -z "$SHUTDOWN_TEMP_WORKER_PID" ] || kill -KILL "$SHUTDOWN_TEMP_WORKER_PID" 2>/dev/null || true
+  [ -z "$SWEPT_QUARANTINE_WORKER_PID" ] || kill -KILL "$SWEPT_QUARANTINE_WORKER_PID" 2>/dev/null || true
   [ -z "$RESTART_SUPERVISOR_PID" ] || kill -KILL "$RESTART_SUPERVISOR_PID" 2>/dev/null || true
   if [ -f "$STATE_ROOT/worker.pid" ]; then
     fm_remote_job_stop_worker_tree "$(cat "$STATE_ROOT/worker.pid")" || true
@@ -654,8 +684,9 @@ pass "quarantine recovery refuses unverifiable supervisors and ignores reused pi
 # bounded burst and then keep signalling until it is gone: the first signal
 # starts the shutdown and every later one lands inside it, the same way the group
 # signal and the forwarded signal do. A shutdown that dies part way through
-# leaves its ownership lock behind holding a half-written temp file no later
-# worker can clear, and every replacement then fails to report ready.
+# leaves its ownership lock behind holding a half-written temp file. Acquire
+# reclaim clears those leftovers, but this case still pins that shutdown itself
+# ignores the repeat so it can finish and release ownership without a race.
 #
 # The burst is bounded and the follow-up signals are paced deliberately. An
 # unpaced signal loop delivers hundreds of thousands of signals per second,
@@ -715,6 +746,592 @@ kill -TERM "$REPEAT_WORKER_PID"
 wait "$REPEAT_WORKER_PID" 2>/dev/null || true
 REPEAT_WORKER_PID=
 pass "a repeatedly signalled shutdown still releases ownership for the next worker"
+
+# Crash or a shutdown killed part way through leaves the ownership directory
+# holding half-written mktemp files. Reclaim used to remove only pid/start/command
+# and then rmdir, so those leftovers made every later worker exit 1 and the
+# supervisor restart-storm. A dead owner, leftover temps, and a leftover
+# heartbeat must all be reclaimable; a live owner that still heartbeats must not
+# be stolen.
+STALE_LOCK_HOME="$TMP_ROOT/stale-lock-account"
+STALE_LOCK_STATE="$TMP_ROOT/stale-lock-jobs"
+mkdir -p "$STALE_LOCK_HOME" "$STALE_LOCK_STATE/worker.lock"
+chmod 700 "$STALE_LOCK_HOME" "$STALE_LOCK_STATE" "$STALE_LOCK_STATE/worker.lock"
+printf '999999\n' > "$STALE_LOCK_STATE/worker.lock/pid"
+printf 'stale-start\n' > "$STALE_LOCK_STATE/worker.lock/start"
+printf 'stale-command\n' > "$STALE_LOCK_STATE/worker.lock/command"
+printf 'interrupted\n' > "$STALE_LOCK_STATE/worker.lock/.pid.XXXXXX"
+printf 'interrupted\n' > "$STALE_LOCK_STATE/worker.lock/.start.XXXXXX"
+printf 'interrupted\n' > "$STALE_LOCK_STATE/worker.lock/.command.XXXXXX"
+printf 'interrupted\n' > "$STALE_LOCK_STATE/worker.lock/.quarantine.XXXXXX"
+printf '999999\n' > "$STALE_LOCK_STATE/worker.pid"
+printf '999999\n' > "$STALE_LOCK_STATE/worker.ready"
+chmod 600 "$STALE_LOCK_STATE/worker.lock"/* "$STALE_LOCK_STATE/worker.lock"/.[!.]* \
+  "$STALE_LOCK_STATE/worker.pid" "$STALE_LOCK_STATE/worker.ready"
+touch -t 200001010000 "$STALE_LOCK_STATE/worker.lock" "$STALE_LOCK_STATE/worker.ready" \
+  "$STALE_LOCK_STATE/worker.pid"
+HOME="$STALE_LOCK_HOME" FM_ROOT_OVERRIDE="$REMOTE_ROOT" FM_REMOTE_JOB_STATE_ROOT="$STALE_LOCK_STATE" \
+  FM_REMOTE_JOB_PLATFORM_OVERRIDE=Linux "$REMOTE_ROOT/bin/fm-remote-job-worker.sh" --serve \
+  > "$TMP_ROOT/stale-lock.out" 2> "$TMP_ROOT/stale-lock.err" &
+STALE_LOCK_WORKER_PID=$!
+STALE_LOCK_READY=
+for _ in $(seq 1 300); do
+  STALE_LOCK_READY=$(cat "$STALE_LOCK_STATE/worker.ready" 2>/dev/null || true)
+  case "$STALE_LOCK_READY" in
+    ''|999999) ;;
+    *) kill -0 "$STALE_LOCK_READY" 2>/dev/null && break ;;
+  esac
+  if ! kill -0 "$STALE_LOCK_WORKER_PID" 2>/dev/null; then
+    break
+  fi
+  sleep 0.05
+done
+if ! kill -0 "$STALE_LOCK_WORKER_PID" 2>/dev/null; then
+  wait "$STALE_LOCK_WORKER_PID" 2>/dev/null || true
+  STALE_LOCK_WORKER_PID=
+  fail "a stale leftover lock made the next worker exit instead of reclaiming: $(cat "$TMP_ROOT/stale-lock.err")"
+fi
+case "$STALE_LOCK_READY" in
+  ''|999999) fail "the worker did not reclaim a stale leftover ownership lock" ;;
+esac
+kill -0 "$STALE_LOCK_READY" 2>/dev/null \
+  || fail "the reclaimed worker pid is not alive"
+kill -TERM "$STALE_LOCK_WORKER_PID"
+wait "$STALE_LOCK_WORKER_PID" 2>/dev/null || true
+STALE_LOCK_WORKER_PID=
+pass "a stale leftover ownership lock is reclaimed by the next worker"
+
+LIVE_LOCK_HOME="$TMP_ROOT/live-lock-account"
+LIVE_LOCK_STATE="$TMP_ROOT/live-lock-jobs"
+mkdir -p "$LIVE_LOCK_HOME"
+chmod 700 "$LIVE_LOCK_HOME"
+HOME="$LIVE_LOCK_HOME" FM_ROOT_OVERRIDE="$REMOTE_ROOT" FM_REMOTE_JOB_STATE_ROOT="$LIVE_LOCK_STATE" \
+  FM_REMOTE_JOB_PLATFORM_OVERRIDE=Linux "$REMOTE_ROOT/bin/fm-remote-job-worker.sh" --serve \
+  > "$TMP_ROOT/live-lock.out" 2> "$TMP_ROOT/live-lock.err" &
+LIVE_LOCK_WORKER_PID=$!
+for _ in $(seq 1 300); do
+  [ -f "$LIVE_LOCK_STATE/worker.ready" ] && break
+  sleep 0.05
+done
+assert_present "$LIVE_LOCK_STATE/worker.ready" "the live owner did not become ready"
+LIVE_LOCK_PID=$(cat "$LIVE_LOCK_STATE/worker.ready")
+kill -0 "$LIVE_LOCK_PID" 2>/dev/null || fail "the live owner pid is not alive"
+HOME="$LIVE_LOCK_HOME" FM_ROOT_OVERRIDE="$REMOTE_ROOT" FM_REMOTE_JOB_STATE_ROOT="$LIVE_LOCK_STATE" \
+  FM_REMOTE_JOB_PLATFORM_OVERRIDE=Linux "$REMOTE_ROOT/bin/fm-remote-job-worker.sh" --serve \
+  > "$TMP_ROOT/live-lock-challenger.out" 2> "$TMP_ROOT/live-lock-challenger.err" &
+LIVE_LOCK_CHALLENGER_PID=$!
+LIVE_LOCK_CHALLENGER_DEADLINE=$((SECONDS + 5))
+while kill -0 "$LIVE_LOCK_CHALLENGER_PID" 2>/dev/null && [ "$SECONDS" -lt "$LIVE_LOCK_CHALLENGER_DEADLINE" ]; do
+  sleep 0.05
+done
+if kill -0 "$LIVE_LOCK_CHALLENGER_PID" 2>/dev/null; then
+  kill -TERM "$LIVE_LOCK_CHALLENGER_PID" 2>/dev/null || true
+  wait "$LIVE_LOCK_CHALLENGER_PID" 2>/dev/null || true
+  LIVE_LOCK_CHALLENGER_PID=
+  fail "a challenger waited on a live owner instead of leaving the lock in place"
+fi
+set +e
+wait "$LIVE_LOCK_CHALLENGER_PID"
+LIVE_LOCK_CHALLENGER_RC=$?
+set -e
+LIVE_LOCK_CHALLENGER_PID=
+[ "$LIVE_LOCK_CHALLENGER_RC" -eq 0 ] \
+  || fail "a challenger stole or failed against a live owner (rc=$LIVE_LOCK_CHALLENGER_RC): $(cat "$TMP_ROOT/live-lock-challenger.err")"
+[ "$(cat "$LIVE_LOCK_STATE/worker.lock/pid")" = "$LIVE_LOCK_PID" ] \
+  || fail "a challenger replaced a live owner's lock pid"
+kill -0 "$LIVE_LOCK_PID" 2>/dev/null || fail "a challenger killed the live owner"
+kill -TERM "$LIVE_LOCK_WORKER_PID"
+wait "$LIVE_LOCK_WORKER_PID" 2>/dev/null || true
+LIVE_LOCK_WORKER_PID=
+pass "a live owner that still heartbeats is not stolen"
+
+# A live owner is only recognised by its recorded ps start and command, and a
+# suspend/resume can change what ps reports for a process that never died. The
+# owner is still alive and still refreshing its heartbeat, so that fresh
+# heartbeat has to keep the lock: a challenger must leave the records alone
+# rather than sweep a live owner out and serve the same account queue alongside
+# it. Once the heartbeat does go stale the same challenger must still reclaim,
+# so the guard cannot become the restart storm it replaced.
+DRIFT_HOME="$TMP_ROOT/drift-lock-account"
+DRIFT_STATE="$TMP_ROOT/drift-lock-jobs"
+mkdir -p "$DRIFT_HOME" "$DRIFT_STATE/worker.lock"
+chmod 700 "$DRIFT_HOME" "$DRIFT_STATE" "$DRIFT_STATE/worker.lock"
+sleep 300 &
+DRIFT_OWNER_PID=$!
+printf '%s\n' "$DRIFT_OWNER_PID" > "$DRIFT_STATE/worker.lock/pid"
+printf 'Thu Jan  1 00:00:00 2000\n' > "$DRIFT_STATE/worker.lock/start"
+printf 'a command ps no longer reports\n' > "$DRIFT_STATE/worker.lock/command"
+printf '%s\n' "$DRIFT_OWNER_PID" > "$DRIFT_STATE/worker.pid"
+printf '%s\n' "$DRIFT_OWNER_PID" > "$DRIFT_STATE/worker.ready"
+chmod 600 "$DRIFT_STATE/worker.lock"/* "$DRIFT_STATE/worker.pid" "$DRIFT_STATE/worker.ready"
+touch -t 200001010000 "$DRIFT_STATE/worker.lock"
+while kill -0 "$DRIFT_OWNER_PID" 2>/dev/null; do
+  touch "$DRIFT_STATE/worker.ready" 2>/dev/null || break
+  sleep 1
+done &
+DRIFT_HEARTBEAT_PID=$!
+HOME="$DRIFT_HOME" FM_ROOT_OVERRIDE="$REMOTE_ROOT" FM_REMOTE_JOB_STATE_ROOT="$DRIFT_STATE" \
+  FM_REMOTE_JOB_PLATFORM_OVERRIDE=Linux "$REMOTE_ROOT/bin/fm-remote-job-worker.sh" --serve \
+  > "$TMP_ROOT/drift-lock.out" 2> "$TMP_ROOT/drift-lock.err" &
+DRIFT_CHALLENGER_PID=$!
+DRIFT_DEADLINE=$((SECONDS + 2))
+while [ "$SECONDS" -lt "$DRIFT_DEADLINE" ]; do
+  [ "$(cat "$DRIFT_STATE/worker.lock/pid" 2>/dev/null || true)" = "$DRIFT_OWNER_PID" ] \
+    || fail "a challenger swept a live owner whose recorded ps records had drifted"
+  kill -0 "$DRIFT_CHALLENGER_PID" 2>/dev/null \
+    || fail "a challenger failed against a heartbeating owner: $(cat "$TMP_ROOT/drift-lock.err")"
+  sleep 0.25
+done
+kill -0 "$DRIFT_OWNER_PID" 2>/dev/null || fail "a challenger killed the drifted owner"
+kill "$DRIFT_HEARTBEAT_PID" 2>/dev/null || true
+wait "$DRIFT_HEARTBEAT_PID" 2>/dev/null || true
+DRIFT_HEARTBEAT_PID=
+DRIFT_DEAD_OWNER_PID=$DRIFT_OWNER_PID
+kill "$DRIFT_OWNER_PID" 2>/dev/null || true
+wait "$DRIFT_OWNER_PID" 2>/dev/null || true
+DRIFT_OWNER_PID=
+DRIFT_READY=
+for _ in $(seq 1 600); do
+  DRIFT_READY=$(cat "$DRIFT_STATE/worker.ready" 2>/dev/null || true)
+  case "$DRIFT_READY" in
+    ''|"$DRIFT_DEAD_OWNER_PID") ;;
+    *) kill -0 "$DRIFT_READY" 2>/dev/null && break ;;
+  esac
+  kill -0 "$DRIFT_CHALLENGER_PID" 2>/dev/null || break
+  sleep 0.1
+done
+kill -0 "$DRIFT_CHALLENGER_PID" 2>/dev/null \
+  || fail "the deferring challenger exited instead of reclaiming a lock gone stale: $(cat "$TMP_ROOT/drift-lock.err")"
+kill -0 "${DRIFT_READY:-0}" 2>/dev/null \
+  || fail "the deferring challenger never reclaimed the lock once the heartbeat went stale"
+kill -TERM "$DRIFT_CHALLENGER_PID"
+wait "$DRIFT_CHALLENGER_PID" 2>/dev/null || true
+DRIFT_CHALLENGER_PID=
+pass "a heartbeating owner with drifted ps records is deferred to until it goes stale"
+
+# Reclaim is single-writer: the winner holds a claim marker inside the ownership
+# directory while it sweeps, so a loser cannot delete the records the winner
+# publishes. A reclaimer killed while holding that marker must not wedge the
+# account forever, so a marker left behind on an otherwise stale lock is taken
+# over by the next worker once the marker itself has gone stale.
+ABANDONED_HOME="$TMP_ROOT/abandoned-claim-account"
+ABANDONED_STATE="$TMP_ROOT/abandoned-claim-jobs"
+mkdir -p "$ABANDONED_HOME" "$ABANDONED_STATE/worker.lock/claim"
+chmod 700 "$ABANDONED_HOME" "$ABANDONED_STATE" "$ABANDONED_STATE/worker.lock" \
+  "$ABANDONED_STATE/worker.lock/claim"
+printf '999999\n' > "$ABANDONED_STATE/worker.lock/pid"
+printf 'stale-start\n' > "$ABANDONED_STATE/worker.lock/start"
+printf 'stale-command\n' > "$ABANDONED_STATE/worker.lock/command"
+printf '999999\n' > "$ABANDONED_STATE/worker.ready"
+chmod 600 "$ABANDONED_STATE/worker.lock"/pid "$ABANDONED_STATE/worker.lock"/start \
+  "$ABANDONED_STATE/worker.lock"/command "$ABANDONED_STATE/worker.ready"
+touch -t 200001010000 "$ABANDONED_STATE/worker.lock/claim" "$ABANDONED_STATE/worker.ready" \
+  "$ABANDONED_STATE/worker.lock"
+HOME="$ABANDONED_HOME" FM_ROOT_OVERRIDE="$REMOTE_ROOT" FM_REMOTE_JOB_STATE_ROOT="$ABANDONED_STATE" \
+  FM_REMOTE_JOB_PLATFORM_OVERRIDE=Linux "$REMOTE_ROOT/bin/fm-remote-job-worker.sh" --serve \
+  > "$TMP_ROOT/abandoned-claim.out" 2> "$TMP_ROOT/abandoned-claim.err" &
+ABANDONED_CLAIM_WORKER_PID=$!
+ABANDONED_READY=
+for _ in $(seq 1 300); do
+  ABANDONED_READY=$(cat "$ABANDONED_STATE/worker.ready" 2>/dev/null || true)
+  case "$ABANDONED_READY" in
+    ''|999999) ;;
+    *) kill -0 "$ABANDONED_READY" 2>/dev/null && break ;;
+  esac
+  kill -0 "$ABANDONED_CLAIM_WORKER_PID" 2>/dev/null || break
+  sleep 0.05
+done
+if ! kill -0 "$ABANDONED_CLAIM_WORKER_PID" 2>/dev/null; then
+  wait "$ABANDONED_CLAIM_WORKER_PID" 2>/dev/null || true
+  ABANDONED_CLAIM_WORKER_PID=
+  fail "an abandoned reclaim marker wedged the next worker: $(cat "$TMP_ROOT/abandoned-claim.err")"
+fi
+case "$ABANDONED_READY" in
+  ''|999999) fail "the worker did not take over a lock left behind by a killed reclaimer" ;;
+esac
+assert_absent "$ABANDONED_STATE/worker.lock/claim" \
+  "the reclaiming worker left its claim marker behind"
+kill -TERM "$ABANDONED_CLAIM_WORKER_PID"
+wait "$ABANDONED_CLAIM_WORKER_PID" 2>/dev/null || true
+ABANDONED_CLAIM_WORKER_PID=
+pass "a lock left claimed by a killed reclaimer is taken over, not wedged"
+
+# The marker a reclaiming worker holds is only abandoned once the marker itself
+# has gone stale. The ownership directory around it can be arbitrarily old - a
+# dead owner published its records long ago - so reading that directory's age
+# instead would let a challenger rename a peer's live marker aside and reclaim
+# alongside it. A fresh marker on an otherwise stale lock has to be left exactly
+# as it stands while the challenger exits 0.
+LIVE_CLAIM_HOME="$TMP_ROOT/live-claim-account"
+LIVE_CLAIM_STATE="$TMP_ROOT/live-claim-jobs"
+mkdir -p "$LIVE_CLAIM_HOME" "$LIVE_CLAIM_STATE/worker.lock"
+chmod 700 "$LIVE_CLAIM_HOME" "$LIVE_CLAIM_STATE" "$LIVE_CLAIM_STATE/worker.lock"
+printf '999999\n' > "$LIVE_CLAIM_STATE/worker.lock/pid"
+printf 'stale-start\n' > "$LIVE_CLAIM_STATE/worker.lock/start"
+printf 'stale-command\n' > "$LIVE_CLAIM_STATE/worker.lock/command"
+printf '999999\n' > "$LIVE_CLAIM_STATE/worker.ready"
+chmod 600 "$LIVE_CLAIM_STATE/worker.lock"/* "$LIVE_CLAIM_STATE/worker.ready"
+mkdir "$LIVE_CLAIM_STATE/worker.lock/claim"
+chmod 700 "$LIVE_CLAIM_STATE/worker.lock/claim"
+touch -t 200001010000 "$LIVE_CLAIM_STATE/worker.lock" "$LIVE_CLAIM_STATE/worker.ready"
+HOME="$LIVE_CLAIM_HOME" FM_ROOT_OVERRIDE="$REMOTE_ROOT" FM_REMOTE_JOB_STATE_ROOT="$LIVE_CLAIM_STATE" \
+  FM_REMOTE_JOB_PLATFORM_OVERRIDE=Linux "$REMOTE_ROOT/bin/fm-remote-job-worker.sh" --serve \
+  > "$TMP_ROOT/live-claim.out" 2> "$TMP_ROOT/live-claim.err" &
+LIVE_CLAIM_WORKER_PID=$!
+LIVE_CLAIM_DEADLINE=$((SECONDS + 8))
+while kill -0 "$LIVE_CLAIM_WORKER_PID" 2>/dev/null && [ "$SECONDS" -lt "$LIVE_CLAIM_DEADLINE" ]; do
+  sleep 0.05
+done
+if kill -0 "$LIVE_CLAIM_WORKER_PID" 2>/dev/null; then
+  kill -TERM "$LIVE_CLAIM_WORKER_PID" 2>/dev/null || true
+  wait "$LIVE_CLAIM_WORKER_PID" 2>/dev/null || true
+  LIVE_CLAIM_WORKER_PID=
+  fail "a challenger did not defer to a peer's fresh reclaim marker"
+fi
+set +e
+wait "$LIVE_CLAIM_WORKER_PID"
+LIVE_CLAIM_RC=$?
+set -e
+LIVE_CLAIM_WORKER_PID=
+[ "$LIVE_CLAIM_RC" -eq 0 ] \
+  || fail "a challenger failed instead of deferring to a peer's reclaim marker (rc=$LIVE_CLAIM_RC): $(cat "$TMP_ROOT/live-claim.err")"
+assert_present "$LIVE_CLAIM_STATE/worker.lock/claim" \
+  "a challenger took over a peer's fresh reclaim marker"
+[ "$(cat "$LIVE_CLAIM_STATE/worker.lock/pid")" = 999999 ] \
+  || fail "a challenger reclaimed a lock a peer was still claiming"
+pass "a peer's fresh reclaim marker is deferred to, not taken over"
+
+# Taking over an abandoned marker needs a scratch directory, and failing to make
+# one is a local resource failure - a full or read-only state root - not proof
+# that a peer owns the lock. Reporting it as ownership would exit 0, which the
+# Linux supervisor reads as a clean stop and never restarts, leaving the account
+# with no worker at all. It has to stay retryable instead.
+SCRATCH_FAIL_HOME="$TMP_ROOT/scratch-fail-account"
+SCRATCH_FAIL_STATE="$TMP_ROOT/scratch-fail-jobs"
+SCRATCH_FAIL_BIN="$TMP_ROOT/scratch-fail-bin"
+mkdir -p "$SCRATCH_FAIL_HOME" "$SCRATCH_FAIL_STATE/worker.lock/claim" "$SCRATCH_FAIL_BIN"
+chmod 700 "$SCRATCH_FAIL_HOME" "$SCRATCH_FAIL_STATE" "$SCRATCH_FAIL_STATE/worker.lock" \
+  "$SCRATCH_FAIL_STATE/worker.lock/claim"
+cat > "$SCRATCH_FAIL_BIN/mktemp" <<SH
+#!/bin/bash
+for arg in "\$@"; do
+  case "\$arg" in *.claim.XXXXXX) exit 1 ;; esac
+done
+exec $(command -v mktemp) "\$@"
+SH
+chmod 755 "$SCRATCH_FAIL_BIN/mktemp"
+printf '999999\n' > "$SCRATCH_FAIL_STATE/worker.lock/pid"
+printf 'stale-start\n' > "$SCRATCH_FAIL_STATE/worker.lock/start"
+printf 'stale-command\n' > "$SCRATCH_FAIL_STATE/worker.lock/command"
+printf '999999\n' > "$SCRATCH_FAIL_STATE/worker.ready"
+chmod 600 "$SCRATCH_FAIL_STATE/worker.lock"/pid "$SCRATCH_FAIL_STATE/worker.lock"/start \
+  "$SCRATCH_FAIL_STATE/worker.lock"/command "$SCRATCH_FAIL_STATE/worker.ready"
+touch -t 200001010000 "$SCRATCH_FAIL_STATE/worker.lock/claim" "$SCRATCH_FAIL_STATE/worker.ready" \
+  "$SCRATCH_FAIL_STATE/worker.lock"
+HOME="$SCRATCH_FAIL_HOME" PATH="$SCRATCH_FAIL_BIN:$PATH" FM_ROOT_OVERRIDE="$REMOTE_ROOT" \
+  FM_REMOTE_JOB_STATE_ROOT="$SCRATCH_FAIL_STATE" FM_REMOTE_JOB_PLATFORM_OVERRIDE=Linux \
+  "$REMOTE_ROOT/bin/fm-remote-job-worker.sh" --serve \
+  > "$TMP_ROOT/scratch-fail.out" 2> "$TMP_ROOT/scratch-fail.err" &
+SCRATCH_FAIL_WORKER_PID=$!
+SCRATCH_FAIL_DEADLINE=$((SECONDS + 3))
+while [ "$SECONDS" -lt "$SCRATCH_FAIL_DEADLINE" ]; do
+  kill -0 "$SCRATCH_FAIL_WORKER_PID" 2>/dev/null || break
+  sleep 0.1
+done
+if ! kill -0 "$SCRATCH_FAIL_WORKER_PID" 2>/dev/null; then
+  set +e
+  wait "$SCRATCH_FAIL_WORKER_PID"
+  SCRATCH_FAIL_RC=$?
+  set -e
+  SCRATCH_FAIL_WORKER_PID=
+  [ "$SCRATCH_FAIL_RC" -ne 0 ] \
+    || fail "a worker that could not make its reclaim scratch directory reported peer ownership"
+  fail "a worker that could not make its reclaim scratch directory stopped retrying (rc=$SCRATCH_FAIL_RC)"
+fi
+[ "$(cat "$SCRATCH_FAIL_STATE/worker.lock/pid")" = 999999 ] \
+  || fail "a worker reclaimed the lock without its reclaim scratch directory"
+kill -TERM "$SCRATCH_FAIL_WORKER_PID"
+wait "$SCRATCH_FAIL_WORKER_PID" 2>/dev/null || true
+SCRATCH_FAIL_WORKER_PID=
+pass "a failed reclaim scratch directory keeps retrying instead of reporting peer ownership"
+
+# An owner whose shutdown cannot confirm its execution stopped publishes the
+# quarantine guard before it starts the slow part of stopping, so the guard can
+# land in the ownership directory after a reclaiming worker has already checked
+# for it and won its claim marker. Reclaim sweeps that directory, and sweeping
+# the guard away would let the replacement serve the account queue beside a
+# command tree nobody confirmed dead. The guard has to survive the sweep and
+# send the reclaimer back to the quarantine branch. The staged mkdir publishes
+# it exactly in that window, which is the only way to reach it deterministically.
+LATE_QUARANTINE_HOME="$TMP_ROOT/late-quarantine-account"
+LATE_QUARANTINE_STATE="$TMP_ROOT/late-quarantine-jobs"
+LATE_QUARANTINE_BIN="$TMP_ROOT/late-quarantine-bin"
+LATE_QUARANTINE_JOB="$LATE_QUARANTINE_STATE/jobs/job-late-quarantine"
+LATE_QUARANTINE_ONCE="$TMP_ROOT/late-quarantine-published"
+mkdir -p "$LATE_QUARANTINE_HOME" "$LATE_QUARANTINE_STATE/jobs" "$LATE_QUARANTINE_STATE/logs" \
+  "$LATE_QUARANTINE_STATE/worker.lock" "$LATE_QUARANTINE_JOB/.claim" "$LATE_QUARANTINE_BIN"
+chmod 700 "$LATE_QUARANTINE_HOME" "$LATE_QUARANTINE_STATE" "$LATE_QUARANTINE_STATE/jobs" \
+  "$LATE_QUARANTINE_STATE/logs" "$LATE_QUARANTINE_STATE/worker.lock" "$LATE_QUARANTINE_JOB" \
+  "$LATE_QUARANTINE_JOB/.claim"
+cat > "$LATE_QUARANTINE_BIN/mkdir" <<SH
+#!/bin/bash
+for arg in "\$@"; do
+  case "\$arg" in
+    */worker.lock/claim)
+      $(command -v mkdir) "\$@" || exit \$?
+      if [ ! -e "$LATE_QUARANTINE_ONCE" ]; then
+        : > "$LATE_QUARANTINE_ONCE"
+        printf 'active execution could not be confirmed stopped\n' > "\${arg%/claim}/quarantine"
+        chmod 600 "\${arg%/claim}/quarantine"
+      fi
+      exit 0
+      ;;
+  esac
+done
+exec $(command -v mkdir) "\$@"
+SH
+chmod 755 "$LATE_QUARANTINE_BIN/mkdir"
+sleep 20 &
+LATE_QUARANTINE_PROCESS_PID=$!
+sleep 0.01 &
+LATE_QUARANTINE_OWNER_PID=$!
+wait "$LATE_QUARANTINE_OWNER_PID" 2>/dev/null || true
+printf '%s\n' "$LATE_QUARANTINE_OWNER_PID" > "$LATE_QUARANTINE_STATE/worker.lock/pid"
+printf 'stale\n' > "$LATE_QUARANTINE_STATE/worker.lock/start"
+printf 'stale\n' > "$LATE_QUARANTINE_STATE/worker.lock/command"
+printf 'running\n' > "$LATE_QUARANTINE_JOB/state"
+printf '%s\n' "$LATE_QUARANTINE_OWNER_PID" > "$LATE_QUARANTINE_JOB/.claim/owner"
+printf '%s\n' "$LATE_QUARANTINE_PROCESS_PID" > "$LATE_QUARANTINE_JOB/.claim/supervisor"
+: > "$LATE_QUARANTINE_JOB/stdout"
+: > "$LATE_QUARANTINE_JOB/stderr"
+chmod 600 "$LATE_QUARANTINE_STATE/worker.lock"/* "$LATE_QUARANTINE_JOB/state" \
+  "$LATE_QUARANTINE_JOB/.claim"/* "$LATE_QUARANTINE_JOB/stdout" "$LATE_QUARANTINE_JOB/stderr"
+touch -t 200001010000 "$LATE_QUARANTINE_STATE/worker.lock"
+HOME="$LATE_QUARANTINE_HOME" PATH="$LATE_QUARANTINE_BIN:$PATH" FM_ROOT_OVERRIDE="$REMOTE_ROOT" \
+  FM_REMOTE_JOB_STATE_ROOT="$LATE_QUARANTINE_STATE" FM_REMOTE_JOB_PLATFORM_OVERRIDE=Linux \
+  "$REMOTE_ROOT/bin/fm-remote-job-worker.sh" --serve \
+  > "$TMP_ROOT/late-quarantine.out" 2> "$TMP_ROOT/late-quarantine.err" &
+LATE_QUARANTINE_WORKER_PID=$!
+LATE_QUARANTINE_DEADLINE=$((SECONDS + 20))
+while kill -0 "$LATE_QUARANTINE_WORKER_PID" 2>/dev/null && [ "$SECONDS" -lt "$LATE_QUARANTINE_DEADLINE" ]; do
+  sleep 0.1
+done
+if kill -0 "$LATE_QUARANTINE_WORKER_PID" 2>/dev/null; then
+  kill -KILL "$LATE_QUARANTINE_WORKER_PID" 2>/dev/null || true
+  wait "$LATE_QUARANTINE_WORKER_PID" 2>/dev/null || true
+  LATE_QUARANTINE_WORKER_PID=
+  fail "a reclaiming worker kept serving after a quarantine landed inside its claim window"
+fi
+set +e
+wait "$LATE_QUARANTINE_WORKER_PID"
+LATE_QUARANTINE_RC=$?
+set -e
+LATE_QUARANTINE_WORKER_PID=
+assert_present "$LATE_QUARANTINE_ONCE" "the staged quarantine was never published into the claim window"
+[ "$LATE_QUARANTINE_RC" -ne 0 ] \
+  || fail "a reclaiming worker accepted ownership after a quarantine landed inside its claim window"
+assert_present "$LATE_QUARANTINE_STATE/worker.lock/quarantine" \
+  "reclaim swept away a quarantine published inside its claim window"
+[ "$(cat "$LATE_QUARANTINE_STATE/worker.lock/pid")" = "$LATE_QUARANTINE_OWNER_PID" ] \
+  || fail "a reclaiming worker took ownership despite a quarantine published inside its claim window"
+assert_absent "$LATE_QUARANTINE_STATE/worker.ready" \
+  "a quarantined reclaim still reported the account ready"
+assert_absent "$LATE_QUARANTINE_STATE/worker.lock/claim" \
+  "a reclaim that deferred to quarantine left its claim marker behind"
+kill "$LATE_QUARANTINE_PROCESS_PID" 2>/dev/null || true
+wait "$LATE_QUARANTINE_PROCESS_PID" 2>/dev/null || true
+LATE_QUARANTINE_PROCESS_PID=
+pass "a quarantine published inside the claim window survives reclaim"
+
+# Every staleness gate is read before the claim marker is taken, and a peer
+# reclaim only frees that marker after it has published its own ownership
+# records. A worker descheduled across that whole window therefore wins the
+# marker against a lock that is no longer stale, and sweeping it would delete a
+# live owner's records and put two workers on one account queue. Winning the
+# marker has to be re-validated against the records. The staged mkdir publishes
+# a live owner's records exactly as the marker is taken, which is the only way
+# to reach that window deterministically.
+FINISHED_RECLAIM_HOME="$TMP_ROOT/finished-reclaim-account"
+FINISHED_RECLAIM_STATE="$TMP_ROOT/finished-reclaim-jobs"
+FINISHED_RECLAIM_BIN="$TMP_ROOT/finished-reclaim-bin"
+FINISHED_RECLAIM_ONCE="$TMP_ROOT/finished-reclaim-published"
+mkdir -p "$FINISHED_RECLAIM_HOME" "$FINISHED_RECLAIM_STATE/worker.lock" "$FINISHED_RECLAIM_BIN"
+chmod 700 "$FINISHED_RECLAIM_HOME" "$FINISHED_RECLAIM_STATE" "$FINISHED_RECLAIM_STATE/worker.lock"
+sleep 30 &
+FINISHED_RECLAIM_OWNER_PID=$!
+cat > "$FINISHED_RECLAIM_BIN/mkdir" <<SH
+#!/bin/bash
+for arg in "\$@"; do
+  case "\$arg" in
+    */worker.lock/claim)
+      $(command -v mkdir) "\$@" || exit \$?
+      if [ ! -e "$FINISHED_RECLAIM_ONCE" ]; then
+        : > "$FINISHED_RECLAIM_ONCE"
+        lock=\${arg%/claim}
+        printf '%s\n' "$FINISHED_RECLAIM_OWNER_PID" > "\$lock/pid"
+        ps -p "$FINISHED_RECLAIM_OWNER_PID" -o lstart= > "\$lock/start"
+        ps -p "$FINISHED_RECLAIM_OWNER_PID" -o command= > "\$lock/command"
+        chmod 600 "\$lock/pid" "\$lock/start" "\$lock/command"
+      fi
+      exit 0
+      ;;
+  esac
+done
+exec $(command -v mkdir) "\$@"
+SH
+chmod 755 "$FINISHED_RECLAIM_BIN/mkdir"
+printf '999999\n' > "$FINISHED_RECLAIM_STATE/worker.lock/pid"
+printf 'stale-start\n' > "$FINISHED_RECLAIM_STATE/worker.lock/start"
+printf 'stale-command\n' > "$FINISHED_RECLAIM_STATE/worker.lock/command"
+printf '999999\n' > "$FINISHED_RECLAIM_STATE/worker.ready"
+chmod 600 "$FINISHED_RECLAIM_STATE/worker.lock"/* "$FINISHED_RECLAIM_STATE/worker.ready"
+touch -t 200001010000 "$FINISHED_RECLAIM_STATE/worker.lock" "$FINISHED_RECLAIM_STATE/worker.ready"
+HOME="$FINISHED_RECLAIM_HOME" PATH="$FINISHED_RECLAIM_BIN:$PATH" FM_ROOT_OVERRIDE="$REMOTE_ROOT" \
+  FM_REMOTE_JOB_STATE_ROOT="$FINISHED_RECLAIM_STATE" FM_REMOTE_JOB_PLATFORM_OVERRIDE=Linux \
+  "$REMOTE_ROOT/bin/fm-remote-job-worker.sh" --serve \
+  > "$TMP_ROOT/finished-reclaim.out" 2> "$TMP_ROOT/finished-reclaim.err" &
+FINISHED_RECLAIM_WORKER_PID=$!
+FINISHED_RECLAIM_DEADLINE=$((SECONDS + 20))
+while kill -0 "$FINISHED_RECLAIM_WORKER_PID" 2>/dev/null && [ "$SECONDS" -lt "$FINISHED_RECLAIM_DEADLINE" ]; do
+  sleep 0.1
+done
+if kill -0 "$FINISHED_RECLAIM_WORKER_PID" 2>/dev/null; then
+  kill -KILL "$FINISHED_RECLAIM_WORKER_PID" 2>/dev/null || true
+  wait "$FINISHED_RECLAIM_WORKER_PID" 2>/dev/null || true
+  FINISHED_RECLAIM_WORKER_PID=
+  fail "a worker served the account after winning the claim against a finished peer reclaim"
+fi
+set +e
+wait "$FINISHED_RECLAIM_WORKER_PID"
+FINISHED_RECLAIM_RC=$?
+set -e
+FINISHED_RECLAIM_WORKER_PID=
+assert_present "$FINISHED_RECLAIM_ONCE" "the staged owner records were never published into the claim window"
+[ "$FINISHED_RECLAIM_RC" -eq 0 ] \
+  || fail "a worker that found a live owner after winning the claim did not defer (rc=$FINISHED_RECLAIM_RC): $(cat "$TMP_ROOT/finished-reclaim.err")"
+[ "$(cat "$FINISHED_RECLAIM_STATE/worker.lock/pid")" = "$FINISHED_RECLAIM_OWNER_PID" ] \
+  || fail "a worker swept the ownership records a finished peer reclaim had just published"
+assert_absent "$FINISHED_RECLAIM_STATE/worker.lock/claim" \
+  "a worker that deferred to a finished peer reclaim left its claim marker behind"
+kill -0 "$FINISHED_RECLAIM_OWNER_PID" 2>/dev/null || fail "the staged live owner is not alive"
+kill "$FINISHED_RECLAIM_OWNER_PID" 2>/dev/null || true
+wait "$FINISHED_RECLAIM_OWNER_PID" 2>/dev/null || true
+FINISHED_RECLAIM_OWNER_PID=
+pass "a claim won against a finished peer reclaim defers instead of sweeping it"
+
+# An owner guarding its shutdown writes worker.lock/.quarantine.XXXXXX, fills it,
+# chmods it and only then renames it onto worker.lock/quarantine, so that temp is
+# present in the ownership directory for several forks. Reclaim sweeps that
+# directory. Deleting the temp makes the owner's rename fail, and a failed guard
+# publish sends the owner back to its serving loop instead of stopping it, so the
+# reclaimer and the owner both serve the account. The lock directory is this
+# protocol's persisted state, so the temp surviving a completed reclaim is the
+# contract being asserted here.
+SHUTDOWN_TEMP_HOME="$TMP_ROOT/shutdown-temp-account"
+SHUTDOWN_TEMP_STATE="$TMP_ROOT/shutdown-temp-jobs"
+SHUTDOWN_TEMP_INFLIGHT="$SHUTDOWN_TEMP_STATE/worker.lock/.quarantine.aBcDeF"
+mkdir -p "$SHUTDOWN_TEMP_HOME" "$SHUTDOWN_TEMP_STATE/worker.lock"
+chmod 700 "$SHUTDOWN_TEMP_HOME" "$SHUTDOWN_TEMP_STATE" "$SHUTDOWN_TEMP_STATE/worker.lock"
+printf '999999\n' > "$SHUTDOWN_TEMP_STATE/worker.lock/pid"
+printf 'stale-start\n' > "$SHUTDOWN_TEMP_STATE/worker.lock/start"
+printf 'stale-command\n' > "$SHUTDOWN_TEMP_STATE/worker.lock/command"
+printf 'active execution could not be confirmed stopped\n' > "$SHUTDOWN_TEMP_INFLIGHT"
+printf '999999\n' > "$SHUTDOWN_TEMP_STATE/worker.ready"
+chmod 600 "$SHUTDOWN_TEMP_STATE/worker.lock"/* "$SHUTDOWN_TEMP_INFLIGHT" \
+  "$SHUTDOWN_TEMP_STATE/worker.ready"
+touch -t 200001010000 "$SHUTDOWN_TEMP_STATE/worker.lock" "$SHUTDOWN_TEMP_STATE/worker.ready"
+HOME="$SHUTDOWN_TEMP_HOME" FM_ROOT_OVERRIDE="$REMOTE_ROOT" \
+  FM_REMOTE_JOB_STATE_ROOT="$SHUTDOWN_TEMP_STATE" FM_REMOTE_JOB_PLATFORM_OVERRIDE=Linux \
+  "$REMOTE_ROOT/bin/fm-remote-job-worker.sh" --serve \
+  > "$TMP_ROOT/shutdown-temp.out" 2> "$TMP_ROOT/shutdown-temp.err" &
+SHUTDOWN_TEMP_WORKER_PID=$!
+SHUTDOWN_TEMP_READY=
+for _ in $(seq 1 300); do
+  SHUTDOWN_TEMP_READY=$(cat "$SHUTDOWN_TEMP_STATE/worker.ready" 2>/dev/null || true)
+  case "$SHUTDOWN_TEMP_READY" in
+    ''|999999) ;;
+    *) kill -0 "$SHUTDOWN_TEMP_READY" 2>/dev/null && break ;;
+  esac
+  kill -0 "$SHUTDOWN_TEMP_WORKER_PID" 2>/dev/null || break
+  sleep 0.05
+done
+case "$SHUTDOWN_TEMP_READY" in
+  ''|999999) fail "the worker did not reclaim past an in-flight shutdown guard temp: $(cat "$TMP_ROOT/shutdown-temp.err")" ;;
+esac
+assert_present "$SHUTDOWN_TEMP_INFLIGHT" \
+  "reclaim deleted the guard temp an owner shutdown was still writing"
+kill -TERM "$SHUTDOWN_TEMP_WORKER_PID"
+wait "$SHUTDOWN_TEMP_WORKER_PID" 2>/dev/null || true
+SHUTDOWN_TEMP_WORKER_PID=
+pass "reclaim leaves an in-flight shutdown guard temp alone"
+
+# The guard can also land after reclaim has read for it and while the sweep is
+# still running. Taking ownership then records live pid/start/command beside a
+# live guard, and from there the account can never probe ready while every
+# replacement refuses to retire a guard held by a live recorded owner. Reclaim
+# has to re-read the guard before recording itself and stop while the lock still
+# holds nothing but the guard. The staged rm publishes it mid-sweep, which is the
+# only way to reach that window deterministically.
+SWEPT_QUARANTINE_HOME="$TMP_ROOT/swept-quarantine-account"
+SWEPT_QUARANTINE_STATE="$TMP_ROOT/swept-quarantine-jobs"
+SWEPT_QUARANTINE_BIN="$TMP_ROOT/swept-quarantine-bin"
+SWEPT_QUARANTINE_ONCE="$TMP_ROOT/swept-quarantine-published"
+mkdir -p "$SWEPT_QUARANTINE_HOME" "$SWEPT_QUARANTINE_STATE/worker.lock" "$SWEPT_QUARANTINE_BIN"
+chmod 700 "$SWEPT_QUARANTINE_HOME" "$SWEPT_QUARANTINE_STATE" "$SWEPT_QUARANTINE_STATE/worker.lock"
+cat > "$SWEPT_QUARANTINE_BIN/rm" <<SH
+#!/bin/bash
+for arg in "\$@"; do
+  case "\$arg" in
+    */worker.lock/*)
+      if [ ! -e "$SWEPT_QUARANTINE_ONCE" ]; then
+        : > "$SWEPT_QUARANTINE_ONCE"
+        lock=\${arg%/*}
+        printf 'active execution could not be confirmed stopped\n' > "\$lock/quarantine"
+        chmod 600 "\$lock/quarantine"
+      fi
+      break
+      ;;
+  esac
+done
+exec $(command -v rm) "\$@"
+SH
+chmod 755 "$SWEPT_QUARANTINE_BIN/rm"
+printf '999999\n' > "$SWEPT_QUARANTINE_STATE/worker.lock/pid"
+printf 'stale-start\n' > "$SWEPT_QUARANTINE_STATE/worker.lock/start"
+printf 'stale-command\n' > "$SWEPT_QUARANTINE_STATE/worker.lock/command"
+printf '999999\n' > "$SWEPT_QUARANTINE_STATE/worker.ready"
+chmod 600 "$SWEPT_QUARANTINE_STATE/worker.lock"/* "$SWEPT_QUARANTINE_STATE/worker.ready"
+touch -t 200001010000 "$SWEPT_QUARANTINE_STATE/worker.lock" "$SWEPT_QUARANTINE_STATE/worker.ready"
+HOME="$SWEPT_QUARANTINE_HOME" PATH="$SWEPT_QUARANTINE_BIN:$PATH" FM_ROOT_OVERRIDE="$REMOTE_ROOT" \
+  FM_REMOTE_JOB_STATE_ROOT="$SWEPT_QUARANTINE_STATE" FM_REMOTE_JOB_PLATFORM_OVERRIDE=Linux \
+  "$REMOTE_ROOT/bin/fm-remote-job-worker.sh" --serve \
+  > "$TMP_ROOT/swept-quarantine.out" 2> "$TMP_ROOT/swept-quarantine.err" &
+SWEPT_QUARANTINE_WORKER_PID=$!
+SWEPT_QUARANTINE_DEADLINE=$((SECONDS + 20))
+while kill -0 "$SWEPT_QUARANTINE_WORKER_PID" 2>/dev/null && [ "$SECONDS" -lt "$SWEPT_QUARANTINE_DEADLINE" ]; do
+  sleep 0.1
+done
+if kill -0 "$SWEPT_QUARANTINE_WORKER_PID" 2>/dev/null; then
+  kill -KILL "$SWEPT_QUARANTINE_WORKER_PID" 2>/dev/null || true
+  wait "$SWEPT_QUARANTINE_WORKER_PID" 2>/dev/null || true
+  SWEPT_QUARANTINE_WORKER_PID=
+  fail "a reclaiming worker served the account over a guard published during its sweep"
+fi
+set +e
+wait "$SWEPT_QUARANTINE_WORKER_PID"
+SWEPT_QUARANTINE_RC=$?
+set -e
+SWEPT_QUARANTINE_WORKER_PID=
+assert_present "$SWEPT_QUARANTINE_ONCE" "the staged guard was never published into the sweep window"
+[ "$SWEPT_QUARANTINE_RC" -eq 75 ] \
+  || fail "a reclaim stopped by a guard published mid-sweep did not report quarantined ownership (rc=$SWEPT_QUARANTINE_RC): $(cat "$TMP_ROOT/swept-quarantine.err")"
+assert_present "$SWEPT_QUARANTINE_STATE/worker.lock/quarantine" \
+  "a guard published during the sweep did not survive it"
+assert_absent "$SWEPT_QUARANTINE_STATE/worker.lock/pid" \
+  "a reclaiming worker recorded ownership beside a guard published during its sweep"
+assert_absent "$SWEPT_QUARANTINE_STATE/worker.lock/claim" \
+  "a reclaim stopped by a guard left its claim marker behind"
+pass "a guard published during the sweep stops reclaim before it records ownership"
 
 # A child that stays up for FM_REMOTE_JOB_SUPERVISOR_HEALTHY_SECONDS clears the
 # consecutive-failure backoff, so a child that dies just past that threshold

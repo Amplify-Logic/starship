@@ -125,12 +125,81 @@ worker_publish_lock_owner() {
   mv -f -- "$pid_tmp" "$WORKER_LOCK/pid" || { rm -f -- "$pid_tmp" "$WORKER_LOCK/start" "$WORKER_LOCK/command"; return 1; }
 }
 
-worker_lock_recent() {
+worker_path_recent() { # <path>
   local mtime now
-  mtime=$(fm_remote_job_path_mtime "$WORKER_LOCK" 2>/dev/null || true)
+  mtime=$(fm_remote_job_path_mtime "$1" 2>/dev/null || true)
   case "$mtime" in ''|*[!0-9]*) return 0 ;; esac
   now=$(date +%s)
   [ $((now - mtime)) -le 10 ]
+}
+
+# Reclaim is single-writer. Two workers that both find the same stale lock would
+# otherwise sweep it at once, and the loser would delete the records the winner
+# had already published and become a second owner of the same account queue. The
+# claim marker is an ordinary mkdir inside the ownership directory, so exactly
+# one worker can create it, and reclaim never removes and recreates the
+# ownership directory itself, so no loser can rmdir it out from under the
+# winner.
+#
+# A reclaimer killed part way through leaves its marker standing, and a marker
+# nobody may take over would wedge the account into the restart storm this path
+# exists to end. Taking one over is gated on the marker's own age rather than
+# the ownership directory's, which a live holder's own mkdir has just
+# refreshed, and the marker is taken by moving it into a scratch directory made
+# fresh for the attempt: a rename moves the one directory that was observed, so
+# of every worker that sees the same abandoned marker exactly one takes it and
+# the rest find it gone. A scratch directory that cannot already exist is what
+# lets the capture be a bare mv - there is no name to pre-clean, and the
+# captured marker always lands at exactly one path, which is the path the age is
+# re-read from. That re-read is the proof: a captured marker that is still fresh
+# is a live peer's, recreated under the same name in between, so the name is put
+# back and this worker defers instead of claiming. Putting it back is a mkdir
+# rather than a move, which can neither nest inside a marker a third worker
+# recreated in the gap nor clobber it.
+worker_claim_stale_lock() {
+  local holder
+  [ -d "$WORKER_LOCK" ] && [ ! -L "$WORKER_LOCK" ] || return 1
+  [ ! -e "$WORKER_LOCK/quarantine" ] && [ ! -L "$WORKER_LOCK/quarantine" ] || return 1
+  (umask 077; mkdir "$WORKER_LOCK/claim") 2>/dev/null && return 0
+  [ -d "$WORKER_LOCK/claim" ] && [ ! -L "$WORKER_LOCK/claim" ] || return 1
+  worker_path_recent "$WORKER_LOCK/claim" && return 2
+  holder=$(umask 077; mktemp -d "$FM_REMOTE_JOB_STATE/.claim.XXXXXX") || return 1
+  if ! mv "$WORKER_LOCK/claim" "$holder/" 2>/dev/null; then
+    rmdir "$holder" 2>/dev/null || true
+    return 2
+  fi
+  if worker_path_recent "$holder/claim"; then
+    (umask 077; mkdir "$WORKER_LOCK/claim") 2>/dev/null || true
+    rmdir "$holder/claim" "$holder" 2>/dev/null || true
+    return 2
+  fi
+  rmdir "$holder/claim" "$holder" 2>/dev/null || true
+  (umask 077; mkdir "$WORKER_LOCK/claim") 2>/dev/null || return 2
+}
+
+# Drop what a dead owner left behind so the claiming worker can publish its own
+# records in place. pid/start/command are the published owner records and the
+# .pid.*, .start.*, .command.* names are the mktemp leftovers a crash or
+# interrupted shutdown leaves behind. Removing only the published records left
+# those temps in place, rmdir failed, and every later worker exited 1 into a
+# restart storm. Nothing about quarantine is swept: the published name is the
+# guard itself, which only worker_recover_quarantine may retire, and a
+# .quarantine.* temp is what an owner's shutdown is writing right now, so
+# deleting one makes its mv fail and sends that owner back to serving. Reclaim
+# publishes in place and no longer rmdirs the lock, so a temp left by a crash
+# costs nothing beyond a deferred rmdir on this worker's own clean exit.
+worker_clear_stale_lock_records() {
+  local f
+  for f in "$WORKER_LOCK"/* "$WORKER_LOCK"/.[!.]*; do
+    [ -e "$f" ] || [ -L "$f" ] || continue
+    case "$f" in
+      "$WORKER_LOCK/claim"|"$WORKER_LOCK/quarantine"|"$WORKER_LOCK"/.quarantine.*) continue ;;
+    esac
+    [ ! -L "$f" ] || return 1
+    [ -f "$f" ] || return 1
+    rm -f -- "$f" || return 1
+  done
+  return 0
 }
 
 worker_quarantined_execution_stopped() { # <account-home>
@@ -158,7 +227,7 @@ worker_recover_quarantine() { # <account-home>
 }
 
 worker_acquire_lock() {
-  local account_home=$1 attempt=0
+  local account_home=$1 attempt=0 status
   while [ "$attempt" -lt 150 ]; do
     if (umask 077; mkdir "$WORKER_LOCK") 2>/dev/null; then
       WORKER_LOCK_HELD=1
@@ -171,15 +240,60 @@ worker_acquire_lock() {
       continue
     fi
     if fm_remote_job_lock_owner_matches_process "$account_home"; then return 2; fi
-    if fm_remote_job_probe "$account_home" || worker_lock_recent; then
+    # A fresh heartbeat proves a live owner even when its recorded ps start or
+    # command no longer matches, and a just-created lock is another worker
+    # publishing its identity. Either way wait rather than steal; a dead owner's
+    # heartbeat and leftovers both go stale inside this budget.
+    if fm_remote_job_probe "$account_home" || worker_path_recent "$WORKER_LOCK"; then
       attempt=$((attempt + 1))
       sleep 0.1
       continue
     fi
-    [ ! -L "$WORKER_LOCK/pid" ] && [ ! -L "$WORKER_LOCK/start" ] && [ ! -L "$WORKER_LOCK/command" ] || return 1
-    rm -f -- "$WORKER_LOCK/pid" "$WORKER_LOCK/start" "$WORKER_LOCK/command" || return 1
-    rmdir "$WORKER_LOCK" || return 1
+    worker_claim_stale_lock
+    status=$?
+    if [ "$status" -eq 2 ]; then return 2; fi
+    if [ "$status" -ne 0 ]; then
+      attempt=$((attempt + 1))
+      sleep 0.1
+      continue
+    fi
+    if [ -e "$WORKER_LOCK/quarantine" ] || [ -L "$WORKER_LOCK/quarantine" ]; then
+      rmdir "$WORKER_LOCK/claim" 2>/dev/null || true
+      continue
+    fi
+    # Every staleness gate above was read before the marker was taken, and the
+    # marker only becomes free again once a peer reclaim has published and
+    # released it. Records that now match a live process are that peer's, so
+    # this worker is the redundant one rather than the reclaimer.
+    if fm_remote_job_lock_owner_matches_process "$account_home"; then
+      rmdir "$WORKER_LOCK/claim" 2>/dev/null || true
+      return 2
+    fi
+    WORKER_LOCK_HELD=1
+    if ! worker_clear_stale_lock_records; then
+      rmdir "$WORKER_LOCK/claim" 2>/dev/null || true
+      return 1
+    fi
+    # An owner's shutdown can land the guard any time up to the moment this
+    # worker records itself. Taking ownership over one would leave an account
+    # that never probes ready and whose replacements can no longer retire the
+    # guard against these live records, so stop while the lock still holds
+    # nothing but the guard.
+    if [ -e "$WORKER_LOCK/quarantine" ] || [ -L "$WORKER_LOCK/quarantine" ]; then
+      WORKER_LOCK_HELD=0
+      rmdir "$WORKER_LOCK/claim" 2>/dev/null || true
+      return 3
+    fi
+    worker_publish_lock_owner
+    status=$?
+    rmdir "$WORKER_LOCK/claim" 2>/dev/null || true
+    [ "$status" -eq 0 ] || return 1
+    return 0
   done
+  # An owner that is still heartbeating after the whole budget is alive and this
+  # worker is redundant: leave its lock alone and exit 0 instead of failing into
+  # a supervisor restart storm.
+  fm_remote_job_probe "$account_home" && return 2
   return 1
 }
 
@@ -394,9 +508,10 @@ worker_stop_active_execution() {
 # to this same serving child, so a repeat is the normal case and not an
 # exception. Restoring the default let that second signal kill the shutdown part
 # way through, which left the ownership lock behind holding a half-written temp
-# file that no later worker could clear, so every replacement then failed to
-# report ready. A shutdown that hangs is still stopped: the caller escalates to
-# KILL, which no disposition can block.
+# file. worker_acquire_lock reclaims those leftovers for the next worker, but a
+# shutdown killed mid-write still races the replacement, so ignore the repeat
+# rather than restoring the default. A shutdown that hangs is still stopped: the
+# caller escalates to KILL, which no disposition can block.
 worker_shutdown() {
   trap '' HUP INT TERM
   worker_publish_quarantine || {
