@@ -1208,13 +1208,34 @@ housekeeping() {  # <state>
   #     read decides relevance, and the classified-through offset is the dedup.
   if [ "$(_file_age "$state/.subsuper-last-scan")" -ge "${FM_HEARTBEAT_SCAN_SECS:-$HEARTBEAT_SCAN_SECS_DEFAULT}" ]; then
     _now > "$state/.subsuper-last-scan"
-    local event record rest endpoint ident rc
+    local event record rest endpoint ident rc offset dropped line dropped_lines=''
     for f in "$state"/*.status; do
       [ -e "$f" ] || [ -L "$f" ] || continue
       task=$(basename "$f"); task="${task%.status}"
-      record=$(status_span_first_actionable_record "$f" \
-        "$(status_seen_offset "$state" "$task")")
+      offset=$(status_seen_offset "$state" "$task")
+      record=$(status_span_first_actionable_record "$f" "$offset")
       rc=$?
+      # Collect what this same span DROPPED, from the same offset, for the
+      # opt-in second look after the loop. Away mode is where this silence gap
+      # bites hardest: nobody is watching the pane and hours pass. A pure read,
+      # no network; the one bounded call happens once per scan below.
+      #
+      # The gate file's PRESENCE is only a precondition here, never the arm
+      # decision - bin/fm-triage-second-look.sh still owns whether an existing
+      # gate actually arms this home. Checking it keeps a home that never created
+      # the file from paying a second span read per status log on every scan for
+      # a capability it has not opted into.
+      if [ "$rc" -ne 2 ] && [ -f "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}/triage-second-look" ]; then
+        dropped=$(status_span_dropped_lines "$f" "$offset") || dropped=''
+        if [ -n "$dropped" ]; then
+          while IFS= read -r line; do
+            [ -n "$line" ] || continue
+            dropped_lines="${dropped_lines}${task}"$'\t'"${line}"$'\n'
+          done <<EOF
+$dropped
+EOF
+        fi
+      fi
       if [ "$rc" -eq 2 ]; then
         ident=$(status_observed_signature "$f")
         status_presentation_marker_reported_matches "$(_seen_status_path "$state" "$task")" "$ident" \
@@ -1236,6 +1257,46 @@ housekeeping() {  # <state>
         escalate_add "$state" "$(basename "$f"): status position commit failed (catch-all scan)"
       fi
     done
+    second_look_escalate "$state" "$dropped_lines"
+  fi
+}
+
+# The opt-in second look over the lines the catch-all scan above walked past.
+# bin/fm-triage-second-look.sh owns the whole contract; this is only the delivery
+# mapping. ESCALATE-ONLY and additive: it is handed only lines the deterministic
+# classifier already dropped, and all it can do is add an escalation. An unarmed
+# home, a failure, a timeout or an absent key all produce nothing and leave this
+# daemon behaving exactly as it does today. Producing nothing is not the same as
+# having nothing to say, so the tool's diagnostics reach the daemon log rather
+# than /dev/null.
+#
+# The tier decides delivery, never whether to speak. alert flushes the buffer
+# immediately - the same delivery the zero-batch setting uses, preserving the
+# buffer if the inject cannot be confirmed - while digest simply joins the next
+# batch. The model's own confidence can only demote alert to digest, never
+# silence a line.
+second_look_escalate() {  # <state> <dropped-records>
+  local state=$1 records=$2 tool task tier reason line err alert=0
+  [ -n "$records" ] || return 0
+  tool="$FM_DAEMON_DIR/fm-triage-second-look.sh"
+  [ -x "$tool" ] || return 0
+  err=$(mktemp "$state/.second-look-stderr.XXXXXX") || err=/dev/null
+  while IFS=$(printf '\t') read -r task tier reason line; do
+    [ -n "$task" ] && [ -n "$line" ] || continue
+    if escalate_add "$state" "$task.status: $line (second look: $reason)"; then
+      [ "$tier" = alert ] && alert=1
+    fi
+  done < <(printf '%s' "$records" | "$tool" 2>"$err" || true)
+  # One scan, one digest. Flushing inside the loop would empty the buffer before
+  # the rest of this scan's promotions were added, so a span that destroyed data
+  # over several lines would arrive as several single-event injections.
+  [ "$alert" -eq 1 ] && { escalate_flush "$state" || true; }
+  if [ "$err" != /dev/null ]; then
+    while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      log "second look: $line"
+    done < "$err"
+    rm -f "$err"
   fi
 }
 

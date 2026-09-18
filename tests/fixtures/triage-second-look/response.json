@@ -1,0 +1,277 @@
+{
+  "model": "jev-1.13.0",
+  "answers": {
+    "l1__understated_terminal": {
+      "type": "noul",
+      "noul": 0.12
+    },
+    "l1__needs_captain": {
+      "type": "noul",
+      "noul": 0.74
+    },
+    "l1__adverse_event": {
+      "type": "noul",
+      "noul": 0.97
+    },
+    "l1__urgency": {
+      "type": "score",
+      "score": 1.9,
+      "confidence": 0.85
+    },
+    "l2__understated_terminal": {
+      "type": "noul",
+      "noul": 0.14
+    },
+    "l2__needs_captain": {
+      "type": "noul",
+      "noul": 0.89
+    },
+    "l2__adverse_event": {
+      "type": "noul",
+      "noul": 0.05
+    },
+    "l2__urgency": {
+      "type": "score",
+      "score": 0.94,
+      "confidence": 0.78
+    },
+    "l3__understated_terminal": {
+      "type": "noul",
+      "noul": 0.1
+    },
+    "l3__needs_captain": {
+      "type": "noul",
+      "noul": 0.68
+    },
+    "l3__adverse_event": {
+      "type": "noul",
+      "noul": 0.11
+    },
+    "l3__urgency": {
+      "type": "score",
+      "score": 1.27,
+      "confidence": 0.55
+    },
+    "l4__understated_terminal": {
+      "type": "noul",
+      "noul": 0.05
+    },
+    "l4__needs_captain": {
+      "type": "noul",
+      "noul": 0.92
+    },
+    "l4__adverse_event": {
+      "type": "noul",
+      "noul": 0.1
+    },
+    "l4__urgency": {
+      "type": "score",
+      "score": 1.86,
+      "confidence": 0.78
+    },
+    "l5__understated_terminal": {
+      "type": "noul",
+      "noul": 0.05
+    },
+    "l5__needs_captain": {
+      "type": "noul",
+      "noul": 0.38
+    },
+    "l5__adverse_event": {
+      "type": "noul",
+      "noul": 0.76
+    },
+    "l5__urgency": {
+      "type": "score",
+      "score": 1.91,
+      "confidence": 0.87
+    },
+    "l6__understated_terminal": {
+      "type": "noul",
+      "noul": 0.93
+    },
+    "l6__needs_captain": {
+      "type": "noul",
+      "noul": 0.09
+    },
+    "l6__adverse_event": {
+      "type": "noul",
+      "noul": 0.48
+    },
+    "l6__urgency": {
+      "type": "score",
+      "score": 0.52,
+      "confidence": 0.22
+    },
+    "l7__understated_terminal": {
+      "type": "noul",
+      "noul": 0.92
+    },
+    "l7__needs_captain": {
+      "type": "noul",
+      "noul": 0.11
+    },
+    "l7__adverse_event": {
+      "type": "noul",
+      "noul": 0.06
+    },
+    "l7__urgency": {
+      "type": "score",
+      "score": 0.93,
+      "confidence": 0.8
+    },
+    "l8__understated_terminal": {
+      "type": "noul",
+      "noul": 0.05
+    },
+    "l8__needs_captain": {
+      "type": "noul",
+      "noul": 0.66
+    },
+    "l8__adverse_event": {
+      "type": "noul",
+      "noul": 0.14
+    },
+    "l8__urgency": {
+      "type": "score",
+      "score": 0.78,
+      "confidence": 0.49
+    },
+    "l9__understated_terminal": {
+      "type": "noul",
+      "noul": 0.04
+    },
+    "l9__needs_captain": {
+      "type": "noul",
+      "noul": 0.09
+    },
+    "l9__adverse_event": {
+      "type": "noul",
+      "noul": 0.04
+    },
+    "l9__urgency": {
+      "type": "score",
+      "score": 0.19,
+      "confidence": 0.71
+    },
+    "l10__understated_terminal": {
+      "type": "noul",
+      "noul": 0.04
+    },
+    "l10__needs_captain": {
+      "type": "noul",
+      "noul": 0.05
+    },
+    "l10__adverse_event": {
+      "type": "noul",
+      "noul": 0.05
+    },
+    "l10__urgency": {
+      "type": "score",
+      "score": 0.64,
+      "confidence": 0.45
+    },
+    "l11__understated_terminal": {
+      "type": "noul",
+      "noul": 0.07
+    },
+    "l11__needs_captain": {
+      "type": "noul",
+      "noul": 0.05
+    },
+    "l11__adverse_event": {
+      "type": "noul",
+      "noul": 0.04
+    },
+    "l11__urgency": {
+      "type": "score",
+      "score": 0.1,
+      "confidence": 0.85
+    },
+    "l12__understated_terminal": {
+      "type": "noul",
+      "noul": 0.07
+    },
+    "l12__needs_captain": {
+      "type": "noul",
+      "noul": 0.21
+    },
+    "l12__adverse_event": {
+      "type": "noul",
+      "noul": 0.06
+    },
+    "l12__urgency": {
+      "type": "score",
+      "score": 0.22,
+      "confidence": 0.67
+    },
+    "l13__understated_terminal": {
+      "type": "noul",
+      "noul": 0.46
+    },
+    "l13__needs_captain": {
+      "type": "noul",
+      "noul": 0.07
+    },
+    "l13__adverse_event": {
+      "type": "noul",
+      "noul": 0.04
+    },
+    "l13__urgency": {
+      "type": "score",
+      "score": 0.24,
+      "confidence": 0.64
+    },
+    "l14__understated_terminal": {
+      "type": "noul",
+      "noul": 0.07
+    },
+    "l14__needs_captain": {
+      "type": "noul",
+      "noul": 0.21
+    },
+    "l14__adverse_event": {
+      "type": "noul",
+      "noul": 0.04
+    },
+    "l14__urgency": {
+      "type": "score",
+      "score": 0.77,
+      "confidence": 0.62
+    },
+    "l15__understated_terminal": {
+      "type": "noul",
+      "noul": 0.05
+    },
+    "l15__needs_captain": {
+      "type": "noul",
+      "noul": 0.13
+    },
+    "l15__adverse_event": {
+      "type": "noul",
+      "noul": 0.04
+    },
+    "l15__urgency": {
+      "type": "score",
+      "score": 0.4,
+      "confidence": 0.4
+    },
+    "l16__understated_terminal": {
+      "type": "noul",
+      "noul": 0.15
+    },
+    "l16__needs_captain": {
+      "type": "noul",
+      "noul": 0.27
+    },
+    "l16__adverse_event": {
+      "type": "noul",
+      "noul": 0.07
+    },
+    "l16__urgency": {
+      "type": "score",
+      "score": 1.1,
+      "confidence": 0.0
+    }
+  }
+}

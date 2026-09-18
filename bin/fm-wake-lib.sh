@@ -1989,12 +1989,18 @@ fm_wake_restore_queue() {
   fi
 }
 
+# Collapse duplicate rows to the last of each kind+key, except that every BARE
+# heartbeat collapses to one regardless of key: an idle fleet queues nothing but
+# heartbeats and the supervisor wants one. A heartbeat carrying its own key -
+# the second look's promotion, whose payload names the line and the reason it
+# was raised - keeps that key, so a later bare heartbeat cannot replace a
+# payload nothing will read a second time.
 fm_wake_print_deduped() {
   local file=$1
   awk -F '\t' '
     NF >= 5 {
       dedupe = $3 SUBSEP $4
-      if ($3 == "heartbeat") {
+      if ($3 == "heartbeat" && $4 == "heartbeat") {
         dedupe = "heartbeat"
       }
       if (!(dedupe in seen)) {

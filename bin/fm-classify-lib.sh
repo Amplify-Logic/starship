@@ -1826,6 +1826,64 @@ status_span_has_actionable() {  # <status-file> <start-offset>
   status_span_first_actionable_record "$1" "${2:-0}" > /dev/null
 }
 
+# Emit the status lines in a span that status_span_first_actionable_record
+# deliberately drops: every line status_is_captain_relevant rejected, minus the
+# declarations that are non-surfacing by design.
+#
+# Same span read, same identity snapshot, and deliberately a SEPARATE function
+# rather than another output field on the reader above. That reader is pure by
+# the contract in this library's header and the always-on per-wake watcher path
+# depends on it; the one consumer of these dropped lines - the opt-in second look
+# at the two heartbeat backstops (bin/fm-triage-second-look.sh) - makes a bounded
+# network call, and putting that anywhere inside the reader would break the
+# property every caller relies on. This function itself is a pure read: it walks
+# bytes and prints, exactly like its sibling.
+#
+# Excluded from the output on top of every captain-relevant line:
+#   paused:        a declared external wait, deliberately non-surfacing
+#   captain-held:  a verified transfer the hold lifecycle already owns
+#   resolved:      a closing line whose opening has already surfaced
+# Those three are silent BY DESIGN rather than because a verb regex missed them,
+# so promoting one would re-open a declaration the fleet has just closed.
+#
+# Prints one dropped line per output line in source order. Returns 0 when at
+# least one line was emitted, 1 after a successful walk that emitted none
+# (including an absent log and an exhausted span), and 2 with no output when an
+# existing status object cannot be read or its identity changed under the read -
+# the same three returns as the actionable reader, so a caller that already
+# branches on those codes can branch on these identically.
+status_span_dropped_lines() {  # <status-file> <start-offset>
+  local f=$1 start=${2:-0} size ident cur_ident scratch chunk_file line rc=1 resolve held
+  [ -e "$f" ] || { [ -L "$f" ] && return 2; return 1; }
+  [ -f "$f" ] && [ -r "$f" ] && [ ! -L "$f" ] || return 2
+  ident=$(_fm_open_decisions_file_ident "$f") || return 2
+  size=$(_fm_status_file_size "$f") || return 2
+  size=${size//[[:space:]]/}
+  case "$size" in ''|*[!0-9]*) return 2 ;; esac
+  case "$start" in ''|*[!0-9]*) start=0 ;; esac
+  [ "$start" -le "$size" ] || start=0
+  [ "$start" -lt "$size" ] || return 1
+  resolve=${FM_CLASSIFY_RESOLVE_VERB:-$FM_CLASSIFY_RESOLVE_VERB_DEFAULT}
+  held=${FM_CLASSIFY_CAPTAIN_HELD_VERB:-$FM_CLASSIFY_CAPTAIN_HELD_VERB_DEFAULT}
+  scratch=$(_fm_status_span_scratch "$f") || return 2
+  chunk_file="${scratch}.dropped"
+  _fm_status_read_span "$f" "$start" "$((size - start))" > "$chunk_file" 2>/dev/null \
+    || { rm -f "$chunk_file"; return 2; }
+  cur_ident=$(_fm_open_decisions_file_ident "$f") || { rm -f "$chunk_file"; return 2; }
+  [ "$cur_ident" = "$ident" ] || { rm -f "$chunk_file"; return 2; }
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in *[![:space:]]*) ;; *) continue ;; esac
+    status_is_captain_relevant "$line" && continue
+    case "$(status_line_verb "$line")" in
+      "${FM_CLASSIFY_PAUSED_VERB:-$FM_CLASSIFY_PAUSED_VERB_DEFAULT}"|"$resolve"|"$held") continue ;;
+    esac
+    printf '%s\n' "$line"
+    rc=0
+  done < "$chunk_file"
+  rm -f "$chunk_file"
+  return "$rc"
+}
+
 # Classify WHY an idle/stale crew MIGHT be safely absorbed instead of surfaced,
 # from bin/fm-crew-state.sh's one authoritative current-state line
 # ("state: <s> · source: <src> · <detail>"). Prints exactly one token:

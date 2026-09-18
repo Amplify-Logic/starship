@@ -1630,13 +1630,36 @@ EOF
 # is absorbed; it surfaces only an event the per-wake path absorbed by mistake -
 # the fail-safe backstop.
 heartbeat_scan_finds_actionable() {
-  local f task record rest endpoint ident rc found=1 sig marker
+  local f task record rest endpoint ident rc found=1 sig marker offset dropped line
   FM_HEARTBEAT_SURFACE_ENDPOINTS=''
+  FM_HEARTBEAT_DROPPED_LINES=''
   for f in "$STATE"/*.status; do
     [ -e "$f" ] || [ -L "$f" ] || continue
     task=$(basename "$f"); task="${task%.status}"
-    record=$(status_span_first_actionable_record "$f" "$(hb_surfaced_offset "$task")")
+    offset=$(hb_surfaced_offset "$task")
+    record=$(status_span_first_actionable_record "$f" "$offset")
     rc=$?
+    # Collect what this same span DROPPED, from the same offset, for the opt-in
+    # second look below. A pure read with no network in it, so this scan keeps
+    # the "pure detect, no side effects" contract its callers rely on; the one
+    # bounded network call happens at the call site, once per scan.
+    #
+    # The gate file's PRESENCE is only a precondition here, never the arm
+    # decision - bin/fm-triage-second-look.sh still owns whether an existing gate
+    # actually arms this home. Checking it keeps a home that never created the
+    # file from paying a second span read per status log on every heartbeat for a
+    # capability it has not opted into.
+    if [ "$rc" -ne 2 ] && [ -f "$CONFIG/triage-second-look" ]; then
+      dropped=$(status_span_dropped_lines "$f" "$offset") || dropped=''
+      if [ -n "$dropped" ]; then
+        while IFS= read -r line; do
+          [ -n "$line" ] || continue
+          FM_HEARTBEAT_DROPPED_LINES="${FM_HEARTBEAT_DROPPED_LINES}${task}"$'\t'"${line}"$'\n'
+        done <<EOF
+$dropped
+EOF
+      fi
+    fi
     [ "$rc" -eq 1 ] && [ -z "$record" ] && continue
     if [ "$rc" -eq 2 ]; then
       sig=$(status_observed_signature "$f")
@@ -1651,6 +1674,71 @@ heartbeat_scan_finds_actionable() {
     [ "$rc" -eq 0 ] && found=0
   done
   return "$found"
+}
+
+# The opt-in second look over the lines the scan above walked past
+# (bin/fm-triage-second-look.sh owns the whole contract). Prints one promotion
+# per line as "<task-id> <tier> <reason> <line>"; prints nothing when this home
+# is not armed, when the call fails, or when nothing was promoted.
+#
+# It is ESCALATE-ONLY and additive: it is handed only lines the deterministic
+# classifier already dropped, and all it can do here is turn an absorbed
+# heartbeat into a delivered one or add a reason to one that was already
+# delivering. No answer it returns can silence a wake, so a failure, a timeout,
+# an absent key or an unarmed home leaves this watcher behaving exactly as it
+# does today - which is why every failure path here is an empty result. Empty is
+# not the same as unremarkable, so the tool's diagnostics go to the triage log
+# rather than to /dev/null: an answer shape that stopped parsing looks exactly
+# like a quiet scan from the outside.
+heartbeat_second_look() {
+  local tool="$SCRIPT_DIR/fm-triage-second-look.sh" err line
+  [ -n "${FM_HEARTBEAT_DROPPED_LINES:-}" ] || return 0
+  [ -x "$tool" ] || return 0
+  err=$(mktemp "$STATE/.second-look-stderr.XXXXXX") || err=''
+  if [ -n "$err" ]; then
+    printf '%s' "$FM_HEARTBEAT_DROPPED_LINES" | "$tool" 2>"$err" || true
+    while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      triage_log "second look: $line"
+    done < "$err"
+    rm -f "$err"
+  else
+    printf '%s' "$FM_HEARTBEAT_DROPPED_LINES" | "$tool" 2>/dev/null || true
+  fi
+}
+
+# The heartbeat wake payload for a set of promotions, bounded to one line.
+# Promoted lines carry their reason so the supervisor reads WHY each was raised
+# rather than being sent back to the fleet with no pointer.
+#
+# It is a `heartbeat: ` reason because that is what this row is: the away-mode
+# supervisor dispatches on the payload, and an unqualified sentence would be
+# escalated as an "unknown wake" for a wake this home deliberately creates. The
+# promoted lines still reach an away captain either way - the daemon's own
+# catch-all keeps a separate offset marker from the watcher's, so it re-reads
+# and re-promotes the same dropped lines on its next scan.
+# The dedupe key for a promotion row, derived from the payload it carries.
+#
+# Distinct promotions must not collapse onto each other: two unacknowledged
+# rows sharing one key leave only the last, and the status logs behind both were
+# already marked surfaced through their end, so the earlier line and its reason
+# would never be read. Keying on the content keeps every distinct promotion and
+# still collapses an identical one re-queued before the drain.
+heartbeat_second_look_key() {  # <payload>
+  printf 'second-look:%s' "$(printf '%s' "$1" | hash_pane | cut -c1-12)"
+}
+
+heartbeat_second_look_payload() {  # <promotions>
+  local promotions=$1 task tier reason line payload='' count=0
+  while IFS=$(printf '\t') read -r task tier reason line; do
+    [ -n "$task" ] || continue
+    count=$((count + 1))
+    [ -n "$payload" ] && payload="${payload} | "
+    payload="${payload}${task} (${tier}, ${reason}): ${line}"
+  done <<EOF
+$promotions
+EOF
+  printf 'heartbeat: second look promoted %s dropped status line(s): %s' "$count" "$payload"
 }
 
 # event_wait_or_sleep: the terminal wait of each supervision cycle. For a home
@@ -2536,19 +2624,42 @@ EOF
       # Enqueue first, then record every status log surfaced through its end so the
       # next heartbeat does not re-fire it (enqueue-before-suppress preserved);
       # this wake sends firstmate to the whole fleet, so every log is read.
-      fm_wake_append heartbeat heartbeat heartbeat || exit 1
+      promotions=$(heartbeat_second_look)
+      if [ -n "$promotions" ]; then
+        promotion_payload=$(heartbeat_second_look_payload "$promotions")
+        fm_wake_append heartbeat "$(heartbeat_second_look_key "$promotion_payload")" \
+          "$promotion_payload" || exit 1
+      else
+        fm_wake_append heartbeat heartbeat heartbeat || exit 1
+      fi
       touch "$STATE/.last-heartbeat"
       mark_all_captain_relevant_surfaced || true
       wake "heartbeat"
     else
-      if ! mark_all_captain_relevant_surfaced; then
-        fm_wake_append heartbeat heartbeat heartbeat || exit 1
+      # Nothing the deterministic classifier calls captain-relevant. Ask the
+      # opt-in second look about the lines it dropped BEFORE absorbing, because
+      # absorbing is what marks those lines surfaced and they are never read
+      # again. A promotion here converts this absorb into an ordinary heartbeat
+      # wake carrying its reason; an unarmed home, a failure or no promotion all
+      # produce an empty result and the absorb below is byte-for-byte today's.
+      promotions=$(heartbeat_second_look)
+      if [ -n "$promotions" ]; then
+        promotion_payload=$(heartbeat_second_look_payload "$promotions")
+        fm_wake_append heartbeat "$(heartbeat_second_look_key "$promotion_payload")" \
+          "$promotion_payload" || exit 1
         touch "$STATE/.last-heartbeat"
+        mark_all_captain_relevant_surfaced || true
         wake "heartbeat"
+      else
+        if ! mark_all_captain_relevant_surfaced; then
+          fm_wake_append heartbeat heartbeat heartbeat || exit 1
+          touch "$STATE/.last-heartbeat"
+          wake "heartbeat"
+        fi
+        touch "$STATE/.last-heartbeat"
+        echo $(( $(cat "$STATE/.heartbeat-streak" 2>/dev/null || echo 0) + 1 )) > "$STATE/.heartbeat-streak"
+        triage_log "absorbed heartbeat (no captain-relevant change)"
       fi
-      touch "$STATE/.last-heartbeat"
-      echo $(( $(cat "$STATE/.heartbeat-streak" 2>/dev/null || echo 0) + 1 )) > "$STATE/.heartbeat-streak"
-      triage_log "absorbed heartbeat (no captain-relevant change)"
     fi
   fi
 

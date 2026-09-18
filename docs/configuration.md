@@ -212,6 +212,50 @@ The bound is required rather than cosmetic because churn and pane staleness read
 The flag is a home-local supervision-noise preference and is not inherited by secondmate homes, which run their own crew mix.
 [`architecture.md`](architecture.md) owns the triage contract and `bin/fm-watch.sh`'s `signal_turnend_panes_churned` owns the exact evidence and fail-closed boundaries.
 
+## Status second look (config/triage-second-look)
+
+An opt-in, per-home and per-device second look over the status lines the deterministic wake classifier has already dropped, run only at the two heartbeat backstops.
+It ships inert: with no `enabled = true` line in the private gitignored `config/triage-second-look`, no call is made and supervision behaves exactly as it does without it, so cloning this repo, seeding a secondmate home, or adding a device never starts making paid calls.
+The gate is deliberately not inherited into secondmate homes for the same reason.
+
+**The gap it closes.** Firstmate decides what is captain-relevant from a status line's leading verb ([`../bin/fm-classify-lib.sh`](../bin/fm-classify-lib.sh)).
+That is deliberately verb-aware and correctly refuses to be fooled by prose, but a verb test cannot read a sentence.
+A worker that writes `working: the backfill migration truncated public.users on staging; 4100 rows gone` is dropped permanently by every caller, and the heartbeat backstop does not save it either, because that backstop re-checks for captain-relevant events a later append moved past and this line was never captain-relevant by the only definition the code has.
+This is a silence failure, and it is worst in away mode, where nobody is watching the pane and hours pass.
+
+**Escalate-only, and that is the whole safety argument.**
+The pass receives only lines the shipped classifier already dropped, and the only thing it can emit is a promotion.
+There is no output that silences a line, so neither a model answer nor text a worker writes into a status line can suppress an escalation Firstmate would otherwise make; the worst a hostile status line can achieve is one extra line in a digest.
+That containment is structural and does not depend on the model reading any particular line correctly.
+
+**Fail-open to today.** No key, no `python3`, a timeout, a rate limit, a malformed body: each prints nothing and supervision is unchanged.
+"The second look is down" and "the second look was never built" are the same state.
+
+**Where it runs.** The two heartbeat backstops only, never the per-wake path, which must stay cheap and work offline: the always-on watcher's fleet scan ([`../bin/fm-watch.sh`](../bin/fm-watch.sh)) and the away-mode daemon's catch-all scan ([`../bin/fm-supervise-daemon.sh`](../bin/fm-supervise-daemon.sh)).
+Each scan makes at most one request, never one request per line, covering every dropped line it found up to a fixed batch bound the engine pins; a scan carrying more than that looks at the newest lines, because a status log is append-only and the tail is what just happened.
+Batching is a security property as well as the cheaper shape: a status line arguing for its own escalation measurably wins when evaluated alone and measurably loses when evaluated beside its peers, and it is also cheaper and faster.
+Both margins were measured by the 2026-09-17 probe, which asked a richer request than the line-only one this home now sends; the verification page linked at the end of this section owns those numbers and says what has not been re-measured since.
+
+**What a promotion does.** In the always-on watcher a promotion rides in that heartbeat's wake payload, which names each promoted line and why it was raised.
+A heartbeat that would otherwise have been absorbed becomes an ordinary heartbeat wake instead, and one whose scan already found captain-relevant work wakes as it would have anyway, carrying the promoted lines with it.
+In the away-mode daemon a promotion joins the escalation buffer with the same reason; when any promotion in a scan is one the model is both confident about and rates as interrupting, the buffer is flushed once after every promotion from that scan has joined it, so one scan delivers one digest however many lines it promoted.
+That flush is the same delivery a zero-batch setting uses and preserves the buffer if the injection cannot be confirmed.
+Low model confidence only ever demotes an interrupt to the next batch; it can never silence a promotion.
+
+**Cost.** At most about 516 input tokens per dropped line: that is the 2026-09-17 measurement, taken before the request was narrowed to the line alone.
+A scan carrying five new dropped lines is roughly $0.0001, and a busy home polling all day stays under $1 a month against three orders of magnitude of rate-limit headroom.
+Most scans carry zero or one new dropped line.
+
+Configuration is `key = value` lines and the only key is `enabled`.
+Unlike `config/speak`, a malformed gate file reports on stderr and leaves this home inert rather than exiting loudly, because the caller is a supervision loop and a config typo must never change what that loop does.
+`TYPESAFE_API_KEY` is read from the environment, else from this home's gitignored `.env`, and never appears in argv, stdout, stderr or any state file.
+The dropped status line itself is the whole of what leaves this machine: the task's brief, its worker kind and its earlier status lines are never sent, so arming this gate does not ship a brief's client names, hostnames or unreleased plans to a third party.
+The model is pinned to an exact version rather than an alias because the thresholds were tuned against that version.
+[`../bin/fm-triage-second-look.sh`](../bin/fm-triage-second-look.sh)'s header and `--help` own the exact invocation, the environment overrides and the exit codes, and its engine owns the request shape, the four questions, the batch bound, the thresholds and the tier rule.
+The tool reads its batch on stdin as `<task-id>` TAB `<status line>` records, one per line, so feed it one to read the exact request a scan would send:
+`printf 'my-task\tworking: the backfill migration truncated public.users\n' | bin/fm-triage-second-look.sh --dry-run`.
+Dated live evidence is in [`verification/triage-second-look.md`](verification/triage-second-look.md).
+
 ## Gate defaults (.no-mistakes.yaml)
 
 The tracked `.no-mistakes.yaml` sets `test.evidence.store_in_repo: true` and pins `commands.lint` to `bin/fm-lint.sh`, the same owner CI invokes.

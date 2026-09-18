@@ -637,6 +637,10 @@
       "audience": "maintainer-verification"
     },
     {
+      "path": "docs/verification/triage-second-look.md",
+      "audience": "maintainer-verification"
+    },
+    {
       "path": "docs/voice-relay.md",
       "audience": "operator-current"
     },
