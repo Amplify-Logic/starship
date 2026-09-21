@@ -57,14 +57,11 @@ Each shard is still strictly serial in itself, and separate runners mean no two 
 `.github/workflows/ci.yml` derives the same `n` from `strategy.job-total` rather than a literal, so changing the shard count in either file without the other fails the lane loudly instead of leaving part of the required suite unrun.
 
 Assignment is longest-processing-time bin packing over per-script duration hints embedded in `bin/fm-test-run.sh`.
-The embedded hints include the slowest measurements retained from the `fm-test-timing-portable-serial-*` artifacts of three green CI runs on 2026-09-01, [33558082172](https://github.com/kunchenguid/firstmate/actions/runs/33558082172), [33523597838](https://github.com/kunchenguid/firstmate/actions/runs/33523597838), and [33463326167](https://github.com/kunchenguid/firstmate/actions/runs/33463326167), the completed-script measurements from [run 34342484144](https://github.com/kunchenguid/firstmate/actions/runs/34342484144), plus the 5121 ms native-Windows focused runner measurement for `tests/fm-pi-windows-shell-invocation.test.sh` from 2026-09-06T21:02Z.
+Every hint in the table is CI-derived: the slowest completed `duration_ms` per `path` across the `fm-test-timing-portable-serial-*` artifacts of four green Amplify-Logic main CI runs, [35589872313](https://github.com/Amplify-Logic/firstmate/actions/runs/35589872313) and [35583964981](https://github.com/Amplify-Logic/firstmate/actions/runs/35583964981) on 2026-09-21 and [35405990130](https://github.com/Amplify-Logic/firstmate/actions/runs/35405990130) and [35389857132](https://github.com/Amplify-Logic/firstmate/actions/runs/35389857132) on 2026-09-19.
 Taking the slowest of several CI runs rather than a single run keeps the balance honest on a slow runner.
-The fork-owned scripts those runs completed carry hints measured on this fork's own `ubuntu-latest` runners, taken as the slowest completed `duration_ms` per path across five green Amplify-Logic CI runs on 2026-09-15: [34944102029](https://github.com/Amplify-Logic/firstmate/actions/runs/34944102029), [34942594033](https://github.com/Amplify-Logic/firstmate/actions/runs/34942594033), [34905239028](https://github.com/Amplify-Logic/firstmate/actions/runs/34905239028), [34833455475](https://github.com/Amplify-Logic/firstmate/actions/runs/34833455475), and [34819320177](https://github.com/Amplify-Logic/firstmate/actions/runs/34819320177).
-Those runs predate the wholesale re-base, so they measure the fork's own scripts rather than the creator-side scripts the re-base introduced, which stay on the default weight until this fork's CI has measured them.
-One row breaks that provenance on purpose: `tests/fm-cursor-adapter.test.sh` carries 39523 ms measured locally on macOS on 2026-09-16, as the slowest of three consecutive runs, because the cursor catalog bound it now proves costs roughly 22 seconds of real waiting that postdates those CI runs and would otherwise sit behind a 3758 ms hint.
-That figure is conservative for `ubuntu-latest`, where the non-waiting part of the suite ran in 3758 ms, so the next CI-derived refresh should replace it rather than keep it.
-Six fork-only serial scripts also have no hint row, because none of those five runs recorded a completed duration for them: `tests/fm-calm-extension.test.sh`, `tests/fm-claude-continuity-live-e2e.test.sh`, `tests/fm-cursor-primary-profile.test.sh`, `tests/fm-herdr-layout-preview-e2e.test.sh`, `tests/fm-herdr-worker-presentation-e2e.test.sh`, and `tests/fm-voice-relay-freshness.test.sh`.
-They stay on the default weight knowingly, so a hint refresh has to measure them alongside the creator-side remainder rather than treating every fork script as already measured.
+All four postdate the wholesale re-base, so they measure the creator-side scripts it introduced alongside the fork's own, and every one of the 235 scripts the serial lane currently holds carries a measured row rather than the default weight.
+Thirty-three of them gate-skip on `ubuntu-latest` because the real tool they exercise is absent there, so their hint is that near-zero CI cost: the right weight for packing these CI shards, and the wrong one for predicting a local run that has the tool.
+One row is deliberately not CI-derived: `tests/fm-pi-windows-shell-invocation.test.sh` keeps the 5121 ms native-Windows focused-runner measurement from 2026-09-06T21:02Z, because the portable shards skip it and its 1188 ms Linux gate-skip would understate a focused Windows run.
 A script with no hint gets the conservative `PORTABLE_SERIAL_DEFAULT_WEIGHT_MS` default.
 Hints only affect balance: the coverage guard keeps the partition complete and disjoint whatever they say, so a stale hint costs a slower shard rather than lost coverage.
 Balance is still worth keeping current, because enough unmeasured scripts let one shard carry more than twice another shard's real work and reach the job cap while another runner sits idle.
@@ -73,9 +70,10 @@ That is not hypothetical: by 2026-09-01 the lane had grown from 116 to 139 scrip
 Refresh the hints whenever the serial lane gains scripts, rather than waiting for that bound to trip.
 
 `bin/fm-test-run.sh` owns the per-shard packing, so its `--check-coverage` output is the current account of lane size, shard composition, and balance rather than a copied table.
-Shard 1 already runs about 29 minutes on main, so the 45-minute job cap keeps meaningful hang-tripwire margin for job setup and runner-speed spread.
+Across the four runs above the previous hints left shard 1 carrying 26.5 to 30.6 minutes of script time while the lightest shard carried 15.1 to 20.1, and the refreshed hints estimate all five shards at about 23.1 minutes, so the 45-minute job cap keeps meaningful hang-tripwire margin for job setup and runner-speed spread.
+Those per-shard figures are packing arithmetic over measured hints, not a measured job duration; the next green run's artifacts are what confirm the new spread.
 
-The single longest script, `tests/fm-watch-triage.test.sh` at 262626 ms, is the floor for any shard count.
+The single longest script, `tests/fm-watch-triage.test.sh` at 636459 ms, is the floor for any shard count.
 
 Refresh the CI-derived hints by downloading the per-shard timing artifacts from several green runs of this fork's own CI, which is the measuring authority for both fork-owned and creator-side scripts, and replacing the `portable_serial_weight_hints` table in `bin/fm-test-run.sh` with the slowest measured `duration_ms` per `path`:
 
@@ -115,7 +113,7 @@ Portable shards, each portable serial shard, and the Herdr lane upload runner-ge
 | Lane | Bound | Rationale |
 |---|---|---|
 | portable parallel 1/2 | See [CI workflow](../.github/workflows/ci.yml) | The workflow owns the parallel cap rationale and its evidence limits. |
-| portable serial 1-5 | job `timeout-minutes: 45` | Shard 1 already runs about 29 minutes on main, which left a 30-minute cap no margin against runner-speed variance; the 45-minute cap remains a hang tripwire while leaving real margin for job setup and runner-speed spread. |
+| portable serial 1-5 | job `timeout-minutes: 45` | Shard 1 ran 26.5 to 30.6 minutes on main under the previous hints, which left a 30-minute cap no margin against runner-speed variance; the 45-minute cap remains a hang tripwire while leaving real margin for job setup and runner-speed spread. |
 | Herdr | family-run step `timeout-minutes: 20`; job `timeout-minutes: 75` backstop | Healthy runs finished around 7 minutes before this lane gained `fm-backend-herdr-focus-flash-e2e`, which measures about 2 minutes against a real lab locally, so the step bound is still the hang tripwire (cleanup and timing artifacts still upload) while the job cap stays a last-resort backstop. Refresh this figure from the lane's uploaded timing artifact. |
 
 Timeouts are intended as hang tripwires; a passing coverage guard does not establish a healthy job duration.
