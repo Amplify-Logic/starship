@@ -905,6 +905,40 @@ test_worker_role_scope() {
   pass "fm-brief: scaffolds leave the worker role scope to the launch boundary and keep the secondmate contract"
 }
 
+# Both PR-ending modes must tell the worker to aim the PR at the repository the
+# worktree's origin points at: gh defaults a fork's PR to the parent repository,
+# which twice landed a task PR on the upstream parent. The command lives in one
+# owner (fm_pr_target_block), so the two variants are asserted to carry the same
+# resolve command, the explicit --repo pass, and the pre-done-line check.
+test_pr_target_follows_origin_in_both_pr_modes() {
+  local home id brief
+  home="$TMP_ROOT/pr-target-home"
+  mkdir -p "$home/data"
+  for id_mode in "brief-prtarget-nm:no-mistakes" "brief-prtarget-direct:direct-PR"; do
+    id=${id_mode%%:*}
+    FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" some-proj --mode "${id_mode##*:}" >/dev/null 2>&1 \
+      || fail "$id: scaffold failed"
+    brief="$home/data/$id/brief.md"
+    assert_grep "## PR target" "$brief" "$id: brief missing the PR target instruction"
+    # shellcheck disable=SC2016 # The brief prose names the literal shell command.
+    assert_grep 'ORIGIN_REPO=$(git remote get-url origin' "$brief" \
+      "$id: brief missing the exact origin-resolving command"
+    # shellcheck disable=SC2016 # The brief prose quotes a literal command name.
+    assert_grep 'Do not resolve it with a bare `gh repo view`' "$brief" \
+      "$id: brief lost the warning that gh resolves a fork to its parent"
+    # shellcheck disable=SC2016 # The brief prose names the literal shell variable.
+    assert_grep 'pass `--repo "$ORIGIN_REPO"` on PR creation' "$brief" \
+      "$id: brief does not require the explicit repository on PR creation"
+    assert_grep "close that PR and raise it again" "$brief" \
+      "$id: brief does not require verifying the PR URL before the done line"
+  done
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-prtarget-local some-proj --mode local-only >/dev/null 2>&1 \
+    || fail "local-only scaffold failed"
+  assert_no_grep "## PR target" "$home/data/brief-prtarget-local/brief.md" \
+    "local-only brief opens no PR and must not carry the PR target instruction"
+  pass "fm-brief.sh: direct-PR and no-mistakes briefs target origin's repository for the PR"
+}
+
 test_worker_role_scope
 test_script_parses
 test_no_heredoc_in_command_substitution
@@ -915,6 +949,7 @@ test_ship_mode_is_explicit_not_registry
 test_delivery_flags_are_refused_where_they_do_not_apply
 test_faster_paths_use_configured_authority_without_stacked_review
 test_no_mistakes_dod_wording
+test_pr_target_follows_origin_in_both_pr_modes
 test_ask_user_escalation_format
 test_ship_project_memory_wording
 test_herdr_lab_contract_is_explicit_and_complete

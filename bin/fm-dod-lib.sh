@@ -38,6 +38,8 @@
 # conflicting role is superseded rather than duplicated.
 # fm_ship_rule_one owns the mode-specific first ship safety rule shared by an
 # ordinary ship brief and the durable contract written during scout promotion.
+# fm_pr_target_block owns the fork-safe PR-target instruction that the direct-PR
+# and no-mistakes definitions of done both render, so the two cannot drift.
 
 fm_brief_worker_role() {  # <state-dir> <task-id>
   local state=$1 task_id=$2
@@ -232,6 +234,24 @@ fm_ask_user_escalation_block() {  # <data-dir> <task-id>
 EOF
 }
 
+# Single owner of the PR-target instruction shared by every ship mode that ends
+# in a pull request. A fork's worktree makes `gh` default a new PR to the parent
+# repository, which has landed task PRs on the wrong repo, so the block names
+# one command for resolving origin's owner/repo and one check before the done
+# line. The command reads the remote directly because a bare `gh repo view` on
+# a fork reports the parent repository. Rendered by the direct-PR and no-mistakes definitions of done, and so by
+# bin/fm-brief.sh and the ship contract bin/fm-promote.sh writes.
+fm_pr_target_block() {
+  cat <<'EOF'
+
+## PR target
+This repository may be a fork, and `gh` defaults a fork's pull request to the parent repository, so always name the repository your worktree's `origin` points at.
+Resolve it once from the remote itself - `ORIGIN_REPO=$(git remote get-url origin | sed -E 's#^[^/]*//[^/]*/##; s#^[^:/]*:##; s#\.git$##')` - and pass `--repo "$ORIGIN_REPO"` on PR creation.
+Do not resolve it with a bare `gh repo view`: on a fork that reports the parent repository, which is the mistake this guards against.
+Before you append the done line, confirm the PR URL the forge printed is under `$ORIGIN_REPO`; if it is not, close that PR and raise it again against `$ORIGIN_REPO`.
+EOF
+}
+
 fm_dod_block() {  # <mode> <task-id>
   local mode=$1 id=$2
   case "$mode" in
@@ -244,6 +264,7 @@ The task is complete only when committed on your branch.
 When it is implemented and committed, push your branch and open a PR with \`gh-axi\`, then append \`done: PR {url}\` to the status file and stop.
 Do NOT run /no-mistakes. The configured merge authority decides whether to merge the PR; firstmate relays the outcome.
 EOF
+      fm_pr_target_block
       ;;
     local-only)
       cat <<EOF
@@ -291,6 +312,7 @@ Two firstmate-specific rules layer on top of that guidance:
 
 After /no-mistakes reports CI green (the CI-ready return point - do not wait for it to keep monitoring in the background until merge), append \`done: PR {url} checks green\` and stop. You are finished.
 EOF
+      fm_pr_target_block
       ;;
     *)
       echo "error: fm_dod_block: unknown delivery mode '$mode'" >&2
