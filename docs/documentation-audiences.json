@@ -671,6 +671,11 @@
     {
       "path": "skills/stow/SKILL.md",
       "audience": "public-product"
+    },
+    {
+      "path": "docs/todo-page-review.md",
+      "audience": "maintainer-architecture",
+      "owner": "bin/fm-todo-render.sh"
     }
   ]
 }
