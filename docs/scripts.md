@@ -210,6 +210,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-morning-intake-schedule.sh` | Render, install, inspect, and remove that intake's opt-in macOS launchd schedule and its live watcher check (docs/configuration.md "Morning intake") |
 | `fm-channel-intake.sh`   | Opt-in continuous channel intake: the per-source repeat-poll gate and obligation ledger, local only, owning cadence, checkpoints, dedup, backoff, and the notification budget (docs/channel-intake.md) |
 | `fm-channel-intake-schedule.sh` | Render, install, inspect, and remove that intake's opt-in macOS launchd schedule and its live watcher check (docs/channel-intake.md) |
+| `fm-todo-render.sh`      | Rebuild the day's Lavish to-do page from the channel-intake ledger, deterministically and with no model call, ranking open work by severity then recency (docs/channel-intake.md) |
 | `fm-launchd-schedule-lib.sh` | Shared per-home LaunchAgent render, lint, load, and remove for this fork's scheduled owners |
 | `fm-task-outcome.sh`     | Resolve a worker outcome from an explicit value, structured backlog title, or safe fallback |
 | `fm-visible-title.sh`    | Build the human WORKER tab title from a resolved outcome and state label, the single owner of that format |

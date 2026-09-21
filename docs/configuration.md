@@ -1212,6 +1212,12 @@ The completion watermark under private gitignored `data/morning-intake/` advance
 A failed or partial intake therefore never marks the day done, which is what lets a corrected source message published after a same-day failure still be ingested while attempts remain.
 Reports and durable records survive both acknowledgement and schedule removal.
 
+The day's Lavish page is part of that completion rather than an extra.
+`complete` refuses without `--lavish FILE` naming an existing, non-empty `.html` page under the home's own `.lavish/` directory, so a markdown report alone no longer finishes the day.
+A day that genuinely cannot have a page completes with `--no-lavish REASON` instead; the reason is written into the day's durable record and printed by `status` as `state_lavish_waiver`, so a skipped page stays visible rather than indistinguishable from a rendered one.
+The two are mutually exclusive, a `rearm` clears both so the next `complete` proves the page again, and the gate never opens or renders the page itself.
+[`bin/fm-todo-render.sh`](../bin/fm-todo-render.sh) owns rendering that page; its header and `--help` own the exact commands and paths.
+
 Two delivery paths reach the orchestrator, and neither one starts a session.
 `arm-check` writes `state/<label>.check.sh` and binds it through `bin/fm-check-register.sh`, so a running watcher executes it on its slow cadence and wakes the live primary through the established check path.
 `arm-check` is idempotent: re-running it converges on the same registered state, and it rebinds a shim whose bytes no longer match the recorded binding.
