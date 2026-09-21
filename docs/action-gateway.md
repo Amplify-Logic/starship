@@ -65,7 +65,8 @@ Severity classes follow Atelier's tool taxonomy shape (`read` / `costly` / `exte
 
 Registered irreversible kinds include `purchase`, `payment`, `spend`, `transfer`, `checkout`, `ad.spend`, `email.send`, `message.send`, `sms.send`, `chat.send`, `notify.person`, `outreach.send`, `social.post`, `submission.send`, `booking.request`, `device.config.push`, and `device.firmware.push`.
 Registered external kinds include `calendar.create`, `crm.update`, `file.write.remote`, `kb.fact.publish`, `course.publish`, and `sheet.write`.
-The deny-by-default registry in `bin/fm-action-gateway.sh` is the owner of that list; `classify --action-kind` reports severity, ceiling, and whether a kind is graduatable without duplicating it.
+The deny-by-default registry in `bin/fm-action-gateway.sh` is the owner of that list; `classify --action-kind` reports severity, ceiling, and whether a kind is graduatable, and `classify --list` dumps every registered kind with its severity.
+The two enumerations above are convenience copies and are drift-checked against `classify --list` by `tests/fm-action-gateway.test.sh`, so adding or removing a registered kind fails that test until this section is updated.
 No configuration, trusted-task-type rule, or escalation path may graduate spend or real-person messaging to autonomous.
 
 ## Canonical action digest
@@ -132,6 +133,7 @@ fm-action-gateway.sh status --digest HEX
 fm-action-gateway.sh gate-check --digest HEX
 fm-action-gateway.sh replay
 fm-action-gateway.sh classify --action-kind KIND             # registry lookup; no audit I/O
+fm-action-gateway.sh classify --list                         # every registered kind + severity
 ```
 
 Mutating commands print `key=value` lines (at least `decision=` and `state=`) only after the durable append succeeds.

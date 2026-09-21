@@ -19,6 +19,7 @@
 #   gate-check --digest H       fail closed unless digest is approved (choke helper)
 #   replay                      rebuild all states; crash-safe confirm-first default
 #   classify --action-kind K    print severity, ceiling, and whether K is graduatable
+#   classify --list             print every registered action_kind and its severity
 #   -h|--help
 #
 # Default (no command, stdin or --file): prepare.
@@ -53,6 +54,7 @@ usage: fm-action-gateway.sh prepare [--file <path>]
        fm-action-gateway.sh gate-check --digest <hex>
        fm-action-gateway.sh replay
        fm-action-gateway.sh classify --action-kind <kind>
+       fm-action-gateway.sh classify --list
        fm-action-gateway.sh -h|--help
 
 Privilege-separated confirm-first action broker: workers prepare requests;
@@ -733,13 +735,22 @@ def cmd_prepare(cmd: dict, by_digest, by_idem, used_nonces):
 def cmd_classify(cmd: dict) -> None:
     """Registry-only: severity, ceiling, and whether this kind may graduate.
 
+    With list set, dump every registered kind and its severity instead, so
+    documentation and other consumers can read the registry from the broker.
+
     Reuses resolve_severity + classify_ceiling. Irreversible kinds and any
     kind the ceiling classifier labels spend or messaging are non-graduatable.
     Unknown kinds are refused (deny by default). No audit I/O.
     """
+    if cmd.get("list"):
+        for kind, severity in sorted(
+            OPERATION_REGISTRY.items(), key=lambda kv: (kv[1], kv[0])
+        ):
+            print(f"action_kind={kind} severity={severity}")
+        return
     kind = cmd.get("action_kind")
     if not isinstance(kind, str) or not kind.strip():
-        fail("classify requires --action-kind")
+        fail("classify requires --action-kind or --list")
     kind = kind.strip()
     severity = resolve_severity(kind)
     ceiling = classify_ceiling(severity, kind, {})
@@ -1299,13 +1310,17 @@ cmd_replay() {
 }
 
 cmd_classify() {
-  local kind='' cmd_json
+  local kind='' list=0 cmd_json
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --action-kind)
         [ "$#" -ge 2 ] || fail "--action-kind requires a value"
         kind=$2
         shift 2
+        ;;
+      --list)
+        list=1
+        shift
         ;;
       -*)
         fail "unknown flag: $1"
@@ -1315,7 +1330,14 @@ cmd_classify() {
         ;;
     esac
   done
-  [ -n "$kind" ] || fail "classify requires --action-kind"
+  if [ "$list" -eq 1 ]; then
+    [ -z "$kind" ] || fail "classify takes --action-kind or --list, not both"
+    broker_paths
+    run_broker "$GW_ROOT" "$AUDIT_PATH" "$SECRET_PATH" '{"op":"classify","list":true}' ||
+      fail "classify failed"
+    return
+  fi
+  [ -n "$kind" ] || fail "classify requires --action-kind or --list"
   broker_paths
   cmd_json=$(python3 -c 'import json,sys; print(json.dumps({"op":"classify","action_kind":sys.argv[1]}))' "$kind")
   run_broker "$GW_ROOT" "$AUDIT_PATH" "$SECRET_PATH" "$cmd_json" || fail "classify failed"

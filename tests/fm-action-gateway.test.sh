@@ -421,6 +421,45 @@ test_classify_graduatable_query() {
   pass "classify reuses the ceiling classifier for graduation"
 }
 
+# docs/action-gateway.md enumerates the registered irreversible and external
+# kinds in prose while the broker's registry owns them. Both lists are compared
+# through `classify --list` so the check reads the executable, never its source.
+test_doc_kind_lists_match_registry() {
+  local doc="$ROOT/docs/action-gateway.md"
+  local listing rc severity prose doc_kinds registry_kinds missing extra
+
+  set +e
+  listing=$("$GW_SH" classify --list 2>&1)
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "classify --list exit"
+  assert_contains "$listing" 'action_kind=purchase severity=irreversible' \
+    "classify --list dumps the registry"
+
+  for severity in irreversible external; do
+    prose=$(grep -c "^Registered $severity kinds include " "$doc" || true)
+    [ "$prose" = "1" ] || fail \
+      "docs/action-gateway.md must carry exactly one 'Registered $severity kinds include' line (found $prose)"
+
+    # shellcheck disable=SC2016  # backticks are literal Markdown code fences here
+    doc_kinds=$(grep "^Registered $severity kinds include " "$doc" |
+      grep -o '`[^`]*`' | tr -d '`' | sort -u)
+    registry_kinds=$(printf '%s\n' "$listing" |
+      sed -n "s/^action_kind=\\(.*\\) severity=$severity\$/\\1/p" | sort -u)
+
+    [ -n "$doc_kinds" ] || fail "no $severity kinds parsed from docs/action-gateway.md"
+    [ -n "$registry_kinds" ] || fail "no $severity kinds reported by classify --list"
+
+    missing=$(comm -13 <(printf '%s\n' "$doc_kinds") <(printf '%s\n' "$registry_kinds") | tr '\n' ' ')
+    extra=$(comm -23 <(printf '%s\n' "$doc_kinds") <(printf '%s\n' "$registry_kinds") | tr '\n' ' ')
+    [ -z "${missing// /}" ] || fail \
+      "docs/action-gateway.md omits registered $severity kinds: ${missing% }"
+    [ -z "${extra// /}" ] || fail \
+      "docs/action-gateway.md lists $severity kinds the registry does not register: ${extra% }"
+  done
+  pass "doc kind enumerations match the broker registry"
+}
+
 test_crash_replay_defaults_to_confirm_first() {
   local out digest
   reset_gw
@@ -593,6 +632,7 @@ test_state_transitions_execute_stub_to_unknown
 test_messaging_ceiling_non_graduatable
 test_occ_registry_classifications
 test_classify_graduatable_query
+test_doc_kind_lists_match_registry
 test_crash_replay_defaults_to_confirm_first
 test_illegal_transition_forged_approved_refused
 test_idempotency_key_conflict
