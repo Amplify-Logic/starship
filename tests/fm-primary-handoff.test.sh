@@ -817,8 +817,75 @@ test_astra_registered_profile() {
   pass "handoff registers astra on the codex CLI and quota pool without joining the default chain"
 }
 
+test_cursor_grok_quota_monitored() {
+  local norm cli provider remaining unmonitored
+  norm=$(
+    # shellcheck source=bin/fm-primary-handoff-lib.sh
+    . "$ROOT/bin/fm-primary-handoff-lib.sh"
+    fm_handoff_normalize_profile cursor
+  )
+  [ "$norm" = cursor-grok ] || fail "handoff did not normalize the cursor launcher alias"
+  cli=$(
+    # shellcheck source=bin/fm-primary-handoff-lib.sh
+    . "$ROOT/bin/fm-primary-handoff-lib.sh"
+    fm_handoff_profile_cli cursor-grok
+  )
+  [ "$cli" = agent ] || fail "handoff did not map cursor-grok to the agent CLI"
+  provider=$(
+    # shellcheck source=bin/fm-primary-handoff-lib.sh
+    . "$ROOT/bin/fm-primary-handoff-lib.sh"
+    fm_handoff_profile_provider cursor-grok
+  )
+  [ "$provider" = cursor ] || fail "handoff did not map cursor-grok to the cursor quota provider"
+  cat > "$TMP_ROOT/quota-cursor.json" <<'JSON'
+{
+  "providers": [
+    {
+      "provider": "cursor",
+      "state": { "status": "fresh" },
+      "windows": [
+        { "id": "included_usage", "kind": "monthly", "percentRemaining": 26 },
+        { "id": "auto_usage", "kind": "monthly", "percentRemaining": 24 },
+        { "id": "api_usage", "kind": "monthly", "percentRemaining": 5 },
+        { "id": "grok_bot", "kind": "weekly", "percentRemaining": 3 }
+      ]
+    }
+  ]
+}
+JSON
+  remaining=$(
+    # shellcheck source=bin/fm-primary-handoff-lib.sh
+    . "$ROOT/bin/fm-primary-handoff-lib.sh"
+    FM_HANDOFF_QUOTA_JSON="$TMP_ROOT/quota-cursor.json" \
+      fm_handoff_min_remaining_for_profile cursor-grok
+  )
+  [ "$remaining" = 24 ] || \
+    fail "cursor-grok did not read only the general cursor plan windows: $remaining"
+  (
+    # shellcheck source=bin/fm-primary-handoff-lib.sh
+    . "$ROOT/bin/fm-primary-handoff-lib.sh"
+    FM_HANDOFF_QUOTA_JSON="$TMP_ROOT/quota-cursor.json" \
+      fm_handoff_over_threshold cursor-grok 30
+  ) || fail "cursor-grok did not trip the quota threshold from its plan windows"
+  (
+    # shellcheck source=bin/fm-primary-handoff-lib.sh
+    . "$ROOT/bin/fm-primary-handoff-lib.sh"
+    FM_HANDOFF_QUOTA_JSON="$TMP_ROOT/quota-cursor.json" \
+      fm_handoff_over_threshold cursor-grok 10
+  ) && fail "cursor-grok tripped the quota threshold while it still had headroom"
+  unmonitored=$(
+    # shellcheck source=bin/fm-primary-handoff-lib.sh
+    . "$ROOT/bin/fm-primary-handoff-lib.sh"
+    FM_HANDOFF_QUOTA_JSON="$TMP_ROOT/quota-cursor.json" \
+      fm_handoff_min_remaining_for_profile pi
+  )
+  [ "$unmonitored" = na ] || fail "pi reported a quota window while unmonitored: $unmonitored"
+  pass "handoff reads cursor-grok quota from the general cursor plan windows only"
+}
+
 test_disabled_is_noop
 test_astra_registered_profile
+test_cursor_grok_quota_monitored
 test_happy_path_atomic_handoff
 test_flush_failure_keeps_outgoing_lock
 test_signal_failure_keeps_outgoing_lock

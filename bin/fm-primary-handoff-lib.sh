@@ -149,11 +149,18 @@ fm_handoff_profile_cli() {
   esac
 }
 
+# Map a primary profile onto the quota-axi provider whose general account
+# windows bound it. An empty result means the profile is unmonitored on the
+# quota axis. cursor-grok runs on the cursor account, whose plan windows
+# bound every model it routes to. A provider whose general window ids the
+# producer stops reporting degrades to `na`, the same as an unmonitored
+# profile, rather than reading a narrower window as an account bound.
 fm_handoff_profile_provider() {
   case "$1" in
     claude|claude-fable|claude-opus|opus) printf 'claude\n' ;;
     codex|astra) printf 'codex\n' ;;
     grok) printf 'grok\n' ;;
+    cursor|cursor-grok|cursor-grok45) printf 'cursor\n' ;;
     *) printf '\n' ;;
   esac
 }
@@ -402,6 +409,7 @@ fm_handoff_min_remaining_for_profile() {
       if $p == "claude" then ["five_hour","seven_day"]
       elif $p == "codex" then ["five_hour","weekly"]
       elif $p == "grok" then ["five_hour","weekly"]
+      elif $p == "cursor" then ["included_usage","auto_usage"]
       else []
       end;
     ([.providers[]? | select(.provider == $p) | .windows[]? as $window

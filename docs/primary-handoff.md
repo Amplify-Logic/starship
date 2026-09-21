@@ -165,7 +165,8 @@ That marker is not a lock and never authorizes mutation.
 
 ## Quota-monitored providers only (quota axis)
 
-Auto-rotation via `check`/`run` only triggers the **quota** axis for quota-monitored providers: claude, codex, and grok.
+Auto-rotation via `check`/`run` only triggers the **quota** axis for quota-monitored providers: claude, codex, grok, and cursor.
+A cursor-grok primary is read from its cursor plan windows (`included_usage` and `auto_usage`), not from the model- or bot-scoped windows quota-axi also reports for that account.
 When the active primary is pi, kimi-k3, or opencode, no quota source exists, `min_remaining` reports `na`, and the quota axis never auto-hands-off.
 The **context** axis can still fire for any profile that has a durable context sample.
 Operators must run `fm-primary-handoff.sh execute --force` (or wait until a monitored provider is active again) to force a quota-style chain walk off an unmonitored provider.
@@ -173,4 +174,4 @@ This is an accepted limitation, not a bug.
 
 ## Testing
 
-`tests/fm-primary-handoff.test.sh` exercises the happy path, disabled no-op, context-threshold detection, same-runtime rotation, afk refusal, cooldown, workers-survive, watcher re-arm, wake durability across flush, and failure-injection cases that prove the never-two-holders invariant across flush, signal, wait, release, and launch failures.
+`tests/fm-primary-handoff.test.sh` exercises the happy path, disabled no-op, context-threshold detection, the cursor-grok quota mapping and its general-window selection, same-runtime rotation, afk refusal, cooldown, workers-survive, watcher re-arm, wake durability across flush, and failure-injection cases that prove the never-two-holders invariant across flush, signal, wait, release, and launch failures.
