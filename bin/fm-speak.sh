@@ -85,6 +85,22 @@
 # from holding the audio device. A speech error downstream of that handoff is unobservable here
 # by design.
 #
+# SERIAL PLAYBACK. Two calls in one turn used to overlap because each handoff
+# returned before audio started. Playback is now serialized per home through
+# state/.speak.lock, acquired by the detached speaker after that handoff: a
+# second line waits for the current one to finish, then plays, and the calling
+# turn is still not held open by audio. Dry-run and register refusals never
+# take the lock. The lock serializes playback without ordering it: waiting
+# speakers race for the free lock rather than queueing on it, so two lines
+# handed off close together play one after the other but not necessarily in
+# the order they were handed off. The wait is outside the speaker bound, so a
+# queued line still gets its own playback budget after the line ahead of it
+# ends. A dead holder is stolen by the portable lock helpers in
+# bin/fm-wake-lib.sh, and a holder whose pid number has since been handed to
+# an unrelated process is reclaimed on its recorded identity, so a killed
+# speaker cannot silence the home for good; a holder that is genuinely still
+# speaking is waited out. See hold_playback_lock.
+#
 # NEVER SHARES THE CALLER'S PROCESS GROUP. Detaching the speaker from the
 # caller's streams is not enough to let a line finish: the speaker must also
 # leave the caller's process group, or anything that reaps that group takes the
@@ -106,14 +122,15 @@
 #                      (default 15)
 #   FM_SPEAK_TIMEOUT   bounded seconds for the detached speaker (default 60)
 #   FM_STATE_OVERRIDE  state directory holding the confirmed-voice memory
-#                      (default: $FM_HOME/state)
+#                      and the per-home playback lock (default: $FM_HOME/state)
 #
 # EXIT CODES (mirroring the register owner's own contract):
 #   0  handed to the speaker, printed under --dry-run, or this home is not
 #      opted in
 #   1  cannot speak: the register owner is unreachable, failed or exceeded its
 #      bound, the speech binary is missing, the configured voice is not one
-#      this machine has, or the config is invalid
+#      this machine has, the state directory that holds the playback lock
+#      cannot be created, or the config is invalid
 #   2  refused by the register; nothing was spoken and the reason is reported
 set -eu
 
@@ -124,6 +141,8 @@ CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 CONFIG_FILE="$CONFIG/speak"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 VOICE_CONFIRMED_FILE="$STATE/speak-voice-confirmed"
+SPEAK_LOCK="$STATE/.speak.lock"
+SPEAK_LOCK_HELD=false
 
 DEFAULT_SHAPER_TIMEOUT=15
 DEFAULT_SPEAKER_TIMEOUT=60
@@ -297,6 +316,109 @@ play_bounded() {  # <cmd...>
   kill "$WATCHDOG_PID" 2>/dev/null || true
 }
 
+# Portable lock helpers live in fm-wake-lib.sh. Loaded in the parent before a
+# word has been shaped: the state directory the lock lives in has to be refused
+# here, while nothing is outstanding, rather than abort a line that was already
+# shaped and leave its temporary file behind. The directory is created under
+# this script's own refusal because the library creates it unguarded when
+# sourced, which would report the failure as a bare mkdir error from a tool the
+# captain never called. A missing library fails the same way, on stderr,
+# instead of dying silently in the detached speaker whose streams are already
+# closed.
+load_speak_lock_helpers() {
+  mkdir -p "$STATE" 2>/dev/null \
+    || die "cannot create the state directory that holds the playback lock: $STATE"
+  # shellcheck source=bin/fm-wake-lib.sh
+  . "$ROOT/bin/fm-wake-lib.sh"
+}
+
+# fm_lock_try_acquire proves a holder alive with kill -0 on the recorded pid
+# alone. A speaker that was killed outright leaves its lock in persistent
+# state, and once that pid number is handed to some unrelated long-lived
+# process the lock reads as held forever - permanent silence, which is a worse
+# failure than the overlap being fixed. Recording the holder's identity beside
+# the pid is what tells a speaker that is still speaking from a pid that has
+# merely been reused.
+# shellcheck disable=SC2329 # Reached only through hold_playback_lock.
+record_speak_lock_identity() {
+  local pid identity
+  pid=$(cat "$SPEAK_LOCK/pid" 2>/dev/null) || return 0
+  identity=$(fm_pid_identity "$pid" 2>/dev/null) || return 0
+  [ -n "$identity" ] || return 0
+  printf '%s\n' "$identity" > "$SPEAK_LOCK/pid-identity" 2>/dev/null || true
+}
+
+# Positive proof that the live pid in the lock is no longer the speaker that
+# took it. Anything short of that proof - an identity that was never recorded,
+# or one this machine cannot read back - leaves the holder alone, so the wait
+# can never cut a line that is still playing.
+# shellcheck disable=SC2329 # Reached only through hold_playback_lock.
+speak_lock_pid_was_reused() {
+  local pid recorded current
+  pid=$(cat "$SPEAK_LOCK/pid" 2>/dev/null) || return 1
+  fm_pid_alive "$pid" || return 1
+  recorded=$(cat "$SPEAK_LOCK/pid-identity" 2>/dev/null) || return 1
+  [ -n "$recorded" ] || return 1
+  current=$(fm_pid_identity "$pid" 2>/dev/null) || return 1
+  [ -n "$current" ] || return 1
+  [ "$current" != "$recorded" ]
+}
+
+# Reclaim under the lock's steal mutex, the same serialization
+# fm_lock_try_acquire uses for its own dead-owner steal: while it is held no
+# other speaker can publish the lock, so the window between proving the pid
+# was reused and removing the lock cannot swallow a genuine new claim.
+# shellcheck disable=SC2329 # Reached only through hold_playback_lock.
+reclaim_reused_speak_lock() {
+  local steal="$SPEAK_LOCK.steal"
+  speak_lock_pid_was_reused || return 0
+  fm_lock_try_acquire "$steal" || return 0
+  if speak_lock_pid_was_reused; then
+    fm_lock_remove_path "$SPEAK_LOCK" || true
+  fi
+  fm_lock_release "$steal" || true
+}
+
+# Wait for any earlier line in this home to finish, then keep the lock until
+# this line has played. The wait is unbounded on a holder that is genuinely
+# speaking because that holder's own speaker bound is what ends it. Acquisition
+# is attempted at the library's own cadence, but the reuse probe runs once a
+# second rather than on every spin: it reads the holder's identity through `ps`,
+# and a line queued behind a thirty-second one would otherwise pay that on the
+# captain's machine ten times a second for the whole line. A lock left on a
+# reused pid is recovered a second later either way.
+# shellcheck disable=SC2329 # Reached only through play_serialized.
+hold_playback_lock() {
+  local spins=0
+  until fm_lock_try_acquire "$SPEAK_LOCK"; do
+    spins=$((spins + 1))
+    if [ "$((spins % 10))" -eq 0 ]; then
+      reclaim_reused_speak_lock
+    fi
+    sleep 0.1
+  done
+  SPEAK_LOCK_HELD=true
+  record_speak_lock_identity
+}
+
+# shellcheck disable=SC2329 # Reached only through play_serialized.
+release_playback_lock() {
+  [ "$SPEAK_LOCK_HELD" = true ] || return 0
+  SPEAK_LOCK_HELD=false
+  fm_lock_release "$SPEAK_LOCK" || true
+}
+
+# Serial wrapper around play_bounded: acquire after detach, release after the
+# line ends or the speaker bound kills it. The EXIT trap covers a speaker that
+# never reaches the explicit release.
+# shellcheck disable=SC2329 # Reached only through the speaker bodies below.
+play_serialized() {  # <cmd...>
+  hold_playback_lock
+  trap release_playback_lock EXIT
+  play_bounded "$@"
+  release_playback_lock
+}
+
 # The two speaker bodies. Each owns the temporary files it was handed and removes
 # them once the line has actually finished playing, so a file left behind is
 # itself the evidence that a speaker was cut short.
@@ -304,9 +426,9 @@ play_bounded() {  # <cmd...>
 say_speaker() {  # <textfile>
   local textfile=$1
   if [ -n "$CFG_VOICE" ]; then
-    play_bounded "$SAY_BIN" -v "$CFG_VOICE" -f "$textfile"
+    play_serialized "$SAY_BIN" -v "$CFG_VOICE" -f "$textfile"
   else
-    play_bounded "$SAY_BIN" -f "$textfile"
+    play_serialized "$SAY_BIN" -f "$textfile"
   fi
   rm -f "$textfile"
 }
@@ -314,7 +436,7 @@ say_speaker() {  # <textfile>
 # shellcheck disable=SC2329 # Invoked by name through detach_speaker.
 audio_speaker() {  # <player> <audio> <textfile>
   local player=$1 audio=$2 textfile=$3
-  play_bounded "$player" "$audio"
+  play_serialized "$player" "$audio"
   rm -f "$audio" "$textfile"
 }
 
@@ -548,7 +670,10 @@ main() {
   fi
 
   apply_desk_register
-  [ "$dry_run" = true ] || start_voice_list
+  if [ "$dry_run" != true ]; then
+    load_speak_lock_helpers
+    start_voice_list
+  fi
 
   outfile=$(mktemp "${TMPDIR:-/tmp}/fm-speak-out.XXXXXX") || die "cannot create a temporary file"
   errfile=$(mktemp "${TMPDIR:-/tmp}/fm-speak-err.XXXXXX") || {

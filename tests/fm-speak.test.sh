@@ -727,6 +727,204 @@ test_no_temporary_files_are_left_behind() {
   pass "fm-speak: no temporary files are left behind"
 }
 
+# A speaker that records when a line starts and when it actually finishes, so
+# overlapping playback is visible as a second start before the first end.
+install_marking_speaker() {  # <home> <linger-seconds>
+  local home=$1 linger=$2
+  cat > "$home/speaker" <<EOF
+#!/usr/bin/env bash
+text=
+prev=
+for a in "\$@"; do
+  [ "\$prev" != -f ] || text=\$(cat "\$a")
+  prev=\$a
+done
+printf 'start: %s\n' "\$text" >> "$home/spoken.log"
+sleep $linger
+printf 'end: %s\n' "\$text" >> "$home/spoken.log"
+EOF
+  chmod +x "$home/speaker"
+}
+
+wait_for_content() {  # <path> <needle> <msg>
+  local path=$1 needle=$2 msg=$3 waited=0
+  while [ "$waited" -lt 250 ]; do
+    grep -qF "$needle" "$path" 2>/dev/null && return 0
+    sleep 0.2
+    waited=$((waited + 1))
+  done
+  fail "$msg"
+}
+
+assert_playback_did_not_overlap() {  # <log>
+  local log=$1 in_progress=0 line snapshot
+  snapshot=$(cat "$log")
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      start:*)
+        [ "$in_progress" -eq 0 ] || fail "fm-speak: a second line started before the first ended: $snapshot"
+        in_progress=1
+        ;;
+      end:*)
+        [ "$in_progress" -eq 1 ] || fail "fm-speak: an end marker arrived with no line in progress: $snapshot"
+        in_progress=0
+        ;;
+    esac
+  done <<EOF
+$snapshot
+EOF
+  [ "$in_progress" -eq 0 ] || fail "fm-speak: a line started and never ended: $snapshot"
+}
+
+# The Helena 2026-09-17 failure: two sequential speak calls from one shell
+# handed audio off and returned, so the second line started while the first
+# was still playing. The caller must still return before either line finishes.
+test_two_sequential_calls_do_not_overlap_playback() {
+  local home started finished elapsed
+  home=$(new_home serialize "enabled = true")
+  install_shaper "$home" >/dev/null
+  # One line of audio has to outlast the handoff budget below by a wide
+  # margin: the proof is that both calls returned while the first line was
+  # still playing, not that the pair happened to be quick.
+  install_marking_speaker "$home" 12
+
+  started=$(date +%s)
+  speak "$home" "The first line is green." >/dev/null 2>&1 \
+    || fail "fm-speak: the first sequential call failed"
+  speak "$home" "The second line is ready." >/dev/null 2>&1 \
+    || fail "fm-speak: the second sequential call failed"
+  finished=$(date +%s)
+  elapsed=$((finished - started))
+
+  [ "$elapsed" -lt 8 ] \
+    || fail "fm-speak: sequential calls waited ${elapsed}s for audio instead of handing off"
+
+  # Nothing orders the two speakers, so both end markers have to land before
+  # the log is a complete snapshot: waiting on one of them can catch the other
+  # line mid-play and read its dangling start as an overlap.
+  wait_for_content "$home/spoken.log" "end: The first line is green." \
+    "fm-speak: sequential calls never finished the first line"
+  wait_for_content "$home/spoken.log" "end: The second line is ready." \
+    "fm-speak: sequential calls never finished the second line"
+  assert_grep "start: The first line is green." "$home/spoken.log" \
+    "the first line must reach the speaker"
+  assert_grep "start: The second line is ready." "$home/spoken.log" \
+    "the second line must reach the speaker"
+  assert_playback_did_not_overlap "$home/spoken.log"
+  pass "fm-speak: two sequential calls from one shell do not overlap playback"
+}
+
+# The lock is per home, so two homes may speak at the same time.
+test_two_homes_may_speak_at_the_same_time() {
+  local home_a home_b waited=0
+  home_a=$(new_home serialize-a "enabled = true")
+  home_b=$(new_home serialize-b "enabled = true")
+  install_shaper "$home_a" >/dev/null
+  install_shaper "$home_b" >/dev/null
+  # The linger has to outlast the poll below by a wide margin: home A's `end:`
+  # marker landing while the loop is still waiting for home B would fail the
+  # overlap proof with a complaint about lock scope that scheduling caused.
+  install_marking_speaker "$home_a" 15
+  install_marking_speaker "$home_b" 15
+
+  speak "$home_a" "Home A is speaking." >/dev/null 2>&1 \
+    || fail "fm-speak: home A failed to speak"
+  speak "$home_b" "Home B is speaking." >/dev/null 2>&1 \
+    || fail "fm-speak: home B failed to speak"
+
+  while [ "$waited" -lt 20 ]; do
+    if grep -qF "start: Home A is speaking." "$home_a/spoken.log" 2>/dev/null \
+      && grep -qF "start: Home B is speaking." "$home_b/spoken.log" 2>/dev/null; then
+      break
+    fi
+    sleep 0.2
+    waited=$((waited + 1))
+  done
+  grep -qF "start: Home A is speaking." "$home_a/spoken.log" 2>/dev/null \
+    || fail "fm-speak: home A never started"
+  grep -qF "start: Home B is speaking." "$home_b/spoken.log" 2>/dev/null \
+    || fail "fm-speak: home B never started within the overlap window"
+  grep -qF "end:" "$home_a/spoken.log" 2>/dev/null \
+    && fail "fm-speak: home A finished before home B started, so the lock is not home-scoped"
+  pass "fm-speak: two homes may speak at the same time"
+}
+
+# A speaker that is killed outright leaves its lock behind in persistent state,
+# and that pid number is eventually handed to some unrelated process. Liveness
+# alone then reads the lock as held forever and the home never speaks again, so
+# the recorded identity has to be what decides. The squatter here stands in for
+# the reusing process: alive, holding the lock, and not the speaker that took
+# it.
+test_a_lock_whose_pid_was_reused_is_reclaimed() {
+  local home owner squatter
+  home=$(new_home reused-lock "enabled = true")
+  install_shaper "$home" >/dev/null
+  install_marking_speaker "$home" 1
+
+  owner="$home/state/.speak.lock.owner.stale"
+  mkdir -p "$owner"
+  # Outliving the whole case is the point: a squatter that exits on its own
+  # hands the lock back through the ordinary dead-owner steal, and the case
+  # would then pass without ever reclaiming anything.
+  sleep 300 &
+  squatter=$!
+  fm_test_track_pid "$squatter"
+  printf '%s\n' "$squatter" > "$owner/pid"
+  printf '%s\n' 'the identity of a speaker that is long gone' > "$owner/pid-identity"
+  ln -s "$owner" "$home/state/.speak.lock"
+
+  speak "$home" "The stale lock did not silence me." >/dev/null 2>&1 \
+    || fail "fm-speak: the call behind a reused-pid lock failed"
+  wait_for_content "$home/spoken.log" "end: The stale lock did not silence me." \
+    "fm-speak: a lock left behind on a reused pid silenced the home"
+  kill "$squatter" 2>/dev/null || true
+  pass "fm-speak: a lock whose recorded pid was reused is reclaimed"
+}
+
+# A register owner that records every call, so "nothing was shaped" is an
+# observable fact rather than an inference from the absence of leftovers.
+install_recording_shaper() {  # <home>
+  local home=$1
+  cat > "$home/shaper" <<EOF
+#!/usr/bin/env bash
+printf 'called: %s\n' "\$*" >> "$home/shaper.log"
+shift
+printf '%s\n' "\$*"
+EOF
+  chmod +x "$home/shaper"
+}
+
+# The lock lives in the state directory, so a state directory that cannot be
+# created has to be refused before a word is shaped. Refusing it afterwards
+# would spend the register owner on a line that is then thrown away, abort a
+# line that was already spoken for, and leave its temporary file behind,
+# spending the one signal this script keeps for a speaker that was cut short.
+test_an_unusable_state_directory_is_refused_before_anything_is_shaped() {
+  local home scratch out status=0 left
+  home=$(new_home unusable-state "enabled = true")
+  install_recording_shaper "$home"
+  install_speaker "$home" >/dev/null
+  scratch="$TMP_ROOT/unusable-state-scratch"
+  mkdir -p "$scratch"
+  printf 'a regular file where the state directory belongs\n' > "$home/state"
+
+  out=$(TMPDIR="$scratch" speak "$home" "The fix is green." 2>"$home/refusal") || status=$?
+  [ "$status" -ne 0 ] \
+    || fail "fm-speak: an unusable state directory was reported as a spoken line"
+  [ ! -f "$home/shaper.log" ] \
+    || fail "fm-speak: the register owner was spent on a line that was never spoken"
+  assert_grep "fm-speak:" "$home/refusal" \
+    "the refusal must name the tool that refused"
+  [ -z "$out" ] \
+    || fail "fm-speak: a line was reported spoken with no state directory: $out"
+  [ ! -f "$home/spoken.log" ] \
+    || fail "fm-speak: a line reached the speaker with no state directory"
+  left=$(find "$scratch" -name 'fm-speak-*' 2>/dev/null | wc -l | tr -d ' ')
+  [ "$left" = 0 ] \
+    || fail "fm-speak: $left temporary file(s) were left behind by the refusal"
+  pass "fm-speak: an unusable state directory is refused before anything is shaped"
+}
+
 test_a_home_that_never_opted_in_stays_silent
 test_an_absent_config_is_the_same_as_not_opted_in
 test_an_opted_in_home_speaks_the_shaped_line
@@ -755,3 +953,7 @@ test_a_reap_of_the_callers_process_group_does_not_cut_the_line
 test_a_desk_line_is_not_cut_by_the_glasses_budget
 test_an_empty_register_override_restores_the_glasses_cut
 test_an_already_chosen_register_is_never_replaced
+test_two_sequential_calls_do_not_overlap_playback
+test_two_homes_may_speak_at_the_same_time
+test_a_lock_whose_pid_was_reused_is_reclaimed
+test_an_unusable_state_directory_is_refused_before_anything_is_shaped

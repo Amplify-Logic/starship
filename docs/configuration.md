@@ -1286,6 +1286,7 @@ The Mac push-to-talk floater that feeds captain input into this home is document
 
 Each call is bounded on both halves so a captain-facing turn is never held open: the register call is waited on under a watchdog because its output is needed, and speaker playback is detached with its standard streams closed (Deepgram synthesis is waited only for the network `--to` file, then playback is detached).
 Detachment also puts the speaker in a process group of its own, so a harness that reaps the speaking command's process group at the end of its turn cannot cut the spoken line short; the script's header owns that mechanic.
+Playback is serialized per home: a second line waits for the current one to finish rather than overlapping, and that wait happens in the detached speaker so the calling turn is still not held open by audio.
 The two bounds are deliberately separate because they protect different things: `FM_SPEAK_SHAPER_TIMEOUT` bounds the waited-on register call and is therefore the worst case a turn can be held, while `FM_SPEAK_TIMEOUT` bounds synthesis/playback runaways without ever holding the caller for the duration of the audio.
 The script's header owns their defaults.
 
