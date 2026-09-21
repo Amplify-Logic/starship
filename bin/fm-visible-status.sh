@@ -2,9 +2,31 @@
 # Project authoritative Firstmate task details onto Herdr presentation metadata.
 #
 # Usage:
-#   fm-visible-status.sh --all
+#   fm-visible-status.sh --all [--republish]
 #   fm-visible-status.sh <task-id>
 #   fm-visible-status.sh --clear <task-id>
+#
+# --all is a bounded, single-flight pass and never a nested one:
+#   - Every backend round trip (tab rename, pane metadata, workspace rename,
+#     cursor pane capture) and the authoritative-state read run under
+#     fm-timeout-lib.sh, bounded by FM_VISIBLE_CALL_TIMEOUT seconds (default 5).
+#   - Each task is additionally bounded by FM_VISIBLE_TASK_TIMEOUT seconds
+#     (default 15) and the whole pass by FM_VISIBLE_PASS_TIMEOUT seconds
+#     (default 120). A task the pass did not reach keeps its previous published
+#     label and is published by the next pass.
+#   - A task whose computed label equals the one last published for it is
+#     skipped without any backend call. The last published label lives in
+#     state/<id>.visible-label, a workspace's in state/.visible-workspace-<id>;
+#     both are pure presentation caches, safe to delete (that forces one full
+#     republish). --republish ignores them, which is what a recovery pass after
+#     a backend restart wants. A single-task refresh always publishes and only
+#     updates those records, so --republish means nothing there.
+#   - One pass at a time per home: a second --all exits immediately while
+#     state/.visible-status-all.lock is held by a live pass, and the exported
+#     FM_VISIBLE_STATUS_ALL_ACTIVE guard makes a nested --all a no-op.
+#   - The authoritative state of each task is read at most once per pass, and
+#     each project workspace is renamed at most once per pass, so a pass costs
+#     O(tasks) reads rather than O(tasks x tasks).
 #
 # New managed tabs read:
 #   WORKER · <human outcome> · <authoritative state>
@@ -45,6 +67,76 @@ SOURCE=firstmate-worker-visible-v1
 # captain-facing state vocabulary shared with the layout preview.
 # shellcheck source=bin/fm-visible-format-lib.sh
 . "$SCRIPT_DIR/fm-visible-format-lib.sh"
+# fm_run_timed owns bounded execution, so no backend round trip here can
+# outlive its deadline and starve a caller that is holding a liveness budget.
+# shellcheck source=bin/fm-timeout-lib.sh
+. "$SCRIPT_DIR/fm-timeout-lib.sh"
+
+ALL_LOCK="$STATE/.visible-status-all.lock"
+REPUBLISH=0
+BATCH=0
+TASK_START=
+# A non-positive value is not a bound (fm-timeout-lib.sh), so an unusable
+# setting falls back to the default rather than silently removing the deadline.
+positive_seconds() {  # <value> <default>
+  case "$1" in
+    ''|*[!0-9]*|0) printf '%s' "$2" ;;
+    *) printf '%s' "$1" ;;
+  esac
+}
+CALL_TIMEOUT=$(positive_seconds "${FM_VISIBLE_CALL_TIMEOUT:-}" 5)
+TASK_TIMEOUT=$(positive_seconds "${FM_VISIBLE_TASK_TIMEOUT:-}" 15)
+PASS_TIMEOUT=$(positive_seconds "${FM_VISIBLE_PASS_TIMEOUT:-}" 120)
+
+# next_bound: seconds the next backend call may take, the smallest of the
+# per-call bound and whatever is left of the task and pass deadlines. Returns
+# non-zero when a deadline is already spent, which is the caller's signal to
+# stop rather than to run an unbounded call.
+next_bound() {
+  local budget=$CALL_TIMEOUT left
+  if [ -n "$TASK_START" ]; then
+    left=$((TASK_TIMEOUT - (SECONDS - TASK_START)))
+    [ "$left" -lt "$budget" ] && budget=$left
+  fi
+  if [ "$BATCH" -eq 1 ]; then
+    left=$((PASS_TIMEOUT - SECONDS))
+    [ "$left" -lt "$budget" ] && budget=$left
+  fi
+  [ "$budget" -gt 0 ] || return 1
+  printf '%s' "$budget"
+}
+
+# The cache bounds the cost of the fleet-wide pass. A single-task refresh is
+# already a bounded, deliberate point in a task's lifecycle - a spawn, a
+# relaunch, a push transition - and its caller expects the projection to happen,
+# so it always publishes and then records what it published.
+skip_unchanged() {
+  [ "$BATCH" -eq 1 ] && [ "$REPUBLISH" -eq 0 ]
+}
+
+pass_exhausted() {
+  [ "$BATCH" -eq 1 ] || return 1
+  [ "$SECONDS" -ge "$PASS_TIMEOUT" ]
+}
+
+# bounded: run one backend round trip under the current deadline. Exit status
+# is the command's own, 124 when the bound was hit, and 124 when no budget was
+# left to spend.
+bounded() {  # <command...>
+  local budget
+  budget=$(next_bound) || return 124
+  fm_run_timed "$budget" "$@"
+}
+
+# bounded_shell: the same bound for a shell FUNCTION. fm_run_timed's external
+# mechanisms exec the command in a fresh process where this shell's functions
+# do not exist, so a function goes through fm-timeout-lib.sh's subshell runner,
+# which keeps them visible and still bounds the whole process group.
+bounded_shell() {  # <shell-function> [args...]
+  local budget
+  budget=$(next_bound) || return 124
+  fm_run_bash_timeout "$budget" "$@"
+}
 
 usage() {
   sed -n '2,/^set -u$/s/^# \{0,1\}//p' "$0"
@@ -91,16 +183,42 @@ human_outcome() {  # <id> <meta>
   "$SCRIPT_DIR/fm-task-outcome.sh" "$1" "$(meta_value "$2" outcome)"
 }
 
-canonical_state() {  # <id>
+read_canonical_state() {  # <id>
   local id=$1 line
   if [ -n "${FM_VISIBLE_STATE_FILE:-}" ] && [ -f "$FM_VISIBLE_STATE_FILE" ]; then
     line=$(sed -n "s/^$id=//p" "$FM_VISIBLE_STATE_FILE" | tail -1)
     [ -z "$line" ] || { printf '%s' "${line#state: }" | cut -d' ' -f1; return 0; }
   fi
-  line=$(FM_CREW_STATE_NM_TIMEOUT=${FM_VISIBLE_NM_TIMEOUT:-2} \
+  line=$(bounded env "FM_CREW_STATE_NM_TIMEOUT=${FM_VISIBLE_NM_TIMEOUT:-2}" \
     "$SCRIPT_DIR/fm-crew-state.sh" "$id" 2>/dev/null || true)
   line=${line#state: }
   printf '%s' "${line%% · *}"
+}
+
+# One authoritative read per task per process. A project's aggregate counts
+# every managed task in that project, so without this memo a pass over N tasks
+# would read state N + N x N times, which is what made a large fleet's refresh
+# run for minutes. Bash 3.2 has no associative arrays, so the memo is a
+# newline-delimited "<id>=<state>" string; an empty state is stored as "-" so a
+# recorded miss is not re-read on every project aggregate.
+# It publishes into CANONICAL_STATE rather than standard output, because a
+# command substitution would run - and discard - the memo in a subshell.
+STATE_MEMO=$'\n'
+CANONICAL_STATE=
+canonical_state() {  # <id>
+  local id=$1 rest state
+  case "$STATE_MEMO" in
+    *$'\n'"$id="*)
+      rest=${STATE_MEMO#*$'\n'"$id="}
+      state=${rest%%$'\n'*}
+      [ "$state" != - ] || state=
+      CANONICAL_STATE=$state
+      return 0
+      ;;
+  esac
+  state=$(read_canonical_state "$id")
+  STATE_MEMO="$STATE_MEMO$id=${state:--}"$'\n'
+  CANONICAL_STATE=$state
 }
 
 # cursor_pane_capture: plain-text pane tail for live model parsing.
@@ -117,7 +235,9 @@ cursor_pane_capture() {  # <session> <pane>
     return 0
   fi
   [ -n "$session" ] && [ -n "$pane" ] || return 1
-  fm_backend_herdr_capture "${session}:${pane}" 40 2>/dev/null
+  # The only per-pane read in this script, and only for cursor workers; it is
+  # bounded like every other backend round trip.
+  bounded_shell fm_backend_herdr_capture "${session}:${pane}" 40 2>/dev/null
 }
 
 # record_model_live: upsert model_live=<token> on <meta> when the live label
@@ -184,7 +304,42 @@ actual_branch() {  # <worktree>
 herdr_call() {  # <session> <args...>
   local session=$1
   shift
-  HERDR_SESSION="$session" herdr "$@" --session "$session"
+  bounded env "HERDR_SESSION=$session" herdr "$@" --session "$session"
+}
+
+# Last-published label records. Presentation caches only: deleting one costs a
+# redundant republish and nothing else, so every write here is best-effort.
+task_label_record() {  # <task-id>
+  printf '%s/%s.visible-label' "$STATE" "$1"
+}
+
+workspace_label_record() {  # <workspace-id>
+  printf '%s/.visible-workspace-%s' "$STATE" \
+    "$(printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_')"
+}
+
+# Drop the records of tasks and workspaces this home no longer has, so a long
+# lived home does not accumulate them. Teardown clears a retired task through
+# --clear; this is the sweep for anything that vanished another way.
+prune_label_records() {
+  local record id meta workspaces="" ws
+  for meta in "$STATE"/*.meta; do
+    [ -f "$meta" ] || continue
+    ws=$(meta_value "$meta" herdr_workspace_id)
+    [ -z "$ws" ] || workspaces="$workspaces$(workspace_label_record "$ws")"$'\n'
+  done
+  for record in "$STATE"/*.visible-label; do
+    [ -f "$record" ] || continue
+    id=$(basename "$record" .visible-label)
+    [ -f "$STATE/$id.meta" ] || rm -f "$record"
+  done
+  for record in "$STATE"/.visible-workspace-*; do
+    [ -f "$record" ] || continue
+    case "$workspaces" in
+      *"$record"$'\n'*) ;;
+      *) rm -f "$record" ;;
+    esac
+  done
 }
 
 project_stats() {  # <project-key>
@@ -196,7 +351,8 @@ project_stats() {  # <project-key>
     [ "$(meta_value "$meta" herdr_workspace_managed)" = 1 ] || continue
     [ "$(project_key "$meta")" = "$key" ] || continue
     id=$(basename "$meta" .meta)
-    state=$(fm_visible_state "$(canonical_state "$id")")
+    canonical_state "$id"
+    state=$(fm_visible_state "$CANONICAL_STATE")
     case "$state" in
       'NEEDS YOU') needs=$((needs + 1)) ;;
       FAILED) failed=$((failed + 1)) ;;
@@ -210,7 +366,7 @@ project_stats() {  # <project-key>
 }
 
 update_project() {  # <meta>
-  local meta=$1 session workspace key name stats aggregate
+  local meta=$1 session workspace key name stats aggregate label record
   [ "$(meta_value "$meta" herdr_workspace_managed)" = 1 ] || return 0
   session=$(meta_value "$meta" herdr_session)
   workspace=$(meta_value "$meta" herdr_workspace_id)
@@ -219,11 +375,36 @@ update_project() {  # <meta>
   [ -n "$session" ] && [ -n "$workspace" ] && [ -n "$key" ] && [ -n "$name" ] || return 0
   stats=$(project_stats "$key")
   aggregate=$(fm_visible_aggregate "$stats")
-  herdr_call "$session" workspace rename "$workspace" "$name · $aggregate" >/dev/null 2>&1 || true
+  label="$name · $aggregate"
+  record=$(workspace_label_record "$workspace")
+  if skip_unchanged && [ "$(cat "$record" 2>/dev/null || true)" = "$label" ]; then
+    return 0
+  fi
+  if herdr_call "$session" workspace rename "$workspace" "$label" >/dev/null 2>&1; then
+    printf '%s\n' "$label" > "$record" 2>/dev/null || true
+  fi
+}
+
+# One workspace rename per project per pass. update_task used to call
+# update_project, so a project with K tasks paid K identical renames.
+update_projects() {
+  local meta key seen=$'\n'
+  for meta in "$STATE"/*.meta; do
+    [ -f "$meta" ] || continue
+    pass_exhausted && break
+    [ "$(meta_value "$meta" backend)" = herdr ] || continue
+    [ "$(meta_value "$meta" kind)" != secondmate ] || continue
+    [ "$(meta_value "$meta" herdr_workspace_managed)" = 1 ] || continue
+    key=$(project_key "$meta")
+    case "$seen" in *$'\n'"$key"$'\n'*) continue ;; esac
+    seen="$seen$key"$'\n'
+    update_project "$meta"
+  done
 }
 
 update_task() {  # <task-id>
   local id=$1 meta session tab pane state icon title detail outcome runtime branch
+  local record published=1
   meta="$STATE/$id.meta"
   [ -f "$meta" ] || return 0
   [ "$(meta_value "$meta" backend)" = herdr ] || return 0
@@ -232,7 +413,9 @@ update_task() {  # <task-id>
   tab=$(meta_value "$meta" herdr_tab_id)
   pane=$(meta_value "$meta" herdr_pane_id)
   [ -n "$session" ] && [ -n "$tab" ] && [ -n "$pane" ] || return 0
-  state=$(fm_visible_state "$(canonical_state "$id")")
+  TASK_START=$SECONDS
+  canonical_state "$id"
+  state=$(fm_visible_state "$CANONICAL_STATE")
   icon=$(fm_visible_icon "$state")
   outcome=$(human_outcome "$id" "$meta")
   runtime=$(runtime_text "$meta")
@@ -241,7 +424,16 @@ update_task() {  # <task-id>
   # worker is spawned with and the tab this refresh renames it to cannot drift.
   title=$("$SCRIPT_DIR/fm-visible-title.sh" "$outcome" "$icon $state")
   detail="$runtime · $branch"
-  herdr_call "$session" tab rename "$tab" "$title" >/dev/null 2>&1 || true
+  # Everything the tab and the pane display is derived from these three
+  # values, so an identical triple means the backend already shows this label
+  # and the two round trips below would change nothing.
+  record=$(task_label_record "$id")
+  if skip_unchanged \
+    && [ "$(cat "$record" 2>/dev/null || true)" = "$title"$'\t'"$detail"$'\t'"$icon $state" ]; then
+    TASK_START=
+    return 0
+  fi
+  herdr_call "$session" tab rename "$tab" "$title" >/dev/null 2>&1 || published=0
   herdr_call "$session" pane report-metadata "$pane" \
     --source "$SOURCE" \
     --title "$title" \
@@ -253,12 +445,19 @@ update_task() {  # <task-id>
     --token "fm_task_id=$id" \
     --token "fm_runtime=$runtime" \
     --token "fm_branch=$branch" \
-    --token "fm_state=$state" >/dev/null 2>&1 || true
-  update_project "$meta"
+    --token "fm_state=$state" >/dev/null 2>&1 || published=0
+  # Only a fully published label is remembered: a timed-out or failed round
+  # trip leaves the record alone so the next pass publishes this task again.
+  if [ "$published" -eq 1 ]; then
+    printf '%s\n' "$title"$'\t'"$detail"$'\t'"$icon $state" > "$record" 2>/dev/null || true
+  fi
+  TASK_START=
+  [ "$BATCH" -eq 1 ] || update_project "$meta"
 }
 
 clear_task() {  # <task-id>
   local id=$1 meta session tab pane
+  rm -f "$(task_label_record "$id")"
   meta="$STATE/$id.meta"
   [ -f "$meta" ] || return 0
   [ "$(meta_value "$meta" backend)" = herdr ] || return 0
@@ -281,24 +480,72 @@ clear_task() {  # <task-id>
     || true
 }
 
-case "${1:-}" in
-  -h|--help|'') usage ;;
-  --all)
+# refresh_all: one bounded pass over every recorded task, then one rename per
+# project workspace, then the record sweep. A spent pass deadline stops the
+# pass where it is: the unreached tasks keep their previous published label and
+# the next pass, which starts from a fresh deadline, publishes them.
+refresh_all() {
+  local meta
+  BATCH=1
+  for meta in "$STATE"/*.meta; do
+    [ -f "$meta" ] || continue
+    pass_exhausted && break
+    update_task "$(basename "$meta" .meta)"
+  done
+  update_projects
+  prune_label_records
+}
+
+MODE=
+ARG=
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -h|--help) usage; exit 0 ;;
+    --republish) REPUBLISH=1 ;;
+    --all) [ -z "$MODE" ] || { usage >&2; exit 2; }; MODE=all ;;
+    --clear)
+      [ -z "$MODE" ] || { usage >&2; exit 2; }
+      MODE=clear
+      [ "$#" -ge 2 ] || { usage >&2; exit 2; }
+      shift
+      ARG=$1
+      ;;
+    --*) usage >&2; exit 2 ;;
+    *)
+      [ -z "$MODE" ] || { usage >&2; exit 2; }
+      MODE=task
+      ARG=$1
+      ;;
+  esac
+  shift
+done
+
+case "$MODE" in
+  '') usage ;;
+  all)
+    # Never recurse. The guard is exported, so a child process that reaches
+    # this script again during a pass exits instead of starting a second one.
+    [ "${FM_VISIBLE_STATUS_ALL_ACTIVE:-0}" = 1 ] && exit 0
+    export FM_VISIBLE_STATUS_ALL_ACTIVE=1
     fm_backend_herdr_presentation_capable || exit 0
-    for meta in "$STATE"/*.meta; do
-      [ -f "$meta" ] || continue
-      update_task "$(basename "$meta" .meta)"
-    done
+    if ! declare -F fm_lock_try_acquire >/dev/null 2>&1; then
+      # shellcheck source=bin/fm-wake-lib.sh
+      . "$SCRIPT_DIR/fm-wake-lib.sh"
+    fi
+    # Single flight per home: a pass already under way is doing this work, and
+    # a second one would only queue more backend round trips behind it. The
+    # lock's own dead-owner reclaim keeps a killed pass from wedging the next.
+    fm_lock_try_acquire "$ALL_LOCK" || exit 0
+    trap 'fm_lock_release "$ALL_LOCK"' EXIT
+    trap 'fm_lock_release "$ALL_LOCK"; exit 143' INT TERM
+    refresh_all
     ;;
-  --clear)
-    [ "$#" -eq 2 ] || { usage >&2; exit 2; }
+  clear)
     fm_backend_herdr_presentation_capable || exit 0
-    clear_task "$2"
+    clear_task "$ARG"
     ;;
-  --*) usage >&2; exit 2 ;;
-  *)
-    [ "$#" -eq 1 ] || { usage >&2; exit 2; }
+  task)
     fm_backend_herdr_presentation_capable || exit 0
-    update_task "$1"
+    update_task "$ARG"
     ;;
 esac

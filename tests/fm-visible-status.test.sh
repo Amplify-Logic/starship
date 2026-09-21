@@ -98,7 +98,10 @@ atelier-ready=done
 legacy-task=working
 EOF
 
-run_all() {
+# The published-label cache makes a second identical pass a no-op, so every
+# case that asserts on the CALLS a pass makes forces a republish; the cache
+# itself is covered by its own cases below.
+run_all() {  # [extra fm-visible-status.sh args...]
   : > "$LOG"
   PATH="$FAKEBIN:$PATH" \
     FM_HOME="$HOME_FIX" \
@@ -108,12 +111,12 @@ run_all() {
     HERDR_ENV=1 \
     HERDR_SESSION=fm-lab-visible \
     HERDR_PANE_ID=ordinary-worker:p9 \
-    "$ROOT/bin/fm-visible-status.sh" --all
+    "$ROOT/bin/fm-visible-status.sh" --all "$@"
 }
 
 test_tasks_projects_axes_and_states() {
   local out
-  run_all
+  run_all --republish
   out=$(cat "$LOG")
   assert_contains "$out" 'tab rename t1 WORKER · Ship the Journey release · 🔵 WORKING' \
     'Pi ship did not receive the worker contract'
@@ -136,7 +139,7 @@ test_tasks_projects_axes_and_states() {
 
 test_legacy_refresh_and_primary_boundary() {
   local out
-  run_all
+  run_all --republish
   out=$(cat "$LOG")
   assert_contains "$out" 'tab rename oldt WORKER · Refresh legacy task safely · 🔵 WORKING' \
     'legacy task was not safely refreshed by recorded tab id'
@@ -151,7 +154,7 @@ test_legacy_refresh_and_primary_boundary() {
 
 test_secondmate_keeps_legacy_presentation() {
   local out
-  run_all
+  run_all --republish
   out=$(cat "$LOG")
   assert_not_contains "$out" 'tab rename smt' \
     'a secondmate tab was renamed to the WORKER convention'
@@ -168,7 +171,7 @@ test_incapable_build_projects_nothing() {
     FM_VISIBLE_HERDR_LOG="$LOG" \
     FM_BACKEND_HERDR_PRESENTATION_FORCE=0 \
     HERDR_SESSION=fm-lab-visible \
-    "$ROOT/bin/fm-visible-status.sh" --all
+    "$ROOT/bin/fm-visible-status.sh" --all --republish
   [ -s "$LOG" ] && fail 'a below-capability Herdr build still received presentation calls'
   pass 'visible status: below the presentation capability no tab or workspace is touched'
 }
@@ -282,3 +285,165 @@ test_cleanup_keeps_stable_target_fallback
 test_genuine_primary_and_lab_are_structural
 test_cursor_live_footer_relabels_runtime_over_meta
 test_cursor_busy_pane_keeps_meta_model
+
+# --- bounded, single-flight refresh over a large fleet ----------------------
+#
+# The captain's fleet reached 24 concurrent task records with a dozen live
+# panes, where the refresh ran for over five minutes and starved the watcher's
+# liveness beacon. These cases pin the four properties that bound it: a pass
+# reads and renames each thing once, an unchanged label costs no backend call,
+# a slow backend cannot outlast the pass deadline, and two passes never run at
+# once.
+
+BIG_HOME="$TMP_ROOT/big-home"
+BIG_STATES="$TMP_ROOT/big-states"
+BIG_LOG="$TMP_ROOT/big-herdr.log"
+BIG_TASKS=22
+mkdir -p "$BIG_HOME/state" "$BIG_HOME/data"
+
+# Slow ONLY on the presentation round trips, so a caller's other herdr use
+# (liveness, capture) stays fast and the delay under test is the relabel's own.
+SLOWBIN="$TMP_ROOT/slowbin"
+mkdir -p "$SLOWBIN"
+cat > "$SLOWBIN/herdr" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$FM_VISIBLE_HERDR_LOG"
+case "$*" in
+  *"tab rename"*|*"pane report-metadata"*|*"workspace rename"*)
+    sleep "${FM_FAKE_HERDR_SLEEP:-1}" ;;
+esac
+exit 0
+SH
+chmod +x "$SLOWBIN/herdr"
+
+: > "$BIG_STATES"
+big_i=1
+while [ "$big_i" -le "$BIG_TASKS" ]; do
+  big_project=$(( (big_i % 3) + 1 ))
+  fm_write_meta "$BIG_HOME/state/big-$big_i.meta" \
+    "worktree=$TMP_ROOT/no-such-worktree" \
+    "project=/projects/big-$big_project" \
+    "harness=pi" \
+    "model=default" \
+    "kind=ship" \
+    "backend=herdr" \
+    "herdr_session=fm-lab-big" \
+    "herdr_workspace_id=bw$big_project" \
+    "herdr_tab_id=bt$big_i" \
+    "herdr_pane_id=bw$big_project:p$big_i" \
+    "herdr_workspace_managed=1" \
+    "herdr_project_name=Big $big_project" \
+    "herdr_project_key=/projects/big-$big_project"
+  printf 'big-%s=working\n' "$big_i" >> "$BIG_STATES"
+  printf -- '- [ ] big-%s - Ship big task %s (repo: big-%s)\n' "$big_i" "$big_i" "$big_project" \
+    >> "$BIG_HOME/data/backlog.md"
+  big_i=$((big_i + 1))
+done
+
+# run_big [--slow] [extra args...]: one --all pass over the large fleet.
+run_big() {
+  local path="$FAKEBIN:$PATH"
+  if [ "${1:-}" = --slow ]; then path="$SLOWBIN:$FAKEBIN:$PATH"; shift; fi
+  PATH="$path" \
+    FM_HOME="$BIG_HOME" \
+    FM_VISIBLE_STATE_FILE="$BIG_STATES" \
+    FM_VISIBLE_HERDR_LOG="$BIG_LOG" \
+    FM_BACKEND_HERDR_PRESENTATION_FORCE=1 \
+    HERDR_SESSION=fm-lab-big \
+    "$ROOT/bin/fm-visible-status.sh" --all "$@"
+}
+
+count_calls() {  # <pattern>
+  grep -c -- "$1" "$BIG_LOG" 2>/dev/null || true
+}
+
+test_pass_renames_each_workspace_once() {
+  local renames
+  : > "$BIG_LOG"
+  run_big --republish || fail 'a full pass over the large fleet failed'
+  [ "$(count_calls 'tab rename bt')" -eq "$BIG_TASKS" ] \
+    || fail "a full pass did not rename every task tab exactly once: $(count_calls 'tab rename bt')"
+  renames=$(count_calls 'workspace rename bw1 ')
+  [ "$renames" -eq 1 ] \
+    || fail "a project workspace was renamed $renames times in one pass, once per task rather than once per project"
+  pass 'visible status: one pass renames each task tab once and each project workspace once'
+}
+
+test_unchanged_labels_cost_no_backend_call() {
+  local before
+  run_big --republish || fail 'the priming pass failed'
+  : > "$BIG_LOG"
+  run_big || fail 'the unchanged pass failed'
+  [ ! -s "$BIG_LOG" ] \
+    || fail "a pass that changed no label still made backend calls: $(head -3 "$BIG_LOG")"
+  # A single changed state republishes that task and its project, nothing else.
+  before=$(count_calls 'tab rename')
+  [ "$before" -eq 0 ] || fail 'the unchanged pass was not silent'
+  printf 'big-4=blocked\n' >> "$BIG_STATES"
+  : > "$BIG_LOG"
+  run_big || fail 'the pass after a state change failed'
+  [ "$(count_calls 'tab rename bt4 ')" -eq 1 ] \
+    || fail 'the task whose authoritative state changed was not republished'
+  [ "$(count_calls 'tab rename')" -eq 1 ] \
+    || fail "tasks whose label did not change were republished: $(count_calls 'tab rename')"
+  [ "$(count_calls 'workspace rename')" -eq 1 ] \
+    || fail 'only the changed task project workspace should have been renamed'
+  printf 'big-4=working\n' >> "$BIG_STATES"
+  run_big >/dev/null 2>&1 || true
+  pass 'visible status: a label that did not change costs no backend call'
+}
+
+test_pass_deadline_bounds_a_slow_backend() {
+  local started elapsed
+  rm -f "$BIG_HOME"/state/*.visible-label "$BIG_HOME"/state/.visible-workspace-*
+  : > "$BIG_LOG"
+  started=$SECONDS
+  FM_VISIBLE_PASS_TIMEOUT=2 FM_VISIBLE_CALL_TIMEOUT=1 FM_FAKE_HERDR_SLEEP=10 \
+    run_big --slow || fail 'a pass against a wedged backend did not return cleanly'
+  elapsed=$((SECONDS - started))
+  [ "$elapsed" -le 20 ] \
+    || fail "a pass against a wedged backend ran ${elapsed}s, past its own deadline"
+  [ "$(count_calls 'tab rename')" -lt "$BIG_TASKS" ] \
+    || fail 'the pass deadline did not stop the pass against a wedged backend'
+  rm -f "$BIG_HOME"/state/*.visible-label "$BIG_HOME"/state/.visible-workspace-*
+  pass 'visible status: a wedged backend cannot make a pass outlast its deadline'
+}
+
+test_second_pass_never_runs_beside_the_first() {
+  local pid started elapsed during after
+  : > "$BIG_LOG"
+  FM_FAKE_HERDR_SLEEP=1 run_big --slow --republish >/dev/null 2>&1 &
+  pid=$!
+  # Wait for the first pass to be provably under way before racing it.
+  while [ "$(count_calls 'tab rename')" -lt 1 ]; do
+    kill -0 "$pid" 2>/dev/null || break
+    sleep 0.2
+  done
+  during=$(count_calls 'tab rename')
+  started=$SECONDS
+  run_big --republish || fail 'the second concurrent pass did not exit cleanly'
+  elapsed=$((SECONDS - started))
+  after=$(count_calls 'tab rename')
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  [ "$elapsed" -le 5 ] \
+    || fail "a second pass waited ${elapsed}s behind the running one instead of standing down"
+  [ "$after" -le "$((during + 3))" ] \
+    || fail 'a second pass queued its own backend calls behind the running pass'
+  rm -f "$BIG_HOME"/state/*.visible-label "$BIG_HOME"/state/.visible-workspace-*
+  pass 'visible status: only one refresh pass per home runs at a time'
+}
+
+test_a_nested_pass_is_a_no_op() {
+  : > "$BIG_LOG"
+  FM_VISIBLE_STATUS_ALL_ACTIVE=1 run_big --republish \
+    || fail 'a nested pass did not exit cleanly'
+  [ ! -s "$BIG_LOG" ] || fail 'a pass started from inside a running pass projected anyway'
+  pass 'visible status: a refresh pass started from inside one is a no-op'
+}
+
+test_pass_renames_each_workspace_once
+test_unchanged_labels_cost_no_backend_call
+test_pass_deadline_bounds_a_slow_backend
+test_second_pass_never_runs_beside_the_first
+test_a_nested_pass_is_a_no_op

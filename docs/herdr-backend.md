@@ -75,7 +75,7 @@ The exact validation commands and results for this implementation were:
 bin/fm-lint.sh
 PASS - ShellCheck 0.11.0, no findings
 
-tests/fm-project-presentation.test.sh && tests/fm-visible-status.test.sh && tests/fm-spawn-herdr-presentation.test.sh
+tests/fm-project-presentation.test.sh && tests/fm-visible-status.test.sh && tests/fm-spawn-herdr-presentation.test.sh && tests/fm-watch-presentation.test.sh
 PASS
 
 tests/fm-backend-herdr.test.sh
@@ -367,10 +367,19 @@ Default-on projection has its own higher floor, `FM_BACKEND_HERDR_MIN_PRESENTATI
 `bin/fm-visible-status.sh` refreshes at bounded authoritative-state points, never on a timer:
 
 - `bin/fm-spawn.sh` projects the single task after its record is published, and after both the fresh-spawn and the relaunch publish paths, so a relaunch projects its own replacement record rather than the record it replaced.
-- `bin/fm-session-start.sh` refreshes `--all` during session recovery, but only for the session owner: a lock-refused read-only session must not mutate presentation.
+- `bin/fm-session-start.sh` refreshes `--all --republish` during session recovery, but only for the session owner: a lock-refused read-only session must not mutate presentation.
+  Recovery republishes rather than trusting the cached labels below, because whatever restarted the session may also have restarted the surface showing them.
 - `bin/fm-push-transition-lib.sh` refreshes the single task on a push transition, before that transition is absorbed or escalated, so an absorbed transition still updates the label.
-- `bin/fm-watch.sh` refreshes `--all` on each coalesced signal batch, where status writes and turn-end markers have already been gathered.
+- `bin/fm-watch.sh` starts `--all` on each coalesced signal batch, where status writes and turn-end markers have already been gathered, and never waits for it.
+  The poll loop owns the liveness beacon the whole supervision chain reads, and a large fleet against a slow Herdr made an inline refresh the one thing on that path that could outlast the guard's grace, so the pass is detached exactly like the published-summary refresh beside it.
+  A pass still running when the next batch arrives keeps running instead of being raced.
 - `bin/fm-teardown.sh` clears the retired task with `--clear <id>` once it has committed to retiring it, then refreshes `--all` after the record is removed, because the removal changes every remaining task's project aggregate.
+
+An `--all` pass is bounded and single-flight, so a large fleet or a slow Herdr costs a stale label rather than a stalled caller: every backend round trip runs under a per-call deadline, each task under a per-task deadline, and the pass under a pass deadline, after which the tasks it did not reach keep their previous label until the next pass.
+A task whose computed label matches the one last published for it is skipped without any backend call, and each project workspace is renamed once per pass rather than once per task in it; the authoritative state of a task is read once per pass, so a pass costs O(tasks) reads instead of O(tasks x tasks).
+The published labels live in `state/<id>.visible-label` and `state/.visible-workspace-<id>`, which are caches - deleting one costs a redundant republish and nothing else - and `--republish` ignores them.
+Only one pass per home runs at a time (`state/.visible-status-all.lock`), and a pass started from inside a running one is a no-op.
+`bin/fm-visible-status.sh`'s header owns the exact deadlines and their environment overrides.
 
 Every Herdr presentation call is best-effort because recorded ids, landed-work checks, and endpoint cleanup remain authoritative.
 The helper updates only recorded, non-secondmate task panes and never emits `FIRSTMATE` or `LAB`.

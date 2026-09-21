@@ -788,8 +788,11 @@ if [ "$PRIMARY_HARNESS" = omp ]; then
 fi
 # Recovery is a bounded presentation refresh point, and only for the session
 # owner: a lock-refused read-only session must not mutate Herdr presentation.
-# Projection is best-effort and never affects durable task control.
-[ "$READ_ONLY" -eq 1 ] || "$SCRIPT_DIR/fm-visible-status.sh" --all >/dev/null 2>&1 || true
+# Projection is best-effort and never affects durable task control. Recovery
+# republishes rather than trusting the last-published labels, because whatever
+# restarted the session may also have restarted the surface showing them.
+[ "$READ_ONLY" -eq 1 ] \
+  || "$SCRIPT_DIR/fm-visible-status.sh" --all --republish >/dev/null 2>&1 || true
 "$SCRIPT_DIR/fm-supervision-instructions.sh" \
   --harness "$PRIMARY_HARNESS" \
   --read-only "$READ_ONLY" \

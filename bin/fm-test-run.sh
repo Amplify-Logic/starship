@@ -888,7 +888,7 @@ tests/fm-upstream-ledger.test.sh 2867
 tests/fm-upstream-watch.test.sh 2250
 tests/fm-upstream.test.sh 2192
 tests/fm-vendor-auth-probe.test.sh 44246
-tests/fm-visible-status.test.sh 4644
+tests/fm-visible-status.test.sh 29400
 tests/fm-voice-relay-appserver.test.sh 12255
 tests/fm-voice-relay-freshness.test.sh 9441
 tests/fm-voice-relay.test.sh 29942
@@ -901,6 +901,7 @@ tests/fm-wake-queue.test.sh 82105
 tests/fm-watch-arm.test.sh 69029
 tests/fm-watch-caffeinate.test.sh 8386
 tests/fm-watch-checkpoint.test.sh 7497
+tests/fm-watch-presentation.test.sh 23300
 tests/fm-watch-recovery-loop.test.sh 60775
 tests/fm-watch-triage.test.sh 636459
 tests/fm-watcher-lock.test.sh 112524

@@ -1941,6 +1941,28 @@ fi
 # first. Publication is eventually consistent by design and every reader
 # re-derives current state from the owning home anyway, while beacon freshness
 # is what the whole supervision chain rests on.
+# The captain-facing pane labels are the same kind of side-band nicety, and a
+# large fleet made them the more expensive one: the pass is bounded per call,
+# per task and per pass by bin/fm-visible-status.sh, but that whole budget is
+# still far larger than one poll, and running it inline put minutes between two
+# beacon touches - the shape that made the guard declare a live watcher stale
+# and refuse to re-arm. Nothing in the poll reads a pane label, so start the
+# pass and move on. The helper is single-flight per home, so a pass still
+# running when the next coalesced set arrives is left to finish rather than
+# raced; this guard keeps the watcher from forking a second one for nothing.
+VISIBLE_STATUS_PID=
+visible_status_refresh_detached() {
+  if [ -n "$VISIBLE_STATUS_PID" ]; then
+    if kill -0 "$VISIBLE_STATUS_PID" 2>/dev/null; then
+      return 0
+    fi
+    wait "$VISIBLE_STATUS_PID" 2>/dev/null || true
+    VISIBLE_STATUS_PID=
+  fi
+  "$SCRIPT_DIR/fm-visible-status.sh" --all </dev/null >/dev/null 2>&1 &
+  VISIBLE_STATUS_PID=$!
+}
+
 HOME_SUMMARY_PID=
 home_summary_refresh_detached() {
   if [ -n "$HOME_SUMMARY_PID" ]; then
@@ -2261,8 +2283,9 @@ while :; do
     pending=$(printf '%s\n%s' "$pending" "$(scan_signals)")
     # Status writes and turn-end markers are bounded authoritative-state refresh
     # points for captain-facing Herdr presentation, so the coalesced set is also
-    # where every task's pane label is brought back in line.
-    "$SCRIPT_DIR/fm-visible-status.sh" --all >/dev/null 2>&1 || true
+    # where every task's pane label is brought back in line - detached, for the
+    # reason visible_status_refresh_detached carries.
+    visible_status_refresh_detached
     # The final coalesced signal set is the watcher-carried status-change
     # trigger for this home's published summary. Start it before either
     # surfacing or absorbing the signal, but never wait on it: see
