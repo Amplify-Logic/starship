@@ -55,7 +55,7 @@ TMP_ROOT=$(fm_test_tmproot fm-spawn-agent-up)
 # repeating forever), so a case can model a shell that becomes an agent, or one
 # that never does.
 make_case() {
-  local name=$1 harness=$2 launch_binary=$3 fakebin real real_bin
+  local name=$1 harness=$2 launch_binary=$3 fakebin
   CASE_DIR="$TMP_ROOT/$name"
   HOME_DIR="$CASE_DIR/home"
   PROJ_DIR="$CASE_DIR/project"
@@ -211,10 +211,8 @@ SH
   # PATH is pinned narrow so the harness stubs decide resolution, but two real
   # tools are needed: node records Claude workspace trust, and python3 with
   # tomllib validates the Kimi config the turn-end hook edits.
-  for real in node python3; do
-    real_bin=$(command -v "$real" 2>/dev/null || true)
-    [ -z "$real_bin" ] || ln -sf "$real_bin" "$fakebin/$real"
-  done
+  # Absence is tolerated here: the cases that need them gate on their own.
+  fm_fake_real_tool "$fakebin" node python3 || true
   cat > "$fakebin/$launch_binary" <<'SH'
 #!/usr/bin/env bash
 set -u
@@ -519,7 +517,7 @@ test_invalid_bound_knobs_are_refused() {
 # agent-liveness reader (fm_backend_agent_state answers `unverified`), which is
 # the state this fixture exists to reach - tmux can never produce it.
 make_orca_case() {  # <name> [harness]
-  local name=$1 harness=${2:-kimi} fakebin real real_bin
+  local name=$1 harness=${2:-kimi} fakebin
   CASE_DIR="$TMP_ROOT/$name"
   HOME_DIR="$CASE_DIR/home"
   PROJ_DIR="$CASE_DIR/project"

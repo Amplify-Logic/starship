@@ -615,7 +615,9 @@ fm_live_gate() {
 # --- fakebin / PATH shims ---------------------------------------------------
 #
 # fm_fakebin <dir> creates <dir>/fakebin and echoes it; prepend it to PATH to
-# shadow real tools with stubs. fm_fake_exit0 drops trivial exit-0 stubs for the
+# shadow real tools with stubs. fm_fake_real_tool links the host's real copy of
+# a named tool into a fakebin dir, for a dependency the subject genuinely needs
+# under a narrow PATH pin. fm_fake_exit0 drops trivial exit-0 stubs for the
 # named tools into a fakebin dir. fm_fake_crash_injector drops the shim a fake
 # uses to crash the process under test deterministically. fm_fake_version_tool
 # drops a stub for a tool whose installed version bootstrap gates, so a fixture
@@ -626,6 +628,27 @@ fm_fakebin() {
   local dir=$1 fakebin="$1/fakebin"
   mkdir -p "$fakebin"
   printf '%s\n' "$fakebin"
+}
+
+# fm_fake_real_tool <fakebin> <tool>...: link the host's own copy of each named
+# tool into <fakebin>, so a narrowly pinned PATH keeps deciding resolution for
+# the stubs while a genuine dependency of the code under test still resolves
+# wherever the host installed it (Homebrew's /opt/homebrew/bin is not in the
+# usual /usr/bin:/bin pin). Returns non-zero when any named tool is absent, so a
+# caller whose subject hard-requires the tool can fail loudly naming it.
+fm_fake_real_tool() {
+  local fakebin=$1 tool real_bin missing=0
+  shift
+  mkdir -p "$fakebin"
+  for tool in "$@"; do
+    real_bin=$(command -v "$tool" 2>/dev/null || true)
+    if [ -z "$real_bin" ]; then
+      missing=1
+      continue
+    fi
+    ln -sf "$real_bin" "$fakebin/$tool"
+  done
+  [ "$missing" -eq 0 ]
 }
 
 fm_fake_exit0() {

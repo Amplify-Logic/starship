@@ -9,6 +9,12 @@ set -u
 TMP_ROOT=$(fm_test_tmproot fm-primary-handoff)
 HOME_FIX="$TMP_ROOT/home"
 FAKEBIN=$(fm_fakebin "$TMP_ROOT")
+# run_execute pins PATH to the fakebin plus /usr/bin:/bin so the stubs and seam
+# commands decide resolution. fm-primary-handoff-lib.sh reads
+# config/primary-handoff with jq, which is outside that pin on Homebrew hosts,
+# so link the host's own jq in rather than widening the pin. No case here
+# asserts the no-jq refusal, so nothing is retired by making jq resolve.
+fm_fake_real_tool "$FAKEBIN" jq || fail "jq is required to run this suite"
 mkdir -p "$HOME_FIX/state" "$HOME_FIX/config" "$HOME_FIX/data"
 SIGNAL_LOG="$TMP_ROOT/signal.log"
 LAUNCH_LOG="$TMP_ROOT/launch.log"
