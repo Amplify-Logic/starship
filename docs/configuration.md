@@ -1240,6 +1240,7 @@ It never reads a source system, opens a network connection, sends a message, spa
 An orchestrator performs the authenticated connector read on its own path and reports back through `observe`, `complete` and `fail`.
 
 `interval_seconds` has a hard 300-second floor, because an awake laptop multiplies the cadence by every enrolled source.
+Optional `active_start` and `active_end`, set together as `HH:MM`, bound the scanning day so no source is due outside the window and nothing reads or wakes; they bound reads only, while quiet hours still own alert delivery.
 A source whose read failed backs off geometrically to `backoff_max_seconds` and reads `unknown`, never "nothing new".
 `notify-due` renders one grouped, rate-limited, quiet-hours-aware private payload and does not send it; the orchestrator sends it and confirms with `notify-sent`, so an interrupted send re-renders rather than being silently swallowed.
 Notifications are refused outright until `notify_recipient_verified = true`, which is set only after the recipient has been checked against the known captain account.
