@@ -57,9 +57,30 @@ cat "$FM_FLEET_FIXTURE/$1"
 SH
 chmod +x "$BINDIR/slow-crew-state"
 
+# A fixture endpoint prober standing in for bin/fm-backend.sh's recovery-grade
+# classifier, so the liveness cases run with no tmux session, no herdr server and
+# no agent process. It answers from the recorded target's own name.
+cat > "$BINDIR/fake-probe" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$1 $2" >> "${FM_FLEET_TEST_PROBES:-/dev/null}"
+case "$2" in
+  live*) printf 'alive' ;;
+  dead*) printf 'dead' ;;
+  *) printf 'unknown' ;;
+esac
+SH
+chmod +x "$BINDIR/fake-probe"
+
 task() {  # <id> <kind> <canonical line>
   fm_write_meta "$STATE/$1.meta" "kind=$2"
   printf '%s\n' "$3" > "$FLEET_FIX/$1"
+}
+
+# endpoint_task: a task record that also carries the endpoint and worktree the
+# liveness fold reads - the shape a real dispatched task's metadata has.
+endpoint_task() {  # <id> <window> <worktree> <canonical line>
+  fm_write_meta "$STATE/$1.meta" kind=crew backend=tmux "window=$2" "worktree=$3"
+  printf '%s\n' "$4" > "$FLEET_FIX/$1"
 }
 
 # Every case gets its own state directory, fixtures and call log. A detached
@@ -100,16 +121,18 @@ test_canonical_states_fold_into_the_five_fields() {
   task mate secondmate 'state: working · source: pane · harness busy'
 
   out=$(FM_FLEET_STATE_NO_CACHE=1 FM_FLEET_STATE_READER="$BINDIR/fake-crew-state" counts)
-  # records working validating paused attention known
-  [ "$out" = $'8\t1\t1\t1\t3\t1' ] \
+  # records alive stopped validating paused attention known
+  # No fixture records an endpoint, so the only proof of life available is the
+  # busy pane worker the canonical reader saw.
+  [ "$out" = $'8\t1\t0\t1\t1\t3\t1' ] \
     || fail "canonical states did not fold into the documented fields: $(printf '%s' "$out" | tr '\t' ' ')"
-  pass "fleet status: canonical states fold into records, working, validating, paused and attention"
+  pass "fleet status: canonical states fold into records, alive, stopped, validating, paused and attention"
 }
 
 # The whole point of the change: a meta file is a record, and a record is not a
 # worker. Second mates are direct reports, not work items, and stay out entirely.
 test_records_are_counted_apart_from_live_workers() {
-  local out records working
+  local out records alive
   reset_state
   task live crew 'state: working · source: pane · harness busy'
   task gone1 crew 'state: unknown · source: none · backend target gone: w8:pV'
@@ -118,9 +141,9 @@ test_records_are_counted_apart_from_live_workers() {
 
   out=$(FM_FLEET_STATE_NO_CACHE=1 FM_FLEET_STATE_READER="$BINDIR/fake-crew-state" counts)
   records=$(printf '%s' "$out" | cut -f1)
-  working=$(printf '%s' "$out" | cut -f2)
+  alive=$(printf '%s' "$out" | cut -f2)
   [ "$records" = 4 ] || fail "four task records were not all counted as records: $records"
-  [ "$working" = 1 ] || fail "task records were counted as running workers: $working"
+  [ "$alive" = 1 ] || fail "task records were counted as running workers: $alive"
   pass "fleet status: task records are counted apart from live workers"
 }
 
@@ -134,7 +157,7 @@ test_an_incomplete_fold_is_refused_rather_than_published_short() {
   rm -f "$FLEET_FIX/two"
 
   out=$(FM_FLEET_STATE_NO_CACHE=1 FM_FLEET_STATE_READER="$BINDIR/fake-crew-state" counts)
-  [ "$out" = $'2\t0\t0\t0\t0\t0' ] \
+  [ "$out" = $'2\t0\t0\t0\t0\t0\t0' ] \
     || fail "a fold the reader could not complete was published anyway: $(printf '%s' "$out" | tr '\t' ' ')"
   pass "fleet status: an incomplete fold is refused instead of reported as a quieter fleet"
 }
@@ -146,10 +169,10 @@ test_a_broken_reader_never_becomes_an_idle_fleet() {
 
   out=$(FM_FLEET_STATE_NO_CACHE=1 FM_FLEET_TEST_READER_FAIL=1 \
     FM_FLEET_STATE_READER="$BINDIR/fake-crew-state" counts)
-  known=$(printf '%s' "$out" | cut -f6)
+  known=$(printf '%s' "$out" | cut -f7)
   [ "$known" = 0 ] || fail "a reader that answers nothing was treated as a real reading"
   out=$(FM_FLEET_STATE_NO_CACHE=1 FM_FLEET_STATE_READER="$TMP_ROOT/not-a-reader" counts)
-  known=$(printf '%s' "$out" | cut -f6)
+  known=$(printf '%s' "$out" | cut -f7)
   [ "$known" = 0 ] || fail "a missing reader was treated as a real reading"
   pass "fleet status: a broken or missing canonical reader reports unknown, never an idle fleet"
 }
@@ -170,13 +193,13 @@ test_a_reading_for_another_fleet_is_discarded() {
   ' _ "$ROOT" "$STATE" "$BINDIR/fake-crew-state"
   out=$(FM_FLEET_STATE_NOW=1010 FM_FLEET_STATE_TTL=600 FM_FLEET_STATE_MAX_AGE=600 \
     FM_FLEET_STATE_READER="$BINDIR/fake-crew-state" counts)
-  known=$(printf '%s' "$out" | cut -f6)
+  known=$(printf '%s' "$out" | cut -f7)
   [ "$known" = 1 ] || fail "a fresh cached reading for this fleet was not used: $out"
 
   task two crew 'state: paused · source: status-log · upstream release'
   out=$(FM_FLEET_STATE_NOW=1010 FM_FLEET_STATE_TTL=600 FM_FLEET_STATE_MAX_AGE=600 \
     FM_FLEET_STATE_READER="$BINDIR/fake-crew-state" counts)
-  known=$(printf '%s' "$out" | cut -f6)
+  known=$(printf '%s' "$out" | cut -f7)
   [ "$known" = 0 ] || fail "a reading taken before the fleet changed was applied to the new fleet"
   pass "fleet status: a cached reading is discarded once the fleet it covered has changed"
 }
@@ -192,12 +215,12 @@ test_a_reading_that_has_aged_out_is_discarded() {
 
   out=$(FM_FLEET_STATE_NOW=1100 FM_FLEET_STATE_TTL=600 FM_FLEET_STATE_MAX_AGE=300 \
     FM_FLEET_STATE_READER="$BINDIR/fake-crew-state" counts)
-  [ "$(printf '%s' "$out" | cut -f6)" = 1 ] \
+  [ "$(printf '%s' "$out" | cut -f7)" = 1 ] \
     || fail "a reading inside its maximum age was discarded: $out"
 
   out=$(FM_FLEET_STATE_NOW=2000 FM_FLEET_STATE_TTL=600 FM_FLEET_STATE_MAX_AGE=300 \
     FM_FLEET_STATE_READER="$BINDIR/fake-crew-state" counts)
-  known=$(printf '%s' "$out" | cut -f6)
+  known=$(printf '%s' "$out" | cut -f7)
   [ "$known" = 0 ] || fail "a reading past its maximum age was still reported as current"
   pass "fleet status: a reading past its maximum age is discarded rather than shown as current"
 }
@@ -206,10 +229,10 @@ test_a_malformed_cached_reading_is_refused() {
   local out known
   reset_state
   task one crew 'state: working · source: pane · harness busy'
-  printf '1000\tnot-a-number\t0\t0\t0\tsig\n' > "$STATE/.status-fleet-state"
+  printf '1000\tnot-a-number\t0\t0\t0\t0\tsig\n' > "$STATE/.status-fleet-state"
   out=$(FM_FLEET_STATE_NOW=1010 FM_FLEET_STATE_TTL=600 FM_FLEET_STATE_MAX_AGE=600 \
     FM_FLEET_STATE_READER="$BINDIR/fake-crew-state" counts)
-  known=$(printf '%s' "$out" | cut -f6)
+  known=$(printf '%s' "$out" | cut -f7)
   [ "$known" = 0 ] || fail "a malformed cached reading was rendered as a real one"
   pass "fleet status: a malformed cached reading is refused"
 }
@@ -271,7 +294,7 @@ test_a_zero_record_fleet_reports_a_trusted_zero() {
   reset_state
 
   out=$(FM_FLEET_STATE_NO_CACHE=1 FM_FLEET_STATE_READER="$BINDIR/fake-crew-state" counts)
-  [ "$out" = $'0\t0\t0\t0\t0\t1' ] \
+  [ "$out" = $'0\t0\t0\t0\t0\t0\t1' ] \
     || fail "an empty fleet was not read as a trusted zero: $(printf '%s' "$out" | tr '\t' ' ')"
 
   # And end to end through the cache, the way a frame actually reaches it: the
@@ -285,7 +308,7 @@ test_a_zero_record_fleet_reports_a_trusted_zero() {
     waited=$((waited + 1))
   done
   out=$(FM_FLEET_STATE_READER="$BINDIR/counting-crew-state" counts)
-  [ "$out" = $'0\t0\t0\t0\t0\t1' ] \
+  [ "$out" = $'0\t0\t0\t0\t0\t0\t1' ] \
     || fail "a cached empty-fleet reading was not accepted for the fleet it covered: $(printf '%s' "$out" | tr '\t' ' ')"
   unset FM_FLEET_TEST_CALLS
   pass "fleet status: a fleet of zero records reports a real zero rather than permanent placeholders"
@@ -310,7 +333,7 @@ test_a_reader_that_drains_stdin_cannot_truncate_the_fold() {
   asked=$(wc -l < "$FM_FLEET_TEST_CALLS" | tr -d ' ')
   [ "$asked" = 4 ] \
     || fail "a reader that drained stdin swallowed the remaining ids; only $asked of 4 tasks were folded"
-  [ "$out" = $'4\t2\t0\t1\t1\t1' ] \
+  [ "$out" = $'4\t2\t0\t0\t1\t1\t1' ] \
     || fail "a stdin-draining reader produced a short fold reported as complete: $(printf '%s' "$out" | tr '\t' ' ')"
   unset FM_FLEET_TEST_CALLS
   pass "fleet status: a canonical reader that drains stdin cannot truncate the fold or publish it short"
@@ -395,6 +418,127 @@ test_a_published_refresh_releases_its_claim_and_a_silent_one_ages_out() {
   pass "fleet status: a published refresh releases its claim, and a silent one is reclaimed by ageing out"
 }
 
+# --- liveness --------------------------------------------------------------
+
+# The question the row exists to answer. A record is not a worker: the headline
+# counts endpoints an agent is actually running on, and the records whose worker
+# is gone are their own figure rather than being folded into the same number.
+test_live_agents_and_stopped_records_are_separate_figures() {
+  local out
+  reset_state
+  mkdir -p "$TMP_ROOT/case$FLEET_CASE/wt"
+  endpoint_task busy live-1 "$TMP_ROOT/case$FLEET_CASE/wt" \
+    'state: working · source: pane · harness busy'
+  # Alive but idle: no run, no busy pane, and the captain still has a worker.
+  endpoint_task idle live-2 "$TMP_ROOT/case$FLEET_CASE/wt" \
+    'state: unknown · source: none · nothing attributed'
+  endpoint_task gone dead-1 "$TMP_ROOT/case$FLEET_CASE/wt" \
+    'state: done · source: run-step · checks passed'
+  endpoint_task shed live-3 "$TMP_ROOT/case$FLEET_CASE/no-such-worktree" \
+    'state: done · source: run-step · checks passed'
+
+  out=$(FM_FLEET_STATE_NO_CACHE=1 FM_FLEET_STATE_PROBE="$BINDIR/fake-probe" \
+    FM_FLEET_STATE_READER="$BINDIR/fake-crew-state" counts)
+  # records alive stopped validating paused attention known
+  [ "$out" = $'4\t2\t2\t0\t0\t0\t1' ] \
+    || fail "live agents and stopped records were not reported as separate figures: $(printf '%s' "$out" | tr '\t' ' ')"
+  pass "fleet status: the headline counts live agents and stopped records carry their own figure"
+}
+
+# A worktree that is gone is decisive and is checked before the endpoint, so a
+# record whose work no longer exists on disk can never be counted as a worker -
+# and it costs no probe at all.
+test_a_gone_worktree_is_stopped_without_probing_the_endpoint() {
+  local out probes
+  reset_state
+  export FM_FLEET_TEST_PROBES="$TMP_ROOT/case$FLEET_CASE/probes"
+  : > "$FM_FLEET_TEST_PROBES"
+  endpoint_task shed live-1 "$TMP_ROOT/case$FLEET_CASE/no-such-worktree" \
+    'state: working · source: pane · harness busy'
+
+  out=$(FM_FLEET_STATE_NO_CACHE=1 FM_FLEET_STATE_PROBE="$BINDIR/fake-probe" \
+    FM_FLEET_STATE_READER="$BINDIR/fake-crew-state" counts)
+  probes=$(wc -l < "$FM_FLEET_TEST_PROBES" | tr -d ' ')
+  [ "$out" = $'1\t0\t1\t0\t0\t0\t1' ] \
+    || fail "a record whose worktree is gone was not counted as stopped: $(printf '%s' "$out" | tr '\t' ' ')"
+  [ "$probes" = 0 ] \
+    || fail "a record whose worktree is gone still spent $probes endpoint probes"
+  unset FM_FLEET_TEST_PROBES
+  pass "fleet status: a record whose worktree is gone is stopped, and costs no endpoint probe"
+}
+
+# Overstating either figure is the failure this library exists to prevent, so a
+# task whose liveness was never established is counted in neither. A remote
+# secondmate's endpoint is on another host; an unverified backend's prober can
+# only answer unknown; a record with no endpoint at all proves nothing either.
+test_unproven_liveness_is_counted_in_neither_figure() {
+  local out
+  reset_state
+  mkdir -p "$TMP_ROOT/case$FLEET_CASE/wt"
+  fm_write_meta "$STATE/afar.meta" kind=crew backend=tmux window=live-1 \
+    "worktree=$TMP_ROOT/case$FLEET_CASE/wt" remote_host=elsewhere
+  printf '%s\n' 'state: unknown · source: remote-endpoint · unreachable' \
+    > "$FLEET_FIX/afar"
+  endpoint_task murky maybe-1 "$TMP_ROOT/case$FLEET_CASE/wt" \
+    'state: unknown · source: none · endpoint unreadable'
+  fm_write_meta "$STATE/bare.meta" kind=crew backend=tmux \
+    "worktree=$TMP_ROOT/case$FLEET_CASE/wt"
+  printf '%s\n' 'state: unknown · source: none · no window recorded' \
+    > "$FLEET_FIX/bare"
+
+  out=$(FM_FLEET_STATE_NO_CACHE=1 FM_FLEET_STATE_PROBE="$BINDIR/fake-probe" \
+    FM_FLEET_STATE_READER="$BINDIR/fake-crew-state" counts)
+  [ "$out" = $'3\t0\t0\t0\t0\t0\t1' ] \
+    || fail "liveness that was never established was still claimed: $(printf '%s' "$out" | tr '\t' ' ')"
+  pass "fleet status: a task whose liveness is unproven is counted as neither alive nor stopped"
+}
+
+# A worker on a backend with no recovery classifier still exists. The busy pane
+# reading the canonical reader already took is proof of life in its own right,
+# so an unknown probe verdict never costs the captain a worker they have.
+test_a_busy_worker_counts_as_alive_when_the_prober_cannot_answer() {
+  local out
+  reset_state
+  mkdir -p "$TMP_ROOT/case$FLEET_CASE/wt"
+  endpoint_task busy maybe-1 "$TMP_ROOT/case$FLEET_CASE/wt" \
+    'state: working · source: pane · harness busy'
+
+  out=$(FM_FLEET_STATE_NO_CACHE=1 FM_FLEET_STATE_PROBE="$BINDIR/fake-probe" \
+    FM_FLEET_STATE_READER="$BINDIR/fake-crew-state" counts)
+  [ "$out" = $'1\t1\t0\t0\t0\t0\t1' ] \
+    || fail "a busy worker was lost because its backend has no recovery classifier: $(printf '%s' "$out" | tr '\t' ' ')"
+  pass "fleet status: a busy worker counts as alive even when the endpoint prober cannot answer"
+}
+
+# AGENTS.md section 8: a status line is a wake EVENT, not current state. A task
+# that paused and then resumed leaves `paused:` as the last line of its log
+# forever, and the old row counted it as parked for as long as that line sat
+# there. The fold reads the reconciled current state instead, and never the log.
+test_a_resolved_pause_is_not_counted_as_paused() {
+  local out
+  reset_state
+  mkdir -p "$TMP_ROOT/case$FLEET_CASE/wt"
+  endpoint_task resumed live-1 "$TMP_ROOT/case$FLEET_CASE/wt" \
+    'state: working · source: pane · harness busy'
+  printf '%s\n' 'working: started' 'paused: waiting on an upstream release' \
+    > "$STATE/resumed.status"
+  endpoint_task waiting live-2 "$TMP_ROOT/case$FLEET_CASE/wt" \
+    'state: paused · source: status-log · upstream release'
+  printf '%s\n' 'paused: waiting on an upstream release' > "$STATE/waiting.status"
+  # And the mirror image: a log whose last line reads resolved, over a task the
+  # canonical reader still reports as blocked, stays counted for attention.
+  endpoint_task stuck live-3 "$TMP_ROOT/case$FLEET_CASE/wt" \
+    'state: blocked · source: status-log · needs a credential'
+  printf '%s\n' 'blocked: needs a credential' 'resolved: [key=cred] supplied' \
+    > "$STATE/stuck.status"
+
+  out=$(FM_FLEET_STATE_NO_CACHE=1 FM_FLEET_STATE_PROBE="$BINDIR/fake-probe" \
+    FM_FLEET_STATE_READER="$BINDIR/fake-crew-state" counts)
+  [ "$out" = $'3\t3\t0\t0\t1\t1\t1' ] \
+    || fail "paused and attention were read from the status log rather than the reconciled state: $(printf '%s' "$out" | tr '\t' ' ')"
+  pass "fleet status: paused and attention follow the reconciled current state, not the last status line"
+}
+
 test_canonical_states_fold_into_the_five_fields
 test_records_are_counted_apart_from_live_workers
 test_an_incomplete_fold_is_refused_rather_than_published_short
@@ -408,3 +552,8 @@ test_a_zero_record_fleet_reports_a_trusted_zero
 test_a_reader_that_drains_stdin_cannot_truncate_the_fold
 test_the_refresh_claim_covers_the_whole_refresh_bound
 test_a_published_refresh_releases_its_claim_and_a_silent_one_ages_out
+test_live_agents_and_stopped_records_are_separate_figures
+test_a_gone_worktree_is_stopped_without_probing_the_endpoint
+test_unproven_liveness_is_counted_in_neither_figure
+test_a_busy_worker_counts_as_alive_when_the_prober_cannot_answer
+test_a_resolved_pause_is_not_counted_as_paused

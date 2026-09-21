@@ -34,11 +34,35 @@ cat "$FM_FLEET_FIXTURE/$1"
 SH
 chmod +x "$FAKEBIN/fake-crew-state"
 
+# The endpoint prober behind the live-agent count is bin/fm-backend.sh's
+# recovery-grade classifier, which needs a real session provider and a real
+# agent process. Suite-wide, a fixture stands in for it and answers from the
+# recorded target's own name, so no case can reach a live endpoint.
+export FM_FLEET_STATE_PROBE="$FAKEBIN/fake-probe"
+cat > "$FAKEBIN/fake-probe" <<'SH'
+#!/usr/bin/env bash
+case "$2" in
+  live*) printf 'alive' ;;
+  dead*) printf 'dead' ;;
+  *) printf 'unknown' ;;
+esac
+SH
+chmod +x "$FAKEBIN/fake-probe"
+
 # fleet_task <id> <kind> <canonical state line>: one task record plus the state
 # the canonical reader reports for it.
 fleet_task() {
   fm_write_meta "$HOME_FIX/state/$1.meta" "kind=$2"
   printf '%s\n' "$3" > "$FLEET_FIX/$1"
+}
+
+# fleet_endpoint_task <id> <window> <worktree> <canonical state line>: the same,
+# for a record that also carries the endpoint and worktree the live-agent and
+# stopped figures are read from.
+fleet_endpoint_task() {
+  fm_write_meta "$HOME_FIX/state/$1.meta" kind=crew backend=tmux \
+    "window=$2" "worktree=$3"
+  printf '%s\n' "$4" > "$FLEET_FIX/$1"
 }
 
 reset_fleet() {
@@ -228,9 +252,38 @@ test_contract_order_and_fleet_projection() {
   : > "$HOME_FIX/state/.afk"
 
   out=$(render Opus high 42 73 1.235 | strip_ansi)
-  [ "$out" = "⚓ Opus·high │ 🧠42% ⚡73% │ 🚢1 🧪1 ⏸1 ⚠1 📋6 │ 👁 100s │ \$1.24 │ 💤AFK" ] \
+  [ "$out" = "⚓ Opus·high │ 🧠42% ⚡73% │ 🚢1 🧪1 ⏸1 ⚠1 🪦0 📋6 │ 👁 100s │ \$1.24 │ 💤AFK" ] \
     || fail "canonical fields, order, fleet counts, or formatting drifted: $out"
   pass "status bar: canonical field order and fleet projection are stable"
+}
+
+# The number the captain actually asks the row for. On 2026-09-21 fifteen records
+# rendered while ten of them had a dead endpoint or a worktree that was already
+# gone, and nothing in the row said so: the headline has to be live agents, and
+# the records whose worker is gone need a figure of their own.
+test_the_headline_is_live_agents_and_stopped_records_are_visible() {
+  local out
+  reset_fleet
+  mkdir -p "$HOME_FIX/wt"
+  fleet_endpoint_task busy live-1 "$HOME_FIX/wt" \
+    'state: working · source: pane · harness busy'
+  fleet_endpoint_task idle live-2 "$HOME_FIX/wt" \
+    'state: unknown · source: none · nothing attributed'
+  fleet_endpoint_task gone dead-1 "$HOME_FIX/wt" \
+    'state: done · source: run-step · checks passed'
+  fleet_endpoint_task shed dead-2 "$HOME_FIX/wt" \
+    'state: unknown · source: none · backend target gone'
+  fleet_endpoint_task shredded live-3 "$HOME_FIX/no-such-worktree" \
+    'state: done · source: run-step · checks passed'
+  : > "$HOME_FIX/state/.last-watcher-beat"
+
+  out=$(render Opus high -- -- -- | strip_ansi)
+  assert_contains "$out" '🚢2 ' \
+    "the headline did not count the two endpoints an agent is actually running on"
+  assert_contains "$out" '🪦3' \
+    "the three records whose worker is gone are not shown as a distinct figure"
+  assert_contains "$out" '📋5' "the record count does not cover every ordinary task"
+  pass "status bar: the headline is live agents and stopped records carry their own figure"
 }
 
 # The defect the captain photographed: twelve task records rendered as twelve
@@ -282,7 +335,7 @@ test_unknown_fleet_state_shows_placeholders_and_never_zero() {
   # No cached reading and no reader that can answer: every live field is unknown.
   out=$(FM_FLEET_STATE_NO_CACHE=0 FM_FLEET_STATE_READER="$FAKEBIN/absent-reader" \
     render Opus high -- -- -- | strip_ansi)
-  assert_contains "$out" '🚢-- 🧪-- ⏸-- ⚠--' \
+  assert_contains "$out" '🚢-- 🧪-- ⏸-- ⚠-- 🪦--' \
     "an unread fleet does not show placeholders for every live field"
   assert_contains "$out" '📋2' "the record count is not shown while the live fields are unknown"
   assert_not_contains "$out" '🚢0' "an unread fleet was reported as zero live workers"
@@ -291,7 +344,7 @@ test_unknown_fleet_state_shows_placeholders_and_never_zero() {
   reset_fleet
   fleet_task done1 crew 'state: done · source: run-step · checks passed'
   out=$(render Opus high -- -- -- | strip_ansi)
-  assert_contains "$out" '🚢0 🧪0 ⏸0 ⚠0 📋1' "a genuinely idle fleet is not reported as zero"
+  assert_contains "$out" '🚢0 🧪0 ⏸0 ⚠0 🪦0 📋1' "a genuinely idle fleet is not reported as zero"
   pass "status bar: an unread fleet shows placeholders and a genuine zero still shows zero"
 }
 
@@ -1375,6 +1428,7 @@ SH
 }
 
 test_contract_order_and_fleet_projection
+test_the_headline_is_live_agents_and_stopped_records_are_visible
 test_task_records_are_never_counted_as_running_workers
 test_validating_work_is_distinguished_from_a_busy_worker
 test_unknown_fleet_state_shows_placeholders_and_never_zero

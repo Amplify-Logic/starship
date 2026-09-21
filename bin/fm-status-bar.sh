@@ -354,18 +354,21 @@ X=$'\033[0m'
 # Fleet fields, from bin/fm-fleet-status-lib.sh. This used to count every meta
 # file as a running ship and fold each status log's last line into paused and
 # attention; both readings turned task RECORDS into apparent live workers. The
-# library now folds the canonical current-state reader instead, and reports
-# whether it has a usable reading at all.
+# library now folds the canonical current-state reader and the recovery-grade
+# endpoint classifier instead, so the headline is live agents and the records
+# whose worker is gone carry their own figure, and it reports whether it has a
+# usable reading at all.
 fleet_counts() {
   local reading
   RECORD_COUNT=0
-  WORKING_COUNT=0
+  ALIVE_COUNT=0
+  STOPPED_COUNT=0
   VALIDATING_COUNT=0
   PAUSED_COUNT=0
   ATTENTION_COUNT=0
   FLEET_KNOWN=0
   reading=$(fm_fleet_status_counts "$STATE" 2>/dev/null) || return 0
-  IFS=$'\t' read -r RECORD_COUNT WORKING_COUNT VALIDATING_COUNT \
+  IFS=$'\t' read -r RECORD_COUNT ALIVE_COUNT STOPPED_COUNT VALIDATING_COUNT \
     PAUSED_COUNT ATTENTION_COUNT FLEET_KNOWN <<EOF
 $reading
 EOF
@@ -401,7 +404,7 @@ supervision_age() {
 render_once() {
   local anchor separator context_part quota_part paused_color attention_color
   local fleet_part watch_part cost_part afk_part age context_color quota_color
-  local working_color validating_color
+  local alive_color stopped_color validating_color
 
   fleet_counts
   age=$(supervision_age)
@@ -436,24 +439,30 @@ render_once() {
   fi
 
   # The record count is always exact and always shown, because it is the one
-  # fleet number that makes no claim about running workers. The four live fields
+  # fleet number that makes no claim about running workers. The five live fields
   # are a single reading: without one they ALL show the placeholder, because a
   # zero here would assert an idle fleet, which is a real state the captain has
   # to be able to believe.
+  #
+  # 🚢 leads because live agents is the question the row exists to answer, and
+  # 🪦 sits against 📋 because "records whose worker is gone" is a statement
+  # about the record count, not about the work.
   if [ "$FLEET_KNOWN" != 1 ]; then
-    fleet_part="${D}🚢-- 🧪-- ⏸-- ⚠--${X} ${D}📋${RECORD_COUNT}${X}"
+    fleet_part="${D}🚢-- 🧪-- ⏸-- ⚠-- 🪦--${X} ${D}📋${RECORD_COUNT}${X}"
   else
-    working_color=$D
-    [ "$WORKING_COUNT" -eq 0 ] || working_color=$G
+    alive_color=$D
+    [ "$ALIVE_COUNT" -eq 0 ] || alive_color=$G
     validating_color=$D
     [ "$VALIDATING_COUNT" -eq 0 ] || validating_color=$C
     paused_color=$D
     [ "$PAUSED_COUNT" -eq 0 ] || paused_color=$Y
     attention_color=$D
     [ "$ATTENTION_COUNT" -eq 0 ] || attention_color=$R
-    fleet_part="${working_color}🚢${WORKING_COUNT}${X} ${validating_color}🧪${VALIDATING_COUNT}${X}"
+    stopped_color=$D
+    [ "$STOPPED_COUNT" -eq 0 ] || stopped_color=$Y
+    fleet_part="${alive_color}🚢${ALIVE_COUNT}${X} ${validating_color}🧪${VALIDATING_COUNT}${X}"
     fleet_part="${fleet_part} ${paused_color}⏸${PAUSED_COUNT}${X} ${attention_color}⚠${ATTENTION_COUNT}${X}"
-    fleet_part="${fleet_part} ${D}📋${RECORD_COUNT}${X}"
+    fleet_part="${fleet_part} ${stopped_color}🪦${STOPPED_COUNT}${X} ${D}📋${RECORD_COUNT}${X}"
   fi
 
   if [ "$age" = -- ]; then

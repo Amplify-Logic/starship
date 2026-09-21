@@ -15,6 +15,15 @@
 # counts. Nothing here selects a run, re-implements attribution, or second-
 # guesses a state word; a change to how a run is chosen belongs in that reader.
 #
+# Folding current state was not enough on its own. A state word describes the
+# WORK, and the captain's question is about the WORKERS: on 2026-09-21 fifteen
+# records rendered while ten of them had a dead endpoint or a worktree that was
+# already gone, and nothing in the row said so. So the fold also asks each task's
+# recorded endpoint whether an agent is running on it, through the one
+# recovery-grade classifier in bin/fm-backend.sh, and reports the live count and
+# the recorded-but-stopped count as separate figures. The probe rides the same
+# out-of-band refresh as the canonical read, so it costs a frame nothing.
+#
 # The cost is why the answers are cached. A canonical read is about a second per
 # task because it consults the pipeline, so a twelve-task fleet is over ten
 # seconds - three orders of magnitude more than the renderer's one-second frame.
@@ -27,13 +36,23 @@
 #   records     ordinary task records in this home, excluding second mates.
 #               Free to count and always exact. It is the one number that is
 #               deliberately NOT a claim about running workers.
-#   working     a live worker is busy on the task right now.
+#   alive       an agent is running on the task's recorded endpoint right now.
+#               This is the headline, because it is the only number that answers
+#               "how many workers do I actually have".
+#   stopped     the record is still here but its worker is not: the endpoint is
+#               proven dead or absent, or the recorded worktree is gone.
 #   validating  the validation pipeline owns the task - it is progressing, but
 #               no worker is typing at it.
 #   paused      a declared bounded external wait.
 #   attention   firstmate has to act: a decision, a blocker, or a failure.
 #
-# The four live fields are all-or-nothing: without a usable reading they are
+# alive and stopped are separate readings of the same fleet rather than two ends
+# of one axis, and a task counts toward NEITHER unless its state was proven: a
+# backend with no recovery classifier, an unreachable remote secondmate, or a
+# record with no endpoint at all leaves the task in records only. Overstating
+# either side is the failure this library exists to prevent.
+#
+# The five live fields are all-or-nothing: without a usable reading they are
 # reported unknown together, and the renderer shows placeholders. They are never
 # reported as zero to stand in for "not read yet", because zero live workers is
 # a real and meaningful fleet state that the captain must be able to trust.
@@ -50,6 +69,10 @@
 #                            and never less than FM_FLEET_STATE_WAIT)
 #   FM_FLEET_STATE_NOW       override the current epoch
 #   FM_FLEET_STATE_READER    canonical reader to fold (default fm-crew-state.sh)
+#   FM_FLEET_STATE_PROBE     endpoint liveness prober invoked as
+#                            `<probe> <backend> <target>` and answering
+#                            alive|dead|unknown (default: fm_backend_agent_alive
+#                            from bin/fm-backend.sh)
 #   FM_FLEET_STATE_NO_CACHE  1 to read inline and bypass the cache entirely
 set -u
 
@@ -115,6 +138,10 @@ _fm_fleet_id_stream() {  # <id>...
 # state word: `working · run-step` means the pipeline is carrying the task, while
 # `working · pane` means a worker is busy on it. Folding both into one "active"
 # number is what made a validating task indistinguishable from a typing one.
+#
+# The `working` bucket is not a displayed field of its own any more: the fold
+# consumes it as proof of life for the liveness reading below, where a worker
+# the busy classifier just watched is alive whatever an endpoint probe can say.
 _fm_fleet_bucket() {  # <canonical line>
   local line=$1 state source
   state=${line#*state: }
@@ -134,8 +161,93 @@ _fm_fleet_bucket() {  # <canonical line>
   esac
 }
 
-# _fm_fleet_collect: fold the canonical reader over every ordinary task and print
-# one reading: <stamp> <working> <validating> <paused> <attention> <signature>.
+# _fm_fleet_backend_ready: load bin/fm-backend.sh once, on first use.
+#
+# It is sourced HERE rather than at library load because the renderer sources
+# this library in the frame process and a frame never reads metadata or probes
+# an endpoint. Only the out-of-band fold pays for it.
+_fm_fleet_backend_ready() {
+  [ "${_FM_FLEET_BACKEND_READY:-}" = 1 ] && return 0
+  # shellcheck source=bin/fm-backend.sh
+  . "$_FM_FLEET_LIB_DIR/fm-backend.sh" 2>/dev/null || return 1
+  _FM_FLEET_BACKEND_READY=1
+  return 0
+}
+
+# _fm_fleet_probe_default: the shipped endpoint prober. It is the recovery-grade
+# classifier in bin/fm-backend.sh and nothing else, so "alive" here means the
+# same proven-at-process-level thing it means to recovery, and an endpoint that
+# merely failed to answer stays unknown instead of being called dead.
+_fm_fleet_probe_default() {  # <backend> <target>
+  fm_backend_agent_alive "$1" "$2" 2>/dev/null || printf 'unknown'
+}
+
+# _fm_fleet_liveness: alive, stopped, or unknown for one task record.
+#
+# Order matters, and it is an order of PROOF rather than of preference:
+#
+#   1. A remote secondmate's endpoint lives on another host, so nothing local
+#      can judge it. Ordinary tasks are local; this is the belt-and-braces arm
+#      for a record that carries remote_host= anyway.
+#   2. A recorded worktree that is gone is checked FIRST, and it is decisive.
+#      The work that record describes no longer exists on disk, so whatever is
+#      or is not still attached to its endpoint is not a worker carrying it -
+#      which is exactly the case the captain kept being shown as a ship. It is
+#      also a local stat, so it spends no probe.
+#   3. The endpoint prober's own "alive" is the strongest evidence of a worker
+#      there is: bin/fm-backend.sh proves it at process level.
+#   4. A canonical `working` fold - the reader saw `working · pane`, a worker
+#      busy at the task - is also proof of life: the busy classifier just watched
+#      that worker do something. This arm is what keeps the count honest on a
+#      backend with no recovery classifier, where the prober can only ever
+#      answer unknown.
+#   5. The prober's own "dead" - the endpoint exists with no agent, or is
+#      authoritatively absent.
+#
+# Anything left over is unknown, and an unknown task is counted in neither
+# figure. A record with no endpoint recorded at all lands here: it cannot hold a
+# live agent, but calling it stopped would assert a death this library never
+# established, and the record count already says the task is here.
+_fm_fleet_liveness() {  # <meta> <busy: 1 when the fold read a busy pane worker> <prober>
+  local meta=$1 busy=$2 probe=$3 backend target worktree verdict
+
+  _fm_fleet_backend_ready || {
+    printf 'unknown'
+    return 0
+  }
+  [ -z "$(fm_meta_get "$meta" remote_host)" ] || {
+    printf 'unknown'
+    return 0
+  }
+  worktree=$(fm_meta_get "$meta" worktree)
+  if [ -n "$worktree" ] && [ ! -d "$worktree" ]; then
+    printf 'stopped'
+    return 0
+  fi
+  backend=$(fm_backend_of_meta "$meta")
+  target=$(fm_backend_target_of_meta "$meta")
+  verdict=unknown
+  if [ -n "$target" ]; then
+    verdict=$("$probe" "$backend" "$target" 2>/dev/null) || verdict=unknown
+    [ "$verdict" = alive ] && {
+      printf 'alive'
+      return 0
+    }
+  fi
+  [ "$busy" = 1 ] && {
+    printf 'alive'
+    return 0
+  }
+  [ "$verdict" = dead ] && {
+    printf 'stopped'
+    return 0
+  }
+  printf 'unknown'
+}
+
+# _fm_fleet_collect: fold the canonical reader and the endpoint prober over every
+# ordinary task and print one reading:
+#   <stamp> <alive> <stopped> <validating> <paused> <attention> <signature>
 #
 # A reading is COMPLETE or it is not a reading. If the canonical reader cannot
 # answer for even one task - it is missing, it failed, the fleet changed under
@@ -149,10 +261,11 @@ _fm_fleet_bucket() {  # <canonical line>
 # other tools: given the id stream as its own stdin, one of them draining stdin
 # would swallow the remaining ids and end the loop with asked == answered on a
 # fraction of the fleet. The reader's stdin is detached for the same reason.
-_fm_fleet_collect() {  # <state-dir> <now> <reader>
-  local state=$1 now=$2 reader=$3 id line bucket signature
-  local working=0 validating=0 paused=0 attention=0 asked=0 answered=0
+_fm_fleet_collect() {  # <state-dir> <now> <reader> [prober]
+  local state=$1 now=$2 reader=$3 probe=${4:-} id line bucket signature life busy
+  local alive=0 stopped=0 validating=0 paused=0 attention=0 asked=0 answered=0
   local ids=()
+  [ -n "$probe" ] || probe=${FM_FLEET_STATE_PROBE:-_fm_fleet_probe_default}
   while IFS= read -r id; do
     [ -n "$id" ] || continue
     ids+=("$id")
@@ -164,20 +277,28 @@ _fm_fleet_collect() {  # <state-dir> <now> <reader>
     [ -n "$line" ] || continue
     answered=$((answered + 1))
     bucket=$(_fm_fleet_bucket "$line")
+    busy=0
     case "$bucket" in
-      working) working=$((working + 1)) ;;
+      working) busy=1 ;;
       validating) validating=$((validating + 1)) ;;
       paused) paused=$((paused + 1)) ;;
       attention) attention=$((attention + 1)) ;;
     esac
+    life=$(_fm_fleet_liveness "$state/$id.meta" "$busy" "$probe")
+    case "$life" in
+      alive) alive=$((alive + 1)) ;;
+      stopped) stopped=$((stopped + 1)) ;;
+    esac
   done
   [ "$answered" -eq "$asked" ] || return 1
-  printf '%s\t%s\t%s\t%s\t%s\t%s' \
-    "$now" "$working" "$validating" "$paused" "$attention" "$signature"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s' \
+    "$now" "$alive" "$stopped" "$validating" "$paused" "$attention" "$signature"
 }
 
 # _fm_fleet_refresh_detached: start at most ONE bounded refresh and return at
-# once. The claim is what keeps a one-second loop from stacking readers: a tick
+# once. The prober is not a parameter: the detached shell re-sources this
+# library and _fm_fleet_collect resolves it from the environment, so a home or a
+# test that overrides FM_FLEET_STATE_PROBE reaches the refresh too. The claim is what keeps a one-second loop from stacking readers: a tick
 # during an in-flight refresh, or right after one died without writing, is
 # refused until the claim ages out.
 #
@@ -216,17 +337,17 @@ _fm_fleet_refresh_detached() {  # <cache> <state-dir> <now> <reader>
 
 # _fm_fleet_unknown: the reading a frame gets when the live fields are not known.
 _fm_fleet_unknown() {  # <records>
-  printf '%s\t0\t0\t0\t0\t0' "$1"
+  printf '%s\t0\t0\t0\t0\t0\t0' "$1"
 }
 
 # fm_fleet_status_counts: the fleet fields for one frame, as
-#   <records> <working> <validating> <paused> <attention> <known>
-# tab separated, where <known> is 1 when the four live fields are a real reading
-# of THIS fleet and 0 when they are not yet known. The four live fields are 0
+#   <records> <alive> <stopped> <validating> <paused> <attention> <known>
+# tab separated, where <known> is 1 when the five live fields are a real reading
+# of THIS fleet and 0 when they are not yet known. The five live fields are 0
 # and meaningless when <known> is 0; the renderer must show placeholders.
 fm_fleet_status_counts() {  # <state-dir>
   local state=$1 now cache reader records ttl max_age
-  local cached stamp working validating paused attention signature current
+  local cached stamp alive stopped validating paused attention signature current
   records=$(_fm_fleet_ids "$state" | grep -c '') || records=0
   now=$(_fm_fleet_now) || {
     _fm_fleet_unknown "$records"
@@ -249,7 +370,7 @@ fm_fleet_status_counts() {  # <state-dir>
     _fm_fleet_unknown "$records"
     return 0
   }
-  IFS=$'\t' read -r stamp working validating paused attention signature <<READING
+  IFS=$'\t' read -r stamp alive stopped validating paused attention signature <<READING
 $cached
 READING
   current=$(_fm_fleet_ids "$state" | _fm_fleet_signature) || current=
@@ -260,12 +381,12 @@ READING
     _fm_fleet_unknown "$records"
     return 0
   fi
-  case "$working$validating$paused$attention" in
+  case "$alive$stopped$validating$paused$attention" in
     ''|*[!0-9]*)
       _fm_fleet_unknown "$records"
       return 0
       ;;
   esac
-  printf '%s\t%s\t%s\t%s\t%s\t1' \
-    "$records" "$working" "$validating" "$paused" "$attention"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t1' \
+    "$records" "$alive" "$stopped" "$validating" "$paused" "$attention"
 }
