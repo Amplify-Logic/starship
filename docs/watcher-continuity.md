@@ -136,10 +136,11 @@ From spawn code, `bin/fm-spawn.sh` does not put this variable on the herdr launc
 The Claude worker launch prefix sets `CLAUDE_CODE_AUTO_COMPACT_WINDOW=500000` and `CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false` (see `docs/configuration.md` "Context window").
 A herdr worker pane otherwise inherits the launching environment for `FM_HERDR_PROJECT_*`, which is why spawn pins or clears those two variables, but that is not evidence for this pressure-reap export.
 Whether a herdr crewmate receives the export is therefore untested.
-The spawn launch prefix omits `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP`, so a Claude secondmate running its own watcher on tmux stays reapable and can lose its arm the same way the primary did.
-This PR does not close that gap.
-The disable stays scoped to the primary on the verified tmux path, and this change does not add a worker-scoping mechanism.
-The launcher header owns the exact export.
+A Claude secondmate runs its own supervision cycle, so its watcher arm is a tracked background shell of an interactive Claude session and is reapable exactly as the primary's was.
+`bin/fm-spawn.sh` therefore carries `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1` on the Claude launch line for `kind=secondmate`, on every backend, because the pane environment comes from the backend rather than from the launching primary.
+Ordinary crewmates and scouts arm no watcher, so they stay on Claude's default and the disable is deliberately not applied to them.
+The launch-line placement is what carries it on the verified tmux path; whether a herdr pane would also have inherited it remains untested, as above, so the herdr secondmate case rests on the explicit launch-line export rather than on inheritance.
+The launcher header owns the exact primary export, and `bin/fm-spawn.sh`'s `launch_template()` owns the secondmate one.
 A Claude primary started outside that launcher must export the same variable by hand before launch.
 
 Host status is two separate claims, and only the first rests on this fleet's own evidence.

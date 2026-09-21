@@ -1087,6 +1087,57 @@ test_claude_secondmate_launch_carries_the_attribution_policy() {
   pass "a claude secondmate launch carries the attribution-off policy too"
 }
 
+# A secondmate runs its own supervision cycle, so Claude Code's idle
+# background-shell pressure reap can take its watcher arm down exactly as it did
+# the primary's (docs/watcher-continuity.md "Claude background-shell pressure
+# reap"). Ordinary crewmates and scouts arm no watcher, so the disable stays
+# scoped to them being excluded rather than blanket-applied.
+test_claude_secondmate_launch_disables_the_background_shell_pressure_reap() {
+  local rec id sm out status launch
+  id=profile-secondmate-bgreap-z24
+  rec=$(make_spawn_case profile-secondmate-bgreap claude "$id")
+  read_case_record "$rec"
+  sm="$CASE_DIR/secondmate-home"
+  make_seeded_secondmate_home "$sm" "$id"
+
+  out=$(FM_TEST_CLAUDE_CONFIG_DIR="$CASE_DIR/claude-work" \
+    run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$sm" --secondmate)
+  status=$?
+  expect_code 0 "$status" "secondmate claude spawn should succeed"$'\n'"$out"
+  launch=$(cat "$LAUNCH_LOG")
+  assert_contains "$launch" "CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1 CLAUDE_CODE_AUTO_COMPACT_WINDOW=" \
+    "claude secondmate launch left its own watcher arm reapable"
+  assert_contains "$launch" "CLAUDE_CODE_SEND_FEEDBACK=0 claude " \
+    "the pressure-reap disable broke the feedback-draft launch contract"
+  pass "a claude secondmate launch disables the background-shell pressure reap that would kill its watcher arm"
+}
+
+test_claude_crewmate_and_scout_launches_keep_the_background_shell_reap_default() {
+  local rec id out status launch
+  id=profile-crewmate-bgreap-z25
+  rec=$(make_spawn_case profile-crewmate-bgreap claude "$id")
+  read_case_record "$rec"
+
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
+  status=$?
+  expect_code 0 "$status" "claude crewmate spawn should succeed"$'\n'"$out"
+  launch=$(cat "$LAUNCH_LOG")
+  assert_not_contains "$launch" "CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP" \
+    "claude crewmate launch carried the secondmate-scoped pressure-reap disable"
+
+  id=profile-scout-bgreap-z26
+  rec=$(make_spawn_case profile-scout-bgreap claude "$id")
+  read_case_record "$rec"
+
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --scout)
+  status=$?
+  expect_code 0 "$status" "claude scout spawn should succeed"$'\n'"$out"
+  launch=$(cat "$LAUNCH_LOG")
+  assert_not_contains "$launch" "CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP" \
+    "claude scout launch carried the secondmate-scoped pressure-reap disable"
+  pass "ordinary claude crewmate and scout launches keep Claude's default background-shell reap"
+}
+
 test_active_dispatch_profile_does_not_block_secondmate_launch() {
   local rec id sm out status
   id=profile-secondmate-z16
@@ -1552,5 +1603,7 @@ test_claude_secondmate_launch_omits_task_control_channel_authority
 test_claude_crewmate_launch_carries_the_attribution_policy
 test_claude_secondmate_launch_carries_the_attribution_policy
 test_active_dispatch_profile_does_not_block_secondmate_launch
+test_claude_secondmate_launch_disables_the_background_shell_pressure_reap
+test_claude_crewmate_and_scout_launches_keep_the_background_shell_reap_default
 
 echo "# all fm-spawn-dispatch-profile tests passed"
