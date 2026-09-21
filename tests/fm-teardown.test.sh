@@ -1428,6 +1428,221 @@ test_retained_legacy_stamp_still_faces_the_endpoint_gate() {
   pass "a legacy stamp a failed rollback left behind still faces the endpoint gate"
 }
 
+# Write a legacy meta whose worktree identity is recorded but empty - the shape
+# left by a pre-binding record whose isolated copy was never named. Args: case_dir
+write_legacy_meta_without_worktree() {
+  local case_dir=$1
+  fm_write_meta "$case_dir/state/task-x1.meta" \
+    "window=firstmate:fm-task-x1" \
+    "endpoint_task_id=task-x1" \
+    "worktree=" \
+    "project=$case_dir/project" \
+    "kind=ship" \
+    "mode=no-mistakes" \
+    "harness=codex"
+}
+
+# Write a Herdr meta with no endpoint_task_id at all: the pre-binding record
+# shape whose endpoint cannot be proved to belong to this task. A second
+# argument adds a published incarnation, so the missing-binding refusal can be
+# reached on its own instead of behind the earlier no-spawn_gen refusal.
+# Args: case_dir [spawn_gen]
+write_legacy_herdr_meta_without_binding() {
+  local case_dir=$1 gen=${2:-}
+  fm_write_meta "$case_dir/state/task-x1.meta" \
+    "window=default:w8:pJ" \
+    "worktree=$case_dir/wt" \
+    "project=$case_dir/project" \
+    "kind=ship" \
+    "mode=no-mistakes" \
+    "harness=codex" \
+    "backend=herdr" \
+    "herdr_session=default" \
+    "herdr_workspace_id=w8" \
+    "herdr_tab_id=w8:tJ" \
+    "herdr_pane_id=w8:pJ"
+  [ -z "$gen" ] || printf 'spawn_gen=%s\n' "$gen" >> "$case_dir/state/task-x1.meta"
+}
+
+# A herdr whose session server is stopped: the backend's own liveness read then
+# reports the recorded endpoint absent (`missing`). Args: case_dir
+add_herdr_server_stopped() {
+  local case_dir=$1
+  cat > "$case_dir/fakebin/herdr" <<'SH'
+#!/usr/bin/env bash
+set -u
+[ "${1:-}" = status ] && { printf '{"server":{"running":false}}\n'; exit 0; }
+printf '{"error":{"code":"server_not_running"}}\n'
+exit 1
+SH
+  chmod +x "$case_dir/fakebin/herdr"
+}
+
+# A herdr whose session is up and whose recorded pane is still THERE, merely
+# without a registered agent: the backend reads that as `dead`, never absent.
+# Args: case_dir
+add_herdr_pane_present_without_agent() {
+  local case_dir=$1
+  cat > "$case_dir/fakebin/herdr" <<'SH'
+#!/usr/bin/env bash
+set -u
+cmd="${1:-} ${2:-}"
+case "$cmd" in
+  "status "*|"status") printf '{"server":{"running":true}}\n'; exit 0 ;;
+  "pane get") printf '{"result":{"pane":{"pane_id":"%s"}}}\n' "${3:-}"; exit 0 ;;
+  "agent get") printf '{"error":{"code":"agent_not_found"}}\n'; exit 0 ;;
+esac
+printf '{"error":{"code":"unsupported"}}\n'
+exit 1
+SH
+  chmod +x "$case_dir/fakebin/herdr"
+}
+
+test_legacy_record_reconciles_a_record_with_no_worktree_identity() {
+  local case_dir out
+  command -v jq >/dev/null 2>&1 || { pass "legacy no-worktree reconciliation skipped without jq"; return; }
+  case_dir=$(make_case legacy-no-worktree)
+  write_legacy_meta_without_worktree "$case_dir"
+  seed_backlog_in_flight "$case_dir"
+  printf 'working: started\n' > "$case_dir/state/task-x1.status"
+
+  out=$(run_teardown "$case_dir" --legacy-record) \
+    || fail "legacy-no-worktree: teardown refused a legacy record with nothing to return"
+  printf '%s\n' "$out" | grep -Fq 'no worktree identity to return' \
+    || fail "legacy-no-worktree: the teardown line did not name the reconciled degradation: $out"
+  [ "$(backlog_row_state "$case_dir")" = "done" ] \
+    || fail "legacy-no-worktree: the backlog item did not close like an ordinary teardown"
+  assert_absent "$case_dir/state/task-x1.meta" \
+    "legacy-no-worktree: teardown left the task record behind"
+  assert_absent "$case_dir/state/task-x1.status" \
+    "legacy-no-worktree: the status log was not retired the way an ordinary teardown retires it"
+  pass "a legacy record with no worktree identity reconciles with nothing to return to the pool"
+}
+
+test_legacy_record_refuses_an_ambiguous_worktree_identity() {
+  local case_dir rc before
+  case_dir=$(make_case legacy-two-worktrees)
+  write_legacy_meta "$case_dir" no-mistakes ship
+  printf 'worktree=%s\n' "$case_dir/other-wt" >> "$case_dir/state/task-x1.meta"
+  seed_backlog_in_flight "$case_dir"
+  before=$(cksum "$case_dir/state/task-x1.meta" | awk '{print $1, $2}')
+
+  set +e
+  run_teardown "$case_dir" --legacy-record > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "legacy-two-worktrees: a record naming two isolated copies must still refuse"
+  grep -q "more than one worktree identity" "$case_dir/stderr" \
+    || fail "legacy-two-worktrees: the refusal did not name the failing condition"
+  [ "$(cksum "$case_dir/state/task-x1.meta" | awk '{print $1, $2}')" = "$before" ] \
+    || fail "legacy-two-worktrees: the refusal modified the task record"
+  [ "$(backlog_row_state "$case_dir")" = in_flight ] \
+    || fail "legacy-two-worktrees: the refusal closed the backlog item anyway"
+  pass "--legacy-record never reconciles a record that names more than one isolated copy"
+}
+
+test_unbound_endpoint_still_refuses_without_the_flag() {
+  local case_dir rc before
+  command -v jq >/dev/null 2>&1 || { pass "unbound-endpoint flagless refusal skipped without jq"; return; }
+  case_dir=$(make_case unbound-noflag)
+  write_legacy_herdr_meta_without_binding "$case_dir" teardown-test-task-x1
+  seed_backlog_in_flight "$case_dir"
+  wt_commit "$case_dir" "landed legacy work"
+  add_fork_with_pushed_branch "$case_dir"
+  add_herdr_server_stopped "$case_dir"
+  before=$(cksum "$case_dir/state/task-x1.meta" | awk '{print $1, $2}')
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "unbound-noflag: an unbound endpoint must refuse without --legacy-record"
+  grep -q "lacks an exact task binding" "$case_dir/stderr" \
+    || fail "unbound-noflag: the refusal did not keep its existing wording"
+  [ "$(cksum "$case_dir/state/task-x1.meta" | awk '{print $1, $2}')" = "$before" ] \
+    || fail "unbound-noflag: the refusal modified the task record"
+  [ "$(backlog_row_state "$case_dir")" = in_flight ] \
+    || fail "unbound-noflag: the refusal closed the backlog item anyway"
+  pass "an endpoint with no exact task binding still refuses teardown without --legacy-record"
+}
+
+test_unbound_endpoint_reconciles_once_the_backend_reports_it_absent() {
+  local case_dir out
+  command -v jq >/dev/null 2>&1 || { pass "unbound-endpoint reconciliation skipped without jq"; return; }
+  case_dir=$(make_case unbound-absent)
+  write_legacy_herdr_meta_without_binding "$case_dir"
+  seed_backlog_in_flight "$case_dir"
+  wt_commit "$case_dir" "landed legacy work"
+  add_fork_with_pushed_branch "$case_dir"
+  add_herdr_server_stopped "$case_dir"
+  printf 'working: started\n' > "$case_dir/state/task-x1.status"
+
+  out=$(run_teardown "$case_dir" --legacy-record) \
+    || fail "unbound-absent: teardown refused a landed record whose endpoint is gone: $(cat "$case_dir/state/task-x1.meta" 2>/dev/null)"
+  printf '%s\n' "$out" | grep -Fq 'endpoint reconciled without an exact task binding' \
+    || fail "unbound-absent: the teardown line did not name the reconciled degradation: $out"
+  [ "$(backlog_row_state "$case_dir")" = "done" ] \
+    || fail "unbound-absent: the backlog item did not close like an ordinary teardown"
+  assert_absent "$case_dir/state/task-x1.meta" \
+    "unbound-absent: teardown left the task record behind"
+  assert_absent "$case_dir/state/task-x1.status" \
+    "unbound-absent: the status log was not retired the way an ordinary teardown retires it"
+  pass "an unbound legacy endpoint the backend reports absent reconciles with nothing to stop"
+}
+
+test_unbound_endpoint_refuses_while_the_backend_still_reports_it() {
+  local case_dir rc before
+  command -v jq >/dev/null 2>&1 || { pass "unbound-endpoint presence refusal skipped without jq"; return; }
+  case_dir=$(make_case unbound-present)
+  write_legacy_herdr_meta_without_binding "$case_dir"
+  seed_backlog_in_flight "$case_dir"
+  wt_commit "$case_dir" "landed legacy work"
+  add_fork_with_pushed_branch "$case_dir"
+  add_herdr_pane_present_without_agent "$case_dir"
+  before=$(cksum "$case_dir/state/task-x1.meta" | awk '{print $1, $2}')
+
+  set +e
+  run_teardown "$case_dir" --legacy-record > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "unbound-present: an endpoint the backend still reports must refuse"
+  grep -q "can be reconciled only once the backend reports it absent" "$case_dir/stderr" \
+    || fail "unbound-present: the refusal did not name the failing condition: $(cat "$case_dir/stderr")"
+  [ "$(cksum "$case_dir/state/task-x1.meta" | awk '{print $1, $2}')" = "$before" ] \
+    || fail "unbound-present: the refusal modified the task record"
+  [ "$(backlog_row_state "$case_dir")" = in_flight ] \
+    || fail "unbound-present: the refusal closed the backlog item anyway"
+  pass "an unbound legacy endpoint that is agent-less but still present refuses reconciliation"
+}
+
+test_unbound_endpoint_never_relaxes_the_unlanded_work_refusal() {
+  local case_dir rc before
+  command -v jq >/dev/null 2>&1 || { pass "unbound-endpoint unlanded refusal skipped without jq"; return; }
+  case_dir=$(make_case unbound-unlanded)
+  write_legacy_herdr_meta_without_binding "$case_dir"
+  seed_backlog_in_flight "$case_dir"
+  wt_commit_file "$case_dir" feature.txt unique-unbound-content "real unlanded work"
+  add_herdr_server_stopped "$case_dir"
+  before=$(cksum "$case_dir/state/task-x1.meta" | awk '{print $1, $2}')
+
+  set +e
+  run_teardown "$case_dir" --legacy-record > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "unbound-unlanded: reconciliation must not relax the unlanded-work refusal"
+  grep -q REFUSED "$case_dir/stderr" \
+    || fail "unbound-unlanded: no REFUSED line for unlanded work on a reconcilable record"
+  [ "$(cksum "$case_dir/state/task-x1.meta" | awk '{print $1, $2}')" = "$before" ] \
+    || fail "unbound-unlanded: the refusal modified the task record"
+  [ "$(backlog_row_state "$case_dir")" = in_flight ] \
+    || fail "unbound-unlanded: the refusal closed the backlog item anyway"
+  pass "legacy-record reconciliation never relaxes the unlanded-work refusal"
+}
+
 test_legacy_record_never_accepts_a_corrupt_spawn_gen() {
   local case_dir rc
   case_dir=$(make_case legacy-corrupt)
@@ -3812,6 +4027,12 @@ test_legacy_record_teardown_refuses_an_ambiguous_endpoint
 test_legacy_record_rolls_the_stamp_back_when_the_marker_write_fails
 test_retained_legacy_stamp_still_faces_the_endpoint_gate
 test_legacy_record_never_accepts_a_corrupt_spawn_gen
+test_legacy_record_reconciles_a_record_with_no_worktree_identity
+test_legacy_record_refuses_an_ambiguous_worktree_identity
+test_unbound_endpoint_still_refuses_without_the_flag
+test_unbound_endpoint_reconciles_once_the_backend_reports_it_absent
+test_unbound_endpoint_refuses_while_the_backend_still_reports_it
+test_unbound_endpoint_never_relaxes_the_unlanded_work_refusal
 test_stale_index_lock_cleared_and_teardown_succeeds
 test_live_index_lock_is_never_removed_and_teardown_refuses
 test_lsof_error_never_clears_index_lock

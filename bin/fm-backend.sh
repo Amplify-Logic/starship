@@ -365,14 +365,6 @@ fm_backend_target_of_meta() {  # <meta-file>
   [ -n "$window" ] && printf '%s' "$window"
 }
 
-# fm_backend_validate_task_endpoint: validate a task cleanup record entirely
-# from its durable metadata before any runtime command or cleanup mutation.
-# The validation binds the exact task id, selected backend, target, project,
-# and worktree. New non-tmux records carry endpoint_task_id because their
-# opaque runtime ids do not encode the task label. Legacy tmux records remain
-# valid only when their window name itself is exactly fm-<task-id>.
-# On success, sets FM_BACKEND_VALIDATED_BACKEND and
-# FM_BACKEND_VALIDATED_TARGET. On failure, prints one refusal and returns 1.
 fm_backend_meta_exact_value() {  # <meta-file> <key>
   local meta=$1 key=$2 count value
   count=$(grep -c "^$key=" "$meta" 2>/dev/null || true)
@@ -382,17 +374,69 @@ fm_backend_meta_exact_value() {  # <meta-file> <key>
   printf '%s' "$value"
 }
 
+# True only when a field names nothing at all: absent, or present exactly once
+# with an empty value. More than one line is an ambiguous field, never nothing.
+fm_backend_meta_field_is_unset() {  # <meta-file> <key>
+  local meta=$1 key=$2 count
+  count=$(grep -c "^$key=" "$meta" 2>/dev/null || true)
+  case "$count" in
+    0) return 0 ;;
+    1) [ -z "$(grep "^$key=" "$meta" | cut -d= -f2-)" ] ;;
+    *) return 1 ;;
+  esac
+}
+
 fm_backend_endpoint_atom_valid() {  # <value>
   case "$1" in
     ''|*[!A-Za-z0-9._@%+-]*) return 1 ;;
   esac
 }
 
-fm_backend_validate_task_endpoint() {  # <meta-file> <task-id>
+# fm_backend_validate_task_endpoint: validate a task cleanup record entirely
+# from its durable metadata before any runtime command or cleanup mutation.
+# The validation binds the exact task id, selected backend, target, project,
+# and worktree. New non-tmux records carry endpoint_task_id because their
+# opaque runtime ids do not encode the task label. Legacy tmux records remain
+# valid only when their window name itself is exactly fm-<task-id>.
+# On success, sets FM_BACKEND_VALIDATED_BACKEND and
+# FM_BACKEND_VALIDATED_TARGET. On failure, prints one refusal and returns 1.
+#
+# Optional third argument --reconcile-legacy: the caller has already accepted
+# this record as a legacy record that no live task can own (bin/fm-teardown.sh's
+# --legacy-record). Two degradations a pre-binding record can carry then report
+# themselves instead of refusing, because neither one names anything this record
+# could still be holding:
+#   * an absent or empty worktree= field, reported as
+#     FM_BACKEND_VALIDATED_WORKTREE_ABSENT=1 - there is no isolated copy to
+#     inspect or return. A record carrying MORE than one worktree= line still
+#     refuses: that names an isolated copy, it just cannot say which.
+#   * an absent endpoint_task_id on a Herdr record, reported as
+#     FM_BACKEND_VALIDATED_ENDPOINT_UNBOUND=1 - the endpoint cannot be proved to
+#     belong to this task, so the caller must prove it is ABSENT before it may
+#     reconcile the record, and must never close it. An endpoint_task_id naming
+#     a DIFFERENT task still refuses, ahead of every backend branch.
+# Nothing else relaxes: every malformed, ambiguous, or inconsistent field, and
+# every other backend's missing binding, refuses exactly as it does without the
+# flag. Both globals are set to 0 on every call, so a caller that never passes
+# the flag reads the same two zeros it would read from an unmodified record.
+fm_backend_validate_task_endpoint() {  # <meta-file> <task-id> [--reconcile-legacy]
   local meta=$1 id=$2 backend_count backend window worktree project binding_count binding
   local session pane recorded_session workspace tab terminal worktree_id surface
+  local reconcile=0
   FM_BACKEND_VALIDATED_BACKEND=
   FM_BACKEND_VALIDATED_TARGET=
+  # shellcheck disable=SC2034 # Output globals are consumed by sourcing callers.
+  FM_BACKEND_VALIDATED_WORKTREE_ABSENT=0
+  # shellcheck disable=SC2034 # Output globals are consumed by sourcing callers.
+  FM_BACKEND_VALIDATED_ENDPOINT_UNBOUND=0
+  case "${3:-}" in
+    '') ;;
+    --reconcile-legacy) reconcile=1 ;;
+    *)
+      echo "REFUSED: unknown endpoint validation option '$3'; preserving task state." >&2
+      return 1
+      ;;
+  esac
   [ -f "$meta" ] && [ ! -L "$meta" ] || {
     echo "REFUSED: task $id has no regular endpoint metadata at $meta; preserving task state." >&2
     return 1
@@ -406,8 +450,17 @@ fm_backend_validate_task_endpoint() {  # <meta-file> <task-id>
     return 1
   }
   worktree=$(fm_backend_meta_exact_value "$meta" worktree) || {
-    echo "REFUSED: task $id has a missing, empty, or ambiguous worktree identity; preserving task state." >&2
-    return 1
+    if [ "$reconcile" = 1 ] && fm_backend_meta_field_is_unset "$meta" worktree; then
+      worktree=
+      # shellcheck disable=SC2034 # Output globals are consumed by sourcing callers.
+      FM_BACKEND_VALIDATED_WORKTREE_ABSENT=1
+    elif [ "$reconcile" = 1 ]; then
+      echo "REFUSED: task $id records more than one worktree identity, so legacy reconciliation cannot tell which isolated copy to inspect; preserving task state." >&2
+      return 1
+    else
+      echo "REFUSED: task $id has a missing, empty, or ambiguous worktree identity; preserving task state." >&2
+      return 1
+    fi
   }
   project=$(fm_backend_meta_exact_value "$meta" project) || {
     echo "REFUSED: task $id has a missing, empty, or ambiguous project identity; preserving task state." >&2
@@ -457,10 +510,17 @@ fm_backend_validate_task_endpoint() {  # <meta-file> <task-id>
       fi
       ;;
     herdr)
-      [ "$binding" = "$id" ] || {
-        echo "REFUSED: legacy Herdr endpoint metadata for task $id lacks an exact task binding; preserving task state." >&2
-        return 1
-      }
+      if [ "$binding" != "$id" ]; then
+        if [ "$reconcile" = 1 ]; then
+          # Reached only with an ABSENT binding: a binding naming another task
+          # refused above.
+          # shellcheck disable=SC2034 # Output globals are consumed by sourcing callers.
+          FM_BACKEND_VALIDATED_ENDPOINT_UNBOUND=1
+        else
+          echo "REFUSED: legacy Herdr endpoint metadata for task $id lacks an exact task binding; preserving task state." >&2
+          return 1
+        fi
+      fi
       recorded_session=$(fm_backend_meta_exact_value "$meta" herdr_session) || recorded_session=
       workspace=$(fm_backend_meta_exact_value "$meta" herdr_workspace_id) || workspace=
       tab=$(fm_backend_meta_exact_value "$meta" herdr_tab_id) || tab=

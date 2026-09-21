@@ -288,6 +288,72 @@ test_supported_backend_endpoint_records_validate() {
     "backend=cmux" "cmux_workspace_id=workspace-1" "cmux_surface_id=surface-2"
   fm_backend_validate_task_endpoint "$dir/home/state/$id.meta" "$id" || fail "valid cmux endpoint refused"
 
+  # --reconcile-legacy: what it relaxes, and everything it still refuses.
+  id=reconcile-no-worktree
+  fm_write_meta "$dir/home/state/$id.meta" \
+    "window=lab:w1:p2" "worktree=" "project=$dir/project" \
+    "backend=herdr" "herdr_session=lab" "herdr_workspace_id=w1" "herdr_tab_id=w1:t2" "herdr_pane_id=w1:p2"
+  fm_backend_validate_task_endpoint "$dir/home/state/$id.meta" "$id" --reconcile-legacy \
+    || fail "legacy reconciliation refused a record with no worktree identity and no endpoint binding"
+  [ "$FM_BACKEND_VALIDATED_WORKTREE_ABSENT" = 1 ] \
+    || fail "legacy reconciliation did not report the absent worktree identity"
+  [ "$FM_BACKEND_VALIDATED_ENDPOINT_UNBOUND" = 1 ] \
+    || fail "legacy reconciliation did not report the absent endpoint binding"
+  fm_backend_validate_task_endpoint "$dir/home/state/$id.meta" "$id" 2>/dev/null \
+    && fail "the same record validated without --reconcile-legacy"
+
+  id=reconcile-bound
+  fm_write_meta "$dir/home/state/$id.meta" \
+    "window=lab:w1:p2" "endpoint_task_id=$id" "worktree=$dir/worktree" "project=$dir/project" \
+    "backend=herdr" "herdr_session=lab" "herdr_workspace_id=w1" "herdr_tab_id=w1:t2" "herdr_pane_id=w1:p2"
+  fm_backend_validate_task_endpoint "$dir/home/state/$id.meta" "$id" --reconcile-legacy \
+    || fail "legacy reconciliation refused an intact record"
+  [ "$FM_BACKEND_VALIDATED_WORKTREE_ABSENT" = 0 ] && [ "$FM_BACKEND_VALIDATED_ENDPOINT_UNBOUND" = 0 ] \
+    || fail "legacy reconciliation reported a degradation an intact record does not carry"
+
+  id=reconcile-two-worktrees
+  fm_write_meta "$dir/home/state/$id.meta" \
+    "window=lab:w1:p2" "endpoint_task_id=$id" "worktree=$dir/worktree" "worktree=$dir/other" \
+    "project=$dir/project" "backend=herdr" "herdr_session=lab" "herdr_workspace_id=w1" \
+    "herdr_tab_id=w1:t2" "herdr_pane_id=w1:p2"
+  fm_backend_validate_task_endpoint "$dir/home/state/$id.meta" "$id" --reconcile-legacy 2>/dev/null \
+    && fail "legacy reconciliation accepted a record naming two isolated copies"
+
+  id=reconcile-other-task
+  fm_write_meta "$dir/home/state/$id.meta" \
+    "window=lab:w1:p2" "endpoint_task_id=someone-else" "worktree=$dir/worktree" "project=$dir/project" \
+    "backend=herdr" "herdr_session=lab" "herdr_workspace_id=w1" "herdr_tab_id=w1:t2" "herdr_pane_id=w1:p2"
+  fm_backend_validate_task_endpoint "$dir/home/state/$id.meta" "$id" --reconcile-legacy 2>/dev/null \
+    && fail "legacy reconciliation accepted an endpoint bound to another task"
+
+  id=reconcile-inconsistent
+  fm_write_meta "$dir/home/state/$id.meta" \
+    "window=lab:w1:p2" "worktree=$dir/worktree" "project=$dir/project" \
+    "backend=herdr" "herdr_session=lab" "herdr_workspace_id=w1" "herdr_tab_id=w1:t2" "herdr_pane_id=w1:p9"
+  fm_backend_validate_task_endpoint "$dir/home/state/$id.meta" "$id" --reconcile-legacy 2>/dev/null \
+    && fail "legacy reconciliation accepted inconsistent Herdr endpoint metadata"
+
+  for backend in zellij cmux; do
+    id="reconcile-$backend"
+    case "$backend" in
+      zellij)
+        fm_write_meta "$dir/home/state/$id.meta" \
+          "window=lab:7" "worktree=$dir/worktree" "project=$dir/project" \
+          "backend=zellij" "zellij_session=lab" "zellij_tab_id=3" "zellij_pane_id=7"
+        ;;
+      cmux)
+        fm_write_meta "$dir/home/state/$id.meta" \
+          "window=workspace-1:surface-2" "worktree=$dir/worktree" "project=$dir/project" \
+          "backend=cmux" "cmux_workspace_id=workspace-1" "cmux_surface_id=surface-2"
+        ;;
+    esac
+    fm_backend_validate_task_endpoint "$dir/home/state/$id.meta" "$id" --reconcile-legacy 2>/dev/null \
+      && fail "legacy reconciliation relaxed the $backend missing-binding refusal"
+  done
+
+  fm_backend_validate_task_endpoint "$dir/home/state/reconcile-bound.meta" reconcile-bound --bogus 2>/dev/null \
+    && fail "endpoint validation accepted an unknown option"
+
   for backend in tmux herdr zellij orca cmux; do
     set +e
     fm_backend_kill "$backend" "" >/dev/null 2>&1
@@ -295,7 +361,7 @@ test_supported_backend_endpoint_records_validate() {
     set -e
     [ "$target" -ne 0 ] || fail "$backend generic kill accepted an empty target"
   done
-  pass "cleanup identity: valid tmux, Herdr, Zellij, Orca, and cmux records validate while every empty backend target refuses"
+  pass "cleanup identity: valid tmux, Herdr, Zellij, Orca, and cmux records validate, legacy reconciliation relaxes only an absent worktree identity and an absent Herdr binding, and every empty backend target refuses"
 }
 
 test_tmux_empty_target_refuses_without_invocation() {

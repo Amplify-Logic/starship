@@ -150,7 +150,7 @@
 # releases its durable treehouse lease so the pool slot is freed,
 # never left leased forever. If the treehouse return fails, teardown leaves the
 # leased home and state in place instead of hiding a still-held lease.
-# Usage: fm-teardown.sh <task-id> [--force] [--legacy-record]
+# Usage: fm-teardown.sh <task-id> [--force] [--legacy-record]  (--help prints this usage)
 #   --force skips ordinary-task dirty and landed-work checks, skips scout report
 #   checks, and discards secondmate child work for kind=secondmate. Only use it
 #   when the captain has explicitly said to discard the work.
@@ -164,6 +164,24 @@
 #   an abandoned attempt left behind never counts as a published incarnation:
 #   the record still reads as a legacy record, so the endpoint gate runs again
 #   and the retry still needs --legacy-record.
+#   The same flag also reconciles the two degradations a record written before
+#   the endpoint-binding and incarnation fields existed can carry, each of which
+#   otherwise leaves that record with no supported retirement path at all
+#   (bin/fm-backend.sh's --reconcile-legacy owns exactly what it relaxes):
+#     * no worktree= identity at all - there is nothing to return to the pool,
+#       so every isolated-copy step is skipped. A record naming MORE than one
+#       worktree still refuses, and a worktree that IS present still passes the
+#       ordinary dirty and landed-work checks before anything is returned.
+#     * no endpoint_task_id on a Herdr record - the endpoint cannot be proved to
+#       belong to this task, so teardown needs the backend's own liveness read to
+#       report it `missing` (absent), never merely `dead` (present but
+#       agent-less), and then treats it as no endpoint to stop: no close is
+#       attempted, so no endpoint this record cannot claim is ever touched. An
+#       endpoint the backend still reports present refuses, naming that as the
+#       condition that failed.
+#   Both reconciliations leave the backlog transition, status-log retention, and
+#   every other refusal exactly as they are in an ordinary teardown, and the
+#   final teardown line names whichever degradation was reconciled.
 #
 # Transient / stale worktree git lock recovery (teardown-lock-race): a crew process
 # killed mid-git-operation can leave a .git/worktrees/<wt>/index.lock (or, for a
@@ -286,6 +304,33 @@ SUB_HOME_PARENT_MARKER=".fm-secondmate-parent"
 . "$SCRIPT_DIR/fm-pending-reply-lib.sh"
 # shellcheck source=bin/fm-nm-run-lib.sh
 . "$SCRIPT_DIR/fm-nm-run-lib.sh"
+case "${1:-}" in
+  -h|--help)
+    cat <<'FMEOF'
+Usage: fm-teardown.sh <task-id> [--force] [--legacy-record]
+
+Retires one task: concludes its pipeline run, returns its isolated copy to the
+pool, closes its endpoint, moves its backlog item, and removes its durable
+records. Refuses, without changing anything, whenever work could be lost.
+
+  --force          Discard uncommitted or unlanded work, skip the scout
+                   deliverable check, and discard a secondmate's child work.
+                   Only with the captain's explicit word to discard.
+  --legacy-record  Accept a record that predates the spawn_gen incarnation
+                   field, and reconcile the two degradations such a record can
+                   carry: no worktree identity (nothing to return to the pool)
+                   and, on a Herdr record, no exact endpoint binding (nothing to
+                   stop, and only once the backend reports that endpoint
+                   absent). Never relaxes the dirty or unlanded-work refusals,
+                   never accepts an endpoint that is still present, and never
+                   accepts a record naming more than one isolated copy.
+
+This script's header is the owner of the landed-work proofs, the legacy-record
+reconciliation rules, slot ownership, and stale-lock recovery.
+FMEOF
+    exit 0
+    ;;
+esac
 if [ "$#" -lt 1 ] || ! fm_task_id_path_safe "$1"; then
   echo "error: invalid teardown request" >&2
   exit 2
@@ -912,9 +957,28 @@ fi
 # This is the first cleanup authorization check. It is metadata-only and must
 # complete before fm-guard, a backend command, file removal, branch deletion,
 # worktree return, registry change, or process termination can run.
-fm_backend_validate_task_endpoint "$META" "$ID" || exit 1
+# --legacy-record additionally authorizes the two legacy-record degradations
+# fm_backend_validate_task_endpoint reports rather than refuses; the endpoint
+# gate further below is what turns an unbound endpoint into an accepted one.
+if [ "$LEGACY_RECORD_GIVEN" = 1 ]; then
+  fm_backend_validate_task_endpoint "$META" "$ID" --reconcile-legacy || exit 1
+else
+  fm_backend_validate_task_endpoint "$META" "$ID" || exit 1
+fi
 BACKEND=$FM_BACKEND_VALIDATED_BACKEND
 T=$FM_BACKEND_VALIDATED_TARGET
+TEARDOWN_ENDPOINT_UNBOUND=$FM_BACKEND_VALIDATED_ENDPOINT_UNBOUND
+TEARDOWN_WORKTREE_ABSENT=$FM_BACKEND_VALIDATED_WORKTREE_ABSENT
+# Set once the backend's own liveness read proves the recorded endpoint is gone,
+# so every close step below knows there is nothing left to stop.
+TEARDOWN_ENDPOINT_ABSENT=0
+# Named in the final line so a reconciled record says which degradation it
+# carried rather than looking like an ordinary teardown in the log.
+TEARDOWN_RECONCILED_NOTE=
+[ "$TEARDOWN_ENDPOINT_UNBOUND" != 1 ] \
+  || TEARDOWN_RECONCILED_NOTE="$TEARDOWN_RECONCILED_NOTE, endpoint reconciled without an exact task binding"
+[ "$TEARDOWN_WORKTREE_ABSENT" != 1 ] \
+  || TEARDOWN_RECONCILED_NOTE="$TEARDOWN_RECONCILED_NOTE, no worktree identity to return"
 WT=$(fm_meta_get "$META" worktree)
 PROJ=$(fm_meta_get "$META" project)
 T_ORCA=
@@ -1003,20 +1067,37 @@ fi
 # given) may be torn down only when its recorded endpoint is confidently gone
 # or agent-less; only the recovery-grade classifier's dead and missing license
 # that, and every ambiguous, unreadable, or unverified endpoint state refuses
-# while the record is still intact. Acceptance resolves the incarnation token
-# here; the record itself is stamped only once every landed-work refusal has
-# passed, immediately before the close marker binds to it, so any refusal
+# while the record is still intact. A record whose endpoint carries no exact
+# task binding runs the same read for the same reason and then needs the
+# stricter of the two answers: `missing`, the proof there is no endpoint left to
+# stop. `missing` also records that fact for the close steps below, whether or
+# not the record was bound, so a confirmation of absence is never re-litigated
+# against a backend that is simply gone. Acceptance resolves the incarnation
+# token here; the record itself is stamped only once every landed-work refusal
+# has passed, immediately before the close marker binds to it, so any refusal
 # leaves the record byte-identical.
-if [ "$TEARDOWN_LEGACY_PENDING" = 1 ]; then
+if [ "$TEARDOWN_LEGACY_PENDING" = 1 ] || [ "$TEARDOWN_ENDPOINT_UNBOUND" = 1 ]; then
   TEARDOWN_LEGACY_ENDPOINT=$(fm_backend_agent_state "$BACKEND" "$T")
   case "$TEARDOWN_LEGACY_ENDPOINT" in
-    dead|missing) ;;
+    missing) TEARDOWN_ENDPOINT_ABSENT=1 ;;
+    dead) ;;
     *)
-      echo "REFUSED: task $ID's record predates spawn_gen and its recorded endpoint reads '$TEARDOWN_LEGACY_ENDPOINT', not confidently dead or agent-less; --legacy-record teardown is refused while an agent may still be bound to it. Nothing was changed." >&2
+      echo "REFUSED: task $ID's legacy record cannot be reconciled because its recorded endpoint reads '$TEARDOWN_LEGACY_ENDPOINT', not confidently dead or agent-less; --legacy-record teardown is refused while an agent may still be bound to it. Nothing was changed." >&2
       echo "Reconcile the endpoint first (bin/fm-crew-state.sh $ID), or relaunch the task to publish an unambiguous incarnation, then retry teardown." >&2
       exit 1
       ;;
   esac
+  # An unbound record cannot prove the recorded endpoint is its own, so an
+  # agent-less but still PRESENT endpoint is not enough: only an absent one is
+  # safe to reconcile, because there is then nothing that could be closed on
+  # another task's behalf.
+  if [ "$TEARDOWN_ENDPOINT_UNBOUND" = 1 ] && [ "$TEARDOWN_ENDPOINT_ABSENT" != 1 ]; then
+    echo "REFUSED: task $ID's record carries no exact endpoint binding, so its recorded endpoint $T can be reconciled only once the backend reports it absent; it reads '$TEARDOWN_LEGACY_ENDPOINT'. Nothing was changed." >&2
+    echo "Close or reconcile that endpoint first (bin/fm-crew-state.sh $ID), then retry teardown." >&2
+    exit 1
+  fi
+fi
+if [ "$TEARDOWN_LEGACY_PENDING" = 1 ]; then
   if [ -n "$TEARDOWN_LEGACY_RETAINED_STAMP" ]; then
     TEARDOWN_META_SPAWN_GEN=$TEARDOWN_LEGACY_RETAINED_STAMP
   else
@@ -3332,9 +3413,12 @@ fi
 # every durable record, and the endpoint are all still intact for a plain
 # rerun. An unresolvable lock path (for example an unreachable server) also
 # refuses before any destructive step.
+# An endpoint the backend already reported absent has no pane to reposition and
+# no close to serialize, so the whole locked close sequence is skipped rather
+# than made to wait on a backend that is gone.
 TEARDOWN_HERDR_SESSION=
 TEARDOWN_HERDR_PANE=
-if [ "$BACKEND" = herdr ]; then
+if [ "$BACKEND" = herdr ] && [ "$TEARDOWN_ENDPOINT_ABSENT" != 1 ]; then
   teardown_herdr_preflight_target "$T" "$ID" || exit 1
   fm_backend_herdr_parse_target "$T" || exit 1
   TEARDOWN_HERDR_SESSION=$FM_BACKEND_HERDR_SESSION
@@ -3508,7 +3592,12 @@ if [ "$BACKEND" = herdr ] \
   fi
 fi
 
-if [ "$HERDR_PRESENTATION_RETIRE_CANDIDATE" = 1 ]; then
+if [ "$TEARDOWN_ENDPOINT_ABSENT" = 1 ]; then
+  # Nothing to stop: the backend reported this endpoint absent before any
+  # destructive step ran, so no close is attempted and no endpoint this record
+  # may not even own is touched.
+  :
+elif [ "$HERDR_PRESENTATION_RETIRE_CANDIDATE" = 1 ]; then
   # The presentation lock was acquired before the worktree return above; a
   # contended lock already refused this teardown while everything was intact.
   if teardown_herdr_session_lock_held "$HERDR_PRESENTATION_SESSION"; then
@@ -3550,7 +3639,9 @@ fi
 # the locked close. Only a structured not-found proves the pane gone; unknown
 # presence, missing or malformed endpoint identity, and missing confirmation
 # machinery all refuse.
-if [ "$BACKEND" = herdr ]; then
+if [ "$BACKEND" = herdr ] && [ "$TEARDOWN_ENDPOINT_ABSENT" = 1 ]; then
+  : # Already proved absent by the backend's own liveness read above.
+elif [ "$BACKEND" = herdr ]; then
   fm_backend_source herdr || true
   if ! declare -F fm_backend_herdr_endpoint_confirmed_gone >/dev/null 2>&1; then
     echo "error: herdr endpoint confirmation is unavailable for $ID; retaining every durable task record" >&2
@@ -3684,9 +3775,9 @@ if [ -d "$STATE" ]; then
   "$SCRIPT_DIR/fm-home-summary-refresh.sh" --best-effort || true
 fi
 if [ "$TEARDOWN_LEGACY_ACCEPTED" = 1 ]; then
-  echo "teardown $ID complete (window $T, worktree $WT, legacy record accepted without spawn_gen: endpoint $TEARDOWN_LEGACY_ENDPOINT, incarnation $TEARDOWN_META_SPAWN_GEN)"
+  echo "teardown $ID complete (window $T, worktree ${WT:-<none recorded>}, legacy record accepted without spawn_gen: endpoint $TEARDOWN_LEGACY_ENDPOINT, incarnation $TEARDOWN_META_SPAWN_GEN${TEARDOWN_RECONCILED_NOTE})"
 elif teardown_owns_worktree; then
-  echo "teardown $ID complete (window $T, worktree $WT)"
+  echo "teardown $ID complete (window $T, worktree ${WT:-<none recorded>}${TEARDOWN_RECONCILED_NOTE})"
 else
   echo "teardown $ID complete (window $T; pool slot $WT left to task $TEARDOWN_SLOT_REASSIGNED_TO${TEARDOWN_SLOT_REASSIGNED_HOME:+ (home $TEARDOWN_SLOT_REASSIGNED_HOME)}, which it was reassigned to)"
 fi
