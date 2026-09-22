@@ -218,6 +218,17 @@ test_pi_snippet_uses_effective_extension_path() {
   pass "pi supervision snippet renders the effective extension path"
 }
 
+# The block is printed into a session running at the repository root, so a
+# link relative to docs/supervision-protocols/ would point outside the repo.
+test_printed_paths_resolve_from_repo_root() {
+  local harness out
+  for harness in claude codex cursor grok kimi omp opencode pi not-real; do
+    out=$("$RENDER" --harness "$harness")
+    assert_not_contains "$out" "](../" "$harness block printed a link relative to docs/supervision-protocols/"
+  done
+  pass "every harness block names docs by repository-root paths"
+}
+
 test_selected_harness_block_only
 test_unknown_fallback
 test_conditional_stanzas
@@ -228,3 +239,4 @@ test_pi_signed_preserves_identity_with_pi_supervision_protocol
 test_grok_is_background_notify
 test_grok_command_sources_effective_config
 test_pi_snippet_uses_effective_extension_path
+test_printed_paths_resolve_from_repo_root

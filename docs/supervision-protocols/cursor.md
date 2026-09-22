@@ -19,13 +19,13 @@ When this session owns supervision and away mode is not active:
 6. Treat `watcher: started ...` and `watcher: attached ...` inside park output as proof that one live cycle exists.
    On attach, the arm follows verified identity-matched successors instead of exiting when the first cycle ends.
 7. The durable wake queue preserves actionable events between a follow-up and the next park.
-   [`watcher-continuity.md`](../watcher-continuity.md) owns the exact session-lock recovery boundary.
+   `docs/watcher-continuity.md` owns the exact session-lock recovery boundary.
 8. Waiting on the hook-owned park is silent: do not send idle progress while the watcher is parked.
 
 The watcher itself remains `bin/fm-watch.sh`, and `bin/fm-watch-arm.sh` remains the verified arm wrapper that the `stop` hook runs as its own tracked child.
 Re-arm attaches to an existing healthy cycle when one is already present and follows its verified successor chain.
-See [`watcher-continuity.md`](../watcher-continuity.md) for the arm-layer successor and clean-close failure contract.
+See `docs/watcher-continuity.md` for the arm-layer successor and clean-close failure contract.
 
-Exit status 2 is a silent no-op on Cursor's `stop` step, so this adapter never blocks a turn end and instead forces one bounded follow-up, which [`turnend-guard.md`](../turnend-guard.md) accepts as an equal alternative.
+Exit status 2 is a silent no-op on Cursor's `stop` step, so this adapter never blocks a turn end and instead forces one bounded follow-up, which `docs/turnend-guard.md` accepts as an equal alternative.
 That document owns the double loop bound, the supersession contract, the Pi-host stand-down, and the compatibility limits, including that a Cursor primary must be launched with `--trust` for its project hooks to load at all.
 Cursor's `beforeSubmitPrompt` step fires once for a real captain message and not for hook-driven follow-ups, so it could invalidate the baton at the start of this window, but that registration is deliberately deferred alongside the `preCompact` surface.

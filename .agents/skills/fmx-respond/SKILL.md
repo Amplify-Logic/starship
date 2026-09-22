@@ -150,10 +150,9 @@ The watcher coalesces same-key `check:` wakes, so one `x-mention` wake can stand
 Treat `state/x-inbox/` as the source of truth and process **every** file you find there, not just the `request_id` named in the wake.
 
 1. **Gather live fleet state once.** Compose answers from what this instance genuinely knows right now:
-   - `data/backlog.md` "## In flight" - the work currently moving.
-   - `state/*.status` - the latest line of each in-flight job, for fresh phase detail.
+   - `bin/fm-fleet-snapshot.sh --json` - the work currently moving, read through the configured backlog backend with current state reconciled, and readable in away and quiet mode; use `bin/fm-crew-state.sh <id>` when one task's phase matters, never a raw status line, which is a wake event rather than current state.
    - `data/projects.md` - the active projects, for naming what you work on in plain terms.
-   Translate every internal item into an outcome. Example: a backlog line `fix-login-k3 - repair OAuth redirect (repo: yourapp)` becomes "patching a sign-in redirect bug on one of the apps" - no id, no repo name unless it is already public.
+   Translate every internal item into an outcome. Example: an in-flight item `fix-login-k3 - repair OAuth redirect (repo: yourapp)` becomes "patching a sign-in redirect bug on one of the apps" - no id, no repo name unless it is already public.
 2. **Drain every pending mention.** For each `state/x-inbox/*.json` file:
    a. **Read the whole object, not a fixed list of fields.**
       Inspect every key the payload actually carries - at the top level, inside `in_reply_to`, and inside each `in_reply_to_chain` entry - because the relay gains fields over time and anything you never look at is invisible to you.

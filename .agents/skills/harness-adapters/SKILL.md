@@ -35,7 +35,7 @@ For recovery and control, use the exact `harness=` in `state/<id>.meta`; never i
 Deliver lifecycle actions only through `../../../bin/fm-control.sh <task-id> interrupt|exit|relaunch`.
 Never type an interrupt key or exit command through `fm-send`, where routing-marked lifecycle text becomes chat.
 Trust handling is complete only when inspection proves the target started processing its instructions; delivery success alone is not proof.
-Muse, Gemini, and AGY are verified only for crewmate and scout work, never a secondmate or primary.
+Muse, Gemini, AGY, Rovo, and prime-agent are verified only for crewmate and scout work, never a secondmate or primary.
 
 ## Detection
 
@@ -55,7 +55,6 @@ Every emitted plan appends the selected or recorded harness reference after the 
 The `harness-adapter-routing-v1` object is the machine-readable and human-visible selection contract: choose the operation, choose the scenario within it, then append the selected harness reference.
 `default` is the normal scenario when no narrower scenario applies.
 Kimi establishes its upstream primary boundary in its selected harness reference; this fork certifies Kimi and Cursor PRIMARY profiles of its own through `bin/fm-primary.sh`, and each harness reference states which role its facts cover.
-Muse and Gemini follow Non-negotiable safety above.
 A new tool remains undispatchable until the `verify` plan, its harness entry, every named owner, and the live checks land.
 
 ```json harness-adapter-routing-v1

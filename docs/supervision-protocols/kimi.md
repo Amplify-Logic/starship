@@ -2,7 +2,8 @@ Mode: Kimi background-notify supervision.
 
 When this session owns supervision and away mode is not active:
 1. Drain first with `bin/fm-wake-drain.sh`.
-2. Source `__FM_X_MODE_ENV__` first when X mode is active.
+   After handling all emitted wakes and reconciling open decisions and unread status lines, run the exact `--ack-through` command printed as `WAKE_ACK_REQUIRED`; until then the work remains durable for idempotent re-handling after interruption.
+2. Source `__FM_X_MODE_ENV__` first when Relay is active.
 3. Run `bin/fm-watch-arm.sh` with Kimi's built-in `Bash` tool as its own call, with `run_in_background=true`, `description="Supervise Firstmate fleet"`, and `disable_timeout=true`.
 4. Never bundle the arm command with other commands.
 5. Never use shell `&` for watcher supervision.

@@ -132,7 +132,7 @@ test_profiles_and_root() {
     "Pi dry-run leaked the Claude pressure-reap env line"
 
   out=$(dry claude-opus)
-  assert_contains "$out" "'claude' '--model' 'claude-opus-5' '--effort' 'xhigh' '--name' 'FIRSTMATE' '--dangerously-skip-permissions'" \
+  assert_contains "$out" "'claude' '--model' 'claude-opus-5-5' '--effort' 'xhigh' '--name' 'FIRSTMATE' '--dangerously-skip-permissions'" \
     "Claude Opus profile did not pin model, default effort, role, and bypass"
   assert_contains "$out" "CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1" \
     "Claude Opus dry-run omitted the background-shell pressure-reap disable"
@@ -995,8 +995,8 @@ test_claude_effort() {
   out=$(dry claude-opus 2>/dev/null)
   assert_contains "$out" "'--effort' 'high'" \
     "primary-effort high did not apply to Claude Opus"
-  assert_contains "$out" "'--model' 'claude-opus-5'" \
-    "primary-effort high lost the Opus 5 model pin"
+  assert_contains "$out" "'--model' 'claude-opus-5-5'" \
+    "primary-effort high lost the Opus 5.5 model pin"
 
   printf '  high \n' > "$effort_file"
   out=$(dry claude-opus 2>/dev/null)

@@ -13,7 +13,7 @@
 #                 No context-window flag either: see "Context window" below.
 #   claude-fable  claude --model claude-fable-5-1 --effort <value> --name FIRSTMATE
 #                 --dangerously-skip-permissions
-#   claude-opus   claude --model claude-opus-5 --effort <value> --name FIRSTMATE
+#   claude-opus   claude --model claude-opus-5-5 --effort <value> --name FIRSTMATE
 #                 --dangerously-skip-permissions
 #                 Both Claude profiles use the first trimmed line of local
 #                 gitignored config/primary-effort when that file exists,
@@ -988,7 +988,7 @@ refuse_active_session
 case "$PROFILE" in
   pi) CLI=pi ;;
   claude-fable) CLI=claude; CLAUDE_MODEL=claude-fable-5-1 ;;
-  claude-opus) CLI=claude; CLAUDE_MODEL=claude-opus-5 ;;
+  claude-opus) CLI=claude; CLAUDE_MODEL=claude-opus-5-5 ;;
   codex) CLI=codex ;;
   astra) CLI=codex ;;
   opencode) CLI=opencode ;;

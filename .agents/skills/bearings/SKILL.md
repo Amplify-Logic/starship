@@ -161,11 +161,7 @@ Rules that keep the contract unambiguous:
 - Every chat digest and file-mode report is a complete current snapshot, never a delta against a prior report.
 - Recently Landed always renders the bounded current baseline, even when the same completions appeared in an earlier report.
 - Recently Landed must reflect every completion the backlog recorded with its completion date up to the moment this report is generated, including one recorded seconds ago.
-  Telling the captain nothing landed right after they watched something finish is a trust failure, not a difference of opinion about what "recent" means.
-  Because the section is capped, the ordering decides which rows survive, so every home's newest dated completion that carries the fleet's newest completion date always keeps a slot and the cap can never be what drops it in favour of an older or undated row, whichever home recorded it; `bin/fm-landed-lib.sh` owns that ordering rule and `tests/fm-landed-completion-truth.test.sh` pins the guarantee.
-  Three gaps sit outside that guarantee and must never be reported as proof that nothing landed: a Done row left without a completion date ranks below every dated row and can rotate out under the cap, a completion never written into Done at all cannot appear here whatever the ordering does, and a completion that does not carry the fleet's newest date can still rotate out once the fleet has more homes than the cap has slots.
-  That third gap is a capacity limit rather than a recording failure: only rows at the fleet's newest completion date are reserved, the slots left after them are shared across homes rather than filled strictly oldest-last, and when more homes tie at that newest date than the cap has slots the later-sorting tied homes still drop, because day-granularity completion dates give the ordering nothing finer to prefer.
-  So when the captain has just watched something finish and this section does not show it, treat that as a recording problem to name explicitly rather than as an empty result to pass on.
+  The cap's ordering (`bin/fm-landed-lib.sh`, pinned by `tests/fm-landed-completion-truth.test.sh`) always keeps each home's newest dated completion, but an undated Done row, a completion never written into Done, or an older one displaced when homes outnumber the cap can still be missing, so a completion the captain just saw that is absent here is a recording problem to name, never proof nothing landed.
   When the cap did drop older completions, say so in one short line rather than implying the list is everything.
 - Never render an all-clear verdict while anything is unresolved.
   What is banned is a VERDICT or a CLAIM ABOUT FLEET WORK OUTCOMES: saying nothing landed when work actually landed, calling work finished, clean, or fine while something is still open or failed, or closing with a general reassurance while any section still carries an open item.
@@ -192,10 +188,3 @@ Rules that keep the contract unambiguous:
 - Translate every machine field, warning, and workflow label through `AGENTS.md` section 9 in both chat and file mode; never expose raw snapshot vocabulary or internal mechanics.
 - Every PR reference is a full `https://...` URL, never a bare `#number`.
 - Never include PHI or secret values; the report is an operational artifact, but it is still subject to the same security and compliance rules that govern everything else in this fleet.
-
-## Supervision discipline
-
-During a digest/build invocation, this skill changes no fleet state beyond observational remote-ledger cache refreshes, durable local per-target reconcile-notify requests, explicit report or board artifacts, binding, and source registration.
-Do not tear down a task, merge a PR, dispatch queued work, steer a worker, answer a queued decision, clean up work, or mutate any other `state/` or `data/` file during that invocation.
-If the state gathered for the digest suggests an action, name it in its section and leave it to the normal lifecycle and configured authority.
-On a later board wake, this read-only invocation rule yields to "Handling a board wake" and its guarded authority for captain-selected dispatches and merges.

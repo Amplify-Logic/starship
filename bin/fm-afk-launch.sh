@@ -16,7 +16,7 @@
 # on Pi, the ordinary supervision session keeps running in both postures, and
 # `start` refuses on those harnesses. Every other harness still runs the daemon
 # for now, so `start` and `start-native` require the confirmed record before they
-# launch the daemon.
+# launch an away daemon (a quiet entry needs none; see FM_AFK_MODE below).
 # `stop` (the return, driven by bin/fm-afk-return.sh) shuts the daemon down,
 # clears state/.afk last, and archives the record under state/afk-contracts/.
 #
@@ -76,6 +76,8 @@
 # FM_AFK_MODE (away|quiet, default away) declares which mode a `start` entry
 # requests; leave it unset for a plain refresh of an already-running daemon
 # so its current mode is preserved (bin/fm-afk-start.sh fm_afk_flag_write).
+# A quiet entry (FM_AFK_MODE=quiet, or a bare refresh of an on-disk quiet flag)
+# needs no away-posture record, and refuses on Pi like every daemon entry.
 set -u
 
 FM_AFK_LAUNCH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -191,14 +193,30 @@ fm_afk_launch_primary_harness() {
   "$FM_AFK_LAUNCH_DIR/fm-harness.sh" 2>/dev/null || printf unknown
 }
 
+# A quiet entry is a present captain asking for fewer routine wake turns, not
+# an away mandate: FM_AFK_MODE=quiet requests it, and a bare refresh (mode
+# unset) of an on-disk quiet flag keeps it.
+fm_afk_launch_quiet_entry() {
+  case "${FM_AFK_MODE:-}" in
+    quiet) return 0 ;;
+    '') [ -f "$FM_AFK_LAUNCH_STATE/.afk" ] && [ "$(fm_afk_mode "$FM_AFK_LAUNCH_STATE")" = quiet ] ;;
+    *) return 1 ;;
+  esac
+}
+
 # The away daemon is no longer launched on Pi: the posture record is the whole
 # entry there and the ordinary supervision session runs in both postures.
+# Quiet mode exists only as that daemon, so it is unavailable on Pi.
 fm_afk_launch_daemon_allowed() {
   local harness
   harness=$(fm_afk_launch_primary_harness)
   case "$harness" in
     pi|pi-signed)
-      fm_afk_launch_log "the away daemon is no longer launched on $harness; the away-posture record is the posture there (run bin/fm-afk-launch.sh confirm and stop)"
+      if fm_afk_launch_quiet_entry; then
+        fm_afk_launch_log "quiet mode needs the away daemon, which is no longer launched on $harness; ordinary supervision continues unchanged"
+      else
+        fm_afk_launch_log "the away daemon is no longer launched on $harness; the away-posture record is the posture there (run bin/fm-afk-launch.sh confirm and stop)"
+      fi
       return 1 ;;
   esac
   return 0
@@ -212,8 +230,11 @@ fm_afk_launch_catchup_pending() {
   return 1
 }
 
+# Away entry requires the captain-confirmed posture record; a quiet entry
+# carries no mandate, so it needs none.
 fm_afk_launch_record_require() {
   local record
+  fm_afk_launch_quiet_entry && return 0
   record=$(fm_afk_contract_path "$FM_AFK_LAUNCH_STATE")
   if ! fm_afk_contract_present "$FM_AFK_LAUNCH_STATE"; then
     fm_afk_launch_log "a confirmed away-posture record is required; run propose and confirm before starting the daemon"

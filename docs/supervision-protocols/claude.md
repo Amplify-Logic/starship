@@ -16,12 +16,12 @@ When this session owns supervision and away mode is not active:
    On attach, the arm follows verified identity-matched successors instead of exiting when the first cycle ends.
 7. The durable wake queue preserves actionable events between a rewake and the next Stop-launched arm, while the bounded turn-end guard prevents a blind Stop when recovery did not start.
    No PreToolUse hook denies fleet commands based on watcher status.
-   [`watcher-continuity.md`](../watcher-continuity.md) owns the exact session-lock recovery boundary.
+   `docs/watcher-continuity.md` owns the exact session-lock recovery boundary.
 8. The turn-end guard (`bin/fm-turnend-guard.sh --claude`) remains the final backstop.
-   It requires the PID-strict live-watcher and fresh-beacon predicate at the Stop boundary; [`turnend-guard.md`](../turnend-guard.md#guard-predicates) owns the distinct model-aware mid-turn pull-guard rules.
-   It allows the stop when a watcher is healthy or an open auto-arm generation claim owns recovery, while fresh failure epochs advance the bounded one-time attended fail-open progression described in [`turnend-guard.md`](../turnend-guard.md).
+   It requires the PID-strict live-watcher and fresh-beacon predicate at the Stop boundary; `docs/turnend-guard.md#guard-predicates` owns the distinct model-aware mid-turn pull-guard rules.
+   It allows the stop when a watcher is healthy or an open auto-arm generation claim owns recovery, while fresh failure epochs advance the bounded one-time attended fail-open progression described in `docs/turnend-guard.md`.
 9. Waiting on the hook-owned cycle is silent: do not send idle progress while the watcher is parked.
 
 The watcher itself remains `bin/fm-watch.sh`, and `bin/fm-watch-arm.sh` remains the verified arm wrapper that the Stop hook foregrounds.
 Re-arm attaches to an existing healthy cycle when one is already present and follows its verified successor chain.
-See [`watcher-continuity.md`](../watcher-continuity.md) for the arm-layer successor and clean-close failure contract and the Claude ownership model.
+See `docs/watcher-continuity.md` for the arm-layer successor and clean-close failure contract and the Claude ownership model.

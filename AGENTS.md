@@ -87,7 +87,6 @@ config/wedge-alarm  optional away-mode wedge-alarm active-alert directives; LOCA
 config/watched-tools.json  optional list of the tools this home depends on, read by the update check armed with bin/fm-tool-update-check.sh; LOCAL, gitignored, firstmate-maintained but human-editable, and NOT inherited by secondmate homes; see docs/configuration.md "Watched tool updates"
 config/x-mode.env    generated Relay watcher cadence; LOCAL, gitignored; source before arming watcher when present
 config/accounts.json  optional named vendor accounts for claude and codex; LOCAL, gitignored; firstmate-maintained but human-editable, selected per launch with --account, homes derived under data/accounts/, absent = no pinning at all; NOT inherited by secondmate homes (docs/configuration.md "Vendor account pinning")
-config/crew-dispatch.json  optional crewmate dispatch profiles; LOCAL, gitignored; firstmate-maintained but human-editable natural-language rules that choose a per-task harness/model/effort profile (section 4); inherited by secondmate homes
 config/primary-handoff  optional quota- and context-aware primary orchestrator rotation; LOCAL, gitignored; absent or enabled:false leaves primary launch unchanged; see docs/primary-handoff.md
 config/primary-effort  optional Claude primary launch effort for claude-fable and claude-opus; LOCAL, gitignored; one of low, medium, high, xhigh, max; absent = xhigh; read only by bin/fm-primary.sh at launch; not inherited by secondmate homes; see docs/configuration.md
 config/astra-effort  optional Astra primary launch effort; LOCAL, gitignored; one of low, medium, high, xhigh; absent = xhigh; read only by bin/fm-primary.sh at launch; not inherited by secondmate homes; see docs/configuration.md
@@ -233,8 +232,8 @@ A silent bootstrap section needs no action; for any printed actionable diagnosti
 
 Load `harness-adapters` before every spawn or recovery and before trust handling, skill invocation, interrupt, exit, resume, or adapter verification.
 The verified harnesses are `claude`, `codex`, `opencode`, `pi`, `pi-signed`, `grok`, `kimi`, `cursor`, and `omp`, plus `muse`, `gemini`, `rovo`, `agy`, and this fork's `prime-agent` for crewmates and scouts only; never dispatch on an unverified adapter.
-`prime-agent` is worker-only, pinned at v0.7.0, and its daemon persistence means a dead pane is not a stopped worker; `fm-spawn` refuses per-token-billed model routes for it.
-This fork additionally certifies two PRIMARY profiles that upstream does not carry, and one role never implies the other: `cursor` through `bin/fm-primary.sh cursor-grok`, and Kimi Code 0.27.0 through `bin/fm-primary.sh kimi-k3`, whose launch is quiet on 0.27.0 and the re-verified 0.31.1, warns on any build with no primary evidence, and blocks on none of them.
+`prime-agent` is worker-only, and its daemon persistence means a dead pane is not a stopped worker.
+This fork also certifies `cursor` and `kimi-k3` PRIMARY profiles through `bin/fm-primary.sh`, and one role never implies the other; each harness reference owns its version evidence.
 If static `config/crew-harness` or `config/secondmate-harness` names an unverified adapter, report it and fall back only to a verified adapter rather than launching it.
 
 `docs/configuration.md` owns dispatch-profile and runtime-backend schemas, `bin/fm-dispatch-select.sh` owns this fork's selector mechanics, `bin/fm-harness.sh` owns static resolution, and `bin/fm-spawn.sh` owns launch flags and fail-closed validation.
@@ -329,8 +328,6 @@ If established evidence already answers an informational question, relay it with
 Never both present a likely-enough solution and launch a parallel design exercise that is not expected to change it.
 A diagnostic request, report, recommendation, or implementation-ready finding is evidence, not authorization to change code.
 Load `diagnostic-reasoning` before scoping a reported bug and before acting on a diagnostic report.
-Before committing to a genuinely divergent, fuzzy, high-leverage decision (design, architecture, API/schema shape, naming, strategy, approach-selection, hard/ambiguous debugging), load `adhd-auto-fire`.
-Before committing to an architectural, security-sensitive, schema/API-contract, or otherwise high-stakes design or decision output, load `second-opinion-auto-fire`.
 
 Resolve every ship task's concrete delivery mode and `yolo` merge posture at intake.
 Pass the mode explicitly to the brief, and pass both values explicitly to the spawn and any scout promotion; each command refuses to guess the values it consumes.
