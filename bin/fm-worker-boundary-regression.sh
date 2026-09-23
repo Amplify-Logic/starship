@@ -51,7 +51,8 @@ file is still scored, and a gateway that fails or answers otherwise keeps the de
 Every source-manifest privileged path must declare kind executable, config, or state
 and an install_path under one of these approved system prefixes:
   /Library/PrivilegedHelperTools/firstmate/   /Library/LaunchDaemons/
-  /var/db/firstmate/gateway/                  /var/run/firstmate/
+  /usr/local/libexec/firstmate/               /var/db/firstmate/gateway/
+  /var/db/firstmate/sink/                     /var/run/firstmate/
 
 Exit 0 means every probe matched the selected target's expectation.
 Exit 1 means at least one boundary or source invariant failed.
@@ -825,7 +826,9 @@ def source_invariant_probes(manifest_path: Path, repo: Path) -> Dict[str, str]:
     approved_prefixes = (
         "/Library/PrivilegedHelperTools/firstmate/",
         "/Library/LaunchDaemons/",
+        "/usr/local/libexec/firstmate/",
         "/var/db/firstmate/gateway/",
+        "/var/db/firstmate/sink/",
         "/var/run/firstmate/",
     )
     for entry in privileged_paths:

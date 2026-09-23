@@ -313,6 +313,68 @@ assert set(actual.values()) == {"FAIL"}, actual
 PY
 pass "source invariant checker reports FAIL rather than crashing on a wrongly shaped manifest"
 
+# The gateway v2 installation lifecycle installs its programs under
+# /usr/local/libexec/firstmate/ and its executor-owned receipt store under
+# /var/db/firstmate/sink/. Both are approved prefixes, so a reviewed manifest
+# naming them passes, while a path outside every approved prefix still fails -
+# a correct-looking path the installer does not own is not a trusted install.
+V2_MANIFEST="$TMP/v2-install-source.json"
+OUTSIDE_MANIFEST="$TMP/outside-prefix-source.json"
+
+write_prefix_manifest() {  # <out> <install-path> [state-install-path]
+  python3 - "$1" "$VERIFY_SOURCE" "$PRIV_SOURCE" "$SOCKET_SOURCE" "$2" "${3:-}" <<'PY'
+import json
+import sys
+
+manifest, verifier, privileged, sockets, first, second = sys.argv[1:7]
+purposes = ["dispatch", "inference", "prepare", "approval", "execution"]
+paths = [{"kind": "executable", "install_path": first, "ancestor_check_source": verifier}]
+if second:
+    paths.append({"kind": "state", "install_path": second, "ancestor_check_source": verifier})
+value = {
+    "schema": "fm-worker-boundary-source.v1",
+    "privileged_paths": paths,
+    "privileged_sources": [privileged],
+    "forbidden_production_trust_env": ["FM_TRUST_STATE_OVERRIDE"],
+    "required_socket_purposes": purposes,
+    "sockets": [
+        {"purpose": purpose, "schema": f"fm.{purpose}.v1", "source": sockets}
+        for purpose in purposes
+    ],
+    "launcher_attestation": {"mode": "restricted"},
+}
+json.dump(value, open(manifest, "w", encoding="utf-8"))
+PY
+}
+
+write_prefix_manifest "$V2_MANIFEST" /usr/local/libexec/firstmate/fm-action-gateway-v2.py /var/db/firstmate/sink/safe-sink-v2.sqlite3
+v2_result=$($PACK --check-source-only --source-manifest "$V2_MANIFEST")
+python3 - "$v2_result" <<'PY'
+import json
+import sys
+actual = json.loads(sys.argv[1])
+assert actual, actual
+assert set(actual.values()) == {"PASS"}, actual
+PY
+pass "the gateway v2 installation paths are approved prefixes and pass the source invariant checker"
+
+write_prefix_manifest "$OUTSIDE_MANIFEST" /opt/firstmate/runner
+# A FAIL verdict is the expected result here, and --check-source-only exits
+# nonzero when it reports one, so the exit code is captured rather than fatal.
+set +e
+outside_result=$($PACK --check-source-only --source-manifest "$OUTSIDE_MANIFEST")
+outside_rc=$?
+set -e
+[ "$outside_rc" -ne 0 ] || fail "an unapproved install prefix must exit nonzero"
+python3 - "$outside_result" <<'PY'
+import json
+import sys
+actual = json.loads(sys.argv[1])
+assert actual, actual
+assert "FAIL" in set(actual.values()), actual
+PY
+pass "an install path outside every approved prefix still fails the source invariant checker"
+
 [ -x "$PACK" ] || fail "boundary pack must be executable"
 [ -f "$MANIFEST" ] || fail "committed current-source manifest must exist"
 pass "boundary pack is directly executable"

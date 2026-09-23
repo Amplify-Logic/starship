@@ -55,8 +55,9 @@ Use `--target nested-container --launcher-adapter PATH` for the hardened contain
 A launcher adapter must implement the exact argv contract in the script header and must return the payload result across its own staging boundary.
 The adapter must not grant host-path access merely because the hostile fixture names a path.
 
-Use `--artifact-adapter PATH` when the quarantine importer exists.
+Use `--artifact-adapter PATH` for the quarantine importer.
 The importer passes only when it rejects each hostile archive, imports nothing, and leaves the synthetic outside canary unchanged.
+`bin/fm-action-artifact-import-v2.py` implements that contract; without an adapter both artifact probes record `NO_IMPORTER` and fail.
 Use `--gateway PATH` for a command-compatible gateway test adapter; without it the pack measures the landed `bin/fm-action-gateway.sh` broker.
 `bin/fm-action-gateway-v2.py` is the current such adapter and is scored by this pack under a temporary root ([`docs/action-gateway-v2.md`](action-gateway-v2.md)).
 Use `--source-manifest PATH` for the reviewed installation manifest and `--attestation PATH` for trusted launcher output.
@@ -65,6 +66,8 @@ Use `--source-manifest PATH` for the reviewed installation manifest and `--attes
 
 Each privileged path declares its kind, its fixed installation path under one of the approved system prefixes printed by `--help`, and the source that verifies every ancestor with `stat`, UID, and root-ownership checks.
 An absolute path outside those prefixes fails, because a correct-looking path the installer does not own is not a trusted installation.
+The approved set covers the two prefixes the gateway v2 installation lifecycle uses, `/usr/local/libexec/firstmate/` for its programs and `/var/db/firstmate/sink/` for the executor-owned receipt store, alongside the original four.
+The receipt store is a separate prefix from `/var/db/firstmate/gateway/` on purpose: the broker root stays broker-only, and the store the broker reads is owned by the executor ([`docs/action-gateway-v2.md`](action-gateway-v2.md)).
 Every privileged source is scanned for worker-selected file input and production trust-state environment overrides.
 The scanned override set mirrors the production path overrides owned by `docs/action-gateway.md`.
 Each required channel has one unique purpose and schema identifier.
