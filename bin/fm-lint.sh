@@ -41,13 +41,20 @@
 # invocations in the core bin/ and bin/backends/ scripts so every configured
 # backlog backend follows the same tasks-axi lifecycle path.
 #
-# Canonical lint defaults to two bounded workers over two stable logical shards.
-# Each shard writes separate diagnostics, and the parent replays those outputs in
-# deterministic shard and root order after every worker finishes. FM_LINT_JOBS=1
-# runs the same shards serially with byte-identical diagnostics and exit selection.
+# Lint defaults to two bounded workers pulling roots from one shared queue, one
+# ShellCheck process per root, most expensive root first. Measured per-root CPU
+# cost in bin/fm-lint-costs.tsv orders the queue. A root the table does not list
+# has no trustworthy cost, so it is queued ahead of every measured root and only
+# size-estimated among its unlisted peers; an unlisted canonical root also warns
+# once on stderr without failing the run. Because a free worker always takes the
+# next root, adding or resizing files cannot unbalance the workers. Each
+# root writes separate diagnostics, and the parent replays them in root order
+# after every worker finishes, so FM_LINT_JOBS=1 gives byte-identical diagnostics
+# and exit selection. --record-costs rewrites the cost table from a full run.
 #
 # Optional quiet telemetry writes one bounded TSV snapshot of content and source
-# graph identity, wall/CPU/RSS, shard load, and competing ShellCheck processes.
+# graph identity, wall/CPU/RSS, cost-table coverage, and competing ShellCheck
+# processes.
 #
 # Usage:
 #   fm-lint.sh                         lint the context-selected file set (see above)
@@ -55,6 +62,7 @@
 #   fm-lint.sh <path>...               lint explicit roots with the same config
 #   fm-lint.sh --jobs <1|2> [path]...  override bounded worker count
 #   fm-lint.sh --telemetry <path> ...  write a quiet metrics snapshot
+#   fm-lint.sh --record-costs <path>   also write measured per-root costs (full canonical run only)
 #   fm-lint.sh --required-version      print the ShellCheck pin
 #   fm-lint.sh --list-files            print the file set that would be linted
 #   fm-lint.sh --help                  print this usage
@@ -66,6 +74,10 @@ REQUIRED_SHELLCHECK=0.11.0
 LOCAL_NOX_EXCLUDE=SC1091,SC2034,SC2153,SC2329
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 SELF="$SELF_DIR/fm-lint.sh"
+COST_TABLE="$SELF_DIR/fm-lint-costs.tsv"
+# Byte-size estimate for a root the cost table does not list, near the canonical
+# set's measured average.
+COST_ESTIMATE_BYTES_PER_CS=50
 ROOT="$(cd "$SELF_DIR/.." && pwd -P)"
 cd "$ROOT" || exit 1
 
@@ -78,54 +90,62 @@ fm_lint_worker_stop() {
   FM_LINT_WORKER_SHELLCHECK_PID=
 }
 
-fm_lint_worker() {  # <manifest> <output-dir> <shard-index>
-  local manifest=$1 output_dir=$2 shard_index=$3 tab index path output invocation_rc rc=0
-  local -a roots shellcheck_args
-  roots=()
+# fm_lint_worker_children_cpu converts a saved `times` report into reaped-children
+# user+system CPU centiseconds. The caller runs `times` itself because a command
+# substitution's forked shell starts with empty child accounting.
+fm_lint_worker_children_cpu() {  # <times-file>
+  awk 'NR == 2 {
+    total = 0
+    for (i = 1; i <= 2; i++) {
+      split($i, part, "m")
+      sub(/s$/, "", part[2])
+      total += part[1] * 60 + part[2]
+    }
+    printf "%d\n", total * 100 + 0.5
+  }' "$1"
+}
+
+fm_lint_worker() {  # <queue> <output-dir> <worker-index>
+  local queue=$1 output_dir=$2 worker_index=$3 tab index path output rc cpu_before cpu_after
+  local -a shellcheck_args
   tab=$(printf '\t')
+  shellcheck_args=(--norc)
+  if [ "${FM_LINT_INTERNAL_FOLLOW_SOURCES:-1}" -eq 1 ]; then
+    shellcheck_args+=(--external-sources)
+  fi
+  if [ -n "${FM_LINT_INTERNAL_EXCLUDE:-}" ]; then
+    shellcheck_args+=(--exclude="$FM_LINT_INTERNAL_EXCLUDE")
+  fi
+  if [ "${FM_LINT_INTERNAL_FAST:-0}" -eq 1 ]; then
+    shellcheck_args+=(--extended-analysis=false)
+  fi
+  trap 'fm_lint_worker_stop; exit 129' HUP
+  trap 'fm_lint_worker_stop; exit 130' INT
+  trap 'fm_lint_worker_stop; exit 143' TERM
+  # Every worker walks the same cost-ordered queue and claims each root with an
+  # atomic mkdir, so whichever worker is free takes the next most expensive root.
   while IFS="$tab" read -r index path || [ -n "${index:-}${path:-}" ]; do
     [ -n "${index:-}" ] || continue
-    roots+=("$path")
-  done < "$manifest"
-  output="$output_dir/shard.$shard_index"
-  if [ "${#roots[@]}" -gt 0 ]; then
-    trap 'fm_lint_worker_stop; exit 129' HUP
-    trap 'fm_lint_worker_stop; exit 130' INT
-    trap 'fm_lint_worker_stop; exit 143' TERM
-    shellcheck_args=(--norc)
-    if [ "${FM_LINT_INTERNAL_FOLLOW_SOURCES:-1}" -eq 1 ]; then
-      shellcheck_args+=(--external-sources)
+    mkdir "$output_dir/claim.$index" 2>/dev/null || continue
+    output="$output_dir/root.$index"
+    rc=0
+    if [ -n "${FM_LINT_INTERNAL_COSTS:-}" ]; then
+      times > "$output_dir/times.$worker_index"
+      cpu_before=$(fm_lint_worker_children_cpu "$output_dir/times.$worker_index")
     fi
-    if [ -n "${FM_LINT_INTERNAL_EXCLUDE:-}" ]; then
-      shellcheck_args+=(--exclude="$FM_LINT_INTERNAL_EXCLUDE")
+    "$FM_LINT_SHELLCHECK" "${shellcheck_args[@]}" -- "$path" > "$output.out" 2>&1 &
+    FM_LINT_WORKER_SHELLCHECK_PID=$!
+    wait "$FM_LINT_WORKER_SHELLCHECK_PID" || rc=$?
+    FM_LINT_WORKER_SHELLCHECK_PID=
+    if [ -n "${FM_LINT_INTERNAL_COSTS:-}" ]; then
+      times > "$output_dir/times.$worker_index"
+      cpu_after=$(fm_lint_worker_children_cpu "$output_dir/times.$worker_index")
+      printf '%s\t%s\n' "$path" "$((cpu_after - cpu_before))" >> "$output_dir/costs.$worker_index"
     fi
-    if [ "${FM_LINT_INTERNAL_FAST:-0}" -eq 1 ]; then
-      shellcheck_args+=(--extended-analysis=false)
-    fi
-    : > "$output.out"
-    if [ "${FM_LINT_INTERNAL_FOLLOW_SOURCES:-1}" -eq 1 ]; then
-      "$FM_LINT_SHELLCHECK" "${shellcheck_args[@]}" -- "${roots[@]}" >> "$output.out" 2>&1 &
-      FM_LINT_WORKER_SHELLCHECK_PID=$!
-      wait "$FM_LINT_WORKER_SHELLCHECK_PID" || rc=$?
-      FM_LINT_WORKER_SHELLCHECK_PID=
-    else
-      for path in "${roots[@]}"; do
-        invocation_rc=0
-        "$FM_LINT_SHELLCHECK" "${shellcheck_args[@]}" -- "$path" >> "$output.out" 2>&1 &
-        FM_LINT_WORKER_SHELLCHECK_PID=$!
-        wait "$FM_LINT_WORKER_SHELLCHECK_PID" || invocation_rc=$?
-        FM_LINT_WORKER_SHELLCHECK_PID=
-        if [ "$rc" -eq 0 ] && [ "$invocation_rc" -ne 0 ]; then
-          rc=$invocation_rc
-        fi
-      done
-    fi
-    trap - HUP INT TERM
-  else
-    : > "$output.out"
-  fi
-  printf '%s\n' "$rc" > "$output.rc"
-  return "$rc"
+    printf '%s\n' "$rc" > "$output.rc"
+  done < "$queue"
+  trap - HUP INT TERM
+  return 0
 }
 
 # Private subprocess mode used only by the bounded parent above.
@@ -394,6 +414,7 @@ fm_lint_run_backend_purity() {
 
 JOBS=${FM_LINT_JOBS:-2}
 TELEMETRY=${FM_LINT_TELEMETRY:-}
+RECORD_COSTS=
 FAST=0
 ANALYSIS_MODE=full
 LIST_FILES=0
@@ -415,6 +436,15 @@ while [ "$#" -gt 0 ]; do
       ;;
     --telemetry=*)
       TELEMETRY=${1#*=}
+      shift
+      ;;
+    --record-costs)
+      [ "$#" -ge 2 ] || { printf 'fm-lint.sh: --record-costs requires a path.\n' >&2; exit 2; }
+      RECORD_COSTS=$2
+      shift 2
+      ;;
+    --record-costs=*)
+      RECORD_COSTS=${1#*=}
       shift
       ;;
     --fast)
@@ -520,6 +550,10 @@ if [ "$CHANGED_MODE" -eq 1 ] && [ "$FAST" -eq 0 ]; then
   ANALYSIS_MODE=local
 fi
 ROOT_COUNT=${#ROOTS[@]}
+if [ -n "$RECORD_COSTS" ] && { [ "$EXPLICIT_PATHS" -eq 1 ] || [ "$CHANGED_MODE" -eq 1 ] || [ "$FAST" -eq 1 ]; }; then
+  printf 'fm-lint.sh: --record-costs measures the full canonical lint; run it in CI posture (CI=true) or on main without paths or --fast.\n' >&2
+  exit 2
+fi
 
 if [ "$LIST_FILES" -eq 1 ]; then
   [ "$#" -eq 0 ] || {
@@ -601,12 +635,7 @@ TAB=$(printf '\t')
 WEIGHTS="$TMP_ROOT/weights"
 OUTPUT_DIR="$TMP_ROOT/output"
 mkdir -p "$OUTPUT_DIR"
-SHARD_COUNT=2
-worker=0
-while [ "$worker" -lt "$SHARD_COUNT" ]; do
-  : > "$TMP_ROOT/manifest.$worker"
-  worker=$((worker + 1))
-done
+QUEUE="$TMP_ROOT/queue"
 
 index=1
 : > "$WEIGHTS"
@@ -618,34 +647,56 @@ for path in "${ROOTS[@]}"; do
       ;;
   esac
   if [ -f "$path" ]; then
-    weight=$(wc -c < "$path" 2>/dev/null | tr -d '[:space:]')
+    bytes=$(wc -c < "$path" 2>/dev/null | tr -d '[:space:]')
   else
-    weight=1
+    bytes=0
   fi
-  case "$weight" in ''|*[!0-9]*) weight=1 ;; esac
-  printf '%s\t%s\t%s\n' "$weight" "$index" "$path" >> "$WEIGHTS"
+  case "$bytes" in ''|*[!0-9]*) bytes=0 ;; esac
+  canonical=0
+  ! fm_lint_is_canonical_root "$path" || canonical=1
+  printf '%s\t%s\t%s\t%s\n' "$index" "$bytes" "$path" "$canonical" >> "$WEIGHTS"
   index=$((index + 1))
 done
 
-# Largest-first deterministic greedy assignment keeps the two bounded workers
-# balanced without affecting replay order. Direct bytes are a stable portable
-# proxy after the expensive dynamic adapter source fan-out is cut.
-WORKER_LOADS=(0 0)
-LC_ALL=C sort -t "$TAB" -k1,1nr -k2,2n "$WEIGHTS" > "$WEIGHTS.sorted"
-while IFS="$TAB" read -r weight index path; do
-  worker=0
-  if [ "${WORKER_LOADS[1]}" -lt "${WORKER_LOADS[0]}" ]; then
-    worker=1
-  fi
-  printf '%s\t%s\n' "$index" "$path" >> "$TMP_ROOT/manifest.$worker"
-  WORKER_LOADS[worker]=$((WORKER_LOADS[worker] + weight))
-done < "$WEIGHTS.sorted"
-worker=0
-while [ "$worker" -lt "$SHARD_COUNT" ]; do
-  LC_ALL=C sort -t "$TAB" -k1,1n "$TMP_ROOT/manifest.$worker" > "$TMP_ROOT/manifest.$worker.sorted"
-  mv "$TMP_ROOT/manifest.$worker.sorted" "$TMP_ROOT/manifest.$worker"
-  worker=$((worker + 1))
-done
+# Queue roots most expensive first so no costly root starts late and leaves one
+# worker running alone. Measured cost comes from COST_TABLE; a root it does not
+# list (new, renamed, or outside the canonical set) has an unknown cost that
+# bytes model poorly, so it leads the queue ahead of every measured root and its
+# byte estimate only orders it against the other unlisted roots. That way the
+# worst case for a stale table is starting an expensive root too early, never
+# too late. The order only affects wall time: every root is linted exactly once
+# and diagnostics replay in root order, so results never depend on the table.
+UNMEASURED="$TMP_ROOT/unmeasured"
+: > "$UNMEASURED"
+awk -F "$TAB" -v OFS="$TAB" -v table="$COST_TABLE" -v per_cs="$COST_ESTIMATE_BYTES_PER_CS" \
+  -v unmeasured="$UNMEASURED" '
+  BEGIN {
+    while ((getline line < table) > 0) {
+      if (line ~ /^#/ || split(line, field, "\t") < 2 || field[2] !~ /^[0-9]+$/) continue
+      measured[field[1]] = field[2]
+    }
+    close(table)
+  }
+  {
+    if ($3 in measured) {
+      print 0, measured[$3], $1, $3
+    } else {
+      print 1, int($2 / per_cs) + 1, $1, $3
+      if ($4 == 1) print $3 >> unmeasured
+    }
+  }
+  END { close(unmeasured) }
+' "$WEIGHTS" | LC_ALL=C sort -t "$TAB" -k1,1nr -k2,2nr -k3,3n | cut -f3- > "$QUEUE"
+
+# One stderr line, never a failure: an unmeasured canonical root still lints, it
+# just schedules on a guess, so the run reports the stale table and continues.
+if [ -s "$UNMEASURED" ]; then
+  printf 'fm-lint.sh: %s canonical root(s) missing from %s, queued first on a size estimate: %s; regenerate with: CI=true bin/fm-lint.sh --record-costs %s\n' \
+    "$(wc -l < "$UNMEASURED" | tr -d '[:space:]')" \
+    "${COST_TABLE#"$ROOT"/}" \
+    "$(tr '\n' ' ' < "$UNMEASURED" | sed 's/ $//')" \
+    "${COST_TABLE#"$ROOT"/}" >&2
+fi
 
 fm_lint_shellcheck_count() {
   if command -v pgrep >/dev/null 2>&1; then
@@ -681,38 +732,50 @@ if [ -n "$TELEMETRY" ]; then
 fi
 
 fm_lint_run_worker() {  # <worker-index>
-  local worker_index=$1 manifest timing
-  manifest="$TMP_ROOT/manifest.$worker_index"
+  local worker_index=$1 timing
   timing="$TMP_ROOT/timing.$worker_index"
   if [ -n "$TELEMETRY" ] && [ -x /usr/bin/time ]; then
     if [ "$(uname)" = Darwin ]; then
       exec "$PERL_BIN" -e 'setpgrp(0, 0) or die "setpgrp: $!"; exec @ARGV or die "exec: $!"' \
         /usr/bin/time -lp -o "$timing" \
         env FM_LINT_INTERNAL=1 FM_LINT_INTERNAL_FAST="$FAST" \
-        FM_LINT_INTERNAL_FOLLOW_SOURCES="$FOLLOW_SOURCES" FM_LINT_INTERNAL_EXCLUDE="$EXCLUDE_CODES" \
+        FM_LINT_INTERNAL_FOLLOW_SOURCES="$FOLLOW_SOURCES" FM_LINT_INTERNAL_EXCLUDE="$EXCLUDE_CODES" FM_LINT_INTERNAL_COSTS="$RECORD_COSTS" \
         FM_LINT_SHELLCHECK="$SHELLCHECK_BIN" \
-        "${BASH:-bash}" "$SELF" --internal-worker "$manifest" "$OUTPUT_DIR" "$worker_index"
+        "${BASH:-bash}" "$SELF" --internal-worker "$QUEUE" "$OUTPUT_DIR" "$worker_index"
     else
       exec "$PERL_BIN" -e 'setpgrp(0, 0) or die "setpgrp: $!"; exec @ARGV or die "exec: $!"' \
         /usr/bin/time -f 'wall_seconds=%e\nuser_seconds=%U\nsystem_seconds=%S\nmax_rss_kib=%M' -o "$timing" \
         env FM_LINT_INTERNAL=1 FM_LINT_INTERNAL_FAST="$FAST" \
-        FM_LINT_INTERNAL_FOLLOW_SOURCES="$FOLLOW_SOURCES" FM_LINT_INTERNAL_EXCLUDE="$EXCLUDE_CODES" \
+        FM_LINT_INTERNAL_FOLLOW_SOURCES="$FOLLOW_SOURCES" FM_LINT_INTERNAL_EXCLUDE="$EXCLUDE_CODES" FM_LINT_INTERNAL_COSTS="$RECORD_COSTS" \
         FM_LINT_SHELLCHECK="$SHELLCHECK_BIN" \
-        "${BASH:-bash}" "$SELF" --internal-worker "$manifest" "$OUTPUT_DIR" "$worker_index"
+        "${BASH:-bash}" "$SELF" --internal-worker "$QUEUE" "$OUTPUT_DIR" "$worker_index"
     fi
   else
     [ -z "$TELEMETRY" ] || printf 'timing_unavailable=1\n' > "$timing"
     exec "$PERL_BIN" -e 'setpgrp(0, 0) or die "setpgrp: $!"; exec @ARGV or die "exec: $!"' \
       env FM_LINT_INTERNAL=1 FM_LINT_INTERNAL_FAST="$FAST" \
-      FM_LINT_INTERNAL_FOLLOW_SOURCES="$FOLLOW_SOURCES" FM_LINT_INTERNAL_EXCLUDE="$EXCLUDE_CODES" \
+      FM_LINT_INTERNAL_FOLLOW_SOURCES="$FOLLOW_SOURCES" FM_LINT_INTERNAL_EXCLUDE="$EXCLUDE_CODES" FM_LINT_INTERNAL_COSTS="$RECORD_COSTS" \
       FM_LINT_SHELLCHECK="$SHELLCHECK_BIN" \
-      "${BASH:-bash}" "$SELF" --internal-worker "$manifest" "$OUTPUT_DIR" "$worker_index"
+      "${BASH:-bash}" "$SELF" --internal-worker "$QUEUE" "$OUTPUT_DIR" "$worker_index"
   fi
 }
 
 fm_lint_start_worker() {
   fm_lint_run_worker "$1" &
   ACTIVE_PIDS+=("$!")
+}
+
+# Write the measured per-root costs as a complete replacement cost table, only
+# when every root reported one.
+fm_lint_write_costs() {
+  local costs_tmp="$TMP_ROOT/costs.tsv"
+  {
+    printf '# fm-lint.sh root cost table: <root path> TAB <ShellCheck CPU centiseconds>.\n'
+    printf '# Only orders the lint work queue; regenerate with: CI=true bin/fm-lint.sh --record-costs bin/fm-lint-costs.tsv\n'
+    cat "$OUTPUT_DIR"/costs.* 2>/dev/null | LC_ALL=C sort -t "$TAB" -k1,1
+  } > "$costs_tmp" || return 1
+  [ "$(grep -vc '^#' "$costs_tmp")" -eq "$ROOT_COUNT" ] || return 1
+  mv -f "$costs_tmp" "$RECORD_COSTS"
 }
 
 fm_lint_wait_workers() {
@@ -724,41 +787,37 @@ fm_lint_wait_workers() {
   done
 }
 
-if [ "$JOBS" -eq 1 ]; then
-  worker=0
-  while [ "$worker" -lt "$SHARD_COUNT" ]; do
-    fm_lint_start_worker "$worker"
-    fm_lint_wait_workers
-    worker=$((worker + 1))
-  done
-else
-  worker=0
-  while [ "$worker" -lt "$SHARD_COUNT" ]; do
-    fm_lint_start_worker "$worker"
-    worker=$((worker + 1))
-  done
-  fm_lint_wait_workers
-fi
-
-# Replay both stable shards in deterministic order and select the first nonzero
-# shard status. ShellCheck processes every root in a shard after earlier findings.
-overall_rc=0
 worker=0
-while [ "$worker" -lt "$SHARD_COUNT" ]; do
-  output="$OUTPUT_DIR/shard.$worker"
+while [ "$worker" -lt "$JOBS" ]; do
+  fm_lint_start_worker "$worker"
+  worker=$((worker + 1))
+done
+fm_lint_wait_workers
+
+# Replay every root in its original order and select the first nonzero status,
+# so diagnostics and exit selection are identical for any worker count.
+overall_rc=0
+index=1
+for path in "${ROOTS[@]}"; do
+  output="$OUTPUT_DIR/root.$index"
   [ ! -f "$output.out" ] || cat "$output.out"
   if [ -f "$output.rc" ]; then
     rc=$(cat "$output.rc" 2>/dev/null || printf '2')
     case "$rc" in ''|*[!0-9]*) rc=2 ;; esac
   else
-    printf 'fm-lint.sh: worker produced no result for shard %s.\n' "$worker" >&2
+    printf 'fm-lint.sh: no worker produced a result for %s.\n' "$path" >&2
     rc=2
   fi
   if [ "$overall_rc" -eq 0 ] && [ "$rc" -ne 0 ]; then
     overall_rc=$rc
   fi
-  worker=$((worker + 1))
+  index=$((index + 1))
 done
+
+if [ -n "$RECORD_COSTS" ] && ! fm_lint_write_costs; then
+  printf 'fm-lint.sh: could not record root costs to %s.\n' "$RECORD_COSTS" >&2
+  [ "$overall_rc" -ne 0 ] || overall_rc=2
+fi
 
 if [ -n "$TELEMETRY" ]; then
   TELEMETRY_END_EPOCH=$(date +%s)
@@ -799,6 +858,8 @@ if [ -n "$TELEMETRY" ]; then
   source_targets=$(LC_ALL=C sort -u "$TMP_ROOT/source-targets" | wc -l | tr -d '[:space:]')
   content_cksum=$(cksum "$TMP_ROOT/content-cksums" | awk '{print $1 "-" $2}')
   git_head=$(git rev-parse HEAD 2>/dev/null || printf 'unavailable')
+  measured_cost_roots=$(awk -F "$TAB" 'FNR == NR { if ($0 !~ /^#/) measured[$1] = 1; next } ($3 in measured) { n++ } END { print n + 0 }' \
+    "$COST_TABLE" "$WEIGHTS" 2>/dev/null || printf 'unavailable')
 
   if [ -x /usr/bin/time ]; then
     if [ "$(uname)" = Darwin ]; then
@@ -849,8 +910,7 @@ EOF
     printf 'source_boundary_directives\t%s\n' "$source_boundaries"
     printf 'source_followed_directives\t%s\n' "$source_followed"
     printf 'source_target_count\t%s\n' "$source_targets"
-    printf 'shard_1_weight_bytes\t%s\n' "${WORKER_LOADS[0]}"
-    printf 'shard_2_weight_bytes\t%s\n' "${WORKER_LOADS[1]:-0}"
+    printf 'measured_cost_roots\t%s\n' "$measured_cost_roots"
     printf 'wall_seconds\t%s\n' "$((TELEMETRY_END_EPOCH - TELEMETRY_START_EPOCH))"
     printf 'worker_wall_sum_seconds\t%s\n' "$timing_worker_wall"
     printf 'max_worker_wall_seconds\t%s\n' "$max_worker_wall"
