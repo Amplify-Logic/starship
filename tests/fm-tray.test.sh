@@ -182,6 +182,10 @@ test_read_only_refuses_approve() {
 }
 
 test_show_delegates_to_gateway() {
+  # Unlike the hand-written audit lines above, this request goes through real
+  # prepare validation, which caps approval freshness per severity - so the
+  # expiry has to be relative to now rather than a fixed far-future constant.
+  local expires_at=$(( $(date +%s) + 600 ))
   local out rc digest req
   rm -f "$AUDIT"
   req=$(cat <<JSON
@@ -195,7 +199,7 @@ test_show_delegates_to_gateway() {
   "environment": "prod",
   "policy_version": "1",
   "idempotency_key": "idem-tray-show",
-  "expires_at": 1893456000,
+  "expires_at": $expires_at,
   "nonce": "nonce-tray-show",
   "requester_id": "worker-show"
 }

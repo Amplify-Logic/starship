@@ -32,9 +32,13 @@ JSON object with exactly these top-level fields:
 
 `requester_id` may be omitted from JSON when `FM_ACTION_REQUESTER_ID` is set in the environment; the broker injects it before validation.
 
-Example:
+Example.
+`expires_at` is computed rather than hardcoded: a fixed epoch is refused as soon as it goes stale, and `email.send` is `irreversible`, so the broker caps its window at 15 minutes (see [Broker-capped approval freshness](#broker-capped-approval-freshness)).
 
-```json
+```sh
+expires_at=$(( $(date +%s) + 600 ))   # inside the irreversible ceiling
+
+cat <<JSON | bin/fm-action-gateway.sh prepare
 {
   "task_id": "pitch-agent-42",
   "domain": "music-outreach",
@@ -45,10 +49,11 @@ Example:
   "environment": "prod",
   "policy_version": "1",
   "idempotency_key": "pitch-agent-42-v1",
-  "expires_at": 1893456000,
+  "expires_at": $expires_at,
   "nonce": "n-7f3a9c2e",
   "requester_id": "worker-task-42"
 }
+JSON
 ```
 
 ## Operation registry and severity
@@ -64,10 +69,29 @@ Severity classes follow Atelier's tool taxonomy shape (`read` / `costly` / `exte
 | `irreversible` | Money or real-person messaging / publishing | **structurally** confirm-first forever |
 
 Registered irreversible kinds include `purchase`, `payment`, `spend`, `transfer`, `checkout`, `ad.spend`, `email.send`, `message.send`, `sms.send`, `chat.send`, `notify.person`, `outreach.send`, `social.post`, `submission.send`, `booking.request`, `device.config.push`, and `device.firmware.push`.
-Registered external kinds include `calendar.create`, `crm.update`, `file.write.remote`, `kb.fact.publish`, `course.publish`, and `sheet.write`.
+Registered external kinds include `calendar.create`, `crm.update`, `device.config.stage`, `file.write.remote`, `kb.fact.publish`, `course.publish`, and `sheet.write`.
+`device.config.stage` prepares and verifies a device configuration command **without sending it**; see [`fota-staging.md`](fota-staging.md).
 The deny-by-default registry in `bin/fm-action-gateway.sh` is the owner of that list; `classify --action-kind` reports severity, ceiling, and whether a kind is graduatable, and `classify --list` dumps every registered kind with its severity.
 The two enumerations above are convenience copies and are drift-checked against `classify --list` by `tests/fm-action-gateway.test.sh`, so adding or removing a registered kind fails that test until this section is updated.
-No configuration, trusted-task-type rule, or escalation path may graduate spend or real-person messaging to autonomous.
+Every `device.*` kind, at any severity, carries the non-graduatable `device` ceiling.
+Customer hardware is not graduatable to autonomous: without that class an `external` device kind carries neither an amount nor a recipient, would classify with no ceiling at all, and `bin/fm-order.sh graduate` accepts exactly that answer.
+The same class also corrects `device.config.push`, which previously reported `ceiling=messaging` and mislabelled every audit record and deck card for a device action.
+
+No configuration, trusted-task-type rule, or escalation path may graduate spend, real-person messaging, or customer-site device actions to autonomous.
+
+## Broker-capped approval freshness
+
+`expires_at` is capped by the broker per severity, so a caller may request a shorter window but never a longer one:
+
+| Severity | Maximum TTL |
+| -------- | ----------- |
+| `read` | 24 hours |
+| `costly` | 1 hour |
+| `external` | 30 minutes |
+| `irreversible` | 15 minutes |
+
+Without this ceiling a caller chose its own expiry unchecked, so a worker could mint an approval window that never went stale - which defeats the requirement that stale approval or target data stops with an honest state.
+`MAX_TTL_SECONDS` in `bin/fm-action-gateway.sh` is the owner of those values.
 
 ## Canonical action digest
 

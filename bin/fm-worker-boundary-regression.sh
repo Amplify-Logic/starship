@@ -476,7 +476,9 @@ def valid_action_request(sequence: int = 1, blob: str = "") -> Dict[str, Any]:
         "environment": "test",
         "policy_version": "synthetic-v1",
         "idempotency_key": f"synthetic-idem-{sequence}",
-        "expires_at": int(time.time()) + 3600,
+        # Inside the broker's tightest per-severity ceiling (irreversible, 900s),
+        # so these probes measure the boundary they name rather than a TTL refusal.
+        "expires_at": int(time.time()) + 600,
         "nonce": f"synthetic-nonce-{sequence}",
         "requester_id": "synthetic-worker",
     }

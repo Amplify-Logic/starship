@@ -177,6 +177,13 @@ collect_tray() {
   "$SCRIPT_DIR/fm-tray.sh" json 2>/dev/null || printf '%s\n' '[]'
 }
 
+collect_staging() {
+  # Device staging runs, rendered into the sections that already own each state:
+  # a run awaiting the captain is staged, a run still working is under way, and
+  # a run that needs a person is a need. The deck adds no section of its own.
+  "$SCRIPT_DIR/fm-fota-stage-run.sh" list --json 2>/dev/null || printf '%s\n' '[]'
+}
+
 collect_orders() {
   # --no-tray-depth: the pane groups staged cards by the tray rows it already
   # read itself, so the depth fm-order.sh would otherwise compute costs two more
@@ -389,6 +396,8 @@ emit_payload() {
   collect_vocabulary
   printf '%s tray\n' "$SECTION_MARK"
   collect_tray
+  printf '%s staging\n' "$SECTION_MARK"
+  collect_staging
   printf '%s orders\n' "$SECTION_MARK"
   collect_orders
   printf '%s backlog\n' "$SECTION_MARK"

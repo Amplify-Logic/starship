@@ -317,6 +317,10 @@
       "audience": "maintainer-architecture"
     },
     {
+      "path": "docs/fota-staging.md",
+      "audience": "maintainer-architecture"
+    },
+    {
       "path": "docs/adhd.md",
       "audience": "operator-current"
     },

@@ -159,7 +159,20 @@ OPERATION_REGISTRY = {
     "booking.request": "irreversible",
     "device.config.push": "irreversible",
     "device.firmware.push": "irreversible",
+    # Customer-site device staging. Prepares and verifies a command WITHOUT
+    # sending it; the send remains device.config.push. Registered external
+    # because it drives an authenticated portal session on the captain's
+    # behalf, and carries the device ceiling so it can never be graduated
+    # out of per-change approval.
+    "device.config.stage": "external",
 }
+
+# Every device.* kind, at any severity, carries the non-graduatable device
+# ceiling. classify_ceiling() returns 'spend' or 'messaging' only for money
+# and real-person messaging, so without this an external device kind would
+# classify with no ceiling at all and fm-order.sh graduate would accept it.
+# Customer hardware is not graduatable to autonomous at any severity.
+DEVICE_CEILING_PREFIX = "device."
 
 ALLOWED_TIERS = frozenset({"confirm-first", "autonomous", "sandbox"})
 REQUIRED = (
@@ -176,6 +189,18 @@ REQUIRED = (
     "nonce",
     "requester_id",
 )
+# Broker-capped approval freshness, per severity. A caller previously chose its
+# own expiry with no ceiling, so a worker could mint an approval window that
+# never went stale - which defeats the requirement that stale approval or target
+# data must stop with an honest state. The broker caps it instead: the caller may
+# ask for less, never more. Tightest ceiling on the most dangerous severity.
+MAX_TTL_SECONDS = {
+    "read": 86400,
+    "costly": 3600,
+    "external": 1800,
+    "irreversible": 900,
+}
+
 TERMINAL = frozenset({"succeeded", "failed", "unknown"})
 VALID_STATES = frozenset(
     {"prepared", "approved", "executing", "succeeded", "failed", "unknown"}
@@ -237,7 +262,12 @@ def resolve_severity(action_kind: str) -> str:
 
 
 def classify_ceiling(severity: str, action_kind: str, params: dict):
-    """Return 'spend', 'messaging', or None. Floor cannot be raised later."""
+    """Return 'device', 'spend', 'messaging', or None. Floor cannot be raised later."""
+    # Checked first: a device kind is never graduatable, and previously
+    # device.config.push fell through to 'messaging', which mislabelled every
+    # audit record and deck card for a device action.
+    if action_kind.startswith(DEVICE_CEILING_PREFIX):
+        return "device"
     if severity == "irreversible":
         if action_kind in {
             "purchase",
@@ -338,7 +368,18 @@ def validate_request(obj):
         fail("expires_at must be a positive unix timestamp integer")
 
     # Deny-by-default: must resolve.
-    resolve_severity(obj["action_kind"])
+    severity = resolve_severity(obj["action_kind"])
+
+    # Broker-capped freshness. Checked after severity resolves so the ceiling is
+    # the one that matches the action actually being prepared.
+    cap = MAX_TTL_SECONDS.get(severity)
+    if cap is not None:
+        requested_ttl = exp - now_ts()
+        if requested_ttl > cap:
+            fail(
+                f"expires_at exceeds the broker ceiling for severity {severity}: "
+                f"requested {requested_ttl}s, maximum {cap}s"
+            )
     return obj
 
 
@@ -739,7 +780,8 @@ def cmd_classify(cmd: dict) -> None:
     documentation and other consumers can read the registry from the broker.
 
     Reuses resolve_severity + classify_ceiling. Irreversible kinds and any
-    kind the ceiling classifier labels spend or messaging are non-graduatable.
+    kind the ceiling classifier labels device, spend or messaging are
+    non-graduatable.
     Unknown kinds are refused (deny by default). No audit I/O.
     """
     if cmd.get("list"):
@@ -754,7 +796,7 @@ def cmd_classify(cmd: dict) -> None:
     kind = kind.strip()
     severity = resolve_severity(kind)
     ceiling = classify_ceiling(severity, kind, {})
-    if severity == "irreversible" or ceiling in {"spend", "messaging"}:
+    if severity == "irreversible" or ceiling in {"device", "spend", "messaging"}:
         graduatable = "no"
     else:
         graduatable = "yes"

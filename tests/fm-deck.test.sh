@@ -1356,6 +1356,144 @@ test_json_mode_degrades_honestly_and_scrubs() {
 }
 
 
+# A payload carrying device staging runs, so the pane can be driven through the
+# sections that already own each state. bin/fm-deck.sh emits this section from
+# bin/fm-fota-stage-run.sh list --json.
+staging_payload() {  # <staging-json>
+  render_payload "" ""
+  printf '%s staging\n' "$MARK"
+  printf '%s\n' "$1"
+}
+
+test_staging_runs_route_to_the_sections_that_own_each_state() {
+  local out
+  out=$(staging_payload '[
+    {"run_id":"r-ready","state":"ready","device_id":"dev-ready","attempt":1,"eligibility":"verified"},
+    {"run_id":"r-pending","state":"pending","device_id":"dev-pending","attempt":1,"eligibility":"verified"},
+    {"run_id":"r-unknown","state":"unknown","device_id":"dev-unknown","attempt":1,"eligibility":"verified",
+     "reason":"no result inside the deadline"},
+    {"run_id":"r-error","state":"error","device_id":"dev-error","attempt":1,"eligibility":"verified",
+     "reason":"readback payload does not match the staged plan"}
+  ]' | python3 "$RENDER" "$MARK" 2>&1)
+
+  # A run awaiting the captain is staged; the pane must not still claim nothing is.
+  assert_contains "$out" 'dev-ready' "a ready run appears on the pane"
+  assert_contains "$out" 'awaiting your approval' "a ready run says what it wants"
+  assert_not_contains "$out" 'nothing staged for you right now' \
+    "a ready run replaces the empty staged line"
+
+  # A run still working belongs beside the workers, not in the captain's asks.
+  assert_contains "$out" 'dev-pending' "a pending run appears under way"
+  assert_contains "$out" 'PREPARING' "a pending run is labelled as preparing"
+
+  # unknown is a need, not a failure: someone has to go and look.
+  assert_contains "$out" 'dev-unknown' "an unknown run appears"
+  assert_contains "$out" 'verify at the portal' "unknown tells the captain what to do"
+  assert_contains "$out" 'dev-error' "an error run appears"
+  pass "each staging state renders in the section that already owns it"
+}
+
+test_a_pending_staging_run_reports_its_real_age() {
+  local out
+  # Started two hours before the pane's clock. The heard column is the one thing
+  # he scans to spot a stalled worker, so a hardcoded zero would guarantee it
+  # says a six-hour-old run is fresh.
+  out=$(staging_payload '[
+    {"run_id":"r-old","state":"pending","device_id":"dev-old","attempt":1,
+     "eligibility":"verified","started_at":'"$((NOW - 7200))"'}
+  ]' | python3 "$RENDER" "$MARK" 2>&1)
+  assert_contains "$out" 'heard 2h ago' "the run reports the age its record carries"
+  assert_not_contains "$out" 'heard 0s ago' "no run is reported as freshly heard"
+
+  # A record with no usable start says so rather than inventing a fresh one.
+  out=$(staging_payload '[
+    {"run_id":"r-nostart","state":"pending","device_id":"dev-nostart","attempt":1,
+     "eligibility":"verified"}
+  ]' | python3 "$RENDER" "$MARK" 2>&1)
+  assert_contains "$out" 'not reported yet' "a missing start is not reported as now"
+  pass "a pending staging run reports the age its record actually carries"
+}
+
+test_an_acknowledged_run_leaves_the_ask_list_with_its_evidence_intact() {
+  local out
+  out=$(staging_payload '[
+    {"run_id":"r-unknown","state":"unknown","device_id":"dev-seen","attempt":1,
+     "eligibility":"verified","reason":"no result inside the deadline",
+     "acknowledged":true},
+    {"run_id":"r-open","state":"error","device_id":"dev-open","attempt":1,
+     "eligibility":"verified","reason":"readback payload does not match"}
+  ]' | python3 "$RENDER" "$MARK" 2>&1)
+  # Acknowledgement is the captain saying he has seen it. The record and its
+  # outcome are untouched; only the active ask list stops repeating it.
+  assert_not_contains "$out" 'dev-seen' "an acknowledged run is no longer an open ask"
+  assert_contains "$out" 'dev-open' "an unacknowledged run still asks"
+  pass "an explicit acknowledgement removes a settled alert from the ask list"
+}
+
+test_a_never_queued_run_says_so_rather_than_claiming_delivery() {
+  local out
+  out=$(staging_payload '[
+    {"run_id":"r-prepared","state":"prepared","device_id":"dev-prepared","attempt":1,
+     "eligibility":"verified","reason":"no companion thread is configured"}
+  ]' | python3 "$RENDER" "$MARK" 2>&1)
+  # A generated file alone is only prepared. It needs a person, and it must not
+  # be drawn beside the workers as though something were carrying it.
+  assert_contains "$out" 'dev-prepared' "a prepared run is surfaced"
+  assert_contains "$out" 'no companion thread is configured' "it says why nothing moved"
+  assert_not_contains "$out" 'PREPARING' "a prepared run is not shown as under way"
+  pass "a run nothing ever queued is an ask, not work under way"
+}
+
+test_the_model_count_describes_only_the_rows_its_consumer_renders() {
+  local model staged staged_runs
+  command -v jq >/dev/null 2>&1 || { pass "skip: jq not found for the staged-count test"; return 0; }
+  model=$(staging_payload '[
+    {"run_id":"r-ready","state":"ready","device_id":"dev-ready","attempt":1,
+     "eligibility":"verified"}
+  ]' | python3 "$RENDER" --json "$MARK" 2>&1)
+  staged=$(printf '%s' "$model" | jq -r '.counts.staged')
+  staged_runs=$(printf '%s' "$model" | jq -r '.counts.staged_runs')
+  # `staged.groups` is what a model consumer renders, so `counts.staged` counts
+  # exactly that. A surface that also draws the staging runs adds staged_runs;
+  # one that does not is never handed a headline larger than its own rows.
+  [ "$staged" = "$(printf '%s' "$model" | jq -r '[.staged.groups[].cards[]] | length')" ] \
+    || fail "staged count does not match the grouped cards: $staged"
+  [ "$staged_runs" = 1 ] || fail "staging runs are not counted separately: $staged_runs"
+  pass "the model's staged count describes only the rows its consumer renders"
+}
+
+test_staging_never_claims_unverified_eligibility_is_settled() {
+  local out
+  out=$(staging_payload '[
+    {"run_id":"r1","state":"ready","device_id":"dev-a","attempt":1,"eligibility":"unverified"}
+  ]' | python3 "$RENDER" "$MARK" 2>&1)
+  # A staged run on a target whose eligibility was never established must say so
+  # on the pane, not only in the plan file the captain is not reading.
+  assert_contains "$out" 'eligibility unverified' "unverified eligibility is shown"
+  pass "a staged run shows unverified eligibility on the pane"
+}
+
+test_absent_staging_section_changes_nothing() {
+  local out
+  out=$(render_payload "" "" | python3 "$RENDER" "$MARK" 2>&1)
+  # Every home without a staging run emits no such section; the pane must read
+  # exactly as it did before rather than erroring or inventing an empty group.
+  assert_contains "$out" 'hubspot://note-1' "the existing staged card is untouched"
+  assert_not_contains "$out" 'PREPARING' "no staging rows appear"
+  assert_not_contains "$out" 'awaiting your approval' "no staging wording appears"
+  pass "a payload with no staging section renders unchanged"
+}
+
+test_malformed_staging_section_is_skipped_not_guessed() {
+  local out
+  out=$(staging_payload 'not json at all' | python3 "$RENDER" "$MARK" 2>&1)
+  # An unreadable section must cost only itself: the rest of the pane still
+  # draws, and no staging row is invented from text that could not be parsed.
+  assert_contains "$out" 'hubspot://note-1' "the rest of the pane still draws"
+  assert_not_contains "$out" 'PREPARING' "nothing is invented from unreadable input"
+  pass "an unreadable staging section is skipped rather than guessed at"
+}
+
 test_help_exits_zero
 test_empty_home_renders_honest_empty_sections
 test_no_sources_at_all_still_renders
@@ -1391,3 +1529,11 @@ test_json_mode_emits_the_pane_as_one_model
 test_json_mode_degrades_honestly_and_scrubs
 test_interval_validation
 test_refresh_loop_redraws_and_reflects_changes
+test_staging_runs_route_to_the_sections_that_own_each_state
+test_a_pending_staging_run_reports_its_real_age
+test_an_acknowledged_run_leaves_the_ask_list_with_its_evidence_intact
+test_a_never_queued_run_says_so_rather_than_claiming_delivery
+test_the_model_count_describes_only_the_rows_its_consumer_renders
+test_staging_never_claims_unverified_eligibility_is_settled
+test_absent_staging_section_changes_nothing
+test_malformed_staging_section_is_skipped_not_guessed

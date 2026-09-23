@@ -221,6 +221,74 @@ def parse_tray(text):
     return rows if isinstance(rows, list) else []
 
 
+# Device staging runs arrive in the tray's shape - a JSON array or nothing - so
+# they are read by the tray's parser rather than a second copy of it.
+parse_staging = parse_tray
+
+
+# Where each staging state belongs on a pane that already has a home for it.
+# A run awaiting the captain is staged; one still working is under way; one that
+# needs a person is a need. `unknown` is deliberately a need and not a failure:
+# it means the outcome was never observed, so someone has to go and look, and
+# `prepared` joins it: the request exists but no transport ever took it.
+STAGING_STAGED = ("ready",)
+STAGING_UNDER_WAY = ("pending",)
+STAGING_NEEDS_YOU = ("prepared", "error", "unknown")
+
+
+def staging_by_state(staging, wanted):
+    rows = []
+    for run in staging or []:
+        if not isinstance(run, dict):
+            continue
+        if clean(run.get("state")) in wanted:
+            rows.append(run)
+    return rows
+
+
+def staging_needs_you(staging):
+    """Settled runs still asking for a person.
+
+    An explicit captain acknowledgement (`fm-fota-stage-run.sh ack`) drops a run
+    from the active ask list. The record, its outcome and its evidence are all
+    untouched - acknowledging is saying he has seen it, never that it resolved.
+    """
+    return [
+        run
+        for run in staging_by_state(staging, STAGING_NEEDS_YOU)
+        if not run.get("acknowledged")
+    ]
+
+
+def staging_age(run, now=None):
+    """Seconds since the run recorded its start; -1 when that is not knowable."""
+    started = to_int(run.get("started_at"), -1)
+    if started <= 0:
+        return -1
+    if now is None:
+        now = int(time.time())
+    return max(0, now - started)
+
+
+def staging_label(run):
+    """One captain-facing phrase for a staging run, never a raw record."""
+    device = clean(run.get("device_id")) or "an unnamed target"
+    state = clean(run.get("state"))
+    if state == "ready":
+        note = "staged and verified, awaiting your approval"
+    elif state == "pending":
+        note = "preparing"
+    elif state == "prepared":
+        note = clean(run.get("reason")) or "request generated but never queued"
+    elif state == "unknown":
+        note = "outcome not observed - verify at the portal before retrying"
+    else:
+        note = clean(run.get("reason")) or "preparation failed"
+    if clean(run.get("eligibility")) != "verified":
+        note += " · eligibility unverified"
+    return device, note
+
+
 def parse_orders(text):
     """`<slug>\\t<status line>\\t<key>=<value>...` into a dict.
 
@@ -443,12 +511,19 @@ def staged_groups(tray, orders):
     return groups, quiet
 
 
-def build_staged(tray, orders, width):
+def build_staged(tray, orders, width, staging=()):
     """Staged actions awaiting his click, grouped by standing order."""
     groups, quiet = staged_groups(tray, orders)
+    ready = staging_by_state(staging, STAGING_STAGED)
     lines = []
-    if not groups:
+    if not groups and not ready:
         lines.append("  nothing staged for you right now")
+    for run in ready:
+        device, note = staging_label(run)
+        lines.append(
+            "  %s  —  %s"
+            % (pad(clip(device, 22), 22), clip(note, max(20, width - 30)))
+        )
     for group in groups:
         if group["status"] is not None:
             context = "%s · last ran %s" % (group["status"], group["last_fire"])
@@ -520,7 +595,7 @@ def backlog_note(status, width, fallback):
     return lines
 
 
-def needs_you_rows(tasks, backlog, backlog_status="ok"):
+def needs_you_rows(tasks, backlog, backlog_status="ok", staging=()):
     """Everything that cannot move without him, most immediate first.
 
     Returns the sorted list of (ask, title, url, where) tuples both renderings
@@ -583,6 +658,9 @@ def needs_you_rows(tasks, backlog, backlog_status="ok"):
             continue
         rows.append(row)
         seen_ids.add(task_id)
+    for run in staging_needs_you(staging):
+        device, note = staging_label(run)
+        rows.append(("check", note, "", device))
     for row in backlog:
         if row.get("state") == "done":
             continue
@@ -602,9 +680,9 @@ def needs_you_rows(tasks, backlog, backlog_status="ok"):
     return rows
 
 
-def build_needs_you(tasks, backlog, limit, width, backlog_status="ok"):
+def build_needs_you(tasks, backlog, limit, width, backlog_status="ok", staging=()):
     """The NEEDS YOU section: needs_you_rows drawn to the frame width."""
-    rows = needs_you_rows(tasks, backlog, backlog_status)
+    rows = needs_you_rows(tasks, backlog, backlog_status, staging)
     if not rows:
         note = backlog_note(backlog_status, width, False)
         return note + ["  nothing is waiting on you"], 0
@@ -663,7 +741,7 @@ LABEL_COL = 11
 UNDER_WAY_FIXED = 2 + ICON_COL + 1 + LABEL_COL + 1 + 2 + PROJECT_COL + 1 + HEARD_COL
 
 
-def under_way_rows(tasks, vocab):
+def under_way_rows(tasks, vocab, staging=(), now=None):
     """Every recorded worker, most urgent first, with its captain-facing label."""
     ordered = sorted(
         tasks, key=lambda t: (STATE_RANK.get(t["state"], 9), -t["heard"])
@@ -684,17 +762,35 @@ def under_way_rows(tasks, vocab):
                 "pr": task["pr"],
             }
         )
+    for run in staging_by_state(staging, STAGING_UNDER_WAY):
+        device, note = staging_label(run)
+        rows.append(
+            {
+                "id": clean(run.get("run_id")),
+                "kind": "staging",
+                "project": device,
+                "outcome": note,
+                "state": "working",
+                "label": "PREPARING",
+                "icon": "\U0001f7e1",
+                # The one column he scans to spot a stalled worker, so it comes
+                # off the record's own clock. Without a usable start it reads as
+                # not reported rather than claiming the run is fresh.
+                "heard_secs": staging_age(run, now),
+                "pr": "",
+            }
+        )
     return rows
 
 
-def build_under_way(tasks, vocab, width):
-    if not tasks:
+def build_under_way(tasks, vocab, width, staging=(), now=None):
+    if not tasks and not staging_by_state(staging, STAGING_UNDER_WAY):
         return ["  no work under way"]
     # Fixed columns: he scans this section down the state dot, so the outcome
     # column cannot shift width from row to row.
     outcome_col = max(20, width - UNDER_WAY_FIXED)
     lines = []
-    for task in under_way_rows(tasks, vocab):
+    for task in under_way_rows(tasks, vocab, staging, now):
         label, icon = task["label"], task["icon"]
         heard = format_age(task["heard_secs"])
         heard_text = ("heard %s ago" % heard) if heard != "-" else "not reported yet"
@@ -808,6 +904,7 @@ def read_payload(stream, mark):
         "needs_limit": to_int(limits[2] if len(limits) > 2 else "", NEEDS_YOU_DEFAULT),
         "vocab": parse_vocabulary(sections.get("vocabulary", "")),
         "tray": parse_tray(sections.get("tray", "")),
+        "staging": parse_staging(sections.get("staging", "")),
         "orders": parse_orders(sections.get("orders", "")),
         "backlog": parse_backlog(sections.get("backlog", "")),
         "backlog_status": first_line(sections.get("backlog_status", "")) or "ok",
@@ -839,8 +936,13 @@ def build_model(payload):
     only in `just_in` so a renderer cannot mistake it for something to act on.
     """
     tray = payload["tray"]
+    staging = payload["staging"]
     groups, quiet = staged_groups(tray, payload["orders"])
-    needs = needs_you_rows(payload["tasks"], payload["backlog"], payload["backlog_status"])
+    ready_staging = staging_by_state(staging, STAGING_STAGED)
+    under_way_staging = staging_by_state(staging, STAGING_UNDER_WAY)
+    needs = needs_you_rows(
+        payload["tasks"], payload["backlog"], payload["backlog_status"], staging
+    )
     backlog_reason = BACKLOG_UNAVAILABLE.get(payload["backlog_status"])
     loose = payload["loose"]
     oldest = max((to_int(r.get("age_secs"), 0) for r in tray), default=-1)
@@ -855,12 +957,21 @@ def build_model(payload):
         },
         "counts": {
             "needs_you": len(needs),
+            # Counts only the grouped tray cards, because `staged.groups` is
+            # what a consumer of this model renders. A surface that draws the
+            # staging runs too adds `staged_runs` to it; one that does not must
+            # never be handed a headline larger than the rows below it.
             "staged": len(tray),
+            "staged_runs": len(ready_staging),
             "staged_oldest": format_age(oldest) if tray else None,
             "loose_ends": loose["total"] if loose is not None else None,
-            "under_way": len(payload["tasks"]),
+            "under_way": len(payload["tasks"]) + len(under_way_staging),
         },
-        "staged": {"groups": groups, "quiet_orders": quiet},
+        "staged": {
+            "groups": groups,
+            "quiet_orders": quiet,
+            "staging_runs": ready_staging,
+        },
         "needs_you": {
             "rows": [
                 {"ask": ask, "title": title, "url": url, "project": where}
@@ -879,7 +990,9 @@ def build_model(payload):
             "total": loose["total"],
             "items": [{"bucket": bucket, "text": text} for bucket, text in loose["items"]],
         },
-        "under_way": under_way_rows(payload["tasks"], payload["vocab"]),
+        "under_way": under_way_rows(
+            payload["tasks"], payload["vocab"], staging, payload["now"]
+        ),
         "just_in": just_in_rows(payload["backlog"]),
     }
     return scrub_deep(model)
@@ -913,22 +1026,30 @@ def main():
     tasks = payload["tasks"]
     loose = payload["loose"]
 
-    staged = build_staged(tray, orders, width)
+    staging = payload["staging"]
+    staged_runs = staging_by_state(staging, STAGING_STAGED)
+    under_way_runs = staging_by_state(staging, STAGING_UNDER_WAY)
+
+    staged = build_staged(tray, orders, width, staging)
     needs_you, needs_count = build_needs_you(
-        tasks, backlog, needs_limit, width, backlog_status
+        tasks, backlog, needs_limit, width, backlog_status, staging
     )
-    under_way = build_under_way(tasks, vocab, width)
+    under_way = build_under_way(tasks, vocab, width, staging, now)
     just_in = build_just_in(backlog, just_in_limit, width)
 
     oldest = format_age(max((to_int(r.get("age_secs"), 0) for r in tray), default=-1))
 
     counts = [
         "%d need you" % needs_count,
-        "%d staged%s" % (len(tray), (" (oldest %s)" % oldest) if tray else ""),
+        "%d staged%s"
+        % (
+            len(tray) + len(staged_runs),
+            (" (oldest %s)" % oldest) if tray else "",
+        ),
     ]
     if loose is not None:
         counts.append("%d loose ends" % loose["total"])
-    counts.append("%d under way" % len(tasks))
+    counts.append("%d under way" % (len(tasks) + len(under_way_runs)))
 
     clock = time.strftime("%a %d %b %H:%M:%S", time.localtime(now))
     title = "⚓  ACTION DECK · " + home

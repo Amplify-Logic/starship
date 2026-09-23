@@ -17,8 +17,11 @@ mkdir -p "$DATA_DIR" "$HOME_DIR/config"
 printf '%s\n' "$SECRET" > "$HOME_DIR/config/action-captain-secret"
 chmod 600 "$HOME_DIR/config/action-captain-secret"
 
-# Fixed future expiry so prepare/approve stay valid unless a test overrides now.
-EXPIRY=1893456000
+# Expiry inside the broker's per-severity ceiling (MAX_TTL_SECONDS), so prepare
+# and approve stay valid unless a test overrides now. It must be relative to the
+# real clock now that the broker caps freshness: a fixed far-future constant is
+# exactly what that ceiling refuses.
+EXPIRY=$(( $(date +%s) + 600 ))
 
 valid_request() {
   local kind=${1:-purchase}
@@ -618,6 +621,55 @@ test_no_outward_effect_codepaths() {
   pass "no code path performs a real outward effect"
 }
 
+
+test_device_ceiling_is_non_graduatable() {
+  local out
+  # Correction 7. An external kind with neither money nor a recipient used to
+  # classify with no ceiling at all, and fm-order.sh graduates on exactly that
+  # answer - so a device action could have been graduated out of per-change
+  # approval. Customer hardware is not graduatable at any severity.
+  out=$(run_worker classify --action-kind device.config.stage 2>&1)
+  assert_contains "$out" 'severity=external' "staging is external"
+  assert_contains "$out" 'ceiling=device' "staging carries the device ceiling"
+  assert_contains "$out" 'graduatable=no' "staging cannot be graduated"
+
+  # The same kind shape without a device prefix is unaffected.
+  out=$(run_worker classify --action-kind sheet.write 2>&1)
+  assert_contains "$out" 'graduatable=yes' "a non-device external kind is unchanged"
+
+  # device.config.push previously reported ceiling=messaging, which mislabelled
+  # every audit record and deck card for a device action.
+  out=$(run_worker classify --action-kind device.config.push 2>&1)
+  assert_contains "$out" 'ceiling=device' "push is labelled device, not messaging"
+  assert_contains "$out" 'graduatable=no' "push stays non-graduatable"
+  pass "every device kind carries a non-graduatable device ceiling"
+}
+
+test_broker_caps_approval_freshness() {
+  local out rc
+  reset_gw
+  # Correction 5. A caller-chosen expiry with no ceiling lets a worker mint an
+  # approval window that never goes stale, which defeats the requirement that
+  # stale approval data stops with an honest state.
+  set +e
+  out=$(
+    valid_request device.config.stage confirm-first '' idem-ttl nonce-ttl worker-ttl \
+      | sed "s/\"expires_at\": [0-9]*/\"expires_at\": 4102444800/" \
+      | run_worker prepare 2>&1
+  )
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "over-ceiling expiry exit"
+  assert_contains "$out" 'exceeds the broker ceiling' "refusal names the ceiling"
+  assert_contains "$out" 'maximum 1800s' "refusal states the external maximum"
+
+  # A request inside the ceiling still prepares normally.
+  out=$(valid_request device.config.stage confirm-first '' idem-ttl2 nonce-ttl2 worker-ttl2 \
+    | run_worker prepare 2>&1)
+  assert_contains "$out" 'state=prepared' "an expiry inside the ceiling prepares"
+  pass "the broker caps approval freshness per severity"
+}
+
 test_help_exits_zero
 test_schema_rejects_missing_and_bad_fields
 test_prepare_confirm_first_no_token_to_worker
@@ -640,3 +692,5 @@ test_overrides_require_test_mode
 test_file_input_prepare
 test_audit_failure_yields_no_decision
 test_no_outward_effect_codepaths
+test_device_ceiling_is_non_graduatable
+test_broker_caps_approval_freshness
