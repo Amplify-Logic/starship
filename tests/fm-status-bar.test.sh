@@ -141,14 +141,15 @@ SH
   # from the very file this run is writing; that is the measurement, not a bug.
   PATH="$FAKEBIN:$PATH" \
     FM_HOME="$HOME_FIX" \
-    FM_PRIMARY_HARNESS=kimi \
+    FM_PRIMARY_HARNESS=codex \
+    FM_CODEX_METRICS_ROLLOUT="$TMP_ROOT/no-rollout" \
     FM_STATUS_BAR_INTERVAL=0 \
     FM_STATUS_BAR_TMUX_COUNT="$count_file" \
     FM_STATUS_BAR_TEST_SNAPDIR="$snap_dir" \
     FM_STATUS_BAR_TEST_SNAPCOUNT="$snap_count_file" \
     FM_STATUS_BAR_TEST_OUT="$out_file" \
     "$ROOT/bin/fm-status-bar.sh" \
-      --adapter kimi --model kimi-code/k3 --effort -- --follow-pane %42 \
+      --adapter codex --model m --effort -- --follow-pane %42 \
     > "$out_file"
 
   # One snapshot per collection, or the check is narrower than it advertises.
@@ -190,12 +191,13 @@ SH
   chmod +x "$FAKEBIN/stat"
   out=$(PATH="$FAKEBIN:$PATH" \
     FM_HOME="$HOME_FIX" \
-    FM_PRIMARY_HARNESS=kimi \
+    FM_PRIMARY_HARNESS=codex \
+    FM_CODEX_METRICS_ROLLOUT="$TMP_ROOT/no-rollout" \
     FM_STATUS_BAR_NOW=1000 \
     FM_STATUS_BAR_INTERVAL=0 \
     FM_STATUS_BAR_TMUX_COUNT="$count_file" \
     "$ROOT/bin/fm-status-bar.sh" \
-      --adapter kimi --model kimi-code/k3 --effort -- --follow-pane %42)
+      --adapter codex --model m --effort -- --follow-pane %42)
   rows=$(printf '%s' "$out" | grep -o '⚓' | wc -l | tr -d ' ')
   [ "$rows" -eq 3 ] \
     || fail "three refreshes published $rows unchanged rows instead of one row each"
@@ -208,20 +210,25 @@ SH
 #!/usr/bin/env bash
 epoch=900
 [ ! -f "$FM_STATUS_BAR_TEST_BEAT_FILE" ] || epoch=$(<"$FM_STATUS_BAR_TEST_BEAT_FILE")
-printf '%s\n' "$((epoch - 1))" > "$FM_STATUS_BAR_TEST_BEAT_FILE"
+# Only the supervision beacon read ages the clock, so a stat the frame makes
+# for any other reason cannot skip an age the row must show.
+case "$*" in
+  *.last-watcher-beat) printf '%s\n' "$((epoch - 1))" > "$FM_STATUS_BAR_TEST_BEAT_FILE" ;;
+esac
 printf '%s\n' "$epoch"
 SH
   chmod +x "$FAKEBIN/stat"
   rm -f "$TMP_ROOT/beat-epoch"
   out=$(PATH="$FAKEBIN:$PATH" \
     FM_HOME="$HOME_FIX" \
-    FM_PRIMARY_HARNESS=kimi \
+    FM_PRIMARY_HARNESS=codex \
+    FM_CODEX_METRICS_ROLLOUT="$TMP_ROOT/no-rollout" \
     FM_STATUS_BAR_NOW=1000 \
     FM_STATUS_BAR_INTERVAL=0 \
     FM_STATUS_BAR_TMUX_COUNT="$count_file" \
     FM_STATUS_BAR_TEST_BEAT_FILE="$TMP_ROOT/beat-epoch" \
     "$ROOT/bin/fm-status-bar.sh" \
-      --adapter kimi --model kimi-code/k3 --effort -- --follow-pane %42 | strip_ansi)
+      --adapter codex --model m --effort -- --follow-pane %42 | strip_ansi)
   rows=$(printf '%s' "$out" | grep -o '⚓' | wc -l | tr -d ' ')
   [ "$rows" -eq 3 ] \
     || fail "three refreshes published $rows rows instead of one row each"
@@ -455,12 +462,13 @@ SH
   chmod +x "$FAKEBIN/tmux"
   out=$(PATH="$FAKEBIN:$PATH" \
     FM_HOME="$HOME_FIX" \
-    FM_PRIMARY_HARNESS=kimi \
+    FM_PRIMARY_HARNESS=codex \
+    FM_CODEX_METRICS_ROLLOUT="$TMP_ROOT/no-rollout" \
     FM_STATUS_BAR_INTERVAL=0 \
     FM_STATUS_BAR_TMUX_COUNT="$count_file" \
     "$ROOT/bin/fm-status-bar.sh" \
-      --adapter kimi \
-      --model kimi-code/k3 \
+      --adapter codex \
+      --model m \
       --effort -- \
       --follow-pane %42)
   assert_not_contains "$out" '⚓' "tmux companion rendered after its primary pane disappeared"
@@ -590,11 +598,12 @@ test_companion_clears_the_whole_pane_once_at_startup() {
   fm_install_fake_tmux_pane "$FAKEBIN" 2
   out=$(PATH="$FAKEBIN:$PATH" \
     FM_HOME="$HOME_FIX" \
-    FM_PRIMARY_HARNESS=kimi \
+    FM_PRIMARY_HARNESS=codex \
+    FM_CODEX_METRICS_ROLLOUT="$TMP_ROOT/no-rollout" \
     FM_STATUS_BAR_INTERVAL=0 \
     FM_STATUS_BAR_TMUX_COUNT="$count_file" \
     "$ROOT/bin/fm-status-bar.sh" \
-      --adapter kimi --model kimi-code/k3 --effort -- --follow-pane %42)
+      --adapter codex --model m --effort -- --follow-pane %42)
   # Herdr clamps the split share to 0.9, so a companion is a proportional tenth
   # of the tab - two rows on a 23-row terminal, six on a 63-row one - and `pane
   # run` echoes the launch command into the pane's shell, so everything the

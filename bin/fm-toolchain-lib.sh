@@ -25,9 +25,8 @@
 # every publisher release into an unscheduled fleet outage, which is exactly
 # what bin/fm-primary.sh's exact-match Kimi pin used to do: it took the
 # certified primary down rather than leaving it merely uncertified, and it
-# stayed down once the pinned build no longer existed on disk. That gate now
-# accepts every build it holds primary evidence for, warns on the rest, and
-# launches either way, on this same reasoning; bin/fm-primary.sh owns it.
+# stayed down once the pinned build no longer existed on disk. That Kimi
+# primary profile has since been removed.
 # Cursor follows the same warn-and-launch rule now that its Stop turn-end hook
 # is certified; an explicitly logged-out Cursor CLI remains a launch refusal
 # because it would open a login screen instead of a primary session.
@@ -64,7 +63,6 @@ FM_TOOLCHAIN_PROBE_TIMEOUT_DEFAULT="${FM_TOOLCHAIN_PROBE_TIMEOUT_DEFAULT:-5}"
 # Verified against every runtime in the manifest:
 #   claude  "2.1.220 (Claude Code)"        -> 2.1.220
 #   codex   "codex-cli 0.144.6"            -> 0.144.6
-#   kimi    "0.31.1"                       -> 0.31.1
 #   agent   "2026.07.23-e383d2b"           -> 2026.07.23-e383d2b
 #   pi      "0.80.10"                      -> 0.80.10
 fm_toolchain_parse_version() {

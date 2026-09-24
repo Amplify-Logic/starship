@@ -30,7 +30,7 @@ write_enabled_config() {
   "threshold_context_percent_used": $context_used,
   "poll_seconds": 60,
   "cooldown_seconds": 300,
-  "chain": ["claude-fable", "pi", "codex", "kimi-k3"]
+  "chain": ["claude-fable", "pi", "codex"]
 }
 JSON
   else
@@ -40,7 +40,7 @@ JSON
   "threshold_percent_remaining": $threshold,
   "poll_seconds": 60,
   "cooldown_seconds": 300,
-  "chain": ["claude-fable", "pi", "codex", "kimi-k3"]
+  "chain": ["claude-fable", "pi", "codex"]
 }
 JSON
   fi
@@ -421,7 +421,7 @@ test_check_ok_when_under_threshold() {
 test_primary_unchanged_when_handoff_disabled() {
   local out
   rm -f "$HOME_FIX/config/primary-handoff" "$HOME_FIX/state/.primary-active"
-  for cli in pi claude codex opencode grok kimi; do
+  for cli in pi claude codex opencode grok; do
     cat > "$FAKEBIN/$cli" <<'SH'
 #!/usr/bin/env bash
 exit 0
@@ -818,7 +818,7 @@ test_astra_registered_profile() {
     FM_CONFIG_OVERRIDE="$default_config" fm_handoff_load_config >/dev/null 2>&1
     printf '%s\n' "$FM_HANDOFF_CHAIN_JSON"
   )
-  [ "$chain" = '["claude-fable","claude-opus","pi","codex","kimi-k3"]' ] || \
+  [ "$chain" = '["claude-fable","claude-opus","pi","codex"]' ] || \
     fail "default rotation chain changed: $chain"
   pass "handoff registers astra on the codex CLI and quota pool without joining the default chain"
 }

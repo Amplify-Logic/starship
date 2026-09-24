@@ -181,7 +181,7 @@ cmd_execute() {
     FM_HANDOFF_THRESHOLD=${FM_HANDOFF_THRESHOLD:-15}
     FM_HANDOFF_CONTEXT_USED_THRESHOLD=${FM_HANDOFF_CONTEXT_USED_THRESHOLD:-}
     FM_HANDOFF_COOLDOWN_SECONDS=${FM_HANDOFF_COOLDOWN_SECONDS:-300}
-    FM_HANDOFF_CHAIN_JSON=${FM_HANDOFF_CHAIN_JSON:-'["claude-fable","claude-opus","pi","codex","kimi-k3"]'}
+    FM_HANDOFF_CHAIN_JSON=${FM_HANDOFF_CHAIN_JSON:-'["claude-fable","claude-opus","pi","codex"]'}
   fi
 
   mkdir -p "$STATE" "$CONFIG" || return 1

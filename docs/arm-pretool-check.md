@@ -37,11 +37,11 @@ It tokenizes the bytes and classifies lexical execution positions only.
 
 `bin/fm-arm-pretool-check.sh` supports these entry forms:
 
-- Stdin JSON at `.tool_input.command` for Claude, Codex, and the managed Kimi primary plugin.
+- Stdin JSON at `.tool_input.command` for Claude and Codex.
 - Stdin JSON at `.toolInput.command` for Grok.
 - `--command <exact string>` for OpenCode, Pi, pi-signed, and omp.
 - `--background` as a compatibility-only field that never changes the decision.
-- `--claude` to preserve the stderr-only exit-2 deny transport used by Claude and Kimi.
+- `--claude` to preserve Claude's stderr-only deny requirement.
 
 The wrapper discovers the code root from its own location.
 The active firstmate home is `${FM_HOME:-<code-root>}`.
@@ -175,7 +175,6 @@ Prose may improve without changing adapter behavior.
 | Codex | `.tool_input.command` | The `.codex/hooks.json` command forwards the complete stdin payload and Codex blocks on exit 2. |
 | Claude | `.tool_input.command` | `.claude/settings.json` forwards stdin with `--claude`, leaving stdout empty and returning the stderr deny object. |
 | Cursor | `.tool_input.command` (Claude-mapped `preToolUse`) | Same `--claude` transport via tracked `.claude/settings.json`; Cursor CLI `2026.07.20-8cc9c0b` fired Claude-format PreToolUse in the 2026-07-22 primary lab. |
-| Kimi | `.tool_input.command` | The managed primary plugin forwards stdin with `--claude`; Kimi blocks the Bash call on exit 2 and places the stderr reason in model context. |
 | Grok | `.toolInput.command` | `.grok/hooks/fm-primary-pretool-check.json` forwards stdin and Grok consumes the stdout `decision=deny` object. |
 | OpenCode | `output.args.command` | `.opencode/plugins/fm-primary-pretool-check.js` passes one `--command` argument and throws only for exit 2. |
 | Pi / pi-signed | `event.input.command` | `.pi/extensions/fm-primary-turnend-guard.ts` passes one `--command` argument and returns `{block: true}` only for exit 2. |
@@ -248,34 +247,11 @@ Native supervision paths were also validated in the same scratch project:
 
 Every native-path automatic marker was present and every deny sentinel remained absent.
 
-### Kimi Code 0.27.0, 2026-07-19
-
-The Kimi check ran in a named non-default Herdr lab with an isolated Kimi home and scratch Firstmate home.
-The launcher command was `bin/fm-primary.sh kimi-k3`, reached only through `fm-herdr-lab.sh run <lab> agent start ... -- <scratch-root>/bin/fm-primary.sh kimi-k3`.
-The TUI displayed `Version: 0.27.0`, `Model: K3`, and the `yolo` permission mode.
-
-The model issued this exact Bash call:
-
-```sh
-bin/fm-watch-arm.sh &
-```
-
-The persisted Kimi wire recorded the exact call and result:
-
-```json
-{"name":"Bash","args":{"command":"bin/fm-watch-arm.sh &"}}
-{"output":"{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\"},\"systemMessage\":\"[watcher-background] a protected watcher command cannot run in an asynchronous shell list or through nohup/disown\"}","isError":true}
-```
-
-No watcher process or watcher lock was created by the denied call.
-The same session later ran `bin/fm-watch-arm.sh` through Kimi's background Bash task with `run_in_background=true` and `disable_timeout=true`, proving the deny does not block the supported arm mechanism.
-
 ## Automated validation
 
 `tests/fm-arm-pretool-check.test.sh` owns the adversarial acceptance matrix.
 Every row runs through Codex-shaped stdin, Claude-shaped stdin, Grok-shaped stdin, OpenCode-shaped CLI, and Pi-shaped CLI entry forms.
 The suite also verifies real newline bytes, direct classifier reason codes, comments, heredoc data, malformed and unsupported protected syntax, constructed dynamic payloads, malformed transport fail-open behavior, missing runtime fail-open behavior, output shapes, and exact adapter field forwarding plus exit-2 mapping.
-`tests/fm-primary.test.sh` verifies that the managed Kimi plugin registers the shared Claude-shaped checker as a blockable PreToolUse hook.
 
 Run:
 

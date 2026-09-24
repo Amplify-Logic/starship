@@ -233,7 +233,7 @@ A silent bootstrap section needs no action; for any printed actionable diagnosti
 Load `harness-adapters` before every spawn or recovery and before trust handling, skill invocation, interrupt, exit, resume, or adapter verification.
 The verified harnesses are `claude`, `codex`, `opencode`, `pi`, `pi-signed`, `grok`, `kimi`, `cursor`, and `omp`, plus `muse`, `gemini`, `rovo`, `agy`, and this fork's `prime-agent` for crewmates and scouts only; never dispatch on an unverified adapter.
 `prime-agent` is worker-only, and its daemon persistence means a dead pane is not a stopped worker.
-This fork also certifies `cursor` and `kimi-k3` PRIMARY profiles through `bin/fm-primary.sh`, and one role never implies the other; each harness reference owns its version evidence.
+This fork also certifies a `cursor` PRIMARY profile through `bin/fm-primary.sh`, and one role never implies the other; each harness reference owns its version evidence.
 If static `config/crew-harness` or `config/secondmate-harness` names an unverified adapter, report it and fall back only to a verified adapter rather than launching it.
 
 `docs/configuration.md` owns dispatch-profile and runtime-backend schemas, `bin/fm-dispatch-select.sh` owns this fork's selector mechanics, `bin/fm-harness.sh` owns static resolution, and `bin/fm-spawn.sh` owns launch flags and fail-closed validation.

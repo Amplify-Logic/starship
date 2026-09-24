@@ -51,10 +51,6 @@
 #   opencode      OPENCODE_CONFIG_CONTENT={"permission":{"*":"allow"}}
 #                 opencode
 #   grok          grok --permission-mode bypassPermissions
-#   kimi-k3       kimi --model kimi-code/k3 --yolo
-#                 Inside tmux, the launcher adds a detached one-row companion
-#                 that renders docs/status-bar.md without replacing Kimi's
-#                 native footer or controls.
 #   cursor-grok   agent --yolo --model cursor-grok-4.6-high
 #                 Cursor has no effort flag; the tier is a model-id suffix.
 #                 It has no context-window flag either: see "Context window"
@@ -95,7 +91,7 @@
 #     compaction.reserveTokens, and reserveTokens exists only in a settings file.
 #   cursor-grok  nothing is passed. The Cursor CLI exposes no context or
 #     compaction setting.
-# opencode, grok, and kimi-k3 are outside that order and are unchanged.
+# opencode and grok are outside that order and are unchanged.
 #
 # --account <name> is the ONLY extra argument a profile accepts; every other one
 # still refuses, because that refusal exists to keep resume arguments away from
@@ -103,7 +99,7 @@
 # It pins the launch to a NAMED VENDOR ACCOUNT: the Claude profiles take a claude
 # account, exported as CLAUDE_CONFIG_DIR, and the Codex-backed profiles codex and
 # astra take a codex account, exported as CODEX_HOME. A profile whose vendor has no account concept (pi,
-# opencode, grok, kimi-k3, cursor-grok, cursor-grok45) refuses --account rather
+# opencode, grok, cursor-grok, cursor-grok45) refuses --account rather
 # than ignoring it.
 # Accounts are named in local, gitignored config/accounts.json (docs/configuration.md
 # owns that schema) and their homes are DERIVED as data/accounts/<vendor>/<name>,
@@ -134,8 +130,7 @@
 # Two seats can share one email address, so an email is not enough to tell them
 # apart; the org and plan are. That is what an account's expect value is for.
 #
-# Aliases: claude -> claude-fable; opus -> claude-opus; kimi -> kimi-k3;
-# cursor -> cursor-grok. There is no alias for cursor-grok45; name it in full so
+# Aliases: claude -> claude-fable; opus -> claude-opus; cursor -> cursor-grok. There is no alias for cursor-grok45; name it in full so
 # the previous Grok generation is never launched by accident.
 # The aliases are primary-launch conveniences only.
 # They never change config/crew-harness, config/secondmate-harness, dispatch
@@ -155,32 +150,6 @@
 # When local config/primary-handoff is present and enabled, a real launch also
 # writes state/.primary-active for bin/fm-primary-handoff.sh; disabled or absent
 # config leaves that marker unwritten (docs/primary-handoff.md).
-#
-# Kimi is verified as a PRIMARY here and, separately, as a WORKER via
-# fm-spawn --harness kimi (docs/kimi-harness.md, 2026-07-23).
-# Two builds are accepted without a warning, and they are deliberately different
-# values: KIMI_CERTIFIED_VERSION is the last full primary certification, which is
-# what docs/toolchain-manifest.tsv's kimi row transcribes, and
-# KIMI_VALIDATED_VERSION is the newer build whose primary hook mechanics were
-# re-verified without a full certification. Both are named below, and the launch
-# check is set membership rather than one equality: once those two legitimately
-# differ, a single exact-match test cannot express "unevidenced" and would always
-# report one of the two accepted builds as unevidenced.
-# Any other installed version WARNS and launches anyway; it does not block.
-# Kimi ships a self-updater, so an exact-equality gate in front of it turned
-# every publisher release into an unscheduled outage of the certified primary
-# rather than a merely uncertified one - the same reasoning bin/fm-toolchain-lib.sh
-# applies fleet-wide. The functional gate that remains is `kimi doctor` against
-# the managed home, which fails the launch when the integration is actually
-# broken instead of when a version string merely moved.
-# The launcher builds a persistent isolated KIMI_CODE_HOME under this Firstmate
-# home's data directory.
-# It copies the selected source config, links only required authentication and
-# user-resource paths, and installs a managed Firstmate plugin there.
-# Kimi's ordinary SessionStart hook discards stdout; the plugin's native
-# sessionStart.skill is the model-context nudge on startup, resume, and /new.
-# Its hooks provide blockable PreToolUse and Stop integration.
-# The source Kimi home and its live config are never edited.
 #
 # Cursor CLI primary support records the empirically certified agent version
 # below and in docs/cursor-harness.md; any other build warns and launches.
@@ -234,17 +203,6 @@ DATA=${FM_DATA_OVERRIDE:-$FM_HOME/data}
 CONFIG=${FM_CONFIG_OVERRIDE:-$FM_HOME/config}
 # shellcheck source=bin/fm-account-lib.sh
 . "$SCRIPT_DIR/fm-account-lib.sh"
-# The two Kimi builds this repo carries primary evidence for; running either one
-# is quiet, anything else warns and still launches. Both are literal constants,
-# never parsed from docs/toolchain-manifest.tsv, because the launcher does not
-# otherwise read that file. `kimi doctor` against the managed home is the
-# functional gate that can still fail a launch.
-# Last full primary certification, transcribed by the manifest's kimi row.
-KIMI_CERTIFIED_VERSION=0.27.0
-# Newest build with primary hook evidence but no full certification
-# (docs/kimi-harness.md), so it reads differently from the certified build above
-# on purpose rather than as a drift bug.
-KIMI_VALIDATED_VERSION=0.31.1
 # Cursor's exact-match BLOCK existed only because its Stop turn-end hook was
 # unverified on 2026.07.20-8cc9c0b, which made drift there unsafe rather than
 # merely uncertified. Stop now fires (docs/cursor-harness.md, re-certified
@@ -625,7 +583,7 @@ mark_current_surface() {
 }
 
 # Companion status rows for the profiles whose CLI exposes no third-party
-# status-bar API that can carry Firstmate's fleet fields (Kimi, Codex, Astra).
+# status-bar API that can carry Firstmate's fleet fields (Codex, Astra).
 # Claude, Pi and Cursor use their own native surfaces instead.
 #
 # The companion is presentation only: if the session provider refuses the
@@ -633,7 +591,6 @@ mark_current_surface() {
 # than failing the primary.
 companion_status_profile() {  # -> "adapter<TAB>model<TAB>effort", or 1
   case "$PROFILE" in
-    kimi-k3) printf 'kimi\tkimi-code/k3\t--' ;;
     codex) printf 'codex\tcodex\t--' ;;
     astra) printf 'codex\tgpt-6-astra\t%s' "${ASTRA_EFFORT:---}" ;;
     *) return 1 ;;
@@ -770,113 +727,6 @@ EOF
   return 0
 }
 
-prepare_kimi_home() {
-  local source_home managed plugin skills installed source_installed now item tmp_installed tmp_merged tmp_plugin path
-  source_home=${FM_KIMI_SOURCE_HOME:-${KIMI_CODE_HOME:-$HOME/.kimi-code}}
-  managed=${FM_KIMI_PRIMARY_HOME:-$DATA/primary/kimi-k3}
-  [ "$source_home" != "$managed" ] || die "managed Kimi home must differ from its source home"
-  [ -f "$source_home/config.toml" ] || die "Kimi source config is missing: $source_home/config.toml"
-  require_command jq
-  for path in "$managed" "$managed/plugins" "$managed/plugins/managed" \
-    "$managed/plugins/managed/firstmate-primary"; do
-    [ ! -L "$path" ] || die "managed Kimi integration path is an unrelated symlink: $path"
-  done
-  mkdir -p "$managed" "$managed/plugins/managed/firstmate-primary/skills/firstmate-session-start" \
-    || die "could not create managed Kimi primary home: $managed"
-  chmod 0700 "$managed" 2>/dev/null || true
-  plugin="$managed/plugins/managed/firstmate-primary"
-  skills="$plugin/skills/firstmate-session-start"
-  installed="$managed/plugins/installed.json"
-  for path in "$managed/config.toml" "$managed/tui.toml" "$installed" \
-    "$plugin/kimi.plugin.json" "$skills/SKILL.md"; do
-    [ ! -L "$path" ] || die "managed Kimi integration file is an unrelated symlink: $path"
-  done
-  cp "$source_home/config.toml" "$managed/config.toml" \
-    || die "could not copy Kimi config into the managed primary home"
-  [ ! -f "$source_home/tui.toml" ] || cp "$source_home/tui.toml" "$managed/tui.toml" \
-    || die "could not copy Kimi TUI preferences into the managed primary home"
-
-  for item in oauth credentials device_id bin skills mcp.json; do
-    [ -e "$source_home/$item" ] || [ -L "$source_home/$item" ] || continue
-    if [ -L "$managed/$item" ]; then
-      [ "$(readlink "$managed/$item" 2>/dev/null)" = "$source_home/$item" ] \
-        || die "managed Kimi path is an unrelated symlink: $managed/$item"
-    elif [ -e "$managed/$item" ]; then
-      case "$item" in
-        oauth|credentials|device_id) die "managed Kimi authentication path is not the expected symlink: $managed/$item" ;;
-        *) continue ;;
-      esac
-    else
-      ln -s "$source_home/$item" "$managed/$item" \
-        || die "could not link Kimi resource into the managed primary home: $item"
-    fi
-  done
-
-  tmp_plugin=$(mktemp "$plugin/.manifest.XXXXXX") \
-    || die "could not stage the managed Kimi plugin manifest"
-  jq -n \
-    --arg arm "'$FM_ROOT/bin/fm-arm-pretool-check.sh' --claude" \
-    --arg cd "'$FM_ROOT/bin/fm-cd-pretool-check.sh' --claude" \
-    --arg stop "'$FM_ROOT/bin/fm-turnend-guard.sh'" \
-    '{
-      name: "firstmate-primary",
-      version: "1",
-      description: "Firstmate primary lifecycle integration",
-      skills: "./skills/",
-      sessionStart: {skill: "firstmate-session-start"},
-      hooks: [
-        {event: "PreToolUse", matcher: "Bash", command: $arm, timeout: 10},
-        {event: "PreToolUse", matcher: "Bash", command: $cd, timeout: 10},
-        {event: "Stop", command: $stop, timeout: 30}
-      ]
-    }' > "$tmp_plugin" \
-    || { rm -f "$tmp_plugin"; die "could not render the managed Kimi plugin manifest"; }
-  mv "$tmp_plugin" "$plugin/kimi.plugin.json" \
-    || { rm -f "$tmp_plugin"; die "could not publish the managed Kimi plugin manifest"; }
-  cat > "$skills/SKILL.md" <<'EOF'
----
-name: firstmate-session-start
-description: Required Firstmate primary session initialization.
----
-Run `bin/fm-session-start.sh` now, exactly once, before executing any other instructions.
-EOF
-  now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-  tmp_installed=$(mktemp "$managed/plugins/.installed.XXXXXX") \
-    || die "could not stage the managed Kimi plugin registry"
-  jq -n --arg root "$plugin" --arg installed "$now" --arg source "$FM_ROOT" '
-    {
-      version: 1,
-      plugins: [{
-        id: "firstmate-primary",
-        root: $root,
-        source: "local-path",
-        enabled: true,
-        installedAt: $installed,
-        originalSource: $source
-      }]
-    }
-  ' > "$tmp_installed" \
-    || { rm -f "$tmp_installed"; die "could not render the managed Kimi plugin registry"; }
-  source_installed="$source_home/plugins/installed.json"
-  if [ -f "$source_installed" ]; then
-    tmp_merged=$(mktemp "$managed/plugins/.installed.XXXXXX") \
-      || { rm -f "$tmp_installed"; die "could not stage the merged Kimi plugin registry"; }
-    jq --slurpfile managed "$tmp_installed" '
-      .version = (.version // 1)
-      | .plugins = (((.plugins // []) | map(select(.id != "firstmate-primary"))) + $managed[0].plugins)
-    ' "$source_installed" > "$tmp_merged" \
-      || { rm -f "$tmp_installed" "$tmp_merged"; die "could not merge the source and managed Kimi plugin registries"; }
-    rm -f "$tmp_installed"
-    mv "$tmp_merged" "$installed" \
-      || { rm -f "$tmp_merged"; die "could not publish the managed Kimi plugin registry"; }
-  else
-    mv "$tmp_installed" "$installed" \
-      || { rm -f "$tmp_installed"; die "could not publish the managed Kimi plugin registry"; }
-  fi
-  chmod 0600 "$managed/config.toml" "$installed" 2>/dev/null || true
-  KIMI_PRIMARY_HOME=$managed
-}
-
 verify_integrations() {
   case "$PROFILE" in
     pi)
@@ -916,10 +766,6 @@ verify_integrations() {
       require_file .grok/hooks/fm-primary-pretool-check.json
       require_file .grok/hooks/fm-primary-cd-check.json
       require_file .grok/hooks/fm-primary-turnend-guard.json
-      ;;
-    kimi-k3)
-      require_file bin/fm-status-bar.sh
-      prepare_kimi_home
       ;;
     cursor-grok|cursor-grok45)
       require_file .claude/settings.json
@@ -972,12 +818,11 @@ done
 case "$PROFILE" in
   claude) PROFILE=claude-fable ;;
   opus) PROFILE=claude-opus ;;
-  kimi) PROFILE=kimi-k3 ;;
   cursor) PROFILE=cursor-grok ;;
 esac
 case "$PROFILE" in
-  pi|claude-fable|claude-opus|codex|astra|opencode|grok|kimi-k3|cursor-grok|cursor-grok45) ;;
-  *) die "unknown or unverified primary profile '$PROFILE' (verified: pi claude-fable claude-opus codex astra opencode grok kimi-k3 cursor-grok cursor-grok45)" ;;
+  pi|claude-fable|claude-opus|codex|astra|opencode|grok|cursor-grok|cursor-grok45) ;;
+  *) die "unknown or unverified primary profile '$PROFILE' (verified: pi claude-fable claude-opus codex astra opencode grok cursor-grok cursor-grok45)" ;;
 esac
 
 validate_visible_prefix
@@ -993,7 +838,6 @@ case "$PROFILE" in
   astra) CLI=codex ;;
   opencode) CLI=opencode ;;
   grok) CLI=grok ;;
-  kimi-k3) CLI=${FM_KIMI_BIN:-kimi} ;;
   cursor-grok|cursor-grok45) CLI=${FM_CURSOR_BIN:-agent} ;;
 esac
 require_command "$CLI"
@@ -1002,23 +846,6 @@ require_command "$CLI"
 # one. With no pin resolved this is a no-op and the environment is untouched.
 [ -z "$ACCOUNT_HOME" ] || export "$ACCOUNT_ENV=$ACCOUNT_HOME"
 verify_integrations
-
-if [ "$PROFILE" = kimi-k3 ]; then
-  version=$("$CLI" --version 2>/dev/null | head -1)
-  case $version in
-    "$KIMI_CERTIFIED_VERSION")
-      printf 'fm-primary: Kimi %s is the certified primary build (docs/kimi-harness.md)\n' \
-        "$KIMI_CERTIFIED_VERSION" >&2 ;;
-    "$KIMI_VALIDATED_VERSION")
-      printf 'fm-primary: Kimi %s is the newest-evidence build: hooks re-verified 2026-08-04, not a full certification (docs/kimi-harness.md)\n' \
-        "$KIMI_VALIDATED_VERSION" >&2 ;;
-    *)
-      printf 'fm-primary: Kimi primary carries evidence for %s (certified) and %s (newest evidence); found %s (docs/kimi-harness.md) - launching anyway\n' \
-        "$KIMI_CERTIFIED_VERSION" "$KIMI_VALIDATED_VERSION" "${version:-unknown}" >&2 ;;
-  esac
-  KIMI_CODE_HOME="$KIMI_PRIMARY_HOME" "$CLI" doctor >/dev/null 2>&1 \
-    || die "managed Kimi primary integration failed 'kimi doctor'"
-fi
 
 case "$PROFILE" in cursor-grok|cursor-grok45)
   version=$("$CLI" --version 2>/dev/null | head -1 | tr -d '\r')
@@ -1088,9 +915,6 @@ case "$PROFILE" in
   grok)
     argv=(grok --permission-mode bypassPermissions)
     ;;
-  kimi-k3)
-    argv=("$CLI" --model kimi-code/k3 --yolo)
-    ;;
   cursor-grok)
     argv=("$CLI" --yolo --model cursor-grok-4.6-high)
     ;;
@@ -1103,7 +927,6 @@ if [ "${FM_PRIMARY_DRY_RUN:-0}" = 1 ]; then
   printf 'root=%s\n' "$PWD"
   printf 'profile=%s\n' "$PROFILE"
   printf 'role=%s\n' "$role"
-  [ "$PROFILE" != kimi-k3 ] || printf 'KIMI_CODE_HOME=%s\n' "$KIMI_PRIMARY_HOME"
   [ -z "${CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP:-}" ] || \
     printf 'CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=%s\n' "$CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP"
   [ -z "${CLAUDE_CODE_AUTO_COMPACT_WINDOW:-}" ] || \
@@ -1159,11 +982,6 @@ install_primary_status_bar
 case "$PROFILE" in
   opencode)
     export OPENCODE_CONFIG_CONTENT='{"permission":{"*":"allow"}}'
-    exec "${argv[@]}"
-    ;;
-  kimi-k3)
-    export KIMI_CODE_HOME=$KIMI_PRIMARY_HOME
-    export FM_PRIMARY_HARNESS=kimi
     exec "${argv[@]}"
     ;;
   cursor-grok|cursor-grok45)

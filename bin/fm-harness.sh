@@ -78,11 +78,9 @@ CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 # decides whether that claim survives contradicting ancestry.
 harness_marker() {
   # FM_PRIMARY_HARNESS is a Firstmate-OWNED launch marker injected by
-  # bin/fm-primary.sh, the same shape as FM_OMP_HARNESS below. Kimi 0.27.0
-  # publishes no unambiguous native marker of its own, and a Cursor primary
+  # bin/fm-primary.sh, the same shape as FM_OMP_HARNESS below. A Cursor primary
   # does not clear an inherited CLAUDECODE, so the launcher states the identity
   # it just established rather than leaving it to be inferred.
-  [ "${FM_PRIMARY_HARNESS:-}" = "kimi" ] && { echo kimi; return; }
   [ "${FM_PRIMARY_HARNESS:-}" = "cursor" ] && { echo cursor; return; }
   # prime-agent (Prime Intellect) is a hard fork of pi and inherits pi's
   # PI_CODING_AGENT=true for its children, so it must be tested BEFORE the

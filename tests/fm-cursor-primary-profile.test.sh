@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Cursor and Kimi primary-profile detection, and the worker-boundary regression.
+# Cursor primary-profile detection, and the worker-boundary regression.
 #
 # bin/fm-primary.sh establishes the primary's identity at the launch boundary and
-# states it in FM_PRIMARY_HARNESS, because Kimi publishes no unambiguous native
-# marker and a Cursor primary does not clear an inherited CLAUDECODE. That claim
+# states it in FM_PRIMARY_HARNESS, because a Cursor primary does not clear an
+# inherited CLAUDECODE. That claim
 # is observable through `fm-harness.sh marker`; `detect_own` deliberately lets a
 # contradicting harness ANCESTOR outrank it, so a variable leaked into an
 # unrelated pane cannot rename that session. The detect_own case below builds
@@ -21,8 +21,6 @@ test_primary_marker_states_the_launched_identity() {
   local out
   out=$(FM_PRIMARY_HARNESS=cursor CLAUDECODE=1 "$ROOT/bin/fm-harness.sh" marker)
   [ "$out" = cursor ] || fail "Cursor primary marker lost to an inherited CLAUDECODE (got '$out')"
-  out=$(FM_PRIMARY_HARNESS=kimi CLAUDECODE=1 "$ROOT/bin/fm-harness.sh" marker)
-  [ "$out" = kimi ] || fail "Kimi primary marker lost to an inherited CLAUDECODE (got '$out')"
   pass "fm-harness: the primary launcher's established identity survives an inherited foreign marker"
 }
 

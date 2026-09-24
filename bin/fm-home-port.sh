@@ -808,7 +808,7 @@ HARNESS_LOGINS (interactive; cannot be automated):
   2. claude                  - Claude Code login (alternate-account isolation under state/ if used)
   3. agent / cursor-agent    - Cursor CLI login
   4. codex                   - Codex CLI login
-  5. kimi                    - Kimi Code login (if used as primary)
+  5. kimi                    - Kimi Code login (if used for workers)
   6. pi                      - Pi login (if used)
 
 CLAUDE_CONFIG_DIR:

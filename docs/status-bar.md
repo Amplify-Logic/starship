@@ -134,14 +134,6 @@ Pi 0.80.10 exposes no provider-quota value to this footer, so quota is `--`.
 The extension uses Pi TUI's `truncateToWidth()` and a one-second cached refresh, and it does not replace the editor or keyboard controls.
 The extension is inert unless `bin/fm-primary.sh` supplied `FM_PRIMARY_HARNESS=pi`.
 
-### Kimi Code/K3
-
-Kimi Code 0.27.0 has a native status bar but no supported plugin or configuration API for third-party status content.
-Its plugin surface provides skills, MCP servers, and lifecycle hooks, while the native footer remains internal.
-`bin/fm-primary.sh kimi-k3` therefore attaches the shared companion pane described under "Shared companion surface" below, which leaves Kimi's own footer and controls unchanged.
-Kimi's model is known from the guarded K3 profile, while effort, context, quota, and session cost use `--` because Kimi does not expose them to the plugin or launcher.
-Outside a verified companion provider there is no non-invasive persistent Kimi surface, so the launcher leaves the native TUI untouched rather than claiming false parity.
-
 ### Cursor CLI
 
 Cursor CLI 2026.09.08 exposes a native custom status line: a single `statusLine` object of
@@ -268,14 +260,14 @@ rather than left out, but neither binary is installed on this machine and neithe
 No native status-line, footer, or plugin surface has been examined for either one, and no integration for
 either has been exercised, so nothing is claimed about what they do or do not expose.
 Their prospective surface is the shared companion below, which is provider-driven rather than
-harness-driven and would therefore attach the same way it does for Kimi, Codex, and Astra - but that has
+harness-driven and would therefore attach the same way it does for Codex and Astra - but that has
 not been demonstrated for either profile, and `companion_status_profile` deliberately does not yet list
 them, so today a guarded `opencode` or `grok` primary leaves its native TUI untouched.
 These two rows stay unverified until the binaries are present and probed; they are not waived.
 
 ### Shared companion surface
 
-Kimi, Codex, and Astra share one companion implementation rather than three.
+Codex and Astra share one companion implementation rather than two.
 `bin/fm-status-bar.sh --follow-pane <pane> --follow-backend <tmux|herdr>` runs a one-row loop that disables
 autowrap, clips the canonical line instead of wrapping it, and exits as soon as its exact primary pane is gone.
 It clears the whole pane once at startup, because `herdr pane run` echoes the launch command into the pane's
@@ -422,8 +414,8 @@ Chrome mode is also off entirely for tmux, and refuses a chrome pane that is the
 
 Claude's earlier prototype is local to the primary home's `.claude/settings.local.json`.
 After this change lands, remove only that local `statusLine` entry so it no longer overrides tracked `.claude/settings.json`.
-Do not copy a renderer into `state/` and do not edit `~/.claude`, `~/.kimi-code`, or `~/.pi`.
-The next guarded Claude, Pi, or Kimi primary launch loads the tracked integration automatically.
+Do not copy a renderer into `state/` and do not edit `~/.claude` or `~/.pi`.
+The next guarded Claude or Pi primary launch loads the tracked integration automatically.
 
 Codex's native half needs no repeat edit once the `[tui]` block above is in `$CODEX_HOME/config.toml`,
 but a session must have LOADED it: `/statusline` inside a running TUI applies the selection to that
@@ -443,9 +435,8 @@ Editing `~/.cursor` by hand is still out of scope, and no other file under it is
 Rows captured before 2026-09-12 show the fleet group as `🚢<active> ⏸<paused> ⚠<attention>`, and rows captured before 2026-09-21 show it as `🚢<working> 🧪<validating> ⏸<paused> ⚠<attention> 📋<records>`.
 That was the field shape on the day each of those runs was observed; the current shape is the one in the canonical line above, and those older captures are kept as the evidence they were rather than rewritten.
 
-The adapter contract was checked on 2026-07-21 with Claude Code's project status-line payload shape, Kimi Code 0.27.0, Pi 0.80.10, Cursor CLI 2026.07.17-3e2a980, and tmux 3.6a.
+The adapter contract was checked on 2026-07-21 with Claude Code's project status-line payload shape, Pi 0.80.10, Cursor CLI 2026.07.17-3e2a980, and tmux 3.6a.
 The installed Pi documentation and example at `examples/extensions/custom-footer.ts` show `ctx.ui.setFooter()`, `render(width)`, and `truncateToWidth()`.
-The installed Kimi help and public 0.27.0 plugin documentation expose lifecycle hooks but no footer renderer.
 On that date the installed Cursor CLI 2026.07.17-3e2a980 exposed plugin directories but no status-line
 configuration or footer renderer, which is why the contract originally excluded Cursor from display.
 
@@ -462,7 +453,6 @@ Nothing was run on the project's Linux workstation, so no Linux behavior is clai
 
 ```sh
 pi --version
-kimi --version
 agent --version
 bash tests/fm-status-bar.test.sh
 bash tests/fm-primary.test.sh
@@ -514,7 +504,6 @@ Observed version output on 2026-07-21:
 
 ```text
 0.80.10
-0.27.0
 2026.07.17-3e2a980
 ```
 
@@ -568,28 +557,6 @@ The TUI listed `fm-primary-status-bar.ts` under loaded extensions and rendered:
 ```
 
 A 48-column rerun stayed on one row and ended at `👁 NO-WA`, confirming that Pi truncates the ANSI line to the supplied render width instead of wrapping it.
-
-Kimi's non-native fallback was exercised in a real 140-column one-row tmux companion:
-
-```sh
-tmp_root=$(mktemp -d "${TMPDIR:-/tmp}/fm-status-kimi-live.XXXXXX")
-session="fm-status-kimi-live-$$"
-mkdir -p "$tmp_root/home/state"
-tmux new-session -d -s "$session" -x 140 -y 12 'sleep 8'
-main_pane=$(tmux display-message -p -t "$session":0.0 '#{pane_id}')
-status_pane=$(tmux split-window -d -P -F '#{pane_id}' -v -l 1 -t "$main_pane" \
-  "env FM_PRIMARY_HARNESS=kimi FM_HOME='$tmp_root/home' FM_STATUS_BAR_INTERVAL=1 '$PWD/bin/fm-status-bar.sh' --adapter kimi --model kimi-code/k3 --effort -- --follow-pane '$main_pane'")
-sleep 2
-tmux capture-pane -p -t "$status_pane" -S -1
-tmux kill-session -t "$session" 2>/dev/null || true
-rm -rf "$tmp_root"
-```
-
-Observed output:
-
-```text
-⚓ kimi-code/k3·-- │ 🧠-- ⚡-- │ 🚢0 ⏸0 ⚠0 │ 👁 NO-WATCH -- │ $-- │ 💤--
-```
 
 `tests/fm-status-bar.test.sh` passed canonical order, threshold, placeholder, supervision-alert, Claude-payload, Cursor-payload, account-role, control-byte sanitization, exact-pane cleanup on both companion providers, unverified-provider refusal, one-time pane clear, blank-free refresh, per-refresh row publication, and guarded-installation cases.
 `tests/fm-primary.test.sh` passed the guarded tmux and herdr companion cases - including the separated refused-split and split-named-no-pane outcomes, and cleanup of only the exact pane the split returned - alongside all existing launcher cases.

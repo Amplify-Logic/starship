@@ -8,8 +8,8 @@
 #     certified version, evidence pointer, and rationale.
 #   - Several drifted runtimes in one manifest each get their own line. The
 #     fixture that covers this is synthetic, not a snapshot of live reality:
-#     Claude 2.1.220 against 2.1.217, Codex 0.144.6 against 0.144.4, and Kimi
-#     0.31.1 against 0.27.0.
+#     Claude 2.1.220 against 2.1.217, Codex 0.144.6 against 0.144.4, and Pi
+#     0.81.0 against 0.80.10.
 #   - Silent for a runtime whose installed version matches.
 #   - Silent for an absent binary (MISSING already owns that) and for a banner
 #     with no parseable version.
@@ -17,8 +17,6 @@
 #   - Version parsing handles every real banner shape in the manifest.
 #   - Missing manifest is silent.
 #   - The tracked manifest is well formed and every evidence pointer resolves.
-#   - bin/fm-primary.sh's KIMI_CERTIFIED_VERSION still transcribes the kimi row's
-#     certified column.
 # shellcheck disable=SC2016
 set -u
 
@@ -68,11 +66,11 @@ test_reports_one_line_per_drifted_runtime() {
   w=$(new_world three-gaps)
   stub_runtime "$w/bin" claude '2.1.220 (Claude Code)'
   stub_runtime "$w/bin" codex 'codex-cli 0.144.6'
-  stub_runtime "$w/bin" kimi '0.31.1'
+  stub_runtime "$w/bin" pi '0.81.0'
   write_manifest "$w/manifest.tsv" \
     'claude|claude|2.1.217|subagent-guard deny keys certified here|docs/subagent-guard.md' \
     'codex|codex|0.144.4|native SessionStart injection certified here|docs/sessionstart-nudge.md' \
-    'kimi|kimi|0.27.0|the primary launcher warns on drift instead of blocking|docs/kimi-harness.md'
+    'pi|pi|0.80.10|primary turn-end extension certified here|docs/verification/supervision.md'
   out=$(
     PATH="$w/bin:/usr/bin:/bin" FM_TOOLCHAIN_MANIFEST="$w/manifest.tsv" \
       bash -c '. "$0"; fm_toolchain_check /unused' "$ROOT/bin/fm-toolchain-lib.sh"
@@ -84,9 +82,9 @@ test_reports_one_line_per_drifted_runtime() {
     'TOOLCHAIN_DRIFT: codex installed 0.144.6, certified 0.144.4 (docs/sessionstart-nudge.md)' \
     "Codex drift was not reported"
   assert_contains "$out" \
-    'TOOLCHAIN_DRIFT: kimi installed 0.31.1, certified 0.27.0 (docs/kimi-harness.md)' \
-    "Kimi drift was not reported"
-  assert_contains "$out" 'the primary launcher warns on drift instead of blocking' \
+    'TOOLCHAIN_DRIFT: pi installed 0.81.0, certified 0.80.10 (docs/verification/supervision.md)' \
+    "Pi drift was not reported"
+  assert_contains "$out" 'primary turn-end extension certified here' \
     "the drift line dropped the manifest rationale"
   [ "$(printf '%s\n' "$out" | grep -c '^TOOLCHAIN_DRIFT: ')" = 3 ] \
     || fail "expected exactly three drift lines, got: $out"
@@ -159,7 +157,6 @@ test_parses_every_real_banner_shape() {
   done <<'EOF'
 2.1.220 (Claude Code)|2.1.220
 codex-cli 0.144.6|0.144.6
-0.31.1|0.31.1
 2026.07.23-e383d2b|2026.07.23-e383d2b
 0.80.10|0.80.10
 grok 0.2.103 (89c3d36fb6f1) [stable]|0.2.103
@@ -192,30 +189,6 @@ test_tracked_manifest_is_well_formed() {
   done < "$manifest"
   [ "$rows" -ge 3 ] || fail "expected at least three manifest rows, got $rows"
   pass "the tracked manifest is well formed and every certified version is evidenced"
-}
-
-# bin/fm-primary.sh's KIMI_CERTIFIED_VERSION is a hand-copied second copy of the
-# kimi row's certified column, and a version constant silently drifting from its
-# source is the exact failure this manifest exists to prevent, so the
-# transcription is proved here instead of parsed at launch time.
-# KIMI_VALIDATED_VERSION has no manifest counterpart and is deliberately free to
-# differ, so it gets no such guard. This lives in the manifest's own suite so a
-# manifest-only bump selects it, which the launcher's suite would not.
-test_kimi_certified_constant_matches_manifest() {
-  local constant certified
-  constant=$(sed -n 's/^KIMI_CERTIFIED_VERSION=\(.*\)$/\1/p' "$ROOT/bin/fm-primary.sh")
-  [ -n "$constant" ] || fail "bin/fm-primary.sh no longer defines KIMI_CERTIFIED_VERSION"
-  # Match the row by its tab-separated runtime column, never a loose substring,
-  # so a mention of kimi elsewhere in the manifest cannot satisfy this.
-  certified=$(awk -F'\t' '
-    /^#/ { next }
-    $1 == "kimi" { print $3; found = 1 }
-    END { exit !found }
-  ' "$ROOT/docs/toolchain-manifest.tsv") \
-    || fail "docs/toolchain-manifest.tsv has no kimi row to transcribe"
-  [ "$constant" = "$certified" ] \
-    || fail "KIMI_CERTIFIED_VERSION is $constant but the manifest's kimi certified column is $certified"
-  pass "bin/fm-primary.sh's KIMI_CERTIFIED_VERSION transcribes the manifest's kimi certified column"
 }
 
 test_bootstrap_wires_the_drift_line() {
@@ -257,9 +230,9 @@ fi
 exit 0
 SH
   chmod +x "$fakebin/tasks-axi"
-  stub_runtime "$fakebin" kimi '0.31.1'
+  stub_runtime "$fakebin" pi '0.81.0'
   write_manifest "$w/manifest.tsv" \
-    'kimi|kimi|0.27.0|the primary launcher warns on drift instead of blocking|docs/kimi-harness.md'
+    'pi|pi|0.80.10|primary turn-end extension certified here|docs/verification/supervision.md'
 
   mkdir -p "$w/repo" "$w/home/config" "$w/home/state" "$w/home/data" "$w/home/projects"
   git -C "$w/repo" init -q
@@ -278,7 +251,7 @@ SH
   )
   rc=$?
   assert_contains "$out" \
-    'TOOLCHAIN_DRIFT: kimi installed 0.31.1, certified 0.27.0 (docs/kimi-harness.md)' \
+    'TOOLCHAIN_DRIFT: pi installed 0.81.0, certified 0.80.10 (docs/verification/supervision.md)' \
     "bootstrap did not surface the TOOLCHAIN_DRIFT line"
   [ "$rc" -eq 0 ] || fail "bootstrap must stay fail-open on drift; exited $rc"
   pass "bootstrap wires the TOOLCHAIN_DRIFT diagnostic and stays fail-open"
@@ -299,6 +272,5 @@ test_silent_when_manifest_is_missing
 test_fails_open_on_drift
 test_parses_every_real_banner_shape
 test_tracked_manifest_is_well_formed
-test_kimi_certified_constant_matches_manifest
 test_bootstrap_wires_the_drift_line
 test_skill_documents_the_drift_line

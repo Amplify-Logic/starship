@@ -243,7 +243,7 @@ Expect these, in order, on a fresh machine:
 2. **Claude Code** - run `claude` and complete its login; a second seat is a named account with its own derived home (`bin/fm-account.sh create claude <name>`, then log that home in separately - see `docs/configuration.md` "Vendor account pinning").
 3. **Cursor CLI** - run the Cursor agent CLI login for worker dispatch.
 4. **Codex** - run `codex` login when that pool is used.
-5. **Kimi Code** - login when using the Kimi primary.
+5. **Kimi Code** - login when using Kimi workers.
 6. **Pi** - login when using Pi.
 
 No script can complete those logins unattended.

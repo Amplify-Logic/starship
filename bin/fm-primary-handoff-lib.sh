@@ -103,7 +103,7 @@ fm_handoff_load_config() {
   ')
   FM_HANDOFF_CONTEXT_USED_THRESHOLD=$ctx_raw
   FM_HANDOFF_CHAIN_JSON=$(printf '%s\n' "$json" | jq -c '
-    (.chain // ["claude-fable","claude-opus","pi","codex","kimi-k3"])
+    (.chain // ["claude-fable","claude-opus","pi","codex"])
     | if type == "array" and length > 0 then . else empty end
   ' 2>/dev/null) || {
     fm_handoff_log "invalid config/primary-handoff: chain must be a non-empty array"
@@ -129,9 +129,8 @@ fm_handoff_normalize_profile() {
   case "$1" in
     claude) printf 'claude-fable\n' ;;
     opus) printf 'claude-opus\n' ;;
-    kimi) printf 'kimi-k3\n' ;;
     cursor) printf 'cursor-grok\n' ;;
-    pi|claude-fable|claude-opus|codex|astra|opencode|grok|kimi-k3|cursor-grok|cursor-grok45) printf '%s\n' "$1" ;;
+    pi|claude-fable|claude-opus|codex|astra|opencode|grok|cursor-grok|cursor-grok45) printf '%s\n' "$1" ;;
     *) return 1 ;;
   esac
 }
@@ -143,7 +142,6 @@ fm_handoff_profile_cli() {
     codex|astra) printf 'codex\n' ;;
     opencode) printf 'opencode\n' ;;
     grok) printf 'grok\n' ;;
-    kimi-k3) printf 'kimi\n' ;;
     cursor-grok|cursor-grok45) printf 'agent\n' ;;
     *) return 1 ;;
   esac

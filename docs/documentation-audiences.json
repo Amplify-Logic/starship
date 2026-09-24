@@ -561,10 +561,6 @@
       "audience": "agent-runtime"
     },
     {
-      "path": "docs/supervision-protocols/kimi.md",
-      "audience": "agent-runtime"
-    },
-    {
       "path": "docs/supervision-protocols/omp.md",
       "audience": "agent-runtime"
     },

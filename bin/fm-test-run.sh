@@ -766,7 +766,6 @@ tests/fm-home-summary-refresh.test.sh 39884
 tests/fm-inactive-reconcile.test.sh 51253
 tests/fm-install-herdr.test.sh 1224
 tests/fm-kimi-harness.test.sh 27597
-tests/fm-kimi-primary.test.sh 1227
 tests/fm-kimi-worker.test.sh 1203
 tests/fm-landed-completion-truth.test.sh 7052
 tests/fm-lint-workflows.test.sh 1950
@@ -1699,10 +1698,10 @@ families_for_changed_path() {
     tests/*)
       printf '%s\n' "__unmapped__:$path"
       ;;
-    # Standalone public prose (VISION, GROK_BOT) and .greptile/ code-review
-    # configuration carry no executable surface, so they have no test
-    # ownership, exactly like README and docs beside them.
-    README.md|VISION.md|GROK_BOT.md|LICENSE|assets/*|docs/*|.gitignore|.greptile/*)
+    # Standalone public prose (VISION, GROK_BOT, ONBOARDING) and .greptile/
+    # code-review configuration carry no executable surface, so they have no
+    # test ownership, exactly like README and docs beside them.
+    README.md|VISION.md|GROK_BOT.md|ONBOARDING.md|LICENSE|assets/*|docs/*|.gitignore|.greptile/*)
       ;;
     *)
       if [ -e "$path" ]; then

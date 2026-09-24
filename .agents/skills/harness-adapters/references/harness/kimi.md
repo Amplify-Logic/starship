@@ -42,8 +42,6 @@ The delivery-only spinner match covers the full moon-phase glyph set but remains
 
 Kimi is outside the primary turn-end guard scope.
 
-This fork does certify a Kimi PRIMARY profile that upstream does not carry: `../../../../bin/fm-primary.sh kimi-k3` launches it with `--yolo` and `FM_PRIMARY_HARNESS=kimi`, because Kimi publishes no unambiguous native identity marker of its own.
-Launch is quiet on Kimi Code 0.27.0 and the re-verified 0.31.1, warns on any build carrying no primary evidence, and blocks on none of them.
 Worker evidence - busy signature, interrupt, and the turn-end Stop hook - is dated 2026-07-23 and owned by `../../../../docs/kimi-harness.md`.
 `../../../docs/turnend-guard.md` owns its separate global hook surface and captain-approved crew wake integration.
 

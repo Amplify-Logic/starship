@@ -1,11 +1,9 @@
 # Kimi Code harness verification
 
-Empirical verification record for Kimi Code as a Firstmate harness.
-Primary support is certified separately through `bin/fm-primary.sh kimi-k3`.
-This document owns the WORKER certification record and the dated re-verification of primary hook mechanics on builds newer than that certification.
+Empirical verification record for Kimi Code as a Firstmate WORKER harness.
+This fork no longer carries a Kimi PRIMARY profile; Kimi is certified for crewmates and scouts only.
 
 The distilled operating facts live in the `harness-adapters` skill.
-Exact primary launch flags live in `bin/fm-primary.sh`.
 Worker dispatch through `bin/fm-spawn.sh` accepts `kimi` after the 2026-07-23 lab.
 
 **Worker lab: 2026-07-23** on:
@@ -19,41 +17,6 @@ Worker dispatch through `bin/fm-spawn.sh` accepts `kimi` after the 2026-07-23 la
 
 A prior partial lab on 2026-07-21 verified launch/autonomy, trust, composer, exit, and resume, but could not capture busy/interrupt/turn-end because every model call returned billing-cycle `403`.
 That quota blocker is gone (Allegretto plan; probe `kimi --prompt 'Reply with exactly OK.' --model kimi-code/k3` succeeded 2026-07-23).
-
-## Scope: primary certified; worker certified 2026-07-23
-
-Kimi primary support (session-start, PreToolUse seatbelt, Stop turn-end guard, watcher protocol) was certified on 2026-07-19 against 0.27.0.
-See `docs/architecture.md` and the four lifecycle guard docs for that evidence.
-Its primary hook mechanics were re-verified live on 0.31.1 on 2026-08-04; see [Primary hook mechanics on 0.31.1](#primary-hook-mechanics-on-0311-2026-08-04) below.
-
-## Primary hook mechanics on 0.31.1 (2026-08-04)
-
-Re-verified because the certified 0.27.0 build no longer exists on the captain's machine, which took the exact-match launch gate in `bin/fm-primary.sh` down with it.
-`bin/fm-primary.sh` no longer blocks on version equality.
-It accepts two evidenced builds quietly, the certified 0.27.0 in `KIMI_CERTIFIED_VERSION` and this build in `KIMI_VALIDATED_VERSION`, identifying each in one short line at launch.
-Only a build carrying neither kind of primary evidence warns, and even that one launches; `kimi doctor` against the managed home is the functional gate that can still fail a launch closed.
-
-| Component | Value |
-|---|---|
-| Kimi Code CLI (`kimi`) | `0.31.1` (`~/.kimi-code/bin/kimi-0.31.1`, sha256 `8f2403ed...c454fc`) |
-| Model | `kimi-code/k3` (TUI showed `Model: K3`, `Version: 0.31.1`, footer `yolo`) |
-| Isolation | Scratch `FM_HOME`, scratch Kimi source home, scratch managed home; the captain's `~/.kimi-code` was read through symlinks and never written |
-| Managed home | Built by `bin/fm-primary.sh`'s own `prepare_kimi_home` via `FM_KIMI_SOURCE_HOME` and `FM_KIMI_PRIMARY_HOME` |
-
-`kimi doctor` against the managed home passed: `All checked config files are valid.`
-
-Three mechanisms were exercised live, with the plugin's hook commands swapped for logging stubs so the probe never ran Firstmate's real guards.
-
-| Mechanism | Result | Evidence |
-|---|---|---|
-| sessionStart skill injection | PASS | The model reported `There's a system-reminder saying my first output this session must be exactly the token SESSIONSTART_SKILL_LOADED` and emitted that token instead of answering the user's prompt, so the managed plugin's `sessionStart.skill` still reaches model context. |
-| PreToolUse (Bash) | PASS | `PRETOOL_FIRED 17:17:59` logged when the model ran `echo probe-ok`, and the command was permitted. |
-| Stop turn-end | PASS | `STOP_FIRED` logged at `17:16:48` and `17:18:02`, once per completed turn. |
-
-The plugin manifest schema `bin/fm-primary.sh` writes (`sessionStart.skill` plus a `hooks` array) is still accepted unchanged on 0.31.1.
-
-One lab trap worth recording: `plugins/installed.json` stores an absolute `root`, so copying a managed home to a new path silently keeps loading the plugin from the original path.
-Rewrite that field when relocating a managed home, or the probe measures the wrong tree.
 
 Worker (crewmate/scout) certification is complete for the surfaces below on Kimi Code 0.27.0.
 
@@ -119,7 +82,6 @@ Moon-phase emoji spinners (`🌕`/`🌔`/...) also appear mid-turn but are not u
 
 Keystroke: `Ctrl+C` (`pane send-keys ... C-c`).
 Evidence: mid-turn pane printed `Interrupted by user`, `agent_status` returned to `idle`, and `pane process-info` still showed a live `kimi` / `kimi-code` process in the same pane.
-Matches the primary interrupt fact; now verified on the worker path as well.
 
 ### Crewmate turn-end hook (2026-07-23) - VERIFIED
 
@@ -147,8 +109,3 @@ That hook script is the sole writer of that config region; nothing else may edit
 
 `pane process-info` reported `name: kimi` and `argv0: kimi-code`.
 `bin/backends/tmux.sh` treats `*kimi*` as `alive`.
-
-## Primary pointer
-
-Primary-only certification and e2e evidence remain in `docs/architecture.md` (2026-07-19) plus `docs/turnend-guard.md`, `docs/arm-pretool-check.md`, `docs/sessionstart-nudge.md`, and `docs/cd-guard.md`.
-Primary facts are unchanged by this worker certification.

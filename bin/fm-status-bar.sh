@@ -5,22 +5,21 @@
 #   fm-status-bar.sh --adapter claude
 #   fm-status-bar.sh --adapter pi --model MODEL --effort LEVEL \
 #     --context-used PERCENT --quota-used PERCENT --cost USD
-#   fm-status-bar.sh --adapter kimi --model MODEL --effort LEVEL \
+#   fm-status-bar.sh --adapter codex --model MODEL --effort LEVEL \
 #     --follow-pane PANE [--follow-backend tmux|herdr]
 #
 # Claude mode reads the native statusLine JSON payload from stdin.
 # Cursor mode reads Cursor CLI's native statusLine JSON payload from stdin.
 # Pi supplies its native footer metrics as normalized arguments.
-# Kimi and Codex use --follow-pane for a companion row because neither exposes
-# a third-party status-bar API that can carry Firstmate's fleet fields.
+# Codex uses --follow-pane for a companion row because it exposes no
+# third-party status-bar API that can carry Firstmate's fleet fields.
 # --follow-backend selects the session provider that owns the companion pane:
 # tmux (default) or herdr. Herdr panes are addressed by HERDR_PANE_ID.
 #
 # The Codex companion supplies its own context and quota figures rather than
 # leaving them blank: bin/fm-codex-session-metrics-lib.sh binds to the exact
 # primary session behind the followed pane and resolves the account's binding
-# quota window. Kimi keeps "--" for both, because no equivalent source has been
-# verified for it. That library owns the mechanics, the separation that keeps an
+# quota window. That library owns the mechanics, the separation that keeps an
 # account-level allowance and a per-session reading from standing in for each
 # other, and the caching that keeps a one-second refresh off the provider.
 #
@@ -147,7 +146,7 @@ while [ "$#" -gt 0 ]; do
 done
 
 case "$ADAPTER" in
-  claude|pi|kimi|codex|cursor) ;;
+  claude|pi|codex|cursor) ;;
   *) exit 0 ;;
 esac
 case "$FOLLOW_BACKEND" in

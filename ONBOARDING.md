@@ -391,12 +391,11 @@ Once a tool is on your machine and logged in, your first mate will start choosin
 | **Cursor CLI** (`agent`) | Cheap, fast workers on Grok 4.5 / Composer | Cursor Pro |
 | **Codex** (`codex`) | Another strong worker; kept available for testing | OpenAI |
 | **Pi** (`pi`) | Worker, and the second-opinion checker path | Bring-your-own key |
-| **Kimi** (`kimi`) | Economical orchestrator and verified K3 worker | Moonshot |
+| **Kimi** (`kimi`) | Verified K3 worker | Moonshot |
 | **Grok** (`grok`) | Another orchestrator option | xAI |
 | **opencode** | Another worker option | Provider-dependent |
 
-Kimi can run the primary session and also take worker jobs via `fm-spawn --harness kimi` (K3 model).
-Install the current Kimi Code: the launcher never refuses a newer build over its version, and it prints one line at startup saying what evidence this repo has for the build you are running.
+Kimi takes worker jobs via `fm-spawn --harness kimi` (K3 model).
 
 If you later want a **second Claude login** (or a second OpenAI account) without disturbing your main one, your first mate names it in a local `config/accounts.json` and gives it its own isolated home, which you then log into and select per launch with `--account` - see [docs/configuration.md](docs/configuration.md) "Vendor account pinning".
 Each account is logged in on the machine that uses it - an account home is **never copied between machines** and never seeded from another account.

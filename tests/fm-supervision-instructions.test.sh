@@ -222,7 +222,7 @@ test_pi_snippet_uses_effective_extension_path() {
 # link relative to docs/supervision-protocols/ would point outside the repo.
 test_printed_paths_resolve_from_repo_root() {
   local harness out
-  for harness in claude codex cursor grok kimi omp opencode pi not-real; do
+  for harness in claude codex cursor grok omp opencode pi not-real; do
     out=$("$RENDER" --harness "$harness")
     assert_not_contains "$out" "](../" "$harness block printed a link relative to docs/supervision-protocols/"
   done

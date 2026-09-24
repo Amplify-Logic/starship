@@ -167,7 +167,7 @@ That marker is not a lock and never authorizes mutation.
 
 Auto-rotation via `check`/`run` only triggers the **quota** axis for quota-monitored providers: claude, codex, grok, and cursor.
 A cursor-grok primary is read from its cursor plan windows (`included_usage` and `auto_usage`), not from the model- or bot-scoped windows quota-axi also reports for that account.
-When the active primary is pi, kimi-k3, or opencode, no quota source exists, `min_remaining` reports `na`, and the quota axis never auto-hands-off.
+When the active primary is pi or opencode, no quota source exists, `min_remaining` reports `na`, and the quota axis never auto-hands-off.
 The **context** axis can still fire for any profile that has a durable context sample.
 Operators must run `fm-primary-handoff.sh execute --force` (or wait until a monitored provider is active again) to force a quota-style chain walk off an unmonitored provider.
 This is an accepted limitation, not a bug.
