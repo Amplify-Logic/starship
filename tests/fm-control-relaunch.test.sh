@@ -927,6 +927,35 @@ test_worker_account_pin_follows_the_relaunch() {
   pass "fm-control relaunch: the replacement follows the home's current worker account pin"
 }
 
+# The worker account pin records its own account= value, `ordinary` or a
+# config root path, which is never a vendor registry name. Once the pin is
+# gone, a relaunch in a home with a registry must not read that value back as
+# a registry account; it falls to the registry default like any unpinned spawn.
+test_relaunch_does_not_read_a_worker_pin_value_as_a_registry_account() {
+  local dir out rc id=rl-acct-reg value
+  dir=$(new_case acct-reg "$id")
+  add_ship_task "$dir" "$id" claude
+  make_claude_auth_stub "$dir"
+  mkdir -p "$dir/home/config" "$dir/home/data/accounts/claude/personal"
+  : > "$dir/home/data/accounts/claude/personal/.credentials.json"
+  printf '%s\n' '{"claude":{"default":"personal","accounts":{"personal":{}}}}' > "$dir/home/config/accounts.json"
+  for value in ordinary "$dir/work"; do
+    printf 'account=%s\n' "$value" >> "$dir/home/state/$id.meta"
+    : > "$dir/fake/literal"
+    out=$(run_control "$dir" "$id" relaunch --note "pin removed"); rc=$?
+    expect_code 0 "$rc" "a relaunch after a removed pin recorded $value should succeed"$'\n'"$out"
+    [ "$(meta_field "$dir" "$id" account)" = personal ] \
+      || fail "a removed pin's $value was read back as a registry account"
+    [ "$(meta_field "$dir" "$id" account_source)" = registry ] \
+      || fail "the registry account was recorded without its source"
+    assert_contains "$(cat "$dir/fake/literal")" "$dir/home/data/accounts/claude/personal" \
+      "the replacement should launch under the registry default"
+    sed -i.bak '/^account=/d;/^account_source=/d' "$dir/home/state/$id.meta"
+    rm -f "$dir/home/state/$id.meta.bak"
+  done
+  pass "fm-control relaunch: a removed worker pin's value is never read back as a registry account"
+}
+
 test_explicit_model_wins_over_the_recorded_one() {
   local dir out rc
   dir=$(new_case explicit rl7)
@@ -2467,6 +2496,7 @@ test_same_harness_relaunch_keeps_the_profile_axes
 test_native_ultra_relaunch_preserves_profile_and_rejects_before_stop
 test_signed_out_worker_account_pin_refuses_before_stop
 test_worker_account_pin_follows_the_relaunch
+test_relaunch_does_not_read_a_worker_pin_value_as_a_registry_account
 test_explicit_model_wins_over_the_recorded_one
 test_relaunch_onto_an_unverified_harness_is_refused
 test_prior_harness_turnend_registry_entry_is_cleared

@@ -105,8 +105,10 @@
 #   runs on that account's CLAUDE_CONFIG_DIR home, a codex harness on its
 #   CODEX_HOME home, both derived as data/accounts/<vendor>/<name> from local
 #   gitignored config/accounts.json (docs/configuration.md owns that schema).
-#   The resolved name is recorded in meta as account=, and only when a pin
-#   actually applies, so an unpinned spawn's meta is unchanged. Without the flag
+#   The resolved name is recorded in meta as account= with account_source=registry,
+#   and only when a pin actually applies, so an unpinned spawn's meta is
+#   unchanged; the source tag keeps a relaunch from reading the worker account
+#   pin's own account= value (`ordinary` or a path) back as a registry name. Without the flag
 #   the vendor default in that file applies; with NO such file there is no
 #   pinning at all and every spawn behaves exactly as it did before. --account on
 #   a harness with no vendor account concept, or on a raw launch command whose
@@ -2950,8 +2952,17 @@ esac
 # --account refuses rather than launching on two competing selections.
 if [ "$RELAUNCH" -eq 1 ] && [ "$ACCOUNT_SET" -eq 0 ] && [ "$RAW_LAUNCH" -eq 0 ] \
   && [ "$HARNESS" = "$RELAUNCH_PRIOR_HARNESS" ] && [ -z "$WORKER_ACCOUNT" ]; then
+  # Inherit only a registry-written account. The worker account pin records
+  # its own account= (`ordinary` or an absolute path), which is never a registry
+  # name; a record from before the source tag existed can only hold a registry
+  # name, which never starts with `/`.
   ACCOUNT=$(fm_meta_get "$RELAUNCH_META" account)
-  [ -z "$ACCOUNT" ] || ACCOUNT_SET=1
+  case "$(fm_meta_get "$RELAUNCH_META" account_source):$ACCOUNT" in
+    registry:?*) ACCOUNT_SET=1 ;;
+    :ordinary | :/* | *:) ACCOUNT= ;;
+    :*) ACCOUNT_SET=1 ;;
+    *) ACCOUNT= ;;
+  esac
 fi
 ACCOUNT_NAME=
 ACCOUNT_HOME=
@@ -5453,7 +5464,7 @@ SPAWN_META_PATH=$SPAWN_META_TMP
 preserve_relaunch_meta() {
   awk -F= '
     BEGIN {
-      split("window endpoint_task_id worktree project harness kind mode yolo branch tasktmp model model_requested model_live effort task_type outcome account account_provider busy_gen spawn_gen traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id herdr_workspace_managed herdr_project_key herdr_project_name zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id home projects control_relaunch_tx", keys, " ")
+      split("window endpoint_task_id worktree project harness kind mode yolo branch tasktmp model model_requested model_live effort task_type outcome account account_source account_provider busy_gen spawn_gen traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id herdr_workspace_managed herdr_project_key herdr_project_name zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id home projects control_relaunch_tx", keys, " ")
       for (i in keys) owned[keys[i]] = 1
     }
     !($1 in owned)
@@ -5494,7 +5505,7 @@ preserve_relaunch_meta() {
   [ -z "$TASK_TYPE" ] || echo "task_type=$TASK_TYPE"
   # account= appears only for a pinned spawn (absent means the ambient vendor
   # home), so teardown and recovery can see which login the work ran on.
-  [ -z "$ACCOUNT_NAME" ] || echo "account=$ACCOUNT_NAME"
+  [ -z "$ACCOUNT_NAME" ] || printf 'account=%s\naccount_source=registry\n' "$ACCOUNT_NAME"
   # The worker account pin, only when this home declares one, so an unpinned
   # task record stays byte-identical.
   [ -z "$WORKER_ACCOUNT" ] || echo "account=$WORKER_ACCOUNT_DECLARED"
