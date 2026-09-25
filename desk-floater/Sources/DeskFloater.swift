@@ -612,9 +612,9 @@ final class FloaterModel: ObservableObject {
                 await MainActor.run {
                     self.status = "Delivering…"
                 }
-                let delivered = Self.deliver(repoRoot: repoRoot, fmHome: fmHome, text: text)
+                let outcome = Self.deliver(repoRoot: repoRoot, fmHome: fmHome, text: text)
                 await MainActor.run {
-                    self.finish(status: delivered ? "Sent" : "Deliver failed")
+                    self.finish(status: outcome)
                 }
             }
         }
@@ -644,9 +644,16 @@ final class FloaterModel: ObservableObject {
         return run(bin: bin, args: [audio.path], env: ["FM_HOME": fmHome])
     }
 
-    nonisolated private static func deliver(repoRoot: String, fmHome: String, text: String) -> Bool {
+    // Types the transcript into firstmate's own chat; bin/fm-desk-voice.sh
+    // falls back to its mailbox when that pane cannot be reached.
+    nonisolated private static func deliver(repoRoot: String, fmHome: String, text: String) -> String {
         let bin = (repoRoot as NSString).appendingPathComponent("bin/fm-desk-voice.sh")
-        return run(bin: bin, args: ["deliver", "--source", "desk-floater", text], env: ["FM_HOME": fmHome]) != nil
+        guard let out = run(bin: bin, args: ["send", "--source", "desk-floater", text], env: ["FM_HOME": fmHome]) else {
+            return "Deliver failed"
+        }
+        if out.hasPrefix("sent:") { return "Sent" }
+        if out.hasPrefix("sent-unconfirmed:") { return "Sent, unconfirmed" }
+        return "Saved to mailbox"
     }
 
     nonisolated private static func speak(repoRoot: String, fmHome: String, args: [String]) -> String? {

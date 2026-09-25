@@ -13,8 +13,7 @@ Exactly one fleet brain remains: the primary already running in this home.
 - Always-on-top, draggable floating control (SwiftUI): a small talk button with four smaller controls beside it.
 - Push-to-talk (hold or click-to-toggle), or hold Right Option anywhere. Not always-listening. No wake word.
 - Speech-to-text via Deepgram (`bin/fm-deepgram-stt.sh`).
-- Transcript delivery into a durable mailbox under the home
-  (`state/desk-voice/inbox/`), plus a wake so the primary can see it.
+- Transcripts typed straight into the primary Firstmate chat and submitted, with a durable mailbox under the home (`state/desk-voice/inbox/`) as the fallback.
 - Optional speak-back of Firstmate outcome lines through `bin/fm-speak.sh`,
   which speaks through macOS `say` when `config/speak` names a `voice` and
   through Deepgram Aura otherwise, each the fallback for the other.
@@ -42,8 +41,8 @@ Exactly one fleet brain remains: the primary already running in this home.
    Grant microphone permission when macOS asks.
    macOS also asks for the Accessibility permission, once for each new build (see [Permissions](#permissions)); the buttons work without it, the hotkeys and typing into other apps do not.
 
-4. Hold the button (or click to toggle), speak, release. The transcript is
-   written to `state/desk-voice/inbox/<utc>-<id>.json` and a wake is queued.
+4. Hold the button (or click to toggle), speak, release.
+   The transcript is typed into the primary Firstmate chat and submitted, or saved to the mailbox when that chat cannot be reached.
 
 ## Controls
 
@@ -105,7 +104,19 @@ If DeskFloater already shows as switched on in that list, switch it off and on a
 
 ## How transcripts reach Firstmate
 
-v1 delivery is **write transcript + wake**, not composer injection:
+The floater hands each transcript to `bin/fm-desk-voice.sh send`, which types it into the primary Firstmate session's own chat pane and presses Enter.
+The words arrive at once, even while Firstmate is mid-task, and that pane does not need focus.
+Only the session holding this home's session lock is ever typed into, and only after its pane is proven to host that session; the script header owns the resolution and the supported runtime backends.
+The pane must also show its chat input, read as empty or holding a draft.
+A pane showing a shell or a screen that cannot be read counts as unreachable, because typed words there would become keypresses.
+So does a pane showing a selection dialog, such as a permission prompt, a question, or a picker: a pointer on a numbered option, or an `Enter to select` or `Esc to cancel` footer, sends the transcript to the mailbox so it cannot pick an option.
+
+The transcript is sent as the captain's plain words, with no label or marker.
+Line breaks and control characters become spaces, so a transcript cannot submit early or press keys.
+
+A voice message that lands while a half-typed draft sits in the Firstmate chat joins that draft and is submitted with it.
+
+When the chat pane cannot be reached, is not showing its chat input, or refuses the text, the transcript goes to the mailbox instead:
 
 | Path | Role |
 | --- | --- |
@@ -113,17 +124,21 @@ v1 delivery is **write transcript + wake**, not composer injection:
 | `state/desk-voice/processed/` | After `bin/fm-desk-voice.sh drain` |
 | wake `check desk-voice` | Nudges the primary that something landed |
 
-The primary (or you) drains with:
+A transcript reaches Firstmate one way only.
+Text that was typed and submitted, even when the submit could not be confirmed, is never also saved to the mailbox.
+The floater shows which way it went: `Sent`, `Sent, unconfirmed`, or `Saved to mailbox`.
+
+The primary (or you) drains the mailbox with:
 
 ```
 bin/fm-desk-voice.sh pending
 bin/fm-desk-voice.sh drain
 ```
 
-Drain prints each transcript as plain text (or `--print` for JSON) and moves
-the file to `processed/`. Treat the drained text as captain input in the
-primary conversation. Do not paste blindly into random terminals.
-Dictation is the only path that types text into another app, and only where you put the cursor.
+Drain prints each transcript as plain text (or `--print` for JSON) and moves the file to `processed/`.
+Treat the drained text as captain input in the primary conversation.
+`bin/fm-desk-voice.sh deliver` writes to the mailbox directly, without trying the chat pane.
+Dictation types text only where you put the cursor, and talk-to-Firstmate types only into the primary Firstmate chat.
 
 ## Desk speak-out bound
 
@@ -161,7 +176,7 @@ STT model default: `nova-2` (`DEEPGRAM_STT_MODEL`).
 | Script | Role |
 | --- | --- |
 | `bin/fm-desk-floater.sh` | Build/launch the floating control; the controls, hotkeys and dictation live in `desk-floater/Sources/DeskFloater.swift` |
-| `bin/fm-desk-voice.sh` | Inbox deliver / pending / drain |
+| `bin/fm-desk-voice.sh` | Send into the primary chat, with mailbox deliver / pending / drain |
 | `bin/fm-deepgram-stt.sh` | Audio file → transcript |
 | `bin/fm-deepgram-tts.sh` | Text → Deepgram Aura audio |
 | `bin/fm-speak.sh` | Captain-facing speak-out (a named `voice` selects `say`, else Deepgram Aura; each the other's fallback), plus `--stop`, `--repeat`, `--mute`, `--unmute` and `--muted` |
