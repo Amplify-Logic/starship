@@ -4,6 +4,9 @@
 #
 # Usage:
 #   fm-speak.sh [--dry-run] <text>
+#   fm-speak.sh --stop
+#   fm-speak.sh --repeat
+#   fm-speak.sh --mute | --unmute | --muted
 #   fm-speak.sh --help
 #
 # WHY THIS EXISTS: firstmate could already speak to the captain through the
@@ -106,6 +109,31 @@
 # leave the caller's process group, or anything that reaps that group takes the
 # audio with it. See detach_speaker for what that costs when it is missed.
 #
+# PLAYBACK CONTROLS, for the desk floater's buttons and any caller:
+#   --stop    cuts short the line playing now and cancels every line that was
+#             handed over before the stop and has not started yet, so a queued
+#             line does not start talking the moment the captain silenced the
+#             one ahead of it. A line handed over after the stop plays normally.
+#             Each stop bumps state/speak-stop-generation; a speaker compares it
+#             with the value it read when its call began, once it holds the
+#             playback lock and again once its player is running, and a stop
+#             kills the player named in state/.speak-player. Either the speaker
+#             sees the new value or the stop sees the player, so no line slips
+#             between the two.
+#   --repeat  speaks the last line this home handed to a speaker again. That line
+#             is kept in state/speak-last only after it was shaped and handed
+#             over, so a refused or unshaped sentence can never be repeated, and
+#             it is replayed as it was shaped rather than shaped a second time.
+#             Nothing spoken yet is exit 1.
+#   --mute    makes every later line, repeats included, stay silent until
+#             --unmute, and stops any line playing now. The flag is
+#             state/speak-muted and is per home. A muted line is neither shaped
+#             nor kept for --repeat, and the call still exits 0: muting affects
+#             voice only, and the text reply stays the authoritative one.
+#   --muted   prints `muted` or `unmuted`.
+# Controls need no opt-in because they can only make this home quieter; --repeat
+# is a spoken line and honours `enabled` like any other.
+#
 # Environment overrides, for tests and unusual layouts:
 #   FM_SPEAK_SHAPER    register owner exposing the `--dry-run <text>` contract
 #                      (default: $FM_HOME/projects/glasses-voice/bin/announce)
@@ -143,6 +171,11 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 VOICE_CONFIRMED_FILE="$STATE/speak-voice-confirmed"
 SPEAK_LOCK="$STATE/.speak.lock"
 SPEAK_LOCK_HELD=false
+MUTE_FILE="$STATE/speak-muted"
+LAST_FILE="$STATE/speak-last"
+STOP_GEN_FILE="$STATE/speak-stop-generation"
+PLAYER_FILE="$STATE/.speak-player"
+STOP_GEN_AT_START=0
 
 DEFAULT_SHAPER_TIMEOUT=15
 DEFAULT_SPEAKER_TIMEOUT=60
@@ -307,13 +340,20 @@ detach_speaker() {  # <function> [args...]
 # speaker chosen before the handoff is the only one that speaks this line.
 # shellcheck disable=SC2329 # Reached only through the speaker bodies below.
 play_bounded() {  # <cmd...>
-  local pid
+  local pid holder
   set +m
   "$@" &
   pid=$!
   start_watchdog "$SPEAKER_TIMEOUT" "$pid"
+  if fm_current_pid holder; then
+    printf '%s %s\n' "$pid" "$holder" > "$PLAYER_FILE" 2>/dev/null || true
+  fi
+  # Checked only after the player is named, so a stop that lands between the
+  # lock and this line is either seen here or finds the player to kill.
+  ! stopped_since_start || kill "$pid" 2>/dev/null || true
   wait "$pid" 2>/dev/null || true
   kill "$WATCHDOG_PID" 2>/dev/null || true
+  rm -f "$PLAYER_FILE"
 }
 
 # Portable lock helpers live in fm-wake-lib.sh. Loaded in the parent before a
@@ -415,7 +455,7 @@ release_playback_lock() {
 play_serialized() {  # <cmd...>
   hold_playback_lock
   trap release_playback_lock EXIT
-  play_bounded "$@"
+  stopped_since_start || play_bounded "$@"
   release_playback_lock
 }
 
@@ -480,6 +520,61 @@ speak_deepgram_or_fail() {  # <textfile>
   fi
   detach_speaker audio_speaker "$afplay_bin" "$audio" "$textfile"
   return 0
+}
+
+# --- playback controls ------------------------------------------------------
+
+stop_generation() {
+  local gen
+  gen=$(cat "$STOP_GEN_FILE" 2>/dev/null) || gen=0
+  case "$gen" in ''|*[!0-9]*) gen=0 ;; esac
+  printf '%s\n' "$gen"
+}
+
+# shellcheck disable=SC2329 # Reached only through the speaker bodies above.
+stopped_since_start() {
+  [ "$(stop_generation)" != "$STOP_GEN_AT_START" ]
+}
+
+# Cancel every line handed over so far, then cut the one playing now. The player
+# is killed only while it is still the child of the speaker that named it, so a
+# pid number reused after the line ended is never signalled.
+stop_playback() {
+  local next tmp player holder parent
+  mkdir -p "$STATE" 2>/dev/null || die "cannot create the state directory: $STATE"
+  next=$(( $(stop_generation) + 1 ))
+  tmp=$(mktemp "$STATE/.speak-stop.XXXXXX") || die "cannot record the stop in $STATE"
+  printf '%s\n' "$next" > "$tmp"
+  mv -f "$tmp" "$STOP_GEN_FILE" || { rm -f "$tmp"; die "cannot record the stop in $STATE"; }
+  [ -f "$PLAYER_FILE" ] || return 0
+  read -r player holder 2>/dev/null < "$PLAYER_FILE" || return 0
+  case "$player$holder" in ''|*[!0-9]*) return 0 ;; esac
+  parent=$(ps -o ppid= -p "$player" 2>/dev/null | tr -d '[:space:]') || return 0
+  [ "$parent" = "$holder" ] || return 0
+  kill "$player" 2>/dev/null || true
+}
+
+is_muted() {
+  [ -e "$MUTE_FILE" ]
+}
+
+set_muted() {  # true|false
+  mkdir -p "$STATE" 2>/dev/null || die "cannot create the state directory: $STATE"
+  if [ "$1" = true ]; then
+    : > "$MUTE_FILE" || die "cannot record mute in $MUTE_FILE"
+    stop_playback
+  else
+    rm -f "$MUTE_FILE" || die "cannot clear mute in $MUTE_FILE"
+  fi
+}
+
+remember_last_line() {  # <shaped text>
+  local tmp
+  tmp=$(mktemp "$STATE/.speak-last.XXXXXX" 2>/dev/null) || return 0
+  if printf '%s\n' "$1" > "$tmp" 2>/dev/null && mv -f "$tmp" "$LAST_FILE" 2>/dev/null; then
+    return 0
+  fi
+  rm -f "$tmp"
 }
 
 # --- configured voice -------------------------------------------------------
@@ -632,18 +727,66 @@ apply_desk_register() {
 
 # --- main -------------------------------------------------------------------
 
+# Speak the kept last line again, as it was shaped. Honours opt-in and mute
+# exactly like a new line, and takes the same speaker path and playback lock.
+repeat_last_line() {
+  local textfile
+  load_config
+  if [ "$CFG_ENABLED" != true ]; then
+    note "this home is not opted in; add 'enabled = true' to config/speak to speak here"
+    exit 0
+  fi
+  if is_muted; then
+    note "voice is muted; nothing was spoken (fm-speak.sh --unmute)"
+    exit 0
+  fi
+  [ -s "$LAST_FILE" ] || die "nothing has been spoken here yet; nothing to repeat"
+  if [ ! -x "$SAY_BIN" ] && [ -z "$(fm_deepgram_api_key)" ]; then
+    die "no speech binary at $SAY_BIN and no DEEPGRAM_API_KEY (set FM_SPEAK_SAY or the key)"
+  fi
+  load_speak_lock_helpers
+  start_voice_list
+  textfile=$(mktemp "${TMPDIR:-/tmp}/fm-speak-text.XXXXXX") || die "cannot create a temporary file"
+  cp "$LAST_FILE" "$textfile" || { rm -f "$textfile"; die "cannot read $LAST_FILE"; }
+  speak_detached "$textfile"
+  cat "$LAST_FILE"
+  exit 0
+}
+
 main() {
-  local dry_run=false text='' outfile errfile textfile status shaped
+  local dry_run=false text='' outfile errfile textfile status shaped control=
 
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --help|-h) usage; exit 0 ;;
       --dry-run) dry_run=true; shift ;;
+      --stop|--repeat|--mute|--unmute|--muted)
+        [ -z "$control" ] || { note "only one of --stop, --repeat, --mute, --unmute, --muted"; exit 1; }
+        control=${1#--}
+        shift
+        ;;
       --) shift; break ;;
       -*) note "unexpected option: $1"; usage; exit 1 ;;
       *) break ;;
     esac
   done
+
+  STOP_GEN_AT_START=$(stop_generation)
+  if [ -n "$control" ]; then
+    [ "$#" -eq 0 ] && [ "$dry_run" = false ] \
+      || { note "--$control takes no text and no --dry-run"; exit 1; }
+    case "$control" in
+      stop) stop_playback ;;
+      mute) set_muted true ;;
+      unmute) set_muted false ;;
+      muted) if is_muted; then printf 'muted\n'; else printf 'unmuted\n'; fi ;;
+      repeat)
+        require_positive_int FM_SPEAK_TIMEOUT "$SPEAKER_TIMEOUT"
+        repeat_last_line
+        ;;
+    esac
+    exit 0
+  fi
 
   [ "$#" -gt 0 ] || { note "nothing to speak"; usage; exit 1; }
   text=$*
@@ -658,6 +801,10 @@ main() {
 
   if [ "$CFG_ENABLED" != true ]; then
     note "this home is not opted in; add 'enabled = true' to config/speak to speak here"
+    exit 0
+  fi
+  if [ "$dry_run" != true ] && is_muted; then
+    note "voice is muted; nothing was spoken (fm-speak.sh --unmute)"
     exit 0
   fi
 
@@ -724,6 +871,7 @@ main() {
   textfile=$(mktemp "${TMPDIR:-/tmp}/fm-speak-text.XXXXXX") || die "cannot create a temporary file"
   printf '%s\n' "$shaped" > "$textfile"
   speak_detached "$textfile"
+  remember_last_line "$shaped"
   printf '%s\n' "$shaped"
   exit 0
 }

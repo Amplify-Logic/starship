@@ -176,11 +176,11 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-bridge-fields.sh`    | Add the bridge's title, repo, hold kind and hold reason to a finished bearings model, so the projection itself carries none of them |
 | `fm-overlay.sh`          | Open a Markdown view as an in-terminal Herdr overlay pane, degrading to a printed pointer to the same content; installs nothing and is called nowhere by default (docs/chart-room.md) |
 | `fm-present.sh`          | Present a captain-action artifact once per unchanged milestone through its existing local owner |
-| `fm-speak.sh` | Speak one captain-facing outcome line out of this machine's speaker, shaped by the glasses spoken-register owner; a named `voice` selects macOS say, otherwise Deepgram Aura leads when DEEPGRAM_API_KEY is set, each the other's fallback (the script header owns the mechanic); inert unless config/speak opts the home in (docs/configuration.md "Desk voice-out", docs/desk-floater.md) |
+| `fm-speak.sh` | Speak one captain-facing outcome line out of this machine's speaker, shaped by the glasses spoken-register owner; a named `voice` selects macOS say, otherwise Deepgram Aura leads when DEEPGRAM_API_KEY is set, each the other's fallback (the script header owns the mechanic); inert unless config/speak opts the home in; `--stop`, `--repeat` and `--mute`/`--unmute` back the desk floater's voice controls (docs/configuration.md "Desk voice-out", docs/desk-floater.md) |
 | `fm-deepgram-tts.sh` | Synthesize one line with Deepgram Aura and play it (or --to a file); reads DEEPGRAM_API_KEY from env or gitignored .env; never logs the key |
 | `fm-deepgram-stt.sh` | Transcribe one audio file with Deepgram for the desk floater push-to-talk path; never logs the key |
 | `fm-desk-voice.sh` | Durable desk-voice mailbox: deliver / pending / drain captain-input transcripts under state/desk-voice/ and wake the primary (docs/desk-floater.md) |
-| `fm-desk-floater.sh` | Build and launch the Mac always-on-top push-to-talk floater for this home (docs/desk-floater.md) |
+| `fm-desk-floater.sh` | Build and launch the Mac always-on-top push-to-talk and dictation floater for this home (docs/desk-floater.md) |
 | `fm-voice-relay.sh`      | Durable freshness, evidence, and presentation ledger for the spoken desktop companion: topic revisions, the pre-action and pre-speech gates, and immutable receipts (docs/desktop-companion.md) |
 | `fm-voice-relay-appserver.sh` | Dry-run-unless-`--live` app-server adapter for that relay: schema probe, steerable-status check, `turn/steer`, `turn/interrupt` (docs/desktop-companion.md) |
 | `fm-adhd.sh`             | Bounded ADHD divergent-ideation wrapper; writes distilled CLI output and refuses when `adhd` is absent (docs/adhd.md) |

@@ -7,8 +7,11 @@
 #   fm-desk-voice.sh drain [--print]
 #   fm-desk-voice.sh --help
 #
-# WHY: the floater is mouth/ears only. It must not paste into random terminals
-# or act as a second Firstmate. Transcripts land under
+# WHY: the floater is mouth/ears only. Transcripts meant for Firstmate must not
+# be pasted into random terminals, and the floater must not act as a second
+# Firstmate. (Its separate dictation mode types only into the text box the
+# captain chose and never reaches this mailbox; see docs/desk-floater.md.)
+# Transcripts land under
 #   $FM_HOME/state/desk-voice/inbox/<utc>-<id>.json
 # and a single wake is appended so the primary can see and drain them.
 #

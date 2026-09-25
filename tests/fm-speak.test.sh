@@ -925,6 +925,96 @@ test_an_unusable_state_directory_is_refused_before_anything_is_shaped() {
   pass "fm-speak: an unusable state directory is refused before anything is shaped"
 }
 
+# The desk floater's Mute button: voice goes quiet until unmuted, while the
+# caller still sees success because the text reply is the authoritative one.
+test_mute_silences_every_line_until_unmuted() {
+  local home out code
+  home=$(new_home mute "enabled = true")
+  install_recording_shaper "$home"
+  install_speaker "$home" >/dev/null
+
+  out=$(speak "$home" --muted) || fail "fm-speak: --muted failed"
+  assert_equals "unmuted" "$out" "a fresh home must read as unmuted"
+  speak "$home" --mute >/dev/null 2>&1 || fail "fm-speak: --mute failed"
+  out=$(speak "$home" --muted) || fail "fm-speak: --muted failed"
+  assert_equals "muted" "$out" "--mute must be visible through --muted"
+
+  out=$(speak "$home" "The fix is green." 2>&1) && code=0 || code=$?
+  expect_code 0 "$code" "a muted line must not look like a failure"
+  assert_contains "$out" "muted" "the silence must be explicable"
+  assert_stayed_silent "$home/spoken.log" "a muted home must not reach the speaker"
+  [ ! -f "$home/shaper.log" ] || fail "fm-speak: a muted line was still shaped"
+
+  speak "$home" --unmute >/dev/null 2>&1 || fail "fm-speak: --unmute failed"
+  speak "$home" "The fix is green." >/dev/null 2>&1 || fail "fm-speak: an unmuted line failed"
+  wait_for_spoken "$home/spoken.log" "an unmuted home must speak again"
+  pass "fm-speak: mute silences every line until unmuted"
+}
+
+# The Stop button: the line playing now is cut, a line already queued behind it
+# never starts, and a line handed over after the stop still plays.
+test_stop_cuts_the_current_line_and_cancels_the_queued_one() {
+  local home waited=0
+  home=$(new_home stop "enabled = true")
+  install_shaper "$home" >/dev/null
+  install_marking_speaker "$home" 20
+
+  speak "$home" "The first line is long." >/dev/null 2>&1 || fail "fm-speak: the first line failed"
+  wait_for_content "$home/spoken.log" "start: The first line is long." \
+    "fm-speak: the first line never started"
+  speak "$home" "The queued line waits." >/dev/null 2>&1 || fail "fm-speak: the queued line failed"
+  speak "$home" --stop || fail "fm-speak: --stop failed"
+  while [ -e "$home/state/.speak.lock" ] && [ "$waited" -lt 50 ]; do
+    sleep 0.2
+    waited=$((waited + 1))
+  done
+  [ ! -e "$home/state/.speak.lock" ] || fail "fm-speak: the stopped line kept the playback lock"
+
+  speak "$home" "The line after the stop plays." >/dev/null 2>&1 \
+    || fail "fm-speak: the line after the stop failed"
+  wait_for_content "$home/spoken.log" "start: The line after the stop plays." \
+    "fm-speak: a line handed over after the stop was cancelled too"
+  assert_no_grep "end: The first line is long." "$home/spoken.log" \
+    "fm-speak: the playing line was not cut short"
+  assert_no_grep "The queued line waits." "$home/spoken.log" \
+    "fm-speak: a line queued before the stop still started"
+  speak "$home" --stop || fail "fm-speak: the cleanup --stop failed"
+  pass "fm-speak: stop cuts the current line and cancels the one queued behind it"
+}
+
+# The Repeat button replays the last line that was actually handed to a speaker,
+# as it was shaped: never a refused line, and never before anything was spoken.
+test_repeat_speaks_the_last_spoken_line_again() {
+  local home out code
+  home=$(new_home repeat "enabled = true")
+  install_shaper "$home" >/dev/null
+  install_speaker "$home" >/dev/null
+
+  out=$(speak "$home" --repeat 2>&1) && code=0 || code=$?
+  expect_code 1 "$code" "repeat with nothing spoken is an error"
+  assert_contains "$out" "nothing to repeat" "the refusal must say why"
+
+  speak "$home" "The fix is green, see https://example.test/pr/1" >/dev/null 2>&1 \
+    || fail "fm-speak: the first line failed"
+  speak "$home" "Shall I merge it?" >/dev/null 2>&1 || true
+  wait_for_spoken "$home/spoken.log" "the first line never reached the speaker"
+  : > "$home/spoken.log"
+  out=$(speak "$home" --repeat) || fail "fm-speak: --repeat failed"
+  assert_contains "$out" "The fix is green, see" "repeat reports the line it replayed"
+  wait_for_spoken "$home/spoken.log" "the repeat never reached the speaker"
+  assert_grep "text: The fix is green, see" "$home/spoken.log" \
+    "the repeat must replay the last spoken line"
+  assert_no_grep "https://" "$home/spoken.log" "the repeat must replay the shaped line"
+  assert_no_grep "Shall I" "$home/spoken.log" "a refused line must never be repeated"
+
+  : > "$home/spoken.log"
+  speak "$home" --mute >/dev/null 2>&1 || fail "fm-speak: --mute failed"
+  speak "$home" --repeat >/dev/null 2>&1 || fail "fm-speak: a muted repeat must not fail"
+  sleep 0.5
+  [ ! -s "$home/spoken.log" ] || fail "fm-speak: a repeat was spoken while muted"
+  pass "fm-speak: repeat replays the last spoken line, never a refused one, and honours mute"
+}
+
 test_a_home_that_never_opted_in_stays_silent
 test_an_absent_config_is_the_same_as_not_opted_in
 test_an_opted_in_home_speaks_the_shaped_line
@@ -957,3 +1047,6 @@ test_two_sequential_calls_do_not_overlap_playback
 test_two_homes_may_speak_at_the_same_time
 test_a_lock_whose_pid_was_reused_is_reclaimed
 test_an_unusable_state_directory_is_refused_before_anything_is_shaped
+test_mute_silences_every_line_until_unmuted
+test_stop_cuts_the_current_line_and_cancels_the_queued_one
+test_repeat_speaks_the_last_spoken_line_again

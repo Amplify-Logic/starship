@@ -6,7 +6,9 @@
 #   fm-desk-floater.sh --help
 #
 # Requires macOS with Swift 5.9+, microphone permission on first use, and
-# DEEPGRAM_API_KEY in the environment or this home's gitignored .env.
+# DEEPGRAM_API_KEY in the environment or this home's gitignored .env. The global
+# hotkeys and typing dictated text into other apps also need the Accessibility
+# permission, asked for on the first launch of each new build.
 # See docs/desk-floater.md.
 #
 # Builds desk-floater/ into a minimal .app under desk-floater/.build/DeskFloater.app
