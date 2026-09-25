@@ -103,6 +103,11 @@ case "${1:-}" in
     prev=
     for arg in "$@"; do
       if [ "$prev" = "-l" ]; then
+        # A spawn types a short line sourcing its staged launch file; log the
+        # staged command itself.
+        case "$arg" in
+          ". '"*"'") staged=${arg#". '"}; staged=${staged%"'"}; [ ! -f "$staged" ] || arg=$(cat "$staged") ;;
+        esac
         printf '%s\n' "$arg" >> "${FM_FAKE_LAUNCH_LOG:?}"
       fi
       prev=$arg
@@ -248,7 +253,12 @@ test_raw_launch_command_remains_exempt() {
   assert_contains "$out" "spawned $ID harness=custom-agent" "raw launch command did not spawn"
   assert_absent "$PROBE_LOG" "raw launch command unexpectedly ran a first-word probe"
   launch=$(cat "$LAUNCH_LOG")
-  [ "$launch" = "custom-agent --flag" ] || fail "raw launch command changed"$'\n'"actual: $launch"
+  # The raw command runs verbatim; only the spawn's shared environment exports
+  # (compact-adviser kill switch, commit-msg hook path) may precede it.
+  case "$launch" in
+    "custom-agent --flag" | *"; custom-agent --flag") ;;
+    *) fail "raw launch command changed"$'\n'"actual: $launch" ;;
+  esac
   cleanup_task_tmp "$ID"
   pass "raw launch command stays exempt from preflight and is sent unchanged"
 }

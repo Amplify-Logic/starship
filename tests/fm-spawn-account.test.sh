@@ -26,11 +26,13 @@ SPAWN_HOMES_FILE="$TMP_ROOT/homes"
 BASELINE_LAUNCH_FILE="$TMP_ROOT/baseline-claude-launch"
 
 # The launch line with this case's own paths replaced by tokens - the task's
-# brief directory and the bin/ the spawn ran from - so two cases that differ
-# only in where they live can be compared byte for byte.
+# brief directory, its commit-msg hook directory, and the bin/ the spawn ran
+# from - so two cases that differ only in where they live can be compared byte
+# for byte.
 launch_without_case_paths() {  # <launch-line> <home> <task-id> <spawn-bin-dir>
   local launch=$1 home=$2 id=$3 bindir=$4
   launch=${launch//$home\/data\/$id/<TASK-DATA>}
+  launch=${launch//$home\/state\/$id.git-hooks/<TASK-HOOKS>}
   printf '%s' "${launch//$bindir/<BIN>}"
 }
 
@@ -66,6 +68,11 @@ case "${1:-}" in
       prev=
       for a in "$@"; do
         if [ "$prev" = "-l" ]; then
+          # A spawn types a short line sourcing its staged launch file; log
+          # the staged command itself.
+          case "$a" in
+            ". '"*"'") staged=${a#". '"}; staged=${staged%"'"}; [ ! -f "$staged" ] || a=$(cat "$staged") ;;
+          esac
           printf '%s\n' "$a" >> "$FM_FAKE_LAUNCH_LOG"
         fi
         prev=$a
@@ -304,7 +311,9 @@ test_pinned_claude_account_exports_home_and_records_meta() {
   expect_code 0 "$status" "pinned claude spawn should succeed: $out"
   launch=$(cat "$LAUNCH_LOG")
   case "$launch" in
-    "CLAUDE_CONFIG_DIR='$home' "*) ;;
+    # The spawn's shared environment exports may precede the pin, but the pin
+    # must still lead the harness command itself.
+    "CLAUDE_CONFIG_DIR='$home' "* | *"; CLAUDE_CONFIG_DIR='$home' "*) ;;
     *) fail "pinned claude launch did not export the derived home first"$'\n'"actual: $launch" ;;
   esac
   assert_grep "account=max" "$HOME_DIR/state/$id.meta" "meta did not record the pinned account"
@@ -325,7 +334,9 @@ test_vendor_default_applies_without_the_flag() {
   expect_code 0 "$status" "codex spawn on the vendor default should succeed: $out"
   launch=$(cat "$LAUNCH_LOG")
   case "$launch" in
-    "CODEX_HOME='$home' "*) ;;
+    # The spawn's shared environment exports may precede the pin, but the pin
+    # must still lead the harness command itself.
+    "CODEX_HOME='$home' "* | *"; CODEX_HOME='$home' "*) ;;
     *) fail "omitted --account did not fall back to the codex default account"$'\n'"actual: $launch" ;;
   esac
   assert_grep "account=robin" "$HOME_DIR/state/$id.meta" "meta did not record the default account"
