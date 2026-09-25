@@ -2844,17 +2844,27 @@ case "${1:-}" in
     done
     exit 0 ;;
   list-windows)
-    if [ "${FM_FAKE_WINDOW_GONE:-0}" = 1 ] || { [ -f "$probe.killed" ] && [ ! -f "$probe.spawned" ]; }; then
-      printf 'main\n'
-    else
-      printf 'main\nfm-sm1\n'
-    fi
+    printf 'main\n'
+    # A gone window stays gone only until this stub's own new-window relaunches
+    # it, and every relaunched window is listed by name, because fm-spawn.sh's
+    # agent-up check reads the new endpoint back.
+    {
+      if [ -f "$probe.spawned" ] || { [ "${FM_FAKE_WINDOW_GONE:-0}" != 1 ] && [ ! -f "$probe.killed" ]; }; then
+        printf 'fm-sm1\n'
+      fi
+      [ ! -f "$probe.names" ] || cat "$probe.names"
+    } | sort -u
     exit 0 ;;
   capture-pane) [ -z "${FM_FAKE_TMUX_CAPTURE:-}" ] || cat "$FM_FAKE_TMUX_CAPTURE"; exit 0 ;;
   new-window)
     printf '%s\n' "$*" >> "$log"
     [ "${FM_TEST_FAIL_NEW_WINDOW:-0}" = 1 ] && exit 1
     : > "$probe.spawned"
+    prev=
+    for a in "$@"; do
+      [ "$prev" != -n ] || printf '%s\n' "$a" >> "$probe.names"
+      prev=$a
+    done
     printf '@1\n'
     exit 0 ;;
   kill-window)
