@@ -33,9 +33,88 @@ fm_sup_format_duration() {
   printf '%s%ss\n' "$out" "$seconds"
 }
 
+_FM_SUP_LIB_DIR=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" 2>/dev/null && pwd -P) || _FM_SUP_LIB_DIR=.
+
+# Lazy loaders, so a home whose tasks declare nothing idle never pays for the
+# status classifier or the bounded runner on the hook paths that source this.
+# The classifier restores its caller's nounset setting around the timeout
+# library it sources, so loading it covers both.
+_fm_sup_require_classify() {
+  command -v status_declared_wait_line >/dev/null 2>&1 && return 0
+  # shellcheck source=bin/fm-classify-lib.sh
+  . "$_FM_SUP_LIB_DIR/fm-classify-lib.sh" 2>/dev/null
+}
+
+# fm_sup_agent_liveness <meta-file>
+# Prints alive, dead, or unknown for the task's recorded agent: the
+# recovery-grade fm_backend_agent_alive verdict, read in a bounded child so
+# the backend library's globals never leak into the hook that sourced this.
+# FM_SUP_LIVENESS_PROBE is a test seam invoked as `<probe> <meta-file>`.
+# Anything but a clean `dead` - a timeout, an unreadable endpoint, a backend
+# with no classifier - prints unknown.
+fm_sup_agent_liveness() {  # <meta-file>
+  local meta=$1 verdict
+  _fm_sup_require_classify || { printf 'unknown'; return 0; }
+  if [ -n "${FM_SUP_LIVENESS_PROBE:-}" ]; then
+    verdict=$(fm_run_timed "${FM_SUP_LIVENESS_TIMEOUT:-5}" "$FM_SUP_LIVENESS_PROBE" "$meta" 2>/dev/null)
+  else
+    # shellcheck disable=SC2016 # Expanded by the child shell, not here.
+    verdict=$(fm_run_timed "${FM_SUP_LIVENESS_TIMEOUT:-5}" bash -c \
+      '. "$1/fm-backend.sh" && fm_backend_agent_alive "$(fm_backend_of_meta "$2")" "$(fm_backend_target_of_meta "$2")"' \
+      _ "$_FM_SUP_LIB_DIR" "$meta" 2>/dev/null)
+  fi
+  case "$verdict" in
+    alive|dead) printf '%s' "$verdict" ;;
+    *) printf 'unknown' ;;
+  esac
+}
+
+# fm_sup_task_inert <state-dir> <task-id>
+# True when a task's record is present but nothing about it can change while
+# supervision is down, so it is not in flight. Both halves are required:
+#   1. It declares itself idle: its metadata carries a non-empty standing=
+#      (a standing service record, not a dispatched worker), or its status
+#      log's declared wait (status_declared_wait_line) is a paused: or
+#      captain-held line.
+#   2. No agent can be running for it: no window= was ever recorded, or the
+#      recorded agent reads confidently dead. A worker that declared a wait
+#      and is still alive - or whose liveness cannot be read - stays in flight.
+# A task still counts, whatever it declares, when the watcher has scheduled
+# work on it: a secondmate (a supervisor whose liveness the watcher owns), any
+# state/<id>.check.sh poll - a registered custom check or an unbound one such
+# as a PR merge poll - or a pause naming the time it clears (`until`), which
+# the watcher rechecks.
+fm_sup_task_inert() {  # <state-dir> <task-id>
+  local state=$1 id=$2 meta line standing='' window='' kind='' status wait
+  meta="$state/$id.meta"
+  [ -e "$state/$id.check.sh" ] && return 1
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      standing=?*) standing=1 ;;
+      window=*) window=${line#window=} ;;
+      kind=*) kind=${line#kind=} ;;
+    esac
+  done < "$meta" 2>/dev/null || return 1
+  [ "$kind" = secondmate ] && return 1
+  if [ -z "$standing" ]; then
+    status="$state/$id.status"
+    # Cheap pre-filter: a log that never mentions either wait verb cannot end
+    # in one, so ordinary tasks never load the classifier.
+    grep -Fq -e "${FM_CLASSIFY_PAUSED_VERB:-paused}" -e "${FM_CLASSIFY_CAPTAIN_HELD_VERB:-captain-held}" \
+      "$status" 2>/dev/null || return 1
+    _fm_sup_require_classify || return 1
+    wait=$(status_declared_wait_line "$status")
+    [ -n "$wait" ] || return 1
+    status_paused_until "$wait" >/dev/null && return 1
+  fi
+  [ -n "$window" ] || return 0
+  [ "$(fm_sup_agent_liveness "$meta")" = dead ]
+}
+
 # fm_supervision_status <state-dir> [grace-seconds]
 # Populates, for the state dir at $1:
-#   FM_SUP_IN_FLIGHT      count of state/*.meta (in-flight tasks)
+#   FM_SUP_IN_FLIGHT      count of state/*.meta tasks that can still change
+#                         state (fm_sup_task_inert above owns the exclusion)
 #   FM_SUP_IN_FLIGHT_IDS  those tasks' IDs, comma-separated, or "(none)"
 #   FM_SUP_SOURCES        count of registered process-to-event sources
 #   FM_SUP_CHECKS         count of registered custom checks: a state/<id>.check.sh
@@ -79,6 +158,7 @@ fm_supervision_status() {
     [ -e "$meta" ] || continue
     id=${meta##*/}
     id=${id%.meta}
+    fm_sup_task_inert "$state" "$id" && continue
     FM_SUP_IN_FLIGHT=$((FM_SUP_IN_FLIGHT + 1))
     if [ -n "$FM_SUP_IN_FLIGHT_IDS" ]; then
       FM_SUP_IN_FLIGHT_IDS="$FM_SUP_IN_FLIGHT_IDS, $id"

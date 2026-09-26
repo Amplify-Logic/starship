@@ -174,6 +174,94 @@ test_predicate_relay_shim_is_not_a_custom_check() {
   pass "fm_supervision_status: the relay shim is not counted as a registered custom check"
 }
 
+# Declared-idle records: a standing service with no endpoint, or a declared wait
+# whose agent is confidently dead, is not in flight; anything that could still
+# change - a live or unreadable agent, a scheduled poll or recheck, a secondmate -
+# still is. FM_SUP_LIVENESS_PROBE answers the agent read as `<probe> <meta>`.
+make_liveness_probe() {  # <dir> <verdict>
+  local probe="$1/probe-$2"
+  mkdir -p "$1"
+  printf '#!/usr/bin/env bash\nprintf %%s %s\n' "$2" > "$probe"
+  chmod +x "$probe"
+  printf '%s\n' "$probe"
+}
+
+test_predicate_standing_record_without_endpoint_is_not_in_flight() {
+  local state="$TMP_ROOT/pred-standing/state"
+  mkdir -p "$state"
+  printf 'project=/p\nkind=ship\nstanding=inbox-poll\n' > "$state/svc1.meta"
+  printf 'note: standing poll, no worker\n' > "$state/svc1.status"
+  if fm_supervision_needed "$state" 300; then
+    fail "a standing record with no endpoint must not need supervision (in flight: $FM_SUP_IN_FLIGHT_IDS)"
+  fi
+  [ "$FM_SUP_IN_FLIGHT" -eq 0 ] || fail "expected zero in-flight, got $FM_SUP_IN_FLIGHT"
+  [ "$FM_SUP_IN_FLIGHT_IDS" = '(none)' ] || fail "expected no in-flight ids, got $FM_SUP_IN_FLIGHT_IDS"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$state/svc1.check.sh"
+  : > "$state/svc1.check-trust"
+  fm_supervision_needed "$state" 300 || fail "the standing service's registered poll must still need supervision"
+  [ "$FM_SUP_IN_FLIGHT" -eq 1 ] || fail "a registered poll must keep its standing record in flight, got $FM_SUP_IN_FLIGHT"
+  [ "$FM_SUP_IN_FLIGHT_IDS" = svc1 ] || fail "expected svc1 in flight, got $FM_SUP_IN_FLIGHT_IDS"
+  [ "$FM_SUP_CHECKS" -eq 1 ] || fail "expected the standing service's poll as one registered check, got $FM_SUP_CHECKS"
+  pass "fm_supervision_status: a standing record with no endpoint is not in flight until the watcher polls for it"
+}
+
+test_predicate_parked_dead_worker_is_not_in_flight() {
+  local dir="$TMP_ROOT/pred-parked-dead" state dead
+  state="$dir/state"
+  mkdir -p "$state"
+  dead=$(make_liveness_probe "$dir" dead)
+  printf 'window=s:w1\nkind=ship\n' > "$state/park1.meta"
+  printf 'working: setup\npaused: parked for the upstream release; worker exited\n' > "$state/park1.status"
+  printf 'window=s:w2\nkind=scout\n' > "$state/held1.meta"
+  printf 'working: reading\ncaptain-held: awaiting the call on the schema\n' > "$state/held1.status"
+  printf 'window=s:w3\nkind=ship\n' > "$state/live1.meta"
+  printf 'paused: earlier wait\nworking: resumed\n' > "$state/live1.status"
+  FM_SUP_LIVENESS_PROBE=$dead fm_supervision_status "$state" 300
+  [ "$FM_SUP_IN_FLIGHT" -eq 1 ] || fail "expected only the working task in flight, got $FM_SUP_IN_FLIGHT ($FM_SUP_IN_FLIGHT_IDS)"
+  [ "$FM_SUP_IN_FLIGHT_IDS" = live1 ] || fail "expected live1 alone in flight, got $FM_SUP_IN_FLIGHT_IDS"
+  pass "fm_supervision_status: paused and captain-held work with a dead agent is not in flight"
+}
+
+test_predicate_parked_worker_that_may_be_alive_stays_in_flight() {
+  local dir="$TMP_ROOT/pred-parked-alive" state verdict probe
+  state="$dir/state"
+  mkdir -p "$state"
+  printf 'window=s:w1\nkind=ship\n' > "$state/park1.meta"
+  printf 'paused: waiting on the rate-limit reset\n' > "$state/park1.status"
+  printf 'window=s:w2\nkind=ship\nstanding=svc\n' > "$state/svc1.meta"
+  for verdict in alive unknown timeout; do
+    probe=$(make_liveness_probe "$dir" "$verdict")
+    FM_SUP_LIVENESS_PROBE=$probe fm_supervision_status "$state" 300
+    [ "$FM_SUP_IN_FLIGHT" -eq 2 ] || fail "an agent reading $verdict must keep the task in flight, got $FM_SUP_IN_FLIGHT ($FM_SUP_IN_FLIGHT_IDS)"
+  done
+  printf '#!/usr/bin/env bash\nsleep 10\nprintf dead\n' > "$dir/probe-slow"
+  chmod +x "$dir/probe-slow"
+  FM_SUP_LIVENESS_TIMEOUT=1 FM_SUP_LIVENESS_PROBE="$dir/probe-slow" fm_supervision_status "$state" 300
+  [ "$FM_SUP_IN_FLIGHT" -eq 2 ] || fail "a liveness read that times out must keep the task in flight, got $FM_SUP_IN_FLIGHT"
+  printf 'window=s:w1\nkind=ship\nbackend=no-such-backend\n' > "$state/park1.meta"
+  rm -f "$state/svc1.meta"
+  fm_supervision_status "$state" 300
+  [ "$FM_SUP_IN_FLIGHT" -eq 1 ] || fail "the shipped probe must keep an unverifiable agent in flight, got $FM_SUP_IN_FLIGHT"
+  pass "fm_supervision_status: a parked task whose agent is alive or unreadable stays in flight"
+}
+
+test_predicate_parked_task_with_scheduled_work_stays_in_flight() {
+  local dir="$TMP_ROOT/pred-parked-scheduled" state dead
+  state="$dir/state"
+  mkdir -p "$state"
+  dead=$(make_liveness_probe "$dir" dead)
+  printf 'window=s:w1\nkind=ship\n' > "$state/poll1.meta"
+  printf 'paused: waiting on review\n' > "$state/poll1.status"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$state/poll1.check.sh"
+  printf 'window=s:w2\nkind=ship\n' > "$state/until1.meta"
+  printf 'paused: quota resets until 2026-09-27T00:00Z\n' > "$state/until1.status"
+  printf 'window=s:w3\nkind=secondmate\n' > "$state/mate1.meta"
+  printf 'paused: idle\n' > "$state/mate1.status"
+  FM_SUP_LIVENESS_PROBE=$dead fm_supervision_status "$state" 300
+  [ "$FM_SUP_IN_FLIGHT" -eq 3 ] || fail "a task poll, a timed pause, and a secondmate must stay in flight, got $FM_SUP_IN_FLIGHT ($FM_SUP_IN_FLIGHT_IDS)"
+  pass "fm_supervision_status: a parked task the watcher still has scheduled work on stays in flight"
+}
+
 # --- HOOK: bin/fm-turnend-guard.sh ------------------------------------------
 #
 # Each scenario gets its own directory carrying a copy of the two guard scripts
@@ -308,6 +396,16 @@ test_hook_silent_when_no_work_in_flight() {
   expect_code 0 "$status" "hook must exit 0 with no in-flight work"
   [ -z "$out" ] || fail "hook produced output with no in-flight work: $out"
   pass "fm-turnend-guard: silent no-op with nothing in flight"
+}
+
+test_hook_silent_over_standing_record_only() {
+  local dir out status
+  dir=$(make_primary_dir "$TMP_ROOT/hook-standing")
+  printf 'project=/p\nkind=ship\nstanding=inbox-poll\n' > "$dir/state/svc1.meta"
+  out=$(run_hook "$dir" false); status=$?
+  expect_code 0 "$status" "hook must not block over a standing record with no endpoint"
+  [ -z "$out" ] || fail "hook produced output over a standing record with no endpoint: $out"
+  pass "fm-turnend-guard: silent over a standing record with no endpoint"
 }
 
 test_hook_blocks_when_fresh_beacon_has_no_live_lock() {
@@ -2205,7 +2303,12 @@ test_predicate_registered_check_survives_rebinding_drift
 test_predicate_unregistered_check_needs_nothing
 test_predicate_task_pr_poll_is_not_a_custom_check
 test_predicate_relay_shim_is_not_a_custom_check
+test_predicate_standing_record_without_endpoint_is_not_in_flight
+test_predicate_parked_dead_worker_is_not_in_flight
+test_predicate_parked_worker_that_may_be_alive_stays_in_flight
+test_predicate_parked_task_with_scheduled_work_stays_in_flight
 test_hook_silent_when_no_work_in_flight
+test_hook_silent_over_standing_record_only
 test_hook_blocks_when_fresh_beacon_has_no_live_lock
 test_hook_blocks_source_only_home
 test_hook_blocks_when_dead_lock_has_fresh_beacon

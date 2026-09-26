@@ -10,7 +10,7 @@
 # guards. It writes one durable outage marker and reuses config/wedge-alarm's
 # active channels for a loud notification.
 #
-# A home is worth supervising when a crew task is in flight (state/*.meta) OR
+# A home is worth supervising when a crew task is in flight (FM_SUP_IN_FLIGHT) OR
 # when a glasses shift is armed (the bin/fm-shift.sh record named by
 # FM_SUP_SHIFT_RECORD_NAME): shift questions arrive as mailbox events, not as
 # tasks, so without the second condition a watcher that died mid-shift would

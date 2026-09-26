@@ -102,11 +102,11 @@ POLICY="$SCRIPT_DIR/fm-continuity-command-policy.mjs"
 . "$SCRIPT_DIR/fm-wake-lib.sh"
 
 fm_primary_scope_matches "$FM_ROOT" "$STATE" || exit 0
-fm_supervision_status "$STATE" "${FM_GUARD_GRACE:-300}"
-[ "$FM_SUP_IN_FLIGHT" -gt 0 ] || exit 0
 if fm_watcher_healthy "$STATE" "$WATCH" "${FM_GUARD_GRACE:-300}" "$FM_HOME"; then
   exit 0
 fi
+fm_supervision_status "$STATE" "${FM_GUARD_GRACE:-300}"
+[ "$FM_SUP_IN_FLIGHT" -gt 0 ] || exit 0
 
 # This hook can be the first surviving process to observe the outage, so it
 # records the durable evidence the host sentinel later alerts on. Marker-only:
