@@ -10,7 +10,7 @@ Exactly one fleet brain remains: the primary already running in this home.
 
 ## What you get
 
-- Always-on-top, draggable floating control (SwiftUI): a small talk button with four smaller controls beside it.
+- Always-on-top, draggable floating control (SwiftUI): a small talk button with five smaller controls beside it.
 - Push-to-talk (hold or click-to-toggle), or hold Right Option anywhere. Not always-listening. No wake word.
 - Speech-to-text via Deepgram (`bin/fm-deepgram-stt.sh`).
 - Transcripts typed straight into the primary Firstmate chat and submitted, with a durable mailbox under the home (`state/desk-voice/inbox/`) as the fallback.
@@ -19,6 +19,7 @@ Exactly one fleet brain remains: the primary already running in this home.
   through Deepgram Aura otherwise, each the fallback for the other.
 - Stop, Repeat and Mute controls for that spoken voice.
 - A dictation mode that types what you say into whatever text box has the cursor, instead of sending it to Firstmate.
+- Quick screenshots sent to Firstmate on their own or together with a voice message (see [Screenshots](#screenshots)).
 
 ## Enablement
 
@@ -39,7 +40,7 @@ Exactly one fleet brain remains: the primary already running in this home.
    First launch builds the Swift package under `desk-floater/` into
    `desk-floater/.build/` (gitignored) and opens the floating control.
    Grant microphone permission when macOS asks.
-   macOS also asks for the Accessibility permission, once for each new build (see [Permissions](#permissions)); the buttons work without it, the hotkeys and typing into other apps do not.
+   macOS also asks for the Accessibility and Screen Recording permissions, once for each new build (see [Permissions](#permissions)); the buttons work without Accessibility, the hotkeys and typing into other apps do not, and screenshots need Screen Recording.
 
 4. Hold the button (or click to toggle), speak, release.
    The transcript is typed into the primary Firstmate chat and submitted, or saved to the mailbox when that chat cannot be reached.
@@ -55,6 +56,7 @@ Drag the floater by its dark backing plate or the status line under the buttons.
 | Repeat (circular arrow) | Speaks the last spoken reply again. Runs `bin/fm-speak.sh --repeat`; the status line says "Nothing to repeat" when nothing has been spoken yet, and "Voice muted" (without repeating) while the voice is muted. |
 | Mute (speaker) | Toggles voice off and on. While muted the icon is a crossed-out speaker on an orange circle, every reply stays text-only, and a reply playing at the moment you mute stops. Runs `bin/fm-speak.sh --mute` / `--unmute`; the setting is per home and survives restarting the floater. |
 | Type (text cursor) | Dictation: click once to start, click again to finish. See [Dictation](#dictation). |
+| Camera | Takes a screenshot for Firstmate. See [Screenshots](#screenshots). A number on it counts the shots waiting to be sent; an orange "!" means the Screen Recording permission is missing, and clicking it asks again. |
 
 Muting affects voice only.
 Firstmate's text replies stay the authoritative ones, and nothing about how Firstmate handles your transcripts changes.
@@ -66,8 +68,10 @@ Firstmate's text replies stay the authoritative ones, and nothing about how Firs
 | --- | --- |
 | Right Option, held | Walkie-talkie: talks to Firstmate for as long as it is held, exactly like holding the large button. Releasing sends. A brief brush of the key (under about a third of a second) sends nothing. |
 | Right Command, tapped | Starts dictation; tap it again to finish and type the text. |
+| Right Shift, tapped | Takes a screenshot of the display under the mouse pointer. See [Screenshots](#screenshots). |
 
-Only the right-hand keys are watched, so the left Option and Command keys keep working as usual.
+Only the right-hand keys are watched, so the left Option, Command and Shift keys keep working as usual.
+Right Shift follows the same tap rules as Right Command: held with a letter to type a capital, or held longer than half a second, it is an ordinary Shift press and takes no screenshot.
 A hotkey used as part of a shortcut is ignored: pressing a letter or clicking the mouse while Right Option is held (to type a special character, or Option-click) cancels that capture without sending anything, and Right Command pressed with another key or a click, or held longer than half a second, is an ordinary Command press. System shortcuts that macOS keeps to itself, such as a quick Right Command-Tab or Right Command-Space, are hidden from the floater and can read as a tap; use the left Command key for those.
 
 ## Dictation
@@ -87,12 +91,38 @@ Without the Accessibility permission the text is left on the clipboard instead a
 Dictated text never goes to Firstmate's mailbox and never wakes Firstmate.
 Clicking a floater control does not take keyboard focus from the app you are typing in.
 
+## Screenshots
+
+Tap Right Shift, or click the Camera control, to take a screenshot of the whole display under the mouse pointer.
+Take several in a row, moving the pointer to another display in between if you like: they stack, and about three seconds after the last one they are sent to Firstmate together as one message, with nothing more to press.
+The camera shows how many are stacked, the status line reads "2 shots stacked", then "Sent" once they are delivered.
+
+The message names each image by its full path, for example `Screenshots: /…/state/desk-voice/shots/<time>-<id>.png /…/<time>-<id>.png`, so Firstmate can open them.
+A message with screenshots, with or without words, travels the same way as a voice message: typed into the Firstmate chat, or saved to the mailbox when that chat cannot be reached, see [How transcripts reach Firstmate](#how-transcripts-reach-firstmate).
+
+Screenshots combine with talk-to-Firstmate:
+
+- Shots taken while Right Option is held, or while the large button is recording, go with that voice message.
+- Shots still stacking when you start talking wait and go with the voice message too.
+- Shots taken after you finish talking, while the message is still being transcribed, join it; the message then waits until three seconds after the last shot.
+- Talking again while a message waits for its shots ("Adding shots…" on the status line) adds the new words after the first ones, and the wait starts over from the end of that talk.
+
+The words and the image paths arrive as one message, the transcript first, then the `Screenshots:` paths (on one typed line in the chat, on a line of their own in the mailbox).
+A voice message with no shots stacked is sent as soon as it is transcribed, so a shot taken after it has already gone is sent on its own.
+Dictation never takes screenshots along: shots taken while dictating are sent to Firstmate on their own.
+
+Screenshots are kept in this home's `state/desk-voice/shots/`, which is gitignored and readable only by you.
+Only the newest 30 are kept; each new shot removes the oldest beyond that.
+`bin/fm-desk-voice.sh shot` takes them and its header owns that limit.
+Nothing is sent anywhere but to this home's Firstmate.
+
 ## Permissions
 
 | Permission | Needed for | Where |
 | --- | --- | --- |
 | Microphone | Every capture | Asked the first time you talk. |
-| Accessibility | The Right Option and Right Command hotkeys, and pasting dictated text into other apps | Asked on the first launch of each new build. Grant it in System Settings, Privacy & Security, Accessibility, by switching on DeskFloater. |
+| Accessibility | The Right Option, Right Command and Right Shift hotkeys, and pasting dictated text into other apps | Asked on the first launch of each new build. Grant it in System Settings, Privacy & Security, Accessibility, by switching on DeskFloater. |
+| Screen Recording | Screenshots | Asked on the first launch of each new build. Grant it in System Settings, Privacy & Security, Screen & System Audio Recording, by switching on DeskFloater. |
 
 The floater checks the permission every few seconds and turns the hotkeys on as soon as it is granted, with no restart.
 Until then the hotkeys and the paste are off: an orange "!" badge sits on the talk button, the status line reads "Keys off - click !" in orange, and the on-screen buttons work as normal.
@@ -102,9 +132,13 @@ macOS ties the grant to the exact app build, so every time `bin/fm-desk-floater.
 The rebuilt floater asks once more on its first launch.
 If DeskFloater already shows as switched on in that list, switch it off and on again, or remove it with the minus button and click the badge to add it back.
 
+Screen Recording works the same way, with its own orange "!" on the Camera control.
+Until it is granted, screenshots are off and the Camera control and Right Shift take none; clicking the Camera control asks macOS again and opens the Screen Recording settings.
+macOS may only notice a new Screen Recording grant after the floater restarts, so choose "Quit & Reopen" if it offers, or restart it with `bin/fm-desk-floater.sh`.
+
 ## How transcripts reach Firstmate
 
-The floater hands each transcript to `bin/fm-desk-voice.sh send`, which types it into the primary Firstmate session's own chat pane and presses Enter.
+The floater hands each message, with or without screenshots, to `bin/fm-desk-voice.sh send`, which types it into the primary Firstmate session's own chat pane and presses Enter.
 The words arrive at once, even while Firstmate is mid-task, and that pane does not need focus.
 Only the session holding this home's session lock is ever typed into, and only after its pane is proven to host that session; the script header owns the resolution and the supported runtime backends.
 The pane must also show its chat input, read as empty or holding a draft.
@@ -167,7 +201,8 @@ STT model default: `nova-2` (`DEEPGRAM_STT_MODEL`).
 
 - Always-on open mic / wake word.
 - Sending dictated text anywhere but the text box that has the cursor.
-- Screen observation / computer use.
+- Watching the screen continuously, or computer use: a screenshot is only taken when you ask for one.
+- Choosing a window or region: a screenshot is always the whole display under the pointer.
 - Replacing glasses voice or the ElevenLabs glasses path.
 - Building inside the OpenAI Codex app.
 
@@ -175,8 +210,8 @@ STT model default: `nova-2` (`DEEPGRAM_STT_MODEL`).
 
 | Script | Role |
 | --- | --- |
-| `bin/fm-desk-floater.sh` | Build/launch the floating control; the controls, hotkeys and dictation live in `desk-floater/Sources/DeskFloater.swift` |
-| `bin/fm-desk-voice.sh` | Send into the primary chat, with mailbox deliver / pending / drain |
+| `bin/fm-desk-floater.sh` | Build/launch the floating control; the controls, hotkeys, dictation and screenshot stacking live in `desk-floater/Sources/DeskFloater.swift` |
+| `bin/fm-desk-voice.sh` | Send into the primary chat, screenshot capture, and mailbox deliver / pending / drain |
 | `bin/fm-deepgram-stt.sh` | Audio file → transcript |
 | `bin/fm-deepgram-tts.sh` | Text → Deepgram Aura audio |
 | `bin/fm-speak.sh` | Captain-facing speak-out (a named `voice` selects `say`, else Deepgram Aura; each the other's fallback), plus `--stop`, `--repeat`, `--mute`, `--unmute` and `--muted` |
