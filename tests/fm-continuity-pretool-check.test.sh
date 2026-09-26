@@ -63,7 +63,7 @@ expect_deny() {
   [ ! -s "$OUT" ] || fail "$label deny wrote stdout: $(cat "$OUT")"
   jq -e '.hookSpecificOutput.hookEventName == "PreToolUse" and .hookSpecificOutput.permissionDecision == "deny"' "$ERR" >/dev/null 2>&1 \
     || fail "$label deny omitted Claude's permission decision: $(cat "$ERR")"
-  [ -n "$expected" ] || expected="[watcher-continuity] SUPERVISION OUTAGE: down for unknown duration (unknown since when; watcher beat file missing or unreadable); 1 task(s) in flight: task. No live watcher holds this home lock. Drain wakes with bin/fm-wake-drain.sh, the safe mid-session action; run the once-per-session bin/fm-session-start.sh instead only if you have not already run it earlier this session; use fail-closed bin/fm-teardown.sh for completed tasks when needed, then re-arm with bin/fm-watch-arm.sh as a tracked Claude background task before running other fleet commands (blocked: $blocked)"
+  [ -n "$expected" ] || expected="[watcher-continuity] SUPERVISION OUTAGE: down for unknown duration (unknown since when; watcher beat file missing or unreadable); 1 task(s) in flight: task. Failed watcher check: watcher-pid-alive - no watcher lock pid is recorded. No live watcher holds this home lock. Drain wakes with bin/fm-wake-drain.sh, the safe mid-session action; run the once-per-session bin/fm-session-start.sh instead only if you have not already run it earlier this session; use fail-closed bin/fm-teardown.sh for completed tasks when needed, then re-arm with bin/fm-watch-arm.sh as a tracked Claude background task before running other fleet commands (blocked: $blocked)"
   actual=$(jq -r '.systemMessage' "$ERR")
   [ "$actual" = "$expected" ] || fail "$label recovery guidance changed: $actual"
 }
@@ -83,7 +83,7 @@ test_gate_scope_and_recovery_exceptions() {
   # exactly that literal invocation is a recovery exception and nothing else is.
   expect_allow "exact sentinel enable improves recovery" 'bin/fm-supervision-sentinel.sh enable'
   expect_allow "nested exact sentinel enable improves recovery" "bash -lc 'bin/fm-supervision-sentinel.sh enable'"
-  unsafe_sentinel_reason='[watcher-continuity] SUPERVISION OUTAGE: down for unknown duration (unknown since when; watcher beat file missing or unreadable); 1 task(s) in flight: task. During recovery only the literal bin/fm-supervision-sentinel.sh enable is allowed; arm, disarm, check, and every other host-sentinel invocation stays blocked until supervision is healthy (blocked: fm-supervision-sentinel.sh)'
+  unsafe_sentinel_reason='[watcher-continuity] SUPERVISION OUTAGE: down for unknown duration (unknown since when; watcher beat file missing or unreadable); 1 task(s) in flight: task. Failed watcher check: watcher-pid-alive - no watcher lock pid is recorded. During recovery only the literal bin/fm-supervision-sentinel.sh enable is allowed; arm, disarm, check, and every other host-sentinel invocation stays blocked until supervision is healthy (blocked: fm-supervision-sentinel.sh)'
   expect_deny "sentinel disarm reduces safety" 'bin/fm-supervision-sentinel.sh disarm' 'fm-supervision-sentinel.sh' "$unsafe_sentinel_reason"
   expect_deny "sentinel arm is not explicit enable" 'bin/fm-supervision-sentinel.sh arm' 'fm-supervision-sentinel.sh' "$unsafe_sentinel_reason"
   expect_deny "sentinel check is not explicit enable" 'bin/fm-supervision-sentinel.sh check' 'fm-supervision-sentinel.sh' "$unsafe_sentinel_reason"
@@ -93,7 +93,7 @@ test_gate_scope_and_recovery_exceptions() {
   expect_deny "over-argued sentinel enable is not recovery" 'bin/fm-supervision-sentinel.sh enable disarm' 'fm-supervision-sentinel.sh' "$unsafe_sentinel_reason"
   # shellcheck disable=SC2016 # Literal dynamic mode is test input and must stay denied.
   expect_deny "dynamic sentinel mode is not exact" 'bin/fm-supervision-sentinel.sh "$MODE"' 'fm-supervision-sentinel.sh' "$unsafe_sentinel_reason"
-  unsafe_teardown_reason='[watcher-continuity] SUPERVISION OUTAGE: down for unknown duration (unknown since when; watcher beat file missing or unreadable); 1 task(s) in flight: task. No live watcher holds this home lock. During recovery only the ordinary literal bin/fm-teardown.sh is allowed, so drop --force and any shell-expanded arguments and retry the literal invocation (blocked: fm-teardown.sh)'
+  unsafe_teardown_reason='[watcher-continuity] SUPERVISION OUTAGE: down for unknown duration (unknown since when; watcher beat file missing or unreadable); 1 task(s) in flight: task. Failed watcher check: watcher-pid-alive - no watcher lock pid is recorded. No live watcher holds this home lock. During recovery only the ordinary literal bin/fm-teardown.sh is allowed, so drop --force and any shell-expanded arguments and retry the literal invocation (blocked: fm-teardown.sh)'
   expect_deny "forced teardown is not recovery" 'bin/fm-teardown.sh task --force' 'fm-teardown.sh' "$unsafe_teardown_reason"
   expect_deny "nested forced teardown is not recovery" "bash -lc 'bin/fm-teardown.sh task --force'" 'fm-teardown.sh' "$unsafe_teardown_reason"
   # shellcheck disable=SC2016  # single quotes are deliberate: "$TEARDOWN_MODE" is literal test data (an unsafe shell-expanded arg the gate must deny), not an expansion here
@@ -126,9 +126,9 @@ test_gate_scope_and_recovery_exceptions() {
 test_lock_holding_session_rerun_refused() {
   local held_reason rerun_reason
   RUN_FROM_HARNESS=1
-  held_reason='[watcher-continuity] SUPERVISION OUTAGE: down for unknown duration (unknown since when; watcher beat file missing or unreadable); 1 task(s) in flight: task. No live watcher holds this home lock. Drain wakes with bin/fm-wake-drain.sh, the safe mid-session action; use fail-closed bin/fm-teardown.sh for completed tasks when needed, then re-arm with bin/fm-watch-arm.sh as a tracked Claude background task before running other fleet commands (blocked: fm-crew-state.sh)'
+  held_reason='[watcher-continuity] SUPERVISION OUTAGE: down for unknown duration (unknown since when; watcher beat file missing or unreadable); 1 task(s) in flight: task. Failed watcher check: watcher-pid-alive - no watcher lock pid is recorded. No live watcher holds this home lock. Drain wakes with bin/fm-wake-drain.sh, the safe mid-session action; use fail-closed bin/fm-teardown.sh for completed tasks when needed, then re-arm with bin/fm-watch-arm.sh as a tracked Claude background task before running other fleet commands (blocked: fm-crew-state.sh)'
   expect_deny "lock-holding session guidance" 'bin/fm-crew-state.sh task' 'fm-crew-state.sh' "$held_reason"
-  rerun_reason='[watcher-continuity] SUPERVISION OUTAGE: down for unknown duration (unknown since when; watcher beat file missing or unreadable); 1 task(s) in flight: task. No live watcher holds this home lock. This session'\''s own ancestry already holds the home session lock, so the once-per-session bin/fm-session-start.sh has already run here and a mid-session re-run is not a recovery action. Drain wakes with bin/fm-wake-drain.sh, the safe mid-session action; use fail-closed bin/fm-teardown.sh for completed tasks when needed, then re-arm with bin/fm-watch-arm.sh as a tracked Claude background task before running other fleet commands (blocked: fm-session-start.sh)'
+  rerun_reason='[watcher-continuity] SUPERVISION OUTAGE: down for unknown duration (unknown since when; watcher beat file missing or unreadable); 1 task(s) in flight: task. Failed watcher check: watcher-pid-alive - no watcher lock pid is recorded. No live watcher holds this home lock. This session'\''s own ancestry already holds the home session lock, so the once-per-session bin/fm-session-start.sh has already run here and a mid-session re-run is not a recovery action. Drain wakes with bin/fm-wake-drain.sh, the safe mid-session action; use fail-closed bin/fm-teardown.sh for completed tasks when needed, then re-arm with bin/fm-watch-arm.sh as a tracked Claude background task before running other fleet commands (blocked: fm-session-start.sh)'
   expect_deny "mid-session session-start re-run" 'bin/fm-session-start.sh' 'fm-session-start.sh' "$rerun_reason"
   expect_deny "nested mid-session session-start re-run" "bash -lc 'bin/fm-session-start.sh'" 'fm-session-start.sh' "$rerun_reason"
   # The other recovery allowances are unaffected by session-lock ownership.
@@ -149,9 +149,9 @@ test_foreign_lock_holder_session_start_refused() {
   node -e 'setTimeout(() => {}, 300000)' codex &
   holder=$!
   printf '%s\n' "$holder" > "$STATE/.lock"
-  foreign_reason='[watcher-continuity] SUPERVISION OUTAGE: down for unknown duration (unknown since when; watcher beat file missing or unreadable); 1 task(s) in flight: task. No live watcher holds this home lock. Another live session holds the home session lock, so the once-per-session bin/fm-session-start.sh belongs to that session and is not a recovery action here. Drain wakes with bin/fm-wake-drain.sh, the safe mid-session action; use fail-closed bin/fm-teardown.sh for completed tasks when needed, then re-arm with bin/fm-watch-arm.sh as a tracked Claude background task before running other fleet commands (blocked: fm-session-start.sh)'
+  foreign_reason='[watcher-continuity] SUPERVISION OUTAGE: down for unknown duration (unknown since when; watcher beat file missing or unreadable); 1 task(s) in flight: task. Failed watcher check: watcher-pid-alive - no watcher lock pid is recorded. No live watcher holds this home lock. Another live session holds the home session lock, so the once-per-session bin/fm-session-start.sh belongs to that session and is not a recovery action here. Drain wakes with bin/fm-wake-drain.sh, the safe mid-session action; use fail-closed bin/fm-teardown.sh for completed tasks when needed, then re-arm with bin/fm-watch-arm.sh as a tracked Claude background task before running other fleet commands (blocked: fm-session-start.sh)'
   expect_deny "ancestry-mismatch session start" 'bin/fm-session-start.sh' 'fm-session-start.sh' "$foreign_reason"
-  foreign_guidance='[watcher-continuity] SUPERVISION OUTAGE: down for unknown duration (unknown since when; watcher beat file missing or unreadable); 1 task(s) in flight: task. No live watcher holds this home lock. Drain wakes with bin/fm-wake-drain.sh, the safe mid-session action; use fail-closed bin/fm-teardown.sh for completed tasks when needed, then re-arm with bin/fm-watch-arm.sh as a tracked Claude background task before running other fleet commands (blocked: fm-crew-state.sh)'
+  foreign_guidance='[watcher-continuity] SUPERVISION OUTAGE: down for unknown duration (unknown since when; watcher beat file missing or unreadable); 1 task(s) in flight: task. Failed watcher check: watcher-pid-alive - no watcher lock pid is recorded. No live watcher holds this home lock. Drain wakes with bin/fm-wake-drain.sh, the safe mid-session action; use fail-closed bin/fm-teardown.sh for completed tasks when needed, then re-arm with bin/fm-watch-arm.sh as a tracked Claude background task before running other fleet commands (blocked: fm-crew-state.sh)'
   expect_deny "foreign-lock guidance drops the session-start clause" 'bin/fm-crew-state.sh task' 'fm-crew-state.sh' "$foreign_guidance"
   kill "$holder" 2>/dev/null || true
   wait "$holder" 2>/dev/null || true
@@ -220,7 +220,104 @@ test_live_lock_with_stale_beacon_still_denies_fleet_command() {
   assert_contains "$actual" 'SUPERVISION OUTAGE: down for at least ' "stale-beacon denial omitted the unambiguous alarm"
   assert_contains "$actual" 'since the last watcher beat' "stale-beacon denial omitted the outage age evidence"
   assert_contains "$actual" '1 task(s) in flight: task' "stale-beacon denial omitted the in-flight task identity"
+  assert_contains "$actual" 'Failed watcher check: watcher-beat-fresh - ' "stale-beacon denial did not name the failed check"
+  assert_contains "$actual" 'No live watcher holds this home lock.' "stale-beacon denial dropped the outage holder sentence"
+  assert_contains "$actual" 're-arm with bin/fm-watch-arm.sh as a tracked' "stale-beacon denial dropped the plain re-arm guidance"
   pass "continuity gate requires both the identity-matched live lock and a fresh beacon"
+}
+
+# ps renders lstart in the caller's zone, and the watcher that writes its lock
+# identity and the hook that re-reads it can run under different TZ values. The
+# identity must be zone-stable, or a healthy watcher is refused as an outage.
+# FM_PROC_ROOT_OVERRIDE forces the ps lstart form on Linux too.
+test_live_watcher_identity_is_timezone_stable() {
+  local holder identity writer_start checker_start rc=0
+  sleep 300 &
+  holder=$!
+  writer_start=$(TZ=AAA+5 LC_ALL=C ps -p "$holder" -o lstart=)
+  checker_start=$(TZ=BBB-7 LC_ALL=C ps -p "$holder" -o lstart=)
+  identity=$(TZ=AAA+5 FM_PROC_ROOT_OVERRIDE="$TMP_ROOT/no-proc" FM_STATE_OVERRIDE="$STATE" \
+    bash -c '. "$1"; fm_pid_identity "$2"' _ "$ROOT/bin/fm-wake-lib.sh" "$holder") || identity=
+  mkdir -p "$STATE/.watch.lock"
+  printf '%s\n' "$holder" > "$STATE/.watch.lock/pid"
+  printf '%s\n' "$PRIMARY" > "$STATE/.watch.lock/fm-home"
+  printf '%s\n' "$WATCH" > "$STATE/.watch.lock/watcher-path"
+  printf '%s\n' "$identity" > "$STATE/.watch.lock/pid-identity"
+  touch "$STATE/.last-watcher-beat"
+
+  export TZ=BBB-7 FM_PROC_ROOT_OVERRIDE="$TMP_ROOT/no-proc"
+  run_command 'bin/fm-crew-state.sh task' || rc=$?
+  unset TZ FM_PROC_ROOT_OVERRIDE
+  kill "$holder" 2>/dev/null || true
+  wait "$holder" 2>/dev/null || true
+  rm -rf "$STATE/.watch.lock" "$STATE/.last-watcher-beat"
+  [ -n "$writer_start" ] && [ "$writer_start" != "$checker_start" ] \
+    || fail "fixture zones must render the same lstart differently: '$writer_start' vs '$checker_start'"
+  [ -n "$identity" ] || fail "could not identify live continuity fixture"
+  [ "$rc" -eq 0 ] || fail "healthy watcher checked from another time zone must allow, got exit $rc: $(cat "$ERR")"
+  [ ! -s "$OUT" ] && [ ! -s "$ERR" ] || fail "healthy watcher allow wrote output: $(cat "$OUT" "$ERR")"
+  pass "continuity gate accepts a healthy watcher whose identity was recorded under another time zone"
+}
+
+# A watcher still running across the upgrade that pinned lstart to UTC recorded
+# its identity in local time; the gate and every other lock consumer sharing
+# fm_pid_identity_matches must keep accepting it rather than evict it as reused.
+test_legacy_local_time_identity_still_matches() {
+  local holder legacy utc rc=0 daemon_rc=0
+  sleep 300 &
+  holder=$!
+  legacy=$(TZ=AAA+5 COLUMNS=10000 LC_ALL=C ps -p "$holder" -o lstart= -o command= | sed 's/^[[:space:]]*//')
+  utc=$(FM_PROC_ROOT_OVERRIDE="$TMP_ROOT/no-proc" FM_STATE_OVERRIDE="$STATE" \
+    bash -c '. "$1"; fm_pid_identity "$2"' _ "$ROOT/bin/fm-wake-lib.sh" "$holder") || utc=
+  mkdir -p "$STATE/.watch.lock" "$STATE/.supervise-daemon.lock"
+  printf '%s\n' "$holder" > "$STATE/.watch.lock/pid"
+  printf '%s\n' "$PRIMARY" > "$STATE/.watch.lock/fm-home"
+  printf '%s\n' "$WATCH" > "$STATE/.watch.lock/watcher-path"
+  printf '%s\n' "$legacy" > "$STATE/.watch.lock/pid-identity"
+  printf '%s\n' "$holder" > "$STATE/.supervise-daemon.lock/pid"
+  printf '%s\n' "$legacy" > "$STATE/.supervise-daemon.lock/pid-identity"
+  touch "$STATE/.last-watcher-beat" "$STATE/.afk"
+
+  export TZ=AAA+5 FM_PROC_ROOT_OVERRIDE="$TMP_ROOT/no-proc"
+  run_command 'bin/fm-crew-state.sh task' || rc=$?
+  FM_STATE_OVERRIDE="$STATE" bash -c '. "$1"; fm_afk_daemon_owns_supervision "$2"' \
+    _ "$ROOT/bin/fm-wake-lib.sh" "$STATE" || daemon_rc=$?
+  unset TZ FM_PROC_ROOT_OVERRIDE
+  kill "$holder" 2>/dev/null || true
+  wait "$holder" 2>/dev/null || true
+  rm -rf "$STATE/.watch.lock" "$STATE/.supervise-daemon.lock" "$STATE/.last-watcher-beat" "$STATE/.afk"
+  [ -n "$legacy" ] && [ -n "$utc" ] && [ "$legacy" != "$utc" ] \
+    || fail "fixture must render the legacy local-time identity differently from UTC: '$legacy' vs '$utc'"
+  [ "$rc" -eq 0 ] || fail "healthy watcher with a legacy local-time identity must allow, got exit $rc: $(cat "$ERR")"
+  [ ! -s "$OUT" ] && [ ! -s "$ERR" ] || fail "legacy identity allow wrote output: $(cat "$OUT" "$ERR")"
+  [ "$daemon_rc" -eq 0 ] || fail "supervise-daemon lock with a legacy local-time identity must still own supervision"
+  pass "legacy local-time lock identities still match their live process after the UTC pin"
+}
+
+test_deny_names_the_failed_watcher_check() {
+  local holder rc=0 actual expected teardown_actual
+  sleep 300 &
+  holder=$!
+  mkdir -p "$STATE/.watch.lock"
+  printf '%s\n' "$holder" > "$STATE/.watch.lock/pid"
+  printf '%s\n' "$PRIMARY" > "$STATE/.watch.lock/fm-home"
+  printf '%s\n' "$WATCH" > "$STATE/.watch.lock/watcher-path"
+  printf '%s\n' 'Mon Jan  1 00:00:00 2001 sleep 300' > "$STATE/.watch.lock/pid-identity"
+  touch "$STATE/.last-watcher-beat"
+
+  run_command 'bin/fm-teardown.sh task --force' || true
+  teardown_actual=$(jq -r '.systemMessage' "$ERR")
+  run_command 'bin/fm-crew-state.sh task' || rc=$?
+  kill "$holder" 2>/dev/null || true
+  wait "$holder" 2>/dev/null || true
+  rm -rf "$STATE/.watch.lock" "$STATE/.last-watcher-beat"
+  [ "$rc" -eq 2 ] || fail "a live watcher with a mismatched lock identity must deny fleet work, got $rc"
+  actual=$(jq -r '.systemMessage' "$ERR")
+  expected="[watcher-continuity] The watcher is running with a fresh beat but its identity check failed: pid-identity-mismatch - watcher pid $holder is running but its live process identity differs from the identity the lock recorded. Fleet commands stay gated until it is restarted. Drain wakes with bin/fm-wake-drain.sh, the safe mid-session action; run the once-per-session bin/fm-session-start.sh instead only if you have not already run it earlier this session; use fail-closed bin/fm-teardown.sh for completed tasks when needed, then restart it with bin/fm-watch-arm.sh --restart as a tracked Claude background task before running other fleet commands (blocked: fm-crew-state.sh)"
+  [ "$actual" = "$expected" ] || fail "live-watcher identity-mismatch denial must name the check without outage framing: $actual"
+  expected="[watcher-continuity] The watcher is running with a fresh beat but its identity check failed: pid-identity-mismatch - watcher pid $holder is running but its live process identity differs from the identity the lock recorded. Fleet commands stay gated until it is restarted. During recovery only the ordinary literal bin/fm-teardown.sh is allowed, so drop --force and any shell-expanded arguments and retry the literal invocation; restart the watcher with bin/fm-watch-arm.sh --restart as a tracked Claude background task (blocked: fm-teardown.sh)"
+  [ "$teardown_actual" = "$expected" ] || fail "live-watcher unsafe-teardown denial must point to the restart: $teardown_actual"
+  pass "continuity denial names the failed check of a live watcher without calling it an outage"
 }
 
 test_child_worktree_and_malformed_input_fail_open() {
@@ -265,5 +362,8 @@ test_reused_non_harness_pid_first_run_allowed
 test_dead_lock_holder_first_run_allowed
 test_deny_quantifies_stale_outage_and_names_every_task
 test_live_lock_with_stale_beacon_still_denies_fleet_command
+test_live_watcher_identity_is_timezone_stable
+test_legacy_local_time_identity_still_matches
+test_deny_names_the_failed_watcher_check
 test_child_worktree_and_malformed_input_fail_open
 test_claude_hook_registration_preserves_stop_backstop

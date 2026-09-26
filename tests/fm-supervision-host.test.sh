@@ -542,6 +542,25 @@ test_engine_turn_is_bounded_and_its_descendants_reaped() {
   pass "host: an engine turn is bounded, and tool processes outside its process group are reaped"
 }
 
+# A predecessor started before lstart identities were pinned to UTC recorded
+# its descendants in local time; a successor must still reap them.
+test_engine_reap_accepts_a_legacy_local_time_identity() {
+  local ledger="$TMP_ROOT/legacy-descendants" victim legacy
+  sleep 300 &
+  victim=$!
+  legacy=$(TZ=AAA+5 COLUMNS=10000 LC_ALL=C ps -p "$victim" -o lstart= -o command= | sed 's/^[[:space:]]*//')
+  [ -n "$legacy" ] || fail "legacy reap: could not render the fixture identity"
+  printf '%s\t%s\n' "$victim" "$legacy" > "$ledger"
+  TZ=AAA+5 FM_PROC_ROOT_OVERRIDE="$TMP_ROOT/no-proc" FM_STATE_OVERRIDE="$TMP_ROOT/legacy-state" \
+    bash -c '. "$1/bin/fm-wake-lib.sh"; . "$1/bin/fm-supervision-engine-lib.sh"; _fm_engine_reap "$2"' _ "$ROOT" "$ledger"
+  wait_until 50 sh -c '! kill -0 "$1" 2>/dev/null' _ "$victim" || {
+    kill -KILL "$victim" 2>/dev/null || true
+    fail "legacy reap: a descendant recorded with a local-time identity was not reaped"
+  }
+  wait "$victim" 2>/dev/null || true
+  pass "host: engine reap still matches a descendant recorded with a legacy local-time identity"
+}
+
 test_restarted_host_stops_what_a_killed_predecessor_left() {
   local home first_host arm watcher
   home=$(make_home away-crash away)
@@ -824,6 +843,7 @@ test_report_without_acknowledgement_hands_the_wake_to_main
 test_return_during_a_failed_turn_still_hands_its_outcomes_to_main
 test_incomplete_engine_result_hands_the_wake_to_main
 test_engine_turn_is_bounded_and_its_descendants_reaped
+test_engine_reap_accepts_a_legacy_local_time_identity
 test_restarted_host_stops_what_a_killed_predecessor_left
 test_park_boundary_ends_the_park_before_the_hook_timeout
 test_park_boundary_holds_under_back_to_back_closes

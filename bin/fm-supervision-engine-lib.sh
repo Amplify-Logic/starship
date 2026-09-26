@@ -175,14 +175,13 @@ _fm_engine_snapshot_descendants() {
 # that is still alive under its recorded identity. A recycled pid never
 # matches its recorded identity, so it is never signalled.
 _fm_engine_reap() {
-  local ledger=$1 pid identity current signal survivors i
+  local ledger=$1 pid identity signal survivors i
   [ -s "$ledger" ] || return 0
   for signal in TERM KILL; do
     survivors=0
     while IFS="$(printf '\t')" read -r pid identity; do
       fm_pid_alive "$pid" || continue
-      current=$(_fm_engine_identity "$pid") || continue
-      [ "$current" = "$identity" ] || continue
+      fm_pid_identity_matches "$pid" "$identity" || continue
       kill "-$signal" "$pid" 2>/dev/null || true
       survivors=$((survivors + 1))
     done < "$ledger"

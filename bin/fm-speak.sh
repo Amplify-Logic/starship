@@ -424,14 +424,13 @@ record_speak_lock_identity() {
 # can never cut a line that is still playing.
 # shellcheck disable=SC2329 # Reached only through hold_playback_lock.
 speak_lock_pid_was_reused() {
-  local pid recorded current
+  local pid recorded
   pid=$(cat "$SPEAK_LOCK/pid" 2>/dev/null) || return 1
   fm_pid_alive "$pid" || return 1
   recorded=$(cat "$SPEAK_LOCK/pid-identity" 2>/dev/null) || return 1
   [ -n "$recorded" ] || return 1
-  current=$(fm_pid_identity "$pid" 2>/dev/null) || return 1
-  [ -n "$current" ] || return 1
-  [ "$current" != "$recorded" ]
+  fm_pid_identity_matches "$pid" "$recorded"
+  [ "$?" -eq 1 ]
 }
 
 # Reclaim under the lock's steal mutex, the same serialization

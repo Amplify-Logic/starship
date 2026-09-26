@@ -911,9 +911,10 @@ async function sleep(milliseconds) {
   await new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
-async function capturedProcessOutput(command, args, maxBytes = 8192) {
+async function capturedProcessOutput(command, args, maxBytes = 8192, extraEnv = { TZ: "UTC0" }) {
   const child = spawn(command, args, {
-    env: { PATH: sanitizedPath(), LANG: "C", LC_ALL: "C" },
+    // TZ matches bin/fm-wake-lib.sh fm_pid_identity, whose ps lstart identity pidIdentity compares against.
+    env: { PATH: sanitizedPath(), LANG: "C", LC_ALL: "C", ...extraEnv },
     shell: false,
     stdio: ["ignore", "pipe", "ignore"],
   });
@@ -947,6 +948,16 @@ async function pidIdentity(pid) {
   return capturedProcessOutput("/bin/ps", ["-p", String(pid), "-o", "lstart=", "-o", "command="]);
 }
 
+// Mirrors bin/fm-wake-lib.sh fm_pid_identity_matches: a ps identity recorded
+// before lstart was pinned to UTC rendered in local time, so accept that too.
+async function pidIdentityMatches(pid, expected) {
+  const actual = await pidIdentity(pid);
+  if (actual === expected) return true;
+  if (/^(?:proc|linux)-starttime=/u.test(actual)) return false;
+  const legacy = await capturedProcessOutput("/bin/ps", ["-p", String(pid), "-o", "lstart=", "-o", "command="], 8192, {});
+  return legacy === expected;
+}
+
 async function selfIdentity() {
   if (!cachedSelfIdentity) {
     cachedSelfIdentity = `host-token:${makeRequestId()}`;
@@ -977,13 +988,13 @@ async function processIdentityState(pid, expected) {
       return pidAlive(pid) ? 2 : 1;
     }
   }
-  let actual;
+  let matched;
   try {
-    actual = await pidIdentity(pid);
+    matched = await pidIdentityMatches(pid, expected);
   } catch {
     return pidAlive(pid) ? 2 : 1;
   }
-  return actual === expected ? 0 : 2;
+  return matched ? 0 : 2;
 }
 
 async function barrierProcessGroupState(pid, expectedIdentity) {
@@ -1011,13 +1022,13 @@ async function processGroupState(pid, expectedIdentity = null, trustedChild = fa
   if (!pidAlive(pid)) return groupAlive(pid) ? 3 : 1;
   if (expectedIdentity?.startsWith("barrier-token:")) return barrierProcessGroupState(pid, expectedIdentity);
   if (expectedIdentity) {
-    let actual;
+    let matched;
     try {
-      actual = await pidIdentity(pid);
+      matched = await pidIdentityMatches(pid, expectedIdentity);
     } catch {
       return pidAlive(pid) ? 2 : (groupAlive(pid) ? 3 : 1);
     }
-    if (actual !== expectedIdentity) return 2;
+    if (!matched) return 2;
   } else if (!trustedChild) {
     return 2;
   }
