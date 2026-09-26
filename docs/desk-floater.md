@@ -10,7 +10,7 @@ Exactly one fleet brain remains: the primary already running in this home.
 
 ## What you get
 
-- Always-on-top, draggable floating control (SwiftUI): a small talk button with five smaller controls beside it, and a dropdown arrow for recent replies.
+- Always-on-top, draggable floating control (SwiftUI): a small talk button with four smaller controls beside it, and a dropdown arrow for recent replies.
 - Push-to-talk (hold or click-to-toggle), or hold Right Option anywhere. Not always-listening. No wake word.
 - Speech-to-text via Deepgram (`bin/fm-deepgram-stt.sh`).
 - Transcripts typed straight into the primary Firstmate chat and submitted, with a durable mailbox under the home (`state/desk-voice/inbox/`) as the fallback.
@@ -56,8 +56,7 @@ Drag the floater by its dark backing plate or the status line under the buttons.
 | Repeat (circular arrow) | Speaks the last spoken reply again. Runs `bin/fm-speak.sh --repeat`; the status line says "Nothing to repeat" when nothing has been spoken yet, and "Voice muted" (without repeating) while the voice is muted. |
 | Recent replies (dropdown arrow, right edge) | Opens a list of the last 10 spoken replies, newest first, each with its time and the start of its text; hover over one to read all of it. Click a reply to hear it again. Stop and Mute work on it as on Repeat, and while muted a click stays silent and the status line says "Voice muted". Click the arrow again to close the list. Runs `bin/fm-speak.sh --history` and `--replay <number>`. |
 | Mute (speaker) | Toggles voice off and on. While muted the icon is a crossed-out speaker on an orange circle, every reply stays text-only, and a reply playing at the moment you mute stops. Runs `bin/fm-speak.sh --mute` / `--unmute`; the setting is per home and survives restarting the floater. |
-| Type (text cursor) | Dictation: click once to start, click again to finish. See [Dictation](#dictation). |
-| Camera | Takes a screenshot for Firstmate. See [Screenshots](#screenshots). A number on it counts the shots waiting to be sent; an orange "!" means the Screen Recording permission is missing, and clicking it asks again. |
+| Camera (bottom right of the small controls) | Takes a screenshot for Firstmate. See [Screenshots](#screenshots). A number on it counts the shots waiting to be sent; an orange "!" means the Screen Recording permission is missing, and clicking it asks again. |
 
 Repeat and the recent list play a reply as soon as you click, from the audio kept when it was first spoken, rather than waiting for Deepgram to make it again.
 A reply with no kept audio, such as one spoken by macOS `say`, is spoken again the ordinary way.
@@ -84,9 +83,9 @@ A hotkey used as part of a shortcut is ignored: pressing a letter or clicking th
 Dictation types what you say into whatever text box has the cursor: this terminal, a browser field, a chat window, any app.
 
 1. Put the cursor where the text should go.
-2. Tap Right Command, or click the Type control.
-   The large button and the Type control turn purple and the status line reads "Dictating…" while it listens.
-3. Speak, then tap Right Command or click Type again.
+2. Tap Right Command.
+   The large button turns purple and the status line reads "Dictating…" while it listens.
+3. Speak, then tap Right Command again.
    The audio is transcribed through the same Deepgram path, and the text is pasted where the cursor is.
 
 The paste puts the text on the clipboard, sends Command-V to the app you are typing in, then puts back whatever the clipboard held before.

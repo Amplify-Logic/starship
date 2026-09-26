@@ -756,7 +756,7 @@ final class FloaterModel: ObservableObject {
         cancelCapture()
     }
 
-    // MARK: dictation (Type button, or a tap of Right Command)
+    // MARK: dictation (a tap of Right Command)
 
     func toggleDictation() {
         switch mode {
@@ -1097,15 +1097,9 @@ struct FloaterView: View {
                             tint: model.muted ? Color(red: 0.85, green: 0.45, blue: 0.10) : nil,
                             action: model.toggleMute
                         )
-                        control(
-                            dictating ? "keyboard.fill" : "character.cursor.ibeam",
-                            help: dictating ? "Finish dictation" : "Dictate into the text box with the cursor (or tap Right Command)",
-                            tint: dictating ? dictateColor : nil,
-                            action: model.toggleDictation
-                        )
+                        shotButton
                     }
                 }
-                shotButton
                 recentToggle
             }
             Text(model.status)
@@ -1207,10 +1201,6 @@ struct FloaterView: View {
     /// Today's replies show the time; older ones the day as well.
     private static func timeLabel(_ time: Date) -> String {
         Calendar.current.isDateInToday(time) ? clock.string(from: time) : dayClock.string(from: time)
-    }
-
-    private var dictating: Bool {
-        model.purpose == .dictate && model.mode != .idle
     }
 
     private var keysOffIdle: Bool {
