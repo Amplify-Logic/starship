@@ -66,6 +66,11 @@ Muting affects voice only.
 Firstmate's text replies stay the authoritative ones, and nothing about how Firstmate handles your transcripts changes.
 `bin/fm-speak.sh`'s header owns how stop, repeat, the reply history and mute behave.
 
+You can talk while a reply is being spoken.
+The reply keeps playing, and it stays out of your message: the floater records with macOS voice processing, which removes the Mac's own playback from the microphone.
+macOS always lowers other audio a little while voice processing records; the floater sets that to the minimum, applied only while you are actually speaking, so a reply may dip briefly but is never paused or stopped.
+`desk-floater/Sources/VoiceCapture.swift` owns the capture.
+
 ## Hotkeys
 
 | Key | What it does |

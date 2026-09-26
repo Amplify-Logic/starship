@@ -524,7 +524,7 @@ final class FloaterModel: ObservableObject {
 
     let repoRoot: String
     let fmHome: String
-    private var recorder: AVAudioRecorder?
+    private var recorder: VoiceCapture?
     private var recordURL: URL?
     private var pressStartedAt: Date?
     private var latched = false
@@ -893,35 +893,26 @@ final class FloaterModel: ObservableObject {
             }
             let url = FileManager.default.temporaryDirectory
                 .appendingPathComponent("fm-desk-\(UUID().uuidString).wav")
-            let settings: [String: Any] = [
-                AVFormatIDKey: Int(kAudioFormatLinearPCM),
-                AVSampleRateKey: 16000,
-                AVNumberOfChannelsKey: 1,
-                AVLinearPCMBitDepthKey: 16,
-                AVLinearPCMIsFloatKey: false,
-                AVLinearPCMIsBigEndianKey: false
-            ]
+            // Echo-cancelled, so a reply playing on the speakers stays out of the
+            // message while it keeps playing. See VoiceCapture.
+            let capture = VoiceCapture(url: url)
             do {
-                let rec = try AVAudioRecorder(url: url, settings: settings)
-                rec.prepareToRecord()
-                guard rec.record() else {
-                    mode = .idle
-                    status = "Record failed"
-                    return
-                }
-                guard mode == .starting else {
-                    rec.stop()
-                    try? FileManager.default.removeItem(at: url)
-                    return
-                }
-                recorder = rec
-                recordURL = url
-                mode = .recording
-                status = listeningStatus
+                try capture.start()
             } catch {
+                try? FileManager.default.removeItem(at: url)
                 mode = .idle
                 status = "Record error"
+                return
             }
+            guard mode == .starting else {
+                capture.stop()
+                try? FileManager.default.removeItem(at: url)
+                return
+            }
+            recorder = capture
+            recordURL = url
+            mode = .recording
+            status = listeningStatus
         }
     }
 

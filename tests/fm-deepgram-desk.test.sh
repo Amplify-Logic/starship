@@ -955,7 +955,7 @@ Screenshots: $shot1 $shot2" ] || fail "unexpected combined message: $drained"
   pass "fm-desk-voice: screenshots are delivered by path, alone or with the transcript, as one message"
 }
 
-# The floater's screenshot-stacking rules are Swift, so they need macOS and swift.
+# The floater's screenshot-stacking rules and capture conversion are Swift, so they need macOS and swift.
 test_floater_swift_tests() {
   local out
   if [ "$(uname)" != Darwin ] || ! command -v swift >/dev/null 2>&1; then
@@ -963,7 +963,7 @@ test_floater_swift_tests() {
     return
   fi
   out=$(swift test --package-path "$ROOT/desk-floater" 2>&1) || fail "desk floater Swift tests failed: $out"
-  pass "desk floater: screenshot stack Swift tests pass"
+  pass "desk floater: screenshot stack and capture conversion Swift tests pass"
 }
 
 test_deepgram_lib_reads_dotenv_without_logging_key() {
