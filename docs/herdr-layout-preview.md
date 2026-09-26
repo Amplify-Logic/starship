@@ -195,7 +195,7 @@ At twenty-five it would be worse than three summary rows, so at that scale it is
 
 The recovery works by the same mechanism that makes AFTER-B work.
 Herdr's workspace order is creation order, and a later workspace always appends, so a holder workspace created before any worker keeps position 1 permanently and never has to be moved.
-AFTER-A already proves the two halves of this are possible: a non-worker holder workspace is stageable, and its row is renamed on each state change exactly the way `update_project` renames project rows today.
+AFTER-A already proves the two halves of this are possible: a non-worker holder workspace is stageable, and its row is renamed on each state change exactly the way `update_workspace` renames project rows today.
 Capture 03 stages three such holder rows, the first of which reads `City Guide · 🟣 1 NEEDS YOU · 🔵 2 WORKING`.
 Capture 04 is the stronger evidence for the claim, because it shows that same holder row recounted after the late worker arrived, as `City Guide · 🟣 1 NEEDS YOU · 🔴 1 FAILED · 🔵 2 WORKING`.
 That recounted row is a holder row being re-rendered on a state change, which is exactly what a summary row would have to do.

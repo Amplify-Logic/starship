@@ -347,6 +347,86 @@ EOF
   pass 'visible status: busy cursor pane without footer model keeps meta'
 }
 
+# --- one workspace shared by several projects ------------------------------
+#
+# Herdr can seat workers of several projects in one managed workspace. Its
+# label must not be whichever project a pass relabelled last, which would name
+# every worker row in it after that one project.
+
+SHARED_HOME="$TMP_ROOT/shared-home"
+SHARED_STATES="$TMP_ROOT/shared-states"
+mkdir -p "$SHARED_HOME/state" "$SHARED_HOME/data"
+SHARED_WT=$(make_worktree shared fm/shared-s1)
+
+write_shared_task() {  # <id> <project-key> <project-name> <ws> <n>
+  fm_write_meta "$SHARED_HOME/state/$1.meta" \
+    "worktree=$SHARED_WT" \
+    "project=$2" \
+    "harness=pi" \
+    "model=default" \
+    "kind=ship" \
+    "backend=herdr" \
+    "herdr_session=fm-lab-shared" \
+    "herdr_workspace_id=$4" \
+    "herdr_tab_id=st$5" \
+    "herdr_pane_id=$4:p$5" \
+    "herdr_workspace_managed=1" \
+    "herdr_project_name=$3" \
+    "herdr_project_key=$2"
+}
+
+# shared_fleet <voice-id> <journey-id>: the task ids choose which project's
+# record a pass meets first, so the two orders exercise both.
+shared_fleet() {
+  rm -f "$SHARED_HOME"/state/*.meta "$SHARED_HOME"/state/*.visible-label \
+    "$SHARED_HOME"/state/.visible-workspace-*
+  write_shared_task "$1" /projects/glasses-voice 'Glasses Voice' sw 1
+  write_shared_task "$2" /projects/city-guide 'City Guide' sw 2
+  write_shared_task "$2-two" /projects/city-guide 'City Guide' sw 3
+  write_shared_task solo-atelier /projects/atelier Atelier ow 4
+  cat > "$SHARED_STATES" <<EOF
+$1=working
+$2=parked
+$2-two=working
+solo-atelier=working
+EOF
+}
+
+run_shared() {  # <fm-visible-status.sh args...>
+  : > "$LOG"
+  PATH="$FAKEBIN:$PATH" \
+    FM_HOME="$SHARED_HOME" \
+    FM_VISIBLE_STATE_FILE="$SHARED_STATES" \
+    FM_VISIBLE_HERDR_LOG="$LOG" \
+    FM_BACKEND_HERDR_PRESENTATION_FORCE=1 \
+    HERDR_SESSION=fm-lab-shared \
+    "$ROOT/bin/fm-visible-status.sh" "$@"
+}
+
+test_shared_workspace_label_is_neutral_and_stable() {
+  local order expected='workspace rename sw Firstmate · 🟣 1 NEEDS YOU · 🔵 2 WORKING'
+  for order in 'a-voice z-journey' 'z-voice a-journey'; do
+    # shellcheck disable=SC2086
+    shared_fleet $order
+    run_shared --all || fail "a pass over a shared workspace failed ($order)"
+    assert_contains "$(cat "$LOG")" "$expected" \
+      "a workspace shared by two projects was not labelled neutrally over all its tasks ($order)"
+    assert_not_contains "$(grep 'workspace rename sw ' "$LOG")" 'Glasses Voice' \
+      "a shared workspace was labelled with one project's name ($order)"
+    assert_not_contains "$(grep 'workspace rename sw ' "$LOG")" 'City Guide' \
+      "a shared workspace was labelled with one project's name ($order)"
+    [ "$(grep -c 'workspace rename sw ' "$LOG")" -eq 1 ] \
+      || fail "a shared workspace was renamed more than once in one pass ($order)"
+    assert_contains "$(cat "$LOG")" 'workspace rename ow Atelier · 🔵 1 WORKING' \
+      "a single-project workspace lost its project name ($order)"
+  done
+  # A single-task refresh names the shared workspace the same way.
+  run_shared z-voice || fail 'a single-task refresh in a shared workspace failed'
+  assert_contains "$(cat "$LOG")" "$expected" \
+    'a single-task refresh relabelled a shared workspace after its own project'
+  pass 'visible status: a workspace shared by several projects gets one neutral, order-independent label'
+}
+
 test_tasks_projects_axes_and_states
 test_legacy_refresh_and_primary_boundary
 test_worker_pane_sheds_a_primary_role
@@ -358,6 +438,7 @@ test_cleanup_keeps_stable_target_fallback
 test_genuine_primary_and_lab_are_structural
 test_cursor_live_footer_relabels_runtime_over_meta
 test_cursor_busy_pane_keeps_meta_model
+test_shared_workspace_label_is_neutral_and_stable
 
 # --- bounded, single-flight refresh over a large fleet ----------------------
 #

@@ -26,7 +26,7 @@
 #     state/.visible-status-all.lock is held by a live pass, and the exported
 #     FM_VISIBLE_STATUS_ALL_ACTIVE guard makes a nested --all a no-op.
 #   - The authoritative state of each task is read at most once per pass, and
-#     each project workspace is renamed at most once per pass, so a pass costs
+#     each managed workspace is renamed at most once per pass, so a pass costs
 #     O(tasks) reads rather than O(tasks x tasks).
 #
 # New managed tabs read:
@@ -34,7 +34,8 @@
 # Pane detail reads:
 #   <runtime/model> · <actual branch or detached>
 # Project workspaces retain their human project name and add prioritized task
-# counts.
+# counts. A workspace shared by tasks of several projects reads
+# "Firstmate · <counts>" over all of them instead of any one project's name.
 #
 # For cursor workers, runtime/model prefers the live idle-footer model parsed
 # from the pane (bin/fm-cursor-model-lib.sh) over meta model= when readable, and
@@ -346,14 +347,37 @@ prune_label_records() {
   done
 }
 
-project_stats() {  # <project-key>
-  local key=$1 meta id state
+# The label a shared workspace carries when the managed tasks in it belong to
+# more than one project. Herdr can place several projects' workers in one
+# workspace, and naming it after any one of them mislabels every other row.
+MIXED_WORKSPACE_NAME=Firstmate
+
+# workspace_label: the label for one managed workspace, from every managed
+# non-secondmate task recorded in it. A single-project workspace reads
+# "<project name> · <counts>"; a workspace shared by several projects reads
+# "$MIXED_WORKSPACE_NAME · <counts>" with the counts over all of its tasks, so
+# the label never depends on which project's meta a pass reached first.
+# Publishes into WORKSPACE_LABEL, empty when there is nothing to name.
+WORKSPACE_LABEL=
+workspace_label() {  # <session> <workspace-id>
+  local session=$1 workspace=$2 meta id state key name="" first_key="" mixed=0
   local needs=0 failed=0 blocked=0 working=0 waiting=0 ready=0
+  WORKSPACE_LABEL=
   for meta in "$STATE"/*.meta; do
     [ -f "$meta" ] || continue
     [ "$(meta_value "$meta" backend)" = herdr ] || continue
+    [ "$(meta_value "$meta" kind)" != secondmate ] || continue
     [ "$(meta_value "$meta" herdr_workspace_managed)" = 1 ] || continue
-    [ "$(project_key "$meta")" = "$key" ] || continue
+    [ "$(meta_value "$meta" herdr_session)" = "$session" ] || continue
+    [ "$(meta_value "$meta" herdr_workspace_id)" = "$workspace" ] || continue
+    key=$(project_key "$meta")
+    [ -n "$key" ] || continue
+    if [ -z "$first_key" ]; then
+      first_key=$key
+      name=$(project_name "$meta")
+    elif [ "$key" != "$first_key" ]; then
+      mixed=1
+    fi
     id=$(basename "$meta" .meta)
     canonical_state "$id"
     state=$(fm_visible_state "$CANONICAL_STATE")
@@ -366,20 +390,19 @@ project_stats() {  # <project-key>
       READY) ready=$((ready + 1)) ;;
     esac
   done
-  printf '%s %s %s %s %s %s' "$needs" "$failed" "$blocked" "$working" "$waiting" "$ready"
+  [ -n "$first_key" ] || return 0
+  [ "$mixed" -eq 0 ] || name=$MIXED_WORKSPACE_NAME
+  [ -n "$name" ] || return 0
+  WORKSPACE_LABEL="$name · $(fm_visible_aggregate \
+    "$needs $failed $blocked $working $waiting $ready")"
 }
 
-update_project() {  # <meta>
-  local meta=$1 session workspace key name stats aggregate label record
-  [ "$(meta_value "$meta" herdr_workspace_managed)" = 1 ] || return 0
-  session=$(meta_value "$meta" herdr_session)
-  workspace=$(meta_value "$meta" herdr_workspace_id)
-  key=$(project_key "$meta")
-  name=$(project_name "$meta")
-  [ -n "$session" ] && [ -n "$workspace" ] && [ -n "$key" ] && [ -n "$name" ] || return 0
-  stats=$(project_stats "$key")
-  aggregate=$(fm_visible_aggregate "$stats")
-  label="$name · $aggregate"
+update_workspace() {  # <session> <workspace-id>
+  local session=$1 workspace=$2 label record
+  [ -n "$session" ] && [ -n "$workspace" ] || return 0
+  workspace_label "$session" "$workspace"
+  label=$WORKSPACE_LABEL
+  [ -n "$label" ] || return 0
   record=$(workspace_label_record "$workspace")
   if skip_unchanged && [ "$(cat "$record" 2>/dev/null || true)" = "$label" ]; then
     return 0
@@ -389,20 +412,22 @@ update_project() {  # <meta>
   fi
 }
 
-# One workspace rename per project per pass. update_task used to call
-# update_project, so a project with K tasks paid K identical renames.
-update_projects() {
-  local meta key seen=$'\n'
+# One rename per managed workspace per pass, however many tasks or projects it
+# holds. Renaming once per project let projects sharing a workspace overwrite
+# each other's label, so the last one relabelled named every worker in it.
+update_workspaces() {
+  local meta session workspace seen=$'\n'
   for meta in "$STATE"/*.meta; do
     [ -f "$meta" ] || continue
     pass_exhausted && break
     [ "$(meta_value "$meta" backend)" = herdr ] || continue
     [ "$(meta_value "$meta" kind)" != secondmate ] || continue
     [ "$(meta_value "$meta" herdr_workspace_managed)" = 1 ] || continue
-    key=$(project_key "$meta")
-    case "$seen" in *$'\n'"$key"$'\n'*) continue ;; esac
-    seen="$seen$key"$'\n'
-    update_project "$meta"
+    session=$(meta_value "$meta" herdr_session)
+    workspace=$(meta_value "$meta" herdr_workspace_id)
+    case "$seen" in *$'\n'"$session"$'\t'"$workspace"$'\n'*) continue ;; esac
+    seen="$seen$session"$'\t'"$workspace"$'\n'
+    update_workspace "$session" "$workspace"
   done
 }
 
@@ -475,7 +500,8 @@ update_task() {  # <task-id>
     printf '%s\n' "$title"$'\t'"$detail"$'\t'"$icon $state" > "$record" 2>/dev/null || true
   fi
   TASK_START=
-  [ "$BATCH" -eq 1 ] || update_project "$meta"
+  [ "$BATCH" -eq 1 ] || [ "$(meta_value "$meta" herdr_workspace_managed)" != 1 ] \
+    || update_workspace "$session" "$(meta_value "$meta" herdr_workspace_id)"
 }
 
 clear_task() {  # <task-id>
@@ -504,7 +530,7 @@ clear_task() {  # <task-id>
 }
 
 # refresh_all: one bounded pass over every recorded task, then one rename per
-# project workspace, then the record sweep. A spent pass deadline stops the
+# managed workspace, then the record sweep. A spent pass deadline stops the
 # pass where it is: the unreached tasks keep their previous published label and
 # the next pass, which starts from a fresh deadline, publishes them.
 refresh_all() {
@@ -515,7 +541,7 @@ refresh_all() {
     pass_exhausted && break
     update_task "$(basename "$meta" .meta)"
   done
-  update_projects
+  update_workspaces
   prune_label_records
 }
 

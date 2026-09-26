@@ -583,6 +583,7 @@ The adapter binds a newly created workspace once with hidden `fm_owner` and `fm_
 Each token is a versioned Git object hash of the complete physical path, keeping the immutable identity below Herdr's metadata value limit without storing a truncatable raw path.
 Workspace lookup exact-matches both tokens and never identifies or adopts managed work by its visible label.
 The human project label is mutable presentation and may include prioritized aggregate state without weakening ownership.
+A managed workspace holding tasks from several projects is labeled neutrally over all of them rather than after any one project; `bin/fm-visible-status.sh`'s header owns the exact label.
 
 This container shape is what [`docs/herdr-layout-preview.md`](herdr-layout-preview.md) proposes replacing with upstream's one-workspace-per-worker unit.
 That preview is unapproved and changes nothing here until the captain accepts it.
@@ -660,7 +661,7 @@ Default-on projection has its own higher floor, `FM_BACKEND_HERDR_MIN_PRESENTATI
 - `bin/fm-teardown.sh` clears the retired task with `--clear <id>` once it has committed to retiring it, then refreshes `--all` after the record is removed, because the removal changes every remaining task's project aggregate.
 
 An `--all` pass is bounded and single-flight, so a large fleet or a slow Herdr costs a stale label rather than a stalled caller: every backend round trip runs under a per-call deadline, each task under a per-task deadline, and the pass under a pass deadline, after which the tasks it did not reach keep their previous label until the next pass.
-A task whose computed label matches the one last published for it costs only the primary-role clear described below and the `fm_state` token it restores, and each project workspace is renamed once per pass rather than once per task in it; the authoritative state of a task is read once per pass, so a pass costs O(tasks) reads instead of O(tasks x tasks).
+A task whose computed label matches the one last published for it costs only the primary-role clear described below and the `fm_state` token it restores, and each managed workspace is renamed once per pass rather than once per task or project in it; the authoritative state of a task is read once per pass, so a pass costs O(tasks) reads instead of O(tasks x tasks).
 The published labels live in `state/<id>.visible-label` and `state/.visible-workspace-<id>`, which are caches - deleting one costs a redundant republish and nothing else - and `--republish` ignores them.
 Only one pass per home runs at a time (`state/.visible-status-all.lock`), and a pass started from inside a running one is a no-op.
 `bin/fm-visible-status.sh`'s header owns the exact deadlines and their environment overrides.
