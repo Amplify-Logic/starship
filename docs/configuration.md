@@ -2654,7 +2654,7 @@ The file is not inherited by secondmate homes.
 Absent or `"enabled": false` is a complete no-op: `bin/fm-primary.sh` launch behavior is unchanged and `bin/fm-primary-handoff.sh` exits without touching the session lock.
 When enabled, `bin/fm-primary-handoff.sh` evaluates:
 
-- **Quota** - when the minimum general-window `percentRemaining` from `quota-axi` is at or below `threshold_percent_remaining`, rotate to the next profile in `chain`.
+- **Quota** - when the minimum `percentRemaining` from `quota-axi` over the provider's general windows and the active profile's own model window (`model:fable` for `claude-fable`) is at or below `threshold_percent_remaining`, rotate to the next profile in `chain`.
 - **Context** - when durable context used (from `state/.primary-context`, written by `bin/fm-status-bar.sh`) is at or above `threshold_context_percent_used`, rotate to the **same** profile for a fresh empty session.
   Absent or null `threshold_context_percent_used` disables the context axis only.
 

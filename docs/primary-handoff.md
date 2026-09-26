@@ -20,15 +20,15 @@ Keeping sessions short and rotating before context balloons past roughly half us
 Local, gitignored `config/primary-handoff` is a JSON object.
 See [`docs/examples/primary-handoff.json`](examples/primary-handoff.json) and the "Primary orchestrator handoff" section of [`configuration.md`](configuration.md).
 The quota-rotation example uses `"chain": ["claude-fable", "claude-opus"]` so a Fable primary can hand off directly to Opus.
-Claude quota is read from the shared general windows (`five_hour`, `seven_day`) of the single `claude` provider, never from a model-specific window, so this chain rotates only when the shared five-hour or seven-day window crosses the threshold, not when a Fable-specific model window runs out.
-Both Claude profiles share that one provider, so after rotating to `claude-opus` no further quota rotation is expected: `check` reports `handoff: chain exhausted` and stays put quietly instead of failing on every poll, while the context axis can still refresh the same profile.
+Both Claude profiles read the shared general windows (`five_hour`, `seven_day`) of the single `claude` provider, and `claude-fable` also reads its own `model:fable` window, so this chain rotates when either the shared windows or the Fable window crosses the threshold.
+After rotating to `claude-opus` only the shared windows bound it, so no further quota rotation is expected once they are low: `check` reports `handoff: chain exhausted` and stays put quietly instead of failing on every poll, while the context axis can still refresh the same profile.
 The `astra` profile draws on the same single `codex` provider allowance as the `codex` profile, so a `"chain": ["codex", "astra"]` behaves the same way: one model switch, then `check` reports `handoff: chain exhausted` and stays put.
 
 Two independent trigger axes share one rotation protocol:
 
 | Axis | Config field | Signal | Default when `enabled: true` | Rotation target |
 | --- | --- | --- | --- | --- |
-| Quota | `threshold_percent_remaining` | `quota-axi` min general-window remaining | `15` | Next distinct profile in `chain` |
+| Quota | `threshold_percent_remaining` | `quota-axi` min remaining over the provider's general windows and the profile's own model window | `15` | Next distinct profile in `chain` |
 | Context | `threshold_context_percent_used` | `state/.primary-context` used percent | absent = axis disabled | Same profile (fresh session) |
 
 Captain target for the context axis: rotate near ~50% context used (`"threshold_context_percent_used": 50`).
@@ -174,4 +174,4 @@ This is an accepted limitation, not a bug.
 
 ## Testing
 
-`tests/fm-primary-handoff.test.sh` exercises the happy path, disabled no-op, context-threshold detection, the cursor-grok quota mapping and its general-window selection, same-runtime rotation, afk refusal, cooldown, workers-survive, watcher re-arm, wake durability across flush, and failure-injection cases that prove the never-two-holders invariant across flush, signal, wait, release, and launch failures.
+`tests/fm-primary-handoff.test.sh` exercises the happy path, disabled no-op, context-threshold detection, the cursor-grok quota mapping and its general-window selection, the `claude-fable` model-window rotation to `claude-opus`, same-runtime rotation, afk refusal, cooldown, workers-survive, watcher re-arm, wake durability across flush, and failure-injection cases that prove the never-two-holders invariant across flush, signal, wait, release, and launch failures.
