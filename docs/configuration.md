@@ -2566,7 +2566,7 @@ The injection alarm fires at most once per max-defer window after a genuine wedg
 A watcher that recovers and is reaped again starts a new outage episode, which resets that backoff and alerts on the next host check.
 Failed watcher-outage delivery remains pending and retries after a short claim lease; only successful delivery advances that backoff.
 A missing or failing channel logs and falls through to the next, never crashing the daemon.
-`bin/fm-shift.sh` appends and removes one sentinel-delimited `command:` block here while a glasses shift is armed, so a watcher outage is spoken into the captain's glasses; see [`shift-loop.md`](shift-loop.md).
+`bin/fm-shift.sh` appends and removes one sentinel-delimited block here while a glasses shift is armed, carrying `auto` beside the `command:` directive that speaks a watcher outage into the captain's glasses; see [`shift-loop.md`](shift-loop.md).
 See [`wedge-alarm.md`](wedge-alarm.md) for the channel reference and macOS verification evidence, and [`examples/wedge-alarm`](examples/wedge-alarm) for a copyable config.
 
 ## Context window
