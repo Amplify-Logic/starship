@@ -3891,6 +3891,11 @@ if [ "$RELAUNCH" -eq 1 ]; then
     HERDR_SEEDED_DEFAULT_TAB_ID=${HERDR_CONTAINER_RAW#*$'\t'}
     HERDR_SES=${CONTAINER%%:*}
     HERDR_WORKSPACE_ID=${CONTAINER#*:}
+    # The flat container is not the project's token-owned workspace, so the
+    # rebound record must not claim it: herdr_workspace_managed would let the
+    # workspace aggregate rename this shared container after the project. The
+    # project key, name and outcome still name the task and stay as recorded.
+    HERDR_WORKSPACE_MANAGED=0
     HERDR_TASK_IDS=$(fm_backend_herdr_create_task "$CONTAINER" "$W" "$WT" "$HERDR_SEEDED_DEFAULT_TAB_ID") || exit 1
     read -r HERDR_TAB_ID HERDR_PANE_ID <<EOF
 $HERDR_TASK_IDS
@@ -4349,6 +4354,7 @@ spawn_render_respawn_command() {
   [ -z "$EFFORT" ] || cmd="$cmd --effort $(shell_quote "$EFFORT")"
   [ -z "$MODE" ] || cmd="$cmd --mode $(shell_quote "$MODE")"
   [ -z "$YOLO" ] || cmd="$cmd --yolo $(shell_quote "$YOLO")"
+  [ "$BRANCH_PREFIX_SET" -eq 0 ] || cmd="$cmd --branch-prefix $(shell_quote "$BRANCH_PREFIX")"
   [ -z "${OUTCOME:-}" ] || cmd="$cmd --outcome $(shell_quote "$OUTCOME")"
   [ -z "${TASK_TYPE:-}" ] || cmd="$cmd --task-type $(shell_quote "$TASK_TYPE")"
   printf '%s' "$cmd"

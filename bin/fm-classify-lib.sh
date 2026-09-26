@@ -379,16 +379,6 @@ _fm_last_non_resolve_line() {  # <status-file>
   printf '%s' "$out"
 }
 
-# 0 when the task's own last word about the work is a declared wait - an
-# external-wait pause or a verified captain-held transfer - reading past a
-# trailing resolution line, which decided nothing about the crew.
-status_declared_wait() {  # <status-file>
-  local f=$1 last
-  last=$(last_status_line "$f")
-  status_is_resolved "$last" && last=$(_fm_last_non_resolve_line "$f")
-  status_is_paused_or_captain_held "$last"
-}
-
 # The status line that holds a crew in a declared wait, or nothing when it is in
 # none. Supervisors decide the wait from this line, never from the raw latest
 # event: a resolved line is also how firstmate answers a decision (fm-send

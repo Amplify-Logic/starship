@@ -734,6 +734,27 @@ test_relaunch_refusal_keeps_the_record_and_hands_back_a_relaunch() {
   pass "a refused relaunch keeps the record and hands back the same --relaunch"
 }
 
+# A ship with a registered branch prefix records its brief against that
+# branch, so a re-spawn that dropped the prefix would come back on fm/<id> and
+# be refused as a branch mismatch; the handed-back command must carry it.
+test_respawn_command_carries_the_branch_prefix() {
+  local out status
+  make_case prefix-dead claude claude
+  set_command_sequence zsh
+  printf 'Ship branch: feat/%s\n' "$ID" >> "$HOME_DIR/data/$ID/brief.md"
+
+  out=$(run_spawn_args "$ID" "$PROJ_DIR" --mode direct-PR --yolo off --branch-prefix feat/)
+  status=$?
+
+  expect_code 1 "$status" "a launch that never started its agent should refuse"$'\n'"$out"
+  assert_contains "$out" "re-spawn the task with this exact command" \
+    "refusal did not hand back a re-spawn"
+  assert_contains "$out" "--yolo 'off' --branch-prefix 'feat/'" \
+    "the re-spawn command dropped this ship's branch prefix, so a copy-paste would be refused as a branch mismatch"
+  cleanup_task_tmp "$ID"
+  pass "the re-spawn command carries a ship's registered branch prefix"
+}
+
 test_missing_endpoint_respawn_command_carries_kind_and_axes() {
   local out status
   make_case vanish-scout claude claude
@@ -760,6 +781,7 @@ test_invalid_bound_knobs_are_refused
 test_unverified_non_kimi_backend_still_spawns_and_warns
 test_missing_endpoint_refuses_on_the_first_read
 test_missing_endpoint_respawn_command_carries_kind_and_axes
+test_respawn_command_carries_the_branch_prefix
 test_raw_launch_is_not_gated_on_agent_liveness
 test_relaunch_refusal_keeps_the_record_and_hands_back_a_relaunch
 
