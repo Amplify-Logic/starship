@@ -1211,17 +1211,25 @@ struct FloaterView: View {
 
     private let mainSize: CGFloat = 36
     private let controlSize: CGFloat = 20
+    private let controlSpacing: CGFloat = 4
+    private let rowSpacing: CGFloat = 6
+    private let arrowWidth: CGFloat = 12
+    /// The status line is as wide as the row of controls above it, so the bubble
+    /// has no empty strip beside them.
+    private var rowWidth: CGFloat {
+        mainSize + rowSpacing + controlSize * 2 + controlSpacing + rowSpacing + arrowWidth
+    }
 
     var body: some View {
         VStack(alignment: .trailing, spacing: 4) {
-            HStack(spacing: 6) {
+            HStack(spacing: rowSpacing) {
                 mainButton
-                VStack(spacing: 4) {
-                    HStack(spacing: 4) {
+                VStack(spacing: controlSpacing) {
+                    HStack(spacing: controlSpacing) {
                         control("stop.fill", help: "Stop talking", action: model.stopTalking)
                         control("arrow.counterclockwise", help: "Repeat the last reply", action: model.repeatLast)
                     }
-                    HStack(spacing: 4) {
+                    HStack(spacing: controlSpacing) {
                         control(
                             model.muted ? "speaker.slash.fill" : "speaker.wave.2.fill",
                             help: model.muted ? "Voice muted - click to unmute" : "Mute voice",
@@ -1237,8 +1245,9 @@ struct FloaterView: View {
                 .font(.system(size: 9, weight: .medium))
                 .foregroundStyle(keysOffIdle ? Color(red: 1.0, green: 0.72, blue: 0.35) : Color.white)
                 .lineLimit(1)
+                .minimumScaleFactor(0.8)
                 .truncationMode(.tail)
-                .frame(width: 128)
+                .frame(width: rowWidth)
                 .allowsHitTesting(false)
             if model.showingRecent {
                 recentList
@@ -1263,13 +1272,14 @@ struct FloaterView: View {
         }
     }
 
-    /// The dropdown arrow to the right of the controls: opens the recent replies.
+    /// The dropdown arrow to the right of the controls, centred beside them and
+    /// only as tall as one control: opens the recent replies.
     private var recentToggle: some View {
         Button(action: model.toggleRecent) {
             Image(systemName: model.showingRecent ? "chevron.up" : "chevron.down")
                 .font(.system(size: 8, weight: .bold))
                 .foregroundStyle(.white)
-                .frame(width: 12, height: controlSize * 2 + 4)
+                .frame(width: arrowWidth, height: controlSize + controlSpacing)
                 .background(Capsule().fill(model.showingRecent ? Color.white.opacity(0.35) : Color.white.opacity(0.22)))
                 .contentShape(Capsule())
         }

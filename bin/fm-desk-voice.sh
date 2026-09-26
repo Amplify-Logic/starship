@@ -513,7 +513,11 @@ shot() {
   # Microseconds in the name keep name order equal to capture order for pruning.
   name=$(python3 -c 'import datetime, secrets; print(datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S%fZ") + "-" + secrets.token_hex(4))')
   path="$SHOTS/${name}.png"
-  tmp="$SHOTS/.tmp-${name}.png"
+  # macOS screencapture writes nothing to a dot-prefixed file name yet exits 0,
+  # so the capture gets a plain name inside a private folder the prune skips.
+  mkdir -p "$SHOTS/.tmp" || die "cannot create $SHOTS/.tmp"
+  chmod 700 "$SHOTS/.tmp" 2>/dev/null || true
+  tmp="$SHOTS/.tmp/${name}.png"
   if ! "$capture" -x -t png ${display:+-D "$display"} "$tmp" >/dev/null || [ ! -s "$tmp" ]; then
     rm -f "$tmp"
     die "screen capture failed"

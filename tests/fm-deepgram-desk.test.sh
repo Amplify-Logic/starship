@@ -1264,7 +1264,9 @@ test_desk_voice_dictation_refuses_bad_front_arguments() {
 
 # The floater's screenshots are captured by a stand-in here: a test must never
 # photograph the real screen.
-install_capture() {  # <home> [fail|empty]
+# nodot behaves like macOS screencapture, which cannot write to a file name
+# starting with a dot: it complains, writes nothing, and still exits 0.
+install_capture() {  # <home> [fail|empty|nodot]
   local home=$1 mode=${2:-ok}
   cat > "$home/capture" <<EOF
 #!/usr/bin/env bash
@@ -1273,6 +1275,12 @@ for a in "\$@"; do out=\$a; done
 case "$mode" in
   fail) exit 1 ;;
   empty) : > "\$out" ;;
+  nodot)
+    case "\${out##*/}" in
+      .*) echo "screencapture: cannot write file to intended destination, \$out" >&2; exit 0 ;;
+    esac
+    printf 'PNG' > "\$out"
+    ;;
   *) printf 'PNG' > "\$out" ;;
 esac
 EOF
@@ -1306,6 +1314,18 @@ test_desk_voice_shot_captures_the_named_display() {
   [ ! -d "$home/state/desk-voice/inbox" ] || [ -z "$(ls "$home/state/desk-voice/inbox")" ] \
     || fail "a shot on its own must not send anything"
   pass "fm-desk-voice: shot captures the named display into the home's screenshot folder"
+}
+
+test_desk_voice_shot_capture_file_name_has_no_leading_dot() {
+  local home path left
+  home=$(new_home shot-nodot)
+  install_capture "$home" nodot
+  path=$(shoot_in "$home" 2>"$home/shot.err") \
+    || fail "shot failed with a capture tool that refuses dot-prefixed names: $(cat "$home/shot.err")"
+  [ "$(cat "$path")" = PNG ] || fail "shot did not keep the captured image"
+  left=$(find "$home/state/desk-voice/shots" -type f | wc -l | tr -d ' ')
+  [ "$left" -eq 1 ] || fail "expected only the finished screenshot, found $left file(s)"
+  pass "fm-desk-voice: shot works with a capture tool that cannot write dot-prefixed file names"
 }
 
 test_desk_voice_shot_keeps_only_the_newest() {
@@ -1433,6 +1453,7 @@ test_desk_voice_dictation_keeps_the_send_checks
 test_desk_voice_dictation_front_check_on_tmux
 test_desk_voice_dictation_refuses_bad_front_arguments
 test_desk_voice_shot_captures_the_named_display
+test_desk_voice_shot_capture_file_name_has_no_leading_dot
 test_desk_voice_shot_keeps_only_the_newest
 test_desk_voice_shot_failure_leaves_nothing
 test_desk_voice_deliver_with_screenshots
