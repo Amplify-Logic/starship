@@ -40,7 +40,7 @@ Exactly one fleet brain remains: the primary already running in this home.
    First launch builds the Swift package under `desk-floater/` into
    `desk-floater/.build/` (gitignored) and opens the floating control.
    Grant microphone permission when macOS asks.
-   macOS also asks for the Accessibility and Screen Recording permissions, once for each new build (see [Permissions](#permissions)); the buttons work without Accessibility, the hotkeys and typing into other apps do not, and screenshots need Screen Recording.
+   macOS also asks for the Accessibility and Screen Recording permissions (see [Permissions](#permissions)); the buttons work without Accessibility, the hotkeys and typing into other apps do not, and screenshots need Screen Recording.
 
 4. Hold the button (or click to toggle), speak, release.
    The transcript is typed into the primary Firstmate chat and submitted, or saved to the mailbox when that chat cannot be reached.
@@ -145,21 +145,37 @@ Nothing is sent anywhere but to this home's Firstmate.
 | Permission | Needed for | Where |
 | --- | --- | --- |
 | Microphone | Every capture | Asked the first time you talk. |
-| Accessibility | The Right Option, Right Command and Right Shift hotkeys, and pasting dictated text into other apps | Asked on the first launch of each new build. Grant it in System Settings, Privacy & Security, Accessibility, by switching on DeskFloater. |
-| Screen Recording | Screenshots | Asked on the first launch of each new build. Grant it in System Settings, Privacy & Security, Screen & System Audio Recording, by switching on DeskFloater. |
-| Automation (Terminal) | Sending dictation typed into the Firstmate chat | Asked the first time you dictate with Terminal in front; a new build may ask again. Grant it in System Settings, Privacy & Security, Automation, by switching on Terminal under DeskFloater. |
+| Accessibility | The Right Option, Right Command and Right Shift hotkeys, and pasting dictated text into other apps | Asked on the first launch. Grant it in System Settings, Privacy & Security, Accessibility, by switching on DeskFloater. |
+| Screen Recording | Screenshots | Asked on the first launch. Grant it in System Settings, Privacy & Security, Screen & System Audio Recording, by switching on DeskFloater. |
+| Automation (Terminal) | Sending dictation typed into the Firstmate chat | Asked the first time you dictate with Terminal in front. Grant it in System Settings, Privacy & Security, Automation, by switching on Terminal under DeskFloater. |
 
 The floater checks the permission every few seconds and turns the hotkeys on as soon as it is granted, with no restart.
 Until then the hotkeys and the paste are off: an orange "!" badge sits on the talk button, the status line reads "Keys off - click !" in orange, and the on-screen buttons work as normal.
 Clicking the badge asks macOS again and opens the Accessibility settings.
 
-macOS ties the grant to the exact app build, so every time `bin/fm-desk-floater.sh` rebuilds the floater (after any change to its code) the old grant stops counting and the badge comes back.
-The rebuilt floater asks once more on its first launch.
-If DeskFloater already shows as switched on in that list, switch it off and on again, or remove it with the minus button and click the badge to add it back.
-
 Screen Recording works the same way, with its own orange "!" on the Camera control.
 Until it is granted, screenshots are off and the Camera control and Right Shift take none; clicking the Camera control asks macOS again and opens the Screen Recording settings.
 macOS may only notice a new Screen Recording grant after the floater restarts, so choose "Quit & Reopen" if it offers, or restart it with `bin/fm-desk-floater.sh`.
+
+### Keeping the permissions across rebuilds
+
+macOS keeps both grants for as long as the floater keeps the same signature, so `bin/fm-desk-floater.sh` signs every floater it launches with the same identity.
+It uses the first "Apple Development" certificate in your keychain, the one Xcode creates when you sign in with an Apple ID, so a rebuilt floater keeps its grants and the badges stay away.
+To use another certificate, put its name or SHA-1 hash on one line in this home's private `config/desk-floater-signing-identity` (see [configuration](configuration.md#desk-floater-signing-identity-configdesk-floater-signing-identity)).
+If that certificate is missing, expired or fails to sign, the launcher says so and falls back to the "Apple Development" one, then to ad-hoc, and the floater still starts.
+Without a certificate the floater stays ad-hoc signed and the launcher says so: macOS then ties each grant to that one build, every rebuild (after any change to its code) asks again, and the badges come back.
+The first signed build is new to macOS too, so it is asked about once more.
+When a build is asked about while DeskFloater already shows as switched on in that list, switch it off and on again, or remove it with the minus button and click the badge to add it back.
+
+### Quit & Reopen
+
+"Quit & Reopen", Finder and a login item start the floater without the home the launcher passes it.
+The floater then finds its home from where it is: the Firstmate folder holding `desk-floater/.build/DeskFloater.app`.
+If it is not inside a Firstmate folder, it says so and quits rather than guessing.
+
+macOS can reopen any copy it knows under the app's identifier, so only the floater `bin/fm-desk-floater.sh` launches carries that identifier.
+A copy built with `--build-only`, such as one a worker builds to check a change, goes to its own `desk-floater/.build/DeskFloater-build-only.app` with an identifier of its own and stays ad-hoc signed, so it never changes the floater you launched and macOS never reopens it in place of this home's floater.
+Each launch also makes macOS forget any other copy it knows under the floater's identifier, such as one built by an older version of the launcher, which takes a few seconds after the floater is already up.
 
 ## How transcripts reach Firstmate
 

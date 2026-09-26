@@ -2552,6 +2552,16 @@ The two bounds are deliberately separate because they protect different things: 
 The script's header owns their defaults.
 `bin/fm-speak.sh --stop`, `--repeat`, `--history`, `--replay`, `--mute`, `--unmute` and `--muted` are the desk floater's voice controls: a mute is a per-home runtime flag in `state/speak-muted`, never a `config/speak` key, and silences voice only, while the text reply stays authoritative; the script's header owns their behavior and docs/desk-floater.md describes the buttons.
 
+## Desk floater signing identity (config/desk-floater-signing-identity)
+
+Optional, private, gitignored, and not inherited by secondmate homes.
+One line naming the codesigning identity `bin/fm-desk-floater.sh` signs the desk floater with, as a SHA-1 hash or a name `codesign` accepts, or `-` to keep the linker's ad-hoc signature.
+Absent, the launcher uses the first valid "Apple Development" identity in the keychain, and stays ad-hoc with a note when there is none.
+A stable identity is what lets the floater keep its Accessibility and Screen Recording grants across rebuilds.
+A named identity the keychain does not hold, one that has expired, or one that fails to sign never stops the launcher: it falls back to the first valid "Apple Development" identity, then to ad-hoc, with a note naming what happened.
+Only the launched floater is signed; a `--build-only` copy stays ad-hoc and never looks in the keychain.
+The script's header owns the mechanics, and [`desk-floater.md`](desk-floater.md#keeping-the-permissions-across-rebuilds) describes the effect.
+
 ## Supervision active alert channels (config/wedge-alarm)
 
 When away-mode injection wedges past `FM_MAX_DEFER_SECS`, the sub-supervisor raises a loud, rate-limited alarm.

@@ -22,11 +22,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @MainActor
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
-        let root = ProcessInfo.processInfo.environment["FM_DESK_FLOATER_ROOT"]
-            ?? FileManager.default.currentDirectoryPath
-        let home = ProcessInfo.processInfo.environment["FM_HOME"]
-            ?? root
-        let model = FloaterModel(repoRoot: root, fmHome: home)
+        guard let location = HomeLocation.resolve(
+            environment: ProcessInfo.processInfo.environment,
+            bundlePath: Bundle.main.bundlePath,
+            currentDirectory: FileManager.default.currentDirectoryPath,
+            isCodeRoot: HomeLocation.isCodeRoot
+        ) else {
+            NSApp.activate(ignoringOtherApps: true)
+            let alert = NSAlert()
+            alert.messageText = "DeskFloater cannot find its Firstmate home"
+            alert.informativeText = "Start it with bin/fm-desk-floater.sh in your Firstmate folder."
+            alert.runModal()
+            NSApp.terminate(nil)
+            return
+        }
+        let model = FloaterModel(repoRoot: location.root, fmHome: location.home)
         let panel = FloaterPanel(model: model)
         panel.orderFrontRegardless()
         self.panel = panel
@@ -48,6 +58,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         screen.start()
         self.screen = screen
         model.refreshMute()
+    }
+}
+
+/// Where the floater finds this home's scripts and state. The launcher passes
+/// both; macOS "Quit & Reopen", Finder and login items start the app without
+/// them and in "/", so the code root then comes from the bundle's own place in
+/// the repo, <root>/desk-floater/.build/DeskFloater.app, and the home defaults
+/// to that root as it does in the launcher.
+enum HomeLocation {
+    static func resolve(
+        environment: [String: String],
+        bundlePath: String,
+        currentDirectory: String,
+        isCodeRoot: (String) -> Bool
+    ) -> (root: String, home: String)? {
+        var root = nonEmpty(environment["FM_DESK_FLOATER_ROOT"])
+        if root == nil {
+            let build = URL(fileURLWithPath: bundlePath).standardizedFileURL.deletingLastPathComponent()
+            let package = build.deletingLastPathComponent()
+            let candidate = package.deletingLastPathComponent().path
+            if build.lastPathComponent == ".build" && package.lastPathComponent == "desk-floater"
+                && isCodeRoot(candidate) {
+                root = candidate
+            }
+        }
+        if root == nil && isCodeRoot(currentDirectory) {
+            root = currentDirectory
+        }
+        guard let root else { return nil }
+        return (root, nonEmpty(environment["FM_HOME"]) ?? root)
+    }
+
+    /// A Firstmate code root holds the scripts the floater runs.
+    static func isCodeRoot(_ path: String) -> Bool {
+        FileManager.default.isExecutableFile(
+            atPath: (path as NSString).appendingPathComponent("bin/fm-desk-voice.sh"))
+    }
+
+    private static func nonEmpty(_ value: String?) -> String? {
+        guard let value, !value.isEmpty else { return nil }
+        return value
     }
 }
 
@@ -185,8 +236,8 @@ struct TapKey {
 /// Right Command starts or finishes dictation, and a lone tap of Right Shift
 /// takes a screenshot. Watching keys in other apps, and typing the dictated text
 /// into them, both need the Accessibility permission. macOS ties that grant to
-/// the exact build, so a rebuilt floater is untrusted again: it asks once per
-/// build, and the keys-off badge asks again on demand.
+/// the app's signature, so an ad-hoc signed rebuild is untrusted again: it asks
+/// once per build, and the keys-off badge asks again on demand.
 @MainActor
 final class HotkeyMonitor {
     var onTalkDown: (() -> Void)?
@@ -222,9 +273,9 @@ final class HotkeyMonitor {
         }
     }
 
-    /// Asks for the permission again and opens its Settings pane. A rebuilt
-    /// floater can still be listed there as switched on while macOS ignores the
-    /// old grant, so the pane is where the captain switches it off and on.
+    /// Asks for the permission again and opens its Settings pane. An ad-hoc
+    /// signed rebuild can still be listed there as switched on while macOS
+    /// ignores the old grant, so the pane is where the captain switches it off and on.
     func requestAccess() {
         Self.prompt()
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
@@ -238,7 +289,8 @@ final class HotkeyMonitor {
         _ = AXIsProcessTrustedWithOptions(options)
     }
 
-    /// Identifies this exact build, so a rebuild is asked about once more.
+    /// Identifies this exact build, so a rebuild macOS does not trust yet is
+    /// asked about once more.
     static func buildStamp() -> String {
         let path = Bundle.main.executablePath ?? CommandLine.arguments[0]
         let attrs = (try? FileManager.default.attributesOfItem(atPath: path)) ?? [:]
@@ -313,7 +365,7 @@ final class HotkeyMonitor {
 }
 
 /// The Screen Recording permission screenshots need. Like Accessibility, macOS
-/// ties it to the exact build: it is asked for once per build, checked every few
+/// ties it to the app's signature: it is asked for once per build, checked every few
 /// seconds, and asked for again from the camera button's badge.
 @MainActor
 final class ScreenAccess {
