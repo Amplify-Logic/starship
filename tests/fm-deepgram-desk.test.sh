@@ -1418,6 +1418,25 @@ test_deepgram_lib_reads_dotenv_without_logging_key() {
   pass "fm-deepgram-lib: loads .env key without printing it"
 }
 
+# The voice the captain chose lives in the home's .env beside the key, and the
+# automatic reply speech runs without it in its environment, so the helper must
+# read it from there; an explicit environment value still wins.
+test_tts_reads_the_voice_from_dotenv() {
+  local home out
+  home=$(new_home dotenv-voice)
+  printf 'DEEPGRAM_API_KEY=test-key-not-real\nDEEPGRAM_TTS_MODEL="aura-2-helena-en"\n' > "$home/.env"
+  out=$(env -u DEEPGRAM_TTS_MODEL -u DEEPGRAM_API_KEY FM_HOME="$home" FM_DEEPGRAM_ENV_FILE="$home/.env" \
+    "$TTS" --dry-run -- "Captain, checks are green." 2>&1) || fail "dry-run failed: $out"
+  assert_contains "$out" "model=aura-2-helena-en" "the .env voice must be used when the environment has none"
+  out=$(env -u DEEPGRAM_API_KEY DEEPGRAM_TTS_MODEL=aura-2-luna-en FM_HOME="$home" FM_DEEPGRAM_ENV_FILE="$home/.env" \
+    "$TTS" --dry-run -- "Captain, checks are green." 2>&1) || fail "dry-run failed: $out"
+  assert_contains "$out" "model=aura-2-luna-en" "an environment voice must win over the .env one"
+  out=$(env -u DEEPGRAM_TTS_MODEL DEEPGRAM_API_KEY=test-key-not-real FM_DEEPGRAM_ENV_FILE=/dev/null \
+    "$TTS" --dry-run -- "Captain, checks are green." 2>&1) || fail "dry-run failed: $out"
+  assert_contains "$out" "model=aura-2-thalia-en" "the documented default must apply when neither sets a voice"
+  pass "fm-deepgram-tts: reads the voice from .env, the environment wins, else the default"
+}
+
 test_tts_refuses_without_key
 test_tts_dry_run_with_key
 test_stt_refuses_without_key_or_file
@@ -1459,3 +1478,4 @@ test_desk_voice_shot_failure_leaves_nothing
 test_desk_voice_deliver_with_screenshots
 test_floater_swift_tests
 test_deepgram_lib_reads_dotenv_without_logging_key
+test_tts_reads_the_voice_from_dotenv

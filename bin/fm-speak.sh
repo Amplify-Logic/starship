@@ -71,12 +71,13 @@
 # three-sentence outcome, so this script always points the register owner at
 # docs/examples/desk-speak-register.toml via GLASSES_ANNOUNCE_CONFIG. It is the
 # sink for the desk, not the glasses, so the budget follows the desk and not
-# whichever speaker ends up playing the line: the same 30 seconds applies to
+# whichever speaker ends up playing the line: the same 16 seconds applies to
 # Deepgram Aura and to macOS `say`. That example keeps the same URL/path/id and
-# decision refusals and raises the budget only: 30 seconds / about 78 words at
-# 2.6 wps. Two opt-outs remain. An already-set GLASSES_ANNOUNCE_CONFIG is never
-# overridden, and FM_SPEAK_DEEPGRAM_REGISTER= (empty) keeps the glasses
-# eight-second cut. That variable keeps its historical name because it is the
+# decision refusals and changes the budget only: 16 seconds and four sentences /
+# about 41 words at 2.6 wps, into which bin/fm-claude-reply-speak.sh fits its
+# spoken lead plus a short pointer to the screen. Two opt-outs remain.
+# An already-set GLASSES_ANNOUNCE_CONFIG is never overridden, and
+# FM_SPEAK_DEEPGRAM_REGISTER= (empty) keeps the glasses eight-second cut. That variable keeps its historical name because it is the
 # published opt-out; it is not a Deepgram gate and never was one.
 #
 # NEVER BLOCKS THE CALLER'S TURN. The register call is bounded and waited on
@@ -532,9 +533,10 @@ speak_deepgram_or_fail() {  # <textfile>
   out=$(mktemp "${TMPDIR:-/tmp}/fm-speak-dg-out.XXXXXX") || { rm -f "$audio"; return 1; }
   err=$(mktemp "${TMPDIR:-/tmp}/fm-speak-dg-err.XXXXXX") || { rm -f "$audio" "$out"; return 1; }
   status=0
-  # Subshell keeps the key out of this shell; helper re-reads env/.env itself.
+  # Subshell keeps the key out of this shell; helper re-reads env/.env itself,
+  # and this home's FM_HOME is passed so it reads the voice from the same .env.
   run_bounded "$SPEAKER_TIMEOUT" "$out" "$err" \
-    env DEEPGRAM_API_KEY="$key" "$DEEPGRAM_TTS" --to "$audio" -- "$(cat "$textfile")" \
+    env DEEPGRAM_API_KEY="$key" FM_HOME="$FM_HOME" "$DEEPGRAM_TTS" --to "$audio" -- "$(cat "$textfile")" \
     || status=$?
   rm -f "$out" "$err"
   if [ "$status" -ne 0 ] || [ ! -s "$audio" ]; then

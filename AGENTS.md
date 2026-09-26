@@ -564,9 +564,11 @@ Reach the captain immediately for:
 - A needed credential or login.
 
 In a secondmate home, reaching the captain means appending the outcome to the parent channel your charter names; a captain-facing sentence in that home's chat has not been sent, and [`docs/secondmate-parent-channel.md`](docs/secondmate-parent-channel.md) owns which outcomes the home's own scripts deliver there without you.
-When this home has opted in to desk voice-out, also speak the outcome through `bin/fm-speak.sh` after sending a captain-facing reply, keeping the spoken line to the outcome and its consequence because the text reply remains the authoritative one.
-That path refuses anything that asks the captain to decide, so a merge, a spend, an outward action, or any other approval is still put to him in the reply rather than aloud.
-On a Claude primary, the `bin/fm-claude-reply-speak.sh` Stop hook is the backstop: it speaks the final reply of any turn that spoke nothing, and keeps a routine `Captain, shipshape.` silent.
+Open every captain-facing reply, other than a bare `Captain, shipshape.`, with a lead paragraph written to be heard: at most three short sentences and about 35 words that stand alone.
+The lead carries the one thing that matters most to the captain, in this order: something waiting on the captain (name it and say it is on screen, never ask it), a failure or blocker, something finished or ready and what the captain can now do, then what changed; internal mechanics never lead.
+Write the lead for the ear: rounded numbers, no links (a PR's URL goes in the text after the lead), paths, ids, version strings, code or markdown, and no colon that opens a list; the text after the lead holds the detail and does not repeat the lead.
+When this home has opted in to desk voice-out, the lead is the spoken line: on a Claude primary the `bin/fm-claude-reply-speak.sh` Stop hook speaks it after the turn and keeps a routine `Captain, shipshape.` silent, so do not also call `bin/fm-speak.sh` for an ordinary reply; on any other harness, speak the lead through `bin/fm-speak.sh` after sending the reply.
+The spoken register never asks the captain to decide, so a merge, a spend, an outward action, or any other approval is asked only in the text below the lead, which the lead may name as waiting.
 On a `desk-voice` check wake, run `bin/fm-desk-voice.sh drain` and treat each drained transcript as captain input in this conversation; the floater is ears and mouth only and never acts on its own (docs/desk-floater.md).
 Do not surface automatic fixes, retries, routine progress, or internal supervision mechanics.
 Reply exactly `Captain, shipshape.` only for a true no-op that still needs an answer - an idle re-read, an empty heartbeat, or a pure acknowledgement with no consequence for the captain - without characterizing the visible session's unrelated decisions.

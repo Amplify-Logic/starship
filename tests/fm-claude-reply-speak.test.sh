@@ -37,15 +37,23 @@ install_hook_scripts() {
 }
 
 # A stand-in for bin/fm-speak.sh with its observable contract: a refused line
-# exits 2 and is not kept, an accepted line is recorded and kept as the next
-# numbered entry in state/speak-history/.
+# exits 2, reports the register's reason on stderr, and is not kept; an accepted
+# line is recorded and kept as the next numbered entry in state/speak-history/.
+# Like the installed register, it refuses an approval word even inside news.
 install_speak_stub() {
   local dir=$1
   cat > "$dir/speak-stub" <<'EOF'
 #!/usr/bin/env bash
 text=$*
 case "$text" in
-  *"Shall I"*) printf 'refused: %s\n' "$text" >> "$FM_HOME/refused.log"; exit 2 ;;
+  *"Shall I"*|*approved*)
+    printf 'refused: %s\n' "$text" >> "$FM_HOME/refused.log"
+    printf 'refused: asks the captain to decide; announcements carry news, not decisions\n' >&2
+    exit 2 ;;
+  *"Unspeakable"*)
+    printf 'refused: %s\n' "$text" >> "$FM_HOME/refused.log"
+    printf 'refused: nothing speakable left after removing URLs, paths, and ids\n' >&2
+    exit 2 ;;
 esac
 printf '%s\n' "$text" >> "$FM_HOME/spoken.log"
 n=$(ls "$FM_HOME/state/speak-history" 2>/dev/null | sort -n | tail -n 1)
@@ -107,14 +115,55 @@ test_plain_reply_is_spoken() {
   pass "plain reply is spoken in full"
 }
 
-test_decision_reply_speaks_notice() {
+test_decision_reply_falls_back_to_first_sentence() {
   local dir
   dir=$(make_primary_dir "$TMP_ROOT/decision")
   run_hook "$dir" "Captain, the PR is green. Shall I merge it?"
   assert_grep 'Shall I merge it' "$dir/refused.log" "the reply itself must reach the register first"
+  assert_equals "Captain, the PR is green. The choice is on screen." "$(spoken "$dir")" \
+    "a refused decision reply must fall back to its first sentence and point at the choice"
+  rm -f "$dir/spoken.log"
+  run_hook "$dir" "$(printf '%s\n' "Captain, the PR is green. Shall I merge it?" "" \
+    "The checks ran twice on both platforms and the reviewers left no comments on any of the changed files.")"
+  assert_equals "Captain, the PR is green. The choice is on screen." "$(spoken "$dir")" \
+    "a refused decision with more to read must still point at the choice, not at more"
+  pass "decision reply falls back to its first sentence plus the choice pointer"
+}
+
+test_decision_only_reply_speaks_notice() {
+  local dir
+  dir=$(make_primary_dir "$TMP_ROOT/decision-only")
+  run_hook "$dir" "Shall I merge the green PR now?"
   assert_equals "Captain, a decision is waiting for you on screen." "$(spoken "$dir")" \
-    "a refused decision reply must be replaced by the on-screen notice"
-  pass "decision reply is replaced by the on-screen notice"
+    "a reply that is nothing but a decision must be replaced by the decision notice"
+  pass "decision-only reply speaks the decision notice"
+}
+
+test_non_decision_refusal_never_claims_a_decision() {
+  local dir
+  dir=$(make_primary_dir "$TMP_ROOT/not-decision")
+  run_hook "$dir" "Unspeakable lead only."
+  assert_equals "Captain, my reply is on screen." "$(spoken "$dir")" \
+    "a refusal that is not a decision must not say a decision is waiting"
+  rm -f "$dir/spoken.log"
+  run_hook "$dir" "Unspeakable first sentence. The fix merged."
+  assert_equals "Captain, my reply is on screen." "$(spoken "$dir")" \
+    "a refused first sentence must fall back to the plain on-screen notice"
+  pass "a refusal that is not a decision speaks the plain on-screen notice"
+}
+
+test_decision_refusal_of_news_never_claims_a_decision() {
+  local dir
+  dir=$(make_primary_dir "$TMP_ROOT/approved-news")
+  run_hook "$dir" "Captain, Alex approved the draft and it went out."
+  assert_grep 'Alex approved the draft' "$dir/refused.log" "the news must reach the register first"
+  assert_equals "Captain, my reply is on screen." "$(spoken "$dir")" \
+    "news the register mistakes for a decision must not be announced as one"
+  rm -f "$dir/spoken.log"
+  run_hook "$dir" "Captain, the review is closed. Alex approved the draft."
+  assert_equals "Captain, the review is closed. More on screen." "$(spoken "$dir")" \
+    "the fallback for mistaken news must point at more, not at a choice"
+  pass "a decision refusal of plain news never claims a decision"
 }
 
 test_markdown_reply_speaks_first_paragraph() {
@@ -138,8 +187,8 @@ Second paragraph is not spoken.
 EOF
 )
   run_hook "$dir" "$reply"
-  assert_equals "Captain, the fix is in main and the review found nothing. It is live now." \
-    "$(spoken "$dir")" "only the first plain paragraph, cleaned of markdown, must be spoken"
+  assert_equals "Captain, the fix is in main and the review found nothing. It is live now. More on screen." \
+    "$(spoken "$dir")" "only the first plain paragraph, cleaned of markdown, must be spoken, pointing at the rest"
   pass "markdown reply speaks only the first plain paragraph"
 }
 
@@ -148,7 +197,7 @@ test_list_paragraph_is_joined() {
   dir=$(make_primary_dir "$TMP_ROOT/list")
   reply=$(printf '%s\n' "Captain, two results:" "- the fix merged" "1. the docs are current")
   run_hook "$dir" "$reply"
-  assert_equals "Captain, two results: the fix merged the docs are current" "$(spoken "$dir")" \
+  assert_equals "Captain, two results: the fix merged the docs are current." "$(spoken "$dir")" \
     "list markers must be stripped from the spoken paragraph"
   pass "list markers are stripped"
 }
@@ -185,7 +234,7 @@ test_shipshape_near_misses_are_spoken() {
   local dir
   dir=$(make_primary_dir "$TMP_ROOT/shipshape-near")
   run_hook "$dir" "captain, shipshape"
-  assert_equals "captain, shipshape" "$(spoken "$dir")" \
+  assert_equals "captain, shipshape." "$(spoken "$dir")" \
     "only the exact routine line is routine"
   pass "shipshape near misses are spoken"
 }
@@ -210,17 +259,139 @@ test_shipshape_opener_is_dropped_two_paragraphs() {
 }
 
 test_long_reply_is_capped() {
-  local dir reply words
+  local dir reply out
   dir=$(make_primary_dir "$TMP_ROOT/long")
-  reply="Captain, the first sentence has exactly ten words in it here. $(printf 'word %.0s' $(seq 1 70))end."
+  reply="Captain, the first sentence has exactly ten words in it here. Then $(printf 'word %.0s' $(seq 1 70))end."
   run_hook "$dir" "$reply"
-  assert_equals "Captain, the first sentence has exactly ten words in it here." "$(spoken "$dir")" \
-    "an over-long line must be cut back to the last full sentence inside the cap"
+  assert_equals "Captain, the first sentence has exactly ten words in it here. More on screen." "$(spoken "$dir")" \
+    "an over-long lead must be cut back to the last whole sentence inside the cap, pointing at the rest"
   rm -f "$dir/spoken.log"
   run_hook "$dir" "$(printf 'word %.0s' $(seq 1 80))"
-  words=$(spoken "$dir" | wc -w | tr -d ' ')
-  assert_equals "60" "$words" "a line with no sentence end must be capped at 60 words"
-  pass "long replies are capped at about 60 words"
+  out=$(spoken "$dir")
+  assert_equals "80" "$(printf '%s' "$out" | wc -w | tr -d ' ')" \
+    "a first sentence longer than the cap is kept whole for the register to cut"
+  assert_equals "word." "${out##* }" "a lead with no closing full stop must be given one"
+  pass "long leads are cut back to whole sentences inside the cap"
+}
+
+test_lead_written_to_the_rule_is_kept_whole() {
+  local dir lead
+  dir=$(make_primary_dir "$TMP_ROOT/whole-lead")
+  lead="Captain, the filming-rights check is done and nobody was contacted. The app already has footage from three places with no written OK, so you and Alex need to decide what to do; the options are on screen."
+  run_hook "$dir" "$(printf '%s\n' "$lead" "" "**A.** Ask for permission" "**B.** Remove the footage")"
+  assert_equals "$lead" "$(spoken "$dir")" \
+    "a lead of about 35 words must be spoken whole, with no pointer when it already says on screen"
+  pass "a lead written to the about-35-word rule is spoken whole"
+}
+
+test_lead_keeps_at_most_three_sentences() {
+  local dir
+  dir=$(make_primary_dir "$TMP_ROOT/three")
+  run_hook "$dir" "Captain, one is done. Two is done. Three is done. Four is done."
+  assert_equals "Captain, one is done. Two is done. Three is done. More on screen." "$(spoken "$dir")" \
+    "the lead must stop at three sentences and point at the rest"
+  pass "the lead stops at three sentences"
+}
+
+test_numbers_do_not_split_sentences() {
+  local dir reply
+  dir=$(make_primary_dir "$TMP_ROOT/numbers")
+  reply="Captain, Herdr 0.9.1 is out and we run 0.7.4 today. Codex 5.5 is ready. The update is small."
+  run_hook "$dir" "$reply"
+  assert_equals "$reply" "$(spoken "$dir")" \
+    "version numbers and decimals must not count as sentence ends"
+  pass "numbers with dots stay inside their sentence"
+}
+
+test_trailing_list_lead_in_is_dropped() {
+  local dir reply
+  dir=$(make_primary_dir "$TMP_ROOT/lead-in")
+  reply=$(printf '%s\n' "Captain, it's mostly not the AI models. There are two kinds of key involved:" "" \
+    "- the model keys" "- the service keys")
+  run_hook "$dir" "$reply"
+  assert_equals "Captain, it's mostly not the AI models. More on screen." "$(spoken "$dir")" \
+    "a closing list lead-in must be dropped and the rest pointed at"
+  rm -f "$dir/spoken.log"
+  run_hook "$dir" "$(printf '%s\n' "Captain, three things landed:" "" "- the fix" "- the docs")"
+  assert_equals "Captain, three things landed. More on screen." "$(spoken "$dir")" \
+    "a lead-in that is the only sentence must end with a full stop instead, pointing at the list"
+  pass "a trailing list lead-in is dropped, or closed when it is the whole lead"
+}
+
+test_pointer_names_what_waits_on_screen() {
+  local dir
+  dir=$(make_primary_dir "$TMP_ROOT/pointers")
+  run_hook "$dir" "$(printf '%s\n' "Captain, the night jobs lack their keys." "" \
+    "**A.** Keychain" "**B.** A file" "" "I'd go with A.")"
+  assert_equals "Captain, the night jobs lack their keys. The choice is on screen." "$(spoken "$dir")" \
+    "lettered options must point at the choice"
+  rm -f "$dir/spoken.log"
+  run_hook "$dir" "$(printf '%s\n' "Captain, the catch-up is green." "" "Say \"land it\" when you want it merged.")"
+  assert_equals "Captain, the catch-up is green. The choice is on screen." "$(spoken "$dir")" \
+    "an instruction to reply with a quoted phrase must point at the choice"
+  rm -f "$dir/spoken.log"
+  run_hook "$dir" "$(printf '%s\n' "Captain, the floater is rebuilt." "" "- **Rebuild:** say \"rebuild the floater\" when you are at the desk.")"
+  assert_equals "Captain, the floater is rebuilt. The choice is on screen." "$(spoken "$dir")" \
+    "a list item telling the captain what to say must point at the choice"
+  rm -f "$dir/spoken.log"
+  run_hook "$dir" "$(printf '%s\n' "Captain, stop works from the Mac." "" "Tell me: did the text say \"Stopped\" or something else?")"
+  assert_equals "Captain, stop works from the Mac. There's a question for you on screen." "$(spoken "$dir")" \
+    "a quoted word inside a question is not a choice"
+  rm -f "$dir/spoken.log"
+  run_hook "$dir" "$(printf '%s\n' "Captain, the draft is ready." "" "Should it go to Alex as well?")"
+  assert_equals "Captain, the draft is ready. There's a question for you on screen." "$(spoken "$dir")" \
+    "a later paragraph ending in a question mark must point at the question"
+  rm -f "$dir/spoken.log"
+  run_hook "$dir" "$(printf '%s\n' "Captain, the floater needs one more try." "" "1. tap" "2. speak" "3. tap again")"
+  assert_equals "Captain, the floater needs one more try. The steps are on screen." "$(spoken "$dir")" \
+    "a numbered list must point at the steps"
+  rm -f "$dir/spoken.log"
+  run_hook "$dir" "$(printf '%s\n' "Captain, the fix merged." "" "Details follow here.")"
+  assert_equals "Captain, the fix merged." "$(spoken "$dir")" \
+    "a complete lead followed only by a one-line sign-off must get no pointer"
+  rm -f "$dir/spoken.log"
+  run_hook "$dir" "$(printf '%s\n' "Captain, the fix merged." "" "The cause was a stale cache." "" "The retry now clears it.")"
+  assert_equals "Captain, the fix merged. More on screen." "$(spoken "$dir")" \
+    "further paragraphs after the lead must point at the rest"
+  rm -f "$dir/spoken.log"
+  run_hook "$dir" "$(printf '%s\n' "Captain, the fix merged." "" "- the cache" "- the retry")"
+  assert_equals "Captain, the fix merged. More on screen." "$(spoken "$dir")" \
+    "a bulleted list after the lead must point at the rest"
+  rm -f "$dir/spoken.log"
+  run_hook "$dir" "$(printf '%s\n' "Captain, the fix merged." "" "PR: https://example.invalid/pr/1")"
+  assert_equals "Captain, the fix merged. More on screen." "$(spoken "$dir")" \
+    "a link after the lead must point at the rest"
+  rm -f "$dir/spoken.log"
+  run_hook "$dir" "$(printf '%s\n' "Captain, the emails are drafted; the drafts are below." "" "1. one" "2. two")"
+  assert_equals "Captain, the emails are drafted; the drafts are below." "$(spoken "$dir")" \
+    "a lead that already points at the screen must get no second pointer"
+  rm -f "$dir/spoken.log"
+  run_hook "$dir" "$(printf '%s\n' "Captain, CPU stayed below half all night." "" "**A.** Keep it" "**B.** Scale down")"
+  assert_equals "Captain, CPU stayed below half all night. The choice is on screen." "$(spoken "$dir")" \
+    "the word below in news must not hide the choice pointer"
+  pass "the pointer names a choice, a question, steps, more, or nothing"
+}
+
+test_pointer_fits_the_spoken_budget() {
+  local dir first second out
+  dir=$(make_primary_dir "$TMP_ROOT/budget")
+  first="Captain, $(printf 'alpha %.0s' $(seq 1 18))done."
+  second="Then $(printf 'beta %.0s' $(seq 1 13))end."
+  run_hook "$dir" "$(printf '%s\n' "$first $second" "" "**A.** One" "**B.** Two")"
+  assert_equals "$first $second The choice is on screen." "$(spoken "$dir")" \
+    "a 35-word lead and the choice pointer fit the budget whole"
+  rm -f "$dir/spoken.log"
+  run_hook "$dir" "$(printf '%s\n' "$first $second" "" "Should it ship tonight?")"
+  out=$(spoken "$dir")
+  assert_equals "$first There's a question for you on screen." "$out" \
+    "a 35-word lead must be cut back so the question pointer is still spoken"
+  rm -f "$dir/spoken.log"
+  run_hook "$dir" "$(printf '%s\n' "$first $second gamma gamma done." "" "**A.** One" "**B.** Two")"
+  out=$(spoken "$dir")
+  assert_equals "$first The choice is on screen." "$out" \
+    "a 38-word lead must be cut back so the choice pointer is still spoken"
+  [ "$(printf '%s' "$out" | wc -w | tr -d ' ')" -le 41 ] || fail "the spoken line must fit 41 words"
+  pass "the lead leaves room for its pointer inside the spoken budget"
 }
 
 test_model_already_spoke_is_silent_then_next_turn_speaks() {
@@ -348,12 +519,24 @@ test_real_speak_speaks_and_falls_back() {
   install_real_speak_fixture "$dir"
   printf 'enabled = true\n' > "$dir/config/speak"
   run_hook_real_speak "$dir" "Captain, the review is ready. Shall I merge it?"
+  wait_for_audio "$dir" "the fallback line never reached the speaker"
+  assert_equals "Captain, the review is ready. The choice is on screen." "$(cat "$dir/audio.log")" \
+    "the real register's decision refusal must fall back to the first sentence and the choice pointer"
+  assert_equals "Captain, the review is ready. The choice is on screen." "$(cat "$dir/state/speak-history/1/text")" \
+    "the fallback must be the kept line"
+  pass "real fm-speak: decision reply falls back to its first sentence"
+}
+
+test_real_speak_decision_only_speaks_notice() {
+  local dir
+  dir=$(make_primary_dir "$TMP_ROOT/real-notice")
+  install_real_speak_fixture "$dir"
+  printf 'enabled = true\n' > "$dir/config/speak"
+  run_hook_real_speak "$dir" "Shall I merge the review?"
   wait_for_audio "$dir" "the decision notice never reached the speaker"
   assert_equals "Captain, a decision is waiting for you on screen." "$(cat "$dir/audio.log")" \
-    "the real register must accept the on-screen notice in place of the refused reply"
-  assert_equals "Captain, a decision is waiting for you on screen." "$(cat "$dir/state/speak-history/1/text")" \
-    "the notice must be the kept line"
-  pass "real fm-speak: decision reply speaks the on-screen notice"
+    "the register's reason passed through the real fm-speak must select the decision notice"
+  pass "real fm-speak: a decision-only reply speaks the decision notice"
 }
 
 test_real_speak_muted_and_not_enabled_stay_silent() {
@@ -383,7 +566,10 @@ test_settings_register_async_primary_hook() {
 }
 
 test_plain_reply_is_spoken
-test_decision_reply_speaks_notice
+test_decision_reply_falls_back_to_first_sentence
+test_decision_only_reply_speaks_notice
+test_non_decision_refusal_never_claims_a_decision
+test_decision_refusal_of_news_never_claims_a_decision
 test_markdown_reply_speaks_first_paragraph
 test_list_paragraph_is_joined
 test_empty_and_tool_only_turns_are_silent
@@ -393,6 +579,12 @@ test_shipshape_near_misses_are_spoken
 test_shipshape_opener_is_dropped_one_line
 test_shipshape_opener_is_dropped_two_paragraphs
 test_long_reply_is_capped
+test_lead_written_to_the_rule_is_kept_whole
+test_lead_keeps_at_most_three_sentences
+test_numbers_do_not_split_sentences
+test_trailing_list_lead_in_is_dropped
+test_pointer_names_what_waits_on_screen
+test_pointer_fits_the_spoken_budget
 test_model_already_spoke_is_silent_then_next_turn_speaks
 test_superseded_stop_is_dropped
 test_worker_worktree_is_inert
@@ -400,5 +592,6 @@ test_secondmate_home_is_inert
 test_session_without_lock_is_inert
 test_cursor_payload_is_inert
 test_real_speak_speaks_and_falls_back
+test_real_speak_decision_only_speaks_notice
 test_real_speak_muted_and_not_enabled_stay_silent
 test_settings_register_async_primary_hook

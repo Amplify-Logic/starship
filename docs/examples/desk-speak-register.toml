@@ -1,9 +1,16 @@
-# Longer spoken-register budget for desk speech.
+# Spoken-register budget for desk speech.
 #
 # Same safety floor as the glasses announce defaults (strip URLs/paths/ids,
 # refuse decision-seeking lines). The spoken time budget is raised from ~8s,
 # which is tuned for the glasses and cuts an ordinary desk outcome mid-message,
-# to 30s.
+# to 16s and four sentences: about 41 words at 2.6 words a second.
+# bin/fm-claude-reply-speak.sh cuts its spoken lead back to leave room for its
+# one short pointer to the screen, so keep its SPOKEN_WORDS in step with this.
+#
+# on_request and decision_pointer are for a register that drops a sentence
+# asking the captain to decide and keeps the news, pointing at the screen
+# instead. The register ignores keys it does not know, so until it reads them
+# a decision-seeking line is still refused whole.
 #
 # fm-speak.sh exports GLASSES_ANNOUNCE_CONFIG to this file for every desk line,
 # whether Deepgram Aura or macOS `say` ends up playing it, unless that variable
@@ -11,6 +18,8 @@
 # private path if you want a different budget.
 
 [register]
-max_spoken_seconds = 30
-max_sentences = 6
+max_spoken_seconds = 16
+max_sentences = 4
 words_per_second = 2.6
+on_request = "drop"
+decision_pointer = "The choice is on screen."

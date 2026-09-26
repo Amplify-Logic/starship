@@ -154,7 +154,7 @@ speak_env() {  # <home> <name=value> <args...>
 }
 
 # Long enough to be cut by the glasses budget (8s x 2.6 wps = 20 words) and
-# short enough to survive the desk one (30s x 2.6 wps = 78 words). It is an
+# short enough to survive the desk one (16s x 2.6 wps = 41 words). It is an
 # ordinary three-sentence outcome, which is the point: this is not an unusually
 # long line, it is the shape of the lines the captain was losing the end of.
 LONG_OUTCOME="The finances fix is on the branch and the checks came back green on the first run. The review found nothing to change. The pull request is waiting for your word before anything lands."

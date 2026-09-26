@@ -223,8 +223,8 @@ ordinary two- or three-sentence desk outcome mid-message.
 So `bin/fm-speak.sh` points that owner at
 [`docs/examples/desk-speak-register.toml`](examples/desk-speak-register.toml)
 (via `GLASSES_ANNOUNCE_CONFIG`, unless already set) for every desk line.
-That example keeps the same URL/path/id and decision refusals but raises the
-spoken budget to **30 seconds** (about 78 words at 2.6 wps).
+That example keeps the same URL/path/id and decision refusals but sets the
+spoken budget to **16 seconds** and four sentences (about 41 words at 2.6 wps).
 The budget belongs to the desk rather than to the speaker, so it is the same
 whichever speaker plays the line, macOS `say` or Deepgram Aura.
 Two lines in one turn play one after another rather than overlapping.
@@ -235,7 +235,7 @@ glasses cut by exporting `FM_SPEAK_DEEPGRAM_REGISTER=` (empty).
 The variable keeps its historical name because it is the published opt-out; it
 has never been a Deepgram gate.
 
-TTS model default: `aura-2-thalia-en` (`DEEPGRAM_TTS_MODEL`).
+TTS model default: `aura-2-thalia-en` (`DEEPGRAM_TTS_MODEL`, from the environment or this home's gitignored `.env`).
 STT model default: `nova-2` (`DEEPGRAM_STT_MODEL`).
 
 ## Non-goals

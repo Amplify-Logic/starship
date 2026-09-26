@@ -8,7 +8,8 @@
 # Reads DEEPGRAM_API_KEY from the environment or the home's gitignored .env
 # (see bin/fm-deepgram-lib.sh). Never logs the key.
 #
-# Default model: aura-2-thalia-en (override with DEEPGRAM_TTS_MODEL).
+# Default model: aura-2-thalia-en (override with DEEPGRAM_TTS_MODEL in the
+# environment or the home's gitignored .env; the environment wins).
 # Output encoding: mp3. Played with /usr/bin/afplay unless --to writes the
 # bytes and skips playback, or FM_DEEPGRAM_AFPLAY names another player.
 #
