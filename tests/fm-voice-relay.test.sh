@@ -3222,7 +3222,8 @@ pass "--listen open-mic refuses at startup, before it opens anything"
 narrow=$(records_status --scope counts) || fail "counts scope failed"
 assert_contains "$narrow" '"scope": "counts"' "counts scope should say so"
 assert_contains "$narrow" '"in_flight": 3' "counts scope should still count in-flight work"
-assert_contains "$narrow" '"queued": 2' "counts scope should still count queued work"
+assert_contains "$narrow" '"queued": 1' \
+  "counts scope should count queued work, leaving out what is held for the captain"
 assert_contains "$narrow" '"awaiting_captain": 2' "counts scope should count what waits on the captain"
 assert_contains "$narrow" '"open_pull_requests": 1' "counts scope should count open pull requests"
 # No record free text is assembled at all at this scope, so there is nothing to
@@ -3461,6 +3462,60 @@ assert_contains "$by_queued" '"queued": 1' \
 assert_contains "$by_queued" 'pull/11' "the other pull requests should still be named"
 assert_contains "$by_queued" 'pull/12' "the other pull requests should still be named"
 pass "one deny decision per item covers every list that item could appear in"
+
+# --- what the counts mean -----------------------------------------------------
+#
+# "Queued" is work the fleet could pick up, so a queued row held for the captain
+# is counted once, as waiting on the captain, and not again as queued. A hold
+# deferred to a later date is not waiting on the captain today: it is reported
+# as its own count and never named in the waiting list. The dates sit far in the
+# past and future so the fixture does not depend on the day it runs.
+COUNT_HOME="$TMP_ROOT/count-meaning"
+mkdir -p "$COUNT_HOME/data" "$COUNT_HOME/state" "$COUNT_HOME/config"
+cat > "$COUNT_HOME/data/backlog.md" <<'EOF'
+# Backlog
+
+## In flight
+- [ ] run-one - Ship the importer (repo: a) (kind: ship)
+- [ ] ask-now - Pick the storage shape (repo: a) (kind: captain)
+
+## Queued
+- [ ] work-one - Add the retry (repo: a) (kind: ship)
+- [ ] work-two - Tidy the logs (repo: a) (kind: ship) (hold-kind: future) (hold-until: 2999-01-01)
+- [ ] held-now - Approve the spend (repo: a) (kind: ship) (hold-kind: captain) (hold: approve the spend)
+- [ ] held-due - Renew the plan (repo: a) (kind: ship) (hold-kind: captain) (hold-until: 2000-01-01)
+- [ ] held-typo - Rotate the keys (repo: a) (kind: ship) (hold-kind: captain) (hold-until: soon)
+- [ ] held-later - Revisit pricing (repo: a) (kind: ship) (hold-kind: captain) (hold-until: 2999-01-01)
+- [ ] ask-later - Choose the launch week (repo: a) (kind: captain) (hold-until: 2999-06-01)
+EOF
+count_status() {
+  python3 "$ROOT/bin/fm_voice_records.py" status --home "$COUNT_HOME" "$@"
+}
+counted=$(count_status --scope counts) || fail "the count-meaning fixture failed"
+assert_contains "$counted" '"queued": 2' \
+  "queued should count only work the fleet could pick up, including a non-captain dated hold"
+assert_contains "$counted" '"awaiting_captain": 4' \
+  "waiting on the captain should keep undated, due and malformed-date holds and leave out future ones"
+assert_contains "$counted" '"deferred_for_captain": 2' \
+  "holds deferred to a future date should be counted separately"
+assert_contains "$counted" '"in_flight": 2' "in-flight work should be unchanged"
+counted_full=$(count_status --scope full) || fail "the count-meaning fixture failed at full scope"
+python3 - "$counted_full" <<'PY_COUNTS' || fail "the waiting list should agree with the waiting count"
+import json, sys
+answer = json.loads(sys.argv[1])
+named = [row["id"] for row in answer["awaiting_captain_detail"]]
+named += ["+"] * answer.get("awaiting_captain_detail_not_listed", 0)
+assert answer["awaiting_captain"] == 4, answer
+assert len(named) == answer["awaiting_captain"], named
+assert set(named) == {"ask-now", "held-now", "held-due", "held-typo"}, named
+assert answer["deferred_for_captain"] == 2, answer
+assert answer["queued"] == 2, answer
+PY_COUNTS
+assert_not_contains "$counted_full" 'held-later' \
+  "a hold deferred to a future date must not be named as waiting on the captain"
+assert_not_contains "$counted_full" 'ask-later' \
+  "a deferred decision must not be named as waiting on the captain"
+pass "queued leaves out captain holds, and future-dated holds are counted apart from what waits now"
 
 # --- what a status line may say ---------------------------------------------
 #

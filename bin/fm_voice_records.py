@@ -92,6 +92,7 @@ as a tool result, so the shell form is the same interface the relay uses.
 """
 
 import argparse
+import datetime
 import json
 import os
 import re
@@ -117,6 +118,7 @@ TAG = re.compile(r"\((?P<key>[a-z-]+): (?P<value>[^)]*)\)")
 # leaves them in the title. A date read aloud in the middle of a sentence is
 # noise, so they come out too.
 DATE_TAG = re.compile(r"\((?:since|done) [0-9-]+\)")
+HOLD_DATE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
 
 # The only backlog sections this module will parse. Done history is skipped
 # before a line is even split, so widening the answer cannot reach it by
@@ -379,7 +381,6 @@ def fleet_status(home=None, scope=None):
 
     open_items = [i for i in items if not i["done"]]
     in_flight = [i for i in open_items if i["section"] == "in flight"]
-    queued = [i for i in open_items if i["section"] == "queued"]
     # "What is waiting on me" is the union of decisions filed for the captain
     # and anything explicitly held for them. The two overlap but neither
     # contains the other, because a decision can be filed before it is held.
@@ -388,6 +389,24 @@ def fleet_status(home=None, scope=None):
         if i["tags"].get("hold-kind") == "captain"
         or i["tags"].get("kind") == "captain"
     ]
+    captain_ids = {i["id"] for i in held_for_captain}
+    # Queued means work the fleet could pick up. A queued row held for the
+    # captain is a decision, already counted as waiting on the captain, and
+    # counting it here too made the queue look about twice its real size.
+    queued = [i for i in open_items
+              if i["section"] == "queued" and i["id"] not in captain_ids]
+    # A hold deferred to a later date is not waiting on the captain today. The
+    # deferral lapses on its date, so the hold is waiting again from that day,
+    # the same reading bin/fm-fleet-snapshot.sh gives it; a malformed date stays
+    # waiting, so a typo can never hide a decision.
+    today = datetime.date.today().isoformat()
+    deferred_for_captain = [
+        i for i in held_for_captain
+        if HOLD_DATE.match(i["tags"].get("hold-until", ""))
+        and i["tags"]["hold-until"] > today
+    ]
+    deferred_ids = {i["id"] for i in deferred_for_captain}
+    awaiting_captain = [i for i in held_for_captain if i["id"] not in deferred_ids]
     # OPEN work only. _workers lists every state/*.meta in the home, and a task
     # keeps its meta after it is marked done until teardown removes it, so taking
     # every worker with a pull request would count and name finished tasks. That
@@ -416,7 +435,8 @@ def fleet_status(home=None, scope=None):
         "worker_states": states,
         "in_flight": len(in_flight),
         "queued": len(queued),
-        "awaiting_captain": len(held_for_captain),
+        "awaiting_captain": len(awaiting_captain),
+        "deferred_for_captain": len(deferred_for_captain),
         "open_pull_requests": len(with_pr),
         "captain_notes_waiting": waiting,
     }
@@ -447,7 +467,7 @@ def fleet_status(home=None, scope=None):
     known = {}
     for item in open_items:
         known.setdefault(item["id"], item)
-    nameable = ({i["id"] for i in in_flight} | {i["id"] for i in held_for_captain}
+    nameable = ({i["id"] for i in in_flight} | {i["id"] for i in awaiting_captain}
                 | {w["id"] for w in with_pr})
 
     withheld_ids = set()
@@ -480,7 +500,7 @@ def fleet_status(home=None, scope=None):
         })
 
     detail_captain = []
-    for item in held_for_captain:
+    for item in awaiting_captain:
         if not keep(item["id"]):
             continue
         detail_captain.append({"id": item["id"], "title": item["title"]})
