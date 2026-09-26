@@ -2288,3 +2288,21 @@ A throwaway scout was spawned through `bin/fm-spawn.sh --scout --harness omp --m
 6. `bin/fm-control.sh <id> exit` stopped the agent and `bin/fm-teardown.sh` returned the worktree and closed the item.
 
 `FM_OMP_LIVE_E2E=1 tests/fm-omp-primary-live-e2e.test.sh` refreshes the primary evidence; the worker path above is refreshed by repeating the scout dispatch after any omp upgrade.
+
+## Claude reply-speak Stop hook
+
+The primary reply-speak hook (`bin/fm-claude-reply-speak.sh`) depends on two things Claude Code emits: an `async` Stop hook really runs after an interactive turn inside the session's own process tree, and its payload carries the final reply as `last_assistant_message`.
+Verified on 2026-09-25 with Claude Code 2.1.282 on macOS arm64, tmux on a private socket, a fake register owner, and a fake speaker, so no audio played:
+
+```sh
+FM_CLAUDE_REPLY_SPEAK_LIVE_E2E=1 tests/fm-claude-reply-speak-live-e2e.test.sh
+```
+
+```text
+ok - Claude 2.1.282 (Claude Code) live E2E spoke the final reply through the async Stop hook and kept the routine shipshape reply silent
+```
+
+The interactive turn ended at once and the hook then found the lock-holding session in its ancestry and handed the reply to the speaker; the routine `Captain, shipshape.` reply reached no speaker.
+`claude -p` does not run a plain `async` Stop hook before it exits, which is why the guard drives an interactive session; a probe hook registered the same way under `-p` recorded nothing, while the same probe registered synchronously received the payload.
+The guard runs in the checkout it is started from, which must already be trusted, and fails rather than answering a trust prompt.
+Rerun it after every Claude Code upgrade; it submits two short prompts.

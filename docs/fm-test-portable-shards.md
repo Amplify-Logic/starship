@@ -9,23 +9,13 @@ Balance hints come from serial runs of the real lanes on `ubuntu-latest`.
 The concurrent isolation proof in [fm-test-isolation-proof.md](fm-test-isolation-proof.md) establishes concurrency safety, not serial CI duration.
 Local timings are not interchangeable with CI timings: platform and machine load can affect each script differently and change their relative weights.
 
-The retained hints are the slowest completed value each script reached across six CI runs on 2026-09-10: [34459949083](https://github.com/kunchenguid/firstmate/actions/runs/34459949083), [34460760299](https://github.com/kunchenguid/firstmate/actions/runs/34460760299), [34462530836](https://github.com/kunchenguid/firstmate/actions/runs/34462530836), [34462758357](https://github.com/kunchenguid/firstmate/actions/runs/34462758357), [34466966385](https://github.com/kunchenguid/firstmate/actions/runs/34466966385), and [34470382458](https://github.com/kunchenguid/firstmate/actions/runs/34470382458).
-Shard 2 completed in all six, so its scripts come from the uploaded `fm-test-timing-portable-parallel-2` artifacts.
-Shard 1 was cancelled at its job cap in five of the six, so its scripts come from the `FM_TEST_END duration_ms=` markers in each cancelled job's log, which record every script that finished before the cancellation, plus the one complete `fm-test-timing-portable-parallel-1` artifact from run 34462758357.
+The retained hints are the slowest completed value each script reached across ten Amplify-Logic CI runs on 2026-09-25: [36156168263](https://github.com/Amplify-Logic/firstmate/actions/runs/36156168263), [36183925393](https://github.com/Amplify-Logic/firstmate/actions/runs/36183925393), [36184543450](https://github.com/Amplify-Logic/firstmate/actions/runs/36184543450), [36188061903](https://github.com/Amplify-Logic/firstmate/actions/runs/36188061903), [36190759251](https://github.com/Amplify-Logic/firstmate/actions/runs/36190759251), [36191708779](https://github.com/Amplify-Logic/firstmate/actions/runs/36191708779), [36193069705](https://github.com/Amplify-Logic/firstmate/actions/runs/36193069705), [36195433877](https://github.com/Amplify-Logic/firstmate/actions/runs/36195433877), [36196950818](https://github.com/Amplify-Logic/firstmate/actions/runs/36196950818), and [36197552016](https://github.com/Amplify-Logic/firstmate/actions/runs/36197552016).
+Every lane 2 invocation completed, so its scripts come from the uploaded `fm-test-timing-portable-parallel-2` artifacts.
+Lane 1 contributes nine uploaded `fm-test-timing-portable-parallel-1` artifacts plus the `FM_TEST_END duration_ms=` markers from three cancelled invocations, which record every script that finished before the cancellation: run 36193069705 and attempts 2 and 3 of run 36197552016.
+Each current member therefore has ten to twelve samples, taken under the lane composition these hints replaced.
 Observed maxima provide conservative packing weights, not an upper bound on future durations.
-
-The measurements cover all 24 candidates, with six samples per script except:
-
-| Samples | Scripts |
-|---:|---|
-| 4 | `tests/fm-lint.test.sh` |
-| 3 | `tests/fm-pi-primary-types.test.sh`, `tests/fm-review-diff.test.sh` |
-| 1 | `tests/fm-brief.test.sh`, `tests/fm-transition-lib.test.sh` |
-
-The two scripts with one sample are the tail of shard 1 that only the complete run reached.
 Collect completed per-script measurements for every member before calculating a split.
 A cancelled lane's elapsed duration is only a lower bound; its unfinished scripts have no completed duration for that invocation.
-The complete historical run supplies tail-script hints, not a completion time for any later cancelled invocation or for the rebalanced jobs.
 
 ## Parallel lanes
 
@@ -33,6 +23,9 @@ The two parallel lanes use longest-processing-time assignment over those hints.
 [`bin/fm-test-run.sh`](../bin/fm-test-run.sh) holds the duration values in `portable_parallel_weight_hints` and the ordered memberships and lane-specific prerequisite constraints beside `list_portable_parallel_1` and `list_portable_parallel_2`.
 Read the derived packing estimates with that runner's `--check-coverage`; its header and `--help` own the output fields and the selection-specific `--list-scheduled` weight rules.
 The largest individual hint sets a lower bound on the estimated duration of any split, regardless of how evenly the remaining work is assigned.
+That floor is why `tests/fm-captain-hold-lifecycle.test.sh` runs in the portable serial shards even though it passed the concurrent isolation proof: its 344364 ms CI maximum would fill more than half of a parallel job cap on its own.
+With it, the 24 members summed to about 1123 s of hint time, so no two-lane split could leave either lane under about 562 s of script time against the 600 s cap, and 24 of the 82 lane 1 jobs between 2026-09-21 and 2026-09-25 were cancelled at that cap.
+`bin/fm-test-isolation-proof.sh --list-exclusions` records that reason beside the candidate list it was removed from.
 The CI cap follows the three-tier timeout policy in [Timeouts](#timeouts) below.
 
 [`tests/fm-test-run.test.sh`](../tests/fm-test-run.test.sh), in `test_portable_parallel_lanes_stay_duration_balanced`, requires every parallel member to have a hint and the lane sums to differ by no more than five percent of the larger sum.
@@ -59,13 +52,14 @@ Each shard is still strictly serial in itself, and separate runners mean no two 
 Assignment is longest-processing-time bin packing over per-script duration hints embedded in `bin/fm-test-run.sh`.
 Every hint in the table is CI-derived: the slowest completed `duration_ms` per `path` across the `fm-test-timing-portable-serial-*` artifacts of four green Amplify-Logic main CI runs, [35589872313](https://github.com/Amplify-Logic/firstmate/actions/runs/35589872313) and [35583964981](https://github.com/Amplify-Logic/firstmate/actions/runs/35583964981) on 2026-09-21 and [35405990130](https://github.com/Amplify-Logic/firstmate/actions/runs/35405990130) and [35389857132](https://github.com/Amplify-Logic/firstmate/actions/runs/35389857132) on 2026-09-19.
 Taking the slowest of several CI runs rather than a single run keeps the balance honest on a slow runner.
-All four postdate the wholesale re-base, so they measure the creator-side scripts it introduced alongside the fork's own, and every one of the 236 scripts the serial lane held at that refresh carried a measured row rather than the default weight.
+All four postdate the wholesale re-base, so they measure the creator-side scripts it introduced alongside the fork's own, and every one of the 236 scripts the serial lane then held carried a measured row rather than the default weight.
 Thirty-three of them gate-skip on `ubuntu-latest` because the real tool they exercise is absent there, so their hint is that near-zero CI cost: the right weight for packing these CI shards, and the wrong one for predicting a local run that has the tool.
 One row is deliberately not CI-derived: `tests/fm-pi-windows-shell-invocation.test.sh` keeps the 5121 ms native-Windows focused-runner measurement from 2026-09-06T21:02Z, because the portable shards skip it and its 1188 ms Linux gate-skip would understate a focused Windows run.
 Two more rows are not CI-derived, for the same kind of reason: `tests/fm-visible-status.test.sh` carries 29400 ms and `tests/fm-watch-presentation.test.sh` 23300 ms, both measured locally on macOS on 2026-09-21.
 Both suites now spend most of their time deliberately waiting on a slow fake backend to prove the Herdr presentation refresh stays bounded; the first's 4644 ms CI row predates that wait, and the second has never run in CI.
 The next CI-derived refresh should replace both rather than keep them.
 Scripts the creator added after that re-base carry the creator's own hints from green runs [35279383618](https://github.com/kunchenguid/firstmate/actions/runs/35279383618) and [35282466441](https://github.com/kunchenguid/firstmate/actions/runs/35282466441) on 2026-09-17, and a script neither side has measured yet packs at the default weight, until the next CI-derived refresh of this fork's serial lane replaces them.
+`tests/fm-captain-hold-lifecycle.test.sh` joined the serial lane from the parallel lanes with its 344364 ms parallel-lane maximum from the runs listed under Verification inputs, which the next serial refresh replaces.
 A script with no hint gets the conservative `PORTABLE_SERIAL_DEFAULT_WEIGHT_MS` default.
 Hints only affect balance: the coverage guard keeps the partition complete and disjoint whatever they say, so a stale hint costs a slower shard rather than lost coverage.
 Balance is still worth keeping current, because enough unmeasured scripts let one shard carry more than twice another shard's real work and reach the job cap while another runner sits idle.

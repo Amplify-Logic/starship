@@ -2537,6 +2537,12 @@ Configuration is `key = value` lines; unknown keys are refused rather than ignor
 `enabled` arms this home, and the optional `voice` names a `say` voice, which also selects `say` as the speaker.
 The script's header and `--help` own the exact invocation, the environment overrides, and the exit codes.
 `AGENTS.md` section 9 owns when the orchestrator speaks.
+
+**Automatic reply speech.** On a Claude primary, the tracked `Stop` hook `bin/fm-claude-reply-speak.sh` is the backstop for that duty.
+It runs in the background after every turn of the lock-holding plain primary checkout, never in a crew or scout worktree or a secondmate home, and speaks the turn's final reply through `bin/fm-speak.sh` only when nothing was spoken during that turn.
+It speaks the first plain paragraph of the reply, capped at about 60 words, and replaces a line the register refuses as a decision request with a short notice that a decision is waiting on screen.
+A routine `Captain, shipshape.` reply stays silent to save speech credits, and a reply that opens with that line speaks only what follows it.
+Mute and the opt-in gate above apply unchanged, and the hook's header owns the exact rules.
 The Mac push-to-talk floater that feeds captain input into this home is documented in [`desk-floater.md`](desk-floater.md).
 
 Each call is bounded on both halves so a captain-facing turn is never held open: the register call is waited on under a watchdog because its output is needed, and speaker playback is detached with its standard streams closed (Deepgram synthesis is waited only for the network `--to` file, then playback is detached).

@@ -356,7 +356,7 @@ family_for_basename() {
       ;;
     fm-afk-pi-herdr-return-e2e.test.sh|\
     fm-bearings-board-lavish-live-e2e.test.sh|\
-    fm-claude-stop-autoarm-live-e2e.test.sh|\
+    fm-claude-stop-autoarm-live-e2e.test.sh|fm-claude-reply-speak-live-e2e.test.sh|\
     fm-cmux-claude-composer-live-e2e.test.sh|\
     fm-composer-matrix-live-e2e.test.sh|\
     fm-composer-codex-idle-live-e2e.test.sh|\
@@ -495,7 +495,6 @@ list_proven_isolated() {
 tests/fm-arm-pretool-check.test.sh
 tests/fm-backend-herdr.test.sh
 tests/fm-brief.test.sh
-tests/fm-captain-hold-lifecycle.test.sh
 tests/fm-cd-pretool-check.test.sh
 tests/fm-composer-ghost.test.sh
 tests/fm-composer-lib.test.sh
@@ -524,30 +523,29 @@ EOF
 # refresh procedure are owned by docs/fm-test-portable-shards.md.
 portable_parallel_weight_hints() {
   cat <<'EOF'
-tests/fm-arm-pretool-check.test.sh 30898
-tests/fm-backend-herdr.test.sh 22144
-tests/fm-brief.test.sh 1625
-tests/fm-captain-hold-lifecycle.test.sh 296481
-tests/fm-cd-pretool-check.test.sh 16964
-tests/fm-composer-ghost.test.sh 2120
-tests/fm-composer-lib.test.sh 4798
-tests/fm-crew-state.test.sh 11557
-tests/fm-ensure-agents-md.test.sh 901
-tests/fm-grok-harness.test.sh 6563
-tests/fm-herdr-lab.test.sh 9800
-tests/fm-lint.test.sh 164262
-tests/fm-pi-primary-types.test.sh 8624
-tests/fm-pr-merge.test.sh 111145
-tests/fm-review-diff.test.sh 2747
-tests/fm-send-popup-settle.test.sh 4939
-tests/fm-send-settle.test.sh 2051
-tests/fm-send-strict.test.sh 3861
-tests/fm-spawn-batch.test.sh 2265
-tests/fm-supervision-instructions.test.sh 297
-tests/fm-test-run.test.sh 92944
-tests/fm-tmux-submit-busy.test.sh 2477
-tests/fm-transition-lib.test.sh 99
-tests/fm-x-mode.test.sh 31870
+tests/fm-arm-pretool-check.test.sh 34116
+tests/fm-backend-herdr.test.sh 33329
+tests/fm-brief.test.sh 6667
+tests/fm-cd-pretool-check.test.sh 18749
+tests/fm-composer-ghost.test.sh 3502
+tests/fm-composer-lib.test.sh 6688
+tests/fm-crew-state.test.sh 14374
+tests/fm-ensure-agents-md.test.sh 2092
+tests/fm-grok-harness.test.sh 10801
+tests/fm-herdr-lab.test.sh 19572
+tests/fm-lint.test.sh 227743
+tests/fm-pi-primary-types.test.sh 4604
+tests/fm-pr-merge.test.sh 185115
+tests/fm-review-diff.test.sh 4268
+tests/fm-send-popup-settle.test.sh 6683
+tests/fm-send-settle.test.sh 3373
+tests/fm-send-strict.test.sh 5432
+tests/fm-spawn-batch.test.sh 4209
+tests/fm-supervision-instructions.test.sh 1554
+tests/fm-test-run.test.sh 150795
+tests/fm-tmux-submit-busy.test.sh 2608
+tests/fm-transition-lib.test.sh 1194
+tests/fm-x-mode.test.sh 31644
 EOF
 }
 
@@ -571,35 +569,34 @@ portable_parallel_lane_weight() {
 list_portable_parallel_1() {
   cat <<'EOF'
 tests/fm-lint.test.sh
-tests/fm-pr-merge.test.sh
-tests/fm-test-run.test.sh
-tests/fm-cd-pretool-check.test.sh
-tests/fm-pi-primary-types.test.sh
-tests/fm-grok-harness.test.sh
+tests/fm-arm-pretool-check.test.sh
+tests/fm-backend-herdr.test.sh
+tests/fm-x-mode.test.sh
+tests/fm-herdr-lab.test.sh
+tests/fm-crew-state.test.sh
 tests/fm-composer-lib.test.sh
-tests/fm-review-diff.test.sh
-tests/fm-tmux-submit-busy.test.sh
-tests/fm-composer-ghost.test.sh
 tests/fm-brief.test.sh
+tests/fm-pi-primary-types.test.sh
+tests/fm-spawn-batch.test.sh
+tests/fm-send-settle.test.sh
+tests/fm-ensure-agents-md.test.sh
+tests/fm-transition-lib.test.sh
 EOF
 }
 
 # Portable parallel shard 2: the complementary LPT half of the proven set.
 list_portable_parallel_2() {
   cat <<'EOF'
-tests/fm-captain-hold-lifecycle.test.sh
-tests/fm-x-mode.test.sh
-tests/fm-arm-pretool-check.test.sh
-tests/fm-backend-herdr.test.sh
-tests/fm-crew-state.test.sh
-tests/fm-herdr-lab.test.sh
+tests/fm-pr-merge.test.sh
+tests/fm-test-run.test.sh
+tests/fm-cd-pretool-check.test.sh
+tests/fm-grok-harness.test.sh
 tests/fm-send-popup-settle.test.sh
 tests/fm-send-strict.test.sh
-tests/fm-spawn-batch.test.sh
-tests/fm-send-settle.test.sh
-tests/fm-ensure-agents-md.test.sh
+tests/fm-review-diff.test.sh
+tests/fm-composer-ghost.test.sh
+tests/fm-tmux-submit-busy.test.sh
 tests/fm-supervision-instructions.test.sh
-tests/fm-transition-lib.test.sh
 EOF
 }
 
@@ -728,6 +725,7 @@ tests/fm-calm-claude-mod.test.sh 1252
 tests/fm-calm-extension.test.sh 6150
 tests/fm-calm-pi-extension.test.sh 52655
 tests/fm-capability.test.sh 1779
+tests/fm-captain-hold-lifecycle.test.sh 344364
 tests/fm-channel-intake.test.sh 42021
 tests/fm-chart-room.test.sh 18281
 tests/fm-check-unregister.test.sh 1586
