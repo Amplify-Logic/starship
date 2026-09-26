@@ -9,7 +9,9 @@
 # DEEPGRAM_API_KEY in the environment or this home's gitignored .env. The global
 # hotkeys and typing dictated text into other apps also need the Accessibility
 # permission, and screenshots the Screen Recording permission, each asked for
-# on the first launch of each new build.
+# on the first launch of each new build. Sending dictation typed into the
+# Firstmate chat needs the Automation permission for Terminal, asked on first
+# use.
 # See docs/desk-floater.md.
 #
 # Builds desk-floater/ into a minimal .app under desk-floater/.build/DeskFloater.app
@@ -64,6 +66,8 @@ write_info_plist() {
   <true/>
   <key>NSMicrophoneUsageDescription</key>
   <string>Desk floater records push-to-talk audio so Firstmate can hear your captain input via Deepgram.</string>
+  <key>NSAppleEventsUsageDescription</key>
+  <string>Desk floater asks Terminal which tab is in front, so dictation into the Firstmate chat is sent rather than only pasted.</string>
 </dict>
 </plist>
 PLIST

@@ -4,6 +4,7 @@
 #
 # Usage:
 #   fm-desk-voice.sh send [--source <name>] [--image <png>]... [<transcript text...>]
+#   fm-desk-voice.sh send --front-app <pid> --front-tty <tty> [--source <name>] [<text...>]
 #   fm-desk-voice.sh deliver [--source <name>] [--image <png>]... [<transcript text...>]
 #   fm-desk-voice.sh shot [--display <n>]
 #   fm-desk-voice.sh pending
@@ -14,8 +15,9 @@
 # be pasted into random terminals, and the floater must not act as a second
 # Firstmate. The only terminal this script ever types into is the primary
 # session that holds this home's session lock. (The floater's separate
-# dictation mode types only into the text box the captain chose and never
-# reaches this script; see docs/desk-floater.md.)
+# dictation mode pastes into the text box the captain chose, and reaches this
+# script only through send --front-app below, when that text box is the
+# primary's own chat; see docs/desk-floater.md.)
 #
 # send is the floater's talk-to-firstmate path. It types the message (the
 # transcript and any screenshots, composed as deliver composes them) into
@@ -46,7 +48,24 @@
 #                                         the backend reported send-failed, its
 #                                         known-undelivered verdict; the
 #                                         message went to the mailbox below
+#   not-in-front                          with --front-app and --front-tty
+#                                         only: the chat is not what the
+#                                         captain is typing in; nothing sent
 # A message therefore reaches the primary exactly one way.
+#
+# send --front-app <pid> --front-tty <tty> is the floater's dictation path: it
+# sends only when the text box with the cursor is the primary's own chat, and
+# otherwise prints "not-in-front" and delivers nothing, so the floater pastes
+# the text where the cursor is instead. <pid> is the frontmost Mac app and
+# <tty> the terminal device of its frontmost tab. The chat is in front when
+# the proven primary pane is the multiplexer's focused pane (herdr: that
+# pane's own focused flag; tmux: the active pane of its session's active
+# window) and a client of that multiplexer runs on <tty> beneath <pid>. A
+# herdr client is found by the kernel's socket facts (lsof): a process whose
+# unix socket peers with a socket of the server that owns this pane's API
+# socket, and whose standard input is <tty>. An unresolved primary counts as
+# not in front. Once in front, every send check above still applies, so an
+# unreadable chat or a selection dialog still goes to the mailbox.
 #
 # deliver is the mailbox path. Transcripts land under
 #   $FM_HOME/state/desk-voice/inbox/<utc>-<id>.json
@@ -289,12 +308,81 @@ shows_selection_dialog() {  # <backend> <target>
   printf '%s\n' "$screen" | grep -Eiq '(❯|›)[[:space:]]*[0-9]+\.|enter to select|esc to cancel'
 }
 
+# The pids of the herdr clients attached to the server that owns <socket> (the
+# pane's API socket) and runs <root>, one per line. A client is a process
+# whose unix socket peers with one of that server's other sockets.
+herdr_client_pids() {  # <socket> <root>
+  local socket=$1 root=$2 listing server
+  listing=$(lsof -U -F pdn 2>/dev/null) || [ -n "$listing" ] || return 1
+  for server in $(printf '%s\n' "$listing" | awk -v sock="$socket" '
+    /^p/ { pid = substr($0, 2) }
+    /^n/ && substr($0, 2) == sock { print pid }
+  ' | sort -u); do
+    pid_within "$root" "$server" || continue
+    printf '%s\n' "$listing" | awk -v sock="$socket" -v server="$server" '
+      /^p/ { pid = substr($0, 2); next }
+      /^d/ { dev = substr($0, 2); next }
+      /^n/ {
+        name = substr($0, 2)
+        if (pid == server && name != sock) { mine[dev] = 1 }
+        else if (pid != server && name ~ /^->/) { peer[pid] = peer[pid] " " substr(name, 3) }
+      }
+      END {
+        for (p in peer) {
+          n = split(peer[p], addrs, " ")
+          for (i = 1; i <= n; i++) if (addrs[i] in mine) { print p; break }
+        }
+      }
+    '
+    return 0
+  done
+  return 1
+}
+
+# The terminal device on <pid>'s standard input.
+stdin_tty() {  # <pid>
+  lsof -a -p "$1" -d 0 -F n 2>/dev/null | sed -n 's/^n//p' | head -n 1
+}
+
+# True when <target> is what the captain sees in the frontmost tab <tty> of
+# app <app>: the multiplexer's focused pane, shown by a client on <tty>
+# running beneath <app>. <root> is the pane's proven root pid.
+shown_in_front() {  # <backend> <target> <root> <app> <tty>
+  local backend=$1 target=$2 root=$3 app=$4 tty=$5 client info session
+  case "$backend" in
+    herdr)
+      fm_backend_herdr_parse_target "$target" || return 1
+      fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" pane get "$FM_BACKEND_HERDR_PANE" 2>/dev/null \
+        | jq -e --arg pane "$FM_BACKEND_HERDR_PANE" \
+          '.result.pane | select(.pane_id == $pane) | .focused == true' >/dev/null 2>&1 \
+        || return 1
+      [ -n "${HERDR_SOCKET_PATH:-}" ] || return 1
+      for client in $(herdr_client_pids "$HERDR_SOCKET_PATH" "$root"); do
+        [ "$(stdin_tty "$client")" = "$tty" ] && pid_within "$client" "$app" && return 0
+      done
+      ;;
+    tmux)
+      info=$(tmux display-message -p -t "$target" '#{session_id} #{window_active}#{pane_active}' 2>/dev/null) \
+        || return 1
+      session=${info% *}
+      [ "${info##* }" = 11 ] || return 1
+      while read -r client info; do
+        [ "$info" = "$tty" ] && pid_within "$client" "$app" && return 0
+      done <<EOF
+$(tmux list-clients -t "$session" -F '#{client_pid} #{client_tty}' 2>/dev/null)
+EOF
+      ;;
+  esac
+  return 1
+}
+
 # Type <line> into the lock-holding primary's own pane and submit it. Prints
 # "<verdict><TAB><backend><TAB><target>" once the pane is proven to host the
-# primary and show its chat input, or nothing and returns 1 when it is not
-# (nothing was typed). Call it
+# primary and show its chat input. Returns 1 when the pane is not proven, or
+# with <app> and <tty> is not in front (see shown_in_front), and 2 when it is
+# proven but not showing its chat input; nothing was typed either way. Call it
 # in a subshell: it replaces the pane environment with the primary's own.
-primary_submit() {  # <line>
+primary_submit() {  # <line> [<app> <tty>]
   local lock="$STATE/.lock" pid envs kv backend target root verdict
   [ -f "$lock" ] && [ ! -L "$lock" ] || return 1
   pid=$(head -n 1 "$lock" 2>/dev/null) || return 1
@@ -314,25 +402,63 @@ EOF
   fm_backend_target_exists "$backend" "$target" || return 1
   root=$(pane_root_pid "$backend" "$target") || return 1
   pid_within "$pid" "$root" || return 1
+  if [ "$#" -ge 3 ]; then
+    shown_in_front "$backend" "$target" "$root" "$2" "$3" || return 1
+  fi
   case "$(fm_backend_composer_state "$backend" "$target" 2>/dev/null)" in
     empty|pending) ;;
-    *) return 1 ;;
+    *) return 2 ;;
   esac
-  ! shows_selection_dialog "$backend" "$target" || return 1
+  ! shows_selection_dialog "$backend" "$target" || return 2
   verdict=$(fm_backend_send_text_submit "$backend" "$target" "$1" 3 0.4 0.5) || verdict=send-failed
   printf '%s\t%s\t%s\n' "${verdict:-send-failed}" "$backend" "$target"
 }
 
 send() {
-  local source text line result='' verdict backend target path image
-  local -a image_args=()
+  local source text line result='' verdict backend target path image rc=0
+  local front_app='' front_tty=''
+  local -a image_args=() front=() rest=()
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --front-app)
+        [ "$#" -ge 2 ] || refuse "--front-app needs a pid"
+        front_app=$2
+        shift 2
+        ;;
+      --front-tty)
+        [ "$#" -ge 2 ] || refuse "--front-tty needs a terminal device"
+        front_tty=$2
+        shift 2
+        ;;
+      --source|--image)
+        [ "$#" -ge 2 ] || break
+        rest+=("$1" "$2")
+        shift 2
+        ;;
+      *) break ;;
+    esac
+  done
+  set -- ${rest[@]+"${rest[@]}"} "$@"
+  if [ -n "$front_app$front_tty" ]; then
+    case "$front_app" in
+      ''|0*|*[!0-9]*) refuse "--front-app needs a pid: $front_app" ;;
+    esac
+    printf '%s' "$front_tty" | grep -Eqx '/dev/(tty[A-Za-z0-9]+|pts/[0-9]+)' \
+      || refuse "--front-tty needs a terminal device: $front_tty"
+    front=("$front_app" "$front_tty")
+  fi
   parse_transcript_args "$@"
   source=$ARG_SOURCE
   text=$ARG_TEXT
   line=$(plain_line "$(message_text)") || die "cannot prepare transcript"
   [ -n "$line" ] || refuse "nothing to deliver"
 
-  if result=$(primary_submit "$line") && [ -n "$result" ]; then
+  result=$(primary_submit "$line" ${front[@]+"${front[@]}"}) || rc=$?
+  if [ "${#front[@]}" -gt 0 ] && [ "$rc" = 1 ]; then
+    printf 'not-in-front\n'
+    return 0
+  fi
+  if [ "$rc" = 0 ] && [ -n "$result" ]; then
     IFS=$'\t' read -r verdict backend target <<<"$result"
     case "$verdict" in
       empty)

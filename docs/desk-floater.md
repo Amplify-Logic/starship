@@ -18,7 +18,7 @@ Exactly one fleet brain remains: the primary already running in this home.
   which speaks through macOS `say` when `config/speak` names a `voice` and
   through Deepgram Aura otherwise, each the fallback for the other.
 - Stop, Repeat and Mute controls for that spoken voice, and a list of the recent spoken replies to hear any of them again.
-- A dictation mode that types what you say into whatever text box has the cursor, instead of sending it to Firstmate.
+- A dictation mode that types what you say into whatever text box has the cursor, and sends it when that text box is the Firstmate chat.
 - Quick screenshots sent to Firstmate on their own or together with a voice message (see [Screenshots](#screenshots)).
 
 ## Enablement
@@ -76,7 +76,7 @@ macOS always lowers other audio a little while voice processing records; the flo
 | Key | What it does |
 | --- | --- |
 | Right Option, held | Walkie-talkie: talks to Firstmate for as long as it is held, exactly like holding the large button. Releasing sends. A brief brush of the key (under about a third of a second) sends nothing. |
-| Right Command, tapped | Starts dictation; tap it again to finish and type the text. |
+| Right Command, tapped | Starts dictation; tap it again to finish and type the text, or send it when the cursor is in the Firstmate chat. |
 | Right Shift, tapped | Takes a screenshot of the display under the mouse pointer. See [Screenshots](#screenshots). |
 
 Only the right-hand keys are watched, so the left Option, Command and Shift keys keep working as usual.
@@ -92,13 +92,28 @@ Dictation types what you say into whatever text box has the cursor: this termina
    The large button turns purple and the status line reads "Dictating…" while it listens.
 3. Speak, then tap Right Command again.
    The audio is transcribed through the same Deepgram path, and the text is pasted where the cursor is.
+   When the cursor is in the Firstmate chat, the text is sent instead (see [Dictating into the Firstmate chat](#dictating-into-the-firstmate-chat)).
 
 The paste puts the text on the clipboard, sends Command-V to the app you are typing in, then puts back whatever the clipboard held before.
 The dictated text is marked transient so clipboard-history tools skip it, and anything a password manager marked concealed or transient is not put back: the clipboard is left without it, so the password manager's own clear-after timer still applies.
 If something else is copied during that moment, the floater leaves the new clipboard contents alone.
 Without the Accessibility permission the text is left on the clipboard instead and the status line reads "Copied - press ⌘V".
-Dictated text never goes to Firstmate's mailbox and never wakes Firstmate.
 Clicking a floater control does not take keyboard focus from the app you are typing in.
+
+### Dictating into the Firstmate chat
+
+When the text box with the cursor is the Firstmate chat itself, dictation sends the text the way talking to Firstmate does: it is typed into the chat and submitted, and the status line reads `Sent`.
+It takes the same path and the same safety checks, so a chat showing a question or a permission prompt gets nothing and the text goes to the mailbox instead, see [How transcripts reach Firstmate](#how-transcripts-reach-firstmate).
+In every other app, and in any other terminal tab or pane, dictation only pastes, and never presses Return.
+
+The floater treats the cursor as being in the Firstmate chat only when all of these hold at the moment the text is ready:
+
+- Terminal is the frontmost app, and its frontmost tab is the one running the Herdr or tmux session that holds the primary Firstmate.
+- That session shows the primary Firstmate's pane as its focused pane.
+
+Terminal is the only app the floater can ask which tab is in front, so dictation into a Firstmate chat shown in any other terminal app is only pasted.
+Asking Terminal needs the Automation permission (see [Permissions](#permissions)); without it, the floater cannot tell which tab is in front, so any dictation with Terminal in front is only pasted and the status line reads "Typed, not sent - allow Terminal", even in a tab that is not the Firstmate chat.
+`bin/fm-desk-voice.sh`'s header owns how the chat is recognised.
 
 ## Screenshots
 
@@ -132,6 +147,7 @@ Nothing is sent anywhere but to this home's Firstmate.
 | Microphone | Every capture | Asked the first time you talk. |
 | Accessibility | The Right Option, Right Command and Right Shift hotkeys, and pasting dictated text into other apps | Asked on the first launch of each new build. Grant it in System Settings, Privacy & Security, Accessibility, by switching on DeskFloater. |
 | Screen Recording | Screenshots | Asked on the first launch of each new build. Grant it in System Settings, Privacy & Security, Screen & System Audio Recording, by switching on DeskFloater. |
+| Automation (Terminal) | Sending dictation typed into the Firstmate chat | Asked the first time you dictate with Terminal in front; a new build may ask again. Grant it in System Settings, Privacy & Security, Automation, by switching on Terminal under DeskFloater. |
 
 The floater checks the permission every few seconds and turns the hotkeys on as soon as it is granted, with no restart.
 Until then the hotkeys and the paste are off: an orange "!" badge sits on the talk button, the status line reads "Keys off - click !" in orange, and the on-screen buttons work as normal.
@@ -181,7 +197,7 @@ bin/fm-desk-voice.sh drain
 Drain prints each transcript as plain text (or `--print` for JSON) and moves the file to `processed/`.
 Treat the drained text as captain input in the primary conversation.
 `bin/fm-desk-voice.sh deliver` writes to the mailbox directly, without trying the chat pane.
-Dictation types text only where you put the cursor, and talk-to-Firstmate types only into the primary Firstmate chat.
+Dictation types text only where you put the cursor, sending it only when that is the Firstmate chat, and talk-to-Firstmate types only into the primary Firstmate chat.
 
 ## Desk speak-out bound
 

@@ -417,6 +417,51 @@ enum Paster {
     }
 }
 
+/// The terminal device of the frontmost tab of a terminal app, asked of the app
+/// itself over Apple Events (the Automation permission). Only apps whose answer
+/// has been checked against the real app are listed; any other app has no tab
+/// to report, so dictation there is only pasted.
+enum FrontTab {
+    enum Answer {
+        case tty(String)
+        case denied
+        case none
+    }
+
+    private static let scripts: [String: String] = [
+        "com.apple.Terminal": "tell application id \"com.apple.Terminal\" to get tty of selected tab of front window",
+    ]
+
+    static func tty(of app: NSRunningApplication) -> Answer {
+        guard let id = app.bundleIdentifier, let script = scripts[id] else { return .none }
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        proc.arguments = ["-e", "with timeout of 3 seconds", "-e", script, "-e", "end timeout"]
+        let out = Pipe()
+        let err = Pipe()
+        proc.standardOutput = out
+        proc.standardError = err
+        do {
+            try proc.run()
+        } catch {
+            return .none
+        }
+        let data = out.fileHandleForReading.readDataToEndOfFile()
+        let errText = String(data: err.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        proc.waitUntilExit()
+        // -1743: the captain has not allowed the floater to control the app.
+        if errText.contains("-1743") {
+            return .denied
+        }
+        guard proc.terminationStatus == 0,
+              let tty = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              tty.hasPrefix("/dev/") else {
+            return .none
+        }
+        return .tty(tty)
+    }
+}
+
 /// Screenshots waiting to go to Firstmate, and the talk-to-Firstmate words held
 /// to go with them. They go as one message once `window` has passed since the
 /// last shot or the end of the last talk, so each new one restarts the wait.
@@ -498,8 +543,9 @@ final class FloaterModel: ObservableObject {
         case busy
     }
 
-    /// Where a capture's transcript goes: Firstmate's mailbox, or typed into
-    /// the focused text box. Dictated text never reaches the mailbox.
+    /// Where a capture's transcript goes: to Firstmate, or typed into the
+    /// focused text box. Dictated text reaches Firstmate only when that text
+    /// box is Firstmate's own chat.
     enum Purpose {
         case firstmate
         case dictate
@@ -962,9 +1008,33 @@ final class FloaterModel: ObservableObject {
             }
             switch purpose {
             case .dictate:
-                await MainActor.run {
+                // Dictating into Firstmate's own chat sends it, as talking to
+                // Firstmate does; anywhere else the text is only pasted.
+                let front = await MainActor.run { NSWorkspace.shared.frontmostApplication }
+                var denied = false
+                if let front {
+                    switch FrontTab.tty(of: front) {
+                    case .tty(let tty):
+                        if let sent = Self.sendIfInFront(repoRoot: repoRoot, fmHome: fmHome, text: text,
+                                                         app: front.processIdentifier, tty: tty) {
+                            await MainActor.run {
+                                self.finish(status: sent)
+                            }
+                            return
+                        }
+                    case .denied:
+                        denied = true
+                    case .none:
+                        break
+                    }
+                }
+                await MainActor.run { [denied] in
                     let typed = Paster.paste(text)
-                    self.finish(status: typed ? "Typed" : "Copied - press ⌘V")
+                    if !typed {
+                        self.finish(status: "Copied - press ⌘V")
+                    } else {
+                        self.finish(status: denied ? "Typed, not sent - allow Terminal" : "Typed")
+                    }
                 }
             case .firstmate:
                 await MainActor.run {
@@ -1020,6 +1090,24 @@ final class FloaterModel: ObservableObject {
         }
         guard let out = run(bin: bin, args: args, env: ["FM_HOME": fmHome]) else {
             return "Deliver failed"
+        }
+        if out.hasPrefix("sent:") { return "Sent" }
+        if out.hasPrefix("sent-unconfirmed:") { return "Sent, unconfirmed" }
+        return "Saved to mailbox"
+    }
+
+    /// Sends dictated text to Firstmate when the text box with the cursor is
+    /// Firstmate's own chat: the frontmost tab <tty> of app <app> shows it.
+    /// Returns the status to show, or nil when the chat is not in front (or
+    /// the check failed), so the caller pastes the text instead.
+    nonisolated private static func sendIfInFront(repoRoot: String, fmHome: String, text: String,
+                                                  app: pid_t, tty: String) -> String? {
+        let bin = (repoRoot as NSString).appendingPathComponent("bin/fm-desk-voice.sh")
+        let args = ["send", "--front-app", String(app), "--front-tty", tty,
+                    "--source", "desk-floater-dictation", "--", text]
+        guard let out = run(bin: bin, args: args, env: ["FM_HOME": fmHome]),
+              !out.hasPrefix("not-in-front") else {
+            return nil
         }
         if out.hasPrefix("sent:") { return "Sent" }
         if out.hasPrefix("sent-unconfirmed:") { return "Sent, unconfirmed" }

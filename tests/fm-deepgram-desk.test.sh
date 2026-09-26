@@ -607,12 +607,14 @@ test_desk_voice_deliver_pending_drain() {
 #
 # A stand-in primary: a live process whose command line names a harness (a
 # python script under a claude/ directory, which the session-lock identity
-# accepts) and whose environment names a Herdr pane. It holds the fixture
-# home's session lock. The herdr on PATH is a fake that logs every call, so no
-# real pane ever receives text or keys.
+# accepts) and whose environment names a Herdr pane (or a tmux pane). It holds
+# the fixture home's session lock, and runs beneath a stand-in multiplexer
+# server. The herdr and tmux on PATH are fakes that log every call, so no real
+# pane ever receives text or keys.
 
-desk_send_fixture() {  # <name> -> home; starts the stand-in primary
-  local name=$1 home dir fb pid i envs
+desk_send_fixture() {  # <name> [tmux] -> home; starts the stand-in primary
+  local name=$1 backend=${2:-herdr} home dir fb pid i envs marker
+  local -a pane_env
   home=$(new_home "$name")
   dir="$home/fixture"
   fb="$dir/bin"
@@ -627,7 +629,8 @@ case "${1:-} ${2:-}" in
   "status --json")
     printf '{"client":{"version":"0.7.4","protocol":14},"server":{"running":true}}\n' ;;
   "pane get")
-    printf '{"result":{"pane":{"pane_id":"%s"}}}\n' "$3" ;;
+    if [ -e "$dir/unfocused" ]; then f=false; else f=true; fi
+    printf '{"result":{"pane":{"pane_id":"%s","focused":%s}}}\n' "$3" "$f" ;;
   "pane process-info")
     printf '{"result":{"type":"pane_process_info","process_info":{"pane_id":"%s","shell_pid":%s,"foreground_processes":[]}}}\n' \
       "$4" "$(cat "$dir/shell-pid")" ;;
@@ -649,14 +652,46 @@ case "${1:-} ${2:-}" in
 esac
 exit 0
 SH
+  # The tmux fake answers only what reaching the pane and the front check
+  # read; its chat input cannot be read, so a message that gets that far lands
+  # in the mailbox.
+  cat > "$fb/tmux" <<'SH'
+#!/usr/bin/env bash
+set -u
+dir=${FM_FAKE_HERDR_DIR:?}
+{ printf 'call'; for a in "$@"; do printf '\x1f%s' "$a"; done; printf '\n'; } >> "$dir/tmux.log"
+case "$*" in
+  *'#{pane_pid}'*) cat "$dir/shell-pid" ;;
+  *'#{session_id} #{window_active}#{pane_active}'*) cat "$dir/tmux-active" ;;
+  *'#{pane_id}'*) printf '%%9\n' ;;
+  list-clients*) cat "$dir/tmux-clients" 2>/dev/null ;;
+  *) exit 1 ;;
+esac
+SH
   printf '#!/bin/sh\nexit 0\n' > "$fb/osascript"
-  chmod +x "$fb/herdr" "$fb/osascript"
+  chmod +x "$fb/herdr" "$fb/tmux" "$fb/osascript"
   : > "$dir/herdr.log"
-  env HERDR_ENV=1 HERDR_PANE_ID=w7:p3 HERDR_SESSION=fm-desk-send-test \
-    HERDR_SOCKET_PATH="$dir/herdr.sock" \
-    python3 "$dir/claude/holder.py" >/dev/null 2>&1 &
-  pid=$!
-  printf '%s\n' "$pid" > "$dir/holder-pid"
+  : > "$dir/tmux.log"
+  if [ "$backend" = tmux ]; then
+    pane_env=(TMUX="$dir/tmux.sock,1,0" TMUX_PANE=%9)
+    marker=TMUX_PANE=%9
+  else
+    pane_env=(HERDR_ENV=1 HERDR_PANE_ID=w7:p3 HERDR_SESSION=fm-desk-send-test
+      HERDR_SOCKET_PATH="$dir/herdr.sock")
+    marker=HERDR_PANE_ID=w7:p3
+  fi
+  # The stand-in server is the stand-in primary's parent, as a multiplexer
+  # server is the parent of the pane that hosts a real primary.
+  # shellcheck disable=SC2016  # expanded by the inner shell
+  env "${pane_env[@]}" bash -c \
+    'python3 "$1" >/dev/null 2>&1 & printf "%s\n" "$!" > "$2.tmp"; mv "$2.tmp" "$2"; wait' \
+    _ "$dir/claude/holder.py" "$dir/holder-pid" >/dev/null 2>&1 &
+  printf '%s\n' "$!" > "$dir/server-pid"
+  for i in $(seq 1 50); do
+    [ -s "$dir/holder-pid" ] && break
+    sleep 0.1
+  done
+  pid=$(cat "$dir/holder-pid" 2>/dev/null) || return 1
   printf '%s\n' "$pid" > "$home/state/.lock"
   # The pane's root process is the stand-in itself unless a case says otherwise.
   printf '%s\n' "$pid" > "$dir/shell-pid"
@@ -667,11 +702,11 @@ SH
     else
       envs=$(ps -E -ww -o command= -p "$pid" 2>/dev/null | tr ' ' '\n')
     fi
-    case "$envs" in *HERDR_PANE_ID=w7:p3*) break ;; esac
+    case "$envs" in *"$marker"*) break ;; esac
     sleep 0.1
   done
   case "$envs" in
-    *HERDR_PANE_ID=w7:p3*) ;;
+    *"$marker"*) ;;
     *) kill "$pid" 2>/dev/null; return 1 ;;
   esac
   printf '%s\n' "$home"
@@ -848,6 +883,151 @@ Screenshots: $shot" ] || fail "unexpected mailbox message: $drained"
   pass "fm-desk-voice send: screenshots the pane refuses land in the mailbox with the words"
 }
 
+# --- desk-voice send --front-app/--front-tty: dictation into the chat -------
+#
+# A stand-in terminal app with a stand-in multiplexer client beneath it, and a
+# fake lsof reporting the kernel's socket facts for them: the client's unix
+# socket peers with a socket of the stand-in server, and its standard input is
+# <tty>. The tmux fake lists the same client.
+
+desk_front_fixture() {  # <home> <tty>
+  local dir="$1/fixture" i
+  bash -c 'sleep 60 >/dev/null 2>&1 & printf "%s\n" "$!" > "$1.tmp"; mv "$1.tmp" "$1"; wait' \
+    _ "$dir/client-pid" >/dev/null 2>&1 &
+  printf '%s\n' "$!" > "$dir/app-pid"
+  for i in $(seq 1 50); do
+    [ -s "$dir/client-pid" ] && break
+    sleep 0.1
+  done
+  printf '%s\n' "$2" > "$dir/client-tty"
+  printf '%s %s\n' "$(cat "$dir/client-pid")" "$2" > "$dir/tmux-clients"
+  printf '%s 11\n' "\$1" > "$dir/tmux-active"
+  desk_front_peer "$1" 0xb2
+  cat > "$dir/bin/lsof" <<'SH'
+#!/usr/bin/env bash
+dir=${FM_FAKE_HERDR_DIR:?}
+case " $* " in
+  *" -U "*) cat "$dir/lsof-unix" ;;
+  *" -d 0 "*)
+    [ "$3" = "$(cat "$dir/client-pid")" ] || exit 1
+    printf 'p%s\nf0\nn%s\n' "$3" "$(cat "$dir/client-tty")" ;;
+  *) exit 1 ;;
+esac
+SH
+  chmod +x "$dir/bin/lsof"
+}
+
+# Rewrites the socket listing so the stand-in client's socket peers with
+# <address>; the stand-in server's own client socket is 0xb2.
+desk_front_peer() {  # <home> <address>
+  local dir="$1/fixture"
+  cat > "$dir/lsof-unix" <<EOF
+p$(cat "$dir/server-pid")
+f4
+d0xa1
+n$dir/herdr.sock
+f7
+d0xb2
+n$dir/herdr-client.sock
+p$(cat "$dir/client-pid")
+f5
+d0xc3
+n->$2
+EOF
+}
+
+desk_front_done() {  # <home>
+  kill "$(cat "$1/fixture/client-pid")" 2>/dev/null || true
+  desk_send_done "$1"
+}
+
+desk_dictate() {  # <home> <tty> <text> -> stdout of send from the stand-in app
+  desk_send "$1" --front-app "$(cat "$1/fixture/app-pid")" --front-tty "$2" -- "$3"
+}
+
+test_desk_voice_dictation_sends_when_the_chat_is_in_front() {
+  local home out
+  home=$(desk_send_fixture front-sent) || { desk_send_skip front-sent; return 0; }
+  desk_front_fixture "$home" /dev/ttys042
+  out=$(desk_dictate "$home" /dev/ttys042 "Merge the finances PR") || fail "send failed: $out"
+  assert_contains "$out" "sent: herdr fm-desk-send-test:w7:p3" "dictation into the chat is sent"
+  assert_contains "$(herdr_calls "$home" pane send-text)" "pane send-text w7:p3 Merge the finances PR" \
+    "the dictated words are typed into the primary's pane"
+  assert_contains "$(herdr_calls "$home" pane send-keys)" "pane send-keys w7:p3 enter" "Enter submits it"
+  [ "$(inbox_count "$home")" = 0 ] || fail "a sent dictation must not also land in the mailbox"
+  desk_front_done "$home"
+  pass "fm-desk-voice send: dictation into the Firstmate chat in front is typed and submitted"
+}
+
+test_desk_voice_dictation_elsewhere_is_left_to_paste() {
+  local home out case
+  for case in unfocused other-tty other-app other-server no-lock; do
+    home=$(desk_send_fixture "front-$case") || { desk_send_skip "front-$case"; return 0; }
+    desk_front_fixture "$home" /dev/ttys042
+    case "$case" in
+      unfocused) : > "$home/fixture/unfocused" ;;
+      other-tty) printf '/dev/ttys007\n' > "$home/fixture/client-tty" ;;
+      other-app) cat "$home/fixture/server-pid" > "$home/fixture/app-pid" ;;
+      other-server) desk_front_peer "$home" 0xff ;;
+      no-lock) rm -f "$home/state/.lock" ;;
+    esac
+    out=$(desk_dictate "$home" /dev/ttys042 "draft reply to Sam") || fail "$case: send failed: $out"
+    [ "$out" = not-in-front ] || fail "$case: expected not-in-front, got: $out"
+    [ -z "$(herdr_calls "$home" pane send-text)" ] || fail "$case: nothing may be typed into the chat"
+    [ -z "$(herdr_calls "$home" pane send-keys)" ] || fail "$case: no Enter may be sent"
+    [ "$(inbox_count "$home")" = 0 ] || fail "$case: text meant elsewhere must not land in the mailbox"
+    desk_front_done "$home"
+  done
+  pass "fm-desk-voice send: dictation anywhere but the Firstmate chat in front sends nothing"
+}
+
+test_desk_voice_dictation_keeps_the_send_checks() {
+  local home out
+  home=$(desk_send_fixture front-modal) || { desk_send_skip front-modal; return 0; }
+  desk_front_fixture "$home" /dev/ttys042
+  printf ' Do you want to proceed?\n ❯ 1. Yes\n   2. No\n' > "$home/fixture/modal"
+  out=$(desk_dictate "$home" /dev/ttys042 "1 and merge") || fail "send failed: $out"
+  case "$out" in mailbox:\ *) ;; *) fail "expected a mailbox delivery, got: $out" ;; esac
+  [ -z "$(herdr_calls "$home" pane send-text)" ] || fail "nothing may be typed into a dialog"
+  [ "$(inbox_count "$home")" = 1 ] || fail "the dictation must land in the mailbox once"
+  desk_front_done "$home"
+  pass "fm-desk-voice send: dictation into a chat showing a dialog goes to the mailbox"
+}
+
+test_desk_voice_dictation_front_check_on_tmux() {
+  local home out
+  home=$(desk_send_fixture front-tmux tmux) || { desk_send_skip front-tmux; return 0; }
+  desk_front_fixture "$home" /dev/ttys042
+  # In front, the fake's unreadable chat input sends it on to the mailbox.
+  out=$(desk_dictate "$home" /dev/ttys042 "Status please") || fail "send failed: $out"
+  case "$out" in mailbox:\ *) ;; *) fail "expected the front check to pass, got: $out" ;; esac
+  assert_contains "$(tr '\037' ' ' < "$home/fixture/tmux.log")" "list-clients -t \$1" \
+    "the clients of the pane's own session are read"
+  printf '%s 10\n' "\$1" > "$home/fixture/tmux-active"
+  out=$(desk_dictate "$home" /dev/ttys042 "Status please") || fail "send failed: $out"
+  [ "$out" = not-in-front ] || fail "an inactive pane must not count as in front, got: $out"
+  printf '%s 11\n' "\$1" > "$home/fixture/tmux-active"
+  out=$(desk_dictate "$home" /dev/ttys007 "Status please") || fail "send failed: $out"
+  [ "$out" = not-in-front ] || fail "a client on another terminal must not count, got: $out"
+  ! grep -qF send-keys "$home/fixture/tmux.log" || fail "no keys may reach the tmux pane"
+  desk_front_done "$home"
+  pass "fm-desk-voice send: on tmux, only the active pane shown on the front terminal is in front"
+}
+
+test_desk_voice_dictation_refuses_bad_front_arguments() {
+  local home out status
+  home=$(new_home front-args)
+  for args in "--front-app 0 --front-tty /dev/ttys001" "--front-app 12x --front-tty /dev/ttys001" \
+    "--front-app 12 --front-tty /tmp/x" "--front-app 12"; do
+    status=0
+    # shellcheck disable=SC2086
+    out=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" "$DESK" send $args -- words 2>&1) || status=$?
+    [ "$status" -eq 2 ] || fail "expected exit 2 for '$args', got $status: $out"
+  done
+  [ "$(inbox_count "$home")" = 0 ] || fail "a refused send must deliver nothing"
+  pass "fm-desk-voice send: malformed front arguments are refused"
+}
+
 # The floater's screenshots are captured by a stand-in here: a test must never
 # photograph the real screen.
 install_capture() {  # <home> [fail|empty]
@@ -1010,6 +1190,11 @@ test_desk_voice_send_falls_back_when_the_pane_shows_a_dialog
 test_desk_voice_send_joins_a_pending_draft
 test_desk_voice_send_types_screenshots_into_the_primary_pane
 test_desk_voice_send_screenshots_fall_back_to_the_mailbox
+test_desk_voice_dictation_sends_when_the_chat_is_in_front
+test_desk_voice_dictation_elsewhere_is_left_to_paste
+test_desk_voice_dictation_keeps_the_send_checks
+test_desk_voice_dictation_front_check_on_tmux
+test_desk_voice_dictation_refuses_bad_front_arguments
 test_desk_voice_shot_captures_the_named_display
 test_desk_voice_shot_keeps_only_the_newest
 test_desk_voice_shot_failure_leaves_nothing
