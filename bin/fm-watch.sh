@@ -2923,9 +2923,17 @@ while :; do
             triage_log "PR poll for $id changed before its validated check; skipping the stale snapshot"
             continue
           fi
-          run_check_capture "$SCRIPT_DIR/fm-pr-poll.sh" --validated \
-            "$provider" "$url" "$host" "$path" "$number" || exit 1
-          out=$FM_CHECK_RESULT
+          # A merge already reported for this exact identity cannot un-merge, so
+          # the marker stands in for the forge read: the result below is then
+          # absorbed and the poll retired without waking or polling again.
+          if fm_pr_poll_merge_already_notified "$STATE" "$id" \
+              "$provider" "$host" "$path" "$number"; then
+            out=merged
+          else
+            run_check_capture "$SCRIPT_DIR/fm-pr-poll.sh" --validated \
+              "$provider" "$url" "$host" "$path" "$number" || exit 1
+            out=$FM_CHECK_RESULT
+          fi
         elif fm_custom_check_snapshot_prepare "$STATE" "$id"; then
           custom_snapshot=$FM_CUSTOM_CHECK_SNAPSHOT
           run_check_capture "$custom_snapshot" || exit 1

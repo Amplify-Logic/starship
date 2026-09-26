@@ -2133,49 +2133,57 @@ test_merged_poll_retires_once() {
 # itself catch a poll re-registered for a task whose merge was already
 # surfaced (e.g. bin/fm-pr-check.sh re-armed after the fact). The per-task
 # merge-notified marker (bin/fm-pr-lib.sh) is what stops that re-registration
-# from producing a second main-blocking wake for the identical merge, while a
-# genuinely first notification (test_merged_poll_retires_once above) still
-# reaches main.
+# from producing a second main-blocking wake for the identical merge, or a
+# second forge read, on any later check interval, while a genuinely first
+# notification (test_merged_poll_retires_once above) still reaches main.
 test_merged_poll_reregistration_after_notification_is_absorbed() {
-  local dir state rc first
+  local dir state rc first url cycle
+  url=https://github.com/o/r/pull/1
   dir=$(make_case merged-reregistration-absorbed)
   state="$dir/home/state"
-  write_poll_meta "$state" task-a https://github.com/o/r/pull/1
-  seed_canonical_poll "$dir" task-a https://github.com/o/r/pull/1
+  write_poll_meta "$state" task-a "$url"
+  seed_canonical_poll "$dir" task-a "$url"
   add_stop_custom_check "$dir"
 
   set +e
-  FM_TEST_GH_STATE=MERGED run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/watch-1.out" 2> "$dir/watch-1.err"
+  FM_TEST_GH_LOG="$dir/gh.log" FM_TEST_GH_STATE=MERGED \
+    run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/watch-1.out" 2> "$dir/watch-1.err"
   rc=$?
   set -e
   [ "$rc" -eq 0 ] || fail "first merged watcher cycle failed: $(cat "$dir/watch-1.err")"
   first=$(cat "$dir/watch-1.out")
   case "$first" in check:*task-a.check.sh:*merged) ;; *) fail "first merge confirmation was not delivered: $first" ;; esac
+  grep -F "pr view $url --json state" "$dir/gh.log" >/dev/null \
+    || fail "first merged cycle did not read the forge"
   ack_watcher_cycle "$state" || fail "first merge confirmation acknowledgement failed"
   assert_poll_absent "$state" task-a
   [ -f "$state/task-a.pr-poll-merge-notified" ] || fail "the merge-notified marker was not recorded"
 
   # Re-registration: fm-pr-check.sh re-armed for a task whose PR is already
   # merged (a fresh check.sh/pr-poll/pr-poll-registration, a distinct
-  # retirement identity from the one just retired).
-  seed_canonical_poll "$dir" task-a https://github.com/o/r/pull/1
-  rm -f "$state/.last-check"
+  # retirement identity from the one just retired), on more than one interval.
+  for cycle in 2 3; do
+    seed_canonical_poll "$dir" task-a "$url"
+    rm -f "$state/.last-check" "$dir/gh.log"
 
-  set +e
-  FM_TEST_GH_STATE=MERGED run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/watch-2.out" 2> "$dir/watch-2.err"
-  rc=$?
-  set -e
-  [ "$rc" -eq 0 ] || fail "second watcher cycle failed: $(cat "$dir/watch-2.err")"
-  case "$(cat "$dir/watch-2.out")" in
-    check:*z-stop.check.sh:*stop-cycle) ;;
-    *) fail "the re-registered duplicate did not fall through to the next check: $(cat "$dir/watch-2.out")" ;;
-  esac
-  ! grep -F 'task-a.check.sh: merged' "$dir/watch-2.out" >/dev/null \
-    || fail "a repeat identical merged poll opened a main-blocking row: $(cat "$dir/watch-2.out")"
-  ! grep "$(printf '\tcheck\ttask-a.check.sh\t')" "$state/.wake-queue" >/dev/null 2>&1 \
-    || fail "the absorbed duplicate merge notice was queued as a main-blocking row"
-  assert_poll_absent "$state" task-a
-  pass "a repeat identical merged poll for an already-notified task is absorbed, never queued as a main-blocking row"
+    set +e
+    FM_TEST_GH_LOG="$dir/gh.log" FM_TEST_GH_STATE=MERGED \
+      run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/watch-$cycle.out" 2> "$dir/watch-$cycle.err"
+    rc=$?
+    set -e
+    [ "$rc" -eq 0 ] || fail "watcher cycle $cycle failed: $(cat "$dir/watch-$cycle.err")"
+    case "$(cat "$dir/watch-$cycle.out")" in
+      check:*z-stop.check.sh:*stop-cycle) ;;
+      *) fail "the re-registered duplicate did not fall through to the next check on cycle $cycle: $(cat "$dir/watch-$cycle.out")" ;;
+    esac
+    ! grep "$(printf '\tcheck\ttask-a.check.sh\t')" "$state/.wake-queue" >/dev/null 2>&1 \
+      || fail "the absorbed duplicate merge notice was queued as a main-blocking row on cycle $cycle"
+    ! grep -F "pr view $url --json state" "$dir/gh.log" >/dev/null 2>&1 \
+      || fail "cycle $cycle queried the forge again for an already-reported merge"
+    assert_poll_absent "$state" task-a
+    ack_watcher_cycle "$state" || fail "watcher cycle $cycle acknowledgement failed"
+  done
+  pass "a repeat identical merged poll for an already-notified task is absorbed without a forge read, never queued as a main-blocking row"
 }
 
 # The captain merging a PR himself on the forge is the same outcome as a merge
