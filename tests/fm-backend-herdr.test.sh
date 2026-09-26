@@ -184,7 +184,10 @@ SH
 # call - mirrors an out-of-band agent registering itself) or an
 # agent_not_found error when none was preset (verified real-herdr behavior for
 # a pane with no registered agent). Every call is logged to $FM_HERDR_LOG in
-# the same unit-separated form as make_herdr_fakebin.
+# the same unit-separated form as make_herdr_fakebin. `session list`, `pane get`,
+# and `tab get` model a launcher pane's own identity reads, so a spawn from inside
+# a seeded pane (HERDR_PANE_ID plus FM_FAKE_HERDR_SOCKET as its socket) adopts
+# that pane's workspace exactly as fm_backend_herdr_launcher_identity resolves it.
 make_herdr_statefake() {  # <dir> -> echoes fakebin dir; seeds an empty state file
   local dir=$1 fb="$1/fakebin"
   mkdir -p "$fb"
@@ -234,6 +237,16 @@ case "$cmd $sub" in
        | .next = (.next + 2)' | save
     printf '{"result":{"workspace":{"workspace_id":"%s","label":"%s"},"tab":{"tab_id":"%s"},"root_pane":{"pane_id":"%s"}}}\n' \
       "$wsid" "$label" "$wsid:t$dn" "$wsid:p$dn"
+    ;;
+  "session list")
+    printf '{"sessions":[{"name":"%s","running":true,"socket_path":"%s"}]}\n' \
+      "${HERDR_SESSION:-}" "${FM_FAKE_HERDR_SOCKET:-/tmp/fm-herdr-unit/fake.sock}"
+    ;;
+  "pane get")
+    jq_state --arg p "${3:-}" '{result:{pane:(.tabs[]|select(.pane_id==$p)|{pane_id, tab_id, workspace_id})}}'
+    ;;
+  "tab get")
+    jq_state --arg t "${3:-}" '{result:{tab:(.tabs[]|select(.tab_id==$t)|{tab_id, workspace_id})}}'
     ;;
   "tab list")
     jq_state --arg w "$ws" '{result:{tabs:[.tabs[]|select(.workspace_id==$w)]}}'
@@ -5962,6 +5975,73 @@ test_list_live_hidden_legacy_and_other_home_boundary() {
   pass 'list_live supports hidden and legacy recovery while refusing another home workspace'
 }
 
+# A worker placed in the workspace its launcher runs in must stay visible to
+# recovery exactly like one placed in a workspace the spawn created: the adopted
+# workspace takes this home's fm_owner token. It never takes a workspace from
+# another home, whether that home owns it by token or by its legacy label, and
+# it never gains fm_project, so a spawn with no launcher still resolves to the
+# workspace it created rather than the adopted one.
+test_list_live_sees_workers_in_created_and_adopted_workspaces() {
+  local dir fb state home other project owner raw live sock
+  dir="$TMP_ROOT/list-live-adopted"; mkdir -p "$dir"
+  fb=$(make_herdr_statefake "$dir")
+  state="$dir/state.json"; home="$dir/home"; other="$dir/other"; project="$dir/project"
+  mkdir -p "$home" "$other" "$project"; : > "$dir/log"
+  owner=$(herdr_test_path_token "$home")
+  sock=/tmp/fm-herdr-unit/lab.sock
+  jq --arg other "$(herdr_test_path_token "$other")" '
+    .workspaces=[
+      {workspace_id:"captain",label:"captain-shell",tokens:{}},
+      {workspace_id:"foreign",label:"their-shell",tokens:{fm_owner:$other}},
+      {workspace_id:"sibling",label:"2ndmate-sib",tokens:{}}
+    ] |
+    .tabs=[
+      {tab_id:"captain:t1",pane_id:"captain:p1",workspace_id:"captain",label:"shell",tokens:{}},
+      {tab_id:"foreign:t1",pane_id:"foreign:p1",workspace_id:"foreign",label:"shell",tokens:{}},
+      {tab_id:"sibling:t1",pane_id:"sibling:p1",workspace_id:"sibling",label:"shell",tokens:{}}
+    ]' "$state" > "$state.tmp" && mv "$state.tmp" "$state"
+
+  # spawn <launcher-pane|""> <task-id>: the adapter half of one fm-spawn.sh herdr
+  # placement, from inside <launcher-pane> or from outside Herdr entirely.
+  spawn() {
+    local pane=$1 task=$2 container seeded
+    raw=$(PATH="$fb:$PATH" FM_HERDR_LOG="$dir/log" FM_FAKE_HERDR_STATE="$state" FM_FAKE_HERDR_SOCKET="$sock" \
+      FM_HOME="$home" FM_HERDR_PROJECT_KEY="$(cd "$project" && pwd -P)" FM_HERDR_PROJECT_LABEL='Project' \
+      HERDR_SESSION=lab HERDR_PANE_ID="$pane" HERDR_SOCKET_PATH="$sock" \
+      bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_container_ensure /tmp' "$ROOT") \
+      || fail "container_ensure failed for $task from launcher '$pane'"
+    container=${raw%%$'\t'*}; seeded=${raw#*$'\t'}
+    PATH="$fb:$PATH" FM_HERDR_LOG="$dir/log" FM_FAKE_HERDR_STATE="$state" FM_HOME="$home" \
+      bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_create_task "$1" "WORKER · $2" /tmp "$3" "$2"' \
+      "$ROOT" "$container" "$task" "$seeded" >/dev/null || fail "create_task failed for $task"
+  }
+  tokens_of() { jq -c --arg w "$1" '.workspaces[]|select(.workspace_id==$w)|.tokens' "$state"; }
+
+  spawn "" created-task
+  [ "${raw%%$'\t'*}" = lab:w1 ] || fail "a spawn with no launcher should create its project workspace, got '$raw'"
+  spawn captain:p1 adopted-task
+  [ "$raw" = $'lab:captain\t' ] || fail "a spawn from the captain's pane should adopt that workspace, got '$raw'"
+  spawn foreign:p1 foreign-placed-task
+  spawn sibling:p1 sibling-placed-task
+
+  live=$(PATH="$fb:$PATH" FM_HERDR_LOG="$dir/log" FM_FAKE_HERDR_STATE="$state" FM_HOME="$home" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_list_live lab' "$ROOT")
+  assert_contains "$live" 'fm-created-task' 'list_live lost the worker in the workspace the spawn created'
+  assert_contains "$live" 'fm-adopted-task' "list_live lost the worker in the launcher's adopted workspace"
+  assert_not_contains "$live" 'foreign-placed-task' "the adopted workspace another home owns by token was claimed"
+  assert_not_contains "$live" 'sibling-placed-task' "the adopted workspace another home owns by legacy label was claimed"
+
+  [ "$(tokens_of captain)" = "$(jq -cn --arg o "$owner" '{fm_owner:$o}')" ] \
+    || fail "the adopted workspace should carry exactly this home's fm_owner, got $(tokens_of captain)"
+  [ "$(tokens_of foreign)" = "$(jq -cn --arg o "$(herdr_test_path_token "$other")" '{fm_owner:$o}')" ] \
+    || fail "another home's token-owned workspace was rebound: $(tokens_of foreign)"
+  [ "$(tokens_of sibling)" = '{}' ] || fail "another home's legacy-labeled workspace was bound: $(tokens_of sibling)"
+
+  spawn "" created-again-task
+  [ "${raw%%$'\t'*}" = lab:w1 ] || fail "a later spawn with no launcher must still resolve its created workspace, not the adopted one, got '$raw'"
+  pass 'list_live sees workers in both created and launcher-adopted workspaces without claiming another home workspace'
+}
+
 # shellcheck source=bin/fm-backend.sh
 . "$ROOT/bin/fm-backend.sh"
 
@@ -6097,6 +6177,7 @@ test_list_live_scoped_to_this_homes_workspace_only
 test_managed_workspace_identity_uses_hidden_physical_tokens
 test_managed_task_identity_allows_shared_titles_and_recovers_hidden_ids
 test_list_live_hidden_legacy_and_other_home_boundary
+test_list_live_sees_workers_in_created_and_adopted_workspaces
 test_parse_target
 test_normalize_key
 test_capture_calls_pane_read

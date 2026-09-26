@@ -1831,6 +1831,7 @@ fm_backend_herdr_launcher_identity() {  # <session>
   FM_BACKEND_HERDR_LAUNCHER_PANE_ID=""
   FM_BACKEND_HERDR_LAUNCHER_TAB_ID=""
   FM_BACKEND_HERDR_LAUNCHER_WORKSPACE_ID=""
+  FM_BACKEND_HERDR_LAUNCHER_WORKSPACES=""
   [ -n "$pane" ] || return 2
 
   # Same-session proof, before the pane id is trusted at all: herdr pane ids
@@ -1912,7 +1913,39 @@ fm_backend_herdr_launcher_identity() {  # <session>
   # shellcheck disable=SC2034  # callers consume the verified binding's parts
   FM_BACKEND_HERDR_LAUNCHER_TAB_ID=$tab
   FM_BACKEND_HERDR_LAUNCHER_WORKSPACE_ID=$workspace
+  FM_BACKEND_HERDR_LAUNCHER_WORKSPACES=$list
   return 0
+}
+
+# fm_backend_herdr_workspace_bind_adopted_owner: give a workspace a spawn
+# ADOPTED from its launcher the same hidden fm_owner binding a created one
+# carries, so fm_backend_herdr_list_live still finds the workers placed there.
+# <workspace-list> is the `workspace list` response the adoption was verified
+# against. Only fm_owner is bound: without fm_project the token-pair lookup in
+# fm_backend_herdr_workspace_find_all still never resolves a spawn that has no
+# launcher into the adopted workspace. Another home's workspace is never
+# claimed: one already carrying any fm_owner is left untouched, and so is an
+# untokened one wearing a legacy home label (firstmate, 2ndmate-<id>), which
+# list_live already reads as its home's by that label and which a binding would
+# take away from it. Best-effort like the pane's fm_task_id projection: the
+# recorded backend ids stay authoritative, so a failure warns and never fails
+# the spawn.
+fm_backend_herdr_workspace_bind_adopted_owner() {  # <session> <workspace_id> <workspace-list>
+  local session=$1 wsid=$2 list=$3 entry current label
+  entry=$(printf '%s' "$list" | jq -c --arg id "$wsid" '
+    [.result.workspaces[]? | select(.workspace_id == $id)]
+    | select(length == 1) | .[0]
+    | select(((.tokens // {}) | type) == "object")
+  ' 2>/dev/null)
+  [ -n "$entry" ] || return 0
+  current=$(printf '%s' "$entry" | jq -r '.tokens.fm_owner // ""' 2>/dev/null)
+  [ -z "$current" ] || return 0
+  label=$(printf '%s' "$entry" | jq -r '.label // ""' 2>/dev/null)
+  case "$label" in firstmate|2ndmate-*) return 0 ;; esac
+  fm_backend_herdr_cli "$session" workspace report-metadata "$wsid" \
+    --source firstmate-owner-identity-v1 \
+    --token "fm_owner=$(fm_backend_herdr_identity_token "$FM_HOME")" >/dev/null 2>&1 \
+    || echo "warning: could not bind adopted Herdr workspace $wsid to its Firstmate home; recovery discovery will not list workers placed there, and recorded backend ids remain authoritative" >&2
 }
 
 # fm_backend_herdr_workspace_prune_seeded_default_tab: close EXACTLY
@@ -2048,6 +2081,8 @@ fm_backend_herdr_workspace_ensure() {  # <session> <cwd> [<launcher-relationship
     case "$status" in
       0)
         FM_BACKEND_HERDR_WS_ID=$FM_BACKEND_HERDR_LAUNCHER_WORKSPACE_ID
+        fm_backend_herdr_workspace_bind_adopted_owner "$session" "$FM_BACKEND_HERDR_WS_ID" \
+          "$FM_BACKEND_HERDR_LAUNCHER_WORKSPACES"
         printf '%s' "$FM_BACKEND_HERDR_WS_ID"
         return 0
         ;;
@@ -3842,8 +3877,10 @@ EOF
 # Recovery reads IDENTITY, not display text. A task's tab now carries a human
 # sentence, so a scan for fm-<id> labels alone would miss every managed worker
 # and report the whole fleet as orphaned. It walks every workspace this physical
-# home owns (plus the legacy per-home workspace, which predates the tokens and
-# stays readable until its tasks finish) and recovers each pane from its hidden
+# home owns, whether a spawn created it or adopted it from its launcher
+# (fm_backend_herdr_workspace_bind_adopted_owner), plus the legacy per-home
+# workspace, which predates the tokens and stays readable until its tasks
+# finish, and recovers each pane from its hidden
 # fm_task_id, falling back to the legacy label for panes created before it.
 # Another home's tokened workspace is never claimed by label.
 fm_backend_herdr_list_live() {  # <session>

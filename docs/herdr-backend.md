@@ -580,6 +580,7 @@ This section details the fallback the ordinary launcher-bound placement above fa
 
 With no Herdr ancestry to inherit, managed ship and scout tasks use one Herdr workspace per `(physical FM_HOME, physical project)` and one tab per task.
 The adapter binds a newly created workspace once with hidden `fm_owner` and `fm_project` tokens.
+A launcher workspace a spawn adopts gains only the hidden `fm_owner` token, so its workers stay visible to recovery without it ever becoming a project workspace; one that another home already owns, by token or by legacy home label, is left untouched.
 Each token is a versioned Git object hash of the complete physical path, keeping the immutable identity below Herdr's metadata value limit without storing a truncatable raw path.
 Workspace lookup exact-matches both tokens and never identifies or adopts managed work by its visible label.
 The human project label is mutable presentation and may include prioritized aggregate state without weakening ownership.
@@ -608,7 +609,7 @@ A secondmate primary pane still uses that home workspace because it has no physi
 Its tab keeps the legacy `fm-<id>` title too: `bin/fm-visible-status.sh` skips every `kind=secondmate` task, so the WORKER convention never applies to a secondmate primary.
 New project workers spawned from either a primary or secondmate home use the token-owned project workspace contract instead.
 
-Recovery scans token-owned workspaces whose `fm_owner` equals the active physical home and reads hidden `fm_task_id` from each pane.
+Recovery scans token-owned workspaces whose `fm_owner` equals the active physical home, including adopted launcher workspaces, and reads hidden `fm_task_id` from each pane.
 It also scans that home's un-tokened legacy workspace for visible `fm-<id>` tabs.
 It never claims a tokened workspace owned by another home, even when the visible project label collides.
 
