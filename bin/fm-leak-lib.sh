@@ -28,6 +28,9 @@ fm_leak_is_allowed_email() {
     git@github.com) return 0 ;;
     *@example.com|*@example.org|*@example.net|*@example.invalid|*@example.test) return 0 ;;
     *@localhost|*@local.test) return 0 ;;
+    # Vendor bot identities, not people: bin/fm-git-strip-ai-trailers.sh names
+    # them to recognise and strip AI co-author trailers.
+    noreply@anthropic.com|noreply@openai.com|copilot@github.com) return 0 ;;
   esac
   return 1
 }

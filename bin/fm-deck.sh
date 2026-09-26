@@ -96,7 +96,7 @@ SECTION_MARK=$(new_section_mark)
 # fm_visible_state / fm_visible_icon own the captain-facing state wording.
 # shellcheck source=bin/fm-visible-format-lib.sh
 . "$SCRIPT_DIR/fm-visible-format-lib.sh"
-# status_open_decisions / status_declared_wait / last_status_line own the durable
+# status_open_decisions / status_declared_wait_line / last_status_line own the durable
 # status fold, so the deck never re-derives "is this decision still open".
 # shellcheck source=bin/fm-classify-lib.sh
 . "$SCRIPT_DIR/fm-classify-lib.sh"
@@ -299,15 +299,18 @@ reported_state() {  # <status-file> -> <state>
   # last word about the work, so read the state from the line before it. Without
   # this, a worker that finished or failed and then had an unrelated decision
   # resolved afterwards renders as still working - a failed worker showing up
-  # blue on his pane is the wrong way round to be wrong. This is the same
-  # look-back status_declared_wait performs, taken from the fold's own helper so
-  # the two readings cannot disagree.
+  # blue on his pane is the wrong way round to be wrong. The look-back uses the
+  # fold's own helper, and the declared wait below is status_declared_wait_line,
+  # the rule the watcher and supervisor use, so a resolved line carrying the
+  # pause's own phase key ends the declared wait here too; the task then falls
+  # to the verb map below, where nobody having spoken since still reads as
+  # waiting.
   resolve=${FM_CLASSIFY_RESOLVE_VERB:-$FM_CLASSIFY_RESOLVE_VERB_DEFAULT}
   if [ "$(status_line_verb "$last")" = "$resolve" ]; then
     effective=$(_fm_last_non_resolve_line "$f")
     [ -z "$effective" ] || last=$effective
   fi
-  if status_declared_wait "$f"; then
+  if [ -n "$(status_declared_wait_line "$f")" ]; then
     printf 'paused'
     return 0
   fi

@@ -148,6 +148,9 @@ test_unknown_dependency_and_integration_refusals() {
 
   mkdir -p "$mini/bin" "$mini-home/state" "$mini-home/data"
   cp "$ROOT/bin/fm-primary.sh" "$ROOT/bin/fm-lock.sh" "$mini/bin/"
+  # The session-lock status read sources its libraries, so the mini root carries
+  # them; only the tracked harness integration is missing.
+  cp "$ROOT"/bin/fm-*-lib.sh "$mini/bin/"
   status=0
   out=$(PATH="$FAKEBIN:$PATH" FM_HOME="$mini-home" FM_PRIMARY_DRY_RUN=1 "$mini/bin/fm-primary.sh" pi 2>&1) || status=$?
   [ "$status" -ne 0 ] || fail "profile launched without its tracked integration"

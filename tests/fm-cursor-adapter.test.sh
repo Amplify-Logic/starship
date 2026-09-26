@@ -313,7 +313,10 @@ test_harnessless_union_still_carries_the_cursor_footer() {
 
 test_launch_template_flags() {
   local tpl
-  tpl=$(grep -m1 "^    cursor) printf" "$ROOT/bin/fm-spawn.sh")
+  # Read the arm from launch_template() itself, whatever its indentation, so an
+  # install hint or another case arm with the same label cannot stand in for it.
+  tpl=$(awk '/^launch_template\(\) \{/ { f = 1 } f && /^\}/ { f = 0 } f' "$ROOT/bin/fm-spawn.sh" \
+    | grep -m1 -E "^ +cursor\) printf")
   case "$tpl" in *'--yolo'*) : ;; *) fail "cursor launch template lacks --yolo autonomy: $tpl" ;; esac
   case "$tpl" in *'--workspace __WORKTREE__'*) : ;; *) fail "cursor launch template lacks --workspace pin: $tpl" ;; esac
   # The safety-critical negative: -w/--worktree would let cursor allocate a

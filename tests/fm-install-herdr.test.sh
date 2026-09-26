@@ -91,7 +91,7 @@ test_ci_wires_installers_and_required_lane() {
   # shellcheck disable=SC2016 # The workflow's own literal, matched verbatim.
   assert_grep 'portable-serial-${{ matrix.shard }}of${{ strategy.job-total }}' "$CI" \
     "portable CI must compose each serial shard lane from its matrix entry"
-  assert_grep 'shard: [1, 2, 3, 4, 5]' "$CI" \
+  assert_grep 'shard: [1, 2, 3, 4, 5, 6, 7, 8, 9]' "$CI" \
     "portable CI must run every serial shard"
   assert_grep 'fm-test-run.sh --check-coverage' "$CI" \
     "CI must prove portable lanes and Herdr partition the complete inventory"

@@ -178,6 +178,13 @@ case "${1:-}" in
     prev=
     literal=
     for arg in "$@"; do
+      if [ "$prev" = -l ]; then
+        # A spawn types a short line sourcing its staged launch file; record
+        # the staged command itself.
+        case "$arg" in
+          ". '"*"'") staged=${arg#". '"}; staged=${staged%"'"}; [ ! -f "$staged" ] || arg=$(cat "$staged") ;;
+        esac
+      fi
       case "$prev" in
         -l) printf 'literal:%s\n' "$arg" >> "$log"; [ -n "$literal" ] || literal=$arg ;;
       esac
@@ -602,43 +609,10 @@ SH
 }
 
 # An UNSUPPORTED check is not a failed one. A backend that cannot report agent
-# liveness at all could never have proven the spill either way, so refusing
-# there would delete kimi-on-Orca outright rather than fix anything. It must
-# proceed on the pre-existing settle-and-type path, and say once, loudly, that
-# the delivery went out unverified.
-test_unverified_liveness_backend_still_spawns_and_warns() {
-  local out status warnings
-  make_orca_case orca-unverified
-
-  out=$( env \
-    FM_ROOT_OVERRIDE='' \
-    FM_HOME="$HOME_DIR" \
-    FM_STATE_OVERRIDE="$HOME_DIR/state" \
-    FM_DATA_OVERRIDE="$HOME_DIR/data" \
-    FM_PROJECTS_OVERRIDE="$HOME_DIR/projects" \
-    FM_CONFIG_OVERRIDE="$HOME_DIR/config" \
-    FM_SPAWN_NO_GUARD=1 \
-    FM_KIMI_BRIEF_SETTLE_SECS=0 \
-    FM_SPAWN_AGENT_UP_SLEEP=0 \
-    FM_ORCA_LOG="$ORCA_LOG" \
-    FM_ORCA_RESPONSES="$ORCA_RESP" \
-    HOME="$HOME_DIR/user-home" \
-    PATH="$FAKEBIN_DIR:$PATH" \
-    "$SPAWN" "$ID" "$PROJ_DIR" kimi --backend orca --mode no-mistakes --yolo off 2>&1 )
-  status=$?
-
-  expect_code 0 "$status" "kimi on a backend with no liveness reader should still spawn"$'\n'"$out"
-  assert_contains "$out" "spawned $ID harness=kimi" "an unsupported liveness check removed a working spawn"
-  assert_contains "$out" "orca backend cannot report agent liveness for the kimi harness at all" \
-    "the spawn did not name the backend whose check could not run"
-  assert_contains "$out" "UNVERIFIED" "the warning did not say the brief delivery was unverified"
-  warnings=$(printf '%s\n' "$out" | grep -c 'cannot report agent liveness' || true)
-  [ "$warnings" = 1 ] || fail "expected exactly one unverified-backend warning, saw $warnings"
-  assert_grep 'Read the brief at' "$ORCA_LOG" "the brief pointer was never delivered through the Orca terminal"
-  cleanup_task_tmp "$ID"
-  pass "an unsupported liveness check warns and proceeds instead of removing a working spawn"
-}
-
+# liveness at all could never have proven a spill either way, so the spawn
+# proceeds on the settle-and-type path and says once, loudly, that the delivery
+# went out unverified. Kimi itself is refused earlier on such a backend, because
+# its trust dialog needs a scrollback-free read of the live pane.
 test_unverified_non_kimi_backend_still_spawns_and_warns() {
   local out status
   make_orca_case orca-unverified-claude claude
@@ -760,6 +734,27 @@ test_relaunch_refusal_keeps_the_record_and_hands_back_a_relaunch() {
   pass "a refused relaunch keeps the record and hands back the same --relaunch"
 }
 
+# A ship with a registered branch prefix records its brief against that
+# branch, so a re-spawn that dropped the prefix would come back on fm/<id> and
+# be refused as a branch mismatch; the handed-back command must carry it.
+test_respawn_command_carries_the_branch_prefix() {
+  local out status
+  make_case prefix-dead claude claude
+  set_command_sequence zsh
+  printf 'Ship branch: feat/%s\n' "$ID" >> "$HOME_DIR/data/$ID/brief.md"
+
+  out=$(run_spawn_args "$ID" "$PROJ_DIR" --mode direct-PR --yolo off --branch-prefix feat/)
+  status=$?
+
+  expect_code 1 "$status" "a launch that never started its agent should refuse"$'\n'"$out"
+  assert_contains "$out" "re-spawn the task with this exact command" \
+    "refusal did not hand back a re-spawn"
+  assert_contains "$out" "--yolo 'off' --branch-prefix 'feat/'" \
+    "the re-spawn command dropped this ship's branch prefix, so a copy-paste would be refused as a branch mismatch"
+  cleanup_task_tmp "$ID"
+  pass "the re-spawn command carries a ship's registered branch prefix"
+}
+
 test_missing_endpoint_respawn_command_carries_kind_and_axes() {
   local out status
   make_case vanish-scout claude claude
@@ -783,10 +778,10 @@ test_dead_shell_refusal_is_recoverable_and_actionable
 test_happy_path_launch_is_unchanged
 test_unreadable_liveness_warns_without_refusing_or_burning_the_bound
 test_invalid_bound_knobs_are_refused
-test_unverified_liveness_backend_still_spawns_and_warns
 test_unverified_non_kimi_backend_still_spawns_and_warns
 test_missing_endpoint_refuses_on_the_first_read
 test_missing_endpoint_respawn_command_carries_kind_and_axes
+test_respawn_command_carries_the_branch_prefix
 test_raw_launch_is_not_gated_on_agent_liveness
 test_relaunch_refusal_keeps_the_record_and_hands_back_a_relaunch
 

@@ -14,7 +14,7 @@ WORKFLOW="$ROOT/.github/workflows/no-mistakes-required.yml"
 # pins the same SHA, which is what the gate contract below holds this workflow
 # to, so the two suites cannot drift apart silently.
 GATE_ACTION=kunchenguid/no-mistakes/.github/actions/require-no-mistakes
-GATE_ACTION_REF=32d396ac0f29135daf7fcb9964aba9d5f4e796d6
+GATE_ACTION_REF=f6441c96c352a18b9cadcaef6b6c7017e9ac3970
 
 command -v ruby >/dev/null 2>&1 \
   || fail "ruby is required to parse .github/workflows/no-mistakes-required.yml as YAML"
