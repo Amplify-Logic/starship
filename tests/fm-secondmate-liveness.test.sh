@@ -25,6 +25,15 @@
 #   - The sweep converges: once a secondmate reads alive, a later run never
 #     re-touches it (idempotent by construction, not by remembering what it
 #     already did).
+#   - A respawn preserves the vendor account the secondmate was pinned to: a
+#     registry-written account= is read back from the meta and passed as
+#     --account, so recovery can never move a pinned secondmate onto a different
+#     login. A worker account pin's own account= value is never passed back, and
+#     a secondmate with no recorded account= respawns with no flag at all. Nor is
+#     the account passed when config/secondmate-harness now respawns the mate onto
+#     a different harness: that account is another vendor's login. A worker
+#     account pin that now covers the mate's harness outranks the recorded
+#     account, exactly as it does for a control-plane relaunch.
 #   - The sweep is skipped entirely under FM_BOOTSTRAP_DETECT_ONLY=1 (the
 #     read-only session path), matching the other mutating sweeps.
 #   - The sweep is naturally scoped to the primary: with no kind=secondmate
@@ -393,6 +402,148 @@ test_sweep_respawns_confirmed_dead_secondmate() {
   pass "sweep: a confirmed-dead secondmate endpoint is killed and respawned"
 }
 
+# make_account_world <name> <meta-account-lines>: a dead codex secondmate whose
+# meta carries the given account lines, in a home whose registry defines two
+# codex accounts with `robin` as the default. Both account homes exist, so
+# nothing but what the relaunch passes decides which login the mate lands on.
+make_account_world() {
+  local name=$1 lines=$2 w real_jq
+  w=$(new_world "$name")
+  add_sm_home "$w" sm1 firstmate:fm-sm1 codex
+  printf '%s' "$lines" >> "$w/home/state/sm1.meta"
+  printf '%s\n' '{"codex":{"default":"robin","accounts":{"robin":{},"alex":{}}}}' \
+    > "$w/home/config/accounts.json"
+  mkdir -p "$w/home/data/accounts/codex/robin" "$w/home/data/accounts/codex/alex"
+  real_jq=$(command -v jq 2>/dev/null) || fail "jq is required to read config/accounts.json"
+  ln -sf "$real_jq" "$(fm_fakebin "$w")/jq"
+  printf '%s\n' "$w"
+}
+
+# Recovery must not move a pinned secondmate onto a different vendor login.
+# Which account a worker runs on is the captain's explicit spend and
+# data-boundary decision (docs/configuration.md), so the relaunch carries a
+# registry-written account= forward instead of letting fm-spawn re-resolve it to
+# the vendor default. The proof is the respawned meta: it still names the
+# pinned account, for a tagged record and for one from before the source tag.
+test_sweep_respawn_preserves_the_pinned_account() {
+  local lines label w fb tmuxfb log
+  for lines in $'account=alex\naccount_source=registry\n' $'account=alex\n'; do
+    label=tagged
+    case "$lines" in *account_source*) ;; *) label=legacy ;; esac
+    w=$(make_account_world "sweep-account-pin-$label" "$lines")
+    fb=$(make_toolchain "$w"); tmuxfb=$(make_liveness_tmux "$w")
+    log="$w/calls.log"; : > "$log"
+
+    run_bootstrap "$tmuxfb:$fb" "$w/home" zsh "$log" >/dev/null
+
+    assert_contains "$(cat "$log")" "new-window" "the pinned ($label) secondmate was never respawned"
+    [ "$(sed -n 's/^account=//p' "$w/home/state/sm1.meta")" = alex ] \
+      || fail "the $label respawn dropped the pinned account and fell back to the vendor default"
+  done
+  pass "sweep: a respawned secondmate comes back on the registry account it was pinned to"
+}
+
+# A worker account pin records its own account= (`ordinary` or a path), which is
+# never a registry name: the relaunch must not pass it as --account, where the
+# registry would refuse it and strand the mate. The mate respawns as a new spawn
+# would, here onto the registry default.
+test_sweep_respawn_never_passes_a_worker_pin_value_as_account() {
+  local value w fb tmuxfb log out
+  for value in ordinary /pinned/claude/root; do
+    w=$(make_account_world "sweep-account-worker-pin-${value//\//-}" "account=$value"$'\n')
+    fb=$(make_toolchain "$w"); tmuxfb=$(make_liveness_tmux "$w")
+    log="$w/calls.log"; : > "$log"
+
+    out=$(run_bootstrap "$tmuxfb:$fb" "$w/home" zsh "$log")
+
+    assert_not_contains "$out" "respawn failed" \
+      "a worker pin value '$value' was passed back as a registry account and refused the respawn"
+    assert_contains "$(cat "$log")" "new-window" "the secondmate recorded under pin '$value' was never respawned"
+    [ "$(sed -n 's/^account=//p' "$w/home/state/sm1.meta")" = robin ] \
+      || fail "the secondmate recorded under pin '$value' did not resolve its account as a new spawn would"
+  done
+  pass "sweep: a worker account pin value is never passed back as a registry account"
+}
+
+# A pinned account names one vendor's login. When config/secondmate-harness has
+# since moved secondmates to another harness, the respawn lands there, so the
+# recorded account must not be passed: the new harness's registry has no such
+# account and would refuse, stranding the mate. It resolves afresh instead, as
+# `bin/fm-spawn.sh --relaunch` does onto a different harness.
+test_sweep_respawn_onto_a_switched_harness_resolves_its_account_afresh() {
+  local w fb tmuxfb log out
+  w=$(make_account_world sweep-account-harness-switch $'account=alex\naccount_source=registry\n')
+  printf '%s\n' pi-signed > "$w/home/config/secondmate-harness"
+  fb=$(make_toolchain "$w"); tmuxfb=$(make_liveness_tmux "$w")
+  log="$w/calls.log"; : > "$log"
+
+  out=$(run_bootstrap "$tmuxfb:$fb" "$w/home" missing "$log")
+
+  assert_not_contains "$out" "respawn failed" \
+    "the codex account was passed to a pi-signed respawn and refused it"
+  assert_contains "$(cat "$log")" "new-window" "the secondmate was never respawned onto the switched harness"
+  [ "$(sed -n 's/^harness=//p' "$w/home/state/sm1.meta")" = pi-signed ] \
+    || fail "the respawn did not land on the switched secondmate harness"
+  if grep -q '^account=alex$' "$w/home/state/sm1.meta"; then
+    fail "the codex account followed the secondmate onto the pi-signed harness"
+  fi
+  pass "sweep: a respawn onto a switched harness resolves its account afresh"
+}
+
+# A home's worker account pin outranks the registry, a relaunch's recorded
+# account included (docs/configuration.md "Worker account pin"). A claude
+# secondmate pinned to a registry account before the captain wrote
+# config/claude-account must respawn under that pin, not refuse the two
+# competing selections and stay dead on every sweep.
+test_sweep_respawn_under_a_worker_account_pin_follows_the_pin() {
+  local w fb tmuxfb log out
+  w=$(new_world sweep-account-worker-pin-wins)
+  printf '%s\n' claude > "$w/home/config/secondmate-harness"
+  add_sm_home "$w" sm1 firstmate:fm-sm1 claude
+  printf '%s\n' account=alex account_source=registry >> "$w/home/state/sm1.meta"
+  printf '%s\n' '{"claude":{"default":"robin","accounts":{"robin":{},"alex":{}}}}' \
+    > "$w/home/config/accounts.json"
+  mkdir -p "$w/work"
+  : > "$w/work/.credentials.json"
+  printf '%s\n' "$w/work" > "$w/home/config/claude-account"
+  fb=$(make_toolchain "$w"); tmuxfb=$(make_liveness_tmux "$w")
+  cat > "$fb/claude" <<'SH'
+#!/usr/bin/env bash
+[ "${1:-}" = --version ] && { printf '%s\n' 1.0.0; exit 0; }
+[ "${1:-}" = auth ] && [ "${2:-}" = status ] || exit 0
+[ -f "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.credentials.json" ]
+SH
+  chmod +x "$fb/claude"
+  log="$w/calls.log"; : > "$log"
+
+  out=$(run_bootstrap "$tmuxfb:$fb" "$w/home" missing "$log")
+
+  assert_not_contains "$out" "respawn failed" \
+    "the recorded registry account was combined with the worker account pin and refused the respawn"
+  assert_contains "$(cat "$log")" "new-window" "the secondmate was never respawned under the worker account pin"
+  [ "$(sed -n 's/^account=//p' "$w/home/state/sm1.meta")" = "$w/work" ] \
+    || fail "the respawned secondmate did not come back under the worker account pin"
+  pass "sweep: a worker account pin outranks the recorded account on respawn"
+}
+
+# The unpinned case stays a complete no-op: no account= in the meta means no
+# --account flag, and with no registry the respawned meta records no account.
+test_sweep_respawn_without_a_pin_records_no_account() {
+  local w fb tmuxfb log
+  w=$(new_world sweep-account-unpinned)
+  add_sm_home "$w" sm1 firstmate:fm-sm1 codex
+  fb=$(make_toolchain "$w"); tmuxfb=$(make_liveness_tmux "$w")
+  log="$w/calls.log"; : > "$log"
+
+  run_bootstrap "$tmuxfb:$fb" "$w/home" zsh "$log" >/dev/null
+
+  assert_contains "$(cat "$log")" "new-window" "the unpinned secondmate was never respawned"
+  if grep -q '^account=' "$w/home/state/sm1.meta"; then
+    fail "an unpinned respawn invented an account: $(grep '^account=' "$w/home/state/sm1.meta")"
+  fi
+  pass "sweep: an unpinned secondmate respawns with no account flag and no account in its meta"
+}
+
 test_sweep_skips_mate_whose_liveness_lock_is_held() {
   local w fb tmuxfb log out holder i=0
   w=$(new_world sweep-lock-held)
@@ -724,6 +875,11 @@ test_tmux_agent_state_rejects_malformed_targets_before_probe
 test_herdr_agent_state_preserves_husk_classifier
 test_agent_state_dispatcher_and_compatibility
 test_sweep_respawns_confirmed_dead_secondmate
+test_sweep_respawn_preserves_the_pinned_account
+test_sweep_respawn_never_passes_a_worker_pin_value_as_account
+test_sweep_respawn_onto_a_switched_harness_resolves_its_account_afresh
+test_sweep_respawn_under_a_worker_account_pin_follows_the_pin
+test_sweep_respawn_without_a_pin_records_no_account
 test_sweep_leaves_alive_secondmate_untouched
 test_sweep_respawns_authoritatively_missing_pi_secondmate
 test_sweep_respawns_authoritatively_missing_pi_signed_secondmate

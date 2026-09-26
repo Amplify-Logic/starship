@@ -107,8 +107,9 @@
 #   gitignored config/accounts.json (docs/configuration.md owns that schema).
 #   The resolved name is recorded in meta as account= with account_source=registry,
 #   and only when a pin actually applies, so an unpinned spawn's meta is
-#   unchanged; the source tag keeps a relaunch from reading the worker account
-#   pin's own account= value (`ordinary` or a path) back as a registry name. Without the flag
+#   unchanged; the source tag keeps a relaunch or secondmate respawn from reading
+#   the worker account pin's own account= value (`ordinary` or a path) back as a
+#   registry name. Without the flag
 #   the vendor default in that file applies; with NO such file there is no
 #   pinning at all and every spawn behaves exactly as it did before. --account on
 #   a harness with no vendor account concept, or on a raw launch command whose
@@ -2951,19 +2952,23 @@ esac
 # resolved above) outranks the named-account registry: the registry, its
 # default, and a relaunch's recorded account all stand down, and an explicit
 # --account refuses rather than launching on two competing selections.
-if [ "$RELAUNCH" -eq 1 ] && [ "$ACCOUNT_SET" -eq 0 ] && [ "$RAW_LAUNCH" -eq 0 ] \
-  && [ "$HARNESS" = "$RELAUNCH_PRIOR_HARNESS" ] && [ -z "$WORKER_ACCOUNT" ]; then
-  # Inherit only a registry-written account. The worker account pin records
-  # its own account= (`ordinary` or an absolute path), which is never a registry
-  # name; a record from before the source tag existed can only hold a registry
-  # name, which never starts with `/`.
-  ACCOUNT=$(fm_meta_get "$RELAUNCH_META" account)
-  case "$(fm_meta_get "$RELAUNCH_META" account_source):$ACCOUNT" in
-    registry:?*) ACCOUNT_SET=1 ;;
-    :ordinary | :/* | *:) ACCOUNT= ;;
-    :*) ACCOUNT_SET=1 ;;
-    *) ACCOUNT= ;;
-  esac
+# A relaunch and a secondmate respawn over its existing record (the liveness
+# recovery path) both come back on the recorded account while they keep the
+# recorded harness.
+ACCOUNT_PRIOR_META=
+if [ "$RELAUNCH" -eq 1 ]; then
+  ACCOUNT_PRIOR_META=$RELAUNCH_META
+elif [ "$KIND" = secondmate ] && fm_backlog_record_present "$STATE/$ID.meta" "task record" "$STATE"; then
+  ACCOUNT_PRIOR_META="$STATE/$ID.meta"
+fi
+if [ -n "$ACCOUNT_PRIOR_META" ] && [ "$ACCOUNT_SET" -eq 0 ] && [ "$RAW_LAUNCH" -eq 0 ] \
+  && [ "$HARNESS" = "$(fm_meta_get "$ACCOUNT_PRIOR_META" harness)" ] && [ -z "$WORKER_ACCOUNT" ] \
+  && command -v fm_account_recorded_name >/dev/null 2>&1; then
+  # Inherit only a registry-written account (fm_account_recorded_name owns
+  # the rule), never the worker account pin's own account= value.
+  ACCOUNT=$(fm_account_recorded_name "$(fm_meta_get "$ACCOUNT_PRIOR_META" account_source)" \
+    "$(fm_meta_get "$ACCOUNT_PRIOR_META" account)")
+  [ -z "$ACCOUNT" ] || ACCOUNT_SET=1
 fi
 ACCOUNT_NAME=
 ACCOUNT_HOME=

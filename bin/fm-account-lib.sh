@@ -53,6 +53,21 @@ fm_account_env_var() {  # <vendor>
   esac
 }
 
+# fm_account_recorded_name: the registry account name a task record's account=
+# carries back into a relaunch or respawn, or nothing. Only a registry-written
+# account= is carried: a spawn records it with account_source=registry, while
+# the worker account pin (bin/fm-worker-account-lib.sh) records its own account=
+# (`ordinary` or an absolute path), which is never a registry name. A record from
+# before the source tag existed can only hold a registry name, which is never
+# `ordinary` and never starts with `/`.
+fm_account_recorded_name() {  # <account_source> <account>
+  case "$1:$2" in
+    registry:?*) printf '%s\n' "$2" ;;
+    :ordinary | :/* | *:) ;;
+    :*) printf '%s\n' "$2" ;;
+  esac
+}
+
 # fm_account_registry_file: the local registry path for a config dir.
 fm_account_registry_file() {  # <config-dir>
   printf '%s/accounts.json' "$1"
