@@ -79,6 +79,7 @@ Each effective `FM_HOME` contains private operational directories.
 - Captain preferences and optional shared captain preferences.
 - Learnings, backlog, briefs, and scout reports.
 - Explicitly installed content-addressed extension packages under `data/extensions/packages/`.
+- Glasses ideas held for Atelier under `data/voice-ideas/` (`bin/fm-voice-idea.py`).
 
 `state/` holds runtime records:
 

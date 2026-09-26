@@ -220,6 +220,7 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-file-event-lib.sh`   | Default glasses mailbox/inbox watch paths, the bounded file-event wait, and the watcher's forked terminal wait (hook W1) |
 | `fm-file-eventwait.py`   | Portable kqueue, inotify, or stat-backed implementation of the bounded file-event wait |
 | `fm-shift.sh`            | Arm, stand down, and report the captain's glasses voice loop for one delivery shift; refuses rather than half-arming (docs/shift-loop.md) |
+| `fm-voice-idea.py`       | File an idea spoken into the glasses on its Atelier song through the Atelier Inbox, holding it until Atelier can take it and speaking Atelier's receipt; `arm` registers its watcher check (docs/voice-ideas.md) |
 | `fm-supervision-sentinel.sh` | Home-scoped macOS launchd outage sentinel that alarms outside the harness process tree and never restarts supervision (docs/watcher-continuity.md) |
 | `fm-morning-intake.sh`   | Opt-in once-per-local-day intake gate owning the local day, bounded retries, visible failure, and the completion watermark (docs/configuration.md "Morning intake") |
 | `fm-morning-intake-schedule.sh` | Render, install, inspect, and remove that intake's opt-in macOS launchd schedule and its live watcher check (docs/configuration.md "Morning intake") |

@@ -677,6 +677,10 @@
       "audience": "maintainer-verification"
     },
     {
+      "path": "docs/voice-ideas.md",
+      "audience": "operator-current"
+    },
+    {
       "path": "docs/voice-relay.md",
       "audience": "operator-current"
     },
