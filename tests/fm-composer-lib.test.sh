@@ -788,6 +788,70 @@ test_matrix_claude_selection_dialogs_are_unknown() {
   pass "matrix: claude's permission prompt, AskUserQuestion and /model picker read unknown on every profile"
 }
 
+test_matrix_claude_suggested_prompt_and_draft() {
+  # Claude's dim suggested prompt (`❯` NBSP, then SGR 2 text) is not typed
+  # input: the desk floater sends only into a box that reads empty or pending,
+  # so a suggestion must read empty wherever styling survives the capture.
+  # A capture without styling cannot tell it from typed text and stays unknown.
+  # The same session's typed draft reads pending, and a stashed draft's footer
+  # (`› stashed`, codex's glyph mid-row) is never taken for a composer.
+  local screen plain
+  screen=$(cat "$DIALOGS/claude-2.1.283-ghost-suggestion.ansi")
+  plain=$(printf '%s\n' "$screen" | fm_composer_strip_ansi)
+  assert_screen "claude suggested prompt on tmux" empty "$CAPS_TMUX" "$screen" 26 probe-absent
+  assert_screen "claude suggested prompt on herdr" empty "$CAPS_STYLED" "$screen" '' probe-absent
+  assert_screen "claude suggested prompt on zellij" empty "$CAPS_STYLED_NOID" "$screen"
+  assert_screen "claude suggested prompt on cmux/orca" unknown "$CAPS_PLAIN" "$plain"
+  screen=$(cat "$DIALOGS/claude-2.1.283-stashed-draft.ansi")
+  assert_screen "claude stashed draft under a suggestion on tmux" empty "$CAPS_TMUX" "$screen" 26 probe-absent
+  assert_screen "claude stashed draft under a suggestion on herdr" empty "$CAPS_STYLED" "$screen" '' probe-absent
+  screen=$(cat "$DIALOGS/claude-2.1.283-draft.ansi")
+  assert_screen "claude typed draft on tmux" pending "$CAPS_TMUX" "$screen" 26 probe-absent
+  assert_screen "claude typed draft on herdr" pending "$CAPS_STYLED" "$screen" '' probe-absent
+  assert_screen "claude typed draft on zellij" pending "$CAPS_STYLED_NOID" "$screen"
+  # Herdr's ansi read of the same suggestion (claude 2.1.283 on herdr 0.7.4):
+  # every run reset first, a truecolor glyph, and a titled top rule.
+  screen="${ESC}[0m${ESC}[38;2;136;136;136m────────────────────────── FIRSTMATE ─${ESC}[0m"
+  screen+=$'\n'"${ESC}[0m${ESC}[38;2;153;153;153m❯${NBSP}${ESC}[0m${ESC}[2mYes, land both changes${ESC}[0m"
+  screen+=$'\n'"${ESC}[0m${ESC}[38;2;136;136;136m─────────────────────────────────────${ESC}[0m"
+  screen+=$'\n'"  ${ESC}[0m${ESC}[38;2;255;107;128m⏵⏵ bypass permissions on${ESC}[0m${ESC}[38;2;153;153;153m (shift+tab to cycle)${ESC}[0m"
+  assert_screen "claude suggested prompt in herdr's ansi read" empty "$CAPS_STYLED" "$screen" '' probe-absent
+  # The same read of a real Firstmate primary pane (transcript text replaced).
+  screen=$(cat "$DIALOGS/claude-2.1.283-herdr-suggested-prompt.ansi")
+  assert_screen "claude suggested prompt in a real herdr primary pane" empty "$CAPS_STYLED" "$screen" '' probe-absent
+  screen=${screen//"${ESC}[2myes do it in chrome"/"${ESC}[38;2;255;255;255myes do it in chrome"}
+  assert_screen "the same suggestion accepted into the box as text" pending "$CAPS_STYLED" "$screen" '' probe-absent
+  pass "matrix: claude's suggested prompt reads empty wherever styling survives, its typed draft pending"
+}
+
+test_matrix_claude_wrapped_stash_marker() {
+  # A narrow or busy Claude pane wraps `› stashed` onto a footer row of its
+  # own (claude 2.1.283, captured live at 54 columns on tmux and about 53 on
+  # herdr 0.7.4). It is furniture under the `❯` box, not a lower composer: the
+  # box Ctrl+S emptied reads empty, and a typed draft above it still pending.
+  local rule='──────────────────────────────────────────────────────'
+  local screen typed codex
+  screen="  39."$'\n\n'"$rule"$'\n❯'"$NBSP"$'\n'"$rule"
+  screen+=$'\n  ⏵⏵ auto mode on (shift+tab to cycle) · esc to int…'
+  screen+=$'\n                                           › stashed'
+  assert_screen "claude wrapped stash marker on tmux" empty "$CAPS_TMUX" "$screen" 3 probe-absent
+  assert_screen "claude wrapped stash marker on herdr" empty "$CAPS_STYLED" "$screen" '' probe-absent
+  assert_screen "claude wrapped stash marker on cmux/orca" empty "$CAPS_PLAIN" "$screen"
+  [ -z "$(fm_composer_extract_selected_content "$CAPS_PLAIN" "$screen")" ] \
+    || fail "the wrapped stash marker must not read as text in the box"
+  # Herdr's lab pane adds a notice row between the rules and the footer.
+  screen=${screen/$'\n  ⏵⏵'/$'\n  ⚠ Transcript saving is off — inherited CLAUDE_CO…\n  ⏵⏵'}
+  assert_screen "claude wrapped stash marker under a notice on herdr" empty "$CAPS_STYLED" "$screen" '' probe-absent
+  typed=${screen/❯$NBSP/❯ CURLEW draft typed while busy}
+  assert_screen "claude typed draft over a wrapped stash marker on tmux" pending "$CAPS_TMUX" "$typed" 3 probe-absent
+  [ "$(fm_composer_extract_selected_content "$CAPS_PLAIN" "$typed")" = "CURLEW draft typed while busy" ] \
+    || fail "the box above a wrapped stash marker must read its own draft"
+  # Codex's own `›` composer holding the word `stashed` is still a composer.
+  codex=$'history\n› stashed'
+  assert_screen "codex composer holding the word stashed" pending "$CAPS_TMUX" "$codex" 1 probe-absent
+  pass "matrix: claude's stash marker wrapped onto its own footer row is furniture, not a composer"
+}
+
 test_selection_dialog_survives_ghost_stripped_option() {
   # The highlighted option's number and label drawn in a dark truecolor that
   # ghost stripping removes, leaving the glyph alone on its row - which reads
@@ -1073,6 +1137,8 @@ test_matrix_grok_titled_bottom_border
 test_matrix_kimi_bordered_shell_glyph_box
 test_matrix_claude_inside_zellij_ansi_dump
 test_matrix_claude_selection_dialogs_are_unknown
+test_matrix_claude_suggested_prompt_and_draft
+test_matrix_claude_wrapped_stash_marker
 test_selection_dialog_survives_ghost_stripped_option
 test_selection_dialog_rule_is_bounded
 test_strict_blank_row_divergence

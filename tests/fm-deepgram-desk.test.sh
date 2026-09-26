@@ -17,6 +17,19 @@ TMP_ROOT=$(fm_test_tmproot fm-deepgram-desk)
 unset DEEPGRAM_API_KEY || true
 export FM_DEEPGRAM_ENV_FILE=/dev/null
 
+# Every mailbox delivery raises a macOS notification. A stand-in osascript
+# records it instead, so a test never pops "Desk voice transcript ready" on the
+# captain's screen for a message that is not in his real mailbox.
+NOTIFY_BIN="$TMP_ROOT/notify-bin"
+NOTIFY_LOG="$TMP_ROOT/osascript.log"
+mkdir -p "$NOTIFY_BIN"
+cat > "$NOTIFY_BIN/osascript" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >> "$NOTIFY_LOG"
+EOF
+chmod +x "$NOTIFY_BIN/osascript"
+export PATH="$NOTIFY_BIN:$PATH"
+
 new_home() {  # <name> [config-lines...]
   local name=$1
   shift
@@ -819,6 +832,7 @@ test_speak_falls_back_to_say_when_deepgram_fails() {
 test_desk_voice_deliver_pending_drain() {
   local home path pending drained wake
   home=$(new_home mailbox)
+  : > "$NOTIFY_LOG"
   path=$(
     FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" \
       "$DESK" deliver --source test-suite "Merge the finances PR when green"
@@ -830,6 +844,8 @@ test_desk_voice_deliver_pending_drain() {
   [ -f "$home/state/.wake-queue" ] || fail "wake queue missing"
   wake=$(cat "$home/state/.wake-queue")
   assert_contains "$wake" "desk-voice" "wake names desk-voice"
+  assert_contains "$(cat "$NOTIFY_LOG")" "Desk voice transcript ready" \
+    "the delivery notification reached the stand-in, never the real one"
   drained=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" "$DESK" drain) \
     || fail "drain failed"
   assert_contains "$drained" "Merge the finances PR when green" "drain prints transcript"
@@ -840,25 +856,58 @@ test_desk_voice_deliver_pending_drain() {
 # --- desk-voice send: straight into the primary's chat pane ------------------
 #
 # A stand-in primary: a live process whose command line names a harness (a
-# python script under a claude/ directory, which the session-lock identity
-# accepts) and whose environment names a Herdr pane (or a tmux pane). It holds
-# the fixture home's session lock, and runs beneath a stand-in multiplexer
-# server. The herdr and tmux on PATH are fakes that log every call, so no real
-# pane ever receives text or keys.
+# python script under a claude/ directory, or another harness's, which the
+# session-lock identity accepts) and whose environment names a Herdr pane (or
+# a tmux pane). It holds the fixture home's session lock, and runs beneath a
+# stand-in multiplexer server. The herdr and tmux on PATH are fakes that log
+# every call, so no real pane ever receives text or keys.
+#
+# The herdr fake draws Claude's chat box between two rules: the draft file is
+# typed text, the ghost file a dim suggested prompt shown while nothing is
+# typed, and the stash file a draft set aside with Ctrl+S, shown as
+# `› stashed` in the footer. Its keys behave as Claude's do: Ctrl+S stashes a
+# typed draft or pops the stash into an empty box, Ctrl+U clears the box, and
+# Enter submits the box (the suggestion when nothing is typed) to the
+# submitted log, then restores a stash into the box. Knob files bend it: wrap
+# draws the box 40 columns wide, where Ctrl+U deletes one wrapped row;
+# drop-head loses the first typed character; no-marker hides `› stashed`;
+# narrow draws `› stashed` on a footer row of its own, as a narrow pane wraps it;
+# pop-fails refuses the Ctrl+S that pops a stash; refold makes Enter redraw
+# the box as a pasted-text placeholder plus the typed tail without submitting;
+# late-paste holds sent text back from the box for the number of screen reads
+# it names, as a busy Claude draws input late, yet handles it before any key.
+# Text over 800 characters folds as Claude folds it (verified live on claude
+# 2.1.283): a bracketed paste into one `[Pasted text #N]` placeholder, a typed
+# burst into a placeholder plus its literal tail. Enter expands a placeholder
+# back into its text.
 
-desk_send_fixture() {  # <name> [tmux] -> home; starts the stand-in primary
-  local name=$1 backend=${2:-herdr} home dir fb pid i envs marker
+desk_send_fixture() {  # <name> [tmux|herdr] [harness] -> home; starts the stand-in primary
+  local name=$1 backend=${2:-herdr} harness=${3:-claude} home dir fb pid i envs marker
   local -a pane_env
   home=$(new_home "$name")
   dir="$home/fixture"
   fb="$dir/bin"
-  mkdir -p "$fb" "$dir/claude"
-  printf 'import time\ntime.sleep(60)\n' > "$dir/claude/holder.py"
+  mkdir -p "$fb" "$dir/$harness"
+  # A node linked under the harness's own name is a process whose name the
+  # session-lock identity reads as that harness, as a real `claude` is.
+  # Without node, a python script under the harness's directory stands in.
+  if command -v node >/dev/null 2>&1; then
+    ln -s "$(command -v node)" "$dir/$harness/$harness"
+    set -- "$dir/$harness/$harness" -e 'setTimeout(() => {}, 60000)'
+  else
+    printf 'import time\ntime.sleep(60)\n' > "$dir/$harness/holder.py"
+    set -- python3 "$dir/$harness/holder.py"
+  fi
   cat > "$fb/herdr" <<'SH'
 #!/usr/bin/env bash
 set -u
 dir=${FM_FAKE_HERDR_DIR:?}
 { printf 'call'; for a in "$@"; do printf '\x1f%s' "$a"; done; printf '\n'; } >> "$dir/herdr.log"
+draw_queued() {
+  [ -e "$dir/queued" ] || return 0
+  cat "$dir/queued" >> "$dir/draft"
+  rm -f "$dir/queued" "$dir/queued-reads"
+}
 case "${1:-} ${2:-}" in
   "status --json")
     printf '{"client":{"version":"0.7.4","protocol":14},"server":{"running":true}}\n' ;;
@@ -869,20 +918,124 @@ case "${1:-} ${2:-}" in
     printf '{"result":{"type":"pane_process_info","process_info":{"pane_id":"%s","shell_pid":%s,"foreground_processes":[]}}}\n' \
       "$4" "$(cat "$dir/shell-pid")" ;;
   "pane read")
+    if [ -e "$dir/queued" ]; then
+      left=$(( $(cat "$dir/queued-reads") - 1 ))
+      if [ "$left" -le 0 ]; then draw_queued; else printf '%s' "$left" > "$dir/queued-reads"; fi
+    fi
+    case " $* " in *' ansi '*) ansi=1 ;; *) ansi=0 ;; esac
     if [ -e "$dir/modal" ]; then
-      cat "$dir/modal"
-    else
-      printf '❯ %s\n' "$(cat "$dir/draft" 2>/dev/null)"
-    fi ;;
+      if [ "$ansi" = 1 ]; then cat "$dir/modal"; else sed $'s/\033\\[[0-9;:]*m//g' "$dir/modal"; fi
+      exit 0
+    fi
+    # The screen is the case's capture, or a bare chat box, with its last
+    # prompt row redrawn from the box's state the way Claude draws it.
+    screen="$dir/screen"
+    if [ ! -e "$screen" ]; then
+      screen="$dir/screen.default"
+      printf '%s\n' '────────────────────────────────────────' '❯' \
+        '────────────────────────────────────────' '  ⏵⏵ auto mode on' > "$screen"
+    fi
+    esc=$'\033'
+    draft=$(cat "$dir/draft" 2>/dev/null)
+    row="❯"$'\302\240'"${esc}[0m"
+    if [ -n "$draft" ] && [ -e "$dir/wrap" ]; then
+      row+="${esc}[38;2;255;255;255m${draft:0:40}"
+      rest=${draft:40}
+      while [ -n "$rest" ]; do
+        row+='\n  '"${rest:0:40}"
+        rest=${rest:40}
+      done
+      row+="${esc}[0m"
+    elif [ -n "$draft" ]; then
+      row+="${esc}[38;2;255;255;255m${draft}${esc}[0m"
+    elif [ -e "$dir/ghost" ]; then
+      row+="${esc}[2m$(cat "$dir/ghost")${esc}[0m"
+    fi
+    stash=0
+    [ ! -e "$dir/stash" ] || [ -e "$dir/no-marker" ] || stash=1
+    [ "$stash" = 0 ] || [ ! -e "$dir/narrow" ] || stash=2
+    last=$(grep -n '❯' "$screen" | tail -n 1 | cut -d: -f1)
+    awk -v n="$last" -v row="$row" -v stash="$stash" -v rows="$(wc -l < "$screen")" '
+      NR == n { print row "\r"; next }
+      NR == rows && stash == 2 { print; print "                    › stashed\r"; next }
+      NR == rows && stash == 1 { sub(/\r$/, ""); print $0 "    › stashed\r"; next }
+      { print }
+    ' "$screen" > "$dir/screen.now"
+    if [ "$ansi" = 1 ]; then cat "$dir/screen.now"; else sed $'s/\033\\[[0-9;:]*m//g' "$dir/screen.now"; fi ;;
   "pane send-text")
     [ ! -e "$dir/send-text-fails" ] || exit 1
-    printf '%s' "$4" >> "$dir/draft" ;;
+    if [ -e "$dir/drop-head" ]; then text=${4:1}; else text=$4; fi
+    open=$'\033[200~' close=$'\033[201~'
+    n=$(( $(cat "$dir/pastes" 2>/dev/null || echo 0) + 1 ))
+    if [ "${text#"$open"}" != "$text" ] && [ "${text%"$close"}" != "$text" ]; then
+      text=${text#"$open"}
+      text=${text%"$close"}
+      if [ "${#text}" -gt 800 ]; then
+        printf '%s' "$n" > "$dir/pastes"
+        printf '%s' "$text" > "$dir/paste-$n"
+        text="[Pasted text #$n]"
+      fi
+    else
+      text=${text%"$close"}
+      if [ "${#text}" -gt 800 ]; then
+        printf '%s' "$n" > "$dir/pastes"
+        printf '%s' "${text:0:${#text}-40}" > "$dir/paste-$n"
+        text="[Pasted text #$n]${text: -40}"
+      fi
+    fi
+    if [ -e "$dir/late-paste" ]; then
+      printf '%s' "$text" >> "$dir/queued"
+      cp "$dir/late-paste" "$dir/queued-reads"
+    else
+      printf '%s' "$text" >> "$dir/draft"
+    fi ;;
   "pane send-keys")
-    : > "$dir/entered"
-    [ -e "$dir/never-works" ] || : > "$dir/draft" ;;
+    draw_queued
+    case "$4" in
+      ctrl+s)
+        [ ! -e "$dir/no-stash" ] || exit 0
+        if [ -s "$dir/draft" ]; then
+          mv "$dir/draft" "$dir/stash"
+          : > "$dir/draft"
+        elif [ -e "$dir/stash" ]; then
+          [ ! -e "$dir/pop-fails" ] || exit 1
+          mv "$dir/stash" "$dir/draft"
+        fi ;;
+      ctrl+u)
+        draft=$(cat "$dir/draft" 2>/dev/null)
+        if [ -e "$dir/wrap" ] && [ "${#draft}" -gt 40 ]; then
+          printf '%s' "${draft:0:$(( (${#draft} - 1) / 40 * 40 ))}" > "$dir/draft"
+        else
+          : > "$dir/draft"
+        fi ;;
+      *)
+        : > "$dir/entered"
+        [ ! -e "$dir/never-works" ] || exit 0
+        if [ -e "$dir/refold" ]; then
+          draft=$(cat "$dir/draft")
+          printf '[Pasted text #2 +3 lines]%s' "${draft: -40}" > "$dir/draft"
+          exit 0
+        fi
+        if [ -s "$dir/draft" ]; then
+          draft=$(cat "$dir/draft")
+          for paste in "$dir"/paste-*; do
+            [ -e "$paste" ] || continue
+            draft=${draft//"[Pasted text #${paste##*-}]"/$(cat "$paste")}
+          done
+          printf '%s\n' "$draft" >> "$dir/submitted"
+        elif [ -e "$dir/ghost" ]; then
+          { cat "$dir/ghost"; printf '\n'; } >> "$dir/submitted"
+        fi
+        : > "$dir/draft"
+        [ ! -e "$dir/stash" ] || mv "$dir/stash" "$dir/draft" ;;
+    esac ;;
   "agent get")
     if [ -e "$dir/entered" ] && [ ! -e "$dir/never-works" ]; then s=working; else s=idle; fi
-    printf '{"result":{"agent":{"agent_status":"%s"}}}\n' "$s" ;;
+    if [ -e "$dir/agent" ]; then
+      printf '{"result":{"agent":{"agent":"%s","agent_status":"%s"}}}\n' "$(cat "$dir/agent")" "$s"
+    else
+      printf '{"result":{"agent":{"agent_status":"%s"}}}\n' "$s"
+    fi ;;
 esac
 exit 0
 SH
@@ -918,8 +1071,8 @@ SH
   # server is the parent of the pane that hosts a real primary.
   # shellcheck disable=SC2016  # expanded by the inner shell
   env "${pane_env[@]}" bash -c \
-    'python3 "$1" >/dev/null 2>&1 & printf "%s\n" "$!" > "$2.tmp"; mv "$2.tmp" "$2"; wait' \
-    _ "$dir/claude/holder.py" "$dir/holder-pid" >/dev/null 2>&1 &
+    'out=$1; shift; "$@" >/dev/null 2>&1 & printf "%s\n" "$!" > "$out.tmp"; mv "$out.tmp" "$out"; wait' \
+    _ "$dir/holder-pid" "$@" >/dev/null 2>&1 &
   printf '%s\n' "$!" > "$dir/server-pid"
   for i in $(seq 1 50); do
     [ -s "$dir/holder-pid" ] && break
@@ -1052,7 +1205,10 @@ test_desk_voice_send_falls_back_when_the_pane_shows_a_dialog() {
   for screen in \
     $' Bash command\n\n   gh pr merge 42\n\n Do you want to proceed?\n ❯ 1. Yes\n   2. Yes, and don\'t ask again for gh commands\n   3. No, and tell Claude what to do differently (esc)\n' \
     $' Which branch should I merge?\n\n   main\n   release\n\n Enter to select · ↑/↓ to navigate · Esc to cancel\n' \
-    $' Pick a model\n  > 1. Opus\n    2. Sonnet\n'; do
+    $' Pick a model\n  > 1. Opus\n    2. Sonnet\n' \
+    "$(cat "$ROOT/tests/fixtures/composer-claude-dialogs/claude-2.1.283-permission-prompt.ansi")" \
+    "$(cat "$ROOT/tests/fixtures/composer-claude-dialogs/claude-2.1.283-ask-user-question.ansi")" \
+    "$(cat "$ROOT/tests/fixtures/composer-claude-dialogs/claude-2.1.283-model-picker.ansi")"; do
     n=$((n + 1))
     home=$(desk_send_fixture "send-modal-$n") || { desk_send_skip "send-modal-$n"; return 0; }
     printf '%s' "$screen" > "$home/fixture/modal"
@@ -1066,16 +1222,281 @@ test_desk_voice_send_falls_back_when_the_pane_shows_a_dialog() {
   pass "fm-desk-voice send: a pane showing a dialog instead of its chat input gets nothing"
 }
 
-test_desk_voice_send_joins_a_pending_draft() {
+# Claude 2.1.283's idle chat in Herdr 0.7.4, read from the primary's own pane
+# with the transcript text replaced: titled rules, a status line, a new
+# message pill, and a dim suggested prompt in the box.
+HERDR_CLAUDE_SCREEN="$ROOT/tests/fixtures/composer-claude-dialogs/claude-2.1.283-herdr-suggested-prompt.ansi"
+
+# The line number of the first herdr call matching <words...>, or nothing.
+herdr_call_line() {  # <home> <subcommand words...>
+  local home=$1 pattern
+  shift
+  pattern=$(printf '\x1f%s' "$@")
+  grep -n -F -- "$pattern" "$home/fixture/herdr.log" | head -n 1 | cut -d: -f1
+}
+
+test_desk_voice_send_ignores_a_suggested_prompt() {
   local home out
-  home=$(desk_send_fixture send-draft) || { desk_send_skip send-draft; return 0; }
-  printf 'half typed ' > "$home/fixture/draft"
-  out=$(desk_send "$home" "and ship it") || fail "send failed: $out"
-  assert_contains "$out" "sent: herdr fm-desk-send-test:w7:p3" "a pending draft still takes the transcript"
+  home=$(desk_send_fixture send-ghost) || { desk_send_skip send-ghost; return 0; }
+  cp "$HERDR_CLAUDE_SCREEN" "$home/fixture/screen"
+  printf 'claude' > "$home/fixture/agent"
+  printf 'Yes, land both glasses changes' > "$home/fixture/ghost"
+  out=$(desk_send "$home" "Check the second screenshot") || fail "send failed: $out"
+  assert_contains "$out" "sent: herdr fm-desk-send-test:w7:p3" "a suggested prompt does not block the message"
+  [ "$(cat "$home/fixture/submitted")" = "Check the second screenshot" ] \
+    || fail "only the message may be submitted, got: $(cat "$home/fixture/submitted")"
   [ "$(herdr_calls "$home" pane send-text | wc -l | tr -d ' ')" = 1 ] || fail "text must be typed exactly once"
   [ "$(inbox_count "$home")" = 0 ] || fail "a pane delivery must not also land in the mailbox"
   desk_send_done "$home"
-  pass "fm-desk-voice send: a half-typed draft is joined and submitted"
+  pass "fm-desk-voice send: Claude's dim suggested prompt counts as an empty chat box"
+}
+
+test_desk_voice_send_goes_past_a_claude_draft() {
+  local home out stash typed
+  home=$(desk_send_fixture send-draft) || { desk_send_skip send-draft; return 0; }
+  cp "$HERDR_CLAUDE_SCREEN" "$home/fixture/screen"
+  printf 'claude' > "$home/fixture/agent"
+  # Normal-intensity text in the box, as a suggestion accepted with Tab or a
+  # typed draft reads: the pre-send check Herdr runs for Claude refused it.
+  printf 'Yes, land both glasses changes' > "$home/fixture/draft"
+  out=$(desk_send "$home" "and ship it") || fail "send failed: $out"
+  assert_contains "$out" "sent: herdr fm-desk-send-test:w7:p3" "a draft does not block the message"
+  [ "$(cat "$home/fixture/submitted")" = "and ship it" ] \
+    || fail "only the message may be submitted, got: $(cat "$home/fixture/submitted")"
+  [ "$(cat "$home/fixture/draft")" = "Yes, land both glasses changes" ] \
+    || fail "the draft must be back in the chat box, got: $(cat "$home/fixture/draft")"
+  [ ! -e "$home/fixture/stash" ] || fail "the draft must not stay stashed"
+  stash=$(herdr_call_line "$home" pane send-keys w7:p3 ctrl+s)
+  typed=$(herdr_call_line "$home" pane send-text)
+  [ -n "$stash" ] && [ -n "$typed" ] && [ "$stash" -lt "$typed" ] \
+    || fail "the draft must be set aside before the message is typed"
+  [ "$(herdr_calls "$home" pane send-keys w7:p3 ctrl+s | wc -l | tr -d ' ')" = 1 ] \
+    || fail "the draft is set aside once and restored by the chat itself"
+  [ "$(herdr_calls "$home" pane send-keys w7:p3 enter | wc -l | tr -d ' ')" = 1 ] \
+    || fail "Enter must be pressed exactly once"
+  [ "$(inbox_count "$home")" = 0 ] || fail "a pane delivery must not also land in the mailbox"
+  desk_send_done "$home"
+  pass "fm-desk-voice send: a Claude draft is set aside, the message sent alone, and the draft put back"
+}
+
+test_desk_voice_send_goes_past_a_draft_in_a_narrow_pane() {
+  local home out
+  home=$(desk_send_fixture send-draft-narrow) || { desk_send_skip send-draft-narrow; return 0; }
+  cp "$HERDR_CLAUDE_SCREEN" "$home/fixture/screen"
+  printf 'claude' > "$home/fixture/agent"
+  # A narrow or busy pane wraps Claude's `› stashed` onto a footer row of its
+  # own (verified live on claude 2.1.283, herdr and tmux): that marker is not
+  # text in the box, so the emptied box still takes the message.
+  : > "$home/fixture/narrow"
+  printf 'CURLEW draft typed while busy' > "$home/fixture/draft"
+  out=$(desk_send "$home" "and ship it") || fail "send failed: $out"
+  assert_contains "$out" "sent: herdr fm-desk-send-test:w7:p3" "a wrapped stash marker does not block the message"
+  [ "$(cat "$home/fixture/submitted")" = "and ship it" ] \
+    || fail "only the message may be submitted, got: $(cat "$home/fixture/submitted" 2>/dev/null)"
+  [ "$(cat "$home/fixture/draft")" = "CURLEW draft typed while busy" ] || fail "the draft must be back in the chat box"
+  [ ! -e "$home/fixture/stash" ] || fail "the draft must not stay stashed"
+  [ "$(herdr_calls "$home" pane send-keys w7:p3 enter | wc -l | tr -d ' ')" = 1 ] \
+    || fail "Enter must be pressed exactly once"
+  [ "$(inbox_count "$home")" = 0 ] || fail "a pane delivery must not also land in the mailbox"
+  desk_send_done "$home"
+  pass "fm-desk-voice send: a stash marker wrapped onto its own footer row is not read as text in the box"
+}
+
+test_desk_voice_send_goes_past_a_pasted_text_draft() {
+  local home out
+  home=$(desk_send_fixture send-draft-paste) || { desk_send_skip send-draft-paste; return 0; }
+  cp "$HERDR_CLAUDE_SCREEN" "$home/fixture/screen"
+  printf 'claude' > "$home/fixture/agent"
+  # A multi-line paste collapsed by Claude: the whole draft is its placeholder.
+  printf '[Pasted text #1 +42 lines]' > "$home/fixture/draft"
+  out=$(desk_send "$home" "and ship it") || fail "send failed: $out"
+  assert_contains "$out" "sent: herdr fm-desk-send-test:w7:p3" "a restored paste placeholder is not the message"
+  [ "$(cat "$home/fixture/submitted")" = "and ship it" ] \
+    || fail "only the message may be submitted, got: $(cat "$home/fixture/submitted")"
+  [ "$(cat "$home/fixture/draft")" = "[Pasted text #1 +42 lines]" ] || fail "the pasted draft must be back in the chat box"
+  [ "$(herdr_calls "$home" pane send-keys w7:p3 enter | wc -l | tr -d ' ')" = 1 ] \
+    || fail "Enter must be pressed exactly once"
+  [ "$(inbox_count "$home")" = 0 ] || fail "a pane delivery must not also land in the mailbox"
+  desk_send_done "$home"
+  pass "fm-desk-voice send: a draft that is only a pasted-text placeholder is put back and the send confirmed"
+}
+
+test_desk_voice_send_keeps_a_draft_it_cannot_set_aside() {
+  local home out case
+  for case in stashed no-stash; do
+    home=$(desk_send_fixture "send-draft-$case") || { desk_send_skip "send-draft-$case"; return 0; }
+    cp "$HERDR_CLAUDE_SCREEN" "$home/fixture/screen"
+    printf 'claude' > "$home/fixture/agent"
+    printf 'half typed thought' > "$home/fixture/draft"
+    if [ "$case" = stashed ]; then
+      printf 'an earlier stash' > "$home/fixture/stash"
+    else
+      : > "$home/fixture/no-stash"
+    fi
+    out=$(desk_send "$home" "and ship it") || fail "send failed: $out"
+    case "$out" in mailbox:\ *) ;; *) fail "$case: expected a mailbox delivery, got: $out" ;; esac
+    [ -z "$(herdr_calls "$home" pane send-text)" ] || fail "$case: nothing may be typed"
+    [ -z "$(herdr_calls "$home" pane send-keys w7:p3 enter)" ] || fail "$case: no Enter may be pressed"
+    [ ! -e "$home/fixture/submitted" ] || fail "$case: nothing may be submitted"
+    [ "$(cat "$home/fixture/draft")" = "half typed thought" ] || fail "$case: the draft must stay in the box"
+    if [ "$case" = stashed ]; then
+      [ "$(cat "$home/fixture/stash")" = "an earlier stash" ] || fail "an earlier stash must be kept"
+      [ -z "$(herdr_calls "$home" pane send-keys w7:p3 ctrl+s)" ] || fail "an earlier stash must not be replaced"
+    fi
+    [ "$(inbox_count "$home")" = 1 ] || fail "$case: the message must land in the mailbox once"
+    desk_send_done "$home"
+  done
+  pass "fm-desk-voice send: a draft that cannot be set aside safely stays put and the message goes to the mailbox"
+}
+
+test_desk_voice_send_proves_a_long_message_past_a_claude_draft() {
+  local home out long
+  home=$(desk_send_fixture send-draft-long) || { desk_send_skip send-draft-long; return 0; }
+  cp "$HERDR_CLAUDE_SCREEN" "$home/fixture/screen"
+  printf 'claude' > "$home/fixture/agent"
+  : > "$home/fixture/wrap"
+  printf 'half typed thought' > "$home/fixture/draft"
+  # 759 characters, short enough for Claude to show as text, wrap to 19 box
+  # rows, more than a 20-row read can hold with the rules and footer.
+  long=$(printf 'word%03d ' $(seq 1 95))
+  long=${long% }
+  out=$(desk_send "$home" "$long") || fail "send failed: $out"
+  assert_contains "$out" "sent: herdr fm-desk-send-test:w7:p3" "a long message is proven whole and sent"
+  [ "$(cat "$home/fixture/submitted")" = "$long" ] || fail "only the whole message may be submitted"
+  [ "$(cat "$home/fixture/draft")" = "half typed thought" ] || fail "the draft must be back in the chat box"
+  [ "$(inbox_count "$home")" = 0 ] || fail "a pane delivery must not also land in the mailbox"
+  desk_send_done "$home"
+  pass "fm-desk-voice send: a message that wraps past a 20-row read still goes past a Claude draft"
+}
+
+test_desk_voice_send_pastes_a_voice_length_message_past_a_claude_draft() {
+  local home out long case draft
+  # About 3.2k characters, the length of a long voice transcript: typed, Claude
+  # would fold it into a placeholder plus a literal tail that cannot be proven.
+  long=$(printf 'word%03d ' $(seq 1 400))
+  long=${long% }
+  for case in typed pasted; do
+    home=$(desk_send_fixture "send-draft-voice-$case") || { desk_send_skip "send-draft-voice-$case"; return 0; }
+    cp "$HERDR_CLAUDE_SCREEN" "$home/fixture/screen"
+    printf 'claude' > "$home/fixture/agent"
+    if [ "$case" = typed ]; then draft='half typed thought'; else draft='[Pasted text #1 +42 lines]'; fi
+    printf '%s' "$draft" > "$home/fixture/draft"
+    out=$(desk_send "$home" "$long") || fail "$case: send failed: $out"
+    assert_contains "$out" "sent: herdr fm-desk-send-test:w7:p3" "$case: a voice-length message goes past the draft"
+    [ "$(cat "$home/fixture/submitted")" = "$long" ] || fail "$case: only the whole message may be submitted"
+    [ "$(cat "$home/fixture/draft")" = "$draft" ] || fail "$case: the draft must be back in the chat box"
+    [ ! -e "$home/fixture/stash" ] || fail "$case: the draft must not stay stashed"
+    [ "$(herdr_calls "$home" pane send-keys w7:p3 enter | wc -l | tr -d ' ')" = 1 ] \
+      || fail "$case: Enter must be pressed exactly once"
+    [ "$(inbox_count "$home")" = 0 ] || fail "$case: a pane delivery must not also land in the mailbox"
+    desk_send_done "$home"
+  done
+  pass "fm-desk-voice send: a voice-length message is pasted past a Claude draft, shown as one placeholder, and sent"
+}
+
+test_desk_voice_send_waits_for_a_late_drawn_message_past_a_claude_draft() {
+  local home out
+  home=$(desk_send_fixture send-draft-late) || { desk_send_skip send-draft-late; return 0; }
+  cp "$HERDR_CLAUDE_SCREEN" "$home/fixture/screen"
+  printf 'claude' > "$home/fixture/agent"
+  printf 'half typed thought' > "$home/fixture/draft"
+  # A busy chat that has not drawn the paste yet reads empty; a Ctrl+S then
+  # would stash the message over the captain's draft.
+  printf '6' > "$home/fixture/late-paste"
+  out=$(desk_send "$home" "and ship it") || fail "send failed: $out"
+  assert_contains "$out" "sent: herdr fm-desk-send-test:w7:p3" "a message drawn late still goes past the draft"
+  [ "$(cat "$home/fixture/submitted")" = "and ship it" ] \
+    || fail "only the message may be submitted, got: $(cat "$home/fixture/submitted" 2>/dev/null)"
+  [ "$(cat "$home/fixture/draft")" = "half typed thought" ] \
+    || fail "the draft must be back in the chat box, got: $(cat "$home/fixture/draft")"
+  [ ! -e "$home/fixture/stash" ] || fail "the draft must not stay stashed"
+  [ "$(herdr_calls "$home" pane send-keys w7:p3 ctrl+s | wc -l | tr -d ' ')" = 1 ] \
+    || fail "Ctrl+S must not be pressed again while the message may still arrive"
+  [ "$(herdr_calls "$home" pane send-keys w7:p3 enter | wc -l | tr -d ' ')" = 1 ] \
+    || fail "Enter must be pressed exactly once"
+  [ "$(inbox_count "$home")" = 0 ] || fail "a pane delivery must not also land in the mailbox"
+  desk_send_done "$home"
+  pass "fm-desk-voice send: a message the chat draws late is waited for, not stashed over the draft"
+}
+
+test_desk_voice_send_never_confirms_a_redrawn_message_past_a_draft() {
+  local home out long
+  home=$(desk_send_fixture send-draft-refold) || { desk_send_skip send-draft-refold; return 0; }
+  cp "$HERDR_CLAUDE_SCREEN" "$home/fixture/screen"
+  printf 'claude' > "$home/fixture/agent"
+  : > "$home/fixture/refold"
+  printf 'half typed thought' > "$home/fixture/draft"
+  long=$(printf 'word%03d ' $(seq 1 60))
+  long=${long% }
+  out=$(desk_send "$home" "$long") || fail "send failed: $out"
+  case "$out" in
+    sent-unconfirmed:\ *) ;;
+    *) fail "a message redrawn in the box but never submitted must not read as sent, got: $out" ;;
+  esac
+  [ ! -e "$home/fixture/submitted" ] || fail "nothing was submitted"
+  [ "$(herdr_calls "$home" pane send-keys w7:p3 enter | wc -l | tr -d ' ')" = 1 ] \
+    || fail "Enter must be pressed exactly once"
+  desk_send_done "$home"
+  pass "fm-desk-voice send: a message Claude redraws instead of submitting is not reported as sent"
+}
+
+test_desk_voice_send_clears_a_refused_message_and_restores_the_draft() {
+  local home out long case
+  long=$(printf 'word%03d ' $(seq 1 125))
+  long=${long% }
+  for case in restored pop-fails; do
+    home=$(desk_send_fixture "send-draft-refused-$case") || { desk_send_skip "send-draft-refused-$case"; return 0; }
+    cp "$HERDR_CLAUDE_SCREEN" "$home/fixture/screen"
+    printf 'claude' > "$home/fixture/agent"
+    : > "$home/fixture/wrap"
+    : > "$home/fixture/drop-head"
+    [ "$case" = restored ] || : > "$home/fixture/pop-fails"
+    printf 'half typed thought' > "$home/fixture/draft"
+    out=$(desk_send "$home" "$long") || fail "send failed: $out"
+    case "$out" in mailbox:\ *) ;; *) fail "$case: a message not proven in the box must go to the mailbox, got: $out" ;; esac
+    [ -z "$(herdr_calls "$home" pane send-keys w7:p3 enter)" ] || fail "$case: no Enter may be pressed"
+    [ ! -e "$home/fixture/submitted" ] || fail "$case: nothing may be submitted"
+    if [ "$case" = restored ]; then
+      [ "$(cat "$home/fixture/draft")" = "half typed thought" ] || fail "the draft must be back in the chat box"
+    else
+      [ "$(cat "$home/fixture/stash")" = "half typed thought" ] || fail "the draft must stay stashed"
+      [ -z "$(cat "$home/fixture/draft")" ] || fail "the refused message must be cleared"
+    fi
+    [ "$(inbox_count "$home")" = 1 ] || fail "$case: the message must land in the mailbox once"
+    desk_send_done "$home"
+  done
+  pass "fm-desk-voice send: a long message refused before Enter is cleared and sent to the mailbox"
+}
+
+test_desk_voice_send_restores_a_draft_stashed_without_a_marker() {
+  local home out
+  home=$(desk_send_fixture send-draft-no-marker) || { desk_send_skip send-draft-no-marker; return 0; }
+  cp "$HERDR_CLAUDE_SCREEN" "$home/fixture/screen"
+  printf 'claude' > "$home/fixture/agent"
+  : > "$home/fixture/no-marker"
+  printf 'half typed thought' > "$home/fixture/draft"
+  out=$(desk_send "$home" "and ship it") || fail "send failed: $out"
+  case "$out" in mailbox:\ *) ;; *) fail "expected a mailbox delivery, got: $out" ;; esac
+  [ -z "$(herdr_calls "$home" pane send-text)" ] || fail "nothing may be typed"
+  [ "$(cat "$home/fixture/draft")" = "half typed thought" ] || fail "the draft must be put back in the chat box"
+  [ ! -e "$home/fixture/stash" ] || fail "the draft must not stay stashed"
+  [ "$(inbox_count "$home")" = 1 ] || fail "the message must land in the mailbox once"
+  desk_send_done "$home"
+  pass "fm-desk-voice send: a draft stashed without a readable marker is put back before the mailbox"
+}
+
+test_desk_voice_send_joins_another_harness_draft() {
+  local home out
+  home=$(desk_send_fixture send-draft-codex herdr codex) || { desk_send_skip send-draft-codex; return 0; }
+  printf 'half typed ' > "$home/fixture/draft"
+  out=$(desk_send "$home" "and ship it") || fail "send failed: $out"
+  assert_contains "$out" "sent: herdr fm-desk-send-test:w7:p3" "a pending draft still takes the transcript"
+  [ "$(cat "$home/fixture/submitted")" = "half typed and ship it" ] \
+    || fail "the draft and message must be submitted together, got: $(cat "$home/fixture/submitted")"
+  [ -z "$(herdr_calls "$home" pane send-keys w7:p3 ctrl+s)" ] || fail "only Claude's draft is stashed"
+  [ "$(inbox_count "$home")" = 0 ] || fail "a pane delivery must not also land in the mailbox"
+  desk_send_done "$home"
+  pass "fm-desk-voice send: another harness's half-typed draft is joined and submitted"
 }
 
 test_desk_voice_send_types_screenshots_into_the_primary_pane() {
@@ -1463,7 +1884,18 @@ test_desk_voice_send_refuses_a_pane_not_hosting_the_primary
 test_desk_voice_send_falls_back_when_the_pane_refuses_text
 test_desk_voice_send_never_doubles_an_unconfirmed_submit
 test_desk_voice_send_falls_back_when_the_pane_shows_a_dialog
-test_desk_voice_send_joins_a_pending_draft
+test_desk_voice_send_ignores_a_suggested_prompt
+test_desk_voice_send_goes_past_a_claude_draft
+test_desk_voice_send_goes_past_a_draft_in_a_narrow_pane
+test_desk_voice_send_goes_past_a_pasted_text_draft
+test_desk_voice_send_keeps_a_draft_it_cannot_set_aside
+test_desk_voice_send_proves_a_long_message_past_a_claude_draft
+test_desk_voice_send_pastes_a_voice_length_message_past_a_claude_draft
+test_desk_voice_send_clears_a_refused_message_and_restores_the_draft
+test_desk_voice_send_waits_for_a_late_drawn_message_past_a_claude_draft
+test_desk_voice_send_never_confirms_a_redrawn_message_past_a_draft
+test_desk_voice_send_restores_a_draft_stashed_without_a_marker
+test_desk_voice_send_joins_another_harness_draft
 test_desk_voice_send_types_screenshots_into_the_primary_pane
 test_desk_voice_send_screenshots_fall_back_to_the_mailbox
 test_desk_voice_dictation_sends_when_the_chat_is_in_front

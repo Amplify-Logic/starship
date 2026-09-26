@@ -359,6 +359,7 @@ family_for_basename() {
     fm-claude-stop-autoarm-live-e2e.test.sh|fm-claude-reply-speak-live-e2e.test.sh|\
     fm-cmux-claude-composer-live-e2e.test.sh|\
     fm-composer-matrix-live-e2e.test.sh|\
+    fm-desk-voice-claude-draft-live-e2e.test.sh|\
     fm-composer-codex-idle-live-e2e.test.sh|\
     fm-codex-continuity-live-e2e.test.sh|fm-codex-hook-layer-live-e2e.test.sh|\
     fm-grok-continuity-live-e2e.test.sh|\

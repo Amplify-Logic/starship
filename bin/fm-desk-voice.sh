@@ -29,11 +29,16 @@
 # root process must be that pid or one of its ancestors. The pane's composer
 # must also read empty or pending (bin/fm-backend.sh fm_backend_composer_state):
 # an unknown screen can be a modal dialog, a picker, or a dead shell, where
-# typed words become keypresses. A screen showing a selection dialog (a
-# pointer on a numbered option, or an Enter to select / Esc to cancel footer)
-# is refused too, whatever the composer reads. Delivery goes through
-# the backend's submit primitive (bin/fm-backend.sh fm_backend_send_text_submit),
-# so any backend that can report a pane's root pid below can be added. The
+# typed words become keypresses. Claude's dim suggested prompt is not typed
+# text, so a box showing only that reads empty. A screen showing a selection
+# dialog (a pointer on a numbered option, or an Enter to select / Esc to
+# cancel footer) is refused too, whatever the composer reads. Delivery goes
+# through the backend's submit primitive (bin/fm-backend.sh
+# fm_backend_send_text_submit), so any backend that can report a pane's root
+# pid below can be added. When a Claude primary's box holds the captain's
+# unsent draft (pending), the message goes past it instead: see
+# send_past_draft below, which never submits, clears, or retypes the draft.
+# Another harness's draft is joined by the message and submitted with it. The
 # text is sent as the captain's plain words: control characters, newlines, and
 # Unicode line separators become spaces, so nothing can submit early or reach
 # the pane as a key.
@@ -44,9 +49,10 @@
 #                                         proven; never re-sent to the mailbox
 #   mailbox: <path>                       the pane could not be resolved, its
 #                                         composer was not empty or pending,
-#                                         it showed a selection dialog, or
-#                                         the backend reported send-failed, its
-#                                         known-undelivered verdict; the
+#                                         it showed a selection dialog, a
+#                                         Claude draft could not be set aside,
+#                                         or the backend reported send-failed,
+#                                         its known-undelivered verdict; the
 #                                         message went to the mailbox below
 #   not-in-front                          with --front-app and --front-tty
 #                                         only: the chat is not what the
@@ -107,6 +113,8 @@ SHOTS="$STATE/desk-voice/shots"
 . "$SCRIPT_DIR/fm-supervisor-target-lib.sh"
 # shellcheck source=bin/fm-backend.sh
 . "$SCRIPT_DIR/fm-backend.sh"
+# shellcheck source=bin/fm-composer-lib.sh
+. "$SCRIPT_DIR/fm-composer-lib.sh"
 
 # The pane environment keys read from the primary's process.
 PANE_ENV_RE='^(TMUX|TMUX_PANE|HERDR_ENV|HERDR_PANE_ID|HERDR_SESSION|HERDR_SOCKET_PATH)='
@@ -308,6 +316,162 @@ shows_selection_dialog() {  # <backend> <target>
   printf '%s\n' "$screen" | grep -Eiq '(❯|›)[[:space:]]*[0-9]+\.|enter to select|esc to cancel'
 }
 
+# The text in <target>'s chat box as the last [rows] screen rows show it, or
+# fail when no box can be read. A dim suggested prompt reads as text here, so
+# ask fm_backend_composer_state whether the box is empty.
+composer_text() {  # <backend> <target> [rows]
+  local cap
+  cap=$(fm_backend_capture "$1" "$2" "${3:-${FM_COMPOSER_CAPTURE_LINES:-20}}" 2>/dev/null) || return 1
+  fm_composer_extract_selected_content styled=0 "$cap"
+}
+
+# <text> with its spaces normalized and all whitespace removed, so two readings
+# of the same words compare equal however they wrap.
+squeezed() {  # <text>
+  local text=$1
+  fm_composer_normalize_spaces_var text
+  text=${text//[$' \t\r\n\v\f']/}
+  printf '%s' "${text//$'\xE2\x81\xA3'/}"
+}
+
+# True when Claude's footer shows a stashed draft (`› stashed`). An unreadable
+# screen counts, so a stash the captain already keeps is never replaced.
+shows_stash() {  # <backend> <target>
+  local screen
+  screen=$(fm_backend_capture "$1" "$2" "${FM_COMPOSER_CAPTURE_LINES:-20}" 2>/dev/null) || return 0
+  printf '%s\n' "$screen" | fm_composer_strip_ansi | grep -Eq '›[[:space:]]*stashed[[:space:]]*$'
+}
+
+# Put <text> into <target> as one bracketed paste, without submitting it.
+# Claude reads a paste whole and shows one over 800 characters as a single
+# `[Pasted text #N]` placeholder; a typed burst that long can lose its head or
+# fold into placeholders plus a literal tail, which no proof can tell from a
+# truncated message (verified live on claude 2.1.283). <text> is one plain
+# line (plain_line), so it holds no escape that could end the paste early.
+paste_text() {  # <backend> <target> <text>
+  local buffer="fm-desk-voice-$$"
+  fm_backend_source "$1" || return 1
+  case "$1" in
+    tmux)
+      printf '%s' "$3" | tmux load-buffer -b "$buffer" - \
+        && tmux paste-buffer -p -d -b "$buffer" -t "$2"
+      ;;
+    herdr) fm_backend_herdr_send_literal "$2" $'\033[200~'"$3"$'\033[201~' ;;
+    *) return 1 ;;
+  esac
+}
+
+# Poll <target>'s composer verdict until it reads <want>; 0 when it did.
+await_composer() {  # <backend> <target> <want> <tries>
+  local i=0
+  while [ "$i" -lt "$4" ]; do
+    [ "$(fm_backend_composer_state "$1" "$2" 2>/dev/null)" = "$3" ] && return 0
+    sleep 0.2
+    i=$((i + 1))
+  done
+  return 1
+}
+
+# Put a draft this script stashed back into the box: Ctrl+S on an empty box
+# pops the stash. Pressed only while the box reads empty, because on a box
+# holding text Ctrl+S would stash that text over the draft. 0 when the draft
+# is back in the box.
+unstash_draft() {  # <backend> <target>
+  await_composer "$1" "$2" empty 5 || return 1
+  fm_backend_send_key "$1" "$2" C-s >/dev/null 2>&1 || return 1
+  await_composer "$1" "$2" pending 10
+}
+
+# Send <line> past the captain's unsent draft in a Claude primary's chat box.
+# Ctrl+S stashes the draft, with its pasted text and images, and empties the
+# box; Claude puts the draft back by itself the moment the next message is
+# submitted, and mid-turn too, where that message is queued (verified live on
+# claude 2.1.283; docs/verification/runtime-backends.md "Desk floater send
+# past a draft"). So the message is pasted (paste_text) only into a box the
+# stash has emptied, and Enter is pressed once, only while the box shows
+# exactly the message, or only the placeholder a long paste becomes, never
+# again: a second Enter after Claude restored the draft would
+# submit the draft. The proof reads, and the Ctrl+U presses that clear a
+# refused message, are sized by the message, which wraps (fm_composer_proof_lines).
+# The proof is read for up to 3s before it is refused: a busy chat draws a
+# paste late but handles it before any later key, so a box that still reads
+# empty early on may yet show the message, and a Ctrl+S then would stash it
+# over the draft.
+# After Enter the message was submitted only once the box reads empty or
+# shows the captain's draft again: Claude can redraw a long message it has not
+# submitted as pasted-text placeholders plus its tail, which is neither the
+# proven text nor the message.
+# The one deliberate exception where text in the box still sends the message
+# to the mailbox: a footer that already shows `› stashed`, because a second
+# stash would replace the one the captain keeps, and an existing Claude stash
+# is never overwritten. Prints the submit vocabulary: empty (submitted),
+# send-failed (not submitted; the draft is back in the box or a note says it
+# is stashed), unknown (typed, and the box could not be proven empty again).
+send_past_draft() {  # <backend> <target> <line>
+  local backend=$1 target=$2 line=$3 draft after shown rows i
+  if shows_stash "$backend" "$target" \
+    || ! draft=$(composer_text "$backend" "$target") || [ -z "$draft" ]; then
+    printf 'send-failed'
+    return 0
+  fi
+  fm_backend_send_key "$backend" "$target" C-s >/dev/null 2>&1 || { printf 'send-failed'; return 0; }
+  if ! await_composer "$backend" "$target" empty 10; then
+    note "the chat box did not set the captain's draft aside"
+    printf 'send-failed'
+    return 0
+  fi
+  if ! shows_stash "$backend" "$target"; then
+    if unstash_draft "$backend" "$target"; then
+      note "the chat box did not show the captain's draft as stashed, so it was put back"
+    else
+      note "the captain's draft may be stashed; Ctrl+S in the chat brings it back"
+    fi
+    printf 'send-failed'
+    return 0
+  fi
+  if ! paste_text "$backend" "$target" "$line"; then
+    unstash_draft "$backend" "$target" || note "the captain's draft is stashed; Ctrl+S in the chat brings it back"
+    printf 'send-failed'
+    return 0
+  fi
+  rows=$(fm_composer_proof_lines "$line")
+  i=0
+  while sleep 0.2; ! after=$(composer_text "$backend" "$target" "$rows") \
+    || ! fm_composer_payload_shown "$line" "$after"; do
+    i=$((i + 1))
+    [ "$i" -lt 15 ] || break
+  done
+  if [ "$i" -ge 15 ]; then
+    i=0
+    while ! await_composer "$backend" "$target" empty 1; do
+      if [ "$i" -ge "$rows" ] || ! fm_backend_send_key "$backend" "$target" C-u >/dev/null 2>&1; then
+        note "the captain's draft is stashed; Ctrl+S in the chat brings it back once the box is empty"
+        printf 'unknown'
+        return 0
+      fi
+      i=$((i + 1))
+    done
+    unstash_draft "$backend" "$target" || note "the captain's draft is stashed; Ctrl+S in the chat brings it back"
+    printf 'send-failed'
+    return 0
+  fi
+  shown=$(squeezed "$after")
+  draft=$(squeezed "$draft")
+  fm_backend_send_key "$backend" "$target" Enter >/dev/null 2>&1 || { printf 'unknown'; return 0; }
+  i=0
+  while :; do
+    sleep 0.2
+    if [ "$(fm_backend_composer_state "$backend" "$target" 2>/dev/null)" = empty ] \
+      || { [ "$draft" != "$shown" ] && after=$(composer_text "$backend" "$target") \
+        && [ "$(squeezed "$after")" = "$draft" ]; }; then
+      printf 'empty'
+      return 0
+    fi
+    i=$((i + 1))
+    [ "$i" -lt 15 ] || { printf 'unknown'; return 0; }
+  done
+}
+
 # The pids of the herdr clients attached to the server that owns <socket> (the
 # pane's API socket) and runs <root>, one per line. A client is a process
 # whose unix socket peers with one of that server's other sockets.
@@ -383,11 +547,13 @@ EOF
 # proven but not showing its chat input; nothing was typed either way. Call it
 # in a subshell: it replaces the pane environment with the primary's own.
 primary_submit() {  # <line> [<app> <tty>]
-  local lock="$STATE/.lock" pid envs kv backend target root verdict
+  local lock="$STATE/.lock" pid envs kv backend target root verdict draft claude
   [ -f "$lock" ] && [ ! -L "$lock" ] || return 1
   pid=$(head -n 1 "$lock" 2>/dev/null) || return 1
   case "$pid" in ''|*[!0-9]*) return 1 ;; esac
   fm_harness_holder_alive "$pid" || return 1
+  # Kept now: sourcing a backend resets the session-lock library's flag.
+  claude=${FM_HARNESS_IS_CLAUDE:-0}
   envs=$(holder_pane_env "$pid")
   [ -n "$envs" ] || return 1
   unset FM_SUPERVISOR_TARGET FM_SUPERVISOR_BACKEND TMUX TMUX_PANE \
@@ -406,11 +572,16 @@ EOF
     shown_in_front "$backend" "$target" "$root" "$2" "$3" || return 1
   fi
   case "$(fm_backend_composer_state "$backend" "$target" 2>/dev/null)" in
-    empty|pending) ;;
+    empty) draft=0 ;;
+    pending) draft=1 ;;
     *) return 2 ;;
   esac
   ! shows_selection_dialog "$backend" "$target" || return 2
-  verdict=$(fm_backend_send_text_submit "$backend" "$target" "$1" 3 0.4 0.5) || verdict=send-failed
+  if [ "$draft" = 1 ] && [ "$claude" = 1 ]; then
+    verdict=$(send_past_draft "$backend" "$target" "$1") || verdict=send-failed
+  else
+    verdict=$(fm_backend_send_text_submit "$backend" "$target" "$1" 3 0.4 0.5) || verdict=send-failed
+  fi
   printf '%s\t%s\t%s\n' "${verdict:-send-failed}" "$backend" "$target"
 }
 

@@ -1,0 +1,30 @@
+[38;5;174m▝▜[48;5;16m█████[49m█▀[39m  [38;5;246mOpus[39m [38;5;246m5.5[39m [38;5;246mwith[39m [38;5;246mlow[39m [38;5;246meffort[39m [38;5;246m·[39m [38;5;246mClaude[39m [38;5;246mMax[39m
+[38;5;174m ▝▝[39m   [38;5;174m▝▝[39m   [38;5;246m/…/fixture/cc[39m
+
+[38;5;246m  ⎿  SessionStart:startup hook error[39m
+[38;5;246m  ⎿  Failed with non-blocking status code: /bin/sh: ${CLAUDE_PLUGIN_ROOT}/hooks/run-hook.cmd: No [39m
+     [38;5;246msuch file or directory[39m
+
+[38;5;239m[48;5;237m❯ [38;5;231mList three fruit names, one per line, nothing else.[39m
+
+[38;5;231m[49m⏺[39m Apple
+  Banana
+  Cherry
+
+[38;5;246m✻[39m [38;5;246mBaked for 1s · done 8:02 PM[39m
+
+[38;5;239m[48;5;237m❯ [38;5;231mI want to write hello.txt with one of those fruits in it. Propose which fruit and ask me to [39m
+  [38;5;231mconfirm before you write anything.[39m
+[49m
+[38;5;231m⏺[39m I'd go with [1mApple[0m. It's first on the list and a common default.
+
+  The plan is to create [38;5;153mhello.txt[39m in the current directory containing just [38;5;153mApple[39m. Should I go ahead,
+  or would you rather have a different fruit?
+
+[38;5;246m✻[39m [38;5;246mSautéed for 2s · done 8:03 PM[39m
+
+[38;5;244m────────────────────────────────────────────────────────────────────────────────────────────────────
+[39m❯ [2myes, go ahead[0m
+[38;5;244m────────────────────────────────────────────────────────────────────────────────────────────────────
+[39m  [38;5;220m⏵⏵[39m [38;5;220mauto[39m [38;5;220mmode[39m [38;5;220mon[38;5;246m (shift+tab[39m [38;5;246mto[39m [38;5;246mcycle) · ← 2 agents[39m                                     [38;5;246m › stashed[39m
+
