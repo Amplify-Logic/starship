@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# Desk-voice delivery: captain-input transcripts from the Mac floater.
+# Desk-voice delivery: captain-input transcripts and screenshots from the Mac
+# floater.
 #
 # Usage:
-#   fm-desk-voice.sh send [--source <name>] <transcript text...>
-#   fm-desk-voice.sh deliver [--source <name>] <transcript text...>
+#   fm-desk-voice.sh send [--source <name>] [--image <png>]... [<transcript text...>]
+#   fm-desk-voice.sh deliver [--source <name>] [--image <png>]... [<transcript text...>]
+#   fm-desk-voice.sh shot [--display <n>]
 #   fm-desk-voice.sh pending
 #   fm-desk-voice.sh drain [--print]
 #   fm-desk-voice.sh --help
@@ -15,7 +17,8 @@
 # dictation mode types only into the text box the captain chose and never
 # reaches this script; see docs/desk-floater.md.)
 #
-# send is the floater's talk-to-firstmate path. It types the transcript into
+# send is the floater's talk-to-firstmate path. It types the message (the
+# transcript and any screenshots, composed as deliver composes them) into
 # the primary's own chat pane and presses Enter, so the words arrive at once,
 # even mid-turn, without that pane needing focus. The pane is resolved from
 # state/.lock: the lock's pid must be a live harness, the pane named by that
@@ -42,12 +45,25 @@
 #                                         it showed a selection dialog, or
 #                                         the backend reported send-failed, its
 #                                         known-undelivered verdict; the
-#                                         transcript went to the mailbox below
-# A transcript therefore reaches the primary exactly one way.
+#                                         message went to the mailbox below
+# A message therefore reaches the primary exactly one way.
 #
 # deliver is the mailbox path. Transcripts land under
 #   $FM_HOME/state/desk-voice/inbox/<utc>-<id>.json
 # and a single wake is appended so the primary can see and drain them.
+#
+# deliver --image (repeatable, absolute path to an existing file) attaches
+# screenshots: the message becomes the transcript, if any, followed by one line
+# "Screenshots: <path> <path>...", and the JSON also lists them under "images".
+# A message may be screenshots alone.
+#
+# shot captures one whole display (screencapture's -D numbering, 1 = main;
+# the main display when omitted) to
+#   $FM_HOME/state/desk-voice/shots/<utc-with-microseconds>-<id>.png
+# prints that path, and prunes the folder to the newest FM_DESK_SHOTS_KEEP
+# (default 30) images. It never delivers anything by itself. The capture
+# command is FM_DESK_SHOT_CAPTURE (default screencapture), called as
+# <cmd> -x -t png [-D <n>] <file>; tests point it at a stub.
 #
 # Drain moves files to state/desk-voice/processed/ and prints each transcript
 # (one JSON object per line with --print, plain text otherwise). The primary
@@ -62,6 +78,7 @@ FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 INBOX="$STATE/desk-voice/inbox"
 PROCESSED="$STATE/desk-voice/processed"
+SHOTS="$STATE/desk-voice/shots"
 
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
@@ -102,10 +119,11 @@ ensure_dirs() {
   chmod 700 "$STATE/desk-voice" "$INBOX" "$PROCESSED" 2>/dev/null || true
 }
 
-write_transcript_json() {  # <path> <stamp> <id> <source> <text>
-  python3 - "$1" "$2" "$3" "$4" "$5" <<'PY'
+write_transcript_json() {  # <path> <stamp> <id> <source> <text> [<image>...]
+  python3 - "$@" <<'PY'
 import json, sys
 path, stamp, rid, source, text = sys.argv[1:6]
+images = sys.argv[6:]
 doc = {
     "schema": "fm-desk-voice-transcript.v1",
     "id": rid,
@@ -113,15 +131,19 @@ doc = {
     "source": source,
     "transcript": text,
 }
+if images:
+    doc["images"] = images
 with open(path, "w", encoding="utf-8") as fh:
     json.dump(doc, fh, ensure_ascii=False)
     fh.write("\n")
 PY
 }
 
-# Parse "[--source <name>] [--] <text...>" into ARG_SOURCE and ARG_TEXT.
+# Parse "[--source <name>] [--image <png>]... [--] [<text...>]" into ARG_SOURCE,
+# ARG_IMAGES and ARG_TEXT (empty when the text is blank).
 parse_transcript_args() {
   ARG_SOURCE=desk-floater
+  ARG_IMAGES=()
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --source)
@@ -129,24 +151,45 @@ parse_transcript_args() {
         ARG_SOURCE=$2
         shift 2
         ;;
+      --image)
+        [ "$#" -ge 2 ] || refuse "--image needs a path"
+        case "$2" in
+          /*) ;;
+          *) refuse "--image needs an absolute path: $2" ;;
+        esac
+        [ -f "$2" ] || refuse "no such image: $2"
+        ARG_IMAGES+=("$2")
+        shift 2
+        ;;
       --) shift; break ;;
       -*) refuse "unexpected option: $1" ;;
       *) break ;;
     esac
   done
-  [ "$#" -gt 0 ] || refuse "nothing to deliver"
   ARG_TEXT=$*
   case "$ARG_TEXT" in
     *[![:space:]]*) ;;
-    *) refuse "nothing to deliver" ;;
+    *) ARG_TEXT='' ;;
   esac
+}
+
+# The message the parsed arguments make: the transcript, if any, then one
+# "Screenshots: <path>..." line when images are attached.
+message_text() {
+  local text=$ARG_TEXT
+  if [ "${#ARG_IMAGES[@]}" -gt 0 ]; then
+    text="${text:+$text
+}Screenshots: ${ARG_IMAGES[*]}"
+  fi
+  printf '%s' "$text"
 }
 
 deliver() {
   local source text id stamp path tmp
   parse_transcript_args "$@"
   source=$ARG_SOURCE
-  text=$ARG_TEXT
+  text=$(message_text)
+  [ -n "$text" ] || refuse "nothing to deliver"
 
   ensure_dirs
   stamp=$(date -u +%Y%m%dT%H%M%SZ)
@@ -154,7 +197,7 @@ deliver() {
   path="$INBOX/${stamp}-${id}.json"
   tmp=$(mktemp "$INBOX/.tmp.XXXXXX") || die "cannot create temp transcript"
 
-  if ! write_transcript_json "$tmp" "$stamp" "$id" "$source" "$text"; then
+  if ! write_transcript_json "$tmp" "$stamp" "$id" "$source" "$text" ${ARG_IMAGES[@]+"${ARG_IMAGES[@]}"}; then
     rm -f "$tmp"
     die "cannot write transcript JSON"
   fi
@@ -281,11 +324,12 @@ EOF
 }
 
 send() {
-  local source text line result='' verdict backend target path
+  local source text line result='' verdict backend target path image
+  local -a image_args=()
   parse_transcript_args "$@"
   source=$ARG_SOURCE
   text=$ARG_TEXT
-  line=$(plain_line "$text") || die "cannot prepare transcript"
+  line=$(plain_line "$(message_text)") || die "cannot prepare transcript"
   [ -n "$line" ] || refuse "nothing to deliver"
 
   if result=$(primary_submit "$line") && [ -n "$result" ]; then
@@ -308,8 +352,58 @@ send() {
   else
     note "the primary's chat pane is not reachable; saving to the mailbox instead"
   fi
-  path=$(deliver --source "$source" -- "$text")
+  for image in ${ARG_IMAGES[@]+"${ARG_IMAGES[@]}"}; do
+    image_args+=(--image "$image")
+  done
+  path=$(deliver --source "$source" ${image_args[@]+"${image_args[@]}"} -- "$text")
   printf 'mailbox: %s\n' "$path"
+}
+
+shot() {
+  local display='' keep=${FM_DESK_SHOTS_KEEP:-30} capture=${FM_DESK_SHOT_CAPTURE:-screencapture}
+  local name path tmp excess
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --display)
+        [ "$#" -ge 2 ] || refuse "--display needs a number"
+        display=$2
+        shift 2
+        ;;
+      *) refuse "unexpected argument: $1" ;;
+    esac
+  done
+  case "$display" in
+    ''|[1-9]|[1-9][0-9]) ;;
+    *) refuse "--display needs a display number from 1: $display" ;;
+  esac
+  case "$keep" in
+    [1-9]|[1-9][0-9]|[1-9][0-9][0-9]) ;;
+    *) refuse "FM_DESK_SHOTS_KEEP must be a number from 1 to 999: $keep" ;;
+  esac
+
+  ensure_dirs
+  mkdir -p "$SHOTS" || die "cannot create $SHOTS"
+  chmod 700 "$SHOTS" 2>/dev/null || true
+  # Microseconds in the name keep name order equal to capture order for pruning.
+  name=$(python3 -c 'import datetime, secrets; print(datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S%fZ") + "-" + secrets.token_hex(4))')
+  path="$SHOTS/${name}.png"
+  tmp="$SHOTS/.tmp-${name}.png"
+  if ! "$capture" -x -t png ${display:+-D "$display"} "$tmp" >/dev/null || [ ! -s "$tmp" ]; then
+    rm -f "$tmp"
+    die "screen capture failed"
+  fi
+  mv "$tmp" "$path" || die "cannot finalize screenshot"
+  chmod 600 "$path" 2>/dev/null || true
+
+  # Keep only the newest images; names sort by capture time.
+  shopt -s nullglob
+  local -a all=("$SHOTS"/*.png)
+  excess=$(( ${#all[@]} - keep ))
+  if [ "$excess" -gt 0 ]; then
+    rm -f "${all[@]:0:$excess}"
+  fi
+
+  printf '%s\n' "$path"
 }
 
 pending() {
@@ -354,6 +448,7 @@ main() {
     --help|-h) usage; exit 0 ;;
     send) shift; send "$@" ;;
     deliver) shift; deliver "$@" ;;
+    shot) shift; shot "$@" ;;
     pending) shift; pending "$@" ;;
     drain) shift; drain "$@" ;;
     *) refuse "unknown command: $1" ;;

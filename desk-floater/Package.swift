@@ -11,6 +11,11 @@ let package = Package(
         .executableTarget(
             name: "DeskFloater",
             path: "Sources"
+        ),
+        .testTarget(
+            name: "DeskFloaterTests",
+            dependencies: ["DeskFloater"],
+            path: "Tests/DeskFloaterTests"
         )
     ]
 )

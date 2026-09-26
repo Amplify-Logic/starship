@@ -686,14 +686,15 @@ desk_send_skip() {  # <case>
   printf 'skip: %s: this host does not expose the stand-in primary environment\n' "$1"
 }
 
-desk_send() {  # <home> <text> -> stdout of fm-desk-voice.sh send
+desk_send() {  # <home> [--image <png>]... <text> -> stdout of fm-desk-voice.sh send
   local home=$1 dir="$1/fixture"
+  shift
   (
     unset TMUX TMUX_PANE HERDR_ENV HERDR_PANE_ID HERDR_SESSION HERDR_SOCKET_PATH \
       FM_BACKEND_HERDR_BIN FM_SUPERVISOR_TARGET FM_SUPERVISOR_BACKEND
     PATH="$dir/bin:$PATH" FM_FAKE_HERDR_DIR="$dir" FM_HOME="$home" \
       FM_STATE_OVERRIDE="$home/state" FM_BACKEND_HERDR_SUBMIT_MIN_SLEEP=0.1 \
-      "$DESK" send --source test-suite "$2"
+      "$DESK" send --source test-suite "$@"
   )
 }
 
@@ -808,6 +809,163 @@ test_desk_voice_send_joins_a_pending_draft() {
   pass "fm-desk-voice send: a half-typed draft is joined and submitted"
 }
 
+test_desk_voice_send_types_screenshots_into_the_primary_pane() {
+  local home out shot1 shot2
+  home=$(desk_send_fixture send-shots) || { desk_send_skip send-shots; return 0; }
+  shot1="$home/one.png"
+  shot2="$home/two.png"
+  printf PNG > "$shot1"
+  printf PNG > "$shot2"
+  out=$(desk_send "$home" --image "$shot1" --image "$shot2" -- "Why is this red") \
+    || fail "send with screenshots failed: $out"
+  assert_contains "$out" "sent: herdr fm-desk-send-test:w7:p3" "screenshots go into the primary pane"
+  assert_contains "$(herdr_calls "$home" pane send-text)" \
+    "pane send-text w7:p3 Why is this red Screenshots: $shot1 $shot2 --session fm-desk-send-test" \
+    "the words and the image paths are typed as one plain line"
+  [ "$(inbox_count "$home")" = 0 ] || fail "a pane delivery must not also land in the mailbox"
+  : > "$home/fixture/herdr.log"
+  out=$(desk_send "$home" --image "$shot1" --) || fail "send of screenshots alone failed: $out"
+  assert_contains "$(herdr_calls "$home" pane send-text)" "pane send-text w7:p3 Screenshots: $shot1 --session" \
+    "screenshots alone are typed too"
+  desk_send_done "$home"
+  pass "fm-desk-voice send: screenshots, alone or with words, are typed into the primary's pane"
+}
+
+test_desk_voice_send_screenshots_fall_back_to_the_mailbox() {
+  local home out shot path drained
+  home=$(desk_send_fixture send-shots-refused) || { desk_send_skip send-shots-refused; return 0; }
+  shot="$home/one.png"
+  printf PNG > "$shot"
+  : > "$home/fixture/send-text-fails"
+  out=$(desk_send "$home" --image "$shot" -- "Look at this") || fail "send failed: $out"
+  case "$out" in mailbox:\ *) ;; *) fail "expected a mailbox delivery, got: $out" ;; esac
+  path=${out#mailbox: }
+  assert_contains "$(cat "$path")" "$shot" "the mailbox record lists the image"
+  drained=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" "$DESK" drain) || fail "drain failed"
+  [ "$drained" = "Look at this
+Screenshots: $shot" ] || fail "unexpected mailbox message: $drained"
+  desk_send_done "$home"
+  pass "fm-desk-voice send: screenshots the pane refuses land in the mailbox with the words"
+}
+
+# The floater's screenshots are captured by a stand-in here: a test must never
+# photograph the real screen.
+install_capture() {  # <home> [fail|empty]
+  local home=$1 mode=${2:-ok}
+  cat > "$home/capture" <<EOF
+#!/usr/bin/env bash
+printf '%s\\n' "\$*" >> "$home/capture.log"
+for a in "\$@"; do out=\$a; done
+case "$mode" in
+  fail) exit 1 ;;
+  empty) : > "\$out" ;;
+  *) printf 'PNG' > "\$out" ;;
+esac
+EOF
+  chmod +x "$home/capture"
+}
+
+shoot_in() {  # <home> [args...]
+  local home=$1
+  shift
+  FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_DESK_SHOT_CAPTURE="$home/capture" \
+    "$DESK" shot "$@"
+}
+
+test_desk_voice_shot_captures_the_named_display() {
+  local home path perms
+  home=$(new_home shot)
+  install_capture "$home"
+  path=$(shoot_in "$home" --display 2) || fail "shot failed: $path"
+  case "$path" in
+    "$home/state/desk-voice/shots/"*.png) ;;
+    *) fail "shot path is not in the home's screenshot folder: $path" ;;
+  esac
+  [ "$(cat "$path")" = PNG ] || fail "shot did not keep the captured image"
+  assert_contains "$(cat "$home/capture.log")" "-x -t png -D 2" "the display under the pointer is captured, silently"
+  if [ "$(uname)" = Darwin ]; then perms=$(stat -f %Lp "$path"); else perms=$(stat -c %a "$path"); fi
+  [ "$perms" = 600 ] || fail "screenshot should be private (600), got $perms"
+  path=$(shoot_in "$home") || fail "shot without a display failed: $path"
+  case "$(tail -n 1 "$home/capture.log")" in
+    *-D*) fail "no --display must leave the display choice to the capture tool" ;;
+  esac
+  [ ! -d "$home/state/desk-voice/inbox" ] || [ -z "$(ls "$home/state/desk-voice/inbox")" ] \
+    || fail "a shot on its own must not send anything"
+  pass "fm-desk-voice: shot captures the named display into the home's screenshot folder"
+}
+
+test_desk_voice_shot_keeps_only_the_newest() {
+  local home first second third left
+  home=$(new_home shot-prune)
+  install_capture "$home"
+  first=$(FM_DESK_SHOTS_KEEP=2 shoot_in "$home") || fail "first shot failed"
+  second=$(FM_DESK_SHOTS_KEEP=2 shoot_in "$home") || fail "second shot failed"
+  third=$(FM_DESK_SHOTS_KEEP=2 shoot_in "$home") || fail "third shot failed"
+  left=$(find "$home/state/desk-voice/shots" -name '*.png' | wc -l | tr -d ' ')
+  [ "$left" -eq 2 ] || fail "expected 2 screenshots kept, got $left"
+  [ ! -f "$first" ] || fail "the oldest screenshot should have been pruned"
+  [ -f "$second" ] && [ -f "$third" ] || fail "the newest screenshots must be kept"
+  pass "fm-desk-voice: the screenshot folder keeps only the newest images"
+}
+
+test_desk_voice_shot_failure_leaves_nothing() {
+  local home out status=0 left
+  home=$(new_home shot-fail)
+  install_capture "$home" fail
+  out=$(shoot_in "$home" 2>&1) || status=$?
+  [ "$status" -eq 1 ] || fail "expected exit 1 for a failed capture, got $status: $out"
+  install_capture "$home" empty
+  status=0
+  out=$(shoot_in "$home" 2>&1) || status=$?
+  [ "$status" -eq 1 ] || fail "expected exit 1 for an empty capture, got $status: $out"
+  left=$(find "$home/state/desk-voice/shots" -type f | wc -l | tr -d ' ')
+  [ "$left" -eq 0 ] || fail "a failed capture left $left file(s) behind"
+  status=0
+  out=$(shoot_in "$home" --display 0 2>&1) || status=$?
+  [ "$status" -eq 2 ] || fail "expected exit 2 for display 0, got $status: $out"
+  pass "fm-desk-voice: a failed capture exits 1 and leaves no screenshot"
+}
+
+test_desk_voice_deliver_with_screenshots() {
+  local home shot1 shot2 path drained json out status=0
+  home=$(new_home mailbox-shots)
+  install_capture "$home"
+  shot1=$(shoot_in "$home") || fail "shot failed"
+  shot2=$(shoot_in "$home") || fail "shot failed"
+  path=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" \
+    "$DESK" deliver --source test-suite --image "$shot1" --image "$shot2" -- "Why is this red") \
+    || fail "deliver with screenshots failed"
+  json=$(cat "$path")
+  assert_contains "$json" "$shot1" "the message record lists the first image"
+  drained=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" "$DESK" drain) || fail "drain failed"
+  [ "$drained" = "Why is this red
+Screenshots: $shot1 $shot2" ] || fail "unexpected combined message: $drained"
+  path=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" "$DESK" deliver --image "$shot1" --) \
+    || fail "deliver of screenshots alone failed"
+  drained=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" "$DESK" drain) || fail "drain failed"
+  [ "$drained" = "Screenshots: $shot1" ] || fail "unexpected screenshots-only message: $drained"
+  out=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" "$DESK" deliver --image shot.png 2>&1) || status=$?
+  [ "$status" -eq 2 ] || fail "expected exit 2 for a relative image path, got $status: $out"
+  status=0
+  out=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" "$DESK" deliver --image "$home/missing.png" 2>&1) || status=$?
+  [ "$status" -eq 2 ] || fail "expected exit 2 for a missing image, got $status: $out"
+  status=0
+  out=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" "$DESK" deliver -- 2>&1) || status=$?
+  [ "$status" -eq 2 ] || fail "expected exit 2 with neither words nor images, got $status: $out"
+  pass "fm-desk-voice: screenshots are delivered by path, alone or with the transcript, as one message"
+}
+
+# The floater's screenshot-stacking rules are Swift, so they need macOS and swift.
+test_floater_swift_tests() {
+  local out
+  if [ "$(uname)" != Darwin ] || ! command -v swift >/dev/null 2>&1; then
+    pass "desk floater: Swift tests skipped (need macOS and swift)"
+    return
+  fi
+  out=$(swift test --package-path "$ROOT/desk-floater" 2>&1) || fail "desk floater Swift tests failed: $out"
+  pass "desk floater: screenshot stack Swift tests pass"
+}
+
 test_deepgram_lib_reads_dotenv_without_logging_key() {
   local home out
   home=$(new_home dotenv)
@@ -850,4 +1008,11 @@ test_desk_voice_send_falls_back_when_the_pane_refuses_text
 test_desk_voice_send_never_doubles_an_unconfirmed_submit
 test_desk_voice_send_falls_back_when_the_pane_shows_a_dialog
 test_desk_voice_send_joins_a_pending_draft
+test_desk_voice_send_types_screenshots_into_the_primary_pane
+test_desk_voice_send_screenshots_fall_back_to_the_mailbox
+test_desk_voice_shot_captures_the_named_display
+test_desk_voice_shot_keeps_only_the_newest
+test_desk_voice_shot_failure_leaves_nothing
+test_desk_voice_deliver_with_screenshots
+test_floater_swift_tests
 test_deepgram_lib_reads_dotenv_without_logging_key
