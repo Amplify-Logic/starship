@@ -9,7 +9,7 @@ Start with the directory layout, then use the setting reference for the behavior
 | --- | --- |
 | Firstmate's code, private files, or project location | [FM_HOME](#fm_home) and [operational home layout](#operational-home-layout-and-state) |
 | Task windows and worker tools | [Runtime backend](#runtime-backend-configbackend--fm_backend) and [harness support](#harness-support) |
-| Worker permissions, accounts, or environment | [Claude permission mode](#claude-permission-mode-configclaude-permission-mode), [worker account pin](#worker-account-pin-configclaude-account-configpi-account), and [worker launch environment](#worker-launch-environment-configlaunch-env-allowlist) |
+| Worker permissions, accounts, or environment | [Claude permission mode](#claude-permission-mode-configclaude-permission-mode), [Claude concise prompt](#claude-concise-prompt-configclaude-concise-prompt), [worker account pin](#worker-account-pin-configclaude-account-configpi-account), and [worker launch environment](#worker-launch-environment-configlaunch-env-allowlist) |
 | Backlog, preferences, and memory | [Backlog backend](#backlog-backend-taskstoml--configbacklog-backend), [captain preferences](#captain-preferences-datacaptainmd--datacaptain-sharedmd), and [startup memory budget](#startup-memory-budget-configstartup-memory-budget) |
 | Supervision and presentation | [Pi supervision branch](#pi-supervision-branch), [supervision host](#supervision-host-configsupervision-host), and [Calm preference](#calm-preference-configcalm) |
 | Persistent secondmates | [Secondmate routes](#secondmate-routes-datasecondmatesmd) |
@@ -863,6 +863,26 @@ The diagnostic names the accepted values; Firstmate never falls back to a permis
 The file is a captain-wide safety preference, so it is inherited into secondmate homes under the [`secondmate-provisioning`](../.agents/skills/secondmate-provisioning/SKILL.md) inherited-local-material contract; a secondmate's own Claude crewmates then launch on the same posture.
 
 The [Claude adapter reference](../.agents/skills/harness-adapters/references/harness/claude.md) records the verified shape of both launches and which once-per-machine dialog each one can meet.
+
+## Claude concise prompt (config/claude-concise-prompt)
+
+The optional local, gitignored `config/claude-concise-prompt` opts Claude task workers into a concise-communication system prompt.
+Its aim is fewer output tokens and less scope creep from Claude workers.
+The token is the file's whitespace-trimmed content.
+
+| Token | Claude ship and scout launches |
+| --- | --- |
+| `off` | unchanged |
+| `on` | [`docs/worker-prompts/claude-concise.md`](worker-prompts/claude-concise.md) appended to the task-worker system prompt |
+
+An absent file means off, so an unconfigured home launches byte-for-byte as before.
+With `on`, the prompt joins the existing task-worker `--append-system-prompt` statement after a blank line; the pane reads the tracked file at launch.
+The prompt changes only how a worker writes: it defers to the launch brief, its status protocol, its Definition of done, and the no-mistakes gate instructions wherever they require a format or a step.
+Claude secondmates, raw launch commands, and every other harness are unaffected.
+
+Any other value, an unreadable file, or a missing prompt file refuses every spawn from that home before any endpoint, worktree, or task record exists.
+`bin/fm-spawn.sh` reads the file on every spawn and relaunch, so a change takes effect at the next launch.
+The file is not inherited into secondmate homes; set it in each home whose Claude workers should use it.
 
 ## Worker account pin (config/claude-account, config/pi-account)
 

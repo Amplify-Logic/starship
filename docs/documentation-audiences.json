@@ -701,6 +701,10 @@
       "audience": "operator-current"
     },
     {
+      "path": "docs/worker-prompts/claude-concise.md",
+      "audience": "agent-runtime"
+    },
+    {
       "path": "docs/zellij-backend.md",
       "audience": "operator-current"
     },

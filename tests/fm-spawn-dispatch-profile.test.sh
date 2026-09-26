@@ -1523,6 +1523,117 @@ test_launch_environment_inaccessible_config_refuses
 test_launch_environment_inherited_by_secondmate
 test_launch_environment_inheritance_preserves_on_source_errors
 
+# config/claude-concise-prompt (bin/fm-spawn.sh header): absent and `off` must
+# both launch byte-for-byte as before, `on` must append exactly the tracked
+# prompt to the task-worker system-prompt argument, and nothing else changes.
+CLAUDE_CONCISE_PROMPT_FILE="$ROOT/docs/worker-prompts/claude-concise.md"
+
+# Runs a captured launch under a fake claude that records its argv, one
+# NUL-terminated argument each, and prints the --append-system-prompt value.
+claude_appended_system_prompt() {  # <fakebin> <case-dir> <launch>
+  local fakebin=$1 case_dir=$2 launch=$3 argv
+  argv="$case_dir/claude-argv"
+  cat > "$fakebin/claude" <<'SH'
+#!/usr/bin/env bash
+[ "${1:-}" != --version ] || exit 0
+printf '%s\0' "$@" > "$FM_CLAUDE_ARGV"
+SH
+  chmod +x "$fakebin/claude"
+  FM_CLAUDE_ARGV="$argv" PATH="$fakebin:$PATH" bash -c "$launch" || fail "could not run the captured claude launch"
+  perl -0ne 'chomp; if ($want) { print; exit } $want = 1 if $_ eq "--append-system-prompt"' "$argv"
+}
+
+test_claude_concise_prompt_off_leaves_the_launch_unchanged() {
+  local rec id out status launch expected token
+  for token in absent off; do
+    id=concise-$token-z30
+    rec=$(make_spawn_case "concise-$token" claude "$id")
+    read_case_record "$rec"
+    [ "$token" = absent ] || printf ' off\n' > "$HOME_DIR/config/claude-concise-prompt"
+
+    out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
+    status=$?
+    expect_code 0 "$status" "claude spawn with claude-concise-prompt $token should succeed"$'\n'"$out"
+    launch=$(cat "$LAUNCH_LOG")
+    expected=$(claude_expected_launch "$HOME_DIR" "$id" --dangerously-skip-permissions)
+    [ "$launch" = "$expected" ] || fail "claude-concise-prompt $token changed the launch"$'\n'"expected: $expected"$'\n'"actual:   $launch"
+    assert_not_contains "$launch" "claude-concise.md" "claude-concise-prompt $token must not reference the prompt"
+  done
+  pass "config/claude-concise-prompt absent or off launches claude byte-for-byte unchanged"
+}
+
+test_claude_concise_prompt_on_appends_exactly_the_prompt() {
+  local rec id out status launch trust expected actual kind
+  trust=${CLAUDE_CONTROL_CHANNEL_FLAG#"--append-system-prompt '"}
+  trust=${trust%"'"}
+  expected="$trust"$'\n\n'"$(cat "$CLAUDE_CONCISE_PROMPT_FILE")"
+  for kind in ship scout; do
+    id=concise-on-$kind-z31
+    rec=$(make_spawn_case "concise-on-$kind" claude "$id")
+    read_case_record "$rec"
+    printf 'on\n' > "$HOME_DIR/config/claude-concise-prompt"
+
+    if [ "$kind" = scout ]; then
+      out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --scout)
+    else
+      out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
+    fi
+    status=$?
+    expect_code 0 "$status" "claude $kind spawn with claude-concise-prompt on should succeed"$'\n'"$out"
+    launch=$(cat "$LAUNCH_LOG")
+    [ "$(grep -o -- '--append-system-prompt' <<<"$launch" | wc -l | tr -d ' ')" = 1 ] ||
+      fail "claude $kind launch must keep a single --append-system-prompt argument"
+    actual=$(claude_appended_system_prompt "$FAKEBIN_DIR" "$CASE_DIR" "$launch")
+    [ "$actual" = "$expected" ] ||
+      fail "claude $kind launch did not append exactly the concise prompt to the trust statement"$'\n'"expected: $expected"$'\n'"actual:   $actual"
+  done
+  pass "config/claude-concise-prompt on appends exactly the tracked prompt to claude ship and scout launches"
+}
+
+test_claude_concise_prompt_skips_secondmates_and_other_harnesses() {
+  local rec id sm out status launch
+  id=concise-secondmate-z32
+  rec=$(make_spawn_case concise-secondmate claude "$id")
+  read_case_record "$rec"
+  printf 'on\n' > "$HOME_DIR/config/claude-concise-prompt"
+  sm="$CASE_DIR/secondmate-home"
+  make_seeded_secondmate_home "$sm" "$id"
+  out=$(FM_TEST_CLAUDE_CONFIG_DIR="$CASE_DIR/claude-work" \
+    run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$sm" --secondmate)
+  status=$?
+  expect_code 0 "$status" "secondmate claude spawn with claude-concise-prompt on should succeed"$'\n'"$out"
+  launch=$(cat "$LAUNCH_LOG")
+  assert_not_contains "$launch" "claude-concise.md" "a persistent secondmate must not receive the worker concise prompt"
+
+  id=concise-codex-z33
+  rec=$(make_spawn_case concise-codex claude "$id")
+  read_case_record "$rec"
+  printf 'on\n' > "$HOME_DIR/config/claude-concise-prompt"
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --harness codex)
+  status=$?
+  expect_code 0 "$status" "codex spawn with claude-concise-prompt on should succeed"$'\n'"$out"
+  launch=$(cat "$LAUNCH_LOG")
+  assert_not_contains "$launch" "claude-concise.md" "the concise prompt must not leak into a codex launch"
+  assert_not_contains "$launch" "__CLAUDECONCISE__" "a codex launch must not carry an unreplaced placeholder"
+  pass "config/claude-concise-prompt changes claude worker launches only"
+}
+
+test_claude_concise_prompt_invalid_refuses_before_endpoint_or_metadata() {
+  local rec id out status
+  id=concise-invalid-z34
+  rec=$(make_spawn_case concise-invalid claude "$id")
+  read_case_record "$rec"
+  printf 'yes\n' > "$HOME_DIR/config/claude-concise-prompt"
+
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
+  status=$?
+  expect_code 1 "$status" "an unrecognized claude-concise-prompt token must refuse the spawn"
+  assert_contains "$out" "config/claude-concise-prompt holds 'yes'" "refusal must name the file and the offending token"
+  [ ! -s "$LAUNCH_LOG" ] || fail "an invalid concise-prompt token must launch nothing (got: $(cat "$LAUNCH_LOG"))"
+  [ ! -e "$HOME_DIR/state/$id.meta" ] || fail "an invalid concise-prompt token must write no task record"
+  pass "an unrecognized config/claude-concise-prompt token refuses before any endpoint or metadata"
+}
+
 test_worker_launch_delivers_role_scope() {
   local rec id out launch kind prompt envelope encoded brief_kind brief content first_line role_line task_line inbox
   for brief_kind in heading legacy scaffold; do
@@ -1746,6 +1857,10 @@ test_claude_permission_mode_auto_swaps_only_the_permission_flag
 test_claude_permission_mode_auto_reaches_scout_launch
 test_claude_permission_mode_invalid_refuses_before_endpoint_or_metadata
 test_non_claude_harness_ignores_claude_permission_mode
+test_claude_concise_prompt_off_leaves_the_launch_unchanged
+test_claude_concise_prompt_on_appends_exactly_the_prompt
+test_claude_concise_prompt_skips_secondmates_and_other_harnesses
+test_claude_concise_prompt_invalid_refuses_before_endpoint_or_metadata
 test_non_claude_harness_ignores_config_dir
 test_claude_task_launch_carries_control_channel_authority
 test_claude_secondmate_launch_omits_task_control_channel_authority
