@@ -554,6 +554,43 @@ test_real_speak_muted_and_not_enabled_stay_silent() {
   pass "real fm-speak: muted and not-enabled homes stay silent"
 }
 
+# The floater's voice-volume level reaches the reply the hook speaks, through
+# the real fm-speak: the say line is rendered and played at the set level.
+test_real_speak_honours_the_voice_volume() {
+  local dir
+  dir=$(make_primary_dir "$TMP_ROOT/real-volume")
+  install_real_speak_fixture "$dir"
+  cat > "$dir/speaker" <<EOF
+#!/usr/bin/env bash
+out= text=
+while [ "\$#" -gt 0 ]; do
+  case "\$1" in
+    -o) out=\$2; shift 2 ;;
+    -f) text=\$(cat "\$2"); shift 2 ;;
+    *) shift ;;
+  esac
+done
+[ -n "\$out" ] && printf '%s' "\$text" > "\$out"
+EOF
+  cat > "$dir/afplay" <<EOF
+#!/usr/bin/env bash
+file=
+for a in "\$@"; do file=\$a; done
+printf '%s | %s\n' "\$1 \$2" "\$(cat "\$file")" >> "$dir/audio.log"
+EOF
+  chmod +x "$dir/speaker" "$dir/afplay"
+  printf 'enabled = true\n' > "$dir/config/speak"
+  printf '35\n' > "$dir/state/speak-volume"
+  (
+    export FM_DEEPGRAM_AFPLAY="$dir/afplay"
+    run_hook_real_speak "$dir" "Captain, the quieter voice is on."
+  )
+  wait_for_audio "$dir" "the reply never reached the player"
+  assert_equals "-v 0.35 | Captain, the quieter voice is on." "$(cat "$dir/audio.log")" \
+    "the hook's reply must play at the set voice volume"
+  pass "real fm-speak: the hook's reply honours the voice volume"
+}
+
 # --- registration ------------------------------------------------------------
 
 test_settings_register_async_primary_hook() {
@@ -594,4 +631,5 @@ test_cursor_payload_is_inert
 test_real_speak_speaks_and_falls_back
 test_real_speak_decision_only_speaks_notice
 test_real_speak_muted_and_not_enabled_stay_silent
+test_real_speak_honours_the_voice_volume
 test_settings_register_async_primary_hook

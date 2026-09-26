@@ -9,6 +9,7 @@
 #   fm-speak.sh --history
 #   fm-speak.sh --replay <number>
 #   fm-speak.sh --mute | --unmute | --muted
+#   fm-speak.sh --volume [<percent>]
 #   fm-speak.sh --help
 #
 # WHY THIS EXISTS: firstmate could already speak to the captain through the
@@ -141,9 +142,22 @@
 #             nor kept for --repeat, and the call still exits 0: muting affects
 #             voice only, and the text reply stays the authoritative one.
 #   --muted   prints `muted` or `unmuted`.
-# Controls need no opt-in because they can only make this home quieter; --repeat
-# and --replay are spoken lines and honour `enabled`, mute and --stop like any
-# other, and print the text they replayed.
+#   --volume [<percent>]
+#             prints, or with a whole number from 0 to 200 sets, the spoken
+#             voice's level as a percentage of the Mac's own output volume: 100
+#             (the default) is as loud as everything else, lower is quieter
+#             than everything else, and above 100 is extra gain for a voice
+#             that is too quiet beside other audio. The level is
+#             state/speak-volume, per home, and the system volume itself is
+#             never touched. It is applied as afplay's playback volume, so a
+#             Deepgram line and kept audio play at it directly, and a `say`
+#             line at any level other than 100 is rendered to audio first and
+#             played the same way; with no afplay on this machine a `say` line
+#             plays at the system volume and says so. A change applies from
+#             the next line a speaker starts, never to one already playing.
+# Controls need no opt-in because none of them speaks on its own; --repeat and
+# --replay are spoken lines and honour `enabled`, mute, the volume and --stop
+# like any other, and print the text they replayed.
 #
 # REPLY HISTORY: every line handed to a speaker is kept in
 # state/speak-history/<number>/, readable only by this account (directories
@@ -165,6 +179,8 @@
 #   FM_SPEAK_SAY       speech binary (default: /usr/bin/say)
 #   FM_SPEAK_DEEPGRAM_TTS
 #                      Deepgram TTS helper (default: $ROOT/bin/fm-deepgram-tts.sh)
+#   FM_DEEPGRAM_AFPLAY audio player for Deepgram audio, kept audio and a `say`
+#                      line rendered at a set volume (default: /usr/bin/afplay)
 #   FM_SPEAK_DEEPGRAM_REGISTER
 #                      GLASSES_ANNOUNCE_CONFIG path for the longer desk register,
 #                      applied to every desk line (default:
@@ -199,10 +215,14 @@ VOICE_CONFIRMED_FILE="$STATE/speak-voice-confirmed"
 SPEAK_LOCK="$STATE/.speak.lock"
 SPEAK_LOCK_HELD=false
 MUTE_FILE="$STATE/speak-muted"
+VOLUME_FILE="$STATE/speak-volume"
+SPEAK_VOLUME=100
 HISTORY_DIR="$STATE/speak-history"
 HISTORY_KEEP=10
 KEPT_AUDIO=
 REPLAY_NUMBER=
+VOLUME_ARG=
+VOLUME_SET=false
 STOP_GEN_FILE="$STATE/speak-stop-generation"
 PLAYER_FILE="$STATE/.speak-player"
 STOP_GEN_AT_START=0
@@ -213,6 +233,7 @@ DEFAULT_SPEAKER_TIMEOUT=60
 SHAPER="${FM_SPEAK_SHAPER:-$FM_HOME/projects/glasses-voice/bin/announce}"
 SAY_BIN="${FM_SPEAK_SAY:-/usr/bin/say}"
 DEEPGRAM_TTS="${FM_SPEAK_DEEPGRAM_TTS:-$ROOT/bin/fm-deepgram-tts.sh}"
+AFPLAY_BIN="${FM_DEEPGRAM_AFPLAY:-/usr/bin/afplay}"
 # Default longer desk register; empty FM_SPEAK_DEEPGRAM_REGISTER disables the bump.
 if [ "${FM_SPEAK_DEEPGRAM_REGISTER+x}" = x ]; then
   DESK_REGISTER=$FM_SPEAK_DEEPGRAM_REGISTER
@@ -494,6 +515,9 @@ play_serialized() {  # <cmd...>
 # shellcheck disable=SC2329 # Invoked by name through detach_speaker.
 say_speaker() {  # <textfile>
   local textfile=$1
+  if say_at_volume "$textfile"; then
+    return 0
+  fi
   if [ -n "$CFG_VOICE" ]; then
     play_serialized "$SAY_BIN" -v "$CFG_VOICE" -f "$textfile"
   else
@@ -502,15 +526,54 @@ say_speaker() {  # <textfile>
   rm -f "$textfile"
 }
 
+# `say` has no volume of its own, so a line at any level other than 100 is
+# rendered to audio under the speaker bound and played like Deepgram audio. The
+# render happens before the playback lock, so a queued line is ready by the time
+# the line ahead of it ends. Returns 1, leaving the text in place, when the line
+# should be spoken by `say` directly: at the default level, with no player, or
+# when the render left nothing to play.
+# shellcheck disable=SC2329 # Reached only through say_speaker.
+say_at_volume() {  # <textfile>
+  local textfile=$1 rendered
+  if [ "$SPEAK_VOLUME" = 100 ] || [ ! -x "$AFPLAY_BIN" ]; then
+    return 1
+  fi
+  rendered=$(mktemp "${TMPDIR:-/tmp}/fm-speak-say.XXXXXX") || return 1
+  mv "$rendered" "$rendered.aiff" || { rm -f "$rendered"; return 1; }
+  rendered=$rendered.aiff
+  if [ -n "$CFG_VOICE" ]; then
+    run_bounded "$SPEAKER_TIMEOUT" /dev/null /dev/null \
+      "$SAY_BIN" -v "$CFG_VOICE" -o "$rendered" -f "$textfile" || true
+  else
+    run_bounded "$SPEAKER_TIMEOUT" /dev/null /dev/null \
+      "$SAY_BIN" -o "$rendered" -f "$textfile" || true
+  fi
+  if [ ! -s "$rendered" ]; then
+    rm -f "$rendered"
+    return 1
+  fi
+  audio_speaker "$AFPLAY_BIN" "$rendered" "$textfile"
+}
+
+# Every afplay handoff goes through here, so the set volume reaches Deepgram
+# audio, kept audio and a rendered `say` line alike. The default level passes no
+# volume at all, leaving playback exactly as it was before levels existed.
 # shellcheck disable=SC2329 # Invoked by name through detach_speaker.
 audio_speaker() {  # <player> <audio> [textfile]
   local player=$1 audio=$2 textfile=${3:-}
-  play_serialized "$player" "$audio"
+  if [ "$SPEAK_VOLUME" = 100 ]; then
+    play_serialized "$player" "$audio"
+  else
+    play_serialized "$player" -v "$(volume_gain)" "$audio"
+  fi
   rm -f "$audio"
   [ -z "$textfile" ] || rm -f "$textfile"
 }
 
 speak_say_detached() {  # <textfile>
+  if [ "$SPEAK_VOLUME" != 100 ] && [ ! -x "$AFPLAY_BIN" ]; then
+    note "no afplay at $AFPLAY_BIN; this line plays at the system volume, not at $SPEAK_VOLUME%"
+  fi
   detach_speaker say_speaker "$1"
 }
 
@@ -519,7 +582,7 @@ speak_say_detached() {  # <textfile>
 # caller's turn is never held open by audio. Returns 0 when Deepgram accepted
 # the line, 1 when the caller should use `say`.
 speak_deepgram_or_fail() {  # <textfile>
-  local textfile=$1 key audio status=0 afplay_bin out err
+  local textfile=$1 key audio status=0 out err
   key=$(fm_deepgram_api_key)
   [ -n "$key" ] || return 1
   [ -x "$DEEPGRAM_TTS" ] || {
@@ -543,14 +606,13 @@ speak_deepgram_or_fail() {  # <textfile>
     note "Deepgram TTS failed; falling back to macOS say"
     return 1
   fi
-  afplay_bin="${FM_DEEPGRAM_AFPLAY:-/usr/bin/afplay}"
-  if [ ! -x "$afplay_bin" ]; then
+  if [ ! -x "$AFPLAY_BIN" ]; then
     rm -f "$audio"
-    note "no afplay at $afplay_bin; falling back to say"
+    note "no afplay at $AFPLAY_BIN; falling back to say"
     return 1
   fi
   keep_audio "$audio"
-  detach_speaker audio_speaker "$afplay_bin" "$audio" "$textfile"
+  detach_speaker audio_speaker "$AFPLAY_BIN" "$audio" "$textfile"
   return 0
 }
 
@@ -598,6 +660,40 @@ set_muted() {  # true|false
   else
     rm -f "$MUTE_FILE" || die "cannot clear mute in $MUTE_FILE"
   fi
+}
+
+# The set level as a whole percentage. An absent or unreadable level is the
+# default, so a damaged file can never silence or blast a line.
+speak_volume() {
+  local level
+  level=$(cat "$VOLUME_FILE" 2>/dev/null) || level=
+  level=$(printf '%s' "$level" | tr -d '[:space:]')
+  case "$level" in
+    ''|*[!0-9]*) level=100 ;;
+  esac
+  level=$((10#$level))
+  [ "$level" -le 200 ] || level=100
+  printf '%s\n' "$level"
+}
+
+set_volume() {  # <percent>
+  local level=$1 tmp
+  case "$level" in
+    ''|*[!0-9]*) die "--volume needs a whole percentage from 0 to 200: $level" ;;
+  esac
+  [ "${#level}" -le 3 ] && [ "$((10#$level))" -le 200 ] \
+    || die "--volume needs a whole percentage from 0 to 200: $level"
+  level=$((10#$level))
+  mkdir -p "$STATE" 2>/dev/null || die "cannot create the state directory: $STATE"
+  tmp=$(mktemp "$STATE/.speak-volume.XXXXXX") || die "cannot record the volume in $STATE"
+  printf '%s\n' "$level" > "$tmp"
+  mv -f "$tmp" "$VOLUME_FILE" || { rm -f "$tmp"; die "cannot record the volume in $VOLUME_FILE"; }
+}
+
+# afplay's volume for the set level: 1 is the system volume.
+# shellcheck disable=SC2329 # Reached only through audio_speaker.
+volume_gain() {
+  awk -v level="$SPEAK_VOLUME" 'BEGIN { printf "%.2f\n", level / 100 }'
 }
 
 # --- reply history ----------------------------------------------------------
@@ -703,11 +799,10 @@ list_history() {
 # lock cannot take the audio from under it. Returns 1 when there is nothing to
 # play this way and the caller should speak the text instead.
 play_kept_audio() {  # <entry-dir>
-  local entry=$1 player audio
+  local entry=$1 audio
   [ -z "$CFG_VOICE" ] || return 1
   [ -s "$entry/audio.mp3" ] || return 1
-  player="${FM_DEEPGRAM_AFPLAY:-/usr/bin/afplay}"
-  [ -x "$player" ] || return 1
+  [ -x "$AFPLAY_BIN" ] || return 1
   audio=$(mktemp "${TMPDIR:-/tmp}/fm-speak-dg.XXXXXX") || return 1
   mv "$audio" "$audio.mp3" || { rm -f "$audio"; return 1; }
   audio=$audio.mp3
@@ -715,7 +810,7 @@ play_kept_audio() {  # <entry-dir>
     rm -f "$audio"
     return 1
   fi
-  detach_speaker audio_speaker "$player" "$audio"
+  detach_speaker audio_speaker "$AFPLAY_BIN" "$audio"
 }
 
 # --- configured voice -------------------------------------------------------
@@ -918,12 +1013,17 @@ main() {
     case "$1" in
       --help|-h) usage; exit 0 ;;
       --dry-run) dry_run=true; shift ;;
-      --stop|--repeat|--history|--replay|--mute|--unmute|--muted)
+      --stop|--repeat|--history|--replay|--mute|--unmute|--muted|--volume)
         [ -z "$control" ] || {
-          note "only one of --stop, --repeat, --history, --replay, --mute, --unmute, --muted"
+          note "only one of --stop, --repeat, --history, --replay, --mute, --unmute, --muted, --volume"
           exit 1
         }
         control=${1#--}
+        if [ "$control" = volume ] && [ "$#" -ge 2 ]; then
+          VOLUME_ARG=$2
+          VOLUME_SET=true
+          shift
+        fi
         if [ "$control" = replay ]; then
           [ "$#" -ge 2 ] || { note "--replay needs a reply number from --history"; exit 1; }
           REPLAY_NUMBER=$2
@@ -941,6 +1041,7 @@ main() {
   done
 
   STOP_GEN_AT_START=$(stop_generation)
+  SPEAK_VOLUME=$(speak_volume)
   if [ -n "$control" ]; then
     [ "$#" -eq 0 ] && [ "$dry_run" = false ] \
       || { note "--$control takes no other text and no --dry-run"; exit 1; }
@@ -949,6 +1050,13 @@ main() {
       mute) set_muted true ;;
       unmute) set_muted false ;;
       muted) if is_muted; then printf 'muted\n'; else printf 'unmuted\n'; fi ;;
+      volume)
+        if [ "$VOLUME_SET" = true ]; then
+          set_volume "$VOLUME_ARG"
+        else
+          printf '%s\n' "$SPEAK_VOLUME"
+        fi
+        ;;
       history) list_history ;;
       repeat|replay)
         require_positive_int FM_SPEAK_TIMEOUT "$SPEAKER_TIMEOUT"

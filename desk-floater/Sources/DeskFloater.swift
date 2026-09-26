@@ -582,6 +582,90 @@ struct ShotStack {
     }
 }
 
+/// The spoken voice's level, as `bin/fm-speak.sh --volume` keeps it: a whole
+/// percentage of the Mac's own output volume, where 100 is as loud as
+/// everything else and anything above it is extra gain for the voice alone.
+enum VoiceVolume {
+    static let range = 0...200
+    static let standard = 100
+
+    static func clamp(_ level: Int) -> Int {
+        min(max(level, range.lowerBound), range.upperBound)
+    }
+
+    /// Reads `--volume`'s output; anything else is not a level.
+    static func parse(_ out: String?) -> Int? {
+        guard let text = out?.trimmingCharacters(in: .whitespacesAndNewlines),
+              let level = Int(text), range.contains(level) else {
+            return nil
+        }
+        return level
+    }
+}
+
+/// What a click on the speaker button does: a plain click mutes or unmutes,
+/// while a right-click or a Control-click - the Mac's secondary click - opens
+/// the voice-volume control.
+enum SpeakerClick: Equatable {
+    case mute
+    case volume
+
+    static func route(_ type: NSEvent.EventType, modifiers: NSEvent.ModifierFlags) -> SpeakerClick? {
+        switch type {
+        case .rightMouseDown:
+            return .volume
+        case .leftMouseDown:
+            return modifiers.contains(.control) ? .volume : .mute
+        default:
+            return nil
+        }
+    }
+}
+
+/// Takes the speaker button's clicks in AppKit, because SwiftUI has no
+/// secondary-click gesture: every click is routed through SpeakerClick, so a
+/// Control-click opens the volume control instead of also muting.
+final class SpeakerClickView: NSView {
+    var onMute: (() -> Void)?
+    var onVolume: (() -> Void)?
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func mouseDown(with event: NSEvent) {
+        dispatch(event)
+    }
+
+    override func rightMouseDown(with event: NSEvent) {
+        dispatch(event)
+    }
+
+    private func dispatch(_ event: NSEvent) {
+        switch SpeakerClick.route(event.type, modifiers: event.modifierFlags) {
+        case .mute: onMute?()
+        case .volume: onVolume?()
+        case nil: break
+        }
+    }
+}
+
+struct SpeakerClickCatcher: NSViewRepresentable {
+    let help: String
+    let onMute: () -> Void
+    let onVolume: () -> Void
+
+    func makeNSView(context: Context) -> SpeakerClickView {
+        let view = SpeakerClickView()
+        updateNSView(view, context: context)
+        return view
+    }
+
+    func updateNSView(_ view: SpeakerClickView, context: Context) {
+        view.onMute = onMute
+        view.onVolume = onVolume
+        view.toolTip = help
+    }
+}
+
 /// One reply from the speak-out history, as `bin/fm-speak.sh --history` lists it.
 struct RecentReply: Identifiable, Equatable {
     let id: Int
@@ -610,6 +694,9 @@ final class FloaterModel: ObservableObject {
     @Published var purpose: Purpose = .firstmate
     @Published var status: String = "Hold to talk"
     @Published var muted = false
+    /// The spoken voice's level as a percentage of the system volume.
+    @Published var voiceVolume = VoiceVolume.standard
+    @Published var showingVolume = false
     @Published var recent: [RecentReply] = []
     @Published var showingRecent = false
     @Published var keysTrusted = false {
@@ -941,6 +1028,36 @@ final class FloaterModel: ObservableObject {
         }
     }
 
+    /// Opens or closes the voice-volume control (right-click or Control-click
+    /// on the speaker button).
+    func toggleVolume() {
+        showingVolume.toggle()
+        if showingVolume {
+            refreshVolume()
+        }
+    }
+
+    func refreshVolume() {
+        Task.detached(priority: .userInitiated) { [repoRoot, fmHome] in
+            let level = VoiceVolume.parse(Self.speak(repoRoot: repoRoot, fmHome: fmHome, args: ["--volume"]))
+            await MainActor.run {
+                if let level, self.voiceVolume != level {
+                    self.voiceVolume = level
+                }
+            }
+        }
+    }
+
+    /// Keeps the level for the next spoken line; the system volume is never
+    /// touched.
+    func setVoiceVolume(_ level: Int) {
+        let level = VoiceVolume.clamp(level)
+        voiceVolume = level
+        runSpeak(["--volume", String(level)]) { ok in
+            ok ? "Voice at \(level)%" : "Volume not saved"
+        }
+    }
+
     func refreshMute() {
         Task.detached(priority: .utility) { [repoRoot, fmHome] in
             let out = Self.speak(repoRoot: repoRoot, fmHome: fmHome, args: ["--muted"])
@@ -1245,12 +1362,7 @@ struct FloaterView: View {
                         control("arrow.counterclockwise", help: "Repeat the last reply", action: model.repeatLast)
                     }
                     HStack(spacing: controlSpacing) {
-                        control(
-                            model.muted ? "speaker.slash.fill" : "speaker.wave.2.fill",
-                            help: model.muted ? "Voice muted - click to unmute" : "Mute voice",
-                            tint: model.muted ? Color(red: 0.85, green: 0.45, blue: 0.10) : nil,
-                            action: model.toggleMute
-                        )
+                        speakerButton
                         shotButton
                     }
                 }
@@ -1264,6 +1376,9 @@ struct FloaterView: View {
                 .truncationMode(.tail)
                 .frame(width: rowWidth)
                 .allowsHitTesting(false)
+            if model.showingVolume {
+                volumeControl
+            }
             if model.showingRecent {
                 recentList
             }
@@ -1285,6 +1400,69 @@ struct FloaterView: View {
         } action: { size in
             mover.fit(size)
         }
+    }
+
+    /// Mutes on a click; a right-click or Control-click opens the voice-volume
+    /// control below the row.
+    private var speakerButton: some View {
+        let help = model.muted
+            ? "Voice muted - click to unmute; right-click for voice volume"
+            : "Mute voice; right-click or Control-click for voice volume"
+        return control(
+            model.muted ? "speaker.slash.fill" : "speaker.wave.2.fill",
+            help: help,
+            tint: model.muted ? Color(red: 0.85, green: 0.45, blue: 0.10) : nil,
+            action: model.toggleMute
+        )
+        .overlay {
+            SpeakerClickCatcher(help: help, onMute: model.toggleMute, onVolume: model.toggleVolume)
+        }
+        .accessibilityAction(named: "Voice volume", model.toggleVolume)
+    }
+
+    /// The voice's own level beside everything else on the Mac: 100% is the
+    /// system volume, lower is quieter than other audio, higher is louder.
+    private var volumeControl: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 5) {
+                Image(systemName: "speaker.wave.1.fill")
+                    .font(.system(size: 8))
+                Slider(
+                    value: Binding(
+                        get: { Double(model.voiceVolume) },
+                        set: { model.voiceVolume = VoiceVolume.clamp(Int($0.rounded())) }
+                    ),
+                    in: Double(VoiceVolume.range.lowerBound)...Double(VoiceVolume.range.upperBound),
+                    step: 5
+                ) { editing in
+                    if !editing {
+                        model.setVoiceVolume(model.voiceVolume)
+                    }
+                }
+                .controlSize(.mini)
+                .accessibilityLabel("Voice volume")
+                Text("\(model.voiceVolume)%")
+                    .font(.system(size: 9, weight: .semibold).monospacedDigit())
+                    .frame(width: 32, alignment: .trailing)
+            }
+            HStack(spacing: 4) {
+                Text("Voice vs system volume")
+                    .font(.system(size: 8))
+                    .foregroundStyle(.white.opacity(0.7))
+                Spacer(minLength: 0)
+                if model.voiceVolume != VoiceVolume.standard {
+                    Button("Reset") { model.setVoiceVolume(VoiceVolume.standard) }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 8, weight: .semibold))
+                        .help("Back to the system volume (100%)")
+                }
+            }
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 5)
+        .padding(.vertical, 3)
+        .background(RoundedRectangle(cornerRadius: 5).fill(Color.white.opacity(0.12)))
+        .frame(width: 180)
     }
 
     /// The dropdown arrow to the right of the controls, centred beside them and

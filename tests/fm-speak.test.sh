@@ -1112,13 +1112,24 @@ done
 printf 'synth: %s\n' "\$*" >> "$home/deepgram.log"
 printf 'audio of %s' "\$*" > "\$out"
 EOF
+  install_afplay "$home" "$linger"
+  chmod +x "$home/deepgram-tts"
+}
+
+# The player records its options apart from what it played, so a case can
+# assert the volume it was handed without disturbing the playback log.
+install_afplay() {  # <home> [linger-seconds]
+  local home=$1 linger=${2:-0}
   cat > "$home/afplay" <<EOF
 #!/usr/bin/env bash
-printf 'start: %s\n' "\$(cat "\$1")" >> "$home/played.log"
+file=
+for a in "\$@"; do file=\$a; done
+printf 'argv: %s\n' "\$*" >> "$home/afplay.log"
+printf 'start: %s\n' "\$(cat "\$file")" >> "$home/played.log"
 sleep $linger
-printf 'end: %s\n' "\$(cat "\$1")" >> "$home/played.log"
+printf 'end: %s\n' "\$(cat "\$file")" >> "$home/played.log"
 EOF
-  chmod +x "$home/deepgram-tts" "$home/afplay"
+  chmod +x "$home/afplay"
 }
 
 speak_dg() {  # <home> <env-file> <args...>
@@ -1234,6 +1245,118 @@ test_stop_cuts_a_replay_of_kept_audio() {
   pass "fm-speak: stop cuts a replay of kept audio"
 }
 
+# The desk floater's voice-volume control: a per-home level, as a percentage
+# of the system volume, that every playback path applies without touching the
+# system volume itself.
+test_the_volume_is_kept_per_home_and_refused_out_of_range() {
+  local home out code bad
+  home=$(new_home volume-level "enabled = true")
+  out=$(speak "$home" --volume) || fail "fm-speak: --volume failed"
+  assert_equals 100 "$out" "a fresh home must read as the system volume"
+  speak "$home" --volume 40 || fail "fm-speak: --volume 40 failed"
+  out=$(speak "$home" --volume) || fail "fm-speak: --volume failed"
+  assert_equals 40 "$out" "a set level must read back"
+  speak "$home" --volume 150 || fail "fm-speak: --volume 150 failed"
+  assert_equals 150 "$(speak "$home" --volume)" "headroom above the system volume must be allowed"
+
+  for bad in 201 -5 loud 1.5 ''; do
+    code=0
+    out=$(speak "$home" --volume "$bad" 2>&1) || code=$?
+    expect_code 1 "$code" "--volume '$bad' must be refused"
+    assert_contains "$out" "0 to 200" "the refusal must name the range"
+  done
+  assert_equals 150 "$(speak "$home" --volume)" "a refused level must leave the set one alone"
+
+  code=0
+  out=$(speak "$home" --volume 50 "some text" 2>&1) || code=$?
+  expect_code 1 "$code" "--volume must take no text to speak"
+  printf 'garbage\n' > "$home/state/speak-volume"
+  assert_equals 100 "$(speak "$home" --volume)" "a damaged level must read as the default"
+  pass "fm-speak: the volume is kept per home and refused out of range"
+}
+
+test_a_set_volume_reaches_deepgram_and_kept_audio() {
+  local home
+  home=$(new_home volume-deepgram "enabled = true")
+  install_shaper "$home" >/dev/null
+  install_speaker "$home" >/dev/null
+  install_deepgram "$home"
+
+  speak_dg "$home" "$home/.env" "At the system volume." >/dev/null 2>&1 || fail "fm-speak: the line failed"
+  wait_for_content "$home/played.log" "end: audio of At the system volume." \
+    "fm-speak: the default-level line never played"
+  assert_no_grep "argv: -v" "$home/afplay.log" "the default level must hand the player no volume"
+
+  speak "$home" --volume 40 || fail "fm-speak: --volume 40 failed"
+  speak_dg "$home" "$home/.env" "Quieter than the rest." >/dev/null 2>&1 || fail "fm-speak: the line failed"
+  wait_for_content "$home/played.log" "end: audio of Quieter than the rest." \
+    "fm-speak: the quieter line never played"
+  assert_grep "argv: -v 0.40 " "$home/afplay.log" "a Deepgram line must play at the set level"
+
+  : > "$home/afplay.log"
+  speak "$home" --volume 175 || fail "fm-speak: --volume 175 failed"
+  speak_dg "$home" "$home/.env" --repeat >/dev/null 2>&1 || fail "fm-speak: --repeat failed"
+  wait_for_lines "$home/afplay.log" 1 "fm-speak: the kept audio never played"
+  assert_grep "argv: -v 1.75 " "$home/afplay.log" "kept audio must play at the level set since it was kept"
+  assert_equals 2 "$(count_lines "$home/deepgram.log")" "a repeat must still not synthesize again"
+  pass "fm-speak: a set volume reaches Deepgram audio and kept audio"
+}
+
+# `say` has no volume of its own: at a set level the line is rendered to audio
+# and played through the player at that level; with no player it is spoken at
+# the system volume and the caller is told so.
+install_rendering_speaker() {  # <home>
+  local home=$1
+  cat > "$home/speaker" <<EOF
+#!/usr/bin/env bash
+out= text=
+while [ "\$#" -gt 0 ]; do
+  case "\$1" in
+    -o) out=\$2; shift 2 ;;
+    -f) text=\$(cat "\$2"); shift 2 ;;
+    *) shift ;;
+  esac
+done
+if [ -n "\$out" ]; then
+  printf 'rendered: %s\n' "\$text" >> "$home/spoken.log"
+  printf 'said %s' "\$text" > "\$out"
+else
+  printf 'spoken: %s\n' "\$text" >> "$home/spoken.log"
+fi
+EOF
+  chmod +x "$home/speaker"
+}
+
+test_a_set_volume_reaches_a_say_line() {
+  local home out
+  home=$(new_home volume-say "enabled = true")
+  install_shaper "$home" >/dev/null
+  install_rendering_speaker "$home"
+  install_afplay "$home"
+
+  FM_DEEPGRAM_AFPLAY="$home/afplay" speak "$home" "At the system volume." >/dev/null 2>&1 \
+    || fail "fm-speak: the line failed"
+  wait_for_content "$home/spoken.log" "spoken: At the system volume." \
+    "fm-speak: a default-level say line must be spoken directly"
+  assert_absent "$home/afplay.log" "a default-level say line must not go through the player"
+
+  speak "$home" --volume 60 || fail "fm-speak: --volume 60 failed"
+  FM_DEEPGRAM_AFPLAY="$home/afplay" speak "$home" "Quieter than the rest." >/dev/null 2>&1 \
+    || fail "fm-speak: the line failed"
+  wait_for_content "$home/played.log" "end: said Quieter than the rest." \
+    "fm-speak: the rendered say line never played"
+  assert_grep "rendered: Quieter than the rest." "$home/spoken.log" "the say line must be rendered, not spoken"
+  assert_no_grep "spoken: Quieter than the rest." "$home/spoken.log" "the say line must not also be spoken"
+  assert_grep "argv: -v 0.60 " "$home/afplay.log" "the rendered say line must play at the set level"
+
+  out=$(FM_DEEPGRAM_AFPLAY="$home/no-afplay" speak "$home" "No player here." 2>&1) \
+    || fail "fm-speak: the line failed without a player"
+  assert_contains "$out" "system volume" "a line that cannot honour the level must say so"
+  wait_for_content "$home/spoken.log" "spoken: No player here." \
+    "fm-speak: with no player the say line must still be spoken"
+  pass "fm-speak: a set volume reaches a say line"
+}
+
 # Permission bits of a path, as octal digits, on macOS and Linux alike.
 mode_of() {  # <path>
   stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1"
@@ -1310,3 +1433,6 @@ test_a_replay_plays_kept_audio_without_synthesizing_again
 test_a_named_voice_is_kept_on_replay
 test_stop_cuts_a_replay_of_kept_audio
 test_the_reply_history_is_readable_only_by_its_owner
+test_the_volume_is_kept_per_home_and_refused_out_of_range
+test_a_set_volume_reaches_deepgram_and_kept_audio
+test_a_set_volume_reaches_a_say_line
