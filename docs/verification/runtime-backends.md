@@ -709,6 +709,18 @@ Issue #3436's recorded idle capture reproduced the cause on 2026-09-14: Grok 1.0
 The classifier now accepts only that exact three-column overhang (`FM_COMPOSER_GROK_TITLE_OVERHANG` in `bin/fm-composer-lib.sh`) carrying a typed `Grok <model> (<effort>)` title; the portable regressions feed the real capture through both the shared Herdr capability profile and `fm_backend_herdr_composer_state`, and prove idle is `empty`, typed content is `pending`, and an unrecognized oversized title remains `unknown`.
 Grok was not installed on the verification machine for this 2026-09-14 change, so the live guard still owes a refresh against the current release rather than treating the portable capture as current live evidence; the three-column width is not live-verified and may need adjustment if Grok's title rendering changes or scales with title length.
 This closes only #3436's idle-composer-misclassification symptom (Grok/Herdr composer read `unknown` instead of `empty`, blocking away-mode injection). The issue's second symptom - a leftover watcher never yielding and never being taken over or refused at AFK start - is unrelated to composer classification and is tracked separately in #2270, where #3436's reproduction serves as corroborating evidence.
+The selection dialog rule (THE SELECTION DIALOG RULE in `bin/fm-composer-lib.sh`) was verified on 2026-09-26 against claude 2.1.283 on tmux 3.6a, macOS arm64.
+Its permission prompt, AskUserQuestion dialog, and /model picker were captured with `tmux capture-pane -p -e` into `tests/fixtures/composer-claude-dialogs/`, and before the rule each read `pending` on every styled profile, while a permission prompt whose option text was ghost-coloured read `empty` under the tmux cursor read.
+`tests/fm-composer-lib.test.sh` now pins all three, plus the ghost-coloured variant, as `unknown` on every capability profile in both locales, with the idle composer from the same session still `empty`.
+The live guard above opens the real /model picker on the proven-idle Claude pane without submitting a prompt:
+
+```text
+ok - claude (2.1.283 (Claude Code)): real idle composer classifies empty
+ok - claude (2.1.283 (Claude Code)): the same idle pane read cursorless is not pending (verdict: empty)
+ok - claude (2.1.283 (Claude Code)): the real /model selection dialog classifies unknown, cursor and cursorless
+```
+
+That run was made from an untrusted task worktree, so Kimi 0.39.1 parked on its folder-trust dialog and failed its idle check as the guard intends; the results for the other harnesses above are not refreshed by it.
 Cursor is deliberately outside this cursor-anchored empty-composer matrix because its terminal cursor is parked outside the composer; tmux's Cursor-specific, process-identity-gated cursorless fallback is covered by the [Cursor Agent CLI](#cursor-agent-cli) section's separate live evidence and drift guard.
 
 `zellij action dump-screen --pane-id <id> --ansi` was verified at zellij 0.44.0 to preserve ANSI styling (real Claude Code rendered inside a zellij pane dumped `ESC[m` `❯` U+00A0 for its idle composer row), which is the capability the zellij composer classifier reads.

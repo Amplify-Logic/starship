@@ -19,7 +19,9 @@
 #     non-tmux backend performs and the one a vendor's own footer rows can
 #     break: a harness that renders a statusLine or mode hint below its
 #     composer must never make an idle composer read `pending`, because that
-#     verdict is what skips a steer's doorbell fleet-wide.
+#     verdict is what skips a steer's doorbell fleet-wide;
+#   - claude's real /model selection dialog, opened on that idle pane, reads
+#     `unknown` both ways, so no injector can type into it.
 #
 # Run explicitly with FM_COMPOSER_MATRIX_LIVE=1. No prompt is ever submitted
 # to any harness, so no model tokens are spent. An absent harness is reported
@@ -116,6 +118,7 @@ check_harness_idle_empty() {  # <name> <launch-cmd...>
     CHECKED=$((CHECKED + 1))
     pass "$name ($version): real idle composer classifies empty"
     check_harness_idle_cursorless "$name" "$version" "$SESSION:$win"
+    [ "$name" != claude ] || check_claude_selection_dialog "$version" "$SESSION:$win"
   fi
   tmux -L "$SOCKET" kill-window -t "$SESSION:$win" 2>/dev/null || true
 }
@@ -156,6 +159,47 @@ check_harness_idle_cursorless() {  # <name> <version> <target>
   else
     CHECKED=$((CHECKED + 1))
     pass "$name ($version): the same idle pane read cursorless is not pending (verdict: $verdict)"
+  fi
+}
+
+# A real claude selection dialog, opened on the proven-idle pane: the /model
+# picker marks its highlighted option with claude's own `❯` glyph followed by
+# the option number, the shape THE SELECTION DIALOG RULE in
+# bin/fm-composer-lib.sh refuses. Opening it runs a local command and submits
+# no prompt, so it spends no model tokens. Both the cursor read and the
+# cursorless read must answer `unknown`: `empty` would let the away-mode
+# injector type into the picker, and `pending` would let a join-the-draft
+# caller do the same, with Enter confirming the highlighted model either way.
+check_claude_selection_dialog() {  # <version> <target>
+  local version=$1 target=$2 screen='' verdict='' cursorless='' i=0 caps
+  caps=$(printf 'styled=1\ncursor=0\nidentity=1\nrows=0')
+  tmux -L "$SOCKET" send-keys -t "$target" -l '/model' 2>/dev/null || true
+  sleep 1
+  tmux -L "$SOCKET" send-keys -t "$target" Enter 2>/dev/null || true
+  while [ "$i" -lt 15 ]; do
+    screen=$(tmux -L "$SOCKET" capture-pane -p -t "$target" 2>/dev/null || true)
+    printf '%s\n' "$screen" | grep -qE '❯[[:space:]]*[0-9]+\.' && break
+    i=$((i + 1))
+    sleep 1
+  done
+  if ! printf '%s\n' "$screen" | grep -qE '❯[[:space:]]*[0-9]+\.'; then
+    FAILED=1
+    printf 'not ok - claude (%s): the /model picker never showed a numbered highlighted option\n' "$version" >&2
+    tmux -L "$SOCKET" send-keys -t "$target" Escape 2>/dev/null || true
+    return 0
+  fi
+  verdict=$(fm_tmux_composer_state "$target")
+  cursorless=$(fm_composer_classify_screen "$caps" "$(fm_tmux_composer_capture "$target")" '' probe-absent)
+  tmux -L "$SOCKET" send-keys -t "$target" Escape 2>/dev/null || true
+  if [ "$verdict" = unknown ] && [ "$cursorless" = unknown ]; then
+    CHECKED=$((CHECKED + 1))
+    pass "claude ($version): the real /model selection dialog classifies unknown, cursor and cursorless"
+  else
+    printf '# claude /model picker tail:\n' >&2
+    printf '%s\n' "$screen" | grep '[^[:space:]]' | tail -12 | sed 's/^/#   /' >&2
+    FAILED=1
+    printf 'not ok - claude (%s): the /model selection dialog read %s (cursor) and %s (cursorless), expected unknown for both\n' \
+      "$version" "${verdict:-unreadable}" "${cursorless:-unreadable}" >&2
   fi
 }
 

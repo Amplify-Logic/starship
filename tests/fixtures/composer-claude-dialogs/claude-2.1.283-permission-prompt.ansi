@@ -1,0 +1,29 @@
+
+[38;5;246m  ⎿  SessionStart:startup hook error[39m
+[38;5;246m  ⎿  Failed with non-blocking status code: /bin/sh: ${CLAUDE_PLUGIN_ROOT}/hooks/run-hook.cmd: No [39m
+     [38;5;246msuch file or directory[39m
+
+[38;5;239m[48;5;237m❯[39m [38;5;231m/model[39m [49m
+[38;5;246m  ⎿  [39mKept model as [38;5;153mOpus 5.5 (1M context)[39m
+
+[38;5;239m[48;5;237m❯ [38;5;231mRun this exact bash command with the Bash tool: curl -s https://example.com -o page.html[39m
+
+[38;5;246m[49m⏺[39m [1mBash[0m(curl -s https://example.com -o page.html)
+[38;5;246m  ⎿  Waiting…[39m
+
+[38;5;153m────────────────────────────────────────────────────────────────────────────────────────────────────
+[39m [1m[38;5;153mBash command[0m
+ [1mTip: auto mode handles these prompts for you — choose "switch to auto mode" below[0m
+
+   curl -s https://example.com -o page.html
+   [38;5;246mDownload[39m [38;5;246mexample.com[39m [38;5;246mto[39m [38;5;246mpage.html[39m
+
+ This command requires approval
+
+ Do you want to proceed?
+ [38;5;153m❯[39m [38;5;246m1.[39m [38;5;153mYes[39m
+   [38;5;246m2.[39m Yes, and don’t ask again for: curl *
+   [38;5;246m3.[39m Yes, and switch to auto mode[38;5;246m ·[39m [38;5;246mauto[39m [38;5;246mmode[39m [38;5;246mhandles[39m [38;5;246mthese[39m [38;5;246mprompts[39m [38;5;246mfor[39m [38;5;246myou[39m
+   [38;5;246m4.[39m No
+
+ [38;5;246mEsc[39m [38;5;246mto[39m [38;5;246mcancel[39m [38;5;246m·[39m [38;5;246mTab[39m [38;5;246mto[39m [38;5;246mamend[39m

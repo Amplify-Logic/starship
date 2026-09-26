@@ -300,8 +300,8 @@ pid_within() {  # <pid> <root>
 
 # True when <target>'s screen shows a selection dialog (a permission prompt, a
 # question, a picker), where typed words would pick an option. The shared
-# composer classifier reads a pointer on a numbered option as a bare agent
-# prompt holding text, so this is checked here. An unreadable screen counts.
+# composer classifier already refuses a pointer on a numbered option; this
+# also catches the dialog footers it does not read. An unreadable screen counts.
 shows_selection_dialog() {  # <backend> <target>
   local screen
   screen=$(fm_backend_capture "$1" "$2" "${FM_COMPOSER_CAPTURE_LINES:-20}" 2>/dev/null) || return 0
