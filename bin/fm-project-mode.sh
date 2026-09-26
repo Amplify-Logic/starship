@@ -28,10 +28,11 @@
 #   - <name> [<mode> +yolo] - <desc> (added <date>)                  -> <mode> on fm/
 #   - <name> [<mode> +yolo branch=<prefix>] - <desc> (added <date>)  -> <mode> <yolo> <prefix>
 #   - <name> [<mode> forge=gerrit] - <desc> (added <date>)           -> <mode> off, --forge gerrit
+#   - <name> [<mode> alias=<other>] - <desc> (added <date>)          -> same posture for <name> and <other>
 #   <name> may contain spaces; it ends at the literal " [" or " - " that follows it.
-#   Bracket tokens are order-independent: +yolo, branch=<prefix>, and forge=<value>
-#   are recognized by their own shape wherever they appear, and whichever token is
-#   left over is the mode. <prefix> must not contain a space; an empty override
+#   Bracket tokens are order-independent: +yolo, branch=<prefix>, forge=<value>,
+#   and alias=<other> are recognized by their own shape wherever they appear, and
+#   whichever token is left over is the mode. <prefix> must not contain a space; an empty override
 #   ("branch=") resolves to "" for a bare "<task-id>" ship branch instead of the
 #   legacy "fm/<task-id>".
 #
@@ -52,6 +53,11 @@
 #   third-party repo that does not use this tooling. Query it with
 #   --branch-prefix; it never appears in the default "<mode> <yolo>" output, so
 #   existing mechanical callers are unaffected by its presence.
+# alias=<other> (orthogonal, repeatable) = a second name the row answers to, for
+#   a project whose clone directory differs from its registered name (callers
+#   such as bin/fm-spawn.sh look a project up by its directory basename). It
+#   cannot contain a space, and a row registered under the exact name always
+#   wins over another row's alias.
 # forge (orthogonal, and orthogonal to yolo too) = which forge the project's
 #   remote actually is, never inferred from mode, remote name, host, or protocol.
 #   `none` means a forge whose pull requests and checks no-mistakes already
@@ -76,6 +82,12 @@
 # tell a conditional policy apart from a flat mode sees "no-mistakes-prod-only"
 # itself. Not combined with --branch-prefix, which has no conditional-policy leg.
 #
+# --line prints the registry row the name resolves to, verbatim, by the same
+# resolution as the posture (exact name first, else an alias=<name> match), and
+# prints nothing when no row matches or the registry is absent. The seeding
+# scripts copy that row into a seeded home, so the row they carry is always the
+# one whose posture they resolved.
+#
 # An unknown/missing project or unknown mode falls back to "no-mistakes off" (or
 # "fm/" under --branch-prefix) and warns to stderr, so a typo never silently
 # drops the gate. Other annotation tokens are ignored, as they always were, keyed
@@ -93,7 +105,7 @@
 # to the forge binding, so it prints even when the forge token is malformed;
 # every path that reads the forge binding (default, --forge, and spawn's
 # forge-agreement check) still refuses.
-# Usage: fm-project-mode.sh [--raw|--branch-prefix|--forge] <project-name>
+# Usage: fm-project-mode.sh [--raw|--branch-prefix|--forge|--line] <project-name>
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -104,14 +116,17 @@ REG="$DATA/projects.md"
 RAW=0
 BRANCH_PREFIX_QUERY=0
 WANT_FORGE=0
+LINE_QUERY=0
 case "${1:-}" in
   --raw) RAW=1; shift ;;
   --branch-prefix) BRANCH_PREFIX_QUERY=1; shift ;;
   --forge) WANT_FORGE=1; shift ;;
+  --line) LINE_QUERY=1; shift ;;
 esac
-NAME=${1:?usage: fm-project-mode.sh [--raw|--branch-prefix|--forge] <project-name>}
+NAME=${1:?usage: fm-project-mode.sh [--raw|--branch-prefix|--forge|--line] <project-name>}
 
 if [ ! -f "$REG" ]; then
+  [ "$LINE_QUERY" -eq 0 ] || exit 0
   echo "warn: no registry at $REG; defaulting $NAME to no-mistakes off" >&2
   if [ "$BRANCH_PREFIX_QUERY" -eq 1 ]; then
     echo "fm/"
@@ -123,9 +138,10 @@ fi
 # `forge`, then "posture <mode> <yolo> <branch-prefix> <forge>" (branch-prefix is
 # the raw prefix, defaulting to "fm/"; forge is `none` or the whole `forge=<value>`
 # token, so an empty value survives the split), or nothing if the project is
-# absent. Every other token beside the mode is ignored, exactly as before either
-# annotation existed.
-parsed=$(awk -v n="$NAME" '
+# absent. Under --line it prints the matched raw row instead. alias=<other>
+# tokens only widen which rows match. Every other token
+# beside the mode is ignored, exactly as before any annotation existed.
+parsed=$(awk -v n="$NAME" -v want_line="$LINE_QUERY" '
   function dist(x, y,   i, j, lx, ly, d, c, v) {
     lx = length(x); ly = length(y);
     for (i=0; i<=lx; i++) d[i,0] = i;
@@ -139,47 +155,78 @@ parsed=$(awk -v n="$NAME" '
     }
     return d[lx,ly];
   }
-  {
-    # Exact whole-name match on the raw line text (never a regex, so a name
-    # containing dots or brackets is compared literally): the line must start
-    # with "- " n, and the text right after the name must be empty, or start
-    # with " [" or " - ", so a name that is a leading prefix of a longer
-    # registered name does not match that longer row.
-    prefix = "- " n; plen = length(prefix);
-    if (substr($0, 1, plen) != prefix) next
-    after = substr($0, plen + 1);
-    if (after != "" && substr(after, 1, 2) != " [" && substr(after, 1, 3) != " - ") next
-    mode="no-mistakes"; yolo="off"; branch="fm/"; forge="none";
+  # Parse the bracket annotation of one row into the global posture fields; returns
+  # the space-joined alias=<name> values it registers.
+  function parse(after,   s, nk, rest, i, k, a, j, key, e, mode_set, aliases) {
+    mode="no-mistakes"; yolo="off"; branch="fm/"; forge="none"; near=""; aliases="";
     if (substr(after, 1, 2) == " [") {
       s="";
       nk = split(after, rest, " ");
       for (i=1; i<=nk; i++) { s = s (s==""?"":" ") rest[i]; if (rest[i] ~ /\]$/) break }
       gsub(/^\[|\]$/, "", s);           # strip the surrounding brackets
       k = split(s, a, " ");
-      # Tokens are order-independent: +yolo, branch=<prefix>, and forge=<value>
-      # are recognized by their own shape wherever they appear, keyed tokens
-      # that are neither are ignored (with a near-miss warning for the forge
-      # spelling), and the first token left over is the mode.
+      # Tokens are order-independent: +yolo, branch=<prefix>, forge=<value>, and
+      # alias=<name> are recognized by their own shape wherever they appear,
+      # keyed tokens that are none of those are ignored (with a near-miss
+      # warning for the forge spelling), and the first token left over is the mode.
       mode_set = 0
       for (j=1; j<=k; j++) {
         if (a[j]=="+yolo") { yolo="on"; continue }
         if (a[j] ~ /^branch=/) { branch = substr(a[j], 8); continue }
         if (a[j] ~ /^forge=/) { forge = a[j]; continue }
+        if (a[j] ~ /^alias=./) { aliases = aliases " " substr(a[j], 7); continue }
         if (a[j] ~ /^[^=]+=/) {
           key = substr(a[j], 1, index(a[j], "=") - 1);
           e = dist(key, "forge");
-          if (e >= 1 && e <= 2) print "near", a[j];
+          if (e >= 1 && e <= 2) near = near "near " a[j] "\n";
           if (mode_set == 0) { mode = a[j]; mode_set = 1 }
           continue
         }
         if (a[j] != "" && mode_set == 0) { mode = a[j]; mode_set = 1 }
       }
     }
-    # branch is printed LAST: an empty branch= override must survive as an
-    # empty final field, which only holds when nothing follows it.
-    print "posture", mode, yolo, forge, branch; exit
+    return aliases " "
+  }
+  # branch is printed LAST: an empty branch= override must survive as an
+  # empty final field, which only holds when nothing follows it.
+  function emit() { printf "%s", near; print "posture", mode, yolo, forge, branch }
+  {
+    if (substr($0, 1, 2) != "- ") next
+    # Exact whole-name match on the raw line text (never a regex, so a name
+    # containing dots or brackets is compared literally): the line must start
+    # with "- " n, and the text right after the name must be empty, or start
+    # with " [" or " - ", so a name that is a leading prefix of a longer
+    # registered name does not match that longer row.
+    prefix = "- " n; plen = length(prefix);
+    if (substr($0, 1, plen) == prefix) {
+      after = substr($0, plen + 1);
+      if (after == "" || substr(after, 1, 2) == " [" || substr(after, 1, 3) == " - ") {
+        found = 1
+        if (want_line) { print; exit }
+        parse(after); emit(); exit
+      }
+    }
+    # An alias=<name> token lets a row answer for a second name, such as the
+    # directory a clone lives in when it differs from the registered name. A
+    # registered name always wins over an alias on another row, so the first alias
+    # match is held until the whole registry has been read.
+    if (alias_row != "" || n ~ / /) next
+    b = index($0, " ["); d = index($0, " - ");
+    if (b == 0 || (d > 0 && d < b)) next
+    after = substr($0, b);
+    if (index(parse(after), " " n " ") > 0) { alias_row = after; alias_line = $0 }
+  }
+  END {
+    if (found || alias_row == "") exit
+    if (want_line) { print alias_line; exit }
+    parse(alias_row); emit()
   }
 ' "$REG")
+
+if [ "$LINE_QUERY" -eq 1 ]; then
+  [ -z "$parsed" ] || printf '%s\n' "$parsed"
+  exit 0
+fi
 
 if [ -z "$parsed" ]; then
   echo "warn: project \"$NAME\" not in registry; defaulting to no-mistakes off" >&2

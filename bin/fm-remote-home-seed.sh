@@ -192,7 +192,7 @@ EOF
     || die "project $project has no origin; pass $project=<origin-url> so the remote host can clone it"
   fm_project_origin_safe "$ORIGIN" \
     || die "project $project origin is not an accepted clone URL: $ORIGIN"
-  REGISTRY_LINE=$(awk -v p="$project" '$1 == "-" && $2 == p { print; exit }' "$DATA/projects.md" 2>/dev/null || true)
+  REGISTRY_LINE=$(FM_HOME="$FM_HOME" FM_DATA_OVERRIDE="$DATA" "$SCRIPT_DIR/fm-project-mode.sh" --line "$project")
   [ -n "$REGISTRY_LINE" ] || die "project $project has no registry record"
   NAME_B64=$(printf '%s' "$project" | encode)
   ORIGIN_B64=$(printf '%s' "$ORIGIN" | encode)

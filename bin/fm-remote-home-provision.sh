@@ -220,7 +220,10 @@ EOF
   [ -n "$ORIGIN" ] || die "project $NAME has no origin"
   fm_project_origin_safe "$ORIGIN" || die "project $NAME origin is not an accepted clone URL: $ORIGIN"
   case "$MODE" in no-mistakes|direct-PR) ;; *) die "project $NAME has unsupported remote mode: $MODE" ;; esac
-  case "$REGISTRY_LINE" in "- $NAME "*) ;; *) die "project $NAME registry line is malformed" ;; esac
+  mkdir -p "$TMP/registry-check"
+  printf '%s\n' "$REGISTRY_LINE" > "$TMP/registry-check/projects.md"
+  [ "$(FM_DATA_OVERRIDE="$TMP/registry-check" "$SCRIPT_DIR/fm-project-mode.sh" --line "$NAME")" = "$REGISTRY_LINE" ] \
+    || die "project $NAME registry line is malformed"
   DEST="$FM_HOME/projects/$NAME"
   if [ -e "$DEST" ] || [ -L "$DEST" ]; then
     [ -d "$DEST" ] && [ ! -L "$DEST" ] && [ -d "$DEST/.git" ] \

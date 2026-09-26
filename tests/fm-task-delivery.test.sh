@@ -522,6 +522,48 @@ EOF
   pass "fm-project-mode: the registry lookup matches a whole multi-word name, not just its first token"
 }
 
+# A project whose clone directory differs from its registered name (the
+# firstmate repo registered as "firstmate" but cloned as "starship") must still
+# resolve its standing posture when looked up by that directory name, rather
+# than silently dropping its +yolo to the unregistered default.
+test_project_mode_resolves_a_registered_alias() {
+  local home out err
+  home="$TMP_ROOT/project-mode-alias/home"
+  mkdir -p "$home/data"
+  cat > "$home/data/projects.md" <<'EOF'
+- firstmate [no-mistakes +yolo alias=starship] - fixture registered under another name (added 2026-01-01)
+- other [alias=shared branch=o/ direct-PR] - fixture with alias before the mode (added 2026-01-01)
+- shared [local-only] - fixture whose exact name another row aliases (added 2026-01-01)
+- plain - fixture whose description mentions [alias=desc] (added 2026-01-01)
+EOF
+  out=$(FM_HOME="$home" "$PROJECT_MODE" starship 2>/dev/null)
+  [ "$out" = "no-mistakes on" ] || fail "an aliased directory name did not resolve to its registered posture (got '$out')"
+  err=$(FM_HOME="$home" "$PROJECT_MODE" starship 2>&1 >/dev/null)
+  [ -z "$err" ] || fail "an aliased directory name still warned as not in the registry: $err"
+  out=$(FM_HOME="$home" "$PROJECT_MODE" firstmate 2>/dev/null)
+  [ "$out" = "no-mistakes on" ] || fail "the registered name stopped resolving once it carried an alias (got '$out')"
+
+  out=$(FM_HOME="$home" "$PROJECT_MODE" other 2>/dev/null)
+  [ "$out" = "direct-PR off" ] || fail "an alias token before the mode was mistaken for the mode (got '$out')"
+  out=$(FM_HOME="$home" "$PROJECT_MODE" shared 2>/dev/null)
+  [ "$out" = "local-only off" ] || fail "another row's alias outranked an exact registered name (got '$out')"
+
+  out=$(FM_HOME="$home" "$PROJECT_MODE" desc 2>/dev/null)
+  [ "$out" = "no-mistakes off" ] || fail "an alias-shaped word in a description was read as an alias (got '$out')"
+  err=$(FM_HOME="$home" "$PROJECT_MODE" desc 2>&1 >/dev/null)
+  assert_contains "$err" "not in registry" "an unregistered name stopped warning"
+
+  out=$(FM_HOME="$home" "$PROJECT_MODE" --line starship 2>/dev/null)
+  [ "$out" = "- firstmate [no-mistakes +yolo alias=starship] - fixture registered under another name (added 2026-01-01)" ] \
+    || fail "--line did not print the row an alias resolves to (got '$out')"
+  out=$(FM_HOME="$home" "$PROJECT_MODE" --line shared 2>/dev/null)
+  [ "$out" = "- shared [local-only] - fixture whose exact name another row aliases (added 2026-01-01)" ] \
+    || fail "--line preferred another row's alias over the exact registered name (got '$out')"
+  out=$(FM_HOME="$home" "$PROJECT_MODE" --line desc 2>&1)
+  [ -z "$out" ] || fail "--line printed something for an unregistered name (got '$out')"
+  pass "fm-project-mode: an alias=<name> token resolves the row's posture under a second name"
+}
+
 # The registry parser survives for the mechanical consumers only. It accepts the
 # conditional policy, maps it to its most rigorous leg for them, and exposes the
 # raw annotation for the one caller that must tell a policy from a flat mode.
@@ -1621,6 +1663,7 @@ test_promotion_persists_the_selected_ship_branch
 test_promotion_branch_command_is_shell_safe
 test_local_merge_uses_the_recorded_ship_branch
 test_project_mode_matches_whole_multiword_names
+test_project_mode_resolves_a_registered_alias
 test_project_mode_maps_the_conditional_policy
 test_project_mode_binds_the_forge_orthogonally
 test_project_mode_refuses_only_a_malformed_forge_binding

@@ -488,6 +488,7 @@ rm -rf "$TMP_ROOT/beta-src"
 cat > "$TMP_ROOT/seed-parent/data/projects.md" <<'EOF'
 - beta [direct-PR] - beta project (added 2026-08-06)
 - delta [local-only] - delta project (added 2026-08-06)
+- beta-registered [direct-PR +yolo alias=beta-dir] - beta cloned under another directory name (added 2026-08-06)
 EOF
 BETA_ORIGIN="file://$TMP_ROOT/beta.git"
 PROJECTS_BEFORE=$(projects_snapshot "$TMP_ROOT/seed-parent/projects")
@@ -549,6 +550,21 @@ assert_absent "$TMP_ROOT/seed-parent/projects/beta" \
 [ "$(projects_snapshot "$TMP_ROOT/seed-parent/projects")" = "$PROJECTS_BEFORE" ] \
   || fail "seeding changed the primary project tree"
 pass "remote seeding provisions a supplied origin without touching the primary project tree"
+
+# A project registered under one name and cloned under another carries its
+# registered row, alias included, so the remote home resolves the same posture.
+out=$(FM_SECONDMATE_CHARTER='Own aliased beta delivery on the build Mac.' \
+  FM_SECONDMATE_SCOPE='aliased beta delivery' \
+  seed_env "$ROOT/bin/fm-remote-home-seed.sh" seed-alias remote-mac "$REMOTE_ROOT" \
+  "$TMP_ROOT/seed-alias-home" "beta-dir=$BETA_ORIGIN" 2>&1) \
+  || fail "seeding refused a project registered under an alias"$'\n'"$out"
+assert_present "$TMP_ROOT/seed-alias-home/projects/beta-dir/.git" \
+  "the remote host did not clone the aliased project under its directory name"
+assert_grep '- beta-registered [direct-PR +yolo alias=beta-dir]' "$TMP_ROOT/seed-alias-home/data/projects.md" \
+  "the remote home did not carry the aliased project's registered row"
+[ "$(FM_HOME="$TMP_ROOT/seed-alias-home" "$REMOTE_ROOT/bin/fm-project-mode.sh" beta-dir 2>/dev/null)" = "direct-PR on" ] \
+  || fail "the remote home did not resolve the aliased project's registered posture"
+pass "remote seeding carries an aliased project's registered row to the remote home"
 
 # The receiving host validates the origin itself rather than trusting whatever
 # reached it, so a manifest naming an executable transport provisions nothing.

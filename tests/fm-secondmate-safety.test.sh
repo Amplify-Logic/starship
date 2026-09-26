@@ -1178,6 +1178,34 @@ test_home_seed_resolves_relative_source_origins() {
   pass "home seeding resolves relative source origins against the source project"
 }
 
+# A project registered under one name but cloned under another (the firstmate
+# repo registered as "firstmate" and cloned as "starship") must carry its
+# registered row into the seeded home rather than a bare placeholder that drops
+# its +yolo, and a reseed must replace that row rather than duplicate it.
+test_home_seed_carries_an_aliased_registry_row() {
+  local home subhome row out
+  home="$TMP_ROOT/alias-row-home"
+  subhome="$TMP_ROOT/alias-row-subhome"
+  row='- firstmate [direct-PR +yolo alias=starship] - registered under another name (added 2026-06-22)'
+  mkdir -p "$home/projects" "$home/data" "$home/state"
+  fm_git_init_commit "$home/projects/starship"
+  fm_git_add_origin "$home/projects/starship" "$TMP_ROOT/remotes/alias-row-starship.git"
+  printf '%s\n' "$row" > "$home/data/projects.md"
+  scaffold_secondmate_charter "$home" design 'design domain' starship || fail "charter scaffold failed for aliased registry row seed test"
+
+  FM_HOME="$home" "$ROOT/bin/fm-home-seed.sh" design "$subhome" starship >/dev/null \
+    || fail "seed failed for a project registered under an alias"
+  [ "$(cat "$subhome/data/projects.md")" = "$row" ] \
+    || fail "seeded registry did not carry the aliased project's registered row: $(cat "$subhome/data/projects.md")"
+  out=$(FM_ROOT_OVERRIDE='' FM_DATA_OVERRIDE='' FM_HOME="$subhome" "$ROOT/bin/fm-project-mode.sh" starship 2>/dev/null)
+  [ "$out" = "direct-PR on" ] || fail "seeded home did not resolve the aliased posture (got '$out')"
+  FM_HOME="$home" "$ROOT/bin/fm-home-seed.sh" design "$subhome" starship >/dev/null \
+    || fail "reseed failed for a project registered under an alias"
+  [ "$(cat "$subhome/data/projects.md")" = "$row" ] \
+    || fail "reseed did not replace the aliased project's registered row: $(cat "$subhome/data/projects.md")"
+  pass "home seeding carries an aliased project's registered row into the seeded home"
+}
+
 test_home_seed_skips_initialized_existing_no_mistakes_projects() {
   local home subhome err fakebin log origin
   home="$TMP_ROOT/existing-initialized-home"
@@ -3031,6 +3059,7 @@ test_home_seed_refuses_home_overlapping_registered_home
 test_home_seed_refuses_remote_backed_project_without_origin
 test_home_seed_refuses_existing_remote_backed_project_with_wrong_origin
 test_home_seed_resolves_relative_source_origins
+test_home_seed_carries_an_aliased_registry_row
 test_home_seed_skips_initialized_existing_no_mistakes_projects
 test_home_seed_refuses_uninitialized_existing_no_mistakes_project
 test_home_seed_refuses_project_destinations_outside_subhome

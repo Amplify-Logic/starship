@@ -54,6 +54,8 @@ The optional `+yolo` posture changes merge authority only and does not change th
 Default it off for every project and every posture, and enable it only on the captain's explicit instruction.
 `AGENTS.md` section 7 owns the merge-authority contract.
 
+Spawn and other mechanical callers look a project up by its clone directory name, so a project registered under a different name must carry an `alias=<directory>` token or its posture silently falls back to the unregistered default; `bin/fm-project-mode.sh`'s header owns the token.
+
 A current concrete captain approval settles only the exact project operation, project, remote, visibility, delivery posture, or other bounded scope it names.
 Do not ask again for a value the captain already supplied, but do not infer omitted values or broaden that approval.
 Approval never changes the execution boundary: use only the guarded project paths authorized by `AGENTS.md`, and route privileged outward actions through the action gateway when its operation registry covers them.

@@ -679,8 +679,7 @@ seed_rollback() {
 
 registry_line_for_project() {
   local project=$1 line
-  [ -f "$DATA/projects.md" ] || return 1
-  line=$(awk -v n="$project" '$1=="-" && $2==n { print; exit }' "$DATA/projects.md")
+  line=$(FM_HOME="$FM_HOME" FM_DATA_OVERRIDE="$DATA" "$FM_ROOT/bin/fm-project-mode.sh" --line "$project")
   [ -n "$line" ] || return 1
   printf '%s\n' "$line"
 }
@@ -698,11 +697,21 @@ EOF
 }
 
 sync_project_registry() {
-  local home=$1 sub_reg tmp project line today names
+  local home=$1 sub_reg tmp project line today names lines
   shift
   sub_reg="$home/data/projects.md"
   tmp="$sub_reg.tmp.$$"
-  names=$(printf '%s\n' "$@" | awk '{ printf "%s%s", sep, $0; sep="\034" }')
+  today=$(date +%F)
+  lines=
+  for project in "$@"; do
+    line=$(registry_line_for_project "$project" || true)
+    if [ -z "$line" ]; then
+      line="- $project - cloned project (added $today)"
+    fi
+    lines="$lines$line
+"
+  done
+  names=$({ printf '%s\n' "$@"; printf '%s' "$lines" | awk '{ print $2 }'; } | awk '{ printf "%s%s", sep, $0; sep="\034" }')
   if [ -f "$sub_reg" ]; then
     awk -v names="$names" '
       BEGIN {
@@ -714,14 +723,7 @@ sync_project_registry() {
   else
     : > "$tmp"
   fi
-  today=$(date +%F)
-  for project in "$@"; do
-    line=$(registry_line_for_project "$project" || true)
-    if [ -z "$line" ]; then
-      line="- $project - cloned project (added $today)"
-    fi
-    printf '%s\n' "$line" >> "$tmp"
-  done
+  printf '%s' "$lines" >> "$tmp"
   mv "$tmp" "$sub_reg"
 }
 
