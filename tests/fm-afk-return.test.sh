@@ -298,6 +298,37 @@ test_evidence_publication_failure_preserves_wake_for_redrain() {
   pass "AFK return re-drains published wakes until handling acknowledges"
 }
 
+test_wake_ack_publication_failure_keeps_gate_and_lock_clean() {
+  local dir out rc gate
+  dir="$TMP_ROOT/wake-ack-publication-failure"
+  install_runner "$dir"
+  gate="$dir/home/state/.afk-return-catchup"
+  printf '1784074271\t8\tsignal\tack-task.status\tsignal: ack after stderr failure\n' \
+    > "$dir/home/state/.fake-drain"
+  : > "$dir/read-only-output"
+
+  set +e
+  FM_HOME="$dir/home" FM_STATE_OVERRIDE="$dir/home/state" \
+    "$dir/bin/fm-afk-return.sh" begin 3< "$dir/read-only-output" > "$dir/failed.out" 2>&3
+  rc=$?
+  set -e
+  [ "$rc" -eq 3 ] || fail "wake acknowledgement publication failure should retain catch-up (rc=$rc)"
+  [ -s "$gate" ] || fail "wake acknowledgement publication failure did not retain the catch-up gate"
+  if grep -q 'WAKE_ACK_REQUIRED' "$gate"; then
+    fail "unpublished wake acknowledgement leaked into the retained gate: $(cat "$gate")"
+  fi
+  [ ! -e "$dir/home/state/.afk-return-catchup.lock" ] && [ ! -L "$dir/home/state/.afk-return-catchup.lock" ] || fail "wake acknowledgement publication failure left the return lock held"
+  if ls "$dir/home/state"/.afk-return-catchup.pending.* >/dev/null 2>&1; then
+    fail "wake acknowledgement publication failure orphaned a pending gate file"
+  fi
+  [ ! -e "$dir/home/state/.fake-drain-acks" ] || fail "wake acknowledgement publication failure acknowledged the wake"
+
+  out=$(run_return "$dir" check) || fail "retry after wake acknowledgement publication failure did not complete: $out"
+  assert_contains "$out" 'WAKE_ACK_REQUIRED: after handling completes' "retry did not republish the wake acknowledgement"
+  [ ! -e "$gate" ] || fail "successful acknowledgement publication left the catch-up gate pending"
+  pass "an unwritable stderr keeps the wake acknowledgement out of the gate and releases the return lock"
+}
+
 test_away_reentry_refuses_pending_return_gate() {
   local dir out rc
   dir="$TMP_ROOT/reentry"
@@ -874,6 +905,7 @@ test_return_gate_owns_remediation_and_reports_catchup_to_bearings
 test_explicit_reclassification_requires_durable_reason
 test_captain_decision_does_not_masquerade_as_firstmate_blocker
 test_evidence_publication_failure_preserves_wake_for_redrain
+test_wake_ack_publication_failure_keeps_gate_and_lock_clean
 test_away_reentry_refuses_pending_return_gate
 test_return_is_mode_agnostic_for_quiet_mode
 test_check_retries_recorded_terminal_teardown

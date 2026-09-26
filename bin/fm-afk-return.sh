@@ -252,6 +252,20 @@ print_evidence() {  # <file>
   done < "$file"
 }
 
+# Stock macOS Bash 3.2 keeps the bytes of a failed builtin write to stdout
+# buffered, and the next command substitution's child flushes them into the
+# value it captures. Stdout is therefore staged in a file and copied out by an
+# external cat, so an unwritable stdout reads as a publication failure instead
+# of corrupting later captured values. The command runs in the current shell.
+publish_stdout() {  # <command> [args...]
+  local staged rc=0
+  staged=$(mktemp "$STATE/.afk-return-stdout.XXXXXX") || return 1
+  "$@" > "$staged"
+  cat "$staged" || rc=1
+  rm -f "$staged"
+  return "$rc"
+}
+
 print_blockers() {  # <file>
   local file=$1 tag id key summary
   while IFS="$(printf '\t')" read -r tag id key summary; do
@@ -588,7 +602,7 @@ EOF
 
 return_reconcile() {
   local evidence blockers drain_err drained wake_ack_line wake_ack_through wake_ack_generation wedge escalations lifecycle_ok=1 since contract_since superseded_record retained_record
-  local archived_contract tag kind text retained_live restored_epoch
+  local archived_contract tag kind text retained_live restored_epoch brief_published
   evidence=$(mktemp "$STATE/.afk-return-evidence.XXXXXX") || return 1
   blockers=$(mktemp "$STATE/.afk-return-blockers.XXXXXX") || { rm -f "$evidence"; return 1; }
   drain_err=$(mktemp "$STATE/.afk-return-drain.XXXXXX") || { rm -f "$evidence" "$blockers"; return 1; }
@@ -732,7 +746,8 @@ EOF
     append_evidence lifecycle "status file unreadable: $STATUS_SCAN_ERROR; catch-up stays gated" "$evidence"
     lifecycle_ok=0
   fi
-  render_return_brief "$evidence" "$blockers" "$since"
+  brief_published=1
+  publish_stdout render_return_brief "$evidence" "$blockers" "$since" || brief_published=0
   if [ "$HELD_READ_FAILED" -eq 1 ]; then
     append_evidence lifecycle "held set unreadable: $HELD_READ_PATH; catch-up stays gated" "$evidence"
     lifecycle_ok=0
@@ -749,7 +764,7 @@ EOF
     return 3
   fi
 
-  if ! print_evidence "$evidence"; then
+  if [ "$brief_published" -ne 1 ] || ! publish_stdout print_evidence "$evidence"; then
     append_evidence lifecycle 'recovery evidence publication failed; retry catch-up before ordinary work' "$evidence"
     write_gate "$evidence" "$blockers" || { rm -f "$evidence" "$blockers" "$drain_err"; return 1; }
     printf 'fm-afk-return: recovery evidence could not be published; catch-up remains pending\n' >&2
@@ -757,7 +772,7 @@ EOF
     return 3
   fi
 
-  if [ -n "$wake_ack_line" ] && ! printf '%s\n' "$wake_ack_line" >&2; then
+  if [ -n "$wake_ack_line" ] && ! publish_stdout printf '%s\n' "$wake_ack_line" >&2; then
     append_evidence lifecycle 'durable wake acknowledgement command publication failed; retry catch-up before ordinary work' "$evidence"
     write_gate "$evidence" "$blockers" || { rm -f "$evidence" "$blockers" "$drain_err"; return 1; }
     rm -f "$evidence" "$blockers" "$drain_err"
