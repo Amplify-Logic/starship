@@ -2697,12 +2697,13 @@ Account names are one path segment of letters, digits, dot, dash, or underscore,
 `expect` is optional and is described below.
 
 Selection is explicit and manual by design.
-`bin/fm-primary.sh <profile> --account <name>` pins a primary and `bin/fm-spawn.sh <id> <project> --account <name>` pins a worker, which records `account=` in that task's metadata.
+`bin/fm-primary.sh <profile> --account <name>` pins a primary and `bin/fm-spawn.sh <id> <project> --account <name>` pins a worker, which records `account=` with `account_source=registry` in that task's metadata.
 There is no automatic switching, no fallback to another account when one is exhausted, and no quota-driven selection: which account work runs on is a spend and data-boundary decision that belongs to the captain.
 A home's per-harness [worker account pin](#worker-account-pin-configclaude-account-configpi-account) takes precedence for that harness's workers: registry selection is skipped there, and an explicit `--account` spawn is refused rather than silently combined with the pin.
 For the same reason the pin survives recovery: when the session-start secondmate liveness sweep respawns a confidently dead secondmate, it reads `account=` back from that secondmate's metadata and passes it as `--account`, so a pinned secondmate can never come back on a different login.
 A secondmate with no recorded `account=` is respawned with no flag, exactly as before.
 A control-plane relaunch (`bin/fm-control.sh <id> relaunch`, owned by [`docs/agent-control.md`](agent-control.md#transactional-relaunch)) that keeps the recorded harness also reads `account=` back from the task's metadata, so the replacement is pinned exactly as the original was and refuses rather than falling back if that account can no longer be resolved; a relaunch onto a different harness resolves its account afresh, as a new spawn would.
+The relaunch carries back only a registry-written `account=`: the worker account pin records its own `account=` (`ordinary` or an absolute path), which is never read back as a registry name, so a task spawned under a since-removed pin resolves its account as a new spawn would rather than being refused.
 
 Homes are created by `bin/fm-account.sh create <vendor> <name>`, which makes one empty directory and prints the login command for it.
 Firstmate never copies, links, or seeds a credential directory, `auth.json`, `.credentials.json`, or keychain entry from one account home to another or from the ambient home, and never runs a login itself.
