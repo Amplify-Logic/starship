@@ -1048,6 +1048,17 @@ fm_git_init_commit() {
   git -C "$dir" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -qm initial
 }
 
+# fm_git_no_auto_maintenance <repo>: stop git's detached auto-maintenance in a
+# fixture repo, so no background process repacks its loose objects and deletes
+# them while a later step clones or reads the repo. Git 2.54 made geometric
+# repacking the auto-maintenance default, which a single commit of 100 or more
+# new loose objects triggers; a local clone of the fixture then races that
+# repack and fails on an object file that vanished mid-copy. Call it before the
+# fixture's first commit.
+fm_git_no_auto_maintenance() {
+  git -C "$1" config maintenance.auto false
+}
+
 # fm_git_add_origin <repo> <bare>: clone <repo> bare into <bare> and register it
 # as <repo>'s origin via a file:// URL (so later clones resolve an absolute path).
 fm_git_add_origin() {
