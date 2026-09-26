@@ -253,6 +253,9 @@ SH
 exit 0
 SH
   chmod +x "$fb/sleep"
+  # The relaunch preflight refuses before touching the pane when the codex
+  # launch binary is absent, which is every CI runner.
+  fm_fake_launch_binary "$fb" codex
 }
 
 test_relaunch_rebuilds_the_switch() {

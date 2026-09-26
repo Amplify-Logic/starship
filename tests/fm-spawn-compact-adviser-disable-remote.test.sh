@@ -54,6 +54,9 @@ cat > "$REMOTE_ROOT/bin/tmux" <<'SH'
 exit 0
 SH
 chmod +x "$REMOTE_ROOT/bin/tmux"
+# The remote launch preflight resolves the harness binary on the remote child
+# PATH, which leads with the tracked code root's bin/; a runner has no codex.
+fm_fake_launch_binary "$REMOTE_ROOT/bin" codex
 install_remote_herdr_fixture "$REMOTE_ROOT" "$HERDR_STATE" "$HERDR_LOG" \
   "$TMP_ROOT/herdr-send-fail" "$TMP_ROOT/herdr.sock"
 git -C "$REMOTE_ROOT" init -q -b main

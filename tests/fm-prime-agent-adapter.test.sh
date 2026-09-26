@@ -361,7 +361,10 @@ test_teardown_wires_daemon_stop_and_cleanup() {
 
 test_launch_template_shape() {
   local spawn="$ROOT/bin/fm-spawn.sh" tpl
-  tpl=$(grep -m1 "^    prime-agent) printf" "$spawn")
+  # Read the arm from launch_template() itself, whatever its indentation, so the
+  # install hint's own prime-agent arm cannot stand in for it.
+  tpl=$(awk '/^launch_template\(\) \{/ { f = 1 } f && /^\}/ { f = 0 } f' "$spawn" \
+    | grep -m1 -E "^ +prime-agent\) printf")
   [ -n "$tpl" ] || fail "fm-spawn missing prime-agent launch_template branch"
   case "$tpl" in *'PRIME_AGENT_CODING_AGENT_DIR=__PASTATE__'*) : ;; *) fail "template lacks agent-dir containment: $tpl" ;; esac
   case "$tpl" in *'PRIME_AGENT_KERNEL_VENV=__PASTATE__/kernel-venv'*) : ;; *) fail "template lacks kernel-venv containment: $tpl" ;; esac
@@ -378,7 +381,8 @@ test_launch_template_shape() {
 
 test_turn_end_hook_written_outside_worktree() {
   local blk
-  blk=$(sed -n '/^    prime-agent\*)/,/^      ;;/p' "$ROOT/bin/fm-spawn.sh")
+  # Indentation-agnostic: the arm runs from its label to its own `;;`.
+  blk=$(sed -n '/^ *prime-agent\*)/,/^ *;;/p' "$ROOT/bin/fm-spawn.sh")
   case "$blk" in *'prime-ext.ts'*) : ;; *) fail "prime-agent spawn does not write the turn-end extension" ;; esac
   case "$blk" in *'turn_end'*) : ;; *) fail "prime-agent extension does not listen for turn_end" ;; esac
   # shellcheck disable=SC2016  # single quotes are deliberate: literal source expression

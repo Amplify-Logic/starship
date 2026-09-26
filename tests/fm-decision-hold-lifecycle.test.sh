@@ -257,7 +257,8 @@ EOF
 # Ruling: quiet treatment must never outlive the hold. The decision collapse
 # moved that close from resolve to `complete`: the gate transfers every still-open
 # keyed status decision to its durable captain-held task with a
-# `captain-held [key=<key>]:` line, and the status_open_decisions fold closes that
+# `captain-held [key=<key>]:` line (stamped `[at=<epoch>]` by the self-announced
+# append, so the checks below allow it), and the status_open_decisions fold closes that
 # key there (bin/fm-captain-hold.sh). Answering the hold later writes nothing
 # further to the status stream, so what must hold is that the transfer closes the
 # fold exactly once and no later resolve re-opens or re-closes it.
@@ -275,7 +276,7 @@ test_complete_transfer_closes_the_keyed_decision() {
     || fail "could not register emit hold"
   run_decisions "$home" complete "$id" emit >/dev/null \
     || fail "completion gate failed"
-  grep -F "captain-held [key=emit]: tracked by $hold" "$home/state/$id.status" >/dev/null \
+  grep -E "^captain-held \[key=emit\]( \[at=[0-9]+\])?: tracked by $hold\$" "$home/state/$id.status" >/dev/null \
     || fail "complete did not transfer the decision to a captain-held status line"
   tasks_in "$home" add emit-dep "Emit dependent" --kind ship --repo sample >/dev/null \
     || fail "could not create dependent"
@@ -285,7 +286,7 @@ test_complete_transfer_closes_the_keyed_decision() {
     --routed-to emit-dep >/dev/null || fail "resolve failed"
   run_decisions "$home" resolve "$id" emit --decision-file "$home/emit-decision.txt" \
     --routed-to emit-dep >/dev/null || fail "idempotent resolve re-run failed"
-  lines=$(grep -cF "captain-held [key=emit]:" "$home/state/$id.status")
+  lines=$(grep -cE "^captain-held \\[key=emit\\]( \\[at=[0-9]+\\])?:" "$home/state/$id.status")
   [ "$lines" -eq 1 ] || fail "the transfer close was written more than once (count $lines)"
   open=$(bash -c '. "$1"; status_open_decisions "$2"' _ \
     "$ROOT/bin/fm-classify-lib.sh" "$home/state/$id.status")
@@ -327,7 +328,7 @@ test_resolve_retry_does_not_close_a_reused_key() {
   printf 'needs-decision [key=retry]: pick a NEW shape\n' >> "$home/state/$id.status"
   run_decisions "$home" resolve "$id" retry --decision-file "$home/retry-decision.txt" \
     --routed-to retry-dep >/dev/null || fail "old resolve retry failed"
-  lines=$(grep -cF "captain-held [key=retry]:" "$home/state/$id.status")
+  lines=$(grep -cE "^captain-held \\[key=retry\\]( \\[at=[0-9]+\\])?:" "$home/state/$id.status")
   [ "$lines" -eq 1 ] || fail "the old resolve retry wrote another close over the reused key (count $lines)"
   open=$(bash -c '. "$1"; status_open_decisions "$2"' _ \
     "$ROOT/bin/fm-classify-lib.sh" "$home/state/$id.status")
@@ -366,16 +367,16 @@ test_complete_refuses_reused_resolved_decision_key() {
     --title "Pick the fresh shape" --reason "captain fresh pending" --repo sample >/dev/null \
     || fail "could not register fresh hold"
   meta_before=$(cat "$home/state/$id.meta")
-  before=$(grep -cF "captain-held [key=reuse]:" "$home/state/$id.status")
+  before=$(grep -cE "^captain-held \\[key=reuse\\]( \\[at=[0-9]+\\])?:" "$home/state/$id.status")
   if run_decisions "$home" complete "$id" reuse fresh > "$home/reuse-complete.out" 2> "$home/reuse-complete.err"; then
-    after=$(grep -cF "captain-held [key=reuse]:" "$home/state/$id.status")
+    after=$(grep -cE "^captain-held \\[key=reuse\\]( \\[at=[0-9]+\\])?:" "$home/state/$id.status")
     [ "$after" -gt "$before" ] \
       && fail "re-used resolved key re-opened the fold (captain-held count $before -> $after) before the guard"
     fail "complete accepted a re-used resolved decision key"
   fi
   grep -F "captain decision $hold is already durably resolved; use a new decision key" "$home/reuse-complete.err" >/dev/null \
     || fail "complete refused without the new-key message: $(cat "$home/reuse-complete.err")"
-  after=$(grep -cF "captain-held [key=reuse]:" "$home/state/$id.status")
+  after=$(grep -cE "^captain-held \\[key=reuse\\]( \\[at=[0-9]+\\])?:" "$home/state/$id.status")
   [ "$after" -eq "$before" ] || fail "the refused complete appended a captain-held transfer anyway"
   # The refusal must happen BEFORE the metadata attestation: a failed complete
   # may not leave decisions_reviewed=1 and an updated key inventory that a
@@ -497,7 +498,7 @@ EOF
 }
 
 test_terminal_single_owner_status_decision_does_not_block_empty_inventory() {
-  local home id open secondmate
+  local home id secondmate
   home=$(make_home stale-terminal-decision)
   id=sample-terminal-review
   mkdir -p "$home/data/$id"
@@ -506,9 +507,11 @@ test_terminal_single_owner_status_decision_does_not_block_empty_inventory() {
   printf 'needs-decision [key=default]: choose route A or route B\ndone: report complete\n' \
     > "$home/state/$id.status"
   printf '# Terminal sample review\n\nNo unresolved captain choice remains.\n' > "$home/data/$id/report.md"
-  open=$(bash -c '. "$1"; status_open_decisions "$2"' _ \
-    "$ROOT/bin/fm-classify-lib.sh" "$home/state/$id.status")
-  assert_contains "$open" "default" "fixture must retain the raw stale status decision"
+  # The raw stale decision stays in the log; the creator's status fold already
+  # lets the ship/scout terminal line supersede it, and the inventory gate below
+  # must agree rather than block on the raw line.
+  assert_grep 'needs-decision [key=default]' "$home/state/$id.status" \
+    "fixture must retain the raw stale status decision"
   run_decisions "$home" complete "$id" --none >/dev/null \
     || fail "terminal single-owner stale status decision blocked empty inventory completion"
   run_decisions "$home" verify "$id" >/dev/null \

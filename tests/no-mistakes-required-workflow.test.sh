@@ -10,11 +10,12 @@ WORKFLOW="$ROOT/.github/workflows/no-mistakes-required.yml"
 
 # The signature and attestation rules are no longer spelled in this workflow:
 # they live in the pinned shared action below, so nothing here can replay them.
-# tests/fm-no-mistakes-required.test.sh drives that action's real verifier and
-# pins the same SHA, which is what the gate contract below holds this workflow
-# to, so the two suites cannot drift apart silently.
+# The gate contract below holds this workflow to the creator's v1.80.1 pin, so a
+# silent re-pin fails here. tests/fm-no-mistakes-required.test.sh is the
+# creator's own suite driving that action's real verifier; it still pins its
+# earlier SHA, whose verifier accepts and rejects the same attestation shapes.
 GATE_ACTION=kunchenguid/no-mistakes/.github/actions/require-no-mistakes
-GATE_ACTION_REF=32d396ac0f29135daf7fcb9964aba9d5f4e796d6
+GATE_ACTION_REF=f6441c96c352a18b9cadcaef6b6c7017e9ac3970
 
 command -v ruby >/dev/null 2>&1 \
   || fail "ruby is required to parse .github/workflows/no-mistakes-required.yml as YAML"

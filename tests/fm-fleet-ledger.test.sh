@@ -8,25 +8,16 @@ set -u
 
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+# shellcheck source=tests/fixtures.sh
+. "$(dirname "${BASH_SOURCE[0]}")/fixtures.sh"
 
 TMP_ROOT=$(fm_test_tmproot fm-fleet-ledger)
 
 make_fakebin() {  # <dir>
-  local fakebin
-  fakebin=$(fm_fakebin "$1")
-  cat > "$fakebin/tmux" <<'SH'
-#!/usr/bin/env bash
-case "$*" in
-  *"#{pane_current_path}"*) printf '%s\n' "${FM_FAKE_PANE_PATH:-}"; exit 0 ;;
-esac
-case "${1:-}" in
-  display-message) printf 'firstmate\n' ;;
-esac
-exit 0
-SH
-  chmod +x "$fakebin/tmux"
-  fm_fake_exit0 "$fakebin" treehouse no-mistakes
-  printf '%s\n' "$fakebin"
+  # The shared spawn fakebin: its tmux lists the windows it created and it
+  # carries the launch-binary stubs, so the fork's launch preflight and
+  # agent-up gate see a started worker on runners with no agent CLIs.
+  fm_test_make_spawn_fakebin "$1" no-mistakes
 }
 
 # Sets HOME_DIR PROJ_DIR WT_DIR FAKEBIN TASK for one isolated case.

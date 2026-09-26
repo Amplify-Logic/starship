@@ -2876,6 +2876,9 @@ exit 0
 SH
   chmod +x "$fakebin/tmux"
   make_fake_crew_state "$fakebin" >/dev/null
+  # The relaunch's launch preflight refuses when the codex binary is absent,
+  # which is every CI runner.
+  fm_fake_launch_binary "$fakebin" codex
   printf '%s\n' "$dir"
 }
 
