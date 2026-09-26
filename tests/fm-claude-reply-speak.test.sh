@@ -37,8 +37,8 @@ install_hook_scripts() {
 }
 
 # A stand-in for bin/fm-speak.sh with its observable contract: a refused line
-# exits 2 and is not kept, an accepted line is recorded and kept in
-# state/speak-last.
+# exits 2 and is not kept, an accepted line is recorded and kept as the next
+# numbered entry in state/speak-history/.
 install_speak_stub() {
   local dir=$1
   cat > "$dir/speak-stub" <<'EOF'
@@ -48,7 +48,10 @@ case "$text" in
   *"Shall I"*) printf 'refused: %s\n' "$text" >> "$FM_HOME/refused.log"; exit 2 ;;
 esac
 printf '%s\n' "$text" >> "$FM_HOME/spoken.log"
-printf '%s\n' "$text" > "$FM_HOME/state/speak-last"
+n=$(ls "$FM_HOME/state/speak-history" 2>/dev/null | sort -n | tail -n 1)
+n=$(( ${n:-0} + 1 ))
+mkdir -p "$FM_HOME/state/speak-history/$n"
+printf '%s\n' "$text" > "$FM_HOME/state/speak-history/$n/text"
 EOF
   chmod +x "$dir/speak-stub"
 }
@@ -226,8 +229,7 @@ test_model_already_spoke_is_silent_then_next_turn_speaks() {
   run_hook "$dir" "Captain, turn one is done."
   assert_equals "Captain, turn one is done." "$(spoken "$dir")" "baseline turn must be spoken"
   # Turn two: the model spoke its own line through bin/fm-speak.sh.
-  sleep 1
-  printf 'Captain, turn two spoken by the model.\n' > "$dir/state/speak-last"
+  FM_HOME="$dir" "$dir/speak-stub" "Captain, turn two spoken by the model."
   rm -f "$dir/spoken.log"
   run_hook "$dir" "Captain, turn two is done."
   assert_absent "$dir/spoken.log" "a turn the model already spoke must not be spoken twice"
@@ -349,7 +351,7 @@ test_real_speak_speaks_and_falls_back() {
   wait_for_audio "$dir" "the decision notice never reached the speaker"
   assert_equals "Captain, a decision is waiting for you on screen." "$(cat "$dir/audio.log")" \
     "the real register must accept the on-screen notice in place of the refused reply"
-  assert_equals "Captain, a decision is waiting for you on screen." "$(cat "$dir/state/speak-last")" \
+  assert_equals "Captain, a decision is waiting for you on screen." "$(cat "$dir/state/speak-history/1/text")" \
     "the notice must be the kept line"
   pass "real fm-speak: decision reply speaks the on-screen notice"
 }
@@ -365,7 +367,7 @@ test_real_speak_muted_and_not_enabled_stay_silent() {
   run_hook_real_speak "$dir" "Captain, homes that never opted in stay quiet."
   sleep 1
   assert_absent "$dir/audio.log" "a muted or not-enabled home must stay silent"
-  assert_absent "$dir/state/speak-last" "nothing must be kept when nothing was spoken"
+  assert_absent "$dir/state/speak-history" "nothing must be kept when nothing was spoken"
   pass "real fm-speak: muted and not-enabled homes stay silent"
 }
 

@@ -57,6 +57,9 @@ final class FloaterPanel: NSPanel {
         let mover = WindowMover()
         let view = FloaterView(model: model, mover: mover)
         let hosting = NSHostingView(rootView: view)
+        // WindowMover sizes the window: left to itself the hosting view would
+        // grow it from the top-left corner and push the controls off-screen.
+        hosting.sizingOptions = []
         hosting.frame = NSRect(origin: .zero, size: hosting.fittingSize)
         super.init(
             contentRect: hosting.frame,
@@ -64,7 +67,6 @@ final class FloaterPanel: NSPanel {
             backing: .buffered,
             defer: false
         )
-        mover.window = self
         self.contentView = hosting
         self.isFloatingPanel = true
         // Clicking a control must never take keyboard focus from the app the
@@ -79,16 +81,24 @@ final class FloaterPanel: NSPanel {
             let f = screen.visibleFrame
             self.setFrameOrigin(NSPoint(x: f.maxX - hosting.frame.width - 24, y: f.midY))
         }
+        // Only once the panel is placed, so the first fit anchors to where the
+        // captain sees it rather than to the origin it was created at.
+        mover.window = self
     }
 
     override var canBecomeKey: Bool { true }
 }
 
-/// Moves the floater with the pointer while its backing plate is dragged.
+/// Moves the floater with the pointer while its backing plate is dragged, and
+/// resizes it when the recent-replies list opens or closes. The top-right
+/// corner stays put, so the controls do not jump and the list drops down and
+/// to the left of them.
 final class WindowMover {
     weak var window: NSWindow?
     private var startOrigin: NSPoint?
     private var startMouse: NSPoint?
+    private var anchor: NSPoint?
+    private var fitted: NSRect?
 
     func drag() {
         guard let window else { return }
@@ -99,6 +109,23 @@ final class WindowMover {
         }
         guard let origin = startOrigin, let start = startMouse else { return }
         window.setFrameOrigin(NSPoint(x: origin.x + mouse.x - start.x, y: origin.y + mouse.y - start.y))
+    }
+
+    func fit(_ size: CGSize) {
+        guard let window, size.width > 0, size.height > 0 else { return }
+        let frame = window.frame
+        let corner = (frame == fitted ? anchor : nil) ?? NSPoint(x: frame.maxX, y: frame.maxY)
+        anchor = corner
+        var rect = NSRect(x: corner.x - size.width, y: corner.y - size.height, width: size.width, height: size.height)
+        if let visible = (window.screen ?? NSScreen.main)?.visibleFrame {
+            rect.origin.x = max(min(rect.origin.x, visible.maxX - rect.width), visible.minX)
+            rect.origin.y = max(min(rect.origin.y, visible.maxY - rect.height), visible.minY)
+        }
+        if rect != frame {
+            window.setFrame(rect, display: true)
+            window.invalidateShadow()
+        }
+        fitted = window.frame
     }
 
     func end() {
@@ -455,6 +482,13 @@ struct ShotStack {
     }
 }
 
+/// One reply from the speak-out history, as `bin/fm-speak.sh --history` lists it.
+struct RecentReply: Identifiable, Equatable {
+    let id: Int
+    let time: Date
+    let text: String
+}
+
 @MainActor
 final class FloaterModel: ObservableObject {
     enum Mode {
@@ -475,6 +509,8 @@ final class FloaterModel: ObservableObject {
     @Published var purpose: Purpose = .firstmate
     @Published var status: String = "Hold to talk"
     @Published var muted = false
+    @Published var recent: [RecentReply] = []
+    @Published var showingRecent = false
     @Published var keysTrusted = false {
         didSet {
             if mode == .idle {
@@ -506,7 +542,12 @@ final class FloaterModel: ObservableObject {
         self.repoRoot = repoRoot
         self.fmHome = fmHome
         muteTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.refreshMute() }
+            MainActor.assumeIsolated {
+                self?.refreshMute()
+                if self?.showingRecent == true {
+                    self?.refreshRecent()
+                }
+            }
         }
     }
 
@@ -747,6 +788,48 @@ final class FloaterModel: ObservableObject {
         runSpeak(["--repeat"]) { ok in ok ? "Repeating" : "Nothing to repeat" }
     }
 
+    func toggleRecent() {
+        showingRecent.toggle()
+        if showingRecent {
+            refreshRecent()
+        }
+    }
+
+    /// Speaks one reply from the recent list again; stays silent while muted,
+    /// exactly like Repeat.
+    func replay(_ reply: RecentReply) {
+        guard !muted else {
+            if mode == .idle {
+                finish(status: "Voice muted")
+            }
+            return
+        }
+        runSpeak(["--replay", String(reply.id)]) { ok in ok ? "Replaying" : "No longer kept" }
+    }
+
+    func refreshRecent() {
+        Task.detached(priority: .userInitiated) { [repoRoot, fmHome] in
+            let out = Self.speak(repoRoot: repoRoot, fmHome: fmHome, args: ["--history"]) ?? ""
+            let replies = Self.parseHistory(out)
+            await MainActor.run {
+                if self.recent != replies {
+                    self.recent = replies
+                }
+            }
+        }
+    }
+
+    /// Reads `<number> TAB <epoch> TAB <text>` lines, newest first.
+    nonisolated private static func parseHistory(_ out: String) -> [RecentReply] {
+        out.split(separator: "\n").compactMap { line in
+            let cols = line.split(separator: "\t", maxSplits: 2, omittingEmptySubsequences: false)
+            guard cols.count == 3, let id = Int(cols[0]), let epoch = TimeInterval(cols[1]) else {
+                return nil
+            }
+            return RecentReply(id: id, time: Date(timeIntervalSince1970: epoch), text: String(cols[2]))
+        }
+    }
+
     func toggleMute() {
         let wasMuted = muted
         muted.toggle()
@@ -773,6 +856,9 @@ final class FloaterModel: ObservableObject {
                     self.finish(status: message(ok))
                 }
                 self.refreshMute()
+                if self.showingRecent {
+                    self.refreshRecent()
+                }
             }
         }
     }
@@ -996,7 +1082,7 @@ struct FloaterView: View {
     private let controlSize: CGFloat = 20
 
     var body: some View {
-        VStack(spacing: 4) {
+        VStack(alignment: .trailing, spacing: 4) {
             HStack(spacing: 6) {
                 mainButton
                 VStack(spacing: 4) {
@@ -1020,6 +1106,7 @@ struct FloaterView: View {
                     }
                 }
                 shotButton
+                recentToggle
             }
             Text(model.status)
                 .font(.system(size: 9, weight: .medium))
@@ -1028,6 +1115,9 @@ struct FloaterView: View {
                 .truncationMode(.tail)
                 .frame(width: 128)
                 .allowsHitTesting(false)
+            if model.showingRecent {
+                recentList
+            }
         }
         .padding(6)
         .background(
@@ -1041,6 +1131,82 @@ struct FloaterView: View {
                 )
         )
         .fixedSize()
+        .onGeometryChange(for: CGSize.self) { proxy in
+            proxy.size
+        } action: { size in
+            mover.fit(size)
+        }
+    }
+
+    /// The dropdown arrow to the right of the controls: opens the recent replies.
+    private var recentToggle: some View {
+        Button(action: model.toggleRecent) {
+            Image(systemName: model.showingRecent ? "chevron.up" : "chevron.down")
+                .font(.system(size: 8, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: 12, height: controlSize * 2 + 4)
+                .background(Capsule().fill(model.showingRecent ? Color.white.opacity(0.35) : Color.white.opacity(0.22)))
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .help(model.showingRecent ? "Hide recent replies" : "Recent replies - click one to hear it again")
+        .accessibilityLabel(model.showingRecent ? "Hide recent replies" : "Show recent replies")
+    }
+
+    private var recentList: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            if model.recent.isEmpty {
+                Text("Nothing spoken yet")
+                    .font(.system(size: 9))
+                    .foregroundStyle(.white.opacity(0.7))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 2)
+            }
+            ForEach(model.recent) { reply in
+                Button {
+                    model.replay(reply)
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "play.fill")
+                            .font(.system(size: 7))
+                        Text(Self.timeLabel(reply.time))
+                            .font(.system(size: 9, weight: .semibold).monospacedDigit())
+                            .foregroundStyle(.white.opacity(0.75))
+                        Text(reply.text)
+                            .font(.system(size: 9))
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                        Spacer(minLength: 0)
+                    }
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 3)
+                    .background(RoundedRectangle(cornerRadius: 5).fill(Color.white.opacity(0.12)))
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(reply.text)
+                .accessibilityLabel("Hear again: \(reply.text)")
+            }
+        }
+        .frame(width: 230)
+    }
+
+    private static let clock: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm"
+        return f
+    }()
+
+    private static let dayClock: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "d MMM HH:mm"
+        return f
+    }()
+
+    /// Today's replies show the time; older ones the day as well.
+    private static func timeLabel(_ time: Date) -> String {
+        Calendar.current.isDateInToday(time) ? clock.string(from: time) : dayClock.string(from: time)
     }
 
     private var dictating: Bool {

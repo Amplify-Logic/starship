@@ -28,10 +28,10 @@
 #   - the routine no-news reply: exactly "Captain, shipshape." after trimming,
 #     so a bare routine update costs no speech;
 #   - a turn in which bin/fm-speak.sh already handed a line over: the hook
-#     records a signature of state/speak-last (mtime plus checksum) after each
-#     Stop it accounts for, including after its own speech, and a different
-#     signature at the next Stop means someone spoke during this turn. Its own
-#     speech therefore never silences the next turn;
+#     records the newest reply number in state/speak-history/ (numbers only
+#     grow) after each Stop it accounts for, including after its own speech, and
+#     a different number at the next Stop means someone spoke during this turn.
+#     Its own speech therefore never silences the next turn;
 #   - a Stop superseded by a newer Stop: each Stop writes a fresh token to
 #     state/.reply-speak-stop, waits FM_REPLY_SPEAK_SETTLE_MS (default 2000),
 #     and speaks only while its token is still the latest. That drops the
@@ -67,7 +67,7 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 SPEAK="${FM_REPLY_SPEAK_CMD:-$SCRIPT_DIR/fm-speak.sh}"
 STOP_TOKEN_FILE="$STATE/.reply-speak-stop"
 SEEN_FILE="$STATE/.reply-speak-seen"
-SPEAK_LAST="$STATE/speak-last"
+SPEAK_HISTORY="$STATE/speak-history"
 DECISION_NOTICE="Captain, a decision is waiting for you on screen."
 
 ROUTINE_LINE="Captain, shipshape."
@@ -108,12 +108,18 @@ write_atomic() {  # <file> <text>
 MY_TOKEN="$$.$(date +%s).$RANDOM"
 write_atomic "$STOP_TOKEN_FILE" "$MY_TOKEN" || exit 0
 
-speak_last_signature() {
-  [ -f "$SPEAK_LAST" ] || { printf 'none\n'; return 0; }
-  printf '%s %s\n' "$(fm_path_mtime "$SPEAK_LAST")" "$(cksum < "$SPEAK_LAST" 2>/dev/null)"
+newest_spoken_number() {
+  local entry name newest=none
+  for entry in "$SPEAK_HISTORY"/*; do
+    name=${entry##*/}
+    case "$name" in ''|*[!0-9]*) continue ;; esac
+    [ -d "$entry" ] || continue
+    if [ "$newest" = none ] || [ "$name" -gt "$newest" ]; then newest=$name; fi
+  done
+  printf '%s\n' "$newest"
 }
 record_seen() {
-  write_atomic "$SEEN_FILE" "$(speak_last_signature)" || true
+  write_atomic "$SEEN_FILE" "$(newest_spoken_number)" || true
 }
 
 # --- did bin/fm-speak.sh already speak during this turn? ---------------------
@@ -122,7 +128,7 @@ record_seen() {
 SPOKE_THIS_TURN=0
 if [ -f "$SEEN_FILE" ]; then
   SEEN=$(cat "$SEEN_FILE" 2>/dev/null || true)
-  [ "$SEEN" = "$(speak_last_signature)" ] || SPOKE_THIS_TURN=1
+  [ "$SEEN" = "$(newest_spoken_number)" ] || SPOKE_THIS_TURN=1
 fi
 record_seen
 [ "$SPOKE_THIS_TURN" -eq 0 ] || exit 0

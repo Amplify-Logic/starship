@@ -1015,6 +1015,260 @@ test_repeat_speaks_the_last_spoken_line_again() {
   pass "fm-speak: repeat replays the last spoken line, never a refused one, and honours mute"
 }
 
+# The floater's recent-replies list: newest first, each with a number that stays
+# with its reply, bounded to the newest ten, and never holding a refused line.
+test_history_lists_the_newest_ten_replies_newest_first() {
+  local home out n first last count
+  home=$(new_home history "enabled = true")
+  install_shaper "$home" >/dev/null
+  install_speaker "$home" >/dev/null
+
+  out=$(speak "$home" --history) || fail "fm-speak: --history failed on an empty home"
+  assert_equals "" "$out" "an empty history must print nothing"
+
+  for n in 1 2 3 4 5 6 7 8 9 10 11 12; do
+    speak "$home" "Reply $n is green." >/dev/null 2>&1 || fail "fm-speak: reply $n failed"
+  done
+  speak "$home" "Shall I merge it?" >/dev/null 2>&1 || true
+
+  out=$(speak "$home" --history) || fail "fm-speak: --history failed"
+  count=$(printf '%s\n' "$out" | wc -l | tr -d ' ')
+  assert_equals 10 "$count" "the history must keep only the newest ten replies"
+  first=$(printf '%s\n' "$out" | head -n 1)
+  last=$(printf '%s\n' "$out" | tail -n 1)
+  assert_equals "12" "$(printf '%s' "$first" | cut -f 1)" "the newest reply must be listed first"
+  assert_equals "Reply 12 is green." "$(printf '%s' "$first" | cut -f 3)" "the listed text is the shaped line"
+  assert_equals "Reply 3 is green." "$(printf '%s' "$last" | cut -f 3)" "the oldest kept reply must be listed last"
+  printf '%s' "$first" | cut -f 2 | grep -Eq '^[0-9]+$' \
+    || fail "fm-speak: the listed time must be epoch seconds: $first"
+  assert_equals 3 "$(printf '%s' "$first" | awk -F '\t' '{ print NF }')" "each listed reply has exactly three columns"
+  assert_not_contains "$out" "Shall I" "a refused line must never be kept"
+  pass "fm-speak: the history lists the newest ten replies, newest first"
+}
+
+# Choosing a reply from the list plays that reply, even after a newer one has
+# arrived, and a number that is not kept is refused rather than guessed.
+test_replay_speaks_the_chosen_reply() {
+  local home out code number
+  home=$(new_home replay "enabled = true")
+  install_shaper "$home" >/dev/null
+  install_speaker "$home" >/dev/null
+
+  speak "$home" "The first reply." >/dev/null 2>&1 || fail "fm-speak: the first reply failed"
+  number=$(speak "$home" --history | cut -f 1)
+  speak "$home" "The second reply." >/dev/null 2>&1 || fail "fm-speak: the second reply failed"
+  speak "$home" "The third reply." >/dev/null 2>&1 || fail "fm-speak: the third reply failed"
+  # Queued lines play one at a time but in no fixed order, so all three must
+  # have played before the log is cleared.
+  wait_for_content "$home/spoken.log" "text: The first reply." "fm-speak: the first reply never played"
+  wait_for_content "$home/spoken.log" "text: The second reply." "fm-speak: the second reply never played"
+  wait_for_content "$home/spoken.log" "text: The third reply." "fm-speak: the third reply never played"
+  : > "$home/spoken.log"
+
+  out=$(speak "$home" --replay "$number") || fail "fm-speak: --replay failed"
+  assert_equals "The first reply." "$out" "replay reports the line it replayed"
+  wait_for_content "$home/spoken.log" "text: The first reply." \
+    "fm-speak: the replay did not speak the chosen reply"
+  assert_no_grep "second" "$home/spoken.log" "the replay must speak only the chosen reply"
+  assert_no_grep "third" "$home/spoken.log" "the replay must speak only the chosen reply"
+  out=$(speak "$home" --history | wc -l | tr -d ' ')
+  assert_equals 3 "$out" "a replay must not add a reply to the history"
+
+  out=$(speak "$home" --replay 99 2>&1) && code=0 || code=$?
+  expect_code 1 "$code" "a reply number that is not kept is an error"
+  assert_contains "$out" "no reply numbered 99" "the refusal must say why"
+  for bad in 0 abc ''; do
+    speak "$home" --replay "$bad" >/dev/null 2>&1 && code=0 || code=$?
+    expect_code 1 "$code" "--replay '$bad' must be refused"
+  done
+  speak "$home" --replay >/dev/null 2>&1 && code=0 || code=$?
+  expect_code 1 "$code" "--replay without a number must be refused"
+
+  : > "$home/spoken.log"
+  speak "$home" --mute >/dev/null 2>&1 || fail "fm-speak: --mute failed"
+  out=$(speak "$home" --replay "$number" 2>&1) || fail "fm-speak: a muted replay must not fail"
+  assert_contains "$out" "muted" "a muted replay must say why it stayed silent"
+  sleep 0.5
+  [ ! -s "$home/spoken.log" ] || fail "fm-speak: a replay was spoken while muted"
+  pass "fm-speak: replay speaks the chosen reply, refuses unknown numbers, and honours mute"
+}
+
+# The Deepgram stand-ins: synthesis writes audio naming the line it was asked
+# for, and the player records what it played, so a replay that skipped the
+# network is visible as a play with no synthesis beside it.
+install_deepgram() {  # <home> [player-linger-seconds]
+  local home=$1 linger=${2:-0}
+  printf 'DEEPGRAM_API_KEY=test-key-not-real\n' > "$home/.env"
+  cat > "$home/deepgram-tts" <<EOF
+#!/usr/bin/env bash
+out=
+while [ "\$#" -gt 0 ]; do
+  case "\$1" in
+    --to) out=\$2; shift 2 ;;
+    --) shift; break ;;
+    *) shift ;;
+  esac
+done
+printf 'synth: %s\n' "\$*" >> "$home/deepgram.log"
+printf 'audio of %s' "\$*" > "\$out"
+EOF
+  cat > "$home/afplay" <<EOF
+#!/usr/bin/env bash
+printf 'start: %s\n' "\$(cat "\$1")" >> "$home/played.log"
+sleep $linger
+printf 'end: %s\n' "\$(cat "\$1")" >> "$home/played.log"
+EOF
+  chmod +x "$home/deepgram-tts" "$home/afplay"
+}
+
+speak_dg() {  # <home> <env-file> <args...>
+  local home=$1 envfile=$2
+  shift 2
+  FM_DEEPGRAM_ENV_FILE="$envfile" FM_SPEAK_DEEPGRAM_TTS="$home/deepgram-tts" \
+    FM_DEEPGRAM_AFPLAY="$home/afplay" speak "$home" "$@"
+}
+
+count_lines() {  # <file>
+  if [ -f "$1" ]; then wc -l < "$1" | tr -d ' '; else printf '0\n'; fi
+}
+
+wait_for_lines() {  # <file> <count> <msg>
+  local waited=0
+  while [ "$waited" -lt 50 ]; do
+    [ "$(count_lines "$1")" -lt "$2" ] || return 0
+    sleep 0.2
+    waited=$((waited + 1))
+  done
+  fail "$3"
+}
+
+# The captain's complaint: Repeat was slow because it synthesized the line over
+# the network again. A reply Deepgram already synthesized replays from its kept
+# audio; one with no kept audio is synthesized once and kept for next time.
+test_a_replay_plays_kept_audio_without_synthesizing_again() {
+  local home out
+  home=$(new_home replay-audio "enabled = true")
+  install_shaper "$home" >/dev/null
+  install_speaker "$home" >/dev/null
+  install_deepgram "$home"
+
+  speak_dg "$home" "$home/.env" "The fix is green." >/dev/null 2>&1 || fail "fm-speak: the line failed"
+  wait_for_content "$home/played.log" "end: audio of The fix is green." \
+    "fm-speak: the synthesized line never played"
+  assert_equals 1 "$(count_lines "$home/deepgram.log")" "the line must be synthesized once"
+
+  out=$(speak_dg "$home" "$home/.env" --repeat) || fail "fm-speak: --repeat failed"
+  assert_equals "The fix is green." "$out" "repeat reports the line it replayed"
+  wait_for_lines "$home/played.log" 4 "fm-speak: the kept audio never played"
+  assert_equals 4 "$(count_lines "$home/played.log")" "the kept audio must play a second time"
+  assert_equals 1 "$(count_lines "$home/deepgram.log")" "a repeat with kept audio must not synthesize again"
+  [ ! -s "$home/spoken.log" ] || fail "fm-speak: say spoke a reply that had kept audio"
+
+  # A reply spoken by say has no kept audio: its replay goes through the normal
+  # speaker choice once, and what that synthesized is kept for the next replay.
+  speak_dg "$home" /dev/null "The scout is done." >/dev/null 2>&1 || fail "fm-speak: the say line failed"
+  wait_for_spoken "$home/spoken.log" "the say line never reached the speaker"
+  speak_dg "$home" "$home/.env" --repeat >/dev/null 2>&1 || fail "fm-speak: the say repeat failed"
+  wait_for_content "$home/played.log" "end: audio of The scout is done." \
+    "fm-speak: a reply with no kept audio was not synthesized for its replay"
+  assert_equals 2 "$(count_lines "$home/deepgram.log")" "the replay must synthesize exactly once"
+  speak_dg "$home" "$home/.env" --repeat >/dev/null 2>&1 || fail "fm-speak: the second repeat failed"
+  wait_for_lines "$home/played.log" 8 "fm-speak: the kept audio never played again"
+  assert_equals 2 "$(count_lines "$home/deepgram.log")" "audio synthesized for a replay must be kept"
+  assert_equals 8 "$(count_lines "$home/played.log")" "the kept audio must play again"
+  pass "fm-speak: a replay plays kept audio without synthesizing again"
+}
+
+# Kept audio is Deepgram's voice; a home that named a `say` voice hears that
+# voice on a replay too.
+test_a_named_voice_is_kept_on_replay() {
+  local home
+  home=$(new_home replay-voice "enabled = true")
+  install_shaper "$home" >/dev/null
+  install_speaker "$home" >/dev/null
+  install_deepgram "$home"
+  printf 'Ava en_US # Hello\n' > "$home/voices"
+
+  speak_dg "$home" "$home/.env" "The fix is green." >/dev/null 2>&1 || fail "fm-speak: the line failed"
+  wait_for_content "$home/played.log" "end: audio of The fix is green." \
+    "fm-speak: the synthesized line never played"
+  printf 'enabled = true\nvoice = Ava\n' > "$home/config/speak"
+  speak_dg "$home" "$home/.env" --repeat >/dev/null 2>&1 || fail "fm-speak: --repeat failed"
+  wait_for_content "$home/spoken.log" "text: The fix is green." \
+    "fm-speak: a home with a named voice did not replay through say"
+  assert_grep "argv: -v Ava" "$home/spoken.log" "the replay must use the named voice"
+  assert_equals 2 "$(count_lines "$home/played.log")" "kept audio must not play for a named voice"
+  pass "fm-speak: a named voice wins over kept audio on a replay"
+}
+
+# Stop covers a replay from kept audio exactly as it covers any other line.
+test_stop_cuts_a_replay_of_kept_audio() {
+  local home waited=0
+  home=$(new_home replay-stop "enabled = true")
+  install_shaper "$home" >/dev/null
+  install_speaker "$home" >/dev/null
+  install_deepgram "$home" 20
+
+  speak_dg "$home" "$home/.env" "The long reply." >/dev/null 2>&1 || fail "fm-speak: the line failed"
+  wait_for_content "$home/played.log" "start: audio of The long reply." \
+    "fm-speak: the line never started"
+  speak "$home" --stop || fail "fm-speak: --stop failed"
+  while [ -e "$home/state/.speak.lock" ] && [ "$waited" -lt 50 ]; do
+    sleep 0.2
+    waited=$((waited + 1))
+  done
+  : > "$home/played.log"
+
+  speak_dg "$home" "$home/.env" --repeat >/dev/null 2>&1 || fail "fm-speak: --repeat failed"
+  wait_for_content "$home/played.log" "start: audio of The long reply." \
+    "fm-speak: the replay never started"
+  speak "$home" --stop || fail "fm-speak: --stop failed"
+  waited=0
+  while [ -e "$home/state/.speak.lock" ] && [ "$waited" -lt 50 ]; do
+    sleep 0.2
+    waited=$((waited + 1))
+  done
+  [ ! -e "$home/state/.speak.lock" ] || fail "fm-speak: the stopped replay kept the playback lock"
+  assert_no_grep "end: audio of The long reply." "$home/played.log" \
+    "fm-speak: the replay was not cut short"
+  pass "fm-speak: stop cuts a replay of kept audio"
+}
+
+# Permission bits of a path, as octal digits, on macOS and Linux alike.
+mode_of() {  # <path>
+  stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1"
+}
+
+# The captain's spoken replies are private: other accounts on the Mac must not
+# be able to read the kept text or audio, even under a permissive umask and
+# even when a history directory already exists with looser permissions.
+test_the_reply_history_is_readable_only_by_its_owner() {
+  local home history entry path
+  home=$(new_home history-private "enabled = true")
+  install_shaper "$home" >/dev/null
+  install_speaker "$home" >/dev/null
+  install_deepgram "$home"
+  history="$home/state/speak-history"
+  mkdir -p "$history"
+  chmod 755 "$history"
+
+  (umask 022 && speak_dg "$home" "$home/.env" "The fix is green.") >/dev/null 2>&1 \
+    || fail "fm-speak: the line failed"
+  wait_for_content "$home/played.log" "end: audio of The fix is green." \
+    "fm-speak: the synthesized line never played"
+
+  assert_equals 700 "$(mode_of "$history")" "an existing history directory must be tightened to 0700"
+  entry=$(find "$history" -mindepth 1 -maxdepth 1 -type d | head -n 1)
+  [ -n "$entry" ] || fail "fm-speak: no reply was kept"
+  assert_equals 700 "$(mode_of "$entry")" "a kept reply's directory must be 0700"
+  for path in "$entry"/*; do
+    assert_equals 600 "$(mode_of "$path")" "kept file ${path##*/} must be 0600"
+  done
+  [ -f "$entry/audio.mp3" ] || fail "fm-speak: the reply's audio was not kept"
+  [ -f "$entry/text" ] || fail "fm-speak: the reply's text was not kept"
+  pass "fm-speak: the reply history is readable only by its owner"
+}
+
 test_a_home_that_never_opted_in_stays_silent
 test_an_absent_config_is_the_same_as_not_opted_in
 test_an_opted_in_home_speaks_the_shaped_line
@@ -1050,3 +1304,9 @@ test_an_unusable_state_directory_is_refused_before_anything_is_shaped
 test_mute_silences_every_line_until_unmuted
 test_stop_cuts_the_current_line_and_cancels_the_queued_one
 test_repeat_speaks_the_last_spoken_line_again
+test_history_lists_the_newest_ten_replies_newest_first
+test_replay_speaks_the_chosen_reply
+test_a_replay_plays_kept_audio_without_synthesizing_again
+test_a_named_voice_is_kept_on_replay
+test_stop_cuts_a_replay_of_kept_audio
+test_the_reply_history_is_readable_only_by_its_owner

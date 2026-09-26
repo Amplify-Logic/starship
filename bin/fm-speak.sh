@@ -6,6 +6,8 @@
 #   fm-speak.sh [--dry-run] <text>
 #   fm-speak.sh --stop
 #   fm-speak.sh --repeat
+#   fm-speak.sh --history
+#   fm-speak.sh --replay <number>
 #   fm-speak.sh --mute | --unmute | --muted
 #   fm-speak.sh --help
 #
@@ -120,11 +122,18 @@
 #             kills the player named in state/.speak-player. Either the speaker
 #             sees the new value or the stop sees the player, so no line slips
 #             between the two.
-#   --repeat  speaks the last line this home handed to a speaker again. That line
-#             is kept in state/speak-last only after it was shaped and handed
-#             over, so a refused or unshaped sentence can never be repeated, and
-#             it is replayed as it was shaped rather than shaped a second time.
-#             Nothing spoken yet is exit 1.
+#   --repeat  speaks the newest line in the reply history again (see REPLY
+#             HISTORY below). Nothing spoken yet is exit 1.
+#   --history prints the reply history newest first, one line per reply:
+#             `<number> TAB <epoch seconds> TAB <text>`, with the text's own
+#             tabs and line breaks turned into spaces. An empty history prints
+#             nothing and exits 0.
+#   --replay <number>
+#             speaks the reply with that number from --history again. The
+#             number belongs to the reply, not to its place in the list, so a
+#             reply that arrives between reading the list and choosing from it
+#             never shifts the choice onto a different line. A number that is
+#             not kept (never used, or pruned) is exit 1.
 #   --mute    makes every later line, repeats included, stay silent until
 #             --unmute, and stops any line playing now. The flag is
 #             state/speak-muted and is per home. A muted line is neither shaped
@@ -132,7 +141,22 @@
 #             voice only, and the text reply stays the authoritative one.
 #   --muted   prints `muted` or `unmuted`.
 # Controls need no opt-in because they can only make this home quieter; --repeat
-# is a spoken line and honours `enabled` like any other.
+# and --replay are spoken lines and honour `enabled`, mute and --stop like any
+# other, and print the text they replayed.
+#
+# REPLY HISTORY: every line handed to a speaker is kept in
+# state/speak-history/<number>/, readable only by this account (directories
+# 0700, files 0600), with the time it was spoken and the text as it was
+# shaped, so a refused or unshaped sentence can never be replayed, and a replay
+# is never shaped a second time. Numbers only grow; the newest 10 replies
+# are kept and older ones are pruned whenever a new one is kept. A muted line is
+# neither shaped nor kept. When Deepgram synthesized the line, its audio is kept
+# beside the text, and a replay plays that audio straight away instead of paying
+# for the network synthesis again - that wait is what made a replay slow. A reply
+# with no kept audio (spoken by `say`, or kept before its audio was) is spoken
+# through the ordinary speaker choice, and audio synthesized for that replay is
+# kept for the next one. A named `voice` in config/speak always wins: kept
+# Deepgram audio is not in that voice, so it is not played for such a home.
 #
 # Environment overrides, for tests and unusual layouts:
 #   FM_SPEAK_SHAPER    register owner exposing the `--dry-run <text>` contract
@@ -149,8 +173,9 @@
 #                      bounded seconds for the waited-on register call
 #                      (default 15)
 #   FM_SPEAK_TIMEOUT   bounded seconds for the detached speaker (default 60)
-#   FM_STATE_OVERRIDE  state directory holding the confirmed-voice memory
-#                      and the per-home playback lock (default: $FM_HOME/state)
+#   FM_STATE_OVERRIDE  state directory holding the confirmed-voice memory,
+#                      the per-home playback lock and the reply history
+#                      (default: $FM_HOME/state)
 #
 # EXIT CODES (mirroring the register owner's own contract):
 #   0  handed to the speaker, printed under --dry-run, or this home is not
@@ -158,7 +183,8 @@
 #   1  cannot speak: the register owner is unreachable, failed or exceeded its
 #      bound, the speech binary is missing, the configured voice is not one
 #      this machine has, the state directory that holds the playback lock
-#      cannot be created, or the config is invalid
+#      cannot be created, the config is invalid, or a replay names a reply
+#      that is not kept
 #   2  refused by the register; nothing was spoken and the reason is reported
 set -eu
 
@@ -172,7 +198,10 @@ VOICE_CONFIRMED_FILE="$STATE/speak-voice-confirmed"
 SPEAK_LOCK="$STATE/.speak.lock"
 SPEAK_LOCK_HELD=false
 MUTE_FILE="$STATE/speak-muted"
-LAST_FILE="$STATE/speak-last"
+HISTORY_DIR="$STATE/speak-history"
+HISTORY_KEEP=10
+KEPT_AUDIO=
+REPLAY_NUMBER=
 STOP_GEN_FILE="$STATE/speak-stop-generation"
 PLAYER_FILE="$STATE/.speak-player"
 STOP_GEN_AT_START=0
@@ -474,10 +503,11 @@ say_speaker() {  # <textfile>
 }
 
 # shellcheck disable=SC2329 # Invoked by name through detach_speaker.
-audio_speaker() {  # <player> <audio> <textfile>
-  local player=$1 audio=$2 textfile=$3
+audio_speaker() {  # <player> <audio> [textfile]
+  local player=$1 audio=$2 textfile=${3:-}
   play_serialized "$player" "$audio"
-  rm -f "$audio" "$textfile"
+  rm -f "$audio"
+  [ -z "$textfile" ] || rm -f "$textfile"
 }
 
 speak_say_detached() {  # <textfile>
@@ -518,6 +548,7 @@ speak_deepgram_or_fail() {  # <textfile>
     note "no afplay at $afplay_bin; falling back to say"
     return 1
   fi
+  keep_audio "$audio"
   detach_speaker audio_speaker "$afplay_bin" "$audio" "$textfile"
   return 0
 }
@@ -568,13 +599,122 @@ set_muted() {  # true|false
   fi
 }
 
-remember_last_line() {  # <shaped text>
-  local tmp
-  tmp=$(mktemp "$STATE/.speak-last.XXXXXX" 2>/dev/null) || return 0
-  if printf '%s\n' "$1" > "$tmp" 2>/dev/null && mv -f "$tmp" "$LAST_FILE" 2>/dev/null; then
+# --- reply history ----------------------------------------------------------
+
+# Kept reply numbers, oldest first. An entry directory is claimed before its text
+# is written, so a number may briefly have no text; readers skip it.
+history_numbers() {
+  local entry name
+  for entry in "$HISTORY_DIR"/*; do
+    name=${entry##*/}
+    case "$name" in ''|*[!0-9]*) continue ;; esac
+    [ -d "$entry" ] && printf '%s\n' "$name"
+  done | sort -n
+}
+
+# Copy the synthesized audio aside before the detached speaker plays and removes
+# it, so the reply history can keep it. Best effort: a line without kept audio
+# is still replayable, only not instantly.
+keep_audio() {  # <audio>
+  local kept
+  KEPT_AUDIO=
+  kept=$(mktemp "$STATE/.speak-audio.XXXXXX" 2>/dev/null) || return 0
+  if { ln -f "$1" "$kept" 2>/dev/null || cp "$1" "$kept" 2>/dev/null; } \
+    && chmod 600 "$kept" 2>/dev/null; then
+    KEPT_AUDIO=$kept
+  else
+    rm -f "$kept"
+  fi
+}
+
+# Move kept audio into a reply's entry. An entry pruned in the meantime simply
+# loses the audio.
+attach_kept_audio() {  # <entry-dir>
+  [ -n "$KEPT_AUDIO" ] || return 0
+  mv -f "$KEPT_AUDIO" "$1/audio.mp3" 2>/dev/null || rm -f "$KEPT_AUDIO"
+  KEPT_AUDIO=
+}
+
+prune_history() {
+  local count number
+  count=$(history_numbers | wc -l | tr -d '[:space:]')
+  [ "$count" -gt "$HISTORY_KEEP" ] || return 0
+  history_numbers | head -n "$((count - HISTORY_KEEP))" | while read -r number; do
+    rm -rf "${HISTORY_DIR:?}/$number"
+  done
+}
+
+# Keep one line that was handed to a speaker. Best effort, like the handoff it
+# follows: a history that cannot be written never turns a spoken line into a
+# failure. Everything is written under umask 077 and the directory is tightened
+# to 0700 on every use, so the captain's replies are never readable by another
+# account on the machine, including a history left behind by an older version.
+record_history() {  # <shaped text>
+  local saved
+  saved=$(umask)
+  umask 077
+  store_history "$1"
+  umask "$saved"
+}
+
+# The number is claimed with mkdir, which is atomic, so two lines kept at once
+# never share one.
+store_history() {  # <shaped text>
+  local last next tries=0 entry
+  if ! mkdir -p "$HISTORY_DIR" 2>/dev/null || ! chmod 700 "$HISTORY_DIR" 2>/dev/null; then
+    attach_kept_audio /nonexistent
     return 0
   fi
-  rm -f "$tmp"
+  last=$(history_numbers | tail -n 1)
+  next=$(( ${last:-0} + 1 ))
+  until mkdir "$HISTORY_DIR/$next" 2>/dev/null; do
+    tries=$((tries + 1))
+    if [ "$tries" -ge 20 ]; then
+      attach_kept_audio /nonexistent
+      return 0
+    fi
+    next=$((next + 1))
+  done
+  entry=$HISTORY_DIR/$next
+  date +%s > "$entry/time" 2>/dev/null || true
+  attach_kept_audio "$entry"
+  if printf '%s\n' "$1" > "$entry/.text" 2>/dev/null; then
+    mv -f "$entry/.text" "$entry/text" 2>/dev/null || true
+  fi
+  prune_history
+}
+
+list_history() {
+  local number entry when text
+  history_numbers | sort -rn | while read -r number; do
+    entry=$HISTORY_DIR/$number
+    [ -s "$entry/text" ] || continue
+    text=$(tr '\t\r\n' '   ' < "$entry/text" 2>/dev/null) || continue
+    text=$(printf '%s' "$text" | sed -E 's/[[:space:]]+$//')
+    when=$(cat "$entry/time" 2>/dev/null) || when=0
+    case "$when" in ''|*[!0-9]*) when=0 ;; esac
+    printf '%s\t%s\t%s\n' "$number" "$when" "$text"
+  done
+}
+
+# Play a reply's kept audio straight away, with no synthesis. The speaker gets a
+# copy of its own so pruning the entry while the line waits for the playback
+# lock cannot take the audio from under it. Returns 1 when there is nothing to
+# play this way and the caller should speak the text instead.
+play_kept_audio() {  # <entry-dir>
+  local entry=$1 player audio
+  [ -z "$CFG_VOICE" ] || return 1
+  [ -s "$entry/audio.mp3" ] || return 1
+  player="${FM_DEEPGRAM_AFPLAY:-/usr/bin/afplay}"
+  [ -x "$player" ] || return 1
+  audio=$(mktemp "${TMPDIR:-/tmp}/fm-speak-dg.XXXXXX") || return 1
+  mv "$audio" "$audio.mp3" || { rm -f "$audio"; return 1; }
+  audio=$audio.mp3
+  if ! ln -f "$entry/audio.mp3" "$audio" 2>/dev/null && ! cp "$entry/audio.mp3" "$audio" 2>/dev/null; then
+    rm -f "$audio"
+    return 1
+  fi
+  detach_speaker audio_speaker "$player" "$audio"
 }
 
 # --- configured voice -------------------------------------------------------
@@ -607,7 +747,12 @@ drop_voice_list() {
   VOICE_LIST_GUARD=
   VOICE_LIST_FILE=
 }
-trap drop_voice_list EXIT
+# shellcheck disable=SC2329 # Invoked through the EXIT trap below.
+cleanup_on_exit() {
+  drop_voice_list
+  [ -z "$KEPT_AUDIO" ] || rm -f "$KEPT_AUDIO"
+}
+trap cleanup_on_exit EXIT
 
 # Only a confirmed voice is remembered. A voice that was not found is re-asked
 # every line on purpose: the captain is being told about it every line too, and a
@@ -727,10 +872,11 @@ apply_desk_register() {
 
 # --- main -------------------------------------------------------------------
 
-# Speak the kept last line again, as it was shaped. Honours opt-in and mute
-# exactly like a new line, and takes the same speaker path and playback lock.
-repeat_last_line() {
-  local textfile
+# Speak a kept reply again, as it was shaped. Honours opt-in and mute exactly
+# like a new line, and takes the same speaker path and playback lock; kept audio
+# skips the synthesis. <number> empty means the newest reply (--repeat).
+replay_reply() {  # [number]
+  local number=$1 entry text textfile
   load_config
   if [ "$CFG_ENABLED" != true ]; then
     note "this home is not opted in; add 'enabled = true' to config/speak to speak here"
@@ -740,16 +886,27 @@ repeat_last_line() {
     note "voice is muted; nothing was spoken (fm-speak.sh --unmute)"
     exit 0
   fi
-  [ -s "$LAST_FILE" ] || die "nothing has been spoken here yet; nothing to repeat"
+  if [ -z "$number" ]; then
+    number=$(list_history | head -n 1 | cut -f 1)
+    [ -n "$number" ] || die "nothing has been spoken here yet; nothing to repeat"
+  fi
+  entry=$HISTORY_DIR/$number
+  text=$(cat "$entry/text" 2>/dev/null) || text=
+  [ -n "$text" ] || die "no reply numbered $number is kept; see fm-speak.sh --history"
+  load_speak_lock_helpers
+  if play_kept_audio "$entry"; then
+    printf '%s\n' "$text"
+    exit 0
+  fi
   if [ ! -x "$SAY_BIN" ] && [ -z "$(fm_deepgram_api_key)" ]; then
     die "no speech binary at $SAY_BIN and no DEEPGRAM_API_KEY (set FM_SPEAK_SAY or the key)"
   fi
-  load_speak_lock_helpers
   start_voice_list
   textfile=$(mktemp "${TMPDIR:-/tmp}/fm-speak-text.XXXXXX") || die "cannot create a temporary file"
-  cp "$LAST_FILE" "$textfile" || { rm -f "$textfile"; die "cannot read $LAST_FILE"; }
+  printf '%s\n' "$text" > "$textfile"
   speak_detached "$textfile"
-  cat "$LAST_FILE"
+  attach_kept_audio "$entry"
+  printf '%s\n' "$text"
   exit 0
 }
 
@@ -760,9 +917,20 @@ main() {
     case "$1" in
       --help|-h) usage; exit 0 ;;
       --dry-run) dry_run=true; shift ;;
-      --stop|--repeat|--mute|--unmute|--muted)
-        [ -z "$control" ] || { note "only one of --stop, --repeat, --mute, --unmute, --muted"; exit 1; }
+      --stop|--repeat|--history|--replay|--mute|--unmute|--muted)
+        [ -z "$control" ] || {
+          note "only one of --stop, --repeat, --history, --replay, --mute, --unmute, --muted"
+          exit 1
+        }
         control=${1#--}
+        if [ "$control" = replay ]; then
+          [ "$#" -ge 2 ] || { note "--replay needs a reply number from --history"; exit 1; }
+          REPLAY_NUMBER=$2
+          case "$REPLAY_NUMBER" in
+            ''|*[!0-9]*|0*) note "--replay needs a reply number from --history: $REPLAY_NUMBER"; exit 1 ;;
+          esac
+          shift
+        fi
         shift
         ;;
       --) shift; break ;;
@@ -774,15 +942,16 @@ main() {
   STOP_GEN_AT_START=$(stop_generation)
   if [ -n "$control" ]; then
     [ "$#" -eq 0 ] && [ "$dry_run" = false ] \
-      || { note "--$control takes no text and no --dry-run"; exit 1; }
+      || { note "--$control takes no other text and no --dry-run"; exit 1; }
     case "$control" in
       stop) stop_playback ;;
       mute) set_muted true ;;
       unmute) set_muted false ;;
       muted) if is_muted; then printf 'muted\n'; else printf 'unmuted\n'; fi ;;
-      repeat)
+      history) list_history ;;
+      repeat|replay)
         require_positive_int FM_SPEAK_TIMEOUT "$SPEAKER_TIMEOUT"
-        repeat_last_line
+        replay_reply "$REPLAY_NUMBER"
         ;;
     esac
     exit 0
@@ -871,7 +1040,7 @@ main() {
   textfile=$(mktemp "${TMPDIR:-/tmp}/fm-speak-text.XXXXXX") || die "cannot create a temporary file"
   printf '%s\n' "$shaped" > "$textfile"
   speak_detached "$textfile"
-  remember_last_line "$shaped"
+  record_history "$shaped"
   printf '%s\n' "$shaped"
   exit 0
 }

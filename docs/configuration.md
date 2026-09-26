@@ -1295,7 +1295,7 @@ Detachment also puts the speaker in a process group of its own, so a harness tha
 Playback is serialized per home: a second line waits for the current one to finish rather than overlapping, and that wait happens in the detached speaker so the calling turn is still not held open by audio.
 The two bounds are deliberately separate because they protect different things: `FM_SPEAK_SHAPER_TIMEOUT` bounds the waited-on register call and is therefore the worst case a turn can be held, while `FM_SPEAK_TIMEOUT` bounds synthesis/playback runaways without ever holding the caller for the duration of the audio.
 The script's header owns their defaults.
-`bin/fm-speak.sh --stop`, `--repeat`, `--mute`, `--unmute` and `--muted` are the desk floater's voice controls: a mute is a per-home runtime flag in `state/speak-muted`, never a `config/speak` key, and silences voice only, while the text reply stays authoritative; the script's header owns their behavior and docs/desk-floater.md describes the buttons.
+`bin/fm-speak.sh --stop`, `--repeat`, `--history`, `--replay`, `--mute`, `--unmute` and `--muted` are the desk floater's voice controls: a mute is a per-home runtime flag in `state/speak-muted`, never a `config/speak` key, and silences voice only, while the text reply stays authoritative; the script's header owns their behavior and docs/desk-floater.md describes the buttons.
 
 ## Supervision active alert channels (config/wedge-alarm)
 
