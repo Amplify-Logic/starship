@@ -113,7 +113,6 @@ run_axi_isolated() {
   local axi profile
   axi=$(axi_bin) || refuse_missing_axi
   profile=$(profile_dir_for "$id")
-  mkdir -p "$profile" || fail "could not create profile dir $profile"
   # Explicitly defeat ambient attach-to-existing-browser knobs.
   env -u CHROME_DEVTOOLS_AXI_AUTO_CONNECT \
       -u CHROME_DEVTOOLS_AXI_BROWSER_URL \
@@ -130,6 +129,10 @@ cmd_start() {
   root=$(browse_root_for "$id")
   marker=$(live_marker_for "$id")
   mkdir -p "$root" || fail "could not create browse root $root"
+  # Only start creates the profile. A stop must never create one: teardown
+  # stops the session after a retired secondmate's home is already gone, and a
+  # recreated profile path would resurrect that home.
+  mkdir -p "$(profile_dir_for "$id")" || fail "could not create profile dir $(profile_dir_for "$id")"
   if ! run_axi_isolated "$id" start; then
     fail "chrome-devtools-axi start failed for session $id"
   fi

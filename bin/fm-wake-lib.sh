@@ -963,6 +963,17 @@ fm_recovery_marker_reopen_announced() {
   fm_recovery_transition "$1" reopen-announced
 }
 
+# A lock lives inside its parent directory. Once that directory is gone (a
+# torn-down home or task record) there is no holder to reclaim and no steal
+# lock to take, so acquiring must refuse at once: the stale-owner path below
+# would otherwise recurse through .steal, .steal.steal, ... without end.
+_fm_lock_parent_exists() {  # <lockdir>
+  case "$1" in
+    */*) [ -d "${1%/*}/" ] ;;
+    *) return 0 ;;
+  esac
+}
+
 fm_lock_try_acquire() {
   local lockdir=$1 pid steal cur rc steal_owner primary_owner current
   FM_LOCK_HELD_PID=
@@ -972,6 +983,7 @@ fm_lock_try_acquire() {
   if fm_lock_try_create "$lockdir"; then
     return 0
   fi
+  _fm_lock_parent_exists "$lockdir" || return 1
 
   fm_current_pid current || return 1
   pid=$(cat "$lockdir/pid" 2>/dev/null || true)
@@ -1066,6 +1078,8 @@ fm_lock_try_acquire() {
 fm_lock_acquire_wait() {
   local lockdir=$1
   while ! fm_lock_try_acquire "$lockdir"; do
+    # No amount of waiting acquires a lock whose directory is gone.
+    _fm_lock_parent_exists "$lockdir" || return 1
     sleep 0.1
   done
 }

@@ -404,6 +404,20 @@ issue_cap() {
   $GW issue-capability --purpose "$purpose" --job-id "$job" --uid "$uid" | awk -F= '$1=="capability" {print $2}'
 }
 
+# A capability is handed to the runner as its own argv word, so no issued token
+# may be readable as an option. Base64url tokens began with '-' about one time
+# in 64, and argparse then refused the documented --capability TOKEN form.
+test_issued_capabilities_are_never_option_like() {
+  local cap _
+  reset_gateway
+  for _ in 1 2 3 4 5 6 7 8; do
+    cap=$(issue_cap execution argv-job)
+    printf '%s' "$cap" | grep -Eq '^[A-Za-z0-9]+$' \
+      || fail "issued capability can be misread as a command-line option: $cap"
+  done
+  pass "every issued capability is a plain argv word the runner can never read as an option"
+}
+
 test_distinct_peer_credential_protocols() {
   local cap bad_cap approval_cap execution_cap request_json prepare_payload response request_id digest
   reset_gateway
@@ -1162,6 +1176,7 @@ test_strict_parser_rejections
 test_canonicalization_matches_rfc8785
 test_closed_plan_resolution
 test_sqlite_uniqueness_replay_concurrency_and_tombstones
+test_issued_capabilities_are_never_option_like
 test_crash_recovery_marks_unknown
 test_distinct_peer_credential_protocols
 test_regression_pack_gateway_expectations

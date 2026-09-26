@@ -1083,7 +1083,10 @@ def issue_capability(db: sqlite3.Connection, purpose: str, job_id: str, peer_uid
         fail("unknown capability purpose")
     if not ID_RE.fullmatch(job_id):
         fail("job_id must be path-safe")
-    token = secrets.token_urlsafe(32)
+    # Hex, not urlsafe base64: a capability travels as its own argv word
+    # (fm-action-runner-v2.py run --capability TOKEN), and a urlsafe token that
+    # happened to begin with '-' was read by argparse as an option instead.
+    token = secrets.token_hex(32)
     db.execute(
         "INSERT INTO capabilities(capability_hash,purpose,job_id,peer_uid,created_at,expires_at) VALUES(?,?,?,?,?,?)",
         (capability_hash(token), purpose, job_id, peer_uid, now, now + 600),

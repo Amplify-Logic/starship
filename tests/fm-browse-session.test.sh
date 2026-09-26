@@ -180,6 +180,24 @@ test_stop_retains_profile_purge_removes() {
   pass "stop retains profile; --purge removes the browse root"
 }
 
+# Teardown stops a retired secondmate's session after its home, which holds the
+# overridden state directory, is already gone. Stopping must not recreate any
+# of that path, or the retired home comes back.
+test_stop_creates_nothing_under_a_removed_state_dir() {
+  local fakebin log gone
+  fakebin=$(fm_fakebin "$TMP/gone")
+  install_axi_stub "$fakebin"
+  log="$TMP/gone/axi.log"
+  : > "$log"
+  gone="$TMP/retired-home"
+  PATH="$fakebin:$BASE_PATH" FM_HOME="$gone" FM_STATE_OVERRIDE="$gone/state/parent-route" \
+    FM_BROWSE_TEST_LOG="$log" "$BROWSE_SH" stop task-retired --purge >/dev/null \
+    || fail "stop for a removed state directory failed"
+  assert_contains "$(cat "$log")" 'argv=stop' "stop still closes the named session"
+  [ ! -e "$gone" ] || fail "stop recreated the removed home: $(find "$gone")"
+  pass "stop closes the session without recreating a removed state directory"
+}
+
 test_teardown_source_purges_browse_dir() {
   # Contract: teardown best-effort stops+purges browse state for the task id.
   # shellcheck disable=SC2016
@@ -216,5 +234,6 @@ test_start_names_session_and_isolates_profile
 test_every_axi_invocation_strips_captain_chrome_inputs
 test_two_tasks_get_distinct_profiles
 test_stop_retains_profile_purge_removes
+test_stop_creates_nothing_under_a_removed_state_dir
 test_teardown_source_purges_browse_dir
 test_axi_absent_refuses

@@ -2403,6 +2403,30 @@ test_self_held_lock_reclaims_instead_of_deadlocking() {
   pass "an abandoned same-process lock hold is reclaimed; a parent's live hold is not"
 }
 
+# A torn-down home or task record takes its lock directory with it. Acquiring
+# there once recursed through .steal, .steal.steal, ... and a waiter then spun
+# until an outer deadline killed it, which kept a watcher alive past the
+# teardown of its own state directory.
+test_lock_in_a_vanished_directory_refuses_at_once() {
+  local dir state rc
+  dir=$(make_case vanished-lock-dir)
+  state="$dir/state"
+  mkdir -p "$state/gone"
+  rc=0
+  FM_STATE_OVERRIDE="$state" bash -c '
+    . "$1"
+    . "$2"
+    rmdir "$3/gone" || exit 20
+    fm_run_timed 5 bash -c ". \"\$1\"; fm_lock_try_acquire \"\$2\"" _ "$1" "$3/gone/.fixture.lock"
+    [ "$?" -eq 1 ] || exit 11
+    fm_run_timed 5 bash -c ". \"\$1\"; fm_lock_acquire_wait \"\$2\"" _ "$1" "$3/gone/.fixture.lock"
+    [ "$?" -eq 1 ] || exit 12
+    [ ! -e "$3/gone" ] || exit 13
+  ' _ "$ROOT/bin/fm-wake-lib.sh" "$ROOT/bin/fm-timeout-lib.sh" "$state" || rc=$?
+  [ "$rc" -eq 0 ] || fail "a lock in a vanished directory did not refuse at once (rc=$rc)"
+  pass "acquiring a lock whose directory is gone refuses at once instead of waiting forever"
+}
+
 test_subshell_lock_ownership_without_bashpid() {
   local dir state rc
   dir=$(make_case subshell-lock-ownership)
@@ -3311,6 +3335,7 @@ SH
 }
 
 test_self_held_lock_reclaims_instead_of_deadlocking
+test_lock_in_a_vanished_directory_refuses_at_once
 test_subshell_lock_ownership_without_bashpid
 test_bounded_lock_handoff_after_contention
 test_live_presentation_holder_is_deadlined_without_weakening_ack

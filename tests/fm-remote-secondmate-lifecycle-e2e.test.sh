@@ -1151,9 +1151,12 @@ jq --arg p "$ios_pane" \
   || fail "the agent-free remote pane did not classify dead"
 
 tabs_before=$(grep -c '^tab create' "$HERDR_LOG" || true)
+# remote_env is a function, so a backgrounded call is a subshell; exec makes
+# watch_pid the watcher itself. Signalling only that subshell would orphan a
+# live watcher that keeps writing into the fixture while cleanup removes it.
 FM_STATE_OVERRIDE="$WATCH_STATE" FM_SECONDMATE_LIVENESS_SECS=1 FM_POLL=1 \
   FM_SIGNAL_GRACE=0 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
-  remote_env "$ROOT/bin/fm-watch.sh" \
+  remote_env exec "$ROOT/bin/fm-watch.sh" \
   > "$TMP_ROOT/watch-liveness.out" 2> "$TMP_ROOT/watch-liveness.err" &
 watch_pid=$!
 watch_wait=0
@@ -1204,7 +1207,7 @@ ssh_before=$(cat "$SSH_COUNT" 2>/dev/null || printf '0')
 FM_FAKE_SSH_MODE=unreachable FM_STATE_OVERRIDE="$WATCH_STATE_UNREACHABLE" \
   FM_SECONDMATE_LIVENESS_SECS=1 FM_POLL=1 FM_SIGNAL_GRACE=0 \
   FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
-  remote_env "$ROOT/bin/fm-watch.sh" \
+  remote_env exec "$ROOT/bin/fm-watch.sh" \
   > "$TMP_ROOT/watch-unreachable.out" 2> "$TMP_ROOT/watch-unreachable.err" &
 watch_pid=$!
 sleep 4
@@ -1212,6 +1215,12 @@ kill -0 "$watch_pid" 2>/dev/null \
   || fail "the watcher exited against an unreachable remote secondmate: $(cat "$TMP_ROOT/watch-unreachable.out" "$TMP_ROOT/watch-unreachable.err")"
 kill "$watch_pid" 2>/dev/null || true
 wait "$watch_pid" 2>/dev/null || true
+# A watcher that outlived its stop keeps beating once per poll into a fixture
+# that cleanup is about to remove.
+touch "$TMP_ROOT/watch-unreachable.stopped"
+sleep 2.5
+[ ! "$WATCH_STATE_UNREACHABLE/.last-watcher-beat" -nt "$TMP_ROOT/watch-unreachable.stopped" ] \
+  || fail "the stopped unreachable-leg watcher is still polling"
 ssh_after=$(cat "$SSH_COUNT" 2>/dev/null || printf '0')
 [ "$ssh_after" -gt "$ssh_before" ] || fail "the unreachable remote endpoint was never probed"
 [ ! -s "$WATCH_STATE_UNREACHABLE/.wake-queue" ] \
