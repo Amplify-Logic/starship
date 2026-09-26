@@ -151,20 +151,23 @@ exclusion_reason() {
     fm-backend-orca.test.sh)
       printf '%s\n' 'orca backend surface; keep serial until dedicated isolation proof'
       ;;
+    fm-captain-hold-lifecycle.test.sh)
+      printf '%s\n' 'isolated in the 2026-08-20 proof, but its CI duration alone would fill most of a parallel job cap; serial CI shards carry it'
+      ;;
     *)
       return 1
       ;;
   esac
 }
 
-# Exact candidate set from the archived concurrent proof. Adding or removing a
-# path requires a new audit and proof archive.
+# Exact candidate set, within the archived concurrent proof
+# (docs/fm-test-isolation-proof.md). Adding a path requires a new audit and
+# proof archive; a removed path keeps its reason in exclusion_reason above.
 list_parallel_candidates() {
   cat <<'EOF'
 tests/fm-arm-pretool-check.test.sh
 tests/fm-backend-herdr.test.sh
 tests/fm-brief.test.sh
-tests/fm-captain-hold-lifecycle.test.sh
 tests/fm-cd-pretool-check.test.sh
 tests/fm-composer-ghost.test.sh
 tests/fm-composer-lib.test.sh
@@ -210,6 +213,7 @@ fm-wake-queue.test.sh
 fm-afk-inject-e2e.test.sh
 fm-backend-herdr-smoke.test.sh
 fm-backend-cmux-smoke.test.sh
+fm-captain-hold-lifecycle.test.sh
 fm-pi-primary-live-e2e.test.sh
 fm-quota-array-dispatch-live-e2e.test.sh
 EOF

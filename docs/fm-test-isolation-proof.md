@@ -76,6 +76,19 @@ This record owns concurrent isolation evidence for the portable parallel candida
 | 331 | 0 | 20 | `tests/fm-supervision-instructions.test.sh` |
 | 99 | 0 | 23 | `tests/fm-transition-lib.test.sh` |
 
+### Current candidate set
+
+`tests/fm-captain-hold-lifecycle.test.sh` has since left the candidate set for CI duration, not isolation: [fm-test-portable-shards.md](fm-test-portable-shards.md) owns that reason, and `bin/fm-test-isolation-proof.sh --list-exclusions` records it.
+The remaining 23 candidates are a subset of the archive above, which stays the last fully passing portable run.
+
+A 23-candidate re-run on 2026-09-26 did not pass on a macOS host with `/bin/bash` 3.2.57 and five-minute load averages between 11 and 35.
+Command: `FM_PI_PACKAGE_DIR=<pi-0.87.1>/node_modules/@earendil-works/pi-coding-agent PATH=<typescript-5.9.3>/node_modules/.bin:$PATH bin/fm-test-isolation-proof.sh --jobs 4`, because the host's own TypeScript 4.9.5 and Pi 0.80.10 fail `tests/fm-pi-primary-types.test.sh` even when it runs alone.
+Every run failed only `tests/fm-test-run.test.sh`, and one run also failed the `tests/fm-herdr-lab.test.sh` viewer fixture launch under load.
+The same command on unmodified `main` with all 24 candidates failed `tests/fm-test-run.test.sh` too, so neither failure comes from removing a candidate.
+Two causes were found in the full output.
+`tests/fm-lint.test.sh` wrote a transient `tests/*.test.sh` fixture into the checkout, so a concurrent `tests/fm-test-run.test.sh` counted one more suite script than its own listing (`not ok - union of lanes (284) must equal --all (283)`); that fixture now uses a name outside `tests/*.test.sh`.
+The rest were `printf: write error: Interrupted system call` from Bash 3.2 inside `bin/fm-test-run.sh --check-coverage`, which truncates one lane listing and fails its partition check under this load; that remains open, and CI's Linux lanes run these scripts serially.
+
 ## Family concurrency proofs
 
 `bin/fm-test-isolation-proof.sh --pool <family>` runs the same concurrent proof over a whole `bin/fm-test-run.sh` family, for a stateful family that stays serial on CI but can earn bounded local concurrency.

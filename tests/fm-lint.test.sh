@@ -674,7 +674,9 @@ test_changed_mode_hides_cross_file_codes_that_ci_still_sees() {
   fi
   local tmp fakebin diff_file fixture out rc
   tmp=$(fm_test_tmproot fm-lint-local-exclude-behavior)
-  fixture="$ROOT/tests/fm-lint-local-exclude-fixture.test.sh"
+  # A tests/*.sh root the changed-mode gate lints, but deliberately not a
+  # *.test.sh name: concurrent suites enumerate tests/*.test.sh in this checkout.
+  fixture="$ROOT/tests/fm-lint-local-exclude-fixture.sh"
   printf '%s\n' "$fixture" >> "$FM_TEST_CLEANUP_REGISTRY"
   cat > "$fixture" <<'SH'
 #!/usr/bin/env bash
@@ -694,7 +696,7 @@ SH
   fakebin=$(fm_fakebin "$tmp")
   fm_lint_stub_git "$fakebin"
   diff_file="$tmp/diff.nul"
-  fm_lint_write_diff_file "$diff_file" "tests/fm-lint-local-exclude-fixture.test.sh"
+  fm_lint_write_diff_file "$diff_file" "tests/fm-lint-local-exclude-fixture.sh"
 
   rc=0
   out=$(PATH="$fakebin:$PATH" GITHUB_ACTIONS='' CI='' FM_LINT_JOBS=1 \
