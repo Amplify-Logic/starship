@@ -58,6 +58,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         screen.start()
         self.screen = screen
         model.refreshMute()
+        DispatchQueue.main.async {
+            model.warmMicrophone()
+        }
     }
 }
 
@@ -622,7 +625,9 @@ final class FloaterModel: ObservableObject {
 
     let repoRoot: String
     let fmHome: String
-    private var recorder: VoiceCapture?
+    // Echo-cancelled, so a reply playing on the speakers stays out of the
+    // message while it keeps playing. See VoiceCapture.
+    private let capture = VoiceCapture()
     private var recordURL: URL?
     private var pressStartedAt: Date?
     private var latched = false
@@ -991,11 +996,8 @@ final class FloaterModel: ObservableObject {
             }
             let url = FileManager.default.temporaryDirectory
                 .appendingPathComponent("fm-desk-\(UUID().uuidString).wav")
-            // Echo-cancelled, so a reply playing on the speakers stays out of the
-            // message while it keeps playing. See VoiceCapture.
-            let capture = VoiceCapture(url: url)
             do {
-                try capture.start()
+                try capture.start(writingTo: url)
             } catch {
                 try? FileManager.default.removeItem(at: url)
                 mode = .idle
@@ -1007,7 +1009,6 @@ final class FloaterModel: ObservableObject {
                 try? FileManager.default.removeItem(at: url)
                 return
             }
-            recorder = capture
             recordURL = url
             mode = .recording
             status = listeningStatus
@@ -1018,8 +1019,7 @@ final class FloaterModel: ObservableObject {
         latched = false
         fromHotkey = false
         pressStartedAt = nil
-        recorder?.stop()
-        recorder = nil
+        capture.stop()
         if let url = recordURL {
             try? FileManager.default.removeItem(at: url)
         }
@@ -1037,9 +1037,8 @@ final class FloaterModel: ObservableObject {
         latched = false
         fromHotkey = false
         pressStartedAt = nil
-        recorder?.stop()
-        recorder = nil
         guard let url = recordURL else {
+            capture.stop()
             mode = .idle
             self.purpose = .firstmate
             status = idleStatus
@@ -1048,6 +1047,14 @@ final class FloaterModel: ObservableObject {
         recordURL = nil
         mode = .busy
         status = "Transcribing…"
+        // The last words are still arriving as the key comes up; the capture
+        // keeps recording for a moment before the file is closed.
+        capture.finish { [self] in
+            transcribeAndDeliver(url, purpose: purpose)
+        }
+    }
+
+    private func transcribeAndDeliver(_ url: URL, purpose: Purpose) {
         Task.detached(priority: .userInitiated) { [repoRoot, fmHome] in
             let transcript = Self.transcribe(repoRoot: repoRoot, fmHome: fmHome, audio: url)
             try? FileManager.default.removeItem(at: url)
@@ -1111,6 +1118,14 @@ final class FloaterModel: ObservableObject {
                 self.status = self.idleStatus
             }
         }
+    }
+
+    /// Builds the capture engine ahead of the first press when the microphone
+    /// is already allowed, so the first words of the first message are
+    /// recorded too. See VoiceCapture.
+    func warmMicrophone() {
+        guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else { return }
+        try? capture.warm()
     }
 
     private func requestMic() async -> Bool {

@@ -69,6 +69,8 @@ Firstmate's text replies stay the authoritative ones, and nothing about how Firs
 You can talk while a reply is being spoken.
 The reply keeps playing, and it stays out of your message: the floater records with macOS voice processing, which removes the Mac's own playback from the microphone.
 macOS always lowers other audio a little while voice processing records; the floater sets that to the minimum, applied only while you are actually speaking, so a reply may dip briefly but is never paused or stopped.
+Recording starts the moment you press: once the microphone is allowed, the floater gets it ready when it opens and again after your audio devices change, so your first words are kept.
+After you release, it keeps listening for a moment, so a last word still being spoken is not cut off.
 `desk-floater/Sources/VoiceCapture.swift` owns the capture.
 
 ## Hotkeys

@@ -1389,7 +1389,7 @@ Screenshots: $shot1 $shot2" ] || fail "unexpected combined message: $drained"
   pass "fm-desk-voice: screenshots are delivered by path, alone or with the transcript, as one message"
 }
 
-# The floater's screenshot-stacking rules and capture conversion are Swift, so they need macOS and swift.
+# The floater's screenshot-stacking rules, voice capture and capture conversion are Swift, so they need macOS and swift.
 test_floater_swift_tests() {
   local out
   if [ "$(uname)" != Darwin ] || ! command -v swift >/dev/null 2>&1; then
