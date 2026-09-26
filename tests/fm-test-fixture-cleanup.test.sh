@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Behavior tests for tests/lib.sh's shared fixture-tempdir helper
-# (fm_test_tmproot / fm_test_cleanup / fm_test_reap_orphans).
+# (fm_test_tmproot / fm_test_cleanup / fm_test_reap_orphans) and its
+# process-group reaper (fm_test_run_reaped).
 #
 # The near-universal call pattern across this suite is
 # `TMP_ROOT=$(fm_test_tmproot prefix)`, which forks a subshell to capture the
@@ -164,9 +165,48 @@ test_orphan_sweep_reaps_read_only_package_tree() {
   pass "the orphan sweep reaps read-only package fixtures"
 }
 
+test_run_reaped_ends_leftovers_and_spares_outsiders() {
+  local harness outsider out status pid tries
+  harness=$(fm_test_tmproot fm-test-run-reaped)
+  # A same-shaped process outside the reaped group stands in for a real home's
+  # watcher: it ignores TERM too, and the reap must never reach it.
+  ( trap '' TERM; while [ ! -e "$harness/stop-outsider" ]; do sleep 0.05; done ) &
+  outsider=$!
+  # shellcheck disable=SC2016 # the child shell expands these
+  out=$(printf 'from-stdin\n' | FM_REAPED_ENV=env-through fm_test_run_reaped bash -c '
+    printf "%s %s\n" "$FM_REAPED_ENV" "$(cat)"
+    ( trap "" TERM; printf "%s\n" "$BASHPID" > "$1/ignorer"; while :; do sleep 0.05; done ) &
+    ( printf "%s\n" "$BASHPID" > "$1/plain"; while :; do sleep 0.05; done ) &
+    while [ ! -s "$1/ignorer" ] || [ ! -s "$1/plain" ]; do sleep 0.02; done
+    exit 7
+  ' _ "$harness")
+  status=$?
+  expect_code 7 "$status" "fm_test_run_reaped must return the command's own exit status"
+  assert_equals "env-through from-stdin" "$out" \
+    "fm_test_run_reaped must pass the caller's environment and stdin to the command"
+  for pid in "$(cat "$harness/plain")" "$(cat "$harness/ignorer")"; do
+    tries=0
+    while [ "$tries" -lt 50 ] && kill -0 "$pid" 2>/dev/null; do
+      sleep 0.02
+      tries=$((tries + 1))
+    done
+    if kill -0 "$pid" 2>/dev/null; then
+      kill -KILL "$pid" 2>/dev/null || true
+      fail "a process the command left behind outlived fm_test_run_reaped: $pid"
+    fi
+  done
+  if ! kill -0 "$outsider" 2>/dev/null; then
+    fail "fm_test_run_reaped signalled a process outside the command's own group"
+  fi
+  : > "$harness/stop-outsider"
+  wait "$outsider" 2>/dev/null
+  pass "fm_test_run_reaped reaps the command's leftovers and nothing outside its group"
+}
+
 test_fixture_root_gone_after_normal_exit
 test_fixture_root_gone_after_sigterm
 test_cleanup_registry_resists_precreation
 test_fixture_registration_failure_rolls_back_root
 test_orphan_sweep_respects_fixture_ownership
 test_orphan_sweep_reaps_read_only_package_tree
+test_run_reaped_ends_leftovers_and_spares_outsiders

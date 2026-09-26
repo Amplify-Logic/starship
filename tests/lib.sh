@@ -482,6 +482,57 @@ EOF
   return 0
 }
 
+# fm_test_run_reaped <command> [args...]: run a command that spawns supervision
+# children (a watcher plugin or extension driven from node, say) and reap every
+# process it leaves behind the moment it exits.
+#
+# The suite teardown above cannot reach those leftovers. Once the command exits
+# they reparent to init, so they are no longer this shell's descendants, and a
+# child still starting through `bash -lc` names no fixture path until it execs.
+# One that later finds its fixture root deleted can then poll for a stop file
+# forever. So the command runs in a process group of its own, and when it exits
+# every process still in that group gets TERM and, after a two-second grace,
+# KILL. A TERM, INT, or HUP delivered to the reaper is forwarded to the group and
+# starts the same grace. The group is created for this command alone, and the
+# reap signals it at once when the command exits, while any member keeps its id
+# reserved, so a real home's watcher is never in it. A descendant that moves
+# into a group of its own is outside this reap. The exit status and stdin are
+# the command's own.
+# Do not wrap a command whose test asserts on what happens to its children after
+# it exits, because the reap would satisfy that assertion for it.
+fm_test_run_reaped() {
+  command -v perl >/dev/null 2>&1 || {
+    echo "fm_test_run_reaped: perl is required to reap $1's process group" >&2
+    return 127
+  }
+  perl -MPOSIX=WNOHANG,setpgid -MTime::HiRes=time -e '
+    my $grace = 2;
+    my $pid = fork;
+    exit 127 unless defined $pid;
+    if ($pid == 0) { setpgid(0, 0); exec { $ARGV[0] } @ARGV; exit 127 }
+    setpgid($pid, $pid);
+    my $kill_at = 0;
+    for my $sig (qw(TERM INT HUP)) {
+      $SIG{$sig} = sub { kill $sig, -$pid; $kill_at ||= time + $grace };
+    }
+    my $status;
+    while (1) {
+      my $done = waitpid $pid, WNOHANG;
+      if ($done == $pid) { $status = $?; last }
+      if ($done == -1) { $status = 127 << 8; last }
+      if ($kill_at && time >= $kill_at) { kill "KILL", -$pid; $kill_at = 0 }
+      select undef, undef, undef, 0.05;
+    }
+    kill "TERM", -$pid;
+    my $deadline = time + $grace;
+    while (kill 0, -$pid) {
+      if (time >= $deadline) { kill "KILL", -$pid; last }
+      select undef, undef, undef, 0.05;
+    }
+    exit(($status & 127) ? 128 + ($status & 127) : $status >> 8);
+  ' -- "$@"
+}
+
 # Remove a fixture tree even when it holds a read-only directory, such as the
 # spawn-owned state/<id>.git-hooks strip directory.
 fm_test_remove_tree() {
