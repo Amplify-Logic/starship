@@ -66,7 +66,47 @@ check_queries() {
     || fail "home-port fallback allowlist query failed"
   [ "$(printf '%s\n' "$out" | LC_ALL=C sort)" = "$(printf '%s\n' "$fallback" | LC_ALL=C sort)" ] \
     || fail "declared port-allowlist and home-port fallback disagree"
+  out=$("$SURFACE" port-data-allowlist) || fail "port data allowlist query failed"
+  assert_contains "$out" 'data/goals/' "port data allowlist misses goal charters"
+  fallback=$("$ROOT/bin/fm-home-port.sh" portable-data-entries) \
+    || fail "home-port fallback data entry query failed"
+  [ "$(printf '%s\n' "$out" | LC_ALL=C sort)" = "$(printf '%s\n' "$fallback" | LC_ALL=C sort)" ] \
+    || fail "declared port-data-allowlist and home-port fallback disagree"
   pass "list, topology, config, and port queries expose declared data"
+}
+
+# replace_data_entry <repo> <line>: swap the fixture manifest's goal-charter
+# data entry for <line>.
+replace_data_entry() {
+  local repo=$1 line=$2
+  DATA_LINE="$line" awk '$0 == "data = data/goals/" { print ENVIRON["DATA_LINE"]; next } { print }' \
+    "$repo/fork-surface.conf" >"$repo/fork-surface.conf.new" || fail "could not rewrite fixture data entry"
+  mv "$repo/fork-surface.conf.new" "$repo/fork-surface.conf"
+  grep -qxF "$line" "$repo/fork-surface.conf" || fail "fixture manifest did not take data line: $line"
+}
+
+check_data_entry_disagreement_fails() {
+  local repo out rc=0
+  repo="$TMP_ROOT/data-disagree"
+  clone_current_tree "$repo"
+  replace_data_entry "$repo" 'data = data/goals/alpha.md'
+  out=$(cd "$repo" && bin/fm-fork-surface.sh check 2>&1) || rc=$?
+  [ "$rc" -ne 0 ] || fail "a data entry the home-port fallback lacks must fail"
+  assert_contains "$out" 'portable data declarations disagree' "failure must name the data pairing"
+  assert_contains "$out" 'data/goals/alpha.md' "failure must name the unpaired entry"
+  pass "a declared data entry must match the home-port fallback data entries"
+}
+
+check_non_portable_data_entry_fails() {
+  local repo out rc=0
+  repo="$TMP_ROOT/data-not-portable"
+  clone_current_tree "$repo"
+  replace_data_entry "$repo" $'data = data/goals/\ndata = data/accounts/'
+  out=$(cd "$repo" && bin/fm-fork-surface.sh check 2>&1) || rc=$?
+  [ "$rc" -ne 0 ] || fail "a data entry outside the goal charters must fail"
+  assert_contains "$out" 'second-machine-porting' "failure must name the capability"
+  assert_contains "$out" 'is not portable: data/accounts/' "failure must name the non-portable entry"
+  pass "a declared data entry outside the goal charters fails"
 }
 
 check_required_surface_deletion_fails() {
@@ -172,6 +212,8 @@ check_branch_commit_entry_fails_after_squash() {
 
 check_current_manifest
 check_queries
+check_data_entry_disagreement_fails
+check_non_portable_data_entry_fails
 check_required_surface_deletion_fails
 check_personal_surface_deletion_is_optional
 check_pre_merge_entry_survives_squash

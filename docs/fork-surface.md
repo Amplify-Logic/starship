@@ -21,9 +21,10 @@ A capability with `assert = test` is defended by behavior rather than by the con
 
 Run `bin/fm-fork-surface.sh check` to validate the manifest and all declared assertions.
 Run `bin/fm-fork-surface.sh list` for active and frozen capability titles, or add `--topology herdr-topology` to select topology-sensitive entries.
-Run `bin/fm-fork-surface.sh list --config` to append each capability's optional config and secret paths.
+Run `bin/fm-fork-surface.sh list --config` to append each capability's optional config, data, and secret paths.
 Run `bin/fm-fork-surface.sh paths` to print each capability-owned path.
 Run `bin/fm-fork-surface.sh port-allowlist` to print portable, non-secret config paths.
+Run `bin/fm-fork-surface.sh port-data-allowlist` to print portable data entries, where a trailing slash names a directory of files.
 
 `fork-surface.upstream-base` is a sorted path snapshot, not a fetched reference.
 After a reviewed merge-base advance, update the manifest's `upstream_base`, run `bin/fm-fork-surface.sh sync-base`, and review both changes together.
@@ -37,7 +38,7 @@ A branch commit is rejected even while it still resolves locally, because a clon
 A capability introduced by an unmerged pull request cannot yet know its squash-merge commit, so it records the literal `pre-merge`, which survives every rebase and squash, and is repaired to the squash-merge commit after landing.
 It never records an unrelated commit that happens to be an ancestor, because `check` only proves that a reference is part of this history and cannot detect misattributed provenance.
 Declared personal paths are checked for unique ownership when present but may be absent.
-It also requires secret config to stay ignored and refused by home porting, and requires portable config declarations to agree with the home-port fallback.
+It also requires secret config to stay ignored and refused by home porting, requires portable config and data declarations to agree with the home-port fallbacks, and requires every data entry to be one home porting accepts as portable.
 Failures name the capability and concrete repair instead of modifying the tree.
 
 ## Refactors and retirement

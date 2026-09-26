@@ -6,14 +6,18 @@
 #   fm-fork-surface.sh list [--topology NAME] [--config]
 #   fm-fork-surface.sh paths
 #   fm-fork-surface.sh port-allowlist
+#   fm-fork-surface.sh port-data-allowlist
 #   fm-fork-surface.sh sync-base [GIT_REF]
 #   fm-fork-surface.sh --help
 #
 # check validates schema 1 and assertions G1-G10 from docs/fork-surface.md.
 # list prints active and frozen capabilities as tab-separated id/title rows.
-# --topology filters list; --config appends each config or secret path.
+# --topology filters list; --config appends each config, data, or secret path.
 # paths prints every declared owns path as a tab-separated id/path row.
 # port-allowlist prints portable config paths, excluding secrets, one per line.
+# port-data-allowlist prints portable data entries, one per line; an entry is a
+# single file or, with a trailing slash, a directory of files, and
+# bin/fm-home-port.sh portable-data-entry owns which entries are portable.
 # sync-base rewrites the base path snapshot from GIT_REF (default: upstream_base).
 set -eu
 
@@ -42,7 +46,7 @@ parse_manifest() {
     function known_cap_key(k) {
       return k == "id" || k == "title" || k == "layer" || k == "scope" || k == "status" || k == "why" || \
         k == "owns" || k == "modifies" || k == "anchor" || k == "proves" || \
-        k == "proves_note" || k == "assert" || k == "config" || k == "secret" || \
+        k == "proves_note" || k == "assert" || k == "config" || k == "data" || k == "secret" || \
         k == "commits" || k == "upstream_ref" || k == "topology" || \
         k == "retired_reason" || k == "retired_pr"
     }
@@ -155,7 +159,7 @@ check_manifest() {
   while IFS=$'\t' read -r kind id key value line; do
     [ "$kind" = C ] || continue
     case "$key" in
-      owns|modifies|config|secret)
+      owns|modifies|config|data|secret)
         path_is_safe "$value" || { printf 'fm-fork-surface: %s: unsafe %s path at line %s: %s\n' "$id" "$key" "$line" "$value" >&2; failures=$((failures + 1)); }
         ;;
       anchor)
@@ -301,7 +305,7 @@ check_manifest() {
     done < <(comm -13 "$tmp/fork_only" "$tmp/declared_required")
   fi
 
-  # G7 and G8: secret and portable config declarations agree with ignore/port policy.
+  # G7 and G8: secret and portable config and data declarations agree with ignore/port policy.
   "$ROOT/bin/fm-fork-surface.sh" port-allowlist >"$tmp/manifest_portable"
   "$ROOT/bin/fm-home-port.sh" portable-config-files >"$tmp/home_portable"
   LC_ALL=C sort -u "$tmp/manifest_portable" -o "$tmp/manifest_portable"
@@ -311,16 +315,31 @@ check_manifest() {
     comm -3 "$tmp/manifest_portable" "$tmp/home_portable" >&2 || true
     failures=$((failures + 1))
   fi
+  "$ROOT/bin/fm-fork-surface.sh" port-data-allowlist >"$tmp/manifest_portable_data"
+  "$ROOT/bin/fm-home-port.sh" portable-data-entries >"$tmp/home_portable_data"
+  LC_ALL=C sort -u "$tmp/manifest_portable_data" -o "$tmp/manifest_portable_data"
+  LC_ALL=C sort -u "$tmp/home_portable_data" -o "$tmp/home_portable_data"
+  if ! cmp -s "$tmp/manifest_portable_data" "$tmp/home_portable_data"; then
+    printf 'fm-fork-surface: portable data declarations disagree with bin/fm-home-port.sh fallback data entries; update both in the same change\n' >&2
+    comm -3 "$tmp/manifest_portable_data" "$tmp/home_portable_data" >&2 || true
+    failures=$((failures + 1))
+  fi
   while IFS=$'\t' read -r kind id key path line; do
     [ "$kind" = C ] || continue
     case "$key" in
-      config|secret)
+      config|data|secret)
         if ! git -C "$ROOT" check-ignore -q -- "$path"; then
           printf 'fm-fork-surface: %s: %s knob is not gitignored: %s; add the path to .gitignore\n' "$id" "$key" "$path" >&2
           failures=$((failures + 1))
         fi
         ;;
     esac
+    if [ "$key" = data ]; then
+      if ! "$ROOT/bin/fm-home-port.sh" portable-data-entry "$path" >/dev/null; then
+        printf 'fm-fork-surface: %s: data entry at line %s is not portable: %s; declare only an entry bin/fm-home-port.sh portable-data-entry accepts\n' "$id" "$line" "$path" >&2
+        failures=$((failures + 1))
+      fi
+    fi
     if [ "$key" = secret ]; then
       if ! "$ROOT/bin/fm-home-port.sh" refused-path "$path" >/dev/null; then
         printf 'fm-fork-surface: %s: secret knob is not refused by bin/fm-home-port.sh: %s; register it in is_refused_relpath\n' "$id" "$path" >&2
@@ -354,7 +373,7 @@ list_capabilities() {
     $1 == "C" && $3 == "title" { title[$2]=$4 }
     $1 == "C" && $3 == "status" { status[$2]=$4; order[++n]=$2 }
     $1 == "C" && $3 == "topology" { topo[$2]=$4 }
-    $1 == "C" && ($3 == "config" || $3 == "secret") { knobs[$2]=knobs[$2] (knobs[$2] ? "," : "") $4 }
+    $1 == "C" && ($3 == "config" || $3 == "data" || $3 == "secret") { knobs[$2]=knobs[$2] (knobs[$2] ? "," : "") $4 }
     END {
       for (i=1; i<=n; i++) {
         id=order[i]
@@ -393,6 +412,18 @@ port_allowlist() {
   ' "$parsed" | LC_ALL=C sort -u
 }
 
+port_data_allowlist() {
+  local parsed
+  parsed=$(mktemp "${TMPDIR:-/tmp}/fm-fork-surface-port-data.XXXXXX")
+  trap 'rm -f "${parsed:-}"' EXIT
+  parse_manifest "$parsed"
+  awk -F '\t' '
+    $1 == "C" && $3 == "status" { status[$2]=$4 }
+    $1 == "C" && $3 == "data" { n[$2]+=1; data[$2 SUBSEP n[$2]]=$4 }
+    END { for (id in n) if (status[id] != "retired") for (i=1; i<=n[id]; i++) print data[id SUBSEP i] }
+  ' "$parsed" | LC_ALL=C sort -u
+}
+
 sync_base() {
   local parsed ref base snapshot tmp
   parsed=$(mktemp "${TMPDIR:-/tmp}/fm-fork-surface-sync.XXXXXX")
@@ -421,6 +452,7 @@ main() {
     list) shift; list_capabilities "$@" ;;
     paths) shift; [ $# -eq 0 ] || die "paths takes no arguments"; list_paths ;;
     port-allowlist) shift; [ $# -eq 0 ] || die "port-allowlist takes no arguments"; port_allowlist ;;
+    port-data-allowlist) shift; [ $# -eq 0 ] || die "port-data-allowlist takes no arguments"; port_data_allowlist ;;
     sync-base) shift; [ $# -le 1 ] || die "sync-base takes at most one ref"; sync_base "$@" ;;
     *) usage; die "unknown command: $1" ;;
   esac

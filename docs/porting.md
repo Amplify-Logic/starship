@@ -2,8 +2,8 @@
 
 How to bring Firstmate up on another machine, what private material can travel, and how the two supported follow-on models differ.
 
-`bin/fm-home-port.sh` owns the refuse list, secret scan, push/pull mechanics, and the portable data-file list.
-The live portable **config** allowlist is printed by `bin/fm-fork-surface.sh port-allowlist`.
+`bin/fm-home-port.sh` owns the refuse list, secret scan, push/pull mechanics, the portable data-file list, and which data entries are portable.
+The live portable **config** allowlist is printed by `bin/fm-fork-surface.sh port-allowlist`, and the live portable **data** entries by `bin/fm-fork-surface.sh port-data-allowlist`.
 `bin/fm-bootstrap.sh` owns toolchain detection - reuse it; do not duplicate missing-tool logic here.
 `docs/configuration.md` owns the operational-home layout and config schemas.
 
@@ -22,7 +22,7 @@ Choose one before you treat a later pull as routine.
 | Layer | What | How it moves |
 | --- | --- | --- |
 | Tracked repo | `AGENTS.md`, `bin/`, skills, docs, workflows | `git clone` / `bin/fm-update.sh` |
-| Captain-private portable | The portable data files plus allowlisted non-secret `config/` files (see "Portable allowlist" below) | `bin/fm-home-port.sh` push/pull against a private transport |
+| Captain-private portable | The portable data files, declared goal charters, and allowlisted non-secret `config/` files (see "Portable allowlist" below) | `bin/fm-home-port.sh` push/pull against a private transport |
 | Machine-local, never port | Secrets, `state/`, `projects/`, `bridge/`, fleet registries, the capability outcome log, and anything naming an absolute path or a running process on one machine | Recreate on the destination; do not copy |
 
 Porting machine-local material causes real confusion: dead panes, wrong worktree bindings, and watcher locks that belong to another computer.
@@ -44,6 +44,7 @@ The script also keeps a synced fallback array for checkouts that predate the man
 Prose lists of config files in this document are illustrative and will rot; do not treat them as the allowlist.
 
 The portable **data** files are the four regular files named in `bin/fm-home-port.sh`: `data/captain.md`, optional `data/captain-shared.md`, `data/learnings.md`, and `data/backlog.md`.
+Goal charters travel through the manifest's `data` entries instead; see "Goal charters" below.
 Exact flags remain in `bin/fm-home-port.sh --help` and its header.
 
 ## Secrets do not port
@@ -65,7 +66,7 @@ An export or push transcript therefore shows `PORTABLE:` lines for what travelle
 Paths that behave this way today include, when present:
 
 - `data/capability-outcomes.log` (see below; this one must never port)
-- `data/goals/` (goal charters; see below)
+- any goal charter the declared `data` entries do not select (see below)
 - `data/done-archive.md`
 - `data/upstream-watch/`
 - `data/morning-intake/` (this home's own local-day intake state; `docs/configuration.md` "Morning intake")
@@ -91,12 +92,17 @@ The log records harness, model, and effort outcomes against that machine's subsc
 Copying it onto another machine would actively mislead dispatch there: routes that are cheap or available on the source can be expensive, missing, or forbidden on the destination.
 Each home grows its own log as work on that machine completes.
 
-## Goal charters do not port today
+## Goal charters
 
 Per-project goal charters live at `data/goals/<project>.md` (`docs/chart-room.md`).
-They are not on the portable data list.
-The copy path only accepts regular files, so a directory of charters cannot travel without new directory-entry support that neither the data list nor the config manifest has.
-Treat that as a known limitation: charters stay on the home that wrote them unless a later change adds that support.
+They travel through `data` entries in `fork-surface.conf`, which name either the whole `data/goals/` directory or one `data/goals/<project>.md` charter.
+This fork declares the directory entry, so every charter in the pushing home travels.
+To send only chosen charters, push from a pruned staging home that holds just those charters, or declare per-file entries in place of the directory entry.
+`bin/fm-fork-surface.sh check` requires the declared entries to match the home-port fallback and to be entries `bin/fm-home-port.sh portable-data-entry` accepts, so no other private data can be declared portable this way.
+When you change the `data` entries in `fork-surface.conf`, change `FALLBACK_PORTABLE_DATA_ENTRIES` in `bin/fm-home-port.sh` in the same edit, or that check fails.
+Each push first removes every `data/goals/*.md` charter from the transport, whichever kind of entry is declared, then copies the charters the pushing home selects, so a charter that is deleted or no longer selected stops travelling; the removal is a commit in the transport's own history, so it stays recoverable there.
+Pull and import never delete anything on the receiving home: a later pull replaces each destination charter that shares a name with a travelling one and keeps charters that exist only on the destination.
+The chart room's code already travels with the tracked repo; only the charters themselves need the transport.
 
 ## Step zero: push from the source machine first
 
@@ -333,6 +339,7 @@ Detail lives with its owners: [baby-menu-quota-widget.md](baby-menu-quota-widget
 - Toolchain detection: `bin/fm-bootstrap.sh`
 - Tracked-repo self-update: `bin/fm-update.sh` / `/updatefirstmate`
 - Live portable config allowlist: `bin/fm-fork-surface.sh port-allowlist`
+- Live portable data entries: `bin/fm-fork-surface.sh port-data-allowlist`
 - Exact port flags, data-file list, and refuse list: `bin/fm-home-port.sh --help` and its header
 - Goal charter format: `docs/chart-room.md`
 - Capability outcome log format: `docs/configuration.md` ("Capability outcome log")

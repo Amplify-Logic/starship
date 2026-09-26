@@ -20,8 +20,19 @@
 #   fm-home-port.sh scan [--warn-machine-local] PATH...
 #   fm-home-port.sh verify [--home DIR]
 #   fm-home-port.sh portable-config-files
+#   fm-home-port.sh portable-data-entries
+#   fm-home-port.sh portable-data-entry PATH
 #   fm-home-port.sh refused-path PATH
 #   fm-home-port.sh --help
+#
+# Portable data entries extend the fixed data files with goal charters.
+# An entry is either the directory data/goals/ (every regular <name>.md directly
+# inside it travels) or one charter file data/goals/<name>.md, where <name>
+# starts with a letter or digit and holds only letters, digits, dot, dash, and
+# underscore. A symlink, a non-regular .md entry, or a misnamed .md charter
+# inside a declared directory stops export, import, push, and pull rather than
+# being skipped. Import copies each charter in the source over the destination
+# copy of the same name and never deletes a destination-only charter.
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -47,6 +58,8 @@ Usage:
   fm-home-port.sh scan [--warn-machine-local] PATH...
   fm-home-port.sh verify [--home DIR]
   fm-home-port.sh portable-config-files
+  fm-home-port.sh portable-data-entries
+  fm-home-port.sh portable-data-entry PATH
   fm-home-port.sh refused-path PATH
   fm-home-port.sh --help
 
@@ -60,6 +73,9 @@ changes the exit code; patterns are owned by bin/fm-leak-lib.sh (shared with CI)
 
 verify runs the destination readiness checks from docs/porting.md plus
 config/backend and config/crew-harness presence checks.
+
+portable-data-entries prints the fallback goal-charter data entries.
+portable-data-entry exits 0 only for data/goals/ or data/goals/<name>.md.
 
 Environment:
   FM_HOME             active firstmate home (default: tracked root)
@@ -109,6 +125,97 @@ FALLBACK_PORTABLE_CONFIG_FILES=(
   config/upstream-watch
 )
 PORTABLE_CONFIG_FILES=("${FALLBACK_PORTABLE_CONFIG_FILES[@]}")
+
+# Keep this fallback in sync with `fm-fork-surface.sh port-data-allowlist`,
+# the live owner whenever the manifest is present.
+FALLBACK_PORTABLE_DATA_ENTRIES=(
+  data/goals/
+)
+PORTABLE_DATA_ENTRIES=("${FALLBACK_PORTABLE_DATA_ENTRIES[@]}")
+
+PORTABLE_CHARTER_NAME_RE='^[A-Za-z0-9][A-Za-z0-9._-]*\.md$'
+
+is_portable_data_entry() {
+  local rel=$1 name
+  [ "$rel" = data/goals/ ] && return 0
+  case "$rel" in
+    data/goals/*) name=${rel#data/goals/} ;;
+    *) return 1 ;;
+  esac
+  case "$name" in
+    */*) return 1 ;;
+  esac
+  [[ "$name" =~ $PORTABLE_CHARTER_NAME_RE ]]
+}
+
+# Print the relative paths of existing charter files one data entry names under
+# ROOT. Stops on anything that is not a plain regular file.
+data_entry_files() {
+  local root=$1 rel=$2 dir path name
+  case "$rel" in
+    */)
+      dir="$root/${rel%/}"
+      [ -L "$dir" ] && die "portable data directory is a symlink: $dir"
+      [ -e "$dir" ] || return 0
+      [ -d "$dir" ] || die "portable data directory is not a directory: $dir"
+      for path in "$dir"/*.md; do
+        [ -e "$path" ] || [ -L "$path" ] || continue
+        name=${path##*/}
+        [ ! -L "$path" ] && [ -f "$path" ] \
+          || die "portable data path is not a regular file: $path"
+        [[ "$name" =~ $PORTABLE_CHARTER_NAME_RE ]] \
+          || die "portable data file name is not portable: $path"
+        printf '%s%s\n' "$rel" "$name"
+      done
+      ;;
+    *)
+      dir="$root/${rel%/*}"
+      [ -L "$dir" ] && die "portable data directory is a symlink: $dir"
+      path="$root/$rel"
+      [ -e "$path" ] || [ -L "$path" ] || return 0
+      [ ! -L "$path" ] && [ -f "$path" ] \
+        || die "portable data path is not a regular file: $path"
+      printf '%s\n' "$rel"
+      ;;
+  esac
+}
+
+# Print every charter file the declared data entries select under ROOT, once each.
+portable_data_files() {
+  local root=$1 rel files all=""
+  for rel in "${PORTABLE_DATA_ENTRIES[@]}"; do
+    # A die inside command substitution only leaves the subshell, so re-raise it.
+    files=$(data_entry_files "$root" "$rel") || exit 1
+    [ -z "$files" ] || all="$all$files"$'\n'
+  done
+  [ -z "$all" ] || printf '%s' "$all" | LC_ALL=C sort -u
+}
+
+# Remove every charter under ROOT whenever any data entry is declared, so a push
+# stops carrying a charter the source no longer selects, including one an
+# earlier push under a wider entry carried.
+prune_portable_data() {
+  local root=$1 files rel
+  [ "${#PORTABLE_DATA_ENTRIES[@]}" -gt 0 ] || return 0
+  files=$(data_entry_files "$root" data/goals/) || exit 1
+  while IFS= read -r rel; do
+    [ -n "$rel" ] || continue
+    rm -f -- "$root/$rel"
+  done <<<"$files"
+}
+
+load_manifest_portable_data_entries() {
+  local declared rel
+  [ -f "$FM_ROOT/fork-surface.conf" ] || return 0
+  declared=$("$FM_ROOT/bin/fm-fork-surface.sh" port-data-allowlist) \
+    || die "fork-surface data declaration is invalid"
+  PORTABLE_DATA_ENTRIES=()
+  while IFS= read -r rel; do
+    [ -n "$rel" ] || continue
+    is_portable_data_entry "$rel" || die "fork-surface declares a data entry that is not portable: $rel"
+    PORTABLE_DATA_ENTRIES+=("$rel")
+  done <<<"$declared"
+}
 
 load_manifest_portable_config_files() {
   local declared rel
@@ -250,7 +357,7 @@ announce_standing_refusals() {
 
 copy_portable_tree() {
   local src_home=$1 dest_root=$2
-  local rel src dest parent copied=0
+  local rel src dest parent data_files copied=0
 
   for rel in "${PORTABLE_DATA_FILES[@]}" "${PORTABLE_CONFIG_FILES[@]}"; do
     if is_refused_relpath "$rel"; then
@@ -266,6 +373,16 @@ copy_portable_tree() {
     printf 'PORTABLE: %s\n' "$rel"
     copied=$((copied + 1))
   done
+
+  data_files=$(portable_data_files "$src_home") || exit 1
+  while IFS= read -r rel; do
+    [ -n "$rel" ] || continue
+    is_refused_relpath "$rel" && die "portable data entry selects refused path: $rel"
+    mkdir -p "$(dirname -- "$dest_root/$rel")"
+    cp -p "$src_home/$rel" "$dest_root/$rel"
+    printf 'PORTABLE: %s\n' "$rel"
+    copied=$((copied + 1))
+  done <<<"$data_files"
 
   [ "$copied" -gt 0 ] || die "no portable files found under $src_home"
 }
@@ -529,7 +646,7 @@ cmd_export() {
 }
 
 cmd_import() {
-  local home=$FM_HOME source="" rel
+  local home=$FM_HOME source="" rel data_files
   while [ $# -gt 0 ]; do
     case "$1" in
       --home)
@@ -572,6 +689,8 @@ cmd_import() {
   fi
 
   scan_path "$source" || die "import source failed secret scan; refusing to write into $home"
+  # Resolve the charter set before any write so a bad entry leaves the home untouched.
+  data_files=$(portable_data_files "$source") || exit 1
 
   mkdir -p "$home/data" "$home/config"
 
@@ -585,6 +704,16 @@ cmd_import() {
     cp -p "$source/$rel" "$home/$rel"
     printf 'IMPORTED: %s\n' "$rel"
   done
+  while IFS= read -r rel; do
+    [ -n "$rel" ] || continue
+    if is_refused_relpath "$rel"; then
+      refuse "$rel"
+      die "import refused refused-path in source: $rel"
+    fi
+    mkdir -p "$(dirname -- "$home/$rel")"
+    cp -p "$source/$rel" "$home/$rel"
+    printf 'IMPORTED: %s\n' "$rel"
+  done <<<"$data_files"
   printf 'IMPORT_OK: %s\n' "$home"
 }
 
@@ -673,7 +802,7 @@ EOF
 
 Captain-private portable Firstmate home material.
 
-Tracked here: `data/captain.md`, `data/learnings.md`, `data/backlog.md`, optional `data/captain-shared.md`, and non-secret `config/` operating choices.
+Tracked here: `data/captain.md`, `data/learnings.md`, `data/backlog.md`, optional `data/captain-shared.md`, goal charters under `data/goals/`, and non-secret `config/` operating choices.
 
 Never store `.env`, API credentials, `state/`, or `projects/` here.
 
@@ -739,6 +868,7 @@ cmd_push() {
   fi
 
   write_portable_scaffold "$repo"
+  prune_portable_data "$repo"
   copy_portable_tree "$home" "$repo"
   scan_path "$repo" || die "push aborted: secret scan failed before writing the bundle"
 
@@ -878,12 +1008,21 @@ main() {
       [ $# -eq 1 ] || die "portable-config-files takes no arguments"
       printf '%s\n' "${FALLBACK_PORTABLE_CONFIG_FILES[@]}"
       ;;
+    portable-data-entries)
+      [ $# -eq 1 ] || die "portable-data-entries takes no arguments"
+      printf '%s\n' "${FALLBACK_PORTABLE_DATA_ENTRIES[@]}"
+      ;;
+    portable-data-entry)
+      [ $# -eq 2 ] || die "portable-data-entry requires one repo-relative path"
+      is_portable_data_entry "$2"
+      ;;
     refused-path)
       [ $# -eq 2 ] || die "refused-path requires one repo-relative path"
       is_refused_relpath "$2"
       ;;
     export|import|push|pull|bootstrap|scan|verify)
       load_manifest_portable_config_files
+      load_manifest_portable_data_entries
       cmd=$1
       shift
       "cmd_$cmd" "$@"
