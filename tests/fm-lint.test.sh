@@ -1426,6 +1426,110 @@ test_unmeasured_canonical_root_leads_the_queue_and_warns_once() {
   pass "fm-lint.sh queues unmeasured canonical roots first and warns once without failing"
 }
 
+test_memory_classes_bound_what_runs_side_by_side() {
+  local tmp repo fakebin log classes root out
+  local -a alone huge heavy light small
+  tmp=$(fm_test_tmproot fm-lint-memory-classes)
+  repo="$tmp/repo"
+  mkdir -p "$repo/bin" "$repo/tests" "$tmp/classes" "$tmp/state"
+  cp "$LINT" "$repo/bin/fm-lint.sh"
+  chmod +x "$repo/bin/fm-lint.sh"
+  fakebin=$(fm_fakebin "$tmp")
+  log="$tmp/shellcheck.log"
+  classes="$tmp/classes"
+  : > "$log"
+  # A fixture cost table far from every class boundary: the costliest root is
+  # alone, two roots at two thirds of its cost are huge, two at a quarter of it
+  # are heavy, four at a few percent are light, and six at well under one
+  # percent are small. A root the table does not list has unknown memory, so it
+  # must be treated as alone.
+  alone=(tests/alone.sh tests/unlisted.sh)
+  huge=(tests/huge-a.sh tests/huge-b.sh)
+  heavy=(tests/heavy-a.sh tests/heavy-b.sh)
+  light=(tests/light-a.sh tests/light-b.sh tests/light-c.sh tests/light-d.sh)
+  small=(tests/small-a.sh tests/small-b.sh tests/small-c.sh tests/small-d.sh tests/small-e.sh tests/small-f.sh)
+  {
+    printf '# fixture cost table\n'
+    printf '%s\t%s\n' tests/alone.sh 10000 tests/huge-a.sh 6700 tests/huge-b.sh 6500 \
+      tests/heavy-a.sh 3000 tests/heavy-b.sh 2500 \
+      tests/light-a.sh 800 tests/light-b.sh 700 tests/light-c.sh 600 tests/light-d.sh 500 \
+      tests/small-a.sh 60 tests/small-b.sh 50 tests/small-c.sh 40 tests/small-d.sh 30 tests/small-e.sh 20 tests/small-f.sh 10
+  } > "$repo/bin/fm-lint-costs.tsv"
+  for root in "${alone[@]}" "${huge[@]}" "${heavy[@]}" "${light[@]}" "${small[@]}"; do
+    printf '#!/usr/bin/env bash\n:\n' > "$repo/$root"
+  done
+  printf '%s\n' "${alone[@]}" > "$classes/alone"
+  printf '%s\n' "${huge[@]}" > "$classes/huge"
+  printf '%s\n' "${heavy[@]}" > "$classes/heavy"
+  printf '%s\n' "${light[@]}" > "$classes/light"
+  cat > "$fakebin/shellcheck" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = --version ]; then
+  printf 'ShellCheck - shell script analysis tool\nversion: 0.11.0\n'
+  exit 0
+fi
+root=${!#}
+state=$FM_TEST_STATE
+log() { printf '%s %s\n' "$1" "$root" >> "$FM_TEST_LOG"; }
+in_class() { grep -qxF -- "$root" "$FM_TEST_CLASSES/$1"; }
+if in_class alone || in_class huge || in_class heavy; then
+  mkdir "$state/big" 2>/dev/null || log overlap
+  if in_class alone || in_class huge; then
+    mkdir "$state/huge"
+    ! ls -d "$state"/light.* >/dev/null 2>&1 || log light-beside-huge
+    if in_class alone; then
+      mkdir "$state/alone"
+      ! ls -d "$state"/small.* >/dev/null 2>&1 || log small-beside-alone
+      sleep 1
+      rmdir "$state/alone"
+    else
+      sleep 1
+    fi
+    rmdir "$state/huge"
+  else
+    sleep 2
+  fi
+  rmdir "$state/big" 2>/dev/null
+elif in_class light; then
+  mkdir "$state/light.$$"
+  [ ! -d "$state/huge" ] || log light-beside-huge
+  [ ! -d "$state/big" ] || log light-beside-heavy
+  sleep 0.3
+  rmdir "$state/light.$$"
+else
+  mkdir "$state/small.$$"
+  [ ! -d "$state/alone" ] || log small-beside-alone
+  [ ! -d "$state/huge" ] || log small-beside-huge
+  sleep 0.3
+  rmdir "$state/small.$$"
+fi
+log linted
+exit 0
+SH
+  chmod +x "$fakebin/shellcheck"
+
+  out=$(cd "$repo" && PATH="$fakebin:$PATH" FM_LINT_JOBS=2 FM_TEST_LOG="$log" FM_TEST_CLASSES="$classes" \
+    FM_TEST_STATE="$tmp/state" bin/fm-lint.sh "${small[@]}" "${light[@]}" "${heavy[@]}" "${huge[@]}" "${alone[@]}" 2>&1) \
+    || fail "memory-class lint failed"$'\n'"$out"
+  if grep -q '^overlap ' "$log"; then
+    fail "two heavy or huge roots ran side by side"$'\n'"logged: $(cat "$log")"
+  fi
+  if grep -q '^light-beside-huge ' "$log"; then
+    fail "a light root ran beside a huge or alone root"$'\n'"logged: $(cat "$log")"
+  fi
+  if grep -q '^small-beside-alone ' "$log"; then
+    fail "a small root ran beside an alone root"$'\n'"logged: $(cat "$log")"
+  fi
+  [ "$(grep '^linted ' "$log" | LC_ALL=C sort)" \
+    = "$(printf 'linted %s\n' "${small[@]}" "${light[@]}" "${heavy[@]}" "${huge[@]}" "${alone[@]}" | LC_ALL=C sort)" ] \
+    || fail "memory classes changed which roots were linted"$'\n'"logged: $(cat "$log")"
+  grep -q '^small-beside-huge ' "$log" \
+    || fail "no small root ran beside a huge root, so the second worker sat idle"$'\n'"logged: $(cat "$log")"
+  grep -q '^light-beside-heavy ' "$log" \
+    || fail "no light root ran beside a heavy root, so the second worker sat idle"$'\n'"logged: $(cat "$log")"
+  pass "fm-lint.sh runs the costliest root alone, keeps costly roots apart, and runs only small roots beside a huge one"
+}
+
 test_record_costs_orders_the_full_queue() {
   local tmp fakebin log costs out max_cost listed recorded
   local unlisted_count late_unlisted first_measured first_measured_cost
@@ -1492,6 +1596,7 @@ test_clean_fixture_passes
 test_jobs_are_deterministic_and_complete
 test_queue_starts_costly_roots_first_and_replays_in_root_order
 test_record_costs_orders_the_full_queue
+test_memory_classes_bound_what_runs_side_by_side
 test_unmeasured_canonical_root_leads_the_queue_and_warns_once
 test_worker_trees_stop_on_signal
 test_seeded_module_boundary_parity
