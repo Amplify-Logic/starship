@@ -660,13 +660,16 @@ Default-on projection has its own higher floor, `FM_BACKEND_HERDR_MIN_PRESENTATI
 - `bin/fm-teardown.sh` clears the retired task with `--clear <id>` once it has committed to retiring it, then refreshes `--all` after the record is removed, because the removal changes every remaining task's project aggregate.
 
 An `--all` pass is bounded and single-flight, so a large fleet or a slow Herdr costs a stale label rather than a stalled caller: every backend round trip runs under a per-call deadline, each task under a per-task deadline, and the pass under a pass deadline, after which the tasks it did not reach keep their previous label until the next pass.
-A task whose computed label matches the one last published for it is skipped without any backend call, and each project workspace is renamed once per pass rather than once per task in it; the authoritative state of a task is read once per pass, so a pass costs O(tasks) reads instead of O(tasks x tasks).
+A task whose computed label matches the one last published for it costs only the primary-role clear described below and the `fm_state` token it restores, and each project workspace is renamed once per pass rather than once per task in it; the authoritative state of a task is read once per pass, so a pass costs O(tasks) reads instead of O(tasks x tasks).
 The published labels live in `state/<id>.visible-label` and `state/.visible-workspace-<id>`, which are caches - deleting one costs a redundant republish and nothing else - and `--republish` ignores them.
 Only one pass per home runs at a time (`state/.visible-status-all.lock`), and a pass started from inside a running one is a no-op.
 `bin/fm-visible-status.sh`'s header owns the exact deadlines and their environment overrides.
 
 Every Herdr presentation call is best-effort because recorded ids, landed-work checks, and endpoint cleanup remain authoritative.
 The helper updates only recorded, non-secondmate task panes and never emits `FIRSTMATE` or `LAB`.
+Before it publishes a worker label, it clears any role the primary launcher left on that pane, because Herdr keeps a source's fields until that source clears them.
+That clear runs on every pass, even for a task whose label is unchanged, because the label cache cannot see a primary marker that lands after the label was published.
+Herdr tokens are keyed by name rather than source, so that clear also drops the worker's own `fm_state`; an unchanged task republishes just that token.
 `bin/fm-primary.sh` is the structural owner of primary projection: only an invocation through the primary launcher may emit `FIRSTMATE`, and its guarded non-default lab mode emits `LAB · PRIMARY` instead.
 An ordinary worker merely carrying `HERDR_ENV=1` can therefore never become the captain-facing primary.
 

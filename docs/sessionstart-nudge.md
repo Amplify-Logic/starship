@@ -177,6 +177,7 @@ So a truncated digest does neither of these:
 
 - They source `bin/fm-gate-refuse-lib.sh` and stay silent for a no-mistakes gate agent identified by `NO_MISTAKES_GATE` or a `.no-mistakes/repos/*.git` git-common-dir.
 - They share `bin/fm-primary-scope-lib.sh` with `bin/fm-turnend-guard.sh`, so every hook uses one primary-detection owner.
+- They also stay silent for a ship or scout worker marked by `FM_TASK_ID`, even when its directory is not a linked task worktree.
 
 The Guard Predicates section of [`turnend-guard.md`](turnend-guard.md#guard-predicates) owns marker validation, plain-checkout detection, and required Firstmate-shaped paths.
 
@@ -376,6 +377,7 @@ It proves the nudge wrapper's silence for these cases:
 
 - Both gate signals.
 - An unmarked linked worktree.
+- A ship or scout worker's task marker.
 - A missing state directory.
 - An already-owned lock.
 

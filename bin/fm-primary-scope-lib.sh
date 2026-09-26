@@ -71,6 +71,14 @@ fm_root_is_secondmate_home() {
   return 0
 }
 
+# Return 0 when this process runs in a ship or scout worker pane.
+# bin/fm-spawn.sh exports FM_TASK_ID into exactly those panes and never into a
+# secondmate or primary, so the marker holds even when a worker's directory
+# does not look like a linked task worktree.
+fm_is_task_worker() {
+  [ -n "${FM_TASK_ID:-}" ]
+}
+
 # Return 0 when $1 is a genuine primary root whose effective state dir is $2.
 # A valid secondmate marker force-includes a linked secondmate home.
 # Otherwise only a plain checkout is primary, never a linked task worktree.

@@ -12,9 +12,23 @@ LOG="$TMP_ROOT/herdr.log"
 STATES="$TMP_ROOT/states"
 mkdir -p "$HOME_FIX/state" "$HOME_FIX/data" "$TMP_ROOT/worktrees"
 
+# Herdr keys a pane's hidden tokens by name alone, whatever --source sets or
+# clears them, so the fake keeps them the same way under FM_VISIBLE_HERDR_TOKENS.
 cat > "$FAKEBIN/herdr" <<'SH'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$FM_VISIBLE_HERDR_LOG"
+if [ -n "${FM_VISIBLE_HERDR_TOKENS:-}" ] && [ "$1 $2" = 'pane report-metadata' ]; then
+  dir="$FM_VISIBLE_HERDR_TOKENS/$3"
+  shift 3
+  mkdir -p "$dir"
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --token) printf '%s' "${2#*=}" > "$dir/${2%%=*}"; shift ;;
+      --clear-token) rm -f "$dir/$2"; shift ;;
+    esac
+    shift
+  done
+fi
 exit 0
 SH
 cat > "$FAKEBIN/pi" <<'SH'
@@ -107,6 +121,7 @@ run_all() {  # [extra fm-visible-status.sh args...]
     FM_HOME="$HOME_FIX" \
     FM_VISIBLE_STATE_FILE="$STATES" \
     FM_VISIBLE_HERDR_LOG="$LOG" \
+    FM_VISIBLE_HERDR_TOKENS="$TMP_ROOT/tokens" \
     FM_BACKEND_HERDR_PRESENTATION_FORCE=1 \
     HERDR_ENV=1 \
     HERDR_SESSION=fm-lab-visible \
@@ -150,6 +165,61 @@ test_legacy_refresh_and_primary_boundary() {
   assert_not_contains "$out" 'ordinary-worker:p9' \
     'worker environment pane was mistaken for the primary pane'
   pass 'visible status: legacy mixed workspace stays in place and worker environments never project FIRSTMATE'
+}
+
+# A worker that ran bin/fm-primary.sh in its own pane marked it with the
+# primary role, and Herdr keeps that source's fields until the source clears
+# them. Publishing the worker label must therefore clear them first.
+test_worker_pane_sheds_a_primary_role() {
+  local out clear publish
+  run_all --republish
+  out=$(cat "$LOG")
+  clear='pane report-metadata w1:p1 --source firstmate-primary-visible-v1 --clear-title --clear-display-agent --clear-state-labels --clear-token fm_role --clear-token fm_state'
+  publish='pane report-metadata w1:p1 --source firstmate-worker-visible-v1'
+  assert_contains "$out" "$clear" \
+    'a worker pane kept whatever primary role the primary launcher marked onto it'
+  [ "$(grep -n -F -- "$clear" "$LOG" | head -1 | cut -d: -f1)" -lt \
+    "$(grep -n -F -- "$publish" "$LOG" | head -1 | cut -d: -f1)" ] \
+    || fail 'the primary role was cleared after the worker label, not before it'
+  assert_not_contains "$out" 'sm:p1' \
+    'a secondmate pane had its presentation touched'
+  pass 'visible status: publishing a worker pane clears any primary role left on it'
+}
+
+# The primary marker can land on a worker pane after that worker's label was
+# published and cached. The ordinary watcher pass skips the unchanged label, but
+# must still clear the marker rather than leave FIRSTMATE until a --republish.
+test_cached_worker_label_still_sheds_a_primary_role() {
+  local clear
+  run_all --republish
+  run_all
+  clear='pane report-metadata w1:p1 --source firstmate-primary-visible-v1 --clear-title --clear-display-agent --clear-state-labels --clear-token fm_role --clear-token fm_state'
+  assert_contains "$(cat "$LOG")" "$clear" \
+    'an ordinary pass over a cached worker label left a later primary marker in place'
+  assert_not_contains "$(cat "$LOG")" 'tab rename t1 ' \
+    'an ordinary pass republished a worker label that had not changed'
+  pass 'visible status: an ordinary pass clears a primary role from a cached worker pane'
+}
+
+# Clearing the primary marker's fm_state also drops the worker's own fm_state,
+# because Herdr tokens are not scoped to a source. A cached pass must leave the
+# worker's published fm_state in place, including after a marker overwrote it.
+test_cached_worker_pass_keeps_worker_fm_state() {
+  local tokens="$TMP_ROOT/tokens/w1:p1"
+  run_all --republish
+  assert_equals WORKING "$(cat "$tokens/fm_state" 2>/dev/null)" \
+    'the worker label did not publish its fm_state token'
+  run_all
+  assert_equals WORKING "$(cat "$tokens/fm_state" 2>/dev/null)" \
+    'an ordinary cached pass stripped the worker fm_state token'
+  printf 'FIRSTMATE' > "$tokens/fm_role"
+  printf 'WAITING' > "$tokens/fm_state"
+  run_all
+  assert_equals WORKING "$(cat "$tokens/fm_state" 2>/dev/null)" \
+    'a cached pass left the primary marker fm_state on a worker pane'
+  assert_absent "$tokens/fm_role" \
+    'a cached pass left the primary marker fm_role on a worker pane'
+  pass 'visible status: a cached pass keeps the worker fm_state token published'
 }
 
 test_secondmate_keeps_legacy_presentation() {
@@ -279,6 +349,9 @@ EOF
 
 test_tasks_projects_axes_and_states
 test_legacy_refresh_and_primary_boundary
+test_worker_pane_sheds_a_primary_role
+test_cached_worker_label_still_sheds_a_primary_role
+test_cached_worker_pass_keeps_worker_fm_state
 test_secondmate_keeps_legacy_presentation
 test_incapable_build_projects_nothing
 test_cleanup_keeps_stable_target_fallback
@@ -291,7 +364,7 @@ test_cursor_busy_pane_keeps_meta_model
 # The captain's fleet reached 24 concurrent task records with a dozen live
 # panes, where the refresh ran for over five minutes and starved the watcher's
 # liveness beacon. These cases pin the four properties that bound it: a pass
-# reads and renames each thing once, an unchanged label costs no backend call,
+# reads and renames each thing once, an unchanged label is not republished,
 # a slow backend cannot outlast the pass deadline, and two passes never run at
 # once.
 
@@ -370,12 +443,15 @@ test_pass_renames_each_workspace_once() {
 }
 
 test_unchanged_labels_cost_no_backend_call() {
-  local before
+  local before unchanged
   run_big --republish || fail 'the priming pass failed'
   : > "$BIG_LOG"
   run_big || fail 'the unchanged pass failed'
-  [ ! -s "$BIG_LOG" ] \
-    || fail "a pass that changed no label still made backend calls: $(head -3 "$BIG_LOG")"
+  # Only the per-pane primary-role clear runs, with the fm_state token that
+  # clear also drops; together they shed a marker the cache cannot see.
+  unchanged='--source firstmate-primary-visible-v1 |--source firstmate-worker-visible-v1 --token fm_state=[A-Z ]* --session '
+  ! grep -v -E -- "$unchanged" "$BIG_LOG" | grep -q . \
+    || fail "a pass that changed no label still republished: $(grep -v -E -- "$unchanged" "$BIG_LOG" | head -3)"
   # A single changed state republishes that task and its project, nothing else.
   before=$(count_calls 'tab rename')
   [ "$before" -eq 0 ] || fail 'the unchanged pass was not silent'
@@ -390,7 +466,7 @@ test_unchanged_labels_cost_no_backend_call() {
     || fail 'only the changed task project workspace should have been renamed'
   printf 'big-4=working\n' >> "$BIG_STATES"
   run_big >/dev/null 2>&1 || true
-  pass 'visible status: a label that did not change costs no backend call'
+  pass 'visible status: a label that did not change is not republished'
 }
 
 test_pass_deadline_bounds_a_slow_backend() {

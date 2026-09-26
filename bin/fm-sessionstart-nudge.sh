@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Print the one-line session-start instruction only for a genuine firstmate
-# primary whose current harness session has not already acquired the home lock.
+# primary whose current harness session has not already acquired the home lock,
+# never for a ship or scout worker.
 # Every silence and error path exits 0 because Claude SessionStart exit 2 blocks
 # session initialization.
 set -u
@@ -18,6 +19,7 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 . "$SCRIPT_DIR/fm-operational-input.sh"
 
 fm_is_gate_agent "$FM_ROOT" && exit 0
+fm_is_task_worker && exit 0
 fm_primary_scope_matches "$FM_ROOT" "$STATE" || exit 0
 
 lock_is_in_ancestry() {

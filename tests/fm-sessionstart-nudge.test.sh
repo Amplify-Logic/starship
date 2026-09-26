@@ -1037,6 +1037,29 @@ test_run_gate_and_scope_are_silent() {
   pass "run wrapper: ordinary ineligible opens stay silent-zero and Pi preflight gets an explicit silent stand-down"
 }
 
+# A ship or scout worker must never take a home's helm, even when its directory
+# looks like a genuine primary rather than a linked task worktree: the task
+# marker bin/fm-spawn.sh exports is enough to stand both tiers down.
+run_hook_as_worker() {  # <root> [args...]
+  FM_TASK_ID=worker-k1 run_hook "$@"
+}
+
+test_task_worker_marker_is_silent() {
+  local nudge_root="$TMP_ROOT/worker-nudge" run_root="$TMP_ROOT/worker-run" out status=0
+  make_primary "$nudge_root"
+  expect_silent_zero "task worker nudge" env FM_TASK_ID=worker-k1 FM_GATE_REFUSE_BYPASS=0 \
+    FM_ROOT_OVERRIDE="$nudge_root" FM_HOME="$nudge_root" "$NUDGE"
+  make_run_primary "$run_root"
+  expect_silent_zero "task worker run" run_hook_as_worker "$run_root" --source startup
+  assert_absent "$run_root/state/.lock" "a task worker's session open still took the fleet lock"
+  out=$(env FM_TASK_ID=worker-k1 FM_GATE_REFUSE_BYPASS=0 \
+    FM_ROOT_OVERRIDE="$run_root" FM_HOME="$run_root" PATH="$RUN_PATH" \
+    "$RUN" --source startup --pi-prerequisite 2>&1) || status=$?
+  expect_code 3 "$status" "task worker Pi prerequisite stand-down"
+  [ -z "$out" ] || fail "task worker Pi prerequisite stand-down must be silent, got: $out"
+  pass "session start: a marked ship or scout worker never gets the nudge or the digest"
+}
+
 test_run_reports_a_failed_session_start_as_digest_text() {
   local root="$TMP_ROOT/run-unwritable" out status=0
   make_run_primary "$root"
@@ -1067,6 +1090,7 @@ test_run_resume_delegates_to_the_nudge
 test_run_reads_source_from_the_hook_payload
 test_run_unknown_source_takes_the_helm
 test_run_gate_and_scope_are_silent
+test_task_worker_marker_is_silent
 test_run_reports_a_failed_session_start_as_digest_text
 test_pi_startup_classifies_cli_continuations
 test_pi_sessionstart_generation_prerequisite

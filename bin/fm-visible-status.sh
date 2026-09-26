@@ -14,8 +14,9 @@
 #     (default 15) and the whole pass by FM_VISIBLE_PASS_TIMEOUT seconds
 #     (default 120). A task the pass did not reach keeps its previous published
 #     label and is published by the next pass.
-#   - A task whose computed label equals the one last published for it is
-#     skipped without any backend call. The last published label lives in
+#   - A task whose computed label equals the one last published for it skips
+#     the tab and label calls, keeping only the primary-role clear and its
+#     fm_state restore (see update_task). The last published label lives in
 #     state/<id>.visible-label, a workspace's in state/.visible-workspace-<id>;
 #     both are pure presentation caches, safe to delete (that forces one full
 #     republish). --republish ignores them, which is what a recovery pass after
@@ -49,6 +50,7 @@
 # without touching any tab or workspace, so legacy fm-<id> labels survive.
 # This script never projects FIRSTMATE or LAB roles: bin/fm-primary.sh owns the
 # structurally guarded primary surface, and lab identity remains lab-owned.
+# Publishing a worker pane also clears any role bin/fm-primary.sh left on it.
 set -u
 
 SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
@@ -56,6 +58,8 @@ FM_ROOT=${FM_ROOT_OVERRIDE:-$(CDPATH='' cd -- "$SCRIPT_DIR/.." && pwd -P)}
 FM_HOME=${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}
 STATE=${FM_STATE_OVERRIDE:-$FM_HOME/state}
 SOURCE=firstmate-worker-visible-v1
+# The source bin/fm-primary.sh marks its own pane with.
+PRIMARY_SOURCE=firstmate-primary-visible-v1
 
 # fm_backend_herdr_presentation_capable owns the capability verdict shared
 # with fm-spawn.sh's herdr arm.
@@ -424,12 +428,31 @@ update_task() {  # <task-id>
   # worker is spawned with and the tab this refresh renames it to cannot drift.
   title=$("$SCRIPT_DIR/fm-visible-title.sh" "$outcome" "$icon $state")
   detail="$runtime · $branch"
+  # A worker pane is never the primary, so drop any role the primary launcher
+  # marked onto it. Herdr keeps each source's fields until that source clears
+  # them, so without this a worker that once ran bin/fm-primary.sh in its own
+  # pane would keep the FIRSTMATE role token beside its worker label. The
+  # label record below cannot see that marker, so this clear runs even on a
+  # pass that skips an unchanged label: a marker landing after the label was
+  # cached is gone by the next ordinary pass, not only after a --republish.
+  herdr_call "$session" pane report-metadata "$pane" \
+    --source "$PRIMARY_SOURCE" \
+    --clear-title \
+    --clear-display-agent \
+    --clear-state-labels \
+    --clear-token fm_role \
+    --clear-token fm_state >/dev/null 2>&1 || published=0
   # Everything the tab and the pane display is derived from these three
   # values, so an identical triple means the backend already shows this label
   # and the two round trips below would change nothing.
   record=$(task_label_record "$id")
   if skip_unchanged \
     && [ "$(cat "$record" 2>/dev/null || true)" = "$title"$'\t'"$detail"$'\t'"$icon $state" ]; then
+    # Herdr tokens are keyed by name, not source, so the clear above also
+    # dropped this worker's own fm_state; put it back.
+    herdr_call "$session" pane report-metadata "$pane" \
+      --source "$SOURCE" \
+      --token "fm_state=$state" >/dev/null 2>&1 || true
     TASK_START=
     return 0
   fi
