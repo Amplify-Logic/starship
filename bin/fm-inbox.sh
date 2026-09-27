@@ -24,6 +24,7 @@
 #   fm-inbox.sh note [--request-id <id>] [--json] -   (body from stdin)
 #   fm-inbox.sh announce [--json] <id>
 #   fm-inbox.sh reply [--json] <id> <text>... | reply [--json] <id> -
+#   fm-inbox.sh progress <id> <text>... | progress <id> -
 #   fm-inbox.sh receipts [--after <cursor>] [--all-pending] [--all-handled] [--all-replies]
 #   fm-inbox.sh ready
 #   fm-inbox.sh say  [<file.wav>]       (default: audio on stdin)
@@ -62,6 +63,13 @@
 # Each reply is stamped with a durable per-home sequence, so the receipts cursor
 # is a strict total order and two replies recorded in the same second are both
 # readable. One reply per note: a second one is refused.
+# `progress` publishes a short update on a note still being worked, before the
+# one reply: any number of lines, in order, refused once the reply exists.
+# Receipts list them per note as progress[] ({at, body}).
+# A newly created and announced note also rings the primary (ring_primary
+# below): a short labelled line typed into its chat pane so a busy primary sees
+# the note within seconds. The queued wake is still the delivery; the watcher
+# surfaces a note queued mid-cycle (bin/fm-watch.sh captain_input_surface_queued).
 # `ready` is the read-only primary-readiness projection (lock, wake-consumer
 # health, away posture, observation time). It never acquires the session lock
 # and never infers liveness from a lock file, a session, or a pane.
@@ -81,8 +89,8 @@
 # An absent profile means the call uses whatever credentials are already in the
 # environment, which is also what FM_INBOX_PROFILE= (empty) forces.
 #
-# `note`, `announce`, `reply`, `receipts`, `ready`, `status`, `list` and `drain`
-# need NO configuration at all, because they make no model call. The voice
+# `note`, `announce`, `reply`, `progress`, `receipts`, `ready`, `status`, `list`
+# and `drain` need NO configuration at all, because they make no model call. The voice
 # handover depends on `note`, so it keeps working in a home that has configured
 # nothing. `--json` / `receipts` / `ready` require python3, which a firstmate
 # home already uses for other tools.
@@ -91,8 +99,8 @@
 #   FM_HOME              operational home whose state/ and data/ are used.
 #
 # PRIVACY: `say` sends your audio and `ask` sends your question to Bedrock.
-# `note`, `announce`, `reply`, `receipts`, `ready`, `status`, `list` and `drain`
-# make no network call at all.
+# `note`, `announce`, `reply`, `progress`, `receipts`, `ready`, `status`, `list`
+# and `drain` make no network call at all.
 #
 # `note` is also the queueing half of the spoken interface: when the voice agent
 # in bin/fm-voice-relay.py hands real work over to firstmate, it runs this
@@ -196,6 +204,7 @@ aws_call() {
 REQUESTS="$INBOX/.requests"
 ANNOUNCED_DIR="$INBOX/.announced"
 REPLIES="$INBOX/.replies"
+PROGRESS="$INBOX/.progress"
 
 REPLY_SEQ_LOCK="$INBOX/.replies.lock"
 
@@ -362,6 +371,26 @@ announce_note() {  # <id> <summary>
   return "$status"
 }
 
+# Ring the busy primary so a new note is seen within seconds instead of at its
+# next turn end: one short labelled line typed into the lock-holding primary's
+# own chat pane, through bin/fm-desk-voice.sh ring, which owns the pane proof
+# and the composer checks. The line is plain visible text: Claude Code strips
+# the operational protocol's invisible mark from typed input and holds the
+# message for review. The ring runs detached with its output discarded, so the
+# note returns at once and a caller reading its output (the voice bridge waits
+# on it with a timeout) is never held by a slow pane. The queued wake above
+# stays the durable delivery; a ring that cannot be typed changes nothing. Away
+# and quiet mode own supervision through their own path, so they are never
+# rung.
+ring_primary() {  # <id>
+  local id=$1
+  [ ! -e "$STATE/.afk" ] || return 0
+  [ -x "$FM_ROOT/bin/fm-desk-voice.sh" ] || return 0
+  FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" nohup "$FM_ROOT/bin/fm-desk-voice.sh" ring \
+    "[firstmate inbox] captain inbox note $id is queued. Run bin/fm-wake-drain.sh now to pick it up; it stays queued until handled and acknowledged." \
+    </dev/null >/dev/null 2>&1 &
+}
+
 finish_note_result() {  # <outcome> <id> <request-id> <json> <strict-exit> <summary>
   local outcome=$1 id=$2 request_id=$3 json=$4 strict=$5 summary=$6
   local announced=0 acknowledged=0 path="$INBOX/$id.note" rc=0
@@ -385,6 +414,9 @@ finish_note_result() {  # <outcome> <id> <request-id> <json> <strict-exit> <summ
     elif [ "$acknowledged" -eq 1 ]; then
       printf '  firstmate has already acknowledged this note.\n'
     fi
+  fi
+  if [ "$announced" -eq 1 ] && [ "$outcome" = created ]; then
+    ring_primary "$id"
   fi
   if [ "$announced" -eq 1 ] || [ "$acknowledged" -eq 1 ]; then
     return 0
@@ -651,6 +683,41 @@ PY
   fi
 }
 
+# The header owns the progress contract. The check against the reply and the
+# append share the reply lock, so a line can never land after the reply.
+cmd_progress() {
+  local id body path at
+  id=${1:-}
+  [ -n "$id" ] || die "usage: fm-inbox.sh progress <id> <text>... (or: progress <id> -)"
+  shift
+  valid_note_id "$id" || die "invalid note id"
+  path=$(note_path "$id") || die "no such note: $id"
+  if [ "$#" -eq 0 ]; then
+    die "usage: fm-inbox.sh progress <id> <text>... (or: progress <id> -)"
+  elif [ "$1" = "-" ]; then
+    [ "$#" -eq 1 ] || die "usage: fm-inbox.sh progress <id> -"
+    body=$(cat)
+  else
+    body="$*"
+  fi
+  body=$(printf '%s' "$body" | tr '\t\r\n' '   ')
+  [ -n "${body//[[:space:]]/}" ] || die "refusing to record an empty progress line"
+  mkdir -p "$PROGRESS"
+  load_wake_lib || die "the progress record needs $FM_ROOT/bin/fm-wake-lib.sh"
+  fm_lock_acquire_wait "$REPLY_SEQ_LOCK" || die "could not lock the reply record"
+  if [ -f "$REPLIES/$id" ]; then
+    fm_lock_release "$REPLY_SEQ_LOCK"
+    die "reply already recorded for $id; progress lines come before it"
+  fi
+  at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  if ! printf '%s\t%s\n' "$at" "$body" >>"$PROGRESS/$id"; then
+    fm_lock_release "$REPLY_SEQ_LOCK"
+    die "could not record the progress line for $id"
+  fi
+  fm_lock_release "$REPLY_SEQ_LOCK"
+  printf 'progress %s\n' "$id"
+}
+
 cmd_receipts() {
   local after="" all_pending=0 all_handled=0 all_replies=0
   while [ "$#" -gt 0 ]; do
@@ -669,22 +736,22 @@ cmd_receipts() {
     esac
   done
   need_python
-  python3 - "$INBOX" "$ANNOUNCED_DIR" "$REPLIES" "$FM_HOME" \
+  python3 - "$INBOX" "$ANNOUNCED_DIR" "$REPLIES" "$FM_HOME" "$PROGRESS" \
     "$RECEIPTS_PENDING_BOUND" "$RECEIPTS_HANDLED_BOUND" "$RECEIPTS_REPLIES_BOUND" \
     "$all_pending" "$all_handled" "$all_replies" "$after" \
     "$(date -u +%Y-%m-%dT%H:%M:%SZ)" <<'PY'
 import json, os, sys
 from pathlib import Path
 
-inbox, announced_dir, replies_dir, home = sys.argv[1:5]
-pending_bound = int(sys.argv[5])
-handled_bound = int(sys.argv[6])
-replies_bound = int(sys.argv[7])
-all_pending = sys.argv[8] == "1"
-all_handled = sys.argv[9] == "1"
-all_replies = sys.argv[10] == "1"
-after = sys.argv[11]
-generated = sys.argv[12]
+inbox, announced_dir, replies_dir, home, progress_dir = sys.argv[1:6]
+pending_bound = int(sys.argv[6])
+handled_bound = int(sys.argv[7])
+replies_bound = int(sys.argv[8])
+all_pending = sys.argv[9] == "1"
+all_handled = sys.argv[10] == "1"
+all_replies = sys.argv[11] == "1"
+after = sys.argv[12]
+generated = sys.argv[13]
 
 # A record that vanishes between listing and reading - drain --ack moving a
 # note to handled/ - is skipped, and undecodable bytes are replaced, so one bad
@@ -758,6 +825,19 @@ def reply_record(note_id):
         "cursor": "%012d" % int(raw_seq),
     }
 
+# Progress lines in the order they were published, each {"at", "body"}.
+def progress_lines(note_id):
+    try:
+        text = (Path(progress_dir) / note_id).read_bytes().decode("utf-8", errors="replace")
+    except OSError:
+        return []
+    lines = []
+    for raw in text.splitlines():
+        at, sep, body = raw.partition("\t")
+        if sep and body.strip():
+            lines.append({"at": at, "body": body})
+    return lines
+
 # announced is null - not false - for a note written before this home tracked
 # announcement markers: it appended its own wake at creation and left no record
 # of it, so "not announced" is not something anyone can read off this state.
@@ -772,6 +852,7 @@ def enrich(note, acknowledged):
     else:
         rec["announced"] = None
     rec["reply"] = reply_record(note_id)
+    rec["progress"] = progress_lines(note_id)
     rec.pop("path", None)
     rec.pop("announce_marker", None)
     return rec
@@ -1139,6 +1220,7 @@ case "${1:-}" in
   note)     shift; cmd_note "$@" ;;
   announce) shift; cmd_announce "$@" ;;
   reply)    shift; cmd_reply "$@" ;;
+  progress) shift; cmd_progress "$@" ;;
   receipts) shift; cmd_receipts "$@" ;;
   ready)    shift; cmd_ready "$@" ;;
   say)      shift; cmd_say "$@" ;;

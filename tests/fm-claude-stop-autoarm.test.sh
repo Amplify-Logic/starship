@@ -1494,6 +1494,66 @@ test_host_crash_is_retried_then_reported() {
   pass "auto-arm: a host that died without a close is retried, then reported as a failure"
 }
 
+# End to end with the real arm and watcher: the handling successor the previous
+# rewake started is still running when a captain note is queued mid-turn, and
+# the turn then ends. The note must be presented through a rewake at that turn
+# end. Before, the Stop attached to the successor, which never surfaced queued
+# notes, so the turn ended silently and the note waited for an unrelated event.
+test_note_queued_mid_turn_is_presented_at_turn_end() {
+  local dir out status succ_out succ_pid id drained i hook_pid child
+  local -a knobs=(FM_POLL=1 FM_HEARTBEAT=600 FM_CHECK_INTERVAL=999999
+    FM_SECONDMATE_LIVENESS_SECS=99999999 FM_SUPERVISION_SENTINEL_MODE=off FM_ARM_ATTACH_POLL=0.2)
+  local -a no_pane=(-u TMUX -u TMUX_PANE -u HERDR_ENV -u HERDR_PANE_ID -u HERDR_SESSION -u HERDR_SOCKET_PATH)
+  dir=$(make_primary_dir "$TMP_ROOT/note-mid-turn")
+  rm -rf "${dir:?}/bin"
+  cp -R "$ROOT/bin" "$dir/bin"
+  : > "$dir/state/task.meta"
+  fm_test_track_watcher_state "$dir/state"
+  succ_out="$dir/successor.out"
+  env "${no_pane[@]}" "${knobs[@]}" FM_HOME="$dir" FM_WATCH_PREDECESSOR_ARM_PID=$$ \
+    "$dir/bin/fm-watch-arm.sh" > "$succ_out" 2>&1 &
+  succ_pid=$!
+  i=0
+  while ! grep -q '^watcher: started' "$succ_out" 2>/dev/null && [ "$i" -lt 300 ]; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  grep -q '^watcher: started' "$succ_out" || fail "the handling successor did not start: $(cat "$succ_out")"
+  id=$(env "${no_pane[@]}" FM_HOME="$dir" "$dir/bin/fm-inbox.sh" note "connection test ping" | sed -n 's/^queued //p')
+  [ -n "$id" ] || fail "the captain note was not queued"
+  out="$dir/hook.out"
+  printf '%s\n' '{"session_id":"sess-autoarm","stop_hook_active":false}' \
+    | env "${no_pane[@]}" "${knobs[@]}" FM_HOME="$dir" "$FAKE_CLAUDE" -c '
+        printf "%s\n" "$$" > "$FM_HOME/state/.lock"
+        "$FM_HOME/bin/fm-claude-stop-autoarm.sh"
+      ' > "$out" 2>&1 &
+  hook_pid=$!
+  i=0
+  while kill -0 "$hook_pid" 2>/dev/null && [ "$i" -lt 300 ]; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  status=124
+  if kill -0 "$hook_pid" 2>/dev/null; then
+    for child in $(pgrep -P "$hook_pid" 2>/dev/null); do
+      kill -TERM "$child" 2>/dev/null || true
+    done
+    kill -TERM "$hook_pid" 2>/dev/null || true
+    wait "$hook_pid" 2>/dev/null || true
+  else
+    status=0
+    wait "$hook_pid" || status=$?
+  fi
+  kill -TERM "$succ_pid" 2>/dev/null || true
+  wait "$succ_pid" 2>/dev/null || true
+  [ "$status" -ne 124 ] || fail "the turn end never presented the captain note queued mid-turn: $(cat "$out")"
+  expect_code 2 "$status" "a captain note queued mid-turn must rewake the primary at turn end"
+  assert_contains "$(cat "$out")" "firstmate watcher wake" "the turn end must deliver a wake banner"
+  drained=$(FM_HOME="$dir" "$dir/bin/fm-wake-drain.sh" 2>/dev/null)
+  assert_contains "$drained" "inbox:$id" "the rewake's drain must present the captain note"
+  pass "auto-arm: a captain note queued mid-turn is presented at that turn's end"
+}
+
 test_fm_lock_status_still_works_with_shared_lib() {
   local out
   out=$(FM_HOME="$TMP_ROOT/lock-status-home" bash "$ROOT/bin/fm-lock.sh" status 2>&1)
@@ -1552,4 +1612,5 @@ test_host_handback_carries_every_host_line
 test_host_stand_down_is_silent
 test_host_crash_is_retried_then_reported
 test_fm_lock_status_still_works_with_shared_lib
+test_note_queued_mid_turn_is_presented_at_turn_end
 test_stands_down_only_on_pi_code_transcript_path

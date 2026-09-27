@@ -2047,6 +2047,41 @@ procevent_surface_queued() {
   wake "$reason"
 }
 
+# Deliver captain input another process queued while this watcher was running:
+# a captain inbox note (bin/fm-inbox.sh, the path Starship Voice and the
+# glasses take) or a desk-voice mailbox transcript (bin/fm-desk-voice.sh
+# deliver). Those producers append straight to the durable queue and touch no
+# source this watcher waits on, and resurface_after_downtime below never
+# presents them from a handling successor and waits on them while an episode is
+# announced, so such a note used to sit queued - and a Claude Stop attached to
+# the same cycle ended silently - until an unrelated event closed the cycle.
+# Rows at or below the baseline read at lock time belong to the wake that
+# started this cycle or to its recovery check, so only newer rows count; the
+# drain stays the presenter and the acknowledgement owner.
+CAPTAIN_INPUT_BASELINE=0
+captain_input_baseline_read() {
+  local seq
+  fm_lock_acquire_wait "$FM_WAKE_QUEUE_LOCK"
+  seq=$(cat "$STATE/.wake-queue.seq" 2>/dev/null || true)
+  fm_lock_release "$FM_WAKE_QUEUE_LOCK"
+  case "$seq" in ''|*[!0-9]*) seq=0 ;; esac
+  CAPTAIN_INPUT_BASELINE=$seq
+}
+
+captain_input_surface_queued() {
+  local rows first
+  [ -s "$FM_WAKE_QUEUE" ] || return 0
+  fm_lock_acquire_wait "$FM_WAKE_QUEUE_LOCK"
+  rows=$(awk -F '\t' -v base="$CAPTAIN_INPUT_BASELINE" '
+    NF >= 5 && $2 ~ /^[0-9]+$/ && $2 + 0 > base + 0 && $3 == "check" \
+      && ($4 ~ /^inbox:/ || $4 == "desk-voice") { sub(/^check: /, "", $5); print $5 }
+  ' "$FM_WAKE_QUEUE" 2>/dev/null || true)
+  fm_lock_release "$FM_WAKE_QUEUE_LOCK"
+  [ -n "$rows" ] || return 0
+  first=$(printf '%s\n' "$rows" | head -n 1)
+  wake "check: $first"
+}
+
 run_check_process() {
   local c=$1
   shift
@@ -2534,6 +2569,9 @@ done
 if [ -n "$EVICTED_PID" ]; then
   echo "watcher: replaced stalled pid $EVICTED_PID (beacon ${EVICTED_BEAT_AGE}s past hard bound ${WATCHER_STALL_BOUND}s)"
 fi
+# Read before the recovery check below, so a row appended after it is newer
+# than this baseline even when that check has already announced the episode.
+captain_input_baseline_read
 WATCHER_RECOVERY_PENDING=0
 if [ -n "${FM_LOCK_RECOVERED_PID:-}" ]; then
   WATCHER_RECOVERY_PENDING=1
@@ -2865,6 +2903,7 @@ while :; do
   # Then deliver any queued-but-unsurfaced result, including one a runner
   # published while this watcher was between cycles.
   procevent_surface_queued
+  captain_input_surface_queued
 
   # A process-event result carries richer adapter-owned wake context than the
   # generic recovery reason, so give that owner first refusal.

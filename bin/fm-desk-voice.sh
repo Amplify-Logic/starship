@@ -6,6 +6,7 @@
 #   fm-desk-voice.sh send [--source <name>] [--image <png>]... [<transcript text...>]
 #   fm-desk-voice.sh send --front-app <pid> --front-tty <tty> [--source <name>] [<text...>]
 #   fm-desk-voice.sh deliver [--source <name>] [--image <png>]... [<transcript text...>]
+#   fm-desk-voice.sh ring <line>
 #   fm-desk-voice.sh shot [--display <n>]
 #   fm-desk-voice.sh pending
 #   fm-desk-voice.sh drain [--print]
@@ -72,6 +73,15 @@
 # socket, and whose standard input is <tty>. An unresolved primary counts as
 # not in front. Once in front, every send check above still applies, so an
 # unreadable chat or a selection dialog still goes to the mailbox.
+#
+# ring is the mid-turn doorbell other captain-input paths use: it types <line>
+# into the same proven primary pane, with every send check above, and never
+# falls back to the mailbox, because the caller has already queued its own
+# durable wake. It types only into a composer that reads empty, so a draft the
+# captain is writing is never submitted with it. One line on stdout, exit 0:
+#   rung: <backend> <target>              typed and submit confirmed
+#   rung-unconfirmed: <backend> <target> (<verdict>)
+#   not-rung                              nothing typed; the queued wake stands
 #
 # deliver is the mailbox path. Transcripts land under
 #   $FM_HOME/state/desk-voice/inbox/<utc>-<id>.json
@@ -547,7 +557,7 @@ EOF
 # proven but not showing its chat input; nothing was typed either way. Call it
 # in a subshell: it replaces the pane environment with the primary's own.
 primary_submit() {  # <line> [<app> <tty>]
-  local lock="$STATE/.lock" pid envs kv backend target root verdict draft claude
+  local lock="$STATE/.lock" pid envs kv backend target root verdict draft claude composer
   [ -f "$lock" ] && [ ! -L "$lock" ] || return 1
   pid=$(head -n 1 "$lock" 2>/dev/null) || return 1
   case "$pid" in ''|*[!0-9]*) return 1 ;; esac
@@ -571,7 +581,12 @@ EOF
   if [ "$#" -ge 3 ]; then
     shown_in_front "$backend" "$target" "$root" "$2" "$3" || return 1
   fi
-  case "$(fm_backend_composer_state "$backend" "$target" 2>/dev/null)" in
+  composer=$(fm_backend_composer_state "$backend" "$target" 2>/dev/null)
+  case " ${PRIMARY_SUBMIT_COMPOSER:-empty pending} " in
+    *" $composer "*) ;;
+    *) return 2 ;;
+  esac
+  case "$composer" in
     empty) draft=0 ;;
     pending) draft=1 ;;
     *) return 2 ;;
@@ -654,6 +669,23 @@ send() {
   done
   path=$(deliver --source "$source" ${image_args[@]+"${image_args[@]}"} -- "$text")
   printf 'mailbox: %s\n' "$path"
+}
+
+ring() {
+  local line result='' verdict backend target rc=0
+  [ "$#" -eq 1 ] || refuse "usage: fm-desk-voice.sh ring <line>"
+  line=$(plain_line "$1") || die "cannot prepare the line"
+  [ -n "$line" ] || refuse "nothing to ring"
+  result=$(PRIMARY_SUBMIT_COMPOSER=empty primary_submit "$line") || rc=$?
+  if [ "$rc" = 0 ] && [ -n "$result" ]; then
+    IFS=$'\t' read -r verdict backend target <<<"$result"
+    case "$verdict" in
+      empty) printf 'rung: %s %s\n' "$backend" "$target"; return 0 ;;
+      send-failed) ;;
+      *) printf 'rung-unconfirmed: %s %s (%s)\n' "$backend" "$target" "$verdict"; return 0 ;;
+    esac
+  fi
+  printf 'not-rung\n'
 }
 
 shot() {
@@ -749,6 +781,7 @@ main() {
     --help|-h) usage; exit 0 ;;
     send) shift; send "$@" ;;
     deliver) shift; deliver "$@" ;;
+    ring) shift; ring "$@" ;;
     shot) shift; shot "$@" ;;
     pending) shift; pending "$@" ;;
     drain) shift; drain "$@" ;;

@@ -222,5 +222,91 @@ test_handling_successor_does_not_go_blind() {
   pass "a resurfacing handling successor stays alive and supervises instead of going blind"
 }
 
+# Captain input queued while a cycle runs - a Starship Voice or glasses note
+# through bin/fm-inbox.sh, or a desk-voice mailbox transcript - must close the
+# cycle with its own reason. Before, a handling successor never re-announced
+# queued rows and an announced episode waited on them, so the note sat queued
+# until an unrelated event woke the primary. Rows already queued when the cycle
+# started belong to the wake that started it and must not wake it again.
+captain_input_watch_bg() {  # <dir> <out> [extra env assignments...]
+  local dir=$1 out=$2
+  shift 2
+  mkdir -p "$dir/home/data"
+  : > "$dir/state/crew.meta"
+  PATH="$dir/fakebin:$PATH" FM_HOME="$dir/home" FM_STATE_OVERRIDE="$dir/state" \
+    FM_POLL=1 FM_SIGNAL_GRACE=0 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=600 \
+    FM_SECONDMATE_LIVENESS_SECS=99999999 env "$@" "$WATCH" > "$out" 2>&1 &
+}
+
+wait_for_lock_holder() {  # <state> <pid>
+  local i=0
+  while [ "$i" -lt 300 ]; do
+    [ "$(cat "$1/.watch.lock/pid" 2>/dev/null || true)" = "$2" ] && [ -e "$1/.last-watcher-beat" ] && return 0
+    sleep 0.1
+    i=$((i + 1))
+  done
+  return 1
+}
+
+test_handling_successor_surfaces_a_captain_note_queued_mid_handling() {
+  local dir state out child id rc
+  dir=$(make_case captain-note-successor)
+  state="$dir/state"
+  out="$dir/watch.out"
+  # The predecessor's wake is being handled: its row is queued and presented.
+  append_wake "$state" check "inbox:1-old" "check: captain inbox note 1-old - already delivered"
+  printf 'announced:handling:gap.1.bbb\n' > "$state/.watcher-down"
+  chmod 600 "$state/.watcher-down"
+  captain_input_watch_bg "$dir" "$out" FM_WATCH_HANDLING_SUCCESSOR=1
+  child=$!
+  wait_for_lock_holder "$state" "$child" \
+    || { kill -TERM "$child" 2>/dev/null || true; fail "handling successor did not take the watcher lock: $(cat "$out")"; }
+  sleep 2.5
+  if ! is_live_non_zombie "$child"; then
+    fail "a row queued before the successor started woke it again: $(cat "$out")"
+  fi
+  id=$(FM_HOME="$dir/home" FM_STATE_OVERRIDE="$state" \
+    "$ROOT/bin/fm-inbox.sh" note "connection test ping" | sed -n 's/^queued //p')
+  [ -n "$id" ] || { kill -TERM "$child" 2>/dev/null || true; fail "the note was not queued"; }
+  rc=0
+  wait_for_exit "$child" 60 || rc=$?
+  [ "$rc" -ne 124 ] || fail "the handling successor never surfaced the captain note queued mid-handling: $(cat "$out")"
+  grep -F "check: captain inbox note $id - connection test ping" "$out" >/dev/null \
+    || fail "the wake did not name the new captain note: $(cat "$out")"
+  ! grep -F '1-old' "$out" >/dev/null || fail "the already-delivered row was surfaced again: $(cat "$out")"
+  [ "$(grep -c "inbox:" "$state/.wake-queue")" = 2 ] \
+    || fail "surfacing must leave the durable rows for the drain to present and acknowledge"
+  pass "a handling successor surfaces a captain note queued while the primary is handling"
+}
+
+test_handling_cycle_names_new_captain_input() {
+  local dir state out child rc
+  dir=$(make_case captain-input-handling)
+  state="$dir/state"
+  out="$dir/watch.out"
+  append_wake "$state" check "inbox:1-old" "check: captain inbox note 1-old - presented, not yet acknowledged"
+  printf 'pending:handling:gap.2.ccc\n' > "$state/.watcher-down"
+  chmod 600 "$state/.watcher-down"
+  captain_input_watch_bg "$dir" "$out"
+  child=$!
+  wait_for_lock_holder "$state" "$child" \
+    || { kill -TERM "$child" 2>/dev/null || true; fail "watcher did not take the lock: $(cat "$out")"; }
+  sleep 2.5
+  if ! is_live_non_zombie "$child"; then
+    fail "an episode still being handled was re-presented without new input: $(cat "$out")"
+  fi
+  append_wake "$state" check "desk-voice" "desk-voice: $state/desk-voice/inbox/fixture.json"
+  append_wake "$state" check "inbox:2-new" "check: captain inbox note 2-new - second"
+  rc=0
+  wait_for_exit "$child" 60 || rc=$?
+  [ "$rc" -ne 124 ] || fail "new captain input while an episode is handled never woke the watcher: $(cat "$out")"
+  grep -Fx "check: desk-voice: $state/desk-voice/inbox/fixture.json" "$out" >/dev/null \
+    || fail "the wake did not name the new captain input: $(cat "$out")"
+  ! grep -F 'rearm-resurface' "$out" >/dev/null || fail "the wake reported generic recovery instead of the captain input: $(cat "$out")"
+  pass "captain input queued while an episode is handled wakes the watcher under its own name"
+}
+
 test_handling_successor_does_not_go_blind
 test_unacknowledged_recovery_is_announced_once_per_generation
+test_handling_successor_surfaces_a_captain_note_queued_mid_handling
+test_handling_cycle_names_new_captain_input

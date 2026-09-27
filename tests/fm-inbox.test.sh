@@ -544,3 +544,34 @@ run_inbox "$home" drain --ack "$did" >/dev/null || fail "drain --ack failed"
 assert_absent "$home/state/inbox/$did.note" "acked note leaves pending"
 assert_present "$home/state/inbox/handled/$did.note" "acked note is in handled"
 pass "drain --ack still moves the note to handled"
+
+# --- progress lines before the one reply ------------------------------------
+
+home=$(make_home progress)
+queued=$(run_inbox "$home" note "fix the slow voice pickup") || fail "note for progress failed"
+pid=${queued#queued }
+pid=${pid%%$'\n'*}
+run_inbox "$home" progress "$pid" "On it, looking at the watcher now." >/dev/null \
+  || fail "first progress line failed"
+printf 'Found it.\nWriting the fix.\n' | run_inbox "$home" progress "$pid" - >/dev/null \
+  || fail "progress from stdin failed"
+progress=$(run_inbox "$home" receipts | python3 -c 'import json,sys
+row=json.load(sys.stdin)["pending"][0]
+print("|".join(p["body"] for p in row["progress"]))
+print(row["reply"])')
+assert_equals $'On it, looking at the watcher now.|Found it. Writing the fix.\nNone' "$progress" \
+  "receipts list progress lines in order, one line each, before any reply"
+run_inbox "$home" reply "$pid" "Fixed: notes now reach you within seconds." >/dev/null || fail "reply after progress failed"
+late_code=0
+late=$(run_inbox "$home" progress "$pid" "one more thing" 2>&1) || late_code=$?
+expect_code 1 "$late_code" "a progress line after the reply is refused"
+assert_contains "$late" "reply already recorded" "the refusal names the reply"
+progress=$(run_inbox "$home" receipts | python3 -c 'import json,sys
+row=json.load(sys.stdin)["pending"][0]
+print(len(row["progress"]), row["reply"]["body"])')
+assert_equals "2 Fixed: notes now reach you within seconds." "$progress" \
+  "the reply follows the progress lines and closes them"
+empty_code=0
+run_inbox "$home" progress "$pid" "   " >/dev/null 2>&1 || empty_code=$?
+expect_code 1 "$empty_code" "an empty progress line is refused"
+pass "progress lines publish in order before the one reply and close with it"

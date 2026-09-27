@@ -34,6 +34,7 @@ The relay reads records and queues work. It never changes a project, and the
 queueing half is `bin/fm-inbox.sh note`, the same surface the captain's own
 out-of-band capture already uses, rather than a second queue.
 `bin/fm-inbox.sh` remains the single owner of that queue, including request-id deduplication, receipts JSON, and the primary reply record.
+A new note also rings a busy primary within seconds, and the primary can publish short progress lines on it before the one reply; the `bin/fm-inbox.sh` header owns both.
 
 ## What it costs in time
 

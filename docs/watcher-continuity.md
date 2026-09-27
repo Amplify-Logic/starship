@@ -215,6 +215,10 @@ The first recovery marks that generation announced, and later arms wait until a 
 A non-successor watcher start after an announced-but-unacked episode is a new down stretch.
 It mints a fresh generation so buried decisions still resurface once.
 
+Captain input is outside this rule.
+A captain inbox note or desk-voice mailbox row queued after a watcher took its lock closes that cycle with its own reason, whether the watcher is a handling successor or the episode is announced (`captain_input_surface_queued` in `bin/fm-watch.sh`).
+Without it, such a note waits for an unrelated event, and a Claude turn end that attached to the same cycle ends silently.
+
 ### Generation reuse
 
 Every watcher close and every durable queue append publishes downtime.
@@ -542,6 +546,7 @@ They also prove that a legacy or handoff-phase watcher marker from an absent rep
 
 - The once-per-generation announcement bound with the real Pi extension against a refused handling handshake.
 - A handling successor that must surface a real crew event instead of going blind.
+- Captain input queued after a cycle started, surfaced under its own reason by a handling successor and by a cycle whose episode is being handled.
 
 `tests/fm-watch-triage.test.sh` proves TERM stops a watcher blocked inside a poll's pane capture and still releases its lock and records an acknowledgeable stop.
 It also checks that a newly appended keyed decision is classified without rereading earlier status bytes, so signal handling can return to the watcher's beacon refresh even when the status history is long.
@@ -571,6 +576,7 @@ It also checks that a newly appended keyed decision is classified without reread
 - The handling successor an ended attached cycle starts with the closed arm as its predecessor and that outlives the rewake.
 - An unconfirmed successor reported in the banner without withholding the wake.
 - Host-timeout HUP/TERM/INT translation into the same durable failure handoff.
+- A captain note queued mid-turn, with the real arm and watcher, presented through a rewake at that turn's end.
 
 It also covers generation-claim single-flight, stuck-claim supersession, superseded-owner silence, notice-marker refusal and retry, ownership-atomic episode reset, and the legacy upgrade shim.
 [`turnend-guard.md`](turnend-guard.md) owns those behavior contracts.

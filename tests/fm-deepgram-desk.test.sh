@@ -1222,6 +1222,87 @@ test_desk_voice_send_falls_back_when_the_pane_shows_a_dialog() {
   pass "fm-desk-voice send: a pane showing a dialog instead of its chat input gets nothing"
 }
 
+# --- captain inbox notes ring the busy primary -------------------------------
+#
+# A Starship Voice or glasses note goes through bin/fm-inbox.sh note, which
+# queues its durable wake and then rings the primary through
+# fm-desk-voice.sh ring: one labelled line typed into the same proven pane the
+# desk floater uses, so a primary busy mid-turn sees the note within seconds.
+
+inbox_note_in() {  # <home> <text> -> stdout of fm-inbox.sh note
+  local home=$1 dir="$1/fixture"
+  (
+    unset TMUX TMUX_PANE HERDR_ENV HERDR_PANE_ID HERDR_SESSION HERDR_SOCKET_PATH \
+      FM_BACKEND_HERDR_BIN FM_SUPERVISOR_TARGET FM_SUPERVISOR_BACKEND
+    PATH="$dir/bin:$PATH" FM_FAKE_HERDR_DIR="$dir" FM_HOME="$home" \
+      FM_STATE_OVERRIDE="$home/state" FM_BACKEND_HERDR_SUBMIT_MIN_SLEEP=0.1 \
+      "$ROOT/bin/fm-inbox.sh" note "$2"
+  )
+}
+
+# The ring is detached from the note, so a case waits for it to finish: its
+# Enter, or its composer read followed by the exit of the ring process, whose
+# command line names the note.
+wait_for_ring() {  # <home> <note-id>
+  local home=$1 id=$2 i=0
+  while [ "$i" -lt 150 ]; do
+    [ -e "$home/fixture/entered" ] && return 0
+    if [ -n "$(herdr_calls "$home" pane read)" ] \
+      && ! pgrep -f "captain inbox note $id" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.1
+    i=$((i + 1))
+  done
+  return 1
+}
+
+test_inbox_note_rings_the_busy_primary() {
+  local home out id typed started elapsed
+  home=$(desk_send_fixture note-ring) || { desk_send_skip note-ring; return 0; }
+  started=$(date +%s)
+  out=$(inbox_note_in "$home" "connection test ping") || fail "note failed: $out"
+  id=$(printf '%s\n' "$out" | sed -n 's/^queued //p')
+  [ -n "$id" ] || fail "the note was not queued: $out"
+  wait_for_ring "$home" "$id" || fail "the ring never finished"
+  elapsed=$(( $(date +%s) - started ))
+  typed=$(herdr_calls "$home" pane send-text)
+  assert_contains "$typed" "[firstmate inbox] captain inbox note $id is queued" \
+    "the primary's pane gets one labelled line naming the note"
+  assert_not_contains "$typed" "connection test ping" "the ring carries no note text, only its id"
+  [ "$(herdr_calls "$home" pane send-text | wc -l | tr -d ' ')" = 1 ] || fail "the ring was typed more than once"
+  assert_contains "$(herdr_calls "$home" pane send-keys)" "pane send-keys w7:p3 enter" "Enter submits the ring"
+  assert_contains "$(cat "$home/state/.wake-queue")" "inbox:$id" "the durable wake is still queued"
+  [ "$elapsed" -le 10 ] || fail "ringing took ${elapsed}s, not seconds"
+  [ "$(inbox_count "$home")" = 0 ] || fail "a ring must not write the desk mailbox"
+  desk_send_done "$home"
+  pass "fm-inbox note: a new captain note rings the busy primary within seconds and stays queued"
+}
+
+test_inbox_note_ring_never_submits_a_draft_or_rings_away() {
+  local home out
+  home=$(desk_send_fixture note-ring-draft) || { desk_send_skip note-ring-draft; return 0; }
+  printf 'half typed ' > "$home/fixture/draft"
+  out=$(inbox_note_in "$home" "status please") || fail "note failed: $out"
+  wait_for_ring "$home" "$(printf '%s\n' "$out" | sed -n 's/^queued //p')" \
+    || fail "the ring never read the composer"
+  [ -z "$(herdr_calls "$home" pane send-text)" ] || fail "a ring must never be typed onto the captain's draft"
+  [ -z "$(herdr_calls "$home" pane send-keys)" ] || fail "a ring must never submit the captain's draft"
+  assert_contains "$(cat "$home/state/.wake-queue")" "inbox:" "the note still reaches the queue"
+  desk_send_done "$home"
+  home=$(desk_send_fixture note-ring-away) || { desk_send_skip note-ring-away; return 0; }
+  printf 'away\n' > "$home/state/.afk"
+  out=$(inbox_note_in "$home" "status please") || fail "note failed: $out"
+  [ -z "$(herdr_calls "$home" pane)" ] || fail "away mode's own supervision path must not even be probed"
+  [ -z "$(herdr_calls "$home" pane send-text)" ] || fail "away mode's own supervision path must not be rung over"
+  assert_contains "$(cat "$home/state/.wake-queue")" "inbox:" "the note still reaches the queue while away"
+  desk_send_done "$home"
+  out=$(FM_HOME="$TMP_ROOT/ring-nobody" FM_STATE_OVERRIDE="$TMP_ROOT/ring-nobody/state" "$DESK" ring "hello") \
+    || fail "ring with no primary failed: $out"
+  [ "$out" = not-rung ] || fail "ring with no primary must report not-rung, got: $out"
+  pass "fm-inbox note: the ring never submits a draft, never rings away mode, and falls back to the queue"
+}
+
 # Claude 2.1.283's idle chat in Herdr 0.7.4, read from the primary's own pane
 # with the transcript text replaced: titled rules, a status line, a new
 # message pill, and a dim suggested prompt in the box.
@@ -1896,6 +1977,8 @@ test_desk_voice_send_waits_for_a_late_drawn_message_past_a_claude_draft
 test_desk_voice_send_never_confirms_a_redrawn_message_past_a_draft
 test_desk_voice_send_restores_a_draft_stashed_without_a_marker
 test_desk_voice_send_joins_another_harness_draft
+test_inbox_note_rings_the_busy_primary
+test_inbox_note_ring_never_submits_a_draft_or_rings_away
 test_desk_voice_send_types_screenshots_into_the_primary_pane
 test_desk_voice_send_screenshots_fall_back_to_the_mailbox
 test_desk_voice_dictation_sends_when_the_chat_is_in_front
