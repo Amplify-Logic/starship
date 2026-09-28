@@ -58,8 +58,8 @@ Publishing the stamp first ensures a snapshot cannot observe a newly captain-hel
 
 Repeat and edge cases:
 
-- Retries of an active hold preserve its hold-set timestamp.
-- Re-holding released work starts a new timestamped lifecycle.
+- Retries of an active hold with an identical reason preserve its hold-set timestamp, even when only `--until` changes.
+- Re-holding an active hold with a reworded reason, or re-holding released work, starts a new timestamped lifecycle whose stamp is always later than the old one.
 - A closed task is refused rather than reopened.
 - `--until` stores the captain's own deferral date through tasks-axi's date gate.
 
@@ -71,6 +71,7 @@ The `answer` subcommand records the captain's exact words and resolves the call 
 | --- | --- |
 | `answer` | Closes a question-shaped call. |
 | `answer --release` | Frees a captain-gated work item to proceed without completing it. |
+| `answer --expect-identity <identity>` | Records the answer only when the call's current `open --identity` value still matches, and otherwise exits 3 and records nothing. |
 
 It requires a non-empty captain decision file of at most 8192 bytes.
 It then works in this order:
@@ -82,6 +83,11 @@ It then works in this order:
 
 If the close is interrupted, the still-held task therefore keeps its original age basis.
 A matching retry also completes any resolution-first normalization left unfinished after the close itself succeeded.
+
+`--expect-identity` serves a caller that showed the captain one exact question, such as a phone approval card.
+The comparison runs under the answer's own task lock, so a hold or answer cannot land between the check and the record.
+The identity is the hold-set stamp plus the count of recorded answers, so a closed, released, or re-held call refuses a stale expectation, and a reworded live call refuses a tap on its old wording.
+The command header in `bin/fm-captain-hold.sh` owns the exact refusal and failure cases.
 
 ### Answer retries and tasks closed elsewhere
 
@@ -520,7 +526,8 @@ The suite does not test the accepted merge-to-cleanup re-hold window or asynchro
 - Answer-time resolution works through a bound channel with task-id keys.
   This includes the `release` mode, mode-matched replay idempotence, and the refusal of drifted, mode-mismatched, absent, unheld, and already-closed keys.
 - The chat channel reaches the same intake.
-- Hold-set stamping precedes visible hold state, preserves an active lifecycle's timestamp, and resets after release.
+- Hold-set stamping precedes visible hold state, preserves an active lifecycle's timestamp for an identical reason, and moves strictly later after a reword or release.
+- `answer --expect-identity` records nothing for a stale identity, including a same-worded re-hold and a reworded live call, and keeps the ordinary failure when the backlog read fails.
 - Interrupted answer closure retains the stamp until close and restores resolution-first ordering on retry.
 - Deferral through `--until` leaves `captain_actionable` false until due.
 
