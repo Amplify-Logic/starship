@@ -243,9 +243,12 @@ exit 1
 SH
 
   if [ "$want_herdr" = with-herdr ]; then
-    cat > "$CASE_BIN/herdr" <<'SH'
-#!/usr/bin/env bash
-set -u
+    # The case paths are baked in as defaults because the detached server
+    # launch scrubs every FM_* variable from the `herdr server` environment.
+    # shellcheck disable=SC2016
+    printf '#!/usr/bin/env bash\nset -u\n: "${FM_FAKE_HERDR_RUNNING:=%q}" "${FM_FAKE_STATE:=%q}" "${FM_FAKE_HERDR_SOCKET:=%q}"\n' \
+      "$CASE_HERDR_RUNNING" "$CASE_STATE" "$CASE_STATE/herdr.sock" > "$CASE_BIN/herdr"
+    cat >> "$CASE_BIN/herdr" <<'SH'
 running=$(cat "$FM_FAKE_HERDR_RUNNING" 2>/dev/null || printf 'false')
 case "${1:-} ${2:-}" in
   "status --json")

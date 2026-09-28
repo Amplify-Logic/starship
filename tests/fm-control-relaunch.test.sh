@@ -2087,10 +2087,10 @@ make_herdr_stub() {  # <case-dir>
   # The herdr server-ensure poll must actually wait between reads, so this case
   # keeps the real sleep rather than the tmux cases' instant stub.
   rm -f "$fb/sleep"
-  cat > "$fb/herdr" <<'SH'
-#!/usr/bin/env bash
-set -u
-D=$FM_FAKE_DIR
+  # The fake directory is baked in because the detached server launch scrubs
+  # every FM_* variable from the `herdr server` environment.
+  printf '#!/usr/bin/env bash\nset -u\nD=%q\n' "$1/fake" > "$fb/herdr"
+  cat >> "$fb/herdr" <<'SH'
 printf '%s\n' "$*" >> "$D/herdr-log"
 if [ "${1:-}" = status ] && [ "${2:-}" = --json ]; then
   if [ -f "$D/herdr-stopped" ]; then

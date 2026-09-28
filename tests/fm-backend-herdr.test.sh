@@ -134,17 +134,25 @@ herdr_submit_claude_prefix() {  # <resp-dir> <typed-text>
   printf '  \xe2\x9d\xaf %s\n' "$text" > "$resp/4.out"
 }
 
-# make_herdr_server_env_fakebin: a stateful server stub that records only the
-# long-lived server launch environment, then reports the server as running.
-make_herdr_server_env_fakebin() {  # <dir> -> echoes fakebin dir
-  local dir=$1 fb="$1/fakebin"
+# make_herdr_server_env_fakebin: a stateful server stub that records the
+# long-lived server launch - its environment, process group, session, working
+# directory, and descriptors - then reports the server as running. Its paths
+# are baked in at creation because the owner scrubs every FM_* variable from
+# the server's environment. The server then lingers for <linger> seconds while
+# holding every descriptor it inherited, so a launch that leaked a caller's
+# pipe would hold that caller open for the whole linger. `calls` logs every
+# invocation.
+make_herdr_server_env_fakebin() {  # <dir> [<linger-seconds>] -> echoes fakebin dir
+  local dir=$1 linger=${2:-0} fb="$1/fakebin"
   mkdir -p "$fb"
-  cat > "$fb/herdr" <<'SH'
-#!/usr/bin/env bash
-set -u
+  {
+    printf '#!/usr/bin/env bash\nset -u\n'
+    printf 'LOG=%q\nMARKER=%q\nCALLS=%q\nLINGER=%q\n' "$dir/env" "$dir/running" "$dir/calls" "$linger"
+    cat <<'SH'
+printf '%s\n' "$*" >> "$CALLS"
 case "${1:-}" in
   status)
-    if [ -e "$FM_HERDR_SERVER_MARKER" ]; then
+    if [ -e "$MARKER" ]; then
       printf '{"server":{"running":true}}\n'
     else
       printf '{"server":{"running":false}}\n'
@@ -152,16 +160,41 @@ case "${1:-}" in
     ;;
   server)
     {
-      for name in FM_HOME FM_ROOT_OVERRIDE FM_STATE_OVERRIDE FM_DATA_OVERRIDE FM_PROJECTS_OVERRIDE FM_CONFIG_OVERRIDE CURSOR_AGENT CURSOR_INVOKED_AS CLAUDECODE PI_CODING_AGENT FM_PI_HARNESS GROK_AGENT FM_SUPERVISION_MODEL FM_HERDR_SENTINEL HERDR_SESSION; do
+      for name in FM_HOME FM_ROOT_OVERRIDE FM_STATE_OVERRIDE FM_DATA_OVERRIDE FM_PROJECTS_OVERRIDE FM_CONFIG_OVERRIDE \
+        FM_TASK_ID FM_HERDR_PROJECT_KEY CURSOR_AGENT CURSOR_INVOKED_AS CLAUDECODE CLAUDE_CODE_CHILD_SESSION \
+        CLAUDE_EFFORT CLAUDE_CODE_SESSION_ID CODEX_THREAD_ID PI_CODING_AGENT FM_PI_HARNESS GROK_AGENT \
+        FM_SUPERVISION_MODEL HERDR_ENV HERDR_PANE_ID HERDR_SOCKET_PATH GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 \
+        GIT_CONFIG_VALUE_0 TRACEPARENT GOTMPDIR HERDR_TEST_SENTINEL FM_REMOTE_JOB_ACTIVE CODEX_HOME \
+        PRIME_AGENT_BUILD_ID PRIME_AGENT_CODING_AGENT_DIR GROK_WORKSPACE_ROOT AGENT \
+        CLAUDE_CODE_OAUTH_TOKEN PI_CODING_AGENT_DIR HERDR_SESSION; do
         eval 'value=${'"$name"'-<unset>}'
         printf '%s=%s\n' "$name" "$value"
       done
       printf 'args=%s\n' "$*"
-    } > "$FM_HERDR_SERVER_ENV_LOG"
-    : > "$FM_HERDR_SERVER_MARKER"
+      printf 'pid=%s\n' "$$"
+      printf 'cwd=%s\n' "$PWD"
+    } > "$LOG"
+    python3 -c '
+import os, sys
+null = os.stat("/dev/null")
+with open(sys.argv[1], "a") as out:
+    out.write("pgid=%d\nsid=%d\n" % (os.getpgrp(), os.getsid(0)))
+    for fd in (0, 1, 2):
+        st = os.fstat(fd)
+        same = (st.st_dev, st.st_ino) == (null.st_dev, null.st_ino)
+        out.write("fd%d=%s\n" % (fd, "null" if same else "other"))
+    try:
+        os.fstat(7)
+        out.write("fd7=open\n")
+    except OSError:
+        out.write("fd7=closed\n")
+' "$LOG"
+    : > "$MARKER"
+    sleep "$LINGER"
     ;;
 esac
 SH
+  } > "$fb/herdr"
   chmod +x "$fb/herdr"
   printf '%s\n' "$fb"
 }
@@ -912,7 +945,8 @@ test_cli_scopes_the_selected_client_to_its_session() {
   cat > "$dir/stale/herdr" <<'SH'
 #!/usr/bin/env bash
 session=${!#}
-printf '%s\n' "$*" >> "${FM_HERDR_PAIR_DIR:?}/stale.log"
+FM_HERDR_PAIR_DIR=${FM_HERDR_PAIR_DIR:-$(cd "$(dirname "$0")/.." && pwd)}
+printf '%s\n' "$*" >> "$FM_HERDR_PAIR_DIR/stale.log"
 if [ "${1:-} ${2:-}" = "status --json" ]; then
   if [ "$session" = fresh ]; then
     printf '{"client":{"version":"0.8.2","protocol":20},"server":{"running":false}}\n'
@@ -933,7 +967,8 @@ SH
   cat > "$dir/current/herdr" <<'SH'
 #!/usr/bin/env bash
 session=${!#}
-printf '%s\n' "$*" >> "${FM_HERDR_PAIR_DIR:?}/current.log"
+FM_HERDR_PAIR_DIR=${FM_HERDR_PAIR_DIR:-$(cd "$(dirname "$0")/.." && pwd)}
+printf '%s\n' "$*" >> "$FM_HERDR_PAIR_DIR/current.log"
 if [ "${1:-} ${2:-}" = "status --json" ]; then
   if [ "$session" = fresh ]; then
     printf '{"client":{"version":"0.9.0","protocol":22},"server":{"running":false}}\n'
@@ -955,11 +990,12 @@ SH
   out=$(run_with_clients "$dir" "$dir/stale:$dir/current" \
     'fm_backend_herdr_cli modern pane get w1:p1 > "$FM_HERDR_PAIR_DIR/modern.out" || exit 1
      fm_backend_herdr_cli fresh status --json > "$FM_HERDR_PAIR_DIR/fresh-status.out" || exit 1
-     fm_backend_herdr_cli fresh server > "$FM_HERDR_PAIR_DIR/server.out" || exit 1
+     fm_backend_herdr_server_start_detached fresh || exit 1
+     for _ in $(seq 1 50); do grep -q "server --session fresh" "$FM_HERDR_PAIR_DIR/stale.log" "$FM_HERDR_PAIR_DIR/current.log" 2>/dev/null && break; sleep 0.1; done
      touch "$FM_HERDR_PAIR_DIR/switched"
      fm_backend_herdr_cli modern pane get w1:p1 > "$FM_HERDR_PAIR_DIR/legacy.out" || exit 1
-     printf "%s|%s|%s|%s|%s" "$(cat "$FM_HERDR_PAIR_DIR/modern.out")" "$(jq -r .server.running "$FM_HERDR_PAIR_DIR/fresh-status.out")" "$(cat "$FM_HERDR_PAIR_DIR/server.out")" "$(cat "$FM_HERDR_PAIR_DIR/legacy.out")" "${FM_BACKEND_HERDR_BIN:-PATH-default}"')
-  [ "$out" = 'modern|false|path-default-server|legacy|PATH-default' ] \
+     printf "%s|%s|%s|%s" "$(cat "$FM_HERDR_PAIR_DIR/modern.out")" "$(jq -r .server.running "$FM_HERDR_PAIR_DIR/fresh-status.out")" "$(cat "$FM_HERDR_PAIR_DIR/legacy.out")" "${FM_BACKEND_HERDR_BIN:-PATH-default}"')
+  [ "$out" = 'modern|false|legacy|PATH-default' ] \
     || fail "a selected client should stay scoped to its session while forced reselection still returns to the PATH default, got: $out"
   assert_contains "$(cat "$dir/stale.log")" 'server --session fresh' "a stopped second session should start with the PATH-default client"
   assert_not_contains "$(cat "$dir/current.log")" 'server --session fresh' "another session's selected client must not start the stopped session"
@@ -1240,43 +1276,106 @@ test_container_ensure_starts_server_and_workspace() {
   printf '{"client":{"version":"0.7.1","protocol":14}}\n' > "$resp/1.out"
   # 2: server_ensure's status --json check -> not running
   printf '{"server":{"running":false}}\n' > "$resp/2.out"
-  # 3: `herdr server` backgrounded launch - no meaningful output
-  # 4: server_ensure poll -> now running
-  printf '{"server":{"running":true}}\n' > "$resp/4.out"
-  # 5: workspace list -> empty (no "firstmate" workspace yet)
-  printf '{"result":{"workspaces":[]}}\n' > "$resp/5.out"
-  # 6: workspace create -> w1, seeding default tab w1:t9 (real herdr returns
+  # The detached launch is stubbed here; its own test covers what it starts.
+  # 3: server_ensure poll -> now running
+  printf '{"server":{"running":true}}\n' > "$resp/3.out"
+  # 4: workspace list -> empty (no "firstmate" workspace yet)
+  printf '{"result":{"workspaces":[]}}\n' > "$resp/4.out"
+  # 5: workspace create -> w1, seeding default tab w1:t9 (real herdr returns
   # the seeded tab/pane ids in the SAME response - verified empirically).
-  printf '{"result":{"workspace":{"workspace_id":"w1","label":"firstmate"},"tab":{"tab_id":"w1:t9"},"root_pane":{"pane_id":"w1:p9"}}}\n' > "$resp/6.out"
+  printf '{"result":{"workspace":{"workspace_id":"w1","label":"firstmate"},"tab":{"tab_id":"w1:t9"},"root_pane":{"pane_id":"w1:p9"}}}\n' > "$resp/5.out"
   fb=$(make_herdr_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_HERDR_SCRIPT_STATUS=1 HERDR_SESSION=fmtest \
-    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_container_ensure /tmp' "$ROOT" )
+    bash -c '. "$0/bin/backends/herdr.sh"
+      fm_backend_herdr_server_start_detached() { printf "detached-start %s\n" "$1" >> "$FM_HERDR_LOG"; }
+      fm_backend_herdr_container_ensure /tmp' "$ROOT" )
   [ "$out" = $'fmtest:w1\tw1:t9' ] || fail "container_ensure should echo '<session>:<workspace_id>\\t<seeded_default_tab_id>', got '$out'"
-  assert_contains "$(cat "$log")" "HERDR_SESSION=fmtest"$'\x1f''server' "container_ensure did not start the herdr server"
+  assert_contains "$(cat "$log")" "detached-start fmtest" "container_ensure did not start the herdr server through its detached owner"
   assert_contains "$(cat "$log")" $'\x1f''workspace'$'\x1f''create'$'\x1f''--cwd'$'\x1f''/tmp'$'\x1f''--label'$'\x1f''firstmate' \
     "container_ensure did not create the firstmate workspace with the given cwd"
   pass "fm_backend_herdr_container_ensure: version-gates, starts the server, ensures the firstmate workspace, echoes session:workspace_id + the seeded default tab id"
 }
 
+# The incident this guards (2026-09-28): a server started from inside a job
+# lived in that job's process group, so killing the job killed every pane, and
+# its replacement inherited a dead agent's environment and held its caller's
+# pipe open. Run from a caller that holds fd 7 open on its own command
+# substitution's pipe, the start must return promptly, and the server must
+# land in its own process group and session with /dev/null stdio, no
+# inherited descriptor, a scrubbed environment, and $HOME as its cwd.
 test_server_ensure_scrubs_home_and_harness_identity() {
-  local dir log marker fb output name
-  dir="$TMP_ROOT/server-env"; mkdir -p "$dir"; log="$dir/env"; marker="$dir/running"
-  fb=$(make_herdr_server_env_fakebin "$dir")
-  PATH="$fb:$PATH" FM_HERDR_SERVER_ENV_LOG="$log" FM_HERDR_SERVER_MARKER="$marker" FM_HERDR_SENTINEL=kept \
+  local dir log fb output name started elapsed callers pid
+  dir="$TMP_ROOT/server-env"; mkdir -p "$dir/home" "$dir/caller-cwd"; log="$dir/env"
+  fb=$(make_herdr_server_env_fakebin "$dir" 4)
+  started=$(python3 -c 'import time; print(time.monotonic())')
+  callers=$(cd "$dir/caller-cwd" && exec 7>&1 && PATH="$fb:$PATH" HOME="$dir/home" HERDR_TEST_SENTINEL=kept \
     FM_HOME=/tmp/wrong-home FM_ROOT_OVERRIDE=/tmp/wrong-root FM_STATE_OVERRIDE=/tmp/wrong-state \
     FM_DATA_OVERRIDE=/tmp/wrong-data FM_PROJECTS_OVERRIDE=/tmp/wrong-projects FM_CONFIG_OVERRIDE=/tmp/wrong-config \
-    CURSOR_AGENT=1 CURSOR_INVOKED_AS=cursor-agent CLAUDECODE=1 PI_CODING_AGENT=true FM_PI_HARNESS=pi-signed GROK_AGENT=1 FM_SUPERVISION_MODEL=autoarm \
-    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_server_ensure fmtest' "$ROOT"
+    FM_TASK_ID=some-task FM_HERDR_PROJECT_KEY=/tmp/project FM_REMOTE_JOB_ACTIVE=1 \
+    CURSOR_AGENT=1 CURSOR_INVOKED_AS=cursor-agent CLAUDECODE=1 CLAUDE_CODE_CHILD_SESSION=1 CLAUDE_EFFORT=medium \
+    CLAUDE_CODE_SESSION_ID=dead-session CODEX_THREAD_ID=t1 CODEX_HOME=/tmp/codex-home CLAUDE_CODE_OAUTH_TOKEN=oauth-token \
+    PI_CODING_AGENT_DIR=/tmp/pi-agent PI_CODING_AGENT=true FM_PI_HARNESS=pi-signed GROK_AGENT=1 \
+    PRIME_AGENT_BUILD_ID=b1 PRIME_AGENT_CODING_AGENT_DIR=/tmp/prime-agent GROK_WORKSPACE_ROOT=/tmp/grok-ws AGENT=rovodev_cli \
+    FM_SUPERVISION_MODEL=autoarm HERDR_ENV=1 HERDR_PANE_ID=w1:p1 HERDR_SOCKET_PATH=/tmp/caller.sock \
+    GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/tmp/task-hooks TRACEPARENT=00-x GOTMPDIR=/tmp/task-go \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_server_ensure fmtest || exit 1; python3 -c "import os; print(os.getpgrp(), os.getsid(0))"' "$ROOT")
   expect_code 0 $? "server_ensure should start under a polluted launcher environment"
+  elapsed=$(python3 -c "import time; print(time.monotonic() - $started)")
   output=$(cat "$log")
+  pid=$(printf '%s\n' "$output" | sed -n 's/^pid=//p')
+  fm_test_track_pid "$pid"
+  python3 -c "import sys; sys.exit(0 if float(sys.argv[1]) < 3 else 1)" "$elapsed" \
+    || fail "server_ensure held its caller for ${elapsed}s: the lingering server kept the caller's pipe open"
   for name in FM_HOME FM_ROOT_OVERRIDE FM_STATE_OVERRIDE FM_DATA_OVERRIDE FM_PROJECTS_OVERRIDE FM_CONFIG_OVERRIDE \
-    CURSOR_AGENT CURSOR_INVOKED_AS CLAUDECODE PI_CODING_AGENT FM_PI_HARNESS GROK_AGENT FM_SUPERVISION_MODEL; do
+    FM_TASK_ID FM_HERDR_PROJECT_KEY CURSOR_AGENT CURSOR_INVOKED_AS CLAUDECODE CLAUDE_CODE_CHILD_SESSION CLAUDE_EFFORT \
+    CLAUDE_CODE_SESSION_ID CODEX_THREAD_ID PI_CODING_AGENT FM_PI_HARNESS GROK_AGENT FM_SUPERVISION_MODEL HERDR_ENV \
+    HERDR_PANE_ID HERDR_SOCKET_PATH GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0 TRACEPARENT GOTMPDIR \
+    PRIME_AGENT_BUILD_ID GROK_WORKSPACE_ROOT AGENT; do
     assert_contains "$output" "$name=<unset>" "server_ensure leaked $name into the long-lived Herdr server"
   done
-  assert_contains "$output" "FM_HERDR_SENTINEL=kept" "server_ensure removed an unrelated environment variable"
+  assert_contains "$output" "HERDR_TEST_SENTINEL=kept" "server_ensure removed an unrelated environment variable"
+  assert_contains "$output" "FM_REMOTE_JOB_ACTIVE=1" "server_ensure removed the remote worker birth marker the owner check reads"
+  assert_contains "$output" "CODEX_HOME=/tmp/codex-home" "server_ensure removed the user's Codex config root"
+  assert_contains "$output" "CLAUDE_CODE_OAUTH_TOKEN=oauth-token" "server_ensure removed the user's Claude credential"
+  assert_contains "$output" "PI_CODING_AGENT_DIR=/tmp/pi-agent" "server_ensure removed the user's Pi account root"
+  assert_contains "$output" "PRIME_AGENT_CODING_AGENT_DIR=/tmp/prime-agent" "server_ensure removed the prime-agent state root"
   assert_contains "$output" "HERDR_SESSION=fmtest" "server_ensure lost explicit Herdr session routing"
   assert_contains "$output" "args=server --session fmtest" "server_ensure lost the trailing Herdr session flag"
-  pass "fm_backend_herdr_server_ensure: scrubs home and harness identity without disturbing unrelated environment or session routing"
+  assert_contains "$output" "cwd=$(cd "$dir/home" && pwd -P)" "the server should run from \$HOME, not its caller's directory"
+  for name in fd0 fd1 fd2; do
+    assert_contains "$output" "$name=null" "the server's $name should be /dev/null"
+  done
+  assert_contains "$output" "fd7=closed" "the server inherited its caller's open descriptor"
+  assert_not_equals "${callers%% *}" "$(printf '%s\n' "$output" | sed -n 's/^pgid=//p')" "the server joined its caller's process group, so killing that job would kill it"
+  assert_not_equals "${callers##* }" "$(printf '%s\n' "$output" | sed -n 's/^sid=//p')" "the server stayed in its caller's session"
+  [ -z "$pid" ] || kill "$pid" 2>/dev/null || true
+  pass "fm_backend_herdr_server_ensure: starts a detached server in its own group and session, scrubbed of harness, home, task, and pane identity, without holding its caller"
+}
+
+# A read must never start a server: a capture or busy read from inside a job
+# (the watcher, the phone bridge) that started one would leave every pane tied
+# to that job. With no server running it reports that plainly and fails fast.
+test_reads_never_start_a_server() {
+  local dir fb out status started elapsed fn
+  dir="$TMP_ROOT/server-reads"; mkdir -p "$dir"
+  fb=$(make_herdr_server_env_fakebin "$dir" 4)
+  for fn in capture visible_capture current_path busy_state send_key kill; do
+    started=$(python3 -c 'import time; print(time.monotonic())')
+    out=$(PATH="$fb:$PATH" bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_'"$fn"' fmtest:w1:p1 Enter 2>&1' "$ROOT")
+    status=$?
+    elapsed=$(python3 -c "import time; print(time.monotonic() - $started)")
+    python3 -c "import sys; sys.exit(0 if float(sys.argv[1]) < 2 else 1)" "$elapsed" \
+      || fail "$fn took ${elapsed}s with no server running"
+    case "$fn" in
+      busy_state) [ "${out##*$'\n'}" = "unknown" ] || fail "busy_state should read unknown with no server, got '$out'" ;;
+      capture|visible_capture|send_key)
+        [ "$status" -ne 0 ] || fail "$fn should fail with no server running"
+        assert_contains "$out" "is not running" "$fn did not say the server is not running" ;;
+    esac
+  done
+  [ ! -e "$dir/env" ] || fail "a read started a herdr server: $(cat "$dir/env")"
+  ! grep -q '^server' "$dir/calls" 2>/dev/null || fail "a read invoked herdr server"
+  pass "herdr reads and sends never start a server, and report a stopped one at once"
 }
 
 test_container_ensure_reuses_existing_workspace() {
@@ -6090,6 +6189,7 @@ test_workspace_ensure_other_home_ignores_the_launcher_identity
 test_container_ensure_refuses_an_ambiguous_home_label
 test_container_ensure_starts_server_and_workspace
 test_server_ensure_scrubs_home_and_harness_identity
+test_reads_never_start_a_server
 test_container_ensure_reuses_existing_workspace
 test_container_ensure_creates_with_no_focus_flag
 test_container_ensure_uses_secondmate_home_label

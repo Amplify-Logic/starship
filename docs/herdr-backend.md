@@ -40,6 +40,7 @@ Prerequisites:
 - `jq` for JSON responses.
 - The universal harness and toolchain requirements in [`configuration.md`](configuration.md#toolchain).
 - `python3` only for optional protocol-16 presentation-space ordering and native event subscription.
+- `perl`, present on stock macOS and Linux, to start a detached server (see [Server ownership](#server-ownership)).
 
 Herdr is dual-licensed AGPL-3.0-or-later or commercial.
 Firstmate invokes its CLI as a separate process.
@@ -737,7 +738,7 @@ Herdr tasks additionally record:
 | Operation | Verified herdr call | What was verified |
 |---|---|---|
 | Version/protocol gate | `herdr status --json` -> `.client.protocol` | Session-independent; `.server.*` fields ARE session-dependent. |
-| Headless server start | `HERDR_SESSION=<name> herdr server --session <name>` (backgrounded) | A bare socket call does NOT auto-start the server; the adapter always starts-then-polls before any workspace/tab/pane call. This fact is for start only, not cleanup, and the explicit `--session` flag is intentional because `HERDR_SESSION` alone is not safe session targeting. |
+| Headless server start | `HERDR_SESSION=<name> herdr server --session <name>` (detached, see [Server ownership](#server-ownership)) | A bare socket call does NOT auto-start the server; a creating path starts-then-polls before any workspace/tab/pane call, and a read never starts one. This fact is for start only, not cleanup, and the explicit `--session` flag is intentional because `HERDR_SESSION` alone is not safe session targeting. |
 | Duplicate task check | `herdr pane list --workspace <id>`, match hidden `.tokens.fm_task_id`; visible `fm-<id>` tab fallback for legacy rows | Herdr does not enforce label uniqueness, so mutable human titles are never task identity. |
 | Send literal (unsubmitted) | `herdr pane send-text <pane> <text>` | Does NOT auto-submit, contrary to the original design addendum's guess. Verified directly: a unique marker sent this way sits unexecuted in the composer until a separate Enter. Behaves exactly like tmux's `send-keys -l`. |
 | Send + submit atomically | `herdr pane run <pane> <command>` | Runs and submits a command in one call; used for the spawn-time pane-run commands (`treehouse get`, the `GOTMPDIR` export, and the `FM_HERDR_PROJECT_*` pin) exactly where tmux used one `send-keys ... Enter` call. |
@@ -1010,19 +1011,29 @@ Workspace and tab ids support verification and cleanup but are not inferred from
 
 ### Named server and session routing
 
-The adapter starts and polls a named server before workspace, tab, pane, or agent calls.
 Every Herdr invocation goes through `fm_backend_herdr_cli`, which sets the environment and passes an explicit trailing `--session <name>`.
 An environment variable alone is not reliable when another Herdr server is running.
 
-When the selected named server is not running, the adapter launches it without these inherited values:
+### Server ownership
 
-- Firstmate home and directory overrides.
-- Harness identity markers.
-- The supervision-model override.
+A local Herdr server is started in exactly one place, `fm_backend_herdr_server_start_detached`, and only paths about to create something call it through `fm_backend_herdr_server_ensure`.
+Those paths are a spawn and its recovery, the away-daemon launch, the absence proof behind `fm-control.sh` relaunch and exit, and the remote doctor's server fix.
+Every read or send - capture, busy state, current path, text, keys, and kill - goes through `fm_backend_herdr_target_ready`, which only checks that the server is running.
+When it is not, the read reports that on stderr and fails at once instead of starting one, because no server means no pane to read or send to.
 
-Herdr passes its server startup environment to every later pane, so retaining those values could misroute panes for another Firstmate home or harness.
+Herdr 0.7.4 has no detach or no-autostart option of its own, and its status reports `detached_server_daemon` as false, so the owner detaches the server itself with Perl's `POSIX::setsid`:
+
+- The server runs in its own session and process group, so killing the job that needed it, for example `launchctl kickstart -k` on a launch agent, cannot take the server and every pane with it.
+- Its stdin, stdout, and stderr are `/dev/null` and every other inherited descriptor is closed, so it never holds a caller's pipe or lock open, and the caller returns as soon as the server has left its session, with a failed detach reported to the caller.
+- Its working directory is `$HOME`, never a task worktree that cleanup may later remove.
+- Its environment drops per-session harness identity (`CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_CODE_CHILD_SESSION`, `CLAUDE_CODE_SESSION_ID`, `CLAUDE_CODE_SESSION_ATTENDED`, `CLAUDE_CODE_MESSAGING_*`, `CLAUDE_PID`, `CLAUDE_EFFORT`, `AI_AGENT`, `CODEX_THREAD_ID`, `CODEX_SANDBOX*`, `PI_CODING_AGENT`, `GEMINI_CLI`, `GROK_AGENT`, `GROK_SESSION_ID`, `GROK_HOOK_*`, `GROK_WORKSPACE_ROOT`, `OPENCODE`, the Cursor markers, the Rovo markers including `AGENT=rovodev_cli`, and the prime-agent `PRIME_AGENT_INTERNAL_DAEMON_WORKER`, `PRIME_AGENT_BUILD_ID`, `PRIME_AGENT_LAUNCHER_PATH`, and `PRIME_AGENT_KERNEL_VENV`), every `FM_*` home and task marker except `FM_REMOTE_JOB_ACTIVE`, which the remote owner-birth check reads to prove a worker-started server, the caller's own multiplexer pane identity (Herdr, tmux, Zellij, and cmux), trace context, and per-task Git config and Go temp root.
+- It keeps user configuration and credential roots such as `CODEX_HOME`, `PI_CODING_AGENT_DIR`, `GROK_HOME`, `GEMINI_CLI_HOME`, `OPENCODE_CONFIG*`, `CLAUDE_CONFIG_DIR`, `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX`, and `CLAUDE_CODE_OAUTH_TOKEN`, so an unpinned worker still runs on the launcher's account.
+
+Herdr passes its server startup environment to every later pane, so retaining those values would give every pane a dead agent's session, effort, or task wiring.
 An already-running server is reused without restart or environment changes.
 Explicit named-session routing and unrelated launch environment remain intact.
+A server that the captain starts by attaching the Herdr client from a terminal is outside this owner and keeps that terminal's environment.
+`tests/fm-backend-herdr.test.sh` pins both halves: the detached start, and that no read starts a server.
 
 ### Sending text and keys
 
