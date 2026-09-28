@@ -54,13 +54,12 @@ seed_home() {
 
 ## Done
 - [x] old-six - Shipped the $NEVER_TOKEN integration (repo: alpha) (done 2026-07-01)
-# An unticked line under Done, held for the captain. Two separate mechanisms keep
-# finished work out of an answer: the section is never parsed, and a ticked box is
-# dropped. A ticked line is blocked by both, so it cannot tell which one broke.
-# This line is blocked by the section rule alone, and the list of what waits on
-# the captain is assembled with no section filter at all, so it is the one place
-# where losing that rule would put finished work into a spoken answer.
-- [ ] old-seven - Decide the $NEVER_TOKEN renewal (repo: alpha) (kind: captain)
+# An unticked line under Done, held for the captain. Separate mechanisms keep
+# finished work out of an answer: the section is never parsed, a ticked box is
+# dropped, and the canonical hold classification gives a Done row no bucket. A
+# ticked line is blocked by all of them, so it cannot tell which one broke; this
+# line is blocked by the section rule and the classification alone.
+- [ ] old-seven - Decide the $NEVER_TOKEN renewal (repo: alpha) (kind: captain) (hold: decide the renewal) (hold-kind: captain)
 EOF
 
   fm_write_meta "$HOME_FIXTURE/state/alpha-one.meta" \
@@ -3224,7 +3223,9 @@ assert_contains "$narrow" '"scope": "counts"' "counts scope should say so"
 assert_contains "$narrow" '"in_flight": 3' "counts scope should still count in-flight work"
 assert_contains "$narrow" '"queued": 1' \
   "counts scope should count queued work, leaving out what is held for the captain"
-assert_contains "$narrow" '"awaiting_captain": 2' "counts scope should count what waits on the captain"
+# delta-four is the one live captain hold. beta-two is a to-do filed with kind
+# captain and no hold, which is not a call on the captain's cards.
+assert_contains "$narrow" '"awaiting_captain": 1' "counts scope should count what waits on the captain"
 assert_contains "$narrow" '"open_pull_requests": 1' "counts scope should count open pull requests"
 # No record free text is assembled at all at this scope, so there is nothing to
 # filter and nothing to get wrong.
@@ -3295,9 +3296,9 @@ for scope in full counts; do
     "an unticked line under finished work must not be named in a $scope answer"
   assert_not_contains "$answer" 'the rate we agreed' \
     "a note body must not reach a $scope answer"
-  # The count is the assertion that bites if the section rule is lost: old-seven
-  # is held for the captain and that list has no section filter of its own.
-  assert_contains "$answer" '"awaiting_captain": 2' \
+  # old-seven is a captain hold under Done, so counting it would mean finished
+  # work had reached the waiting count.
+  assert_contains "$answer" '"awaiting_captain": 1' \
     "finished work must not be counted as waiting on the captain at $scope scope"
 done
 pass "finished work and note bodies never reach a spoken answer at any scope"
@@ -3369,10 +3370,9 @@ rm -f "$HOME_FIXTURE/config/voice-read-deny"
 # Both items below sit in all three lists, and each is matched on a field only
 # one of those lists reads.
 #
-# The third item is the one an in-flight-only fixture cannot catch: a QUEUED item
-# that nothing holds for the captain, so no list iterates it, while its pull
-# request link still reaches the answer through the worker records. Assembling its
-# fields only where some list walks past it misses a match on its own title.
+# The third item is a QUEUED item that nothing holds for the captain, with a
+# runtime record and pull request left behind. It is not a worker on deck, so it
+# reaches no list at all: it is left out by construction, never withheld.
 LEAK_HOME="$TMP_ROOT/deny-every-list"
 TITLE_TOKEN=LEAKSBYTITLE
 HOLD_TOKEN=LEAKSBYHOLD
@@ -3382,7 +3382,7 @@ cat > "$LEAK_HOME/data/backlog.md" <<EOF
 # Backlog
 
 ## In flight
-- [ ] omega-nine - Renew the $TITLE_TOKEN contract (repo: omega) (kind: captain)
+- [ ] omega-nine - Renew the $TITLE_TOKEN contract (repo: omega) (kind: captain) (hold: decide the renewal) (hold-kind: captain)
 - [ ] sigma-ten - Move the account onto the new tier (repo: sigma) (kind: ship) (hold-kind: captain) (hold: waiting on the $HOLD_TOKEN owner)
 
 ## Queued
@@ -3408,8 +3408,8 @@ assert_contains "$reachable" 'sigma-ten' "fixture: the held item should be named
 assert_contains "$reachable" 'pull/12' "fixture: its pull request should be reachable"
 assert_contains "$reachable" '"awaiting_captain": 2' \
   "fixture: both in-flight items should be waiting on the captain"
-assert_contains "$reachable" 'pull/99' \
-  "fixture: the queued item should reach the answer through its pull request"
+assert_not_contains "$reachable" 'pull/99' \
+  "fixture: a queued item's leftover pull request is not open work on deck"
 assert_contains "$reachable" '"queued": 1' "fixture: the queued item should be counted"
 
 # Matched on its title, which only the in-flight list reads.
@@ -3425,8 +3425,7 @@ assert_contains "$by_title" '"withheld_as_confidential": 1' \
 # The other items are untouched, so this is a substring list and not a switch.
 assert_contains "$by_title" 'sigma-ten' "the deny list must not suppress everything"
 assert_contains "$by_title" 'pull/12' "the other pull requests should still be named"
-assert_contains "$by_title" 'pull/99' "the other pull requests should still be named"
-assert_contains "$by_title" '"open_pull_requests": 3' \
+assert_contains "$by_title" '"open_pull_requests": 2' \
   "denying an item must not change the count of open pull requests"
 
 # Matched on its hold text, which only the captain list reads. The mirror of the
@@ -3444,9 +3443,8 @@ assert_contains "$by_hold" 'pull/11' "the other pull request should still be nam
 assert_contains "$by_hold" '"in_flight": 2' \
   "denying an item must not change the count of in-flight work"
 
-# Matched on the title of a QUEUED item that no list iterates. Its only way into
-# the answer is its pull request link, and the pull request list knows nothing
-# about titles, so a field set assembled per list never sees the match at all.
+# Matched on the title of a QUEUED item that no list iterates. With no way into
+# any list, it is not named and not counted as withheld either.
 printf '%s\n' "$QUEUED_TOKEN" > "$LEAK_HOME/config/voice-read-deny"
 by_queued=$(leak_status) || fail "deny by queued title failed"
 assert_not_contains "$by_queued" "$QUEUED_TOKEN" \
@@ -3455,8 +3453,8 @@ assert_not_contains "$by_queued" 'zeta-eight' \
   "a denied queued item must not be named"
 assert_not_contains "$by_queued" 'pull/99' \
   "a denied queued item must not surface through its pull request link"
-assert_contains "$by_queued" '"withheld_as_confidential": 1' \
-  "a denied queued item must be counted, so nothing is hidden silently"
+assert_contains "$by_queued" '"withheld_as_confidential": 0' \
+  "a queued item no list could name is left out, not counted as withheld"
 assert_contains "$by_queued" '"queued": 1' \
   "denying it must not change the count of queued work"
 assert_contains "$by_queued" 'pull/11' "the other pull requests should still be named"
@@ -3466,10 +3464,12 @@ pass "one deny decision per item covers every list that item could appear in"
 # --- what the counts mean -----------------------------------------------------
 #
 # "Queued" is work the fleet could pick up, so a queued row held for the captain
-# is counted once, as waiting on the captain, and not again as queued. A hold
-# deferred to a later date is not waiting on the captain today: it is reported
-# as its own count and never named in the waiting list. The dates sit far in the
-# past and future so the fixture does not depend on the day it runs.
+# is counted once, as a captain hold, and not again as queued. What waits on the
+# captain is exactly the live captain calls the cards show, which is
+# bin/fm-fleet-snapshot.sh's hold_bucket "live": a hold blocked by unfinished
+# work, dated to later or aged out is deferred, and a to-do filed with kind
+# captain and no hold is neither. The dates sit far in the past and future so the
+# fixture does not depend on the day it runs.
 COUNT_HOME="$TMP_ROOT/count-meaning"
 mkdir -p "$COUNT_HOME/data" "$COUNT_HOME/state" "$COUNT_HOME/config"
 cat > "$COUNT_HOME/data/backlog.md" <<'EOF'
@@ -3477,16 +3477,22 @@ cat > "$COUNT_HOME/data/backlog.md" <<'EOF'
 
 ## In flight
 - [ ] run-one - Ship the importer (repo: a) (kind: ship)
-- [ ] ask-now - Pick the storage shape (repo: a) (kind: captain)
+- [ ] held-run - Ship the exporter (repo: a) (kind: ship) (hold: land it?) (hold-kind: captain)
+  Captain hold set: 2999-01-01T00:00:00Z
 
 ## Queued
 - [ ] work-one - Add the retry (repo: a) (kind: ship)
-- [ ] work-two - Tidy the logs (repo: a) (kind: ship) (hold-kind: future) (hold-until: 2999-01-01)
-- [ ] held-now - Approve the spend (repo: a) (kind: ship) (hold-kind: captain) (hold: approve the spend)
-- [ ] held-due - Renew the plan (repo: a) (kind: ship) (hold-kind: captain) (hold-until: 2000-01-01)
-- [ ] held-typo - Rotate the keys (repo: a) (kind: ship) (hold-kind: captain) (hold-until: soon)
-- [ ] held-later - Revisit pricing (repo: a) (kind: ship) (hold-kind: captain) (hold-until: 2999-01-01)
-- [ ] ask-later - Choose the launch week (repo: a) (kind: captain) (hold-until: 2999-06-01)
+- [ ] work-two - Tidy the logs (repo: a) (kind: ship) (hold: later) (hold-kind: future) (hold-until: 2999-01-01)
+- [ ] todo-captain - Pick the storage shape (repo: a) (kind: captain)
+- [ ] held-now - Approve the spend (repo: a) (kind: ship) (hold: approve the spend) (hold-kind: captain)
+- [ ] held-due - Renew the plan (repo: a) (kind: ship) (hold: renew) (hold-kind: captain) (hold-until: 2000-01-01)
+- [ ] held-freed - Launch after the migration blocked-by: shipped-zero (repo: a) (kind: ship) (hold: launch?) (hold-kind: captain)
+- [ ] held-later - Revisit pricing (repo: a) (kind: ship) (hold: pricing) (hold-kind: captain) (hold-until: 2999-01-01)
+- [ ] held-blocked - Launch after the retry blocked-by: work-one (repo: a) (kind: ship) (hold: launch?) (hold-kind: captain)
+- [ ] held-old - Choose the launch week (repo: a) (kind: ship) (since 2000-01-01) (hold: which week) (hold-kind: captain)
+
+## Done
+- [x] shipped-zero - Run the migration (repo: a) (kind: ship) (done 2000-01-01)
 EOF
 count_status() {
   python3 "$ROOT/bin/fm_voice_records.py" status --home "$COUNT_HOME" "$@"
@@ -3495,27 +3501,38 @@ counted=$(count_status --scope counts) || fail "the count-meaning fixture failed
 assert_contains "$counted" '"queued": 2' \
   "queued should count only work the fleet could pick up, including a non-captain dated hold"
 assert_contains "$counted" '"awaiting_captain": 4' \
-  "waiting on the captain should keep undated, due and malformed-date holds and leave out future ones"
-assert_contains "$counted" '"deferred_for_captain": 2' \
-  "holds deferred to a future date should be counted separately"
+  "waiting on the captain should count live calls only: undated, due, and unblocked holds"
+assert_contains "$counted" '"deferred_for_captain": 3' \
+  "dated, blocked and aged captain holds should be counted separately"
 assert_contains "$counted" '"in_flight": 2' "in-flight work should be unchanged"
+assert_contains "$counted" '"in_flight_held": 1' \
+  "the held in-flight row should be counted as held, so it is not also read as running work"
 counted_full=$(count_status --scope full) || fail "the count-meaning fixture failed at full scope"
-python3 - "$counted_full" <<'PY_COUNTS' || fail "the waiting list should agree with the waiting count"
+canonical=$(FM_HOME="$COUNT_HOME" "$ROOT/bin/fm-fleet-snapshot.sh" --backlog) \
+  || fail "the canonical backlog classification failed"
+python3 - "$counted_full" "$canonical" <<'PY_COUNTS' || fail "the waiting list should agree with the waiting count and the cards"
 import json, sys
 answer = json.loads(sys.argv[1])
+canonical = json.loads(sys.argv[2])
 named = [row["id"] for row in answer["awaiting_captain_detail"]]
 named += ["+"] * answer.get("awaiting_captain_detail_not_listed", 0)
 assert answer["awaiting_captain"] == 4, answer
 assert len(named) == answer["awaiting_captain"], named
-assert set(named) == {"ask-now", "held-now", "held-due", "held-typo"}, named
-assert answer["deferred_for_captain"] == 2, answer
+assert set(named) == {"held-run", "held-now", "held-due", "held-freed"}, named
+# The same set the captain's cards are built from, so the two cannot disagree.
+live = {r["id"] for r in canonical["records"]
+        if r.get("structured") and r.get("hold_bucket") == "live"}
+assert set(named) == live, (named, live)
+assert answer["deferred_for_captain"] == 3, answer
 assert answer["queued"] == 2, answer
+held = {row["id"]: row["held"] for row in answer["in_flight_detail"]}
+assert held == {"run-one": False, "held-run": True}, held
 PY_COUNTS
-assert_not_contains "$counted_full" 'held-later' \
-  "a hold deferred to a future date must not be named as waiting on the captain"
-assert_not_contains "$counted_full" 'ask-later' \
-  "a deferred decision must not be named as waiting on the captain"
-pass "queued leaves out captain holds, and future-dated holds are counted apart from what waits now"
+for deferred in held-later held-blocked held-old todo-captain; do
+  assert_not_contains "$counted_full" "$deferred" \
+    "$deferred is not a live captain call and must not be named as waiting on the captain"
+done
+pass "what waits on the captain is the cards' live calls, and a held in-flight row is flagged rather than counted twice"
 
 # --- what a status line may say ---------------------------------------------
 #
@@ -3651,12 +3668,59 @@ assert_not_contains "$open_only" "$FINISHED_TOKEN" \
 # finished work back in and leaned on the deny list to hide it would fail here.
 assert_contains "$open_only" '"withheld_as_confidential": 0' \
   "finished work is left out rather than counted as withheld"
-# The worker count is deliberately NOT open-only: a task keeps its runtime record
-# until teardown removes it, and that record is what "on deck" counts. Asserted in
-# the same case as the pull request count so the two cannot quietly converge.
-assert_contains "$open_only" '"workers_on_deck": 3' \
-  "every live runtime record is still on deck, finished or not"
+# The worker count follows the backlog role, as Bearings Underway does, not the
+# open-only rule: a ticked row still under In flight keeps its worker role and
+# is on deck, while an item under Done is not. Asserted in the same case as the
+# pull request count so the two cannot quietly converge.
+assert_contains "$open_only" '"workers_on_deck": 2' \
+  "a ticked in-flight row is still on deck and an item under Done is not"
 pass "a finished task's pull request is neither counted nor named"
+
+# --- leftover runtime records ------------------------------------------------
+#
+# A task whose backlog item went back to Queued, or on to Done, can keep its
+# state/<id>.meta until teardown removes it. Bearings leaves such a task out of
+# Underway, so the voice answer must not count it as a worker on deck, give its
+# last event a place in the state histogram, or count its pull request. A meta
+# with no backlog row at all is still counted, as Bearings still lists it.
+STALE_HOME="$TMP_ROOT/leftover-runtime-records"
+mkdir -p "$STALE_HOME/data" "$STALE_HOME/state" "$STALE_HOME/config"
+cat > "$STALE_HOME/data/backlog.md" <<'EOF'
+# Backlog
+
+## In flight
+- [ ] live-one - Ship the importer (repo: a) (kind: ship)
+
+## Queued
+- [ ] requeued-two - Wake the call desk (repo: a) (kind: ship)
+
+## Done
+- [x] finished-three - Read the call notes (repo: a) (kind: ship) (done 2026-09-01)
+EOF
+fm_write_meta "$STALE_HOME/state/live-one.meta" \
+  kind=ship pr=https://github.com/example/a/pull/1
+fm_write_meta "$STALE_HOME/state/requeued-two.meta" \
+  kind=ship pr=https://github.com/example/a/pull/2
+fm_write_meta "$STALE_HOME/state/finished-three.meta" \
+  kind=ship pr=https://github.com/example/a/pull/3
+fm_write_meta "$STALE_HOME/state/unlisted-four.meta" kind=ship
+printf '%s\n' 'working: importing' > "$STALE_HOME/state/live-one.status"
+printf '%s\n' 'blocked: worktree gone' > "$STALE_HOME/state/requeued-two.status"
+printf '%s\n' 'done: shipped' > "$STALE_HOME/state/finished-three.status"
+for scope in counts full; do
+  stale=$(python3 "$ROOT/bin/fm_voice_records.py" status --home "$STALE_HOME" --scope "$scope") \
+    || fail "the leftover-runtime-record fixture failed at $scope scope"
+  python3 - "$stale" <<'PY_STALE' || fail "leftover runtime records must not count as workers at $scope scope"
+import json, sys
+answer = json.loads(sys.argv[1])
+assert answer["workers_on_deck"] == 2, answer
+assert answer["worker_states"] == {"working": 1, "no events yet": 1}, answer
+assert answer["open_pull_requests"] == 1, answer
+if answer["scope"] == "full":
+    assert [row["id"] for row in answer["pull_request_detail"]] == ["live-one"], answer
+PY_STALE
+done
+pass "a queued or finished item's leftover runtime record is not counted as a worker"
 
 # The deny list, observed doing its job on the one list that still carries links.
 # A substring matching an OPEN task's title takes that task out of the pull

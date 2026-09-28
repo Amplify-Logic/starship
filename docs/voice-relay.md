@@ -179,9 +179,13 @@ Two whole classes of record are excluded at every scope, and excluded by constru
   file in front of them, and they are where commercial detail gets quoted.
 
 Only open work and this home's own runtime records are ever assembled.
-A task keeps its runtime record until teardown, so the count of workers on deck
-and the states beside it still include one whose item is already done; both are a
-number and a state word, never anything written in a record.
+The backlog role and captain-hold classification come from
+`bin/fm-fleet-snapshot.sh --backlog`, which contributes closed words and no text.
+The count of workers on deck and the states beside it cover the same tasks
+Bearings lists as Underway: a runtime record whose backlog item is in flight, or
+that has no backlog item at all. A record left behind by an item back in Queued
+or under Done is not counted, even before teardown removes it. Both are a number
+and a state word, never anything written in a record.
 Verified against the captain's live records on 2026-08-21: every occurrence of
 the one customer identifier those records contain sits in finished work or a note
 body, so nothing a status answer can say names a customer.

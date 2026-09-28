@@ -27,9 +27,14 @@
 # decisions from report or visual-review prose or reimplements snapshot semantics.
 # Underway (in_flight) projects every main live worker plus every active child
 # from every readable secondmate ledger, independently of that home's
-# bearings_state. Each row's name is the durable task title when nonblank and
-# its durable task id otherwise, so renderers always receive a task-identifying
-# label instead of having to substitute run status. A home classified
+# bearings_state. A main task whose backlog item is Queued or Done is not a live
+# worker even while its metadata remains, such as a standing check registered on
+# a queued item or a finished task awaiting cleanup, so it stays out of Underway;
+# the queued item still appears as a Charted Next gate. A task with metadata and
+# no backlog item at all stays in Underway rather than being hidden. Each row's
+# name is the durable task title when nonblank and its durable task id
+# otherwise, so renderers always receive a task-identifying label instead of
+# having to substitute run status. A home classified
 # captain_decision because it has an open
 # captain hold still contributes each working child as its own Underway row;
 # the home row on secondmates[] keeps the decision and gate classification.
@@ -166,7 +171,8 @@ remote homes under one shared snapshot budget and may refresh the parent-side ca
 Default fields: schema, home, generated, prs, in_flight{id,kind,state,repo,name,doing},
   secondmates{id,state,doing,provenance,freshness,age_seconds,contradiction,reason},
   secondmate_reconcile{id,spawn_gen,host,kind,ids},
-  decisions_open{id,key,verb,summary,owner}, landed{id,what,artifact,owner},
+  decisions_open{id,key,verb,summary,owner}, decisions_open_total,
+  landed{id,what,artifact,owner},
   gates{id,title,blocked_by,reason,owner,filed}, reports{id,path}, recorded_prs{id,url},
   unhealthy_endpoints{...} (only when non-empty), omitted{surface,reveal}.
 Default gates are selected newest filed first before their bound; undated gates
@@ -546,6 +552,7 @@ MODEL=$(printf '%s' "$SNAP" | jq \
   | ([ .tasks[]
        | select(.kind != "secondmate")
        | select(.backlog.current_role != "program")
+       | select(.backlog.current_role != "queued" and .backlog.current_role != "done")
        | select(.backlog.current_role != "held" or .current_state.state == "working")
        | {id, kind,
         state: .current_state.state,
@@ -684,6 +691,7 @@ MODEL=$(printf '%s' "$SNAP" | jq \
         | select(.reconcile_inventory != null)
         | {id, spawn_gen:(.spawn_gen // null), host:(.host // null), kind:(.reconcile_inventory.kind // null), ids:((.reconcile_inventory.ids // []) | map(select(type == "string")) | sort)} ],
       decisions_open: (if $all_decisions == 1 then $decisions_all else $decisions_all[:$decisions_n] end),
+      decisions_open_total: ($decisions_all | length),
       landed: ($done | map({id, what:(.title | trunc(70)),
                             artifact:(landed_artifact // "-"),owner:.home_id})),
       gates: ($return_catchup_gate

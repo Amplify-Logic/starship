@@ -1525,6 +1525,7 @@ test_section_caps_and_expansion_flags() {
     run "$home" "$fakebin" --json)
   printf '%s' "$json" | jq -e '
     (.in_flight|length) == 2 and (.decisions_open|length) == 2 and (.gates|length) == 2
+    and .decisions_open_total == 5
     and (.reports|length) == 2 and (.recorded_prs|length) == 2 and (.unhealthy_endpoints|length) == 2
     and ([.omitted[].surface] | index("in_flight showing 2 of 5") != null)
     and ([.omitted[].surface] | index("decisions_open showing 2 of 5") != null)
@@ -1539,6 +1540,7 @@ test_section_caps_and_expansion_flags() {
       --all-reports --all-recorded-prs --all-unhealthy)
   printf '%s' "$expanded" | jq -e '
     (.in_flight|length) == 5 and (.decisions_open|length) == 5 and (.gates|length) == 5
+    and .decisions_open_total == 5
     and (.reports|length) == 5 and (.recorded_prs|length) == 5 and (.unhealthy_endpoints|length) == 5
   ' >/dev/null || fail "section expansion flags did not reveal full sets: $expanded"
   pass "all fleet-sized sections are capped with counted opt-in expansion"
@@ -2227,6 +2229,45 @@ EOF
       and ([.decisions_open[].id] | index("(main-inventory)") | not)
   ' >/dev/null || fail "unstructured current not disclosed or structured sibling lost: $json"
   pass "main unstructured current is disclosed while structured siblings still project"
+}
+
+# A task keeps its metadata after its backlog item leaves In flight: a standing
+# check registered on a queued item, or a finished task still awaiting cleanup.
+# Neither is a live worker, so Underway must not list it; the queued item stays
+# visible as a Charted Next gate. Metadata with no backlog item at all is not
+# proof that nothing runs, so it stays in Underway.
+test_underway_lists_only_in_flight_backlog_items() {
+  local home fakebin json id
+  home=$(make_home underway-in-flight-only)
+  : > "$home/data/secondmates.md"
+  cat > "$home/data/backlog.md" <<'EOF'
+## In flight
+- [ ] live-ship - Running now (repo: firstmate) (kind: ship) (since 2026-07-11)
+
+## Queued
+- [ ] standing-check - Standing inbox check (repo: firstmate) (kind: ship) (since 2026-07-11)
+
+## Done
+- [x] finished-ship - Finished, cleanup pending (repo: firstmate) (kind: ship) (done 2026-07-12)
+EOF
+  for id in live-ship standing-check finished-ship unlisted-task; do
+    mkdir -p "$home/projects/$id"
+    fm_write_meta "$home/state/$id.meta" \
+      "window=firstmate:fm-$id" \
+      "worktree=$home/projects/$id" \
+      "project=firstmate" \
+      "harness=codex" \
+      "kind=ship" \
+      "mode=no-mistakes"
+    printf 'working: still recorded as working\n' > "$home/state/$id.status"
+  done
+  fakebin=$(make_fakebin "$home")
+  json=$(run "$home" "$fakebin" --json)
+  printf '%s' "$json" | jq -e '
+    ([.in_flight[].id] | sort) == ["live-ship", "unlisted-task"]
+      and ([.gates[].id] | index("standing-check") != null)
+  ' >/dev/null || fail "Underway listed a task whose backlog item is not in flight: $json"
+  pass "Underway lists only tasks whose backlog item is in flight, keeping queued items as gates"
 }
 
 test_main_orphan_counterfactual_meta_clears_inventory_warning() {
@@ -3396,6 +3437,7 @@ test_captains_call_anti_leak
 test_main_orphan_in_flight_is_disclosed_not_invented
 test_main_unstructured_current_is_disclosed_with_structured_sibling
 test_main_orphan_counterfactual_meta_clears_inventory_warning
+test_underway_lists_only_in_flight_backlog_items
 test_working_captain_holds_keep_their_bucket_surfaces
 test_active_children_project_independent_of_home_captain_hold
 test_nameless_legacy_summary_uses_its_durable_identifier

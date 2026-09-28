@@ -121,6 +121,9 @@
 #
 # --contribution-input prints only the canonical backlog/tasks ownership pair,
 # without worker observations or cross-home collection, for the home-local poll.
+# --backlog prints only the canonical backlog object above, with no task, worker,
+# or cross-home reads, for readers such as bin/fm_voice_records.py that need the
+# same role and hold_bucket classification without paying for a full snapshot.
 # Compatibility: JSON is the primary machine-readable surface.
 # Human views must render this output instead of parsing state files again.
 set -u
@@ -241,6 +244,7 @@ usage() {
   cat <<'EOF'
 usage: fm-fleet-snapshot.sh --json
        fm-fleet-snapshot.sh --secondmate-home-summary
+       fm-fleet-snapshot.sh --backlog
 
 Print a structured snapshot of the firstmate fleet.
 JSON is the stable machine-readable output contract. The default snapshot
@@ -248,6 +252,9 @@ refreshes only its parent-side remote-summary cache as an observational side eff
 
 --contribution-input emits the canonical local backlog/tasks ownership pair only,
 without worker observations or cross-home collection.
+
+--backlog emits the canonical local backlog object only, with the same
+current_role and hold_bucket classification, and reads no task or other home.
 
 --secondmate-home-summary emits the bounded structured summary used after a
 validated registered-home handoff. It is local-only, skips nested secondmate
@@ -298,6 +305,7 @@ case "${1:---json}" in
   --json) ;;
   --secondmate-home-summary) OUTPUT_MODE=secondmate-home-summary ;;
   --contribution-input) OUTPUT_MODE=contribution-input ;;
+  --backlog) OUTPUT_MODE=backlog ;;
   -h|--help) usage; exit 0 ;;
   *) usage >&2; exit 2 ;;
 esac
@@ -1983,6 +1991,10 @@ scout_report_lines() {
 }
 
 BACKLOG_JSON=$(backlog_json) || { echo "fm-fleet-snapshot: backlog read failed" >&2; exit 1; }
+if [ "$OUTPUT_MODE" = backlog ]; then
+  printf '%s\n' "$BACKLOG_JSON"
+  exit 0
+fi
 contribution_tasks_json() {
   local meta id merge_authority
   for meta in "$STATE"/*.meta; do
