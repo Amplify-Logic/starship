@@ -90,7 +90,12 @@ find_chrome() {
 # timed the attempt out - when it did, the exit status is only this helper's own
 # kill signal. The extra flags remove Chrome's background-network and /dev/shm
 # dependencies, which are the start-up surfaces that fail on a runner; neither
-# changes the rendered DOM of a local file.
+# changes the rendered DOM of a local file. --use-mock-keychain and
+# --password-store=basic keep every attempt's fresh profile off the machine
+# owner's password store: without them Chrome on macOS asks the login keychain
+# to store its Safe Storage key on each launch, which can raise a "Keychain Not
+# Found" dialog whose Reset To Defaults button would wipe the owner's saved
+# passwords, and on Linux it would reach for the desktop secret service.
 render_export_dom() {
   local chrome=$1 source_file=$2 out_file=$3 pi_version=$4
   local attempt pid status wait_count wait_limit reap_wait log profile report timed_out
@@ -123,6 +128,8 @@ render_export_dom() {
       "$chrome" \
       ${profile_arg[@]+"${profile_arg[@]}"} \
       --headless=new \
+      --use-mock-keychain \
+      --password-store=basic \
       --disable-gpu \
       --no-sandbox \
       --disable-dev-shm-usage \
@@ -3848,6 +3855,7 @@ test_export_dom_render_guard() {
 #!/bin/sh
 case "${1:-}" in --version) echo "FakeChrome 1.2.3"; exit 0 ;; esac
 echo attempt >>"$FM_FAKE_CHROME_ATTEMPTS"
+printf '%s\n' "$@" >"$FM_FAKE_CHROME_ATTEMPTS.args"
 printf '<html><head></head><body>export</body></html>\n'
 SH
   cat >"$dir/chrome-flaky" <<'SH'
@@ -3884,6 +3892,10 @@ SH
   [ "$(wc -l <"$dir/attempts-ok")" -eq 1 ] \
     || fail "render_export_dom retried a Chrome that had already rendered the DOM"
   [ ! -s "$dir/report-ok" ] || fail "render_export_dom reported a diagnostic for a successful render"
+  grep -Fxq -- '--use-mock-keychain' "$dir/attempts-ok.args" \
+    || fail "render_export_dom launched Chrome without --use-mock-keychain, so macOS asks the login keychain to store its Safe Storage key"
+  grep -Fxq -- '--password-store=basic' "$dir/attempts-ok.args" \
+    || fail "render_export_dom launched Chrome without --password-store=basic, so it can reach the platform password store"
 
   : >"$dir/attempts-flaky"
   : >"$out_file"
@@ -3924,7 +3936,7 @@ SH
   assert_contains "$report" "timed_out=yes" \
     "the render failure reported its own kill signal without saying the attempt was timed out"
 
-  pass "the rendered-export-DOM guard renders in one pass, retries a bounded number of Chrome start-up failures, and reports the Chrome binary, Chrome version, Pi version, exit status, and Chrome diagnostic when every attempt fails"
+  pass "the rendered-export-DOM guard keeps Chrome off the login keychain, renders in one pass, retries a bounded number of Chrome start-up failures, and reports the Chrome binary, Chrome version, Pi version, exit status, and Chrome diagnostic when every attempt fails"
 }
 
 test_interactive_terminal_e2e() {
