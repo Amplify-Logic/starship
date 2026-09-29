@@ -783,6 +783,189 @@ test_local_only_merged_to_local_main_allows() {
   pass "local-only worktree with work merged into local main is torn down (no regression)"
 }
 
+# Lanes without a pipeline record still leave comparable capability evidence:
+# a landed local-only or direct-PR branch records merged when it never moved
+# after the worker's first done: report and revised with the move count when
+# it did, and a fresh counter records zero steers rather than no count.
+capability_line() {  # <case-dir>
+  tail -1 "$1/data/capability-outcomes.log" 2>/dev/null
+}
+
+land_local_only_with_ready_at() {  # <case-dir> <ready-epoch> [<follow-up-epoch>]
+  local case_dir=$1 ready=$2 followup=${3:-}
+  printf '%s\n' harness=claude model=opus effort=high >> "$case_dir/state/task-x1.meta"
+  : > "$case_dir/state/task-x1.steers"
+  wt_commit_file "$case_dir" delivered.txt "first delivery" "first delivery"
+  printf 'done [at=%s]: branch fm/task-x1 ready\n' "$ready" >> "$case_dir/state/task-x1.status"
+  if [ -n "$followup" ]; then
+    GIT_COMMITTER_DATE="@$followup +0000" wt_commit_file "$case_dir" followup.txt "review follow-up" "review follow-up"
+    printf 'done [at=%s]: branch fm/task-x1 ready again\n' "$((followup + 1))" >> "$case_dir/state/task-x1.status"
+  fi
+  git -C "$case_dir/project" update-ref refs/heads/main "$(git -C "$case_dir/wt" rev-parse HEAD)"
+}
+
+test_local_only_landed_as_delivered_records_merged() {
+  local case_dir now line
+  case_dir=$(make_case capability-merged)
+  write_meta "$case_dir" local-only ship
+  now=$(date +%s)
+  land_local_only_with_ready_at "$case_dir" "$((now + 100))"
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" \
+    || fail "capability-merged: teardown failed: $(cat "$case_dir/stderr")"
+  line=$(capability_line "$case_dir")
+  case "$line" in
+    *'|ship|claude|opus|high|merged|0|0') ;;
+    *) fail "a branch that never moved after its ready report should record merged with zero steers, got: $line" ;;
+  esac
+  pass "landed local-only work with no follow-up records merged and a zero steer count"
+}
+
+test_local_only_landed_after_follow_up_records_revised() {
+  local case_dir now line
+  case_dir=$(make_case capability-revised)
+  write_meta "$case_dir" local-only ship
+  now=$(date +%s)
+  land_local_only_with_ready_at "$case_dir" "$((now + 100))" "$((now + 200))"
+  printf 'steer\n' >> "$case_dir/state/task-x1.steers"
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" \
+    || fail "capability-revised: teardown failed: $(cat "$case_dir/stderr")"
+  line=$(capability_line "$case_dir")
+  case "$line" in
+    *'|ship|claude|opus|high|revised|1|1') ;;
+    *) fail "a branch that moved after its first ready report should record revised with its move and steer counts, got: $line" ;;
+  esac
+  pass "landed local-only work with a follow-up commit records revised with its counts"
+}
+
+test_local_only_relanded_after_follow_up_records_revised() {
+  local case_dir now line
+  case_dir=$(make_case capability-relanded)
+  write_meta "$case_dir" local-only ship
+  printf '%s\n' harness=claude model=opus effort=high >> "$case_dir/state/task-x1.meta"
+  : > "$case_dir/state/task-x1.steers"
+  wt_commit_file "$case_dir" delivered.txt "first delivery" "first delivery"
+  now=$(date +%s)
+  printf 'done [at=%s]: branch fm/task-x1 ready\n' "$((now + 100))" >> "$case_dir/state/task-x1.status"
+  git -C "$case_dir/project" update-ref refs/heads/main "$(git -C "$case_dir/wt" rev-parse HEAD)"
+  GIT_COMMITTER_DATE="@$((now + 200)) +0000" wt_commit_file "$case_dir" followup.txt "review follow-up" "review follow-up"
+  git -C "$case_dir/project" update-ref refs/heads/main "$(git -C "$case_dir/wt" rev-parse HEAD)"
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" \
+    || fail "capability-relanded: teardown failed: $(cat "$case_dir/stderr")"
+  line=$(capability_line "$case_dir")
+  case "$line" in
+    *'|ship|claude|opus|high|revised|1|0') ;;
+    *) fail "work landed, revised, and landed again should record revised|1, got: $line" ;;
+  esac
+  pass "local-only work landed, revised, and landed again records revised"
+}
+
+test_local_only_rebased_after_ready_records_merged() {
+  local case_dir now line
+  case_dir=$(make_case capability-rebased)
+  write_meta "$case_dir" local-only ship
+  printf '%s\n' harness=claude model=opus effort=high >> "$case_dir/state/task-x1.meta"
+  : > "$case_dir/state/task-x1.steers"
+  wt_commit_file "$case_dir" delivered.txt "first delivery" "first delivery"
+  now=$(date +%s)
+  printf 'done [at=%s]: branch fm/task-x1 ready\n' "$((now + 100))" >> "$case_dir/state/task-x1.status"
+  printf '%s\n' "another task landed first" > "$case_dir/project/other.txt"
+  git -C "$case_dir/project" add other.txt
+  git -C "$case_dir/project" -c user.email=t@t -c user.name=t commit -q -m "another task"
+  GIT_COMMITTER_DATE="@$((now + 200)) +0000" \
+    git -C "$case_dir/wt" -c user.email=t@t -c user.name=t rebase -q main
+  git -C "$case_dir/project" update-ref refs/heads/main "$(git -C "$case_dir/wt" rev-parse HEAD)"
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" \
+    || fail "capability-rebased: teardown failed: $(cat "$case_dir/stderr")"
+  line=$(capability_line "$case_dir")
+  case "$line" in
+    *'|ship|claude|opus|high|merged|0|0') ;;
+    *) fail "a pure rebase after the ready report is not a revision and should record merged|0, got: $line" ;;
+  esac
+  pass "local-only work only rebased after its ready report records merged"
+}
+
+test_direct_pr_merged_as_delivered_records_merged() {
+  local case_dir now line
+  case_dir=$(make_case capability-direct-pr-merged)
+  write_meta "$case_dir" direct-PR ship
+  printf '%s\n' harness=claude model=opus effort=high >> "$case_dir/state/task-x1.meta"
+  : > "$case_dir/state/task-x1.steers"
+  wt_commit_file "$case_dir" delivered.txt "merged through its PR" "first delivery"
+  now=$(date +%s)
+  printf 'done [at=%s]: PR https://github.com/example/repo/pull/7\n' "$((now + 100))" >> "$case_dir/state/task-x1.status"
+  add_fork_with_pushed_branch "$case_dir"
+  add_gh_pr_merged_for_head "$case_dir" "$(git -C "$case_dir/wt" rev-parse HEAD)"
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" \
+    || fail "capability-direct-pr-merged: teardown failed: $(cat "$case_dir/stderr")"
+  line=$(capability_line "$case_dir")
+  case "$line" in
+    *'|ship|claude|opus|high|merged|0|0') ;;
+    *) fail "direct-PR work whose PR merged as delivered should record merged|0, got: $line" ;;
+  esac
+  pass "direct-PR work whose PR merged with no follow-up records merged"
+}
+
+test_pushed_but_unlanded_work_keeps_outcome_unknown() {
+  local mode case_dir now line
+  for mode in local-only direct-PR; do
+    case_dir=$(make_case "capability-unlanded-$mode")
+    write_meta "$case_dir" "$mode" ship
+    printf '%s\n' harness=claude model=opus effort=high >> "$case_dir/state/task-x1.meta"
+    : > "$case_dir/state/task-x1.steers"
+    wt_commit_file "$case_dir" delivered.txt "not in main" "first delivery"
+    now=$(date +%s)
+    printf 'done [at=%s]: branch fm/task-x1 ready\n' "$((now + 100))" >> "$case_dir/state/task-x1.status"
+    add_fork_with_pushed_branch "$case_dir"
+    run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" \
+      || fail "capability-unlanded-$mode: teardown failed: $(cat "$case_dir/stderr")"
+    line=$(capability_line "$case_dir")
+    case "$line" in
+      *'|ship|claude|opus|high|unknown||0') ;;
+      *) fail "$mode work pushed but never landed must record unknown, got: $line" ;;
+    esac
+  done
+  pass "pushed but unlanded direct-PR and local-only work records unknown instead of merged"
+}
+
+test_untimed_ready_report_keeps_outcome_unknown() {
+  local case_dir line
+  case_dir=$(make_case capability-untimed)
+  write_meta "$case_dir" local-only ship
+  land_local_only_with_ready_at "$case_dir" 0
+  # Replace the timed report with an untimed one: no ready point is derivable.
+  printf 'done: branch fm/task-x1 ready\n' > "$case_dir/state/task-x1.status"
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" \
+    || fail "capability-untimed: teardown failed: $(cat "$case_dir/stderr")"
+  line=$(capability_line "$case_dir")
+  case "$line" in
+    *'|ship|claude|opus|high|unknown||0') ;;
+    *) fail "an untimed first ready report must leave the outcome unknown, got: $line" ;;
+  esac
+  pass "an untimed first ready report leaves the outcome unknown instead of guessing"
+}
+
+test_scout_with_report_records_reported() {
+  local case_dir line
+  case_dir=$(make_case capability-reported)
+  write_meta "$case_dir" no-mistakes scout
+  printf '%s\n' harness=claude model=opus effort=high >> "$case_dir/state/task-x1.meta"
+  : > "$case_dir/state/task-x1.steers"
+  mkdir -p "$case_dir/data/task-x1"
+  printf '%s\n' '# Findings' 'The cause is the retry loop.' > "$case_dir/data/task-x1/report.md"
+  FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$case_dir/state" \
+    FM_DATA_OVERRIDE="$case_dir/data" FM_CONFIG_OVERRIDE="$case_dir/config" \
+    "$ROOT/bin/fm-captain-hold.sh" complete task-x1 --none >/dev/null \
+    || fail "capability-reported: the report's captain-call review could not be attested"
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" \
+    || fail "capability-reported: teardown failed: $(cat "$case_dir/stderr")"
+  line=$(capability_line "$case_dir")
+  case "$line" in
+    *'|scout|claude|opus|high|reported||0') ;;
+    *) fail "a scout that left its report should record reported with zero steers, got: $line" ;;
+  esac
+  pass "a scout that left its report records reported and a zero steer count"
+}
+
 test_no_mistakes_origin_remote_allows() {
   local case_dir rc
   case_dir=$(make_case nm-origin)
@@ -4384,6 +4567,14 @@ test_teardown_closes_the_backlog_item_itself
 test_teardown_manual_backend_leaves_the_backlog_to_the_operator
 test_local_only_truly_unpushed_refuses
 test_local_only_merged_to_local_main_allows
+test_local_only_landed_as_delivered_records_merged
+test_local_only_landed_after_follow_up_records_revised
+test_local_only_relanded_after_follow_up_records_revised
+test_local_only_rebased_after_ready_records_merged
+test_direct_pr_merged_as_delivered_records_merged
+test_pushed_but_unlanded_work_keeps_outcome_unknown
+test_untimed_ready_report_keeps_outcome_unknown
+test_scout_with_report_records_reported
 test_no_mistakes_origin_remote_allows
 test_no_mistakes_truly_unpushed_refuses
 test_local_only_force_overrides_unpushed

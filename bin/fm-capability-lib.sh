@@ -10,8 +10,10 @@
 #     Fields never contain '|' or newlines; invalid fields refuse the append.
 #     The trailing counts are written only when derivable, each as one
 #     non-negative integer: fix-rounds is the number of earlier recorded
-#     pipeline attempts for the task's branch before its final attempt, and
-#     steers is the confirmed supervisor send count from state/<id>.steers.
+#     pipeline attempts for the task's branch before its final attempt (for
+#     merged and revised, the branch moves after the first ready report), and
+#     steers is the confirmed supervisor send count from state/<id>.steers,
+#     which fm-spawn creates empty so a task nobody steered records 0.
 #     An absent fix-rounds count retains an empty field when steers is present;
 #     otherwise absent trailing counts are omitted, never guessed. Older
 #     six-field lines without them stay valid forever.
@@ -21,9 +23,16 @@
 #       fixed     validation passed only after earlier recorded attempts
 #       failed    validation ran but its newest recorded attempt never
 #                 completed
-#       unknown   no validation result was derivable at teardown (scout
-#                 reports, direct-PR/local-only delivery, or unavailable run
-#                 records)
+#       merged    direct-PR or local-only work landed with no follow-up: its
+#                 branch's content never changed after the worker's first
+#                 done: report, so a pure rebase still counts (fix-rounds 0)
+#       revised   direct-PR or local-only work landed only after follow-up
+#                 commits that changed the branch-only patch-ids; fix-rounds
+#                 counts the branch moves after that first done: report
+#       reported  a scout left a non-empty data/<id>/report.md
+#       unknown   no result was derivable at teardown (no pipeline record, no
+#                 ready report or branch history, no proven landing, no
+#                 scout report, or a worktree slot reassigned to another task)
 #       discarded work was discarded by an approved --force teardown
 #   - Secondmate teardowns are not recorded (not a worker capability sample).
 #   - task-type is a free-form slug from meta task_type= when present, else kind
@@ -32,8 +41,11 @@
 #   - Evidence layers ON cost-allowed profiles only: callers pass the already
 #     cost-filtered profile set; this lib never invents a harness outside it and
 #     never bypasses third-party-model / crew-dispatch guards.
+#   - Density is first-try successes over counted samples: green and merged
+#     are first-try successes, reported is neutral (counted in neither), and
+#     every other outcome counts toward the total only.
 #   - select=capability-recent ranks allowed profiles by green density
-#     (first-try greens / all samples) in the window; a sampled profile
+#     (first-try successes / counted samples) in the window; a sampled profile
 #     outranks an earlier unsampled one only when density > 0; all-zero or
 #     absent evidence keeps input (configured) order; no samples for a
 #     task-type keep the first.
@@ -95,7 +107,7 @@ fm_capability_log_append() {
   local fix_rounds=${6:-} steers=${7:-}
   local log_path ts dir line
   case "$outcome" in
-    green|fixed|failed|unknown|discarded) ;;
+    green|fixed|failed|merged|revised|reported|unknown|discarded) ;;
     *) return 1 ;;
   esac
   fm_capability_field_ok "$task_type" || return 1
@@ -150,6 +162,37 @@ fm_capability_outcome_from_runs() {
   '
 }
 
+# Derive a direct-PR or local-only ship's outcome from when its worker first
+# reported it ready and when its branch moved. A branch that stayed put after
+# that report is merged as first delivered; teardown keeps merged or revised
+# only once it proves the work landed (a merged PR for direct-PR, the local
+# default branch for local-only) and records unknown otherwise. Teardown also
+# turns revised back into merged when the moves left the branch-only patch-ids
+# unchanged (a pure rebase), and into unknown when they cannot be compared.
+# Args: ready-epoch (the first done: event's time, empty when unknown) and the
+# branch's reflog times, one unix epoch per line in any order.
+# Prints "<outcome>|<fix-rounds>":
+#   - no ready time, or no branch move after its creation -> unknown|
+#   - no branch move after the ready time                 -> merged|0
+#   - n branch moves after the ready time                 -> revised|<n>
+fm_capability_outcome_from_followups() {
+  local ready=$1 moves=$2
+  case "$ready" in
+    ''|*[!0-9]*) printf 'unknown|\n'; return 0 ;;
+  esac
+  printf '%s\n' "$moves" | awk -v ready="$ready" '
+    $1 ~ /^[0-9]+$/ {
+      total++
+      if (($1 + 0) > (ready + 0)) after++
+    }
+    END {
+      if (total < 2) { printf "unknown|\n"; exit }
+      if (after == 0) { printf "merged|0\n" }
+      else { printf "revised|%d\n", after }
+    }
+  '
+}
+
 # Record teardown evidence from already-loaded meta fields plus the derived
 # validation outcome. Args: kind force_flag harness model effort task_type
 #   outcome fix_rounds steers
@@ -170,7 +213,7 @@ fm_capability_record_teardown() {
     steers=
   fi
   case "$outcome" in
-    green|fixed|failed|unknown|discarded) ;;
+    green|fixed|failed|merged|revised|reported|unknown|discarded) ;;
     *) return 0 ;;
   esac
   case "$fix_rounds" in ''|*[!0-9]*) fix_rounds= ;; esac
@@ -201,16 +244,17 @@ fm_capability_recent_lines() {
 # Summarize green density per harness|model|effort for a task-type.
 # Prints lines: <harness>|<model>|<effort>|<green>|<total>|<density_percent>
 # sorted by density desc, then total desc, then key asc. Density is integer
-# percent (green*100/total); green counts first-try passes only, while fixed,
-# failed, unknown, and discarded samples still count toward total.
+# percent (green*100/total); green counts first-try successes only (green and
+# merged), reported samples are skipped, and fixed, failed, revised, unknown,
+# and discarded samples still count toward total.
 # Args: task-type
 fm_capability_summarize() {
   local task_type=$1
   fm_capability_recent_lines "$task_type" | awk -F'|' '
-    NF >= 6 {
+    NF >= 6 && $6 != "reported" {
       key = $3 "|" $4 "|" $5
       total[key]++
-      if ($6 == "green") green[key]++
+      if ($6 == "green" || $6 == "merged") green[key]++
     }
     END {
       for (key in total) {

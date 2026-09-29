@@ -1246,6 +1246,31 @@ if command -v fm_capability_outcome_from_runs >/dev/null 2>&1 \
       *) CAP_OUTCOME=$CAP_EVIDENCE ;;
     esac
   fi
+  # Lanes with no pipeline record still have evidence: a scout's report, and a
+  # direct-PR or local-only branch that did or did not move after the worker's
+  # first done: report. The first done: line alone is the ready point, so an
+  # untimed one leaves the outcome unknown rather than borrowing a later time.
+  if [ "$CAP_OUTCOME" = unknown ]; then
+    if [ "$KIND" = scout ]; then
+      [ ! -s "$DATA/$ID/report.md" ] || CAP_OUTCOME=reported
+    elif [ -n "$CAP_BRANCH" ] && { [ "$MODE" = direct-PR ] || [ "$MODE" = local-only ]; }; then
+      CAP_READY=
+      if [ -f "$STATE/$ID.status" ]; then
+        while IFS= read -r cap_line || [ -n "$cap_line" ]; do
+          [ "$(status_line_verb "$cap_line")" = "done" ] || continue
+          CAP_READY=$(status_line_at_epoch "$cap_line" || true)
+          break
+        done < "$STATE/$ID.status"
+      fi
+      CAP_REFLOG=$(git -C "$WT" reflog show --date=unix --format='%gd %H' "refs/heads/$CAP_BRANCH" 2>/dev/null \
+        | sed -n 's/.*@{\([0-9][0-9]*\)} \([0-9a-f][0-9a-f]*\)$/\1 \2/p')
+      CAP_MOVES=$(printf '%s\n' "$CAP_REFLOG" | awk 'NF == 2 { print $1 }')
+      CAP_EVIDENCE=$(fm_capability_outcome_from_followups "$CAP_READY" "$CAP_MOVES")
+      CAP_OUTCOME=${CAP_EVIDENCE%%|*}
+      CAP_FIX_ROUNDS=${CAP_EVIDENCE#*|}
+      case "$CAP_FIX_ROUNDS" in ''|*[!0-9]*) CAP_FIX_ROUNDS= ;; esac
+    fi
+  fi
 fi
 
 # A record accepted as a legacy incarnation (no spawn_gen, and either
@@ -3532,6 +3557,13 @@ remove_secondmate_registry_entry() {
 
 require_exclusive_task_worktree_slot || exit 1
 require_owned_task_worktree_slot || exit 1
+if ! teardown_owns_worktree; then
+  case "$CAP_OUTCOME" in
+    ''|reported) ;;
+    *) CAP_OUTCOME=unknown ;;
+  esac
+  CAP_FIX_ROUNDS=
+fi
 
 validate_pr_poll_cleanup "$STATE" "$ID" || exit 1
 
@@ -3653,6 +3685,81 @@ if teardown_owns_worktree && [ -d "$WT" ] && [ "$FORCE" != "--force" ]; then
       exit 1
     fi
   fi
+fi
+
+# A merged or revised capability outcome stands only when the work's landing
+# is proven while the worktree still exists: a merged PR for direct-PR, and for
+# local-only a head on the local default branch or content already in it. The
+# proof runs bounded like the rest of the capability evidence, so a slow or
+# unreachable forge leaves the outcome unknown instead of delaying teardown.
+capability_landing_proven() {
+  local name
+  teardown_owns_worktree && [ -d "$WT" ] || return 1
+  if [ "$MODE" = direct-PR ]; then
+    pr_is_merged "$CAP_BRANCH"
+    return
+  fi
+  if name=$(default_branch) \
+    && git -C "$WT" merge-base --is-ancestor HEAD "refs/heads/$name" 2>/dev/null; then
+    return 0
+  fi
+  content_in_default
+}
+case "$CAP_OUTCOME" in
+  merged|revised)
+    if ! fm_run_bash_timeout 20 capability_landing_proven >/dev/null 2>&1; then
+      CAP_OUTCOME=unknown
+      CAP_FIX_ROUNDS=
+    fi
+    ;;
+esac
+
+# A branch that moved after the ready report was revised only when those moves
+# changed its content: the patch-ids of its branch-only commits at the ready-time
+# head and at the final head are compared, so a pure rebase stays merged. Branch-
+# only means not on the default branch as it stood before the work landed there.
+# Returns 0 when the content is unchanged, 1 when it changed, and 2 when either
+# side cannot be derived.
+capability_default_positions_before() {  # <ready-head> <final-head>
+  local name ref entry
+  name=$(default_branch) || return 1
+  for ref in "refs/heads/$name" "refs/remotes/origin/$name"; do
+    git -C "$WT" rev-parse --quiet --verify "$ref" >/dev/null 2>&1 || continue
+    for entry in $( { git -C "$WT" rev-parse "$ref"; git -C "$WT" reflog show --format=%H "$ref"; } 2>/dev/null ); do
+      git -C "$WT" merge-base --is-ancestor "$1" "$entry" 2>/dev/null && continue
+      git -C "$WT" merge-base --is-ancestor "$2" "$entry" 2>/dev/null && continue
+      printf '%s\n' "$entry"
+      break
+    done
+  done
+}
+capability_branch_patch_ids() {  # <head> <excluded-commits>
+  printf '%s\n' "$2" | sed -n 's/^\([0-9a-f][0-9a-f]*\)$/^\1/p' \
+    | git -C "$WT" log --no-merges -p --format='commit %H' --stdin "$1" 2>/dev/null \
+    | git patch-id --stable 2>/dev/null | awk '{ print $1 }' | sort -u
+}
+capability_followups_kept_content() {
+  local ready_head final_head excluded ready_ids final_ids
+  teardown_owns_worktree && [ -d "$WT" ] || return 2
+  ready_head=$(printf '%s\n' "$CAP_REFLOG" | awk -v ready="$CAP_READY" \
+    'NF == 2 && ($1 + 0) <= (ready + 0) { print $2; exit }')
+  [ -n "$ready_head" ] || return 2
+  final_head=$(git -C "$WT" rev-parse --quiet --verify "refs/heads/$CAP_BRANCH^{commit}" 2>/dev/null) || return 2
+  excluded=$(capability_default_positions_before "$ready_head" "$final_head") || return 2
+  [ -n "$excluded" ] || return 2
+  ready_ids=$(capability_branch_patch_ids "$ready_head" "$excluded")
+  final_ids=$(capability_branch_patch_ids "$final_head" "$excluded")
+  [ -n "$ready_ids" ] && [ -n "$final_ids" ] || return 2
+  [ "$ready_ids" = "$final_ids" ] || return 1
+}
+if [ "$CAP_OUTCOME" = revised ]; then
+  cap_content_rc=0
+  capability_followups_kept_content || cap_content_rc=$?
+  case "$cap_content_rc" in
+    0) CAP_OUTCOME=merged; CAP_FIX_ROUNDS=0 ;;
+    1) ;;
+    *) CAP_OUTCOME=unknown; CAP_FIX_ROUNDS= ;;
+  esac
 fi
 
 # A Herdr close may reposition shared workspace order, so the whole

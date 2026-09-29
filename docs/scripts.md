@@ -212,7 +212,7 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-fork-test-registry-lib.sh` | Parse `tests/fork-test-registry.conf` so fork-only test families and changed-path owners are declared there rather than in the runner; its header owns the row grammar and the missing-registry behavior |
 | `fm-continuity-pretool-check.sh` | Narrow Claude recovery gate when in-flight work has no live watcher lock (docs/arm-pretool-check.md) |
 | `fm-continuity-command-policy.mjs` | Semantic owner of Claude continuity-gate fleet-command classification (docs/arm-pretool-check.md) |
-| `fm-dispatch-select.sh`  | Resolve a matched crew-dispatch rule to one concrete profile, owning `quota-balanced` and `capability-recent` selection plus capability evidence surfacing |
+| `fm-dispatch-select.sh`  | Resolve a matched crew-dispatch rule to one concrete profile, owning `capability-recent` selection plus capability evidence surfacing and never ranking by quota |
 | `fm-capability-lib.sh`   | Append-only capability outcome log (green means first-try validation pass), 7-day reader, ranking, and advisory scout-tax helpers |
 | `fm-home-port.sh`        | Export, import, push, pull, or bootstrap captain-private portable home material (docs/porting.md) |
 | `fm-home-manifest.sh`    | Print the environment-fidelity manifest of backend and tool versions that `fm-bootstrap.sh manifest` dispatches to (docs/porting.md) |

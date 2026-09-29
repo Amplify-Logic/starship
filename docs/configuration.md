@@ -1226,6 +1226,25 @@ When the brief has both sections, the same request also asks one yes/no scope qu
 An answer of 0.5 or above prints one `scope:` line with the probability, as advice only: it never changes the status, rule, fallback, candidates, or profile.
 A brief without both sections is not asked it, and a missing, malformed, or below-0.5 answer prints nothing; an `error` outcome, including an API failure or timeout, never carries a scope line.
 
+**Never-send list (config/dispatch-never-send)**
+
+The optional local, gitignored `config/dispatch-never-send` keeps values you name from ever leaving the machine in a resolver request.
+It has no default entries, and an absent file changes nothing.
+Like `config/crew-dispatch.json`, it is inherited into secondmate homes, so a secondmate's resolver withholds the same values.
+
+Each non-blank line not beginning with `#` is one literal value, matched case-insensitively.
+Every entry is trimmed of surrounding whitespace, and any run of whitespace, in the entry or in the checked text, counts as one space, so a value the brief wraps across lines still matches.
+
+```text
+# Client names
+Example Client Ltd
+```
+
+Before the request is sent, every string in it is checked: the project name, the task text, each rule's `when`, and the fixed question text.
+A match stops the request: the resolver behaves exactly as when it is off, printing one `dispatch-resolve: off (...; nothing sent)` line on stderr and nothing on stdout, making no network or quota call, and exiting 0, so firstmate dispatches through its existing intake.
+A list that is present but not a readable regular file also stops the request the same way rather than sending unchecked text.
+That one diagnostic names the list line number at most and never prints the listed value or the matching text.
+
 **Missing or invalid rules**
 
 An absent rules file, a default-only file, or `rules: []` returns the non-clear reason `no rules to match` without a model or quota request, leaving firstmate's existing routing in control; an existing but unreadable or malformed rules file, including a broken symlink, remains an actionable exit 2 configuration error.
@@ -2876,9 +2895,14 @@ Each append-only line is:
 `green` means validation passed on the first try: exactly one pipeline attempt is recorded for the task branch.
 `fixed` means validation passed only after earlier recorded attempts, and its `fix-rounds` field counts those earlier attempts.
 `failed` means validation ran but its newest recorded attempt never completed.
-`unknown` means no validation result was derivable (scout reports, direct-PR or local-only delivery, or unavailable run records).
+`merged` means direct-PR or local-only work landed with no follow-up: its branch's content never changed after the worker's first `done:` report, so a pure rebase still counts as merged.
+Teardown keeps `merged` or `revised` only when it proves the landing before removing the worktree: a merged PR for direct-PR, or for local-only a head on the local default branch or content already in it; unproven work records `unknown`.
+`revised` means such work landed only after follow-up commits: the patch-ids of its branch-only commits at the ready-time head and at the final head differ, and its `fix-rounds` field counts the branch moves after that first report; when they cannot be compared the outcome is `unknown`.
+`reported` means a scout left a non-empty report.
+`unknown` means no result was derivable (no pipeline record, an untimed first `done:` report, a branch that never moved, an unproven landing, or no scout report); a ship whose worktree slot teardown finds reassigned to another task also records `unknown` with no `fix-rounds`, since that slot's branch history is no longer the task's.
 `discarded` records an approved `--force` teardown.
-The trailing counts are written only when derivable: `steers` counts confirmed supervisor sends recorded per task by `bin/fm-send.sh`, and an empty `fix-rounds` slot is retained when only `steers` is known.
+Density counts `green` and `merged` as first-try successes, counts `revised` and every other outcome toward the total only, and leaves `reported` out of both.
+The trailing counts are written only when derivable: `steers` counts confirmed supervisor sends recorded per task by `bin/fm-send.sh` into a counter `bin/fm-spawn.sh` starts empty, so an unsteered task records 0, and an empty `fix-rounds` slot is retained when only `steers` is known.
 Older six-field lines without trailing counts stay valid, and readers treat missing counts as absent rather than guessing them.
 `task-type` comes from meta `task_type=` when `fm-spawn.sh --task-type <slug>` recorded it, otherwise from `kind` (`ship` or `scout`).
 Fields never contain `|` or newlines.
@@ -2886,5 +2910,5 @@ Fields never contain `|` or newlines.
 Cost rules in `config/crew-dispatch.json` always win: evidence only ranks or advises within the already cost-filtered `use` array and never bypasses the third-party-model guard.
 With `--task-type`, dispatch-select prints `CAPABILITY_EVIDENCE:` lines on stderr for firstmate.
 About 10% of those dispatches may also print one `CAPABILITY_SCOUT_TAX:` suggestion naming a different allowed profile; that suggestion is advisory and never changes the selected stdout profile.
-`select: capability-recent` makes ranking choose the best recent green density inside the allowed array, where green strictly means first-try passes; a sampled profile outranks an earlier unsampled one only when density is greater than 0, and absent or all-zero evidence keeps configured input order.
+`select: capability-recent` makes ranking choose the best recent density inside the allowed array, where density counts first-try successes (`green`, or `merged` with zero follow-ups) over counted samples; a sampled profile outranks an earlier unsampled one only when density is greater than 0, and absent or all-zero evidence keeps configured input order.
 Overrides for tests and ops live under Environment variables (`FM_CAPABILITY_*`).

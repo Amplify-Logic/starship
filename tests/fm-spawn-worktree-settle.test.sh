@@ -167,7 +167,7 @@ test_already_settled_pane_costs_one_confirm_read() {
   assert_grep "worktree=$WT_DIR" "$HOME_DIR/state/$id.meta" \
     "meta did not record the already-settled worktree"
   reads=$(cat "$COUNTFILE")
-  [ "$reads" -eq 2 ] || fail "already-settled pane took $reads reads to confirm - expected the first read plus one confirmation"
+  [ "$reads" -eq 3 ] || fail "already-settled pane took $reads reads to confirm - expected the first read, one confirmation, and the launch-boundary cwd check"
   pass "an already-settled pane confirms on the next read, not a whole extra cycle"
 }
 
@@ -238,8 +238,25 @@ test_primary_checkout_that_never_settles_fails_at_the_deadline() {
   pass "a pane stuck on the primary checkout fails loudly at the deadline"
 }
 
+# A fresh task starts its steer counter empty, so teardown's capability record
+# can say a task nobody steered took zero steers instead of leaving it unknown.
+test_fresh_spawn_starts_an_empty_steer_counter() {
+  local rec id out status
+  id=settle-steer-counter-z5
+  rec=$(make_settle_case settle-steer-counter "$id" 0)
+  read_settle_record "$rec"
+
+  out=$(run_settle_spawn "$id")
+  status=$?
+  expect_code 0 "$status" "spawn should succeed"$'\n'"$out"
+  [ -f "$HOME_DIR/state/$id.steers" ] || fail "a fresh spawn did not create its steer counter"
+  [ ! -s "$HOME_DIR/state/$id.steers" ] || fail "a fresh steer counter must start empty"
+  pass "a fresh spawn starts an empty steer counter"
+}
+
 test_single_stale_first_read_is_not_accepted
 test_already_settled_pane_costs_one_confirm_read
+test_fresh_spawn_starts_an_empty_steer_counter
 test_transient_primary_checkout_is_not_accepted
 test_primary_checkout_that_never_settles_fails_at_the_deadline
 

@@ -507,6 +507,7 @@ tests/fm-spawn-dispatch-profile.test.sh	182
 tests/fm-spawn-herdr-env.test.sh	56
 tests/fm-spawn-herdr-presentation.test.sh	62
 tests/fm-spawn-launch-preflight.test.sh	66
+tests/fm-spawn-orca-worktree.test.sh	60
 tests/fm-spawn-pool-base-freshen.test.sh	117
 tests/fm-spawn-worktree-settle.test.sh	64
 tests/fm-speak.test.sh	96

@@ -1298,7 +1298,7 @@ crew_dispatch_validate() {
       + (if ($p.effort? != null) then "/" + ($p.effort | tostring) else "" end);
     def profile_set($value; $selector):
       if ($value | type) == "array" then
-        (($selector // "quota-balanced") + "[" + ([$value[] | profile(.)] | join(", ")) + "]")
+        (($selector // "spendPriority") + "[" + ([$value[] | profile(.)] | join(", ")) + "]")
       else profile($value)
       end;
     (["BOOTSTRAP_INFO: crew dispatch active config/crew-dispatch.json"]
