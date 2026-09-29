@@ -98,6 +98,33 @@ The delivery mode is the same on most ship briefs and says nothing about difficu
 These live runs cover the scout line, the free-form whole-brief fallback, the ship-brief package, the top-tier floor turning the pick `ambiguous`, and the fallback to a runner-up.
 The remaining behavior is covered only by the offline tests below: a fenced heading inside a section, the boundaries of the global 0.6 confidence check with no declared floors, the probability-based floor examples, the tie case, and rejection of an out-of-range `min_confidence`.
 
+## Scope advice against real and widened briefs
+
+Run 2026-09-29 against the pinned `jev-1.13.0`, with the resolver reading the key from the home `.env` through `FM_HOME` and the home's own eight-rule `config/crew-dispatch.json`.
+Eight briefs: six real scaffolded briefs with both task sections, and two copies of two of them with one unasked change added to `## Firstmate spec` (a settings-screen redesign; a phone build bump and TestFlight upload).
+Each brief went through the shipped resolver three times, and the raw scope answer was read from the captured response.
+
+| Brief | Scope probability, three runs | `scope:` lines printed |
+| --- | --- | --- |
+| Real: pre-release checks for an app | 0.14 to 0.16 | 0 of 3 |
+| Real: a batch of small tooling fixes | 0.16 to 0.19 | 0 of 3 |
+| Real: a voice-assistant answer fix | 0.16 to 0.17 | 0 of 3 |
+| Real: a voice-assistant web search tool | 0.22 to 0.23 | 0 of 3 |
+| Real: a document kit for an app | 0.30 to 0.31 | 0 of 3 |
+| Real: seed data for one lane of a plan | 0.49 to 0.50 | 2 of 3 |
+| Widened: settings redesign | 0.83 to 0.86 | 3 of 3 |
+| Widened: build bump and upload | 0.83, 0.83, and one timeout | 2 of 2 answered |
+
+Both widened briefs cleared 0.5 on every answered run and five of the six real briefs stayed at or below 0.31.
+The seed-data brief sits on the floor: its `## Captain's intent` points at a report for the lane without naming it, so the build instructions read as adding entries the ask never states.
+The one timeout (no response within the 5-second limit) produced the ordinary `error` outcome with no `scope:` line.
+Every answered run returned a usable rule answer beside the scope answer; input tokens were 1,544 to 1,669 per request.
+
+Wording matters more than the floor on a single-brief request.
+Six other wordings were measured on the same eight briefs in scope-only requests over the same state.
+The bare question without criteria put the widened copies at only 0.59 to 0.63, and criteria that named no example of an unasked change scored the seed-data brief at 0.80.
+The shipped criteria name concrete unasked changes (a redesign, an extra feature, a build bump, an upload or release, a cleanup sweep) and count tests, documentation, verification, and scope limits as serving the ask.
+
 ## Offline behavior
 
 `tests/fm-dispatch-resolve.test.sh` drives the public interface with a fake `curl` that records argv, the request body, the header read from file descriptor 3, and whether the secret reached its environment, plus a fake `quota-axi` that performs the same environment check.
@@ -106,9 +133,10 @@ It proves the absent key (environment and `.env`) prints one stderr line, nothin
 It proves absent, default-only, and empty-rules files return `no rules to match` without a model or quota request, while a broken rules-file symlink exits 2 as unreadable.
 It proves the documented starter configuration resolves its Pi default through the declared Claude provider, a `.env` key turns the tool on, and the environment wins over it.
 It proves the key is absent from child environments, never appears on `curl` argv, and arrives only as the bearer header on the descriptor.
-It proves the request uses the fixed endpoint and model, carries only the project, the brief's task sections read by the shared brief-heading parser with a scout line only for a scout brief and never a ship brief's delivery mode (or the whole brief when it has neither section), and rule Choice with one option per rule plus the fixed neutral none option, and never carries `why`, `use`, or quota.
+It proves the request uses the fixed endpoint and the pinned `jev-1.13.0` model, carries only the project, the brief's task sections read by the shared brief-heading parser with a scout line only for a scout brief and never a ship brief's delivery mode (or the whole brief when it has neither section), and rule Choice with one option per rule plus the fixed neutral none option, and never carries `why`, `use`, or quota.
 It proves a declared `min_confidence` is checked against the rule's own probability both as the pick and as a runner-up, a picked rule below it falls to the most probable runner-up that clears its floor, is `ambiguous` when none does or two tie, and that a file without declared floors keeps the global 0.6 floor on confidence unchanged.
 It proves the clear, fixed-floor ambiguous with candidate evidence, escalate (approval with candidate evidence, unverifiable rule floor, tie, nothing rankable), known rule-floor fall-through, known and unverifiable profile-floor evidence, explicit-provider and provider-ID enforcement, authoritative Agy and explicit-provider Gemini routing, partial providers, eligible unranked candidates and their clear-result note, concrete quota vetoes and profile-floor shortfalls taking precedence over uncertainty, account-wide quota veto, limiting-bound ranking, schema-6 account-row binding with schema-5 compatibility, missing-curl and quota-axi failures, HTTP 429 and 500, transport failure, malformed usage, zero-mass or malformed probabilities or confidence, malformed or duplicate profile, invalid selector, removed-option rejection, and out-of-range rule ID paths behave as the contract states, with configuration errors exiting 2 before any network call.
+It proves the scope question is asked only when the brief has both task sections, rides the same state, prints one `scope:` line at 0.5 or above without changing any other output line, and is silent for a below-floor, nonnumeric, out-of-range, missing, or malformed answer and on any `error` outcome, including a quota failure after a valid answer, a rule choice outside the rules file, and an API failure.
 `tests/fm-bootstrap.test.sh` proves bootstrap ignores resolver-only fields without the typed key, validates each malformed shape when the environment or home `.env` activates typed resolution, and prevents an environment-provided key from reaching child processes.
 
 ```console

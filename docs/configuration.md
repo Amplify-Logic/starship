@@ -1171,6 +1171,10 @@ A ship brief's delivery mode is deliberately not sent, because in live runs nami
 
 The scaffold's standard setup, rules, and definition-of-done text is the same in every brief, so leaving it out keeps its safety language from reading as a signal about the task.
 
+When the brief has both sections, the same request also asks one yes/no scope question over the same state: do the build instructions under `## Firstmate spec` add a change the ask under `## Captain's intent` did not need?
+An answer of 0.5 or above prints one `scope:` line with the probability, as advice only: it never changes the status, rule, fallback, candidates, or profile.
+A brief without both sections is not asked it, and a missing, malformed, or below-0.5 answer prints nothing; an `error` outcome, including an API failure or timeout, never carries a scope line.
+
 **Missing or invalid rules**
 
 An absent rules file, a default-only file, or `rules: []` returns the non-clear reason `no rules to match` without a model or quota request, leaving firstmate's existing routing in control; an existing but unreadable or malformed rules file, including a broken symlink, remains an actionable exit 2 configuration error.
@@ -1233,7 +1237,7 @@ Firstmate passes its profile line unless it states a reason to override, such as
 
 - The resolver and bootstrap copy an environment-provided key into a non-exported private variable and unset `TYPESAFE_API_KEY` before launching child processes, so the secret is absent from child environments.
 - The resolver sends the key to `curl` only as a header read from a file descriptor, never on argv, and nothing prints, logs, or writes it.
-- The resolver fixes the endpoint at `https://api.typesafe.ai`, model at `jev-latest`, default confidence floor at 0.6, and request timeout at 5 seconds; `TYPESAFE_API_KEY` is its only resolver-specific environment setting.
+- The resolver fixes the endpoint at `https://api.typesafe.ai`, model pinned at `jev-1.13.0` (never an alias, because the floors were measured against that version), default confidence floor at 0.6, scope advice floor at 0.5, and request timeout at 5 seconds; `TYPESAFE_API_KEY` is its only resolver-specific environment setting.
 
 The live rule-match evidence is recorded in [`verification/dispatch-resolve.md`](verification/dispatch-resolve.md).
 

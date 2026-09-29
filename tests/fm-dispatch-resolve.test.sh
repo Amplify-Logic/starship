@@ -234,7 +234,7 @@ assert_contains "$argv" '@/dev/fd/3' "the header is read from a file descriptor"
 assert_equals "Authorization: Bearer $KEY" "$(cat "$LOG/header")" "curl receives the bearer header on fd 3"
 assert_equals $'curl:clean\nquota-axi:clean' "$(cat "$LOG/child-env")" "the API key is absent from every child environment"
 body=$(cat "$LOG/body")
-assert_equals 'jev-latest' "$(jq -r .model <<<"$body")" "default model is jev-latest"
+assert_equals 'jev-1.13.0' "$(jq -r .model <<<"$body")" "the model is pinned to jev-1.13.0, never an alias"
 assert_equals 'pager' "$(jq -r .state.task.project <<<"$body")" "project rides in the state"
 assert_contains "$(jq -r .state.task.brief <<<"$body")" 'off-by-one in the pager' "a brief without task headings rides whole in the state"
 assert_equals '["rule"]' "$(jq -c '.questions | keys' <<<"$body")" "only the rule Choice is asked"
@@ -483,6 +483,77 @@ reset_log
 TYPESAFE_API_KEY=$KEY run code out err "$BRIEF"
 assert_equals "$(cat "$BRIEF")" "$(jq -r .state.task.brief "$LOG/body")" "a brief with neither heading is sent whole"
 pass "only the brief's task sections and scout tag reach the model, with a whole-brief fallback"
+
+# --- scope advice: one yes/no beside the rule Choice, never an outcome input ------
+with_scope() {  # <scope answer JSON>: add it to the canned rule_4 response
+  write_response "$RESPONSE" rule_4 0.9
+  jq --argjson scope "$1" '.answers.scope = $scope' "$RESPONSE" > "$TMP_ROOT/scoped.json"
+  mv "$TMP_ROOT/scoped.json" "$RESPONSE"
+}
+without_latency() { grep -v '^  model: .*latency_ms:' <<<"$1"; }
+SCOPE_TEXT='  scope: probability 0.98 that the build instructions add a change the ask did not need (advice only)'
+reset_log
+write_response "$RESPONSE" rule_4 0.9
+TYPESAFE_API_KEY=$KEY run code out err "$SCAFFOLD_BRIEF"
+BASELINE=$(without_latency "$out")
+body=$(cat "$LOG/body")
+assert_equals '["rule","scope"]' "$(jq -c '.questions | keys' <<<"$body")" "a brief with both sections is also asked the scope question"
+assert_equals 'noul' "$(jq -r .questions.scope.type <<<"$body")" "the scope question is a yes/no"
+assert_contains "$(jq -r .questions.scope.instructions <<<"$body")" 'add a change the ask' "the scope question asks whether the build instructions add a change"
+assert_equals "$(jq -c .state <<<"$body")" "$(jq -c '{task: {project: "", brief: .state.task.brief}}' <<<"$body")" "the scope question rides the same state, adding nothing to it"
+assert_not_contains "$out" '  scope:' "a response without a scope answer prints no scope line"
+
+reset_log
+with_scope '{"type":"noul","noul":0.98}'
+TYPESAFE_API_KEY=$KEY run code out err "$SCAFFOLD_BRIEF"
+expect_code 0 "$code" "a widened brief still exits 0"
+assert_contains "$out" "$SCOPE_TEXT" "a scope answer at or above 0.5 prints one advisory scope line"
+assert_equals "$BASELINE" "$(without_latency "$out" | grep -vxF "$SCOPE_TEXT")" "the scope line never changes the status, rule, or profile"
+assert_equals 1 "$(grep -c '^  scope:' <<<"$out")" "exactly one scope line is printed"
+
+reset_log
+with_scope '{"type":"noul","noul":0.5}'
+TYPESAFE_API_KEY=$KEY run code out err "$SCAFFOLD_BRIEF"
+assert_contains "$out" '  scope: probability 0.5 that' "a scope answer of exactly 0.5 reaches the floor"
+
+for bad in '{"type":"noul","noul":0.49}' '{"type":"noul","noul":"high"}' '{"type":"noul","noul":1.5}' '{"type":"noul"}' '"garbled"' 'null'; do
+  reset_log
+  with_scope "$bad"
+  TYPESAFE_API_KEY=$KEY run code out err "$SCAFFOLD_BRIEF"
+  expect_code 0 "$code" "scope answer $bad exits 0"
+  assert_equals "$BASELINE" "$(without_latency "$out")" "scope answer $bad leaves the output exactly as without a scope answer"
+  assert_not_contains "$err" 'scope' "scope answer $bad is silent on stderr"
+done
+
+reset_log
+with_scope '{"type":"noul","noul":0.98}'
+TYPESAFE_API_KEY=$KEY FAKE_QUOTA_FAIL=1 run code out err "$SCAFFOLD_BRIEF"
+assert_contains "$out" '  status: error' "a quota failure after the answer is still an error outcome"
+assert_not_contains "$out" '  scope:' "an error after a valid answer prints no scope line"
+
+reset_log
+write_response "$RESPONSE" rule_9 0.9
+jq '.answers.scope = {"type":"noul","noul":0.98}' "$RESPONSE" > "$TMP_ROOT/scoped.json"
+mv "$TMP_ROOT/scoped.json" "$RESPONSE"
+TYPESAFE_API_KEY=$KEY run code out err "$SCAFFOLD_BRIEF"
+assert_contains "$out" '  reason: rule rule_9 is not in the rules file' "an unknown rule id beside a scope answer is still an error outcome"
+assert_not_contains "$out" '  scope:' "a resolution error prints no scope line"
+
+reset_log
+with_scope '{"type":"noul","noul":0.98}'
+TYPESAFE_API_KEY=$KEY FAKE_CURL_HTTP=504 run code out err "$SCAFFOLD_BRIEF"
+assert_contains "$out" '  reason: http 504 after' "a timeout-shaped API failure is the usual error outcome"
+assert_not_contains "$out" '  scope:' "an API failure prints no scope line"
+
+for one_section in "$SPEC_ONLY_BRIEF" "$BRIEF"; do
+  reset_log
+  with_scope '{"type":"noul","noul":0.98}'
+  printf '%s\n' '# Task' '## Firstmate spec' 'Spec text.' > "$SPEC_ONLY_BRIEF"
+  TYPESAFE_API_KEY=$KEY run code out err "$one_section"
+  assert_equals '["rule"]' "$(jq -c '.questions | keys' "$LOG/body")" "a brief without both sections is not asked the scope question"
+  assert_not_contains "$out" '  scope:' "a brief without both sections prints no scope line"
+done
+pass "scope advice: asked only with both sections, printed at 0.5, silent otherwise, never changes the outcome"
 
 # --- escalate: captain approval ------------------------------------------------
 reset_log

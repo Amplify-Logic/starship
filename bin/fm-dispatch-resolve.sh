@@ -19,7 +19,12 @@
 #   scout brief (the whole brief when it has neither section), as state and
 #   ONE Choice question whose options are every rule's `when` from
 #   config/crew-dispatch.json plus one fixed generic none option. Jev returns
-#   the matched rule, a probability per option, and a confidence. Everything
+#   the matched rule, a probability per option, and a confidence. When the
+#   brief has both sections, the same request also asks one yes/no scope
+#   question: do the build instructions add a change the ask did not need?
+#   At 0.5 or above one advisory `scope:` line is printed; the answer never
+#   changes the status or profile, and a missing or malformed scope answer or
+#   an `error` outcome prints nothing. Everything
 #   after that is jq: the confidence floor (0.6 on the answer confidence, or a
 #   rule's declared `min_confidence` on that rule's probability, falling to the
 #   most probable other option that clears its own floor), the rule's declared
@@ -39,6 +44,7 @@
 #   dispatch-resolve:
 #     status: clear | ambiguous | escalate | error
 #     model/latency_ms/tokens, rule (when excerpt) and confidence, probabilities
+#     scope: probability <p> that the build instructions add ... (advice only; both sections, p >= 0.5)
 #     fallback: <runner-up rule taken when the picked rule missed its own floor>
 #     reason: <why the status is not clear>
 #     candidate: <harness>:<model> provider=.. scope=.. remaining=..% spendPriority=.. runway=.. -> eligible | eligible, unranked: <reason> | not eligible: <reason>
@@ -81,7 +87,10 @@ CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 . "$SCRIPT_DIR/fm-brief-heading-lib.sh"
 
 CONFIDENCE_FLOOR=0.6
-TS_MODEL=jev-latest
+# Pinned, never an alias: the scope threshold was measured against this exact
+# version, and an alias can move underneath the rule floors too.
+TS_MODEL=jev-1.13.0
+SCOPE_FLOOR=0.5
 TS_BASE=https://api.typesafe.ai
 TS_TIMEOUT=5
 DEFAULT_WHEN="No listed rule applies to this task."
@@ -251,6 +260,13 @@ task_sections() {
   done
 }
 SECTIONS=$(task_sections)
+# The scope question compares the ask with the build instructions, so it is
+# asked only when the brief carries both; any other brief's request is unchanged.
+SCOPE_CHECK=false
+if fm_brief_task_heading_present "$BRIEF" "## Captain's intent" &&
+  fm_brief_task_heading_present "$BRIEF" "## Firstmate spec"; then
+  SCOPE_CHECK=true
+fi
 if [ -n "$SECTIONS" ]; then
   { brief_kind; printf '%s\n' "$SECTIONS"; } > "$TASK_TEXT" || die "could not read brief: $BRIEF"
 else
@@ -259,19 +275,29 @@ fi
 LAT_MS=null
 command -v curl >/dev/null 2>&1 || emit_error "curl not installed"
   REQUEST=$(jq -n --rawfile brief "$TASK_TEXT" --arg project "$PROJECT" --arg model "$TS_MODEL" \
-    --arg none_criterion "$DEFAULT_WHEN" --slurpfile rules "$RULES" '
+    --arg none_criterion "$DEFAULT_WHEN" --argjson scope_check "$SCOPE_CHECK" --slurpfile rules "$RULES" '
     ($rules[0]) as $cfg |
     ($cfg.rules | to_entries | map({key: ("rule_" + ((.key + 1) | tostring)), value: .value.when}) | from_entries) as $criteria |
     {
       model: $model,
       state: {task: {project: $project, brief: $brief}},
-      questions: {
+      questions: ({
         rule: {
           type: "choice",
           instructions: "Which ONE dispatch rule best fits `task` (read `task.brief` and `task.project`)? Each option is the rule'"'"'s own matching condition; pick `default` when no rule'"'"'s condition is met, including when a rule'"'"'s own exemption text excludes this task.",
           criteria: ($criteria + {default: $none_criterion})
         }
       }
+      + (if $scope_check then {
+        scope: {
+          type: "noul",
+          instructions: "Do the build instructions under `## Firstmate spec` in `task.brief` add a change the ask under `## Captain'"'"'s intent` did not need?",
+          criteria: {
+            true: "The build instructions add a change nothing in the ask calls for, such as an unrequested redesign, an extra feature, a version or build bump, an upload or release, or a cleanup sweep.",
+            false: "Every change in the build instructions serves the ask, or a report or plan the ask points to; tests, documentation, verification and out-of-scope limits count as serving it."
+          }
+        }
+      } else {} end))
     }')
   T0=$(fm_timing_now_ms)
   HTTP=$(printf '%s' "$REQUEST" | curl -sS --max-time "$TS_TIMEOUT" -o "$RESP_FILE" -w '%{http_code}' \
@@ -295,6 +321,16 @@ jq -e --slurpfile rules "$RULES" '
        (.usage.input_tokens | type) == "number" and
        (.usage.output_tokens | type) == "number"))' \
   "$RESP_FILE" >/dev/null 2>&1 || emit_error "response is not a rule Choice answer"
+
+# ---- scope advice: printed at the floor, never an input to the outcome -----------
+SCOPE_LINE=''
+if [ "$SCOPE_CHECK" = true ]; then
+  SCOPE_LINE=$(jq -r --argjson floor "$SCOPE_FLOOR" '
+    .answers.scope.noul
+    | select(type == "number" and . >= $floor and . <= 1)
+    | "  scope: probability \(.) that the build instructions add a change the ask did not need (advice only)"' \
+    "$RESP_FILE" 2>/dev/null) || SCOPE_LINE=''
+fi
 
 # ---- quota evidence: one quota-axi --json snapshot -----------------------------
 command -v quota-axi >/dev/null 2>&1 || emit_error "quota-axi not installed"
@@ -446,7 +482,7 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
     end
   end') || emit_error "resolution failed"
 
-TEXT=$(jq -r '
+TEXT=$(jq -r --arg scope "$SCOPE_LINE" '
   def flat: tostring | gsub("[\t\r\n]"; " ");
   def show($value): ($value // "-") | flat;
   def shell_arg: flat | @sh;
@@ -455,6 +491,7 @@ TEXT=$(jq -r '
   "  model: \(show(.model))   latency_ms: \(show(.latency_ms))   tokens: \(show(.tokens.input_tokens))/\(show(.tokens.output_tokens))",
   "  rule: \(.rule | flat) (\(.rule_when | flat))   confidence: \(.confidence | flat)",
   "  probabilities: \([.probabilities | to_entries[] | "\(.key | flat)=\(.value | flat)"] | join(" "))",
+  (if $scope != "" and .status != "error" then $scope else empty end),
   (if .fallback then "  fallback: \(.fallback | flat)" else empty end),
   (if .reason then "  reason: \(.reason | flat)" else empty end),
   (if .note then "  note: \(.note | flat)" else empty end),
