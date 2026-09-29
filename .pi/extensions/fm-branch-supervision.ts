@@ -99,7 +99,7 @@ import {
   type ExtensionCommandContext,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { Box, Container, fuzzyFilter, Input, SelectList, Text } from "@earendil-works/pi-tui";
+import { Box, type Component, Container, fuzzyFilter, Input, SelectList, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { registerFirstmateTool } from "./lib/fm-native-contract.ts";
 import { runCommandAsync } from "./lib/fm-async-exec.ts";
@@ -2122,9 +2122,44 @@ ${context.command}
     return stockOutcomesPreviewLines ?? undefined;
   };
 
+  // Pi 0.99.0 began drawing a tool's arguments on its stock call line, so the
+  // call line comes from Pi's own fallback rather than a copy of its format.
+  // A Pi without that fallback keeps the bare title it used to draw.
+  const stockOutcomesCall = (
+    toolName: string,
+    args: unknown,
+    expanded: boolean,
+    theme: Parameters<NonNullable<ToolDefinition["renderCall"]>>[1],
+  ): Component => {
+    try {
+      const probe = new ToolExecutionComponent(
+        toolName,
+        "fm-outcomes-call-probe",
+        args,
+        { showImages: false },
+        {
+          name: toolName,
+          label: "Call probe",
+          description: "Call probe",
+          parameters: Type.Object({}),
+          execute: async () => ({ content: [], details: undefined }),
+        },
+        { requestRender() {} } as ConstructorParameters<typeof ToolExecutionComponent>[5],
+        root,
+      );
+      probe.setExpanded(expanded);
+      const createCallFallback = (probe as unknown as { createCallFallback?: () => unknown }).createCallFallback;
+      const call = typeof createCallFallback === "function" ? createCallFallback.call(probe) : undefined;
+      if (typeof (call as Partial<Component> | undefined)?.render === "function") return call as Component;
+    } catch {
+      // Keep the bare title below.
+    }
+    return new Text(theme.fg("toolTitle", theme.bold(toolName)), 0, 0);
+  };
+
   type OutcomesToolShellState = {
     shell?: Box;
-    call?: Text;
+    call?: Component;
     result?: Text | Container;
   };
   const refreshOutcomesToolShell = (
@@ -2156,11 +2191,11 @@ ${context.command}
       recent: Type.Optional(Type.Number({ description: "How many most-recent outcomes to read (default 20)" })),
     }),
     renderShell: "self",
-    renderCall: (_args, theme, context) => {
+    renderCall: (args, theme, context) => {
       if (calmPresentation.stockExportRendering) throw new Error("Use Pi stock export rendering");
       if (calmHides("assistant-tool-call")) return new Container();
       const shellState = context.state as OutcomesToolShellState;
-      shellState.call = new Text(theme.fg("toolTitle", theme.bold("fm_branch_outcomes")), 0, 0);
+      shellState.call = stockOutcomesCall("fm_branch_outcomes", args, context.expanded, theme);
       return refreshOutcomesToolShell(shellState, theme, context);
     },
     renderResult: (result, options, theme, context) => {
@@ -2218,11 +2253,11 @@ ${context.command}
       through: Type.Number({ description: "The highest outcome sequence number this conversation has processed" }),
     }),
     renderShell: "self",
-    renderCall: (_args, theme, context) => {
+    renderCall: (args, theme, context) => {
       if (calmPresentation.stockExportRendering) throw new Error("Use Pi stock export rendering");
       if (calmHides("assistant-tool-call")) return new Container();
       const shellState = context.state as OutcomesToolShellState;
-      shellState.call = new Text(theme.fg("toolTitle", theme.bold("fm_branch_processed")), 0, 0);
+      shellState.call = stockOutcomesCall("fm_branch_processed", args, context.expanded, theme);
       return refreshOutcomesToolShell(shellState, theme, context);
     },
     renderResult: (result, _options, theme, context) => {

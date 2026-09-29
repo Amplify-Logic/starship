@@ -4390,7 +4390,17 @@ if (!messages || !tree) process.exit(1);
 if (!/<div class="user-message"[^>]*>[\s\S]*Show a deterministic tool example\./.test(messages)) process.exit(1);
 if (!/<div class="assistant-message"[^>]*>[\s\S]*The deterministic tool example is complete\./.test(messages)) process.exit(1);
 if (messages.includes('<div class="hook-message"')) process.exit(1);
-if (messages.includes("[firstmate-synthetic-input]")) process.exit(1);
+// Since Pi 0.99.0 the export keeps a custom message the terminal hides, marked
+// hook-message-hidden and hidden by the export's own stylesheet until the reader
+// asks for hidden messages, so it stays outside the conversation the export opens on.
+const hiddenLabel = /<div class="hook-type">\[firstmate-synthetic-input\] · Hidden in terminal<\/div>/g;
+const hiddenLabels = messages.match(hiddenLabel)?.length ?? 0;
+if (messages.replace(hiddenLabel, "").includes("[firstmate-synthetic-input]")) process.exit(1);
+if (hiddenLabels > 0) {
+  if (hiddenLabels > (messages.match(/<div class="hook-message hook-message-hidden"/g)?.length ?? 0)) process.exit(1);
+  if (!/body:not\(\.show-hidden-messages\)\s+\.hook-message-hidden\s*\{\s*display:\s*none;?\s*\}/.test(dom)) process.exit(1);
+  if (/<body[^>]*class="[^"]*\bshow-hidden-messages\b/.test(dom)) process.exit(1);
+}
 for (const current of ["CURRENT_WATCHER_E2E", "CURRENT_TURN_END_E2E", "CURRENT_AWAY_E2E", "CURRENT_FROM_FIRSTMATE_E2E", "CURRENT_LAUNCH_BRIEF_E2E"]) {
   if (!messages.includes(current)) process.exit(1);
 }
