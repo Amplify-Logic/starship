@@ -1292,6 +1292,21 @@ Firstmate passes its profile line unless it states a reason to override, such as
 
 The live rule-match evidence is recorded in [`verification/dispatch-resolve.md`](verification/dispatch-resolve.md).
 
+## Test failure cause (.env TYPESAFE_API_KEY)
+
+When a `bin/fm-test-run.sh` run ends with failures, the runner asks typesafe.ai's Jev model in one request why each failing script failed and prints an advisory `FM_TEST_FAILURE_CAUSE` line per failure: `code-bug`, `test-out-of-date`, `environment`, or `unclear` when the model's confidence is under 0.6.
+The labels are hints for whoever reads the failure and never change the run's exit status.
+The same key turns it on: `TYPESAFE_API_KEY` from the environment, else from `$FM_HOME/.env`, where the runner defaults `FM_HOME` to its own repository root, so a run in a disposable task copy with neither stays silent.
+With no key, no `python3`, a timeout, or an answer it cannot read, it prints nothing at all and the run reads exactly as it does without it.
+CI holds no key, so it only ever runs locally.
+
+What leaves the machine is each failing script's path and output tail and this repository's tracked diff against the `--base` merge base, trimmed to fit the model's window, with the captain-private paths excluded even if a fork tracks them and any copy of the key replaced.
+The whole request, the state and one question per failure, is sized to fit that window.
+Every failure in the run is labelled: the failures and their questions share one budget, so each output tail shrinks as the failure count grows.
+Only a run with more failures than that budget can describe, a few dozen, leaves the last ones in run order out of the request, and each of those still gets a visible `FM_TEST_FAILURE_CAUSE script=<path> cause=not-labelled reason=over-size-limit` line beside the labels.
+The runner's header owns when it runs and its marker; [`../bin/fm-test-failure-cause.py`](../bin/fm-test-failure-cause.py) owns the request, the pinned model version, the floor, the size bounds, and its environment overrides, and its `--dry-run` prints the exact request body without a network call.
+Live evidence for the pinned model and the floor is recorded in [`verification/test-failure-cause.md`](verification/test-failure-cause.md).
+
 ## Toolchain
 
 On session start the first mate detects what its required toolchain is missing or too old and lists each problem with either an exact install command or manual instructions.
@@ -2396,7 +2411,7 @@ FMX_RELAY_URL=https://myfirstmate.io   # optional Relay endpoint override, mainl
 FMX_ENV_FILE=           # optional alternate .env file for direct Relay client invocations; bootstrap still checks $FM_HOME/.env
 FMX_DRY_RUN=            # truthy previews Relay replies and dismissals to state/x-outbox/ without posting or requiring a token
 FMX_X_REPLY_MAX_CHARS=280   # X reply per-message split budget; values below 50 clamp to 50
-TYPESAFE_API_KEY=       # typed dispatch resolution opt-in, from the environment or .env; absent means bin/fm-dispatch-resolve.sh is off (docs/configuration.md "Typed dispatch resolution")
+TYPESAFE_API_KEY=       # typed dispatch resolution and test failure cause opt-in, from the environment or .env; absent means bin/fm-dispatch-resolve.sh is off and bin/fm-test-run.sh prints no cause labels (docs/configuration.md "Typed dispatch resolution", "Test failure cause")
 FMX_DISCORD_REPLY_MAX_CHARS=1900   # Discord reply per-message split budget; values below 50 clamp to 50, values above 2000 reset to 1900
 FMX_X_THREAD_MAX=25     # maximum messages in one auto-split reply thread
 FMX_FOLLOWUP_MAX_AGE_SECS=604800   # local window for posting Relay completion follow-ups (7 days)

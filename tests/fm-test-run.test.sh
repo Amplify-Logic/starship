@@ -12,6 +12,11 @@ set -u
 
 RUNNER="$ROOT/bin/fm-test-run.sh"
 
+# Every failing fixture here would otherwise ask TypeSafe for failure-cause
+# labels when a developer's shell exports the key; the cases that exercise that
+# path supply their own home, key, and endpoint or recorded answer.
+unset TYPESAFE_API_KEY FM_TEST_FAILURE_CAUSE_RESPONSE FM_TEST_FAILURE_CAUSE_ENDPOINT
+
 assert_present "$RUNNER" "bin/fm-test-run.sh is missing"
 [ -x "$RUNNER" ] || fail "bin/fm-test-run.sh must be executable"
 
@@ -850,6 +855,277 @@ SH
   [ "$rc" -eq 0 ] || { rm -rf "$tmp"; fail "aggregate exit must be 0 when every script passes"; }
   rm -rf "$tmp"
   pass "aggregate exit reflects any script failure"
+}
+
+# Two failing fixtures and one passing one, for the failure-cause cases. The
+# second failure prints the fake key, so a case can prove it never leaves.
+write_failure_cause_fixtures() {  # <dir>
+  local dir=$1
+  cat >"$dir/code.test.sh" <<'SH'
+#!/usr/bin/env bash
+echo "not ok - expected 3 lines, got 2"
+exit 1
+SH
+  cat >"$dir/env.test.sh" <<'SH'
+#!/usr/bin/env bash
+echo "tool said: token fm-cause-test-key-7Q"
+echo "not ok - jq: command not found"
+exit 1
+SH
+  cat >"$dir/pass.test.sh" <<'SH'
+#!/usr/bin/env bash
+echo "ok - pass"
+SH
+  chmod +x "$dir"/*.test.sh
+  mkdir -p "$dir/home"
+}
+
+# A labelled run: the exit status is the run's own, the labels are advisory
+# markers in run order, a label under the 0.6 floor reads "unclear", and an
+# answer that cannot be read drops that one label. Every way the check cannot
+# work leaves the output exactly as a run without it.
+test_failure_cause_labels_are_advisory() {
+  local tmp rc out
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-cause.XXXXXX")
+  write_failure_cause_fixtures "$tmp"
+  run_cause() {  # <response-file or empty> <scripts...>
+    local response=$1
+    shift
+    set +e
+    env -u TYPESAFE_API_KEY FM_HOME="$tmp/home" FM_TEST_FAILURE_CAUSE_RESPONSE="$response" \
+      "$RUNNER" --jobs 1 "$@" >"$tmp/out" 2>"$tmp/err"
+    rc=$?
+    set -e
+    out=$(cat "$tmp/out")
+  }
+
+  printf '%s' '{"answers":{"f1__cause":{"choice":"code_bug","confidence":0.91},"f2__cause":{"choice":"environment","confidence":0.43}}}' >"$tmp/labels.json"
+  run_cause "$tmp/labels.json" "$tmp/code.test.sh" "$tmp/pass.test.sh" "$tmp/env.test.sh"
+  expect_code 1 "$rc" "labels must not change the failing run's exit status"
+  assert_contains "$out" "FM_TEST_FAILURE_CAUSE script=$tmp/code.test.sh cause=code-bug confidence=0.91" "confident label"
+  assert_contains "$out" "FM_TEST_FAILURE_CAUSE script=$tmp/env.test.sh cause=unclear confidence=0.43" "label under the floor reads unclear"
+  [ "$(grep -c '^FM_TEST_FAILURE_CAUSE ' "$tmp/out")" -eq 2 ] || fail "only failures are labelled: $out"
+
+  printf '%s' '{"answers":{"f1__cause":{"choice":"flaky","confidence":0.99},"f2__cause":{"choice":"environment","confidence":0.88}}}' >"$tmp/partial.json"
+  run_cause "$tmp/partial.json" "$tmp/code.test.sh" "$tmp/env.test.sh"
+  expect_code 1 "$rc" "a partly unreadable answer keeps the exit status"
+  assert_not_contains "$out" "script=$tmp/code.test.sh cause=" "an unreadable answer drops its label"
+  assert_contains "$out" "FM_TEST_FAILURE_CAUSE script=$tmp/env.test.sh cause=environment confidence=0.88" "the readable answer still labels"
+
+  printf 'not json' >"$tmp/bad.json"
+  run_cause "$tmp/bad.json" "$tmp/code.test.sh"
+  expect_code 1 "$rc" "a bad answer keeps the exit status"
+  assert_not_contains "$out" "FM_TEST_FAILURE_CAUSE" "a bad answer prints no label"
+  assert_not_contains "$(cat "$tmp/err")" "failure-cause" "a bad answer is silent"
+
+  run_cause "" "$tmp/code.test.sh"
+  expect_code 1 "$rc" "no key keeps the exit status"
+  assert_not_contains "$out" "FM_TEST_FAILURE_CAUSE" "no key prints no label"
+  assert_not_contains "$(cat "$tmp/err")" "failure-cause" "no key is silent"
+
+  run_cause "$tmp/labels.json" "$tmp/pass.test.sh"
+  expect_code 0 "$rc" "a green run stays green"
+  assert_not_contains "$out" "FM_TEST_FAILURE_CAUSE" "a green run asks nothing"
+  rm -rf "$tmp"
+  pass "failure-cause labels are advisory, floored, and silent when unavailable"
+}
+
+# The real network path against a local endpoint: the key comes from the
+# home's .env into the Authorization header only, never into output or the
+# request body; the request is one batch on the pinned model; and an endpoint
+# that never answers ends in silence inside the request bound.
+test_failure_cause_request_and_timeout() {
+  local tmp rc port server_pid mode started elapsed
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-cause-net.XXXXXX")
+  write_failure_cause_fixtures "$tmp"
+  printf 'OTHER=1\nexport TYPESAFE_API_KEY="fm-cause-test-key-7Q"\n' >"$tmp/home/.env"
+  cat >"$tmp/server.py" <<'PY'
+import http.server, json, sys, time
+mode, portfile, record = sys.argv[1], sys.argv[2], sys.argv[3]
+class Handler(http.server.BaseHTTPRequestHandler):
+    def do_POST(self):
+        body = self.rfile.read(int(self.headers["Content-Length"]))
+        with open(record, "w") as f:
+            json.dump({"auth": self.headers.get("Authorization"), "body": json.loads(body)}, f)
+        if mode == "hang":
+            time.sleep(30)
+            return
+        answer = {"answers": {"f1__cause": {"choice": "test_out_of_date", "confidence": 0.8},
+                              "f2__cause": {"choice": "environment", "confidence": 0.95}}}
+        data = json.dumps(answer).encode()
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+    def log_message(self, *args):
+        pass
+server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+with open(portfile + ".tmp", "w") as f:
+    f.write(str(server.server_address[1]))
+import os; os.rename(portfile + ".tmp", portfile)
+server.serve_forever()
+PY
+  for mode in answer hang; do
+    rm -f "$tmp/port" "$tmp/record.json"
+    python3 "$tmp/server.py" "$mode" "$tmp/port" "$tmp/record.json" &
+    server_pid=$!
+    for _ in $(seq 1 100); do [ -s "$tmp/port" ] && break; sleep 0.05; done
+    port=$(cat "$tmp/port" 2>/dev/null) || { kill "$server_pid"; fail "local endpoint did not start"; }
+    started=$(date +%s)
+    set +e
+    env -u TYPESAFE_API_KEY -u FM_TEST_FAILURE_CAUSE_RESPONSE FM_HOME="$tmp/home" \
+      FM_TEST_FAILURE_CAUSE_ENDPOINT="http://127.0.0.1:$port/v1/systemone" \
+      FM_TEST_FAILURE_CAUSE_TIMEOUT=1 \
+      "$RUNNER" --jobs 1 "$tmp/code.test.sh" "$tmp/env.test.sh" >"$tmp/out" 2>"$tmp/err"
+    rc=$?
+    set -e
+    elapsed=$(($(date +%s) - started))
+    kill "$server_pid" 2>/dev/null || true
+    wait "$server_pid" 2>/dev/null || true
+    expect_code 1 "$rc" "$mode: the failing run keeps its exit status"
+    python3 - "$tmp/record.json" "$tmp" <<'PY' || fail "$mode: request was not the expected batch"
+import json, sys
+record = json.load(open(sys.argv[1]))
+tmp = sys.argv[2]
+assert record["auth"] == "Bearer fm-cause-test-key-7Q", "key from the home .env, as a header"
+body = record["body"]
+assert body["model"] == "jev-1.13.0", body["model"]
+failures = body["state"]["failures"]
+assert [failures[t]["script"] for t in ("f1", "f2")] == [tmp + "/code.test.sh", tmp + "/env.test.sh"]
+assert sorted(body["questions"]) == ["f1__cause", "f2__cause"]
+assert body["questions"]["f1__cause"]["type"] == "choice"
+assert "jq: command not found" in failures["f2"]["output_tail"]
+assert "fm-cause-test-key-7Q" not in json.dumps(body), "the key never enters the request body"
+PY
+    assert_no_grep "fm-cause-test-key-7Q" "$tmp/err" "$mode: the key never reaches stderr"
+    if [ "$mode" = answer ]; then
+      assert_grep "FM_TEST_FAILURE_CAUSE script=$tmp/code.test.sh cause=test-out-of-date confidence=0.80" "$tmp/out" "answer: first label"
+      assert_grep "FM_TEST_FAILURE_CAUSE script=$tmp/env.test.sh cause=environment confidence=0.95" "$tmp/out" "answer: second label"
+    else
+      assert_no_grep "FM_TEST_FAILURE_CAUSE" "$tmp/out" "hang: a timeout prints no label"
+      assert_no_grep "failure-cause" "$tmp/err" "hang: a timeout is silent"
+      [ "$elapsed" -lt 20 ] || fail "hang: the request bound did not end the wait (${elapsed}s)"
+    fi
+  done
+  rm -rf "$tmp"
+  pass "failure-cause request carries the home key only as a header, and a hung endpoint ends silently"
+}
+
+# What leaves the machine, read from the engine's own --dry-run: the diff
+# against the merge base fits the window with every file represented, and a
+# captain-private path is excluded even when a fork tracks it.
+test_failure_cause_request_fits_and_excludes_private_paths() {
+  local tmp repo base
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-cause-diff.XXXXXX")
+  repo="$tmp/repo"
+  fm_git_init_commit "$repo"
+  base=$(git -C "$repo" rev-parse HEAD)
+  mkdir -p "$repo/bin" "$repo/tests" "$repo/data"
+  python3 -c 'import sys; open(sys.argv[1], "w").write("".join("line %d of a very large generated change\n" % i for i in range(6000)))' "$repo/bin/big.sh"
+  cat >"$repo/tests/small.test.sh" <<'SH'
+assert_equals "new name" "$got"
+SH
+  printf 'private captain note\n' >"$repo/data/private.md"
+  git -C "$repo" add bin/big.sh tests/small.test.sh
+  git -C "$repo" add -f data/private.md
+  git -C "$repo" -c user.name=t -c user.email=t@example.invalid commit -qm change
+  printf 'not ok - wrong name\n' >"$tmp/out.txt"
+  printf '%s\t%s\n' tests/small.test.sh "$tmp/out.txt" >"$tmp/failures.tsv"
+  env -u TYPESAFE_API_KEY FM_HOME="$tmp" python3 "$ROOT/bin/fm-test-failure-cause.py" \
+    --dry-run --root "$repo" --base "$base" "$tmp/failures.tsv" >"$tmp/request.json" \
+    || fail "dry run must print the request"
+  python3 - "$tmp/request.json" <<'PY' || fail "request does not fit or leaks a private path"
+import json, sys
+request = json.load(open(sys.argv[1]))
+state = request["state"]
+assert len(json.dumps(state)) <= 80000, len(json.dumps(state))
+diff = state["diff"]
+assert 'assert_equals "new name"' in diff, "the small test change survives trimming"
+assert "bin/big.sh" in diff and "[trimmed]" in diff, "the large change is trimmed, not dropped"
+assert "private captain note" not in diff and "data/private.md" not in diff
+assert state["failures"]["f1"]["output_tail"] == "not ok - wrong name\n"
+PY
+  rm -rf "$tmp"
+  pass "failure-cause request fits the window and excludes captain-private paths"
+}
+
+# The failures and their questions share one size budget with the diff: a run
+# past the old cap of ten labels every failure with a shorter tail each, the
+# whole request - state and every question - fits the window, and only a run
+# past what the budget can describe leaves failures unlabelled, each with a
+# visible marker rather than a silent gap. --dry-run prints the exact body.
+test_failure_cause_shares_the_size_budget() {
+  local tmp repo base i name scripts=() labelled over
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-cause-many.XXXXXX")
+  mkdir -p "$tmp/home"
+  cat >"$tmp/fixture" <<'SH'
+#!/usr/bin/env bash
+printf 'noise %.0s' $(seq 1 700)
+name=${0##*/}
+echo "not ok - failure ${name%.test.sh}"
+exit 1
+SH
+  chmod +x "$tmp/fixture"
+  for i in $(seq 1 101); do
+    name=$(printf '%s/f%03d.test.sh' "$tmp" "$i")
+    cp "$tmp/fixture" "$name"
+    scripts+=("$name")
+  done
+  python3 -c 'import json; print(json.dumps({"answers": {"f%d__cause" % i: {"choice": "code_bug", "confidence": 0.9} for i in range(1, 102)}}))' >"$tmp/labels.json"
+  set +e
+  env -u TYPESAFE_API_KEY FM_HOME="$tmp/home" FM_TEST_FAILURE_CAUSE_RESPONSE="$tmp/labels.json" \
+    "$RUNNER" --jobs 1 "${scripts[@]}" >"$tmp/out" 2>"$tmp/err"
+  expect_code 1 $? "labels must not change the failing run's exit status"
+  set -e
+  labelled=$(grep -c '^FM_TEST_FAILURE_CAUSE script=.* cause=code-bug confidence=0.90$' "$tmp/out" || true)
+  over=$(grep -c '^FM_TEST_FAILURE_CAUSE script=.* cause=not-labelled reason=over-size-limit$' "$tmp/out" || true)
+  [ "$labelled" -ge 14 ] || fail "more failures than the old cap of ten are labelled: $labelled"
+  [ "$over" -ge 1 ] || fail "a run past the budget reports its over-limit failures: $(grep FM_TEST_FAILURE_CAUSE "$tmp/out")"
+  [ $((labelled + over)) -eq 101 ] || fail "every failure gets a label or an over-limit marker: $labelled + $over"
+  for name in "${scripts[@]}"; do
+    [ "$(grep -c "^FM_TEST_FAILURE_CAUSE script=$name cause=" "$tmp/out")" -eq 1 ] || fail "one marker per failure: $name"
+  done
+
+  repo="$tmp/repo"
+  fm_git_init_commit "$repo"
+  base=$(git -C "$repo" rev-parse HEAD)
+  mkdir -p "$repo/bin"
+  python3 -c 'import sys; open(sys.argv[1], "w").write("".join("line %d of a very large generated change\n" % i for i in range(6000)))' "$repo/bin/big.sh"
+  git -C "$repo" add bin/big.sh
+  git -C "$repo" -c user.name=t -c user.email=t@example.invalid commit -qm change
+  for i in 14 101; do
+    : >"$tmp/failures.tsv"
+    for name in "${scripts[@]:0:$i}"; do
+      "$name" >"$name.out" 2>&1 || true
+      printf '%s\t%s\n' "$name" "$name.out" >>"$tmp/failures.tsv"
+    done
+    env -u TYPESAFE_API_KEY FM_HOME="$tmp/home" python3 "$ROOT/bin/fm-test-failure-cause.py" \
+      --dry-run --root "$repo" --base "$base" "$tmp/failures.tsv" >"$tmp/request.json" \
+      || fail "dry run must print the request"
+    python3 - "$tmp/request.json" "$i" <<'PY' || fail "$i failures: the request does not fit the shared budget"
+import json, sys
+raw = open(sys.argv[1]).read().rstrip("\n")
+count = int(sys.argv[2])
+request = json.loads(raw)
+assert json.dumps(request) == raw, "the dry run prints the exact body that is sent"
+assert len(raw) <= 80000, len(raw)
+failures = request["state"]["failures"]
+tags = ["f%d" % n for n in range(1, len(failures) + 1)]
+assert list(failures) == tags, list(failures)
+assert list(request["questions"]) == ["%s__cause" % tag for tag in tags]
+if count == 14:
+    assert len(failures) == 14, len(failures)
+else:
+    assert 14 <= len(failures) < count, len(failures)
+assert "bin/big.sh" in request["state"]["diff"] and "[trimmed]" in request["state"]["diff"]
+tails = {len(failure["output_tail"]) for failure in failures.values()}
+assert len(tails) == 1 and min(tails) >= 400, tails
+for tag, failure in failures.items():
+    assert failure["output_tail"].rstrip().endswith("not ok - failure f%03d" % int(tag[1:])), tag
+PY
+  done
+  rm -rf "$tmp"
+  pass "failure-cause request fits the window with every question and reports any failure over it"
 }
 
 test_gate_skip_accounting() {
@@ -1753,6 +2029,10 @@ test_family_proofs_run_in_separate_concurrent_phases
 test_empty_selection_emits_summary
 test_timing_markers_and_json
 test_aggregate_exit_behavior
+test_failure_cause_labels_are_advisory
+test_failure_cause_request_and_timeout
+test_failure_cause_request_fits_and_excludes_private_paths
+test_failure_cause_shares_the_size_budget
 test_gate_skip_accounting
 test_gate_skip_reason_is_recorded
 test_a_run_that_ran_records_no_skip_reason

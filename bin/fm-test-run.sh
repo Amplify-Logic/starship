@@ -94,6 +94,25 @@
 #   FM_TEST_SUMMARY_FAMILY family=<name> count=<n> duration_ms=<n> failed=<n>
 #   FM_TEST_SLOWEST rank=<k> script=<path> duration_ms=<n>
 #   FM_TEST_BUDGET max_wall_ms=<n> duration_ms=<n>   (only with --max-wall-ms)
+#   FM_TEST_FAILURE_CAUSE script=<path> cause=<cause> confidence=<0..1>
+#   FM_TEST_FAILURE_CAUSE script=<path> cause=not-labelled reason=over-size-limit
+#                   (only after failures, and only when a TypeSafe key is found)
+#
+# Failure cause (advisory):
+#   After a run with failures, one batched request to TypeSafe's Jev model
+#   (bin/fm-test-failure-cause.py owns the request, the pinned model and the
+#   0.6 floor) labels each failing script code-bug, test-out-of-date,
+#   environment, or unclear below the floor. It sends each failure's output
+#   tail and this repository's tracked branch diff against --base's merge base,
+#   trimmed so the whole request fits: the failures and their questions share
+#   one budget, so each tail shrinks as the count grows, and a failure past
+#   what the budget can describe gets the not-labelled marker instead. It
+#   never changes the exit status. It is
+#   silent - no marker, no log line - with no TYPESAFE_API_KEY in the
+#   environment or in $FM_HOME/.env (FM_HOME defaults to this repository's
+#   root), without python3, on timeout (a 30s hard bound), or on an answer it
+#   cannot read.
+#   CI holds no key, so it runs only locally.
 #
 # Placement refusal:
 #   A task worker is assigned an isolated worktree, and that placement is
@@ -2399,14 +2418,16 @@ if [ "$JOBS" -gt 1 ]; then
   rm -f "$SCHEDULE_TMP"
 fi
 
-if [ "$PER_SCRIPT_TIMEOUT_SECS" -gt 0 ]; then
-  [ -r "$ROOT/bin/fm-timeout-lib.sh" ] || die "per-script timeout helper not found: bin/fm-timeout-lib.sh"
+if [ -r "$ROOT/bin/fm-timeout-lib.sh" ]; then
   # shellcheck source=bin/fm-timeout-lib.sh
   . "$ROOT/bin/fm-timeout-lib.sh"
+elif [ "$PER_SCRIPT_TIMEOUT_SECS" -gt 0 ]; then
+  die "per-script timeout helper not found: bin/fm-timeout-lib.sh"
 fi
 
 RUN_TMP=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run.XXXXXX")
 RECORDS="$RUN_TMP/records.tsv"
+FAILURES_TSV="$RUN_TMP/failures.tsv"
 FAMILIES_TSV="$RUN_TMP/families.tsv"
 : >"$RECORDS"
 declare -a WORKER_PIDS=()
@@ -2489,6 +2510,7 @@ record_script_result() {
     FAILED=$((FAILED + 1))
     fail_delta=1
     AGG_RC=1
+    printf '%s\t%s\n' "$script" "$out" >>"$FAILURES_TSV"
   fi
 
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
@@ -2731,6 +2753,29 @@ if [ -s "$RECORDS" ]; then
     rank=$((rank + 1))
   done
 fi
+
+# Advisory labels only (header "Failure cause"): every way this can fail
+# returns 0 and prints nothing, and nothing here touches AGG_RC.
+FAILURE_CAUSE_BOUND=30
+print_failure_causes() {
+  local engine="$ROOT/bin/fm-test-failure-cause.py" labels script cause detail
+  [ -s "$FAILURES_TSV" ] || return 0
+  [ -r "$engine" ] || return 0
+  command -v python3 >/dev/null 2>&1 || return 0
+  command -v fm_run_timed >/dev/null 2>&1 || return 0
+  labels=$(FM_HOME="${FM_HOME:-$ROOT}" fm_run_timed "$FAILURE_CAUSE_BOUND" \
+    python3 "$engine" --root "$ROOT" --base "$BASE_REF" "$FAILURES_TSV" 2>/dev/null) || return 0
+  while IFS=$'\t' read -r script cause detail; do
+    [ -n "$script" ] && [ -n "$detail" ] || continue
+    if [ "$cause" = not-labelled ]; then
+      printf 'FM_TEST_FAILURE_CAUSE script=%s cause=not-labelled reason=%s\n' "$script" "$detail"
+    else
+      printf 'FM_TEST_FAILURE_CAUSE script=%s cause=%s confidence=%s\n' \
+        "$script" "$cause" "$detail"
+    fi
+  done <<<"$labels"
+}
+print_failure_causes || true
 
 if [ -n "$JSON_PATH" ]; then
   mkdir -p "$(dirname "$JSON_PATH")"

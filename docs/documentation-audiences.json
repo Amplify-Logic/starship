@@ -673,6 +673,10 @@
       "audience": "maintainer-verification"
     },
     {
+      "path": "docs/verification/test-failure-cause.md",
+      "audience": "maintainer-verification"
+    },
+    {
       "path": "docs/verification/trace-context.md",
       "audience": "maintainer-verification"
     },
