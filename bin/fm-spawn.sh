@@ -381,6 +381,9 @@
 #     __DEVINCONFIG__ private per-task Devin config with lifecycle hooks
 #     __AGYBIN__    resolved, agy-verified executable for an agy launch
 # Verified per-harness turn-end hooks are installed automatically where enabled; some live outside the worktree.
+# A claude crewmate or scout also gets the worker command guard's PreToolUse
+# Bash hook in its settings.local.json when this home's config/command-guard
+# arms it for the project (bin/fm-command-guard.py owns the gate and the hook).
 # Kimi uses one surgically installed Firstmate region in $HOME/.kimi-code/config.toml,
 # a firstmate-owned global hook and registry, and a gitignored per-task pointer.
 # Kimi 2.0.0 also gates a fresh worktree on an interactive folder-trust dialog.
@@ -5099,8 +5102,22 @@ if [ "$KIND" != secondmate ]; then
     j_stop=$(json_escape "touch $(shell_quote "$TURNEND"); $busy_cmd_prefix idle $busy_suffix --event stop 2>/dev/null || true")
     j_stopfail=$(json_escape "$busy_cmd_prefix idle $busy_suffix --event stop-failure 2>/dev/null || true")
     j_sessionend=$(json_escape "$busy_cmd_prefix idle $busy_suffix --event session-end 2>/dev/null || true")
+    # The opt-in worker command guard (bin/fm-command-guard.py): a PreToolUse
+    # hook on Bash, written only for a worker whose home armed it and whose
+    # project the gate does not exclude. The hook re-reads the same gate on
+    # every command, so switching it off needs no relaunch.
+    guard_hook=
+    guard_project=$(basename "$PROJ_ABS")
+    if [ -e "$CONFIG/command-guard" ] || [ -L "$CONFIG/command-guard" ]; then
+      if ! command -v python3 >/dev/null 2>&1; then
+        echo "warning: config/command-guard is present but python3 is not installed; $ID runs without the command guard" >&2
+      elif python3 "$FM_ROOT/bin/fm-command-guard.py" armed --config "$CONFIG" --project "$guard_project"; then
+        j_guard=$(json_escape "python3 $(shell_quote "$FM_ROOT/bin/fm-command-guard.py") hook --config $(shell_quote "$(cd "$CONFIG" && pwd -P)") --state $(shell_quote "$STATE_REAL") --home $(shell_quote "$FM_HOME") --task $(shell_quote "$ID") --project $(shell_quote "$guard_project")")
+        guard_hook=",\"PreToolUse\":[{\"matcher\":\"Bash\",\"hooks\":[{\"type\":\"command\",\"command\":\"$j_guard\",\"timeout\":15}]}]"
+      fi
+    fi
     cat >"$WT/.claude/settings.local.json" <<EOF
-{"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"$j_submit"}]}],"Stop":[{"hooks":[{"type":"command","command":"$j_stop"}]}],"StopFailure":[{"hooks":[{"type":"command","command":"$j_stopfail"}]}],"SessionEnd":[{"hooks":[{"type":"command","command":"$j_sessionend"}]}]}}
+{"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"$j_submit"}]}],"Stop":[{"hooks":[{"type":"command","command":"$j_stop"}]}],"StopFailure":[{"hooks":[{"type":"command","command":"$j_stopfail"}]}],"SessionEnd":[{"hooks":[{"type":"command","command":"$j_sessionend"}]}]$guard_hook}}
 EOF
     exclude_path '.claude/settings.local.json'
     ;;

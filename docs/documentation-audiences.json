@@ -621,6 +621,10 @@
       "audience": "maintainer-verification"
     },
     {
+      "path": "docs/verification/command-guard.md",
+      "audience": "maintainer-verification"
+    },
+    {
       "path": "docs/verification/devin.md",
       "audience": "maintainer-verification"
     },

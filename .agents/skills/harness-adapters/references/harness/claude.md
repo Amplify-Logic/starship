@@ -66,7 +66,7 @@ When `config/claude-concise-prompt` is `on`, the same argument also carries the 
 ## Primary integration
 
 [`../../../../../docs/verification/supervision.md`](../../../../../docs/verification/supervision.md#turn-end-guard) records the current primary and Stop auto-arm live evidence.
-This differs from the worker hook, which only touches a task marker through `.claude/settings.local.json`.
+This differs from the worker hook, which only touches a task marker through `.claude/settings.local.json`; a home that opts in to the [worker command guard](../../../../../docs/configuration.md#worker-command-guard-configcommand-guard) also adds a `PreToolUse` Bash hook there.
 
 Primary `.claude/settings.json` registers `../../../bin/fm-turnend-guard.sh --claude` and `../../../bin/fm-claude-stop-autoarm.sh` with `asyncRewake: true` and `timeout: 28800`.
 Guard exit 2 plus stderr forces continuation.

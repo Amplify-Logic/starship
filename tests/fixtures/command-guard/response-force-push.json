@@ -1,0 +1,23 @@
+{
+  "answers": {
+    "destructive_intent": {
+      "noul": 0.83,
+      "type": "noul"
+    },
+    "effect": {
+      "choice": "irreversible",
+      "confidence": 0.91,
+      "probabilities": {
+        "irreversible": 0.94,
+        "read_only": 0.0,
+        "reversible": 0.06
+      },
+      "type": "choice"
+    },
+    "injection": {
+      "noul": 0.02,
+      "type": "noul"
+    }
+  },
+  "model": "jev-1.13.0"
+}
