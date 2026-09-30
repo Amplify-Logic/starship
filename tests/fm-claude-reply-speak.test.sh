@@ -40,10 +40,13 @@ install_hook_scripts() {
 # exits 2, reports the register's reason on stderr, and is not kept; an accepted
 # line is recorded and kept as the next numbered entry in state/speak-history/.
 # Like the installed register, it refuses an approval word even inside news.
+# --dry-run prints an accepted line without recording or keeping it.
 install_speak_stub() {
   local dir=$1
   cat > "$dir/speak-stub" <<'EOF'
 #!/usr/bin/env bash
+dry_run=0
+[ "${1-}" != --dry-run ] || { dry_run=1; shift; }
 text=$*
 case "$text" in
   *"Shall I"*|*approved*)
@@ -55,6 +58,7 @@ case "$text" in
     printf 'refused: nothing speakable left after removing URLs, paths, and ids\n' >&2
     exit 2 ;;
 esac
+[ "$dry_run" = 0 ] || { printf '%s\n' "$text"; exit 0; }
 printf '%s\n' "$text" >> "$FM_HOME/spoken.log"
 n=$(ls "$FM_HOME/state/speak-history" 2>/dev/null | sort -n | tail -n 1)
 n=$(( ${n:-0} + 1 ))
@@ -147,9 +151,24 @@ test_non_decision_refusal_never_claims_a_decision() {
     "a refusal that is not a decision must not say a decision is waiting"
   rm -f "$dir/spoken.log"
   run_hook "$dir" "Unspeakable first sentence. The fix merged."
+  assert_equals "The fix merged. More on screen." "$(spoken "$dir")" \
+    "a refused first sentence must be dropped and the rest spoken with a plain pointer"
+  rm -f "$dir/spoken.log"
+  run_hook "$dir" "Unspeakable first sentence. Unspeakable second sentence."
   assert_equals "Captain, my reply is on screen." "$(spoken "$dir")" \
-    "a refused first sentence must fall back to the plain on-screen notice"
+    "a lead refused sentence by sentence must fall back to the plain on-screen notice"
   pass "a refusal that is not a decision speaks the plain on-screen notice"
+}
+
+test_refused_sentence_alone_is_dropped() {
+  local dir
+  dir=$(make_primary_dir "$TMP_ROOT/refused-sentence")
+  run_hook "$dir" "Captain, the release build finished. All twelve checks passed on both platforms. The changelog is updated. Alex approved the draft notes. The tag goes out tonight."
+  assert_grep 'The changelog is updated. Alex approved the draft notes.' "$dir/refused.log" \
+    "the whole lead must reach the register first"
+  assert_equals "Captain, the release build finished. All twelve checks passed on both platforms. The changelog is updated. The tag goes out tonight. More on screen." \
+    "$(spoken "$dir")" "only the refused fourth sentence may be dropped, with a pointer to it"
+  pass "a refused sentence alone is dropped and the rest of the lead is spoken"
 }
 
 test_decision_refusal_of_news_never_claims_a_decision() {
@@ -277,20 +296,20 @@ test_long_reply_is_capped() {
 test_lead_written_to_the_rule_is_kept_whole() {
   local dir lead
   dir=$(make_primary_dir "$TMP_ROOT/whole-lead")
-  lead="Captain, the filming-rights check is done and nobody was contacted. The app already has footage from three places with no written OK, so you and Alex need to decide what to do; the options are on screen."
+  lead="Captain, the filming-rights check is done and nobody was contacted. The app already has footage from three places with no written OK. The oldest clip has been live for a year. Two of the places are partners we still work with. The third has closed. So you and Alex need to decide what to do; the options are on screen."
   run_hook "$dir" "$(printf '%s\n' "$lead" "" "**A.** Ask for permission" "**B.** Remove the footage")"
   assert_equals "$lead" "$(spoken "$dir")" \
-    "a lead of about 35 words must be spoken whole, with no pointer when it already says on screen"
-  pass "a lead written to the about-35-word rule is spoken whole"
+    "a six-sentence lead of about 60 words must be spoken whole, with no pointer when it already says on screen"
+  pass "a lead sized to what matters is spoken whole"
 }
 
-test_lead_keeps_at_most_three_sentences() {
+test_lead_keeps_at_most_six_sentences() {
   local dir
-  dir=$(make_primary_dir "$TMP_ROOT/three")
-  run_hook "$dir" "Captain, one is done. Two is done. Three is done. Four is done."
-  assert_equals "Captain, one is done. Two is done. Three is done. More on screen." "$(spoken "$dir")" \
-    "the lead must stop at three sentences and point at the rest"
-  pass "the lead stops at three sentences"
+  dir=$(make_primary_dir "$TMP_ROOT/six")
+  run_hook "$dir" "Captain, one is done. Two is done. Three is done. Four is done. Five is done. Six is done. Seven is done."
+  assert_equals "Captain, one is done. Two is done. Three is done. Four is done. Five is done. Six is done. More on screen." "$(spoken "$dir")" \
+    "the lead must stop at six sentences and point at the rest"
+  pass "the lead stops at six sentences"
 }
 
 test_numbers_do_not_split_sentences() {
@@ -375,22 +394,22 @@ test_pointer_names_what_waits_on_screen() {
 test_pointer_fits_the_spoken_budget() {
   local dir first second out
   dir=$(make_primary_dir "$TMP_ROOT/budget")
-  first="Captain, $(printf 'alpha %.0s' $(seq 1 18))done."
-  second="Then $(printf 'beta %.0s' $(seq 1 13))end."
+  first="Captain, $(printf 'alpha %.0s' $(seq 1 34))done."
+  second="Then $(printf 'beta %.0s' $(seq 1 34))end."
   run_hook "$dir" "$(printf '%s\n' "$first $second" "" "**A.** One" "**B.** Two")"
   assert_equals "$first $second The choice is on screen." "$(spoken "$dir")" \
-    "a 35-word lead and the choice pointer fit the budget whole"
+    "a 72-word lead and the choice pointer fit the budget whole"
   rm -f "$dir/spoken.log"
   run_hook "$dir" "$(printf '%s\n' "$first $second" "" "Should it ship tonight?")"
   out=$(spoken "$dir")
   assert_equals "$first There's a question for you on screen." "$out" \
-    "a 35-word lead must be cut back so the question pointer is still spoken"
+    "a 72-word lead must be cut back so the question pointer is still spoken"
   rm -f "$dir/spoken.log"
   run_hook "$dir" "$(printf '%s\n' "$first $second gamma gamma done." "" "**A.** One" "**B.** Two")"
   out=$(spoken "$dir")
   assert_equals "$first The choice is on screen." "$out" \
-    "a 38-word lead must be cut back so the choice pointer is still spoken"
-  [ "$(printf '%s' "$out" | wc -w | tr -d ' ')" -le 41 ] || fail "the spoken line must fit 41 words"
+    "a 75-word lead must be cut back so the choice pointer is still spoken"
+  [ "$(printf '%s' "$out" | wc -w | tr -d ' ')" -le 78 ] || fail "the spoken line must fit 78 words"
   pass "the lead leaves room for its pointer inside the spoken budget"
 }
 
@@ -607,6 +626,7 @@ test_decision_reply_falls_back_to_first_sentence
 test_decision_only_reply_speaks_notice
 test_non_decision_refusal_never_claims_a_decision
 test_decision_refusal_of_news_never_claims_a_decision
+test_refused_sentence_alone_is_dropped
 test_markdown_reply_speaks_first_paragraph
 test_list_paragraph_is_joined
 test_empty_and_tool_only_turns_are_silent
@@ -617,7 +637,7 @@ test_shipshape_opener_is_dropped_one_line
 test_shipshape_opener_is_dropped_two_paragraphs
 test_long_reply_is_capped
 test_lead_written_to_the_rule_is_kept_whole
-test_lead_keeps_at_most_three_sentences
+test_lead_keeps_at_most_six_sentences
 test_numbers_do_not_split_sentences
 test_trailing_list_lead_in_is_dropped
 test_pointer_names_what_waits_on_screen

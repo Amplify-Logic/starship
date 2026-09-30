@@ -3,7 +3,8 @@
 # Same safety floor as the glasses announce defaults (strip URLs/paths/ids,
 # refuse decision-seeking lines). The spoken time budget is raised from ~8s,
 # which is tuned for the glasses and cuts an ordinary desk outcome mid-message,
-# to 16s and four sentences: about 41 words at 2.6 words a second.
+# to 30s and seven sentences: about 78 words at 2.6 words a second, so a lead
+# sized to what matters (AGENTS.md section 9, roughly 75 words) is heard whole.
 # bin/fm-claude-reply-speak.sh cuts its spoken lead back to leave room for its
 # one short pointer to the screen, so keep its SPOKEN_WORDS in step with this.
 #
@@ -18,8 +19,8 @@
 # private path if you want a different budget.
 
 [register]
-max_spoken_seconds = 16
-max_sentences = 4
+max_spoken_seconds = 30
+max_sentences = 7
 words_per_second = 2.6
 on_request = "drop"
 decision_pointer = "The choice is on screen."

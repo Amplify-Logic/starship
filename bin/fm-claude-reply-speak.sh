@@ -20,8 +20,9 @@
 #   - a closing sentence ending in ":" introduces a list on screen, so it is
 #     dropped when another sentence precedes it and ended with "." when it is
 #     the only one;
-#   - at most 3 sentences and 38 words (about 35, with slack so a lead written
-#     to AGENTS.md section 9 is never cut), cut back to the last whole sentence;
+#   - at most 6 sentences and 75 words (AGENTS.md section 9's roughly 75-word
+#     lead, leaving the register's seventh sentence for the pointer), cut back
+#     to the last whole sentence;
 #     a first sentence longer than that is kept whole for the register to cut;
 #   - ended with "." when it does not already end in . ! or ?;
 #   - followed by one voice-only pointer, first match wins, unless the lead
@@ -34,14 +35,17 @@
 #     rest holds more than a one-line sign-off of at most 15 words (another
 #     paragraph or line, a list, a table, code, or a link) or the cuts above
 #     dropped anything. The desk budget (docs/examples/desk-speak-register.toml)
-#     is 41 words, and the lead is cut back further so that it and the pointer
+#     is 78 words, and the lead is cut back further so that it and the pointer
 #     fit, because past the budget the register drops the pointer sentence.
-# When the register refuses the line (bin/fm-speak.sh exit 2), the hook speaks
-# only the lead's first sentence plus the pointer, or plus "More on screen." when
-# there was none; when the refusal names a decision, as below, "The choice is on
-# screen." replaces a missing pointer or "More on screen.". When that is refused
-# too, or the lead was a single sentence, it speaks "Captain, a decision is
-# waiting for you on screen." or "Captain, my reply is on screen." A decision is named
+# When the register refuses the line (bin/fm-speak.sh exit 2), the hook asks the
+# register (bin/fm-speak.sh --dry-run) about each lead sentence on its own and
+# speaks every sentence it accepts, in order, plus the pointer, or plus "More on
+# screen." when there was none; when the refusal names a decision, as below,
+# "The choice is on screen." replaces a missing pointer or "More on screen.".
+# When that is refused too, it speaks only the lead's first sentence with the
+# same pointer, and when that is refused, or the lead was a single sentence, it
+# speaks "Captain, a decision is waiting for you on screen." or "Captain, my
+# reply is on screen." A decision is named
 # only when a refusal reason said the line asked the captain to decide AND the
 # reply itself agrees: the rest offers a choice, a question, or steps, or the
 # lead asks a question. The reason is the register's own "refused: <reason>"
@@ -99,13 +103,13 @@ DECISION_NOTICE="Captain, a decision is waiting for you on screen."
 REPLY_NOTICE="Captain, my reply is on screen."
 
 ROUTINE_LINE="Captain, shipshape."
-# AGENTS.md section 9 asks for a lead of about 35 words; the cap leaves a few
-# words of slack so a lead written to that rule is never cut mid-thought.
-MAX_WORDS=38
-MAX_SENTENCES=3
-# Words the desk register speaks: 16s at 2.6 words a second
+# AGENTS.md section 9 sizes the lead to what matters, roughly 75 words at most;
+# one sentence short of the register's seven leaves room for the pointer.
+MAX_WORDS=75
+MAX_SENTENCES=6
+# Words the desk register speaks: 30s at 2.6 words a second
 # (docs/examples/desk-speak-register.toml).
-SPOKEN_WORDS=41
+SPOKEN_WORDS=78
 
 SETTLE_MS=${FM_REPLY_SPEAK_SETTLE_MS:-2000}
 case "$SETTLE_MS" in ''|*[!0-9]*) SETTLE_MS=2000 ;; esac
@@ -237,10 +241,10 @@ PARA=
 case "$SCAN" in *$'\n'*) PARA=${SCAN#*$'\n'} ;; esac
 PARA=$(printf '%s\n' "$PARA" | sed -E 's/\[([^]]*)\]\([^)]*\)/\1/g; s/(\*\*|__|`)//g')
 
-# Shape the lead and print five lines: the lead, its first sentence, the
-# voice-only pointer (empty when none applies), 1 when the first sentence already
-# points at the screen, and 1 when the reply itself holds a choice, a question,
-# or steps for the captain.
+# Shape the lead and print the lead, the voice-only pointer (empty when none
+# applies), and 1 when the reply itself holds a choice, a question, or steps for
+# the captain, then one line per lead sentence: 1 when it already points at the
+# screen, else 0, a space, and the sentence.
 SHAPED=$(printf '%s\n' "$PARA" | awk -v max_words="$MAX_WORDS" -v max_sentences="$MAX_SENTENCES" \
   -v budget="$SPOKEN_WORDS" -v cue="$CUE" '
   function closed(word) { return word ~ /[.!?]["\047)\]]*$/ }
@@ -295,20 +299,20 @@ SHAPED=$(printf '%s\n' "$PARA" | awk -v max_words="$MAX_WORDS" -v max_sentences=
       # Leave room in the register budget for the pointer, so it is always heard.
       if (budget - words(pointer) < max_words) kept = keep(budget - words(pointer))
     }
-    lead = join(1, end_at[kept])
-    first = join(1, end_at[1])
-    print lead
-    print first
+    print join(1, end_at[kept])
     print pointer
-    print (onscreen(first) ? 1 : 0)
     print ((cue ~ /^(choice|question|steps)$/ || asks) ? 1 : 0)
+    for (s = 1; s <= kept; s++) {
+      sentence = join(s == 1 ? 1 : end_at[s - 1] + 1, end_at[s])
+      print (onscreen(sentence) ? 1 : 0) " " sentence
+    }
   }
 ')
 LEAD=$(printf '%s\n' "$SHAPED" | sed -n 1p)
-FIRST=$(printf '%s\n' "$SHAPED" | sed -n 2p)
-POINTER=$(printf '%s\n' "$SHAPED" | sed -n 3p)
-FIRST_POINTS=$(printf '%s\n' "$SHAPED" | sed -n 4p)
-ASKS_CAPTAIN=$(printf '%s\n' "$SHAPED" | sed -n 5p)
+POINTER=$(printf '%s\n' "$SHAPED" | sed -n 2p)
+ASKS_CAPTAIN=$(printf '%s\n' "$SHAPED" | sed -n 3p)
+SENTENCES=$(printf '%s\n' "$SHAPED" | sed -n '4,$p')
+FIRST_SENTENCE=$(printf '%s\n' "$SENTENCES" | sed -n 1p)
 case "$LEAD" in
   *[![:space:]]*) ;;
   *) exit 0 ;;
@@ -339,19 +343,46 @@ speak_line() {  # <line>; returns bin/fm-speak.sh's exit status
   fi
   return "$rc"
 }
+# The lead's sentence lines the register accepts on their own, in order.
+accepted_sentences() {
+  local entry
+  while IFS= read -r entry; do
+    "$SPEAK" --dry-run "${entry#? }" >/dev/null 2>&1 </dev/null && printf '%s\n' "$entry"
+  done <<EOF
+$SENTENCES
+EOF
+}
+# Speaks some of the lead's sentence lines plus a pointer to what the voice left
+# out; returns bin/fm-speak.sh's exit status.
+speak_sentences() {  # <sentence lines>
+  local entry text='' points=0 pointer=$POINTER
+  while IFS= read -r entry; do
+    text=${text:+$text }${entry#? }
+    [ "${entry%% *}" = 0 ] || points=1
+  done <<EOF
+$1
+EOF
+  case "$REFUSED_DECISION:$pointer" in
+    1:|"1:More on screen.") pointer="The choice is on screen." ;;
+    0:) pointer="More on screen." ;;
+  esac
+  [ "$points" != 1 ] || pointer=
+  speak_line "$text${pointer:+ $pointer}"
+}
 
 rc=0
 speak_line "$LINE" || rc=$?
-if [ "$rc" -eq 2 ] && [ "$FIRST" != "$LEAD" ] && still_latest; then
-  # Only the first sentence, plus a pointer to what the voice left out.
-  FALLBACK_POINTER=$POINTER
-  case "$REFUSED_DECISION:$FALLBACK_POINTER" in
-    1:|"1:More on screen.") FALLBACK_POINTER="The choice is on screen." ;;
-    0:) FALLBACK_POINTER="More on screen." ;;
-  esac
-  [ "$FIRST_POINTS" != 1 ] || FALLBACK_POINTER=
-  rc=0
-  speak_line "$FIRST${FALLBACK_POINTER:+ $FALLBACK_POINTER}" || rc=$?
+if [ "$rc" -eq 2 ] && [ "$SENTENCES" != "$FIRST_SENTENCE" ] && still_latest; then
+  # Only the sentences the register refuses on their own are dropped.
+  ACCEPTED=$(accepted_sentences)
+  if [ -n "$ACCEPTED" ] && [ "$ACCEPTED" != "$SENTENCES" ] && still_latest; then
+    rc=0
+    speak_sentences "$ACCEPTED" || rc=$?
+  fi
+  if [ "$rc" -eq 2 ] && [ "$ACCEPTED" != "$FIRST_SENTENCE" ] && still_latest; then
+    rc=0
+    speak_sentences "$FIRST_SENTENCE" || rc=$?
+  fi
 fi
 if [ "$rc" -eq 2 ] && still_latest; then
   if [ "$REFUSED_DECISION" -eq 1 ]; then

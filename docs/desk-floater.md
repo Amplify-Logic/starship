@@ -236,7 +236,7 @@ So `bin/fm-speak.sh` points that owner at
 [`docs/examples/desk-speak-register.toml`](examples/desk-speak-register.toml)
 (via `GLASSES_ANNOUNCE_CONFIG`, unless already set) for every desk line.
 That example keeps the same URL/path/id and decision refusals but sets the
-spoken budget to **16 seconds** and four sentences (about 41 words at 2.6 wps).
+spoken budget to **30 seconds** and seven sentences (about 78 words at 2.6 wps).
 The budget belongs to the desk rather than to the speaker, so it is the same
 whichever speaker plays the line, macOS `say` or Deepgram Aura.
 Two lines in one turn play one after another rather than overlapping.
