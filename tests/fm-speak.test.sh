@@ -368,6 +368,63 @@ test_dry_run_never_reaches_the_speaker() {
   pass "fm-speak: a dry run prints the line and makes no sound"
 }
 
+# With no FM_SPEAK_SHAPER, the register owner is the starship-voice clone's
+# announce when it is there and the retiring glasses-voice clone's otherwise.
+# Each project fake tags the line it shapes with its own project name.
+install_project_shaper() {  # <home> <project>
+  mkdir -p "$1/projects/$2/bin"
+  printf '#!/usr/bin/env bash\nshift\nprintf "%s: %%s\\n" "$*"\n' "$2" \
+    > "$1/projects/$2/bin/announce"
+  chmod +x "$1/projects/$2/bin/announce"
+}
+
+speak_default_shaper() {  # <home> <args...>
+  local home=$1
+  shift
+  env -u FM_SPEAK_SHAPER FM_HOME="$home" FM_SPEAK_SAY="$home/speaker" "$SPEAK" "$@"
+}
+
+test_the_default_register_owner_prefers_starship_voice() {
+  local home out code
+  home=$(new_home default-starship "enabled = true")
+  install_speaker "$home" >/dev/null
+  install_project_shaper "$home" glasses-voice
+  install_project_shaper "$home" starship-voice
+
+  out=$(speak_default_shaper "$home" --dry-run "The fix is green.") && code=0 || code=$?
+  expect_code 0 "$code" "the starship-voice owner shapes the line"
+  assert_contains "$out" "starship-voice: The fix is green." "the starship-voice clone wins when both are present"
+  assert_not_contains "$out" "glasses-voice:" "the retiring clone must not shape the line"
+  pass "fm-speak: the default register owner is the starship-voice clone when it exists"
+}
+
+test_the_default_register_owner_falls_back_to_glasses_voice() {
+  local home out code
+  home=$(new_home default-glasses "enabled = true")
+  install_speaker "$home" >/dev/null
+  install_project_shaper "$home" glasses-voice
+
+  out=$(speak_default_shaper "$home" --dry-run "The fix is green.") && code=0 || code=$?
+  expect_code 0 "$code" "the glasses-voice owner shapes the line"
+  assert_contains "$out" "glasses-voice: The fix is green." "the retiring clone is the fallback"
+  pass "fm-speak: the default register owner falls back to the glasses-voice clone"
+}
+
+test_an_explicit_register_owner_wins_over_both_clones() {
+  local home out code
+  home=$(new_home override-shaper "enabled = true")
+  install_shaper "$home" >/dev/null
+  install_speaker "$home" >/dev/null
+  install_project_shaper "$home" glasses-voice
+  install_project_shaper "$home" starship-voice
+
+  out=$(speak "$home" --dry-run "The fix is green.") && code=0 || code=$?
+  expect_code 0 "$code" "the named owner shapes the line"
+  assert_contains "$out" "The fix is green." "the named owner's line is printed"
+  assert_not_contains "$out" "-voice:" "neither project clone may shape the line"
+  pass "fm-speak: FM_SPEAK_SHAPER still wins over both project clones"
+}
+
 # The turn-blocking property. A caller reading this through a command
 # substitution must not be held open until the audio finishes.
 test_the_caller_is_never_held_open_by_audio_still_playing() {
@@ -1399,6 +1456,9 @@ test_a_request_for_a_spoken_yes_is_never_spoken
 test_a_line_that_is_only_a_link_is_not_spoken
 test_the_speaker_receives_the_stripped_line_not_the_raw_one
 test_dry_run_never_reaches_the_speaker
+test_the_default_register_owner_prefers_starship_voice
+test_the_default_register_owner_falls_back_to_glasses_voice
+test_an_explicit_register_owner_wins_over_both_clones
 test_the_caller_is_never_held_open_by_audio_still_playing
 test_a_runaway_speaker_is_killed_at_the_bound
 test_the_speaker_bound_does_not_bound_the_register_call

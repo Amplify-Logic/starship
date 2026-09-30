@@ -175,7 +175,9 @@
 #
 # Environment overrides, for tests and unusual layouts:
 #   FM_SPEAK_SHAPER    register owner exposing the `--dry-run <text>` contract
-#                      (default: $FM_HOME/projects/glasses-voice/bin/announce)
+#                      (default: $FM_HOME/projects/starship-voice/bin/announce
+#                      when it exists, else the retiring
+#                      $FM_HOME/projects/glasses-voice/bin/announce)
 #   FM_SPEAK_SAY       speech binary (default: /usr/bin/say)
 #   FM_SPEAK_DEEPGRAM_TTS
 #                      Deepgram TTS helper (default: $ROOT/bin/fm-deepgram-tts.sh)
@@ -230,7 +232,15 @@ STOP_GEN_AT_START=0
 DEFAULT_SHAPER_TIMEOUT=15
 DEFAULT_SPEAKER_TIMEOUT=60
 
-SHAPER="${FM_SPEAK_SHAPER:-$FM_HOME/projects/glasses-voice/bin/announce}"
+# The voice project moved from projects/glasses-voice to projects/starship-voice;
+# the old clone stays a fallback while homes retire it.
+if [ -n "${FM_SPEAK_SHAPER:-}" ]; then
+  SHAPER=$FM_SPEAK_SHAPER
+elif [ -e "$FM_HOME/projects/starship-voice/bin/announce" ]; then
+  SHAPER="$FM_HOME/projects/starship-voice/bin/announce"
+else
+  SHAPER="$FM_HOME/projects/glasses-voice/bin/announce"
+fi
 SAY_BIN="${FM_SPEAK_SAY:-/usr/bin/say}"
 DEEPGRAM_TTS="${FM_SPEAK_DEEPGRAM_TTS:-$ROOT/bin/fm-deepgram-tts.sh}"
 AFPLAY_BIN="${FM_DEEPGRAM_AFPLAY:-/usr/bin/afplay}"

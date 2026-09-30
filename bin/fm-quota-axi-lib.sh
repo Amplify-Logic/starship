@@ -145,6 +145,9 @@ fm_quota_single_provider_table() {
     'muse meta'
 }
 
+# Reads the whole table before matching: an early return from a process
+# substitution leaves its writer to hit a closed pipe and print a stray
+# "write error" on stderr wherever SIGPIPE is ignored, as on CI runners.
 fm_quota_single_provider_for_harness() {
   local harness provider
   while read -r harness provider; do
@@ -152,7 +155,7 @@ fm_quota_single_provider_for_harness() {
       printf '%s\n' "$provider"
       return 0
     fi
-  done < <(fm_quota_single_provider_table)
+  done <<<"$(fm_quota_single_provider_table)"
   return 1
 }
 
