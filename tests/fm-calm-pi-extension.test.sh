@@ -4164,7 +4164,12 @@ export default function (pi: ExtensionAPI): void {
 }
 TS
   printf '%s\n' '{"tui.input.submit":"alt+s"}' >"$config/keybindings.json"
-  printf '%s\n' '{"hideThinkingBlock":true}' >"$config/settings.json"
+  # The restored transcript is taller than the pane, so the assertions below read
+  # the terminal's own scrollback. Pi 1.0 made the fullscreen TUI (an alternate
+  # screen with no scrollback) the default, so pin the regular mode this fixture
+  # reads; Pi 0.99 already accepts the setting and defaults to it. The
+  # viewport-only geometry and follow-up fixtures above keep Pi's default mode.
+  printf '%s\n' '{"hideThinkingBlock":true,"tuiMode":"regular"}' >"$config/settings.json"
   now=$(date -u +%Y-%m-%dT%H:%M:%S.000Z)
   cat >"$session_file" <<JSON
 {"type":"session","version":3,"id":"11111111-1111-4111-8111-111111111111","timestamp":"$now","cwd":"$project"}
