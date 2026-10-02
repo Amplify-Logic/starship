@@ -26,7 +26,7 @@ FM_ROOT="${FM_ROOT_OVERRIDE:-${FM_ROOT:-$FM_DEEPGRAM_DEFAULT_ROOT}}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 
 FM_DEEPGRAM_DEFAULT_TTS_MODEL="${FM_DEEPGRAM_DEFAULT_TTS_MODEL:-aura-2-thalia-en}"
-FM_DEEPGRAM_DEFAULT_STT_MODEL="${FM_DEEPGRAM_DEFAULT_STT_MODEL:-nova-2}"
+FM_DEEPGRAM_DEFAULT_STT_MODEL="${FM_DEEPGRAM_DEFAULT_STT_MODEL:-nova-3}"
 
 # Read one KEY=VALUE from a .env-style file without sourcing. Last assignment
 # wins. Tolerates optional export, surrounding whitespace, and one matching

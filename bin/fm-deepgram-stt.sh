@@ -6,9 +6,25 @@
 #   fm-deepgram-stt.sh --help
 #
 # Reads DEEPGRAM_API_KEY from the environment or the home's gitignored .env.
-# Never logs the key. Default model: nova-2 (override with DEEPGRAM_STT_MODEL).
+# Never logs the key. Default model: nova-3 (override with DEEPGRAM_STT_MODEL).
 #
 # Prints the transcript text on stdout (or the raw JSON with --json).
+#
+# Vocabulary: an optional private $FM_HOME/config/stt-vocabulary (gitignored;
+# absent changes nothing).
+#   - `#` comment lines and blank lines are ignored.
+#   - A plain line is a key term sent to Deepgram as a recognition hint:
+#     `keyterm=<term>` for nova-3 models, `keywords=<term>:2` for any
+#     other model. Terms are URL-encoded and capped at Deepgram's documented
+#     limits (100 keywords; keyterms stop at a conservative estimate of the
+#     500-token budget), so an oversized list is trimmed rather than refused.
+#   - A `heard => written` line rewrites the printed transcript after
+#     transcription: case-insensitive, whole words only, longest heard phrase
+#     first, each span rewritten at most once. Words in `heard` match across
+#     any run of whitespace. --json output stays Deepgram's raw response.
+#   - A line with `=>` but an empty side is ignored. A vocabulary that cannot
+#     be read or parsed is skipped with a note on stderr; it never fails the
+#     transcription.
 #
 # Exit:
 #   0  transcript printed (may be empty if Deepgram heard silence)
@@ -44,24 +60,117 @@ die() {
   exit 1
 }
 
-extract_transcript() {  # <json-file>
-  python3 - "$1" <<'PY'
-import json, sys
-path = sys.argv[1]
-data = json.load(open(path, encoding="utf-8"))
+# The vocabulary parser and transcript reader, run by python3 with argv: <mode> <vocab> ...
+# Modes: `query <model>` prints the extra query string (leading `&`, or
+# nothing); `transcript <json-file>` prints the rewritten transcript.
+vocab_py() {
+  cat <<'PY'
+import json, re, sys
+from urllib.parse import quote
+
+def note(msg):
+    print(f"fm-deepgram-stt: {msg}", file=sys.stderr)
+
+def load_vocab(path):
+    terms, rewrites = [], []
+    if not path:
+        return terms, rewrites
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            lines = fh.read().splitlines()
+    except FileNotFoundError:
+        return terms, rewrites
+    except OSError as exc:
+        note(f"vocabulary skipped: {exc.strerror or exc}")
+        return terms, rewrites
+    for raw in lines:
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=>" in line:
+            heard, _, written = line.partition("=>")
+            heard, written = " ".join(heard.split()), written.strip()
+            if heard and written:
+                rewrites.append((heard, written))
+            continue
+        term = " ".join(line.split())
+        if term and term not in terms:
+            terms.append(term)
+    return terms, rewrites
+
+def query(terms, model):
+    if not terms:
+        return ""
+    m = model.lower()
+    parts = []
+    if m.startswith("nova-3"):
+        # Deepgram caps keyterms at 500 tokens per request and errors beyond
+        # it; budget conservatively (about one token per three characters).
+        budget = 450
+        for term in terms:
+            cost = len(term) // 3 + 2
+            if cost > budget:
+                break
+            budget -= cost
+            parts.append("keyterm=" + quote(term, safe=""))
+    else:
+        for term in terms[:100]:
+            parts.append("keywords=" + quote(term + ":2", safe=""))
+    return "".join("&" + p for p in parts)
+
+def rewrite(text, rewrites):
+    if not text or not rewrites:
+        return text
+    table = {}
+    for heard, written in rewrites:
+        table.setdefault(heard.lower(), written)
+    ordered = sorted(table, key=len, reverse=True)
+    pattern = re.compile(
+        r"(?<!\w)(?:"
+        + "|".join(r"\s+".join(re.escape(w) for w in h.split()) for h in ordered)
+        + r")(?!\w)",
+        re.IGNORECASE,
+    )
+    return pattern.sub(
+        lambda m: table.get(" ".join(m.group(0).split()).lower(), m.group(0)), text
+    )
+
+mode, vocab = sys.argv[1], sys.argv[2]
+if mode == "query":
+    try:
+        terms, _ = load_vocab(vocab)
+        sys.stdout.write(query(terms, sys.argv[3]))
+    except Exception as exc:  # a bad vocabulary never breaks the request
+        note(f"vocabulary skipped: {exc}")
+    raise SystemExit(0)
+
+data = json.load(open(sys.argv[3], encoding="utf-8"))
 try:
     text = data["results"]["channels"][0]["alternatives"][0].get("transcript", "")
 except (KeyError, IndexError, TypeError) as exc:
-    print(f"fm-deepgram-stt: unexpected JSON shape: {exc}", file=sys.stderr)
+    note(f"unexpected JSON shape: {exc}")
     raise SystemExit(1)
+try:
+    _, rewrites = load_vocab(vocab)
+    text = rewrite(text, rewrites)
+except Exception as exc:
+    note(f"vocabulary rewrites skipped: {exc}")
 sys.stdout.write(text)
 if text and not text.endswith("\n"):
     sys.stdout.write("\n")
 PY
 }
 
+vocab_query() {  # <vocab> <model>
+  python3 -c "$(vocab_py)" query "$1" "$2" || true
+}
+
+extract_transcript() {  # <vocab> <json-file>
+  python3 -c "$(vocab_py)" transcript "$1" "$2"
+}
+
 main() {
-  local json_out=false audio='' key model http tmp ctype auth_cfg
+  local json_out=false audio='' key model http tmp ctype auth_cfg vocab extra
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --help|-h) usage; exit 0 ;;
@@ -78,6 +187,8 @@ main() {
   key=$(fm_deepgram_api_key)
   [ -n "$key" ] || refuse "DEEPGRAM_API_KEY is not set (env or gitignored .env)"
   model=$(fm_deepgram_stt_model)
+  vocab=$FM_HOME/config/stt-vocabulary
+  extra=$(vocab_query "$vocab" "$model")
 
   case "$audio" in
     *.wav|*.WAV) ctype=audio/wav ;;
@@ -99,7 +210,7 @@ main() {
     --config "$auth_cfg" \
     --header "Content-Type: ${ctype}" \
     --data-binary @"$audio" \
-    --url "https://api.deepgram.com/v1/listen?model=${model}&smart_format=true") || {
+    --url "https://api.deepgram.com/v1/listen?model=${model}&smart_format=true${extra}") || {
     rm -f "$tmp"
     die "curl failed talking to Deepgram"
   }
@@ -119,7 +230,7 @@ main() {
     exit 0
   fi
 
-  if ! extract_transcript "$tmp"; then
+  if ! extract_transcript "$vocab" "$tmp"; then
     rm -f "$tmp"
     die "could not parse Deepgram transcript JSON"
   fi

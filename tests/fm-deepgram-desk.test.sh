@@ -235,7 +235,7 @@ test_stt_prints_transcript_from_mocked_deepgram() {
   out=$(DEEPGRAM_API_KEY=super-secret-test-key FM_DEEPGRAM_CURL="$home/curl" \
     "$STT" "$home/clip.wav" 2>&1) || fail "stt failed: $out"
   [ "$out" = "merge the finances pull request" ] || fail "unexpected transcript: $out"
-  assert_contains "$(cat "$home/curl.log")" "model=nova-2" "default model reaches the request"
+  assert_contains "$(cat "$home/curl.log")" "model=nova-3" "default model reaches the request"
   assert_contains "$(cat "$home/curl.log")" "Content-Type: audio/wav" "wav content type"
   case "$(cat "$home/curl.log")" in
     *super-secret*) fail "key leaked into curl argv" ;;
@@ -256,6 +256,110 @@ test_stt_reports_http_failure() {
   [ "$status" -eq 1 ] || fail "expected exit 1 on HTTP failure, got $status: $out"
   assert_contains "$out" "HTTP 401" "HTTP status is reported"
   pass "fm-deepgram-stt: a Deepgram failure exits 1 with the status"
+}
+
+# Runs the helper against a mocked Deepgram that returns <transcript>, with the
+# home's vocabulary file holding the remaining arguments as lines (no file
+# when none are given). Prints the transcript; the request lands in curl.log.
+stt_with_vocab() {  # <home> <transcript> [vocab-lines...]
+  local home=$1 transcript=$2
+  shift 2
+  printf 'RIFF' > "$home/clip.wav"
+  rm -f "$home/curl.log" "$home/config/stt-vocabulary"
+  [ "$#" -eq 0 ] || printf '%s\n' "$@" > "$home/config/stt-vocabulary"
+  install_stt_curl "$home" 200 \
+    "{\"results\":{\"channels\":[{\"alternatives\":[{\"transcript\":\"$transcript\"}]}]}}"
+  DEEPGRAM_API_KEY=test-key-not-real FM_DEEPGRAM_CURL="$home/curl" \
+    FM_HOME="$home" "$STT" "$home/clip.wav"
+}
+
+test_stt_without_vocabulary_sends_no_hints() {
+  local home out
+  home=$(new_home stt-vocab-absent)
+  out=$(stt_with_vocab "$home" "call pat dot example one" 2>&1) || fail "stt failed: $out"
+  [ "$out" = "call pat dot example one" ] || fail "transcript changed without a vocabulary: $out"
+  case "$(cat "$home/curl.log")" in
+    *keyterm=*|*keywords=*) fail "hints sent without a vocabulary: $(cat "$home/curl.log")" ;;
+  esac
+  printf '%s\n' "$(cat "$home/curl.log")" | grep -q 'smart_format=true$' || fail "the request must be unchanged"
+  pass "fm-deepgram-stt: an absent vocabulary changes nothing"
+}
+
+test_stt_vocabulary_key_terms_reach_the_request_encoded() {
+  local home out log
+  home=$(new_home stt-vocab-terms)
+  out=$(stt_with_vocab "$home" "hello" \
+    '# names the transcriber keeps missing' '' '   ' \
+    'Quillan' 'Zorbit Labs' 'a&b=c') || fail "stt failed: $out"
+  log=$(cat "$home/curl.log")
+  assert_contains "$log" "keyterm=Quillan&keyterm=Zorbit%20Labs&keyterm=a%26b%3Dc" \
+    "nova-3 key terms are URL-encoded keyterm parameters"
+  case "$log" in
+    *names*|*keyterm=%23*|*keyterm=\&*) fail "a comment or blank line became a key term: $log" ;;
+  esac
+  out=$(DEEPGRAM_STT_MODEL=nova-2 stt_with_vocab "$home" "hello" 'Quillan' 'Zorbit Labs') \
+    || fail "stt failed: $out"
+  log=$(cat "$home/curl.log")
+  assert_contains "$log" "model=nova-2" "the model override still wins"
+  assert_contains "$log" "keywords=Quillan%3A2&keywords=Zorbit%20Labs%3A2" \
+    "nova-2 key terms are boosted keywords"
+  case "$log" in *keyterm=*) fail "nova-2 must not get keyterm: $log" ;; esac
+  pass "fm-deepgram-stt: key terms reach Deepgram encoded in the model's hint form"
+}
+
+test_stt_vocabulary_caps_key_terms() {
+  local home out log i terms=()
+  home=$(new_home stt-vocab-cap)
+  for i in $(seq 1 150); do terms+=("term$i"); done
+  out=$(DEEPGRAM_STT_MODEL=nova-2 stt_with_vocab "$home" "hello" "${terms[@]}") \
+    || fail "stt failed: $out"
+  log=$(cat "$home/curl.log")
+  [ "$(printf '%s' "$log" | grep -o 'keywords=' | wc -l | tr -d ' ')" = 100 ] \
+    || fail "nova-2 keywords must stop at 100"
+  out=$(stt_with_vocab "$home" "hello" "${terms[@]}") || fail "stt failed: $out"
+  log=$(cat "$home/curl.log")
+  i=$(printf '%s' "$log" | grep -o 'keyterm=' | wc -l | tr -d ' ')
+  [ "$i" -gt 0 ] && [ "$i" -lt 150 ] || fail "nova-3 keyterms must be trimmed to the token budget, got $i"
+  pass "fm-deepgram-stt: an oversized vocabulary is trimmed, not refused"
+}
+
+test_stt_vocabulary_rewrites_the_printed_transcript() {
+  local home out raw
+  home=$(new_home stt-vocab-rewrite)
+  out=$(stt_with_vocab "$home" \
+    "I'll make one on Pat dot example one and one at p dot example acme corp" \
+    'pat dot example one => pat.example1' \
+    'p dot example acme corp => p.example@acmecorp' \
+    'example => WRONG') || fail "stt failed: $out"
+  [ "$out" = "I'll make one on pat.example1 and one at p.example@acmecorp" ] \
+    || fail "the two addresses were not rewritten: $out"
+  raw=$(DEEPGRAM_API_KEY=test-key-not-real FM_DEEPGRAM_CURL="$home/curl" FM_HOME="$home" \
+    "$STT" --json "$home/clip.wav") || fail "stt --json failed: $raw"
+  assert_contains "$raw" "Pat dot example one" "--json keeps Deepgram's raw words"
+  pass "fm-deepgram-stt: rewrites turn spoken addresses into written ones"
+}
+
+test_stt_vocabulary_rewrites_longest_whole_phrase_first() {
+  local home out
+  home=$(new_home stt-vocab-longest)
+  out=$(stt_with_vocab "$home" "ask Robin and Robin Vale about robinsons" \
+    'robin => Robyn' 'Robin   Vale => R. Vale') || fail "stt failed: $out"
+  [ "$out" = "ask Robyn and R. Vale about robinsons" ] \
+    || fail "rewrites must be whole-phrase, case-insensitive, longest first: $out"
+  pass "fm-deepgram-stt: rewrites match whole phrases, longest first, ignoring case"
+}
+
+test_stt_vocabulary_ignores_malformed_lines() {
+  local home out log
+  home=$(new_home stt-vocab-malformed)
+  out=$(stt_with_vocab "$home" "send it to sam dot test" \
+    '=> orphan' 'dangling =>' '=>' 'sam dot test => sam.test' 'Quillan' 2>&1) \
+    || fail "stt failed: $out"
+  [ "$out" = "send it to sam.test" ] || fail "malformed lines broke the rewrite: $out"
+  log=$(cat "$home/curl.log")
+  assert_contains "$log" "keyterm=Quillan" "the good key term still reaches the request"
+  case "$log" in *orphan*|*dangling*) fail "a malformed rewrite became a key term: $log" ;; esac
+  pass "fm-deepgram-stt: malformed vocabulary lines are ignored"
 }
 
 # --- desk floater launcher -------------------------------------------------
@@ -1944,6 +2048,12 @@ test_tts_dry_run_with_key
 test_stt_refuses_without_key_or_file
 test_stt_prints_transcript_from_mocked_deepgram
 test_stt_reports_http_failure
+test_stt_without_vocabulary_sends_no_hints
+test_stt_vocabulary_key_terms_reach_the_request_encoded
+test_stt_vocabulary_caps_key_terms
+test_stt_vocabulary_rewrites_the_printed_transcript
+test_stt_vocabulary_rewrites_longest_whole_phrase_first
+test_stt_vocabulary_ignores_malformed_lines
 test_floater_help_and_option_refusal
 test_floater_signs_with_a_stable_identity
 test_floater_build_only_leaves_the_launched_app_alone
