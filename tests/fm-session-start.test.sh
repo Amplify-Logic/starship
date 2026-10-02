@@ -2208,6 +2208,46 @@ EOF
   pass "--reemit reprints the digest without repeating startup's mutating sweeps and still drains queued wakes"
 }
 
+# Captain words the ledger holds unmarked print on the full and the re-emit
+# digest until mark, and a later prompt brings the section back.
+test_unreconciled_captain_words_print_until_marked() {
+  local rec root home fakebin full reemit after_mark again ledger
+  rec=$(new_world captain-ledger)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+  ledger="$home/data/captain-ledger.jsonl"
+  printf '{"seq":1,"epoch":%s,"session":"sess-a","text":"Move the venue deposit from 2 November to 1 February."}\n' \
+    "$(date +%s)" > "$ledger"
+
+  full=$(FM_FAKE_HARNESS_PID=$$ run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_contains "$full" "UNRECONCILED CAPTAIN WORDS (1 since " "the full digest omitted unreconciled captain words"
+  assert_contains "$full" "Move the venue deposit from 2 November to 1 February." "the full digest omitted the captain's sentence"
+  assert_contains "$full" "fm-captain-ledger.sh mark" "the full digest omitted how to mark the words reconciled"
+
+  reemit=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$root" FM_FAKE_HARNESS_PID=$$ PATH="$fakebin:$BASE_PATH" \
+    env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
+    "$SESSION_START" --reemit)
+  assert_contains "$reemit" "SESSION START (CONTEXT RE-EMIT)" "the re-emit fixture did not take the re-emit path"
+  assert_contains "$reemit" "UNRECONCILED CAPTAIN WORDS (1 since " "the re-emit digest omitted unreconciled captain words"
+  assert_contains "$reemit" "Move the venue deposit from 2 November to 1 February." "the re-emit digest omitted the captain's sentence"
+
+  FM_HOME="$home" "$ROOT/bin/fm-captain-ledger.sh" mark >/dev/null || fail "marking the ledger failed"
+  after_mark=$(FM_FAKE_HARNESS_PID=$$ run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_contains "$after_mark" "WAKE QUEUE" "the digest after mark did not run its wake-queue stage"
+  assert_not_contains "$after_mark" "UNRECONCILED CAPTAIN WORDS" "the digest kept the section after every entry was marked"
+
+  printf '{"seq":2,"epoch":%s,"session":"sess-b","text":"Keep the review on Thursday."}\n' "$(date +%s)" >> "$ledger"
+  again=$(FM_FAKE_HARNESS_PID=$$ run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_contains "$again" "UNRECONCILED CAPTAIN WORDS (1 since " "a new entry after mark did not bring the section back with a count of 1"
+  assert_contains "$again" "Keep the review on Thursday." "the returned section omitted the new entry"
+  assert_not_contains "$again" "Move the venue deposit" "the returned section repeated an entry already marked"
+
+  pass "session start prints unreconciled captain words on the full and re-emit digests until they are marked"
+}
+
 test_agents_baseline_stays_at_true_start_and_reemits_on_every_drifted_pi_compact() {
   local rec root home fakebin startup compact_equal compact_first compact_second clear_out resume_out reset_out baseline baseline_after expected_hash refresh_line bootstrap_line
   rec=$(new_world agents-refresh)
@@ -2815,6 +2855,7 @@ test_portable_timeout_escalates_term_resistant_process
 test_runtime_bound_leaves_a_healthy_digest_untouched
 test_runtime_bound_leaves_harness_ancestry_headroom
 test_reemit_skips_startup_sweeps_but_keeps_the_wake_drain
+test_unreconciled_captain_words_print_until_marked
 test_agents_baseline_stays_at_true_start_and_reemits_on_every_drifted_pi_compact
 test_read_only_pi_compact_refreshes_against_its_own_session_identity
 test_codex_unreachable_reset_sources_do_not_claim_instruction_refresh

@@ -36,6 +36,7 @@ bin/fm-busy-event.sh	60
 bin/fm-busy-lib.sh	36
 bin/fm-capability-lib.sh	17
 bin/fm-captain-hold.sh	1047
+bin/fm-captain-ledger.sh	65
 bin/fm-cd-pretool-check.sh	7
 bin/fm-channel-intake-schedule.sh	8
 bin/fm-channel-intake.sh	766
@@ -326,6 +327,7 @@ tests/fm-calm-pi-extension.test.sh	206
 tests/fm-calm-pi-queue-retention-live-e2e.test.sh	47
 tests/fm-capability.test.sh	76
 tests/fm-captain-hold-lifecycle.test.sh	307
+tests/fm-captain-ledger.test.sh	60
 tests/fm-cd-pretool-check.test.sh	67
 tests/fm-channel-intake.test.sh	577
 tests/fm-chart-room.test.sh	63

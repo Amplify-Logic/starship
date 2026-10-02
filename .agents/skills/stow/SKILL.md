@@ -238,6 +238,7 @@ A local skill exists only in this home, so offloading an entry out of `data/capt
 The sweep above preserves knowledge; this one preserves the state of work.
 A reset destroys whatever exists only in this session, and that includes what you have learned about work already under way, not just facts worth remembering.
 So before the reset, make sure the important open work you are holding in context is durably recorded: file what was never filed, and correct what you now know is stale.
+Take `bin/fm-captain-ledger.sh pending` as an input to this pass: it lists every captain prompt not yet marked reconciled, including words a compaction already took out of this context, and each one that changes a preference, a task, or a decision must be recorded in `data/captain.md`, the backlog, or the decision files.
 
 Judge for yourself what is important and which record each thing belongs to, and write it through the owner that already governs that record.
 One bound holds: this covers the open work you are actually holding in context, not the records at large.
@@ -271,6 +272,7 @@ Address the captain directly and translate paths, storage mechanics, and workflo
 State what reset-safe means in the same breath as the claim: nothing this session knew has been lost.
 It is never a claim that the home's durable records are correct, because this pass checks no record the session did not name.
 Do not hide an over-budget result behind a reset-safe claim.
+A receipt that declares the session reset-safe ends with `bin/fm-captain-ledger.sh mark <seq>`, where `<seq>` is the newest entry number that pass's `pending` listed, run only after every entry it listed is reconciled.
 In a primary home the receipt is written after the cascade below, not instead of it.
 
 ## Automatic cascade to secondmates

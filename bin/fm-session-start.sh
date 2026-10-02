@@ -39,6 +39,8 @@
 #   3. wake-drain     - presents durable wakes and advances recovery handling
 #                       state, so it only runs when locked. The local bounded
 #                       inactive-outcome startup scan runs in the deferred worker.
+#                       Unreconciled captain words from bin/fm-captain-ledger.sh
+#                       follow the queue, on the same locked path.
 #   4. supervision-instructions - the one emitted operating block for the
 #                       detected primary harness.
 #   5. read-once contract - the do-not-re-read contract covering every source
@@ -743,6 +745,17 @@ else
     printf '%s\n' "$DRAIN_OUT"
   else
     printf '(no queued wakes)\n'
+  fi
+  # Captain words the ledger recorded that no session has marked reconciled
+  # (bin/fm-captain-ledger.sh). Like the queue above they are this turn's work,
+  # so they print on the full and the re-emit path and only for the lock holder,
+  # the one session that may reconcile and mark them. Nothing pending prints
+  # nothing.
+  LEDGER_OUT=$(FM_HOME="$FM_HOME" FM_ROOT_OVERRIDE="$FM_ROOT" FM_STATE_OVERRIDE="$STATE" \
+    FM_DATA_OVERRIDE="$DATA" "$SCRIPT_DIR/fm-captain-ledger.sh" pending 2>/dev/null) || LEDGER_OUT=
+  if [ -n "$LEDGER_OUT" ]; then
+    section "${LEDGER_OUT%%$'\n'*}"
+    printf '%s\n' "${LEDGER_OUT#*$'\n'}"
   fi
 fi
 
