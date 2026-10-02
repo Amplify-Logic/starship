@@ -193,7 +193,7 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-voice-relay.sh`      | Durable freshness, evidence, and presentation ledger for the spoken desktop companion: topic revisions, the pre-action and pre-speech gates, and immutable receipts (docs/desktop-companion.md) |
 | `fm-voice-relay-appserver.sh` | Dry-run-unless-`--live` app-server adapter for that relay: schema probe, steerable-status check, `turn/steer`, `turn/interrupt` (docs/desktop-companion.md) |
 | `fm-adhd.sh`             | Bounded ADHD divergent-ideation wrapper; writes distilled CLI output and refuses when `adhd` is absent (docs/adhd.md) |
-| `fm-second-opinion.sh`   | Bounded rival-model second-opinion wrapper; hostile review via Pi, neutral cwd, Codex quota floor (docs/second-opinion.md) |
+| `fm-second-opinion.sh`   | Bounded rival-model second-opinion wrapper; hostile review by Fable (default) or Grok via Cursor, neutral cwd, per-reviewer quota floor (docs/second-opinion.md) |
 | `fm-browse-session.sh`   | Isolated per-task chrome-devtools-axi sessions with per-task profiles; never attaches to the captain's Chrome (docs/worker-browsing.md) |
 | `fm-action-gateway.sh`   | Privilege-separated confirm-first action broker: digest-bound captain approval, locked state machine, hard spend/messaging ceilings, execution stubbed (docs/action-gateway.md) |
 | `fm-order.sh`            | Standing Order list/show/run/log-fire/arm/disarm/graduate over `data/orders/<slug>.md`; arming requires `--by-captain` (docs/ops-command-center.md) |

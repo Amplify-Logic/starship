@@ -1,34 +1,48 @@
 #!/usr/bin/env bash
 # fm-second-opinion.sh - bounded rival-model second-opinion wrapper for firstmate.
 #
-# Invokes a registered reviewer (default: sol via Pi) with a hostile-reviewer
-# prompt scaffold, writes the verbatim review to a caller-named file, and refuses
-# oversized input, unknown reviewers, and low Codex quota rather than proceeding
-# silently.
+# Invokes a registered reviewer (default: fable via Claude Code) with a
+# hostile-reviewer prompt scaffold, writes the verbatim review to a caller-named
+# file, and refuses oversized input, unknown reviewers, and a reviewer pool below
+# its quota floor rather than proceeding silently.
 #
 # CRITICAL: the reviewer process MUST run from a neutral working directory
-# (mktemp -d). Launching `pi --print` inside the firstmate checkout loads the
+# (mktemp -d). Launching a reviewer CLI inside the firstmate checkout loads the
 # project context and answers as a lock-refused firstmate instead of reviewing.
 # See docs/second-opinion.md.
 #
 # Reviewer registry (data-driven; add rows without changing callers):
-#   sol  -> pi --print --model openai-codex/gpt-5.6-sol --thinking xhigh
-#   k3   -> kimi --model kimi-code/k3 --prompt <hostile-review-prompt>
-# Only `sol` and `k3` are verified. Unknown names refuse loudly.
+#   fable -> claude -p --model claude-fable-5-1 --effort medium
+#              --strict-mcp-config --no-session-persistence <prompt>
+#   grok  -> cursor-agent -p --model grok-4.7-xhigh --mode ask --trust <prompt>
+#   sol   -> pi --print --model openai-codex/gpt-5.6-sol --thinking xhigh <prompt>
+#   k3    -> kimi --model kimi-code/k3 --prompt <prompt>
+# Unknown names refuse loudly. `sol` stays available but is no longer the
+# default; it stops working when the Codex subscription lapses.
 #
 # Never sets or requires ANTHROPIC_API_KEY or OPENAI_API_KEY; strips ambient ones
-# so the Pi -> Codex/OpenAI subscription path stays in force.
+# so every reviewer stays on its subscription path (Claude plan, Cursor plan,
+# Codex plan) rather than cash API billing.
 #
 # Usage:
 #   fm-second-opinion.sh --out <path> [--context <file>]... [--reviewer <name>]
 #                        [--] <decision-or-design text>
 #   fm-second-opinion.sh -h|--help
 #
-# Defaults: --reviewer sol
+# Defaults: --reviewer fable
 # Prompt size bound: FM_SECOND_OPINION_MAX_PROMPT_BYTES (default 100000)
-# Quota floor: refuse when Codex general-window percentRemaining is below 10
-#   unless FM_SECOND_OPINION_FORCE=1. Missing/unparseable quota tooling warns
-#   and proceeds.
+# Quota floor: refuse when the reviewer's pool percentRemaining (read from
+#   quota-axi --json) is below FM_SECOND_OPINION_QUOTA_FLOOR (default 10)
+#   unless FM_SECOND_OPINION_FORCE=1. Pools per reviewer (lowest window wins):
+#     fable -> claude model:fable and seven_day
+#     grok  -> cursor all_models effective availability (quota-axi's lowest
+#              bounding window: included_usage, auto_usage, api_usage)
+#     sol   -> codex five_hour and weekly
+#     k3    -> none
+#   A reading marked stale counts as unavailable. An unavailable reading warns
+#   and proceeds, except for grok, which refuses without
+#   FM_SECOND_OPINION_FORCE=1: once Cursor's included pool is empty a run draws
+#   the paid API balance, so an unknown reading must not spend it.
 #
 # Exit:
 #   0 on success
@@ -36,6 +50,10 @@
 #   127 when the reviewer binary is absent
 #   otherwise propagates the reviewer process exit code
 set -eu
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=bin/fm-cursor-lib.sh
+. "$SCRIPT_DIR/fm-cursor-lib.sh"
 
 FM_SECOND_OPINION_MAX_PROMPT_BYTES=${FM_SECOND_OPINION_MAX_PROMPT_BYTES:-100000}
 FM_SECOND_OPINION_QUOTA_FLOOR=${FM_SECOND_OPINION_QUOTA_FLOOR:-10}
@@ -45,11 +63,13 @@ usage() {
 usage: fm-second-opinion.sh --out <path> [--context <file>]... [--reviewer <name>]
                             [--] <decision-or-design text>
 
-Bounded rival-model second-opinion wrapper. Default reviewer is sol (Pi +
-openai-codex/gpt-5.6-sol at thinking xhigh). Writes the reviewer's verbatim
-output to --out with a small header. Never sets or requires API keys.
-See docs/second-opinion.md for cost policy, the neutral-cwd rule, and the
-reviewer registry.
+Bounded rival-model second-opinion wrapper. Default reviewer is fable (Claude
+Code + claude-fable-5-1 at effort medium). Use --reviewer grok (Cursor +
+grok-4.7-xhigh) beside it for high-stakes calls. sol (Pi + Codex) and k3
+(Kimi) remain available. Writes the reviewer's verbatim output to --out with a
+small header. Never sets or requires API keys.
+See docs/second-opinion.md for cost policy, quota floors, the neutral-cwd rule,
+and the reviewer registry.
 EOF
 }
 
@@ -62,38 +82,84 @@ refuse_missing_cli() {
   local name=$1
   cat <<EOF >&2
 fm-second-opinion: reviewer binary not found on PATH: ${name}
-Install or restore the reviewer CLI (Pi for sol, kimi for k3), then retry.
+Install or restore the reviewer CLI (claude for fable, cursor-agent for grok,
+pi for sol, kimi for k3), then retry.
 See docs/second-opinion.md.
 EOF
   exit 127
 }
 
-# Resolve a registry name into REVIEWER_LABEL, REVIEWER_BIN_NAME, and
-# REVIEWER_ARGS (bash array of argv after the binary). Add verified reviewers
-# here only; callers stay unchanged.
+# Resolve a registry name into REVIEWER_LABEL, REVIEWER_BIN_NAME, REVIEWER_ARGS
+# (bash array of argv after the binary; the prompt is appended as the final
+# argv), and the quota pool: QUOTA_PROVIDER and either QUOTA_WINDOWS
+# (space-separated quota-axi window ids, lowest percentRemaining wins) or
+# QUOTA_SCOPE (a quotaSemantics.effectiveAvailability scope whose known
+# effectivePercentRemaining is read), QUOTA_POOL (human label), and
+# QUOTA_UNAVAILABLE (proceed|refuse). No QUOTA_PROVIDER means no floor. Add
+# verified reviewers here only; callers stay unchanged.
 resolve_reviewer() {
+  QUOTA_PROVIDER=
+  QUOTA_WINDOWS=
+  QUOTA_SCOPE=
+  QUOTA_POOL=
+  QUOTA_UNAVAILABLE=proceed
   case "$1" in
+    fable)
+      # Claude Code print mode on the Claude subscription. Strict MCP config with
+      # no --mcp-config loads no MCP servers, so user servers cannot leak live
+      # state into the review; no session persistence keeps throwaway neutral
+      # cwds out of the session history. Avoid variadic flags here: they would
+      # swallow the trailing prompt argv.
+      REVIEWER_LABEL='fable'
+      REVIEWER_BIN_NAME=claude
+      REVIEWER_ARGS=(-p --model claude-fable-5-1 --effort medium
+        --strict-mcp-config --no-session-persistence)
+      QUOTA_PROVIDER=claude
+      QUOTA_WINDOWS='model:fable seven_day'
+      QUOTA_POOL='Claude Fable week'
+      ;;
+    grok)
+      # Cursor agent print mode, read-only ask mode, on Cursor's included pool.
+      # The floor reads quota-axi's all-model effective availability, which is
+      # the lowest of every window bounding a non-Auto run, so an empty sub-pool
+      # refuses even while the combined included pool still reads high.
+      REVIEWER_LABEL='grok'
+      REVIEWER_BIN_NAME=cursor-agent
+      REVIEWER_ARGS=(-p --model grok-4.7-xhigh --mode ask --trust)
+      QUOTA_PROVIDER=cursor
+      QUOTA_SCOPE='all_models'
+      QUOTA_POOL='Cursor all-model availability (lowest of included, auto and API usage)'
+      QUOTA_UNAVAILABLE=refuse
+      ;;
     sol)
       REVIEWER_LABEL='sol'
       REVIEWER_BIN_NAME=pi
       REVIEWER_ARGS=(--print --model openai-codex/gpt-5.6-sol --thinking xhigh)
+      QUOTA_PROVIDER=codex
+      QUOTA_WINDOWS='five_hour weekly'
+      QUOTA_POOL='Codex general-window'
       ;;
     k3)
       # Kimi Code K3 via non-interactive --prompt (PROMPT is the next argv after
-      # --prompt). Must run from a neutral cwd like sol - never the proposal repo.
+      # --prompt). Must run from a neutral cwd like the others - never the
+      # proposal repo.
       REVIEWER_LABEL='k3'
       REVIEWER_BIN_NAME=kimi
       REVIEWER_ARGS=(--model kimi-code/k3 --prompt)
       ;;
     *)
-      fail "unknown reviewer: $1 (verified: sol, k3)"
+      fail "unknown reviewer: $1 (verified: fable, grok, sol, k3)"
       ;;
   esac
 }
 
-# Print Codex general-window percentRemaining (min of five_hour/weekly), or
-# "na" when tooling is absent or unparseable. Never exits non-zero itself.
-codex_general_remaining() {
+# Print the lowest percentRemaining across QUOTA_WINDOWS, or the lowest known
+# effectivePercentRemaining for QUOTA_SCOPE, for QUOTA_PROVIDER; or "na" when
+# tooling is absent or unparseable, any matching provider row is stale, or
+# nothing listed reports a number. Model-kind windows count only under their own
+# model:<name> id, so a per-model window can never stand in for a general one.
+# Never exits non-zero.
+pool_remaining() {
   local quota_cmd quota_json
   if [ -n "${FM_SECOND_OPINION_QUOTA_JSON:-}" ]; then
     if [ ! -f "$FM_SECOND_OPINION_QUOTA_JSON" ]; then
@@ -115,35 +181,54 @@ codex_general_remaining() {
       return 0
     }
   fi
-  printf '%s\n' "$quota_json" | jq -r '
-    ([.providers[]? | select(.provider == "codex") | .windows[]? as $window
-      | select((["five_hour","weekly"] | index($window.id)) != null
-        and (($window.kind? // "") != "model")
-        and (($window.percentRemaining? | type) == "number"))
-      | $window.percentRemaining] | if length == 0 then "na" else min end)
+  printf '%s\n' "$quota_json" | jq -r --arg provider "$QUOTA_PROVIDER" \
+    --arg ids "$QUOTA_WINDOWS" --arg scope "$QUOTA_SCOPE" '
+    ($ids | split(" ") | map(select(length > 0))) as $wanted
+    | [.providers[]? | select(.provider == $provider)] as $rows
+    | if any($rows[]; .state.stale? == true) then "na"
+      elif $scope != "" then
+        ([$rows[] | .quotaSemantics.effectiveAvailability[]?
+          | select(.scope == $scope and .status == "known"
+            and ((.effectivePercentRemaining? | type) == "number"))
+          | .effectivePercentRemaining] | if length == 0 then "na" else min end)
+      else
+        ([$rows[] | .windows[]? as $window
+          | select(($wanted | index($window.id)) != null
+            and ((($window.kind? // "") != "model")
+              or (($window.id | tostring) | startswith("model:")))
+            and (($window.percentRemaining? | type) == "number"))
+          | $window.percentRemaining] | if length == 0 then "na" else min end)
+      end
   ' 2>/dev/null || printf 'na\n'
 }
 
 check_quota_floor() {
   local remaining floor
-  # Codex subscription floor applies only to the sol reviewer path.
-  [ "$REVIEWER_LABEL" = sol ] || return 0
+  [ -n "$QUOTA_PROVIDER" ] || return 0
   floor=$FM_SECOND_OPINION_QUOTA_FLOOR
-  remaining=$(codex_general_remaining)
+  remaining=$(pool_remaining)
   case "$remaining" in
     na|'')
-      printf 'fm-second-opinion: quota advisory: Codex general-window reading unavailable; proceeding\n' >&2
+      if [ "$QUOTA_UNAVAILABLE" = refuse ]; then
+        if [ "${FM_SECOND_OPINION_FORCE:-}" = 1 ]; then
+          printf 'fm-second-opinion: quota advisory: %s reading unavailable but FM_SECOND_OPINION_FORCE=1; proceeding\n' \
+            "$QUOTA_POOL" >&2
+          return 0
+        fi
+        fail "${QUOTA_POOL} reading unavailable; ${REVIEWER_LABEL} could draw paid usage, so refusing; set FM_SECOND_OPINION_FORCE=1 to override"
+      fi
+      printf 'fm-second-opinion: quota advisory: %s reading unavailable; proceeding\n' "$QUOTA_POOL" >&2
       return 0
       ;;
   esac
-  printf 'fm-second-opinion: quota advisory: Codex general-window percentRemaining=%s (floor=%s)\n' \
-    "$remaining" "$floor" >&2
+  printf 'fm-second-opinion: quota advisory: %s percentRemaining=%s (floor=%s)\n' \
+    "$QUOTA_POOL" "$remaining" "$floor" >&2
   if awk -v r="$remaining" -v f="$floor" 'BEGIN { exit ((r + 0 < f + 0) ? 0 : 1) }'; then
     if [ "${FM_SECOND_OPINION_FORCE:-}" = 1 ]; then
       printf 'fm-second-opinion: quota below floor but FM_SECOND_OPINION_FORCE=1; proceeding\n' >&2
       return 0
     fi
-    fail "Codex general-window percentRemaining ${remaining} is below floor ${floor}; set FM_SECOND_OPINION_FORCE=1 to override"
+    fail "${QUOTA_POOL} percentRemaining ${remaining} is below floor ${floor}; set FM_SECOND_OPINION_FORCE=1 to override"
   fi
 }
 
@@ -153,7 +238,7 @@ byte_count() {
 }
 
 OUT=
-REVIEWER=sol
+REVIEWER=fable
 CONTEXT_FILES=()
 DECISION=
 
@@ -213,6 +298,7 @@ PROMPT=$(cat <<EOF
 You are a hostile design reviewer. Try to break the proposal below.
 Rank findings by severity (CRITICAL / HIGH / MEDIUM / LOW).
 Be concrete: name failure modes, missing invariants, attack paths, and what must change.
+Check threading, concurrency, timeouts, retries and idempotency explicitly: what happens if two calls overlap, a call times out but the work continues, or a step is retried.
 Do not rubber-stamp. If something is sound, say so briefly after the findings.
 
 ## Subject
@@ -229,7 +315,9 @@ fi
 
 REVIEWER_BIN=${FM_SECOND_OPINION_BIN:-}
 if [ -z "$REVIEWER_BIN" ]; then
-  if ! REVIEWER_BIN=$(command -v "$REVIEWER_BIN_NAME" 2>/dev/null); then
+  if [ "$REVIEWER_BIN_NAME" = cursor-agent ]; then
+    REVIEWER_BIN=$(fm_cursor_resolve_binary) || refuse_missing_cli "$REVIEWER_BIN_NAME"
+  elif ! REVIEWER_BIN=$(command -v "$REVIEWER_BIN_NAME" 2>/dev/null); then
     refuse_missing_cli "$REVIEWER_BIN_NAME"
   fi
 elif [ ! -x "$REVIEWER_BIN" ]; then
@@ -249,8 +337,9 @@ NEUTRAL_CWD=$(mktemp -d "${TMPDIR:-/tmp}/fm-second-opinion-cwd.XXXXXX")
 trap 'rm -f "$TMP_OUT"; rm -rf "$NEUTRAL_CWD"' EXIT
 
 # Never introduce cash API billing: do not set or require API keys.
-# Unset ambient keys so this wrapper stays on the Pi -> Codex/OpenAI path.
-# CRITICAL: run from NEUTRAL_CWD so Pi does not load the firstmate project context.
+# Unset ambient keys so every reviewer stays on its subscription path.
+# CRITICAL: run from NEUTRAL_CWD so the reviewer does not load the firstmate
+# project context.
 set +e
 (
   cd "$NEUTRAL_CWD" || exit 1

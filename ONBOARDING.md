@@ -388,9 +388,9 @@ Once a tool is on your machine and logged in, your first mate will start choosin
 
 | Add | Why you'd want it | Account |
 |---|---|---|
-| **Cursor CLI** (`agent`) | Cheap, fast workers on Grok 4.5 / Composer | Cursor Pro |
+| **Cursor CLI** (`agent`) | Cheap, fast workers on Grok 4.5 / Composer, and the different-vendor second-opinion reviewer | Cursor Pro |
 | **Codex** (`codex`) | Another strong worker; kept available for testing | OpenAI |
-| **Pi** (`pi`) | Worker, and the second-opinion checker path | Bring-your-own key |
+| **Pi** (`pi`) | Another worker option | Bring-your-own key |
 | **Kimi** (`kimi`) | Verified K3 worker | Moonshot |
 | **Grok** (`grok`) | Another orchestrator option | xAI |
 | **opencode** | Another worker option | Provider-dependent |
