@@ -2689,11 +2689,12 @@ It teaches the desk floater's transcription (`bin/fm-deepgram-stt.sh`) the names
 Absent, transcription behaves exactly as without it.
 Lines starting with `#` and blank lines are ignored.
 A plain line is a key term, sent to Deepgram as a recognition hint for that request.
-A `heard => written` line rewrites the printed transcript after Deepgram returns it, for example `pat dot example one => pat.example1`.
-Rewrites ignore case, match whole words only, and try the longest heard phrase first.
+A `heard => written` line rewrites the printed transcript after Deepgram returns it, for example `pat dot example 1 => pat.example1` for `Pat dot example 1`.
+Use Deepgram's returned spelling and numbers on the left: smart formatting happens before rewrites, so spoken `one` may arrive as `1`.
+Rewrites ignore case, match whole tokens (including email addresses, dotted names, contractions and hyphenated words) while still allowing a possessive `'s` or `’s` after the match, and try the longest heard phrase first.
 `--json` output stays Deepgram's raw response, untouched by rewrites.
 A malformed line is ignored, and a vocabulary that cannot be read never stops a transcription.
-The default model is `nova-3` because only Nova-3 accepts Deepgram's keyterm hints; `DEEPGRAM_STT_MODEL` still overrides it, and an older model gets the terms as boosted keywords instead.
+The default model is `nova-3` because only Nova-3 accepts Deepgram's keyterm hints; `DEEPGRAM_STT_MODEL` in the environment or this home's gitignored `.env` overrides it (the environment wins), and an older model gets the terms as boosted keywords instead.
 The script's header owns the hint parameters, the term caps, and the matching rules.
 
 ## Supervision active alert channels (config/wedge-alarm)

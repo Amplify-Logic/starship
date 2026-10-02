@@ -248,7 +248,7 @@ The variable keeps its historical name because it is the published opt-out; it
 has never been a Deepgram gate.
 
 TTS model default: `aura-2-thalia-en` (`DEEPGRAM_TTS_MODEL`, from the environment or this home's gitignored `.env`).
-STT model default: `nova-3` (`DEEPGRAM_STT_MODEL`); per-home vocabulary in `config/stt-vocabulary`, see [docs/configuration.md](configuration.md#speech-to-text-vocabulary-configstt-vocabulary).
+STT model default: `nova-3` (`DEEPGRAM_STT_MODEL`, from the environment or this home's gitignored `.env`); per-home vocabulary in `config/stt-vocabulary`, see [docs/configuration.md](configuration.md#speech-to-text-vocabulary-configstt-vocabulary).
 
 ## Non-goals
 

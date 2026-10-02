@@ -6,7 +6,8 @@
 #   fm-deepgram-stt.sh --help
 #
 # Reads DEEPGRAM_API_KEY from the environment or the home's gitignored .env.
-# Never logs the key. Default model: nova-3 (override with DEEPGRAM_STT_MODEL).
+# Never logs the key. Default model: nova-3 (override with DEEPGRAM_STT_MODEL
+# in the environment or the home's gitignored .env; the environment wins).
 #
 # Prints the transcript text on stdout (or the raw JSON with --json).
 #
@@ -19,9 +20,14 @@
 #     limits (100 keywords; keyterms stop at a conservative estimate of the
 #     500-token budget), so an oversized list is trimmed rather than refused.
 #   - A `heard => written` line rewrites the printed transcript after
-#     transcription: case-insensitive, whole words only, longest heard phrase
-#     first, each span rewritten at most once. Words in `heard` match across
-#     any run of whitespace. --json output stays Deepgram's raw response.
+#     smart formatting: use the returned text as `heard`, including formatted
+#     numbers (e.g. `pat dot example 1 => pat.example1`). Matching ignores case
+#     and accepts any run of whitespace between words. Match whole tokens only:
+#     never a part of an email address, dotted name, contraction or hyphenated
+#     word, though a possessive `'s` or `’s` may follow (`robin => ROBIN` turns
+#     `robin's` into `ROBIN's`). Surrounding sentence punctuation is preserved.
+#     Try the longest heard phrase first, each span rewritten at most once.
+#     --json stays raw.
 #   - A line with `=>` but an empty side is ignored. A vocabulary that cannot
 #     be read or parsed is skipped with a note on stderr; it never fails the
 #     transcription.
@@ -125,15 +131,38 @@ def rewrite(text, rewrites):
     for heard, written in rewrites:
         table.setdefault(heard.lower(), written)
     ordered = sorted(table, key=len, reverse=True)
-    pattern = re.compile(
-        r"(?<!\w)(?:"
-        + "|".join(r"\s+".join(re.escape(w) for w in h.split()) for h in ordered)
-        + r")(?!\w)",
-        re.IGNORECASE,
+    # A rewrite may replace a complete compound token, but must never start or
+    # finish inside one, except just before a trailing possessive 's.
+    # Email local parts allow more punctuation than names.
+    compound = re.compile(
+        r"[\w.!#$%&'*+/=?^`{|}~\-]+@[\w-]+(?:\.[\w-]+)*"
+        r"|\w+(?:[.'’\u2010\u2011-]\w+)+"
     )
-    return pattern.sub(
-        lambda m: table.get(" ".join(m.group(0).split()).lower(), m.group(0)), text
-    )
+    interiors = set()
+    for token in compound.finditer(text):
+        interiors.update(range(token.start() + 1, token.end()))
+        if token.group().lower().endswith(("'s", "’s")):
+            interiors.discard(token.end() - 2)
+    # Check each alternative at a valid start so a longer phrase ending inside
+    # a compound cannot hide a shorter, valid rewrite at that same position.
+    patterns = [
+        (re.compile(r"\s+".join(re.escape(w) for w in h.split()) + r"(?!\w)", re.IGNORECASE), table[h])
+        for h in ordered
+    ]
+    pieces, cursor = [], 0
+    for candidate in re.finditer(r"(?<!\w)(?=\S)", text):
+        start = candidate.start()
+        if start < cursor or start in interiors:
+            continue
+        for rule, written in patterns:
+            match = rule.match(text, start)
+            if match is None or match.end() in interiors:
+                continue
+            pieces.extend((text[cursor:start], written))
+            cursor = match.end()
+            break
+    pieces.append(text[cursor:])
+    return "".join(pieces)
 
 mode, vocab = sys.argv[1], sys.argv[2]
 if mode == "query":

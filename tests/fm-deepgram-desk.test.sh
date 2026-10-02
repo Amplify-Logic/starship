@@ -14,7 +14,8 @@ DESK="$ROOT/bin/fm-desk-voice.sh"
 TMP_ROOT=$(fm_test_tmproot fm-deepgram-desk)
 
 # Ambient captain keys must not leak into these fixtures.
-unset DEEPGRAM_API_KEY || true
+unset DEEPGRAM_API_KEY DEEPGRAM_STT_MODEL DEEPGRAM_TTS_MODEL || true
+unset FM_DEEPGRAM_DEFAULT_STT_MODEL FM_DEEPGRAM_DEFAULT_TTS_MODEL || true
 export FM_DEEPGRAM_ENV_FILE=/dev/null
 
 # Every mailbox delivery raises a macOS notification. A stand-in osascript
@@ -276,8 +277,8 @@ stt_with_vocab() {  # <home> <transcript> [vocab-lines...]
 test_stt_without_vocabulary_sends_no_hints() {
   local home out
   home=$(new_home stt-vocab-absent)
-  out=$(stt_with_vocab "$home" "call pat dot example one" 2>&1) || fail "stt failed: $out"
-  [ "$out" = "call pat dot example one" ] || fail "transcript changed without a vocabulary: $out"
+  out=$(stt_with_vocab "$home" "Call Pat dot example 1." 2>&1) || fail "stt failed: $out"
+  [ "$out" = "Call Pat dot example 1." ] || fail "transcript changed without a vocabulary: $out"
   case "$(cat "$home/curl.log")" in
     *keyterm=*|*keywords=*) fail "hints sent without a vocabulary: $(cat "$home/curl.log")" ;;
   esac
@@ -327,15 +328,16 @@ test_stt_vocabulary_rewrites_the_printed_transcript() {
   local home out raw
   home=$(new_home stt-vocab-rewrite)
   out=$(stt_with_vocab "$home" \
-    "I'll make one on Pat dot example one and one at p dot example acme corp" \
-    'pat dot example one => pat.example1' \
+    "I'll make one on Pat dot example 1, and one at p dot example acme corp." \
+    'pat dot example 1 => pat.example1' \
     'p dot example acme corp => p.example@acmecorp' \
     'example => WRONG') || fail "stt failed: $out"
-  [ "$out" = "I'll make one on pat.example1 and one at p.example@acmecorp" ] \
+  [ "$out" = "I'll make one on pat.example1, and one at p.example@acmecorp." ] \
     || fail "the two addresses were not rewritten: $out"
   raw=$(DEEPGRAM_API_KEY=test-key-not-real FM_DEEPGRAM_CURL="$home/curl" FM_HOME="$home" \
     "$STT" --json "$home/clip.wav") || fail "stt --json failed: $raw"
-  assert_contains "$raw" "Pat dot example one" "--json keeps Deepgram's raw words"
+  [ "$raw" = "$(cat "$home/stt-body.json")" ] || fail "--json must keep the raw formatted response"
+  assert_contains "$(cat "$home/curl.log")" 'smart_format=true' "rewrites receive formatted text"
   pass "fm-deepgram-stt: rewrites turn spoken addresses into written ones"
 }
 
@@ -360,6 +362,69 @@ test_stt_vocabulary_ignores_malformed_lines() {
   assert_contains "$log" "keyterm=Quillan" "the good key term still reaches the request"
   case "$log" in *orphan*|*dangling*) fail "a malformed rewrite became a key term: $log" ;; esac
   pass "fm-deepgram-stt: malformed vocabulary lines are ignored"
+}
+
+test_stt_vocabulary_preserves_compound_tokens() {
+  local home out compounds
+  home=$(new_home stt-vocab-boundaries)
+  compounds="robin.gray@example.test robin@example.test a+robin@example.test a/robin@example.test a!robin@example.test a++robin@example.test a.o'robin@example.test team@robin.test robin.gray gray.robin robin-gray gray-robin robin‐gray robin‑gray don't don’t o'robin o’robin robins _robin robin_"
+  out=$(stt_with_vocab "$home" "$compounds; Robin, (robin). 'robin' ‘robin’ don!" \
+    'robin => Robyn' 'don => Donald' 'example => WRONG' 'test => WRONG') \
+    || fail "stt failed: $out"
+  [ "$out" = "$compounds; Robyn, (Robyn). 'Robyn' ‘Robyn’ Donald!" ] \
+    || fail "compound tokens must stay intact while standalone words change: $out"
+  pass "fm-deepgram-stt: email addresses, dotted names, contractions and hyphenated words stay intact"
+}
+
+test_stt_vocabulary_rewrites_possessive_names() {
+  local home out
+  home=$(new_home stt-vocab-possessive)
+  out=$(stt_with_vocab "$home" "robin's laptop, quillan’s PR, don't, don’t, robin.example's, robin@example.test" \
+    'robin => ROBIN' 'quillan => Quillan' 'don => Donald') || fail "stt failed: $out"
+  [ "$out" = "ROBIN's laptop, Quillan’s PR, don't, don’t, robin.example's, robin@example.test" ] \
+    || fail "a possessive must take the rewrite while contractions, dotted names and emails stay intact: $out"
+  pass "fm-deepgram-stt: possessive names take the rewrite"
+}
+
+test_stt_vocabulary_rewrites_complete_compounds_and_valid_shorter_phrases() {
+  local home out
+  home=$(new_home stt-vocab-complete)
+  out=$(stt_with_vocab "$home" "Ask robin.gray, don't ask robin.gray@example.test. Robin   Vale!" \
+    'ask robin => WRONG' 'ask => Ask' 'robin => WRONG' \
+    'robin.gray => robyn.gray' "don't => do not" \
+    'robin.gray@example.test => robyn.gray@example.test' \
+    'robin vale => R. Vale' 'robyn => WRONG') || fail "stt failed: $out"
+  [ "$out" = "Ask robyn.gray, do not Ask robyn.gray@example.test. R. Vale!" ] \
+    || fail "whole compounds and shorter valid alternatives must still rewrite once: $out"
+  pass "fm-deepgram-stt: whole compound rewrites and shorter valid alternatives still work"
+}
+
+test_stt_reads_the_model_from_dotenv() {
+  local home out log
+  home=$(new_home stt-dotenv-model)
+  printf 'export DEEPGRAM_STT_MODEL="nova-2"\n' > "$home/.env"
+  out=$(unset FM_DEEPGRAM_ENV_FILE; stt_with_vocab "$home" 'Hello.' 'Quillan' 2>&1) \
+    || fail "stt failed: $out"
+  [ "$out" = 'Hello.' ] || fail "model settings must not appear in the transcript output"
+  log=$(cat "$home/curl.log")
+  case "$log" in *'model=nova-2&smart_format=true&keywords=Quillan%3A2'*) ;; *) fail "home .env must select model and keyword hints" ;; esac
+  out=$(unset FM_DEEPGRAM_ENV_FILE; DEEPGRAM_STT_MODEL=nova-3 stt_with_vocab "$home" 'Hello.' 'Quillan' 2>&1) \
+    || fail "stt failed: $out"
+  log=$(cat "$home/curl.log")
+  case "$log" in *'model=nova-3&smart_format=true&keyterm=Quillan'*) ;; *) fail "the environment must win over .env" ;; esac
+  printf 'DEEPGRAM_STT_MODEL=\n' > "$home/.env"
+  out=$(unset FM_DEEPGRAM_ENV_FILE; stt_with_vocab "$home" 'Hello.' 'Quillan' 2>&1) \
+    || fail "stt failed: $out"
+  case "$(cat "$home/curl.log")" in *'model=nova-3&'*) ;; *) fail "empty .env model must use the default" ;; esac
+  printf 'DEEPGRAM_STT_MODEL=nova-2\n' > "$home/model.env"
+  out=$(FM_DEEPGRAM_ENV_FILE="$home/model.env" stt_with_vocab "$home" 'Hello.' 'Quillan' 2>&1) \
+    || fail "stt failed: $out"
+  case "$(cat "$home/curl.log")" in *'model=nova-2&'*) ;; *) fail "the explicit dotenv path must be respected" ;; esac
+  rm "$home/.env"
+  out=$(unset FM_DEEPGRAM_ENV_FILE; stt_with_vocab "$home" 'Hello.' 'Quillan' 2>&1) \
+    || fail "stt failed: $out"
+  case "$(cat "$home/curl.log")" in *'model=nova-3&'*) ;; *) fail "absent .env model must use the default" ;; esac
+  pass "fm-deepgram-stt: model and hints follow environment, home .env, then default"
 }
 
 # --- desk floater launcher -------------------------------------------------
@@ -2054,6 +2119,10 @@ test_stt_vocabulary_caps_key_terms
 test_stt_vocabulary_rewrites_the_printed_transcript
 test_stt_vocabulary_rewrites_longest_whole_phrase_first
 test_stt_vocabulary_ignores_malformed_lines
+test_stt_vocabulary_preserves_compound_tokens
+test_stt_vocabulary_rewrites_possessive_names
+test_stt_vocabulary_rewrites_complete_compounds_and_valid_shorter_phrases
+test_stt_reads_the_model_from_dotenv
 test_floater_help_and_option_refusal
 test_floater_signs_with_a_stable_identity
 test_floater_build_only_leaves_the_launched_app_alone

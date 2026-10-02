@@ -10,8 +10,8 @@
 #   fm_deepgram_load_dotenv_key
 #     Internal: read one key from a .env-style file without sourcing it.
 #   fm_deepgram_tts_model / fm_deepgram_stt_model
-#     Resolve model names from the environment, then (text-to-speech only) the
-#     home's gitignored .env, then the documented defaults.
+#     Resolve model names from the environment, then the home's gitignored
+#     .env, then the documented defaults.
 #   fm_deepgram_auth_config <key>
 #     Write a 0600 curl config file carrying the Authorization header and print
 #     its path, so the key never appears in curl's argv. Caller removes it.
@@ -82,7 +82,14 @@ fm_deepgram_tts_model() {
 }
 
 fm_deepgram_stt_model() {
-  printf '%s' "${DEEPGRAM_STT_MODEL:-$FM_DEEPGRAM_DEFAULT_STT_MODEL}"
+  local model env_file
+  if [ -n "${DEEPGRAM_STT_MODEL:-}" ]; then
+    printf '%s' "$DEEPGRAM_STT_MODEL"
+    return 0
+  fi
+  env_file="${FM_DEEPGRAM_ENV_FILE:-$FM_HOME/.env}"
+  model=$(fm_deepgram_load_dotenv_key DEEPGRAM_STT_MODEL "$env_file") || model=
+  printf '%s' "${model:-$FM_DEEPGRAM_DEFAULT_STT_MODEL}"
 }
 
 fm_deepgram_auth_config() {  # <key>
