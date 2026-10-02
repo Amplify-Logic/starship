@@ -78,6 +78,11 @@
 #          nonvisual dispatch continues with plain-text decisions and reports,
 #          but Lavish use still requires a compatible build at or above its floor.
 #          tasks-axi feature probes remain a separate defense-in-depth check.
+#          peekaboo is reported MISSING only in a home that opted in to
+#          accessibility-first computer use with a config/computer-use presence
+#          flag, when bin/fm-computer-use.sh check fails (absent, not the pinned
+#          version, or does not start); that script owns the pin and the check,
+#          and nothing is installed without the install consent path.
 #          tasks-axi and quota-axi are essential bootstrap tools.
 #          A compatible tasks-axi default backend is silent.
 #          quota-axi is required for the agent-owned dispatch-profile array
@@ -850,6 +855,7 @@ install_cmd() {
     no-mistakes) echo "curl -fsSL https://raw.githubusercontent.com/kunchenguid/no-mistakes/main/docs/install.sh | sh" ;;
     gh-axi|chrome-devtools-axi|lavish-axi) echo "npm install -g $1 && $1 setup hooks" ;;
     tasks-axi|quota-axi) echo "npm install -g $1" ;;
+    peekaboo) echo "\"$SCRIPT_DIR/fm-computer-use.sh\" install  # pinned $("$SCRIPT_DIR/fm-computer-use.sh" pin), user-level in ~/.local/bin; fm-computer-use.sh check says what is wrong" ;;
     *) return 1 ;;
   esac
 }
@@ -1556,6 +1562,9 @@ detect_local_tools() {
   fi
   if command -v tasks-axi >/dev/null 2>&1 && ! fm_tasks_axi_compatible; then
     echo "MISSING: tasks-axi (install: $(install_cmd tasks-axi))"
+  fi
+  if [ -e "$CONFIG/computer-use" ] && ! "$SCRIPT_DIR/fm-computer-use.sh" check >/dev/null 2>&1; then
+    echo "MISSING: peekaboo (install: $(install_cmd peekaboo))"
   fi
 }
 

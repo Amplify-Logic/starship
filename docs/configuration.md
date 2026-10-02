@@ -562,6 +562,14 @@ A Secondmate on a remote route is covered the same way: the primary resolves and
 The presence flag is session-scoped enablement, so it transfers at launch and is left unchanged by live convergence into a running home.
 See [`trace-context.md`](trace-context.md) for carrier semantics, supported routes, the manual fleet-restart requirement, the session boundary, and safety limits; `bin/fm-trace-context-lib.sh`'s header owns the exact mechanics, and [`verification/trace-context.md`](verification/trace-context.md) records repeatable evidence.
 
+## Computer use (config/computer-use)
+
+The optional local, gitignored `config/computer-use` presence flag says this home drives macOS app interfaces through the `macos-computer-use` skill.
+With it present, session-start bootstrap checks for the pinned Peekaboo and reports a missing, other-version or broken copy as `MISSING: peekaboo`; installing it still waits for the captain's consent.
+With it absent, nothing is checked or reported.
+The flag is not inherited by secondmate homes.
+`bin/fm-computer-use.sh` owns the pin, the check, the installer and the guard; the skill owns when and how they are used.
+
 ## Fleet activity ledger (config/fleet-ledger)
 
 See [`fleet-ledger.md`](fleet-ledger.md) for the opt-in setup, record contract, and limits.

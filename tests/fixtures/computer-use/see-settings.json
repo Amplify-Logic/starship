@@ -1,0 +1,21 @@
+{
+  "success": true,
+  "data": {
+    "application_name": "Ableton Live 12",
+    "window_title": "Settings",
+    "is_dialog": false,
+    "snapshot_id": "ps1_fixture0001",
+    "element_count": 9,
+    "ui_elements": [
+      {"id": "elem_1", "role": "group", "ax_role": "AXGroup", "role_description": "group", "label": "group", "is_actionable": false},
+      {"id": "elem_2", "role": "button", "ax_role": "AXButton", "role_description": "close button", "label": "close button", "is_actionable": true, "is_enabled": true},
+      {"id": "elem_3", "role": "button", "ax_role": "AXButton", "role_description": "button", "label": "Link, Tempo & MIDI", "is_actionable": true, "is_selected": true},
+      {"id": "elem_4", "role": "button", "ax_role": "AXButton", "role_description": "button", "label": "Plug-Ins", "is_actionable": true, "is_enabled": false},
+      {"id": "elem_5", "role": "checkbox", "ax_role": "AXCheckBox", "role_description": "switch", "label": "1", "value": "1", "identifier": "VST3_System_Folders_Toggle", "is_actionable": true},
+      {"id": "elem_6", "role": "other", "ax_role": "AXStaticText", "role_description": "text", "label": "Control Surface 1", "value": "Control Surface 1", "is_actionable": false},
+      {"id": "elem_7", "role": "other", "ax_role": "AXCell", "role_description": "cell", "label": "cell", "is_actionable": false},
+      {"id": "elem_8", "role": "popUpButton", "ax_role": "AXPopUpButton", "role_description": "pop up button", "title": "Control Surface", "value": "AbletonMCP", "is_actionable": true},
+      {"id": "elem_9", "role": "textField", "ax_role": "AXTextField", "role_description": "text field", "description": "Search", "is_actionable": true}
+    ]
+  }
+}

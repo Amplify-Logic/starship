@@ -416,6 +416,37 @@ ROWS
   pass "bootstrap permits nonvisual work without compatible lavish-axi and retains its presentation floor"
 }
 
+test_peekaboo_reported_only_when_opted_in() {
+  local label opted version mode case_dir fakebin out missing n
+  missing="MISSING: peekaboo (install: \"$ROOT/bin/fm-computer-use.sh\" install  # pinned 4.5.0, user-level in ~/.local/bin; fm-computer-use.sh check says what is wrong)"
+  n=0
+  while IFS='^' read -r label opted version mode; do
+    [ -n "$label" ] || continue
+    n=$((n + 1))
+    case_dir="$TMP_ROOT/peekaboo-$n"
+    mkdir -p "$case_dir/home/config"
+    printf '%s\n' manual > "$case_dir/home/config/backlog-backend"
+    [ "$opted" = no ] || : > "$case_dir/home/config/computer-use"
+    fakebin=$(make_fake_toolchain "$case_dir")
+    [ "$version" = absent ] || fm_fake_version_tool "$fakebin" peekaboo FM_FAKE_PEEKABOO_VERSION "$version"
+    out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+      FM_FAKE_TREEHOUSE_LEASE_HELP=1 FM_FAKE_PEEKABOO_VERSION="$version" "$ROOT/bin/fm-bootstrap.sh") \
+      || fail "$label: the peekaboo check must not fail bootstrap"
+    case "$mode" in
+      empty) [ -z "$out" ] || fail "$label: expected silence, got: $out" ;;
+      missing) [ "$out" = "$missing" ] || fail "$label: expected '$missing', got: $out" ;;
+    esac
+  done <<'ROWS'
+absent and not opted in stays silent^no^absent^empty
+wrong version and not opted in stays silent^no^Peekaboo 4.6.0 (main/x)^empty
+absent and opted in is reported^yes^absent^missing
+wrong version and opted in is reported^yes^Peekaboo 4.6.0 (main/x)^missing
+pinned version and opted in stays silent^yes^Peekaboo 4.5.0 (main/a1d48b28a)^empty
+ROWS
+  [ "$n" -eq 5 ] || fail "every peekaboo row must run"
+  pass "bootstrap reports a missing or wrongly versioned peekaboo only in a home opted in with config/computer-use"
+}
+
 test_tasks_axi_min_version() {
   local label version mode case_dir fakebin out missing n archive_body multi_id
   missing='MISSING: tasks-axi (install: npm install -g tasks-axi)'
@@ -1245,6 +1276,7 @@ test_bootstrap_reporting
 test_no_mistakes_min_version
 test_gh_axi_min_version
 test_lavish_axi_min_version
+test_peekaboo_reported_only_when_opted_in
 test_tasks_axi_min_version
 test_quota_axi_min_version
 test_git_is_required_with_supported_install_instruction
