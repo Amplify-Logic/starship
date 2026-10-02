@@ -406,6 +406,111 @@ BROKER_READ
   pass "the broker reads a real store it cannot write, through a directory it cannot write either"
 }
 
+test_interrupted_apply_and_export_converge_without_duplicate_effects() {
+  local point plan rc result
+  for point in before-commit after-commit export-fsync export-replace; do
+    reset_state
+    plan="$TMP/crash-$point.json"
+    canonical_plan "crash-$point" "$plan" >/dev/null
+    set +e
+    python3 - "$SINK" "$plan" "$point" <<'PYCRASH'
+import importlib.util, os, sqlite3, sys
+from unittest.mock import patch
+spec = importlib.util.spec_from_file_location("sink", sys.argv[1])
+sink = importlib.util.module_from_spec(spec); spec.loader.exec_module(sink)
+raw = open(sys.argv[2], "rb").read(); point = sys.argv[3]
+connect, fsync, replace = sqlite3.connect, os.fsync, os.replace
+class Interrupted(sqlite3.Connection):
+    def execute(self, sql, args=()):
+        effect_commit = sql == "COMMIT" and self.execute("SELECT COUNT(*) FROM receipts").fetchone()[0] > 0
+        if effect_commit and point == "before-commit":
+            os._exit(77)
+        result = super().execute(sql, args)
+        if effect_commit and point == "after-commit":
+            os._exit(77)
+        return result
+def synced(fd):
+    fsync(fd)
+    if point == "export-fsync": os._exit(77)
+def replaced(src, dst):
+    replace(src, dst)
+    if point == "export-replace": os._exit(77)
+with patch.object(sqlite3, "connect", lambda *a, **kw: connect(*a, **kw, factory=Interrupted)), patch.object(os, "fsync", synced), patch.object(os, "replace", replaced):
+    sink.apply_plan(raw)
+PYCRASH
+    rc=$?
+    set -e
+    expect_code 77 "$rc" "death at $point"
+    # Observe through the broker before retrying/export repair.
+    if ! python3 - "$GW" "crash-$point" "$point" <<'PYREAD'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("gateway", sys.argv[1])
+gateway = importlib.util.module_from_spec(spec); spec.loader.exec_module(gateway)
+presence, digest = gateway.observed_sink_record(sys.argv[2])
+assert presence == ("absent" if sys.argv[3] == "before-commit" else "present"), (presence, digest)
+PYREAD
+    then
+      fail "wrong effect evidence after $point"
+    fi
+    result=$($SINK apply <"$plan") || fail "retry after $point failed"
+    assert_contains "$result" '"readback_verified":true' 'retry repairs the derived journal'
+    $SINK apply <"$plan" >/dev/null || fail 'repeat failed'
+    [ "$(wc -l <"$SINK_ROOT/safe-sink-v2.jsonl" | tr -d ' ')" = 1 ] || fail "duplicate export after $point"
+    if ! python3 - "$SINK_ROOT/safe-sink-v2.sqlite3" <<'PYCOUNT'
+import hashlib, sqlite3, sys
+rows = sqlite3.connect(sys.argv[1]).execute("SELECT record_json,record_digest FROM receipts").fetchall()
+assert len(rows) == 1, rows
+assert hashlib.sha256(rows[0][0]).hexdigest() == rows[0][1]
+PYCOUNT
+    then
+      fail "duplicate or absent authoritative effect after $point"
+    fi
+  done
+  pass 'death before/after commit and export fsync/replacement converges to one effect and receipt'
+}
+
+test_legacy_receipted_effect_migrates_without_replay() {
+  local plan out
+  reset_state
+  plan="$TMP/legacy-good.json"
+  canonical_plan legacy-good-idem "$plan" >/dev/null
+  $SINK apply <"$plan" >/dev/null || fail 'fixture apply failed'
+  # Build the previous public schema, retaining the receipt and journal.
+  python3 - "$SINK_ROOT/safe-sink-v2.sqlite3" <<'PYLEGACY'
+import sqlite3, sys
+with sqlite3.connect(sys.argv[1]) as db:
+    db.execute("ALTER TABLE receipts RENAME TO previous")
+    db.execute("CREATE TABLE receipts (idempotency_key TEXT PRIMARY KEY, receipt_id TEXT UNIQUE, request_id TEXT UNIQUE, plan_digest TEXT UNIQUE, record_digest TEXT UNIQUE, journal_offset INTEGER, applied_at INTEGER)")
+    db.execute("INSERT INTO receipts SELECT idempotency_key,receipt_id,request_id,plan_digest,record_digest,journal_offset,applied_at FROM previous")
+    db.execute("DROP TABLE previous")
+    db.execute("PRAGMA user_version=0")
+PYLEGACY
+  out=$($SINK apply <"$plan") || fail 'legacy receipt migration failed'
+  assert_contains "$out" '"outcome":"already-applied"' 'migration keeps original effect'
+  assert_contains "$out" '"readback_verified":true' 'migrated effect is verified'
+  [ "$(wc -l <"$SINK_ROOT/safe-sink-v2.jsonl" | tr -d ' ')" = 1 ] || fail 'migration duplicated journal'
+  pass 'a legacy receipted journal migrates to atomic storage without replay'
+}
+
+test_legacy_unreceipted_effect_is_preserved_for_reconciliation() {
+  local plan out rc
+  reset_state
+  plan="$TMP/legacy.json"
+  canonical_plan legacy-idem "$plan" >/dev/null
+  $SINK apply <"$plan" >/dev/null || fail 'fixture apply failed'
+  python3 - "$SINK_ROOT/safe-sink-v2.sqlite3" <<'PYLEGACY'
+import sqlite3, sys
+with sqlite3.connect(sys.argv[1]) as db:
+    db.execute("DELETE FROM receipts")
+    db.execute("PRAGMA user_version=0")
+PYLEGACY
+  out=$($SINK apply <"$plan" 2>&1) && rc=0 || rc=$?
+  expect_code 1 "$rc" 'legacy orphan refuses replay'
+  assert_contains "$out" 'unreceipted effect' 'orphan requires reconciliation'
+  [ "$(wc -l <"$SINK_ROOT/safe-sink-v2.jsonl" | tr -d ' ')" = 1 ] || fail 'orphan evidence was lost or duplicated'
+  pass 'legacy journal effects without receipts survive and refuse automatic replay'
+}
+
 test_sink_root_is_its_own_and_not_the_broker_root
 test_sink_refuses_a_plan_it_is_not_the_executor_for
 test_sink_is_deterministic_and_matches_the_broker_record
@@ -415,3 +520,6 @@ test_a_store_whose_group_or_mode_drifted_is_refused
 test_the_store_root_is_held_setgid
 test_a_store_root_whose_setgid_cannot_be_set_is_refused
 test_broker_reads_the_store_without_being_able_to_write_it
+test_interrupted_apply_and_export_converge_without_duplicate_effects
+test_legacy_unreceipted_effect_is_preserved_for_reconciliation
+test_legacy_receipted_effect_migrates_without_replay

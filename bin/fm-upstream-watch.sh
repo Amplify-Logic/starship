@@ -20,6 +20,10 @@
 # bin/fm-bootstrap.sh calls it so the session-start digest surfaces the report.
 # `acknowledge` removes only the pending pointer; reports and watermarks remain.
 #
+# FM_UPSTREAM_WATCH_LOCK_TIMEOUT bounds acquisition (default 5 seconds).
+# FM_UPSTREAM_WATCH_FETCH_TIMEOUT bounds each cache fetch (default 120 seconds).
+# The owner-aware mutex recovers dead owners, including legacy ownerless locks.
+#
 # Generation is separately owned by fm-upstream-watch-generate.sh so a private
 # repository workflow can retarget delivery without changing report semantics.
 set -eu
@@ -111,12 +115,22 @@ run_watch() {
 
   umask 077
   mkdir -p "$WATCH_DIR" "$REPORTS"
+  # shellcheck source=bin/fm-wake-lib.sh disable=SC1091
+  . "$SCRIPT_DIR/fm-wake-lib.sh"
+  # shellcheck source=bin/fm-timeout-lib.sh disable=SC1091
+  . "$SCRIPT_DIR/fm-timeout-lib.sh"
+  local lock_timeout=${FM_UPSTREAM_WATCH_LOCK_TIMEOUT:-5} fetch_timeout=${FM_UPSTREAM_WATCH_FETCH_TIMEOUT:-120}
+  case "$lock_timeout" in ''|*[!0-9]*|0) die 'lock timeout must be positive seconds' ;; esac
+  case "$fetch_timeout" in ''|*[!0-9]*|0) die 'fetch timeout must be positive seconds' ;; esac
   lock="$WATCH_DIR/.run-lock"
-  if ! mkdir "$lock" 2>/dev/null; then
+  RUN_LOCK=$lock
+  trap 'fm_lock_release "$RUN_LOCK"' EXIT
+  trap 'exit 129' HUP
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  if ! fm_lock_acquire_wait_bounded "$lock" "$lock_timeout"; then
     die "another upstream watch run is active ($lock)"
   fi
-  RUN_LOCK=$lock
-  trap 'rm -rf "${RUN_LOCK:-}"' EXIT HUP INT TERM
 
   if [ ! -d "$CACHE" ]; then
     git init --bare -q "$CACHE"
@@ -125,9 +139,9 @@ run_watch() {
     || die "cache is not a bare repository: $CACHE"
   # These are the only fetches in normal operation, and both write only refs in
   # the standalone cache. The live checkout is a read-only source URL here.
-  GIT_TERMINAL_PROMPT=0 git -C "$CACHE" fetch --no-tags --quiet "$ROOT" \
+  fm_run_timed "$fetch_timeout" env GIT_TERMINAL_PROMPT=0 git -C "$CACHE" fetch --no-tags --quiet "$ROOT" \
     "+$head:refs/fm-watch/fork-head"
-  GIT_TERMINAL_PROMPT=0 git -C "$CACHE" fetch --no-tags --quiet "$upstream_url" \
+  fm_run_timed "$fetch_timeout" env GIT_TERMINAL_PROMPT=0 git -C "$CACHE" fetch --no-tags --quiet "$upstream_url" \
     "+refs/heads/$branch:refs/fm-watch/upstream"
   tip=$(git -C "$CACHE" rev-parse refs/fm-watch/upstream)
   watermark=

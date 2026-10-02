@@ -169,6 +169,47 @@ test_private_path_and_schedule() {
   pass 'reports are ignored and the explicit launchd schedule is weekly, configurable, and fetch-safe'
 }
 
+test_crashed_owner_and_slow_fetch_recover() {
+  local w fakebin out rc started elapsed real_git
+  w="$TMP_ROOT/recovery"
+  new_world "$w"
+  fakebin="$w/fakebin"
+  mkdir -p "$fakebin"
+  real_git=$(command -v git)
+  cat >"$fakebin/git" <<'STUB'
+#!/usr/bin/env bash
+case " $* " in
+  *' fetch '*)
+    case "${FM_TEST_FETCH_MODE:-}" in
+      crash)
+        kill -KILL "$(cat "$FM_HOME/data/upstream-watch/.run-lock/pid")"
+        exit 0
+        ;;
+      slow) exec sleep 30 ;;
+    esac
+    ;;
+esac
+exec "$FM_TEST_REAL_GIT" "$@"
+STUB
+  chmod +x "$fakebin/git"
+  out=$(PATH="$fakebin:$PATH" FM_TEST_REAL_GIT="$real_git" FM_TEST_FETCH_MODE=crash     FM_UPSTREAM_WATCH_FETCH_TIMEOUT=2 run_watch "$w" killed 2>&1) && rc=0 || rc=$?
+  [ "$rc" -ne 0 ] || fail 'the owner was not killed'
+  [ -e "$w/home/data/upstream-watch/.run-lock" ] || fail 'crash did not leave its lock'
+  out=$(run_watch "$w" recovered)
+  assert_contains "$out" 'wrote private report' 'dead owner stranded the next run'
+
+  started=$(date +%s)
+  out=$(PATH="$fakebin:$PATH" FM_TEST_REAL_GIT="$real_git" FM_TEST_FETCH_MODE=slow     FM_UPSTREAM_WATCH_FETCH_TIMEOUT=1 run_watch "$w" slow 2>&1) && rc=0 || rc=$?
+  expect_code 124 "$rc" 'stalled fetch is bounded'
+  elapsed=$(( $(date +%s) - started ))
+  [ "$elapsed" -lt 15 ] || fail "fetch exceeded its bounded budget: ${elapsed}s"
+  [ ! -e "$w/home/data/upstream-watch/.run-lock" ] || fail 'timeout kept the mutex'
+  out=$(run_watch "$w" after-timeout)
+  assert_contains "$out" 'wrote private report' 'timeout stranded subsequent reports'
+  pass 'a killed owner is reclaimed and a stalled fetch times out without stranding reports'
+}
+
 test_first_report_and_quiet_second_run
 test_pending_bootstrap_surface_and_acknowledgement
 test_private_path_and_schedule
+test_crashed_owner_and_slow_fetch_recover

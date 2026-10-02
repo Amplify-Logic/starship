@@ -3,9 +3,9 @@
 
 This is the Step 2.6 executor: the only program bin/fm-action-gateway-v2.py will
 ever claim an execution for, and the only component in the v2 boundary that holds
-an effect. Its effect is deliberately local and inert - one append-only record in
-its own store under its own root - so the whole execution path can be proved end
-to end before any outward capability exists.
+an effect. Its effect is deliberately local and inert - one immutable SQLite record
+committed with its receipt under its own root - so the whole execution path can
+be proved end to end before any outward capability exists.
 
 Three properties matter, and each is enforced here rather than asserted:
 
@@ -14,11 +14,11 @@ Three properties matter, and each is enforced here rather than asserted:
                  always produces the same bytes and the broker can recompute them
                  without asking this program anything.
   Exactly once   The idempotency key is the receipt store's primary key. A repeat
-                 apply reports already-applied and changes nothing, so a repeated
-                 click, a retry, or a restart cannot produce a second effect.
+                 apply reports already-applied and only repairs the derived JSONL
+                 export, so a retry or restart cannot produce a second effect.
   Readable back  After committing, this program re-opens its own store read-only
-                 and re-reads the appended line, and reports what it found rather
-                 than what it intended.
+                 and checks the effect bytes and their JSONL copy, reporting what
+                 it found rather than what it intended.
 
 It refuses any plan that claims an outward executor, and any plan whose bound
 executor hash is not this file's exact bytes.
@@ -63,6 +63,7 @@ import secrets
 import sqlite3
 import stat
 import sys
+import tempfile
 import time
 import urllib.parse
 from pathlib import Path
@@ -266,13 +267,41 @@ def connect_database() -> Tuple[sqlite3.Connection, int]:
           plan_digest TEXT NOT NULL UNIQUE,
           record_digest TEXT NOT NULL UNIQUE,
           journal_offset INTEGER,
+          record_json BLOB,
           applied_at INTEGER NOT NULL
         );
         """
     )
-    columns = {str(row["name"]) for row in connection.execute("PRAGMA table_info(receipts)")}
-    if "journal_offset" not in columns:
-        connection.execute("ALTER TABLE receipts ADD COLUMN journal_offset INTEGER")
+    # Upgrade old journals only when every effect has a matching receipt. An
+    # orphan from the former append/COMMIT gap is evidence, never disposable.
+    # Serialize schema inspection too, so concurrent first uses cannot both
+    # try to add the migration column.
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        columns = {str(row["name"]) for row in connection.execute("PRAGMA table_info(receipts)")}
+        if "journal_offset" not in columns:
+            connection.execute("ALTER TABLE receipts ADD COLUMN journal_offset INTEGER")
+        if "record_json" not in columns:
+            connection.execute("ALTER TABLE receipts ADD COLUMN record_json BLOB")
+        if connection.execute("PRAGMA user_version").fetchone()[0] == 0:
+            known = {row["record_digest"] for row in connection.execute("SELECT record_digest FROM receipts")}
+            lines = journal_path().read_bytes().splitlines() if journal_path().exists() else []
+            if any(sha256_bytes(line) not in known for line in lines):
+                fail("legacy sink journal has an unreceipted effect; reconciliation required")
+            for row in connection.execute("SELECT idempotency_key,record_digest,journal_offset FROM receipts WHERE record_json IS NULL"):
+                offset = row["journal_offset"]
+                if journal_record_digest(offset) != row["record_digest"]:
+                    fail("legacy sink receipt has no matching journal effect; reconciliation required")
+                with journal_path().open("rb") as handle:
+                    handle.seek(offset)
+                    encoded = handle.readline().rstrip(b"\n")
+                connection.execute("UPDATE receipts SET record_json=? WHERE idempotency_key=?", (encoded, row["idempotency_key"]))
+            connection.execute("PRAGMA user_version=1")
+        connection.execute("COMMIT")
+    except BaseException:
+        connection.execute("ROLLBACK")
+        connection.close()
+        raise
     harden_store_files(expected_gid)
     return connection, expected_gid
 
@@ -357,8 +386,8 @@ def readback(idempotency_key: str, record_digest: str, journal_offset: Optional[
     if connection is not None:
         try:
             connection.row_factory = sqlite3.Row
-            row = connection.execute("SELECT record_digest FROM receipts WHERE idempotency_key=?", (idempotency_key,)).fetchone()
-            observed_receipt = str(row["record_digest"]) if row is not None else None
+            row = connection.execute("SELECT record_json FROM receipts WHERE idempotency_key=?", (idempotency_key,)).fetchone()
+            observed_receipt = sha256_bytes(bytes(row["record_json"])) if row is not None else None
         except sqlite3.Error:
             observed_receipt = None
         finally:
@@ -370,6 +399,45 @@ def readback(idempotency_key: str, record_digest: str, journal_offset: Optional[
         "readback_journal_digest": observed_journal,
         "readback_verified": verified,
     }
+
+
+def export_journal(connection: sqlite3.Connection, expected_gid: int) -> None:
+    """Replace the derived JSONL snapshot under the database writer lock.
+
+    A crash before or after replacement is harmless: the next apply exports
+    the same committed rows. The journal never precedes the authoritative effect.
+    """
+    connection.execute("BEGIN IMMEDIATE")
+    temp = None
+    try:
+        fd, temp = tempfile.mkstemp(prefix=".safe-sink-export-", dir=sink_root())
+        with os.fdopen(fd, "wb") as handle:
+            os.fchmod(handle.fileno(), STORE_FILE_MODE)
+            if os.fstat(handle.fileno()).st_gid != expected_gid:
+                os.fchown(handle.fileno(), -1, expected_gid)
+            for row in connection.execute("SELECT idempotency_key,record_json,record_digest FROM receipts ORDER BY rowid"):
+                encoded = bytes(row["record_json"])
+                if sha256_bytes(encoded) != row["record_digest"]:
+                    fail("stored sink effect does not match its receipt")
+                offset = handle.tell()
+                handle.write(encoded + b"\n")
+                connection.execute("UPDATE receipts SET journal_offset=? WHERE idempotency_key=?", (offset, row["idempotency_key"]))
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp, journal_path())
+        directory = os.open(sink_root(), os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+        connection.execute("COMMIT")
+    except BaseException:
+        connection.execute("ROLLBACK")
+        raise
+    finally:
+        if temp is not None:
+            with contextlib.suppress(FileNotFoundError):
+                os.unlink(temp)
 
 
 def apply_plan(raw: bytes) -> Dict[str, Any]:
@@ -395,36 +463,20 @@ def apply_plan(raw: bytes) -> Dict[str, Any]:
             stored_offset = existing["journal_offset"]
         else:
             receipt_id = secrets.token_hex(16)
-            # The journal is written inside the transaction so a crash between
-            # the two leaves the receipt uncommitted rather than leaving a
-            # record nothing accounts for. The append offset is recorded with
-            # the receipt so verification never has to rescan the journal.
-            descriptor = os.open(journal_path(), os.O_WRONLY | os.O_APPEND | os.O_CREAT, STORE_FILE_MODE)
+            # Effect bytes and the receipt share one atomic SQLite commit.
             try:
-                # Set on the open descriptor rather than left to the umask, so
-                # the journal carries the broker's read authority from the first
-                # byte instead of from the hardening pass after the commit.
-                journal_info = os.fstat(descriptor)
-                if stat.S_IMODE(journal_info.st_mode) != STORE_FILE_MODE:
-                    os.fchmod(descriptor, STORE_FILE_MODE)
-                if journal_info.st_gid != expected_gid:
-                    os.fchown(descriptor, -1, expected_gid)
-                stored_offset = os.lseek(descriptor, 0, os.SEEK_END)
-                try:
-                    connection.execute(
-                        "INSERT INTO receipts(idempotency_key,receipt_id,request_id,plan_digest,record_digest,journal_offset,applied_at) VALUES(?,?,?,?,?,?,?)",
-                        (idempotency_key, receipt_id, request_id, plan_digest, digest, stored_offset, int(time.time())),
-                    )
-                except sqlite3.IntegrityError as exc:
-                    connection.execute("ROLLBACK")
-                    fail(f"safe sink refused a conflicting identity: {exc}")
-                os.write(descriptor, encoded + b"\n")
-                os.fsync(descriptor)
-            finally:
-                os.close(descriptor)
+                connection.execute(
+                    "INSERT INTO receipts(idempotency_key,receipt_id,request_id,plan_digest,record_digest,record_json,applied_at) VALUES(?,?,?,?,?,?,?)",
+                    (idempotency_key, receipt_id, request_id, plan_digest, digest, encoded, int(time.time())),
+                )
+            except sqlite3.IntegrityError as exc:
+                connection.execute("ROLLBACK")
+                fail(f"safe sink refused a conflicting identity: {exc}")
             connection.execute("COMMIT")
             outcome = "applied"
             stored_digest = digest
+        export_journal(connection, expected_gid)
+        stored_offset = connection.execute("SELECT journal_offset FROM receipts WHERE idempotency_key=?", (idempotency_key,)).fetchone()[0]
     except SinkError:
         raise
     except Exception:

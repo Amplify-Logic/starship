@@ -122,6 +122,8 @@ The broker opens the safe sink's own receipt store read-only and looks for the r
 
 The executor's claimed outcome is recorded in the audit event as `executor_claimed_outcome` and never decides the state.
 An executor that reports success it did not achieve settles `failed` or `unknown`, whichever the store actually supports.
+The runner settles only after it has reaped the executor, and the sink commits each effect atomically with its receipt, so an absent receipt at settlement means nothing was applied.
+A runner that dies before reaping its executor never settles; its lease expires and the request records `unknown`, reconciliation required.
 A settle arriving after the lease expired is refused and leaves the recorded `unknown` in place, so a late return can never resurrect a terminal state.
 
 Status reports a `settlement` word alongside the state, because "approved", "queued", "sent" and "applied" are different facts:
@@ -140,12 +142,14 @@ Status reports a `settlement` word alongside the state, because "approved", "que
 
 ## The deterministic safe sink
 
-The safe sink is the only executor the broker will claim for, and its effect is deliberately local and inert: one append-only record in its own store.
+The safe sink is the only executor the broker will claim for, and its effect is deliberately local and inert: one immutable SQLite record committed atomically with its receipt.
 It refuses any plan that claims an outward executor, and any plan whose bound executor hash is not its own exact bytes.
 
 One approved plan resolves to exactly one record, built only from the plan's identity fields, so the broker recomputes the same bytes without asking the sink anything.
-The idempotency key is the receipt store's primary key, so a repeated click, a retry, or a restart reports `already-applied` and changes nothing.
-After committing, the sink re-opens its own store read-only and re-reads the appended line, and reports what it found rather than what it intended.
+The idempotency key is the receipt store's primary key, so a repeated click, a retry, or a restart reports `already-applied` without creating another effect.
+The JSONL journal is an atomic snapshot exported from committed SQLite records, so interruption during export cannot create an unreceipted effect or duplicate one on retry.
+Legacy journals migrate only when their records have matching receipts; an orphan is preserved and requires reconciliation.
+After exporting, the sink re-opens its own store read-only and verifies both the stored effect bytes and their journal copy.
 
 The sink derives its store root by its own rule rather than accepting one from the caller: a sink whose store the caller could relocate is a sink whose receipts the broker cannot use as evidence.
 
@@ -164,7 +168,7 @@ The store is deliberately not WAL for the same reason.
 A read-only opener of a WAL database has to create the `-shm` wal-index beside the database file, so a reader with no write access to that directory is refused outright and the broker could never read the evidence at all.
 `journal_mode=TRUNCATE` with `synchronous=FULL` keeps the same durability and stays readable through group read on the files alone, and a store that reports WAL back is refused rather than used, so a regression to WAL fails loudly instead of silently breaking the broker's read path at install time.
 
-Verification is bounded rather than a rescan: the journal offset of each appended record is stored with its receipt, so reading an effect back is one seek and one line no matter how many records the journal already holds.
+Export rebuilds the journal under the SQLite writer lock and records each exported offset; subsequent journal readback is one seek and one line.
 
 ## The execution entry point
 
