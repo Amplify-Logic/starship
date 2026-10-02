@@ -384,7 +384,7 @@ announce_note() {  # <id> <summary>
 # rung.
 ring_primary() {  # <id>
   local id=$1
-  [ ! -e "$STATE/.afk" ] || return 0
+  [ ! -e "$STATE/.afk" ] && [ ! -e "$STATE/.afk-contract" ] || return 0
   [ -x "$FM_ROOT/bin/fm-desk-voice.sh" ] || return 0
   FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" nohup "$FM_ROOT/bin/fm-desk-voice.sh" ring \
     "[firstmate inbox] captain inbox note $id is queued. Run bin/fm-wake-drain.sh now to pick it up; it stays queued until handled and acknowledged." \

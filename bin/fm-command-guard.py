@@ -36,14 +36,16 @@
 # failure of an episode is written once to the log and stderr, and the next good
 # answer ends the episode. The guard never stops work because Jev is down.
 #
-# NEVER SENDS SECRETS. Only the command text leaves the machine, never the
-# working directory, the task or the environment. Before it is sent, every
-# value of this home's .env and every secret-looking environment variable is
-# removed wherever it appears, anything shaped like a known key, token,
-# password argument, credentialed URL or private-key block is replaced, and a
-# NAME=value assignment loses its value when the name looks secret or the value
-# looks random. Plain values such as paths stay visible, so the judge can see
-# what `T=../sibling-copy; rm -rf "$T"` removes.
+# REDACTS KNOWN SECRETS. Only the command text leaves the machine, never the
+# working directory, the task or the environment. Before it is sent, known
+# .env and secret-looking environment values are removed, as described in
+# docs/configuration.md. Redaction is best-effort: known keys, tokens,
+# password arguments, whole quoted or unquoted, credentialed URLs and
+# private-key blocks are replaced; a NAME=value assignment loses its value when
+# the name looks secret or the value looks random. It matches text patterns,
+# not shell syntax, and every command is judged with whatever it removed.
+# Plain values such as paths stay visible, so the judge can see what
+# `T=../sibling-copy; rm -rf "$T"` removes.
 #
 # ONE SIGNAL AMONG SEVERAL. The video this borrows from saw an agent route
 # around a write-only gate by writing the same file with a shell heredoc, so
@@ -210,7 +212,7 @@ def api_key(home):
 
 # ---- redaction --------------------------------------------------------------
 
-SECRET_NAME = re.compile(r"(?i)(key|token|secret|pass|pwd|credential|auth|cookie|session|private|signature)")
+SECRET_NAME = re.compile(r"(?i)(key|token|secret|pass|pwd|credential|auth|cookie|session|private|signature|(?:^|_)pin(?:$|_))")
 NOT_SECRET_NAMES = {"PWD", "OLDPWD", "SSH_AUTH_SOCK", "XPC_SERVICE_NAME", "TERM_SESSION_ID"}
 
 KEY_PATTERNS = [
@@ -227,9 +229,9 @@ KEY_PATTERNS = [
 # --password ..., Authorization: Bearer ...
 NAMED_VALUE = re.compile(
     r"(?i)((?:bearer|basic)\s+(?=[^\s\"';&|]{8,})|"
-    r"(?:api[_-]?key|access[_-]?key|secret|token|password|passwd|auth)[\"']?\s*[=:]\s*[\"']?|"
-    r"--(?:api[_-]?key|token|password|passwd|secret|auth)[ =][\"']?)"
-    r"([^\s\"';&|]+)")
+    r"(?:api[_-]?key|access[_-]?key|secret|token|password|passwd|auth)[\"']?\s*[=:]\s*|"
+    r"--(?:api[_-]?key|token|password|passwd|secret|auth)(?:=|\s+))"
+    r"(\"(?:\\.|[^\"\\])*\"|'[^']*'|[^\s\"';&|]+)")
 URL_CREDENTIAL = re.compile(r"(://)[^/\s:@]+:[^/\s@]+@")
 # NAME=value at the start, after whitespace or an operator, or on its own line
 # inside a heredoc body. Only a secret-looking name or a random-looking value
@@ -255,7 +257,9 @@ def _assignment(match):
 
 
 def literal_secrets(home):
-    values = set(v for v in env_file_values(home).values() if len(v) >= 6)
+    values = {value for name, value in env_file_values(home).items()
+              if value and (len(value) >= 6
+                            or (SECRET_NAME.search(name) and name not in NOT_SECRET_NAMES))}
     for name, value in os.environ.items():
         if name in NOT_SECRET_NAMES or not SECRET_NAME.search(name):
             continue
@@ -267,7 +271,11 @@ def literal_secrets(home):
 def redact(command, secrets):
     text = command
     for value in secrets:
-        text = text.replace(value, REDACTED)
+        if len(value) < 6:
+            # A short credential must not erase letters inside ordinary words.
+            text = re.sub(r"(?<!\w)" + re.escape(value) + r"(?!\w)", REDACTED, text)
+        else:
+            text = text.replace(value, REDACTED)
     for pattern in KEY_PATTERNS:
         text = pattern.sub(REDACTED, text)
     text = NAMED_VALUE.sub(lambda m: m.group(1) + REDACTED, text)

@@ -159,6 +159,8 @@ test_default_fable_happy_path() {
     "fable: hostile-review prompt passed as argv"
   assert_contains "$(cat "$dir/argv.txt")" 'Check threading, concurrency, timeouts, retries and idempotency explicitly' \
     "fable: concurrency and retry rule reaches the reviewer"
+  assert_contains "$(cat "$dir/argv.txt")" 'and confirm a caller actually reaches it' \
+    "fable: concurrency findings require a reachable caller"
   assert_contains "$RUN_OUT" 'Claude Fable week percentRemaining=42' \
     "fable: advisory reads the lower of model:fable and seven_day, not five_hour"
   assert_not_contains "$RUN_OUT" 'API key was set' \
@@ -217,6 +219,8 @@ test_grok_happy_path_and_floor() {
     "grok: cursor-agent read-only print invocation"
   assert_contains "$(cat "$dir/argv.txt")" 'Check threading, concurrency' \
     "grok: concurrency and retry rule reaches the reviewer"
+  assert_contains "$(cat "$dir/argv.txt")" 'and confirm a caller actually reaches it' \
+    "grok: concurrency findings require a reachable caller"
   assert_contains "$RUN_OUT" 'Cursor all-model availability (lowest of included, auto and API usage) percentRemaining=15' \
     "grok: advisory reads the all-model effective availability"
 

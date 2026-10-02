@@ -214,6 +214,54 @@ test_plain_assignments_stay_visible() {
   pass "plain assignments and arguments such as a delete target, a disk or an environment name stay visible"
 }
 
+test_quoted_and_short_secrets_are_redacted() {
+  local home cmd body log text
+  home=$(new_home redact-short 'enabled = true\n')
+  printf 'API_TOKEN=q7x\nDB_PASSWORD=z9\nPIN=abc12\nSERVICE_PIN=7\nMODE=dev\nEMPTY_SECRET=\n' >> "$home/.env"
+  reset_server "$FIX/response-git-status.json"
+  cmd=$(cat <<'EOF'
+client --password 'correct horse battery staple' --token="violet sea shell" --auth "escaped \"quote\" secret" --secret plain-secret
+client login q7x z9 abc12 7 q7x-suffix prefixq7x MODE=dev
+EOF
+)
+  payload "$cmd" | env -i PATH="$PATH" FM_COMMAND_GUARD_ENDPOINT="$FM_COMMAND_GUARD_ENDPOINT" \
+    python3 "$GUARD" hook --home "$home" --state "$home/state" --config "$home/config" \
+    --task fixture --project demo >/dev/null
+  body=$(jq -r '.state.command' "$SRV/requests.jsonl")
+  log=$(jq -r '.command' "$home/state/command-guard.log")
+  for text in "$body" "$log"; do
+    assert_not_contains "$text" 'horse' "a quoted password must be removed whole"
+    assert_not_contains "$text" 'sea shell' "a quoted equals value must be removed whole"
+    assert_not_contains "$text" 'quote' "an escaped quote must not end redaction early"
+    assert_not_contains "$text" 'plain-secret' "an unquoted credential must still be removed"
+    assert_not_contains "$text" 'login q7x z9' "short secret-named .env values must be removed"
+    assert_contains "$text" 'login <redacted> <redacted> <redacted> <redacted>' "short credentials, including one-character PINs, must be redacted"
+    assert_contains "$text" 'prefixq7x' "short secrets must match token boundaries"
+    assert_contains "$text" 'MODE=dev' "ordinary short values must stay readable"
+  done
+  pass "whole quoted credentials and short secret-named .env values are removed from requests and logs"
+}
+
+test_routine_expansions_are_judged() {
+  local home cmd out body
+  home=$(new_home redact-routine 'enabled = true\n')
+  # shellcheck disable=SC2016 # literal commands sent to the fake judge; nothing here may expand
+  for cmd in \
+    'GH_TOKEN="$(gh auth token)" gh pr create --fill|GH_TOKEN=<redacted> gh pr create --fill' \
+    'mysql --password="$(cat ~/.dbpw)" -e "select 1"|mysql --password=<redacted> -e "select 1"' \
+    'export API_KEY="${API_KEY:-dev}"; npm test|export API_KEY=<redacted>; npm test' \
+    "cd \"\${HOME}/proj\" && client --token 'abc def'|cd \"\${HOME}/proj\" && client --token <redacted>" \
+    "git commit -m \"\$(cat <<'EOF'"$'\n''Redact --password "a b" values whole'$'\n'"EOF"$'\n'")\"|git commit -m \"\$(cat <<'EOF'"$'\n''Redact --password <redacted> values whole'$'\n'"EOF"$'\n'")\""; do
+    reset_server "$FIX/response-git-status.json"
+    out=$(run_hook "$home" "${cmd%%|*}")
+    assert_equals "" "$out" "a routine command with an expanded or quoted credential must be allowed by the judge's answer"
+    assert_equals 1 "$(requests)" "a routine command with an expanded or quoted credential must be judged"
+    body=$(jq -r '.state.command' "$SRV/requests.jsonl")
+    assert_equals "${cmd#*|}" "$body" "the judged command keeps its arguments and loses each credential value"
+  done
+  pass "routine commands with expanded or quoted credentials are judged with each value redacted"
+}
+
 # --- a long command is judged whole, in parts ---------------------------------
 
 part_answers() {  # <part-count> <irreversible-part>: every part benign but one
@@ -413,6 +461,8 @@ test_recorded_block_and_allow
 test_thresholds
 test_non_bash_tool_ignored
 test_redaction
+test_quoted_and_short_secrets_are_redacted
+test_routine_expansions_are_judged
 test_plain_assignments_stay_visible
 test_long_command_judged_in_parts
 test_parts_failure_falls_back_to_head_and_tail

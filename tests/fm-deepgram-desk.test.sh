@@ -1105,7 +1105,13 @@ case "${1:-} ${2:-}" in
         '────────────────────────────────────────' '  ⏵⏵ auto mode on' > "$screen"
     fi
     esc=$'\033'
-    draft=$(cat "$dir/draft" 2>/dev/null)
+    if [ -e "$dir/stale-left" ]; then
+      draft=$(cat "$dir/stale-draft")
+      left=$(( $(cat "$dir/stale-left") - 1 ))
+      if [ "$left" -le 0 ]; then rm -f "$dir/stale-left"; else printf '%s' "$left" > "$dir/stale-left"; fi
+    else
+      draft=$(cat "$dir/draft" 2>/dev/null)
+    fi
     row="❯"$'\302\240'"${esc}[0m"
     if [ -n "$draft" ] && [ -e "$dir/wrap" ]; then
       row+="${esc}[38;2;255;255;255m${draft:0:40}"
@@ -1133,6 +1139,14 @@ case "${1:-} ${2:-}" in
     if [ "$ansi" = 1 ]; then cat "$dir/screen.now"; else sed $'s/\033\\[[0-9;:]*m//g' "$dir/screen.now"; fi ;;
   "pane send-text")
     [ ! -e "$dir/send-text-fails" ] || exit 1
+    if [ -e "$dir/hold-send" ]; then
+      : > "$dir/send-held"
+      for _ in $(seq 1 150); do
+        [ -e "$dir/release-send" ] && break
+        sleep 0.1
+      done
+      [ -e "$dir/release-send" ] || exit 1
+    fi
     if [ -e "$dir/drop-head" ]; then text=${4:1}; else text=$4; fi
     open=$'\033[200~' close=$'\033[201~'
     n=$(( $(cat "$dir/pastes" 2>/dev/null || echo 0) + 1 ))
@@ -1157,7 +1171,8 @@ case "${1:-} ${2:-}" in
       cp "$dir/late-paste" "$dir/queued-reads"
     else
       printf '%s' "$text" >> "$dir/draft"
-    fi ;;
+    fi
+    [ ! -e "$dir/type-before-enter" ] || cat "$dir/type-before-enter" >> "$dir/draft" ;;
   "pane send-keys")
     draw_queued
     case "$4" in
@@ -1179,6 +1194,10 @@ case "${1:-} ${2:-}" in
         fi ;;
       *)
         : > "$dir/entered"
+        if [ -e "$dir/swallow-enter-once" ]; then
+          rm "$dir/swallow-enter-once"
+          exit 0
+        fi
         [ ! -e "$dir/never-works" ] || exit 0
         if [ -e "$dir/refold" ]; then
           draft=$(cat "$dir/draft")
@@ -1192,14 +1211,19 @@ case "${1:-} ${2:-}" in
             draft=${draft//"[Pasted text #${paste##*-}]"/$(cat "$paste")}
           done
           printf '%s\n' "$draft" >> "$dir/submitted"
+          if [ -e "$dir/stale-reads" ]; then
+            printf '%s' "$draft" > "$dir/stale-draft"
+            cp "$dir/stale-reads" "$dir/stale-left"
+          fi
         elif [ -e "$dir/ghost" ]; then
           { cat "$dir/ghost"; printf '\n'; } >> "$dir/submitted"
         fi
         : > "$dir/draft"
-        [ ! -e "$dir/stash" ] || mv "$dir/stash" "$dir/draft" ;;
+        [ ! -e "$dir/stash" ] || mv "$dir/stash" "$dir/draft"
+        [ ! -e "$dir/type-after-enter" ] || mv "$dir/type-after-enter" "$dir/draft" ;;
     esac ;;
   "agent get")
-    if [ -e "$dir/entered" ] && [ ! -e "$dir/never-works" ]; then s=working; else s=idle; fi
+    if [ -e "$dir/entered" ] && [ ! -e "$dir/never-works" ] && [ ! -e "$dir/agent-idle" ]; then s=working; else s=idle; fi
     if [ -e "$dir/agent" ]; then
       printf '{"result":{"agent":{"agent":"%s","agent_status":"%s"}}}\n' "$(cat "$dir/agent")" "$s"
     else
@@ -1208,9 +1232,9 @@ case "${1:-} ${2:-}" in
 esac
 exit 0
 SH
-  # The tmux fake answers only what reaching the pane and the front check
-  # read; its chat input cannot be read, so a message that gets that far lands
-  # in the mailbox.
+  # By default the tmux fake answers only the pane and front checks. Ring
+  # race cases opt into the same composer model as Herdr, through tmux's
+  # capture, buffer and key operations.
   cat > "$fb/tmux" <<'SH'
 #!/usr/bin/env bash
 set -u
@@ -1221,7 +1245,22 @@ case "$*" in
   *'#{session_id} #{window_active}#{pane_active}'*) cat "$dir/tmux-active" ;;
   *'#{pane_id}'*) printf '%%9\n' ;;
   list-clients*) cat "$dir/tmux-clients" 2>/dev/null ;;
-  *) exit 1 ;;
+  *)
+    [ -e "$dir/tmux-composer" ] || exit 1
+    case "$1" in
+      capture-pane) "$dir/bin/herdr" pane read --pane w7:p3 --format ansi ;;
+      display-message)
+        case "$*" in *'#{cursor_y}'*) printf '1\n' ;; *) exit 1 ;; esac ;;
+      load-buffer) cat > "$dir/tmux-buffer" ;;
+      paste-buffer) "$dir/bin/herdr" pane send-text w7:p3 "$(cat "$dir/tmux-buffer")" ;;
+      send-keys)
+        case "$4" in
+          -l) "$dir/bin/herdr" pane send-text w7:p3 "$5" ;;
+          Enter) "$dir/bin/herdr" pane send-keys w7:p3 enter ;;
+          *) exit 1 ;;
+        esac ;;
+      *) exit 1 ;;
+    esac ;;
 esac
 SH
   printf '#!/bin/sh\nexit 0\n' > "$fb/osascript"
@@ -1407,6 +1446,154 @@ inbox_note_in() {  # <home> <text> -> stdout of fm-inbox.sh note
       FM_STATE_OVERRIDE="$home/state" FM_BACKEND_HERDR_SUBMIT_MIN_SLEEP=0.1 \
       "$ROOT/bin/fm-inbox.sh" note "$2"
   )
+}
+
+desk_ring() {  # <home> <line>
+  local home=$1 dir="$1/fixture"
+  env -u TMUX -u TMUX_PANE -u HERDR_ENV -u HERDR_PANE_ID -u HERDR_SOCKET_PATH \
+    PATH="$dir/bin:$PATH" FM_FAKE_HERDR_DIR="$dir" FM_HOME="$home" \
+    FM_STATE_OVERRIDE="$home/state" "$DESK" ring "$2"
+}
+
+test_ring_checks_the_payload_before_each_enter() {
+  local home out backend when
+  for backend in tmux herdr; do
+    for when in before after retry; do
+      home=$(desk_send_fixture "ring-race-$backend-$when" "$backend") \
+        || { desk_send_skip "ring-race-$backend-$when"; return 0; }
+      : > "$home/fixture/tmux-composer"
+      case "$when" in
+        before|after) printf 'half typed thought' > "$home/fixture/type-$when-enter" ;;
+        retry) : > "$home/fixture/swallow-enter-once" ;;
+      esac
+      out=$(desk_ring "$home" '[firstmate inbox] ring') || fail "ring failed: $out"
+      case "$when" in
+        before)
+          [ ! -e "$home/fixture/entered" ] || fail "$backend: ring submitted a changed draft"
+          assert_contains "$(cat "$home/fixture/draft")" 'half typed thought' "human text must be kept"
+          ;;
+        after)
+          [ "$(cat "$home/fixture/submitted")" = '[firstmate inbox] ring' ] || fail "$backend: ring retried over a new draft"
+          [ "$(cat "$home/fixture/draft")" = 'half typed thought' ] || fail "$backend: new draft must remain unsent"
+          [ "$(herdr_calls "$home" pane send-keys | wc -l | tr -d ' ')" = 1 ] || fail "$backend: no Enter retry over a new draft"
+          ;;
+        retry)
+          assert_contains "$out" "rung: $backend" "an unchanged ring can retry a swallowed Enter"
+          [ "$(cat "$home/fixture/submitted")" = '[firstmate inbox] ring' ] || fail "$backend: retry must submit only the ring"
+          [ "$(herdr_calls "$home" pane send-keys | wc -l | tr -d ' ')" = 2 ] || fail "$backend: exactly one safe retry is expected"
+          ;;
+      esac
+      [ "$(inbox_count "$home")" = 0 ] || fail "a ring must not write a duplicate mailbox message"
+      desk_send_done "$home"
+    done
+  done
+  pass "desk ring: both backends re-read the payload before every Enter, including retries"
+}
+
+test_ring_waits_for_a_late_paste_and_a_late_redraw() {
+  local home out backend when
+  for backend in tmux herdr; do
+    for when in paste suggestion redraw stash; do
+      home=$(desk_send_fixture "ring-late-$backend-$when" "$backend") \
+        || { desk_send_skip "ring-late-$backend-$when"; return 0; }
+      : > "$home/fixture/tmux-composer"
+      case "$when" in
+        paste) printf '6' > "$home/fixture/late-paste" ;;
+        suggestion)
+          printf '6' > "$home/fixture/late-paste"
+          printf 'suggested words' > "$home/fixture/ghost"
+          ;;
+        redraw) printf '5' > "$home/fixture/stale-reads" ;;
+        stash)
+          printf 'half typed thought' > "$home/fixture/stash"
+          printf '5' > "$home/fixture/stale-reads"
+          ;;
+      esac
+      out=$(desk_ring "$home" '[firstmate inbox] ring') || fail "ring failed: $out"
+      case "$when" in
+        paste|suggestion|redraw)
+          assert_contains "$out" "rung: $backend" "a late $when must still be proven and submitted"
+          [ "$(cat "$home/fixture/submitted")" = '[firstmate inbox] ring' ] || fail "$backend: only the ring may be submitted"
+          [ "$(herdr_calls "$home" pane send-keys | wc -l | tr -d ' ')" = 1 ] || fail "$backend: a late $when needs exactly one Enter"
+          [ ! -s "$home/fixture/draft" ] || fail "$backend: the ring must not stay in the box"
+          ;;
+        stash)
+          [ "$out" = not-rung ] || fail "$backend: a ring must leave a stashed draft alone: $out"
+          [ -z "$(herdr_calls "$home" pane send-text)" ] || fail "$backend: nothing may be typed over a stash"
+          [ -z "$(herdr_calls "$home" pane send-keys)" ] || fail "$backend: no Enter may restore and submit a stash"
+          [ "$(cat "$home/fixture/stash")" = 'half typed thought' ] || fail "$backend: the stash must be kept"
+          [ ! -e "$home/fixture/submitted" ] || fail "$backend: nothing may be submitted"
+          ;;
+      esac
+      [ "$(inbox_count "$home")" = 0 ] || fail "a ring must not write a duplicate mailbox message"
+      desk_send_done "$home"
+    done
+  done
+  pass "desk ring: a late paste is still proven, even under a dim suggestion, a late redraw gets no retry, and a stash is never rung over"
+}
+
+test_ring_and_send_share_one_writer_lock() {
+  local home first out pid i
+  for first in ring send; do
+    home=$(desk_send_fixture "pane-writer-$first") || { desk_send_skip "pane-writer-$first"; return 0; }
+    : > "$home/fixture/hold-send"
+    if [ "$first" = ring ]; then
+      desk_ring "$home" '[firstmate inbox] ring' > "$home/first.out" &
+    else
+      desk_send "$home" 'first message' > "$home/first.out" &
+    fi
+    pid=$!
+    fm_test_track_pid "$pid"
+    for i in $(seq 1 100); do
+      [ -e "$home/fixture/send-held" ] && break
+      sleep 0.1
+    done
+    [ -e "$home/fixture/send-held" ] || fail "first writer never reached the pane"
+    out=$(desk_ring "$home" 'second ring') || fail "contending ring failed"
+    [ "$out" = not-rung ] || fail "contending ring must leave its durable wake alone: $out"
+    out=$(desk_send "$home" 'second message') || fail "contending send failed"
+    case "$out" in mailbox:\ *) ;; *) fail "contending send must use its mailbox: $out" ;; esac
+    [ "$(herdr_calls "$home" pane send-text | wc -l | tr -d ' ')" = 1 ] || fail "only the lock holder may type"
+    : > "$home/fixture/release-send"
+    wait "$pid" || fail "first writer failed"
+    rm "$home/fixture/hold-send"
+    out=$(desk_ring "$home" 'next ring') || fail "ring after lock release failed"
+    assert_contains "$out" 'rung:' "the writer lock must be released after submission"
+    desk_send_done "$home"
+  done
+  pass "desk ring and send: concurrent writers use one lock and release it after delivery"
+}
+
+test_inbox_ring_respects_contract_only_away_posture() {
+  local home out probe posture i
+  home=$(new_home note-ring-contract)
+  mkdir -p "$home/fixture/bin"
+  # A transport probe records a ring launch without needing any live primary.
+  cat > "$home/fixture/bin/nohup" <<'SH'
+#!/bin/sh
+printf 'ring\n' >> "$FM_HOME/rings"
+SH
+  chmod +x "$home/fixture/bin/nohup"
+  for posture in present away quiet contract; do
+    rm -f "$home/state/.afk" "$home/state/.afk-contract" "$home/rings"
+    case "$posture" in
+      away|quiet) printf '%s\n' "$posture" > "$home/state/.afk" ;;
+      contract) printf '{}\n' > "$home/state/.afk-contract" ;;
+    esac
+    out=$(inbox_note_in "$home" "status $posture") || fail "note failed: $out"
+    if [ "$posture" = present ]; then
+      for i in $(seq 1 50); do [ ! -e "$home/rings" ] || break; sleep 0.1; done
+      [ -s "$home/rings" ] || fail "present posture must launch the ring"
+    else
+      sleep 0.3
+      [ ! -e "$home/rings" ] || fail "$posture posture must suppress the ring"
+    fi
+    probe=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" "$ROOT/bin/fm-inbox.sh" ready)
+    [ "$posture" != contract ] || assert_equals away "$(printf '%s' "$probe" | python3 -c 'import json,sys; print(json.load(sys.stdin)["posture"]["state"])')" \
+      "ready and ring must agree on contract-only away mode"
+  done
+  [ "$(find "$home/state/inbox" -name '*.note' | wc -l | tr -d ' ')" = 4 ] || fail "all postures must retain their notes"
+  pass "fm-inbox: ring uses the same .afk and .afk-contract posture as readiness"
 }
 
 # The ring is detached from the note, so a case waits for it to finish: its
@@ -1688,6 +1875,52 @@ test_desk_voice_send_never_confirms_a_redrawn_message_past_a_draft() {
     || fail "Enter must be pressed exactly once"
   desk_send_done "$home"
   pass "fm-desk-voice send: a message Claude redraws instead of submitting is not reported as sent"
+}
+
+test_desk_voice_send_keeps_the_stash_when_paste_outlives_proof() {
+  local home out suggestion
+  for suggestion in absent shown; do
+    home=$(desk_send_fixture "send-draft-too-late-$suggestion") || { desk_send_skip "send-draft-too-late-$suggestion"; return 0; }
+    printf 'half typed thought' > "$home/fixture/draft"
+    printf '200' > "$home/fixture/late-paste"
+    [ "$suggestion" = absent ] || printf 'suggested words' > "$home/fixture/ghost"
+    out=$(desk_send "$home" 'delayed message') || fail "send failed: $out"
+    assert_contains "$out" 'sent-unconfirmed:' "unseen buffered input has an unknown outcome"
+    [ "$(cat "$home/fixture/stash")" = 'half typed thought' ] || fail "the original draft must remain stashed"
+    [ "$(cat "$home/fixture/queued")" = 'delayed message' ] || fail "the paste must still be buffered"
+    [ "$(herdr_calls "$home" pane send-keys | wc -l | tr -d ' ')" = 1 ] || fail "only the initial stash key may be sent"
+    [ ! -e "$home/fixture/submitted" ] || fail "nothing may be submitted"
+    [ "$(inbox_count "$home")" = 0 ] || fail "buffered input must not also reach the mailbox"
+    desk_send_done "$home"
+  done
+  pass "desk send: a paste delayed beyond the proof window never receives recovery Ctrl+S"
+}
+
+test_desk_voice_send_never_submits_a_draft_left_stashed() {
+  local home out backend
+  for backend in herdr tmux; do
+    home=$(desk_send_fixture "send-after-stash-$backend" "$backend") \
+      || { desk_send_skip "send-after-stash-$backend"; return 0; }
+    : > "$home/fixture/tmux-composer"
+    : > "$home/fixture/agent-idle"
+    if [ "$backend" = herdr ]; then
+      printf 'half typed thought' > "$home/fixture/draft"
+      printf '200' > "$home/fixture/late-paste"
+      out=$(desk_send "$home" 'delayed message') || fail "send failed: $out"
+      assert_contains "$out" 'sent-unconfirmed:' "the delayed paste leaves the draft stashed"
+      # The delayed paste is lost, so the box is empty over the kept stash.
+      rm -f "$home/fixture/queued" "$home/fixture/queued-reads" "$home/fixture/late-paste"
+    else
+      printf 'half typed thought' > "$home/fixture/stash"
+    fi
+    out=$(desk_send "$home" 'next message') || fail "send failed: $out"
+    assert_contains "$out" "$backend" "the next message still goes to the primary's pane"
+    [ "$(cat "$home/fixture/submitted")" = 'next message' ] || fail "$backend: only the new message may be submitted"
+    [ "$(cat "$home/fixture/draft")" = 'half typed thought' ] || fail "$backend: the restored draft must stay unsent"
+    [ "$(inbox_count "$home")" = 0 ] || fail "$backend: a typed message must not also reach the mailbox"
+    desk_send_done "$home"
+  done
+  pass "desk send: a message sent over a stashed draft presses Enter once, so the restored draft stays unsent"
 }
 
 test_desk_voice_send_clears_a_refused_message_and_restores_the_draft() {
@@ -2153,11 +2386,17 @@ test_desk_voice_send_proves_a_long_message_past_a_claude_draft
 test_desk_voice_send_pastes_a_voice_length_message_past_a_claude_draft
 test_desk_voice_send_clears_a_refused_message_and_restores_the_draft
 test_desk_voice_send_waits_for_a_late_drawn_message_past_a_claude_draft
+test_desk_voice_send_keeps_the_stash_when_paste_outlives_proof
+test_desk_voice_send_never_submits_a_draft_left_stashed
 test_desk_voice_send_never_confirms_a_redrawn_message_past_a_draft
 test_desk_voice_send_restores_a_draft_stashed_without_a_marker
 test_desk_voice_send_joins_another_harness_draft
 test_inbox_note_rings_the_busy_primary
 test_inbox_note_ring_never_submits_a_draft_or_rings_away
+test_ring_checks_the_payload_before_each_enter
+test_ring_waits_for_a_late_paste_and_a_late_redraw
+test_ring_and_send_share_one_writer_lock
+test_inbox_ring_respects_contract_only_away_posture
 test_desk_voice_send_types_screenshots_into_the_primary_pane
 test_desk_voice_send_screenshots_fall_back_to_the_mailbox
 test_desk_voice_dictation_sends_when_the_chat_is_in_front

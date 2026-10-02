@@ -198,8 +198,9 @@ Your draft is never sent, cleared, or retyped.
 The message goes into the emptied box as one paste, so a long voice transcript shows there as a single `[Pasted text #N]` placeholder and is sent whole.
 That has one deliberate exception, where text in the box still sends the message to the mailbox: Claude's footer already shows `› stashed`, a draft you set aside yourself.
 Stashing again would replace yours, and an existing Claude stash is never overwritten.
-If the message cannot be proven in the box before Enter, it is cleared, your draft is put back, and the message goes to the mailbox; if the box cannot be cleared, the send reports that the submit was not confirmed instead.
-Whenever your draft cannot be put back, the send notes that Ctrl+S in the chat brings it back.
+If the message cannot be proven in the box before Enter, it is cleared, your draft is put back, and the message goes to the mailbox.
+If the box cannot be cleared, or the message has not appeared in it at all, no further keys are sent, so a late paste cannot replace your stashed draft, and the send reports that the submit was not confirmed instead.
+Whenever your draft cannot be put back, the send notes that it is still stashed; Ctrl+S in an empty chat box brings it back.
 After Enter the send counts as confirmed only once the box is empty or shows your draft again; otherwise it reports that the submit was not confirmed.
 With another harness as the primary, the message joins the draft and is submitted with it.
 

@@ -895,7 +895,19 @@ The message goes into the stashed box as one bracketed paste (tmux `paste-buffer
 Typed as keys, a burst over about 1.2k characters reached Claude 2.1.283 with its head lost or folded into `[Pasted text #N]` placeholders plus a literal tail, which the pre-Enter proof must refuse, so such messages went to the mailbox.
 Pasted, Claude shows a message over 800 characters as one `[Pasted text #N]` placeholder and submits it whole.
 Verified the same day with the real `fm-desk-voice.sh send` against Claude 2.1.283 on tmux 3.6a and in an `fm-lab-*` Herdr 0.7.4 session: messages of about 1.3k and 3.2k characters past a typed draft, and 3.2k past a pasted draft, were reported `sent`, appeared whole as the submitted prompt, and the draft came back to the box unsent.
-This guard submits one short prompt; rerun it after a Claude upgrade.
+This guard submits two short prompts, covering send past a draft and ring delivery; rerun it after a Claude upgrade.
+
+On 2026-10-02, the portable `bin/fm-test-run.sh tests/fm-deepgram-desk.test.sh` regressions passed with simulated tmux and Herdr panes:
+
+```text
+ok - desk send: a paste delayed beyond the proof window never receives recovery Ctrl+S
+ok - desk ring: both backends re-read the payload before every Enter, including retries
+ok - desk ring and send: concurrent writers use one lock and release it after delivery
+ok - fm-inbox: ring uses the same .afk and .afk-contract posture as readiness
+```
+
+The live refresh command above could not reach an empty composer with Claude Code 2.1.287 on this Mac, including one run from an unmodified baseline checkout; it did not exercise submission, so the earlier live evidence remains version-scoped to 2.1.283.
+Its result was `not ok - Claude 2.1.287 (Claude Code) never showed an empty chat box:` with no captured screen.
 
 ## Gemini
 

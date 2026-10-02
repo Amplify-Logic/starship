@@ -11,7 +11,7 @@ Claude Code: 2.1.284.
 ## Portable suite, network stubbed
 
 `tests/fm-command-guard.test.sh` runs the real gate, redaction, request, HTTP call and rule against a local fake endpoint that records every request.
-It covers the gate (absent, false, Harbour always off, excluded projects, malformed value, unknown key, symlink), an unarmed home, Harbour and an excluded project sending nothing, the two recorded live answers (a force-push to main denied with the final notice, `git status` allowed), each threshold at and just below its value, a partial answer still blocking on the condition that fired, non-Bash payloads ignored, redaction of secret-named or random-looking assignments while plain assignments and arguments stay visible, `.env` values, secret-looking environment values and key shapes with the key travelling only in the header, a long command sent as overlapping parts in one request with any part blocking, a failed parts request falling back to one head-and-tail judgement that can still block and allowing only when both fail, logged once, a command over the 8-part cap allowed unjudged and logged, every step-aside path (no key, unreadable answer, HTTP 500, timeout) logged once per episode, and the hook `bin/fm-spawn.sh` installs only for an armed, unexcluded project matched by its logical name, never Harbour, honouring the live gate.
+It covers the gate (absent, false, Harbour always off, excluded projects, malformed value, unknown key, symlink), an unarmed home, Harbour and an excluded project sending nothing, the two recorded live answers (a force-push to main denied with the final notice, `git status` allowed), each threshold at and just below its value, a partial answer still blocking on the condition that fired, non-Bash payloads ignored, redaction of secret-named or random-looking assignments while plain assignments and arguments stay visible, `.env` values, secret-looking environment values and key shapes with the key travelling only in the header, whole quoted credential arguments and short secret-named `.env` values, routine commands with expanded or quoted credentials still judged with each value redacted, a long command sent as overlapping parts in one request with any part blocking, a failed parts request falling back to one head-and-tail judgement that can still block and allowing only when both fail, logged once, a command over the 8-part cap allowed unjudged and logged, every step-aside path (no key, unreadable answer, HTTP 500, timeout) logged once per episode, and the hook `bin/fm-spawn.sh` installs only for an armed, unexcluded project matched by its logical name, never Harbour, honouring the live gate.
 
 ```console
 $ bash tests/fm-command-guard.test.sh
@@ -21,6 +21,8 @@ ok - recorded live answers deny a force-push to main with the final notice and a
 ok - irreversible blocks at 0.6, destructive at 0.7 and injection at 0.8, and nothing below them does
 ok - only Bash commands are judged
 ok - secret-named or random assignments, .env values, secret-looking environment values and key shapes never leave the machine
+ok - whole quoted credentials and short secret-named .env values are removed from requests and logs
+ok - routine commands with expanded or quoted credentials are judged with each value redacted
 ok - plain assignments and arguments such as a delete target, a disk or an environment name stay visible
 ok - a long command is sent whole as overlapping parts in one request, and any part firing blocks
 ok - a failed parts request falls back to one head-and-tail judgement, and only both failing allows
@@ -29,6 +31,8 @@ ok - with no key every command is allowed, and each outage episode is logged onc
 ok - an unreadable answer, an HTTP error and a timeout all allow and are logged, and a partial answer still blocks
 ok - fm-spawn installs the Bash guard hook only for an armed, unexcluded project by logical name, never Harbour, and the hook honours the live gate
 ```
+
+The two quoted-credential lines were added on 2026-10-02, when the whole suite above passed again on Python 3.12.5.
 
 ## Live guard
 

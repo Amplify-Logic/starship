@@ -6,8 +6,10 @@
 # own rendering and keys, so this drives a real Claude in a private tmux
 # server: the floater message must be submitted alone and the draft must be
 # back in the chat box, never submitted.
-# Run explicitly with FM_DESK_VOICE_CLAUDE_DRAFT_LIVE=1; it submits one short
-# prompt to the installed claude.
+# It also rings the same primary through the payload-proof path, first
+# refusing its restored draft and then submitting only the ring text.
+# Run explicitly with FM_DESK_VOICE_CLAUDE_DRAFT_LIVE=1; it submits two short
+# prompts to the installed claude.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -97,3 +99,29 @@ screen | grep -qF 'Reply with only the word OSPREY' \
 ! screen | grep -F 'Reply with only the word OSPREY' | grep -qF KESTREL \
   || fail "Claude $VERSION: the draft was submitted with the floater message"
 pass "desk floater: real Claude $VERSION submits the message alone and puts the unsent draft back"
+
+ring() {
+  env -u TMUX -u TMUX_PANE -u HERDR_ENV -u HERDR_PANE_ID -u HERDR_SOCKET_PATH \
+    PATH="$LAB/notify-bin:$PATH" FM_HOME="$LAB/home" FM_STATE_OVERRIDE="$LAB/home/state" \
+    "$DESK" ring "$1"
+}
+
+out=$(ring 'Reply with only the word WREN') || fail "Claude $VERSION: ring failed: $out"
+[ "$out" = not-rung ] || fail "Claude $VERSION: a restored draft must refuse a ring: $out"
+screen | grep -qF "$DRAFT" || fail "Claude $VERSION: refusing a ring lost the draft"
+# Clear only the test's own invented draft to exercise an empty primary.
+t send-keys -t fm:0.0 C-u
+sleep 1
+[ "$(composer_state)" = empty ] || fail "Claude $VERSION: the test draft did not clear"
+out=$(ring 'Reply with only the word WREN') || fail "Claude $VERSION: ring failed: $out"
+case "$out" in
+  'rung: tmux '*) ;;
+  *) fail "Claude $VERSION: payload-proven ring did not submit: $out" ;;
+esac
+answered=0
+for _ in $(seq 1 60); do
+  if screen | grep -q '⏺ WREN'; then answered=1; break; fi
+  sleep 1
+done
+[ "$answered" = 1 ] || fail "Claude $VERSION: the ring never reached the model"
+pass "desk ring: real Claude $VERSION refuses an unsent draft and submits the proven ring alone"
