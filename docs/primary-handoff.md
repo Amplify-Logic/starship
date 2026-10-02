@@ -68,22 +68,31 @@ Phases recorded in `state/.primary-handoff`:
 1. **planning** - Acquire the handoff coordination lock (`state/.primary-handoff.lock`).
    Read `state/.primary-active` and the live session-lock holder.
    Choose the target profile (same-runtime for context, next chain profile for quota, or explicit `--to`).
-   Persist the durable intent (`from`, `to`, `trigger`, `token`, `outgoing_pid`) before touching the outgoing process.
+   Preflight the launch route and the target profile through the primary launcher's CLI, integration, configuration, and account checks while the outgoing owner remains intact.
+   Persist the durable intent and outgoing process identity before touching the outgoing process.
 2. **flushing** - Hold the wake-queue lock briefly so no mid-append wake record is lost, then release it.
    Durable fleet records are already on disk; this step only serializes the last queue write and stamps the handoff record.
    The session lock remains held by the outgoing harness.
 3. **releasing** - Signal the outgoing harness PID, wait until it is not a live harness, then run `fm-lock.sh release-stale`.
-   `release-stale` removes `state/.lock` only when the recorded holder is dead or not a harness.
+   `release-stale` holds the same acquisition mutex as ordinary session acquisition while checking liveness, removing the stale lock, and cleaning its session identity and handoff acknowledgement.
    It refuses while a live harness still holds the lock.
    The release decision lives in `bin/fm-primary-handoff-lib.sh`, which `fm-lock.sh` executes for that subcommand and without which it refuses the release rather than removing the lock.
 4. **launching** - Re-check the never-two-holders invariant.
    Refuse to launch if the session lock is still held by a live harness.
-   Launch the incoming profile through `bin/fm-primary.sh` (or the test launch seam).
-5. **complete** - Observe a new live session-lock holder distinct from the outgoing PID, or accept a successful launch seam result in tests.
+   Dispatch the generation-bound launch entry, which serializes incoming launchers across controller restarts and retains its lifetime lock through the primary launcher's exec.
+5. **complete** - Wait under a bounded startup deadline for the actual session-lock acquisition acknowledgement.
+   Its token, target profile, holder PID, and process identity must match this attempt and the current live lock owner; command success alone never completes handoff.
    Record cooldown metadata so the supervisor does not thrash.
    The incoming primary's ordinary session-start path re-arms the watcher / supervision cycle; a rotation that left the fleet unwatched would be a regression.
 
-The coordination lock serializes concurrent supervisors.
+The coordination lock serializes concurrent supervisors, and obtaining it is required before reconciling an interrupted nonterminal record.
+If the original owner is still live before release, reconciliation aborts that attempt safely so the next check can start afresh.
+A releasing attempt may resume only against the recorded outgoing process identity.
+The record persists `shutdown_requested=yes` before the outgoing is signalled and never clears it.
+A failed target preflight aborts a live-outgoing attempt only when the record proves no shutdown was requested; otherwise the attempt stays pending, so the replacement launches once the outgoing exits.
+With no live owner, recovery resumes the recorded target; an already running launcher is reused, and an already acknowledged replacement is finalized.
+An unrelated live owner aborts recovery without receiving a signal.
+The same generation gate prevents a delayed duplicate runtime dispatch from starting another incoming primary.
 The session lock transfer is strictly ordered: outgoing death, then stale release, then incoming acquire via ordinary `fm-session-start.sh` / `fm-lock.sh` acquire inside the new primary session.
 
 ```
@@ -110,11 +119,13 @@ outgoing holds lock
 
 Unless `execute --force`:
 
-- **Away mode** (`state/.afk`): refuse.
-  The away daemon owns supervision then; rotating the primary would fight that ownership.
-- **In-progress rotation**: refuse when `state/.primary-handoff` phase is `planning`, `flushing`, `releasing`, or `launching`.
+- **Away mode**: refuse when the canonical away-contract predicate is true or the legacy daemon/quiet flag exists.
+  This includes Pi and supervision-host homes that have no away daemon.
+  [`../bin/fm-afk-contract.sh`](../bin/fm-afk-contract.sh) owns the canonical posture predicate.
 - **Cooldown**: skip after a completed handoff until `cooldown_until`.
   Prevents a primary that starts already above threshold from busy-loop rotating.
+
+Coordination, generation, and live-owner checks apply even with `--force`.
 
 ## In-flight captain decisions (conversation-only state)
 
@@ -133,27 +144,30 @@ Chosen tradeoff:
 
 | Failure | Detection | Response | Lock invariant |
 | --- | --- | --- | --- |
-| Feature disabled / config absent | Config read | No-op exit 0 | Untouched |
+| Feature disabled / config absent | Config read | Reconcile any nonterminal attempt, then no-op exit 0 | Untouched unless reconciling |
 | Quota probe missing or unparseable | `quota-axi` / fixture | No quota handoff; context axis may still fire | Untouched |
 | Quota over threshold, no distinct successor in `chain` | `check` / `run` | `handoff: chain exhausted`, no quota rotation, no failure phase; context axis still evaluated | Untouched unless context axis fires |
 | Context sample missing | No `state/.primary-context` / override | No context handoff | Untouched |
 | Current profile not over either threshold | Metric compare | No handoff | Untouched |
-| Away mode active | `state/.afk` | Refuse (unless `--force`) | Untouched |
+| Away mode active | Canonical contract or legacy daemon/quiet flag | Refuse (unless `--force`) | Untouched |
 | Cooldown active | `cooldown_until` | Skip | Untouched |
-| Rotation already in progress | Non-terminal phase | Refuse overlapping execute | Untouched |
-| No next profile in chain / CLI missing | Chain walk | Abort planning; keep outgoing | Untouched |
+| Controller still running | Coordination lock | Refuse overlapping execute | Untouched |
+| No next profile / unavailable launch route, CLI, configuration, or account | Chain walk and launcher preflight | Refuse before signalling outgoing | Untouched |
 | Crash during planning before intent publish | Missing or partial record | Next check starts clean | Outgoing still holds |
-| Crash during flushing | Phase `flushing` | Resume refuses launch until release completes; may retry flush | Outgoing still holds |
-| Outgoing ignores signal / stays alive | Wait timeout | Phase `aborted`; never launch incoming | Outgoing still holds |
-| `release-stale` while live holder | `fm-lock.sh` refusal | Abort; never launch | Outgoing still holds |
-| `release-stale` with `bin/fm-primary-handoff-lib.sh` missing | `fm-lock.sh` refusal naming the file | Abort; never launch; lock left in place | Outgoing still holds |
+| Crash during planning or flushing after intent publish | Nonterminal record and original owner still live | Abort attempt; a later check may start afresh | Outgoing still holds |
+| Outgoing ignores signal / stays alive | Wait timeout | Retain `releasing` for reconciliation; never launch over a live owner | Outgoing still holds |
+| `release-stale` while live holder | `fm-lock.sh` refusal | Retain attempt for reconciliation; never launch | Live owner preserved |
+| `release-stale` with `bin/fm-primary-handoff-lib.sh` missing | `fm-lock.sh` refusal naming the file | Refuse; never launch; lock left in place | No ownership transfer |
 | Crash after release, before launch | Phase `releasing`/`launching`, lock free | Retry launch only; never recreate outgoing ownership | Zero live holders until incoming acquires |
-| Incoming launch fails | Launch non-zero | Phase `failed`; lock left free/stale for manual recovery | Still at most one holder (zero) |
+| Incoming launch fails or acknowledgement is delayed | Launch non-zero or startup deadline | Retain `launching`; subsequent checks retry or finalize the same target | No launch over a live owner |
+| Controller dies after incoming startup | Matching live acquisition acknowledgement | Finalize the recorded attempt once | Incoming remains owner |
+| Unrelated or reused PID owns the home | Lock and process identity differ from record | Abort recovery without signalling it | Unrelated owner preserved |
 | Second supervisor races | Coordination lock | Loser exits without mutating session lock | Preserved by serialization |
 | Attempted launch while live holder exists | Pre-launch assert | Hard refuse | Preserved |
 | Failure injection at any phase | `FM_HANDOFF_INJECT_FAIL` test seam | Abort that phase without advancing past the safety gate | Asserted by tests |
 
-Manual recovery after `failed` or `aborted`: inspect `state/.primary-handoff`, confirm `fm-lock.sh status`, then relaunch a primary with `bin/fm-primary.sh <profile>` once the lock is free or stale.
+For manual recovery, inspect `state/.primary-handoff` and confirm `fm-lock.sh status`.
+Nonterminal attempts are reconciled by `check`, `execute`, and `run`; older terminal `failed` records still require a manual primary launch once the lock is free or stale.
 
 ## Interaction with existing primary launch
 
@@ -174,4 +188,4 @@ This is an accepted limitation, not a bug.
 
 ## Testing
 
-`tests/fm-primary-handoff.test.sh` exercises the happy path, disabled no-op, context-threshold detection, the cursor-grok quota mapping and its general-window selection, the `claude-fable` model-window rotation to `claude-opus`, same-runtime rotation, afk refusal, cooldown, workers-survive, watcher re-arm, wake durability across flush, and failure-injection cases that prove the never-two-holders invariant across flush, signal, wait, release, and launch failures.
+`tests/fm-primary-handoff.test.sh` uses synthetic holders and runtime stubs to exercise stale-release/acquisition races, preflight refusals, delayed and unrelated ownership acknowledgements, controller death at durable phase boundaries, recovery without duplicate launches, the happy path, disabled no-op, context-threshold detection, the cursor-grok quota mapping and its general-window selection, the `claude-fable` model-window rotation to `claude-opus`, same-runtime rotation, afk refusal, cooldown, workers-survive, watcher re-arm, wake durability across flush, and failure-injection cases that prove the never-two-holders invariant across flush, signal, wait, release, and launch failures.

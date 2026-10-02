@@ -2786,7 +2786,7 @@ The file is not inherited by secondmate homes.
 ## Primary orchestrator handoff (config/primary-handoff)
 
 `config/primary-handoff` is an optional local, gitignored JSON file that enables automated rotation of the Firstmate primary orchestrator on two independent axes: provider quota and model-context used.
-Absent or `"enabled": false` is a complete no-op: `bin/fm-primary.sh` launch behavior is unchanged and `bin/fm-primary-handoff.sh` exits without touching the session lock.
+Absent or `"enabled": false` starts no handoff and leaves `bin/fm-primary.sh` launch behavior unchanged; `bin/fm-primary-handoff.sh` only reconciles an interrupted earlier attempt, as [`docs/primary-handoff.md`](primary-handoff.md) describes.
 When enabled, `bin/fm-primary-handoff.sh` evaluates:
 
 - **Quota** - when the minimum `percentRemaining` from `quota-axi` over the provider's general windows and the active profile's own model window (`model:fable` for `claude-fable`) is at or below `threshold_percent_remaining`, rotate to the next profile in `chain`.

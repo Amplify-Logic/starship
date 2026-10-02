@@ -204,7 +204,7 @@ fm_handoff_read_kv_file() {
         key=${line%%=*}
         value=${line#*=}
         case "$key" in
-          schema|phase|from|to|reason|token|outgoing_pid|incoming_pid|started_at|updated_at|error|profile|pid|completed_at|cooldown_until|trigger|remaining_percent|used_percent)
+          schema|phase|from|to|reason|token|outgoing_pid|outgoing_identity|shutdown_requested|incoming_pid|identity|started_at|updated_at|error|profile|pid|completed_at|cooldown_until|trigger|remaining_percent|used_percent)
             printf -v "$key" '%s' "$value"
             ;;
         esac
@@ -247,12 +247,19 @@ fm_handoff_write_record() {
     "trigger=${trigger:-}" \
     "token=${token:-}" \
     "outgoing_pid=${outgoing_pid:-}" \
+    "outgoing_identity=${outgoing_identity:-}" \
+    "shutdown_requested=${shutdown_requested:-}" \
     "incoming_pid=${incoming_pid:-}" \
     "started_at=${started_at:-}" \
     "updated_at=$updated" \
     "error=${error:-}" \
     "completed_at=${completed_at:-}" \
-    "cooldown_until=${cooldown_until:-}"
+    "cooldown_until=${cooldown_until:-}" || return 1
+  if [ "${FM_HANDOFF_INJECT_CRASH:-}" = "${phase:-}" ]; then
+    local current
+    fm_current_pid current || return 1
+    kill -KILL "$current"
+  fi
 }
 
 fm_handoff_read_record() {
@@ -265,6 +272,8 @@ fm_handoff_read_record() {
   trigger=''
   token=''
   outgoing_pid=''
+  outgoing_identity=''
+  shutdown_requested=''
   incoming_pid=''
   started_at=''
   error=''
@@ -325,10 +334,13 @@ fm_handoff_context_over_threshold() {
   esac
 }
 
-# Away-mode owns supervision; refuse automated rotation while state/.afk exists.
-fm_handoff_afk_active() {
-  [ -e "$STATE/.afk" ]
-}
+# The canonical contract owns away posture; the legacy flag also covers quiet.
+fm_handoff_afk_active() (
+  # Imported globals stay in this subshell; the script is its own lint root.
+  # shellcheck source=/dev/null
+  . "${BASH_SOURCE%/*}/fm-afk-contract.sh"
+  fm_afk_contract_present "$STATE" || [ -e "$STATE/.afk" ]
+)
 
 # True when a prior handoff record is mid-flight (not terminal).
 fm_handoff_rotation_in_progress() {
@@ -533,32 +545,96 @@ fm_handoff_release_session_lock_stale() {
   FM_HOME="$FM_HOME" "$FM_ROOT/bin/fm-lock.sh" release-stale
 }
 
+# Run the same non-mutating gates as a real primary launch, including explicit
+# --to profiles. Custom runtime routes must supply their own preflight command.
+fm_handoff_preflight() {
+  local profile=$1 launch_cli _ignored
+  if [ -n "${FM_HANDOFF_LAUNCH_CMD:-}" ]; then
+    read -r launch_cli _ignored <<< "$FM_HANDOFF_LAUNCH_CMD"
+    command -v "$launch_cli" >/dev/null 2>&1 || {
+      fm_handoff_die "custom launch command unavailable: $launch_cli"
+      return 1
+    }
+    [ -n "${FM_HANDOFF_PREFLIGHT_CMD:-}" ] || {
+      fm_handoff_die "custom launch route requires FM_HANDOFF_PREFLIGHT_CMD"
+      return 1
+    }
+    # shellcheck disable=SC2086
+    $FM_HANDOFF_PREFLIGHT_CMD "$profile" || return 1
+  else
+    if [ -z "${TMUX:-}" ] || ! command -v tmux >/dev/null 2>&1 \
+      || ! tmux display-message -p '#S' >/dev/null 2>&1; then
+      fm_handoff_die "no launch route: set FM_HANDOFF_LAUNCH_CMD or run inside tmux"
+      return 1
+    fi
+  fi
+  FM_HOME="$FM_HOME" "$FM_ROOT/bin/fm-primary.sh" "$profile" --preflight
+}
+
+fm_handoff_launch_lock() { # <token>
+  case "${1:-}" in ''|*[!0-9-]*) return 1 ;; esac
+  printf '%s/.primary-handoff-launch.%s.lock\n' "$STATE" "$1"
+}
+
 fm_handoff_launch_incoming() {
   local profile=$1
-  if [ "${FM_HANDOFF_INJECT_FAIL:-}" = pre_launch ]; then
-    fm_handoff_die "injected failure at pre_launch"
-    return 1
-  fi
+  case "${FM_HANDOFF_INJECT_FAIL:-}" in
+    pre_launch|launch) fm_handoff_die "injected failure at ${FM_HANDOFF_INJECT_FAIL}"; return 1 ;;
+  esac
   fm_handoff_assert_never_two_live_holders --require-free || return 1
-  if [ "${FM_HANDOFF_INJECT_FAIL:-}" = launch ]; then
-    fm_handoff_die "injected failure at launch"
-    return 1
-  fi
+  # A surviving launcher is already starting this generation. Its independent
+  # lock survives a controller crash and stays held across the primary's exec.
+  local launch_lock launch_pid
+  launch_lock=$(fm_handoff_launch_lock "$token") || return 1
+  launch_pid=$(cat "$launch_lock/pid" 2>/dev/null || true)
+  if fm_pid_alive "$launch_pid"; then return 0; fi
   if [ -n "${FM_HANDOFF_LAUNCH_CMD:-}" ]; then
-    # Redirect stdio so a backgrounded incoming process cannot keep a caller's
-    # command-substitution pipe open after this script exits.
-    # shellcheck disable=SC2086
-    $FM_HANDOFF_LAUNCH_CMD "$profile" </dev/null >/dev/null 2>&1
+    "$FM_ROOT/bin/fm-primary-handoff.sh" launch "$token" "$profile" \
+      </dev/null >/dev/null 2>&1 &
+    return 0
+  fi
+  tmux new-window -d -n "FIRSTMATE" \
+    "cd $(printf '%q' "$FM_ROOT") && env FM_HOME=$(printf '%q' "$FM_HOME") $(printf '%q' "$FM_ROOT/bin/fm-primary-handoff.sh") launch $(printf '%q' "$token") $(printf '%q' "$profile")" \
+    </dev/null >/dev/null 2>&1
+}
+
+# Called by fm-lock only after verified acquisition, while .lock.acquire is held.
+# This receipt binds a launch generation to an actual live session, including
+# harnesses whose anchor PID differs from the launcher's exec PID.
+fm_handoff_ack_acquired() { # <holder-pid>
+  local holder=$1 identity
+  if [ -z "${FM_HANDOFF_TOKEN:-}" ]; then
+    rm -f "$STATE/.lock-handoff"
     return $?
   fi
-  if [ -n "${TMUX:-}" ] && command -v tmux >/dev/null 2>&1; then
-    tmux new-window -d -n "FIRSTMATE" \
-      "cd $(printf '%q' "$FM_ROOT") && env FM_HOME=$(printf '%q' "$FM_HOME") $(printf '%q' "$FM_ROOT/bin/fm-primary.sh") $(printf '%q' "$profile")" \
-      </dev/null >/dev/null 2>&1
-    return $?
-  fi
-  fm_handoff_die "no launch seam: set FM_HANDOFF_LAUNCH_CMD or run inside tmux"
-  return 1
+  identity=$(fm_pid_identity "$holder") || return 1
+  fm_handoff_write_kv_file "$STATE/.lock-handoff" \
+    "token=$FM_HANDOFF_TOKEN" "profile=${FM_HANDOFF_PROFILE:-}" \
+    "pid=$holder" "identity=$identity"
+}
+
+fm_handoff_incoming_acknowledged() {
+  local expected_token=$token expected_profile=$to token='' profile='' pid='' identity=''
+  fm_handoff_session_live_holder || return 1
+  fm_handoff_read_kv_file "$STATE/.lock-handoff" || return 1
+  [ -n "$expected_token" ] && [ "$token" = "$expected_token" ] \
+    && [ "$profile" = "$expected_profile" ] \
+    && [ "$pid" = "$FM_HANDOFF_LIVE_HOLDER_PID" ] \
+    && [ "$pid" != "$outgoing_pid" ] && [ -n "$identity" ] || return 1
+  fm_pid_identity_matches "$pid" "$identity" || return 1
+  incoming_pid=$pid
+}
+
+fm_handoff_wait_incoming() {
+  local deadline budget=${FM_HANDOFF_STARTUP_SECS:-60}
+  case "$budget" in ''|*[!0-9]*) return 1 ;; esac
+  deadline=$((SECONDS + budget))
+  while :; do
+    fm_handoff_incoming_acknowledged && return 0
+    [ "$SECONDS" -lt "$deadline" ] || break
+    sleep 0.1
+  done
+  fm_handoff_die "incoming has not acknowledged session-lock ownership; recovery pending"
 }
 
 fm_handoff_in_cooldown() {
@@ -573,33 +649,35 @@ fm_handoff_in_cooldown() {
   [ "$now" -lt "$cooldown_until" ]
 }
 
-# Release the outgoing primary's lock once it is genuinely gone.
-#
-# The refusal is the whole point of the subcommand, so it lives here with the
-# decision rather than at the call site: a live holder keeps its lock, and a
-# holder that changes while this runs aborts the release, because removing a
-# lock a live primary still holds is what puts two primaries on one home.
-fm_handoff_release_stale() { # <lock-file>
-  local lock=${1:-} old current
+# Serialize the entire stale decision and both identity removals with normal
+# acquisition. A subshell owns cleanup so sourced callers keep their traps.
+fm_handoff_release_stale() ( # <lock-file>
+  local lock=${1:-} old claim
   [ -n "$lock" ] || { echo "error: release-stale needs a lock path" >&2; return 2; }
-  if [ ! -f "$lock" ]; then
+  # Imported globals stay in this subshell; the library is its own lint root.
+  # shellcheck source=/dev/null
+  . "${BASH_SOURCE%/*}/fm-wake-lib.sh"
+  claim="${lock%/*}/.lock.acquire"
+  trap 'fm_lock_release "$claim"' EXIT
+  trap 'exit 1' HUP INT TERM
+  fm_lock_acquire_wait "$claim" || return 1
+  if [ -e "$lock" ] || [ -L "$lock" ]; then
+    [ -f "$lock" ] && [ ! -L "$lock" ] || {
+      echo "error: session lock is not a regular file; refusing release" >&2
+      return 1
+    }
+    old=$(cat "$lock") || return 1
+    if fm_harness_holder_alive "$old"; then
+      echo "error: refusing to release a live firstmate session lock (pid $old)" >&2
+      return 1
+    fi
+    rm -f "$lock" || return 1
+    echo "lock released: stale holder pid $old"
+  else
     echo "lock: free"
-    return 0
   fi
-  old=$(cat "$lock")
-  if fm_harness_holder_alive "$old"; then
-    echo "error: refusing to release a live firstmate session lock (pid $old)" >&2
-    return 1
-  fi
-  current=$(cat "$lock" 2>/dev/null || true)
-  if [ "$current" != "$old" ]; then
-    echo "error: lock holder changed to pid ${current:-none} during release-stale; refusing" >&2
-    return 1
-  fi
-  rm -f "$lock"
-  echo "lock released: stale holder pid $old"
-  return 0
-}
+  rm -f "${lock%/*}/.lock-session" "${lock%/*}/.lock-handoff"
+)
 
 # Executed, not sourced: bin/fm-lock.sh execs this file for release-stale. Every
 # consumer that sources it gets the helpers above and nothing else.

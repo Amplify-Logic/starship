@@ -2,7 +2,7 @@
 # Launch a verified Firstmate primary profile from this tracked Starship root.
 #
 # Usage:
-#   fm-primary.sh <profile> [--account <name>]
+#   fm-primary.sh <profile> [--account <name>] [--preflight]
 #   fm-primary.sh --install-shim
 #   fm-primary.sh --help
 #
@@ -93,7 +93,10 @@
 #     compaction setting.
 # opencode and grok are outside that order and are unchanged.
 #
-# --account <name> is the ONLY extra argument a profile accepts; every other one
+# --preflight checks the CLI, integrations, configuration, and account without
+# acquiring a session, changing a terminal, or launching the CLI. It permits an
+# existing owner so handoff can validate the replacement before stopping it.
+# --account <name> is the only other argument a profile accepts; every other one
 # still refuses, because that refusal exists to keep resume arguments away from
 # the launched CLI.
 # It pins the launch to a NAMED VENDOR ACCOUNT: the Claude profiles take a claude
@@ -790,14 +793,16 @@ case "$PROFILE" in
     exit 0
     ;;
 esac
-# One optional flag rides alongside a profile: --account <name>. Every other
-# extra argument still refuses, because that refusal exists to stop resume
+# Account selection and read-only preflight ride alongside a profile. Every
+# other extra argument still refuses, because that refusal exists to stop resume
 # arguments reaching the launched CLI.
 ACCOUNT_ARG=
 ACCOUNT_SET=0
+PREFLIGHT=0
 shift
 while [ "$#" -gt 0 ]; do
   case "$1" in
+    --preflight) PREFLIGHT=1; shift ;;
     --account)
       [ "$ACCOUNT_SET" -eq 0 ] || die "--account may be given only once"
       [ "$#" -ge 2 ] || die "--account requires an account name"
@@ -827,8 +832,10 @@ esac
 
 validate_visible_prefix
 resolve_account
-mkdir -p "$STATE" "$DATA" || die "could not create Firstmate private state directories"
-refuse_active_session
+if [ "$PREFLIGHT" -ne 1 ]; then
+  mkdir -p "$STATE" "$DATA" || die "could not create Firstmate private state directories"
+  refuse_active_session
+fi
 
 case "$PROFILE" in
   pi) CLI=pi ;;
@@ -923,7 +930,7 @@ case "$PROFILE" in
     ;;
 esac
 
-if [ "${FM_PRIMARY_DRY_RUN:-0}" = 1 ]; then
+if [ "${FM_PRIMARY_DRY_RUN:-0}" = 1 ] && [ "$PREFLIGHT" -ne 1 ]; then
   printf 'root=%s\n' "$PWD"
   printf 'profile=%s\n' "$PROFILE"
   printf 'role=%s\n' "$role"
@@ -960,6 +967,8 @@ if [ "$PROFILE" = codex ] || [ "$PROFILE" = astra ]; then
       die "Codex CLI is not logged in ('$CLI login status'); the primary would boot to its login screen instead of a session" ;;
   esac
 fi
+
+[ "$PREFLIGHT" -ne 1 ] || exit 0
 
 mark_current_surface
 export FM_PRIMARY_HARNESS=${PROFILE%%-*}

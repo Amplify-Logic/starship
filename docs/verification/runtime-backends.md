@@ -7,6 +7,38 @@ The backend guides own current setup, safety boundaries, and limitations.
 Exact task chronology, branch names, temporary homes, local paths, process ids, thread ids, and delivery transcripts remain in private reports or PR evidence.
 Where a captured line carries a path under the operator's home directory, the record shows that directory as `<HOME>`, which is the public-repo leak guard's requirement rather than the tool's output.
 
+## Primary handoff transaction
+
+Verified on 2026-10-02 with macOS 26.5.1 and Bash 3.2.57 using synthetic harness processes and runtime stubs only.
+[`../primary-handoff.md`](../primary-handoff.md) owns the protocol and its supported recovery behavior.
+The launcher preflight covers every supported primary profile through its existing integration and account checks.
+The handoff tests exercise the actual tmux command construction with a stub runtime; no live tmux or Herdr lifecycle, primary restart, or model call is part of this evidence.
+Other runtime backends require a preflighted custom launch route and otherwise refuse before signalling the outgoing owner.
+
+```sh
+bin/fm-test-run.sh tests/fm-primary-handoff.test.sh
+bin/fm-test-run.sh tests/fm-primary-handoff.test.sh tests/fm-primary.test.sh
+bin/fm-test-run.sh tests/fm-primary-handoff.test.sh tests/fm-session-lock-ancestry.test.sh
+```
+
+Selected exact passing output:
+
+```text
+ok - stale release excludes concurrent acquisition through unlink and identity cleanup
+ok - route, explicit target CLI, configuration, and account fail before outgoing signal
+ok - tmux dispatch through the real primary launcher carries a bound acquisition acknowledgement
+ok - delayed launch waits for a bound live-owner acknowledgement exactly once
+ok - startup timeout retains recovery and reuses the existing launcher
+ok - recovery waits for an in-flight acquisition receipt without aborting or launching twice
+ok - controller death at each durable phase and after dispatch recovers with one launch
+ok - recovery checks outgoing process identity even under force
+ok - an unrelated live owner cannot satisfy startup acknowledgement or be stopped by recovery
+ok - canonical away contract and legacy quiet flag refuse check and execute
+ok - fm-primary: preflight checks all profile gates without launch, state, or terminal changes
+ok - session-lock: a same-session confirmation waits for the claim lock and refreshes a re-keyed id
+ok - session-lock: a waiting confirmation does not steal another session's lock
+```
+
 ## Harness detection precedence
 
 Firstmate's own harness comes from two kinds of evidence, and `bin/fm-harness.sh` owns how they combine: an environment marker names its harness, and the nearest harness process in the parent chain proves who owns the process tree.

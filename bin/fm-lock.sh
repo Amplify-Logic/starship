@@ -29,8 +29,9 @@
 #                                wakes. Machine-readable lock fields live on
 #                                fm-inbox.sh ready, from the same inspect helper.
 #        fm-lock.sh release-stale
-#          Remove state/.lock only when the recorded holder is dead or not a
-#          harness. Refuse while a live harness still holds it. Used by
+#          Remove state/.lock and its identity sidecars under the acquisition
+#          mutex only when the recorded holder is dead or not a harness.
+#          Refuse while a live harness still holds it. Used by
 #          bin/fm-primary-handoff.sh after the outgoing primary has exited.
 #
 # Acquire exit codes, the single owner of what each refusal means. Every refusal
@@ -139,6 +140,16 @@ restore_uncommitted_lock_session() {
   LOCK_SESSION_KIND=0
 }
 commit_lock_session() {
+  # Optional fork receipt: publication belongs to the verified lock transaction,
+  # never to a successful launcher command or an unbound PID observation.
+  if [ -f "$SCRIPT_DIR/fm-primary-handoff-lib.sh" ]; then
+    # shellcheck source=bin/fm-primary-handoff-lib.sh
+    . "$SCRIPT_DIR/fm-primary-handoff-lib.sh"
+    fm_handoff_ack_acquired "$(cat "$LOCK")" || {
+      echo "error: cannot acknowledge handoff session ownership" >&2
+      exit 1
+    }
+  fi
   LOCK_SESSION_PHASE=0
   LOCK_SESSION_KIND=0
   rm -f "$LOCK_SESSION_PREV" 2>/dev/null || true

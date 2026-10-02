@@ -1507,6 +1507,31 @@ test_context_window_is_capped_at_500k() {
   pass "fm-primary: Claude and Codex launches cap the window at 500k; Pi and Cursor stay bare"
 }
 
+test_preflight_is_read_only_and_checks_accounts() {
+  local profile out status=0 holder
+  # A synthetic live owner must not prevent checking a replacement.
+  bash -c 'while :; do sleep 1; done' claude-preflight-holder &
+  holder=$!
+  printf '%s\n' "$holder" > "$HOME_FIX/state/.lock"
+  : > "$LOG"
+  for profile in pi claude-fable claude-opus codex astra opencode grok cursor-grok cursor-grok45; do
+    out=$(live "$profile" --preflight 2>&1) || status=$?
+    [ "$status" -eq 0 ] || { kill "$holder"; fail "$profile preflight failed: $out"; }
+  done
+  kill "$holder"
+  wait "$holder" 2>/dev/null || true
+  rm -f "$HOME_FIX/state/.lock"
+  [ ! -s "$LOG" ] || fail "preflight launched a CLI or changed a runtime surface: $(cat "$LOG")"
+  [ ! -f "$HOME_FIX/state/.primary-active" ] || fail "preflight published an active launch"
+  status=0
+  out=$(FM_PRIMARY_TEST_CODEX_LOGIN_STATUS='Not logged in' live codex --preflight 2>&1) || status=$?
+  [ "$status" -ne 0 ] || fail "preflight skipped account availability"
+  assert_contains "$out" 'not logged in' "preflight account failure was unclear"
+  pass "fm-primary: preflight checks all profile gates without launch, state, or terminal changes"
+}
+
+test_preflight_is_read_only_and_checks_accounts
+
 test_profiles_and_root
 test_context_window_is_capped_at_500k
 test_claude_effort

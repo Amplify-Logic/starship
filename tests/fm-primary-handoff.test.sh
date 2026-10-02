@@ -18,6 +18,13 @@ fm_fake_real_tool "$FAKEBIN" jq || fail "jq is required to run this suite"
 mkdir -p "$HOME_FIX/state" "$HOME_FIX/config" "$HOME_FIX/data"
 SIGNAL_LOG="$TMP_ROOT/signal.log"
 LAUNCH_LOG="$TMP_ROOT/launch.log"
+HOLDER_BIN="$TMP_ROOT/harness/codex"
+mkdir -p "${HOLDER_BIN%/*}"
+ln -s /bin/bash "$HOLDER_BIN"
+for cli in pi claude codex opencode grok agent; do
+  printf '#!/bin/sh\nexit 0\n' > "$FAKEBIN/$cli"
+  chmod +x "$FAKEBIN/$cli"
+done
 
 write_enabled_config() {
   local threshold=${1:-15}
@@ -98,6 +105,7 @@ start_fake_holder() {
   # Args contain "claude" so fm-lock.sh holder_alive treats this as a harness.
   bash -c 'while :; do sleep 5; done' claude-primary-handoff-test &
   FAKE_HOLDER_PID=$!
+  printf '%s\n' "$FAKE_HOLDER_PID" >> "$HOME_FIX/holders"
   printf '%s\n' "$FAKE_HOLDER_PID" > "$HOME_FIX/state/.lock"
 }
 
@@ -110,6 +118,15 @@ stop_fake_holder() {
 }
 
 cleanup_holders() {
+  local holder
+  : > "$HOME_FIX/unlink-go"
+  : > "$HOME_FIX/ack-go"
+  while IFS= read -r holder; do
+    case "$holder" in ''|*[!0-9]*) continue ;; esac
+    kill "$holder" 2>/dev/null || true
+    wait "$holder" 2>/dev/null || true
+  done < <(cat "$HOME_FIX/holders" 2>/dev/null)
+  : > "$HOME_FIX/holders"
   stop_fake_holder
   if [ -n "${FAKE_INCOMING_PID:-}" ]; then
     kill "$FAKE_INCOMING_PID" 2>/dev/null || true
@@ -127,6 +144,9 @@ cleanup_holders() {
     "$HOME_FIX/state/.primary-context" \
     "$HOME_FIX/state/.last-watcher-beat" \
     "$HOME_FIX/state/.afk" \
+    "$HOME_FIX/state/.afk-contract" \
+    "$HOME_FIX/state/.lock-handoff" \
+    "$HOME_FIX/state/.lock-session" \
     "$HOME_FIX/state/.wake-queue" \
     "$HOME_FIX/state/worker1.meta" \
     "$HOME_FIX/state/worker1.status"
@@ -167,15 +187,17 @@ wait_dead_ok() {
 launch_incoming() {
   local profile=$1
   printf 'launch %s\n' "$profile" >> "$LAUNCH_LOG"
-  # Args must match fm-lock.sh HARNESS_RE (pi is anchored as ^pi$, so use codex/claude).
-  # Detach stdio so command-substitution callers are not held open.
-  bash -c 'while :; do sleep 5; done' claude-primary-handoff-incoming \
-    </dev/null >/dev/null 2>&1 &
-  FAKE_INCOMING_PID=$!
-  printf '%s\n' "$FAKE_INCOMING_PID" > "$HOME_FIX/state/.lock"
-  # Simulate the incoming primary re-arming supervision after session-start.
-  : > "$HOME_FIX/state/.last-watcher-beat"
-  return 0
+  printf '%s\n' "$$" >> "$HOME_FIX/holders"
+  # A synthetic harness runs the real acquisition/acknowledgement path and
+  # stays foreground, just as fm-primary's exec holds the launch lifetime lock.
+  # shellcheck disable=SC2016 # expressions belong to the synthetic child
+  exec "$HOLDER_BIN" -c '
+    sleep "${FM_TEST_STARTUP_DELAY:-0}"
+    if [ "${FM_TEST_UNRELATED:-0}" = 1 ]; then unset FM_HANDOFF_TOKEN; fi
+    "$ROOT/bin/fm-lock.sh" || exit 1
+    : > "$HOME_FIX/state/.last-watcher-beat"
+    while :; do sleep 1; done
+  '
 }
 
 run_execute() {
@@ -185,6 +207,8 @@ run_execute() {
   FM_HANDOFF_SIGNAL_CMD='signal_kill' \
   FM_HANDOFF_WAIT_DEAD_CMD='wait_dead_ok' \
   FM_HANDOFF_LAUNCH_CMD='launch_incoming' \
+  FM_HANDOFF_PREFLIGHT_CMD=true \
+  FM_HANDOFF_STARTUP_SECS=10 \
   FM_HANDOFF_SKIP_CLI_CHECK=1 \
   FM_HANDOFF_WAIT_DEAD_SECS=3 \
   "$@"
@@ -192,10 +216,11 @@ run_execute() {
 
 # Export seam functions for eval'd command strings.
 export -f signal_kill wait_dead_ok launch_incoming
-export SIGNAL_LOG LAUNCH_LOG HOME_FIX FAKE_INCOMING_PID ROOT
+export SIGNAL_LOG LAUNCH_LOG HOME_FIX FAKE_INCOMING_PID ROOT HOLDER_BIN
 
 test_disabled_is_noop() {
   local out status=0
+  : > "$LAUNCH_LOG"
   rm -f "$HOME_FIX/config/primary-handoff"
   start_fake_holder
   write_active claude-fable
@@ -207,6 +232,158 @@ test_disabled_is_noop() {
   assert_not_contains "$(cat "$LAUNCH_LOG" 2>/dev/null || true)" 'launch' "disabled check must not launch"
   cleanup_holders
   pass "disabled config is a no-op and leaves the live session lock alone"
+}
+
+test_disabled_force_uses_default_chain() {
+  local out status=0
+  : > "$LAUNCH_LOG"
+  rm -f "$HOME_FIX/config/primary-handoff"
+  write_active claude-fable
+  start_fake_holder
+  out=$(run_execute "$ROOT/bin/fm-primary-handoff.sh" execute --force 2>&1) || status=$?
+  expect_code 0 "$status" "forced handoff under disabled config should use the default chain: $out"
+  assert_contains "$(cat "$HOME_FIX/state/.primary-handoff")" 'to=claude-opus' "default chain successor not chosen"
+  assert_contains "$(cat "$HOME_FIX/state/.primary-handoff")" 'phase=complete' "forced handoff did not complete"
+  [ "$(cat "$LAUNCH_LOG")" = 'launch claude-opus' ] || fail "expected one claude-opus launch: $(cat "$LAUNCH_LOG")"
+  cleanup_holders
+  pass "execute --force without --to walks the default chain when handoff is disabled"
+}
+
+test_disabled_check_recovers_crashed_force() {
+  local out status=0 i
+  : > "$LAUNCH_LOG"
+  rm -f "$HOME_FIX/config/primary-handoff"
+  write_active claude-fable
+  start_fake_holder
+  out=$(FM_HANDOFF_INJECT_CRASH=launching run_execute \
+    "$ROOT/bin/fm-primary-handoff.sh" execute --force --to pi 2>&1) || status=$?
+  [ "$status" -ne 0 ] || fail "launching crash did not interrupt controller: $out"
+  for i in {1..3}; do
+    out=$(run_execute "$ROOT/bin/fm-primary-handoff.sh" check 2>&1) || true
+    if grep -q '^phase=complete$' "$HOME_FIX/state/.primary-handoff"; then break; fi
+  done
+  assert_contains "$(cat "$HOME_FIX/state/.primary-handoff")" 'phase=complete' "disabled check did not recover: $out"
+  [ "$(cat "$LAUNCH_LOG")" = 'launch pi' ] || fail "expected one pi launch: $(cat "$LAUNCH_LOG")"
+  [ "$(live_holder_count)" = 1 ] || fail "recovery left no live owner"
+  out=$(run_execute "$ROOT/bin/fm-primary-handoff.sh" check 2>&1)
+  assert_contains "$out" 'handoff: disabled' "check should report disabled once reconciled"
+  cleanup_holders
+  pass "check reconciles a crashed forced handoff before reporting disabled"
+}
+
+test_launcher_lock_is_generation_bound() {
+  local out status=0 other_pid other_lock
+  : > "$LAUNCH_LOG"
+  write_enabled_config
+  write_active claude-fable
+  start_fake_holder
+  sleep 60 &
+  other_pid=$!
+  printf '%s\n' "$other_pid" >> "$HOME_FIX/holders"
+  other_lock="$HOME_FIX/state/.primary-handoff-launch.1-2-3-4.lock"
+  mkdir -p "$other_lock"
+  printf '%s\n' "$other_pid" > "$other_lock/pid"
+  out=$(run_execute "$ROOT/bin/fm-primary-handoff.sh" execute --to pi 2>&1) || status=$?
+  expect_code 0 "$status" "first generation should complete: $out"
+  out=$(run_execute "$ROOT/bin/fm-primary-handoff.sh" execute --force --to codex 2>&1) || status=$?
+  expect_code 0 "$status" "live earlier launcher blocked the next generation: $out"
+  assert_contains "$(cat "$HOME_FIX/state/.primary-handoff")" 'to=codex' "second generation target missing"
+  assert_contains "$(cat "$HOME_FIX/state/.primary-handoff")" 'phase=complete' "second generation did not complete"
+  [ "$(wc -l < "$LAUNCH_LOG" | tr -d ' ')" = 2 ] || fail "expected one launch per generation: $(cat "$LAUNCH_LOG")"
+  [ "$(live_holder_count)" = 1 ] || fail "second generation left no single live owner"
+  [ "$(cat "$other_lock/pid" 2>/dev/null)" = "$other_pid" ] || fail "an unrelated live generation's launch lock was removed"
+  rm -rf "$other_lock"
+  cleanup_holders
+  pass "incoming launcher reuse and cleanup are bound to the matching generation"
+}
+
+test_recovery_preflight_failure_preserves_outgoing() {
+  local out status=0
+  : > "$SIGNAL_LOG"
+  : > "$LAUNCH_LOG"
+  write_enabled_config
+  write_active claude-fable
+  start_fake_holder
+  FM_HANDOFF_INJECT_CRASH=releasing run_execute \
+    "$ROOT/bin/fm-primary-handoff.sh" execute --to pi > "$TMP_ROOT/crash.out" 2>&1 || true
+  assert_contains "$(cat "$HOME_FIX/state/.primary-handoff")" 'shutdown_requested=no' "pre-signal crash should prove no shutdown request"
+  out=$(run_execute env FM_HANDOFF_PREFLIGHT_CMD=false \
+    "$ROOT/bin/fm-primary-handoff.sh" check 2>&1) || status=$?
+  assert_contains "$(cat "$HOME_FIX/state/.primary-handoff")" 'phase=aborted' "failed recovery preflight left the attempt nonterminal: $out"
+  kill -0 "$FAKE_HOLDER_PID" || fail "failed recovery preflight stopped the outgoing primary"
+  [ ! -s "$SIGNAL_LOG" ] && [ ! -s "$LAUNCH_LOG" ] || fail "failed recovery preflight signalled or launched"
+  cleanup_holders
+  pass "recovery preflight failure aborts while the unsignalled outgoing primary stays the owner"
+}
+
+signal_request_only() {
+  printf 'signal %s\n' "$1" >> "$SIGNAL_LOG"
+}
+export -f signal_request_only
+
+test_delayed_shutdown_survives_preflight_outage() {
+  local out status=0 i
+  : > "$SIGNAL_LOG"
+  : > "$LAUNCH_LOG"
+  write_enabled_config
+  write_active claude-fable
+  start_fake_holder
+  out=$(run_execute env FM_HANDOFF_SIGNAL_CMD=signal_request_only FM_HANDOFF_WAIT_DEAD_CMD=false \
+    "$ROOT/bin/fm-primary-handoff.sh" execute --to pi 2>&1) || status=$?
+  [ "$status" -ne 0 ] || fail "shutdown timeout should leave the attempt pending: $out"
+  [ "$(cat "$SIGNAL_LOG")" = "signal $FAKE_HOLDER_PID" ] || fail "outgoing shutdown was not requested once"
+  kill -0 "$FAKE_HOLDER_PID" || fail "outgoing should still be live after the timeout"
+  out=$(run_execute env FM_HANDOFF_PREFLIGHT_CMD=false \
+    "$ROOT/bin/fm-primary-handoff.sh" check 2>&1) || true
+  assert_contains "$(cat "$HOME_FIX/state/.primary-handoff")" 'phase=releasing' "preflight outage abandoned a signalled outgoing: $out"
+  assert_contains "$(cat "$HOME_FIX/state/.primary-handoff")" 'shutdown_requested=yes' "shutdown evidence was lost"
+  [ ! -s "$LAUNCH_LOG" ] || fail "preflight outage launched while the outgoing was live"
+  stop_fake_holder
+  for i in {1..3}; do
+    out=$(run_execute "$ROOT/bin/fm-primary-handoff.sh" check 2>&1) || true
+    if grep -q '^phase=complete$' "$HOME_FIX/state/.primary-handoff"; then break; fi
+  done
+  assert_contains "$(cat "$HOME_FIX/state/.primary-handoff")" 'phase=complete' "restored route did not replace the exited outgoing: $out"
+  [ "$(cat "$LAUNCH_LOG")" = 'launch pi' ] || fail "expected exactly one replacement launch: $(cat "$LAUNCH_LOG")"
+  [ "$(live_holder_count)" = 1 ] || fail "recovery left no single live owner"
+  cleanup_holders
+  pass "a signalled outgoing that exits after a preflight outage is replaced exactly once"
+}
+
+test_record_without_target_is_aborted() {
+  local out
+  : > "$LAUNCH_LOG"
+  write_enabled_config
+  write_active claude-fable
+  start_fake_holder
+  FM_HANDOFF_INJECT_CRASH=releasing run_execute \
+    "$ROOT/bin/fm-primary-handoff.sh" execute --to pi > "$TMP_ROOT/crash.out" 2>&1 || true
+  sed 's/^to=.*/to=/' "$HOME_FIX/state/.primary-handoff" > "$HOME_FIX/record.tmp"
+  mv "$HOME_FIX/record.tmp" "$HOME_FIX/state/.primary-handoff"
+  out=$(run_execute "$ROOT/bin/fm-primary-handoff.sh" check 2>&1) || true
+  assert_contains "$(cat "$HOME_FIX/state/.primary-handoff")" 'phase=aborted' "targetless record stayed nonterminal: $out"
+  assert_contains "$(cat "$HOME_FIX/state/.primary-handoff")" 'incomplete handoff record' "targetless record not rejected as incomplete"
+  kill -0 "$FAKE_HOLDER_PID" || fail "targetless record recovery stopped the outgoing primary"
+  [ ! -s "$LAUNCH_LOG" ] || fail "targetless record recovery launched"
+  cleanup_holders
+  pass "a handoff record without a target is aborted rather than retried forever"
+}
+
+test_recover_only_never_starts_rotation() {
+  local out status=0
+  : > "$SIGNAL_LOG"
+  : > "$LAUNCH_LOG"
+  write_enabled_config
+  write_quota "$TMP_ROOT/quota.json" 5
+  write_active claude-fable
+  start_fake_holder
+  out=$(run_execute "$ROOT/bin/fm-primary-handoff.sh" execute --recover-only 2>&1) || status=$?
+  expect_code 0 "$status" "recover-only with nothing to recover should succeed: $out"
+  [ ! -s "$SIGNAL_LOG" ] && [ ! -s "$LAUNCH_LOG" ] || fail "recover-only started a fresh rotation"
+  [ ! -f "$HOME_FIX/state/.primary-handoff" ] || fail "recover-only planned a new handoff record"
+  kill -0 "$FAKE_HOLDER_PID" || fail "recover-only stopped the healthy primary"
+  cleanup_holders
+  pass "recovery-only dispatch never falls through into a fresh rotation"
 }
 
 test_happy_path_atomic_handoff() {
@@ -276,7 +453,7 @@ test_wait_dead_failure_never_launches() {
   assert_contains "$out" 'did not release' "wait_dead abort message missing"
   assert_not_contains "$(cat "$LAUNCH_LOG")" 'launch' "wait_dead failure must not launch"
   [ "$(live_holder_count)" -le 1 ] || fail "wait_dead failure dual-held"
-  assert_contains "$(cat "$HOME_FIX/state/.primary-handoff")" 'phase=aborted' "should abort"
+  assert_contains "$(cat "$HOME_FIX/state/.primary-handoff")" 'phase=releasing' "timeout must stay recoverable"
   assert_never_two
   cleanup_holders
   pass "wait_dead failure never launches and never dual-holds"
@@ -360,7 +537,7 @@ test_pre_launch_failure_leaves_zero_or_one_holder() {
   [ "$count" -le 1 ] || fail "pre_launch failure broke never-two invariant"
   # Outgoing was signaled and released; lock should be free (zero holders).
   [ "$count" = 0 ] || fail "expected zero live holders after release+pre_launch fail, got $count"
-  assert_contains "$(cat "$HOME_FIX/state/.primary-handoff")" 'phase=failed' "should be failed"
+  assert_contains "$(cat "$HOME_FIX/state/.primary-handoff")" 'phase=launching' "should remain recoverable"
   cleanup_holders
   pass "pre_launch failure leaves zero live holders and never dual-holds"
 }
@@ -380,7 +557,7 @@ test_launch_failure_never_dual_holds() {
   assert_not_contains "$(cat "$LAUNCH_LOG")" 'launch' "launch inject must not call launch seam"
   [ "$(live_holder_count)" -le 1 ] || fail "launch failure dual-held"
   [ "$(live_holder_count)" = 0 ] || fail "launch failure should leave lock free"
-  assert_contains "$(cat "$HOME_FIX/state/.primary-handoff")" 'phase=failed' "should be failed"
+  assert_contains "$(cat "$HOME_FIX/state/.primary-handoff")" 'phase=launching' "should remain recoverable"
   cleanup_holders
   pass "launch failure never creates two live holders"
 }
@@ -532,21 +709,26 @@ test_same_runtime_rotation_via_execute() {
 }
 
 test_afk_refusal() {
-  local out status=0
-  : > "$LAUNCH_LOG"
-  write_enabled_config 15 50
-  write_quota "$TMP_ROOT/quota.json" 5
-  write_context_sample 10
-  write_active claude-fable
-  start_fake_holder
-  : > "$HOME_FIX/state/.afk"
-  out=$(run_execute "$ROOT/bin/fm-primary-handoff.sh" check 2>&1) || status=$?
-  expect_code 0 "$status" "afk check should soft-skip"
-  assert_contains "$out" 'handoff: afk' "should report afk"
-  assert_not_contains "$(cat "$LAUNCH_LOG")" 'launch' "afk must not launch"
-  [ "$(live_holder_count)" = 1 ] || fail "afk must keep outgoing lock"
-  cleanup_holders
-  pass "away mode refuses automated rotation"
+  local out marker command status
+  for marker in .afk .afk-contract; do
+    for command in check execute; do
+      : > "$LAUNCH_LOG"
+      : > "$SIGNAL_LOG"
+      write_enabled_config 15 50
+      write_quota "$TMP_ROOT/quota.json" 5
+      write_context_sample 10
+      write_active claude-fable
+      start_fake_holder
+      : > "$HOME_FIX/state/$marker"
+      status=0
+      out=$(run_execute "$ROOT/bin/fm-primary-handoff.sh" "$command" 2>&1) || status=$?
+      expect_code 0 "$status" "$marker $command should soft-skip: $out"
+      [ ! -s "$LAUNCH_LOG" ] && [ ! -s "$SIGNAL_LOG" ] || fail "$marker must prevent launch and signal"
+      [ "$(cat "$HOME_FIX/state/.lock")" = "$FAKE_HOLDER_PID" ] || fail "away must keep outgoing lock"
+      cleanup_holders
+    done
+  done
+  pass "canonical away contract and legacy quiet flag refuse check and execute"
 }
 
 test_cooldown_prevents_busy_loop() {
@@ -934,7 +1116,289 @@ JSON
   pass "Fable model-window exhaustion rotates claude-fable to claude-opus"
 }
 
+# F1: stop precisely at unlink, then exercise a real competing acquisition.
+test_stale_release_serializes_acquisition() {
+  local release_pid acquire_pid i
+  rm -f "$HOME_FIX/unlink-go" "$HOME_FIX/unlink-ready"
+  printf '999999\n' > "$HOME_FIX/state/.lock"
+  printf 'old-session\n' > "$HOME_FIX/state/.lock-session"
+  cat > "$FAKEBIN/rm" <<'SH'
+#!/bin/bash
+if [ "${2:-}" = "$HOME_FIX/state/.lock" ]; then
+  : > "$HOME_FIX/unlink-ready"
+  while [ ! -f "$HOME_FIX/unlink-go" ]; do sleep 0.1; done
+fi
+exec /bin/rm "$@"
+SH
+  chmod +x "$FAKEBIN/rm"
+  PATH="$FAKEBIN:/usr/bin:/bin" FM_HOME="$HOME_FIX" \
+    "$ROOT/bin/fm-lock.sh" release-stale > "$TMP_ROOT/release.out" 2>&1 &
+  release_pid=$!
+  for i in {1..100}; do [ ! -f "$HOME_FIX/unlink-ready" ] || break; sleep 0.1; done
+  [ -f "$HOME_FIX/unlink-ready" ] || fail "release never reached unlink"
+  # shellcheck disable=SC2016 # expressions belong to the synthetic child
+  FM_HOME="$HOME_FIX" "$HOLDER_BIN" -c '
+    "$ROOT/bin/fm-lock.sh" > "$HOME_FIX/acquire.out" || exit 1
+    : > "$HOME_FIX/acquired"
+    while :; do sleep 1; done
+  ' &
+  acquire_pid=$!
+  printf '%s\n' "$acquire_pid" >> "$HOME_FIX/holders"
+  sleep 0.3
+  [ ! -f "$HOME_FIX/acquired" ] || fail "acquisition bypassed stale-release mutex"
+  : > "$HOME_FIX/unlink-go"
+  wait "$release_pid" || fail "stale release failed"
+  for i in {1..100}; do [ ! -f "$HOME_FIX/acquired" ] || break; sleep 0.1; done
+  [ -f "$HOME_FIX/acquired" ] || fail "acquisition did not finish"
+  [ "$(cat "$HOME_FIX/state/.lock")" = "$acquire_pid" ] || fail "stale release removed new owner"
+  [ ! -e "$HOME_FIX/state/.lock-session" ] || fail "old session identity survived release"
+  rm -f "$FAKEBIN/rm"
+  cleanup_holders
+  pass "stale release excludes concurrent acquisition through unlink and identity cleanup"
+}
+
+test_preflight_preserves_outgoing() {
+  local mode out status
+  for mode in route custom cli config account; do
+    : > "$SIGNAL_LOG"
+    : > "$LAUNCH_LOG"
+    write_enabled_config
+    write_active claude-fable
+    start_fake_holder
+    status=0
+    case "$mode" in
+      custom)
+        out=$(run_execute env FM_HANDOFF_LAUNCH_CMD=missing-handoff-command \
+          "$ROOT/bin/fm-primary-handoff.sh" execute --to pi 2>&1) || status=$?
+        ;;
+      route)
+        out=$(run_execute env -u TMUX -u FM_HANDOFF_LAUNCH_CMD \
+          "$ROOT/bin/fm-primary-handoff.sh" execute --to pi 2>&1) || status=$?
+        ;;
+      cli)
+        mv "$FAKEBIN/pi" "$FAKEBIN/pi.saved"
+        out=$(run_execute "$ROOT/bin/fm-primary-handoff.sh" execute --to pi 2>&1) || status=$?
+        mv "$FAKEBIN/pi.saved" "$FAKEBIN/pi"
+        ;;
+      config)
+        printf 'invalid\n' > "$HOME_FIX/config/primary-effort"
+        out=$(run_execute "$ROOT/bin/fm-primary-handoff.sh" execute --to claude-opus 2>&1) || status=$?
+        rm -f "$HOME_FIX/config/primary-effort"
+        ;;
+      account)
+        printf '#!/bin/sh\necho "Not logged in" >&2\nexit 1\n' > "$FAKEBIN/codex"
+        out=$(run_execute "$ROOT/bin/fm-primary-handoff.sh" execute --to codex 2>&1) || status=$?
+        printf '#!/bin/sh\nexit 0\n' > "$FAKEBIN/codex"
+        ;;
+    esac
+    [ "$status" -ne 0 ] || fail "$mode preflight should refuse: $out"
+    [ ! -s "$SIGNAL_LOG" ] && [ ! -s "$LAUNCH_LOG" ] || fail "$mode preflight stopped outgoing"
+    kill -0 "$FAKE_HOLDER_PID" || fail "$mode killed outgoing"
+    cleanup_holders
+  done
+  pass "route, explicit target CLI, configuration, and account fail before outgoing signal"
+}
+
+test_delayed_ack_and_recovery() {
+  local out status=0
+  : > "$LAUNCH_LOG"
+  write_enabled_config
+  write_active claude-fable
+  start_fake_holder
+  out=$(FM_TEST_STARTUP_DELAY=1 run_execute "$ROOT/bin/fm-primary-handoff.sh" execute --to pi 2>&1) || status=$?
+  expect_code 0 "$status" "delayed startup must complete: $out"
+  assert_contains "$(cat "$HOME_FIX/state/.primary-handoff")" 'phase=complete' "delayed startup never completed"
+  [ "$(wc -l < "$LAUNCH_LOG" | tr -d ' ')" = 1 ] || fail "delayed startup launched twice"
+  out=$(run_execute "$ROOT/bin/fm-primary-handoff.sh" check 2>&1)
+  assert_contains "$out" 'cooldown' "completed recovery lacks cooldown"
+  cleanup_holders
+  pass "delayed launch waits for a bound live-owner acknowledgement exactly once"
+}
+
+test_crash_recovery() {
+  local crash out status i
+  for crash in planning flushing releasing launching complete post_launch; do
+    : > "$LAUNCH_LOG"
+    write_enabled_config
+    write_quota "$TMP_ROOT/quota.json" 5
+    write_active claude-fable
+    start_fake_holder
+    status=0
+    if [ "$crash" = post_launch ]; then
+      out=$(FM_HANDOFF_INJECT_FAIL=post_launch run_execute \
+        "$ROOT/bin/fm-primary-handoff.sh" execute --to pi 2>&1) || status=$?
+    else
+      out=$(FM_HANDOFF_INJECT_CRASH=$crash run_execute \
+        "$ROOT/bin/fm-primary-handoff.sh" execute --to pi 2>&1) || status=$?
+    fi
+    [ "$status" -ne 0 ] || fail "$crash did not interrupt controller: $out"
+    # A launcher may still be acquiring while the restarted controller runs.
+    for i in {1..3}; do
+      out=$(run_execute "$ROOT/bin/fm-primary-handoff.sh" check 2>&1) || true
+      if grep -q '^phase=complete$' "$HOME_FIX/state/.primary-handoff"; then break; fi
+    done
+    assert_contains "$(cat "$HOME_FIX/state/.primary-handoff")" 'phase=complete' "$crash did not recover: $out"
+    [ "$(wc -l < "$LAUNCH_LOG" | tr -d ' ')" = 1 ] || fail "$crash duplicated incoming launch"
+    [ "$(live_holder_count)" = 1 ] || fail "$crash left no live owner"
+    kill -0 "$FAKE_HOLDER_PID" 2>/dev/null && fail "$crash left outgoing live with incoming"
+    cleanup_holders
+  done
+  pass "controller death at each durable phase and after dispatch recovers with one launch"
+}
+
+test_unrelated_owner_is_not_acknowledged() {
+  local out status=0 i
+  : > "$LAUNCH_LOG"
+  : > "$SIGNAL_LOG"
+  write_enabled_config
+  write_active claude-fable
+  start_fake_holder
+  out=$(FM_TEST_UNRELATED=1 run_execute env FM_HANDOFF_STARTUP_SECS=1 \
+    "$ROOT/bin/fm-primary-handoff.sh" execute --to pi 2>&1) || status=$?
+  [ "$status" -ne 0 ] || fail "unbound incoming was acknowledged: $out"
+  assert_contains "$(cat "$HOME_FIX/state/.primary-handoff")" 'phase=launching' "timeout lost recovery record"
+  : > "$SIGNAL_LOG"
+  for i in {1..3}; do
+    out=$(run_execute env FM_HANDOFF_STARTUP_SECS=1 "$ROOT/bin/fm-primary-handoff.sh" check 2>&1) || true
+    if grep -q '^phase=aborted$' "$HOME_FIX/state/.primary-handoff"; then break; fi
+  done
+  assert_contains "$out" 'unrelated live owner' "recovery did not reject foreign owner"
+  [ ! -s "$SIGNAL_LOG" ] || fail "recovery signalled unrelated owner"
+  [ "$(wc -l < "$LAUNCH_LOG" | tr -d ' ')" = 1 ] || fail "recovery launched over unrelated owner"
+  cleanup_holders
+  pass "an unrelated live owner cannot satisfy startup acknowledgement or be stopped by recovery"
+}
+
+test_pending_startup_reuses_launcher() {
+  local out status=0
+  : > "$LAUNCH_LOG"
+  write_enabled_config
+  write_active claude-fable
+  start_fake_holder
+  out=$(FM_TEST_STARTUP_DELAY=3 run_execute env FM_HANDOFF_STARTUP_SECS=1 \
+    "$ROOT/bin/fm-primary-handoff.sh" execute --to pi 2>&1) || status=$?
+  [ "$status" -ne 0 ] || fail "pending startup did not time out: $out"
+  assert_contains "$(cat "$HOME_FIX/state/.primary-handoff")" 'phase=launching' "timeout must stay recoverable"
+  status=0
+  out=$(run_execute "$ROOT/bin/fm-primary-handoff.sh" check 2>&1) || status=$?
+  expect_code 0 "$status" "pending launcher did not recover: $out"
+  assert_contains "$(cat "$HOME_FIX/state/.primary-handoff")" 'phase=complete' "pending launch not completed"
+  [ "$(wc -l < "$LAUNCH_LOG" | tr -d ' ')" = 1 ] || fail "pending launcher was duplicated"
+  cleanup_holders
+  pass "startup timeout retains recovery and reuses the existing launcher"
+}
+
+test_reused_outgoing_identity_is_not_signalled() {
+  local out status=0
+  : > "$SIGNAL_LOG"
+  : > "$LAUNCH_LOG"
+  write_enabled_config
+  write_active claude-fable
+  start_fake_holder
+  FM_HANDOFF_INJECT_CRASH=releasing run_execute \
+    "$ROOT/bin/fm-primary-handoff.sh" execute --to pi > "$TMP_ROOT/crash.out" 2>&1 || true
+  # Model PID reuse without ever signalling an unrelated real process.
+  sed 's/^outgoing_identity=.*/outgoing_identity=different-incarnation/' \
+    "$HOME_FIX/state/.primary-handoff" > "$HOME_FIX/record.tmp"
+  mv "$HOME_FIX/record.tmp" "$HOME_FIX/state/.primary-handoff"
+  out=$(run_execute "$ROOT/bin/fm-primary-handoff.sh" execute --force 2>&1) || status=$?
+  [ "$status" -ne 0 ] || fail "reused PID should refuse even with force: $out"
+  [ ! -s "$SIGNAL_LOG" ] && [ ! -s "$LAUNCH_LOG" ] || fail "reused PID was signalled or launched over"
+  cleanup_holders
+  pass "recovery checks outgoing process identity even under force"
+}
+
+test_tmux_route_carries_acknowledgement() {
+  local out status=0
+  : > "$LAUNCH_LOG"
+  write_enabled_config
+  write_active claude-fable
+  start_fake_holder
+  cat > "$FAKEBIN/tmux" <<'SH'
+#!/bin/bash
+case "$1" in
+  display-message) printf 'fixture-session\n' ;;
+  new-window) bash -c "$5" </dev/null >/dev/null 2>&1 & ;;
+  *) exit 1 ;;
+esac
+SH
+  cat > "$FAKEBIN/pi" <<'SH'
+#!/bin/bash
+printf 'launch pi\n' >> "$LAUNCH_LOG"
+printf '%s\n' "$$" >> "$HOME_FIX/holders"
+exec "$HOLDER_BIN" -c '
+  sleep 1
+  "$ROOT/bin/fm-lock.sh" || exit 1
+  while :; do sleep 1; done
+'
+SH
+  chmod +x "$FAKEBIN/tmux" "$FAKEBIN/pi"
+  out=$(run_execute env -u FM_HANDOFF_LAUNCH_CMD -u TMUX_PANE -u HERDR_PANE_ID TMUX=fixture \
+    "$ROOT/bin/fm-primary-handoff.sh" execute --to pi 2>&1) || status=$?
+  expect_code 0 "$status" "stubbed tmux route did not finish: $out"
+  assert_contains "$(cat "$HOME_FIX/state/.primary-handoff")" 'phase=complete' "tmux route did not acknowledge"
+  [ "$(wc -l < "$LAUNCH_LOG" | tr -d ' ')" = 1 ] || fail "tmux route launched more than once"
+  cleanup_holders
+  rm -f "$FAKEBIN/tmux"
+  printf '#!/bin/sh\nexit 0\n' > "$FAKEBIN/pi"
+  pass "tmux dispatch through the real primary launcher carries a bound acquisition acknowledgement"
+}
+
+test_recovery_waits_for_inflight_ack_publication() {
+  local out recovery_pid i
+  : > "$LAUNCH_LOG"
+  write_enabled_config
+  write_active claude-fable
+  start_fake_holder
+  rm -f "$HOME_FIX/ack-go" "$HOME_FIX/ack-ready"
+  cat > "$FAKEBIN/mv" <<'SH'
+#!/bin/bash
+if [ "${2:-}" = "$HOME_FIX/state/.lock-handoff" ]; then
+  : > "$HOME_FIX/ack-ready"
+  while [ ! -f "$HOME_FIX/ack-go" ]; do sleep 0.1; done
+fi
+exec /bin/mv "$@"
+SH
+  chmod +x "$FAKEBIN/mv"
+  FM_HANDOFF_INJECT_FAIL=post_launch run_execute \
+    "$ROOT/bin/fm-primary-handoff.sh" execute --to pi > "$TMP_ROOT/dispatch.out" 2>&1 || true
+  for i in {1..100}; do [ ! -f "$HOME_FIX/ack-ready" ] || break; sleep 0.1; done
+  [ -f "$HOME_FIX/ack-ready" ] || fail "incoming never reached acknowledgement publication"
+  run_execute "$ROOT/bin/fm-primary-handoff.sh" check > "$TMP_ROOT/recover.out" 2>&1 &
+  recovery_pid=$!
+  sleep 0.3
+  assert_contains "$(cat "$HOME_FIX/state/.primary-handoff")" 'phase=launching' "recovery misclassified an acquisition still publishing its receipt"
+  : > "$HOME_FIX/ack-go"
+  wait "$recovery_pid" || fail "recovery failed: $(cat "$TMP_ROOT/recover.out")"
+  out=$(cat "$HOME_FIX/state/.primary-handoff")
+  assert_contains "$out" 'phase=complete' "recovery never acknowledged completed publication"
+  [ "$(wc -l < "$LAUNCH_LOG" | tr -d ' ')" = 1 ] || fail "ack publication race duplicated launch"
+  rm -f "$FAKEBIN/mv"
+  cleanup_holders
+  pass "recovery waits for an in-flight acquisition receipt without aborting or launching twice"
+}
+
+test_recovery_waits_for_inflight_ack_publication
+
+test_tmux_route_carries_acknowledgement
+
+test_pending_startup_reuses_launcher
+test_reused_outgoing_identity_is_not_signalled
+
+test_stale_release_serializes_acquisition
+test_preflight_preserves_outgoing
+test_delayed_ack_and_recovery
+test_crash_recovery
+test_unrelated_owner_is_not_acknowledged
+
 test_disabled_is_noop
+test_disabled_force_uses_default_chain
+test_disabled_check_recovers_crashed_force
+test_launcher_lock_is_generation_bound
+test_recovery_preflight_failure_preserves_outgoing
+test_delayed_shutdown_survives_preflight_outage
+test_record_without_target_is_aborted
+test_recover_only_never_starts_rotation
 test_astra_registered_profile
 test_cursor_grok_quota_monitored
 test_happy_path_atomic_handoff
