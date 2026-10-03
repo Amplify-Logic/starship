@@ -23,6 +23,18 @@ CONTRACT="$ROOT/bin/fm-afk-contract.sh"
 LEASE="$ROOT/bin/fm-lease.sh"
 
 command -v node >/dev/null 2>&1 || { printf 'skip: node absent\n'; exit 0; }
+# bin/fm-branch-dispatch.mjs imports a TypeScript module through Node's built-in
+# type stripping, so the host cases need Node 22.18 or later.
+NODE_VERSION=$(node --version 2>/dev/null)
+NODE_MAJOR=${NODE_VERSION#v}; NODE_MAJOR=${NODE_MAJOR%%.*}
+NODE_MINOR=${NODE_VERSION#v*.}; NODE_MINOR=${NODE_MINOR%%.*}
+case "$NODE_MAJOR.$NODE_MINOR" in
+  *[!0-9.]*|.*|*.) printf 'skip: cannot read node version %s; needs Node 22.18 or later\n' "$NODE_VERSION"; exit 0 ;;
+esac
+if [ "$NODE_MAJOR" -lt 22 ] || { [ "$NODE_MAJOR" -eq 22 ] && [ "$NODE_MINOR" -lt 18 ]; }; then
+  printf 'skip: node %s is older than the Node 22.18 floor bin/fm-branch-dispatch.mjs needs\n' "$NODE_VERSION"
+  exit 0
+fi
 command -v perl >/dev/null 2>&1 || { printf 'skip: perl absent\n'; exit 0; }
 
 TMP_ROOT=$(fm_test_tmproot fm-supervision-host)
