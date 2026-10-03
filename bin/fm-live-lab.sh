@@ -35,6 +35,9 @@
 #                    on Pi; none leaves the file absent; off writes the
 #                    inherited supervision-host-off opt-out instead, so the
 #                    mate spawn inherits it).
+#   sentinel         the lab home and the mate home each carry the host
+#                    sentinel's durable disarm record, so no lab arm registers
+#                    a launchd job that would outlive the lab.
 #   tmux server      private, through the lab home's bin/fm-lab-home.sh
 #                    tmux-dir, with no user tmux config (its plugins never run
 #                    in a lab), started from an empty environment so no inherited
@@ -129,6 +132,14 @@ digest() {  # <file> -> sha256 of its bytes, or "absent"
 }
 
 treehouse_listing() { ls -1A "$TREEHOUSE_DIR" 2>/dev/null || true; }
+
+# disarm_sentinel <home>: write the host sentinel's durable disarm record
+# (FM_SUP_DISARM_RECORD_NAME in bin/fm-supervision-lib.sh) before anything runs
+# in a lab home, so no arm there registers a launchd job that down would leave
+# behind, alerting about a deleted home.
+disarm_sentinel() {
+  printf 'state=disarmed\nreason=fm-live-lab home\n' > "$1/state/.supervision-sentinel.disarmed"
+}
 
 rec_get() {  # <root> <key>
   sed -n "s/^$2=//p" "$1/$RECORD_NAME" | head -n 1
@@ -451,6 +462,7 @@ spawn_mate() {
   (cd "$LAB" && lab_run FM_HOME="$LAB" FM_SECONDMATE_CHARTER="$charter" \
     FM_SECONDMATE_SCOPE='second-mate live validation synthetic status relay' \
     "$LAB/bin/fm-home-seed.sh" "$MATE_ID" "$ROOT/mate" --no-projects) || return 1
+  disarm_sentinel "$ROOT/mate" || return 1
   (cd "$LAB" && lab_run FM_HOME="$LAB" "$LAB/bin/fm-spawn.sh" "$MATE_ID" --secondmate)
 }
 
@@ -529,6 +541,7 @@ cmd_up() {
   git -C "$LAB" checkout -q -f -B main FETCH_HEAD || die "cannot check out $ref"
   git -C "$LAB" config user.name lab && git -C "$LAB" config user.email lab@example.invalid
   mkdir -p "$LAB/state" "$LAB/data" "$LAB/config" "$LAB/projects" "$ROOT/treehouse"
+  disarm_sentinel "$LAB" || die "cannot disarm the host supervision sentinel for the lab home"
   printf 'tmux\n' > "$LAB/config/backend"
   printf 'claude\n' > "$LAB/config/crew-harness"
   printf 'claude sonnet low\n' > "$LAB/config/secondmate-harness"

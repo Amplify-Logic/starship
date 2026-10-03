@@ -727,6 +727,34 @@ out=$("$LIVE_LAB" down "$U" 2>&1)
 expect_code 0 "$?" "down removes the up-built lab: $out"
 pass "up re-registers primary trust after a concurrent Claude write"
 
+# A lab home must never register a host-level supervision sentinel: down never
+# boots one out, so a registered job would outlive the lab and alert the
+# captain about a deleted home. The arm a lab turn end runs must decline, and a
+# fake launchd must hold no job naming the lab home once down has run.
+FAKE_LAUNCHD="$TMP_ROOT/fake-launchd"
+mkdir -p "$FAKE_LAUNCHD"
+cat > "$FAKE_LAUNCHD/launchctl" <<SH
+#!/usr/bin/env bash
+case "\$1" in
+  bootstrap) cat "\$3" >> "$FAKE_LAUNCHD/jobs" ;;
+  print) [ -s "$FAKE_LAUNCHD/jobs" ] ;;
+  bootout|enable|kickstart) exit 0 ;;
+  *) exit 2 ;;
+esac
+SH
+chmod +x "$FAKE_LAUNCHD/launchctl"
+S="$TMP_ROOT/sentinel-lab"
+out=$(SHELL=/bin/sh PATH="$TMP_ROOT/stub-bin:$PATH" "$LIVE_LAB" up --harness claude --source "$UPSRC" --ref HEAD --timeout 0 "$S" 2>&1)
+expect_code 1 "$?" "stand-in primary does not answer probe: $out"
+sed -n 's/^tmux_dir=//p' "$S/.fm-live-lab" >> "$TMP_ROOT/tmux-dirs"
+out=$(FM_HOME="$S/home" FM_SENTINEL_PLATFORM=Darwin FM_SENTINEL_LAUNCHCTL="$FAKE_LAUNCHD/launchctl" \
+  FM_SENTINEL_CHECK_WAIT_SECS=1 "$S/home/bin/fm-supervision-sentinel.sh" arm 2>&1)
+expect_code 4 "$?" "the lab home's sentinel arm is a deliberate no-op: $out"
+out=$("$LIVE_LAB" down "$S" 2>&1)
+expect_code 0 "$?" "down removes the sentinel lab: $out"
+assert_not_contains "$(cat "$FAKE_LAUNCHD/jobs" 2>/dev/null)" "$S/home" "no launchd sentinel job names the lab home after down"
+pass "a lab home never registers a host supervision sentinel"
+
 # ---- fm-claude-trust.sh --lab-home -------------------------------------------
 
 T="$TMP_ROOT/trust"
