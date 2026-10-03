@@ -192,8 +192,9 @@ window_id() {
   esac
   window=$(sed -n 's/^window=//p' "$LAB/state/$name.meta" 2>/dev/null)
   [ -z "$window" ] || name=${window#*:}
-  lab_tmux list-windows -t firstmate -F "#{window_name}$(printf '\t')#{window_id}" 2>/dev/null \
-    | awk -F '\t' -v n="$name" '$1 == n { print $2; exit }'
+  # The id leads and a space separates it: tmux 3.6 turns a tab in -F into '_'.
+  lab_tmux list-windows -t firstmate -F '#{window_id} #{window_name}' 2>/dev/null \
+    | awk -v n="$name" '{ id = $1; sub(/^[^ ]* /, ""); if ($0 == n) { print id; exit } }'
 }
 
 window_field() {  # <name> <format>
