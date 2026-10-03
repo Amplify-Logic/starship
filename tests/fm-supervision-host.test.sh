@@ -29,6 +29,10 @@ TMP_ROOT=$(fm_test_tmproot fm-supervision-host)
 FAKEBIN=$(fm_fakebin "$TMP_ROOT/fakebin")
 ln -s /bin/bash "$FAKEBIN/claude"
 FAKE_CLAUDE="$FAKEBIN/claude"
+# The Stop hook sessions run the real fm-watch-arm.sh, which arms the host
+# supervision sentinel in a primary home. A fixture home must never register a
+# launchd job that outlives it, so the sentinel stays off for this file.
+export FM_SUPERVISION_SENTINEL_MODE=off
 
 # The stub engine. It records its environment and arguments, then acts like a
 # branch turn through the real scripts according to $FM_HOME/stub-mode:
