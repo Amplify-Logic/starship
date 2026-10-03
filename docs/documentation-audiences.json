@@ -361,6 +361,10 @@
       "audience": "operator-current"
     },
     {
+      "path": "docs/cloud-routines.md",
+      "audience": "operator-current"
+    },
+    {
       "path": "docs/captain-hold-lifecycle.md",
       "audience": "maintainer-architecture"
     },

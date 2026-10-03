@@ -94,6 +94,7 @@ Each effective `FM_HOME` contains private operational directories.
 - Per-task steering-inbox records under `state/<id>.inbox/` (`bin/fm-task-inbox-lib.sh`).
 - Parent-owned secondmate pending-reply records under `state/pending-replies/` (`bin/fm-pending-reply-lib.sh`).
 - The captain-ledger reconciliation cursor `state/.captain-ledger-cursor` (`bin/fm-captain-ledger.sh`).
+- The cloud routine report check's shim `state/routine-reports.check.sh` and its record `state/.routine-reports` (`bin/fm-routine-report-check.sh`; [cloud-routines.md](cloud-routines.md)).
 
 `config/` holds local gitignored operating choices, including explicit extension bindings under `config/extensions.d/`.
 

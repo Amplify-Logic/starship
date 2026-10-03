@@ -185,6 +185,8 @@ bin/fm-remote-job-worker.sh	210
 bin/fm-remote-readiness-lib.sh	3
 bin/fm-remote-secondmate-control.sh	3349
 bin/fm-review-diff.sh	10
+bin/fm-routine-creator-watch.sh	30
+bin/fm-routine-report-check.sh	170
 bin/fm-second-opinion.sh	8
 bin/fm-secondmate-charter-lib.sh	2
 bin/fm-secondmate-liveness-lib.sh	470
@@ -472,6 +474,8 @@ tests/fm-remote-secondmate-parent-binding.test.sh	63
 tests/fm-remote-secondmate-trace-context.test.sh	62
 tests/fm-remote-transport-lanes.test.sh	208
 tests/fm-review-diff.test.sh	57
+tests/fm-routine-creator-watch.test.sh	55
+tests/fm-routine-report-check.test.sh	55
 tests/fm-rovo-harness.test.sh	252
 tests/fm-rovo-signals-live-e2e.test.sh	95
 tests/fm-second-opinion.test.sh	56
