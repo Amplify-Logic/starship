@@ -832,7 +832,7 @@ def progress_lines(note_id):
     except OSError:
         return []
     lines = []
-    for raw in text.splitlines():
+    for raw in text.split("\n"):
         at, sep, body = raw.partition("\t")
         if sep and body.strip():
             lines.append({"at": at, "body": body})

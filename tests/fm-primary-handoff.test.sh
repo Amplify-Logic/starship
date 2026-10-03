@@ -54,13 +54,20 @@ JSON
 }
 
 write_context_sample() {
-  local remaining=$1
-  local used=$((100 - remaining))
+  local remaining=$1 owner
+  owner=$(FM_HOME="$HOME_FIX" bash -c '
+    . "$1/bin/fm-wake-lib.sh"
+    pid=$(cat "$STATE/.lock" 2>/dev/null) || exit 0
+    identity=$(fm_pid_identity "$pid") || exit 0
+    session=$(cat "$STATE/.lock-session" 2>/dev/null || true)
+    printf "%s|%s|%s" "$pid" "$identity" "$session"
+  ' _ "$ROOT")
   cat > "$HOME_FIX/state/.primary-context" <<EOF
 schema=fm-primary-context.v1
 remaining_percent=$remaining
-used_percent=$used
-updated_at=1
+used_percent=$((100 - remaining))
+owner=$owner
+updated_at=$(date +%s)
 EOF
 }
 
@@ -107,6 +114,9 @@ start_fake_holder() {
   FAKE_HOLDER_PID=$!
   printf '%s\n' "$FAKE_HOLDER_PID" >> "$HOME_FIX/holders"
   printf '%s\n' "$FAKE_HOLDER_PID" > "$HOME_FIX/state/.lock"
+  if [ -f "$HOME_FIX/state/.primary-context" ]; then
+    write_context_sample "$(sed -n 's/^remaining_percent=//p' "$HOME_FIX/state/.primary-context")"
+  fi
 }
 
 stop_fake_holder() {
@@ -648,6 +658,31 @@ test_concurrent_coordination_lock() {
   pass "coordination lock serializes supervisors without dual session-lock holders"
 }
 
+test_context_samples_belong_to_current_session() {
+  local out
+  start_fake_holder
+  write_context_sample 10
+  out=$(FM_HOME="$HOME_FIX" "$ROOT/bin/fm-primary-handoff.sh" status)
+  assert_contains "$out" 'context_used_percent: 90' "fresh owner sample must be usable"
+  cp "$HOME_FIX/state/.primary-context" "$TMP_ROOT/old-context"
+  stop_fake_holder
+  start_fake_holder
+  cp "$TMP_ROOT/old-context" "$HOME_FIX/state/.primary-context"
+  out=$(FM_HOME="$HOME_FIX" "$ROOT/bin/fm-primary-handoff.sh" status)
+  assert_contains "$out" 'context_used_percent: na' "replacement must reject previous owner sample"
+  write_context_sample 10
+  printf 'new-conversation\n' > "$HOME_FIX/state/.lock-session"
+  out=$(FM_HOME="$HOME_FIX" "$ROOT/bin/fm-primary-handoff.sh" status)
+  assert_contains "$out" 'context_used_percent: na' "same PID in a new conversation must reject old sample"
+  write_context_sample 10
+  out=$(FM_HOME="$HOME_FIX" FM_HANDOFF_NOW=9999999999 "$ROOT/bin/fm-primary-handoff.sh" status)
+  assert_contains "$out" 'context_used_percent: na' "expired sample must be ignored"
+  out=$(FM_HOME="$HOME_FIX" FM_HANDOFF_NOW=1 "$ROOT/bin/fm-primary-handoff.sh" status)
+  assert_contains "$out" 'context_used_percent: na' "future-dated sample must be ignored"
+  cleanup_holders
+  pass "context samples require the current session and a fresh timestamp"
+}
+
 test_context_threshold_detection() {
   local out status=0
   : > "$LAUNCH_LOG"
@@ -663,6 +698,7 @@ test_context_threshold_detection() {
   assert_contains "$out" 'handed_off: claude-fable -> claude-fable' "context should same-runtime rotate"
   assert_contains "$(cat "$LAUNCH_LOG")" 'launch claude-fable' "should launch same profile"
   assert_contains "$(cat "$HOME_FIX/state/.primary-handoff")" 'trigger=context' "record trigger should be context"
+  [ ! -e "$HOME_FIX/state/.primary-context" ] || fail "incoming launch retained outgoing context"
   assert_never_two
   cleanup_holders
   pass "context threshold detection triggers same-runtime rotation"
@@ -851,6 +887,7 @@ test_wakes_survive_flush() {
 test_status_bar_persists_context_sample() {
   local input out
   rm -f "$HOME_FIX/state/.primary-context"
+  start_fake_holder
   input='{"model":{"display_name":"Claude Fable"},"effort":{"level":"high"},"context_window":{"remaining_percentage":48.2},"rate_limits":{"five_hour":{"used_percentage":12.9}},"cost":{"total_cost_usd":1.0}}'
   out=$(
     printf '%s' "$input" | FM_HOME="$HOME_FIX" FM_PRIMARY_HARNESS=claude \
@@ -1413,6 +1450,7 @@ test_check_triggers_when_over_threshold
 test_check_ok_when_under_threshold
 test_primary_unchanged_when_handoff_disabled
 test_concurrent_coordination_lock
+test_context_samples_belong_to_current_session
 test_context_threshold_detection
 test_context_under_threshold_noop
 test_same_runtime_rotation_via_execute

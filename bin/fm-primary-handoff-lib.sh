@@ -282,12 +282,31 @@ fm_handoff_read_record() {
   fm_handoff_read_kv_file "$path"
 }
 
+# Bind a sample to the lock holder's process incarnation and, when available,
+# conversation id. All primary harnesses have a process identity; the session
+# sidecar additionally distinguishes Claude conversations within that process.
+fm_handoff_context_owner() {
+  local pid identity session
+  pid=$(cat "$(fm_handoff_session_lock)" 2>/dev/null) || return 1
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  if ! command -v fm_pid_identity >/dev/null 2>&1; then
+    # shellcheck source=bin/fm-wake-lib.sh
+    . "$FM_ROOT/bin/fm-wake-lib.sh" || return 1
+  fi
+  identity=$(fm_pid_identity "$pid") || return 1
+  session=$(cat "$STATE/.lock-session" 2>/dev/null || true)
+  [ "$pid" = "$(cat "$(fm_handoff_session_lock)" 2>/dev/null)" ] || return 1
+  printf '%s|%s|%s\n' "$pid" "$identity" "$session"
+}
+
 # Persist a context-window sample for the handoff supervisor.
+# Only samples belonging to the current owner and at most 300 seconds old are
+# usable; legacy unbound samples are ignored. Incoming launches clear the file.
 # Callers pass remaining_percent (0-100); used_percent is derived as 100 - remaining.
 # The status bar displays used % and derives remaining as 100 - used before calling.
 # Best-effort: never fails the caller (status-bar render must stay inert-safe).
 fm_handoff_write_context_sample() {
-  local remaining=$1 path now used
+  local remaining=$1 path now used owner
   path=$(fm_handoff_context_path)
   case "$remaining" in
     ''|--|*[!0-9]*) return 0 ;;
@@ -296,26 +315,41 @@ fm_handoff_write_context_sample() {
     remaining=100
   fi
   used=$((100 - remaining))
+  owner=$(fm_handoff_context_owner) || return 0
   now=$(fm_handoff_now)
   mkdir -p "$(dirname -- "$path")" 2>/dev/null || return 0
   fm_handoff_write_kv_file "$path" \
     "schema=fm-primary-context.v1" \
     "remaining_percent=$remaining" \
     "used_percent=$used" \
+    "owner=$owner" \
     "updated_at=$now" 2>/dev/null || return 0
   return 0
 }
 
 # Print used_percent from the durable sample, or "na".
 fm_handoff_context_used_percent() {
-  local path used
+  local path used owner current updated now
   if [ -n "${FM_HANDOFF_CONTEXT_USED:-}" ]; then
     printf '%s\n' "$FM_HANDOFF_CONTEXT_USED"
     return 0
   fi
   path=$(fm_handoff_context_path)
   [ -f "$path" ] || { printf 'na\n'; return 0; }
-  used=$(awk -F= '$1 == "used_percent" { print $2; exit }' "$path")
+  # Read one snapshot: the status bar atomically replaces this file.
+  local sample
+  sample=$(cat "$path") || { printf 'na\n'; return 0; }
+  owner=$(printf '%s\n' "$sample" | sed -n 's/^owner=//p')
+  current=$(fm_handoff_context_owner) || { printf 'na\n'; return 0; }
+  [ -n "$owner" ] && [ "$owner" = "$current" ] || { printf 'na\n'; return 0; }
+  updated=$(printf '%s\n' "$sample" | sed -n 's/^updated_at=//p')
+  case "$updated" in ''|*[!0-9]*) printf 'na\n'; return 0 ;; esac
+  now=$(fm_handoff_now)
+  if [ "$updated" -gt "$now" ] || [ "$((now - updated))" -gt 300 ]; then
+    printf 'na\n'
+    return 0
+  fi
+  used=$(printf '%s\n' "$sample" | sed -n 's/^used_percent=//p')
   case "$used" in
     ''|*[!0-9]*) printf 'na\n' ;;
     *) printf '%s\n' "$used" ;;

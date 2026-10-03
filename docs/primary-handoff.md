@@ -43,10 +43,12 @@ Claude Code feeds context-window percentages into the status-line command.
 schema=fm-primary-context.v1
 remaining_percent=<100 - used>
 used_percent=<0-100>
+owner=<lock holder PID>|<process identity>|<optional conversation id>
 updated_at=<epoch>
 ```
 
-The handoff supervisor reads `used_percent` out-of-band.
+The handoff supervisor reads `used_percent` out-of-band only for the current session and a fresh sample; `bin/fm-primary-handoff-lib.sh` owns the binding and freshness checks.
+An incoming launch clears the outgoing sample, and legacy samples without an owner are ignored.
 Test seam: `FM_HANDOFF_CONTEXT_USED` overrides the durable sample.
 
 ## Same-runtime vs cross-runtime

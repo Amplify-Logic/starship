@@ -455,6 +455,90 @@ test_spawn_installs_hook_only_when_armed() {
   pass "fm-spawn installs the Bash guard hook only for an armed, unexcluded project by logical name, never Harbour, and the hook honours the live gate"
 }
 
+# Exercise the public hook entry with a synthetic judge and stalled bookkeeping.
+test_known_deny_survives_bookkeeping_deadline() {
+  local home
+  home=$(new_home bookkeeping 'enabled = true\n')
+  python3 - "$GUARD" "$home" <<'PYTEST' || fail "bookkeeping discarded a deny or exceeded its bound"
+import contextlib, importlib.util, io, json, pathlib, signal, sys, time
+spec = importlib.util.spec_from_file_location("guard", sys.argv[1])
+g = importlib.util.module_from_spec(spec); spec.loader.exec_module(g)
+home = pathlib.Path(sys.argv[2])
+sys.argv = [sys.argv[1], "hook", "--config", str(home / "config"), "--state", str(home / "state"),
+            "--home", str(home), "--task", "fixture", "--project", "demo"]
+for boundary in ("outage_over", "append_log"):
+    def judge(*_):
+        signal.setitimer(signal.ITIMER_REAL, 0.1)
+        return "block", "fixture deny", {}, "invented command", "whole"
+    def stalled(*_):
+        time.sleep(5)
+    g.judge = judge
+    original = getattr(g, boundary)
+    setattr(g, boundary, stalled)
+    sys.stdin = io.StringIO(json.dumps({"tool_name": "Bash", "tool_input": {"command": "invented command"}}))
+    output, errors = io.StringIO(), io.StringIO(); start = time.monotonic()
+    try:
+        with contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
+            assert g.main() == 0
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        setattr(g, boundary, original)
+    assert time.monotonic() - start < 2, "bookkeeping was not bounded"
+    assert json.loads(output.getvalue())["hookSpecificOutput"]["permissionDecision"] == "deny"
+    state = home / "state"
+    assert not (state / g.OUTAGE_NAME).exists(), "a judged command opened an outage"
+    log = state / g.LOG_NAME
+    assert not log.exists() or '"outcome": "error"' not in log.read_text(), "a judged command logged an outage"
+    assert "stepping aside" not in errors.getvalue(), "a judged command announced an outage"
+PYTEST
+  pass "a known deny survives slow outage cleanup and log append under a bounded budget without reporting an outage"
+}
+
+test_concurrent_log_rotation_preserves_history() {
+  local home
+  home=$(new_home rotation)
+  python3 - "$GUARD" "$home/state" <<'PYTEST' || fail "concurrent rotation lost history or a decision"
+import importlib.util, json, multiprocessing, pathlib, sys, time
+spec = importlib.util.spec_from_file_location("guard", sys.argv[1])
+g = importlib.util.module_from_spec(spec); spec.loader.exec_module(g)
+state = pathlib.Path(sys.argv[2]); path = state / g.LOG_NAME
+history = "old history\n" * (g.LOG_ROTATE_BYTES // 12 + 1)
+path.write_text(history)
+ctx = multiprocessing.get_context("fork")
+rotating, release, entered = ctx.Event(), ctx.Event(), ctx.Event()
+def first():
+    replace = g.os.replace
+    def paused_replace(*args):
+        rotating.set()
+        assert release.wait(5)
+        replace(*args)
+    g.os.replace = paused_replace
+    g.append_log(state, {"who": "A"})
+def second():
+    entered.set()
+    g.append_log(state, {"who": "B"})
+a, b = ctx.Process(target=first), ctx.Process(target=second)
+a.start()
+try:
+    assert rotating.wait(5), "first writer never reached rotation"
+    b.start(); assert entered.wait(5)
+    # B can finish only in the broken, unlocked implementation while A is paused.
+    b.join(0.2)
+finally:
+    release.set()
+    a.join(5)
+    if b.pid: b.join(5)
+    for child in (a, b):
+        if child.pid and child.is_alive(): child.kill(); child.join()
+assert a.exitcode == b.exitcode == 0
+assert pathlib.Path(str(path) + ".1").read_text() == history, "retained history was replaced"
+assert {json.loads(line)["who"] for line in path.read_text().splitlines()} == {"A", "B"}
+PYTEST
+  pass "concurrent log rotation preserves retained history and both decisions"
+}
+
+test_known_deny_survives_bookkeeping_deadline
+test_concurrent_log_rotation_preserves_history
 test_gate
 test_unarmed_hook_sends_nothing
 test_recorded_block_and_allow

@@ -673,8 +673,9 @@ It also replaces known key and token shapes, whole quoted or unquoted credential
 These rules match text patterns, not shell syntax, so a quote after a credential name is read as the start of its value wherever it appears; redaction never skips or blocks a command, and every command is judged with whatever the rules removed.
 Plain values such as paths, `env=prod` or `of=/dev/disk2` stay visible, so the judge can see what `T=../sibling-copy; rm -rf "$T"` removes.
 
-**Steps aside on failure.** No key, a timeout, an HTTP error, an unreadable answer or a crash all allow the command, a multi-part command only once its head-and-tail request has failed too.
+**Steps aside on failure.** No key, a timeout, an HTTP error, an unreadable answer or a crash before the verdict all allow the command, a multi-part command only once its head-and-tail request has failed too.
 A single-part request is bounded at 4 seconds (`FM_COMMAND_GUARD_TIMEOUT`) and a multi-part one at 6 seconds (`FM_COMMAND_GUARD_MULTIPART_TIMEOUT`), and the whole hook at the sum of both plus 3 seconds.
+A block is emitted before any logging, which then gets at most one more second, so a failure or timeout while logging never turns a block into an allow.
 The first failure of an episode is written once to `state/command-guard.log` and to stderr, and the next good answer ends the episode.
 `TYPESAFE_API_KEY` is read from the environment, else from this home's `.env`, and never appears in argv, output or the log.
 

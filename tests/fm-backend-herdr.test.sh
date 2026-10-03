@@ -1296,6 +1296,33 @@ test_container_ensure_starts_server_and_workspace() {
   pass "fm_backend_herdr_container_ensure: version-gates, starts the server, ensures the firstmate workspace, echoes session:workspace_id + the seeded default tab id"
 }
 
+test_server_start_resolves_relative_executable_before_chdir() {
+  local dir i
+  dir="$TMP_ROOT/relative-server"
+  mkdir -p "$dir/work/tools" "$dir/home/tools"
+  cat > "$dir/work/tools/herdr" <<'SH'
+#!/bin/sh
+printf '%s\n' "$PWD" > "$(dirname "$0")/../started"
+SH
+  cat > "$dir/home/tools/herdr" <<'SH'
+#!/bin/sh
+touch wrong-executable
+SH
+  chmod +x "$dir/work/tools/herdr" "$dir/home/tools/herdr"
+  # Only these fixture executables are launched; no real Herdr lifecycle.
+  (cd "$dir/work" && PATH="tools:/usr/bin:/bin" HOME="$dir/home" \
+    bash -c '. "$1/bin/backends/herdr.sh"; fm_backend_herdr_session_client() { echo herdr; }; fm_backend_herdr_server_start_detached fixture' _ "$ROOT") \
+    || fail "relative executable launch failed"
+  for i in $(seq 1 50); do
+    [ -f "$dir/work/started" ] || [ -f "$dir/home/wrong-executable" ] && break
+    sleep 0.1
+  done
+  [ ! -f "$dir/home/wrong-executable" ] || fail "chdir selected a different executable"
+  [ -f "$dir/work/started" ] || fail "resolved relative executable never ran"
+  assert_equals "$dir/home" "$(cat "$dir/work/started")" "resolved executable still starts at HOME"
+  pass "relative Herdr executable remains the selected binary after chdir"
+}
+
 # The incident this guards (2026-09-28): a server started from inside a job
 # lived in that job's process group, so killing the job killed every pane, and
 # its replacement inherited a dead agent's environment and held its caller's
@@ -6188,6 +6215,7 @@ test_workspace_ensure_refuses_an_ambiguous_label_with_no_launcher
 test_workspace_ensure_other_home_ignores_the_launcher_identity
 test_container_ensure_refuses_an_ambiguous_home_label
 test_container_ensure_starts_server_and_workspace
+test_server_start_resolves_relative_executable_before_chdir
 test_server_ensure_scrubs_home_and_harness_identity
 test_reads_never_start_a_server
 test_container_ensure_reuses_existing_workspace

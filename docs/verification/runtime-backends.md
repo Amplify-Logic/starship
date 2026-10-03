@@ -1153,6 +1153,15 @@ The CLI matrix was checked directly:
 All destructive verification used `bin/fm-herdr-lab.sh` with a non-default `fm-lab-` name and a byte-identical default-session tripwire.
 No ambient `herdr server stop` command is a supported test operation.
 
+### Detached launcher executable resolution
+
+Verified 2026-10-03 on macOS 26.5.1 with Bash 3.2.57 and Python 3.12.5 using fixture executables only; no Herdr server was operated.
+`bin/fm-test-run.sh tests/fm-primary-handoff.test.sh tests/fm-backend-herdr.test.sh tests/fm-voice-idea.test.sh` exercised relative PATH resolution with a different executable at the same relative path under HOME and produced:
+
+```text
+ok - relative Herdr executable remains the selected binary after chdir
+```
+
 ### fm-remote server birth and login-keychain access
 
 Measured 2026-09-09 on macOS 26 (Darwin 25.6.0) aarch64 with Claude Code 2.1.266 and Herdr 0.9.0, the guarantee behind `bin/fm-remote-herdr-guard.sh` and the doctor's `herdr-server` check: login-keychain access follows the audit session a process was born into, never the launch shape or the shell.
