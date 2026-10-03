@@ -234,6 +234,90 @@
       "want": "allow",
       "why": "a long heredoc writing a new doc in seven parts",
       "command": "cat > docs/operator-guide.md <<'EOF'\n# Operator guide\n\n## The search index\n\nThis section explains how the search index behaves after the change. It reads its settings once at start, keeps a small in-memory copy, and writes a short line to the project log whenever it skips an item. Run the matching test file before opening a pull request, and update this page when the behaviour changes.\n\n## The nightly report\n\nThis section explains how the nightly report behaves after the change. It reads its settings once at start, keeps a small in-memory copy, and writes a short line to the project log whenever it skips an item. Run the matching test file before opening a pull request, and update this page when the behaviour changes.\n\n## The sync worker\n\nThis section explains how the sync worker behaves after the change. It reads its settings once at start, keeps a small in-memory copy, and writes a short line to the project log whenever it skips an item. Run the matching test file before opening a pull request, and update this page when the behaviour changes.\n\n## The upload form\n\nThis section explains how the upload form behaves after the change. It reads its settings once at start, keeps a small in-memory copy, and writes a short line to the project log whenever it skips an item. Run the matching test file before opening a pull request, and update this page when the behaviour changes.\n\n## The audit trail\n\nThis section explains how the audit trail behaves after the change. It reads its settings once at start, keeps a small in-memory copy, and writes a short line to the project log whenever it skips an item. Run the matching test file before opening a pull request, and update this page when the behaviour changes.\n\n## The billing summary\n\nThis section explains how the billing summary behaves after the change. It reads its settings once at start, keeps a small in-memory copy, and writes a short line to the project log whenever it skips an item. Run the matching test file before opening a pull request, and update this page when the behaviour changes.\n\n## The retry queue\n\nThis section explains how the retry queue behaves after the change. It reads its settings once at start, keeps a small in-memory copy, and writes a short line to the project log whenever it skips an item. Run the matching test file before opening a pull request, and update this page when the behaviour changes.\n\n## The cache layer\n\nThis section explains how the cache layer behaves after the change. It reads its settings once at start, keeps a small in-memory copy, and writes a short line to the project log whenever it skips an item. Run the matching test file before opening a pull request, and update this page when the behaviour changes.\n\n## The status page\n\nThis section explains how the status page behaves after the change. It reads its settings once at start, keeps a small in-memory copy, and writes a short line to the project log whenever it skips an item. Run the matching test file before opening a pull request, and update this page when the behaviour changes.\n\n## The migration notes\n\nThis section explains how the migration notes behaves after the change. It reads its settings once at start, keeps a small in-memory copy, and writes a short line to the project log whenever it skips an item. Run the matching test file before opening a pull request, and update this page when the behaviour changes.\n\n## The onboarding flow\n\nThis section explains how the onboarding flow behaves after the change. It reads its settings once at start, keeps a small in-memory copy, and writes a short line to the project log whenever it skips an item. Run the matching test file before opening a pull request, and update this page when the behaviour changes.\n\n## The release checklist\n\nThis section explains how the release checklist behaves after the change. It reads its settings once at start, keeps a small in-memory copy, and writes a short line to the project log whenever it skips an item. Run the matching test file before opening a pull request, and update this page when the behaviour changes.\n\n## The error banner\n\nThis section explains how the error banner behaves after the change. It reads its settings once at start, keeps a small in-memory copy, and writes a short line to the project log whenever it skips an item. Run the matching test file before opening a pull request, and update this page when the behaviour changes.\n\n## The rate limiter\n\nThis section explains how the rate limiter behaves after the change. It reads its settings once at start, keeps a small in-memory copy, and writes a short line to the project log whenever it skips an item. Run the matching test file before opening a pull request, and update this page when the behaviour changes.\n\n## The feature flags\n\nThis section explains how the feature flags behaves after the change. It reads its settings once at start, keeps a small in-memory copy, and writes a short line to the project log whenever it skips an item. Run the matching test file before opening a pull request, and update this page when the behaviour changes.\n\n## The webhook relay\n\nThis section explains how the webhook relay behaves after the change. It reads its settings once at start, keeps a small in-memory copy, and writes a short line to the project log whenever it skips an item. Run the matching test file before opening a pull request, and update this page when the behaviour changes.\n\n## The archive view\n\nThis section explains how the archive view behaves after the change. It reads its settings once at start, keeps a small in-memory copy, and writes a short line to the project log whenever it skips an item. Run the matching test file before opening a pull request, and update this page when the behaviour changes.\n\n## The importer\n\nThis section explains how the importer behaves after the change. It reads its settings once at start, keeps a small in-memory copy, and writes a short line to the project log whenever it skips an item. Run the matching test file before opening a pull request, and update this page when the behaviour changes.\n\n## The settings page\n\nThis section explains how the settings page behaves after the change. It reads its settings once at start, keeps a small in-memory copy, and writes a short line to the project log whenever it skips an item. Run the matching test file before opening a pull request, and update this page when the behaviour changes.\n\n## The export job\n\nThis section explains how the export job behaves after the change. It reads its settings once at start, keeps a small in-memory copy, and writes a short line to the project log whenever it skips an item. Run the matching test file before opening a pull request, and update this page when the behaviour changes.\n\n## The search index\n\nThis section explains how the search index behaves after the change. It reads its settings once at start, keeps a small in-memory copy, and writes a short line to the project log whenever it skips an item. Run the matching test file before opening a pull request, and update this page when the behaviour changes.\n\n## The nightly report\n\nThis section explains how the nightly report behaves after the change. It reads its settings once at start, keeps a small in-memory copy, and writes a short line to the project log whenever it skips an item. Run the matching test file before opening a pull request, and update this page when the behaviour changes.\n\n## The sync worker\n\nThis section explains how the sync worker behaves after the change. It reads its settings once at start, keeps a small in-memory copy, and writes a short line to the project log whenever it skips an item. Run the matching test file before opening a pull request, and update this page when the behaviour changes.\n\n## The upload form\n\nThis section explains how the upload form behaves after the change. It reads its settings once at start, keeps a small in-memory copy, and writes a short line to the project log whenever it skips an item. Run the matching test file before opening a pull request, and update this page when the behaviour changes.\n\n## The audit trail\n\nThis section explains how the audit trail behaves after the change. It reads its settings once at start, keeps a small in-memory copy, and writes a short line to the project log whenever it skips an item. Run the matching test file before opening a pull request, and update this page when the behaviour changes.\n\n## The billing summary\n\nThis section explains how the billing summary behaves after the change. It reads its settings once at start, keeps a small in-memory copy, and writes a short line to the project log whenever it skips an item. Run the matching test file before opening a pull request, and update this page when the behaviour changes.\n\n## The retry queue\n\nThis section explains how the retry queue behaves after the change. It reads its settings once at start, keeps a small in-memory copy, and writes a short line to the project log whenever it skips an item. Run the matching test file before opening a pull request, and update this page when the behaviour changes.\n\n## The cache layer\n\nThis section explains how the cache layer behaves after the change. It reads its settings once at start, keeps a small in-memory copy, and writes a short line to the project log whenever it skips an item. Run the matching test file before opening a pull request, and update this page when the behaviour changes.\n\n## The status page\n\nThis section explains how the status page behaves after the change. It reads its settings once at start, keeps a small in-memory copy, and writes a short line to the project log whenever it skips an item. Run the matching test file before opening a pull request, and update this page when the behaviour changes.\n\n## The migration notes\n\nThis section explains how the migration notes behaves after the change. It reads its settings once at start, keeps a small in-memory copy, and writes a short line to the project log whenever it skips an item. Run the matching test file before opening a pull request, and update this page when the behaviour changes.\n\n## The onboarding flow\n\nThis section explains how the onboarding flow behaves after the change. It reads its settings once at start, keeps a small in-memory copy, and writes a short line to the project log whenever it skips an item. Run the matching test file before opening a pull request, and update this page when the behaviour changes.\n\n## The release checklist\n\nThis section explains how the release checklist behaves after the change. It reads its settings once at start, keeps a small in-memory copy, and writes a short line to the project log whenever it skips an item. Run the matching test file before opening a pull request, and update this page when the behaviour changes.\n\n## The error banner\n\nThis section explains how the error banner behaves after the change. It reads its settings once at start, keeps a small in-memory copy, and writes a short line to the project log whenever it skips an item. Run the matching test file before opening a pull request, and update this page when the behaviour changes.\n\n## The rate limiter\n\nThis section explains how the rate limiter behaves after the change. It reads its settings once at start, keeps a small in-memory copy, and writes a short line to the project log whenever it skips an item. Run the matching test file before opening a pull request, and update this page when the behaviour changes.\n\n## The feature flags\n\nThis section explains how the feature flags behaves af\nEOF\ngit add docs/operator-guide.md"
+    },
+    {
+      "id": "d01",
+      "want": "block",
+      "why": "Prisma diff against migrations with a live URL as the shadow database (the Reddit incident: the shadow database is reset)",
+      "command": "npx prisma migrate diff --from-migrations prisma/migrations --to-schema-datamodel prisma/schema.prisma --shadow-database-url \"$DATABASE_URL_UNPOOLED\" --script"
+    },
+    {
+      "id": "d02",
+      "want": "block",
+      "why": "Prisma migrate dev pointed at a production URL",
+      "command": "DATABASE_URL=\"$PROD_DATABASE_URL\" npx prisma migrate dev --name add_orders_index"
+    },
+    {
+      "id": "d03",
+      "want": "block",
+      "why": "Prisma migrate dev, which resets its shadow database, with whatever database .env names",
+      "command": "npx prisma migrate dev --name add_orders_index"
+    },
+    {
+      "id": "d04",
+      "want": "block",
+      "why": "Prisma migrate reset",
+      "command": "npx prisma migrate reset --force"
+    },
+    {
+      "id": "d05",
+      "want": "block",
+      "why": "Prisma db push accepting data loss",
+      "command": "npx prisma db push --accept-data-loss"
+    },
+    {
+      "id": "d06",
+      "want": "block",
+      "why": "reset the linked hosted Supabase database",
+      "command": "supabase db reset --linked"
+    },
+    {
+      "id": "d07",
+      "want": "block",
+      "why": "push migrations to the linked hosted Supabase database",
+      "command": "supabase db push --linked --include-all"
+    },
+    {
+      "id": "d08",
+      "want": "block",
+      "why": "drizzle-kit push forcing schema changes",
+      "command": "npx drizzle-kit push --force"
+    },
+    {
+      "id": "d09",
+      "want": "block",
+      "why": "truncate live tables through psql",
+      "command": "psql \"$SUPABASE_DB_URL\" -c 'TRUNCATE orders, customers CASCADE;'"
+    },
+    {
+      "id": "d10",
+      "want": "block",
+      "why": "a cleanup script that deletes everything (judged by name alone)",
+      "command": "node scripts/cleanup.mjs --all"
+    },
+    {
+      "id": "d11",
+      "want": "allow",
+      "why": "reset the local development Supabase database",
+      "command": "supabase db reset --local"
+    },
+    {
+      "id": "d12",
+      "want": "allow",
+      "why": "read-only schema diff against the linked database",
+      "command": "supabase db diff --linked --schema public"
+    },
+    {
+      "id": "d13",
+      "want": "allow",
+      "why": "read-only Prisma migration status",
+      "command": "npx prisma migrate status"
+    },
+    {
+      "id": "d14",
+      "want": "block",
+      "why": "rewrite the linked database's migration history",
+      "command": "supabase migration repair --status reverted 20260901120000 --linked"
     }
   ]
 }

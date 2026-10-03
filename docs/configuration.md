@@ -640,7 +640,7 @@ Dated live evidence is in [`verification/triage-second-look.md`](verification/tr
 ## Worker command guard (config/command-guard)
 
 An opt-in, per-home check that runs before each shell command a spawned Claude worker (crewmate or scout) makes.
-TypeSafe's Jev judges the command, and the command is blocked when it would remove, overwrite or send something with no way back, when it aims to wipe something, or when it carries text aimed at the judge itself.
+A local database deny list checks the command first, then TypeSafe's Jev judges it, and the command is blocked when it would change a live database, when it would remove, overwrite or send something with no way back, when it aims to wipe something, or when it carries text aimed at the judge itself.
 The primary and secondmates are never guarded, and nor is any other worker harness.
 
 It ships off.
@@ -652,21 +652,28 @@ enabled = true
 exclude = private-client-app, family-notes
 ```
 
-`private-app` is always excluded: Harbour is local-only, so its workers are never guarded and their commands are never sent, whatever this file says.
-`exclude` covers the rest, naming other project directories whose workers are never guarded and whose commands are never sent, separated by spaces or commas.
+`private-app` is always excluded: Harbour is local-only, so its commands are never sent to Jev, whatever this file says.
+`exclude` covers the rest, naming other project directories whose commands are never sent, separated by spaces or commas.
+Excluded projects and Harbour still get the local database list, because it sends nothing.
 Both match the project's logical directory name, the name the project registry uses, even when that directory is a link to a differently named copy.
 List every other project whose code or commands must not reach a third party.
-Any other key or a malformed value leaves the guard off, and the spawn prints why.
+Any other key or a malformed value leaves the guard off at spawn, and the spawn prints why.
 
-**How it runs.** When the gate arms a project, `fm-spawn.sh` adds a Claude Code `PreToolUse` hook on `Bash` to the worker's own `.claude/settings.local.json`, beside its lifecycle hooks.
+**How it runs.** When the gate is on, `fm-spawn.sh` adds a Claude Code `PreToolUse` hook on `Bash` to the worker's own `.claude/settings.local.json`, beside its lifecycle hooks.
 The hook reads the same gate again on every command, so switching it off or excluding a project takes effect at once, while switching it on reaches workers spawned or relaunched after the change.
+
+**Local database list.** Before anything is sent, the hook matches the whole command, heredoc and `-c` bodies included, against a fixed list and blocks a match outright.
+The list covers `prisma migrate dev` or `reset`, `prisma migrate diff` with `--shadow-database-url` or `--from-migrations`, a shadow database set on the command line, `prisma db push`, `drizzle-kit push` or `drop`, `supabase db push`, `db reset`, `migration repair`, `link`, `projects delete` or `branches delete` unless `--local` is set with no `--linked`, `--db-url` or `--project-ref`, Supabase Management API database queries and login-role calls, `DROP TABLE`, `SCHEMA` or `DATABASE`, `TRUNCATE` or a `DELETE FROM` with no `WHERE` in a `psql` or `sqlite3` command, `railway volume`, `down`, `delete`, `ssh` or `run`, and `vercel env rm` or `pull`.
+The deny names the rule that fired and tells the worker to report the exact change to firstmate as a blocker, because workers never change a live database.
+Nothing remote is involved, so this list never steps aside: it holds when Jev is down or no key is set, a crash in the check blocks, and a gate that turns malformed after the hook is installed stops only the Jev call while the list keeps blocking.
+It matches text, not shell syntax, so a command that only mentions one of these, such as a search or a commit message, is blocked too; a script that runs one of them under another name is not seen.
 Each command is one request of three questions, asked in this order: whether the command contains text addressed to the judge, whether its effect is read-only, reversible or irreversible, and whether it aims to remove or wipe something.
 A redacted command longer than 2,000 characters is cut into overlapping parts of at most 2,000 characters, and the same request carries every part and asks the three questions of each, so every part of the command is judged.
 Any one condition in any part blocks: text aimed at the judge at 0.8, irreversible at 0.6 confidence, or destructive intent at 0.7.
 If that multi-part request fails (a timeout, an HTTP error or an unusable answer), the guard asks once more about the first 1,500 and last 500 characters alone before it steps aside, so a long command is never judged on less than that.
 A command that needs more than 8 parts is not judged: it is allowed, and a warning goes to stderr and to `state/command-guard.log`.
-A block reaches the worker as a denied tool call whose reason names the condition and says the block is final, not to work around it, and to report it to firstmate as a blocked status line.
-To let one blocked command through, switch the gate off, have the worker run it, then switch the gate back on.
+A Jev block reaches the worker as a denied tool call whose reason names the condition and says the block is final, not to work around it, and to report it to firstmate as a blocked status line.
+To let one blocked command through, switch the gate off, have the worker run it, then switch the gate back on; this switches the local list off too.
 
 **What leaves the machine.** Only the command text, never the working directory, the task or the environment.
 Redaction is best-effort: it removes `.env` values and secret-looking environment values of at least six characters, plus shorter nonempty values from secret-named `.env` keys at token boundaries.
@@ -674,7 +681,7 @@ It also replaces known key and token shapes, whole quoted or unquoted credential
 These rules match text patterns, not shell syntax, so a quote after a credential name is read as the start of its value wherever it appears; redaction never skips or blocks a command, and every command is judged with whatever the rules removed.
 Plain values such as paths, `env=prod` or `of=/dev/disk2` stay visible, so the judge can see what `T=../sibling-copy; rm -rf "$T"` removes.
 
-**Steps aside on failure.** No key, a timeout, an HTTP error, an unreadable answer or a crash before the verdict all allow the command, a multi-part command only once its head-and-tail request has failed too.
+**Jev steps aside on failure.** No key, a timeout, an HTTP error, an unreadable answer or a crash before Jev's verdict all allow a command the local list did not block, a multi-part command only once its head-and-tail request has failed too.
 A single-part request is bounded at 4 seconds (`FM_COMMAND_GUARD_TIMEOUT`) and a multi-part one at 6 seconds (`FM_COMMAND_GUARD_MULTIPART_TIMEOUT`), and the whole hook at the sum of both plus 3 seconds.
 A block is emitted before any logging, which then gets at most one more second, so a failure or timeout while logging never turns a block into an allow.
 The first failure of an episode is written once to `state/command-guard.log` and to stderr, and the next good answer ends the episode.
@@ -686,8 +693,8 @@ Known limit: the judge sees only the command text, so a target held in a secret-
 The guard is a best-effort advisory layer and does not try to close every way of hiding intent from the judge.
 It is still an extra check on a worker that already runs in a disposable copy under supervision, not a sandbox.
 
-**Log and benchmark.** Every decision is one JSON line in `state/command-guard.log` with the redacted command, the answers, the outcome and the `path` that decided it (`whole`, `parts` or `head-and-tail`), rotated at 2 MB.
-`python3 bin/fm-command-guard.py bench tests/fixtures/command-guard/benchmark.json` runs the labelled command set live, one request per command as the hook sends it, and prints each verdict and the agreement.
+**Log and benchmark.** Every Jev decision and every local block is one JSON line in `state/command-guard.log` with the redacted command, the answers, the outcome and the `path` that decided it (`local`, `whole`, `parts` or `head-and-tail`), rotated at 2 MB.
+`python3 bin/fm-command-guard.py bench tests/fixtures/command-guard/benchmark.json` runs the labelled command set through the local list and then live, one request per command the list did not block, as the hook sends it, and prints each verdict and the agreement.
 Grow that set when a real block or a real miss teaches something, and rerun it after changing a question, a threshold or the pinned model.
 The engine's header owns the exact invocation, questions, criteria, thresholds and redaction, and dated results are in [`verification/command-guard.md`](verification/command-guard.md).
 

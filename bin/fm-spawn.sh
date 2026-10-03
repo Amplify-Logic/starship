@@ -385,7 +385,7 @@
 # Verified per-harness turn-end hooks are installed automatically where enabled; some live outside the worktree.
 # A claude crewmate or scout also gets the worker command guard's PreToolUse
 # Bash hook in its settings.local.json when this home's config/command-guard
-# arms it for the project (bin/fm-command-guard.py owns the gate and the hook).
+# is on (bin/fm-command-guard.py owns the gate and the hook).
 # Kimi uses one surgically installed Firstmate region in $HOME/.kimi-code/config.toml,
 # a firstmate-owned global hook and registry, and a gitignored per-task pointer.
 # Kimi 2.0.0 also gates a fresh worktree on an interactive folder-trust dialog.
@@ -5146,9 +5146,9 @@ if [ "$KIND" != secondmate ]; then
     j_stopfail=$(json_escape "$busy_cmd_prefix idle $busy_suffix --event stop-failure 2>/dev/null || true")
     j_sessionend=$(json_escape "$busy_cmd_prefix idle $busy_suffix --event session-end 2>/dev/null || true")
     # The opt-in worker command guard (bin/fm-command-guard.py): a PreToolUse
-    # hook on Bash, written only for a worker whose home armed it and whose
-    # project the gate does not exclude. The hook re-reads the same gate on
-    # every command, so switching it off needs no relaunch.
+    # hook on Bash, written only for a worker whose home switched it on. An
+    # excluded project gets the local database list alone. The hook re-reads
+    # the same gate on every command, so switching it off needs no relaunch.
     guard_hook=
     guard_project=$(basename "$PROJ_ABS")
     if [ -e "$CONFIG/command-guard" ] || [ -L "$CONFIG/command-guard" ]; then

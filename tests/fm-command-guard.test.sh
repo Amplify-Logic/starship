@@ -61,8 +61,9 @@ new_home() {  # <name> [gate-text]
 }
 
 payload() {  # <command> [tool]
-  python3 -c 'import json,sys; print(json.dumps({"hook_event_name":"PreToolUse","tool_name":sys.argv[2],"tool_input":{"command":sys.argv[1]}}))' \
-    "$1" "${2:-Bash}"
+  # The command goes through stdin: Linux caps a single argument at 128 KiB, below the long-command cases.
+  printf '%s' "$1" | python3 -c 'import json,sys; print(json.dumps({"hook_event_name":"PreToolUse","tool_name":sys.argv[1],"tool_input":{"command":sys.stdin.read()}}))' \
+    "${2:-Bash}"
 }
 
 run_hook() {  # <home> <command> [project] [tool]
@@ -80,10 +81,9 @@ test_gate() {
   python3 "$GUARD" armed --config "$home/config" --project demo && fail "enabled = false must be off"
   printf '# on for this home\nenabled = true\nexclude = private-lab, other\n' > "$home/config/command-guard"
   python3 "$GUARD" armed --config "$home/config" --project demo || fail "enabled = true must arm an unlisted project"
-  python3 "$GUARD" armed --config "$home/config" --project private-lab && fail "an excluded project must stay off"
-  python3 "$GUARD" armed --config "$home/config" --project other && fail "every excluded project must stay off"
+  python3 "$GUARD" armed --config "$home/config" --project private-lab || fail "an excluded project must still get the local list"
   printf 'enabled = true\n' > "$home/config/command-guard"
-  python3 "$GUARD" armed --config "$home/config" --project private-app && fail "Harbour must stay off with no exclude line"
+  python3 "$GUARD" armed --config "$home/config" --project private-app || fail "Harbour must still get the local list"
   printf 'enabled = yes\n' > "$home/config/command-guard"
   out=$(python3 "$GUARD" armed --config "$home/config" --project demo 2>&1) && fail "a malformed value must be off"
   assert_contains "$out" "enabled must be true or false" "a malformed gate must say why"
@@ -93,7 +93,7 @@ test_gate() {
   printf 'enabled = true\n' > "$home/gate-target"
   ln -s "$home/gate-target" "$home/config/command-guard"
   python3 "$GUARD" armed --config "$home/config" --project demo 2>/dev/null && fail "a symlinked gate must be off"
-  pass "the gate is off unless enabled = true, always excludes Harbour, excludes listed projects, and treats a malformed file as off"
+  pass "the gate is off unless enabled = true, arms every project including excluded ones and Harbour, and treats a malformed file as off"
 }
 
 test_unarmed_hook_sends_nothing() {
@@ -111,7 +111,7 @@ test_unarmed_hook_sends_nothing() {
   out=$(run_hook "$home" "git push --force origin main" private-app)
   assert_equals "" "$out" "Harbour must allow without output"
   assert_equals 0 "$(requests)" "Harbour must never be sent, whatever the gate says"
-  pass "an unarmed home, Harbour and an excluded project allow every command and send nothing"
+  pass "an unarmed home, Harbour and an excluded project allow a command off the local list and send nothing"
 }
 
 # --- the rule, on recorded live answers ------------------------------------
@@ -168,6 +168,239 @@ test_non_bash_tool_ignored() {
   assert_equals "" "$out" "a non-Bash payload must be allowed"
   assert_equals 0 "$(requests)" "a non-Bash payload must make no call"
   pass "only Bash commands are judged"
+}
+
+# --- the local database list, before Jev ------------------------------------
+
+# shellcheck disable=SC2016 # the incident command is sent literally, $DATABASE_URL_UNPOOLED and all
+INCIDENT='npx prisma migrate diff --from-migrations prisma/migrations --to-schema-datamodel prisma/schema.prisma --shadow-database-url "$DATABASE_URL_UNPOOLED" --script'
+
+assert_local_block() {  # <home> <command> <message> [project]
+  local out
+  out=$(run_hook "$1" "$2" "${4:-demo}" 2>/dev/null)
+  printf '%s' "$out" | jq -e '.hookSpecificOutput.permissionDecision == "deny"' >/dev/null || fail "$3, got: $out"
+  assert_contains "$out" "Database guard blocked this command" "$3: the deny must name the local list"
+}
+
+test_local_list_blocks_when_jev_is_unreachable() {
+  local home out cmd
+  home=$(new_home local-down 'enabled = true\n')
+  reset_server '{"error":"boom"}' 500
+  for cmd in "$INCIDENT" 'npx prisma migrate dev --name add_orders_index' \
+    'supabase migration repair --status reverted 20260901120000 --linked'; do
+    assert_local_block "$home" "$cmd" "a live database change must be blocked while Jev is down"
+  done
+  out=$(run_hook "$home" "$INCIDENT")
+  assert_contains "$out" "prisma migrate diff with a shadow database" "the deny must say which rule fired"
+  assert_contains "$out" "report the exact change to firstmate as a blocked status line" "the deny must send live database changes to firstmate"
+  assert_equals 0 "$(requests)" "a local block must make no call"
+  rm -f "$home/.env"
+  assert_local_block "$home" 'npx prisma migrate dev' "a live database change must be blocked with no key"
+  grep -q '"path": "local"' "$home/state/command-guard.log" || fail "a local block must be logged with its path"
+  [ ! -e "$home/state/.command-guard-outage" ] || fail "a local block must not open an outage"
+
+  printf 'TYPESAFE_API_KEY=ts-fixture-key-0001\n' > "$home/.env"
+  for cmd in 'supabase db reset --local' 'npx prisma migrate status' 'supabase db diff --linked --schema public'; do
+    reset_server "$FIX/response-git-status.json"
+    out=$(run_hook "$home" "$cmd")
+    assert_equals "" "$out" "$cmd must pass the local list and be allowed"
+    assert_equals 1 "$(requests)" "$cmd must still go to Jev"
+    reset_server '{"error":"boom"}' 500
+    out=$(run_hook "$home" "$cmd" 2>/dev/null)
+    assert_equals "" "$out" "$cmd must be allowed when Jev is down"
+  done
+  printf 'enabled = false\n' > "$home/config/command-guard"
+  out=$(run_hook "$home" "$INCIDENT")
+  assert_equals "" "$out" "switching the gate off must switch the local list off too"
+  pass "the incident command, migrate dev and migration repair are blocked locally with Jev down or no key, and a local reset and read-only commands still pass"
+}
+
+test_local_list_rules() {
+  local home out cmd
+  home=$(new_home local-rules 'enabled = true\n')
+  rm -f "$home/.env"
+  while IFS= read -r cmd; do
+    [ -n "$cmd" ] || continue
+    assert_local_block "$home" "$(printf '%b' "$cmd")" "the local list must block: $cmd"
+  done <<'CASES'
+npx prisma migrate reset --force
+pnpm exec prisma migrate --schema=prisma/schema.prisma dev
+SHADOW_DATABASE_URL="$DATABASE_URL" npx prisma migrate status
+sed -i 's/x/shadowDatabaseUrl = env("LIVE")/' prisma/schema.prisma
+npx prisma db push
+npx drizzle-kit push --force
+bunx drizzle-kit drop
+supabase db push --linked --include-all
+supabase db reset
+npx supabase --debug db push
+supabase db push --local --db-url "$LIVE_URL"
+supabase link --project-ref abcdef
+supabase projects delete abcdef
+supabase branches delete preview
+supabase db reset --local && supabase db push
+curl -X POST https://api.supabase.com/v1/projects/abcdef/database/query -d @q.json
+node -e "fetch('https://api.supabase.com/v1/projects/abcdef/cli/login-role', {method: 'POST'})"
+psql "$DB" -c 'DROP TABLE users;'
+psql "$DB" <<'SQL'\nbegin;\ndrop schema public cascade;\ncommit;\nSQL
+psql -c "TRUNCATE orders, customers CASCADE;"
+sqlite3 store.sqlite 'DELETE FROM jobs'
+sqlite3 store.sqlite <<'EOF'\ndelete from jobs;\nEOF
+psql "$DATABASE_URL" -c 'DELETE FROM "User"'
+psql "$DATABASE_URL" -c "DELETE FROM \\"User\\"; select 1 where true"
+bash -c 'npx prisma migrate dev'
+npx prisma \\\n  migrate dev
+railway volume delete data
+railway down
+railway ssh
+railway run npm start
+vercel env rm SECRET production
+vercel env pull .env.local
+npx prisma@5 migrate dev
+pnpm dlx prisma@6 migrate reset --force
+npx prisma@latest db push
+npx -y supabase@latest db reset --linked
+npx supabase@latest db push
+bunx drizzle-kit@latest push
+npx vercel@latest env pull
+supabase --workdir ./app db push
+supabase --profile prod db push
+npx prisma migrate --schema prisma/schema.prisma dev
+CASES
+  reset_server "$FIX/response-git-status.json"
+  while IFS= read -r cmd; do
+    [ -n "$cmd" ] || continue
+    out=$(run_hook "$home" "$(printf '%b' "$cmd")" 2>/dev/null)
+    assert_equals "" "$out" "the local list must pass: $cmd"
+  done <<'CASES'
+npx prisma migrate deploy
+npx prisma generate
+npx prisma migrate diff --from-schema-datamodel a.prisma --to-schema-datamodel b.prisma
+npx drizzle-kit generate
+supabase db push --local
+supabase migration list --linked
+supabase status
+sqlite3 store.sqlite 'DELETE FROM jobs WHERE id = 3'
+psql "$DATABASE_URL" -c "DELETE FROM \\"User\\" WHERE id = 1"
+psql "$DATABASE_URL" -c 'DELETE FROM "User" WHERE id = 1'
+psql "$DATABASE_URL" -c 'DELETE FROM "public"."User" WHERE id = 1'
+npx prisma@5 migrate deploy
+psql -c "delete from t where x = 'a'"
+truncate -s 0 log.txt && psql -c 'select 1'
+echo "DROP TABLE x"
+ls supabase/migrations prisma/dev.db
+railway status
+vercel env ls
+vercel env add FOO production
+CASES
+  pass "the local list blocks every listed database command, in heredoc and -c bodies too, and passes their read-only and local neighbours"
+}
+
+test_malformed_gate_keeps_local_list() {
+  local home out
+  home=$(new_home local-malformed 'enabled = true\n')
+  printf 'enabled = true\nexclude: foo\n' > "$home/config/command-guard"
+  reset_server "$FIX/response-force-push.json"
+  assert_local_block "$home" 'npx prisma migrate dev' "a malformed gate must keep the local list blocking"
+  out=$(run_hook "$home" "git push --force origin main" 2>/dev/null)
+  assert_equals "" "$out" "a malformed gate must stop the Jev call"
+  printf 'enabled = yes\n' > "$home/config/command-guard"
+  assert_local_block "$home" 'npx prisma migrate dev' "a malformed value must keep the local list blocking"
+  assert_equals 0 "$(requests)" "a malformed gate must send nothing"
+  pass "a gate that turns malformed after spawn keeps the local list blocking and sends nothing to Jev"
+}
+
+test_local_list_stays_fast_on_long_commands() {
+  local home cmd started elapsed
+  home=$(new_home local-long 'enabled = true\n')
+  rm -f "$home/.env"
+  while IFS= read -r -d '' cmd; do
+    started=$(python3 -c 'import time; print(time.time())')
+    assert_local_block "$home" "$cmd" "a long command must still be blocked locally: ${cmd:0:40}"
+    elapsed=$(python3 -c 'import sys, time; print(time.time() - float(sys.argv[1]))' "$started")
+    python3 -c 'import sys; sys.exit(float(sys.argv[1]) >= 2.0)' "$elapsed" \
+      || fail "a ${#cmd}-character command starting ${cmd:0:40} took ${elapsed}s to decide locally"
+  done < <(python3 - <<'PYCASES'
+import sys
+block = " && npx prisma migrate dev"
+cases = [
+    "prisma -a " * 16000 + "npx prisma migrate dev",
+    ("prisma " + "-a " * 10) * 3000 + block,
+    "echo " + "prisma@" * 16000 + block,
+    "echo " + "supabase@x," * 10000 + block,
+    "echo " + "drizzle-kit@" * 9000 + block,
+    "echo " + "railway@-" * 12000 + block,
+    "vercel -a" + " '\"" * 30000 + "x" + block,
+    "railway -" + "x" * 100000 + block,
+    "echo " + "supabase -a -" * 10000 + block,
+    "prisma migrate " + "-x " * 30000 + block,
+    "SHADOW_DATABASE_URL " * 6000 + block,
+    "psql -c '" + 'delete from "' * 10000 + "'; psql -c 'delete from t'",
+    "psql -c '" + "delete from a." * 10000 + "'; psql -c 'delete from t'",
+    "psql " + "drop " * 20000 + "drop table t",
+    "psql " + "truncate " * 15000 + "truncate t",
+    "curl " + "api.supabase.com/v1/projects/" * 4000 + " https://api.supabase.com/v1/projects/a/database/query",
+]
+sys.stdout.write("".join(case + "\0" for case in cases))
+PYCASES
+)
+  pass "the local list decides long repetitive commands for every rule in well under two seconds and still blocks them"
+}
+
+test_local_list_benchmark_cases() {
+  local home id want cmd out
+  home=$(new_home local-bench 'enabled = true\n')
+  rm -f "$home/.env"
+  while IFS=$'\t' read -r id want cmd; do
+    out=$(run_hook "$home" "$(printf '%b' "$cmd")" 2>/dev/null)
+    if [ "$want" = block ] && [ "$id" != d10 ]; then
+      assert_contains "$out" "Database guard blocked" "benchmark case $id must be blocked locally"
+    else
+      assert_equals "" "$out" "benchmark case $id must be left to Jev"
+    fi
+  done < <(jq -r '.cases[] | select(.id | startswith("d")) | [.id, .want, (.command | gsub("\\\\"; "\\\\\\\\") | gsub("\n"; "\\n"))] | @tsv' \
+    "$FIX/benchmark.json")
+  assert_equals 14 "$(jq '[.cases[] | select(.id | startswith("d"))] | length' "$FIX/benchmark.json")" "the benchmark must carry the 14 database cases"
+  pass "the 14 database benchmark cases are blocked locally as labelled, except a script judged by its name alone"
+}
+
+test_local_list_reaches_excluded_projects() {
+  local home out
+  home=$(new_home local-excluded 'enabled = true\nexclude = private-lab\n')
+  reset_server "$FIX/response-force-push.json"
+  for project in private-lab private-app; do
+    assert_local_block "$home" "$INCIDENT" "the local list must block for $project" "$project"
+    out=$(run_hook "$home" "git push --force origin main" "$project")
+    assert_equals "" "$out" "$project must not be judged by Jev"
+  done
+  assert_equals 0 "$(requests)" "an excluded project and Harbour must never be sent"
+  printf 'psql "postgres://ops:hunter22@db.example/x" -c "DROP TABLE t"\n' > "$TMP_ROOT/secret-cmd"
+  assert_local_block "$home" "$(cat "$TMP_ROOT/secret-cmd")" "a credentialed database URL must still be blocked" private-lab
+  assert_not_contains "$(cat "$home/state/command-guard.log")" "hunter22" "a local block must log only the redacted command"
+  pass "excluded projects and Harbour get the local list and still send nothing to Jev"
+}
+
+test_local_check_crash_blocks() {
+  local home
+  home=$(new_home local-crash 'enabled = true\n')
+  python3 - "$GUARD" "$home" <<'PYTEST' || fail "a crash in the local check must block"
+import contextlib, importlib.util, io, json, pathlib, sys
+spec = importlib.util.spec_from_file_location("guard", sys.argv[1])
+g = importlib.util.module_from_spec(spec); spec.loader.exec_module(g)
+home = pathlib.Path(sys.argv[2])
+def broken(_):
+    raise RuntimeError("fixture")
+g.database_rule = broken
+sys.argv = [sys.argv[1], "hook", "--config", str(home / "config"), "--state", str(home / "state"),
+            "--home", str(home), "--task", "fixture", "--project", "demo"]
+sys.stdin = io.StringIO(json.dumps({"tool_name": "Bash", "tool_input": {"command": "git status"}}))
+output = io.StringIO()
+with contextlib.redirect_stdout(output):
+    assert g.main() == 0
+decision = json.loads(output.getvalue())["hookSpecificOutput"]
+assert decision["permissionDecision"] == "deny"
+assert "could not run (RuntimeError)" in decision["permissionDecisionReason"]
+PYTEST
+  pass "a crash in the local database check blocks instead of stepping aside"
 }
 
 # --- never send secrets -----------------------------------------------------
@@ -429,16 +662,24 @@ test_spawn_installs_hook_only_when_armed() {
     || fail "an unarmed home must not install the guard hook"
 
   wt=$(spawn_claude excluded guard-excluded 'enabled = true\nexclude = project\n')
-  jq -e '.hooks | has("PreToolUse") | not' "$wt/.claude/settings.local.json" >/dev/null \
-    || fail "an excluded project must not get the guard hook"
+  cmd=$(jq -r '.hooks.PreToolUse[0].hooks[0].command' "$wt/.claude/settings.local.json")
+  assert_contains "$cmd" "--project 'project'" "an excluded project must get the hook for the local list"
+  reset_server "$FIX/response-force-push.json"
+  out=$(payload "git push --force origin main" | bash -c "$cmd")
+  assert_equals "" "$out" "an excluded project's hook must allow a command off the local list"
+  out=$(payload "npx prisma migrate dev" | bash -c "$cmd")
+  assert_contains "$out" "Database guard blocked" "an excluded project's hook must still run the local list"
+  assert_equals 0 "$(requests)" "an excluded project's hook must never send a command"
 
   wt=$(spawn_claude harbour guard-harbour 'enabled = true\n' private-app)
-  jq -e '.hooks | has("PreToolUse") | not' "$wt/.claude/settings.local.json" >/dev/null \
-    || fail "Harbour, reached through a link to a differently named copy, must not get the guard hook"
+  cmd=$(jq -r '.hooks.PreToolUse[0].hooks[0].command' "$wt/.claude/settings.local.json")
+  assert_contains "$cmd" "--project 'private-app'" "Harbour, reached through a link, must get the hook under its logical name"
 
   wt=$(spawn_claude linked guard-linked 'enabled = true\nexclude = linked-name\n' linked-name)
-  jq -e '.hooks | has("PreToolUse") | not' "$wt/.claude/settings.local.json" >/dev/null \
-    || fail "an exclude must match the project's logical name, not the link target"
+  cmd=$(jq -r '.hooks.PreToolUse[0].hooks[0].command' "$wt/.claude/settings.local.json")
+  reset_server "$FIX/response-force-push.json"
+  out=$(payload "git push --force origin main" | bash -c "$cmd")
+  assert_equals 0 "$(requests)" "an exclude must match the project's logical name, not the link target"
 
   wt=$(spawn_claude on guard-on 'enabled = true\n')
   settings="$wt/.claude/settings.local.json"
@@ -452,7 +693,7 @@ test_spawn_installs_hook_only_when_armed() {
   printf 'enabled = false\n' > "$TMP_ROOT/spawn-on/home/config/command-guard"
   out=$(payload "git push --force origin main" | bash -c "$cmd")
   assert_equals "" "$out" "switching the gate off must take effect without a relaunch"
-  pass "fm-spawn installs the Bash guard hook only for an armed, unexcluded project by logical name, never Harbour, and the hook honours the live gate"
+  pass "fm-spawn installs the Bash guard hook whenever the gate is on, excluded projects and Harbour get the local list without Jev by logical name, and the hook honours the live gate"
 }
 
 # Exercise the public hook entry with a synthetic judge and stalled bookkeeping.
@@ -544,6 +785,13 @@ test_unarmed_hook_sends_nothing
 test_recorded_block_and_allow
 test_thresholds
 test_non_bash_tool_ignored
+test_local_list_blocks_when_jev_is_unreachable
+test_local_list_rules
+test_malformed_gate_keeps_local_list
+test_local_list_stays_fast_on_long_commands
+test_local_list_benchmark_cases
+test_local_list_reaches_excluded_projects
+test_local_check_crash_blocks
 test_redaction
 test_quoted_and_short_secrets_are_redacted
 test_routine_expansions_are_judged
