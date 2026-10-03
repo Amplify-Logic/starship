@@ -2135,8 +2135,9 @@ case "${1:-} ${2:-}" in
     exit 0 ;;
   'pane process-info')
     # A retained registration with a shell-only pane models an exited agent
-    # whose Herdr status authority still belongs to its previous session.
-    if [ -f "$D/herdr-agent-registration" ]; then
+    # whose Herdr status authority still belongs to its previous session, until
+    # a delivered launch brings the replacement agent up in the pane.
+    if [ -f "$D/herdr-agent-registration" ] && [ ! -f "$D/herdr-agent-live" ]; then
       printf '{"result":{"type":"pane_process_info","process_info":{"pane_id":"%s","shell_pid":4242,"foreground_processes":[]}}}\n' \
         "$(cat "$D/herdr-pane")"
     else

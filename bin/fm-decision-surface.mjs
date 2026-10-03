@@ -6,10 +6,12 @@ import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 
 const MARKER = "FM_DECISION_ANSWER_V1:";
 const MANIFEST_START = '<script id="fm-decision-data" type="application/json">';
 const MANIFEST_END = "</script>";
+const HOLD_REASON_LIB = path.join(path.dirname(fileURLToPath(import.meta.url)), "fm-hold-reason-lib.sh");
 
 function fail(message, code = 1) {
   console.error(`fm-decision-surface: ${message}`);
@@ -69,8 +71,16 @@ function parseShow(output) {
   return task;
 }
 
+// Captain-hold reasons are stored encoded; bin/fm-hold-reason-lib.sh owns decoding them.
 function taskShow(home, id) {
-  return parseShow(run("tasks-axi", ["show", id, "--full"], home));
+  const shown = run("tasks-axi", ["show", id, "--full"], home);
+  const decoded = spawnSync("bash", ["-c", '. "$1" && fm_hold_reason_decode_stream', "bash", HOLD_REASON_LIB], {
+    input: shown,
+    encoding: "utf8",
+    maxBuffer: 32 * 1024 * 1024,
+  });
+  if (decoded.error || decoded.status !== 0) fail(`could not decode the hold reason of ${id}`);
+  return parseShow(decoded.stdout);
 }
 
 function taskIdsFromList(output) {

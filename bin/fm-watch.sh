@@ -2092,9 +2092,12 @@ procevent_surface_queued() {
 # glasses take) or a desk-voice mailbox transcript (bin/fm-desk-voice.sh
 # deliver). Those producers append straight to the durable queue and touch no
 # source this watcher waits on, and resurface_after_downtime below never
-# presents them from a handling successor and waits on them while an episode is
-# announced, so such a note used to sit queued - and a Claude Stop attached to
-# the same cycle ended silently - until an unrelated event closed the cycle.
+# presents them from a handling successor, so such a note used to sit queued -
+# and a Claude Stop attached to the same cycle ended silently - until an
+# unrelated event closed the cycle. While the episode this cycle started on is
+# still being handled, the note closes the cycle under its own name ahead of
+# that recovery check; an announced downtime episode instead reopens on the
+# append and closes the cycle as recovery, which presents the same row.
 # Rows at or below the baseline read at lock time belong to the wake that
 # started this cycle or to its recovery check, so only newer rows count; the
 # drain stays the presenter and the acknowledgement owner.
@@ -2635,6 +2638,12 @@ if [ "${FM_WATCH_HANDLING_SUCCESSOR:-0}" = 1 ]; then
 elif [ "$FM_RECOVERY_MARKER_ACTION" = recover ]; then
   WATCHER_RECOVERY_PENDING=1
 fi
+# Whether this cycle started on an episode still being handled; see
+# captain_input_surface_queued for why that orders captain input first.
+WATCHER_EPISODE_HANDLING=0
+case "$FM_RECOVERY_MARKER_TOKEN" in
+  *:handling:*) WATCHER_EPISODE_HANDLING=1 ;;
+esac
 # Side-band ledger publication, detached from the poll loop.
 #
 # The poll loop owns the liveness beacon below, and fm-guard.sh reads that
@@ -2948,11 +2957,16 @@ while :; do
   # Then deliver any queued-but-unsurfaced result, including one a runner
   # published while this watcher was between cycles.
   procevent_surface_queued
-  captain_input_surface_queued
 
   # A process-event result carries richer adapter-owned wake context than the
   # generic recovery reason, so give that owner first refusal.
-  resurface_after_downtime
+  if [ "$WATCHER_EPISODE_HANDLING" -eq 1 ]; then
+    captain_input_surface_queued
+    resurface_after_downtime
+  else
+    resurface_after_downtime
+    captain_input_surface_queued
+  fi
 
   # The existing poll loop also owns the bounded inactive-outcome cadence.
   # This is mechanical and silent unless a durable terminal-outcome obligation

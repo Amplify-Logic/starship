@@ -223,8 +223,9 @@ A non-successor watcher start checks the durable queue and recovery marker under
 If an announced-but-unacknowledged episode has an empty queue, the arm leaves that generation announced, making repeated empty-queue arms idempotent while a long-poll source is merely alive.
 If a durable row arrived after the announcement, the arm opens a fresh pending downtime generation so buried work still resurfaces once.
 
-Captain input is outside this rule.
-A captain inbox note or desk-voice mailbox row queued after a watcher took its lock closes that cycle with its own reason, whether the watcher is a handling successor or the episode is announced (`captain_input_surface_queued` in `bin/fm-watch.sh`).
+Captain input also reaches a cycle this rule leaves silent.
+A captain inbox note or desk-voice mailbox row queued after a watcher took its lock closes that cycle with its own reason when the watcher is a handling successor or started on an episode still being handled (`captain_input_surface_queued` in `bin/fm-watch.sh`).
+An announced downtime episode instead reopens on that append and closes the cycle as recovery, which presents the same row.
 Without it, such a note waits for an unrelated event, and a Claude turn end that attached to the same cycle ends silently.
 
 ### Generation reuse
