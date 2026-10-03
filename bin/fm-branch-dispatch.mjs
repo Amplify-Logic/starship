@@ -7,6 +7,8 @@
 // single owner of which queued rows the branch may claim and of the wake text,
 // and this file only prints that module's answers in a shape a shell can read.
 // The Pi branch extension and this entry therefore apply identical rules.
+// Loading the .ts module relies on Node's built-in type stripping, so this
+// entry needs Node 22.18 or later.
 //
 // Usage:
 //   fm-branch-dispatch.mjs scope [--heartbeat] [--afk]

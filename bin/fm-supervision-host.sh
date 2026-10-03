@@ -851,7 +851,7 @@ handle_wake() {  # <reason-lines>
     set --
     case "$first" in heartbeat*) set -- --heartbeat ;; esac
     if ! scope=$(node "$SCRIPT_DIR/fm-branch-dispatch.mjs" scope "$@" --afk 2>/dev/null); then
-      HANDLE_WHY="branch eligibility could not be computed"
+      HANDLE_WHY=$(eligibility_unknown_why)
       return 1
     fi
   fi
@@ -1014,6 +1014,14 @@ handle_wake() {  # <reason-lines>
   return 1
 }
 
+# Why branch eligibility could not be computed. bin/fm-branch-dispatch.mjs
+# imports a TypeScript module through Node's built-in type stripping, which
+# needs Node 22.18 or later, so the line names the node this host found.
+eligibility_unknown_why() {
+  printf 'branch eligibility could not be computed (found node %s, needs 22.18 or later)' \
+    "$(node --version 2>/dev/null || echo unknown)"
+}
+
 # The captain outcomes one turn recorded, as store rows.
 turn_captain_seqs() {  # <turn>
   awk -F '\t' -v turn="$1" '$1 == turn && $3 == "captain" { printf "%s%s", sep, $2; sep = ", " }' "$RECEIPTS" 2>/dev/null
@@ -1033,7 +1041,7 @@ attended_acceptor() {  # <first-reason-line>
   elif health_cooling; then
     ATTENDED_WHY="the supervision session is cooling down after engine errors"
   elif ! offer=$(printf '%s\n' "$1" | node "$SCRIPT_DIR/fm-branch-dispatch.mjs" offer 2>/dev/null); then
-    ATTENDED_WHY="branch eligibility could not be computed"
+    ATTENDED_WHY=$(eligibility_unknown_why)
   elif [ "$(printf '%s\n' "$offer" | sed -n 's/^eligible=//p')" != 1 ]; then
     ATTENDED_WHY="main-only"
   fi

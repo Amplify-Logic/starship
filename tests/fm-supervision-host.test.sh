@@ -1078,6 +1078,36 @@ test_attended_close_with_unidentified_main_session_passes_to_main() {
   pass "host: an attended close whose main session cannot be identified reaches main and runs no engine turn"
 }
 
+# A node older than 22.18 cannot load bin/fm-branch-dispatch.mjs (it imports a
+# TypeScript module through built-in type stripping). The shim answers as such
+# a node: the close reaches main, and the ledger names the node it found and
+# the floor it needs, so the cause is obvious.
+test_attended_close_on_a_node_too_old_for_dispatch_names_the_floor() {
+  local home real_node
+  home=$(make_home attended-old-node attended)
+  real_node=$(command -v node)
+  cat > "$home/fakebin/node" <<SH
+#!/usr/bin/env bash
+[ "\${1:-}" != --version ] || { echo v22.13.1; exit 0; }
+case "\$*" in
+  *fm-branch-dispatch.mjs*) echo 'TypeError [ERR_UNKNOWN_FILE_EXTENSION]: Unknown file extension ".ts"' >&2; exit 1 ;;
+esac
+exec "$real_node" "\$@"
+SH
+  chmod +x "$home/fakebin/node"
+  start_host "$home"
+  wait_until 150 watcher_live "$home" || fail "old node: the host never started a watcher cycle"
+  append_status "$home" 'step one'
+  wait_until 250 host_exited "$home" || fail "old node: the close did not reach main: $(cat "$home/state/.supervision-host.log")"
+  expect_code 0 "$(cat "$home/host.rc")" "a close whose eligibility cannot be computed must exit 0"
+  assert_re '^signal: .*demo.status' "$home/host.out" "the close must carry the watcher's reason line"
+  [ "$(engine_calls "$home")" -eq 0 ] || fail "old node: the engine ran without an offer"
+  assert_re '	pass-through	attended	branch eligibility could not be computed \(found node v22\.13\.1, needs 22\.18 or later\)	signal:' \
+    "$home/state/.supervision-host.log" "the ledger must name the node found and the floor it needs"
+  stop_home_processes "$home"
+  pass "host: an attended close on a node too old for branch dispatch reaches main, naming the node and its floor"
+}
+
 # The close is accepted attended as routine, then its task turns main-only (a
 # decision is recorded) while the successor starts: the turn meets the offer
 # rule again, so the close reaches main exactly as the arm printed it and no
@@ -2937,6 +2967,7 @@ test_attended_main_only_close_passes_straight_to_main
 test_off_written_while_parked_passes_the_next_attended_close_to_main
 test_main_only_pass_through_leaves_the_successor_watcher_running
 test_attended_close_with_unidentified_main_session_passes_to_main
+test_attended_close_on_a_node_too_old_for_dispatch_names_the_floor
 test_close_accepted_away_that_turns_attended_passes_to_main
 test_attended_close_that_turns_main_only_before_its_turn_passes_to_main
 test_claude_stop_hook_delivers_a_main_only_pass_through
