@@ -122,7 +122,7 @@ Unavailable provider metrics are dim and never silently converted to zero.
 
 Tracked `.claude/settings.json` registers `bin/fm-status-bar.sh --adapter claude` through Claude's native `statusLine` command API.
 The command consumes Claude's model, effort, context-used (`context_window.used_percentage`, falling back to deriving used from `remaining_percentage` when used is absent), five-hour quota, and cumulative-cost JSON fields.
-When context used is numeric, the renderer also persists a durable sample to `state/.primary-context` for the optional primary-handoff context axis (see [`docs/primary-handoff.md`](primary-handoff.md)), deriving remaining as `100 - used` for the sample API.
+When context used is numeric and the home has an identifiable session owner, the renderer also persists a durable sample to `state/.primary-context` for the optional primary-handoff context axis (see [`docs/primary-handoff.md`](primary-handoff.md)), deriving remaining as `100 - used` for the sample API.
 The renderer emits nothing unless `bin/fm-primary.sh` supplied `FM_PRIMARY_HARNESS=claude`.
 This keeps the tracked project setting inert for an unguarded manual Claude launch.
 

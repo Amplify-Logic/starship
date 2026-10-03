@@ -146,6 +146,7 @@ complete_record() {
 finish_launch() {
   phase=launching
   fm_handoff_write_record || return 1
+  rm -f "$(fm_handoff_context_path)" || return 1
   if ! fm_handoff_launch_incoming "$to"; then
     error="incoming launch failed for $to; recovery pending"
     fm_handoff_write_record

@@ -561,6 +561,11 @@ print("|".join(p["body"] for p in row["progress"]))
 print(row["reply"])')
 assert_equals $'On it, looking at the watcher now.|Found it. Writing the fix.\nNone' "$progress" \
   "receipts list progress lines in order, one line each, before any reply"
+unicode_progress=$(python3 -c 'print("Checked\u2028still checking\u2029next\vpart\ffinal")')
+run_inbox "$home" progress "$pid" "$unicode_progress" >/dev/null || fail "Unicode progress failed"
+progress=$(run_inbox "$home" receipts | python3 -c 'import json,sys
+print(json.load(sys.stdin)["pending"][0]["progress"][-1]["body"])')
+assert_equals "$unicode_progress" "$progress" "receipt must preserve separators other than the record delimiter"
 run_inbox "$home" reply "$pid" "Fixed: notes now reach you within seconds." >/dev/null || fail "reply after progress failed"
 late_code=0
 late=$(run_inbox "$home" progress "$pid" "one more thing" 2>&1) || late_code=$?
@@ -569,7 +574,7 @@ assert_contains "$late" "reply already recorded" "the refusal names the reply"
 progress=$(run_inbox "$home" receipts | python3 -c 'import json,sys
 row=json.load(sys.stdin)["pending"][0]
 print(len(row["progress"]), row["reply"]["body"])')
-assert_equals "2 Fixed: notes now reach you within seconds." "$progress" \
+assert_equals "3 Fixed: notes now reach you within seconds." "$progress" \
   "the reply follows the progress lines and closes them"
 empty_code=0
 run_inbox "$home" progress "$pid" "   " >/dev/null 2>&1 || empty_code=$?

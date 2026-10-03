@@ -1765,6 +1765,7 @@ fm_backend_herdr_server_start_detached() {  # <session>
   }
   bin=$(command -v "$(fm_backend_herdr_session_client "$session")" 2>/dev/null) || bin=
   [ -n "$bin" ] || { echo "error: cannot start the herdr server for session '$session': the herdr CLI did not resolve" >&2; return 1; }
+  case "$bin" in /*) ;; *) bin="$PWD/$bin" ;; esac
   while IFS= read -r name; do
     case "$name" in
       FM_REMOTE_JOB_ACTIVE) ;;

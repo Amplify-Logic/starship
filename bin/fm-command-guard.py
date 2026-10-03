@@ -32,9 +32,10 @@
 # operator contract.
 #
 # STEPS ASIDE ON ANY FAILURE. No key, a timeout, an HTTP error, an unreadable
-# answer, a malformed gate or a crash all ALLOW the command. The first such
-# failure of an episode is written once to the log and stderr, and the next good
-# answer ends the episode. The guard never stops work because Jev is down.
+# answer, a malformed gate or a crash before the verdict all ALLOW the command.
+# The first such failure of an episode is written once to the log and stderr,
+# and the next good answer ends the episode. The guard never stops work because
+# Jev is down.
 #
 # REDACTS KNOWN SECRETS. Only the command text leaves the machine, never the
 # working directory, the task or the environment. Before it is sent, known
@@ -76,6 +77,7 @@
 #   FM_COMMAND_GUARD_MULTIPART_TIMEOUT  multi-part request bound in seconds (default 6)
 #   FM_COMMAND_GUARD_ENV_FILE   .env holding TYPESAFE_API_KEY (default <home>/.env)
 #   TYPESAFE_API_KEY            wins over the .env; never logged, never in argv
+import fcntl
 import json
 import os
 import pathlib
@@ -503,13 +505,25 @@ def judge(command, home):
 def append_log(state_dir, record):
     path = pathlib.Path(state_dir) / LOG_NAME
     try:
-        if path.is_symlink():
-            return
-        if path.exists() and path.stat().st_size > LOG_ROTATE_BYTES:
-            os.replace(str(path), str(path) + ".1")
-        fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
-        with os.fdopen(fd, "a", encoding="utf-8") as handle:
-            handle.write(json.dumps(record, sort_keys=True) + "\n")
+        # Lock a stable sibling: the log inode changes during rotation.
+        lock_fd = os.open(str(path) + ".lock", os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(lock_fd, "w") as lock:
+            deadline = time.monotonic() + 0.5
+            while True:
+                try:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if time.monotonic() >= deadline:
+                        return
+                    time.sleep(0.01)
+            if path.is_symlink():
+                return
+            if path.exists() and path.stat().st_size > LOG_ROTATE_BYTES:
+                os.replace(str(path), str(path) + ".1")
+            fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+            with os.fdopen(fd, "a", encoding="utf-8") as handle:
+                handle.write(json.dumps(record, sort_keys=True) + "\n")
     except OSError:
         pass
 
@@ -586,19 +600,25 @@ def run_hook(opts):
         return 0
 
     outcome, reason, answers, sent, path = judge(command, opts["home"])
-    record = dict(base, at=int(time.time()), outcome=outcome, reason=reason,
-                  answers=answers, command=sent, path=path)
-    if outcome == "error":
-        outage_once(state_dir, record)
-        return 0
-    if outcome == "skip":
-        note("allowed without judging it: %s" % reason)
-        append_log(state_dir, dict(record, command=sent[:PART_CHARS]))
-        return 0
-    outage_over(state_dir)
-    append_log(state_dir, record)
+    signal.alarm(0)
     if outcome == "block":
         deny(reason)
+        sys.stdout.flush()
+    # Bookkeeping has its own short budget and cannot revoke a known deny.
+    signal.setitimer(signal.ITIMER_REAL, 1.0)
+    record = dict(base, at=int(time.time()), outcome=outcome, reason=reason,
+                  answers=answers, command=sent, path=path)
+    try:
+        if outcome == "error":
+            outage_once(state_dir, record)
+        elif outcome == "skip":
+            note("allowed without judging it: %s" % reason)
+            append_log(state_dir, dict(record, command=sent[:PART_CHARS]))
+        else:
+            outage_over(state_dir)
+            append_log(state_dir, record)
+    except (Exception, HookBound):  # noqa: BLE001
+        pass
     return 0
 
 
@@ -654,19 +674,22 @@ def main():
         opts = _options(rest, ("config", "state", "home", "task", "project"))
         # The whole hook is bounded here as well as per request, so a stalled
         # name lookup cannot hold a worker's command past the bound. Any
-        # failure below allows the command.
+        # failure before a verdict allows the command.
         signal.signal(signal.SIGALRM, _hook_bound_hit)
         signal.alarm(int(MULTIPART_TIMEOUT_S + TIMEOUT_S) + 3)
         try:
             return run_hook(opts)
         except (Exception, HookBound) as error:  # noqa: BLE001
+            signal.setitimer(signal.ITIMER_REAL, 1.0)
             try:
                 outage_once(opts["state"], {"at": int(time.time()), "task": opts["task"],
                                             "project": opts["project"], "outcome": "error",
                                             "reason": type(error).__name__})
-            except Exception:  # noqa: BLE001
+            except (Exception, HookBound):  # noqa: BLE001
                 pass
             return 0
+        finally:
+            signal.setitimer(signal.ITIMER_REAL, 0)
     if command == "armed":
         opts = _options(rest, ("config", "project"))
         try:
