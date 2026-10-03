@@ -39,7 +39,7 @@
 #   docs/desktop-companion.md   what the companion is, its setup, its transport,
 #                               and the accepted/picked-up/completed distinction.
 #   docs/codex-app-backend.md   why `codex-app` is still not a backend.
-#   bin/fm-path-lib.sh          durable-directory resolution.
+#   bin/fm-durable-path-lib.sh  durable-directory resolution.
 #
 # STATE: private, per-home, under $FM_HOME/state/voice-relay (0700). Nothing here
 # is tracked, and no session identifier, path, or account value reaches a tracked
@@ -249,8 +249,8 @@ FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 RELAY_DIR="${FM_VOICE_RELAY_DIR:-$STATE/voice-relay}"
 
-# shellcheck source=bin/fm-path-lib.sh
-. "$SCRIPT_DIR/fm-path-lib.sh"
+# shellcheck source=bin/fm-durable-path-lib.sh
+. "$SCRIPT_DIR/fm-durable-path-lib.sh"
 
 umask 077
 

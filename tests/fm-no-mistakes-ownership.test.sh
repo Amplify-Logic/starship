@@ -5,12 +5,10 @@ set -u
 # shellcheck source=tests/lib.sh disable=SC1091
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
+# The Validate contract lives in the validation-supervision skill, which
+# AGENTS.md section 7 loads whenever a no-mistakes validation run is active.
 validate_contract() {
-  awk '
-    /^### Validate$/ { found = 1; next }
-    found && /^### / { exit }
-    found { print }
-  ' "$ROOT/AGENTS.md"
+  cat "$ROOT/.agents/skills/validation-supervision/SKILL.md"
 }
 
 test_worker_owns_synchronous_driver() {

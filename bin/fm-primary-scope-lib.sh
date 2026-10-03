@@ -3,6 +3,8 @@
 # for a genuine firstmate primary home, and the session-lock ancestry test for
 # whether this hook's own harness session already acquired that home's lock.
 # This file is sourced by hook entrypoints and has no side effects on source.
+# fm_primary_root_matches is split out so a caller can confirm primary-home
+# identity before its gitignored state dir exists, such as to create it.
 
 # Harness identity - the command-name vocabulary, the ancestry walk, holder
 # liveness, and the per-process match - is owned by bin/fm-session-lock-lib.sh.
@@ -79,11 +81,12 @@ fm_is_task_worker() {
   [ -n "${FM_TASK_ID:-}" ]
 }
 
-# Return 0 when $1 is a genuine primary root whose effective state dir is $2.
-# A valid secondmate marker force-includes a linked secondmate home.
-# Otherwise only a plain checkout is primary, never a linked task worktree.
-fm_primary_scope_matches() {
-  local root=$1 state=$2 git_dir git_common_dir
+# Return 0 when $1 is a genuine primary root, regardless of whether its state
+# dir exists yet. A valid secondmate marker force-includes a linked secondmate
+# home. Otherwise only a plain checkout is primary, never a linked task
+# worktree.
+fm_primary_root_matches() {
+  local root=$1 git_dir git_common_dir
   if ! fm_root_is_secondmate_home "$root"; then
     git_dir=$(git -C "$root" rev-parse --git-dir 2>/dev/null) || return 1
     git_common_dir=$(git -C "$root" rev-parse --git-common-dir 2>/dev/null) || return 1
@@ -91,7 +94,13 @@ fm_primary_scope_matches() {
   fi
   [ -f "$root/AGENTS.md" ] || return 1
   [ -d "$root/bin" ] || return 1
-  [ -d "$state" ] || return 1
+}
+
+# Return 0 when $1 is a genuine primary root whose effective state dir $2
+# already exists.
+fm_primary_scope_matches() {
+  local root=$1 state=$2
+  fm_primary_root_matches "$root" && [ -d "$state" ]
 }
 
 # Print this process's relation to the session lock in state dir $1:
