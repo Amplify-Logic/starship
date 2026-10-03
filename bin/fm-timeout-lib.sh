@@ -223,6 +223,7 @@ fm_exec_timed() {  # <seconds> <grace-seconds> <command...>
   owner=${FM_EXEC_TIMED_OWNER_PID:-$$}
   # Bash 3.2 has no BASHPID: an exec'd child shell's PPID names this frame.
   # It runs as $BASH because callers may narrow PATH to the bounded tools.
+  # shellcheck disable=SC2016 # $PPID must expand in the child shell.
   [ "$owner" != "${BASHPID:-$(exec "$BASH" -c 'printf "%s\n" "$PPID"')}" ] || owner=$PPID
   unset FM_EXEC_TIMED_OWNER_PID
   if command -v perl >/dev/null 2>&1; then
