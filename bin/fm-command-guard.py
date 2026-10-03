@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 # fm-command-guard.py - the opt-in worker command guard: before a spawned
-# worker's shell command runs, TypeSafe's Jev judges it, and the command is
-# blocked when it would remove, overwrite or send something with no way back,
-# when it aims to wipe something, or when it carries text aimed at the judge
-# itself.
+# worker's shell command runs, a local database deny list checks it, then
+# TypeSafe's Jev judges it, and the command is blocked when it would change a
+# live database, when it would remove, overwrite or send something with no way
+# back, when it aims to wipe something, or when it carries text aimed at the
+# judge itself.
 #
 # Usage:
 #   fm-command-guard.py hook --config DIR --state DIR --home DIR --task ID --project NAME
@@ -12,27 +13,43 @@
 #       payload on stdin. On a block it prints the documented PreToolUse deny
 #       object on stdout; on an allow it prints nothing. It always exits 0.
 #   fm-command-guard.py armed --config DIR --project NAME
-#       Exit 0 when the guard is on for that project, 1 when it is not. A
-#       malformed gate says why on stderr and counts as off. fm-spawn.sh asks this
-#       before it writes the hook, and the hook asks it again on every command, so
-#       switching the gate off, or excluding a project, takes effect at once.
+#       Exit 0 when the hook belongs on that project's workers, 1 when it does
+#       not: the gate is on, and every project then gets the local list, an
+#       excluded one without Jev. A malformed gate says why on stderr and counts
+#       as off. fm-spawn.sh asks this before it writes the hook, and the hook
+#       reads the gate again on every command, so switching the gate off, or
+#       excluding a project from Jev, takes effect at once. A gate that turns
+#       malformed after the hook is installed stops only the Jev call.
 #   fm-command-guard.py bench FILE
 #       Run every labelled command in FILE through the real request and the real
 #       rule, one request per command exactly as the hook sends it, and print the
-#       answers, each verdict against its label, and the agreement. Needs a key.
+#       answers, each verdict against its label, and the agreement. A command
+#       the local list blocks is never sent. Needs a key.
 #       tests/fixtures/command-guard/benchmark.json is the tracked set; grow it
 #       whenever a real block or a real miss teaches something.
 #
 # OPT-IN, per home, off by default: nothing is installed or sent unless this
 # home's private gitignored config/command-guard says `enabled = true`. It is not
-# inherited into secondmate homes. private-app is local-only and is never
-# guarded or sent, whatever the gate says; projects named on an `exclude` line
-# are treated the same way. Both match the project's logical directory name, as
-# the registry names it. docs/configuration.md "Worker command guard" owns the
-# operator contract.
+# inherited into secondmate homes. private-app is local-only and its
+# commands are never sent to Jev, whatever the gate says; projects named on an
+# `exclude` line are treated the same way. Both match the project's logical
+# directory name, as the registry names it. docs/configuration.md "Worker
+# command guard" owns the operator contract.
 #
-# STEPS ASIDE ON ANY FAILURE. No key, a timeout, an HTTP error, an unreadable
-# answer, a malformed gate or a crash before the verdict all ALLOW the command.
+# LOCAL DATABASE LIST FIRST, FOR EVERY PROJECT. Before anything is redacted or
+# sent, database_rule() matches the whole raw command, heredoc and -c bodies
+# included, against its fixed list of commands that reset, push to, repair or
+# delete a live database, listed for operators in docs/configuration.md. A
+# match is blocked outright with a short notice that live database changes go
+# to firstmate as a blocker. Nothing remote is involved, so it never steps aside:
+# it runs for excluded projects and Harbour too, and a crash in the check
+# blocks. It matches text, not shell syntax, so a command that only mentions
+# one of these (a grep, a commit message) is blocked as well.
+#
+# JEV STEPS ASIDE ON ANY FAILURE. No key, a timeout, an HTTP error, an unreadable
+# answer, a crash before Jev's verdict or a malformed gate all ALLOW a command
+# the local list did not block. Only an absent gate or `enabled = false`
+# switches the local list off.
 # The first such failure of an episode is written once to the log and stderr,
 # and the next good answer ends the episode. The guard never stops work because
 # Jev is down.
@@ -102,6 +119,9 @@ BLOCK_NOTICE = (
     "This block is final. Do not try to work around it with another command, "
     "another tool, a different path, or an encoding that does the same thing. "
     "Stop and report what was blocked and why to firstmate as a blocked status line.")
+LOCAL_BLOCK = (
+    "Database guard blocked this command: %s. Workers never change a live database. "
+    "Do not work around this; report the exact change to firstmate as a blocked status line.")
 
 # Parts overlap by PART_OVERLAP so a clause cut at one part's end is whole in the next.
 PART_CHARS = 2000
@@ -172,10 +192,100 @@ def read_gate(config_dir):
 
 
 def armed_for(config_dir, project):
-    if not project or project in ALWAYS_EXCLUDED:
+    """Whether the hook belongs on this project's workers: the local list runs for every project."""
+    if not project:
         return False
-    enabled, excluded = read_gate(config_dir)
-    return enabled and project not in excluded
+    enabled, _ = read_gate(config_dir)
+    return enabled
+
+
+def sent_for(project, excluded):
+    """Whether this project's commands may go to Jev at all."""
+    return project not in ALWAYS_EXCLUDED and project not in excluded
+
+
+# ---- local database list ----------------------------------------------------
+
+# Words and the quotes around them separate tool names from their subcommands,
+# a version pin on the tool name is skipped, and up to eight flag words in
+# between are skipped with or without a value, so `npx supabase@latest
+# --workdir app db push` and `bash -c 'prisma migrate dev'` both match. Every
+# pattern here stays linear, so a long command is decided well inside the hook
+# bound instead of timing out into an allow.
+_SEP = r"[\s'\"]+"
+_VERSION = r"(?:@[^\s'\"@]*)?"
+_FLAGS = r"(?:-[^\s'\"]*[\s'\"]+(?:[^-\s'\"][^\s'\"]*[\s'\"]+)?){0,8}"
+_END = r"(?![\w./-])"
+
+
+def _tool_pattern(name, *subcommands):
+    words = (_SEP + _FLAGS).join("(?:%s)" % word for word in subcommands)
+    return r"(?<![\w.-])%s%s%s%s%s%s" % (name, _VERSION, _SEP, _FLAGS, words, _END)
+
+
+def _tool(*patterns):
+    return re.compile("|".join(_tool_pattern(*words) for words in patterns), re.I)
+
+
+PRISMA_MIGRATE = _tool(("prisma", "migrate", "dev|reset"))
+PRISMA_DIFF = _tool(("prisma", "migrate", "diff"))
+PRISMA_DIFF_RESETS = re.compile(r"--(?:shadow-database-url|from-migrations)\b")
+PRISMA_SHADOW = re.compile(r"\bSHADOW_DATABASE_URL\s*=|\bshadowDatabaseUrl\s*[=:]|--shadow-database-url\b")
+PRISMA_PUSH = _tool(("prisma", "db", "push"))
+DRIZZLE = _tool(("drizzle-kit", "push|drop"))
+SUPABASE = _tool(("supabase", "db", "push|reset"), ("supabase", "migration", "repair"),
+                 ("supabase", "link"), ("supabase", "projects|branches", "delete"))
+SUPABASE_LOCAL = re.compile(r"(?<![\w-])--local(?![\w-])")
+SUPABASE_REMOTE = re.compile(r"(?<![\w-])--(?:linked|db-url|project-ref)(?![\w-])")
+SUPABASE_API = re.compile(r"(?i)api\.supabase\.com/v1/projects/[^\s'\"/]*/(?:database/query|cli/login-role)")
+SQL_CLIENT = re.compile(r"(?<![\w.-])(?:psql|sqlite3)(?![\w-])")
+SQL_DROP = re.compile(r"(?i)\b(?:drop\s+(?:table|schema|database)|truncate\s+(?:table\s+)?[\w\"])")
+_SQL_NAME = r"(?:\\?\"[^\"\\]+\\?\"|[\w$]+)"
+SQL_DELETE = re.compile(r"(?i)\bdelete\s+from\b\s*(?:%s(?:\.%s)*)?([^;\"'`]*)" % (_SQL_NAME, _SQL_NAME))
+SQL_WHERE = re.compile(r"(?i)\bwhere\b")
+RAILWAY = _tool(("railway", "volume|down|delete|ssh|run"))
+VERCEL_ENV = _tool(("vercel", "env", "rm|remove|pull"))
+SEGMENT_SPLIT = re.compile(r"\n|;|&&|\|\||\||&")
+
+
+def database_rule(command):
+    """The name of the local rule this command fires, or None."""
+    text = command.replace("\\\n", " ")
+    for segment in SEGMENT_SPLIT.split(text):
+        if PRISMA_MIGRATE.search(segment):
+            return "prisma migrate dev or reset"
+        if PRISMA_DIFF.search(segment) and PRISMA_DIFF_RESETS.search(segment):
+            return "prisma migrate diff with a shadow database or --from-migrations"
+        if PRISMA_SHADOW.search(segment):
+            return "a Prisma shadow database set on the command line"
+        if PRISMA_PUSH.search(segment):
+            return "prisma db push"
+        if DRIZZLE.search(segment):
+            return "drizzle-kit push or drop"
+        if (SUPABASE.search(segment)
+                and not (SUPABASE_LOCAL.search(segment) and not SUPABASE_REMOTE.search(segment))):
+            return "a Supabase change to a linked or hosted database (only --local is allowed)"
+        if RAILWAY.search(segment):
+            return "railway volume, down, delete, ssh or run"
+        if VERCEL_ENV.search(segment):
+            return "vercel env rm or pull"
+    if SUPABASE_API.search(text):
+        return "a Supabase Management API database query or login-role call"
+    if SQL_CLIENT.search(text):
+        if SQL_DROP.search(text):
+            return "DROP or TRUNCATE in a psql or sqlite3 command"
+        if any(not SQL_WHERE.search(m.group(1)) for m in SQL_DELETE.finditer(text)):
+            return "DELETE FROM with no WHERE in a psql or sqlite3 command"
+    return None
+
+
+def local_verdict(command):
+    """The block reason when the local list fires, else None. Nothing remote is
+    involved, so it never steps aside: a crash in the check blocks."""
+    try:
+        return database_rule(command)
+    except Exception as error:  # noqa: BLE001 - any failure blocks
+        return "the local database check could not run (%s)" % type(error).__name__
 
 
 # ---- key --------------------------------------------------------------------
@@ -569,24 +679,27 @@ def _options(args, names):
     return values
 
 
-def deny(reason):
+def deny(message):
     json.dump({"hookSpecificOutput": {
         "hookEventName": "PreToolUse",
         "permissionDecision": "deny",
-        "permissionDecisionReason": "Command guard blocked this command: %s. %s" % (reason, BLOCK_NOTICE),
+        "permissionDecisionReason": message,
     }}, sys.stdout)
     sys.stdout.write("\n")
+    sys.stdout.flush()
 
 
 def run_hook(opts):
     state_dir = opts["state"]
     base = {"task": opts["task"], "project": opts["project"]}
     try:
-        if not armed_for(opts["config"], opts["project"]):
-            return 0
+        enabled, excluded = read_gate(opts["config"])
+        jev = True
     except GateError as error:
         outage_once(state_dir, dict(base, at=int(time.time()), outcome="error",
                                     reason="gate: %s" % error))
+        enabled, excluded, jev = True, set(), False
+    if not enabled or not opts["project"]:
         return 0
     try:
         payload = json.loads(sys.stdin.read() or "{}")
@@ -599,11 +712,25 @@ def run_hook(opts):
     if not isinstance(command, str) or not command.strip():
         return 0
 
+    rule = local_verdict(command)
+    if rule:
+        signal.alarm(0)
+        deny(LOCAL_BLOCK % rule)
+        signal.setitimer(signal.ITIMER_REAL, 1.0)
+        try:
+            append_log(state_dir, dict(base, at=int(time.time()), outcome="block", reason=rule,
+                                       answers={}, command=redact(command, literal_secrets(opts["home"])),
+                                       path="local"))
+        except (Exception, HookBound):  # noqa: BLE001
+            pass
+        return 0
+    if not jev or not sent_for(opts["project"], excluded):
+        return 0
+
     outcome, reason, answers, sent, path = judge(command, opts["home"])
     signal.alarm(0)
     if outcome == "block":
-        deny(reason)
-        sys.stdout.flush()
+        deny("Command guard blocked this command: %s. %s" % (reason, BLOCK_NOTICE))
     # Bookkeeping has its own short budget and cannot revoke a known deny.
     signal.setitimer(signal.ITIMER_REAL, 1.0)
     record = dict(base, at=int(time.time()), outcome=outcome, reason=reason,
@@ -628,7 +755,11 @@ def run_bench(path, home):
     misses = []
     for case in cases:
         started = time.time()
-        outcome, reason, answers, sent, path = judge(case["command"], home)
+        rule = local_verdict(case["command"])
+        if rule:
+            outcome, reason, answers, sent, path = "block", rule, {}, "", "local"
+        else:
+            outcome, reason, answers, sent, path = judge(case["command"], home)
         elapsed = time.time() - started
         if outcome == "error":
             note("%s: %s" % (case["id"], reason))
