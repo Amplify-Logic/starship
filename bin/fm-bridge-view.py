@@ -14,12 +14,15 @@ into the local glasses mailbox; the relay token stays in this process.
 /deck and /api/deck serve the captain's Action Deck from one bounded
 `bin/fm-deck.sh --json` read behind the same session, Host and CSP
 boundary; they render records and act on nothing (docs/bridge-view.md).
+The glance's What I remember section reads only the captain, learnings and
+goal files under data/, withholding gift lines; read_memory owns that list.
 """
 
 from __future__ import annotations
 
 import argparse
 import base64
+import errno
 import fcntl
 import hashlib
 import hmac
@@ -32,6 +35,7 @@ import selectors
 import shutil
 import signal
 import socket
+import stat
 import subprocess
 import sys
 import threading
@@ -1403,6 +1407,220 @@ def project_routing(routing: Dict[str, Any], bearings: Dict[str, Any], now: floa
     }
 
 
+# The What I remember section reads exactly these files under the home's data/
+# and nothing else: never the harness memory store, a .env or key file, a
+# project data folder, or the backlog.
+MEMORY_SOURCES = (
+    ("captain.md", "About you"),
+    ("captain-shared.md", "About you, shared with second mates"),
+    ("learnings.md", "What the crew has learned"),
+)
+MEMORY_GOALS_DIR = "goals"
+MEMORY_MAX_BYTES = 256_000
+MEMORY_GOAL_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*\.md$")
+# Any word starting gift, surpris or present withholds the line, so the
+# captain's private gift exchange never reaches the screen. Over-matching
+# ("presentation") only withholds more.
+MEMORY_WITHHELD_RE = re.compile(r"(?i)\b(?:gift|surpris|present)")
+MEMORY_HEADING_RE = re.compile(r"^(#{1,6})\s+(.*?)\s*#*\s*$")
+MEMORY_BULLET_RE = re.compile(r"^(?:[-*+]|\d+[.)])\s+")
+MEMORY_SETEXT_RE = re.compile(r"^ {0,3}(?:=+|-+)$")
+
+
+def _memory_withheld(text: str) -> bool:
+    # An underscore is a word character, so birthday_gift would slip past \b.
+    return MEMORY_WITHHELD_RE.search(text.replace("_", " ")) is not None
+
+
+def _memory_clean(text: str) -> str:
+    """Strip control and invisible format characters a file could smuggle in."""
+    return "".join(
+        " " if ch == "\t" else ch
+        for ch in text
+        if ch == "\t" or ch == "‍" or unicodedata.category(ch) not in ("Cc", "Cf", "Cs", "Co")
+    )
+
+
+def _memory_plain(lines: List[str]) -> str:
+    return re.sub(r"\*\*|__|`", "", "\n".join(lines)).strip()
+
+
+def memory_sections(text: str) -> Tuple[List[Dict[str, Any]], int]:
+    """Split one memory file into headed sections of plain-text entries.
+
+    An entry is a top-level line plus every line under it up to the next blank
+    line, heading, or top-level bullet. A withheld line of any kind drops its
+    whole entry and everything after it, blank lines and tables included, up to
+    the next ATX heading of the same or higher level than the heading it sits
+    under (a withheld ATX or Setext heading counts as under its own level); a
+    withheld line under no heading hides up to the next ATX heading or the end
+    of the file. Only an ATX heading ends a hidden block: a Setext underline
+    inside one is hidden with it. Returns the sections and how many non-blank
+    lines were withheld."""
+    sections: List[Dict[str, Any]] = []
+    current: Dict[str, Any] = {"heading": "", "entries": []}
+    sections.append(current)
+    entry: List[str] = []
+    entry_plain = False
+    withheld = 0
+    section_level = 0
+    hidden_level = 0
+    in_fence = False
+
+    def flush() -> None:
+        nonlocal entry, withheld
+        if entry:
+            if hidden_level:
+                withheld += len(entry)
+            else:
+                plain = _memory_plain(entry)
+                if plain:
+                    current["entries"].append(plain)
+        entry = []
+
+    for raw in text.splitlines():
+        line = _memory_clean(raw).rstrip()
+        stripped = line.strip()
+        if stripped.startswith("```") or stripped.startswith("~~~"):
+            in_fence = not in_fence
+            if not hidden_level and _memory_withheld(stripped):
+                hidden_level = section_level or 6
+            if hidden_level:
+                withheld += 1
+            continue
+        heading = None if in_fence else MEMORY_HEADING_RE.match(line)
+        setext = (
+            not in_fence
+            and entry_plain
+            and entry
+            and MEMORY_SETEXT_RE.match(line)
+            and (not hidden_level or _memory_withheld(" ".join(entry)))
+        )
+        if heading or setext:
+            if heading:
+                flush()
+                level, title, lines = len(heading.group(1)), heading.group(2), 1
+            else:
+                level, title, lines = (1 if stripped[0] == "=" else 2), " ".join(entry), len(entry) + 1
+                entry = []
+            if hidden_level and level <= hidden_level:
+                hidden_level = 0
+            if hidden_level or _memory_withheld(title):
+                hidden_level = hidden_level or level
+                withheld += lines
+                continue
+            section_level = level
+            current = {"heading": _memory_plain([title]), "entries": []}
+            sections.append(current)
+            continue
+        if not stripped:
+            if not in_fence:
+                flush()
+            continue
+        top = not in_fence and not line[:1].isspace()
+        bullet = top and MEMORY_BULLET_RE.match(line)
+        if bullet:
+            flush()
+        if not entry:
+            entry_plain = top and not bullet and not hidden_level
+        if not hidden_level and _memory_withheld(stripped):
+            hidden_level = section_level or 6
+        entry.append(MEMORY_BULLET_RE.sub("", line, count=1) if bullet else stripped)
+    flush()
+    return [s for s in sections if s["entries"]], withheld
+
+
+def _read_memory_file(path: Path) -> Tuple[Optional[bytes], float, bool]:
+    """Read a plain regular file without following a symlink at its last hop.
+    Returns (bytes or None when absent, mtime, truncated)."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_NONBLOCK", 0))
+    except FileNotFoundError:
+        return None, 0.0, False
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            raise RuntimeError("skipped: a link, not a file this home keeps") from None
+        raise
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            raise RuntimeError("skipped: not a plain file")
+        data = b""
+        while len(data) <= MEMORY_MAX_BYTES:
+            chunk = os.read(fd, MEMORY_MAX_BYTES + 1 - len(data))
+            if not chunk:
+                break
+            data += chunk
+        truncated = len(data) > MEMORY_MAX_BYTES
+        return data[:MEMORY_MAX_BYTES], info.st_mtime, truncated
+    finally:
+        os.close(fd)
+
+
+def _memory_source(path: Path, label: str, rel: str) -> Tuple[Dict[str, Any], int]:
+    row: Dict[str, Any] = {"label": label, "path": rel}
+    try:
+        data, mtime, truncated = _read_memory_file(path)
+    except (OSError, RuntimeError) as exc:
+        row["error"] = str(exc) if isinstance(exc, RuntimeError) else "unreadable"
+        return row, 0
+    if data is None:
+        row["missing"] = True
+        return row, 0
+    sections, withheld = memory_sections(data.decode("utf-8", errors="replace"))
+    row["changed"] = int(mtime)
+    row["changed_date"] = time.strftime("%Y-%m-%d", time.localtime(mtime))
+    row["sections"] = sections
+    row["entries"] = sum(len(s["entries"]) for s in sections)
+    if truncated:
+        row["truncated"] = True
+    return row, withheld
+
+
+def read_memory(home: Path) -> Dict[str, Any]:
+    """What this home keeps about the captain, for the What I remember section.
+
+    Reads only data/captain.md, data/captain-shared.md, data/learnings.md and
+    the goal charters directly inside data/goals/, never through a symlink.
+    Every source is listed, including an absent one, so the page shows the
+    whole of what could be kept."""
+    data_dir = home / "data"
+    sources: List[Dict[str, Any]] = []
+    withheld = 0
+    for name, label in MEMORY_SOURCES:
+        row, count = _memory_source(data_dir / name, label, f"data/{name}")
+        sources.append(row)
+        withheld += count
+    goals_dir = data_dir / MEMORY_GOALS_DIR
+    rel_dir = f"data/{MEMORY_GOALS_DIR}/"
+    try:
+        real_dir = goals_dir.is_dir() and not goals_dir.is_symlink()
+        names = sorted(os.listdir(goals_dir)) if real_dir else []
+    except OSError:
+        names = []
+    shown = 0
+    for name in names:
+        if not MEMORY_GOAL_NAME_RE.match(name):
+            continue
+        goal = name[:-3]
+        if _memory_withheld(goal):
+            # A charter named for a gift is withheld whole, name included.
+            try:
+                data, _mtime, _truncated = _read_memory_file(goals_dir / name)
+            except (OSError, RuntimeError):
+                data = None
+            text = (data or b"").decode("utf-8", errors="replace")
+            withheld += sum(1 for line in text.splitlines() if line.strip()) or 1
+            continue
+        row, count = _memory_source(goals_dir / name, f"Goals: {goal.replace('-', ' ')}", rel_dir + name)
+        sources.append(row)
+        withheld += count
+        shown += 1
+    if not shown:
+        sources.append({"label": "Goals", "path": rel_dir, "missing": True})
+    return {"sources": sources, "withheld": withheld}
+
+
 def safe_https(url: str) -> Optional[str]:
     """An ordinary HTTPS link a browser may follow, else None.
 
@@ -1596,6 +1814,10 @@ class SnapshotCache:
             )
         except (OSError, RuntimeError) as exc:
             observation["routing"] = {"error": str(exc) or "routing snapshot failed"}
+        try:
+            observation["memory"] = read_memory(self.home)
+        except (OSError, RuntimeError, ValueError) as exc:
+            observation["memory"] = {"error": str(exc) or "memory read failed"}
         observation["mailbox_listener"] = mailbox_listener_available()
         observation["read_started"] = model.get("generated")
         observation["server_unix"] = int(started)
@@ -1763,6 +1985,15 @@ form.logout button { width: auto; min-height: 2rem; padding: 0.3rem 0.7rem; back
 .pbar > span { display: block; height: 100%; width: 0; background: #6ea8fe; }
 pre.graph { margin: 0.2rem 0 0; font: 0.9rem/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; color: #c5d0c8; white-space: pre; overflow-x: auto; }
 .worker-meta { display: block; margin: 0.15rem 0 0 1.2rem; }
+#memory .mem-fold { margin-right: 0; }
+#memory .mem-fold > summary { justify-content: space-between; gap: 0.6rem; }
+#memory .mem-meta, #memory .mem-path { color: #9aa7a0; font-size: 0.85rem; }
+#memory .mem-body { padding: 0 0.9rem 0.6rem; }
+#memory .mem-body ul { padding: 0; }
+#memory h3 { font-size: 0.72rem; letter-spacing: 0.12em; text-transform: uppercase; color: #9aa7a0; margin: 0.9rem 0 0.2rem; font-weight: 600; }
+#memory li { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 0.95rem; }
+#memory .mem-empty { border: 1px solid #2a3330; border-radius: 0.5rem; padding: 0.5rem 0.9rem; margin: 0.35rem 0 0; color: #c5d0c8; font-size: 0.95rem; }
+footer { margin: 1.6rem 0 0; }
 """
 
 PINNED_LINKS_CSS = """
@@ -1806,7 +2037,7 @@ function setPhotoCount(n) {
   if (count) count.textContent = 'Photos received today: ' + n;
 }
 function markBucketsUnreachable() {
-  ['needs','underway','finished','waiting','routing'].forEach(function(id) {
+  ['needs','underway','finished','waiting','routing','memory'].forEach(function(id) {
     const root = document.getElementById(id);
     if (!root) return;
     if (root.textContent.indexOf('Loading') !== -1) {
@@ -1937,6 +2168,40 @@ function renderRouting(r, serverUnix) {
     el.style.width = Math.round(v * 100) + '%%';
   });
 }
+let memoryShown = '';
+function memorySource(src) {
+  const label = esc(src.label || '');
+  const path = '<span class="mem-path">' + esc(src.path || '') + '</span>';
+  if (src.missing) return '<div class="mem-empty">' + label + ' · nothing kept<br>' + path + '</div>';
+  if (src.error) return '<div class="mem-empty">' + label + ' · ' + esc(src.error) + '<br>' + path + '</div>';
+  const n = src.entries || 0;
+  const meta = 'changed ' + esc(src.changed_date || '?') + ' · ' + n + (n === 1 ? ' entry' : ' entries');
+  const body = (src.sections || []).map(function(section) {
+    return (section.heading ? '<h3>' + esc(section.heading) + '</h3>' : '') + '<ul>' +
+      (section.entries || []).map(function(entry) { return '<li>' + esc(entry) + '</li>'; }).join('') + '</ul>';
+  }).join('');
+  return '<details class="more-fold mem-fold"><summary><span>' + label + '</span><span class="mem-meta">' + meta +
+    '</span></summary><div class="mem-body">' + path +
+    (src.truncated ? '<p class="warn">Only the start of this file is shown.</p>' : '') + body + '</div></details>';
+}
+function renderMemory(m) {
+  const root = document.getElementById('memory');
+  const foot = document.getElementById('memory-withheld');
+  if (!root || !m) return;
+  // Re-render only when what is kept changed, so an open fold stays open.
+  const key = JSON.stringify(m);
+  if (key === memoryShown) return;
+  memoryShown = key;
+  if (m.error) {
+    root.innerHTML = '<p class="empty">Memory is unavailable: ' + esc(m.error) + '</p>';
+    if (foot) foot.textContent = '';
+    return;
+  }
+  root.innerHTML = (m.sources || []).map(memorySource).join('');
+  const w = m.withheld || 0;
+  if (foot) foot.textContent = 'What I remember withheld ' + w +
+    (w === 1 ? ' line' : ' lines') + ' about a gift, surprise or present.';
+}
 function apply(data) {
   lastSuccess = Date.now();
   setStale(false);
@@ -1951,6 +2216,7 @@ function apply(data) {
   renderBucket('finished', data.just_finished, 'No recent completions.');
   renderWaiting(data.waiting);
   renderRouting(data.routing, data.server_unix);
+  renderMemory(data.memory);
   setPhotoCount(data.photos_today != null ? data.photos_today : 0);
 }
 function setSpeakStatus(kind, text) {
@@ -2326,6 +2592,10 @@ def glance_html(nonce: str, home: Optional[Path] = None) -> str:
 <div id="finished"><p class="empty">Loading…</p></div>
 <h2>Routing</h2>
 <div id="routing"><p class="empty">Loading…</p></div>
+<h2>What I remember</h2>
+<p class="note">What this home keeps about you, shown only to your logged-in devices on your private network and never sent to any outside service. Nothing can be changed from this page.</p>
+<div id="memory"><p class="empty">Loading…</p></div>
+<footer><p class="note" id="memory-withheld"></p></footer>
 </main>
 </body>
 </html>
