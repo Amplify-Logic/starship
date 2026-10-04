@@ -34,6 +34,14 @@
 # modes, runs at startup and then at most every 60 seconds, never more rarely
 # than the shortest record reap age.
 #
+# The worker lock is the account queue's singleton. A serving loop that finds
+# another worker recorded as the lock's owner - a challenger that reclaimed it
+# while this loop looked stale - yields as a loop that lost its lock does: it
+# stops its tracked lanes and exits 0 without touching the lock, and the Linux
+# supervisor above it exits with it. It never claims, reclaims, or heartbeats
+# beside the owner, because two loops serving one queue stop each other's
+# running jobs.
+#
 # The worker is abandoned when its configured FM_ROOT stops being a genuine
 # Firstmate checkout - the state a pruned no-mistakes gate worktree, a returned
 # pooled worktree, or a removed test fixture root leaves behind. It can never
@@ -596,6 +604,23 @@ worker_exit_lost_lock() {
     exit 125
   }
   exit 0
+}
+
+# Another worker has published itself as the owner of the lock this loop
+# acquired. A lock with no readable owner is not a takeover: it is either a
+# reclaim still publishing or a lock nobody holds, and this loop keeps serving
+# until an owner appears.
+worker_lock_taken_by_peer() {
+  local owner_pid
+  [ "$WORKER_LOCK_HELD" -eq 1 ] || return 1
+  owner_pid=$(fm_remote_job_read_single_line "$WORKER_LOCK/pid" 64 2>/dev/null) || return 1
+  [ "$owner_pid" != "${BASHPID:-$$}" ]
+}
+
+worker_yield_if_lock_taken() {
+  worker_lock_taken_by_peer || return 0
+  worker_error "another worker now owns this account queue; stopping this duplicate serving loop"
+  worker_exit_lost_lock
 }
 
 # Ignore, rather than restore the default disposition for, the signals this
@@ -1202,6 +1227,7 @@ worker_process_once() { # <account-home>
     case "$state" in
       queued)
         worker_lane_owns_job "$job" && continue
+        worker_yield_if_lock_taken
         if ! worker_clear_dead_claim "$job"; then
           if worker_claim_owner_alive "$job"; then
             home=$(worker_read_text "$job" home 8192 2>/dev/null || true)
@@ -1228,7 +1254,9 @@ worker_process_once() { # <account-home>
         candidates="$candidates$seq"$'\t'"$id"$'\t'"$home"$'\n'
         ;;
       running)
-        worker_lane_owns_job "$job" || worker_reclaim_running_job "$job" || true
+        worker_lane_owns_job "$job" && continue
+        worker_yield_if_lock_taken
+        worker_reclaim_running_job "$job" || true
         continue
         ;;
       *) continue ;;
@@ -1252,6 +1280,7 @@ worker_process_once() { # <account-home>
     job=$(fm_remote_job_job_dir "$id" 2>/dev/null || true)
     [ -n "$job" ] || continue
     [ "$(fm_remote_job_read_state "$job" 2>/dev/null || true)" = queued ] || continue
+    worker_yield_if_lock_taken
     worker_start_lane "$job" "$home"
   done < <(printf '%s' "$candidates" | sort -t $'\t' -k1,1n -k2,2)
 }
@@ -1298,6 +1327,7 @@ main() {
   WORKER_FAST_REMAINING=0
   WORKER_ACTIVITY=1
   while :; do
+    worker_yield_if_lock_taken
     if [ "$SECONDS" -ne "$next_heartbeat" ]; then
       worker_write_heartbeat || { worker_error "cannot update worker heartbeat"; exit 1; }
       next_heartbeat=$SECONDS

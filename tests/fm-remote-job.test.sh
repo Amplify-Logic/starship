@@ -33,6 +33,8 @@ SWEPT_QUARANTINE_WORKER_PID=
 DRIFT_OWNER_PID=
 DRIFT_HEARTBEAT_PID=
 DRIFT_CHALLENGER_PID=
+DUPLICATE_OWNER_PID=
+DUPLICATE_CHALLENGER_PID=
 ABANDONED_CLAIM_WORKER_PID=
 RESTART_SUPERVISOR_PID=
 LOST_TERM_PID=
@@ -56,6 +58,8 @@ cleanup_remote_job_fixture() {
   [ -z "$DRIFT_HEARTBEAT_PID" ] || kill "$DRIFT_HEARTBEAT_PID" 2>/dev/null || true
   [ -z "$DRIFT_OWNER_PID" ] || kill "$DRIFT_OWNER_PID" 2>/dev/null || true
   [ -z "$DRIFT_CHALLENGER_PID" ] || kill "$DRIFT_CHALLENGER_PID" 2>/dev/null || true
+  [ -z "$DUPLICATE_OWNER_PID" ] || kill -KILL "$DUPLICATE_OWNER_PID" 2>/dev/null || true
+  [ -z "$DUPLICATE_CHALLENGER_PID" ] || kill "$DUPLICATE_CHALLENGER_PID" 2>/dev/null || true
   [ -z "$ABANDONED_CLAIM_WORKER_PID" ] || kill "$ABANDONED_CLAIM_WORKER_PID" 2>/dev/null || true
   [ -z "$LIVE_CLAIM_WORKER_PID" ] || kill "$LIVE_CLAIM_WORKER_PID" 2>/dev/null || true
   [ -z "$SCRATCH_FAIL_WORKER_PID" ] || kill "$SCRATCH_FAIL_WORKER_PID" 2>/dev/null || true
@@ -1013,6 +1017,99 @@ kill -TERM "$DRIFT_CHALLENGER_PID"
 wait "$DRIFT_CHALLENGER_PID" 2>/dev/null || true
 DRIFT_CHALLENGER_PID=
 pass "a heartbeating owner with drifted ps records is deferred to until it goes stale"
+
+# A serving loop that stalls long enough for its heartbeat to go stale while its
+# recorded ps start has drifted is reclaimed by the next launch, and the
+# original loop is still alive when it resumes. Two loops then serve one queue,
+# and each reclaims the other's running jobs as orphans, so a job publishes
+# "stopped before this job completed" instead of its own result. The resumed
+# loop must yield to the worker now recorded as the owner: exit 0 on its own,
+# leave the owner's lock alone, and never touch the owner's running job.
+cat > "$REMOTE_ROOT/bin/fm-takeover-job.sh" <<'SH'
+#!/bin/bash
+printf 'started\n' > "$1"
+sleep 2
+printf 'finished\n'
+SH
+chmod +x "$REMOTE_ROOT/bin/fm-takeover-job.sh"
+git -C "$REMOTE_ROOT" add bin/fm-takeover-job.sh
+git -C "$REMOTE_ROOT" commit -qm 'takeover job'
+DUPLICATE_HOME="$TMP_ROOT/duplicate-account"
+DUPLICATE_STATE="$TMP_ROOT/duplicate-jobs"
+DUPLICATE_STARTED="$TMP_ROOT/duplicate-started"
+mkdir -p "$DUPLICATE_HOME"
+chmod 700 "$DUPLICATE_HOME"
+HOME="$DUPLICATE_HOME" FM_ROOT_OVERRIDE="$REMOTE_ROOT" FM_REMOTE_JOB_STATE_ROOT="$DUPLICATE_STATE" \
+  FM_REMOTE_JOB_PLATFORM_OVERRIDE=Linux "$REMOTE_ROOT/bin/fm-remote-job-worker.sh" --serve \
+  > "$TMP_ROOT/duplicate-owner.out" 2> "$TMP_ROOT/duplicate-owner.err" &
+DUPLICATE_OWNER_PID=$!
+for _ in $(seq 1 300); do
+  [ "$(cat "$DUPLICATE_STATE/worker.lock/pid" 2>/dev/null || true)" = "$DUPLICATE_OWNER_PID" ] \
+    && [ -f "$DUPLICATE_STATE/worker.ready" ] && break
+  sleep 0.05
+done
+[ "$(cat "$DUPLICATE_STATE/worker.lock/pid" 2>/dev/null || true)" = "$DUPLICATE_OWNER_PID" ] \
+  || fail "the first serving loop did not take the account queue"
+kill -STOP "$DUPLICATE_OWNER_PID"
+for _ in $(seq 1 100); do
+  [ "$(ps -o state= -p "$DUPLICATE_OWNER_PID" 2>/dev/null | tr -d ' ')" = T ] && break
+  sleep 0.05
+done
+[ "$(ps -o state= -p "$DUPLICATE_OWNER_PID" 2>/dev/null | tr -d ' ')" = T ] \
+  || fail "the first serving loop did not stall"
+printf 'Thu Jan  1 00:00:00 2000\n' > "$DUPLICATE_STATE/worker.lock/start"
+touch -t 200001010000 "$DUPLICATE_STATE/worker.ready" "$DUPLICATE_STATE/worker.lock"
+HOME="$DUPLICATE_HOME" FM_ROOT_OVERRIDE="$REMOTE_ROOT" FM_REMOTE_JOB_STATE_ROOT="$DUPLICATE_STATE" \
+  FM_REMOTE_JOB_PLATFORM_OVERRIDE=Linux "$REMOTE_ROOT/bin/fm-remote-job-worker.sh" --serve \
+  > "$TMP_ROOT/duplicate-challenger.out" 2> "$TMP_ROOT/duplicate-challenger.err" &
+DUPLICATE_CHALLENGER_PID=$!
+for _ in $(seq 1 300); do
+  [ "$(cat "$DUPLICATE_STATE/worker.lock/pid" 2>/dev/null || true)" = "$DUPLICATE_CHALLENGER_PID" ] && break
+  sleep 0.05
+done
+[ "$(cat "$DUPLICATE_STATE/worker.lock/pid" 2>/dev/null || true)" = "$DUPLICATE_CHALLENGER_PID" ] \
+  || fail "the challenger did not reclaim the stalled loop's stale lock: $(cat "$TMP_ROOT/duplicate-challenger.err")"
+FM_REMOTE_JOB_STATE_ROOT="$DUPLICATE_STATE" FM_REMOTE_JOB_TIMEOUT=20 \
+  fm_remote_job_stage "$DUPLICATE_HOME" "$REMOTE_ROOT" "$REMOTE_HOME" \
+  fm-takeover-job.sh "$DUPLICATE_STARTED" < /dev/null > /dev/null
+DUPLICATE_JOB_ID=$FM_REMOTE_JOB_ID
+for _ in $(seq 1 200); do
+  [ -f "$DUPLICATE_STARTED" ] && break
+  sleep 0.05
+done
+assert_present "$DUPLICATE_STARTED" "the owner did not start the staged job"
+kill -CONT "$DUPLICATE_OWNER_PID"
+DUPLICATE_DEADLINE=$((SECONDS + 5))
+while kill -0 "$DUPLICATE_OWNER_PID" 2>/dev/null && [ "$SECONDS" -lt "$DUPLICATE_DEADLINE" ]; do
+  sleep 0.05
+done
+kill -0 "$DUPLICATE_OWNER_PID" 2>/dev/null \
+  && fail "a resumed serving loop kept serving beside the worker that owns its queue"
+set +e
+wait "$DUPLICATE_OWNER_PID"
+DUPLICATE_OWNER_RC=$?
+set -e
+DUPLICATE_OWNER_PID=
+[ "$DUPLICATE_OWNER_RC" -eq 0 ] \
+  || fail "a serving loop that lost its queue did not yield cleanly (rc=$DUPLICATE_OWNER_RC): $(cat "$TMP_ROOT/duplicate-owner.err")"
+FM_REMOTE_JOB_STATE_ROOT="$DUPLICATE_STATE" fm_remote_job_wait "$DUPLICATE_HOME" "$DUPLICATE_JOB_ID" \
+  || fail "$FM_REMOTE_JOB_ERROR"
+[ "$FM_REMOTE_JOB_EXIT" -eq 0 ] \
+  || fail "the yielding loop stopped the owner's running job (exit $FM_REMOTE_JOB_EXIT): $(cat "$FM_REMOTE_JOB_STDERR")"
+assert_contains "$(cat "$FM_REMOTE_JOB_STDOUT")" finished "the owner's job did not publish its own result"
+[ "$(cat "$DUPLICATE_STATE/worker.lock/pid" 2>/dev/null || true)" = "$DUPLICATE_CHALLENGER_PID" ] \
+  || fail "the yielding loop rewrote the owner's lock"
+kill -0 "$DUPLICATE_CHALLENGER_PID" 2>/dev/null || fail "the yielding loop stopped the owner"
+for _ in $(seq 1 100); do
+  [ "$(cat "$DUPLICATE_STATE/worker.ready" 2>/dev/null || true)" = "$DUPLICATE_CHALLENGER_PID" ] && break
+  sleep 0.05
+done
+[ "$(cat "$DUPLICATE_STATE/worker.ready" 2>/dev/null || true)" = "$DUPLICATE_CHALLENGER_PID" ] \
+  || fail "the owner's heartbeat was not the only one left"
+kill -TERM "$DUPLICATE_CHALLENGER_PID"
+wait "$DUPLICATE_CHALLENGER_PID" 2>/dev/null || true
+DUPLICATE_CHALLENGER_PID=
+pass "a serving loop that resumes after its queue was reclaimed yields to the owner"
 
 # Reclaim is single-writer: the winner holds a claim marker inside the ownership
 # directory while it sweeps, so a loser cannot delete the records the winner
