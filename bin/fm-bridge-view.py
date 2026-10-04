@@ -54,6 +54,7 @@ CACHE_TTL_SECONDS = 30
 SNAPSHOT_TIMEOUT_SECONDS = 20
 SNAPSHOT_MAX_BYTES = 1_000_000
 DECK_SCHEMA = "fm-deck.v1"
+ROUTING_SCHEMA = "fm-routing.v1"
 COOKIE_NAME = "fm_bridge_sid"
 COOKIE_PATH = "/"
 SCRYPT_N = 2**14
@@ -1264,6 +1265,144 @@ def run_deck(home: Path, root: Path) -> Dict[str, Any]:
     return model
 
 
+def run_routing(home: Path, root: Path) -> Dict[str, Any]:
+    """One `fm-routing-snapshot.sh --json` read: roster, recent dispatch
+    decisions, and each task record's kind and model, from local files only."""
+    script = root / "bin" / "fm-routing-snapshot.sh"
+    if not script.is_file():
+        raise RuntimeError(f"routing snapshot missing: {script}")
+    model = _run_json_child([str(script), "--json"], home, root, "routing snapshot")
+    if model.get("schema") != ROUTING_SCHEMA:
+        raise RuntimeError("routing snapshot schema mismatch")
+    return model
+
+
+def short_model(model: Any) -> str:
+    """claude-sonnet-5-5 -> sonnet-5.5, openai-codex/gpt-5.6-sol -> gpt-5.6-sol."""
+    text = str(model or "").strip().rsplit("/", 1)[-1]
+    text = re.sub(r"^claude-", "", text)
+    return re.sub(r"-(\d+)-(\d+)$", r"-\1.\2", text)
+
+
+def profile_text(profile: Any) -> str:
+    if not isinstance(profile, dict):
+        return ""
+    model = short_model(profile.get("model")) or str(profile.get("harness") or "")
+    effort = str(profile.get("effort") or "").strip()
+    return f"{model} · {effort}" if effort and effort != "default" else model
+
+
+def _probability(value: Any) -> Optional[float]:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value) if 0 <= value <= 1 else None
+
+
+def project_routing(routing: Dict[str, Any], bearings: Dict[str, Any], now: float) -> Dict[str, Any]:
+    """Shape the Routing section: the roster, the latest dispatch decisions,
+    the worker graph, and live workers. Live work is the bearings read's own
+    in_flight rows, named exactly as the glance names them, each joined by id
+    to its record's kind, model, effort, and spawn time. The graph hangs each
+    `<mate>/<child>` row beneath its second mate from the bearings
+    secondmates rows. A decision names its
+    task by the title the glance already shows for it (live, landed, or
+    waiting), never by its id. Nothing else from a task record or brief
+    reaches the page."""
+    roster = []
+    for row in routing.get("roster") or []:
+        if not isinstance(row, dict):
+            continue
+        profiles = [profile_text(p) for p in row.get("profiles") or []]
+        roster.append(
+            {
+                "label": str(row.get("label") or row.get("rule") or ""),
+                "profile": " / ".join(p for p in profiles if p) or "-",
+                "default": row.get("rule") == "default",
+            }
+        )
+    records = {
+        str(row.get("id")): row
+        for row in routing.get("workers") or []
+        if isinstance(row, dict) and row.get("id")
+    }
+    in_flight = bearings.get("in_flight") if isinstance(bearings.get("in_flight"), list) else []
+    workers: List[Dict[str, Any]] = []
+    graph: List[Dict[str, Any]] = []
+    mates: Dict[str, Dict[str, Any]] = {}
+    secondmates = bearings.get("secondmates") if isinstance(bearings.get("secondmates"), list) else []
+    for row in secondmates:
+        mate_id = str(row.get("id") or "") if isinstance(row, dict) else ""
+        if not mate_id or mate_id.startswith("(") or mate_id in mates:
+            continue
+        record = records.get(mate_id) or {}
+        mates[mate_id] = {
+            "kind": str(record.get("kind") or "secondmate"),
+            "model": short_model(record.get("model")) or "-",
+            "state": str(row.get("state") or "unknown"),
+            "children": [],
+        }
+    names: Dict[str, str] = {}
+    for key, field in (("landed", "what"), ("gates", "title")):
+        rows = bearings.get(key) if isinstance(bearings.get(key), list) else []
+        for row in rows:
+            if isinstance(row, dict) and row.get("id"):
+                title = human_line(str(row.get(field) or ""), "")
+                if title:
+                    names.setdefault(str(row["id"]), title)
+    for row in in_flight:
+        if not isinstance(row, dict):
+            continue
+        task_id = str(row.get("id") or "")
+        state = str(row.get("state") or "unknown")
+        record = records.get(task_id) or {}
+        title = human_line(str(row.get("name") or row.get("title") or ""), "") or "Work under way"
+        names[task_id] = title
+        kind = str(record.get("kind") or row.get("kind") or "worker")
+        model = short_model(record.get("model")) or "-"
+        effort = str(record.get("effort") or "").strip()
+        started = record.get("started")
+        age = int(now - started) if isinstance(started, int) and 0 < started <= now else -1
+        workers.append(
+            {
+                "title": title,
+                "kind": kind,
+                "model": model,
+                "effort": "" if effort == "default" else effort,
+                "age_secs": age,
+                "state": state,
+                "dot": map_dot(state),
+            }
+        )
+        node = {"kind": kind, "model": model, "state": state, "children": []}
+        mate_id, _, child_id = task_id.partition("/")
+        if child_id and mate_id in mates:
+            mates[mate_id]["children"].append(node)
+        else:
+            graph.append(node)
+    graph.extend(mates.values())
+    decisions = []
+    for row in routing.get("decisions") or []:
+        if not isinstance(row, dict):
+            continue
+        decisions.append(
+            {
+                "task": names.get(str(row.get("task") or "")) or "Earlier task",
+                "status": str(row.get("status") or ""),
+                "rule": str(row.get("label") or row.get("rule") or ""),
+                "p": _probability(row.get("p")),
+                "profile": profile_text(row.get("profile")),
+                "at": row.get("at") if isinstance(row.get("at"), int) else None,
+            }
+        )
+    return {
+        "roster": roster,
+        "roster_error": routing.get("roster_error"),
+        "decisions": decisions,
+        "graph": graph,
+        "workers": workers,
+    }
+
+
 def safe_https(url: str) -> Optional[str]:
     """An ordinary HTTPS link a browser may follow, else None.
 
@@ -1449,6 +1588,14 @@ class SnapshotCache:
     def _load(self, started: float) -> Dict[str, Any]:
         model = run_snapshot(self.home, self.root)
         observation = project_observation(model)
+        # The Routing section rides the same refresh; its own failure leaves
+        # the glance whole and says why in the section instead.
+        try:
+            observation["routing"] = project_routing(
+                run_routing(self.home, self.root), model, started
+            )
+        except (OSError, RuntimeError) as exc:
+            observation["routing"] = {"error": str(exc) or "routing snapshot failed"}
         observation["mailbox_listener"] = mailbox_listener_available()
         observation["read_started"] = model.get("generated")
         observation["server_unix"] = int(started)
@@ -1594,6 +1741,28 @@ form.logout button { width: auto; min-height: 2rem; padding: 0.3rem 0.7rem; back
 .page-nav { display: flex; gap: 0.4rem; margin: 0.5rem 0 0.2rem; font-size: 0.92rem; }
 .page-nav a, .page-nav span { display: inline-flex; align-items: center; min-height: 2.2rem; padding: 0.2rem 0.75rem; border-radius: 999px; border: 1px solid #3b4742; text-decoration: none; color: #c5d0c8; }
 .page-nav span[aria-current] { background: #1b2220; color: #f2f4f3; }
+#routing h3 { font-size: 0.72rem; letter-spacing: 0.12em; text-transform: uppercase; color: #9aa7a0; margin: 1rem 0 0.3rem; font-weight: 600; }
+#routing h3:first-child { margin-top: 0.2rem; }
+.route-row { display: flex; justify-content: space-between; align-items: baseline; gap: 0.8rem; font-size: 0.95rem; }
+.route-row .label { overflow-wrap: anywhere; }
+.route-row .prof { color: #9cdcfe; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.route-row.default .label { color: #9aa7a0; }
+.decision { border: 1px solid #2a3330; border-radius: 0.5rem; padding: 0.6rem 0.8rem; margin: 0.4rem 0 0; }
+.decision.latest { border-color: #3b4742; background: #151b19; }
+.decision .top { display: flex; justify-content: space-between; gap: 0.6rem; align-items: baseline; }
+.decision .task { font-weight: 600; overflow-wrap: anywhere; }
+.decision .when, .decision .rule, .worker-meta { color: #9aa7a0; font-size: 0.88rem; }
+.decision .rule { margin: 0.25rem 0 0; overflow-wrap: anywhere; }
+.decision .pick { margin: 0.3rem 0 0; color: #f2f4f3; font-size: 0.95rem; }
+.verdict { font-size: 0.72rem; letter-spacing: 0.06em; text-transform: uppercase; border-radius: 999px; padding: 0.05rem 0.5rem; border: 1px solid #3b4742; color: #c5d0c8; }
+.verdict.clear { border-color: #34d399; color: #34d399; }
+.verdict.ambiguous { border-color: #fbbf24; color: #fbbf24; }
+.verdict.escalate { border-color: #c084fc; color: #c084fc; }
+.verdict.error { border-color: #f87171; color: #f87171; }
+.pbar { height: 0.35rem; background: #2a3330; border-radius: 999px; margin: 0.4rem 0 0; overflow: hidden; }
+.pbar > span { display: block; height: 100%; width: 0; background: #6ea8fe; }
+pre.graph { margin: 0.2rem 0 0; font: 0.9rem/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; color: #c5d0c8; white-space: pre; overflow-x: auto; }
+.worker-meta { display: block; margin: 0.15rem 0 0 1.2rem; }
 """
 
 PINNED_LINKS_CSS = """
@@ -1637,7 +1806,7 @@ function setPhotoCount(n) {
   if (count) count.textContent = 'Photos received today: ' + n;
 }
 function markBucketsUnreachable() {
-  ['needs','underway','finished','waiting'].forEach(function(id) {
+  ['needs','underway','finished','waiting','routing'].forEach(function(id) {
     const root = document.getElementById(id);
     if (!root) return;
     if (root.textContent.indexOf('Loading') !== -1) {
@@ -1705,6 +1874,69 @@ function renderWaiting(bucket) {
       '</summary>' + renderList(items) + '</details>';
   }).join('');
 }
+function fmtAge(secs) {
+  if (secs == null || secs < 0) return '';
+  if (secs < 60) return secs + 's';
+  if (secs < 3600) return Math.floor(secs / 60) + 'm';
+  if (secs < 86400) return Math.floor(secs / 3600) + 'h';
+  return Math.floor(secs / 86400) + 'd';
+}
+function graphText(nodes) {
+  const lines = ['firstmate'];
+  function walk(list, prefix) {
+    list.forEach(function(node, i) {
+      const last = i === list.length - 1;
+      lines.push(prefix + (last ? '└ ' : '├ ') + node.kind + ' · ' + node.model);
+      walk(node.children || [], prefix + (last ? '  ' : '│ '));
+    });
+  }
+  walk(nodes || [], '');
+  return lines.join('\\n');
+}
+function renderRouting(r, serverUnix) {
+  const root = document.getElementById('routing');
+  if (!root || !r) return;
+  if (r.error) {
+    root.innerHTML = '<p class="empty">Routing is unavailable: ' + esc(r.error) + '</p>';
+    return;
+  }
+  let html = '<h3>Model roster</h3>';
+  const roster = r.roster || [];
+  if (r.roster_error) html += '<p class="warn">' + esc(r.roster_error) + '</p>';
+  html += roster.length ? '<ul>' + roster.map(function(row) {
+    return '<li class="route-row' + (row['default'] ? ' default' : '') + '"><span class="label">' +
+      esc(row.label) + '</span><span class="prof">' + esc(row.profile) + '</span></li>';
+  }).join('') + '</ul>' : '<p class="empty">No routing rules configured.</p>';
+  html += '<h3>Jev decisions</h3>';
+  const decisions = r.decisions || [];
+  html += decisions.length ? decisions.map(function(d, i) {
+    const p = d.p == null ? '' : ' · p ' + Number(d.p).toFixed(2);
+    const ago = d.at && serverUnix ? fmtAge(Math.max(0, serverUnix - d.at)) + ' ago' : '';
+    const status = ['clear','ambiguous','escalate','error'].indexOf(d.status) !== -1 ? d.status : '';
+    return '<div class="decision' + (i === 0 ? ' latest' : '') + '"><div class="top"><span class="task">' +
+      esc(d.task) + '</span><span class="when">' + esc(ago) + '</span></div>' +
+      '<p class="rule"><span class="verdict ' + status + '">' + esc(d.status || '?') + '</span>' + esc(p) +
+      ' · ' + esc(d.rule) + '</p>' +
+      (d.p == null ? '' : '<div class="pbar"><span data-p="' + esc(d.p) + '"></span></div>') +
+      (d.profile ? '<p class="pick">→ ' + esc(d.profile) + '</p>'
+        : (status && status !== 'clear' ? '<p class="rule">→ left to firstmate&#39;s own call</p>' : '')) + '</div>';
+  }).join('') : '<p class="empty">No routing decisions recorded yet.</p>';
+  const workers = r.workers || [];
+  html += '<h3>Agent graph</h3><pre class="graph">' + esc(graphText(r.graph)) + '</pre>';
+  html += '<h3>Live workers · ' + workers.length + '</h3>';
+  html += workers.length ? '<ul>' + workers.map(function(w) {
+    const bits = [w.kind, w.model + (w.effort ? ' · ' + w.effort : ''), fmtAge(w.age_secs), w.state]
+      .filter(function(x) { return x; });
+    return '<li><span class="dot ' + dotClass(w.dot) + '"></span>' + esc(w.title) +
+      '<span class="worker-meta">' + esc(bits.join(' · ')) + '</span></li>';
+  }).join('') + '</ul>' : '<p class="empty">No workers under way.</p>';
+  root.innerHTML = html;
+  // CSP blocks inline style attributes, so bar widths are set through the DOM.
+  root.querySelectorAll('[data-p]').forEach(function(el) {
+    const v = Math.max(0, Math.min(1, Number(el.getAttribute('data-p')) || 0));
+    el.style.width = Math.round(v * 100) + '%%';
+  });
+}
 function apply(data) {
   lastSuccess = Date.now();
   setStale(false);
@@ -1718,6 +1950,7 @@ function apply(data) {
   renderBucket('underway', data.under_way, 'Nothing is under way.');
   renderBucket('finished', data.just_finished, 'No recent completions.');
   renderWaiting(data.waiting);
+  renderRouting(data.routing, data.server_unix);
   setPhotoCount(data.photos_today != null ? data.photos_today : 0);
 }
 function setSpeakStatus(kind, text) {
@@ -2091,6 +2324,8 @@ def glance_html(nonce: str, home: Optional[Path] = None) -> str:
 <div id="waiting"><p class="empty">Loading…</p></div>
 <h2>Just finished</h2>
 <div id="finished"><p class="empty">Loading…</p></div>
+<h2>Routing</h2>
+<div id="routing"><p class="empty">Loading…</p></div>
 </main>
 </body>
 </html>

@@ -64,6 +64,20 @@
 #   escalate  -> the rule requires captain approval, no candidate is rankable, or a genuine tie
 #   error     -> API, network, response, or quota-axi failure; decide as today
 #   Every outcome exits 0 so an intake is never blocked by this tool.
+#
+# Decision record: once Jev has answered and the result is resolved (any
+#   status), one JSON line is appended to $FM_HOME/state/dispatch-decisions.jsonl
+#   when that state/ directory exists:
+#     {"at":<epoch>,"task":"<id>","status":"<status>","rule":"rule_<n>|default",
+#      "rule_when":"<first 60 chars of that rule's when>","p":<probability>,
+#      "profile":{"harness":..,"model":..|null,"effort":..|null}|null}
+#   rule is the rule whose profiles the result was drawn from: the answer's
+#   rule after any runner-up fallback, or default when that rule's quota floor
+#   falls through to the default; p is Jev's probability for that rule, and
+#   profile is the chosen profile on a clear result, else null.
+#   task is the <id> of a data/<id>/brief.md path. No brief text, quota, or
+#   candidate evidence is written. The off, no-rules, and pre-answer error paths
+#   write nothing. Writing is best effort and never changes stdout or the exit.
 #   Exit 2 only for a usage or configuration error (unreadable brief, an
 #   existing unreadable rules file, malformed rules, or missing jq), which is
 #   actionable, never selected around.
@@ -386,6 +400,34 @@ command -v quota-axi >/dev/null 2>&1 || emit_error "quota-axi not installed"
 quota-axi --json > "$QUOTA" 2>/dev/null || emit_error "quota-axi --json failed"
 fm_quota_json_valid < "$QUOTA" || emit_error "quota-axi --json returned an invalid snapshot"
 
+# ---- decision record: one local line per answered resolve ---------------------
+# The task id comes from the data/<id>/brief.md path firstmate passes; any other
+# path records its file name without .md, and an id with characters outside
+# [A-Za-z0-9._-] records "-". Nothing from the brief itself is read here.
+decision_task_id() {  # <brief path>
+  local path=$1 base id
+  base=${path##*/}
+  if [ "$base" = brief.md ]; then
+    case "$path" in */*) id=${path%/*}; id=${id##*/} ;; *) id='' ;; esac
+  else
+    id=${base%.md}
+  fi
+  case "$id" in ''|.|..|*[!A-Za-z0-9._-]*) id='-' ;; esac
+  printf '%s' "${id:0:80}"
+}
+# Best effort and silent: a home without state/ or an unwritable record never
+# changes the printed answer or the exit status.
+record_decision() {
+  local state="$FM_HOME/state" line
+  [ -d "$state" ] || return 0
+  line=$(jq -c --arg task "$(decision_task_id "$BRIEF")" --argjson at "$(date +%s)" '{
+    at: $at, task: $task, status,
+    rule: .chosen_rule, rule_when: .chosen_when, p: .chosen_p,
+    profile: (if .chosen then (.chosen.profile | {harness, model: (.model // null), effort: (.effort // null)}) else null end)
+  }' <<<"$RESULT" 2>/dev/null) || return 0
+  printf '%s\n' "$line" >> "$state/dispatch-decisions.jsonl" 2>/dev/null || true
+}
+
 # ---- resolution: declared gates + quota evidence + argmax, all in jq ------------
 RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg none_criterion "$DEFAULT_WHEN" --argjson pmap "$PMAP" \
   --slurpfile resp "$RESP_FILE" --slurpfile rules "$RULES" --slurpfile quota "$QUOTA" "$FM_QUOTA_ROW_JQ"'
@@ -498,11 +540,13 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
      then {source: "default", use: profiles($cfg.default // null), note: "rule \($choice) floor \($rule.floor.scope) below \($rule.floor.min_percent)%: fall through to default"}
    else {source: $choice, use: profiles($rule.use), note: "rule matched"} end) as $sel |
   def when_of($c): (if rule_at($c) == null then $none_criterion else rule_at($c).when end | .[0:60]);
+  (if $fb.below and ($fb.to | not) then $choice else ($sel.source // $choice) end) as $drawn |
   {
     model: $r.model, latency_ms: $lat, tokens: ($r.usage // null),
     rule: $picked,
     rule_when: when_of($picked),
-    confidence: $a.confidence, probabilities: $a.probabilities
+    confidence: $a.confidence, probabilities: $a.probabilities,
+    chosen_rule: $drawn, chosen_when: when_of($drawn), chosen_p: $a.probabilities[$drawn]
   }
   + (if $fb.to then {fallback: "\($choice) (\(when_of($choice))) probability \($fb.p) clears its floor \($fb.to_floor); \($picked) probability \($a.probabilities[$picked]) is below its floor \($picked_floor)"} else {} end)
   as $ev |
@@ -553,5 +597,6 @@ TEXT=$(jq -r --arg scope "$SCOPE_LINE" '
   (if .chosen then "  profile: --harness \(.chosen.profile.harness | shell_arg)"
       + (if .chosen.profile.model then " --model \(.chosen.profile.model | shell_arg)" else "" end)
       + (if .chosen.profile.effort then " --effort \(.chosen.profile.effort | shell_arg)" else "" end) else empty end)' <<<"$RESULT") || emit_error "output rendering failed"
+record_decision
 printf '%s\n' "$TEXT"
 exit 0

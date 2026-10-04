@@ -98,6 +98,22 @@ If the first observation request fails, the buckets replace "Loading…" with "C
 If refreshes stop for 90 seconds after a successful load, the already-open tab overlays "Cannot reach the desk" from the client clock.
 Last-good on the server cannot save a tab that never hears back.
 
+## Routing
+
+The glance ends with a read-only Routing section: which model each kind of job goes to, the latest Jev routing decisions, a graph of the running workers, and the live workers with model, effort, age, and state.
+It rides the same 30-second observation as the buckets above, so it never adds a request or a refresh of its own.
+
+The server reads it from `bin/fm-routing-snapshot.sh --json`, whose header owns the `fm-routing.v1` fields, and joins it to the bearings read the glance already made:
+
+- The model roster is every rule in `config/crew-dispatch.json`, as a short label cut from its `when` text, beside its model and effort, then the default.
+- The decisions are the newest few lines of the local dispatch decision record ([`docs/configuration.md`](configuration.md#typed-dispatch-resolution-env-typesafe_api_key) owns it): outcome, probability, rule, and chosen profile.
+- The live workers are the bearings `in_flight` rows, so they list exactly the work Under way, Waiting, and Needs you already show, each with its record's kind, model, effort, and spawn time.
+- The graph shows the same rows under firstmate, plus each second mate from the bearings `secondmates` rows with its own workers hanging beneath it.
+
+A task is named only by the title the glance already shows for it, and a decision whose task the glance no longer shows reads "Earlier task"; task ids, a record's outcome line, and brief text never reach the page.
+The section reads local files only: it makes no Jev call, changes no routing or model, and sends nothing off the machine.
+If the routing read fails, the buckets still render and the section says why in place.
+
 The mailbox indicator is a local listen or launchd check.
 It must never call `GET /v1/announcements`, because that call marks announcements delivered.
 

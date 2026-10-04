@@ -246,6 +246,41 @@ assert_not_contains "$body" 'spendPriority' "quota never leaves the machine"
 assert_not_contains "$body" 'cursor-grok' "use profiles never leave the machine"
 pass "clear: one rule Choice request, key on the fd header only, spendPriority argmax over every candidate"
 
+# --- decision record: one local line per answered resolve, no brief text -------
+RECORD="$HOME_DIR/state/dispatch-decisions.jsonl"
+RECORD_BRIEF="$TMP_ROOT/data/ship-r1/brief.md"
+mkdir -p "$HOME_DIR/state" "${RECORD_BRIEF%/*}"
+printf '# Task\n## Captain'"'"'s intent\nRECORD-SENTINEL-BRIEF-TEXT fix the pager.\n' > "$RECORD_BRIEF"
+reset_log
+write_response "$RESPONSE" rule_4 0.9
+TYPESAFE_API_KEY=$KEY run code out err "$RECORD_BRIEF" --project pager
+expect_code 0 "$code" "a recorded clear result exits 0"
+assert_contains "$out" '  status: clear' "recording leaves the printed answer unchanged"
+assert_equals 1 "$(grep -c '' "$RECORD")" "one answered resolve appends one line"
+line=$(cat "$RECORD")
+assert_equals '["at","p","profile","rule","rule_when","status","task"]' "$(jq -c 'keys' <<<"$line")" "the record holds only time, task, outcome, rule, probability, and profile"
+assert_equals 'ship-r1|clear|rule_4|A simple bug fix with a stated root cause.|0.96' "$(jq -r '"\(.task)|\(.status)|\(.rule)|\(.rule_when)|\(.p)"' <<<"$line")" "the task id comes from the brief path and the rule from the answer"
+assert_equals '{"harness":"cursor","model":"cursor-grok-4.6-medium","effort":null}' "$(jq -c .profile <<<"$line")" "the chosen profile is recorded"
+assert_not_contains "$line" 'RECORD-SENTINEL-BRIEF-TEXT' "brief text never reaches the record"
+assert_not_contains "$line" 'spendPriority' "quota evidence never reaches the record"
+reset_log
+write_response "$RESPONSE" rule_4 0.3
+TYPESAFE_API_KEY=$KEY run code out err "$RECORD_BRIEF" --project pager
+assert_contains "$out" '  status: ambiguous' "low confidence is ambiguous"
+assert_equals 'ambiguous|null' "$(tail -n 1 "$RECORD" | jq -r '"\(.status)|\(.profile)"')" "a non-clear result records no profile"
+reset_log
+run code out err "$RECORD_BRIEF" --project pager
+assert_equals 2 "$(grep -c '' "$RECORD")" "the off path records nothing"
+rm -f "$RECORD"
+mkdir "$RECORD"
+reset_log
+write_response "$RESPONSE" rule_4 0.9
+TYPESAFE_API_KEY=$KEY run code out err "$RECORD_BRIEF" --project pager
+expect_code 0 "$code" "an unwritable record still exits 0"
+assert_contains "$out" "  profile: --harness 'cursor' --model 'cursor-grok-4.6-medium'" "an unwritable record still prints the answer"
+rm -rf "$HOME_DIR/state"
+pass "an answered resolve appends one local decision line without brief text, and a failed write changes nothing"
+
 # --- never-send list: a match or a bad list withholds the request -------------
 NEVER_SEND="$HOME_DIR/config/dispatch-never-send"
 PRIVATE_BRIEF="$TMP_ROOT/private-brief.md"
@@ -662,12 +697,21 @@ pass "escalate: a rule declared approval: captain never yields a profile"
 
 # --- rule floor fails: fall through to default -------------------------------
 reset_log
+mkdir -p "$HOME_DIR/state"
 write_response "$RESPONSE" rule_1 0.97
 TYPESAFE_API_KEY=$KEY run code out err "$BRIEF"
 assert_contains "$out" '  status: clear' "rule floor fall-through still resolves"
 assert_contains "$out" '  note: rule rule_1 floor model:fable below 20%: fall through to default' "rule floor fall-through is explained"
 assert_contains "$out" "  profile: --harness 'cursor' --model 'cursor-grok-4.6-high'" "fall-through resolves among the default profiles"
 assert_not_contains "$out" 'candidate: claude:fable' "the floored rule's own profile is not a candidate"
+assert_equals 'clear|default|0.01|cursor-grok-4.6-high' "$(jq -r '"\(.status)|\(.rule)|\(.p)|\(.profile.model)"' "$HOME_DIR/state/dispatch-decisions.jsonl")" "a floor fall-through records the default it drew the profile from"
+reset_log
+write_response "$RESPONSE" rule_1 0.4
+TYPESAFE_API_KEY=$KEY run code out err "$BRIEF"
+assert_contains "$out" '  status: ambiguous' "low confidence on a floored rule is ambiguous"
+assert_equals 'ambiguous|rule_1|New feature work on the app.|0.01|null' "$(tail -n 1 "$HOME_DIR/state/dispatch-decisions.jsonl" | jq -r '"\(.status)|\(.rule)|\(.rule_when)|\(.p)|\(.profile)"')" "an ambiguous answer records its own rule even when that rule's floor is below"
+rm -rf "$HOME_DIR/state"
+write_response "$RESPONSE" rule_1 0.97
 
 MISSING_RULE_FLOOR="$TMP_ROOT/missing-rule-floor.json"
 jq '(.providers[] | select(.provider == "claude") | .quotaSemantics.effectiveAvailability) |= map(select(.scope != "model:fable"))' "$QUOTA" > "$MISSING_RULE_FLOOR"

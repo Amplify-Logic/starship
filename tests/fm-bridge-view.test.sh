@@ -349,6 +349,7 @@ markers = [
     '<h2>Under way</h2>',
     '<h2>Waiting</h2>',
     '<h2>Just finished</h2>',
+    '<h2>Routing</h2>',
 ]
 positions = [page.index(marker) for marker in markers]
 if positions != sorted(positions):
@@ -1738,6 +1739,211 @@ JS
   pass "glance page renders waiting chips and a needs-you show-all line"
 }
 
+# The Routing section: the roster, the latest dispatch decisions, the worker
+# graph, and live workers, from bin/fm-routing-snapshot.sh joined to the
+# bearings read the glance already makes. It names tasks only by the titles the
+# glance shows and never fails the glance with it.
+test_routing_projection_joins_live_rows() {
+  local output
+  output=$(python3 - "$ROOT/bin/fm-bridge-view.py" <<'PY'
+import importlib.util, json, sys
+spec = importlib.util.spec_from_file_location("bridge", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+routing = {
+    "schema": "fm-routing.v1",
+    "roster": [
+        {"rule": "rule_1", "label": "COURSE WRITING", "profiles": [{"harness": "claude", "model": "claude-fable-5-1", "effort": "medium"}]},
+        {"rule": "rule_2", "label": "Hostile read", "profiles": [{"harness": "cursor", "model": "grok-4.7-xhigh", "effort": None}, {"harness": "pi", "model": "openai-codex/gpt-5.6-sol", "effort": "high"}]},
+        {"rule": "default", "label": "default", "profiles": [{"harness": "claude", "model": "opus", "effort": "high"}]},
+    ],
+    "roster_error": None,
+    "decisions": [
+        {"at": 900, "task": "ship-a", "status": "clear", "rule": "rule_1", "label": "COURSE WRITING", "p": 0.81, "profile": {"harness": "claude", "model": "claude-sonnet-5-5", "effort": "medium"}},
+        {"at": 800, "task": "landed-z", "status": "ambiguous", "rule": "rule_2", "label": "Hostile read", "p": 0.4, "profile": None},
+        {"at": 700, "task": "gone-task-q7", "status": "clear", "rule": "default", "label": "default", "p": True, "profile": None},
+    ],
+    "workers": [
+        {"id": "ship-a", "kind": "ship", "model": "claude-sonnet-5-5", "effort": "medium", "started": 400},
+        {"id": "mate", "kind": "secondmate", "model": "opus", "effort": "default", "started": None},
+        {"id": "unlisted-record", "kind": "scout", "model": "opus", "effort": "high", "started": 100},
+    ],
+}
+bearings = {
+    "in_flight": [
+        {"id": "ship-a", "kind": "ship", "state": "working", "name": "Phone routing panel"},
+        {"id": "mate/child-b", "kind": "scout", "state": "paused", "name": "Setlist evidence"},
+    ],
+    "secondmates": [
+        {"id": "(registry)", "state": "unknown", "doing": "Registered secondmate table unavailable"},
+        {"id": "mate", "state": "active_child_work", "doing": "child-b: paused"},
+    ],
+    "landed": [{"id": "landed-z", "what": "Spoken updates on the glasses"}],
+}
+out = module.project_routing(routing, bearings, 1000.0)
+text = json.dumps(out)
+assert [r["profile"] for r in out["roster"]] == ["fable-5.1 · medium", "grok-4.7-xhigh / gpt-5.6-sol · high", "opus · high"], out["roster"]
+assert out["roster"][-1]["default"] is True
+assert [d["task"] for d in out["decisions"]] == ["Phone routing panel", "Spoken updates on the glasses", "Earlier task"], out["decisions"]
+assert out["decisions"][0]["profile"] == "sonnet-5.5 · medium" and out["decisions"][0]["p"] == 0.81
+assert out["decisions"][1]["profile"] == "" and out["decisions"][2]["p"] is None
+assert [(w["title"], w["kind"], w["model"], w["effort"], w["age_secs"], w["state"]) for w in out["workers"]] == [
+    ("Phone routing panel", "ship", "sonnet-5.5", "medium", 600, "working"),
+    ("Setlist evidence", "scout", "-", "", -1, "paused"),
+], out["workers"]
+assert [(n["kind"], n["model"], n["state"], [(c["kind"], c["model"]) for c in n["children"]]) for n in out["graph"]] == [
+    ("ship", "sonnet-5.5", "working", []),
+    ("secondmate", "opus", "active_child_work", [("scout", "-")]),
+], out["graph"]
+for leaked in ("ship-a", "landed-z", "gone-task-q7", "unlisted-record", "child-b"):
+    assert leaked not in text, leaked
+PY
+  ) || fail "routing projection failed: $output"
+  pass "routing joins live rows to records, names tasks by glance titles, and nests second-mate children"
+}
+
+test_routing_failure_leaves_glance_whole() {
+  local home fixture output
+  home=$(make_home routing-failure)
+  fixture=$home/root
+  mkdir -p "$fixture/bin"
+  cat > "$fixture/bin/fm-bearings-snapshot.sh" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' '{"schema":"fm-bearings.v1","in_flight":[{"id":"ship-a","kind":"ship","state":"working","name":"Phone routing panel"}]}'
+SH
+  chmod +x "$fixture/bin/fm-bearings-snapshot.sh"
+  output=$(python3 - "$ROOT/bin/fm-bridge-view.py" "$home" "$fixture" <<'PY'
+import importlib.util, pathlib, sys
+spec = importlib.util.spec_from_file_location("bridge", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+home, root = pathlib.Path(sys.argv[2]), pathlib.Path(sys.argv[3])
+module.mailbox_listener_available = lambda: False
+obs = module.SnapshotCache(home, root).get()
+assert obs["under_way"]["items"][0]["title"] == "Phone routing panel", obs
+assert "routing snapshot missing" in obs["routing"]["error"], obs["routing"]
+script = root / "bin" / "fm-routing-snapshot.sh"
+script.write_text("#!/usr/bin/env bash\necho nope >&2\nexit 3\n")
+script.chmod(0o755)
+obs = module.SnapshotCache(home, root).get()
+assert obs["under_way"]["items"], obs
+assert obs["routing"]["error"] == "nope", obs["routing"]
+PY
+  ) || fail "routing failure broke the glance: $output"
+  pass "a missing or failing routing snapshot leaves the glance whole and says why"
+}
+
+test_observation_carries_routing_from_local_records() {
+  local home fakebin port cookie hdr body before after
+  home=$(make_home routing-live)
+  fakebin=$(make_fakebin "$home")
+  ln -s "$(command -v jq)" "$fakebin/jq"
+  cat > "$fakebin/tmux" <<'SH'
+#!/usr/bin/env bash
+case "${1:-}" in
+  display-message) printf '%%1\n' ;;
+  capture-pane) printf 'all quiet\n> \n' ;;
+esac
+exit 0
+SH
+  chmod +x "$fakebin/tmux"
+  cat > "$home/config/crew-dispatch.json" <<'JSON'
+{ "rules": [ { "when": "STANDING DEFAULT: ordinary work.", "use": { "harness": "claude", "model": "opus", "effort": "high" } } ],
+  "default": { "harness": "claude", "model": "opus", "effort": "high" } }
+JSON
+  printf '%s\n' '{"at":1790000000,"task":"ship-task","status":"clear","rule":"rule_1","rule_when":"STANDING DEFAULT: ordinary work.","p":0.9,"profile":{"harness":"codex","model":"gpt-5.6-sol","effort":"high"}}' \
+    > "$home/state/dispatch-decisions.jsonl"
+  printf 'model=gpt-5.6-sol\neffort=high\nspawn_gen=s1790000000.1.2\noutcome=PRIVATE-OUTCOME-TEXT\n' >> "$home/state/ship-task.meta"
+  init_passcode "$home" >/dev/null
+  port=$(start_bridge "$home" "$fakebin")
+  cookie=$(bridge_cookie "$home" "$port")
+  before=$(fingerprint "$home")
+  hdr=$home/obs.hdr; body=$home/obs.body
+  curl_bridge "$port" /api/observation "$hdr" "$body" --header "Cookie: $cookie"
+  after=$(fingerprint "$home")
+  assert_contains "$(head -n 1 "$hdr")" "200" "observation with routing must succeed"
+  [ "$before" = "$after" ] || fail "reading routing changed fleet records"
+  jq -e '.routing.roster[0].label == "STANDING DEFAULT" and .routing.roster[0].profile == "opus · high"' "$body" >/dev/null \
+    || fail "routing roster missing: $(cat "$body")"
+  jq -e '.routing.decisions[0] | .task == "VoiceLoop tap trigger" and .status == "clear" and .profile == "gpt-5.6-sol · high"' "$body" >/dev/null \
+    || fail "routing decision missing or unnamed: $(jq -c .routing "$body")"
+  jq -e '.routing.workers[0] | .title == "VoiceLoop tap trigger" and .model == "gpt-5.6-sol" and .kind == "ship"' "$body" >/dev/null \
+    || fail "routing worker missing: $(jq -c .routing "$body")"
+  assert_not_contains "$(cat "$body")" "ship-task" "routing must not leak task ids"
+  assert_not_contains "$(cat "$body")" "PRIVATE-OUTCOME-TEXT" "routing must not leak a record's outcome"
+  pass "the observation carries the routing section from local records without ids or outcomes"
+}
+
+test_glance_page_renders_routing() {
+  local output
+  output=$(node - "$ROOT/bin/fm-bridge-view.py" <<'JS'
+const {execFileSync} = require('child_process');
+const vm = require('vm');
+const script = execFileSync('python3', ['-', process.argv[2]], {
+  input: `import importlib.util, sys
+spec = importlib.util.spec_from_file_location("bridge", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+print(module.PAGE_JS)
+`,
+  encoding: 'utf8'
+});
+const bar = {getAttribute() { return '0.81'; }, style: {}};
+const routing = {innerHTML: '', textContent: '', querySelectorAll() { return [bar]; }};
+const elements = {
+  needs: {innerHTML: '', textContent: ''},
+  underway: {innerHTML: '', textContent: ''},
+  finished: {innerHTML: '', textContent: ''},
+  waiting: {innerHTML: '', textContent: ''},
+  routing,
+  observed: {textContent: ''},
+  desk: {textContent: ''},
+  mailbox: {textContent: ''},
+  stale: {classList: {toggle() {}}},
+  'photo-count': {textContent: ''}
+};
+const context = vm.createContext({
+  document: {hidden: false, addEventListener() {}, getElementById(id) { return elements[id] || null; }},
+  window: {addEventListener() {}},
+  Date, setInterval() {}, setTimeout, clearTimeout
+});
+vm.runInContext(script, context);
+const apply = vm.runInContext('apply', context);
+const base = {mailbox_listener: true, photos_today: 0, needs_you: {items: []}, under_way: {items: []},
+  just_finished: {items: []}, waiting: {groups: []}, server_unix: 10000};
+apply(Object.assign({}, base, {routing: {
+  roster: [{label: 'COURSE WRITING', profile: 'fable-5.1 · medium', default: false},
+           {label: 'default', profile: 'opus · high', default: true}],
+  decisions: [{task: 'Phone <b>routing</b> panel', status: 'clear', rule: 'STANDING DEFAULT', p: 0.81,
+               profile: 'opus · high', at: 9400},
+              {task: 'Setlist evidence', status: 'ambiguous', rule: 'Hostile read', p: 0.4, profile: '', at: 9000}],
+  graph: [{kind: 'ship', model: 'opus', children: []},
+          {kind: 'secondmate', model: 'opus', children: [{kind: 'scout', model: 'sonnet-5.5', children: []}]}],
+  workers: [{title: 'Phone routing panel', kind: 'ship', model: 'opus', effort: 'high', age_secs: 720,
+             state: 'working', dot: 'Under way'}]
+}}));
+const html = routing.innerHTML;
+for (const want of ['Model roster', 'COURSE WRITING', 'fable-5.1 · medium', 'route-row default',
+                    'Jev decisions', 'verdict clear', 'p 0.81', '→ opus · high', '10m ago',
+                    'Phone &lt;b&gt;routing&lt;/b&gt; panel', 'Agent graph', 'firstmate\n├ ship · opus\n└ secondmate · opus\n  └ scout · sonnet-5.5',
+                    'verdict ambiguous', 'left to firstmate&#39;s own call',
+                    'Live workers · 1', 'ship · opus · high · 12m · working']) {
+  if (!html.includes(want)) throw new Error('routing render missing ' + JSON.stringify(want) + ': ' + html);
+}
+if (bar.style.width !== '81%') throw new Error('probability bar width not set: ' + bar.style.width);
+apply(Object.assign({}, base, {routing: {roster: [], decisions: [], graph: [], workers: []}}));
+for (const want of ['No routing rules configured.', 'No routing decisions recorded yet.', 'No workers under way.']) {
+  if (!routing.innerHTML.includes(want)) throw new Error('empty routing missing ' + want + ': ' + routing.innerHTML);
+}
+apply(Object.assign({}, base, {routing: {error: 'routing snapshot timed out'}}));
+if (!routing.innerHTML.includes('Routing is unavailable: routing snapshot timed out')) {
+  throw new Error('routing error not shown: ' + routing.innerHTML);
+}
+JS
+  ) || fail "glance routing rendering failed: $output"
+  pass "glance page renders the roster, decisions, graph, and workers, with empty and error copy"
+}
+
 test_observation_selects_and_groups_live_backlog() {
   local home fakebin port cookie hdr body
   home=$(make_home glance-select)
@@ -2318,6 +2524,10 @@ test_human_titles_drop_internal_primary_lines
 test_needs_you_excludes_deferred_holds_and_caps_at_five
 test_waiting_groups_by_project_counts
 test_glance_page_renders_chips_and_needs_remainder
+test_routing_projection_joins_live_rows
+test_routing_failure_leaves_glance_whole
+test_observation_carries_routing_from_local_records
+test_glance_page_renders_routing
 test_observation_selects_and_groups_live_backlog
 test_multi_file_origin_null_uploads_are_atomic_and_partial
 test_unauthenticated_speak_rejected

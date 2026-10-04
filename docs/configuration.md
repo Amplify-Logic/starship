@@ -95,6 +95,7 @@ Each effective `FM_HOME` contains private operational directories.
 - Parent-owned secondmate pending-reply records under `state/pending-replies/` (`bin/fm-pending-reply-lib.sh`).
 - The captain-ledger reconciliation cursor `state/.captain-ledger-cursor` (`bin/fm-captain-ledger.sh`).
 - The cloud routine report check's shim `state/routine-reports.check.sh` and its record `state/.routine-reports` (`bin/fm-routine-report-check.sh`; [cloud-routines.md](cloud-routines.md)).
+- The dispatch decision record `state/dispatch-decisions.jsonl` (`bin/fm-dispatch-resolve.sh`; "Typed dispatch resolution" below).
 
 `config/` holds local gitignored operating choices, including explicit extension bindings under `config/extensions.d/`.
 
@@ -1351,6 +1352,15 @@ The tool never replaces firstmate's judgment, `quota-array-dispatch`, the captai
 By accepted design, a `clear` result does not enforce catalog/authentication, reasoning-class, or completion-runway gates.
 
 Firstmate passes its profile line unless it states a reason to override, such as the brief's reasoning class or an eligible-unranked-candidate note; every non-clear result returns to the full existing intake.
+
+**Decision record (state/dispatch-decisions.jsonl)**
+
+Each resolve that Jev answered appends one JSON line to the home's `state/dispatch-decisions.jsonl`, so the bridge page's Routing section ([`bridge-view.md`](bridge-view.md#routing)) can show recent decisions after the printed answer is gone.
+The line holds only the time, the task id taken from the `data/<id>/brief.md` path, the outcome, the rule whose profiles the result drew from (the answer's rule, or `default` when that rule's quota floor falls through) with the start of its `when` text, that rule's probability, and the chosen profile on a `clear` result.
+It never holds brief text, quota, or candidate evidence, and the off, no-rules, and pre-answer error paths write nothing.
+Writing is best effort: a home without `state/` or a failed write leaves the printed answer and exit status unchanged.
+The file is append-only and local; empty it with `: > state/dispatch-decisions.jsonl` to clear the history.
+The script header owns the exact line format.
 
 **Key handling and fixed settings**
 
