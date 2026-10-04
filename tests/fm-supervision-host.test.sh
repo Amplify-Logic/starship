@@ -15,14 +15,14 @@
 # on separate runners (docs/fm-test-portable-shards.md). With no argument this
 # file runs the core cases; tests/fm-supervision-host-lifecycle.test.sh passes
 # "lifecycle" for the engine-error latch, reaping, park-boundary, and
-# host-ownership cases, and "all" runs every case in one process.
+# host-ownership cases.
 # shellcheck disable=SC2016 # single-quoted scripts expand inside their own shells
 set -u
 
 SUITE_PART=${1:-core}
 case "$SUITE_PART" in
-  core|lifecycle|all) ;;
-  *) printf 'fm-supervision-host.test.sh: unknown part %s; use core, lifecycle, or all\n' "$SUITE_PART" >&2; exit 2 ;;
+  core|lifecycle) ;;
+  *) printf 'fm-supervision-host.test.sh: unknown part %s; use core or lifecycle\n' "$SUITE_PART" >&2; exit 2 ;;
 esac
 
 # shellcheck source=tests/wake-helpers.sh
@@ -2965,7 +2965,7 @@ test_superseded_host_leaves_the_owner_untouched() {
   pass "host: a host under a superseded auto-arm generation stands down without touching the owner"
 }
 
-if [ "$SUITE_PART" != lifecycle ]; then
+if [ "$SUITE_PART" = core ]; then
 test_claude_stop_hook_restores_handoff_when_successor_closed_before_exit_to_main
 test_claude_stop_hook_restores_handoff_when_successor_closed_mid_engine_turn
 test_claude_stop_hook_notifies_when_closed_successor_downtime_restore_fails
@@ -3028,7 +3028,7 @@ fi
 
 # The lifecycle part: engine-error latch, engine bounding and reaping, restarted
 # hosts, the park boundary, and host ownership.
-if [ "$SUITE_PART" != core ]; then
+if [ "$SUITE_PART" = lifecycle ]; then
 test_latch_trips_after_two_engine_errors_then_probes_and_recovers
 test_latch_keeps_attended_closes_on_main_and_skips_unopted_homes
 test_attended_latch_keeps_closes_on_main_and_records_recovery_off_main
