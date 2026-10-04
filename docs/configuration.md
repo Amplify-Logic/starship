@@ -2657,7 +2657,7 @@ Nothing re-creates that shim on its own, so while an intake is armed or owed `pe
 With no session running, nothing is delivered when the job fires: the armed state is durable and the next session's bootstrap section surfaces it as `MORNING_INTAKE: ...`, so the intake is queued until firstmate next starts rather than running on its own.
 
 `bin/fm-morning-intake-schedule.sh` owns the inspectable macOS launchd schedule and refuses to install on a home that has not opted in.
-It shares the LaunchAgent writer in `bin/fm-launchd-schedule-lib.sh` with `bin/fm-upstream-watch-schedule.sh` and `bin/fm-channel-intake-schedule.sh`, so all three schedules render, validate and load the same way.
+It shares the LaunchAgent writer in `bin/fm-launchd-schedule-lib.sh` with this fork's other scheduled owners, so every schedule renders, validates and loads the same way.
 Run `render` to inspect the complete definition, `install` to write it, load it and arm the live check, `status` to print the resolved knobs and installed file, or `remove` to unload it and disarm the check.
 `StartInterval` plus `RunAtLoad` is the whole trigger: launchd runs the job at login and then on the interval, and an interval that elapsed during sleep runs shortly after the machine wakes.
 That is why the intake is defined as the first available morning rather than a lid-open event; launchd exposes no such event here and none is claimed.
@@ -2685,10 +2685,27 @@ Notifications are refused outright until `notify_recipient_verified = true`, whi
 Source identities live in the private inventory named by `sources_file`, never in this config file and never in the tracked repository; unknown config keys are refused rather than parked.
 
 `bin/fm-channel-intake-schedule.sh` owns the inspectable macOS launchd schedule under its own `channel-intake` agent label and refuses to install on a home that has not opted in.
-It shares the LaunchAgent writer in `bin/fm-launchd-schedule-lib.sh` with the morning-intake and upstream-watch schedules, so all three render, validate and load the same way.
+It shares the LaunchAgent writer in `bin/fm-launchd-schedule-lib.sh` with this fork's other scheduled owners, so every schedule renders, validates and loads the same way.
 `StartInterval` plus `RunAtLoad` is the whole trigger, and a tick reads forward from each source's own checkpoint, so a sleep or offline gap is walked rather than skipped.
 The interval is a target detection latency and never an upper bound: sleep, offline stretches, backoff, quota and queue delay all add to it, and no instant or 24x7 availability is claimed.
 Removing the schedule disarms the live check and leaves the ledger in place, because an open obligation must survive an uninstall.
+
+## Dropped-threads digest (config/dropped-threads)
+
+An opt-in, twice-daily digest of what has been left hanging in this home's own records, delivered as one spoken sentence and a short list.
+It ships inert: with no `enabled = true` line in private gitignored `config/dropped-threads`, `bin/fm-dropped-threads.sh` does nothing at all, so cloning this repo, seeding a secondmate home, or adding a device never enrols it.
+Each home and each device opts in separately.
+
+At about the configured morning and evening times (08:30 and 19:30 local by default) it lists live and aged captain holds with any due date, open questions from work under way, other held items whose date has arrived, and in-flight tasks without a captain hold that have no stamped status event for over a day.
+It reads local records only, through the canonical snapshot's local-only modes, and it only reports: it never changes the backlog, a hold or a task, never wakes firstmate, never writes a captain inbox note, and opens no network connection.
+When nothing is waiting the slot is still recorded, with no sentence and no list, and nothing is spoken.
+
+Delivery is a durable record under private `data/dropped-threads/`, which a later Starship Voice change will read for the phone card, plus the sentence spoken at the desk through `bin/fm-speak.sh`, which stays silent unless desk voice-out is on.
+`bin/fm-dropped-threads.sh`'s header owns the record format (`fm-dropped-threads.v1`), the slot and catch-up rules, the exact commands and the config keys; `latest --json` is the reader's entry point and `preview` shows what the next digest would say without writing or speaking anything.
+
+`bin/fm-dropped-threads-schedule.sh` owns the inspectable macOS launchd schedule, written through the shared `bin/fm-launchd-schedule-lib.sh`, and refuses to install on a home that has not opted in.
+Run `render` to inspect the complete definition, `install` to write and load it, `status` to print the resolved knobs and installed file, or `remove` to unload it.
+The default cadence is 900 seconds, read back from the digest owner; set `interval_seconds = N` in `config/dropped-threads` to change it.
 
 ## Desk voice-out (config/speak)
 

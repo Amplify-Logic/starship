@@ -233,6 +233,8 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-channel-intake.sh`   | Opt-in continuous channel intake: the per-source repeat-poll gate and obligation ledger, local only, owning cadence, checkpoints, dedup, backoff, and the notification budget (docs/channel-intake.md) |
 | `fm-channel-intake-schedule.sh` | Render, install, inspect, and remove that intake's opt-in macOS launchd schedule and its live watcher check (docs/channel-intake.md) |
 | `fm-channel-intake-assess.py` | Decide from one HubSpot ticket timeline whether a partner-facing ask is awaiting the captain, for that intake's `observe --timeline-file` (docs/channel-intake.md) |
+| `fm-dropped-threads.sh`  | Opt-in twice-daily dropped-threads digest from local records: one spoken sentence plus a short list, recorded for a later Starship Voice phone card and spoken at the desk (docs/configuration.md "Dropped-threads digest") |
+| `fm-dropped-threads-schedule.sh` | Render, install, inspect, and remove that digest's opt-in macOS launchd schedule (docs/configuration.md "Dropped-threads digest") |
 | `fm-todo.sh`             | The daily to-do's durable item store: one record per ask folded from the channel ledger, morning metadata and captain-held backlog, with recorded verification, durable page commands and closure evidence (docs/channel-intake.md) |
 | `fm-todo-render.sh`      | Rebuild the day's Lavish to-do page from the item store, deterministically and with no model call, with per-line freshness (docs/channel-intake.md) |
 | `fm-launchd-schedule-lib.sh` | Shared per-home LaunchAgent render, lint, load, and remove for this fork's scheduled owners |
