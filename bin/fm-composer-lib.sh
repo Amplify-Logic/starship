@@ -580,11 +580,12 @@ fm_composer_strip_braille() {
   '
 }
 
-# The bounded row window adapters should capture for a composer read. One
-# shared policy (previously three per-backend variables that had drifted to
-# 20/20/200): the composer is bottom-anchored, so a small tail window is
-# sufficient and keeps stale scrollback (startup banners, old transcript
-# boxes) from ever competing with the live composer.
+# The bounded row window for adapters that use tail-capture composer reads and
+# for the shared inbox confirmation read. One shared policy (previously three
+# per-backend variables that had drifted to 20/20/200) keeps stale scrollback
+# (startup banners, old transcript boxes) out of those candidate sets. tmux
+# and Herdr adapter composer reads use their visible viewports instead; Herdr
+# also uses this value as the minimum Ctrl+U clear budget after a refused proof.
 FM_COMPOSER_CAPTURE_LINES=${FM_COMPOSER_CAPTURE_LINES:-20}
 
 # Pi allows a multi-line composer between its horizontal separators. Bound the
@@ -793,6 +794,37 @@ _fm_composer_pi_separator_row() {  # <trimmed-row>
     *────────*) return 0 ;;
   esac
   return 1
+}
+
+# _fm_composer_titled_rule_row: 0 when a trimmed row is a composer rule with a
+# session title burned into it (Claude Code draws a named session's title into
+# its composer's TOP rule: `──────── <name> ─`, issues #5601 and #5558), proven
+# by collapsing to exactly the column width of <plain-rule-spaces>, the partner
+# closing rule already mapped to spaces.
+#
+# This is deliberately NOT a relaxation of _fm_composer_pi_separator_row, and
+# the two must not be merged: that predicate also feeds the pi identity
+# conjunction, so it stays strictly dashes-only. This one has the single
+# consumer _fm_composer_bare_rule_sandwich.
+#
+# The row must OPEN with the same 8-column dash run the strict separator
+# requires. Width is proven by comparing canonical space strings, never by
+# `${#row}`, which counts characters under UTF-8 and bytes under LC_ALL=C
+# (issue #1988). Title text is ASCII-printable only, the same boundary
+# _fm_composer_titled_bottom_ok holds; any other glyph leaves residue, and the
+# verdict stays `unknown`, the safe direction.
+_fm_composer_titled_rule_row() {  # <trimmed-row> <plain-rule-spaces>
+  local row=$1 expected=$2 spaces
+  case "$row" in
+    ────────*) ;;
+    *) return 1 ;;
+  esac
+  spaces=${row//─/ }
+  spaces=$(printf '%s' "$spaces" | LC_ALL=C sed 's/[!-~]/ /g')
+  case "$spaces" in
+    *[![:space:]]*) return 1 ;;
+  esac
+  [ "$spaces" = "$expected" ]
 }
 
 # Row-scan results are returned through FM_COMPOSER_SCAN_* globals (bash 3.2
@@ -1468,6 +1500,42 @@ _fm_composer_locate_footer_zone() {  # <plain>
     && [ "$FM_COMPOSER_SCAN_BARE_ROW" -le "$FM_COMPOSER_FOOTER_LAST" ]
 }
 
+# _fm_composer_bare_rule_sandwich: 0 when bare agent-glyph <row> sits in its
+# own titled composer: a titled rule directly above it and the screen's only
+# unmatched separator directly below its last row, which is that composer's
+# closing rule. A draft too long for one row wraps onto continuation rows
+# between the glyph and that rule; they are the same rows the bare selection
+# extends over below, so a wrapped draft is spared exactly like a one-row one.
+#
+# The cursorless staleness rule reads an unmatched separator BELOW a candidate
+# as proof the candidate is scrollback. A titled top rule never opens the
+# separator pair, so the composer's own closing rule becomes that unmatched
+# separator and a genuinely idle composer read `unknown`. Adjacency on BOTH
+# edges keeps the staleness rule intact everywhere else: a glyph stranded in
+# scrollback has transcript rows, not its own rules, around it.
+_fm_composer_bare_rule_sandwich() {  # <plain-screen> <row>
+  local plain=$1 row=$2 above below last=$2 next
+  [ "$row" -ge 1 ] || return 1
+  next=$((row + 1))
+  while [ "$next" -lt "$FM_COMPOSER_SCAN_PI_LAST_SEPARATOR" ]; do
+    below=$(_fm_composer_screen_row "$next" "$plain")
+    fm_composer_normalize_trim_var below
+    [ -n "$below" ] || return 1
+    ! fm_composer_row_has_edge "$below" || return 1
+    ! _fm_composer_row_is_omp_status "$below" || return 1
+    ! _fm_composer_row_is_braille_furniture "$below" || return 1
+    last=$next
+    next=$((next + 1))
+  done
+  [ "$FM_COMPOSER_SCAN_PI_LAST_SEPARATOR" -eq "$((last + 1))" ] || return 1
+  below=$(_fm_composer_screen_row "$((last + 1))" "$plain")
+  fm_composer_normalize_trim_var below
+  _fm_composer_pi_separator_row "$below" || return 1
+  above=$(_fm_composer_screen_row "$((row - 1))" "$plain")
+  fm_composer_normalize_trim_var above
+  _fm_composer_titled_rule_row "$above" "${below//─/ }"
+}
+
 _fm_composer_select_cursorless() {
   local plain=$1 generic=-1 next boundary raw trimmed glyph bare footer=0
   FM_COMPOSER_SELECTED_KIND=
@@ -1523,18 +1591,23 @@ _fm_composer_select_cursorless() {
   fi
   # A lower unmatched separator below the generic candidate proves that
   # candidate is stale decoration (pi chrome or a leftover banner) rather than
-  # the live composer - but ONLY for a container shape. It must NOT wipe a bare
-  # AGENT GLYPH row: Claude and Codex frame their live unbordered composer with
-  # full-width horizontal rules, and a custom statusLine or bypass-permissions
-  # footer sits below those rules. Reading that frame as stale pi classified an
-  # idle Claude primary as unknown forever and silently blocked every away-mode
-  # escalation delivery (2026-07-20/21 overnight incident: 1630 deferred
-  # injects, 0 deliveries).
+  # the live composer. The exception is a bare AGENT GLYPH row in its own
+  # titled composer: Claude frames a named session's unbordered composer with a
+  # titled top rule and a plain closing rule, with a custom statusLine or
+  # bypass-permissions footer below. Reading that frame as stale pi classified
+  # an idle Claude primary as unknown forever and silently blocked every
+  # away-mode escalation delivery (2026-07-20/21 overnight incident: 1630
+  # deferred injects, 0 deliveries).
   if [ "$FM_COMPOSER_SCAN_PI_PAIR_FOUND" = 0 ] \
-     && [ "$FM_COMPOSER_SCAN_PI_LAST_SEPARATOR" -gt "$generic" ] \
-     && [ "$FM_COMPOSER_SELECTED_KIND" != bare ]; then
-    FM_COMPOSER_SELECTED_KIND=
-    return 1
+     && [ "$FM_COMPOSER_SCAN_PI_LAST_SEPARATOR" -gt "$generic" ]; then
+    # Spare only a bare glyph inside its own titled composer rules; see
+    # _fm_composer_bare_rule_sandwich for why that shape is not scrollback.
+    if ! { [ "$FM_COMPOSER_SELECTED_KIND" = bare ] \
+           && [ "$generic" = "$FM_COMPOSER_SCAN_BARE_ROW" ] \
+           && _fm_composer_bare_rule_sandwich "$plain" "$FM_COMPOSER_SCAN_BARE_ROW"; }; then
+      FM_COMPOSER_SELECTED_KIND=
+      return 1
+    fi
   fi
   if [ "$FM_COMPOSER_SCAN_SHELL_ROW" -gt "$generic" ]; then
     FM_COMPOSER_SELECTED_KIND=

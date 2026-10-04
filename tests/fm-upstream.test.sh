@@ -212,12 +212,12 @@ SH
   pass "bootstrap wires the UPSTREAM diagnostic"
 }
 
-test_skill_and_agents_trigger_mention_upstream() {
+test_skill_and_trigger_index_mention_upstream() {
   assert_grep 'UPSTREAM' "$ROOT/.agents/skills/bootstrap-diagnostics/SKILL.md" \
     "bootstrap-diagnostics skill lost UPSTREAM handling"
-  assert_grep '`UPSTREAM:`' "$ROOT/AGENTS.md" \
-    "AGENTS.md bootstrap-diagnostics trigger lost UPSTREAM"
-  pass "skill and AGENTS.md trigger mention UPSTREAM"
+  assert_grep '`UPSTREAM:`' "$ROOT/.agents/skills/agent-skill-trigger-index/SKILL.md" \
+    "the agent-only trigger index lost the bootstrap-diagnostics UPSTREAM trigger"
+  pass "skill and agent-only trigger index mention UPSTREAM"
 }
 
 test_reports_commits_behind_with_subjects
@@ -227,4 +227,4 @@ test_silent_when_origin_equals_upstream
 test_silent_when_current
 test_silent_for_secondmate_home
 test_bootstrap_wires_upstream_line
-test_skill_and_agents_trigger_mention_upstream
+test_skill_and_trigger_index_mention_upstream

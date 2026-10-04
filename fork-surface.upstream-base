@@ -1,7 +1,9 @@
-# upstream_base = 8d2ee291107d14f37ca7ef280199bebed22578c4
+# upstream_base = e31bc6e620ca532c2e0e0b72f3fd7c0869a12270
 .agents/skills/afk/SKILL.md
+.agents/skills/agent-skill-trigger-index/SKILL.md
 .agents/skills/ahoy/SKILL.md
 .agents/skills/ask-user-authority/SKILL.md
+.agents/skills/away-quiet-supervision/SKILL.md
 .agents/skills/bearings/SKILL.md
 .agents/skills/bearings/assets/board-template.html
 .agents/skills/bootstrap-diagnostics/SKILL.md
@@ -32,22 +34,29 @@
 .agents/skills/harness-adapters/references/harness/opencode.md
 .agents/skills/harness-adapters/references/harness/pi.md
 .agents/skills/harness-adapters/references/harness/rovo.md
+.agents/skills/operational-home-layout/SKILL.md
 .agents/skills/process-event-sources/SKILL.md
 .agents/skills/project-management/SKILL.md
 .agents/skills/quiet/SKILL.md
 .agents/skills/quota-array-dispatch/SKILL.md
+.agents/skills/scout-completion/SKILL.md
 .agents/skills/secondmate-provisioning/SKILL.md
+.agents/skills/session-start-recovery/SKILL.md
+.agents/skills/ship-landing/SKILL.md
 .agents/skills/stow/SKILL.md
 .agents/skills/stuck-crewmate-recovery/SKILL.md
 .agents/skills/updatefirstmate/SKILL.md
+.agents/skills/validation-supervision/SKILL.md
 .claude/mods/firstmate-calm/.claude-plugin/plugin.json
 .claude/mods/firstmate-calm/hooks/hooks.json
 .claude/mods/firstmate-calm/hooks/register.ts
+.claude/mods/firstmate-calm/lib/fm-branch-notes.ts
 .claude/mods/firstmate-calm/lib/fm-calm-presentation.ts
 .claude/mods/firstmate-calm/lib/fm-calm-preservation.ts
 .claude/mods/firstmate-calm/lib/fm-calm-ship-raster.ts
 .claude/mods/firstmate-calm/lib/fm-calm-working-ship-sprite.ts
 .claude/mods/firstmate-calm/lib/fm-operational-input.ts
+.claude/mods/firstmate-calm/tests/branch-notes.test.ts
 .claude/mods/firstmate-calm/tests/calm.test.ts
 .claude/mods/firstmate-calm/tests/support.ts
 .claude/mods/firstmate-calm/tests/working-ship.test.ts
@@ -176,15 +185,19 @@ bin/fm-herdr-ci-cleanup.sh
 bin/fm-herdr-lab-viewer.py
 bin/fm-herdr-lab.sh
 bin/fm-herdr-session-cleanup.sh
+bin/fm-hold-reason-lib.sh
 bin/fm-home-seed.sh
 bin/fm-home-summary-refresh.sh
 bin/fm-hook-host-lib.sh
+bin/fm-host-mirror.sh
 bin/fm-inactive-reconcile.sh
 bin/fm-inbox.sh
 bin/fm-install-actionlint.sh
 bin/fm-install-herdr.sh
 bin/fm-install-shellcheck.sh
 bin/fm-install-treehouse.sh
+bin/fm-jev-mem-guard.py
+bin/fm-jev-mem-guard.sh
 bin/fm-kimi-turnend-hook.sh
 bin/fm-lab-home.sh
 bin/fm-landed-lib.sh
@@ -193,6 +206,7 @@ bin/fm-lease.sh
 bin/fm-line-cap-lib.sh
 bin/fm-lint-workflows.sh
 bin/fm-lint.sh
+bin/fm-live-lab.sh
 bin/fm-lock-lib.sh
 bin/fm-lock.sh
 bin/fm-mail-check.sh
@@ -206,6 +220,7 @@ bin/fm-nm-run-lib.sh
 bin/fm-on.sh
 bin/fm-operational-input.sh
 bin/fm-parent-channel-lib.sh
+bin/fm-path-lib.sh
 bin/fm-peek.sh
 bin/fm-pending-reply-lib.sh
 bin/fm-pr-check.sh
@@ -247,6 +262,7 @@ bin/fm-remote-job-reap-orphans.sh
 bin/fm-remote-job-worker.sh
 bin/fm-remote-readiness-lib.sh
 bin/fm-remote-secondmate-control.sh
+bin/fm-remote-secondmate-relaunch.sh
 bin/fm-review-diff.sh
 bin/fm-secondmate-charter-lib.sh
 bin/fm-secondmate-liveness-lib.sh
@@ -336,6 +352,7 @@ docs/gerrit-change-watch.md
 docs/gerrit-forge-integration.md
 docs/gitlab-merge-watch.md
 docs/herdr-backend.md
+docs/jev-guards.md
 docs/orca-backend.md
 docs/pi-supervision-branch-poster.svg
 docs/pi-supervision-branch.md
@@ -472,6 +489,7 @@ tests/fm-fleet-ledger.test.sh
 tests/fm-fleet-snapshot-view.test.sh
 tests/fm-fleet-sync.test.sh
 tests/fm-forge-detect.test.sh
+tests/fm-fork-free-helpers.test.sh
 tests/fm-gate-refuse.test.sh
 tests/fm-gemini-harness.test.sh
 tests/fm-git-strip-ai-trailers.test.sh
@@ -493,13 +511,18 @@ tests/fm-herdr-session-cleanup.test.sh
 tests/fm-herdr-submit-confirm-live-e2e.test.sh
 tests/fm-herdr-version-floor-live-e2e.test.sh
 tests/fm-home-summary-refresh.test.sh
+tests/fm-host-mirror-live-e2e.test.sh
+tests/fm-host-mirror.test.sh
 tests/fm-inactive-reconcile.test.sh
 tests/fm-inbox.test.sh
+tests/fm-jev-mem-guard.test.sh
 tests/fm-kimi-harness.test.sh
 tests/fm-launch-prompt-signals-live-e2e.test.sh
 tests/fm-lint-workflows.test.sh
 tests/fm-lint.test.sh
 tests/fm-live-gate.test.sh
+tests/fm-live-lab-up-mate.test.sh
+tests/fm-live-lab.test.sh
 tests/fm-mail-check.test.sh
 tests/fm-mail.test.sh
 tests/fm-muse-harness.test.sh
@@ -511,6 +534,7 @@ tests/fm-omp-primary-live-e2e.test.sh
 tests/fm-on.test.sh
 tests/fm-opencode-primary-live-e2e.test.sh
 tests/fm-operational-input.test.sh
+tests/fm-parent-channel-scan-exclusion.test.sh
 tests/fm-peek-remote.test.sh
 tests/fm-pending-reply.test.sh
 tests/fm-pi-branch-extension.test.sh
@@ -519,6 +543,7 @@ tests/fm-pi-branch-responsiveness-live-e2e.test.sh
 tests/fm-pi-codex-native.test.sh
 tests/fm-pi-primary-live-e2e.test.sh
 tests/fm-pi-primary-types.test.sh
+tests/fm-pi-seeded-home-trust-live-e2e.test.sh
 tests/fm-pi-watch-extension.test.sh
 tests/fm-pi-windows-shell-invocation.test.sh
 tests/fm-pr-check-security.test.sh
@@ -534,6 +559,7 @@ tests/fm-public-followup.test.sh
 tests/fm-quota-array-dispatch-live-e2e.test.sh
 tests/fm-quota-choose.test.sh
 tests/fm-remote-backlog-handoff.test.sh
+tests/fm-remote-delta-read.test.sh
 tests/fm-remote-doctor.test.sh
 tests/fm-remote-entrypoint.test.sh
 tests/fm-remote-herdr-guard.test.sh
@@ -542,6 +568,7 @@ tests/fm-remote-job.test.sh
 tests/fm-remote-reply.test.sh
 tests/fm-remote-secondmate-lifecycle-e2e.test.sh
 tests/fm-remote-secondmate-parent-binding.test.sh
+tests/fm-remote-secondmate-relaunch.test.sh
 tests/fm-remote-secondmate-trace-context.test.sh
 tests/fm-remote-transport-lanes.test.sh
 tests/fm-review-diff.test.sh
@@ -574,6 +601,7 @@ tests/fm-spawn-batch.test.sh
 tests/fm-spawn-compact-adviser-disable-remote.test.sh
 tests/fm-spawn-compact-adviser-disable.test.sh
 tests/fm-spawn-dispatch-profile.test.sh
+tests/fm-spawn-orca-worktree.test.sh
 tests/fm-spawn-pool-base-freshen.test.sh
 tests/fm-spawn-worktree-settle.test.sh
 tests/fm-startup-memory-budget.test.sh
@@ -582,6 +610,7 @@ tests/fm-stat-shadowing.test.sh
 tests/fm-stow-cascade.test.sh
 tests/fm-subagent-pretool-check.test.sh
 tests/fm-supervision-events.test.sh
+tests/fm-supervision-host-attended-live-e2e.test.sh
 tests/fm-supervision-host-live-e2e.test.sh
 tests/fm-supervision-host.test.sh
 tests/fm-supervision-instructions.test.sh

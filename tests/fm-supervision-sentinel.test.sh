@@ -856,7 +856,8 @@ test_watch_arm_validates_arguments_before_sentinel_registration() {
   make_primary "$home"
   home=$(cd "$home" && pwd -P)
   calls="$home/sentinel-calls.log"
-  cp "$ROOT/bin/fm-watch-arm.sh" "$ROOT/bin/fm-wake-lib.sh" "$ROOT/bin/fm-supervision-lib.sh" "$home/bin/" \
+  cp "$ROOT/bin/fm-watch-arm.sh" "$ROOT/bin/fm-wake-lib.sh" "$ROOT/bin/fm-supervision-lib.sh" \
+    "$ROOT/bin/fm-path-lib.sh" "$ROOT/bin/fm-gate-refuse-lib.sh" "$home/bin/" \
     || fail "could not stage the scratch watcher-arm tree"
   cat > "$home/bin/fm-watch.sh" <<SH
 #!/usr/bin/env bash
@@ -890,7 +891,8 @@ test_watch_arm_registers_the_host_sentinel_only_after_a_healthy_watcher() {
   home=$(cd "$home" && pwd -P)
   order="$home/arm-order.log"
   out="$home/arm.out"
-  cp "$ROOT/bin/fm-watch-arm.sh" "$ROOT/bin/fm-wake-lib.sh" "$ROOT/bin/fm-supervision-lib.sh" "$home/bin/" \
+  cp "$ROOT/bin/fm-watch-arm.sh" "$ROOT/bin/fm-wake-lib.sh" "$ROOT/bin/fm-supervision-lib.sh" \
+    "$ROOT/bin/fm-path-lib.sh" "$ROOT/bin/fm-gate-refuse-lib.sh" "$home/bin/" \
     || fail "could not stage the scratch watcher-arm tree"
   cat > "$home/bin/fm-watch.sh" <<SH
 #!/usr/bin/env bash

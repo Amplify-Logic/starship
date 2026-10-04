@@ -9,7 +9,7 @@ Cross-harness provider and credential identity is owned by `references/common/mo
 |---|---|
 | Binary | `fm_cursor_resolve_binary` in `../../../bin/fm-cursor-lib.sh` resolves stable launcher `cursor-agent` or legacy `agent`, never `cursor`; both symlink into `~/.local/share/cursor-agent/versions/<version>/cursor-agent`, whose target auto-update replaces. |
 | Launch | Positional instructions with `--trust`, `--yolo`, optional `--model <model>`, and `--workspace <absolute-task-worktree>`, after clearing foreign primary markers. |
-| Attribution | Cursor can append a Co-authored-by trailer after the typed message. Every fleet launch installs the pane-scoped commit-msg strip in `../../../bin/fm-git-strip-ai-trailers.sh`, which removes known AI trailers and leaves human co-authors and the author identity untouched. |
+| Attribution | Cursor can append a Co-authored-by trailer after the typed message. Unless the home sets `config/keep-ai-trailers` (`../../../../../docs/configuration.md` "Commit attribution"), every fleet launch installs the pane-scoped commit-msg strip in `../../../bin/fm-git-strip-ai-trailers.sh`, which removes known AI trailers and leaves human co-authors and the author identity untouched. |
 | Models | Use current-account `cursor-agent --list-models` or legacy `agent --list-models`; Grok reasoning tiers are model-id suffixes whose set differs by model generation, so choose an id the listing actually returns rather than assuming a tier. |
 | Busy state | `../../../bin/fm-busy-lib.sh` folds the per-conversation transcript as `cursor-transcript`: `role:user` opens and typed `turn_ended` closes success or abort, covering manual interrupt; nothing is armed or seeded, and this backend-agnostic source was identical on tmux and Herdr. |
 | Exit command | `/exit`. |
@@ -69,7 +69,7 @@ Example: `../../../bin/fm-spawn.sh <task-id> <project> --scout --harness cursor 
 ## Primary integration
 
 Primary supervision is the stop-hook park in `../../../docs/supervision-protocols/cursor.md` through tracked `.cursor/hooks.json`; primary and secondmate launches require `--trust` or hooks do not load.
-In a home with `config/supervision-host` the park runs the supervision host instead of `../../../bin/fm-watch-arm.sh`, with Claude's print mode as its headless engine; [`supervision-host.md`](../../../../../docs/supervision-host.md) owns the host.
+In a home with `config/supervision-host` and no `config/supervision-host-off` the park runs the supervision host instead of `../../../bin/fm-watch-arm.sh`, with Claude's print mode as its headless engine; [`supervision-host.md`](../../../../../docs/supervision-host.md) owns the host.
 
 This fork additionally carries a guarded primary LAUNCHER for Cursor that upstream does not: `../../../../bin/fm-primary.sh cursor-grok` runs `agent --yolo --model cursor-grok-4.6-high` with `FM_PRIMARY_HARNESS=cursor`, and `cursor-grok45` keeps the previous Grok generation launchable with identical mechanics.
 The launcher refuses a Cursor build that is not its exact certified version, because Cursor's Stop turn-end hook is verified per build rather than merely drifted.

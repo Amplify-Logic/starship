@@ -72,7 +72,12 @@ run_tasks add alpha-run-retries-a3 "Give the run its retries" --kind ship --repo
 run_tasks add alpha-run-exception-x1 "Reconcile the run's numbers" --kind ship --repo alpha
 run_tasks add alpha-outward-invite-o1 "Invite the first outside crew" --kind ship --repo alpha
 run_tasks add alpha-decision-d1 "Answer whether the run may email people" --kind captain --repo alpha
-run_tasks hold alpha-decision-d1 --reason "Sending mail is outward and irreversible, so it is the captain's word" --kind captain
+# bin/fm-captain-hold.sh stores a captain's reason encoded, so this one is stored
+# the same way and must reach the captain as the words that were written.
+DECISION_REASON="Sending mail is outward (and irreversible), so it is the captain's word"
+# shellcheck source=bin/fm-hold-reason-lib.sh
+. "$ROOT/bin/fm-hold-reason-lib.sh"
+run_tasks hold alpha-decision-d1 --reason "$(fm_hold_reason_encode "$DECISION_REASON")" --kind captain
 run_tasks add alpha-parked-p1 "Rebuild the old importer" --kind ship --repo alpha
 run_tasks hold alpha-parked-p1 --reason "Parked on captain order until the run is boring" --kind parked
 run_tasks add alpha-tagged-t1 "Check every number against its source" --kind ship --repo alpha \
@@ -177,6 +182,15 @@ test_captain_calls_are_separated_from_parked_work() {
     = "Parked on captain order until the run is boring" ] \
     || fail "the plain park reason must be carried through"
   pass "answers the captain owes are separated from work parked with a reason"
+}
+
+test_an_encoded_decision_reason_reaches_the_captain_decoded() {
+  local node
+  node=$(chart render /p/alpha/node/alpha-decision-d1) || fail "a decision node did not render"
+  assert_contains "$node" "Sending mail is outward (and irreversible), so it is the captain&#39;s word" \
+    "the decision node must show the decoded reason"
+  assert_not_contains "$node" "fm-hold-v1:" "the decision node must not show the stored encoding"
+  pass "an encoded captain-hold reason reaches the captain as its decoded words"
 }
 
 test_a_project_is_claimed_by_its_own_name_and_its_aliases() {
@@ -502,6 +516,7 @@ test_charter_parses_into_lanes
 test_goal_token_and_covers_mapping
 test_unmapped_work_lands_in_a_visible_bucket
 test_captain_calls_are_separated_from_parked_work
+test_an_encoded_decision_reason_reaches_the_captain_decoded
 test_a_project_is_claimed_by_its_own_name_and_its_aliases
 test_a_project_without_a_charter_still_renders
 test_every_view_is_reachable_and_nothing_is_a_dead_end

@@ -30,7 +30,7 @@ install_hook_scripts() {
   local dir=$1 script
   mkdir -p "$dir/bin"
   for script in fm-claude-reply-speak.sh fm-primary-scope-lib.sh fm-session-lock-lib.sh \
-    fm-hook-host-lib.sh fm-wake-lib.sh fm-cursor-lib.sh; do
+    fm-hook-host-lib.sh fm-wake-lib.sh fm-path-lib.sh fm-cursor-lib.sh; do
     cp "$ROOT/bin/$script" "$dir/bin/$script"
   done
   chmod +x "$dir/bin/fm-claude-reply-speak.sh"

@@ -697,9 +697,11 @@ fm_backend_source_readable() {  # <path>
 }
 
 fm_backend_source() {  # <name>
-  local name=$1 adapter rel lib_path
+  local name=$1 adapter rel sibling
   fm_backend_validate "$name" || return 1
   adapter="$FM_BACKEND_LIB_DIR/backends/$name.sh"
+  # The sibling list rides in the positional parameters: zsh does not
+  # word-split an unquoted expansion, so a space-separated string is one path.
   case "$name" in
     tmux)
       set -- fm-tmux-lib.sh fm-composer-lib.sh fm-cursor-lib.sh fm-session-lock-lib.sh fm-agent-process-lib.sh fm-gemini-lib.sh
@@ -721,12 +723,9 @@ fm_backend_source() {  # <name>
       ;;
   esac
   fm_backend_source_readable "$adapter" || return 1
-  # The sibling list is the positional parameters, so zsh, which does not
-  # word-split an unquoted expansion, walks it exactly as bash does; the loop
-  # variable avoids zsh's special `path` array, which would hide PATH.
   for rel in "$@"; do
-    lib_path="$FM_BACKEND_LIB_DIR/$rel"
-    fm_backend_source_readable "$lib_path" || return 1
+    sibling="$FM_BACKEND_LIB_DIR/$rel"
+    fm_backend_source_readable "$sibling" || return 1
   done
   case "$name" in
     tmux)

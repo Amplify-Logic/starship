@@ -33,7 +33,12 @@ launch_without_case_paths() {  # <launch-line> <home> <task-id> <spawn-bin-dir>
   local launch=$1 home=$2 id=$3 bindir=$4
   launch=${launch//$home\/data\/$id/<TASK-DATA>}
   launch=${launch//$home\/state\/$id.git-hooks/<TASK-HOOKS>}
-  printf '%s' "${launch//$bindir/<BIN>}"
+  launch=${launch//$home\/state\/$id.inbox/<TASK-INBOX>}
+  launch=${launch//$home\/state\/operational-inbox/<OPERATIONAL-INBOX>}
+  launch=${launch//${bindir%/bin}\/.agents\/skills/<SKILLS>}
+  # The launch-brief doorbell names a fresh record on every spawn.
+  printf '%s' "${launch//$bindir/<BIN>}" \
+    | sed -E 's#<OPERATIONAL-INBOX>/[0-9]+-[0-9a-f]+\.msg#<OPERATIONAL-INBOX>/<RECORD>.msg#g'
 }
 
 make_spawn_fakebin() {
@@ -239,8 +244,8 @@ test_absent_registry_changes_nothing() {
   launch_without_case_paths "$launch" "$HOME_DIR" "$id" "$ROOT/bin" > "$BASELINE_LAUNCH_FILE"
   assert_contains "$launch" "claude --dangerously-skip-permissions" \
     "absent registry did not produce an ordinary claude launch line"
-  assert_contains "$launch" "encode launch-brief" \
-    "absent registry did not produce a launch line carrying the brief"
+  assert_contains "$launch" "Firstmate operational input waiting: read" \
+    "absent registry did not produce a launch line carrying the brief's doorbell"
   assert_no_grep 'account=' "$HOME_DIR/state/$id.meta" "absent registry still recorded an account in meta"
   assert_no_grep 'CLAUDE_CONFIG_DIR' "$LAUNCH_LOG" "absent registry still pinned a Claude home"
   pass "fm-spawn: an absent config/accounts.json leaves the launch and meta unchanged"
@@ -258,6 +263,10 @@ test_absent_library_degrades_without_error() {
   bin="$TMP_ROOT/account-nolib/bin"
   cp -R "$ROOT/bin" "$bin"
   rm -f "$bin/fm-account-lib.sh"
+  # The Claude launch grants the code root's skills directory, so the copied
+  # root needs one.
+  mkdir -p "$TMP_ROOT/account-nolib/.agents"
+  ln -s "$ROOT/.agents/skills" "$TMP_ROOT/account-nolib/.agents/skills"
   write_registry "$HOME_DIR"
 
   out=$(SPAWN="$bin/fm-spawn.sh" run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")

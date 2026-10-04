@@ -430,7 +430,7 @@ test_kimi_refusal_reports_its_own_launch_line() {
 }
 
 # The happy path must not change: one launch line goes into the pane, it names
-# the brief file rather than pasting its text, and the spawn reports success.
+# the brief's record rather than pasting its text, and the spawn reports success.
 test_happy_path_launch_is_unchanged() {
   local out status deliveries
   make_case claude-ok claude claude
@@ -443,16 +443,19 @@ test_happy_path_launch_is_unchanged() {
   assert_contains "$out" "spawned $ID harness=claude" "healthy spawn did not report success"
   assert_grep 'CLAUDE_CODE_AUTO_COMPACT_WINDOW=500000 CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false' \
     "$EVENT_LOG" "the launch line was not sent unchanged"
-  assert_grep "encode launch-brief < '$HOME_DIR/data/$ID/launch-brief.md'" "$EVENT_LOG" \
-    "the launch line no longer names this task's brief file"
+  # Claude's launch names the brief's record-backed doorbell, not its text.
+  assert_grep "Firstmate operational input waiting: read" "$EVENT_LOG" \
+    "the launch line no longer rings the brief's doorbell"
+  assert_grep "/state/operational-inbox/" "$EVENT_LOG" \
+    "the launch line no longer names this task's brief record"
   assert_no_grep 'second line of the brief' "$EVENT_LOG" \
-    "the launch line pasted the brief's text instead of naming its file"
-  deliveries=$(grep -cF "encode launch-brief < '$HOME_DIR/data/$ID/launch-brief.md'" "$EVENT_LOG" || true)
+    "the launch line pasted the brief's text instead of naming its record"
+  deliveries=$(grep -cF "Firstmate operational input waiting: read" "$EVENT_LOG" || true)
   [ "$deliveries" = 1 ] \
     || fail "expected the brief to be named on the launch line exactly once, saw $deliveries deliveries"
   assert_present "$HOME_DIR/state/$ID.meta" "healthy spawn did not write task meta"
   cleanup_task_tmp "$ID"
-  pass "the healthy launch path is unchanged and still names the brief file on the launch line"
+  pass "the healthy launch path is unchanged and still names the brief record on the launch line"
 }
 
 # pi execs into a generic node process that cannot be attributed back to pi from

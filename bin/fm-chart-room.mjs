@@ -36,6 +36,7 @@ const SHOW_CONCURRENCY = 8;
 // one read of the records, so a read that stalls is a failure, not a wait.
 const CHILD_TIMEOUT_MS = 15000;
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+const HOLD_REASON_LIB = path.join(path.dirname(fileURLToPath(import.meta.url)), "fm-hold-reason-lib.sh");
 
 function fail(message, code = 1) {
   console.error(`fm-chart-room: ${message}`);
@@ -56,7 +57,7 @@ function parseArgs(argv) {
 
 // --- reading the records ----------------------------------------------------
 
-function runCapture(command, args, cwd) {
+function runCapture(command, args, cwd, input) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { cwd, encoding: "utf8" });
     let stdout = "";
@@ -75,6 +76,8 @@ function runCapture(command, args, cwd) {
     }, CHILD_TIMEOUT_MS);
     child.stdout.on("data", (chunk) => { stdout += chunk; });
     child.stderr.on("data", (chunk) => { stderr += chunk; });
+    child.stdin.on("error", () => {});
+    child.stdin.end(input);
     child.on("error", (error) => settle(reject, new Error(`${command} could not run: ${error.message}`)));
     child.on("close", (status) => {
       if (status !== 0) settle(reject, new Error(`${command} ${args.join(" ")} failed: ${(stderr || stdout).trim()}`));
@@ -142,11 +145,17 @@ function unreadableTask(id) {
   return { id, title: id, unreadable: true };
 }
 
+// Captain-hold reasons are stored encoded; bin/fm-hold-reason-lib.sh owns decoding them.
+async function taskShow(home, id) {
+  const shown = await runCapture("tasks-axi", ["show", id, "--full"], home);
+  return runCapture("bash", ["-c", '. "$1" && fm_hold_reason_decode_stream', "bash", HOLD_REASON_LIB], home, shown);
+}
+
 async function loadTasks(home) {
   const listed = taskIdsFromList(await runCapture("tasks-axi", ["list"], home));
   return mapPool(listed, SHOW_CONCURRENCY, async (id) => {
     try {
-      return parseShow(await runCapture("tasks-axi", ["show", id, "--full"], home)) || unreadableTask(id);
+      return parseShow(await taskShow(home, id)) || unreadableTask(id);
     } catch {
       return unreadableTask(id);
     }
