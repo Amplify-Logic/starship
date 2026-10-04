@@ -20,17 +20,36 @@
 #       item, no LaunchAgent, no privacy prompt. Refuses to replace a
 #       ~/.local/bin/peekaboo that is not its own link. Removal is in
 #       .agents/skills/macos-computer-use/SKILL.md.
-#   fm-computer-use.sh elements --app <app> [--window-title <title>] [--all] [--max <n>] [--from <see.json>]
-#       One `peekaboo see --json` read of the app's window, printed compactly:
+#   fm-computer-use.sh elements --app <app> [--window-title <title>] [--all] [--max <n>] [--screenshot] [--thin <n>] [--from <see.json>]
+#       Read the app's window as its element list, without a screenshot
+#       (`peekaboo see --tree --no-screenshot --json`), so a minimised window
+#       or one on another desktop still reads. <app> is a name or a bundle id
+#       (com.apple.Notes); when a name matches several processes, the bundle id
+#       of the one running app with exactly that name is used instead, and the
+#       header names it as "<app> (<bundle id>)" to pass to later peekaboo calls.
+#       Printed compactly:
 #         "app: <app> | window: <title> | dialog: yes|no | snapshot: <id> | elements: <shown>/<total>"
-#       then one line per element, "<id> <role> '<label>'" plus " = <value>",
+#       with "<id> (read-only)" when Peekaboo says its ids cannot be acted on,
+#       plus " | partial: <Peekaboo's warning>" when Peekaboo says the list is
+#       incomplete or cut at its element limit, and " | screenshot: <path>"
+#       when a window image was taken, then one
+#       line per element, "<id> <role> '<label>'" plus " = <value>",
 #       " (disabled)" and " (selected)" where they apply. By default only
 #       actionable elements and elements carrying readable text are listed;
 #       --all lists every element. --max caps the list (default 200).
+#       A second, annotated window image read is taken only with --screenshot
+#       or when fewer than --thin elements (default 5; 0 never) are listed;
+#       its list replaces the first so ids match the image. When that image
+#       cannot be taken the element list is still printed and Peekaboo's
+#       reason goes to stderr; that is a failure (exit 1) only with
+#       --screenshot. A failed read prints Peekaboo's own reason.
 #       --from renders a saved `see --json` file instead of reading the screen.
+#   fm-computer-use.sh front [--all] [--max <n>] [--screenshot] [--thin <n>]
+#       The same read of whatever window is in front; the header names the app.
+#       Read-only: it never brings anything forward or sends input.
 #   fm-computer-use.sh settle --app <app> [--window-title <title>] [--timeout <s>] [--interval <s>]
-#       Re-read the element list until two consecutive reads agree, then print
-#       the settled list and exit 0. Exits 3 with the last list printed when
+#       Re-read the element list (no screenshot) until two consecutive reads
+#       agree, then print the settled list and exit 0. Exits 3 with the last list printed when
 #       --timeout (default 5) passes first. --interval defaults to 0.3.
 #   fm-computer-use.sh facts
 #       Print the screen state the guard reads, as one JSON object:
@@ -172,12 +191,12 @@ cmd_install() {
   echo "installed peekaboo $PEEKABOO_PIN at $link -> $lib/peekaboo"
 }
 
-# render_elements <see-json-file> <all:0|1> <max>
+# render_elements <see-json-file> <all:0|1> <max> [screenshot-path] [resolved-bundle-id]
 render_elements() {
-  python3 - "$1" "$2" "$3" <<'PY'
+  python3 - "$1" "$2" "$3" "${4:-}" "${5:-}" <<'PY'
 import json, sys
 
-path, show_all, cap = sys.argv[1], sys.argv[2] == "1", int(sys.argv[3])
+path, show_all, cap, shot, resolved = sys.argv[1], sys.argv[2] == "1", int(sys.argv[3]), sys.argv[4], sys.argv[5]
 try:
     with open(path, encoding="utf-8") as fh:
         doc = json.load(fh)
@@ -233,41 +252,128 @@ for el in data["ui_elements"]:
 total = len(lines)
 shown = lines[:cap]
 dialog = "yes" if data.get("is_dialog") else "no"
-print(f"app: {text(data.get('application_name'))} | window: {text(data.get('window_title'))} | "
-      f"dialog: {dialog} | snapshot: {text(data.get('snapshot_id'))} | elements: {len(shown)}/{total}")
+app = text(data.get("application_name")) + (f" ({resolved})" if resolved else "")
+cut = data.get("truncation") if isinstance(data.get("truncation"), dict) else {}
+partial = text(cut.get("warning")).replace("|", "/")
+if not partial and cut.get("incomplete_accessibility_read") is True:
+    partial = "incomplete accessibility read"
+if not partial and cut.get("max_element_count_reached") is True:
+    partial = "element limit reached"
+print(f"app: {app} | window: {text(data.get('window_title'))} | "
+      f"dialog: {dialog} | snapshot: {text(data.get('snapshot_id'))}"
+      + (" (read-only)" if data.get("snapshot_reusable") is False else "")
+      + f" | elements: {len(shown)}/{total}"
+      + (f" | partial: {partial}" if partial else "")
+      + (f" | screenshot: {shot}" if shot else ""))
 for line in shown:
     print(line)
 PY
 }
 
-# see_to_file <out> <app> [window-title]: one peekaboo read into <out>. The
-# window image goes to one private, overwritten file, so the latest snapshot's
-# image stays valid for snapshot-relative actions without piling up captures.
-see_to_file() {
-  local out=$1 app=$2 title=${3:-} dir shot
-  dir="${TMPDIR:-/tmp}/fm-computer-use"
-  mkdir -p "$dir" && chmod 0700 "$dir" || return 1
-  shot="$dir/latest.png"
-  if [ -n "$title" ]; then
-    peekaboo see --app "$app" --window-title "$title" --path "$shot" --json > "$out" 2>/dev/null
+# see_reason <see-json-file> <stderr-file>: Peekaboo's own reason for a failed
+# read, from its JSON error, else its first stderr line, cut to 300 characters
+# (an ambiguous name is followed by every running process).
+see_reason() {
+  python3 - "$1" "$2" <<'PY'
+import json, sys
+
+reason = ""
+try:
+    with open(sys.argv[1], encoding="utf-8") as fh:
+        doc = json.load(fh)
+    err = doc.get("error") if isinstance(doc, dict) else None
+    if isinstance(err, dict):
+        reason = str(err.get("message") or "")
+except (OSError, ValueError):
+    pass
+if not reason:
+    try:
+        with open(sys.argv[2], encoding="utf-8", errors="replace") as fh:
+            reason = next((line.strip() for line in fh if line.strip()), "")
+    except OSError:
+        pass
+reason = " ".join(reason.split()) or "no output"
+print(reason if len(reason) <= 300 else reason[:297] + "...")
+PY
+}
+
+# see_ok <see-json-file>: the read succeeded and carries an element list.
+see_ok() {
+  python3 - "$1" <<'PY'
+import json, sys
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as fh:
+        doc = json.load(fh)
+except (OSError, ValueError):
+    sys.exit(1)
+data = doc.get("data") if isinstance(doc, dict) else None
+ok = doc.get("success") is not False and isinstance(data, dict) and isinstance(data.get("ui_elements"), list)
+sys.exit(0 if ok else 1)
+PY
+}
+
+# see_read <out> <err> <mode:tree|shot> <app> [window-title]: one peekaboo read.
+# tree reads the element list only; shot also writes an annotated window image
+# to one private, overwritten file, so the latest snapshot's image stays valid
+# for snapshot-relative actions without piling up captures.
+see_read() {
+  local out=$1 err=$2 mode=$3 app=$4 title=${5:-} dir
+  local args=(see --app "$app")
+  [ -z "$title" ] || args+=(--window-title "$title")
+  if [ "$mode" = tree ]; then
+    args+=(--tree --no-screenshot)
   else
-    peekaboo see --app "$app" --path "$shot" --json > "$out" 2>/dev/null
+    dir="${TMPDIR:-/tmp}/fm-computer-use"
+    mkdir -p "$dir" && chmod 0700 "$dir" || return 1
+    args+=(--annotate --path "$dir/latest.png")
   fi
+  peekaboo "${args[@]}" --json > "$out" 2> "$err" && see_ok "$out"
+}
+
+# shot_path <see-json-file>: the annotated image a shot read wrote, else its raw one.
+shot_path() {
+  python3 - "$1" <<'PY'
+import json, sys
+
+data = json.load(open(sys.argv[1], encoding="utf-8")).get("data") or {}
+print(data.get("screenshot_annotated") or data.get("screenshot_raw") or "")
+PY
+}
+
+# RESOLVE_SCRIPT prints the bundle ids of the foreground apps whose process
+# name is exactly the argument, one per line.
+RESOLVE_SCRIPT='on run argv
+  set target to item 1 of argv
+  tell application "System Events" to set ids to bundle identifier of every process whose name is target and background only is false
+  set AppleScript'"'"'s text item delimiters to linefeed
+  return ids as text
+end run'
+
+# resolve_app <name>: the one bundle id for a name Peekaboo found ambiguous.
+resolve_app() {
+  local ids
+  ids=$(osascript -e "$RESOLVE_SCRIPT" "$1" 2>/dev/null | sed -e '/^missing value$/d' -e '/^$/d')
+  [ -n "$ids" ] && [ "$(printf '%s\n' "$ids" | wc -l | tr -d ' ')" = 1 ] || return 1
+  printf '%s\n' "$ids"
 }
 
 cmd_elements() {
-  local app="" title="" all=0 max=200 from="" tmp rc
+  local app="" title="" all=0 max=200 from="" shot=0 thin=5 tmp rc=0 id resolved="" reason total path
   while [ $# -gt 0 ]; do
     case "$1" in
       --app) app=${2:-}; shift 2 ;;
       --window-title) title=${2:-}; shift 2 ;;
       --all) all=1; shift ;;
       --max) max=${2:-}; shift 2 ;;
+      --screenshot) shot=1; shift ;;
+      --thin) thin=${2:-}; shift 2 ;;
       --from) from=${2:-}; shift 2 ;;
       *) die_usage "elements: unknown argument $1" ;;
     esac
   done
   case "$max" in ''|*[!0-9]*) die_usage "elements: --max must be a whole number" ;; esac
+  case "$thin" in ''|*[!0-9]*) die_usage "elements: --thin must be a whole number" ;; esac
   need_python
   if [ -n "$from" ]; then
     render_elements "$from" "$all" "$max"
@@ -276,15 +382,51 @@ cmd_elements() {
   [ -n "$app" ] || die_usage "elements: --app is required"
   command -v peekaboo >/dev/null 2>&1 || { echo "fm-computer-use.sh: peekaboo is not installed ($(cmd_check))" >&2; return 1; }
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-cu-see.XXXXXX") || return 1
-  if see_to_file "$tmp/see.json" "$app" "$title"; then
-    render_elements "$tmp/see.json" "$all" "$max"
-    rc=$?
-  else
-    echo "fm-computer-use.sh: peekaboo see failed for $app" >&2
-    rc=1
+  if ! see_read "$tmp/tree.json" "$tmp/tree.err" tree "$app" "$title"; then
+    reason=$(see_reason "$tmp/tree.json" "$tmp/tree.err")
+    case "$reason" in
+      "Multiple apps match"*)
+        if ! id=$(resolve_app "$app"); then
+          reason="$reason - pass the bundle id instead"
+        elif see_read "$tmp/tree.json" "$tmp/tree.err" tree "$id" "$title"; then
+          app=$id
+          resolved=$id
+          reason=""
+        else
+          app=$id
+          reason=$(see_reason "$tmp/tree.json" "$tmp/tree.err")
+        fi ;;
+    esac
+    if [ -n "$reason" ]; then
+      echo "fm-computer-use.sh: peekaboo could not read $app: $reason" >&2
+      rm -rf "$tmp"
+      return 1
+    fi
   fi
+  render_elements "$tmp/tree.json" "$all" "$max" "" "$resolved" > "$tmp/tree.txt" || { rm -rf "$tmp"; return 1; }
+  total=$(sed -n '1s/.*| elements: [0-9]*\/\([0-9]*\).*/\1/p' "$tmp/tree.txt")
+  if [ "$shot" = 1 ] || [ "${total:-0}" -lt "$thin" ]; then
+    if see_read "$tmp/shot.json" "$tmp/shot.err" shot "$app" "$title"; then
+      path=$(shot_path "$tmp/shot.json")
+      render_elements "$tmp/shot.json" "$all" "$max" "${path:-none}" "$resolved"
+      rc=$?
+      rm -rf "$tmp"
+      return "$rc"
+    fi
+    echo "fm-computer-use.sh: no window image of $app: $(see_reason "$tmp/shot.json" "$tmp/shot.err")" >&2
+    [ "$shot" = 0 ] || rc=1
+  fi
+  cat "$tmp/tree.txt"
   rm -rf "$tmp"
   return "$rc"
+}
+
+cmd_front() {
+  local arg
+  for arg in "$@"; do
+    case "$arg" in --app|--window-title|--from) die_usage "front: $arg is not taken; front reads whatever window is in front" ;; esac
+  done
+  cmd_elements --app frontmost "$@"
 }
 
 cmd_settle() {
@@ -303,9 +445,9 @@ cmd_settle() {
   deadline=$(( $(date +%s) + timeout ))
   while :; do
     if [ -n "$title" ]; then
-      cur=$(cmd_elements --app "$app" --window-title "$title") || return 1
+      cur=$(cmd_elements --app "$app" --window-title "$title" --thin 0) || return 1
     else
-      cur=$(cmd_elements --app "$app") || return 1
+      cur=$(cmd_elements --app "$app" --thin 0) || return 1
     fi
     # The snapshot id changes on every read; compare everything else.
     if [ -n "$prev" ] && [ "$(printf '%s\n' "$cur" | sed '1s/ | snapshot: [^|]*//')" = "$(printf '%s\n' "$prev" | sed '1s/ | snapshot: [^|]*//')" ]; then
@@ -590,6 +732,7 @@ case "${1:-}" in
   pin) echo "$PEEKABOO_PIN" ;;
   install) shift; cmd_install "$@" ;;
   elements) shift; cmd_elements "$@" ;;
+  front) shift; cmd_front "$@" ;;
   settle) shift; cmd_settle "$@" ;;
   facts) shift; cmd_facts "$@" ;;
   guard) shift; cmd_guard "$@" ;;

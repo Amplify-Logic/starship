@@ -126,6 +126,148 @@ test_elements_render_compactly() {
   pass "elements renders one compact line per useful element with state, and refuses malformed output"
 }
 
+# see_json <n> [app]: a successful `see --json` read holding <n> labelled buttons.
+see_json() {
+  python3 - "$1" "${2:-Demo}" <<'PY'
+import json, sys
+n, app = int(sys.argv[1]), sys.argv[2]
+els = [{"id": f"elem_{i}", "role": "button", "label": f"Button {i}", "is_actionable": True} for i in range(1, n + 1)]
+print(json.dumps({"success": True, "data": {"application_name": app, "window_title": "W", "is_dialog": False,
+      "snapshot_id": "s1", "screenshot_annotated": "/tmp/fm-cu-shot_annotated.png", "ui_elements": els}}))
+PY
+}
+
+see_error() {  # <message>: a failed `see --json` read as Peekaboo prints it.
+  python3 -c 'import json, sys; print(json.dumps({"success": False, "data": None, "error": {"message": sys.argv[1], "code": "INTERACTION_FAILED"}}))' "$1"
+}
+
+# fake_see <dir>: a peekaboo whose `see` answers from <dir>/<mode>-<app>.json
+# (mode tree for --no-screenshot reads, shot otherwise), exiting 1 when the
+# answer is a failure. Every call's arguments are appended to <dir>/calls.
+fake_see() {
+  mkdir -p "$1"
+  cat > "$1/peekaboo" <<SH
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$1/calls"
+[ "\${1:-}" = see ] || exit 0
+app="" mode=shot prev=""
+for a in "\$@"; do
+  [ "\$prev" = --app ] && app=\$a
+  [ "\$a" = --no-screenshot ] && mode=tree
+  prev=\$a
+done
+f="$1/\$mode-\$app.json"
+if [ ! -f "\$f" ]; then
+  printf '{"success":false,"data":null,"error":{"message":"Application %s not found"}}\n' "\$app"
+  exit 1
+fi
+cat "\$f"
+grep -q '"success": false' "\$f" && exit 1
+exit 0
+SH
+  chmod 0755 "$1/peekaboo"
+}
+
+test_elements_read_the_list_without_a_screenshot() {
+  local d out err rc
+  d="$TMP_ROOT/tree-first"; fake_see "$d"
+  see_json 8 > "$d/tree-Demo.json"
+  out=$(PATH="$d:$BASE_PATH" "$CU" elements --app Demo) || fail "a readable list must render: $out"
+  assert_contains "$(sed -n 1p <<<"$out")" "elements: 8/8" "the element list must render"
+  assert_not_contains "$(sed -n 1p <<<"$out")" "screenshot:" "a full list must not take a screenshot"
+  assert_equals 1 "$(wc -l < "$d/calls" | tr -d ' ')" "a full list must take one read"
+  assert_contains "$(cat "$d/calls")" "--tree --no-screenshot" "the first read must skip the screenshot"
+
+  d="$TMP_ROOT/hidden"; fake_see "$d"
+  see_error "Window not found: accessible window for PID 82064" > "$d/tree-WhatsApp.json"
+  err=$(PATH="$d:$BASE_PATH" "$CU" elements --app WhatsApp 2>&1 >/dev/null)
+  rc=$?
+  assert_equals 1 "$rc" "an unreadable window must fail"
+  assert_equals "fm-computer-use.sh: peekaboo could not read WhatsApp: Window not found: accessible window for PID 82064" "$err" \
+    "a failed read must pass Peekaboo's own reason through"
+
+  d="$TMP_ROOT/truncated"; fake_see "$d"
+  see_json 8 | python3 -c 'import json, sys; doc = json.load(sys.stdin); doc["data"]["truncation"] = {"incomplete_accessibility_read": False, "max_element_count_reached": True, "warning": "Warning: AX tree truncated at element count 1000. Narrow the target."}; print(json.dumps(doc))' > "$d/tree-Finder.json"
+  out=$(PATH="$d:$BASE_PATH" "$CU" elements --app Finder) || fail "a truncated read must still render: $out"
+  assert_contains "$(sed -n 1p <<<"$out")" "elements: 8/8 | partial: Warning: AX tree truncated at element count 1000. Narrow the target." \
+    "a successful read Peekaboo marks partial must say so in the header"
+  assert_equals 1 "$(wc -l < "$d/calls" | tr -d ' ')" "a partial read must not be retried"
+
+  d="$TMP_ROOT/read-only"; fake_see "$d"
+  see_json 8 | python3 -c 'import json, sys; doc = json.load(sys.stdin); doc["data"]["snapshot_reusable"] = False; print(json.dumps(doc))' > "$d/tree-Demo.json"
+  out=$(PATH="$d:$BASE_PATH" "$CU" elements --app Demo) || fail "a read-only snapshot must still render: $out"
+  assert_contains "$(sed -n 1p <<<"$out")" "| snapshot: s1 (read-only) | elements: 8/8" "a snapshot Peekaboo calls not reusable must be marked read-only"
+  pass "elements reads the element list without a screenshot, marks a partial or read-only list, and passes Peekaboo's reason through"
+}
+
+test_elements_take_a_screenshot_only_when_asked_or_thin() {
+  local d out err rc
+  d="$TMP_ROOT/thin"; fake_see "$d"
+  see_json 2 > "$d/tree-Live.json"
+  see_json 3 Live > "$d/shot-Live.json"
+  out=$(PATH="$d:$BASE_PATH" "$CU" elements --app Live) || fail "a thin list with an image must succeed: $out"
+  assert_equals "app: Live | window: W | dialog: no | snapshot: s1 | elements: 3/3 | screenshot: /tmp/fm-cu-shot_annotated.png" \
+    "$(sed -n 1p <<<"$out")" "a thin list must be replaced by the annotated image read and name its image"
+  assert_contains "$(sed -n 2p "$d/calls")" "--annotate --path" "the image read must be annotated and saved"
+  out=$(PATH="$d:$BASE_PATH" "$CU" elements --app Live --thin 0)
+  assert_not_contains "$(sed -n 1p <<<"$out")" "screenshot:" "--thin 0 must never take an image"
+
+  d="$TMP_ROOT/asked"; fake_see "$d"
+  see_json 8 > "$d/tree-Demo.json"
+  see_json 8 > "$d/shot-Demo.json"
+  out=$(PATH="$d:$BASE_PATH" "$CU" elements --app Demo --screenshot) || fail "an asked-for image must succeed: $out"
+  assert_contains "$(sed -n 1p <<<"$out")" "| screenshot: /tmp/fm-cu-shot_annotated.png" "--screenshot must take the image on a full list"
+
+  d="$TMP_ROOT/thin-hidden"; fake_see "$d"
+  see_json 2 > "$d/tree-Notes.json"
+  see_error "Desktop observation target was not found: shareable window for Notes. reason=window minimized" > "$d/shot-Notes.json"
+  out=$(PATH="$d:$BASE_PATH" "$CU" elements --app Notes 2>"$TMP_ROOT/thin-hidden.err")
+  rc=$?
+  assert_equals 0 "$rc" "a thin list whose window cannot be imaged must still succeed"
+  assert_contains "$(sed -n 1p <<<"$out")" "elements: 2/2" "the element list must still be printed"
+  assert_contains "$(cat "$TMP_ROOT/thin-hidden.err")" "no window image of Notes: Desktop observation target was not found" "the image failure must give Peekaboo's reason"
+  err=$(PATH="$d:$BASE_PATH" "$CU" elements --app Notes --screenshot 2>&1 >/dev/null)
+  rc=$?
+  assert_equals 1 "$rc" "an asked-for image that cannot be taken must fail"
+  assert_contains "$err" "window minimized" "the asked-for image failure must give Peekaboo's reason"
+  pass "elements takes an annotated window image only when asked or when the list is thin, and keeps the list when the image fails"
+}
+
+test_elements_resolve_an_ambiguous_name_to_its_bundle_id() {
+  local d out err long
+  long="Multiple apps match 'Arc'. Did you mean: $(printf 'Helper %s, ' $(seq 1 80))Arc"
+  d="$TMP_ROOT/ambiguous"; fake_see "$d"
+  see_error "$long" > "$d/tree-Arc.json"
+  see_json 18 Arc > "$d/tree-company.thebrowser.Browser.json"
+  fake_osascript "$d" 0 company.thebrowser.Browser
+  out=$(PATH="$d:$BASE_PATH" "$CU" elements --app Arc) || fail "an ambiguous name with one running app must resolve: $out"
+  assert_contains "$(sed -n 1p <<<"$out")" "app: Arc (company.thebrowser.Browser) | " "the resolved read must name the bundle id to act with"
+  assert_contains "$(sed -n 2p "$d/calls")" "--app company.thebrowser.Browser" "the retry must read by bundle id"
+  see_json 18 Arc > "$d/shot-company.thebrowser.Browser.json"
+  out=$(PATH="$d:$BASE_PATH" "$CU" elements --app Arc --screenshot) || fail "a resolved name must take its image by bundle id: $out"
+  assert_contains "$(sed -n 1p <<<"$out")" "app: Arc (company.thebrowser.Browser) | " "the image read must name the bundle id too"
+
+  d="$TMP_ROOT/ambiguous-two"; fake_see "$d"
+  see_error "$long" > "$d/tree-Arc.json"
+  fake_osascript "$d" 0 "$(printf 'one.app\ntwo.app')"
+  err=$(PATH="$d:$BASE_PATH" "$CU" elements --app Arc 2>&1 >/dev/null) && fail "a name matching two running apps must not guess"
+  assert_contains "$err" "peekaboo could not read Arc: Multiple apps match 'Arc'" "the refusal must give Peekaboo's reason"
+  assert_contains "$err" "... - pass the bundle id instead" "a long reason must be cut and say what to pass instead"
+  [ "${#err}" -lt 420 ] || fail "a long reason must be cut, got ${#err} characters"
+  pass "elements retries an ambiguous app name by the bundle id of its one running app, and never guesses between two"
+}
+
+test_front_reads_the_frontmost_window() {
+  local d out
+  d="$TMP_ROOT/front"; fake_see "$d"
+  see_json 9 Notes > "$d/tree-frontmost.json"
+  out=$(PATH="$d:$BASE_PATH" "$CU" front) || fail "front must read the frontmost window: $out"
+  assert_contains "$(sed -n 1p <<<"$out")" "app: Notes | " "the header must name the app in front"
+  assert_contains "$(cat "$d/calls")" "see --app frontmost --tree --no-screenshot" "front must read the frontmost app without a screenshot"
+  PATH="$d:$BASE_PATH" "$CU" front --app Notes >/dev/null 2>&1; assert_equals 2 "$?" "front must refuse --app"
+  pass "front reads whatever window is in front without a screenshot"
+}
+
 # fake_see_sequence <dir> <n-changing>: a peekaboo whose `see` returns a list
 # that changes for the first <n-changing> reads and then stays the same.
 fake_see_sequence() {
@@ -133,6 +275,7 @@ fake_see_sequence() {
   cat > "$1/peekaboo" <<SH
 #!/usr/bin/env bash
 [ "\${1:-}" = see ] || exit 0
+printf '%s\n' "\$*" >> "$1/calls"
 n=\$(cat "$1/count" 2>/dev/null || echo 0); n=\$((n + 1)); printf '%s' "\$n" > "$1/count"
 label="Loading \$n"
 [ "$2" != never ] && [ "\$n" -gt "$2" ] && label=Ready
@@ -147,6 +290,7 @@ test_settle_waits_for_two_equal_reads() {
   out=$(PATH="$d:$BASE_PATH" "$CU" settle --app Demo --timeout 5 --interval 0.05) || fail "a list that stops changing must settle: $out"
   assert_contains "$out" "elem_1 button 'Ready'" "settle must print the settled list"
   assert_equals 4 "$(cat "$d/count")" "settle must stop at the first two equal reads (snapshot ids differ)"
+  assert_equals 4 "$(grep -c -- '--no-screenshot' "$d/calls")" "settle must re-read the list without screenshots, even a thin one"
   d="$TMP_ROOT/settle-never"; fake_see_sequence "$d" never
   out=$(PATH="$d:$BASE_PATH" "$CU" settle --app Demo --timeout 1 --interval 0.05 2>&1)
   rc=$?
@@ -346,6 +490,10 @@ test_facts_report_desk_transcription() {
 test_check_reports_absent_wrong_and_broken
 test_install_verifies_and_links_user_level
 test_elements_render_compactly
+test_elements_read_the_list_without_a_screenshot
+test_elements_take_a_screenshot_only_when_asked_or_thin
+test_elements_resolve_an_ambiguous_name_to_its_bundle_id
+test_front_reads_the_frontmost_window
 test_settle_waits_for_two_equal_reads
 test_dialog_kinds
 test_guard_decisions

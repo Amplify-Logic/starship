@@ -249,6 +249,10 @@
       "audience": "agent-runtime"
     },
     {
+      "path": ".agents/skills/macos-computer-use/recipes.md",
+      "audience": "agent-runtime"
+    },
+    {
       "path": ".agents/skills/process-event-sources/SKILL.md",
       "audience": "agent-runtime"
     },
