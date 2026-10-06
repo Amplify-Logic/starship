@@ -6,7 +6,8 @@ About 20 minutes, mostly waiting for installs.
 
 This guide is for a blank macOS machine.
 When you finish, you will have a running first mate that can really dispatch a worker - not just chat back.
-The real finish line is a **slug round-trip**: a worker writes a random word into a file in its own isolated copy and reports it back to you.
+The setup finish line is a **slug round-trip**: a worker writes a random word into a file in its own isolated copy and reports it back to you.
+After that, steps 8 and 9 connect your other tools and point you to [the captain's handbook](docs/handbook.md), which explains the whole system, shows how to make it your own, and gives you a first-week path to full use.
 
 > Your setup is yours alone.
 > A fresh clone gets only the public repo - no one else's preferences, backlog, project list, or accounts.
@@ -18,7 +19,8 @@ The real finish line is a **slug round-trip**: a worker writes a random word int
 
 1. **GitHub** (free) - create an account if you do not have one.
 2. **One AI coding subscription** - use **Claude Code**.
-   Claude Pro (~$20/mo) works; Max also works.
+   Claude Pro (~$20/mo) works; Max, Team, and Enterprise also work.
+   If your organisation has a Claude workspace, use that account: the connectors it offers (mail, calendar, documents, and so on) then come along into Claude Code.
    Cursor, Codex, Grok, Pi, and Kimi exist and can be added later - skip them for now.
 
 You should see: both accounts signed in in a browser tab before you open Terminal.
@@ -250,7 +252,9 @@ From `~/starship`:
 bin/fm-primary.sh claude
 ```
 
-If that refuses, run `claude` from `~/starship` instead - a direct launch needs the one environment variable [README.md](README.md#install-and-launch) names for Claude Code.
+That launches Claude Code on its strongest model, with its permission prompts turned off so the first mate can run its own scripts; its [house rules](#11-house-rules) are what keep it safe.
+If your account does not offer that model, use `bin/fm-primary.sh opus` instead.
+`bin/fm-primary.sh --help` lists every launch profile and exactly what each one runs.
 
 You should see: Claude Code opening inside the firstmate folder (not a bare shell error).
 
@@ -286,7 +290,7 @@ You should see: a plain list of still-missing tools (for example `jq`, `tmux`, `
 Say **yes, install them**.
 It installs them itself via `bin/fm-bootstrap.sh install` after your consent.
 
-The nine it can install for you after consent are: `jq`, `tmux`, `treehouse`, `no-mistakes`, `gh-axi`, `tasks-axi`, `lavish-axi`, `chrome-devtools-axi`, and `quota-axi`.
+Today the ones it can install for you after consent include `jq`, `tmux`, `treehouse`, `no-mistakes`, `gh-axi`, `tasks-axi`, `lavish-axi`, `chrome-devtools-axi`, and `quota-axi`; [docs/configuration.md](docs/configuration.md#toolchain) owns the current list.
 
 If it names something it cannot install for you - Herdr is the only one - it gives you the link.
 Follow it, then say **check again**.
@@ -337,12 +341,60 @@ It may ask which project - answer: this folder (the firstmate checkout itself).
 
 That one green line proves the whole stack end to end: spawn, isolated copy, agent login, and the report channel.
 When your slug comes back, your setup is genuinely finished.
+Continue to step 8 to connect the rest of your tools.
 
 If the slug never comes back: ask "why can't you start a worker?" or "what happened to the test worker?", fix what it names, re-run the [preflight checkpoint](#3-preflight-checkpoint-before-you-start-the-agent), then retry this step.
 
 ---
 
-## 8. Troubleshooting
+## 8. Connect your other tools
+
+The first mate becomes genuinely useful once it can read your mail, calendar, documents, meeting notes, chat, and tracker.
+
+1. Before you connect mail or chat, tell the first mate how to treat outward sends.
+   It does not hold them by itself, so record this standing rule first, both for the first mate (`data/captain.md`) and for every worker brief (`config/brief-include.md`):
+
+```text
+remember this as a standing rule, and add the same line to config/brief-include.md so every worker brief carries it: never send, post, or reply to anyone outside on my behalf without showing me the draft first
+```
+
+You should see: it confirms it recorded the rule in `data/captain.md` and added it to `config/brief-include.md`.
+
+2. In a browser, open claude.ai, go to Settings, then Connectors, and add the services you use.
+   A work account may already have some added by your administrator.
+3. Back in the first mate's window, type `/mcp`.
+
+You should see: each connector listed as connected (Claude Code shows claude.ai connectors as `claude.ai <Service>`).
+Sign in from that list to any that ask.
+
+4. Ask one real question per connector, for example:
+
+```text
+what's on my calendar tomorrow?
+```
+
+You should see: real data from that service, not an apology.
+
+[The captain's handbook](docs/handbook.md#connectors-and-tools) recommends a rounded starter set, explains MCP servers you add to Claude Code directly, and lists firstmate's own tools with a check for each.
+
+---
+
+## 9. Make it yours
+
+Read [the captain's handbook](docs/handbook.md) next.
+It explains the whole system in plain words, how to teach the first mate your preferences and rules, how memory and skills work, how to approve work, and a five-day path of small practice tasks.
+
+To start straight away, tell it one thing about how you work:
+
+```text
+remember this as a standing preference: lead every reply with the outcome, and keep it short
+```
+
+You should see: it confirms it recorded the preference; ask "what's in captain.md now?" to read it back.
+
+---
+
+## 10. Troubleshooting
 
 Every recovery ends the same way: **re-run the [preflight checkpoint](#3-preflight-checkpoint-before-you-start-the-agent), then continue** from the step you were on.
 That way you never leave setup in an undefined state.
@@ -364,13 +416,17 @@ That way you never leave setup in an undefined state.
 | `herdr protocol N … older than the verified minimum` | Run `herdr update`, or download 0.7.4+ from [herdr.dev](https://herdr.dev). Re-run the checkpoint, then continue. |
 | Herdr runs but panes have no project/worker labels | Your Herdr is below protocol 16. Run `herdr update`. Re-run the checkpoint, then continue. |
 | It never notices a worker finished | The trust prompt was declined. Restart, accept trust (step 4b). Re-run the checkpoint, then retry the slug test. |
+| A connector is missing or answers with an apology | Type `/mcp` and sign in to it. If it is not listed, add it at claude.ai (Settings, then Connectors) with the same account Claude Code uses, then restart the first mate. |
+| Claude Code says the model is not available on launch | Your account does not offer that model. Launch with `bin/fm-primary.sh opus`. |
 | Preflight shows ❌ for something you think you installed | Follow that row's one-line fix hint. Re-run the checkpoint until green, then continue. |
 
 ---
 
-## 9. House rules
+## 11. House rules
 
-- It never merges a pull request without your say-so.
+- It never merges a pull request without your say-so, unless you have told it a project may merge passing work on its own.
+- Anything destructive, irreversible, or security-sensitive comes to you first.
+- It does not hold outward sends by itself. Record the standing rule from [step 8](#8-connect-your-other-tools) before you connect mail or chat.
 - It only touches projects you point it at.
 - Your setup is yours alone - nothing you do is shared back to anyone.
 
@@ -379,7 +435,7 @@ Your private home never enters the PR.
 
 ---
 
-## 10. Growing the fleet (optional)
+## 12. Growing the fleet (optional)
 
 Install only what you'll use.
 Once a tool is on your machine and logged in, your first mate will start choosing between them on its own.
@@ -388,7 +444,7 @@ Once a tool is on your machine and logged in, your first mate will start choosin
 
 | Add | Why you'd want it | Account |
 |---|---|---|
-| **Cursor CLI** (`agent`) | Cheap, fast workers on Grok 4.5 / Composer, and the different-vendor second-opinion reviewer | Cursor Pro |
+| **Cursor CLI** (`agent`) | Cheap, fast workers on Grok and Composer models, and the different-vendor second-opinion reviewer | Cursor Pro |
 | **Codex** (`codex`) | Another strong worker; kept available for testing | OpenAI |
 | **Pi** (`pi`) | Another worker option | Bring-your-own key |
 | **Kimi** (`kimi`) | Verified K3 worker | Moonshot |
@@ -412,7 +468,8 @@ Each account is logged in on the machine that uses it - an account home is **nev
 
 ## See also
 
+- [docs/handbook.md](docs/handbook.md) - how the system works end to end, making it your own, connectors, and a first-week path
 - [README.md](README.md) - what firstmate is
 - [docs/configuration.md](docs/configuration.md) - layout, backends, and X mode
 - [docs/herdr-backend.md](docs/herdr-backend.md) - Herdr details
-- [docs/porting.md](docs/porting.md) - moving a private home to a second machine
+- [docs/porting.md](docs/porting.md) - moving your own private home to a second machine of yours; a colleague starts from a fresh clone with this guide instead

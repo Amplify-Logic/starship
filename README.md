@@ -214,6 +214,7 @@ Firstmate's skills live in two separate places with different audiences:
 ## Documentation
 
 - [docs/architecture.md](docs/architecture.md) - maintainer architecture for the crew, supervision, worktrees, secondmates, and project modes.
+- [ONBOARDING.md](ONBOARDING.md) and [docs/handbook.md](docs/handbook.md) - blank Mac to a working first mate, then how the whole system works, making it your own, connecting your tools, and a first-week path to full use.
 - [docs/configuration.md](docs/configuration.md) - environment variables, `FM_HOME`, runtime backend selection, optional Relay and its X and Discord setup steps, trusted external process-event adapter setup, the files you set, and harness support.
 - [docs/porting.md](docs/porting.md) - bring Firstmate up on a second machine and keep captain-private portable material in step with explicit push/pull.
 - [docs/extension-bindings.md](docs/extension-bindings.md) - maintainer architecture for the narrow trusted external `process-event-adapter/1` package, binding, handshake, and evidence boundary.

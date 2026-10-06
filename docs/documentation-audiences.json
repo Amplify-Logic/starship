@@ -505,6 +505,10 @@
       "audience": "operator-current"
     },
     {
+      "path": "docs/handbook.md",
+      "audience": "operator-current"
+    },
+    {
       "path": "docs/herdr-backend.md",
       "audience": "operator-current"
     },
