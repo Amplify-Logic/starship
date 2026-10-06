@@ -814,11 +814,18 @@ SH
 # fails afterwards, so a follow loop runs exactly <calls> refreshes and then
 # exits because its primary pane is gone. The call tally lives in the file named
 # by FM_STATUS_BAR_TMUX_COUNT, which the caller must point at a fresh path.
+# Only the pane-id probe is counted: any other query (the Codex process lookup
+# asks for the pane's process id) is refused, so a refresh's own process reads
+# can never consume the refresh budget.
 fm_install_fake_tmux_pane() {
   local fakebin=$1 calls=$2
   mkdir -p "$fakebin"
   cat > "$fakebin/tmux" <<SH
 #!/usr/bin/env bash
+case " \$* " in
+  *'#{pane_id}'*) ;;
+  *) exit 1 ;;
+esac
 count=0
 [ ! -f "\$FM_STATUS_BAR_TMUX_COUNT" ] || count=\$(<"\$FM_STATUS_BAR_TMUX_COUNT")
 count=\$((count + 1))

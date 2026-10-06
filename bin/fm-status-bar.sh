@@ -628,6 +628,79 @@ companion_pane_alive() {
   [ "$resolved" = "$FOLLOW_PANE" ]
 }
 
+# companion_runtime_present: 0 iff a Codex process is the followed pane's shell
+# or one of its descendants. The walk is rooted at the shell on both providers,
+# not at Herdr's foreground group: a Codex the captain suspends with Ctrl-Z
+# hands the foreground to the shell but is still the pane's primary, and
+# retiring its bar then would lose it for good after `fg`. The five-level bound
+# and the identity rule are the metrics supply's tmux arm's, but each level is
+# checked as it is found and the walk stops at the first Codex, because this
+# runs on every refresh and only needs to know whether Codex is there.
+companion_runtime_present() {
+  local shell_pid frontier next p c
+  case "$FOLLOW_BACKEND" in
+    tmux)
+      shell_pid=$(tmux display-message -p -t "$FOLLOW_PANE" '#{pane_pid}' 2>/dev/null)
+      ;;
+    herdr)
+      shell_pid=$(herdr --session "$FM_STATUS_HERDR_SESSION" pane process-info --pane "$FOLLOW_PANE" 2>/dev/null \
+        | jq -r --arg pane "$FOLLOW_PANE" '
+            select(.result.type == "pane_process_info")
+            | select(.result.process_info.pane_id == $pane)
+            | .result.process_info.shell_pid | select(type == "number" and . > 1) | floor
+          ' 2>/dev/null)
+      ;;
+    *) return 1 ;;
+  esac
+  case "$shell_pid" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  ! _fm_codex_is_codex_pid "$shell_pid" || return 0
+  frontier="$shell_pid"
+  for _ in 1 2 3 4 5; do
+    next=
+    for p in $frontier; do
+      for c in $(pgrep -P "$p" 2>/dev/null); do
+        ! _fm_codex_is_codex_pid "$c" || return 0
+        next="$next $c"
+      done
+    done
+    [ -n "$next" ] || return 1
+    frontier=$next
+  done
+  return 1
+}
+
+# companion_runtime_retired: 0 once the followed pane has stopped running the
+# runtime this companion was launched for, even though the pane itself is
+# still there. A pane outlives its primary: the captain can quit Codex and start
+# a different harness in the same pane, and a provider can hand a reused pane
+# id to new work, so pane liveness alone would keep a stale row - an Astra bar
+# under a Claude primary - on screen indefinitely.
+#
+# Retirement is armed only after the runtime has been positively seen behind
+# the pane (companion_runtime_present).
+# Before that the launcher is still on its way to exec'ing the runtime, and a
+# provider that cannot report pane processes at all never arms it, which keeps
+# the pre-existing pane-liveness behavior rather than retiring a working bar.
+# Once armed, the runtime must be absent for three consecutive ticks, so one
+# failed or racing process read cannot retire a live primary's companion.
+# Every guarded launch installs its own companion, so a primary relaunched in
+# the same pane is never left without one by this.
+RUNTIME_SEEN=0
+RUNTIME_MISSES=0
+companion_runtime_retired() {
+  [ "$ADAPTER" = codex ] && [ "$CODEX_METRICS_READY" = 1 ] || return 1
+  if companion_runtime_present; then
+    RUNTIME_SEEN=1
+    RUNTIME_MISSES=0
+    return 1
+  fi
+  [ "$RUNTIME_SEEN" = 1 ] || return 1
+  RUNTIME_MISSES=$((RUNTIME_MISSES + 1))
+  [ "$RUNTIME_MISSES" -ge 3 ]
+}
+
 if [ -n "$FOLLOW_PANE" ]; then
   case "$FOLLOW_BACKEND" in
     tmux) command -v tmux >/dev/null 2>&1 || exit 0 ;;
@@ -666,7 +739,19 @@ if [ -n "$FOLLOW_PANE" ]; then
   # this renderer never releases a zoom it does not own. The release path
   # clears it permanently.
   CHROME_ZOOM_WATCH=$CHROME_ZOOMED
+  # Exiting is the whole retirement: the renderer is the companion pane's only
+  # process on both providers (tmux runs it as the split's command, and the
+  # Herdr launch execs it in place of the pane's shell), so the provider closes
+  # that pane itself and no pane is ever closed by id from here. The primary
+  # pane outlives a retirement, so a zoom this renderer owns is given back
+  # first, or it would go on hiding whatever later splits that tab.
   while companion_pane_alive; do
+    if companion_runtime_retired; then
+      if [ "$FOLLOW_BACKEND" = herdr ] && [ "$CHROME_ZOOM_WATCH" = 1 ]; then
+        herdr --session "$FM_STATUS_HERDR_SESSION" pane zoom "$FOLLOW_PANE" --off >/dev/null 2>&1
+      fi
+      break
+    fi
     # Collect the complete frame before any of it reaches the pane, then publish
     # the row erase and the finished frame in a single write. Erasing first left
     # the row visibly blank for the whole length of the collection, which is what

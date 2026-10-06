@@ -270,6 +270,20 @@ These two rows stay unverified until the binaries are present and probed; they a
 Codex and Astra share one companion implementation rather than two.
 `bin/fm-status-bar.sh --follow-pane <pane> --follow-backend <tmux|herdr>` runs a one-row loop that disables
 autowrap, clips the canonical line instead of wrapping it, and exits as soon as its exact primary pane is gone.
+It also exits once that pane stops running the runtime it was launched for, because a pane outlives its
+primary: the captain can quit Codex and start another harness in the same pane, and a reused pane id can
+belong to new work, so pane liveness alone would leave a stale Astra row under a Claude primary.
+That retirement arms only after the companion has positively seen a Codex process behind the pane, and then
+needs Codex absent for three consecutive refreshes, so the launch window before `exec` and a single failed
+process read never retire a working row.
+Codex counts as behind the pane when the pane's shell or one of its descendants is the Codex CLI, on both
+providers. On herdr that walk starts from `pane process-info`'s `shell_pid` rather than the foreground group the
+metrics supply reads, so a Codex suspended with Ctrl-Z, which hands the foreground to the shell, keeps its row.
+A provider that cannot report pane processes never arms it and keeps the pane-liveness behavior.
+Exiting is the whole retirement: the renderer is the companion pane's only process on both providers, so the
+provider closes the pane itself and the renderer never closes a pane by id.
+Measured on herdr 0.7.4 (2026-10-02) in a disposable lab session: a split pane whose `pane run` command
+`exec`s a process disappears from `pane list` as soon as that process exits.
 It clears the whole pane once at startup, because `herdr pane run` echoes the launch command into the pane's
 shell before `exec` replaces it and that line would otherwise stay visible below the status row.
 Each refresh collects the whole row before any of it reaches the pane, then writes the single-row erase and
@@ -398,8 +412,10 @@ is the ONLY thing that arms the renderer's release watch. The launcher still pas
 a crowded tab - the border row is worth having either way - so without the signal the renderer would
 otherwise be releasing a zoom that belongs to someone else. If `pane run` then fails, the launcher
 releases its own zoom before closing the pane it was taken for.
-The renderer never re-applies the zoom: it only RELEASES, on a slow cadence, if a third pane later
-appears in that tab, and it stops checking once released.
+Likewise, a renderer that retires because the primary pane stopped running Codex releases the zoom it
+owns before exiting, since that pane outlives it; one that does not own the zoom leaves it alone.
+The renderer never re-applies the zoom: apart from that retirement, it only RELEASES, on a slow
+cadence, if a third pane later appears in that tab, and it stops checking once released.
 That keeps two properties at the same time - a co-tenant pane's live work is never hidden, and a
 captain who deliberately unzooms is not fought once a second.
 
@@ -558,7 +574,7 @@ The TUI listed `fm-primary-status-bar.ts` under loaded extensions and rendered:
 
 A 48-column rerun stayed on one row and ended at `👁 NO-WA`, confirming that Pi truncates the ANSI line to the supplied render width instead of wrapping it.
 
-`tests/fm-status-bar.test.sh` passed canonical order, threshold, placeholder, supervision-alert, Claude-payload, Cursor-payload, account-role, control-byte sanitization, exact-pane cleanup on both companion providers, unverified-provider refusal, one-time pane clear, blank-free refresh, per-refresh row publication, and guarded-installation cases.
+`tests/fm-status-bar.test.sh` passed canonical order, threshold, placeholder, supervision-alert, Claude-payload, Cursor-payload, account-role, control-byte sanitization, exact-pane cleanup on both companion providers, runtime-change retirement on both companion providers with a suspended Codex keeping its row and a retiring companion releasing only the zoom it owns, unverified-provider refusal, one-time pane clear, blank-free refresh, per-refresh row publication, and guarded-installation cases.
 `tests/fm-primary.test.sh` passed the guarded tmux and herdr companion cases - including the separated refused-split and split-named-no-pane outcomes, and cleanup of only the exact pane the split returned - alongside all existing launcher cases.
 `tests/fm-cursor-statusline.test.sh` passed the installer's single-key install, exact uninstall restore, foreign-status-line refusal in both directions, cross-checkout removal, invalid-config refusal, and credentials-untouched cases.
 `tests/fm-pi-primary-types.test.sh` reported an honest skip because the host TypeScript 4.9.5 cannot parse Pi 0.80.10's declarations, while the real Pi TUI loaded and ran the TypeScript extension.
