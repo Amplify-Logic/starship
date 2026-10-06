@@ -266,6 +266,7 @@ STT model default: `nova-3` (`DEEPGRAM_STT_MODEL`, from the environment or this 
 | --- | --- |
 | `bin/fm-desk-floater.sh` | Build/launch the floating control; the controls, hotkeys, dictation and screenshot stacking live in `desk-floater/Sources/DeskFloater.swift` |
 | `bin/fm-desk-voice.sh` | Send into the primary chat, screenshot capture, and mailbox deliver / pending / drain |
+| `bin/fm-web.sh` | The localhost chat page, which sends through `bin/fm-desk-voice.sh send` ([web.md](web.md)) |
 | `bin/fm-deepgram-stt.sh` | Audio file → transcript |
 | `bin/fm-deepgram-tts.sh` | Text → Deepgram Aura audio |
 | `bin/fm-speak.sh` | Captain-facing speak-out (a named `voice` selects `say`, else Deepgram Aura; each the other's fallback), plus `--stop`, `--repeat`, `--history`, `--replay`, `--mute`, `--unmute`, `--muted` and `--volume` |

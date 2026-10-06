@@ -717,6 +717,10 @@
       "audience": "operator-current"
     },
     {
+      "path": "docs/web.md",
+      "audience": "operator-current"
+    },
+    {
       "path": "docs/wedge-alarm.md",
       "audience": "operator-current"
     },

@@ -96,6 +96,7 @@ Each effective `FM_HOME` contains private operational directories.
 - The captain-ledger reconciliation cursor `state/.captain-ledger-cursor` (`bin/fm-captain-ledger.sh`).
 - The cloud routine report check's shim `state/routine-reports.check.sh` and its record `state/.routine-reports` (`bin/fm-routine-report-check.sh`; [cloud-routines.md](cloud-routines.md)).
 - The dispatch decision record `state/dispatch-decisions.jsonl` (`bin/fm-dispatch-resolve.sh`; "Typed dispatch resolution" below).
+- The localhost web page's token, pid, port and request log under `state/web/` (`bin/fm-web.sh`; [web.md](web.md)).
 
 `config/` holds local gitignored operating choices, including explicit extension bindings under `config/extensions.d/`.
 
