@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import Carbon
 import AVFoundation
 import SwiftUI
 
@@ -189,55 +190,100 @@ final class WindowMover {
 }
 
 /// A modifier key that acts on a lone tap: pressed and released within the tap
-/// limit, with no other key, click or modifier used while it was down.
+/// limit, with no other key, click or modifier used while it was down. A key
+/// with a typing guard also leaves taps close to typing alone: pressed within
+/// `quiet` of the last key, or followed by a key within `settle` of its
+/// release, it was a Shift brushed while typing rather than a tap.
 struct TapKey {
     let keyCode: UInt16
     // Device-dependent modifier bit that tells the right-hand key from the left.
     let bit: UInt
     let flag: NSEvent.ModifierFlags
+    let quiet: TimeInterval
+    let settle: TimeInterval
     private var downAt: Date?
     private var chorded = false
+    private var lastKeyAt: Date?
+    // A tap waiting out `settle`.
+    private var pending: Date?
 
-    init(keyCode: UInt16, bit: UInt, flag: NSEvent.ModifierFlags) {
+    init(keyCode: UInt16, bit: UInt, flag: NSEvent.ModifierFlags,
+         quiet: TimeInterval = 0, settle: TimeInterval = 0) {
         self.keyCode = keyCode
         self.bit = bit
         self.flag = flag
+        self.quiet = quiet
+        self.settle = settle
     }
 
     static let rightCommand = TapKey(keyCode: 54, bit: 0x10, flag: .command)
-    static let rightShift = TapKey(keyCode: 60, bit: 0x04, flag: .shift)
+    static let rightShift = TapKey(keyCode: 60, bit: 0x04, flag: .shift, quiet: 1.5, settle: 0.5)
 
-    /// A key press or click while this key is down makes it part of a shortcut.
+    /// A click while this key is down makes it part of a shortcut.
     mutating func chord() {
         if downAt != nil {
             chorded = true
         }
     }
 
+    /// A key press: part of a shortcut while this key is down, and typing
+    /// that a tap close to it belongs to.
+    mutating func keyPressed(at now: Date) {
+        lastKeyAt = max(lastKeyAt ?? now, now)
+        if let tap = pending, now >= tap, now.timeIntervalSince(tap) < settle {
+            pending = nil
+        }
+        chord()
+    }
+
     /// Feeds one modifier change; true when it completes a lone tap. Modifiers
     /// in `allowed` may already be held without making the press a shortcut.
-    mutating func update(_ event: NSEvent, allowed: NSEvent.ModifierFlags, limit: TimeInterval) -> Bool {
-        guard event.keyCode == keyCode else {
+    mutating func update(keyCode: UInt16, flags: NSEvent.ModifierFlags, at now: Date,
+                         allowed: NSEvent.ModifierFlags, limit: TimeInterval) -> Bool {
+        guard keyCode == self.keyCode else {
             chord()
             return false
         }
-        if event.modifierFlags.rawValue & bit != 0 {
+        if flags.rawValue & bit != 0 {
             let others = NSEvent.ModifierFlags([.shift, .control, .option, .command, .function])
                 .subtracting(flag)
                 .subtracting(allowed)
-            downAt = Date()
-            chorded = !event.modifierFlags.intersection(others).isEmpty
+            downAt = now
+            chorded = !flags.intersection(others).isEmpty || typed(within: quiet, before: now)
             return false
         }
         guard let started = downAt else { return false }
         downAt = nil
-        return !chorded && Date().timeIntervalSince(started) < limit
+        guard !chorded && now.timeIntervalSince(started) < limit else { return false }
+        if settle > 0 {
+            pending = now
+        }
+        return true
+    }
+
+    /// Called `settle` after a tap released at `tap`: true when it still
+    /// stands, with no key pressed in between and no later tap replacing it.
+    mutating func takeSettled(tap: Date) -> Bool {
+        guard pending == tap else { return false }
+        pending = nil
+        return true
+    }
+
+    private func typed(within interval: TimeInterval, before now: Date) -> Bool {
+        guard interval > 0, let last = lastKeyAt else { return false }
+        return now.timeIntervalSince(last) < interval
+    }
+
+    /// When an event happened, from its own timestamp (seconds since the Mac
+    /// started), so events delivered in a late burst keep their real spacing.
+    static func time(of event: NSEvent) -> Date {
+        Date(timeIntervalSinceNow: event.timestamp - ProcessInfo.processInfo.systemUptime)
     }
 }
 
 /// Global keys: Right Option held is push-to-talk to Firstmate, a lone tap of
 /// Right Command starts or finishes dictation, and a lone tap of Right Shift
-/// takes a screenshot. Watching keys in other apps, and typing the dictated text
+/// away from typing takes a screenshot. Watching keys in other apps, and typing the dictated text
 /// into them, both need the Accessibility permission. macOS ties that grant to
 /// the app's signature, so an ad-hoc signed rebuild is untrusted again: it asks
 /// once per build, and the keys-off badge asks again on demand.
@@ -336,6 +382,7 @@ final class HotkeyMonitor {
     }
 
     private func handle(_ event: NSEvent) {
+        let at = TapKey.time(of: event)
         if event.type != .flagsChanged {
             // Any key or click while a hotkey is held makes it a shortcut, not a
             // hotkey: Option-letter types a character, Command-click opens a link.
@@ -343,8 +390,13 @@ final class HotkeyMonitor {
                 talkDown = false
                 onTalkChord?()
             }
-            dictateKey.chord()
-            shotKey.chord()
+            if event.type == .keyDown {
+                dictateKey.keyPressed(at: at)
+                shotKey.keyPressed(at: at)
+            } else {
+                dictateKey.chord()
+                shotKey.chord()
+            }
             return
         }
         if event.keyCode == Self.rightOptionKey {
@@ -357,12 +409,28 @@ final class HotkeyMonitor {
                 onTalkUp?()
             }
         }
-        if dictateKey.update(event, allowed: [], limit: tapLimit) {
+        if dictateKey.update(keyCode: event.keyCode, flags: event.modifierFlags, at: at,
+                             allowed: [], limit: tapLimit) {
             onDictateTap?()
         }
         // Screenshots taken while Right Option is held join that voice message.
-        if shotKey.update(event, allowed: talkDown ? .option : [], limit: tapLimit) {
-            onShotTap?()
+        if shotKey.update(keyCode: event.keyCode, flags: event.modifierFlags, at: at,
+                          allowed: talkDown ? .option : [], limit: tapLimit) {
+            shotTapped(at: at)
+        }
+    }
+
+    /// A Right Shift tap becomes a screenshot only once typing has not resumed
+    /// right after it. While secure typing is on (a password field, or a
+    /// terminal's Secure Keyboard Entry) macOS hides key presses from the
+    /// floater, so a capital letter would read as a lone Shift tap: no shot then.
+    private func shotTapped(at tap: Date) {
+        guard !IsSecureEventInputEnabled() else { return }
+        Timer.scheduledTimer(withTimeInterval: shotKey.settle, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.shotKey.takeSettled(tap: tap) else { return }
+                self.onShotTap?()
+            }
         }
     }
 }

@@ -39,7 +39,10 @@
 # pid below can be added. When a Claude primary's box holds the captain's
 # unsent draft (pending), the message goes past it instead: see
 # send_past_draft below, which never submits, clears, or retypes the draft.
-# Another harness's draft is joined by the message and submitted with it. The
+# Another harness's draft is joined by the message and submitted with it. A
+# message of screenshots alone is the exception: it is typed only into a
+# composer that reads empty, and goes to the mailbox past any draft, because
+# a stray screenshot must never interrupt the captain's typing. The
 # text is sent as the captain's plain words: control characters, newlines, and
 # Unicode line separators become spaces, so nothing can submit early or reach
 # the pane as a key.
@@ -49,7 +52,8 @@
 #                                         typed and Enter sent, submit not
 #                                         proven; never re-sent to the mailbox
 #   mailbox: <path>                       the pane could not be resolved, its
-#                                         composer was not empty or pending,
+#                                         composer was not empty or pending
+#                                         (not empty, for screenshots alone),
 #                                         it showed a selection dialog, a
 #                                         Claude draft could not be set aside,
 #                                         or the backend reported send-failed,
@@ -602,7 +606,9 @@ EOF
 # primary and show its chat input. Returns 1 when the pane is not proven, or
 # with <app> and <tty> is not in front (see shown_in_front), and 2 when it is
 # proven but not showing its chat input, another writer owns it, or a ring
-# finds a stash; nothing was typed either way. Its subshell scopes the pane environment and writer lock.
+# finds a stash; nothing was typed either way. PRIMARY_SUBMIT_COMPOSER lists
+# the composer states that may take the line (default "empty pending"), and
+# PRIMARY_SUBMIT_RING=1 submits it the way ring does. Its subshell scopes the pane environment and writer lock.
 primary_submit() (  # <line> [<app> <tty>]
   local lock="$STATE/.lock" pid envs kv backend target root verdict draft claude composer tries
   local writer_lock="$STATE/desk-voice/.send.lock"
@@ -643,7 +649,7 @@ EOF
     *) return 2 ;;
   esac
   ! shows_selection_dialog "$backend" "$target" || return 2
-  if [ "${PRIMARY_SUBMIT_COMPOSER:-}" = empty ]; then
+  if [ "${PRIMARY_SUBMIT_RING:-0}" = 1 ]; then
     ! shows_stash "$backend" "$target" || return 2
     verdict=$(submit_ring "$backend" "$target" "$1") || verdict=send-failed
   elif [ "$draft" = 1 ] && [ "$claude" = 1 ]; then
@@ -658,7 +664,7 @@ EOF
 
 send() {
   local source text line result='' verdict backend target path image rc=0
-  local front_app='' front_tty=''
+  local composer='empty pending' front_app='' front_tty=''
   local -a image_args=() front=() rest=()
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -695,7 +701,9 @@ send() {
   line=$(plain_line "$(message_text)") || die "cannot prepare transcript"
   [ -n "$line" ] || refuse "nothing to deliver"
 
-  result=$(primary_submit "$line" ${front[@]+"${front[@]}"}) || rc=$?
+  # Screenshots alone never go past a draft: the captain may be typing.
+  [ -n "$text" ] || composer=empty
+  result=$(PRIMARY_SUBMIT_COMPOSER=$composer primary_submit "$line" ${front[@]+"${front[@]}"}) || rc=$?
   if [ "${#front[@]}" -gt 0 ] && [ "$rc" = 1 ]; then
     printf 'not-in-front\n'
     return 0
@@ -732,7 +740,7 @@ ring() {
   [ "$#" -eq 1 ] || refuse "usage: fm-desk-voice.sh ring <line>"
   line=$(plain_line "$1") || die "cannot prepare the line"
   [ -n "$line" ] || refuse "nothing to ring"
-  result=$(PRIMARY_SUBMIT_COMPOSER=empty primary_submit "$line") || rc=$?
+  result=$(PRIMARY_SUBMIT_COMPOSER=empty PRIMARY_SUBMIT_RING=1 primary_submit "$line") || rc=$?
   if [ "$rc" = 0 ] && [ -n "$result" ]; then
     IFS=$'\t' read -r verdict backend target <<<"$result"
     case "$verdict" in

@@ -2021,6 +2021,34 @@ Screenshots: $shot" ] || fail "unexpected mailbox message: $drained"
   pass "fm-desk-voice send: screenshots the pane refuses land in the mailbox with the words"
 }
 
+# A screenshot nobody spoke about can arrive while the captain is typing, so it
+# never sets the draft aside or joins it: it waits in the mailbox instead.
+test_desk_voice_send_screenshots_alone_never_go_past_a_draft() {
+  local home out shot path harness
+  for harness in claude codex; do
+    home=$(desk_send_fixture "send-shots-draft-$harness" herdr "$harness") \
+      || { desk_send_skip "send-shots-draft-$harness"; return 0; }
+    shot="$home/one.png"
+    printf PNG > "$shot"
+    if [ "$harness" = claude ]; then
+      cp "$HERDR_CLAUDE_SCREEN" "$home/fixture/screen"
+      printf 'claude' > "$home/fixture/agent"
+    fi
+    printf 'What if we did 2. with 3. somehow' > "$home/fixture/draft"
+    out=$(desk_send "$home" --image "$shot" --) || fail "$harness: send failed: $out"
+    case "$out" in mailbox:\ *) ;; *) fail "$harness: expected a mailbox delivery, got: $out" ;; esac
+    path=${out#mailbox: }
+    assert_contains "$(cat "$path")" "Screenshots: $shot" "$harness: the mailbox record holds the screenshot"
+    [ -z "$(herdr_calls "$home" pane send-text)" ] || fail "$harness: nothing may be typed over a draft"
+    [ -z "$(herdr_calls "$home" pane send-keys)" ] || fail "$harness: no key may reach a pane with a draft"
+    [ "$(cat "$home/fixture/draft")" = 'What if we did 2. with 3. somehow' ] \
+      || fail "$harness: the draft must stay as typed, got: $(cat "$home/fixture/draft")"
+    [ ! -s "$home/fixture/submitted" ] || fail "$harness: nothing may be submitted"
+    desk_send_done "$home"
+  done
+  pass "fm-desk-voice send: screenshots alone wait in the mailbox while a draft is in the chat box"
+}
+
 # --- desk-voice send --front-app/--front-tty: dictation into the chat -------
 #
 # A stand-in terminal app with a stand-in multiplexer client beneath it, and a
@@ -2399,6 +2427,7 @@ test_ring_and_send_share_one_writer_lock
 test_inbox_ring_respects_contract_only_away_posture
 test_desk_voice_send_types_screenshots_into_the_primary_pane
 test_desk_voice_send_screenshots_fall_back_to_the_mailbox
+test_desk_voice_send_screenshots_alone_never_go_past_a_draft
 test_desk_voice_dictation_sends_when_the_chat_is_in_front
 test_desk_voice_dictation_elsewhere_is_left_to_paste
 test_desk_voice_dictation_keeps_the_send_checks

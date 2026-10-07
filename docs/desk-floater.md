@@ -80,10 +80,13 @@ After you release, it keeps listening for a moment, so a last word still being s
 | --- | --- |
 | Right Option, held | Walkie-talkie: talks to Firstmate for as long as it is held, exactly like holding the large button. Releasing sends. A brief brush of the key (under about a third of a second) sends nothing. |
 | Right Command, tapped | Starts dictation; tap it again to finish and type the text, or send it when the cursor is in the Firstmate chat. |
-| Right Shift, tapped | Takes a screenshot of the display under the mouse pointer. See [Screenshots](#screenshots). |
+| Right Shift, tapped while you are not typing | Takes a screenshot of the display under the mouse pointer. See [Screenshots](#screenshots). |
 
 Only the right-hand keys are watched, so the left Option, Command and Shift keys keep working as usual.
 Right Shift follows the same tap rules as Right Command: held with a letter to type a capital, or held longer than half a second, it is an ordinary Shift press and takes no screenshot.
+It also takes no screenshot while you are typing, so a Shift brushed on the way to a capital, a question mark or Return is ignored: a tap within a second and a half of your last key, or followed by a key within half a second, counts as typing.
+A tap that stands takes its screenshot half a second after you let go, and two taps within that half second take one screenshot.
+While macOS has secure typing on, such as in a password field or a terminal with Secure Keyboard Entry, the floater cannot see your keys, so Right Shift takes no screenshot then; use the Camera control.
 A hotkey used as part of a shortcut is ignored: pressing a letter or clicking the mouse while Right Option is held (to type a special character, or Option-click) cancels that capture without sending anything, and Right Command pressed with another key or a click, or held longer than half a second, is an ordinary Command press. System shortcuts that macOS keeps to itself, such as a quick Right Command-Tab or Right Command-Space, are hidden from the floater and can read as a tap; use the left Command key for those.
 
 ## Dictation
@@ -125,7 +128,7 @@ Take several in a row, moving the pointer to another display in between if you l
 The camera shows how many are stacked, the status line reads "2 shots stacked", then "Sent" once they are delivered.
 
 The message names each image by its full path, for example `Screenshots: /…/state/desk-voice/shots/<time>-<id>.png /…/<time>-<id>.png`, so Firstmate can open them.
-A message with screenshots, with or without words, travels the same way as a voice message: typed into the Firstmate chat, or saved to the mailbox when that chat cannot be reached, see [How transcripts reach Firstmate](#how-transcripts-reach-firstmate).
+A message with screenshots, with or without words, travels the same way as a voice message: typed into the Firstmate chat, or saved to the mailbox when that chat cannot be reached or, for screenshots alone, holds text you have not sent yet, see [How transcripts reach Firstmate](#how-transcripts-reach-firstmate).
 
 Screenshots combine with talk-to-Firstmate:
 
@@ -193,7 +196,8 @@ The transcript is sent as the captain's plain words, with no label or marker.
 Line breaks and control characters become spaces, so a transcript cannot submit early or press keys.
 
 Claude's grey suggested prompt is not typed text, so a chat box showing only that counts as empty and the message goes straight in.
-When you have a half-typed draft in a Claude chat box, the message goes past it: the draft is set aside with Claude's own Ctrl+S stash, the message is sent on its own, and Claude puts your draft back in the box, pasted text and images included.
+A message of screenshots alone, with no words, never goes past a draft: while the chat box holds text you have not sent, it goes to the mailbox instead, so a screenshot never interrupts your typing.
+When you have a half-typed draft in a Claude chat box, a message with words goes past it: the draft is set aside with Claude's own Ctrl+S stash, the message is sent on its own, and Claude puts your draft back in the box, pasted text and images included.
 Your draft is never sent, cleared, or retyped.
 The message goes into the emptied box as one paste, so a long voice transcript shows there as a single `[Pasted text #N]` placeholder and is sent whole.
 That has one deliberate exception, where text in the box still sends the message to the mailbox: Claude's footer already shows `› stashed`, a draft you set aside yourself.
@@ -202,7 +206,7 @@ If the message cannot be proven in the box before Enter, it is cleared, your dra
 If the box cannot be cleared, or the message has not appeared in it at all, no further keys are sent, so a late paste cannot replace your stashed draft, and the send reports that the submit was not confirmed instead.
 Whenever your draft cannot be put back, the send notes that it is still stashed; Ctrl+S in an empty chat box brings it back.
 After Enter the send counts as confirmed only once the box is empty or shows your draft again; otherwise it reports that the submit was not confirmed.
-With another harness as the primary, the message joins the draft and is submitted with it.
+With another harness as the primary, a message with words joins the draft and is submitted with it.
 
 When the chat pane cannot be reached, is not showing its chat input, or refuses the text, the transcript goes to the mailbox instead:
 
