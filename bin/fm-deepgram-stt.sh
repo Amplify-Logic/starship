@@ -32,6 +32,15 @@
 #     be read or parsed is skipped with a note on stderr; it never fails the
 #     transcription.
 #
+# Long recordings: there is no length cap here; the whole file is uploaded.
+# The request is bounded instead of left to hang: each attempt gives up
+# connecting after 15 seconds and gives up in all after 120 seconds plus one
+# second per 100 kB of audio (a 10-minute desk recording is about 19 MB, so
+# about five minutes an attempt). A timeout, a dropped connection or a busy
+# Deepgram (HTTP 408, 429 or 5xx) is retried twice, three seconds apart, before
+# the helper fails, so the worst case is three full attempts: about 16 minutes
+# for a 10-minute recording.
+#
 # Exit:
 #   0  transcript printed (may be empty if Deepgram heard silence)
 #   1  request failure
@@ -199,7 +208,7 @@ extract_transcript() {  # <vocab> <json-file>
 }
 
 main() {
-  local json_out=false audio='' key model http tmp ctype auth_cfg vocab extra
+  local json_out=false audio='' key model http tmp ctype auth_cfg vocab extra bytes max_time
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --help|-h) usage; exit 0 ;;
@@ -228,6 +237,9 @@ main() {
     *) ctype=application/octet-stream ;;
   esac
 
+  bytes=$(wc -c < "$audio" | tr -d ' ')
+  max_time=$(( 120 + ${bytes:-0} / 100000 ))
+
   tmp=$(mktemp "${TMPDIR:-/tmp}/fm-deepgram-stt.XXXXXX") || die "cannot create a temporary file"
   auth_cfg=$(fm_deepgram_auth_config "$key") || {
     rm -f "$tmp"
@@ -236,12 +248,17 @@ main() {
   trap 'rm -f "$auth_cfg"' EXIT
   http=$("$CURL_BIN" -sS -o "$tmp" -w "%{http_code}" \
     --request POST \
+    --connect-timeout 15 \
+    --max-time "$max_time" \
+    --retry 2 \
+    --retry-delay 3 \
+    --retry-connrefused \
     --config "$auth_cfg" \
     --header "Content-Type: ${ctype}" \
     --data-binary @"$audio" \
     --url "https://api.deepgram.com/v1/listen?model=${model}&smart_format=true${extra}") || {
     rm -f "$tmp"
-    die "curl failed talking to Deepgram"
+    die "curl failed talking to Deepgram (no answer within ${max_time}s, or the connection failed)"
   }
   rm -f "$auth_cfg"
 

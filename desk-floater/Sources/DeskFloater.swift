@@ -59,6 +59,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         screen.start()
         self.screen = screen
         model.refreshMute()
+        model.recoverRecordings()
         DispatchQueue.main.async {
             model.warmMicrophone()
         }
@@ -780,6 +781,9 @@ final class FloaterModel: ObservableObject {
 
     let repoRoot: String
     let fmHome: String
+    /// Captures are recorded here, in the home's private state, so a recording
+    /// outlives a floater that stops before sending it.
+    let recordingDir: String
     // Echo-cancelled, so a reply playing on the speakers stays out of the
     // message while it keeps playing. See VoiceCapture.
     private let capture = VoiceCapture()
@@ -795,10 +799,17 @@ final class FloaterModel: ObservableObject {
     // transcribed meanwhile takes them along instead, so the two arrive as one.
     private var stack = ShotStack()
     private var shotTimer: Timer?
+    // The recordings of the words held in the stack, kept until they are sent.
+    private var heldAudio: [URL] = []
+
+    // Saved talk-to-Firstmate recordings waiting for an automatic retry, by
+    // path, with the attempts each has had. See Recording.
+    private(set) var retrying: [String: Int] = [:]
 
     init(repoRoot: String, fmHome: String) {
         self.repoRoot = repoRoot
         self.fmHome = fmHome
+        recordingDir = (fmHome as NSString).appendingPathComponent("state/desk-voice/recording")
         muteTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
                 self?.refreshMute()
@@ -809,12 +820,17 @@ final class FloaterModel: ObservableObject {
         }
     }
 
+    static let savedRetrying = "Saved - retrying"
+
     var idleStatus: String {
         if stack.transcript != nil {
             return "Adding shots…"
         }
         if shotCount > 0 {
             return shotCount == 1 ? "1 shot stacked" : "\(shotCount) shots stacked"
+        }
+        if !retrying.isEmpty {
+            return Self.savedRetrying
         }
         return keysTrusted ? "Hold to talk" : "Keys off - click !"
     }
@@ -894,6 +910,8 @@ final class FloaterModel: ObservableObject {
             return
         }
         let (text, images) = stack.take()
+        let audio = heldAudio
+        heldAudio = []
         shotsChanged()
         if mode == .idle {
             if text != nil {
@@ -905,25 +923,47 @@ final class FloaterModel: ObservableObject {
         Task.detached(priority: .userInitiated) { [repoRoot, fmHome] in
             let outcome = Self.deliver(repoRoot: repoRoot, fmHome: fmHome, text: text, images: images)
             await MainActor.run {
-                self.flash(outcome)
+                self.delivered(outcome, audio: audio)
             }
+        }
+    }
+
+    /// After a talk-to-Firstmate message went (or failed to go): its recordings
+    /// are removed once the words are delivered, and kept to be tried again
+    /// when they were not.
+    private func delivered(_ outcome: String?, audio: [URL], finishing: Bool = false) {
+        guard outcome != nil || audio.isEmpty else {
+            for url in audio {
+                keepForRetry(url, purpose: .firstmate, reason: "delivery failed", finishing: finishing)
+            }
+            return
+        }
+        for url in audio {
+            try? FileManager.default.removeItem(at: url)
+        }
+        let status = outcome ?? "Deliver failed"
+        if finishing {
+            finish(status: status)
+        } else {
+            flash(status)
         }
     }
 
     /// A transcribed talk-to-Firstmate message: sent at once when nothing is
     /// stacked, otherwise held until the stack window closes and sent with the
     /// shots. The floater is free meanwhile, so another talk joins the same message.
-    private func voiceTranscribed(_ text: String) {
+    private func voiceTranscribed(_ text: String, audio: URL) {
         guard stack.hold(text) else {
             status = "Delivering…"
             Task.detached(priority: .userInitiated) { [repoRoot, fmHome] in
                 let outcome = Self.deliver(repoRoot: repoRoot, fmHome: fmHome, text: text, images: [])
                 await MainActor.run {
-                    self.finish(status: outcome)
+                    self.delivered(outcome, audio: [audio], finishing: true)
                 }
             }
             return
         }
+        heldAudio.append(audio)
         mode = .idle
         purpose = .firstmate
         status = idleStatus
@@ -1179,9 +1219,12 @@ final class FloaterModel: ObservableObject {
                 status = "Mic denied"
                 return
             }
-            let url = FileManager.default.temporaryDirectory
-                .appendingPathComponent("fm-desk-\(UUID().uuidString).wav")
+            let url = URL(fileURLWithPath: recordingDir)
+                .appendingPathComponent(Recording.fileName(purpose: purpose == .dictate ? "dictate" : "firstmate"))
             do {
+                try FileManager.default.createDirectory(
+                    atPath: recordingDir, withIntermediateDirectories: true,
+                    attributes: [.posixPermissions: 0o700])
                 try capture.start(writingTo: url)
             } catch {
                 try? FileManager.default.removeItem(at: url)
@@ -1242,13 +1285,29 @@ final class FloaterModel: ObservableObject {
     private func transcribeAndDeliver(_ url: URL, purpose: Purpose) {
         Task.detached(priority: .userInitiated) { [repoRoot, fmHome] in
             let transcript = Self.transcribe(repoRoot: repoRoot, fmHome: fmHome, audio: url)
-            try? FileManager.default.removeItem(at: url)
             let text = transcript?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             guard !text.isEmpty else {
-                await MainActor.run {
-                    self.finish(status: "No speech")
+                // Nothing came back. The audio stays until its words are
+                // delivered, unless it is too short to hold any.
+                let failed = transcript == nil
+                if Recording.keep(failed: failed, duration: Recording.duration(of: url)) {
+                    await MainActor.run {
+                        self.keepForRetry(url, purpose: purpose,
+                                          reason: failed ? "transcription failed" : "no speech heard",
+                                          finishing: true)
+                    }
+                } else {
+                    try? FileManager.default.removeItem(at: url)
+                    await MainActor.run {
+                        self.finish(status: failed ? "Transcribe failed" : "No speech")
+                    }
                 }
                 return
+            }
+            if purpose == .dictate {
+                // Once transcribed, dictation is always typed, sent or left on
+                // the clipboard below.
+                try? FileManager.default.removeItem(at: url)
             }
             switch purpose {
             case .dictate:
@@ -1282,23 +1341,140 @@ final class FloaterModel: ObservableObject {
                 }
             case .firstmate:
                 await MainActor.run {
-                    self.voiceTranscribed(text)
+                    self.voiceTranscribed(text, audio: url)
                 }
             }
         }
     }
 
-    private func finish(status: String) {
+    // MARK: recordings kept until delivered
+
+    /// Saves a recording whose words did not reach their destination to the
+    /// home's unsent folder and, for talk to Firstmate, retries it on
+    /// Recording.retryDelays. A dictation stays saved for a manual retry with
+    /// `bin/fm-desk-voice.sh retry`. Should the save itself fail, the audio
+    /// stays in the recording folder, where the next launch finds it.
+    private func keepForRetry(_ url: URL, purpose: Purpose, reason: String, finishing: Bool) {
+        let name = purpose == .dictate ? "dictate" : "firstmate"
+        let retries = purpose == .firstmate
+        let message = retries ? Self.savedRetrying : "Saved, not sent"
+        if finishing {
+            finish(status: message, for: 6)
+        } else {
+            flash(message, for: 6)
+        }
+        Task.detached(priority: .userInitiated) { [repoRoot, fmHome] in
+            let saved = Self.keep(repoRoot: repoRoot, fmHome: fmHome, audio: url, purpose: name, reason: reason)
+            await MainActor.run {
+                guard let saved, retries else {
+                    self.flash("Saved, not sent", for: 6)
+                    return
+                }
+                self.scheduleRetry(saved, attempts: 1)
+            }
+        }
+    }
+
+    private func scheduleRetry(_ path: String, attempts: Int, after wait: TimeInterval? = nil) {
+        guard let delay = wait ?? Recording.retryDelay(afterAttempts: attempts) else {
+            retrying[path] = nil
+            if mode == .idle {
+                status = idleStatus
+            }
+            flash("Saved, not sent", for: 6)
+            return
+        }
+        retrying[path] = attempts
+        if mode == .idle {
+            status = idleStatus
+        }
+        Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated { self?.retry(path) }
+        }
+    }
+
+    private func retry(_ path: String) {
+        let attempts = retrying[path] ?? 1
+        Task.detached(priority: .utility) { [repoRoot, fmHome] in
+            let result = Self.retryRecording(repoRoot: repoRoot, fmHome: fmHome, path: path)
+            await MainActor.run {
+                switch result {
+                case .delivered(let status):
+                    self.retried(path, status: status)
+                case .unsent(let made):
+                    self.scheduleRetry(path, attempts: made)
+                case .busy:
+                    self.scheduleRetry(path, attempts: attempts, after: Recording.busyDelay)
+                case .gone:
+                    self.retried(path, status: nil)
+                case nil:
+                    self.scheduleRetry(path, attempts: attempts + 1)
+                }
+            }
+        }
+    }
+
+    private func retried(_ path: String, status message: String?) {
+        retrying[path] = nil
+        if mode == .idle {
+            status = idleStatus
+        }
+        if let message {
+            flash(message, for: 6)
+        }
+    }
+
+    /// At launch: saves any recording a stopped floater left in the recording
+    /// folder, then resumes the automatic retries of saved talk-to-Firstmate
+    /// recordings that still have some left.
+    func recoverRecordings() {
+        Task.detached(priority: .utility) { [repoRoot, fmHome, recordingDir] in
+            let names = (try? FileManager.default.contentsOfDirectory(atPath: recordingDir)) ?? []
+            for name in names where name.hasSuffix(".wav") {
+                let url = URL(fileURLWithPath: recordingDir).appendingPathComponent(name)
+                let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
+                // A file still being written belongs to a capture under way.
+                if let modified = attributes?[.modificationDate] as? Date,
+                   Date().timeIntervalSince(modified) < 10 {
+                    continue
+                }
+                if Recording.keep(failed: true, duration: Recording.duration(of: url)) {
+                    _ = Self.keep(repoRoot: repoRoot, fmHome: fmHome, audio: url,
+                                  purpose: Recording.purpose(ofFileName: name),
+                                  reason: "the floater stopped before it was sent")
+                } else {
+                    try? FileManager.default.removeItem(at: url)
+                }
+            }
+            let listing = Self.run(bin: (repoRoot as NSString).appendingPathComponent("bin/fm-desk-voice.sh"),
+                                   args: ["recordings"], env: ["FM_HOME": fmHome]) ?? ""
+            let pending: [(String, Int)] = listing.split(separator: "\n").compactMap { line in
+                let cols = line.split(separator: "\t", omittingEmptySubsequences: false)
+                guard cols.count >= 3, cols[1] == "firstmate", let attempts = Int(cols[2]),
+                      Recording.retryDelay(afterAttempts: attempts) != nil else { return nil }
+                return (String(cols[0]), attempts)
+            }
+            await MainActor.run {
+                for (path, attempts) in pending where self.retrying[path] == nil {
+                    self.scheduleRetry(path, attempts: attempts)
+                }
+            }
+        }
+    }
+
+    private func finish(status: String, for seconds: TimeInterval? = nil) {
         mode = .idle
         purpose = .firstmate
-        flash(status)
+        flash(status, for: seconds)
     }
 
     /// Shows a short outcome on the status line while nothing is being captured.
-    private func flash(_ message: String) {
+    /// A message saved rather than sent stays up longer, so it is not missed.
+    private func flash(_ message: String, for seconds: TimeInterval? = nil) {
         guard mode == .idle else { return }
         status = message
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+        let shown = seconds ?? (message == SendOutcome.savedForFirstmate ? 6 : 2)
+        DispatchQueue.main.asyncAfter(deadline: .now() + shown) {
             if self.mode == .idle && self.status == message {
                 self.status = self.idleStatus
             }
@@ -1330,7 +1506,7 @@ final class FloaterModel: ObservableObject {
     /// and returns the status to show. It is typed into firstmate's own chat;
     /// bin/fm-desk-voice.sh falls back to its mailbox when that pane cannot be
     /// reached.
-    nonisolated private static func deliver(repoRoot: String, fmHome: String, text: String?, images: [String]) -> String {
+    nonisolated private static func deliver(repoRoot: String, fmHome: String, text: String?, images: [String]) -> String? {
         let bin = (repoRoot as NSString).appendingPathComponent("bin/fm-desk-voice.sh")
         var args = ["send", "--source", "desk-floater"]
         for image in images {
@@ -1340,12 +1516,7 @@ final class FloaterModel: ObservableObject {
         if let text {
             args.append(text)
         }
-        guard let out = run(bin: bin, args: args, env: ["FM_HOME": fmHome]) else {
-            return "Deliver failed"
-        }
-        if out.hasPrefix("sent:") { return "Sent" }
-        if out.hasPrefix("sent-unconfirmed:") { return "Sent, unconfirmed" }
-        return "Saved to mailbox"
+        return SendOutcome.status(run(bin: bin, args: args, env: ["FM_HOME": fmHome]))
     }
 
     /// Sends dictated text to Firstmate when the text box with the cursor is
@@ -1361,9 +1532,23 @@ final class FloaterModel: ObservableObject {
               !out.hasPrefix("not-in-front") else {
             return nil
         }
-        if out.hasPrefix("sent:") { return "Sent" }
-        if out.hasPrefix("sent-unconfirmed:") { return "Sent, unconfirmed" }
-        return "Saved to mailbox"
+        return SendOutcome.status(out)
+    }
+
+    /// Saves a recording to the home's unsent folder; the saved path, or nil.
+    nonisolated private static func keep(repoRoot: String, fmHome: String, audio: URL,
+                                         purpose: String, reason: String) -> String? {
+        let bin = (repoRoot as NSString).appendingPathComponent("bin/fm-desk-voice.sh")
+        let path = run(bin: bin, args: ["keep", "--purpose", purpose, "--reason", reason, "--", audio.path],
+                       env: ["FM_HOME": fmHome])?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return path.isEmpty ? nil : path
+    }
+
+    /// Transcribes and delivers one saved recording again.
+    nonisolated private static func retryRecording(repoRoot: String, fmHome: String, path: String) -> RetryResult? {
+        let bin = (repoRoot as NSString).appendingPathComponent("bin/fm-desk-voice.sh")
+        return run(bin: bin, args: ["retry", path], env: ["FM_HOME": fmHome])
+            .flatMap { RetryResult.parse($0) }
     }
 
     /// Captures one display to this home's screenshot folder; nil on failure.

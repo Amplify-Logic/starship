@@ -17,6 +17,9 @@ TMP_ROOT=$(fm_test_tmproot fm-deepgram-desk)
 unset DEEPGRAM_API_KEY DEEPGRAM_STT_MODEL DEEPGRAM_TTS_MODEL || true
 unset FM_DEEPGRAM_DEFAULT_STT_MODEL FM_DEEPGRAM_DEFAULT_TTS_MODEL || true
 export FM_DEEPGRAM_ENV_FILE=/dev/null
+# A mailbox delivery rings the primary in the background; cases that test the
+# ring turn it back on with their own short schedule.
+export FM_DESK_VOICE_RING_DELAYS=
 
 # Every mailbox delivery raises a macOS notification. A stand-in osascript
 # records it instead, so a test never pops "Desk voice transcript ready" on the
@@ -257,6 +260,69 @@ test_stt_reports_http_failure() {
   [ "$status" -eq 1 ] || fail "expected exit 1 on HTTP failure, got $status: $out"
   assert_contains "$out" "HTTP 401" "HTTP status is reported"
   pass "fm-deepgram-stt: a Deepgram failure exits 1 with the status"
+}
+
+# A desk recording of <seconds>: 16 kHz, 16-bit, mono, as the floater records.
+long_wav() {  # <path> <seconds>
+  python3 - "$1" "$2" <<'PY'
+import sys, wave
+with wave.open(sys.argv[1], "wb") as w:
+    w.setnchannels(1)
+    w.setsampwidth(2)
+    w.setframerate(16000)
+    w.writeframes(b"\0\0" * int(16000 * float(sys.argv[2])))
+PY
+}
+
+# A curl stand-in that also records the size of the audio it was given.
+install_stt_curl_sizing() {  # <home> <http-code> <body>
+  local home=$1 code=$2
+  install_stt_curl "$@"
+  cat > "$home/curl" <<SH
+#!/usr/bin/env bash
+out=
+prev=
+for a in "\$@"; do
+  [ "\$prev" != -o ] || out=\$a
+  [ "\$prev" != --data-binary ] || wc -c < "\${a#@}" | tr -d ' ' > "$home/uploaded-bytes"
+  prev=\$a
+done
+printf 'curl-argv: %s\n' "\$*" >> "$home/curl.log"
+cat "$home/stt-body.json" > "\$out"
+printf '%s' "$code"
+SH
+  chmod +x "$home/curl"
+}
+
+test_stt_bounds_a_long_request_and_retries_without_a_length_cap() {
+  local home out bytes
+  home=$(new_home stt-long)
+  long_wav "$home/long.wav" 600
+  bytes=$(wc -c < "$home/long.wav" | tr -d ' ')
+  install_stt_curl_sizing "$home" 200 \
+    '{"results":{"channels":[{"alternatives":[{"transcript":"ten minutes of thoughts"}]}]}}'
+  out=$(DEEPGRAM_API_KEY=test-key-not-real FM_DEEPGRAM_CURL="$home/curl" \
+    "$STT" "$home/long.wav" 2>&1) || fail "stt failed on a ten-minute recording: $out"
+  [ "$out" = "ten minutes of thoughts" ] || fail "unexpected transcript: $out"
+  [ "$(cat "$home/uploaded-bytes")" = "$bytes" ] || fail "the whole ten-minute file must be uploaded"
+  assert_contains "$(cat "$home/curl.log")" "--connect-timeout 15" "connecting is bounded"
+  assert_contains "$(cat "$home/curl.log")" "--max-time $(( 120 + bytes / 100000 ))" \
+    "the request bound grows with the recording instead of capping it"
+  assert_contains "$(cat "$home/curl.log")" "--retry 2" "a dropped or busy request is retried"
+  pass "fm-deepgram-stt: a ten-minute recording is uploaded whole, with a bounded, retried request"
+}
+
+test_stt_names_the_bound_when_deepgram_never_answers() {
+  local home out status=0
+  home=$(new_home stt-timeout)
+  printf 'RIFF' > "$home/clip.wav"
+  printf '#!/bin/sh\nexit 28\n' > "$home/curl"
+  chmod +x "$home/curl"
+  out=$(DEEPGRAM_API_KEY=test-key-not-real FM_DEEPGRAM_CURL="$home/curl" \
+    "$STT" "$home/clip.wav" 2>&1) || status=$?
+  [ "$status" -eq 1 ] || fail "a timed-out request must fail with 1, got $status: $out"
+  assert_contains "$out" "no answer within 120s" "the failure names the bound"
+  pass "fm-deepgram-stt: a request that times out fails instead of hanging"
 }
 
 # Runs the helper against a mocked Deepgram that returns <transcript>, with the
@@ -1022,6 +1088,178 @@ test_desk_voice_deliver_pending_drain() {
   pass "fm-desk-voice: deliver, wake, pending, drain"
 }
 
+# --- desk-voice saved recordings: never lost ---------------------------------
+
+desk() {  # <home> <args...> -> stdout of fm-desk-voice.sh, with Deepgram mocked
+  local home=$1
+  shift
+  FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" DEEPGRAM_API_KEY=test-key-not-real \
+    FM_DEEPGRAM_CURL="$home/curl" "$DESK" "$@"
+}
+
+stt_says() {  # <home> <transcript> | <home> --fail
+  if [ "$2" = --fail ]; then
+    install_stt_curl "$1" 502 '{"err_msg":"bad gateway"}'
+  else
+    install_stt_curl "$1" 200 "{\"results\":{\"channels\":[{\"alternatives\":[{\"transcript\":\"$2\"}]}]}}"
+  fi
+}
+
+mode_of() {  # <path>
+  stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1"
+}
+
+saved_at_of() {  # <json>
+  python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["saved_at"])' "$1"
+}
+
+test_desk_voice_keeps_a_recording_until_its_words_are_delivered() {
+  local home saved out json mailbox
+  home=$(new_home recordings-keep)
+  long_wav "$home/capture.wav" 3
+  saved=$(desk "$home" keep --reason "transcription failed" "$home/capture.wav") || fail "keep failed: $saved"
+  [ ! -e "$home/capture.wav" ] || fail "keep must move the recording, not copy it"
+  [ -f "$saved" ] || fail "the saved recording is missing: $saved"
+  case "$saved" in "$home/state/desk-voice/unsent/"*.wav) ;; *) fail "saved outside the unsent folder: $saved" ;; esac
+  [ "$(mode_of "$home/state/desk-voice/unsent")" = 700 ] || fail "the unsent folder must be private"
+  [ "$(mode_of "$saved")" = 600 ] || fail "a saved recording must be readable only by its owner"
+  json="${saved%.wav}.json"
+  [ "$(mode_of "$json")" = 600 ] || fail "the recording record must be private"
+  out=$(desk "$home" recordings) || fail "recordings failed"
+  assert_equals "$saved	firstmate	1	$(saved_at_of "$json")	transcription failed" "$out" \
+    "recordings lists the saved recording, its purpose, attempts and reason"
+
+  stt_says "$home" --fail
+  out=$(desk "$home" retry) || fail "retry failed: $out"
+  assert_equals "unsent	$saved	2	transcription failed: Deepgram listen failed HTTP 502" "$out" \
+    "a failed retry keeps the recording and counts the attempt"
+  stt_says "$home" ""
+  out=$(desk "$home" retry "$saved") || fail "retry failed: $out"
+  assert_equals "unsent	$saved	3	no speech heard" "$out" "an empty transcript is not a delivery"
+  [ -f "$saved" ] || fail "an undelivered recording must stay saved"
+  [ "$(inbox_count "$home")" = 0 ] || fail "nothing is delivered before there are words"
+
+  stt_says "$home" "Merge the finances PR when it is green"
+  out=$(desk "$home" retry "$saved" 2>/dev/null) || fail "retry failed: $out"
+  case "$out" in
+    "delivered	$saved	mailbox: "*) ;;
+    *) fail "the words must be delivered through send, here to the mailbox: $out" ;;
+  esac
+  mailbox=${out##*mailbox: }
+  assert_contains "$(cat "$mailbox")" "Merge the finances PR when it is green" "the mailbox holds the retried words"
+  assert_contains "$(cat "$mailbox")" '"source": "desk-floater-retry"' "the message says it was retried"
+  [ ! -e "$saved" ] && [ ! -e "$json" ] || fail "a delivered recording is removed with its record"
+  out=$(desk "$home" retry "$saved") || fail "retry of a delivered recording failed: $out"
+  assert_equals "gone	$saved" "$out" "a delivered recording is reported gone"
+  [ -z "$(desk "$home" recordings)" ] || fail "nothing is left saved"
+  pass "fm-desk-voice keep/retry: a recording is kept, private, until its words are delivered"
+}
+
+test_desk_voice_retry_of_a_ten_minute_recording_delivers_every_word() {
+  local home saved out words
+  home=$(new_home recordings-long)
+  long_wav "$home/capture.wav" 600
+  words=$(python3 -c 'print(" ".join("word%d" % i for i in range(1500)))')
+  stt_says "$home" "$words"
+  saved=$(desk "$home" keep --reason "transcription failed" "$home/capture.wav") || fail "keep failed"
+  out=$(desk "$home" retry "$saved" 2>/dev/null) || fail "retry failed: $out"
+  case "$out" in "delivered	$saved	mailbox: "*) ;; *) fail "a long recording must be delivered: $out" ;; esac
+  assert_contains "$(cat "${out##*mailbox: }")" "word0 word1 " "the start of a long note arrives"
+  assert_contains "$(cat "${out##*mailbox: }")" "word1498 word1499" "the end of a long note arrives"
+  pass "fm-desk-voice retry: a ten-minute recording is transcribed and delivered whole"
+}
+
+test_desk_voice_retry_of_dictation_returns_the_words() {
+  local home saved out
+  home=$(new_home recordings-dictate)
+  long_wav "$home/capture.wav" 3
+  saved=$(desk "$home" keep --purpose dictate --reason "no speech heard" "$home/capture.wav") || fail "keep failed"
+  assert_contains "$(desk "$home" recordings)" "	dictate	1	" "the purpose is kept"
+  stt_says "$home" "Dear team"
+  out=$(desk "$home" retry) || fail "retry failed: $out"
+  assert_equals "transcript	$saved	Dear team" "$out" "dictation comes back as words to paste"
+  [ "$(inbox_count "$home")" = 0 ] || fail "dictation is never sent to Firstmate by a retry"
+  [ ! -e "$saved" ] || fail "a returned dictation is removed"
+  pass "fm-desk-voice retry: dictation returns its words to the floater, never to Firstmate"
+}
+
+test_desk_voice_keep_never_removes_a_saved_recording() {
+  local home old i
+  home=$(new_home recordings-never-pruned)
+  long_wav "$home/old.wav" 1
+  old=$(desk "$home" keep "$home/old.wav") || fail "keep failed"
+  touch -t 202001010000 "$old" "${old%.wav}.json"
+  for i in $(seq 1 25); do
+    long_wav "$home/capture-$i.wav" 0.1
+    desk "$home" keep "$home/capture-$i.wav" >/dev/null || fail "keep $i failed"
+  done
+  [ -e "$old" ] && [ -e "${old%.wav}.json" ] || fail "an old undelivered recording must stay saved"
+  [ "$(desk "$home" recordings | wc -l | tr -d ' ')" = 26 ] || fail "every undelivered recording must stay saved"
+  pass "fm-desk-voice keep: an undelivered recording is never removed, however old or many"
+}
+
+test_desk_voice_retry_keeps_the_recording_when_the_mailbox_cannot_save() {
+  local home saved out real
+  home=$(new_home recordings-mailbox-fails)
+  long_wav "$home/capture.wav" 1
+  saved=$(desk "$home" keep "$home/capture.wav") || fail "keep failed"
+  stt_says "$home" "words that must not vanish"
+  # A python3 that cannot write a mailbox message, as on a full disk.
+  real=$(command -v python3)
+  mkdir -p "$home/pybin"
+  cat > "$home/pybin/python3" <<SH
+#!/usr/bin/env bash
+if [ "\${1:-}" = - ]; then
+  script=\$(cat)
+  case "\$script" in *fm-desk-voice-transcript.v1*) exit 1 ;; esac
+  exec "$real" "\$@" <<<"\$script"
+fi
+exec "$real" "\$@"
+SH
+  chmod +x "$home/pybin/python3"
+  out=$(PATH="$home/pybin:$PATH" desk "$home" retry "$saved" 2>/dev/null) || fail "retry failed: $out"
+  assert_equals "unsent	$saved	2	delivery failed" "$out" "a mailbox that cannot save is not a delivery"
+  [ -e "$saved" ] && [ -e "${saved%.wav}.json" ] || fail "the recording must stay saved when its words were stored nowhere"
+  [ "$(inbox_count "$home")" = 0 ] || fail "nothing reached the mailbox"
+  pass "fm-desk-voice retry: a mailbox that cannot save leaves the recording saved"
+}
+
+test_desk_voice_retry_refuses_anything_but_a_saved_recording() {
+  local home out status=0
+  home=$(new_home recordings-refuse)
+  long_wav "$home/capture.wav" 1
+  out=$(desk "$home" retry "$home/capture.wav" 2>&1) || status=$?
+  [ "$status" -eq 2 ] || fail "a file outside the unsent folder must be refused, got $status: $out"
+  [ -e "$home/capture.wav" ] || fail "a refused file is left alone"
+  status=0
+  out=$(desk "$home" keep "$home/notes.txt" 2>&1) || status=$?
+  [ "$status" -eq 2 ] || fail "keep must refuse a missing file, got $status: $out"
+  printf 'x' > "$home/notes.txt"
+  status=0
+  out=$(desk "$home" keep "$home/notes.txt" 2>&1) || status=$?
+  [ "$status" -eq 2 ] || fail "keep must refuse a file that is not audio, got $status: $out"
+  pass "fm-desk-voice retry/keep: only saved audio recordings are touched"
+}
+
+test_desk_voice_retries_run_one_at_a_time() {
+  local home saved out
+  home=$(new_home recordings-busy)
+  long_wav "$home/capture.wav" 1
+  saved=$(desk "$home" keep "$home/capture.wav") || fail "keep failed"
+  stt_says "$home" "slow words"
+  # A slow Deepgram holds the first retry while the second one is asked.
+  printf '#!/usr/bin/env bash\nsleep 2\nexec %q "$@"\n' "$home/curl" > "$home/curl-slow"
+  chmod +x "$home/curl-slow"
+  FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" DEEPGRAM_API_KEY=test-key-not-real \
+    FM_DEEPGRAM_CURL="$home/curl-slow" "$DESK" retry "$saved" > "$home/first.out" 2>/dev/null &
+  sleep 1
+  out=$(desk "$home" retry "$saved") || fail "second retry failed: $out"
+  assert_equals "busy	$saved" "$out" "a retry under way keeps the recording to itself"
+  wait
+  case "$(cat "$home/first.out")" in "delivered	$saved	"*) ;; *) fail "the first retry must deliver: $(cat "$home/first.out")" ;; esac
+  pass "fm-desk-voice retry: one retry at a time, the other is told it is busy"
+}
+
 # --- desk-voice send: straight into the primary's chat pane ------------------
 #
 # A stand-in primary: a live process whose command line names a harness (a
@@ -1428,6 +1666,102 @@ test_desk_voice_send_falls_back_when_the_pane_shows_a_dialog() {
     desk_send_done "$home"
   done
   pass "fm-desk-voice send: a pane showing a dialog instead of its chat input gets nothing"
+}
+
+# --- desk-voice mailbox messages ring the busy primary ------------------------
+#
+# A message that goes to the mailbox because the primary's chat could not take
+# it (here a permission dialog) rings the primary once the chat is free, so a
+# busy primary drains it within seconds instead of at its next turn end.
+
+desk_send_ringing() {  # <home> <text> -> stdout of send, with a fast ring schedule
+  FM_DESK_VOICE_RING_DELAYS="0 1 1 1 1 1 1 1" desk_send "$@"
+}
+
+wait_for_desk_ring() {  # <home>
+  local i
+  for i in $(seq 1 100); do
+    [ -n "$(herdr_calls "$1" pane send-text)" ] && [ -e "$1/fixture/entered" ] && return 0
+    sleep 0.1
+  done
+  return 1
+}
+
+test_desk_voice_mailbox_rings_the_primary_once_its_chat_is_free() {
+  local home out started elapsed typed
+  home=$(desk_send_fixture mailbox-ring) || { desk_send_skip mailbox-ring; return 0; }
+  printf ' Do you want to proceed?\n ❯ 1. Yes\n   2. No\n' > "$home/fixture/modal"
+  started=$(date +%s)
+  out=$(desk_send_ringing "$home" "a really long voice note") || fail "send failed: $out"
+  elapsed=$(( $(date +%s) - started ))
+  case "$out" in mailbox:\ *) ;; *) fail "expected a mailbox delivery, got: $out" ;; esac
+  [ "$elapsed" -le 3 ] || fail "send waited ${elapsed}s for its background ring"
+  sleep 1.5
+  [ -z "$(herdr_calls "$home" pane send-text)" ] || fail "nothing may be typed into a dialog"
+  rm -f "$home/fixture/modal"
+  wait_for_desk_ring "$home" || fail "the primary was never rung once its chat was free"
+  typed=$(herdr_calls "$home" pane send-text)
+  assert_contains "$typed" "[firstmate desk-voice] a desk voice message is waiting in the mailbox" \
+    "the primary's chat gets one labelled line asking it to drain now"
+  assert_not_contains "$typed" "a really long voice note" "the ring carries no words of the message"
+  sleep 2
+  [ "$(herdr_calls "$home" pane send-text | wc -l | tr -d ' ')" = 1 ] || fail "a rung primary is rung only once"
+  [ "$(inbox_count "$home")" = 1 ] || fail "the message stays in the mailbox for the drain"
+  assert_contains "$(cat "$home/state/.wake-queue")" "desk-voice" "the durable wake is still queued"
+  desk_send_done "$home"
+  pass "fm-desk-voice: a mailbox message rings the primary as soon as its chat is free"
+}
+
+test_desk_voice_mailbox_ring_stops_once_drained_or_away() {
+  local home out posture
+  for posture in drained away; do
+    home=$(desk_send_fixture "mailbox-ring-$posture") || { desk_send_skip "mailbox-ring-$posture"; return 0; }
+    printf ' Do you want to proceed?\n ❯ 1. Yes\n   2. No\n' > "$home/fixture/modal"
+    # The first ring waits two seconds, so the message is drained (or the
+    # captain away) before any ring reads the chat.
+    out=$(FM_DESK_VOICE_RING_DELAYS="2 1 1 1" desk_send "$home" "status please") || fail "send failed: $out"
+    case "$out" in mailbox:\ *) ;; *) fail "expected a mailbox delivery, got: $out" ;; esac
+    if [ "$posture" = drained ]; then
+      FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" "$DESK" drain >/dev/null || fail "drain failed"
+    else
+      printf 'away\n' > "$home/state/.afk"
+    fi
+    rm -f "$home/fixture/modal"
+    sleep 6
+    [ -z "$(herdr_calls "$home" pane send-text)" ] || fail "$posture: the primary must not be rung"
+    desk_send_done "$home"
+  done
+  pass "fm-desk-voice: the mailbox ring stops once the message is drained, and never rings in away mode"
+}
+
+test_desk_voice_mailbox_ring_never_submits_a_draft_or_stash() {
+  local home out when
+  for when in draft stash; do
+    home=$(desk_send_fixture "mailbox-ring-$when") || { desk_send_skip "mailbox-ring-$when"; return 0; }
+    printf ' Do you want to proceed?\n ❯ 1. Yes\n   2. No\n' > "$home/fixture/modal"
+    out=$(desk_send_ringing "$home" "status please") || fail "send failed: $out"
+    case "$out" in mailbox:\ *) ;; *) fail "expected a mailbox delivery, got: $out" ;; esac
+    case "$when" in
+      draft) printf 'half typed thought' > "$home/fixture/type-before-enter" ;;
+      stash) printf 'half typed thought' > "$home/fixture/stash" ;;
+    esac
+    rm -f "$home/fixture/modal"
+    sleep 4
+    [ -z "$(herdr_calls "$home" pane send-keys)" ] || fail "$when: no Enter may submit the captain's words"
+    [ ! -e "$home/fixture/submitted" ] || fail "$when: nothing may be submitted"
+    case "$when" in
+      draft)
+        [ "$(herdr_calls "$home" pane send-text | wc -l | tr -d ' ')" = 1 ] || fail "draft: a ring that met the captain's typing is not typed again"
+        assert_contains "$(cat "$home/fixture/draft")" 'half typed thought' "the captain's typing must be kept"
+        ;;
+      stash)
+        [ -z "$(herdr_calls "$home" pane send-text)" ] || fail "stash: nothing may be typed over a stash"
+        [ "$(cat "$home/fixture/stash")" = 'half typed thought' ] || fail "stash: the stash must be kept"
+        ;;
+    esac
+    desk_send_done "$home"
+  done
+  pass "fm-desk-voice: the mailbox ring re-reads its payload before Enter and never rings over a stash"
 }
 
 # --- captain inbox notes ring the busy primary -------------------------------
@@ -2374,6 +2708,8 @@ test_tts_dry_run_with_key
 test_stt_refuses_without_key_or_file
 test_stt_prints_transcript_from_mocked_deepgram
 test_stt_reports_http_failure
+test_stt_bounds_a_long_request_and_retries_without_a_length_cap
+test_stt_names_the_bound_when_deepgram_never_answers
 test_stt_without_vocabulary_sends_no_hints
 test_stt_vocabulary_key_terms_reach_the_request_encoded
 test_stt_vocabulary_caps_key_terms
@@ -2399,6 +2735,13 @@ test_speak_leaves_no_voice_list_behind_when_the_register_refuses
 test_speak_does_not_swap_to_deepgram_when_say_fails
 test_speak_falls_back_to_say_when_deepgram_fails
 test_desk_voice_deliver_pending_drain
+test_desk_voice_keeps_a_recording_until_its_words_are_delivered
+test_desk_voice_retry_of_a_ten_minute_recording_delivers_every_word
+test_desk_voice_retry_of_dictation_returns_the_words
+test_desk_voice_keep_never_removes_a_saved_recording
+test_desk_voice_retry_keeps_the_recording_when_the_mailbox_cannot_save
+test_desk_voice_retry_refuses_anything_but_a_saved_recording
+test_desk_voice_retries_run_one_at_a_time
 test_desk_voice_send_types_into_the_primary_pane
 test_desk_voice_send_falls_back_without_a_live_primary
 test_desk_voice_send_refuses_a_pane_not_hosting_the_primary
@@ -2419,6 +2762,9 @@ test_desk_voice_send_never_submits_a_draft_left_stashed
 test_desk_voice_send_never_confirms_a_redrawn_message_past_a_draft
 test_desk_voice_send_restores_a_draft_stashed_without_a_marker
 test_desk_voice_send_joins_another_harness_draft
+test_desk_voice_mailbox_rings_the_primary_once_its_chat_is_free
+test_desk_voice_mailbox_ring_stops_once_drained_or_away
+test_desk_voice_mailbox_ring_never_submits_a_draft_or_stash
 test_inbox_note_rings_the_busy_primary
 test_inbox_note_ring_never_submits_a_draft_or_rings_away
 test_ring_checks_the_payload_before_each_enter

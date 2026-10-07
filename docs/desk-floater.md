@@ -14,6 +14,7 @@ Exactly one fleet brain remains: the primary already running in this home.
 - Push-to-talk (hold or click-to-toggle), or hold Right Option anywhere. Not always-listening. No wake word.
 - Speech-to-text via Deepgram (`bin/fm-deepgram-stt.sh`).
 - Transcripts typed straight into the primary Firstmate chat and submitted, with a durable mailbox under the home (`state/desk-voice/inbox/`) as the fallback.
+- No length limit on a message, and no recording lost: one that cannot be transcribed or delivered is saved and tried again (see [Recordings are never lost](#recordings-are-never-lost)).
 - Optional speak-back of Firstmate outcome lines through `bin/fm-speak.sh`,
   which speaks through macOS `say` when `config/speak` names a `voice` and
   through Deepgram Aura otherwise, each the fallback for the other.
@@ -218,7 +219,13 @@ When the chat pane cannot be reached, is not showing its chat input, or refuses 
 
 A transcript reaches Firstmate one way only.
 Text that was typed and submitted, even when the submit could not be confirmed, is never also saved to the mailbox.
-The floater shows which way it went: `Sent`, `Sent, unconfirmed`, or `Saved to mailbox`.
+The floater shows which way it went: `Sent`, `Sent, unconfirmed`, or `Saved for Firstmate` when it went to the mailbox, which stays on the status line a little longer so it is not mistaken for an unsent message.
+
+A message saved to the mailbox also rings Firstmate, the way a captain inbox note does, so a busy Firstmate picks it up within seconds rather than when its current task ends.
+The ring is one short line typed into the Firstmate chat asking it to collect the mailbox now; it carries none of your words.
+It is typed only into an empty chat box, never over a question, a permission prompt or your draft, so while the chat cannot take it the ring tries again for about four minutes.
+It stops once it is typed or the message has been collected, and it never rings in away or quiet mode, whose own supervision picks the message up.
+`bin/fm-desk-voice.sh`'s header owns the ring.
 
 The primary (or you) drains the mailbox with:
 
@@ -231,6 +238,44 @@ Drain prints each transcript as plain text (or `--print` for JSON) and moves the
 Treat the drained text as captain input in the primary conversation.
 `bin/fm-desk-voice.sh deliver` writes to the mailbox directly, without trying the chat pane.
 Dictation types text only where you put the cursor, sending it only when that is the Firstmate chat, and talk-to-Firstmate types only into the primary Firstmate chat.
+
+## Recordings are never lost
+
+The floater keeps every recording until its words have arrived: typed into the Firstmate chat, saved to the mailbox, or, for dictation, typed or left on the clipboard.
+Recordings are made in this home's private `state/desk-voice/recording/` and removed once their words arrive.
+
+When the words do not arrive, the recording is saved instead:
+
+- Transcription failed, for example because the network or Deepgram was down, for a recording at least half a second long. A shorter one shows `Transcribe failed` and is not kept.
+- Transcription came back with no words from a recording at least two seconds long. A shorter one is taken as a stray press, shows `No speech`, and is not kept.
+- The message could not be delivered at all.
+
+Saved recordings go to `state/desk-voice/unsent/`, readable only by your own account.
+A talk-to-Firstmate recording is tried again by the floater itself after about 20 seconds, a minute and five minutes, and the status line reads `Saved - retrying` meanwhile.
+One that works on a retry is sent to Firstmate as usual, a little later than you spoke it, and the status line says how it went.
+After the last automatic try the status line reads `Saved, not sent` and the recording stays saved.
+A dictation is not tried again by itself, since its words belong where your cursor was when you spoke: the status line reads `Saved, not sent` and the recording stays saved until you retry it.
+Words held back for screenshots that then fail to send are saved and retried the same way, without the screenshots, which stay in `state/desk-voice/shots/`.
+If the floater stops while a recording is being made or transcribed, it saves that recording the next time it starts and, for talk to Firstmate, tries it again.
+
+To see and transcribe saved recordings yourself, or ask Firstmate to:
+
+```
+bin/fm-desk-voice.sh recordings
+bin/fm-desk-voice.sh retry
+```
+
+`retry` tries every saved recording, or only the ones you name, and prints a dictation's words for you to paste.
+A saved recording is never removed by itself: it goes only once its words are delivered, or printed by `retry` for a dictation, or when you delete it from `state/desk-voice/unsent/` with its `.json` record.
+`bin/fm-desk-voice.sh`'s header owns the saved recordings and the retry.
+
+### Long messages
+
+A message has no length limit: a ten-minute recording is transcribed whole and arrives like any other.
+A long one takes longer to transcribe, and the status line reads `Transcribing…` until it is done.
+The transcription request cannot hang: each attempt gives up after a time that grows with the recording, about five minutes for a ten-minute one, and a timeout, a dropped connection or a busy Deepgram is retried twice, so a ten-minute recording waits about 16 minutes at worst before it fails.
+A recording whose transcription still fails is saved and retried as above.
+`bin/fm-deepgram-stt.sh`'s header owns those limits.
 
 ## Desk speak-out bound
 
@@ -269,8 +314,8 @@ STT model default: `nova-3` (`DEEPGRAM_STT_MODEL`, from the environment or this 
 | Script | Role |
 | --- | --- |
 | `bin/fm-desk-floater.sh` | Build/launch the floating control; the controls, hotkeys, dictation and screenshot stacking live in `desk-floater/Sources/DeskFloater.swift` |
-| `bin/fm-desk-voice.sh` | Send into the primary chat, screenshot capture, and mailbox deliver / pending / drain |
+| `bin/fm-desk-voice.sh` | Send into the primary chat, screenshot capture, mailbox deliver / pending / drain, and saved recordings: keep / recordings / retry |
 | `bin/fm-web.sh` | The localhost chat page, which sends through `bin/fm-desk-voice.sh send` ([web.md](web.md)) |
-| `bin/fm-deepgram-stt.sh` | Audio file → transcript |
+| `bin/fm-deepgram-stt.sh` | Audio file → transcript, with a bounded, retried request |
 | `bin/fm-deepgram-tts.sh` | Text → Deepgram Aura audio |
 | `bin/fm-speak.sh` | Captain-facing speak-out (a named `voice` selects `say`, else Deepgram Aura; each the other's fallback), plus `--stop`, `--repeat`, `--history`, `--replay`, `--mute`, `--unmute`, `--muted` and `--volume` |
