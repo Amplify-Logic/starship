@@ -393,13 +393,28 @@ pid_within() {  # <pid> <root>
   return 1
 }
 
+# The last <rows> rows of <target>'s screen. The viewport alone is read where
+# the backend has a verified viewport read, as the composer check reads it:
+# on herdr 0.9.3 a history read of an idle Claude pane scrolls Claude's
+# conversation up to collect it and back, visibly, while a message is being
+# delivered. Other backends keep their bounded history capture.
+screen_rows() {  # <backend> <target> <rows>
+  local screen
+  if fm_backend_visible_capture_supported "$1"; then
+    screen=$(fm_backend_visible_capture "$1" "$2") || return 1
+    printf '%s\n' "$screen" | tail -n "$3"
+  else
+    fm_backend_capture "$1" "$2" "$3"
+  fi
+}
+
 # True when <target>'s screen shows a selection dialog (a permission prompt, a
 # question, a picker), where typed words would pick an option. The shared
 # composer classifier already refuses a pointer on a numbered option; this
 # also catches the dialog footers it does not read. An unreadable screen counts.
 shows_selection_dialog() {  # <backend> <target>
   local screen
-  screen=$(fm_backend_capture "$1" "$2" "${FM_COMPOSER_CAPTURE_LINES:-20}" 2>/dev/null) || return 0
+  screen=$(screen_rows "$1" "$2" "${FM_COMPOSER_CAPTURE_LINES:-20}" 2>/dev/null) || return 0
   printf '%s\n' "$screen" | grep -Eiq '(❯|›)[[:space:]]*[0-9]+\.|enter to select|esc to cancel'
 }
 
@@ -408,7 +423,7 @@ shows_selection_dialog() {  # <backend> <target>
 # ask fm_backend_composer_state whether the box is empty.
 composer_text() {  # <backend> <target> [rows]
   local cap
-  cap=$(fm_backend_capture "$1" "$2" "${3:-${FM_COMPOSER_CAPTURE_LINES:-20}}" 2>/dev/null) || return 1
+  cap=$(screen_rows "$1" "$2" "${3:-${FM_COMPOSER_CAPTURE_LINES:-20}}" 2>/dev/null) || return 1
   fm_composer_extract_selected_content styled=0 "$cap"
 }
 
@@ -425,7 +440,7 @@ squeezed() {  # <text>
 # screen counts, so a stash the captain already keeps is never replaced.
 shows_stash() {  # <backend> <target>
   local screen
-  screen=$(fm_backend_capture "$1" "$2" "${FM_COMPOSER_CAPTURE_LINES:-20}" 2>/dev/null) || return 0
+  screen=$(screen_rows "$1" "$2" "${FM_COMPOSER_CAPTURE_LINES:-20}" 2>/dev/null) || return 0
   printf '%s\n' "$screen" | fm_composer_strip_ansi | grep -Eq '›[[:space:]]*stashed[[:space:]]*$'
 }
 

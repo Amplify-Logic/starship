@@ -2050,6 +2050,38 @@ test_desk_voice_send_goes_past_a_claude_draft() {
   pass "fm-desk-voice send: a Claude draft is set aside, the message sent alone, and the draft put back"
 }
 
+# A herdr read with a line count of an idle Claude pane makes herdr scroll
+# Claude's conversation up to collect its history and back again, which the
+# captain sees as the chat jumping while a message is delivered. Every screen
+# check on the send path reads the viewport instead.
+test_desk_voice_send_reads_only_the_visible_screen() {
+  local home out reads
+  home=$(desk_send_fixture send-viewport-draft) || { desk_send_skip send-viewport-draft; return 0; }
+  cp "$HERDR_CLAUDE_SCREEN" "$home/fixture/screen"
+  printf 'claude' > "$home/fixture/agent"
+  printf 'Yes, land both glasses changes' > "$home/fixture/draft"
+  out=$(desk_send "$home" "and ship it") || fail "send failed: $out"
+  assert_contains "$out" "sent: herdr fm-desk-send-test:w7:p3" "the message goes past the draft"
+  reads=$(herdr_calls "$home" pane read)
+  [ -n "$reads" ] || fail "the send must still read the screen"
+  assert_not_contains "$reads" "--lines" "a send past a draft never asks herdr for history"
+  assert_not_contains "$reads" "--source recent" "a send past a draft reads only the visible screen"
+  desk_send_done "$home"
+  home=$(desk_send_fixture send-viewport-dialog) || { desk_send_skip send-viewport-dialog; return 0; }
+  # An empty chat box under a picker's footer: the composer check passes it,
+  # so only the dialog check keeps the words out of the picker.
+  printf '%s\n' ' Which branch should I merge?' ' Enter to select · Esc to cancel' \
+    '────────────────────────────────────────' '❯' \
+    '────────────────────────────────────────' '  ⏵⏵ auto mode on' > "$home/fixture/screen"
+  out=$(desk_send "$home" "main please") || fail "send failed: $out"
+  case "$out" in mailbox:\ *) ;; *) fail "expected a mailbox delivery, got: $out" ;; esac
+  reads=$(herdr_calls "$home" pane read)
+  [ -n "$reads" ] || fail "the dialog check must still read the screen"
+  assert_not_contains "$reads" "--lines" "the dialog check never asks herdr for history"
+  desk_send_done "$home"
+  pass "fm-desk-voice send: every screen check reads the visible screen, never herdr history"
+}
+
 test_desk_voice_send_goes_past_a_draft_in_a_narrow_pane() {
   local home out
   home=$(desk_send_fixture send-draft-narrow) || { desk_send_skip send-draft-narrow; return 0; }
@@ -2750,6 +2782,7 @@ test_desk_voice_send_never_doubles_an_unconfirmed_submit
 test_desk_voice_send_falls_back_when_the_pane_shows_a_dialog
 test_desk_voice_send_ignores_a_suggested_prompt
 test_desk_voice_send_goes_past_a_claude_draft
+test_desk_voice_send_reads_only_the_visible_screen
 test_desk_voice_send_goes_past_a_draft_in_a_narrow_pane
 test_desk_voice_send_goes_past_a_pasted_text_draft
 test_desk_voice_send_keeps_a_draft_it_cannot_set_aside
