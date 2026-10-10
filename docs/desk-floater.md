@@ -88,7 +88,9 @@ Right Shift follows the same tap rules as Right Command: held with a letter to t
 It also takes no screenshot while you are typing, so a Shift brushed on the way to a capital, a question mark or Return is ignored: a tap within a second and a half of your last key, or followed by a key within half a second, counts as typing.
 A tap that stands takes its screenshot half a second after you let go, and two taps within that half second take one screenshot.
 While macOS has secure typing on, such as in a password field or a terminal with Secure Keyboard Entry, the floater cannot see your keys, so Right Shift takes no screenshot then; use the Camera control.
-A hotkey used as part of a shortcut is ignored: pressing a letter or clicking the mouse while Right Option is held (to type a special character, or Option-click) cancels that capture without sending anything, and Right Command pressed with another key or a click, or held longer than half a second, is an ordinary Command press. System shortcuts that macOS keeps to itself, such as a quick Right Command-Tab or Right Command-Space, are hidden from the floater and can read as a tap; use the left Command key for those.
+A hotkey used as part of a shortcut is ignored: pressing a letter or clicking the mouse within the first third of a second of holding Right Option (to type a special character, or Option-click) cancels that capture without sending anything, and Right Command pressed with another key or a click, or held longer than half a second, is an ordinary Command press.
+Once Right Option has been held longer than that, you are talking: a key or a click, even one that opens a menu, leaves the recording running, and releasing Right Option still sends it.
+System shortcuts that macOS keeps to itself, such as a quick Right Command-Tab or Right Command-Space, are hidden from the floater and can read as a tap; use the left Command key for those.
 
 ## Dictation
 
