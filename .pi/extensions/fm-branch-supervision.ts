@@ -234,6 +234,10 @@ function isProcessingCustomMessage(message: { role?: string; customType?: string
   return message.role === "custom" && message.customType === PROCESSING_MESSAGE_TYPE;
 }
 
+function isProcessingStartMessage(message: unknown): message is { role: string; customType: string; content: unknown } {
+  return typeof message === "object" && message !== null && isProcessingCustomMessage(message);
+}
+
 // Pi persists provider failures as ordinary assistant messages and resolves
 // AgentSession.prompt(), so promise rejection alone cannot detect them. Read
 // only the final assistant entry appended by this prompt: unlike the rebuilt
@@ -1675,9 +1679,16 @@ ${context.command}
     // getEntries() here loses the captain request that the next wake may answer.
     // Stage it verbatim and remember the future persisted index for turn_end's
     // duplicate suppression. Operational extension injections are not dialog.
-    const prompt = event.prompt;
-    processingOpenedThisRun = queuedProcessingContent !== null && prompt === queuedProcessingContent;
+    // Pi 1.x also starts a run from a custom message, which carries no prompt;
+    // earlier Pi delivers every run start as prompt text.
+    const prompt = "prompt" in event ? event.prompt : null;
+    const message = "message" in event ? event.message : null;
+    processingOpenedThisRun =
+      queuedProcessingContent !== null &&
+      (prompt === queuedProcessingContent ||
+        (isProcessingStartMessage(message) && message.content === queuedProcessingContent));
     if (processingOpenedThisRun) queuedProcessingContent = null;
+    if (prompt === null) return;
     const trimmed = prompt.trim();
     if (!trimmed || isOperationalUserText(trimmed)) return;
     const file = currentMainSession.getSessionFile() ?? "";

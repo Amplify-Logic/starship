@@ -1055,15 +1055,15 @@ const operational = spawnSync(
   { encoding: "utf8", input: "operational watcher injection" },
 );
 if (operational.status !== 0) throw new Error(`could not create operational input: ${operational.stderr}`);
-await fire("before_agent_start", { prompt: operational.stdout }, mainCtx);
+await fire("before_agent_start", { messageType: "user", prompt: operational.stdout }, mainCtx);
 entries.push({ type: "message", message: { role: "user", content: operational.stdout } });
 const unsolicitedPrompt = "Please keep responses concise while monitoring the fleet.";
-await fire("before_agent_start", { prompt: unsolicitedPrompt }, mainCtx);
+await fire("before_agent_start", { messageType: "user", prompt: unsolicitedPrompt }, mainCtx);
 entries.push({ type: "message", message: { role: "user", content: unsolicitedPrompt } });
 await fire("agent_start", {}, mainCtx);
 await fire("agent_end", {}, mainCtx);
 const legacyOperational = "⁣FIRSTMATE_OP: give me a fresh system-resource report.";
-await fire("before_agent_start", { prompt: legacyOperational }, mainCtx);
+await fire("before_agent_start", { messageType: "user", prompt: legacyOperational }, mainCtx);
 entries.push({ type: "message", message: { role: "user", content: legacyOperational } });
 await fire("agent_start", {}, mainCtx);
 const unsolicited = dispatch("signal: healthy resource result");
@@ -1091,6 +1091,7 @@ for (let index = 0; index < requestedPrompts.length; index += 1) {
   if (index < longRequests.length && content.length <= 4000) {
     throw new Error(`request fixture ${index} did not exceed the mirror bound`);
   }
+  // Pi before 1.x sends a run start without messageType; it must still stage.
   await fire("before_agent_start", { prompt: content }, mainCtx);
   // Pi persists this only after every before_agent_start handler has returned.
   entries.push({ type: "message", message: { role: "user", content } });
@@ -1954,7 +1955,7 @@ if (openedByCaptain?.messages?.some((message) => message.customType === "fm-bran
   throw new Error(`captain-opened processing was not stripped: ${JSON.stringify(openedByCaptain)}`);
 }
 aborted = false;
-await fire("before_agent_start", { prompt: "captain typed this now" }, abortCtx);
+await fire("before_agent_start", { messageType: "user", prompt: "captain typed this now" }, abortCtx);
 const stolen = await fire("context", {
   messages: [{ role: "user", content: "captain typed this now" }, processingMsg],
 }, abortCtx);
@@ -1964,7 +1965,7 @@ if (stolen?.messages?.some((message) => message.customType === "fm-branch-proces
 }
 await fire("agent_end", {});
 aborted = false;
-await fire("before_agent_start", { prompt: pending.message.content }, abortCtx);
+await fire("before_agent_start", { messageType: "custom", message: processingMsg }, abortCtx);
 await fire("agent_start", {}, defaultSessionCtx);
 const openedByRequest = await fire("context", { messages: [...history, processingMsg] }, abortCtx);
 if (!aborted) throw new Error("a dedicated processing turn with history was not aborted under the record");
@@ -2043,6 +2044,19 @@ if (presented.options.triggerTurn !== true || presented.options.deliverAs !== "f
 }
 for (const needle of [`[seq ${seq1}, recorded 0m ago] task-d:`, `[seq ${seq2}, recorded 0m ago] fleet:`, `through=${seq2}`]) {
   if (!presented.message.content.includes(needle)) throw new Error(`the post-archive request lost ${needle}: ${presented.message.content}`);
+}
+
+// 6. Pi before 1.x opens that request's dedicated turn with its content as the
+// prompt text; a record entered before it runs aborts it the same way.
+contract(["enter", "--words", "stepping out again\n"]);
+const presentedMsg = { role: "custom", customType: presented.message.customType, content: presented.message.content, display: false };
+aborted = false;
+await fire("before_agent_start", { prompt: presented.message.content }, abortCtx);
+await fire("agent_start", {}, defaultSessionCtx);
+const openedByPrompt = await fire("context", { messages: [...history, presentedMsg] }, abortCtx);
+if (!aborted) throw new Error("a dedicated processing turn opened as prompt text was not aborted under the record");
+if (openedByPrompt?.messages?.some((message) => message.customType === "fm-branch-process")) {
+  throw new Error(`prompt-opened processing was not stripped: ${JSON.stringify(openedByPrompt)}`);
 }
 process.exit(0);
 EOF
