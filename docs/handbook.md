@@ -1,7 +1,7 @@
 # The captain's handbook
 
 What firstmate is doing end to end, how to shape it into your own, and a first-week path to full use.
-Read it after [ONBOARDING.md](../ONBOARDING.md) has given you a running first mate that passed the slug test.
+Read it after [ONBOARDING.md](../ONBOARDING.md) has given you a running first mate that brought back its first report.
 This page explains and points; each linked owner holds the exact rules and commands.
 
 ## How it works, in plain words
@@ -207,13 +207,9 @@ Claude in Chrome is not a claude.ai connector, so it is not in the claude.ai Con
 It is a browser extension that lets Claude use pages in your own Chrome when no connector exists; install it, then enable it in Claude Code with `/chrome`.
 
 The first mate does not hold outward sends by itself: a connector that can send, post, or change something can do so without asking you first.
-Record a standing rule before you connect mail or chat ([ONBOARDING step 8](../ONBOARDING.md#8-connect-your-other-tools) prompts for it).
+Record a standing rule before you connect mail or chat ([ONBOARDING step 4](../ONBOARDING.md#4-let-it-finish-its-own-setup-and-set-one-standing-rule) prompts for it).
 Record it in both places: `data/captain.md` binds the first mate, and the same line in `config/brief-include.md` puts it in every worker brief, since workers get the same connectors but do not read `data/captain.md`.
-For example:
-
-```text
-remember this as a standing rule, and add the same line to config/brief-include.md so every worker brief carries it: never send, post, or reply to anyone outside on my behalf without showing me the draft first
-```
+That onboarding step has the exact words to send.
 
 Once you run second mates, also put the rule in `data/captain-shared.md`, which second mates inherit, and in each second mate home's `config/brief-include.md`, since neither of your main home's copies reaches them.
 
@@ -236,7 +232,7 @@ The first mate installs these during setup, after you say yes.
 
 ## Optional extras, off until you switch them on
 
-A fresh copy includes every feature, but anything that talks to a paid service, speaks out loud, or runs on a schedule stays off until you opt in.
+A fresh copy includes every feature, but anything that talks to a paid service, speaks out loud, keeps your words on disk, or runs on a schedule stays off until you opt in.
 Ask the first mate to set one up; each owner page lists what it needs.
 
 | Feature | What it does | Needs |
@@ -247,8 +243,11 @@ Ask the first mate to set one up; each owner page lists what it needs.
 | Spoken replies ([configuration](configuration.md#desk-voice-out-configspeak)) | The first mate reads the start of each reply aloud | The same speech shaper |
 | Phone bridge page ([bridge-view.md](bridge-view.md)) | A phone page showing what needs you, with photo drop and hold-to-speak | Tailscale and Python 3.12 |
 | Morning intake ([configuration](configuration.md#morning-intake-configmorning-intake)) and dropped-threads digest ([configuration](configuration.md#dropped-threads-digest-configdropped-threads)) | A daily intake and a twice-daily "what is left hanging" summary | A scheduled job on this Mac |
-| Computer use ([macos-computer-use](../.agents/skills/macos-computer-use/SKILL.md)) | Lets the agents operate Mac apps and windows | Peekaboo, which the first mate installs, and Mac Accessibility permissions |
+| Computer use ([macos-computer-use](../.agents/opt-in-skills/macos-computer-use/SKILL.md)) | Lets the agents operate Mac apps and windows | Peekaboo, which the first mate installs, and Mac Accessibility permissions |
 | Activity ledger ([fleet-ledger.md](fleet-ledger.md)) | A file other tools can read to follow the fleet | Nothing extra |
+| Second opinion ([second-opinion.md](second-opinion.md)) | A rival AI model stress-tests a big design or decision before work starts | `config/second-opinion`; each review draws on your Claude plan, and the different-vendor pass on a Cursor plan |
+| Divergent ideas ([adhd.md](adhd.md)) | Fans out many options before a fuzzy, high-stakes choice | The `adhd-agent` CLI and `config/adhd` |
+| Prompt ledger ([configuration](configuration.md#captain-ledger-configcaptain-ledger)) | Writes every prompt you type to disk until the first mate has filed what you decided | `config/captain-ledger` |
 
 ## Keeping it current
 
@@ -263,14 +262,14 @@ Each step is small and proves one part of the system.
 
 **Day 1 - running and connected.**
 
-1. Finish [ONBOARDING.md](../ONBOARDING.md), including the slug test.
+1. Finish [ONBOARDING.md](../ONBOARDING.md), including its first report.
 2. Record the outward-send standing rule from [Connectors and tools](#a-rounded-starter-set-for-a-work-setup), then add your connectors and check each with one real question.
 3. Tell the first mate three things about how you work, as standing preferences, then ask "what's in captain.md now?".
 4. Run `/bearings`.
 
 **Day 2 - a first investigation.**
 
-1. Add one real project: "add `github.com/<org>/<repo>` as a project; deliver with full checks", using your real project's address.
+1. Pick a project: Harbour Logbook from onboarding, or add another real one: "add `github.com/<org>/<repo>` as a project; deliver with full checks", using its real address.
 2. Ask a scout question about it: "how does sign-up work in this project? report only".
 3. Read the findings, ask one follow-up, and record anything surprising as a learning.
 

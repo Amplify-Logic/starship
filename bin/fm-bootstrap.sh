@@ -39,8 +39,8 @@
 #          a purely local fast-forward with no origin fetch; a remote route hands
 #          the same commit to its host, which imports that commit into the home
 #          without moving the host's Firstmate copy. If either placement changes
-#          its loaded instruction surface
-#          (AGENTS.md, bin/, or .agents/skills/), bootstrap immediately nudges it
+#          its loaded instruction surface (the paths changed_instr in
+#          bin/fm-ff-lib.sh watches), bootstrap immediately nudges it
 #          via FM_HOME=<active-home> bin/fm-send.sh fm-<id> so meta resolves the
 #          current route and the standard from-firstmate marker is applied. A
 #          successful send prints one BOOTSTRAP_INFO line with the exact target
@@ -430,7 +430,7 @@ secondmate_sync() {
   # another machine, so its host is handed that same commit and imports it there
   # (bin/fm-remote-secondmate-control.sh); this side still fetches nothing.
   # Startup sends reread nudges only for RUNNING secondmates whose instruction
-  # surface (AGENTS.md, bin/, or .agents/skills/) actually changed, so a secondmate already on the primary's
+  # surface (changed_instr in bin/fm-ff-lib.sh) actually changed, so a secondmate already on the primary's
   # version is never disturbed (AGENTS.md bootstrap + supervision). Unlike
   # /updatefirstmate, startup owns the live-convergence send itself because it is
   # a deterministic locked sweep and can report success as BOOTSTRAP_INFO while
@@ -1785,6 +1785,11 @@ if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then
   fi
   # x_mode_setup writes local Relay artifacts only and never leaves the machine.
   local_phase && x_mode_setup
+  # Relink this home's opt-in skills, so a switch changed by hand reaches the
+  # next session; bin/fm-opt-in-skills.sh owns the switches and the links.
+  if local_phase && [ -x "$SCRIPT_DIR/fm-opt-in-skills.sh" ]; then
+    FM_HOME="$FM_HOME" FM_CONFIG_OVERRIDE="$CONFIG" "$SCRIPT_DIR/fm-opt-in-skills.sh" sync "$FM_ROOT" || true
+  fi
   # Adopt existing durable contribution links without making a network call.
   # Detection-only startup must never publish a check registration.
   if local_phase && command -v jq >/dev/null 2>&1 \

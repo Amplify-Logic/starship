@@ -3,8 +3,9 @@
 Firstmate uses a bounded rival-model second opinion as the convergent checker leg of its validation and cross-pollination loop.
 ADHD (`docs/adhd.md`) fans out options before the pick; this front-end stress-tests the pick after, before it becomes build orders.
 The default reviewer runs on Claude Code, which is already a fleet dependency; the different-vendor reviewer needs the Cursor CLI (`cursor-agent`) signed in to a Cursor plan.
-The auto-fire trigger is `.agents/skills/second-opinion-auto-fire/SKILL.md`.
+The auto-fire trigger is `.agents/opt-in-skills/second-opinion-auto-fire/SKILL.md`.
 The CLI wrapper is `bin/fm-second-opinion.sh`.
+The skill is opt-in: a home lists it only with the `config/second-opinion` presence flag ([configuration.md](configuration.md#opt-in-skills-configadhd-configsecond-opinion-configdaily-todo)).
 
 ## What it is for
 
@@ -71,5 +72,5 @@ Empty reviewer output or a reviewer process failure is a loud failure; `--out` i
 ## Ownership
 
 - Wrapper flags, registry, per-reviewer quota pools, and neutral-cwd enforcement: `bin/fm-second-opinion.sh` header and `--help`
-- Auto-fire trigger, when to add the `grok` pass, and the borderline-offer rule: `.agents/skills/second-opinion-auto-fire/SKILL.md`
+- Auto-fire trigger, when to add the `grok` pass, and the borderline-offer rule: `.agents/opt-in-skills/second-opinion-auto-fire/SKILL.md`
 - This file: usage overview, reviewer choice, cost policy, registry summary, and the neutral-cwd rule

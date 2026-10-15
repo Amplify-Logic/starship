@@ -18,6 +18,10 @@
   /></a>
 </p>
 
+> **Teammates: start with [ONBOARDING.md](ONBOARDING.md).**
+> This is Starship, the [Amplify-Logic fork](https://github.com/Amplify-Logic/firstmate) of [kunchenguid/firstmate](https://github.com/kunchenguid/firstmate).
+> Clone this fork, not the upstream repository, and launch with `bin/fm-primary.sh` as that guide shows.
+
 <h3 align="center">Talk to one agent. Ship with a crew.</h3>
 
 <p align="center">
@@ -57,93 +61,15 @@ Full detail on every feature lives in [docs/architecture.md](docs/architecture.m
 
 ## Quick Start
 
+Starship's setup is [ONBOARDING.md](ONBOARDING.md): five steps from a blank Mac to a first mate that has added a real project and brought back a worker's report, launched with `bin/fm-primary.sh`.
+
 ### Requirements
 
-- A verified primary agent harness: Claude Code, Grok, Pi, `pi-signed`, Oh My Pi (`omp`), Codex, OpenCode, or Cursor Agent CLI.
+- A verified primary agent harness: Claude Code, Grok, Pi, `pi-signed`, Oh My Pi (`omp`), Codex, OpenCode, or Cursor Agent CLI; the onboarding guide uses Claude Code, and `bin/fm-primary.sh --help` lists every verified launch profile.
 - Git and the GitHub CLI, authenticated through `gh auth login`.
-- The CLI and dependencies for your selected runtime backend; tmux is the reference default.
+- The CLI and dependencies for your selected runtime backend; tmux is the reference default, and each backend's setup guide is linked in [Documentation](#documentation).
 
 The first mate detects and offers to install supported missing tools after you approve.
-Backend-specific setup is linked in [Documentation](#documentation).
-
-### Recommended harnesses
-
-**Claude Code, Grok, and Pi are equal co-primary recommendations** for running the primary firstmate session, with `pi-signed` supported as Pi's distinct signed-wrapper identity.
-Claude Code uses a tracked Stop hook for tokenless watcher re-arm and rewake, Grok uses background-notify wake cycles, and Pi uses its tracked primary watcher extension.
-All three have verified turn-end guard paths when launched with their documented setup.
-Pick whichever one matches your subscription and workflow.
-
-Oh My Pi (`omp`), a Pi fork, is verified as a primary with the same extension-owned watcher model as Pi and a stronger turn-end guard: its blocking `session_stop` hook compels a continuation instead of requesting one.
-Codex and OpenCode are also verified and supported as primary harnesses; Codex uses bounded foreground checkpoints, and OpenCode uses a TUI plugin, so both carry more harness-specific supervision tradeoffs than the three co-primaries.
-Cursor Agent CLI is verified as a primary too, using a tracked project-scope `.cursor/hooks.json` whose `stop` hook parks on the watcher between turns, closest in shape to Claude Code's.
-Launch it with `--trust`, or none of its project hooks load; it also has no turn-end hook in headless `cursor-agent -p`, so run the primary session interactively.
-
-### Install and launch
-
-```sh
-gh auth login
-git clone https://github.com/kunchenguid/firstmate
-cd firstmate
-```
-
-Then launch one of the co-primary harnesses; AGENTS.md takes over from there:
-
-**Claude Code**
-
-```sh
-claude
-```
-
-**Grok**
-
-```sh
-grok --trust
-```
-
-**Pi**
-
-```sh
-pi
-# or, when the signed wrapper is installed
-FM_PI_HARNESS=pi-signed pi-signed
-```
-
-**Oh My Pi**
-
-```sh
-omp
-# or, when starting from inside a Claude Code pane
-FM_OMP_HARNESS=omp omp
-```
-
-Start `omp` with this checkout as its working directory: it auto-discovers the tracked `.omp/extensions/*.ts` files with no trust dialog, and naming them with `-e` as well would load each twice.
-
-For Grok, `--trust` is needed once per clone so project hooks and the turn-end guard load; `/hooks-trust` inside Grok works too.
-For Pi, approve the project trust prompt once per clone on first launch so the tracked `.pi/extensions/*.ts` files auto-load.
-The `/calm` toggle on Pi, and on Claude Code behind its default-off early-access function-hooks flag, hides supported transcript chrome, including canonically classified Firstmate operational user rows, and uses a Calm-only animated working boat during active runs while preserving all model context and session data.
-Calm changes only presentation, not the user-role delivery, ordering, authority, persistence, or exports of the operational inputs it hides.
-The preference persists for the effective Firstmate home, and toggling it off restores ordinary rendering.
-[Calm's current behavior and supported limits](docs/calm.md) are separate from its [version-scoped maintainer evidence](docs/calm-mode-feasibility.md).
-Pi's `/supervision-model` command pins a cheaper model and a shallower reasoning effort for the supervision branch alone, from the eligible models and thinking levels Pi itself reports, and with no pin the branch normally follows your own conversation's model and effort; see the [configuration schema](docs/configuration.md#pi-supervision-branch-model-and-effort-configsupervision-branch-model-configsupervision-branch-effort).
-
-### Talk to it
-
-```sh
-> ahoy! look at my github project xyz, then fix the flaky login test and add dark mode
-
-# firstmate checks its toolchain (asking your consent before installing anything),
-# clones the project under projects/ and spawns two isolated workers in the active backend.
-# Minutes later:
-
-  PR ready for review, captain: https://github.com/you/xyz/pull/42
-  (fix flaky login test - risk: low - CI green)
-
-> alright merge it
-```
-
-### More backends
-
-Setup guides for tmux (the default) and every other supported backend (herdr, zellij, Orca, cmux) are linked in [Documentation](#documentation) below.
 
 ## How It Works
 

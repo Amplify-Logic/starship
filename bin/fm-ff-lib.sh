@@ -225,11 +225,12 @@ fetch_once() {
 # Which watched instruction paths changed between HEAD and BASE (comma list).
 # These are the files a running agent actually reads or runs: its instructions
 # (AGENTS.md, which CLAUDE.md imports via @AGENTS.md), its agent-loaded skills
-# (.agents/skills/), and its tooling (bin/). Public skills/ is installer-facing
+# (.agents/skills/, and .agents/opt-in-skills/ that a home links into it), and
+# its tooling (bin/). Public skills/ is installer-facing
 # and intentionally not part of this watched instruction surface.
 changed_instr() {
   local dir=$1 base=$2 p out=""
-  for p in AGENTS.md bin .agents/skills; do
+  for p in AGENTS.md bin .agents/skills .agents/opt-in-skills; do
     if ! git -C "$dir" diff --quiet HEAD "$base" -- "$p" 2>/dev/null; then
       out="$out${out:+, }$p"
     fi

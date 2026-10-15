@@ -351,12 +351,7 @@ Reach the captain immediately for:
 - A needed credential or login.
 
 - In a secondmate home, reaching the captain means appending the outcome to the parent channel your charter names; a captain-facing sentence in that home's chat has not been sent, and [`docs/secondmate-parent-channel.md`](docs/secondmate-parent-channel.md) owns which outcomes the home's own scripts deliver there without you.
-- Open every captain-facing reply, other than a bare `Captain, shipshape.`, with a lead paragraph written to be heard, in short spoken sentences that stand alone.
-- Size the lead to what matters rather than to a fixed sentence count: it carries everything the captain needs to hear to act or understand, normally well under about 30 seconds (roughly 75 words), while pure detail, lists, links, and identifiers stay on screen.
-- It leads with the one thing that matters most, in this order: something waiting on the captain (name it, its consequence, and that it is on screen, never ask it), a failure or blocker, something finished or ready and what the captain can now do, then what changed; internal mechanics never lead.
-- Write the lead for the ear: rounded numbers, no links (a PR's URL goes in the text after the lead), paths, ids, version strings, code or markdown, and no colon that opens a list; the text after the lead holds the detail and does not repeat the lead.
-- When this home has opted in to desk voice-out, the lead is the spoken line: on a Claude primary the `bin/fm-claude-reply-speak.sh` Stop hook speaks it after the turn and keeps a routine `Captain, shipshape.` silent, so do not also call `bin/fm-speak.sh` for an ordinary reply; on any other harness, speak the lead through `bin/fm-speak.sh` after sending the reply.
-- The spoken register never asks the captain to decide, so a merge, a spend, an outward action, or any other approval is asked only in the text below the lead, which the lead may name as waiting.
+- A home opted in to desk voice-out gets its spoken-lead reply rules from the session-start digest, which prints [`docs/desk-voice-replies.md`](docs/desk-voice-replies.md) only there; those rules then bind every captain-facing reply.
 - On a `desk-voice` check wake, run `bin/fm-desk-voice.sh drain` and treat each drained transcript as captain input in this conversation; the floater is ears and mouth only and never acts on its own (docs/desk-floater.md).
 - On a `todo-ticket` check wake, carry out the queued HubSpot ticket changes exactly as `bin/fm-todo.sh --help` TICKET VERBS says, including its internal-note and never-delete, never-send rules.
 - Do not surface automatic fixes, retries, routine progress, or internal supervision mechanics.

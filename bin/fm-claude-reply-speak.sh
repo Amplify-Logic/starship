@@ -3,11 +3,12 @@
 #
 # Registered in tracked .claude/settings.json as a Stop command hook with
 # "async": true, so the turn ends at once and this runs in the background.
-# It carries out AGENTS.md section 9's voice-out duty on a Claude primary: the
-# model writes its reply's opening lead for the ear, and this hook speaks that
-# lead whenever the model did not speak a line itself during the turn.
+# It carries out the voice-out duty of docs/desk-voice-replies.md on a Claude
+# primary: the model writes its reply's opening lead for the ear, and this hook
+# speaks that lead whenever the model did not speak a line itself during the
+# turn.
 #
-# What it speaks: the reply's opening lead (AGENTS.md section 9), taken from the
+# What it speaks: the reply's opening lead (docs/desk-voice-replies.md), taken from the
 # Stop payload's `last_assistant_message`, which is the exact final reply:
 #   - a leading routine "Captain, shipshape." is dropped first, so that line is
 #     never spoken and the news after it is;
@@ -20,7 +21,7 @@
 #   - a closing sentence ending in ":" introduces a list on screen, so it is
 #     dropped when another sentence precedes it and ended with "." when it is
 #     the only one;
-#   - at most 6 sentences and 75 words (AGENTS.md section 9's roughly 75-word
+#   - at most 6 sentences and 75 words (docs/desk-voice-replies.md's roughly 75-word
 #     lead, leaving the register's seventh sentence for the pointer), cut back
 #     to the last whole sentence;
 #     a first sentence longer than that is kept whole for the register to cut;
@@ -69,8 +70,10 @@
 #     arrived within the settle window. A continuation that runs longer than the
 #     window can still speak both lines; the final reply is then spoken as well,
 #     because the hook's own speech is not counted as the model's.
-#   - a muted or not-opted-in home: bin/fm-speak.sh owns both and exits 0
-#     without a sound.
+#   - a home that is not opted in: the hook asks bin/fm-speak.sh --enabled
+#     first and does nothing else at all, so a home without config/speak pays
+#     no settle wait and writes no state;
+#   - a muted home: bin/fm-speak.sh owns the mute and exits 0 without a sound.
 #
 # Scope, so workers never speak: every worktree of this repo loads the same
 # tracked settings, so the hook runs only in the plain primary checkout (not a
@@ -103,7 +106,7 @@ DECISION_NOTICE="Captain, a decision is waiting for you on screen."
 REPLY_NOTICE="Captain, my reply is on screen."
 
 ROUTINE_LINE="Captain, shipshape."
-# AGENTS.md section 9 sizes the lead to what matters, roughly 75 words at most;
+# docs/desk-voice-replies.md sizes the lead to what matters, roughly 75 words at most;
 # one sentence short of the register's seven leaves room for the pointer.
 MAX_WORDS=75
 MAX_SENTENCES=6
@@ -123,6 +126,9 @@ case "$SETTLE_MS" in ''|*[!0-9]*) SETTLE_MS=2000 ;; esac
 
 PAYLOAD=$(cat 2>/dev/null || true)
 [ -n "$PAYLOAD" ] || exit 0
+# --- opt-in: a home that does not speak runs nothing below -----------------
+# bin/fm-speak.sh owns the opt-in, so it is asked rather than re-read here.
+[ "$("$SCRIPT_DIR/fm-speak.sh" --enabled 2>/dev/null)" = enabled ] || exit 0
 command -v jq >/dev/null 2>&1 || exit 0
 fm_hook_payload_is_foreign_host "$PAYLOAD" && exit 0
 

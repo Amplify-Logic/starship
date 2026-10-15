@@ -987,6 +987,10 @@ if [ -f "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}/primary-handoff" ] \
     printf 'updated_at=%s\n' "$(date +%s)"
   } > "$STATE/.primary-active"
 fi
+# A harness lists skills once, at start, so this home's opt-in skills are linked
+# before the CLI starts (bin/fm-opt-in-skills.sh owns which and why).
+[ ! -x "$FM_ROOT/bin/fm-opt-in-skills.sh" ] \
+  || FM_HOME="$FM_HOME" FM_CONFIG_OVERRIDE="$CONFIG" "$FM_ROOT/bin/fm-opt-in-skills.sh" sync "$FM_ROOT" || true
 install_primary_status_bar
 case "$PROFILE" in
   opencode)

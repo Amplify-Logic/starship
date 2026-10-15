@@ -5241,6 +5241,13 @@ exclude_path() {
   mkdir -p "$(dirname "$EXCL")"
   grep -qxF "$rel" "$EXCL" 2>/dev/null || echo "$rel" >>"$EXCL"
 }
+# A Firstmate task worktree gets this home's opt-in skills before its worker
+# starts, the same set the primary checkout has; any other project has no
+# opt-in skill folder and is left alone (bin/fm-opt-in-skills.sh). A secondmate
+# home keeps its own switches, so its sync is left to its own sessions.
+if [ "$KIND" != secondmate ] && [ -x "$SCRIPT_DIR/fm-opt-in-skills.sh" ]; then
+  FM_HOME="$FM_HOME" FM_CONFIG_OVERRIDE="$CONFIG" "$SCRIPT_DIR/fm-opt-in-skills.sh" sync "$WT" || true
+fi
 if [ "$RELAUNCH" -eq 1 ]; then
   # Retire the previous incarnation's per-task harness wiring before arming the
   # new one. Without this, a harness switch would leave the old adapter's hook

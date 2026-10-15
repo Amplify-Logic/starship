@@ -30,7 +30,8 @@ install_hook_scripts() {
   local dir=$1 script
   mkdir -p "$dir/bin"
   for script in fm-claude-reply-speak.sh fm-primary-scope-lib.sh fm-session-lock-lib.sh \
-    fm-hook-host-lib.sh fm-wake-lib.sh fm-path-lib.sh fm-cursor-lib.sh; do
+    fm-hook-host-lib.sh fm-wake-lib.sh fm-path-lib.sh fm-cursor-lib.sh \
+    fm-speak.sh fm-deepgram-lib.sh; do
     cp "$ROOT/bin/$script" "$dir/bin/$script"
   done
   chmod +x "$dir/bin/fm-claude-reply-speak.sh"
@@ -76,6 +77,10 @@ make_primary_dir() {
   : > "$dir/AGENTS.md"
   install_hook_scripts "$dir"
   install_speak_stub "$dir"
+  # Opted in, as every case but the opt-in one expects; the hook asks the copied
+  # bin/fm-speak.sh --enabled before anything else.
+  mkdir -p "$dir/config"
+  printf 'enabled = true\n' > "$dir/config/speak"
   printf '%s\n' "$dir"
 }
 
@@ -461,6 +466,26 @@ test_worker_worktree_is_inert() {
   pass "worker worktree session is a no-op"
 }
 
+# A home that never opted in runs nothing: no settle wait, no hook state, and
+# no call to the speaker, even with a speakable reply and the lock held.
+test_home_not_opted_in_runs_nothing() {
+  local dir started elapsed
+  dir=$(make_primary_dir "$TMP_ROOT/not-opted-in")
+  rm -f "$dir/config/speak"
+  started=$(date +%s)
+  SETTLE_MS=3000 run_hook "$dir" "Captain, the fix landed and the checks are green."
+  elapsed=$(( $(date +%s) - started ))
+  assert_absent "$dir/spoken.log" "a home that never opted in must never reach the speaker"
+  assert_absent "$dir/state/.reply-speak-stop" "a home that never opted in must write no hook state"
+  assert_absent "$dir/state/.reply-speak-seen" "a home that never opted in must write no hook state"
+  [ "$elapsed" -lt 3 ] || fail "a home that never opted in must not wait out the settle window (took ${elapsed}s)"
+  printf 'enabled = false\n' > "$dir/config/speak"
+  run_hook "$dir" "Captain, still not opted in."
+  assert_absent "$dir/spoken.log" "enabled = false must stay silent"
+  assert_absent "$dir/state/.reply-speak-stop" "enabled = false must write no hook state"
+  pass "a home that is not opted in runs nothing"
+}
+
 test_secondmate_home_is_inert() {
   local dir
   dir=$(make_primary_dir "$TMP_ROOT/secondmate")
@@ -622,6 +647,7 @@ test_settings_register_async_primary_hook() {
 }
 
 test_plain_reply_is_spoken
+test_home_not_opted_in_runs_nothing
 test_decision_reply_falls_back_to_first_sentence
 test_decision_only_reply_speaks_notice
 test_non_decision_refusal_never_claims_a_decision

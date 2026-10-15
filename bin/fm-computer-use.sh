@@ -19,7 +19,7 @@
 #       ~/.local/bin/peekaboo to it. User-level only: no app bundle, no login
 #       item, no LaunchAgent, no privacy prompt. Refuses to replace a
 #       ~/.local/bin/peekaboo that is not its own link. Removal is in
-#       .agents/skills/macos-computer-use/SKILL.md.
+#       .agents/opt-in-skills/macos-computer-use/SKILL.md.
 #   fm-computer-use.sh elements --app <app> [--window-title <title>] [--all] [--max <n>] [--screenshot] [--thin <n>] [--from <see.json>]
 #       Read the app's window as its element list, without a screenshot
 #       (`peekaboo see --tree --no-screenshot --json`), so a minimised window

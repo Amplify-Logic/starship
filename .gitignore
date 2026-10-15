@@ -26,3 +26,11 @@ __pycache__/
 # SwiftPM build products for the desk floater.
 desk-floater/.build/
 .tools/
+# Opt-in skill links that bin/fm-opt-in-skills.sh puts into .agents/skills/ for
+# a home that switched them on; the skills themselves live in
+# .agents/opt-in-skills/. One line per skill in that script's table.
+/.agents/skills/adhd
+/.agents/skills/adhd-auto-fire
+/.agents/skills/second-opinion-auto-fire
+/.agents/skills/daily-todo-freshness
+/.agents/skills/macos-computer-use

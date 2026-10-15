@@ -2530,6 +2530,41 @@ EOF
   pass "session start prints unreconciled captain words on the full and re-emit digests until they are marked"
 }
 
+# The spoken-lead reply rules print on the full and the re-emit digest only for
+# a home opted in to desk voice-out, and nowhere else.
+test_desk_voice_reply_rules_print_only_when_opted_in() {
+  local rec root home fakebin off full reemit
+  rec=$(new_world desk-voice-rules)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+
+  off=$(FM_FAKE_HARNESS_PID=$$ run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_contains "$off" "WAKE QUEUE" "the digest without voice-out did not run"
+  assert_not_contains "$off" "DESK VOICE-OUT REPLY RULES" "a home that never opted in must not get the voice rules"
+  assert_not_contains "$off" "written to be heard" "a home that never opted in must not get the voice rules"
+
+  printf 'enabled = true\n' > "$home/config/speak"
+  full=$(FM_FAKE_HARNESS_PID=$$ run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_contains "$full" "DESK VOICE-OUT REPLY RULES" "an opted-in home's digest omitted the voice rules"
+  assert_contains "$full" "with a lead paragraph written to be heard" "the voice rules section omitted the lead rule"
+  assert_not_contains "$full" "# Desk voice-out reply rules" "the rules file's title must not print as a markdown heading"
+
+  reemit=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$root" FM_FAKE_HARNESS_PID=$$ PATH="$fakebin:$BASE_PATH" \
+    env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
+    "$SESSION_START" --reemit)
+  assert_contains "$reemit" "SESSION START (CONTEXT RE-EMIT)" "the re-emit fixture did not take the re-emit path"
+  assert_contains "$reemit" "with a lead paragraph written to be heard" "the re-emit digest omitted the voice rules"
+
+  printf 'enabled = false\n' > "$home/config/speak"
+  off=$(FM_FAKE_HARNESS_PID=$$ run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_not_contains "$off" "DESK VOICE-OUT REPLY RULES" "enabled = false must not print the voice rules"
+
+  pass "session start prints the spoken-lead reply rules only for a home opted in to desk voice-out"
+}
+
 test_agents_baseline_stays_at_true_start_and_reemits_on_every_drifted_pi_compact() {
   local rec root home fakebin startup compact_equal compact_first compact_second clear_out resume_out reset_out baseline baseline_after expected_hash refresh_line bootstrap_line
   rec=$(new_world agents-refresh)
@@ -3174,6 +3209,7 @@ test_runtime_bound_leaves_a_healthy_digest_untouched
 test_runtime_bound_leaves_harness_ancestry_headroom
 test_reemit_skips_startup_sweeps_but_keeps_the_wake_drain
 test_unreconciled_captain_words_print_until_marked
+test_desk_voice_reply_rules_print_only_when_opted_in
 test_agents_baseline_stays_at_true_start_and_reemits_on_every_drifted_pi_compact
 test_read_only_pi_compact_refreshes_against_its_own_session_identity
 test_codex_unreachable_reset_sources_do_not_claim_instruction_refresh

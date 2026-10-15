@@ -96,6 +96,10 @@ bump_primary() {
     printf 'echo %s\n' "$mode" > "$w/main/bin/tool.sh"
     printf 's-%s\n' "$mode" > "$w/main/.agents/skills/note.md"
   fi
+  if [ "$mode" = opt-in ]; then
+    mkdir -p "$w/main/.agents/opt-in-skills/extra"
+    printf 'o-%s\n' "$RANDOM" > "$w/main/.agents/opt-in-skills/extra/SKILL.md"
+  fi
   if [ "$mode" = bin ]; then
     printf 'echo %s-%s\n' "$mode" "$RANDOM" > "$w/main/bin/tool.sh"
   fi
@@ -1087,7 +1091,7 @@ test_remote_sync_targets_primary_not_host_copy() {
 # whether the running remote agent must be replaced to reload, or whether the
 # advance reloads itself.
 test_remote_sync_reports_the_changed_instruction_surface() {
-  local w c_instr c_bin c_readme
+  local w c_instr c_bin c_opt_in c_readme
   w=$(new_remote_world remote-instr)
   add_remote_home "$w" sm "$w/coderoot" "$(head_of "$w/main")"
 
@@ -1106,6 +1110,14 @@ test_remote_sync_reports_the_changed_instruction_surface() {
   [ "$REMOTE_SYNC_RC" -eq 0 ] || fail "the bin-only advance did not sync: $REMOTE_SYNC_OUT"
   assert_contains "$REMOTE_SYNC_OUT" "instr=bin" "a bin-only advance must be reported as bin only"
   assert_not_contains "$REMOTE_SYNC_OUT" "AGENTS.md" "a bin-only advance must not claim AGENTS.md changed"
+
+  bump_primary "$w" opt-in
+  c_opt_in=$(head_of "$w/main")
+  git -C "$w/coderoot" fetch -q --no-tags "$w/main" "$c_opt_in"
+  remote_sync "$w" sm "$c_opt_in"
+  [ "$REMOTE_SYNC_RC" -eq 0 ] || fail "the opt-in skill advance did not sync: $REMOTE_SYNC_OUT"
+  assert_contains "$REMOTE_SYNC_OUT" "instr=.agents/opt-in-skills" \
+    "an opt-in skill edit must be reported as an instruction change"
 
   bump_primary "$w" readme
   c_readme=$(head_of "$w/main")

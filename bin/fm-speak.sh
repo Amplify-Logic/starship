@@ -9,6 +9,7 @@
 #   fm-speak.sh --history
 #   fm-speak.sh --replay <number>
 #   fm-speak.sh --mute | --unmute | --muted
+#   fm-speak.sh --enabled
 #   fm-speak.sh --volume [<percent>]
 #   fm-speak.sh --help
 #
@@ -142,6 +143,12 @@
 #             nor kept for --repeat, and the call still exits 0: muting affects
 #             voice only, and the text reply stays the authoritative one.
 #   --muted   prints `muted` or `unmuted`.
+#   --enabled prints `enabled` when this home is opted in (OPT-IN above) and
+#             `disabled` otherwise, whatever the mute says. It is how other
+#             scripts ask whether this home speaks at all without a second
+#             reader of config/speak: the reply-speak Stop hook stands down,
+#             and the session-start digest prints the spoken-lead reply rules
+#             (docs/desk-voice-replies.md), only when it prints `enabled`.
 #   --volume [<percent>]
 #             prints, or with a whole number from 0 to 200 sets, the spoken
 #             voice's level as a percentage of the Mac's own output volume: 100
@@ -1023,9 +1030,9 @@ main() {
     case "$1" in
       --help|-h) usage; exit 0 ;;
       --dry-run) dry_run=true; shift ;;
-      --stop|--repeat|--history|--replay|--mute|--unmute|--muted|--volume)
+      --stop|--repeat|--history|--replay|--mute|--unmute|--muted|--enabled|--volume)
         [ -z "$control" ] || {
-          note "only one of --stop, --repeat, --history, --replay, --mute, --unmute, --muted, --volume"
+          note "only one of --stop, --repeat, --history, --replay, --mute, --unmute, --muted, --enabled, --volume"
           exit 1
         }
         control=${1#--}
@@ -1060,6 +1067,10 @@ main() {
       mute) set_muted true ;;
       unmute) set_muted false ;;
       muted) if is_muted; then printf 'muted\n'; else printf 'unmuted\n'; fi ;;
+      enabled)
+        load_config
+        if [ "$CFG_ENABLED" = true ]; then printf 'enabled\n'; else printf 'disabled\n'; fi
+        ;;
       volume)
         if [ "$VOLUME_SET" = true ]; then
           set_volume "$VOLUME_ARG"

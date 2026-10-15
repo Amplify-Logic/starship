@@ -3,9 +3,10 @@
 Firstmate uses the MIT [ADHD](https://github.com/UditAkhourii/adhd) project (`adhd-agent` on npm) as its divergent-ideation front-end for high-leverage decisions.
 The captain adopted it on 2026-07-23 after a bounded trial.
 This doc owns install, uninstall, usage, and the standing cost policy.
-The captain-invocable skill is `.agents/skills/adhd/SKILL.md`.
-The auto-fire trigger is `.agents/skills/adhd-auto-fire/SKILL.md`.
+The captain-invocable skill is `.agents/opt-in-skills/adhd/SKILL.md`.
+The auto-fire trigger is `.agents/opt-in-skills/adhd-auto-fire/SKILL.md`.
 The CLI wrapper is `bin/fm-adhd.sh`.
+Both skills are opt-in: a home lists them only with the `config/adhd` presence flag ([configuration.md](configuration.md#opt-in-skills-configadhd-configsecond-opinion-configdaily-todo)), because the bootstrap does not install the CLI.
 
 ## What it is for
 
@@ -64,6 +65,6 @@ If `adhd` is missing, the wrapper exits 127 and prints the install and uninstall
 ## Ownership
 
 - Wrapper flags and refusal mechanics: `bin/fm-adhd.sh` header and `--help`
-- Manual captain invocation: `.agents/skills/adhd/SKILL.md`
-- Auto-fire trigger and borderline-offer rule: `.agents/skills/adhd-auto-fire/SKILL.md`
+- Manual captain invocation: `.agents/opt-in-skills/adhd/SKILL.md`
+- Auto-fire trigger and borderline-offer rule: `.agents/opt-in-skills/adhd-auto-fire/SKILL.md`
 - This file: install, uninstall, usage overview, and cost policy

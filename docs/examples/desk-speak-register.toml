@@ -4,7 +4,7 @@
 # refuse decision-seeking lines). The spoken time budget is raised from ~8s,
 # which is tuned for the glasses and cuts an ordinary desk outcome mid-message,
 # to 30s and seven sentences: about 78 words at 2.6 words a second, so a lead
-# sized to what matters (AGENTS.md section 9, roughly 75 words) is heard whole.
+# sized to what matters (docs/desk-voice-replies.md, roughly 75 words) is heard whole.
 # bin/fm-claude-reply-speak.sh cuts its spoken lead back to leave room for its
 # one short pointer to the screen, so keep its SPOKEN_WORDS in step with this.
 #

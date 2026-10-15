@@ -982,6 +982,29 @@ test_an_unusable_state_directory_is_refused_before_anything_is_shaped() {
   pass "fm-speak: an unusable state directory is refused before anything is shaped"
 }
 
+# --enabled answers whether this home speaks at all, from config/speak alone:
+# the mute does not change it, and asking writes nothing.
+test_enabled_reports_the_opt_in() {
+  local home out code
+  home=$(new_home enabled-none)
+  out=$(speak "$home" --enabled) || fail "fm-speak: --enabled failed with no config"
+  assert_equals "disabled" "$out" "a home with no config/speak must read as disabled"
+  home=$(new_home enabled-false "enabled = false")
+  out=$(speak "$home" --enabled) || fail "fm-speak: --enabled failed"
+  assert_equals "disabled" "$out" "enabled = false must read as disabled"
+  home=$(new_home enabled-true "enabled = true")
+  out=$(speak "$home" --enabled) || fail "fm-speak: --enabled failed"
+  assert_equals "enabled" "$out" "enabled = true must read as enabled"
+  speak "$home" --mute >/dev/null 2>&1 || fail "fm-speak: --mute failed"
+  out=$(speak "$home" --enabled) || fail "fm-speak: --enabled failed while muted"
+  assert_equals "enabled" "$out" "a mute must not change the opt-in answer"
+  home=$(new_home enabled-bad "colour = blue")
+  out=$(speak "$home" --enabled 2>&1) && code=0 || code=$?
+  expect_code 1 "$code" "an invalid config must be refused, not read as an answer"
+  assert_not_contains "$out" "enabled" "an invalid config must not answer enabled"
+  pass "fm-speak: --enabled reports the opt-in and ignores the mute"
+}
+
 # The desk floater's Mute button: voice goes quiet until unmuted, while the
 # caller still sees success because the text reply is the authoritative one.
 test_mute_silences_every_line_until_unmuted() {
@@ -1485,6 +1508,7 @@ test_two_homes_may_speak_at_the_same_time
 test_a_lock_whose_pid_was_reused_is_reclaimed
 test_an_unusable_state_directory_is_refused_before_anything_is_shaped
 test_mute_silences_every_line_until_unmuted
+test_enabled_reports_the_opt_in
 test_stop_cuts_the_current_line_and_cancels_the_queued_one
 test_repeat_speaks_the_last_spoken_line_again
 test_history_lists_the_newest_ten_replies_newest_first

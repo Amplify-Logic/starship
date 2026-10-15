@@ -15,9 +15,15 @@
 # reconciles each entry against data/captain.md, the backlog, and the decision
 # files (or runs /stow), then marks the ledger reconciled.
 #
+# OPT-IN. The ledger keeps a person's raw words, so it records only in a home
+# that asked for it: the private, gitignored config/captain-ledger presence
+# flag (any file there, whatever it holds). Without the flag `hook claude` does
+# nothing at all, while `pending` and `mark` still read and reconcile whatever a
+# ledger already holds, so switching it off never strands recorded words.
+#
 # WRITER. `hook claude` runs as the tracked Claude UserPromptSubmit hook in
-# .claude/settings.json. It appends the submitted prompt, with only the
-# whitespace at its very end trimmed, and records nothing for:
+# .claude/settings.json. In an opted-in home it appends the submitted prompt,
+# with only the whitespace at its very end trimmed, and records nothing for:
 #   - input bin/fm-operational-input.sh classifies as operational (watcher
 #     wakes, turn-end guard follow-ups, away-supervisor escalations, launch
 #     briefs, from-firstmate steers, and their pre-protocol forms), and a
@@ -67,7 +73,8 @@
 # hook always exits 0 silently; pending and mark exit 0, and 2 on misuse.
 #
 # Environment overrides, for tests and unusual layouts:
-#   FM_ROOT_OVERRIDE, FM_HOME, FM_STATE_OVERRIDE, FM_DATA_OVERRIDE
+#   FM_ROOT_OVERRIDE, FM_HOME, FM_STATE_OVERRIDE, FM_DATA_OVERRIDE,
+#   FM_CONFIG_OVERRIDE
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -75,6 +82,7 @@ FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
+CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 LEDGER="$DATA/captain-ledger.jsonl"
 CURSOR="$STATE/.captain-ledger-cursor"
 
@@ -118,6 +126,10 @@ hook_claude() {
   local payload parsed session text trimmed kind last cursor seq record
   payload=$(cat 2>/dev/null) || return 0
   [ -n "$payload" ] || return 0
+  # Opt-in: a home without the config/captain-ledger presence flag records
+  # nothing at all, so a prompt is never written to disk without the home
+  # asking for it.
+  [ -e "$CONFIG/captain-ledger" ] || [ -L "$CONFIG/captain-ledger" ] || return 0
   command -v jq >/dev/null 2>&1 || return 0
 
   # shellcheck source=bin/fm-primary-scope-lib.sh

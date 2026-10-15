@@ -103,6 +103,11 @@ if [ "$FF_STATUS" = "updated" ]; then
   # this test suite uses to point fm-update.sh at a fixture checkout).
   FM_HOME="$FM_HOME" FM_ROOT_OVERRIDE="$FM_ROOT" "$SCRIPT_DIR/fm-procevent-when.sh" rebind-all || true
 fi
+# An update can move a skill this home switched on out of .agents/skills/, so
+# relink this home's opt-in skills at once rather than leaving the running
+# session without them until the next launch (bin/fm-opt-in-skills.sh).
+[ ! -x "$FM_ROOT/bin/fm-opt-in-skills.sh" ] \
+  || FM_HOME="$FM_HOME" "$FM_ROOT/bin/fm-opt-in-skills.sh" sync "$FM_ROOT" || true
 
 # --- secondmates -----------------------------------------------------------
 # Every live secondmate this pass leaves on origin's tip is restarted, whether it

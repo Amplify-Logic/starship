@@ -80,7 +80,7 @@ Each effective `FM_HOME` contains private operational directories.
 - Learnings, backlog, briefs, and scout reports.
 - Explicitly installed content-addressed extension packages under `data/extensions/packages/`.
 - Glasses ideas held for Atelier under `data/voice-ideas/` (`bin/fm-voice-idea.py`).
-- The captain ledger `data/captain-ledger.jsonl`, every captain prompt recorded before the primary answers (`bin/fm-captain-ledger.sh`).
+- The captain ledger `data/captain-ledger.jsonl`, every captain prompt recorded before the primary answers in a home opted in through `config/captain-ledger` (`bin/fm-captain-ledger.sh`).
 
 `state/` holds runtime records:
 
@@ -578,10 +578,35 @@ See [`trace-context.md`](trace-context.md) for carrier semantics, supported rout
 ## Computer use (config/computer-use)
 
 The optional local, gitignored `config/computer-use` presence flag says this home drives macOS app interfaces through the `macos-computer-use` skill.
-With it present, session-start bootstrap checks for the pinned Peekaboo and reports a missing, other-version or broken copy as `MISSING: peekaboo`; installing it still waits for the captain's consent.
+With it present, that skill is linked in as an opt-in skill (below), and session-start bootstrap checks for the pinned Peekaboo and reports a missing, other-version or broken copy as `MISSING: peekaboo`; installing it still waits for the captain's consent.
 With it absent, nothing is checked or reported.
 The flag is not inherited by secondmate homes.
 `bin/fm-computer-use.sh` owns the pin, the check, the installer and the guard; the skill owns when and how they are used.
+
+## Opt-in skills (config/adhd, config/second-opinion, config/daily-todo)
+
+A few bundled skills serve one home's own setup rather than every home, so they live in `.agents/opt-in-skills/` and no session lists them until the home switches them on.
+Each switch is an optional local, gitignored presence flag; any file at the path turns it on, whatever it holds:
+
+| Skill | Switched on by |
+| --- | --- |
+| `adhd` and `adhd-auto-fire` ([adhd.md](adhd.md)) | `config/adhd` |
+| `second-opinion-auto-fire` ([second-opinion.md](second-opinion.md)) | `config/second-opinion` |
+| `daily-todo-freshness`, whose re-check rules morning and channel intake apply | `config/daily-todo` |
+| `macos-computer-use` | `config/computer-use` (above) |
+
+A switched-on skill is linked into `.agents/skills/` under its usual name, so it loads exactly as a tracked skill does, and the link is gitignored.
+A harness lists skills when it starts, so a changed switch takes effect from the next launch.
+The flags are home-local and are not inherited by secondmate homes.
+`bin/fm-opt-in-skills.sh` owns the links and when they are made.
+
+## Captain ledger (config/captain-ledger)
+
+The optional local, gitignored `config/captain-ledger` presence flag opts this home into the captain ledger: a Claude prompt-submit hook that writes every prompt the lock-holding primary receives into `data/captain-ledger.jsonl` before the model answers, and a session-start section that lists unreconciled words until an agent marks them.
+With it absent, the hook records nothing, so a fresh clone never writes a prompt to disk on its own.
+Words a ledger already holds still print and can still be marked with the flag removed.
+The flag is not inherited by secondmate homes.
+`bin/fm-captain-ledger.sh` owns the record format, the filters, and the reconciliation commands.
 
 ## Fleet activity ledger (config/fleet-ledger)
 
@@ -1473,7 +1498,7 @@ The same deferred network stage performs guarded tracked-file sync and propagate
 Local routes use direct guarded filesystem operations, while remote routes delegate sync and allowlisted transfer through their configured SSH host without probing any unconfigured fleet.
 
 - It emits `SECONDMATE_SYNC:` only when a home was skipped for an actionable sync reason, inheritance failed, or a divergent shared captain-preference copy was quarantined.
-- When a running home advances and its loaded instruction surface (`AGENTS.md`, `bin/`, or `.agents/skills/`) changed, bootstrap sends the re-read nudge itself through the stable `fm-<id>` selector and reports the exact completed send as `BOOTSTRAP_INFO:`.
+- When a running home advances and its loaded instruction surface (the paths `changed_instr` in `bin/fm-ff-lib.sh` watches) changed, bootstrap sends the re-read nudge itself through the stable `fm-<id>` selector and reports the exact completed send as `BOOTSTRAP_INFO:`.
 - If that send fails, bootstrap keeps an idempotent retry marker and emits `NUDGE_SECONDMATES:` with the failure reason.
 - The same bootstrap run emits `SECONDMATE_LIVENESS:` only when a registered secondmate is skipped or its relaunch fails; already-live and successfully relaunched secondmates are handled silently.
 
@@ -2731,13 +2756,13 @@ Nothing here observes audio, so a successful call means the shaped line was hand
 Configuration is `key = value` lines; unknown keys are refused rather than ignored.
 `enabled` arms this home, and the optional `voice` names a `say` voice, which also selects `say` as the speaker.
 The script's header and `--help` own the exact invocation, the environment overrides, and the exit codes.
-`AGENTS.md` section 9 owns when the orchestrator speaks.
+[`desk-voice-replies.md`](desk-voice-replies.md) owns when the orchestrator speaks; the session-start digest prints it only in a home opted in here.
 
 **Automatic reply speech.** On a Claude primary, the tracked `Stop` hook `bin/fm-claude-reply-speak.sh` carries out that duty.
 It runs in the background after every turn of the lock-holding plain primary checkout, never in a crew or scout worktree or a secondmate home, and speaks the turn's final reply through `bin/fm-speak.sh` only when nothing was spoken during that turn.
-It speaks the reply's opening lead (AGENTS.md section 9): the first plain paragraph, at most six sentences and about 75 words, without a trailing list lead-in, plus one short pointer when the rest of the reply holds a choice, a question, steps, or more than a one-line sign-off, with the lead cut back so the pointer fits the spoken budget; a line the register refuses is retried with only the lead sentences it refuses on their own dropped, then falls back to its first sentence, then to a short notice that names a waiting decision only when the register refused the line as one and the reply itself offers a choice, a question, or steps, or the lead asks a question.
+It speaks the reply's opening lead ([`desk-voice-replies.md`](desk-voice-replies.md)): the first plain paragraph, at most six sentences and about 75 words, without a trailing list lead-in, plus one short pointer when the rest of the reply holds a choice, a question, steps, or more than a one-line sign-off, with the lead cut back so the pointer fits the spoken budget; a line the register refuses is retried with only the lead sentences it refuses on their own dropped, then falls back to its first sentence, then to a short notice that names a waiting decision only when the register refused the line as one and the reply itself offers a choice, a question, or steps, or the lead asks a question.
 A routine `Captain, shipshape.` reply stays silent to save speech credits, and a reply that opens with that line speaks only what follows it.
-Mute and the opt-in gate above apply unchanged, and the hook's header owns the exact rules.
+In a home that has not opted in, the hook asks `bin/fm-speak.sh --enabled` first and then does nothing at all; mute applies unchanged, and the hook's header owns the exact rules.
 The Mac push-to-talk floater that feeds captain input into this home is documented in [`desk-floater.md`](desk-floater.md).
 
 Each call is bounded on both halves so a captain-facing turn is never held open: the register call is waited on under a watchdog because its output is needed, and speaker playback is detached with its standard streams closed (Deepgram synthesis is waited only for the network `--to` file, then playback is detached).
@@ -2745,6 +2770,7 @@ Detachment also puts the speaker in a process group of its own, so a harness tha
 Playback is serialized per home: a second line waits for the current one to finish rather than overlapping, and that wait happens in the detached speaker so the calling turn is still not held open by audio.
 The two bounds are deliberately separate because they protect different things: `FM_SPEAK_SHAPER_TIMEOUT` bounds the waited-on register call and is therefore the worst case a turn can be held, while `FM_SPEAK_TIMEOUT` bounds synthesis/playback runaways without ever holding the caller for the duration of the audio.
 The script's header owns their defaults.
+`bin/fm-speak.sh --enabled` answers whether this home is opted in, for the scripts above.
 `bin/fm-speak.sh --stop`, `--repeat`, `--history`, `--replay`, `--mute`, `--unmute`, `--muted` and `--volume` are the desk floater's voice controls: a mute is a per-home runtime flag in `state/speak-muted` and the voice level a per-home runtime value in `state/speak-volume`, never `config/speak` keys, and both affect voice only, while the text reply stays authoritative; the script's header owns their behavior and docs/desk-floater.md describes the buttons.
 
 ## Desk floater signing identity (config/desk-floater-signing-identity)

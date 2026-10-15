@@ -45,7 +45,9 @@
 #                       Unreconciled captain words from bin/fm-captain-ledger.sh
 #                       follow the queue, on the same locked path.
 #   4. supervision-instructions - the one emitted operating block for the
-#                       detected primary harness.
+#                       detected primary harness, followed, only in a home
+#                       opted in to desk voice-out, by the spoken-lead reply
+#                       rules in docs/desk-voice-replies.md.
 #   5. read-once contract - the do-not-re-read contract covering every source
 #                       represented by the two digests below.
 #   6. fleet digest   - a compact data/backlog.md identity/metadata listing,
@@ -866,6 +868,18 @@ fi
   --afk "$AFK_PRESENT" \
   --afk-mode "$AFK_MODE" \
   --x-mode "$X_MODE_PRESENT"
+# The spoken-lead reply rules bind every reply only in a home that speaks, so
+# they print here, on the full and the re-emit path, only when bin/fm-speak.sh
+# (the opt-in owner) says this home is enabled; elsewhere they cost nothing.
+# FM_ROOT_OVERRIDE names a home root here but fm-speak.sh's own code root, so it
+# is dropped for that one call.
+DESK_VOICE_RULES="$SCRIPT_DIR/../docs/desk-voice-replies.md"
+if [ -f "$DESK_VOICE_RULES" ] \
+  && [ "$(env -u FM_ROOT_OVERRIDE FM_HOME="$FM_HOME" FM_CONFIG_OVERRIDE="$CONFIG" \
+    "$SCRIPT_DIR/fm-speak.sh" --enabled 2>/dev/null)" = enabled ]; then
+  section "DESK VOICE-OUT REPLY RULES"
+  sed '1{/^# /d;}' "$DESK_VOICE_RULES" | sed '/./,$!d'
+fi
 
 # --- 5. read-once contract -------------------------------------------------
 # Ahead of the two digests it governs, not after them: a truncated tail is

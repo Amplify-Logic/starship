@@ -198,6 +198,28 @@ test_exec_environment_and_exit_status() {
   pass "fm-primary: exec preserves root, stable child marker, role, and CLI exit status"
 }
 
+# A launch links the home's switched-on opt-in skills into the launched root
+# before the CLI starts, because the CLI lists skills only once, at start.
+test_launch_links_switched_on_opt_in_skills_first() {
+  local status=0 mini="$TMP_ROOT/optin" home="$TMP_ROOT/optin-home" out
+  mkdir -p "$mini" "$home/state" "$home/data" "$home/config"
+  cp -R "$ROOT/bin" "$ROOT/.agents" "$ROOT/.claude" "$ROOT/.pi" "$mini/"
+  rm -f "$mini"/.agents/skills/adhd "$mini"/.agents/skills/macos-computer-use
+  : > "$home/config/computer-use"
+  : > "$LOG"
+  ( cd "$TMP_ROOT" && \
+    env -u HERDR_ENV -u HERDR_SESSION -u HERDR_PANE_ID -u TMUX_PANE \
+      PATH="$FAKEBIN:$PATH" TERM=dumb FM_HOME="$home" FM_PRIMARY_TEST_LOG="$LOG" \
+      "$mini/bin/fm-primary.sh" pi ) || status=$?
+  [ "$status" -eq 0 ] || fail "the opt-in launch fixture failed (status $status)"
+  out=$(cat "$LOG")
+  assert_contains "$out" "pwd=$mini" "the opt-in launch fixture did not reach the CLI"
+  assert_equals "../opt-in-skills/macos-computer-use" "$(readlink "$mini/.agents/skills/macos-computer-use")" \
+    "a launch must link a switched-on opt-in skill before the CLI starts"
+  [ ! -e "$mini/.agents/skills/adhd" ] || fail "a launch must not link a skill this home did not switch on"
+  pass "fm-primary: a launch links the home's switched-on opt-in skills before the CLI starts"
+}
+
 test_visible_role_marks_only_current_surface() {
   local out
   : > "$LOG"
@@ -1546,6 +1568,7 @@ test_account_invalid_registry_warns_without_crashing_a_launch
 test_unknown_dependency_and_integration_refusals
 test_active_lock_refusal
 test_exec_environment_and_exit_status
+test_launch_links_switched_on_opt_in_skills_first
 test_visible_role_marks_only_current_surface
 test_shim_install_safety
 test_kimi_primary_profile_is_removed

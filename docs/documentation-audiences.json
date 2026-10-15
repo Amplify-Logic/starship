@@ -109,11 +109,11 @@
   ],
   "surfaces": [
     {
-      "path": ".agents/skills/adhd-auto-fire/SKILL.md",
+      "path": ".agents/opt-in-skills/adhd-auto-fire/SKILL.md",
       "audience": "agent-runtime"
     },
     {
-      "path": ".agents/skills/adhd/SKILL.md",
+      "path": ".agents/opt-in-skills/adhd/SKILL.md",
       "audience": "agent-runtime"
     },
     {
@@ -141,7 +141,7 @@
       "audience": "agent-runtime"
     },
     {
-      "path": ".agents/skills/daily-todo-freshness/SKILL.md",
+      "path": ".agents/opt-in-skills/daily-todo-freshness/SKILL.md",
       "audience": "agent-runtime"
     },
     {
@@ -245,11 +245,11 @@
       "audience": "agent-runtime"
     },
     {
-      "path": ".agents/skills/macos-computer-use/SKILL.md",
+      "path": ".agents/opt-in-skills/macos-computer-use/SKILL.md",
       "audience": "agent-runtime"
     },
     {
-      "path": ".agents/skills/macos-computer-use/recipes.md",
+      "path": ".agents/opt-in-skills/macos-computer-use/recipes.md",
       "audience": "agent-runtime"
     },
     {
@@ -269,7 +269,7 @@
       "audience": "agent-runtime"
     },
     {
-      "path": ".agents/skills/second-opinion-auto-fire/SKILL.md",
+      "path": ".agents/opt-in-skills/second-opinion-auto-fire/SKILL.md",
       "audience": "agent-runtime"
     },
     {
@@ -407,6 +407,10 @@
     {
       "path": "docs/desk-floater.md",
       "audience": "operator-current"
+    },
+    {
+      "path": "docs/desk-voice-replies.md",
+      "audience": "agent-runtime"
     },
     {
       "path": "docs/desktop-companion.md",

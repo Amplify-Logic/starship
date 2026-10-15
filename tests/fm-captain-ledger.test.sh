@@ -40,9 +40,10 @@ HOOK_CMD=$(jq -r '.hooks.UserPromptSubmit[].hooks[] | select(.command | contains
   "$ROOT/.claude/settings.json")
 [ -n "$HOOK_CMD" ] || fail "the tracked Claude settings do not register the captain ledger on UserPromptSubmit"
 
-make_home() {  # <name>
+make_home() {  # <name>: a home opted in through config/captain-ledger
   local home="$TMP_ROOT/$1"
-  mkdir -p "$home/state" "$home/data"
+  mkdir -p "$home/state" "$home/data" "$home/config"
+  : > "$home/config/captain-ledger"
   printf '%s\n' "$home"
 }
 
@@ -82,6 +83,26 @@ test_registration_records_the_captain_prompt() {
     "an entry must carry its seq, the session id, and an epoch"
   assert_equals 600 "$(mode_of "$home/data/captain-ledger.jsonl")" "the ledger must be created owner-only"
   pass "ledger: the tracked prompt-submit registration writes the captain's prompt before the hook returns"
+}
+
+# Without the opt-in flag the hook records nothing and creates nothing, while
+# pending and mark keep reconciling what a ledger already holds.
+test_a_home_without_the_flag_records_nothing() {
+  local home
+  home=$(make_home not-opted-in)
+  rm -f "$home/config/captain-ledger"
+  submit "$home" "$PERU"
+  assert_absent "$home/data/captain-ledger.jsonl" "a home without config/captain-ledger must record nothing"
+  : > "$home/config/captain-ledger"
+  submit "$home" "$PERU"
+  assert_equals "$PERU" "$(texts "$home")" "the flag must switch the recording on"
+  rm -f "$home/config/captain-ledger"
+  submit "$home" "Keep the review on Thursday."
+  assert_equals "$PERU" "$(texts "$home")" "removing the flag must stop the recording"
+  assert_contains "$(pending "$home")" "Move the venue deposit" "pending must still list words recorded while the flag was on"
+  mark "$home"
+  assert_equals "" "$(pending "$home")" "mark must still reconcile a ledger with the flag off"
+  pass "ledger: only a home with config/captain-ledger records, and pending and mark still reconcile without it"
 }
 
 test_operational_and_harness_started_input_is_dropped() {
@@ -244,6 +265,7 @@ test_seq_survives_a_removed_ledger_and_a_torn_line() {
 }
 
 test_registration_records_the_captain_prompt
+test_a_home_without_the_flag_records_nothing
 test_operational_and_harness_started_input_is_dropped
 test_an_operational_label_stripped_of_its_mark_is_dropped
 test_a_session_without_the_lock_records_nothing
