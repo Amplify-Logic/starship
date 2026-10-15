@@ -375,9 +375,13 @@ pass 'fm-spawn fake Herdr E2E: a protocol-14 build spawns through the prior labe
 # where an unguarded command substitution into a missing script aborts the whole
 # spawn at 127 rather than degrading. With the fork scripts gone a herdr spawn
 # must still succeed and simply fall back to upstream's opaque window name.
-# Built by symlink so the real checkout is never mutated.
+# Built by symlink so the real checkout is never mutated, with its own history
+# unrelated to the task's project so fm-spawn's self-repository gate proves the
+# project is not firstmate rather than refusing on an undeterminable lineage.
 degraded="$TMP_ROOT/degraded-root"
 mkdir -p "$degraded/bin"
+git init -q "$degraded"
+git -C "$degraded" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -q --allow-empty -m root
 for entry in "$ROOT"/*; do
   [ "$(basename "$entry")" = bin ] || ln -s "$entry" "$degraded/$(basename "$entry")"
 done

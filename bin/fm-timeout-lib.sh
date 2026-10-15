@@ -221,14 +221,13 @@ fm_exec_timed() {  # <seconds> <grace-seconds> <command...>
     exit 125
   fi
   owner=${FM_EXEC_TIMED_OWNER_PID:-$$}
-  # Bash 3.2 has no BASHPID: an exec'd child shell's PPID names this frame.
-  # It runs as $BASH because callers may narrow PATH to the bounded tools.
-  # shellcheck disable=SC2016 # $PPID must expand in the child shell.
-  [ "$owner" != "${BASHPID:-$(exec "$BASH" -c 'printf "%s\n" "$PPID"')}" ] || owner=$PPID
   unset FM_EXEC_TIMED_OWNER_PID
   if command -v perl >/dev/null 2>&1; then
     exec perl -MPOSIX=WNOHANG,setpgid -MTime::HiRes=time -e '
-      my ($bound, $grace, $owner) = (shift, shift, shift);
+      my ($bound, $grace, $owner, $shell_parent) = (shift, shift, shift, shift);
+      # exec preserves the shell PID, including in Bash 3.2 subshells where
+      # BASHPID is unavailable. Keep the pre-exec parent for startup races.
+      $owner = $shell_parent if $owner == $$;
       my $parent = getppid();
       my ($pid, $pending, $kill_at, $timed_out) = (0, "", 0, 0);
       for my $sig (qw(TERM INT HUP)) {
@@ -275,7 +274,7 @@ fm_exec_timed() {  # <seconds> <grace-seconds> <command...>
         }
         select undef, undef, undef, 0.05;
       }
-    ' -- "$seconds" "$grace" "$owner" "$@"
+    ' -- "$seconds" "$grace" "$owner" "$PPID" "$@"
   elif command -v timeout >/dev/null 2>&1; then
     exec timeout -k "$grace" "$seconds" "$@"
   elif command -v gtimeout >/dev/null 2>&1; then

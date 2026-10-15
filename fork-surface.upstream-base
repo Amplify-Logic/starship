@@ -1,4 +1,4 @@
-# upstream_base = e31bc6e620ca532c2e0e0b72f3fd7c0869a12270
+# upstream_base = 0397cb2bb431948f3865b7f28c522290546dcaaf
 .agents/skills/afk/SKILL.md
 .agents/skills/agent-skill-trigger-index/SKILL.md
 .agents/skills/ahoy/SKILL.md
@@ -15,6 +15,7 @@
 .agents/skills/firstmate-codexapp/agents/openai.yaml
 .agents/skills/firstmate-coding-guidelines/SKILL.md
 .agents/skills/firstmate-orca/SKILL.md
+.agents/skills/firstmate-self-repo/SKILL.md
 .agents/skills/fmx-respond/SKILL.md
 .agents/skills/harness-adapters/SKILL.md
 .agents/skills/harness-adapters/references/common/control-and-recovery.md
@@ -167,6 +168,7 @@ bin/fm-doc-audience-check.sh
 bin/fm-dod-lib.sh
 bin/fm-ensure-agents-md.sh
 bin/fm-env-lib.sh
+bin/fm-exclude-tools-lib.sh
 bin/fm-extension-launch-barrier.mjs
 bin/fm-extension.mjs
 bin/fm-extension.sh
@@ -223,6 +225,7 @@ bin/fm-parent-channel-lib.sh
 bin/fm-path-lib.sh
 bin/fm-peek.sh
 bin/fm-pending-reply-lib.sh
+bin/fm-pipeline-spend.sh
 bin/fm-pr-check.sh
 bin/fm-pr-lib.sh
 bin/fm-pr-merge.sh
@@ -237,6 +240,7 @@ bin/fm-procevent-quota.sh
 bin/fm-procevent-remote-reply.sh
 bin/fm-procevent-when.sh
 bin/fm-procevent.sh
+bin/fm-project-capacity-lib.sh
 bin/fm-project-mode.sh
 bin/fm-project-origin-lib.sh
 bin/fm-promote.sh
@@ -264,6 +268,8 @@ bin/fm-remote-readiness-lib.sh
 bin/fm-remote-secondmate-control.sh
 bin/fm-remote-secondmate-relaunch.sh
 bin/fm-review-diff.sh
+bin/fm-role-lib.sh
+bin/fm-role.sh
 bin/fm-secondmate-charter-lib.sh
 bin/fm-secondmate-liveness-lib.sh
 bin/fm-secondmate-nudge-lib.sh
@@ -280,6 +286,7 @@ bin/fm-sessionstart-cursor.sh
 bin/fm-sessionstart-nudge.sh
 bin/fm-sessionstart-run.sh
 bin/fm-spawn.sh
+bin/fm-startup-growth-check.sh
 bin/fm-startup-memory-budget-lib.sh
 bin/fm-startup-memory-budget.sh
 bin/fm-startup-network.sh
@@ -348,6 +355,7 @@ docs/fleet-ledger.md
 docs/fm-test-isolation-proof.json
 docs/fm-test-isolation-proof.md
 docs/fm-test-portable-shards.md
+docs/forgejo-tea-integration.md
 docs/gerrit-change-watch.md
 docs/gerrit-forge-integration.md
 docs/gitlab-merge-watch.md
@@ -546,6 +554,7 @@ tests/fm-pi-primary-types.test.sh
 tests/fm-pi-seeded-home-trust-live-e2e.test.sh
 tests/fm-pi-watch-extension.test.sh
 tests/fm-pi-windows-shell-invocation.test.sh
+tests/fm-pipeline-spend.test.sh
 tests/fm-pr-check-security.test.sh
 tests/fm-pr-merge.test.sh
 tests/fm-pr-reviewers.test.sh
@@ -554,6 +563,8 @@ tests/fm-pr-state.test.sh
 tests/fm-procevent-quota.test.sh
 tests/fm-procevent-when.test.sh
 tests/fm-procevent.test.sh
+tests/fm-project-capacity.test.sh
+tests/fm-project-mode.test.sh
 tests/fm-project-origin.test.sh
 tests/fm-public-followup.test.sh
 tests/fm-quota-array-dispatch-live-e2e.test.sh
@@ -563,6 +574,9 @@ tests/fm-remote-delta-read.test.sh
 tests/fm-remote-doctor.test.sh
 tests/fm-remote-entrypoint.test.sh
 tests/fm-remote-herdr-guard.test.sh
+tests/fm-remote-job-claim-reap.test.sh
+tests/fm-remote-job-claim-retention.test.sh
+tests/fm-remote-job-launchagent.test.sh
 tests/fm-remote-job-orphan-reap.test.sh
 tests/fm-remote-job.test.sh
 tests/fm-remote-reply.test.sh
@@ -574,6 +588,7 @@ tests/fm-remote-transport-lanes.test.sh
 tests/fm-review-diff.test.sh
 tests/fm-rovo-harness.test.sh
 tests/fm-rovo-signals-live-e2e.test.sh
+tests/fm-secondmate-busy-contract-live-e2e.test.sh
 tests/fm-secondmate-harness.test.sh
 tests/fm-secondmate-lifecycle-e2e.test.sh
 tests/fm-secondmate-liveness.test.sh
@@ -581,6 +596,7 @@ tests/fm-secondmate-reconcile.test.sh
 tests/fm-secondmate-restart.test.sh
 tests/fm-secondmate-safety.test.sh
 tests/fm-secondmate-sync.test.sh
+tests/fm-self-repo-role.test.sh
 tests/fm-send-agy-confirm.test.sh
 tests/fm-send-inbox-doorbell-live-e2e.test.sh
 tests/fm-send-inbox.test.sh
@@ -604,6 +620,7 @@ tests/fm-spawn-dispatch-profile.test.sh
 tests/fm-spawn-orca-worktree.test.sh
 tests/fm-spawn-pool-base-freshen.test.sh
 tests/fm-spawn-worktree-settle.test.sh
+tests/fm-startup-growth-check.test.sh
 tests/fm-startup-memory-budget.test.sh
 tests/fm-startup-network.test.sh
 tests/fm-stat-shadowing.test.sh
