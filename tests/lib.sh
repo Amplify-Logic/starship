@@ -1203,6 +1203,134 @@ fm_write_secondmate_meta() {
     "projects=$projects"
 }
 
+# --- headless Chrome ---------------------------------------------------------
+
+find_chrome() {
+  local candidate
+  if [ -n "${FM_CHROME_BIN:-}" ] && [ -x "$FM_CHROME_BIN" ]; then
+    printf '%s\n' "$FM_CHROME_BIN"
+    return 0
+  fi
+  for candidate in \
+    google-chrome \
+    google-chrome-stable \
+    chromium \
+    chromium-browser \
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+  do
+    if command -v "$candidate" >/dev/null 2>&1; then
+      command -v "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# fm_chrome_dump_dom <chrome> <source_file> <out_file> <context> [chrome-flag...]
+# Render <source_file> in real headless Chrome and leave the DOM in <out_file>.
+# Extra flags (a window size, say) go to Chrome; <context> names what the caller
+# rendered with (a tool version, say) in the failure report.
+#
+# Rendering is a vendor-tool step, not the caller's guarantee: the DOM
+# assertions the caller runs afterwards are what protect the contract. Headless
+# Chrome start-up is the part that fails intermittently on a loaded CI runner -
+# it can exit before writing any DOM at all - and a single unattended attempt
+# that discards Chrome's stderr and exit status surfaces a CI break as a bare
+# "could not render", or as a failed DOM assertion, with nothing in the log to
+# tell a Chrome start-up crash apart from a real change in what was rendered.
+#
+# So: retry the render a bounded number of times on a fresh profile, and when
+# every attempt fails, print the Chrome binary, its version, <context>, and
+# each attempt's exit status, stderr tail, and whether the helper
+# timed the attempt out - when it did, the exit status is only this helper's own
+# kill signal. Its own flags remove Chrome's background-network and /dev/shm
+# dependencies, which are the start-up surfaces that fail on a runner; neither
+# changes the rendered DOM of a local file. --use-mock-keychain and
+# --password-store=basic keep every attempt's fresh profile off the machine
+# owner's password store: without them Chrome on macOS asks the login keychain
+# to store its Safe Storage key on each launch, which can raise a "Keychain Not
+# Found" dialog whose Reset To Defaults button would wipe the owner's saved
+# passwords, and on Linux it would reach for the desktop secret service.
+fm_chrome_dump_dom() {
+  local chrome=$1 source_file=$2 out_file=$3 context=$4
+  local attempt pid status wait_count wait_limit reap_wait log profile_dir report timed_out
+  local -a profile_arg
+  report="$TMP_ROOT/chrome-render-report.txt"
+  wait_limit=${FM_CHROME_RENDER_WAIT_TICKS:-300}
+  : >"$report"
+  for attempt in 1 2 3; do
+    log="$TMP_ROOT/chrome-render-$attempt.err"
+    profile_dir="$TMP_ROOT/chrome-home-$attempt"
+    rm -rf "$profile_dir"
+    mkdir -p "$profile_dir"
+    : >"$out_file"
+    # Isolate the profile per attempt. On Linux and every other non-Darwin
+    # platform an explicit --user-data-dir pointing at a brand-new profile makes
+    # Chrome's first-run initialization never complete on at least Google Chrome
+    # for Testing 151.0.7922.34: the browser and its renderers start, but
+    # --dump-dom never returns, so all three bounded attempts end exit=0
+    # timed_out=yes bytes=0 and the caller's DOM assertions never run at all. A
+    # private HOME is Chromium's documented isolation switch there and renders
+    # the same document in about a second. macOS derives its profile directory
+    # from ~/Library regardless of HOME, so Darwin keeps the explicit
+    # --user-data-dir that was this helper's original isolation. Either way each
+    # attempt starts from the fresh directory removed just above.
+    case "$(uname -s)" in
+      Darwin) profile_arg=(--user-data-dir="$profile_dir") ;;
+      *) profile_arg=() ;;
+    esac
+    HOME="$profile_dir" XDG_CONFIG_HOME="$profile_dir/.config" XDG_CACHE_HOME="$profile_dir/.cache" \
+      "$chrome" \
+      ${profile_arg[@]+"${profile_arg[@]}"} \
+      --headless=new \
+      --use-mock-keychain \
+      --password-store=basic \
+      --disable-gpu \
+      --no-sandbox \
+      --disable-dev-shm-usage \
+      --disable-background-networking \
+      --virtual-time-budget=2000 \
+      "${@:5}" \
+      --dump-dom \
+      "file://$source_file" >"$out_file" 2>"$log" &
+    pid=$!
+    # Check the DOM before Chrome's liveness, so an attempt that writes the
+    # complete dump and exits immediately is still read as a success.
+    wait_count=0
+    while [ "$wait_count" -lt "$wait_limit" ]; do
+      grep -Fq '</html>' "$out_file" 2>/dev/null && break
+      kill -0 "$pid" 2>/dev/null || break
+      sleep 0.1
+      wait_count=$((wait_count + 1))
+    done
+    timed_out=no
+    if [ "$wait_count" -ge "$wait_limit" ]; then
+      timed_out=yes
+    fi
+    kill "$pid" 2>/dev/null || true
+    # Chrome can retain --headless=new after --dump-dom completes and ignore TERM,
+    # so an unbounded wait can hang after the complete DOM has been captured.
+    reap_wait=0
+    while kill -0 "$pid" 2>/dev/null && [ "$reap_wait" -lt 20 ]; do
+      sleep 0.1
+      reap_wait=$((reap_wait + 1))
+    done
+    if kill -0 "$pid" 2>/dev/null; then
+      kill -9 "$pid" 2>/dev/null || true
+    fi
+    status=0
+    wait "$pid" 2>/dev/null || status=$?
+    grep -Fq '</html>' "$out_file" 2>/dev/null && return 0
+    printf 'attempt %s: exit=%s timed_out=%s bytes=%s stderr=%s\n' \
+      "$attempt" "$status" "$timed_out" "$(wc -c <"$out_file" | tr -d ' ')" \
+      "$(tail -c 400 "$log" 2>/dev/null | tr '\n' ' ')" >>"$report"
+  done
+  printf 'chrome=%s chrome_version=%s %s; %s' \
+    "$chrome" "$("$chrome" --version 2>&1 | head -1)" "$context" \
+    "$(tr '\n' ' ' <"$report")"
+  return 1
+}
+
 # --- common assertions ------------------------------------------------------
 
 # assert_equals <expected> <actual> <msg>
