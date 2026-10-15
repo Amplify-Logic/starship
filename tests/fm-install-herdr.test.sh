@@ -19,42 +19,132 @@ assert_present "$CLEANUP" "bin/fm-herdr-ci-cleanup.sh is missing"
 [ -x "$TREEHOUSE_INSTALL" ] || fail "fm-install-treehouse.sh must be executable"
 [ -x "$CLEANUP" ] || fail "fm-herdr-ci-cleanup.sh must be executable"
 
+TMP_ROOT=$(fm_test_tmproot fm-install-herdr)
+HERDR_PIN_SHA256=14d9e8bc8b4a9e0118d77c32266f76d461f09b40342eb23752960bd89f59929d
+TREEHOUSE_PIN_SHA256=78c820c5872bf9d9d3eb19bbedd75e4804b9258c862238993fa160cf9d215ed8
+
+# installer_world <name>: a fresh case dir with a fakebin that reports a Linux
+# x86_64 host and serves $FAKE_ASSET for any curl download, logging curl's
+# arguments one per line to <case>/curl.log. No network is touched.
+installer_world() {
+  local case_dir="$TMP_ROOT/$1" fakebin
+  fakebin=$(fm_fakebin "$case_dir")
+  cat > "$fakebin/uname" <<'SH'
+#!/usr/bin/env bash
+case "${1:-}" in
+  -s) echo Linux ;;
+  -m) echo x86_64 ;;
+esac
+SH
+  cat > "$fakebin/curl" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$@" > "$CURL_LOG"
+out=
+while [ "$#" -gt 0 ]; do
+  [ "$1" = -o ] && { shift; out=$1; }
+  shift
+done
+cp "$FAKE_ASSET" "$out"
+SH
+  chmod +x "$fakebin/uname" "$fakebin/curl"
+  printf '%s\n' "$case_dir"
+}
+
+# fake_sha256 <case_dir> <digest>: make sha256sum report <digest> for any file,
+# standing in for a real pinned release asset the test cannot reproduce.
+fake_sha256() {
+  cat > "$1/fakebin/sha256sum" <<SH
+#!/usr/bin/env bash
+printf '%s  %s\\n' '$2' "\$1"
+SH
+  chmod +x "$1/fakebin/sha256sum"
+}
+
+# run_installer <installer> <case_dir>: install into <case_dir>/dest; sets
+# RUN_RC and RUN_ERR.
+run_installer() {
+  local installer=$1 case_dir=$2
+  RUN_RC=0
+  RUN_ERR=$(PATH="$case_dir/fakebin:$PATH" RUNNER_TEMP="$case_dir" \
+    CURL_LOG="$case_dir/curl.log" FAKE_ASSET="$case_dir/asset" \
+    "$installer" "$case_dir/dest" 2>&1 >/dev/null) || RUN_RC=$?
+}
+
+write_fake_herdr() {  # <path> <version> <protocol>
+  cat > "$1" <<SH
+#!/usr/bin/env bash
+case "\${1:-}" in
+  --version) echo 'herdr $2' ;;
+  status) echo '{"client":{"protocol":$3}}' ;;
+esac
+SH
+}
+
+write_fake_treehouse_archive() {  # <case_dir> <version>
+  mkdir -p "$1/archive"
+  printf '#!/usr/bin/env bash\necho v%s\n' "$2" > "$1/archive/treehouse"
+  chmod +x "$1/archive/treehouse"
+  tar -czf "$1/asset" -C "$1/archive" treehouse
+}
+
 test_herdr_installer_pins_exact_version_and_checksums() {
-  assert_grep 'FM_HERDR_CI_VERSION=0.7.4' "$HERDR_INSTALL" \
-    "Herdr installer must pin suite-verified 0.7.4"
-  assert_grep 'FM_HERDR_CI_MIN_PROTOCOL=16' "$HERDR_INSTALL" \
-    "Herdr installer must require protocol floor 16"
-  assert_grep 'ogulcancelik/herdr' "$HERDR_INSTALL" \
-    "Herdr installer must use the official GitHub release source"
-  assert_grep 'herdr-linux-x86_64' "$HERDR_INSTALL" \
-    "Herdr installer must name the Linux x86_64 release asset"
-  assert_grep 'bc0fc02d4ba500f9cac2353a43e67fe036785ecca6eb55378e050fac3c103059' "$HERDR_INSTALL" \
-    "Herdr installer must pin the Linux x86_64 SHA-256"
-  assert_grep 'sha256sum' "$HERDR_INSTALL" \
-    "Herdr installer must verify a SHA-256 checksum"
-  assert_grep '--max-filesize' "$HERDR_INSTALL" \
+  local case_dir
+  case_dir=$(installer_world herdr-mismatch)
+  write_fake_herdr "$case_dir/asset" 0.9.5 16
+  run_installer "$HERDR_INSTALL" "$case_dir"
+  expect_code 1 "$RUN_RC" "Herdr installer with an off-pin asset"
+  assert_contains "$RUN_ERR" "checksum mismatch for herdr-linux-x86_64 (expected $HERDR_PIN_SHA256" \
+    "Herdr installer must refuse an asset whose SHA-256 is not the pin"
+  assert_absent "$case_dir/dest/herdr" "Herdr installer must not install an off-pin asset"
+  assert_equals "https://github.com/herdrdev/herdr/releases/download/v0.9.5/herdr-linux-x86_64" \
+    "$(grep '^https://' "$case_dir/curl.log")" \
+    "Herdr installer must fetch the 0.9.5 Linux x86_64 asset from herdrdev/herdr"
+  assert_equals "--max-filesize" "$(grep -x -- '--max-filesize' "$case_dir/curl.log")" \
     "Herdr installer must bound the download size"
-  assert_no_grep 'brew install' "$HERDR_INSTALL" \
-    "Herdr installer must not use a floating package-manager install"
-  assert_no_grep 'apt-get install' "$HERDR_INSTALL" \
-    "Herdr installer must not use a floating package-manager install"
-  pass "Herdr installer pins exact version, asset, checksum, and protocol floor"
+
+  case_dir=$(installer_world herdr-match)
+  write_fake_herdr "$case_dir/asset" 0.9.5 16
+  fake_sha256 "$case_dir" "$HERDR_PIN_SHA256"
+  run_installer "$HERDR_INSTALL" "$case_dir"
+  expect_code 0 "$RUN_RC" "Herdr installer with the pinned asset: $RUN_ERR"
+  [ -x "$case_dir/dest/herdr" ] || fail "Herdr installer must install the pinned asset"
+  assert_equals "herdr 0.9.5" "$("$case_dir/dest/herdr" --version)" \
+    "Herdr installer must install the downloaded asset"
+
+  case_dir=$(installer_world herdr-old-protocol)
+  write_fake_herdr "$case_dir/asset" 0.9.5 15
+  fake_sha256 "$case_dir" "$HERDR_PIN_SHA256"
+  run_installer "$HERDR_INSTALL" "$case_dir"
+  expect_code 1 "$RUN_RC" "Herdr installer with a protocol 15 build"
+  assert_contains "$RUN_ERR" "below the required floor 16" \
+    "Herdr installer must refuse a build below protocol floor 16"
+  pass "Herdr installer fetches the pinned 0.9.5 asset, verifies its checksum, and gates the protocol floor"
 }
 
 test_treehouse_installer_pins_exact_version_and_checksums() {
-  assert_grep 'FM_TREEHOUSE_CI_VERSION=2.0.1' "$TREEHOUSE_INSTALL" \
-    "Treehouse installer must pin the suite-verified 2.0.1 release"
-  assert_grep 'kunchenguid/treehouse' "$TREEHOUSE_INSTALL" \
-    "Treehouse installer must use the official GitHub release source"
-  assert_grep 'linux-amd64.tar.gz' "$TREEHOUSE_INSTALL" \
-    "Treehouse installer must name the Linux amd64 archive"
-  assert_grep '1d5a32751ab921670103fd201ddb2b91b47338cb13976f45642b827cf8976af2' "$TREEHOUSE_INSTALL" \
-    "Treehouse installer must pin the Linux amd64 SHA-256"
-  assert_grep '--max-filesize' "$TREEHOUSE_INSTALL" \
+  local case_dir
+  case_dir=$(installer_world treehouse-mismatch)
+  write_fake_treehouse_archive "$case_dir" 3.1.3
+  run_installer "$TREEHOUSE_INSTALL" "$case_dir"
+  expect_code 1 "$RUN_RC" "Treehouse installer with an off-pin archive"
+  assert_contains "$RUN_ERR" "checksum mismatch for treehouse-v3.1.3-linux-amd64.tar.gz (expected $TREEHOUSE_PIN_SHA256" \
+    "Treehouse installer must refuse an archive whose SHA-256 is not the pin"
+  assert_absent "$case_dir/dest/treehouse" "Treehouse installer must not install an off-pin archive"
+  assert_equals "https://github.com/kunchenguid/treehouse/releases/download/v3.1.3/treehouse-v3.1.3-linux-amd64.tar.gz" \
+    "$(grep '^https://' "$case_dir/curl.log")" \
+    "Treehouse installer must fetch the 3.1.3 Linux amd64 archive from kunchenguid/treehouse"
+  assert_equals "--max-filesize" "$(grep -x -- '--max-filesize' "$case_dir/curl.log")" \
     "Treehouse installer must bound the download size"
-  assert_no_grep 'brew install' "$TREEHOUSE_INSTALL" \
-    "Treehouse installer must not use a floating package-manager install"
-  pass "Treehouse installer pins exact version, asset, and checksum"
+
+  case_dir=$(installer_world treehouse-match)
+  write_fake_treehouse_archive "$case_dir" 3.1.3
+  fake_sha256 "$case_dir" "$TREEHOUSE_PIN_SHA256"
+  run_installer "$TREEHOUSE_INSTALL" "$case_dir"
+  expect_code 0 "$RUN_RC" "Treehouse installer with the pinned archive: $RUN_ERR"
+  [ -x "$case_dir/dest/treehouse" ] || fail "Treehouse installer must install the pinned archive's binary"
+  assert_equals "v3.1.3" "$("$case_dir/dest/treehouse" --version)" \
+    "Treehouse installer must install the archive's treehouse binary"
+  pass "Treehouse installer fetches the pinned 3.1.3 archive and verifies its checksum"
 }
 
 test_cleanup_only_targets_job_owned_lab_sessions() {

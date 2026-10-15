@@ -159,11 +159,16 @@ def capture(session: str, cols: int, rows: int, seconds: float) -> bytes:
                 break
             chunks.append(data)
     finally:
-        reap(pid)
+        # Close the master BEFORE reaping. Once the deadline stops the reads,
+        # an exiting client that still has output to flush blocks in exit
+        # waiting for the pty to drain, so a blocking reap would wait on it
+        # forever (seen with Herdr 0.9.5 on macOS); a closed master lets its
+        # writes fail and the exit finish.
         try:
             os.close(master)
         except OSError:
             pass
+        reap(pid)
     return b"".join(chunks)
 
 
@@ -208,7 +213,17 @@ def require_pyte():
 
 
 def render(pyte, data: bytes, cols: int, rows: int) -> "list[str]":
-    screen = pyte.Screen(cols, rows)
+    class Screen(pyte.Screen):
+        # A Herdr 0.9.5 client asks its terminal for the color scheme with the
+        # private device-status query CSI ? 996 n, which pyte dispatches with a
+        # `private` flag its handler does not accept. A query draws nothing
+        # and this instrument never answers one, so it is ignored.
+        def report_device_status(self, *args, **kwargs):
+            if kwargs.pop("private", False):
+                return
+            super().report_device_status(*args, **kwargs)
+
+    screen = Screen(cols, rows)
     stream = pyte.ByteStream(screen)
     stream.feed(data)
     return list(screen.display)

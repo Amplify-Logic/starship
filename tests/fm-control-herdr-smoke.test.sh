@@ -185,14 +185,47 @@ EOF
 chmod +x "$FAKEBIN/codex"
 
 # Return the relaunched pane to the plain shell the agent-free cases below
-# operate on: stop the stub's process and drop its registration.
-retire_fake_agent() {
-  local pid i=0
-  pid=$(herdr pane process-info --pane "$PANE_ID" --session "$SESSION" 2>/dev/null \
-    | jq -r '.result.process_info.foreground_processes[0].pid // empty')
-  [ -z "$pid" ] || kill "$pid" 2>/dev/null || true
-  herdr pane release-agent "$PANE_ID" --source fm-control-smoke-launch --agent codex \
-    --session "$SESSION" >/dev/null 2>&1 || true
+# operate on: stop the stub's process and let its registration go.
+# The stub is stopped only after Herdr has seen it settled as the pane's
+# codex-named process for several consecutive reads: stopping it sooner can
+# leave a registration Herdr never clears, intermittently on Herdr 0.7.4 and
+# 0.9.5 alike.
+# The process is codex-named through `name` on Linux, where `argv0` is the
+# symlink's full path, and through `argv0` on macOS, where `name` is `sleep`.
+# At the pane's top shell the stub holds its own registration, which Herdr
+# drops once the stub exits; no `pane release-agent` is sent there, because on
+# Herdr 0.9.5 a release over a codex-named pane leaves a sticky `unknown` codex
+# registration instead of clearing it.
+# Under the nested shell the stale registration the stub was relaunched over
+# still holds the pane, so the stub never registers itself; that case leaves
+# the nested shell and releases the stale registration's own source.
+retire_fake_agent() {  # [nested]
+  local pid='' seen='' samples=0 i=0
+  while [ "$i" -lt 100 ] && [ "$samples" -lt 5 ]; do
+    pid=$(herdr pane process-info --pane "$PANE_ID" --session "$SESSION" 2>/dev/null \
+      | jq -r '[.result.process_info.foreground_processes[]? | select(.name == "codex" or .argv0 == "codex")][0].pid // empty')
+    if [ -n "$pid" ] && { [ -n "${1:-}" ] \
+      || herdr agent get "$PANE_ID" --session "$SESSION" 2>/dev/null \
+        | jq -e '.result.agent.agent == "codex"' >/dev/null 2>&1; }; then
+      [ "$pid" = "$seen" ] && samples=$((samples + 1)) || samples=1
+      seen=$pid
+    else
+      samples=0
+      seen=
+    fi
+    sleep 0.1
+    i=$((i + 1))
+  done
+  [ "$samples" -ge 5 ] || fail "the fake harness never settled as the pane's codex-named process"
+  i=0
+  kill "$pid" 2>/dev/null || true
+  if [ -n "${1:-}" ]; then
+    wait_process_state shell 50 || fail "the fake harness did not exit back to the nested shell"
+    fm_backend_herdr_send_text_line "$SESSION:$PANE_ID" "exit" \
+      || fail "could not leave the nested shell"
+    herdr pane release-agent "$PANE_ID" --source fm-control-smoke --agent fm-control-smoke-agent \
+      --session "$SESSION" >/dev/null 2>&1 || true
+  fi
   while [ "$i" -lt 100 ]; do
     [ "$(fm_backend_herdr_pane_agent_state "$SESSION" "$PANE_ID")" != no-agent ] || return 0
     sleep 0.1
@@ -202,6 +235,23 @@ retire_fake_agent() {
 }
 printf -v FAKEBIN_Q '%q' "$FAKEBIN"
 printf -v PROJ_Q '%q' "$PROJ"
+# The pane runs the operator's login shell, whose profile (conda, nvm, prompt
+# helpers) keeps spawning foreground processes for several seconds and drops
+# any line typed meanwhile, on Herdr 0.7.4 and 0.9.5 alike. The profile spawns
+# more helpers after a lone shell sample, so wait for the shell to stay alone
+# in the foreground for 3 seconds before typing the first line.
+settled=0 i=0
+while [ "$settled" -lt 6 ]; do
+  [ "$i" -lt 240 ] || fail "the task pane login shell never settled at an idle prompt"
+  if herdr pane process-info --pane "$PANE_ID" --session "$SESSION" 2>/dev/null \
+    | jq -e '.result.process_info as $p | [$p.foreground_processes[]?.pid] == [$p.shell_pid]' >/dev/null 2>&1; then
+    settled=$((settled + 1))
+  else
+    settled=0
+  fi
+  sleep 0.5
+  i=$((i + 1))
+done
 fm_backend_herdr_send_text_line "$SESSION:$PANE_ID" "export PATH=$FAKEBIN_Q:\$PATH" \
   || fail "could not put the inert test harness on the pane PATH"
 fm_backend_herdr_send_text_line "$SESSION:$PANE_ID" "cd -- $PROJ_Q" \
@@ -278,6 +328,16 @@ start_agent_process() {
     || version_fail "a real agent-named foreground process reads '$(fm_backend_herdr_pane_process_state "$SESSION" "$PANE_ID")' rather than 'agent' through pane process-info"
 }
 
+# Run the agent under a nested shell, the crew shape: a worker runs inside the
+# worktree subshell, not the pane's own top shell. Herdr 0.9.2 and later clear a
+# registration once its agent exits back to the pane's top shell, but keep it
+# when the agent exits to a nested shell (measured on Herdr 0.9.5), so only this
+# shape still proves the stale-registration case below on every release.
+fm_backend_herdr_send_text_line "$SESSION:$PANE_ID" "bash --noprofile --norc" \
+  || fail "could not start the nested shell in the task pane"
+sleep 1
+wait_process_state shell 50 \
+  || fail "the nested shell did not settle as a plain shell in the task pane"
 start_agent_process
 herdr pane report-agent "$PANE_ID" --source fm-control-smoke --agent fm-control-smoke-agent \
   --state idle --session "$SESSION" >/dev/null 2>&1 \
@@ -351,7 +411,7 @@ awk -F= '$1 == "harness" {$0="harness=claude"} {print}' "$HOME_DIR/state/hsmoke.
   > "$HOME_DIR/state/hsmoke.meta.tmp"
 mv "$HOME_DIR/state/hsmoke.meta.tmp" "$HOME_DIR/state/hsmoke.meta"
 pass "real herdr: a stale registration no longer blocks relaunch, and the endpoint and local copy survive"
-retire_fake_agent
+retire_fake_agent nested
 
 # Last: the foreground process is a plain `sleep`, so the pane never draws any
 # recognized composer chrome. exit's composer-empty guard (bin/fm-control.sh)

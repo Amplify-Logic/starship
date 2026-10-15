@@ -1193,7 +1193,8 @@ No reasoning-effort axis was found; `gemini --help` on 0.58.0 exposes no effort,
 ## Herdr
 
 The compatibility floor is protocol 14.
-The whole real-Herdr lane's latest active verification uses both Herdr 0.7.4 protocol 16 and Herdr 0.8.0 protocol 19 on macOS aarch64, while focused Herdr 0.7.5 protocol 17, earlier protocol-16, protocol-14, and 0.7.3 evidence is retained where it defines current behavior or fallbacks.
+The required real-Herdr CI lane pins Herdr 0.9.5 protocol 22 and Treehouse 3.1.3 (`bin/fm-install-herdr.sh`, `bin/fm-install-treehouse.sh`).
+The whole real-Herdr lane's latest active verification uses Herdr 0.9.5 protocol 22 with Treehouse 3.1.3, recorded under "CI pin" below, after earlier whole-lane runs on Herdr 0.7.4 protocol 16 and Herdr 0.8.0 protocol 19 on macOS aarch64, while focused Herdr 0.7.5 protocol 17, earlier protocol-16, protocol-14, and 0.7.3 evidence is retained where it defines current behavior or fallbacks.
 Protocol 17 keeps every protocol-16 feature gate satisfied; the event and workspace-move floors remain 16.
 Default-on presentation projection has its own floor at Herdr 0.8.0, protocol 19, verified below.
 
@@ -1229,6 +1230,58 @@ The CLI matrix was checked directly:
 
 All destructive verification used `bin/fm-herdr-lab.sh` with a non-default `fm-lab-` name and a byte-identical default-session tripwire.
 No ambient `herdr server stop` command is a supported test operation.
+
+### CI pin: Herdr 0.9.5 and Treehouse 3.1.3
+
+Measured 2026-10-14 on macOS aarch64 (Darwin 25.5.0) with the release binaries `bin/fm-install-herdr.sh` and `bin/fm-install-treehouse.sh` install, side by side with the fleet's own binaries, against isolated `fm-lab-` sessions only:
+
+```sh
+bin/fm-install-herdr.sh "$LAB_BIN"
+bin/fm-install-treehouse.sh "$LAB_BIN"
+env -i HOME="$HOME" USER="$USER" SHELL="$SHELL" TERM=xterm-256color TMPDIR="$TMPDIR" PATH="$LAB_BIN:$PATH" \
+  bin/fm-test-run.sh --family real-herdr-gated --fail-on-gate-skip 'herdr not found'
+```
+
+```text
+fm-install-herdr.sh: installed herdr 0.9.5 (protocol 22) to $LAB_BIN/herdr
+fm-install-treehouse.sh: installed treehouse v3.1.3 to $LAB_BIN/treehouse
+FM_TEST_SUMMARY total=17 failed=0 skipped_gate=1 duration_ms=1954351
+ok - real Herdr lab validation completed on Herdr 0.9.5 with the default-session tripwire intact
+```
+
+The one gate skip is `tests/fm-status-chrome-herdr-lab-e2e.test.sh`, which needs the `pyte` Python module and skips the same way in CI.
+The run uses a scrubbed environment because a shell inside a Firstmate worker pane inherits `HERDR_PANE_ID`, `FM_HERDR_PROJECT_LABEL`, and related variables, and those relabel the lane's lab workspaces and fail its label assertions.
+The presentation suite, the lane's longest script, took 1488 seconds on Herdr 0.9.5 and 1288 seconds on Herdr 0.7.4 on this host in back-to-back runs, so the upgrade does not materially lengthen the lane; the same script took 508 seconds on the Linux CI runner on Herdr 0.7.4.
+
+The live and opt-in Herdr guards outside the lane were run the same day on Herdr 0.9.5 with Claude Code 2.1.300 and Pi 0.87.1, with `pyte` installed for the status chrome guard:
+
+```text
+ok - herdr chrome: the live renderer keeps publishing the border row and never re-applies a released zoom
+ok - real herdr 0.9.5 + pi 0.87.1: the registration left behind by a quit pi reads stale-agent and recovers as dead
+ok - installed herdr 0.9.5 protocol 22 classifies above the presentation floor
+ok - live Herdr submit confirm: Claude Code (2.1.300 (Claude Code)) on herdr 0.9.5 proves and submits a typed /exit behind its command popup
+ok - real Herdr staging captured the current project-grouped layout and both one-worker-per-workspace candidates at eight workers across three projects
+ok - real Herdr grouped Agents presentation shows human project, WORKER outcome/state, Pi detail, and hidden task identity
+```
+
+Those come from `tests/fm-status-chrome-herdr-lab-e2e.test.sh`, `tests/fm-herdr-pi-stale-registration-live-e2e.test.sh`, `tests/fm-herdr-version-floor-live-e2e.test.sh`, `tests/fm-herdr-submit-confirm-live-e2e.test.sh`, `tests/fm-herdr-layout-preview-e2e.test.sh`, and `tests/fm-herdr-worker-presentation-e2e.test.sh`.
+The status chrome guard needed two fixes in `bin/fm-herdr-lab-view.py` first: a Herdr 0.9.5 client asks for the color scheme with the private query `CSI ? 996 n`, and on macOS an exiting client still flushing output blocked until the view closed its pty.
+After those fixes the status chrome guard passes on Herdr 0.9.5, but its timed border-row step is intermittent on a heavily loaded host on both Herdr versions.
+On 2026-10-15, with this host's load average at about 250 to 285, it passed 3 of 6 runs on Herdr 0.9.5 and 3 of 4 runs on Herdr 0.7.4.
+Every failing run stopped only at that step, with `the renderer never replaced the seeded row` or `the renderer did not publish a role-marked border row`, and the rendering steps before it passed in all ten runs.
+Herdr 0.9 also changed `agent start` to start a named agent kind in an existing pane, which the worker presentation guard now uses.
+That pane must be at an idle prompt: with this host's zsh login profile (conda and nvm hooks) the guard failed three of three runs with `timed out waiting for agent startup` or `agent_pane_busy` when it started Pi right after `tab create`, and passed three of three once it waited for the login shell to stay alone in the pane's foreground for 3 seconds.
+
+Treehouse 3.0.0 changed `treehouse return` to exit 3 when it leaves a dirty worktree in place.
+Every Firstmate return passes `--force`, so that exit code cannot reach Firstmate; measured against a scratch repository with Treehouse 3.1.3:
+
+```text
+get --lease --lease-holder sm-x           rc=0, stdout is only the worktree path
+return --if-lease-holder other <path>      rc=1, lease precondition failed
+return --force <dirty path>                rc=0, sibling <slot>/.fm-slot-owner left in place
+return <dirty path> </dev/null             rc=3, worktree not returned
+return --force with a held index.lock      rc=1, git's "Unable to create '.../index.lock': File exists." passes through
+```
 
 ### Detached launcher executable resolution
 
@@ -1617,7 +1670,7 @@ tests/fm-backend-herdr.test.sh
 
 Observed guarantees: every measured release classifies as the table records; either the protocol or the version signal alone carries an at-or-above verdict, and each divergent pair flips once the carrying signal is removed; client and running selected-session server verdicts compose conservatively, an unreadable server-running state and losing both release signals report indeterminate and fall back flat, the default is rechecked after server ensure before projection publication, an unconfigured home is projected only at or above the floor, an explicit `on`, including the historical empty opt-in file, is honored below it, and the below-floor warning is emitted once per home per detected release rather than once per spawn.
 
-The whole real-Herdr lane was run on 2026-08-05 against both the CI-pinned Herdr 0.7.4 protocol 16, which is below the floor, and Herdr 0.8.0 protocol 19, which is at it:
+The whole real-Herdr lane was run on 2026-08-05 against both Herdr 0.7.4 protocol 16, which is below the floor and was then the CI pin, and Herdr 0.8.0 protocol 19, which is at it:
 
 ```sh
 HERDR_LAB_HELPER=bin/fm-herdr-lab.sh bin/fm-test-run.sh --lane real-herdr-gated
@@ -1712,20 +1765,26 @@ Herdr is one of the two backends whose recovery-grade agent-state classifier the
 tests/fm-control-herdr-smoke.test.sh
 ```
 
-Observed output, refreshed 2026-09-10 on Herdr 0.9.0 after the stale-registration fix (the two stale-registration lines are recorded under "Stale agent registration" below):
+Observed output, refreshed 2026-10-14 on Herdr 0.9.5 (the two stale-registration lines are recorded under "Stale agent registration" below):
 
 ```text
 ok - real herdr: exit on a pane with no registered agent is idempotent success
-ok - real herdr 0.9.0: a gone session reads recoverable while a live pane and a malformed target do not
+ok - real herdr 0.9.5: a gone session reads recoverable while a live pane and a malformed target do not
 ok - real herdr: a drifted agent-free shell returns to its worktree and reuses the same endpoint
 ok - real herdr: interrupt refuses when herdr's own agent registry reports no agent
 ok - real herdr: interrupt delivers the harness's key and proves the agent survived it
 ok - real herdr: no control verb removed the endpoint or the task's local copy
-ok - real herdr 0.9.0: a registration Herdr keeps after its agent exits reads stale-agent and recovers as dead
+ok - real herdr 0.9.5: a registration Herdr keeps after its agent exits reads stale-agent and recovers as dead
 ok - real herdr: exit on a pane with a stale registration is idempotent success
 ok - real herdr: a stale registration no longer blocks relaunch, and the endpoint and local copy survive
-ok - real herdr: an agent that does not stop fails closed instead of being reported as stopped
+ok - real herdr: an agent behind an unproven composer fails closed instead of typing an exit command into it
 ```
+
+The task pane runs the operator's login shell, and this host's zsh profile (conda, nvm and prompt helpers) drops a line typed while it is still spawning foreground processes, so the guard waits for the shell to stay alone in the pane's foreground for 3 seconds before typing its first line.
+Without that wait the guard failed at its drift step on Herdr 0.9.5 under both the operator's zsh login shell and a scrubbed environment.
+With it, the guard passed 2 of 2 runs on Herdr 0.9.5 under the operator's zsh login shell on 2026-10-15.
+On Herdr 0.7.4 it currently fails at the drift step on this host, `the real Herdr pane did not drift out of its recorded worktree`, because the zsh profile is still spawning helpers (a late `python`) 20 seconds or more after the pane is created, so the typed `cd` never lands.
+That 0.7.4 failure is a pre-existing host condition outside the Herdr 0.9.5 upgrade.
 
 The registry read through `herdr pane report-agent` is the same source `fm_backend_herdr_agent_state` classifies, and since 2026-09-10 that registration counts as an agent only while `pane process-info` shows a harness process behind it, so the guard backs the registration with a real process named like a harness (a symlink to `sleep`) and then stops that process, with no real harness launched.
 That command is the guard that refreshes this record; run it after every Herdr upgrade rather than trusting the version above.
@@ -1818,7 +1877,8 @@ herdr pane process-info --pane w1:p1 --session "$LAB" | jq -c '.result.process_i
 ```
 
 Before the fix `fm_backend_agent_state herdr` read that second state as `alive`, so `bin/fm-control.sh <id> relaunch` and `bin/fm-spawn.sh --relaunch` were refused for as long as the registration lived, which is hours.
-The registration is still present after the wait, and Herdr's own `pane report-agent` leaves the same shape behind on any pane, which is what the lifecycle-control guard uses.
+The registration is still present after the wait.
+On Herdr 0.9.0 and earlier, Herdr's own `pane report-agent` left the same shape behind on any pane; Herdr 0.9.5 keeps it only under a nested shell, so the lifecycle-control guard runs its agent under one (see "Herdr 0.9.5 registration release" below).
 
 Two vendor facts the fix rests on, both read from the outputs above and from `fm_backend_herdr_pane_process_state`'s `pane process-info` parse:
 
@@ -1856,6 +1916,22 @@ ok - real herdr 0.9.0 + pi 0.85.1: a running registered pi classifies alive at p
 # herdr 0.9.0 kept the pi registration (idle) after /quit under a nested shell: the stale-registration branch is exercised
 ok - real herdr 0.9.0 + pi 0.85.1: the registration left behind by a quit pi reads stale-agent and recovers as dead
 ```
+
+#### Herdr 0.9.5 registration release
+
+Measured 2026-10-14 on macOS aarch64 against Herdr 0.9.5 (protocol 22) and Herdr 0.7.4 (protocol 16) in isolated `fm-lab-` sessions, with an outside `pane report-agent --source fm-control-smoke --agent fm-control-smoke-agent --state idle` over a process named `claude` (a symlink to `sleep`), then `kill` of that process, then `agent get` polled every 0.1 seconds for 15 seconds, three trials per shape:
+
+```text
+herdr 0.9.5, process under the pane's top shell: registration gone after 0.47s, 0.49s, 0.71s
+herdr 0.9.5, process under a nested bash:         registration kept for the whole 15s in all three trials
+herdr 0.7.4, process under the pane's top shell: registration kept for the whole 15s in all three trials
+```
+
+Herdr 0.9.2 and later clear a registration once its agent exits back to the pane's top shell, while the crew shape, an agent exiting to the nested shell `treehouse get` opens, still leaves the stale registration this section describes, so the stale-agent path stays reachable and required.
+
+A `pane release-agent` sent over a pane whose agent is named `codex` does not clear the record on Herdr 0.9.5: with a stub that reports itself as `codex` and then execs a process named `codex`, five of five trials that released the stub's source just before killing it, and a separate trial that released it just after, left `{"agent":"codex","agent_status":"unknown"}` for the whole observation, while five of five trials that only killed it read `agent_not_found` within 0.44 seconds.
+On Herdr 0.7.4 the same release cleared the record within 0.13 seconds in five of five trials.
+Firstmate never sends `pane release-agent`; the lifecycle-control guard therefore retires its codex stub by stopping it rather than releasing it.
 
 `tests/fm-control-herdr-smoke.test.sh` proves the same shape through the control plane with no harness launched (the two `stale` lines under "Agent lifecycle control" above): a registration over a real agent-named process reads `alive`, stopping that process makes the pane read `stale-agent` and recover as `dead` while `agent get` still reports the record, `exit` then reports `already-stopped`, and `--relaunch` reuses the same endpoint with the local copy intact.
 `tests/fm-backend-herdr.test.sh` pins the logic portably with canned `process-info` bodies over real processes, driving the signals apart: the identical shell-only foreground reads `stale-agent` for a childless shell and `live` when an agent-named process is still a descendant of that shell, a `working`, `done`, or `blocked` record over a shell-only pane reads the same as `idle`, an unreadable process view reads `unknown` and refuses husk closing, a transient prompt helper beside the shell settles into `stale-agent` on the next shell-only sample while a foreground that never settles within the bound still reads `live`, and `busy_state` verifies a `working` record before reporting busy.

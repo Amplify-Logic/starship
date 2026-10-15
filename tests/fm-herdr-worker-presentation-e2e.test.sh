@@ -42,11 +42,41 @@ PROJECT_TOKEN=$OWNER_TOKEN
   --token "fm_project=$PROJECT_TOKEN" >/dev/null \
   || fail 'could not bind project identity tokens'
 
-AGENT_OUT=$("$HERDR_LAB_HELPER" run "$HERDR_LAB_SESSION" agent start \
-  'WORKER · Validate GPS triggers across all seven city stops · 🔵 WORKING' \
-  --workspace "$WS" --cwd "$ROOT" --no-focus \
-  --env 'FM_PRESENTATION_LAB=1' \
-  -- pi) || fail 'could not start isolated Pi presentation probe'
+# Herdr 0.9 replaced `agent start <name> --workspace ... -- <argv>`, which made
+# its own tab, with `agent start <name> --kind <kind> --pane <id>` into an
+# existing pane at a shell prompt, and agent names became lowercase slugs.
+if "$HERDR_LAB_HELPER" run "$HERDR_LAB_SESSION" agent start --help 2>/dev/null | grep -q -- '--kind'; then
+  TAB_OUT=$("$HERDR_LAB_HELPER" run "$HERDR_LAB_SESSION" tab create \
+    --workspace "$WS" --cwd "$ROOT" --env 'FM_PRESENTATION_LAB=1' --no-focus) \
+    || fail 'could not create the Pi presentation probe tab'
+  PROBE_PANE=$(printf '%s' "$TAB_OUT" | jq -r '.result.root_pane.pane_id // empty')
+  [ -n "$PROBE_PANE" ] || fail 'tab creation did not return the probe pane id'
+  # The pane runs the operator's login shell, whose profile (conda, nvm,
+  # prompt helpers) keeps spawning foreground processes for several seconds,
+  # and Herdr 0.9 refuses or times out `agent start` until the pane is at an
+  # idle prompt. A lone shell sample is not enough, since the profile spawns
+  # more helpers after it, so wait for the shell to stay alone for 3 seconds.
+  samples=0 i=0
+  while [ "$samples" -lt 6 ]; do
+    [ "$i" -lt 240 ] || fail 'the probe pane login shell never settled at an idle prompt'
+    if "$HERDR_LAB_HELPER" run "$HERDR_LAB_SESSION" pane process-info --pane "$PROBE_PANE" 2>/dev/null \
+      | jq -e '.result.process_info as $p | [$p.foreground_processes[]?.pid] == [$p.shell_pid]' >/dev/null 2>&1; then
+      samples=$((samples + 1))
+    else
+      samples=0
+    fi
+    sleep 0.5
+    i=$((i + 1))
+  done
+  AGENT_OUT=$("$HERDR_LAB_HELPER" run "$HERDR_LAB_SESSION" agent start worker-presentation \
+    --kind pi --pane "$PROBE_PANE") || fail 'could not start isolated Pi presentation probe'
+else
+  AGENT_OUT=$("$HERDR_LAB_HELPER" run "$HERDR_LAB_SESSION" agent start \
+    'WORKER · Validate GPS triggers across all seven city stops · 🔵 WORKING' \
+    --workspace "$WS" --cwd "$ROOT" --no-focus \
+    --env 'FM_PRESENTATION_LAB=1' \
+    -- pi) || fail 'could not start isolated Pi presentation probe'
+fi
 TAB=$(printf '%s' "$AGENT_OUT" | jq -r '.result.agent.tab_id // empty')
 PANE=$(printf '%s' "$AGENT_OUT" | jq -r '.result.agent.pane_id // empty')
 [ -n "$TAB" ] && [ -n "$PANE" ] || fail 'agent start did not return stable tab/pane ids'

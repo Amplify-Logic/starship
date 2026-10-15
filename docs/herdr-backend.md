@@ -7,7 +7,7 @@ A 2026-07-02 cleanup bug proved that `HERDR_SESSION` alone is not a safe way to 
 
 Herdr is an agent-native terminal backend with native per-pane agent state and push events.
 Firstmate requires Herdr protocol 14 or newer.
-Broad backend verification covers versions 0.7.1, 0.7.3, 0.7.4, 0.7.5, and 0.8.0.
+Broad backend verification covers versions 0.7.1, 0.7.3, 0.7.4, 0.7.5, 0.8.0, and 0.9.5, the version the required real-Herdr CI lane pins.
 Protocol-16 features remain gated by availability.
 Default-on presentation spaces have a higher floor of Herdr 0.8.0 for the reason given under [Presentation spaces](#presentation-spaces).
 Herdr provides the terminal session while Treehouse continues to provide task worktrees.

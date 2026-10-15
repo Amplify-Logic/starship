@@ -606,6 +606,68 @@ PYCHECK
   pass "fm-herdr-lab: view is bounded, lab-only, and forwards nothing to Herdr"
 }
 
+# A client that still has output to flush when it exits blocks in exit until
+# the pty drains. The view engine stops reading at its deadline, so it must
+# close the pty before it reaps, or the reap waits on that exit forever (seen
+# with a Herdr 0.9.5 client on macOS, where the exiting client ignored SIGKILL).
+# The fake client paints once, then writes a final burst on SIGTERM and exits
+# without anyone reading it.
+test_view_engine_reaps_a_client_flushing_at_exit() {
+  local engine bin out status=0 waited=0 pid
+  engine="$(dirname "${BASH_SOURCE[0]}")/../bin/fm-herdr-lab-view.py"
+  command -v python3 >/dev/null 2>&1 || { pass "fm-herdr-lab: view reap (skipped: no python3)"; return; }
+  bin="$TMP_ROOT/flushing-client-bin"
+  mkdir -p "$bin"
+  cat > "$bin/herdr" <<'SH'
+#!/usr/bin/env bash
+trap 'head -c 4096 /dev/zero | tr "\\0" x; exit 0' TERM
+printf 'frame'
+while :; do sleep 0.1; done
+SH
+  chmod +x "$bin/herdr"
+  out="$TMP_ROOT/flushing-client.out"
+  PATH="$bin:$PATH" python3 "$engine" --session fm-lab-flush-probe --seconds 2 --format raw-bytes \
+    > "$out" 2>/dev/null &
+  pid=$!
+  while kill -0 "$pid" 2>/dev/null && [ "$waited" -lt 150 ]; do
+    sleep 0.1
+    waited=$((waited + 1))
+  done
+  if kill -0 "$pid" 2>/dev/null; then
+    pkill -KILL -P "$pid" 2>/dev/null || true
+    kill -KILL "$pid" 2>/dev/null || true
+    fail "the view engine hung reaping a client that was still flushing output at exit"
+  fi
+  wait "$pid" || status=$?
+  expect_code 0 "$status" "the view engine must finish once its client is reaped"
+  grep -q frame "$out" || fail "the view engine lost the frame it captured before the deadline"
+  pass "fm-herdr-lab: view reaps a client that is still flushing output at exit"
+}
+
+# A Herdr 0.9.5 client queries its terminal's color scheme with the private
+# device-status query CSI ? 996 n, which crashed the renderer. Rendering needs
+# pyte, which CI does not install, so the case reports a skip without it.
+test_view_engine_renders_past_a_private_status_query() {
+  local engine out
+  engine="$(dirname "${BASH_SOURCE[0]}")/../bin/fm-herdr-lab-view.py"
+  if ! command -v python3 >/dev/null 2>&1 || ! python3 -c 'import pyte' >/dev/null 2>&1; then
+    pass "fm-herdr-lab: view private status query (skipped: python3 module pyte not found)"
+    return
+  fi
+  out=$(python3 - "$engine" <<'PYCHECK' 2>&1
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("view", sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+import pyte
+lines = mod.render(pyte, b"\x1b[?996n\x1b[1;1Hprobe-frame", 20, 8)
+print(lines[0].rstrip())
+PYCHECK
+) || fail "the view renderer failed on a private device-status query: $out"
+  [ "$out" = probe-frame ] || fail "the view renderer lost the frame around a private status query: $out"
+  pass "fm-herdr-lab: view renders past a private device-status query"
+}
+
 test_refuses_unsafe_names
 test_provision_run_and_guarded_teardown
 test_run_scopes_session_before_double_dash
@@ -625,3 +687,5 @@ test_teardown_refuses_while_viewer_attached
 test_viewer_stop_retains_record_when_detach_is_unreadable
 test_viewer_launcher_refuses_unsafe_arguments
 test_view_is_bounded_and_never_reaches_the_live_session
+test_view_engine_reaps_a_client_flushing_at_exit
+test_view_engine_renders_past_a_private_status_query
