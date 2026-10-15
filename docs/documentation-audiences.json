@@ -313,6 +313,14 @@
       "audience": "public-product"
     },
     {
+      "path": "ONBOARDING-linux-server.md",
+      "audience": "public-product"
+    },
+    {
+      "path": "ONBOARDING-windows.md",
+      "audience": "public-product"
+    },
+    {
       "path": "ONBOARDING.md",
       "audience": "public-product"
     },

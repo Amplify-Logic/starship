@@ -79,6 +79,14 @@ unset TASKS_AXI_FILE TASKS_AXI_BACKEND
 # tests/fm-supervision-test-isolation.test.sh owns the regression coverage.
 unset FM_ROOT_OVERRIDE FM_STATE_OVERRIDE
 
+# Drop the host-environment markers. bin/fm-bootstrap.sh reads WSL_DISTRO_NAME,
+# the SSH_* login variables, and DISPLAY/WAYLAND_DISPLAY to add WSL HOST_ENV
+# lines and the headless-server BOOTSTRAP_INFO fact, so a suite run from a WSL
+# shell, over SSH, or on a desktop would see or lose those lines in the
+# bootstrap output it asserts on. A case that verifies them passes the markers
+# itself.
+unset WSL_DISTRO_NAME SSH_CONNECTION SSH_TTY SSH_CLIENT DISPLAY WAYLAND_DISPLAY
+
 # Write the tracked default backlog configuration into a fixture home. Never copy
 # "$ROOT/.tasks.toml": an operator's primary checkout keeps a gitignored override
 # there (for example a beads backend at its live backlog), so a copy points the

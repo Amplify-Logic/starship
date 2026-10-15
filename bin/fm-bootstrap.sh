@@ -17,6 +17,8 @@
 #                 "BACKLOG_RECONCILE: <id>: <what this home could not reconcile>",
 #                 "BACKLOG_RECONCILE: code-root <file> is not this home's <file>; ...",
 #                 "TANGLE: <remediation>",
+#                 "HOST_ENV: WSL: <problem> - <advice>",
+#                 "BOOTSTRAP_INFO: headless server: <board-access advice>",
 #                 "SECONDMATE_SYNC: secondmate <id>: skipped: <reason>",
 #                 "NUDGE_SECONDMATES: secondmate <id>: send failed: <reason>",
 #                 "BOOTSTRAP_INFO: nudged fm-<id> with '<message>'",
@@ -101,6 +103,21 @@
 #          self-updating binary is a scheduled outage. It is silent for a
 #          matching runtime, an absent binary (MISSING already owns that), and
 #          an unparseable --version; see bin/fm-toolchain-lib.sh.
+#          HOST_ENV is a read-only local check of the Linux host Firstmate runs
+#          on, silent on macOS and on a desktop Linux session. Inside WSL
+#          (WSL_DISTRO_NAME set) it names the code root, home, projects
+#          directory, or any project that sits on a Windows drive under
+#          /mnt/<letter>/, and names a .wslconfig that turns localhost
+#          forwarding off while networking is not mirrored (read through
+#          wslinfo, cmd.exe, and wslpath; silent when they are unavailable
+#          or cmd.exe or wslpath does not answer within 5 seconds).
+#          On a headless server (no DISPLAY or WAYLAND_DISPLAY, reached over
+#          SSH) without Tailscale up, it prints one BOOTSTRAP_INFO fact that
+#          review boards and dev servers are reached from the person's own
+#          computer over Tailscale or an SSH port forward, once per home: a
+#          locked run records state/.host-env-headless-advised and stays
+#          silent while it exists. ONBOARDING-windows.md and
+#          ONBOARDING-linux-server.md own the setup each line points at.
 #          UPSTREAM is detect-only and silent when there is no upstream remote,
 #          origin and upstream share a URL (not a fork), the home is a secondmate,
 #          the network is unavailable, or HEAD already contains the upstream tip.
@@ -1631,6 +1648,64 @@ detect_local_config() {
   detect_home_summary_publication
 }
 
+# Host environment check for Linux homes: WSL on a Windows PC, or a headless
+# server reached over SSH. Read-only and local; the header owns the contract.
+host_env_on_windows_drive() {  # <path>
+  case "$1/" in
+    /mnt/[A-Za-z]/*) return 0 ;;
+  esac
+  return 1
+}
+
+host_env_resolve() {  # <path>: physical path when it exists, else as given
+  (cd -P -- "$1" 2>/dev/null && pwd -P) || printf '%s\n' "$1"
+}
+
+host_env_wslconfig() {  # prints the Windows user's .wslconfig path when readable
+  local profile path
+  command -v cmd.exe >/dev/null 2>&1 && command -v wslpath >/dev/null 2>&1 || return 1
+  profile=$(cd / && fm_run_timed 5 cmd.exe /c 'echo %USERPROFILE%' </dev/null 2>/dev/null | tr -d '\r' | head -n 1)
+  [ -n "$profile" ] || return 1
+  path=$(fm_run_timed 5 wslpath -u "$profile" </dev/null 2>/dev/null)/.wslconfig || return 1
+  [ -r "$path" ] || return 1
+  printf '%s\n' "$path"
+}
+
+detect_host_environment() {
+  local path seen='' wslconfig mode forwarding advised="$STATE/.host-env-headless-advised"
+  # WSL exports WSL_DISTRO_NAME into every process it starts; nothing else does.
+  if [ -n "${WSL_DISTRO_NAME:-}" ]; then
+    for path in "$FM_ROOT" "$FM_HOME" "$PROJECTS" "$PROJECTS"/*; do
+      [ "$path" = "$PROJECTS/*" ] && continue
+      path=$(host_env_resolve "$path")
+      case " $seen " in *" $path "*) continue ;; esac
+      seen="$seen $path"
+      host_env_on_windows_drive "$path" \
+        && echo "HOST_ENV: WSL: $path is on the Windows drive - move it under the Linux home (~); git, file watching and file permissions are slow or broken under /mnt/"
+    done
+    mode=$(wslinfo --networking-mode 2>/dev/null | tr -d '\r' || true)
+    if [ "$mode" != mirrored ] && wslconfig=$(host_env_wslconfig); then
+      forwarding=$(LC_ALL=C awk -F= '
+        /^[[:space:]]*\[/ { section = tolower($0); gsub(/[[:space:]]/, "", section) }
+        section == "[wsl2]" && tolower($1) ~ /^[[:space:]]*localhostforwarding[[:space:]]*$/ {
+          value = tolower($2); gsub(/[[:space:]]/, "", value); last = value
+        }
+        END { print last }' "$wslconfig" 2>/dev/null)
+      [ "$forwarding" = false ] \
+        && echo "HOST_ENV: WSL: localhost forwarding is off in $wslconfig, so review boards and dev servers will not open in the Windows browser - set networkingMode=mirrored under [wsl2] there, then run wsl --shutdown from Windows (ONBOARDING-windows.md)"
+    fi
+    return 0
+  fi
+  [ "$(uname -s 2>/dev/null)" = Linux ] || return 0
+  [ -z "${DISPLAY:-}" ] && [ -z "${WAYLAND_DISPLAY:-}" ] || return 0
+  [ -n "${SSH_CONNECTION:-}" ] || [ -n "${SSH_TTY:-}" ] || return 0
+  [ -e "$advised" ] && return 0
+  command -v tailscale >/dev/null 2>&1 && tailscale ip -4 >/dev/null 2>&1 && return 0
+  echo "BOOTSTRAP_INFO: headless server: review boards and dev servers listen only on this server - open them from your own computer over Tailscale (recommended) or an SSH port forward (ONBOARDING-linux-server.md); shown once for this home"
+  # A read-only session leaves the record to the session holding the fleet lock.
+  [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" = 1 ] || { [ -d "$STATE" ] && : > "$advised"; } 2>/dev/null || true
+}
+
 # Shadow-backlog check. When this home's data directory is not the code root's,
 # a code-root data/backlog.md or data/done-archive.md that is not this home's
 # own file is a queue a cwd-relative tasks-axi write has already forked; a link
@@ -1718,6 +1793,7 @@ if network_phase; then
   fm_timing_record phase gh-auth "$__fm_timing_stamp"
 fi
 local_phase && detect_local_config
+local_phase && detect_host_environment
 
 # Read-only runtime drift check: compares docs/toolchain-manifest.tsv against
 # PATH. Detection only - it reports and never blocks a launch; see

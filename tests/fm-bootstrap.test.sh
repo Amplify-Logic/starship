@@ -559,6 +559,94 @@ SH
   pass "bootstrap requires git with an install instruction"
 }
 
+# HOST_ENV: WSL homes and projects on the Windows drive and WSL localhost
+# forwarding turned off (silent when cmd.exe hangs); plus the headless-server
+# board advice, a once-per-home BOOTSTRAP_INFO fact. wslinfo, cmd.exe, wslpath,
+# and tailscale are stubs. The headless-server cases need a real Linux kernel,
+# so a macOS run proves that branch stays silent there instead.
+# shellcheck disable=SC2016  # stub bodies expand when the stub runs
+make_host_env_case() {  # <name> -> echoes "<case_dir>|<fakebin>"
+  local case_dir="$TMP_ROOT/host-env-$1" fakebin
+  mkdir -p "$case_dir/home/config" "$case_dir/home/state" "$case_dir/winhome"
+  printf '%s\n' manual > "$case_dir/home/config/backlog-backend"
+  fakebin=$(make_fake_toolchain "$case_dir")
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "${FAKE_WSL_MODE:-nat}"\n' > "$fakebin/wslinfo"
+  printf '#!/usr/bin/env bash\nprintf "C:\\\\Users\\\\fm\\r\\n"\n' > "$fakebin/cmd.exe"
+  printf '#!/usr/bin/env bash\necho %s\n' "$case_dir/winhome" > "$fakebin/wslpath"
+  chmod +x "$fakebin/wslinfo" "$fakebin/cmd.exe" "$fakebin/wslpath"
+  printf '%s|%s\n' "$case_dir" "$fakebin"
+}
+
+run_host_env_bootstrap() {  # <case_dir> <fakebin> [env assignments...]
+  local case_dir=$1 fakebin=$2
+  shift 2
+  env PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$@" "$ROOT/bin/fm-bootstrap.sh"
+}
+
+# shellcheck disable=SC2016  # the tailscale stub body expands when it runs
+test_host_environment_reports() {
+  local c case_dir fakebin out expected ssh advised
+  c=$(make_host_env_case wsl-drive); case_dir=${c%%|*}; fakebin=${c#*|}
+  out=$(run_host_env_bootstrap "$case_dir" "$fakebin" WSL_DISTRO_NAME=Ubuntu-24.04 \
+    FM_PROJECTS_OVERRIDE=/mnt/c/fm-test-projects)
+  expected="HOST_ENV: WSL: /mnt/c/fm-test-projects is on the Windows drive - move it under the Linux home (~); git, file watching and file permissions are slow or broken under /mnt/"
+  [ "$out" = "$expected" ] || fail "a projects directory on the Windows drive should be named, got: $out"
+  out=$(run_host_env_bootstrap "$case_dir" "$fakebin" WSL_DISTRO_NAME=Ubuntu-24.04 \
+    FM_PROJECTS_OVERRIDE=/mnt/data/fm-test-projects)
+  [ -z "$out" ] || fail "only /mnt/<drive letter>/ is the Windows drive, got: $out"
+  out=$(run_host_env_bootstrap "$case_dir" "$fakebin" FM_PROJECTS_OVERRIDE=/mnt/c/fm-test-projects)
+  [ -z "$out" ] || fail "the Windows-drive check is WSL-only, got: $out"
+
+  printf '[wsl2]\nmemory=8GB\nlocalhostForwarding = False\n' > "$case_dir/winhome/.wslconfig"
+  out=$(run_host_env_bootstrap "$case_dir" "$fakebin" WSL_DISTRO_NAME=Ubuntu-24.04)
+  expected="HOST_ENV: WSL: localhost forwarding is off in $case_dir/winhome/.wslconfig, so review boards and dev servers will not open in the Windows browser - set networkingMode=mirrored under [wsl2] there, then run wsl --shutdown from Windows (ONBOARDING-windows.md)"
+  [ "$out" = "$expected" ] || fail "localhost forwarding off should suggest mirrored networking, got: $out"
+  out=$(run_host_env_bootstrap "$case_dir" "$fakebin" WSL_DISTRO_NAME=Ubuntu-24.04 FAKE_WSL_MODE=mirrored)
+  [ -z "$out" ] || fail "mirrored networking needs no forwarding advice, got: $out"
+  printf '[wsl2]\nnetworkingMode=nat\n' > "$case_dir/winhome/.wslconfig"
+  out=$(run_host_env_bootstrap "$case_dir" "$fakebin" WSL_DISTRO_NAME=Ubuntu-24.04)
+  [ -z "$out" ] || fail "default localhost forwarding needs no advice, got: $out"
+  printf '[wsl2]\nlocalhostForwarding=false\n' > "$case_dir/winhome/.wslconfig"
+  printf '#!/usr/bin/env bash\nsleep 30\nprintf "C:\\\\Users\\\\fm\\r\\n"\n' > "$fakebin/cmd.exe"
+  SECONDS=0
+  out=$(run_host_env_bootstrap "$case_dir" "$fakebin" WSL_DISTRO_NAME=Ubuntu-24.04)
+  [ "$SECONDS" -lt 20 ] || fail "a hung cmd.exe should be cut off, bootstrap took ${SECONDS}s"
+  [ -z "$out" ] || fail "a hung cmd.exe should leave the forwarding check silent, got: $out"
+
+  c=$(make_host_env_case server); case_dir=${c%%|*}; fakebin=${c#*|}
+  ssh='10.0.0.2 50000 10.0.0.1 22'
+  advised="$case_dir/home/state/.host-env-headless-advised"
+  if [ "$(uname -s)" != Linux ]; then
+    out=$(run_host_env_bootstrap "$case_dir" "$fakebin" SSH_CONNECTION="$ssh")
+    [ -z "$out" ] || fail "the headless-server advice is Linux-only, got: $out"
+    pass "bootstrap HOST_ENV names WSL Windows-drive paths and WSL forwarding off; headless-server cases need Linux and stay silent here"
+    return
+  fi
+  out=$(run_host_env_bootstrap "$case_dir" "$fakebin" SSH_CONNECTION="$ssh" DISPLAY=:0)
+  [ -z "$out" ] || fail "a session with a display is not headless, got: $out"
+  out=$(run_host_env_bootstrap "$case_dir" "$fakebin")
+  [ -z "$out" ] || fail "a local session without SSH is not treated as a server, got: $out"
+  printf '#!/usr/bin/env bash\n[ "$*" = "ip -4" ] && echo 100.64.0.1\n' > "$fakebin/tailscale"
+  chmod +x "$fakebin/tailscale"
+  out=$(run_host_env_bootstrap "$case_dir" "$fakebin" SSH_CONNECTION="$ssh")
+  [ -z "$out" ] || fail "a server with Tailscale up needs no board advice, got: $out"
+  rm -f "$fakebin/tailscale"
+  [ ! -e "$advised" ] || fail "no advice was shown, so none may be recorded"
+
+  expected="BOOTSTRAP_INFO: headless server: review boards and dev servers listen only on this server - open them from your own computer over Tailscale (recommended) or an SSH port forward (ONBOARDING-linux-server.md); shown once for this home"
+  out=$(run_host_env_bootstrap "$case_dir" "$fakebin" SSH_CONNECTION="$ssh" FM_BOOTSTRAP_DETECT_ONLY=1)
+  printf '%s\n' "$out" | grep -Fx "$expected" >/dev/null \
+    || fail "a read-only session on a headless server should show the board advice, got: $out"
+  [ ! -e "$advised" ] || fail "a read-only session must not record the advice as shown"
+  out=$(run_host_env_bootstrap "$case_dir" "$fakebin" SSH_CONNECTION="$ssh")
+  [ "$out" = "$expected" ] || fail "a headless server should get the board advice as an info fact, got: $out"
+  [ -e "$advised" ] || fail "the advice was shown but not recorded for this home"
+  out=$(run_host_env_bootstrap "$case_dir" "$fakebin" SSH_CONNECTION="$ssh")
+  [ -z "$out" ] || fail "the board advice is shown once per home, got it again: $out"
+  pass "bootstrap HOST_ENV names WSL Windows-drive paths and WSL forwarding off, and a headless server gets its board advice once per home as an info fact"
+}
+
 test_orca_backend_gates_orca_tool_only_when_selected() {
   local case_dir fakebin out missing_orca
   missing_orca="MISSING: orca (install: brew install orca  # or the platform's package manager)"
@@ -1285,6 +1373,7 @@ test_peekaboo_reported_only_when_opted_in
 test_tasks_axi_min_version
 test_quota_axi_min_version
 test_git_is_required_with_supported_install_instruction
+test_host_environment_reports
 test_orca_backend_gates_orca_tool_only_when_selected
 test_session_provider_backends_do_not_require_tmux
 test_session_provider_backends_gate_own_cli_not_tmux

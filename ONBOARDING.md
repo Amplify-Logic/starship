@@ -5,6 +5,8 @@ You talk to it in plain English; it does the coding work, uses other AI workers 
 Five steps, about 30 minutes, mostly waiting for installs.
 
 This guide is for a blank macOS machine.
+On a Windows PC, start with [ONBOARDING-windows.md](ONBOARDING-windows.md); on a rented Linux server, start with [ONBOARDING-linux-server.md](ONBOARDING-linux-server.md).
+Both set up the machine, then return here for steps 3 to 5.
 The finish line is real work: your first mate adds the Harbour Logbook project and brings back one report from a worker that read it.
 After that, [the captain's handbook](docs/handbook.md) explains the whole system, connects your other tools, and gives you a first-week path.
 

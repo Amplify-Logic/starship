@@ -1,0 +1,262 @@
+name: Windows (WSL 2) and Linux server kit
+
+# End-to-end proof of the Windows (ONBOARDING-windows.md) and Linux server
+# (ONBOARDING-linux-server.md) path, on a fresh Ubuntu 24.04 as a teammate
+# would have it:
+#   kit on WSL 2 (windows-2025): bin/fm-linux-setup.sh --ci, the first mate's
+#     consented toolchain install, one stand-in worker spawned on tmux and its
+#     report read back, headless Chrome rendering a dev server, and a review
+#     board and an Expo-style dev server reached from the Windows side through
+#     WSL's default localhost forwarding.
+#   kit on a server: the same steps in a fresh ubuntu:24.04 container on
+#     ubuntu-latest, headless with no desktop, minus the Windows side.
+#   portable test shards inside WSL 2: the same lanes ci.yml runs on Ubuntu,
+#     each on its own Windows runner. fm-test-run.sh refuses a serial lane
+#     whose "of11" no longer matches its shard count, so a shard change fails
+#     here loudly rather than leaving a shard unrun. Until a tracked follow-up
+#     makes them green, the shards run and report without gating: their test
+#     steps continue on error and a failure shows as a warning, while both kit
+#     lanes stay blocking.
+# Standard runners are free on this public repository. It runs weekly and by
+# hand, and also on pull requests that change this workflow or the setup
+# script: that is how a change to the setup kit gets its Windows and Ubuntu
+# proof before merge, at no cost on this public repository.
+
+on:
+  schedule:
+    - cron: '23 4 * * 1'
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/windows-wsl.yml
+      - bin/fm-linux-setup.sh
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  kit:
+    name: ${{ matrix.kind }} ${{ matrix.lane }}
+    runs-on: ${{ matrix.kind == 'wsl' && 'windows-2025' || 'ubuntu-latest' }}
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        kind: [wsl]
+        lane:
+          - kit
+          - portable-parallel-1
+          - portable-parallel-2
+          - portable-serial-1of11
+          - portable-serial-2of11
+          - portable-serial-3of11
+          - portable-serial-4of11
+          - portable-serial-5of11
+          - portable-serial-6of11
+          - portable-serial-7of11
+          - portable-serial-8of11
+          - portable-serial-9of11
+          - portable-serial-10of11
+          - portable-serial-11of11
+        include:
+          - kind: server
+            lane: kit
+    defaults:
+      run:
+        # Every run step below executes as the ordinary user "fm" in a login
+        # shell inside the fresh Ubuntu: wsl-bash comes from setup-wsl, and
+        # srv-bash is the equivalent wrapper made for the server container.
+        shell: ${{ matrix.kind == 'wsl' && 'wsl-bash {0}' || 'srv-bash {0}' }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Install Ubuntu 24.04 in WSL 2
+        if: matrix.kind == 'wsl'
+        uses: Vampire/setup-wsl@v7.0.0
+        with:
+          distribution: Ubuntu-24.04
+          wsl-version: 2
+          wsl-shell-user: fm
+          wsl-shell-command: bash -c "cd && bash --login -eo pipefail '{0}'"
+
+      # A person types their password at the setup script's sudo prompt; CI
+      # has no one to type it, so the user gets passwordless sudo instead.
+      - name: Give the WSL user sudo
+        if: matrix.kind == 'wsl'
+        shell: wsl-bash -u root {0}
+        run: |
+          id fm >/dev/null 2>&1 || useradd -m -s /bin/bash fm
+          usermod -s /bin/bash -aG sudo fm
+          if [ ! -d /home/fm ]; then
+            cp -rT /etc/skel /home/fm
+            chown -R fm:fm /home/fm
+          fi
+          printf 'fm ALL=(ALL) NOPASSWD:ALL\n' > /etc/sudoers.d/fm
+          chmod 0440 /etc/sudoers.d/fm
+
+      # A cloud Ubuntu image already has sudo, curl and git; the container
+      # image does not, so they are added here to match.
+      - name: Start a fresh Ubuntu 24.04 server
+        if: matrix.kind == 'server'
+        shell: bash
+        run: |
+          set -eu
+          docker run -d --name srv ubuntu:24.04 sleep infinity
+          docker exec srv bash -c '
+            set -eu
+            apt-get update -q
+            DEBIAN_FRONTEND=noninteractive apt-get install -y -q sudo curl git ca-certificates
+            useradd -m -s /bin/bash -G sudo fm
+            printf "fm ALL=(ALL) NOPASSWD:ALL\n" > /etc/sudoers.d/fm
+            chmod 0440 /etc/sudoers.d/fm'
+          docker cp "$GITHUB_WORKSPACE" srv:/home/fm/checkout
+          docker exec srv chown -R fm:fm /home/fm/checkout
+          mkdir -p "$RUNNER_TEMP/srv"
+          cat > "$RUNNER_TEMP/srv/srv-bash" <<'SH'
+          #!/usr/bin/env bash
+          docker cp "$1" srv:/tmp/step.sh && docker exec srv chmod 0644 /tmp/step.sh || exit 1
+          exec docker exec -u fm -w /home/fm srv bash --login -eo pipefail /tmp/step.sh
+          SH
+          chmod +x "$RUNNER_TEMP/srv/srv-bash"
+          echo "$RUNNER_TEMP/srv" >> "$GITHUB_PATH"
+
+      - name: Put this commit at ~/starship
+        run: |
+          src="$HOME/checkout"
+          [ -d "$src" ] || src=$(wslpath -u '${{ github.workspace }}')
+          git config --global --add safe.directory '*'
+          git clone --no-checkout --quiet "$src" ~/starship
+          git -C ~/starship checkout --quiet --detach '${{ github.sha }}'
+          # Worker spawns refresh their base from origin's default branch. The
+          # runner's checkout has no branches on a pull request, so point origin
+          # at GitHub to match the clone the setup script makes.
+          git -C ~/starship remote set-url origin 'https://github.com/${{ github.repository }}.git'
+          git -C ~/starship fetch --quiet origin
+          git -C ~/starship remote set-head origin --auto
+          git -C ~/starship log -1 --oneline
+
+      - name: Run the setup script
+        run: ~/starship/bin/fm-linux-setup.sh --ci
+
+      - name: Install the first mate's toolchain as it would after consent
+        if: matrix.lane == 'kit'
+        run: |
+          cd ~/starship
+          mkdir -p config
+          printf 'tmux\n' > config/backend
+          bin/fm-bootstrap.sh install jq treehouse no-mistakes gh-axi tasks-axi quota-axi lavish-axi chrome-devtools-axi
+          out=$(bin/fm-bootstrap.sh)
+          printf '%s\n' "$out"
+          if printf '%s\n' "$out" | grep -E '^(MISSING|MISSING_MANUAL|HOST_ENV):'; then
+            echo "::error::bootstrap still reports a missing tool or host problem after the toolchain install"
+            exit 1
+          fi
+
+      - name: Spawn one stand-in worker on tmux and read its report
+        if: matrix.lane == 'kit'
+        run: |
+          cd ~/starship
+          id=slugtest
+          slug="ci-slug-$RANDOM$RANDOM"
+          printf 'manual\n' > config/backlog-backend
+          bin/fm-brief.sh "$id" starship --scout
+          sed -i -e "s|{TASK}|Write the slug $slug into onboarding-slug.txt in the isolated copy.|" \
+            -e "s|{FIRSTMATE_SPEC}|A stand-in worker for the CI proof; no model runs.|" "data/$id/brief.md"
+          cat > ~/stand-in-worker.sh <<WORKER
+          #!/usr/bin/env bash
+          printf '%s\n' '$slug' > onboarding-slug.txt
+          printf 'done [at=%s]: wrote %s\n' "\$(date +%s)" '$slug' >> '$HOME/starship/state/$id.status'
+          WORKER
+          bin/fm-spawn.sh "$id" "$HOME/starship" "bash $HOME/stand-in-worker.sh" --scout
+          for _ in $(seq 60); do
+            grep -q "^done .*$slug" "state/$id.status" 2>/dev/null && break
+            sleep 2
+          done
+          grep "^done .*$slug" "state/$id.status"
+          wt=$(sed -n 's/^worktree=//p' "state/$id.meta")
+          [ -n "$wt" ] && [ "$wt" != "$HOME/starship" ]
+          grep -qx "$slug" "$wt/onboarding-slug.txt"
+          tmux list-windows -a
+          echo "stand-in worker wrote $slug in its isolated copy $wt and reported it back"
+
+      # WSL stops a distribution soon after its last wsl.exe session ends,
+      # which would take the board and dev server down between steps.
+      - name: Keep the WSL distribution running
+        if: matrix.lane == 'kit' && matrix.kind == 'wsl'
+        shell: pwsh
+        run: |
+          Start-Process -FilePath wsl.exe -ArgumentList '-d', 'Ubuntu-24.04', '-u', 'fm', '--', 'sleep', '3600' -WindowStyle Hidden
+
+      - name: Start a review board and an Expo-style dev server, and check them headless
+        if: matrix.lane == 'kit'
+        run: |
+          mkdir -p ~/board
+          printf '<!doctype html><title>Kit check</title><h1>fm-board-ok</h1>\n' > ~/board/check.html
+          # Expo's dev server listens on every interface at 8081; this stands in for it.
+          setsid nohup node -e "require('http').createServer((q,s)=>s.end('fm-dev-server-ok')).listen(8081)" \
+            > ~/dev-server.log 2>&1 < /dev/null &
+          LAVISH_AXI_NO_OPEN=1 lavish-axi ~/board/check.html | tee ~/lavish.out
+          url=$(grep -o 'http://[^" ,]*/session/[A-Za-z0-9]*' ~/lavish.out | head -n 1)
+          [ -n "$url" ] || { echo "::error::lavish-axi printed no board URL"; exit 1; }
+          printf '%s\n' "$url" > ~/board-url
+          for _ in $(seq 30); do curl -fsS http://localhost:8081/ >/dev/null 2>&1 && break; sleep 1; done
+          [ "$(curl -fsS http://localhost:8081/)" = fm-dev-server-ok ]
+          curl -fsS -o /dev/null "$url"
+          # The wrappers pass no step env into the Linux side, so the flags are
+          # written into the script. A container cannot create Chrome's sandbox
+          # and has a tiny /dev/shm; a real server and WSL need neither flag.
+          export CHROME_DEVTOOLS_AXI_CHROME_ARGS="${{ matrix.kind == 'server' && '--no-sandbox --disable-dev-shm-usage' || '' }}"
+          chrome-devtools-axi open http://localhost:8081/
+          chrome-devtools-axi snapshot | tee ~/snapshot.txt
+          grep -q fm-dev-server-ok ~/snapshot.txt
+          chrome-devtools-axi stop
+          echo "board at $url and the dev server answer inside, and headless Chrome renders the dev server"
+
+      - name: Reach the board and the dev server from Windows
+        if: matrix.lane == 'kit' && matrix.kind == 'wsl'
+        shell: pwsh
+        run: |
+          $url = (wsl.exe -d Ubuntu-24.04 -u fm -- cat /home/fm/board-url | Out-String).Trim()
+          Write-Output "board: $url"
+          curl.exe -fsS --max-time 15 -o NUL -w "board HTTP %{http_code}`n" $url
+          if ($LASTEXITCODE -ne 0) { Write-Error "the board did not open from Windows"; exit 1 }
+          $body = (curl.exe -fsS --max-time 15 http://localhost:8081/ | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0 -or $body -ne 'fm-dev-server-ok') { Write-Error "the dev server did not answer from Windows: $body"; exit 1 }
+          Write-Output "Windows reached the board and the dev server through localhost"
+
+      # The Pi extension typecheck needs a global tsc, which ci.yml gets from
+      # the hosted Ubuntu image.
+      - name: Install the test-only tools the hosted Ubuntu image carries
+        id: shard-tools
+        if: matrix.lane != 'kit'
+        continue-on-error: true
+        run: |
+          cd ~/starship
+          sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y -q lsof psmisc rsync unzip zip
+          bin/fm-bootstrap.sh install jq tasks-axi
+          npm install -g @earendil-works/pi-coding-agent typescript
+          bin/fm-install-shellcheck.sh "$HOME/.local/bin"
+          bin/fm-install-actionlint.sh "$HOME/.local/bin"
+
+      - name: Run ${{ matrix.lane }} inside WSL 2
+        id: shard-run
+        if: matrix.lane != 'kit'
+        continue-on-error: true
+        run: |
+          cd ~/starship
+          bin/fm-test-run.sh --lane '${{ matrix.lane }}' \
+            --fail-on-gate-skip 'Pi extension typecheck prerequisite not found'
+
+      - name: Report the WSL test shard without gating
+        if: matrix.lane != 'kit' && (steps.shard-tools.outcome == 'failure' || steps.shard-run.outcome == 'failure')
+        shell: bash
+        run: |
+          msg='The ${{ matrix.lane }} WSL test shard failed. The WSL test shards are a tracked follow-up and do not gate this change.'
+          echo "::warning::$msg"
+          echo "$msg" >> "$GITHUB_STEP_SUMMARY"

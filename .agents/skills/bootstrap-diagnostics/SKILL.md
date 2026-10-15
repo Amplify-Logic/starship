@@ -2,7 +2,7 @@
 name: bootstrap-diagnostics
 description: >-
   Agent-only handling playbook for session-start bootstrap diagnostics.
-  Use whenever the session-start digest's bootstrap or network-checks section prints an actionable diagnostic line - MISSING, MISSING_MANUAL, PRESENTATION_UNAVAILABLE, BACKEND_INVALID, NEEDS_GH_AUTH, TANGLE, STARTUP_MEMORY_BUDGET, CREW_DISPATCH invalid, FLEET_SYNC, NETWORK_CHECKS, HOME_SUMMARY, BACKLOG_RECONCILE, SECONDMATE_SYNC, SECONDMATE_LIVENESS, SECONDMATE_HANDOFF, NUDGE_SECONDMATES, CONFIG_REREAD, ACCOUNTS invalid, PR_CHECK_MIGRATION, TOOLCHAIN_DRIFT, UPSTREAM, UPSTREAM_REPORT, MORNING_INTAKE, CHANNEL_INTAKE, or FMX - or reports that an interrupted backlog cleanup may have left an endpoint or local copy, or when a standalone bin/fm-bootstrap.sh or bin/fm-startup-network.sh run prints one of those lines.
+  Use whenever the session-start digest's bootstrap or network-checks section prints an actionable diagnostic line - MISSING, MISSING_MANUAL, PRESENTATION_UNAVAILABLE, BACKEND_INVALID, NEEDS_GH_AUTH, TANGLE, STARTUP_MEMORY_BUDGET, CREW_DISPATCH invalid, FLEET_SYNC, NETWORK_CHECKS, HOME_SUMMARY, BACKLOG_RECONCILE, SECONDMATE_SYNC, SECONDMATE_LIVENESS, SECONDMATE_HANDOFF, NUDGE_SECONDMATES, CONFIG_REREAD, ACCOUNTS invalid, PR_CHECK_MIGRATION, TOOLCHAIN_DRIFT, HOST_ENV, UPSTREAM, UPSTREAM_REPORT, MORNING_INTAKE, CHANNEL_INTAKE, or FMX - or reports that an interrupted backlog cleanup may have left an endpoint or local copy, or when a standalone bin/fm-bootstrap.sh or bin/fm-startup-network.sh run prints one of those lines.
   A silent bootstrap section, or any other BOOTSTRAP_INFO fact, means no skill load.
 user-invocable: false
 metadata:
@@ -94,6 +94,9 @@ When any diagnostic needs captain attention, report the plain consequence and re
   Batch it into the next natural reply unless the drifted runtime is the one a task is about to depend on, or the line names a runtime whose certified pin is enforced elsewhere (`bin/fm-primary.sh` refuses a Cursor primary that is not its exact certified version, because Cursor's Stop turn-end hook is unverified rather than merely drifted, so Cursor drift means that certified path is down right now).
   Report it to the captain as the concrete consequence - which runtime is running past the evidence, and what that evidence covered - never as a version-number dump.
   Absence of this line means every listed runtime matched, was not installed, or printed no readable version; it is never a claim that a runtime was verified.
+- `HOST_ENV: WSL: ...` - the WSL home this first mate runs in needs a change the line names; nothing is blocked, and [`ONBOARDING-windows.md`](../../../ONBOARDING-windows.md) owns the setup it points at.
+  A path on the Windows drive is the captain's to move into the Linux home; never move a home or clone yourself, because that strands live workers and unlanded work.
+  Localhost forwarding off means review boards and dev servers will not open in the Windows browser until the captain edits the named `.wslconfig` and restarts WSL, which also ends this session.
 - `UPSTREAM: <N> commits behind <remote>/<branch> (<url>) - <subjects>` - this home is a fork whose configured upstream has commits the local checkout lacks.
   `<N>` is what is genuinely still outstanding: the raw upstream delta minus the commits this fork has already delivered.
   When the line carries an `<R> upstream commits, <D> already delivered here` clause, the ledger accounted for `<D>` of them, and the listed subjects are only the outstanding ones.
