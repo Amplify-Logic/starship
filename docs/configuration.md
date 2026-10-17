@@ -3045,6 +3045,28 @@ Blank lines and lines starting with `#` are ignored, and malformed entries or no
 `bin/fm-bridge-view.py` reads the file at render time, so changes appear on the next page refresh without restarting the service.
 The file is not inherited by secondmate homes.
 
+## Bridge machines (config/bridge-machines)
+
+`config/bridge-machines` is an optional LOCAL, gitignored file that tells the bridge's Machines page ([`bridge-view.md`](bridge-view.md#machines-machines)) which machines to watch and what else to check.
+Each line is one entry with TAB-separated fields:
+
+```text
+machine<TAB><name>[<TAB><ssh-alias>]
+probe<TAB><label><TAB><https-url>
+service<TAB><label><TAB><loopback-http-url>
+```
+
+- `machine` watches a machine: when it is offline or unreachable the page raises an alert and the health score counts it.
+  `<name>` matches a tailnet machine's name or MagicDNS label, case-insensitively; a name the tailnet does not know becomes its own card reached over ssh.
+  With an `<ssh-alias>` (a plain alias from `~/.ssh/config`, which must already log in without a prompt), the page also reads that machine's load, memory, disk, uptime, and failed systemd units.
+- `probe` checks a web address with one HTTPS GET; any 2xx or 3xx answer passes.
+- `service` checks a local service's health address; it must be `http` or `https` on `127.0.0.1`, `localhost`, or `::1`, and passes on a 2xx answer.
+
+Blank lines and lines starting with `#` are ignored, and a malformed line is skipped and named on the page.
+The file is read on every Machines read, so changes appear within about 30 seconds without restarting the service.
+Without the file the page still lists every tailnet machine and this Mac, and no machine raises an offline alert.
+The file is not inherited by secondmate homes.
+
 ## Primary orchestrator handoff (config/primary-handoff)
 
 `config/primary-handoff` is an optional local, gitignored JSON file that enables automated rotation of the Firstmate primary orchestrator on two independent axes: provider quota and model-context used.

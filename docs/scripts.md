@@ -190,8 +190,9 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-decision-surface.sh` | Render, poll, and route the private loopback Lavish surface over captain decisions   |
 | `fm-read.sh`             | Render a Markdown path or task report as a private loopback Lavish reading page      |
 | `fm-chart-room.sh`       | Serve the private read-only chart room: fleet home, per-project goal maps, rendered fresh on every request (docs/chart-room.md) |
-| `fm-bridge-view.sh`      | Serve the captain's phone-first fleet glance, the `/deck` Action Deck page, photo drop, and hold-to-speak on loopback behind Tailscale Serve (docs/bridge-view.md) |
+| `fm-bridge-view.sh`      | Serve the captain's phone-first fleet glance, the `/deck` Action Deck page, the `/machines` page, photo drop, and hold-to-speak on loopback behind Tailscale Serve (docs/bridge-view.md) |
 | `fm-bridge-fields.sh`    | Add the bridge's title, repo, hold kind and hold reason to a finished bearings model, so the projection itself carries none of them |
+| `fm-machines.py`         | Read-only JSON snapshot of the tailnet machines, this Mac's numbers and background services, configured machines over ssh, and configured HTTPS probes; feeds the bridge's Machines page (docs/bridge-view.md) |
 | `fm-routing-snapshot.sh` | Read-only JSON snapshot of the dispatch roster, recent dispatch decisions, and each task record's kind and model, from local files only; feeds the bridge page's Routing section (docs/bridge-view.md) |
 | `fm-overlay.sh`          | Open a Markdown view as an in-terminal Herdr overlay pane, degrading to a printed pointer to the same content; installs nothing and is called nowhere by default (docs/chart-room.md) |
 | `fm-present.sh`          | Present a captain-action artifact once per unchanged milestone through its existing local owner |

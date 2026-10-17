@@ -6,7 +6,8 @@
 # photo drops into the quarantined inbox, multi-file Origin-null uploads,
 # hold-to-speak mailbox forwarding with the relay token kept server-side,
 # captain-facing glance titles, pinned links, needs-you selection, waiting project chips, keep-alive body drain after early error
-# returns, the What I remember section's privacy guard, and the Action Deck page over bin/fm-deck.sh --json.
+# returns, the What I remember section's privacy guard, the Action Deck page over bin/fm-deck.sh --json,
+# and the Machines page over bin/fm-machines.py --json.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -2712,6 +2713,222 @@ JS
   pass "deck page renders staged, asks, held decisions, under way, landed and loose ends with no run control"
 }
 
+# The Machines page: /machines and /api/machines sit behind the same session,
+# Host and header rules as the glance, serve the fm-machines.v1 model that
+# bin/fm-machines.py --json emits, and expose no control that acts on a machine.
+test_machines_page_and_api() {
+  local home fakebin port cookie hdr body before after n
+  home=$(make_home machines)
+  fakebin=$(make_fakebin "$home")
+  init_passcode "$home" >/dev/null
+  port=$(start_bridge "$home" "$fakebin")
+  hdr=$home/machines.hdr; body=$home/machines.body
+
+  curl_bridge "$port" /machines "$hdr" "$body"
+  grep -q '^HTTP/1.1 200' "$hdr" || fail "unauthenticated /machines did not return the login page: $(cat "$hdr")"
+  grep -q 'action="/login"' "$body" || fail "unauthenticated /machines did not show Log in"
+  if grep -q 'id="map"' "$body"; then fail "unauthenticated /machines leaked the page"; fi
+  curl_bridge "$port" /api/machines "$hdr" "$body"
+  grep -q '^HTTP/1.1 401' "$hdr" || fail "unauthenticated /api/machines was not 401: $(cat "$hdr")"
+
+  cookie=$(bridge_cookie "$home" "$port")
+  curl_bridge "$port" / "$hdr" "$body" --header "Cookie: $cookie"
+  grep -q 'href="/machines"' "$body" || fail "glance page has no Machines nav entry"
+  curl_bridge "$port" /deck "$hdr" "$body" --header "Cookie: $cookie"
+  grep -q 'href="/machines"' "$body" || fail "deck page has no Machines nav entry"
+
+  curl_bridge "$port" /machines "$hdr" "$body" --header "Cookie: $cookie"
+  grep -q '^HTTP/1.1 200' "$hdr" || fail "authenticated /machines failed: $(cat "$hdr")"
+  grep -q '<title>MACHINES</title>' "$body" || fail "machines page title missing"
+  grep -q 'href="/"' "$body" || fail "machines page has no way back to the glance"
+  grep -q 'View only. Nothing on this page changes a machine.' "$body" || fail "machines page lacks the view-only line"
+  n=$(grep -o '<button' "$body" | wc -l | tr -d ' ')
+  [ "$n" = 1 ] || fail "machines page carries $n buttons; only Log out is allowed"
+  grep -qi 'content-security-policy:.*script-src .nonce-' "$hdr" || fail "machines page lacks the nonce CSP"
+
+  before=$(fingerprint "$home")
+  curl_bridge "$port" /api/machines "$hdr" "$body" --header "Cookie: $cookie"
+  after=$(fingerprint "$home")
+  grep -q '^HTTP/1.1 200' "$hdr" || fail "authenticated /api/machines failed: $(cat "$hdr"; cat "$body")"
+  grep -qi '^cache-control: no-store' "$hdr" || fail "/api/machines is cacheable"
+  [ "$before" = "$after" ] || fail "reading /api/machines changed fleet records"
+  jq -e '.schema == "fm-machines.v1" and .this.self == true and (.server_unix | type) == "number"' "$body" >/dev/null \
+    || fail "/api/machines is not the fm-machines.v1 model: $(cat "$body")"
+  jq -e '.services | any(.name == "Bridge page" and .up == true)' "$body" >/dev/null \
+    || fail "the bridge does not report itself serving: $(jq -c .services "$body")"
+  pass "machines page and api sit behind the session, serve the machines model, and act on nothing"
+}
+
+test_machines_api_reports_unreadable() {
+  local home fakebin fixture port cookie hdr body log
+  home=$(make_home machines-error)
+  fakebin=$(make_fakebin "$home")
+  fixture=$home/root
+  mkdir -p "$fixture/bin"
+  cat > "$fixture/bin/fm-machines.py" <<'SH'
+#!/usr/bin/env bash
+echo "machines collector exploded" >&2
+exit 1
+SH
+  chmod +x "$fixture/bin/fm-machines.py"
+  init_passcode "$home" >/dev/null
+  log=$home/bridge-serve.log
+  : > "$log"
+  FM_BRIDGE_VIEW_TEST=1 FM_BRIDGE_VIEW_LAUNCHCTL="$fakebin/launchctl" \
+    PATH="$fakebin:$PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$fixture" \
+    "$BRIDGE" serve --host "$HOST_NAME" --port 0 >"$log" 2>&1 &
+  BRIDGE_PIDS+=("$!")
+  port=$(wait_listening "$log")
+  cookie=$(bridge_cookie "$home" "$port")
+  hdr=$home/machines.hdr; body=$home/machines.body
+  curl_bridge "$port" /api/machines "$hdr" "$body" --header "Cookie: $cookie"
+  grep -q '^HTTP/1.1 503' "$hdr" || fail "a failing machines read was not 503: $(cat "$hdr")"
+  [ "$(jq -r '.error' "$body")" = 'machines unreadable' ] || fail "503 body: $(cat "$body")"
+  jq -e '.detail | test("machines collector exploded")' "$body" >/dev/null || fail "503 lost the reason: $(cat "$body")"
+  pass "a failing machines read is an honest 503 with its reason"
+}
+
+test_machines_page_renders_without_controls() {
+  local output
+  output=$(node - "$ROOT/bin/fm-bridge-view.py" <<'JS'
+const {execFileSync} = require('child_process');
+const vm = require('vm');
+const load = function(name) {
+  return execFileSync('python3', ['-', process.argv[2]], {
+    input: `import importlib.util, sys
+spec = importlib.util.spec_from_file_location("bridge", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+print(module.${name})
+`,
+    encoding: 'utf8'
+  });
+};
+function must(cond, msg) { if (!cond) throw new Error(msg); }
+const ids = ['health', 'alerts', 'map', 'alerts-count', 'machines-observed', 'machines-error', 'machines-config',
+  'nav-machines-text', 'nav-machines-dot'];
+const elements = {};
+for (const id of ids) elements[id] = {innerHTML: '', textContent: 'Loading…', className: ''};
+let overlayOn = false;
+elements.stale = {classList: {toggle(name, on) { overlayOn = !!on; }}};
+const context = vm.createContext({
+  document: {hidden: false, addEventListener() {}, getElementById(id) { return elements[id] || null; }},
+  window: {addEventListener() {}}, Date, Math, setInterval() {}, setTimeout, clearTimeout,
+  AbortController: class { constructor() { this.signal = {}; } abort() {} },
+  fetch: async function() {
+    return {ok: false, status: 503, json: async function() { return {error: 'machines unreadable', detail: 'machines collector exploded'}; }};
+  }
+});
+vm.runInContext(load('MACHINES_JS'), context);
+const apply = vm.runInContext('apply', context);
+const now = Math.floor(Date.now() / 1000);
+apply({
+  schema: 'fm-machines.v1', generated: now,
+  config: {present: true, skipped: ['line 4: probe must be an https URL']},
+  tailnet: {ok: true, error: null},
+  this: {name: 'Studio <Mac>', os: 'macOS', online: true, ip: '100.64.0.1', self: true, link: 'this', watched: true,
+    stats: {os: 'macOS', cpus: 8, load: [1.5, 1.2, 1.0], load_pct: 19, mem_total: 17179869184, mem_pct: 75, disk_total: null, disk_pct: 97, uptime_secs: 90000, failed_units: null},
+    stats_error: null},
+  machines: [
+    {name: 'build-vps', os: 'Linux', online: true, ip: '100.64.0.2', self: false, link: 'tailnet', watched: true, ssh: true,
+     stats: {os: 'Linux', cpus: null, load: null, load_pct: null, mem_total: null, mem_pct: null, disk_total: null, disk_pct: null, uptime_secs: null, failed_units: ['backup.timer']}, stats_error: null},
+    {name: 'dell-laptop', os: 'Linux', online: false, last_seen: now - 259200, ip: '100.64.0.3', self: false, link: 'tailnet', watched: true, ssh: true, stats: null, stats_error: 'offline, so not read'},
+    {name: 'phone', os: 'iOS', online: false, last_seen: now - 5400, ip: '100.64.0.4', self: false, link: 'tailnet', watched: false, ssh: false, stats: null, stats_error: null},
+    {name: 'lan-box', os: null, online: null, ip: null, self: false, link: 'ssh', watched: true, ssh: true, stats: null, stats_error: 'Operation timed out'}
+  ],
+  services: [{name: 'Bridge page', up: true, detail: 'serving'}, {name: 'Voice bridge', up: false, detail: 'Connection refused'}],
+  probes: [{label: 'Shop site', host: 'shop.example', ok: true, status: 200, latency_ms: 84, error: null}],
+  checks: {passing: 4, total: 6},
+  alerts: [{severity: 'critical', text: 'dell-laptop is offline, last seen 3 days ago'}, {severity: 'warning', text: 'Studio <Mac> disk is 97% full'}]
+});
+const map = elements.map.innerHTML;
+const all = ids.map(function(id) { return elements[id].innerHTML; }).join('\n');
+must(all.indexOf('<button') === -1 && all.indexOf('<form') === -1, 'the machines page rendered a control: ' + all);
+must(map.indexOf('Studio &lt;Mac&gt;') !== -1 && all.indexOf('<Mac>') === -1, 'a machine name was not escaped');
+must(map.indexOf('this machine') !== -1, 'this machine is not marked');
+must(map.indexOf('Voice bridge') !== -1 && map.indexOf('Connection refused') !== -1, 'a down service is not shown on the hub');
+must(map.indexOf('<dt>Load</dt><dd>unknown</dd>') !== -1, 'an unreadable value is not shown as unknown: ' + map);
+must(map.indexOf('<dt>Disk</dt><dd>97%</dd>') !== -1, 'disk without a size: ' + map);
+must(map.indexOf('<dt>Failed units</dt><dd>1</dd>') !== -1, 'failed units missing');
+must(map.indexOf('last seen 3 days ago') !== -1, 'offline card lacks last seen: ' + map);
+must(/class="state down">offline</.test(map) && /class="state unknown">unknown</.test(map), 'live states not distinguished');
+must(map.indexOf('not on the tailnet') !== -1 && map.indexOf('SSH only') !== -1, 'ssh-only machine not grouped');
+must(map.indexOf('last seen 1 hour ago') !== -1, '90 minutes offline is not 1 hour: ' + map);
+must(map.indexOf('Tailscale') !== -1 && map.indexOf('1 of 3 live') !== -1, 'tailnet group summary: ' + map);
+must(map.indexOf('Shop site') !== -1 && map.indexOf('84 ms') !== -1, 'probe card missing');
+must(map.indexOf('<a ') === -1, 'the map links somewhere');
+must(elements.health.innerHTML.indexOf('4 of 6 checks passing') !== -1 && elements.health.innerHTML.indexOf('Needs attention') !== -1, 'health: ' + elements.health.innerHTML);
+must(elements.alerts.innerHTML.indexOf('Critical') < elements.alerts.innerHTML.indexOf('Warning'), 'alerts order');
+must(elements['alerts-count'].textContent === '2', 'alert count');
+must(elements['machines-config'].textContent.indexOf('line 4') !== -1, 'skipped config lines not named');
+
+apply({schema: 'fm-machines.v1', generated: now, config: {present: false, skipped: []}, tailnet: {ok: false, error: 'tailscale is not installed'},
+  this: {name: 'Studio Mac', online: true, self: true, link: 'this', watched: true, stats: null, stats_error: 'local report exited 1'},
+  machines: [], services: [], probes: [], checks: {passing: 0, total: 0}, alerts: []});
+must(elements.map.innerHTML.indexOf('Cannot read the tailnet: tailscale is not installed') !== -1, 'tailnet error not shown');
+must(elements.map.innerHTML.indexOf('local report exited 1') !== -1, 'local read error not shown');
+must(elements.alerts.innerHTML.indexOf('No alerts.') !== -1, 'empty alerts copy');
+must(elements.health.innerHTML.indexOf('Nothing to check yet') !== -1, 'empty health copy');
+
+for (const id of ['health', 'alerts', 'map']) { elements[id].textContent = 'Loading…'; elements[id].innerHTML = ''; }
+vm.runInContext('lastSuccess = 0', context);
+vm.runInContext('refresh', context)().then(function() {
+  must(overlayOn === false, 'first-load 503 raised the full-page overlay');
+  must(elements.map.innerHTML.indexOf('Cannot read the machines.') !== -1, 'unreadable state not rendered');
+  must(elements['machines-error'].textContent === 'machines collector exploded', '503 reason not shown: ' + elements['machines-error'].textContent);
+
+  // The glance nav entry carries the alert count.
+  const glance = vm.createContext({
+    document: {hidden: false, addEventListener() {}, getElementById(id) { return elements[id] || null; }},
+    window: {addEventListener() {}}, Date, Math, setInterval() {}, setTimeout, clearTimeout, navigator: {}
+  });
+  vm.runInContext(load('PAGE_JS'), glance);
+  const badge = vm.runInContext('machinesBadge', glance);
+  badge({alerts: [{severity: 'warning', text: 'disk'}, {severity: 'critical', text: 'offline'}]});
+  must(elements['nav-machines-text'].textContent === 'Machines · 2 alerts', 'nav text: ' + elements['nav-machines-text'].textContent);
+  must(elements['nav-machines-dot'].className === 'nav-dot crit', 'nav dot: ' + elements['nav-machines-dot'].className);
+  badge({alerts: []});
+  must(elements['nav-machines-text'].textContent === 'Machines' && elements['nav-machines-dot'].className === 'nav-dot on', 'quiet nav');
+
+  // A failed read after a good one shows the entry as unreadable, not the last good state.
+  const unreadable = function(why) {
+    must(elements['nav-machines-text'].textContent === 'Machines · unreadable', why + ' nav text: ' + elements['nav-machines-text'].textContent);
+    must(elements['nav-machines-dot'].className === 'nav-dot warn', why + ' nav dot: ' + elements['nav-machines-dot'].className);
+  };
+  glance.fetch = async function() { return {ok: false, status: 503, json: async function() { return {error: 'machines unreadable'}; }}; };
+  return vm.runInContext('refreshMachines', glance)().then(function() {
+    unreadable('a 503');
+    badge({alerts: []});
+    glance.fetch = async function() { throw new Error('network down'); };
+    return vm.runInContext('refreshMachines', glance)();
+  }).then(function() {
+    unreadable('a network failure');
+    glance.fetch = async function() { return {ok: true, status: 200, json: async function() { return {alerts: []}; }}; };
+    return vm.runInContext('refreshMachines', glance)();
+  }).then(function() {
+    must(elements['nav-machines-text'].textContent === 'Machines' && elements['nav-machines-dot'].className === 'nav-dot on', 'a good read did not clear unreadable');
+
+    // The card's ago() and the collector's alert wording agree at every boundary.
+    const secs = [0, 89, 90, 119, 120, 3599, 3600, 5400, 7199, 7200, 172799, 172800, 259200];
+    const server = JSON.parse(execFileSync('python3', ['-', process.argv[2].replace(/fm-bridge-view\.py$/, 'fm-machines.py'), JSON.stringify(secs)], {
+      input: `import importlib.util, json, sys
+spec = importlib.util.spec_from_file_location("machines", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+print(json.dumps([module._ago(n) for n in json.loads(sys.argv[2])]))
+`,
+      encoding: 'utf8'
+    }));
+    const page = secs.map(vm.runInContext('ago', context));
+    must(JSON.stringify(page) === JSON.stringify(server), 'page and alert ago differ: ' + JSON.stringify(page) + ' vs ' + JSON.stringify(server));
+    must(page[7] === '1 hour ago' && page[3] === '1 minute ago' && page[12] === '3 days ago', 'ago wording: ' + JSON.stringify(page));
+  });
+}).catch(function(err) { console.error(err.message); process.exit(1); });
+JS
+  ) || fail "machines page rendering failed: $output"
+  pass "machines page renders health, alerts, the map, and unknown values, with no control"
+}
+
 
 test_bind_is_loopback_constant
 test_funnel_on_refuses_to_serve
@@ -2758,3 +2975,6 @@ test_speak_origin_null_forwards_m4a_and_polls_text
 test_deck_page_and_api
 test_deck_api_reports_desk_unreachable
 test_deck_page_renders_states_without_run_controls
+test_machines_page_and_api
+test_machines_api_reports_unreadable
+test_machines_page_renders_without_controls

@@ -63,6 +63,7 @@ config/channel-intake  optional opt-in continuous channel intake gate; LOCAL, gi
 config/speak  optional opt-in desk voice-out gate and `say` voice name; LOCAL, gitignored; absent or without `enabled = true` leaves the home silent, so no clone or device starts talking; a named `voice` selects macOS `say`, otherwise Deepgram Aura leads when DEEPGRAM_API_KEY is set, each the other's fallback (bin/fm-speak.sh's header owns the mechanic); see docs/configuration.md "Desk voice-out" and docs/desk-floater.md
 config/desk-floater-signing-identity  optional codesigning identity for the desk floater, or "-" for ad-hoc; LOCAL, gitignored, not inherited; absent, or missing, expired or failing to sign, uses the first "Apple Development" identity, else ad-hoc, with a note and never a stopped launch; see docs/configuration.md "Desk floater signing identity"
 config/bridge-links  optional LOCAL, gitignored bridge-page pinned links; see docs/configuration.md
+config/bridge-machines  optional LOCAL, gitignored machines, probes, and services the bridge's Machines page watches; absent = tailnet and this Mac only; see docs/configuration.md
 data/                personal fleet records; LOCAL, gitignored as a whole
   backlog.md         task queue, dependencies, history
   captain.md         this home's domain-local captain preferences and working style; LOCAL, gitignored, canonical even if harness memory mirrors it, and updated with inspect-then-update

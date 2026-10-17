@@ -16,6 +16,8 @@ into the local glasses mailbox; the relay token stays in this process.
 boundary; they render records and act on nothing (docs/bridge-view.md).
 The glance's What I remember section reads only the captain, learnings and
 goal files under data/, withholding gift lines; read_memory owns that list.
+/machines and /api/machines show the captain's machines from one bounded
+`bin/fm-machines.py --json` read; they observe and change no machine.
 """
 
 from __future__ import annotations
@@ -59,6 +61,7 @@ SNAPSHOT_TIMEOUT_SECONDS = 20
 SNAPSHOT_MAX_BYTES = 1_000_000
 DECK_SCHEMA = "fm-deck.v1"
 ROUTING_SCHEMA = "fm-routing.v1"
+MACHINES_SCHEMA = "fm-machines.v1"
 COOKIE_NAME = "fm_bridge_sid"
 COOKIE_PATH = "/"
 SCRYPT_N = 2**14
@@ -1212,8 +1215,11 @@ def _child_scratch_and_env(home: Path, root: Path) -> Tuple[Path, Dict[str, str]
     return scratch, env
 
 
-def _run_json_child(argv: List[str], home: Path, root: Path, label: str) -> Dict[str, Any]:
+def _run_json_child(
+    argv: List[str], home: Path, root: Path, label: str, extra_env: Optional[Dict[str, str]] = None
+) -> Dict[str, Any]:
     scratch, env = _child_scratch_and_env(home, root)
+    env.update(extra_env or {})
     proc = subprocess.Popen(
         argv,
         cwd=str(scratch),
@@ -1278,6 +1284,37 @@ def run_routing(home: Path, root: Path) -> Dict[str, Any]:
     model = _run_json_child([str(script), "--json"], home, root, "routing snapshot")
     if model.get("schema") != ROUTING_SCHEMA:
         raise RuntimeError("routing snapshot schema mismatch")
+    return model
+
+
+def run_machines(home: Path, root: Path, bridge_port: int) -> Dict[str, Any]:
+    """One `fm-machines.py --json` read: the tailnet, this Mac, the configured
+    machines over ssh, and the configured probes. The tailscale and ssh paths
+    come from this server's own PATH, and the ssh agent socket is the only
+    secret-bearing variable passed through, so a configured alias can log in."""
+    script = root / "bin" / "fm-machines.py"
+    if not script.is_file():
+        raise RuntimeError(f"machines snapshot missing: {script}")
+    argv = [
+        str(script),
+        "--json",
+        "--home",
+        str(home),
+        "--root",
+        str(root),
+        "--tailscale",
+        shutil.which("tailscale", path=os.environ.get("PATH", CHILD_PATH)) or "",
+        "--ssh",
+        shutil.which("ssh", path=os.environ.get("PATH", CHILD_PATH)) or "",
+        "--bridge-port",
+        str(bridge_port),
+    ]
+    extra = {"FM_BRIDGE_VIEW_MAILBOX_PORT": str(mailbox_port())}
+    if os.environ.get("SSH_AUTH_SOCK"):
+        extra["SSH_AUTH_SOCK"] = os.environ["SSH_AUTH_SOCK"]
+    model = _run_json_child(argv, home, root, "machines snapshot", extra)
+    if model.get("schema") != MACHINES_SCHEMA:
+        raise RuntimeError("machines snapshot schema mismatch")
     return model
 
 
@@ -1849,6 +1886,19 @@ class DeckCache(SnapshotCache):
         return deck
 
 
+class MachinesCache(SnapshotCache):
+    """Machines are read on request only, through the same 30-second cache,
+    so an open page reaches each configured machine over ssh at most twice a
+    minute and nothing runs while no page is open."""
+
+    port = DEFAULT_PORT
+
+    def _load(self, started: float) -> Dict[str, Any]:
+        model = run_machines(self.home, self.root, self.port)
+        model["server_unix"] = int(started)
+        return model
+
+
 def csp(nonce: str) -> str:
     return (
         "default-src 'none'; "
@@ -1961,8 +2011,14 @@ header { display: flex; justify-content: space-between; align-items: baseline; g
 form.logout { margin: 0; width: auto; }
 form.logout button { width: auto; min-height: 2rem; padding: 0.3rem 0.7rem; background: transparent; color: #c5d0c8; border-color: #3b4742; }
 .page-nav { display: flex; gap: 0.4rem; margin: 0.5rem 0 0.2rem; font-size: 0.92rem; }
-.page-nav a, .page-nav span { display: inline-flex; align-items: center; min-height: 2.2rem; padding: 0.2rem 0.75rem; border-radius: 999px; border: 1px solid #3b4742; text-decoration: none; color: #c5d0c8; }
-.page-nav span[aria-current] { background: #1b2220; color: #f2f4f3; }
+.page-nav > a, .page-nav > span { display: inline-flex; align-items: center; min-height: 2.2rem; padding: 0.2rem 0.75rem; border-radius: 999px; border: 1px solid #3b4742; text-decoration: none; color: #c5d0c8; }
+.page-nav > span[aria-current] { background: #1b2220; color: #f2f4f3; }
+.page-nav { flex-wrap: wrap; }
+.nav-dot { display: none; width: 0.5rem; height: 0.5rem; border-radius: 50%; margin-right: 0.45rem; }
+.nav-dot.on, .nav-dot.warn, .nav-dot.crit { display: inline-block; }
+.nav-dot.on { background: #34d399; }
+.nav-dot.warn { background: #fbbf24; }
+.nav-dot.crit { background: #f87171; }
 #routing h3 { font-size: 0.72rem; letter-spacing: 0.12em; text-transform: uppercase; color: #9aa7a0; margin: 1rem 0 0.3rem; font-weight: 600; }
 #routing h3:first-child { margin-top: 0.2rem; }
 .route-row { display: flex; justify-content: space-between; align-items: baseline; gap: 0.8rem; font-size: 0.95rem; }
@@ -2450,6 +2506,25 @@ function tickObserved() {
   age.textContent = 'Observed ' + seconds + ' seconds ago';
   if (Date.now() - lastSuccess > STALE_MS) setStale(true);
 }
+// The Machines nav entry carries the machines' alert count, read on its own
+// request so a slow machine never holds up the glance itself.
+function machinesBadge(data) {
+  const alerts = (data && data.alerts) || [];
+  const critical = alerts.some(function(a) { return a.severity === 'critical'; });
+  const el = document.getElementById('nav-machines-text');
+  if (el) el.textContent = !data ? 'Machines · unreadable' : alerts.length ? 'Machines · ' + alerts.length + (alerts.length === 1 ? ' alert' : ' alerts') : 'Machines';
+  const dot = document.getElementById('nav-machines-dot');
+  if (dot) dot.className = 'nav-dot ' + (critical ? 'crit' : alerts.length || !data ? 'warn' : 'on');
+}
+async function refreshMachines() {
+  try {
+    const res = await fetch('/api/machines', { credentials: 'same-origin', cache: 'no-store' });
+    if (!res.ok) throw new Error('status ' + res.status);
+    machinesBadge(await res.json());
+  } catch (err) {
+    machinesBadge(null);
+  }
+}
 async function refresh() {
   try {
     const ctl = new AbortController();
@@ -2471,10 +2546,12 @@ async function refresh() {
 }
 document.addEventListener('DOMContentLoaded', function() {
   refresh();
+  refreshMachines();
   setInterval(refresh, REFRESH_MS);
+  setInterval(refreshMachines, REFRESH_MS);
   setInterval(tickObserved, 1000);
-  document.addEventListener('visibilitychange', function() { if (!document.hidden) refresh(); });
-  window.addEventListener('pageshow', function() { refresh(); });
+  document.addEventListener('visibilitychange', function() { if (!document.hidden) { refresh(); refreshMachines(); } });
+  window.addEventListener('pageshow', function() { refresh(); refreshMachines(); });
   const form = document.getElementById('photo-form');
   if (form) form.addEventListener('submit', sendPhotos);
   const hold = document.getElementById('hold-speak');
@@ -2563,7 +2640,7 @@ def glance_html(nonce: str, home: Optional[Path] = None) -> str:
   <h1>Starship</h1>
   <form class="logout" method="post" action="/logout"><button type="submit">Log out</button></form>
 </header>
-<nav class="page-nav" aria-label="Pages"><span aria-current="page">Fleet glance</span><a href="/deck">Action Deck</a></nav>{links}
+<nav class="page-nav" aria-label="Pages"><span aria-current="page">Fleet glance</span><a href="/deck">Action Deck</a><a href="/machines" id="nav-machines"><span class="nav-dot" id="nav-machines-dot"></span><span id="nav-machines-text">Machines</span></a></nav>{links}
 <h2>Talk</h2>
 <div id="speak-box">
   <label for="hold-speak">Hold to speak</label>
@@ -2883,7 +2960,7 @@ def deck_html(nonce: str, home: Optional[Path] = None) -> str:
   <h1>Action Deck</h1>
   <form class="logout" method="post" action="/logout"><button type="submit">Log out</button></form>
 </header>
-<nav class="page-nav" aria-label="Pages"><a href="/">Fleet glance</a><span aria-current="page">Action Deck</span></nav>{links}
+<nav class="page-nav" aria-label="Pages"><a href="/">Fleet glance</a><span aria-current="page">Action Deck</span><a href="/machines">Machines</a></nav>{links}
 <p class="meta" id="deck-observed">Reading the desk…</p>
 <p class="meta" id="deck-counts"></p>
 <p id="deck-error"></p>
@@ -2912,6 +2989,327 @@ def deck_html(nonce: str, home: Optional[Path] = None) -> str:
 """
 
 
+MACHINES_CSS = """
+main { max-width: 64rem; }
+.machines-top { display: grid; gap: 0.9rem; margin: 1rem 0 0; align-items: start; }
+@media (min-width: 48rem) { .machines-top { grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); } }
+.panel { border: 1px solid #2a3330; border-radius: 0.75rem; background: #141a18; padding: 0.9rem 1rem; }
+.panel h2 { margin: 0 0 0.6rem; display: flex; justify-content: space-between; align-items: baseline; }
+h2 .count { font-size: 0.8rem; letter-spacing: 0; text-transform: none; color: #9aa7a0; }
+.health { display: flex; align-items: center; gap: 1rem; }
+.ring {
+  --pct: 0; --ring: #34d399;
+  flex: none; width: 4.4rem; height: 4.4rem; border-radius: 50%;
+  background: conic-gradient(var(--ring) calc(var(--pct) * 1%), #2a3330 0);
+  display: grid; place-items: center;
+}
+.ring > span { width: 3.5rem; height: 3.5rem; border-radius: 50%; background: #141a18; display: grid; place-items: center; font-weight: 700; font-variant-numeric: tabular-nums; }
+.ring.warn { --ring: #fbbf24; }
+.ring.crit { --ring: #f87171; }
+.health-word { font-size: 1.15rem; font-weight: 600; margin: 0; }
+.health-sub { color: #9aa7a0; font-size: 0.9rem; margin: 0.15rem 0 0; }
+.tally { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 0.9rem 0 0; border: 1px solid #2a3330; border-radius: 0.5rem; }
+.tally > div { text-align: center; padding: 0.45rem 0.2rem; }
+.tally > div + div { border-left: 1px solid #2a3330; }
+.tally b { display: block; font-size: 1.1rem; font-variant-numeric: tabular-nums; }
+.tally span { color: #9aa7a0; font-size: 0.78rem; }
+.alert { border: 1px solid #2a3330; border-left: 3px solid #fbbf24; border-radius: 0.5rem; padding: 0.55rem 0.75rem; margin: 0 0 0.45rem; font-size: 0.95rem; background: #171d1b; overflow-wrap: anywhere; }
+.alert.critical { border-left-color: #f87171; }
+.alert .sev { display: block; font-size: 0.68rem; letter-spacing: 0.1em; text-transform: uppercase; color: #fbbf24; margin-bottom: 0.1rem; }
+.alert.critical .sev { color: #f87171; }
+.map { margin: 0.4rem 0 0; }
+.legend { display: flex; flex-wrap: wrap; gap: 0.3rem 0.9rem; color: #9aa7a0; font-size: 0.82rem; margin: 0 0 0.9rem; }
+.legend span { display: inline-flex; align-items: center; }
+.hub { max-width: 30rem; margin: 0 auto; }
+.link-group { position: relative; padding-top: 1.6rem; }
+.link-group::before { content: ""; position: absolute; top: 0; left: 1rem; height: 1.6rem; border-left: 2px dashed #3b4742; }
+.link-label { position: relative; display: inline-flex; gap: 0.4rem; align-items: center; font-size: 0.7rem; letter-spacing: 0.12em; text-transform: uppercase; color: #c5d0c8; border: 1px solid #3b4742; border-radius: 999px; padding: 0.15rem 0.6rem; background: #101418; margin: 0 0 0.6rem; }
+.link-label .via { color: #9aa7a0; letter-spacing: 0.04em; text-transform: none; }
+.link-group.tailnet .link-label { border-color: #34567f; }
+.link-group.ssh .link-label { border-color: #5b3f7a; }
+.link-group.web .link-label { border-color: #2c6a55; }
+.nodes { display: grid; gap: 0.7rem; margin-left: 1rem; padding-left: 1.1rem; border-left: 2px dashed #3b4742; }
+.nodes > .node { position: relative; }
+.nodes > .node::before { content: ""; position: absolute; left: calc(-1.1rem - 2px); top: 1.35rem; width: 1.1rem; border-top: 2px dashed #3b4742; }
+@media (min-width: 48rem) {
+  .link-group { text-align: center; }
+  .link-group::before { left: 50%; }
+  .nodes { text-align: left; margin: 0; padding: 1.3rem 0 0; border-left: none; border-top: 2px dashed #3b4742; grid-template-columns: repeat(auto-fill, minmax(17rem, 1fr)); }
+  .nodes > .node::before { left: 50%; top: calc(-1.3rem - 2px); width: 0; height: 1.3rem; border-top: none; border-left: 2px dashed #3b4742; }
+}
+.node { border: 1px solid #2a3330; border-radius: 0.75rem; background: #151b19; padding: 0.75rem 0.85rem; text-align: left; }
+.node.offline { border-color: #5a2f31; }
+.node.self { border-color: #3b4742; background: #18201d; }
+.node-head { display: flex; align-items: center; gap: 0.5rem; }
+.node-name { font-weight: 600; overflow-wrap: anywhere; min-width: 0; }
+.node-tags { flex: 1; white-space: nowrap; }
+.live { display: inline-block; flex: none; width: 0.6rem; height: 0.6rem; border-radius: 50%; background: #9aa7a0; margin-right: 0.45rem; }
+.node-head .live { margin-right: 0; }
+.live.up { background: #34d399; box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.18); }
+.live.down { background: #f87171; box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.18); }
+.state { font-size: 0.66rem; letter-spacing: 0.1em; text-transform: uppercase; border: 1px solid #3b4742; border-radius: 0.3rem; padding: 0.05rem 0.4rem; color: #9aa7a0; flex: none; }
+.state.up { border-color: #2c6a55; color: #34d399; }
+.state.down { border-color: #6b3436; color: #f87171; }
+.tag { font-size: 0.66rem; letter-spacing: 0.08em; text-transform: uppercase; color: #9cdcfe; margin-left: 0.1rem; }
+.node-sub { color: #9aa7a0; font-size: 0.86rem; margin: 0.25rem 0 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+dl.facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.45rem 0.9rem; margin: 0.65rem 0 0; }
+dl.facts div { min-width: 0; }
+dl.facts dt { font-size: 0.66rem; letter-spacing: 0.1em; text-transform: uppercase; color: #9aa7a0; }
+dl.facts dd { margin: 0; font: 0.88rem/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; color: #f2f4f3; overflow-wrap: anywhere; }
+dl.facts .hot dd { color: #fbbf24; }
+dl.facts .unknown dd { color: #9aa7a0; }
+.meter { height: 0.22rem; background: #2a3330; border-radius: 999px; overflow: hidden; margin: 0.2rem 0 0; }
+.meter > span { display: block; height: 100%; width: 0; background: #6ea8fe; }
+.hot .meter > span { background: #fbbf24; }
+.node-note { color: #9aa7a0; font-size: 0.85rem; margin: 0.55rem 0 0; overflow-wrap: anywhere; }
+.services { margin: 0.7rem 0 0; border-top: 1px solid #2a3330; padding-top: 0.5rem; }
+.services li { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; padding: 0.3rem 0; border: none; font-size: 0.92rem; }
+.services .svc { display: inline-flex; align-items: center; }
+.services .svc-detail { color: #9aa7a0; font-size: 0.82rem; text-align: right; overflow-wrap: anywhere; }
+.group-note { color: #9aa7a0; font-size: 0.88rem; margin: 0 0 0.6rem; text-align: left; }
+#machines-error { color: #f87171; font-size: 0.92rem; overflow-wrap: anywhere; }
+"""
+
+MACHINES_JS = """
+const STALE_MS = %d * 1000;
+const REFRESH_MS = %d * 1000;
+let lastSuccess = 0;
+let sampledAt = 0;
+const REGIONS = ['health', 'alerts', 'map'];
+function esc(value) {
+  return String(value).replace(/[&<>"']/g, function(ch) {
+    return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]);
+  });
+}
+function setStale(on) {
+  const el = document.getElementById('stale');
+  if (el) el.classList.toggle('on', on);
+}
+function setText(id, text) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = text;
+}
+function setHtml(id, html) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.innerHTML = html;
+  // Widths are set through the DOM, never inline style attributes, so the
+  // nonce-only style policy holds.
+  if (el.querySelectorAll) {
+    el.querySelectorAll('[data-pct]').forEach(function(bar) { bar.style.width = bar.getAttribute('data-pct') + '%%'; });
+    el.querySelectorAll('[data-ring]').forEach(function(ring) { ring.style.setProperty('--pct', ring.getAttribute('data-ring')); });
+  }
+}
+// Matches _ago in bin/fm-machines.py, so a card and its alert never disagree.
+function ago(secs) {
+  if (secs == null || secs < 0) return 'unknown';
+  if (secs < 90) return 'just now';
+  const size = secs < 3600 ? 60 : secs < 172800 ? 3600 : 86400;
+  const unit = size === 60 ? 'minute' : size === 3600 ? 'hour' : 'day';
+  const count = Math.floor(secs / size);
+  return count + ' ' + unit + (count === 1 ? '' : 's') + ' ago';
+}
+function duration(secs) {
+  if (secs == null || secs < 0) return null;
+  const d = Math.floor(secs / 86400), h = Math.floor((secs %% 86400) / 3600), m = Math.floor((secs %% 3600) / 60);
+  if (d) return d + 'd ' + h + 'h';
+  if (h) return h + 'h ' + m + 'm';
+  return m + 'm';
+}
+function bytes(n) {
+  if (!n) return '';
+  const gb = n / 1073741824;
+  return gb >= 1000 ? (gb / 1024).toFixed(1) + ' TB' : (gb >= 100 ? Math.round(gb) : gb.toFixed(gb >= 10 ? 0 : 1)) + ' GB';
+}
+function liveClass(online) { return online === true ? 'up' : online === false ? 'down' : 'unknown'; }
+function liveWord(online) { return online === true ? 'live' : online === false ? 'offline' : 'unknown'; }
+function fact(label, value, hot, pct) {
+  const known = value != null && value !== '';
+  const cls = !known ? ' class="unknown"' : hot ? ' class="hot"' : '';
+  const meter = known && pct != null ? '<div class="meter"><span data-pct="' + Math.max(0, Math.min(100, Number(pct) || 0)) + '"></span></div>' : '';
+  return '<div' + cls + '><dt>' + esc(label) + '</dt><dd>' + esc(known ? value : 'unknown') + '</dd>' + meter + '</div>';
+}
+function facts(m) {
+  const s = m.stats;
+  if (!s) return '';
+  const out = [];
+  out.push(fact('Load', s.load ? s.load[0].toFixed(2) + (s.cpus ? ' · ' + s.cpus + ' cores' : '') : null, s.load_pct != null && s.load_pct > 100, s.load_pct));
+  out.push(fact('Memory', s.mem_pct != null ? s.mem_pct + '%%' + (s.mem_total ? ' of ' + bytes(s.mem_total) : '') : null, s.mem_pct != null && s.mem_pct > 90, s.mem_pct));
+  out.push(fact('Disk', s.disk_pct != null ? s.disk_pct + '%%' + (s.disk_total ? ' of ' + bytes(s.disk_total) : '') : null, s.disk_pct != null && s.disk_pct > 90, s.disk_pct));
+  out.push(fact('Up', duration(s.uptime_secs), false, null));
+  if (s.failed_units != null) out.push(fact('Failed units', String(s.failed_units.length), s.failed_units.length > 0, null));
+  return '<dl class="facts">' + out.join('') + '</dl>';
+}
+function servicesList(services) {
+  if (!services || !services.length) return '';
+  return '<ul class="services">' + services.map(function(svc) {
+    return '<li><span class="svc"><span class="live ' + (svc.up ? 'up' : 'down') + '"></span>' + esc(svc.name) + '</span>' +
+      '<span class="svc-detail">' + esc(svc.detail || (svc.up ? 'up' : 'down')) + '</span></li>';
+  }).join('') + '</ul>';
+}
+function machineCard(m, now, services) {
+  const cls = liveClass(m.online);
+  const tags = (m.self ? '<span class="tag">this machine</span>' : '') + (m.watched && !m.self ? '<span class="tag">watched</span>' : '');
+  const sub = [m.os || 'OS unknown', m.ip || (m.link === 'ssh' ? 'not on the tailnet' : 'no tailnet IP')];
+  if (m.online === false) sub.push('last seen ' + (m.last_seen ? ago(now - m.last_seen) : 'unknown'));
+  let html = '<article class="node' + (m.self ? ' self' : '') + (m.online === false ? ' offline' : '') + '">' +
+    '<div class="node-head"><span class="live ' + cls + '"></span><span class="node-name">' + esc(m.name) + '</span><span class="node-tags">' + tags + '</span>' +
+    '<span class="state ' + cls + '">' + liveWord(m.online) + '</span></div>' +
+    '<p class="node-sub">' + sub.map(esc).join(' · ') + '</p>' + facts(m);
+  if (m.stats_error) html += '<p class="node-note">' + esc(m.stats_error) + '</p>';
+  if (services) html += servicesList(services);
+  return html + '</article>';
+}
+function probeCard(p) {
+  const cls = p.ok ? 'up' : 'down';
+  const facts = '<dl class="facts">' + fact('Status', p.status != null ? String(p.status) : null, !p.ok, null) +
+    fact('Latency', p.latency_ms != null ? p.latency_ms + ' ms' : null, false, null) + '</dl>';
+  return '<article class="node' + (p.ok ? '' : ' offline') + '"><div class="node-head"><span class="live ' + cls + '"></span>' +
+    '<span class="node-name">' + esc(p.label) + '</span><span class="node-tags"></span><span class="state ' + cls + '">' + (p.ok ? 'passing' : 'failing') + '</span></div>' +
+    '<p class="node-sub">' + esc(p.host || '') + '</p>' + facts + (p.error ? '<p class="node-note">' + esc(p.error) + '</p>' : '') + '</article>';
+}
+function group(kind, title, via, cards, note) {
+  return '<section class="link-group ' + kind + '"><p class="link-label">' + esc(title) + (via ? ' <span class="via">' + esc(via) + '</span>' : '') + '</p>' +
+    (note ? '<p class="group-note">' + esc(note) + '</p>' : '') +
+    (cards.length ? '<div class="nodes">' + cards.join('') + '</div>' : '') + '</section>';
+}
+function renderHealth(data) {
+  const checks = data.checks || {};
+  const total = Number(checks.total) || 0, passing = Number(checks.passing) || 0;
+  const alerts = data.alerts || [];
+  const pct = total ? Math.round(100 * passing / total) : 100;
+  const word = !total ? 'Nothing to check yet' : passing === total ? (alerts.length ? 'Up, with warnings' : 'Healthy') : 'Needs attention';
+  const ring = passing === total ? (alerts.length ? 'warn' : '') : 'crit';
+  setHtml('health', '<div class="health"><div class="ring ' + ring + '" data-ring="' + pct + '"><span>' + pct + '</span></div>' +
+    '<div><p class="health-word">' + esc(word) + '</p><p class="health-sub">' + passing + ' of ' + total + ' checks passing</p></div></div>' +
+    '<div class="tally"><div><b>' + passing + '</b><span>passing</span></div><div><b>' + (total - passing) + '</b><span>failing</span></div>' +
+    '<div><b>' + alerts.length + '</b><span>' + (alerts.length === 1 ? 'alert' : 'alerts') + '</span></div></div>');
+}
+function renderAlerts(data) {
+  const alerts = data.alerts || [];
+  setText('alerts-count', String(alerts.length));
+  setHtml('alerts', alerts.length ? alerts.map(function(a) {
+    const critical = a.severity === 'critical';
+    return '<div class="alert' + (critical ? ' critical' : '') + '"><span class="sev">' + (critical ? 'Critical' : 'Warning') + '</span>' + esc(a.text) + '</div>';
+  }).join('') : '<p class="empty">No alerts. Every machine and service checked is answering.</p>');
+}
+function renderMap(data) {
+  const now = Number(data.generated) || Math.floor(Date.now() / 1000);
+  const machines = data.machines || [];
+  const tailnet = machines.filter(function(m) { return m.link === 'tailnet'; }).map(function(m) { return machineCard(m, now); });
+  const ssh = machines.filter(function(m) { return m.link === 'ssh'; }).map(function(m) { return machineCard(m, now); });
+  const probes = (data.probes || []).map(probeCard);
+  let html = '<div class="hub">' + (data.this ? machineCard(data.this, now, data.services || []) : '') + '</div>';
+  const tn = data.tailnet || {};
+  const online = machines.filter(function(m) { return m.link === 'tailnet' && m.online === true; }).length;
+  html += group('tailnet', 'Tailscale', tailnet.length ? online + ' of ' + tailnet.length + ' live' : '', tailnet,
+    tn.ok === false ? 'Cannot read the tailnet: ' + (tn.error || 'unknown') : (tailnet.length ? '' : 'No other machines on the tailnet.'));
+  if (ssh.length) html += group('ssh', 'SSH only', 'not on the tailnet', ssh, '');
+  if (probes.length) html += group('web', 'Web probes', 'HTTPS', probes, '');
+  setHtml('map', html);
+  const skipped = (data.config && data.config.skipped) || [];
+  setText('machines-config', skipped.length ? 'Some config lines were skipped: ' + skipped.join('; ') : '');
+}
+function apply(data) {
+  lastSuccess = Date.now();
+  setStale(false);
+  setText('machines-error', '');
+  const sample = Number(data.generated) || Number(data.server_unix) || 0;
+  sampledAt = sample > 0 ? sample * 1000 : 0;
+  setText('machines-observed', readLabel());
+  renderHealth(data);
+  renderAlerts(data);
+  renderMap(data);
+}
+function readLabel() {
+  if (!sampledAt) return 'Read at an unknown time';
+  const seconds = Math.max(0, Math.round((Date.now() - sampledAt) / 1000));
+  return seconds < 5 ? 'Read just now' : 'Read ' + seconds + ' seconds ago';
+}
+function tickObserved() {
+  if (!lastSuccess) return;
+  if (sampledAt) setText('machines-observed', readLabel());
+  if (Date.now() - lastSuccess > STALE_MS) setStale(true);
+}
+function markUnreachable(detail) {
+  REGIONS.forEach(function(id) {
+    const root = document.getElementById(id);
+    if (root && root.textContent.indexOf('Loading') !== -1) root.innerHTML = '<p class="empty">Cannot read the machines.</p>';
+  });
+  setText('machines-observed', 'Cannot read the machines.');
+  setText('machines-error', detail || '');
+}
+async function refresh() {
+  let detail = '';
+  try {
+    const ctl = new AbortController();
+    const timer = setTimeout(function() { detail = 'timed out reading the machines'; ctl.abort(); }, 25000);
+    const res = await fetch('/api/machines', { credentials: 'same-origin', cache: 'no-store', signal: ctl.signal });
+    clearTimeout(timer);
+    const payload = await res.json().catch(function() { return {}; });
+    if (!res.ok) {
+      detail = payload && payload.detail ? String(payload.detail) : ('status ' + res.status);
+      throw new Error(detail);
+    }
+    apply(payload);
+  } catch (err) {
+    if (!lastSuccess) markUnreachable(detail || String(err && err.message || ''));
+    else tickObserved();
+  }
+}
+document.addEventListener('DOMContentLoaded', function() {
+  refresh();
+  setInterval(refresh, REFRESH_MS);
+  setInterval(tickObserved, 1000);
+  document.addEventListener('visibilitychange', function() { if (!document.hidden) refresh(); });
+  window.addEventListener('pageshow', function() { refresh(); });
+});
+""" % (STALE_CLIENT_SECONDS, REFRESH_CLIENT_SECONDS)
+
+
+def machines_html(nonce: str, home: Optional[Path] = None) -> str:
+    """The Machines page: /machines on the same session, headers and CSP as
+    the glance. It renders the fm-machines.v1 model and carries no control
+    that changes a machine."""
+    links = pinned_links_html(home) if home is not None else ""
+    css = PAGE_CSS + MACHINES_CSS + (PINNED_LINKS_CSS if links else "")
+    loading = '<p class="empty">Loading…</p>'
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="referrer" content="no-referrer">
+<title>MACHINES</title>
+<style nonce="{nonce}">{css}</style>
+<script nonce="{nonce}">{MACHINES_JS}</script>
+</head>
+<body>
+<div id="stale">Cannot reach the desk.</div>
+<main>
+<header>
+  <h1>Machines</h1>
+  <form class="logout" method="post" action="/logout"><button type="submit">Log out</button></form>
+</header>
+<nav class="page-nav" aria-label="Pages"><a href="/">Fleet glance</a><a href="/deck">Action Deck</a><span aria-current="page">Machines</span></nav>{links}
+<p class="meta" id="machines-observed">Reading the machines…</p>
+<p id="machines-error"></p>
+<div class="machines-top">
+<section class="panel"><h2>Health</h2><div id="health">{loading}</div></section>
+<section class="panel"><h2>Alerts <span class="count" id="alerts-count"></span></h2><div id="alerts">{loading}</div></section>
+</div>
+<h2>Network map</h2>
+<p class="legend"><span><span class="live up"></span>live</span><span><span class="live down"></span>offline</span><span><span class="live"></span>unknown</span></p>
+<div class="map" id="map">{loading}</div>
+<p class="note" id="machines-config"></p>
+<p class="warn">View only. Nothing on this page changes a machine.</p>
+</main>
+</body>
+</html>
+"""
+
+
+
 class BridgeState:
     def __init__(self, home: Path, root: Path, expected_host: str) -> None:
         self.home = home
@@ -2920,6 +3318,7 @@ class BridgeState:
         self.sessions = SessionStore(bridge_dir(home) / "sessions.json")
         self.cache = SnapshotCache(home, root)
         self.deck = DeckCache(home, root)
+        self.machines = MachinesCache(home, root)
         self.passcode_path = bridge_dir(home) / "passcode.hash"
         self.login_lock = threading.Lock()
 
@@ -3099,6 +3498,24 @@ class BridgeHandler(BaseHTTPRequestHandler):
                 self._html(200, deck_html, home=STATE.home)
             else:
                 self._html(200, login_html)
+            return
+        if parsed.path == "/machines":
+            if self._authed():
+                self._html(200, machines_html, home=STATE.home)
+            else:
+                self._html(200, login_html)
+            return
+        if parsed.path == "/api/machines":
+            if not self._authed():
+                self._send(401, b'{"error":"unauthorized"}\n', "application/json")
+                return
+            try:
+                payload = STATE.machines.get()
+            except Exception as exc:
+                body = json.dumps({"error": "machines unreadable", "detail": str(exc)}).encode("utf-8")
+                self._send(503, body, "application/json")
+                return
+            self._send(200, json.dumps(payload).encode("utf-8"), "application/json")
             return
         if parsed.path == "/api/deck":
             if not self._authed():
@@ -3440,6 +3857,7 @@ def command_serve(home: Path, root: Path, port: int, host: str) -> None:
     except OSError as exc:
         fail(f"could not bind {LOOPBACK}:{port}: {exc}")
     bound = server.server_address[1]
+    STATE.machines.port = bound
     print(f"listening on {LOOPBACK}:{bound}", flush=True)
     try:
         server.serve_forever()

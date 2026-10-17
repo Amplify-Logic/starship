@@ -11,6 +11,7 @@ Hold-to-speak is a second voice channel into firstmate; it does not answer Needs
 Outbound jumps are allowlisted GitHub pull-request links plus captain-configured HTTPS pinned links below the header; [`docs/configuration.md`](configuration.md#bridge-pinned-links-configbridge-links) owns the pinned-link schema.
 The same authenticated page also accepts photo drops from the captain's phone, including several photos in one picker session, and a hold-to-speak control that forwards audio into the local glasses mailbox.
 Those two controls sit at the top of the authenticated page, above the fleet glance, so they are reachable without scrolling on a phone.
+A Machines page beside the glance shows whether the captain's machines and background services are up; it observes and changes no machine.
 
 The page is served from the Mac on IPv4 loopback and published on the tailnet with **Tailscale Serve HTTPS**.
 It never uses Tailscale Funnel and never binds `0.0.0.0`.
@@ -140,6 +141,31 @@ The section is shown only to the captain's logged-in devices on the private netw
 If the read fails, the buckets still render and the section says why in place.
 `read_memory` in `bin/fm-bridge-view.py` owns the exact parsing.
 
+## Machines (`/machines`)
+
+`/machines` is a read-only map of the captain's machines, on the same server, session cookie, Host check, security headers and loopback-plus-Serve publish path as the glance; `/api/machines` answers 401 without a session.
+The glance, the deck and this page link to each other through the page nav, and the glance's Machines entry carries a coloured dot and the current alert count, or says unreadable when the read fails.
+
+The server reads it from `bin/fm-machines.py --json`, whose header owns the `fm-machines.v1` fields, as one scrubbed, bounded child like the bearings snapshot; the ssh agent socket is the one extra variable passed through so a configured ssh alias can log in.
+It collects only on request, through the same 30-second cache, so nothing runs while no page is open and there is no background daemon.
+Every check runs at once and the whole read ends within 15 seconds, inside the bridge's 20-second child limit; a check still running then is shown as timed out in its own place while the rest of the page stands.
+A failing read answers 503 with the collector's reason and the page says so in place.
+
+What it shows, from real sources only; a value that cannot be read is shown as unknown, never invented:
+
+- Every machine on the tailnet from `tailscale status --json`, with its OS, live or offline state, last seen time, and tailnet IP; a machine that joins the tailnet appears on its own, and Mullvad exit nodes are left out.
+- This Mac, marked as this machine, with its load, memory, disk, and uptime, and the Firstmate background services here: the bridge page, the glasses voice mailbox, and the desk floater, each listed only when it is installed or answering, plus any loopback services named in the config.
+- For each machine named in the config with an ssh alias, the same numbers over ssh (BatchMode, a four-second connect timeout), read only when the tailnet does not report it offline; Linux machines also list failed systemd units.
+- Each HTTPS probe named in the config, with its status and latency.
+
+Health counts checks passing out of the total: each watched machine reachable, each service up, and each probe passing.
+Alerts name a watched machine offline or unreachable, a watched machine whose numbers cannot be read, a service down, a probe failing, failed systemd units, a disk over 90 percent full, or a tailnet that cannot be read.
+Only machines named in the config are watched, so a phone or laptop that sleeps shows offline on its card without raising an alert.
+The map is the hub card for this Mac with its services, then the tailnet machines, any machines reached only over ssh, and the web probes, each group joined to the hub by its link.
+
+[`docs/configuration.md`](configuration.md#bridge-machines-configbridge-machines) owns the optional `config/bridge-machines` file; without it the page still shows the tailnet and this Mac.
+There is no button on the page that acts on a machine.
+
 ## Writes
 
 Login and logout POSTs remain the authentication writes.
@@ -180,7 +206,7 @@ There is still no approve, merge, or spawn control on this page or on `/deck`.
 ## Action Deck page (`/deck`)
 
 `/deck` is the private web rendering of the captain's Action Deck, on the same server, session cookie, Host check, security headers and loopback-plus-Serve publish path as the glance.
-The glance and the deck link to each other through a small page nav under each header.
+The glance, the deck, and the Machines page link to each other through a small page nav under each header.
 An unauthenticated `/deck` shows Log in; `/api/deck` answers 401.
 
 The page renders the `fm-deck.v1` model that `bin/fm-deck.sh --json` emits, so the web deck and the terminal pane read the same records through the same selection rules and can never answer "what needs you" differently.
