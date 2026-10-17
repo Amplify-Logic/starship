@@ -44,8 +44,9 @@ npm install -g @anthropic-ai/claude-code
 claude
 ```
 
-For `gh auth login`, choose **GitHub.com**, then **HTTPS**, then **Login with a web browser**.
-`claude` opens a browser login; complete it, then type `/exit`.
+Homebrew asks `Do you want to proceed with the installation? [y/n]` before it installs; press `y`.
+`gh auth login` asks four questions with the answers you want already selected, so press Enter at each: **GitHub.com**, **HTTPS**, **Yes** to authenticate Git, then **Login with a web browser**.
+`claude` opens a browser login; complete it, then type `/exit`, or press Enter if it asks whether to trust your home folder, which just closes it.
 
 You should see: `gh auth status` says you are logged in to github.com, and `claude --version` prints a version.
 
@@ -61,9 +62,12 @@ bin/fm-primary.sh opus
 
 That launches Claude Code on Opus, with its permission prompts turned off so the first mate can run its own scripts; [its house rules](docs/handbook.md#how-it-works-in-plain-words) are what keep it safe.
 
-The first time, Claude Code asks whether you trust this folder.
-**Say yes.**
-That loads the guards that let your first mate notice when a worker finishes or gets stuck; without them it may never notice.
+The first time, Claude Code asks two questions, and both start with **No, exit** selected, so pressing Enter alone quits.
+For each, press the down arrow once, then Enter:
+
+1. "Is this a project you created or one you trust?": choose **Yes, I trust this folder**.
+   That loads the guards that let your first mate notice when a worker finishes or gets stuck; without them it may never notice.
+2. "WARNING: Claude Code running in Bypass Permissions mode": choose **Yes, I accept**.
 
 You should see: Claude Code open inside the `starship` folder, ready for a message.
 
@@ -130,13 +134,14 @@ It explains the whole system in plain words, how to connect your mail, calendar 
 
 | You see | Do this |
 |---|---|
+| `Invalid input. Please press 'y' to proceed` | Homebrew is asking yes or no; press `y`. |
 | `command not found: brew` | Run the two `PATH` lines Homebrew printed at the end, then open a new Terminal window. |
 | `command not found: npm` or `claude` | `brew install node`, then `npm install -g @anthropic-ai/claude-code`, then open a new Terminal window. |
-| `gh: not logged in` or `NEEDS_GH_AUTH` | `gh auth login`, choosing GitHub.com, HTTPS, and the web browser. |
+| `gh: not logged in` or `NEEDS_GH_AUTH` | `gh auth login`, answering its four questions with GitHub.com, HTTPS, Yes to authenticate Git, and the web browser. |
 | `bin/fm-primary.sh` refuses to start | `bin/fm-primary.sh opus --preflight` names what is missing without starting anything. |
 | `permission denied` on `bin/fm-primary.sh` | `chmod +x bin/*.sh`, then launch again. |
 | `refuses another live Firstmate session` | One is already running; close the other window, or run `tmux ls` and exit the spare session. |
 | It doesn't call you captain | You are not in the Starship folder; `cd ~/starship` and launch again. |
 | It cannot add Harbour Logbook | Your GitHub account cannot see the `harbourlogbook` organisation yet; ask its owner to invite you. |
-| It never notices a worker finished | The trust prompt was declined; quit, launch again, and accept it. |
+| It never notices a worker finished | The trust prompt was declined; quit, launch again, and choose **Yes, I trust this folder**. |
 | Nothing happens for minutes | Normal - work runs in the background. Ask "what are you doing?" |

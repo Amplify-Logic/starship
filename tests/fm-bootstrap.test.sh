@@ -559,8 +559,8 @@ SH
   pass "bootstrap requires git with an install instruction"
 }
 
-# HOST_ENV: WSL homes and projects on the Windows drive and WSL localhost
-# forwarding turned off (silent when cmd.exe hangs); plus the headless-server
+# HOST_ENV: WSL homes and projects on the Windows drive, WSL networking mode
+# none, and WSL localhost forwarding turned off (silent when cmd.exe hangs); plus the headless-server
 # board advice, a once-per-home BOOTSTRAP_INFO fact. wslinfo, cmd.exe, wslpath,
 # and tailscale are stubs. The headless-server cases need a real Linux kernel,
 # so a macOS run proves that branch stays silent there instead.
@@ -604,6 +604,11 @@ test_host_environment_reports() {
   [ "$out" = "$expected" ] || fail "localhost forwarding off should suggest mirrored networking, got: $out"
   out=$(run_host_env_bootstrap "$case_dir" "$fakebin" WSL_DISTRO_NAME=Ubuntu-24.04 FAKE_WSL_MODE=mirrored)
   [ -z "$out" ] || fail "mirrored networking needs no forwarding advice, got: $out"
+  out=$(run_host_env_bootstrap "$case_dir" "$fakebin" WSL_DISTRO_NAME=Ubuntu-24.04 FAKE_WSL_MODE=none)
+  expected="HOST_ENV: WSL: Ubuntu has no network (WSL networking mode is none, which is where WSL falls back when this Windows cannot use networkingMode=mirrored) - remove the networkingMode=mirrored line from .wslconfig in your Windows user folder, then run wsl --shutdown from Windows (ONBOARDING-windows.md)"
+  [ "$out" = "$expected" ] || fail "networking mode none should be named instead of the mirrored advice, got: $out"
+  out=$(run_host_env_bootstrap "$case_dir" "$fakebin" FAKE_WSL_MODE=none)
+  [ -z "$out" ] || fail "the networking check is WSL-only, got: $out"
   printf '[wsl2]\nnetworkingMode=nat\n' > "$case_dir/winhome/.wslconfig"
   out=$(run_host_env_bootstrap "$case_dir" "$fakebin" WSL_DISTRO_NAME=Ubuntu-24.04)
   [ -z "$out" ] || fail "default localhost forwarding needs no advice, got: $out"
@@ -620,7 +625,7 @@ test_host_environment_reports() {
   if [ "$(uname -s)" != Linux ]; then
     out=$(run_host_env_bootstrap "$case_dir" "$fakebin" SSH_CONNECTION="$ssh")
     [ -z "$out" ] || fail "the headless-server advice is Linux-only, got: $out"
-    pass "bootstrap HOST_ENV names WSL Windows-drive paths and WSL forwarding off; headless-server cases need Linux and stay silent here"
+    pass "bootstrap HOST_ENV names WSL Windows-drive paths, WSL networking none, and WSL forwarding off; headless-server cases need Linux and stay silent here"
     return
   fi
   out=$(run_host_env_bootstrap "$case_dir" "$fakebin" SSH_CONNECTION="$ssh" DISPLAY=:0)
@@ -644,7 +649,7 @@ test_host_environment_reports() {
   [ -e "$advised" ] || fail "the advice was shown but not recorded for this home"
   out=$(run_host_env_bootstrap "$case_dir" "$fakebin" SSH_CONNECTION="$ssh")
   [ -z "$out" ] || fail "the board advice is shown once per home, got it again: $out"
-  pass "bootstrap HOST_ENV names WSL Windows-drive paths and WSL forwarding off, and a headless server gets its board advice once per home as an info fact"
+  pass "bootstrap HOST_ENV names WSL Windows-drive paths, WSL networking none, and WSL forwarding off, and a headless server gets its board advice once per home as an info fact"
 }
 
 test_orca_backend_gates_orca_tool_only_when_selected() {

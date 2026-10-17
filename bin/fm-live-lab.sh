@@ -170,8 +170,11 @@ load_lab() {  # <root>: refuse anything up did not build, then load its record
   TREEHOUSE_DIR=$(rec_get "$ROOT" treehouse_dir)
 }
 
+# tmux silently falls back to the default socket when TMUX_TMPDIR names a
+# missing directory, so a vanished lab directory must never reach tmux: that
+# call would land on the person's own sessions, which a kill-server ends.
 lab_tmux() {
-  [ -n "${TMUX_DIR:-}" ] || return 1
+  [ -n "${TMUX_DIR:-}" ] && [ -d "$TMUX_DIR" ] || return 1
   env -u TMUX TMUX_TMPDIR="$TMUX_DIR" tmux "$@"
 }
 

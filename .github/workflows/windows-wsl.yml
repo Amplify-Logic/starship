@@ -3,7 +3,8 @@ name: Windows (WSL 2) and Linux server kit
 # End-to-end proof of the Windows (ONBOARDING-windows.md) and Linux server
 # (ONBOARDING-linux-server.md) path, on a fresh Ubuntu 24.04 as a teammate
 # would have it:
-#   kit on WSL 2 (windows-2025): bin/fm-linux-setup.sh --ci, the first mate's
+#   kit on WSL 2 (windows-2025): bin/fm-linux-setup.sh --ci through a pipe, as
+#     the guides' curl | bash runs it, then the first mate's
 #     consented toolchain install, one stand-in worker spawned on tmux and its
 #     report read back, headless Chrome rendering a dev server, and a review
 #     board and an Expo-style dev server reached from the Windows side through
@@ -150,9 +151,12 @@ jobs:
           git -C ~/starship remote set-head origin --auto
           git -C ~/starship log -1 --oneline
 
-      - name: Run the setup script
+      # Through a pipe, as the guides run it (curl ... | bash): bash then reads
+      # the script from standard input, which any installer reading standard
+      # input would swallow, so a run from a file cannot prove this path.
+      - name: Run the setup script through a pipe
         if: matrix.lane != 'floater'
-        run: ~/starship/bin/fm-linux-setup.sh --ci
+        run: cat ~/starship/bin/fm-linux-setup.sh | bash -s -- --ci
 
       # The floater needs only Ubuntu's own python3 inside WSL and the .NET
       # Framework compiler every Windows has, so it skips the setup script.
@@ -175,7 +179,7 @@ jobs:
           cd ~/starship
           mkdir -p config
           printf 'tmux\n' > config/backend
-          bin/fm-bootstrap.sh install jq treehouse no-mistakes gh-axi tasks-axi quota-axi lavish-axi chrome-devtools-axi
+          bin/fm-bootstrap.sh install treehouse no-mistakes gh-axi tasks-axi quota-axi lavish-axi chrome-devtools-axi
           out=$(bin/fm-bootstrap.sh)
           printf '%s\n' "$out"
           if printf '%s\n' "$out" | grep -E '^(MISSING|MISSING_MANUAL|HOST_ENV):'; then
@@ -264,7 +268,7 @@ jobs:
         run: |
           cd ~/starship
           sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y -q lsof psmisc rsync unzip zip
-          bin/fm-bootstrap.sh install jq tasks-axi
+          bin/fm-bootstrap.sh install tasks-axi
           npm install -g @earendil-works/pi-coding-agent typescript
           bin/fm-install-shellcheck.sh "$HOME/.local/bin"
           bin/fm-install-actionlint.sh "$HOME/.local/bin"

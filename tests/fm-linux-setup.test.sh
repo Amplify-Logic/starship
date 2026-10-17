@@ -52,6 +52,10 @@ SH
 printf 'apt-get %s\n' "$*" >> "$FAKE_WORLD/calls.log"
 for arg in "$@"; do
   case "$arg" in
+    wslu)
+      printf '#!/usr/bin/env bash\necho "wslu v3.2.3-1; wslview v10"\n' > "$FAKE_WORLD/sysbin/wslview"
+      chmod +x "$FAKE_WORLD/sysbin/wslview"
+      ;;
     *.deb)
       printf '#!/usr/bin/env bash\necho "Google Chrome 141.0.0.0"\n' > "$FAKE_WORLD/sysbin/google-chrome"
       chmod +x "$FAKE_WORLD/sysbin/google-chrome"
@@ -101,8 +105,11 @@ case "${1:-}" in
   shellenv) printf 'export PATH="%s:$PATH"\n' "$bin" ;;
   install)
     shift
-    printf 'brew install %s\n' "$*" >> "$FAKE_WORLD/calls.log"
-    for tool in node npm gh tmux; do
+    printf 'brew install %s HOMEBREW_NO_ASK=%s\n' "$*" "${HOMEBREW_NO_ASK:-}" >> "$FAKE_WORLD/calls.log"
+    # A fresh Homebrew's first install reads standard input; under curl | bash
+    # that is the rest of the setup script itself.
+    [ "${FAKE_BREW_READS_STDIN:-}" = 1 ] && cat > /dev/null
+    for tool in node npm gh tmux jq; do
       printf '#!/usr/bin/env bash\necho %s-version-1\n' "$tool" > "$bin/$tool"
       chmod +x "$bin/$tool"
     done ;;
@@ -114,12 +121,15 @@ SH
 
 # run_setup <world> [args...]: run the script inside the world; prints combined
 # output and returns its exit status. FAKE_WINDOWS_PATH appends a directory the
-# way WSL appends the Windows PATH.
+# way WSL appends the Windows PATH, and FAKE_WSL_DISTRO sets WSL_DISTRO_NAME the
+# way WSL does; otherwise it is unset even when the tests themselves run in WSL.
 run_setup() {
   local dir=$1
   shift
   (
     cd "$dir/home" || exit 1
+    unset WSL_DISTRO_NAME
+    [ -z "${FAKE_WSL_DISTRO:-}" ] || export WSL_DISTRO_NAME="$FAKE_WSL_DISTRO"
     PATH="$dir/fakebin:$dir/sysbin${FAKE_WINDOWS_PATH:+:$FAKE_WINDOWS_PATH}" HOME="${FAKE_HOME:-$dir/home}" FAKE_WORLD="$dir" \
       HOMEBREW_PREFIX="$dir/linuxbrew" bash "$SETUP" "$@" 2>&1
   )
@@ -186,13 +196,16 @@ test_fresh_install_then_rerun_is_idempotent() {
   assert_contains "$log" "apt-get install -y -q build-essential procps curl file git ca-certificates" \
     "Homebrew's Linux prerequisites are installed with apt"
   assert_contains "$log" "brew-installer NONINTERACTIVE=1" "Homebrew is installed non-interactively"
-  assert_contains "$log" "brew install git node gh tmux" "the shared tools come from Homebrew"
+  assert_contains "$log" "brew install git node gh tmux jq HOMEBREW_NO_ASK=1" \
+    "the shared tools, jq included, come from Homebrew without its y/n question"
+  assert_not_contains "$log" "wslu" "a server gets no WSL browser bridge"
   assert_contains "$log" "claude-installer" "Claude Code comes from its native installer"
   assert_contains "$log" "curl https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb" \
     "Chrome's package is downloaded"
   assert_contains "$log" "google-chrome-stable_current_amd64.deb" "Chrome's package is installed with apt"
   assert_contains "$log" "git clone https://github.com/Amplify-Logic/firstmate $w/home/starship" \
     "Firstmate is cloned into ~/starship"
+  assert_contains "$out" "ok  jq" "the closing check finds jq"
   assert_contains "$out" "ok  chrome" "the closing check finds Chrome"
   assert_contains "$out" "ok  firstmate" "the closing check finds the clone"
   assert_contains "$out" "Sign-ins skipped (--ci)." "--ci says the sign-ins were skipped"
@@ -200,6 +213,8 @@ test_fresh_install_then_rerun_is_idempotent() {
   assert_contains "$(cat "$w/home/.profile")" "eval \"\$($w/linuxbrew/bin/brew shellenv)\"" \
     "login shells load Homebrew"
   assert_contains "$(cat "$w/home/.bashrc")" '.local/bin' "interactive shells find ~/.local/bin"
+  assert_contains "$(cat "$w/home/.bashrc")" 'export HOMEBREW_NO_ASK=1' "later brew installs ask no y/n question"
+  assert_not_contains "$(cat "$w/home/.bashrc")" 'BROWSER' "a server keeps its own browser setting"
 
   : > "$w/calls.log"
   out=$(run_setup "$w")
@@ -219,11 +234,30 @@ test_fresh_install_then_rerun_is_idempotent() {
   signin=$(printf '%s\n' "$out" | grep -n 'gh auth login' | head -n 1 | cut -d: -f1)
   [ -n "$newterm" ] && [ "$newterm" -lt "$signin" ] \
     || fail "the new terminal must be opened before the sign-ins, got: $out"
-  assert_contains "$out" "step 7 of ONBOARDING-windows.md" "the closing text sends Windows users to the guide's tmux step"
+  assert_contains "$out" "step 8 of ONBOARDING-windows.md" "the closing text sends Windows users to the guide's tmux step"
   assert_contains "$out" "step 6 of ONBOARDING-linux-server.md" "the closing text sends server users to the guide's tmux step"
   [ "$(grep -c 'brew shellenv' "$w/home/.profile")" -eq 1 ] \
     || fail "a re-run duplicated the profile lines: $(cat "$w/home/.profile")"
   pass "a fresh install runs every step once, and a re-run keeps everything and only prints the new-terminal step and the sign-ins"
+}
+
+test_wsl_sends_sign_ins_to_the_windows_browser() {
+  local w out status rc
+  w=$(make_world wsl)
+  out=$(FAKE_WSL_DISTRO=Ubuntu-24.04 run_setup "$w" --ci)
+  status=$?
+  [ "$status" -eq 0 ] || fail "a WSL install should succeed, got $status: $out"
+  assert_contains "$(calls "$w")" "apt-get install -y -q build-essential procps curl file git ca-certificates wslu" \
+    "WSL gets wslu with the system packages"
+  assert_contains "$out" "ok  wslview" "the closing check finds wslview"
+  for rc in .profile .bashrc; do
+    [ "$(grep -cx 'export BROWSER=wslview' "$w/home/$rc")" -eq 1 ] \
+      || fail "$rc should send links to the Windows browser once: $(cat "$w/home/$rc")"
+  done
+  out=$(FAKE_WSL_DISTRO=Ubuntu-24.04 run_setup "$w" --ci)
+  [ "$(grep -cx 'export BROWSER=wslview' "$w/home/.bashrc")" -eq 1 ] \
+    || fail "a re-run duplicated the browser line: $(cat "$w/home/.bashrc")"
+  pass "inside WSL the setup installs wslu and points BROWSER at wslview, so sign-ins open in Windows"
 }
 
 test_arm64_skips_chrome() {
@@ -267,9 +301,36 @@ test_missing_tool_fails_the_closing_check() {
   pass "the closing check fails and names a tool an installer did not actually install"
 }
 
+# run_setup_piped <world> [args...]: as run_setup, but the script arrives on
+# standard input the way the guides run it, curl ... | bash.
+run_setup_piped() {
+  local dir=$1
+  shift
+  (
+    cd "$dir/home" || exit 1
+    unset WSL_DISTRO_NAME
+    cat "$SETUP" | PATH="$dir/fakebin:$dir/sysbin" HOME="$dir/home" FAKE_WORLD="$dir" \
+      HOMEBREW_PREFIX="$dir/linuxbrew" bash -s -- "$@" 2>&1
+  )
+}
+
+test_piped_install_runs_to_the_end() {
+  local w out status
+  w=$(make_world piped)
+  out=$(FAKE_BREW_READS_STDIN=1 run_setup_piped "$w" --ci)
+  status=$?
+  [ "$status" -eq 0 ] || fail "a piped install should succeed, got $status: $out"
+  assert_contains "$out" "Setup finished." "a piped install reaches the end even when brew reads standard input"
+  assert_contains "$(calls "$w")" "claude-installer" "the steps after brew install still run when piped"
+  assert_contains "$out" "ok  firstmate" "the closing check runs when piped"
+  pass "the setup runs to the end under curl | bash even when an installer reads standard input"
+}
+
 test_help_and_usage_errors
+test_piped_install_runs_to_the_end
 test_refusals_change_nothing
 test_fresh_install_then_rerun_is_idempotent
+test_wsl_sends_sign_ins_to_the_windows_browser
 test_arm64_skips_chrome
 test_windows_claude_does_not_count_as_installed
 test_missing_tool_fails_the_closing_check

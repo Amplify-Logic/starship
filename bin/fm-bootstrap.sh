@@ -107,10 +107,12 @@
 #          on, silent on macOS and on a desktop Linux session. Inside WSL
 #          (WSL_DISTRO_NAME set) it names the code root, home, projects
 #          directory, or any project that sits on a Windows drive under
-#          /mnt/<letter>/, and names a .wslconfig that turns localhost
-#          forwarding off while networking is not mirrored (read through
-#          wslinfo, cmd.exe, and wslpath; silent when they are unavailable
-#          or cmd.exe or wslpath does not answer within 5 seconds).
+#          /mnt/<letter>/, says when WSL networking is none (no network at
+#          all, where WSL falls back when mirrored networking is unsupported),
+#          and otherwise names a .wslconfig that turns localhost forwarding off
+#          while networking is not mirrored (read through wslinfo, cmd.exe,
+#          and wslpath; silent when they are unavailable or cmd.exe or wslpath
+#          does not answer within 5 seconds).
 #          On a headless server (no DISPLAY or WAYLAND_DISPLAY, reached over
 #          SSH) without Tailscale up, it prints one BOOTSTRAP_INFO fact that
 #          review boards and dev servers are reached from the person's own
@@ -1684,7 +1686,9 @@ detect_host_environment() {
         && echo "HOST_ENV: WSL: $path is on the Windows drive - move it under the Linux home (~); git, file watching and file permissions are slow or broken under /mnt/"
     done
     mode=$(wslinfo --networking-mode 2>/dev/null | tr -d '\r' || true)
-    if [ "$mode" != mirrored ] && wslconfig=$(host_env_wslconfig); then
+    if [ "$mode" = none ]; then
+      echo "HOST_ENV: WSL: Ubuntu has no network (WSL networking mode is none, which is where WSL falls back when this Windows cannot use networkingMode=mirrored) - remove the networkingMode=mirrored line from .wslconfig in your Windows user folder, then run wsl --shutdown from Windows (ONBOARDING-windows.md)"
+    elif [ "$mode" != mirrored ] && wslconfig=$(host_env_wslconfig); then
       forwarding=$(LC_ALL=C awk -F= '
         /^[[:space:]]*\[/ { section = tolower($0); gsub(/[[:space:]]/, "", section) }
         section == "[wsl2]" && tolower($1) ~ /^[[:space:]]*localhostforwarding[[:space:]]*$/ {

@@ -17,23 +17,53 @@ TMP_ROOT=$(fm_test_tmproot fm-live-lab)
 LIVE_LAB="$ROOT/bin/fm-live-lab.sh"
 TRUST="$ROOT/bin/fm-claude-trust.sh"
 
+# Stops every recorded lab tmux server by its exact socket path. A down has
+# already removed most of these directories, and TMUX_TMPDIR naming a missing
+# directory makes tmux fall back to the default socket: that kill-server would
+# end the person's own tmux sessions, as it did on WSL.
+stop_lab_tmux_servers() {
+  local dir
+  while read -r dir; do
+    [ -n "$dir" ] || continue
+    env -u TMUX -u TMUX_TMPDIR tmux -S "$dir/tmux-$(id -u)/default" kill-server 2>/dev/null
+    case "$dir" in /tmp/fml.*) rm -rf "$dir" ;; esac
+  done < "$TMP_ROOT/tmux-dirs"
+}
+
 live_lab_cleanup() {
-  local dir pid marker
+  local pid marker
   for marker in "$TMP_ROOT/orphan-child" "$TMP_ROOT/late-child" "$TMP_ROOT/reused-child"; do
     [ ! -s "$marker" ] || printf '%s\n' "$(<"$marker")" >> "$TMP_ROOT/pids"
   done
   while read -r pid; do [ -n "$pid" ] && { pkill -P "$pid" 2>/dev/null || true; kill "$pid" 2>/dev/null || true; }; done < "$TMP_ROOT/pids"
-  while read -r dir; do
-    [ -n "$dir" ] || continue
-    env -u TMUX TMUX_TMPDIR="$dir" tmux kill-server 2>/dev/null
-    case "$dir" in /tmp/fml.*) rm -rf "$dir" ;; esac
-  done < "$TMP_ROOT/tmux-dirs"
+  stop_lab_tmux_servers
   rm -rf "/tmp/fm-labt$$-mate" "/tmp/fm-labt$$-worker" "/tmp/fm-labt$$-other" /tmp/fm-labt"$$"-*+*
   fm_test_cleanup
 }
 trap live_lab_cleanup EXIT
 
 command -v tmux >/dev/null 2>&1 || { echo "ok - skipped: tmux is not installed"; exit 0; }
+
+# Every tmux call in this file, and in the lab processes it starts, goes through
+# a guard that refuses and records any call that could reach the default tmux
+# server: one with no -S socket whose TMUX_TMPDIR is unset or missing. The
+# person running the suite keeps their own sessions even if a regression
+# slips in, and the record fails the test at the end.
+REAL_TMUX=$(command -v tmux)
+TMUX_GUARD_LOG="$TMP_ROOT/tmux-default-server-calls"
+: > "$TMUX_GUARD_LOG"
+mkdir -p "$TMP_ROOT/tmux-guard"
+cat > "$TMP_ROOT/tmux-guard/tmux" <<SH
+#!/usr/bin/env bash
+for arg in "\$@"; do [ "\$arg" = -S ] && exec '$REAL_TMUX' "\$@"; done
+if [ -n "\${TMUX_TMPDIR:-}" ] && [ -d "\$TMUX_TMPDIR" ]; then exec '$REAL_TMUX' "\$@"; fi
+printf 'TMUX_TMPDIR=%s tmux %s\n' "\${TMUX_TMPDIR:-<unset>}" "\$*" >> '$TMUX_GUARD_LOG'
+echo "tmux guard: refusing a call that would reach the default tmux server" >&2
+exit 1
+SH
+chmod +x "$TMP_ROOT/tmux-guard/tmux"
+PATH="$TMP_ROOT/tmux-guard:$PATH"
+export PATH
 
 FAKE_HOME="$TMP_ROOT/fakehome"
 mkdir -p "$FAKE_HOME/.pi/agent" "$FAKE_HOME/.treehouse/existing-pool"
@@ -120,6 +150,7 @@ lab_tmux() {  # <root> <tmux args...>
   local dir
   dir=$(sed -n 's/^tmux_dir=//p' "$1/.fm-live-lab")
   shift
+  [ -n "$dir" ] && [ -d "$dir" ] || { echo "lab tmux directory '$dir' is gone" >&2; return 1; }
   env -u TMUX TMUX_TMPDIR="$dir" tmux "$@"
 }
 
@@ -790,3 +821,25 @@ out=$(CLAUDE_CONFIG_DIR="$T/config" "$TRUST" --lab-home "$T/home" 2>&1)
 expect_code 1 "$?" "a symlinked marker is refused"
 assert_contains "$out" "is a symlink" "the refusal names the symlink"
 pass "fm-claude-trust.sh --lab-home trusts only a marked lab primary checkout"
+
+# A lab whose private tmux directory has vanished (a /tmp cleaner, a manual
+# rm) must not fall through to the default tmux server, where tmux would send
+# the lab's commands once TMUX_TMPDIR names a missing directory.
+V=$(make_lab vanished pi)
+V_TMUX=$(sed -n 's/^tmux_dir=//p' "$V/.fm-live-lab")
+env -u TMUX -u TMUX_TMPDIR tmux -S "$V_TMUX/tmux-$(id -u)/default" kill-server
+rm -rf "$V_TMUX"
+[ ! -s "$TMUX_GUARD_LOG" ] || fail "an earlier tmux call could have reached the default tmux server: $(cat "$TMUX_GUARD_LOG")"
+: > "$TMUX_GUARD_LOG"
+out=$("$LIVE_LAB" check "$V" 2>&1)
+expect_code 1 "$?" "check fails on a lab whose tmux directory is gone: $out"
+out=$("$LIVE_LAB" say "$V" probe 2>&1)
+expect_code 1 "$?" "say fails on a lab whose tmux directory is gone: $out"
+"$LIVE_LAB" pane "$V" >/dev/null 2>&1
+"$LIVE_LAB" down "$V" >/dev/null 2>&1
+[ ! -s "$TMUX_GUARD_LOG" ] || fail "a lab with a vanished tmux directory reached for the default tmux server: $(cat "$TMUX_GUARD_LOG")"
+pass "check, say, pane and down never reach the default tmux server when the lab's tmux directory is gone"
+
+stop_lab_tmux_servers
+[ ! -s "$TMUX_GUARD_LOG" ] || fail "a tmux call could have reached the default tmux server: $(cat "$TMUX_GUARD_LOG")"
+pass "no tmux call from this file, its labs, or its server cleanup can reach the default tmux server"

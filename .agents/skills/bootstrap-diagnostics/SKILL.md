@@ -97,6 +97,7 @@ When any diagnostic needs captain attention, report the plain consequence and re
 - `HOST_ENV: WSL: ...` - the WSL home this first mate runs in needs a change the line names; nothing is blocked, and [`ONBOARDING-windows.md`](../../../ONBOARDING-windows.md) owns the setup it points at.
   A path on the Windows drive is the captain's to move into the Linux home; never move a home or clone yourself, because that strands live workers and unlanded work.
   Localhost forwarding off means review boards and dev servers will not open in the Windows browser until the captain edits the named `.wslconfig` and restarts WSL, which also ends this session.
+  Networking mode none means this Ubuntu has no network at all, so every network check and install fails, until the captain removes the mirrored line from `.wslconfig` and restarts WSL, which also ends this session.
 - `UPSTREAM: <N> commits behind <remote>/<branch> (<url>) - <subjects>` - this home is a fork whose configured upstream has commits the local checkout lacks.
   `<N>` is what is genuinely still outstanding: the raw upstream delta minus the commits this fork has already delivered.
   When the line carries an `<R> upstream commits, <D> already delivered here` clause, the ledger accounted for `<D>` of them, and the listed subjects are only the outstanding ones.
