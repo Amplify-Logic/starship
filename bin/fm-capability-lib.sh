@@ -21,8 +21,10 @@
 #       green     validation passed on the first recorded pipeline attempt
 #                 (fix-rounds 0)
 #       fixed     validation passed only after earlier recorded attempts
-#       failed    validation ran but its newest recorded attempt never
-#                 completed
+#       failed    validation ran but its newest recorded attempt did not
+#                 pass; an attempt passed when it completed, or when it was
+#                 cancelled after its own PR step completed and that PR
+#                 merged (see fm_capability_outcome_from_runs)
 #       merged    direct-PR or local-only work landed with no follow-up: its
 #                 branch's content never changed after the worker's first
 #                 done: report, so a pure rebase still counts (fix-rounds 0)
@@ -134,31 +136,53 @@ fm_capability_log_append() {
 }
 
 # Derive the teardown capability outcome from captured `no-mistakes runs` text.
-# Args: branch runs-output (empty when unavailable). Rows are newest-first,
-# whitespace-separated: <status> <branch> <sha> <date> <time> [url]; only
-# completed/failed/cancelled rows for the branch are samples. Prints
-# "<outcome>|<fix-rounds>" where fix-rounds is empty when not derivable:
+# Args: branch runs-output (empty when unavailable) [landed]. Rows are
+# newest-first, whitespace-separated: <status> <branch> <sha> <date> <time>
+# [url]; only completed/failed/cancelled rows for the branch are samples.
+# landed is 1 only when the caller proved the newest attempt's own PR step
+# completed and that PR merged: firstmate may merge once every step before ci
+# passed and then abort the run still monitoring ci, so that cancelled attempt
+# passed. Prints "<outcome>|<fix-rounds>" where fix-rounds is empty when not
+# derivable:
 #   - no row for the branch            -> unknown|      (never guessed)
-#   - newest attempt completed, first  -> green|0       (first try)
-#   - newest attempt completed, later  -> fixed|<earlier-attempt-count>
-#   - newest attempt not completed     -> failed|
+#   - newest attempt passed, first     -> green|0       (first try)
+#   - newest attempt passed, later     -> fixed|<earlier-attempt-count>
+#   - newest attempt did not pass      -> failed|
+# where an attempt passed when it completed, or was cancelled with landed=1.
 fm_capability_outcome_from_runs() {
-  local branch=$1 runs=$2
+  local branch=$1 runs=$2 landed=${3:-0}
   [ -n "$branch" ] || { printf 'unknown|\n'; return 0; }
-  printf '%s\n' "$runs" | awk -v want="$branch" '
+  printf '%s\n' "$runs" | awk -v want="$branch" -v landed="$landed" '
     ($1 == "completed" || $1 == "failed" || $1 == "cancelled") && $2 == want {
       if (seen != 1) { first = $1; seen = 1 }
       total++
     }
     END {
       if (total == 0) { printf "unknown|\n"; exit }
-      if (first == "completed") {
+      if (first == "completed" || (first == "cancelled" && landed == "1")) {
         if (total == 1) { printf "green|0\n" }
         else { printf "fixed|%d\n", total - 1 }
       } else {
         printf "failed|\n"
       }
     }
+  '
+}
+
+# Did `no-mistakes axi status` output, read from the task's worktree, show
+# that branch's own cancelled run with its pr step completed? Args: branch
+# axi-status-output. Reads only the top-level run: object (never
+# other_branch_run:). Returns 0 when it did, non-zero otherwise.
+fm_capability_run_reached_pr() {
+  local branch=$1 status=$2
+  [ -n "$branch" ] && [ -n "$status" ] || return 1
+  printf '%s\n' "$status" | awk -v want="$branch" '
+    /^[^[:space:]]/ { in_run = ($0 ~ /^run:[[:space:]]*$/); next }
+    !in_run { next }
+    /^[[:space:]]+branch:/ { v = $2; gsub(/"/, "", v); if (!got_branch) { branch = v; got_branch = 1 } }
+    /^[[:space:]]+status:/ { v = $2; gsub(/"/, "", v); if (!got_status) { status = v; got_status = 1 } }
+    /^[[:space:]]+pr,completed(,|$)/ { pr_done = 1 }
+    END { exit !(branch == want && status == "cancelled" && pr_done) }
   '
 }
 

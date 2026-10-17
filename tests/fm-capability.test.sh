@@ -143,7 +143,50 @@ test_outcome_derivation_from_runs_rows() {
   [ "$got" = 'unknown|' ] || fail "missing branch must be unknown, got: $got"
   got=$(fm_capability_outcome_from_runs fm/task-x1 '  completed    fm/other x 2026-08-20 17:12')
   [ "$got" = 'unknown|' ] || fail "unmatched branch must be unknown, got: $got"
+
+  # A newest attempt cancelled after its own PR step completed and its PR
+  # merged passed; without that proof, or when the newest attempt failed, it
+  # did not.
+  runs='  cancelled    fm/task-x1 6a28c638  2026-10-17 02:48  https://github.com/example/repo/pull/9'
+  got=$(fm_capability_outcome_from_runs fm/task-x1 "$runs" 1)
+  [ "$got" = 'green|0' ] || fail "a landed cancelled first attempt should be green|0, got: $got"
+  got=$(fm_capability_outcome_from_runs fm/task-x1 "$runs")
+  [ "$got" = 'failed|' ] || fail "a cancelled attempt without landing proof must stay failed, got: $got"
+  runs="$runs
+  failed       fm/task-x1 d7bf67d7  2026-10-16 03:37"
+  got=$(fm_capability_outcome_from_runs fm/task-x1 "$runs" 1)
+  [ "$got" = 'fixed|1' ] || fail "a landed cancelled attempt after one earlier attempt should be fixed|1, got: $got"
+  got=$(fm_capability_outcome_from_runs fm/task-x1 '  failed       fm/task-x1 d7bf67d7  2026-10-16 03:37' 1)
+  [ "$got" = 'failed|' ] || fail "landing proof never turns a failed newest attempt into a pass, got: $got"
   pass "run-table derivation yields first-try green, fixed, failed, or unknown"
+}
+
+test_run_reached_pr_from_axi_status() {
+  local status
+  status='run:
+  id: "01RUN"
+  branch: fm/task-x1
+  status: cancelled
+  head: 6a28c638
+  pr: "https://github.com/example/repo/pull/9"
+  steps[3]{step,status,findings,duration_ms}:
+    push,completed,0,10
+    pr,completed,0,10
+    ci,failed,0,10
+outcome: cancelled'
+  fm_capability_run_reached_pr fm/task-x1 "$status" \
+    || fail "a cancelled run with a completed pr step should count as reaching its PR"
+  ! fm_capability_run_reached_pr fm/other "$status" \
+    || fail "another branch's run must not count"
+  ! fm_capability_run_reached_pr fm/task-x1 "${status/pr,completed/pr,pending}" \
+    || fail "a run cancelled before its pr step completed must not count"
+  ! fm_capability_run_reached_pr fm/task-x1 "${status/status: cancelled/status: failed}" \
+    || fail "a failed run must not count"
+  ! fm_capability_run_reached_pr fm/task-x1 "${status/run:/other_branch_run:}" \
+    || fail "an other_branch_run object must not count"
+  ! fm_capability_run_reached_pr fm/task-x1 '' \
+    || fail "empty status must not count"
+  pass "axi status shows a run cancelled after its own PR step completed"
 }
 
 test_outcome_derivation_from_follow_ups() {
@@ -320,6 +363,7 @@ test_summarize_green_density
 test_summarize_lane_outcome_density
 test_record_teardown_outcomes
 test_outcome_derivation_from_runs_rows
+test_run_reached_pr_from_axi_status
 test_outcome_derivation_from_follow_ups
 test_lane_outcomes_are_recorded
 test_reader_handles_old_and_new_lines

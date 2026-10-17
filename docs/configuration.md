@@ -3204,7 +3204,8 @@ Each append-only line is:
 `outcome` is derived from the task's recorded validation result at teardown, never from the teardown mode.
 `green` means validation passed on the first try: exactly one pipeline attempt is recorded for the task branch.
 `fixed` means validation passed only after earlier recorded attempts, and its `fix-rounds` field counts those earlier attempts.
-`failed` means validation ran but its newest recorded attempt never completed.
+`failed` means validation ran but its newest recorded attempt did not pass.
+An attempt passed when it completed, or when it was cancelled after its own PR step completed and that PR merged, since firstmate may merge once every step before ci passed and then abort the run still monitoring ci.
 `merged` means direct-PR or local-only work landed with no follow-up: its branch's content never changed after the worker's first `done:` report, so a pure rebase still counts as merged.
 Teardown keeps `merged` or `revised` only when it proves the landing before removing the worktree: a merged PR for direct-PR, or for local-only a head on the local default branch or content already in it; unproven work records `unknown`.
 `revised` means such work landed only after follow-up commits: the patch-ids of its branch-only commits at the ready-time head and at the final head differ, and its `fix-rounds` field counts the branch moves after that first report; when they cannot be compared the outcome is `unknown`.

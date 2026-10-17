@@ -1027,6 +1027,89 @@ test_scout_with_report_records_reported() {
   pass "a scout that left its report records reported and a zero steer count"
 }
 
+# A no-mistakes run whose PR merged once every step before ci passed, and that
+# the worker then aborted while ci still monitored the PR, ends cancelled; the
+# capability log must read it as the pass it was, not a failure.
+cancelled_after_pr_axi_status_toon() {  # <branch> <head> <pr-step-status>
+  cat <<EOF
+run:
+  id: "01RUN"
+  branch: $1
+  status: cancelled
+  head: $2
+  pr: "https://github.com/example/repo/pull/7"
+  findings: none
+  steps[9]{step,status,findings,duration_ms}:
+    intent,completed,0,10
+    rebase,completed,0,10
+    review,completed,0,10
+    test,completed,0,10
+    document,completed,0,10
+    lint,completed,0,10
+    push,completed,0,10
+    pr,$3,0,10
+    ci,failed,0,10
+outcome: cancelled
+error: "cancelled: aborted by user"
+EOF
+}
+
+cancelled_after_pr_case() {  # <case-name> <merged:0|1> <pr-step-status> [earlier-row]
+  local case_dir head short
+  case_dir=$(make_case "$1")
+  write_meta "$case_dir" no-mistakes ship
+  printf '%s\n' harness=claude model=opus effort=high >> "$case_dir/state/task-x1.meta"
+  : > "$case_dir/state/task-x1.steers"
+  wt_commit_file "$case_dir" feature.txt hello "add feature"
+  append_pr_meta_for_current_head "$case_dir"
+  head=$(git -C "$case_dir/wt" rev-parse HEAD)
+  short=$(git -C "$case_dir/wt" rev-parse --short=8 HEAD)
+  if [ "$2" = 1 ]; then
+    add_gh_pr_merged_for_head "$case_dir" "$head"
+  else
+    land_on_origin_main "$case_dir" feature.txt hello
+  fi
+  FM_FAKE_AXI_STATUS="$(cancelled_after_pr_axi_status_toon fm/task-x1 "$short" "$3")" \
+  FM_FAKE_NM_RUNS_LIST="$(ledger_row cancelled fm/task-x1 "$short" 2026-10-17 02:48 https://github.com/example/repo/pull/7)${4:+
+$4}" \
+    run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" \
+    || fail "$1: teardown failed: $(cat "$case_dir/stderr")"
+  capability_line "$case_dir"
+}
+
+test_cancelled_run_after_merged_pr_records_pass() {
+  local line
+  line=$(cancelled_after_pr_case capability-cancelled-merged 1 completed)
+  case "$line" in
+    *'|ship|claude|opus|high|green|0|0') ;;
+    *) fail "a run cancelled after its PR step completed and its PR merged should record green|0, got: $line" ;;
+  esac
+  line=$(cancelled_after_pr_case capability-cancelled-merged-fixed 1 completed \
+    "$(ledger_row failed fm/task-x1 d7bf67d7 2026-10-16 03:37)")
+  case "$line" in
+    *'|ship|claude|opus|high|fixed|1|0') ;;
+    *) fail "the same pass after one earlier attempt should record fixed|1, got: $line" ;;
+  esac
+  pass "a run cancelled after its PR step completed and its PR merged records a pass"
+}
+
+test_cancelled_run_without_merged_pr_stays_failed() {
+  local line
+  # The work landed on main, but no merged PR proves this run delivered it.
+  line=$(cancelled_after_pr_case capability-cancelled-unmerged 0 completed)
+  case "$line" in
+    *'|ship|claude|opus|high|failed||0') ;;
+    *) fail "a cancelled run with no merged PR must stay failed, got: $line" ;;
+  esac
+  # The PR merged, but this run was cancelled before its own PR step completed.
+  line=$(cancelled_after_pr_case capability-cancelled-before-pr 1 pending)
+  case "$line" in
+    *'|ship|claude|opus|high|failed||0') ;;
+    *) fail "a run cancelled before its PR step completed must stay failed, got: $line" ;;
+  esac
+  pass "a cancelled run without a merged PR from its own PR step stays failed"
+}
+
 test_no_mistakes_origin_remote_allows() {
   local case_dir rc
   case_dir=$(make_case nm-origin)
@@ -5546,6 +5629,8 @@ test_direct_pr_merged_as_delivered_records_merged
 test_pushed_but_unlanded_work_keeps_outcome_unknown
 test_untimed_ready_report_keeps_outcome_unknown
 test_scout_with_report_records_reported
+test_cancelled_run_after_merged_pr_records_pass
+test_cancelled_run_without_merged_pr_stays_failed
 test_no_mistakes_origin_remote_allows
 test_no_mistakes_truly_unpushed_refuses
 test_local_only_force_overrides_unpushed

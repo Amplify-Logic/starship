@@ -3813,6 +3813,25 @@ case "$CAP_OUTCOME" in
     ;;
 esac
 
+# A failed outcome whose newest attempt was cancelled after its own pr step
+# completed passed when that PR merged: firstmate merges once every step before
+# ci passed, then the worker aborts the run still monitoring ci. The run detail
+# and the merge proof are read bounded while the worktree still exists.
+capability_cancelled_run_landed() {
+  local status
+  teardown_owns_worktree && [ -d "$WT" ] || return 1
+  status=$(fm_nm_run "$WT" "$NM_TEARDOWN_TIMEOUT" axi status)
+  fm_capability_run_reached_pr "$CAP_BRANCH" "$status" || return 1
+  pr_is_merged "$CAP_BRANCH"
+}
+if [ "$CAP_OUTCOME" = failed ] \
+  && fm_run_bash_timeout 20 capability_cancelled_run_landed >/dev/null 2>&1; then
+  CAP_EVIDENCE=$(fm_capability_outcome_from_runs "$CAP_BRANCH" "$CAP_RUNS" 1)
+  CAP_OUTCOME=${CAP_EVIDENCE%%|*}
+  CAP_FIX_ROUNDS=${CAP_EVIDENCE#*|}
+  case "$CAP_FIX_ROUNDS" in ''|*[!0-9]*) CAP_FIX_ROUNDS= ;; esac
+fi
+
 # A branch that moved after the ready report was revised only when those moves
 # changed its content: the patch-ids of its branch-only commits at the ready-time
 # head and at the final head are compared, so a pure rebase stays merged. Branch-
