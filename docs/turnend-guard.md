@@ -233,6 +233,7 @@ A watcher wedged mid-cycle can therefore no longer refuse every replacement inde
 `bin/fm-watch.sh`'s header owns the exact wording and the survives-TERM fallback.
 Below that bound a stale beacon alone does not end an attached arm's watch of a live, identity-matched holder; a changed lock can end it sooner.
 At the bound the arm reports a typed stalled-holder failure so its owner's retry can replace the holder.
+After a host sleep, which froze the holder and the arm together, the arm measures that age from its own resume rather than across the sleep.
 `fm_watcher_stall_bound` in `bin/fm-wake-lib.sh` owns the shared derivation; `bin/fm-watch-arm.sh`'s header owns the exact attached-arm close behavior.
 
 The auto-arm hook additionally exports its resolved `FM_GUARD_GRACE` when it forks `bin/fm-watch-arm.sh`.

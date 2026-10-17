@@ -390,6 +390,107 @@ test_attached_arm_hands_a_stalled_holder_to_its_replacement() {
   pass "watch-arm: an attached arm hands a holder stalled past the bound to its owner's replacement"
 }
 
+# A host sleep freezes the holder and the attached arm together while the wall
+# clock runs on, so the beacon reads far past the stall bound the moment they
+# wake. The arm usually resumes first. It must restart the holder's stall clock
+# at the resume instead of failing a healthy holder that has not had a chance to
+# beat yet, which left no one following that holder's next wake.
+test_attached_arm_survives_a_host_sleep() {
+  local dir state fakebin out armout status i armout_resumed arm_followed
+  dir=$(make_case attached-host-sleep)
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  out="$dir/watch.out"
+  armout="$dir/arm.out"
+  start_seed_watcher "$state" "$fakebin" "$out" 1
+  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_ARM_ATTACH_POLL=0.1 \
+    FM_ARM_CONFIRM_TIMEOUT=1 FM_GUARD_GRACE=4 FM_WATCHER_STALL_BOUND=12 \
+    FM_ARM_SUSPEND_GAP=2 "$WATCH_ARM" > "$armout" &
+  ARM_PID=$!
+  i=0
+  while [ "$i" -lt 80 ]; do
+    grep -qF "watcher: attached pid=$SEED_PID" "$armout" 2>/dev/null && break
+    sleep 0.1
+    i=$((i + 1))
+  done
+  grep -qF "watcher: attached pid=$SEED_PID" "$armout" \
+    || fail "arm did not attach to the live watcher: $(cat "$armout")"
+
+  # The host sleeps: both processes stop, and an hour of wall clock passes
+  # over the beacon while neither runs.
+  kill -STOP "$SEED_PID" "$ARM_PID"
+  sleep 3
+  fm_touch_epoch "$(( $(date +%s) - 3600 ))" "$state/.last-watcher-beat"
+  # The arm wakes first and polls while the holder is still frozen.
+  kill -CONT "$ARM_PID"
+  sleep 1.5
+  arm_followed=0
+  is_live_non_zombie "$ARM_PID" && arm_followed=1
+  armout_resumed=$(cat "$armout")
+  kill -CONT "$SEED_PID"
+  [ "$arm_followed" = 1 ] || fail "attached arm ended as soon as the host woke: $armout_resumed"
+  assert_not_contains "$armout_resumed" 'watcher: FAILED' \
+    "attached arm read the sleep as a stall of the holder it follows"
+
+  # The holder resumes and delivers a wake, and the arm still reports it.
+  printf 'needs-decision: which export format?\n' > "$state/demo.status"
+  wait_for_exit "$SEED_PID" 150
+  grep -q '^signal:' "$out" || fail "resumed holder did not surface the signal wake: $(cat "$out")"
+  wait_for_exit "$ARM_PID" 150
+  status=$?
+  ! grep -qF 'watcher: FAILED' "$armout" \
+    || fail "attached arm failed after the host woke: $(cat "$armout")"
+  grep -q '^signal:' "$armout" \
+    || fail "attached arm did not report the resumed holder's wake: $(cat "$armout")"
+  expect_code 0 "$status" "an attached arm that slept with its holder must close with its wake"
+  pass "watch-arm: an attached arm restarts the stall clock after a host sleep and reports the holder's wake"
+}
+
+# The resume restarts the stall clock; it does not stop it. A holder that
+# never beats again after the host wakes is still handed to the owner's retry
+# once the stall bound has passed since the resume.
+test_attached_arm_still_fails_a_holder_stalled_after_a_host_sleep() {
+  local dir state fakebin armout holder identity status resumed_at ended_at
+  dir=$(make_case attached-sleep-then-stall)
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  armout="$dir/arm.out"
+  sleep 300 &
+  holder=$!
+  identity=$(FM_STATE_OVERRIDE="$state" bash -c '. "$1"; fm_pid_identity "$2"' _ "$ROOT/bin/fm-wake-lib.sh" "$holder") \
+    || fail "could not identify the fake holder"
+  mkdir -p "$state/.watch.lock"
+  printf '%s\n' "$holder" > "$state/.watch.lock/pid"
+  printf '%s\n' "$dir" > "$state/.watch.lock/fm-home"
+  printf '%s\n' "$WATCH" > "$state/.watch.lock/watcher-path"
+  printf '%s\n' "$identity" > "$state/.watch.lock/pid-identity"
+  : > "$state/.last-watcher-beat"
+
+  PATH="$fakebin:$PATH" FM_HOME="$dir" FM_STATE_OVERRIDE="$state" FM_ARM_ATTACH_POLL=0.1 \
+    FM_ARM_CONFIRM_TIMEOUT=1 FM_GUARD_GRACE=60 FM_WATCHER_STALL_BOUND=6 \
+    FM_ARM_SUSPEND_GAP=2 "$WATCH_ARM" > "$armout" &
+  ARM_PID=$!
+  wait_for_file_text "$armout" "watcher: attached pid=$holder" \
+    || fail "arm did not attach to the fresh holder: $(cat "$armout")"
+  kill -STOP "$ARM_PID"
+  sleep 3
+  fm_touch_epoch "$(( $(date +%s) - 3600 ))" "$state/.last-watcher-beat"
+  resumed_at=$(date +%s)
+  kill -CONT "$ARM_PID"
+  wait_for_exit "$ARM_PID" 300
+  status=$?
+  ended_at=$(date +%s)
+  kill "$holder" 2>/dev/null || true
+  wait "$holder" 2>/dev/null || true
+  grep -Eq "^watcher: FAILED - attached watcher pid=$holder stalled " "$armout" \
+    || fail "attached arm did not hand the holder that never beat again to its owner: $(cat "$armout")"
+  [ "$status" -ne 0 ] && [ "$status" -ne 124 ] \
+    || fail "stalled-holder close did not exit nonzero (status $status)"
+  [ $((ended_at - resumed_at)) -ge 5 ] \
+    || fail "attached arm failed the holder $((ended_at - resumed_at))s after the resume, before the 6s stall bound"
+  pass "watch-arm: a holder that never beats after a host sleep is still failed once the stall bound passes"
+}
+
 test_rearm_resurfaces_durable_queue_and_remote_open_decision() {
   local dir home state fakebin result armout drainout status watcher_pid sequence generation decision_recovery_arm decision_successor
   dir=$(make_case rearm-resurface)
@@ -1723,6 +1824,8 @@ test_reaper_stops_a_tracked_watcher
 test_attached_arm_still_fails_on_a_wake_it_did_not_deliver
 test_attached_arm_follows_a_slow_live_holder
 test_attached_arm_hands_a_stalled_holder_to_its_replacement
+test_attached_arm_survives_a_host_sleep
+test_attached_arm_still_fails_a_holder_stalled_after_a_host_sleep
 test_rearm_resurfaces_durable_queue_and_remote_open_decision
 test_slow_rearm_recovery_is_still_surfaced
 test_marker_publish_failure_retains_recovery_evidence

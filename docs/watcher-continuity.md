@@ -111,7 +111,8 @@ After each non-actionable arm close, the hook rechecks the identity-matched watc
 The beacon is `state/.last-watcher-beat`, which only the watcher process touches.
 
 - A cycle-end failure is benign when that live-watcher predicate is true.
-  In that case the hook suppresses the arm output and continues silently.
+  In that case the hook suppresses the arm output, resets the failure episode, and spends its next bounded attempt attaching to that watcher, because no other owner would deliver that watcher's next wake to an idle session.
+  Only when no attempt remains does it continue silently.
 - Only an exhausted failure with no verified watcher commits one last-resort notice for the continuous failure episode.
 - A refused notice commit stays silent for a later retry.
 - After a successful notice, later Stop cycles exit 2 without repeating it until the turn-end guard consumes the attended fail-open.
@@ -197,7 +198,7 @@ It enters its poll loop immediately and keeps scanning signals, stale panes, and
 ### Manual recovery and other harnesses
 
 - The model no longer re-arms after ordinary wakes.
-- No PreToolUse hook denies fleet commands based on watcher status.
+- The one PreToolUse watcher check, the Claude continuity gate in [`arm-pretool-check.md`](arm-pretool-check.md#claude-continuity-gate), denies fleet commands only on a genuine outage by the Claude model's own verdict, never in the gap between watcher cycles.
 - A genuine auto-arm failure describes the automatic mechanism as broken and never directs a routine manual background arm.
 - Terminal arm-output classification (`started`, `attached`, or `FAILED`) remains defense in depth for the manual recovery path.
 - Codex retains its bounded foreground checkpoint protocol.

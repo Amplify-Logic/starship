@@ -45,7 +45,11 @@
 # keeps following it, as a started arm waits out a slow child, until the lock
 # changes or the beacon reaches fm_watcher_stall_bound (bin/fm-wake-lib.sh), the
 # age at which the watcher's own re-arm evicts it; there it fails with the
-# stalled-holder line so its owner's retry replaces the holder. A cycle
+# stalled-holder line so its owner's retry replaces the holder. A gap of at least
+# FM_ARM_SUSPEND_GAP seconds (default 60) between two of its own clock reads
+# means this arm was suspended, as by a host sleep that froze the holder too, so
+# the stall age restarts at that resume instead of counting wall-clock time no
+# process ran through. A cycle
 # that ends with no reason line and no healthy successor is resolved against the
 # watcher's identity-bound delivery record: a matching record reports that wake
 # and exits 0, and only a cycle that delivered nothing is the typed nonzero
@@ -164,6 +168,10 @@ ATTACH_POLL=${FM_ARM_ATTACH_POLL:-0.5}
 # The beacon age at which the watcher's own re-arm evicts a live holder; an
 # attached arm follows a slow holder up to it (attach_and_wait).
 STALL_BOUND=$(fm_watcher_stall_bound)
+# A gap this long between two attached clock reads means this arm was suspended
+# with the host, so the holder's stall age restarts at the resume (attach_and_wait).
+SUSPEND_GAP=${FM_ARM_SUSPEND_GAP:-60}
+case "$SUSPEND_GAP" in ''|*[!0-9]*|0) SUSPEND_GAP=60 ;; esac
 CYCLE_LOG="$STATE/.watch-cycle-exits.log"
 CYCLE_LOG_LOCK="$STATE/.watch-cycle-exits.lock"
 CYCLE_LOG_MAX_BYTES=${FM_WATCH_CYCLE_LOG_MAX_BYTES:-262144}
@@ -417,9 +425,25 @@ attached_holder_live() {
 # a started arm tolerates by waiting on its child, so this arm keeps following it.
 # Only at the stall bound, where the watcher's own re-arm evicts a live holder,
 # does it fail with the typed stalled-holder line so its owner's retry replaces it.
+# A host sleep freezes the holder and this arm alike while the wall clock runs
+# on, so after a gap of SUSPEND_GAP between two clock reads the stall age counts
+# from the resume. The clock is read at the top of each poll and again just
+# before the age test, so a suspension anywhere in the poll is caught.
+attach_poll_now=0
+attach_poll_resumed=0
+attach_poll_clock() {
+  local now
+  now=$(date +%s)
+  [ $((now - attach_poll_now)) -lt "$SUSPEND_GAP" ] || attach_poll_resumed=$now
+  attach_poll_now=$now
+}
+
 attach_and_wait() {
   local attached_pid=$1 age
+  attach_poll_now=$(date +%s)
+  attach_poll_resumed=0
   while :; do
+    attach_poll_clock
     if healthy_watcher; then
       if [ "$HEALTHY_PID" != "$attached_pid" ] || [ "$HEALTHY_IDENTITY" != "$cycle_watcher_identity" ]; then
         cycle_log_append unknown unknown lock-replaced "attached:$HEALTHY_PID"
@@ -431,7 +455,9 @@ attach_and_wait() {
       continue
     fi
     if attached_holder_live "$attached_pid"; then
+      attach_poll_clock
       age=$(fm_path_age "$BEAT")
+      [ "$age" -le $((attach_poll_now - attach_poll_resumed)) ] || age=$((attach_poll_now - attach_poll_resumed))
       if [ "$age" -lt "$STALL_BOUND" ]; then
         sleep "$ATTACH_POLL"
         continue

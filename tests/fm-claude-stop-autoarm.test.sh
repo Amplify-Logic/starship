@@ -220,6 +220,21 @@ printf 'signal: task.status done: fixture peer cycle ended\n'
 exit 0
 SH
       ;;
+    benign-then-followed)
+      # The first arm ends without a wake while a healthy watcher holds the
+      # home (the shape of an attached arm that misread a host sleep as a
+      # stall); a later arm attaches to that watcher and reports its wake.
+      cat >> "$dir/bin/fm-watch-arm.sh" <<'SH'
+if [ "$(wc -l < "$FM_HOME/state/arm-ran" | tr -d ' ')" -le 1 ]; then
+  printf 'watcher: FAILED - attached watcher pid=1 stalled (beacon 4245s at or past hard bound 900s)\n'
+  exit 1
+fi
+printf 'watcher: attached pid=%s (beacon 2s)\n' "$$"
+printf 'pending:downtime:fixture-generation\n' > "$FM_HOME/state/.watcher-down"
+printf 'signal: task.status done: fixture followed cycle ended\n'
+exit 0
+SH
+      ;;
     *)
       echo "unknown arm fixture: $kind" >&2
       return 2
@@ -645,6 +660,38 @@ test_post_alarm_actionable_close_is_suppressed() {
   pass "auto-arm: post-alarm actionable outcomes cannot continue or reset failure state"
 }
 
+# A close with no wake while a healthy watcher holds the home is not the end of
+# supervision: that watcher's next wake still needs someone to deliver it. The
+# hook used to exit silently there, so the watcher's next close sat in the queue
+# with no rewake and no successor until the captain happened to type. It must
+# attach to that watcher and deliver the wake it ends with, even inside an
+# episode whose attended fail-open was already consumed.
+test_benign_cycle_end_with_live_watcher_follows_it() {
+  local dir out status pid identity
+  dir=$(make_primary_dir "$TMP_ROOT/benign-follow")
+  : > "$dir/state/task.meta"
+  write_arm_fixture "$dir" benign-then-followed
+  sleep 60 &
+  pid=$!
+  identity=$(watcher_identity "$dir" "$pid") || fail "could not identify live watcher holder for benign close"
+  record_watcher_lock "$dir" "$pid" "$identity"
+  touch "$dir/state/.last-watcher-beat"
+  : > "$dir/state/.claude-autoarm-failure-notified"
+  : > "$dir/state/.claude-autoarm-failure-alarmed"
+  out=$(run_autoarm "$dir" 2>/dev/null); status=$?
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  expect_code 2 "$status" "the healthy watcher's wake must rewake the session"
+  assert_contains "$out" "signal: task.status done: fixture followed cycle ended" "rewake must carry the followed watcher's wake"
+  [ "$(wc -l < "$dir/state/arm-ran" | tr -d ' ')" -eq 2 ] \
+    || fail "the hook must run one more arm to follow the healthy watcher: $(cat "$dir/state/arm-ran")"
+  [ -s "$dir/state/successor-ran" ] || fail "the followed wake must still start a handling successor"
+  [ ! -e "$dir/state/.claude-autoarm-failure-alarmed" ] \
+    || fail "a healthy watcher must reset the failure episode before the followed wake is delivered"
+  [ "$(epoch_outcome "$dir")" = rewake ] || fail "epoch must record outcome=rewake, got: $(epoch_outcome "$dir")"
+  pass "auto-arm: a close without a wake beside a healthy watcher follows that watcher to its wake"
+}
+
 test_benign_cycle_end_with_live_watcher_is_silent() {
   local dir out out2 status status2 pid identity
   dir=$(make_primary_dir "$TMP_ROOT/benign-live")
@@ -667,11 +714,14 @@ test_benign_cycle_end_with_live_watcher_is_silent() {
   [ -z "$out" ] || fail "benign live cycle produced an operator notice: $out"
   [ -z "$out2" ] || fail "next benign live cycle produced an operator notice: $out2"
   [ "$(epoch_outcome "$dir")" = clean ] || fail "benign live cycle must record outcome=clean, got: $(epoch_outcome "$dir")"
-  [ "$(wc -l < "$dir/state/arm-ran" | tr -d ' ')" -eq 2 ] || fail "the next Stop-owned cycle must run its own bounded arm"
+  # Each Stop-owned cycle tries to follow the healthy watcher with its remaining
+  # bounded attempt before it settles silently.
+  [ "$(wc -l < "$dir/state/arm-ran" | tr -d ' ')" -eq 4 ] \
+    || fail "each Stop-owned cycle must run its own bounded arms: $(wc -l < "$dir/state/arm-ran" | tr -d ' ')"
   [ ! -e "$dir/state/.turnend-claude-blocks" ] || fail "benign live cycle must clear the prior block budget"
   [ ! -e "$dir/state/.claude-autoarm-failure-notified" ] || fail "benign live cycle must not leave a failure-notice marker"
   [ ! -e "$dir/state/.claude-autoarm-failure-alarmed" ] || fail "benign live cycle must not leave an attended-alarm marker"
-  pass "auto-arm: benign cycle end with a live watcher and fresh beacon stays silent across the next cycle"
+  pass "auto-arm: benign cycle ends with a live watcher and fresh beacon stay silent within the bounded attempts"
 }
 
 test_positive_recovery_budget_contention_preserves_episode() {
@@ -1785,6 +1835,7 @@ test_failed_cycles_notify_once_and_keep_retrying
 test_failure_notice_marker_write_refuses_delivery_and_retries
 test_unverified_clean_close_exhausts_retries
 test_post_alarm_actionable_close_is_suppressed
+test_benign_cycle_end_with_live_watcher_follows_it
 test_benign_cycle_end_with_live_watcher_is_silent
 test_positive_recovery_budget_contention_preserves_episode
 test_owner_mutex_contention_preserves_failure_episode_reset

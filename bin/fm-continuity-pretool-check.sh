@@ -6,9 +6,13 @@
 # bin/fm-watch-arm.sh, the independently fail-closed bin/fm-teardown.sh, or the
 # exact literal "bin/fm-supervision-sentinel.sh enable" that the session-start
 # disarm banner names, and only when the active primary home has task metadata
-# in flight but no identity-matched live watcher with a fresh beacon holds the
-# home lock. Ordinary shell commands, recovery commands, healthy supervision,
-# fleet-idle homes, and child worktrees are always allowed.
+# in flight and supervision is down by the Claude Stop-owned model's own
+# verdict (fm_watcher_supervision_verdict for the autoarm model in
+# bin/fm-wake-lib.sh owns it). The watcher closes on every wake and the next
+# cycle starts at the handoff or the turn end, so a fresh beacon with no
+# watcher holding the lock is that cycle working, not an outage, and is never
+# told to arm by hand. Ordinary shell commands, recovery commands, healthy
+# supervision, fleet-idle homes, and child worktrees are always allowed.
 #
 # The recovery set is keyed on the command word actually executed, so a direct
 # bin/fm-bootstrap.sh stays denied while the bin/fm-bootstrap.sh that
@@ -38,7 +42,8 @@
 # Input is Claude PreToolUse JSON on stdin. Tests may pass --command directly.
 # Malformed transport, missing jq/Node, a missing classifier, or classifier
 # failure all fail open. A deny writes Claude's hook decision to stderr only and
-# exits 2; its message names the watcher check fm_watcher_healthy failed.
+# exits 2; its message names the watcher check the PID-strict fm_watcher_healthy
+# failed.
 set -u
 
 COMMAND=
@@ -105,27 +110,15 @@ fm_primary_scope_matches "$FM_ROOT" "$STATE" || exit 0
 if fm_watcher_healthy "$STATE" "$WATCH" "${FM_GUARD_GRACE:-300}" "$FM_HOME"; then
   exit 0
 fi
+# The PID-strict check names what failed; the model-aware verdict decides
+# whether that is an outage. This gate is registered only for Claude, so it
+# asks for the autoarm model rather than detecting the harness.
+FAILED_CHECK=${FM_WATCHER_UNHEALTHY_CHECK:-unknown}
+FM_SUPERVISION_MODEL=autoarm fm_watcher_supervision_verdict "$STATE" "$WATCH" "${FM_GUARD_GRACE:-300}" "$FM_HOME" "$FM_ROOT"
+[ "$FM_WATCHER_VERDICT_OK" = true ] && exit 0
 fm_supervision_status "$STATE" "${FM_GUARD_GRACE:-300}"
 [ "$FM_SUP_IN_FLIGHT" -gt 0 ] || exit 0
-# Name the watcher check that failed. A running watcher with a fresh beat that
-# fails only a lock check (such as an identity mismatch) is not an outage, and a
-# plain re-arm leaves it in place, so its deny says so and points to --restart.
-FAILED_CHECK=${FM_WATCHER_UNHEALTHY_CHECK:-unknown}
-case "$FAILED_CHECK" in
-  watcher-pid-alive*|watcher-beat-fresh*|unknown) LIVE_WATCHER=false ;;
-  *) LIVE_WATCHER=$FM_SUP_WATCHER_FRESH ;;
-esac
-if [ "$LIVE_WATCHER" = true ]; then
-  LEAD="The watcher is running with a fresh beat but its identity check failed: $FAILED_CHECK. Fleet commands stay gated until it is restarted."
-  HOLDER_SENTENCE=""
-  REARM="restart it with bin/fm-watch-arm.sh --restart"
-  RESTART_SENTENCE="; restart the watcher with bin/fm-watch-arm.sh --restart as a tracked Claude background task"
-else
-  LEAD="$FM_SUP_OUTAGE_SUMMARY Failed watcher check: $FAILED_CHECK."
-  HOLDER_SENTENCE=" No live watcher holds this home lock."
-  REARM="re-arm with bin/fm-watch-arm.sh"
-  RESTART_SENTENCE=""
-fi
+LEAD="$FM_SUP_OUTAGE_SUMMARY Failed watcher check: $FAILED_CHECK."
 
 # This hook can be the first surviving process to observe the outage, so it
 # records the durable evidence the host sentinel later alerts on. Marker-only:
@@ -153,10 +146,10 @@ REASON_CODE=${REST#*"$TAB"}
 [ "$REASON_CODE" != "$REST" ] || REASON_CODE=""
 case "$REASON_CODE" in
   unsafe-teardown)
-    REASON="[watcher-continuity] $LEAD$HOLDER_SENTENCE During recovery only the ordinary literal bin/fm-teardown.sh is allowed, so drop --force and any shell-expanded arguments and retry the literal invocation$RESTART_SENTENCE (blocked: $BLOCKED_SCRIPT)"
+    REASON="[watcher-continuity] $LEAD No live watcher holds this home lock. During recovery only the ordinary literal bin/fm-teardown.sh is allowed, so drop --force and any shell-expanded arguments and retry the literal invocation (blocked: $BLOCKED_SCRIPT)"
     ;;
   unsafe-sentinel)
-    REASON="[watcher-continuity] $LEAD During recovery only the literal bin/fm-supervision-sentinel.sh enable is allowed; arm, disarm, check, and every other host-sentinel invocation stays blocked until supervision is healthy$RESTART_SENTENCE (blocked: $BLOCKED_SCRIPT)"
+    REASON="[watcher-continuity] $LEAD During recovery only the literal bin/fm-supervision-sentinel.sh enable is allowed; arm, disarm, check, and every other host-sentinel invocation stays blocked until supervision is healthy (blocked: $BLOCKED_SCRIPT)"
     ;;
   midsession-session-start)
     if [ "$LOCK_RELATION" = ancestry ]; then
@@ -164,12 +157,12 @@ case "$REASON_CODE" in
     else
       HOLDER_CLAUSE="Another live session holds the home session lock, so the once-per-session bin/fm-session-start.sh belongs to that session and is not a recovery action here."
     fi
-    REASON="[watcher-continuity] $LEAD$HOLDER_SENTENCE $HOLDER_CLAUSE Drain wakes with bin/fm-wake-drain.sh, the safe mid-session action; use fail-closed bin/fm-teardown.sh for completed tasks when needed, then $REARM as a tracked Claude background task before running other fleet commands (blocked: $BLOCKED_SCRIPT)"
+    REASON="[watcher-continuity] $LEAD No live watcher holds this home lock. $HOLDER_CLAUSE Drain wakes with bin/fm-wake-drain.sh, the safe mid-session action; use fail-closed bin/fm-teardown.sh for completed tasks when needed, then re-arm with bin/fm-watch-arm.sh as a tracked Claude background task before running other fleet commands (blocked: $BLOCKED_SCRIPT)"
     ;;
   *)
     SESSION_START_CLAUSE=" run the once-per-session bin/fm-session-start.sh instead only if you have not already run it earlier this session;"
     [ "$LOCK_RELATION" = free ] || SESSION_START_CLAUSE=""
-    REASON="[watcher-continuity] $LEAD$HOLDER_SENTENCE Drain wakes with bin/fm-wake-drain.sh, the safe mid-session action;$SESSION_START_CLAUSE use fail-closed bin/fm-teardown.sh for completed tasks when needed, then $REARM as a tracked Claude background task before running other fleet commands (blocked: $BLOCKED_SCRIPT)"
+    REASON="[watcher-continuity] $LEAD No live watcher holds this home lock. Drain wakes with bin/fm-wake-drain.sh, the safe mid-session action;$SESSION_START_CLAUSE use fail-closed bin/fm-teardown.sh for completed tasks when needed, then re-arm with bin/fm-watch-arm.sh as a tracked Claude background task before running other fleet commands (blocked: $BLOCKED_SCRIPT)"
     ;;
 esac
 ESCAPED=$(printf '%s' "$REASON" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr '\n' ' ')

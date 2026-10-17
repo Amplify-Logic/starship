@@ -85,7 +85,8 @@
 #     ledger write; the failure notice additionally requires its marker write.
 #     A refused generation exits 0 silently even after printing. A close that
 #     reports no actionable reason is benign when a live identity-matched
-#     watcher still has a fresh beacon.
+#     watcher still has a fresh beacon; that watcher's next wake still needs
+#     this hook, so a remaining bounded attempt attaches to it.
 #   - Failure handling: a typed failure is rechecked against the same live,
 #     fresh watcher predicate and retried a bounded number of times in this
 #     hook. Only an exhausted failure with no verified watcher emits one
@@ -461,10 +462,18 @@ while [ "$attempt" -lt "$AUTOARM_ATTEMPTS" ]; do
   fi
 
   # A non-actionable close is benign when another verified watcher already owns
-  # this home and is still beating within the shared grace window.
+  # this home and is still beating within the shared grace window. That watcher
+  # still needs this hook to deliver its next wake, or its close would wait for
+  # unrelated input, so while attempts remain the healthy sighting resets the
+  # failure episode and the next arm attaches to that watcher.
   if fm_watcher_healthy "$STATE" "$SCRIPT_DIR/fm-watch.sh" "$GRACE" "$FM_HOME"; then
     HEALTHY=1
-    break
+    [ "$attempt" -lt "$AUTOARM_ATTEMPTS" ] || break
+    fm_autoarm_reset_owned "$STATE" "$MY_GEN" || break
+    HEALTHY=0
+    [ -z "$OUT" ] || rm -f "$OUT" 2>/dev/null || true
+    OUT=
+    continue
   fi
   [ "$attempt" -lt "$AUTOARM_ATTEMPTS" ] || break
   [ -z "$OUT" ] || rm -f "$OUT" 2>/dev/null || true
