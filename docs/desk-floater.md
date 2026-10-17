@@ -4,6 +4,8 @@ A Mac-native always-on-top push-to-talk control for **this** Firstmate home.
 It recreates the *feel* of a floating desk mic without depending on the
 ChatGPT/Codex desktop app.
 
+On Windows, where Starship runs inside WSL 2, the [Windows desk floater](desk-floater-windows.md) does the same through the same delivery scripts.
+
 The floater is mouth and ears only, plus a dictation keyboard you drive yourself.
 It does not spawn workers, merge, edit config, or act as a second Firstmate.
 Exactly one fleet brain remains: the primary already running in this home.

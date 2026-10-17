@@ -417,6 +417,10 @@
       "audience": "maintainer-architecture"
     },
     {
+      "path": "docs/desk-floater-windows.md",
+      "audience": "operator-current"
+    },
+    {
       "path": "docs/desk-floater.md",
       "audience": "operator-current"
     },

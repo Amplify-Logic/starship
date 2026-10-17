@@ -10,6 +10,9 @@ name: Windows (WSL 2) and Linux server kit
 #     WSL's default localhost forwarding.
 #   kit on a server: the same steps in a fresh ubuntu:24.04 container on
 #     ubuntu-latest, headless with no desktop, minus the Windows side.
+#   floater on WSL 2: the Windows desk floater (docs/desk-floater-windows.md)
+#     built with Windows' own .NET Framework compiler from inside WSL, as a
+#     teammate's install builds it, and its decisions and WSL side tested.
 #   portable test shards inside WSL 2: the same lanes ci.yml runs on Ubuntu,
 #     each on its own Windows runner. fm-test-run.sh refuses a serial lane
 #     whose "of11" no longer matches its shard count, so a shard change fails
@@ -18,9 +21,10 @@ name: Windows (WSL 2) and Linux server kit
 #     steps continue on error and a failure shows as a warning, while both kit
 #     lanes stay blocking.
 # Standard runners are free on this public repository. It runs weekly and by
-# hand, and also on pull requests that change this workflow or the setup
-# script: that is how a change to the setup kit gets its Windows and Ubuntu
-# proof before merge, at no cost on this public repository.
+# hand, and also on pull requests that change this workflow, the setup
+# script or the Windows desk floater: that is how a change to the setup kit or
+# the floater gets its Windows and Ubuntu proof before merge, at no cost on
+# this public repository.
 
 on:
   schedule:
@@ -30,6 +34,10 @@ on:
     paths:
       - .github/workflows/windows-wsl.yml
       - bin/fm-linux-setup.sh
+      - bin/fm-desk-floater-windows.sh
+      - bin/fm-desk-play-windows.sh
+      - desk-floater-windows/**
+      - tests/fm-desk-floater-windows.test.sh
 
 permissions:
   contents: read
@@ -49,6 +57,7 @@ jobs:
         kind: [wsl]
         lane:
           - kit
+          - floater
           - portable-parallel-1
           - portable-parallel-2
           - portable-serial-1of11
@@ -142,7 +151,23 @@ jobs:
           git -C ~/starship log -1 --oneline
 
       - name: Run the setup script
+        if: matrix.lane != 'floater'
         run: ~/starship/bin/fm-linux-setup.sh --ci
+
+      # The floater needs only Ubuntu's own python3 inside WSL and the .NET
+      # Framework compiler every Windows has, so it skips the setup script.
+      - name: Build and test the Windows desk floater
+        if: matrix.lane == 'floater'
+        run: |
+          cd ~/starship
+          out=$(bash tests/fm-desk-floater-windows.test.sh 2>&1) || { printf '%s\n' "$out"; exit 1; }
+          printf '%s\n' "$out"
+          printf '%s\n' "$out" | grep -q 'C# self-test passes' \
+            || { echo "::error::the C# self-test did not run with Windows' own compiler"; exit 1; }
+          bin/fm-desk-floater-windows.sh install --no-start
+          bin/fm-desk-floater-windows.sh status | tee ~/floater-status
+          grep -qx 'installed: yes' ~/floater-status
+          bin/fm-desk-floater-windows.sh uninstall
 
       - name: Install the first mate's toolchain as it would after consent
         if: matrix.lane == 'kit'
@@ -234,7 +259,7 @@ jobs:
       # the hosted Ubuntu image.
       - name: Install the test-only tools the hosted Ubuntu image carries
         id: shard-tools
-        if: matrix.lane != 'kit'
+        if: matrix.lane != 'kit' && matrix.lane != 'floater'
         continue-on-error: true
         run: |
           cd ~/starship
@@ -246,7 +271,7 @@ jobs:
 
       - name: Run ${{ matrix.lane }} inside WSL 2
         id: shard-run
-        if: matrix.lane != 'kit'
+        if: matrix.lane != 'kit' && matrix.lane != 'floater'
         continue-on-error: true
         run: |
           cd ~/starship
@@ -254,7 +279,7 @@ jobs:
             --fail-on-gate-skip 'Pi extension typecheck prerequisite not found'
 
       - name: Report the WSL test shard without gating
-        if: matrix.lane != 'kit' && (steps.shard-tools.outcome == 'failure' || steps.shard-run.outcome == 'failure')
+        if: matrix.lane != 'kit' && matrix.lane != 'floater' && (steps.shard-tools.outcome == 'failure' || steps.shard-run.outcome == 'failure')
         shell: bash
         run: |
           msg='The ${{ matrix.lane }} WSL test shard failed. The WSL test shards are a tracked follow-up and do not gate this change.'

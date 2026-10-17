@@ -1479,6 +1479,8 @@ set -u
 dir=${FM_FAKE_HERDR_DIR:?}
 { printf 'call'; for a in "$@"; do printf '\x1f%s' "$a"; done; printf '\n'; } >> "$dir/tmux.log"
 case "$*" in
+  *'show-options -gv focus-events'*) cat "$dir/tmux-focus-events" 2>/dev/null || printf 'on\n' ;;
+  *'@fm-focus-since'*) cat "$dir/tmux-focus-since" 2>/dev/null ;;
   *'#{pane_pid}'*) cat "$dir/shell-pid" ;;
   *'#{session_id} #{window_active}#{pane_active}'*) cat "$dir/tmux-active" ;;
   *'#{pane_id}'*) printf '%%9\n' ;;
@@ -2546,11 +2548,64 @@ test_desk_voice_dictation_front_check_on_tmux() {
   pass "fm-desk-voice send: on tmux, only the active pane shown on the front terminal is in front"
 }
 
+# The Windows floater cannot name a terminal device, so it asks whether the
+# chat's tmux client has its terminal's focus (docs/desk-floater-windows.md).
+test_desk_voice_dictation_front_focused_on_tmux() {
+  local home out
+  home=$(desk_send_fixture front-focused tmux) || { desk_send_skip front-focused; return 0; }
+  printf '%s 11\n' "\$1" > "$home/fixture/tmux-active"
+  # The fake tmux server tracks focus since 1000.
+  printf '1000\n' > "$home/fixture/tmux-focus-since"
+  printf '1001 attached,focused,UTF-8\n' > "$home/fixture/tmux-clients"
+  # In front, the fake's unreadable chat input sends it on to the mailbox.
+  out=$(desk_send "$home" --front-focused -- "Status please") || fail "send failed: $out"
+  case "$out" in mailbox:\ *) ;; *) fail "a focused client on the active pane is in front, got: $out" ;; esac
+  assert_contains "$(tr '\037' ' ' < "$home/fixture/tmux.log")" "list-clients -t \$1 -F #{client_created} #{client_flags}" \
+    "the focus of the pane's own session's clients is read"
+  printf '1001 attached,UTF-8\n1002 attached,UTF-8,read-only\n' > "$home/fixture/tmux-clients"
+  out=$(desk_send "$home" --front-focused -- "Status please") || fail "send failed: $out"
+  [ "$out" = not-in-front ] || fail "no focused client must not count as in front, got: $out"
+  # focus-events turned on at 2000 in the running server: a client attached
+  # at 1500 keeps a stale focused flag, one attached at 2000 is tracked.
+  printf '2000\n' > "$home/fixture/tmux-focus-since"
+  printf '1500 attached,focused,UTF-8\n' > "$home/fixture/tmux-clients"
+  out=$(desk_send "$home" --front-focused -- "Status please") || fail "send failed: $out"
+  [ "$out" = not-in-front ] || fail "a client attached before focus tracking began must not count, got: $out"
+  printf '1500 attached,focused,UTF-8\n2000 attached,focused,UTF-8\n' > "$home/fixture/tmux-clients"
+  out=$(desk_send "$home" --front-focused -- "Status please") || fail "send failed: $out"
+  case "$out" in mailbox:\ *) ;; *) fail "a client attached once focus was tracked counts, got: $out" ;; esac
+  printf 'off\n' > "$home/fixture/tmux-focus-events"
+  out=$(desk_send "$home" --front-focused -- "Status please") || fail "send failed: $out"
+  [ "$out" = not-in-front ] || fail "without focus-events nothing counts as in front, got: $out"
+  rm -f "$home/fixture/tmux-focus-events" "$home/fixture/tmux-focus-since"
+  printf '1001 attached,focused,UTF-8\n' > "$home/fixture/tmux-clients"
+  out=$(desk_send "$home" --front-focused -- "Status please") || fail "send failed: $out"
+  [ "$out" = not-in-front ] || fail "with no record of when focus tracking began nothing counts, got: $out"
+  printf '1000\n' > "$home/fixture/tmux-focus-since"
+  printf '%s 10\n' "\$1" > "$home/fixture/tmux-active"
+  out=$(desk_send "$home" --front-focused -- "Status please") || fail "send failed: $out"
+  [ "$out" = not-in-front ] || fail "an inactive pane must not count as in front, got: $out"
+  rm -f "$home/state/.lock"
+  printf '%s 11\n' "\$1" > "$home/fixture/tmux-active"
+  out=$(desk_send "$home" --front-focused -- "Status please") || fail "send failed: $out"
+  [ "$out" = not-in-front ] || fail "no primary must not count as in front, got: $out"
+  ! grep -qF send-keys "$home/fixture/tmux.log" || fail "no keys may reach the tmux pane"
+  [ "$(inbox_count "$home")" = 2 ] || fail "only the in-front dictations may land in the mailbox"
+  desk_send_done "$home"
+  home=$(desk_send_fixture front-focused-herdr) || { desk_send_skip front-focused-herdr; return 0; }
+  out=$(desk_send "$home" --front-focused -- "Status please") || fail "send failed: $out"
+  [ "$out" = not-in-front ] || fail "a herdr primary is never in front this way, got: $out"
+  [ -z "$(herdr_calls "$home" pane send-text)" ] || fail "nothing may be typed into a herdr chat"
+  desk_send_done "$home"
+  pass "fm-desk-voice send --front-focused: only the active tmux pane of a focus-tracked client is in front"
+}
+
 test_desk_voice_dictation_refuses_bad_front_arguments() {
   local home out status
   home=$(new_home front-args)
   for args in "--front-app 0 --front-tty /dev/ttys001" "--front-app 12x --front-tty /dev/ttys001" \
-    "--front-app 12 --front-tty /tmp/x" "--front-app 12"; do
+    "--front-app 12 --front-tty /tmp/x" "--front-app 12" \
+    "--front-focused --front-app 12 --front-tty /dev/ttys001"; do
     status=0
     # shellcheck disable=SC2086
     out=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" "$DESK" send $args -- words 2>&1) || status=$?
@@ -2656,6 +2711,36 @@ test_desk_voice_shot_failure_leaves_nothing() {
   out=$(shoot_in "$home" --display 0 2>&1) || status=$?
   [ "$status" -eq 2 ] || fail "expected exit 2 for display 0, got $status: $out"
   pass "fm-desk-voice: a failed capture exits 1 and leaves no screenshot"
+}
+
+# The Windows floater takes its screenshots on Windows and hands them over.
+test_desk_voice_shot_stores_a_png_from_stdin() {
+  local home path status=0 out left first second third
+  home=$(new_home shot-stdin)
+  printf '\211PNG\r\n\032\nwindows-image' > "$home/in.png"
+  path=$(shoot_in "$home" --stdin < "$home/in.png") || fail "shot --stdin failed: $path"
+  case "$path" in
+    "$home/state/desk-voice/shots/"*.png) ;;
+    *) fail "shot --stdin path is not in the home's screenshot folder: $path" ;;
+  esac
+  cmp -s "$home/in.png" "$path" || fail "shot --stdin must keep the image exactly"
+  [ "$(mode_of "$path")" = 600 ] || fail "a handed-over screenshot must be private"
+  [ ! -e "$home/capture.log" ] || fail "shot --stdin must not capture the screen"
+  printf 'not an image' | shoot_in "$home" --stdin >/dev/null 2>&1 || status=$?
+  [ "$status" -eq 1 ] || fail "expected exit 1 for input that is not a PNG, got $status"
+  : | shoot_in "$home" --stdin >/dev/null 2>&1 || status=$?
+  [ "$status" -eq 1 ] || fail "expected exit 1 for no input, got $status"
+  left=$(find "$home/state/desk-voice/shots" -type f | wc -l | tr -d ' ')
+  [ "$left" -eq 1 ] || fail "refused input left $((left - 1)) file(s) behind"
+  status=0
+  out=$(shoot_in "$home" --stdin --display 2 < "$home/in.png" 2>&1) || status=$?
+  [ "$status" -eq 2 ] || fail "expected exit 2 for --stdin with --display, got $status: $out"
+  first=$(FM_DESK_SHOTS_KEEP=2 shoot_in "$home" --stdin < "$home/in.png") || fail "shot failed"
+  second=$(FM_DESK_SHOTS_KEEP=2 shoot_in "$home" --stdin < "$home/in.png") || fail "shot failed"
+  third=$(FM_DESK_SHOTS_KEEP=2 shoot_in "$home" --stdin < "$home/in.png") || fail "shot failed"
+  [ ! -e "$path" ] && [ ! -e "$first" ] && [ -f "$second" ] && [ -f "$third" ] \
+    || fail "handed-over screenshots are pruned to the newest like captured ones"
+  pass "fm-desk-voice: shot --stdin stores a handed-over PNG, refuses anything else, and prunes"
 }
 
 test_desk_voice_deliver_with_screenshots() {
@@ -2811,11 +2896,13 @@ test_desk_voice_dictation_sends_when_the_chat_is_in_front
 test_desk_voice_dictation_elsewhere_is_left_to_paste
 test_desk_voice_dictation_keeps_the_send_checks
 test_desk_voice_dictation_front_check_on_tmux
+test_desk_voice_dictation_front_focused_on_tmux
 test_desk_voice_dictation_refuses_bad_front_arguments
 test_desk_voice_shot_captures_the_named_display
 test_desk_voice_shot_capture_file_name_has_no_leading_dot
 test_desk_voice_shot_keeps_only_the_newest
 test_desk_voice_shot_failure_leaves_nothing
+test_desk_voice_shot_stores_a_png_from_stdin
 test_desk_voice_deliver_with_screenshots
 test_floater_swift_tests
 test_deepgram_lib_reads_dotenv_without_logging_key

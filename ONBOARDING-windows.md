@@ -151,6 +151,23 @@ When the first mate's startup checks run, it also tells you if anything sits und
 
 ---
 
+## 9. Talk to your first mate (optional)
+
+The desk floater lets you hold a key and talk to your first mate, hear its replies, dictate into any Windows app, and send it screenshots.
+Once your first mate runs, put your Deepgram key in `~/starship/.env` as a line `DEEPGRAM_API_KEY=...`, and for spoken replies put `enabled = true` in `~/starship/config/speak`.
+Then, in Ubuntu:
+
+```sh
+cd ~/starship
+bin/fm-desk-floater-windows.sh install
+```
+
+It needs no admin rights and nothing to download.
+The floater appears at the bottom right of your screen and starts with Windows from now on.
+Hold Right Alt and speak to talk to your first mate; [docs/desk-floater-windows.md](docs/desk-floater-windows.md) has the rest.
+
+---
+
 ## Working on an app from Windows
 
 - **Web preview:** a dev server started in Ubuntu (for example `pnpm web`) opens in your Windows browser at the `localhost` address it prints.

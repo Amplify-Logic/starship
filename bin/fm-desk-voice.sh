@@ -5,9 +5,10 @@
 # Usage:
 #   fm-desk-voice.sh send [--source <name>] [--image <png>]... [<transcript text...>]
 #   fm-desk-voice.sh send --front-app <pid> --front-tty <tty> [--source <name>] [<text...>]
+#   fm-desk-voice.sh send --front-focused [--source <name>] [<text...>]
 #   fm-desk-voice.sh deliver [--source <name>] [--image <png>]... [<transcript text...>]
 #   fm-desk-voice.sh ring <line>
-#   fm-desk-voice.sh shot [--display <n>]
+#   fm-desk-voice.sh shot [--display <n> | --stdin]
 #   fm-desk-voice.sh keep [--purpose firstmate|dictate] [--reason <text>] <audio-file>
 #   fm-desk-voice.sh recordings
 #   fm-desk-voice.sh retry [<saved-recording>...]
@@ -81,6 +82,16 @@
 # not in front. Once in front, every send check above still applies, so an
 # unreadable chat or a selection dialog still goes to the mailbox.
 #
+# send --front-focused is the same dictation path for the Windows floater
+# (docs/desk-floater-windows.md), which cannot name a terminal device: the
+# chat is in front when the proven primary pane is the active pane of its
+# tmux session's active window and a client attached to that session reports
+# that its terminal has focus (tmux's focused client flag, trusted only for a
+# client that attached while the tmux option focus-events was on; see
+# shown_focused). The Windows floater asks only while a terminal window is the
+# foreground window. Herdr has no such flag, so a herdr primary is never in
+# front this way.
+#
 # ring is the mid-turn doorbell other captain-input paths use: it types <line>
 # into the same proven primary pane, with every send check above, and never
 # falls back to the mailbox, because the caller has already queued its own
@@ -114,6 +125,11 @@
 # screenshots: the message becomes the transcript, if any, followed by one line
 # "Screenshots: <path> <path>...", and the JSON also lists them under "images".
 # A message may be screenshots alone.
+#
+# shot --stdin stores a PNG read from standard input instead of capturing one,
+# under the same name, folder and pruning as below; the Windows floater takes
+# its screenshots on the Windows side and hands them over this way. Input that
+# is not a PNG is refused.
 #
 # shot captures one whole display (screencapture's -D numbering, 1 = main;
 # the main display when omitted) to
@@ -683,15 +699,37 @@ EOF
   return 1
 }
 
+# True when tmux <target> is the active pane of its session's active window
+# and a client attached to that session reports that its terminal has focus.
+# tmux tracks focus only for a client that attached while focus-events was
+# on; one attached earlier keeps the focused flag it attached with forever.
+# So a client counts only when it attached after tracking began: the time in
+# the server option @fm-focus-since (set by the Windows floater's bridge,
+# bin/fm-desk-floater-windows.sh). Without it no client counts.
+shown_focused() {  # <backend> <target>
+  local info session since
+  [ "$1" = tmux ] || return 1
+  [ "$(tmux show-options -gv focus-events 2>/dev/null)" = on ] || return 1
+  info=$(tmux display-message -p -t "$2" '#{session_id} #{window_active}#{pane_active}' 2>/dev/null) \
+    || return 1
+  session=${info% *}
+  [ "${info##* }" = 11 ] || return 1
+  since=$(tmux show-options -gqv @fm-focus-since 2>/dev/null)
+  case "$since" in ''|*[!0-9]*) return 1 ;; esac
+  tmux list-clients -t "$session" -F '#{client_created} #{client_flags}' 2>/dev/null \
+    | awk -v since="$since" '$1 >= since && ("," $2 ",") ~ /,focused,/ { found = 1 } END { exit !found }'
+}
+
 # Type <line> into the lock-holding primary's own pane and submit it. Prints
 # "<verdict><TAB><backend><TAB><target>" once the pane is proven to host the
 # primary and show its chat input. Returns 1 when the pane is not proven, or
-# with <app> and <tty> is not in front (see shown_in_front), and 2 when it is
+# with <app> and <tty> is not in front (see shown_in_front), or with --focused
+# is not in front (see shown_focused), and 2 when it is
 # proven but not showing its chat input, another writer owns it, or a ring
 # finds a stash; nothing was typed either way. PRIMARY_SUBMIT_COMPOSER lists
 # the composer states that may take the line (default "empty pending"), and
 # PRIMARY_SUBMIT_RING=1 submits it the way ring does. Its subshell scopes the pane environment and writer lock.
-primary_submit() (  # <line> [<app> <tty>]
+primary_submit() (  # <line> [<app> <tty> | --focused]
   local lock="$STATE/.lock" pid envs kv backend target root verdict draft claude composer tries
   local writer_lock="$STATE/desk-voice/.send.lock"
   [ -f "$lock" ] && [ ! -L "$lock" ] || return 1
@@ -716,6 +754,8 @@ EOF
   pid_within "$pid" "$root" || return 1
   if [ "$#" -ge 3 ]; then
     shown_in_front "$backend" "$target" "$root" "$2" "$3" || return 1
+  elif [ "${2:-}" = --focused ]; then
+    shown_focused "$backend" "$target" || return 1
   fi
   mkdir -p "$STATE/desk-voice" || return 2
   fm_lock_try_acquire "$writer_lock" || return 2
@@ -746,10 +786,14 @@ EOF
 
 send() {
   local source text line result='' verdict backend target path image rc=0
-  local composer='empty pending' front_app='' front_tty=''
+  local composer='empty pending' front_app='' front_tty='' focused=false
   local -a image_args=() front=() rest=()
   while [ "$#" -gt 0 ]; do
     case "$1" in
+      --front-focused)
+        focused=true
+        shift
+        ;;
       --front-app)
         [ "$#" -ge 2 ] || refuse "--front-app needs a pid"
         front_app=$2
@@ -775,7 +819,10 @@ send() {
     esac
     printf '%s' "$front_tty" | grep -Eqx '/dev/(tty[A-Za-z0-9]+|pts/[0-9]+)' \
       || refuse "--front-tty needs a terminal device: $front_tty"
+    [ "$focused" = false ] || refuse "--front-focused cannot be combined with --front-app or --front-tty"
     front=("$front_app" "$front_tty")
+  elif [ "$focused" = true ]; then
+    front=(--focused)
   fi
   parse_transcript_args "$@"
   source=$ARG_SOURCE
@@ -845,13 +892,17 @@ ring_line() {  # <line>
 
 shot() {
   local display='' keep=${FM_DESK_SHOTS_KEEP:-30} capture=${FM_DESK_SHOT_CAPTURE:-screencapture}
-  local name path tmp excess
+  local name path tmp excess from_stdin=false
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --display)
         [ "$#" -ge 2 ] || refuse "--display needs a number"
         display=$2
         shift 2
+        ;;
+      --stdin)
+        from_stdin=true
+        shift
         ;;
       *) refuse "unexpected argument: $1" ;;
     esac
@@ -860,6 +911,7 @@ shot() {
     ''|[1-9]|[1-9][0-9]) ;;
     *) refuse "--display needs a display number from 1: $display" ;;
   esac
+  [ "$from_stdin" = false ] || [ -z "$display" ] || refuse "--stdin cannot be combined with --display"
   case "$keep" in
     [1-9]|[1-9][0-9]|[1-9][0-9][0-9]) ;;
     *) refuse "FM_DESK_SHOTS_KEEP must be a number from 1 to 999: $keep" ;;
@@ -876,7 +928,12 @@ shot() {
   mkdir -p "$SHOTS/.tmp" || die "cannot create $SHOTS/.tmp"
   chmod 700 "$SHOTS/.tmp" 2>/dev/null || true
   tmp="$SHOTS/.tmp/${name}.png"
-  if ! "$capture" -x -t png ${display:+-D "$display"} "$tmp" >/dev/null || [ ! -s "$tmp" ]; then
+  if [ "$from_stdin" = true ]; then
+    if ! cat > "$tmp" || [ "$(LC_ALL=C head -c 8 "$tmp" | od -An -tx1 | tr -d ' \n')" != 89504e470d0a1a0a ]; then
+      rm -f "$tmp"
+      die "standard input is not a PNG image"
+    fi
+  elif ! "$capture" -x -t png ${display:+-D "$display"} "$tmp" >/dev/null || [ ! -s "$tmp" ]; then
     rm -f "$tmp"
     die "screen capture failed"
   fi

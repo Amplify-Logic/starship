@@ -189,7 +189,11 @@
 #   FM_SPEAK_DEEPGRAM_TTS
 #                      Deepgram TTS helper (default: $ROOT/bin/fm-deepgram-tts.sh)
 #   FM_DEEPGRAM_AFPLAY audio player for Deepgram audio, kept audio and a `say`
-#                      line rendered at a set volume (default: /usr/bin/afplay)
+#                      line rendered at a set volume (default: /usr/bin/afplay;
+#                      where there is none and this home has the Windows desk
+#                      floater installed, bin/fm-desk-play-windows.sh, which
+#                      plays through Windows from WSL and caps the level at
+#                      100)
 #   FM_SPEAK_DEEPGRAM_REGISTER
 #                      GLASSES_ANNOUNCE_CONFIG path for the longer desk register,
 #                      applied to every desk line (default:
@@ -250,7 +254,15 @@ else
 fi
 SAY_BIN="${FM_SPEAK_SAY:-/usr/bin/say}"
 DEEPGRAM_TTS="${FM_SPEAK_DEEPGRAM_TTS:-$ROOT/bin/fm-deepgram-tts.sh}"
-AFPLAY_BIN="${FM_DEEPGRAM_AFPLAY:-/usr/bin/afplay}"
+# Inside WSL 2 with the Windows desk floater installed for this home, there is
+# no afplay and lines play through Windows instead (docs/desk-floater-windows.md).
+if [ -n "${FM_DEEPGRAM_AFPLAY:-}" ]; then
+  AFPLAY_BIN=$FM_DEEPGRAM_AFPLAY
+elif [ ! -x /usr/bin/afplay ] && [ -f "$STATE/desk-floater-windows/install" ]; then
+  AFPLAY_BIN="$ROOT/bin/fm-desk-play-windows.sh"
+else
+  AFPLAY_BIN=/usr/bin/afplay
+fi
 # Default longer desk register; empty FM_SPEAK_DEEPGRAM_REGISTER disables the bump.
 if [ "${FM_SPEAK_DEEPGRAM_REGISTER+x}" = x ]; then
   DESK_REGISTER=$FM_SPEAK_DEEPGRAM_REGISTER
