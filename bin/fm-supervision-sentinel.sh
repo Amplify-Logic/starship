@@ -292,7 +292,12 @@ fm_sentinel_write_plist() { # <label> <interval>
     printf '%s\n' '  </dict>'
     printf '%s\n' '  <key>RunAtLoad</key>' '  <true/>'
     printf '  <key>StartInterval</key>\n  <integer>%s</integer>\n' "$interval"
-    printf '%s\n' '  <key>ProcessType</key>' '  <string>Background</string>'
+    # Interactive, never Background: this job exists to post an alarm, and the
+    # Background class throttled it so hard on a loaded host that osascript took
+    # 6 to 28 seconds and alerts kept hitting the 10-second notifier timeout.
+    # Standard still carries light throttling; the check itself is a short
+    # once-a-minute script, so running it unthrottled costs nothing measurable.
+    printf '%s\n' '  <key>ProcessType</key>' '  <string>Interactive</string>'
     printf '%s\n' '</dict>' '</plist>'
   } > "$pending" || { rm -f "$pending"; return 1; }
   chmod 600 "$pending" || { rm -f "$pending"; return 1; }

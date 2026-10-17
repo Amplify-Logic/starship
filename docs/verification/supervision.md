@@ -878,3 +878,33 @@ Observed output:
 ```
 
 The safe command-channel contract is covered without a notification by `tests/fm-daemon.test.sh`: the summary reaches both `$1` and stdin, every channel is process-group bounded, and a failed channel falls through.
+
+### Host sentinel banner from a launchd agent, 2026-10-17
+
+Run on macOS 26.5.1 (25F80) with a one-minute load average near 500.
+The same argv-safe `osascript` command, run by a probe launchd agent that changed only `ProcessType`, took these whole seconds to return:
+
+| `ProcessType` | Runs | Seconds |
+| --- | --- | --- |
+| `Background` | 6 | 28, 8, 20, 15, 6, 6 |
+| `Standard` | 9 | 0, 2, 0, 2, 1, 1, 4, 2, 3 |
+| `Interactive` | 6 | 0, 0, 0, 0, 1, 0 |
+
+From a login shell it returned in 0.29 seconds.
+`Background` runs took 6 to 28 seconds, against a 10-second notifier bound, which is why the host sentinel, generated as `Background`, logged `osascript notifier timed out` for its alarms from 2026-08-17 on.
+Running `/usr/sbin/taskpolicy -B -p $$` inside the `Background` job before `osascript` did not help (11, 3 and 6 seconds).
+
+Both opt-in real-launchd cases then passed with the generated manifest set to `Interactive`:
+
+```sh
+FM_SENTINEL_REAL_LAUNCHD_SMOKE=1 FM_SENTINEL_REAL_BANNER_SMOKE=1 tests/fm-supervision-sentinel.test.sh
+```
+
+```text
+ok - supervision sentinel: real launchd bootstrap -> scheduled-check -> alert owner delivers end to end
+ok - supervision sentinel: real launchd -> real alert owner -> osascript banner delivered within its bound
+```
+
+With the manifest still `Background`, the banner case failed with `not ok - the launchd-spawned osascript notifier hit its timeout instead of posting the banner`.
+A visible `firstmate: SUPERVISION DOWN` banner naming the scratch home appeared on screen, and the launchd-spawned check logged `wedge alarm: osascript channel delivered` and committed `delivery=sent`.
+Later the same day, at load averages of about 14 and 64 to 73, the banner case passed with the manifest set to `Background` too (`spawn type = background (5)`), so the smoke separates the two only under contention like the load near 500 above.

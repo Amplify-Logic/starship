@@ -358,6 +358,7 @@ SH
     fail "failed active-alert channel was reported as delivered"
   fi
   assert_contains "$(cat "$home/state/.supervision-outage-alarm")" 'delivery=pending' "failed notification was incorrectly marked delivered"
+  assert_no_grep 'channel delivered' "$home/state/.supervision-sentinel.log" "a failed notification was logged as delivered"
   sleep 1
   FM_SENTINEL_CLAIM_LEASE_SECS=1 run_check "$home" "$recorder" || fail "pending notification was not retried successfully"
   assert_contains "$(cat "$home/state/.supervision-outage-alarm")" 'delivery=sent' "successful retry did not commit delivery state"
@@ -554,6 +555,10 @@ test_arm_registers_one_home_scoped_read_only_launchd_job() {
   assert_contains "$(cat "$plist")" '<integer>60</integer>' "launchd plist lost the bounded one-minute check cadence"
   assert_contains "$(cat "$plist")" '/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin' "launchd plist did not pin its minimal host PATH"
   assert_not_contains "$(cat "$plist")" '.pi/agent/bin' "launchd plist persisted a harness-controlled PATH"
+  # A Background job is throttled until its osascript banner outlives the notifier
+  # timeout on a loaded host, which silenced every outage alarm for two months.
+  assert_contains "$(cat "$plist")" '<string>Interactive</string>' "launchd plist did not run the alarm job unthrottled"
+  assert_not_contains "$(cat "$plist")" '<string>Background</string>' "launchd plist throttles the alarm job as Background"
   if command -v plutil >/dev/null 2>&1; then
     plutil -lint "$plist" >/dev/null || fail "generated launchd plist is invalid"
   fi
@@ -1218,6 +1223,7 @@ SH
   [ -s "$log" ] || fail "fake osascript did not receive the active alert"
   assert_contains "$(cat "$log")" 'firstmate: SUPERVISION DOWN' "Notification Center title did not identify the supervision outage"
   assert_contains "$(cat "$log")" 'SUPERVISION DOWN: 1 task(s) in flight' "Notification Center body omitted the outage summary"
+  assert_grep 'wedge alarm: osascript channel delivered' "$home/state/.supervision-sentinel.log" "the sentinel did not log the delivered notification"
   pass "supervision sentinel: OS alert title and body are unambiguous (fake notifier only)"
 }
 
@@ -1249,10 +1255,9 @@ test_real_launchd_scheduled_check_delivers_end_to_end() {
   alert_log="$home/real-launchd-alert.log"
   scratch_sentinel="$home/bin/fm-supervision-sentinel.sh"
 
-  cp "$SENTINEL" "$scratch_sentinel"
-  cp "$ROOT/bin/fm-supervision-lib.sh" "$ROOT/bin/fm-primary-scope-lib.sh" \
-    "$ROOT/bin/fm-wake-lib.sh" "$home/bin/" \
-    || fail "could not stage the scratch sentinel's libraries"
+  # Stage the whole of bin/ so the copy keeps every library its sources pull in,
+  # then replace the alert owner with the stub before anything can launch it.
+  cp -R "$ROOT/bin/." "$home/bin/" || fail "could not stage the scratch sentinel's bin/ copy"
   cat > "$home/bin/fm-supervise-daemon.sh" <<SH
 #!/usr/bin/env bash
 printf '%s\t%s\n' "\$1" "\$2" >> "$alert_log"
@@ -1302,6 +1307,63 @@ SH
   pass "supervision sentinel: real launchd bootstrap -> scheduled-check -> alert owner delivers end to end"
 }
 
+# Opt-in end-to-end proof that the REAL alert owner posts a REAL Notification
+# Center banner from a launchd-spawned check, within its notifier bound. The smoke
+# above stubs the alert owner, so it cannot see what broke delivery from August
+# 2026 on: the manifest's launchd ProcessType throttled the job so hard that
+# osascript took 6 to 28 seconds under load and alerts kept hitting the 10-second
+# notifier timeout, while the same command from a login shell took well under one.
+# This case therefore runs a full copy of bin/ inside the scratch home, so the
+# launched sentinel resolves the real fm-supervise-daemon.sh beside itself, and it
+# configures only the osascript channel. It posts one visible banner titled
+# "firstmate: SUPERVISION DOWN" naming the scratch home, so it is gated on its own
+# attended opt-in, exactly like the transport smoke.
+test_real_launchd_alert_posts_a_real_banner_within_its_bound() {
+  local home log service marker i
+  if [ "${FM_SENTINEL_REAL_BANNER_SMOKE:-0}" != 1 ]; then
+    pass "supervision sentinel: real-banner smoke skipped (FM_SENTINEL_REAL_BANNER_SMOKE=1 on an attended macOS login session runs it and posts one banner)"
+    return 0
+  fi
+  [ "$(uname)" = Darwin ] || fail "the real-banner smoke was requested on $(uname); it is macOS-only"
+  [ -x /bin/launchctl ] || fail "the real-banner smoke was requested without /bin/launchctl"
+  [ -x /usr/bin/osascript ] || fail "the real-banner smoke was requested without /usr/bin/osascript"
+
+  home="$TMP_ROOT/real-banner"
+  make_primary "$home"
+  home=$(cd "$home" && pwd -P)
+  cp -R "$ROOT/bin/." "$home/bin/" || fail "could not stage the scratch home's bin/ copy"
+  printf 'osascript\n' > "$home/config/wedge-alarm"
+  printf 'project=test\n' > "$home/state/task.meta"
+  touch -t 202001010000 "$home/state/.last-watcher-beat"
+
+  service=$(fm_sentinel_expected_service "$home") || fail "could not derive the banner smoke service identity"
+  FM_SENTINEL_SMOKE_SERVICE="$service"
+
+  FM_SUPERVISION_SENTINEL_MODE=auto FM_HOME="$home" \
+    FM_CONFIG_OVERRIDE="$home/config" \
+    FM_SENTINEL_CHECK_WAIT_SECS=30 \
+    "$home/bin/fm-supervision-sentinel.sh" arm || fail "real launchd did not retain and verify the banner smoke service"
+
+  # One launchd-spawned check either commits delivery=sent or logs its notifier
+  # timeout; wait for whichever comes first rather than for a fixed interval.
+  marker="$home/state/.supervision-outage-alarm"
+  log="$home/state/.supervision-sentinel.log"
+  i=0
+  while [ "$i" -lt 300 ] && ! grep -qF 'delivery=sent' "$marker" 2>/dev/null \
+    && ! grep -qF 'notification failed' "$log" 2>/dev/null; do
+    sleep 0.2
+    i=$((i + 1))
+  done
+  assert_no_grep 'timed out' "$log" "the launchd-spawned osascript notifier hit its timeout instead of posting the banner"
+  assert_no_grep 'notification failed' "$log" "the launchd-spawned osascript notifier failed"
+  assert_grep 'wedge alarm: osascript channel delivered' "$log" "the sentinel did not log the delivered banner"
+  assert_grep 'delivery=sent' "$marker" "the delivered banner did not commit its delivery state"
+
+  fm_sentinel_bootout_smoke_service "$service" || fail "banner smoke service could not be retired after the smoke"
+  FM_SENTINEL_SMOKE_SERVICE=
+  pass "supervision sentinel: real launchd -> real alert owner -> osascript banner delivered within its bound"
+}
+
 test_stale_beacon_alert_is_loud_deduplicated_backed_off_and_rearmed
 test_guard_note_outage_records_evidence_without_notifying
 test_in_harness_modes_are_marker_only_and_honor_a_durable_disarm
@@ -1325,3 +1387,4 @@ test_missing_host_capability_is_a_distinct_permanent_result
 test_deliberate_noop_arm_is_a_distinct_non_failure_result
 test_real_channel_uses_unambiguous_notification_title_without_posting
 test_real_launchd_scheduled_check_delivers_end_to_end
+test_real_launchd_alert_posts_a_real_banner_within_its_bound

@@ -509,7 +509,7 @@ Starting either owner from launchd could race the existing singleton or create a
 The sentinel therefore makes the outage bounded and loud while leaving recovery to the existing home-scoped, identity-checked paths.
 Linux and other hosts retain the hook alarms but do not yet have a verified host scheduler; watcher entry reports that limitation in a genuine primary home, and stays silent in a child task worktree or non-primary home exactly as macOS does.
 On such a host the marker-only guard modes are the only writers of `state/.supervision-outage-alarm`, so they refresh unclaimed evidence whenever the outage episode or in-flight count moves rather than freezing on the first outage ever observed; a claim or committed delivery owned by a scheduled host check is never overwritten.
-The launchd transport itself is covered by an opt-in real-`launchctl` smoke rather than the default suite; see [`wedge-alarm.md`](wedge-alarm.md) for how to run it and what remains transport-unverified until it is.
+The launchd transport and the real banner it posts are covered by opt-in real-`launchctl` smokes rather than the default suite; see [`wedge-alarm.md`](wedge-alarm.md) for how to run them and what each proves.
 
 ## Filesystem-event continuity
 

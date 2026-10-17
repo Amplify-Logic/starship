@@ -1113,6 +1113,13 @@ wedge_alarm_emit() {  # <channel> <summary>
   esac
 }
 
+# Record one channel's successful delivery, in the log as well as for the
+# one-shot exit status, so a working alarm is as visible as a failing one.
+wedge_alarm_delivered() {  # <channel>
+  WEDGE_ALARM_DELIVERED=1
+  log "wedge alarm: $1 channel delivered"
+}
+
 # Fire every configured active-alert channel, best-effort. Always returns 0: a
 # channel failure can never abort inject_wedge_alarm or the daemon loop. Any
 # `off` directive disables the alert, regardless of position; an unresolvable
@@ -1139,8 +1146,8 @@ wedge_alarm_notify() {  # <summary> <marker>
     case "$ch" in auto|default) ch=$(wedge_alarm_platform_default) ;; esac
     case "$ch" in
       '') log "wedge alarm: no OS-level alert channel on $(uname); durable marker $marker is the only signal - set config/wedge-alarm (e.g. a command: directive)" ;;
-      osascript|herdr) wedge_alarm_emit "$ch" "$summary" && WEDGE_ALARM_DELIVERED=1 ;;
-      command:*) wedge_alarm_emit command "$summary" "${ch#command:}" && WEDGE_ALARM_DELIVERED=1 ;;
+      osascript|herdr) wedge_alarm_emit "$ch" "$summary" && wedge_alarm_delivered "$ch" ;;
+      command:*) wedge_alarm_emit command "$summary" "${ch#command:}" && wedge_alarm_delivered command ;;
       *) log "wedge alarm: unrecognized active-alert channel directive (redacted); marker still written" ;;
     esac
   done
