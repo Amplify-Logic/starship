@@ -1,15 +1,20 @@
 {
   "rules": [
     {
-      "when": "Well-specified mechanical work whose specification is already precise: a rote rename, a formatting sweep, tests against existing behaviour, documentation generated from a diff, or several such tasks dispatched at once.",
-      "use": { "harness": "claude", "model": "sonnet", "effort": "medium" },
-      "why": "Sonnet is fast and good value when the task leaves little to judgment, and a wide burst of workers spends less of the subscription window on it."
+      "when": "Tiny, fully specified work with nothing to decide: reading back a value, a one-line edit, a status check, a quick lookup, or a few such chores dispatched at once.",
+      "use": { "harness": "claude", "model": "claude-haiku-5-5", "effort": "low" },
+      "why": "Haiku 5.5 does a chore at a small fraction of Opus's usage, which leaves more of a Pro or Max 5x window for the work that needs Opus."
     },
     {
-      "when": "High-leverage planning, architecture, strategy or approach selection, where the worker produces judgment rather than code.",
-      "use": { "harness": "claude", "model": "opus", "effort": "xhigh" },
-      "why": "Spend the deepest reasoning only where a wrong direction costs the most; use this rule sparingly."
+      "when": "Well-specified mechanical work whose specification is already precise: a rote rename, a formatting sweep, tests against existing behaviour, documentation generated from a diff, or several such tasks dispatched at once.",
+      "use": { "harness": "claude", "model": "claude-sonnet-5-5", "effort": "medium" },
+      "why": "Sonnet 5.5 is fast and good value when the task leaves little to judgment, and a wide burst of workers spends less of a Pro or Max 5x window on it."
+    },
+    {
+      "when": "High-leverage planning, architecture, diagnosis, strategy or approach selection, where the worker produces judgment rather than code.",
+      "use": { "harness": "claude", "model": "claude-opus-5-5", "effort": "high" },
+      "why": "Spend more reasoning where a wrong direction costs the most; extra-high effort is left out because a Pro or Max 5x window runs out quickly at that depth."
     }
   ],
-  "default": { "harness": "claude", "model": "opus", "effort": "high" }
+  "default": { "harness": "claude", "model": "claude-opus-5-5", "effort": "medium" }
 }

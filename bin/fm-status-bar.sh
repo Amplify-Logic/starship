@@ -400,6 +400,15 @@ supervision_age() {
   printf '%s' "$age"
 }
 
+# Whether this home holds any task or second-mate record or registered check.
+home_has_records() {
+  local record
+  for record in "$STATE"/*.meta "$STATE"/*.check.sh; do
+    [ -e "$record" ] && return 0
+  done
+  return 1
+}
+
 render_once() {
   local anchor separator context_part quota_part paused_color attention_color
   local fleet_part watch_part cost_part afk_part age context_color quota_color
@@ -464,7 +473,13 @@ render_once() {
     fleet_part="${fleet_part} ${stopped_color}🪦${STOPPED_COUNT}${X} ${D}📋${RECORD_COUNT}${X}"
   fi
 
-  if [ "$age" = -- ]; then
+  # With no task or second-mate record and no registered check there is
+  # nothing to supervise, so a missing or stale beacon is calm rather than an
+  # alarm; the moment any record or check exists the bright-red NO-WATCH
+  # returns.
+  if { [ "$age" = -- ] || [ "$age" -ge 180 ]; } && ! home_has_records; then
+    watch_part="${D}👁 idle${X}"
+  elif [ "$age" = -- ]; then
     watch_part="${BR}👁 NO-WATCH --${X}"
   elif [ "$age" -lt 180 ]; then
     watch_part="${G}👁 ${age}s${X}"

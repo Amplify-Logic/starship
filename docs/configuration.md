@@ -13,7 +13,7 @@ Start with the directory layout, then use the setting reference for the behavior
 | Backlog, preferences, and memory | [Backlog backend](#backlog-backend-taskstoml--configbacklog-backend), [captain preferences](#captain-preferences-datacaptainmd--datacaptain-sharedmd), [external memory tiers](#external-memory-tiers-memory-layering-section), and [startup memory budget](#startup-memory-budget-configstartup-memory-budget) |
 | Supervision and presentation | [Pi supervision branch](#pi-supervision-branch), [supervision host](#supervision-host-configsupervision-host), and [Calm preference](#calm-preference-configcalm) |
 | Persistent secondmates | [Secondmate routes](#secondmate-routes-datasecondmatesmd) |
-| Starter settings for a new home: which model does which job, spoken replies, and transcription words | [Crew dispatch profiles](#crew-dispatch-profiles-configcrew-dispatchjson), [desk voice-out](#desk-voice-out-configspeak), and [speech-to-text vocabulary](#speech-to-text-vocabulary-configstt-vocabulary) |
+| Starter settings for a new home: which model does which job, spoken replies, transcription words, and how hard the first mate thinks | [Starter settings](#starter-settings-first-launch), [crew dispatch profiles](#crew-dispatch-profiles-configcrew-dispatchjson), [desk voice-out](#desk-voice-out-configspeak), [speech-to-text vocabulary](#speech-to-text-vocabulary-configstt-vocabulary), and [primary effort](#primary-effort-configprimary-effort) |
 | The call recorder | [Call recorder](#call-recorder-configcall-companion) |
 | Per-run overrides and tuning | [Environment variables](#environment-variables) |
 
@@ -1409,7 +1409,9 @@ This single-provider table is separate from the frozen legacy mapping used by `f
 - Bootstrap reports unsupported harness/model/effort combinations as a `CREW_DISPATCH` diagnostic when they are visible in the file.
 
 See [`docs/examples/crew-dispatch.json`](examples/crew-dispatch.json) for a starting point to copy into local `config/crew-dispatch.json`; its Pi default declares the `claude` provider required for typed resolution of that Anthropic model.
-A home that runs Claude only starts from [`docs/examples/crew-dispatch-claude-only.json`](examples/crew-dispatch-claude-only.json) instead: Opus at high effort by default, Sonnet at medium for well-specified mechanical work, and Opus at extra-high effort for judgment-heavy planning, with no other provider or account assumed.
+A home that runs Claude only starts from [`docs/examples/crew-dispatch-claude-only.json`](examples/crew-dispatch-claude-only.json) instead, which a new home's first Claude launch installs on its own ([starter settings](#starter-settings-first-launch)).
+It is sized for a Claude Pro or Max 5x plan: Opus 5.5 at medium effort for nearly everything, Opus 5.5 at high effort for judgment-heavy planning and diagnosis, Sonnet 5.5 at medium for well-specified mechanical work, and Haiku 5.5 at low for tiny chores with nothing to decide, with no other provider or account assumed.
+Extra-high effort is deliberately absent, because a Pro or Max 5x window runs out quickly at that depth; add it to a rule's `effort` on a larger plan.
 
 **Validation and diagnostics**
 
@@ -2965,7 +2967,7 @@ Rewrites ignore case, match whole tokens (including email addresses, dotted name
 A malformed line is ignored, and a vocabulary that cannot be read never stops a transcription.
 The default model is `nova-3` because only Nova-3 accepts Deepgram's keyterm hints; `DEEPGRAM_STT_MODEL` in the environment or this home's gitignored `.env` overrides it (the environment wins), and an older model gets the terms as boosted keywords instead.
 The script's header owns the hint parameters, the term caps, and the matching rules.
-[`docs/examples/stt-vocabulary`](examples/stt-vocabulary) is a starter template to copy and fill with your own names.
+[`docs/examples/stt-vocabulary`](examples/stt-vocabulary) is the starter template a new home installs on its first launch ([starter settings](#starter-settings-first-launch)); add your own names below its starter words.
 
 ## Call recorder (config/call-companion)
 
@@ -3005,11 +3007,38 @@ The Cursor CLI exposes no context or compaction setting: `agent --help` on 2026.
 
 Every other worker adapter is outside that order and its launch is unchanged.
 
+## Starter settings (first launch)
+
+A new home's first launch with a Claude profile (`bin/fm-primary.sh opus`, or `claude`) installs the Claude starter settings into its private `config/`, so a teammate's Starship is set up the team's way without copying anything by hand.
+A new home is one whose `state/` is absent or empty, which means it has never run.
+
+| Installed as | Copied from | What it does |
+| --- | --- | --- |
+| `config/crew-dispatch.json` | [`docs/examples/crew-dispatch-claude-only.json`](examples/crew-dispatch-claude-only.json) | Which Claude model does which job, sized for a Pro or Max 5x plan ([crew dispatch profiles](#crew-dispatch-profiles-configcrew-dispatchjson)). |
+| `config/speak` | [`docs/examples/speak`](examples/speak) | Turns spoken replies on; without the voice setup it needs, replies stay text only ([desk voice-out](#desk-voice-out-configspeak)). |
+| `config/stt-vocabulary` | [`docs/examples/stt-vocabulary`](examples/stt-vocabulary) | Starter words for the desk floater's transcription ([speech-to-text vocabulary](#speech-to-text-vocabulary-configstt-vocabulary)). |
+
+A file already in `config/` is never overwritten, and a home that has run before gets nothing, so an existing home keeps exactly what it has; it can copy any of these files by hand.
+Other primary profiles install nothing, because the routing sends every worker to Claude.
+`--preflight` and a dry run never write them.
+The launcher prints the files it installed, and `bin/fm-primary.sh`'s header owns the mechanics.
+
 ## Primary effort (config/primary-effort)
 
 `config/primary-effort` is an optional local, gitignored one-token file that sets the launch effort for the `claude-fable` and `claude-opus` primary profiles.
 `bin/fm-primary.sh` reads it only at launch.
-When the file is absent, the launcher uses `xhigh`.
+When the file is absent, the effort follows the Claude plan the first mate is signed in to:
+
+| Plan | Default effort |
+| --- | --- |
+| Claude Pro | `medium` |
+| Claude Max 5x | `high` |
+| Claude Max 20x | `xhigh` |
+| Anything the launcher cannot read as one of these | `high` |
+
+`max` is never a default; it is reached only by writing it into this file.
+The launch line names the effort and the plan it came from, and `bin/fm-primary.sh`'s header owns how the plan is read.
+To choose your own, write one word into the file and start the first mate again, for example `echo high > config/primary-effort`.
 When the file is present, its first line must trim to exactly one of `low`, `medium`, `high`, `xhigh`, or `max`.
 Any other content, including an empty token, refuses rather than falling back.
 The file is not inherited by secondmate homes.

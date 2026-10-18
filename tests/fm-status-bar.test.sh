@@ -382,6 +382,8 @@ test_threshold_colors_and_placeholders() {
 
 test_no_watch_is_bright_red_when_missing_or_stale() {
   local out
+  reset_fleet
+  fleet_task underway crew 'state: working · source: pane · harness busy'
   rm -f "$HOME_FIX/state/.last-watcher-beat"
   out=$(render Opus high 50 10 0)
   assert_contains "$out" $'\033[91;1m👁 NO-WATCH --' "missing supervision beacon is not a bright-red NO-WATCH alert"
@@ -400,6 +402,43 @@ test_no_watch_is_bright_red_when_missing_or_stale() {
       --effort high)
   assert_contains "$out" $'\033[91;1m👁 NO-WATCH --' "unreadable supervision time is not a bright-red NO-WATCH alert"
   pass "status bar: missing and stale supervision are loud NO-WATCH alerts"
+}
+
+# A new home that has never dispatched anything has no supervision to run, and a
+# bright-red NO-WATCH there read as an error to a new user on their first launch.
+# The alarm belongs to work that is under way, including a second mate.
+test_idle_home_without_records_shows_supervision_calmly() {
+  local out kind
+  reset_fleet
+  rm -f "$HOME_FIX/state/.last-watcher-beat"
+  out=$(render Opus high 50 10 0)
+  assert_contains "$out" $'\033[2m👁 idle' "a home with no records and no beacon is not a calm, dim idle"
+  assert_not_contains "$out" 'NO-WATCH' "a home with no records still raised NO-WATCH"
+
+  : > "$HOME_FIX/state/.last-watcher-beat"
+  out=$(FM_STATUS_BAR_TEST_BEAT_EPOCH=800 render Opus high 50 10 0)
+  assert_contains "$out" $'\033[2m👁 idle' "a home with no records and a stale beacon is not a calm, dim idle"
+
+  out=$(FM_STATUS_BAR_TEST_BEAT_EPOCH=990 render Opus high 50 10 0)
+  assert_contains "$out" $'\033[92m👁 10s' "a fresh beacon on an idle home no longer shows its age"
+
+  for kind in crew scout secondmate; do
+    reset_fleet
+    fm_write_meta "$HOME_FIX/state/one.meta" "kind=$kind"
+    rm -f "$HOME_FIX/state/.last-watcher-beat"
+    out=$(render Opus high 50 10 0)
+    assert_contains "$out" $'\033[91;1m👁 NO-WATCH --' "a $kind record with no beacon did not raise the bright-red NO-WATCH"
+  done
+  reset_fleet
+  printf '#!/bin/sh\n' > "$HOME_FIX/state/mail.check.sh"
+  rm -f "$HOME_FIX/state/.last-watcher-beat"
+  out=$(render Opus high 50 10 0)
+  assert_contains "$out" $'\033[91;1m👁 NO-WATCH --' "a registered check with no beacon did not raise the bright-red NO-WATCH"
+  : > "$HOME_FIX/state/.last-watcher-beat"
+  out=$(FM_STATUS_BAR_TEST_BEAT_EPOCH=800 render Opus high 50 10 0)
+  assert_contains "$out" $'\033[91;1m👁 NO-WATCH 200s' "a registered check with a stale beacon did not raise the bright-red NO-WATCH"
+  rm -f "$HOME_FIX/state/mail.check.sh"
+  pass "status bar: an idle home with no records shows supervision calmly"
 }
 
 test_claude_payload_adapter_and_primary_guard() {
@@ -1693,6 +1732,7 @@ test_validating_work_is_distinguished_from_a_busy_worker
 test_unknown_fleet_state_shows_placeholders_and_never_zero
 test_threshold_colors_and_placeholders
 test_no_watch_is_bright_red_when_missing_or_stale
+test_idle_home_without_records_shows_supervision_calmly
 test_claude_payload_adapter_and_primary_guard
 test_follow_mode_exits_when_primary_pane_is_gone
 test_cursor_payload_adapter_and_primary_guard

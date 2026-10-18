@@ -27,7 +27,7 @@ Width-constrained surfaces clip or truncate the canonical line without wrapping 
 | `⚠ attention` | Tasks that need Firstmate to act: a decision, a blocker, or a failure. | `--` while the fleet reading is unknown. |
 | `🪦 stopped` | Records still here whose worker is not: the endpoint is proven dead or absent, or the recorded worktree is gone. | `--` while the fleet reading is unknown. |
 | `📋 records` | Ordinary task records in this home, excluding persistent second mates. Always exact, and deliberately not a claim about running workers. | `0` when no ordinary tasks exist. |
-| `👁 supervision` | Age in seconds of `state/.last-watcher-beat`. | Bright-red `NO-WATCH --` when the beacon is missing or unreadable. |
+| `👁 supervision` | Age in seconds of `state/.last-watcher-beat`. | Bright-red `NO-WATCH --` when the beacon is missing or unreadable; dim `idle` instead while the home holds no task or second-mate record and no registered check. |
 | `$ cost` | Cumulative cost in US dollars for the current orchestrator session, rounded to two decimals. | `$--` when the orchestrator does not expose cost. |
 | `💤 AFK` | Whether the Firstmate home is in away mode. | Dim `💤--` when away mode is off. |
 
@@ -103,12 +103,13 @@ A persistent second mate never contributes to the three task counts.
 ANSI renderers use bright colors for state and alerts.
 Green is ANSI 92, yellow is ANSI 93, red is ANSI 91, cyan is ANSI 96, dim is ANSI 2, and reset is ANSI 0.
 `NO-WATCH` is always bold bright red with ANSI `91;1`.
+It is raised only while the home holds a task or second-mate record (`state/*.meta`) or a registered check (`state/*.check.sh`), because that is when supervision has work to keep; a home with neither, such as a new one that has never dispatched anything, renders a missing or stale beacon as a dim `👁 idle` so a first launch does not open on an alarm.
 
 | Metric | Green | Yellow | Red |
 | --- | --- | --- | --- |
 | Context used | 0 through 70 percent. | 71 through 85 percent. | 86 through 100 percent. |
 | Provider quota used | 0 through 69 percent. | 70 through 89 percent. | 90 through 100 percent. |
-| Supervision freshness | Beacon age below 180 seconds. | Not used. | Beacon age of 180 seconds or more, or a missing or unreadable beacon. |
+| Supervision freshness | Beacon age below 180 seconds. | Not used. | Beacon age of 180 seconds or more, or a missing or unreadable beacon, while any record or registered check exists. |
 
 The active count is bright green.
 The paused count is bright yellow only when nonzero and dim otherwise.

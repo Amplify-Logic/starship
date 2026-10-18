@@ -12,7 +12,7 @@ After that, [the captain's handbook](docs/handbook.md) explains the whole system
 
 > Your setup is yours alone.
 > A fresh clone gets only the public repo - no one else's preferences, backlog, project list, or accounts.
-> Your private folders (`data/`, `state/`, `config/`, `projects/`, `.env`) are created empty on first run, stay on your machine, and are gitignored forever.
+> Your private folders (`data/`, `state/`, `config/`, `projects/`, `.env`) are created on first run, empty apart from the team's starter settings in `config/`, stay on your machine, and are gitignored forever.
 
 ---
 
@@ -71,6 +71,15 @@ For each, press the down arrow once, then Enter:
 
 You should see: Claude Code open inside the `starship` folder, ready for a message.
 
+That first launch also sets up your home the team's way, with nothing to copy:
+
+- **Which model does which job.** Opus 5.5 does nearly everything; Sonnet 5.5 and Haiku 5.5 take only small, fully specified chores, so a Claude Pro or Max 5x plan lasts.
+- **How hard your first mate thinks.** It follows your Claude plan: `medium` on Pro, `high` on Max 5x, and `xhigh` only on Max 20x. The launch line names the level and your plan.
+- **Spoken replies and transcription words**; replies stay text only until you set up voice ([desk voice-out](docs/configuration.md#desk-voice-out-configspeak)).
+
+To change how hard your first mate thinks, write one word, then start it again: `echo high > config/primary-effort`.
+The words, from lightest to deepest, are `low`, `medium`, `high`, `xhigh` and `max`; deeper thinking uses your plan's allowance faster, and `rm config/primary-effort` goes back to your plan's level.
+
 Workers open as tmux windows, which needs nothing more.
 [Herdr](docs/herdr-backend.md) is an optional, richer view you can add later; tell your first mate "use herdr" once it is installed.
 
@@ -127,15 +136,16 @@ If the report never comes back, ask "why can't you start a worker?" and fix what
 
 ## Optional: starter settings and the call recorder
 
-Starship ships starter settings you can copy into your private `config/` folder:
+A new home gets the starter settings on its first launch (step 3).
+A home that ran before they shipped can copy them into its private `config/` folder; `cp -n` never replaces a file you already have:
 
 ```sh
-cp docs/examples/crew-dispatch-claude-only.json config/crew-dispatch.json
-cp docs/examples/speak config/speak
-cp docs/examples/stt-vocabulary config/stt-vocabulary
+cp -n docs/examples/crew-dispatch-claude-only.json config/crew-dispatch.json
+cp -n docs/examples/speak config/speak
+cp -n docs/examples/stt-vocabulary config/stt-vocabulary
 ```
 
-- `crew-dispatch.json` decides which Claude model does which job: Opus for ordinary work, Sonnet for well-specified mechanical work, and deeper Opus thinking for planning; it uses no other provider or account.
+- `crew-dispatch.json` decides which Claude model does which job: Opus 5.5 for nearly everything, Sonnet 5.5 for well-specified mechanical work, and Haiku 5.5 for tiny chores, sized for a Pro or Max 5x plan; it uses no other provider or account.
 - `speak` turns on spoken replies; it needs the Starship Voice project and a Deepgram key or a macOS voice, as [desk voice-out](docs/configuration.md#desk-voice-out-configspeak) explains, and stays silent without them.
 - `stt-vocabulary` teaches the desk floater's transcription the names you say; add your own below its starter words.
 

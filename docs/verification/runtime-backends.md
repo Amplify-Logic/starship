@@ -671,6 +671,24 @@ skip-runner: pi-signed is not installed, so its pin check was not exercised
 
 The guard submits no prompt and spends no tokens, so it runs by default wherever a runner is installed; rerun it after every Claude or Pi upgrade.
 
+## First mate plan default
+
+With no `config/primary-effort`, `bin/fm-primary.sh` picks the Claude primary's effort from vendor output: the `subscriptionType` field of `claude auth status` (`pro` or `max`), and `oauthAccount.organizationRateLimitTier` in `~/.claude.json` (or `$CLAUDE_CONFIG_DIR/.claude.json`), the only place Max 5x and Max 20x differ.
+On Claude Code 2.1.302 a Max 20x sign-in reports `"subscriptionType": "max"` and carries the tier `default_claude_max_20x`, and the same record's cached usage table names exactly two subscription tiers, `default_claude_max_5x` and `default_claude_max_20x`, which is why the launcher matches `5x` and `20x` in the tier and reads Pro from `subscriptionType` alone.
+`tests/fm-primary.test.sh` pins every plan's mapping with a fake CLI; `tests/fm-primary-plan-live-e2e.test.sh` reads the real signed-in account, read-only, and proves both fields exist and that a dry-run launch names the plan it resolved.
+
+Verified 2026-10-18 on Claude Code 2.1.302 on macOS, signed in to a Max 20x account; Pro and Max 5x sign-ins were not available on this host.
+
+```sh
+bash tests/fm-primary-plan-live-e2e.test.sh
+```
+
+```
+ok - claude 2.1.302 (Claude Code): the first mate's default effort reads the real max plan (tier default_claude_max_20x)
+```
+
+The guard submits no prompt and spends no tokens, so it runs by default wherever Claude Code is installed and skips a host with no subscription sign-in; rerun it after every Claude Code upgrade.
+
 ## Secondmate busy contract
 
 Verified 2026-09-22 on this host with Claude Code 2.1.278, OpenCode 1.18.31, Pi 0.86.1, and Grok 1.0.40.

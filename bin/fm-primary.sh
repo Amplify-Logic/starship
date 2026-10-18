@@ -17,7 +17,9 @@
 #                 --dangerously-skip-permissions
 #                 Both Claude profiles use the first trimmed line of local
 #                 gitignored config/primary-effort when that file exists,
-#                 otherwise xhigh.
+#                 otherwise the default for the signed-in Claude plan:
+#                 medium on Pro, high on Max 5x, xhigh on Max 20x, and high
+#                 when the plan cannot be read (see "Plan default" below).
 #                 Accepted tokens: low, medium, high, xhigh, max.
 #                 Any other content, including an empty token, refuses.
 #                 Exports CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1 so
@@ -161,6 +163,30 @@
 # Worker adapter behavior is unchanged; this profile certifies PRIMARY only.
 # Never launch a cursor WORKER from the primary checkout (that checkout's
 # .claude/settings.json Stop wiring is for the primary session).
+#
+# Plan default: with no config/primary-effort, a Claude profile asks the
+# signed-in account (the pinned one under --account) for its plan. `claude auth
+# status` names the subscription (pro, max) and the account record beside the
+# Claude config directory ($CLAUDE_CONFIG_DIR/.claude.json, else ~/.claude.json)
+# carries oauthAccount.organizationRateLimitTier, the only place Max 5x and
+# Max 20x differ. A tier naming 20x or 5x decides; otherwise a pro or max
+# subscription decides, a Max whose tier is unreadable taking the Max 5x
+# default. Anything else (an API key, a Team or Enterprise seat, a logged-out
+# or unanswering CLI) takes high, the standing Opus default, so a seat whose
+# plan cannot be read is never spent at the Max 20x depth. `max` is never a plan
+# default; it is reached only by writing it into config/primary-effort. The
+# launch line names the plan the default came from.
+# tests/fm-primary-plan-live-e2e.test.sh re-proves both readings on the real CLI.
+#
+# Starter settings: a real Claude-profile launch of a fresh home - one whose
+# state/ is absent or empty, so it has never run - copies the Claude starter
+# settings from docs/examples/ into config/ just before the CLI starts:
+# crew-dispatch.json (from crew-dispatch-claude-only.json), speak, and
+# stt-vocabulary. A file already in config/ is never overwritten, a home that
+# has run before gets nothing, and other profiles never write them, because the
+# routing sends every worker to Claude. docs/configuration.md "Starter
+# settings" owns what each file does. --preflight and FM_PRIMARY_DRY_RUN never
+# write them.
 #
 # --install-shim creates ~/.local/bin/firstmate as a symlink to this command.
 # It is idempotent only for that exact symlink and refuses every other existing
@@ -362,18 +388,49 @@ herdr_chrome_capable() {  # <session> <pane> <probe row>
   herdr_chrome_pane_count "$session" "$pane" >/dev/null
 }
 
+# Name the signed-in Claude plan as pro, max5, max20, or nothing when it cannot
+# be read. The header's "Plan default" owns which signals decide and why.
+claude_plan() {
+  local status subscription tier
+  command -v jq >/dev/null 2>&1 || return 0
+  status=$(fm_run_timed 10 "$CLI" auth status </dev/null 2>/dev/null) || true
+  subscription=$(printf '%s' "$status" \
+    | jq -r 'select(.loggedIn == true) | .subscriptionType // empty' 2>/dev/null) || subscription=
+  [ -n "$subscription" ] || return 0
+  tier=$(jq -r '.oauthAccount.organizationRateLimitTier // empty' \
+    "${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json" 2>/dev/null) || tier=
+  case "$tier" in
+    *20x*) printf 'max20' ;;
+    *5x*) printf 'max5' ;;
+    *)
+      case "$subscription" in
+        pro) printf 'pro' ;;
+        max) printf 'max5' ;;
+      esac
+      ;;
+  esac
+}
+
 # Resolve Claude primary effort from local config/primary-effort.
-# An absent file defaults to xhigh. A present file must have a first line that
-# trims to exactly one accepted token; anything else, including an empty token,
-# refuses rather than falling back. Call this only for a Claude profile so a bad
-# file cannot block other primaries.
+# An absent file takes the signed-in plan's default (header "Plan default").
+# A present file must have a first line that trims to exactly one accepted
+# token; anything else, including an empty token, refuses rather than falling
+# back. Call this only for a Claude profile so a bad file cannot block other
+# primaries.
 resolve_claude_effort() {
   local file value
   file="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}/primary-effort"
   if [ ! -f "$file" ]; then
-    CLAUDE_EFFORT=xhigh
+    case "$(claude_plan)" in
+      pro) CLAUDE_EFFORT=medium; CLAUDE_EFFORT_SOURCE="the default for a Claude Pro plan" ;;
+      max5) CLAUDE_EFFORT=high; CLAUDE_EFFORT_SOURCE="the default for a Claude Max 5x plan" ;;
+      max20) CLAUDE_EFFORT=xhigh; CLAUDE_EFFORT_SOURCE="the default for a Claude Max 20x plan" ;;
+      *) CLAUDE_EFFORT=high; CLAUDE_EFFORT_SOURCE="the default when the Claude plan cannot be read" ;;
+    esac
+    CLAUDE_EFFORT_SOURCE="$CLAUDE_EFFORT_SOURCE; config/primary-effort sets your own"
     return 0
   fi
+  CLAUDE_EFFORT_SOURCE="from $file"
   IFS= read -r value < "$file" || true
   value=${value#"${value%%[![:space:]]*}"}
   value=${value%"${value##*[![:space:]]}"}
@@ -598,6 +655,24 @@ companion_status_profile() {  # -> "adapter<TAB>model<TAB>effort", or 1
     astra) printf 'codex\tgpt-6-astra\t%s' "${ASTRA_EFFORT:---}" ;;
     *) return 1 ;;
   esac
+}
+
+# Copy the starter settings into a fresh home's config/, never over a file that
+# is already there (header "Starter settings").
+STARTER_SETTINGS="crew-dispatch.json:crew-dispatch-claude-only.json speak:speak stt-vocabulary:stt-vocabulary"
+install_starter_settings() {
+  local pair name source installed=
+  mkdir -p "$CONFIG" || return 0
+  for pair in $STARTER_SETTINGS; do
+    name=${pair%%:*}
+    source=$FM_ROOT/docs/examples/${pair#*:}
+    [ ! -e "$CONFIG/$name" ] && [ -f "$source" ] || continue
+    cp "$source" "$CONFIG/$name" || continue
+    installed="$installed config/$name"
+  done
+  [ -z "$installed" ] \
+    || printf 'fm-primary: new home: installed the starter settings%s (docs/configuration.md "Starter settings")\n' "$installed" >&2
+  return 0
 }
 
 # install_primary_status_bar: attach the companion row through whichever
@@ -832,6 +907,10 @@ esac
 
 validate_visible_prefix
 resolve_account
+FRESH_HOME=0
+if [ ! -d "$STATE" ] || [ -z "$(ls -A "$STATE" 2>/dev/null)" ]; then
+  FRESH_HOME=1
+fi
 if [ "$PREFLIGHT" -ne 1 ]; then
   mkdir -p "$STATE" "$DATA" || die "could not create Firstmate private state directories"
   refuse_active_session
@@ -892,7 +971,7 @@ case "$PROFILE" in
     # maximum window).
     export CLAUDE_CODE_AUTO_COMPACT_WINDOW=500000
     argv=(claude --model "$CLAUDE_MODEL" --effort "$CLAUDE_EFFORT" --name "$role" --dangerously-skip-permissions)
-    printf 'fm-primary: launching model %s at effort %s\n' "$CLAUDE_MODEL" "$CLAUDE_EFFORT" >&2
+    printf 'fm-primary: launching model %s at effort %s (%s)\n' "$CLAUDE_MODEL" "$CLAUDE_EFFORT" "$CLAUDE_EFFORT_SOURCE" >&2
     ;;
   codex)
     argv=(codex --dangerously-bypass-hook-trust --dangerously-bypass-approvals-and-sandbox -c model_auto_compact_token_limit=500000)
@@ -970,6 +1049,9 @@ fi
 
 [ "$PREFLIGHT" -ne 1 ] || exit 0
 
+case "$PROFILE" in
+  claude-fable|claude-opus) [ "$FRESH_HOME" -ne 1 ] || install_starter_settings ;;
+esac
 mark_current_surface
 export FM_PRIMARY_HARNESS=${PROFILE%%-*}
 export FM_PRIMARY_ROLE=$role
