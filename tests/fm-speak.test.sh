@@ -1003,6 +1003,11 @@ test_enabled_reports_the_opt_in() {
   expect_code 1 "$code" "an invalid config must be refused, not read as an answer"
   assert_not_contains "$out" "enabled" "an invalid config must not answer enabled"
   pass "fm-speak: --enabled reports the opt-in and ignores the mute"
+  home=$(new_home enabled-starter)
+  cp "$ROOT/docs/examples/speak" "$home/config/speak"
+  out=$(speak "$home" --enabled) || fail "fm-speak: the starter config/speak was refused"
+  assert_equals "enabled" "$out" "the starter config/speak must turn spoken replies on"
+  pass "fm-speak: the starter config/speak turns spoken replies on"
 }
 
 # The desk floater's Mute button: voice goes quiet until unmuted, while the

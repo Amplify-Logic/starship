@@ -125,6 +125,27 @@ If the report never comes back, ask "why can't you start a worker?" and fix what
 
 ---
 
+## Optional: starter settings and the call recorder
+
+Starship ships starter settings you can copy into your private `config/` folder:
+
+```sh
+cp docs/examples/crew-dispatch-claude-only.json config/crew-dispatch.json
+cp docs/examples/speak config/speak
+cp docs/examples/stt-vocabulary config/stt-vocabulary
+```
+
+- `crew-dispatch.json` decides which Claude model does which job: Opus for ordinary work, Sonnet for well-specified mechanical work, and deeper Opus thinking for planning; it uses no other provider or account.
+- `speak` turns on spoken replies; it needs the Starship Voice project and a Deepgram key or a macOS voice, as [desk voice-out](docs/configuration.md#desk-voice-out-configspeak) explains, and stays silent without them.
+- `stt-vocabulary` teaches the desk floater's transcription the names you say; add your own below its starter words.
+
+You should see: after a restart, your first mate dispatches workers on Claude only.
+
+Starship also carries a call recorder that turns a call into a live desk and end-of-call notes, on macOS.
+It records only after everyone on the call has agreed; [docs/call-companion.md](docs/call-companion.md) explains setup, stopping and deleting.
+
+---
+
 ## Next
 
 Read [the captain's handbook](docs/handbook.md).

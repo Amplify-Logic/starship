@@ -425,6 +425,10 @@
       "audience": "operator-current"
     },
     {
+      "path": "docs/call-companion.md",
+      "audience": "operator-current"
+    },
+    {
       "path": "docs/desk-voice-replies.md",
       "audience": "agent-runtime"
     },
@@ -465,6 +469,14 @@
       "audience": "operator-example"
     },
     {
+      "path": "docs/examples/call-companion",
+      "audience": "operator-example"
+    },
+    {
+      "path": "docs/examples/crew-dispatch-claude-only.json",
+      "audience": "operator-example"
+    },
+    {
       "path": "docs/examples/desk-speak-register.toml",
       "audience": "operator-example"
     },
@@ -486,6 +498,14 @@
     },
     {
       "path": "docs/examples/wedge-alarm",
+      "audience": "operator-example"
+    },
+    {
+      "path": "docs/examples/speak",
+      "audience": "operator-example"
+    },
+    {
+      "path": "docs/examples/stt-vocabulary",
       "audience": "operator-example"
     },
     {

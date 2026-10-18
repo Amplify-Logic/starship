@@ -1,0 +1,32 @@
+# config/call-companion - settings for the call recorder (bin/fm-call-companion.sh).
+# Copy this into a local, gitignored config/call-companion and edit.
+# `key = value` lines; `#` comments and blank lines are ignored; an unknown key
+# is refused. Every line below shows the default, so an absent file behaves the
+# same as this one. See docs/call-companion.md.
+
+# Label for speech heard only on this Mac's own microphone. Speech from the
+# call audio is labelled "others", and anything in between "unknown speaker".
+speaker_name = me
+
+# Microphone to record, as ffmpeg lists it (empty: the first physical one).
+mic_device =
+
+# Loopback input that carries the call audio (empty: record the microphone only).
+loopback_device = BlackHole
+
+# Output switched to while recording, so the call audio also reaches the
+# loopback; the previous output is restored on stop (empty: never switch).
+multi_output_device = Multi-Output Device
+
+# whisper.cpp model file (empty: ~/.cache/whisper/ggml-large-v3-turbo.bin when
+# present, else ~/.cache/whisper/ggml-base.en.bin).
+whisper_model =
+
+# Claude models for the live desk and for the end-of-call notes.
+digest_model = sonnet
+notes_model = opus
+
+# Optional second screen: an ssh host running Hyprland and Chromium that shows
+# the desk full screen while recording, and the address it opens for the desk.
+display_host =
+display_url =

@@ -1315,6 +1315,22 @@ default profile floor without min_percent is flagged^{"default":[{"harness":"cod
 default profile floor provider override is flagged^{"default":{"harness":"codex","floor":{"scope":"all_models","min_percent":50,"provider":"claude"}}}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - default profile floor needs scope and min_percent 0..100
 ROWS
 
+  # Each tracked dispatch example a new home copies must validate silently,
+  # with and without typed resolution.
+  for example in crew-dispatch.json crew-dispatch-claude-only.json; do
+    case_dir="$TMP_ROOT/dispatch-example-$example"
+    mkdir -p "$case_dir/home/config"
+    printf '%s\n' manual > "$case_dir/home/config/backlog-backend"
+    cp "$ROOT/docs/examples/$example" "$case_dir/home/config/crew-dispatch.json"
+    fakebin=$(make_fake_toolchain "$case_dir")
+    add_real_jq "$fakebin"
+    for key in test-key ''; do
+      out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+        TYPESAFE_API_KEY=$key FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
+      [ -z "$out" ] || fail "docs/examples/$example does not validate (typed key '$key'): $out"
+    done
+  done
+
   case_dir="$TMP_ROOT/dispatch-opt-in-gate"
   mkdir -p "$case_dir/home/config"
   printf '%s\n' manual > "$case_dir/home/config/backlog-backend"

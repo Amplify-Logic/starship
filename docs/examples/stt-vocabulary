@@ -1,0 +1,19 @@
+# config/stt-vocabulary - words the desk floater's transcription should hear
+# right (bin/fm-deepgram-stt.sh). Copy this into a local, gitignored
+# config/stt-vocabulary and add the names you say. See docs/configuration.md
+# "Speech-to-text vocabulary".
+#
+# A plain line is a key term the recogniser should favour.
+# A `heard => written` line fixes a mis-hearing after transcription; write the
+# left side the way it comes back (numbers arrive as digits).
+
+# Words every Starship home uses.
+Starship
+Firstmate
+no-mistakes
+treehouse
+
+# Your own names, projects and addresses, for example:
+# Pat Example
+# Harbour Logbook
+# pat dot example 1 => pat.example1

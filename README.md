@@ -11,6 +11,7 @@ You only answer the real decisions.
 - **A guided start** - a step-by-step setup from a blank computer to a first mate that has done one piece of real work, set up around Claude Code and launched with `bin/fm-primary.sh`, plus [a handbook](docs/handbook.md) for everything after that.
 - **Mac, Windows and Linux** - besides the Mac, it runs on a Windows PC inside WSL 2, or on a rented Linux server you reach over SSH, both set up by one script, `bin/fm-linux-setup.sh`.
 - **A desk floater you can talk to** - a small always-on-top control on the [Mac](docs/desk-floater.md) and on [Windows](docs/desk-floater-windows.md): hold a key to talk to the first mate and hear its replies.
+- **A call recorder and starter settings** - an optional [call recorder](docs/call-companion.md) that keeps a live page of a call and writes notes when it ends, once everyone has agreed to be recorded, and starter settings in `docs/examples/` for which Claude model does which job, spoken replies, and transcription words; the [onboarding guide](ONBOARDING.md#optional-starter-settings-and-the-call-recorder) shows how to copy them.
 - **Easy updates** - say "update starship" and it pulls the latest shared instructions and scripts and restarts cleanly, without touching your private files.
 - **A way to share improvements** - changes to Starship itself go back as pull requests through the `no-mistakes` review pipeline, as [CONTRIBUTING.md](CONTRIBUTING.md) explains.
 
@@ -182,6 +183,7 @@ Firstmate's skills live in two separate places with different audiences:
 - [docs/extension-bindings.md](docs/extension-bindings.md) - maintainer architecture for the narrow trusted external `process-event-adapter/1` package, binding, handshake, and evidence boundary.
 - [docs/remote-secondmates.md](docs/remote-secondmates.md) - current setup, routing, transfer, recovery, and safety behavior for whole-home remote second mates.
 - [docs/calm.md](docs/calm.md) - current `/calm` behavior on Pi and Claude Code and its supported presentation limits.
+- [docs/call-companion.md](docs/call-companion.md) - the macOS call recorder: a live call desk and end-of-call notes, recorded only after everyone on the call has agreed, and how to stop and delete a recording.
 - [docs/voice-relay.md](docs/voice-relay.md) - the optional spoken interface: setup on both machines, measured round-trip cost, what a spoken answer may read, and what this build does not do yet.
 - [docs/cloud-routines.md](docs/cloud-routines.md) - the scheduled Claude cloud routine that watches public creator repositories with the laptop closed and publishes to a separate reports repository, never to firstmate: setup, what it can touch, cost, and the kill switch.
 - [docs/fleet-ledger.md](docs/fleet-ledger.md) - the opt-in activity ledger outside tools can read to follow a home's tasks, and its record contract.

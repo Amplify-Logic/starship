@@ -1,0 +1,15 @@
+{
+  "rules": [
+    {
+      "when": "Well-specified mechanical work whose specification is already precise: a rote rename, a formatting sweep, tests against existing behaviour, documentation generated from a diff, or several such tasks dispatched at once.",
+      "use": { "harness": "claude", "model": "sonnet", "effort": "medium" },
+      "why": "Sonnet is fast and good value when the task leaves little to judgment, and a wide burst of workers spends less of the subscription window on it."
+    },
+    {
+      "when": "High-leverage planning, architecture, strategy or approach selection, where the worker produces judgment rather than code.",
+      "use": { "harness": "claude", "model": "opus", "effort": "xhigh" },
+      "why": "Spend the deepest reasoning only where a wrong direction costs the most; use this rule sparingly."
+    }
+  ],
+  "default": { "harness": "claude", "model": "opus", "effort": "high" }
+}

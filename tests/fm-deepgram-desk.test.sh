@@ -374,6 +374,24 @@ test_stt_vocabulary_key_terms_reach_the_request_encoded() {
   pass "fm-deepgram-stt: key terms reach Deepgram encoded in the model's hint form"
 }
 
+# The starter template a new home copies is read as key terms only: its
+# comments and commented-out examples never reach Deepgram or rewrite anything.
+test_stt_starter_vocabulary_sends_only_its_terms() {
+  local home out log
+  home=$(new_home stt-vocab-starter)
+  printf 'RIFF' > "$home/clip.wav"
+  cp "$ROOT/docs/examples/stt-vocabulary" "$home/config/stt-vocabulary"
+  install_stt_curl "$home" 200 '{"results":{"channels":[{"alternatives":[{"transcript":"Call pat dot example 1 about Starship."}]}]}}'
+  out=$(DEEPGRAM_API_KEY=test-key-not-real FM_DEEPGRAM_CURL="$home/curl" FM_HOME="$home" "$STT" "$home/clip.wav") \
+    || fail "stt failed with the starter vocabulary: $out"
+  [ "$out" = "Call pat dot example 1 about Starship." ] || fail "a commented-out example rewrote the transcript: $out"
+  log=$(cat "$home/curl.log")
+  assert_contains "$log" "keyterm=Starship&keyterm=Firstmate&keyterm=no-mistakes&keyterm=treehouse" \
+    "the starter key terms reach the request"
+  case "$log" in *Pat*|*Harbour*|*%23*) fail "a commented-out example became a key term: $log" ;; esac
+  pass "fm-deepgram-stt: the starter vocabulary sends its key terms and nothing commented out"
+}
+
 test_stt_vocabulary_caps_key_terms() {
   local home out log i terms=()
   home=$(new_home stt-vocab-cap)
@@ -2829,6 +2847,7 @@ test_stt_bounds_a_long_request_and_retries_without_a_length_cap
 test_stt_names_the_bound_when_deepgram_never_answers
 test_stt_without_vocabulary_sends_no_hints
 test_stt_vocabulary_key_terms_reach_the_request_encoded
+test_stt_starter_vocabulary_sends_only_its_terms
 test_stt_vocabulary_caps_key_terms
 test_stt_vocabulary_rewrites_the_printed_transcript
 test_stt_vocabulary_rewrites_longest_whole_phrase_first

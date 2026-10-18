@@ -201,6 +201,14 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-deepgram-stt.sh` | Transcribe one audio file with Deepgram for the desk floater push-to-talk path; never logs the key |
 | `fm-desk-voice.sh` | Desk-voice delivery: send types a captain-input transcript (or dictation, only when the primary chat is the text box in front) into the primary chat pane, falling back to the durable mailbox (deliver / pending / drain transcripts and screenshot paths under state/desk-voice/, with a wake and a retried doorbell ring), plus `ring` to type a doorbell line only into an empty primary composer, with no mailbox fallback, `shot` to capture a display (or store a PNG handed over on standard input) into state/desk-voice/shots/, and `keep` / `recordings` / `retry` to save, list and transcribe again a floater recording whose words did not arrive (docs/desk-floater.md) |
 | `fm-desk-floater.sh` | Build and launch the Mac always-on-top push-to-talk, dictation and screenshot floater for this home (docs/desk-floater.md) |
+| `fm-call-companion.sh` | Start (only with `--everyone-agreed`), stop, archive, list and delete call recordings, and show the live call desk (docs/call-companion.md) |
+| `fm-call-watch.sh` | Notice calls, remind to ask before recording, and stop a running recording once the call ends; installs its LaunchAgent (docs/call-companion.md) |
+| `fm-call-mic.sh` | Record the microphone and call audio in overlapping chunks and transcribe them locally with whisper.cpp |
+| `fm-call-captions.sh` | Append a Google Meet tab's visible captions to the call transcript |
+| `fm-call-digest.sh` | Keep the live call desk: a cited digest of the last hour of transcript |
+| `fm-call-final-notes.py` | Write paraphrased end-of-call notes that account for every item the live desk showed |
+| `fm-call-speaker-split.py` | Label transcribed speech by the recorded track that carried it |
+| `fm-call-lib.sh` | Shared call-recorder paths and `config/call-companion` settings |
 | `fm-desk-floater-windows.sh` | From inside WSL 2, build, install, update, start, stop and remove the Windows floater with Windows' own C# compiler, and serve its `bridge` calls through the shared desk-voice, speech-to-text and speak scripts (docs/desk-floater-windows.md) |
 | `fm-desk-play-windows.sh` | afplay stand-in `fm-speak.sh` uses inside WSL 2 once the Windows floater is installed: plays one reply through the Windows speakers and stops on a stop (docs/desk-floater-windows.md) |
 | `fm-web.sh` | Serve the localhost chat page onto the primary first mate: its conversation, a message box that sends through `fm-desk-voice.sh send`, and the bridge glance (docs/web.md) |

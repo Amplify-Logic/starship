@@ -13,6 +13,8 @@ Start with the directory layout, then use the setting reference for the behavior
 | Backlog, preferences, and memory | [Backlog backend](#backlog-backend-taskstoml--configbacklog-backend), [captain preferences](#captain-preferences-datacaptainmd--datacaptain-sharedmd), [external memory tiers](#external-memory-tiers-memory-layering-section), and [startup memory budget](#startup-memory-budget-configstartup-memory-budget) |
 | Supervision and presentation | [Pi supervision branch](#pi-supervision-branch), [supervision host](#supervision-host-configsupervision-host), and [Calm preference](#calm-preference-configcalm) |
 | Persistent secondmates | [Secondmate routes](#secondmate-routes-datasecondmatesmd) |
+| Starter settings for a new home: which model does which job, spoken replies, and transcription words | [Crew dispatch profiles](#crew-dispatch-profiles-configcrew-dispatchjson), [desk voice-out](#desk-voice-out-configspeak), and [speech-to-text vocabulary](#speech-to-text-vocabulary-configstt-vocabulary) |
+| The call recorder | [Call recorder](#call-recorder-configcall-companion) |
 | Per-run overrides and tuning | [Environment variables](#environment-variables) |
 
 ## FM_HOME
@@ -81,6 +83,7 @@ Each effective `FM_HOME` contains private operational directories.
 - Explicitly installed content-addressed extension packages under `data/extensions/packages/`.
 - Glasses ideas held for Atelier under `data/voice-ideas/` (`bin/fm-voice-idea.py`).
 - The captain ledger `data/captain-ledger.jsonl`, every captain prompt recorded before the primary answers in a home opted in through `config/captain-ledger` (`bin/fm-captain-ledger.sh`).
+- Call recordings under `data/calls/`: the transcript, live desk, end-of-call notes and archive (`bin/fm-call-lib.sh`; [call-companion.md](call-companion.md)).
 
 `state/` holds runtime records:
 
@@ -97,6 +100,7 @@ Each effective `FM_HOME` contains private operational directories.
 - The cloud routine report check's shim `state/routine-reports.check.sh` and its record `state/.routine-reports` (`bin/fm-routine-report-check.sh`; [cloud-routines.md](cloud-routines.md)).
 - The dispatch decision record `state/dispatch-decisions.jsonl` (`bin/fm-dispatch-resolve.sh`; "Typed dispatch resolution" below).
 - The localhost web page's token, pid, port and request log under `state/web/` (`bin/fm-web.sh`; [web.md](web.md)).
+- The call recorder's process records, logs, short-lived audio chunks and decision logs under `state/calls/` (`bin/fm-call-lib.sh`; [call-companion.md](call-companion.md)).
 
 `config/` holds local gitignored operating choices, including explicit extension bindings under `config/extensions.d/`.
 
@@ -1405,6 +1409,7 @@ This single-provider table is separate from the frozen legacy mapping used by `f
 - Bootstrap reports unsupported harness/model/effort combinations as a `CREW_DISPATCH` diagnostic when they are visible in the file.
 
 See [`docs/examples/crew-dispatch.json`](examples/crew-dispatch.json) for a starting point to copy into local `config/crew-dispatch.json`; its Pi default declares the `claude` provider required for typed resolution of that Anthropic model.
+A home that runs Claude only starts from [`docs/examples/crew-dispatch-claude-only.json`](examples/crew-dispatch-claude-only.json) instead: Opus at high effort by default, Sonnet at medium for well-specified mechanical work, and Opus at extra-high effort for judgment-heavy planning, with no other provider or account assumed.
 
 **Validation and diagnostics**
 
@@ -2917,6 +2922,7 @@ Nothing here observes audio, so a successful call means the shaped line was hand
 
 Configuration is `key = value` lines; unknown keys are refused rather than ignored.
 `enabled` arms this home, and the optional `voice` names a `say` voice, which also selects `say` as the speaker.
+[`docs/examples/speak`](examples/speak) is a starter file that turns spoken replies on.
 The script's header and `--help` own the exact invocation, the environment overrides, and the exit codes.
 [`desk-voice-replies.md`](desk-voice-replies.md) owns when the orchestrator speaks; the session-start digest prints it only in a home opted in here.
 
@@ -2959,6 +2965,15 @@ Rewrites ignore case, match whole tokens (including email addresses, dotted name
 A malformed line is ignored, and a vocabulary that cannot be read never stops a transcription.
 The default model is `nova-3` because only Nova-3 accepts Deepgram's keyterm hints; `DEEPGRAM_STT_MODEL` in the environment or this home's gitignored `.env` overrides it (the environment wins), and an older model gets the terms as boosted keywords instead.
 The script's header owns the hint parameters, the term caps, and the matching rules.
+[`docs/examples/stt-vocabulary`](examples/stt-vocabulary) is a starter template to copy and fill with your own names.
+
+## Call recorder (config/call-companion)
+
+Optional, private, gitignored, and not inherited by secondmate homes.
+It holds the call recorder's settings: the label for your own speech, the microphone and loopback devices, the speech model, the Claude models for the live desk and the notes, and an optional second screen.
+Absent, every setting takes its default.
+`key = value` lines; `#` comments and blank lines are ignored, and an unknown key is refused so a typo never silently changes what is recorded.
+[`docs/examples/call-companion`](examples/call-companion) lists every key with its default, `bin/fm-call-lib.sh`'s header owns their meaning, and [call-companion.md](call-companion.md) covers consent, setup, stopping and deleting.
 
 ## Supervision active alert channels (config/wedge-alarm)
 

@@ -24,6 +24,8 @@
 #                               install against a temporary home without ever
 #                               loading anything into a real launchd session
 #   FM_LAUNCHD_REMOVE_NEEDS_DARWIN  true to refuse `remove` away from macOS
+#   FM_LAUNCHD_PATH             optional PATH for the job; unset or empty keeps
+#                               launchd's minimal default
 #
 # The sourcing script must also define `die` and `fm_launchd_interval`, and may
 # define any of these optional hooks, which are called only when they exist:
@@ -49,8 +51,13 @@ fm_launchd_hook() {
 # login and then on the interval, and an interval that elapsed while the machine
 # slept runs shortly after it wakes. There is no lid-open event here.
 fm_launchd_render() {
-  local interval root home program stdout stderr
+  local interval root home program stdout stderr path_entry=''
   interval=$(fm_launchd_interval)
+  if [ -n "${FM_LAUNCHD_PATH:-}" ]; then
+    path_entry="
+    <key>PATH</key>
+    <string>$(fm_launchd_xml_escape "$FM_LAUNCHD_PATH")</string>"
+  fi
   root=$(fm_launchd_xml_escape "$FM_LAUNCHD_ROOT")
   home=$(fm_launchd_xml_escape "$FM_LAUNCHD_FM_HOME")
   program=$(fm_launchd_xml_escape "$FM_LAUNCHD_PROGRAM")
@@ -75,7 +82,7 @@ fm_launchd_render() {
     <key>FM_HOME</key>
     <string>$home</string>
     <key>FM_ROOT_OVERRIDE</key>
-    <string>$root</string>
+    <string>$root</string>$path_entry
   </dict>
   <key>StartInterval</key>
   <integer>$interval</integer>
