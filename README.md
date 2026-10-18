@@ -1,4 +1,42 @@
-<h1 align="center">firstmate</h1>
+<h1 align="center">Starship</h1>
+
+<h3 align="center">Talk to one AI first mate. It runs a crew of coding agents for you.</h3>
+
+Starship is a ready-to-use build of [Firstmate](https://github.com/kunchenguid/firstmate).
+You ask for work in plain words, and the first mate hands each task to its own AI worker, keeps an eye on all of them, and brings back finished pull requests or written reports.
+You only answer the real decisions.
+
+## What Starship adds
+
+- **A guided start** - a step-by-step setup from a blank computer to a first mate that has done one piece of real work, set up around Claude Code and launched with `bin/fm-primary.sh`, plus [a handbook](docs/handbook.md) for everything after that.
+- **Mac, Windows and Linux** - besides the Mac, it runs on a Windows PC inside WSL 2, or on a rented Linux server you reach over SSH, both set up by one script, `bin/fm-linux-setup.sh`.
+- **A desk floater you can talk to** - a small always-on-top control on the [Mac](docs/desk-floater.md) and on [Windows](docs/desk-floater-windows.md): hold a key to talk to the first mate and hear its replies.
+- **Easy updates** - say "update starship" and it pulls the latest shared instructions and scripts and restarts cleanly, without touching your private files.
+- **A way to share improvements** - changes to Starship itself go back as pull requests through the `no-mistakes` review pipeline, as [CONTRIBUTING.md](CONTRIBUTING.md) explains.
+
+## Who it is for
+
+Starship is for people and teams who want several pieces of software work done at once - fixes, investigations, plans, reviews - without juggling a separate AI session for each.
+Your setup stays yours: a fresh copy holds only the public files, and your preferences, task list, projects and sign-ins stay private on your own machine.
+
+## Start here
+
+| Your computer | Start with |
+| --- | --- |
+| Mac | [ONBOARDING.md](ONBOARDING.md) |
+| Windows PC (through WSL 2) | [ONBOARDING-windows.md](ONBOARDING-windows.md) |
+| Rented Linux server | [ONBOARDING-linux-server.md](ONBOARDING-linux-server.md) |
+
+Clone this repository, [Amplify-Logic/firstmate](https://github.com/Amplify-Logic/firstmate), not the upstream one.
+
+## Credit
+
+Starship is built on [Firstmate](https://github.com/kunchenguid/firstmate) by Kun Chen, and like Firstmate it is MIT licensed - see [LICENSE](LICENSE).
+
+# Built on Firstmate
+
+The rest of this page is the original Firstmate introduction.
+
 <p align="center">
   <a
     href="https://img.shields.io/badge/platform-macOS%20%7C%20Linux-blue?style=flat-square"
@@ -17,10 +55,6 @@
       src="https://img.shields.io/discord/1439901831038763092?style=flat-square&label=discord"
   /></a>
 </p>
-
-> **Teammates: start with [ONBOARDING.md](ONBOARDING.md).**
-> This is Starship, the [Amplify-Logic fork](https://github.com/Amplify-Logic/firstmate) of [kunchenguid/firstmate](https://github.com/kunchenguid/firstmate).
-> Clone this fork, not the upstream repository, and launch with `bin/fm-primary.sh` as that guide shows.
 
 <h3 align="center">Talk to one agent. Ship with a crew.</h3>
 
