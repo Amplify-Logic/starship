@@ -273,16 +273,19 @@ FM_SUP_SENTINEL_NOOP_EXIT=4
 # shellcheck disable=SC2034 # Read by callers after sourcing.
 FM_SUP_AWAY_GAP_NAME=.supervision-sentinel.away-gap
 
-# Canonical basename of the armed glasses-shift record written by
-# bin/fm-shift.sh start and removed by bin/fm-shift.sh stop. While it exists the
-# host sentinel supervises the home even with no crew task in flight: a shift's
-# questions arrive as mailbox events, never as state/*.meta tasks, so the
-# in-flight count alone would read a dead watcher during a shift as idle.
+# Canonical basename of the armed glasses-shift record. The shift tool lives in
+# a home's private add-on (its bin/fm-shift.sh start writes the record and stop
+# removes it), and the add-on reads this record name and the two predicates
+# below from here, so they stay in this library while it does. While the record
+# exists the add-on's sentinel hook keeps the host sentinel supervising the home
+# even with no crew task in flight: a shift's questions arrive as mailbox
+# events, never as state/*.meta tasks, so the in-flight count alone would read a
+# dead watcher during a shift as idle.
 # shellcheck disable=SC2034 # Read by callers after sourcing.
 FM_SUP_SHIFT_RECORD_NAME=.shift
 
 # Canonical basename of the away-mode flag. A shift's lifetime is strictly
-# contained inside away mode's: bin/fm-shift.sh start establishes away mode
+# contained inside away mode's: the add-on's shift start establishes away mode
 # before it writes the shift record, and its stop tears no artifact down until
 # that flag is gone. Spelled once here so every reader of the pair agrees.
 # shellcheck disable=SC2034 # Read by callers after sourcing.
@@ -312,7 +315,7 @@ fm_sup_shift_armed() {
 # fm_sup_shift_stale <state-dir>
 # True when a shift record outlived away mode. The artifacts are still present
 # and still capture the home's alarm channel, so this is the state a human must
-# be told about and `bin/fm-shift.sh stop` is what clears it.
+# be told about and the add-on's shift stop is what clears it.
 fm_sup_shift_stale() {
   local state=$1
   [ -f "$state/$FM_SUP_SHIFT_RECORD_NAME" ] && [ ! -e "$state/$FM_SUP_AFK_FLAG_NAME" ]

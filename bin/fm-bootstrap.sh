@@ -29,12 +29,6 @@
 #                 "UPSTREAM: <N> commits behind <remote>/<branch> (<url>)
 #                  [- <R> upstream commits, <D> already delivered here] - <subjects>",
 #                 "UPSTREAM_REPORT: new private report at <path>",
-#                 "MORNING_INTAKE: <label> due|failed|complete ..." or
-#                 "MORNING_INTAKE: new <label> report at <path>",
-#                 "CHANNEL_INTAKE: <N> source(s) due ...", "<N> item(s) ready
-#                  to send|blocked, ...|held, ...", "source(s) reading
-#                  unknown ...", or
-#                  "<label> live check is absent|unregistered ...",
 #                 "FMX: X mode on ..." or "FMX: X mode off ...".
 #          When a RUNNING secondmate home is fast-forwarded, its target is
 #          firstmate's own current default-branch commit. A local worktree uses
@@ -133,15 +127,8 @@
 #          UPSTREAM_REPORT is the read-only pending-report check owned by
 #          bin/fm-upstream-watch.sh. The weekly job writes only private data/;
 #          acknowledge the report after reading it so later sessions stay quiet.
-#          Bootstrap hooks (bin/fm-addon.sh) add their own read-only lines.
-#          MORNING_INTAKE is the read-only owed/failed/pending check owned by
-#          bin/fm-morning-intake.sh, silent unless this home opted in.
-#          CHANNEL_INTAKE is the read-only due/ready/unknown check owned by
-#          bin/fm-channel-intake.sh, silent unless this home opted in. A source
-#          reading `unknown` did not complete its last read, which is not the
-#          same as nothing new, and a notification the gate refused or held is
-#          named as such rather than counted as quiet;
-#          docs/channel-intake.md owns the response.
+#          Bootstrap hooks (bin/fm-addon.sh) add their own read-only lines,
+#          which the hook's owner documents.
 #          X mode is OPTIONAL and inert unless FM_HOME/.env has a non-empty
 #          FMX_PAIRING_TOKEN. When opted in, bootstrap requires curl+jq, writes
 #          the relay poll shim and 30s cadence config, and prints an FMX line.
@@ -1814,9 +1801,8 @@ command -v fm_upstream_check >/dev/null 2>&1 && fm_upstream_check "$FM_ROOT" "$F
 [ ! -x "$SCRIPT_DIR/fm-upstream-watch.sh" ] \
   || "$SCRIPT_DIR/fm-upstream-watch.sh" pending
 # Read-only checks from bootstrap hooks: this checkout's built-in hooks and this
-# home's private add-on (bin/fm-addon.sh owns the hook points). The opt-in
-# morning and channel intakes report here; each hook owns its own check, and a
-# home whose hooks have nothing to say prints nothing.
+# home's private add-on (bin/fm-addon.sh owns the hook points). Each hook owns
+# its own check, and a home whose hooks have nothing to say prints nothing.
 FM_HOME="$FM_HOME" FM_CONFIG_OVERRIDE="$CONFIG" "$SCRIPT_DIR/fm-addon.sh" run bootstrap
 
 if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then

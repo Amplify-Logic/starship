@@ -55,7 +55,7 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-claude-reply-speak.sh` | Claude Stop `async` hook speaking the primary's final reply through desk voice-out when the turn spoke nothing (docs/configuration.md "Desk voice-out") |
 | `fm-captain-ledger.sh` | Claude UserPromptSubmit hook recording each captain prompt to the captain ledger in a home opted in through config/captain-ledger, plus the `pending` listing the session-start digest prints until `mark` records them reconciled |
 | `fm-opt-in-skills.sh` | Link into `.agents/skills/` only the opt-in skills from `.agents/opt-in-skills/` that this home switched on with `config/` presence flags, so no other home lists them, plus every skill of this home's private add-on (docs/configuration.md "Opt-in skills") |
-| `fm-addon.sh` | This home's private add-on named by `config/addon`: resolve its checkout, list and run the `bootstrap`, `session-start`, `sentinel` and `watcher` hooks of this repository's `hooks/` and the add-on's, and clone a missing checkout (docs/configuration.md "Private add-on") |
+| `fm-addon.sh` | This home's private add-on named by `config/addon`: resolve its checkout, list and run the `bootstrap`, `session-start`, `sentinel`, `watcher` and `deck-staging` hooks of this repository's `hooks/` and the add-on's, and clone a missing checkout (docs/configuration.md "Private add-on") |
 | `fm-turnend-guard.sh`    | Shared primary turn-end guard predicate so no turn ends blind (docs/turnend-guard.md) |
 | `fm-turnend-guard-grok.sh` | Grok Stop-hook adapter for the primary turn-end guard                              |
 | `fm-kimi-turnend-hook.sh` | Surgically install or remove Kimi's guarded global crew turn-end hook                |
@@ -141,7 +141,6 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-check-unregister.sh` | Retire a custom watcher check and its trust binding by validated task id            |
 | `fm-check-lib.sh`        | Validate custom-check registrations and prepare private execution snapshots          |
 | `fm-tool-update-check.sh` | Report watched tooling with an update available, and updates installed but left inert by PATH order |
-| `fm-routine-report-check.sh` | Watcher check that wakes once per new scheduled cloud routine report in the dedicated reports repository, plus `show` to read the reports without changing this checkout ([cloud-routines.md](cloud-routines.md)) |
 | `fm-routine-creator-watch.sh` | The creator-repo watch a scheduled Claude cloud routine runs: public git reads into one capped digest pushed to the dedicated reports repository, never to firstmate ([cloud-routines.md](cloud-routines.md)) |
 | `fm-startup-growth-check.sh` | Daily metadata-only growth check for startup memory and tracked startup/instruction surfaces |
 | `fm-pr-lib.sh`           | Own canonical task and PR validation plus private atomic PR-poll publication, merge-notification identity, and retirement |
@@ -223,8 +222,6 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-order.sh`            | Standing Order list/show/run/log-fire/arm/disarm/graduate over `data/orders/<slug>.md`; arming requires `--by-captain` (docs/ops-command-center.md) |
 | `fm-tray.sh`             | Read-only pending-action renderer over the action-gateway audit log; age is the headline; never approves (docs/ops-command-center.md) |
 | `fm-deck.sh`             | Refreshing captain-private Action Deck pane: what is waiting on the captain above the fold, then what is moving; composes records this home already keeps and mutates none of them; `--json` emits the same model for the bridge's `/deck` page (docs/ops-command-center.md, docs/bridge-view.md) |
-| `fm-fota-stage.py`       | Stage and verify a device configuration command into a `fm.fota-staging-plan.v1` preview; per-key confirmed encodings, observed-row eligibility, deterministic operation identity; never sends (docs/fota-staging.md) |
-| `fm-fota-stage-run.sh`   | Background staging runs over a staged plan: generates the browser-side request, queues it to the configured companion through `codex queue --thread` and stores the receipt, deduplicates by operation identity, settles `prepared`/`pending`/`ready`/`error`/`unknown` from an independent readback, and records explicit captain acknowledgement; never sends (docs/fota-staging.md) |
 | `fm-action-gateway-v2.py` | Gateway v2 broker: strict parsing, immutable closed plans, SQLite-authoritative state, peer-authenticated channels, approval signatures verified against an enrolled signer, and lease-bounded execution settled from the executor's own store (docs/action-gateway-v2.md) |
 | `fm-action-safe-sink-v2.py` | Gateway v2 deterministic safe sink: the only executor the broker claims for; one local append-only record per approved plan, exactly once, read back before it reports (docs/action-gateway-v2.md) |
 | `fm-action-runner-v2.py` | Gateway v2 execution entry point: the execution socket's executor peer; claims one lease, verifies the bound executor's bytes before running it, and reports back with no approval authority and no say in the outcome (docs/action-gateway-v2.md) |
@@ -241,20 +238,9 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-home-port.sh`        | Export, import, push, pull, or bootstrap captain-private portable home material (docs/porting.md) |
 | `fm-home-manifest.sh`    | Print the environment-fidelity manifest of backend and tool versions that `fm-bootstrap.sh manifest` dispatches to (docs/porting.md) |
 | `fm-project-display-name.sh` | Resolve a project slug to its human display name with explicit brand overrides and a synthesized fallback |
-| `fm-file-event-lib.sh`   | Default glasses mailbox/inbox watch paths, the bounded file-event wait, and the watcher's forked terminal wait (hook W1) |
-| `fm-file-eventwait.py`   | Portable kqueue, inotify, or stat-backed implementation of the bounded file-event wait |
-| `fm-shift.sh`            | Arm, stand down, and report the captain's glasses voice loop for one delivery shift; refuses rather than half-arming (docs/shift-loop.md) |
-| `fm-voice-idea.py`       | File an idea spoken into the glasses on its Atelier song through the Atelier Inbox, holding it until Atelier can take it and speaking Atelier's receipt; `arm` registers its watcher check (docs/voice-ideas.md) |
 | `fm-supervision-sentinel.sh` | Home-scoped macOS launchd outage sentinel that alarms outside the harness process tree and never restarts supervision (docs/watcher-continuity.md) |
-| `fm-morning-intake.sh`   | Opt-in once-per-local-day intake gate owning the local day, bounded retries, visible failure, and the completion watermark (docs/configuration.md "Morning intake") |
-| `fm-morning-intake-schedule.sh` | Render, install, inspect, and remove that intake's opt-in macOS launchd schedule and its live watcher check (docs/configuration.md "Morning intake") |
-| `fm-channel-intake.sh`   | Opt-in continuous channel intake: the per-source repeat-poll gate and obligation ledger, local only, owning cadence, checkpoints, dedup, backoff, and the notification budget (docs/channel-intake.md) |
-| `fm-channel-intake-schedule.sh` | Render, install, inspect, and remove that intake's opt-in macOS launchd schedule and its live watcher check (docs/channel-intake.md) |
-| `fm-channel-intake-assess.py` | Decide from one HubSpot ticket timeline whether a partner-facing ask is awaiting the captain, for that intake's `observe --timeline-file` (docs/channel-intake.md) |
 | `fm-dropped-threads.sh`  | Opt-in twice-daily dropped-threads digest from local records: one spoken sentence plus a short list, recorded for a later Starship Voice phone card and spoken at the desk (docs/configuration.md "Dropped-threads digest") |
 | `fm-dropped-threads-schedule.sh` | Render, install, inspect, and remove that digest's opt-in macOS launchd schedule (docs/configuration.md "Dropped-threads digest") |
-| `fm-todo.sh`             | The daily to-do's durable item store: one record per ask folded from the channel ledger, morning metadata and captain-held backlog, with recorded verification, durable page commands, ticket verbs queued for Firstmate's HubSpot write, and closure evidence (docs/channel-intake.md) |
-| `fm-todo-render.sh`      | Rebuild the day's Lavish to-do page from the item store, deterministically and with no model call, with per-line freshness (docs/channel-intake.md) |
 | `fm-launchd-schedule-lib.sh` | Shared per-home LaunchAgent render, lint, load, and remove for this fork's scheduled owners |
 | `fm-task-outcome.sh`     | Resolve a worker outcome from an explicit value, structured backlog title, or safe fallback |
 | `fm-visible-title.sh`    | Build the human WORKER tab title from a resolved outcome and state label, the single owner of that format |

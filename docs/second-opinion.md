@@ -5,7 +5,7 @@ ADHD (`docs/adhd.md`) fans out options before the pick; this front-end stress-te
 The default reviewer runs on Claude Code, which is already a fleet dependency; the different-vendor reviewer needs the Cursor CLI (`cursor-agent`) signed in to a Cursor plan.
 The auto-fire trigger is `.agents/opt-in-skills/second-opinion-auto-fire/SKILL.md`.
 The CLI wrapper is `bin/fm-second-opinion.sh`.
-The skill is opt-in: a home lists it only with the `config/second-opinion` presence flag ([configuration.md](configuration.md#opt-in-skills-configadhd-configsecond-opinion-configdaily-todo)).
+The skill is opt-in: a home lists it only with the `config/second-opinion` presence flag ([configuration.md](configuration.md#opt-in-skills-configadhd-configsecond-opinion)).
 
 ## What it is for
 

@@ -70,7 +70,7 @@ Severity classes follow Atelier's tool taxonomy shape (`read` / `costly` / `exte
 
 Registered irreversible kinds include `purchase`, `payment`, `spend`, `transfer`, `checkout`, `ad.spend`, `email.send`, `message.send`, `sms.send`, `chat.send`, `notify.person`, `outreach.send`, `social.post`, `submission.send`, `booking.request`, `device.config.push`, and `device.firmware.push`.
 Registered external kinds include `calendar.create`, `crm.update`, `device.config.stage`, `file.write.remote`, `kb.fact.publish`, `course.publish`, and `sheet.write`.
-`device.config.stage` prepares and verifies a device configuration command **without sending it**; see [`fota-staging.md`](fota-staging.md).
+`device.config.stage` prepares and verifies a device configuration command **without sending it**; the staging tool itself lives in a home's private add-on.
 The deny-by-default registry in `bin/fm-action-gateway.sh` is the owner of that list; `classify --action-kind` reports severity, ceiling, and whether a kind is graduatable, and `classify --list` dumps every registered kind with its severity.
 The two enumerations above are convenience copies and are drift-checked against `classify --list` by `tests/fm-action-gateway.test.sh`, so adding or removing a registered kind fails that test until this section is updated.
 Every `device.*` kind, at any severity, carries the non-graduatable `device` ceiling.

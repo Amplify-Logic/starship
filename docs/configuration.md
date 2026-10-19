@@ -15,7 +15,7 @@ Start with the directory layout, then use the setting reference for the behavior
 | Persistent secondmates | [Secondmate routes](#secondmate-routes-datasecondmatesmd) |
 | Starter settings for a new home: which model does which job, spoken replies, transcription words, and how hard the first mate thinks | [Starter settings](#starter-settings-first-launch), [crew dispatch profiles](#crew-dispatch-profiles-configcrew-dispatchjson), [desk voice-out](#desk-voice-out-configspeak), [speech-to-text vocabulary](#speech-to-text-vocabulary-configstt-vocabulary), and [primary effort](#primary-effort-configprimary-effort) |
 | The call recorder | [Call recorder](#call-recorder-configcall-companion) |
-| A home's own private tools beside the shared code | [Private add-on](#private-add-on-configaddon) and [opt-in skills](#opt-in-skills-configadhd-configsecond-opinion-configdaily-todo) |
+| A home's own private tools beside the shared code | [Private add-on](#private-add-on-configaddon) and [opt-in skills](#opt-in-skills-configadhd-configsecond-opinion) |
 | Per-run overrides and tuning | [Environment variables](#environment-variables) |
 
 ## FM_HOME
@@ -82,7 +82,6 @@ Each effective `FM_HOME` contains private operational directories.
 - Captain preferences and optional shared captain preferences.
 - Learnings, backlog, briefs, scout reports, and the optional per-task no-mistakes pipeline-spend ledger.
 - Explicitly installed content-addressed extension packages under `data/extensions/packages/`.
-- Glasses ideas held for Atelier under `data/voice-ideas/` (`bin/fm-voice-idea.py`).
 - The captain ledger `data/captain-ledger.jsonl`, every captain prompt recorded before the primary answers in a home opted in through `config/captain-ledger` (`bin/fm-captain-ledger.sh`).
 - Call recordings under `data/calls/`: the transcript, live desk, end-of-call notes and archive (`bin/fm-call-lib.sh`; [call-companion.md](call-companion.md)).
 
@@ -98,7 +97,6 @@ Each effective `FM_HOME` contains private operational directories.
 - Per-task steering-inbox records under `state/<id>.inbox/` (`bin/fm-task-inbox-lib.sh`).
 - Parent-owned secondmate pending-reply records under `state/pending-replies/` (`bin/fm-pending-reply-lib.sh`).
 - The captain-ledger reconciliation cursor `state/.captain-ledger-cursor` (`bin/fm-captain-ledger.sh`).
-- The cloud routine report check's shim `state/routine-reports.check.sh` and its record `state/.routine-reports` (`bin/fm-routine-report-check.sh`; [cloud-routines.md](cloud-routines.md)).
 - The dispatch decision record `state/dispatch-decisions.jsonl` (`bin/fm-dispatch-resolve.sh`; "Typed dispatch resolution" below).
 - The localhost web page's token, pid, port and request log under `state/web/` (`bin/fm-web.sh`; [web.md](web.md)).
 - The call recorder's process records, logs, short-lived audio chunks and decision logs under `state/calls/` (`bin/fm-call-lib.sh`; [call-companion.md](call-companion.md)).
@@ -590,7 +588,7 @@ With it absent, nothing is checked or reported.
 The flag is not inherited by secondmate homes.
 `bin/fm-computer-use.sh` owns the pin, the check, the installer and the guard; the skill owns when and how they are used.
 
-## Opt-in skills (config/adhd, config/second-opinion, config/daily-todo)
+## Opt-in skills (config/adhd, config/second-opinion)
 
 A few bundled skills serve one home's own setup rather than every home, so they live in `.agents/opt-in-skills/` and no session lists them until the home switches them on.
 Each switch is an optional local, gitignored presence flag; any file at the path turns it on, whatever it holds:
@@ -599,7 +597,6 @@ Each switch is an optional local, gitignored presence flag; any file at the path
 | --- | --- |
 | `adhd` and `adhd-auto-fire` ([adhd.md](adhd.md)) | `config/adhd` |
 | `second-opinion-auto-fire` ([second-opinion.md](second-opinion.md)) | `config/second-opinion` |
-| `daily-todo-freshness`, whose re-check rules morning and channel intake apply | `config/daily-todo` |
 | `macos-computer-use` | `config/computer-use` (above) |
 
 A switched-on skill is linked into `.agents/skills/` under its usual name, so it loads exactly as a tracked skill does, and the link is gitignored.
@@ -623,10 +620,11 @@ With no `config/addon` a home behaves exactly as it does without add-ons.
 An add-on keeps this repository's layout, so a tool moves between the two by moving its files:
 
 - Every skill in the add-on's `.agents/skills/` is linked into the home's checkout as an opt-in skill is, and replaces an opt-in skill of the same name.
-- Hooks in the add-on's `hooks/<point>/` run beside this repository's own built-in `hooks/<point>/`, in name order, and replace a built-in hook of the same name: `bootstrap` adds read-only startup checks, `session-start` adds standing instructions to the session-start digest, `sentinel` names work that keeps the host sentinel watching a home with no task in flight, and `watcher` files are sourced into the watcher when it starts.
+- Hooks in the add-on's `hooks/<point>/` run beside this repository's own built-in `hooks/<point>/`, in name order, and replace a built-in hook of the same name: `bootstrap` adds read-only startup checks, `session-start` adds standing instructions to the session-start digest, `sentinel` names work that keeps the host sentinel watching a home with no task in flight, `watcher` files are sourced into the watcher when it starts, and `deck-staging` adds staging runs to the Action Deck.
 
 `/updatefirstmate` ("update starship") fast-forwards the add-on from its origin with the same guards as the shared code and relinks its skills, and a remote second mate's home fast-forwards the add-on its own `config/addon` names.
 `bin/fm-home-port.sh` carries `config/addon` to another machine, clones the add-on during its one-command handoff, and fails `verify` while the checkout is missing, and `bin/fm-linux-setup.sh --addon <owner>/<repo>` names one on a new Linux machine.
+Personal tools that serve one home only, such as a morning or channel intake, a daily to-do page, glasses tools or device configuration staging, live in that home's own add-on rather than here.
 Register the add-on as an ordinary project when workers should change it.
 The add-on is home-local and is not inherited by secondmate homes.
 `bin/fm-addon.sh` owns the configuration, the hook points and their contract, and the install.
@@ -2848,70 +2846,6 @@ The default cadence is 604800 seconds (weekly).
 Set `interval_seconds = N` in private `config/upstream-watch`, or export `FM_UPSTREAM_WATCH_INTERVAL_SECONDS=N`, to override it.
 The generator and delivery scripts never port, merge, rebase, or publish anything.
 
-## Morning intake (config/morning-intake)
-
-An opt-in, once-per-local-day gate for a scheduled daily intake and report.
-It ships inert: with no `enabled = true` line in private gitignored `config/morning-intake`, `bin/fm-morning-intake.sh` does nothing at all, so cloning this repo, seeding a secondmate home, or adding a device never enrols it.
-Each home and each device opts in separately.
-
-`bin/fm-morning-intake.sh` owns the local day, the start-of-morning threshold, deduplication, bounded retries, the visible failure state, and the completion watermark.
-Its header and `--help` own the exact commands, config keys and mechanics.
-A `timezone` that does not resolve on this host is refused rather than silently treated as UTC, which would move both the local day and the threshold.
-Every failure counts against the day's `max_attempts`, whether or not it was claimed first, and only `reset` gives a spent budget back.
-`run` is both the scheduled entry point and the retained manual command; `run --force` arms an intake outside the configured window.
-`--force` does not override the bounded budget: on a day whose attempts are spent it refuses and names `reset`, rather than arming a day `claim` would then refuse and waking the primary for it.
-It never reads a source system, spawns an agent, starts a session, or takes the per-home session lock, so it cannot compete with a live fleet.
-
-The completion watermark under private gitignored `data/morning-intake/` advances only in `complete`, and only after the named report is verified as a non-empty regular file inside the configured `report_dir`.
-A failed or partial intake therefore never marks the day done, which is what lets a corrected source message published after a same-day failure still be ingested while attempts remain.
-Reports and durable records survive both acknowledgement and schedule removal.
-
-The day's Lavish page is part of that completion rather than an extra.
-`complete` refuses without `--lavish FILE` naming an existing, non-empty `.html` page under the home's own `.lavish/` directory, so a markdown report alone no longer finishes the day.
-A day that genuinely cannot have a page completes with `--no-lavish REASON` instead; the reason is written into the day's durable record and printed by `status` as `state_lavish_waiver`, so a skipped page stays visible rather than indistinguishable from a rendered one.
-The two are mutually exclusive, a `rearm` clears both so the next `complete` proves the page again, and the gate never opens or renders the page itself.
-[`bin/fm-todo-render.sh`](../bin/fm-todo-render.sh) owns rendering that page; its header and `--help` own the exact commands and paths.
-
-Two delivery paths reach the orchestrator, and neither one starts a session.
-`arm-check` writes `state/<label>.check.sh` and binds it through `bin/fm-check-register.sh`, so a running watcher executes it on its slow cadence and wakes the live primary through the established check path.
-`arm-check` is idempotent: re-running it converges on the same registered state, and it rebinds a shim whose bytes no longer match the recorded binding.
-Nothing re-creates that shim on its own, so while an intake is armed or owed `pending` reports an absent or unregistered live check and names `arm-check` as the repair; detection stays read-only, so session start never writes into `state/` on a home it has not enrolled.
-With no session running, nothing is delivered when the job fires: the armed state is durable and the next session's bootstrap section surfaces it as `MORNING_INTAKE: ...`, so the intake is queued until firstmate next starts rather than running on its own.
-
-`bin/fm-morning-intake-schedule.sh` owns the inspectable macOS launchd schedule and refuses to install on a home that has not opted in.
-It shares the LaunchAgent writer in `bin/fm-launchd-schedule-lib.sh` with this fork's other scheduled owners, so every schedule renders, validates and loads the same way.
-Run `render` to inspect the complete definition, `install` to write it, load it and arm the live check, `status` to print the resolved knobs and installed file, or `remove` to unload it and disarm the check.
-`StartInterval` plus `RunAtLoad` is the whole trigger: launchd runs the job at login and then on the interval, and an interval that elapsed during sleep runs shortly after the machine wakes.
-That is why the intake is defined as the first available morning rather than a lid-open event; launchd exposes no such event here and none is claimed.
-The default cadence is 900 seconds, read back from the gate owner rather than parsed twice; set `interval_seconds = N` in `config/morning-intake` to change it.
-
-## Continuous channel intake (config/channel-intake)
-
-An opt-in, per-source repeat-poll gate and obligation ledger for continuous intake from already-enrolled channels.
-It ships inert: with no `enabled = true` line in private gitignored `config/channel-intake`, `bin/fm-channel-intake.sh` does nothing at all, so cloning this repo, seeding a secondmate home, or adding a device never enrols it.
-Each home and each device opts in separately.
-
-This is the repeat-poll sibling of the morning gate above, and it exists because that gate is once per local day: after a day completes its `run` returns early, so a shorter scheduler interval only re-checks a satisfied day gate.
-Everything else is deliberately the same discipline - a private mutex over its own record, durable armed state, one wake per armed cycle, the registered watcher check, and a watermark that advances only behind captured output.
-
-`bin/fm-channel-intake.sh` owns the cadence, the per-source checkpoints, deduplication, edit detection, backoff, the ledger, and the notification budget.
-Its header and `--help` own the exact commands, config keys and mechanics; `docs/channel-intake.md` owns the operator procedure, the source inventory format, and the disclosed detection limits.
-It never reads a source system, opens a network connection, sends a message, spawns an agent, or takes the per-home session lock, so it cannot compete with a live fleet.
-An orchestrator performs the authenticated connector read on its own path and reports back through `observe`, `complete` and `fail`.
-
-`interval_seconds` has a hard 300-second floor, because an awake laptop multiplies the cadence by every enrolled source.
-Optional `active_start` and `active_end`, set together as `HH:MM`, bound the scanning day so no source is due outside the window and nothing reads or wakes; they bound reads only, while quiet hours still own alert delivery.
-A source whose read failed backs off geometrically to `backoff_max_seconds` and reads `unknown`, never "nothing new".
-`notify-due` renders one grouped, rate-limited, quiet-hours-aware private payload and does not send it; the orchestrator sends it and confirms with `notify-sent`, so an interrupted send re-renders rather than being silently swallowed.
-Notifications are refused outright until `notify_recipient_verified = true`, which is set only after the recipient has been checked against the known captain account.
-Source identities live in the private inventory named by `sources_file`, never in this config file and never in the tracked repository; unknown config keys are refused rather than parked.
-
-`bin/fm-channel-intake-schedule.sh` owns the inspectable macOS launchd schedule under its own `channel-intake` agent label and refuses to install on a home that has not opted in.
-It shares the LaunchAgent writer in `bin/fm-launchd-schedule-lib.sh` with this fork's other scheduled owners, so every schedule renders, validates and loads the same way.
-`StartInterval` plus `RunAtLoad` is the whole trigger, and a tick reads forward from each source's own checkpoint, so a sleep or offline gap is walked rather than skipped.
-The interval is a target detection latency and never an upper bound: sleep, offline stretches, backoff, quota and queue delay all add to it, and no instant or 24x7 availability is claimed.
-Removing the schedule disarms the live check and leaves the ledger in place, because an open obligation must survive an uninstall.
-
 ## Dropped-threads digest (config/dropped-threads)
 
 An opt-in, twice-daily digest of what has been left hanging in this home's own records, delivered as one spoken sentence and a short list.
@@ -3007,7 +2941,7 @@ Absent, every setting takes its default.
 ## Supervision active alert channels (config/wedge-alarm)
 
 When away-mode injection wedges past `FM_MAX_DEFER_SECS`, the sub-supervisor raises a loud, rate-limited alarm.
-The host-level macOS sentinel uses the same channels when a crew task is in flight or a glasses shift is armed without a healthy identity-matched watcher lock and beacon.
+The host-level macOS sentinel uses the same channels when a crew task is in flight or a sentinel hook reports work without a healthy identity-matched watcher lock and beacon.
 Beyond the durable alarm markers and the tmux status-line flash available to the injection case, these backend-independent alerts can reach the captain even when every pane and its backend status-line is unreadable.
 In-harness turn-end and continuity guards write only the pending marker and return their own loud banner immediately; the independent scheduled host check exclusively owns external-channel delivery.
 `config/wedge-alarm` (local, gitignored) lists channel directives, one per non-empty, non-comment line; every listed non-`off` channel fires, best-effort.
@@ -3018,7 +2952,7 @@ The injection alarm fires at most once per max-defer window after a genuine wedg
 A watcher that recovers and is reaped again starts a new outage episode, which resets that backoff and alerts on the next host check.
 Failed watcher-outage delivery remains pending and retries after a short claim lease; only successful delivery advances that backoff.
 A missing or failing channel logs and falls through to the next, never crashing the daemon.
-`bin/fm-shift.sh` appends and removes one sentinel-delimited block here while a glasses shift is armed, carrying `auto` beside the `command:` directive that speaks a watcher outage into the captain's glasses; see [`shift-loop.md`](shift-loop.md).
+A tool in a home's private add-on may append and remove its own sentinel-delimited block here while it needs an extra channel, keeping `auto` beside its `command:` directive.
 See [`wedge-alarm.md`](wedge-alarm.md) for the channel reference and macOS verification evidence, and [`examples/wedge-alarm`](examples/wedge-alarm) for a copyable config.
 
 ## Context window

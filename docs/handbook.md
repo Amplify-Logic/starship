@@ -242,7 +242,7 @@ Ask the first mate to set one up; each owner page lists what it needs.
 | Desk floater ([desk-floater.md](desk-floater.md)) | Push-to-talk button on your Mac that types what you say into the first mate | A Deepgram API key; spoken replies also need a separate voice project's speech shaper |
 | Spoken replies ([configuration](configuration.md#desk-voice-out-configspeak)) | The first mate reads the start of each reply aloud | The same speech shaper |
 | Phone bridge page ([bridge-view.md](bridge-view.md)) | A phone page showing what needs you, with photo drop and hold-to-speak | Tailscale and Python 3.12 |
-| Morning intake ([configuration](configuration.md#morning-intake-configmorning-intake)) and dropped-threads digest ([configuration](configuration.md#dropped-threads-digest-configdropped-threads)) | A daily intake and a twice-daily "what is left hanging" summary | A scheduled job on this Mac |
+| Dropped-threads digest ([configuration](configuration.md#dropped-threads-digest-configdropped-threads)) | A twice-daily "what is left hanging" summary | A scheduled job on this Mac |
 | Computer use ([macos-computer-use](../.agents/opt-in-skills/macos-computer-use/SKILL.md)) | Lets the agents operate Mac apps and windows | Peekaboo, which the first mate installs, and Mac Accessibility permissions |
 | Activity ledger ([fleet-ledger.md](fleet-ledger.md)) | A file other tools can read to follow the fleet | Nothing extra |
 | Second opinion ([second-opinion.md](second-opinion.md)) | A rival AI model stress-tests a big design or decision before work starts | `config/second-opinion`; each review draws on your Claude plan, and the different-vendor pass on a Cursor plan |

@@ -62,14 +62,12 @@ The routine stays disabled until the captain has done all of these, in order:
 4. Add Amplify-Logic/firstmate-routine-reports to the routine's repositories.
 5. Create a dedicated cloud environment with network access **None** in the environment dialog at claude.ai, and point the routine at it.
 6. Only then, with this script on firstmate's default branch, start one manual **Run now** at claude.ai/code/routines and confirm a commit landed on `main` of the reports repository; that run verifies the push before the schedule is trusted.
-7. Turn the routine's schedule on, and arm the laptop check in the firstmate home: `bin/fm-routine-report-check.sh arm`.
+7. Turn the routine's schedule on.
 
 ## Reviewing a report
 
-[`bin/fm-routine-report-check.sh`](../bin/fm-routine-report-check.sh) is a registered watcher check, and its header owns cadence and the record.
-It reads the reports repository, not this checkout's origin.
-When that repository's `main` moves, it wakes firstmate with one generic line that carries no report content.
-`bin/fm-routine-report-check.sh show` then prints every report from a throwaway copy, without fetching into or changing this checkout.
+Each report is the `creator-watch.md` file on `main` of the reports repository, and that repository's history holds every earlier run.
+The laptop check that wakes firstmate when a new report lands is not part of this repository: it lives in the private add-on of the home that reviews the reports (`docs/configuration.md` "Private add-on").
 
 ## Kill switch
 
@@ -77,7 +75,6 @@ When that repository's `main` moves, it wakes firstmate with one generic line th
 - From a firstmate Claude session, the routine tools can set it to disabled; they cannot delete it.
 - Add a file named `PAUSED` to `main` of the reports repository: the script then publishes nothing until it is removed.
 - Uninstall the Claude GitHub App, or remove the reports repository from it, to take away write access entirely; this holds only while no `/web-setup` gh token is stored on the claude.ai account, so remove any such token as well.
-- Stop the laptop notices with `bin/fm-routine-report-check.sh disarm`.
 
 ## Cost and limits
 

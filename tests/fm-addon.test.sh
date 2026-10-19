@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
 # tests/fm-addon.test.sh - bin/fm-addon.sh: a home's private add-on.
 #
-# With no config/addon a home runs only this checkout's built-in hooks. A
-# configured add-on's hooks join them in name order, an add-on hook replaces a
-# built-in of the same name, a failing or slow hook never stops the caller or
-# the hooks after it, watcher hooks are sourced into bin/fm-watch.sh rather than
-# run, an unusable config/addon is named with its repair, and install clones a
-# missing checkout from the configured origin.
+# With no config/addon a home runs only the code checkout's built-in hooks, and
+# this checkout ships none, so a home with no add-on gets no hook at any point.
+# A configured add-on's hooks join the built-ins in name order, an add-on hook
+# replaces a built-in of the same name, a failing or slow hook never stops the
+# caller or the hooks after it, watcher hooks are sourced into bin/fm-watch.sh
+# rather than run, an unusable config/addon is named with its repair, and
+# install clones a missing checkout from the configured origin.
 #
 # Every case uses a throwaway home and add-on, so no case reads or writes this
-# home; the built-in hooks under test are this checkout's real hooks/ entries.
+# home; built-in hooks are exercised in a throwaway code checkout holding a copy
+# of the script.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -48,45 +50,77 @@ addon() {  # <home> <args...>
   env -u FM_CONFIG_OVERRIDE -u FM_ROOT_OVERRIDE FM_HOME="$home" "$ADDON" "$@"
 }
 
-test_no_addon_runs_only_the_built_in_hooks() {
-  local home out code
+# new_code <name>: a throwaway code checkout holding this script and the library
+# it sources, so a case can give it built-in hooks; echoes its canonical path.
+new_code() {
+  local code="$TMP_ROOT/$1/code"
+  mkdir -p "$code/bin" "$code/hooks"
+  cp "$ADDON" "$ROOT/bin/fm-timeout-lib.sh" "$code/bin/"
+  (cd "$code" && pwd -P)
+}
+
+addon_at() {  # <code> <home> <args...>
+  local code=$1 home=$2
+  shift 2
+  env -u FM_CONFIG_OVERRIDE -u FM_ROOT_OVERRIDE FM_HOME="$home" "$code/bin/fm-addon.sh" "$@"
+}
+
+test_no_addon_means_no_hooks() {
+  local home out code point
   home=$(new_home none)
   out=$(addon "$home" root 2>&1); code=$?
   expect_code 1 "$code" "root with no config/addon"
   assert_equals "" "$out" "root with no add-on must print nothing"
+  for point in bootstrap session-start sentinel watcher deck-staging; do
+    assert_equals "" "$(addon "$home" hooks "$point" 2>&1)" "a home with no add-on must list no $point hook"
+  done
+  for point in bootstrap session-start sentinel deck-staging; do
+    out=$(addon "$home" run "$point" 2>&1); code=$?
+    expect_code 0 "$code" "run $point with nothing to run"
+    assert_equals "" "$out" "a home with no add-on must get no $point output"
+  done
+  pass "with no config/addon a home gets no hook at any point, because this checkout ships none"
+}
+
+test_built_in_hooks_run_with_no_addon() {
+  local code home
+  code=$(new_code built-in)
+  home=$(new_home built-in)
+  add_hook "$code" bootstrap 20-second 'echo second'
+  add_hook "$code" bootstrap 10-first 'echo first'
   assert_equals "$(printf '%s\t%s\n%s\t%s' \
-    "$ROOT" "$ROOT/hooks/bootstrap/10-morning-intake" "$ROOT" "$ROOT/hooks/bootstrap/20-channel-intake")" \
-    "$(addon "$home" hooks bootstrap)" "a home with no add-on must list exactly the built-in bootstrap hooks"
-  out=$(addon "$home" run bootstrap 2>&1); code=$?
-  expect_code 0 "$code" "run with nothing to report"
-  assert_equals "" "$out" "a home that never opted in to an intake must get no bootstrap output"
-  assert_equals "" "$(addon "$home" run sentinel 2>&1)" "an idle home must report no sentinel work"
-  assert_equals "" "$(addon "$home" run session-start 2>&1)" "a home with no add-on has no session-start output"
-  pass "with no config/addon only this checkout's built-in hooks run, and they stay silent"
+    "$code" "$code/hooks/bootstrap/10-first" "$code" "$code/hooks/bootstrap/20-second")" \
+    "$(addon_at "$code" "$home" hooks bootstrap)" "a home with no add-on must list exactly the built-in hooks"
+  assert_equals "$(printf 'first\nsecond')" "$(addon_at "$code" "$home" run bootstrap 2>&1)" \
+    "a home with no add-on must run the built-in hooks in name order"
+  pass "with no config/addon the code checkout's built-in hooks run in name order"
 }
 
 test_addon_hooks_join_in_name_order_and_replace_built_ins() {
-  local home addon out
+  local code home addon out
+  code=$(new_code order)
   home=$(new_home order)
+  add_hook "$code" bootstrap 10-built-in 'echo built-in'
+  add_hook "$code" bootstrap 20-replaced 'echo the built-in that must not run'
   addon=$(new_addon "$home")
   # shellcheck disable=SC2016 # The hook body expands its own variables.
   add_hook "$addon" bootstrap 05-first 'printf "first root=%s hook=%s home=%s args=%s\n" "$FM_ROOT" "$FM_HOOK_ROOT" "$FM_HOME" "$*"'
-  add_hook "$addon" bootstrap 20-channel-intake 'echo "replaced the built-in"'
+  add_hook "$addon" bootstrap 20-replaced 'echo "replaced the built-in"'
   add_hook "$addon" bootstrap .hidden 'echo hidden'
   add_hook "$addon" bootstrap 'has space' 'echo spaced'
   printf '#!/usr/bin/env bash\necho not-executable\n' > "$addon/hooks/bootstrap/30-not-executable"
   mkdir -p "$addon/hooks/bootstrap/40-a-directory"
   addon=$(cd "$addon" && pwd -P)
 
-  out=$(addon "$home" hooks bootstrap)
+  out=$(addon_at "$code" "$home" hooks bootstrap)
   assert_equals "$(printf '%s\t%s\n%s\t%s\n%s\t%s' \
     "$addon" "$addon/hooks/bootstrap/05-first" \
-    "$ROOT" "$ROOT/hooks/bootstrap/10-morning-intake" \
-    "$addon" "$addon/hooks/bootstrap/20-channel-intake")" "$out" \
+    "$code" "$code/hooks/bootstrap/10-built-in" \
+    "$addon" "$addon/hooks/bootstrap/20-replaced")" "$out" \
     "add-on hooks must join the built-ins in name order, replace the one of their name, and skip non-hooks"
 
-  out=$(addon "$home" run bootstrap one two 2>&1)
-  assert_equals "$(printf 'first root=%s hook=%s home=%s args=one two\nreplaced the built-in' "$ROOT" "$addon" "$home")" \
+  out=$(addon_at "$code" "$home" run bootstrap one two 2>&1)
+  assert_equals "$(printf 'first root=%s hook=%s home=%s args=one two\nbuilt-in\nreplaced the built-in' "$code" "$addon" "$home")" \
     "$out" "every hook must run once, in order, with its roots, the home, and the arguments"
   pass "add-on hooks join the built-ins in name order and replace a built-in of the same name"
 }
@@ -127,9 +161,8 @@ SH
   addon=$(cd "$addon" && pwd -P)
 
   out=$(addon "$home" hooks watcher)
-  assert_equals "$(printf '%s\t%s\n%s\t%s' \
-    "$ROOT" "$ROOT/hooks/watcher/10-glasses-file-event.sh" "$addon" "$addon/hooks/watcher/50-mine.sh")" \
-    "$out" "watcher hooks are the readable .sh files of both places, in name order"
+  assert_equals "$(printf '%s\t%s' "$addon" "$addon/hooks/watcher/50-mine.sh")" \
+    "$out" "watcher hooks are the readable .sh files, and nothing else"
   addon "$home" run watcher >/dev/null 2>&1; code=$?
   expect_code 2 "$code" "watcher hooks are sourced by the watcher, never run"
 
@@ -139,14 +172,12 @@ SH
       . "$1/bin/fm-watch.sh" || exit 3
       fm_addon_test_marker
       printf "input=[%s]\n" "$fm_addon_test_input"
-      command -v fm_fork_event_wait_or_sleep >/dev/null 2>&1 && echo "built-in hook loaded"
       [ -z "${FM_HOOK_ROOT:-}" ] && echo "hook root cleared"
     ' _ "$ROOT" 2>&1)
   assert_contains "$out" "marker from $addon" "the watcher must source the add-on's hook with FM_HOOK_ROOT set to the add-on"
   assert_contains "$out" "input=[]" "a sourced hook must read no input"
-  assert_contains "$out" "built-in hook loaded" "the built-in glasses file-event hook must still load beside it"
   assert_contains "$out" "hook root cleared" "FM_HOOK_ROOT must not outlive the hook loading"
-  pass "watcher hooks of both places are sourced into the watcher, never run"
+  pass "watcher hooks are sourced into the watcher, never run"
 }
 
 test_unusable_config_is_named_with_its_repair() {
@@ -235,7 +266,8 @@ test_misuse_exits_2() {
   pass "misuse exits 2 and --help exits 0"
 }
 
-test_no_addon_runs_only_the_built_in_hooks
+test_no_addon_means_no_hooks
+test_built_in_hooks_run_with_no_addon
 test_addon_hooks_join_in_name_order_and_replace_built_ins
 test_failing_and_slow_hooks_never_stop_the_caller
 test_watcher_hooks_are_sourced_into_the_watcher

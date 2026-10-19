@@ -126,8 +126,25 @@ check_personal_surface_deletion_is_optional() {
   local repo out
   repo="$TMP_ROOT/personal-delete"
   clone_current_tree "$repo"
-  git -C "$repo" rm -q bin/fm-voice-idea.py docs/voice-ideas.md tests/fm-voice-idea.test.sh \
-    || fail "could not remove personal fixture surface"
+  # A personal capability whose tool lives in a home's private add-on: declared
+  # here, with none of its files in this copy.
+  cat >>"$repo/fork-surface.conf" <<'CONF'
+
+[capability]
+id = personal-omission-fixture
+title = Personal capability omitted from this copy
+layer = shared
+scope = personal
+status = active
+why = A fixture capability proves a declared personal surface may be absent.
+owns = bin/fm-personal-omission-fixture.sh
+owns = docs/personal-omission-fixture.md
+owns = tests/fm-personal-omission-fixture.test.sh
+proves = tests/fm-personal-omission-fixture.test.sh
+assert = files+test
+commits = pre-merge
+topology = independent
+CONF
   out=$(cd "$repo" && bin/fm-fork-surface.sh check 2>&1) \
     || fail "declared personal surface must be optional: $out"
   assert_contains "$out" 'FORK_SURFACE OK' "personal omission success marker"

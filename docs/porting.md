@@ -69,9 +69,7 @@ Paths that behave this way today include, when present:
 - any goal charter the declared `data` entries do not select (see below)
 - `data/done-archive.md`
 - `data/upstream-watch/`
-- `data/morning-intake/` (this home's own local-day intake state; `docs/configuration.md` "Morning intake")
-- `data/channel-intake/` (this home's own source inventory, per-source checkpoints and obligation ledger; `docs/channel-intake.md`)
-- `data/todo/` (this home's own durable daily to-do items, their recorded verification and closures; `docs/channel-intake.md`)
+- the data directories the tools of a home's private add-on keep, such as `data/morning-intake/`, `data/channel-intake/` and `data/todo/`
 - `data/action-gateway/`
 - `data/orders/`
 - `data/errands/`

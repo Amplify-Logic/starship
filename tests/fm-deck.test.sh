@@ -1358,11 +1358,47 @@ test_json_mode_degrades_honestly_and_scrubs() {
 
 # A payload carrying device staging runs, so the pane can be driven through the
 # sections that already own each state. bin/fm-deck.sh emits this section from
-# bin/fm-fota-stage-run.sh list --json.
+# the home's deck-staging hooks (bin/fm-addon.sh).
 staging_payload() {  # <staging-json>
   render_payload "" ""
   printf '%s staging\n' "$MARK"
   printf '%s\n' "$1"
+}
+
+# The deck reads staging runs only through deck-staging hooks of the home's
+# private add-on: each hook's JSON array joins the one the renderer reads, a hook
+# printing anything else adds nothing, and a home with no add-on has none.
+test_deck_staging_hooks_feed_the_pane() {
+  local home fb addon model
+  command -v jq >/dev/null 2>&1 || { pass "skip: jq not found for the deck-staging hook test"; return 0; }
+  home=$(make_home staging-hooks)
+  fb=$(fm_fakebin "$home")
+  install_fake_tasks_axi "$fb" empty
+  model=$(run_deck "$home" "$fb" --json 2>/dev/null)
+  [ "$(printf '%s' "$model" | jq -r '.counts.staged_runs')" = 0 ] \
+    || fail "a home with no add-on showed staging runs: $model"
+
+  addon="$TMP/staging-hooks-addon"
+  mkdir -p "$addon/hooks/deck-staging"
+  printf '#!/usr/bin/env bash\necho %s\n' \
+    "'[{\"run_id\":\"r1\",\"state\":\"ready\",\"device_id\":\"dev-from-hook\",\"attempt\":1,\"eligibility\":\"verified\"}]'" \
+    > "$addon/hooks/deck-staging/10-ready"
+  printf '#!/usr/bin/env bash\necho %s\n' \
+    "'[{\"run_id\":\"r2\",\"state\":\"pending\",\"device_id\":\"dev-second-hook\",\"attempt\":1,\"eligibility\":\"verified\"}]'" \
+    > "$addon/hooks/deck-staging/20-pending"
+  printf '#!/usr/bin/env bash\necho not json\n' > "$addon/hooks/deck-staging/05-garbage"
+  printf '#!/usr/bin/env bash\nprintf oops\n' > "$addon/hooks/deck-staging/07-garbage-no-newline"
+  chmod +x "$addon/hooks/deck-staging/"*
+  printf 'path = %s\n' "$addon" > "$home/config/addon"
+
+  model=$(run_deck "$home" "$fb" --json 2>/dev/null)
+  [ "$(printf '%s' "$model" | jq -r '.counts.staged_runs')" = 1 ] \
+    || fail "the ready run from the first hook was not staged: $model"
+  [ "$(printf '%s' "$model" | jq -r '.staged.staging_runs[0].device_id')" = dev-from-hook ] \
+    || fail "the staged run is not the hook's: $model"
+  printf '%s' "$model" | jq -e '[.under_way[] | select(.kind == "staging")] | length == 1' >/dev/null \
+    || fail "the pending run from the second hook is not under way: $model"
+  pass "deck-staging hooks feed the pane, and a hook printing anything else adds nothing"
 }
 
 test_staging_runs_route_to_the_sections_that_own_each_state() {
@@ -1529,6 +1565,7 @@ test_json_mode_emits_the_pane_as_one_model
 test_json_mode_degrades_honestly_and_scrubs
 test_interval_validation
 test_refresh_loop_redraws_and_reflects_changes
+test_deck_staging_hooks_feed_the_pane
 test_staging_runs_route_to_the_sections_that_own_each_state
 test_a_pending_staging_run_reports_its_real_age
 test_an_acknowledged_run_leaves_the_ask_list_with_its_evidence_intact

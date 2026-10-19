@@ -249,8 +249,8 @@ def staging_by_state(staging, wanted):
 def staging_needs_you(staging):
     """Settled runs still asking for a person.
 
-    An explicit captain acknowledgement (`fm-fota-stage-run.sh ack`) drops a run
-    from the active ask list. The record, its outcome and its evidence are all
+    A run its staging tool records as acknowledged by the captain drops from
+    the active ask list. The record, its outcome and its evidence are all
     untouched - acknowledging is saying he has seen it, never that it resolved.
     """
     return [

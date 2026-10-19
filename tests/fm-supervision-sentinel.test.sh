@@ -413,11 +413,29 @@ test_live_identity_matched_watcher_stays_silent() {
   pass "supervision sentinel: live identity-matched watcher with a fresh beacon stays silent"
 }
 
+# install_shift_hook <home>: the glasses shift's sentinel hook as a home's
+# private add-on carries it. The shift tool itself lives in that add-on, which
+# reads the definition of "armed" from this checkout's bin/fm-supervision-lib.sh.
+install_shift_hook() {
+  local addon="$1-addon"
+  mkdir -p "$addon/hooks/sentinel"
+  cat > "$addon/hooks/sentinel/10-glasses-shift" <<'SH'
+#!/usr/bin/env bash
+. "$FM_ROOT/bin/fm-supervision-lib.sh"
+if fm_sup_shift_armed "${FM_STATE_OVERRIDE:-$FM_HOME/state}"; then
+  printf 'glasses shift armed\n'
+fi
+SH
+  chmod +x "$addon/hooks/sentinel/10-glasses-shift"
+  printf 'path = %s\n' "$addon" > "$1/config/addon"
+}
+
 # An armed glasses shift is work worth supervising even with no crew task in
 # flight: shift questions arrive as mailbox events, never as state/*.meta.
 test_armed_shift_with_no_crew_task_is_supervised() {
   local home="$TMP_ROOT/shift" recorder="$TMP_ROOT/record-shift" log="$TMP_ROOT/shift-alerts.log" holder out status marker
   make_primary "$home"
+  install_shift_hook "$home"
   make_recorder "$recorder" "$log"
   marker="$home/state/.supervision-outage-alarm"
   # Armed means the record AND away mode: a shift's lifetime is contained inside
@@ -515,6 +533,7 @@ test_addon_sentinel_hook_work_is_supervised() {
 test_a_shift_record_without_away_mode_is_not_supervised() {
   local home="$TMP_ROOT/shift-stale" recorder="$TMP_ROOT/record-shift-stale" log="$TMP_ROOT/shift-stale-alerts.log" out status
   make_primary "$home"
+  install_shift_hook "$home"
   make_recorder "$recorder" "$log"
   printf 'started_epoch=0\n' > "$home/state/.shift"
   # No state/.afk: exactly what an away-mode return leaves behind.
@@ -534,6 +553,7 @@ test_a_shift_record_without_away_mode_is_not_supervised() {
 test_dead_away_daemon_with_a_shift_armed_fires_the_host_alarm() {
   local home="$TMP_ROOT/shift-dead" recorder="$TMP_ROOT/record-shift-dead" log="$TMP_ROOT/shift-dead-alerts.log" holder identity out
   make_primary "$home"
+  install_shift_hook "$home"
   make_recorder "$recorder" "$log"
   printf 'started_epoch=0\n' > "$home/state/.shift"
   : > "$home/state/.afk"

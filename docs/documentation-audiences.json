@@ -141,10 +141,6 @@
       "audience": "agent-runtime"
     },
     {
-      "path": ".agents/opt-in-skills/daily-todo-freshness/SKILL.md",
-      "audience": "agent-runtime"
-    },
-    {
       "path": ".agents/skills/decision-hold-lifecycle/SKILL.md",
       "audience": "agent-runtime"
     },
@@ -341,10 +337,6 @@
       "audience": "maintainer-architecture"
     },
     {
-      "path": "docs/fota-staging.md",
-      "audience": "maintainer-architecture"
-    },
-    {
       "path": "docs/adhd.md",
       "audience": "operator-current"
     },
@@ -387,10 +379,6 @@
     {
       "path": "docs/cd-guard.md",
       "audience": "maintainer-architecture"
-    },
-    {
-      "path": "docs/channel-intake.md",
-      "audience": "operator-current"
     },
     {
       "path": "docs/chart-room.md",
@@ -613,10 +601,6 @@
       "audience": "operator-current"
     },
     {
-      "path": "docs/shift-loop.md",
-      "audience": "operator-current"
-    },
-    {
       "path": "docs/status-bar.md",
       "audience": "operator-current"
     },
@@ -749,10 +733,6 @@
       "audience": "maintainer-verification"
     },
     {
-      "path": "docs/voice-ideas.md",
-      "audience": "operator-current"
-    },
-    {
       "path": "docs/voice-relay.md",
       "audience": "operator-current"
     },
@@ -787,11 +767,6 @@
     {
       "path": "skills/stow/SKILL.md",
       "audience": "public-product"
-    },
-    {
-      "path": "docs/todo-page-review.md",
-      "audience": "maintainer-architecture",
-      "owner": "bin/fm-todo-render.sh"
     },
     {
       "path": "tests/captures/no-mistakes-v1.70.1/README.md",

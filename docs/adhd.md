@@ -6,7 +6,7 @@ This doc owns install, uninstall, usage, and the standing cost policy.
 The captain-invocable skill is `.agents/opt-in-skills/adhd/SKILL.md`.
 The auto-fire trigger is `.agents/opt-in-skills/adhd-auto-fire/SKILL.md`.
 The CLI wrapper is `bin/fm-adhd.sh`.
-Both skills are opt-in: a home lists them only with the `config/adhd` presence flag ([configuration.md](configuration.md#opt-in-skills-configadhd-configsecond-opinion-configdaily-todo)), because the bootstrap does not install the CLI.
+Both skills are opt-in: a home lists them only with the `config/adhd` presence flag ([configuration.md](configuration.md#opt-in-skills-configadhd-configsecond-opinion)), because the bootstrap does not install the CLI.
 
 ## What it is for
 

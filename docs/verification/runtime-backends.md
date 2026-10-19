@@ -1368,6 +1368,8 @@ Verified 2026-10-03 on macOS 26.5.1 with Bash 3.2.57 and Python 3.12.5 using fix
 ok - relative Herdr executable remains the selected binary after chdir
 ```
 
+That line comes from `tests/fm-backend-herdr.test.sh`, which carries this guarantee; `tests/fm-voice-idea.test.sh` has since moved out of this repository into a home's private add-on.
+
 ### fm-remote server birth and login-keychain access
 
 Measured 2026-09-09 on macOS 26 (Darwin 25.6.0) aarch64 with Claude Code 2.1.266 and Herdr 0.9.0, the guarantee behind `bin/fm-remote-herdr-guard.sh` and the doctor's `herdr-server` check: login-keychain access follows the audit session a process was born into, never the launch shape or the shell.

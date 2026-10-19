@@ -77,7 +77,6 @@ skill_table() {
 adhd adhd
 adhd-auto-fire adhd
 second-opinion-auto-fire second-opinion
-daily-todo-freshness daily-todo
 macos-computer-use computer-use
 EOF
 }

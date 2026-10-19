@@ -11,9 +11,9 @@
 # active channels for a loud notification.
 #
 # A home is worth supervising when a crew task is in flight (FM_SUP_IN_FLIGHT) OR
-# when a sentinel hook (bin/fm-addon.sh) reports work, such as an armed glasses
-# shift (the bin/fm-shift.sh record named by FM_SUP_SHIFT_RECORD_NAME): shift
-# questions arrive as mailbox events, not as tasks, so without the second
+# when a sentinel hook (bin/fm-addon.sh) reports work, such as a private
+# add-on's armed glasses shift (the record named by FM_SUP_SHIFT_RECORD_NAME):
+# shift questions arrive as mailbox events, not as tasks, so without the second
 # condition a watcher that died mid-shift would read as idle. The crew-task path
 # is unchanged by that second condition.
 #
@@ -776,8 +776,9 @@ fm_sentinel_record_check() {
 }
 
 # The work sentinel hooks still watch over in this home, joined into one line,
-# empty when there is none (bin/fm-addon.sh owns the hook point). An armed
-# glasses shift is one: its questions arrive as mailbox events, never as tasks.
+# empty when there is none (bin/fm-addon.sh owns the hook point). An add-on's
+# armed glasses shift is one: its questions arrive as mailbox events, never as
+# tasks.
 fm_sentinel_hook_work() {
   FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$FM_SENTINEL_STATE" \
     "$FM_SENTINEL_DIR/fm-addon.sh" run sentinel 2>/dev/null | awk '

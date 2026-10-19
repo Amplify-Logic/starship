@@ -187,9 +187,9 @@ WATCH_HOME_EXISTED=0
 . "$SCRIPT_DIR/fm-push-transition-lib.sh"
 # Hook W1, part one of three. Watcher hooks are sourced here, once per start:
 # this checkout's built-in hooks/watcher/ and this home's private add-on's, as
-# bin/fm-addon.sh lists them. The fork's glasses mailbox/inbox file-event wait is
-# one (bin/fm-file-event-lib.sh). The call sites below are guarded, so with no
-# hook loaded this watcher runs its own terminal wait unchanged. Each hook is
+# bin/fm-addon.sh lists them. An add-on's glasses mailbox/inbox file-event wait
+# is one. The call sites below are guarded, so with no hook loaded this watcher
+# runs its own terminal wait unchanged. Each hook is
 # sourced with stdin from /dev/null, so it can never read the list as input.
 _fm_watch_hook_lines=$(FM_HOME="$FM_HOME" FM_CONFIG_OVERRIDE="$CONFIG" \
   "$SCRIPT_DIR/fm-addon.sh" hooks watcher 2>/dev/null) || _fm_watch_hook_lines=
@@ -2966,10 +2966,10 @@ while :; do
 
   check_sweep_begin "$CHECK_SWEEP_PENDING" || exit 1
 
-  # The fork catches mailbox/inbox writes that landed while no watcher was
+  # A watcher hook (hook W1) may catch writes that landed while no watcher was
   # alive, during successor setup, or during the just-completed bounded wait,
-  # and expires .last-check before the slow-check cadence test below so the
-  # sweep runs in this same loop. Without the library nothing runs here and the
+  # and expire .last-check before the slow-check cadence test below so the
+  # sweep runs in this same loop. With no such hook nothing runs here and the
   # cadence is the creator's.
   if command -v fm_fork_glasses_file_event_catch_up >/dev/null 2>&1; then
     fm_fork_glasses_file_event_catch_up || true
@@ -3608,13 +3608,11 @@ EOF
   # else the blind poll sleep. See event_wait_or_sleep.
   #
   # Hook W1, part three of three. This is a declared override, not a
-  # contribution: the fork's wait replaces this one rather than running beside
+  # contribution: a hook's wait replaces this one rather than running beside
   # it, because running both would serialise a shortened wait behind a full poll
-  # sleep and the glasses interrupt would become a no-op. Its trigger is
-  # narrower than "the fork is installed" - a home with glasses watch paths -
-  # and for every other home bin/fm-file-event-lib.sh calls event_wait_or_sleep
-  # below itself rather than copying it. With the library absent, this line is
-  # the branch that runs.
+  # sleep and the hook's interrupt would become a no-op. A hook that has nothing
+  # to wait on for this home calls event_wait_or_sleep below itself rather than
+  # copying it. With no such hook, this line is the branch that runs.
   if command -v fm_fork_event_wait_or_sleep >/dev/null 2>&1; then
     fm_fork_event_wait_or_sleep
   else

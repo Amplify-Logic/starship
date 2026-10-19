@@ -71,12 +71,12 @@ test_switch_links_its_skills_and_checkout_stays_clean() {
 test_captain_home_switches_link_every_skill() {
   local dir shipped entry flag
   dir=$(make_checkout captain)
-  for flag in adhd second-opinion daily-todo computer-use captain-ledger; do : > "$dir/config/$flag"; done
+  for flag in adhd second-opinion computer-use captain-ledger; do : > "$dir/config/$flag"; done
   printf 'enabled = true\n' > "$dir/config/speak"
   run_sync "$dir"
   shipped=$(for entry in "$ROOT"/.agents/opt-in-skills/*/; do entry=${entry%/}; printf '%s\n' "${entry##*/}"; done \
     | sort | tr '\n' ' ' | sed 's/ $//')
-  assert_equals "adhd adhd-auto-fire daily-todo-freshness macos-computer-use second-opinion-auto-fire" \
+  assert_equals "adhd adhd-auto-fire macos-computer-use second-opinion-auto-fire" \
     "$shipped" "the shipped opt-in skills changed; update this test and the captain home switch list"
   assert_equals "$shipped" "$(linked "$dir")" "the captain home's switches must link every shipped opt-in skill"
   assert_equals "" "$(git -C "$dir/checkout" status --porcelain)" \
@@ -165,18 +165,18 @@ test_addon_skills_link_and_checkout_stays_clean() {
 test_addon_skill_replaces_the_opt_in_skill_of_its_name() {
   local dir addon
   dir=$(make_checkout addon-replace)
-  : > "$dir/config/daily-todo"
+  : > "$dir/config/computer-use"
   run_sync "$dir"
-  assert_equals "../opt-in-skills/daily-todo-freshness" "$(readlink "$dir/checkout/.agents/skills/daily-todo-freshness")" \
+  assert_equals "../opt-in-skills/macos-computer-use" "$(readlink "$dir/checkout/.agents/skills/macos-computer-use")" \
     "the switch alone must link the shipped opt-in skill"
-  make_addon "$dir" daily-todo-freshness
+  make_addon "$dir" macos-computer-use
   run_sync "$dir"
   addon=$(cd "$dir/addon" && pwd -P)
-  assert_equals "$addon/.agents/skills/daily-todo-freshness" "$(readlink "$dir/checkout/.agents/skills/daily-todo-freshness")" \
+  assert_equals "$addon/.agents/skills/macos-computer-use" "$(readlink "$dir/checkout/.agents/skills/macos-computer-use")" \
     "a skill the add-on carries must replace the opt-in skill of the same name"
   rm -f "$dir/config/addon"
   run_sync "$dir"
-  assert_equals "../opt-in-skills/daily-todo-freshness" "$(readlink "$dir/checkout/.agents/skills/daily-todo-freshness")" \
+  assert_equals "../opt-in-skills/macos-computer-use" "$(readlink "$dir/checkout/.agents/skills/macos-computer-use")" \
     "without the add-on the switched-on opt-in skill must come back"
   assert_equals "" "$(git -C "$dir/checkout" status --porcelain)" "the checkout must stay clean throughout"
   pass "an add-on skill replaces the opt-in skill of its name, and gives it back when the add-on goes"
@@ -215,9 +215,9 @@ test_addon_inside_the_home_links_replaces_and_unlinks() {
   local dir home addon skill
   dir=$(make_checkout addon-in-home)
   home="$dir/checkout"
-  : > "$dir/config/daily-todo"
+  : > "$dir/config/computer-use"
   mkdir -p "$home/projects/starship-addon/.agents/skills"
-  for skill in daily-todo-freshness my-todo; do
+  for skill in macos-computer-use my-todo; do
     mkdir -p "$home/projects/starship-addon/.agents/skills/$skill"
     printf -- '---\nname: %s\n---\n' "$skill" > "$home/projects/starship-addon/.agents/skills/$skill/SKILL.md"
   done
@@ -226,16 +226,16 @@ test_addon_inside_the_home_links_replaces_and_unlinks() {
   addon=$(cd "$home/projects/starship-addon" && pwd -P)
   assert_equals "$addon/.agents/skills/my-todo" "$(readlink "$home/.agents/skills/my-todo")" \
     "an add-on inside the home must be linked by absolute path"
-  assert_equals "$addon/.agents/skills/daily-todo-freshness" "$(readlink "$home/.agents/skills/daily-todo-freshness")" \
+  assert_equals "$addon/.agents/skills/macos-computer-use" "$(readlink "$home/.agents/skills/macos-computer-use")" \
     "an add-on inside the home must replace the opt-in skill of the same name"
   rm -rf "$home/projects/starship-addon/.agents/skills/my-todo"
   assert_equals "" "$(run_home_sync "$dir")" "sync must print nothing when it removes a dropped add-on skill"
   [ ! -L "$home/.agents/skills/my-todo" ] || fail "a skill the add-on inside the home dropped must lose its link"
   rm -f "$dir/config/addon"
   assert_equals "" "$(run_home_sync "$dir")" "sync must print nothing when it hands a skill back to the opt-in folder"
-  assert_equals "../opt-in-skills/daily-todo-freshness" "$(readlink "$home/.agents/skills/daily-todo-freshness")" \
+  assert_equals "../opt-in-skills/macos-computer-use" "$(readlink "$home/.agents/skills/macos-computer-use")" \
     "without the add-on the switched-on opt-in skill must come back"
-  assert_equals "daily-todo-freshness" "$(linked "$dir")" "no add-on link may stay once the add-on goes"
+  assert_equals "macos-computer-use" "$(linked "$dir")" "no add-on link may stay once the add-on goes"
   assert_equals "" "$(git -C "$home" status --porcelain)" "the checkout must stay clean throughout"
   pass "an add-on inside the home links, replaces, and unlinks like one beside it"
 }

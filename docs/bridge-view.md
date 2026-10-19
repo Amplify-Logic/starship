@@ -178,7 +178,7 @@ The request is capped at 15 MB and returns 413 when larger or 415 when the type 
 The per-session rolling-hour limit counts authenticated, non-empty attempts within that cap, including attempts later rejected as unsupported, and returns 429 after 30 such attempts.
 
 Files land under `data/bridge-inbox/` (created mode 0700) with a unique timestamped name such as `20260819T113530Z-<hex>.jpg` and a sibling `.json` sidecar recording `received_at`, `original_name`, `size`, and `content_type`.
-[`watcher-continuity.md`](watcher-continuity.md#filesystem-event-continuity) owns watcher latency and cross-cycle continuity for writes here and to the glasses mailbox DB under `data/glasses-voice-runtime/`.
+A write here or to the glasses mailbox DB under `data/glasses-voice-runtime/` wakes the watcher at once only when a watcher hook of the home's private add-on provides that wait ([`watcher-continuity.md`](watcher-continuity.md#add-on-watcher-hooks)); otherwise it is picked up on the ordinary check cadence.
 Names never overwrite; the directory is quarantined storage only.
 The server does not execute, decode, or otherwise parse image contents beyond the magic-byte sniff.
 The photo path writes only to `bridge/` and this inbox; hold-to-speak sends requests through the loopback mailbox API instead of writing mailbox state directly.

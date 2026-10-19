@@ -181,7 +181,37 @@ collect_staging() {
   # Device staging runs, rendered into the sections that already own each state:
   # a run awaiting the captain is staged, a run still working is under way, and
   # a run that needs a person is a need. The deck adds no section of its own.
-  "$SCRIPT_DIR/fm-fota-stage-run.sh" list --json 2>/dev/null || printf '%s\n' '[]'
+  # The runs come from deck-staging hooks (bin/fm-addon.sh), each printing one
+  # JSON array, joined here into the one array the renderer reads; a hook whose
+  # output is not a JSON array adds nothing. Hook output arrives concatenated
+  # with no separator, so after unparseable text the join resumes at the next
+  # '[' rather than the next newline.
+  local out=''
+  out=$(FM_HOME="$FM_HOME" FM_CONFIG_OVERRIDE="$CONFIG" \
+    "$SCRIPT_DIR/fm-addon.sh" run deck-staging 2>/dev/null) || out=''
+  if [ -z "$out" ]; then
+    printf '%s\n' '[]'
+    return 0
+  fi
+  printf '%s\n' "$out" | python3 -c '
+import json, sys
+text, runs, at, decoder = sys.stdin.read(), [], 0, json.JSONDecoder()
+while True:
+    while at < len(text) and text[at].isspace():
+        at += 1
+    if at >= len(text):
+        break
+    try:
+        value, at = decoder.raw_decode(text, at)
+    except ValueError:
+        at = text.find("[", at + 1)
+        if at < 0:
+            break
+        continue
+    if isinstance(value, list):
+        runs.extend(value)
+print(json.dumps(runs))
+' 2>/dev/null || printf '%s\n' '[]'
 }
 
 collect_orders() {

@@ -511,19 +511,12 @@ Linux and other hosts retain the hook alarms but do not yet have a verified host
 On such a host the marker-only guard modes are the only writers of `state/.supervision-outage-alarm`, so they refresh unclaimed evidence whenever the outage episode or in-flight count moves rather than freezing on the first outage ever observed; a claim or committed delivery owned by a scheduled host check is never overwritten.
 The launchd transport and the real banner it posts are covered by opt-in real-`launchctl` smokes rather than the default suite; see [`wedge-alarm.md`](wedge-alarm.md) for how to run them and what each proves.
 
-## Filesystem-event continuity
+## Add-on watcher hooks
 
-Glasses mailbox and bridge-inbox wakes survive the intentional one-shot watcher boundary through `state/.last-check`.
-On startup and at the top of every later watcher loop, including the loop after a bounded wait timeout, `bin/fm-watch.sh` asks `bin/fm-file-event-lib.sh` whether any current default watch path is newer than the last completed authenticated-check sweep.
-A newer path removes the marker before the cadence test, so authenticated checks run in that same loop instead of waiting for another filesystem event or the 300-second backstop.
-The live waiter still compares signatures around each bounded wait, which covers a write racing catch-up with waiter setup.
-Each watcher loop captures a private marker before filesystem catch-up and publishes that boundary only when an authenticated check sweep completes, so unchanged paths do not fire twice while a later write remains newer for the next loop or successor.
-This catch-up is part of the existing singleton watcher cycle and does not add another watcher, change lock ownership, or alter the one-actionable-reason exit contract.
-The watcher loads that library through its built-in watcher hook, `hooks/watcher/10-glasses-file-event.sh`, which it sources at start beside any watcher hook of a private add-on ([configuration](configuration.md#private-add-on-configaddon)).
-Both the catch-up and the forked terminal wait are reached through guarded calls, so a checkout without `bin/fm-file-event-lib.sh` runs the watcher's own `event_wait_or_sleep` and its ordinary check cadence instead.
-`bin/fm-file-event-lib.sh` also checks that shape once each time it loads, which for the watcher is once per start and never per cycle: `fm_fork_assert_watcher_hook_shape` walks the watcher beside it, and if any fork call has escaped its guard or the terminal wait has lost its else branch it names the line on stderr and disables the override by replacing the fork's terminal wait with a direct call to the watcher's own `event_wait_or_sleep` and making the catch-up a no-op, so the watcher always still has a wait even when its call site is the thing that broke.
-`fm_fork_assert_watcher_hook_shape` is the single owner of that check, and `tests/fm-file-eventwait.test.sh` proves it by running the function against the real watcher and against deliberately broken copies that have lost a guard or the else branch.
-`docs/bridge-view.md` owns the separate glasses existence-only watcher-check guidance.
+A watcher hook of the home's private add-on ([configuration](configuration.md#private-add-on-configaddon)) is sourced once when `bin/fm-watch.sh` starts, and hook W1 there owns the two guarded functions such a hook may define.
+`fm_fork_glasses_file_event_catch_up` runs at the top of every watcher loop before the slow-check cadence test, and `fm_fork_event_wait_or_sleep` replaces the watcher's terminal wait.
+Both are reached through guarded calls, so a home with no such hook runs the watcher's own `event_wait_or_sleep` and its ordinary check cadence.
+A hook runs inside the existing singleton watcher cycle and does not add another watcher, change lock ownership, or alter the one-actionable-reason exit contract.
 
 ## Regression coverage
 

@@ -768,7 +768,6 @@ tests/fm-calm-pi-extension.test.sh 58675
 tests/fm-calm-pi-queue-retention-live-e2e.test.sh 2152
 tests/fm-capability.test.sh 1779
 tests/fm-captain-ledger.test.sh 4137
-tests/fm-channel-intake.test.sh 51577
 tests/fm-chart-room.test.sh 18281
 tests/fm-check-unregister.test.sh 1586
 tests/fm-ci-workflow.test.sh 7236
@@ -811,7 +810,6 @@ tests/fm-dispatch-select.test.sh 1346
 tests/fm-documentation-audiences.test.sh 1554
 tests/fm-dod-lib.test.sh 4000
 tests/fm-extension-binding.test.sh 19492
-tests/fm-file-eventwait.test.sh 22776
 tests/fm-fleet-ledger.test.sh 25352
 tests/fm-fleet-snapshot-view.test.sh 26165
 tests/fm-fleet-status-lib.test.sh 6731
@@ -819,8 +817,6 @@ tests/fm-fleet-sync.test.sh 40541
 tests/fm-forge-detect.test.sh 1198
 tests/fm-fork-free-helpers.test.sh 1528
 tests/fm-fork-surface.test.sh 37075
-tests/fm-fota-stage-run.test.sh 9816
-tests/fm-fota-stage.test.sh 2736
 tests/fm-gate-refuse.test.sh 9953
 tests/fm-gateway-install-v2.test.sh 1751
 tests/fm-gemini-harness.test.sh 2149
@@ -861,7 +857,6 @@ tests/fm-live-lab-up-mate.test.sh 18729
 tests/fm-live-lab.test.sh 89754
 tests/fm-mail-check.test.sh 8173
 tests/fm-mail.test.sh 10794
-tests/fm-morning-intake.test.sh 14978
 tests/fm-muse-harness.test.sh 59782
 tests/fm-muse-signals-live-e2e.test.sh 1244
 tests/fm-nm-test-contract.test.sh 1957
@@ -916,7 +911,6 @@ tests/fm-remote-secondmate-relaunch.test.sh 1932
 tests/fm-remote-secondmate-trace-context.test.sh 107181
 tests/fm-remote-transport-lanes.test.sh 75091
 tests/fm-routine-creator-watch.test.sh 4041
-tests/fm-routine-report-check.test.sh 1535
 tests/fm-rovo-harness.test.sh 23949
 tests/fm-rovo-signals-live-e2e.test.sh 1158
 tests/fm-second-opinion.test.sh 1482
@@ -942,7 +936,6 @@ tests/fm-sessionstart-hook-live-e2e.test.sh 1231
 tests/fm-sessionstart-instruction-refresh-live-e2e.test.sh 1165
 tests/fm-sessionstart-nudge.test.sh 71802
 tests/fm-shared-captain-inheritance.test.sh 7991
-tests/fm-shift.test.sh 16287
 tests/fm-spawn-account.test.sh 16139
 tests/fm-spawn-agent-up.test.sh 42530
 tests/fm-spawn-compact-adviser-disable-remote.test.sh 54955
@@ -981,8 +974,6 @@ tests/fm-test-isolation-proof.test.sh 5258
 tests/fm-timeout-lib-tty.test.sh 2354
 tests/fm-timeout-lib.test.sh 10750
 tests/fm-tmux-agent-liveness.test.sh 3770
-tests/fm-todo-render.test.sh 12202
-tests/fm-todo.test.sh 27339
 tests/fm-tool-update-check.test.sh 15664
 tests/fm-toolchain-drift.test.sh 1611
 tests/fm-trace-context-lib.test.sh 1474
@@ -998,7 +989,6 @@ tests/fm-upstream-watch.test.sh 3896
 tests/fm-upstream.test.sh 2260
 tests/fm-vendor-auth-probe.test.sh 44273
 tests/fm-visible-status.test.sh 29400
-tests/fm-voice-idea.test.sh 22619
 tests/fm-voice-relay-appserver.test.sh 12255
 tests/fm-voice-relay-freshness.test.sh 9441
 tests/fm-voice-relay.test.sh 33032

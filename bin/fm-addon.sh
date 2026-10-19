@@ -24,10 +24,10 @@
 # did before add-ons existed.
 #
 # HOOK POINTS. Hooks come from two places: this repository's own hooks/<point>/
-# (built-in hooks, which hold a home's tools that have not moved into an add-on
-# yet) and the add-on's hooks/<point>/. An add-on hook with the same name as a
-# built-in replaces it, so a tool that moves out never runs twice. Hooks run in
-# name order, so a numeric prefix such as 10- sets the order.
+# (built-in hooks, for a shared tool that runs at a hook point) and the add-on's
+# hooks/<point>/. An add-on hook with the same name as a built-in replaces it,
+# so a tool never runs twice. Hooks run in name order, so a numeric prefix such
+# as 10- sets the order.
 #   bootstrap      executables run by session-start bootstrap among its
 #                  read-only checks; their output lands in the startup digest.
 #   session-start  executables run where the session-start digest prints the
@@ -40,6 +40,10 @@
 #   watcher        bash files named <name>.sh, sourced once into bin/fm-watch.sh
 #                  when it starts, with FM_HOOK_ROOT set; hook W1 there owns the
 #                  guarded functions such a file may define.
+#   deck-staging   executables run by bin/fm-deck.sh on every frame; each prints
+#                  one JSON array of staging run records, which the deck joins
+#                  and bin/fm-deck-render.py places in the sections that own
+#                  each run's state.
 # Executable hooks run with stdin from /dev/null and with FM_HOME, FM_ROOT (this
 # repository) and FM_HOOK_ROOT (the repository holding the hook) exported, plus
 # any arguments given to `run`. Each is bounded by FM_ADDON_HOOK_TIMEOUT seconds
@@ -167,7 +171,7 @@ resolve_addon() {
 
 valid_point() {
   case "$1" in
-    bootstrap|session-start|sentinel|watcher) return 0 ;;
+    bootstrap|session-start|sentinel|watcher|deck-staging) return 0 ;;
   esac
   return 1
 }
