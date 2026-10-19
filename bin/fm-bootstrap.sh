@@ -133,6 +133,7 @@
 #          UPSTREAM_REPORT is the read-only pending-report check owned by
 #          bin/fm-upstream-watch.sh. The weekly job writes only private data/;
 #          acknowledge the report after reading it so later sessions stay quiet.
+#          Bootstrap hooks (bin/fm-addon.sh) add their own read-only lines.
 #          MORNING_INTAKE is the read-only owed/failed/pending check owned by
 #          bin/fm-morning-intake.sh, silent unless this home opted in.
 #          CHANNEL_INTAKE is the read-only due/ready/unknown check owned by
@@ -1812,18 +1813,11 @@ command -v fm_upstream_check >/dev/null 2>&1 && fm_upstream_check "$FM_ROOT" "$F
 # by fm-upstream-watch.sh rather than being reimplemented here.
 [ ! -x "$SCRIPT_DIR/fm-upstream-watch.sh" ] \
   || "$SCRIPT_DIR/fm-upstream-watch.sh" pending
-# Read-only owed/failed/pending check for the opt-in morning intake. Inert on
-# every home without an `enabled = true` line in config/morning-intake, and the
-# local day, thresholds, retries and watermark all remain owned by
-# fm-morning-intake.sh rather than being reimplemented here.
-[ ! -x "$SCRIPT_DIR/fm-morning-intake.sh" ] \
-  || "$SCRIPT_DIR/fm-morning-intake.sh" pending
-# Read-only due/ready/unknown check for the opt-in continuous channel intake.
-# Inert on every home without an `enabled = true` line in config/channel-intake,
-# and the cadence, per-source checkpoints, ledger and notification budget all
-# remain owned by fm-channel-intake.sh rather than being reimplemented here.
-[ ! -x "$SCRIPT_DIR/fm-channel-intake.sh" ] \
-  || "$SCRIPT_DIR/fm-channel-intake.sh" pending
+# Read-only checks from bootstrap hooks: this checkout's built-in hooks and this
+# home's private add-on (bin/fm-addon.sh owns the hook points). The opt-in
+# morning and channel intakes report here; each hook owns its own check, and a
+# home whose hooks have nothing to say prints nothing.
+FM_HOME="$FM_HOME" FM_CONFIG_OVERRIDE="$CONFIG" "$SCRIPT_DIR/fm-addon.sh" run bootstrap
 
 if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then
   # secondmate_sync consumes SECONDMATE_RESPAWNED_IDS from the liveness sweep, so

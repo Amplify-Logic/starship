@@ -98,6 +98,7 @@ test_export_copies_portable_only() {
   printf 'scrypt-hash\n' > "$home/bridge/passcode.hash"
   printf 'one-shot-passcode\n' > "$home/data/bridge-view-passcode.txt"
   printf 'interval_seconds = 604800\n' > "$home/config/upstream-watch"
+  printf 'path = projects/my-addon\norigin = https://example.invalid/my-addon\n' > "$home/config/addon"
   mkdir -p "$dest"
 
   local out
@@ -118,6 +119,7 @@ test_export_copies_portable_only() {
   assert_present "$dest/config/primary-handoff" "manifest-declared primary handoff config not exported"
   assert_present "$dest/config/startup-memory-budget" "manifest-declared startup-memory budget not exported"
   assert_present "$dest/config/upstream-watch" "manifest-declared upstream-watch config not exported"
+  assert_present "$dest/config/addon" "manifest-declared private add-on config not exported"
   assert_absent "$dest/.env" ".env must not be exported"
   assert_absent "$dest/config/action-captain-secret" "action capability secret must not be exported"
   assert_absent "$dest/bridge" "bridge/ must not be exported"
@@ -296,6 +298,31 @@ test_verify_passes_ready_home() {
   assert_contains "$out" 'VERIFY_PASS: crew-harness' "crew-harness should pass"
   assert_contains "$out" 'VERIFY_OK:' "expected VERIFY_OK summary"
   pass "verify passes a ready destination home"
+}
+
+test_verify_reports_the_private_addon() {
+  local home="$TMP_ROOT/verify-addon" out rc=0 fakebin
+  seed_home "$home"
+  printf 'tmux\n' > "$home/config/backend"
+  rm -f "$home/config/crew-dispatch.json"
+  fakebin=$(make_verify_fakebin "$TMP_ROOT/verify-addon-bin")
+  out=$(PATH="$fakebin:$BASE_PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" "$PORT" verify --home "$home" 2>&1) || rc=$?
+  [ "$rc" -eq 0 ] || fail "verify should pass a home with no add-on, got rc=$rc out=$out"
+  assert_contains "$out" 'VERIFY_PASS: addon - no private add-on configured' "a home with no add-on must pass the add-on check"
+
+  printf 'path = projects/my-addon\n' > "$home/config/addon"
+  rc=0
+  out=$(PATH="$fakebin:$BASE_PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" "$PORT" verify --home "$home" 2>&1) || rc=$?
+  [ "$rc" -ne 0 ] || fail "verify must fail while the configured add-on is missing, got: $out"
+  assert_contains "$out" "VERIFY_FAIL: addon - the add-on checkout $home/projects/my-addon is missing; run bin/fm-addon.sh install" \
+    "a missing add-on must fail with its repair"
+
+  mkdir -p "$home/projects/my-addon"
+  rc=0
+  out=$(PATH="$fakebin:$BASE_PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" "$PORT" verify --home "$home" 2>&1) || rc=$?
+  [ "$rc" -eq 0 ] || fail "verify should pass once the add-on is present, got rc=$rc out=$out"
+  assert_contains "$out" 'VERIFY_PASS: addon - private add-on present at' "a present add-on must pass"
+  pass "verify reports whether a configured private add-on's checkout is present"
 }
 
 test_verify_accepts_prime_agent_worker() {
@@ -596,6 +623,7 @@ test_scan_warn_machine_local_does_not_mask_secrets
 test_verify_fails_missing_portable_files
 test_verify_fails_unknown_backend_and_unverified_harness
 test_verify_passes_ready_home
+test_verify_reports_the_private_addon
 test_verify_accepts_prime_agent_worker
 test_verify_completes_for_every_verified_harness
 

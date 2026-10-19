@@ -24,7 +24,7 @@ make_world() {
   fakebin=$(fm_fakebin "$dir")
   : > "$dir/calls.log"
   fm_fake_real_tool "$fakebin" bash sh env cat grep sed head mkdir mktemp \
-    chmod rm cp touch tr dirname || fail "a basic tool is missing on this host"
+    chmod rm cp touch tr dirname awk || fail "a basic tool is missing on this host"
   fm_fake_exit0 "$fakebin" true
 
   cat > "$fakebin/uname" <<'SH'
@@ -88,23 +88,39 @@ case "$url" in
   *) exit 22 ;;
 esac
 SH
+  # A clone of Firstmate carries the real add-on owner, so --addon runs the
+  # same install a real clone would; a clone of an add-on whose URL matches
+  # FAKE_ADDON_CLONE_FAILS fails the way a private repository does before the
+  # GitHub sign-in.
   cat > "$fakebin/git" <<'SH'
 #!/usr/bin/env bash
 case "${1:-}" in
   --version) echo "git version 2.43.0"; exit 0 ;;
   clone)
-    printf 'git clone %s %s\n' "$2" "$3" >> "$FAKE_WORLD/calls.log"
-    mkdir -p "$3/bin" "$3/.git" && touch "$3/bin/fm-primary.sh" "$3/AGENTS.md"
-    # The clone's own Herdr setup: records its call and installs a herdr the
-    # way bin/fm-herdr-setup.sh would.
-    cat > "$3/bin/fm-herdr-setup.sh" <<'HS'
+    shift
+    while [ "$#" -gt 2 ]; do shift; done
+    printf 'git clone %s %s\n' "$1" "$2" >> "$FAKE_WORLD/calls.log"
+    case "$1" in
+      */firstmate)
+        mkdir -p "$2/bin" "$2/.git" && touch "$2/bin/fm-primary.sh" "$2/AGENTS.md"
+        cp "$FAKE_FM_BIN/fm-addon.sh" "$FAKE_FM_BIN/fm-timeout-lib.sh" "$2/bin/"
+        # The clone's own Herdr setup: records its call and installs a herdr the
+        # way bin/fm-herdr-setup.sh would.
+        cat > "$2/bin/fm-herdr-setup.sh" <<'HS'
 #!/usr/bin/env bash
 printf 'herdr-setup %s FM_HOME=%s\n' "$*" "${FM_HOME:-}" >> "$FAKE_WORLD/calls.log"
 mkdir -p "$HOME/.local/bin"
 printf '#!/usr/bin/env bash\necho herdr 0.9.5\n' > "$HOME/.local/bin/herdr"
 chmod +x "$HOME/.local/bin/herdr"
 HS
-    chmod +x "$3/bin/fm-herdr-setup.sh" ;;
+        chmod +x "$2/bin/fm-herdr-setup.sh" ;;
+      *)
+        if [ -n "${FAKE_ADDON_CLONE_FAILS:-}" ] && [ -z "${1##*"$FAKE_ADDON_CLONE_FAILS"*}" ]; then
+          echo "fatal: could not read Username for 'https://github.com': terminal prompts disabled" >&2
+          exit 128
+        fi
+        mkdir -p "$2/.git" ;;
+    esac ;;
   -C) [ -d "$2/.git" ] ;;
 esac
 SH
@@ -141,7 +157,7 @@ run_setup() {
     unset WSL_DISTRO_NAME
     [ -z "${FAKE_WSL_DISTRO:-}" ] || export WSL_DISTRO_NAME="$FAKE_WSL_DISTRO"
     PATH="$dir/fakebin:$dir/sysbin${FAKE_WINDOWS_PATH:+:$FAKE_WINDOWS_PATH}" HOME="${FAKE_HOME:-$dir/home}" FAKE_WORLD="$dir" \
-      HOMEBREW_PREFIX="$dir/linuxbrew" bash "$SETUP" "$@" 2>&1
+      FAKE_FM_BIN="$ROOT/bin" HOMEBREW_PREFIX="$dir/linuxbrew" bash "$SETUP" "$@" 2>&1
   )
 }
 
@@ -326,7 +342,7 @@ run_setup_piped() {
     cd "$dir/home" || exit 1
     unset WSL_DISTRO_NAME
     cat "$SETUP" | PATH="$dir/fakebin:$dir/sysbin" HOME="$dir/home" FAKE_WORLD="$dir" \
-      HOMEBREW_PREFIX="$dir/linuxbrew" bash -s -- "$@" 2>&1
+      FAKE_FM_BIN="$ROOT/bin" HOMEBREW_PREFIX="$dir/linuxbrew" bash -s -- "$@" 2>&1
   )
 }
 
@@ -342,7 +358,49 @@ test_piped_install_runs_to_the_end() {
   pass "the setup runs to the end under curl | bash even when an installer reads standard input"
 }
 
+test_addon_is_named_and_cloned_once_signed_in() {
+  local w out status config arg
+  w=$(make_world addon)
+  config="$w/home/starship/config/addon"
+  out=$(FAKE_ADDON_CLONE_FAILS=starship-addon run_setup "$w" --addon Amplify-Logic/starship-addon)
+  status=$?
+  [ "$status" -eq 0 ] || fail "a setup whose add-on cannot be cloned yet should still finish, got $status: $out"
+  assert_equals "$(printf 'path = projects/starship-addon\norigin = https://github.com/Amplify-Logic/starship-addon')" \
+    "$(cat "$config")" "--addon must name the add-on's origin and its checkout under projects/"
+  assert_contains "$out" "the add-on is not cloned yet" "a clone that needs the sign-in must be reported"
+  assert_contains "$out" "3. ~/starship/bin/fm-addon.sh install" "the closing steps must name the command that finishes the add-on"
+  out=$(FAKE_ADDON_CLONE_FAILS=starship-addon run_setup "$w" --ci --addon Amplify-Logic/starship-addon)
+  assert_not_contains "$out" "3. ~/starship/bin/fm-addon.sh install" "--ci prints no closing steps"
+
+  : > "$w/calls.log"
+  out=$(run_setup "$w" --addon Amplify-Logic/starship-addon)
+  status=$?
+  [ "$status" -eq 0 ] || fail "a re-run after the sign-in should succeed, got $status: $out"
+  assert_contains "$(calls "$w")" "git clone https://github.com/Amplify-Logic/starship-addon $w/home/starship/projects/starship-addon" \
+    "the add-on must be cloned into its configured checkout"
+  assert_contains "$out" "add-on: cloned" "the clone must be reported"
+  assert_not_contains "$out" "3. ~/starship/bin/fm-addon.sh install" "a cloned add-on needs no closing step"
+
+  printf 'path = elsewhere\n' > "$config"
+  out=$(run_setup "$w" --ci --addon other/repo)
+  assert_contains "$out" "already names an add-on; left as it is" "a different add-on must not be overwritten"
+  assert_equals "path = elsewhere" "$(cat "$config")" "an existing config/addon must be left as it is"
+
+  w=$(make_world addon-usage)
+  for arg in starship-addon https://github.com/Amplify-Logic/starship-addon \
+    git@github.com:Amplify-Logic/starship-addon.git /srv/addon.git Amplify-Logic/..; do
+    out=$(run_setup "$w" --addon "$arg" 2>&1)
+    status=$?
+    [ "$status" -eq 2 ] || fail "--addon $arg should be a usage error, got $status: $out"
+    assert_contains "$out" "--addon needs OWNER/REPO, the add-on's GitHub repository" "--addon $arg must be refused by naming the OWNER/REPO form"
+  done
+  [ ! -s "$w/calls.log" ] || fail "an add-on usage error must change nothing: $(calls "$w")"
+  [ ! -e "$w/home/starship/config/addon" ] || fail "an add-on usage error must write no config/addon"
+  pass "--addon names the private add-on by OWNER/REPO only, clones it once the sign-in allows, and never overwrites another one"
+}
+
 test_help_and_usage_errors
+test_addon_is_named_and_cloned_once_signed_in
 test_piped_install_runs_to_the_end
 test_refusals_change_nothing
 test_fresh_install_then_rerun_is_idempotent

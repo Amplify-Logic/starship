@@ -194,6 +194,8 @@ It records only after everyone on the call has agreed; [docs/call-companion.md](
 
 ## Next
 
+To get the team's latest Starship at any time, tell your first mate "update starship": it pulls the shared Starship and restarts any second mates on it.
+
 Read [the captain's handbook](docs/handbook.md).
 It explains the whole system in plain words, how to connect your mail, calendar and documents, how to teach the first mate your preferences, how to approve work, and a five-day path of small practice tasks.
 

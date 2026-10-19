@@ -15,6 +15,7 @@ Start with the directory layout, then use the setting reference for the behavior
 | Persistent secondmates | [Secondmate routes](#secondmate-routes-datasecondmatesmd) |
 | Starter settings for a new home: which model does which job, spoken replies, transcription words, and how hard the first mate thinks | [Starter settings](#starter-settings-first-launch), [crew dispatch profiles](#crew-dispatch-profiles-configcrew-dispatchjson), [desk voice-out](#desk-voice-out-configspeak), [speech-to-text vocabulary](#speech-to-text-vocabulary-configstt-vocabulary), and [primary effort](#primary-effort-configprimary-effort) |
 | The call recorder | [Call recorder](#call-recorder-configcall-companion) |
+| A home's own private tools beside the shared code | [Private add-on](#private-add-on-configaddon) and [opt-in skills](#opt-in-skills-configadhd-configsecond-opinion-configdaily-todo) |
 | Per-run overrides and tuning | [Environment variables](#environment-variables) |
 
 ## FM_HOME
@@ -605,6 +606,30 @@ A switched-on skill is linked into `.agents/skills/` under its usual name, so it
 A harness lists skills when it starts, so a changed switch takes effect from the next launch.
 The flags are home-local and are not inherited by secondmate homes.
 `bin/fm-opt-in-skills.sh` owns the links and when they are made.
+
+## Private add-on (config/addon)
+
+A home can run its own tools from a separate, usually private repository, its add-on, on top of the shared Starship code, without the two repositories ever merging.
+The optional local, gitignored `config/addon` names it:
+
+```text
+path = projects/starship-addon
+origin = https://github.com/<owner>/starship-addon
+```
+
+`path` is the add-on's checkout, absolute, under `~/`, or relative to the home; `origin` is what `bin/fm-addon.sh install` clones when that checkout is missing.
+With no `config/addon` a home behaves exactly as it does without add-ons.
+
+An add-on keeps this repository's layout, so a tool moves between the two by moving its files:
+
+- Every skill in the add-on's `.agents/skills/` is linked into the home's checkout as an opt-in skill is, and replaces an opt-in skill of the same name.
+- Hooks in the add-on's `hooks/<point>/` run beside this repository's own built-in `hooks/<point>/`, in name order, and replace a built-in hook of the same name: `bootstrap` adds read-only startup checks, `session-start` adds standing instructions to the session-start digest, `sentinel` names work that keeps the host sentinel watching a home with no task in flight, and `watcher` files are sourced into the watcher when it starts.
+
+`/updatefirstmate` ("update starship") fast-forwards the add-on from its origin with the same guards as the shared code and relinks its skills, and a remote second mate's home fast-forwards the add-on its own `config/addon` names.
+`bin/fm-home-port.sh` carries `config/addon` to another machine, clones the add-on during its one-command handoff, and fails `verify` while the checkout is missing, and `bin/fm-linux-setup.sh --addon <owner>/<repo>` names one on a new Linux machine.
+Register the add-on as an ordinary project when workers should change it.
+The add-on is home-local and is not inherited by secondmate homes.
+`bin/fm-addon.sh` owns the configuration, the hook points and their contract, and the install.
 
 ## Captain ledger (config/captain-ledger)
 

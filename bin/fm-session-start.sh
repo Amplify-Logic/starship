@@ -49,7 +49,8 @@
 #   4. supervision-instructions - the one emitted operating block for the
 #                       detected primary harness, followed, only in a home
 #                       opted in to desk voice-out, by the spoken-lead reply
-#                       rules in docs/desk-voice-replies.md.
+#                       rules in docs/desk-voice-replies.md, and then by the
+#                       output of any session-start hook (bin/fm-addon.sh).
 #   5. read-once contract - the do-not-re-read contract covering every source
 #                       represented by the two digests below.
 #   6. fleet digest   - a compact data/backlog.md identity/metadata listing,
@@ -890,6 +891,16 @@ if [ -f "$DESK_VOICE_RULES" ] \
     "$SCRIPT_DIR/fm-speak.sh" --enabled 2>/dev/null)" = enabled ]; then
   section "DESK VOICE-OUT REPLY RULES"
   sed '1{/^# /d;}' "$DESK_VOICE_RULES" | sed '/./,$!d'
+fi
+# Standing instructions from session-start hooks, which a private add-on uses
+# for rules that bind every turn of this home only (bin/fm-addon.sh owns the
+# hook points). They print here on the full and the re-emit path, and a home
+# with no such hook prints nothing.
+ADDON_INSTRUCTIONS=$(FM_HOME="$FM_HOME" FM_CONFIG_OVERRIDE="$CONFIG" \
+  "$SCRIPT_DIR/fm-addon.sh" run session-start 2>&1) || ADDON_INSTRUCTIONS=
+if [ -n "$ADDON_INSTRUCTIONS" ]; then
+  section "ADD-ON INSTRUCTIONS"
+  printf '%s\n' "$ADDON_INSTRUCTIONS"
 fi
 
 # --- 5. read-once contract -------------------------------------------------

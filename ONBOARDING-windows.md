@@ -180,6 +180,7 @@ When the first mate's startup checks run, it also tells you if anything sits und
 If you left Herdr with `Ctrl-b`, then `q`, while an Ubuntu window stayed open, Herdr kept running and this brings back your first mate as you left it.
 Closing the last Ubuntu window lets WSL shut Ubuntu down, which stops Herdr and your first mate; a Windows restart does the same.
 After that, Herdr reopens your spaces; if your first mate's space shows only a shell, run `cd ~/starship && bin/fm-primary.sh opus` there again, and it starts fresh and picks up its work from its records.
+To get the team's latest Starship, tell your first mate "update starship".
 
 **Prefer tmux?** Herdr is the default, and tmux still works: run `echo tmux > ~/starship/config/backend`, start the first mate inside `tmux new -s firstmate`, and workers open as tmux windows instead ([docs/tmux-backend.md](docs/tmux-backend.md)).
 

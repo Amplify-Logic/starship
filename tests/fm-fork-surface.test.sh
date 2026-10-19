@@ -126,8 +126,7 @@ check_personal_surface_deletion_is_optional() {
   local repo out
   repo="$TMP_ROOT/personal-delete"
   clone_current_tree "$repo"
-  git -C "$repo" rm -q bin/fm-adhd.sh docs/adhd.md .agents/opt-in-skills/adhd/SKILL.md \
-    .agents/opt-in-skills/adhd-auto-fire/SKILL.md tests/fm-adhd.test.sh \
+  git -C "$repo" rm -q bin/fm-voice-idea.py docs/voice-ideas.md tests/fm-voice-idea.test.sh \
     || fail "could not remove personal fixture surface"
   out=$(cd "$repo" && bin/fm-fork-surface.sh check 2>&1) \
     || fail "declared personal surface must be optional: $out"

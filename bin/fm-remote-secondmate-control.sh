@@ -32,6 +32,8 @@
 # code root from origin. Because this home is a standalone clone, the target
 # commit is imported here first and the fast-forward itself is the shared one in
 # bin/fm-ff-lib.sh, so the clean, ancestry, and branch guards have a single owner.
+# Before that sync, update also fast-forwards the home's own private add-on
+# (bin/fm-addon.sh) from the add-on's origin, under the same guards.
 # A private parent-route state directory stores only the remote secondmate
 # agent's endpoint record; the home's own
 # state/*.meta remains reserved for workers the secondmate supervises.
@@ -406,7 +408,23 @@ cmd_update() {
       die "remote code root did not complete a safe origin update"
       ;;
   esac
+  update_home_addon
   cmd_sync "$id"
+}
+
+# The remote home's own private add-on (bin/fm-addon.sh) moves under the same
+# fast-forward-only guard, from its own origin. Its one "add-on: ..." line comes
+# ahead of the result line the parent reads, and a home with no add-on prints
+# nothing. An add-on that cannot advance is reported, never a reason to stop.
+update_home_addon() {
+  local addon_out addon_status=0
+  addon_out=$(FM_HOME="$TARGET_HOME" FM_CONFIG_OVERRIDE="$TARGET_HOME/config" \
+    "$SCRIPT_DIR/fm-addon.sh" root 2>&1) || addon_status=$?
+  case "$addon_status" in
+    0) ff_target "$addon_out" "add-on" origin no no ;;
+    1) ;;
+    *) printf 'add-on: skipped: %s\n' "${addon_out#fm-addon: }" ;;
+  esac
 }
 
 cmd_retire() {

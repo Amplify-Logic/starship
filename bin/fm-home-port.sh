@@ -123,6 +123,7 @@ FALLBACK_PORTABLE_CONFIG_FILES=(
   config/wedge-alarm
   config/primary-handoff
   config/upstream-watch
+  config/addon
 )
 PORTABLE_CONFIG_FILES=("${FALLBACK_PORTABLE_CONFIG_FILES[@]}")
 
@@ -581,6 +582,16 @@ cmd_verify() {
     verify_pass crew-harness "config/crew-harness absent (mirrors primary harness)"
   fi
 
+  # config/addon: a configured private add-on has its checkout (bin/fm-addon.sh)
+  local addon_out addon_status=0
+  addon_out=$(FM_HOME="$home" FM_CONFIG_OVERRIDE="$home/config" "$SCRIPT_DIR/fm-addon.sh" root 2>&1) \
+    || addon_status=$?
+  case "$addon_status" in
+    0) verify_pass addon "private add-on present at $addon_out" ;;
+    1) verify_pass addon "no private add-on configured" ;;
+    *) verify_fail addon "${addon_out#fm-addon: }" ;;
+  esac
+
   # 6. Aggregate readiness before real work (after every mechanical check)
   if [ "$failed" -eq 0 ]; then
     verify_pass ready "destination checks passed; complete interactive harness logins before dispatching real work"
@@ -979,6 +990,14 @@ cmd_bootstrap() {
   mkdir -p "$home/data" "$home/config" "$home/state" "$home/projects"
 
   cmd_pull --remote "$remote" --home "$home"
+
+  # A pulled config/addon names this home's private add-on; clone it now, while
+  # the GitHub sign-in that reached the portable repo is at hand. A failure is
+  # reported and leaves the rest of the handoff running.
+  if [ -f "$home/config/addon" ]; then
+    FM_HOME="$home" FM_CONFIG_OVERRIDE="$home/config" "$SCRIPT_DIR/fm-addon.sh" install \
+      || printf 'ADDON_INSTALL: failed; fix the reason above, then run bin/fm-addon.sh install\n' >&2
+  fi
 
   if [ -x "$home/bin/fm-bootstrap.sh" ]; then
     printf 'BOOTSTRAP_DETECT: running %s\n' "$home/bin/fm-bootstrap.sh"

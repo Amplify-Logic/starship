@@ -46,16 +46,25 @@
 # the kernel is WSL 1 (Claude Code needs WSL 2); apt-get is absent; or
 # ~/starship exists but is not a Firstmate clone.
 #
+# With --addon, it also names this home's private add-on in
+# ~/starship/config/addon (bin/fm-addon.sh): the add-on's GitHub repository as
+# its origin, checked out at projects/<repository name>. It then tries the clone
+# once; a private add-on usually needs the GitHub sign-in first, so when the
+# clone fails the closing instructions name the command that finishes it. A
+# config/addon that already names something else is left as it is.
+#
 # Re-running is safe: present tools are kept, the clone is left as it is, and
 # the profile lines are written once.
 #
 # Usage:
-#   fm-linux-setup.sh [--ci]
+#   fm-linux-setup.sh [--ci] [--addon OWNER/REPO]
 #   curl -fsSL https://raw.githubusercontent.com/Amplify-Logic/firstmate/main/bin/fm-linux-setup.sh | bash
 #   cat fm-linux-setup.sh | bash -s -- --ci
-#   --ci    skip the closing sign-in instructions (gh auth login, claude);
-#           .github/workflows/windows-wsl.yml runs it this way, through a
-#           pipe as the guides do, with no person at the keyboard.
+#   --ci     skip the closing sign-in instructions (gh auth login, claude);
+#            .github/workflows/windows-wsl.yml runs it this way, through a
+#            pipe as the guides do, with no person at the keyboard.
+#   --addon  name this home's private add-on by its GitHub repository,
+#            OWNER/REPO, and clone it when the sign-in already allows it
 # Exit: 0 when every tool answers --version; 1 on a refusal or failed step,
 # with the reason on stderr; 2 on a usage error.
 set -eu
@@ -69,11 +78,12 @@ BREW_PACKAGES="git node gh tmux jq"
 
 usage() {
   cat <<'EOF'
-usage: fm-linux-setup.sh [--ci]
+usage: fm-linux-setup.sh [--ci] [--addon OWNER/REPO]
   Takes a fresh Ubuntu 24.04 (inside WSL 2, or a server over SSH) to the point
   where a first mate can start, cloning Firstmate into ~/starship.
   Run it as your own user from your Linux home, never under /mnt/.
-  --ci    skip the closing sign-in instructions (gh auth login, claude)
+  --ci     skip the closing sign-in instructions (gh auth login, claude)
+  --addon  name your private add-on by its GitHub repository, OWNER/REPO
 EOF
 }
 
@@ -104,11 +114,52 @@ check() {  # <label> <command...>: sets missing=1 when the tool does not answer
   fi
 }
 
+# addon_origin <OWNER/REPO>: the GitHub clone URL for an add-on argument.
+addon_origin() {
+  [[ $1 =~ ^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9._-]*[A-Za-z0-9_-]$ ]] || return 1
+  printf 'https://github.com/%s\n' "$1"
+}
+
+# setup_addon <target> <OWNER/REPO>: write config/addon unless it already
+# names something else, then try the clone once. Sets ADDON_PENDING=1 when the
+# clone is still to be done after the sign-ins.
+setup_addon() {
+  local target=$1 origin name config want
+  origin=$(addon_origin "$2")
+  name=${2#*/}
+  config="$target/config/addon"
+  want=$(printf 'path = projects/%s\norigin = %s\n' "$name" "$origin")
+  mkdir -p "$target/config"
+  if [ ! -e "$config" ]; then
+    say "Naming your private add-on in $config"
+    printf '%s\n' "$want" > "$config"
+  elif [ "$(cat "$config")" != "$want" ]; then
+    warn "$config already names an add-on; left as it is"
+  fi
+  if FM_HOME="$target" GIT_TERMINAL_PROMPT=0 "$target/bin/fm-addon.sh" install </dev/null; then
+    ADDON_PENDING=0
+  else
+    ADDON_PENDING=1
+    warn "the add-on is not cloned yet; run ~/starship/bin/fm-addon.sh install after the GitHub sign-in"
+  fi
+}
+
 main() {
   CI_MODE=0
+  ADDON=
+  ADDON_PENDING=0
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --ci) CI_MODE=1 ;;
+      --addon)
+        if [ "$#" -lt 2 ] || ! addon_origin "$2" >/dev/null; then
+          printf "fm-linux-setup.sh: --addon needs OWNER/REPO, the add-on's GitHub repository\n" >&2
+          usage >&2
+          exit 2
+        fi
+        ADDON=$2
+        shift
+        ;;
       -h|--help) usage; exit 0 ;;
       *) printf 'fm-linux-setup.sh: unknown argument: %s\n' "$1" >&2; usage >&2; exit 2 ;;
     esac
@@ -226,6 +277,7 @@ main() {
     say "Cloning Firstmate into $TARGET"
     git clone "$REPO_URL" "$TARGET" </dev/null || die "git clone failed"
   fi
+  [ -z "$ADDON" ] || setup_addon "$TARGET" "$ADDON"
 
   HERDR_WANTED=0
   if [ "$ON_WSL" = 1 ]; then
@@ -297,6 +349,15 @@ Then, in the new terminal, two sign-ins are yours to do:
      Sign in. When it then asks whether you trust your home folder, Enter on
      "No, exit" just closes it; you stay signed in.
      On a server, open the link it prints on your own computer and paste the code back.
+EOF
+  if [ "$ADDON_PENDING" = 1 ]; then
+    cat <<'EOF'
+
+  3. ~/starship/bin/fm-addon.sh install
+     Clones your private add-on, now that GitHub knows who you are.
+EOF
+  fi
+  cat <<'EOF'
 
 Then go back to the guide you are following:
   - on Windows, step 8 of ONBOARDING-windows.md, which starts the first mate

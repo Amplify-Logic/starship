@@ -1238,12 +1238,35 @@ printf 'remote update probe\n' > "$REMOTE_SEED/REMOTE_UPDATE_PROBE"
 git -C "$REMOTE_SEED" add REMOTE_UPDATE_PROBE
 git -C "$REMOTE_SEED" commit -qm 'advance remote code root'
 git -C "$REMOTE_SEED" push -q origin main
+# The remote home's own private add-on (bin/fm-addon.sh) is one commit behind
+# its origin, so the same update must fast-forward it too.
+ADDON_ORIGIN="$TMP_ROOT/addon.git"
+git init -q --bare "$ADDON_ORIGIN"
+git -C "$ADDON_ORIGIN" symbolic-ref HEAD refs/heads/main
+git clone -q "file://$ADDON_ORIGIN" "$TMP_ROOT/addon-seed" 2>/dev/null
+git -C "$TMP_ROOT/addon-seed" config user.email test@example.com
+git -C "$TMP_ROOT/addon-seed" config user.name Test
+printf 'one\n' > "$TMP_ROOT/addon-seed/README.md"
+git -C "$TMP_ROOT/addon-seed" add README.md
+git -C "$TMP_ROOT/addon-seed" commit -qm a1
+git -C "$TMP_ROOT/addon-seed" push -q origin main
+git clone -q "file://$ADDON_ORIGIN" "$REMOTE_HOME/projects/addon"
+mkdir -p "$REMOTE_HOME/config"
+printf 'path = projects/addon\n' > "$REMOTE_HOME/config/addon"
+printf 'two\n' > "$TMP_ROOT/addon-seed/README.md"
+git -C "$TMP_ROOT/addon-seed" commit -qam a2
+git -C "$TMP_ROOT/addon-seed" push -q origin main
 UPDATE_OUT=$(remote_env "$ROOT/bin/fm-on.sh" ios fm-remote-secondmate-control.sh update ios)
 assert_contains "$UPDATE_OUT" 'synced:' "remote update did not report a host-local fast-forward"
+[ "$(printf '%s\n' "$UPDATE_OUT" | tail -1 | cut -c1-7)" = 'synced:' ] \
+  || fail "the remote update result must stay the last line the parent reads: $UPDATE_OUT"
 [ "$(git -C "$REMOTE_HOME" rev-parse HEAD)" = "$(git -C "$REMOTE_ROOT" rev-parse HEAD)" ] \
   || fail "remote persistent home did not fast-forward to its code-root commit"
 assert_present "$REMOTE_HOME/REMOTE_UPDATE_PROBE" "remote update did not materialize the code-root commit"
-pass "remote update imports and fast-forwards the persistent home on its configured host"
+assert_contains "$UPDATE_OUT" 'add-on: updated ' "remote update did not fast-forward the home's private add-on"
+[ "$(git -C "$REMOTE_HOME/projects/addon" rev-parse HEAD)" = "$(git -C "$ADDON_ORIGIN" rev-parse main)" ] \
+  || fail "the remote home's add-on is not at its origin's main"
+pass "remote update imports and fast-forwards the persistent home and its private add-on on its configured host"
 
 # The remote restart verb is not a second implementation: its host-local leg runs
 # the ORDINARY control plane against a record that is plain and local on that

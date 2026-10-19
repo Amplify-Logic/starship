@@ -464,8 +464,45 @@ test_armed_shift_with_no_crew_task_is_supervised() {
   [ "$(wc -l < "$log" | tr -d '[:space:]')" -eq 1 ] || fail "a stood-down shift with no task in flight still alerted"
   out=$(run_mode "$home" "$recorder" check); status=$?
   expect_code 0 "$status" "no shift and no task must report OK"
-  assert_contains "$out" 'OK - no task metadata in flight and no glasses shift armed' "the idle verdict did not say neither condition holds"
+  assert_contains "$out" 'OK - no task metadata in flight and no work reported by a sentinel hook' "the idle verdict did not say neither condition holds"
   pass "supervision sentinel: an armed shift with no crew task is supervised, alerts once, and goes idle when stood down"
+}
+
+# Any sentinel hook of a private add-on (bin/fm-addon.sh) can name work worth
+# supervising in the same way, and the alert names that work.
+test_addon_sentinel_hook_work_is_supervised() {
+  local home="$TMP_ROOT/addon-sentinel" recorder="$TMP_ROOT/record-addon" log="$TMP_ROOT/addon-alerts.log" holder out status addon
+  make_primary "$home"
+  make_recorder "$recorder" "$log"
+  addon="$TMP_ROOT/addon-sentinel-addon"
+  mkdir -p "$addon/hooks/sentinel"
+  # shellcheck disable=SC2016 # The hook expands its own variables.
+  printf '#!/usr/bin/env bash\n[ -e "$FM_STATE_OVERRIDE/nightly.armed" ] && echo "nightly import armed"\nexit 0\n' \
+    > "$addon/hooks/sentinel/50-nightly"
+  chmod +x "$addon/hooks/sentinel/50-nightly"
+  printf 'path = %s\n' "$addon" > "$home/config/addon"
+  : > "$home/state/nightly.armed"
+  sleep 60 &
+  holder=$!
+  install_stale_watcher_fixture "$home" "$holder" "$ROOT/bin/fm-watch.sh" || {
+    kill "$holder" 2>/dev/null || true
+    wait "$holder" 2>/dev/null || true
+    fail "could not identify the add-on watcher fixture"
+  }
+  touch -t 202001010000 "$home/state/.last-watcher-beat"
+
+  out=$(run_mode "$home" "$recorder" check); status=$?
+  expect_code 1 "$status" "add-on work with a stale watcher must be an outage"
+  assert_contains "$out" 'SUPERVISION DOWN: nightly import armed, no crew task in flight' \
+    "the outage did not name the add-on's work"
+
+  rm -f "$home/state/nightly.armed" "$home/state/.supervision-outage-alarm"
+  out=$(run_mode "$home" "$recorder" check); status=$?
+  kill "$holder" 2>/dev/null || true
+  wait "$holder" 2>/dev/null || true
+  expect_code 0 "$status" "with the add-on's work gone the home is idle"
+  assert_contains "$out" 'OK - no task metadata in flight and no work reported by a sentinel hook' "the idle verdict did not read as idle"
+  pass "supervision sentinel: a private add-on's sentinel hook keeps an idle home supervised and names its work"
 }
 
 # The real shift failure mode: the away daemon runs the watcher as its child, so
@@ -489,7 +526,7 @@ test_a_shift_record_without_away_mode_is_not_supervised() {
 
   out=$(run_mode "$home" "$recorder" check); status=$?
   expect_code 0 "$status" "a stale shift record must report OK, not an outage"
-  assert_contains "$out" 'OK - no task metadata in flight and no glasses shift armed' \
+  assert_contains "$out" 'OK - no task metadata in flight and no work reported by a sentinel hook' \
     "the stale-record verdict did not report the home as having nothing to supervise: $out"
   pass "supervision sentinel: a shift record that outlived away mode is not supervised"
 }
@@ -1371,6 +1408,7 @@ test_marker_only_evidence_refreshes_a_new_episode_but_never_a_claim
 test_symlinked_home_is_not_reported_as_an_outage
 test_live_identity_matched_watcher_stays_silent
 test_armed_shift_with_no_crew_task_is_supervised
+test_addon_sentinel_hook_work_is_supervised
 test_dead_away_daemon_with_a_shift_armed_fires_the_host_alarm
 test_a_shift_record_without_away_mode_is_not_supervised
 test_failed_alert_stays_pending_and_retries

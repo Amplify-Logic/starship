@@ -11,10 +11,11 @@
 # active channels for a loud notification.
 #
 # A home is worth supervising when a crew task is in flight (FM_SUP_IN_FLIGHT) OR
-# when a glasses shift is armed (the bin/fm-shift.sh record named by
-# FM_SUP_SHIFT_RECORD_NAME): shift questions arrive as mailbox events, not as
-# tasks, so without the second condition a watcher that died mid-shift would
-# read as idle. The crew-task path is unchanged by that second condition.
+# when a sentinel hook (bin/fm-addon.sh) reports work, such as an armed glasses
+# shift (the bin/fm-shift.sh record named by FM_SUP_SHIFT_RECORD_NAME): shift
+# questions arrive as mailbox events, not as tasks, so without the second
+# condition a watcher that died mid-shift would read as idle. The crew-task path
+# is unchanged by that second condition.
 #
 # This sentinel deliberately NEVER starts, stops, or signals a watcher or the
 # away-mode daemon. A generic host process cannot safely recreate a harness
@@ -774,19 +775,31 @@ fm_sentinel_record_check() {
   fi
 }
 
+# The work sentinel hooks still watch over in this home, joined into one line,
+# empty when there is none (bin/fm-addon.sh owns the hook point). An armed
+# glasses shift is one: its questions arrive as mailbox events, never as tasks.
+fm_sentinel_hook_work() {
+  FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$FM_SENTINEL_STATE" \
+    "$FM_SENTINEL_DIR/fm-addon.sh" run sentinel 2>/dev/null | awk '
+      NF { out = out (out == "" ? "" : "; ") $0 }
+      END { printf "%s", out }
+    '
+}
+
 # True when this home has nothing to supervise: no crew task in flight and no
-# armed glasses shift. Every in-flight gate below goes through this one
+# work a sentinel hook reports. Every in-flight gate below goes through this one
 # predicate so the claim and its post-claim revalidation can never disagree.
 fm_sentinel_idle() {
-  [ "$FM_SUP_IN_FLIGHT" -eq 0 ] && ! fm_sup_shift_armed "$FM_SENTINEL_STATE"
+  [ "$FM_SUP_IN_FLIGHT" -eq 0 ] && [ -z "$(fm_sentinel_hook_work)" ]
 }
 
 # What is being supervised, for the outage summary and the OK report. The
 # crew-task wording is byte-identical to what it always was; only a home with
-# zero tasks and an armed shift names the shift instead of "0 task(s)".
+# zero tasks names the hooks' work instead of "0 task(s)".
 fm_sentinel_workload() {
-  if [ "$FM_SUP_IN_FLIGHT" -eq 0 ]; then
-    printf 'glasses shift armed, no crew task in flight'
+  local work
+  if [ "$FM_SUP_IN_FLIGHT" -eq 0 ] && work=$(fm_sentinel_hook_work) && [ -n "$work" ]; then
+    printf '%s, no crew task in flight' "$work"
   else
     printf '%s task(s) in flight' "$FM_SUP_IN_FLIGHT"
   fi
@@ -926,7 +939,7 @@ fm_sentinel_check() { # <scheduled|diagnostic|note>
   if fm_sentinel_idle; then
     [ "$clear_on_recovery" -eq 0 ] || fm_sentinel_clear_alarm
     if [ "$report" -eq 1 ]; then
-      printf 'supervision sentinel: OK - no task metadata in flight and no glasses shift armed for this home; nothing to supervise\n'
+      printf 'supervision sentinel: OK - no task metadata in flight and no work reported by a sentinel hook for this home; nothing to supervise\n'
       fm_sentinel_report_host_capability
       fm_sentinel_report_arm_state
     fi

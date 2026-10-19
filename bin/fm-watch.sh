@@ -185,11 +185,23 @@ WATCH_HOME_EXISTED=0
 # runtime needlessly spends per-root CI lint memory while adding no uncovered file.
 # shellcheck source=/dev/null
 . "$SCRIPT_DIR/fm-push-transition-lib.sh"
-# Hook W1, part one of three. The fork's glasses mailbox/inbox file-event wait is
-# carried entirely by this library; the call sites below are guarded, so an
-# absent library leaves this watcher running its own terminal wait unchanged.
-# shellcheck source=bin/fm-file-event-lib.sh
-[ ! -r "$SCRIPT_DIR/fm-file-event-lib.sh" ] || . "$SCRIPT_DIR/fm-file-event-lib.sh"
+# Hook W1, part one of three. Watcher hooks are sourced here, once per start:
+# this checkout's built-in hooks/watcher/ and this home's private add-on's, as
+# bin/fm-addon.sh lists them. The fork's glasses mailbox/inbox file-event wait is
+# one (bin/fm-file-event-lib.sh). The call sites below are guarded, so with no
+# hook loaded this watcher runs its own terminal wait unchanged. Each hook is
+# sourced with stdin from /dev/null, so it can never read the list as input.
+_fm_watch_hook_lines=$(FM_HOME="$FM_HOME" FM_CONFIG_OVERRIDE="$CONFIG" \
+  "$SCRIPT_DIR/fm-addon.sh" hooks watcher 2>/dev/null) || _fm_watch_hook_lines=
+# shellcheck disable=SC2034 # FM_HOOK_ROOT is read by the sourced hook.
+while IFS="$(printf '\t')" read -r FM_HOOK_ROOT _fm_watch_hook; do
+  [ -n "${_fm_watch_hook:-}" ] || continue
+  # shellcheck source=/dev/null
+  . "$_fm_watch_hook" </dev/null
+done <<_FM_WATCH_HOOKS
+$_fm_watch_hook_lines
+_FM_WATCH_HOOKS
+unset _fm_watch_hook_lines _fm_watch_hook FM_HOOK_ROOT
 # shellcheck source=bin/fm-pr-lib.sh
 . "$SCRIPT_DIR/fm-pr-lib.sh"
 # Only for the arm-time check on FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS below;

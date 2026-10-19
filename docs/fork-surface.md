@@ -12,6 +12,7 @@
 Every capability also has a distribution scope.
 `core` and `team` capabilities are required and their declared assertions fail CI when they disappear.
 `personal` capabilities remain declared as a public inventory but are optional, so another copy can omit them without weakening required-surface checks.
+They are the tools one home moves into its private add-on ([configuration](configuration.md#private-add-on-configaddon)), and until they move, their hooks sit in this repository's built-in `hooks/`.
 
 The `topology = herdr-topology` marker is query metadata for the open Herdr topology choice.
 It does not select a topology.

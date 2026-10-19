@@ -2566,6 +2566,43 @@ EOF
   pass "session start prints the spoken-lead reply rules only for a home opted in to desk voice-out"
 }
 
+# A private add-on's session-start hooks print as standing instructions on the
+# full and the re-emit digest, its bootstrap hooks print in the bootstrap
+# section, and a home with no add-on gets neither.
+test_private_addon_hooks_print_in_the_digest() {
+  local rec root home fakebin addon off full reemit
+  rec=$(new_world addon-hooks)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+
+  off=$(FM_FAKE_HARNESS_PID=$$ run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_contains "$off" "WAKE QUEUE" "the digest without an add-on did not run"
+  assert_not_contains "$off" "ADD-ON INSTRUCTIONS" "a home with no add-on must not get an add-on section"
+
+  addon="$(dirname "$home")/addon"
+  mkdir -p "$addon/hooks/session-start" "$addon/hooks/bootstrap"
+  printf '#!/usr/bin/env bash\necho "Ticket changes stay internal notes."\n' > "$addon/hooks/session-start/10-rules"
+  printf '#!/usr/bin/env bash\necho "ADDON_CHECK: nothing owed"\n' > "$addon/hooks/bootstrap/10-check"
+  chmod +x "$addon/hooks/session-start/10-rules" "$addon/hooks/bootstrap/10-check"
+  printf 'path = %s\n' "$addon" > "$home/config/addon"
+
+  full=$(FM_FAKE_HARNESS_PID=$$ run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_contains "$full" "ADD-ON INSTRUCTIONS" "the add-on's session-start output had no section"
+  assert_contains "$full" "Ticket changes stay internal notes." "the add-on's standing instructions did not print"
+  assert_contains "$full" "ADDON_CHECK: nothing owed" "the add-on's bootstrap check did not print"
+
+  reemit=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$root" FM_FAKE_HARNESS_PID=$$ PATH="$fakebin:$BASE_PATH" \
+    env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
+    "$SESSION_START" --reemit)
+  assert_contains "$reemit" "SESSION START (CONTEXT RE-EMIT)" "the re-emit fixture did not take the re-emit path"
+  assert_contains "$reemit" "Ticket changes stay internal notes." "the re-emit digest omitted the add-on's standing instructions"
+
+  pass "session start prints a private add-on's standing instructions and bootstrap checks, and nothing without one"
+}
+
 test_agents_baseline_stays_at_true_start_and_reemits_on_every_drifted_pi_compact() {
   local rec root home fakebin startup compact_equal compact_first compact_second clear_out resume_out reset_out baseline baseline_after expected_hash refresh_line bootstrap_line
   rec=$(new_world agents-refresh)
@@ -3211,6 +3248,7 @@ test_runtime_bound_leaves_harness_ancestry_headroom
 test_reemit_skips_startup_sweeps_but_keeps_the_wake_drain
 test_unreconciled_captain_words_print_until_marked
 test_desk_voice_reply_rules_print_only_when_opted_in
+test_private_addon_hooks_print_in_the_digest
 test_agents_baseline_stays_at_true_start_and_reemits_on_every_drifted_pi_compact
 test_read_only_pi_compact_refreshes_against_its_own_session_identity
 test_codex_unreachable_reset_sources_do_not_claim_instruction_refresh

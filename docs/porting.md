@@ -141,6 +141,7 @@ gh repo clone <owner>/firstmate ~/starship && cd ~/starship && bin/fm-home-port.
 ```
 
 That clones the tracked repo, pulls captain-private portable material from the private transport, creates empty `state/` and `projects/`, and runs bootstrap detection.
+When the pulled material includes `config/addon`, it also clones that home's private add-on from the origin the file names ([configuration](configuration.md#private-add-on-configaddon)), and `bin/fm-home-port.sh verify` fails until the add-on's checkout exists.
 It does **not** log into harness CLIs - those need interactive logins (see below).
 
 After this first pull, follow the model you chose under "Two models after the seed".

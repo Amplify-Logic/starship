@@ -2,10 +2,12 @@
 # Self-update a running firstmate and its secondmates to the latest origin.
 #
 # Mechanical half of the /updatefirstmate skill. Fast-forwards the running
-# firstmate repo's default branch from origin, then fast-forwards every
-# registered secondmate home. Local homes are treehouse worktrees or standalone
-# clones; remote routes update their configured code root on that host and then
-# fast-forward the persistent home to that root. FAST-FORWARD ONLY, exactly like
+# firstmate repo's default branch from origin, then this home's private add-on
+# checkout from its own origin (bin/fm-addon.sh), then every registered
+# secondmate home; a remote one also fast-forwards its own add-on. Local homes
+# are treehouse worktrees or standalone clones; remote routes update their
+# configured code root on that host and then fast-forward the persistent home to
+# that root. FAST-FORWARD ONLY, exactly like
 # fm-fleet-sync.sh: never force, never create a merge commit, never stash.
 # A secondmate divergence whose complete local tree result is already present at
 # the target is reconciled with reset --keep; every other unsafe target is
@@ -103,9 +105,28 @@ if [ "$FF_STATUS" = "updated" ]; then
   # this test suite uses to point fm-update.sh at a fixture checkout).
   FM_HOME="$FM_HOME" FM_ROOT_OVERRIDE="$FM_ROOT" "$SCRIPT_DIR/fm-procevent-when.sh" rebind-all || true
 fi
-# An update can move a skill this home switched on out of .agents/skills/, so
-# relink this home's opt-in skills at once rather than leaving the running
-# session without them until the next launch (bin/fm-opt-in-skills.sh).
+
+# --- private add-on --------------------------------------------------------
+# This home's private add-on (bin/fm-addon.sh) moves with the shared code, from
+# the add-on's own origin and under the same fast-forward-only guard, so one
+# update brings both. With no config/addon this prints nothing.
+addon_status=0
+addon_out=$(FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-addon.sh" root 2>&1) || addon_status=$?
+case "$addon_status" in
+  0)
+    ff_target "$addon_out" "add-on" origin no no
+    if [ "$FF_STATUS" = updated ] && [ -n "$FF_INSTR" ]; then
+      reread_firstmate="yes"
+    fi
+    ;;
+  1) ;;
+  *) echo "add-on: skipped: ${addon_out#fm-addon: }" ;;
+esac
+
+# An update can move a skill this home switched on out of .agents/skills/, or
+# change the add-on's skills, so relink this home's opt-in and add-on skills at
+# once rather than leaving the running session without them until the next
+# launch (bin/fm-opt-in-skills.sh).
 [ ! -x "$FM_ROOT/bin/fm-opt-in-skills.sh" ] \
   || FM_HOME="$FM_HOME" "$FM_ROOT/bin/fm-opt-in-skills.sh" sync "$FM_ROOT" || true
 
@@ -176,6 +197,13 @@ fm_ff_after_secondmate_settled() {  # <id> <home> <window> <status> <instr>
   claim_settled_secondmate "$1"
 }
 
+# A remote home reports its own add-on's update as one "add-on: ..." line ahead
+# of its result line (bin/fm-remote-secondmate-control.sh update); a host whose
+# copy predates add-ons prints none.
+relay_remote_addon() {  # <id> <remote output>
+  printf '%s\n' "$2" | awk -v id="$1" 'sub(/^add-on: /, "") { print "remote secondmate " id " add-on: " $0 }'
+}
+
 # Live direct reports first: state/<id>.meta with kind=secondmate carries the
 # authoritative home= path.
 sweep_live_secondmate_metas "$STATE" origin yes
@@ -217,12 +245,14 @@ if [ -f "$SECONDMATES_MD" ]; then
             else
               echo "remote secondmate $id: updated on $SECONDMATE_REGISTRY_HOST ($remote_commit)"
             fi
+            relay_remote_addon "$id" "$remote_out"
             if [ -f "$STATE/$id.meta" ] && grep -qx 'kind=secondmate' "$STATE/$id.meta"; then
               claim_settled_secondmate "$id"
             fi
             ;;
           current:*)
             echo "remote secondmate $id: already current on $SECONDMATE_REGISTRY_HOST (${remote_result#current: })"
+            relay_remote_addon "$id" "$remote_out"
             # Already on the target commit is a SUCCESSFUL update of that home,
             # so it earns the same restart as one that had to advance.
             if [ -f "$STATE/$id.meta" ] && grep -qx 'kind=secondmate' "$STATE/$id.meta"; then
@@ -232,7 +262,10 @@ if [ -f "$SECONDMATES_MD" ]; then
           *) echo "remote secondmate $id: skipped on $SECONDMATE_REGISTRY_HOST: malformed update result" >&2 ;;
         esac
       else
-        echo "remote secondmate $id: skipped on $SECONDMATE_REGISTRY_HOST: ${remote_out%%$'\n'*}" >&2
+        remote_reason=$(printf '%s\n' "$remote_out" | awk '!/^add-on: / { print; exit }')
+        [ -n "$remote_reason" ] || remote_reason=${remote_out%%$'\n'*}
+        echo "remote secondmate $id: skipped on $SECONDMATE_REGISTRY_HOST: $remote_reason" >&2
+        relay_remote_addon "$id" "$remote_out"
       fi
     else
       process_secondmate "$id" "$home" "" origin yes
