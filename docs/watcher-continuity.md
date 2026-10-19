@@ -562,6 +562,8 @@ They also prove that a legacy or handoff-phase watcher marker from an absent rep
 - An append that reopens an announced empty recovery.
 - A watcher close inside the handling window that must leave the printed acknowledgement valid.
 - A re-arm whose recovery cycle is slowed after confirmation and must still surface rather than read as a watcher that stayed live.
+- A fresh watcher whose startup outlasts the confirmation window, which the arm waits for within its start bound instead of killing it.
+- A start that outlasts the start bound, which fails without leaving a dead watch lock, steal mutex, or queue lock behind.
 - The self-healing moved-generation acknowledgement that consumes its handled rows and names its remedy.
 - The already-acknowledged confirmation no-op for a matching generation, with its mismatched-generation, dead-pid, and lock-mismatch rejections preserved.
 - The manual-restart generation churn that makes a confirmation for the churned generation report a mismatch, which an arm check without a reopen leaves in place.

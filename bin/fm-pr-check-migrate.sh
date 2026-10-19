@@ -18,8 +18,10 @@
 # earned evidence that no unsafe legacy check remains armed. Re-deriving that
 # verdict instead costs one hash per check file and grows with the fleet, and no
 # sweep is running to publish a progress record, so bin/fm-watch-arm.sh cannot
-# tell that work apart from a watcher that will never appear and kills a healthy
-# child at FM_ARM_CONFIRM_TIMEOUT. Reading the marker keeps the gate at a fixed
+# tell that work apart from a watcher that will never appear: past
+# FM_ARM_CONFIRM_TIMEOUT it waits for a child still starting only up to
+# FM_ARM_START_BOUND, then gives up and stops that healthy child once it is
+# cleanup-ready. Reading the marker keeps the gate at a fixed
 # handful of stats. The watcher still authenticates every check again at
 # dispatch and refuses an unauthenticated one without execution, so a check that
 # rots after the marker was published is reported loudly rather than run.

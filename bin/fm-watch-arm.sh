@@ -35,6 +35,16 @@
 #   watcher: FAILED - attached watcher pid=<N> stalled (beacon <age>s at or past hard bound <bound>s)
 #                                                        - the followed holder is alive but its beacon
 #                                                          reached the stall bound
+# A fresh child normally confirms within FM_ARM_CONFIRM_TIMEOUT seconds. One that
+# is still alive and starting past that window (its lock identity and first
+# beacon not both published yet) is slow, not failed, so the arm keeps waiting
+# for it up to FM_ARM_START_BOUND seconds (default 30) before giving up. Giving
+# up never kills a child mid-startup: it is stopped once it is cleanup-ready, so
+# its own exit cleanup releases the watch lock (or after one more start bound,
+# past which it is stopped anyway). Only that give-up path uses the start bound:
+# a HUP, TERM or INT sent to the arm (an adapter retiring an unready arm) waits
+# for the child to become cleanup-ready only until the confirmation deadline, so
+# such a retire keeps its confirmation-window timing.
 # It NEVER reports started/attached/healthy off a stale beacon or a dead/reused pid: a
 # stale-beacon or dead-pid holder either self-heals (the fresh child steals the
 # dead lock per the singleton self-eviction/steal path and is confirmed) or this
@@ -163,6 +173,18 @@ case "${OSTYPE:-}" in
   *) ARM_CONFIRM_DEFAULT=10 ;;
 esac
 CONFIRM_TIMEOUT=${FM_ARM_CONFIRM_TIMEOUT:-$ARM_CONFIRM_DEFAULT}
+# Hard bound for a child still starting past that window. Startup before the
+# first beacon is a long run of short-lived processes (sourcing, lock steal,
+# recovery-marker transitions), which a contended host can stretch past the
+# confirmation window; such a child is waited for up to this bound instead of
+# killed mid-startup. Never shorter than the confirmation window.
+START_BOUND=${FM_ARM_START_BOUND:-30}
+case "$START_BOUND" in ''|*[!0-9]*) START_BOUND=30 ;; esac
+START_BOUND=$((10#$START_BOUND))
+case "$CONFIRM_TIMEOUT" in
+  ''|*[!0-9]*) ;;
+  *) [ "$START_BOUND" -ge "$((10#$CONFIRM_TIMEOUT))" ] || START_BOUND=$((10#$CONFIRM_TIMEOUT)) ;;
+esac
 # Poll interval while attached to an existing healthy watcher.
 ATTACH_POLL=${FM_ARM_ATTACH_POLL:-0.5}
 # The beacon age at which the watcher's own re-arm evicts a live holder; an
@@ -687,24 +709,31 @@ cleanup_child() {
   fi
 }
 
+# The watcher installs its own cleanup traps only after acquiring and publishing
+# the home-bound lock identity. A TERM before that point kills it with no cleanup:
+# it abandons the watch lock (or the steal mutex, mid-steal) under a dead pid, and
+# the next start must steal it, which makes that start slower still. So stop the
+# child only once it is cleanup-ready (or let it exit on its own), never past
+# <bound-epoch>; a child still short of that point there is stopped anyway.
+stop_child_once_cleanup_ready() {  # <bound-epoch>
+  local bound=$1
+  [ -n "$child" ] || return 0
+  while fm_pid_alive "$child"; do
+    if fm_watcher_lock_matches_pid "$STATE" "$WATCH" "$child" "$FM_HOME" \
+      || [ "$(date +%s)" -ge "$bound" ]; then
+      kill -TERM "$child" 2>/dev/null || true
+      break
+    fi
+    sleep 0.02
+  done
+}
+
 # shellcheck disable=SC2329 # Invoked indirectly by the signal traps below.
 handle_arm_signal() {
   local signal=$1 rc=$2
   trap - HUP TERM INT
   if [ -n "$child" ] && fm_pid_alive "$child"; then
-    # The watcher installs its own cleanup traps only after acquiring and
-    # publishing the home-bound lock identity. Do not TERM it in the middle of
-    # stale-lock acquisition: that can abandon the steal mutex. Let startup
-    # reach that cleanup-ready point (or exit naturally) before forwarding TERM,
-    # but never past the startup confirmation deadline.
-    while fm_pid_alive "$child"; do
-      if fm_watcher_lock_matches_pid "$STATE" "$WATCH" "$child" "$FM_HOME" \
-        || [ "$(date +%s)" -ge "$deadline" ]; then
-        kill -TERM "$child" 2>/dev/null || true
-        break
-      fi
-      sleep 0.02
-    done
+    stop_child_once_cleanup_ready "$deadline"
     wait "$child" 2>/dev/null || true
   fi
   cycle_log_append "$rc" "$signal" arm-interrupted none
@@ -722,7 +751,9 @@ child_out=$(mktemp "$STATE/.watch-arm-output.XXXXXX") || {
 }
 # date(1) exposes whole seconds. Keep the configured confirmation budget from
 # collapsing when startup begins just before the next second boundary.
-deadline=$(( $(date +%s) + CONFIRM_TIMEOUT + 1 ))
+start_epoch=$(date +%s)
+deadline=$(( start_epoch + CONFIRM_TIMEOUT + 1 ))
+start_deadline=$(( start_epoch + START_BOUND + 1 ))
 if [ -n "${FM_WATCH_PREDECESSOR_ARM_PID:-}" ]; then
   FM_WATCH_HANDLING_SUCCESSOR=1 "$WATCH" >"$child_out" &
 else
@@ -833,15 +864,27 @@ while :; do
     owned_child_finished "$rc"
     exit $?
   fi
-  [ "$(date +%s)" -ge "$deadline" ] && break
+  # Past the confirmation window, a child that is alive but not yet healthy is
+  # still starting (its lock identity and first beacon are not both published
+  # yet): slow, not failed, so keep waiting for it up to the start bound rather
+  # than kill it mid-startup.
+  if [ "$(date +%s)" -ge "$deadline" ]; then
+    fm_pid_alive "$child" || continue
+    [ "$(date +%s)" -ge "$start_deadline" ] && break
+  fi
   sleep 0.2
 done
 
+# Giving up: stop the child without abandoning its locks. A child that is still
+# starting gets one more start bound to reach its cleanup-ready point. Wait out
+# its exit cleanup before cleanup_child: a second TERM would cut that cleanup
+# short and leave the lock behind after all.
+stop_child_once_cleanup_ready $(( $(date +%s) + START_BOUND + 1 ))
 trap - HUP TERM INT
-print_watch_output "$child_out"
-cleanup_child
 wait "$child" 2>/dev/null
 rc=$?
+print_watch_output "$child_out"
+cleanup_child
 cycle_log_append "$rc" "$(cycle_signal_name "$rc")" confirmation-timeout none
 echo "watcher: FAILED - no live watcher with a fresh beacon"
 exit 1

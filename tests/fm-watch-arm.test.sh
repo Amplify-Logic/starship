@@ -671,6 +671,134 @@ SH
   pass "watch-arm: a re-arm whose recovery cycle runs slowly still surfaces it"
 }
 
+# Slow the watcher's own startup, the long run of short-lived processes before
+# its first beacon, the way a contended host does. Only calls whose parent is
+# bin/fm-watch.sh (the watcher or one of its subshells) are held, never the
+# arm's, and only until the first beacon exists. <mode> is a per-call delay in
+# seconds, or "hold" to block each call made while the watch lock is held until
+# <release-file> exists, creating <holding-file> when the first such call blocks.
+# <arm-start-file> gets the epoch at which the arm creates its output file, which
+# it does just before taking its own start time.
+slow_watcher_startup() {  # <state> <fakebin> <mode> [release-file holding-file arm-start-file]
+  local state=$1 fakebin=$2 mode=$3 release=${4:-} holding=${5:-} armstart=${6:-} tool real
+  for tool in mktemp readlink; do
+    real=$(command -v "$tool") || fail "no $tool to slow"
+    cat > "$fakebin/$tool" <<SH
+#!/bin/sh
+case "\$(ps -o command= -p "\$PPID" 2>/dev/null)" in
+  *fm-watch-arm.sh*)
+    case "\$*" in
+      *.watch-arm-output.*)
+        if [ -n "$armstart" ] && [ ! -e "$armstart" ]; then
+          date +%s > "$armstart.tmp" && mv "$armstart.tmp" "$armstart"
+        fi
+        ;;
+    esac
+    ;;
+  *fm-watch.sh*)
+    if [ ! -e "$state/.last-watcher-beat" ]; then
+      if [ "$mode" = hold ]; then
+        if [ -L "$state/.watch.lock" ]; then
+          [ -e "$holding" ] || : > "$holding"
+          while [ ! -e "$release" ]; do sleep 0.1; done
+        fi
+      else
+        sleep "$mode"
+      fi
+    fi
+    ;;
+esac
+exec "$real" "\$@"
+SH
+    chmod +x "$fakebin/$tool"
+  done
+}
+
+# 19 Oct 2026: on a contended Mac the handling successor's watcher took more
+# than the 10s confirmation window to reach its first beacon, and the arm killed
+# it mid-startup. A child that is still starting past the window is waited for
+# up to the start bound, so it confirms instead of timing out.
+test_slow_start_confirms_within_the_start_bound() {
+  local dir home state fakebin armout started elapsed
+  dir=$(make_case slow-start-confirms)
+  home="$dir/home"
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  armout="$dir/arm.out"
+  mkdir -p "$home/data"
+  slow_watcher_startup "$state" "$fakebin" 0.25
+
+  started=$(date +%s)
+  PATH="$fakebin:$PATH" FM_HOME="$home" FM_STATE_OVERRIDE="$state" \
+    FM_POLL=1 FM_SIGNAL_GRACE=0 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
+    FM_ARM_CONFIRM_TIMEOUT=2 FM_ARM_START_BOUND=60 "$WATCH_ARM" > "$armout" 2>&1 &
+  ARM_PID=$!
+  while is_live_non_zombie "$ARM_PID" && ! grep -q '^watcher: ' "$armout"; do
+    [ $(( $(date +%s) - started )) -lt 90 ] || break
+    sleep 0.1
+  done
+  elapsed=$(( $(date +%s) - started ))
+  grep -q '^watcher: started pid=' "$armout" \
+    || fail "a slow start timed out instead of confirming: $(cat "$armout")"
+  # Without this, a change that stopped the delay from applying would pass here
+  # while no longer testing a start slower than the confirmation window.
+  [ "$elapsed" -ge 4 ] \
+    || fail "the slowed start confirmed in ${elapsed}s, inside the 2s window it must outlast"
+  FM_HOME="$home" FM_STATE_OVERRIDE="$state" "$WATCH_ARM" --stop > /dev/null 2>&1 || true
+  wait_for_exit "$ARM_PID" 100 > /dev/null 2>&1 || true
+  pass "watch-arm: a start slower than the confirmation window confirms within the start bound"
+}
+
+# A start that outlasts even the start bound fails, but the arm stops its child
+# only once that child is cleanup-ready, so the timeout leaves no dead watch
+# lock, steal mutex, or queue lock behind for the next start to steal. This
+# checks that clean-timeout outcome; test_slow_start_confirms_within_the_start_bound
+# covers how long the arm waits.
+test_start_timeout_leaves_no_dead_lock() {
+  local dir home state fakebin armout release holding armstart started release_at status lock
+  dir=$(make_case start-timeout-clean)
+  home="$dir/home"
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  armout="$dir/arm.out"
+  release="$dir/release"
+  holding="$dir/holding"
+  armstart="$dir/arm-start"
+  mkdir -p "$home/data"
+  slow_watcher_startup "$state" "$fakebin" hold "$release" "$holding" "$armstart"
+
+  started=$(date +%s)
+  PATH="$fakebin:$PATH" FM_HOME="$home" FM_STATE_OVERRIDE="$state" \
+    FM_POLL=1 FM_SIGNAL_GRACE=0 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
+    FM_ARM_CONFIRM_TIMEOUT=1 FM_ARM_START_BOUND=12 "$WATCH_ARM" > "$armout" 2>&1 &
+  ARM_PID=$!
+  # Time the release from the arm's own start, however long its child takes to
+  # reach the watch lock: the arm gives up by about start+13s and then grants
+  # one more 12s start bound, so releasing at start+17s lands between the two
+  # with seconds of margin either way.
+  while is_live_non_zombie "$ARM_PID" && [ ! -s "$armstart" ]; do
+    [ $(( $(date +%s) - started )) -lt 60 ] || break
+    sleep 0.1
+  done
+  [ -s "$armstart" ] || fail "the arm never created its output file: $(cat "$armout")"
+  release_at=$(( $(cat "$armstart") + 17 ))
+  while [ "$(date +%s)" -lt "$release_at" ]; do sleep 0.1; done
+  [ -e "$holding" ] || fail "the held startup never took the watch lock: $(cat "$armout")"
+  touch "$release"
+  wait_for_exit "$ARM_PID" 200
+  status=$?
+  [ "$status" -ne 0 ] || fail "a start past the start bound did not fail: $(cat "$armout")"
+  grep -qF 'watcher: FAILED - no live watcher with a fresh beacon' "$armout" \
+    || fail "a start past the start bound did not report the confirmation failure: $(cat "$armout")"
+  for lock in .watch.lock .watch.lock.steal .wake-queue.lock .watcher-down.lock; do
+    [ ! -e "$state/$lock" ] && [ ! -L "$state/$lock" ] \
+      || fail "the start timeout left $lock behind (pid $(cat "$state/$lock/pid" 2>/dev/null))"
+  done
+  grep 'reason=confirmation-timeout' "$state/.watch-cycle-exits.log" | grep -qF 'lock_after=pid:none|identity:none' \
+    || fail "the confirmation-timeout record does not show a released lock: $(cat "$state/.watch-cycle-exits.log")"
+  pass "watch-arm: a start timeout stops the child only once it can release its locks"
+}
+
 test_marker_publish_failure_retains_recovery_evidence() {
   local dir home state fakebin first_arm watcher_pid armout
   dir=$(make_case downtime-marker-publish-failure)
@@ -1828,6 +1956,8 @@ test_attached_arm_survives_a_host_sleep
 test_attached_arm_still_fails_a_holder_stalled_after_a_host_sleep
 test_rearm_resurfaces_durable_queue_and_remote_open_decision
 test_slow_rearm_recovery_is_still_surfaced
+test_slow_start_confirms_within_the_start_bound
+test_start_timeout_leaves_no_dead_lock
 test_marker_publish_failure_retains_recovery_evidence
 test_delivery_gap_wake_is_recovered_once
 test_interrupted_handling_is_redrained_on_rearm

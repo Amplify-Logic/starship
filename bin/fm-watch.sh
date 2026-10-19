@@ -2832,6 +2832,9 @@ watcher_cleanup() {
   [ -z "${CHECK_SWEEP_PENDING:-}" ] || rm -f "$CHECK_SWEEP_PENDING"
   pr_poll_publish_release || cleanup_status=1
   pr_poll_control_release || cleanup_status=1
+  # A stop can land inside a queue-lock section of the poll cycle. Release it
+  # here (a no-op unless this watcher holds it) rather than strand a dead owner.
+  fm_lock_release "$FM_WAKE_QUEUE_LOCK" || cleanup_status=1
   if [ "$(cat "$WATCH_LOCK/pid" 2>/dev/null || true)" = "${WATCHER_PID:-}" ]; then
     owns_lock=1
     if [ "${WATCHER_RECOVERY_PENDING:-0}" -eq 1 ] \
