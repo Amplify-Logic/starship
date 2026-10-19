@@ -727,15 +727,11 @@ test_session_provider_backends_gate_own_cli_not_tmux() {
     out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
       FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
     if [ "$backend" = herdr ]; then
-      missing="MISSING_MANUAL: herdr (instructions: https://herdr.dev)"
+      missing="MISSING: herdr (install: FM_HOME=\"$case_dir/home\" \"$ROOT/bin/fm-herdr-setup.sh\" --quiet"
     else
       missing="MISSING: $cli"
     fi
     assert_contains "$out" "$missing" "backend=$backend must fail closed on its own missing session CLI"
-    if [ "$backend" = herdr ]; then
-      assert_not_contains "$out" "MISSING: herdr (install:" \
-        "backend=herdr must not advertise manual guidance as an executable install command"
-    fi
     assert_not_contains "$out" "MISSING: tmux" "backend=$backend must not demand tmux when its own CLI is missing"
   done <<'ROWS'
 herdr^herdr
@@ -745,14 +741,14 @@ ROWS
   pass "bootstrap: a session-provider backend gates its own CLI, never a false tmux requirement"
 }
 
-test_herdr_install_requires_manual_action() {
+test_cursor_install_requires_manual_action() {
   local out status
-  out=$("$ROOT/bin/fm-bootstrap.sh" install herdr 2>&1)
+  out=$("$ROOT/bin/fm-bootstrap.sh" install cursor-agent 2>&1)
   status=$?
-  [ "$status" -ne 0 ] || fail "install herdr should fail instead of evaluating its manual-install hint"
-  [ "$out" = "error: herdr requires manual installation (instructions: https://herdr.dev)" ] \
-    || fail "install herdr should return actionable manual-install guidance, got: $out"
-  pass "bootstrap: Herdr manual-install guidance is never executed as a shell command"
+  [ "$status" -ne 0 ] || fail "install cursor-agent should fail instead of evaluating its manual-install hint"
+  [ "$out" = "error: cursor-agent requires manual installation (instructions: https://cursor.com/cli)" ] \
+    || fail "install cursor-agent should return actionable manual-install guidance, got: $out"
+  pass "bootstrap: manual-install guidance is never executed as a shell command"
 }
 
 test_cmux_bundled_cli_satisfies_dependency() {
@@ -1398,7 +1394,7 @@ test_host_environment_reports
 test_orca_backend_gates_orca_tool_only_when_selected
 test_session_provider_backends_do_not_require_tmux
 test_session_provider_backends_gate_own_cli_not_tmux
-test_herdr_install_requires_manual_action
+test_cursor_install_requires_manual_action
 test_cmux_bundled_cli_satisfies_dependency
 test_unknown_backend_reports_invalid_configuration
 test_json_backends_require_jq_not_tmux

@@ -94,7 +94,17 @@ case "${1:-}" in
   --version) echo "git version 2.43.0"; exit 0 ;;
   clone)
     printf 'git clone %s %s\n' "$2" "$3" >> "$FAKE_WORLD/calls.log"
-    mkdir -p "$3/bin" "$3/.git" && touch "$3/bin/fm-primary.sh" "$3/AGENTS.md" ;;
+    mkdir -p "$3/bin" "$3/.git" && touch "$3/bin/fm-primary.sh" "$3/AGENTS.md"
+    # The clone's own Herdr setup: records its call and installs a herdr the
+    # way bin/fm-herdr-setup.sh would.
+    cat > "$3/bin/fm-herdr-setup.sh" <<'HS'
+#!/usr/bin/env bash
+printf 'herdr-setup %s FM_HOME=%s\n' "$*" "${FM_HOME:-}" >> "$FAKE_WORLD/calls.log"
+mkdir -p "$HOME/.local/bin"
+printf '#!/usr/bin/env bash\necho herdr 0.9.5\n' > "$HOME/.local/bin/herdr"
+chmod +x "$HOME/.local/bin/herdr"
+HS
+    chmod +x "$3/bin/fm-herdr-setup.sh" ;;
   -C) [ -d "$2/.git" ] ;;
 esac
 SH
@@ -199,6 +209,8 @@ test_fresh_install_then_rerun_is_idempotent() {
   assert_contains "$log" "brew install git node gh tmux jq HOMEBREW_NO_ASK=1" \
     "the shared tools, jq included, come from Homebrew without its y/n question"
   assert_not_contains "$log" "wslu" "a server gets no WSL browser bridge"
+  assert_not_contains "$log" "herdr-setup" "a server keeps tmux and gets no Herdr setup"
+  assert_not_contains "$out" "  herdr" "a server does not check for Herdr"
   assert_contains "$log" "claude-installer" "Claude Code comes from its native installer"
   assert_contains "$log" "curl https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb" \
     "Chrome's package is downloaded"
@@ -234,7 +246,8 @@ test_fresh_install_then_rerun_is_idempotent() {
   signin=$(printf '%s\n' "$out" | grep -n 'gh auth login' | head -n 1 | cut -d: -f1)
   [ -n "$newterm" ] && [ "$newterm" -lt "$signin" ] \
     || fail "the new terminal must be opened before the sign-ins, got: $out"
-  assert_contains "$out" "step 8 of ONBOARDING-windows.md" "the closing text sends Windows users to the guide's tmux step"
+  assert_contains "$out" "step 8 of ONBOARDING-windows.md" "the closing text sends Windows users to the guide's Herdr step"
+  assert_contains "$out" "inside Herdr;" "the Windows step starts the first mate in Herdr"
   assert_contains "$out" "step 6 of ONBOARDING-linux-server.md" "the closing text sends server users to the guide's tmux step"
   [ "$(grep -c 'brew shellenv' "$w/home/.profile")" -eq 1 ] \
     || fail "a re-run duplicated the profile lines: $(cat "$w/home/.profile")"
@@ -250,6 +263,9 @@ test_wsl_sends_sign_ins_to_the_windows_browser() {
   assert_contains "$(calls "$w")" "apt-get install -y -q build-essential procps curl file git ca-certificates wslu" \
     "WSL gets wslu with the system packages"
   assert_contains "$out" "ok  wslview" "the closing check finds wslview"
+  assert_contains "$(calls "$w")" "herdr-setup --quiet FM_HOME=$w/home/starship" \
+    "inside WSL the clone's own Herdr setup runs for the new home"
+  assert_contains "$out" "ok  herdr" "the closing check finds Herdr"
   for rc in .profile .bashrc; do
     [ "$(grep -cx 'export BROWSER=wslview' "$w/home/$rc")" -eq 1 ] \
       || fail "$rc should send links to the Windows browser once: $(cat "$w/home/$rc")"
@@ -257,7 +273,7 @@ test_wsl_sends_sign_ins_to_the_windows_browser() {
   out=$(FAKE_WSL_DISTRO=Ubuntu-24.04 run_setup "$w" --ci)
   [ "$(grep -cx 'export BROWSER=wslview' "$w/home/.bashrc")" -eq 1 ] \
     || fail "a re-run duplicated the browser line: $(cat "$w/home/.bashrc")"
-  pass "inside WSL the setup installs wslu and points BROWSER at wslview, so sign-ins open in Windows"
+  pass "inside WSL the setup installs wslu and Herdr, and points BROWSER at wslview, so sign-ins open in Windows"
 }
 
 test_arm64_skips_chrome() {

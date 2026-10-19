@@ -1480,6 +1480,10 @@ test_portable_serial_packing_budget_boundary() {
   while IFS= read -r script; do
     printf '#!/usr/bin/env bash\nexit 0\n' >"$repo/$script"
   done < <("$RUNNER" --list --all)
+  # The fork registry is packing policy too: it keeps its real-herdr-gated rows
+  # out of the serial lane.
+  cp "$ROOT/bin/fm-fork-test-registry-lib.sh" "$repo/bin/"
+  cp "$ROOT/tests/fork-test-registry.conf" "$repo/tests/"
 
   for weight in 1200000 1200001; do
     cp "$RUNNER" "$repo/bin/fm-test-run.sh"

@@ -9,6 +9,7 @@ Install tmux with `brew install tmux` or your platform package manager.
 The universal harness and toolchain requirements are in [`configuration.md`](configuration.md#toolchain).
 
 tmux is the hard default when no explicit setting or runtime auto-detection selects another backend.
+Starship's setup selects Herdr for a fresh home on a Mac and on Windows, and tmux on a server ([`configuration.md`](configuration.md#backend-selection-order)); tmux remains the fallback everywhere.
 Select it explicitly with local `config/backend` containing `tmux`, with `FM_BACKEND=tmux` for one launch, or by asking Firstmate to use tmux.
 Explicit tmux selection via `config/backend` or `--backend tmux` overrides runtime auto-detection.
 

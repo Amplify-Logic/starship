@@ -54,10 +54,36 @@ You should see: `gh auth status` says you are logged in to github.com, and `clau
 
 ## 3. Get Starship and start your first mate
 
+Your first mate and its workers run inside [Herdr](https://herdr.dev), a terminal view made for AI agents: every worker shows up in its sidebar, with whether it is working or waiting for you.
+
+Coming from [ONBOARDING-windows.md](ONBOARDING-windows.md)? Its setup script already did the first part, and its step 8 opened Herdr; start at **Start your first mate**, in Herdr's shell.
+Coming from [ONBOARDING-linux-server.md](ONBOARDING-linux-server.md)? A server runs in tmux instead; start at **Start your first mate**, inside your tmux session.
+
+**Get Starship and set up Herdr:**
+
 ```sh
 git clone https://github.com/Amplify-Logic/firstmate ~/starship
 cd ~/starship
-bin/fm-primary.sh opus
+bin/fm-herdr-setup.sh
+```
+
+It installs Herdr, adds Herdr's Claude Code integration so Herdr can show what each Claude is doing, and sets this Starship to run in Herdr.
+
+You should see: `Herdr is ready.`
+
+**Open Herdr:** open a **new** Terminal window, so `herdr` is found, and type:
+
+```sh
+herdr
+```
+
+The first time, Herdr may first ask how it should notify you; any answer works, and you can change it later in Herdr's settings (`Ctrl-b`, then `s`).
+Herdr then shows a shell, with a sidebar on the left.
+
+**Start your first mate:** in that shell, type:
+
+```sh
+cd ~/starship && bin/fm-primary.sh opus
 ```
 
 That launches Claude Code on Opus, with its permission prompts turned off so the first mate can run its own scripts; [its house rules](docs/handbook.md#how-it-works-in-plain-words) are what keep it safe.
@@ -68,6 +94,9 @@ For each, press the down arrow once, then Enter:
 1. "Is this a project you created or one you trust?": choose **Yes, I trust this folder**.
    That loads the guards that let your first mate notice when a worker finishes or gets stuck; without them it may never notice.
 2. "WARNING: Claude Code running in Bypass Permissions mode": choose **Yes, I accept**.
+
+Claude Code may also offer to switch to its new full-screen display.
+Either answer works; your first mate and its workers run the same way in both.
 
 You should see: Claude Code open inside the `starship` folder, ready for a message.
 
@@ -80,8 +109,15 @@ That first launch also sets up your home the team's way, with nothing to copy:
 To change how hard your first mate thinks, write one word, then start it again: `echo high > config/primary-effort`.
 The words, from lightest to deepest, are `low`, `medium`, `high`, `xhigh` and `max`; deeper thinking uses your plan's allowance faster, and `rm config/primary-effort` goes back to your plan's level.
 
-Workers open as tmux windows, which needs nothing more.
-[Herdr](docs/herdr-backend.md) is an optional, richer view you can add later; tell your first mate "use herdr" once it is installed.
+Each worker your first mate starts appears in Herdr's sidebar as its own space while it works, and goes away when it is cleaned up.
+Click one to watch it, or press `Ctrl-b`, then `w`, to pick one; come back to your first mate the same way.
+
+**Every day after this, on a Mac:** open Terminal and type `herdr`.
+Herdr keeps running when you close the window (or press `Ctrl-b`, then `q`, to leave it), so this brings back your first mate as you left it.
+After the Mac restarts, Herdr reopens your spaces; if your first mate's space shows only a shell, run `cd ~/starship && bin/fm-primary.sh opus` there again, and it picks up its work from where it stopped.
+On Windows, follow the daily steps in [ONBOARDING-windows.md step 9](ONBOARDING-windows.md#9-finish-with-the-shared-steps) instead, because closing Ubuntu stops Herdr there.
+
+**Prefer tmux?** Herdr is the default, and tmux still works: run `echo tmux > ~/starship/config/backend`, start the first mate inside `tmux new -s firstmate`, and workers open as tmux windows instead ([docs/tmux-backend.md](docs/tmux-backend.md)).
 
 ---
 
@@ -171,7 +207,8 @@ It explains the whole system in plain words, how to connect your mail, calendar 
 | `gh: not logged in` or `NEEDS_GH_AUTH` | `gh auth login`, answering its four questions with GitHub.com, HTTPS, Yes to authenticate Git, and the web browser. |
 | `bin/fm-primary.sh` refuses to start | `bin/fm-primary.sh opus --preflight` names what is missing without starting anything. |
 | `permission denied` on `bin/fm-primary.sh` | `chmod +x bin/*.sh`, then launch again. |
-| `refuses another live Firstmate session` | One is already running; close the other window, or run `tmux ls` and exit the spare session. |
+| `refuses another live Firstmate session` | One is already running, perhaps in another Herdr space or Terminal window; type `/exit` in the spare one, then launch again. |
+| `command not found: herdr` | Open a new Terminal window; if it is still not found, run `bin/fm-herdr-setup.sh` again from `~/starship`. |
 | It doesn't call you captain | You are not in the Starship folder; `cd ~/starship` and launch again. |
 | It cannot add Harbour Logbook | Your GitHub account cannot see the `harbourlogbook` organisation yet; ask its owner to invite you. |
 | It never notices a worker finished | The trust prompt was declined; quit, launch again, and choose **Yes, I trust this folder**. |

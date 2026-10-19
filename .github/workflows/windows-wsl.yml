@@ -5,12 +5,13 @@ name: Windows (WSL 2) and Linux server kit
 # would have it:
 #   kit on WSL 2 (windows-2025): bin/fm-linux-setup.sh --ci through a pipe, as
 #     the guides' curl | bash runs it, then the first mate's
-#     consented toolchain install, one stand-in worker spawned on tmux and its
-#     report read back, headless Chrome rendering a dev server, and a review
+#     consented toolchain install, one stand-in worker spawned on Herdr (the
+#     runtime the setup selects inside WSL) and its report read back, headless Chrome rendering a dev server, and a review
 #     board and an Expo-style dev server reached from the Windows side through
 #     WSL's default localhost forwarding.
 #   kit on a server: the same steps in a fresh ubuntu:24.04 container on
-#     ubuntu-latest, headless with no desktop, minus the Windows side.
+#     ubuntu-latest, headless with no desktop, on tmux as the server guide
+#     selects it, minus the Windows side.
 #   floater on WSL 2: the Windows desk floater (docs/desk-floater-windows.md)
 #     built with Windows' own .NET Framework compiler from inside WSL, as a
 #     teammate's install builds it, and its decisions and WSL side tested.
@@ -23,7 +24,7 @@ name: Windows (WSL 2) and Linux server kit
 #     lanes stay blocking.
 # Standard runners are free on this public repository. It runs weekly and by
 # hand, and also on pull requests that change this workflow, the setup
-# script or the Windows desk floater: that is how a change to the setup kit or
+# scripts or the Windows desk floater: that is how a change to the setup kit or
 # the floater gets its Windows and Ubuntu proof before merge, at no cost on
 # this public repository.
 
@@ -35,6 +36,8 @@ on:
     paths:
       - .github/workflows/windows-wsl.yml
       - bin/fm-linux-setup.sh
+      - bin/fm-herdr-setup.sh
+      - bin/fm-install-herdr.sh
       - bin/fm-desk-floater-windows.sh
       - bin/fm-desk-play-windows.sh
       - desk-floater-windows/**
@@ -179,7 +182,13 @@ jobs:
         run: |
           cd ~/starship
           mkdir -p config
-          printf 'tmux\n' > config/backend
+          # Inside WSL the setup selected Herdr for this fresh home; a server
+          # selects tmux the way ONBOARDING-linux-server.md step 6 does.
+          if [ '${{ matrix.kind }}' = wsl ]; then
+            [ "$(cat config/backend)" = herdr ] || { echo "::error::the setup did not select Herdr inside WSL"; exit 1; }
+          else
+            printf 'tmux\n' > config/backend
+          fi
           bin/fm-bootstrap.sh install treehouse no-mistakes gh-axi tasks-axi quota-axi lavish-axi chrome-devtools-axi
           out=$(bin/fm-bootstrap.sh)
           printf '%s\n' "$out"
@@ -188,7 +197,7 @@ jobs:
             exit 1
           fi
 
-      - name: Spawn one stand-in worker on tmux and read its report
+      - name: Spawn one stand-in worker on the selected runtime and read its report
         if: matrix.lane == 'kit'
         run: |
           cd ~/starship
@@ -212,7 +221,12 @@ jobs:
           wt=$(sed -n 's/^worktree=//p' "state/$id.meta")
           [ -n "$wt" ] && [ "$wt" != "$HOME/starship" ]
           grep -qx "$slug" "$wt/onboarding-slug.txt"
-          tmux list-windows -a
+          if [ "$(cat config/backend)" = herdr ]; then
+            grep -q '^herdr_pane_id=' "state/$id.meta"
+            herdr workspace list
+          else
+            tmux list-windows -a
+          fi
           echo "stand-in worker wrote $slug in its isolated copy $wt and reported it back"
 
       # WSL stops a distribution soon after its last wsl.exe session ends,

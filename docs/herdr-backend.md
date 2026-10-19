@@ -1,4 +1,4 @@
-# Herdr runtime backend (experimental)
+# Herdr runtime backend
 
 This page covers running Firstmate workers on the Herdr runtime backend: setup, where tasks appear, how they are cleaned up, how input reaches them, and how their liveness is read.
 Operators who choose Herdr, or who verify Firstmate against it, need it.
@@ -6,6 +6,7 @@ Below the operator sections it also keeps this fork's dated adapter findings for
 A 2026-07-02 cleanup bug proved that `HERDR_SESSION` alone is not a safe way to target destructive session cleanup; see "Session targeting: the `--session` flag, not `HERDR_SESSION` alone" below.
 
 Herdr is an agent-native terminal backend with native per-pane agent state and push events.
+Starship's setup makes it the runtime of a fresh home on a Mac and inside WSL 2 on Windows, while a server and any home that already chose tmux keep tmux (see [Setup](#setup)).
 Firstmate requires Herdr protocol 14 or newer.
 Broad backend verification covers versions 0.7.1, 0.7.3, 0.7.4, 0.7.5, 0.8.0, and 0.9.5, the version the required real-Herdr CI lane pins.
 Protocol-16 features remain gated by availability.
@@ -34,9 +35,12 @@ Herdr provides the terminal session while Treehouse continues to provide task wo
 
 Pick Herdr when you want native busy, idle, and blocked state and accept the [active limits](#active-limits) below.
 
+On a Mac or inside WSL 2, `bin/fm-herdr-setup.sh` does the whole setup: it keeps a Herdr that passes the version gate or installs the pinned release through `bin/fm-install-herdr.sh`, installs Herdr's Claude Code integration, and writes `herdr` to `config/backend` only for a fresh home.
+[ONBOARDING.md](../ONBOARDING.md) step 3 runs it on a Mac, and `bin/fm-linux-setup.sh` runs it inside WSL 2; the script header owns the exact rules.
+
 Prerequisites:
 
-- Herdr protocol 14 or newer, installed from [herdr.dev](https://herdr.dev).
+- Herdr protocol 14 or newer, installed by `bin/fm-herdr-setup.sh` or from [herdr.dev](https://herdr.dev).
 - `jq` for JSON responses.
 - The universal harness and toolchain requirements in [`configuration.md`](configuration.md#toolchain).
 - `python3` only for optional protocol-16 presentation-space ordering and native event subscription.
@@ -563,18 +567,17 @@ Any of these preserves the candidate and lets session startup continue with at m
 [`verification/runtime-backends.md`](verification/runtime-backends.md#workspace-removal-focus-safety) owns the active versioned evidence for the focus-flash test.
 [`verification/runtime-backends.md`](verification/runtime-backends.md#attached-foreground-viewer) owns the active versioned evidence and the re-run trigger for the attached-viewer test.
 
-## Status: experimental
+## Status: supported
 
-Herdr is experimental, exactly like every non-tmux backend in this design.
+Herdr is supported, with its own required CI lane, and is Starship's default for a fresh home on a Mac and inside WSL 2 on Windows.
 Select it by putting `herdr` in a local `config/backend` file, by exporting `FM_BACKEND=herdr`, or by telling the first mate in chat to use herdr.
 It can also be selected by runtime auto-detection when firstmate itself is running inside herdr and no explicit backend setting exists.
 Absent those three explicit settings, firstmate falls through to runtime auto-detection.
 When nothing is explicitly configured, `bin/fm-backend.sh`'s `fm_backend_detect` checks the runtime firstmate itself is executing inside: `$TMUX` (set inside every tmux pane, including a tmux pane nested inside a herdr pane) selects tmux and wins when present, `HERDR_ENV=1` (injected into every process herdr manages a pane for) selects herdr when `$TMUX` is absent, and cmux runtime signals select cmux only after those multiplexer markers are absent.
 See [`docs/cmux-backend.md`](cmux-backend.md#runtime-detection) for cmux's primary `CMUX_WORKSPACE_ID` marker and macOS-only fallback signals.
-An auto-detected herdr spawn prints one loud stderr notice (set `config/backend` or pass `--backend tmux` to opt out).
-Auto-detecting tmux stays silent, since that reproduces today's unconfigured default byte-for-byte.
+An auto-detected herdr spawn stays silent, like an auto-detected tmux one; set `config/backend` or pass `--backend tmux` to opt out.
 Only when none of that resolves anything does firstmate fall back to the hard default, tmux.
-Absent `backend=` in a task's meta always means `tmux`; a herdr task carries an explicit `backend=herdr` line, while other experimental adapters carry their own backend values.
+Absent `backend=` in a task's meta always means `tmux`; a herdr task carries an explicit `backend=herdr` line, while the experimental zellij, orca, and cmux adapters carry their own backend values.
 A herdr spawn refuses loudly if `herdr` or `jq` is missing, or if the installed herdr's protocol is older than the verified minimum (`fm_backend_herdr_version_check`).
 The managed human-presentation flow is additionally capability-gated (`fm_backend_herdr_presentation_capable`, protocol 16); below that it falls back to the prior label-based spawn flow instead of refusing - see "Presentation capability gate" below.
 
@@ -1927,6 +1930,7 @@ tests/fm-backend-herdr-launcher-workspace-e2e.test.sh
 tests/fm-backend-herdr-presentation-e2e.test.sh
 tests/fm-backend-herdr-agent-exit-shell-e2e.test.sh
 tests/fm-herdr-pi-stale-registration-live-e2e.test.sh
+tests/fm-spawn-herdr-agent-up-live-e2e.test.sh
 tests/fm-backend-herdr-eventwait-smoke.test.sh
 tests/fm-control-herdr-smoke.test.sh
 tests/fm-herdr-session-cleanup.test.sh

@@ -1950,6 +1950,26 @@ ok - real herdr: a drifted agent-free shell returns to its worktree and reuses t
 `tests/fm-control-relaunch.test.sh` drives a tmux stub and proves that tmux retains its prior refusal without sending `cd` or any other input to the pane.
 The Herdr refusal when a shell accepts the command but does not move is not exercised in this change.
 
+### Placeholder status at agent start
+
+Measured 2026-10-18 on macOS aarch64 against Herdr 0.9.5 (protocol 22) and Herdr 0.7.4 (protocol 16) in isolated `fm-lab-` sessions, after a fresh Starship on Windows 11 (WSL 2, Herdr 0.9.5) reported right after a spawn that it could not read the new worker's screen to confirm it had started.
+A real `claude` (Claude Code 2.1.302) and a stand-in whose argv[0] is `claude` were each started in a lab pane, and `agent get` plus `fm_backend_agent_state herdr` were read once a second:
+
+```text
+herdr 0.9.5, real claude:  agent_not_found, then {"agent":"claude","agent_status":"unknown"} for about 4s, then blocked (its trust dialog)
+herdr 0.9.5, stand-in:     agent_not_found, then unknown for about 3s, then idle
+herdr 0.7.4, real claude:  agent_not_found, then idle within a second, then blocked
+```
+
+Herdr 0.9.5 creates the record with its placeholder `unknown` status the moment it notices the harness, and holds it for seconds before screen detection or the integration reports a state; 0.7.4 never showed it at start.
+The adapter read that placeholder as `unreadable`, so the spawn's one-second agent-up gate (`bin/fm-spawn.sh` `spawn_wait_agent_up`) saw two unreadable reads in a row and ended with "The herdr pane could not be read for the claude harness; delivery proceeded UNVERIFIED".
+`fm_backend_herdr_pane_agent_state` now settles the placeholder by the process view: a running harness process reads `live`, a shell-only pane reads `stale-agent`, and anything else stays `unknown`.
+`tests/fm-spawn-herdr-agent-up-live-e2e.test.sh` drives the real `bin/fm-spawn.sh --harness claude` into a lab session and passes on both releases; `tests/fm-backend-herdr.test.sh` pins the classifier with canned bodies.
+Every pane the spawn opens starts the lab server's `$SHELL` as a login shell, which rebuilds PATH from the operator's rc files, so a stand-in on fm-spawn's own PATH never reaches it: the pane would start an installed Claude Code with the operator's config, or find no `claude` at all.
+The test therefore provisions its lab with a pane shell that puts the stand-in first, points Claude at a scratch config and reads no rc file, and proves a lab pane resolves the stand-in before it spawns.
+The stand-in is a symlink named `claude` to a long-running native stand-in rather than the measurement's `exec -a claude`, because `exec -a` renames argv[0] only and Linux keeps the kernel process name `sleep`.
+The same reproduction was not run inside WSL 2: the version, not the platform, decides the placeholder, and the WSL machine ran 0.9.5.
+
 ### Stale agent registration
 
 Measured 2026-09-10 on macOS aarch64 against Herdr 0.9.0 (protocol 22) and Pi 0.85.1 in an isolated `fm-lab-` session (upstream issue #4115, duplicates #3639, #3487, #2908, #3545).

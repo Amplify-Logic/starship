@@ -74,7 +74,11 @@ Put the cursor where the text should go, tap Right Ctrl, speak, and tap Right Ct
 The button turns purple while it listens.
 The text is pasted with Ctrl+V and your clipboard is put back afterwards; the dictated text is kept out of Windows' clipboard history, and clipboard contents a password manager marked private are not put back.
 
-When the cursor is in the first mate's chat itself, dictation sends the text the way talking does, with the same checks.
+With a first mate running in Herdr, the default setup, dictating into its chat types the words there like any other app, and they wait for you to press Enter.
+Herdr does not report which terminal window has focus, so the floater cannot tell that its chat is the one in front.
+Talking and screenshots still go straight into a Herdr first mate's chat.
+
+With a first mate running in tmux (the fallback in [ONBOARDING.md](../ONBOARDING.md#3-get-starship-and-start-your-first-mate)), dictating into its chat sends the text the way talking does, with the same checks.
 The floater treats the chat as being in front only when a terminal window (such as Windows Terminal) is the foreground window, the tmux pane of the first mate is the active one, and tmux says its terminal has focus.
 tmux keeps track of focus only for a terminal that attached while its `focus-events` option was on, so install adds `set -g focus-events on` to your `~/.tmux.conf` (uninstall takes it out again) and the floater also turns the option on in your running tmux.
 A tmux window that was already open before then counts once you attach to it again, for example after closing the tab and running `tmux attach -t firstmate`, or when tmux next starts.
@@ -115,7 +119,8 @@ The floater writes a short log of what it did, never your words, to `floater.log
 
 - The Mac records with echo cancellation, so a reply playing on the speakers stays out of your message; this floater does not.
   Use a headset, or press Stop before you talk while a reply is playing.
-- Sending dictation into the chat works with a tmux first mate only, as ONBOARDING-windows.md sets up.
+- Dictation is sent into the chat by itself only for a first mate running in tmux; in Herdr, the default, dictated words wait in the chat for you to press Enter.
+- Talking and dictation need a working microphone; without one, screenshots still reach the first mate.
 - Spoken replies need the same voice setup as on the Mac: a Deepgram key and the spoken-register owner `bin/fm-speak.sh` uses; without them replies stay text only.
 
 ## Related scripts

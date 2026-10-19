@@ -150,8 +150,9 @@ Then do the two sign-ins it prints:
 
 ## 6. Run the first mate in tmux
 
-tmux keeps the first mate and its workers running after you disconnect.
-Tell Firstmate to use it, then start a session:
+On a server, the first mate and its workers run in tmux, which keeps them running after you disconnect and is what this guide is tested with.
+(On a Mac or a Windows PC they run in Herdr instead.)
+Tell Firstmate to use tmux, then start a session:
 
 ```sh
 mkdir -p ~/starship/config
@@ -159,8 +160,9 @@ echo tmux > ~/starship/config/backend
 tmux new -s firstmate
 ```
 
-Continue with [ONBOARDING.md step 3, get Starship and start your first mate](ONBOARDING.md#3-get-starship-and-start-your-first-mate), inside this session, and go on through the Harbour Logbook report in step 5.
-Skip step 2 of that guide and the `git clone` line of step 3: the setup script did both.
+Continue with [ONBOARDING.md step 3, get Starship and start your first mate](ONBOARDING.md#3-get-starship-and-start-your-first-mate) at **Start your first mate**, inside this session, and go on through the Harbour Logbook report in step 5.
+Skip step 2 of that guide and the first part of step 3 (the `git clone` and `bin/fm-herdr-setup.sh` lines, and opening Herdr): the setup script cloned Starship, and a server uses tmux.
+Workers open as tmux windows; `Ctrl-b` then `w` lists them.
 
 To leave everything running, press `Ctrl-b` then `d`.
 Next time: `ssh <you>@<server>` and `tmux attach -t firstmate`.

@@ -900,6 +900,33 @@ test_agent_descendant_under_a_spaced_install_path_stays_alive() {
   pass "herdr stale registration: the descendant walk reads a spaced executable path whole"
 }
 
+# Herdr 0.9.5 registers a starting harness with a placeholder `unknown` status
+# for seconds before any lifecycle state (docs/verification/runtime-backends.md
+# "Placeholder status at agent start"); the spawn's agent-up gate read it as
+# unreadable. Only a positive agent process makes the placeholder live.
+test_placeholder_status_is_decided_by_the_process_view() {
+  local sleep_bin shell_pid out
+  out=$(stale_registration_case placeholder-claude unknown \
+    '{"result":{"type":"pane_process_info","process_info":{"pane_id":"w1:p2","shell_pid":4242,"foreground_process_group_id":4243,"foreground_processes":[{"pid":4243,"name":"2.1.302","argv0":"claude","argv":["claude"],"cmdline":"claude"}]}}}')
+  [ "$out" = "live alive refused" ] \
+    || fail "a placeholder record over a running claude must read live/alive, got '$out'"
+  sleep_bin=$(command -v sleep) || fail "sleep not found"
+  "$sleep_bin" 300 &
+  shell_pid=$!
+  out=$(stale_registration_case placeholder-shell unknown "$(shell_only_process_info "$shell_pid")")
+  kill "$shell_pid" 2>/dev/null || true
+  [ "$out" = "stale-agent dead refused" ] \
+    || fail "a placeholder record over a shell-only pane must read stale-agent/dead and refuse husk closing, got '$out'"
+  out=$(stale_registration_case placeholder-other unknown \
+    '{"result":{"type":"pane_process_info","process_info":{"pane_id":"w1:p2","shell_pid":4242,"foreground_process_group_id":4243,"foreground_processes":[{"pid":4243,"name":"vim","argv0":"vim","argv":["vim"],"cmdline":"vim"}]}}}')
+  [ "$out" = "unknown unreadable refused" ] \
+    || fail "a placeholder record over a non-agent foreground must stay unknown/unreadable, got '$out'"
+  out=$(stale_registration_case placeholder-unreadable unknown 'Error: socket unavailable' 1)
+  [ "$out" = "unknown unreadable refused" ] \
+    || fail "a placeholder record with an unreadable process view must stay unknown/unreadable, got '$out'"
+  pass "herdr placeholder status: a starting agent reads alive only when its process is running"
+}
+
 test_registered_agent_with_an_unreadable_process_view_is_unknown() {
   local out
   out=$(stale_registration_case unreadable-exit idle 'Error: socket unavailable' 1)
@@ -6455,6 +6482,7 @@ test_transient_prompt_helper_settles_into_stale_agent
 test_exhausted_settle_window_keeps_a_non_shell_foreground_live
 test_registered_agent_with_an_agent_descendant_outside_the_foreground_stays_alive
 test_agent_descendant_under_a_spaced_install_path_stays_alive
+test_placeholder_status_is_decided_by_the_process_view
 test_registered_agent_with_an_unreadable_process_view_is_unknown
 test_registered_agent_with_an_empty_foreground_over_a_real_shell_settles_via_descendant_walk
 test_projection_reclaim_rollback_refuses_a_stale_registration

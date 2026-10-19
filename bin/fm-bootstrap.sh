@@ -880,6 +880,7 @@ install_cmd() {
     no-mistakes) echo "curl -fsSL https://raw.githubusercontent.com/kunchenguid/no-mistakes/main/docs/install.sh | sh" ;;
     gh-axi|chrome-devtools-axi|lavish-axi) echo "npm install -g $1 && $1 setup hooks" ;;
     tasks-axi|quota-axi) echo "npm install -g $1" ;;
+    herdr) echo "FM_HOME=\"$FM_HOME\" \"$SCRIPT_DIR/fm-herdr-setup.sh\" --quiet  # pinned release in ~/.local/bin plus Herdr's Claude Code integration" ;;
     peekaboo) echo "\"$SCRIPT_DIR/fm-computer-use.sh\" install  # pinned $("$SCRIPT_DIR/fm-computer-use.sh" pin), user-level in ~/.local/bin; fm-computer-use.sh check says what is wrong" ;;
     *) return 1 ;;
   esac
@@ -887,7 +888,6 @@ install_cmd() {
 
 manual_install_url() {
   case "$1" in
-    herdr) echo "https://herdr.dev" ;;
     cursor-agent) echo "https://cursor.com/cli" ;;
     *) return 1 ;;
   esac

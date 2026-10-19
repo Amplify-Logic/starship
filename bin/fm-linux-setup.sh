@@ -12,13 +12,18 @@
 #     the Windows default browser
 #   - Homebrew on Linux, so the bootstrap's `brew install` and `npm install -g`
 #     hints work unchanged and need no sudo later
-#   - brew: git node gh tmux jq
+#   - brew: git node gh tmux jq (tmux is a server's runtime and the
+#     fallback elsewhere)
 #   - Claude Code through its Linux native installer (~/.local/bin/claude)
 #   - Google Chrome stable on x86_64. It needs no desktop: chrome-devtools-axi
 #     drives it headless by default, so the same package serves WSL and a
 #     server. Google publishes no arm64 Linux package, so arm64 skips it with
 #     a warning and browser checks stay unavailable there.
 #   - a Firstmate clone at ~/starship (an existing clone is left untouched)
+#   - inside WSL, Herdr with its Claude Code integration and, for a fresh
+#     home, config/backend set to herdr, so the first mate starts in Herdr
+#     from its first launch, as on a Mac (bin/fm-herdr-setup.sh owns all
+#     three; a server keeps tmux, ONBOARDING-linux-server.md step 6)
 #   - lines in ~/.profile and ~/.bashrc, so login shells, tmux panes, and new
 #     terminals pick these up: one `brew shellenv` line, one ~/.local/bin PATH
 #     line, `export HOMEBREW_NO_ASK=1` (Homebrew otherwise stops every install
@@ -222,6 +227,16 @@ main() {
     git clone "$REPO_URL" "$TARGET" </dev/null || die "git clone failed"
   fi
 
+  HERDR_WANTED=0
+  if [ "$ON_WSL" = 1 ]; then
+    if [ -x "$TARGET/bin/fm-herdr-setup.sh" ]; then
+      HERDR_WANTED=1
+      FM_HOME="$TARGET" "$TARGET/bin/fm-herdr-setup.sh" --quiet </dev/null || die "setting up Herdr failed"
+    else
+      warn "this Starship copy predates the Herdr setup; update it with 'git -C $TARGET pull', then run $TARGET/bin/fm-herdr-setup.sh"
+    fi
+  fi
+
   # shellcheck disable=SC2016  # these lines are written for the shell to expand later
   for rc in "$HOME/.profile" "$HOME/.bashrc"; do
     ensure_line "$rc" "eval \"\$($BREW shellenv)\""
@@ -242,6 +257,7 @@ main() {
   check jq jq --version
   check claude claude --version
   [ "$ON_WSL" = 0 ] || check wslview wslview --version
+  [ "$HERDR_WANTED" = 0 ] || check herdr herdr --version
   if [ "$CHROME_WANTED" = 1 ]; then
     if command -v google-chrome >/dev/null 2>&1; then
       check chrome google-chrome --version
@@ -282,10 +298,13 @@ Then, in the new terminal, two sign-ins are yours to do:
      "No, exit" just closes it; you stay signed in.
      On a server, open the link it prints on your own computer and paste the code back.
 
-Then go back to the guide you are following: step 8 of ONBOARDING-windows.md
-on Windows, or step 6 of ONBOARDING-linux-server.md on a server. It starts the
-first mate inside tmux and then hands over to step 3 of ONBOARDING.md.
-Starship is already cloned in ~/starship.
+Then go back to the guide you are following:
+  - on Windows, step 8 of ONBOARDING-windows.md, which starts the first mate
+    inside Herdr;
+  - on a server, step 6 of ONBOARDING-linux-server.md, which starts it inside
+    tmux.
+Each then hands over to step 3 of ONBOARDING.md. Starship is already cloned
+in ~/starship.
 EOF
 }
 

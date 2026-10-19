@@ -36,6 +36,7 @@ Two fork rows are not CI-derived: `tests/fm-visible-status.test.sh` (29400 ms) a
 This fork's serial table was refreshed again on 2026-10-04 from run [37147855677](https://github.com/Amplify-Logic/firstmate/actions/runs/37147855677), the CI run of the [creator catch-up pull request](https://github.com/Amplify-Logic/firstmate/pull/256).
 Each serial script keeps the larger of its previous value and that run's successful `duration_ms`, which raised 154 rows and gave 17 never-measured scripts their first value.
 Its serial 2 job was cancelled at the 30-minute cap and uploaded no artifact, so its completed `FM_TEST_END` markers supplement the nine artifacts the other serial jobs uploaded, and the scripts it never reached, `tests/fm-visible-status.test.sh` among them, keep their previous values.
+`tests/fm-herdr-setup.test.sh` (1559 ms) joined the lane later and carries its first successful `duration_ms` from run [39159091513](https://github.com/Amplify-Logic/firstmate/actions/runs/39159091513); its 45000 ms default weight had left the shards no room for the packing-boundary case in `tests/fm-test-run.test.sh`.
 
 ## Parallel lanes
 

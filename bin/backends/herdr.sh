@@ -2481,6 +2481,16 @@ EOF
 #                 registration keeps its authority. An idle or blocked agent
 #                 is still a genuine, still-registered agent, not a restored
 #                 husk, so it is never a close-and-replace candidate.
+#                 Herdr's placeholder agent_status `unknown` (a record created
+#                 the moment Herdr notices a harness, before any state is
+#                 known) is live only when the process view positively reads
+#                 `agent`: the record alone carries no state, so `other` stays
+#                 unknown, while a shell-only view reads stale-agent as above.
+#                 Herdr 0.9.5 holds that placeholder for several seconds after
+#                 Claude starts, where 0.7.4 went straight from agent_not_found
+#                 to idle, so without this every spawn's agent-up gate read the
+#                 starting worker as unreadable (docs/verification/
+#                 runtime-backends.md "Placeholder status at agent start").
 #   unknown     - anything else: an unparseable/unexpected response from
 #                 either call, a `pane get` success whose own echoed pane_id
 #                 does not round-trip (guards against misreading a herdr
@@ -2509,6 +2519,14 @@ fm_backend_herdr_pane_agent_state() {  # <session> <pane_id>
   status=$(printf '%s' "$out" | jq -r '.result.agent.agent_status // empty' 2>/dev/null)
   case "$status" in
     working|idle|done|blocked) ;;
+    unknown)
+      case "$(fm_backend_herdr_pane_process_state "$session" "$pane_id")" in
+        agent) printf 'live' ;;
+        shell) printf 'stale-agent' ;;
+        *) printf 'unknown' ;;
+      esac
+      return 0
+      ;;
     *) printf 'unknown'; return 0 ;;
   esac
   case "$(fm_backend_herdr_pane_process_state "$session" "$pane_id")" in

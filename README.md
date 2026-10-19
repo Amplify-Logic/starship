@@ -9,6 +9,7 @@ You only answer the real decisions.
 ## What Starship adds
 
 - **A guided start** - a step-by-step setup from a blank computer to a first mate that has done one piece of real work, set up around Claude Code and launched with `bin/fm-primary.sh`, plus [a handbook](docs/handbook.md) for everything after that.
+- **Herdr from the first launch** - on a Mac and on Windows, the setup installs [Herdr](https://herdr.dev) and starts the first mate inside it, so every worker shows up in Herdr's sidebar with whether it is working or waiting; tmux stays available, and a server uses it.
 - **Mac, Windows and Linux** - besides the Mac, it runs on a Windows PC inside WSL 2, or on a rented Linux server you reach over SSH, both set up by one script, `bin/fm-linux-setup.sh`.
 - **A desk floater you can talk to** - a small always-on-top control on the [Mac](docs/desk-floater.md) and on [Windows](docs/desk-floater-windows.md): hold a key to talk to the first mate and hear its replies.
 - **A call recorder and starter settings** - an optional [call recorder](docs/call-companion.md) that keeps a live page of a call and writes notes when it ends, once everyone has agreed to be recorded, and starter settings for which Claude model does which job, spoken replies, and transcription words, which a new home installs on its first launch; its first mate's thinking level follows the Claude plan it runs on, as the [onboarding guide](ONBOARDING.md#3-get-starship-and-start-your-first-mate) explains.
@@ -91,7 +92,7 @@ Launching a supported harness inside it for your primary session instantiates yo
 - **Optional status second look** - opt in per home so the heartbeat backstop takes one bounded look at the progress lines the verb-based classifier dropped, catching destroyed data, a spend you own, or a credential need written as a progress note; it can only add an escalation, never silence one, and with the gate absent or the service unreachable supervision behaves exactly as it does today.
 - **Optional Relay** - opt in with one local `.env` pairing token so firstmate can answer your public mentions on X and Discord alike, act on normal reversible mention requests through the same lifecycle as chat requests, acknowledge spawned work, and post up to three public-safe completion follow-ups within seven days for genuine milestones and the final outcome without changing non-Relay behavior; a final reply promised in a thread becomes durable state that is reconciled from disk, so a restart or a compacted conversation cannot lose it; dry-run preview records would-be replies and dismissals locally before go-live.
 - **Strict project boundary** - the first mate is read-only over your projects except for the narrow guarded and captain-approved operations authorized by [hard rule 1](AGENTS.md#1-identity-and-prime-directives), including fleet sync's guarded safe branch pruning; crewmates make every other project change behind the configured merge authority.
-- **Restart-proof** - all state lives on disk and in the active session backend (tmux by hard default, herdr or cmux when selected or auto-detected, zellij/orca when explicitly selected); the next session reconciles after a restart, while ordinary supervision recovers confirmed-dead secondmate agents without waiting for one.
+- **Restart-proof** - all state lives on disk and in the active session backend (tmux by hard default, herdr or cmux when selected or auto-detected - Starship's setup selects herdr on a Mac and on Windows - zellij/orca when explicitly selected); the next session reconciles after a restart, while ordinary supervision recovers confirmed-dead secondmate agents without waiting for one.
 
 Full detail on every feature lives in [docs/architecture.md](docs/architecture.md).
 
@@ -103,7 +104,7 @@ Starship's setup is [ONBOARDING.md](ONBOARDING.md): five steps from a blank Mac 
 
 - A verified primary agent harness: Claude Code, Grok, Pi, `pi-signed`, Oh My Pi (`omp`), Codex, OpenCode, or Cursor Agent CLI; the onboarding guide uses Claude Code, and `bin/fm-primary.sh --help` lists every verified launch profile.
 - Git and the GitHub CLI, authenticated through `gh auth login`.
-- The CLI and dependencies for your selected runtime backend; tmux is the reference default, and each backend's setup guide is linked in [Documentation](#documentation).
+- The CLI and dependencies for your selected runtime backend; tmux is the reference default, Starship's setup selects Herdr on a Mac and on Windows, and each backend's setup guide is linked in [Documentation](#documentation).
 
 The first mate detects and offers to install supported missing tools after you approve.
 

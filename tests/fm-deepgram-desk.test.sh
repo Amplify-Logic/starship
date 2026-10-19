@@ -1610,8 +1610,11 @@ test_desk_voice_send_types_into_the_primary_pane() {
   assert_contains "$(herdr_calls "$home" pane send-keys)" "pane send-keys w7:p3 enter" "Enter submits it"
   [ "$(inbox_count "$home")" = 0 ] || fail "a pane delivery must not also land in the mailbox"
   [ ! -s "$home/state/.wake-queue" ] || fail "a pane delivery must not queue a mailbox wake"
+  # A Herdr first mate needs no tmux at all: the Windows floater's talk path
+  # reaches it with no tmux session open.
+  [ ! -s "$home/fixture/tmux.log" ] || fail "talking to a herdr primary must never call tmux: $(cat "$home/fixture/tmux.log")"
   desk_send_done "$home"
-  pass "fm-desk-voice send: types the transcript into the primary's own pane and submits it"
+  pass "fm-desk-voice send: types the transcript into the primary's own pane and submits it, with no tmux"
 }
 
 test_desk_voice_send_falls_back_without_a_live_primary() {
@@ -2614,6 +2617,7 @@ test_desk_voice_dictation_front_focused_on_tmux() {
   out=$(desk_send "$home" --front-focused -- "Status please") || fail "send failed: $out"
   [ "$out" = not-in-front ] || fail "a herdr primary is never in front this way, got: $out"
   [ -z "$(herdr_calls "$home" pane send-text)" ] || fail "nothing may be typed into a herdr chat"
+  [ ! -s "$home/fixture/tmux.log" ] || fail "dictation toward a herdr primary must never call tmux: $(cat "$home/fixture/tmux.log")"
   desk_send_done "$home"
   pass "fm-desk-voice send --front-focused: only the active tmux pane of a focus-tracked client is in front"
 }

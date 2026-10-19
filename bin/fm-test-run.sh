@@ -838,6 +838,7 @@ tests/fm-harness-precedence.test.sh 5149
 tests/fm-herdr-layout-preview-e2e.test.sh 1089
 tests/fm-herdr-pi-stale-registration-live-e2e.test.sh 1161
 tests/fm-herdr-session-cleanup.test.sh 8691
+tests/fm-herdr-setup.test.sh 1559
 tests/fm-herdr-submit-confirm-live-e2e.test.sh 1131
 tests/fm-herdr-version-floor-live-e2e.test.sh 1190
 tests/fm-herdr-worker-presentation-e2e.test.sh 1154

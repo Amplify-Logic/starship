@@ -131,6 +131,7 @@ curl -fsSL https://raw.githubusercontent.com/Amplify-Logic/firstmate/main/bin/fm
 ```
 
 It asks for your Ubuntu password once, then installs the build tools, Homebrew, git, node, gh, tmux, jq, Claude Code and Chrome, and clones Firstmate into `~/starship`.
+It also installs [Herdr](https://herdr.dev), the terminal view your first mate and its workers run in, with Herdr's Claude Code integration, and sets your Starship to run in it.
 It also makes sign-in links open in your normal Windows browser, rather than in the Linux Chrome it installs for the first mate's own checks.
 About 15 minutes; a lot of text scrolls past, and it asks nothing more.
 
@@ -154,36 +155,33 @@ When it asks whether you trust your home folder, **No, exit** is selected; press
 
 ---
 
-## 8. Use tmux as your view
+## 8. Open Herdr
 
-Workers open as tmux windows, as on a Mac; on Windows, stay with tmux rather than adding Herdr later, since tmux is the longest-tested option.
-Tell Firstmate before you launch:
-
-```sh
-mkdir -p ~/starship/config
-echo tmux > ~/starship/config/backend
-```
-
-Start the first mate inside a tmux session, so every worker appears as a window you can watch:
+Your first mate and its workers run inside Herdr, which the setup script installed.
+In your Ubuntu tab, type:
 
 ```sh
-tmux new -s firstmate
+herdr
 ```
 
-You should see a green bar along the bottom of the window.
-`Ctrl-b` then `w` lists the windows; `Ctrl-b` then `d` detaches, and `tmux attach -t firstmate` brings it back.
+The first time, Herdr may first ask how it should notify you; any answer works, and you can change it later in Herdr's settings (`Ctrl-b`, then `s`).
+Herdr then shows a shell, with a sidebar on the left where each worker will appear.
 
 ---
 
 ## 9. Finish with the shared steps
 
-Continue with [ONBOARDING.md step 3, get Starship and start your first mate](ONBOARDING.md#3-get-starship-and-start-your-first-mate), inside your tmux session in Ubuntu, and go on through the Harbour Logbook report in step 5.
-Skip step 2 of that guide and the `git clone` line of step 3: the setup script did both.
+Continue with [ONBOARDING.md step 3, get Starship and start your first mate](ONBOARDING.md#3-get-starship-and-start-your-first-mate) at **Start your first mate**, in Herdr's shell, and go on through the Harbour Logbook report in step 5.
+Skip step 2 of that guide and the first part of step 3 (the `git clone` and `bin/fm-herdr-setup.sh` lines): the setup script did those.
 
 When the first mate's startup checks run, it also tells you if anything sits under `/mnt/`, if Ubuntu has no network, or if `localhost` cannot reach Windows.
 
-**Every day after this:** open Terminal (it opens Ubuntu) and run `tmux attach -t firstmate`.
-If it says there is no session, run `tmux new -s firstmate`, then `cd ~/starship && bin/fm-primary.sh opus`.
+**Every day after this:** open Terminal (it opens Ubuntu) and type `herdr`.
+If you left Herdr with `Ctrl-b`, then `q`, while an Ubuntu window stayed open, Herdr kept running and this brings back your first mate as you left it.
+Closing the last Ubuntu window lets WSL shut Ubuntu down, which stops Herdr and your first mate; a Windows restart does the same.
+After that, Herdr reopens your spaces; if your first mate's space shows only a shell, run `cd ~/starship && bin/fm-primary.sh opus` there again, and it starts fresh and picks up its work from its records.
+
+**Prefer tmux?** Herdr is the default, and tmux still works: run `echo tmux > ~/starship/config/backend`, start the first mate inside `tmux new -s firstmate`, and workers open as tmux windows instead ([docs/tmux-backend.md](docs/tmux-backend.md)).
 
 ---
 
@@ -200,7 +198,13 @@ bin/fm-desk-floater-windows.sh install
 
 It needs no admin rights and nothing to download.
 The floater appears at the bottom right of your screen and starts with Windows from now on.
-Hold Right Alt and speak to talk to your first mate; [docs/desk-floater-windows.md](docs/desk-floater-windows.md) has the rest.
+Hold Right Alt and speak to talk to your first mate: your words go straight into its chat in Herdr, as screenshots do.
+Tap Right Ctrl to dictate into whatever has your cursor; in the first mate's chat in Herdr, the dictated words wait there for you to press Enter.
+
+Talking and dictation need a working microphone.
+If the talk button shows an orange `!` and "Mic off - click !", Windows' privacy settings keep apps off the microphone: click it and turn on microphone access for desktop apps.
+Without a microphone, screenshots still reach your first mate.
+[docs/desk-floater-windows.md](docs/desk-floater-windows.md) has the rest.
 
 ---
 
@@ -230,7 +234,7 @@ Two lighter ways to use Claude work on Windows with no Linux at all:
 | `this is WSL 1` | In PowerShell: `wsl --set-version Ubuntu-24.04 2`, then run the setup again. |
 | No `Setup finished.` at the end of the setup | Run the setup command again. |
 | A board link or `localhost` page does not open in Windows | Check `.wslconfig` from step 4, run `wsl --shutdown`, open a new Ubuntu tab, and start again. |
-| `command not found: brew`, `claude`, or `gh` after setup | Open a new Ubuntu tab; the old one has the old PATH. |
+| `command not found: brew`, `claude`, `gh`, or `herdr` after setup | Open a new Ubuntu tab; the old one has the old PATH. |
 | A sign-in opens a Linux Chrome window instead of your normal browser | Open a new Ubuntu tab and sign in again; you can also just finish in that Chrome window. |
 | Everything is slow | Check `pwd`: your project must be under `/home/...`, never `/mnt/c/...`. |
 
