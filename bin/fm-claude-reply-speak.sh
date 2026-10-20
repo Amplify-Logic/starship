@@ -70,9 +70,9 @@
 #     arrived within the settle window. A continuation that runs longer than the
 #     window can still speak both lines; the final reply is then spoken as well,
 #     because the hook's own speech is not counted as the model's.
-#   - a home that is not opted in: the hook asks bin/fm-speak.sh --enabled
-#     first and does nothing else at all, so a home without config/speak pays
-#     no settle wait and writes no state;
+#   - a home that is not opted in: after the plain-language check below, the
+#     hook asks bin/fm-speak.sh --enabled and does nothing else at all, so a
+#     home without config/speak pays no settle wait and writes no state;
 #   - a muted home: bin/fm-speak.sh owns the mute and exits 0 without a sound.
 #
 # Scope, so workers never speak: every worktree of this repo loads the same
@@ -84,9 +84,20 @@
 # Cursor-delivered payload stands down through bin/fm-hook-host-lib.sh, and the
 # settings entry's GROK_* guard keeps it inert under Grok.
 #
-# Never blocks and never prints: every path exits 0 with no stdout, and
-# bin/fm-speak.sh's diagnostics are read only for the refusal reason, then
-# discarded.
+# Plain-language check: in that same scope, and whether or not the home speaks,
+# the final reply is scanned for internal terms AGENTS.md section 9 tells the
+# first mate to translate before the captain reads them. Section 9 owns the
+# rule and its full vocabulary; PLAIN_TERMS below is only the distinctive part
+# of it, because ordinary words on that list such as "check", "done", "state",
+# or "blocked" would warn on plain English. Fenced code, inline code, and links
+# are skipped, since a command, path, or URL the captain needs is not a slip.
+# A hit prints one JSON line carrying a systemMessage, which Claude Code hands
+# to the first mate at its next turn without showing it to the captain. It is
+# a warning only: the reply is never blocked, held, or rewritten.
+#
+# Never blocks: every path exits 0, the plain-language warning line is the only
+# stdout, and bin/fm-speak.sh's diagnostics are read only for the refusal
+# reason, then discarded.
 #
 # Environment overrides, for tests and unusual layouts:
 #   FM_REPLY_SPEAK_CMD           speak command (default: bin/fm-speak.sh)
@@ -114,6 +125,10 @@ MAX_SENTENCES=6
 # (docs/examples/desk-speak-register.toml).
 SPOKEN_WORDS=78
 
+# The distinctive part of AGENTS.md section 9's internal vocabulary, as
+# case-insensitive extended regular expressions matched as whole words.
+PLAIN_TERMS='worktrees?|primary checkout|local-main|teardown|crewmates?|watchers?|heartbeats?|wake queue|wake events?|harness(es)?|session lock|status files?|meta(data)? files?|task ids?|ask-user|needs-decision|fix-review|checks-passed|direct-PR|local-only|no-mistakes|yolo|captain hold|decision hold|fail(s|ed)?[- ]closed|fail(s|ed)?[- ]open|fail(s)? loudly|refuses loudly'
+
 SETTLE_MS=${FM_REPLY_SPEAK_SETTLE_MS:-2000}
 case "$SETTLE_MS" in ''|*[!0-9]*) SETTLE_MS=2000 ;; esac
 
@@ -126,9 +141,6 @@ case "$SETTLE_MS" in ''|*[!0-9]*) SETTLE_MS=2000 ;; esac
 
 PAYLOAD=$(cat 2>/dev/null || true)
 [ -n "$PAYLOAD" ] || exit 0
-# --- opt-in: a home that does not speak runs nothing below -----------------
-# bin/fm-speak.sh owns the opt-in, so it is asked rather than re-read here.
-[ "$("$SCRIPT_DIR/fm-speak.sh" --enabled 2>/dev/null)" = enabled ] || exit 0
 command -v jq >/dev/null 2>&1 || exit 0
 fm_hook_payload_is_foreign_host "$PAYLOAD" && exit 0
 
@@ -136,6 +148,29 @@ fm_hook_payload_is_foreign_host "$PAYLOAD" && exit 0
 fm_root_is_secondmate_home "$FM_ROOT" && exit 0
 fm_primary_scope_matches "$FM_ROOT" "$STATE" || exit 0
 fm_session_lock_owned_by_self "$STATE" || exit 0
+
+MSG=$(printf '%s' "$PAYLOAD" | jq -r '.last_assistant_message // empty | strings' 2>/dev/null || true)
+
+# --- plain-language check: warn the first mate, never the captain -----------
+# Code fences, inline code, and links are dropped before matching, so a command
+# or path the captain needs never counts as a slip.
+# shellcheck disable=SC2016 # the backticks are literal Markdown code spans
+plain_language_warning() {  # <reply>
+  local hits
+  hits=$(printf '%s\n' "$1" | awk '
+      /^[[:space:]]*(```|~~~)/ { fence = !fence; next }
+      !fence' \
+    | sed -E 's/`[^`]*`//g; s/\]\([^)]*\)/]/g; s#https?://[^[:space:]]+##g' \
+    | grep -oiwE "$PLAIN_TERMS" \
+    | tr '[:upper:]' '[:lower:]' | awk '!seen[$0]++' | paste -sd, - | sed 's/,/, /g')
+  [ -n "$hits" ] || return 0
+  jq -cn --arg terms "$hits" '{systemMessage: ("Plain-language check: your last reply to the captain used internal terms AGENTS.md section 9 says to translate: " + $terms + ". Say the outcome in plain words next time. Nothing was blocked; no reply to this notice is needed.")}'
+}
+plain_language_warning "$MSG"
+
+# --- opt-in: a home that does not speak runs nothing below -----------------
+# bin/fm-speak.sh owns the opt-in, so it is asked rather than re-read here.
+[ "$("$SCRIPT_DIR/fm-speak.sh" --enabled 2>/dev/null)" = enabled ] || exit 0
 
 # --- claim the latest Stop ---------------------------------------------------
 # Written before anything can exit, so an empty newer Stop still supersedes an
@@ -176,8 +211,6 @@ if [ -f "$SEEN_FILE" ]; then
 fi
 record_seen
 [ "$SPOKE_THIS_TURN" -eq 0 ] || exit 0
-
-MSG=$(printf '%s' "$PAYLOAD" | jq -r '.last_assistant_message // empty | strings' 2>/dev/null || true)
 
 # --- routine no-news line: never spoken -------------------------------------
 MSG=${MSG#"${MSG%%[![:space:]]*}"}

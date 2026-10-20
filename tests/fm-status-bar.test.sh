@@ -202,13 +202,15 @@ SH
   [ "$rows" -eq 3 ] \
     || fail "three refreshes published $rows unchanged rows instead of one row each"
 
-  # A clock that moves one second per refresh changes the supervision age, and
-  # every one of those changes must reach the pane.
+  # A clock that moves one second per refresh carries the supervision beacon
+  # across its 180-second freshness bound, and that change must reach the pane.
+  # A task record keeps the stale reading an alarm rather than a calm idle.
   rm -f "$count_file"
   fm_install_fake_tmux_pane "$FAKEBIN" 3
+  fm_write_meta "$HOME_FIX/state/refresh-probe.meta" "kind=crew"
   cat > "$FAKEBIN/stat" <<'SH'
 #!/usr/bin/env bash
-epoch=900
+epoch=821
 [ ! -f "$FM_STATUS_BAR_TEST_BEAT_FILE" ] || epoch=$(<"$FM_STATUS_BAR_TEST_BEAT_FILE")
 # Only the supervision beacon read ages the clock, so a stat the frame makes
 # for any other reason cannot skip an age the row must show.
@@ -232,10 +234,9 @@ SH
   rows=$(printf '%s' "$out" | grep -o '⚓' | wc -l | tr -d ' ')
   [ "$rows" -eq 3 ] \
     || fail "three refreshes published $rows rows instead of one row each"
-  assert_contains "$out" '👁 100s' "the first supervision age never reached the pane"
-  assert_contains "$out" '👁 101s' "a changed supervision age never reached the pane"
-  assert_contains "$out" '👁 102s' "a changed supervision age never reached the pane"
-  rm -f "$FAKEBIN/tmux"
+  assert_contains "$out" '👁 watching' "the fresh supervision reading never reached the pane"
+  assert_contains "$out" '👁 not watching' "a changed supervision reading never reached the pane"
+  rm -f "$FAKEBIN/tmux" "$HOME_FIX/state/refresh-probe.meta"
   cat > "$FAKEBIN/stat" <<'SH'
 #!/usr/bin/env bash
 printf '%s\n' "${FM_STATUS_BAR_TEST_BEAT_EPOCH:-900}"
@@ -259,7 +260,7 @@ test_contract_order_and_fleet_projection() {
   : > "$HOME_FIX/state/.afk"
 
   out=$(render Opus high 42 73 1.235 | strip_ansi)
-  [ "$out" = "⚓ Opus·high │ 🧠42% ⚡73% │ 🚢1 🧪1 ⏸1 ⚠1 🪦0 📋6 │ 👁 100s │ \$1.24 │ 💤AFK" ] \
+  [ "$out" = "⚓ Opus·high │ 🧠42% ⚡73% │ 1 working, 1 checking, 1 waiting, 1 needs a look │ 👁 watching │ \$1.24 │ 💤AFK" ] \
     || fail "canonical fields, order, fleet counts, or formatting drifted: $out"
   pass "status bar: canonical field order and fleet projection are stable"
 }
@@ -285,11 +286,10 @@ test_the_headline_is_live_agents_and_stopped_records_are_visible() {
   : > "$HOME_FIX/state/.last-watcher-beat"
 
   out=$(render Opus high -- -- -- | strip_ansi)
-  assert_contains "$out" '🚢2 ' \
+  assert_contains "$out" '2 working' \
     "the headline did not count the two endpoints an agent is actually running on"
-  assert_contains "$out" '🪦3' \
+  assert_contains "$out" '3 stopped' \
     "the three records whose worker is gone are not shown as a distinct figure"
-  assert_contains "$out" '📋5' "the record count does not cover every ordinary task"
   pass "status bar: the headline is live agents and stopped records carry their own figure"
 }
 
@@ -306,9 +306,8 @@ test_task_records_are_never_counted_as_running_workers() {
   : > "$HOME_FIX/state/.last-watcher-beat"
 
   out=$(render Opus high -- -- -- | strip_ansi)
-  assert_contains "$out" '🚢1 ' "a fleet of one live worker and three records did not report one ship"
-  assert_contains "$out" '📋4' "the record count does not cover every ordinary task"
-  assert_not_contains "$out" '🚢4' "task records were counted as running workers"
+  assert_contains "$out" '1 working' "a fleet of one live worker and three records did not report one worker"
+  assert_not_contains "$out" '4 working' "task records were counted as running workers"
   pass "status bar: a task record is never counted as a running worker"
 }
 
@@ -325,8 +324,8 @@ test_validating_work_is_distinguished_from_a_busy_worker() {
   : > "$HOME_FIX/state/.last-watcher-beat"
 
   out=$(render Opus high -- -- -- | strip_ansi)
-  assert_contains "$out" '🚢1 🧪2' "validating work was folded into the busy-worker count"
-  assert_contains "$out" '⚠1' "a parked validation gate is not reported as needing attention"
+  assert_contains "$out" '1 working, 2 checking' "validating work was folded into the busy-worker count"
+  assert_contains "$out" '1 needs a look' "a parked validation gate is not reported as needing attention"
   pass "status bar: validating work is a separate field from a busy worker"
 }
 
@@ -342,17 +341,26 @@ test_unknown_fleet_state_shows_placeholders_and_never_zero() {
   # No cached reading and no reader that can answer: every live field is unknown.
   out=$(FM_FLEET_STATE_NO_CACHE=0 FM_FLEET_STATE_READER="$FAKEBIN/absent-reader" \
     render Opus high -- -- -- | strip_ansi)
-  assert_contains "$out" '🚢-- 🧪-- ⏸-- ⚠-- 🪦--' \
-    "an unread fleet does not show placeholders for every live field"
-  assert_contains "$out" '📋2' "the record count is not shown while the live fields are unknown"
-  assert_not_contains "$out" '🚢0' "an unread fleet was reported as zero live workers"
+  assert_contains "$out" '│ workers unknown │' \
+    "an unread fleet does not say its workers are unknown"
+  assert_not_contains "$out" 'no workers' "an unread fleet was reported as zero live workers"
 
-  # A genuine zero still renders as zero.
+  # Records the reading could not classify are never an idle fleet: they are
+  # named as tasks whose state is unknown.
   reset_fleet
   fleet_task done1 crew 'state: done · source: run-step · checks passed'
   out=$(render Opus high -- -- -- | strip_ansi)
-  assert_contains "$out" '🚢0 🧪0 ⏸0 ⚠0 🪦0 📋1' "a genuinely idle fleet is not reported as zero"
-  pass "status bar: an unread fleet shows placeholders and a genuine zero still shows zero"
+  assert_contains "$out" '│ 1 task, state unknown │' "an unclassified record is not named as a task of unknown state"
+  assert_not_contains "$out" 'no workers' "a home with a task record was reported as having no workers"
+  fleet_task done2 crew 'state: done · source: run-step · checks passed'
+  out=$(render Opus high -- -- -- | strip_ansi)
+  assert_contains "$out" '│ 2 tasks, state unknown │' "two unclassified records are not named as tasks of unknown state"
+
+  # A genuine zero, with no task record at all, still renders as no workers.
+  reset_fleet
+  out=$(render Opus high -- -- -- | strip_ansi)
+  assert_contains "$out" '│ no workers │' "a genuinely idle fleet is not reported as no workers"
+  pass "status bar: an unread fleet shows placeholders, unclassified records stay visible, and a genuine zero still shows zero"
 }
 
 test_threshold_colors_and_placeholders() {
@@ -380,17 +388,17 @@ test_threshold_colors_and_placeholders() {
   pass "status bar: threshold colors and unavailable-metric placeholders are canonical"
 }
 
-test_no_watch_is_bright_red_when_missing_or_stale() {
+test_not_watching_is_bright_red_when_missing_or_stale() {
   local out
   reset_fleet
   fleet_task underway crew 'state: working · source: pane · harness busy'
   rm -f "$HOME_FIX/state/.last-watcher-beat"
   out=$(render Opus high 50 10 0)
-  assert_contains "$out" $'\033[91;1m👁 NO-WATCH --' "missing supervision beacon is not a bright-red NO-WATCH alert"
+  assert_contains "$out" $'\033[91;1m👁 not watching' "missing supervision beacon is not a bright-red not-watching alert"
 
   : > "$HOME_FIX/state/.last-watcher-beat"
   out=$(FM_STATUS_BAR_TEST_BEAT_EPOCH=800 render Opus high 50 10 0)
-  assert_contains "$out" $'\033[91;1m👁 NO-WATCH 200s' "stale supervision beacon is not a bright-red NO-WATCH alert"
+  assert_contains "$out" $'\033[91;1m👁 not watching' "stale supervision beacon is not a bright-red not-watching alert"
 
   out=$(PATH="$FAKEBIN:$PATH" \
     FM_HOME="$HOME_FIX" \
@@ -400,12 +408,12 @@ test_no_watch_is_bright_red_when_missing_or_stale() {
       --adapter pi \
       --model Opus \
       --effort high)
-  assert_contains "$out" $'\033[91;1m👁 NO-WATCH --' "unreadable supervision time is not a bright-red NO-WATCH alert"
-  pass "status bar: missing and stale supervision are loud NO-WATCH alerts"
+  assert_contains "$out" $'\033[91;1m👁 not watching' "unreadable supervision time is not a bright-red not-watching alert"
+  pass "status bar: missing and stale supervision are loud not-watching alerts"
 }
 
 # A new home that has never dispatched anything has no supervision to run, and a
-# bright-red NO-WATCH there read as an error to a new user on their first launch.
+# bright-red alarm there read as an error to a new user on their first launch.
 # The alarm belongs to work that is under way, including a second mate.
 test_idle_home_without_records_shows_supervision_calmly() {
   local out kind
@@ -413,30 +421,30 @@ test_idle_home_without_records_shows_supervision_calmly() {
   rm -f "$HOME_FIX/state/.last-watcher-beat"
   out=$(render Opus high 50 10 0)
   assert_contains "$out" $'\033[2m👁 idle' "a home with no records and no beacon is not a calm, dim idle"
-  assert_not_contains "$out" 'NO-WATCH' "a home with no records still raised NO-WATCH"
+  assert_not_contains "$out" 'not watching' "a home with no records still raised the not-watching alarm"
 
   : > "$HOME_FIX/state/.last-watcher-beat"
   out=$(FM_STATUS_BAR_TEST_BEAT_EPOCH=800 render Opus high 50 10 0)
   assert_contains "$out" $'\033[2m👁 idle' "a home with no records and a stale beacon is not a calm, dim idle"
 
   out=$(FM_STATUS_BAR_TEST_BEAT_EPOCH=990 render Opus high 50 10 0)
-  assert_contains "$out" $'\033[92m👁 10s' "a fresh beacon on an idle home no longer shows its age"
+  assert_contains "$out" $'\033[92m👁 watching' "a fresh beacon on an idle home no longer shows it is watching"
 
   for kind in crew scout secondmate; do
     reset_fleet
     fm_write_meta "$HOME_FIX/state/one.meta" "kind=$kind"
     rm -f "$HOME_FIX/state/.last-watcher-beat"
     out=$(render Opus high 50 10 0)
-    assert_contains "$out" $'\033[91;1m👁 NO-WATCH --' "a $kind record with no beacon did not raise the bright-red NO-WATCH"
+    assert_contains "$out" $'\033[91;1m👁 not watching' "a $kind record with no beacon did not raise the bright-red not-watching alarm"
   done
   reset_fleet
   printf '#!/bin/sh\n' > "$HOME_FIX/state/mail.check.sh"
   rm -f "$HOME_FIX/state/.last-watcher-beat"
   out=$(render Opus high 50 10 0)
-  assert_contains "$out" $'\033[91;1m👁 NO-WATCH --' "a registered check with no beacon did not raise the bright-red NO-WATCH"
+  assert_contains "$out" $'\033[91;1m👁 not watching' "a registered check with no beacon did not raise the bright-red not-watching alarm"
   : > "$HOME_FIX/state/.last-watcher-beat"
   out=$(FM_STATUS_BAR_TEST_BEAT_EPOCH=800 render Opus high 50 10 0)
-  assert_contains "$out" $'\033[91;1m👁 NO-WATCH 200s' "a registered check with a stale beacon did not raise the bright-red NO-WATCH"
+  assert_contains "$out" $'\033[91;1m👁 not watching' "a registered check with a stale beacon did not raise the bright-red not-watching alarm"
   rm -f "$HOME_FIX/state/mail.check.sh"
   pass "status bar: an idle home with no records shows supervision calmly"
 }
@@ -1731,7 +1739,7 @@ test_task_records_are_never_counted_as_running_workers
 test_validating_work_is_distinguished_from_a_busy_worker
 test_unknown_fleet_state_shows_placeholders_and_never_zero
 test_threshold_colors_and_placeholders
-test_no_watch_is_bright_red_when_missing_or_stale
+test_not_watching_is_bright_red_when_missing_or_stale
 test_idle_home_without_records_shows_supervision_calmly
 test_claude_payload_adapter_and_primary_guard
 test_follow_mode_exits_when_primary_pane_is_gone

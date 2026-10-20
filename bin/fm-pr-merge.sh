@@ -134,8 +134,8 @@
 # unreadable row refuses before that command, so a captain approval must be
 # recorded as an `answer --release` before this entrypoint is invoked. While
 # an away record exists (a quiet-mode record is a present captain, so its
-# merges stay attended: bin/fm-afk-contract.sh mode) any green merge may
-# proceed under away authority:
+# merges stay attended: bin/fm-afk-contract.sh mode) any green merge that
+# needs no captain's yes may proceed under away authority:
 # the record's presence is the whole mechanical fact, and which merge the
 # captain's away words meant is the supervision session's reading
 # (bin/fm-branch-prompt.sh "Postures"). An unreadable record refuses rather
@@ -168,7 +168,37 @@
 # explicit captain instruction and never skips the live green check, the
 # away-record read, or a captain hold.
 #
-# Usage: fm-pr-merge.sh <task-id> <pr-url> [--attended-override] [--allow-red <check-name>] [--allow-missing <check-name>] [-- <extra forge merge args>]
+# Two kinds of GitHub pull request need the captain's explicit yes even under
+# standing yolo merge authority, and each is a refusal reported beside every
+# other pre-merge condition: one whose author is not the GitHub account this
+# home's gh is signed in as (a teammate's or a bot's), and one in a firstmate
+# repository that changes Starship's own rules - a root or nested AGENTS.md,
+# the root CLAUDE.md, .claude/settings.json, anything under .agents/skills/ or
+# .agents/opt-in-skills/, or anything under hooks/, including a file renamed
+# out of those places. The rules check applies when the task's recorded
+# project shares firstmate's lineage, or when that cannot be ruled out
+# (bin/fm-role-lib.sh fm_role_self_repo), and when it is a Starship add-on:
+# this home's configured add-on (bin/fm-addon.sh root) or any repository with
+# bin/fm-team-root.sh at its root. Any other project proven unrelated skips it.
+# Both are read live at merge time, and an author, account, or changed-file
+# read that fails refuses rather than passing. --captain-approved, parsed
+# before the optional -- separator, records that the captain explicitly
+# approved this merge in the moment and skips both refusals and their reads; it
+# never skips the live green check, a captain hold, or the away-record read,
+# and it is refused while the away-posture record exists, because that yes has
+# to be given in person. GitLab and Forgejo merges carry neither refusal yet,
+# so --captain-approved is refused there rather than silently dropped.
+#
+# A GitHub pull request that no task owns, such as a teammate's, is merged by
+# passing --no-task in place of the task id. It meets every live pre-merge
+# condition above, the author and rules refusals included (with no recorded
+# project, the rules check always runs), and binds the verified head the same
+# way. With no task record there is no task lock, recorded pr= or merge poll,
+# captain-hold read, persisted merge authority, or merge wake; it is
+# attended-only, refused while the away-posture record exists, and refused on
+# GitLab and Forgejo.
+#
+# Usage: fm-pr-merge.sh <task-id>|--no-task <pr-url> [--attended-override] [--captain-approved] [--allow-red <check-name>] [--allow-missing <check-name>] [-- <extra forge merge args>]
 #
 # On GitLab, this script confirms the MR is actually merged before reporting it;
 # an auto-merge-queued or unconfirmed request leaves the poll armed and records
@@ -193,6 +223,8 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 . "$SCRIPT_DIR/fm-merge-authority-lib.sh"
 # shellcheck source=bin/fm-afk-contract.sh
 . "$SCRIPT_DIR/fm-afk-contract.sh"
+# shellcheck source=bin/fm-role-lib.sh
+. "$SCRIPT_DIR/fm-role-lib.sh"
 
 if [ "$#" -lt 2 ]; then
   echo "error: invalid PR merge request" >&2
@@ -200,7 +232,11 @@ if [ "$#" -lt 2 ]; then
 fi
 ID=$1
 RAW_URL=$2
-if ! fm_pr_task_id_valid "$ID" || ! fm_pr_url_parse "$RAW_URL"; then
+# --no-task in place of the task id merges a pull request that no task owns,
+# such as a teammate's; the header's task-less paragraph owns what it skips.
+NO_TASK=false
+[ "$ID" != --no-task ] || NO_TASK=true
+if { [ "$NO_TASK" = false ] && ! fm_pr_task_id_valid "$ID"; } || ! fm_pr_url_parse "$RAW_URL"; then
   echo "error: invalid PR merge request" >&2
   exit 2
 fi
@@ -227,6 +263,7 @@ if [ "$PROVIDER" = gerrit ]; then
 fi
 shift 2
 ATTENDED_OVERRIDE=false
+CAPTAIN_APPROVED=false
 ALLOW_RED=()
 ALLOW_MISSING=()
 while [ "$#" -gt 0 ]; do
@@ -237,6 +274,14 @@ while [ "$#" -gt 0 ]; do
       ;;
     --attended-override=*)
       echo "error: --attended-override takes no value" >&2
+      exit 2
+      ;;
+    --captain-approved)
+      CAPTAIN_APPROVED=true
+      shift
+      ;;
+    --captain-approved=*)
+      echo "error: --captain-approved takes no value" >&2
       exit 2
       ;;
     --allow-red)
@@ -289,6 +334,19 @@ if [ "${#ALLOW_MISSING[@]}" -gt 0 ]; then
       ;;
     forgejo)
       echo "error: --allow-missing does not apply to Forgejo, where a merge already requires the head's combined commit status to have succeeded" >&2
+      exit 2
+      ;;
+  esac
+fi
+
+if [ "$NO_TASK" = true ] && [ "$PROVIDER" != github ]; then
+  echo "error: --no-task applies only to a GitHub pull request, the only forge whose author and changed files this script checks" >&2
+  exit 2
+fi
+if [ "$CAPTAIN_APPROVED" = true ]; then
+  case "$PROVIDER" in
+    gitlab|forgejo)
+      echo "error: --captain-approved does not apply to $PROVIDER, where this script does not yet check the author or the changed files" >&2
       exit 2
       ;;
   esac
@@ -425,6 +483,7 @@ fm_backlog_directory_present "$STATE" "state directory" || {
   exit 1
 }
 META="$STATE/$ID.meta"
+[ "$NO_TASK" = false ] || META=
 
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
@@ -440,15 +499,36 @@ META="$STATE/$ID.meta"
 . "$SCRIPT_DIR/fm-lease-lib.sh"
 fm_lease_forbid_branch "PR merge (fm-pr-merge)" --away-relocated
 
-if [ ! -f "$META" ] || [ -L "$META" ]; then
-  echo "error: task metadata is unavailable" >&2
-  exit 1
+# Whether this pull request can change Starship's own rules: only a project
+# proven not to share firstmate's lineage and not a Starship add-on skips the
+# changed-file read, so a task-less pull request, which records no project, is
+# always checked.
+RULES_GUARDED=true
+if [ "$NO_TASK" = false ]; then
+  if [ ! -f "$META" ] || [ -L "$META" ]; then
+    echo "error: task metadata is unavailable" >&2
+    exit 1
+  fi
+  if ! fm_backlog_meta_spawn_gen_optional "$META" "$STATE"; then
+    echo "error: PR merge refused: $FM_BACKLOG_TRANSITION_ERROR" >&2
+    exit 1
+  fi
+  MERGE_EXPECTED_SPAWN_GEN=$FM_BACKLOG_META_SPAWN_GEN
+  MERGE_PROJECT=$(grep '^project=' "$META" | tail -1 | cut -d= -f2- || true)
+  if [ -n "$MERGE_PROJECT" ]; then
+    rules_lineage=0
+    fm_role_self_repo "$MERGE_PROJECT" "$FM_ROOT" || rules_lineage=$?
+    [ "$rules_lineage" -ne 1 ] || RULES_GUARDED=false
+    if [ "$RULES_GUARDED" = false ]; then
+      if [ -f "$MERGE_PROJECT/bin/fm-team-root.sh" ]; then
+        RULES_GUARDED=true
+      elif addon_root=$(FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-addon.sh" root 2>/dev/null) \
+        && [ "$addon_root" = "$(cd "$MERGE_PROJECT" 2>/dev/null && pwd -P)" ]; then
+        RULES_GUARDED=true
+      fi
+    fi
+  fi
 fi
-if ! fm_backlog_meta_spawn_gen_optional "$META" "$STATE"; then
-  echo "error: PR merge refused: $FM_BACKLOG_TRANSITION_ERROR" >&2
-  exit 1
-fi
-MERGE_EXPECTED_SPAWN_GEN=$FM_BACKLOG_META_SPAWN_GEN
 
 MERGE_CONTROL_LOCK=
 MERGE_META_LOCK=
@@ -458,15 +538,17 @@ merge_control_cleanup() {
   [ -z "$MERGE_CONTROL_LOCK" ] || fm_lock_release "$MERGE_CONTROL_LOCK" || true
 }
 trap merge_control_cleanup EXIT
-MERGE_CONTROL_LOCK="$STATE/.control-$ID.lock"
-fm_lock_acquire_wait "$MERGE_CONTROL_LOCK"
-if ! fm_backlog_meta_spawn_gen_optional "$META" "$STATE"; then
-  echo "error: task $ID changed while waiting to merge; refusing: $FM_BACKLOG_TRANSITION_ERROR" >&2
-  exit 1
-fi
-if [ "$FM_BACKLOG_META_SPAWN_GEN" != "$MERGE_EXPECTED_SPAWN_GEN" ]; then
-  echo "error: task $ID changed incarnation while waiting to merge; refusing" >&2
-  exit 1
+if [ "$NO_TASK" = false ]; then
+  MERGE_CONTROL_LOCK="$STATE/.control-$ID.lock"
+  fm_lock_acquire_wait "$MERGE_CONTROL_LOCK"
+  if ! fm_backlog_meta_spawn_gen_optional "$META" "$STATE"; then
+    echo "error: task $ID changed while waiting to merge; refusing: $FM_BACKLOG_TRANSITION_ERROR" >&2
+    exit 1
+  fi
+  if [ "$FM_BACKLOG_META_SPAWN_GEN" != "$MERGE_EXPECTED_SPAWN_GEN" ]; then
+    echo "error: task $ID changed incarnation while waiting to merge; refusing" >&2
+    exit 1
+  fi
 fi
 
 # Reading the merge request state needs both tools. Report them together and
@@ -968,12 +1050,52 @@ github_required_checks_missing() {
 # Sets FM_PR_MERGE_HEAD to the verified head on success. Returns 3, rather than
 # the usual 1, when mergeable=UNKNOWN is the only failing condition, so the
 # caller can retry a still-computing mergeability read instead of refusing.
+# The two refusals only the captain's explicit yes lifts, set as refusal lines
+# each ending in a newline, or empty, in FM_PR_CAPTAIN_REFUSALS. The account
+# login is read once per run. Args: the live pull request view JSON.
+FM_PR_GITHUB_OWN_LOGIN=
+FM_PR_CAPTAIN_REFUSALS=
+github_captain_word_refusals() {
+  local json=$1 author files rules out=''
+  FM_PR_CAPTAIN_REFUSALS=
+  [ "$CAPTAIN_APPROVED" = false ] || return 0
+  author=$(printf '%s' "$json" | jq -r '.author.login // empty | strings' 2>/dev/null || true)
+  if [ -z "$FM_PR_GITHUB_OWN_LOGIN" ]; then
+    FM_PR_GITHUB_OWN_LOGIN=$(gh api user 2>/dev/null | jq -r '.login // empty | strings' 2>/dev/null || true)
+  fi
+  if [ -z "$author" ] || [ -z "$FM_PR_GITHUB_OWN_LOGIN" ]; then
+    out="$out  - the pull request author or this home's GitHub account could not be read, so a pull request this home did not open cannot be ruled out; merge only with --captain-approved after the captain's explicit yes
+"
+  elif [ "$(printf '%s' "$author" | tr '[:upper:]' '[:lower:]')" != "$(printf '%s' "$FM_PR_GITHUB_OWN_LOGIN" | tr '[:upper:]' '[:lower:]')" ]; then
+    out="$out  - the pull request was opened by '$author', not by this home's GitHub account '$FM_PR_GITHUB_OWN_LOGIN'; merge only with --captain-approved after the captain's explicit yes
+"
+  fi
+  if [ "$RULES_GUARDED" = true ]; then
+    if ! files=$(gh api --paginate "repos/$PR_OWNER/$PR_REPO/pulls/$PR_NUMBER/files" 2>/dev/null) \
+      || ! rules=$(printf '%s' "$files" | jq -rs '
+        [ .[] | if type == "array" then .[] else error("invalid files page") end
+          | if (.filename | type) == "string" then .filename, (.previous_filename // empty | strings)
+            else error("invalid file entry") end ]
+        | map(select(. == "AGENTS.md" or endswith("/AGENTS.md") or . == "CLAUDE.md"
+            or . == ".claude/settings.json" or startswith(".agents/skills/")
+            or startswith(".agents/opt-in-skills/") or startswith("hooks/")))
+        | unique | join(", ")' 2>/dev/null); then
+      out="$out  - the files the pull request changes could not be read, so a change to Starship's own rules cannot be ruled out; merge only with --captain-approved after the captain's explicit yes
+"
+    elif [ -n "$rules" ]; then
+      out="$out  - the pull request changes Starship's own rules ($rules); merge only with --captain-approved after the captain's explicit yes
+"
+    fi
+  fi
+  FM_PR_CAPTAIN_REFUSALS=$out
+}
+
 github_verify_mergeable() {
   local json fields line red name covered missing unreported producers runs
   local total=0 named=0 refusals='' mergeable_refusal=''
   local state='' draft='' mergeable='' merge_state='' live_head='' base=''
 
-  if ! json=$(gh pr view "$URL" --json state,isDraft,mergeable,mergeStateStatus,headRefOid,baseRefName,statusCheckRollup 2>/dev/null) \
+  if ! json=$(gh pr view "$URL" --json state,isDraft,mergeable,mergeStateStatus,headRefOid,baseRefName,author,statusCheckRollup 2>/dev/null) \
     || [ -z "$json" ]; then
     echo "error: could not read the GitHub pull request state before merging" >&2
     return 1
@@ -1036,6 +1158,8 @@ FIELDS
   [ "$merge_state" != DIRTY ] \
     || refusals="$refusals  - mergeStateStatus is DIRTY (conflicts)
 "
+  github_captain_word_refusals "$json"
+  refusals="$refusals$FM_PR_CAPTAIN_REFUSALS"
 
   uncovered=''
   while IFS= read -r name; do
@@ -1367,7 +1491,28 @@ hold_away_record_for_merge() {
   return 1
 }
 
+# A task-less merge has no task record to carry away authority, so it is
+# attended-only: any away record refuses it, and an unreadable record refuses
+# rather than being skipped. A quiet-mode record is a present captain.
+require_attended_task_less_merge() {
+  if fm_afk_contract_present "$STATE"; then
+    if ! FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \
+      "$SCRIPT_DIR/fm-afk-contract.sh" validate >/dev/null 2>&1; then
+      echo "error: PR merge refused - the away-posture record could not be read; nothing was merged" >&2
+      return 1
+    fi
+    if fm_afk_contract_away_present "$STATE"; then
+      echo "error: --no-task is attended-only; while the away-posture record exists a pull request no task owns waits for the captain" >&2
+      return 2
+    fi
+  fi
+}
+
 require_current_away_authority() {
+  if [ "$NO_TASK" = true ]; then
+    require_attended_task_less_merge
+    return
+  fi
   FM_PR_AWAY_POSTURE=false
   if fm_afk_contract_away_present "$STATE"; then
     FM_PR_AWAY_POSTURE=true
@@ -1389,6 +1534,10 @@ require_current_away_authority() {
   fi
   if [ "$FM_PR_AWAY_POSTURE" = true ] && [ "${#ALLOW_MISSING[@]}" -gt 0 ]; then
     echo "error: --allow-missing is attended-only; while the away-posture record exists every required check must report" >&2
+    return 2
+  fi
+  if [ "$FM_PR_AWAY_POSTURE" = true ] && [ "$CAPTAIN_APPROVED" = true ]; then
+    echo "error: --captain-approved is attended-only; while the away-posture record exists the captain's yes cannot be given in person" >&2
     return 2
   fi
 }
@@ -1602,9 +1751,11 @@ forgejo_confirm_merged() {
 away_status=0
 require_current_away_authority || away_status=$?
 [ "$away_status" -eq 0 ] || exit "$away_status"
-require_recorded_pr_identity || exit 1
-record_pr_metadata || exit 1
-require_released_captain_hold || exit 1
+if [ "$NO_TASK" = false ]; then
+  require_recorded_pr_identity || exit 1
+  record_pr_metadata || exit 1
+  require_released_captain_hold || exit 1
+fi
 
 # Accepted confused-agent-grade limitation, as in bin/fm-lease-lib.sh, not an
 # oversight: if this lock-owning shell dies while its gh or glab child lives,
@@ -1660,7 +1811,7 @@ case "$PROVIDER" in
       "${merge_args[@]+"${merge_args[@]}"}" "$@" 2>&1) || merge_status=$?
     if [ "$merge_status" -eq 0 ]; then
       FM_PR_GITHUB_MERGE_ACCEPTED=true
-      persist_accepted_merge_authority || exit 1
+      [ "$NO_TASK" = true ] || persist_accepted_merge_authority || exit 1
       fm_afk_contract_lock_release || true
       fm_lock_release "$MERGE_CONTROL_LOCK" || true
       MERGE_CONTROL_LOCK=
@@ -1686,6 +1837,8 @@ case "$PROVIDER" in
     if [ "$FM_PR_GITHUB_MERGED" = true ]; then
       printf 'verified: %s is merged (state=%s, merged=%s, isInMergeQueue=%s)\n' \
         "$URL" "$FM_PR_GITHUB_STATE" "$FM_PR_GITHUB_MERGED" "$FM_PR_GITHUB_QUEUED"
+      # No task record means no merge poll or wake to publish.
+      [ "$NO_TASK" = false ] || exit 0
     elif [ "$FM_PR_GITHUB_QUEUED" = true ]; then
       printf 'verified: %s is queued (state=%s, merged=%s, isInMergeQueue=%s)\n' \
         "$URL" "$FM_PR_GITHUB_STATE" "$FM_PR_GITHUB_MERGED" "$FM_PR_GITHUB_QUEUED"

@@ -8,7 +8,7 @@ This file is the single owner of the Firstmate primary status-bar contract.
 After ANSI styling is removed, every renderer uses this field order:
 
 ```text
-⚓ <model>·<effort> [<account-role>] │ 🧠<context-used> ⚡<provider-quota-used> │ 🚢<alive> 🧪<validating> ⏸<paused> ⚠<attention> 🪦<stopped> 📋<records> │ 👁 <supervision> │ $<session-cost> │ 💤<afk>
+⚓ <model>·<effort> [<account-role>] │ 🧠<context-used> ⚡<provider-quota-used> │ <workers> │ 👁 <supervision> │ $<session-cost> │ 💤<afk>
 ```
 
 The separator is one space, a dim `│`, and one space.
@@ -21,42 +21,49 @@ Width-constrained surfaces clip or truncate the canonical line without wrapping 
 | `[account-role]` | A compact role word for the vendor account this primary is running on, attached to the model identity rather than forming its own group. | Omitted entirely when the account is unknown. |
 | `🧠 context` | The integer percentage of the model context window already used. | `--` when the orchestrator does not expose current context use. |
 | `⚡ quota` | The integer percentage of the provider's binding quota window already used, immediately followed by a dim token naming the window or windows that bind it when the adapter knows them. | `--` when the provider or orchestrator does not expose quota, or exposes a figure whose windows cannot all be named. |
-| `🚢 alive` | Tasks whose recorded endpoint has an agent running on it right now, busy or idle. This is the headline, because it is the only field that answers how many workers the captain actually has. | `--` while the fleet reading is unknown. |
-| `🧪 validating` | Tasks the validation pipeline is carrying. They are progressing, but no worker is typing at them. | `--` while the fleet reading is unknown. |
-| `⏸ paused` | Tasks in a declared bounded external wait. | `--` while the fleet reading is unknown. |
-| `⚠ attention` | Tasks that need Firstmate to act: a decision, a blocker, or a failure. | `--` while the fleet reading is unknown. |
-| `🪦 stopped` | Records still here whose worker is not: the endpoint is proven dead or absent, or the recorded worktree is gone. | `--` while the fleet reading is unknown. |
-| `📋 records` | Ordinary task records in this home, excluding persistent second mates. Always exact, and deliberately not a claim about running workers. | `0` when no ordinary tasks exist. |
-| `👁 supervision` | Age in seconds of `state/.last-watcher-beat`. | Bright-red `NO-WATCH --` when the beacon is missing or unreadable; dim `idle` instead while the home holds no task or second-mate record and no registered check. |
+| `workers` | Plain-word counts, in this order and each shown only when nonzero, joined by commas: `N working`, `N checking`, `N waiting`, `N needs a look` (`N need a look` when more than one), and `N stopped`, as in `2 working, 1 needs a look`. | Dim `workers unknown` while the fleet reading is unknown; dim `N tasks, state unknown` (`1 task, state unknown`) when the reading is known, every count is zero, and task records still exist; dim `no workers` only when the reading is known, every count is zero, and no task record exists. |
+| `👁 supervision` | `watching` while `state/.last-watcher-beat` is under 180 seconds old. | Bright-red `not watching` when the beacon is missing, unreadable, or 180 seconds old or more; dim `idle` instead while the home holds no task or second-mate record and no registered check. |
 | `$ cost` | Cumulative cost in US dollars for the current orchestrator session, rounded to two decimals. | `$--` when the orchestrator does not expose cost. |
 | `💤 AFK` | Whether the Firstmate home is in away mode. | Dim `💤--` when away mode is off. |
 
 ## Fleet fields
+
+The `workers` group speaks plain words because the captain reads this row, and `AGENTS.md` section 9 asks for outcomes rather than internal labels.
+Each word maps to one figure from `bin/fm-fleet-status-lib.sh`:
+
+| Words | Figure | Meaning |
+| --- | --- | --- |
+| `working` | alive | Tasks whose recorded endpoint has an agent running on it right now, busy or idle. This is the headline, because it is the only figure that answers how many workers the captain actually has. |
+| `checking` | validating | Tasks the validation pipeline is carrying. They are progressing, but no worker is typing at them. |
+| `waiting` | paused | Tasks in a declared bounded external wait. |
+| `needs a look` | attention | Tasks that need Firstmate to act: a decision, a blocker, or a failure. |
+| `stopped` | stopped | Records still here whose worker is not: the endpoint is proven dead or absent, or the recorded worktree is gone. |
+
+The library's record count, which counts ordinary task records rather than workers, is shown only when no other count is, as `N tasks, state unknown`, so a record the reading could not classify never reads as an idle fleet.
 
 A task record outlives its worker, and `AGENTS.md` section 8 defines a status line as a wake EVENT rather than current state.
 Counting `state/*.meta` files as running workers, and folding each status log's last line into paused and attention, therefore reported records as live work in both directions at once: it overstated how much was running and understated how much needed attention.
 Folding the reconciled current state fixed what the numbers SAID about the work, and still left the captain without the one number he was asking for: on 2026-09-21 fifteen records rendered while ten of them had a dead endpoint or a worktree that was already gone.
 So the group now leads with the agents that are actually running and gives the records whose worker is gone a figure of their own.
 
-`🧪`, `⏸`, and `⚠` come from `bin/fm-crew-state.sh`, the canonical current-state reader, folded by `bin/fm-fleet-status-lib.sh`.
+`checking`, `waiting`, and `needs a look` come from `bin/fm-crew-state.sh`, the canonical current-state reader, folded by `bin/fm-fleet-status-lib.sh`.
 That library selects no run and re-implements no attribution; run selection stays with the canonical reader, and the fold never reads a status log's last line.
-The distinction between a busy worker and `🧪` is the reader's SOURCE, not its state word: `working · run-step` is the pipeline carrying a task, and `working · pane` is a worker busy on one.
-`⚠` covers `parked`, `blocked`, and `failed`, which are the states that need Firstmate rather than time.
+The distinction between a busy worker and `checking` is the reader's SOURCE, not its state word: `working · run-step` is the pipeline carrying a task, and `working · pane` is a worker busy on one.
+`needs a look` covers `parked`, `blocked`, and `failed`, which are the states that need Firstmate rather than time.
 
 ### Live agents and stopped records
 
 A state word describes the WORK, and the captain's question is about the WORKERS.
-So `🚢` and `🪦` are a second reading, taken in the same fold: each task's recorded endpoint is asked whether an agent is running on it, through `fm_backend_agent_alive` in `bin/fm-backend.sh` - the same recovery-grade classifier recovery itself trusts, proven at process level rather than from a registration or a rendered title.
+So `working` and `stopped` are a second reading, taken in the same fold: each task's recorded endpoint is asked whether an agent is running on it, through `fm_backend_agent_alive` in `bin/fm-backend.sh` - the same recovery-grade classifier recovery itself trusts, proven at process level rather than from a registration or a rendered title.
 
 They are separate figures rather than two ends of one axis, and a task counts toward neither unless its state was proven.
 The order of proof, which `bin/fm-fleet-status-lib.sh` owns in full, is: a remote second mate's endpoint is on another host and cannot be judged locally; a recorded worktree that is gone is decisive and spends no probe; the classifier's own `alive`; a `working · pane` fold, which is proof of life in its own right and is what keeps the count honest on a backend with no recovery classifier; and finally the classifier's own `dead`.
 Everything else - an unreadable endpoint, an unverified backend, a record with no endpoint at all - stays unknown and is counted in neither figure, because overstating either side is the failure this whole supply exists to prevent.
-`🚢` therefore counts an idle worker as the worker it is, which `🧪` and `⏸` deliberately do not.
+`working` therefore counts an idle worker as the worker it is, which `checking` and `waiting` deliberately do not.
 
 The five live fields are a single reading and share a single fate.
-A reading that is missing, incomplete, past its maximum age, malformed, or taken for a different set of tasks renders `--` in all five rather than a number in any.
+A reading that is missing, incomplete, past its maximum age, malformed, or taken for a different set of tasks renders `workers unknown` rather than a number for any of them.
 They are never reported as zero to stand in for "not read yet", because an idle fleet is a real state the captain has to be able to act on.
-`📋` is independent of all that: it counts records directly, so it stays exact even while the live fields are unknown.
 
 A canonical read consults the validation pipeline and costs about a second per task, which is three orders of magnitude more than the renderer's one-second frame.
 So the fold runs out of band: a frame reads the cache and starts at most one detached refresh, under a claim that a second frame cannot take and that a refresher which died without writing releases on its own.
@@ -96,13 +103,13 @@ This field consumes whatever account identity the account owner resolves; it nev
 
 Counts are cheap local projections, not full worker reconciliation.
 An ordinary task remains active while its metadata exists, including the interval between completion and cleanup.
-A persistent second mate never contributes to the three task counts.
+A persistent second mate never contributes to the worker counts.
 
 ## Thresholds and colors
 
 ANSI renderers use bright colors for state and alerts.
 Green is ANSI 92, yellow is ANSI 93, red is ANSI 91, cyan is ANSI 96, dim is ANSI 2, and reset is ANSI 0.
-`NO-WATCH` is always bold bright red with ANSI `91;1`.
+`not watching` is always bold bright red with ANSI `91;1`.
 It is raised only while the home holds a task or second-mate record (`state/*.meta`) or a registered check (`state/*.check.sh`), because that is when supervision has work to keep; a home with neither, such as a new one that has never dispatched anything, renders a missing or stale beacon as a dim `👁 idle` so a first launch does not open on an alarm.
 
 | Metric | Green | Yellow | Red |
@@ -111,9 +118,7 @@ It is raised only while the home holds a task or second-mate record (`state/*.me
 | Provider quota used | 0 through 69 percent. | 70 through 89 percent. | 90 through 100 percent. |
 | Supervision freshness | Beacon age below 180 seconds. | Not used. | Beacon age of 180 seconds or more, or a missing or unreadable beacon, while any record or registered check exists. |
 
-The active count is bright green.
-The paused count is bright yellow only when nonzero and dim otherwise.
-The attention count is bright red only when nonzero and dim otherwise.
+`working` is bright green, `checking` is bright cyan, `waiting` and `stopped` are bright yellow, and `needs a look` is bright red; `workers unknown`, `state unknown`, and `no workers` are dim.
 The active AFK flag is bright cyan.
 Unavailable provider metrics are dim and never silently converted to zero.
 
@@ -449,7 +454,7 @@ Editing `~/.cursor` by hand is still out of scope, and no other file under it is
 
 ## Verification record
 
-Rows captured before 2026-09-12 show the fleet group as `🚢<active> ⏸<paused> ⚠<attention>`, and rows captured before 2026-09-21 show it as `🚢<working> 🧪<validating> ⏸<paused> ⚠<attention> 📋<records>`.
+Rows captured before 2026-09-12 show the fleet group as `🚢<active> ⏸<paused> ⚠<attention>`, rows captured before 2026-09-21 show it as `🚢<working> 🧪<validating> ⏸<paused> ⚠<attention> 📋<records>`, and rows captured before 2026-10-20 show it as `🚢<alive> 🧪<validating> ⏸<paused> ⚠<attention> 🪦<stopped> 📋<records>`, with supervision as `👁 <seconds>s` or a bright-red `NO-WATCH`.
 That was the field shape on the day each of those runs was observed; the current shape is the one in the canonical line above, and those older captures are kept as the evidence they were rather than rewritten.
 
 The adapter contract was checked on 2026-07-21 with Claude Code's project status-line payload shape, Pi 0.80.10, Cursor CLI 2026.07.17-3e2a980, and tmux 3.6a.
