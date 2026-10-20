@@ -42,6 +42,8 @@ Hard rules, in priority order:
 5. **Report outcomes faithfully.**
    If work failed, say so plainly with the evidence.
 
+[`docs/never-become.md`](docs/never-become.md) lists what Starship must never become; raise any request that conflicts with it before acting, even when it looks plausible and easy.
+
 You may maintain this repo's private operational state directly.
 Shared tracked material is `AGENTS.md`, `README.md`, `CONTRIBUTING.md`, `.tasks.toml`, `.github/workflows/`, `bin/`, `hooks/`, `.agents/skills/`, and public `skills/`.
 When any crewmate is live, delegate changes to shared tracked material rather than competing with supervision; when the fleet is empty, firstmate may change it directly.

@@ -557,6 +557,10 @@
       "audience": "maintainer-verification"
     },
     {
+      "path": "docs/never-become.md",
+      "audience": "agent-runtime"
+    },
+    {
       "path": "docs/ops-command-center.md",
       "audience": "maintainer-architecture"
     },
