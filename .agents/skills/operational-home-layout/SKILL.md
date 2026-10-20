@@ -48,6 +48,7 @@ config/pipeline-spend  optional presence flag opting this home in to default-off
 config/turnend-churn-absorb  optional presence flag opting this home into the default-off absorb of bare turn-end wakes on pane churn; LOCAL, gitignored, and not inherited; see docs/configuration.md "Turn-end pane-churn absorb"
 config/triage-second-look  optional opt-in gate for the escalate-only second look over status lines the wake classifier dropped, run at the heartbeat backstops only; LOCAL, gitignored, absent means inert with no paid call, and not inherited; see docs/configuration.md "Status second look"
 config/command-guard  optional opt-in gate for the local database deny list and the Jev check before each spawned Claude worker's shell command, with an `exclude` list of projects kept from Jev; LOCAL, gitignored, absent means off with nothing installed or sent, and not inherited; see docs/configuration.md "Worker command guard"
+config/outward-permissions  optional standing permissions for worker outward actions (send, reply, accept invites and the like through connectors or the browser), one per line, or `no block` to switch the worker outward check off; LOCAL, gitignored, absent means every worker can only read and draft, and not inherited; see docs/configuration.md "Worker outward actions"
 config/wedge-defer-parked-gate  optional presence flag opting this home into the default-off deferral of a wedge escalation for a lane parked at a validation gate awaiting the supervisor's own still-open decision; LOCAL, gitignored, and not inherited; see docs/configuration.md "Parked-gate wait deferral"
 config/cmux-socket-password  optional cmux control-socket password; LOCAL, gitignored; read fresh on every cmux CLI call and passed through without ever overriding an operator's own ambient CMUX_SOCKET_PASSWORD when absent (docs/cmux-backend.md "Setup")
 config/wedge-alarm  optional away-mode wedge-alarm active-alert directives; LOCAL, gitignored; absent means auto (macOS Notification Center when available); see docs/wedge-alarm.md
@@ -85,6 +86,7 @@ state/               runtime records and signals; gitignored
   <id>.kimi-turnend-token   firstmate-owned Kimi hook registry token for the task; removed by teardown
   <id>.gemini-settings.json  firstmate-owned per-task Gemini settings carrying the busy-state and turn-end hooks, reached through GEMINI_CLI_SYSTEM_SETTINGS_PATH so nothing is written into the project's own .gemini/; removed by teardown
   <id>.claude-settings.json  firstmate-owned per-task Claude settings for a secondmate (busy-state hooks plus the session keys), passed through --settings so the mate home's own .claude/settings.local.json is never edited; written by fm-spawn; removed by relaunch retirement and teardown
+  <id>.outward-seen.json  calendar event organizers a worker has read, recorded by the outward check for `invites from` permissions; bin/fm-outward-check.py owns it; removed by teardown
   <id>.devin-config.json  firstmate-owned per-task Devin config (mode 600 snapshot of the user config plus the busy-state and turn-end hooks) passed through --config so no user or project config is edited; bin/fm-devin-config.sh owns it; removed by teardown
   <id>.muse-session  muse busy-source binding (sessions root plus task worktree) written by fm-spawn; removed by teardown
   <id>.cursor-session  cursor busy-source binding (projects root, task worktree, prior conversations) written by fm-spawn; removed by teardown
@@ -151,6 +153,7 @@ state/               runtime records and signals; gitignored
   .secondmate-relaunch-<id> .secondmate-relaunch-bound-<id>   durable relaunch history and parked-bound state; never touch (bin/fm-secondmate-liveness-lib.sh owns the ledger contract)
   .watch-triage.log  watcher's absorbed-wake debug log (size-capped); never relied on, safe to delete
   command-guard.log .command-guard-outage  worker command guard decision log (redacted commands, rotated) and its open-outage marker; bin/fm-command-guard.py owns both
+  outward-check.log  worker outward check record of every refusal and every outward action a permission or No Block allowed (no message contents); bin/fm-outward-check.py owns it
   .last-watcher-beat watcher liveness beacon, touched every poll (including while absorbing benign wakes); guard scripts read it
   .subsuper-* .supervise-daemon.*   sub-supervisor internals; never touch
 .no-mistakes/        local validation state and evidence; gitignored

@@ -14,8 +14,8 @@
 # charters still use a single `{TASK}` charter fill. Firstmate may adjust other
 # sections when the task genuinely deviates (e.g. working an existing external
 # PR instead of shipping a new one).
-# Usage: fm-brief.sh <task-id> <repo-name> --mode <no-mistakes|direct-PR|local-only> [--branch-prefix <prefix>] [--base-branch <branch>] [--forge <none|gerrit|forgejo> [--shape squash]] [--herdr-lab]
-#        fm-brief.sh <task-id> <repo-name> --scout [--base-branch <branch>] [--herdr-lab]
+# Usage: fm-brief.sh <task-id> <repo-name> --mode <no-mistakes|direct-PR|local-only> [--branch-prefix <prefix>] [--base-branch <branch>] [--forge <none|gerrit|forgejo> [--shape squash]] [--outward '<permission>'] [--herdr-lab]
+#        fm-brief.sh <task-id> <repo-name> --scout [--base-branch <branch>] [--outward '<permission>'] [--herdr-lab]
 #        fm-brief.sh <task-id> --secondmate {<project>...|--no-projects}
 #   --scout writes the scout contract instead: the deliverable is a report at
 #   data/<task-id>/report.md (no branch, no push, no PR) and the worktree is scratch.
@@ -90,6 +90,15 @@
 # authority and records it in the task record, and bin/fm-promote.sh honors it
 # the same way. Ship-only: a scout publishes nothing and a charter is not a
 # delivery contract.
+# --outward '<permission>[; <permission>...]' records what this job may do
+# outward through connected accounts or the browser on the captain's word,
+# such as 'send email to a@example.com' (docs/configuration.md "Worker outward
+# actions" owns the words; bin/fm-outward-check.py parse checks them and a
+# phrase it does not understand stops the scaffold). Ship and scout briefs
+# always carry a "# Outward actions" section whose fixed
+# "Outward permission: <permissions|none>" line bin/fm-spawn.sh requires to
+# agree with its own --outward, so the worker's instructions and the
+# permission its check enforces cannot drift apart. Refused on --secondmate.
 # --project <dir> is the task's project directory, used to detect when a ship
 # brief would publish to firstmate's own repository: for such a task this
 # scaffold refuses a publishing mode that the home's role or recorded consent
@@ -224,6 +233,8 @@ UPSTREAM_CONSENT=
 UPSTREAM_CONSENT_SET=0
 PROJECT_DIR=
 PROJECT_DIR_SET=0
+OUTWARD=
+OUTWARD_SET=0
 POS=()
 want_value=
 for a in "$@"; do
@@ -239,6 +250,7 @@ for a in "$@"; do
       shape) SHAPE=$a; SHAPE_SET=1 ;;
       upstream-consent) UPSTREAM_CONSENT=$a; UPSTREAM_CONSENT_SET=1 ;;
       project) PROJECT_DIR=$a; PROJECT_DIR_SET=1 ;;
+      outward) OUTWARD=$a; OUTWARD_SET=1 ;;
       *) echo "error: internal parser state for --$want_value" >&2; exit 1 ;;
     esac
     want_value=
@@ -263,6 +275,8 @@ for a in "$@"; do
     --upstream-consent=*) UPSTREAM_CONSENT=${a#--upstream-consent=}; UPSTREAM_CONSENT_SET=1 ;;
     --project) want_value="project" ;;
     --project=*) PROJECT_DIR=${a#--project=}; PROJECT_DIR_SET=1 ;;
+    --outward) want_value=outward ;;
+    --outward=*) OUTWARD=${a#--outward=}; OUTWARD_SET=1 ;;
     # yolo never reaches the worker: it is firstmate's merge authority, not a
     # brief input. Refuse it loudly so it is never silently dropped here and then
     # believed to have been recorded.
@@ -375,6 +389,20 @@ if [ "$KIND" = ship ] && [ "$MODE" != local-only ] && [ "$PROJECT_DIR_SET" -eq 1
       exit 1
       ;;
   esac
+fi
+# A job's outward permission is checked and normalized here, so the brief line
+# carries exactly the text bin/fm-spawn.sh records and the check enforces.
+OUTWARD_LINE=none
+if [ "$OUTWARD_SET" -eq 1 ]; then
+  [ "$KIND" != secondmate ] || {
+    echo "error: --outward applies only to ship and scout briefs; a secondmate is not guarded" >&2
+    exit 1
+  }
+  command -v python3 >/dev/null 2>&1 || {
+    echo "error: --outward needs python3 to check the permission" >&2
+    exit 1
+  }
+  OUTWARD_LINE=$(python3 "$SCRIPT_DIR/fm-outward-check.py" parse "$OUTWARD") || exit 1
 fi
 ID=${POS[0]}
 BRANCH="$BRANCH_PREFIX$ID"
@@ -662,6 +690,20 @@ IFS= read -r -d '' SHARED_INFRA_RULE <<'EOF' || true
 EOF
 SHARED_INFRA_RULE=${SHARED_INFRA_RULE%$'\n'}
 
+# What this job may do outward. The "Outward permission:" line is machine-read
+# by bin/fm-spawn.sh; bin/fm-outward-check.py enforces it for Claude workers.
+if [ "$OUTWARD_LINE" = none ]; then
+  OUTWARD_SCOPE="This job has no outward permission of its own."
+else
+  OUTWARD_SCOPE="This job may do exactly what that line names, and nothing else outward."
+fi
+OUTWARD_SECTION="# Outward actions
+Outward permission: $OUTWARD_LINE
+$OUTWARD_SCOPE
+Reading, searching, listing and creating drafts in connected accounts such as mail, calendar and files are always fine, and so is reading a page already open through the Claude in Chrome tools.
+Sending, replying, forwarding, answering or changing calendar events, sharing, trashing, Zapier actions, and opening a URL, clicking, typing or running scripts through the Claude in Chrome tools need the captain's word, and a check refuses them unless this job or this home allows them.
+When the check refuses something the job needs, do not retry it or reach the same result another way; append \`blocked:\` naming the refused action and stop."
+
 if [ -n "$BASE_BRANCH" ]; then
   SETUP_BASE="You are in a disposable git worktree of $REPO, at a detached HEAD on a clean copy of its base branch.
 Base branch: $BASE_BRANCH"
@@ -709,6 +751,8 @@ $CREWMATE_PAUSE_INSTRUCTIONS
    A decision or blocker you opened stays open until a \`resolved\` line carrying its exact key lands; a later \`done:\` or \`working:\` line never closes it, even when the answer is what started that work.
    Firstmate's reply normally writes that closing line at answer time; when a blocker or wait clears WITHOUT a firstmate reply, append \`resolved [at=<epoch>]: {how it cleared}\` yourself (same \`[key=<slug>]\` if you opened it with one) as you resume.
 $SHARED_INFRA_RULE
+
+$OUTWARD_SECTION
 
 $WAIT_BLOCK$INBOX_SECTION
 
@@ -789,6 +833,8 @@ $ASK_USER_BLOCK
    A decision or blocker you opened stays open until a \`resolved\` line carrying its exact key lands; a later \`done:\` or \`working:\` line never closes it, even when the answer is what started that work.
    Firstmate's reply normally writes that closing line at answer time; when a blocker or wait clears WITHOUT a firstmate reply, append \`resolved [at=<epoch>]: {how it cleared}\` yourself (same \`[key=<slug>]\` if you opened it with one) as you resume.
 $SHARED_INFRA_RULE
+
+$OUTWARD_SECTION
 
 $WAIT_BLOCK$INBOX_SECTION
 

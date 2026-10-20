@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Spawn a direct report: a crewmate in a treehouse or Orca worktree, or a
 # secondmate in its isolated firstmate home.
-# Usage: fm-spawn.sh <task-id> <project-dir> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> [--branch-prefix <prefix>] [--base-branch <branch>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] [--account <name>] [--outcome <text>] [--task-type <slug>] [--herdr-resume-lock-wait]
-#        fm-spawn.sh <task-id> <project-dir> --scout [--base-branch <branch>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] [--account <name>] [--outcome <text>] [--task-type <slug>] [--herdr-resume-lock-wait]
+# Usage: fm-spawn.sh <task-id> <project-dir> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> [--branch-prefix <prefix>] [--base-branch <branch>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] [--account <name>] [--outcome <text>] [--task-type <slug>] [--outward '<permission>'] [--herdr-resume-lock-wait]
+#        fm-spawn.sh <task-id> <project-dir> --scout [--base-branch <branch>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] [--account <name>] [--outcome <text>] [--task-type <slug>] [--outward '<permission>'] [--herdr-resume-lock-wait]
 #        fm-spawn.sh <task-id> [<firstmate-home>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] [--account <name>] --secondmate
 #   --mode and --yolo are this task's delivery contract, REQUIRED for every ship
 #   spawn and refused on --scout and --secondmate spawns. Firstmate resolves both
@@ -139,6 +139,14 @@
 #   backlog title and then its documented safe fallback.
 #   --task-type records an optional capability-learning slug in meta task_type=
 #   (no '|' or newlines); teardown logs it, and absent it falls back to kind.
+#   --outward '<permission>[; <permission>...]' is what this ship or scout job
+#   may do outward on the captain's word (docs/configuration.md "Worker outward
+#   actions"). It is checked and normalized by bin/fm-outward-check.py parse,
+#   must agree with the brief's "Outward permission:" line (a brief without the
+#   line counts as none), and is recorded in meta outward=; a relaunch reuses
+#   the recorded value, including any bin/fm-outward-grant.sh added, and
+#   refuses the flag. Every Claude ship or scout spawn installs the outward
+#   check hooks (bin/fm-outward-check.py) whatever the flag says.
 #   A herdr crewmate or scout is placed in the exact workspace of the firstmate
 #   or secondmate process launching it, resolved from that process's own herdr
 #   pane rather than from a workspace label (herdr enforces no label uniqueness,
@@ -808,6 +816,8 @@ BASE_BRANCH=
 BASE_BRANCH_SET=0
 UPSTREAM_CONSENT=
 UPSTREAM_CONSENT_SET=0
+OUTWARD=
+OUTWARD_SET=0
 TRACEPARENT_SET=0
 RELAUNCH=0
 # Opt-in only: exact-resume presentation-order lock waits instead of refusing.
@@ -871,6 +881,10 @@ for a in "$@"; do
     upstream-consent)
       UPSTREAM_CONSENT=$a
       UPSTREAM_CONSENT_SET=1
+      ;;
+    outward)
+      OUTWARD=$a
+      OUTWARD_SET=1
       ;;
     traceparent)
       TRACEPARENT_ARG=$a
@@ -954,6 +968,11 @@ for a in "$@"; do
   --upstream-consent=*)
     UPSTREAM_CONSENT=${a#--upstream-consent=}
     UPSTREAM_CONSENT_SET=1
+    ;;
+  --outward) want_value=outward ;;
+  --outward=*)
+    OUTWARD=${a#--outward=}
+    OUTWARD_SET=1
     ;;
   --traceparent) want_value=traceparent ;;
   --traceparent=*)
@@ -1079,6 +1098,10 @@ if [ "$RELAUNCH" -eq 1 ]; then
     echo "error: --relaunch reuses the task's recorded upstream consent; --upstream-consent cannot override it" >&2
     exit 1
   }
+  [ "$OUTWARD_SET" -eq 0 ] || {
+    echo "error: --relaunch reuses the task's recorded outward permission; add to it with bin/fm-outward-grant.sh instead of --outward" >&2
+    exit 1
+  }
 else
   # Delivery contract (AGENTS.md section 7). A ship task's mode and yolo are
   # firstmate's per-task decision, so they are required and closed-set validated
@@ -1143,6 +1166,21 @@ else
       echo "error: --upstream-consent applies only to ship spawns; a scout publishes nothing and a secondmate records no delivery contract" >&2
       exit 1
     }
+  fi
+  # A job's outward permission (docs/configuration.md "Worker outward
+  # actions") is normalized by the same parser the brief used, so the
+  # brief-agreement check below compares exact text.
+  if [ "$OUTWARD_SET" -eq 1 ]; then
+    [ "$KIND" != secondmate ] || {
+      echo "error: --outward applies only to ship and scout spawns; a secondmate is not guarded" >&2
+      exit 1
+    }
+    command -v python3 >/dev/null 2>&1 || {
+      echo "error: --outward needs python3 to check the permission" >&2
+      exit 1
+    }
+    OUTWARD=$(python3 "$SCRIPT_DIR/fm-outward-check.py" parse "$OUTWARD") || exit 1
+    [ "$OUTWARD" != none ] || OUTWARD=
   fi
 fi
 
@@ -2085,6 +2123,7 @@ if [ "$RELAUNCH" -eq 1 ]; then
   MODE=$(fm_meta_get "$RELAUNCH_META" mode)
   YOLO=$(fm_meta_get "$RELAUNCH_META" yolo)
   UPSTREAM_CONSENT=$(fm_meta_get "$RELAUNCH_META" upstream_consent)
+  OUTWARD=$(fm_meta_get "$RELAUNCH_META" outward)
   if [ "$KIND" = ship ]; then
     BRANCH=$(fm_meta_get "$RELAUNCH_META" branch)
     [ -n "$BRANCH" ] || BRANCH="fm/$ID"
@@ -3784,6 +3823,17 @@ if [ "$KIND" = ship ] || [ "$KIND" = scout ]; then
   if ADDRESS_LINE=$(fm_brief_intent_address_line "$BRIEF"); then
     echo "error: $BRIEF ## Captain's intent has an operator-address line: $ADDRESS_LINE; write the captain's actual words without a Captain label or address before spawn, since the heading already records provenance" >&2
     exit 1
+  fi
+  # The brief's "Outward permission:" line (bin/fm-brief.sh) is what the worker
+  # reads; the recorded outward= is what its check enforces. A fresh spawn
+  # refuses any disagreement. A relaunch keeps the record, which
+  # bin/fm-outward-grant.sh may have widened since the brief was written.
+  if [ "$RELAUNCH" -eq 0 ]; then
+    BRIEF_OUTWARD=$(sed -n 's/^Outward permission: //p' "$BRIEF" | head -n 1)
+    if [ "${BRIEF_OUTWARD:-none}" != "${OUTWARD:-none}" ]; then
+      echo "error: outward permission mismatch for $ID: $BRIEF says '${BRIEF_OUTWARD:-none}' but this spawn passed '${OUTWARD:-none}'; correct --outward or re-scaffold the brief with the same --outward so the worker's instructions and its check agree" >&2
+      exit 1
+    fi
   fi
   if [ "$KIND" = ship ] && [ "$MODE" = no-mistakes ]; then
     if fm_brief_task_heading_present "$BRIEF" "## Captain's intent"; then
@@ -5665,9 +5715,33 @@ BUSY_GEN=
         echo "warning: config/command-guard is present but python3 is not installed; $ID runs without the command guard" >&2
       elif python3 "$FM_ROOT/bin/fm-command-guard.py" armed --config "$CONFIG" --project "$guard_project"; then
         j_guard=$(json_escape "python3 $(shell_quote "$FM_ROOT/bin/fm-command-guard.py") hook --config $(shell_quote "$(cd "$CONFIG" && pwd -P)") --state $(shell_quote "$STATE_REAL") --home $(shell_quote "$FM_HOME") --task $(shell_quote "$ID") --project $(shell_quote "$guard_project")")
-        guard_hook=",\"PreToolUse\":[{\"matcher\":\"Bash\",\"hooks\":[{\"type\":\"command\",\"command\":\"$j_guard\",\"timeout\":15}]}]"
+        guard_hook="{\"matcher\":\"Bash\",\"hooks\":[{\"type\":\"command\",\"command\":\"$j_guard\",\"timeout\":15}]}"
       fi
     fi
+    # The worker outward check (bin/fm-outward-check.py, docs/configuration.md
+    # "Worker outward actions"): a PreToolUse hook on the claude.ai connector
+    # and Claude in Chrome tools, the only ones it guards, that refuses an
+    # outward action this job or home has not allowed, and a PostToolUse
+    # hook that records calendar event organizers
+    # for `invites from` permissions. Every crewmate and scout gets it; the
+    # hook reads this home's config/outward-permissions on every call, so a
+    # standing permission or the No Block switch needs no relaunch. When
+    # python3 cannot run the check, the shell fallback exits 2, which Claude
+    # Code treats as a refusal, so a broken check never lets an action through.
+    pretool_entries=$guard_hook
+    posttool_json=
+    if [ "$KIND" != secondmate ]; then
+      command -v python3 >/dev/null 2>&1 \
+        || echo "warning: python3 is not installed; $ID's outward check will refuse every connected-account and browser action until it is" >&2
+      outward_config=$(cd "$CONFIG" 2>/dev/null && pwd -P) || outward_config=$CONFIG
+      outward_args="--state $(shell_quote "$STATE_REAL") --task $(shell_quote "$ID")"
+      j_outward=$(json_escape "python3 $(shell_quote "$FM_ROOT/bin/fm-outward-check.py") hook --config $(shell_quote "$outward_config") $outward_args || { echo 'Starship refused this action because its outward check could not run; append a blocked: status line naming this and stop.' >&2; exit 2; }")
+      j_seen=$(json_escape "python3 $(shell_quote "$FM_ROOT/bin/fm-outward-check.py") seen $outward_args >/dev/null 2>&1 || true")
+      pretool_entries="${pretool_entries:+$pretool_entries,}{\"matcher\":\"mcp__claude_ai_.*|mcp__claude-in-chrome__.*\",\"hooks\":[{\"type\":\"command\",\"command\":\"$j_outward\",\"timeout\":15}]}"
+      posttool_json=",\"PostToolUse\":[{\"matcher\":\"mcp__claude_ai_.*\",\"hooks\":[{\"type\":\"command\",\"command\":\"$j_seen\",\"timeout\":15}]}]"
+    fi
+    pretool_json=
+    [ -z "$pretool_entries" ] || pretool_json=",\"PreToolUse\":[$pretool_entries]"
     stop_entry=
     if [ "$KIND" = secondmate ] && grep -qF '.fm-busy-stop' "$WT/bin/fm-turnend-guard.sh" 2>/dev/null; then
       {
@@ -5685,7 +5759,7 @@ BUSY_GEN=
       j_stop=$(json_escape "${stop_turnend}$busy_cmd_prefix idle $busy_suffix --event stop 2>/dev/null || true")
       stop_entry="\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$j_stop\"}]}],"
     fi
-    hooks_json="\"hooks\":{\"UserPromptSubmit\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$j_submit\"}]}],${stop_entry}\"StopFailure\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$j_stopfail\"}]}],\"SessionEnd\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$j_sessionend\"}]}]$guard_hook}"
+    hooks_json="\"hooks\":{\"UserPromptSubmit\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$j_submit\"}]}],${stop_entry}\"StopFailure\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$j_stopfail\"}]}],\"SessionEnd\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$j_sessionend\"}]}]$pretool_json$posttool_json}"
     if [ "$KIND" = secondmate ]; then
       session_keys='"feedbackDrafts":"off",'
       if [ "$KEEP_AI_TRAILERS" != 1 ]; then
@@ -6143,7 +6217,7 @@ SPAWN_META_PATH=$SPAWN_META_TMP
 preserve_relaunch_meta() {
   awk -F= '
     BEGIN {
-      split("window endpoint_task_id worktree project harness kind mode yolo branch tasktmp base_branch upstream_consent model model_requested model_live effort task_type outcome account account_source account_provider busy_gen spawn_gen traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id herdr_workspace_managed herdr_project_key herdr_project_name zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id home projects control_relaunch_tx", keys, " ")
+      split("window endpoint_task_id worktree project harness kind mode yolo branch tasktmp base_branch upstream_consent outward model model_requested model_live effort task_type outcome account account_source account_provider busy_gen spawn_gen traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id herdr_workspace_managed herdr_project_key herdr_project_name zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id home projects control_relaunch_tx", keys, " ")
       for (i in keys) owned[keys[i]] = 1
     }
     !($1 in owned)
@@ -6162,6 +6236,7 @@ preserve_relaunch_meta() {
   echo "tasktmp=$TASK_TMP"
   [ -z "$BASE_BRANCH" ] || echo "base_branch=$BASE_BRANCH"
   [ -z "$UPSTREAM_CONSENT" ] || echo "upstream_consent=$UPSTREAM_CONSENT"
+  [ -z "$OUTWARD" ] || echo "outward=$OUTWARD"
   if { [ "$HARNESS" = prime-agent ] || [ "$HARNESS" = cursor ]; } \
      && [ -n "$LAUNCH_MODEL" ]; then
     # Both adapters resolve a launch model that differs from the requested one:

@@ -697,6 +697,10 @@
       "audience": "maintainer-verification"
     },
     {
+      "path": "docs/verification/outward-check.md",
+      "audience": "maintainer-verification"
+    },
+    {
       "path": "docs/verification/process-event-sources.md",
       "audience": "maintainer-verification"
     },

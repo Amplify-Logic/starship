@@ -9,7 +9,7 @@ Start with the directory layout, then use the setting reference for the behavior
 | --- | --- |
 | Firstmate's code, private files, or project location | [FM_HOME](#fm_home) and [operational home layout](#operational-home-layout-and-state) |
 | Task windows and worker tools | [Runtime backend](#runtime-backend-configbackend--fm_backend) and [harness support](#harness-support) |
-| Worker permissions, accounts, or environment | [Claude permission mode](#claude-permission-mode-configclaude-permission-mode), [worker command guard](#worker-command-guard-configcommand-guard), [Claude concise prompt](#claude-concise-prompt-configclaude-concise-prompt), [worker account pin](#worker-account-pin-configclaude-account-configpi-account), [worker tool exclusions](#worker-tool-exclusions-configcrew-exclude-tools), and [worker launch environment](#worker-launch-environment-configlaunch-env-allowlist) |
+| Worker permissions, accounts, or environment | [Claude permission mode](#claude-permission-mode-configclaude-permission-mode), [worker command guard](#worker-command-guard-configcommand-guard), [worker outward actions](#worker-outward-actions-configoutward-permissions), [Claude concise prompt](#claude-concise-prompt-configclaude-concise-prompt), [worker account pin](#worker-account-pin-configclaude-account-configpi-account), [worker tool exclusions](#worker-tool-exclusions-configcrew-exclude-tools), and [worker launch environment](#worker-launch-environment-configlaunch-env-allowlist) |
 | Backlog, preferences, and memory | [Backlog backend](#backlog-backend-taskstoml--configbacklog-backend), [captain preferences](#captain-preferences-datacaptainmd--datacaptain-sharedmd), [external memory tiers](#external-memory-tiers-memory-layering-section), and [startup memory budget](#startup-memory-budget-configstartup-memory-budget) |
 | Supervision and presentation | [Pi supervision branch](#pi-supervision-branch), [supervision host](#supervision-host-configsupervision-host), and [Calm preference](#calm-preference-configcalm) |
 | Persistent secondmates | [Secondmate routes](#secondmate-routes-datasecondmatesmd) |
@@ -805,6 +805,68 @@ It is still an extra check on a worker that already runs in a disposable copy un
 `python3 bin/fm-command-guard.py bench tests/fixtures/command-guard/benchmark.json` runs the labelled command set through the local list and then live, one request per command the list did not block, as the hook sends it, and prints each verdict and the agreement.
 Grow that set when a real block or a real miss teaches something, and rerun it after changing a question, a threshold or the pinned model.
 The engine's header owns the exact invocation, questions, criteria, thresholds and redaction, and dated results are in [`verification/command-guard.md`](verification/command-guard.md).
+
+## Worker outward actions (config/outward-permissions)
+
+A check that runs before a spawned Claude worker (crewmate or scout) uses a claude.ai connector, such as Gmail, Google Calendar, Drive, Zapier or Claude Docs, or the Claude in Chrome tools that control the captain's browser.
+Anything that acts outward is refused unless this job or this home allows it, so no worker sends, replies, forwards, answers or changes a calendar event, shares, trashes, runs a Zapier action or opens a URL, clicks or types in the captain's browser without the captain's word.
+Reading, searching, listing and creating or updating drafts always pass, and so does reading a page already open in the browser and moving between its tabs.
+
+It is on in every home by default.
+With no `config/outward-permissions` file, every worker can read and draft but cannot act outward.
+The primary, secondmates, other worker harnesses and every other tool, including Bash and locally configured MCP servers, are not checked.
+
+**What counts as outward.** The check reads only the tool name, so it keeps working as connectors add tools.
+An action passes without permission only when its name starts with a reading word (get, list, search, read, query, find, fetch, suggest, guide, export, download, view, count, describe, lookup), creates or updates a draft, or, in the browser, lists, opens or switches tabs, resizes the window, or records a GIF, and none of its words is an outward word such as send, reply, forward, share, publish, post, delete, trash, accept, decline or respond.
+Every other action of a claude.ai connector or the browser needs a permission, and every Zapier tool is treated as an action.
+Opening a URL in the browser needs `control browser`, because a link in the captain's logged-in browser can itself answer an invite, unsubscribe or submit a form.
+
+**Permissions.** A permission is one line of plain words:
+
+| Permission | Allows |
+| --- | --- |
+| `send email` | sending, replying to and forwarding mail |
+| `send email to <addresses>` | the same, only when every recipient is listed |
+| `respond to invites [from <addresses>]` | answering calendar invites, optionally only from those organizers |
+| `accept invites [from <addresses>]`, `decline invites [from <addresses>]` | only that answer |
+| `change calendar` | creating, updating and deleting calendar events |
+| `organise mail` | labels, trash, spam and other mailbox changes |
+| `control browser` | opening URLs, clicking, typing, form input, scripts and uploads in the captain's browser |
+| `use <tool name or glob>` | exactly the named connector tools, for example `use mcp__claude_ai_Zapier_MCP__*` |
+
+Addresses are full email addresses or `@domain` for everyone at that domain, separated by commas, spaces or `and`; names such as "the Harbour team" are not understood.
+`send email to` holds only when the recipients are visible in the request: a reply needs an explicit `to`, a reply-all also an explicit `cc`, and a draft sent by its id never shows its recipients, so only plain `send email` covers it.
+Each `to`, `cc` and `bcc` entry must be exactly one plain address such as `ana@example.com`; an entry with a display name, angle brackets, a comma or a space cannot be confirmed, so `send email to` does not cover the send.
+`invites from` holds only for an event the worker has read in the same job, because a hook records each event's organizer from the calendar connector's answer to `get_event`, `list_events` or `search_events`.
+
+**Per job.** When the captain hands over a job that must act outward, pass the permission to both `bin/fm-brief.sh` and `bin/fm-spawn.sh` as `--outward '<permission>[; <permission>...]'`.
+The brief shows it on its `Outward permission:` line, the spawn refuses a value that differs from the brief, and the task record keeps it as `outward=`.
+It holds for that task only, including after a relaunch.
+`bin/fm-outward-grant.sh <task-id> '<permission>'` adds a permission to a running task when the captain allows it mid-job, without a relaunch.
+
+**Standing permissions.** The private gitignored `config/outward-permissions` lists permissions for routine work, one per line, that every worker in the home gets:
+
+```
+# Harbour invites and the weekly update
+accept invites from @example.com
+send email to team@example.com
+```
+
+Blank lines and `#` comments are ignored.
+A line the check does not understand allows nothing; refusals name it, and `python3 bin/fm-outward-check.py check-config --config config` lists every such line.
+
+**No Block mode.** A line `no block` in `config/outward-permissions` switches the check off for every worker in the home, so workers act outward whenever their instructions say to.
+Delete the line to turn the check back on.
+
+The check reads the file on every connector or browser action, so a change takes effect at once without a relaunch.
+The file is not inherited into secondmate homes.
+
+**How it runs.** `bin/fm-spawn.sh` adds a Claude Code `PreToolUse` hook on `mcp__claude_ai_.*|mcp__claude-in-chrome__.*` and a `PostToolUse` hook on `mcp__claude_ai_.*` to every Claude crewmate and scout's `.claude/settings.local.json`, beside its lifecycle hooks.
+A refusal reaches the worker as a denied tool call that names the tool, what it would have done and any permission that came close, says that reading and drafting still work, tells the worker not to retry or route around it but to report a `blocked:` status line, and names the permission that would allow it.
+It never shows the grant command, the permissions file or any other path, so the worker reports the permission and only the captain, through Firstmate, decides whether to give it.
+Any failure inside the check refuses the action, and a check that cannot run at all, such as when `python3` is missing, refuses too.
+Every refusal and every outward action a permission or No Block let through is one JSON line in `state/outward-check.log` naming the task, tool, decision and deciding permission, never the message or event contents.
+[`bin/fm-outward-check.py`](../bin/fm-outward-check.py)'s header owns the matching rules, and dated live results are in [`verification/outward-check.md`](verification/outward-check.md).
 
 ## Parked-gate wait deferral (config/wedge-defer-parked-gate)
 
