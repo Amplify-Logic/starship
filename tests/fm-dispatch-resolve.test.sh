@@ -375,6 +375,34 @@ assert_contains "$out" '  status: clear' "no list resolves exactly as before"
 assert_contains "$(jq -r .state.task.brief "$LOG/body")" 'Acme-Ledger' "no list sends the task text as before"
 pass "never-send list withholds the request on a match or a bad list, and never prints the value"
 
+# --- private-app: never sent, with or without a never-send list ---------
+HARBOUR_BRIEF="$TMP_ROOT/harbour-brief.md"
+cat > "$HARBOUR_BRIEF" <<'MD'
+# Task
+## Captain's intent
+HARBOUR-SENTINEL plan the Sunday call.
+
+# Setup
+You are in a disposable git worktree of private-app, at a detached HEAD on a clean default branch.
+MD
+reset_log
+write_response "$RESPONSE" rule_4 0.9
+TYPESAFE_API_KEY=$KEY run code out err "$BRIEF" --project private-app
+expect_withheld "a private-app --project" "project private-app is never sent"
+reset_log
+TYPESAFE_API_KEY=$KEY run code out err "$BRIEF" --project "$TMP_ROOT/projects/private-app/"
+expect_withheld "a private-app project path" "project private-app is never sent"
+reset_log
+TYPESAFE_API_KEY=$KEY run code out err "$HARBOUR_BRIEF"
+expect_withheld "a brief scaffolded for private-app with no --project" "project private-app is never sent" 'HARBOUR-SENTINEL'
+reset_log
+TYPESAFE_API_KEY=$KEY run code out err "$HARBOUR_BRIEF" --project pager
+expect_withheld "a private-app brief under another --project" "project private-app is never sent"
+reset_log
+TYPESAFE_API_KEY=$KEY run code out err "$BRIEF" --project private-app-site
+assert_contains "$out" '  status: clear' "only the exact logical project name is withheld"
+pass "a private-app brief is never sent, named by --project or by its scaffolded setup line"
+
 # --- rules are snapshotted and line output is injection-safe -------------------
 MUTATED_RULES="$TMP_ROOT/mutated-rules.json"
 jq '.rules[3].use = {"harness":"claude","model":"opus"}' "$BASE_RULES" > "$MUTATED_RULES"

@@ -738,6 +738,7 @@ Configuration is `key = value` lines and the only key is `enabled`.
 Unlike `config/speak`, a malformed gate file reports on stderr and leaves this home inert rather than exiting loudly, because the caller is a supervision loop and a config typo must never change what that loop does.
 `TYPESAFE_API_KEY` is read from the environment, else from this home's gitignored `.env`, and never appears in argv, stdout, stderr or any state file.
 The dropped status line itself is the whole of what leaves this machine: the task's brief, its worker kind and its earlier status lines are never sent, so arming this gate does not ship a brief's client names, hostnames or unreleased plans to a third party.
+A line from a task whose recorded project is `private-app`, or one carrying a value from the [never-send list](#typed-dispatch-resolution-env-typesafe_api_key), is left out before the request is built and is never promoted; a list that is present but unreadable withholds the whole scan.
 The model is pinned to an exact version rather than an alias because the thresholds were tuned against that version.
 [`../bin/fm-triage-second-look.sh`](../bin/fm-triage-second-look.sh)'s header and `--help` own the exact invocation, the environment overrides and the exit codes, and its engine owns the request shape, the four questions, the batch bound, the thresholds and the tier rule.
 The tool reads its batch on stdin as `<task-id>` TAB `<status line>` records, one per line, so feed it one to read the exact request a scan would send:
@@ -1485,9 +1486,10 @@ A brief without both sections is not asked it, and a missing, malformed, or belo
 
 **Never-send list (config/dispatch-never-send)**
 
-The optional local, gitignored `config/dispatch-never-send` keeps values you name from ever leaving the machine in a resolver request.
+The optional local, gitignored `config/dispatch-never-send` keeps values you name from ever leaving the machine in a resolver request or a [status second look](#status-second-look-configtriage-second-look).
+List the private words whose tasks must stay local, such as client, finance, or health names; nothing tracked in this repository seeds them.
 It has no default entries, and an absent file changes nothing.
-Like `config/crew-dispatch.json`, it is inherited into secondmate homes, so a secondmate's resolver withholds the same values.
+Like `config/crew-dispatch.json`, it is inherited into secondmate homes, so a secondmate's resolver and second look withhold the same values.
 
 Each non-blank line not beginning with `#` is one literal value, matched case-insensitively.
 Every entry is trimmed of surrounding whitespace, and any run of whitespace, in the entry or in the checked text, counts as one space, so a value the brief wraps across lines still matches.
@@ -1501,6 +1503,8 @@ Before the request is sent, every string in it is checked: the project name, the
 A match stops the request: the resolver behaves exactly as when it is off, printing one `dispatch-resolve: off (...; nothing sent)` line on stderr and nothing on stdout, making no network or quota call, and exiting 0, so firstmate dispatches through its existing intake.
 A list that is present but not a readable regular file also stops the request the same way rather than sending unchecked text.
 That one diagnostic names the list line number at most and never prints the listed value or the matching text.
+
+`private-app` is never sent, with or without a list, matching the [worker command guard](#worker-command-guard-configcommand-guard): when `--project` or the repository named by the brief's scaffolded setup line has that logical directory name, the resolver takes the same off path before reading the rules.
 
 **Missing or invalid rules**
 

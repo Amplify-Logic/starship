@@ -49,6 +49,9 @@
 #   "dispatch-resolve: off (...; nothing sent)" line on stderr naming at most
 #   the list line number, never its value, prints nothing on stdout, and exits
 #   0 with no network or quota call, exactly like the absent-key off path.
+#   private-app is never sent, list or not: when --project or the
+#   repository the brief's scaffolded setup line names has that logical
+#   directory name, the same off path runs before the rules are even read.
 #
 # Output (stdout, TOON-style block):
 #   dispatch-resolve:
@@ -118,6 +121,8 @@ SCOPE_FLOOR=0.5
 TS_BASE=https://api.typesafe.ai
 TS_TIMEOUT=5
 DEFAULT_WHEN="No listed rule applies to this task."
+# The same always-excluded projects as ALWAYS_EXCLUDED in bin/fm-command-guard.py.
+ALWAYS_EXCLUDED='private-app'
 
 die() { printf 'error: %s\n' "$1" >&2; exit 2; }
 no_rules() {
@@ -155,6 +160,17 @@ fi
 # ---- inputs --------------------------------------------------------------------
 [ -n "$BRIEF" ] || die "brief file required (see --help)"
 [ -r "$BRIEF" ] || die "brief file not readable: $BRIEF"
+# The logical directory name of --project and of the repository the brief's
+# scaffolded setup line names, so a brief resolved without --project still counts.
+for name in "$PROJECT" "$(sed -n 's/^You are in a disposable git worktree of \(.*\), at a detached HEAD.*/\1/p' "$BRIEF")"; do
+  while [ "${name%/}" != "$name" ]; do name=${name%/}; done
+  case " $ALWAYS_EXCLUDED " in
+    *" ${name##*/} "*)
+      echo "dispatch-resolve: off (project ${name##*/} is never sent to an outside service; nothing sent)" >&2
+      exit 0
+      ;;
+  esac
+done
 [ -e "$RULES_PATH" ] || [ -L "$RULES_PATH" ] || no_rules
 [ -r "$RULES_PATH" ] || die "rules file not readable: $RULES_PATH"
 command -v jq >/dev/null 2>&1 || die "jq required"

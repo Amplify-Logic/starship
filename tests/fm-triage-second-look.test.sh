@@ -369,6 +369,54 @@ print(len(json.load(sys.stdin)["state"]["lines"]))')
   pass "a large scan is truncated to its newest lines rather than growing without limit"
 }
 
+test_harbour_and_never_send_lines_never_leave_the_machine() {
+  local dir request err out status
+  dir=$(new_home never-send armed)
+  seed_task "$dir" c1 ship "Plan the Sunday call." 'working: one'
+  printf 'kind=ship\nproject=%s\n' "$dir/projects/private-app" > "$dir/state/c1.meta"
+  seed_task "$dir" t1 ship "Ship it." 'working: one'
+  printf 'kind=ship\nproject=%s\n' "$dir/projects/pager" > "$dir/state/t1.meta"
+  printf '%s\n' '# private values' '  Acme   Ledger ' > "$dir/config/dispatch-never-send"
+  err="$dir/err"
+
+  # The same exclusion the dispatch resolver and the command guard apply:
+  # private-app status lines and lines carrying a listed private value
+  # stay on this machine, so they are left out before the request is built.
+  request=$(printf '%s\n' \
+    $'c1\tworking: HARBOUR-SENTINEL the genie rules draft is lost' \
+    $'t1\tworking: the acme ledger\texport wiped 4100 invoices' \
+    $'t1\tworking: the migration truncated public.users' \
+    | FM_HOME="$dir" "$TOOL" --dry-run 2>"$err")
+
+  assert_contains "$request" 'truncated public.users' "a line from another project was withheld"
+  assert_not_contains "$request" 'HARBOUR-SENTINEL' "a private-app status line left the machine"
+  assert_not_contains "$request" 'invoices' "a line matching config/dispatch-never-send left the machine"
+  [ "$(printf '%s' "$request" | python3 -c '
+import json, sys
+print(len(json.load(sys.stdin)["state"]["lines"]))')" = 1 ] || fail "withheld lines still reached the request"
+  assert_contains "$(cat "$err")" 'withheld 2 line(s)' "the withheld lines were not reported"
+  assert_not_contains "$(cat "$err")" 'HARBOUR-SENTINEL' "the diagnostic printed a withheld line"
+  assert_not_contains "$(cat "$err")" 'Acme' "the diagnostic printed a listed value"
+
+  # A batch with nothing left to send makes no call: an unreachable endpoint
+  # would otherwise exit 2.
+  out=$(printf 'c1\tworking: HARBOUR-SENTINEL anything\n' | FM_HOME="$dir" TYPESAFE_API_KEY=unused \
+    FM_TRIAGE_SECOND_LOOK_ENDPOINT='http://127.0.0.1:1/never' "$TOOL" 2>/dev/null) && status=0 || status=$?
+  [ "$status" -eq 0 ] || fail "a fully withheld batch tried the network (exit $status)"
+  [ -z "$out" ] || fail "a fully withheld batch promoted something: $out"
+
+  # A list that cannot be read withholds the whole batch rather than sending
+  # unchecked text.
+  rm -f "$dir/config/dispatch-never-send"
+  mkdir "$dir/config/dispatch-never-send"
+  request=$(printf 't1\tworking: the migration truncated public.users\n' \
+    | FM_HOME="$dir" "$TOOL" --dry-run 2>"$err") && status=0 || status=$?
+  [ "$status" -eq 2 ] || fail "an unreadable never-send list did not withhold the batch (exit $status)"
+  [ -z "$request" ] || fail "an unreadable never-send list still built a request"
+  assert_contains "$(cat "$err")" 'not a readable regular file' "an unreadable list did not say why"
+  pass "private-app lines and never-send matches are withheld before the request is built"
+}
+
 test_the_api_key_never_leaves_the_process() {
   local dir out err sentinel
   dir=$(new_home key-secrecy armed)
@@ -1059,6 +1107,7 @@ test_request_carries_the_dropped_line_and_nothing_else
 test_request_is_one_batch_for_the_whole_scan
 test_only_lines_the_real_classifier_dropped_can_reach_the_request
 test_the_batch_is_bounded
+test_harbour_and_never_send_lines_never_leave_the_machine
 test_the_api_key_never_leaves_the_process
 test_recorded_probe_response_reproduces_the_measured_verdicts
 test_conditions_are_separate_not_blended

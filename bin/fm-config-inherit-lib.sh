@@ -4,7 +4,7 @@
 # config/, so a secondmate's OWN crewmates inherit the primary's settings
 # (e.g. primary config/crew-dispatch.json makes a secondmate use the same dispatch
 # profile rules and primary config/dispatch-never-send keeps the same values
-# out of its dispatch resolver requests, primary config/crew-harness=codex makes a secondmate's crewmates
+# out of its dispatch resolver and status second-look requests, primary config/crew-harness=codex makes a secondmate's crewmates
 # spawn on codex too, primary config/backlog-backend=manual makes that home
 # hand-edit backlog files too, primary config/backend pins that home's local
 # runtime-backend default for future spawns, primary config/startup-memory-budget

@@ -87,6 +87,60 @@ def note(message):
 
 
 HOME_ROOT = os.environ.get("FM_HOME") or os.path.expanduser("~/starship")
+STATE_DIR = pathlib.Path(os.environ.get("FM_STATE_OVERRIDE") or pathlib.Path(HOME_ROOT) / "state")
+CONFIG_DIR = pathlib.Path(os.environ.get("FM_CONFIG_OVERRIDE") or pathlib.Path(HOME_ROOT) / "config")
+
+# The same always-excluded projects as ALWAYS_EXCLUDED in bin/fm-command-guard.py,
+# and the same private list bin/fm-dispatch-resolve.sh withholds, with the same
+# matching rule: a case-insensitive literal, whitespace runs counted as one space.
+ALWAYS_EXCLUDED = frozenset({"private-app"})
+NEVER_SEND_NAME = "dispatch-never-send"
+TASK_ID = re.compile(r"[A-Za-z0-9._-]+")
+
+
+class NeverSendError(Exception):
+    pass
+
+
+def squash(text):
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def never_send_values():
+    """The listed private values, lowercased. Raises NeverSendError on a bad list."""
+    path = CONFIG_DIR / NEVER_SEND_NAME
+    if not path.exists() and not path.is_symlink():
+        return []
+    if not path.is_file():
+        raise NeverSendError("%s is not a readable regular file" % path)
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        raise NeverSendError("%s is not a readable regular file" % path)
+    values = (squash(raw).lower() for raw in text.splitlines())
+    return [value for value in values if value and not value.startswith("#")]
+
+
+def task_project(task):
+    """The logical directory name of the task's recorded project, or ""."""
+    if not TASK_ID.fullmatch(task) or task in (".", ".."):
+        return ""
+    try:
+        text = (STATE_DIR / ("%s.meta" % task)).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    project = ""
+    for line in text.splitlines():
+        if line.startswith("project="):
+            project = line[len("project="):]
+    return os.path.basename(project.rstrip("/"))
+
+
+def withheld(task, line, values):
+    if task_project(task) in ALWAYS_EXCLUDED:
+        return True
+    text = squash(line).lower()
+    return any(value in text for value in values)
 
 
 def api_key(home):
@@ -214,8 +268,14 @@ def read_records():
     Synthetic tags keep the request's JSON paths simple identifiers: a task id
     carries hyphens, and `lines.a-b-c.line` is not a path worth asking a model
     to follow.
+
+    A line from a private-app task or one matching the never-send list is
+    left out before the bound, so it never leaves the machine and never takes a
+    batch slot. Raises NeverSendError when the list cannot be read.
     """
+    values = never_send_values()
     parsed = []
+    held = 0
     for raw in sys.stdin.read().splitlines():
         if "\t" not in raw:
             continue
@@ -223,7 +283,14 @@ def read_records():
         task, line = task.strip(), normalize(line)
         if not task or not line:
             continue
+        if withheld(task, line, values):
+            held += 1
+            continue
         parsed.append((task, line))
+    if held:
+        # Never the line or the listed value, only how many stayed here.
+        note("withheld %d line(s) that never leave this machine "
+             "(private-app or config/%s)" % (held, NEVER_SEND_NAME))
     if len(parsed) > MAX_LINES:
         note("scan carried %d dropped lines; looking at the newest %d"
              % (len(parsed), MAX_LINES))
@@ -303,7 +370,11 @@ def main():
     args = sys.argv[1:]
     dry_run = "--dry-run" in args
 
-    records = read_records()
+    try:
+        records = read_records()
+    except NeverSendError as error:
+        note("%s (nothing sent, promoting nothing)" % error)
+        return 2
     if not records:
         return 0
 
