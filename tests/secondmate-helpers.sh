@@ -41,8 +41,25 @@ case "${1:-}" in
     done
     exit 0
     ;;
-  has-session|new-session|kill-window)
+  has-session|new-session)
     printf '%s\n' "$*" >> "$FM_FAKE_TMUX_LOG"
+    exit 0
+    ;;
+  kill-window)
+    printf '%s\n' "$*" >> "$FM_FAKE_TMUX_LOG"
+    target=
+    previous=
+    for arg in "$@"; do
+      [ "$previous" = -t ] && target=$arg
+      previous=$arg
+    done
+    # The inventory records bare window names, so drop the session part.
+    target=${target##*:}
+    target=${target#=}
+    if [ -s "$window_log" ]; then
+      grep -Fvx -- "$target" "$window_log" > "$window_log.tmp" || true
+      mv "$window_log.tmp" "$window_log"
+    fi
     exit 0
     ;;
   send-keys)
@@ -69,6 +86,7 @@ case "${1:-}" in
       if [ "$prev" = -t ]; then session=$arg; break; fi
       prev=$arg
     done
+    session=${session#=}
     while IFS= read -r recorded; do
       [ -n "$recorded" ] || continue
       if [ -z "$session" ]; then

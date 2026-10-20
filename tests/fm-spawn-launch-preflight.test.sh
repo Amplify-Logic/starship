@@ -131,6 +131,11 @@ SH
 #!/usr/bin/env bash
 set -u
 printf '%s %s\n' "$(basename "$0")" "$*" >> "${FM_FAKE_PROBE_LOG:?}"
+# Cursor's launch resolver runs one bounded --help and needs its CLI identity.
+if [ "$(basename "$0")" = cursor-agent ] && [ "$*" = --help ]; then
+  printf 'Start the Cursor Agent\n'
+  exit 0
+fi
 [ "$#" -eq 1 ] && [ "$1" = "--version" ]
 SH
     chmod +x "$FAKEBIN_DIR/$launch_binary"

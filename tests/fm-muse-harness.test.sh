@@ -482,7 +482,13 @@ set -u
 case "${1:-}" in
   display-message) printf 'fakepane\n'; exit 0 ;;
   has-session) exit 0 ;;
-  list-panes|list-windows) printf 'fm-send:0\n'; exit 0 ;;
+  list-windows)
+    case "$*" in
+      *'#{window_id}'*'#{window_index}'*'#{window_name}'*) printf '@0|0|muse\n' ;;
+      *) printf '0\n' ;;
+    esac
+    exit 0 ;;
+  list-panes) printf '%%0\n'; exit 0 ;;
   send-keys)
     shift
     printf '%s\n' "$*" >> "$FM_FAKE_KEY_LOG"

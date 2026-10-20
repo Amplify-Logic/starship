@@ -133,7 +133,24 @@ case "${1:-}" in
     done
     exit 0
     ;;
-  has-session|new-session|kill-window|set-window-option) exit 0 ;;
+  kill-window)
+    # A killed window leaves the inventory, so exact endpoint membership reads
+    # it as gone.
+    target=
+    prev=
+    for a in "$@"; do
+      [ "$prev" != -t ] || target=$a
+      prev=$a
+    done
+    target=${target##*:}
+    target=${target#=}
+    if [ -f "$window_log" ]; then
+      grep -Fvx -- "$target" "$window_log" > "$window_log.tmp" || true
+      mv "$window_log.tmp" "$window_log"
+    fi
+    exit 0
+    ;;
+  has-session|new-session|set-window-option) exit 0 ;;
   send-keys)
     if [ -n "${FM_FAKE_LAUNCH_LOG:-}" ]; then
       prev=

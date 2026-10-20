@@ -523,6 +523,8 @@ write_fake_cursor_agent() {  # <path>
   mkdir -p "$(dirname "$1")"
   cat > "$1" <<'EOF'
 #!/usr/bin/env bash
+# Launch resolution runs one bounded --help and needs Cursor's CLI identity.
+[ "${1:-}" = --help ] && { printf 'Start the Cursor Agent\n'; exit 0; }
 [ "${1:-}" = --list-models ] || exit 1
 printf 'Available models\ncursor-grok-4.6-high - Cursor Grok 4.6\ncursor-grok-4.6-xhigh - Cursor Grok 4.6 Extra High\n'
 EOF
@@ -708,6 +710,8 @@ write_faithful_timeout() {  # <dir>
   mkdir -p "$1"
   cat > "$1/timeout" <<'EOF'
 #!/usr/bin/env bash
+# bin/fm-timeout-lib.sh passes GNU's -k <grace> before the duration.
+if [ "${1:-}" = -k ]; then shift 2; fi
 secs=$1
 shift
 if [ "$secs" -le 0 ] 2>/dev/null; then
