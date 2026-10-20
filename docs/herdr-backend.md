@@ -568,76 +568,6 @@ Any of these preserves the candidate and lets session startup continue with at m
 [`verification/runtime-backends.md`](verification/runtime-backends.md#workspace-removal-focus-safety) owns the active versioned evidence for the focus-flash test.
 [`verification/runtime-backends.md`](verification/runtime-backends.md#attached-foreground-viewer) owns the active versioned evidence and the re-run trigger for the attached-viewer test.
 
-## Status: supported
-
-Herdr is supported, with its own required CI lane, and is Starship's default for a fresh home on a Mac and inside WSL 2 on Windows.
-Select it by putting `herdr` in a local `config/backend` file, by exporting `FM_BACKEND=herdr`, or by telling the first mate in chat to use herdr.
-It can also be selected by runtime auto-detection when firstmate itself is running inside herdr and no explicit backend setting exists.
-Absent those three explicit settings, firstmate falls through to runtime auto-detection.
-When nothing is explicitly configured, `bin/fm-backend.sh`'s `fm_backend_detect` checks the runtime firstmate itself is executing inside: `$TMUX` (set inside every tmux pane, including a tmux pane nested inside a herdr pane) selects tmux and wins when present, `HERDR_ENV=1` (injected into every process herdr manages a pane for) selects herdr when `$TMUX` is absent, and cmux runtime signals select cmux only after those multiplexer markers are absent.
-See [`docs/cmux-backend.md`](cmux-backend.md#runtime-detection) for cmux's primary `CMUX_WORKSPACE_ID` marker and macOS-only fallback signals.
-An auto-detected herdr spawn stays silent, like an auto-detected tmux one; set `config/backend` or pass `--backend tmux` to opt out.
-Only when none of that resolves anything does firstmate fall back to the hard default, tmux.
-Absent `backend=` in a task's meta always means `tmux`; a herdr task carries an explicit `backend=herdr` line, while the experimental zellij, orca, and cmux adapters carry their own backend values.
-A herdr spawn refuses loudly if `herdr` or `jq` is missing, or if the installed herdr's protocol is older than the verified minimum (`fm_backend_herdr_version_check`).
-The managed human-presentation flow is additionally capability-gated (`fm_backend_herdr_presentation_capable`, protocol 16); below that it falls back to the prior label-based spawn flow instead of refusing - see "Presentation capability gate" below.
-
-## Worktree provider stays treehouse
-
-Herdr is a session provider only.
-Treehouse remains the worktree provider, exactly as it is for tmux.
-Herdr's own `worktree.*` operations (branch-based, pooling/lease-free) are never used by this adapter.
-
-## Home-workspace fallback and identity tokens
-
-This section details the fallback the ordinary launcher-bound placement above falls through to, and the identity tokens that make a home workspace unambiguous.
-
-With no Herdr ancestry to inherit, managed ship and scout tasks use one Herdr workspace per `(physical FM_HOME, physical project)` and one tab per task.
-The adapter binds a newly created workspace once with hidden `fm_owner` and `fm_project` tokens.
-A launcher workspace a spawn adopts gains only the hidden `fm_owner` token, so its workers stay visible to recovery without it ever becoming a project workspace; one that another home already owns, by token or by legacy home label, is left untouched.
-Each token is a versioned Git object hash of the complete physical path, keeping the immutable identity below Herdr's metadata value limit without storing a truncatable raw path.
-Workspace lookup exact-matches both tokens and never identifies or adopts managed work by its visible label.
-The human project label is mutable presentation and may include prioritized aggregate state without weakening ownership.
-A managed workspace holding tasks from several projects is labeled neutrally over all of them rather than after any one project; `bin/fm-visible-status.sh`'s header owns the exact label.
-
-This container shape is what [`docs/herdr-layout-preview.md`](herdr-layout-preview.md) proposes replacing with upstream's one-workspace-per-worker unit.
-That preview is unapproved and changes nothing here until the captain accepts it.
-
-The project display name comes from `bin/fm-project-display-name.sh`, the single resolver owner.
-It has explicit brand and acronym casing overrides and labels its generic title-cased result as a synthesized fallback rather than claiming a repository basename is authoritative human naming.
-`sample-product` resolves to `Sample Product`, and `api-platform` resolves to `API Platform` via its explicit override.
-
-A task's visible tab title is separate from its durable identity.
-New panes carry hidden `fm_task_id`, while the recorded workspace, tab, and pane ids remain the operational targets.
-The tab reads `WORKER · <human outcome> · <authoritative state>`.
-`bin/fm-visible-title.sh` is the single owner of that title format; both the spawn path and the `bin/fm-visible-status.sh` tab rename build the title through it, so the title a worker is spawned with and the title a later refresh renames it to cannot drift apart.
-`bin/fm-task-outcome.sh` owns outcome precedence: explicit `fm-spawn.sh --outcome`, structured backlog title, then a safe humanized task-id fallback.
-The spawn path calls the outcome resolver, the title owner, and the project display-name resolver only through guarded best-effort hooks: with those fork scripts absent a herdr spawn still succeeds and degrades to upstream's behavior, the opaque window name as the tab title, the plain directory basename as the project label, and an empty `outcome=` value in the task's meta (pinned by `tests/fm-spawn-herdr-presentation.test.sh`).
-`bin/fm-visible-status.sh` reads runtime/model from task metadata (and, for cursor, from the live pane footer when present), branch or detached state from the recorded isolated copy, and lifecycle state from `bin/fm-crew-state.sh`.
-It never derives lifecycle state from the append-only status tail or Herdr's native activity alone.
-
-### Legacy home labels
-
-The former workspace labels remain the compatibility vocabulary: `firstmate` for a primary home and `2ndmate-<id>` for a marked secondmate home.
-A secondmate primary pane still uses that home workspace because it has no physical project of its own.
-Its tab keeps the legacy `fm-<id>` title too: `bin/fm-visible-status.sh` skips every `kind=secondmate` task, so the WORKER convention never applies to a secondmate primary.
-New project workers spawned from either a primary or secondmate home use the token-owned project workspace contract instead.
-
-Recovery scans token-owned workspaces whose `fm_owner` equals the active physical home, including adopted launcher workspaces, and reads hidden `fm_task_id` from each pane.
-It also scans that home's un-tokened legacy workspace for visible `fm-<id>` tabs.
-It never claims a tokened workspace owned by another home, even when the visible project label collides.
-
-### Focus behavior: never steals the captain's attention
-
-Verified empirically against the real binary, in an isolated session:
-
-- `herdr workspace create` and `herdr tab create` do NOT focus by default once at least one workspace already exists in the session - matching (and no worse than) the pre-P3 adapter's already-flagless calls.
-- The ONE exception: the very first workspace ever created in a brand-new, empty herdr session focuses regardless, because herdr always needs something focused to attach a client to - there is nothing to "not steal focus from" at that point.
-- `--focus` reliably DOES focus (both the workspace and, for a tab, the pane within it) - confirming the flag has real effect and isn't a no-op, so its absence is meaningful.
-
-Both `fm_backend_herdr_workspace_ensure`'s workspace create and `fm_backend_herdr_create_task`'s tab create now pass `--no-focus` unconditionally.
-This is defense in depth rather than a behavior change in the already-safe steady state: it guards workspace and tab creation after the session already has a focused workspace, but it cannot prevent herdr's unavoidable first-workspace focus in a brand-new empty session.
-Once a workspace exists, spawning - primary or secondmate, workspace or tab - should not switch whatever space the captain is actively watching.
 ## Project groups
 
 Project groups are an opt-in display layer that shows each task's project group and status in Herdr's sidebar and sorts Herdr's agents list by group and then by status.
@@ -758,7 +688,76 @@ The tags, the agents view, and the placement are covered by offline tests agains
 They were also exercised against a real Herdr 0.9.5 server (protocol 22) in a guarded lab session: after one watcher poll `herdr pane list` showed the `fm_*` tokens on each task pane, the agents list header read `projects` with tasks ordered by group and then status, a newly spawned projected task landed after the other tasks of its group with only that workspace moving and no focus change, and `fm-herdr-groups.sh clear` removed the tokens and the view.
 To repeat the check on a live session, turn the feature on, wait one watcher poll, and confirm the same four results.
 
-## Default-tab prune safety
+## Status: supported
+
+Herdr is supported, with its own required CI lane, and is Starship's default for a fresh home on a Mac and inside WSL 2 on Windows.
+Select it by putting `herdr` in a local `config/backend` file, by exporting `FM_BACKEND=herdr`, or by telling the first mate in chat to use herdr.
+It can also be selected by runtime auto-detection when firstmate itself is running inside herdr and no explicit backend setting exists.
+Absent those three explicit settings, firstmate falls through to runtime auto-detection.
+When nothing is explicitly configured, `bin/fm-backend.sh`'s `fm_backend_detect` checks the runtime firstmate itself is executing inside: `$TMUX` (set inside every tmux pane, including a tmux pane nested inside a herdr pane) selects tmux and wins when present, `HERDR_ENV=1` (injected into every process herdr manages a pane for) selects herdr when `$TMUX` is absent, and cmux runtime signals select cmux only after those multiplexer markers are absent.
+See [`docs/cmux-backend.md`](cmux-backend.md#runtime-detection) for cmux's primary `CMUX_WORKSPACE_ID` marker and macOS-only fallback signals.
+An auto-detected herdr spawn stays silent, like an auto-detected tmux one; set `config/backend` or pass `--backend tmux` to opt out.
+Only when none of that resolves anything does firstmate fall back to the hard default, tmux.
+Absent `backend=` in a task's meta always means `tmux`; a herdr task carries an explicit `backend=herdr` line, while the experimental zellij, orca, cmux, and paseo adapters carry their own backend values.
+A herdr spawn refuses loudly if `herdr` or `jq` is missing, or if the installed herdr's protocol is older than the verified minimum (`fm_backend_herdr_version_check`).
+The managed human-presentation flow is additionally capability-gated (`fm_backend_herdr_presentation_capable`, protocol 16); below that it falls back to the prior label-based spawn flow instead of refusing - see "Presentation capability gate" below.
+
+## Worktree provider stays treehouse
+
+Herdr is a session provider only.
+Treehouse remains the worktree provider, exactly as it is for tmux.
+Herdr's own `worktree.*` operations (branch-based, pooling/lease-free) are never used by this adapter.
+
+## Home-workspace fallback and identity tokens
+
+This section details the fallback the ordinary launcher-bound placement above falls through to, and the identity tokens that make a home workspace unambiguous.
+
+With no Herdr ancestry to inherit, managed ship and scout tasks use one Herdr workspace per `(physical FM_HOME, physical project)` and one tab per task.
+The adapter binds a newly created workspace once with hidden `fm_owner` and `fm_project` tokens.
+A launcher workspace a spawn adopts gains only the hidden `fm_owner` token, so its workers stay visible to recovery without it ever becoming a project workspace; one that another home already owns, by token or by legacy home label, is left untouched.
+Each token is a versioned Git object hash of the complete physical path, keeping the immutable identity below Herdr's metadata value limit without storing a truncatable raw path.
+Workspace lookup exact-matches both tokens and never identifies or adopts managed work by its visible label.
+The human project label is mutable presentation and may include prioritized aggregate state without weakening ownership.
+A managed workspace holding tasks from several projects is labeled neutrally over all of them rather than after any one project; `bin/fm-visible-status.sh`'s header owns the exact label.
+
+This container shape is what [`docs/herdr-layout-preview.md`](herdr-layout-preview.md) proposes replacing with upstream's one-workspace-per-worker unit.
+That preview is unapproved and changes nothing here until the captain accepts it.
+
+The project display name comes from `bin/fm-project-display-name.sh`, the single resolver owner.
+It has explicit brand and acronym casing overrides and labels its generic title-cased result as a synthesized fallback rather than claiming a repository basename is authoritative human naming.
+`sample-product` resolves to `Sample Product`, and `api-platform` resolves to `API Platform` via its explicit override.
+
+A task's visible tab title is separate from its durable identity.
+New panes carry hidden `fm_task_id`, while the recorded workspace, tab, and pane ids remain the operational targets.
+The tab reads `WORKER · <human outcome> · <authoritative state>`.
+`bin/fm-visible-title.sh` is the single owner of that title format; both the spawn path and the `bin/fm-visible-status.sh` tab rename build the title through it, so the title a worker is spawned with and the title a later refresh renames it to cannot drift apart.
+`bin/fm-task-outcome.sh` owns outcome precedence: explicit `fm-spawn.sh --outcome`, structured backlog title, then a safe humanized task-id fallback.
+The spawn path calls the outcome resolver, the title owner, and the project display-name resolver only through guarded best-effort hooks: with those fork scripts absent a herdr spawn still succeeds and degrades to upstream's behavior, the opaque window name as the tab title, the plain directory basename as the project label, and an empty `outcome=` value in the task's meta (pinned by `tests/fm-spawn-herdr-presentation.test.sh`).
+`bin/fm-visible-status.sh` reads runtime/model from task metadata (and, for cursor, from the live pane footer when present), branch or detached state from the recorded isolated copy, and lifecycle state from `bin/fm-crew-state.sh`.
+It never derives lifecycle state from the append-only status tail or Herdr's native activity alone.
+
+### Legacy home labels
+
+The former workspace labels remain the compatibility vocabulary: `firstmate` for a primary home and `2ndmate-<id>` for a marked secondmate home.
+A secondmate primary pane still uses that home workspace because it has no physical project of its own.
+Its tab keeps the legacy `fm-<id>` title too: `bin/fm-visible-status.sh` skips every `kind=secondmate` task, so the WORKER convention never applies to a secondmate primary.
+New project workers spawned from either a primary or secondmate home use the token-owned project workspace contract instead.
+
+Recovery scans token-owned workspaces whose `fm_owner` equals the active physical home, including adopted launcher workspaces, and reads hidden `fm_task_id` from each pane.
+It also scans that home's un-tokened legacy workspace for visible `fm-<id>` tabs.
+It never claims a tokened workspace owned by another home, even when the visible project label collides.
+
+### Focus behavior: never steals the captain's attention
+
+Verified empirically against the real binary, in an isolated session:
+
+- `herdr workspace create` and `herdr tab create` do NOT focus by default once at least one workspace already exists in the session - matching (and no worse than) the pre-P3 adapter's already-flagless calls.
+- The ONE exception: the very first workspace ever created in a brand-new, empty herdr session focuses regardless, because herdr always needs something focused to attach a client to - there is nothing to "not steal focus from" at that point.
+- `--focus` reliably DOES focus (both the workspace and, for a tab, the pane within it) - confirming the flag has real effect and isn't a no-op, so its absence is meaningful.
+
+Both `fm_backend_herdr_workspace_ensure`'s workspace create and `fm_backend_herdr_create_task`'s tab create now pass `--no-focus` unconditionally.
+This is defense in depth rather than a behavior change in the already-safe steady state: it guards workspace and tab creation after the session already has a focused workspace, but it cannot prevent herdr's unavoidable first-workspace focus in a brand-new empty session.
+Once a workspace exists, spawning - primary or secondmate, workspace or tab - should not switch whatever space the captain is actively watching.
 
 ### Label collisions do not identify managed work
 

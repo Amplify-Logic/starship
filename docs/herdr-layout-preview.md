@@ -213,11 +213,9 @@ That is still worth having, but it is less than what the three project rows give
 They appear in the order they started.
 Because every row names its project this is a scanning cost rather than a correctness problem, and sorting by urgency is not available either, for the same reason: the list order cannot be controlled.
 
-**The upstream ask is worth raising for real grouping and sorting.**
-Herdr would need to let a row declare a parent, or let the list be sorted, so grouping does not depend on creation order.
-That is a small, well-defined ask and it benefits upstream's own supervisor tree, which has exactly the same weakness: their `└ ` child rows drift away from their parent the same way AFTER-A's did.
-Worth raising with Kun Chen; worth doing regardless of whether he takes it.
-It is no longer the only way to get counts back, though, because the pinned summary row above does not need it, and it stays the only way to get a per-project breakdown back at a scale where one row cannot hold one.
+**Upstream has since shipped grouping and sorting as an opt-in.**
+Upstream's [project groups](herdr-backend.md#project-groups), now merged into this fork and off by default, tag each task with its group and status, sort Herdr's agents list by group and then status, and place a new task inside its group instead of at the end.
+This preview predates that feature and its captures were not re-run with it on, so the ordering cost above describes the default layout only.
 
 ## What is in this branch
 
