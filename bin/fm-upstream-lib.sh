@@ -72,6 +72,51 @@ FM_UPSTREAM_LEDGER_SCAN_LIMIT_DEFAULT="${FM_UPSTREAM_LEDGER_SCAN_LIMIT_DEFAULT:-
 # Separates the fork-message corpus from the upstream commit list on one pipe.
 FM_UPSTREAM_LEDGER_SPLIT='<<<FM_UPSTREAM_LEDGER_SPLIT>>>'
 
+# Read one key from the private config/upstream-watch file.
+# The file holds one `key = value` per line; blank lines and # comments are
+# ignored. Known keys:
+#   interval_seconds = N   standing-watch cadence in seconds (default weekly)
+#   catchup = on|off       opt in to scheduled catch-up preparation (default off)
+# fm_upstream_watch_config <file> <key> prints the key's value, or nothing when
+# the file or the key is absent. An unknown key, a duplicate key, or an invalid
+# value prints the reason on stderr and returns 2, so every reader refuses the
+# same malformed file instead of each parsing it differently.
+fm_upstream_watch_config() {
+  local file=$1 want=$2 line key value seen='' found=''
+  [ -f "$file" ] || return 0
+  while IFS= read -r line || [ -n "$line" ]; do
+    line=$(printf '%s\n' "$line" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')
+    case "$line" in ''|'#'*) continue ;; esac
+    case "$line" in
+      *=*) ;;
+      *) printf 'config/upstream-watch: not a key = value line: %s\n' "$line" >&2; return 2 ;;
+    esac
+    key=$(printf '%s\n' "${line%%=*}" | tr -d '[:space:]')
+    value=$(printf '%s\n' "${line#*=}" | tr -d '[:space:]')
+    case "$key" in
+      interval_seconds)
+        case "$value" in ''|*[!0-9]*|0)
+          printf 'config/upstream-watch: interval_seconds must be a positive integer: %s\n' "$value" >&2
+          return 2 ;;
+        esac
+        ;;
+      catchup)
+        case "$value" in on|off) ;; *)
+          printf 'config/upstream-watch: catchup must be on or off: %s\n' "$value" >&2
+          return 2 ;;
+        esac
+        ;;
+      *) printf 'config/upstream-watch: unknown key: %s\n' "$key" >&2; return 2 ;;
+    esac
+    case " $seen " in
+      *" $key "*) printf 'config/upstream-watch: duplicate %s setting\n' "$key" >&2; return 2 ;;
+    esac
+    seen="$seen $key"
+    [ "$key" != "$want" ] || found=$value
+  done <"$file"
+  [ -z "$found" ] || printf '%s\n' "$found"
+}
+
 # Normalize a remote URL for equality checks: strip trailing .git and slash,
 # and peel a file:// scheme so path-form and file-form remotes compare equal.
 fm_upstream_normalize_url() {

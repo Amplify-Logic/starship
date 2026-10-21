@@ -15,9 +15,12 @@
 # bin/fm-launchd-schedule-lib.sh; this script owns only the cadence.
 # The default interval is 604800 seconds (weekly).
 # Override it with FM_UPSTREAM_WATCH_INTERVAL_SECONDS or a private
-# config/upstream-watch line: `interval_seconds = N`.
-# launchd calls bin/fm-upstream-watch.sh run; generation remains separately
-# callable by a future private-repository workflow.
+# config/upstream-watch line: `interval_seconds = N` (bin/fm-upstream-lib.sh's
+# fm_upstream_watch_config owns that file's format).
+# The job runs with the installer's PATH, so reinstall after moving a tool.
+# launchd calls bin/fm-upstream-watch.sh run, which also prepares a catch-up
+# plan when the home has opted in with `catchup = on`; generation remains
+# separately callable by a future private-repository workflow.
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -26,6 +29,8 @@ FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$ROOT}}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 DEFAULT_INTERVAL=604800
+# shellcheck source=bin/fm-upstream-lib.sh disable=SC1091
+. "$SCRIPT_DIR/fm-upstream-lib.sh"
 
 usage() {
   awk '
@@ -41,19 +46,10 @@ die() {
 }
 
 interval_seconds() {
-  local value=${FM_UPSTREAM_WATCH_INTERVAL_SECONDS:-} line key parsed
-  if [ -z "$value" ] && [ -f "$CONFIG/upstream-watch" ]; then
-    while IFS= read -r line; do
-      line=$(printf '%s\n' "$line" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')
-      case "$line" in ''|'#'*) continue ;; esac
-      key=${line%%=*}
-      parsed=${line#*=}
-      key=$(printf '%s\n' "$key" | tr -d '[:space:]')
-      parsed=$(printf '%s\n' "$parsed" | tr -d '[:space:]')
-      [ "$key" = interval_seconds ] || die "unknown config key: $key"
-      [ -z "$value" ] || die 'duplicate interval_seconds setting'
-      value=$parsed
-    done <"$CONFIG/upstream-watch"
+  local value=${FM_UPSTREAM_WATCH_INTERVAL_SECONDS:-}
+  if [ -z "$value" ]; then
+    value=$(fm_upstream_watch_config "$CONFIG/upstream-watch" interval_seconds) \
+      || die 'config/upstream-watch is invalid'
   fi
   [ -n "$value" ] || value=$DEFAULT_INTERVAL
   case "$value" in ''|*[!0-9]*|0) die "interval_seconds must be a positive integer: $value" ;; esac
@@ -69,6 +65,10 @@ FM_LAUNCHD_LOG_DIR="$DATA/upstream-watch"
 FM_LAUNCHD_AGENTS_DIR=${FM_UPSTREAM_WATCH_LAUNCH_AGENTS_DIR:-$HOME/Library/LaunchAgents}
 FM_LAUNCHD_LAUNCHCTL=${FM_UPSTREAM_WATCH_LAUNCHCTL:-launchctl}
 FM_LAUNCHD_REMOVE_NEEDS_DARWIN=true
+# The installer's PATH, so the report's tool-version section finds the same
+# Herdr, treehouse, no-mistakes, and AXI binaries the home itself runs rather
+# than reporting them missing under launchd's minimal default PATH.
+FM_LAUNCHD_PATH=$PATH
 
 # shellcheck source=bin/fm-launchd-schedule-lib.sh disable=SC1091
 . "$SCRIPT_DIR/fm-launchd-schedule-lib.sh"

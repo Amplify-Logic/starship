@@ -3042,7 +3042,7 @@ The shared staleness proof lives in `bin/fm-lock-lib.sh`, which both `fm-teardow
 `bin/fm-upstream-watch.sh run` writes dated reports, its watermark, and a standalone bare git cache under private gitignored `data/upstream-watch/`.
 The cache shares neither objects nor refs with the live checkout, and every network fetch runs inside that cache.
 `bin/fm-upstream-watch-generate.sh` is the fetch-free report generator that a future private-repository workflow can call without retaining the local delivery.
-Reports contain only public upstream commit data and tracked fork-surface information, never captain preferences, backlog contents, project records, or other private operational context.
+Reports contain only public upstream commit data, tracked fork-surface information, and installed tool versions, never captain preferences, backlog contents, project records, or other private operational context.
 The session-start bootstrap section prints `UPSTREAM_REPORT: new private report at <path>` until the report is read and acknowledged with `bin/fm-upstream-watch.sh acknowledge <path>`.
 
 `bin/fm-upstream-watch-schedule.sh` owns the inspectable macOS launchd schedule, written through the shared `bin/fm-launchd-schedule-lib.sh`.
@@ -3050,6 +3050,20 @@ Run `render` to inspect the complete definition, `install` to write and load it,
 The default cadence is 604800 seconds (weekly).
 Set `interval_seconds = N` in private `config/upstream-watch`, or export `FM_UPSTREAM_WATCH_INTERVAL_SECONDS=N`, to override it.
 The generator and delivery scripts never port, merge, rebase, or publish anything.
+
+Every report ends with a tool-version section from `bin/fm-stack-versions.sh`: Herdr, treehouse, no-mistakes, and the AXI tools, each installed version against its latest release and the version Starship's own pins expect.
+It only reports and never installs or upgrades anything; it flags Herdr and treehouse upgrades as needing a quiet window with no workers running.
+The scheduled job runs with the PATH it was installed from, so reinstall the schedule after moving one of those tools.
+
+### Catching up with the upstream
+
+Catch-up is off by default for every home.
+A home opts in with a `catchup = on` line in its own `config/upstream-watch`, beside any `interval_seconds` line; `bin/fm-upstream-lib.sh`'s `fm_upstream_watch_config` owns the file's format and refuses unknown keys and values.
+Opted in, a scheduled run that finds new upstream work adds a catch-up plan to its report: this home's own commits the upstream lacks, the files both sides changed, and the files a trial merge would conflict on.
+`bin/fm-upstream-watch.sh catchup` runs the same procedure on demand, with no opt-in, and plans every outstanding upstream commit.
+Whichever run wrote the plan, session start prints `UPSTREAM_CATCHUP: catch-up ready to prepare, private report at <path>` until the report is acknowledged, and `bin/fm-upstream-watch.sh arm` registers a watcher check that tells a running firstmate once per prepared catch-up (`disarm` retires it).
+Neither form merges anything: firstmate prepares the catch-up as a real merge on a branch through the home's normal delivery path, and the captain approves the merge.
+The `catchup` skill owns turning it on and off, the merge rules, and landing.
 
 ## Dropped-threads digest (config/dropped-threads)
 

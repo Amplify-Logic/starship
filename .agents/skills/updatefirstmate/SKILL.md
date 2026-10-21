@@ -17,6 +17,7 @@ Only `AGENTS.md`, `bin/`, `hooks/`, and `.agents/skills/` are a running firstmat
 A home with a private add-on (`config/addon`, docs/configuration.md "Private add-on") also runs that add-on's skills and hooks, so the update brings the add-on along.
 This skill performs that pull for the running main firstmate and every secondmate, without disturbing any in-flight work.
 Updating is consumption, not publication: it only pulls from upstream, so every home runs it regardless of role, and the firstmate-repository publication boundary (`firstmate-self-repo`) never applies to it.
+It never brings a fork's upstream work into the home: catching a fork up with its own upstream is a real merge that the `catchup` skill owns.
 
 Pulling the files is only half of it.
 A running agent holds `AGENTS.md` and every skill it has already loaded frozen from the moment it launched, and no verified harness offers a reload, so new bytes on disk change nothing for it until it starts a fresh conversation.

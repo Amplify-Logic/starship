@@ -416,6 +416,7 @@ Firstmate's shared instruction surface reaches running homes only after it lands
 Only `AGENTS.md`, `bin/`, `hooks/`, and `.agents/skills/` are loaded by a running firstmate; public `skills/` is an installer-facing surface.
 When the captain invokes `/updatefirstmate` or asks to update firstmate or Starship, load the `/updatefirstmate` skill.
 The skill owns the guarded fleet update and restart procedure; under `projects/` it only fast-forwards a configured private add-on checkout (`bin/fm-addon.sh`).
+Catching a fork up with its own upstream is a separate request: load the `catchup` skill when the captain invokes `/catchup` or asks to catch up Starship, or a catch-up notice arrives.
 
 ## 13. Agent-only reference skills
 

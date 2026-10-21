@@ -116,6 +116,7 @@ Some skills are commands you type:
 | `/quiet` | You are here but want fewer interruptions; only things that need you come through |
 | `/stow` | File what this session learned and tidy the memory files |
 | `/updatefirstmate` | Pull the latest shared firstmate and restart cleanly |
+| `/catchup` | Catch this home up with its own upstream, on demand or weekly once you opt in; stops for you to approve the merge |
 
 The [README](../README.md#built-in-skills) owns the full list.
 Other skills load automatically: the first mate's instructions name the situation for each, such as before starting a worker or when a worker reports a pull request.

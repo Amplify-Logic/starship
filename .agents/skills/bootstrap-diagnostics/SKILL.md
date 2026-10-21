@@ -2,7 +2,7 @@
 name: bootstrap-diagnostics
 description: >-
   Agent-only handling playbook for session-start bootstrap diagnostics.
-  Use whenever the session-start digest's bootstrap or network-checks section prints an actionable diagnostic line - MISSING, MISSING_MANUAL, PRESENTATION_UNAVAILABLE, BACKEND_INVALID, NEEDS_GH_AUTH, TANGLE, STARTUP_MEMORY_BUDGET, CREW_DISPATCH invalid, FLEET_SYNC, NETWORK_CHECKS, HOME_SUMMARY, BACKLOG_RECONCILE, SECONDMATE_SYNC, SECONDMATE_LIVENESS, SECONDMATE_HANDOFF, NUDGE_SECONDMATES, CONFIG_REREAD, ACCOUNTS invalid, PR_CHECK_MIGRATION, TOOLCHAIN_DRIFT, HOST_ENV, UPSTREAM, UPSTREAM_REPORT, or FMX - or reports that an interrupted backlog cleanup may have left an endpoint or local copy, or when a standalone bin/fm-bootstrap.sh or bin/fm-startup-network.sh run prints one of those lines.
+  Use whenever the session-start digest's bootstrap or network-checks section prints an actionable diagnostic line - MISSING, MISSING_MANUAL, PRESENTATION_UNAVAILABLE, BACKEND_INVALID, NEEDS_GH_AUTH, TANGLE, STARTUP_MEMORY_BUDGET, CREW_DISPATCH invalid, FLEET_SYNC, NETWORK_CHECKS, HOME_SUMMARY, BACKLOG_RECONCILE, SECONDMATE_SYNC, SECONDMATE_LIVENESS, SECONDMATE_HANDOFF, NUDGE_SECONDMATES, CONFIG_REREAD, ACCOUNTS invalid, PR_CHECK_MIGRATION, TOOLCHAIN_DRIFT, HOST_ENV, UPSTREAM, UPSTREAM_REPORT, UPSTREAM_CATCHUP, or FMX - or reports that an interrupted backlog cleanup may have left an endpoint or local copy, or when a standalone bin/fm-bootstrap.sh or bin/fm-startup-network.sh run prints one of those lines.
   A silent bootstrap section, or any other BOOTSTRAP_INFO fact, means no skill load.
 user-invocable: false
 metadata:
@@ -104,11 +104,14 @@ When any diagnostic needs captain attention, report the plain consequence and re
   Tell the captain the outstanding count, the upstream URL, and the listed subjects so they can judge urgency; the raw figure is bookkeeping and rarely worth relaying.
   A commit the fork has delivered without leaving any machine-readable reference belongs in `docs/upstream-ported-ledger.txt` as one reviewable record, which is also how a wrong match is retired; never replace the derivation with a stored total.
   Do not merge, rebase, or fast-forward from upstream yourself; `/updatefirstmate` and `bin/fm-update.sh` only advance from origin and cannot deliver upstream work on a fork.
-  Wait for an explicit captain decision on whether and how to take the upstream commits.
+  Wait for an explicit captain decision on whether and how to take the upstream commits; taking them is a catch-up through the `catchup` skill.
   Absence of this line is normal for a non-fork home, an offline probe, or a current tip - never invent drift.
 - `UPSTREAM_REPORT: new private report at <path>` - the standing weekly upstream watch produced a new private report.
-  Read the report, relay only its new gains and named fork collisions, and make no porting change without a separate captain decision.
+  Read the report, relay its new gains and named fork collisions, and make no porting change without a separate captain decision.
+  Also relay its tool-version `Behind:` line in plain words and install nothing, following the `catchup` skill's Tool versions rules.
   After reading, run `bin/fm-upstream-watch.sh acknowledge <path>` so the same report does not surface at later session starts.
-  A one-line "nothing to do" report needs only that one-line outcome, never padding from older reports.
+  A quiet report's upstream part is one "nothing to do" line, followed by the tool versions; relay that one-line outcome and the tool versions, never padding from older reports.
+- `UPSTREAM_CATCHUP: catch-up ready to prepare, private report at <path>` - a scheduled run on a home opted in to the weekly catch-up, or an earlier on-demand `bin/fm-upstream-watch.sh catchup` run, found new upstream work and wrote a catch-up plan that is still waiting to be prepared.
+  Load the `catchup` skill, which owns preparing, landing, and acknowledging it.
 - `FMX: X mode on ...` / `FMX: X mode off ...` - bootstrap confirmed or removed the local Relay poll artifacts (`docs/configuration.md` "Relay (.env)"); the emitted line still carries Relay's former `X mode` wording.
   Only when a running watcher needs the cadence transition applied immediately, restart the home-scoped watcher through the emitted harness supervision protocol; bootstrap deliberately never restarts the watcher itself.

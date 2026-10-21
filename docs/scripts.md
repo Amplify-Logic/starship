@@ -250,6 +250,7 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-visible-title.sh`    | Build the human WORKER tab title from a resolved outcome and state label, the single owner of that format |
 | `fm-visible-status.sh`   | Project authoritative worker details onto Herdr presentation metadata                |
 | `fm-upstream-lib.sh`     | Read-only fork upstream-drift detection, ledger-subtracted so the count falls as batches land (`UPSTREAM:`) |
+| `fm-stack-versions.sh`   | Report-only check of each stack tool's installed version (Herdr, treehouse, no-mistakes, the AXI tools) against its latest release and Starship's pins, flagging Herdr and treehouse upgrades for a quiet window |
 | `fm-toolchain-lib.sh`    | Read-only runtime version-drift detection against `docs/toolchain-manifest.tsv`, fail-open (`TOOLCHAIN_DRIFT:`) |
 | `fm-secondmate-registry-lib.sh` | Shared `data/secondmates.md` record parser and strict/scoped binding validator |
 | `fm-durable-path-lib.sh` | Shared normalization of relative durable directory inputs to absolute paths          |

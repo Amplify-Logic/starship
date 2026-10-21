@@ -3,10 +3,17 @@
 #
 # Usage:
 #   fm-upstream-watch-generate.sh --git-dir DIR --base REF --tip REF \
-#     --ledger FILE [--watermark SHA] [--fork-root DIR] [--upstream-url URL]
+#     --ledger FILE [--watermark SHA] [--fork-root DIR] [--upstream-url URL] \
+#     [--catchup-plan]
 #
 # This generator is deliberately separate from delivery and NEVER fetches,
 # updates a ref, writes a watermark, or ports work.
+# --catchup-plan appends a catch-up plan whenever there is new work: this
+# home's own commits the upstream lacks, the files both sides changed since
+# they last met, and the files a trial merge of TIP into BASE would conflict
+# on. The trial merge is `git merge-tree --write-tree`, which needs git 2.38 or
+# newer and writes only unreferenced tree objects into DIR; it touches no ref,
+# index, or working tree.
 # bin/fm-upstream-watch.sh owns the local private delivery and fetches only into
 # its standalone bare cache under data/upstream-watch/cache.git, which shares no
 # object store or refs with the live checkout.
@@ -28,6 +35,7 @@ LEDGER=
 WATERMARK=
 FORK_ROOT=
 UPSTREAM_URL=
+CATCHUP_PLAN=0
 SCAN_LIMIT=${FM_UPSTREAM_LEDGER_SCAN_LIMIT:-$FM_UPSTREAM_LEDGER_SCAN_LIMIT_DEFAULT}
 
 usage() {
@@ -52,6 +60,7 @@ while [ "$#" -gt 0 ]; do
     --watermark) [ "$#" -ge 2 ] || die '--watermark requires a value'; WATERMARK=$2; shift 2 ;;
     --fork-root) [ "$#" -ge 2 ] || die '--fork-root requires a value'; FORK_ROOT=$2; shift 2 ;;
     --upstream-url) [ "$#" -ge 2 ] || die '--upstream-url requires a value'; UPSTREAM_URL=$2; shift 2 ;;
+    --catchup-plan) CATCHUP_PLAN=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) die "unknown argument: $1" ;;
   esac
@@ -206,5 +215,70 @@ while IFS=$'\t' read -r sha subject; do
     printf '  - Source: commit %s%s%s\n' "$TICK" "$sha" "$TICK"
   fi
 done <"$NEW"
+
+plural() {
+  if [ "$1" = 1 ]; then printf '1 %s' "$2"; else printf '%s %ss' "$1" "$2"; fi
+}
+
+# Print up to <limit> lines from stdin as Markdown bullets, then how many more.
+bullets() {
+  local limit=$1
+  awk -v limit="$limit" '
+    NF { n++; if (n <= limit) print "- " $0 }
+    END { if (n > limit) printf "- and %d more.\n", n - limit }
+  '
+}
+
+catchup_plan() {
+  local own_total both conflicts status preview
+  printf '\n## Catch-up plan\n\n'
+  if [ -n "$UPSTREAM_URL" ]; then
+    printf 'Catch up to upstream %s through %s%s%s.\n' "$UPSTREAM_URL" "$TICK" "$(git -C "$GIT_DIR" rev-parse "$TIP")" "$TICK"
+  else
+    printf 'Catch up to upstream commit %s%s%s.\n' "$TICK" "$(git -C "$GIT_DIR" rev-parse "$TIP")" "$TICK"
+  fi
+  if [ -z "$MERGE_BASE" ]; then
+    printf 'This home and the upstream share no history, so there is no catch-up merge to prepare.\n'
+    return 0
+  fi
+  printf 'They last met at %s%s%s.\n\n' "$TICK" "${MERGE_BASE:0:12}" "$TICK"
+
+  own_total=$(git -C "$GIT_DIR" rev-list --count --no-merges "$TIP..$BASE")
+  printf "This home's own changes: %s the upstream does not have, newest first.\n" "$(plural "$own_total" commit)"
+  if [ "$own_total" -gt 0 ]; then
+    git -C "$GIT_DIR" log --no-merges --format="${TICK}%h${TICK} %s" "$TIP..$BASE" \
+      | awk '{ if (length($0) > 120) $0 = substr($0, 1, 117) "..."; print }' \
+      | bullets 60
+  fi
+
+  both="$TMP/both-sides"
+  comm -12 \
+    <(git -C "$GIT_DIR" diff --name-only "$MERGE_BASE..$BASE" | sort -u) \
+    <(git -C "$GIT_DIR" diff --name-only "$MERGE_BASE..$TIP" | sort -u) >"$both"
+  printf '\nFiles the upstream changes that this home has also changed since they last met: %s.\n' \
+    "$(grep -c '[^[:space:]]' "$both" || true)"
+  bullets 80 <"$both"
+
+  conflicts="$TMP/conflicts"
+  preview=0
+  git -C "$GIT_DIR" merge-tree --write-tree --name-only --no-messages "$BASE" "$TIP" \
+    >"$TMP/merge-tree" 2>/dev/null && status=0 || status=$?
+  case "$status" in
+    0|1)
+      preview=1
+      tail -n +2 "$TMP/merge-tree" | awk 'NF && !seen[$0]++' >"$conflicts"
+      ;;
+  esac
+  if [ "$preview" -eq 0 ]; then
+    printf '\nA trial merge could not run here (it needs git 2.38 or newer), so expected conflicts are unknown.\n'
+  elif [ -s "$conflicts" ]; then
+    printf '\nA trial merge conflicts in %s:\n' "$(plural "$(grep -c '[^[:space:]]' "$conflicts" || true)" file)"
+    bullets 80 <"$conflicts"
+  else
+    printf '\nA trial merge found no conflicts.\n'
+  fi
+}
+
+[ "$CATCHUP_PLAN" -eq 0 ] || catchup_plan
 
 printf '\nThis is a decision report only. Nothing was ported, merged, rebased, or changed.\n'
