@@ -100,7 +100,7 @@ Firstmate's wrapper still matters: crewmates route every `ask-user` finding to f
 [`docs/configuration.md`](docs/configuration.md#gate-defaults-no-mistakesyaml) owns the tracked `.no-mistakes.yaml` gate defaults.
 The `firstmate-coding-guidelines` skill owns the rule that local no-mistakes Test stays intent-targeted rather than configuring `commands.test`.
 Verify the same way the gate does: reach for `bin/fm-test-run.sh` with the subjects you care about rather than chaining `bash tests/a.test.sh && bash tests/b.test.sh`, because a list of script paths gets the same bounded concurrency as `--changed`.
-The pipeline publishes that evidence itself, so never hand-commit `.no-mistakes/` paths onto a feature branch; CI rejects them as tracked personal fleet paths.
+The pipeline keeps evidence files and media on the local machine because this repository is public: they are never committed to a branch or uploaded to the PR, and only a short inline result line reaches the public PR description, so never hand-commit `.no-mistakes/` paths onto any branch; CI rejects them as tracked personal fleet paths.
 
 Check and test the toolbelt before pushing:
 
