@@ -1016,13 +1016,15 @@ EOF
 FM_FAKE_SSH_MODE=inherit-block remote_env "$ROOT/bin/fm-spawn.sh" ios --secondmate \
   > "$TMP_ROOT/spawn-concurrent.out" 2>&1 &
 spawn_concurrent=$!
-spawn_inherit_wait=0
-# Earlier inherited files traverse the worker before captain-shared.md, so give
-# a loaded portable runner 30 seconds to reach this deliberately blocked write.
+# Every inherited file before captain-shared.md traverses the job worker one at a
+# time, which takes 30 to 60 seconds on a loaded runner. The loop already fails
+# as soon as the spawn exits, so this wall-clock bound only has to catch a hung
+# spawn and can be generous; the later blocked pushes and respawn reuse it.
+remote_spawn_progress_secs=300
+spawn_inherit_deadline=$((SECONDS + remote_spawn_progress_secs))
 while [ ! -f "$TMP_ROOT/inherit.entered" ]; do
   kill -0 "$spawn_concurrent" 2>/dev/null || fail "remote spawn exited before its blocked inheritance write"
-  spawn_inherit_wait=$((spawn_inherit_wait + 1))
-  [ "$spawn_inherit_wait" -le 1500 ] || fail "remote spawn never reached its blocked inheritance write"
+  [ "$SECONDS" -lt "$spawn_inherit_deadline" ] || fail "remote spawn never reached its blocked inheritance write"
   sleep 0.02
 done
 cat > "$PARENT/data/captain-shared.md" <<'EOF'
@@ -1127,13 +1129,12 @@ EOF
 FM_FAKE_SSH_MODE=inherit-block remote_env "$ROOT/bin/fm-config-push.sh" \
   > "$TMP_ROOT/config-concurrent-first.out" 2>&1 &
 config_first=$!
-inherit_wait=0
+# The push sends every earlier inherited file before this write, so it takes the
+# same wall-clock bound as the earlier blocked spawn inheritance write.
+inherit_deadline=$((SECONDS + remote_spawn_progress_secs))
 while [ ! -f "$TMP_ROOT/inherit.entered" ]; do
   kill -0 "$config_first" 2>/dev/null || fail "first inheritance transaction exited before its blocked write"
-  inherit_wait=$((inherit_wait + 1))
-  # Match the earlier spawn/inheritance wait: a loaded portable runner can
-  # spend several seconds in the remote entrypoint before reaching this write.
-  [ "$inherit_wait" -le 1500 ] || fail "first inheritance transaction never reached its blocked write"
+  [ "$SECONDS" -lt "$inherit_deadline" ] || fail "first inheritance transaction never reached its blocked write"
   sleep 0.02
 done
 cat > "$PARENT/data/captain-shared.md" <<'EOF'
@@ -1351,17 +1352,24 @@ jq --arg p "$ios_pane" \
   || fail "the agent-free remote pane did not classify dead"
 
 tabs_before=$(grep -c '^tab create' "$HERDR_LOG" || true)
+# The relaunch is a whole remote spawn, and this suite pushes its inheritance
+# one item at a time through the local job worker, so it routinely takes 30 to
+# 60 seconds on a loaded runner. The watcher bounds the relaunch by its own
+# per-relaunch timeout and then wakes either way, auto-relaunched or failed, so
+# the wait for its exit derives from that same timeout plus slack for the probe
+# and the wake; a slow relaunch the watcher still accepts cannot fail this step.
+watch_relaunch_timeout=300
 # exec keeps $! the watcher itself rather than the function's subshell, so a
 # kill reaches the process that probes and writes into the fixture root.
 FM_STATE_OVERRIDE="$WATCH_STATE" FM_SECONDMATE_LIVENESS_SECS=1 FM_POLL=1 \
+  FM_SECONDMATE_LIVENESS_TIMEOUT="$watch_relaunch_timeout" \
   FM_SIGNAL_GRACE=0 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
   remote_env exec "$ROOT/bin/fm-watch.sh" \
   > "$TMP_ROOT/watch-liveness.out" 2> "$TMP_ROOT/watch-liveness.err" &
 watch_pid=$!
-watch_wait=0
-while kill -0 "$watch_pid" 2>/dev/null && [ "$watch_wait" -lt 1500 ]; do
+watch_deadline=$((SECONDS + watch_relaunch_timeout + 60))
+while kill -0 "$watch_pid" 2>/dev/null && [ "$SECONDS" -lt "$watch_deadline" ]; do
   sleep 0.02
-  watch_wait=$((watch_wait + 1))
 done
 if kill -0 "$watch_pid" 2>/dev/null; then
   kill "$watch_pid" 2>/dev/null || true
@@ -1627,13 +1635,12 @@ rm -f "$TMUX_STATE" "$TMP_ROOT/launch.entered" "$TMP_ROOT/launch.release"
 FM_FAKE_SSH_MODE=launch-block remote_env "$ROOT/bin/fm-spawn.sh" ios --secondmate \
   > "$TMP_ROOT/spawn-retirement.out" 2>&1 &
 spawn_retirement_pid=$!
-launch_wait=0
-# The respawn performs readiness and inheritance jobs before launch, so allow
-# the same 30-second loaded-runner bound as the earlier blocked worker path.
+# The respawn performs readiness and every inheritance job before launch, so it
+# takes the same wall-clock bound as the earlier blocked inheritance write.
+launch_deadline=$((SECONDS + remote_spawn_progress_secs))
 while [ ! -f "$TMP_ROOT/launch.entered" ]; do
   kill -0 "$spawn_retirement_pid" 2>/dev/null || fail "remote respawn exited before its blocked launch"
-  launch_wait=$((launch_wait + 1))
-  [ "$launch_wait" -le 1500 ] || fail "remote respawn never reached its blocked launch"
+  [ "$SECONDS" -lt "$launch_deadline" ] || fail "remote respawn never reached its blocked launch"
   sleep 0.02
 done
 FM_FAKE_SSH_MODE=retire-lost-slot remote_env "$ROOT/bin/fm-teardown.sh" ios \
