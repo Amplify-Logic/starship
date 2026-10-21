@@ -1,6 +1,6 @@
 # Decision hold lifecycle mechanism
 
-The normative policy is owned by `.agents/skills/decision-hold-lifecycle/SKILL.md` and is not restated here.
+The normative policy is owned by `.agents/skills/captain-hold-lifecycle/SKILL.md` and is not restated here.
 This document records the deterministic mechanism, structured surfaces, and privacy-safe regression evidence.
 
 ## Mechanism
