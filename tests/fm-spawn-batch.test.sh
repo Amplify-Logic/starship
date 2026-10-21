@@ -93,6 +93,7 @@ test_projects_path_scoping() {
     projects="$TMP_ROOT/$id projects"
     mkdir -p "$home/data" "$projects/alpha"
     git -C "$projects/alpha" init -q || fail "$label: could not initialize project fixture"
+    git -c user.name=test -c user.email=test@example.com -C "$projects/alpha" commit -q --allow-empty -m init || fail "$label: could not commit project fixture"
     if [ "$use_override" = yes ]; then
       # shellcheck disable=SC2031  # PATH is scoped to this one invocation on purpose.
       out=$(PATH="$fakebin:$PATH" FM_ROOT_OVERRIDE='' FM_STATE_OVERRIDE='' FM_DATA_OVERRIDE='' FM_CONFIG_OVERRIDE='' \
@@ -101,6 +102,7 @@ test_projects_path_scoping() {
     else
       mkdir -p "$home/projects/alpha"
       git -C "$home/projects/alpha" init -q || fail "$label: could not initialize home project fixture"
+      git -c user.name=test -c user.email=test@example.com -C "$home/projects/alpha" commit -q --allow-empty -m init || fail "$label: could not commit home project fixture"
       # shellcheck disable=SC2031  # PATH is scoped to this one invocation on purpose.
       out=$(PATH="$fakebin:$PATH" FM_ROOT_OVERRIDE='' FM_STATE_OVERRIDE='' FM_DATA_OVERRIDE='' FM_PROJECTS_OVERRIDE='' FM_CONFIG_OVERRIDE='' \
         FM_HOME="$home" FM_SPAWN_NO_GUARD=1 \

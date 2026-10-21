@@ -4,8 +4,9 @@
 # Contracts under test:
 #   - Recording starts only with --everyone-agreed; the agreement is written at
 #     the top of the transcript, and a start without it records nothing.
-#   - stop archives the call under the stamp it got at start, so the next start
-#     begins a clean transcript; a stop with nothing recording adds no
+#   - stop archives the call under the stamp it got at start, which no
+#     archived call holds even in the same second, so the next start begins a
+#     clean transcript; a stop with nothing recording adds no
 #     end-of-call record; a stop after the recorder crashed still closes the
 #     call out with notes dated by the call's stamp, a stop after that call was
 #     deleted leaves no ghost call, a reset with no call in place archives
@@ -342,6 +343,52 @@ EOF
   out=$(run_companion stop 2>&1) || fail "third stop failed: $out"
   unset -f run_companion wait_for_speech
   pass 'a crashed call is closed out, delete wins over a recording or a notes pass, and a start archives a call left in place'
+}
+
+test_new_stamp_skips_archived_stamps() {
+  local home bin out real_date epoch s0 s1 s2 s3 archive
+  home=$(new_home pinnedclock)
+  bin="$TMP_ROOT/pinnedclock-bin"
+  install_fake_audio_tools "$bin"
+  printf '%s\n' '#!/usr/bin/env bash' 'cat > /dev/null' 'exit 1' > "$bin/claude"
+  # The clock is pinned: every reading of the time now gives the same second.
+  real_date=$(command -v date)
+  epoch=1792310400
+  cat > "$bin/date" <<EOF
+#!/usr/bin/env bash
+case " \$* " in *" -r "*|*" -d "*) exec '$real_date' "\$@" ;; esac
+'$real_date' -r $epoch "\$@" 2>/dev/null || exec '$real_date' -d @$epoch "\$@"
+EOF
+  chmod +x "$bin/claude" "$bin/date"
+  stamp_at() { "$real_date" -r "$1" '+%Y%m%d-%H%M%S' 2>/dev/null || "$real_date" -d "@$1" '+%Y%m%d-%H%M%S'; }
+  s0=$(stamp_at "$epoch"); s1=$(stamp_at $((epoch + 1))); s2=$(stamp_at $((epoch + 2))); s3=$(stamp_at $((epoch + 3)))
+  printf 'multi_output_device =\n' > "$home/config/call-companion"
+  export FFMPEG_LOG="$TMP_ROOT/pinnedclock-ffmpeg.log" WHISPER_LOG="$TMP_ROOT/pinnedclock-whisper.log"
+  run_companion() {
+    PATH="$bin:$PATH" FM_HOME="$home" FFMPEG_BIN="$bin/ffmpeg" WHISPER_BIN="$bin/whisper-cli" WHISPER_MODEL="$bin/model.bin" \
+      MIC_CHUNK_SECONDS=2 MIC_CHUNK_OVERLAP_SECONDS=1 CALL_COMPANION_OPEN_BIN=true CALL_COMPANION_FINAL_NOTES=0 \
+      CALL_COMPANION_CLAUDE_BIN="$bin/claude" "$ROOT/bin/fm-call-companion.sh" "$@"
+  }
+  archive="$home/data/calls/archive"
+  mkdir -p "$archive"
+  printf 'first call\n' > "$archive/$s0-transcript.txt"
+  printf 'second call\n' > "$archive/$s1-transcript.txt"
+
+  # A call started in the same second as the calls already archived gets the next free second.
+  out=$(run_companion start --mic --everyone-agreed 2>&1) || fail "start on a pinned clock failed: $out"
+  [ "$(cat "$home/state/calls/call-stamp")" = "$s2" ] || fail "a new call took an archived call's stamp: $(cat "$home/state/calls/call-stamp"), archive $s0 $s1"
+  out=$(run_companion stop 2>&1) || fail "stop on a pinned clock failed: $out"
+  [ "$(run_companion list | tr '\n' ' ')" = "$s0 $s1 $s2 " ] || fail "the call was not archived on its own: $(run_companion list)"
+
+  # An unstamped call archived by reset in that same second gets a free stamp too, and overwrites nothing.
+  printf 'unstamped call\n' > "$home/data/calls/transcript.txt"
+  out=$(run_companion reset 2>&1) || fail "reset on a pinned clock failed: $out"
+  assert_contains "$out" "with stamp $s3" 'reset of an unstamped call took an archived stamp'
+  grep -qx 'unstamped call' "$archive/$s3-transcript.txt" || fail 'reset did not archive the unstamped call under its own stamp'
+  grep -qx 'first call' "$archive/$s0-transcript.txt" || fail 'a new stamp overwrote the first archived call'
+  grep -qx 'second call' "$archive/$s1-transcript.txt" || fail 'a new stamp overwrote the second archived call'
+  unset -f run_companion stamp_at
+  pass 'a call started or archived in the same second as an archived call never takes its stamp'
 }
 
 test_delete_while_stop_waits_wins() {
@@ -806,6 +853,7 @@ test_consent_gate_and_settings
 test_start_stop_records_agreement_in_home
 test_caption_reader_stops_in_time
 test_unfinished_call_is_closed_out
+test_new_stamp_skips_archived_stamps
 test_delete_while_stop_waits_wins
 test_watch_reminds_and_stops_but_never_starts
 test_mic_pipeline_overlap_and_cleanup

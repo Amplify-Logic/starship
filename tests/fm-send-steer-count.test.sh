@@ -29,6 +29,7 @@ TMP_ROOT=$(fm_test_tmproot fm-send-steer-count)
 # "empty" (submit landed), the same box holding text reads "pending" (Enter
 # swallowed). The box's borders must match the input row's width, which is what
 # makes the shape structurally proven rather than "pending-unproven".
+# list-windows names the live windows so explicit sess:<window> targets verify.
 make_stubs() {  # <dir> -> echoes fakebin dir
   local dir=$1 fb="$1/fakebin"
   mkdir -p "$fb"
@@ -47,7 +48,7 @@ case "${1:-}" in
       printf '╭──────────╮\n│          │\n╰──────────╯\n'
     fi
     exit 0 ;;
-  list-windows) exit 0 ;;
+  list-windows) printf '%s\n' fm-build win; exit 0 ;;
 esac
 exit 0
 SH

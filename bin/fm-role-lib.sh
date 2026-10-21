@@ -39,8 +39,9 @@
 # side sharing no root) refuses rather than permits. The publication target is
 # compared only against a maintainer scope or task consent: the repository gh
 # resolves as the default - a remote's recorded `gh repo set-default`
-# (remote.<name>.gh-resolved), else the first remote named upstream, github, or
-# origin - reduced to lowercase host/owner/repo; a local-path remote
+# (remote.<name>.gh-resolved, which may name the remote's own repository as
+# base or another <owner>/<repo>), else the first remote named upstream, github,
+# or origin - reduced to lowercase host/owner/repo; a local-path remote
 # is resolved one hop through that repository's own origin, and left as
 # path:<abs> when unreadable. An unknown target never permits.
 #
@@ -227,27 +228,28 @@ fm_role_git_common_dir() {
 # its default: a remote whose remote.<name>.gh-resolved records `base` is that
 # remote's own repository, and one recording <owner>/<repo> is that repository
 # on the remote's host; otherwise the first of upstream, github, origin that is
-# configured. Normalized to host/owner/repo or path:<abs>. Empty when the repo
-# has no such remote.
+# configured. Normalized to host/owner/repo or path:<abs>. Empty when the
+# selected remote is unreadable or the repo has no such remote. Resolution is
+# entirely offline.
 fm_role_publication_target() {
   local dir=$1 remote url='' key resolved identity
   while read -r key resolved; do
     remote=${key#remote.}
     remote=${remote%.gh-resolved}
-    url=$(git -C "$dir" remote get-url "$remote" 2>/dev/null) || url=
-    [ -n "$url" ] || continue
-    identity=$(fm_role_remote_identity "$url" "$dir")
-    [ -n "$identity" ] || continue
     case $resolved in
-    base) ;;
-    */*)
+    base | */*) ;;
+    *) continue ;;
+    esac
+    # A selected remote that cannot be read never falls back to another one.
+    url=$(git -C "$dir" remote get-url "$remote" 2>/dev/null) || return 0
+    identity=$(fm_role_remote_identity "$url" "$dir")
+    [ -n "$identity" ] || return 0
+    if [ "$resolved" != base ]; then
       case $identity in
       path:*) continue ;;
       esac
       identity="${identity%%/*}/$(fm_role_scope_norm "$resolved")"
-      ;;
-    *) continue ;;
-    esac
+    fi
     printf '%s\n' "$identity"
     return 0
   done < <(git -C "$dir" config --get-regexp '^remote\..*\.gh-resolved$' 2>/dev/null)

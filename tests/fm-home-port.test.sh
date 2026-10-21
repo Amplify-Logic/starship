@@ -46,8 +46,11 @@ make_verify_fakebin() {
   # Cursor ships its CLI as cursor-agent; `agent` is the legacy alias. A ready home
   # has the real name installed, which is what bin/fm-bootstrap.sh resolves through
   # fm_cursor_resolve_binary - a bare stub named `agent` proves nothing about Cursor
-  # and is correctly refused there.
-  fm_fake_exit0 "$fakebin" tmux node git chrome-devtools-axi agent cursor-agent prime-agent
+  # and is correctly refused there. The resolver's bounded --help probe needs the
+  # Cursor Agent CLI identity, so the cursor-agent stub prints it.
+  fm_fake_exit0 "$fakebin" tmux node git chrome-devtools-axi agent prime-agent
+  printf '#!/bin/sh\necho "Start the Cursor Agent"\n' > "$fakebin/cursor-agent"
+  chmod +x "$fakebin/cursor-agent"
   fm_fake_version_tool "$fakebin" gh-axi FM_TEST_GH_AXI_VERSION "$(floor_of fm-bootstrap.sh GH_AXI_MIN)"
   fm_fake_version_tool "$fakebin" lavish-axi FM_TEST_LAVISH_AXI_VERSION "$(floor_of fm-bootstrap.sh LAVISH_AXI_MIN)"
   fm_fake_version_tool "$fakebin" quota-axi FM_TEST_QUOTA_AXI_VERSION "$(floor_of fm-quota-axi-lib.sh FM_QUOTA_AXI_MIN)"

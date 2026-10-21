@@ -244,7 +244,12 @@ case "${1:-}" in
     printf '%s\n' "@spawnwid"
     exit 0
     ;;
-  list-windows) [ ! -f "${0%/*}/.fake-windows" ] || cat "${0%/*}/.fake-windows"; exit 0 ;;
+  list-windows)
+    case "$*" in
+      *'#{window_id}'*) printf '%s\n' '@spawnwid' ;;
+      *) [ ! -f "${0%/*}/.fake-windows" ] || cat "${0%/*}/.fake-windows" ;;
+    esac
+    exit 0 ;;
   has-session|new-session|send-keys|set-window-option) exit 0 ;;
 esac
 exit 0

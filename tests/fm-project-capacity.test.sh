@@ -77,6 +77,7 @@ make_case() {  # <name> [task-id...]
   cat > "$fakebin/tmux" <<'SH'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$FM_FAKE_CALL_LOG"
+window_file="$FM_FAKE_CALL_LOG.window"
 case "$*" in
   *"#{pane_current_path}"*)
     # A spawn that is told to hold waits here, after its capacity check and
@@ -98,14 +99,28 @@ case "${1:-}" in
   display-message) printf 'firstmate\n' ;;
   # fm-spawn reads the window inventory before it reports a spawn as started,
   # so the stub lists back every window it was asked to create.
+  list-windows) [ ! -s "$window_file" ] || cat "$window_file" ;;
   new-window)
-    prev=
-    for a in "$@"; do
-      [ "$prev" != "-n" ] || printf '%s\n' "$a" >> "$FM_FAKE_CALL_LOG.windows"
-      prev=$a
+    name=
+    previous=
+    for arg in "$@"; do
+      [ "$previous" = -n ] && name=$arg
+      previous=$arg
     done
+    grep -Fqx -- "$name" "$window_file" 2>/dev/null || printf '%s\n' "$name" >> "$window_file"
     ;;
-  list-windows) [ ! -f "$FM_FAKE_CALL_LOG.windows" ] || cat "$FM_FAKE_CALL_LOG.windows" ;;
+  kill-window)
+    target=
+    previous=
+    for arg in "$@"; do
+      [ "$previous" = -t ] && target=$arg
+      previous=$arg
+    done
+    target=${target##*:}
+    target=${target#=}
+    grep -Fvx -- "$target" "$window_file" 2>/dev/null > "$window_file.tmp" || true
+    mv "$window_file.tmp" "$window_file"
+    ;;
 esac
 exit 0
 SH

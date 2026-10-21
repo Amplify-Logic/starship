@@ -67,6 +67,12 @@ install_reviewer_stub() {
   cat >"$fakebin/$name" <<SH
 #!/usr/bin/env bash
 set -u
+# Cursor's launch resolver runs one bounded --help identity probe; that is not
+# a reviewer launch, so it answers without touching the argv log.
+if [ "\$*" = --help ]; then
+  printf 'Start the Cursor Agent\\n'
+  exit 0
+fi
 printf '%s\\n' "\$*" > "\${FM_SECOND_OPINION_TEST_ARGV_LOG:?}"
 pwd -P > "\${FM_SECOND_OPINION_CWD_LOG:?}"
 if [ -n "\${ANTHROPIC_API_KEY+x}" ] || [ -n "\${OPENAI_API_KEY+x}" ]; then
