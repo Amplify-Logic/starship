@@ -1087,19 +1087,20 @@ test_fresh_home_gets_the_starter_settings() {
   local home out name
   home=$(starter_home starter-fresh)
   out=$(starter_launch "$home" opus)
-  for name in crew-dispatch.json:crew-dispatch-claude-only.json speak:speak stt-vocabulary:stt-vocabulary; do
+  for name in crew-dispatch.json:crew-dispatch-claude-only.json stt-vocabulary:stt-vocabulary; do
     cmp -s "$ROOT/docs/examples/${name#*:}" "$home/config/${name%%:*}" \
       || fail "a fresh home's first launch did not install config/${name%%:*} from docs/examples/${name#*:}"
   done
-  assert_contains "$out" "installed the starter settings config/crew-dispatch.json config/speak config/stt-vocabulary" \
+  assert_contains "$out" "installed the starter settings config/crew-dispatch.json config/stt-vocabulary" \
     "the first launch did not say which starter settings it installed"
+  [ ! -e "$home/config/speak" ] || fail "a fresh home's first launch switched spoken replies on"
   jq -e '.default.model == "claude-opus-5-5"' "$home/config/crew-dispatch.json" >/dev/null \
     || fail "the installed routing does not default to Opus 5.5"
 
   # A second launch of the same home changes nothing and says nothing.
-  printf 'enabled = false\n' > "$home/config/speak"
+  printf '# my words\n' > "$home/config/stt-vocabulary"
   out=$(starter_launch "$home" opus)
-  assert_equals "enabled = false" "$(cat "$home/config/speak")" "a later launch overwrote a changed starter file"
+  assert_equals "# my words" "$(cat "$home/config/stt-vocabulary")" "a later launch overwrote a changed starter file"
   assert_not_contains "$out" "starter settings" "a home that has run before was offered the starter settings again"
 
   # A fresh home's own file is kept; only the missing ones arrive.
@@ -1109,8 +1110,8 @@ test_fresh_home_gets_the_starter_settings() {
   out=$(starter_launch "$home" claude-fable)
   assert_equals '{"default":{"harness":"pi"}}' "$(cat "$home/config/crew-dispatch.json")" \
     "the first launch overwrote the home's own crew-dispatch.json"
-  [ -f "$home/config/speak" ] || fail "a fresh home with its own routing did not get the missing starter files"
-  assert_contains "$out" "installed the starter settings config/speak config/stt-vocabulary" \
+  [ -f "$home/config/stt-vocabulary" ] || fail "a fresh home with its own routing did not get the missing starter files"
+  assert_contains "$out" "installed the starter settings config/stt-vocabulary" \
     "the first launch did not name only the files it installed"
 
   # A home that has already run keeps exactly what it has.
@@ -1118,7 +1119,7 @@ test_fresh_home_gets_the_starter_settings() {
   mkdir -p "$home/state"
   : > "$home/state/.last-watcher-beat"
   starter_launch "$home" opus >/dev/null
-  [ ! -e "$home/config/crew-dispatch.json" ] && [ ! -e "$home/config/speak" ] \
+  [ ! -e "$home/config/crew-dispatch.json" ] && [ ! -e "$home/config/stt-vocabulary" ] \
     || fail "a home that has already run was given the starter settings"
 
   # Previews, preflight, and non-Claude profiles never write them.

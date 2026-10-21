@@ -181,8 +181,8 @@
 # Starter settings: a real Claude-profile launch of a fresh home - one whose
 # state/ is absent or empty, so it has never run - copies the Claude starter
 # settings from docs/examples/ into config/ just before the CLI starts:
-# crew-dispatch.json (from crew-dispatch-claude-only.json), speak, and
-# stt-vocabulary. A file already in config/ is never overwritten, a home that
+# crew-dispatch.json (from crew-dispatch-claude-only.json) and stt-vocabulary.
+# Spoken replies are never among them: a home turns them on itself. A file already in config/ is never overwritten, a home that
 # has run before gets nothing, and other profiles never write them, because the
 # routing sends every worker to Claude. docs/configuration.md "Starter
 # settings" owns what each file does. --preflight and FM_PRIMARY_DRY_RUN never
@@ -659,7 +659,7 @@ companion_status_profile() {  # -> "adapter<TAB>model<TAB>effort", or 1
 
 # Copy the starter settings into a fresh home's config/, never over a file that
 # is already there (header "Starter settings").
-STARTER_SETTINGS="crew-dispatch.json:crew-dispatch-claude-only.json speak:speak stt-vocabulary:stt-vocabulary"
+STARTER_SETTINGS="crew-dispatch.json:crew-dispatch-claude-only.json stt-vocabulary:stt-vocabulary"
 install_starter_settings() {
   local pair name source installed=
   mkdir -p "$CONFIG" || return 0

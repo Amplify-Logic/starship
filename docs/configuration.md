@@ -13,9 +13,11 @@ Start with the directory layout, then use the setting reference for the behavior
 | Backlog, preferences, and memory | [Backlog backend](#backlog-backend-taskstoml--configbacklog-backend), [captain preferences](#captain-preferences-datacaptainmd--datacaptain-sharedmd), [external memory tiers](#external-memory-tiers-memory-layering-section), and [startup memory budget](#startup-memory-budget-configstartup-memory-budget) |
 | Supervision and presentation | [Pi supervision branch](#pi-supervision-branch), [supervision host](#supervision-host-configsupervision-host), and [Calm preference](#calm-preference-configcalm) |
 | Persistent secondmates | [Secondmate routes](#secondmate-routes-datasecondmatesmd) |
-| Starter settings for a new home: which model does which job, spoken replies, transcription words, and how hard the first mate thinks | [Starter settings](#starter-settings-first-launch), [crew dispatch profiles](#crew-dispatch-profiles-configcrew-dispatchjson), [desk voice-out](#desk-voice-out-configspeak), [speech-to-text vocabulary](#speech-to-text-vocabulary-configstt-vocabulary), and [primary effort](#primary-effort-configprimary-effort) |
+| Starter settings for a new home: which model does which job, transcription words, and how hard the first mate thinks | [Starter settings](#starter-settings-first-launch), [crew dispatch profiles](#crew-dispatch-profiles-configcrew-dispatchjson), [speech-to-text vocabulary](#speech-to-text-vocabulary-configstt-vocabulary), and [primary effort](#primary-effort-configprimary-effort) |
+| Spoken replies | [Desk voice-out](#desk-voice-out-configspeak) |
 | The call recorder | [Call recorder](#call-recorder-configcall-companion) |
 | A home's own private tools beside the shared code | [Private add-on](#private-add-on-configaddon) and [opt-in skills](#opt-in-skills-configadhd-configsecond-opinion) |
+| Keeping private names out of this public repository | [Private leak words](#private-leak-words-configleak-words) |
 | Per-run overrides and tuning | [Environment variables](#environment-variables) |
 
 ## FM_HOME
@@ -2952,7 +2954,7 @@ Nothing here observes audio, so a successful call means the shaped line was hand
 
 Configuration is `key = value` lines; unknown keys are refused rather than ignored.
 `enabled` arms this home, and the optional `voice` names a `say` voice, which also selects `say` as the speaker.
-[`docs/examples/speak`](examples/speak) is a starter file that turns spoken replies on.
+[`docs/examples/speak`](examples/speak) is an example file that turns spoken replies on; a new home never installs it on its own.
 The script's header and `--help` own the exact invocation, the environment overrides, and the exit codes.
 [`desk-voice-replies.md`](desk-voice-replies.md) owns when the orchestrator speaks; the session-start digest prints it only in a home opted in here.
 
@@ -3043,11 +3045,11 @@ A new home is one whose `state/` is absent or empty, which means it has never ru
 | Installed as | Copied from | What it does |
 | --- | --- | --- |
 | `config/crew-dispatch.json` | [`docs/examples/crew-dispatch-claude-only.json`](examples/crew-dispatch-claude-only.json) | Which Claude model does which job, sized for a Pro or Max 5x plan ([crew dispatch profiles](#crew-dispatch-profiles-configcrew-dispatchjson)). |
-| `config/speak` | [`docs/examples/speak`](examples/speak) | Turns spoken replies on; without the voice setup it needs, replies stay text only ([desk voice-out](#desk-voice-out-configspeak)). |
 | `config/stt-vocabulary` | [`docs/examples/stt-vocabulary`](examples/stt-vocabulary) | Starter words for the desk floater's transcription ([speech-to-text vocabulary](#speech-to-text-vocabulary-configstt-vocabulary)). |
 
 A file already in `config/` is never overwritten, and a home that has run before gets nothing, so an existing home keeps exactly what it has; it can copy any of these files by hand.
 Other primary profiles install nothing, because the routing sends every worker to Claude.
+Spoken replies are not a starter setting, so a new home stays silent until it opts in through [desk voice-out](#desk-voice-out-configspeak).
 `--preflight` and a dry run never write them.
 The launcher prints the files it installed, and `bin/fm-primary.sh`'s header owns the mechanics.
 
@@ -3111,6 +3113,15 @@ A home upgraded from the removed third presentation level still holds `max`, whi
 Any other content restores as off rather than refusing, because a corrupt preference must never stop a primary from starting.
 [calm.md](calm.md) owns what the presentation actually does.
 
+## Private leak words (config/leak-words)
+
+`config/leak-words` is an optional LOCAL, gitignored file listing words and phrases that must never appear in this public repository, such as the names of people and private projects.
+It holds one word or phrase per line; blank lines and lines starting with `#` are ignored, and matching ignores case and takes whole words only.
+Without the file, which is the default, the scan is unchanged.
+`bin/fm-leak-guard.sh` checks every tracked file against it, `tests/` included, and its header owns where it looks for the list, so a run from a task's isolated copy or a validation run's copy still finds the home's list.
+`bin/fm-lint.sh` runs that check on every default lint, including the validation pipeline's lint step, so these words are caught before each push; CI has no list, and without one the check is silent.
+The file is not inherited by secondmate homes.
+
 ## Bridge pinned links (config/bridge-links)
 
 `config/bridge-links` is an optional LOCAL, gitignored file containing one pinned bridge-page link per line as `<label><TAB><https-url>`.
@@ -3138,6 +3149,23 @@ service<TAB><label><TAB><loopback-http-url>
 Blank lines and lines starting with `#` are ignored, and a malformed line is skipped and named on the page.
 The file is read on every Machines read, so changes appear within about 30 seconds without restarting the service.
 Without the file the page still lists every tailnet machine and this Mac, and no machine raises an offline alert.
+The file is not inherited by secondmate homes.
+
+## Bridge voice mailbox (config/bridge-mailbox)
+
+`config/bridge-mailbox` is an optional LOCAL, gitignored file that names the loopback voice mailbox the bridge page's hold-to-speak control forwards to ([`bridge-view.md`](bridge-view.md)).
+It holds `key = value` lines; blank lines, lines starting with `#`, and unknown keys are ignored:
+
+```text
+port = <loopback port the mailbox serves>
+token = <path under the home of the file holding its bearer token>
+launchd = <optional LaunchAgent label, for the page's mailbox indicator>
+```
+
+`token` must be a relative path inside the home, never absolute and never through `..`.
+Without the file the bridge has no mailbox: hold-to-speak answers that the mailbox is not configured and the indicator reads off.
+`bin/fm-bridge-view.py` reads it on every request, so a change needs no restart.
+To show the mailbox on the Machines page as well, add its health address as a `service` line in [`config/bridge-machines`](#bridge-machines-configbridge-machines).
 The file is not inherited by secondmate homes.
 
 ## Primary orchestrator handoff (config/primary-handoff)
@@ -3220,7 +3248,7 @@ A pinned home that does not exist or is explicitly logged out refuses the launch
 `expect` closes the silent-wrong-account hole.
 When an account declares it, the launch confirms the pinned home really resolves to that identity before anything runs on it, and refuses naming both the wanted and the actual identity when it does not.
 It is matched case-insensitively against any identity field the vendor reports, so an organization id, an organization name, an email, or a plan name all work.
-Two Claude seats can share one email address - the two on this machine do - so the organization id is the field that actually distinguishes them.
+Two Claude seats can share one email address, so the organization id is the field that actually distinguishes them.
 An identity that cannot be read at all also refuses, because `expect` is a demand for proof rather than a preference.
 `expect` is only accepted for `claude`: `codex login status` reports no identity at all (verified codex-cli 0.153.4, 2026-09-09), so an `expect` on a codex account is reported as invalid rather than silently ignored.
 
@@ -3231,7 +3259,7 @@ A file that exists but cannot be read never fails a launch that asked for no pin
 
 ### What is verified
 
-Both vendors isolate a login, by different mechanisms, and both were proven on this machine on 2026-09-09.
+Both vendors isolate a login, by different mechanisms, and both were proven on a maintainer's machine on 2026-09-09.
 
 Codex keeps its credential in the `auth.json` inside `CODEX_HOME`, so two codex accounts are two independent logged-in homes (codex-cli 0.153.4: the ambient home reported `Logged in using ChatGPT` while an override home reported `Not logged in`).
 
@@ -3241,7 +3269,7 @@ Both seats then reported `loggedIn: true` at the same time, and neither home hel
 So two Claude seats do coexist on one machine, and a pinned home is unauthenticated only until its own login.
 
 That same proof is why `expect` matters.
-The two seats on this machine share one email address and differ only in organization and plan: the ambient seat reported `subscriptionType: max` in a personal organization, and the pinned seat reported `subscriptionType: team` in the `Company` organization.
+The two seats in that proof shared one email address and differed only in organization and plan: the ambient seat reported `subscriptionType: max` in a personal organization, and the pinned seat reported `subscriptionType: team` in a company organization.
 An email would not have told them apart; the organization id does.
 
 `claude auth status` prints its JSON on stdout for both outcomes and exits 0 when logged in and 1 when logged out.

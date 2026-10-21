@@ -273,57 +273,9 @@ FM_SUP_SENTINEL_NOOP_EXIT=4
 # shellcheck disable=SC2034 # Read by callers after sourcing.
 FM_SUP_AWAY_GAP_NAME=.supervision-sentinel.away-gap
 
-# Canonical basename of the armed glasses-shift record. The shift tool lives in
-# a home's private add-on (its bin/fm-shift.sh start writes the record and stop
-# removes it), and the add-on reads this record name and the two predicates
-# below from here, so they stay in this library while it does. While the record
-# exists the add-on's sentinel hook keeps the host sentinel supervising the home
-# even with no crew task in flight: a shift's questions arrive as mailbox
-# events, never as state/*.meta tasks, so the in-flight count alone would read a
-# dead watcher during a shift as idle.
-# shellcheck disable=SC2034 # Read by callers after sourcing.
-FM_SUP_SHIFT_RECORD_NAME=.shift
-
-# Canonical basename of the away-mode flag. A shift's lifetime is strictly
-# contained inside away mode's: the add-on's shift start establishes away mode
-# before it writes the shift record, and its stop tears no artifact down until
-# that flag is gone. Spelled once here so every reader of the pair agrees.
-# shellcheck disable=SC2034 # Read by callers after sourcing.
-FM_SUP_AFK_FLAG_NAME=.afk
-
-# fm_sup_shift_armed <state-dir>
-# THE single definition of "a glasses shift is armed": the shift record exists
-# AND away mode is still active. Both conditions, always, at every read site.
-#
-# Why both: bin/fm-afk-return.sh, the away-mode return owner, knows nothing about
-# the shift and removes nothing of its own, so an ordinary captain return leaves
-# the record, the registered check and the config/wedge-alarm block behind. A
-# read path testing the record alone then treats that leftover as a live shift:
-# the host sentinel keeps supervising an idle home and speaks a repeating
-# "supervision down" line into glasses that are on a charger. Requiring the flag
-# makes every read path agree with the write path that already assumed it.
-#
-# Having the record without the flag is a STALE shift, not an armed one, and it
-# is not nothing: the record and the alarm block are still on disk and still
-# need standing down. Callers that report state to a human must say so rather
-# than reporting simply "not armed" - fm_sup_shift_stale below is that question.
-fm_sup_shift_armed() {
-  local state=$1
-  [ -f "$state/$FM_SUP_SHIFT_RECORD_NAME" ] && [ -e "$state/$FM_SUP_AFK_FLAG_NAME" ]
-}
-
-# fm_sup_shift_stale <state-dir>
-# True when a shift record outlived away mode. The artifacts are still present
-# and still capture the home's alarm channel, so this is the state a human must
-# be told about and the add-on's shift stop is what clears it.
-fm_sup_shift_stale() {
-  local state=$1
-  [ -f "$state/$FM_SUP_SHIFT_RECORD_NAME" ] && [ ! -e "$state/$FM_SUP_AFK_FLAG_NAME" ]
-}
-
 # Canonical basename of the host sentinel's launchd-liveness proof: the epoch of
 # the last scheduled check that resolved this home. Only launchd's private entry
-# point writes it. A registration is verified, and a shift may rely on the host
+# point writes it. A registration is verified, and a home may rely on the host
 # alarm, only while this proof is recent.
 # shellcheck disable=SC2034 # Read by callers after sourcing.
 FM_SUP_LAST_CHECK_NAME=.supervision-sentinel-last-check

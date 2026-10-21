@@ -49,6 +49,7 @@ FM_HERDR_LAYOUT_PREVIEW_E2E=1 \
 ```
 
 Verified 2026-08-03 against Herdr 0.7.4 on macOS 25.5.0.
+The project names, one task title and the waiting label were later renamed in place in the captures to neutral placeholders and `NEEDS YOU`; the stager uses the same names, so a rerun prints the same rows.
 Raw captures: [`docs/evidence/herdr-layout-preview/`](evidence/herdr-layout-preview/).
 
 ## BEFORE: what you see today
@@ -57,7 +58,7 @@ Three rows, one per project, each with a running count of what its workers need.
 
 ```text
 WORKSPACE  City Guide · 🟣 1 NEEDS YOU · 🔵 2 WORKING
-  TAB      WORKER · Validate GPS triggers across all seven city stops · 🔵 WORKING
+  TAB      WORKER · Validate GPS triggers across all seven harbour stops · 🔵 WORKING
   DETAIL   pi/gpt-5.6 · detached
   TAB      WORKER · Decide the harbour-loop audio cut · 🟣 NEEDS YOU
   DETAIL   claude/opus-5 · fm/journey-route-audio-q2
@@ -98,7 +99,7 @@ Staged in project order it looks almost like today:
 
 ```text
 WORKSPACE  City Guide · 🟣 1 NEEDS YOU · 🔵 2 WORKING
-WORKSPACE  └ Validate GPS triggers across all seven city stops · 🔵 WORKING
+WORKSPACE  └ Validate GPS triggers across all seven harbour stops · 🔵 WORKING
 WORKSPACE  └ Decide the harbour-loop audio cut · 🟣 NEEDS YOU
 WORKSPACE  └ Speed up the offline map tiles · 🔵 WORKING
 WORKSPACE  Atelier · 🟣 1 NEEDS YOU · 🔴 1 FAILED
@@ -117,7 +118,7 @@ So when the eighth worker starts, for City Guide, whose heading is at the very t
 
 ```text
 WORKSPACE  City Guide · 🟣 1 NEEDS YOU · 🔴 1 FAILED · 🔵 2 WORKING
-WORKSPACE  └ Validate GPS triggers across all seven city stops · 🔵 WORKING
+WORKSPACE  └ Validate GPS triggers across all seven harbour stops · 🔵 WORKING
 WORKSPACE  └ Decide the harbour-loop audio cut · 🟣 NEEDS YOU
 WORKSPACE  └ Speed up the offline map tiles · 🔵 WORKING
 WORKSPACE  Atelier · 🟣 1 NEEDS YOU · 🔴 1 FAILED
@@ -143,7 +144,7 @@ Ordering is fixed at creation and there is no reorder or nesting command, so any
 Put the project name on the worker row itself and the layout stops depending on position:
 
 ```text
-WORKSPACE  City Guide · Validate GPS triggers across all seven city stops · 🔵 WORKING
+WORKSPACE  City Guide · Validate GPS triggers across all seven harbour stops · 🔵 WORKING
 WORKSPACE  City Guide · Decide the harbour-loop audio cut · 🟣 NEEDS YOU
 WORKSPACE  City Guide · Speed up the offline map tiles · 🔵 WORKING
 WORKSPACE  Atelier · Decide the onboarding welcome copy · 🟣 NEEDS YOU
@@ -205,7 +206,7 @@ So one first-created row could carry counts that no longer depend on where anyth
 Two things are not yet verified, and both need testing before anyone commits to the summary row.
 First, whether a first-created workspace still holds position 1 across a Herdr session restart.
 Second, whether a single summary row stays legible at realistic width, which is the more likely of the two to bite.
-[`docs/herdr-backend.md`](herdr-backend.md) records a real Herdr pane measuring 54 columns in the environment it was verified in, and the widest of the three staged project rows is already 51 characters, so concatenating every project's counts onto one row runs to several hundred characters in a sidebar that truncates.
+[`docs/herdr-backend.md`](herdr-backend.md) records a real Herdr pane measuring 54 columns in the environment it was verified in, and the widest of the three staged project rows is already 40 characters, so concatenating every project's counts onto one row runs to several hundred characters in a sidebar that truncates.
 At the twenty-five-worker scale that motivates the summary row, per-project counts on one row are very likely too wide to read, so the realistic version of that row carries fleet totals rather than a per-project breakdown.
 That is still worth having, but it is less than what the three project rows give you today, and it is the honest size of what this recovery buys.
 

@@ -9,7 +9,7 @@ A glance of what needs the captain, what is under way, what just finished, and w
 It is an observation of durable fleet records, not a place to approve, merge, or spawn.
 Hold-to-speak is a second voice channel into firstmate; it does not answer Needs-you items from this page.
 Outbound jumps are allowlisted GitHub pull-request links plus captain-configured HTTPS pinned links below the header; [`docs/configuration.md`](configuration.md#bridge-pinned-links-configbridge-links) owns the pinned-link schema.
-The same authenticated page also accepts photo drops from the captain's phone, including several photos in one picker session, and a hold-to-speak control that forwards audio into the local glasses mailbox.
+The same authenticated page also accepts photo drops from the captain's phone, including several photos in one picker session, and a hold-to-speak control that forwards audio into the local voice mailbox that [`config/bridge-mailbox`](configuration.md#bridge-voice-mailbox-configbridge-mailbox) names, when the home has one.
 Those two controls sit at the top of the authenticated page, above the fleet glance, so they are reachable without scrolling on a phone.
 A Machines page beside the glance shows whether the captain's machines and background services are up; it observes and changes no machine.
 
@@ -25,7 +25,7 @@ On the Mac itself, [web.md](web.md) is the localhost chat page with this glance 
 
 There is one captain, so there is no account system.
 The first visit shows Log in.
-A dedicated high-entropy passcode, not the glasses relay token, sets an HttpOnly, Secure, SameSite=Strict, host-only session cookie with about a seven-day lifetime.
+A dedicated high-entropy passcode, not the mailbox relay token, sets an HttpOnly, Secure, SameSite=Strict, host-only session cookie with about a seven-day lifetime.
 The salted scrypt hash lives at `bridge/passcode.hash` inside a mode-0700 `bridge/` directory.
 Sessions live in `bridge/sessions.json`.
 Logs go to `bridge/bridge.log`, not into `state/`.
@@ -67,7 +67,7 @@ tailscale serve --bg --https=443 http://127.0.0.1:8766
 The server also refuses to start while Funnel is on.
 A tailnet-only Serve HTTPS proxy is Funnel off and is the supported publish path.
 
-Keep the process alive across reboot with launchd, same KeepAlive pattern as `com.firstmate.glasses-voice-mailbox`.
+Keep the process alive across reboot with a launchd KeepAlive agent.
 Render a local plist and install it by hand; this is a machine-local setup action, not tracked captain state:
 
 ```sh
@@ -94,7 +94,9 @@ Needs you shows at most five items that need the captain now.
 Blocked, failed, or gate-parked live work leads the list.
 Parked holds, recorded duplicates, and retire candidates are excluded from that list by their backlog hold kind and hold reason, not by guessing from titles, and they remain reachable under Waiting.
 If more Needs-you items remain, a quiet "N more waiting on you - show all" control reveals the rest in one tap.
-Waiting is a set of per-project count chips for Atelier, Journey, Finances, Fleet, Glasses, and any other observed project, not a global wall of items.
+Waiting is a set of per-project count chips, one per observed project, not a global wall of items.
+A chip is named from the home's `data/projects.md`: a row's `label=<word>` token when it has one, otherwise its registered name in plain words.
+A row matches when that name or any `alias=` name equals the item's repository name (the part after any `owner/` prefix) as a whole; an item with no repository matches only by whole dash-separated words of its task id, and an unregistered repository is named from its own name.
 Each chip expands to that project's complete list in one tap.
 Item lines are short captain-facing titles; internal ids, paths, and repro strings are not used as the primary line.
 If the first observation request fails, the buckets replace "Loading…" with "Cannot reach the desk" immediately and the full-page overlay appears.
@@ -117,7 +119,7 @@ A task is named only by the title the glance already shows for it, and a decisio
 The section reads local files only: it makes no Jev call, changes no routing or model, and sends nothing off the machine.
 If the routing read fails, the buckets still render and the section says why in place.
 
-The mailbox indicator is a local listen or launchd check.
+The mailbox indicator is a local listen or launchd check against the mailbox `config/bridge-mailbox` names, and reads off when the home names none.
 It must never call `GET /v1/announcements`, because that call marks announcements delivered.
 
 ## What I remember
@@ -154,7 +156,7 @@ A failing read answers 503 with the collector's reason and the page says so in p
 What it shows, from real sources only; a value that cannot be read is shown as unknown, never invented:
 
 - Every machine on the tailnet from `tailscale status --json`, with its OS, live or offline state, last seen time, and tailnet IP; a machine that joins the tailnet appears on its own, and Mullvad exit nodes are left out.
-- This Mac, marked as this machine, with its load, memory, disk, and uptime, and the Firstmate background services here: the bridge page, the glasses voice mailbox, and the desk floater, each listed only when it is installed or answering, plus any loopback services named in the config.
+- This Mac, marked as this machine, with its load, memory, disk, and uptime, and the Firstmate background services here: the bridge page and the desk floater, each listed only when it is installed or answering, plus any loopback services named in the config, such as a voice mailbox's health address.
 - For each machine named in the config with an ssh alias, the same numbers over ssh (BatchMode, a four-second connect timeout), read only when the tailnet does not report it offline; Linux machines also list failed systemd units.
 - Each HTTPS probe named in the config, with its status and latency.
 
@@ -178,7 +180,7 @@ The request is capped at 15 MB and returns 413 when larger or 415 when the type 
 The per-session rolling-hour limit counts authenticated, non-empty attempts within that cap, including attempts later rejected as unsupported, and returns 429 after 30 such attempts.
 
 Files land under `data/bridge-inbox/` (created mode 0700) with a unique timestamped name such as `20260819T113530Z-<hex>.jpg` and a sibling `.json` sidecar recording `received_at`, `original_name`, `size`, and `content_type`.
-A write here or to the glasses mailbox DB under `data/glasses-voice-runtime/` wakes the watcher at once only when a watcher hook of the home's private add-on provides that wait ([`watcher-continuity.md`](watcher-continuity.md#add-on-watcher-hooks)); otherwise it is picked up on the ordinary check cadence.
+A write here wakes the watcher at once only when a watcher hook of the home's private add-on provides that wait ([`watcher-continuity.md`](watcher-continuity.md#add-on-watcher-hooks)); otherwise it is picked up on the ordinary check cadence.
 Names never overwrite; the directory is quarantined storage only.
 The server does not execute, decode, or otherwise parse image contents beyond the magic-byte sniff.
 The photo path writes only to `bridge/` and this inbox; hold-to-speak sends requests through the loopback mailbox API instead of writing mailbox state directly.
@@ -190,7 +192,7 @@ The client posts selected photos one after another and shows progress such as `3
 The body may be `multipart/form-data` with an `audio` file field, or a raw `audio/*` body.
 Safari on iPhone typically records `audio/mp4` (m4a); the server sniffs ftyp/mp4, webm, wav, and mpeg/aac magic bytes and rejects anything else.
 The request is capped at 10 MB to match the mailbox audio limit.
-The bridge process reads the glasses relay token from `data/glasses-voice-runtime/relay-token` under the home and POSTs a `voice-question` to `http://127.0.0.1:8765/v1/questions` with that bearer token.
+The bridge process reads the relay token from the file `config/bridge-mailbox` names under the home and POSTs a `voice-question` to `/v1/questions` on the loopback port it names, with that bearer token; without that file `/speak` answers 503 `mailbox is not configured`.
 The token is never written into HTML, JavaScript, or a response body.
 The audio filename is `bridge.m4a` (or `bridge.webm` / `bridge.wav`) so mailbox records are distinguishable from VoiceLoop captures.
 `GET /api/answer/<request_id>` is session-authenticated, polls `GET /v1/answers/<id>` on the mailbox, and returns JSON `{pending:true}` or `{text:"..."}` without audio bytes.

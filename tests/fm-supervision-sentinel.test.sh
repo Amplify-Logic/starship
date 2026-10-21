@@ -413,25 +413,26 @@ test_live_identity_matched_watcher_stays_silent() {
   pass "supervision sentinel: live identity-matched watcher with a fresh beacon stays silent"
 }
 
-# install_shift_hook <home>: the glasses shift's sentinel hook as a home's
-# private add-on carries it. The shift tool itself lives in that add-on, which
-# reads the definition of "armed" from this checkout's bin/fm-supervision-lib.sh.
+# install_shift_hook <home>: a sentinel hook as a home's private add-on
+# carries one for a shift, a duty of its own whose events arrive outside crew
+# tasks. The add-on owns what "armed" means; this fixture's hook reports an
+# armed shift while its record and away mode both exist.
 install_shift_hook() {
   local addon="$1-addon"
   mkdir -p "$addon/hooks/sentinel"
-  cat > "$addon/hooks/sentinel/10-glasses-shift" <<'SH'
+  cat > "$addon/hooks/sentinel/10-shift" <<'SH'
 #!/usr/bin/env bash
-. "$FM_ROOT/bin/fm-supervision-lib.sh"
-if fm_sup_shift_armed "${FM_STATE_OVERRIDE:-$FM_HOME/state}"; then
-  printf 'glasses shift armed\n'
+state=${FM_STATE_OVERRIDE:-$FM_HOME/state}
+if [ -f "$state/.shift" ] && [ -e "$state/.afk" ]; then
+  printf 'add-on shift armed\n'
 fi
 SH
-  chmod +x "$addon/hooks/sentinel/10-glasses-shift"
+  chmod +x "$addon/hooks/sentinel/10-shift"
   printf 'path = %s\n' "$addon" > "$1/config/addon"
 }
 
-# An armed glasses shift is work worth supervising even with no crew task in
-# flight: shift questions arrive as mailbox events, never as state/*.meta.
+# An armed add-on shift is work worth supervising even with no crew task in
+# flight: its events never arrive as state/*.meta.
 test_armed_shift_with_no_crew_task_is_supervised() {
   local home="$TMP_ROOT/shift" recorder="$TMP_ROOT/record-shift" log="$TMP_ROOT/shift-alerts.log" holder out status marker
   make_primary "$home"
@@ -455,7 +456,7 @@ test_armed_shift_with_no_crew_task_is_supervised() {
   [ -s "$marker" ] || fail "an armed shift with a stale watcher did not write the durable outage marker"
   [ "$(wc -l < "$log" | tr -d '[:space:]')" -eq 1 ] || fail "an armed shift with a stale watcher did not fire exactly one alert"
   out=$(cat "$log")
-  assert_contains "$out" $'osascript\tSUPERVISION DOWN: glasses shift armed, no crew task in flight' \
+  assert_contains "$out" $'osascript\tSUPERVISION DOWN: add-on shift armed, no crew task in flight' \
     "the shift alert did not keep the SUPERVISION DOWN prefix and name the shift: $out"
   assert_not_contains "$out" '0 task(s) in flight' "the shift alert read as an idle home with zero tasks"
   run_check "$home" "$recorder"
@@ -463,14 +464,14 @@ test_armed_shift_with_no_crew_task_is_supervised() {
 
   out=$(run_mode "$home" "$recorder" check); status=$?
   expect_code 1 "$status" "the operator diagnostic must exit non-zero on a shift outage"
-  assert_contains "$out" 'SUPERVISION DOWN: glasses shift armed, no crew task in flight' "the diagnostic did not name the shift outage"
+  assert_contains "$out" 'SUPERVISION DOWN: add-on shift armed, no crew task in flight' "the diagnostic did not name the shift outage"
 
   # With a crew task in flight beside the shift, the crew wording is untouched.
   printf 'project=test\n' > "$home/state/task.meta"
   rm -f "$marker"
   out=$(run_mode "$home" "$recorder" check) || true
   assert_contains "$out" 'SUPERVISION DOWN: 1 task(s) in flight' "an in-flight task beside an armed shift changed the crew-task wording"
-  assert_not_contains "$out" 'glasses shift' "an in-flight task beside an armed shift was reported as a shift outage"
+  assert_not_contains "$out" 'add-on shift' "an in-flight task beside an armed shift was reported as a shift outage"
   rm -f "$home/state/task.meta" "$marker"
 
   # Standing the shift down makes the home idle again: cleared, silent, OK.
@@ -529,7 +530,7 @@ test_addon_sentinel_hook_work_is_supervised() {
 # A shift record that outlived away mode is a stale leftover, not work to
 # supervise. bin/fm-afk-return.sh removes none of the shift's artifacts, so an
 # ordinary captain return leaves the record behind; supervising it would alert
-# on every idle evening and speak into a headset on a charger.
+# on every idle evening.
 test_a_shift_record_without_away_mode_is_not_supervised() {
   local home="$TMP_ROOT/shift-stale" recorder="$TMP_ROOT/record-shift-stale" log="$TMP_ROOT/shift-stale-alerts.log" out status
   make_primary "$home"
@@ -561,7 +562,7 @@ test_dead_away_daemon_with_a_shift_armed_fires_the_host_alarm() {
 
   run_check "$home" "$recorder"
   [ "$(wc -l < "$log" | tr -d '[:space:]')" -eq 1 ] || fail "a dead away daemon with a shift armed did not fire the host alarm"
-  assert_contains "$(cat "$log")" 'SUPERVISION DOWN: glasses shift armed' "the dead-daemon alert did not name the armed shift"
+  assert_contains "$(cat "$log")" 'SUPERVISION DOWN: add-on shift armed' "the dead-daemon alert did not name the armed shift"
   assert_contains "$(cat "$log")" 'last watcher beat:' "the dead-daemon alert omitted the beacon evidence"
   rm -f "$log" "$home/state/.supervision-outage-alarm"
 
@@ -586,7 +587,7 @@ test_dead_away_daemon_with_a_shift_armed_fires_the_host_alarm() {
   wait "$holder" 2>/dev/null || true
   [ ! -e "$log" ] || fail "a healthily watched shift fired an alert: $(cat "$log")"
   [ ! -e "$home/state/.supervision-outage-alarm" ] || fail "a healthily watched shift wrote an outage marker"
-  assert_contains "$out" 'OK - glasses shift armed, no crew task in flight with a live identity-matched watcher' \
+  assert_contains "$out" 'OK - add-on shift armed, no crew task in flight with a live identity-matched watcher' \
     "the healthy report did not name the armed shift: $out"
   pass "supervision sentinel: a dead away daemon with a shift armed fires the host alarm, and a watched shift reports OK by name"
 }

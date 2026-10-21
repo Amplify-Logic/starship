@@ -30,9 +30,11 @@
 #   - <name> [<mode> forge=gerrit] - <desc> (added <date>)           -> <mode> off, --forge gerrit
 #   - <name> [<mode> alias=<other>] - <desc> (added <date>)          -> same posture for <name> and <other>
 #   - <name> [<mode> forge=forgejo] - <desc> (added <date>)          -> <mode> <yolo>, --forge forgejo
+#   - <name> [<mode> label=<word>] - <desc> (added <date>)           -> <mode> off; <word> names it on the bridge page
 #   <name> may contain spaces; it ends at the literal " [" or " - " that follows it.
 #   Bracket tokens are order-independent: +yolo, branch=<prefix>, forge=<value>,
-#   and alias=<other> are recognized by their own shape wherever they appear, and
+#   alias=<other>, and label=<word> are recognized by their own shape wherever
+#   they appear, and
 #   whichever token is left over is the mode. <prefix> must not contain a space; an empty override
 #   ("branch=") resolves to "" for a bare "<task-id>" ship branch instead of the
 #   legacy "fm/<task-id>".
@@ -59,6 +61,9 @@
 #   such as bin/fm-spawn.sh look a project up by its directory basename). It
 #   cannot contain a space, and a row registered under the exact name always
 #   wins over another row's alias.
+# label=<word> (orthogonal) = the short name bin/fm-bridge-view.py shows for the
+#   project; it never changes any posture output, and a row without one is
+#   shown by its registered name.
 # forge (orthogonal, and orthogonal to yolo too) = which forge the project's
 #   remote actually is, never inferred from mode, remote name, host, or protocol.
 #   `none` means a forge whose pull requests and checks no-mistakes already
@@ -170,9 +175,9 @@ parsed=$(awk -v n="$NAME" -v want_line="$LINE_QUERY" '
       for (i=1; i<=nk; i++) { s = s (s==""?"":" ") rest[i]; if (rest[i] ~ /\]$/) break }
       gsub(/^\[|\]$/, "", s);           # strip the surrounding brackets
       k = split(s, a, " ");
-      # Tokens are order-independent: +yolo, branch=<prefix>, forge=<value>, and
-      # alias=<name> are recognized by their own shape wherever they appear,
-      # keyed tokens that are none of those are ignored (with a near-miss
+      # Tokens are order-independent: +yolo, branch=<prefix>, forge=<value>,
+      # alias=<name>, and label=<word> are recognized by their own shape
+      # wherever they appear, keyed tokens that are none of those are ignored (with a near-miss
       # warning for the forge spelling), and the first token left over is the mode.
       mode_set = 0
       for (j=1; j<=k; j++) {
@@ -180,6 +185,7 @@ parsed=$(awk -v n="$NAME" -v want_line="$LINE_QUERY" '
         if (a[j] ~ /^branch=/) { branch = substr(a[j], 8); continue }
         if (a[j] ~ /^forge=/) { forge = a[j]; continue }
         if (a[j] ~ /^alias=./) { aliases = aliases " " substr(a[j], 7); continue }
+        if (a[j] ~ /^label=/) continue
         if (a[j] ~ /^[^=]+=/) {
           key = substr(a[j], 1, index(a[j], "=") - 1);
           e = dist(key, "forge");

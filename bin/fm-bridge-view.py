@@ -10,7 +10,8 @@ writes backlog or fleet state. Session and passcode files live under the
 home's 0700 bridge/ directory. Logs also go there, not into state/.
 Authenticated photo drops land in data/bridge-inbox/ (mode 0700
 quarantined storage). Authenticated hold-to-speak audio is forwarded
-into the local glasses mailbox; the relay token stays in this process.
+into the local voice mailbox that config/bridge-mailbox names, if any; the
+relay token stays in this process.
 /deck and /api/deck serve the captain's Action Deck from one bounded
 `bin/fm-deck.sh --json` read behind the same session, Host and CSP
 boundary; they render records and act on nothing (docs/bridge-view.md).
@@ -50,7 +51,7 @@ from contextlib import contextmanager
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 from urllib.parse import parse_qs, unquote, urlparse
 
 LOOPBACK = "127.0.0.1"
@@ -74,19 +75,14 @@ DEFERRED_HOLD_KINDS = {"parked", "future", "load", "external"}
 DUPLICATE_REASON_RE = re.compile(r"(?i)\bduplicate\b")
 RETIRE_REASON_RE = re.compile(r"(?i)\bretir(?:e|ing|ement)\b")
 PARKED_REASON_RE = re.compile(r"(?i)\bparked\b")
-PROJECT_LABEL_RULES = (
-    (("atelier",), "Atelier"),
-    (("city-guide", "city-guide"), "Journey"),
-    (("household-finances",), "Finances"),
-    (("firstmate", "starship"), "Fleet"),
-    (("glasses-voice",), "Glasses"),
-)
+# One data/projects.md row: "- <name> [<tokens>] - <description>". The name
+# ends at the first " [" or " - ", as in bin/fm-project-mode.sh.
+PROJECT_ROW_RE = re.compile(r"^- (.+?)(?: \[([^\]]*)\])?(?: - |$)")
 STALE_CLIENT_SECONDS = 90
 REFRESH_CLIENT_SECONDS = 30
-MAILBOX_PORT = 8765
-MAILBOX_LAUNCHD = "com.firstmate.glasses-voice-mailbox"
+MAILBOX_CONFIG_RELATIVE = Path("config") / "bridge-mailbox"
+MAILBOX_CONFIG_KEYS = {"port", "launchd", "token"}
 MAILBOX_TIMEOUT_SECONDS = 5
-RELAY_TOKEN_RELATIVE = Path("data") / "glasses-voice-runtime" / "relay-token"
 UPLOAD_MAX_BYTES = 15 * 1024 * 1024
 SPEAK_MAX_BYTES = 10 * 1024 * 1024
 BODY_DRAIN_TIMEOUT_SECONDS = 1.0
@@ -814,15 +810,60 @@ def hold_is_deferred(row: Dict[str, Any]) -> bool:
     return bool(PARKED_REASON_RE.search(reason))
 
 
-def project_label(repo: str, owner: str = "") -> str:
-    blob = " ".join(part for part in (repo, owner) if part).lower()
-    for needles, label in PROJECT_LABEL_RULES:
-        if any(needle in blob for needle in needles):
-            return label
-    token = re.sub(r"[^a-z0-9]+", " ", str(repo or "").rsplit("/", 1)[-1].lower()).strip()
+def _plain_label(name: str) -> str:
+    token = re.sub(r"[^a-z0-9]+", " ", str(name or "").rsplit("/", 1)[-1].lower()).strip()
     if token:
         return token[:1].upper() + token[1:]
-    return "Other"
+    return ""
+
+
+def project_label_rules(text: str) -> List[Tuple[str, str]]:
+    """(needle, label) pairs from the project registry text: each row's name
+    and alias=<name> tokens, labelled by its label=<word> token or else the
+    name in plain words. Longest needle first, so a project whose name holds
+    another's still gets its own label."""
+    rules: List[Tuple[str, str]] = []
+    for line in text.splitlines():
+        match = PROJECT_ROW_RE.match(line)
+        if not match:
+            continue
+        name = match.group(1).strip()
+        tokens = (match.group(2) or "").split()
+        aliases = [t[len("alias="):] for t in tokens if t.startswith("alias=") and len(t) > len("alias=")]
+        labels = [t[len("label="):] for t in tokens if t.startswith("label=") and len(t) > len("label=")]
+        label = labels[0] if labels else _plain_label(name)
+        if not label:
+            continue
+        rules.extend((needle.lower(), label) for needle in [name, *aliases])
+    rules.sort(key=lambda rule: -len(rule[0]))
+    return rules
+
+
+def read_project_label_rules(home: Path) -> List[Tuple[str, str]]:
+    try:
+        return project_label_rules((home / "data" / "projects.md").read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError):
+        return []
+
+
+def project_label(repo: str, owner: str = "", rules: Sequence[Tuple[str, str]] = ()) -> str:
+    """The chip name for an item: its own repository decides; the owner (a
+    task id) is read only when the item names no repository, so a project
+    name inside a task id never relabels another project's item. A
+    repository matches only a whole registered name; a task id matches a
+    name only as whole dash-separated words."""
+    repo_name = str(repo or "").strip().rsplit("/", 1)[-1].lower()
+    if repo_name:
+        for needle, label in rules:
+            if needle == repo_name:
+                return label
+        return _plain_label(repo_name) or "Other"
+    task = str(owner or "").strip().lower()
+    words = "-%s-" % task.replace("_", "-")
+    for needle, label in rules:
+        if "-%s-" % needle.replace("_", "-") in words:
+            return label
+    return _plain_label(task) or "Other"
 
 
 def waiting_groups(items: List[Dict[str, str]]) -> List[Dict[str, Any]]:
@@ -859,26 +900,51 @@ def human_line(text: str, fallback: str = "") -> Optional[str]:
     return candidate
 
 
-def mailbox_port() -> int:
-    port = MAILBOX_PORT
+def mailbox_config(home: Path) -> Dict[str, str]:
+    """The optional config/bridge-mailbox: `key = value` lines naming the
+    voice mailbox hold-to-speak forwards to (docs/configuration.md owns the
+    keys). Unknown keys and malformed lines are skipped; no file means no
+    mailbox."""
+    config: Dict[str, str] = {}
+    try:
+        text = (home / MAILBOX_CONFIG_RELATIVE).read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return config
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = (part.strip() for part in line.split("=", 1))
+        if key in MAILBOX_CONFIG_KEYS and value:
+            config[key] = value
+    return config
+
+
+def mailbox_port(home: Path) -> Optional[int]:
     if TEST_MODE:
         override = os.environ.get("FM_BRIDGE_VIEW_MAILBOX_PORT", "").strip()
         if override.isdigit():
-            port = int(override)
-    return port
+            return int(override)
+    port = mailbox_config(home).get("port", "")
+    if port.isdigit() and 0 < int(port) < 65536:
+        return int(port)
+    return None
 
 
-def relay_token_path(home: Path) -> Path:
-    return home / RELAY_TOKEN_RELATIVE
+def relay_token_path(home: Path) -> Optional[Path]:
+    relative = Path(mailbox_config(home).get("token", ""))
+    if not relative.parts or relative.is_absolute() or ".." in relative.parts:
+        return None
+    return home / relative
 
 
 def load_relay_token(home: Path) -> str:
     if TEST_MODE:
-        env = os.environ.get("GLASSES_RELAY_TOKEN", "").strip()
+        env = os.environ.get("FM_BRIDGE_VIEW_MAILBOX_TOKEN", "").strip()
         if env:
             return env
     path = relay_token_path(home)
-    if path.is_symlink() or not path.is_file():
+    if path is None or path.is_symlink() or not path.is_file():
         return ""
     try:
         token = path.read_text(encoding="utf-8").strip()
@@ -888,9 +954,12 @@ def load_relay_token(home: Path) -> str:
 
 
 def mailbox_request(
-    method: str, path: str, token: str, payload: Optional[Dict[str, Any]] = None
+    home: Path, method: str, path: str, token: str, payload: Optional[Dict[str, Any]] = None
 ) -> Tuple[int, Optional[Dict[str, Any]]]:
-    url = f"http://{LOOPBACK}:{mailbox_port()}{path}"
+    port = mailbox_port(home)
+    if port is None:
+        raise RuntimeError("mailbox unreachable")
+    url = f"http://{LOOPBACK}:{port}{path}"
     data = None if payload is None else json.dumps(payload).encode("utf-8")
     headers = {"Authorization": "Bearer " + token}
     if payload is not None:
@@ -938,7 +1007,7 @@ def build_voice_question(payload: bytes, media_type: str, filename: str) -> Dict
     }
 
 
-def project_observation(model: Dict[str, Any]) -> Dict[str, Any]:
+def project_observation(model: Dict[str, Any], label_rules: Sequence[Tuple[str, str]] = ()) -> Dict[str, Any]:
     omitted = model.get("omitted") or []
     if not isinstance(omitted, list):
         omitted = []
@@ -966,7 +1035,7 @@ def project_observation(model: Dict[str, Any]) -> Dict[str, Any]:
         if hold_is_deferred(row):
             item["dot"] = "Waiting"
             item["project"] = project_label(
-                str(row.get("repo") or ""), str(row.get("owner") or "")
+                str(row.get("repo") or ""), str(row.get("owner") or ""), label_rules
             )
             deferred_items.append(item)
         else:
@@ -993,7 +1062,7 @@ def project_observation(model: Dict[str, Any]) -> Dict[str, Any]:
             stuck_items.append(item)
         elif state == "paused":
             item["project"] = project_label(
-                str(row.get("repo") or ""), str(row.get("owner") or "")
+                str(row.get("repo") or ""), str(row.get("owner") or ""), label_rules
             )
             waiting_live.append(item)
         elif state == "unknown":
@@ -1030,7 +1099,7 @@ def project_observation(model: Dict[str, Any]) -> Dict[str, Any]:
                 "title": title,
                 "dot": "Waiting",
                 "project": project_label(
-                    str(row.get("repo") or ""), str(row.get("owner") or "")
+                    str(row.get("repo") or ""), str(row.get("owner") or ""), label_rules
                 ),
             }
         )
@@ -1061,23 +1130,26 @@ def project_observation(model: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def mailbox_listener_available() -> bool:
-    port = mailbox_port()
-    launchctl = os.environ.get("FM_BRIDGE_VIEW_LAUNCHCTL", "launchctl")
-    uid = os.getuid()
-    try:
-        proc = subprocess.run(
-            [launchctl, "print", f"gui/{uid}/{MAILBOX_LAUNCHD}"],
-            capture_output=True,
-            text=True,
-            timeout=2,
-            check=False,
-            env={"PATH": CHILD_PATH},
-        )
-        if proc.returncode == 0 and "state = running" in proc.stdout:
-            return True
-    except (OSError, subprocess.TimeoutExpired):
-        pass
+def mailbox_listener_available(home: Path) -> bool:
+    port = mailbox_port(home)
+    if port is None:
+        return False
+    label = mailbox_config(home).get("launchd", "")
+    if label:
+        launchctl = os.environ.get("FM_BRIDGE_VIEW_LAUNCHCTL", "launchctl")
+        try:
+            proc = subprocess.run(
+                [launchctl, "print", f"gui/{os.getuid()}/{label}"],
+                capture_output=True,
+                text=True,
+                timeout=2,
+                check=False,
+                env={"PATH": CHILD_PATH},
+            )
+            if proc.returncode == 0 and "state = running" in proc.stdout:
+                return True
+        except (OSError, subprocess.TimeoutExpired):
+            pass
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.settimeout(0.2)
     try:
@@ -1309,7 +1381,7 @@ def run_machines(home: Path, root: Path, bridge_port: int) -> Dict[str, Any]:
         "--bridge-port",
         str(bridge_port),
     ]
-    extra = {"FM_BRIDGE_VIEW_MAILBOX_PORT": str(mailbox_port())}
+    extra: Dict[str, str] = {}
     if os.environ.get("SSH_AUTH_SOCK"):
         extra["SSH_AUTH_SOCK"] = os.environ["SSH_AUTH_SOCK"]
     model = _run_json_child(argv, home, root, "machines snapshot", extra)
@@ -1842,7 +1914,7 @@ class SnapshotCache:
 
     def _load(self, started: float) -> Dict[str, Any]:
         model = run_snapshot(self.home, self.root)
-        observation = project_observation(model)
+        observation = project_observation(model, read_project_label_rules(self.home))
         # The Routing section rides the same refresh; its own failure leaves
         # the glance whole and says why in the section instead.
         try:
@@ -1855,7 +1927,7 @@ class SnapshotCache:
             observation["memory"] = read_memory(self.home)
         except (OSError, RuntimeError, ValueError) as exc:
             observation["memory"] = {"error": str(exc) or "memory read failed"}
-        observation["mailbox_listener"] = mailbox_listener_available()
+        observation["mailbox_listener"] = mailbox_listener_available(self.home)
         observation["read_started"] = model.get("generated")
         observation["server_unix"] = int(started)
         return observation
@@ -3561,7 +3633,7 @@ class BridgeHandler(BaseHTTPRequestHandler):
                 self._json_error(503, "mailbox is not configured")
                 return
             try:
-                status, payload = mailbox_request("GET", "/v1/answers/" + request_id, token)
+                status, payload = mailbox_request(STATE.home, "GET", "/v1/answers/" + request_id, token)
             except RuntimeError:
                 self._json_error(503, "mailbox unreachable")
                 return
@@ -3695,7 +3767,7 @@ class BridgeHandler(BaseHTTPRequestHandler):
             return
         question = build_voice_question(payload, mailbox_type, filename)
         try:
-            status, reply = mailbox_request("POST", "/v1/questions", relay, question)
+            status, reply = mailbox_request(STATE.home, "POST", "/v1/questions", relay, question)
         except RuntimeError:
             self._json_error(503, "mailbox unreachable")
             return
@@ -3826,8 +3898,8 @@ def command_render_plist(home: Path, root: Path) -> None:
     )
 
 
-def command_mailbox() -> None:
-    print("on" if mailbox_listener_available() else "off")
+def command_mailbox(home: Path) -> None:
+    print("on" if mailbox_listener_available(home) else "off")
 
 
 def command_funnel() -> None:
@@ -3882,7 +3954,8 @@ def main(argv: Optional[List[str]] = None) -> None:
     plist = sub.add_parser("render-plist")
     plist.add_argument("--home", required=True)
     plist.add_argument("--root", required=True)
-    sub.add_parser("mailbox-listener")
+    mailbox = sub.add_parser("mailbox-listener")
+    mailbox.add_argument("--home", required=True)
     sub.add_parser("check-funnel")
     args = parser.parse_args(argv)
     if args.command == "serve":
@@ -3894,7 +3967,7 @@ def main(argv: Optional[List[str]] = None) -> None:
     elif args.command == "render-plist":
         command_render_plist(Path(args.home), Path(args.root))
     elif args.command == "mailbox-listener":
-        command_mailbox()
+        command_mailbox(Path(args.home))
     elif args.command == "check-funnel":
         command_funnel()
 

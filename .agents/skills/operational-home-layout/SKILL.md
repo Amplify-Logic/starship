@@ -63,6 +63,8 @@ config/speak  optional opt-in desk voice-out gate and `say` voice name; LOCAL, g
 config/desk-floater-signing-identity  optional codesigning identity for the desk floater, or "-" for ad-hoc; LOCAL, gitignored, not inherited; absent, or missing, expired or failing to sign, uses the first "Apple Development" identity, else ad-hoc, with a note and never a stopped launch; see docs/configuration.md "Desk floater signing identity"
 config/bridge-links  optional LOCAL, gitignored bridge-page pinned links; see docs/configuration.md
 config/bridge-machines  optional LOCAL, gitignored machines, probes, and services the bridge's Machines page watches; absent = tailnet and this Mac only; see docs/configuration.md
+config/bridge-mailbox  optional LOCAL, gitignored loopback voice mailbox the bridge page's hold-to-speak forwards to; absent = no mailbox; see docs/configuration.md "Bridge voice mailbox"
+config/leak-words  optional LOCAL, gitignored private words bin/fm-leak-guard.sh refuses in tracked files; absent = no word check; see docs/configuration.md "Private leak words"
 data/                personal fleet records; LOCAL, gitignored as a whole
   backlog.md         task queue, dependencies, history
   captain.md         this home's domain-local captain preferences and working style; LOCAL, gitignored, canonical even if harness memory mirrors it, and updated with inspect-then-update

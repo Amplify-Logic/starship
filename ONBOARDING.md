@@ -177,13 +177,12 @@ A home that ran before they shipped can copy them into its private `config/` fol
 
 ```sh
 cp -n docs/examples/crew-dispatch-claude-only.json config/crew-dispatch.json
-cp -n docs/examples/speak config/speak
 cp -n docs/examples/stt-vocabulary config/stt-vocabulary
 ```
 
 - `crew-dispatch.json` decides which Claude model does which job: Opus 5.5 for nearly everything, Sonnet 5.5 for well-specified mechanical work, and Haiku 5.5 for tiny chores, sized for a Pro or Max 5x plan; it uses no other provider or account.
-- `speak` turns on spoken replies; it needs the Starship Voice project and a Deepgram key or a macOS voice, as [desk voice-out](docs/configuration.md#desk-voice-out-configspeak) explains, and stays silent without them.
 - `stt-vocabulary` teaches the desk floater's transcription the names you say; add your own below its starter words.
+- Spoken replies are not a starter setting: `cp -n docs/examples/speak config/speak` turns them on, and they need the Starship Voice project and a Deepgram key or a macOS voice, as [desk voice-out](docs/configuration.md#desk-voice-out-configspeak) explains.
 
 You should see: after a restart, your first mate dispatches workers on Claude only.
 

@@ -25,7 +25,7 @@ FAKE_CLAUDE="$FAKEBIN/claude"
 trap fm_test_cleanup EXIT
 unset FM_ROOT_OVERRIDE FM_STATE_OVERRIDE FM_DATA_OVERRIDE FM_TASK_ID CLAUDE_PROJECT_DIR
 
-PERU="Move the venue deposit from 2 November to 1 February."
+SAID="Move the team offsite from 2 November to 1 February."
 
 # A primary checkout: a plain git repo with AGENTS.md and this repo's bin.
 PRIMARY_ROOT="$TMP_ROOT/primary"
@@ -75,9 +75,9 @@ mark() { FM_HOME="$1" "$LEDGER_SH" mark ${2:+"$2"} >/dev/null || fail "mark fail
 test_registration_records_the_captain_prompt() {
   local home entry
   home=$(make_home records)
-  submit "$home" "$PERU"
+  submit "$home" "$SAID"
   assert_present "$home/data/captain-ledger.jsonl" "the hook did not create the ledger"
-  assert_equals "$PERU" "$(texts "$home")" "the ledger must hold the submitted prompt as said"
+  assert_equals "$SAID" "$(texts "$home")" "the ledger must hold the submitted prompt as said"
   entry=$(jq -c '{seq, session, epoch: (.epoch | type)}' "$home/data/captain-ledger.jsonl")
   assert_equals '{"seq":1,"session":"sess-ledger","epoch":"number"}' "$entry" \
     "an entry must carry its seq, the session id, and an epoch"
@@ -91,15 +91,15 @@ test_a_home_without_the_flag_records_nothing() {
   local home
   home=$(make_home not-opted-in)
   rm -f "$home/config/captain-ledger"
-  submit "$home" "$PERU"
+  submit "$home" "$SAID"
   assert_absent "$home/data/captain-ledger.jsonl" "a home without config/captain-ledger must record nothing"
   : > "$home/config/captain-ledger"
-  submit "$home" "$PERU"
-  assert_equals "$PERU" "$(texts "$home")" "the flag must switch the recording on"
+  submit "$home" "$SAID"
+  assert_equals "$SAID" "$(texts "$home")" "the flag must switch the recording on"
   rm -f "$home/config/captain-ledger"
   submit "$home" "Keep the review on Thursday."
-  assert_equals "$PERU" "$(texts "$home")" "removing the flag must stop the recording"
-  assert_contains "$(pending "$home")" "Move the venue deposit" "pending must still list words recorded while the flag was on"
+  assert_equals "$SAID" "$(texts "$home")" "removing the flag must stop the recording"
+  assert_contains "$(pending "$home")" "Move the team offsite" "pending must still list words recorded while the flag was on"
   mark "$home"
   assert_equals "" "$(pending "$home")" "mark must still reconcile a ledger with the flag off"
   pass "ledger: only a home with config/captain-ledger records, and pending and mark still reconcile without it"
@@ -118,8 +118,8 @@ test_operational_and_harness_started_input_is_dropped() {
   submit "$home" "$steer"
   submit "$home" $'\n\n<task-notification>\n<summary>Stop hook feedback</summary>\n</task-notification>'
   submit "$home" $'  \n\t'
-  submit_raw "$home" "$(jq -cn --arg t "$PERU" '{hook_event_name: "UserPromptSubmit", prompt: $t, cursor_version: "x"}')"
-  submit_raw "$home" "$(prompt_payload "$PERU" Stop)"
+  submit_raw "$home" "$(jq -cn --arg t "$SAID" '{hook_event_name: "UserPromptSubmit", prompt: $t, cursor_version: "x"}')"
+  submit_raw "$home" "$(prompt_payload "$SAID" Stop)"
   submit_raw "$home" 'not json at all'
   assert_absent "$home/data/captain-ledger.jsonl" \
     "a wake, a launch brief, a guard follow-up, a steer, a rewake, a blank prompt, a Cursor payload, another event, or garbage was recorded"
@@ -148,13 +148,13 @@ test_a_session_without_the_lock_records_nothing() {
   sleep 30 &
   holder=$!
   printf '%s\n' "$holder" > "$home/state/.lock"
-  prompt_payload "$PERU" | FM_HOME="$home" "$FAKE_CLAUDE" -c \
+  prompt_payload "$SAID" | FM_HOME="$home" "$FAKE_CLAUDE" -c \
     'cd "$1" && CLAUDE_PROJECT_DIR="$1" bash -c "$2"' _ "$PRIMARY_ROOT" "$HOOK_CMD" \
     || fail "the ledger hook exited non-zero for a session without the lock"
   kill "$holder" 2>/dev/null || true
   wait "$holder" 2>/dev/null || true
   rm -f "$home/state/.lock"
-  prompt_payload "$PERU" | FM_HOME="$home" "$FAKE_CLAUDE" -c \
+  prompt_payload "$SAID" | FM_HOME="$home" "$FAKE_CLAUDE" -c \
     'cd "$1" && CLAUDE_PROJECT_DIR="$1" bash -c "$2"' _ "$PRIMARY_ROOT" "$HOOK_CMD" \
     || fail "the ledger hook exited non-zero for a session with no lock at all"
   assert_absent "$home/data/captain-ledger.jsonl" "a session that does not hold the fleet lock recorded a prompt"
@@ -190,10 +190,10 @@ test_pending_mark_and_return() {
   local home out
   home=$(make_home cycle)
   assert_equals "" "$(pending "$home")" "pending must print nothing before any captain words"
-  submit "$home" "$PERU"
+  submit "$home" "$SAID"
   out=$(pending "$home")
   assert_contains "$out" "UNRECONCILED CAPTAIN WORDS (1 since $(date +%Y-%m-%d))" "pending must count the entry and date the oldest"
-  assert_contains "$out" "$PERU" "pending must preview the captain's words"
+  assert_contains "$out" "$SAID" "pending must preview the captain's words"
   assert_contains "$out" "$home/data/captain-ledger.jsonl" "pending must name the ledger"
   assert_contains "$out" "fm-captain-ledger.sh mark 1." "pending must say to mark through the newest entry it showed"
   mark "$home"
@@ -202,7 +202,7 @@ test_pending_mark_and_return() {
   out=$(pending "$home")
   assert_contains "$out" "UNRECONCILED CAPTAIN WORDS (1 since " "a new prompt after mark must bring the section back with a count of 1"
   assert_contains "$out" "Keep the review on Thursday." "the new prompt must be previewed"
-  assert_not_contains "$out" "$PERU" "a marked entry must not reappear"
+  assert_not_contains "$out" "$SAID" "a marked entry must not reappear"
   pass "ledger: pending lists unmarked words, mark silences it, and a new prompt brings it back with a count of 1"
 }
 

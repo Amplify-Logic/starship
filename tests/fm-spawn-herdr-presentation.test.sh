@@ -207,7 +207,7 @@ cat > "$HOME_FIX/data/projects.md" <<'EOF'
 - atelier [local-only] - Atelier
 EOF
 cat > "$HOME_FIX/data/backlog.md" <<'EOF'
-- [ ] journey-single - Validate GPS triggers across all seven city stops (repo: city-guide)
+- [ ] journey-single - Validate GPS triggers across all seven harbour stops (repo: city-guide)
 - [ ] journey-batch-one - Rebaseline the City Guide launch plan with a date (repo: city-guide)
 - [ ] journey-batch-two - Audit the Journey release checklist (repo: city-guide)
 - [ ] atelier-single - Align Atelier launch surfaces (repo: atelier)
@@ -278,7 +278,7 @@ assert_contains "$(jq -r --arg ws "$atelier_ws" '.workspaces[]|select(.workspace
   'Atelier' 'Atelier workspace lost its human project name'
 
 labels=$(jq -r '.tabs[].label' "$HERDR_STATE")
-assert_contains "$labels" 'WORKER · Validate GPS triggers across all seven city stops · 🔵 WORKING' \
+assert_contains "$labels" 'WORKER · Validate GPS triggers across all seven harbour stops · 🔵 WORKING' \
   'single spawn did not render backlog outcome and authoritative state'
 assert_contains "$labels" 'WORKER · Rebaseline the City Guide launch plan with a date · 🟣 NEEDS YOU' \
   'first batch scout did not render its distinct outcome'
@@ -305,7 +305,7 @@ grep -qxF "herdr_project_key=$journey_path" "$journey_meta" \
   || fail "the record did not name the project its workspace belongs to: $(grep '^herdr_project_key=' "$journey_meta" || true)"
 grep -qxF 'herdr_project_name=City Guide' "$journey_meta" \
   || fail "the record did not carry the human project name: $(grep '^herdr_project_name=' "$journey_meta" || true)"
-grep -qxF 'outcome=Validate GPS triggers across all seven city stops' "$journey_meta" \
+grep -qxF 'outcome=Validate GPS triggers across all seven harbour stops' "$journey_meta" \
   || fail "the record did not carry the derived outcome: $(grep '^outcome=' "$journey_meta" || true)"
 grep -qxF 'outcome=Align Atelier launch surfaces' "$HOME_FIX/state/atelier-single.meta" \
   || fail "the captain's explicit --outcome was not recorded, so a refresh renames the tab over it"
@@ -335,7 +335,7 @@ grep -qxF "herdr_project_key=$journey_path" "$relaunched_meta" \
   || fail "the relaunch dropped the project key: $(grep '^herdr_project_key=' "$relaunched_meta" || true)"
 grep -qxF 'herdr_project_name=City Guide' "$relaunched_meta" \
   || fail "the relaunch dropped the project name: $(grep '^herdr_project_name=' "$relaunched_meta" || true)"
-grep -qxF 'outcome=Validate GPS triggers across all seven city stops' "$relaunched_meta" \
+grep -qxF 'outcome=Validate GPS triggers across all seven harbour stops' "$relaunched_meta" \
   || fail "the relaunch dropped the task outcome: $(grep '^outcome=' "$relaunched_meta" || true)"
 [ "$(grep -c '^herdr_workspace_managed=' "$relaunched_meta")" -eq 1 ] \
   || fail 'the relaunched record carries more than one managed marker'

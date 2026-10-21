@@ -13,8 +13,8 @@ seconds; there is no background daemon):
 - This machine's CPU load, memory, disk, and uptime from a small POSIX shell
   report run locally (Darwin and Linux).
 - The health of the Firstmate background services on this machine: the bridge
-  page, the glasses voice mailbox, and the desk floater, each shown only when
-  it is installed here or answering, plus any `service` lines in the config.
+  page and the desk floater, each shown only when it is installed here or
+  answering, plus any `service` lines in the config.
 - For each `machine` line in the config that names an ssh alias, the same
   report over ssh with a short timeout (BatchMode, so it never prompts), only
   when that machine is not known to be offline. Linux machines also report
@@ -42,7 +42,6 @@ the read fail, since each part carries its own error.
 
 Environment:
   FM_HOME                       home whose config/ is read (default: --home)
-  FM_BRIDGE_VIEW_MAILBOX_PORT   glasses mailbox loopback port (default 8765)
   FM_BRIDGE_VIEW_PORT           bridge loopback port (default 8766)
   FM_MACHINES_LAUNCH_AGENTS     LaunchAgents directory (default
                                 ~/Library/LaunchAgents), for tests
@@ -80,7 +79,6 @@ SERVICE_TIMEOUT_SECONDS = 2
 COLLECT_DEADLINE_SECONDS = 15
 REPORT_MAX_BYTES = 64_000
 DISK_ALERT_PERCENT = 90
-MAILBOX_PORT = 8765
 BRIDGE_PORT = 8766
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 SSH_ALIAS_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._@-]*$")
@@ -449,14 +447,6 @@ def service_checks(root: Path, bridge_port: int, extra: List[Dict[str, str]]) ->
             return None
         return _service("Bridge page", up, "serving" if up else f"nothing listening on port {bridge_port}")
 
-    def mailbox() -> Optional[Dict[str, Any]]:
-        port = _env_port("FM_BRIDGE_VIEW_MAILBOX_PORT", MAILBOX_PORT)
-        status, _latency, error = _http_status(f"http://127.0.0.1:{port}/health", SERVICE_TIMEOUT_SECONDS)
-        if status is None and not _agent_installed("com.firstmate.glasses-voice-mailbox"):
-            return None
-        up = status == 200
-        return _service("Glasses voice mailbox", up, "healthy" if up else (error or f"status {status}"))
-
     def floater() -> Optional[Dict[str, Any]]:
         if platform.system() != "Darwin" or not (root / "desk-floater" / ".build" / "DeskFloater.app").is_dir():
             return None
@@ -471,7 +461,6 @@ def service_checks(root: Path, bridge_port: int, extra: List[Dict[str, str]]) ->
 
     checks: List[Tuple[str, Callable[[], Optional[Dict[str, Any]]]]] = [
         ("Bridge page", bridge),
-        ("Glasses voice mailbox", mailbox),
         ("Desk floater", floater),
     ]
     checks.extend((entry["name"], lambda entry=entry: configured(entry)) for entry in extra)
