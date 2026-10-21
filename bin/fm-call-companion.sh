@@ -320,6 +320,20 @@ stamp_time() {
   printf '%s-%s-%s %s:%s:%s\n' "${1:0:4}" "${1:4:2}" "${1:6:2}" "${1:9:2}" "${1:11:2}" "${1:13:2}"
 }
 
+# A new stamp: the time now, moved on a second while an archived call holds it,
+# so a call started or archived in the same second as the last one archived
+# never shares its stamp or overwrites its files.
+new_call_stamp() {
+  local epoch stamp
+  epoch=$(date '+%s')
+  while :; do
+    stamp=$(date -r "$epoch" '+%Y%m%d-%H%M%S' 2>/dev/null || date -d "@$epoch" '+%Y%m%d-%H%M%S')
+    [ -n "$(find "$ARCHIVE_DIR" -maxdepth 1 -type f -name "$stamp-*" 2>/dev/null)" ] || break
+    epoch=$((epoch + 1))
+  done
+  printf '%s\n' "$stamp"
+}
+
 any_running() {
   is_owned_running captions fm-call-captions.sh ||
     is_owned_running mic fm-call-mic.sh ||
@@ -384,7 +398,7 @@ start_companion() {
   ! call_in_place || reset_companion
   prepare_views
   mkdir -p "$STATE_DIR"
-  date '+%Y%m%d-%H%M%S' > "$CALL_STAMP"
+  new_call_stamp > "$CALL_STAMP"
   transcript_note "recording started ($source) after everyone on the call agreed to be recorded"
 
   if [ "$source" = captions ]; then
@@ -540,7 +554,7 @@ reset_companion() {
     return 0
   fi
   mkdir -p "$ARCHIVE_DIR"
-  stamp=$(fm_call_stamp) || stamp=$(date '+%Y%m%d-%H%M%S')
+  stamp=$(fm_call_stamp) || stamp=$(new_call_stamp)
   if [ -s "$TRANSCRIPT" ]; then
     mv "$TRANSCRIPT" "$ARCHIVE_DIR/$stamp-transcript.txt"
     archived=true
