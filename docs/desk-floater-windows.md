@@ -22,6 +22,7 @@ You need Starship set up in Ubuntu as [ONBOARDING-windows.md](../ONBOARDING-wind
 
 1. Put `DEEPGRAM_API_KEY=...` in this home's `.env`, as on a Mac ([desk-floater.md](desk-floater.md#enablement)).
 2. For spoken replies, put `enabled = true` in this home's `config/speak`.
+   Spoken replies are not yet available for teammates; skip this step.
 3. In your Ubuntu window, from `~/starship`:
 
    ```sh

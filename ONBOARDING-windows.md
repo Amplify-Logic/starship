@@ -171,7 +171,7 @@ Herdr then shows a shell, with a sidebar on the left where each worker will appe
 
 ## 9. Finish with the shared steps
 
-Continue with [ONBOARDING.md step 3, get Starship and start your first mate](ONBOARDING.md#3-get-starship-and-start-your-first-mate) at **Start your first mate**, in Herdr's shell, and go on through the Harbour Logbook report in step 5.
+Continue with [ONBOARDING.md step 3, get Starship and start your first mate](ONBOARDING.md#3-get-starship-and-start-your-first-mate) at **Start your first mate**, in Herdr's shell, and go on through your first project's report in step 5.
 Skip step 2 of that guide and the first part of step 3 (the `git clone` and `bin/fm-herdr-setup.sh` lines): the setup script did those.
 
 When the first mate's startup checks run, it also tells you if anything sits under `/mnt/`, if Ubuntu has no network, or if `localhost` cannot reach Windows.
@@ -188,8 +188,10 @@ To get the team's latest Starship, tell your first mate "update starship".
 
 ## 10. Talk to your first mate (optional)
 
-The desk floater lets you hold a key and talk to your first mate, hear its replies, dictate into any Windows app, and send it screenshots.
-Once your first mate runs, put your Deepgram key in `~/starship/.env` as a line `DEEPGRAM_API_KEY=...`, and for spoken replies put `enabled = true` in `~/starship/config/speak`.
+The desk floater lets you hold a key and talk to your first mate, dictate into any Windows app, and send it screenshots.
+Talking and dictation turn your voice into words through Deepgram, which needs a key from a paid account: sign up at [deepgram.com](https://deepgram.com), then create an API key in its console.
+Once your first mate runs, put the key in `~/starship/.env` as a line `DEEPGRAM_API_KEY=...`.
+Spoken replies are not yet available for teammates: they depend on a voice project teammates cannot reach yet, so replies stay text, and you can leave `config/speak` alone.
 Then, in Ubuntu:
 
 ```sh

@@ -34,6 +34,8 @@ Exactly one fleet brain remains: the primary already running in this home.
    enabled = true
    ```
 
+   Spoken replies are not yet available for teammates; skip this step.
+
 3. Launch the floater:
 
    ```

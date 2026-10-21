@@ -207,9 +207,20 @@ Add the ones your organisation actually uses; skip the rest.
 Claude in Chrome is not a claude.ai connector, so it is not in the claude.ai Connectors list; once enabled, `/mcp` shows it separately as the built-in `claude-in-chrome`.
 It is a browser extension that lets Claude use pages in your own Chrome when no connector exists; install it, then enable it in Claude Code with `/chrome`.
 
-The first mate does not hold outward sends by itself: a connector that can send, post, or change something can do so without asking you first.
+Workers are blocked from acting outward unless you allow it.
+A check refuses any worker's send, reply, forward, invite answer, calendar change, Zapier action, or click and typing in your browser, unless that job or your home allows it; reading, searching, and drafting always work.
+When a worker needs one, it stops and the first mate asks you, and your yes allows that one job.
+Three commands switch the style for every worker in your home:
+
+- `/outward-fine-print`, the default: only what a job's own permission or a standing permission allows.
+- `/outward-broad`: whole kinds of action, such as `send email` or `control browser`, for every worker; name the ones you want, as in `/outward-broad send email`.
+- `/outward-no-block`: the check is off, and workers act outward whenever their instructions say to.
+
+[docs/configuration.md](configuration.md#worker-outward-actions-configoutward-permissions) owns the permissions and styles.
+
+The check covers only workers: the first mate itself and second mates are not checked, so a connector they use can send, post, or change something without asking you first.
 Record a standing rule before you connect mail or chat ([ONBOARDING step 4](../ONBOARDING.md#4-let-it-finish-its-own-setup-and-set-one-standing-rule) prompts for it).
-Record it in both places: `data/captain.md` binds the first mate, and the same line in `config/brief-include.md` puts it in every worker brief, since workers get the same connectors but do not read `data/captain.md`.
+Record it in both places: `data/captain.md` binds the first mate, and the same line in `config/brief-include.md` puts it in every worker brief, which also covers what the check does not, such as tools outside your connectors.
 That onboarding step has the exact words to send.
 
 Once you run second mates, also put the rule in `data/captain-shared.md`, which second mates inherit, and in each second mate home's `config/brief-include.md`, since neither of your main home's copies reaches them.
@@ -240,8 +251,8 @@ Ask the first mate to set one up; each owner page lists what it needs.
 | --- | --- | --- |
 | Away and quiet modes (`/afk`, `/quiet`) | Keep routine events off your screen | Nothing extra |
 | Chart room ([chart-room.md](chart-room.md)) | A private local page showing where every project stands | Nothing extra |
-| Desk floater ([desk-floater.md](desk-floater.md)) | Push-to-talk button on your Mac that types what you say into the first mate | A Deepgram API key; spoken replies also need a separate voice project's speech shaper |
-| Spoken replies ([configuration](configuration.md#desk-voice-out-configspeak)) | The first mate reads the start of each reply aloud | The same speech shaper |
+| Desk floater ([Mac](desk-floater.md), [Windows](desk-floater-windows.md)) | Push-to-talk button that types what you say into the first mate | A Deepgram API key, from a paid account at deepgram.com |
+| Spoken replies ([configuration](configuration.md#desk-voice-out-configspeak)) | The first mate reads the start of each reply aloud | A separate voice project's speech shaper; not yet available for teammates |
 | Phone bridge page ([bridge-view.md](bridge-view.md)) | A phone page showing what needs you, with photo drop and hold-to-speak | Tailscale and Python 3.12 |
 | Dropped-threads digest ([configuration](configuration.md#dropped-threads-digest-configdropped-threads)) | A twice-daily "what is left hanging" summary | A scheduled job on this Mac |
 | Computer use ([macos-computer-use](../.agents/opt-in-skills/macos-computer-use/SKILL.md)) | Lets the agents operate Mac apps and windows | Peekaboo, which the first mate installs, and Mac Accessibility permissions |
@@ -254,6 +265,7 @@ Ask the first mate to set one up; each owner page lists what it needs.
 
 Say "update starship" (or "update firstmate", or `/updatefirstmate`) every week or so.
 It pulls the latest shared instructions and scripts and restarts cleanly; your private folders are never touched.
+It skips your home if a file of yours sits in `~/starship` outside those private folders, or if you changed a Starship file; [ONBOARDING.md](../ONBOARDING.md#already-installed) says how to clear that and what else changed for an existing home.
 If you use firstmate on two of your own machines, [porting.md](porting.md) covers moving your private material between them.
 Porting is for your own machines only: a colleague starts from a fresh clone and builds their own home.
 
@@ -270,7 +282,7 @@ Each step is small and proves one part of the system.
 
 **Day 2 - a first investigation.**
 
-1. Pick a project: Harbour Logbook from onboarding, or add another real one: "add `github.com/<org>/<repo>` as a project; deliver with full checks", using its real address.
+1. Pick a project: the one you added in onboarding, or add another real one: "add `github.com/<org>/<repo>` as a project; deliver with full checks", using its real address.
 2. Ask a scout question about it: "how does sign-up work in this project? report only".
 3. Read the findings, ask one follow-up, and record anything surprising as a learning.
 
