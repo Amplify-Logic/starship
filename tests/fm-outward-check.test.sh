@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # tests/fm-outward-check.test.sh - the worker outward-action check
 # (bin/fm-outward-check.py), the per-job grant (bin/fm-outward-grant.sh), the
-# brief line bin/fm-brief.sh writes and the hooks bin/fm-spawn.sh installs.
+# style switch (bin/fm-outward-style.sh), the brief line bin/fm-brief.sh writes
+# and the hooks bin/fm-spawn.sh installs.
 # Every case drives the real hook with the payload Claude Code sends; nothing
 # is stubbed except the spawn world's terminal and harness binaries.
 set -u
@@ -11,6 +12,7 @@ set -u
 
 CHECK="$ROOT/bin/fm-outward-check.py"
 GRANT="$ROOT/bin/fm-outward-grant.sh"
+STYLE="$ROOT/bin/fm-outward-style.sh"
 TMP_ROOT=$(fm_test_tmproot fm-outward-check)
 
 command -v python3 >/dev/null 2>&1 || fail "python3 is required"
@@ -224,6 +226,114 @@ test_no_block_and_config_problems() {
   pass "No Block switches the check off at once, and a line that is not understood allows nothing and is named"
 }
 
+style() {  # <home> <args...>
+  local home=$1
+  shift
+  FM_CONFIG_OVERRIDE="$home/config" "$STYLE" "$@"
+}
+
+test_styles_switch_and_the_check_honours_each() {
+  local home out before
+  home=$(new_home styles '# routine\naccept invites from @example.com\nbroad send email\n')
+  seen "$home" mcp__claude_ai_Google_Calendar__get_event '{"id":"e1","organizer":{"email":"mia@example.com"}}'
+  assert_equals "Outward: fine print" "$(style "$home")" "a home with no style line is fine print"
+  expect_refuse "$home" mcp__claude_ai_Gmail__send_message '{"to":["a@b.example"]}' "a broad line must allow nothing in fine print" >/dev/null
+
+  out=$(style "$home" broad 'send email, control browser') || fail "switching to broad switches must succeed: $out"
+  assert_equals "Outward style is now broad switches: every worker may send email and control the browser without asking, and anything else still needs its job's own permission or a standing permission." \
+    "$out" "the switch must say in one sentence which style is on and what it means"
+  assert_equals "Outward: broad switches (send email, control browser)" "$(style "$home" show)" "show must name the style and its switches"
+  expect_allow "$home" mcp__claude_ai_Gmail__send_message '{"draftId":"d1"}' "the send email switch must allow any send"
+  expect_allow "$home" mcp__claude_ai_Gmail__reply '{"messageId":"m1"}' "the send email switch must allow a reply to default recipients"
+  expect_allow "$home" mcp__claude-in-chrome__navigate '{"url":"https://example.com"}' "the control browser switch must allow browsing"
+  assert_grep '"by": "broad: send email"' "$home/state/outward-check.log" "an action a broad switch allowed must be recorded with it"
+  expect_refuse "$home" mcp__claude_ai_Google_Calendar__create_event '{}' "a switch that is off must still refuse" >/dev/null
+  expect_refuse "$home" mcp__claude_ai_Zapier_MCP__gmail_send_email '{}' "Zapier must stay refused without its switch" >/dev/null
+  expect_allow "$home" mcp__claude_ai_Google_Calendar__respond_to_event '{"eventId":"e1","responseStatus":"accepted"}' \
+    "a narrow standing permission must keep holding in broad switches"
+
+  style "$home" broad 'reply to email, change calendar, respond to invites, use zapier' >/dev/null || fail "naming switches must work"
+  expect_allow "$home" mcp__claude_ai_Gmail__reply '{"messageId":"m1"}' "the reply switch must allow a reply"
+  expect_refuse "$home" mcp__claude_ai_Gmail__send_message '{"to":["a@b.example"]}' "the reply switch must not allow a new message" >/dev/null
+  expect_refuse "$home" mcp__claude-in-chrome__navigate '{}' "naming switches must turn the others off" >/dev/null
+  expect_allow "$home" mcp__claude_ai_Google_Calendar__create_event '{}' "the change calendar switch must allow a calendar change"
+  expect_allow "$home" mcp__claude_ai_Google_Calendar__respond_to_event '{"eventId":"e9","responseStatus":"declined"}' \
+    "the respond to invites switch must allow any answer from anyone"
+  expect_allow "$home" mcp__claude_ai_Zapier_MCP__gmail_send_email '{}' "the zapier switch must allow a Zapier action"
+  expect_refuse "$home" mcp__claude_ai_Gmail__trash_thread '{}' "no switch covers organising mail" >/dev/null
+
+  before=$(cat "$home/config/outward-permissions")
+  style "$home" broad 'send email to a@b.example' 2>/dev/null && fail "a narrow permission is not a broad switch"
+  style "$home" broad 'everything' 2>/dev/null && fail "an unknown switch must be refused"
+  style "$home" broad all 2>/dev/null && fail "all is not a switch"
+  style "$home" broad 'browser' 2>/dev/null && fail "a short form is not a switch"
+  style "$home" broad 'control the browser' 2>/dev/null && fail "another spelling of a switch is not a switch"
+  style "$home" sideways 2>/dev/null && fail "an unknown style must be refused"
+  style "$home" 'fine print' 2>/dev/null && fail "only the hyphenated style words switch"
+  style "$home" 'broad switches' 2>/dev/null && fail "only the hyphenated style words switch"
+  assert_equals "$before" "$(cat "$home/config/outward-permissions")" "a refused switch must change nothing"
+
+  out=$(style "$home" fine-print) || fail "switching to fine print must succeed"
+  assert_equals "Outward style is now fine print: workers act outward only with their job's own permission or one of this home's 1 standing permission." \
+    "$out" "fine print must say what it means"
+  assert_equals "Outward: fine print" "$(style "$home")" "show must name fine print"
+  expect_refuse "$home" mcp__claude_ai_Gmail__reply '{"messageId":"m1"}' "fine print must turn the broad switches off at once" >/dev/null
+  expect_allow "$home" mcp__claude_ai_Google_Calendar__respond_to_event '{"eventId":"e1","responseStatus":"accepted"}' \
+    "fine print must keep the narrow standing permission"
+  assert_grep '# routine' "$home/config/outward-permissions" "a switch must keep comments"
+  assert_grep 'accept invites from @example.com' "$home/config/outward-permissions" "a switch must never delete a narrow standing permission"
+  assert_grep 'broad use zapier' "$home/config/outward-permissions" "fine print must keep the broad switches for later"
+  style "$home" broad >/dev/null
+  assert_equals "Outward: broad switches (reply to email, change calendar, respond to invites, use zapier)" "$(style "$home")" \
+    "broad without switches must bring back the ones chosen before"
+
+  out=$(style "$home" no-block) || fail "switching to no block must succeed"
+  assert_contains "$out" "Outward style is now no block: the check is off" "no block must say the check is off"
+  assert_equals "Outward: no block" "$(style "$home")" "show must name no block"
+  expect_allow "$home" mcp__claude_ai_Gmail__trash_thread '{}' "no block must let everything through"
+  style "$home" fine-print >/dev/null
+  expect_refuse "$home" mcp__claude_ai_Gmail__trash_thread '{}' "leaving no block must restore the check at once" >/dev/null
+  assert_equals 1 "$(grep -c '^style ' "$home/config/outward-permissions")" "the file must hold exactly one style line"
+  assert_grep 'accept invites from @example.com' "$home/config/outward-permissions" "the narrow permission must survive every switch"
+
+  home=$(new_home styles-fresh)
+  out=$(style "$home" broad) || fail "broad in a home with no permissions file must succeed"
+  assert_equals "Outward style is now broad switches, but no switch is on, so workers still act outward only with their job's own permission or a standing permission; which should every worker be allowed to do: send email, reply to email, answer calendar invites, change the calendar, control the browser or run Zapier actions?" \
+    "$out" "broad with no switch chosen before must turn none on and ask which to allow"
+  assert_equals "Outward: broad switches (none on)" "$(style "$home")" "a bare broad on a fresh home must show no switch on"
+  expect_refuse "$home" mcp__claude_ai_Gmail__send_message '{"to":["a@b.example"]}' "a bare broad must not allow sending" >/dev/null
+  expect_refuse "$home" mcp__claude_ai_Gmail__reply '{"messageId":"m1"}' "a bare broad must not allow replying" >/dev/null
+  expect_refuse "$home" mcp__claude_ai_Google_Calendar__respond_to_event '{"eventId":"e1","responseStatus":"accepted"}' "a bare broad must not allow answering invites" >/dev/null
+  expect_refuse "$home" mcp__claude_ai_Google_Calendar__create_event '{}' "a bare broad must not allow calendar changes" >/dev/null
+  expect_refuse "$home" mcp__claude-in-chrome__navigate '{"url":"https://example.com"}' "a bare broad must not allow browsing" >/dev/null
+  expect_refuse "$home" mcp__claude_ai_Zapier_MCP__run_action '{}' "a bare broad must not allow Zapier" >/dev/null
+  style "$home" broad 'send email' >/dev/null || fail "naming a switch after a bare broad must work"
+  expect_allow "$home" mcp__claude_ai_Gmail__send_message '{"to":["a@b.example"]}' "the named switch must then allow sending"
+  expect_refuse "$home" mcp__claude-in-chrome__navigate '{"url":"https://example.com"}' "an unnamed switch must stay off" >/dev/null
+  assert_equals "Outward: fine print" "$(FM_CONFIG_OVERRIDE="$TMP_ROOT/no-config" "$STYLE" show)" "a home with no file must show fine print"
+  pass "each outward style is switched by one command that says what it means, the check honours it at once, and narrow permissions survive"
+}
+
+test_style_lines_that_conflict_or_are_not_understood() {
+  local home reason out
+  home=$(new_home style-conflict 'no block\nstyle broad switches\nbroad send email\n')
+  reason=$(expect_refuse "$home" mcp__claude_ai_Gmail__send_message '{"to":["a@b.example"]}' "conflicting styles must leave fine print")
+  assert_contains "$reason" "more than one style (no block, broad switches), so fine print holds" "the refusal must name the conflict"
+  assert_equals "Outward: fine print" "$(style "$home")" "show must report the style that holds"
+  printf 'style sideways\nbroad organise mail\nstyle broad\nbroad browser\nbroad send emails\n' > "$home/config/outward-permissions"
+  out=$(python3 "$CHECK" check-config --config "$home/config") && fail "check-config must fail on a bad style or switch"
+  assert_contains "$out" "line 1: 'style sideways' is not a style" "check-config must name a style it does not know"
+  assert_contains "$out" "line 2: 'organise mail' is not a broad switch" "check-config must name a line that is not a switch"
+  assert_contains "$out" "line 3: 'style broad' is not a style" "a style line must hold the style's full name"
+  assert_contains "$out" "line 4: 'browser' is not a broad switch" "a broad line must hold the switch's full name"
+  assert_contains "$out" "line 5: 'send emails' is not a broad switch" "a broad line must hold the switch's exact name"
+  printf 'kind=ship\noutward=reply to email; use zapier\n' > "$home/state/task-1.meta"
+  expect_allow "$home" mcp__claude_ai_Gmail__reply '{"messageId":"m1"}' "a job's reply to email must allow a reply"
+  expect_refuse "$home" mcp__claude_ai_Gmail__forward '{"to":["a@b.example"]}' "a job's reply to email must not allow a forward" >/dev/null
+  expect_allow "$home" mcp__claude_ai_Zapier_MCP__run_action '{}' "a job's use zapier must allow any Zapier tool"
+  pass "style lines that conflict or are not understood leave fine print and are named, and the new switch words work per job"
+}
+
 test_any_failure_refuses() {
   local home out fakebin cmd
   home=$(new_home failure)
@@ -354,6 +464,8 @@ test_job_permission_from_the_task_record
 test_job_permission_from_the_task_record_last_line_wins
 test_standing_invites_need_the_seen_organizer
 test_no_block_and_config_problems
+test_styles_switch_and_the_check_honours_each
+test_style_lines_that_conflict_or_are_not_understood
 test_any_failure_refuses
 test_parse_and_grant
 test_brief_line

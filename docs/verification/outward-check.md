@@ -3,13 +3,13 @@
 Repeatable evidence for the worker outward-action check.
 Current behavior and the operator-facing contract are owned by [`../configuration.md`](../configuration.md) ("Worker outward actions"), and the matching rules by [`../../bin/fm-outward-check.py`](../../bin/fm-outward-check.py)'s header; this page records evidence only.
 
-Date: 2026-10-20.
+Date: 2026-10-20; portable suite rerun 2026-10-21.
 Python: 3.12.5 (macOS 26.5.1, Darwin arm64).
 Claude Code: 2.1.305.
 
 ## Portable suite
 
-`tests/fm-outward-check.test.sh` drives the real hook with payloads shaped like Claude Code's, the real grant script, the real brief scaffold and a real `bin/fm-spawn.sh` Claude spawn with only the terminal and harness binaries stubbed.
+`tests/fm-outward-check.test.sh` drives the real hook with payloads shaped like Claude Code's, the real grant and style scripts, the real brief scaffold and a real `bin/fm-spawn.sh` Claude spawn with only the terminal and harness binaries stubbed.
 
 ```console
 $ bash tests/fm-outward-check.test.sh
@@ -19,6 +19,8 @@ ok - a send email to permission holds only when every recipient is visible and l
 ok - a job's permission comes from the last outward= line and holds only for what it names
 ok - an invites-from permission holds only for an organizer the job has seen in a calendar answer, and only for its answer
 ok - No Block switches the check off at once, and a line that is not understood allows nothing and is named
+ok - each outward style is switched by one command that says what it means, the check honours it at once, and narrow permissions survive
+ok - style lines that conflict or are not understood leave fine print and are named, and the new switch words work per job
 ok - a failure inside the check, or a check that cannot run, refuses the action
 ok - permission text is normalized, and a grant widens one running task's permission under its record lock
 ok - ship and scout briefs carry the job's outward permission line, none by default

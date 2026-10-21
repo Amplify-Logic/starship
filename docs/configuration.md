@@ -839,11 +839,13 @@ Opening a URL in the browser needs `control browser`, because a link in the capt
 | --- | --- |
 | `send email` | sending, replying to and forwarding mail |
 | `send email to <addresses>` | the same, only when every recipient is listed |
+| `reply to email` | only replies |
 | `respond to invites [from <addresses>]` | answering calendar invites, optionally only from those organizers |
 | `accept invites [from <addresses>]`, `decline invites [from <addresses>]` | only that answer |
 | `change calendar` | creating, updating and deleting calendar events |
 | `organise mail` | labels, trash, spam and other mailbox changes |
 | `control browser` | opening URLs, clicking, typing, form input, scripts and uploads in the captain's browser |
+| `use zapier` | every Zapier tool |
 | `use <tool name or glob>` | exactly the named connector tools, for example `use mcp__claude_ai_Zapier_MCP__*` |
 
 Addresses are full email addresses or `@domain` for everyone at that domain, separated by commas, spaces or `and`; names such as "the Harbour team" are not understood.
@@ -867,17 +869,30 @@ send email to team@example.com
 Blank lines and `#` comments are ignored.
 A line the check does not understand allows nothing; refusals name it, and `python3 bin/fm-outward-check.py check-config --config config` lists every such line.
 
-**No Block mode.** A line `no block` in `config/outward-permissions` switches the check off for every worker in the home, so workers act outward whenever their instructions say to.
-Delete the line to turn the check back on.
+**Outward styles.** The home runs in one of three styles, which the captain switches with `/outward-fine-print`, `/outward-broad` and `/outward-no-block`, each running `bin/fm-outward-style.sh`:
 
-The check reads the file on every connector or browser action, so a change takes effect at once without a relaunch.
+| Style | What a worker may do outward |
+| --- | --- |
+| fine print (the default) | only what its job's permission or a standing permission allows |
+| broad switches | also every action of each switch that is on: `send email`, `reply to email`, `respond to invites`, `change calendar`, `control browser`, `use zapier` |
+| no block | anything; the check is off for every worker in the home |
+
+The script keeps the style as a `style` line in `config/outward-permissions`, and the broad switches as `broad <switch>` lines that allow nothing in any other style.
+A switch never removes the other lines, so going back to fine print restores exactly the standing permissions there were.
+`/outward-broad` with no switches keeps the ones chosen before; the first time it turns no switch on and asks which to allow.
+Naming switches, such as `/outward-broad send email, control browser`, turns on exactly those.
+The script takes only the exact style words `fine-print`, `broad` and `no-block` and the exact switch names above, comma-separated.
+`bin/fm-outward-style.sh show` prints one line such as `Outward: fine print` for any surface that shows the style in force.
+An older bare `no block` line still means no block, and lines naming two different styles leave fine print and are named in refusals.
+
+The check reads the file on every connector or browser action, so a change, including a style switch, takes effect at once without a relaunch.
 The file is not inherited into secondmate homes.
 
 **How it runs.** `bin/fm-spawn.sh` adds a Claude Code `PreToolUse` hook on `mcp__claude_ai_.*|mcp__claude-in-chrome__.*` and a `PostToolUse` hook on `mcp__claude_ai_.*` to every Claude crewmate and scout's `.claude/settings.local.json`, beside its lifecycle hooks.
 A refusal reaches the worker as a denied tool call that names the tool, what it would have done and any permission that came close, says that reading and drafting still work, tells the worker not to retry or route around it but to report a `blocked:` status line, and names the permission that would allow it.
 It never shows the grant command, the permissions file or any other path, so the worker reports the permission and only the captain, through Firstmate, decides whether to give it.
 Any failure inside the check refuses the action, and a check that cannot run at all, such as when `python3` is missing, refuses too.
-Every refusal and every outward action a permission or No Block let through is one JSON line in `state/outward-check.log` naming the task, tool, decision and deciding permission, never the message or event contents.
+Every refusal and every outward action a permission, a broad switch or no block let through is one JSON line in `state/outward-check.log` naming the task, tool, decision and deciding permission, never the message or event contents.
 [`bin/fm-outward-check.py`](../bin/fm-outward-check.py)'s header owns the matching rules, and dated live results are in [`verification/outward-check.md`](verification/outward-check.md).
 
 ## Parked-gate wait deferral (config/wedge-defer-parked-gate)

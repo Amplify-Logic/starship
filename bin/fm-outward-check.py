@@ -29,10 +29,18 @@
 #       Print each line of config/outward-permissions that is not understood
 #       and exit 1 when there is one; exit 0 when the file is absent or clean.
 #       This operator view names the file; the worker's refusal never does.
+#   fm-outward-check.py style --config DIR [show]
+#   fm-outward-check.py style --config DIR fine-print|no-block
+#   fm-outward-check.py style --config DIR broad [SWITCH[, SWITCH...]]
+#       Show or switch the home's outward style; bin/fm-outward-style.sh is
+#       the operator entry point and its header owns the usage. `show` prints
+#       one line, "Outward: <style>". A switch rewrites only the style line (and,
+#       for broad with SWITCHES, the broad lines) and prints one sentence saying
+#       which style is now on and what it means.
 #
 # docs/configuration.md "Worker outward actions" owns the operator contract:
 # what counts as outward, the permission words, standing permissions and the
-# No Block switch. This header owns the mechanics.
+# outward styles. This header owns the mechanics.
 #
 # WHAT IS GUARDED. Only MCP tools named mcp__claude_ai_<connector>__<action>
 # (the claude.ai connectors: Gmail, Google Calendar, Drive, Zapier, Claude
@@ -51,8 +59,10 @@
 # "send email" (any mail action with send, reply or forward), "respond to
 # invites" (calendar respond, accept, decline, rsvp), "change calendar" (any
 # other calendar change), "organise mail" (any other mailbox change), "control
-# browser" (any other browser action). Other connectors have no kind and are
-# allowed only by "use <tool name or glob>". "send email to <addresses>" holds
+# browser" (any other browser action), "use zapier" (any Zapier tool). "reply
+# to email" allows only a mail action with reply among its words. Other
+# connectors have no kind and are allowed only by "use <tool name or glob>",
+# which also names a single Zapier tool. "send email to <addresses>" holds
 # only when every recipient is visible in the tool input (to, cc, bcc; a reply
 # needs an explicit to, and a reply-all an explicit cc; a draft sent by id never
 # shows its recipients), each field is a list whose every item is exactly one
@@ -63,16 +73,29 @@
 # organizer, and accept or decline also requires that answer.
 # The job's permissions are the last `outward=` line of state/<task>.meta;
 # the home's standing permissions are config/outward-permissions, read on every
-# call, so a change takes effect at once. A line `no block` there switches the
-# check off for every worker in the home.
+# call, so a change takes effect at once.
+#
+# STYLES. A line `style fine print|broad switches|no block` in that file picks
+# the home's outward style; with none the style is fine print, and the older
+# bare `no block` line still means no block. Lines naming two different styles
+# are a problem and leave fine print. Fine print checks the job's permissions
+# and the plain standing lines. Broad switches also honours each `broad
+# <switch>` line, where a switch is exactly one of BROAD_SWITCHES, for every
+# worker; in any other style those lines are kept but allow nothing. The style
+# and switch names are only those exact words. No block switches the
+# check off for every worker in the home. A switch through `style` drops only
+# style lines and, when SWITCHES are given, the broad lines, so narrow standing
+# permissions, comments and lines not understood survive every switch. Broad
+# with no SWITCHES keeps the existing broad lines, and with none turns no
+# switch on and asks which to allow.
 # A refusal names the permission that would allow the action but never the
 # grant command, the permissions file or any other path: only the captain
 # widens what a worker may do, through Firstmate.
 #
-# RECORD. Every refusal and every outward action a permission or No Block let
-# through is appended as one JSON line to state/outward-check.log: time, task,
-# tool, kind, decision and the permission that decided. Tool inputs, such as
-# message bodies, are never logged.
+# RECORD. Every refusal and every outward action a permission, a broad switch
+# or no block let through is appended as one JSON line to
+# state/outward-check.log: time, task, tool, kind, decision and the permission
+# that decided. Tool inputs, such as message bodies, are never logged.
 import fnmatch
 import json
 import os
@@ -97,10 +120,12 @@ SEND_WORDS = {"send", "reply", "forward"}
 RESPOND_WORDS = {"respond", "accept", "decline", "rsvp"}
 
 SEND = "send email"
+REPLY = "reply to email"
 INVITES = "respond to invites"
 CALENDAR = "change calendar"
 MAILBOX = "organise mail"
 BROWSER = "control browser"
+ZAPIER = "use zapier"
 USE = "use"
 
 DOES = {
@@ -109,20 +134,33 @@ DOES = {
     CALENDAR: "would change the calendar",
     MAILBOX: "would change the mailbox",
     BROWSER: "would act in the captain's browser",
+    ZAPIER: "would run a Zapier action",
     None: "would act through a connected account",
 }
+
+FINE_PRINT = "fine print"
+BROAD = "broad switches"
+NO_BLOCK = "no block"
+STYLES = (FINE_PRINT, BROAD, NO_BLOCK)
+STYLE_COMMANDS = {"fine-print": FINE_PRINT, "broad": BROAD, "no-block": NO_BLOCK}
+BROAD_SWITCHES = (SEND, REPLY, INVITES, CALENDAR, BROWSER, ZAPIER)
+SWITCH_PROSE = {SEND: "send email", REPLY: "reply to email", INVITES: "answer calendar invites",
+                CALENDAR: "change the calendar", BROWSER: "control the browser",
+                ZAPIER: "run Zapier actions"}
 
 PERMISSIONS_FILE = "outward-permissions"
 LOG_NAME = "outward-check.log"
 LOG_MAX_BYTES = 1_000_000
 SEEN_MAX = 2000
-VOCABULARY = ("send email [to <addresses>]; respond to invites [from <addresses>]; "
+VOCABULARY = ("send email [to <addresses>]; reply to email; respond to invites [from <addresses>]; "
               "accept invites [from <addresses>]; decline invites [from <addresses>]; "
-              "change calendar; organise mail; control browser; use <tool name or glob>")
+              "change calendar; organise mail; control browser; use zapier; use <tool name or glob>")
 
 PLAIN_ADDRESS_RE = re.compile(r"^[^@\s,;<>]+@[^@\s,;<>]+$")
 ADDRESS_RE = re.compile(r"^(?:[^@\s,;<>]+)?@[^@\s,;<>]+\.[^@\s,;<>]+$")
 SEND_RE = re.compile(r"^send (?:e-?mails?|mail)(?: to (?P<who>.+))?$", re.I)
+REPLY_RE = re.compile(r"^reply to (?:e-?mails?|mail)$", re.I)
+ZAPIER_RE = re.compile(r"^use zapier$", re.I)
 INVITES_RE = re.compile(
     r"^(?P<verb>respond to|accept|decline) (?:calendar )?invit(?:es?|ations?)(?: from (?P<who>.+))?$",
     re.I)
@@ -150,6 +188,8 @@ def parse_one(piece):
     if m:
         who = parse_addresses(m.group("who")) if m.group("who") else []
         return {"kind": SEND, "who": who}
+    if REPLY_RE.match(text):
+        return {"kind": REPLY}
     m = INVITES_RE.match(text)
     if m:
         verb = m.group("verb").lower()
@@ -162,6 +202,8 @@ def parse_one(piece):
         return {"kind": MAILBOX}
     if BROWSER_RE.match(text):
         return {"kind": BROWSER}
+    if ZAPIER_RE.match(text):
+        return {"kind": ZAPIER}
     m = USE_RE.match(text)
     if m:
         return {"kind": USE, "pattern": m.group("pattern")}
@@ -198,28 +240,70 @@ def error_text(e):
     return e.strerror if isinstance(e, OSError) and e.strerror else str(e)
 
 
+def plain(raw):
+    """A file line without its comment, lower case with single spaces."""
+    return " ".join(raw.split("#", 1)[0].lower().split())
+
+
+def line_style(line):
+    """A plain line -> the style it names, or None when it names none."""
+    if line == "no block":
+        return NO_BLOCK
+    if line.startswith("style "):
+        style = line[len("style "):]
+        return style if style in STYLES else ""
+    return None
+
+
+def parse_switch(text):
+    """One broad switch name -> that name, or ValueError."""
+    name = " ".join(text.lower().split())
+    if name not in BROAD_SWITCHES:
+        raise ValueError("'%s' is not a broad switch; use one of: %s" % (text.strip(), "; ".join(BROAD_SWITCHES)))
+    return name
+
+
 def read_config(config_dir):
-    """config/outward-permissions -> (no_block, grants, problems); problems never name the file's path."""
+    """config/outward-permissions -> {style, standing, broad, problems}; problems never name the file's path."""
     path = pathlib.Path(config_dir) / PERMISSIONS_FILE
-    no_block, grants, problems = False, [], []
+    config = {"style": FINE_PRINT, "standing": [], "broad": [], "problems": []}
     if not path.exists():
-        return no_block, grants, problems
+        return config
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except (OSError, UnicodeDecodeError) as e:
-        return no_block, grants, ["the standing permissions could not be read (%s)" % error_text(e)]
+        config["problems"].append("the standing permissions could not be read (%s)" % error_text(e))
+        return config
+    styles = []
     for number, raw in enumerate(lines, 1):
-        line = raw.split("#", 1)[0].strip()
+        line = plain(raw)
         if not line:
             continue
-        if " ".join(line.lower().split()) == "no block":
-            no_block = True
-            continue
-        try:
-            grants.append(parse_one(line))
-        except ValueError as e:
-            problems.append("standing permission line %d: %s" % (number, e))
-    return no_block, grants, problems
+        style = line_style(line)
+        if style == "":
+            config["problems"].append("standing permission line %d: '%s' is not a style; use one of: %s"
+                                      % (number, line, "; ".join(STYLES)))
+        elif style:
+            if style not in styles:
+                styles.append(style)
+        elif line.startswith("broad "):
+            try:
+                name = parse_switch(line[len("broad "):])
+                if name not in config["broad"]:
+                    config["broad"].append(name)
+            except ValueError as e:
+                config["problems"].append("standing permission line %d: %s" % (number, e))
+        else:
+            try:
+                config["standing"].append(parse_one(line))
+            except ValueError as e:
+                config["problems"].append("standing permission line %d: %s" % (number, e))
+    if len(styles) > 1:
+        config["problems"].append("the standing permissions name more than one style (%s), so fine print holds"
+                                  % ", ".join(styles))
+    elif styles:
+        config["style"] = styles[0]
+    return config
 
 
 def task_grants(state_dir, task):
@@ -281,6 +365,8 @@ def classify(server, action):
         return True, INVITES if set(words) & RESPOND_WORDS else CALENDAR
     if fam == "browser":
         return True, BROWSER
+    if fam == "zapier":
+        return True, ZAPIER
     return True, None
 
 
@@ -354,6 +440,8 @@ def grant_allows(grant, tool, server, action, kind, tool_input, ctx):
     """-> (allowed, why-not or None)."""
     if grant["kind"] == USE:
         return fnmatch.fnmatchcase(tool.lower(), grant["pattern"].lower()), None
+    if grant["kind"] == REPLY:
+        return kind == SEND and "reply" in words_of(action), None
     if grant["kind"] != kind:
         return False, None
     label = "'%s'" % render(grant)
@@ -391,7 +479,7 @@ def suggestion(tool, action, kind, tool_input, state_dir, task):
         answer = invite_answer(action, tool_input)
         verb = {"accepted": "accept", "declined": "decline"}.get(answer, "respond")
         return render({"kind": INVITES, "verb": verb, "who": [organizer] if organizer else []})
-    if kind is None:
+    if kind in (None, ZAPIER):
         return "use " + tool
     return kind
 
@@ -508,15 +596,18 @@ def cmd_hook(argv):
         tool_input = payload.get("tool_input")
         tool_input = tool_input if isinstance(tool_input, dict) else {}
         entry = {"ts": int(time.time()), "task": o["task"], "tool": tool, "kind": kind or "other"}
-        no_block, standing, problems = read_config(o["config"])
-        if no_block:
+        config = read_config(o["config"])
+        if config["style"] == NO_BLOCK:
             append_log(o["state"], dict(entry, decision="allow", by="no block"))
             return 0
         own, own_errors = task_grants(o["state"], o["task"])
-        problems = ["this job's permission %s" % e for e in own_errors] + problems
+        problems = ["this job's permission %s" % e for e in own_errors] + config["problems"]
         ctx = {"state": o["state"], "task": o["task"]}
         reasons = []
-        for source, grants in (("job", own), ("standing", standing)):
+        sources = [("job", own), ("standing", config["standing"])]
+        if config["style"] == BROAD:
+            sources.append(("broad", [parse_one(name) for name in config["broad"]]))
+        for source, grants in sources:
             for grant in grants:
                 ok, why = grant_allows(grant, tool, server, action, kind, tool_input, ctx)
                 if ok:
@@ -576,16 +667,109 @@ def cmd_parse(argv):
 
 def cmd_check_config(argv):
     o = opts(argv, ("config",))
-    _, _, problems = read_config(o["config"])
+    problems = read_config(o["config"])["problems"]
     for p in problems:
         print("%s: %s" % (pathlib.Path(o["config"]) / PERMISSIONS_FILE, p))
     return 1 if problems else 0
 
 
+def prose_list(items):
+    return items[0] if len(items) == 1 else ", ".join(items[:-1]) + " and " + items[-1]
+
+
+def style_line(config):
+    if config["style"] == BROAD:
+        return "Outward: %s (%s)" % (BROAD, ", ".join(config["broad"]) or "none on")
+    return "Outward: " + config["style"]
+
+
+def style_sentence(config):
+    style = config["style"]
+    if style == NO_BLOCK:
+        return ("Outward style is now no block: the check is off, so every worker acts outward"
+                " whenever its instructions say to.")
+    if style == BROAD:
+        if not config["broad"]:
+            return ("Outward style is now broad switches, but no switch is on, so workers still act outward"
+                    " only with their job's own permission or a standing permission; which should every worker"
+                    " be allowed to do: %s?"
+                    % prose_list([SWITCH_PROSE[name] for name in BROAD_SWITCHES]).replace(" and ", " or "))
+        return ("Outward style is now broad switches: every worker may %s without asking, and anything else"
+                " still needs its job's own permission or a standing permission."
+                % prose_list([SWITCH_PROSE[name] for name in config["broad"]]))
+    count = len(config["standing"])
+    if not count:
+        return ("Outward style is now fine print: workers act outward only with their job's own permission,"
+                " since this home has no standing permissions.")
+    return ("Outward style is now fine print: workers act outward only with their job's own permission"
+            " or one of this home's %d standing permission%s." % (count, "" if count == 1 else "s"))
+
+
+def write_style(config_dir, style, switches):
+    """Rewrite the style line, and the broad lines when switches is a list, keeping every other line."""
+    path = pathlib.Path(config_dir) / PERMISSIONS_FILE
+    lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+    kept = []
+    for raw in lines:
+        line = plain(raw)
+        if line_style(line) is not None:
+            continue
+        if switches is not None and line.startswith("broad "):
+            continue
+        kept.append(raw)
+    out = ["style " + style] + kept + ["broad " + name for name in switches or []]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(".%s.%d" % (path.name, os.getpid()))
+    tmp.write_text("\n".join(out) + "\n", encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def cmd_style(argv):
+    if len(argv) < 2 or argv[0] != "--config":
+        raise SystemExit("error: missing --config")
+    config_dir, rest = argv[1], argv[2:]
+    action = rest[0] if rest else "show"
+    if action == "show" and len(rest) <= 1:
+        print(style_line(read_config(config_dir)))
+        return 0
+    style = STYLE_COMMANDS.get(action)
+    if not style or (style != BROAD and len(rest) > 1):
+        print("usage: fm-outward-style.sh [show] | fine-print | no-block | broad [<switch>[, <switch>...]]",
+              file=sys.stderr)
+        return 2
+    switches = None
+    if len(rest) > 1:
+        switches = []
+        try:
+            for piece in " ".join(rest[1:]).split(","):
+                if not piece.strip():
+                    continue
+                name = parse_switch(piece)
+                if name not in switches:
+                    switches.append(name)
+        except ValueError as e:
+            print("error: %s" % e, file=sys.stderr)
+            return 1
+        if not switches:
+            print("error: no broad switch given", file=sys.stderr)
+            return 1
+    try:
+        write_style(config_dir, style, switches)
+    except (OSError, UnicodeDecodeError) as e:
+        print("error: the outward style could not be changed (%s)" % error_text(e), file=sys.stderr)
+        return 1
+    config = read_config(config_dir)
+    print(style_sentence(config))
+    for p in config["problems"]:
+        print("note: %s" % p, file=sys.stderr)
+    return 0
+
+
 def main(argv):
-    commands = {"hook": cmd_hook, "seen": cmd_seen, "parse": cmd_parse, "check-config": cmd_check_config}
+    commands = {"hook": cmd_hook, "seen": cmd_seen, "parse": cmd_parse, "check-config": cmd_check_config,
+                "style": cmd_style}
     if len(argv) < 2 or argv[1] not in commands:
-        print("usage: fm-outward-check.py hook|seen|parse|check-config ... (see the header)", file=sys.stderr)
+        print("usage: fm-outward-check.py hook|seen|parse|check-config|style ... (see the header)", file=sys.stderr)
         return 2
     return commands[argv[1]](argv[2:])
 
