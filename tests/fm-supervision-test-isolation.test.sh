@@ -56,9 +56,9 @@ test_lib_source_drops_inherited_operational_home() {
   # process even exists; sourcing the shared library must drop the poison and
   # pin the hermetic fixture home in its place.
   # shellcheck disable=SC2016 # single quotes are deliberate: $0 carries the lib path
-  out=$(env FM_HOME=/Users/you/starship \
-    FM_ROOT_OVERRIDE=/Users/you/starship \
-    FM_STATE_OVERRIDE=/Users/you/starship/state \
+  out=$(env FM_HOME=/Users/exampleuser/starship \
+    FM_ROOT_OVERRIDE=/Users/exampleuser/starship \
+    FM_STATE_OVERRIDE=/Users/exampleuser/starship/state \
     bash -c '
       . "$0"
       printf "home=%s\n" "${FM_HOME:-unset}"
@@ -68,7 +68,7 @@ test_lib_source_drops_inherited_operational_home() {
   assert_contains "$out" "root_override=unset" "lib.sh must drop an inherited FM_ROOT_OVERRIDE"
   assert_contains "$out" "state_override=unset" "lib.sh must drop an inherited FM_STATE_OVERRIDE"
   case "$out" in
-    *home=/Users/you/starship*|*home=unset*)
+    *home=/Users/exampleuser/starship*|*home=unset*)
       fail "lib.sh did not replace an inherited FM_HOME with the hermetic home: $out"
       ;;
   esac

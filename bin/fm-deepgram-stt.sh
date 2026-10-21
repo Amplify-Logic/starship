@@ -24,8 +24,8 @@
 #     numbers (e.g. `pat dot example 1 => pat.example1`). Matching ignores case
 #     and accepts any run of whitespace between words. Match whole tokens only:
 #     never a part of an email address, dotted name, contraction or hyphenated
-#     word, though a possessive `'s` or `’s` may follow (`robin => ROBIN` turns
-#     `robin's` into `ROBIN's`). Surrounding sentence punctuation is preserved.
+#     word, though a possessive `'s` or `’s` may follow (`kai => KAI` turns
+#     `kai's` into `KAI's`). Surrounding sentence punctuation is preserved.
 #     Try the longest heard phrase first, each span rewritten at most once.
 #     --json stays raw.
 #   - A line with `=>` but an empty side is ignored. A vocabulary that cannot

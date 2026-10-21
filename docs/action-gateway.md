@@ -7,7 +7,7 @@ This document owns the ActionRequest schema, the canonical digest, the privilege
 ## Why this exists
 
 In software work, a bad branch can be discarded.
-In a music career, the expensive mistakes are outward: an email to a booking agent, money spent on ads, a post published, a submission sent.
+Outside the code, the expensive mistakes are outward: an email to a customer or partner, money spent on ads, a post published, a submission sent.
 None of those roll back.
 This gateway replaces merge/PR-style review with confirm-first consent for irreversible outward actions.
 
@@ -59,7 +59,7 @@ JSON
 ## Operation registry and severity
 
 Unknown `action_kind` values are refused at prepare (deny by default).
-Severity classes follow Atelier's tool taxonomy shape (`read` / `costly` / `external` / `irreversible`):
+Severity classes are `read` / `costly` / `external` / `irreversible`:
 
 | Severity | Meaning | Consent floor |
 | -------- | ------- | ------------- |

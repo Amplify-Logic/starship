@@ -9,8 +9,9 @@
 # and the /machines page reads `fm-machines.py --json` on request.
 # Optional pinned links are read from config/bridge-links on every page render.
 # Authenticated photo drops land in data/bridge-inbox/. Authenticated
-# hold-to-speak audio is forwarded into the local glasses mailbox; the
-# relay token stays in this process and is never sent to the browser.
+# hold-to-speak audio is forwarded into the local voice mailbox that the
+# optional config/bridge-mailbox names; the relay token stays in this process
+# and is never sent to the browser.
 #
 # The bind address is the literal 127.0.0.1 constant in bin/fm-bridge-view.py
 # and there is no flag or environment variable that widens it.
@@ -99,7 +100,7 @@ command_render_plist() {
 
 command_mailbox() {
   [ "$#" -eq 0 ] || { usage >&2; exit 2; }
-  engine mailbox-listener
+  engine mailbox-listener --home "$FM_HOME"
 }
 
 command_funnel() {

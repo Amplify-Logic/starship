@@ -234,7 +234,7 @@ test_scan_warn_machine_local_is_advisory() {
   local dirty="$TMP_ROOT/machine-local.md" out rc=0
   # Deliberate synthetic PII shapes for the advisory scanner; not real contact data.
   # Use a non-placeholder email so the shared allowlist does not filter it.
-  printf 'contact port-test@example.com\n' > "$dirty"
+  printf 'contact port-test@acme-mail.com\n' > "$dirty"
   printf 'CLAUDE_CONFIG_DIR=/Users/exampleuser/starship/state/claude-alt-account\n' >> "$dirty"
 
   out=$("$PORT" scan --warn-machine-local "$dirty" 2>&1) || rc=$?

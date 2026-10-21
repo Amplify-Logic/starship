@@ -480,7 +480,7 @@ EOF
     || fail "id and matching footer display should be equivalent"
   if FM_CURSOR_MODEL_CATALOG="$catalog" fm_cursor_models_equivalent \
     gpt-5.6-sol-xhigh 'Cursor Grok 4.5 Medium Fast'; then
-    fail "sol-xhigh must not be equivalent to a Grok footer (atelier mismatch shape)"
+    fail "sol-xhigh must not be equivalent to a Grok footer"
   fi
   pass "cursor catalog membership and requested-vs-live equivalence"
 }

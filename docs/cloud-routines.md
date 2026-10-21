@@ -6,7 +6,7 @@ The first and only routine is the weekly creator-repo watch, the cloud twin of t
 Both run side by side; the routine does not replace the laptop watch.
 
 Routines have no remote ingress, no gatekeeper, no messaging or spending authority, and no connectors.
-Never put Harbour, Atelier, City Guide, or any private repository or data into a routine: its repositories are cloned into Anthropic's cloud.
+Never put a private repository or private data into a routine: its repositories are cloned into Anthropic's cloud.
 
 ## The creator-repo watch
 

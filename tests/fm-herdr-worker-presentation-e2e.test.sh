@@ -72,7 +72,7 @@ if "$HERDR_LAB_HELPER" run "$HERDR_LAB_SESSION" agent start --help 2>/dev/null |
     --kind pi --pane "$PROBE_PANE") || fail 'could not start isolated Pi presentation probe'
 else
   AGENT_OUT=$("$HERDR_LAB_HELPER" run "$HERDR_LAB_SESSION" agent start \
-    'WORKER · Validate GPS triggers across all seven city stops · 🔵 WORKING' \
+    'WORKER · Validate GPS triggers across all seven harbour stops · 🔵 WORKING' \
     --workspace "$WS" --cwd "$ROOT" --no-focus \
     --env 'FM_PRESENTATION_LAB=1' \
     -- pi) || fail 'could not start isolated Pi presentation probe'
@@ -82,11 +82,11 @@ PANE=$(printf '%s' "$AGENT_OUT" | jq -r '.result.agent.pane_id // empty')
 [ -n "$TAB" ] && [ -n "$PANE" ] || fail 'agent start did not return stable tab/pane ids'
 
 "$HERDR_LAB_HELPER" run "$HERDR_LAB_SESSION" tab rename "$TAB" \
-  'WORKER · Validate GPS triggers across all seven city stops · 🔵 WORKING' >/dev/null \
+  'WORKER · Validate GPS triggers across all seven harbour stops · 🔵 WORKING' >/dev/null \
   || fail 'could not set worker tab title'
 "$HERDR_LAB_HELPER" run "$HERDR_LAB_SESSION" pane report-metadata "$PANE" \
   --source firstmate-worker-visible-v1 \
-  --title 'WORKER · Validate GPS triggers across all seven city stops · 🔵 WORKING' \
+  --title 'WORKER · Validate GPS triggers across all seven harbour stops · 🔵 WORKING' \
   --display-agent 'pi/gpt-5.6 · detached' \
   --state-label 'working=🔵 WORKING' \
   --state-label 'blocked=🔵 WORKING' \
@@ -120,7 +120,7 @@ native_agent=$(jq -r --arg id "$PANE" '.result.agents[]|select(.pane_id==$id)|.a
 
 [ "$workspace_label" = 'City Guide · 🔵 1 WORKING' ] \
   || fail "real grouped workspace row mismatch: $workspace_label"
-[ "$tab_label" = 'WORKER · Validate GPS triggers across all seven city stops · 🔵 WORKING' ] \
+[ "$tab_label" = 'WORKER · Validate GPS triggers across all seven harbour stops · 🔵 WORKING' ] \
   || fail "real grouped task row mismatch: $tab_label"
 [ "$display_agent" = 'pi/gpt-5.6 · detached' ] \
   || fail "real grouped detail row mismatch: $display_agent"

@@ -358,7 +358,7 @@ if positions != sorted(positions):
     raise SystemExit(1)
 PY
   assert_not_contains "$(cat "$body")" "waiting-summary" "waiting must not hide behind a collapsed fold"
-  assert_not_contains "$(cat "$body")" "GLASSES_RELAY_TOKEN" "page must not mention the relay token"
+  assert_not_contains "$(cat "$body")" "FM_BRIDGE_VIEW_MAILBOX_TOKEN" "page must not mention the relay token"
   assert_not_contains "$(cat "$body")" "relay-token" "page must not mention the relay token path"
   assert_not_contains "$(cat "$body")" "Bearer " "page must not ship a bearer token"
   assert_contains "$(cat "$body")" 'accept="image/jpeg,image/png,image/webp,image/heic,image/heif,image/*"' \
@@ -990,6 +990,38 @@ test_away_mode_passive_refresh_works() {
   pass "away-mode passive refresh works while ordinary Bearings still refuses"
 }
 
+test_mailbox_comes_only_from_its_config() {
+  local home output
+  home=$(make_home mailbox-config)
+  output=$(env -u FM_BRIDGE_VIEW_TEST -u FM_BRIDGE_VIEW_MAILBOX_PORT -u FM_BRIDGE_VIEW_MAILBOX_TOKEN \
+    python3 - "$ROOT/bin/fm-bridge-view.py" "$home" <<'PY'
+import importlib.util, pathlib, sys
+spec = importlib.util.spec_from_file_location("fm_bridge_view", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+home = pathlib.Path(sys.argv[2])
+(home / "config").mkdir(parents=True, exist_ok=True)
+(home / "data" / "voice").mkdir(parents=True, exist_ok=True)
+(home / "data" / "voice" / "token").write_text("secret-token\n")
+config = home / "config" / "bridge-mailbox"
+assert module.mailbox_port(home) is None and module.load_relay_token(home) == ""
+assert module.mailbox_listener_available(home) is False
+config.write_text("# mailbox\nport = 9001\ntoken = data/voice/token\ncolour = blue\nnot a line\n")
+assert module.mailbox_config(home) == {"port": "9001", "token": "data/voice/token"}, module.mailbox_config(home)
+assert module.mailbox_port(home) == 9001
+assert module.load_relay_token(home) == "secret-token"
+for bad in ("/etc/passwd", "../outside/token", "data/../../outside"):
+    config.write_text("port = 9001\ntoken = %s\n" % bad)
+    assert module.relay_token_path(home) is None, bad
+    assert module.load_relay_token(home) == "", bad
+config.write_text("port = 70000\n")
+assert module.mailbox_port(home) is None
+print("ok")
+PY
+  ) || fail "mailbox config read failed: $output"
+  pass "the voice mailbox comes only from config/bridge-mailbox, with the token kept inside the home"
+}
+
 test_mailbox_listener_never_consumes_announcements() {
   local home
   home=$(make_home mailbox)
@@ -1019,7 +1051,7 @@ PY
     n=$((n + 1))
   done
   FM_BRIDGE_VIEW_TEST=1 FM_BRIDGE_VIEW_MAILBOX_PORT="$(cat "$home/mb.port")" \
-    FM_BRIDGE_VIEW_LAUNCHCTL=/usr/bin/false \
+    FM_BRIDGE_VIEW_LAUNCHCTL=/usr/bin/false FM_HOME="$home" \
     "$BRIDGE" mailbox-listener >/dev/null
   sleep 0.3
   if [ -f "$home/mb.got" ]; then
@@ -1563,7 +1595,7 @@ model = {
          "hold_reason": "the captain raises the limit", "repo": "firstmate"},
         {"summary": "Pick the DeepSeek route", "hold_kind": "captain",
          "hold_reason": "captain choice pending", "repo": "starship"},
-        {"summary": "Supply the LoanOffice facts", "hold_kind": "captain",
+        {"summary": "Supply the study facts", "hold_kind": "captain",
          "hold_reason": "only he can answer", "repo": "starship"},
         {"summary": "Fund worker capacity", "hold_kind": "captain",
          "hold_reason": "spend approval", "repo": "firstmate"},
@@ -1632,13 +1664,53 @@ model = {
          "reason": "awaiting captain go"},
         {"title": "Always-on cloud, host+budget", "repo": "Amplify-Logic/firstmate",
          "hold_kind": "captain", "reason": "awaiting captain go"},
+        {"title": "Tidy the notes", "repo": "loose-notes", "hold_kind": "captain",
+         "reason": "awaiting captain go"},
     ],
 }
-obs = module.project_observation(model)
+# The labels come from the home's project registry: a row's label= token, else
+# its name in plain words, matched by name or alias, longest name first.
+registry = """## Projects
+- atelier [local-only] - the old app (added 2026-01-01)
+- atelier-workspace [direct-PR +yolo label=Atelier] - the new app (added 2026-01-01)
+- city-guide [label=Journey direct-PR] - the guide app (added 2026-01-01)
+- household-finances [local-only label=Finances] - the budget (added 2026-01-01)
+- firstmate [no-mistakes alias=starship label=Fleet] - this repository (added 2026-01-01)
+"""
+obs = module.project_observation(model, module.project_label_rules(registry))
 groups = obs["waiting"]["groups"]
 counts = {group["label"]: group["count"] for group in groups}
 if counts.get("Atelier") != 2:
     raise SystemExit("Atelier count wrong: %s" % groups)
+if counts.get("Loose notes") != 1:
+    raise SystemExit("an unregistered repository must be named from its own name: %s" % groups)
+# The item's own repository decides; a registered name inside the owner task
+# id never relabels it, and the owner is read only when there is no repository.
+rules = module.project_label_rules(registry)
+for repo, owner, want in (
+    ("atelier", "atelier-firstmate-hook", "Atelier"),
+    ("loose-notes", "firstmate-notes-sweep", "Loose notes"),
+    ("", "firstmate-notes-sweep", "Fleet"),
+):
+    got = module.project_label(repo, owner, rules)
+    if got != want:
+        raise SystemExit("label for repo %r owner %r: want %r, got %r" % (repo, owner, want, got))
+# A registered name matches a whole repository name, never a piece of one.
+short = module.project_label_rules(registry + "- api [direct-PR] - the api (added 2026-01-01)\n")
+for repo, owner, want in (
+    ("Amplify-Logic/rapid-tools", "", "Rapid tools"),
+    ("garden-notes", "", "Garden notes"),
+    ("org/starship-addon", "", "Starship personal"),
+    ("org/api", "", "Api"),
+    ("", "rapid-tools-sweep", "Rapid tools sweep"),
+    ("", "api-docs-sweep", "Api"),
+):
+    got = module.project_label(repo, owner, short)
+    if got != want:
+        raise SystemExit("label for repo %r owner %r: want %r, got %r" % (repo, owner, want, got))
+bare ={group["label"] for group in module.project_observation(model)["waiting"]["groups"]}
+if "City guide" not in bare or "Journey" in bare:
+    raise SystemExit("without a registry the labels must come from the repository names: %s" % bare)
 if counts.get("Journey") != 1:
     raise SystemExit("Journey count wrong: %s" % groups)
 if counts.get("Finances") != 1:
@@ -1820,7 +1892,7 @@ spec = importlib.util.spec_from_file_location("bridge", sys.argv[1])
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 home, root = pathlib.Path(sys.argv[2]), pathlib.Path(sys.argv[3])
-module.mailbox_listener_available = lambda: False
+module.mailbox_listener_available = lambda home: False
 obs = module.SnapshotCache(home, root).get()
 assert obs["under_way"]["items"][0]["title"] == "Phone routing panel", obs
 assert "routing snapshot missing" in obs["routing"]["error"], obs["routing"]
@@ -2080,7 +2152,7 @@ spec = importlib.util.spec_from_file_location("bridge", sys.argv[1])
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 home, root = pathlib.Path(sys.argv[2]), pathlib.Path(sys.argv[3])
-module.mailbox_listener_available = lambda: False
+module.mailbox_listener_available = lambda home: False
 obs = module.SnapshotCache(home, root).get()
 assert obs["routing"].get("error"), obs
 memory = obs["memory"]
@@ -2180,6 +2252,9 @@ esac
 exit 0
 SH
   chmod +x "$fakebin/tmux"
+  # Chip names come from the home's own project registry.
+  printf '%s\n' '- city-guide [direct-PR label=Journey] - the guide app (added 2026-01-01)' \
+    > "$home/data/projects.md"
   cat > "$home/data/backlog.md" <<'EOF'
 ## In flight
 - [ ] ship-task - VoiceLoop tap trigger (repo: firstmate) (kind: ship) (since 2026-08-19)
@@ -2190,7 +2265,7 @@ SH
 - [ ] decide-advisor - Approve the advisor call (repo: household-finances) (kind: captain) (hold: needs the captain's word) (hold-kind: captain)
 - [ ] decide-limit - Raise the Claude spend limit (repo: firstmate) (kind: captain) (hold: the captain raises the limit) (hold-kind: captain)
 - [ ] decide-deepseek - Pick the DeepSeek route (repo: starship) (kind: captain) (hold: captain choice pending) (hold-kind: captain)
-- [ ] decide-loanoffice - Supply the LoanOffice facts (repo: starship) (kind: captain) (hold: only he can answer) (hold-kind: captain)
+- [ ] decide-study-facts - Supply the study facts (repo: starship) (kind: captain) (hold: only he can answer) (hold-kind: captain)
 - [ ] decide-capacity - Fund worker capacity (repo: firstmate) (kind: captain) (hold: spend approval) (hold-kind: captain)
 - [ ] retire-miro - Confirm retiring the Miro rebuild (repo: city-guide) (kind: captain) (hold: Confirm retiring or reshaping this task.) (hold-kind: captain)
 - [ ] parked-pricing - Align Atelier pricing (repo: atelier) (kind: ship) (hold: Parked 2026-08-02 on captain order) (hold-kind: parked)
@@ -2330,8 +2405,8 @@ test_speak_origin_null_forwards_m4a_and_polls_text() {
   home=$(make_home speak-forward)
   fakebin=$(make_fakebin "$home")
   token="bridge-test-relay-token"
-  mkdir -p "$home/data/glasses-voice-runtime"
-  printf '%s\n' "$token" > "$home/data/glasses-voice-runtime/relay-token"
+  mkdir -p "$home/data/voice-runtime" "$home/config"
+  printf '%s\n' "$token" > "$home/data/voice-runtime/relay-token"
   python3 - "$home" <<'PY' &
 import json, pathlib, sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -2406,10 +2481,10 @@ PY
   done
   [ -f "$home/mb.port" ] || fail "fake mailbox did not bind"
   mbport=$(cat "$home/mb.port")
+  printf '# the mailbox hold-to-speak forwards to\nport = %s\ntoken = data/voice-runtime/relay-token\n' "$mbport" \
+    > "$home/config/bridge-mailbox"
   init_passcode "$home" >/dev/null
-  export FM_BRIDGE_VIEW_MAILBOX_PORT="$mbport"
   port=$(start_bridge "$home" "$fakebin")
-  unset FM_BRIDGE_VIEW_MAILBOX_PORT
   cookie=$(bridge_cookie "$home" "$port")
   tiny_m4a "$home/ask.m4a"
 
@@ -2452,7 +2527,19 @@ PY
   hdr=$home/page.hdr
   curl_bridge "$port" / "$hdr" "$page" --header "Cookie: $cookie"
   assert_not_contains "$(cat "$page")" "$token" "glance HTML must not contain the relay token"
-  pass "hold-to-speak forwards Safari m4a server-side and returns answer text"
+
+  # Without config/bridge-mailbox there is no mailbox, read on the next request.
+  rm "$home/config/bridge-mailbox"
+  hdr=$home/speak-none.hdr; body=$home/speak-none.body
+  curl_bridge "$port" /speak "$hdr" "$body" \
+    --header "Origin: null" \
+    --header "Sec-Fetch-Site: same-origin" \
+    --header "Cookie: $cookie" \
+    -F "audio=@$home/ask.m4a;type=audio/mp4"
+  assert_contains "$(head -n 1 "$hdr")" "503" "speak without a configured mailbox must refuse: $(cat "$body")"
+  assert_contains "$(cat "$body")" "mailbox is not configured" "the refusal must say no mailbox is configured"
+  [ "$(jq length "$home/mailbox-seen.json")" = 1 ] || fail "an unconfigured speak still reached the mailbox"
+  pass "hold-to-speak forwards Safari m4a to the configured mailbox server-side and returns answer text"
 }
 
 # The Action Deck page: /deck and /api/deck sit behind the same session, Host
@@ -2945,6 +3032,7 @@ test_bridge_page_async_progress_and_release
 test_bridge_page_speak_assembles_chunks_and_rejects_tiny
 test_session_revoke_serializes_with_login_create
 test_away_mode_passive_refresh_works
+test_mailbox_comes_only_from_its_config
 test_mailbox_listener_never_consumes_announcements
 test_render_plist_keep_alive_pattern
 test_unauthenticated_upload_rejected

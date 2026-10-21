@@ -1,7 +1,7 @@
 BEFORE - today: one workspace per project, one tab per worker (7 workers, 3 projects)
 -------------------------------------------------------------------------------------
 WORKSPACE  City Guide · 🟣 1 NEEDS YOU · 🔵 2 WORKING
-  TAB      WORKER · Validate GPS triggers across all seven city stops · 🔵 WORKING
+  TAB      WORKER · Validate GPS triggers across all seven harbour stops · 🔵 WORKING
   DETAIL   pi/gpt-5.6 · detached
   TAB      WORKER · Decide the harbour-loop audio cut · 🟣 NEEDS YOU
   DETAIL   claude/opus-5 · fm/journey-route-audio-q2

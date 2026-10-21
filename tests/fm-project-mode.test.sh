@@ -32,6 +32,7 @@ cat > "$DATA/projects.md" <<'EOF'
 - reviewed-yolo [direct-PR +yolo forge=external] - +yolo cannot apply to an external review (added 2026-01-01)
 - reviewed-local [local-only forge=external] - an external review on a mode that publishes nothing (added 2026-01-01)
 - near-miss [direct-PR forg=external] - a near miss of the forge key (added 2026-01-01)
+- labelled [label=Shop direct-PR +yolo] - a label token first must not become the mode (added 2026-01-01)
 EOF
 
 run_mode() {
@@ -101,6 +102,11 @@ done
 err=$(FM_DATA_OVERRIDE="$DATA" "$PROJECT_MODE" near-miss 2>&1 >/dev/null)
 assert_contains "$err" "forge=external" "the near-miss warning does not list forge=external"
 pass "fm-project-mode: forge=external binds direct-PR, reports yolo=off with a refusal, and is refused on local-only"
+
+[ "$(run_mode labelled)" = "direct-PR on" ] || fail "a label token changed the posture: $(run_mode labelled)"
+err=$(FM_DATA_OVERRIDE="$DATA" "$PROJECT_MODE" labelled 2>&1 >/dev/null) || true
+[ -z "$err" ] || fail "a label token warned: $err"
+pass "fm-project-mode: a label=<word> token never changes the posture, wherever it sits"
 
 [ "$(run_forge missing-project)" = "none" ] || fail "a missing project must default --forge to none: $(run_forge missing-project)"
 [ "$(FM_DATA_OVERRIDE="$TMP_ROOT/no-such-dir" "$PROJECT_MODE" --forge legacy 2>/dev/null)" = "none" ] \

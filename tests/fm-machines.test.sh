@@ -166,7 +166,6 @@ snapshot() {  # <home> <fakebin> [extra args...]
   shift 2
   TAILNET_FIXTURE="$home/tailnet.json" SSH_LOG="$home/ssh.log" SSH_FIXTURES="$home/ssh" \
     FM_MACHINES_LAUNCH_AGENTS="$home/agents" \
-    FM_BRIDGE_VIEW_MAILBOX_PORT="${MAILBOX_PORT:-$(closed_port)}" \
     "$TOOL" --json --home "$home" --root "$home" \
     --tailscale "$fb/tailscale" --ssh "$fb/ssh" --bridge-port "${BRIDGE_PORT:-$(closed_port)}" "$@"
 }
@@ -248,7 +247,7 @@ EOF
   printf 'machine\tghost\n' >> "$home/config/bridge-machines"
 
   before=$(fingerprint "$home")
-  out=$(MAILBOX_PORT=$health_port BRIDGE_PORT=$health_port snapshot "$home" "$fb") || fail "configured snapshot exited non-zero"
+  out=$(BRIDGE_PORT=$health_port snapshot "$home" "$fb") || fail "configured snapshot exited non-zero"
   after=$(fingerprint "$home")
   [ "$before" = "$after" ] || fail "the snapshot wrote to the home"
 
@@ -283,7 +282,7 @@ EOF
     "$(jq -r '.machines[] | select(.name == "ghost") | "\(.online) \(.stats_error)"' <<<"$out")" "a name with no alias and no tailnet entry"
 
   # Services: built-ins answering here, then the config's own.
-  assert_equals 'Bridge page:true,Glasses voice mailbox:true,Voice bridge:true,Dead helper:false' \
+  assert_equals 'Bridge page:true,Voice bridge:true,Dead helper:false' \
     "$(jq -r '[.services[] | "\(.name):\(.up)"] | join(",")' <<<"$out")" "services"
 
   # Probe failing.
@@ -295,8 +294,8 @@ EOF
   jq -e '.config.skipped | any(test("probe must be an https URL")) and any(test("loopback")) and any(test("plain host alias"))' <<<"$out" >/dev/null \
     || fail "skip reasons: $(jq -c .config.skipped <<<"$out")"
 
-  # Health: 5 watched machines (2 reachable) + 4 services (3 up) + 1 probe (0 ok).
-  assert_equals '5 10' "$(jq -r '"\(.checks.passing) \(.checks.total)"' <<<"$out")" "health count"
+  # Health: 5 watched machines (2 reachable) + 3 services (2 up) + 1 probe (0 ok).
+  assert_equals '4 9' "$(jq -r '"\(.checks.passing) \(.checks.total)"' <<<"$out")" "health count"
   jq -e '.alerts | any(.severity == "critical" and (.text | test("^dell-laptop is offline, last seen 3 days ago$")))' <<<"$out" >/dev/null || fail "offline alert: $(jq -c .alerts <<<"$out")"
   jq -e '.alerts | any(.severity == "critical" and (.text | test("^lan-box cannot be reached")))' <<<"$out" >/dev/null || fail "unreachable alert"
   jq -e '.alerts | any(.severity == "critical" and .text == "Dead helper is down: status 503")' <<<"$out" >/dev/null || fail "service alert: $(jq -c .alerts <<<"$out")"

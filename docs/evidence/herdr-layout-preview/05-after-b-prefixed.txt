@@ -1,7 +1,7 @@
 AFTER-B - one workspace per worker, project name on every row (7 workers, 3 projects)
 -------------------------------------------------------------------------------------
-WORKSPACE  City Guide · Validate GPS triggers across all seven city stops · 🔵 WORKING
-  TAB      WORKER · Validate GPS triggers across all seven city stops · 🔵 WORKING
+WORKSPACE  City Guide · Validate GPS triggers across all seven harbour stops · 🔵 WORKING
+  TAB      WORKER · Validate GPS triggers across all seven harbour stops · 🔵 WORKING
   DETAIL   pi/gpt-5.6 · detached
 WORKSPACE  City Guide · Decide the harbour-loop audio cut · 🟣 NEEDS YOU
   TAB      WORKER · Decide the harbour-loop audio cut · 🟣 NEEDS YOU

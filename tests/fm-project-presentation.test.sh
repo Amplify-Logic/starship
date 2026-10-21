@@ -29,11 +29,11 @@ test_outcomes() {
   cat > "$HOME_FIX/data/backlog.md" <<'EOF'
 # Backlog
 ## In flight
-- [ ] journey-gps-seven-stop-v8 - Validate GPS triggers across all seven city stops (repo: city-guide) (kind: scout)
+- [ ] journey-gps-seven-stop-v8 - Validate GPS triggers across all seven harbour stops (repo: city-guide) (kind: scout)
 - [ ] journey-launch-date-plan-r3 - Rebaseline the City Guide launch plan with a date (repo: city-guide) (kind: scout)
 EOF
   assert_eq "$(FM_HOME="$HOME_FIX" "$ROOT/bin/fm-task-outcome.sh" journey-gps-seven-stop-v8)" \
-    'Validate GPS triggers across all seven city stops' 'first structured backlog title'
+    'Validate GPS triggers across all seven harbour stops' 'first structured backlog title'
   assert_eq "$(FM_HOME="$HOME_FIX" "$ROOT/bin/fm-task-outcome.sh" journey-launch-date-plan-r3)" \
     'Rebaseline the City Guide launch plan with a date' 'second structured backlog title'
   assert_eq "$(FM_HOME="$HOME_FIX" "$ROOT/bin/fm-task-outcome.sh" any-id 'Explicit human outcome')" \

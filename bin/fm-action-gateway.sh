@@ -123,7 +123,7 @@ SECRET_PATH = sys.argv[3]
 CMD_JSON = sys.argv[4] if len(sys.argv) > 4 else ""
 
 # Deny-by-default operation registry.
-# Severity mirrors Atelier tool_taxonomy: read / costly / external / irreversible.
+# Severity classes: read / costly / external / irreversible.
 # Unknown action_kind is refused at prepare.
 OPERATION_REGISTRY = {
     # read

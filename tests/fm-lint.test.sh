@@ -1920,6 +1920,36 @@ SH
   pass "the roots sidecar and telemetry record the run's final exit status"
 }
 
+test_default_lint_checks_the_home_private_leak_words() {
+  local tmp fakebin out rc
+  tmp=$(fm_test_tmproot fm-lint-private-words)
+  fakebin=$(fm_fakebin "$tmp")
+  mkdir -p "$tmp/repo/bin" "$tmp/repo/tests" "$tmp/home/config" "$tmp/bare-home"
+  cp "$LINT" "$tmp/repo/bin/fm-lint.sh"
+  cp "$ROOT/bin/fm-timeout-lib.sh" "$ROOT/bin/fm-leak-guard.sh" "$ROOT/bin/fm-leak-lib.sh" "$tmp/repo/bin/"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$tmp/repo/bin/fm-lint-workflows.sh"
+  printf '#!/usr/bin/env bash\necho "Robin approved the draft."\n' > "$tmp/repo/tests/noop.test.sh"
+  chmod +x "$tmp/repo/bin/fm-lint.sh" "$tmp/repo/bin/fm-lint-workflows.sh" "$tmp/repo/tests/noop.test.sh"
+  git -C "$tmp/repo" init -q
+  git -C "$tmp/repo" add -A
+  fm_lint_stub_shellcheck "$fakebin" "$tmp/shellcheck.log"
+  printf 'robin\n' > "$tmp/home/config/leak-words"
+
+  rc=0
+  out=$(cd "$tmp/repo" && CI=true PATH="$fakebin:$PATH" FM_HOME="$tmp/home" \
+    "$tmp/repo/bin/fm-lint.sh" 2>&1) || rc=$?
+  [ "$rc" -eq 1 ] || fail "a word from the home's private list did not fail the default lint (exit $rc)"$'\n'"$out"
+  assert_contains "$out" "LEAK_HIT: private-word: tests/noop.test.sh" "the lint run did not name the private word hit"
+
+  # A home with no list, as in CI, lints exactly as before and says nothing.
+  rc=0
+  out=$(cd "$tmp/repo" && CI=true PATH="$fakebin:$PATH" FM_HOME="$tmp/bare-home" \
+    "$tmp/repo/bin/fm-lint.sh" 2>&1) || rc=$?
+  [ "$rc" -eq 0 ] || fail "a home with no private list failed the default lint (exit $rc)"$'\n'"$out"
+  assert_not_contains "$out" "fm-leak-guard" "a home with no private list printed a word-check line"
+  pass "default lint checks the home's private leak words and is silent without a list"
+}
+
 test_roots_sidecar_records_per_root_lifecycle() {
   local tmp fakebin stub_log telemetry roots_log out rc
   local alpha beta gamma
@@ -2058,6 +2088,7 @@ test_source_excerpt_with_oom_text_stays_findings
 test_require_bounds_refuses_when_enforcement_is_missing
 test_pinned_shellcheck_memory_limit
 test_sidecar_result_exit_reflects_final_status
+test_default_lint_checks_the_home_private_leak_words
 test_roots_sidecar_records_per_root_lifecycle
 test_seeded_module_boundary_parity
 test_changed_mode_lints_only_the_changed_file

@@ -23,7 +23,7 @@
 #   JUST IN                recent completions and findings
 #
 # Herdr workspace registration: firstmate opens this pane as its own tab in the
-# captain's "Company Starship" workspace with
+# captain's own Starship workspace with
 #   herdr tab create --workspace <id> --label 'Action Deck' --command 'bin/fm-deck.sh'
 # where <id> is that workspace's recorded id. This script never drives Herdr
 # itself; the screen doctrine owns tab layout.

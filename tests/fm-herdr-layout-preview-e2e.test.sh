@@ -88,7 +88,7 @@ lab_close() {
 # LATE is deliberately a City Guide worker started last, after both
 # other projects already have workers.
 WORKERS=(
-  'journey-gps-seven-stop-v8|City Guide|working|pi/gpt-5.6|detached|Validate GPS triggers across all seven city stops'
+  'journey-gps-seven-stop-v8|City Guide|working|pi/gpt-5.6|detached|Validate GPS triggers across all seven harbour stops'
   'journey-route-audio-q2|City Guide|parked|claude/opus-5|fm/journey-route-audio-q2|Decide the harbour-loop audio cut'
   'journey-tile-cache-r3|City Guide|working|codex/gpt-5.6|fm/journey-tile-cache-r3|Speed up the offline map tiles'
   'atelier-onboarding-copy-k4|Atelier|parked|claude/opus-5|fm/atelier-onboarding-copy-k4|Decide the onboarding welcome copy'

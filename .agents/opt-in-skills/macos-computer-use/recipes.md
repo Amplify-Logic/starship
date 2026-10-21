@@ -15,7 +15,7 @@ Commands:
 - Spotlight search: `mdfind -onlyin ~/Downloads 'kMDItemFSName == "*.pdf"'`. **Tested** (0.76 s).
 - Disks: `osascript -e 'tell application "Finder" to get name of every disk'`. **Tested** (0.5 s; the SSD is named `SSD`).
 - Move to the Bin, which the captain can undo: `osascript -e 'tell application "Finder" to delete (POSIX file "/full/path" as alias)'`. **Untested**, because it changes files.
-- The iCloud Drive inbox where phone files land: `~/Library/Mobile Documents/com~apple~CloudDocs/Atelier Inbox`. **Tested** (exists).
+- The iCloud Drive folder where phone files land sits under `~/Library/Mobile Documents/com~apple~CloudDocs/`; the captain names which folder.
 - The captain's Google Drive: the Drive connector, not the desktop.
 
 Yours to decide: deleting anything, as opposed to moving it to the Bin, and where large new folders go.

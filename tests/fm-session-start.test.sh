@@ -2530,12 +2530,12 @@ EOF
   make_fake_toolchain "$fakebin"
   make_fake_ps_claude "$fakebin"
   ledger="$home/data/captain-ledger.jsonl"
-  printf '{"seq":1,"epoch":%s,"session":"sess-a","text":"Move the venue deposit from 2 November to 1 February."}\n' \
+  printf '{"seq":1,"epoch":%s,"session":"sess-a","text":"Move the team offsite from 2 November to 1 February."}\n' \
     "$(date +%s)" > "$ledger"
 
   full=$(FM_FAKE_HARNESS_PID=$$ run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
   assert_contains "$full" "UNRECONCILED CAPTAIN WORDS (1 since " "the full digest omitted unreconciled captain words"
-  assert_contains "$full" "Move the venue deposit from 2 November to 1 February." "the full digest omitted the captain's sentence"
+  assert_contains "$full" "Move the team offsite from 2 November to 1 February." "the full digest omitted the captain's sentence"
   assert_contains "$full" "fm-captain-ledger.sh mark" "the full digest omitted how to mark the words reconciled"
 
   reemit=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$root" FM_FAKE_HARNESS_PID=$$ PATH="$fakebin:$BASE_PATH" \
@@ -2543,7 +2543,7 @@ EOF
     "$SESSION_START" --reemit)
   assert_contains "$reemit" "SESSION START (CONTEXT RE-EMIT)" "the re-emit fixture did not take the re-emit path"
   assert_contains "$reemit" "UNRECONCILED CAPTAIN WORDS (1 since " "the re-emit digest omitted unreconciled captain words"
-  assert_contains "$reemit" "Move the venue deposit from 2 November to 1 February." "the re-emit digest omitted the captain's sentence"
+  assert_contains "$reemit" "Move the team offsite from 2 November to 1 February." "the re-emit digest omitted the captain's sentence"
 
   FM_HOME="$home" "$ROOT/bin/fm-captain-ledger.sh" mark >/dev/null || fail "marking the ledger failed"
   after_mark=$(FM_FAKE_HARNESS_PID=$$ run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
@@ -2554,7 +2554,7 @@ EOF
   again=$(FM_FAKE_HARNESS_PID=$$ run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
   assert_contains "$again" "UNRECONCILED CAPTAIN WORDS (1 since " "a new entry after mark did not bring the section back with a count of 1"
   assert_contains "$again" "Keep the review on Thursday." "the returned section omitted the new entry"
-  assert_not_contains "$again" "Move the venue deposit" "the returned section repeated an entry already marked"
+  assert_not_contains "$again" "Move the team offsite" "the returned section repeated an entry already marked"
 
   pass "session start prints unreconciled captain words on the full and re-emit digests until they are marked"
 }
