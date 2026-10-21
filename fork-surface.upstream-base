@@ -1,4 +1,4 @@
-# upstream_base = 3eabd356abc99bdb0c1d2cefc5a1dec4a9fe39c1
+# upstream_base = 3847411b9a73f6553e172a6aefe5dff05e7aa178
 .agents/skills/afk/SKILL.md
 .agents/skills/agent-skill-trigger-index/SKILL.md
 .agents/skills/ahoy/SKILL.md
@@ -8,7 +8,6 @@
 .agents/skills/bearings/assets/board-template.html
 .agents/skills/bootstrap-diagnostics/SKILL.md
 .agents/skills/captain-hold-lifecycle/SKILL.md
-.agents/skills/decision-hold-lifecycle/SKILL.md
 .agents/skills/diagnostic-reasoning/SKILL.md
 .agents/skills/firstmate-calm
 .agents/skills/firstmate-codexapp/SKILL.md
@@ -147,6 +146,7 @@ bin/fm-brief-heading-lib.sh
 bin/fm-brief.sh
 bin/fm-busy-event.sh
 bin/fm-busy-lib.sh
+bin/fm-capacity.sh
 bin/fm-captain-hold.sh
 bin/fm-cd-command-policy.mjs
 bin/fm-cd-pretool-check.sh
@@ -481,6 +481,7 @@ tests/fm-calm-claude-mod-plugin.test.sh
 tests/fm-calm-claude-mod.test.sh
 tests/fm-calm-pi-extension.test.sh
 tests/fm-calm-pi-queue-retention-live-e2e.test.sh
+tests/fm-capacity.test.sh
 tests/fm-captain-hold-lifecycle.test.sh
 tests/fm-cd-pretool-check.test.sh
 tests/fm-check-unregister.test.sh
