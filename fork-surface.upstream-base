@@ -1,4 +1,4 @@
-# upstream_base = 0397cb2bb431948f3865b7f28c522290546dcaaf
+# upstream_base = 3eabd356abc99bdb0c1d2cefc5a1dec4a9fe39c1
 .agents/skills/afk/SKILL.md
 .agents/skills/agent-skill-trigger-index/SKILL.md
 .agents/skills/ahoy/SKILL.md
@@ -25,6 +25,7 @@
 .agents/skills/harness-adapters/references/harness/agy.md
 .agents/skills/harness-adapters/references/harness/claude.md
 .agents/skills/harness-adapters/references/harness/codex.md
+.agents/skills/harness-adapters/references/harness/commandcode.md
 .agents/skills/harness-adapters/references/harness/cursor.md
 .agents/skills/harness-adapters/references/harness/devin.md
 .agents/skills/harness-adapters/references/harness/gemini.md
@@ -34,6 +35,7 @@
 .agents/skills/harness-adapters/references/harness/omp.md
 .agents/skills/harness-adapters/references/harness/opencode.md
 .agents/skills/harness-adapters/references/harness/pi.md
+.agents/skills/harness-adapters/references/harness/polytoken.md
 .agents/skills/harness-adapters/references/harness/rovo.md
 .agents/skills/operational-home-layout/SKILL.md
 .agents/skills/process-event-sources/SKILL.md
@@ -113,10 +115,12 @@ README.md
 VISION.md
 assets/banner.png
 bin/backends/cmux.sh
+bin/backends/herdr-agent-view.py
 bin/backends/herdr-eventwait.py
 bin/backends/herdr-workspace-move.py
 bin/backends/herdr.sh
 bin/backends/orca.sh
+bin/backends/paseo.sh
 bin/backends/tmux.sh
 bin/backends/zellij.sh
 bin/fm-afk-contract.sh
@@ -152,6 +156,7 @@ bin/fm-check-unregister.sh
 bin/fm-classify-lib.sh
 bin/fm-claude-stop-autoarm.sh
 bin/fm-claude-trust.sh
+bin/fm-commandcode-mod.ts
 bin/fm-composer-lib.sh
 bin/fm-config-inherit-lib.sh
 bin/fm-config-push.sh
@@ -172,6 +177,7 @@ bin/fm-exclude-tools-lib.sh
 bin/fm-extension-launch-barrier.mjs
 bin/fm-extension.mjs
 bin/fm-extension.sh
+bin/fm-external-review-lib.sh
 bin/fm-ff-lib.sh
 bin/fm-fleet-ledger.sh
 bin/fm-fleet-snapshot.sh
@@ -180,10 +186,12 @@ bin/fm-fleet-view.sh
 bin/fm-forge-detect.sh
 bin/fm-gate-refuse-lib.sh
 bin/fm-gemini-lib.sh
+bin/fm-git-push-guard.sh
 bin/fm-git-strip-ai-trailers.sh
 bin/fm-guard.sh
 bin/fm-harness.sh
 bin/fm-herdr-ci-cleanup.sh
+bin/fm-herdr-groups.sh
 bin/fm-herdr-lab-viewer.py
 bin/fm-herdr-lab.sh
 bin/fm-herdr-session-cleanup.sh
@@ -226,6 +234,7 @@ bin/fm-path-lib.sh
 bin/fm-peek.sh
 bin/fm-pending-reply-lib.sh
 bin/fm-pipeline-spend.sh
+bin/fm-polytoken-lib.sh
 bin/fm-pr-check.sh
 bin/fm-pr-lib.sh
 bin/fm-pr-merge.sh
@@ -267,6 +276,7 @@ bin/fm-remote-job-worker.sh
 bin/fm-remote-readiness-lib.sh
 bin/fm-remote-secondmate-control.sh
 bin/fm-remote-secondmate-relaunch.sh
+bin/fm-review-check.sh
 bin/fm-review-diff.sh
 bin/fm-role-lib.sh
 bin/fm-role.sh
@@ -351,6 +361,7 @@ docs/examples/process-event-extension/firstmate-extension.json
 docs/examples/watched-tools.json
 docs/examples/wedge-alarm
 docs/extension-bindings.md
+docs/external-review-forge.md
 docs/fleet-ledger.md
 docs/fm-test-isolation-proof.json
 docs/fm-test-isolation-proof.md
@@ -362,6 +373,7 @@ docs/gitlab-merge-watch.md
 docs/herdr-backend.md
 docs/jev-guards.md
 docs/orca-backend.md
+docs/paseo-backend.md
 docs/pi-supervision-branch-poster.svg
 docs/pi-supervision-branch.md
 docs/remote-secondmates.md
@@ -383,11 +395,13 @@ docs/tmux-backend.md
 docs/trace-context.md
 docs/turnend-guard.md
 docs/verification/agy.md
+docs/verification/commandcode.md
 docs/verification/devin.md
 docs/verification/dispatch-auth.md
 docs/verification/dispatch-resolve.md
 docs/verification/lint-option-a.md
 docs/verification/muse.md
+docs/verification/polytoken.md
 docs/verification/process-event-sources.md
 docs/verification/public-followup.md
 docs/verification/rovo.md
@@ -413,6 +427,10 @@ tests/captures/no-mistakes-v1.70.1/superseded.toon
 tests/captures/no-mistakes-v1.70.1/uninitialized.toon
 tests/cmux-test-safety.sh
 tests/fixtures.sh
+tests/fixtures/opencode-1.18.31-cwd/opencode-1.18.31-busy-wide-abs-cwd.ansi
+tests/fixtures/opencode-1.18.31-cwd/opencode-1.18.31-idle-cwd.ansi
+tests/fixtures/opencode-1.18.31-cwd/opencode-1.18.31-idle-short-cwd.ansi
+tests/fixtures/opencode-1.18.31-cwd/opencode-1.18.31-idle-wide-abs-cwd.ansi
 tests/fm-afk-contract.test.sh
 tests/fm-afk-inject-e2e.test.sh
 tests/fm-afk-inject-herdr-e2e.test.sh
@@ -439,6 +457,8 @@ tests/fm-backend-herdr-stale-active-tab-e2e.test.sh
 tests/fm-backend-herdr-workspace-per-home-e2e.test.sh
 tests/fm-backend-herdr.test.sh
 tests/fm-backend-orca.test.sh
+tests/fm-backend-paseo-smoke.test.sh
+tests/fm-backend-paseo.test.sh
 tests/fm-backend-tmux-smoke.test.sh
 tests/fm-backend-zellij-smoke.test.sh
 tests/fm-backend-zellij.test.sh
@@ -473,6 +493,8 @@ tests/fm-claude-trust.test.sh
 tests/fm-cmux-claude-composer-live-e2e.test.sh
 tests/fm-codex-continuity-live-e2e.test.sh
 tests/fm-codex-hook-layer-live-e2e.test.sh
+tests/fm-commandcode-harness.test.sh
+tests/fm-commandcode-signals-live-e2e.test.sh
 tests/fm-composer-codex-idle-live-e2e.test.sh
 tests/fm-composer-ghost.test.sh
 tests/fm-composer-lib.test.sh
@@ -500,6 +522,7 @@ tests/fm-forge-detect.test.sh
 tests/fm-fork-free-helpers.test.sh
 tests/fm-gate-refuse.test.sh
 tests/fm-gemini-harness.test.sh
+tests/fm-git-push-guard.test.sh
 tests/fm-git-strip-ai-trailers.test.sh
 tests/fm-gitignore-config.test.sh
 tests/fm-gotmp.test.sh
@@ -512,6 +535,7 @@ tests/fm-harness-adapter-references.test.sh
 tests/fm-harness-liveness-drift-live-e2e.test.sh
 tests/fm-harness-precedence.test.sh
 tests/fm-herdr-attached-viewer-live-e2e.test.sh
+tests/fm-herdr-groups.test.sh
 tests/fm-herdr-lab.test.sh
 tests/fm-herdr-pi-stale-registration-live-e2e.test.sh
 tests/fm-herdr-session-cleanup-e2e.test.sh
@@ -540,6 +564,7 @@ tests/fm-no-mistakes-required.test.sh
 tests/fm-omp-harness.test.sh
 tests/fm-omp-primary-live-e2e.test.sh
 tests/fm-on.test.sh
+tests/fm-opencode-abs-cwd-rail-live-e2e.test.sh
 tests/fm-opencode-primary-live-e2e.test.sh
 tests/fm-operational-input.test.sh
 tests/fm-parent-channel-scan-exclusion.test.sh
@@ -555,6 +580,8 @@ tests/fm-pi-seeded-home-trust-live-e2e.test.sh
 tests/fm-pi-watch-extension.test.sh
 tests/fm-pi-windows-shell-invocation.test.sh
 tests/fm-pipeline-spend.test.sh
+tests/fm-polytoken-harness.test.sh
+tests/fm-polytoken-signals-live-e2e.test.sh
 tests/fm-pr-check-security.test.sh
 tests/fm-pr-merge.test.sh
 tests/fm-pr-reviewers.test.sh
@@ -585,6 +612,7 @@ tests/fm-remote-secondmate-parent-binding.test.sh
 tests/fm-remote-secondmate-relaunch.test.sh
 tests/fm-remote-secondmate-trace-context.test.sh
 tests/fm-remote-transport-lanes.test.sh
+tests/fm-review-check.test.sh
 tests/fm-review-diff.test.sh
 tests/fm-rovo-harness.test.sh
 tests/fm-rovo-signals-live-e2e.test.sh
@@ -617,6 +645,7 @@ tests/fm-spawn-batch.test.sh
 tests/fm-spawn-compact-adviser-disable-remote.test.sh
 tests/fm-spawn-compact-adviser-disable.test.sh
 tests/fm-spawn-dispatch-profile.test.sh
+tests/fm-spawn-external-review.test.sh
 tests/fm-spawn-orca-worktree.test.sh
 tests/fm-spawn-pool-base-freshen.test.sh
 tests/fm-spawn-worktree-settle.test.sh
