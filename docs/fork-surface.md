@@ -54,7 +54,7 @@ The gate rejects both silent deletion and a retired declaration whose files stil
 
 ## Wholesale re-base history
 
-The fork was re-based wholesale onto the creator's tree at `b85e28b5` by https://github.com/Amplify-Logic/firstmate/pull/160, which the manifest's `upstream_base` records.
+The fork was re-based wholesale onto the creator's tree at `b85e28b5` by https://github.com/Amplify-Logic/firstmate/pull/160; later catch-ups have since advanced the manifest's `upstream_base` past it.
 It landed on 2026-09-17 as the single squash commit `03961847`, not as the merge commit the pull request asked for, so its one parent is `af3f7d4c` and its tree equals the pull request head `a460e747`.
 Neither `b85e28b5` nor `a460e747` is an ancestor of the default branch, so git ancestry alone does not show that the default branch contains the creator's base.
 The re-base's own commit history survives only on the remote branch `fm/fm-wholesale-creator-rebase-w1` at `a460e747`, so keep that branch, because deleting it leaves the squash message as the only record.
