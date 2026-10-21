@@ -134,11 +134,30 @@ test_private_words_mode() {
   pass "leak guard: --private-words checks only the list and is silent without one"
 }
 
+# The AI co-author addresses bin/fm-git-strip-ai-trailers.sh strips are vendor
+# bots, not people, so docs may name them; a person's address still fails.
+test_vendor_bot_emails_pass() {
+  local repo="$TMP_ROOT/bots" addr
+  make_repo "$repo"
+  for addr in noreply@anthropic.com noreply@openai.com copilot@github.com noreply@commandcode.ai; do
+    printf 'Co-authored-by: Bot <%s>\n' "$addr" >> "$repo/docs/trailers.md"
+  done
+  git -C "$repo" add -A
+  guard "$repo"
+  [ "$GUARD_STATUS" -eq 0 ] || fail "a vendor bot address failed the scan: $GUARD_OUT"
+  printf 'contact someone@acme-mail.com\n' >> "$repo/docs/trailers.md"
+  guard "$repo"
+  [ "$GUARD_STATUS" -eq 1 ] || fail "a person's address passed the scan: $GUARD_OUT"
+  assert_contains "$GUARD_OUT" "LEAK_HIT: email: docs/trailers.md: 5:" "the hit did not name the person's address line"
+  pass "leak guard: vendor bot co-author addresses pass and a person's address still fails"
+}
+
 test_no_list_scans_as_before
 test_listed_word_fails_in_tests
 test_partial_words_do_not_hit
 test_list_found_from_home_and_from_a_task_worktree
 test_list_found_from_a_validation_copy
 test_private_words_mode
+test_vendor_bot_emails_pass
 
 echo "# fm-leak-guard.test.sh: all assertions passed"

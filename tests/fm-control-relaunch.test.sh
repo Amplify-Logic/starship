@@ -830,6 +830,8 @@ make_cursor_stub() {  # <case-dir>
   local fb="$1/fakebin"
   cat > "$fb/cursor-agent" <<'SH'
 #!/usr/bin/env bash
+# The launch resolver's bounded --help probe needs the Cursor Agent CLI identity.
+[ "${1:-}" = --help ] && { printf 'Start the Cursor Agent\n'; exit 0; }
 if [ "${1:-}" = --list-models ]; then
   cat "${FM_FAKE_CURSOR_CATALOG:-/dev/null}"
 fi

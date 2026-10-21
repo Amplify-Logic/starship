@@ -548,6 +548,7 @@ jobs:
   fork-surface:
     name: Declared fork surface
     runs-on: ubuntu-latest
+    if: ${{ !(github.event_name == 'push' && vars.FM_CI_SKIP_PUSH == '1') }}
     # Fast tier: the manifest check and changed-source ownership are seconds long.
     timeout-minutes: 5
     steps:
@@ -573,6 +574,7 @@ jobs:
   leak-guard:
     name: Public-repo leak guard
     runs-on: ubuntu-latest
+    if: ${{ !(github.event_name == 'push' && vars.FM_CI_SKIP_PUSH == '1') }}
     # Fast tier: the leak guard is a seconds-long file scan.
     timeout-minutes: 5
     steps:
