@@ -31,19 +31,37 @@
 # machine. bin/fm-lint.sh runs --private-words on every default lint, which is
 # how the list is checked before each push.
 #
+#
+# DRAFT TEXT. --text checks text that is about to be published rather than
+# tracked files: a PR title, description or comment, or a no-mistakes intent.
+# It reads each named file, or stdin when none is named or the name is -,
+# checks only the private word list, and prints one
+# `LEAK_HIT: private-word: <source>: <word>` line per distinct listed word the
+# text contains (the source is the file as named, or stdin), so the writer
+# knows exactly what to take out. bin/fm-pr-text-guard.py runs it on what a
+# spawned Claude worker is about to publish, and the ship brief tells every
+# worker to run it on draft PR text first.
+#
 # Usage:
 #   fm-leak-guard.sh                  scan the whole tracked tree (what CI runs)
 #   fm-leak-guard.sh <path>...        scan only the given paths (developer convenience)
 #   fm-leak-guard.sh --private-words [<path>...]
 #                                     check only the private word list, and
 #                                     exit 0 silently when this home has none
+#   fm-leak-guard.sh --text [<file>|-]...
+#                                     check draft text against the private word
+#                                     list: exit 1 naming each listed word found,
+#                                     0 when clean, and 0 silently when this home
+#                                     has no list
 set -eu
 
 WORDS_ONLY=0
-if [ "${1:-}" = --private-words ]; then
-  WORDS_ONLY=1
-  shift
-fi
+TEXT_MODE=0
+case "${1:-}" in
+  --private-words) WORDS_ONLY=1; shift ;;
+  --text) WORDS_ONLY=1; TEXT_MODE=1; shift ;;
+esac
+CALLER_PWD=$PWD
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT" || exit 1
@@ -81,6 +99,44 @@ if [ -f "$words_source" ]; then
   [ -s "$WORDS_LIST" ] || { rm -f "$WORDS_LIST"; WORDS_LIST=; }
 fi
 if [ "$WORDS_ONLY" -eq 1 ] && [ -z "$WORDS_LIST" ]; then
+  exit 0
+fi
+
+# --text: every distinct listed word in each source, named once.
+if [ "$TEXT_MODE" -eq 1 ]; then
+  [ "$#" -gt 0 ] || set -- -
+  found=
+  for source in "$@"; do
+    if [ "$source" = - ]; then
+      label=stdin
+      if [ -z "${stdin_copy:-}" ]; then
+        stdin_copy=$(mktemp "${TMPDIR:-/tmp}/fm-leak-text.XXXXXX")
+        trap 'rm -f "$WORDS_LIST" "$stdin_copy"' EXIT
+        cat > "$stdin_copy"
+      fi
+      text=$stdin_copy
+    else
+      label=$source
+      case "$source" in
+        /*) text=$source ;;
+        *) text="$CALLER_PWD/$source" ;;
+      esac
+      if [ ! -f "$text" ] || [ ! -r "$text" ]; then
+        printf 'fm-leak-guard.sh: cannot read %s\n' "$source" >&2
+        exit 2
+      fi
+    fi
+    while IFS= read -r word; do
+      [ -n "$word" ] || continue
+      printf 'LEAK_HIT: private-word: %s: %s\n' "$label" "$word" >&2
+      found="${found:+$found, }$word"
+    done < <(grep -Fiwo -f "$WORDS_LIST" "$text" 2>/dev/null | awk '!seen[tolower($0)]++')
+  done
+  if [ -n "$found" ]; then
+    printf 'fm-leak-guard.sh: FAIL - the text contains words from the private list %s: %s; rewrite it without them\n' "$words_source" "$found" >&2
+    exit 1
+  fi
+  printf 'fm-leak-guard.sh: PASS - no words from the private list in the text\n'
   exit 0
 fi
 

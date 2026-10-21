@@ -21,6 +21,17 @@ document:
     For changed prose, verify audience, authoritative owner, current relevance,
     evidence destination, and unique safety facts, then review the complete
     branch diff again after every documentation or lint fix.
+    Your summaries, findings and evidence become this repository's public PR title, description, comments and evidence branch: name people, companies and projects only by role, such as a colleague or a customer, and never quote a private name from a finding, evidence or the user intent.
+
+# The PR step has no instructions setting, so the same public PR text rule
+# reaches the steps whose summaries and findings write the PR title,
+# description and comments: review (every path), document and test.
+# docs/configuration.md "Private leak words" owns the rule and its known gap.
+review:
+  path_instructions:
+    - path: '*'
+      instructions: |
+        Your summaries, findings and evidence become this repository's public PR title, description, comments and evidence branch: name people, companies and projects only by role, such as a colleague or a customer, and never quote a private name from a finding, evidence or the user intent.
 
 # Pin lint to the same owner CI invokes instead of leaving it to no-mistakes'
 # default handling, which does not invoke the repository's canonical lint gate.
@@ -47,5 +58,6 @@ test:
     Do not mutate the operator primary checkout, real fleet FM_HOME state, or production credentials (never sign in, sign out, re-login, or edit credential stores), and keep git changes otherwise inside the run worktree. A captain-opted-in live check may use the machine's normal Claude login; Claude's own session and transcript files under the home directory are expected and are not credential mutations. An empty isolated CLAUDE_CONFIG_DIR is not evidence that the normal login is unavailable.
     Read docs/herdr-backend.md and the bin/fm-herdr-lab.sh header as the owners of Herdr lab mechanics rather than reproducing that manual here.
     Ship or scout briefs that will drive Herdr lifecycle still require --herdr-lab at scaffold time; these Test-agent instructions are not a substitute for that brief flag.
+    Your summaries, findings and evidence become this repository's public PR title, description, comments and evidence branch: name people, companies and projects only by role, such as a colleague or a customer, and never quote a private name from a finding, evidence or the user intent.
   evidence:
     store_in_repo: true

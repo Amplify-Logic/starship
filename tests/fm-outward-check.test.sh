@@ -310,7 +310,7 @@ test_spawn_installs_the_check() {
   spawn_claude plain out-plain || fail "a plain claude spawn failed: $(cat "$TMP_ROOT/spawn-plain/spawn.out")"
   settings="$TMP_ROOT/spawn-plain/wt/.claude/settings.local.json"
   jq -e '.hooks.Stop and ([.hooks.PreToolUse[] | select(.matcher == $outward)] | length == 1)
-    and (.hooks.PostToolUse[0].matcher == "mcp__claude_ai_.*") and (.hooks.PreToolUse | map(select(.matcher == "Bash")) | length == 0)' \
+    and (.hooks.PostToolUse[0].matcher == "mcp__claude_ai_.*") and (.hooks.PreToolUse | map(select(.matcher == "Bash" and (.hooks[0].command | test("fm-command-guard[.]py")))) | length == 0)' \
     --arg outward "$OUTWARD_MATCHER" "$settings" >/dev/null || fail "every claude worker must get the outward hooks beside its lifecycle hooks: $(cat "$settings")"
   for tool in mcp__claude_ai_Gmail__send_message mcp__claude_ai_Zapier_MCP__gmail_send_email mcp__claude-in-chrome__navigate; do
     printf '%s' "$tool" | jq -Rre --arg m "$OUTWARD_MATCHER" 'test("^(" + $m + ")$")' >/dev/null \

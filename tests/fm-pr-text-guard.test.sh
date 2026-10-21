@@ -1,0 +1,415 @@
+#!/usr/bin/env bash
+# tests/fm-pr-text-guard.test.sh - keeping a home's private words out of the
+# text a worker publishes to a public repository's pull requests: the draft
+# check (bin/fm-leak-guard.sh --text), the Claude worker hook that refuses a
+# publishing command (bin/fm-pr-text-guard.py), the hook bin/fm-spawn.sh
+# installs, and the instruction the ship brief carries. Only gh is faked, so
+# no case reaches the network; it answers public for a repository named in
+# FAKE_GH_PUBLIC, private for one named in FAKE_GH_PRIVATE_REPOS, otherwise
+# from FAKE_GH_PRIVATE, and logs every call.
+set -u
+
+# shellcheck source=tests/fixtures.sh
+. "$(dirname "${BASH_SOURCE[0]}")/fixtures.sh"
+
+LEAK="$ROOT/bin/fm-leak-guard.sh"
+HOOK="$ROOT/bin/fm-pr-text-guard.py"
+TMP_ROOT=$(fm_test_tmproot fm-pr-text-guard)
+
+command -v python3 >/dev/null 2>&1 || fail "python3 is required"
+
+HOME_WORDS="$TMP_ROOT/home"
+mkdir -p "$HOME_WORDS/config"
+printf '# people\nRobin\nacme corp\n' > "$HOME_WORDS/config/leak-words"
+NO_LIST="$TMP_ROOT/no-list-home"
+mkdir -p "$NO_LIST/config"
+
+FAKEBIN="$TMP_ROOT/fakebin"
+GH_LOG="$TMP_ROOT/gh.log"
+mkdir -p "$FAKEBIN"
+cat > "$FAKEBIN/gh" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$FAKE_GH_LOG"
+[ "${1:-} ${2:-}" = "repo view" ] || exit 0
+case " ${FAKE_GH_PUBLIC:-} " in
+  *" ${3:-} "*) echo false; exit 0 ;;
+esac
+case " ${FAKE_GH_PRIVATE_REPOS:-} " in
+  *" ${3:-} "*) echo true; exit 0 ;;
+esac
+if [ "${FAKE_GH_PRIVATE:-}" = unreadable ]; then
+  echo "HTTP 404: Not Found" >&2
+  exit 1
+fi
+echo "${FAKE_GH_PRIVATE:-false}"
+EOF
+chmod +x "$FAKEBIN/gh"
+
+WORK="$TMP_ROOT/work"
+mkdir -p "$WORK"
+
+# leak_text <home> [args...]: the draft check, run from WORK; output in OUT,
+# status in STATUS. Stdin is passed through.
+leak_text() {
+  local home=$1
+  shift
+  STATUS=0
+  OUT=$(cd "$WORK" && FM_HOME="$home" "$LEAK" --text "$@" 2>&1) || STATUS=$?
+}
+
+# hook <home> <command> [cwd]: the PreToolUse hook on that Bash command; its
+# stdout in OUT. FAKE_GH_PRIVATE is inherited.
+hook() {
+  local home=$1 command=$2 cwd=${3:-$WORK}
+  OUT=$(jq -cn --arg c "$command" --arg cwd "$cwd" \
+      '{hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: {command: $c}, cwd: $cwd}' \
+    | PATH="$FAKEBIN:$PATH" FAKE_GH_LOG="$GH_LOG" python3 "$HOOK" hook --home "$home") \
+    || fail "the hook exited nonzero for: $command"
+}
+
+expect_allow() {  # <home> <command> <why> [cwd]
+  hook "$1" "$2" "${4:-}"
+  assert_equals "" "$OUT" "$3"
+}
+
+# expect_refuse <home> <command> <why> [cwd]: the deny reason in REASON.
+expect_refuse() {
+  hook "$1" "$2" "${4:-}"
+  [ -n "$OUT" ] || fail "$3 (got no output)"
+  printf '%s' "$OUT" | jq -e '.hookSpecificOutput.hookEventName == "PreToolUse" and .hookSpecificOutput.permissionDecision == "deny"' \
+    >/dev/null || fail "$3 (got: $OUT)"
+  REASON=$(printf '%s' "$OUT" | jq -r '.hookSpecificOutput.permissionDecisionReason')
+}
+
+test_draft_check_names_each_listed_word() {
+  printf 'Fix the sync that robin reported\n' > "$WORK/title.txt"
+  printf 'Body\n\nAsked by ACME Corp, and Robin again.\n' > "$WORK/body.md"
+  leak_text "$HOME_WORDS" title.txt
+  [ "$STATUS" -eq 1 ] || fail "a title with a listed word must fail: $OUT"
+  assert_contains "$OUT" "LEAK_HIT: private-word: title.txt: robin" "the hit must name the file and the word as written"
+  leak_text "$HOME_WORDS" body.md
+  [ "$STATUS" -eq 1 ] || fail "a body with listed words must fail: $OUT"
+  assert_contains "$OUT" "body.md: ACME Corp" "a listed phrase must be found whatever its case"
+  assert_contains "$OUT" "body.md: Robin" "every listed word must be named"
+  assert_contains "$OUT" "rewrite it without them" "the failure must say what to do"
+  STATUS=0
+  OUT=$(printf 'Thanks, Robin - looks good.\n' | FM_HOME="$HOME_WORDS" "$LEAK" --text 2>&1) || STATUS=$?
+  [ "$STATUS" -eq 1 ] || fail "a comment on stdin with a listed word must fail: $OUT"
+  assert_contains "$OUT" "LEAK_HIT: private-word: stdin: Robin" "stdin must be named as the source"
+  [ "$(printf '%s\n' "$OUT" | grep -c 'stdin: Robin')" -eq 1 ] || fail "a word must be named once: $OUT"
+  pass "the draft check names every listed word in a title, body or comment, whole words, any case"
+}
+
+test_draft_check_passes_clean_text_and_partial_words() {
+  printf 'The robins-egg theme and acme corporation stay.\n' > "$WORK/clean.md"
+  leak_text "$HOME_WORDS" clean.md
+  [ "$STATUS" -eq 0 ] || fail "words only inside longer words must pass: $OUT"
+  assert_contains "$OUT" "PASS" "a clean text must say it passed"
+  STATUS=0
+  OUT=$(printf 'clean\n' | FM_HOME="$HOME_WORDS" "$LEAK" --text - 2>&1) || STATUS=$?
+  [ "$STATUS" -eq 0 ] || fail "clean stdin must pass: $OUT"
+  STATUS=0
+  OUT=$(cd "$WORK" && printf 'clean\n' | FM_HOME="$HOME_WORDS" "$LEAK" --text - clean.md 2>&1) || STATUS=$?
+  [ "$STATUS" -eq 0 ] || fail "clean stdin and a clean file must pass: $OUT"
+  [ -f "$WORK/clean.md" ] || fail "checking stdin before a file must not delete the file"
+  leak_text "$HOME_WORDS" missing.md
+  [ "$STATUS" -eq 2 ] || fail "an unreadable draft must not pass as clean: $OUT"
+  pass "the draft check passes clean text and words that only appear inside longer words"
+}
+
+test_draft_check_without_a_list_is_silent() {
+  leak_text "$NO_LIST" body.md
+  [ "$STATUS" -eq 0 ] || fail "a home with no list must pass: $OUT"
+  assert_equals "" "$OUT" "a home with no list must check nothing and say nothing"
+  pass "the draft check passes silently in a home with no list"
+}
+
+test_hook_refuses_title_body_and_comment_on_a_public_repo() {
+  export FAKE_GH_PRIVATE=false
+  expect_refuse "$HOME_WORDS" 'gh pr create --repo o/public --title "Sync fix for Robin" --body "Details"' \
+    "a listed word in a PR title must be refused"
+  assert_contains "$REASON" '"Robin"' "the refusal must name the word"
+  assert_contains "$REASON" "o/public, a public repository" "the refusal must name the public repository"
+  assert_contains "$REASON" "--text <file>" "the refusal must say how to check a draft"
+  expect_refuse "$HOME_WORDS" "gh-axi pr edit 7 --repo o/public --body-file $WORK/body.md" \
+    "a listed word in a body file must be refused"
+  assert_contains "$REASON" '"ACME Corp", "Robin"' "every listed word in the file must be named"
+  expect_refuse "$HOME_WORDS" 'gh pr create -R o/public -t "Sync fix" -F body.md' \
+    "a body file given with -F must be read relative to the working directory"
+  expect_refuse "$HOME_WORDS" "gh pr comment 7 --repo o/public --body \"\$(cat <<'X'
+Thanks robin
+X
+)\"" "a listed word in a heredoc comment must be refused"
+  # shellcheck disable=SC2016 # The variable expands inside the checked command, not here.
+  expect_refuse "$HOME_WORDS" 'BODY="acme corp asked"; gh issue comment 3 --repo o/public --body "$BODY"' \
+    "a word set in a variable earlier in the same command must be refused"
+  expect_refuse "$HOME_WORDS" 'gh api repos/o/public/issues/3/comments -f body="hi Robin"' \
+    "a comment sent through gh api must be refused"
+  assert_contains "$REASON" "o/public" "the API path must name the repository"
+  unset FAKE_GH_PRIVATE
+  pass "a Claude worker's PR title, body and comment with a listed word are refused on a public repository"
+}
+
+test_hook_reads_body_files_however_they_are_named() {
+  export FAKE_GH_PRIVATE=false
+  printf 'Thanks Robin\n' > "$WORK/pr.md"
+  # shellcheck disable=SC2016 # The substitution runs inside the checked command, not here.
+  expect_refuse "$HOME_WORDS" 'gh pr create --repo o/public -t x --body "$(cat pr.md)"' \
+    "a body read through \$(cat file) must be checked"
+  expect_refuse "$HOME_WORDS" 'gh pr comment 7 --repo o/public --body-file - < pr.md' \
+    "a body redirected into --body-file - must be checked"
+  expect_refuse "$HOME_WORDS" 'cat pr.md | gh pr comment 7 --repo o/public --body-file -' \
+    "a body piped into --body-file - must be checked"
+  # shellcheck disable=SC2016 # The substitution runs inside the checked command, not here.
+  expect_refuse "$HOME_WORDS" 'gh api repos/o/public/issues/3/comments -F "body=@pr.md"' \
+    "a field read from a file must be checked"
+  for fill in --fill -f --fill-first --fill-verbose; do
+    expect_refuse "$HOME_WORDS" "gh pr create --repo o/public $fill" \
+      "gh pr create $fill takes unchecked commit messages and must be refused on a public repository"
+    assert_contains "$REASON" "--fill" "the refusal must name --fill as the reason"
+  done
+  expect_refuse "$HOME_WORDS" 'gh pr create --repo o/public -fd' "a --fill combined with other short flags must count"
+  expect_refuse "$HOME_WORDS" 'gh pr create --repo o/public --fill=true' "a --fill given a value must count"
+  expect_allow "$HOME_WORDS" 'git push -f origin fm/x && gh pr create --repo o/public --title t --body-file clean.md' \
+    "a -f given to another command is not --fill"
+  expect_allow "$HOME_WORDS" 'gh pr create --repo o/public --title "Fix lock" --body "Stop calling rm -f on the lock"' \
+    "a -f inside the body text is not --fill"
+  expect_refuse "$HOME_WORDS" 'gh pr new --repo o/public --fill' "the pr new alias with --fill must count"
+  expect_refuse "$HOME_WORDS" 'gh pr -R o/public create --fill' "a --fill after a repo flag between pr and create must count"
+  assert_contains "$REASON" "--fill" "the refusal must name --fill as the reason"
+  expect_refuse "$HOME_WORDS" 'gh pr --repo=o/public new --fill' "a --fill after --repo= between pr and new must count"
+  expect_refuse "$HOME_WORDS" "gh pr create --repo o/public --fill # it's ready" \
+    "a --fill whose command cannot be parsed because of a trailing comment must still be refused"
+  assert_contains "$REASON" "--fill" "the refusal must name --fill as the reason"
+  expect_refuse "$HOME_WORDS" "# it's ready
+gh pr create --fill --repo o/public" "a --fill whose command cannot be parsed because of a comment line must still be refused"
+  assert_contains "$REASON" "--fill" "the refusal must name --fill as the reason"
+  expect_refuse "$HOME_WORDS" 'gh pr new --repo o/public --title "Fix for Robin" --body x' \
+    "a listed word through the pr new alias must be refused"
+  expect_refuse "$HOME_WORDS" 'gh issue new --repo o/public --title "Fix for Robin" --body x' \
+    "a listed word through the issue new alias must be refused"
+  expect_refuse "$HOME_WORDS" 'gh pr reopen 7 --repo o/public --comment "reopening for Robin"' \
+    "a reopening comment on a PR must be checked"
+  expect_refuse "$HOME_WORDS" 'gh issue reopen 3 --repo o/public --comment "reopening for Robin"' \
+    "a reopening comment on an issue must be checked"
+  export FAKE_GH_PRIVATE=true
+  expect_allow "$HOME_WORDS" 'gh pr create --repo o/work --fill' "--fill may publish to a private repository"
+  unset FAKE_GH_PRIVATE
+  expect_allow "$NO_LIST" 'gh pr create --repo o/public --fill' "--fill passes in a home with no list"
+  pass "body files read through \$(cat), a redirect, a pipe or field=@file are checked, and --fill is refused on a public repository"
+}
+
+test_hook_finds_the_repository_from_urls_and_gh_repo() {
+  export FAKE_GH_PRIVATE=true FAKE_GH_PUBLIC="github.com/o/public o/public"
+  expect_refuse "$HOME_WORDS" 'gh pr comment https://github.com/o/public/pull/7 --body "thanks Robin"' \
+    "a PR URL on a public repository must be the target, not the private working directory"
+  assert_contains "$REASON" "github.com/o/public, a public repository" "the refusal must name the URL's repository"
+  expect_refuse "$HOME_WORDS" 'gh issue comment https://github.com/o/public/issues/3 --body "thanks Robin"' \
+    "an issue URL must be the target"
+  expect_refuse "$HOME_WORDS" 'GH_REPO=o/public gh pr comment 7 --body "thanks Robin"' \
+    "a GH_REPO assignment must be the target"
+  expect_refuse "$HOME_WORDS" 'gh api -X POST repos/o/public/issues/3/comments -f body="thanks Robin"' \
+    "the gh api endpoint after a flag and its value must be the target"
+  expect_allow "$HOME_WORDS" 'gh pr comment https://github.com/o/work/pull/7 --body "thanks Robin"' \
+    "a URL on a private repository may hold listed words"
+  export FAKE_GH_PRIVATE=false FAKE_GH_PUBLIC='' FAKE_GH_PRIVATE_REPOS="github.com/o/private o/private"
+  expect_refuse "$HOME_WORDS" 'gh pr comment 7 --body "Follows https://github.com/o/private/pull/3, thanks Robin"' \
+    "a private URL in the body text must not replace the public repository the comment reaches"
+  assert_contains "$REASON" "the repository this command reaches, a public repository" "the refusal must name gh's default"
+  expect_refuse "$HOME_WORDS" 'gh issue comment 3 --body "see repos/o/private/pulls and GH_REPO=o/private, thanks Robin"' \
+    "an API path or GH_REPO in the body text must not replace the target"
+  export FAKE_GH_PRIVATE=true FAKE_GH_PUBLIC="github.com/o/public o/public" FAKE_GH_PRIVATE_REPOS=''
+  expect_refuse "$HOME_WORDS" 'gh pr review --approve https://github.com/o/public/pull/7 --body "thanks Robin"' \
+    "a PR URL after a flag must still be the target"
+  expect_refuse "$HOME_WORDS" "gh pr comment 7 --repo o/public --body-file - <<'EOF'
+It's fixed, thanks Robin
+EOF" "a command whose words cannot be parsed must not fall back to the private default"
+  assert_contains "$REASON" "could not read which repository" "the refusal must say the target is unknown"
+  assert_not_contains "$REASON" "blocked:" "an unparsable command must be rewritten, not stop the worker"
+  assert_contains "$REASON" "unmatched quote in a heredoc or comment" "the refusal must say why the command could not be read"
+  assert_contains "$REASON" "--body-file <file> and an explicit --repo" "the refusal must say how to make the command readable"
+  expect_refuse "$HOME_WORDS" 'gh pr -Ro/public comment 7 --body "thanks Robin"' \
+    "a repo flag with its value attached must still be checked"
+  assert_contains "$REASON" "o/public, a public repository" "the refusal must name the attached repository"
+  expect_refuse "$HOME_WORDS" 'gh pr comment 7 -R=o/public --body "thanks Robin"' \
+    "a repo flag attached with = must still be checked"
+  assert_contains "$REASON" "to o/public, a public repository" "the refusal must name the repository without the ="
+  expect_refuse "$HOME_WORDS" "# post it; it's for the PR
+gh pr comment 7 --repo o/private --body \"thanks Robin\"" "an apostrophe in a comment line makes the command unparsable"
+  assert_contains "$REASON" "could not read which repository" "the refusal must say the target is unknown"
+  expect_refuse "$HOME_WORDS" "gh pr comment 7 --repo o/private --body 'Tracked in
+#12'
+gh pr comment 3 --repo o/public --body-file - <<'EOF'
+Thanks Robin, it's merged
+EOF" "a quoted line starting with # must not hide a later public comment"
+  expect_refuse "$HOME_WORDS" 'gh pr create --title Fix#12 --body "thanks Robin" --repo o/public' \
+    "a # inside a word must not hide the --repo after it"
+  assert_contains "$REASON" "o/public, a public repository" "the refusal must name the repository after the #"
+  expect_refuse "$HOME_WORDS" 'timeout 60 gh pr comment 7 --repo o/public --body "thanks Robin"' \
+    "a gh word behind a wrapper must still be checked against its --repo"
+  # shellcheck disable=SC2016 # The loop variable expands inside the checked command, not here.
+  expect_refuse "$HOME_WORDS" 'for n in 7 8; do GH_REPO=o/public gh pr comment $n --body "thanks Robin"; done' \
+    "a gh word behind a reserved word must still be checked against its GH_REPO"
+  expect_refuse "$HOME_WORDS" "gh pr list --json number -q '.[].number' | while read n; do gh pr comment \"\$n\" --repo o/public --body \"thanks Robin\"; done" \
+    "a gh word inside a while-read loop must still be checked against its --repo"
+  expect_refuse "$HOME_WORDS" 'gh pr view 7 --repo o/private && timeout 60 gh pr comment 7 --repo o/public --body "thanks Robin"' \
+    "a private repository read first must not hide a public one commented on later"
+  assert_contains "$REASON" "o/public, a public repository" "the refusal must name the public repository"
+  unset FAKE_GH_PRIVATE FAKE_GH_PUBLIC FAKE_GH_PRIVATE_REPOS
+  pass "a PR or issue URL, GH_REPO and the gh api endpoint name repositories the text reaches, and body text never hides one"
+}
+
+test_hook_refuses_the_pipeline_intent_on_a_public_github_repo() {
+  local repo="$TMP_ROOT/nm-repo" other="$TMP_ROOT/nm-other"
+  git init -q "$repo" && git -C "$repo" remote add origin git@github.com:o/public.git
+  git init -q "$other" && git -C "$other" remote add origin https://gitlab.example/o/work.git
+  export FAKE_GH_PRIVATE=false
+  expect_refuse "$HOME_WORDS" 'no-mistakes axi run --intent "Robin wants the sync fixed"' \
+    "a listed word in the pipeline intent must be refused" "$repo"
+  assert_contains "$REASON" "o/public" "the refusal must name origin's repository"
+  expect_refuse "$HOME_WORDS" 'no-mistakes axi respond --action answer --message "ask acme corp"' \
+    "a listed word in a gate answer must be refused" "$repo"
+  expect_allow "$HOME_WORDS" 'no-mistakes axi run --intent "Robin wants the sync fixed"' \
+    "an origin off github.com cannot be checked and must pass" "$other"
+  expect_allow "$HOME_WORDS" 'no-mistakes axi run --intent "fix the sync"' "a clean intent must pass" "$repo"
+  printf 'Robin wants the sync fixed\n' > "$repo/intent.txt"
+  # shellcheck disable=SC2016 # The substitution runs inside the checked command, not here.
+  expect_refuse "$HOME_WORDS" 'no-mistakes axi run --intent "$(cat intent.txt)"' \
+    "an intent read from a file must be checked" "$repo"
+  local private="$TMP_ROOT/nm-private"
+  git init -q "$private" && git -C "$private" remote add origin git@github.com:o/private.git
+  FAKE_GH_PRIVATE_REPOS=o/private expect_allow "$HOME_WORDS" \
+    'no-mistakes axi run --intent "Robin wants the worker to run gh pr comment after the merge"' \
+    "a gh command named inside a private origin's intent must not stop the pipeline" "$private"
+  expect_allow "$HOME_WORDS" 'no-mistakes axi run --intent "Robin wants the worker to run gh pr comment after the merge"' \
+    "a gh command named inside the intent of an origin off GitHub must not be checked" "$other"
+  local alias="$TMP_ROOT/nm-alias" bare="$TMP_ROOT/nm-bare" dotless="$TMP_ROOT/nm-dotless"
+  git init -q "$alias" && git -C "$alias" remote add origin git@github-work:o/public.git
+  git init -q "$dotless" && git -C "$dotless" remote add origin git@work:o/public.git
+  git init -q "$bare"
+  git -C "$repo" remote add upstream git@github.com:o/private.git
+  : > "$GH_LOG"
+  expect_refuse "$HOME_WORDS" 'no-mistakes axi run --intent "Robin wants the sync fixed"' \
+    "origin on github.com must be checked by name, whatever gh's default is" "$repo"
+  assert_equals "repo view o/public --json isPrivate --jq .isPrivate" "$(cat "$GH_LOG")" "gh must read origin's repository by name"
+  : > "$GH_LOG"
+  expect_refuse "$HOME_WORDS" 'no-mistakes axi run --intent "Robin wants the sync fixed"' \
+    "an origin behind an SSH host alias must be checked by its owner/repo" "$alias"
+  assert_equals "repo view o/public --json isPrivate --jq .isPrivate" "$(cat "$GH_LOG")" "gh must read the aliased origin by name"
+  : > "$GH_LOG"
+  expect_refuse "$HOME_WORDS" 'no-mistakes axi run --intent "Robin wants the sync fixed"' \
+    "a dotless SSH alias that does not name GitHub must still be checked" "$dotless"
+  assert_equals "repo view o/public --json isPrivate --jq .isPrivate" "$(cat "$GH_LOG")" "gh must read the dotless alias by name"
+  export FAKE_GH_PRIVATE=true
+  expect_allow "$HOME_WORDS" 'no-mistakes axi run --intent "Robin wants the sync fixed"' \
+    "an aliased origin gh reads as private may hold listed words" "$alias"
+  unset FAKE_GH_PRIVATE
+  expect_refuse "$HOME_WORDS" 'no-mistakes axi run --intent "Robin wants the sync fixed"' \
+    "a checkout with no origin cannot be told apart and must be refused" "$bare"
+  assert_contains "$REASON" "origin remote" "the refusal must name the unreadable origin"
+  pass "the pipeline intent and gate answers are checked against origin's repository on GitHub, however origin is named"
+}
+
+test_hook_passes_clean_private_and_unrelated_commands() {
+  : > "$GH_LOG"
+  export FAKE_GH_PRIVATE=false
+  expect_allow "$HOME_WORDS" 'gh pr create --repo o/public --title "Sync fix" --body "Details"' "clean text must pass"
+  assert_equals "" "$(cat "$GH_LOG")" "a clean command must cost no visibility read"
+  for command in 'gh pr view 7 --repo o/public --comments' 'grep -rn Robin docs' 'git commit -m "Robin"' \
+    'gh api repos/o/public/pulls/7' 'gh pr list --search "Robin"'; do
+    expect_allow "$HOME_WORDS" "$command" "a command that publishes nothing must pass: $command"
+  done
+  export FAKE_GH_PRIVATE=true
+  expect_allow "$HOME_WORDS" 'gh pr create --repo o/work --title "Sync fix for Robin" --body x' \
+    "a private repository may hold listed words"
+  export FAKE_GH_PRIVATE=unreadable
+  expect_refuse "$HOME_WORDS" 'gh pr create --repo o/gone --title "Sync fix for Robin" --body x' \
+    "an unreadable visibility must refuse"
+  assert_contains "$REASON" "could not confirm the repository is private" "the refusal must say why"
+  assert_contains "$REASON" "HTTP 404" "the refusal must carry gh's reason"
+  assert_contains "$REASON" '"Robin"' "the refusal must name the listed word"
+  assert_contains "$REASON" "o/gone: gh repo view failed" "the refusal must name the unreadable repository"
+  assert_contains "$REASON" "Rewrite the text without it" "the refusal must say how to retry"
+  assert_contains "$REASON" "blocked:" "a private repository that cannot be read must leave the worker a way to stop"
+  assert_not_contains "$REASON" "explicit --repo" "an unreadable repository must not suggest a retry that cannot help"
+  unset FAKE_GH_PRIVATE
+  expect_allow "$NO_LIST" 'gh pr create --repo o/public --title "Sync fix for Robin" --body x' \
+    "a home with no list must pass everything"
+  hook "$HOME_WORDS" '' && assert_equals "" "$OUT" "an empty command must pass"
+  local long_body
+  long_body=$(printf 'A clean sentence about the sync fix and why it holds now. %.0s' $(seq 25))$(printf 'x%.0s' $(seq 300))
+  export FAKE_GH_PRIVATE=false
+  expect_allow "$HOME_WORDS" "gh pr create --repo o/public --title t --body \"$long_body\"" \
+    "a long clean inline body must pass in a home with a list"
+  expect_allow "$NO_LIST" "gh pr create --repo o/public --title t --body \"$long_body\"" \
+    "a long clean inline body must pass in a home with no list"
+  unset FAKE_GH_PRIVATE
+  OUT=$(printf 'not json' | python3 "$HOOK" hook --home "$HOME_WORDS") || fail "an unreadable payload must not crash the hook"
+  assert_equals "" "$OUT" "an unreadable payload must pass"
+  OUT=$(jq -cn '{tool_name: "Read", tool_input: {file_path: "/x/Robin"}}' | python3 "$HOOK" hook --home "$HOME_WORDS")
+  assert_equals "" "$OUT" "another tool must pass untouched"
+  pass "clean text, private repositories, unrelated commands and a home with no list all pass"
+}
+
+test_spawn_installs_the_hook() {
+  local case_dir="$TMP_ROOT/spawn" home proj wt fakebin settings cmd
+  home="$case_dir/home"
+  proj="$case_dir/project"
+  wt="$case_dir/wt"
+  fakebin=$(make_spawn_fakebin "$case_dir/fake" claude)
+  fm_test_spawn_home "$home" claude
+  printf 'Robin\n' > "$home/config/leak-words"
+  fm_git_worktree "$proj" "$wt" "wt-prtext"
+  fm_test_spawn_brief "$home" prtext
+  fm_test_run_spawn "$home" "$wt" "$fakebin" prtext "$proj" --mode no-mistakes --yolo off >"$case_dir/spawn.out" 2>&1 \
+    || fail "a claude spawn failed: $(cat "$case_dir/spawn.out")"
+  settings="$wt/.claude/settings.local.json"
+  cmd=$(jq -r '[.hooks.PreToolUse[] | select(.matcher == "Bash") | .hooks[0].command | select(test("fm-pr-text-guard[.]py"))] | if length == 1 then .[0] else error("not exactly one") end' \
+    "$settings") || fail "every claude worker must get exactly one PR text hook: $(cat "$settings")"
+  OUT=$(jq -cn --arg cwd "$WORK" '{tool_name: "Bash", tool_input: {command: "gh pr create --repo o/public --title \"for Robin\" --body x"}, cwd: $cwd}' \
+    | PATH="$FAKEBIN:$PATH" FAKE_GH_LOG="$GH_LOG" FAKE_GH_PRIVATE=false bash -c "$cmd")
+  assert_contains "$OUT" '"deny"' "the installed hook must read the home's own list and refuse"
+  : > "$home/config/leak-words"
+  OUT=$(jq -cn --arg cwd "$WORK" '{tool_name: "Bash", tool_input: {command: "gh pr create --repo o/public --title \"for Robin\" --body x"}, cwd: $cwd}' \
+    | PATH="$FAKEBIN:$PATH" FAKE_GH_LOG="$GH_LOG" FAKE_GH_PRIVATE=false bash -c "$cmd")
+  assert_equals "" "$OUT" "the installed hook must read the home's list live"
+  pass "every claude worker gets the PR text hook, reading its home's list on every command"
+}
+
+test_ship_brief_tells_the_worker_to_check() {
+  local home="$TMP_ROOT/brief-home" id brief check
+  mkdir -p "$home/data" "$home/config"
+  printf 'Robin\n' > "$home/config/leak-words"
+  for id_mode in "brief-prtext-nm:no-mistakes" "brief-prtext-direct:direct-PR"; do
+    id=${id_mode%%:*}
+    FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" some-proj --mode "${id_mode##*:}" >/dev/null 2>&1 \
+      || fail "$id: scaffold failed"
+    brief="$home/data/$id/brief.md"
+    assert_grep "## Public PR text" "$brief" "$id: brief missing the PR text instruction"
+    assert_grep "issues/<number>/comments" "$brief" "$id: the read-back must cover the PR's comments"
+    assert_grep "pulls/<number>/comments" "$brief" "$id: the read-back must cover review comments"
+    # shellcheck disable=SC2016 # The pattern matches literal backticks in the brief.
+    check=$(sed -n 's/.*and run `\(.*\) --text <file>`.*/\1/p' "$brief")
+    [ -n "$check" ] || fail "$id: brief does not name the check command"
+    OUT=$(printf 'for robin\n' | bash -c "$check --text" 2>&1) && fail "$id: the brief's command must find the home's word: $OUT"
+    assert_contains "$OUT" "stdin: robin" "$id: the brief's command must read this home's list"
+  done
+  assert_grep "The one exception to keeping the captain's words" "$home/data/brief-prtext-nm/brief.md" \
+    "a no-mistakes brief must state the public-repository exception to the verbatim intent"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-prtext-local some-proj --mode local-only >/dev/null 2>&1 \
+    || fail "local-only scaffold failed"
+  assert_no_grep "## Public PR text" "$home/data/brief-prtext-local/brief.md" \
+    "a local-only brief opens no PR and must not carry the PR text instruction"
+  pass "direct-PR and no-mistakes briefs tell the worker to check PR text with this home's list"
+}
+
+test_draft_check_names_each_listed_word
+test_draft_check_passes_clean_text_and_partial_words
+test_draft_check_without_a_list_is_silent
+test_hook_refuses_title_body_and_comment_on_a_public_repo
+test_hook_reads_body_files_however_they_are_named
+test_hook_finds_the_repository_from_urls_and_gh_repo
+test_hook_refuses_the_pipeline_intent_on_a_public_github_repo
+test_hook_passes_clean_private_and_unrelated_commands
+test_spawn_installs_the_hook
+test_ship_brief_tells_the_worker_to_check

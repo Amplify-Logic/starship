@@ -658,7 +658,7 @@ test_spawn_installs_hook_only_when_armed() {
   local wt settings cmd out
   wt=$(spawn_claude off guard-off)
   settings="$wt/.claude/settings.local.json"
-  jq -e '.hooks.Stop and ([.hooks.PreToolUse[]? | select(.matcher == "Bash")] | length == 0)' "$settings" >/dev/null \
+  jq -e '.hooks.Stop and ([.hooks.PreToolUse[]? | select(.matcher == "Bash" and (.hooks[0].command | test("fm-command-guard[.]py")))] | length == 0)' "$settings" >/dev/null \
     || fail "an unarmed home must not install the guard hook"
 
   wt=$(spawn_claude excluded guard-excluded 'enabled = true\nexclude = project\n')

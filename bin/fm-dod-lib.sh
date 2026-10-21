@@ -96,6 +96,9 @@
 # reader, so a quoted `Captain:` sample is never authorized intent.
 # Previously stored speaker labels remain readable for compatibility only.
 # Never scrub literal examples or other content the captain actually supplied.
+# The one exception, stated once in fm_nm_driving_block and pointed to from the
+# launch overlay and fm_pr_text_block: on a public repository, a word from the
+# home's private list is replaced by its role and every other word stays.
 # The string passed must be self-sufficient - it plus the codebase reconstructs
 # roughly the same specification - so a report, decision, or PR the intent
 # refers to is written into it as substance, never left as a pointer.
@@ -324,6 +327,7 @@ Use everything under `## Captain intent authorized for --intent` through the end
 Preserve those words without adding speaker labels or direct address.
 Firstmate-authored constraints, acceptance criteria, implementation details, decisions, and tradeoffs are specification, not captain intent.
 The Definition of done's rule that `--intent` must be self-sufficient still governs the string you pass: resolve any report, decision, or PR the intent below refers to into its substance rather than passing the pointer.
+The Definition of done's one exception to keeping the captain's words, for private words on a public repository, still governs too.
 
 ## Captain intent authorized for --intent
 EOF
@@ -393,6 +397,32 @@ Before you append the done line, confirm the PR URL the forge printed is under `
 EOF
 }
 
+# Single owner of the public PR text instruction shared by every ship mode that
+# ends in a pull request: the worker checks draft PR text and the no-mistakes
+# intent with bin/fm-leak-guard.sh --text before publishing it, and checks what
+# was actually published afterwards, comments the pipeline posted included. It names this checkout's guard and the
+# caller's FM_HOME, whose config/leak-words is the list; bin/fm-pr-text-guard.py
+# enforces the same check on a Claude worker's publishing commands. Rendered
+# beside fm_pr_target_block.
+fm_pr_text_block() {
+  local check
+  check="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-leak-guard.sh"
+  printf -v check '%q' "$check"
+  [ -z "${FM_HOME:-}" ] || check="FM_HOME=$(printf '%q' "$FM_HOME") $check"
+  cat <<EOF
+
+## Public PR text
+Personal and work details never go into a public repository's PR titles, descriptions or comments; this home keeps the words it means in a private list.
+Before you open or edit a PR, comment on one, or pass \`--intent\` or a gate answer to no-mistakes, write the draft text to a file and run \`$check --text <file>\` (or pipe the text to \`$check --text\`).
+It names every listed word the text contains; on a public repository, rewrite the text without each named word and check it again, while a private repository's PR may keep them.
+For \`--intent\`, the Definition of done's one exception to keeping the captain's words says how to rewrite it.
+Once the PR exists, check what was actually published the same way: the title and description, and every comment on it, including those the pipeline posted.
+For example, pipe each of \`gh-axi api "repos/\$ORIGIN_REPO/pulls/<number>" --jq '.title, .body'\`, \`gh-axi api --paginate "repos/\$ORIGIN_REPO/issues/<number>/comments" --jq '.[].body'\`, \`gh-axi api --paginate "repos/\$ORIGIN_REPO/pulls/<number>/comments" --jq '.[].body'\` and \`gh-axi api --paginate "repos/\$ORIGIN_REPO/pulls/<number>/reviews" --jq '.[].body'\` into \`$check --text\`.
+On a public repository, edit any named word out of the title, description or comment, leaving any no-mistakes appendix untouched.
+A Claude worker's publishing commands are refused on a public repository while their text holds a listed word, naming the word, so rewrite and retry rather than routing around the refusal.
+EOF
+}
+
 # The forge-independent middle of the no-mistakes contract: how a worker drives
 # the pipeline, what `--intent` may carry, and the two firstmate-specific rules.
 # Written once; only the two sentences about a green PR depend on the forge,
@@ -425,6 +455,7 @@ You drive no-mistakes by responding to its gates, not by implementing fixes.
 Follow the guidance no-mistakes itself provides for the mechanics: it loads when you invoke /no-mistakes, and \`no-mistakes axi run --help\` plus the \`help\` lines in each \`axi\` response are authoritative and version-matched to the installed binary.
 When starting no-mistakes, pass \`--intent\` as only this brief's \`## Captain's intent\` subsection body, not its heading, plus any later words the captain actually said.
 Preserve the actual words without adding speaker labels or direct address; the subsection heading supplies provenance outside the pipeline input.
+The one exception to keeping the captain's words: when this brief has a \`## Public PR text\` section and origin is a public repository, replace each word its check names with that person's, company's or project's role, such as "a colleague" or "a customer", and keep every other word verbatim.
 For a legacy brief with no such subsection, include only words on lines marked \`[captain] \`, excluding that metadata prefix; never copy its mixed \`# Task\` wholesale.
 If it has no provenance-marked captain words, stop and ask firstmate instead of starting no-mistakes.
 Do not include \`## Firstmate spec\`, later Firstmate build constraints, or your own decisions and tradeoffs.
@@ -586,6 +617,7 @@ If you deliberately keep the PR a draft, append \`paused [at=<epoch>]: {why the 
 Do NOT run /no-mistakes. The configured merge authority decides whether to merge the PR; firstmate relays the outcome.
 EOF
       fm_pr_target_block
+      fm_pr_text_block
       ;;
     local-only:*)
       cat <<EOF
@@ -621,6 +653,7 @@ That CI-ready \`done:\` is accepted only when this copy's HEAD - your latest com
 If you deliberately keep the PR a draft, append \`paused [at=<epoch>]: {why the draft is held}\` instead of done.
 EOF
       fm_pr_target_block
+      fm_pr_text_block
       ;;
     *)
       echo "error: fm_dod_block: unknown delivery mode '$mode'" >&2

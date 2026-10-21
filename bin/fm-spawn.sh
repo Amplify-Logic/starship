@@ -528,7 +528,9 @@
 # Verified per-harness turn-end hooks are installed automatically where enabled; some live outside the worktree.
 # A claude crewmate or scout also gets the worker command guard's PreToolUse
 # Bash hook in its settings.local.json when this home's config/command-guard
-# is on (bin/fm-command-guard.py owns the gate and the hook).
+# is on (bin/fm-command-guard.py owns the gate and the hook), and always the
+# PR text check's PreToolUse Bash hook (bin/fm-pr-text-guard.py), which refuses
+# publishing this home's private words to a public repository's PRs.
 # A --secondmate launch arms the same semantic busy contract (bin/fm-busy-lib.sh) in THIS
 # parent home for claude, opencode, pi, pi-signed, and omp, so the parent's active-turn
 # gate can read a busy verdict. Those hooks do not touch the parent's turn-ended marker:
@@ -6237,6 +6239,19 @@ BUSY_GEN=
     if [ "$KIND" != secondmate ]; then
       command -v python3 >/dev/null 2>&1 \
         || echo "warning: python3 is not installed; $ID's outward check will refuse every connected-account and browser action until it is" >&2
+      # The PR text check (bin/fm-pr-text-guard.py, docs/configuration.md
+      # "Private leak words"): a PreToolUse hook on Bash that refuses a
+      # command publishing this home's private words to a public
+      # repository's PR titles, descriptions, comments or pipeline intent.
+      # It reads the home's list on every command, so a list added later
+      # needs no relaunch. Without python3 it is left out rather than
+      # refusing every shell command.
+      if command -v python3 >/dev/null 2>&1; then
+        j_prtext=$(json_escape "python3 $(shell_quote "$FM_ROOT/bin/fm-pr-text-guard.py") hook --home $(shell_quote "$(cd "$FM_HOME" && pwd -P)")")
+        pretool_entries="${pretool_entries:+$pretool_entries,}{\"matcher\":\"Bash\",\"hooks\":[{\"type\":\"command\",\"command\":\"$j_prtext\",\"timeout\":45}]}"
+      else
+        echo "warning: python3 is not installed; $ID runs without the PR text check" >&2
+      fi
       outward_config=$(cd "$CONFIG" 2>/dev/null && pwd -P) || outward_config=$CONFIG
       outward_args="--state $(shell_quote "$STATE_REAL") --task $(shell_quote "$ID")"
       j_outward=$(json_escape "python3 $(shell_quote "$FM_ROOT/bin/fm-outward-check.py") hook --config $(shell_quote "$outward_config") $outward_args || { echo 'Starship refused this action because its outward check could not run; append a blocked: status line naming this and stop.' >&2; exit 2; }")
