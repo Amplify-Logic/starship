@@ -107,7 +107,7 @@ write_github_live_json() {
   local case_dir=$1 head=$2
   printf '%s\n' "$head" > "$case_dir/github-head"
   cat > "$case_dir/github-view.json" <<JSON
-{"state":"OPEN","isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","headRefOid":"$head","baseRefName":"main","statusCheckRollup":[{"__typename":"CheckRun","name":"ci","status":"COMPLETED","conclusion":"SUCCESS"}]}
+{"state":"OPEN","isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","headRefOid":"$head","baseRefName":"main","author":{"login":"fm-home"},"statusCheckRollup":[{"__typename":"CheckRun","name":"ci","status":"COMPLETED","conclusion":"SUCCESS"}]}
 JSON
 }
 
@@ -115,7 +115,7 @@ write_github_red_json() {
   local case_dir=$1 head=$2 name=$3
   printf '%s\n' "$head" > "$case_dir/github-head"
   cat > "$case_dir/github-view.json" <<JSON
-{"state":"OPEN","isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","headRefOid":"$head","baseRefName":"main","statusCheckRollup":[{"__typename":"CheckRun","name":"$name","status":"COMPLETED","conclusion":"FAILURE"}]}
+{"state":"OPEN","isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","headRefOid":"$head","baseRefName":"main","author":{"login":"fm-home"},"statusCheckRollup":[{"__typename":"CheckRun","name":"$name","status":"COMPLETED","conclusion":"FAILURE"}]}
 JSON
 }
 
@@ -150,7 +150,7 @@ write_github_rollup_json() {
   done
   printf '%s\n' "$head" > "$case_dir/github-head"
   cat > "$case_dir/github-view.json" <<JSON
-{"state":"OPEN","isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","headRefOid":"$head","baseRefName":"main","statusCheckRollup":[$rollup]}
+{"state":"OPEN","isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","headRefOid":"$head","baseRefName":"main","author":{"login":"fm-home"},"statusCheckRollup":[$rollup]}
 JSON
 }
 
@@ -252,6 +252,24 @@ case "${1:-} ${2:-}" in
     exit 0
     ;;
   api\ *)
+    # The account this home's gh is signed in as, and the files a pull request
+    # changes, which the captain's-yes refusals read.
+    case " $* " in
+      " api user ")
+        [ ! -f "${FM_TEST_GH_LOGIN_FAIL:-}" ] || exit 1
+        printf '{"login":"%s"}\n' "${FM_TEST_GH_LOGIN:-fm-home}"
+        exit 0
+        ;;
+      *" repos/"*"/pulls/"*"/files "*)
+        [ ! -f "${FM_TEST_GH_FILES_FAIL:-}" ] || exit 1
+        if [ -f "${FM_TEST_GH_FILES:-}" ]; then
+          cat "$FM_TEST_GH_FILES"
+        else
+          printf '%s\n' '[{"filename":"README.md"}]'
+        fi
+        exit 0
+        ;;
+    esac
     # The required-check reads: the branch itself, and its rules read without
     # the merge-queue filter the queue reader below applies.
     case " $* " in
@@ -680,6 +698,10 @@ run_pr_merge() {
   FM_TEST_GH_BRANCH_FAIL="$case_dir/github-branch-fail" \
   FM_TEST_GH_REQUIRED_RULES="$case_dir/github-required-rules.json" \
   FM_TEST_GH_REQUIRED_RULES_FAIL="$case_dir/github-required-rules-fail" \
+  FM_TEST_GH_LOGIN="${FM_TEST_GH_LOGIN:-fm-home}" \
+  FM_TEST_GH_LOGIN_FAIL="$case_dir/github-login-fail" \
+  FM_TEST_GH_FILES="$case_dir/github-files.json" \
+  FM_TEST_GH_FILES_FAIL="$case_dir/github-files-fail" \
   FM_TEST_META_AT_MERGE="$case_dir/meta-at-merge" \
   FM_TEST_AWAY_RECORD_AFTER_VIEW="$case_dir/away-record-after-view" \
   FM_TEST_ROOT="$ROOT" \
@@ -4620,3 +4642,359 @@ test_allow_red_refused_on_forgejo
 test_allow_missing_refused_on_forgejo
 test_allow_no_pipeline_merges_only_a_null_head_pipeline
 test_allow_no_pipeline_is_attended_only_and_gitlab_only
+
+# A pull request this home's GitHub account did not open, such as a teammate's
+# or a bot's, needs the captain's explicit yes even under standing yolo.
+test_github_other_author_needs_the_captain_word() {
+  local case_dir rc head
+  head=c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5
+  case_dir=$(make_case github-other-author)
+  add_gh_mocks "$case_dir" "$head"
+  jq -c '.author.login = "teammate"' "$case_dir/github-view.json" > "$case_dir/view.tmp"
+  mv "$case_dir/view.tmp" "$case_dir/github-view.json"
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/93 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "other-author: a teammate's pull request must be refused"
+  assert_grep "opened by 'teammate', not by this home's GitHub account 'fm-home'" "$case_dir/stderr" \
+    "other-author: the refusal did not name both accounts"
+  assert_grep '--captain-approved' "$case_dir/stderr" \
+    "other-author: the refusal did not name the captain's flag"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" "other-author: gh pr merge ran"
+
+  # GitHub logins are case-insensitive, so the same account in another case is
+  # this home's own pull request.
+  case_dir=$(make_case github-own-author-other-case)
+  add_gh_mocks "$case_dir" "$head"
+  set +e
+  FM_TEST_GH_LOGIN=FM-Home run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/93 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "other-author: the home's own login in another case must merge"
+
+  case_dir=$(make_case github-other-author-approved)
+  add_gh_mocks "$case_dir" "$head"
+  jq -c '.author.login = "teammate"' "$case_dir/github-view.json" > "$case_dir/view.tmp"
+  mv "$case_dir/view.tmp" "$case_dir/github-view.json"
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/93 --captain-approved \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "other-author: --captain-approved must lift the author refusal"
+  assert_logged_gh_merge "$case_dir" 93 example/repo --squash
+  assert_no_grep 'api user' "$case_dir/gh.log" \
+    "other-author: --captain-approved still read the account"
+  pass "fm-pr-merge needs the captain's yes for a pull request this home did not open"
+}
+
+test_github_unreadable_author_or_account_refuses() {
+  local case_dir rc head label
+  head=c6c6c6c6c6c6c6c6c6c6c6c6c6c6c6c6c6c6c6c6
+  for label in account author; do
+    case_dir=$(make_case "github-unreadable-$label")
+    add_gh_mocks "$case_dir" "$head"
+    case "$label" in
+      account) : > "$case_dir/github-login-fail" ;;
+      author)
+        jq -c 'del(.author)' "$case_dir/github-view.json" > "$case_dir/view.tmp"
+        mv "$case_dir/view.tmp" "$case_dir/github-view.json"
+        ;;
+    esac
+    set +e
+    run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/94 \
+      > "$case_dir/stdout" 2> "$case_dir/stderr"
+    rc=$?
+    set -e
+    expect_code 1 "$rc" "unreadable-$label: an unreadable $label must refuse"
+    assert_grep "author or this home's GitHub account could not be read" "$case_dir/stderr" \
+      "unreadable-$label: the refusal did not say what could not be read"
+    assert_no_grep 'pr merge' "$case_dir/gh.log" "unreadable-$label: gh pr merge ran"
+  done
+  pass "fm-pr-merge refuses when the author or this home's account cannot be read"
+}
+
+# A firstmate pull request that changes Starship's own rules needs the
+# captain's yes, read from the files it changes at merge time.
+test_github_rules_change_needs_the_captain_word() {
+  local case_dir rc head files
+  head=c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7
+  for files in '[{"filename":"AGENTS.md"}]' '[{"filename":"docs/AGENTS.md"}]' \
+    '[{"filename":".agents/skills/ship-landing/SKILL.md"}]' '[{"filename":"hooks/stop.sh"}]' \
+    '[{"filename":"CLAUDE.md"}]' '[{"filename":".claude/settings.json"}]' \
+    '[{"filename":".agents/opt-in-skills/adhd/SKILL.md"}]' \
+    '[{"filename":"docs/old-hook.sh","previous_filename":"hooks/old-hook.sh"}]'; do
+    case_dir=$(make_case "github-rules-$(printf '%s' "$files" | cksum | cut -d' ' -f1)")
+    add_gh_mocks "$case_dir" "$head"
+    printf 'project=%s\n' "$ROOT" >> "$case_dir/state/task-x1.meta"
+    printf '%s\n' "$files" > "$case_dir/github-files.json"
+    set +e
+    run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/95 \
+      > "$case_dir/stdout" 2> "$case_dir/stderr"
+    rc=$?
+    set -e
+    expect_code 1 "$rc" "rules-change: $files must be refused"
+    assert_grep "changes Starship's own rules" "$case_dir/stderr" \
+      "rules-change: the refusal for $files did not name the rules"
+    assert_no_grep 'pr merge' "$case_dir/gh.log" "rules-change: gh pr merge ran for $files"
+  done
+  assert_grep 'hooks/old-hook.sh' "$case_dir/stderr" \
+    "rules-change: a file renamed out of hooks/ was not named"
+
+  # Several pages, and a rules file only on the second one.
+  case_dir=$(make_case github-rules-paged)
+  add_gh_mocks "$case_dir" "$head"
+  printf 'project=%s\n' "$ROOT" >> "$case_dir/state/task-x1.meta"
+  printf '%s\n' '[{"filename":"README.md"}]' '[{"filename":"AGENTS.md"},{"filename":"hooks/a.sh"}]' \
+    > "$case_dir/github-files.json"
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/95 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "rules-paged: a rules file on a later page must be refused"
+  assert_grep "Starship's own rules (AGENTS.md, hooks/a.sh)" "$case_dir/stderr" \
+    "rules-paged: the refusal did not list every rules file once"
+
+  case_dir=$(make_case github-rules-files-unreadable)
+  add_gh_mocks "$case_dir" "$head"
+  printf 'project=%s\n' "$ROOT" >> "$case_dir/state/task-x1.meta"
+  : > "$case_dir/github-files-fail"
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/95 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "rules-unreadable: an unreadable file list must refuse"
+  assert_grep 'the files the pull request changes could not be read' "$case_dir/stderr" \
+    "rules-unreadable: the refusal did not say the files could not be read"
+
+  case_dir=$(make_case github-rules-other-files)
+  add_gh_mocks "$case_dir" "$head"
+  printf 'project=%s\n' "$ROOT" >> "$case_dir/state/task-x1.meta"
+  printf '%s\n' '[{"filename":"bin/fm-x.sh"},{"filename":"docs/hooks/note.md"},{"filename":"docs/CLAUDE.md"}]' > "$case_dir/github-files.json"
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/95 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "rules-other: a firstmate change outside the rules must merge"
+
+  case_dir=$(make_case github-rules-approved)
+  add_gh_mocks "$case_dir" "$head"
+  printf 'project=%s\n' "$ROOT" >> "$case_dir/state/task-x1.meta"
+  printf '%s\n' '[{"filename":"AGENTS.md"}]' > "$case_dir/github-files.json"
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/95 --captain-approved \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "rules-approved: --captain-approved must lift the rules refusal"
+  assert_logged_gh_merge "$case_dir" 95 example/repo --squash
+  pass "fm-pr-merge needs the captain's yes for a change to Starship's own rules"
+}
+
+# A project proven unrelated to firstmate is not Starship's rules, so its
+# changed files are never read.
+test_github_rules_check_skips_an_unrelated_project() {
+  local case_dir rc head
+  head=c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8
+  case_dir=$(make_case github-rules-unrelated)
+  add_gh_mocks "$case_dir" "$head"
+  fm_git_init_commit "$case_dir/unrelated"
+  printf 'project=%s\n' "$case_dir/unrelated" >> "$case_dir/state/task-x1.meta"
+  printf '%s\n' '[{"filename":"AGENTS.md"}]' > "$case_dir/github-files.json"
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/96 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "rules-unrelated: an unrelated project's AGENTS.md must not need the captain's yes"
+  assert_no_grep '/pulls/96/files' "$case_dir/gh.log" \
+    "rules-unrelated: the changed files of an unrelated project were read"
+  pass "fm-pr-merge skips the rules check for a project unrelated to firstmate"
+}
+
+# A Starship add-on changes Starship's rules too, though it shares no lineage
+# with firstmate: this home's configured add-on and any repository with the
+# add-on layout marker both get the rules check.
+test_github_rules_check_covers_starship_addons() {
+  local case_dir rc head kind
+  head=cacacacacacacacacacacacacacacacacacacaca
+  for kind in configured marker; do
+    case_dir=$(make_case "github-rules-addon-$kind")
+    add_gh_mocks "$case_dir" "$head"
+    fm_git_init_commit "$case_dir/addon"
+    if [ "$kind" = configured ]; then
+      printf 'path = %s\n' "$case_dir/addon" > "$case_dir/home/config/addon"
+    else
+      mkdir -p "$case_dir/addon/bin"
+      : > "$case_dir/addon/bin/fm-team-root.sh"
+    fi
+    printf 'project=%s\n' "$case_dir/addon" >> "$case_dir/state/task-x1.meta"
+    printf '%s\n' '[{"filename":"hooks/session-start/x"},{"filename":".agents/skills/foo/SKILL.md"}]' \
+      > "$case_dir/github-files.json"
+    set +e
+    run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/97 \
+      > "$case_dir/stdout" 2> "$case_dir/stderr"
+    rc=$?
+    set -e
+    expect_code 1 "$rc" "rules-addon-$kind: an add-on's skill and hook change must need the captain's yes"
+    assert_grep "Starship's own rules (.agents/skills/foo/SKILL.md, hooks/session-start/x)" "$case_dir/stderr" \
+      "rules-addon-$kind: the refusal did not name the add-on's rules files"
+    assert_no_grep 'pr merge' "$case_dir/gh.log" "rules-addon-$kind: gh pr merge ran"
+  done
+  pass "fm-pr-merge needs the captain's yes for a rules change in a Starship add-on"
+}
+
+test_captain_approved_is_attended_and_github_only() {
+  local case_dir rc head
+  head=c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9
+  case_dir=$(make_case github-captain-approved-away)
+  add_gh_mocks "$case_dir" "$head"
+  write_away_record "$case_dir" --words 'merge task-x1 when green'
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/97 --captain-approved \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 2 "$rc" "captain-approved-away: the flag must be refused while away"
+  assert_grep '--captain-approved is attended-only' "$case_dir/stderr" \
+    "captain-approved-away: the refusal did not name attended-only"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" "captain-approved-away: gh pr merge ran"
+
+  case_dir=$(make_gitlab_case gitlab-captain-approved)
+  set +e
+  run_pr_merge "$case_dir" task-x1 "$MR_URL" --captain-approved \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 2 "$rc" "captain-approved-gitlab: the flag must not apply on GitLab"
+  assert_grep '--captain-approved does not apply to gitlab' "$case_dir/stderr" \
+    "captain-approved-gitlab: the refusal did not name GitLab"
+  [ ! -s "$case_dir/glab.log" ] || fail "captain-approved-gitlab: glab ran"
+
+  case_dir=$(make_case github-captain-approved-value)
+  add_gh_mocks "$case_dir" "$head"
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/97 --captain-approved=yes \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 2 "$rc" "captain-approved-value: the flag must take no value"
+  pass "fm-pr-merge keeps --captain-approved attended, valueless, and GitHub-only"
+}
+
+# The captain's-yes refusals are reported beside every other failing condition.
+test_captain_word_refusals_join_the_other_failures() {
+  local case_dir head
+  head=cacacacacacacacacacacacacacacacacacacaca
+  case_dir=$(make_case github-captain-word-with-red)
+  add_gh_mocks "$case_dir" "$head"
+  write_github_red_json "$case_dir" "$head" lint
+  jq -c '.author = {"login":"dependabot[bot]"}' "$case_dir/github-view.json" > "$case_dir/view.tmp"
+  mv "$case_dir/view.tmp" "$case_dir/github-view.json"
+  run_required_case "$case_dir" 98
+  expect_code 1 "$RC" "captain-word-with-red: must refuse"
+  assert_grep "check 'lint' is not green" "$case_dir/stderr" \
+    "captain-word-with-red: the red check was dropped"
+  assert_grep "opened by 'dependabot[bot]'" "$case_dir/stderr" \
+    "captain-word-with-red: the author refusal was dropped"
+  pass "fm-pr-merge reports the captain's-yes refusals together with every other failure"
+}
+
+test_github_other_author_needs_the_captain_word
+test_github_unreadable_author_or_account_refuses
+test_github_rules_change_needs_the_captain_word
+test_github_rules_check_skips_an_unrelated_project
+test_github_rules_check_covers_starship_addons
+test_captain_approved_is_attended_and_github_only
+test_captain_word_refusals_join_the_other_failures
+
+# A pull request no task owns, such as a teammate's, goes through the same live
+# guards with --no-task, and leaves no task record behind.
+test_no_task_merge_runs_the_same_guards() {
+  local case_dir rc head
+  head=cbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcb
+  case_dir=$(make_case no-task-own)
+  add_gh_mocks "$case_dir" "$head"
+  set +e
+  run_pr_merge "$case_dir" --no-task https://github.com/example/repo/pull/99 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "no-task-own: a green pull request this home opened must merge"
+  assert_logged_gh_merge "$case_dir" 99 example/repo --squash
+  assert_grep '/pulls/99/files' "$case_dir/gh.log" \
+    "no-task-own: a pull request with no recorded project skipped the rules check"
+  assert_grep 'verified: https://github.com/example/repo/pull/99 is merged' "$case_dir/stdout" \
+    "no-task-own: the landed merge was not verified"
+  assert_no_grep 'pr=' "$case_dir/state/task-x1.meta" "no-task-own: a task record was written"
+  [ -z "$(find "$case_dir/state" -name '*no-task*' -print)" ] \
+    || fail "no-task-own: a record was created for the --no-task placeholder"
+
+  case_dir=$(make_case no-task-teammate)
+  add_gh_mocks "$case_dir" "$head"
+  jq -c '.author.login = "teammate"' "$case_dir/github-view.json" > "$case_dir/view.tmp"
+  mv "$case_dir/view.tmp" "$case_dir/github-view.json"
+  set +e
+  run_pr_merge "$case_dir" --no-task https://github.com/example/repo/pull/99 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "no-task-teammate: a teammate's pull request must be refused"
+  assert_grep "opened by 'teammate'" "$case_dir/stderr" "no-task-teammate: the author refusal was dropped"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" "no-task-teammate: gh pr merge ran"
+  set +e
+  run_pr_merge "$case_dir" --no-task https://github.com/example/repo/pull/99 --captain-approved \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "no-task-teammate: --captain-approved must lift the author refusal"
+  assert_logged_gh_merge "$case_dir" 99 example/repo --squash
+
+  case_dir=$(make_case no-task-red)
+  add_gh_mocks "$case_dir" "$head"
+  write_github_red_json "$case_dir" "$head" lint
+  set +e
+  run_pr_merge "$case_dir" --no-task https://github.com/example/repo/pull/99 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "no-task-red: a red pull request must be refused"
+  assert_grep "check 'lint' is not green" "$case_dir/stderr" "no-task-red: the red check was not reported"
+  pass "fm-pr-merge merges a task-less pull request only through the same guards"
+}
+
+test_no_task_merge_is_attended_and_github_only() {
+  local case_dir rc head
+  head=cccccccccccccccccccccccccccccccccccccccd
+  case_dir=$(make_case no-task-away)
+  add_gh_mocks "$case_dir" "$head"
+  write_away_record "$case_dir" --words 'merge task-x1 when green'
+  set +e
+  run_pr_merge "$case_dir" --no-task https://github.com/example/repo/pull/100 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 2 "$rc" "no-task-away: a task-less merge must be refused while away"
+  assert_grep '--no-task is attended-only' "$case_dir/stderr" "no-task-away: the refusal did not name attended-only"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" "no-task-away: gh pr merge ran"
+
+  case_dir=$(make_gitlab_case no-task-gitlab)
+  set +e
+  run_pr_merge "$case_dir" --no-task "$MR_URL" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 2 "$rc" "no-task-gitlab: --no-task must not apply on GitLab"
+  assert_grep '--no-task applies only to a GitHub pull request' "$case_dir/stderr" \
+    "no-task-gitlab: the refusal did not name GitHub"
+  [ ! -s "$case_dir/glab.log" ] || fail "no-task-gitlab: glab ran"
+  pass "fm-pr-merge keeps --no-task attended and GitHub-only"
+}
+
+test_no_task_merge_runs_the_same_guards
+test_no_task_merge_is_attended_and_github_only

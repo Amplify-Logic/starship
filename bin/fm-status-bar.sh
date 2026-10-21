@@ -409,10 +409,18 @@ home_has_records() {
   return 1
 }
 
+# Append "<count> <words>" to fleet_part in <color> when count is nonzero,
+# joined by a comma. Args: count color singular-words plural-words
+fleet_phrase() {
+  [ "$1" -gt 0 ] 2>/dev/null || return 0
+  local words=$4
+  [ "$1" -ne 1 ] || words=$3
+  fleet_part="${fleet_part:+$fleet_part${D},${X} }${2}${1} ${words}${X}"
+}
+
 render_once() {
-  local anchor separator context_part quota_part paused_color attention_color
+  local anchor separator context_part quota_part
   local fleet_part watch_part cost_part afk_part age context_color quota_color
-  local alive_color stopped_color validating_color
 
   fleet_counts
   age=$(supervision_age)
@@ -446,45 +454,38 @@ render_once() {
       || quota_part="${quota_color}⚡${QUOTA_USED}%${X}${D}${QUOTA_WINDOW}${X}"
   fi
 
-  # The record count is always exact and always shown, because it is the one
-  # fleet number that makes no claim about running workers. The five live fields
-  # are a single reading: without one they ALL show the placeholder, because a
-  # zero here would assert an idle fleet, which is a real state the captain has
-  # to be able to believe.
-  #
-  # 🚢 leads because live agents is the question the row exists to answer, and
-  # 🪦 sits against 📋 because "records whose worker is gone" is a statement
-  # about the record count, not about the work.
+  # The fleet and supervision fields speak plain words, because the captain
+  # reads this row (AGENTS.md section 9): counts name what the workers are
+  # doing, and only the nonzero ones are shown. The five live counts are a
+  # single reading: without one the group says so rather than showing zeros,
+  # because "no workers" is a real state the captain has to be able to believe.
+  # For the same reason it is never shown while task records exist: records
+  # the reading could not classify are named as tasks whose state is unknown.
   if [ "$FLEET_KNOWN" != 1 ]; then
-    fleet_part="${D}🚢-- 🧪-- ⏸-- ⚠-- 🪦--${X} ${D}📋${RECORD_COUNT}${X}"
+    fleet_part="${D}workers unknown${X}"
   else
-    alive_color=$D
-    [ "$ALIVE_COUNT" -eq 0 ] || alive_color=$G
-    validating_color=$D
-    [ "$VALIDATING_COUNT" -eq 0 ] || validating_color=$C
-    paused_color=$D
-    [ "$PAUSED_COUNT" -eq 0 ] || paused_color=$Y
-    attention_color=$D
-    [ "$ATTENTION_COUNT" -eq 0 ] || attention_color=$R
-    stopped_color=$D
-    [ "$STOPPED_COUNT" -eq 0 ] || stopped_color=$Y
-    fleet_part="${alive_color}🚢${ALIVE_COUNT}${X} ${validating_color}🧪${VALIDATING_COUNT}${X}"
-    fleet_part="${fleet_part} ${paused_color}⏸${PAUSED_COUNT}${X} ${attention_color}⚠${ATTENTION_COUNT}${X}"
-    fleet_part="${fleet_part} ${stopped_color}🪦${STOPPED_COUNT}${X} ${D}📋${RECORD_COUNT}${X}"
+    fleet_part=
+    fleet_phrase "$ALIVE_COUNT" "$G" working working
+    fleet_phrase "$VALIDATING_COUNT" "$C" checking checking
+    fleet_phrase "$PAUSED_COUNT" "$Y" waiting waiting
+    fleet_phrase "$ATTENTION_COUNT" "$R" 'needs a look' 'need a look'
+    fleet_phrase "$STOPPED_COUNT" "$Y" stopped stopped
+    if [ -z "$fleet_part" ] && [ "$RECORD_COUNT" -gt 0 ]; then
+      fleet_part="${D}${RECORD_COUNT} task$([ "$RECORD_COUNT" -eq 1 ] || printf s), state unknown${X}"
+    fi
+    [ -n "$fleet_part" ] || fleet_part="${D}no workers${X}"
   fi
 
   # With no task or second-mate record and no registered check there is
   # nothing to supervise, so a missing or stale beacon is calm rather than an
-  # alarm; the moment any record or check exists the bright-red NO-WATCH
+  # alarm; the moment any record or check exists the bright-red "not watching"
   # returns.
   if { [ "$age" = -- ] || [ "$age" -ge 180 ]; } && ! home_has_records; then
     watch_part="${D}👁 idle${X}"
-  elif [ "$age" = -- ]; then
-    watch_part="${BR}👁 NO-WATCH --${X}"
-  elif [ "$age" -lt 180 ]; then
-    watch_part="${G}👁 ${age}s${X}"
+  elif [ "$age" = -- ] || [ "$age" -ge 180 ]; then
+    watch_part="${BR}👁 not watching${X}"
   else
-    watch_part="${BR}👁 NO-WATCH ${age}s${X}"
+    watch_part="${G}👁 watching${X}"
   fi
 
   if [ "$COST" = -- ]; then

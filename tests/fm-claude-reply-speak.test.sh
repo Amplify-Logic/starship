@@ -118,7 +118,7 @@ test_plain_reply_is_spoken() {
   local dir out
   dir=$(make_primary_dir "$TMP_ROOT/plain")
   out=$(run_hook "$dir" "Captain, the fix landed and the checks are green." 2>&1)
-  assert_equals "" "$out" "the hook must print nothing"
+  assert_equals "" "$out" "the hook must print nothing for a plain reply"
   assert_equals "Captain, the fix landed and the checks are green." "$(spoken "$dir")" \
     "a plain reply must be spoken in full"
   pass "plain reply is spoken in full"
@@ -515,6 +515,62 @@ test_cursor_payload_is_inert() {
   pass "Cursor-delivered payload is a no-op"
 }
 
+# --- plain-language check ------------------------------------------------------
+
+# A reply that speaks internals earns the first mate a warning on stdout, which
+# Claude Code delivers at the next turn; the reply itself is spoken unchanged.
+test_internal_terms_warn_the_first_mate_without_blocking() {
+  local dir out reply
+  dir=$(make_primary_dir "$TMP_ROOT/plain-check")
+  reply="Captain, the worktree teardown failed closed, so the Watcher is idle."
+  out=$(run_hook "$dir" "$reply" 2>/dev/null)
+  [ "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" = 1 ] \
+    || fail "a reply with internal terms must print exactly one warning line, got: $out"
+  printf '%s' "$out" | jq -e '.systemMessage | type == "string"' >/dev/null \
+    || fail "the warning must be a JSON systemMessage, got: $out"
+  assert_contains "$out" 'worktree, teardown, failed closed, watcher' \
+    "the warning must name each internal term once, in reply order"
+  assert_contains "$out" 'section 9' "the warning must point at the rule it enforces"
+  assert_equals "$reply" "$(spoken "$dir")" "the warning must never stop or rewrite the reply"
+  pass "internal terms warn the first mate and leave the reply alone"
+}
+
+# Commands, paths, and links the captain needs to act on are not slips.
+test_code_and_links_do_not_warn() {
+  local dir out
+  dir=$(make_primary_dir "$TMP_ROOT/plain-check-code")
+  out=$(run_hook "$dir" "$(printf '%s\n' 'Captain, run `no-mistakes doctor` to see why.' \
+    '' '```' 'git worktree list' '```' '' 'Details: [the guide](https://example.invalid/worktree).')" 2>/dev/null)
+  assert_equals "" "$out" "code, a fenced block, or a link target must never warn"
+  out=$(run_hook "$dir" "Captain, the fix landed and the checks are green." 2>/dev/null)
+  assert_equals "" "$out" "a plain reply must never warn"
+  pass "code, links, and plain replies raise no warning"
+}
+
+# The check does not depend on voice: a home that never opted into speech is
+# still warned, and still pays no settle wait and writes no hook state.
+test_home_not_opted_in_still_warns() {
+  local dir out
+  dir=$(make_primary_dir "$TMP_ROOT/plain-check-silent")
+  rm -f "$dir/config/speak"
+  out=$(SETTLE_MS=3000 run_hook "$dir" "Captain, the harness is up." 2>/dev/null)
+  assert_contains "$out" '"systemMessage"' "a home without voice must still warn the first mate"
+  assert_contains "$out" 'harness' "the warning must name the term"
+  assert_absent "$dir/spoken.log" "a home that never opted in must never reach the speaker"
+  assert_absent "$dir/state/.reply-speak-stop" "the check must write no hook state"
+  pass "a home without voice is still warned"
+}
+
+# Workers and sessions that do not hold the home lock are never warned: the
+# captain does not read their replies.
+test_plain_check_stays_out_of_worker_sessions() {
+  local dir out
+  dir=$(make_primary_dir "$TMP_ROOT/plain-check-no-lock")
+  out=$(run_hook_without_lock "$dir" "Captain, the worktree is ready." 2>/dev/null)
+  assert_equals "" "$out" "a session without the home lock must never be warned"
+  pass "the plain-language check stays in the lock-holding primary"
+}
+
 # --- integration with the real bin/fm-speak.sh -------------------------------
 
 install_real_speak_fixture() {  # <dir>
@@ -679,3 +735,7 @@ test_real_speak_decision_only_speaks_notice
 test_real_speak_muted_and_not_enabled_stay_silent
 test_real_speak_honours_the_voice_volume
 test_settings_register_async_primary_hook
+test_internal_terms_warn_the_first_mate_without_blocking
+test_code_and_links_do_not_warn
+test_home_not_opted_in_still_warns
+test_plain_check_stays_out_of_worker_sessions
