@@ -2,16 +2,26 @@
 # fm-decision-surface.sh - private Lavish surface for durable captain decisions.
 #
 # Reads every active kind-captain hold through tasks-axi, renders one self-contained
-# HTML page under .lavish/, and launches Lavish only on IPv4 loopback. Each answer
-# carries the exact chosen option in a versioned marker. `poll` validates those
-# markers against the generated page and refuses ambiguous, stale, forged, or
-# lifecycle-unroutable marks instead of guessing.
+# HTML page under .lavish/, and launches Lavish only on IPv4 loopback. A listed row
+# held for another hold kind (such as `future`) is reported as skipped in the
+# generate output only. A captain hold that cannot be shown, or any row that cannot
+# be read, is left off the cards but named in a notice at the top of the page and
+# in the generate output, so one odd row never stops the page from being
+# rewritten. Each answer carries the exact chosen option in a versioned marker.
+# `poll` validates those markers against the generated page and refuses ambiguous,
+# stale, forged, or lifecycle-unroutable marks instead of guessing.
 #
 # `route` is dry-run by default. `route --apply` creates one deterministic dependent
 # work item blocked by the hold, writes the exact chosen option to a private decision
 # file, and delegates ordering and closure to fm-decision-hold.sh resolve. It never
 # calls tasks-axi unhold/done for a decision itself and never invents a second
 # completion policy.
+#
+# `generate` records `<page>.generate-attempt` before it reads the backlog and
+# removes it only once the page is rewritten. While that record exists the page is
+# older than the last generate attempt: `open` refuses to show it, `route --apply`
+# refuses to resolve answers from it, and `poll` still reads answers but prints a
+# warning. `show` and the `route` dry run do not check the record.
 #
 # Parentheses in existing hold reasons are read and rendered verbatim. This command
 # never replays a hold reason through `fm-decision-hold.sh hold`, whose help forbids
@@ -75,8 +85,13 @@ require_runtime() {
   command -v tasks-axi >/dev/null 2>&1 || fail "tasks-axi is required"
 }
 
+stale_attempt() {  # <page>; prints when the unfinished generate attempt started
+  [ -e "$1.generate-attempt" ] || return 1
+  cat "$1.generate-attempt" 2>/dev/null || echo 'at an unknown time'
+}
+
 command_generate() {
-  local output=$DEFAULT_PAGE
+  local output=$DEFAULT_PAGE attempt
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --output) shift; output=${1:-} ;;
@@ -86,11 +101,15 @@ command_generate() {
   done
   require_runtime
   output=$(private_path output "$output")
+  attempt="$output.generate-attempt"
+  (umask 077 && mkdir -p "$(dirname "$output")")
+  date -u '+%Y-%m-%d %H:%M UTC' > "$attempt"
   node "$ENGINE" generate --home "$FM_HOME" --output "$output"
+  rm -f "$attempt"
 }
 
 command_open() {
-  local page=$DEFAULT_PAGE
+  local page=$DEFAULT_PAGE started
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --page) shift; page=${1:-} ;;
@@ -100,12 +119,15 @@ command_open() {
   done
   page=$(private_path page "$page")
   [ -f "$page" ] || fail "page does not exist; run generate first: $page"
+  if started=$(stale_attempt "$page"); then
+    fail "this decision page is older than the last generate attempt (started $started), which did not finish, so its cards may be stale; run generate again and fix what it reports: $page"
+  fi
   command -v "$LAVISH_BIN" >/dev/null 2>&1 || fail "lavish-axi is required"
   LAVISH_AXI_HOST=127.0.0.1 LAVISH_AXI_LINK_HOST=127.0.0.1 LAVISH_AXI_PORT="$LAVISH_PORT" "$LAVISH_BIN" "$page"
 }
 
 command_poll() {
-  local page=$DEFAULT_PAGE answers=$DEFAULT_ANSWERS raw
+  local page=$DEFAULT_PAGE answers=$DEFAULT_ANSWERS raw started
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --page) shift; page=${1:-} ;;
@@ -117,6 +139,9 @@ command_poll() {
   page=$(private_path page "$page")
   answers=$(private_path answers "$answers")
   [ -f "$page" ] || fail "page does not exist; run generate first: $page"
+  if started=$(stale_attempt "$page"); then
+    printf 'fm-decision-surface: warning: this page is older than the last generate attempt (started %s), which did not finish; route --apply will refuse these answers until generate succeeds: %s\n' "$started" "$page" >&2
+  fi
   command -v "$LAVISH_BIN" >/dev/null 2>&1 || fail "lavish-axi is required"
   mkdir -p "$(dirname "$answers")"
   raw=$(mktemp "$(dirname "$answers")/.captain-decisions.poll.XXXXXX")
@@ -144,7 +169,7 @@ command_show() {
 }
 
 command_route() {
-  local page=$DEFAULT_PAGE answers=$DEFAULT_ANSWERS apply=0
+  local page=$DEFAULT_PAGE answers=$DEFAULT_ANSWERS apply=0 started
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --page) shift; page=${1:-} ;;
@@ -160,6 +185,9 @@ command_route() {
   [ -f "$page" ] || fail "page does not exist: $page"
   [ -f "$answers" ] || fail "answers file does not exist; run poll first: $answers"
   if [ "$apply" = 1 ]; then
+    if started=$(stale_attempt "$page"); then
+      fail "refusing route --apply: this decision page is older than the last generate attempt (started $started), which did not finish, so its answers may be stale; run generate again, then answer and poll from the fresh page: $page"
+    fi
     node "$ENGINE" route --home "$FM_HOME" --root "$FM_ROOT" --page "$page" --answers "$answers" --apply
   else
     node "$ENGINE" route --home "$FM_HOME" --root "$FM_ROOT" --page "$page" --answers "$answers"

@@ -3,7 +3,7 @@
 // The shell wrapper owns the operator-facing commands and loopback-only Lavish launch.
 
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -49,13 +49,14 @@ function run(command, args, cwd, extraEnv = {}) {
   return result.stdout;
 }
 
+// Parsing throws rather than exits so generation can skip one unreadable row.
 function parseYamlScalar(value) {
   const trimmed = value.trim();
   if (trimmed.startsWith('"')) {
     try {
       return JSON.parse(trimmed);
     } catch {
-      fail(`tasks-axi returned an invalid quoted scalar: ${trimmed}`);
+      throw new Error(`tasks-axi returned an invalid quoted scalar: ${trimmed}`);
     }
   }
   return trimmed;
@@ -67,20 +68,37 @@ function parseShow(output) {
     const match = line.match(/^  ([a-z_]+): (.*)$/);
     if (match) task[match[1]] = parseYamlScalar(match[2]);
   }
-  if (!task.id) fail("tasks-axi show returned no task id");
+  if (!task.id) throw new Error("tasks-axi show returned no task id");
   return task;
 }
 
 // Captain-hold reasons are stored encoded; bin/fm-hold-reason-lib.sh owns decoding them.
-function taskShow(home, id) {
-  const shown = run("tasks-axi", ["show", id, "--full"], home);
+// Returns { task } or { error } so a caller decides whether one bad row is fatal.
+function readTask(home, id) {
+  const args = ["show", id, "--full"];
+  const shown = spawnSync("tasks-axi", args, { cwd: home, encoding: "utf8", maxBuffer: 32 * 1024 * 1024 });
+  if (shown.error) return { error: `tasks-axi could not run: ${shown.error.message}` };
+  if (shown.status !== 0) {
+    const detail = (shown.stderr || shown.stdout || `exit ${shown.status}`).trim();
+    return { error: `tasks-axi ${args.join(" ")} failed: ${detail}` };
+  }
   const decoded = spawnSync("bash", ["-c", '. "$1" && fm_hold_reason_decode_stream', "bash", HOLD_REASON_LIB], {
-    input: shown,
+    input: shown.stdout,
     encoding: "utf8",
     maxBuffer: 32 * 1024 * 1024,
   });
-  if (decoded.error || decoded.status !== 0) fail(`could not decode the hold reason of ${id}`);
-  return parseShow(decoded.stdout);
+  if (decoded.error || decoded.status !== 0) return { error: `could not decode the hold reason of ${id}` };
+  try {
+    return { task: parseShow(decoded.stdout) };
+  } catch (error) {
+    return { error: error.message };
+  }
+}
+
+function taskShow(home, id) {
+  const { task, error } = readTask(home, id);
+  if (error) fail(error);
+  return task;
 }
 
 function taskIdsFromList(output) {
@@ -197,6 +215,11 @@ function identityFrom(task) {
   return { origin, key };
 }
 
+// `--kind captain` filters the task kind, so the held list can also carry a
+// captain-kind row held for another reason, such as a `future` follow-up. Only a
+// `captain` hold kind is a decision; every other row is skipped, so one odd row
+// never stops the page from being rewritten. A captain hold that cannot be shown,
+// or any row that cannot be read, is returned as `unshown` so the page names it.
 function loadTasks(home) {
   const heldOutput = run(
     "tasks-axi",
@@ -204,10 +227,21 @@ function loadTasks(home) {
     home,
   );
   const listed = taskIdsFromList(heldOutput);
-  const tasks = listed.ids.map((id) => taskShow(home, id));
-  for (const task of tasks) {
-    if (task.state !== "queued" || task.held !== "yes" || task.kind !== "captain" || task.hold_kind !== "captain") {
-      fail(`listed captain hold ${task.id} did not retain the structured held state`);
+  const tasks = [];
+  const skipped = [];
+  const unshown = [];
+  const warnings = [];
+  for (const id of listed.ids) {
+    const { task, error } = readTask(home, id);
+    if (error) {
+      unshown.push({ id, reason: `could not be read: ${error}` });
+    } else if (task.hold_kind !== "captain") {
+      const holdKind = task.hold_kind && task.hold_kind !== "-" ? task.hold_kind : "an unrecorded kind";
+      skipped.push(`skipped: ${id} is held as ${holdKind}, not for a captain decision`);
+    } else if (task.state !== "queued" || task.held !== "yes" || task.kind !== "captain") {
+      unshown.push({ id, reason: "did not retain the structured held state" });
+    } else {
+      tasks.push(task);
     }
   }
 
@@ -215,7 +249,11 @@ function loadTasks(home) {
   const blockedOutput = run("tasks-axi", ["list", "--blocked", "--fields", "blocked_by"], home);
   const blocked = taskIdsFromList(blockedOutput);
   for (const id of blocked.ids) {
-    const dependent = taskShow(home, id);
+    const { task: dependent, error } = readTask(home, id);
+    if (error) {
+      warnings.push(`blocked item ${id} could not be read, so a card may undercount what it blocks: ${error}`);
+      continue;
+    }
     for (const blocker of splitBlockedBy(dependent.blocked_by)) {
       if (dependentMap.has(blocker)) {
         dependentMap.get(blocker).push({ id: dependent.id, title: dependent.title, state: dependent.state });
@@ -225,6 +263,9 @@ function loadTasks(home) {
 
   return {
     count: listed.count,
+    skipped,
+    unshown,
+    warnings,
     tasks: tasks.map((task) => {
       const recommendation = recommendationFrom(task.hold_reason || "");
       const identity = identityFrom(task);
@@ -318,6 +359,9 @@ function renderHtml(manifest) {
       <div class="decision-list">${decisions.map(cardMarkup).join("\n")}</div>
     </section>`).join("\n");
   const blockingCount = manifest.decisions.filter((decision) => decision.dependents.length > 0).length;
+  const unshownMarkup = manifest.unshown.length > 0
+    ? `<section class="unshown" role="alert"><strong>${manifest.unshown.length} captain decision${manifest.unshown.length === 1 ? "" : "s"} could not be shown on this board.</strong> Run generate again and fix what it reports.<ul>${manifest.unshown.map((item) => `<li><code>${escapeHtml(item.id)}</code> - ${escapeHtml(item.reason)}</li>`).join("")}</ul></section>`
+    : "";
   return `<!doctype html>
 <html lang="en" data-lavish-live-reload-root>
 <head>
@@ -373,11 +417,14 @@ function renderHtml(manifest) {
     button { border:0; border-radius:9px; padding:11px 15px; background:var(--sea); color:#082019; font:800 .9rem/1 ui-sans-serif,system-ui,sans-serif; cursor:pointer; }
     button:hover { filter:brightness(1.08); }.answer-actions output { color:var(--sea); font-size:.85rem; }
     .hidden { display:none !important; }
+    .unshown { margin:0 0 28px; padding:14px 16px; background:rgba(255,173,143,.08); border:1px solid rgba(255,173,143,.35); border-radius:12px; }
+    .unshown strong { color:var(--danger); }.unshown ul { margin:.4rem 0 0; padding-left:1.2rem; }.unshown li { overflow-wrap:anywhere; }
     @media (max-width:700px) { main{width:min(100% - 20px,1180px);padding-top:28px}.stats{grid-template-columns:1fr}.decision-card{padding:18px}.domain-heading{align-items:start}.toolbar{top:6px} }
   </style>
 </head>
 <body>
   <main>
+    ${unshownMarkup}
     <p class="kicker">Private loopback register</p>
     <h1>Decisions, all on one deck.</h1>
     <p class="intro">Each answer stays local until it is queued and sent through Lavish. A recommendation is advice, never a preselected answer. Exact custom answers are preserved verbatim.</p>
@@ -532,7 +579,11 @@ function safeRouteId(holdId) {
 function showExists(home, id) {
   const result = spawnSync("tasks-axi", ["show", id, "--full"], { cwd: home, encoding: "utf8" });
   if (result.status !== 0) return null;
-  return parseShow(result.stdout);
+  try {
+    return parseShow(result.stdout);
+  } catch (error) {
+    fail(error.message);
+  }
 }
 
 function currentDependents(home, holdId) {
@@ -654,15 +705,22 @@ switch (args.command) {
     const manifest = {
       schema: "fm-decision-surface.v1",
       generated_at: new Date().toISOString(),
-      count: loaded.count,
+      count: loaded.tasks.length,
       decisions: loaded.tasks,
+      unshown: loaded.unshown,
     };
     mkdirSync(path.dirname(args.output), { recursive: true, mode: 0o700 });
-    writeFileSync(args.output, renderHtml(manifest), { mode: 0o600 });
+    // Rename into place so an interrupted run never leaves a half-written page.
+    const staging = `${args.output}.${process.pid}.tmp`;
+    writeFileSync(staging, renderHtml(manifest), { mode: 0o600 });
+    renameSync(staging, args.output);
+    for (const warning of loaded.warnings) console.error(`fm-decision-surface: ${warning}`);
     const grouped = new Set(manifest.decisions.map((item) => item.group)).size;
     const blocking = manifest.decisions.filter((item) => item.dependents.length > 0).length;
     const lifecycle = manifest.decisions.filter((item) => item.origin && item.key).length;
     console.log(`generated: ${manifest.count} captain decisions (tasks-axi count: ${loaded.count})`);
+    for (const note of loaded.skipped) console.log(note);
+    for (const item of loaded.unshown) console.log(`not shown: ${item.id} ${item.reason}`);
     console.log(`groups: ${grouped}; blocking other work: ${blocking}; lifecycle-routable: ${lifecycle}`);
     console.log(`page: ${args.output}`);
     break;
