@@ -1,4 +1,4 @@
-# upstream_base = 3847411b9a73f6553e172a6aefe5dff05e7aa178
+# upstream_base = 1935d27b30e94e565371180f7ce07f8b212c36b1
 .agents/skills/afk/SKILL.md
 .agents/skills/agent-skill-trigger-index/SKILL.md
 .agents/skills/ahoy/SKILL.md
@@ -120,6 +120,8 @@ bin/backends/herdr-workspace-move.py
 bin/backends/herdr.sh
 bin/backends/orca.sh
 bin/backends/paseo.sh
+bin/backends/rex-eventwait.lua
+bin/backends/rex.sh
 bin/backends/tmux.sh
 bin/backends/zellij.sh
 bin/fm-afk-contract.sh
@@ -236,6 +238,7 @@ bin/fm-pending-reply-lib.sh
 bin/fm-pipeline-spend.sh
 bin/fm-polytoken-lib.sh
 bin/fm-pr-check.sh
+bin/fm-pr-health.sh
 bin/fm-pr-lib.sh
 bin/fm-pr-merge.sh
 bin/fm-pr-poll.sh
@@ -377,6 +380,7 @@ docs/paseo-backend.md
 docs/pi-supervision-branch-poster.svg
 docs/pi-supervision-branch.md
 docs/remote-secondmates.md
+docs/rex-backend.md
 docs/scripts.md
 docs/secondmate-parent-channel.md
 docs/sessionstart-nudge.md
@@ -431,6 +435,7 @@ tests/fixtures/opencode-1.18.31-cwd/opencode-1.18.31-busy-wide-abs-cwd.ansi
 tests/fixtures/opencode-1.18.31-cwd/opencode-1.18.31-idle-cwd.ansi
 tests/fixtures/opencode-1.18.31-cwd/opencode-1.18.31-idle-short-cwd.ansi
 tests/fixtures/opencode-1.18.31-cwd/opencode-1.18.31-idle-wide-abs-cwd.ansi
+tests/fixtures/rex-opencode-1.19.3/opencode-1.19.3-idle-format.vt
 tests/fm-afk-contract.test.sh
 tests/fm-afk-inject-e2e.test.sh
 tests/fm-afk-inject-herdr-e2e.test.sh
@@ -459,6 +464,10 @@ tests/fm-backend-herdr.test.sh
 tests/fm-backend-orca.test.sh
 tests/fm-backend-paseo-smoke.test.sh
 tests/fm-backend-paseo.test.sh
+tests/fm-backend-rex-composer-live-e2e.test.sh
+tests/fm-backend-rex-eventwait-smoke.test.sh
+tests/fm-backend-rex-smoke.test.sh
+tests/fm-backend-rex.test.sh
 tests/fm-backend-tmux-smoke.test.sh
 tests/fm-backend-zellij-smoke.test.sh
 tests/fm-backend-zellij.test.sh
@@ -584,6 +593,7 @@ tests/fm-pipeline-spend.test.sh
 tests/fm-polytoken-harness.test.sh
 tests/fm-polytoken-signals-live-e2e.test.sh
 tests/fm-pr-check-security.test.sh
+tests/fm-pr-health.test.sh
 tests/fm-pr-merge.test.sh
 tests/fm-pr-reviewers.test.sh
 tests/fm-pr-state-live-e2e.test.sh
@@ -694,6 +704,9 @@ tests/fm-watch-arm.test.sh
 tests/fm-watch-checkpoint.test.sh
 tests/fm-watch-recovery-loop.test.sh
 tests/fm-watch-triage.test.sh
+tests/fm-watch-wedge-cap-live.test.sh
+tests/fm-watch-wedge-cap-unconfigured-parity.test.sh
+tests/fm-watch-wedge-cap.test.sh
 tests/fm-watcher-lock.test.sh
 tests/fm-worker-account-live-e2e.test.sh
 tests/fm-worker-account.test.sh
@@ -703,6 +716,7 @@ tests/herdr-client-pair-fixture.sh
 tests/herdr-test-safety.sh
 tests/lib.sh
 tests/remote-herdr-fixture.sh
+tests/rex-test-safety.sh
 tests/secondmate-helpers.sh
 tests/wake-helpers.sh
 tests/zellij-test-safety.sh
