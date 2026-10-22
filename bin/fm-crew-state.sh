@@ -35,6 +35,10 @@
 #      to the routed status log; dead/missing report the remote verdict; an
 #      unreachable or unreadable remote reports unknown-remote, never a false
 #      gone/dead.
+#   1a. A local endpoint whose live agent runs outside the recorded worktree
+#      reports blocked · pane · endpoint misplaced, ahead of every run or pane
+#      read: it is the worker a Herdr restart resumed in the primary checkout
+#      (fm_backend_endpoint_placement owns the evidence; herdr only).
 #   2. Matching no-mistakes run for this crew's branch AND current code identity,
 #      active or terminal (from `axi status`, or the coarse `no-mistakes runs`
 #      fallback)? Branch name alone is not enough: a historical run on a reused
@@ -351,6 +355,23 @@ crew_busy_verdict() {  # <target>
   tail40=$(fm_backend_capture "$TASK_BACKEND" "$1" 40 "$EXPECTED_LABEL" 2>/dev/null) || tail40=''
   fm_busy_classify "$TASK_BACKEND" "$1" "$HARNESS" "$ID" "$STATE" "$tail40"
 }
+
+# --- misplaced endpoint (header step 1a) ------------------------------------
+# A live agent outside its recorded worktree is never plainly alive, whatever a
+# run record or busy read says: it is the worker a Herdr restart resumed in the
+# primary checkout, where it can edit the wrong copy. The placement read is one
+# pane read on herdr (fm_backend_endpoint_placement), and the agent-state read
+# runs only when the pane is already misplaced.
+if [ -n "$BACKEND_TARGET" ] && [ -n "$WT" ]; then
+  PLACEMENT=$(fm_backend_endpoint_placement "$TASK_BACKEND" "$BACKEND_TARGET" "$WT")
+  case "$PLACEMENT" in
+    misplaced$'\t'*)
+      if [ "$(fm_backend_agent_state "$TASK_BACKEND" "$BACKEND_TARGET")" = alive ]; then
+        emit blocked pane "endpoint misplaced: its agent runs in ${PLACEMENT#*$'\t'}, not its recorded worktree $WT; relaunch it with fm-control.sh $ID relaunch (if it shows Claude's external CLAUDE.md imports dialog, a person answers it in the pane first, and No is the safe answer)"
+      fi
+      ;;
+  esac
+fi
 
 # --- no-mistakes run lookup (authoritative when a run matches this branch) --
 # trim, strip_quotes, the bounded nm_run call, nm_field's TOON parse, and the

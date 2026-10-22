@@ -272,7 +272,11 @@ case "${1:-}" in
           printf '{"error":{"code":"pane_not_found","message":"no such pane"}}\n'
           exit 1
         fi
-        printf '{"result":{"pane":{"pane_id":"%s"}}}\n' "${3:-}"
+        if [ -n "${FM_FAKE_HERDR_FG_CWD:-}" ]; then
+          printf '{"result":{"pane":{"pane_id":"%s","foreground_cwd":"%s"}}}\n' "${3:-}" "$FM_FAKE_HERDR_FG_CWD"
+        else
+          printf '{"result":{"pane":{"pane_id":"%s"}}}\n' "${3:-}"
+        fi
         exit 0 ;;
       process-info)
         # The process-level view a registration is verified against (#4115):
@@ -360,6 +364,7 @@ reset_fakes() {
   FM_FAKE_HERDR_AGENT_STATUS=""
   FM_FAKE_HERDR_PROCESS=agent
   FM_FAKE_HERDR_SHELL_PID=$$
+  FM_FAKE_HERDR_FG_CWD=
   FM_FAKE_CI_LOGS=""
   FM_FAKE_DAEMON_DOWN=0
   FM_FAKE_DAEMON_TIMEOUT=0
@@ -384,7 +389,7 @@ reset_fakes() {
   FM_FAKE_GERRIT_READ_LOG=
   unset FM_FAKE_PR_47_STATE FM_FAKE_PR_47_MERGED FM_FAKE_PR_48_STATE FM_FAKE_PR_48_MERGED
   export FM_FAKE_AXI_STATUS FM_FAKE_AXI_STATUS_RUN FM_FAKE_RUNS_LIST FM_FAKE_BUSY FM_FAKE_BUSY_TEXT FM_FAKE_TMUX_MISSING FM_FAKE_TMUX_WINDOW_GONE FM_FAKE_TMUX_UNREADABLE
-  export FM_FAKE_HERDR_BUSY FM_FAKE_HERDR_MISSING FM_FAKE_HERDR_READ_FAIL FM_FAKE_HERDR_HUSK FM_FAKE_HERDR_AGENT_STATUS FM_FAKE_HERDR_PROCESS FM_FAKE_HERDR_SHELL_PID FM_FAKE_CI_LOGS
+  export FM_FAKE_HERDR_BUSY FM_FAKE_HERDR_MISSING FM_FAKE_HERDR_READ_FAIL FM_FAKE_HERDR_HUSK FM_FAKE_HERDR_AGENT_STATUS FM_FAKE_HERDR_PROCESS FM_FAKE_HERDR_SHELL_PID FM_FAKE_HERDR_FG_CWD FM_FAKE_CI_LOGS
   export FM_FAKE_DAEMON_DOWN FM_FAKE_DAEMON_TIMEOUT FM_FAKE_DAEMON_PROBE_LOG FM_FAKE_AXI_HOME
   export FM_FAKE_DAEMON_OUTPUT
   export FM_FAKE_AXI_HOME_ERROR FM_FAKE_AXI_STATUS_RUN_ERROR FM_FAKE_AXI_STATUS_ERROR
@@ -2798,6 +2803,53 @@ test_no_run_herdr_stale_registration_over_shell_reads_agent_gone() {
   assert_contains "$out" "agent gone, pane shell remains" "the agent-gone reason must name the remaining shell"
   assert_not_contains "$out" "backend unreachable" "a readable shell-only pane is not unreachable"
   pass "herdr stale registration over a shell-only pane reads agent gone, not alive"
+}
+
+# A Herdr restart resumes a worker as `claude --resume <id>` in its pane's top
+# shell, the primary checkout. Its live agent there is never plainly alive or
+# working, even under an active validation run: it is reported misplaced so it
+# is relaunched into its own worktree before it edits the wrong copy.
+test_herdr_live_agent_outside_worktree_reads_misplaced() {
+  command -v jq >/dev/null 2>&1 || { pass "herdr misplaced test skipped without jq"; return; }
+  reset_fakes
+  local d proj; d=$(new_case herdr-misplaced)
+  make_repo_on_branch "$d/wt" fm/feat-herdr-misplaced
+  proj="$d/primary"
+  mkdir -p "$proj"
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-herdr-misplaced.meta" "window=default:w1:p2" "worktree=$d/wt" "kind=ship" \
+    "backend=herdr" "harness=claude"
+  FM_FAKE_TMUX_MISSING=1
+  FM_FAKE_HERDR_AGENT_STATUS=working
+  FM_FAKE_HERDR_FG_CWD=$proj
+  FM_FAKE_AXI_STATUS="$(run_running fm/feat-herdr-misplaced)"
+  local out; out=$(run_crew_state "$d" feat-herdr-misplaced)
+  assert_contains "$out" "state: blocked" "a live agent outside its worktree must not read working"
+  assert_contains "$out" "source: pane" "the misplacement is read from the pane"
+  assert_contains "$out" "endpoint misplaced: its agent runs in $proj, not its recorded worktree $d/wt" \
+    "the misplacement must name where the agent runs and where it belongs"
+  assert_contains "$out" "fm-control.sh feat-herdr-misplaced relaunch" "the misplacement must name the recovery"
+  assert_contains "$out" "a person answers it in the pane first" "the misplacement must hand the imports dialog to a person"
+  # The control: the same pane and run with the agent in its worktree is the
+  # ordinary validating worker, and a subdirectory of it is still inside.
+  FM_FAKE_HERDR_FG_CWD="$d/wt"
+  out=$(run_crew_state "$d" feat-herdr-misplaced)
+  assert_contains "$out" "state: working" "an agent in its worktree keeps the run-step reading"
+  assert_not_contains "$out" "misplaced" "an agent in its worktree is not misplaced"
+  mkdir -p "$d/wt/sub"
+  FM_FAKE_HERDR_FG_CWD="$d/wt/sub"
+  out=$(run_crew_state "$d" feat-herdr-misplaced)
+  assert_not_contains "$out" "misplaced" "an agent below its worktree root is not misplaced"
+  # A misplaced pane whose agent is gone is the ordinary agent-gone shape.
+  FM_FAKE_AXI_STATUS=""
+  FM_FAKE_RUNS_LIST=""
+  FM_FAKE_HERDR_FG_CWD=$proj
+  FM_FAKE_HERDR_PROCESS=shell
+  FM_FAKE_HERDR_READ_FAIL=1
+  out=$(run_crew_state "$d" feat-herdr-misplaced)
+  assert_not_contains "$out" "misplaced" "a pane with no live agent has nothing misplaced to report"
+  assert_contains "$out" "agent gone, pane shell remains" "a misplaced agent-free pane keeps the agent-gone reading"
+  pass "herdr: a live agent outside its recorded worktree reads blocked/misplaced, never working"
 }
 
 # The busy half of the same defect: a `working` record Herdr kept after the
@@ -5895,6 +5947,7 @@ test_unanchored_unfetched_active_row_still_binds
 test_unresolved_terminal_row_is_history_not_current
 test_runs_list_continuation_found_when_axi_answers_other_branch
 test_no_run_herdr_stale_registration_over_shell_reads_agent_gone
+test_herdr_live_agent_outside_worktree_reads_misplaced
 test_no_run_herdr_stale_working_record_is_never_busy
 test_capped_competing_live_runs_report_both_ids
 test_capped_overview_without_branch_rows_reports_both_ids

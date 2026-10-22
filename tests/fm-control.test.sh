@@ -919,6 +919,36 @@ test_exit_refuses_an_open_background_picker() {
   pass "fm-control exit: an already-open background-task picker is not typed into"
 }
 
+# A worker Herdr resumed in the primary checkout can sit on Claude's external
+# CLAUDE.md imports dialog (real capture, claude 2.1.307 on herdr 0.9.5). Its
+# option rows used to read as pending composer text. It is a consent question:
+# exit and relaunch refuse by naming it, say a person answers it in the pane,
+# and type nothing.
+test_exit_and_relaunch_refuse_the_external_imports_dialog() {
+  local dir out rc verb
+  for verb in exit relaunch; do
+    dir=$(new_case "imports-dialog-$verb")
+    add_task "$dir" t1 claude
+    alive_as "$dir" claude
+    cat "$ROOT/tests/fixtures/composer-claude-dialogs/claude-2.1.307-external-imports.ansi" > "$dir/fake/pane"
+    if [ "$verb" = exit ]; then
+      out=$(run_control "$dir" t1 exit); rc=$?
+    else
+      out=$(run_control "$dir" t1 relaunch --note "resumed in the wrong folder"); rc=$?
+    fi
+    expect_code 1 "$rc" "$verb at the imports dialog should refuse"$'\n'"$out"
+    assert_contains "$out" "blocked on a prompt: Claude external CLAUDE.md imports dialog" \
+      "the $verb refusal should name the imports dialog"
+    assert_contains "$out" "A person must answer it in the pane" \
+      "the $verb refusal should say a person answers the dialog"
+    assert_contains "$out" "Then retry relaunch" "the $verb refusal should name the retry"
+    assert_not_contains "$out" "pending text" "the imports dialog is not pending composer text"
+    [ ! -s "$dir/fake/literal" ] || fail "$verb must not type into the imports dialog"
+    [ ! -s "$dir/fake/keys" ] || fail "$verb must send the imports dialog no keys"
+  done
+  pass "fm-control exit and relaunch: the external imports dialog is named and never answered"
+}
+
 test_exit_refuses_the_confirming_enter() {
   local dir out rc enters
   dir=$(new_case confirm-picker)
@@ -1249,6 +1279,7 @@ test_busy_agent_is_interrupted_before_the_exit_command
 test_idle_agent_is_not_interrupted
 test_exit_drops_meta_busy_gen_with_the_sidecar
 test_exit_refuses_an_open_background_picker
+test_exit_and_relaunch_refuse_the_external_imports_dialog
 test_exit_refuses_the_confirming_enter
 test_exit_names_a_picker_that_renders_after_the_submit
 test_interrupt_without_acknowledgement_preserves_busy_state

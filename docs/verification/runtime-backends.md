@@ -1597,6 +1597,85 @@ FM_HERDR_SUBMIT_CONFIRM_LIVE=1 tests/fm-herdr-submit-confirm-live-e2e.test.sh
 ok - live Herdr submit confirm: Claude Code (2.1.283 (Claude Code)) on herdr 0.9.0 proves and submits a typed /exit behind its command popup
 ```
 
+### Claude 2.1.307 popup below the composer
+
+Measured 2026-10-22 against Herdr 0.9.5 and Claude Code 2.1.307 in isolated `fm-lab-` sessions.
+
+When the pane has room below the composer, typing `/exit` makes Claude Code 2.1.307 draw its command popup directly under the composer's closing rule, in place of the mode hint.
+The selected entry now carries the composer's own glyph, `  ❯ /exit    Exit the CLI`, so it was the bottom-most same-glyph row and won the cursorless selection.
+The pre-Enter payload proof then read the whole menu as typed text (`/exit Exit the CLI /context Visualize current context usage ...`), pressed Ctrl+U, and reported `send-failed`, so `bin/fm-control.sh exit` failed with "the exit command could not be sent" three times on a pane where typing `/exit` and Enter by hand exited at once.
+A pane whose transcript already fills the viewport still gets the popup above the composer, which is why the full-pane scenario kept passing.
+The composer footer zone in `bin/fm-composer-lib.sh` now treats that popup as furniture when the composer holds a slash command and the row under its closing rule is the glyph-marked entry.
+The real capture is `tests/fixtures/composer-claude-dialogs/claude-2.1.307-slash-popup-below.ansi`.
+
+Portable regressions:
+
+```sh
+tests/fm-composer-lib.test.sh
+tests/fm-backend-herdr.test.sh
+```
+
+```text
+ok - claude's slash popup below the composer is furniture; the composer above holds the typed command
+ok - fm_backend_herdr_send_text_submit: claude 2.1.307's popup below the composer no longer hides a typed /exit
+```
+
+Live guard (fourth scenario, which first asserts the popup was drawn below the composer):
+
+```sh
+FM_HERDR_SUBMIT_CONFIRM_LIVE=1 tests/fm-herdr-submit-confirm-live-e2e.test.sh
+```
+
+```text
+ok - live Herdr submit confirm: Claude Code (2.1.307 (Claude Code)) on herdr 0.9.5 proves and submits a typed /exit behind its command popup
+ok - live Herdr submit confirm: Claude Code (2.1.307 (Claude Code)) on herdr 0.9.5 proves and submits a typed /exit above its popup drawn below the composer
+```
+
+### Herdr restore resumes workers in the primary checkout
+
+Measured 2026-10-22 against Herdr 0.9.5 and Claude Code 2.1.307 in an isolated `fm-lab-` session.
+
+A Claude worker was launched the way a treehouse spawn leaves it: the pane's top shell in the primary checkout and a nested shell in the linked worktree.
+After a guarded lab stop and re-provision, Herdr resumed it as `claude --resume <session>` with both `pane get` `cwd` and `foreground_cwd` in the primary checkout.
+Before the restart `cwd` was the primary checkout and `foreground_cwd` the worktree, so only the foreground cwd separates a healthy worker from the resumed stray.
+A foreground child running in another directory does not move `foreground_cwd`, which follows the foreground process group leader.
+
+When the primary checkout's working copy imports a file outside it, the resumed stray stops on Claude's "Allow external CLAUDE.md file imports?" dialog.
+Ctrl+C leaves that dialog up, and Escape writes `hasClaudeMdExternalIncludesApproved: false` with `hasClaudeMdExternalIncludesWarningShown: true` to the primary checkout's project entry.
+Claude writes that same pair to the primary checkout's entry when the dialog is answered from a linked worktree, and nothing to the worktree's own entry.
+A Claude launched in a worktree under that recorded decline reaches its composer with no dialog.
+
+With the fixes, `bin/fm-control.sh <task> exit` at that dialog refuses with `blocked on a prompt: Claude external CLAUDE.md imports dialog` and types nothing: the dialog stays up and the store is unchanged.
+The lab sequence reads the stray as misplaced at the dialog and at its empty prompt, and after the dialog is answered `bin/fm-control.sh <task> relaunch` stops it, registers trust, and starts the replacement in the worktree:
+
+```text
+state: blocked · source: pane · endpoint misplaced: its agent runs in <primary>, not its recorded worktree <worktree>; relaunch it with fm-control.sh hrr relaunch (if it shows Claude's external CLAUDE.md imports dialog, a person answers it in the pane first, and No is the safe answer)
+relaunched hrr harness=claude from=claude model=default effort=default backend=herdr endpoint=<lab-session>:w1:p1 worktree=<worktree>
+state: working · source: pane · harness busy (claude-hook)
+```
+
+Portable regressions for the placement read and the trust decision:
+
+```sh
+tests/fm-backend-herdr-smoke.test.sh
+tests/fm-crew-state.test.sh
+tests/fm-session-start.test.sh
+tests/fm-claude-trust.test.sh
+tests/fm-control.test.sh
+tests/fm-composer-lib.test.sh
+```
+
+```text
+ok - real herdr: endpoint placement follows the foreground leader's cwd inside or outside the recorded worktree
+ok - herdr: a live agent outside its recorded worktree reads blocked/misplaced, never working
+ok - herdr endpoint placement: a live foreground outside the recorded worktree is reported misplaced, never alive
+ok - fm-claude-trust.sh: a project-entry decline stays in force, is reported, and does not block worktree trust
+ok - fm-spawn.sh: a claude spawn over a standing imports decline launches and reports that imports stay off
+ok - fm-control exit and relaunch: the external imports dialog is named and never answered
+ok - claude's external CLAUDE.md imports dialog is named from its recorded structure, with a person-answers recovery
+ok - fm-claude-trust.sh: refuses to override a worktree's own declined external-imports consent
+```
+
 ### Claude background-task exit picker
 
 Measured 2026-10-05 against Claude Code 2.1.289 in an isolated tmux session.

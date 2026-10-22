@@ -6007,6 +6007,8 @@ claude*)
   else
     spawn_trust_args=("$WT" "$PROJ_ABS")
   fi
+  # Only the `trusted:` lines are dropped: stderr, including the note that a
+  # standing imports decline keeps external CLAUDE.md imports off, passes on.
   if ! "$FM_ROOT/bin/fm-claude-trust.sh" "${spawn_trust_args[@]}" >/dev/null; then
     echo "error: could not pre-register Claude workspace trust for $WT; refusing to launch a claude worker that would wedge on the trust dialog; $(spawn_endpoint_hint)" >&2
     exit 1

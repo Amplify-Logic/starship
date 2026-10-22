@@ -409,9 +409,17 @@ require_state_verified_backend() {  # <verb>
 
 # refuse_blocking_prompt: the screen is a dialog a confirming Enter would
 # answer. Name it and stop. Do not type Escape or an option: both dismiss
-# or choose.
+# or choose. A dialog with its own recovery (fm_composer_blocking_dialog_recovery)
+# says what a person does next.
 refuse_blocking_prompt() {  # <dialog-name>
-  die "task $ID is blocked on a prompt: $1. Refusing to type Enter into it."
+  local recovery=
+  # The composer reads ran in command substitutions, so the shared library
+  # they sourced is not loaded here yet.
+  fm_backend_source "$BACKEND" >/dev/null 2>&1 || true
+  if declare -F fm_composer_blocking_dialog_recovery >/dev/null 2>&1; then
+    recovery=$(fm_composer_blocking_dialog_recovery "$1")
+  fi
+  die "task $ID is blocked on a prompt: $1. Refusing to type Enter into it.${recovery:+ $recovery}"
 }
 
 # rendered_matches <ere>: whether any row of the visible viewport matches.
@@ -1168,6 +1176,8 @@ do_relaunch() {
   spawn_args=("$ID" --relaunch --harness "$TARGET_HARNESS")
   [ "$TARGET_MODEL" = default ] || spawn_args+=(--model "$TARGET_MODEL")
   [ "$TARGET_EFFORT" = default ] || spawn_args+=(--effort "$TARGET_EFFORT")
+  # Only the launch owner's stdout is dropped; its stderr notes, such as a
+  # standing imports decline (bin/fm-claude-trust.sh), reach the operator.
   if FM_CONTROL_RELAUNCH_TX="$RELAUNCH_TX" \
       "$SCRIPT_DIR/fm-spawn.sh" "${spawn_args[@]}" >/dev/null; then
     RELAUNCH_META_PUBLISHED=1

@@ -239,23 +239,53 @@ JSON
 }
 
 # hasClaudeMdExternalIncludesApproved===false with WarningShown===true on the
-# project-root entry is a human's explicit "No, disable" answer, recorded in the SAME store their own
-# interactive sessions read. A spawn must never flip that to true on their
-# behalf: doing so would grant every later interactive session in that
-# checkout silent external-file inclusion the human declined. The whole
-# registration refuses instead, and the store - including the worktree entry,
-# which is never reached - must come back byte-for-byte unchanged.
-test_project_root_entry_declined_external_imports_is_not_overridden() {
-  local rec store out before after
+# project-root entry is a recorded decline in the SAME store the human's own
+# interactive sessions read. Claude Code writes it there whichever directory
+# answered the dialog - a stray a Herdr restore resumed in the primary checkout
+# included - and a worker in a linked worktree under it reaches its composer
+# with imports off and no dialog. So trust registers on both entries while the
+# decline is left exactly as it was: never flipped, never stripped.
+test_project_root_entry_decline_is_kept_and_does_not_block_trust() {
+  local rec store out
   rec=$(make_case project-decline)
   read_case "$rec"
   store="$CONFIG/.claude.json"
   cat > "$store" <<JSON
-{"hasCompletedOnboarding":true,"projects":{"$PROJ":{"hasTrustDialogAccepted":true,"hasClaudeMdExternalIncludesApproved":false,"hasClaudeMdExternalIncludesWarningShown":true,"allowedTools":["Read"]}}}
+{"hasCompletedOnboarding":true,"projects":{"$PROJ":{"hasTrustDialogAccepted":false,"hasClaudeMdExternalIncludesApproved":false,"hasClaudeMdExternalIncludesWarningShown":true,"allowedTools":["Read"]}}}
+JSON
+  out=$(run_trust "$CONFIG" "$WT" "$PROJ")
+  expect_code 0 $? "a decline recorded only on the project entry must not block the worktree's trust: $out"
+  assert_trust_only_no_import_consent "$store" "$WT" \
+    "the worktree entry either lost trust or gained import flags from a project decline"
+  assert_trusted "$store" "$PROJ" "the project-root entry did not gain trust"
+  assert_store_value "$store" false "the project's recorded decline was flipped" \
+    projects "$PROJ" hasClaudeMdExternalIncludesApproved
+  assert_store_value "$store" true "the project's recorded decline was stripped" \
+    projects "$PROJ" hasClaudeMdExternalIncludesWarningShown
+  assert_store_value "$store" '["Read"]' "the project entry's unrelated settings were lost" projects "$PROJ" allowedTools
+  assert_contains "$out" "external CLAUDE.md imports stay off for project" \
+    "registering over a standing decline must say that imports stay off"
+  assert_contains "$out" "hasClaudeMdExternalIncludesApproved and hasClaudeMdExternalIncludesWarningShown are removed" \
+    "the decline note must name the two keys to remove"
+  out=$(CLAUDE_CONFIG_DIR="$CONFIG" HOME="$CONFIG" "$TRUST" "$WT" "$PROJ" 2>/dev/null)
+  assert_not_contains "$out" "imports stay off" "the decline note belongs on stderr, not stdout"
+  pass "fm-claude-trust.sh: a project-entry decline stays in force, is reported, and does not block worktree trust"
+}
+
+# The same decline recorded on the worktree's OWN entry is a decision about the
+# exact directory this registration was about to write. The whole registration
+# refuses and the store comes back byte-for-byte unchanged.
+test_worktree_entry_declined_external_imports_is_not_overridden() {
+  local rec store out before after
+  rec=$(make_case worktree-decline)
+  read_case "$rec"
+  store="$CONFIG/.claude.json"
+  cat > "$store" <<JSON
+{"hasCompletedOnboarding":true,"projects":{"$PROJ":{"hasTrustDialogAccepted":true,"hasClaudeMdExternalIncludesApproved":true,"hasClaudeMdExternalIncludesWarningShown":true},"$WT":{"hasTrustDialogAccepted":false,"hasClaudeMdExternalIncludesApproved":false,"hasClaudeMdExternalIncludesWarningShown":true}}}
 JSON
   before=$(cat "$store")
   out=$(run_trust "$CONFIG" "$WT" "$PROJ")
-  expect_code 1 $? "a project that already declined external imports must be refused: $out"
+  expect_code 1 $? "a worktree that already declined external imports must be refused: $out"
   assert_contains "$out" "declined external CLAUDE.md imports" \
     "the refusal did not name the declined-consent reason"
   assert_contains "$out" "approve the imports dialog interactively" \
@@ -263,7 +293,7 @@ JSON
   after=$(cat "$store")
   [ "$before" = "$after" ] || fail "the store was modified despite the refusal"
   assert_not_trusted "$store" "$WT" "the worktree entry was registered despite the refusal"
-  pass "fm-claude-trust.sh: refuses to override a project's declined external-imports consent"
+  pass "fm-claude-trust.sh: refuses to override a worktree's own declined external-imports consent"
 }
 
 # Claude Code's own default project entry carries BOTH external-imports flags as
@@ -285,6 +315,7 @@ JSON
     "the worktree entry either lost trust or gained unearned import consent"
   assert_trust_only_no_import_consent "$store" "$PROJ" \
     "the project-root entry either lost trust or gained import consent it was never asked for"
+  assert_not_contains "$out" "imports stay off" "a never-asked entry must not report a decline"
   pass "fm-claude-trust.sh: a never-asked default external-imports pair is not treated as a decline"
 }
 
@@ -636,6 +667,36 @@ claude_launch_doorbell() {  # <launch command>
   )
 }
 
+# A spawn over a standing project-entry decline still launches, and the note
+# that imports stay off reaches the caller instead of being discarded with the
+# registration's stdout (fm-control relaunch drops only the spawn's stdout too).
+test_claude_spawn_passes_the_standing_decline_note_through() {
+  local case_dir home proj wt config fakebin launch_log out
+  case_dir="$TMP_ROOT/spawn-decline"
+  home="$case_dir/home"
+  proj="$case_dir/project"
+  wt="$case_dir/wt"
+  config="$case_dir/claude-config"
+  launch_log="$case_dir/launch.log"
+  mkdir -p "$config"
+  fakebin=$(make_spawn_fakebin "$case_dir/fake" claude)
+  fm_test_spawn_home "$home" claude
+  fm_git_worktree "$proj" "$wt" wt-spawn-decline
+  proj=$(cd "$proj" && pwd -P)
+  cat > "$config/.claude.json" <<JSON
+{"hasCompletedOnboarding":true,"projects":{"$proj":{"hasTrustDialogAccepted":true,"hasClaudeMdExternalIncludesApproved":false,"hasClaudeMdExternalIncludesWarningShown":true}}}
+JSON
+  fm_test_spawn_brief "$home" declinespawn
+  out=$(FM_TEST_CLAUDE_CONFIG_DIR="$config" FM_FAKE_LAUNCH_LOG="$launch_log" \
+    fm_test_run_spawn "$home" "$wt" "$fakebin" declinespawn "$proj" claude \
+    --mode no-mistakes --yolo off)
+  expect_code 0 $? "a claude spawn over a standing project decline must succeed: $out"
+  assert_contains "$out" "external CLAUDE.md imports stay off for project $proj" \
+    "the spawn discarded the standing-decline note"
+  assert_present "$launch_log" "the claude spawn sent no launch command"
+  pass "fm-spawn.sh: a claude spawn over a standing imports decline launches and reports that imports stay off"
+}
+
 # The spawn half: a real fm-spawn of a claude worker must pre-register the
 # worktree AND deliver a record-backed doorbell for the brief, with no dialog to
 # answer and no human in the loop.
@@ -842,7 +903,8 @@ test_fresh_worktree_is_trusted
 test_fresh_worktree_also_trusts_the_project_root_without_import_consent
 test_registration_carries_forward_existing_import_consent
 test_project_root_entry_preserves_other_keys
-test_project_root_entry_declined_external_imports_is_not_overridden
+test_project_root_entry_decline_is_kept_and_does_not_block_trust
+test_worktree_entry_declined_external_imports_is_not_overridden
 test_project_root_entry_default_import_flags_are_not_a_decline
 test_registration_is_idempotent
 test_primary_checkout_is_refused
@@ -863,6 +925,7 @@ test_corrupt_store_fails_closed
 test_missing_node_is_refused
 test_scope_refusal_stays_fail_closed_without_node
 test_claude_spawn_pretrusts_its_worktree_and_reaches_the_brief
+test_claude_spawn_passes_the_standing_decline_note_through
 test_refused_spawn_leaves_no_task_state
 test_secondmate_standalone_clone_home_is_trusted
 test_secondmate_leased_worktree_home_is_trusted

@@ -598,6 +598,19 @@ fm_session_start_endpoint_read() {  # <backend> <target> [expected-label]
   ' _ "$SCRIPT_DIR/fm-backend.sh" "$backend" "$target" "$label"
 }
 
+# fm_session_start_endpoint_placement <backend> <target> <worktree>: the same
+# bounded, crash-isolated shape for fm_backend_endpoint_placement, so a live
+# endpoint whose agent runs outside its worktree (a worker a Herdr restart
+# resumed in the primary checkout) is reported misplaced rather than alive.
+# Prints the placement verdict; a failed or timed-out read prints nothing.
+fm_session_start_endpoint_placement() {  # <backend> <target> <worktree>
+  # shellcheck disable=SC2016  # Positional parameters expand inside the child bash, not here.
+  fm_run_timed "$ENDPOINT_TIMEOUT" bash -c '
+    . "$1"
+    fm_backend_endpoint_placement "$2" "$3" "$4"
+  ' _ "$SCRIPT_DIR/fm-backend.sh" "$1" "$2" "$3" 2>/dev/null || true
+}
+
 hash_file_sha256() {
   local file=$1 digest
   [ -f "$file" ] || return 1
@@ -966,10 +979,17 @@ for meta in "$STATE"/*.meta; do
     backend=$(fm_backend_of_meta "$meta")
     endpoint_rc=0
     fm_session_start_endpoint_read "$backend" "${target:-$window}" "fm-$id" || endpoint_rc=$?
+    placement=
+    if [ "$endpoint_rc" -eq 0 ] && [ "$backend" = herdr ]; then
+      placement=$(fm_session_start_endpoint_placement "$backend" "${target:-$window}" "$(fm_meta_get "$meta" worktree)")
+    fi
     # Only the timeout owner's own statuses mean the read itself failed: 124 is
     # the bound firing and >=128 is a signal death. Every other nonzero status
     # is the probe's own verdict that the endpoint is gone.
-    if [ "$endpoint_rc" -eq 0 ]; then
+    if [ "$endpoint_rc" -eq 0 ] && [ "${placement%%$'\t'*}" = misplaced ]; then
+      printf 'endpoint: misplaced (backend=%s window=%s - its live foreground runs in %s, not its recorded worktree; relaunch it with bin/fm-control.sh %s relaunch; if it shows Claude'\''s external CLAUDE.md imports dialog, a person answers it in the pane first, and No is the safe answer)\n' \
+        "$backend" "$window" "${placement#*$'\t'}" "$id"
+    elif [ "$endpoint_rc" -eq 0 ]; then
       printf 'endpoint: alive (backend=%s window=%s)\n' "$backend" "$window"
     elif [ "$endpoint_rc" -eq 124 ] || [ "$endpoint_rc" -ge 128 ]; then
       printf 'endpoint: error (backend=%s window=%s - the endpoint read died or hit its %ss bound; the digest continued past it)\n' \

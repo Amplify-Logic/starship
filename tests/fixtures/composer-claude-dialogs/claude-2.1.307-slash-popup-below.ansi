@@ -1,0 +1,22 @@
+claude --resume 7dd7d862-239e-4d68-aa32-604eb4536ee4
+user@host p % claude --resume 7dd7d862-239e-4d68-aa32-604eb4536ee4
+[0m[38;2;215;119;87m ▐[0m[38;2;215;119;87m[48;2;0;0;0m▛███▛█   [0m[1mClaude Code [0m[38;2;153;153;153mv2.1.307[0m
+[0m[38;2;215;119;87m▝▜[0m[38;2;215;119;87m[48;2;0;0;0m█████[0m[38;2;215;119;87m█▀  [0m[38;2;153;153;153mOpus 5.5 (1M context) with high effort · Claude Max[0m
+[0m[38;2;215;119;87m ▝▝   ▝▝   [0m[38;2;153;153;153m/tmp/fm-lab/p[0m
+
+[0m[38;2;153;153;153m  ⎿  SessionStart:startup hook error[0m
+[0m[38;2;153;153;153m  ⎿  Failed with non-blocking status code: /bin/sh: ${CLAUDE_PLUGIN_ROOT}/hooks/run-hook.cmd: No such file or directory[0m
+
+[0m[38;2;153;153;153m[48;2;55;55;55m❯ [0m[38;2;255;255;255m[48;2;55;55;55mReply with exactly LABPONG and nothing else.[0m[48;2;55;55;55m                                                                          [0m
+
+[0m[38;2;255;255;255m⏺ [0mLABPONG
+
+[0m[38;2;153;153;153m✻ Cogitated for 2s · done 1:32 AM[0m
+
+[0m[38;2;136;136;136m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[0m
+❯ [0m[38;2;177;185;249m/exit[0m
+[0m[38;2;136;136;136m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[0m
+  [0m[38;2;177;185;249m❯ /[0m[1m[38;2;177;185;249mexit[0m[38;2;177;185;249m                                         [0m[1m[38;2;177;185;249mExit[0m[38;2;177;185;249m the CLI[0m
+  [0m[38;2;153;153;153m  /context                                      Visualize current context usage as a colored grid[0m
+  [0m[38;2;153;153;153m  /usage-credits                                Configure usage credits or request them from your admin when you hit[0m
+                                                  [0m[38;2;153;153;153ma limit[0m

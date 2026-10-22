@@ -1157,6 +1157,20 @@ fm_backend_agent_alive() {  # <backend> <target>
   esac
 }
 
+# fm_backend_endpoint_placement: whether a task endpoint's live foreground runs
+# inside its recorded worktree, as `placed`, `misplaced<TAB><cwd>`, `unknown`
+# (unreadable), or `unverified` (no placement read on this backend). Only
+# herdr has one: its server restart resumes agents in the pane's top shell, the
+# primary checkout (fm_backend_herdr_endpoint_placement owns the evidence).
+fm_backend_endpoint_placement() {  # <backend> <target> <worktree>
+  local backend=$1
+  fm_backend_source "$backend" || { printf 'unverified'; return 0; }
+  case "$backend" in
+    herdr) fm_backend_herdr_endpoint_placement "$2" "$3" ;;
+    *) printf 'unverified' ;;
+  esac
+}
+
 # --- native event push (backend-extensible) ---------------------------------
 #
 # The watcher's event-wait splice (bin/fm-watch.sh) is backend-agnostic: it asks

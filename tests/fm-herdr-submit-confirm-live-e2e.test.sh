@@ -8,7 +8,8 @@
 # idle steer. It then requires the same submit path to prove and submit a
 # typed /exit slash command behind the command popup Claude renders below the
 # composer (the fm-control exit breakage on 2.1.283) and verifies the agent
-# actually exited. It fails naming the harness and version rather than
+# actually exited, in a full pane and in a sparse one where 2.1.307 draws the
+# popup with a glyph-marked selected entry directly under the composer. It fails naming the harness and version rather than
 # degrading quietly.
 #
 # Run explicitly with FM_HERDR_SUBMIT_CONFIRM_LIVE=1 after a Herdr or Claude
@@ -205,5 +206,77 @@ done
 [ "$exited" = 1 ] \
   || fail "Claude Code ($VERSION) on $HERDR_VER: the /exit submission reported '$verdict' but the agent never exited"
 pass "live Herdr submit confirm: Claude Code ($VERSION) on $HERDR_VER proves and submits a typed /exit behind its command popup"
+
+# Claude 2.1.307 draws the same popup BELOW the composer when the pane has room
+# there, marking its selected entry with the composer's own glyph, and the
+# proof read that whole menu as typed text (the resumed-stray exit failure
+# after a Herdr restart). A fresh pane in a nearly empty worktree is sparse
+# enough to put it there; the shape is asserted before the submit so this
+# scenario cannot pass vacuously on the above-composer shape. The worktree's
+# trust is pre-registered the way every claude spawn registers it.
+SPARSE_PROJ="$TMP_ROOT/sparse-proj"
+SPARSE="$TMP_ROOT/sparse"
+mkdir -p "$SPARSE_PROJ"
+if ! { git -C "$SPARSE_PROJ" init -q \
+  && git -C "$SPARSE_PROJ" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -q --allow-empty -m initial \
+  && git -C "$SPARSE_PROJ" worktree add -q -b sparse "$SPARSE"; }; then
+  fail "could not create the sparse lab worktree"
+fi
+"$ROOT/bin/fm-claude-trust.sh" "$SPARSE" "$SPARSE_PROJ" >/dev/null \
+  || fail "could not pre-register Claude trust for the sparse lab worktree"
+WS_JSON=$(lab workspace create --cwd "$SPARSE" --label fm-submitsparse --no-focus) \
+  || fail "could not create the sparse submit-confirm workspace"
+SPANE=$(printf '%s' "$WS_JSON" | jq -er '.result.root_pane.pane_id') \
+  || fail "workspace create did not return a sparse pane id"
+STARGET="$SESSION:$SPANE"
+lab pane run "$SPANE" "CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false CLAUDE_CODE_SEND_FEEDBACK=0 claude --dangerously-skip-permissions --settings '{\"feedbackDrafts\":\"off\"}'" >/dev/null \
+  || fail "could not launch Claude Code ($VERSION) in the sparse Herdr pane"
+idle=0
+i=0
+while [ "$i" -lt 60 ]; do
+  screen=$(lab pane read "$SPANE" --source visible 2>/dev/null || true)
+  case "$screen" in
+    *'bypass permissions on'*)
+      st=$(lab agent get "$SPANE" 2>/dev/null | jq -r '.result.agent.agent_status // empty')
+      case "$st" in idle|done) idle=1; break ;; esac
+      ;;
+  esac
+  i=$((i + 1))
+  sleep 1
+done
+[ "$idle" = 1 ] || fail "Claude Code ($VERSION) on $HERDR_VER never rendered an idle composer in the sparse pane"
+lab pane send-text "$SPANE" '/exit' >/dev/null || fail "could not type /exit into the sparse pane"
+below=0
+i=0
+while [ "$i" -lt 20 ]; do
+  screen=$(lab pane read "$SPANE" --source visible 2>/dev/null || true)
+  if printf '%s\n' "$screen" | awk '
+      /^❯[^[:alnum:]]*\/exit[[:space:]]*$/ { composer = NR }
+      composer && NR > composer && /^[[:space:]]+❯ \/exit[[:space:]][[:space:]]+[^[:space:]]/ { found = 1 }
+      END { exit !found }'; then
+    below=1
+    break
+  fi
+  i=$((i + 1))
+  sleep 0.5
+done
+[ "$below" = 1 ] \
+  || fail "Claude Code ($VERSION) on $HERDR_VER did not draw its slash popup below the composer in a sparse pane, so this scenario proves nothing"
+fm_backend_herdr_composer_clear "$STARGET" '/exit' \
+  || fail "could not clear the shape probe's /exit from the sparse composer"
+verdict=$(fm_backend_herdr_send_text_submit "$STARGET" '/exit' 3 0.4 1.2) \
+  || fail "send_text_submit failed to run the sparse /exit submission against Claude Code ($VERSION) on $HERDR_VER"
+[ "$verdict" != send-failed ] \
+  || fail "Claude Code ($VERSION) on $HERDR_VER: a typed /exit above its popup was judged unsent and cleared instead of submitted"
+exited=0
+i=0
+while [ "$i" -lt 30 ]; do
+  if ! lab agent get "$SPANE" >/dev/null 2>&1; then exited=1; break; fi
+  i=$((i + 1))
+  sleep 1
+done
+[ "$exited" = 1 ] \
+  || fail "Claude Code ($VERSION) on $HERDR_VER: the sparse /exit submission reported '$verdict' but the agent never exited"
+pass "live Herdr submit confirm: Claude Code ($VERSION) on $HERDR_VER proves and submits a typed /exit above its popup drawn below the composer"
 
 [ "$CHECKED" -gt 0 ] || fail "FM_HERDR_SUBMIT_CONFIRM_LIVE=1 checked no harness"

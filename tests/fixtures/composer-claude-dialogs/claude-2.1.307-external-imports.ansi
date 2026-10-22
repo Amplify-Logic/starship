@@ -1,0 +1,20 @@
+CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions
+user@host p % CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions
+
+
+[0m[38;2;255;193;7m───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[0m
+  [0m[1m[38;2;255;193;7mAllow external CLAUDE.md file imports?[0m
+
+  This project's CLAUDE.md or .claude/rules imports files outside the current working directory. Never allow this for
+  third-party repositories.
+
+  [0m[38;2;153;153;153mExternal imports:[0m
+  [0m[38;2;153;153;153m  /tmp/fm-lab/outside/EXT.md[0m
+
+  [0m[38;2;153;153;153mImportant: Only use Claude Code with files you trust. Accessing untrusted files may pose security risks[0m
+  [0m[38;2;153;153;153mhttps://code.claude.com/docs/en/security[0m
+
+  [0m[38;2;177;185;249m❯ No, disable external imports[0m
+    Yes, allow external imports
+
+  [0m[3m[38;2;153;153;153mEnter to confirm · Esc to cancel[0m

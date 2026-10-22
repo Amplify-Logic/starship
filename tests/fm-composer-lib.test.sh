@@ -1239,6 +1239,33 @@ test_matrix_claude_suggested_prompt_and_draft() {
   pass "matrix: claude's suggested prompt reads empty wherever styling survives, its typed draft pending"
 }
 
+test_claude_slash_popup_below_composer_is_furniture() {
+  # Real claude 2.1.307 screen read through herdr 0.9.5's ansi viewport after
+  # typing /exit into a sparse pane: the slash-command popup sits directly below
+  # the composer's closing rule and marks its selected entry with the same `❯`.
+  # The composer above is what holds the typed command; the menu is furniture.
+  local screen plain caps out
+  screen=$(cat "$DIALOGS/claude-2.1.307-slash-popup-below.ansi")
+  plain=$(printf '%s\n' "$screen" | fm_composer_strip_ansi)
+  for caps in "$CAPS_STYLED" "$CAPS_STYLED_NOID" "$CAPS_PLAIN"; do
+    out=$(FM_COMPOSER_GHOST_LUMA_MAX=0 fm_composer_extract_selected_content "$caps" "$screen")
+    [ "$out" = /exit ] || fail "the composer above claude's slash popup must read '/exit', got '$out' (caps: ${caps//$'\n'/ })"
+  done
+  [ "$(fm_composer_extract_selected_content "$CAPS_PLAIN" "$plain")" = /exit ] \
+    || fail "the plain capture of claude's slash popup must still read the composer above it"
+  assert_screen "claude slash popup below the composer on herdr" pending "$CAPS_STYLED" "$screen" '' probe-absent
+  # Without styling the box cannot be told from ghost text, so a plain capture
+  # still refuses rather than turning the popup into a verdict either way.
+  assert_screen "claude slash popup below the composer on cmux/orca" unknown "$CAPS_PLAIN" "$plain"
+  # The popup only opens over a typed slash command. The same lower run under
+  # a composer holding ordinary text proves nothing, so the lower same-glyph
+  # row keeps winning exactly as a live composer under stale scrollback does.
+  screen=${screen//$'\xc2\xa0\x1b[0m\x1b[38;2;177;185;249m/exit'/$'\xc2\xa0\x1b[0m\x1b[38;2;177;185;249mhello there'}
+  out=$(FM_COMPOSER_GHOST_LUMA_MAX=0 fm_composer_extract_selected_content "$CAPS_STYLED" "$screen")
+  [ "${out#/exit}" != "$out" ] || fail "a popup-shaped run under a non-slash composer must not be demoted, got '$out'"
+  pass "claude's slash popup below the composer is furniture; the composer above holds the typed command"
+}
+
 test_matrix_claude_wrapped_stash_marker() {
   # A narrow or busy Claude pane wraps `› stashed` onto a footer row of its
   # own (claude 2.1.283, captured live at 54 columns on tmux and about 53 on
@@ -1557,6 +1584,7 @@ test_matrix_kimi_bordered_shell_glyph_box
 test_matrix_claude_inside_zellij_ansi_dump
 test_matrix_claude_selection_dialogs_are_unknown
 test_matrix_claude_suggested_prompt_and_draft
+test_claude_slash_popup_below_composer_is_furniture
 test_matrix_claude_wrapped_stash_marker
 test_selection_dialog_survives_ghost_stripped_option
 test_selection_dialog_rule_is_bounded
@@ -1724,6 +1752,32 @@ test_dialog_note_skips_the_match_when_no_sink_is_set() {
   pass "a dialog note without a sink skips the match, and release leaves a caller RETURN trap"
 }
 
+test_claude_external_imports_dialog_is_named() {
+  local screen out rc
+  screen=$(cat "$DIALOGS/claude-2.1.307-external-imports.ansi")
+  out=$(fm_composer_blocking_dialog "$screen"); rc=$?
+  [ "$rc" -eq 0 ] || fail "claude's external imports dialog must be named"
+  [ "$out" = 'Claude external CLAUDE.md imports dialog' ] || fail "unexpected dialog name '$out'"
+  out=$(fm_composer_blocking_dialog_recovery "$out")
+  assert_contains "$out" "A person must answer it in the pane" "the imports dialog's recovery must hand the answer to a person"
+  # The other option selected is the same dialog.
+  screen=${screen//'❯ No, disable external imports'/'  No, disable external imports'}
+  screen=${screen//'  Yes, allow external imports'/'❯ Yes, allow external imports'}
+  [ "$(fm_composer_blocking_dialog "$screen")" = 'Claude external CLAUDE.md imports dialog' ] \
+    || fail "the imports dialog with Yes selected must be named too"
+  # The same strings quoted above a normal composer are not the dialog.
+  out=$(fm_composer_blocking_dialog "$(printf '%s\n' \
+    'Allow external CLAUDE.md file imports?' \
+    '❯ No, disable external imports' \
+    'Enter to confirm · Esc to cancel' \
+    '' \
+    '❯ ')"); rc=$?
+  [ "$rc" -eq 1 ] || fail "quoted imports-dialog text above a composer must not match, got '$out'"
+  [ -z "$(fm_composer_blocking_dialog_recovery 'Claude background-task exit picker')" ] \
+    || fail "only a dialog with its own recovery prints one"
+  pass "claude's external CLAUDE.md imports dialog is named from its recorded structure, with a person-answers recovery"
+}
+
 test_quoted_exit_picker_text_is_not_a_dialog() {
   local screen out rc sink enters
   screen=$(quoted_exit_picker_screen)
@@ -1760,3 +1814,4 @@ test_background_exit_picker_stays_pending_and_blocks_retry
 test_dialog_heading_and_footer_must_be_the_recorded_lines
 test_dialog_note_skips_the_match_when_no_sink_is_set
 test_quoted_exit_picker_text_is_not_a_dialog
+test_claude_external_imports_dialog_is_named

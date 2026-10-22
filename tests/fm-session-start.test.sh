@@ -513,6 +513,31 @@ SH
   chmod +x "$fakebin/herdr"
 }
 
+# make_fake_herdr_placed <fakebin> <pane=foreground-cwd>...: a running herdr
+# session whose listed panes exist and report that foreground cwd, the
+# placement read a Herdr restart makes interesting (fm_backend_endpoint_placement).
+make_fake_herdr_placed() {
+  local fakebin=$1 pair cases=''
+  shift
+  for pair in "$@"; do
+    cases+="  ${pair%%=*}) printf '{\"result\":{\"pane\":{\"foreground_cwd\":\"%s\"}}}\n' '${pair#*=}'; exit 0 ;;"$'\n'
+  done
+  cat > "$fakebin/herdr" <<SH
+#!/usr/bin/env bash
+set -u
+if [ "\${1:-}" = status ]; then
+  printf '{"server":{"running":true}}\n'
+  exit 0
+fi
+if [ "\${1:-}" = pane ] && [ "\${2:-}" = get ]; then
+  case "\${3:-}" in
+$cases  esac
+fi
+exit 1
+SH
+  chmod +x "$fakebin/herdr"
+}
+
 # make_fake_herdr_deadly_read <fakebin> <live-pane> <kill-pane>: like
 # make_fake_herdr, but `pane get <kill-pane>` KILLs the shell running the
 # endpoint read. The read's shell is the fake's grandparent (fm_backend_herdr_cli's
@@ -1487,6 +1512,36 @@ EOF
     "a probe exiting 4 was mislabelled as a failed read"
 
   pass "herdr endpoint liveness is reported per task: alive, dead for exit 1, dead for any other probe status"
+}
+
+# A Herdr restart resumes a worker in its pane's top shell, the primary
+# checkout. The pane exists, so the old read called it alive; its live
+# foreground outside the recorded worktree is reported misplaced instead.
+test_endpoint_placement_herdr_reports_misplaced() {
+  local rec root home fakebin out wt proj
+  rec=$(new_world placement-herdr)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+  mkdir -p "$root/proj" "$root/wt/sub"
+  wt=$(cd "$root/wt" && pwd -P)
+  proj=$(cd "$root/proj" && pwd -P)
+  make_fake_herdr_placed "$fakebin" "p-home=$wt" "p-sub=$wt/sub" "p-stray=$proj"
+
+  printf 'window=sess:p-home\nkind=ship\nbackend=herdr\nworktree=%s\n' "$wt" > "$home/state/task-home.meta"
+  printf 'window=sess:p-sub\nkind=ship\nbackend=herdr\nworktree=%s\n' "$wt" > "$home/state/task-sub.meta"
+  printf 'window=sess:p-stray\nkind=ship\nbackend=herdr\nworktree=%s\n' "$wt" > "$home/state/task-stray.meta"
+
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_contains "$out" "endpoint: alive (backend=herdr window=sess:p-home)" "a pane running in its worktree must stay alive"
+  assert_contains "$out" "endpoint: alive (backend=herdr window=sess:p-sub)" "a pane running below its worktree must stay alive"
+  assert_contains "$out" "endpoint: misplaced (backend=herdr window=sess:p-stray - its live foreground runs in $proj, not its recorded worktree; relaunch it with bin/fm-control.sh task-stray relaunch; if it shows Claude's external CLAUDE.md imports dialog, a person answers it in the pane first, and No is the safe answer)" \
+    "a pane running outside its worktree was not reported misplaced"
+  assert_not_contains "$out" "endpoint: alive (backend=herdr window=sess:p-stray)" \
+    "a misplaced pane was still reported plainly alive"
+  pass "herdr endpoint placement: a live foreground outside the recorded worktree is reported misplaced, never alive"
 }
 
 test_endpoint_read_death_is_isolated_and_reported() {
@@ -3241,6 +3296,7 @@ test_status_tail_line_cap
 test_orphan_status_logs_are_printed
 test_endpoint_liveness_tmux
 test_endpoint_liveness_herdr
+test_endpoint_placement_herdr_reports_misplaced
 test_endpoint_read_death_is_isolated_and_reported
 test_endpoint_read_hang_is_bounded_and_reported
 test_endpoint_bound_rejects_padded_zero

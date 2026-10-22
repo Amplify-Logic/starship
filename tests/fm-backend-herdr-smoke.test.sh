@@ -297,6 +297,48 @@ case "$p" in
 esac
 pass "real herdr: current_path reads the pane's live cwd"
 
+# --- endpoint placement -------------------------------------------------------
+# A Herdr restart resumes a worker in its pane's top shell, the primary
+# checkout, so placement reads where the live foreground actually runs. The
+# leader-in-worktree case drives the two cwd signals apart deliberately: a
+# foreground child sits in the primary checkout while the leader stays in the
+# worktree, and the verdict must follow the leader.
+PLACE_ROOT=$(cd "$SM_SCRATCH" && pwd -P)/place
+mkdir -p "$PLACE_ROOT/wt/sub" "$PLACE_ROOT/primary"
+place_wait() {  # <want-verdict-prefix>
+  local i=0 v=
+  while [ "$i" -lt 30 ]; do
+    v=$(fm_backend_endpoint_placement herdr "$TARGET" "$PLACE_ROOT/wt")
+    case "$v" in "$1"*) printf '%s' "$v"; return 0 ;; esac
+    sleep 0.2
+    i=$((i + 1))
+  done
+  printf '%s' "$v"
+  return 1
+}
+fm_backend_herdr_send_text_line "$TARGET" "cd $PLACE_ROOT/wt/sub" || fail "could not move the pane into the worktree"
+v=$(place_wait placed) || fail "real herdr: a pane below its worktree root should read placed, got '$v'"
+fm_backend_herdr_send_text_line "$TARGET" "cd $PLACE_ROOT/primary" || fail "could not move the pane out of the worktree"
+v=$(place_wait misplaced) || fail "real herdr: a pane outside its worktree should read misplaced, got '$v'"
+[ "$v" = "misplaced"$'\t'"$PLACE_ROOT/primary" ] \
+  || fail "real herdr: the misplaced verdict should name the foreground cwd, got '$v'"
+fm_backend_herdr_send_text_line "$TARGET" \
+  "cd $PLACE_ROOT/wt && bash --noprofile --norc -c '(cd $PLACE_ROOT/primary && exec sleep 6) & exec sleep 7'" \
+  || fail "could not start the split-directory foreground"
+child_seen=0
+for _ in $(seq 1 30); do
+  if fm_backend_herdr_cli "$SESSION" pane process-info --pane "$PANE_ID" 2>/dev/null \
+    | jq -e --arg p "$PLACE_ROOT/primary" '[.result.process_info.foreground_processes[]? | select(.cwd == $p)] | length > 0' >/dev/null 2>&1; then
+    child_seen=1
+    break
+  fi
+  sleep 0.2
+done
+[ "$child_seen" = 1 ] || fail "real herdr: the foreground child never showed its own primary-checkout cwd, so the split case proves nothing"
+v=$(place_wait placed) || fail "real herdr: a foreground leader in the worktree should read placed despite a child elsewhere, got '$v'"
+sleep 7
+pass "real herdr: endpoint placement follows the foreground leader's cwd inside or outside the recorded worktree"
+
 # --- busy_state on a real claude harness (verified in herdr-verification-p2.md) ---
 
 if [ "${FM_HERDR_SMOKE_REAL_CLAUDE:-0}" = 1 ] && command -v claude >/dev/null 2>&1; then

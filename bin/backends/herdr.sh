@@ -3374,6 +3374,38 @@ fm_backend_herdr_current_path() {  # <target>
     | jq -r '.result.pane.foreground_cwd // empty' 2>/dev/null
 }
 
+# fm_backend_herdr_endpoint_placement: whether <target>'s live foreground runs
+# in <worktree> or below it. Prints `placed`, `misplaced<TAB><foreground-cwd>`,
+# or `unknown` when the pane or the worktree cannot be read.
+#
+# Why: Herdr 0.9.x resumes a registered agent after a server restart
+# (`resume_agents_on_restore`) as `claude --resume <session>` in the pane's top
+# shell, and a worker's top shell sits in the project's primary checkout,
+# because `treehouse get` opens the worktree in a nested subshell. The restored
+# worker is a live agent in the WRONG folder, where it can edit the primary
+# checkout, and every liveness read used to call it plainly alive (verified on
+# herdr 0.9.5 with claude 2.1.307: pane cwd and foreground_cwd both the
+# primary checkout, foreground `claude --resume <id>`).
+#
+# The signal is the foreground process group leader's cwd, never the pane's
+# top-shell cwd: that is the primary checkout on every healthy treehouse worker.
+# The leader is the harness itself, which keeps its launch directory while its
+# tool children run anywhere (verified: a child in another directory does not
+# move foreground_cwd), and the comparison is physical so a symlinked prefix
+# does not read as misplaced.
+fm_backend_herdr_endpoint_placement() {  # <target> <worktree>
+  local seen seen_real wt_real
+  [ -n "${2:-}" ] && [ -d "$2" ] || { printf 'unknown'; return 0; }
+  seen=$(fm_backend_herdr_current_path "$1" 2>/dev/null)
+  [ -n "$seen" ] || { printf 'unknown'; return 0; }
+  wt_real=$(fm_backend_herdr_physical_path "$2")
+  seen_real=$(fm_backend_herdr_physical_path "$seen")
+  case "$seen_real" in
+    "$wt_real" | "$wt_real"/*) printf 'placed' ;;
+    *) printf 'misplaced\t%s' "$seen" ;;
+  esac
+}
+
 # fm_backend_herdr_send_text_line: send one line of TEXT then submit,
 # ATOMICALLY - mirrors tmux's `send-keys -t T text Enter`. Used for the fixed
 # spawn-time commands (treehouse get, the GOTMPDIR export). `pane run` types
