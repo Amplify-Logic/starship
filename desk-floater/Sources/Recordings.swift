@@ -22,6 +22,29 @@ enum Recording {
     /// The capture format's bytes per second (16 kHz, 16-bit, mono), for a file
     /// whose header was never finished.
     private static let bytesPerSecond: Double = 32_000
+    /// A recording whose loudest sample stays below this (about -48 dBFS) is
+    /// near silence: the microphone delivered nothing usable, so there are no
+    /// words to send or to retry. Speech peaks far above it.
+    static let silentPeak: Float = 1.0 / 256
+
+    /// Whether the microphone gave only near silence for the whole recording.
+    /// A file that cannot be read is not called silent.
+    static func isSilent(_ url: URL) -> Bool {
+        guard let file = try? AVAudioFile(forReading: url),
+              let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: 16_384)
+        else { return false }
+        var frames: AVAudioFramePosition = 0
+        while (try? file.read(into: buffer)) != nil, buffer.frameLength > 0,
+              let samples = buffer.floatChannelData {
+            frames += AVAudioFramePosition(buffer.frameLength)
+            for channel in 0..<Int(buffer.format.channelCount) {
+                for frame in 0..<Int(buffer.frameLength) where abs(samples[channel][frame]) >= silentPeak {
+                    return false
+                }
+            }
+        }
+        return frames > 0
+    }
 
     /// Whether a recording that produced no words is worth keeping.
     static func keep(failed: Bool, duration: TimeInterval) -> Bool {

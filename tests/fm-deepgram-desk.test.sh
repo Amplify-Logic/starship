@@ -308,6 +308,8 @@ test_stt_bounds_a_long_request_and_retries_without_a_length_cap() {
   assert_contains "$(cat "$home/curl.log")" "--connect-timeout 15" "connecting is bounded"
   assert_contains "$(cat "$home/curl.log")" "--max-time $(( 120 + bytes / 100000 ))" \
     "the request bound grows with the recording instead of capping it"
+  assert_contains "$(cat "$home/curl.log")" "--speed-limit 1 --speed-time $(( 20 + bytes / 1000000 ))" \
+    "a stalled request gives up after a window that covers Deepgram's work on the file"
   assert_contains "$(cat "$home/curl.log")" "--retry 2" "a dropped or busy request is retried"
   pass "fm-deepgram-stt: a ten-minute recording is uploaded whole, with a bounded, retried request"
 }
@@ -321,8 +323,147 @@ test_stt_names_the_bound_when_deepgram_never_answers() {
   out=$(DEEPGRAM_API_KEY=test-key-not-real FM_DEEPGRAM_CURL="$home/curl" \
     "$STT" "$home/clip.wav" 2>&1) || status=$?
   [ "$status" -eq 1 ] || fail "a timed-out request must fail with 1, got $status: $out"
-  assert_contains "$out" "no answer within 120s" "the failure names the bound"
+  assert_contains "$out" "no answer within 120s, nothing moving for 20s" "the failure names the bounds"
   pass "fm-deepgram-stt: a request that times out fails instead of hanging"
+}
+
+# A local stand-in for Deepgram's listen endpoint, for real curl to talk to.
+# It reads each upload whole and answers <transcript>, except in two modes:
+# "stall-once" takes the first upload and never answers it, as Deepgram did on
+# 22 Oct 2026; "trickle" reads every upload slowly, over <seconds>, so the
+# bytes keep moving the whole time. Each upload it read lands in server.log as
+# "<bytes> <seconds-since-start>". FM_DEEPGRAM_CURL then runs real curl with
+# the request the helper built, sent to the stand-in.
+start_stt_server() {  # <home> <mode> <transcript> [seconds]
+  local home=$1 i
+  python3 - "$home" "$2" "$3" "${4:-0}" > /dev/null 2>&1 <<'PY' &
+import json, os, socket, sys, threading, time
+home, mode, transcript, seconds = sys.argv[1], sys.argv[2], sys.argv[3], float(sys.argv[4])
+began = time.monotonic()
+srv = socket.socket()
+if mode == "trickle":
+    srv.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
+srv.bind(("127.0.0.1", 0))
+srv.listen(4)
+lock = threading.Lock()
+served = [0]
+
+def handle(conn):
+    with lock:
+        served[0] += 1
+        n = served[0]
+    head = b""
+    while b"\r\n\r\n" not in head:
+        chunk = conn.recv(4096)
+        if not chunk:
+            return
+        head += chunk
+    head, body = head.split(b"\r\n\r\n", 1)
+    fields = {}
+    for line in head.split(b"\r\n")[1:]:
+        name, _, value = line.partition(b":")
+        fields[name.strip().lower()] = value.strip()
+    length = int(fields[b"content-length"])
+    if fields.get(b"expect", b"").lower() == b"100-continue":
+        conn.sendall(b"HTTP/1.1 100 Continue\r\n\r\n")
+    start = time.monotonic()
+    while len(body) < length:
+        if mode == "trickle":
+            time.sleep(max(0.0, start + seconds * len(body) / length - time.monotonic()))
+        chunk = conn.recv(min(4096, length - len(body)))
+        if not chunk:
+            return
+        body += chunk
+    with lock, open(home + "/server.log", "a") as log:
+        log.write("%d %.1f\n" % (len(body), time.monotonic() - began))
+    if mode == "stall-once" and n == 1:
+        time.sleep(600)
+        return
+    reply = json.dumps({"results": {"channels": [{"alternatives": [{"transcript": transcript}]}]}}).encode()
+    conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %d\r\n"
+                 b"Connection: close\r\n\r\n%s" % (len(reply), reply))
+    conn.close()
+
+with open(home + "/port.tmp", "w") as f:
+    f.write(str(srv.getsockname()[1]))
+os.rename(home + "/port.tmp", home + "/port")
+while True:
+    conn, _ = srv.accept()
+    threading.Thread(target=handle, args=(conn,), daemon=True).start()
+PY
+  printf '%s\n' "$!" > "$home/server.pid"
+  fm_test_track_pid "$!"
+  for i in $(seq 1 50); do
+    [ ! -f "$home/port" ] || break
+    sleep 0.1
+  done
+  [ -f "$home/port" ] || fail "the stand-in Deepgram did not start"
+  cat > "$home/curl" <<SH
+#!/usr/bin/env bash
+printf 'curl-argv: %s\n' "\$*" >> "$home/curl.log"
+args=()
+for a in "\$@"; do
+  case "\$a" in
+    https://api.deepgram.com/*) a="http://127.0.0.1:$(cat "$home/port")/\${a#https://api.deepgram.com/}" ;;
+  esac
+  args+=("\$a")
+done
+exec curl -q --noproxy '*' "\${args[@]}"
+SH
+  chmod +x "$home/curl"
+}
+
+stop_stt_server() {  # <home>
+  kill "$(cat "$1/server.pid")" 2>/dev/null || true
+}
+
+# On 22 Oct 2026 Deepgram took a 4.6-second recording and never answered; the
+# attempt waited out its two-minute bound before the retry answered, so the
+# message sat on "Transcribing..." for minutes. The stalled attempt now gives
+# up once nothing has moved for the stall window, and the retry answers.
+test_stt_gives_up_on_a_stalled_request_and_retries() {
+  local home out bytes began elapsed status=0
+  home=$(new_home stt-stall)
+  long_wav "$home/short.wav" 4.6
+  bytes=$(wc -c < "$home/short.wav" | tr -d ' ')
+  [ "$bytes" -gt 140000 ] || fail "the stand-in recording must be the size of 4.6 seconds of speech"
+  start_stt_server "$home" stall-once "a short reply"
+  began=$(date +%s)
+  out=$(DEEPGRAM_API_KEY=test-key-not-real FM_DEEPGRAM_CURL="$home/curl" \
+    "$STT" "$home/short.wav" 2> "$home/stderr") || status=$?
+  elapsed=$(( $(date +%s) - began ))
+  stop_stt_server "$home"
+  [ "$status" -eq 0 ] || fail "the retry must answer after a stalled attempt, got $status: $(cat "$home/stderr")"
+  [ "$out" = "a short reply" ] || fail "unexpected transcript: $out"
+  [ "$(awk '{ print $1 }' "$home/server.log" | tr '\n' ' ')" = "$bytes $bytes " ] \
+    || fail "the stalled upload must be sent whole once more: $(cat "$home/server.log")"
+  [ "$elapsed" -ge 20 ] || fail "the stalled attempt must wait out the stall window, gave up after ${elapsed}s"
+  [ "$elapsed" -lt 60 ] || fail "a stalled short recording must not wait minutes, took ${elapsed}s"
+  pass "fm-deepgram-stt: a request Deepgram takes and never answers is retried after ${elapsed}s, not minutes"
+}
+
+# A slow uplink keeps the upload moving for longer than the stall window; the
+# attempt must run on toward its full bound rather than be cut off and resent.
+test_stt_keeps_a_slow_upload_that_is_still_moving() {
+  local home out bytes began elapsed status=0
+  home=$(new_home stt-trickle)
+  long_wav "$home/minute.wav" 60
+  bytes=$(wc -c < "$home/minute.wav" | tr -d ' ')
+  start_stt_server "$home" trickle "a minute of thoughts" 24
+  began=$(date +%s)
+  out=$(DEEPGRAM_API_KEY=test-key-not-real FM_DEEPGRAM_CURL="$home/curl" \
+    "$STT" "$home/minute.wav" 2> "$home/stderr") || status=$?
+  elapsed=$(( $(date +%s) - began ))
+  stop_stt_server "$home"
+  [ "$status" -eq 0 ] || fail "a slow upload must not be cut off, got $status: $(cat "$home/stderr")"
+  [ "$out" = "a minute of thoughts" ] || fail "unexpected transcript: $out"
+  [ "$(awk '{ print $1 }' "$home/server.log" | tr '\n' ' ')" = "$bytes " ] \
+    || fail "the slow upload must arrive whole, once: $(cat "$home/server.log")"
+  [ "$elapsed" -gt $(( 20 + bytes / 1000000 )) ] \
+    || fail "the upload must outlast the stall window to prove anything, took ${elapsed}s"
+  assert_contains "$(cat "$home/curl.log")" "--max-time $(( 120 + bytes / 100000 ))" \
+    "the full per-byte bound still applies"
+  pass "fm-deepgram-stt: a slow upload that keeps moving outlasts the stall window and is answered"
 }
 
 # Runs the helper against a mocked Deepgram that returns <transcript>, with the
@@ -2849,6 +2990,8 @@ test_stt_prints_transcript_from_mocked_deepgram
 test_stt_reports_http_failure
 test_stt_bounds_a_long_request_and_retries_without_a_length_cap
 test_stt_names_the_bound_when_deepgram_never_answers
+test_stt_gives_up_on_a_stalled_request_and_retries
+test_stt_keeps_a_slow_upload_that_is_still_moving
 test_stt_without_vocabulary_sends_no_hints
 test_stt_vocabulary_key_terms_reach_the_request_encoded
 test_stt_starter_vocabulary_sends_only_its_terms

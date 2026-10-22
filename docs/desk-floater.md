@@ -75,6 +75,8 @@ Firstmate's text replies stay the authoritative ones, and nothing about how Firs
 You can talk while a reply is being spoken.
 The reply keeps playing, and it stays out of your message: the floater records with macOS voice processing, which removes the Mac's own playback from the microphone.
 macOS always lowers other audio a little while voice processing records; the floater sets that to the minimum, applied only while you are actually speaking, so a reply may dip briefly but is never paused or stopped.
+When the Mac's sound output is a Multi-Output Device or a virtual device such as BlackHole, voice processing listens against the Mac's built-in speakers instead.
+macOS cannot use a Multi-Output Device for it and picks a device inside it, and against a virtual device it leaves a MacBook's built-in microphone unboosted, so the recording would come out near silent.
 Recording starts the moment you press: once the microphone is allowed, the floater gets it ready when it opens and again after your audio devices change, so your first words are kept.
 After you release, it keeps listening for a moment, so a last word still being spoken is not cut off.
 `desk-floater/Sources/VoiceCapture.swift` owns the capture.
@@ -256,13 +258,16 @@ When the words do not arrive, the recording is saved instead:
 - Transcription came back with no words from a recording at least two seconds long. A shorter one is taken as a stray press, shows `No speech`, and is not kept.
 - The message could not be delivered at all.
 
+A recording that comes out near silent is the exception: the microphone delivered nothing usable, so it is neither transcribed nor kept, and the status line reads `Mic silent - not sent` at once, so you can check the microphone and say it again.
+`desk-floater/Sources/Recordings.swift` owns what counts as near silent.
+
 Saved recordings go to `state/desk-voice/unsent/`, readable only by your own account.
 A talk-to-Firstmate recording is tried again by the floater itself after about 20 seconds, a minute and five minutes, and the status line reads `Saved - retrying` meanwhile.
 One that works on a retry is sent to Firstmate as usual, a little later than you spoke it, and the status line says how it went.
 After the last automatic try the status line reads `Saved, not sent` and the recording stays saved.
 A dictation is not tried again by itself, since its words belong where your cursor was when you spoke: the status line reads `Saved, not sent` and the recording stays saved until you retry it.
 Words held back for screenshots that then fail to send are saved and retried the same way, without the screenshots, which stay in `state/desk-voice/shots/`.
-If the floater stops while a recording is being made or transcribed, it saves that recording the next time it starts and, for talk to Firstmate, tries it again.
+If the floater stops while a recording is being made or transcribed, it saves that recording the next time it starts, unless it is near silent, and, for talk to Firstmate, tries it again.
 
 To see and transcribe saved recordings yourself, or ask Firstmate to:
 
@@ -279,7 +284,9 @@ A saved recording is never removed by itself: it goes only once its words are de
 
 A message has no length limit: a ten-minute recording is transcribed whole and arrives like any other.
 A long one takes longer to transcribe, and the status line reads `Transcribing…` until it is done.
-The transcription request cannot hang: each attempt gives up after a time that grows with the recording, about five minutes for a ten-minute one, and a timeout, a dropped connection or a busy Deepgram is retried twice, so a ten-minute recording waits about 16 minutes at worst before it fails.
+The transcription request cannot hang: each attempt gives up after a time that grows with the recording, about five minutes for a ten-minute one, so a slow connection still has time to send a long recording.
+An attempt on which nothing has moved for 20 seconds, a little longer for a long recording, also gives up: Deepgram now and then takes a recording and never answers, and the retry usually answers at once, so a short message is not left on `Transcribing…` for minutes.
+A stalled or timed-out attempt, a dropped connection or a busy Deepgram is retried twice, so a ten-minute recording waits about 16 minutes at worst before it fails.
 A recording whose transcription still fails is saved and retried as above.
 `bin/fm-deepgram-stt.sh`'s header owns those limits.
 

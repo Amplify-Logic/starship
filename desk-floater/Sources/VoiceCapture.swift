@@ -13,6 +13,16 @@ import Foundation
 /// bin/fm-speak.sh starts, so the reply keeps playing and stays out of the
 /// message.
 ///
+/// Voice processing compares the microphone with one output device, and it
+/// boosts a MacBook's built-in microphone (by about 40 dB) only when that
+/// device is one macOS has tuned it for, such as the built-in speakers. It
+/// cannot compare against a Multi-Output Device, so it picks one of the
+/// devices inside it, which can be a virtual one such as BlackHole; against a
+/// virtual device it leaves the microphone unboosted and the recording comes
+/// out near silent. When the default output is a Multi-Output (aggregate) or
+/// virtual device, the engine therefore compares against the Mac's built-in
+/// output instead (see `ReferenceOutput`).
+///
 /// macOS always lowers other audio while voice processing captures; there is no
 /// setting that turns that off. The lowering is set to its minimum and to apply
 /// only while speech is detected, so a reply dips briefly while the captain
@@ -161,6 +171,19 @@ final class VoiceEngine: CaptureEngine {
     init() throws {
         let input = engine.inputNode
         try input.setVoiceProcessingEnabled(true)
+        if var output = ReferenceOutput.choose(
+            defaultOutput: Self.defaultDevice(kAudioHardwarePropertyDefaultOutputDevice),
+            devices: Self.outputDevices()), let unit = engine.outputNode.audioUnit {
+            // Best effort: should macOS refuse, the recording is no worse than
+            // before, and a near-silent one is reported rather than sent.
+            let status = AudioUnitSetProperty(
+                unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0,
+                &output, UInt32(MemoryLayout<AudioDeviceID>.size))
+            if status != noErr {
+                NSLog("DeskFloater: macOS refused output device %u as the voice-processing reference (OSStatus %d)",
+                      output, status)
+            }
+        }
         input.voiceProcessingOtherAudioDuckingConfiguration =
             AVAudioVoiceProcessingOtherAudioDuckingConfiguration(
                 enableAdvancedDucking: true, duckingLevel: .min)
@@ -200,6 +223,32 @@ final class VoiceEngine: CaptureEngine {
         return device
     }
 
+    /// Every audio device with its transport type and whether it plays sound.
+    private static func outputDevices() -> [OutputDevice] {
+        let system = AudioObjectID(kAudioObjectSystemObject)
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDevices, mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        var size: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(system, &address, 0, nil, &size) == noErr else { return [] }
+        var ids = [AudioDeviceID](repeating: 0, count: Int(size) / MemoryLayout<AudioDeviceID>.size)
+        guard AudioObjectGetPropertyData(system, &address, 0, nil, &size, &ids) == noErr else { return [] }
+        return ids.map { id in
+            var transport: UInt32 = 0
+            var transportSize = UInt32(MemoryLayout<UInt32>.size)
+            var transportAddress = AudioObjectPropertyAddress(
+                mSelector: kAudioDevicePropertyTransportType, mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain)
+            AudioObjectGetPropertyData(id, &transportAddress, 0, nil, &transportSize, &transport)
+            var streams: UInt32 = 0
+            var streamsAddress = AudioObjectPropertyAddress(
+                mSelector: kAudioDevicePropertyStreams, mScope: kAudioObjectPropertyScopeOutput,
+                mElement: kAudioObjectPropertyElementMain)
+            AudioObjectGetPropertyDataSize(id, &streamsAddress, 0, nil, &streams)
+            return OutputDevice(id: id, transport: transport, plays: streams > 0)
+        }
+    }
+
     func installTap(_ block: @escaping (AVAudioPCMBuffer) -> Void) {
         let input = engine.inputNode
         input.installTap(onBus: 0, bufferSize: 4096, format: input.outputFormat(forBus: 0)) { buffer, _ in
@@ -226,6 +275,30 @@ struct AudioSetup: Equatable {
     var format: AVAudioFormat
     var input: AudioDeviceID
     var output: AudioDeviceID
+}
+
+/// An audio device as `ReferenceOutput` sees it.
+struct OutputDevice: Equatable {
+    var id: AudioDeviceID
+    /// The CoreAudio transport type, such as built-in, aggregate or virtual.
+    var transport: UInt32
+    /// Whether it has output streams, so it plays sound.
+    var plays: Bool
+}
+
+/// Which output voice processing compares the microphone against. macOS uses
+/// the default output, which suits a real device. A Multi-Output (aggregate)
+/// or virtual default output leaves the microphone unboosted and the recording
+/// near silent (see `VoiceCapture`), so the built-in output is used instead.
+enum ReferenceOutput {
+    /// The device to compare against, or nil to leave macOS's own choice.
+    static func choose(defaultOutput: AudioDeviceID, devices: [OutputDevice]) -> AudioDeviceID? {
+        guard let current = devices.first(where: { $0.id == defaultOutput }),
+              [kAudioDeviceTransportTypeAggregate, kAudioDeviceTransportTypeAutoAggregate,
+               kAudioDeviceTransportTypeVirtual].contains(current.transport)
+        else { return nil }
+        return devices.first { $0.transport == kAudioDeviceTransportTypeBuiltIn && $0.plays }?.id
+    }
 }
 
 /// Turns the voice-processed input into the transcription format. Voice

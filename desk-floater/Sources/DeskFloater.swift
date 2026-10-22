@@ -863,6 +863,7 @@ final class FloaterModel: ObservableObject {
     }
 
     static let savedRetrying = "Saved - retrying"
+    static let micSilent = "Mic silent - not sent"
 
     var idleStatus: String {
         if stack.transcript != nil {
@@ -1324,8 +1325,17 @@ final class FloaterModel: ObservableObject {
         }
     }
 
-    private func transcribeAndDeliver(_ url: URL, purpose: Purpose) {
+    func transcribeAndDeliver(_ url: URL, purpose: Purpose) {
         Task.detached(priority: .userInitiated) { [repoRoot, fmHome] in
+            // Near silence holds no words to send or to retry: say so at once
+            // rather than saving it and retrying it.
+            if Recording.isSilent(url) {
+                try? FileManager.default.removeItem(at: url)
+                await MainActor.run {
+                    self.finish(status: Self.micSilent, for: 6)
+                }
+                return
+            }
             let transcript = Self.transcribe(repoRoot: repoRoot, fmHome: fmHome, audio: url)
             let text = transcript?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             guard !text.isEmpty else {
@@ -1480,7 +1490,8 @@ final class FloaterModel: ObservableObject {
                    Date().timeIntervalSince(modified) < 10 {
                     continue
                 }
-                if Recording.keep(failed: true, duration: Recording.duration(of: url)) {
+                if !Recording.isSilent(url),
+                   Recording.keep(failed: true, duration: Recording.duration(of: url)) {
                     _ = Self.keep(repoRoot: repoRoot, fmHome: fmHome, audio: url,
                                   purpose: Recording.purpose(ofFileName: name),
                                   reason: "the floater stopped before it was sent")

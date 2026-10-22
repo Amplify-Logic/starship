@@ -209,3 +209,37 @@ final class VoiceCaptureTests: XCTestCase {
         XCTAssertEqual(try seconds(in: second), 0.5, accuracy: 0.05)
     }
 }
+
+final class ReferenceOutputTests: XCTestCase {
+    private let speakers = OutputDevice(id: 134, transport: kAudioDeviceTransportTypeBuiltIn, plays: true)
+    private let microphone = OutputDevice(id: 141, transport: kAudioDeviceTransportTypeBuiltIn, plays: false)
+    private let blackHole = OutputDevice(id: 63, transport: kAudioDeviceTransportTypeVirtual, plays: true)
+    private let multiOutput = OutputDevice(id: 59, transport: kAudioDeviceTransportTypeAggregate, plays: true)
+    private let usb = OutputDevice(id: 70, transport: kAudioDeviceTransportTypeUSB, plays: true)
+
+    /// The setup behind the silent recordings of 22 Oct 2026: the default
+    /// output was a Multi-Output Device holding the speakers and BlackHole, and
+    /// voice processing compared against BlackHole, leaving the microphone
+    /// unboosted. The built-in speakers are used instead.
+    func testAMultiOutputDeviceIsReplacedByTheBuiltInSpeakers() {
+        let devices = [microphone, blackHole, speakers, multiOutput]
+        XCTAssertEqual(ReferenceOutput.choose(defaultOutput: multiOutput.id, devices: devices), speakers.id)
+    }
+
+    func testAVirtualDefaultOutputIsReplacedByTheBuiltInSpeakers() {
+        let devices = [blackHole, microphone, speakers]
+        XCTAssertEqual(ReferenceOutput.choose(defaultOutput: blackHole.id, devices: devices), speakers.id,
+                       "the built-in microphone, which plays nothing, is never chosen")
+    }
+
+    func testARealDefaultOutputIsLeftToMacOS() {
+        let devices = [microphone, speakers, usb, blackHole, multiOutput]
+        XCTAssertNil(ReferenceOutput.choose(defaultOutput: speakers.id, devices: devices))
+        XCTAssertNil(ReferenceOutput.choose(defaultOutput: usb.id, devices: devices))
+    }
+
+    func testWithoutBuiltInSpeakersMacOSKeepsItsChoice() {
+        XCTAssertNil(ReferenceOutput.choose(defaultOutput: multiOutput.id, devices: [blackHole, multiOutput, usb]))
+        XCTAssertNil(ReferenceOutput.choose(defaultOutput: 99, devices: [speakers]), "an unknown default is left alone")
+    }
+}
