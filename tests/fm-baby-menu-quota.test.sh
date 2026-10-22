@@ -28,6 +28,24 @@ make_home() {
   printf '%s\n' "$home"
 }
 
+# The extension ids Baby Menu's loader would register for a home. The packaged
+# app's widget registry (src/main/widget-module-registry.ts) walks every
+# subdirectory of extensions/ recursively, dot-prefixed or not, and turns each
+# widget.tsx into an extension whose id is the first path segment below
+# extensions/. A backup kept anywhere under that root therefore renders as a
+# second copy of the whole panel, which is the regression these tests pin.
+discovered_extension_ids() {
+  local home=$1
+  ( cd "$home/extensions" && find . -type f -name 'widget.tsx' | awk -F/ '{ print $2 }' | sort -u | tr '\n' ' ' )
+}
+
+assert_only_the_expected_widgets_are_discovered() {
+  local home=$1 why=$2 ids
+  ids=$(discovered_extension_ids "$home")
+  [ "$ids" = "some-other-widget weekly-quota " ] \
+    || fail "$why: Baby Menu would discover [$ids], expected only the unrelated extension and weekly-quota"
+}
+
 test_install_places_every_widget_file() {
   local root home out file
   root=$(fm_test_tmproot fm-bm-install)
@@ -77,7 +95,7 @@ test_second_run_is_safe_and_keeps_local_settings() {
 
   # No backup copy is left behind when nothing needed replacing.
   local backups
-  backups=$(find "$home/extensions" -maxdepth 1 -name '.weekly-quota-backup-*' | wc -l | tr -d ' ')
+  backups=$(find "$home/backups" -maxdepth 1 -name 'weekly-quota-backup-*' 2>/dev/null | wc -l | tr -d ' ')
   [ "$backups" = "0" ] || fail "an unchanged second run must not create a backup"
   pass "a second run changes nothing and preserves machine-local settings"
 }
@@ -91,12 +109,122 @@ test_replacing_a_modified_widget_keeps_the_previous_copy() {
   printf '// locally edited\n' >>"$home/extensions/weekly-quota/store.ts"
   "$INSTALL" --home "$home" >/dev/null 2>&1 || fail "reinstall failed"
 
-  backup=$(find "$home/extensions" -maxdepth 1 -name '.weekly-quota-backup-*' | head -1)
-  [ -n "$backup" ] || fail "replacing a modified widget must keep the previous copy"
+  backup=$(find "$home/backups" -maxdepth 1 -name 'weekly-quota-backup-*' | head -1)
+  [ -n "$backup" ] || fail "replacing a modified widget must keep the previous copy under backups/"
   assert_grep '// locally edited' "$backup/store.ts" "the backup must hold the replaced content"
   assert_no_grep '// locally edited' "$home/extensions/weekly-quota/store.ts" \
     "the reinstalled widget must be the tracked source"
-  pass "replacing a modified widget keeps the previous copy beside it"
+  # The regression: the previous copy still holds a widget.tsx, so it must sit
+  # outside the directory the loader walks or the panel renders twice.
+  assert_present "$backup/widget.tsx" "the backup must be a complete copy of the previous widget"
+  case "$backup" in
+    "$home/extensions"/*) fail "a backup must never live under extensions/, where Baby Menu loads it as a second panel: $backup" ;;
+  esac
+  assert_only_the_expected_widgets_are_discovered "$home" "after a replacing install"
+  pass "replacing a modified widget keeps the previous copy outside the loader's reach"
+}
+
+test_legacy_backup_inside_extensions_is_moved_out_on_rerun() {
+  local root home legacy moved out
+  root=$(fm_test_tmproot fm-bm-legacy)
+  home=$(make_home "$root")
+
+  # A home upgraded by the earlier installer: the widget is current, but the
+  # previous copy was kept as a dot-directory inside extensions/, where the
+  # loader found it and drew the whole QUOTA panel a second time.
+  "$INSTALL" --home "$home" >/dev/null 2>&1 || fail "first install failed"
+  legacy="$home/extensions/.weekly-quota-backup-20260911T072105Z.DHGudf"
+  mkdir -p "$legacy"
+  printf 'export const previous = 1;\n' >"$legacy/widget.tsx"
+  printf '// previous server\n' >"$legacy/server.ts"
+  [ "$(discovered_extension_ids "$home")" = ".weekly-quota-backup-20260911T072105Z.DHGudf some-other-widget weekly-quota " ] \
+    || fail "test setup must reproduce the duplicate discovery before the fix runs"
+
+  out=$("$INSTALL" --home "$home" 2>&1)
+  expect_code 0 $? "re-run on a home carrying a legacy backup"
+  assert_contains "$out" "moved the old backup" "the re-run must report the relocation"
+  assert_contains "$out" "already matches" "an up-to-date widget must still not be reinstalled"
+  assert_absent "$legacy" "the legacy backup must no longer sit inside extensions/"
+  moved="$home/backups/weekly-quota-backup-20260911T072105Z.DHGudf"
+  assert_present "$moved/widget.tsx" "the legacy backup must be moved, not deleted"
+  assert_grep '// previous server' "$moved/server.ts" "the moved backup must keep its content"
+  assert_only_the_expected_widgets_are_discovered "$home" "after relocating a legacy backup"
+  assert_grep 'export const other = 1;' "$home/extensions/some-other-widget/widget.tsx" \
+    "relocation must leave an unrelated extension untouched"
+
+  # And a third run has nothing left to move: the home has converged.
+  out=$("$INSTALL" --home "$home" 2>&1)
+  expect_code 0 $? "third run after relocation"
+  assert_not_contains "$out" "moved the old backup" "a converged home must report no further relocation"
+  pass "a legacy backup inside extensions/ is moved out on re-run and the home converges"
+}
+
+test_unmovable_legacy_backup_is_reported_on_stderr_and_fails_the_run() {
+  local root home legacy taken out err status
+  root=$(fm_test_tmproot fm-bm-legacy-taken)
+  home=$(make_home "$root")
+  "$INSTALL" --home "$home" >/dev/null 2>&1 || fail "first install failed"
+  legacy="$home/extensions/.weekly-quota-backup-20260911T072105Z.DHGudf"
+  taken="$home/backups/weekly-quota-backup-20260911T072105Z.DHGudf"
+  mkdir -p "$legacy" "$taken"
+  printf 'export const previous = 1;\n' >"$legacy/widget.tsx"
+  printf 'export const earlier = 1;\n' >"$taken/widget.tsx"
+
+  # The destination name is already taken, so the installer must neither merge
+  # nor overwrite. But the duplicate panel remains, and a zero exit with the
+  # warning on stdout would let an unattended re-run pass as converged.
+  out=$("$INSTALL" --home "$home" 2>"$root/stderr") && status=0 || status=$?
+  err=$(cat "$root/stderr")
+  expect_code 1 "$status" "re-run with an unmovable legacy backup"
+  assert_contains "$err" "WARNING" "the unmovable backup must be reported on stderr"
+  assert_contains "$err" "could not be moved" "the failing completion must say what was left behind"
+  assert_not_contains "$out" "WARNING" "the warning must not be buried in stdout"
+  assert_present "$legacy/widget.tsx" "the legacy backup must be left in place, never deleted"
+  assert_grep 'export const earlier = 1;' "$taken/widget.tsx" "the existing backup must not be overwritten"
+  assert_present "$home/extensions/weekly-quota/widget.tsx" "the widget itself must still be installed"
+  assert_contains "$out" "already matches" "the rest of the install must still run before the failing exit"
+  pass "an unmovable legacy backup is reported on stderr and the run exits non-zero"
+}
+
+test_dry_run_reports_a_legacy_backup_without_moving_it() {
+  local root home legacy out
+  root=$(fm_test_tmproot fm-bm-legacy-dry)
+  home=$(make_home "$root")
+  "$INSTALL" --home "$home" >/dev/null 2>&1 || fail "first install failed"
+  legacy="$home/extensions/.weekly-quota-backup-20260911T072105Z.DHGudf"
+  mkdir -p "$legacy" && printf 'export const previous = 1;\n' >"$legacy/widget.tsx"
+
+  out=$("$INSTALL" --home "$home" --dry-run 2>&1)
+  expect_code 0 $? "dry run with a legacy backup"
+  assert_contains "$out" "would move the old backup" "dry run must name the legacy backup it would relocate"
+  assert_present "$legacy/widget.tsx" "dry run must not move the legacy backup"
+  assert_absent "$home/backups" "dry run must not create the backups directory"
+  pass "dry run reports a legacy backup and moves nothing"
+}
+
+test_dry_run_reports_an_unmovable_legacy_backup_and_fails_like_the_real_run() {
+  local root home legacy taken out err status
+  root=$(fm_test_tmproot fm-bm-legacy-dry-taken)
+  home=$(make_home "$root")
+  "$INSTALL" --home "$home" >/dev/null 2>&1 || fail "first install failed"
+  legacy="$home/extensions/.weekly-quota-backup-20260911T072105Z.DHGudf"
+  taken="$home/backups/weekly-quota-backup-20260911T072105Z.DHGudf"
+  mkdir -p "$legacy" "$taken"
+  printf 'export const previous = 1;\n' >"$legacy/widget.tsx"
+  printf 'export const earlier = 1;\n' >"$taken/widget.tsx"
+
+  # The preview must not promise a move the real run would refuse: the taken
+  # destination is already a fact, so dry run warns and fails the same way.
+  out=$("$INSTALL" --home "$home" --dry-run 2>"$root/stderr") && status=0 || status=$?
+  err=$(cat "$root/stderr")
+  expect_code 1 "$status" "dry run with an unmovable legacy backup"
+  assert_contains "$err" "WARNING" "dry run must report the unmovable backup on stderr"
+  assert_contains "$err" "could not be moved" "dry run must fail its completion like the real run"
+  assert_not_contains "$out" "would move the old backup" "dry run must not promise a move the real run refuses"
+  assert_present "$legacy/widget.tsx" "dry run must leave the legacy backup in place"
+  assert_grep 'export const earlier = 1;' "$taken/widget.tsx" "dry run must leave the existing backup untouched"
+  assert_absent "$home/backups/.weekly-quota-backup-20260911T072105Z.DHGudf" "dry run must move nothing"
+  pass "dry run reports an unmovable legacy backup and exits non-zero like the real run"
 }
 
 test_repeated_replacements_keep_separate_backups() {
@@ -113,16 +241,17 @@ test_repeated_replacements_keep_separate_backups() {
   printf '// second local edit\n' >>"$home/extensions/weekly-quota/store.ts"
   "$INSTALL" --home "$home" >/dev/null 2>&1 || fail "second reinstall failed"
 
-  count=$(find "$home/extensions" -maxdepth 1 -type d -name '.weekly-quota-backup-*' | wc -l | tr -d ' ')
+  count=$(find "$home/backups" -maxdepth 1 -type d -name 'weekly-quota-backup-*' | wc -l | tr -d ' ')
   [ "$count" = "2" ] || fail "two replacing installs must keep two separate backups, found $count"
-  nested=$(find "$home/extensions" -maxdepth 1 -type d -name '.weekly-quota-backup-*' \
+  nested=$(find "$home/backups" -maxdepth 1 -type d -name 'weekly-quota-backup-*' \
     -exec test -e '{}/weekly-quota' \; -print)
   [ -z "$nested" ] || fail "a backup must never be nested inside another backup: $nested"
-  grep -rq -e '// first local edit' "$home/extensions"/.weekly-quota-backup-* \
+  grep -rq -e '// first local edit' "$home/backups"/weekly-quota-backup-* \
     || fail "the first replaced copy must be recoverable from its own backup"
-  grep -rq -e '// second local edit' "$home/extensions"/.weekly-quota-backup-* \
+  grep -rq -e '// second local edit' "$home/backups"/weekly-quota-backup-* \
     || fail "the second replaced copy must be recoverable from its own backup"
-  pass "each replacing install keeps its own backup beside the widget"
+  assert_only_the_expected_widgets_are_discovered "$home" "after two replacing installs"
+  pass "each replacing install keeps its own backup under backups/"
 }
 
 test_example_settings_written_only_when_the_real_file_is_absent() {
@@ -445,6 +574,10 @@ test_install_places_every_widget_file
 test_install_preserves_unrelated_extensions_and_app_files
 test_second_run_is_safe_and_keeps_local_settings
 test_replacing_a_modified_widget_keeps_the_previous_copy
+test_legacy_backup_inside_extensions_is_moved_out_on_rerun
+test_unmovable_legacy_backup_is_reported_on_stderr_and_fails_the_run
+test_dry_run_reports_a_legacy_backup_without_moving_it
+test_dry_run_reports_an_unmovable_legacy_backup_and_fails_like_the_real_run
 test_repeated_replacements_keep_separate_backups
 test_example_settings_written_only_when_the_real_file_is_absent
 test_missing_home_is_refused_rather_than_created

@@ -16,7 +16,7 @@ bin/fm-install-baby-menu-quota.sh --dry-run  # report what would change, write n
 `bin/fm-install-baby-menu-quota.sh --help` owns the exact flags, the backup behavior, and the refusal cases.
 The app watches its own extensions directory and rebuilds a changed widget by itself, so the installer never starts, stops, or restarts the app.
 
-The installer touches only its own extension directory and one example settings file.
+The installer touches only its own extension directory, its own backups under `backups/`, and one example settings file.
 Other extensions, the app bundle, preferences, credentials, and the app database are left exactly as they were, and a re-run of an unchanged install replaces no widget file and never touches your own settings file - it only re-seeds the example one until you have written your own.
 
 ## The one machine-local setting
@@ -85,4 +85,6 @@ That provenance record is the licensing obligation this repository carries; do n
 - The second seat has one reader.
   Its rows report that the read is unavailable rather than falling back to the other seat's numbers.
 - Reinstalling replaces the whole widget directory.
-  Local edits are kept as a timestamped backup beside it; copy anything you want to keep back out of that directory.
+  Local edits are kept as a timestamped backup under `~/.baby-menu/backups/`; copy anything you want to keep back out of that directory.
+  Backups deliberately stay outside `extensions/`: Baby Menu registers every `widget.tsx` it finds anywhere under that directory, dot-prefixed or not, so a backup kept there renders the whole quota panel a second time.
+  A re-run moves any backup an earlier installer left inside `extensions/` out to `backups/`; when that destination name is already taken it leaves the directory in place, reports it on stderr, and exits non-zero, in a dry run too (`--help` owns the details).
