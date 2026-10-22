@@ -118,7 +118,7 @@ parity_run() {  # <dir> <watch> <label> <crew-state> <cap-assignment> [extra-env
     FM_FAKE_CREW_STATE="$crew" FM_WATCH_HANDLING_SUCCESSOR=1 \
     FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
     FM_STALE_ESCALATE_SECS=240 \
-    PATH="$dir/fakebin:$PATH" "${cap_args[@]}" "$@" \
+    PATH="$dir/fakebin:$PATH" ${cap_args[@]+"${cap_args[@]}"} "$@" \
     bash "$watch" > "$out" &
   pid=$!
   wait_for_exit "$pid" 100 || {
