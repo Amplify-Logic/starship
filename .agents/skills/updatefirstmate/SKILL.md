@@ -94,6 +94,8 @@ This touches only the firstmate repo, its own worktrees, and a configured privat
    For example: "Captain, firstmate and both second mates are now on the latest."
    Say plainly when a mate got the message rather than a clean reload, and why - never let a partial reload read as a full one.
    Surface any skipped target whose reason needs the captain's attention - for instance a home with its own un-landed changes (diverged) or local edits (dirty), which were left untouched on purpose.
+   Updating Starship never upgrades the tools beneath it, so also run `FM_HOME=<this-firstmate-home> bin/fm-stack-versions.sh notice`, which reuses this home's once-a-day release cache.
+   When it prints a line, name each tool that is behind in the same report, installed and target version (latest, or Starship's pin for Herdr) and whether it is a small update or a quiet-window upgrade, and handle it as `bootstrap-diagnostics` does for `STACK_TOOLS:`: install nothing without the captain's yes; when it prints nothing, say nothing about tools.
 
 ## Safety
 

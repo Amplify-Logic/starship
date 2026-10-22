@@ -11,6 +11,13 @@
 #   - Herdr and treehouse upgrades are flagged for a quiet window with no
 #     workers running; any other update is small and waits for a yes.
 #   - It only reports: no package manager or installer is ever invoked.
+#   - `notice` prints one line naming each installed tool that is behind, as a
+#     small update or a quiet-window upgrade, judging Herdr against Starship's
+#     exact pin and every other tool against its latest release, and nothing
+#     when no installed tool is known to be behind.
+#   - `notice` caches the whole lookup result, failed lookups included, for a
+#     day per home, names a tool it could not check only on the run that
+#     refreshed that result, and probes installed versions on every run.
 set -u
 
 # shellcheck source=tests/lib.sh disable=SC1091
@@ -69,6 +76,14 @@ run_report() {
   local root=$1 bin=$2
   shift 2
   env "$@" PATH="$bin:/usr/bin:/bin" FM_ROOT_OVERRIDE="$root" FM_STACK_VERSIONS_TIMEOUT=5 "$VERSIONS" report
+}
+
+# run_notice <root> <bin> <state> [env...]
+run_notice() {
+  local root=$1 bin=$2 state=$3
+  shift 3
+  env FM_TEST_STACK_VERSIONS_NOTICE=1 "$@" PATH="$bin:/usr/bin:/bin" FM_ROOT_OVERRIDE="$root" \
+    FM_STATE_OVERRIDE="$state" FM_STACK_VERSIONS_TIMEOUT=5 "$VERSIONS" notice
 }
 
 test_plain_words_per_tool() {
@@ -133,6 +148,83 @@ test_offline_reports_without_failing() {
   pass 'with no network the report still completes and says what it could not compare'
 }
 
+test_notice_names_behind_tools_on_one_line() {
+  local root="$TMP_ROOT/notice/root" bin="$TMP_ROOT/notice/bin" state="$TMP_ROOT/notice/state" out
+  new_root "$root"
+  new_bin "$bin"
+  mkdir -p "$state"
+  fake_tool "$bin" herdr 'herdr 0.7.4'
+  fake_tool "$bin" treehouse 'v2.0.0'
+  fake_tool "$bin" no-mistakes 'no-mistakes version v1.84.0 (4822244) 2026-09-26T08:31:07Z'
+  fake_tool "$bin" gh-axi '0.1.20'
+  fake_tool "$bin" chrome-devtools-axi '0.1.42'
+  fake_tool "$bin" quota-axi 'quota-axi development build'
+  fake_tool "$bin" tasks-axi '0.2.6'
+  out=$(run_notice "$root" "$bin" "$state" FM_TEST_HERDR_LATEST=v0.10.0)
+  [ "$out" = 'STACK_TOOLS: behind: Herdr installed 0.7.4, pinned 0.9.5 (quiet-window upgrade); treehouse installed 2.0.0, latest 3.1.4 (quiet-window upgrade); gh-axi installed 0.1.20, latest 0.1.43 (small update) - could not check: chrome-devtools-axi, quota-axi' ] \
+    || fail "notice line was not the one plain line expected: $out"
+  [ ! -e "$bin/installer-calls" ] || fail "the notice invoked an installer: $(cat "$bin/installer-calls")"
+
+  out=$(run_notice "$root" "$bin" "$state" FM_TEST_HERDR_LATEST=v0.10.0)
+  [ "$out" = 'STACK_TOOLS: behind: Herdr installed 0.7.4, pinned 0.9.5 (quiet-window upgrade); treehouse installed 2.0.0, latest 3.1.4 (quiet-window upgrade); gh-axi installed 0.1.20, latest 0.1.43 (small update)' ] \
+    || fail "a later run the same day did not repeat only the behind tools: $out"
+
+  rm -f "$bin/chrome-devtools-axi" "$bin/treehouse"
+  fake_tool "$bin" herdr 'herdr 0.9.5'
+  fake_tool "$bin" gh-axi '0.1.43'
+  out=$(run_notice "$root" "$bin" "$state" FM_TEST_HERDR_LATEST=v0.10.0)
+  [ -z "$out" ] || fail "notice was not silent with Herdr on its pin and the rest current: $out"
+  pass 'notice names every behind tool with its kind of update on one line, judges Herdr by its pin, and says what it could not check once'
+}
+
+test_notice_caches_the_whole_result_for_a_day() {
+  local root="$TMP_ROOT/cache/root" bin="$TMP_ROOT/cache/bin" state="$TMP_ROOT/cache/state" out
+  new_root "$root"
+  new_bin "$bin"
+  mkdir -p "$state"
+  fake_tool "$bin" gh-axi '0.1.20'
+  out=$(run_notice "$root" "$bin" "$state")
+  assert_contains "$out" 'gh-axi installed 0.1.20, latest 0.1.43 (small update)' 'first notice did not look up the release'
+  assert_contains "$(cat "$state/.stack-versions.latest")" $'npm:gh-axi\t0.1.43' 'the successful lookup was not cached'
+
+  out=$(run_notice "$root" "$bin" "$state" FM_TEST_OFFLINE=1)
+  assert_contains "$out" 'gh-axi installed 0.1.20, latest 0.1.43 (small update)' 'a fresh cache was not used while offline'
+
+  fake_tool "$bin" gh-axi '0.1.43'
+  out=$(run_notice "$root" "$bin" "$state" FM_TEST_OFFLINE=1)
+  [ -z "$out" ] || fail "an upgrade did not show at once against the cached release: $out"
+
+  fake_tool "$bin" gh-axi '0.1.20'
+  printf '%s\nnpm:gh-axi\t0.1.43\n' "$(( $(date +%s) - 86400 ))" >"$state/.stack-versions.latest"
+  out=$(run_notice "$root" "$bin" "$state" FM_TEST_OFFLINE=1)
+  [ "$out" = 'STACK_TOOLS: could not check: gh-axi' ] \
+    || fail "a day-old cache with a failed lookup was not reported as unknown: $out"
+
+  out=$(run_notice "$root" "$bin" "$state")
+  [ -z "$out" ] || fail "a failed lookup was not cached for the day, or was named again: $out"
+
+  fake_tool "$bin" tasks-axi '0.2.5'
+  out=$(run_notice "$root" "$bin" "$state")
+  [ "$out" = 'STACK_TOOLS: behind: gh-axi installed 0.1.20, latest 0.1.43 (small update); tasks-axi installed 0.2.5, latest 0.2.6 (small update)' ] \
+    || fail "a newly installed tool did not refresh the day's lookups: $out"
+  pass 'notice reuses the whole lookup result for a day, failures included, and reads installed versions every run'
+}
+
+test_notice_is_silent_under_the_suite_unless_asked() {
+  local root="$TMP_ROOT/seam/root" bin="$TMP_ROOT/seam/bin" state="$TMP_ROOT/seam/state" out
+  new_root "$root"
+  new_bin "$bin"
+  mkdir -p "$state"
+  fake_tool "$bin" gh-axi '0.1.20'
+  out=$(env PATH="$bin:/usr/bin:/bin" FM_ROOT_OVERRIDE="$root" FM_STATE_OVERRIDE="$state" "$VERSIONS" notice)
+  [ -z "$out" ] || fail "notice reached for releases under the test suite without being asked: $out"
+  [ ! -e "$state/.stack-versions.latest" ] || fail 'notice wrote a cache under the test suite without being asked'
+  pass 'notice stays silent under the test suite unless a case asks for it'
+}
+
 test_plain_words_per_tool
 test_exact_pin_named_when_latest_moves_past_it
 test_offline_reports_without_failing
+test_notice_names_behind_tools_on_one_line
+test_notice_caches_the_whole_result_for_a_day
+test_notice_is_silent_under_the_suite_unless_asked

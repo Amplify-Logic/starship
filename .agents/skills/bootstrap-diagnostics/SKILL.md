@@ -1,7 +1,7 @@
 ---
 name: bootstrap-diagnostics
 description: >-
-  Load when the session-start digest's bootstrap or network-checks section, or a standalone bin/fm-bootstrap.sh or bin/fm-startup-network.sh run, prints an actionable diagnostic line - MISSING, MISSING_MANUAL, PRESENTATION_UNAVAILABLE, BACKEND_INVALID, NEEDS_GH_AUTH, TANGLE, STARTUP_MEMORY_BUDGET, CREW_DISPATCH invalid, FLEET_SYNC, NETWORK_CHECKS, HOME_SUMMARY, BACKLOG_RECONCILE, SECONDMATE_SYNC, SECONDMATE_LIVENESS, SECONDMATE_HANDOFF, NUDGE_SECONDMATES, CONFIG_REREAD, ACCOUNTS invalid, PR_CHECK_MIGRATION, TOOLCHAIN_DRIFT, HOST_ENV, UPSTREAM, UPSTREAM_REPORT, UPSTREAM_CATCHUP, or FMX - or reports that an interrupted backlog cleanup may have left an endpoint or local copy.
+  Load when the session-start digest's bootstrap or network-checks section, or a standalone bin/fm-bootstrap.sh or bin/fm-startup-network.sh run, prints an actionable diagnostic line - MISSING, MISSING_MANUAL, PRESENTATION_UNAVAILABLE, BACKEND_INVALID, NEEDS_GH_AUTH, TANGLE, STARTUP_MEMORY_BUDGET, CREW_DISPATCH invalid, FLEET_SYNC, NETWORK_CHECKS, HOME_SUMMARY, BACKLOG_RECONCILE, SECONDMATE_SYNC, SECONDMATE_LIVENESS, SECONDMATE_HANDOFF, NUDGE_SECONDMATES, CONFIG_REREAD, ACCOUNTS invalid, PR_CHECK_MIGRATION, TOOLCHAIN_DRIFT, HOST_ENV, UPSTREAM, UPSTREAM_REPORT, UPSTREAM_CATCHUP, STACK_TOOLS, or FMX - or reports that an interrupted backlog cleanup may have left an endpoint or local copy.
   A silent bootstrap section, or any other BOOTSTRAP_INFO fact, means no skill load.
 user-invocable: false
 metadata:
@@ -112,5 +112,11 @@ When any diagnostic needs captain attention, report the plain consequence and re
   A quiet report's upstream part is one "nothing to do" line, followed by the tool versions; relay that one-line outcome and the tool versions, never padding from older reports.
 - `UPSTREAM_CATCHUP: catch-up ready to prepare, private report at <path>` - a scheduled run on a home opted in to the weekly catch-up, or an earlier on-demand `bin/fm-upstream-watch.sh catchup` run, found new upstream work and wrote a catch-up plan that is still waiting to be prepared.
   Load the `catchup` skill, which owns preparing, landing, and acknowledging it.
+- `STACK_TOOLS: behind: <tool> installed <version>, latest|pinned <version> (small update|quiet-window upgrade); ...` - a stack tool beneath Starship (Herdr, treehouse, no-mistakes, or an AXI tool) is older than its target: the latest release, or for Herdr the version Starship pins (`pinned`), so a Herdr release newer than the pin is never reported; updating Starship never upgrades these, so this line is how a home learns it is missing their fixes.
+  Relay it to the captain in plain words - which tool, installed and target version, and whether it is a small update or needs a quiet window - and install nothing without the captain's yes.
+  A small update is installed only after that yes.
+  A quiet-window upgrade (Herdr or treehouse) is booked with the captain as a held item for a window with no workers running, following the `catchup` skill's Tool versions rules, which own the quiet-window and Herdr-pin details; `bin/fm-stack-versions.sh report` shows the full comparison against Starship's own pins.
+  When a held item already books that upgrade, or the captain already declined these exact versions, do not ask again; mention it only if the versions changed.
+  A `could not check: <tool>, ...` clause, or a line carrying only that clause, means the installed version or the target version could not be read (often offline); it is unknown, never a claim the tool is current, appears at most once a day, and needs no action beyond a mention.
 - `FMX: X mode on ...` / `FMX: X mode off ...` - bootstrap confirmed or removed the local Relay poll artifacts (`docs/configuration.md` "Relay (.env)"); the emitted line still carries Relay's former `X mode` wording.
   Only when a running watcher needs the cadence transition applied immediately, restart the home-scoped watcher through the emitted harness supervision protocol; bootstrap deliberately never restarts the watcher itself.

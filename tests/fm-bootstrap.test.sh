@@ -1146,6 +1146,7 @@ test_network_phases_record_per_step_elapsed_times() {
 
   assert_present "$log" "the network phase recorded no elapsed times at all"
   assert_timing_record "$log" phase gh-auth '' "the GitHub auth probe was not timed"
+  assert_timing_record "$log" phase stack-versions '' "the stack tool-version notice was not timed"
   assert_timing_record "$log" phase secondmate-liveness '' "the dead-secondmate relaunch sweep was not timed"
   assert_timing_record "$log" phase secondmate-sync '' "the secondmate convergence sweep was not timed"
   assert_timing_record "$log" phase handoff-delivery '' "the pending handoff sweep was not timed"
@@ -1170,6 +1171,41 @@ test_network_phases_record_per_step_elapsed_times() {
     "$ROOT/bin/fm-bootstrap.sh" >/dev/null 2>&1
   assert_absent "$log" "a run that never asked for timings recorded them anyway"
   pass "bootstrap: each deferred network phase, secondmate, and clone records its own elapsed time"
+}
+
+# Every home learns at session start which stack tools are behind, and the
+# release lookups behind that line need the network, so they belong to the
+# deferred network half only. The release servers are a fake curl here.
+test_stack_tools_notice_runs_in_the_network_half() {
+  local case_dir fakebin skip_out only_out
+  case_dir="$TMP_ROOT/stack-tools-notice"
+  mkdir -p "$case_dir/home/config" "$case_dir/home/state"
+  printf '%s\n' manual > "$case_dir/home/config/backlog-backend"
+  fakebin=$(make_fake_toolchain "$case_dir")
+  cat > "$fakebin/curl" <<'SH'
+#!/usr/bin/env bash
+url=
+for arg in "$@"; do url=$arg; done
+case "$url" in
+  https://registry.npmjs.org/gh-axi/latest) printf '{"version":"0.1.43"}\n' ;;
+  https://registry.npmjs.org/*) printf '{"version":"0.0.1"}\n' ;;
+  https://api.github.com/*) printf '{"tag_name":"v0.0.1"}\n' ;;
+  *) exit 22 ;;
+esac
+SH
+  chmod +x "$fakebin/curl"
+
+  skip_out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 FM_TEST_STACK_VERSIONS_NOTICE=1 FM_BOOTSTRAP_NETWORK=skip "$ROOT/bin/fm-bootstrap.sh")
+  assert_not_contains "$skip_out" "STACK_TOOLS:" "the local half looked up stack tool releases"
+  assert_absent "$case_dir/home/state/.stack-versions.latest" "the local half wrote the release cache"
+
+  only_out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 FM_TEST_STACK_VERSIONS_NOTICE=1 FM_BOOTSTRAP_NETWORK=only "$ROOT/bin/fm-bootstrap.sh")
+  assert_contains "$only_out" "STACK_TOOLS: behind: gh-axi installed 0.1.29, latest 0.1.43 (small update)" \
+    "the network half did not name the stack tool that is behind"
+  assert_present "$case_dir/home/state/.stack-versions.latest" "the network half did not cache this home's release lookups"
+  pass "bootstrap: the network half names stack tools that are behind and caches the lookups in this home"
 }
 
 test_tasks_axi_verdict_handoff_is_consumed_once() {
@@ -1419,6 +1455,7 @@ test_routine_bootstrap_contract_runs_under_system_bash
 test_network_phase_partitions_the_run
 test_network_sweeps_recheck_lock_ownership
 test_network_phases_record_per_step_elapsed_times
+test_stack_tools_notice_runs_in_the_network_half
 test_tasks_axi_verdict_handoff_is_consumed_once
 test_crew_dispatch_active_rules_are_verbose_bootstrap_info
 test_crew_dispatch_validation

@@ -30,6 +30,9 @@
 #                  [- <R> upstream commits, <D> already delivered here] - <subjects>",
 #                 "UPSTREAM_REPORT: new private report at <path>",
 #                 "UPSTREAM_CATCHUP: catch-up ready to prepare, private report at <path>",
+#                 "STACK_TOOLS: behind: <tool> installed <version>, latest|pinned
+#                  <version> (small update|quiet-window upgrade); ...",
+#                 "STACK_TOOLS: could not check: <tool>, ...",
 #                 "FMX: X mode on ..." or "FMX: X mode off ...".
 #          When a RUNNING secondmate home is fast-forwarded, its target is
 #          firstmate's own current default-branch commit. A local worktree uses
@@ -125,6 +128,11 @@
 #          clause reports the raw and delivered figures whenever the ledger
 #          accounted for anything, and a fully delivered delta is silent.
 #          It never merges and never touches projects/; see bin/fm-upstream-lib.sh.
+#          STACK_TOOLS is the read-only network-phase tool-version notice owned
+#          by bin/fm-stack-versions.sh notice, which caches its release lookups
+#          for a day per home, names a tool it could not check at most once a
+#          day, and is otherwise silent unless an installed stack tool is known
+#          to be behind. It installs nothing.
 #          UPSTREAM_REPORT and UPSTREAM_CATCHUP are the read-only pending-report
 #          check owned by bin/fm-upstream-watch.sh. The weekly job writes only
 #          private data/; acknowledge the report after reading it so later
@@ -178,14 +186,16 @@
 #                 step. Unrecognized values fall back here on purpose: a typo
 #                 must never silently skip a safety sweep.
 #            skip - every LOCAL step, and none of the network ones. Skips
-#                 `gh auth status`, secondmate_liveness_sweep, secondmate_sync,
+#                 `gh auth status`, the STACK_TOOLS notice,
+#                 secondmate_liveness_sweep, secondmate_sync,
 #                 secondmate_handoff_resume, and fleet_sync.
 #            only - ONLY those network steps and nothing else. No tool detection,
 #                 no version floors, no tangle check, no backlog
 #                 reconciliation, no x_mode_setup: those already ran on the
 #                 local pass.
 #          FM_BOOTSTRAP_DETECT_ONLY composes with it unchanged, so `only` plus
-#          detect-only is the read-only `gh auth status` probe on its own.
+#          detect-only is the read-only `gh auth status` probe and STACK_TOOLS
+#          notice on their own.
 #          bin/fm-startup-network.sh owns the deferral: it runs the `only` phase
 #          in a detached bounded worker and publishes the result. This file stays
 #          the single owner of every sweep, and the split changes only WHEN each
@@ -1838,6 +1848,11 @@ if network_phase; then
   __fm_timing_stamp=$(fm_timing_now_ms)
   gh auth status >/dev/null 2>&1 || echo "NEEDS_GH_AUTH"
   fm_timing_record phase gh-auth "$__fm_timing_stamp"
+  # Read-only: names stack tools behind their latest release or Herdr's pin, from
+  # a once-a-day cache of the release lookups; bin/fm-stack-versions.sh owns it.
+  __fm_timing_stamp=$(fm_timing_now_ms)
+  FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" "$SCRIPT_DIR/fm-stack-versions.sh" notice
+  fm_timing_record phase stack-versions "$__fm_timing_stamp"
 fi
 local_phase && detect_local_config
 local_phase && detect_host_environment
