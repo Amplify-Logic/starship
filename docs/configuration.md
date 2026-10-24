@@ -82,7 +82,7 @@ Each effective `FM_HOME` contains private operational directories.
 
 - Project and secondmate registries.
 - Captain preferences and optional shared captain preferences.
-- Learnings, backlog, briefs, scout reports, and the optional per-task no-mistakes pipeline-spend ledger.
+- Learnings, backlog, briefs, scout reports, optional task status archives, and the optional per-task no-mistakes pipeline-spend ledger.
 - Explicitly installed content-addressed extension packages under `data/extensions/packages/`.
 - The captain ledger `data/captain-ledger.jsonl`, every captain prompt recorded before the primary answers in a home opted in through `config/captain-ledger` (`bin/fm-captain-ledger.sh`).
 - Call recordings under `data/calls/`: the transcript, live desk, end-of-call notes and archive (`bin/fm-call-lib.sh`; [call-companion.md](call-companion.md)).
@@ -113,7 +113,7 @@ Untracked files and directories whose names begin with `scratchpad` are also git
 
 - `bin/fm-spawn.sh` owns the base task-metadata fields it emits, while the runtime-backend section below owns backend-specific fields and selector interpretation.
 
-- `bin/fm-contributions.sh` owns durable published-contribution records under each task, observation bounds, equivalent triage-label configuration, and the authenticated contribution check.
+- `bin/fm-contributions.sh` owns durable published-contribution records under each task, observation bounds, equivalent triage-label configuration, the opt-in `FM_CONTRIBUTIONS_REPLY_AGE` setting (seconds, unset by default) that turns on re-raising unanswered review threads after that age, and the authenticated contribution check.
 
 - The producing PR and Relay helpers own the fields they append, [`bin/fm-classify-lib.sh`](../bin/fm-classify-lib.sh) owns status-event vocabulary, optional emission-time syntax, and legacy unknown-time handling, and `bin/fm-crew-state.sh` owns current-state reconciliation.
 
@@ -433,8 +433,9 @@ For spawn-capable adapters, the runtime session-provider backend controls where 
 | `orca` | Experimental; no dedicated real-backend CI lane | [`docs/orca-backend.md`](orca-backend.md) |
 | `cmux` | Experimental; no dedicated real-backend CI lane | [`docs/cmux-backend.md`](cmux-backend.md) |
 | `paseo` | Experimental; no dedicated real-backend CI lane | [`docs/paseo-backend.md`](paseo-backend.md) |
+| `rex` | Experimental; no dedicated real-backend CI lane | [`docs/rex-backend.md`](rex-backend.md) |
 
-Treehouse remains the worktree provider for tmux, herdr, zellij, cmux, and paseo, since herdr, zellij, cmux, and paseo are session providers only; Orca provides both the task worktree and terminal endpoint.
+Treehouse remains the worktree provider for tmux, herdr, zellij, cmux, paseo, and rex, since herdr, zellij, cmux, paseo, and rex are session providers only; Orca provides both the task worktree and terminal endpoint.
 
 ### Backend selection order
 
@@ -444,22 +445,22 @@ New spawns choose the backend in this order:
    A later task cannot inherit that authority by analogy.
 2. `FM_BACKEND`.
 3. The first non-empty line of local, gitignored `config/backend`.
-4. Runtime auto-detection from `$TMUX`, `HERDR_ENV=1`, or cmux runtime signals.
+4. Runtime auto-detection from `$TMUX`, `HERDR_ENV=1`, `TERM_PROGRAM=rex` with `REX_BLOCK`, or cmux runtime signals.
 5. Default `tmux`.
 
 Starship's setup writes `herdr` into a fresh home's `config/backend` on a Mac and inside WSL 2, and never changes a home that already names a runtime or has already run; `bin/fm-herdr-setup.sh` owns that rule.
 
-If more than one runtime marker is present, detection resolves innermost-first: `$TMUX` is checked before `HERDR_ENV=1`, which is checked before cmux's primary `CMUX_WORKSPACE_ID` marker and its documented fallback signals - tmux or herdr started from inside a cmux terminal is the innermost, currently-executing layer, while cmux itself (a terminal application, not a nestable multiplexer) is always checked last.
-See [`docs/cmux-backend.md`](cmux-backend.md#runtime-detection) for why cmux can be selected when `CMUX_WORKSPACE_ID` is absent.
+If more than one runtime marker is present, detection resolves innermost-first: `$TMUX` is checked before `HERDR_ENV=1`, which is checked before Rex's `TERM_PROGRAM=rex` with `REX_BLOCK`, which is checked before cmux's primary `CMUX_WORKSPACE_ID` marker and its documented fallback signals - tmux, herdr, or Rex started from inside a cmux terminal is the innermost, currently-executing layer, while cmux itself (a terminal application, not a nestable multiplexer) is always checked last.
+See [`docs/cmux-backend.md`](cmux-backend.md#runtime-detection) for why cmux can be selected when `CMUX_WORKSPACE_ID` is absent, and [`docs/rex-backend.md`](rex-backend.md#auto-detection) for why a nested tmux or Herdr inside a Rex block is never read as Rex.
 
-Auto-detected Herdr stays silent like tmux, while auto-detected cmux prints a stderr notice naming `config/backend` and `--backend tmux` because cmux remains experimental.
+Auto-detected Herdr and Rex stay silent like tmux, while auto-detected cmux prints a stderr notice naming `config/backend` and `--backend tmux` because cmux remains experimental.
 Zellij, Orca, and Paseo are never auto-detected; select them by putting the name in a local `config/backend` file, by exporting `FM_BACKEND=<name>`, or by telling the first mate in chat.
 Paseo stays explicit-only because its runtime markers leak into every descendant process, so they cannot stand for a selection (see [`docs/paseo-backend.md`](paseo-backend.md#selection-is-explicit)).
 
 ### Accepted backends and secondmate limits
 
-Any value other than `tmux`, `herdr`, `zellij`, `orca`, `cmux`, or `paseo` is rejected until another adapter is implemented and verified.
-`fm-spawn.sh` accepts `tmux`, `herdr`, `zellij`, `orca`, `cmux`, and `paseo` for ship and scout tasks; `backend=orca`, `backend=cmux`, and `backend=paseo` all still refuse `--secondmate` until secondmate launch semantics are designed for each.
+Any value other than `tmux`, `herdr`, `zellij`, `orca`, `cmux`, `paseo`, or `rex` is rejected until another adapter is implemented and verified.
+`fm-spawn.sh` accepts `tmux`, `herdr`, `zellij`, `orca`, `cmux`, `paseo`, and `rex` for ship and scout tasks; `backend=orca`, `backend=cmux`, and `backend=paseo` all still refuse `--secondmate` until secondmate launch semantics are designed for each.
 
 `codex-app` is not an accepted runtime backend yet; [`docs/codex-app-backend.md`](codex-app-backend.md) owns the Codex App boundary.
 
@@ -480,6 +481,8 @@ The compatibility helper `fm_backend_agent_alive` continues to collapse those de
 
 - A paseo spawn additionally version-gates against the installed `paseo` binary's version, requires `jq`, and starts the daemon with `paseo start` only when it is simply not up yet (see [`docs/paseo-backend.md`](paseo-backend.md) "Setup"), refusing loudly on a missing CLI, an old version, or an unreachable daemon.
 
+- A rex spawn additionally gates both the `rex` CLI and the running Rex server at API revision 5 or newer and requires `jq` (see [`docs/rex-backend.md`](rex-backend.md) "Setup"), refusing loudly on a missing CLI, an older API revision, or a server that cannot be reached or started.
+
 A backend spawn refusal from a missing dependency, version gate, or unauthenticated socket is terminal for that selected backend; firstmate surfaces it as a blocker instead of silently retrying another backend.
 
 ### Task metadata
@@ -492,6 +495,7 @@ Task meta records `backend=` only for a non-default backend; an absent `backend=
 
 - A zellij task additionally records `zellij_session=`, `zellij_tab_id=`, and `zellij_pane_id=`.
 - A paseo task additionally records `paseo_terminal_id=` and `paseo_workspace_id=`, with the terminal NAME as routing authority (see [`docs/paseo-backend.md`](paseo-backend.md) "Task shape and metadata").
+- A rex task additionally records `rex_server=`, `rex_session_id=`, `rex_window_id=`, and `rex_block_id=`, with the immutable block id as routing authority (see [`docs/rex-backend.md`](rex-backend.md) "Task shape and metadata").
 
 - An Orca task additionally records `orca_worktree_id=` and `terminal=`, with `window=fm-<id>` kept as the shared firstmate alias.
 
@@ -546,15 +550,15 @@ Test cleanup must use the guarded path in [`docs/cmux-backend.md`](cmux-backend.
 ## Away-mode supervisor backend (FM_SUPERVISOR_BACKEND / FM_SUPERVISOR_TARGET)
 
 The `/afk` sub-supervisor injects escalation digests into firstmate's own pane independently of where new task endpoints are spawned.
-It currently supports only `tmux` and `herdr` supervisor panes.
+It supports `tmux`, `herdr`, and `rex` supervisor panes.
 
-Set `FM_SUPERVISOR_BACKEND=tmux|herdr` and `FM_SUPERVISOR_TARGET=<target>` to override both axes explicitly.
+Set `FM_SUPERVISOR_BACKEND=tmux|herdr|rex` and `FM_SUPERVISOR_TARGET=<target>` to override both axes explicitly.
 For tmux, accepted targets are `%pane-id`, `@window-id`, `session:@window-id`, a bare session, `session:window-name`, `session:index`, `session:index.pane-index`, and the supported `=session:=window` exact-marker forms; the `fm_backend_target_exists` header in `bin/fm-backend.sh` owns this grammar.
-For herdr, the target is `"<session>:<pane-id>"`.
-Without overrides, backend detection uses `$TMUX_PANE` first, then `HERDR_ENV=1` with `HERDR_PANE_ID`, then falls back to `tmux`.
+For herdr, the target is `"<session>:<pane-id>"`; for Rex it is `<session-uuid>:<block-uuid>`, with both kind prefixes removed.
+Without overrides, backend detection uses `$TMUX_PANE` first, then `HERDR_ENV=1` with `HERDR_PANE_ID`, then `TERM_PROGRAM=rex` with both `REX_SESSION` and `REX_BLOCK`, then falls back to `tmux`.
 
-That keeps a tmux pane nested inside herdr on the tmux transport, matching the runtime backend's innermost-first rule.
-Target detection uses `FM_SUPERVISOR_TARGET`, then `$TMUX_PANE`, then `"${HERDR_SESSION:-default}:${HERDR_PANE_ID}"` under herdr, then the legacy `firstmate:0` tmux fallback with a warning.
+That keeps a nested tmux or Herdr pane on its own transport, matching the runtime backend's innermost-first rule.
+Target detection uses `FM_SUPERVISOR_TARGET`, then `$TMUX_PANE`, then `"${HERDR_SESSION:-default}:${HERDR_PANE_ID}"` under herdr, then the prefix-stripped `REX_SESSION` and `REX_BLOCK` under Rex, then the legacy `firstmate:0` tmux fallback with a warning.
 
 Selecting any other supervisor backend, including `zellij`, `orca`, or `cmux`, refuses at daemon startup instead of trying tmux injection primitives against a non-tmux pane.
 
@@ -690,6 +694,24 @@ With it present, ship and scout briefs gain the `# Waiting` section and the fore
 With the file absent, generated briefs omit the waiting section and the no-poll inbox line, the drive text backgrounds the call, recovery sends during an open decision, and a fire-and-forget steer is not owed a retry ring.
 The flag is a home-local preference and is not inherited by secondmate homes.
 
+## PR health monitor (config/pr-health-monitor)
+
+The optional local, gitignored `config/pr-health-monitor` presence flag opts this home into a mechanical monitor of the pull requests it owns.
+With the flag present, session start arms `state/pr-health.check.sh`, and the watcher's check sweep then prints one wake line for each new condition on an owned PR: a definite merge conflict or a failing required check.
+When no reported check is marked required, a failing reported check still counts, matching `bin/fm-pr-state.sh` for unprotected stacked bases.
+When a required check has reported, optional failures do not notify.
+A conflict is reported once per latest commit, and a failing check once per latest commit and check name, so a check that newly fails at an already reported commit wakes once more while an already reported check never repeats.
+A home owns a PR it recorded, linked, or observed before, and the open PR on a live task copy's current branch, drafts and adopted branches included, until the PR merges or closes.
+A PR URL that only appears in a task's status lines is not owned.
+Retiring a contribution with `bin/fm-contributions.sh retire` ends that task's ownership for the monitor too, and the branch lookup does not reclaim it.
+When a durable contribution record cannot be read, the monitor reports that once, reads nothing and keeps its fingerprints until the record is readable again.
+The monitor reads no other PR, so another home's PR never wakes this home, and it never comments on or changes a PR.
+`bin/fm-pr-health.sh` owns the conditions, the fingerprints in `state/pr-health.json`, and the read budget.
+The monitor only notifies; worker briefs and waiting rules are unchanged by the flag.
+With the file absent, nothing is armed and an already armed check prints nothing.
+Creating the flag takes effect at the next session start, or immediately after `bin/fm-pr-health.sh arm`.
+The flag is a home-local preference and is not inherited by secondmate homes.
+
 ## No-mistakes pipeline spend (config/pipeline-spend)
 
 The optional local, gitignored `config/pipeline-spend` presence flag opts this home into recording per-task no-mistakes pipeline spend in `data/pipeline-spend.jsonl` during teardown.
@@ -717,6 +739,27 @@ With the file absent the report prints counts and host figures only, never inven
 Persistent secondmates hold no lane.
 The file is a per-machine choice and is not inherited by secondmate homes.
 The script's header owns the output line, the host-constraint thresholds, and the probe fallbacks.
+
+## PR-ready line after green (config/ready-after-green)
+
+The optional local, gitignored `config/ready-after-green` presence flag opts a secondmate home into publishing its child's PR-ready parent line only after the child has reported checks green.
+Create it with `touch "$FM_HOME/config/ready-after-green"`; remove it to restore the default.
+It is off by default: without the flag, `bin/fm-pr-check.sh` publishes the line when it registers the PR, whatever the state of the checks.
+With the flag present and a `no-mistakes` task, registration still records the PR and arms the merge poll, but publishes the line only when the last `done` line in the child's status reports `PR <url> checks green` for that same PR, with any text around it.
+A registration made earlier publishes nothing, and registering again after the green report publishes the line.
+The `direct-PR` and `local-only` modes, where ready means opened for review, and Gerrit changes are unaffected.
+The child's own `done` line still reaches the parent through `bin/fm-inactive-reconcile.sh`.
+The flag is a home-local preference and is not inherited by secondmate homes; [`bin/fm-pr-check.sh`](../bin/fm-pr-check.sh) owns the mechanics.
+
+## Task status archive (config/status-archive)
+
+The optional local, gitignored `config/status-archive` presence flag opts this home into retaining task status history during teardown.
+Create it with `touch "$FM_HOME/config/status-archive"`; remove it to disable future archival and pruning.
+It is off by default: without the flag, teardown deletes status logs as before and leaves existing archives untouched.
+The flag applies to teardown run by this home, including forced retirement of its secondmate children; it is not inherited by other homes.
+Each opted-in archival prunes owned logs older than 30 completed days by mtime; housekeeping failures warn and never abort teardown.
+Age-based retention works independently of the selected backlog backend and keeps histories available for a predictable audit period.
+[`architecture.md`](architecture.md#task-status-archives) describes archive locations and isolation from live state; [`bin/fm-teardown.sh`](../bin/fm-teardown.sh) owns the mechanics.
 
 ## Turn-end pane-churn absorb (config/turnend-churn-absorb)
 
@@ -1157,7 +1200,7 @@ devin is verified for crewmate and scout launches only; a secondmate is refused 
 Its private worker config disables Claude Code imports (including the captain's hooks) and, unless the home sets `config/keep-ai-trailers` (see "Commit attribution"), Devin commit attribution without editing user or project config; [`fm-devin-config.sh`](../bin/fm-devin-config.sh) owns these enforced settings and [Devin verification](verification/devin.md) owns the live evidence and observed model availability.
 
 commandcode (Command Code) is verified for crewmate and scout launches only; a secondmate is refused because Command Code has no verified primary supervision protocol.
-It runs only on the tmux and Herdr backends; a zellij, cmux, orca, or paseo launch is refused because those backends supply no Command Code pane identity, without which its idle composer placeholder never reads empty and steering stalls.
+It runs only on the tmux and Herdr backends; a zellij, cmux, orca, or paseo launch is refused because those backends supply no Command Code pane identity, without which its idle composer placeholder never reads empty and steering stalls, and a rex launch is refused until Command Code is live-verified there.
 Its busy-state wiring is a tracked mod loaded per process with `--mod`, so no user or project Command Code settings are edited; [its adapter reference](../.agents/skills/harness-adapters/references/harness/commandcode.md) owns the launch facts and [Command Code verification](verification/commandcode.md) owns the live evidence.
 
 Polytoken is verified for crewmate and scout launches only; [its adapter reference](../.agents/skills/harness-adapters/references/harness/polytoken.md) owns the operating contract and [verification record](verification/polytoken.md) owns the live evidence.
@@ -1441,6 +1484,17 @@ An absent or blank file changes nothing, while a present path that is not a read
 The text is static and never executed or expanded; secondmate charters never take it, and the file is local to each home rather than part of secondmate inherited configuration.
 
 `bin/fm-brief.sh`'s header owns the placement rule and its safety argument.
+
+## Herdr lifecycle spawn guard (config/herdr-lifecycle-spawn-guard)
+
+The optional local, gitignored `config/herdr-lifecycle-spawn-guard` presence flag opts this home into refusing, at spawn, a ship or scout brief that drives Herdr lifecycle without the Herdr isolation contract.
+Create it with `touch "$FM_HOME/config/herdr-lifecycle-spawn-guard"`; remove it to launch such briefs again.
+It is off by default: without the flag, `bin/fm-spawn.sh` launches the brief as before, and only the unguarded scaffold's own `# Herdr lifecycle declaration - NOT ENABLED` gate text asks the author to regenerate it.
+With the flag present, a brief that names `bin/fm-herdr-lab.sh`, or a `herdr session` or `herdr server` command with the verb `start`, `stop`, `delete`, `restart`, `reload-config`, or `live-handoff`, must carry the `# Herdr isolation - HARD SAFETY CONTRACT` section that `bin/fm-brief.sh --herdr-lab` emits.
+The refusal names the first matching command, so the author can tell a brief that truly drives Herdr lifecycle from one that only quotes a verb incidentally, and points at `bin/fm-brief.sh --herdr-lab` as the remedy.
+A refused spawn writes no task record, so the brief can be regenerated and the spawn repeated.
+The flag is read only for ship and scout spawns, secondmate charters never take it, and it is not inherited by secondmate homes.
+[`herdr-backend.md`](herdr-backend.md) owns the lab isolation contract itself; `bin/fm-spawn.sh`'s header owns the exact matching rule.
 
 ## Worker launch environment (config/launch-env-allowlist)
 
@@ -1861,15 +1915,16 @@ The per-backend delta is required only for the backend resolved from `FM_BACKEND
 | `orca` | `orca` |
 | `cmux` | `cmux`, `jq`, `treehouse` |
 | `paseo` | `paseo`, `jq`, `treehouse` |
+| `rex` | `rex`, `jq`, `treehouse` |
 
-The JSON-emitting adapters (`herdr`, `zellij`, `cmux`, `paseo`) need `jq` because their spawn and liveness paths parse backend JSON.
-Every session-provider-only backend (`tmux`, `herdr`, `zellij`, `cmux`, `paseo`) uses `treehouse` for worktrees.
+The JSON-emitting adapters (`herdr`, `zellij`, `cmux`, `paseo`, `rex`) need `jq` because their spawn and liveness paths parse backend JSON.
+Every session-provider-only backend (`tmux`, `herdr`, `zellij`, `cmux`, `paseo`, `rex`) uses `treehouse` for worktrees.
 
-Backend tool availability uses the adapter's own executable resolver, so bootstrap and spawn agree on supported non-`PATH` locations such as cmux's bundled CLI.
+Backend tool availability uses the adapter's own executable resolver, so bootstrap and spawn agree on supported non-`PATH` locations such as cmux's bundled CLI and the Rex server bundle's `rex`.
 An unknown resolved backend emits `BACKEND_INVALID` and blocks dispatch instead of silently dropping its dependency delta or falling back to tmux.
 
 Orca provides both the task worktree and terminal endpoint (see "Runtime backend" above), so `backend=orca` requires only `orca` on top of the universal toolchain and skips both `treehouse` and every other backend's session CLI.
-A herdr, zellij, cmux, or paseo home is therefore never told `tmux` is missing, and the `treehouse` durable-lease upgrade check runs only for the backends that actually use treehouse.
+A herdr, zellij, cmux, paseo, or rex home is therefore never told `tmux` is missing, and the `treehouse` durable-lease upgrade check runs only for the backends that actually use treehouse.
 
 **Feature-specific requirements**
 
@@ -2896,7 +2951,7 @@ FM_DATA_OVERRIDE=        # alternate data dir, mainly for tests
 FM_PROJECTS_OVERRIDE=    # alternate projects dir, mainly for tests
 FM_CONFIG_OVERRIDE=      # alternate config dir, mainly for tests
 FM_PROC_ROOT_OVERRIDE=   # alternate /proc root for Linux process-identity reads in fm-wake-lib.sh and fm-teardown.sh, mainly for tests
-FM_BACKEND=             # optional runtime backend override for new spawns; tmux/herdr/zellij/orca/cmux/paseo support ship/scout spawns, codex-app is not accepted
+FM_BACKEND=             # optional runtime backend override for new spawns; tmux/herdr/zellij/orca/cmux/paseo/rex support ship/scout spawns, codex-app is not accepted
 FM_TRACE_CONTEXT=       # optional trace-context override; see "Trace context propagation"
 FM_TASK_ID=             # internal task-worker marker fm-spawn.sh exports into ship and scout panes, never set by hand; bin/fm-test-run.sh refuses to execute in the repository primary checkout while it is set, and the native session-start wrappers stay silent
 FM_TASK_INBOX=          # internal: absolute path of the task's steering inbox (state/<id>.inbox) that fm-spawn.sh exports into every ship, scout, and secondmate launch, never set by hand; the steering doorbell names "$FM_TASK_INBOX"
@@ -3012,6 +3067,9 @@ FM_SECONDMATE_LIVENESS_WINDOW_SECS=3600   # window the relaunch bound counts sta
 FM_WEDGE_DEMAND_INSPECT_COUNT=3    # consecutive provably-working stale escalations on the same unchanged pane before demand-deep-inspection is added
 FM_WEDGE_GUARD_TIMEOUT_SECS=5      # seconds one guard from config/wedge-evidence-guards may run before it counts as no answer; zero or invalid values use 5
 FM_WEDGE_GUARD_DEFER_MAX=3         # consecutive windows a CRITICAL guard answer may defer one pane's wedge escalation before it fires anyway; invalid values use 3
+FM_WEDGE_MAX_ESCALATIONS=0    # optional ceiling on consecutive wedge escalations for one worker window; 0 (the default) leaves the cap off and every escalation produces a wake, and any value from 1 up to 999999999999999999 publishes one terminal PERMANENTLY-WEDGED wake at that count - carrying the same evidence the escalation it replaces carried: the guard verdict, and the `demand-deep-inspection` marker once the count has reached `FM_WEDGE_DEMAND_INSPECT_COUNT` - and then writes the window-scoped state/.wedge-permanent-<key> to silence further wedge escalations for that window whatever hash its pane renders; the wedge path publishes no second terminal wake while the row that episode queued is still unacknowledged, which scopes the suppression to the episode rather than the window so an earlier episode's unconsumed wake cannot silence a later episode's (the away-posture first sight, which releases the markers without ending the episode, can re-open the row within one episode - an over-notify in the safe direction: the queue check bounds duplicate terminal wakes only while the episode marker stands, and the release removed exactly the marker that would have gated the re-fire, so after it a second wake can stand behind an unacknowledged first), the cap marker goes when the pane leaves the stale path (a busy or no-longer-stably-stale pane), on a declared wait (`paused:` or a verified captain-held transfer) as it starts or once it is lifted, on the turn-end churn absorb, and on every first-sight classification of a fresh stale hash, because each of those routes runs the one reset that drops the wedge timer and, under a configured cap, the escalation count the cap was counting (the away-posture first sight runs that release alone, without ending the episode, since the away daemon owns the one-shot per stale hash), and a fresh wedge escalates normally again; a cap fire also resets the consecutive-deferral budget of a config/wedge-evidence-guards guard, because the guard is not consulted at all while the cap is silencing that window, so its budget must not carry across as if it had been spent, and preserving it would leave a CRITICAL guard that reached its deferral ceiling before the cap fired already at that ceiling on the first escalation after the cap lifts, unable to defer at all; an invalid or out-of-range value uses 0
+FM_CAP_HORIZON_SECS=86400    # seconds a fired cap's window-scoped marker keeps silencing the wedge path for that window, after which a new wedge escalates again; an invalid, out-of-range, or zero value uses 86400
+FM_ROLLBACK_SENTINEL_TTL_SECS=3600   # seconds a cap-state write failure that could not be rolled back keeps the wedge path silenced through state/.wedge-rollback-failed-<key> - a failed cap-marker write whose own rollback also failed, an escalation count the state dir would not take, whose failed write leaves the ceiling unenforceable, or the cap-fire counter reset whose failed reset leaves the saturated counter standing - so a persistent write failure is observed once per wedge event instead of on every poll; an invalid, out-of-range, or zero value uses 3600
 FM_WORKTREE_WRITE_PRUNE='.git node_modules .venv venv __pycache__ .mypy_cache .pytest_cache .ruff_cache .tox target dist build .next .cache vendor'   # directory names the wedge detector's task-worktree write probe skips; the default keeps .git out so a supervisor's own read-only git command can never look like crew progress; set it to the empty string to prune nothing, which widens the probe to the whole depth-bounded tree rather than disabling it
 FM_WORKTREE_WRITE_MAXDEPTH=6       # depth that same probe walks below the recorded worktree; it runs only at the moment a wedge escalation would otherwise fire, never on every poll; no probe knob applies to a secondmate, whose recorded worktree is a provisioned home the probe skips entirely
 FM_WORKTREE_WRITE_TIMEOUT=10       # wall-clock seconds that one walk may take, so a worktree on a hung mount cannot stall the watcher poll that started it; hitting the bound reads as no write evidence, which leaves the escalation schedule exactly as it was; a value that is not a positive integer falls back to the default
@@ -3028,16 +3086,16 @@ FM_FLEET_SYNC_PACKED_REFS_LOCK_AGE_SECS=30       # min mtime age before fm-fleet
 FM_BUSY_REGEX=          # optional override for rendered delivery guards and Grok's isolated task-state fallback; converted worker state ignores it
 FM_COMPOSER_IDLE_RE=    # optional fleet-wide idle-placeholder regex override (bin/fm-composer-lib.sh); a match alone does not prove emptiness because shape-specific position and ANSI de-emphasis safety gates still apply
 FM_COMPOSER_LEFTBAR_FOOTER_RE=   # optional fleet-wide override of the opencode left-bar mode/model footer's regex (bin/fm-composer-lib.sh's FM_COMPOSER_LEFTBAR_FOOTER_RE_DEFAULT, matched against both the ghost-stripped and the ANSI-stripped form of a run's LAST row); an override that cannot match the de-emphasised 1.19.0 footer puts the false `pending` back on an idle pane, so keep the default's required space after the separator and its exact `Build`/`Plan` mode words rather than widening it - widening it is the one path that turns typed text into the `empty` verdict which authorizes typing into a live session; see [runtime backend verification](verification/runtime-backends.md#2026-10-14-opencode-1190-de-emphasised-modefooter-row-in-the-left-bar-composer)
-FM_COMPOSER_CAPTURE_LINES=20   # fleet-wide bound for tail-capture composer reads; it no longer bounds the adapter composer state/content reads on tmux or herdr, which supply their bounded visible pane instead, while the cmux, orca, Zellij, and Paseo adapters use this small window so stale scrollback banners stay out of the candidate set; it still bounds the shared inbox composer read (bin/fm-task-inbox-lib.sh) on every backend, and on herdr it also floors how many Ctrl+U presses a refused leftover may take
+FM_COMPOSER_CAPTURE_LINES=20   # fleet-wide bound for tail-capture composer reads; it no longer bounds the adapter composer state/content reads on tmux, herdr, or rex, which supply their visible pane instead, while the cmux, orca, Zellij, and Paseo adapters use this small window so stale scrollback banners stay out of the candidate set; it still bounds the shared inbox composer read (bin/fm-task-inbox-lib.sh) on every backend, and on herdr it also floors how many Ctrl+U presses a refused leftover may take
 FM_COMPOSER_PI_MAX_LINES=8     # fleet-wide: maximum rows admitted between Pi's identity-corroborated separator pair; taller or ambiguous candidates stay unknown
-FM_COMPOSER_GHOST_LUMA_MAX=128   # fleet-wide: max perceived luminance (0.299R+0.587G+0.114B, 0-255) for a TRUECOLOR foreground to count as de-emphasised ghost/placeholder text and be stripped; dim/faint (SGR 2) is stripped regardless, and a screen whose backend identity is Command Code is read at a fixed 160 instead. Assumes a dark terminal theme (bin/fm-composer-lib.sh's fm_composer_strip_ghost, used by styled tmux, herdr, and Zellij reads). The default sits between the two populations it separates: harnesses draw their own de-emphasised composer furniture below it (opencode 1.19.0's mode footer at luminance 119.8 and its cwd row) and typed text above it. While it sits above the furniture the mode cells are stripped as ghost, so the footer's own identifying cells are gone from the ghost-stripped row and only the row's ANSI-stripped form still proves the footer - which is why the left-bar footer rule reads both forms and an idle opencode pane reads `empty` instead of the false `pending` that position produced - while dropping it under the furniture's luminance leaves those cells in the row and the footer then matches the left-bar footer rule in its stripped form too (still `empty`), and raising it over real typed text deletes typed text and reads as the false `empty` that authorizes typing into a live session; the measured luminances and the left-bar footer proof this threshold decides are in [runtime backend verification](verification/runtime-backends.md#2026-10-14-opencode-1190-de-emphasised-modefooter-row-in-the-left-bar-composer), so move it only against a fresh live capture
+FM_COMPOSER_GHOST_LUMA_MAX=128   # fleet-wide: max perceived luminance (0.299R+0.587G+0.114B, 0-255) for a TRUECOLOR foreground to count as de-emphasised ghost/placeholder text and be stripped; dim/faint (SGR 2) is stripped regardless, and a screen whose backend identity is Command Code is read at a fixed 160 instead. Assumes a dark terminal theme (bin/fm-composer-lib.sh's fm_composer_strip_ghost, used by styled adapter reads). The default sits between the two populations it separates: harnesses draw their own de-emphasised composer furniture below it (opencode 1.19.0's mode footer at luminance 119.8 and its cwd row) and typed text above it. While it sits above the furniture the mode cells are stripped as ghost, so the footer's own identifying cells are gone from the ghost-stripped row and only the row's ANSI-stripped form still proves the footer - which is why the left-bar footer rule reads both forms and an idle opencode pane reads `empty` instead of the false `pending` that position produced - while dropping it under the furniture's luminance leaves those cells in the row and the footer then matches the left-bar footer rule in its stripped form too (still `empty`), and raising it over real typed text deletes typed text and reads as the false `empty` that authorizes typing into a live session; the measured luminances and the left-bar footer proof this threshold decides are in [runtime backend verification](verification/runtime-backends.md#2026-10-14-opencode-1190-de-emphasised-modefooter-row-in-the-left-bar-composer), so move it only against a fresh live capture
 GROK_HOME=              # optional Grok config home for firstmate's global grok turn-end hook; defaults to ~/.grok
 FM_SEND_RETRIES=3       # fm-send typed-plane Enter-retry attempts after typing the line once; agy typed targets use a longer per-harness default owned by bin/fm-send.sh
 FM_SEND_SLEEP=0.4       # seconds between fm-send typed-plane submit checks
 FM_SEND_SETTLE=1        # seconds fm-send waits after a successful typed-plane submit; 0 disables
 FM_PENDING_REPLY_GRACE_SECS=120   # seconds after the request turn completes without a correlated parent report before its one recovery repost is eligible, and after the recovery turn completes before the missed-report escalation is eligible; never counted from delivery
 # sub-supervisor (bin/fm-supervise-daemon.sh); presence-gated via /afk
-FM_SUPERVISOR_BACKEND=             # optional supervisor pane backend override; tmux/herdr only, otherwise detects $TMUX_PANE then HERDR_ENV/HERDR_PANE_ID before tmux fallback
+FM_SUPERVISOR_BACKEND=             # optional supervisor pane backend override; see "Away-mode supervisor backend" for supported backends and detection
 FM_SUPERVISOR_TARGET=              # optional supervisor pane target override; tmux uses the exact forms owned by fm_backend_target_exists in bin/fm-backend.sh, herdr uses <session>:<pane-id>, otherwise auto-detected
 FM_INJECT_SKIP=heartbeat           # |-prefixes force-self-handled bypassing classification; empty disables
 FM_ESCALATE_BATCH_SECS=90          # buffer window for batched escalation digests; 0 = flush immediately
@@ -3073,6 +3131,16 @@ FM_INBOX_STT_MODEL=     # overrides config/inbox-stt-model for fm-inbox.sh say
 FM_INBOX_ASK_MODEL=     # overrides config/inbox-ask-model for fm-inbox.sh ask
 FM_INBOX_PROFILE=       # overrides config/inbox-profile; explicitly empty forces ambient credentials
 ```
+
+`FM_WEDGE_MAX_ESCALATIONS` bounds wedge escalations, not detection, so while its markers stand the dead-endpoint report is still consulted ahead of the short-circuit and reports a proven-gone endpoint exactly once per incarnation.
+The cap covers the wedge timer, which is where a BUSY pane whose agent is still generating output is escalated once its completed-turn age crosses `FM_BUSY_TURN_MAX_SECS`.
+It does not cover the first-sight stale surfaces, so a pane that renders a new hash on every poll is re-classified rather than escalated and still emits one stale wake per hash.
+That re-classification is itself an episode end, so it also releases the markers: a hash-churning pane is not capped across its own churn either, because every first sight after the cap fired re-opens that window. The away-posture first sight releases the markers without ending the episode, because the away daemon owns the one-shot per stale hash and the episode it was already in resumes on that same hash once the away-posture record goes.
+The consecutive-escalation count the ceiling is computed from is written before the escalation it counts is published, so where a configured state dir refuses that write the wedge path rolls back and silences itself through `FM_ROLLBACK_SENTINEL_TTL_SECS` instead of leaving an unenforceable ceiling that restarts at 1 on every poll; with the cap off the count is only what the wake reason reports, so the failure is logged and the unconfigured schedule is unchanged.
+The three cap settings are all bounded above at 999999999999999999, the largest value the watcher's own comparisons can carry, so a value that is not a whole number in range takes that setting's documented default instead: an out-of-range ceiling reads as unset and leaves the ladder uncapped rather than gaining a ceiling the watcher cannot enforce, while an out-of-range horizon or sentinel TTL falls back to its own default.
+Apart from a first-sight classification, only a pane that leaves the stale path, a declared wait (`paused:` or a verified captain-held transfer) as it starts or is lifted, and the turn-end churn absorb clear the markers, and all of them clear them through the one episode-ending reset, which drops the wedge timer and, wherever a cap is configured, the escalation count the cap was counting in the same call. That shared reset is what makes the release structural rather than a list of sites to keep in step. At the first-sight routes the reset is also opt-in per site: under a configured cap the count restarts with the released episode, while with the cap at its default 0 the count survives those routes exactly as the pre-cap watcher's did - the timer dropped and re-armed (or dropped alone), the escalation count standing - so a home that has not set anything keeps today's ladder, including the `demand-deep-inspection` prompt for a stuck pane.
+An operator can re-engage a capped window at once by deleting its `state/.wedge-permanent-<key>` marker, and a window silenced by a failed cap-state write by deleting its `state/.wedge-rollback-failed-<key>` sentinel; both files are safe to delete, and the window then escalates on the ordinary schedule again.
+Turning the cap back off takes effect at once: every cap marker is read only while the cap is configured, so a leftover from an earlier configured run cannot keep a window silent in a home that has turned the cap off.
 
 `fm-teardown.sh` retries only Git's `Unable to create '...index.lock': File exists` return failure up to `FM_TREEHOUSE_RETURN_LOCK_RETRIES` times.
 `FM_TREEHOUSE_RETURN_LOCK_RETRIES` accepts a nonnegative integer, and an unset, blank, or invalid value uses the default of 3.

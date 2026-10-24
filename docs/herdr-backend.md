@@ -695,11 +695,10 @@ Herdr is supported, with its own required CI lane, and is Starship's default for
 Select it by putting `herdr` in a local `config/backend` file, by exporting `FM_BACKEND=herdr`, or by telling the first mate in chat to use herdr.
 It can also be selected by runtime auto-detection when firstmate itself is running inside herdr and no explicit backend setting exists.
 Absent those three explicit settings, firstmate falls through to runtime auto-detection.
-When nothing is explicitly configured, `bin/fm-backend.sh`'s `fm_backend_detect` checks the runtime firstmate itself is executing inside: `$TMUX` (set inside every tmux pane, including a tmux pane nested inside a herdr pane) selects tmux and wins when present, `HERDR_ENV=1` (injected into every process herdr manages a pane for) selects herdr when `$TMUX` is absent, and cmux runtime signals select cmux only after those multiplexer markers are absent.
-See [`docs/cmux-backend.md`](cmux-backend.md#runtime-detection) for cmux's primary `CMUX_WORKSPACE_ID` marker and macOS-only fallback signals.
+Herdr's runtime marker is `HERDR_ENV=1`, injected into every process herdr manages a pane for; a tmux pane nested inside a herdr pane still sets `$TMUX` and selects tmux, because detection resolves innermost-first ([backend selection order](configuration.md#backend-selection-order) owns every backend's marker and their order).
 An auto-detected herdr spawn stays silent, like an auto-detected tmux one; set `config/backend` or pass `--backend tmux` to opt out.
 Only when none of that resolves anything does firstmate fall back to the hard default, tmux.
-Absent `backend=` in a task's meta always means `tmux`; a herdr task carries an explicit `backend=herdr` line, while the experimental zellij, orca, cmux, and paseo adapters carry their own backend values.
+Absent `backend=` in a task's meta always means `tmux`; a herdr task carries an explicit `backend=herdr` line, and [task metadata](configuration.md#task-metadata) owns every other adapter's fields.
 A herdr spawn refuses loudly if `herdr` or `jq` is missing, or if the installed herdr's protocol is older than the verified minimum (`fm_backend_herdr_version_check`).
 The managed human-presentation flow is additionally capability-gated (`fm_backend_herdr_presentation_capable`, protocol 16); below that it falls back to the prior label-based spawn flow instead of refusing - see "Presentation capability gate" below.
 
@@ -1426,8 +1425,7 @@ There is still one watcher process; the event reader is a bounded child of that 
 
 ## Away-mode supervisor support
 
-The away daemon supports tmux and Herdr supervisor panes only.
-It refuses Zellij, Orca, cmux, and Paseo as supervisor backends rather than applying the wrong transport.
+[Away-mode supervisor configuration](configuration.md#away-mode-supervisor-backend-fm_supervisor_backend--fm_supervisor_target) owns supported backends and detection.
 For Herdr, target existence, native state, capture, composer state, and verified submit all route through the shared backend dispatcher and the explicit named-session CLI owner.
 The pane-independent max-defer alert is configured in [`wedge-alarm.md`](wedge-alarm.md).
 
@@ -2050,7 +2048,7 @@ No terminal workaround, forced style reset around foreign output, or blanket ter
 - Mutable labels can collide; they are never placement or destructive authority.
 - A Firstmate outside Herdr cannot resolve a launcher workspace, so a colliding home label refuses new spawns until the collision is cleared.
 - Ghost and placeholder recognition uses ANSI de-emphasis when available; an unstyled glyph row carrying trailing non-idle text fails safely to `unknown`.
-- Only tmux and Herdr can host the away-mode supervisor terminal.
+- Supervisor transport support is separate from task-spawn support; see [away-mode supervisor configuration](configuration.md#away-mode-supervisor-backend-fm_supervisor_backend--fm_supervisor_target).
 
 ## Regression entry points
 

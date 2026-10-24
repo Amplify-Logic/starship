@@ -703,12 +703,14 @@ test_session_provider_backends_do_not_require_tmux() {
     printf '%s\n' "$backend" > "$case_dir/home/config/backend"
     fakebin=$(make_fake_toolchain_no_tmux "$case_dir" "$cli")
     out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+      REX_BIN_DIR="$case_dir/no-rex-bin-dir" FM_BACKEND_REX_BUNDLE_BIN="$case_dir/no-rex" \
       FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
     [ -z "$out" ] || fail "backend=$backend with tmux absent but its own deps present should be silent, got: $out"
   done <<'ROWS'
 herdr^herdr
 zellij^zellij
 cmux^cmux
+rex^rex
 ROWS
   pass "bootstrap: session-provider backends require their own CLI + jq + treehouse, never tmux"
 }
@@ -726,23 +728,28 @@ test_session_provider_backends_gate_own_cli_not_tmux() {
     # Toolchain has jq + treehouse but NOT the session CLI and NOT tmux.
     fakebin=$(make_fake_toolchain_no_tmux "$case_dir")
     out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
-      FM_BACKEND_PASEO_BUNDLE_BIN="$case_dir/no-paseo" FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
+      FM_BACKEND_PASEO_BUNDLE_BIN="$case_dir/no-paseo" REX_BIN_DIR="$case_dir/no-rex-bin-dir" \
+      FM_BACKEND_REX_BUNDLE_BIN="$case_dir/no-rex" FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
     case "$backend" in
       herdr) missing="MISSING: herdr (install: FM_HOME=\"$case_dir/home\" \"$ROOT/bin/fm-herdr-setup.sh\" --quiet" ;;
       paseo) missing="MISSING_MANUAL: paseo (instructions: https://paseo.sh)" ;;
+      rex) missing="MISSING_MANUAL: rex (instructions: https://www.superlogical.com/rex)" ;;
       *) missing="MISSING: $cli" ;;
     esac
     assert_contains "$out" "$missing" "backend=$backend must fail closed on its own missing session CLI"
-    if [ "$backend" = paseo ]; then
-      assert_not_contains "$out" "MISSING: paseo (install:" \
-        "backend=paseo must not advertise manual guidance as an executable install command"
-    fi
+    case "$backend" in
+      paseo|rex)
+        assert_not_contains "$out" "MISSING: $backend (install:" \
+          "backend=$backend must not advertise manual guidance as an executable install command"
+        ;;
+    esac
     assert_not_contains "$out" "MISSING: tmux" "backend=$backend must not demand tmux when its own CLI is missing"
   done <<'ROWS'
 herdr^herdr
 zellij^zellij
 cmux^cmux
 paseo^paseo
+rex^rex
 ROWS
   pass "bootstrap: a session-provider backend gates its own CLI, never a false tmux requirement"
 }
@@ -781,7 +788,7 @@ test_unknown_backend_reports_invalid_configuration() {
   fakebin=$(make_fake_toolchain "$case_dir")
   out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
     FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
-  assert_contains "$out" "BACKEND_INVALID: bogus (known: tmux herdr zellij orca cmux paseo)" \
+  assert_contains "$out" "BACKEND_INVALID: bogus (known: tmux herdr zellij orca cmux paseo rex)" \
     "bootstrap should report an unknown resolved backend"
   assert_not_contains "$out" "MISSING: tmux" "an unknown backend should not silently fall back to tmux dependencies"
   pass "bootstrap: unknown resolved backends fail closed with an actionable diagnostic"
@@ -1273,6 +1280,30 @@ test_crew_dispatch_active_rules_are_verbose_bootstrap_info() {
   pass "bootstrap surfaces active crew-dispatch rules only as verbose BOOTSTRAP_INFO"
 }
 
+# config/pr-health-monitor is the only thing that arms the PR health monitor.
+test_pr_health_monitor_arms_only_with_its_flag() {
+  local case_dir fakebin out flag
+  for flag in on off; do
+    case_dir="$TMP_ROOT/pr-health-$flag"
+    mkdir -p "$case_dir/home/config" "$case_dir/home/data" "$case_dir/home/state"
+    printf '%s\n' manual > "$case_dir/home/config/backlog-backend"
+    [ "$flag" = off ] || : > "$case_dir/home/config/pr-health-monitor"
+    fakebin=$(make_fake_toolchain "$case_dir")
+    add_real_jq "$fakebin"
+    out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+      FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
+    [ -z "$out" ] || fail "bootstrap with the PR health flag $flag printed: $out"
+    if [ "$flag" = on ]; then
+      [ -f "$case_dir/home/state/pr-health.check.sh" ] && [ -f "$case_dir/home/state/pr-health.check-trust" ] \
+        || fail "bootstrap did not register the PR health monitor: $(ls -A "$case_dir/home/state")"
+    else
+      [ -z "$(ls -A "$case_dir/home/state")" ] \
+        || fail "bootstrap without the PR health flag left state: $(ls -A "$case_dir/home/state")"
+    fi
+  done
+  pass "bootstrap arms the PR health monitor only when config/pr-health-monitor exists"
+}
+
 test_crew_dispatch_validation() {
   local label body expect mode case_dir fakebin out child_env n
   n=0
@@ -1458,4 +1489,5 @@ test_network_phases_record_per_step_elapsed_times
 test_stack_tools_notice_runs_in_the_network_half
 test_tasks_axi_verdict_handoff_is_consumed_once
 test_crew_dispatch_active_rules_are_verbose_bootstrap_info
+test_pr_health_monitor_arms_only_with_its_flag
 test_crew_dispatch_validation
