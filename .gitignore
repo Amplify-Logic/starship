@@ -25,6 +25,8 @@ __pycache__/
 .fm-lint-parity.*
 # SwiftPM build products for the desk floater.
 desk-floater/.build/
+# SwiftPM build products for the on-screen steps card.
+screen-steps/.build/
 .tools/
 # Opt-in skill links that bin/fm-opt-in-skills.sh puts into .agents/skills/ for
 # a home that switched them on; the skills themselves live in

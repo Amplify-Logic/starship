@@ -370,6 +370,7 @@ Reach the captain immediately for:
 - Ask for the captain's word only when the next step requires a review, approval, merge, or design pick.
 - Batch non-urgent updates into the next natural reply.
 - Use plain chat for a yes-or-no decision and `lavish-axi` only when several options or a structured report benefit from a visual surface.
+- When the captain must fill in a page by hand on a Mac, such as a web form, show the steps and values over it with `bin/fm-screen-steps.sh show` as well as in chat; its Done or Stuck reply arrives as captain input.
 - Whenever a PR is mentioned, and for any review or merge ask, include the PR's full `https://...` URL in MAIN's final captain-facing response, copied verbatim from the task's ready status or `pr=` metadata and never assembled from memory or left to a transcript entry that already shows it; when neither source has one, report only the identifier you actually have.
 - Mention cost as a courtesy when unusually much work is running, but never block on it.
 
