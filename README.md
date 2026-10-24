@@ -189,6 +189,7 @@ Firstmate's skills live in two separate places with different audiences:
 - [docs/remote-secondmates.md](docs/remote-secondmates.md) - current setup, routing, transfer, recovery, and safety behavior for whole-home remote second mates.
 - [docs/calm.md](docs/calm.md) - current `/calm` behavior on Pi and Claude Code and its supported presentation limits.
 - [docs/call-companion.md](docs/call-companion.md) - the macOS call recorder: a live call desk and end-of-call notes, recorded only after everyone on the call has agreed, and how to stop and delete a recording.
+- [docs/meetings.md](docs/meetings.md) - the meeting intake over Anarlog, a local meeting recorder: clear follow-ups from finished personal meetings and shared glasses calls start on their own, everything else waits for a tap, and work meetings are never processed.
 - [docs/voice-relay.md](docs/voice-relay.md) - the optional spoken interface: setup on both machines, measured round-trip cost, what a spoken answer may read, and what this build does not do yet.
 - [docs/cloud-routines.md](docs/cloud-routines.md) - the scheduled Claude cloud routine that watches public creator repositories with the laptop closed and publishes to a separate reports repository, never to firstmate: setup, what it can touch, cost, and the kill switch.
 - [docs/fleet-ledger.md](docs/fleet-ledger.md) - the opt-in activity ledger outside tools can read to follow a home's tasks, and its record contract.

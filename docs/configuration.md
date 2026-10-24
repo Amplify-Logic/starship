@@ -16,6 +16,7 @@ Start with the directory layout, then use the setting reference for the behavior
 | Starter settings for a new home: which model does which job, transcription words, and how hard the first mate thinks | [Starter settings](#starter-settings-first-launch), [crew dispatch profiles](#crew-dispatch-profiles-configcrew-dispatchjson), [speech-to-text vocabulary](#speech-to-text-vocabulary-configstt-vocabulary), and [primary effort](#primary-effort-configprimary-effort) |
 | Spoken replies | [Desk voice-out](#desk-voice-out-configspeak) |
 | The call recorder | [Call recorder](#call-recorder-configcall-companion) |
+| Meetings recorded by Anarlog, and shared glasses calls | [Meeting intake](#meeting-intake-configmeetings) |
 | A home's own private tools beside the shared code | [Private add-on](#private-add-on-configaddon) and [opt-in skills](#opt-in-skills-configadhd-configsecond-opinion) |
 | Keeping private names out of this public repository | [Private leak words](#private-leak-words-configleak-words) |
 | Per-run overrides and tuning | [Environment variables](#environment-variables) |
@@ -86,6 +87,7 @@ Each effective `FM_HOME` contains private operational directories.
 - Explicitly installed content-addressed extension packages under `data/extensions/packages/`.
 - The captain ledger `data/captain-ledger.jsonl`, every captain prompt recorded before the primary answers in a home opted in through `config/captain-ledger` (`bin/fm-captain-ledger.sh`).
 - Call recordings under `data/calls/`: the transcript, live desk, end-of-call notes and archive (`bin/fm-call-lib.sh`; [call-companion.md](call-companion.md)).
+- Meeting intake records under `data/meetings/<id>/intake.json` (`bin/fm-meetings.sh`; [meetings.md](meetings.md)).
 
 `state/` holds runtime records:
 
@@ -102,6 +104,7 @@ Each effective `FM_HOME` contains private operational directories.
 - The dispatch decision record `state/dispatch-decisions.jsonl` (`bin/fm-dispatch-resolve.sh`; "Typed dispatch resolution" below).
 - The localhost web page's token, pid, port and request log under `state/web/` (`bin/fm-web.sh`; [web.md](web.md)).
 - The call recorder's process records, logs, short-lived audio chunks and decision logs under `state/calls/` (`bin/fm-call-lib.sh`; [call-companion.md](call-companion.md)).
+- The meeting intake's check records under `state/meetings/` (`bin/fm-meetings.sh`; [meetings.md](meetings.md)).
 
 `config/` holds local gitignored operating choices, including explicit extension bindings under `config/extensions.d/`.
 
@@ -3284,6 +3287,15 @@ It holds the call recorder's settings: the label for your own speech, the microp
 Absent, every setting takes its default.
 `key = value` lines; `#` comments and blank lines are ignored, and an unknown key is refused so a typo never silently changes what is recorded.
 [`docs/examples/call-companion`](examples/call-companion) lists every key with its default, `bin/fm-call-lib.sh`'s header owns their meaning, and [call-companion.md](call-companion.md) covers consent, setup, stopping and deleting.
+
+## Meeting intake (config/meetings)
+
+Optional, private, gitignored, and not inherited by secondmate homes.
+It holds the meeting intake's settings: the after-the-call speaker pass, the shared glasses-call folder, the words that mark a work meeting, extra labels for your own speech, and the intake model.
+Absent, every setting takes its default.
+`key = value` lines; `#` comments and blank lines are ignored, and an unknown key is refused so a typo never silently changes which meetings are processed.
+[`docs/examples/meetings`](examples/meetings) lists every key with its default, `bin/fm-meetings.sh`'s header owns their meaning, and [meetings.md](meetings.md) covers setup and the work-meeting rule.
+The optional, private `config/meeting-work-words` lists more work words, one word or phrase per line.
 
 ## Supervision active alert channels (config/wedge-alarm)
 

@@ -1,0 +1,26 @@
+# config/meetings - settings for the meeting intake (bin/fm-meetings.sh).
+# Copy this into a local, gitignored config/meetings and edit.
+# `key = value` lines; `#` comments and blank lines are ignored; an unknown key
+# is refused. Every line below shows the default, so an absent file behaves the
+# same as this one. See docs/meetings.md.
+
+# Starship always asks Anarlog for its after-the-call Batch pass (speaker
+# labels) when it ran none itself. Minutes to wait for that speaker pass before
+# using the live transcript.
+speaker_pass_wait_minutes = 180
+
+# Folder that shared glasses-call audio lands in, or off.
+glasses_folder = ~/Library/Mobile Documents/com~apple~CloudDocs/Starship calls
+
+# Words that mark a work meeting, which is never processed. Repeat the line for
+# each word or phrase. Every line of the private config/meeting-work-words (one
+# word or phrase per line, `#` comments) counts too. None ship by default.
+# work_marker = Example Corp
+
+# Another transcript speaker label that is you, beyond the one Anarlog marks
+# as you. Repeat the line for each.
+# self_label = Me
+
+# Claude model for the intake, and how much of the meeting it reads.
+intake_model = sonnet
+transcript_chars = 60000
