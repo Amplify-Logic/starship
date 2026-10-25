@@ -3,7 +3,7 @@
 Repeatable evidence for the worker outward-action check.
 Current behavior and the operator-facing contract are owned by [`../configuration.md`](../configuration.md) ("Worker outward actions"), and the matching rules by [`../../bin/fm-outward-check.py`](../../bin/fm-outward-check.py)'s header; this page records evidence only.
 
-Date: 2026-10-20; portable suite rerun 2026-10-21.
+Date: 2026-10-20; portable suite rerun 2026-10-24 (Python 3.14.8, macOS 14.6, Darwin arm64).
 Python: 3.12.5 (macOS 26.5.1, Darwin arm64).
 Claude Code: 2.1.305.
 
@@ -14,6 +14,7 @@ Claude Code: 2.1.305.
 ```console
 $ bash tests/fm-outward-check.test.sh
 ok - reading, searching, listing, drafting and looking pass, and other tools are untouched
+ok - a leading word that repeats the connector's name is skipped for reads, never for outward words
 ok - sending, answering and changing events, sharing, trashing, Zapier, new connectors and browser control are refused with a plain way forward
 ok - a send email to permission holds only when every recipient is visible and listed
 ok - a job's permission comes from the last outward= line and holds only for what it names

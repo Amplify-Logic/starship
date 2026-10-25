@@ -50,6 +50,10 @@
 # none of its words is an outward word (OUTWARD_WORDS) and its first word reads
 # (READ_WORDS), or it creates or updates a draft, or on the browser it only
 # moves between tabs, resizes the window or records a GIF (BROWSER_LOOK_WORDS).
+# A first word that repeats the connector's own name, the last word of its
+# server (slack_read_channel on claude_ai_Slack), is skipped for those tests,
+# never for the outward words; an org word, the first half of a two-word name
+# or a word that already reads or drafts is never skipped.
 # Opening a URL (navigate) is an action, because a link in the captain's
 # logged-in browser can itself answer an invite or submit a form. Every Zapier
 # tool is an action. Everything else needs a permission, so a tool a connector adds later
@@ -348,16 +352,25 @@ def words_of(action):
     return [w for w in re.split(r"[^a-z0-9]+", action.lower()) if w]
 
 
+def verb_words(server, words):
+    """words without a leading word that repeats the connector's own name, the last word of its server."""
+    name = words_of(server[len(CONNECTOR_PREFIX):])[-1:] if server.startswith(CONNECTOR_PREFIX) else []
+    if len(words) > 1 and words[:1] == name and words[0] not in READ_WORDS | DRAFT_VERBS:
+        return words[1:]
+    return words
+
+
 def classify(server, action):
     """-> (needs_permission, kind)."""
     fam = family(server)
     words = words_of(action)
     if fam != "zapier" and words and not set(words) & OUTWARD_WORDS:
-        if words[0] in READ_WORDS:
+        verbs = verb_words(server, words)
+        if verbs[0] in READ_WORDS:
             return False, None
-        if fam == "browser" and words[0] in BROWSER_LOOK_WORDS:
+        if fam == "browser" and verbs[0] in BROWSER_LOOK_WORDS:
             return False, None
-        if words[0] in DRAFT_VERBS and set(words) & DRAFT_WORDS:
+        if verbs[0] in DRAFT_VERBS and set(verbs) & DRAFT_WORDS:
             return False, None
     if fam == "mail":
         return True, SEND if set(words) & SEND_WORDS else MAILBOX

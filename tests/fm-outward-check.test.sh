@@ -74,6 +74,23 @@ test_reading_and_drafting_pass_untouched() {
   pass "reading, searching, listing, drafting and looking pass, and other tools are untouched"
 }
 
+test_connector_named_reads_pass() {
+  local home tool
+  home=$(new_home connector-named)
+  for tool in mcp__claude_ai_Slack__slack_read_channel mcp__claude_ai_Slack__slack_read_thread \
+    mcp__claude_ai_Slack__slack_search_public_and_private mcp__claude_ai_Acme_Gmail__gmail_get_message \
+    mcp__claude_ai_Search_Console__search_analytics mcp__claude_ai_Search_Console__search_console_query \
+    mcp__claude_ai_Web_Search__search_web mcp__claude_ai_Acme_Update__update_draft; do
+    expect_allow "$home" "$tool" '{}' "$tool reads after the connector's own name and must pass"
+  done
+  for tool in mcp__claude_ai_Slack__slack_send_message mcp__claude_ai_Slack__slack_schedule_message \
+    mcp__claude_ai_Slack__slack_send_message_draft mcp__claude_ai_Gmail__slack_read_channel \
+    mcp__claude_ai_Acme_Gmail__acme_read_message mcp__claude_ai_Google_Calendar__google_get_event; do
+    expect_refuse "$home" "$tool" '{}' "$tool acts outward or its first word is not its connector's name, so it must be refused" >/dev/null
+  done
+  pass "a leading word that repeats the connector's name is skipped for reads, never for outward words"
+}
+
 test_outward_actions_are_refused() {
   local home tool reason
   home=$(new_home outward)
@@ -459,6 +476,7 @@ test_spawn_installs_the_check() {
 }
 
 test_reading_and_drafting_pass_untouched
+test_connector_named_reads_pass
 test_outward_actions_are_refused
 test_job_permission_from_the_task_record
 test_job_permission_from_the_task_record_last_line_wins

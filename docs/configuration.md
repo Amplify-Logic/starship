@@ -897,7 +897,7 @@ With no `config/outward-permissions` file, every worker can read and draft but c
 The primary, secondmates, other worker harnesses and every other tool, including Bash and locally configured MCP servers, are not checked.
 
 **What counts as outward.** The check reads only the tool name, so it keeps working as connectors add tools.
-An action passes without permission only when its name starts with a reading word (get, list, search, read, query, find, fetch, suggest, guide, export, download, view, count, describe, lookup), creates or updates a draft, or, in the browser, lists, opens or switches tabs, resizes the window, or records a GIF, and none of its words is an outward word such as send, reply, forward, share, publish, post, delete, trash, accept, decline or respond.
+An action passes without permission only when its name, after a first word that repeats the connector's own name and does not itself read or draft (the last word of its server name, so `slack_read_channel` on Slack counts as `read_channel`), starts with a reading word (get, list, search, read, query, find, fetch, suggest, guide, export, download, view, count, describe, lookup), creates or updates a draft, or, in the browser, lists, opens or switches tabs, resizes the window, or records a GIF, and none of its words is an outward word such as send, reply, forward, share, publish, post, delete, trash, accept, decline or respond.
 Every other action of a claude.ai connector or the browser needs a permission, and every Zapier tool is treated as an action.
 Opening a URL in the browser needs `control browser`, because a link in the captain's logged-in browser can itself answer an invite, unsubscribe or submit a form.
 
