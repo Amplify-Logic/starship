@@ -21,7 +21,7 @@ Width-constrained surfaces clip or truncate the canonical line without wrapping 
 | `[account-role]` | A compact role word for the vendor account this primary is running on, attached to the model identity rather than forming its own group. | Omitted entirely when the account is unknown. |
 | `🧠 context` | The integer percentage of the model context window already used. | `--` when the orchestrator does not expose current context use. |
 | `⚡ quota` | The integer percentage of the provider's binding quota window already used, immediately followed by a dim token naming the window or windows that bind it when the adapter knows them. | `--` when the provider or orchestrator does not expose quota, or exposes a figure whose windows cannot all be named. |
-| `workers` | Plain-word counts, in this order and each shown only when nonzero, joined by commas: `N working`, `N checking`, `N waiting`, `N waiting for you`, `N needs a look` (`N need a look` when more than one), and `N stopped`, as in `1 working, 1 waiting for you`. | Dim `workers unknown` while the fleet reading is unknown; dim `N tasks, state unknown` (`1 task, state unknown`) when the reading is known, every count is zero, and task records still exist; dim `no workers` only when the reading is known, every count is zero, and no task record exists. |
+| `workers` | Plain-word counts, in this order and each shown only when nonzero, joined by commas: `N working`, `N checking`, `N waiting`, `N waiting for you`, `N needs a look` (`N need a look` when more than one), and `N stopped`, as in `1 working, 1 waiting for you`. | Dim `workers unknown` only while no good fleet reading exists; a last good reading that is no longer current keeps its words, followed by a dim age such as `(10m ago)`; dim `N tasks, state unknown` (`1 task, state unknown`) when the reading is known, every count is zero, and task records still exist; dim `no workers` only when the reading is known, every count is zero, and no task record exists. |
 | `👁 supervision` | `watching` while `state/.last-watcher-beat` is under 180 seconds old. | Bright-red `not watching` when the beacon is missing, unreadable, or 180 seconds old or more; dim `idle` instead while the home holds no task or second-mate record and no registered check. |
 | `$ cost` | Cumulative cost in US dollars for the current orchestrator session, rounded to two decimals. | `$--` when the orchestrator does not expose cost. |
 | `💤 AFK` | Whether the Firstmate home is in away mode. | Dim `💤--` when away mode is off. |
@@ -36,7 +36,7 @@ Each word maps to one figure from `bin/fm-fleet-status-lib.sh`:
 | `working` | working | Tasks whose recorded endpoint has an agent running on it right now and that no other figure claims. This is the headline, because it answers how many workers are busy for the captain. |
 | `checking` | validating | Tasks the validation pipeline is carrying. They are progressing, but no worker is typing at them. |
 | `waiting` | paused | Tasks in a declared bounded external wait. |
-| `waiting for you` | ready | Work that waits on the captain: a PR ready for review, a ready branch, a report, or a decision a human owes. |
+| `waiting for you` | ready | Work that waits on the captain: a PR ready for review or merge, a ready branch awaiting the merge word, or a decision a human owes. |
 | `needs a look` | attention | Tasks that need Firstmate to act: a blocker or a failure. |
 | `stopped` | stopped | Records still here whose worker is not: the endpoint is proven dead or absent, or the recorded worktree is gone. Done work is never counted here, because a worker that exits once its work is done is not a lost worker; a decision is not done, so its lost worker is. |
 
@@ -50,7 +50,9 @@ So the group now leads with the agents that are actually running and gives the r
 `checking`, `waiting`, `waiting for you`, and `needs a look` come from `bin/fm-crew-state.sh`, the canonical current-state reader, folded by `bin/fm-fleet-status-lib.sh`.
 That library selects no run and re-implements no attribution; run selection stays with the canonical reader, and the fold never reads a status log's last line.
 The distinction between a busy worker and `checking` is the reader's SOURCE, not its state word: `working · run-step` is the pipeline carrying a task, and `working · pane` is a worker busy on one.
-`waiting for you` covers every `done` whose detail does not name a merged or closed PR, and a `parked` the reader says a human owes: a status-log needs-decision, or a gate line carrying the reader's whole `ask-user: authority decision` component.
+`waiting for you` covers a `done` the captain acts on, and a `parked` the reader says a human owes: a status-log needs-decision, or a gate line carrying the reader's whole `ask-user: authority decision` component.
+A `done` the captain acts on is a pipeline (`run-step`) verdict on a PR, or a worker's status-log `done` that `fm_dod_should_gate_ship_done` in `bin/fm-dod-lib.sh` reads as the ready report: a green PR, or a ready branch or PR in a mode whose `done` is the delivery itself.
+Any other status-log `done` - a build committed and handed back before validation, or a scout report Firstmate reads first - is Firstmate's turn and counts in no figure, because no worker is busy on it and nothing waits on the captain: on 2026-10-25 the row read `1 waiting for you` for a ship that had no PR yet.
 Any other `parked` gate is the worker's or Firstmate's turn and claims no figure, so it counts as `working` or `stopped` by liveness alone; a `done` whose PR was merged or closed waits on nobody and counts in no figure at all.
 `needs a look` covers `blocked` and `failed`, which are the states that need Firstmate rather than time.
 
@@ -64,10 +66,12 @@ The order of proof, which `bin/fm-fleet-status-lib.sh` owns in full, is: a remot
 Everything else - an unreadable endpoint, an unverified backend, a record with no endpoint at all - stays unknown and is counted in neither figure, because overstating either side is the failure this whole supply exists to prevent.
 A live agent is still not a busy one: on 2026-10-25 the row read `2 working` while one of the two workers had a green PR and sat idle until the captain gave the merge word.
 So every other figure claims its task first, and `working` counts only a live agent on a task none of them claimed, idle or busy.
-Done work spends no endpoint probe at all, because neither `working` nor `stopped` can count it; a decision is still probed, so a worker lost while it waits is counted `stopped`.
+Done work spends no endpoint probe at all, because its worker is never a lost one; a decision is still probed, so a worker lost while it waits is counted `stopped`.
 
 The six live fields are a single reading and share a single fate.
-A reading that is missing, incomplete, past its maximum age, malformed, or taken for a different set of tasks renders `workers unknown` rather than a number for any of them.
+A reading that is past its maximum age, or taken for a different set of tasks, is the last good reading rather than a current one: its counts are shown followed by a dim age such as `(10m ago)`, and a refresh is started at once.
+Under load the out-of-band fold can miss its bound for longer than a reading lives, and on 2026-10-25 the row read `workers unknown` with five workers running.
+Only a home with no good reading at all, or one whose cached reading is malformed, renders `workers unknown` rather than a number for any of them.
 They are never reported as zero to stand in for "not read yet", because an idle fleet is a real state the captain has to be able to act on.
 
 A canonical read consults the validation pipeline and costs about a second per task, which is three orders of magnitude more than the renderer's one-second frame.
@@ -461,6 +465,7 @@ Editing `~/.cursor` by hand is still out of scope, and no other file under it is
 
 Rows captured before 2026-09-12 show the fleet group as `🚢<active> ⏸<paused> ⚠<attention>`, rows captured before 2026-09-21 show it as `🚢<working> 🧪<validating> ⏸<paused> ⚠<attention> 📋<records>`, and rows captured before 2026-10-20 show it as `🚢<alive> 🧪<validating> ⏸<paused> ⚠<attention> 🪦<stopped> 📋<records>`, with supervision as `👁 <seconds>s` or a bright-red `NO-WATCH`.
 Rows captured before 2026-10-25 count every live agent as `working`, including one whose work already waits on the captain, and have no `waiting for you` figure.
+Rows captured on 2026-10-25 before the fix that followed count a worker's pre-validation `done` as `waiting for you`, and render `workers unknown` when a slow refresh let the reading age out.
 That was the field shape on the day each of those runs was observed; the current shape is the one in the canonical line above, and those older captures are kept as the evidence they were rather than rewritten.
 
 The adapter contract was checked on 2026-07-21 with Claude Code's project status-line payload shape, Pi 0.80.10, Cursor CLI 2026.07.17-3e2a980, and tmux 3.6a.

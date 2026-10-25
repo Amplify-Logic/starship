@@ -318,12 +318,26 @@ test_finished_work_waiting_on_the_captain_is_not_counted_as_working() {
   fleet_endpoint_task gate live-1 "$HOME_FIX/wt" \
     'state: parked · source: status-log · needs-decision: pick a schema'
   fleet_endpoint_task branch dead-1 "$HOME_FIX/wt" \
-    'state: done · source: status-log · done: ready branch'
+    'state: done · source: status-log · ready branch fm/branch at 5d6e7f8'
+  printf 'kind=ship\nmode=local-only\n' >> "$HOME_FIX/state/branch.meta"
   fleet_endpoint_task merged live-2 "$HOME_FIX/wt" \
     'state: done · source: run-step · checks green: PR merged (ci monitor ended)'
   out=$(render Opus high -- -- -- | strip_ansi)
   assert_contains "$out" '│ 2 waiting for you │' \
     "decisions, ready branches, and merged work were not told apart from working"
+
+  # A worker that committed its build and reported done before validation has
+  # no PR and waits on firstmate, not the captain, and no worker is busy on it,
+  # so only the busy worker reads as working.
+  reset_fleet
+  fleet_endpoint_task busy live-1 "$HOME_FIX/wt" \
+    'state: working · source: pane · harness busy'
+  fleet_endpoint_task built dead-1 "$HOME_FIX/wt" \
+    'state: done · source: status-log · committed 1a2b3c4 on fm/built'
+  printf 'kind=ship\nmode=no-mistakes\n' >> "$HOME_FIX/state/built.meta"
+  out=$(render Opus high -- -- -- | strip_ansi)
+  assert_contains "$out" '│ 1 working │' \
+    "a build handed back before validation was counted as waiting for the captain or as working"
   pass "status bar: finished work waiting on the captain is counted apart from working workers"
 }
 
@@ -402,6 +416,15 @@ test_unknown_fleet_state_shows_placeholders_and_never_zero() {
   assert_contains "$out" '│ workers unknown │' \
     "an unread fleet does not say its workers are unknown"
   assert_not_contains "$out" 'no workers' "an unread fleet was reported as zero live workers"
+
+  # Under load the refresh has not landed in time, but a good reading was taken
+  # before: its counts stand in with a dim age rather than workers unknown.
+  printf '400\t1\t0\t2\t0\t0\t1\tstale-signature' > "$HOME_FIX/state/.status-fleet-state"
+  out=$(FM_FLEET_STATE_NO_CACHE=0 FM_FLEET_STATE_NOW=1000 \
+    FM_FLEET_STATE_READER="$FAKEBIN/absent-reader" \
+    render Opus high -- -- -- | strip_ansi)
+  assert_contains "$out" '│ 1 working, 2 checking, 1 waiting for you (10m ago) │' \
+    "a slow refresh under load blanked the last good counts"
 
   # Records the reading could not classify are never an idle fleet: they are
   # named as tasks whose state is unknown.

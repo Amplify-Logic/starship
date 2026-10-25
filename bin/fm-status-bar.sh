@@ -357,7 +357,7 @@ X=$'\033[0m'
 # library now folds the canonical current-state reader and the recovery-grade
 # endpoint classifier instead, so the headline is busy workers, work waiting on
 # the captain is its own figure, the records whose worker is gone carry theirs,
-# and it reports whether it has a usable reading at all.
+# and it reports whether its reading is current, the last good one, or absent.
 fleet_counts() {
   local reading
   RECORD_COUNT=0
@@ -368,13 +368,27 @@ fleet_counts() {
   ATTENTION_COUNT=0
   READY_COUNT=0
   FLEET_KNOWN=0
+  FLEET_AGE=0
   reading=$(fm_fleet_status_counts "$STATE" 2>/dev/null) || return 0
   IFS=$'\t' read -r RECORD_COUNT WORKING_COUNT STOPPED_COUNT VALIDATING_COUNT \
-    PAUSED_COUNT ATTENTION_COUNT READY_COUNT FLEET_KNOWN <<EOF
+    PAUSED_COUNT ATTENTION_COUNT READY_COUNT FLEET_KNOWN FLEET_AGE <<EOF
 $reading
 EOF
   case "$RECORD_COUNT" in ''|*[!0-9]*) RECORD_COUNT=0 ;; esac
-  case "$FLEET_KNOWN" in 1) ;; *) FLEET_KNOWN=0 ;; esac
+  case "$FLEET_KNOWN" in 1|2) ;; *) FLEET_KNOWN=0 ;; esac
+  case "$FLEET_AGE" in ''|*[!0-9]*) FLEET_AGE=0 ;; esac
+}
+
+# The dim age marker for a last good reading that is no longer current, so the
+# captain can see the counts are a moment old rather than a live statement.
+fleet_age_words() {  # <seconds>
+  if [ "$1" -lt 60 ]; then
+    printf 'a moment ago'
+  elif [ "$1" -lt 3600 ]; then
+    printf '%sm ago' "$(($1 / 60))"
+  else
+    printf '%sh ago' "$(($1 / 3600))"
+  fi
 }
 
 supervision_age() {
@@ -463,7 +477,9 @@ render_once() {
   # because "no workers" is a real state the captain has to be able to believe.
   # For the same reason it is never shown while task records exist: records
   # the reading could not classify are named as tasks whose state is unknown.
-  if [ "$FLEET_KNOWN" != 1 ]; then
+  # A last good reading that is no longer current is shown with a dim age, so
+  # a slow refresh under load never blanks the counts to unknown.
+  if [ "$FLEET_KNOWN" = 0 ]; then
     fleet_part="${D}workers unknown${X}"
   else
     fleet_part=
@@ -477,6 +493,8 @@ render_once() {
       fleet_part="${D}${RECORD_COUNT} task$([ "$RECORD_COUNT" -eq 1 ] || printf s), state unknown${X}"
     fi
     [ -n "$fleet_part" ] || fleet_part="${D}no workers${X}"
+    [ "$FLEET_KNOWN" != 2 ] \
+      || fleet_part="${fleet_part} ${D}($(fleet_age_words "$FLEET_AGE"))${X}"
   fi
 
   # With no task or second-mate record and no registered check there is

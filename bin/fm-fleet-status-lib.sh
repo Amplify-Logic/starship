@@ -32,6 +32,15 @@
 # on the captain - is counted there and only there, finished work whose PR was
 # merged or closed is counted nowhere, and the working figure is what is left.
 #
+# Finished is not the same as waiting on the captain either. A ship whose worker
+# committed its build and reported done before validation has no PR and nothing
+# for the captain to act on - it is firstmate's turn to send it into the
+# pipeline - and counting it as waiting for the captain told him a job needed
+# him when it did not. So a done waits on the captain only when the delivery
+# contract reads it as the ready report. A done that is firstmate's turn,
+# including a scout report firstmate reads first, has no busy worker behind it
+# either, so like merged work it is counted nowhere.
+#
 # The cost is why the answers are cached. A canonical read is about a second per
 # task because it consults the pipeline, so a twelve-task fleet is over ten
 # seconds - three orders of magnitude more than the renderer's one-second frame.
@@ -56,8 +65,9 @@
 #               no worker is typing at it.
 #   paused      a declared bounded external wait.
 #   attention   firstmate has to act: a blocker or a failure.
-#   ready       the work waits on the captain: a PR ready for review, a ready
-#               branch, a report, or a decision the reader says a human owes.
+#   ready       the work waits on the captain: a PR ready for review or merge,
+#               a ready branch awaiting the merge word, or a decision the reader
+#               says a human owes.
 #
 # working and stopped are separate readings of the same fleet rather than two
 # ends of one axis, and a task counts toward NEITHER unless its state was
@@ -65,18 +75,21 @@
 # secondmate, or a record with no endpoint at all leaves the task in records
 # only. Overstating either side is the failure this library exists to prevent.
 #
-# The six live fields are all-or-nothing: without a usable reading they are
+# The six live fields are all-or-nothing: without a good reading they are
 # reported unknown together, and the renderer shows placeholders. They are never
 # reported as zero to stand in for "not read yet", because zero live workers is
 # a real and meaningful fleet state that the captain must be able to trust.
 #
 # A cached reading also carries the exact set of tasks it covered. If the fleet
-# has changed since - a task torn down, another dispatched - the reading is about
-# a different fleet and is discarded rather than re-applied to this one.
+# has changed since - a task torn down, another dispatched - or the reading is
+# past its maximum age, it is no longer a current statement about this fleet.
+# It is then reported as the last good reading, with its age, rather than as
+# current, and a refresh is started at once; fm_fleet_status_counts owns why.
 #
 # Test seams:
 #   FM_FLEET_STATE_TTL       seconds before a reading is refreshed (default 120)
-#   FM_FLEET_STATE_MAX_AGE   seconds before a reading is unusable (default 420)
+#   FM_FLEET_STATE_MAX_AGE   seconds before a reading is only the last good one
+#                            rather than current (default 420)
 #   FM_FLEET_STATE_WAIT      wall-clock bound on one refresh (default 90)
 #   FM_FLEET_STATE_WARM_TTL  how long one refresh is considered in flight (90,
 #                            and never less than FM_FLEET_STATE_WAIT)
@@ -158,16 +171,22 @@ _fm_fleet_id_stream() {  # <id>...
 #
 # `done` splits on the PR disposition the reader already put in its detail: a
 # merged or closed PR leaves nothing for the captain and is `finished`, which no
-# field counts, and every other finished task - a PR held for merge, a ready
-# branch, a report - is `ready`, waiting on them.
+# field counts. A run-step done is the pipeline's own verdict on a PR, so it is
+# `ready`, waiting on them. A status-log done is the worker's report, and it is
+# `ready` only when bin/fm-dod-lib.sh's fm_dod_should_gate_ship_done - the one
+# owner of which ship done is the ready report - says so: a green PR, or any
+# done in a mode whose done is the PR or ready branch itself. Every other one -
+# a no-mistakes build handed back before validation, a scout report - is
+# firstmate's turn, with no busy worker and nothing for the captain, so it is
+# `finished` too.
 #
 # `parked` alone does not say who owes the answer. It is a `decision` for the
 # captain only when the reader says a human owes it: a status-log needs-decision,
 # or a gate line carrying the reader's whole FM_GATE_HUMAN_DECISION component.
 # Any other parked gate is the worker's or firstmate's turn, so it claims no
 # field and is read by liveness alone, like any other unclaimed task.
-_fm_fleet_bucket() {  # <canonical line>
-  local line=$1 state source
+_fm_fleet_bucket() {  # <canonical line> [<meta>]
+  local line=$1 meta=${2:-} state source kind
   state=${line#*state: }
   state=${state%% *}
   source=${line#*source: }
@@ -192,7 +211,20 @@ _fm_fleet_bucket() {  # <canonical line>
     done)
       case "$line" in
         *'PR merged'*|*'PR closed'*) printf 'finished' ;;
-        *) printf 'ready' ;;
+        *)
+          [ "$source" = status-log ] || {
+            printf 'ready'
+            return 0
+          }
+          kind=$(fm_dod_meta_value "$meta" kind)
+          if fm_dod_should_gate_ship_done "${kind:-ship}" \
+            "$(fm_dod_meta_value "$meta" mode)" \
+            "done: ${line#*source: status-log · }"; then
+            printf 'ready'
+          else
+            printf 'finished'
+          fi
+          ;;
       esac
       ;;
     blocked|failed) printf 'attention' ;;
@@ -214,12 +246,15 @@ _fm_fleet_backend_ready() {
 }
 
 # _fm_fleet_classify_ready: load bin/fm-classify-lib.sh once, on first use, for
-# FM_GATE_HUMAN_DECISION, the one spelling of a gate owed by a human. Like the
-# backend it is a fold-only cost that a frame never pays.
+# FM_GATE_HUMAN_DECISION, the one spelling of a gate owed by a human, and
+# bin/fm-dod-lib.sh for the one reading of which done is the ready report. Like
+# the backend they are a fold-only cost that a frame never pays.
 _fm_fleet_classify_ready() {
   [ "${_FM_FLEET_CLASSIFY_READY:-}" = 1 ] && return 0
   # shellcheck source=bin/fm-classify-lib.sh
   . "$_FM_FLEET_LIB_DIR/fm-classify-lib.sh" 2>/dev/null || return 1
+  # shellcheck source=bin/fm-dod-lib.sh
+  . "$_FM_FLEET_LIB_DIR/fm-dod-lib.sh" 2>/dev/null || return 1
   _FM_FLEET_CLASSIFY_READY=1
   return 0
 }
@@ -300,10 +335,10 @@ _fm_fleet_liveness() {  # <meta> <busy: 1 when the fold read a busy pane worker>
 #   <stamp> <working> <stopped> <validating> <paused> <attention> <ready>
 #   <signature>
 #
-# Every field but stopped claims a task for itself: working is only a live
-# agent on a task no state field claimed. Done work spends no endpoint probe at
-# all, because neither working nor stopped can count it; a decision is still
-# probed, so a worker lost while it waits is counted stopped.
+# Every field but stopped claims a task for itself: working is a live agent on
+# a task no state field claimed. Done work spends no endpoint probe at all,
+# because its worker is never a lost one; a decision is still probed, so a
+# worker lost while it waits is counted stopped.
 #
 # A reading is COMPLETE or it is not a reading. If the canonical reader cannot
 # answer for even one task - it is missing, it failed, the fleet changed under
@@ -334,7 +369,7 @@ _fm_fleet_collect() {  # <state-dir> <now> <reader> [prober]
     line=$("$reader" "$id" </dev/null 2>/dev/null) || continue
     [ -n "$line" ] || continue
     answered=$((answered + 1))
-    bucket=$(_fm_fleet_bucket "$line")
+    bucket=$(_fm_fleet_bucket "$line" "$state/$id.meta")
     busy=0
     case "$bucket" in
       working) busy=1 ;;
@@ -403,19 +438,29 @@ _fm_fleet_refresh_detached() {  # <cache> <state-dir> <now> <reader>
 
 # _fm_fleet_unknown: the reading a frame gets when the live fields are not known.
 _fm_fleet_unknown() {  # <records>
-  printf '%s\t0\t0\t0\t0\t0\t0\t0' "$1"
+  printf '%s\t0\t0\t0\t0\t0\t0\t0\t0' "$1"
 }
 
 # fm_fleet_status_counts: the fleet fields for one frame, as
 #   <records> <working> <stopped> <validating> <paused> <attention> <ready>
-#   <known>
-# tab separated, where <known> is 1 when the six live fields are a real reading
-# of THIS fleet and 0 when they are not yet known. The six live fields are 0
-# and meaningless when <known> is 0; the renderer must show placeholders.
+#   <known> <age>
+# tab separated. <known> is 1 when the six live fields are a current reading of
+# THIS fleet, 2 when they are the last good reading but no longer current - it
+# aged past its maximum, or the fleet changed since - and 0 when no good reading
+# exists at all. <age> is how many seconds old the reading is, and 0 when
+# <known> is 0. The six live fields are 0 and meaningless when <known> is 0; the
+# renderer must show placeholders, and must mark a <known> 2 reading as past.
+#
+# Why a past reading is shown rather than refused: under load the out-of-band
+# fold can miss its bound for longer than a reading lives, and on 2026-10-25 the
+# row read "workers unknown" with five workers running. A reading the captain
+# can see is old, beside a refresh that keeps being tried, tells him more than a
+# placeholder; unknown is kept for a home that has never had a good reading.
+# Records stay the live count either way, so a dispatch shows up at once.
 fm_fleet_status_counts() {  # <state-dir>
   local state=$1 now cache reader records ttl max_age
-  local cached stamp working stopped validating paused attention ready
-  local signature current
+  local cached='' stamp='' working='' stopped='' validating='' paused=''
+  local attention='' ready='' signature='' current known age fresh=1
   records=$(_fm_fleet_ids "$state" | grep -c '') || records=0
   now=$(_fm_fleet_now) || {
     _fm_fleet_unknown "$records"
@@ -430,33 +475,45 @@ fm_fleet_status_counts() {  # <state-dir>
     cached=$(_fm_fleet_collect "$state" "$now" "$reader") || cached=
   else
     cached=$(fm_status_cache_load "$cache") || cached=
-    fm_status_cache_read "$cache" "$now" "$ttl" >/dev/null 2>&1 \
-      || _fm_fleet_refresh_detached "$cache" "$state" "$now" "$reader"
+    fm_status_cache_read "$cache" "$now" "$ttl" >/dev/null 2>&1 || fresh=0
+  fi
+
+  if [ -n "$cached" ]; then
+    IFS=$'\t' read -r stamp working stopped validating paused attention ready \
+      signature <<READING
+$cached
+READING
+  fi
+  # A reading that is malformed is no reading at all, and is never shown.
+  case "$stamp$working$stopped$validating$paused$attention$ready" in
+    ''|*[!0-9]*) cached= ;;
+  esac
+  [ -n "$signature" ] || cached=
+  [ -n "$cached" ] || fresh=0
+  known=1
+  if [ -n "$cached" ]; then
+    current=$(_fm_fleet_ids "$state" | _fm_fleet_signature) || current=
+    # Two independent reasons a good reading is no longer current: it is about
+    # a different fleet, or it is past its maximum age.
+    if [ "$signature" != "$current" ] \
+      || ! fm_status_age_within "$now" "$stamp" "$max_age"; then
+      known=2
+      fresh=0
+    fi
+  fi
+  # A frame that has no current reading starts a refresh, whatever the cache
+  # TTL says, so a dispatch is folded without waiting out the window.
+  if [ "$fresh" = 0 ] && [ "${FM_FLEET_STATE_NO_CACHE:-}" != 1 ]; then
+    _fm_fleet_refresh_detached "$cache" "$state" "$now" "$reader"
   fi
 
   [ -n "$cached" ] || {
     _fm_fleet_unknown "$records"
     return 0
   }
-  IFS=$'\t' read -r stamp working stopped validating paused attention ready \
-    signature <<READING
-$cached
-READING
-  current=$(_fm_fleet_ids "$state" | _fm_fleet_signature) || current=
-  # Three independent reasons to refuse a reading, all of which mean the same
-  # thing to the captain: this is not a current statement about this fleet.
-  if [ -z "$signature" ] || [ "$signature" != "$current" ] \
-    || ! fm_status_age_within "$now" "$stamp" "$max_age"; then
-    _fm_fleet_unknown "$records"
-    return 0
-  fi
-  case "$working$stopped$validating$paused$attention$ready" in
-    ''|*[!0-9]*)
-      _fm_fleet_unknown "$records"
-      return 0
-      ;;
-  esac
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t1' \
+  age=$((now - stamp))
+  [ "$age" -ge 0 ] || age=0
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s' \
     "$records" "$working" "$stopped" "$validating" "$paused" "$attention" \
-    "$ready"
+    "$ready" "$known" "$age"
 }
