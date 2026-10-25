@@ -342,6 +342,7 @@ G=$'\033[92m'
 Y=$'\033[93m'
 R=$'\033[91m'
 C=$'\033[96m'
+M=$'\033[95m'
 D=$'\033[2m'
 BOLD=$'\033[1m'
 BR=$'\033[91;1m'
@@ -354,21 +355,22 @@ X=$'\033[0m'
 # file as a running ship and fold each status log's last line into paused and
 # attention; both readings turned task RECORDS into apparent live workers. The
 # library now folds the canonical current-state reader and the recovery-grade
-# endpoint classifier instead, so the headline is live agents and the records
-# whose worker is gone carry their own figure, and it reports whether it has a
-# usable reading at all.
+# endpoint classifier instead, so the headline is busy workers, work waiting on
+# the captain is its own figure, the records whose worker is gone carry theirs,
+# and it reports whether it has a usable reading at all.
 fleet_counts() {
   local reading
   RECORD_COUNT=0
-  ALIVE_COUNT=0
+  WORKING_COUNT=0
   STOPPED_COUNT=0
   VALIDATING_COUNT=0
   PAUSED_COUNT=0
   ATTENTION_COUNT=0
+  READY_COUNT=0
   FLEET_KNOWN=0
   reading=$(fm_fleet_status_counts "$STATE" 2>/dev/null) || return 0
-  IFS=$'\t' read -r RECORD_COUNT ALIVE_COUNT STOPPED_COUNT VALIDATING_COUNT \
-    PAUSED_COUNT ATTENTION_COUNT FLEET_KNOWN <<EOF
+  IFS=$'\t' read -r RECORD_COUNT WORKING_COUNT STOPPED_COUNT VALIDATING_COUNT \
+    PAUSED_COUNT ATTENTION_COUNT READY_COUNT FLEET_KNOWN <<EOF
 $reading
 EOF
   case "$RECORD_COUNT" in ''|*[!0-9]*) RECORD_COUNT=0 ;; esac
@@ -456,7 +458,7 @@ render_once() {
 
   # The fleet and supervision fields speak plain words, because the captain
   # reads this row (AGENTS.md section 9): counts name what the workers are
-  # doing, and only the nonzero ones are shown. The five live counts are a
+  # doing, and only the nonzero ones are shown. The six live counts are a
   # single reading: without one the group says so rather than showing zeros,
   # because "no workers" is a real state the captain has to be able to believe.
   # For the same reason it is never shown while task records exist: records
@@ -465,9 +467,10 @@ render_once() {
     fleet_part="${D}workers unknown${X}"
   else
     fleet_part=
-    fleet_phrase "$ALIVE_COUNT" "$G" working working
+    fleet_phrase "$WORKING_COUNT" "$G" working working
     fleet_phrase "$VALIDATING_COUNT" "$C" checking checking
     fleet_phrase "$PAUSED_COUNT" "$Y" waiting waiting
+    fleet_phrase "$READY_COUNT" "$M" 'waiting for you' 'waiting for you'
     fleet_phrase "$ATTENTION_COUNT" "$R" 'needs a look' 'need a look'
     fleet_phrase "$STOPPED_COUNT" "$Y" stopped stopped
     if [ -z "$fleet_part" ] && [ "$RECORD_COUNT" -gt 0 ]; then

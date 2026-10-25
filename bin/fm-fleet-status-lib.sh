@@ -24,6 +24,14 @@
 # the recorded-but-stopped count as separate figures. The probe rides the same
 # out-of-band refresh as the canonical read, so it costs a frame nothing.
 #
+# A live agent is still not a busy one. A worker whose PR is green and that sits
+# idle until the captain says merge has an agent on its endpoint, and counting
+# it as working told the captain two workers were busy when one was waiting for
+# them. So a task whose current state already places it in another field - the
+# pipeline carrying it, a declared wait, a blocker or failure, or work waiting
+# on the captain - is counted there and only there, finished work whose PR was
+# merged or closed is counted nowhere, and the working figure is what is left.
+#
 # The cost is why the answers are cached. A canonical read is about a second per
 # task because it consults the pipeline, so a twelve-task fleet is over ten
 # seconds - three orders of magnitude more than the renderer's one-second frame.
@@ -36,23 +44,28 @@
 #   records     ordinary task records in this home, excluding second mates.
 #               Free to count and always exact. It is the one number that is
 #               deliberately NOT a claim about running workers.
-#   alive       an agent is running on the task's recorded endpoint right now.
-#               This is the headline, because it is the only number that answers
-#               "how many workers do I actually have".
+#   working     an agent is running on the task's recorded endpoint right now and
+#               no other field below claims the task. This is the headline,
+#               because it answers "how many workers are busy for me".
 #   stopped     the record is still here but its worker is not: the endpoint is
-#               proven dead or absent, or the recorded worktree is gone.
+#               proven dead or absent, or the recorded worktree is gone. Done
+#               work is never counted here, because a worker that exits once its
+#               work is done is not a lost worker; a task parked at a decision is
+#               not done, so its lost worker is.
 #   validating  the validation pipeline owns the task - it is progressing, but
 #               no worker is typing at it.
 #   paused      a declared bounded external wait.
-#   attention   firstmate has to act: a decision, a blocker, or a failure.
+#   attention   firstmate has to act: a blocker or a failure.
+#   ready       the work waits on the captain: a PR ready for review, a ready
+#               branch, a report, or a decision the reader says a human owes.
 #
-# alive and stopped are separate readings of the same fleet rather than two ends
-# of one axis, and a task counts toward NEITHER unless its state was proven: a
-# backend with no recovery classifier, an unreachable remote secondmate, or a
-# record with no endpoint at all leaves the task in records only. Overstating
-# either side is the failure this library exists to prevent.
+# working and stopped are separate readings of the same fleet rather than two
+# ends of one axis, and a task counts toward NEITHER unless its state was
+# proven: a backend with no recovery classifier, an unreachable remote
+# secondmate, or a record with no endpoint at all leaves the task in records
+# only. Overstating either side is the failure this library exists to prevent.
 #
-# The five live fields are all-or-nothing: without a usable reading they are
+# The six live fields are all-or-nothing: without a usable reading they are
 # reported unknown together, and the renderer shows placeholders. They are never
 # reported as zero to stand in for "not read yet", because zero live workers is
 # a real and meaningful fleet state that the captain must be able to trust.
@@ -139,9 +152,20 @@ _fm_fleet_id_stream() {  # <id>...
 # `working · pane` means a worker is busy on it. Folding both into one "active"
 # number is what made a validating task indistinguishable from a typing one.
 #
-# The `working` bucket is not a displayed field of its own any more: the fold
-# consumes it as proof of life for the liveness reading below, where a worker
-# the busy classifier just watched is alive whatever an endpoint probe can say.
+# The `working` bucket is not a displayed field of its own: the fold consumes it
+# as proof of life for the liveness reading below, where a worker the busy
+# classifier just watched is alive whatever an endpoint probe can say.
+#
+# `done` splits on the PR disposition the reader already put in its detail: a
+# merged or closed PR leaves nothing for the captain and is `finished`, which no
+# field counts, and every other finished task - a PR held for merge, a ready
+# branch, a report - is `ready`, waiting on them.
+#
+# `parked` alone does not say who owes the answer. It is a `decision` for the
+# captain only when the reader says a human owes it: a status-log needs-decision,
+# or a gate line carrying the reader's whole FM_GATE_HUMAN_DECISION component.
+# Any other parked gate is the worker's or firstmate's turn, so it claims no
+# field and is read by liveness alone, like any other unclaimed task.
 _fm_fleet_bucket() {  # <canonical line>
   local line=$1 state source
   state=${line#*state: }
@@ -156,7 +180,22 @@ _fm_fleet_bucket() {  # <canonical line>
       esac
       ;;
     paused) printf 'paused' ;;
-    parked|blocked|failed) printf 'attention' ;;
+    parked)
+      if [ "$source" = status-log ]; then
+        printf 'decision'
+      else
+        case "$line · " in
+          *" · $FM_GATE_HUMAN_DECISION · "*) printf 'decision' ;;
+        esac
+      fi
+      ;;
+    done)
+      case "$line" in
+        *'PR merged'*|*'PR closed'*) printf 'finished' ;;
+        *) printf 'ready' ;;
+      esac
+      ;;
+    blocked|failed) printf 'attention' ;;
     *) ;;
   esac
 }
@@ -171,6 +210,17 @@ _fm_fleet_backend_ready() {
   # shellcheck source=bin/fm-backend.sh
   . "$_FM_FLEET_LIB_DIR/fm-backend.sh" 2>/dev/null || return 1
   _FM_FLEET_BACKEND_READY=1
+  return 0
+}
+
+# _fm_fleet_classify_ready: load bin/fm-classify-lib.sh once, on first use, for
+# FM_GATE_HUMAN_DECISION, the one spelling of a gate owed by a human. Like the
+# backend it is a fold-only cost that a frame never pays.
+_fm_fleet_classify_ready() {
+  [ "${_FM_FLEET_CLASSIFY_READY:-}" = 1 ] && return 0
+  # shellcheck source=bin/fm-classify-lib.sh
+  . "$_FM_FLEET_LIB_DIR/fm-classify-lib.sh" 2>/dev/null || return 1
+  _FM_FLEET_CLASSIFY_READY=1
   return 0
 }
 
@@ -247,7 +297,13 @@ _fm_fleet_liveness() {  # <meta> <busy: 1 when the fold read a busy pane worker>
 
 # _fm_fleet_collect: fold the canonical reader and the endpoint prober over every
 # ordinary task and print one reading:
-#   <stamp> <alive> <stopped> <validating> <paused> <attention> <signature>
+#   <stamp> <working> <stopped> <validating> <paused> <attention> <ready>
+#   <signature>
+#
+# Every field but stopped claims a task for itself: working is only a live
+# agent on a task no state field claimed. Done work spends no endpoint probe at
+# all, because neither working nor stopped can count it; a decision is still
+# probed, so a worker lost while it waits is counted stopped.
 #
 # A reading is COMPLETE or it is not a reading. If the canonical reader cannot
 # answer for even one task - it is missing, it failed, the fleet changed under
@@ -263,9 +319,11 @@ _fm_fleet_liveness() {  # <meta> <busy: 1 when the fold read a busy pane worker>
 # fraction of the fleet. The reader's stdin is detached for the same reason.
 _fm_fleet_collect() {  # <state-dir> <now> <reader> [prober]
   local state=$1 now=$2 reader=$3 probe=${4:-} id line bucket signature life busy
-  local alive=0 stopped=0 validating=0 paused=0 attention=0 asked=0 answered=0
+  local working=0 stopped=0 validating=0 paused=0 attention=0 ready=0
+  local asked=0 answered=0
   local ids=()
   [ -n "$probe" ] || probe=${FM_FLEET_STATE_PROBE:-_fm_fleet_probe_default}
+  _fm_fleet_classify_ready || return 1
   while IFS= read -r id; do
     [ -n "$id" ] || continue
     ids+=("$id")
@@ -283,16 +341,24 @@ _fm_fleet_collect() {  # <state-dir> <now> <reader> [prober]
       validating) validating=$((validating + 1)) ;;
       paused) paused=$((paused + 1)) ;;
       attention) attention=$((attention + 1)) ;;
+      decision) ready=$((ready + 1)) ;;
+      ready) ready=$((ready + 1)); continue ;;
+      finished) continue ;;
     esac
     life=$(_fm_fleet_liveness "$state/$id.meta" "$busy" "$probe")
     case "$life" in
-      alive) alive=$((alive + 1)) ;;
+      alive)
+        case "$bucket" in
+          ''|working) working=$((working + 1)) ;;
+        esac
+        ;;
       stopped) stopped=$((stopped + 1)) ;;
     esac
   done
   [ "$answered" -eq "$asked" ] || return 1
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s' \
-    "$now" "$alive" "$stopped" "$validating" "$paused" "$attention" "$signature"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s' \
+    "$now" "$working" "$stopped" "$validating" "$paused" "$attention" \
+    "$ready" "$signature"
 }
 
 # _fm_fleet_refresh_detached: start at most ONE bounded refresh and return at
@@ -337,17 +403,19 @@ _fm_fleet_refresh_detached() {  # <cache> <state-dir> <now> <reader>
 
 # _fm_fleet_unknown: the reading a frame gets when the live fields are not known.
 _fm_fleet_unknown() {  # <records>
-  printf '%s\t0\t0\t0\t0\t0\t0' "$1"
+  printf '%s\t0\t0\t0\t0\t0\t0\t0' "$1"
 }
 
 # fm_fleet_status_counts: the fleet fields for one frame, as
-#   <records> <alive> <stopped> <validating> <paused> <attention> <known>
-# tab separated, where <known> is 1 when the five live fields are a real reading
-# of THIS fleet and 0 when they are not yet known. The five live fields are 0
+#   <records> <working> <stopped> <validating> <paused> <attention> <ready>
+#   <known>
+# tab separated, where <known> is 1 when the six live fields are a real reading
+# of THIS fleet and 0 when they are not yet known. The six live fields are 0
 # and meaningless when <known> is 0; the renderer must show placeholders.
 fm_fleet_status_counts() {  # <state-dir>
   local state=$1 now cache reader records ttl max_age
-  local cached stamp alive stopped validating paused attention signature current
+  local cached stamp working stopped validating paused attention ready
+  local signature current
   records=$(_fm_fleet_ids "$state" | grep -c '') || records=0
   now=$(_fm_fleet_now) || {
     _fm_fleet_unknown "$records"
@@ -370,7 +438,8 @@ fm_fleet_status_counts() {  # <state-dir>
     _fm_fleet_unknown "$records"
     return 0
   }
-  IFS=$'\t' read -r stamp alive stopped validating paused attention signature <<READING
+  IFS=$'\t' read -r stamp working stopped validating paused attention ready \
+    signature <<READING
 $cached
 READING
   current=$(_fm_fleet_ids "$state" | _fm_fleet_signature) || current=
@@ -381,12 +450,13 @@ READING
     _fm_fleet_unknown "$records"
     return 0
   fi
-  case "$alive$stopped$validating$paused$attention" in
+  case "$working$stopped$validating$paused$attention$ready" in
     ''|*[!0-9]*)
       _fm_fleet_unknown "$records"
       return 0
       ;;
   esac
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t1' \
-    "$records" "$alive" "$stopped" "$validating" "$paused" "$attention"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t1' \
+    "$records" "$working" "$stopped" "$validating" "$paused" "$attention" \
+    "$ready"
 }

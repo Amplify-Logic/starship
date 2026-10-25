@@ -260,7 +260,7 @@ test_contract_order_and_fleet_projection() {
   : > "$HOME_FIX/state/.afk"
 
   out=$(render Opus high 42 73 1.235 | strip_ansi)
-  [ "$out" = "⚓ Opus·high │ 🧠42% ⚡73% │ 1 working, 1 checking, 1 waiting, 1 needs a look │ 👁 watching │ \$1.24 │ 💤AFK" ] \
+  [ "$out" = "⚓ Opus·high │ 🧠42% ⚡73% │ 1 working, 1 checking, 1 waiting, 1 waiting for you, 1 needs a look │ 👁 watching │ \$1.24 │ 💤AFK" ] \
     || fail "canonical fields, order, fleet counts, or formatting drifted: $out"
   pass "status bar: canonical field order and fleet projection are stable"
 }
@@ -278,11 +278,11 @@ test_the_headline_is_live_agents_and_stopped_records_are_visible() {
   fleet_endpoint_task idle live-2 "$HOME_FIX/wt" \
     'state: unknown · source: none · nothing attributed'
   fleet_endpoint_task gone dead-1 "$HOME_FIX/wt" \
-    'state: done · source: run-step · checks passed'
+    'state: unknown · source: none · backend target gone (agent gone, pane shell remains)'
   fleet_endpoint_task shed dead-2 "$HOME_FIX/wt" \
     'state: unknown · source: none · backend target gone'
   fleet_endpoint_task shredded live-3 "$HOME_FIX/no-such-worktree" \
-    'state: done · source: run-step · checks passed'
+    'state: unknown · source: none · worktree gone (torn down?)'
   : > "$HOME_FIX/state/.last-watcher-beat"
 
   out=$(render Opus high -- -- -- | strip_ansi)
@@ -291,6 +291,63 @@ test_the_headline_is_live_agents_and_stopped_records_are_visible() {
   assert_contains "$out" '3 stopped' \
     "the three records whose worker is gone are not shown as a distinct figure"
   pass "status bar: the headline is live agents and stopped records carry their own figure"
+}
+
+# The row once read "2 working" while one of the two workers had finished: its
+# PR was green and it sat idle until the captain gave the merge word. A live
+# agent is not a busy one, so work waiting on the captain is its own figure and
+# the working count is only what is left.
+test_finished_work_waiting_on_the_captain_is_not_counted_as_working() {
+  local out
+  reset_fleet
+  mkdir -p "$HOME_FIX/wt"
+  fleet_endpoint_task busy live-1 "$HOME_FIX/wt" \
+    'state: working · source: pane · harness busy'
+  fleet_endpoint_task ready live-2 "$HOME_FIX/wt" \
+    'state: done · source: run-step · checks green: PR ready for review'
+  : > "$HOME_FIX/state/.last-watcher-beat"
+
+  out=$(render Opus high -- -- -- | strip_ansi)
+  assert_contains "$out" '│ 1 working, 1 waiting for you │' \
+    "a worker whose PR waits for the merge word was still counted as working"
+
+  # An open decision, a ready branch whose worker has exited, and a merged PR
+  # awaiting cleanup: two wait on the captain, none is working, the exited
+  # worker is not a lost one, and the merged PR waits on nobody.
+  reset_fleet
+  fleet_endpoint_task gate live-1 "$HOME_FIX/wt" \
+    'state: parked · source: status-log · needs-decision: pick a schema'
+  fleet_endpoint_task branch dead-1 "$HOME_FIX/wt" \
+    'state: done · source: status-log · done: ready branch'
+  fleet_endpoint_task merged live-2 "$HOME_FIX/wt" \
+    'state: done · source: run-step · checks green: PR merged (ci monitor ended)'
+  out=$(render Opus high -- -- -- | strip_ansi)
+  assert_contains "$out" '│ 2 waiting for you │' \
+    "decisions, ready branches, and merged work were not told apart from working"
+  pass "status bar: finished work waiting on the captain is counted apart from working workers"
+}
+
+# A parked gate waits on the captain only when the reader says a human owes the
+# answer. Any other gate is the worker's own turn, and a parked worker that is
+# lost is still a stopped one, whoever owes the answer.
+test_only_a_gate_a_human_owes_reads_as_waiting_for_you() {
+  local out
+  reset_fleet
+  mkdir -p "$HOME_FIX/wt"
+  fleet_endpoint_task owed live-1 "$HOME_FIX/wt" \
+    'state: parked · source: run-step · parked at review: 2 finding(s) · ask-user: authority decision · run: r1'
+  fleet_endpoint_task asked dead-1 "$HOME_FIX/wt" \
+    'state: parked · source: status-log · needs-decision: pick a schema'
+  fleet_endpoint_task review live-2 "$HOME_FIX/wt" \
+    'state: parked · source: run-step · parked at review: 2 finding(s) · run: r2'
+  fleet_endpoint_task lost dead-2 "$HOME_FIX/wt" \
+    'state: parked · source: run-step · parked at fix_review · run: r3'
+  : > "$HOME_FIX/state/.last-watcher-beat"
+
+  out=$(render Opus high -- -- -- | strip_ansi)
+  assert_contains "$out" '│ 1 working, 2 waiting for you, 2 stopped │' \
+    "parked gates were not split by who owes the answer, or a lost parked worker was hidden"
+  pass "status bar: only a gate a human owes reads as waiting for you, and a lost parked worker is stopped"
 }
 
 # The defect the captain photographed: twelve task records rendered as twelve
@@ -325,7 +382,8 @@ test_validating_work_is_distinguished_from_a_busy_worker() {
 
   out=$(render Opus high -- -- -- | strip_ansi)
   assert_contains "$out" '1 working, 2 checking' "validating work was folded into the busy-worker count"
-  assert_contains "$out" '1 needs a look' "a parked validation gate is not reported as needing attention"
+  assert_not_contains "$out" 'waiting for you' "a parked gate no human owes was reported as waiting on the captain"
+  assert_not_contains "$out" 'needs a look' "a parked gate no human owes was reported as needing attention"
   pass "status bar: validating work is a separate field from a busy worker"
 }
 
@@ -348,11 +406,11 @@ test_unknown_fleet_state_shows_placeholders_and_never_zero() {
   # Records the reading could not classify are never an idle fleet: they are
   # named as tasks whose state is unknown.
   reset_fleet
-  fleet_task done1 crew 'state: done · source: run-step · checks passed'
+  fleet_task ghost1 crew 'state: unknown · source: none · no current-state source available'
   out=$(render Opus high -- -- -- | strip_ansi)
   assert_contains "$out" '│ 1 task, state unknown │' "an unclassified record is not named as a task of unknown state"
   assert_not_contains "$out" 'no workers' "a home with a task record was reported as having no workers"
-  fleet_task done2 crew 'state: done · source: run-step · checks passed'
+  fleet_task ghost2 crew 'state: unknown · source: none · no current-state source available'
   out=$(render Opus high -- -- -- | strip_ansi)
   assert_contains "$out" '│ 2 tasks, state unknown │' "two unclassified records are not named as tasks of unknown state"
 
@@ -1735,6 +1793,8 @@ SH
 
 test_contract_order_and_fleet_projection
 test_the_headline_is_live_agents_and_stopped_records_are_visible
+test_finished_work_waiting_on_the_captain_is_not_counted_as_working
+test_only_a_gate_a_human_owes_reads_as_waiting_for_you
 test_task_records_are_never_counted_as_running_workers
 test_validating_work_is_distinguished_from_a_busy_worker
 test_unknown_fleet_state_shows_placeholders_and_never_zero

@@ -2669,7 +2669,8 @@ crew_is_paused() {  # <id>
 # The one spelling of the verdict component that says a parked gate's answer is
 # owed by a HUMAN. bin/fm-crew-state.sh mints it (nm_gate_awaits_human_decision
 # owns the derivation: the findings table's `action` column, read by position);
-# crew_gate_awaits_human_decision below is its only consumer.
+# crew_gate_awaits_human_decision below and bin/fm-fleet-status-lib.sh's fold
+# are its consumers.
 FM_GATE_HUMAN_DECISION='ask-user: authority decision'
 
 # 0 if crew <id>'s authoritative current state is a no-mistakes gate whose answer
