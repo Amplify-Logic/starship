@@ -40,19 +40,32 @@ fm_status_age_within() {  # <now> <stamp> <window>
 }
 
 # fm_status_file_mtime: a file's modification epoch, BSD or GNU stat.
+#
+# Chosen by platform, never `stat -f || stat -c`: GNU stat reads -f as
+# filesystem mode, prints a filesystem dump for the file, and only then fails,
+# so the fallback's epoch would land behind that dump and never parse.
 fm_status_file_mtime() {  # <path>
   local modified
-  modified=$(stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null)
+  if [ "$(uname)" = Darwin ]; then
+    modified=$(/usr/bin/stat -f %m "$1" 2>/dev/null)
+  else
+    modified=$(stat -c %Y "$1" 2>/dev/null)
+  fi
   case "$modified" in
     ''|*[!0-9]*) return 1 ;;
   esac
   printf '%s' "$modified"
 }
 
-# fm_status_file_size: a file's size in bytes, BSD or GNU stat.
+# fm_status_file_size: a file's size in bytes, BSD or GNU stat, chosen by
+# platform for the same reason as fm_status_file_mtime.
 fm_status_file_size() {  # <path>
   local size
-  size=$(stat -f %z "$1" 2>/dev/null || stat -c %s "$1" 2>/dev/null)
+  if [ "$(uname)" = Darwin ]; then
+    size=$(/usr/bin/stat -f %z "$1" 2>/dev/null)
+  else
+    size=$(stat -c %s "$1" 2>/dev/null)
+  fi
   case "$size" in
     ''|*[!0-9]*) return 1 ;;
   esac

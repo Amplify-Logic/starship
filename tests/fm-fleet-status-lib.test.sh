@@ -207,6 +207,40 @@ test_a_reading_for_another_fleet_is_not_current() {
   pass "fleet status: a cached reading is no longer current once the fleet it covered has changed"
 }
 
+# A dispatch or a cleanup changes the fleet inside the cache TTL. Waiting out the
+# TTL before refreshing left the row without a current reading for minutes after
+# every spawn, so a changed fleet starts a refresh on the very next frame, while
+# a fresh reading for an unchanged fleet starts none.
+test_a_changed_fleet_starts_a_refresh_without_waiting_for_the_ttl() {
+  local now out
+  reset_state
+  now=$(date +%s)
+  task one crew 'state: working · source: pane · harness busy'
+  bash -c '
+    . "$1/bin/fm-fleet-status-lib.sh"
+    _fm_fleet_collect "$2" "$4" "$3" > "$2/.status-fleet-state"
+  ' _ "$ROOT" "$STATE" "$BINDIR/fake-crew-state" "$now"
+  now=$(date +%s)
+
+  # The reader does not exist, so a refresh this frame starts never publishes
+  # and its claim stays behind as the proof that it was started.
+  out=$(FM_FLEET_STATE_NOW=$now FM_FLEET_STATE_TTL=600 FM_FLEET_STATE_MAX_AGE=600 \
+    FM_FLEET_STATE_READER="$BINDIR/no-such-crew-state" counts)
+  [ "$(printf '%s' "$out" | cut -f8)" = 1 ] \
+    || fail "a fresh reading for an unchanged fleet was not current: $(printf '%s' "$out" | tr '\t' ' ')"
+  [ ! -e "$STATE/.status-fleet-state.refreshing" ] \
+    || fail "a fresh reading for an unchanged fleet started a refresh"
+
+  task two crew 'state: paused · source: status-log · upstream release'
+  out=$(FM_FLEET_STATE_NOW=$now FM_FLEET_STATE_TTL=600 FM_FLEET_STATE_MAX_AGE=600 \
+    FM_FLEET_STATE_READER="$BINDIR/no-such-crew-state" counts)
+  [ "$(printf '%s' "$out" | cut -f8)" = 2 ] \
+    || fail "a reading for the fleet before a dispatch was reported as current: $(printf '%s' "$out" | tr '\t' ' ')"
+  [ -e "$STATE/.status-fleet-state.refreshing" ] \
+    || fail "a changed fleet waited out the cache TTL instead of starting a refresh"
+  pass "fleet status: a changed fleet starts a refresh at once, and an unchanged fresh one does not"
+}
+
 test_a_reading_that_has_aged_out_is_not_current() {
   local out known
   reset_state
@@ -715,6 +749,7 @@ test_records_are_counted_apart_from_live_workers
 test_an_incomplete_fold_is_refused_rather_than_published_short
 test_a_broken_reader_never_becomes_an_idle_fleet
 test_a_reading_for_another_fleet_is_not_current
+test_a_changed_fleet_starts_a_refresh_without_waiting_for_the_ttl
 test_a_reading_that_has_aged_out_is_not_current
 test_a_malformed_cached_reading_is_refused
 test_a_frame_never_calls_the_canonical_reader
