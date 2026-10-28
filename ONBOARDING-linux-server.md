@@ -132,7 +132,7 @@ Logged in as `<you>`, from your home:
 
 ```sh
 cd ~
-curl -fsSL https://raw.githubusercontent.com/Amplify-Logic/firstmate/main/bin/fm-linux-setup.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Amplify-Logic/starship/main/bin/fm-linux-setup.sh | bash
 ```
 
 It asks for your password once, then installs the build tools, Homebrew, git, node, gh, tmux, jq, Claude Code and Chrome, and clones Firstmate into `~/starship`.

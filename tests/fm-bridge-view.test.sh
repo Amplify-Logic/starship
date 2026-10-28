@@ -1662,7 +1662,7 @@ model = {
          "hold_kind": "captain", "reason": "captain call on history purge"},
         {"title": "Cloud slice go", "repo": "firstmate", "hold_kind": "captain",
          "reason": "awaiting captain go"},
-        {"title": "Always-on cloud, host+budget", "repo": "Amplify-Logic/firstmate",
+        {"title": "Always-on cloud, host+budget", "repo": "Amplify-Logic/starship",
          "hold_kind": "captain", "reason": "awaiting captain go"},
         {"title": "Tidy the notes", "repo": "loose-notes", "hold_kind": "captain",
          "reason": "awaiting captain go"},

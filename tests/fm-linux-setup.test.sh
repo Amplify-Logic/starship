@@ -101,7 +101,7 @@ case "${1:-}" in
     while [ "$#" -gt 2 ]; do shift; done
     printf 'git clone %s %s\n' "$1" "$2" >> "$FAKE_WORLD/calls.log"
     case "$1" in
-      */firstmate)
+      */firstmate|*/starship)
         mkdir -p "$2/bin" "$2/.git" && touch "$2/bin/fm-primary.sh" "$2/AGENTS.md"
         cp "$FAKE_FM_BIN/fm-addon.sh" "$FAKE_FM_BIN/fm-timeout-lib.sh" "$2/bin/"
         # The clone's own Herdr setup: records its call and installs a herdr the
@@ -231,7 +231,7 @@ test_fresh_install_then_rerun_is_idempotent() {
   assert_contains "$log" "curl https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb" \
     "Chrome's package is downloaded"
   assert_contains "$log" "google-chrome-stable_current_amd64.deb" "Chrome's package is installed with apt"
-  assert_contains "$log" "git clone https://github.com/Amplify-Logic/firstmate $w/home/starship" \
+  assert_contains "$log" "git clone https://github.com/Amplify-Logic/starship $w/home/starship" \
     "Firstmate is cloned into ~/starship"
   assert_contains "$out" "ok  jq" "the closing check finds jq"
   assert_contains "$out" "ok  chrome" "the closing check finds Chrome"

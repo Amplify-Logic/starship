@@ -68,7 +68,7 @@ Coming from [ONBOARDING-linux-server.md](ONBOARDING-linux-server.md)? A server r
 **Get Starship and set up Herdr:**
 
 ```sh
-git clone https://github.com/Amplify-Logic/firstmate ~/starship
+git clone https://github.com/Amplify-Logic/starship ~/starship
 cd ~/starship
 bin/fm-herdr-setup.sh
 ```

@@ -22,7 +22,7 @@ In particular, run 36664663190's serial 5 finished in 22m15s with an assertion f
 Collect successful per-script measurements for every member before calculating a split.
 
 `tests/fm-supervision-host.test.sh` used 789123 ms from run 36669175457, after the merged [host runtime fix](https://github.com/kunchenguid/firstmate/pull/6179), rather than its pre-fix maximum of 1065298 ms.
-It has since outgrown that value and any one shard: this fork's run [37147855677](https://github.com/Amplify-Logic/firstmate/actions/runs/37147855677) measured 1672244 ms, and the creator's own run [37176050503](https://github.com/kunchenguid/firstmate/actions/runs/37176050503) measured 1567419 ms, either one past the packing target by itself.
+It has since outgrown that value and any one shard: this fork's run 37147855677 of the earlier repository measured 1672244 ms, and the creator's own run [37176050503](https://github.com/kunchenguid/firstmate/actions/runs/37176050503) measured 1567419 ms, either one past the packing target by itself.
 This fork therefore runs the suite in two parts on separate runners: the file itself runs its core cases, and `tests/fm-supervision-host-lifecycle.test.sh` re-enters it for the engine-error latch, reaping, park-boundary, and host-ownership cases.
 Their hints, 888958 ms and 783293 ms, are the two parts' shares of run 37147855677, read from the per-case `ok` timestamps around the split; green runs of the two scripts should replace them.
 The native-Windows-only `tests/fm-pi-windows-shell-invocation.test.sh` retains its separate 5121 ms measurement from 2026-09-06T21:02Z instead of a portable capability skip.
@@ -34,14 +34,14 @@ The local measurements had left the serial lane less aggregate headroom under th
 The session-start hint retains its pre-optimization maximum until CI measures the shorter fixture-only home-summary bound; do not discount a local speedup from CI packing weights.
 
 This fork's serial table also carries the scripts those runs never measured.
-Each fork-only script keeps the slowest completed value from four green Amplify-Logic main runs, [35589872313](https://github.com/Amplify-Logic/firstmate/actions/runs/35589872313) and [35583964981](https://github.com/Amplify-Logic/firstmate/actions/runs/35583964981) on 2026-09-21 and [35405990130](https://github.com/Amplify-Logic/firstmate/actions/runs/35405990130) and [35389857132](https://github.com/Amplify-Logic/firstmate/actions/runs/35389857132) on 2026-09-19.
+Each fork-only script keeps the slowest completed value from four green Amplify-Logic main runs of the earlier repository, 35589872313 and 35583964981 on 2026-09-21 and 35405990130 and 35389857132 on 2026-09-19.
 A script both tables measured keeps the larger value, because the fork extends several of the creator's suites and its own runs measured those longer versions.
 Two fork rows are not CI-derived: `tests/fm-visible-status.test.sh` (29400 ms) and `tests/fm-watch-presentation.test.sh` (23300 ms) were measured locally on macOS on 2026-09-21, and the next CI-derived refresh of this fork's serial lane should replace them.
 
-This fork's serial table was refreshed again on 2026-10-04 from run [37147855677](https://github.com/Amplify-Logic/firstmate/actions/runs/37147855677), the CI run of the [creator catch-up pull request](https://github.com/Amplify-Logic/firstmate/pull/256).
+This fork's serial table was refreshed again on 2026-10-04 from run 37147855677 of the earlier repository, the CI run of the [creator catch-up pull request](https://github.com/Amplify-Logic/starship/pull/256).
 Each serial script keeps the larger of its previous value and that run's successful `duration_ms`, which raised 154 rows and gave 17 never-measured scripts their first value.
 Its serial 2 job was cancelled at the 30-minute cap and uploaded no artifact, so its completed `FM_TEST_END` markers supplement the nine artifacts the other serial jobs uploaded, and the scripts it never reached, `tests/fm-visible-status.test.sh` among them, keep their previous values.
-`tests/fm-herdr-setup.test.sh` (1559 ms) joined the lane later and carries its first successful `duration_ms` from run [39159091513](https://github.com/Amplify-Logic/firstmate/actions/runs/39159091513); its 45000 ms default weight had left the shards no room for the packing-boundary case in `tests/fm-test-run.test.sh`.
+`tests/fm-herdr-setup.test.sh` (1559 ms) joined the lane later and carries its first successful `duration_ms` from run 39159091513 of the earlier repository; its 45000 ms default weight had left the shards no room for the packing-boundary case in `tests/fm-test-run.test.sh`.
 
 ## Parallel lanes
 
@@ -96,7 +96,7 @@ Refresh the CI-derived hints by downloading the per-shard timing artifacts from 
 
 ```sh
 for run in <run-id> <run-id> <run-id>; do
-  gh-axi run download "$run" -R Amplify-Logic/firstmate --dir "/tmp/fm-serial/$run"
+  gh-axi run download "$run" -R Amplify-Logic/starship --dir "/tmp/fm-serial/$run"
 done
 jq -r '.scripts[] | select(.exit == 0) | [.path, .duration_ms] | @tsv' /tmp/fm-serial/*/fm-test-timing-portable-serial-*/*.json \
   | awk -F'\t' '$2 > m[$1] { m[$1] = $2 } END { for (p in m) print p, m[p] }' \

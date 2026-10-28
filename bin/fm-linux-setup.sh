@@ -58,7 +58,7 @@
 #
 # Usage:
 #   fm-linux-setup.sh [--ci] [--addon OWNER/REPO]
-#   curl -fsSL https://raw.githubusercontent.com/Amplify-Logic/firstmate/main/bin/fm-linux-setup.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/Amplify-Logic/starship/main/bin/fm-linux-setup.sh | bash
 #   cat fm-linux-setup.sh | bash -s -- --ci
 #   --ci     skip the closing sign-in instructions (gh auth login, claude);
 #            .github/workflows/windows-wsl.yml runs it this way, through a
@@ -69,7 +69,7 @@
 # with the reason on stderr; 2 on a usage error.
 set -eu
 
-REPO_URL=https://github.com/Amplify-Logic/firstmate
+REPO_URL=https://github.com/Amplify-Logic/starship
 BREW_INSTALLER=https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh
 CLAUDE_INSTALLER=https://claude.ai/install.sh
 CHROME_DEB=https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb

@@ -16,8 +16,8 @@ GitHub Actions and Dependabot are exempt so their automation keeps working, but 
 
 ## Workflow
 
-1. Clone [`Amplify-Logic/firstmate`](https://github.com/Amplify-Logic/firstmate) (`git@github.com:Amplify-Logic/firstmate.git`) and keep it as your `origin`; without push access, also fork it on GitHub for step 3.
-   `Amplify-Logic/firstmate` is this project's canonical home, and pull requests target its `main`; [`kunchenguid/firstmate`](https://github.com/kunchenguid/firstmate) is the upstream it descends from, declared as `upstream_remote` in `fork-surface.conf`, and is never the PR target.
+1. Clone [`Amplify-Logic/starship`](https://github.com/Amplify-Logic/starship) (`git@github.com:Amplify-Logic/starship.git`) and keep it as your `origin`; without push access, also fork it on GitHub for step 3.
+   `Amplify-Logic/starship` is this project's canonical home, and pull requests target its `main`; [`kunchenguid/firstmate`](https://github.com/kunchenguid/firstmate) is the upstream it descends from, declared as `upstream_remote` in `fork-surface.conf`, and is never the PR target.
 2. Create a branch and make your changes.
 3. Initialize the gate with your fork as the push target: `no-mistakes init --fork-url git@github.com:<you>/firstmate.git` (contributing to firstmate requires **no-mistakes v1.46.0+** for structured attestation; without a fork, plain `no-mistakes init` still works for maintainers with push access).
 4. Commit your changes.
@@ -29,7 +29,7 @@ GitHub Actions and Dependabot are exempt so their automation keeps working, but 
 
 6. Run `no-mistakes` to attach to the pipeline, watch findings, authorize auto-fixes, and review ask-user findings as needed.
    Follow the installed no-mistakes version's SKILL.md and live `axi` help for gate mechanics.
-7. Once the pipeline passes, it pushes the branch (to your fork, when you have one) and opens the PR against `Amplify-Logic/firstmate` for you.
+7. Once the pipeline passes, it pushes the branch (to your fork, when you have one) and opens the PR against `Amplify-Logic/starship` for you.
 
 See the [no-mistakes quick start](https://kunchenguid.github.io/no-mistakes/start-here/quick-start/) for the full first-run walkthrough.
 

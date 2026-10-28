@@ -29,7 +29,7 @@ Your setup stays yours: a fresh copy holds only the public files, and your prefe
 | Windows PC (through WSL 2) | [ONBOARDING-windows.md](ONBOARDING-windows.md) |
 | Rented Linux server | [ONBOARDING-linux-server.md](ONBOARDING-linux-server.md) |
 
-Clone this repository, [Amplify-Logic/firstmate](https://github.com/Amplify-Logic/firstmate), not the upstream one.
+Clone this repository, [Amplify-Logic/starship](https://github.com/Amplify-Logic/starship), not the upstream one.
 
 ## Credit
 

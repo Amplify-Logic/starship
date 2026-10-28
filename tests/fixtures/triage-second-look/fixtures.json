@@ -188,7 +188,7 @@
       "task_kind": "ship",
       "task_goal": "Fix the flaky checkout test.",
       "recent": [],
-      "line": "done: PR https://github.com/Amplify-Logic/firstmate/pull/160 checks green"
+      "line": "done: PR https://github.com/Amplify-Logic/starship/pull/160 checks green"
     },
     {
       "id": "e02",
