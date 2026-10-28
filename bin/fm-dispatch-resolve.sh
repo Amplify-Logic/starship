@@ -49,9 +49,11 @@
 #   "dispatch-resolve: off (...; nothing sent)" line on stderr naming at most
 #   the list line number, never its value, prints nothing on stdout, and exits
 #   0 with no network or quota call, exactly like the absent-key off path.
-#   private-app is never sent, list or not: when --project or the
-#   repository the brief's scaffolded setup line names has that logical
-#   directory name, the same off path runs before the rules are even read.
+#   A project named in the optional $FM_HOME/config/private-projects list (one
+#   logical directory name per line) is never sent, never-send list or not:
+#   when --project or the repository the brief's scaffolded setup line names
+#   has a listed name, the same off path runs before the rules are even read.
+#   A private-projects list that is not a readable regular file sends nothing.
 #
 # Output (stdout, TOON-style block):
 #   dispatch-resolve:
@@ -121,8 +123,6 @@ SCOPE_FLOOR=0.5
 TS_BASE=https://api.typesafe.ai
 TS_TIMEOUT=5
 DEFAULT_WHEN="No listed rule applies to this task."
-# The same always-excluded projects as ALWAYS_EXCLUDED in bin/fm-command-guard.py.
-ALWAYS_EXCLUDED='private-app'
 
 die() { printf 'error: %s\n' "$1" >&2; exit 2; }
 no_rules() {
@@ -139,6 +139,8 @@ usage() {
 
 BRIEF='' PROJECT='' RULES_PATH="$CONFIG/crew-dispatch.json" RULES=''
 NEVER_SEND_PATH="$CONFIG/dispatch-never-send"
+# The same private projects bin/fm-command-guard.py never sends.
+PRIVATE_PROJECTS_PATH="$CONFIG/private-projects"
 while [ $# -gt 0 ]; do
   case "$1" in
     --project) [ $# -ge 2 ] || die "--project needs a value"; PROJECT=$2; shift 2 ;;
@@ -160,11 +162,20 @@ fi
 # ---- inputs --------------------------------------------------------------------
 [ -n "$BRIEF" ] || die "brief file required (see --help)"
 [ -r "$BRIEF" ] || die "brief file not readable: $BRIEF"
+PRIVATE_PROJECTS=''
+if [ -e "$PRIVATE_PROJECTS_PATH" ] || [ -L "$PRIVATE_PROJECTS_PATH" ]; then
+  if [ ! -f "$PRIVATE_PROJECTS_PATH" ] || [ ! -r "$PRIVATE_PROJECTS_PATH" ]; then
+    echo "dispatch-resolve: off (config/private-projects is not a readable regular file; nothing sent)" >&2
+    exit 0
+  fi
+  PRIVATE_PROJECTS=$(sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e '/^#/d' -e '/^$/d' "$PRIVATE_PROJECTS_PATH" | tr '\n' ' ')
+fi
 # The logical directory name of --project and of the repository the brief's
 # scaffolded setup line names, so a brief resolved without --project still counts.
 for name in "$PROJECT" "$(sed -n 's/^You are in a disposable git worktree of \(.*\), at a detached HEAD.*/\1/p' "$BRIEF")"; do
   while [ "${name%/}" != "$name" ]; do name=${name%/}; done
-  case " $ALWAYS_EXCLUDED " in
+  [ -n "${name##*/}" ] || continue
+  case " $PRIVATE_PROJECTS " in
     *" ${name##*/} "*)
       echo "dispatch-resolve: off (project ${name##*/} is never sent to an outside service; nothing sent)" >&2
       exit 0

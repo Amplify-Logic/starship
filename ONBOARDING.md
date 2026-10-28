@@ -8,7 +8,7 @@ This guide is for a blank macOS machine.
 On a Windows PC, start with [ONBOARDING-windows.md](ONBOARDING-windows.md); on a rented Linux server, start with [ONBOARDING-linux-server.md](ONBOARDING-linux-server.md).
 Both set up the machine, then return here for steps 3 to 5.
 The finish line is real work: your first mate adds a first project and brings back one report from a worker that read it.
-The Harbour team's first project is Harbour Logbook; a work teammate's is one of their own work repositories, on plain Starship.
+Your first project is one of your own repositories, on plain Starship.
 After that, [the captain's handbook](docs/handbook.md) explains the whole system, connects your other tools, and gives you a first-week path.
 
 > Your setup is yours alone.
@@ -19,10 +19,9 @@ After that, [the captain's handbook](docs/handbook.md) explains the whole system
 
 ## 1. Accounts (browser, before the terminal)
 
-1. **GitHub** - an account that can see your first project:
-   - **The Harbour team:** the `harbourlogbook` organisation; ask its owner to invite you if `github.com/harbourlogbook/private-app` shows you a 404.
-   - **Work teammates:** one of your own work repositories, which becomes your first project in step 5.
-     Starship itself is public, so plain Starship is all you install, with no add-on.
+1. **GitHub** - an account that can see your first project: one of your own repositories, which becomes your first project in step 5.
+   If your team's repository shows you a 404, ask its owner to invite you.
+   Starship itself is public, so plain Starship is all you install, with no add-on.
 2. **Claude** - the Claude account your team uses for Claude Code.
    If your organisation has a Claude workspace, use that account: the connectors it offers (mail, calendar, documents, and so on) then come along into Claude Code.
 
@@ -158,33 +157,7 @@ You should see: it confirms it recorded the rule in `data/captain.md` and in `co
 
 ## 5. Finish line: add your first project and get one report back
 
-Follow the part for your group: the Harbour team adds Harbour Logbook, and work teammates add one of their own work repositories.
-
-### The Harbour team
-
-Type:
-
-```text
-add github.com/harbourlogbook/private-app as a project, delivered through no-mistakes, and never merge anything there without asking me
-```
-
-That is the team's setting for Harbour Logbook: every change goes through the full no-mistakes checks and comes to you as a pull request, and nothing merges until you say so.
-A merge to its main branch goes live, so leave automatic merging (`+yolo`) off for this project.
-
-Then ask for one report, with no changes:
-
-```text
-how does the Play tab open in private-app? report only, no changes
-```
-
-You should see: a few minutes later, a short plain-English report on how the Play tab opens.
-
-That one report proves the whole stack end to end: your GitHub access to the project, a worker starting in its own isolated copy, its Claude sign-in, and the report coming back to you.
-Your setup is finished.
-
-### Work teammates
-
-Pick one work repository you know well and can see on GitHub, then type, with its real address:
+Pick one repository you know well and can see on GitHub, then type, with its real address:
 
 ```text
 add github.com/<org>/<repo> as a project, delivered through no-mistakes, and never merge anything there without asking me
@@ -199,7 +172,9 @@ how does <a feature you know> work in <repo>? report only, no changes
 ```
 
 You should see: a few minutes later, a short plain-English report on that feature.
-Check it against what you know: that one report proves the same things end to end, and your setup is finished.
+Check it against what you know.
+That one report proves the whole stack end to end: your GitHub access to the project, a worker starting in its own isolated copy, its Claude sign-in, and the report coming back to you.
+Your setup is finished.
 
 If the report never comes back, ask "why can't you start a worker?" and fix what it names.
 
@@ -266,6 +241,6 @@ It explains the whole system in plain words, how to connect your mail, calendar 
 | Claude says you reached your usage limit, or workers stop until a reset time | On Claude Pro, your first mate and every Opus worker share one usage window. Wait for the reset time Claude names, then ask the first mate to run fewer workers at a time, or lower its thinking level with `echo low > config/primary-effort` and start it again. |
 | It asks whether to re-certify or pin Claude Code | Ignore it; say "leave it as it is". Nothing is blocked, and that check is the maintainers' job. |
 | `skipped: dirty working tree` after "update starship" | `git -C ~/starship status --short` lists the cause. Move a `??` file out of `~/starship`; for an `M` file, save a copy elsewhere if you want it, then `git -C ~/starship restore <path>`. Then update again. |
-| It cannot add Harbour Logbook | Your GitHub account cannot see the `harbourlogbook` organisation yet; ask its owner to invite you. |
+| It cannot add your first project | Your GitHub account cannot see that repository yet; ask its owner to invite you. |
 | It never notices a worker finished | The trust prompt was declined; quit, launch again, and choose **Yes, I trust this folder**. |
 | Nothing happens for minutes | Normal - work runs in the background. Ask "what are you doing?" |

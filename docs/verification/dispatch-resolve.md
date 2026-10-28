@@ -130,7 +130,7 @@ The shipped criteria name concrete unasked changes (a redesign, an extra feature
 `tests/fm-dispatch-resolve.test.sh` drives the public interface with a fake `curl` that records argv, the request body, the header read from file descriptor 3, and whether the secret reached its environment, plus a fake `quota-axi` that performs the same environment check.
 It proves firstmate can invoke the resolve path without a preflight, rules are snapshotted once from the isolated home's canonical `config/crew-dispatch.json`, and dynamic output fields are flattened to one line.
 It proves the absent key (environment and `.env`) prints one stderr line, nothing on stdout, exits 0, and never invokes `curl` or `quota-axi`.
-It proves a `private-app` brief takes that same off path with no list, whether `--project` or the brief's scaffolded setup line names it, while a project merely sharing the prefix still resolves.
+It proves a brief for a project listed in `config/private-projects` takes that same off path with no never-send list, whether `--project` or the brief's scaffolded setup line names it, while a project merely sharing the prefix still resolves.
 It proves absent, default-only, and empty-rules files return `no rules to match` without a model or quota request, while a broken rules-file symlink exits 2 as unreadable.
 It proves the documented starter configuration resolves its Pi default through the declared Claude provider, a `.env` key turns the tool on, and the environment wins over it.
 It proves the key is absent from child environments, never appears on `curl` argv, and arrives only as the bearer header on the descriptor.

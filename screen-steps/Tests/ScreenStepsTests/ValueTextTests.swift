@@ -6,7 +6,7 @@ final class ValueTextTests: XCTestCase {
     private let values = [
         "com.example.harbourlogbook",
         "com.example-app.harbourlogbook.widget",
-        "HC-2026-IOS-0001",
+        "HL-2026-IOS-0001",
         "English (U.S.)",
         "café 👩‍💻 ok",
     ]
@@ -26,7 +26,7 @@ final class ValueTextTests: XCTestCase {
     }
 
     /// A bundle ID has no break opportunity of its own, so it used to wrap as
-    /// "com.example.happinesscom-" / "pass" with an invented hyphen.
+    /// "com.example.harbourlog-" / "book" with an invented hyphen.
     func testLongValueCanWrapAfterEveryCharacter() {
         let value = "com.example.harbourlogbook"
         XCTAssertEqual(Set(breaks(value)), [0], "the bare value cannot wrap anywhere")

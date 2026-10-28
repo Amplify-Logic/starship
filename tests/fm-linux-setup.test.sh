@@ -362,21 +362,21 @@ test_addon_is_named_and_cloned_once_signed_in() {
   local w out status config arg
   w=$(make_world addon)
   config="$w/home/starship/config/addon"
-  out=$(FAKE_ADDON_CLONE_FAILS=starship-addon run_setup "$w" --addon Amplify-Logic/starship-addon)
+  out=$(FAKE_ADDON_CLONE_FAILS=starship-addon run_setup "$w" --addon example-org/starship-addon)
   status=$?
   [ "$status" -eq 0 ] || fail "a setup whose add-on cannot be cloned yet should still finish, got $status: $out"
-  assert_equals "$(printf 'path = projects/starship-addon\norigin = https://github.com/Amplify-Logic/starship-addon')" \
+  assert_equals "$(printf 'path = projects/starship-addon\norigin = https://github.com/example-org/starship-addon')" \
     "$(cat "$config")" "--addon must name the add-on's origin and its checkout under projects/"
   assert_contains "$out" "the add-on is not cloned yet" "a clone that needs the sign-in must be reported"
   assert_contains "$out" "3. ~/starship/bin/fm-addon.sh install" "the closing steps must name the command that finishes the add-on"
-  out=$(FAKE_ADDON_CLONE_FAILS=starship-addon run_setup "$w" --ci --addon Amplify-Logic/starship-addon)
+  out=$(FAKE_ADDON_CLONE_FAILS=starship-addon run_setup "$w" --ci --addon example-org/starship-addon)
   assert_not_contains "$out" "3. ~/starship/bin/fm-addon.sh install" "--ci prints no closing steps"
 
   : > "$w/calls.log"
-  out=$(run_setup "$w" --addon Amplify-Logic/starship-addon)
+  out=$(run_setup "$w" --addon example-org/starship-addon)
   status=$?
   [ "$status" -eq 0 ] || fail "a re-run after the sign-in should succeed, got $status: $out"
-  assert_contains "$(calls "$w")" "git clone https://github.com/Amplify-Logic/starship-addon $w/home/starship/projects/starship-addon" \
+  assert_contains "$(calls "$w")" "git clone https://github.com/example-org/starship-addon $w/home/starship/projects/starship-addon" \
     "the add-on must be cloned into its configured checkout"
   assert_contains "$out" "add-on: cloned" "the clone must be reported"
   assert_not_contains "$out" "3. ~/starship/bin/fm-addon.sh install" "a cloned add-on needs no closing step"
@@ -387,8 +387,8 @@ test_addon_is_named_and_cloned_once_signed_in() {
   assert_equals "path = elsewhere" "$(cat "$config")" "an existing config/addon must be left as it is"
 
   w=$(make_world addon-usage)
-  for arg in starship-addon https://github.com/Amplify-Logic/starship-addon \
-    git@github.com:Amplify-Logic/starship-addon.git /srv/addon.git Amplify-Logic/..; do
+  for arg in starship-addon https://github.com/example-org/starship-addon \
+    git@github.com:example-org/starship-addon.git /srv/addon.git Amplify-Logic/..; do
     out=$(run_setup "$w" --addon "$arg" 2>&1)
     status=$?
     [ "$status" -eq 2 ] || fail "--addon $arg should be a usage error, got $status: $out"

@@ -30,12 +30,12 @@
 #
 # OPT-IN, per home, off by default: nothing is installed or sent unless this
 # home's private gitignored config/command-guard says `enabled = true`. It is not
-# inherited into secondmate homes. private-app is always excluded: its
-# commands are never sent to an additional outside service such as Jev,
-# whatever the gate says; projects named on an `exclude` line are treated the
-# same way. Both match the project's logical directory name, as the registry
-# names it. docs/configuration.md "Worker command guard" owns the operator
-# contract.
+# inherited into secondmate homes. A project named in the home's private
+# config/private-projects list is always excluded: its commands are never sent
+# to an additional outside service such as Jev, whatever the gate says; projects
+# named on an `exclude` line are treated the same way. Both match the project's
+# logical directory name, as the registry names it. docs/configuration.md
+# "Worker command guard" owns the operator contract.
 #
 # LOCAL DATABASE LIST FIRST, FOR EVERY PROJECT. Before anything is redacted or
 # sent, database_rule() matches the whole raw command, heredoc and -c bodies
@@ -43,7 +43,7 @@
 # delete a live database, listed for operators in docs/configuration.md. A
 # match is blocked outright with a short notice that live database changes go
 # to firstmate as a blocker. Nothing remote is involved, so it never steps aside:
-# it runs for excluded projects and Harbour too, and a crash in the check
+# it runs for excluded and private projects too, and a crash in the check
 # blocks. It matches text, not shell syntax, so a command that only mentions
 # one of these (a grep, a commit message) is blocked as well.
 #
@@ -131,9 +131,10 @@ MAX_PARTS = 8
 # The fallback when a multi-part request fails: one part of the head and tail.
 HEAD_CHARS = 1500
 TAIL_CHARS = 500
-# private-app is always excluded: its commands are never sent to an
-# additional outside service such as Jev, whatever config/command-guard says.
-ALWAYS_EXCLUDED = frozenset({"private-app"})
+# Projects named in config/private-projects are always excluded: their commands
+# are never sent to an additional outside service such as Jev, whatever
+# config/command-guard says.
+PRIVATE_PROJECTS_NAME = "private-projects"
 LOG_NAME = "command-guard.log"
 OUTAGE_NAME = ".command-guard-outage"
 LOG_ROTATE_BYTES = 2 * 1024 * 1024
@@ -201,9 +202,24 @@ def armed_for(config_dir, project):
     return enabled
 
 
-def sent_for(project, excluded):
-    """Whether this project's commands may go to Jev at all."""
-    return project not in ALWAYS_EXCLUDED and project not in excluded
+def private_projects(config_dir):
+    """The home's private project names, or None when the list cannot be read."""
+    path = pathlib.Path(config_dir) / PRIVATE_PROJECTS_NAME
+    if not path.exists() and not path.is_symlink():
+        return set()
+    if not path.is_file():
+        return None
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    names = (raw.strip() for raw in text.splitlines())
+    return {name for name in names if name and not name.startswith("#")}
+
+
+def sent_for(project, excluded, private):
+    """Whether this project's commands may go to Jev at all; an unreadable private list sends nothing."""
+    return private is not None and project not in private and project not in excluded
 
 
 # ---- local database list ----------------------------------------------------
@@ -726,7 +742,7 @@ def run_hook(opts):
         except (Exception, HookBound):  # noqa: BLE001
             pass
         return 0
-    if not jev or not sent_for(opts["project"], excluded):
+    if not jev or not sent_for(opts["project"], excluded, private_projects(opts["config"])):
         return 0
 
     outcome, reason, answers, sent, path = judge(command, opts["home"])

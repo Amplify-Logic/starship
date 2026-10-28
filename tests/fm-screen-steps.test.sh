@@ -544,9 +544,9 @@ Open My Apps first.
 
 1. Click + and choose New App.
 2. Platform: tick `iOS`.
-3) Name: `Harbour Logbook` and SKU `harbour-1`
+3) Name: `Harbour Logbook` and SKU `logbook-1`
    Keep the capital letters, **exactly**.
-- Bundle ID: `com.example.harbour`, again `iOS`
+- Bundle ID: `com.example.logbook`, again `iOS`
 EOF
 }
 
@@ -562,10 +562,10 @@ test_show_builds_the_card_and_opens_the_page_in_arc() {
   assert_equals "Open My Apps first." "$(card_field "$fx" 'card["note"]')" "lines before the first step are the note"
   assert_equals 4 "$(card_field "$fx" 'len(card["steps"])')" "numbered and bulleted lines are steps"
   assert_equals "[]" "$(card_field "$fx" 'card["steps"][0]["values"]')" "a step without code has nothing to copy"
-  assert_equals "['Harbour Logbook', 'harbour-1']" "$(card_field "$fx" 'card["steps"][2]["values"]')" "every code span is a value to copy"
-  assert_equals "Name: \`Harbour Logbook\` and SKU \`harbour-1\`|Keep the capital letters, **exactly**." \
+  assert_equals "['Harbour Logbook', 'logbook-1']" "$(card_field "$fx" 'card["steps"][2]["values"]')" "every code span is a value to copy"
+  assert_equals "Name: \`Harbour Logbook\` and SKU \`logbook-1\`|Keep the capital letters, **exactly**." \
     "$(card_field "$fx" '"|".join(card["steps"][2]["text"].splitlines())')" "an indented line joins its step"
-  assert_equals "['com.example.harbour', 'iOS']" "$(card_field "$fx" 'card["steps"][3]["values"]')" "values are kept per step"
+  assert_equals "['com.example.logbook', 'iOS']" "$(card_field "$fx" 'card["steps"][3]["values"]')" "values are kept per step"
   assert_equals 600 "$(file_mode "$fx/home/state/screen-steps/card.json")" "the card file is private"
   assert_equals 1 "$(grep -c build "$fx/swift.log")" "the card app is built on first use"
   assert_absent "$fx/arc-unsupported.log" "every request show made to Arc was understood"
@@ -694,7 +694,7 @@ test_reply_sends_through_the_desk_voice_path() {
   assert_equals "Stuck on the on-screen steps: Create the app" "$(tail -n 1 "$fx/desk-voice.log")" "Stuck with nothing ticked names the card"
 
   run_steps "$fx" reply stuck --step 3 >/dev/null 2>&1 || fail "reply stuck --step failed"
-  assert_equals "Stuck at step 3 of the on-screen steps: Create the app (Name: Harbour Logbook and SKU harbour-1 Keep the capital letters, exactly.)" \
+  assert_equals "Stuck at step 3 of the on-screen steps: Create the app (Name: Harbour Logbook and SKU logbook-1 Keep the capital letters, exactly.)" \
     "$(tail -n 1 "$fx/desk-voice.log")" "Stuck names the step on one line"
 
   rc=0

@@ -83,7 +83,8 @@ test_gate() {
   python3 "$GUARD" armed --config "$home/config" --project demo || fail "enabled = true must arm an unlisted project"
   python3 "$GUARD" armed --config "$home/config" --project private-lab || fail "an excluded project must still get the local list"
   printf 'enabled = true\n' > "$home/config/command-guard"
-  python3 "$GUARD" armed --config "$home/config" --project private-app || fail "Harbour must still get the local list"
+  printf 'private-app\n' > "$home/config/private-projects"
+  python3 "$GUARD" armed --config "$home/config" --project private-app || fail "a private project must still get the local list"
   printf 'enabled = yes\n' > "$home/config/command-guard"
   out=$(python3 "$GUARD" armed --config "$home/config" --project demo 2>&1) && fail "a malformed value must be off"
   assert_contains "$out" "enabled must be true or false" "a malformed gate must say why"
@@ -93,7 +94,7 @@ test_gate() {
   printf 'enabled = true\n' > "$home/gate-target"
   ln -s "$home/gate-target" "$home/config/command-guard"
   python3 "$GUARD" armed --config "$home/config" --project demo 2>/dev/null && fail "a symlinked gate must be off"
-  pass "the gate is off unless enabled = true, arms every project including excluded ones and Harbour, and treats a malformed file as off"
+  pass "the gate is off unless enabled = true, arms every project including excluded and private ones, and treats a malformed file as off"
 }
 
 test_unarmed_hook_sends_nothing() {
@@ -107,11 +108,17 @@ test_unarmed_hook_sends_nothing() {
   out=$(run_hook "$home" "git push --force origin main" demo)
   assert_equals "" "$out" "an excluded project must allow without output"
   assert_equals 0 "$(requests)" "an excluded project must never be sent"
-  home=$(new_home harbour 'enabled = true\n')
+  home=$(new_home private 'enabled = true\n')
+  printf '# never sent\nprivate-app\n' > "$home/config/private-projects"
   out=$(run_hook "$home" "git push --force origin main" private-app)
-  assert_equals "" "$out" "Harbour must allow without output"
-  assert_equals 0 "$(requests)" "Harbour must never be sent, whatever the gate says"
-  pass "an unarmed home, Harbour and an excluded project allow a command off the local list and send nothing"
+  assert_equals "" "$out" "a private project must allow without output"
+  assert_equals 0 "$(requests)" "a private project must never be sent, whatever the gate says"
+  rm -f "$home/config/private-projects"
+  mkdir "$home/config/private-projects"
+  out=$(run_hook "$home" "git push --force origin main" demo)
+  assert_equals "" "$out" "an unreadable private list must allow without output"
+  assert_equals 0 "$(requests)" "an unreadable private list must send nothing"
+  pass "an unarmed home, a private project, an unreadable private list and an excluded project allow a command off the local list and send nothing"
 }
 
 # --- the rule, on recorded live answers ------------------------------------
@@ -366,17 +373,18 @@ test_local_list_benchmark_cases() {
 test_local_list_reaches_excluded_projects() {
   local home out
   home=$(new_home local-excluded 'enabled = true\nexclude = private-lab\n')
+  printf 'private-app\n' > "$home/config/private-projects"
   reset_server "$FIX/response-force-push.json"
   for project in private-lab private-app; do
     assert_local_block "$home" "$INCIDENT" "the local list must block for $project" "$project"
     out=$(run_hook "$home" "git push --force origin main" "$project")
     assert_equals "" "$out" "$project must not be judged by Jev"
   done
-  assert_equals 0 "$(requests)" "an excluded project and Harbour must never be sent"
+  assert_equals 0 "$(requests)" "an excluded project and a private project must never be sent"
   printf 'psql "postgres://ops:hunter22@db.example/x" -c "DROP TABLE t"\n' > "$TMP_ROOT/secret-cmd"
   assert_local_block "$home" "$(cat "$TMP_ROOT/secret-cmd")" "a credentialed database URL must still be blocked" private-lab
   assert_not_contains "$(cat "$home/state/command-guard.log")" "hunter22" "a local block must log only the redacted command"
-  pass "excluded projects and Harbour get the local list and still send nothing to Jev"
+  pass "excluded and private projects get the local list and still send nothing to Jev"
 }
 
 test_local_check_crash_blocks() {
@@ -671,9 +679,13 @@ test_spawn_installs_hook_only_when_armed() {
   assert_contains "$out" "Database guard blocked" "an excluded project's hook must still run the local list"
   assert_equals 0 "$(requests)" "an excluded project's hook must never send a command"
 
-  wt=$(spawn_claude harbour guard-harbour 'enabled = true\n' private-app)
+  wt=$(spawn_claude private guard-private 'enabled = true\n' private-app)
   cmd=$(jq -r '.hooks.PreToolUse[0].hooks[0].command' "$wt/.claude/settings.local.json")
-  assert_contains "$cmd" "--project 'private-app'" "Harbour, reached through a link, must get the hook under its logical name"
+  assert_contains "$cmd" "--project 'private-app'" "a private project, reached through a link, must get the hook under its logical name"
+  printf 'private-app\n' > "$TMP_ROOT/spawn-private/home/config/private-projects"
+  reset_server "$FIX/response-force-push.json"
+  out=$(payload "git push --force origin main" | bash -c "$cmd")
+  assert_equals 0 "$(requests)" "a private project's hook must never send a command"
 
   wt=$(spawn_claude linked guard-linked 'enabled = true\nexclude = linked-name\n' linked-name)
   cmd=$(jq -r '.hooks.PreToolUse[0].hooks[0].command' "$wt/.claude/settings.local.json")
@@ -693,7 +705,7 @@ test_spawn_installs_hook_only_when_armed() {
   printf 'enabled = false\n' > "$TMP_ROOT/spawn-on/home/config/command-guard"
   out=$(payload "git push --force origin main" | bash -c "$cmd")
   assert_equals "" "$out" "switching the gate off must take effect without a relaunch"
-  pass "fm-spawn installs the Bash guard hook whenever the gate is on, excluded projects and Harbour get the local list without Jev by logical name, and the hook honours the live gate"
+  pass "fm-spawn installs the Bash guard hook whenever the gate is on, excluded and private projects get the local list without Jev by logical name, and the hook honours the live gate"
 }
 
 # Exercise the public hook entry with a synthetic judge and stalled bookkeeping.

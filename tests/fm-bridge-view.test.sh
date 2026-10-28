@@ -1354,7 +1354,7 @@ if module.glance_html("nonce", home) != baseline:
     raise SystemExit("empty bridge-links file changed the rendered page")
 
 (home / "config" / "bridge-links").write_text(
-    "Harbour phone build\thttps://harbour.example/build?mode=phone&v=1\n"
+    "Demo phone build\thttps://demo.example/build?mode=phone&v=1\n"
     "Dell health\thttps://dell.example/health\n"
     "Not secure\thttp://example.com\n"
     "malformed line\n"
@@ -1362,7 +1362,7 @@ if module.glance_html("nonce", home) != baseline:
 )
 rendered = module.glance_html("nonce", home)
 expected = [
-    '<a href="https://harbour.example/build?mode=phone&amp;v=1" target="_blank" rel="noopener noreferrer">Harbour phone build</a>',
+    '<a href="https://demo.example/build?mode=phone&amp;v=1" target="_blank" rel="noopener noreferrer">Demo phone build</a>',
     '<a href="https://dell.example/health" target="_blank" rel="noopener noreferrer">Dell health</a>',
     '&lt;script&gt;alert me&lt;/script&gt;',
     'href="https://example.com/?q=&quot;quoted&quot;&amp;x=1"',
@@ -1700,7 +1700,7 @@ short = module.project_label_rules(registry + "- api [direct-PR] - the api (adde
 for repo, owner, want in (
     ("Amplify-Logic/rapid-tools", "", "Rapid tools"),
     ("garden-notes", "", "Garden notes"),
-    ("org/starship-addon", "", "Starship personal"),
+    ("org/starship-addon", "", "Starship addon"),
     ("org/api", "", "Api"),
     ("", "rapid-tools-sweep", "Rapid tools sweep"),
     ("", "api-docs-sweep", "Api"),
@@ -2036,7 +2036,7 @@ test_memory_reads_only_allowlisted_sources() {
 - Mornings are for reading.
 
 ## Surprise plans
-- Booked the community hall for the 12th.
+- Booked the community hall for the 3rd.
 ### Guests
 - Sam and Kim
 ## Music
@@ -2117,7 +2117,7 @@ cases = [
      "- Gift for Alex:\n\n  Green scarf\n  ---\n- Mornings are for reading.\n# Music\n- Two hours a week.\n",
      [{"heading": "Music", "entries": ["Two hours a week."]}], 4),
     ("table after a blank line",
-     "Gift ideas:\n\n| who | what |\n| Alex | watch |\n",
+     "Gift ideas:\n\n| who | what |\n| Alex | scarf |\n",
      [], 3),
     ("paragraph after a blank line",
      "Gift ideas for Alex:\n\nA green scarf, or a book on sailing.\n",

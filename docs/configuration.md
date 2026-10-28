@@ -818,7 +818,7 @@ Configuration is `key = value` lines and the only key is `enabled`.
 Unlike `config/speak`, a malformed gate file reports on stderr and leaves this home inert rather than exiting loudly, because the caller is a supervision loop and a config typo must never change what that loop does.
 `TYPESAFE_API_KEY` is read from the environment, else from this home's gitignored `.env`, and never appears in argv, stdout, stderr or any state file.
 The dropped status line itself is the whole of what leaves this machine: the task's brief, its worker kind and its earlier status lines are never sent, so arming this gate does not ship a brief's client names, hostnames or unreleased plans to a third party.
-A line from a task whose recorded project is `private-app`, or one carrying a value from the [never-send list](#typed-dispatch-resolution-env-typesafe_api_key), is left out before the request is built and is never promoted; a list that is present but unreadable withholds the whole scan.
+A line from a task whose recorded project is listed in [`config/private-projects`](#private-projects-configprivate-projects), or one carrying a value from the [never-send list](#typed-dispatch-resolution-env-typesafe_api_key), is left out before the request is built and is never promoted; a list that is present but unreadable withholds the whole scan.
 The model is pinned to an exact version rather than an alias because the thresholds were tuned against that version.
 [`../bin/fm-triage-second-look.sh`](../bin/fm-triage-second-look.sh)'s header and `--help` own the exact invocation, the environment overrides and the exit codes, and its engine owns the request shape, the four questions, the batch bound, the thresholds and the tier rule.
 The tool reads its batch on stdin as `<task-id>` TAB `<status line>` records, one per line, so feed it one to read the exact request a scan would send:
@@ -840,9 +840,9 @@ enabled = true
 exclude = private-client-app, family-notes
 ```
 
-`private-app` is always excluded: its commands are never sent to an additional outside service such as Jev, whatever this file says.
+A project listed in [`config/private-projects`](#private-projects-configprivate-projects) is always excluded: its commands are never sent to an additional outside service such as Jev, whatever this file says, and a list that is present but unreadable sends nothing for any project.
 `exclude` covers the rest, naming other project directories whose commands are never sent, separated by spaces or commas.
-Excluded projects and Harbour still get the local database list, because it sends nothing.
+Excluded and private projects still get the local database list, because it sends nothing.
 Both match the project's logical directory name, the name the project registry uses, even when that directory is a link to a differently named copy.
 List every other project whose code or commands must not reach a third party.
 Any other key or a malformed value leaves the guard off at spawn, and the spawn prints why.
@@ -916,7 +916,7 @@ Opening a URL in the browser needs `control browser`, because a link in the capt
 | `use zapier` | every Zapier tool |
 | `use <tool name or glob>` | exactly the named connector tools, for example `use mcp__claude_ai_Zapier_MCP__*` |
 
-Addresses are full email addresses or `@domain` for everyone at that domain, separated by commas, spaces or `and`; names such as "the Harbour team" are not understood.
+Addresses are full email addresses or `@domain` for everyone at that domain, separated by commas, spaces or `and`; names such as "the design team" are not understood.
 `send email to` holds only when the recipients are visible in the request: a reply needs an explicit `to`, a reply-all also an explicit `cc`, and a draft sent by its id never shows its recipients, so only plain `send email` covers it.
 Each `to`, `cc` and `bcc` entry must be exactly one plain address such as `ana@example.com`; an entry with a display name, angle brackets, a comma or a space cannot be confirmed, so `send email to` does not cover the send.
 `invites from` holds only for an event the worker has read in the same job, because a hook records each event's organizer from the calendar connector's answer to `get_event`, `list_events` or `search_events`.
@@ -929,7 +929,7 @@ It holds for that task only, including after a relaunch.
 **Standing permissions.** The private gitignored `config/outward-permissions` lists permissions for routine work, one per line, that every worker in the home gets:
 
 ```
-# Harbour invites and the weekly update
+# Team invites and the weekly update
 accept invites from @example.com
 send email to team@example.com
 ```
@@ -1788,7 +1788,19 @@ A match stops the request: the resolver behaves exactly as when it is off, print
 A list that is present but not a readable regular file also stops the request the same way rather than sending unchecked text.
 That one diagnostic names the list line number at most and never prints the listed value or the matching text.
 
-`private-app` is never sent, with or without a list, matching the [worker command guard](#worker-command-guard-configcommand-guard): when `--project` or the repository named by the brief's scaffolded setup line has that logical directory name, the resolver takes the same off path before reading the rules.
+A project listed in [`config/private-projects`](#private-projects-configprivate-projects) is never sent, with or without a never-send list, matching the [worker command guard](#worker-command-guard-configcommand-guard): when `--project` or the repository named by the brief's scaffolded setup line has a listed logical directory name, the resolver takes the same off path before reading the rules.
+
+**Private projects (config/private-projects)**
+
+The optional local, gitignored `config/private-projects` names projects whose work must never reach an additional outside service, one logical project directory name per line, as the project registry names it; blank lines and lines starting with `#` are ignored.
+It has no default entries, and nothing tracked in this repository names a project for it.
+The [worker command guard](#worker-command-guard-configcommand-guard), this resolver and the [status second look](#status-second-look-configtriage-second-look) each treat a listed project as never sent, whatever their own settings say, and a list that is present but not a readable regular file sends nothing.
+Like `config/dispatch-never-send`, it is inherited into secondmate homes.
+
+```text
+# Projects that never leave this machine
+private-app
+```
 
 **Missing or invalid rules**
 

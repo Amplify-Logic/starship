@@ -90,10 +90,10 @@ HOME_ROOT = os.environ.get("FM_HOME") or os.path.expanduser("~/starship")
 STATE_DIR = pathlib.Path(os.environ.get("FM_STATE_OVERRIDE") or pathlib.Path(HOME_ROOT) / "state")
 CONFIG_DIR = pathlib.Path(os.environ.get("FM_CONFIG_OVERRIDE") or pathlib.Path(HOME_ROOT) / "config")
 
-# The same always-excluded projects as ALWAYS_EXCLUDED in bin/fm-command-guard.py,
-# and the same private list bin/fm-dispatch-resolve.sh withholds, with the same
-# matching rule: a case-insensitive literal, whitespace runs counted as one space.
-ALWAYS_EXCLUDED = frozenset({"private-app"})
+# The same private projects bin/fm-command-guard.py never sends, and the same
+# private list bin/fm-dispatch-resolve.sh withholds, with the same matching
+# rule: a case-insensitive literal, whitespace runs counted as one space.
+PRIVATE_PROJECTS_NAME = "private-projects"
 NEVER_SEND_NAME = "dispatch-never-send"
 TASK_ID = re.compile(r"[A-Za-z0-9._-]+")
 
@@ -121,6 +121,21 @@ def never_send_values():
     return [value for value in values if value and not value.startswith("#")]
 
 
+def private_projects():
+    """The home's private project names. Raises NeverSendError on a bad list."""
+    path = CONFIG_DIR / PRIVATE_PROJECTS_NAME
+    if not path.exists() and not path.is_symlink():
+        return frozenset()
+    if not path.is_file():
+        raise NeverSendError("%s is not a readable regular file" % path)
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        raise NeverSendError("%s is not a readable regular file" % path)
+    names = (raw.strip() for raw in text.splitlines())
+    return frozenset(name for name in names if name and not name.startswith("#"))
+
+
 def task_project(task):
     """The logical directory name of the task's recorded project, or ""."""
     if not TASK_ID.fullmatch(task) or task in (".", ".."):
@@ -136,8 +151,8 @@ def task_project(task):
     return os.path.basename(project.rstrip("/"))
 
 
-def withheld(task, line, values):
-    if task_project(task) in ALWAYS_EXCLUDED:
+def withheld(task, line, values, private):
+    if task_project(task) in private:
         return True
     text = squash(line).lower()
     return any(value in text for value in values)
@@ -269,11 +284,13 @@ def read_records():
     carries hyphens, and `lines.a-b-c.line` is not a path worth asking a model
     to follow.
 
-    A line from a private-app task or one matching the never-send list is
-    left out before the bound, so it never leaves the machine and never takes a
-    batch slot. Raises NeverSendError when the list cannot be read.
+    A line from a task of a project in config/private-projects or one matching
+    the never-send list is left out before the bound, so it never leaves the
+    machine and never takes a batch slot. Raises NeverSendError when either list
+    cannot be read.
     """
     values = never_send_values()
+    private = private_projects()
     parsed = []
     held = 0
     for raw in sys.stdin.read().splitlines():
@@ -283,14 +300,14 @@ def read_records():
         task, line = task.strip(), normalize(line)
         if not task or not line:
             continue
-        if withheld(task, line, values):
+        if withheld(task, line, values, private):
             held += 1
             continue
         parsed.append((task, line))
     if held:
         # Never the line or the listed value, only how many stayed here.
         note("withheld %d line(s) that never leave this machine "
-             "(private-app or config/%s)" % (held, NEVER_SEND_NAME))
+             "(config/%s or config/%s)" % (held, PRIVATE_PROJECTS_NAME, NEVER_SEND_NAME))
     if len(parsed) > MAX_LINES:
         note("scan carried %d dropped lines; looking at the newest %d"
              % (len(parsed), MAX_LINES))
