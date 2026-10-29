@@ -97,7 +97,7 @@ Removal: delete `~/.local/bin/peekaboo` and `~/.local/lib/peekaboo/`, then Peeka
 
 ## 6. Web pages: the browser recipe
 
-The captain's main browser is Arc (bundle id `company.thebrowser.Browser`); Chrome (`com.google.Chrome`) is second.
+The browsers covered here are Arc (bundle id `company.thebrowser.Browser`) and Chrome (`com.google.Chrome`).
 Peekaboo is a poor fit inside a page: Chromium hides page content from the element list, so pick by job:
 
 1. **Logged-in pages and forms** (airlines, payment and account pages, GitHub in the captain's session): the Claude in Chrome extension, through the `mcp__claude-in-chrome__*` tools.
@@ -127,7 +127,7 @@ Arc's support for the extension panel is untested here; if it will not open, Chr
 
 ## 7. Recipe cards for each kind of app
 
-[`recipes.md`](recipes.md) holds one card per kind of app: files, settings and audio, email and calendar, Notes, messaging, Xcode and the simulator, Logic, opening and closing apps, and logins.
+[`recipes.md`](recipes.md) holds one card per kind of app: files, settings and audio, email and calendar, Notes, messaging, Xcode and the simulator, opening and closing apps, and logins.
 Each card gives the commands, what is the captain's to decide, and the known traps; read the matching card before the first step in that app.
 
 ## 8. Delegating
