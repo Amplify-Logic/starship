@@ -8,9 +8,9 @@
 #   - nothing is spoken that the register owner refused;
 #   - nothing is spoken that the register owner never shaped;
 #   - the caller's turn is never held open by audio or by a hung shaper.
-# The register itself is owned by the glasses project and tested there. These
-# tests drive a fake owner that implements its documented exit contract, so the
-# suite runs anywhere and never depends on that project being cloned.
+# The register itself is owned by the external register owner a home names and
+# is tested there. These tests drive a fake owner that implements its documented
+# exit contract, so the suite runs anywhere and never depends on that owner.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -38,7 +38,7 @@ new_home() {  # <name> [config-lines...]
   printf '%s\n' "$TMP_ROOT/$name"
 }
 
-# A stand-in for the glasses register owner, faithful to its documented
+# A stand-in for the register owner, faithful to its documented
 # contract: exit 0 with the shaped line on stdout, exit 2 with a reason on
 # stderr when it refuses, notes on stderr either way.
 install_shaper() {  # <home>
@@ -368,61 +368,64 @@ test_dry_run_never_reaches_the_speaker() {
   pass "fm-speak: a dry run prints the line and makes no sound"
 }
 
-# With no FM_SPEAK_SHAPER, the register owner is the starship-voice clone's
-# announce when it is there and the retiring glasses-voice clone's otherwise.
-# Each project fake tags the line it shapes with its own project name.
-install_project_shaper() {  # <home> <project>
-  mkdir -p "$1/projects/$2/bin"
-  printf '#!/usr/bin/env bash\nshift\nprintf "%s: %%s\\n" "$*"\n' "$2" \
-    > "$1/projects/$2/bin/announce"
-  chmod +x "$1/projects/$2/bin/announce"
+# With no FM_SPEAK_SHAPER, the register owner is the one config/speak names
+# with `shaper`, an absolute path or one relative to the home. Each fake tags
+# the line it shapes with its own name.
+install_named_shaper() {  # <path> <tag>
+  mkdir -p "$(dirname "$1")"
+  printf '#!/usr/bin/env bash\nshift\nprintf "%s: %%s\\n" "$*"\n' "$2" > "$1"
+  chmod +x "$1"
 }
 
-speak_default_shaper() {  # <home> <args...>
+speak_config_shaper() {  # <home> <args...>
   local home=$1
   shift
   env -u FM_SPEAK_SHAPER FM_HOME="$home" FM_SPEAK_SAY="$home/speaker" "$SPEAK" "$@"
 }
 
-test_the_default_register_owner_prefers_starship_voice() {
+test_the_configured_register_owner_shapes_the_line() {
   local home out code
-  home=$(new_home default-starship "enabled = true")
+  home=$(new_home config-shaper "enabled = true" "shaper = owner/bin/announce")
   install_speaker "$home" >/dev/null
-  install_project_shaper "$home" glasses-voice
-  install_project_shaper "$home" starship-voice
+  install_named_shaper "$home/owner/bin/announce" relative
 
-  out=$(speak_default_shaper "$home" --dry-run "The fix is green.") && code=0 || code=$?
-  expect_code 0 "$code" "the starship-voice owner shapes the line"
-  assert_contains "$out" "starship-voice: The fix is green." "the starship-voice clone wins when both are present"
-  assert_not_contains "$out" "glasses-voice:" "the retiring clone must not shape the line"
-  pass "fm-speak: the default register owner is the starship-voice clone when it exists"
+  out=$(speak_config_shaper "$home" --dry-run "The fix is green.") && code=0 || code=$?
+  expect_code 0 "$code" "the configured owner shapes the line"
+  assert_contains "$out" "relative: The fix is green." "a relative shaper path resolves against the home"
+
+  home=$(new_home config-shaper-absolute "enabled = true" "shaper = $TMP_ROOT/absolute-owner")
+  install_speaker "$home" >/dev/null
+  install_named_shaper "$TMP_ROOT/absolute-owner" absolute
+  out=$(speak_config_shaper "$home" --dry-run "The fix is green.") && code=0 || code=$?
+  expect_code 0 "$code" "an absolute configured owner shapes the line"
+  assert_contains "$out" "absolute: The fix is green." "an absolute shaper path is used as given"
+  pass "fm-speak: config/speak shaper names the register owner"
 }
 
-test_the_default_register_owner_falls_back_to_glasses_voice() {
+test_no_register_owner_is_refused_and_nothing_is_spoken() {
   local home out code
-  home=$(new_home default-glasses "enabled = true")
+  home=$(new_home no-shaper "enabled = true")
   install_speaker "$home" >/dev/null
-  install_project_shaper "$home" glasses-voice
 
-  out=$(speak_default_shaper "$home" --dry-run "The fix is green.") && code=0 || code=$?
-  expect_code 0 "$code" "the glasses-voice owner shapes the line"
-  assert_contains "$out" "glasses-voice: The fix is green." "the retiring clone is the fallback"
-  pass "fm-speak: the default register owner falls back to the glasses-voice clone"
+  out=$(speak_config_shaper "$home" "The fix is green." 2>&1) && code=0 || code=$?
+  expect_code 1 "$code" "a home naming no register owner cannot speak"
+  assert_contains "$out" "shaper = <path>" "the refusal names the key to add"
+  assert_stayed_silent "$home/spoken.log" "an unshaped line must never be spoken"
+  pass "fm-speak: with no register owner named, nothing is spoken"
 }
 
-test_an_explicit_register_owner_wins_over_both_clones() {
+test_an_explicit_register_owner_wins_over_the_configured_one() {
   local home out code
-  home=$(new_home override-shaper "enabled = true")
+  home=$(new_home override-shaper "enabled = true" "shaper = owner/bin/announce")
   install_shaper "$home" >/dev/null
   install_speaker "$home" >/dev/null
-  install_project_shaper "$home" glasses-voice
-  install_project_shaper "$home" starship-voice
+  install_named_shaper "$home/owner/bin/announce" configured
 
   out=$(speak "$home" --dry-run "The fix is green.") && code=0 || code=$?
   expect_code 0 "$code" "the named owner shapes the line"
   assert_contains "$out" "The fix is green." "the named owner's line is printed"
-  assert_not_contains "$out" "-voice:" "neither project clone may shape the line"
-  pass "fm-speak: FM_SPEAK_SHAPER still wins over both project clones"
+  assert_not_contains "$out" "configured:" "the configured owner may not shape the line"
+  pass "fm-speak: FM_SPEAK_SHAPER still wins over config/speak shaper"
 }
 
 # The turn-blocking property. A caller reading this through a command
@@ -1484,9 +1487,9 @@ test_a_request_for_a_spoken_yes_is_never_spoken
 test_a_line_that_is_only_a_link_is_not_spoken
 test_the_speaker_receives_the_stripped_line_not_the_raw_one
 test_dry_run_never_reaches_the_speaker
-test_the_default_register_owner_prefers_starship_voice
-test_the_default_register_owner_falls_back_to_glasses_voice
-test_an_explicit_register_owner_wins_over_both_clones
+test_the_configured_register_owner_shapes_the_line
+test_no_register_owner_is_refused_and_nothing_is_spoken
+test_an_explicit_register_owner_wins_over_the_configured_one
 test_the_caller_is_never_held_open_by_audio_still_playing
 test_a_runaway_speaker_is_killed_at_the_bound
 test_the_speaker_bound_does_not_bound_the_register_call

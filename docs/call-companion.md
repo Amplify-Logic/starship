@@ -59,7 +59,7 @@ bin/fm-call-companion.sh stop
 
 `start` opens the desk page, `data/calls/glance.html`, which refreshes every 20 seconds.
 Saying "Firstmate, do it", "Firstmate, build that" or "captain's order:" followed by an instruction still shows that order on the desk under "Spoken orders" and logs it, but the live desk is no longer how spoken orders are caught.
-They are caught after the call by the meeting intake's scan of the finished meeting, which starts the clear ones (see [meetings.md](meetings.md#what-happens-after-a-meeting)).
+They are caught after the call by a meeting intake's scan of the finished meeting, where the home has one, which starts the clear ones.
 `bin/fm-call-digest.sh`'s header owns the logs a home can watch for that.
 
 ## Stop a recording
