@@ -395,10 +395,6 @@
       "audience": "maintainer-architecture"
     },
     {
-      "path": "docs/baby-menu-quota-widget.md",
-      "audience": "operator-current"
-    },
-    {
       "path": "docs/bridge-view.md",
       "audience": "operator-current"
     },
@@ -459,10 +455,6 @@
       "audience": "operator-current"
     },
     {
-      "path": "docs/meetings.md",
-      "audience": "operator-current"
-    },
-    {
       "path": "docs/desk-voice-replies.md",
       "audience": "agent-runtime"
     },
@@ -504,10 +496,6 @@
     },
     {
       "path": "docs/examples/call-companion",
-      "audience": "operator-example"
-    },
-    {
-      "path": "docs/examples/meetings",
       "audience": "operator-example"
     },
     {
@@ -856,10 +844,6 @@
     },
     {
       "path": ".agents/skills/away-quiet-supervision/SKILL.md",
-      "audience": "agent-runtime"
-    },
-    {
-      "path": ".agents/skills/meeting-intake/SKILL.md",
       "audience": "agent-runtime"
     },
     {

@@ -2,9 +2,16 @@
 # Copy this into a local, gitignored config/speak to have the first mate speak
 # its replies out of this Mac's speaker. Without this file it stays silent.
 # `key = value` lines; unknown keys are refused. See docs/configuration.md
-# "Desk voice-out" for what it needs: the Starship Voice project cloned under
-# projects/, and either DEEPGRAM_API_KEY in .env or a macOS voice below.
+# "Desk voice-out" for what it needs: a spoken register owner named below, and
+# either DEEPGRAM_API_KEY in .env or a macOS voice below.
 enabled = true
+
+# The spoken register owner: an executable exposing `--dry-run <text>`, as an
+# absolute path or one relative to this home. Nothing is spoken without one.
+# It reads its spoken budget from the GLASSES_ANNOUNCE_CONFIG file fm-speak
+# points it at (docs/examples/desk-speak-register.toml); an owner that ignores
+# that variable uses its own budget.
+# shaper = projects/<voice-project>/bin/announce
 
 # Optional macOS `say` voice; naming one speaks through `say` instead of
 # Deepgram. Leave it commented out to use Deepgram when the key is set.

@@ -5,7 +5,7 @@ Each card gives the commands, what is the captain's to decide, and the known tra
 **Tested** means the command ran read-only on this Mac in October 2026; **untested** says why it was not run.
 Prefer bundle ids over app names everywhere: a name can match several processes (Arc has helpers named after it).
 
-Standing rules on every card: passwords, codes and logins, privacy permission switches, every message or email sent, every university post or submission, purchases, and anything deleted rather than moved to the Bin are the captain's.
+Standing rules on every card: passwords, codes and logins, privacy permission switches, every message or email sent, purchases, and anything deleted rather than moved to the Bin are the captain's.
 
 ## Files, folders and disks
 
@@ -22,9 +22,8 @@ Yours to decide: deleting anything, as opposed to moving it to the Bin, and wher
 
 Traps:
 
-- Never `rm` the captain's files; Finder's `delete` moves to the Bin and is the only removal without his word.
-- New project and music folders go on the SSD, not the internal disk.
-- Another app's Open or Save panel (Live's "locate folder") is the one file job that needs the element list; act on it through `elements` and the guard.
+- Never `rm` the captain's files; Finder's `delete` moves to the Bin and is the only removal without the captain's word.
+- Another app's Open or Save panel is the one file job that needs the element list; act on it through `elements` and the guard.
 
 ## Settings, audio and devices
 
@@ -118,23 +117,6 @@ Traps:
 
 - Only one simulator may run at a time; check `xcrun simctl list devices booted` before booting another.
 - `open -a Simulator` takes the screen; `simctl` does not.
-
-## Logic Pro
-
-Commands:
-
-- Logic Pro (`com.apple.logic10`, installed as `Logic Pro 2.app`) has almost no scripting: its whole dictionary is `renderPreview`.
-- Read its window with `bin/fm-computer-use.sh elements --app com.apple.logic10`. **Untested**: Logic was not open; it is known to label its controls for VoiceOver, so check the list the first time the captain has it open.
-- Logic's keyboard shortcuts and menu choices need it in front, through the guard.
-- EZdrummer (`com.toontrack.ezdrummer3.app`) and Toontrack Product Manager (`com.toontrack.productmanager`) have no scripting; plug-in windows need a window image.
-- Ableton Live has its own scripting connection; see the skill.
-
-Yours to decide: when Logic is open for the first element-list check, and any save, bounce or overwrite.
-
-Traps:
-
-- Quitting Logic or closing a project raises "Save changes?"; never answer it without the task allowing save dialogs.
-- Set up a drum kit once by hand, save it as a preset, and load it by name rather than driving the plug-in window.
 
 ## Opening and closing apps
 

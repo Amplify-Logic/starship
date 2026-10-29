@@ -16,7 +16,6 @@ Start with the directory layout, then use the setting reference for the behavior
 | Starter settings for a new home: which model does which job, transcription words, and how hard the first mate thinks | [Starter settings](#starter-settings-first-launch), [crew dispatch profiles](#crew-dispatch-profiles-configcrew-dispatchjson), [speech-to-text vocabulary](#speech-to-text-vocabulary-configstt-vocabulary), and [primary effort](#primary-effort-configprimary-effort) |
 | Spoken replies | [Desk voice-out](#desk-voice-out-configspeak) |
 | The call recorder | [Call recorder](#call-recorder-configcall-companion) |
-| Meetings recorded by Anarlog, and shared glasses calls | [Meeting intake](#meeting-intake-configmeetings) |
 | A home's own private tools beside the shared code | [Private add-on](#private-add-on-configaddon) and [opt-in skills](#opt-in-skills-configadhd-configsecond-opinion) |
 | Keeping private names out of this public repository | [Private leak words](#private-leak-words-configleak-words) |
 | Per-run overrides and tuning | [Environment variables](#environment-variables) |
@@ -87,7 +86,6 @@ Each effective `FM_HOME` contains private operational directories.
 - Explicitly installed content-addressed extension packages under `data/extensions/packages/`.
 - The captain ledger `data/captain-ledger.jsonl`, every captain prompt recorded before the primary answers in a home opted in through `config/captain-ledger` (`bin/fm-captain-ledger.sh`).
 - Call recordings under `data/calls/`: the transcript, live desk, end-of-call notes and archive (`bin/fm-call-lib.sh`; [call-companion.md](call-companion.md)).
-- Meeting intake records under `data/meetings/<id>/intake.json` (`bin/fm-meetings.sh`; [meetings.md](meetings.md)).
 
 `state/` holds runtime records:
 
@@ -104,7 +102,6 @@ Each effective `FM_HOME` contains private operational directories.
 - The dispatch decision record `state/dispatch-decisions.jsonl` (`bin/fm-dispatch-resolve.sh`; "Typed dispatch resolution" below).
 - The localhost web page's token, pid, port and request log under `state/web/` (`bin/fm-web.sh`; [web.md](web.md)).
 - The call recorder's process records, logs, short-lived audio chunks and decision logs under `state/calls/` (`bin/fm-call-lib.sh`; [call-companion.md](call-companion.md)).
-- The meeting intake's check records under `state/meetings/` (`bin/fm-meetings.sh`; [meetings.md](meetings.md)).
 
 `config/` holds local gitignored operating choices, including explicit extension bindings under `config/extensions.d/`.
 
@@ -3231,10 +3228,12 @@ An opt-in, per-home and per-device gate for speaking a captain-facing outcome ou
 It ships inert: with no `enabled = true` line in private gitignored `config/speak`, `bin/fm-speak.sh` makes no sound at all, so cloning this repo, seeding a secondmate home, or adding a device never makes it talk.
 
 This is a sink, not a companion.
-The spoken register - outcome first, a few short sentences inside a bounded spoken length, never a URL, path or id, and never a request for a spoken yes - is owned once by the glasses project's `announce` entry point, which already enforces it for the glasses loop.
+The spoken register - outcome first, a few short sentences inside a bounded spoken length, never a URL, path or id, and never a request for a spoken yes - is owned once by an external register owner the home names, not by this repository.
 `bin/fm-speak.sh` shapes every line through that owner and refuses to speak when it cannot reach it, because speaking unshaped text would read a URL aloud.
-Reusing that owner is deliberate: a second copy of the register in this repository would drift from the one the glasses already speak.
-The practical consequence is that desk voice-out needs that project's local entry point present - `projects/starship-voice/bin/announce`, or the retiring `projects/glasses-voice/bin/announce` when the starship-voice clone is absent - and `FM_SPEAK_SHAPER` can name another one exposing the same `--dry-run <text>` contract.
+Reusing that owner is deliberate: a second copy of the register in this repository would drift from the one the owner already enforces.
+The practical consequence is that desk voice-out needs the `shaper` key in `config/speak`, naming an executable that exposes the `--dry-run <text>` contract as an absolute path or one relative to the home; `FM_SPEAK_SHAPER` takes precedence over it, and with neither nothing is spoken.
+The shaper contract has two parts: the owner implements `--dry-run <text>`, printing the shaped line on stdout or exiting 2 to refuse it, and it reads its spoken budget from the `GLASSES_ANNOUNCE_CONFIG` file `bin/fm-speak.sh` points it at ([`docs/examples/desk-speak-register.toml`](examples/desk-speak-register.toml), see **Desk spoken bound** below); an owner that ignores that variable uses its own budget instead.
+**Upgrading an armed home.** Earlier versions found a default owner on their own, so a home that already has `enabled = true` needs a `shaper` line added to `config/speak` after updating; without it nothing is spoken.
 
 **Speaker preference.** A named voice picks the speaker. With a non-empty `voice` in `config/speak`, `bin/fm-speak.sh` speaks through macOS `say` in that voice, because Deepgram takes its voice from `DEEPGRAM_TTS_MODEL`, set in the environment or this home's gitignored `.env`, and cannot honour that key. With no voice named, `DEEPGRAM_API_KEY` in the environment or this home's gitignored `.env` sends the line to Deepgram Aura (`bin/fm-deepgram-tts.sh`, default model `aura-2-thalia-en`), played with `afplay`. Either way the other speaker is the fallback: Deepgram when there is no usable `say` binary, `say` when the key is absent or Deepgram fails. The speaker is chosen before the line is handed over and never swapped afterwards, so a speaker that fails once it has the line is not re-spoken through the other one. A named `voice` is checked against the voices `say` actually has before the handoff, because `say` substitutes a voice it does not have and still exits 0; a voice this machine does not have is reported on stderr and nothing is spoken. The name is matched no more strictly than `say` resolves it - case is ignored, and a bare `Ava` reaches `Ava (Premium)` - so only a name that cannot resolve at all is refused. That check runs beside the register call under its own bound rather than after it, so it does not extend the worst case a turn can be held, and a voice confirmed once is remembered in `state/speak-voice-confirmed` so only the first spoken line waits for it. The key is never logged, and this covers speech out only - the desk floater's transcription still uses the same key.
 **Desk spoken bound.** The register owner truncates before playback and its own default budget is the ~8s one tuned for the glasses, which cuts an ordinary desk outcome mid-message.
@@ -3242,11 +3241,11 @@ So `bin/fm-speak.sh` points that owner at [`docs/examples/desk-speak-register.to
 The bound belongs to the desk, not to the speaker, so it is the same whichever speaker plays the line, macOS `say` or Deepgram Aura.
 Override with `FM_SPEAK_DEEPGRAM_REGISTER`, or keep the short glasses cut with `FM_SPEAK_DEEPGRAM_REGISTER=` (empty); the variable keeps its historical name because it is the published opt-out.
 
-Because the register owner refuses text that asks the captain to decide, a merge, a spend, an outward action, or any other approval structurally cannot be put to him by voice; those stay in the reply he reads.
+Because the register owner refuses text that asks the captain to decide, a merge, a spend, an outward action, or any other approval structurally cannot be put to the captain by voice; those stay in the written reply.
 Nothing here observes audio, so a successful call means the shaped line was handed to the speaker, never that it was produced or heard.
 
 Configuration is `key = value` lines; unknown keys are refused rather than ignored.
-`enabled` arms this home, and the optional `voice` names a `say` voice, which also selects `say` as the speaker.
+`enabled` arms this home, `shaper` names the register owner, and the optional `voice` names a `say` voice, which also selects `say` as the speaker.
 [`docs/examples/speak`](examples/speak) is an example file that turns spoken replies on; a new home never installs it on its own.
 The script's header and `--help` own the exact invocation, the environment overrides, and the exit codes.
 [`desk-voice-replies.md`](desk-voice-replies.md) owns when the orchestrator speaks; the session-start digest prints it only in a home opted in here.
@@ -3299,15 +3298,6 @@ It holds the call recorder's settings: the label for your own speech, the microp
 Absent, every setting takes its default.
 `key = value` lines; `#` comments and blank lines are ignored, and an unknown key is refused so a typo never silently changes what is recorded.
 [`docs/examples/call-companion`](examples/call-companion) lists every key with its default, `bin/fm-call-lib.sh`'s header owns their meaning, and [call-companion.md](call-companion.md) covers consent, setup, stopping and deleting.
-
-## Meeting intake (config/meetings)
-
-Optional, private, gitignored, and not inherited by secondmate homes.
-It holds the meeting intake's settings: the after-the-call speaker pass, the shared glasses-call folder, the words that mark a work meeting, extra labels for your own speech, and the intake model.
-Absent, every setting takes its default.
-`key = value` lines; `#` comments and blank lines are ignored, and an unknown key is refused so a typo never silently changes which meetings are processed.
-[`docs/examples/meetings`](examples/meetings) lists every key with its default, `bin/fm-meetings.sh`'s header owns their meaning, and [meetings.md](meetings.md) covers setup and the work-meeting rule.
-The optional, private `config/meeting-work-words` lists more work words, one word or phrase per line.
 
 ## Supervision active alert channels (config/wedge-alarm)
 

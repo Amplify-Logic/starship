@@ -108,14 +108,14 @@ test_install_verifies_and_links_user_level() {
 test_elements_render_compactly() {
   local out
   out=$("$CU" elements --from "$FIX/see-settings.json") || fail "elements must render the fixture"
-  assert_equals "app: Ableton Live 12 | window: Settings | dialog: no | snapshot: ps1_fixture0001 | elements: 7/7" \
+  assert_equals "app: TextEdit | window: Settings | dialog: no | snapshot: ps1_fixture0001 | elements: 7/7" \
     "$(printf '%s\n' "$out" | sed -n 1p)" "the header must name the app, window, dialog state, snapshot and counts"
   assert_contains "$out" "elem_2 button 'close button'" "an actionable element keeps a role-description label"
-  assert_contains "$out" "elem_3 button 'Link, Tempo & MIDI' (selected)" "selected state must show"
-  assert_contains "$out" "elem_4 button 'Plug-Ins' (disabled)" "disabled state must show"
-  assert_contains "$out" "elem_5 checkbox 'VST3_System_Folders_Toggle' = 1" "a label that repeats the value must fall back to the identifier"
-  assert_contains "$out" "elem_6 text 'Control Surface 1'" "readable text must be listed with its text"
-  assert_contains "$out" "elem_8 popUpButton 'Control Surface' = AbletonMCP" "a value must follow its label"
+  assert_contains "$out" "elem_3 button 'New Document' (selected)" "selected state must show"
+  assert_contains "$out" "elem_4 button 'Open and Save' (disabled)" "disabled state must show"
+  assert_contains "$out" "elem_5 checkbox 'Rich_Text_Toggle' = 1" "a label that repeats the value must fall back to the identifier"
+  assert_contains "$out" "elem_6 text 'Default Font'" "readable text must be listed with its text"
+  assert_contains "$out" "elem_8 popUpButton 'Encoding' = Unicode (UTF-8)" "a value must follow its label"
   assert_not_contains "$out" "elem_1 " "a bare layout group must be left out by default"
   assert_not_contains "$out" "elem_7 " "a bare cell must be left out by default"
   out=$("$CU" elements --from "$FIX/see-settings.json" --all --max 2)
@@ -203,13 +203,13 @@ test_elements_read_the_list_without_a_screenshot() {
 test_elements_take_a_screenshot_only_when_asked_or_thin() {
   local d out err rc
   d="$TMP_ROOT/thin"; fake_see "$d"
-  see_json 2 > "$d/tree-Live.json"
-  see_json 3 Live > "$d/shot-Live.json"
-  out=$(PATH="$d:$BASE_PATH" "$CU" elements --app Live) || fail "a thin list with an image must succeed: $out"
-  assert_equals "app: Live | window: W | dialog: no | snapshot: s1 | elements: 3/3 | screenshot: /tmp/fm-cu-shot_annotated.png" \
+  see_json 2 > "$d/tree-TextEdit.json"
+  see_json 3 TextEdit > "$d/shot-TextEdit.json"
+  out=$(PATH="$d:$BASE_PATH" "$CU" elements --app TextEdit) || fail "a thin list with an image must succeed: $out"
+  assert_equals "app: TextEdit | window: W | dialog: no | snapshot: s1 | elements: 3/3 | screenshot: /tmp/fm-cu-shot_annotated.png" \
     "$(sed -n 1p <<<"$out")" "a thin list must be replaced by the annotated image read and name its image"
   assert_contains "$(sed -n 2p "$d/calls")" "--annotate --path" "the image read must be annotated and saved"
-  out=$(PATH="$d:$BASE_PATH" "$CU" elements --app Live --thin 0)
+  out=$(PATH="$d:$BASE_PATH" "$CU" elements --app TextEdit --thin 0)
   assert_not_contains "$(sed -n 1p <<<"$out")" "screenshot:" "--thin 0 must never take an image"
 
   d="$TMP_ROOT/asked"; fake_see "$d"
@@ -307,14 +307,14 @@ test_dialog_kinds() {
     got=$("$CU" dialog-kind "$text")
     assert_equals "$want" "$got" "$label"
   done <<'ROWS'
-privacy prompt^"Ableton Live 12" would like to access files in your Desktop folder. Don't Allow Allow^privacy
+privacy prompt^"TextEdit" would like to access files in your Desktop folder. Don't Allow Allow^privacy
 password prompt^Terminal wants to use your password. Cancel OK^privacy
-save on close^Save changes to "Demo Song" before closing? Don't Save Cancel Save^save
-replace export^A file named "Mixdown.wav" already exists. Do you want to replace it? Cancel Replace^replace
-delete^Are you sure you want to delete "Take 3"? Cancel Delete^destructive
-quit^Do you want to quit Ableton Live? Cancel Quit^quit
+save on close^Save changes to "Untitled" before closing? Don't Save Cancel Save^save
+replace export^A file named "Report.pdf" already exists. Do you want to replace it? Cancel Replace^replace
+delete^Are you sure you want to delete "Draft 3"? Cancel Delete^destructive
+quit^Do you want to quit TextEdit? Cancel Quit^quit
 software update restart^macOS Tahoe 26.6 is available. Your Mac will restart to install it. Later Install Now^quit
-plain notice^Plug-in scan complete. OK^other
+plain notice^Export complete. OK^other
 ROWS
   [ "$n" -eq 8 ] || fail "the classifier table must run every row"
   pass "dialog-kind classifies privacy, save, replace, destructive, quit and other dialogs"
@@ -335,75 +335,75 @@ run_guard() {  # <facts-file> [args...] -> "rc|output"
 
 test_guard_decisions() {
   local calm dialog_save dialog_privacy busy mic unknown_mic noidle out
-  calm=$(facts calm.json '{"frontmost_app":"Live","frontmost_bundle":"com.ableton.live","focused_role":"AXTextField","focused_label":"Search (Cmd+F)","dialogs":[],"idle_seconds":12.5,"microphone_in_use":false,"desk_transcription_in_flight":false}')
-  out=$(run_guard "$calm" --app Live)
-  assert_equals "0|allow: Live in front, idle 12.5s, microphone off" "$out" "a calm screen with the right app must allow"
-  out=$(run_guard "$calm" --app com.ableton.live); assert_equals 0 "${out%%|*}" "a bundle id must match the frontmost app"
+  calm=$(facts calm.json '{"frontmost_app":"TextEdit","frontmost_bundle":"com.apple.TextEdit","focused_role":"AXTextField","focused_label":"Search (Cmd+F)","dialogs":[],"idle_seconds":12.5,"microphone_in_use":false,"desk_transcription_in_flight":false}')
+  out=$(run_guard "$calm" --app TextEdit)
+  assert_equals "0|allow: TextEdit in front, idle 12.5s, microphone off" "$out" "a calm screen with the right app must allow"
+  out=$(run_guard "$calm" --app com.apple.TextEdit); assert_equals 0 "${out%%|*}" "a bundle id must match the frontmost app"
   out=$(run_guard "$calm" --app Finder)
-  assert_equals "1|refuse: Live is in front, not Finder" "$out" "another frontmost app must refuse"
-  out=$(run_guard "$calm" --app Live --field search); assert_equals 0 "${out%%|*}" "a matching focused field must allow"
-  out=$(run_guard "$calm" --app Live --field Tempo)
-  assert_equals "1|refuse: the focused element is 'AXTextField Search (Cmd+F)', not 'Tempo'" "$out" "a different focused field must refuse"
+  assert_equals "1|refuse: TextEdit is in front, not Finder" "$out" "another frontmost app must refuse"
+  out=$(run_guard "$calm" --app TextEdit --field search); assert_equals 0 "${out%%|*}" "a matching focused field must allow"
+  out=$(run_guard "$calm" --app TextEdit --field Width)
+  assert_equals "1|refuse: the focused element is 'AXTextField Search (Cmd+F)', not 'Width'" "$out" "a different focused field must refuse"
 
-  busy=$(facts busy.json '{"frontmost_app":"Live","dialogs":[],"idle_seconds":0.4,"microphone_in_use":false,"desk_transcription_in_flight":false}')
-  assert_equals "1|refuse: the keyboard or mouse was used 0.4s ago and no 3s quiet window came within 0s" "$(run_guard "$busy" --app Live --wait 0)" \
+  busy=$(facts busy.json '{"frontmost_app":"TextEdit","dialogs":[],"idle_seconds":0.4,"microphone_in_use":false,"desk_transcription_in_flight":false}')
+  assert_equals "1|refuse: the keyboard or mouse was used 0.4s ago and no 3s quiet window came within 0s" "$(run_guard "$busy" --app TextEdit --wait 0)" \
     "recent input must refuse once the wait is spent, without blaming anyone"
-  out=$(run_guard "$busy" --app Live --quiet 0); assert_equals 0 "${out%%|*}" "--quiet 0 must accept any idle time"
+  out=$(run_guard "$busy" --app TextEdit --quiet 0); assert_equals 0 "${out%%|*}" "--quiet 0 must accept any idle time"
 
-  mic=$(facts mic.json '{"frontmost_app":"Live","dialogs":[],"idle_seconds":30,"microphone_in_use":true,"desk_transcription_in_flight":false}')
-  assert_equals "1|refuse: the microphone is in use (dictation or a call)" "$(run_guard "$mic" --app Live)" "dictation must refuse"
-  unknown_mic=$(facts unknown-mic.json '{"frontmost_app":"Live","dialogs":[],"idle_seconds":30,"microphone_in_use":null,"desk_transcription_in_flight":false}')
-  assert_equals "1|refuse: could not tell whether the microphone is in use" "$(run_guard "$unknown_mic" --app Live)" \
+  mic=$(facts mic.json '{"frontmost_app":"TextEdit","dialogs":[],"idle_seconds":30,"microphone_in_use":true,"desk_transcription_in_flight":false}')
+  assert_equals "1|refuse: the microphone is in use (dictation or a call)" "$(run_guard "$mic" --app TextEdit)" "dictation must refuse"
+  unknown_mic=$(facts unknown-mic.json '{"frontmost_app":"TextEdit","dialogs":[],"idle_seconds":30,"microphone_in_use":null,"desk_transcription_in_flight":false}')
+  assert_equals "1|refuse: could not tell whether the microphone is in use" "$(run_guard "$unknown_mic" --app TextEdit)" \
     "an unreadable microphone state must refuse"
-  noidle=$(facts noidle.json '{"frontmost_app":"Live","dialogs":[],"microphone_in_use":false,"desk_transcription_in_flight":false}')
-  assert_equals "1|refuse: could not tell when the keyboard or mouse was last used" "$(run_guard "$noidle" --app Live)" \
+  noidle=$(facts noidle.json '{"frontmost_app":"TextEdit","dialogs":[],"microphone_in_use":false,"desk_transcription_in_flight":false}')
+  assert_equals "1|refuse: could not tell when the keyboard or mouse was last used" "$(run_guard "$noidle" --app TextEdit)" \
     "an unreadable idle time must refuse"
 
-  dialog_save=$(facts save.json '{"frontmost_app":"Live","dialogs":[{"app":"Live","title":"","text":["Save changes to \"Demo Song\" before closing?"],"buttons":["Don'"'"'t Save","Cancel","Save"]}],"idle_seconds":30,"microphone_in_use":false,"desk_transcription_in_flight":false}')
-  out=$(run_guard "$dialog_save" --app Live)
+  dialog_save=$(facts save.json '{"frontmost_app":"TextEdit","dialogs":[{"app":"TextEdit","title":"","text":["Save changes to \"Untitled\" before closing?"],"buttons":["Don'"'"'t Save","Cancel","Save"]}],"idle_seconds":30,"microphone_in_use":false,"desk_transcription_in_flight":false}')
+  out=$(run_guard "$dialog_save" --app TextEdit)
   assert_equals 1 "${out%%|*}" "an open save dialog must refuse"
-  assert_contains "$out" "a save dialog is open in Live" "the refusal must name the dialog kind and app"
+  assert_contains "$out" "a save dialog is open in TextEdit" "the refusal must name the dialog kind and app"
   assert_contains "$out" "[Don't Save, Cancel, Save]" "the refusal must list the buttons"
-  out=$(run_guard "$dialog_save" --app Live --allow-dialog save)
-  assert_equals "0|allow: Live in front, idle 30.0s, microphone off, allowed dialog: save" "$out" "an explicitly allowed save dialog must allow"
+  out=$(run_guard "$dialog_save" --app TextEdit --allow-dialog save)
+  assert_equals "0|allow: TextEdit in front, idle 30.0s, microphone off, allowed dialog: save" "$out" "an explicitly allowed save dialog must allow"
 
-  dialog_privacy=$(facts privacy.json '{"frontmost_app":"Live","dialogs":[{"app":"UserNotificationCenter","title":"","text":["\"Ableton Live 12\" would like to access files in your Desktop folder."],"buttons":["Don'"'"'t Allow","Allow"]}],"idle_seconds":30,"microphone_in_use":false,"desk_transcription_in_flight":false}')
-  out=$(run_guard "$dialog_privacy" --app Live --allow-dialog save)
+  dialog_privacy=$(facts privacy.json '{"frontmost_app":"TextEdit","dialogs":[{"app":"UserNotificationCenter","title":"","text":["\"TextEdit\" would like to access files in your Desktop folder."],"buttons":["Don'"'"'t Allow","Allow"]}],"idle_seconds":30,"microphone_in_use":false,"desk_transcription_in_flight":false}')
+  out=$(run_guard "$dialog_privacy" --app TextEdit --allow-dialog save)
   assert_contains "$out" "refuse: a privacy dialog is open in UserNotificationCenter" "allowing one kind must not allow another"
-  out=$(run_guard "$(facts two-dialogs.json '{"frontmost_app":"Live","dialogs":[{"app":"Live","title":"","text":[],"buttons":[]},{"app":"Live","title":"Save changes before closing?","text":[],"buttons":["Save"]},{"app":"UserNotificationCenter","title":"","text":["\"Live\" would like to access files in your Desktop folder."],"buttons":["Allow"]}],"idle_seconds":30,"microphone_in_use":false,"desk_transcription_in_flight":false}')" \
-    --app Live --allow-dialog other --allow-dialog save)
+  out=$(run_guard "$(facts two-dialogs.json '{"frontmost_app":"TextEdit","dialogs":[{"app":"TextEdit","title":"","text":[],"buttons":[]},{"app":"TextEdit","title":"Save changes before closing?","text":[],"buttons":["Save"]},{"app":"UserNotificationCenter","title":"","text":["\"TextEdit\" would like to access files in your Desktop folder."],"buttons":["Allow"]}],"idle_seconds":30,"microphone_in_use":false,"desk_transcription_in_flight":false}')" \
+    --app TextEdit --allow-dialog other --allow-dialog save)
   assert_contains "$out" "1|refuse: a privacy dialog is open in UserNotificationCenter" "every dialog must be classified on its own, an empty one included"
 
-  assert_equals "1|refuse: could not read the screen state" "$(run_guard "$(facts bad.json 'not json')" --app Live)" \
+  assert_equals "1|refuse: could not read the screen state" "$(run_guard "$(facts bad.json 'not json')" --app TextEdit)" \
     "an unreadable state must refuse"
-  assert_contains "$(run_guard "$TMP_ROOT/absent.json" --app Live)" "refuse: could not read the screen state" "a missing facts file must refuse"
+  assert_contains "$(run_guard "$TMP_ROOT/absent.json" --app TextEdit)" "refuse: could not read the screen state" "a missing facts file must refuse"
   "$CU" guard --facts "$calm" >/dev/null 2>&1; assert_equals 2 "$?" "guard without --app is a usage error"
-  "$CU" guard --facts "$calm" --app Live --allow-dialog anything >/dev/null 2>&1; assert_equals 2 "$?" "an unknown dialog kind is a usage error"
+  "$CU" guard --facts "$calm" --app TextEdit --allow-dialog anything >/dev/null 2>&1; assert_equals 2 "$?" "an unknown dialog kind is a usage error"
   pass "guard allows only the expected app, idle input, a quiet microphone and allowed dialogs, and refuses whatever it cannot read"
 }
 
 test_guard_waits_for_quiet_input() {
   local busy calm busy_mic out
-  busy=$(facts wait-busy.json '{"frontmost_app":"Live","dialogs":[],"idle_seconds":0.4,"microphone_in_use":false,"desk_transcription_in_flight":false}')
-  calm=$(facts wait-calm.json '{"frontmost_app":"Live","dialogs":[],"idle_seconds":1.2,"microphone_in_use":false,"desk_transcription_in_flight":false}')
-  out=$(run_guard "$busy" --facts "$calm" --app Live --quiet 1)
-  assert_equals "0|allow: Live in front, idle 1.2s, microphone off" "$out" "input that stops within the wait must allow on a later read"
-  out=$(run_guard "$busy" --app Live --quiet 1 --wait 1)
+  busy=$(facts wait-busy.json '{"frontmost_app":"TextEdit","dialogs":[],"idle_seconds":0.4,"microphone_in_use":false,"desk_transcription_in_flight":false}')
+  calm=$(facts wait-calm.json '{"frontmost_app":"TextEdit","dialogs":[],"idle_seconds":1.2,"microphone_in_use":false,"desk_transcription_in_flight":false}')
+  out=$(run_guard "$busy" --facts "$calm" --app TextEdit --quiet 1)
+  assert_equals "0|allow: TextEdit in front, idle 1.2s, microphone off" "$out" "input that stops within the wait must allow on a later read"
+  out=$(run_guard "$busy" --app TextEdit --quiet 1 --wait 1)
   assert_equals "1|refuse: the keyboard or mouse was used 0.4s ago and no 1s quiet window came within 1s" "$out" \
     "input that keeps arriving must refuse once the wait is spent"
-  busy_mic=$(facts wait-mic.json '{"frontmost_app":"Live","dialogs":[],"idle_seconds":0.4,"microphone_in_use":true,"desk_transcription_in_flight":false}')
-  out=$(run_guard "$busy_mic" --facts "$calm" --app Live --quiet 1)
+  busy_mic=$(facts wait-mic.json '{"frontmost_app":"TextEdit","dialogs":[],"idle_seconds":0.4,"microphone_in_use":true,"desk_transcription_in_flight":false}')
+  out=$(run_guard "$busy_mic" --facts "$calm" --app TextEdit --quiet 1)
   assert_equals "1|refuse: the microphone is in use (dictation or a call)" "$out" "a live microphone must refuse at once, not wait"
   pass "guard waits a bounded time for a quiet input window and refuses only if input keeps arriving"
 }
 
 test_guard_refuses_during_desk_transcription() {
   local stt unknown out
-  stt=$(facts stt.json '{"frontmost_app":"Live","dialogs":[],"idle_seconds":30,"microphone_in_use":false,"desk_transcription_in_flight":true}')
-  assert_equals "1|refuse: a desk dictation is being transcribed" "$(run_guard "$stt" --app Live)" \
+  stt=$(facts stt.json '{"frontmost_app":"TextEdit","dialogs":[],"idle_seconds":30,"microphone_in_use":false,"desk_transcription_in_flight":true}')
+  assert_equals "1|refuse: a desk dictation is being transcribed" "$(run_guard "$stt" --app TextEdit)" \
     "a dictation that is still being transcribed must refuse"
-  unknown=$(facts stt-unknown.json '{"frontmost_app":"Live","dialogs":[],"idle_seconds":30,"microphone_in_use":false}')
-  assert_equals "1|refuse: could not tell whether a desk dictation is being transcribed" "$(run_guard "$unknown" --app Live)" \
+  unknown=$(facts stt-unknown.json '{"frontmost_app":"TextEdit","dialogs":[],"idle_seconds":30,"microphone_in_use":false}')
+  assert_equals "1|refuse: could not tell whether a desk dictation is being transcribed" "$(run_guard "$unknown" --app TextEdit)" \
     "an unknown transcription state must refuse"
   pass "guard refuses while a desk dictation is in flight or when it cannot tell"
 }
@@ -434,47 +434,47 @@ test_guard_activate_checks_before_and_after() {
   local d notes notes_mic live live_dialog live_busy out
   notes=$(facts act-notes.json '{"frontmost_app":"Notes","focused_role":"AXTextArea","focused_label":"Body","dialogs":[],"idle_seconds":30,"microphone_in_use":false,"desk_transcription_in_flight":false}')
   notes_mic=$(facts act-notes-mic.json '{"frontmost_app":"Notes","dialogs":[],"idle_seconds":30,"microphone_in_use":true,"desk_transcription_in_flight":false}')
-  live=$(facts act-live.json '{"frontmost_app":"Live","focused_role":"AXTextField","focused_label":"Search","dialogs":[],"idle_seconds":30,"microphone_in_use":false,"desk_transcription_in_flight":false}')
-  live_dialog=$(facts act-live-dialog.json '{"frontmost_app":"Live","dialogs":[{"app":"UserNotificationCenter","title":"","text":["\"Ableton Live 12\" would like to access files in your Desktop folder."],"buttons":["Allow"]}],"idle_seconds":30,"microphone_in_use":false,"desk_transcription_in_flight":false}')
+  live=$(facts act-live.json '{"frontmost_app":"TextEdit","focused_role":"AXTextField","focused_label":"Search","dialogs":[],"idle_seconds":30,"microphone_in_use":false,"desk_transcription_in_flight":false}')
+  live_dialog=$(facts act-live-dialog.json '{"frontmost_app":"TextEdit","dialogs":[{"app":"UserNotificationCenter","title":"","text":["\"TextEdit\" would like to access files in your Desktop folder."],"buttons":["Allow"]}],"idle_seconds":30,"microphone_in_use":false,"desk_transcription_in_flight":false}')
 
   d="$TMP_ROOT/act-mic"; fake_osascript "$d" 0
-  out=$(run_activate "$d" --app Live --facts "$notes_mic" --facts "$live")
+  out=$(run_activate "$d" --app TextEdit --facts "$notes_mic" --facts "$live")
   assert_equals "1|refuse: the microphone is in use (dictation or a call)" "$out" "dictation in the captain's app must refuse before activation"
   [ ! -e "$d/activated" ] || fail "a refused pre-check must not activate the app"
 
   d="$TMP_ROOT/act-ok"; fake_osascript "$d" 0
-  out=$(run_activate "$d" --app Live --field search --facts "$notes" --facts "$live")
-  assert_equals "0|allow: Live in front, idle 30.0s, microphone off" "$out" "a calm screen must activate the app and allow"
-  assert_equals "Live" "$(cat "$d/activated")" "the activation must name the app"
+  out=$(run_activate "$d" --app TextEdit --field search --facts "$notes" --facts "$live")
+  assert_equals "0|allow: TextEdit in front, idle 30.0s, microphone off" "$out" "a calm screen must activate the app and allow"
+  assert_equals "TextEdit" "$(cat "$d/activated")" "the activation must name the app"
 
   d="$TMP_ROOT/act-dialog"; fake_osascript "$d" 0
-  out=$(run_activate "$d" --app Live --facts "$notes" --facts "$live_dialog")
+  out=$(run_activate "$d" --app TextEdit --facts "$notes" --facts "$live_dialog")
   assert_contains "$out" "1|refuse: a privacy dialog is open in UserNotificationCenter" "a dialog that appears on activation must refuse"
 
-  live_busy=$(facts act-live-busy.json '{"frontmost_app":"Live","dialogs":[],"idle_seconds":0.1,"microphone_in_use":false,"desk_transcription_in_flight":false}')
+  live_busy=$(facts act-live-busy.json '{"frontmost_app":"TextEdit","dialogs":[],"idle_seconds":0.1,"microphone_in_use":false,"desk_transcription_in_flight":false}')
   d="$TMP_ROOT/act-busy"; fake_osascript "$d" 0
-  out=$(run_activate "$d" --app Live --wait 0 --facts "$notes" --facts "$live_busy")
+  out=$(run_activate "$d" --app TextEdit --wait 0 --facts "$notes" --facts "$live_busy")
   assert_equals "1|refuse: the keyboard or mouse was used 0.1s ago and no 3s quiet window came within 0s" "$out" \
     "input that arrives during activation must refuse"
-  assert_equals "Live" "$(cat "$d/activated")" "the busy read must be the one taken after activation"
+  assert_equals "TextEdit" "$(cat "$d/activated")" "the busy read must be the one taken after activation"
   d="$TMP_ROOT/act-busy-then-calm"; fake_osascript "$d" 0
-  out=$(run_activate "$d" --app Live --quiet 1 --facts "$notes" --facts "$live_busy" --facts "$live")
-  assert_equals "0|allow: Live in front, idle 30.0s, microphone off" "$out" "input after activation that stops within the wait must allow"
+  out=$(run_activate "$d" --app TextEdit --quiet 1 --facts "$notes" --facts "$live_busy" --facts "$live")
+  assert_equals "0|allow: TextEdit in front, idle 30.0s, microphone off" "$out" "input after activation that stops within the wait must allow"
 
   d="$TMP_ROOT/act-stuck"; fake_osascript "$d" 0
-  out=$(run_activate "$d" --app Live --wait 0 --facts "$notes")
-  assert_equals "1|refuse: Notes is in front, not Live" "$out" "an app that never comes to the front must refuse"
+  out=$(run_activate "$d" --app TextEdit --wait 0 --facts "$notes")
+  assert_equals "1|refuse: Notes is in front, not TextEdit" "$out" "an app that never comes to the front must refuse"
 
   d="$TMP_ROOT/act-fail"; fake_osascript "$d" 1
-  out=$(run_activate "$d" --app Live --facts "$notes" --facts "$live")
-  assert_equals "1|refuse: could not bring Live to the front" "$out" "a failed activation must refuse"
+  out=$(run_activate "$d" --app TextEdit --facts "$notes" --facts "$live")
+  assert_equals "1|refuse: could not bring TextEdit to the front" "$out" "a failed activation must refuse"
   pass "guard --activate checks the captain's screen before activating, then re-checks the front app, input, dialogs and field"
 }
 
 test_facts_report_desk_transcription() {
   local d pid out
   d="$TMP_ROOT/facts"
-  fake_osascript "$d" 0 '{"frontmost_app":"Live","frontmost_bundle":"com.ableton.live","focused_role":null,"focused_label":null,"dialogs":[]}'
+  fake_osascript "$d" 0 '{"frontmost_app":"TextEdit","frontmost_bundle":"com.apple.TextEdit","focused_role":null,"focused_label":null,"dialogs":[]}'
   printf '#!/usr/bin/env bash\nwhile :; do sleep 0.1; done\n' > "$d/fm-deepgram-stt.sh"
   chmod 0755 "$d/fm-deepgram-stt.sh"
   "$d/fm-deepgram-stt.sh" &

@@ -168,17 +168,8 @@ What this does *not* do, stated plainly because the difference matters:
 
 When the correction cannot wait for the companion to reach a gate, the fallback is a person, not a mechanism: say it directly in the terminal session, or through Herdr.
 
-## Known app-access limit
-
-Selecting Baby Menu through Computer Use timed out (`getApp`, server error `-10005`), on a run where the tool's own inventory reported the app as not running and on a later retry - so the quota panel was never observed by the tool.
-That is a limit of reaching that particular app, not of the command transport, which worked in the same turns.
-
-If you need the panel looked at, open it by hand first - the app opens its popover only on a real click of its menu-bar icon - and then queue the request while it is on screen, asking for one bounded attempt and the exact tool error if it fails.
-An app-selection call may itself try to launch the app, which is not the same as a visible window; require the answer file to say whether the panel was actually seen.
-
 ## Related owners
 
-- Baby Menu quota panel: [baby-menu-quota-widget.md](baby-menu-quota-widget.md)
 - Codex App backend contract and the lifecycle pieces still missing: [codex-app-backend.md](codex-app-backend.md)
 - Second-machine setup overall: [porting.md](porting.md)
 - Toolchain detection: `bin/fm-bootstrap.sh`

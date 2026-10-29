@@ -748,7 +748,6 @@ tests/fm-afk-return.test.sh 54132
 tests/fm-agy-harness.test.sh 67661
 tests/fm-agy-signals-live-e2e.test.sh 1199
 tests/fm-ask-user-authority.test.sh 1239
-tests/fm-baby-menu-quota.test.sh 2252
 tests/fm-backend-cmux-smoke.test.sh 34
 tests/fm-backend-cmux.test.sh 4898
 tests/fm-backend-orca.test.sh 28632

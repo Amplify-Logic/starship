@@ -13,24 +13,23 @@
 #   fm-speak.sh --volume [<percent>]
 #   fm-speak.sh --help
 #
-# WHY THIS EXISTS: firstmate could already speak to the captain through the
-# glasses loop, which owns the spoken register and enforces it in code. What it
-# could not do is speak when he is at the desk without the glasses. This is that
-# missing sink and nothing else: the same sentence, shaped by the same owner,
-# handed to the local speaker instead of to the phone mailbox.
+# WHY THIS EXISTS: a home can keep its spoken register - how a line is cut
+# down for the ear - in an external owner that already enforces it in code.
+# This script is the local speaker sink for that owner and nothing else: the
+# sentence is shaped by that owner and handed to this machine's speaker.
 #
 # WHAT THIS IS NOT:
 #   - Not a second owner of the spoken register. The register - outcome first,
 #     a few short sentences inside a bounded spoken length, never a URL, path
 #     or id, and never a request for a spoken yes - is owned once by the
-#     glasses project's announce entry point. This script shapes through that
-#     owner, selects the desk budget below, and refuses to speak if it cannot
-#     reach it, because speaking unshaped text would read a URL aloud, which
-#     is the one thing the register forbids outright.
+#     register owner this home names (`shaper` below). This script shapes
+#     through that owner, selects the desk budget below, and refuses to speak
+#     if it cannot reach it, because speaking unshaped text would read a URL
+#     aloud, which is the one thing the register forbids outright.
 #   - Not an approval channel. The register owner refuses text that asks the
 #     captain to decide, so money, outward and destructive choices structurally
-#     cannot be put to him by voice. They stay in the terminal.
-#   - Not a listener. Speech in is the desk floater / glasses path; this script
+#     cannot be put to the captain by voice. They stay in the terminal.
+#   - Not a listener. Speech in is the desk floater path; this script
 #     only speaks out. See docs/desk-floater.md for the push-to-talk inbox.
 #   - Not proof anything was heard. Exit 0 means the shaped line was handed to
 #     the speaker, never that audio was produced or that the captain heard it.
@@ -43,6 +42,12 @@
 #   voice     optional `say` voice name (default: the system voice). Setting it
 #             also selects `say` as the speaker, since Deepgram cannot speak in
 #             it - see SPEAKER PREFERENCE below
+#   shaper    the register owner: an executable exposing the
+#             `--dry-run <text>` contract, as an absolute path or one relative
+#             to this home, that reads its spoken budget from the
+#             GLASSES_ANNOUNCE_CONFIG file set below (DESK SPOKEN BOUND); an
+#             owner that ignores it uses its own budget. Required to speak;
+#             FM_SPEAK_SHAPER wins over it
 #
 # SPEAKER PREFERENCE: naming a voice picks the speaker, because only one of them
 # can honour it. With a non-empty `voice` in config/speak the shaped line goes to
@@ -182,9 +187,7 @@
 #
 # Environment overrides, for tests and unusual layouts:
 #   FM_SPEAK_SHAPER    register owner exposing the `--dry-run <text>` contract
-#                      (default: $FM_HOME/projects/starship-voice/bin/announce
-#                      when it exists, else the retiring
-#                      $FM_HOME/projects/glasses-voice/bin/announce)
+#                      (default: the `shaper` key in config/speak)
 #   FM_SPEAK_SAY       speech binary (default: /usr/bin/say)
 #   FM_SPEAK_DEEPGRAM_TTS
 #                      Deepgram TTS helper (default: $ROOT/bin/fm-deepgram-tts.sh)
@@ -243,15 +246,8 @@ STOP_GEN_AT_START=0
 DEFAULT_SHAPER_TIMEOUT=15
 DEFAULT_SPEAKER_TIMEOUT=60
 
-# The voice project moved from projects/glasses-voice to projects/starship-voice;
-# the old clone stays a fallback while homes retire it.
-if [ -n "${FM_SPEAK_SHAPER:-}" ]; then
-  SHAPER=$FM_SPEAK_SHAPER
-elif [ -e "$FM_HOME/projects/starship-voice/bin/announce" ]; then
-  SHAPER="$FM_HOME/projects/starship-voice/bin/announce"
-else
-  SHAPER="$FM_HOME/projects/glasses-voice/bin/announce"
-fi
+# Resolved after the config is read: FM_SPEAK_SHAPER, else config/speak `shaper`.
+SHAPER="${FM_SPEAK_SHAPER:-}"
 SAY_BIN="${FM_SPEAK_SAY:-/usr/bin/say}"
 DEEPGRAM_TTS="${FM_SPEAK_DEEPGRAM_TTS:-$ROOT/bin/fm-deepgram-tts.sh}"
 # Inside WSL 2 with the Windows desk floater installed for this home, there is
@@ -274,6 +270,7 @@ SPEAKER_TIMEOUT="${FM_SPEAK_TIMEOUT:-$DEFAULT_SPEAKER_TIMEOUT}"
 
 CFG_ENABLED=false
 CFG_VOICE=
+CFG_SHAPER=
 
 # shellcheck source=bin/fm-deepgram-lib.sh
 . "$ROOT/bin/fm-deepgram-lib.sh"
@@ -319,6 +316,9 @@ load_config() {
         ;;
       voice)
         CFG_VOICE=$value
+        ;;
+      shaper)
+        CFG_SHAPER=$value
         ;;
       *) die "unknown config key: $key" ;;
     esac
@@ -1119,8 +1119,15 @@ main() {
     exit 0
   fi
 
+  if [ -z "$SHAPER" ]; then
+    case "$CFG_SHAPER" in
+      '') die "no spoken register owner: add 'shaper = <path>' to config/speak (or set FM_SPEAK_SHAPER)" ;;
+      /*) SHAPER=$CFG_SHAPER ;;
+      *) SHAPER="$FM_HOME/$CFG_SHAPER" ;;
+    esac
+  fi
   [ -x "$SHAPER" ] \
-    || die "the spoken register owner is not executable: $SHAPER (set FM_SPEAK_SHAPER)"
+    || die "the spoken register owner is not executable: $SHAPER (check 'shaper' in config/speak or FM_SPEAK_SHAPER)"
   if [ "$dry_run" != true ]; then
     if [ ! -x "$SAY_BIN" ] && [ -z "$(fm_deepgram_api_key)" ]; then
       die "no speech binary at $SAY_BIN and no DEEPGRAM_API_KEY (set FM_SPEAK_SAY or the key)"
