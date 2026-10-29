@@ -19,4 +19,4 @@
 # sha, needs no record here and a duplicate would only rot. Add a record only
 # when a port left no machine-readable trace at all.
 
-3f9e70e275663c033f9cd12ee7ae3c3598d1894c  ported  fork 4768a69 (Amplify-Logic/starship #24) hand-integrated upstream's two-consecutive-identical non-project path requirement into this fork's settle loop, keeping fork-only stable window-id targeting and PROJ_ABS_REAL physical compares; the body describes the integration but names neither the upstream sha nor upstream PR #765
+3f9e70e275663c033f9cd12ee7ae3c3598d1894c  ported  fork 64e7d24 (Amplify-Logic/starship #24) hand-integrated upstream's two-consecutive-identical non-project path requirement into this fork's settle loop, keeping fork-only stable window-id targeting and PROJ_ABS_REAL physical compares; the body describes the integration but names neither the upstream sha nor upstream PR #765

@@ -47,7 +47,7 @@ The three `unclear` answers were all case 1, whose top pick was right but under 
 ## Real failing run
 
 `tests/fm-timeout-lib.test.sh` fails on this Mac on `origin/main` code too, because the stock `/bin/bash` 3.2 has no `BASHPID` (`line 100: BASHPID: unbound variable`, then `not ok - the bounded probe failed under PATH=...`).
-Its real output tail and this branch's real diff against its base `88c1c709` (7 files; request state 42,347 characters, the diff trimmed to 38,774) were labelled `environment` 0.82, 0.83 and 0.78 over three serial runs, 0.55-0.60 s each, which is correct.
+Its real output tail and this branch's real diff against its base `780f85ae` (7 files; request state 42,347 characters, the diff trimmed to 38,774) were labelled `environment` 0.82, 0.83 and 0.78 over three serial runs, 0.55-0.60 s each, which is correct.
 
 An earlier real-run check, on the request shape before the shared budget, planted a one-line off-by-one in `bin/fm-trace-context-lib.sh` and then reverted it; it came back `unclear` 0.45, with a top pick of `code_bug` at about 0.7.
 
