@@ -8,6 +8,9 @@ enabled = true
 
 # The spoken register owner: an executable exposing `--dry-run <text>`, as an
 # absolute path or one relative to this home. Nothing is spoken without one.
+# It reads its spoken budget from the GLASSES_ANNOUNCE_CONFIG file fm-speak
+# points it at (docs/examples/desk-speak-register.toml); an owner that ignores
+# that variable uses its own budget.
 # shaper = projects/<voice-project>/bin/announce
 
 # Optional macOS `say` voice; naming one speaks through `say` instead of

@@ -44,7 +44,10 @@
 #             it - see SPEAKER PREFERENCE below
 #   shaper    the register owner: an executable exposing the
 #             `--dry-run <text>` contract, as an absolute path or one relative
-#             to this home. Required to speak; FM_SPEAK_SHAPER wins over it
+#             to this home, that reads its spoken budget from the
+#             GLASSES_ANNOUNCE_CONFIG file set below (DESK SPOKEN BOUND); an
+#             owner that ignores it uses its own budget. Required to speak;
+#             FM_SPEAK_SHAPER wins over it
 #
 # SPEAKER PREFERENCE: naming a voice picks the speaker, because only one of them
 # can honour it. With a non-empty `voice` in config/speak the shaped line goes to
