@@ -5,8 +5,7 @@
 Report a security problem privately, not in a public issue.
 A security problem is anything that could let Starship leak a secret, act outward without your word, change a project outside its isolated copy, or run something it should not.
 
-1. Open the repository's **Security** tab and choose **Report a vulnerability**.
-2. If that button is not there, open an issue that says only that you have a security report and asks for a private way to send it, and leave every detail out of the issue.
+Open the repository's **Security** tab and choose **Report a vulnerability**; only the maintainers see what you send there.
 
 Say what you ran, what happened, and what you expected, and include the Starship commit you run (`git -C ~/starship rev-parse --short HEAD`).
 Only the latest `main` is supported, so check that the problem is still there after "update starship".
