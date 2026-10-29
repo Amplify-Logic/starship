@@ -311,12 +311,28 @@
       "audience": "agent-runtime"
     },
     {
+      "path": ".github/ISSUE_TEMPLATE/bug.md",
+      "audience": "public-product"
+    },
+    {
+      "path": ".github/README.md",
+      "audience": "public-product"
+    },
+    {
+      "path": ".github/pull_request_template.md",
+      "audience": "maintainer-architecture"
+    },
+    {
       "path": ".greptile/rules.md",
       "audience": "maintainer-architecture"
     },
     {
       "path": "AGENTS.md",
       "audience": "agent-runtime"
+    },
+    {
+      "path": "CHANGELOG.md",
+      "audience": "operator-current"
     },
     {
       "path": "CLAUDE.md",
@@ -344,6 +360,10 @@
     },
     {
       "path": "README.md",
+      "audience": "public-product"
+    },
+    {
+      "path": "SECURITY.md",
       "audience": "public-product"
     },
     {

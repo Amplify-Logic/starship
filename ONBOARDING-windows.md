@@ -1,6 +1,6 @@
 # Onboarding on Windows: WSL 2 to a working first mate
 
-Firstmate runs on Linux and macOS, so on a Windows PC it runs inside WSL 2, Windows' built-in Linux.
+Starship runs on Linux and macOS, so on a Windows PC it runs inside WSL 2, Windows' built-in Linux.
 Inside WSL 2 your PC behaves like a Linux machine, and every tool a first mate needs has a Linux build.
 Plain Windows (PowerShell or Git Bash) is not supported.
 
@@ -130,7 +130,7 @@ cd ~
 curl -fsSL https://raw.githubusercontent.com/Amplify-Logic/starship/main/bin/fm-linux-setup.sh | bash
 ```
 
-It asks for your Ubuntu password once, then installs the build tools, Homebrew, git, node, gh, tmux, jq, Claude Code and Chrome, and clones Firstmate into `~/starship`.
+It asks for your Ubuntu password once, then installs the build tools, Homebrew, git, node, gh, tmux, jq, Claude Code and Chrome, and clones Starship into `~/starship`.
 It also installs [Herdr](https://herdr.dev), the terminal view your first mate and its workers run in, with Herdr's Claude Code integration, and sets your Starship to run in it.
 It also makes sign-in links open in your normal Windows browser, rather than in the Linux Chrome it installs for the first mate's own checks.
 About 15 minutes; a lot of text scrolls past, and it asks nothing more.
@@ -180,7 +180,7 @@ When the first mate's startup checks run, it also tells you if anything sits und
 If you left Herdr with `Ctrl-b`, then `q`, while an Ubuntu window stayed open, Herdr kept running and this brings back your first mate as you left it.
 Closing the last Ubuntu window lets WSL shut Ubuntu down, which stops Herdr and your first mate; a Windows restart does the same.
 After that, Herdr reopens your spaces; if your first mate's space shows only a shell, run `cd ~/starship && bin/fm-primary.sh opus` there again, and it starts fresh and picks up its work from its records.
-To get the team's latest Starship, tell your first mate "update starship".
+To get the latest Starship, tell your first mate "update starship".
 
 **Prefer tmux?** Herdr is the default, and tmux still works: run `echo tmux > ~/starship/config/backend`, start the first mate inside `tmux new -s firstmate`, and workers open as tmux windows instead ([docs/tmux-backend.md](docs/tmux-backend.md)).
 
@@ -191,7 +191,7 @@ To get the team's latest Starship, tell your first mate "update starship".
 The desk floater lets you hold a key and talk to your first mate, dictate into any Windows app, and send it screenshots.
 Talking and dictation turn your voice into words through Deepgram, which needs a key from a paid account: sign up at [deepgram.com](https://deepgram.com), then create an API key in its console.
 Once your first mate runs, put the key in `~/starship/.env` as a line `DEEPGRAM_API_KEY=...`.
-Spoken replies are not yet available for teammates: they depend on a voice project teammates cannot reach yet, so replies stay text, and you can leave `config/speak` alone.
+Replies stay text, so you can leave `config/speak` alone.
 Then, in Ubuntu:
 
 ```sh

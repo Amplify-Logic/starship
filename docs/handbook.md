@@ -1,6 +1,6 @@
 # The captain's handbook
 
-What firstmate is doing end to end, how to shape it into your own, and a first-week path to full use.
+What Starship is doing end to end, how to shape it into your own, and a first-week path to full use.
 Read it after [ONBOARDING.md](../ONBOARDING.md) has given you a running first mate that brought back its first report.
 This page explains and points; each linked owner holds the exact rules and commands.
 
@@ -46,7 +46,7 @@ Everything the first mate knows about you lives in private folders inside your c
 | `projects/` | Local copies of the projects you work on |
 | `.env` | Secrets and API keys, one per line; never shared |
 
-The rest of the clone (instructions, scripts, skills, and these docs) is shared with everyone who uses firstmate and updates when you ask the first mate to update itself.
+The rest of the clone (instructions, scripts, skills, and these docs) is shared with everyone who uses Starship and updates when you ask the first mate to update itself.
 [docs/configuration.md](configuration.md#operational-home-layout-and-state) owns the full layout.
 
 ## Teaching it: preferences, rules, and learnings
@@ -115,10 +115,10 @@ Some skills are commands you type:
 | `/afk` | You are stepping away: routine events are handled quietly, and a summary waits for your return |
 | `/quiet` | You are here but want fewer interruptions; only things that need you come through |
 | `/stow` | File what this session learned and tidy the memory files |
-| `/updatefirstmate` | Pull the latest shared firstmate and restart cleanly |
+| `/updatefirstmate` | Pull the latest shared Starship and restart cleanly |
 | `/catchup` | Catch this home up with its own upstream, on demand or weekly once you opt in; stops for you to approve the merge |
 
-The [README](../README.md#built-in-skills) owns the full list.
+The [README](../README.md#built-in-skills) lists the rest of Firstmate's built-in skills; Starship adds `/outward-fine-print`, `/outward-broad` and `/outward-no-block`, which set how freely workers may act outward for you ([worker outward actions](configuration.md#worker-outward-actions-configoutward-permissions)).
 Other skills load automatically: the first mate's instructions name the situation for each, such as before starting a worker or when a worker reports a pull request.
 
 **Adding your own skill.**
@@ -132,7 +132,7 @@ make me a personal skill called weekly-report: every Friday I want a summary of 
 
 Then type `/weekly-report` to use it, and ask the first mate to adjust it when the result is not right.
 
-Shared firstmate skills live in `.agents/skills/` in the repo.
+Shared Starship skills live in `.agents/skills/` in the repo.
 Changing one is a contribution that goes through a pull request; see [CONTRIBUTING.md](../CONTRIBUTING.md).
 
 ## Asking for work and approving it
@@ -154,6 +154,7 @@ It reaches you only when something needs you:
 
 To approve, reply in plain words: "merge it", "yes, go with option 2", "hold that until Monday".
 If you were away, `/ahoy` walks you through what is waiting.
+To see every open decision at once, ask the first mate to open the decisions page (`bin/fm-decision-surface.sh`): one private review page lists each decision held for you, and the answers you mark there route back to it.
 
 Long or visual answers can open as a **review page** in your browser (Lavish), where you can mark up parts of the page and send comments back.
 Ask for one when a comparison, plan, or report would be easier to read than chat: "show me the options as a page".
@@ -252,7 +253,7 @@ Ask the first mate to set one up; each owner page lists what it needs.
 | Away and quiet modes (`/afk`, `/quiet`) | Keep routine events off your screen | Nothing extra |
 | Chart room ([chart-room.md](chart-room.md)) | A private local page showing where every project stands | Nothing extra |
 | Desk floater ([Mac](desk-floater.md), [Windows](desk-floater-windows.md)) | Push-to-talk button that types what you say into the first mate | A Deepgram API key, from a paid account at deepgram.com |
-| Spoken replies ([configuration](configuration.md#desk-voice-out-configspeak)) | The first mate reads the start of each reply aloud | A separate voice project's speech shaper; not yet available for teammates |
+| Spoken replies ([configuration](configuration.md#desk-voice-out-configspeak)) | The first mate reads the start of each reply aloud | A separate speech-shaping project that this repository does not include |
 | Phone bridge page ([bridge-view.md](bridge-view.md)) | A phone page showing what needs you, with photo drop and hold-to-speak | Tailscale and Python 3.12 |
 | Dropped-threads digest ([configuration](configuration.md#dropped-threads-digest-configdropped-threads)) | A twice-daily "what is left hanging" summary | A scheduled job on this Mac |
 | Computer use ([macos-computer-use](../.agents/opt-in-skills/macos-computer-use/SKILL.md)) | Lets the agents operate Mac apps and windows | Peekaboo, which the first mate installs, and Mac Accessibility permissions |
@@ -265,9 +266,9 @@ Ask the first mate to set one up; each owner page lists what it needs.
 
 Say "update starship" (or "update firstmate", or `/updatefirstmate`) every week or so.
 It pulls the latest shared instructions and scripts and restarts cleanly; your private folders are never touched.
-It skips your home if a file of yours sits in `~/starship` outside those private folders, or if you changed a Starship file; [ONBOARDING.md](../ONBOARDING.md#already-installed) says how to clear that and what else changed for an existing home.
-If you use firstmate on two of your own machines, [porting.md](porting.md) covers moving your private material between them.
-Porting is for your own machines only: a colleague starts from a fresh clone and builds their own home.
+It skips your home if a file of yours sits in `~/starship` outside those private folders, or if you changed a Starship file; [CHANGELOG.md](../CHANGELOG.md) says how to clear that and what else changed for an existing home.
+If you use Starship on two of your own machines, [porting.md](porting.md) covers moving your private material between them.
+Porting is for your own machines only: anyone else starts from a fresh clone and builds their own home.
 
 ## Your first week
 
