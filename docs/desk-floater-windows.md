@@ -1,6 +1,6 @@
 # Desk floater on Windows (WSL 2)
 
-The Windows desk floater gives a teammate whose Starship runs inside WSL 2 ([ONBOARDING-windows.md](../ONBOARDING-windows.md)) the same floater the Mac has ([desk-floater.md](desk-floater.md)).
+When your Starship runs inside WSL 2 ([ONBOARDING-windows.md](../ONBOARDING-windows.md)), the Windows desk floater gives you the same floater the Mac has ([desk-floater.md](desk-floater.md)).
 Talk to the first mate by holding a key or the button, hear its replies, dictate into any Windows app, and send screenshots.
 
 It is mouth and ears only, like the Mac floater.
@@ -22,7 +22,7 @@ You need Starship set up in Ubuntu as [ONBOARDING-windows.md](../ONBOARDING-wind
 
 1. Put `DEEPGRAM_API_KEY=...` in this home's `.env`, as on a Mac ([desk-floater.md](desk-floater.md#enablement)).
 2. For spoken replies, put `enabled = true` in this home's `config/speak`.
-   Spoken replies are not yet available for teammates; skip this step.
+   This step is optional: replies stay text without it, and [desk voice-out](configuration.md#desk-voice-out-configspeak) explains what spoken replies need.
 3. In your Ubuntu window, from `~/starship`:
 
    ```sh
