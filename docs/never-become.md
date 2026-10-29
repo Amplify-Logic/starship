@@ -8,7 +8,7 @@
 3. Something that mixes your worlds.
    Personal, work and team stay apart: accounts, data and files.
 4. A way your private life leaks into shared code.
-   Your own tools live in your private add-on, never in what the team uses.
+   Your own tools live in your private add-on, never in the shared Starship everyone uses.
 5. Something that forces one person's setup on another.
    Yours working doesn't mean someone else's will.
 6. A system that changes its own rules quietly.
