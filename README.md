@@ -1,44 +1,6 @@
-<h1 align="center">Starship</h1>
+> This is Starship, built on Firstmate: start with [the Starship front page](.github/README.md); the rest of this page is the original Firstmate introduction.
 
-<h3 align="center">Talk to one AI first mate. It runs a crew of coding agents for you.</h3>
-
-Starship is a ready-to-use build of [Firstmate](https://github.com/kunchenguid/firstmate).
-You ask for work in plain words, and the first mate hands each task to its own AI worker, keeps an eye on all of them, and brings back finished pull requests or written reports.
-You only answer the real decisions.
-
-## What Starship adds
-
-- **A guided start** - a step-by-step setup from a blank computer to a first mate that has done one piece of real work, set up around Claude Code and launched with `bin/fm-primary.sh`, plus [a handbook](docs/handbook.md) for everything after that.
-- **Herdr from the first launch** - on a Mac and on Windows, the setup installs [Herdr](https://herdr.dev) and starts the first mate inside it, so every worker shows up in Herdr's sidebar with whether it is working or waiting; tmux stays available, and a server uses it.
-- **Mac, Windows and Linux** - besides the Mac, it runs on a Windows PC inside WSL 2, or on a rented Linux server you reach over SSH, both set up by one script, `bin/fm-linux-setup.sh`.
-- **A desk floater you can talk to** - a small always-on-top control on the [Mac](docs/desk-floater.md) and on [Windows](docs/desk-floater-windows.md): hold a key to talk to the first mate and hear its replies.
-- **A call recorder and starter settings** - an optional [call recorder](docs/call-companion.md) that keeps a live page of a call and writes notes when it ends, once everyone has agreed to be recorded, and starter settings for which Claude model does which job and transcription words, which a new home installs on its first launch; its first mate's thinking level follows the Claude plan it runs on, as the [onboarding guide](ONBOARDING.md#3-get-starship-and-start-your-first-mate) explains.
-- **Easy updates** - say "update starship" and it pulls the latest shared instructions and scripts and restarts cleanly, without touching your private files.
-- **A way to share improvements** - changes to Starship itself go back as pull requests through the `no-mistakes` review pipeline, as [CONTRIBUTING.md](CONTRIBUTING.md) explains.
-
-## Who it is for
-
-Starship is for people and teams who want several pieces of software work done at once - fixes, investigations, plans, reviews - without juggling a separate AI session for each.
-Your setup stays yours: a fresh copy holds only the public files, and your preferences, task list, projects and sign-ins stay private on your own machine.
-
-## Start here
-
-| Your computer | Start with |
-| --- | --- |
-| Mac | [ONBOARDING.md](ONBOARDING.md) |
-| Windows PC (through WSL 2) | [ONBOARDING-windows.md](ONBOARDING-windows.md) |
-| Rented Linux server | [ONBOARDING-linux-server.md](ONBOARDING-linux-server.md) |
-
-Clone this repository, [Amplify-Logic/starship](https://github.com/Amplify-Logic/starship), not the upstream one.
-
-## Credit
-
-Starship is built on [Firstmate](https://github.com/kunchenguid/firstmate) by Kun Chen, and like Firstmate it is MIT licensed - see [LICENSE](LICENSE).
-
-# Built on Firstmate
-
-The rest of this page is the original Firstmate introduction.
-
+<h1 align="center">firstmate</h1>
 <p align="center">
   <a
     href="https://img.shields.io/badge/platform-macOS%20%7C%20Linux-blue?style=flat-square"
@@ -85,28 +47,105 @@ Launching a supported harness inside it for your primary session instantiates yo
 - **A visible crew** - every crewmate works in its own tmux window or Herdr tab, or in an experimental Zellij tab, experimental cmux workspace, or experimental Orca terminal you can watch or type into; the first mate reconciles.
 - **Disposable worktrees** - each task runs in a clean [treehouse](https://github.com/kunchenguid/treehouse) git worktree, or an Orca-managed worktree when `backend=orca`, so parallel work on one repo never collides.
 - **Two task shapes** - ship tasks deliver authorized changes; scout tasks leave standalone investigation reports when the intake contract warrants separate research.
-- **Explicit project modes** - each project ships via `no-mistakes`, `direct-PR`, or `local-only`, with an optional `+yolo` merge-autonomy flag, an optional `branch=<prefix>` override for the default `fm/` ship-branch prefix, an optional `alias=<name>` for a clone whose directory differs from its registered name, and an optional `forge=gerrit` binding under which the worker publishes a Gerrit change instead of opening a pull request.
+- **Explicit project modes** - each project ships via `no-mistakes`, `direct-PR`, or `local-only`, with an optional `+yolo` merge-autonomy flag, an optional `branch=<prefix>` override for the default `fm/` ship-branch prefix, and an optional `forge=gerrit` binding under which the worker publishes a Gerrit change instead of opening a pull request.
 - **Self-repo boundary** - a home runs as firstmate user/operator by default, so a firstmate bug is diagnosed and patched locally but never pushed, PRed, issued, commented, or forked upstream on its own; publishing to firstmate's own repository needs the `config/firstmate-role` maintainer opt-in or a per-task captain consent ([schema](docs/configuration.md#firstmate-role-configfirstmate-role)).
 - **Optional secondmates** - opt in to persistent second mates that run from isolated firstmate homes with their own `FM_HOME`, state, projects, and session lock, either locally or as a whole home on an SSH-reachable host, with guarded updates and recovery that never turns an unavailable remote route into a local replacement.
 - **Event-driven, zero-token supervision** - a bash watcher sleeps on the fleet and wakes the first mate only when something needs you; verified primary harnesses also get a turn-end backstop that blocks or follows up on a blind stop when work is under way and supervision is not live.
-- **Optional status second look** - opt in per home so the heartbeat backstop takes one bounded look at the progress lines the verb-based classifier dropped, catching destroyed data, a spend you own, or a credential need written as a progress note; it can only add an escalation, never silence one, and with the gate absent or the service unreachable supervision behaves exactly as it does today.
 - **Optional Relay** - opt in with one local `.env` pairing token so firstmate can answer your public mentions on X and Discord alike, act on normal reversible mention requests through the same lifecycle as chat requests, acknowledge spawned work, and post up to three public-safe completion follow-ups within seven days for genuine milestones and the final outcome without changing non-Relay behavior; a final reply promised in a thread becomes durable state that is reconciled from disk, so a restart or a compacted conversation cannot lose it; dry-run preview records would-be replies and dismissals locally before go-live.
 - **Strict project boundary** - the first mate is read-only over your projects except for the narrow guarded and captain-approved operations authorized by [hard rule 1](AGENTS.md#1-identity-and-prime-directives), including fleet sync's guarded safe branch pruning; crewmates make every other project change behind the configured merge authority.
-- **Restart-proof** - all state lives on disk and in the active session backend (tmux by hard default, herdr, rex, or cmux when selected or auto-detected - Starship's setup selects herdr on a Mac and on Windows - zellij/orca/paseo when explicitly selected); the next session reconciles after a restart, while ordinary supervision recovers confirmed-dead secondmate agents without waiting for one.
+- **Restart-proof** - all state lives on disk and in the active session backend (tmux by hard default, herdr, rex, or cmux when selected or auto-detected, zellij/orca/paseo when explicitly selected); the next session reconciles after a restart, while ordinary supervision recovers confirmed-dead secondmate agents without waiting for one.
 
 Full detail on every feature lives in [docs/architecture.md](docs/architecture.md).
 
 ## Quick Start
 
-Starship's setup is [ONBOARDING.md](ONBOARDING.md): five steps from a blank Mac to a first mate that has added a real project and brought back a worker's report, launched with `bin/fm-primary.sh`.
-
 ### Requirements
 
-- A verified primary agent harness: Claude Code, Grok, Pi, `pi-signed`, Oh My Pi (`omp`), Codex, OpenCode, or Cursor Agent CLI; the onboarding guide uses Claude Code, and `bin/fm-primary.sh --help` lists every verified launch profile.
+- A verified primary agent harness: Claude Code, Grok, Pi, `pi-signed`, Oh My Pi (`omp`), Codex, OpenCode, or Cursor Agent CLI.
 - Git and the GitHub CLI, authenticated through `gh auth login`.
-- The CLI and dependencies for your selected runtime backend; tmux is the reference default, Starship's setup selects Herdr on a Mac and on Windows, and each backend's setup guide is linked in [Documentation](#documentation).
+- The CLI and dependencies for your selected runtime backend; tmux is the reference default.
 
 The first mate detects and offers to install supported missing tools after you approve.
+Backend-specific setup is linked in [Documentation](#documentation).
+
+### Recommended harnesses
+
+**Claude Code, Grok, and Pi are equal co-primary recommendations** for running the primary firstmate session, with `pi-signed` supported as Pi's distinct signed-wrapper identity.
+Claude Code uses a tracked Stop hook for tokenless watcher re-arm and rewake, Grok uses background-notify wake cycles, and Pi uses its tracked primary watcher extension.
+All three have verified turn-end guard paths when launched with their documented setup.
+Pick whichever one matches your subscription and workflow.
+
+Oh My Pi (`omp`), a Pi fork, is verified as a primary with the same extension-owned watcher model as Pi and a stronger turn-end guard: its blocking `session_stop` hook compels a continuation instead of requesting one.
+Codex and OpenCode are also verified and supported as primary harnesses; Codex uses bounded foreground checkpoints, and OpenCode uses a TUI plugin, so both carry more harness-specific supervision tradeoffs than the three co-primaries.
+Cursor Agent CLI is verified as a primary too, using a tracked project-scope `.cursor/hooks.json` whose `stop` hook parks on the watcher between turns, closest in shape to Claude Code's.
+Launch it with `--trust`, or none of its project hooks load; it also has no turn-end hook in headless `cursor-agent -p`, so run the primary session interactively.
+
+### Install and launch
+
+```sh
+gh auth login
+git clone https://github.com/kunchenguid/firstmate
+cd firstmate
+```
+
+Then launch one of the co-primary harnesses; AGENTS.md takes over from there:
+
+**Claude Code**
+
+```sh
+claude
+```
+
+**Grok**
+
+```sh
+grok --trust
+```
+
+**Pi**
+
+```sh
+pi
+# or, when the signed wrapper is installed
+FM_PI_HARNESS=pi-signed pi-signed
+```
+
+**Oh My Pi**
+
+```sh
+omp
+# or, when starting from inside a Claude Code pane
+FM_OMP_HARNESS=omp omp
+```
+
+Start `omp` with this checkout as its working directory: it auto-discovers the tracked `.omp/extensions/*.ts` files with no trust dialog, and naming them with `-e` as well would load each twice.
+
+For Grok, `--trust` is needed once per clone so project hooks and the turn-end guard load; `/hooks-trust` inside Grok works too.
+For Pi, approve the project trust prompt once per clone on first launch so the tracked `.pi/extensions/*.ts` files auto-load.
+The `/calm` toggle on Pi, and on Claude Code behind its default-off early-access function-hooks flag, hides supported transcript chrome, including canonically classified Firstmate operational user rows, and uses a Calm-only animated working boat during active runs while preserving all model context and session data.
+Calm changes only presentation, not the user-role delivery, ordering, authority, persistence, or exports of the operational inputs it hides.
+The preference persists for the effective Firstmate home, and toggling it off restores ordinary rendering.
+[Calm's current behavior and supported limits](docs/calm.md) are separate from its [version-scoped maintainer evidence](docs/calm-mode-feasibility.md).
+Pi's `/supervision-model` command pins a cheaper model and a shallower reasoning effort for the supervision branch alone, from the eligible models and thinking levels Pi itself reports, and with no pin the branch normally follows your own conversation's model and effort; see the [configuration schema](docs/configuration.md#pi-supervision-branch-model-and-effort-configsupervision-branch-model-configsupervision-branch-effort).
+
+### Talk to it
+
+```sh
+> ahoy! look at my github project xyz, then fix the flaky login test and add dark mode
+
+# firstmate checks its toolchain (asking your consent before installing anything),
+# clones the project under projects/ and spawns two isolated workers in the active backend.
+# Minutes later:
+
+  PR ready for review, captain: https://github.com/you/xyz/pull/42
+  (fix flaky login test - risk: low - CI green)
+
+> alright merge it
+```
+
+### More backends
+
+Setup guides for tmux (the default) and every other supported backend (herdr, zellij, Orca, cmux, Paseo, Rex) are linked in [Documentation](#documentation) below.
 
 ## How It Works
 
@@ -152,11 +191,7 @@ Claude and grok use the slash form shown here; codex uses the same names with `$
 | `/ahoy`            | Recap visible session events since the prior real captain message plus visibly unanswered captain decisions, then guide the captain through any open decisions one at a time in agent-judged impact order; fall back to Bearings when invoked as the session's first real captain message |
 | `/bearings`        | Generate a concise four-section chat digest from bounded fleet state, including registered remote-home ledgers and measured follow-up for owned contributions; use `/bearings file` to also replace today's dated report in `data/`, and add `include PRs` for live GitHub enrichment |
 | `/updatefirstmate` | Guardedly update the running firstmate and its secondmates - fast-forward, or reconcile a redundant post-squash-merge divergence - then persist and restart every live mate successfully left on the target commit - including already-current homes - with an honest re-read nudge only when restart cannot be proven |
-| `/catchup`         | Catch this home up with its own upstream, on demand or weekly once the home opts in: prepare a real-merge catch-up on a branch, report which stack tools are behind, and stop for the captain to approve the merge |
 | `/stow`            | Sweep the session for uncaptured durable knowledge, persist the open work records this session knows are unfiled or now wrong, curate tiered startup memory with decay and cold archival, enforce each home's budget or surface the required decision, cascade to registered second mates, and report what is safe to reset |
-| `/outward-fine-print` | Switch workers back to acting outward (sending mail, answering invites, changing the calendar, Zapier, browser control) only with their job's own permission or a narrow standing permission; the default |
-| `/outward-broad` | Let every worker do whole kinds of outward action, such as send email or control browser, without a per-job permission; name switches to turn on exactly those |
-| `/outward-no-block` | Switch the worker outward check off, so workers act outward whenever their instructions say to |
 
 Bearings invocation examples:
 
@@ -166,7 +201,7 @@ Bearings invocation examples:
 - `/bearings file` replaces today's `data/status-report-<YYYY-MM-DD>.md` from scratch and links it from the four-section chat digest.
 - `/bearings file include PRs` combines the dated report with live PR enrichment.
 
-Agent-only reference skills live under `.agents/skills/` and are loaded by firstmate at the triggers stated in their skill descriptions, as [`AGENTS.md`](AGENTS.md#13-agent-only-reference-skills) directs.
+Agent-only reference skills live under `.agents/skills/` and are loaded by firstmate at the trigger points named in [`AGENTS.md`](AGENTS.md).
 
 ### Two-tier skill layout
 
@@ -181,17 +216,11 @@ Firstmate's skills live in two separate places with different audiences:
 ## Documentation
 
 - [docs/architecture.md](docs/architecture.md) - maintainer architecture for the crew, supervision, worktrees, secondmates, and project modes.
-- [ONBOARDING.md](ONBOARDING.md) and [docs/handbook.md](docs/handbook.md) - blank Mac to a working first mate, then how the whole system works, making it your own, connecting your tools, and a first-week path to full use.
-- [ONBOARDING-windows.md](ONBOARDING-windows.md) and [ONBOARDING-linux-server.md](ONBOARDING-linux-server.md) - the same start on a Windows PC through WSL 2, or on a rented Linux server reached over SSH, using `bin/fm-linux-setup.sh`.
 - [docs/configuration.md](docs/configuration.md) - environment variables, `FM_HOME`, runtime backend selection, optional Relay and its X and Discord setup steps, trusted external process-event adapter setup, the files you set, and harness support.
-- [docs/porting.md](docs/porting.md) - bring Firstmate up on a second machine and keep captain-private portable material in step with explicit push/pull.
 - [docs/extension-bindings.md](docs/extension-bindings.md) - maintainer architecture for the narrow trusted external `process-event-adapter/1` package, binding, handshake, and evidence boundary.
 - [docs/remote-secondmates.md](docs/remote-secondmates.md) - current setup, routing, transfer, recovery, and safety behavior for whole-home remote second mates.
 - [docs/calm.md](docs/calm.md) - current `/calm` behavior on Pi and Claude Code and its supported presentation limits.
-- [docs/call-companion.md](docs/call-companion.md) - the macOS call recorder: a live call desk and end-of-call notes, recorded only after everyone on the call has agreed, and how to stop and delete a recording.
-- [docs/meetings.md](docs/meetings.md) - the meeting intake over Anarlog, a local meeting recorder: clear follow-ups from finished personal meetings and shared glasses calls start on their own, everything else waits for a tap, and work meetings are never processed.
 - [docs/voice-relay.md](docs/voice-relay.md) - the optional spoken interface: setup on both machines, measured round-trip cost, what a spoken answer may read, and what this build does not do yet.
-- [docs/cloud-routines.md](docs/cloud-routines.md) - the scheduled Claude cloud routine that watches public creator repositories with the laptop closed and publishes to a separate reports repository, never to firstmate: setup, what it can touch, cost, and the kill switch.
 - [docs/fleet-ledger.md](docs/fleet-ledger.md) - the opt-in activity ledger outside tools can read to follow a home's tasks, and its record contract.
 - [docs/wedge-alarm.md](docs/wedge-alarm.md) - configure the active alert for an away-mode escalation delivery that gets stuck.
 - [docs/tmux-backend.md](docs/tmux-backend.md) - current setup and limits for the tmux reference backend.

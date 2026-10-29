@@ -34,7 +34,7 @@ Exactly one fleet brain remains: the primary already running in this home.
    enabled = true
    ```
 
-   Spoken replies are not yet available for teammates; skip this step.
+   This step is optional: replies stay text without it, and [desk voice-out](configuration.md#desk-voice-out-configspeak) explains what spoken replies need.
 
 3. Launch the floater:
 

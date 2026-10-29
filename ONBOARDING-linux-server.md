@@ -135,7 +135,7 @@ cd ~
 curl -fsSL https://raw.githubusercontent.com/Amplify-Logic/starship/main/bin/fm-linux-setup.sh | bash
 ```
 
-It asks for your password once, then installs the build tools, Homebrew, git, node, gh, tmux, jq, Claude Code and Chrome, and clones Firstmate into `~/starship`.
+It asks for your password once, then installs the build tools, Homebrew, git, node, gh, tmux, jq, Claude Code and Chrome, and clones Starship into `~/starship`.
 Chrome runs headless here; no desktop is needed for the first mate's browser checks.
 
 First log out (`exit`) and log back in with `ssh <you>@<server-ip>`, so the new tools are on your PATH; in the old login, `gh` and `claude` are not found.
@@ -152,7 +152,7 @@ Then do the two sign-ins it prints:
 
 On a server, the first mate and its workers run in tmux, which keeps them running after you disconnect and is what this guide is tested with.
 (On a Mac or a Windows PC they run in Herdr instead.)
-Tell Firstmate to use tmux, then start a session:
+Tell Starship to use tmux, then start a session:
 
 ```sh
 mkdir -p ~/starship/config
@@ -166,7 +166,7 @@ Workers open as tmux windows; `Ctrl-b` then `w` lists them.
 
 To leave everything running, press `Ctrl-b` then `d`.
 Next time: `ssh <you>@<server>` and `tmux attach -t firstmate`.
-To get the team's latest Starship, tell your first mate "update starship".
+To get the latest Starship, tell your first mate "update starship".
 
 ---
 

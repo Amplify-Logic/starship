@@ -386,8 +386,10 @@ leave_dead_link_locks() {  # <state> <lock>...
     exec sleep 30
   ' _ "$LIB" "$@" >/dev/null 2>&1 &
   holder=$!
+  # Wait on the holder itself rather than a short clock: on a loaded shard it
+  # can take seconds to source the lib, and if it fails it exits at once.
   i=0
-  while [ "$i" -lt 50 ] && [ ! -s "$last/pid" ]; do
+  while [ "$i" -lt 1500 ] && [ ! -s "$last/pid" ] && kill -0 "$holder" 2>/dev/null; do
     sleep 0.02
     i=$((i + 1))
   done

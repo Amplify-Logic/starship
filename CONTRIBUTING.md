@@ -19,7 +19,7 @@ GitHub Actions and Dependabot are exempt so their automation keeps working, but 
 1. Clone [`Amplify-Logic/starship`](https://github.com/Amplify-Logic/starship) (`git@github.com:Amplify-Logic/starship.git`) and keep it as your `origin`; without push access, also fork it on GitHub for step 3.
    `Amplify-Logic/starship` is this project's canonical home, and pull requests target its `main`; [`kunchenguid/firstmate`](https://github.com/kunchenguid/firstmate) is the upstream it descends from, declared as `upstream_remote` in `fork-surface.conf`, and is never the PR target.
 2. Create a branch and make your changes.
-3. Initialize the gate with your fork as the push target: `no-mistakes init --fork-url git@github.com:<you>/firstmate.git` (contributing to firstmate requires **no-mistakes v1.46.0+** for structured attestation; without a fork, plain `no-mistakes init` still works for maintainers with push access).
+3. Initialize the gate with your fork as the push target: `no-mistakes init --fork-url git@github.com:<you>/starship.git` (contributing to firstmate requires **no-mistakes v1.46.0+** for structured attestation; without a fork, plain `no-mistakes init` still works for maintainers with push access).
 4. Commit your changes.
 5. Push through the gate instead of pushing to `origin`:
 

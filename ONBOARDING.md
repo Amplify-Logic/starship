@@ -13,16 +13,16 @@ After that, [the captain's handbook](docs/handbook.md) explains the whole system
 
 > Your setup is yours alone.
 > A fresh clone gets only the public repo - no one else's preferences, backlog, project list, or accounts.
-> Your private folders (`data/`, `state/`, `config/`, `projects/`, `.env`) are created on first run, empty apart from the team's starter settings in `config/`, stay on your machine, and are gitignored forever.
+> Your private folders (`data/`, `state/`, `config/`, `projects/`, `.env`) are created on first run, empty apart from Starship's starter settings in `config/`, stay on your machine, and are gitignored forever.
 
 ---
 
 ## 1. Accounts (browser, before the terminal)
 
 1. **GitHub** - an account that can see your first project: one of your own repositories, which becomes your first project in step 5.
-   If your team's repository shows you a 404, ask its owner to invite you.
+   If a repository shows you a 404, ask its owner to invite you.
    Starship itself is public, so plain Starship is all you install, with no add-on.
-2. **Claude** - the Claude account your team uses for Claude Code.
+2. **Claude** - a Claude account with a paid plan (Pro or Max) for Claude Code.
    If your organisation has a Claude workspace, use that account: the connectors it offers (mail, calendar, documents, and so on) then come along into Claude Code.
 
 You should see: both accounts signed in in a browser tab.
@@ -106,13 +106,12 @@ Either answer works; your first mate and its workers run the same way in both.
 
 You should see: Claude Code open inside the `starship` folder, ready for a message.
 
-That first launch also sets up your home the team's way, with nothing to copy:
+That first launch also sets up your home with Starship's starter settings, with nothing to copy:
 
 - **Which model does which job.** Opus 5.5 does nearly everything; Sonnet 5.5 and Haiku 5.5 take only small, fully specified chores, so a Claude Pro or Max 5x plan lasts.
 - **How hard your first mate thinks.** It follows your Claude plan: `medium` on Pro, `high` on Max 5x, and `xhigh` only on Max 20x. The launch line names the level and your plan.
   A Team or Enterprise seat does not report a plan Starship can read, so it gets `high` and the launch line says "the default when the Claude plan cannot be read"; that is expected, not an error.
-- **Spoken replies and transcription words**; replies stay text only until you set up voice ([desk voice-out](docs/configuration.md#desk-voice-out-configspeak)).
-  Spoken replies are not yet available for teammates, so for you replies stay text.
+- **Transcription words** for the desk floater; replies stay text unless you set up [desk voice-out](docs/configuration.md#desk-voice-out-configspeak).
 
 To change how hard your first mate thinks, write one word, then start it again: `echo high > config/primary-effort`.
 The words, from lightest to deepest, are `low`, `medium`, `high`, `xhigh` and `max`; deeper thinking uses your plan's allowance faster, and `rm config/primary-effort` goes back to your plan's level.
@@ -180,23 +179,6 @@ If the report never comes back, ask "why can't you start a worker?" and fix what
 
 ---
 
-## Already installed?
-
-If you set up Starship before these changes, here is what is different and what to do.
-
-- **Thinking level follows your plan.** With no `config/primary-effort`, the first mate now thinks at your plan's level (step 3), so a Pro home drops from `xhigh` to `medium`.
-  To keep the old depth, `echo xhigh > ~/starship/config/primary-effort`, then start it again; on Pro that uses your allowance much faster.
-- **Your home may still run in tmux.** Homes set up before Herdr became the default stay on tmux, and the guide's `herdr` steps do not apply to them.
-  Keep using tmux as before, or switch when no worker is running: in `~/starship` run `bin/fm-herdr-setup.sh` and `echo herdr > config/backend`, then open Herdr and start your first mate there (step 3).
-- **Starter settings are not copied in.** Only a brand-new home gets them; copy them yourself with the lines under [starter settings](#optional-starter-settings-and-the-call-recorder).
-- **"update starship" skips a home with stray or changed files.** A file of yours inside `~/starship`, outside its private folders, or a change to a Starship file, makes the update skip your home as a "dirty working tree".
-  `git -C ~/starship status --short` lists them.
-  A line starting with `??` is a file of yours: move it out of `~/starship`.
-  A line starting with `M` is a Starship file you changed: save a copy elsewhere if you want it, then `git -C ~/starship restore <path>`.
-  Then say "update starship" again.
-
----
-
 ## Optional: starter settings and the call recorder
 
 A new home gets the starter settings on its first launch (step 3).
@@ -209,7 +191,7 @@ cp -n docs/examples/stt-vocabulary config/stt-vocabulary
 
 - `crew-dispatch.json` decides which Claude model does which job: Opus 5.5 for nearly everything, Sonnet 5.5 for well-specified mechanical work, and Haiku 5.5 for tiny chores, sized for a Pro or Max 5x plan; it uses no other provider or account.
 - `stt-vocabulary` teaches the desk floater's transcription the names you say; add your own below its starter words.
-- Spoken replies are not a starter setting and are not yet available for teammates: they need the Starship Voice project, which teammates cannot reach yet, as [desk voice-out](docs/configuration.md#desk-voice-out-configspeak) explains.
+- Spoken replies are not a starter setting; [desk voice-out](docs/configuration.md#desk-voice-out-configspeak) explains what they need.
 
 You should see: after a restart, your first mate dispatches workers on Claude only.
 
@@ -220,7 +202,8 @@ It records only after everyone on the call has agreed; [docs/call-companion.md](
 
 ## Next
 
-To get the team's latest Starship at any time, tell your first mate "update starship": it pulls the shared Starship and restarts any second mates on it.
+To get the latest Starship at any time, tell your first mate "update starship": it pulls the shared Starship and restarts any second mates on it.
+If you set up Starship before, [CHANGELOG.md](CHANGELOG.md) lists what changed for an existing home and what to do.
 
 Read [the captain's handbook](docs/handbook.md).
 It explains the whole system in plain words, how to connect your mail, calendar and documents, how to teach the first mate your preferences, how to approve work, and a five-day path of small practice tasks.

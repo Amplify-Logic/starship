@@ -3341,7 +3341,7 @@ Every other worker adapter is outside that order and its launch is unchanged.
 
 ## Starter settings (first launch)
 
-A new home's first launch with a Claude profile (`bin/fm-primary.sh opus`, or `claude`) installs the Claude starter settings into its private `config/`, so a teammate's Starship is set up the team's way without copying anything by hand.
+A new home's first launch with a Claude profile (`bin/fm-primary.sh opus`, or `claude`) installs the Claude starter settings into its private `config/`, so a new Starship starts with the starter settings without copying anything by hand.
 A new home is one whose `state/` is absent or empty, which means it has never run.
 
 | Installed as | Copied from | What it does |

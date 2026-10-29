@@ -725,6 +725,8 @@ test_empty_selection_emits_summary() {
   init_changed_fixture_repo "$repo"
   printf 'documentation only\n' >"$repo/README.md"
   printf 'documentation only\n' >"$repo/ONBOARDING.md"
+  printf 'documentation only\n' >"$repo/CHANGELOG.md"
+  printf 'documentation only\n' >"$repo/SECURITY.md"
   out=$(cd "$repo" && bin/fm-test-run.sh --changed --base HEAD --json "$tmp/artifacts/timing.json" 2>"$tmp/err") \
     || fail "empty valid changed selection must pass"
   printf '%s\n' "$out" | grep -Eq \
