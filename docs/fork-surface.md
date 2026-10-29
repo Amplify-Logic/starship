@@ -55,9 +55,9 @@ The gate rejects both silent deletion and a retired declaration whose files stil
 ## Wholesale re-base history
 
 The fork was re-based wholesale onto the creator's tree at `b85e28b5` by pull request 160 of the earlier repository; later catch-ups have since advanced the manifest's `upstream_base` past it.
-It landed on 2026-09-17 as the single squash commit `03961847`, not as the merge commit the pull request asked for, so its one parent is `af3f7d4c` and its tree equals the pull request head `a460e747`.
-Neither `b85e28b5` nor `a460e747` is an ancestor of the default branch, so git ancestry alone does not show that the default branch contains the creator's base.
-The re-base's own commit history survives only on the remote branch `fm/fm-wholesale-creator-rebase-w1` at `a460e747`, so keep that branch, because deleting it leaves the squash message as the only record.
-The recorded pre-re-base anchor is `74e1a957`, and the squash's parent `af3f7d4c` is that commit plus three later fork changes.
-`git revert 03961847` reverses the re-base as one change, which applied directly on top of it restores the `af3f7d4c` tree.
+It landed on 2026-09-17 as the single squash commit `70082c3e`, not as the merge commit the pull request asked for, so its one parent is `f0928cdf`.
+`b85e28b5` is not an ancestor of `70082c3e`, so git ancestry alone does not show that the squash contains the creator's base.
+The squash message is the only record in this repository of the re-base's own commit history.
+The recorded pre-re-base anchor is `a6188123`, and the squash's parent `f0928cdf` is that commit plus three later fork changes.
+`git revert 70082c3e` reverses the re-base as one change, which applied directly on top of it restores the `f0928cdf` tree.
 Later default-branch work builds on the re-based tree, so reverting it now needs the same review as any large change.
