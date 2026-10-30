@@ -5,7 +5,7 @@ Nothing in this document is switched on.
 The live fleet still uses the layout shown under BEFORE, and it stays that way until the captain approves a change.
 
 The decision this preview serves was already made: converge on upstream's Herdr backend and adopt its one-worker-per-container execution unit, because isolating and inspecting a single worker is genuinely better that way, but do not adopt upstream's raw visual hierarchy.
-Upstream's list is flat, labelled by task slug, carries no project context, and degrades past about five workers (the private firstmate-home report `data/fm-upstream-trial-verdict-v2/report.md`, sections "One-worker-per-container: real opinion after using it" and "What ours does better").
+Upstream's list is flat, labelled by task slug, carries no project context, and degrades past about five workers.
 This preview shows what upstream's worker unit looks like once our human-readable project labels are put back on top of it.
 
 ## The two-minute version

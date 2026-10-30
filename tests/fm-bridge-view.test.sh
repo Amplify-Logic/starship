@@ -106,14 +106,14 @@ make_home() {  # <name>
   mkdir -p "$home/state" "$home/data" "$home/config" "$home/projects"
   cat > "$home/data/backlog.md" <<'EOF'
 ## In flight
-- [ ] ship-task - VoiceLoop tap trigger (repo: firstmate) (kind: ship) (since 2026-08-19)
+- [ ] ship-task - WidgetKit tap trigger (repo: firstmate) (kind: ship) (since 2026-08-19)
 
 ## Queued
 - [ ] cloud-hold - Always-on cloud, host+budget (repo: firstmate) (kind: ship)
-- [ ] captain-q - Add Qwen to the fleet? (repo: firstmate) (kind: captain) (hold: captain choice pending) (hold-kind: captain)
+- [ ] captain-q - Add Model X to the fleet? (repo: firstmate) (kind: captain) (hold: captain choice pending) (hold-kind: captain)
 
 ## Done
-- [x] done-a - Spoken updates on the glasses https://github.com/kunchenguid/firstmate/pull/7 (repo: firstmate) (kind: ship) (merged 2026-08-18)
+- [x] done-a - Spoken status updates https://github.com/kunchenguid/firstmate/pull/7 (repo: firstmate) (kind: ship) (merged 2026-08-18)
 EOF
   fm_write_meta "$home/state/ship-task.meta" \
     "window=firstmate:fm-ship-task" \
@@ -985,7 +985,7 @@ test_away_mode_passive_refresh_works() {
   hdr=$home/obs.hdr; body=$home/obs.body
   curl_bridge "$port" /api/observation "$hdr" "$body" --header "Cookie: ${cookie%%;*}"
   assert_contains "$(head -n 1 "$hdr")" "200" "passive observation must work while away: $(cat "$body")"
-  printf '%s' "$(cat "$body")" | jq -e '.under_way.items | any(.title == "VoiceLoop tap trigger")' >/dev/null \
+  printf '%s' "$(cat "$body")" | jq -e '.under_way.items | any(.title == "WidgetKit tap trigger")' >/dev/null \
     || fail "away-mode observation lost live work titles: $(cat "$body")"
   pass "away-mode passive refresh works while ordinary Bearings still refuses"
 }
@@ -1534,11 +1534,11 @@ model = {
     "omitted": [{"surface": "in_flight showing 8 of 80"}, {"surface": "gates showing 20 of 92"}],
     "decisions_open": [{"summary": "Merge the bridge PR?"}],
     "in_flight": [
-        {"state": "working", "title": "VoiceLoop tap trigger"},
+        {"state": "working", "title": "WidgetKit tap trigger"},
         {"state": "working", "title": "repro: env -i HOME=/tmp PATH=/usr/bin"},
-        {"state": "working", "title": "glasses-bridge-upgrades-b3"},
+        {"state": "working", "title": "device-bridge-upgrades-b3"},
     ],
-    "landed": [{"what": "Spoken updates on the glasses", "artifact": "https://github.com/kunchenguid/firstmate/pull/7"}],
+    "landed": [{"what": "Spoken status updates", "artifact": "https://github.com/kunchenguid/firstmate/pull/7"}],
     "gates": [
         {"title": "in-flight backlog item has no child metadata"},
         {"title": "Always-on cloud, host+budget"},
@@ -1548,11 +1548,11 @@ model = {
 obs = module.project_observation(model)
 titles = [row["title"] for row in obs["under_way"]["items"]]
 waiting = [row["title"] for group in obs["waiting"]["groups"] for row in group["items"]]
-if "VoiceLoop tap trigger" not in titles:
+if "WidgetKit tap trigger" not in titles:
     raise SystemExit("kept human in-flight title missing: %s" % titles)
 if any("repro:" in t or "env -i" in t for t in titles):
     raise SystemExit("repro string leaked as a primary line: %s" % titles)
-if any(t == "glasses-bridge-upgrades-b3" for t in titles):
+if any(t == "device-bridge-upgrades-b3" for t in titles):
     raise SystemExit("raw id leaked as a primary line: %s" % titles)
 if any("child metadata" in t for t in waiting):
     raise SystemExit("inventory diagnostic leaked into waiting: %s" % waiting)
@@ -1584,10 +1584,10 @@ model = {
         {"summary": "Duplicate accounts question", "hold_kind": "parked",
          "hold_reason": "Parked 2026-08-02 as a duplicate - asked once under the live item",
          "repo": "alpha-app"},
-        {"summary": "Confirm retiring the Miro rebuild", "hold_kind": "captain",
+        {"summary": "Confirm retiring the legacy rebuild", "hold_kind": "captain",
          "hold_reason": "Confirm retiring or reshaping this task.",
          "repo": "alpha-app"},
-        {"summary": "Choose the Qwen route", "hold_kind": "captain",
+        {"summary": "Choose the Model X route", "hold_kind": "captain",
          "hold_reason": "captain choice pending", "repo": "firstmate"},
         {"summary": "Approve the vendor call", "hold_kind": "captain",
          "hold_reason": "needs the captain's word", "repo": "gamma-ledger"},
@@ -1596,7 +1596,7 @@ model = {
         {"summary": "Pick the DeepSeek route", "hold_kind": "captain",
          "hold_reason": "captain choice pending", "repo": "starship"},
         {"summary": "Supply the study facts", "hold_kind": "captain",
-         "hold_reason": "only he can answer", "repo": "starship"},
+         "hold_reason": "only the owner can answer", "repo": "starship"},
         {"summary": "Fund worker capacity", "hold_kind": "captain",
          "hold_reason": "spend approval", "repo": "firstmate"},
         {"summary": "Choose plan A versus plan B", "hold_kind": "captain",
@@ -1604,7 +1604,7 @@ model = {
     ],
     "in_flight": [
         {"state": "blocked", "title": "Mailbox token missing"},
-        {"state": "working", "title": "VoiceLoop tap trigger"},
+        {"state": "working", "title": "WidgetKit tap trigger"},
     ],
     "landed": [],
     "gates": [],
@@ -1615,7 +1615,7 @@ hidden = [row["title"] for row in obs["needs_you"].get("rest") or []]
 deferred = [
     "Parked web pricing",
     "Duplicate accounts question",
-    "Confirm retiring the Miro rebuild",
+    "Confirm retiring the legacy rebuild",
 ]
 for title in deferred:
     if title in shown or title in hidden:
@@ -1698,11 +1698,11 @@ for repo, owner, want in (
 # A registered name matches a whole repository name, never a piece of one.
 short = module.project_label_rules(registry + "- api [direct-PR] - the api (added 2026-01-01)\n")
 for repo, owner, want in (
-    ("Amplify-Logic/rapid-tools", "", "Rapid tools"),
+    ("example-org/quick-tools", "", "Quick tools"),
     ("garden-notes", "", "Garden notes"),
     ("org/starship-addon", "", "Starship addon"),
     ("org/api", "", "Api"),
-    ("", "rapid-tools-sweep", "Rapid tools sweep"),
+    ("", "quick-tools-sweep", "Quick tools sweep"),
     ("", "api-docs-sweep", "Api"),
 ):
     got = module.project_label(repo, owner, short)
@@ -1774,13 +1774,13 @@ vm.runInContext('apply', context)({
   photos_today: 0,
   needs_you: {
     items: [
-      {title: 'Choose the Qwen route', dot: 'Needs you'},
+      {title: 'Choose the Model X route', dot: 'Needs you'},
       {title: 'Approve the vendor call', dot: 'Needs you'}
     ],
     rest: [{title: 'Fund worker capacity', dot: 'Needs you'}],
     more: 1
   },
-  under_way: {items: [{title: 'VoiceLoop tap trigger', dot: 'Under way'}]},
+  under_way: {items: [{title: 'WidgetKit tap trigger', dot: 'Under way'}]},
   just_finished: {items: []},
   waiting: {
     groups: [
@@ -1852,13 +1852,13 @@ bearings = {
         {"id": "(registry)", "state": "unknown", "doing": "Registered secondmate table unavailable"},
         {"id": "mate", "state": "active_child_work", "doing": "child-b: paused"},
     ],
-    "landed": [{"id": "landed-z", "what": "Spoken updates on the glasses"}],
+    "landed": [{"id": "landed-z", "what": "Spoken status updates"}],
 }
 out = module.project_routing(routing, bearings, 1000.0)
 text = json.dumps(out)
 assert [r["profile"] for r in out["roster"]] == ["fable-5.1 · medium", "grok-4.7-xhigh / gpt-5.6-sol · high", "opus · high"], out["roster"]
 assert out["roster"][-1]["default"] is True
-assert [d["task"] for d in out["decisions"]] == ["Phone routing panel", "Spoken updates on the glasses", "Earlier task"], out["decisions"]
+assert [d["task"] for d in out["decisions"]] == ["Phone routing panel", "Spoken status updates", "Earlier task"], out["decisions"]
 assert out["decisions"][0]["profile"] == "sonnet-5.5 · medium" and out["decisions"][0]["p"] == 0.81
 assert out["decisions"][1]["profile"] == "" and out["decisions"][2]["p"] is None
 assert [(w["title"], w["kind"], w["model"], w["effort"], w["age_secs"], w["state"]) for w in out["workers"]] == [
@@ -1939,9 +1939,9 @@ JSON
   [ "$before" = "$after" ] || fail "reading routing changed fleet records"
   jq -e '.routing.roster[0].label == "STANDING DEFAULT" and .routing.roster[0].profile == "opus · high"' "$body" >/dev/null \
     || fail "routing roster missing: $(cat "$body")"
-  jq -e '.routing.decisions[0] | .task == "VoiceLoop tap trigger" and .status == "clear" and .profile == "gpt-5.6-sol · high"' "$body" >/dev/null \
+  jq -e '.routing.decisions[0] | .task == "WidgetKit tap trigger" and .status == "clear" and .profile == "gpt-5.6-sol · high"' "$body" >/dev/null \
     || fail "routing decision missing or unnamed: $(jq -c .routing "$body")"
-  jq -e '.routing.workers[0] | .title == "VoiceLoop tap trigger" and .model == "gpt-5.6-sol" and .kind == "ship"' "$body" >/dev/null \
+  jq -e '.routing.workers[0] | .title == "WidgetKit tap trigger" and .model == "gpt-5.6-sol" and .kind == "ship"' "$body" >/dev/null \
     || fail "routing worker missing: $(jq -c .routing "$body")"
   assert_not_contains "$(cat "$body")" "ship-task" "routing must not leak task ids"
   assert_not_contains "$(cat "$body")" "PRIVATE-OUTCOME-TEXT" "routing must not leak a record's outcome"
@@ -2080,7 +2080,7 @@ assert goal["label"] == "Goals: firstmate" and goal["sections"][1]["entries"] ==
 assert out["withheld"] == 10, out["withheld"]
 for leaked in ("gift", "Gift", "Mornings", "Surprise", "community hall", "Sam", "Present", "HIDDEN-GIFT-CHARTER", "HIDDEN-UNDERSCORE-CHARTER",
                "LEAKED-LINK-TARGET", "LEAKED-ENV", "LEAKED-PROJECT-DATA",
-               "LEAKED-HARNESS-MEMORY", "VoiceLoop", "ship-task", "**", chr(96)):
+               "LEAKED-HARNESS-MEMORY", "WidgetKit", "ship-task", "**", chr(96)):
     assert leaked not in text, leaked
 PY
   ) || fail "memory read failed: $output"
@@ -2257,24 +2257,24 @@ SH
     > "$home/data/projects.md"
   cat > "$home/data/backlog.md" <<'EOF'
 ## In flight
-- [ ] ship-task - VoiceLoop tap trigger (repo: firstmate) (kind: ship) (since 2026-08-19)
+- [ ] ship-task - WidgetKit tap trigger (repo: firstmate) (kind: ship) (since 2026-08-19)
 - [ ] vendor-wait - Waiting on the Beta vendor (repo: beta) (kind: ship) (since 2026-08-19)
 
 ## Queued
-- [ ] decide-qwen - Choose the Qwen route (repo: firstmate) (kind: captain) (hold: captain choice pending) (hold-kind: captain)
+- [ ] decide-model-x - Choose the Model X route (repo: firstmate) (kind: captain) (hold: captain choice pending) (hold-kind: captain)
 - [ ] decide-vendor - Approve the vendor call (repo: gamma-ledger) (kind: captain) (hold: needs the captain's word) (hold-kind: captain)
 - [ ] decide-limit - Raise the Claude spend limit (repo: firstmate) (kind: captain) (hold: the captain raises the limit) (hold-kind: captain)
 - [ ] decide-deepseek - Pick the DeepSeek route (repo: starship) (kind: captain) (hold: captain choice pending) (hold-kind: captain)
-- [ ] decide-study-facts - Supply the study facts (repo: starship) (kind: captain) (hold: only he can answer) (hold-kind: captain)
+- [ ] decide-study-facts - Supply the study facts (repo: starship) (kind: captain) (hold: only the owner can answer) (hold-kind: captain)
 - [ ] decide-capacity - Fund worker capacity (repo: firstmate) (kind: captain) (hold: spend approval) (hold-kind: captain)
-- [ ] retire-miro - Confirm retiring the Miro rebuild (repo: alpha-app) (kind: captain) (hold: Confirm retiring or reshaping this task.) (hold-kind: captain)
+- [ ] retire-legacy - Confirm retiring the legacy rebuild (repo: alpha-app) (kind: captain) (hold: Confirm retiring or reshaping this task.) (hold-kind: captain)
 - [ ] parked-pricing - Align Beta pricing (repo: beta) (kind: ship) (hold: Parked 2026-08-02 on captain order) (hold-kind: parked)
 - [ ] dup-accounts - User accounts at launch (repo: alpha-app) (kind: ship) (hold: Parked 2026-08-02 as a duplicate - asked once under the live item) (hold-kind: parked)
 - [ ] orbit-board - Keep the orbit board current (repo: alpha-app) (kind: ship) (hold: Parked 2026-08-02 on captain order) (hold-kind: parked)
 - [ ] ledger-rotate - Rotate ledger secrets (repo: gamma-ledger) (kind: ship) (hold: captain call on history purge) (hold-kind: captain)
 
 ## Done
-- [x] done-a - Spoken updates on the glasses https://github.com/kunchenguid/firstmate/pull/7 (repo: firstmate) (kind: ship) (merged 2026-08-18)
+- [x] done-a - Spoken status updates https://github.com/kunchenguid/firstmate/pull/7 (repo: firstmate) (kind: ship) (merged 2026-08-18)
 EOF
   fm_write_meta "$home/state/vendor-wait.meta" \
     "window=firstmate:fm-vendor-wait" \
@@ -2297,7 +2297,7 @@ shown = [row["title"] for row in obs["needs_you"]["items"]]
 hidden = [row["title"] for row in obs["needs_you"]["rest"]]
 waiting = [row["title"] for group in obs["waiting"]["groups"] for row in group["items"]]
 deferred = [
-    "Confirm retiring the Miro rebuild",
+    "Confirm retiring the legacy rebuild",
     "Align Beta pricing",
     "User accounts at launch",
 ]
@@ -2554,9 +2554,9 @@ set -u
 [ "${1:-}" = list ] || exit 0
 printf 'count: 4\n'
 printf 'tasks[4]{id,state,kind,repo,title,hold_kind,hold_reason,links,closed,blocked_by,held,priority}:\n'
-printf '  review-task,in_flight,ship,firstmate,"Spoken updates on the glasses","-","-","pr:https://github.com/kunchenguid/firstmate/pull/9","-",none,no,"-"\n'
+printf '  review-task,in_flight,ship,firstmate,"Spoken status updates","-","-","pr:https://github.com/kunchenguid/firstmate/pull/9","-",none,no,"-"\n'
 printf '  lab-task,in_flight,ship,beta,"Refresh the Beta brand page","-","-","pr:https://gitlab.example/beta/site/-/merge_requests/3","-",none,no,"-"\n'
-printf '  captain-q,queued,captain,firstmate,"Add Qwen to the fleet?",captain,"captain choice pending",none,"-",none,yes,"-"\n'
+printf '  captain-q,queued,captain,firstmate,"Add Model X to the fleet?",captain,"captain choice pending",none,"-",none,yes,"-"\n'
 printf '  done-scout,done,scout,firstmate,"Investigate the delta timeouts","-","-","report:data/done-scout/report.md",2026-09-01,none,no,"-"\n'
 SH
   chmod +x "$fakebin/tasks-axi"
@@ -2575,7 +2575,7 @@ EOF
     "window=firstmate:fm-review-task" \
     "project=firstmate" \
     "kind=ship" \
-    "outcome=Spoken updates on the glasses" \
+    "outcome=Spoken status updates" \
     "pr=https://github.com/kunchenguid/firstmate/pull/9"
   printf 'working: pushed the branch\n' > "$home/state/review-task.status"
   fm_write_meta "$home/state/finished-task.meta" \
@@ -2730,11 +2730,11 @@ apply({
     missing: 'Approval needs the captain secret on the desk.'
   },
   asks: [
-    {ask: 'review', title: 'Spoken updates on the glasses', project: 'firstmate', url: 'https://github.com/acme/alpha/pull/7'},
+    {ask: 'review', title: 'Spoken status updates', project: 'firstmate', url: 'https://github.com/acme/alpha/pull/7'},
     {ask: 'answer', title: 'Rework the beta importer <script>', project: 'Alpha'},
     {ask: 'check', title: 'Photo drops', project: 'firstmate', ref: 'javascript:alert(1)'}
   ],
-  decisions: [{ask: 'decide', title: 'Add Qwen to the fleet?', project: 'firstmate'}, {ask: 'decide', title: 'Authorise the Sweden field visit', project: 'Alpha'}],
+  decisions: [{ask: 'decide', title: 'Add Model X to the fleet?', project: 'firstmate'}, {ask: 'decide', title: 'Authorise the Sweden field visit', project: 'Alpha'}],
   backlog_reason: null,
   unconfirmed: true,
   under_way: [{outcome: 'Ship the alpha widget', project: 'Alpha', state: 'working', label: 'WORKING', heard_secs: 120}],
@@ -2755,7 +2755,7 @@ must(elements.ready.innerHTML.indexOf('Nothing is ready to run from here.') !== 
 must(elements.asks.innerHTML.indexOf('<a href="https://github.com/acme/alpha/pull/7" target="_blank" rel="noopener noreferrer">') !== -1, 'https ask link missing: ' + elements.asks.innerHTML);
 must(elements.asks.innerHTML.indexOf('&lt;script&gt;') !== -1, 'title was not escaped: ' + elements.asks.innerHTML);
 must(elements.asks.innerHTML.indexOf('Not confirmed here') !== -1, 'unconfirmed caveat missing');
-must(elements.asks.innerHTML.indexOf('Add Qwen') === -1, 'a held decision was listed as a live ask');
+must(elements.asks.innerHTML.indexOf('Add Model X') === -1, 'a held decision was listed as a live ask');
 must(elements['decisions-section'].hidden === false, 'held decisions section stayed hidden');
 must(elements.decisions.innerHTML.indexOf('2 held decisions') !== -1, 'held decisions fold missing: ' + elements.decisions.innerHTML);
 const uw = elements.underway.innerHTML;
