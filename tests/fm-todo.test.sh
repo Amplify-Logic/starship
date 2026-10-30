@@ -65,8 +65,9 @@
 #   - The source change an add-on records on `close` or `hand-over` does not
 #     reopen the item when its next pass observes it; any later, different
 #     revision does, and a hand-over with no recorded change comes back on any
-#     source change, unless the source resolved it or set it waiting in the
-#     same tick.
+#     source change. Neither a closed nor a handed-over item reopens when its
+#     source resolves or parks it in the same tick, and a later edit still
+#     reopens it.
 #   - A ledger ask observed with --partner-awaiting-since ranks in the same
 #     partner-awaiting tier as a morning one, oldest first.
 #   - A helpdesk add-on's waiting, reassign and close ticket verbs run on that
@@ -1095,27 +1096,47 @@ test_an_addons_own_source_change_does_not_reopen_the_item() {
 }
 
 test_a_source_that_resolves_a_handed_over_item_wins() {
-  local h res wait
+  local h res wait shut parked
   h="$TMP_ROOT/handed-over-resolved"
   new_home "$h"
   res=$(intake_at "$h" "$T_0900" observe --source C_BRIEF --ref r-res --digest a --class obligation \
     --title 'partner ticket resolved' | awk '{ print $2 }')
   wait=$(intake_at "$h" "$T_0900" observe --source C_BRIEF --ref r-wait --digest a --class obligation \
     --title 'partner ticket parked' | awk '{ print $2 }')
+  shut=$(intake_at "$h" "$T_0900" observe --source C_BRIEF --ref r-shut --digest a --class obligation \
+    --title 'partner ticket shut' | awk '{ print $2 }')
+  parked=$(intake_at "$h" "$T_0900" observe --source C_BRIEF --ref r-park --digest a --class obligation \
+    --title 'partner ticket reassigned' | awk '{ print $2 }')
+  intake_at "$h" "$T_0900" resolve --item "$parked" --waiting --reason 'handed over to Sam' >/dev/null
   render_at "$h" "$T_0900"
+  [ "$(field_of "$h" 'ticket reassigned' 2)" = waiting ] || fail 'a source hand-over did not make the item waiting'
   todo_at "$h" "$T_0900" hand-over --item "$(field_of "$h" 'ticket resolved' 1)" --to Sam --note 'Sam answers it' >/dev/null
   todo_at "$h" "$T_0900" hand-over --item "$(field_of "$h" 'ticket parked' 1)" --to Sam --note 'Sam answers it' >/dev/null
-  # In one tick the owner's reply lands and the source resolves the record.
+  todo_at "$h" "$T_0900" hand-over --item "$(field_of "$h" 'ticket reassigned' 1)" --to Alex --note 'Alex took it over' >/dev/null
+  todo_at "$h" "$T_0900" close --item "$(field_of "$h" 'ticket shut' 1)" --evidence 'answered in the helpdesk' \
+    --actor helpdesk --source-change b >/dev/null
+  # In one tick a reply lands and the source resolves or parks the record.
   intake_at "$h" "$T_1000" observe --source C_BRIEF --ref r-res --digest b >/dev/null
   intake_at "$h" "$T_1000" resolve --item "$res" --reason 'Sam answered the partner' >/dev/null
   intake_at "$h" "$T_1000" observe --source C_BRIEF --ref r-wait --digest b >/dev/null
   intake_at "$h" "$T_1000" resolve --item "$wait" --waiting --reason 'handed over to Sam' >/dev/null
+  intake_at "$h" "$T_1000" observe --source C_BRIEF --ref r-shut --digest c >/dev/null
+  intake_at "$h" "$T_1000" resolve --item "$shut" --reason 'answered in the helpdesk' >/dev/null
+  # A source that stays waiting and gets a new message brings the hand-over back.
+  intake_at "$h" "$T_1000" observe --source C_BRIEF --ref r-park --digest b >/dev/null
   render_at "$h" "$T_1000"
   render_at "$h" "$T_1030"
   [ "$(field_of "$h" 'ticket resolved' 2)" = closed ] || fail 'a handed-over item stayed open after its source resolved it'
   [ "$(field_of "$h" 'ticket parked' 2)" = waiting ] || fail 'a handed-over item reopened while its source set it waiting'
-  assert_not_contains "$(needs_order "$(page "$h" 2026-09-10)")" 'partner ticket' 'a resolved hand-over still needs you'
-  pass 'a source that resolves or parks a handed-over item in the same tick as a change wins over the reopen'
+  [ "$(field_of "$h" 'ticket shut' 2)" = closed ] || fail 'a closed item reopened while its source resolved it in the same tick'
+  [ "$(field_of "$h" 'ticket reassigned' 2)" = open ] || fail 'a new message on a waiting source did not take the hand-over back'
+  [ "$(needs_order "$(page "$h" 2026-09-10)")" = 'partner ticket reassigned' ] \
+    || fail "only the reopened hand-over should need you: $(needs_order "$(page "$h" 2026-09-10)")"
+  # An edit after the resolution is still news and reopens the closed item.
+  intake_at "$h" "$T_1100" observe --source C_BRIEF --ref r-shut --digest d >/dev/null
+  render_at "$h" "$T_1100"
+  [ "$(field_of "$h" 'ticket shut' 2)" = open ] || fail 'an edit after the resolution did not reopen the item'
+  pass 'a source that resolves or parks an item in the same tick as a change wins, and a later change still reopens it'
 }
 
 test_a_ledger_partner_awaiting_ask_ranks_with_the_morning_ones() {

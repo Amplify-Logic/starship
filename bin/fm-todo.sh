@@ -86,7 +86,8 @@
 # no-ops; closures and commands are tombstones that survive them. A closed
 # item, or one an add-on handed over, reopens, with the reason shown, only
 # when one of its sources' own meaningful revision changes to anything but the
-# add-on's recorded source change: the ledger's `edited_digest` over `digest`, a
+# add-on's recorded source change, and that source did not resolve or park it
+# in the same tick: the ledger's `edited_digest` over `digest`, a
 # morning action's explicit `digest` (never its reworded title or daily key),
 # a backlog hold's reason and date. Missing, unreadable or refused input
 # closes nothing; a task that leaves the readable backlog's held set releases
@@ -149,7 +150,8 @@
 # refuses a closed item, an empty name, the captain's own name (captain_names,
 # singly or as one name) and a stale --rev; --at is when it was handed over.
 # A source change brings a handed-over item back to the captain, like a closed
-# one, unless the source itself resolved it or set it waiting; `reopen` does too.
+# one, unless the source itself resolved it or set it waiting in the same tick;
+# `reopen` does too.
 #
 # THE ADD-ON'S OWN SOURCE CHANGE. An add-on that changes the source itself,
 # such as closing or reassigning the ticket a row names, passes
