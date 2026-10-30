@@ -44,6 +44,13 @@
 #                  one JSON array of staging run records, which the deck joins
 #                  and bin/fm-deck-render.py places in the sections that own
 #                  each run's state.
+#   todo-verbs     executables bin/fm-todo.sh offers a to-do page line typed
+#                  against one row that no built-in page command takes; the
+#                  first that prints a result takes it (its header owns the
+#                  contract).
+#   todo-page      executables bin/fm-todo-render.sh runs on every render of
+#                  the day's to-do page; each prints an HTML section placed on
+#                  the page (its header owns the contract).
 # Executable hooks run with stdin from /dev/null and with FM_HOME, FM_ROOT (this
 # repository) and FM_HOOK_ROOT (the repository holding the hook) exported, plus
 # any arguments given to `run`. Each is bounded by FM_ADDON_HOOK_TIMEOUT seconds
@@ -171,7 +178,7 @@ resolve_addon() {
 
 valid_point() {
   case "$1" in
-    bootstrap|session-start|sentinel|watcher|deck-staging) return 0 ;;
+    bootstrap|session-start|sentinel|watcher|deck-staging|todo-verbs|todo-page) return 0 ;;
   esac
   return 1
 }

@@ -16,7 +16,8 @@
 # SKILLS AND SWITCHES. docs/configuration.md "Opt-in skills" documents which
 # config/ presence flag switches each skill on; skill_table below applies it. A
 # switch is a presence flag: any file or link at a skill's path turns it on,
-# whatever it holds. Every skill in the table needs a matching
+# whatever it holds. A skill may name several flags separated by |, and any one
+# of them present turns it on. Every skill in the table needs a matching
 # /.agents/skills/<skill> line in the tracked .gitignore, so a link never makes
 # the checkout read as changed.
 #
@@ -71,13 +72,16 @@ usage() {
 }
 
 # One line per skill: the skill name, then the config/ flag that switches it
-# on. Plain lines rather than an array keep this readable on stock macOS bash.
+# on, or several flags separated by |. Plain lines rather than an array keep
+# this readable on stock macOS bash.
 skill_table() {
   cat <<'EOF'
 adhd adhd
 adhd-auto-fire adhd
 second-opinion-auto-fire second-opinion
 macos-computer-use computer-use
+intake-digest-lines morning-intake|channel-intake
+daily-todo-freshness morning-intake|channel-intake
 EOF
 }
 
@@ -160,6 +164,20 @@ $wanted
 SKILLS
 }
 
+# switched_on <flags>: whether any of the |-separated config/ flags is present.
+switched_on() {
+  local flag rest=$1
+  while [ -n "$rest" ]; do
+    flag=${rest%%|*}
+    [ "$flag" = "$rest" ] && rest= || rest=${rest#*|}
+    [ -n "$flag" ] || continue
+    if [ -e "$CONFIG/$flag" ] || [ -L "$CONFIG/$flag" ]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 sync_checkout() {  # <checkout>
   local checkout=$1 skill flag link want current addon_root addon_names
   [ -d "$checkout/.agents/opt-in-skills" ] || return 0
@@ -179,7 +197,7 @@ sync_checkout() {  # <checkout>
     if [ -n "$addon_names" ] && printf '%s\n' "$addon_names" | grep -qxF "$skill"; then
       # The add-on carries this skill now, and its own link replaces this one.
       [ "$current" != "$want" ] || rm -f "$link" 2>/dev/null || note "could not unlink $link"
-    elif [ -e "$CONFIG/$flag" ] || [ -L "$CONFIG/$flag" ]; then
+    elif switched_on "$flag"; then
       if [ "$current" = "$want" ]; then
         continue
       elif [ -e "$link" ] || [ -L "$link" ]; then

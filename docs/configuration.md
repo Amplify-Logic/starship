@@ -16,6 +16,7 @@ Start with the directory layout, then use the setting reference for the behavior
 | Starter settings for a new home: which model does which job, transcription words, and how hard the first mate thinks | [Starter settings](#starter-settings-first-launch), [crew dispatch profiles](#crew-dispatch-profiles-configcrew-dispatchjson), [speech-to-text vocabulary](#speech-to-text-vocabulary-configstt-vocabulary), and [primary effort](#primary-effort-configprimary-effort) |
 | Spoken replies | [Desk voice-out](#desk-voice-out-configspeak) |
 | The call recorder | [Call recorder](#call-recorder-configcall-companion) |
+| The morning intake, the continuous channel intake and the daily to-do page | [Daily intake and to-do page](#daily-intake-and-to-do-page-configmorning-intake-configchannel-intake) |
 | A home's own private tools beside the shared code | [Private add-on](#private-add-on-configaddon) and [opt-in skills](#opt-in-skills-configadhd-configsecond-opinion) |
 | Keeping private names out of this public repository | [Private leak words](#private-leak-words-configleak-words) |
 | Per-run overrides and tuning | [Environment variables](#environment-variables) |
@@ -613,6 +614,7 @@ Each switch is an optional local, gitignored presence flag; any file at the path
 | `adhd` and `adhd-auto-fire` ([adhd.md](adhd.md)) | `config/adhd` |
 | `second-opinion-auto-fire` ([second-opinion.md](second-opinion.md)) | `config/second-opinion` |
 | `macos-computer-use` | `config/computer-use` (above) |
+| `intake-digest-lines` and `daily-todo-freshness` | `config/morning-intake` or `config/channel-intake` ([below](#daily-intake-and-to-do-page-configmorning-intake-configchannel-intake)) |
 
 A switched-on skill is linked into `.agents/skills/` under its usual name, so it loads exactly as a tracked skill does, and the link is gitignored.
 A harness lists skills when it starts, so a changed switch takes effect from the next launch.
@@ -635,14 +637,38 @@ With no `config/addon` a home behaves exactly as it does without add-ons.
 An add-on keeps this repository's layout, so a tool moves between the two by moving its files:
 
 - Every skill in the add-on's `.agents/skills/` is linked into the home's checkout as an opt-in skill is, and replaces an opt-in skill of the same name.
-- Hooks in the add-on's `hooks/<point>/` run beside this repository's own built-in `hooks/<point>/`, in name order, and replace a built-in hook of the same name: `bootstrap` adds read-only startup checks, `session-start` adds standing instructions to the session-start digest, `sentinel` names work that keeps the host sentinel watching a home with no task in flight, `watcher` files are sourced into the watcher when it starts, and `deck-staging` adds staging runs to the Action Deck.
+- Hooks in the add-on's `hooks/<point>/` run beside this repository's own built-in `hooks/<point>/`, in name order, and replace a built-in hook of the same name: `bootstrap` adds read-only startup checks, `session-start` adds standing instructions to the session-start digest, `sentinel` names work that keeps the host sentinel watching a home with no task in flight, `watcher` files are sourced into the watcher when it starts, `deck-staging` adds staging runs to the Action Deck, and `todo-verbs` and `todo-page` extend the daily to-do page (below).
 
 `/updatefirstmate` ("update starship") fast-forwards the add-on from its origin with the same guards as the shared code and relinks its skills, and a remote second mate's home fast-forwards the add-on its own `config/addon` names.
 `bin/fm-home-port.sh` carries `config/addon` to another machine, clones the add-on during its one-command handoff, and fails `verify` while the checkout is missing, and `bin/fm-linux-setup.sh --addon <owner>/<repo>` names one on a new Linux machine.
-Personal tools that serve one home only, such as a morning or channel intake, a daily to-do page, glasses tools or device configuration staging, live in that home's own add-on rather than here.
+Personal tools that serve one home only, such as glasses tools or device configuration staging, live in that home's own add-on rather than here.
 Register the add-on as an ordinary project when workers should change it.
 The add-on is home-local and is not inherited by secondmate homes.
 `bin/fm-addon.sh` owns the configuration, the hook points and their contract, and the install.
+
+## Daily intake and to-do page (config/morning-intake, config/channel-intake)
+
+Starship ships an optional daily intake that is off until a home turns it on.
+Its three parts work as one system:
+
+- The morning intake (`bin/fm-morning-intake.sh`) is a once-a-day gate that makes sure the morning read of the captain's channels happens, retries it, and shows a missed morning instead of skipping it.
+- The continuous channel intake (`bin/fm-channel-intake.sh`) checks the home's enrolled sources, such as Slack, mail, calendar and Asana, through the day, remembers what it has seen and what the captain still owes, and sends one grouped private alert for anything urgent.
+- The daily to-do page (`bin/fm-todo-render.sh`) is rebuilt from those records on every read, with no model call, and every line on it says when it was last checked at its source.
+
+Nothing reads, arms or schedules anything until the home's own private, gitignored config switches it on with an `enabled = true` line in `config/morning-intake` or `config/channel-intake`.
+Each home names its own sources, with their ids, in its private source inventory (`data/channel-intake/sources.tsv` by default); this repository carries no names, ids or accounts.
+`bin/fm-morning-intake.sh --help` and `bin/fm-channel-intake.sh --help` own every configuration key, and [`channel-intake.md`](channel-intake.md) owns the install, the source inventory, the alert recipient check and rollback.
+To turn it on:
+
+1. Write `config/morning-intake` and `config/channel-intake` with `enabled = true` and the home's `timezone`, then the source inventory.
+2. Arm the live checks and the schedules: `bin/fm-morning-intake.sh arm-check` and `bin/fm-morning-intake-schedule.sh install`, and the same pair for `fm-channel-intake`.
+3. Start a new session, so the `intake-digest-lines` and `daily-todo-freshness` skills are linked in.
+   Either file being present switches those two skills on, as an opt-in skill (above).
+
+The intakes print their state into the session-start digest through the built-in `hooks/bootstrap/10-morning-intake` and `hooks/bootstrap/20-channel-intake`, and stay silent on a home that has not opted in.
+A home whose private add-on (above) carries same-named tools, hooks or skills keeps running the add-on's: its hooks and skills replace the built-in ones, and a schedule or live check it armed names its own scripts.
+An add-on can also extend the to-do page without carrying its own copy: a `todo-verbs` hook takes more verbs typed on a row, such as changes to a ticket the row names, and marks the row with `bin/fm-todo.sh mark`, and a `todo-page` hook adds a section of its own; `bin/fm-todo.sh --help` and `bin/fm-todo-render.sh --help` own those contracts.
+The configuration and records are home-local and are not inherited by secondmate homes.
 
 ## Captain ledger (config/captain-ledger)
 

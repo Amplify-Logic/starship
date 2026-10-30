@@ -69,7 +69,7 @@ Paths that behave this way today include, when present:
 - any goal charter the declared `data` entries do not select (see below)
 - `data/done-archive.md`
 - `data/upstream-watch/`
-- the data directories the tools of a home's private add-on keep, such as `data/morning-intake/`, `data/channel-intake/` and `data/todo/`
+- the daily intake's records, `data/morning-intake/`, `data/channel-intake/` and `data/todo/`, and the data directories the tools of a home's private add-on keep
 - `data/action-gateway/`
 - `data/orders/`
 - `data/errands/`
