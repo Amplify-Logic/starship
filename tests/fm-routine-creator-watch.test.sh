@@ -203,6 +203,24 @@ test_the_digest_is_capped() {
   pass "the digest stays under its byte cap and keeps its window marker"
 }
 
+test_an_unset_reports_repository_refuses() {
+  local dir status out
+  dir=$(make_fixture unset)
+  status=0
+  out=$(cd "$dir/work" && env -u FM_ROUTINE_REMOTE FM_ROUTINE_NOW="$NOW" \
+    FM_ROUTINE_URL_BASE="file://$dir/up/" FM_ROUTINE_REPOS="acme/tool acme/other" \
+    "$WATCH" run 2>&1) || status=$?
+  expect_code 2 "$status" "an unset reports repository setting"
+  assert_contains "$out" "FM_ROUTINE_REMOTE is not set" "the unset refusal does not name the setting"
+  status=0; out=$(run_watch "$dir" run FM_ROUTINE_REMOTE= 2>&1) || status=$?
+  expect_code 2 "$status" "an empty reports repository setting"
+  assert_contains "$out" "FM_ROUTINE_REMOTE is not set" "the empty refusal does not name the setting"
+  assert_equals "" "$(git -C "$dir/reports.git" for-each-ref)" "a refused run wrote to the reports repository"
+  out=$(env -u FM_ROUTINE_REMOTE "$WATCH" --help) || fail "help needs the reports repository setting"
+  assert_contains "$out" "FM_ROUTINE_REMOTE" "help does not name the required setting"
+  pass "with no reports repository set, the run refuses, names the setting and publishes nothing"
+}
+
 test_invalid_settings_and_action_refuse() {
   local dir status
   dir=$(make_fixture invalid)
@@ -223,4 +241,5 @@ test_every_read_failing_publishes_nothing
 test_an_unreadable_repository_is_named
 test_many_unreadable_repositories_are_all_named
 test_the_digest_is_capped
+test_an_unset_reports_repository_refuses
 test_invalid_settings_and_action_refuse

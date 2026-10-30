@@ -86,14 +86,13 @@ The reproducible command is `FM_HERDR_WORKER_PRESENTATION_E2E=1 HERDR_LAB_HELPER
 The real `workspace list`, `tab list`, `pane list`, `agent list`, and `api snapshot` outputs reported these grouped Agents inputs:
 
 ```text
-workspace_label=City Guide · 🔵 1 WORKING
-tab_label=WORKER · Validate GPS triggers across all seven harbour stops · 🔵 WORKING
+workspace_label=Alpha · 🔵 1 WORKING
+tab_label=WORKER · Fix the login timeout · 🔵 WORKING
 display_agent=pi/gpt-5.6 · detached
 native_agent=pi
-fm_task_id=journey-gps-seven-stop-v8
+fm_task_id=alpha-login-timeout-v8
 ```
 
-The project name and task title above were later renamed in place to the neutral placeholders the e2e test now stages.
 This verifies an actual registered Pi agent rather than only fake API logs.
 Herdr's default grouped row configuration consumes workspace and tab on its first row and agent presentation on its second row, so these are the captain-visible values on that surface.
 

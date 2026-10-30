@@ -11,7 +11,8 @@ Never put a private repository or private data into a routine: its repositories 
 ## The creator-repo watch
 
 [`bin/fm-routine-creator-watch.sh`](../bin/fm-routine-creator-watch.sh) is the whole job, and its header owns the mechanics.
-It reads new tags on default-branch commits and recent default-branch commits of a fixed list of public repositories with plain git, and writes one rolling digest, `creator-watch.md`, on the `main` branch of a separate, dedicated public repository, [Amplify-Logic/firstmate-routine-reports](https://github.com/Amplify-Logic/firstmate-routine-reports), which holds nothing else.
+It reads new tags on default-branch commits and recent default-branch commits of a fixed list of public repositories with plain git, and writes one rolling digest, `creator-watch.md`, on the `main` branch of a separate, dedicated reports repository, `<owner>/<reports-repo>`, which holds nothing else.
+The script has no built-in reports repository: the routine sets `FM_ROUTINE_REMOTE` to its clone URL, `https://github.com/<owner>/<reports-repo>.git`, and a run without it refuses and names the setting.
 Each run replaces that file with one new commit, so that repository's history is the audit log of every run.
 A release tag on a commit that is not on a repository's default branch is not in the digest; the laptop creator watch, which keeps running alongside, covers those.
 The routine holds no write access to firstmate as long as the claude.ai account's GitHub connection is the Claude GitHub App only, with no `/web-setup` gh token stored (setup step 3): its clone of this repository is only read to run the script, and the script builds its commit in a temporary repository.
@@ -26,8 +27,8 @@ The model never reads the digest, so release names and commit subjects from othe
 | Model | Claude Haiku 4.5 |
 | Tools | Bash only |
 | Connectors | none; every connector the form adds by default was removed |
-| Repositories | this firstmate repository, which is public, cloned and only read; and Amplify-Logic/firstmate-routine-reports, added in setup step 4 so the push can reach it |
-| Publishes to | `main` of Amplify-Logic/firstmate-routine-reports |
+| Repositories | this firstmate repository, which is public, cloned and only read; and `<owner>/<reports-repo>`, added in setup step 4 so the push can reach it |
+| Publishes to | `main` of `<owner>/<reports-repo>`, named by `FM_ROUTINE_REMOTE` |
 | Environment | a dedicated environment with network access **None** (setup step 5); until then it points at the Default environment only because it stays disabled |
 
 ## What it can and cannot touch
@@ -56,10 +57,10 @@ The GitHub proxy does not limit which branch a push updates, so the boundary is 
 
 The routine stays disabled until the captain has done all of these, in order:
 
-1. Create the empty public repository Amplify-Logic/firstmate-routine-reports, with no README or other initial file.
-2. Install the Claude GitHub App on Amplify-Logic, scoped to that repository only.
+1. Create the empty reports repository `<owner>/<reports-repo>`, with no README or other initial file.
+2. Install the Claude GitHub App on `<owner>`, scoped to that repository only.
 3. Check how the claude.ai account connects to GitHub: it must be the Claude GitHub App only. If a `/web-setup` gh token is stored on the account, remove it before enabling the routine, and do not run `/web-setup` again while the routine exists.
-4. Add Amplify-Logic/firstmate-routine-reports to the routine's repositories.
+4. Add `<owner>/<reports-repo>` to the routine's repositories, and have the routine run the script with `FM_ROUTINE_REMOTE=https://github.com/<owner>/<reports-repo>.git`.
 5. Create a dedicated cloud environment with network access **None** in the environment dialog at claude.ai, and point the routine at it.
 6. Only then, with this script on firstmate's default branch, start one manual **Run now** at claude.ai/code/routines and confirm a commit landed on `main` of the reports repository; that run verifies the push before the schedule is trusted.
 7. Turn the routine's schedule on.

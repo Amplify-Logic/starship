@@ -1,26 +1,26 @@
 AFTER-B - after an eighth worker starts out of project order
 ------------------------------------------------------------
-WORKSPACE  City Guide · Validate GPS triggers across all seven harbour stops · 🔵 WORKING
-  TAB      WORKER · Validate GPS triggers across all seven harbour stops · 🔵 WORKING
+WORKSPACE  Alpha · Fix the login timeout · 🔵 WORKING
+  TAB      WORKER · Fix the login timeout · 🔵 WORKING
   DETAIL   pi/gpt-5.6 · detached
-WORKSPACE  City Guide · Decide the harbour-loop audio cut · 🟣 NEEDS YOU
-  TAB      WORKER · Decide the harbour-loop audio cut · 🟣 NEEDS YOU
-  DETAIL   claude/opus-5 · fm/journey-route-audio-q2
-WORKSPACE  City Guide · Speed up the offline map tiles · 🔵 WORKING
-  TAB      WORKER · Speed up the offline map tiles · 🔵 WORKING
-  DETAIL   codex/gpt-5.6 · fm/journey-tile-cache-r3
-WORKSPACE  Atelier · Decide the onboarding welcome copy · 🟣 NEEDS YOU
+WORKSPACE  Alpha · Decide the pricing page layout · 🟣 NEEDS YOU
+  TAB      WORKER · Decide the pricing page layout · 🟣 NEEDS YOU
+  DETAIL   claude/opus-5 · fm/alpha-pricing-layout-q2
+WORKSPACE  Alpha · Speed up the search results · 🔵 WORKING
+  TAB      WORKER · Speed up the search results · 🔵 WORKING
+  DETAIL   codex/gpt-5.6 · fm/alpha-search-speed-r3
+WORKSPACE  Beta · Decide the onboarding welcome copy · 🟣 NEEDS YOU
   TAB      WORKER · Decide the onboarding welcome copy · 🟣 NEEDS YOU
-  DETAIL   claude/opus-5 · fm/atelier-onboarding-copy-k4
-WORKSPACE  Atelier · Retry the nightly artwork export · 🔴 FAILED
-  TAB      WORKER · Retry the nightly artwork export · 🔴 FAILED
-  DETAIL   pi/gpt-5.6 · fm/atelier-export-retry-m1
+  DETAIL   claude/opus-5 · fm/beta-onboarding-copy-k4
+WORKSPACE  Beta · Retry the nightly CSV export · 🔴 FAILED
+  TAB      WORKER · Retry the nightly CSV export · 🔴 FAILED
+  DETAIL   pi/gpt-5.6 · fm/beta-export-retry-m1
 WORKSPACE  API Platform · Stop rate limits dropping webhook deliveries · 🟠 BLOCKED
   TAB      WORKER · Stop rate limits dropping webhook deliveries · 🟠 BLOCKED
   DETAIL   claude/opus-5 · fm/api-platform-rate-limit-c7
 WORKSPACE  API Platform · Audit the public schema for breaking changes · 🟢 READY
   TAB      WORKER · Audit the public schema for breaking changes · 🟢 READY
   DETAIL   codex/gpt-5.6 · detached
-WORKSPACE  City Guide · Fix the crash on the last booking step · 🔴 FAILED
-  TAB      WORKER · Fix the crash on the last booking step · 🔴 FAILED
-  DETAIL   claude/opus-5 · fm/journey-checkout-crash-t9
+WORKSPACE  Alpha · Fix the crash on the settings page · 🔴 FAILED
+  TAB      WORKER · Fix the crash on the settings page · 🔴 FAILED
+  DETAIL   claude/opus-5 · fm/alpha-settings-crash-t9

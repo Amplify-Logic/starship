@@ -233,14 +233,14 @@ Every string in the model passes the same control-character scrub the terminal r
 
 The home-local registered watcher check is existence-only.
 It determines whether any mailbox row is unanswered with a read-only local database query, prints only `glasses question waiting` when one exists, and leaves transcription to the firstmate turn that handles the wake.
-It must not invoke `glasses-voice-pending`, OpenAI, or any other external transcription API inside the watcher check.
+It must not invoke the voice tool's own pending-transcription command, OpenAI, or any other external transcription API inside the watcher check.
 This keeps the check compatible with glasses CLI versions both before and after an existence-only CLI flag is available.
 
 The mailbox half of the generated check is:
 
 ```bash
 HOME_DIR=/absolute/path/to/firstmate-home
-MAILBOX="$HOME_DIR/data/glasses-voice-runtime/mailbox.db"
+MAILBOX="$HOME_DIR/data/voice-mailbox/mailbox.db"
 if [ -f "$MAILBOX" ] && command -v sqlite3 >/dev/null 2>&1 \
   && [ "$(sqlite3 -readonly "$MAILBOX" "SELECT 1 FROM requests WHERE state != 'answered' LIMIT 1;" 2>/dev/null)" = 1 ]; then
   printf '%s\n' 'glasses question waiting'

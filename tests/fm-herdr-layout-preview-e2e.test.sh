@@ -85,19 +85,19 @@ lab_close() {
 # verdict said upstream's flat list starts to degrade at. No record is `paused`,
 # so WAITING and its yellow aggregate slot are not exercised by these captures.
 # Fields: task-id | project | canonical-state | runtime | branch | outcome
-# LATE is deliberately a City Guide worker started last, after both
+# LATE is deliberately an Alpha worker started last, after both
 # other projects already have workers.
 WORKERS=(
-  'journey-gps-seven-stop-v8|City Guide|working|pi/gpt-5.6|detached|Validate GPS triggers across all seven harbour stops'
-  'journey-route-audio-q2|City Guide|parked|claude/opus-5|fm/journey-route-audio-q2|Decide the harbour-loop audio cut'
-  'journey-tile-cache-r3|City Guide|working|codex/gpt-5.6|fm/journey-tile-cache-r3|Speed up the offline map tiles'
-  'atelier-onboarding-copy-k4|Atelier|parked|claude/opus-5|fm/atelier-onboarding-copy-k4|Decide the onboarding welcome copy'
-  'atelier-export-retry-m1|Atelier|failed|pi/gpt-5.6|fm/atelier-export-retry-m1|Retry the nightly artwork export'
+  'alpha-login-timeout-v8|Alpha|working|pi/gpt-5.6|detached|Fix the login timeout'
+  'alpha-pricing-layout-q2|Alpha|parked|claude/opus-5|fm/alpha-pricing-layout-q2|Decide the pricing page layout'
+  'alpha-search-speed-r3|Alpha|working|codex/gpt-5.6|fm/alpha-search-speed-r3|Speed up the search results'
+  'beta-onboarding-copy-k4|Beta|parked|claude/opus-5|fm/beta-onboarding-copy-k4|Decide the onboarding welcome copy'
+  'beta-export-retry-m1|Beta|failed|pi/gpt-5.6|fm/beta-export-retry-m1|Retry the nightly CSV export'
   'api-platform-rate-limit-c7|API Platform|blocked|claude/opus-5|fm/api-platform-rate-limit-c7|Stop rate limits dropping webhook deliveries'
   'api-platform-schema-audit-s2|API Platform|done|codex/gpt-5.6|detached|Audit the public schema for breaking changes'
 )
-LATE='journey-checkout-crash-t9|City Guide|failed|claude/opus-5|fm/journey-checkout-crash-t9|Fix the crash on the last booking step'
-PROJECTS=('City Guide' 'Atelier' 'API Platform')
+LATE='alpha-settings-crash-t9|Alpha|failed|claude/opus-5|fm/alpha-settings-crash-t9|Fix the crash on the settings page'
+PROJECTS=('Alpha' 'Beta' 'API Platform')
 
 field() {  # <worker-record> <1-based-field>
   printf '%s' "$1" | cut -d'|' -f"$2"
@@ -378,58 +378,58 @@ stage_after_b
 # --- assertions on the real captures ----------------------------------------
 
 before=$(cat "$OUT_DIR/01-before.txt")
-assert_contains "$before" 'WORKSPACE  City Guide · 🟣 1 NEEDS YOU · 🔵 2 WORKING' \
+assert_contains "$before" 'WORKSPACE  Alpha · 🟣 1 NEEDS YOU · 🔵 2 WORKING' \
   'BEFORE project row must carry the human project name and its prioritized counts'
 assert_contains "$before" '  TAB      WORKER · Decide the onboarding welcome copy · 🟣 NEEDS YOU' \
   'BEFORE worker tab must carry the human outcome and prominent state'
-assert_contains "$before" '  DETAIL   claude/opus-5 · fm/atelier-onboarding-copy-k4' \
+assert_contains "$before" '  DETAIL   claude/opus-5 · fm/beta-onboarding-copy-k4' \
   'BEFORE detail row must carry runtime and branch'
 [ "$(sidebar_rows "$OUT_DIR/01-before.txt" | wc -l | tr -d ' ')" = 3 ] \
   || fail 'BEFORE must show exactly one sidebar row per project'
 
 before_late=$(cat "$OUT_DIR/02-before-late-worker.txt")
-assert_contains "$before_late" 'WORKSPACE  City Guide · 🟣 1 NEEDS YOU · 🔴 1 FAILED · 🔵 2 WORKING' \
+assert_contains "$before_late" 'WORKSPACE  Alpha · 🟣 1 NEEDS YOU · 🔴 1 FAILED · 🔵 2 WORKING' \
   'BEFORE must fold a late worker into its own project row and recount it'
 [ "$(sidebar_rows "$OUT_DIR/02-before-late-worker.txt" | wc -l | tr -d ' ')" = 3 ] \
   || fail 'BEFORE must not grow a sidebar row when a late worker starts'
 
 after_a=$(cat "$OUT_DIR/03-after-a-grouped.txt")
-assert_contains "$after_a" 'WORKSPACE  └ Decide the harbour-loop audio cut · 🟣 NEEDS YOU' \
+assert_contains "$after_a" 'WORKSPACE  └ Decide the pricing page layout · 🟣 NEEDS YOU' \
   'AFTER-A worker row must carry the human outcome and prominent state'
 [ "$(sidebar_rows "$OUT_DIR/03-after-a-grouped.txt" | wc -l | tr -d ' ')" = 10 ] \
   || fail 'AFTER-A must show one row per worker plus one header row per project'
 # The grouped reading depends entirely on adjacency: every child row must still
 # sit under its own header when nothing has arrived late.
-[ "$(sidebar_rows "$OUT_DIR/03-after-a-grouped.txt" | sed -n '1p')" = "$(fm_preview_project_row 'City Guide' "$(project_stats 'City Guide' "${WORKERS[@]}")")" ] \
+[ "$(sidebar_rows "$OUT_DIR/03-after-a-grouped.txt" | sed -n '1p')" = "$(fm_preview_project_row 'Alpha' "$(project_stats 'Alpha' "${WORKERS[@]}")")" ] \
   || fail 'AFTER-A must open with the first project header row'
 
 after_a_late=$(cat "$OUT_DIR/04-after-a-late-worker.txt")
-assert_contains "$after_a_late" 'WORKSPACE  City Guide · 🟣 1 NEEDS YOU · 🔴 1 FAILED · 🔵 2 WORKING' \
+assert_contains "$after_a_late" 'WORKSPACE  Alpha · 🟣 1 NEEDS YOU · 🔴 1 FAILED · 🔵 2 WORKING' \
   'AFTER-A header row must still recount its project after the late worker'
-[ "$(sidebar_rows "$OUT_DIR/04-after-a-late-worker.txt" | tail -1)" = "$(fm_preview_grouped_child 'Fix the crash on the last booking step' 🔴 FAILED)" ] \
+[ "$(sidebar_rows "$OUT_DIR/04-after-a-late-worker.txt" | tail -1)" = "$(fm_preview_grouped_child 'Fix the crash on the settings page' 🔴 FAILED)" ] \
   || fail 'AFTER-A late worker must be observed at the position Herdr actually gives it'
-# The recorded divergence: Herdr appends, so the late Journey worker lands at
-# the bottom of the list, four rows below the last Atelier/API Platform row and
+# The recorded divergence: Herdr appends, so the late Alpha worker lands at
+# the bottom of the list, four rows below the last Beta/API Platform row and
 # nowhere near its own header.
 assert_not_contains "$(sidebar_rows "$OUT_DIR/04-after-a-late-worker.txt" | sed -n '2,5p')" \
-  'Fix the crash on the last booking step' \
+  'Fix the crash on the settings page' \
   'AFTER-A late worker must not silently appear inside its own project group'
 
 after_b=$(cat "$OUT_DIR/05-after-b-prefixed.txt")
-assert_contains "$after_b" 'WORKSPACE  Atelier · Retry the nightly artwork export · 🔴 FAILED' \
+assert_contains "$after_b" 'WORKSPACE  Beta · Retry the nightly CSV export · 🔴 FAILED' \
   'AFTER-B worker row must carry project, outcome and prominent state together'
 [ "$(sidebar_rows "$OUT_DIR/05-after-b-prefixed.txt" | wc -l | tr -d ' ')" = 7 ] \
   || fail 'AFTER-B must show exactly one row per worker and no holder rows'
 
 after_b_late=$(cat "$OUT_DIR/06-after-b-late-worker.txt")
-assert_contains "$after_b_late" 'WORKSPACE  City Guide · Fix the crash on the last booking step · 🔴 FAILED' \
+assert_contains "$after_b_late" 'WORKSPACE  Alpha · Fix the crash on the settings page · 🔴 FAILED' \
   'AFTER-B late worker must still name its own project wherever Herdr places it'
 
 # Both candidates keep the view inside a worker identical to today's.
 for capture_file in "$OUT_DIR/03-after-a-grouped.txt" "$OUT_DIR/05-after-b-prefixed.txt"; do
   assert_grep '  TAB      WORKER · Decide the onboarding welcome copy · 🟣 NEEDS YOU' \
     "$capture_file" "worker tab title must be unchanged from today in $capture_file"
-  assert_grep '  DETAIL   claude/opus-5 · fm/atelier-onboarding-copy-k4' \
+  assert_grep '  DETAIL   claude/opus-5 · fm/beta-onboarding-copy-k4' \
     "$capture_file" "worker detail row must be unchanged from today in $capture_file"
 done
 

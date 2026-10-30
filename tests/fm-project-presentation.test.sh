@@ -14,10 +14,10 @@ assert_eq() {
 }
 
 test_project_names() {
-  assert_eq "$("$ROOT/bin/fm-project-display-name.sh" city-guide)" 'City Guide' \
-    'Journey human display name'
-  assert_eq "$("$ROOT/bin/fm-project-display-name.sh" atelier)" 'Atelier' \
-    'Atelier brand casing'
+  assert_eq "$("$ROOT/bin/fm-project-display-name.sh" alpha-app)" 'Alpha App' \
+    'multi-word human display name'
+  assert_eq "$("$ROOT/bin/fm-project-display-name.sh" beta)" 'Beta' \
+    'single-word human display name'
   assert_eq "$("$ROOT/bin/fm-project-display-name.sh" api-platform)" 'API Platform' \
     'acronym override'
   assert_eq "$("$ROOT/bin/fm-project-display-name.sh" ordinary-project)" 'Ordinary Project' \
@@ -29,13 +29,13 @@ test_outcomes() {
   cat > "$HOME_FIX/data/backlog.md" <<'EOF'
 # Backlog
 ## In flight
-- [ ] journey-gps-seven-stop-v8 - Validate GPS triggers across all seven harbour stops (repo: city-guide) (kind: scout)
-- [ ] journey-launch-date-plan-r3 - Rebaseline the City Guide launch plan with a date (repo: city-guide) (kind: scout)
+- [ ] alpha-login-timeout-v8 - Fix the login timeout (repo: alpha) (kind: scout)
+- [ ] alpha-launch-plan-r3 - Rebaseline the Alpha launch plan with a date (repo: alpha) (kind: scout)
 EOF
-  assert_eq "$(FM_HOME="$HOME_FIX" "$ROOT/bin/fm-task-outcome.sh" journey-gps-seven-stop-v8)" \
-    'Validate GPS triggers across all seven harbour stops' 'first structured backlog title'
-  assert_eq "$(FM_HOME="$HOME_FIX" "$ROOT/bin/fm-task-outcome.sh" journey-launch-date-plan-r3)" \
-    'Rebaseline the City Guide launch plan with a date' 'second structured backlog title'
+  assert_eq "$(FM_HOME="$HOME_FIX" "$ROOT/bin/fm-task-outcome.sh" alpha-login-timeout-v8)" \
+    'Fix the login timeout' 'first structured backlog title'
+  assert_eq "$(FM_HOME="$HOME_FIX" "$ROOT/bin/fm-task-outcome.sh" alpha-launch-plan-r3)" \
+    'Rebaseline the Alpha launch plan with a date' 'second structured backlog title'
   assert_eq "$(FM_HOME="$HOME_FIX" "$ROOT/bin/fm-task-outcome.sh" any-id 'Explicit human outcome')" \
     'Explicit human outcome' 'explicit outcome precedence'
   assert_eq "$(FM_HOME="$HOME_FIX" "$ROOT/bin/fm-task-outcome.sh" no-structured-title)" \

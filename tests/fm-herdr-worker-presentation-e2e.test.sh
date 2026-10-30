@@ -28,7 +28,7 @@ trap cleanup EXIT
   || fail 'could not provision guarded non-default Herdr lab'
 
 WS_OUT=$("$HERDR_LAB_HELPER" run "$HERDR_LAB_SESSION" workspace create \
-  --cwd "$ROOT" --label 'City Guide · 🔵 1 WORKING' --no-focus) \
+  --cwd "$ROOT" --label 'Alpha · 🔵 1 WORKING' --no-focus) \
   || fail 'could not create project workspace in lab'
 WS=$(printf '%s' "$WS_OUT" | jq -r '.result.workspace.workspace_id // empty')
 SEED=$(printf '%s' "$WS_OUT" | jq -r '.result.root_pane.pane_id // empty')
@@ -72,7 +72,7 @@ if "$HERDR_LAB_HELPER" run "$HERDR_LAB_SESSION" agent start --help 2>/dev/null |
     --kind pi --pane "$PROBE_PANE") || fail 'could not start isolated Pi presentation probe'
 else
   AGENT_OUT=$("$HERDR_LAB_HELPER" run "$HERDR_LAB_SESSION" agent start \
-    'WORKER · Validate GPS triggers across all seven harbour stops · 🔵 WORKING' \
+    'WORKER · Fix the login timeout · 🔵 WORKING' \
     --workspace "$WS" --cwd "$ROOT" --no-focus \
     --env 'FM_PRESENTATION_LAB=1' \
     -- pi) || fail 'could not start isolated Pi presentation probe'
@@ -82,17 +82,17 @@ PANE=$(printf '%s' "$AGENT_OUT" | jq -r '.result.agent.pane_id // empty')
 [ -n "$TAB" ] && [ -n "$PANE" ] || fail 'agent start did not return stable tab/pane ids'
 
 "$HERDR_LAB_HELPER" run "$HERDR_LAB_SESSION" tab rename "$TAB" \
-  'WORKER · Validate GPS triggers across all seven harbour stops · 🔵 WORKING' >/dev/null \
+  'WORKER · Fix the login timeout · 🔵 WORKING' >/dev/null \
   || fail 'could not set worker tab title'
 "$HERDR_LAB_HELPER" run "$HERDR_LAB_SESSION" pane report-metadata "$PANE" \
   --source firstmate-worker-visible-v1 \
-  --title 'WORKER · Validate GPS triggers across all seven harbour stops · 🔵 WORKING' \
+  --title 'WORKER · Fix the login timeout · 🔵 WORKING' \
   --display-agent 'pi/gpt-5.6 · detached' \
   --state-label 'working=🔵 WORKING' \
   --state-label 'blocked=🔵 WORKING' \
   --state-label 'idle=🔵 WORKING' \
   --state-label 'done=🔵 WORKING' \
-  --token 'fm_task_id=journey-gps-seven-stop-v8' \
+  --token 'fm_task_id=alpha-login-timeout-v8' \
   --token 'fm_runtime=pi/gpt-5.6' \
   --token 'fm_branch=detached' \
   --token 'fm_state=WORKING' >/dev/null \
@@ -118,13 +118,13 @@ display_agent=$(jq -r --arg id "$PANE" '.result.panes[]|select(.pane_id==$id)|.d
 task_id=$(jq -r --arg id "$PANE" '.result.panes[]|select(.pane_id==$id)|.tokens.fm_task_id' "$TMP_ROOT/panes.json")
 native_agent=$(jq -r --arg id "$PANE" '.result.agents[]|select(.pane_id==$id)|.agent' "$TMP_ROOT/agents.json")
 
-[ "$workspace_label" = 'City Guide · 🔵 1 WORKING' ] \
+[ "$workspace_label" = 'Alpha · 🔵 1 WORKING' ] \
   || fail "real grouped workspace row mismatch: $workspace_label"
-[ "$tab_label" = 'WORKER · Validate GPS triggers across all seven harbour stops · 🔵 WORKING' ] \
+[ "$tab_label" = 'WORKER · Fix the login timeout · 🔵 WORKING' ] \
   || fail "real grouped task row mismatch: $tab_label"
 [ "$display_agent" = 'pi/gpt-5.6 · detached' ] \
   || fail "real grouped detail row mismatch: $display_agent"
-[ "$task_id" = journey-gps-seven-stop-v8 ] \
+[ "$task_id" = alpha-login-timeout-v8 ] \
   || fail "real hidden task identity mismatch: $task_id"
 [ "$native_agent" = pi ] \
   || fail "real Agents inventory did not register Pi: $native_agent"

@@ -3893,12 +3893,12 @@ test_projection_reclaim_replaces_only_exact_husk_and_advances_binding() {
     label=$(fm_backend_herdr_projection_workspace_label fm-hibit-r1 "$token")
     fm_backend_herdr_projection_journal_bind \
       "$1/fm-hibit-r1.herdr-presentation" fm-hibit-r1 "$2" fmtest \
-      w2 w2:t2 w2:p2 w1 "City Guide · 🟢 2 WORKING" "$label" fm-fm-hibit-r1 || exit 1
+      w2 w2:t2 w2:p2 w1 "Alpha · 🟢 2 WORKING" "$label" fm-fm-hibit-r1 || exit 1
     printf "%s" "$token"
   ' "$ROOT" "$state" "$home_real") || fail "could not create exact reclaim journal fixture"
   journal="$state/fm-hibit-r1.herdr-presentation"
   label="└ hibit-r1 · p:$token"
-  parent_live="City Guide · 🟡 1 WAITING"
+  parent_live="Alpha · 🟡 1 WAITING"
   # bin/fm-visible-status.sh renames a projected task tab to the worker's human
   # title as soon as the record exists, and again on every state change, so the
   # live husk tab never carries the label its journal recorded at bind time.
@@ -6415,12 +6415,12 @@ test_managed_workspace_identity_uses_hidden_physical_tokens() {
     --arg b "$(herdr_test_path_token "$home_b")" \
     --arg p "$(herdr_test_path_token "$project")" \
     '.workspaces = [
-      {workspace_id:"ours",label:"City Guide",tokens:{fm_owner:$a,fm_project:$p}},
-      {workspace_id:"theirs",label:"City Guide",tokens:{fm_owner:$b,fm_project:$p}}
+      {workspace_id:"ours",label:"Alpha",tokens:{fm_owner:$a,fm_project:$p}},
+      {workspace_id:"theirs",label:"Alpha",tokens:{fm_owner:$b,fm_project:$p}}
     ]' "$state" > "$state.tmp" && mv "$state.tmp" "$state"
   out=$(PATH="$fb:$PATH" FM_HERDR_LOG="$dir/log" FM_FAKE_HERDR_STATE="$state" \
     FM_HOME="$home_a" FM_HERDR_PROJECT_KEY="$(cd "$project" && pwd -P)" \
-    FM_HERDR_PROJECT_LABEL='City Guide' \
+    FM_HERDR_PROJECT_LABEL='Alpha' \
     bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_workspace_find lab' "$ROOT")
   [ "$out" = ours ] || fail "managed workspace lookup adopted by label or another home's token: '$out'"
   pass 'managed Herdr workspace lookup uses hidden physical home/project tokens, never its human label'
@@ -6434,7 +6434,7 @@ test_managed_task_identity_allows_shared_titles_and_recovers_hidden_ids() {
   mkdir -p "$home" "$project"; : > "$dir/log"
   jq --arg owner "$(herdr_test_path_token "$home")" \
     --arg project "$(herdr_test_path_token "$project")" \
-    '.workspaces=[{workspace_id:"w1",label:"City Guide",tokens:{fm_owner:$owner,fm_project:$project}}]' \
+    '.workspaces=[{workspace_id:"w1",label:"Alpha",tokens:{fm_owner:$owner,fm_project:$project}}]' \
     "$state" > "$state.tmp" && mv "$state.tmp" "$state"
   first=$(PATH="$fb:$PATH" FM_HERDR_LOG="$dir/log" FM_FAKE_HERDR_STATE="$state" FM_HOME="$home" \
     bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_create_task lab:w1 "WORKER · Same outcome · 🟡 WAITING" /tmp "" task-one' "$ROOT")
