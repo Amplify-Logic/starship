@@ -42,6 +42,8 @@ This fork's serial table was refreshed again on 2026-10-04 from run 37147855677 
 Each serial script keeps the larger of its previous value and that run's successful `duration_ms`, which raised 154 rows and gave 17 never-measured scripts their first value.
 Its serial 2 job was cancelled at the 30-minute cap and uploaded no artifact, so its completed `FM_TEST_END` markers supplement the nine artifacts the other serial jobs uploaded, and the scripts it never reached, `tests/fm-visible-status.test.sh` among them, keep their previous values.
 `tests/fm-herdr-setup.test.sh` (1559 ms) joined the lane later and carries its first successful `duration_ms` from run 39159091513 of the earlier repository; its 45000 ms default weight had left the shards no room for the packing-boundary case in `tests/fm-test-run.test.sh`.
+The opt-in channel intake and daily to-do scripts joined the lane together and carry their first successful `duration_ms` from run [41103972215](https://github.com/Amplify-Logic/starship/actions/runs/41103972215): `tests/fm-channel-intake.test.sh` (64209 ms), `tests/fm-todo.test.sh` (53145 ms), `tests/fm-todo-render.test.sh` (24241 ms) and `tests/fm-morning-intake.test.sh` (18194 ms).
+Even measured, their work left twelve shards no room for that packing-boundary case, so the lane went to thirteen shards.
 
 ## Parallel lanes
 
@@ -132,7 +134,7 @@ No fast mode, path skips, or paid runner provisioning is part of this layout.
 
 The longer-term performance objective remains a complete green run under fifteen minutes including start delay, but the current watch-triage floor alone exceeds that objective.
 The immediate packing target is the runner's modeled script budget, not a claim that more shards alone can make an indivisible script faster.
-The layout uses nineteen long-lived Linux jobs (twelve serial, two parallel, Herdr, four lint), plus short checks and macOS; insufficient shared account capacity can erase the packing gain.
+The layout uses twenty long-lived Linux jobs (thirteen serial, two parallel, Herdr, four lint), plus short checks and macOS; insufficient shared account capacity can erase the packing gain.
 Compare complete before/after runs, preserve cancelled and partial-run evidence, and measure a representative normal-run sample before claiming a P95 improvement.
 The workflow retains per-PR supersession without cancelling main pushes or changing the compliance workflow's event semantics.
 
