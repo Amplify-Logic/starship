@@ -340,17 +340,24 @@ test_retries_are_bounded_and_exhaustion_is_visible() {
 }
 
 test_no_existing_fleet_is_overridden() {
-  local h other out
+  local h other out fakebin tool
   h="$TMP_ROOT/isolation"
   other="$TMP_ROOT/other-home"
+  fakebin="$TMP_ROOT/isolation-bin"
   new_home "$h"
-  mkdir -p "$other/state" "$other/data"
+  mkdir -p "$other/state" "$other/data" "$fakebin"
   printf 'held by another session\n' >"$other/state/.session.lock"
   printf 'other-home records\n' >"$other/data/backlog.md"
   printf 'other queue row\n' >"$other/state/.wake-queue"
+  # Any agent or watcher start would land in this log.
+  for tool in fm-spawn fm-spawn.sh fm-watch fm-watch.sh; do
+    printf '#!/usr/bin/env bash\nprintf "%%s %%s\\n" "%s" "$*" >>"%s/started"\n' "$tool" "$fakebin" >"$fakebin/$tool"
+    chmod +x "$fakebin/$tool"
+  done
 
-  at "$h" "$T_0700" run >/dev/null
-  at "$h" "$T_0700" arm-check >/dev/null
+  PATH="$fakebin:$PATH" at "$h" "$T_0700" run >/dev/null
+  PATH="$fakebin:$PATH" at "$h" "$T_0700" arm-check >/dev/null
+  PATH="$fakebin:$PATH" at "$h" "$T_0700" claim >/dev/null
 
   # The gate touches nothing outside its own home.
   [ "$(cat "$other/state/.session.lock")" = 'held by another session' ] \
@@ -372,15 +379,12 @@ test_no_existing_fleet_is_overridden() {
 
   # A live session already holding this home's lock is not displaced.
   printf 'live session\n' >"$h/state/.session.lock"
-  out=$(at "$h" "$T_0715" run)
+  out=$(PATH="$fakebin:$PATH" at "$h" "$T_0715" run)
   [ "$(cat "$h/state/.session.lock")" = 'live session' ] \
     || fail "the intake overwrote this home's live session lock"
 
-  # And it never starts an agent or a watcher itself, nor names a fleet lock.
-  assert_no_grep 'fm-spawn' "$INTAKE" 'the intake gate spawns an agent'
-  assert_no_grep 'fm-watch' "$INTAKE" 'the intake gate starts a watcher'
-  assert_no_grep '.session.lock' "$INTAKE" 'the intake gate names the per-home session lock'
-  assert_no_grep '.watch.lock' "$INTAKE" 'the intake gate names the watcher lock'
+  # And it never starts an agent or a watcher itself.
+  [ ! -e "$fakebin/started" ] || fail "the intake gate started an agent or a watcher: $(cat "$fakebin/started")"
 
   pass 'the intake never takes a fleet lock, starts an agent, or touches another home'
 }
@@ -580,11 +584,13 @@ test_both_schedules_share_one_launchd_writer() {
   home="$TMP_ROOT/upstream-home"
   mkdir -p "$home/config"
 
-  assert_grep 'fm-launchd-schedule-lib.sh' "$SCHEDULE"     'the intake schedule no longer uses the shared launchd writer'
-  assert_grep 'fm-launchd-schedule-lib.sh' "$ROOT/bin/fm-upstream-watch-schedule.sh"     'the upstream-watch schedule does not use the shared launchd writer'
+  # One writer: both render the same per-home label scheme under their own stems.
+  out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" "$ROOT/bin/fm-upstream-watch-schedule.sh" render)
+  [ "$(awk '/<string>dev.firstmate.upstream-watch/ { sub(/.*upstream-watch/, ""); print; exit }' <<<"$out")" \
+    = "$(FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" "$SCHEDULE" render | awk '/<string>dev.firstmate.morning-intake/ { sub(/.*morning-intake/, ""); print; exit }')" ] \
+    || fail 'the intake and upstream-watch schedules no longer share one per-home label scheme'
 
   # Sharing the writer must not have moved the other owner's contract.
-  out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" "$ROOT/bin/fm-upstream-watch-schedule.sh" render)
   assert_contains "$out" '<integer>604800</integer>' 'the shared writer changed the weekly upstream default'
   assert_contains "$out" 'dev.firstmate.upstream-watch.' 'the shared writer changed the per-home upstream label'
   assert_contains "$out" 'fm-upstream-watch.sh' 'the shared writer changed the upstream program'

@@ -8,10 +8,14 @@
 #                                [--class CLASS] [--title TEXT] [--link URL]
 #                                [--dedup-key KEY] [--thread PARENT] [--reply-marker VALUE]
 #                                [--source-epoch EPOCH] [--partner]
+#                                [--partner-awaiting-since EPOCH]
 # A new item needs a --title; a later re-read of a known one does not.
 # --partner marks the ask partner- or customer-facing - a colleague relaying a
 # partner question, a customer's own message - and the mark survives every
-# later read.
+# later read. --partner-awaiting-since marks it partner-facing and awaiting the
+# captain since that epoch second, which ranks it in the day page's partner-
+# awaiting tier like a morning action's partner_awaiting and awaiting_since; a
+# later read that passes it again moves the time, one that does not keeps it.
 #   fm-channel-intake.sh complete --source ID --checkpoint VALUE [--relisted]
 #   fm-channel-intake.sh fail --source ID --reason TEXT
 #   fm-channel-intake.sh resolve --item KEY --reason TEXT [--waiting]
@@ -922,12 +926,12 @@ item_body() {
   [ -z "${19:-}" ] || printf '\n%s' "${19}"
 }
 
-# The partner mark an observe recorded, carried verbatim by every later
+# The partner marks an observe recorded, carried verbatim by every later
 # rewrite of the record so a resolve or a notification stamp cannot silently
 # demote a partner- or customer-facing ask.
 attention_fields() {
   [ -f "$1" ] && [ ! -L "$1" ] || return 0
-  grep -E '^partner_hint=' "$1" || true
+  grep -E '^(partner_hint|awaiting_since)=' "$1" || true
 }
 
 # --- wake delivery ----------------------------------------------------------
@@ -1332,7 +1336,7 @@ observe() {
   local dedup='' thread='' marker='' source_epoch='' epoch key path digest thread_marker
   local existing_digest existing_state created revisions provenance notified
   local notified_digest kind outcome prov_tag attention=''
-  local partner_hint=false
+  local partner_hint=false awaiting_since=''
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --source) [ "$#" -ge 2 ] || die '--source requires a value'; id=$2; shift 2 ;;
@@ -1347,6 +1351,14 @@ observe() {
       --reply-marker) [ "$#" -ge 2 ] || die '--reply-marker requires a value'; marker=$2; shift 2 ;;
       --source-epoch) [ "$#" -ge 2 ] || die '--source-epoch requires a value'; source_epoch=$2; shift 2 ;;
       --partner) partner_hint=true; shift ;;
+      --partner-awaiting-since)
+        [ "$#" -ge 2 ] || die '--partner-awaiting-since requires a value'
+        # The same bound the morning sidecar's awaiting_since takes, so
+        # milliseconds or a date never rank as a partner awaiting the captain.
+        case "$2" in
+          ''|0*|*[!0-9]*|????????????*) die "--partner-awaiting-since must be an epoch second: $2" ;;
+        esac
+        awaiting_since=$2; partner_hint=true; shift 2 ;;
       *) die "unknown observe argument: $1" ;;
     esac
   done
@@ -1444,7 +1456,7 @@ observe() {
       # item: it never becomes a second task.
       *) provenance="$provenance $prov_tag"; outcome=merged ;;
     esac
-    attention=$(with_partner_hint "$(attention_fields "$path")" "$partner_hint" "$path")
+    attention=$(with_partner_hint "$(attention_fields "$path")" "$partner_hint" "$path" "$awaiting_since")
     if [ "$existing_digest" = "$digest" ]; then
       # Unchanged content. Provenance may still have grown, so the record is
       # rewritten, but nothing about the item's attention state moves - except
@@ -1471,7 +1483,7 @@ observe() {
     return 0
   fi
 
-  attention=$(with_partner_hint "$attention" "$partner_hint" '')
+  attention=$(with_partner_hint "$attention" "$partner_hint" '' "$awaiting_since")
   save_item "$path" "$(item_body "$key" "$id" "$kind" "$ref" "$link" "$class" \
     "$title" "$digest" open "$epoch" "$epoch" "$source_epoch" '' '' 0 "$prov_tag" '' '' "$attention")"
   if [ -n "$source_epoch" ] && [ "$epoch" -ge "$source_epoch" ]; then
@@ -1485,14 +1497,17 @@ observe() {
   printf 'new %s\n' "$key"
 }
 
-# The partner mark kept: once an earlier observe marked an item
-# partner-facing, a later read does not unmark it.
+# The partner marks kept: once an earlier observe marked an item
+# partner-facing or awaiting the captain, a later read does not unmark it; one
+# that passes a new awaiting time moves it.
 with_partner_hint() {
-  local attention=$1 hint=$2 path=$3
-  attention=$(printf '%s\n' "$attention" | grep -v '^partner_hint=' || true)
+  local attention=$1 hint=$2 path=$3 since=$4
+  attention=$(printf '%s\n' "$attention" | grep -v -e '^partner_hint=' -e '^awaiting_since=' || true)
   if [ "$hint" = true ] || { [ -n "$path" ] && [ "$(record_field "$path" partner_hint)" = 1 ]; }; then
     attention=$(printf '%s\npartner_hint=1' "$attention")
   fi
+  [ -n "$since" ] || [ -z "$path" ] || since=$(record_field "$path" awaiting_since)
+  [ -z "$since" ] || attention=$(printf '%s\nawaiting_since=%s' "$attention" "$since")
   printf '%s' "$attention" | sed '/^$/d'
 }
 

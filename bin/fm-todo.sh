@@ -7,6 +7,8 @@
 #   fm-todo.sh recheck [--since EPOCH ID ...]
 #   fm-todo.sh verify --item ID --how TEXT [--rev REV] [--at EPOCH]
 #   fm-todo.sh close --item ID --evidence TEXT [--reason fulfilled|dismissed|superseded] [--actor NAME]
+#                    [--source-change DIGEST]
+#   fm-todo.sh hand-over --item ID --to NAME --note TEXT [--rev REV] [--at EPOCH] [--source-change DIGEST]
 #   fm-todo.sh reopen --item ID [--reason TEXT]
 #   fm-todo.sh ack --item ID
 #   fm-todo.sh command [--item ID [--rev REV] [--at EPOCH]] [LINE ...]   (lines on stdin when none given)
@@ -29,8 +31,9 @@
 # (its last observation and its own revision), `state` open|waiting|closed,
 # `closure` {reason fulfilled|dismissed|superseded|resolved|released, actor,
 # evidence, at}, `owner`, `snoozed_until`, `pending` handoff, `marks` (the
-# lines an add-on put on the row, below), `verification` {at, how, rev} and
-# `rev`, the item's meaningful revision over its slots.
+# lines an add-on put on the row, below), `source_change` (the change an
+# add-on made at the source, below), `verification` {at, how, rev} and `rev`,
+# the item's meaningful revision over its slots.
 # data/todo/journal is an append-only line per transition or command effect.
 # One lock serializes sync and every write. Sync deletes one kind of record
 # and no other: a routine item or team update the intake retired, thirty days
@@ -81,8 +84,9 @@
 # CHANGES, NOT SNAPSHOTS. Sync applies only what changed since the last sync,
 # so repeated syncs, an old sidecar and a re-asserted morning action are
 # no-ops; closures and commands are tombstones that survive them. A closed
-# item reopens, with the reason shown, only when one of its sources' own
-# meaningful revision changes: the ledger's `edited_digest` over `digest`, a
+# item, or one an add-on handed over, reopens, with the reason shown, only
+# when one of its sources' own meaningful revision changes to anything but the
+# add-on's recorded source change: the ledger's `edited_digest` over `digest`, a
 # morning action's explicit `digest` (never its reworded title or daily key),
 # a backlog hold's reason and date. Missing, unreadable or refused input
 # closes nothing; a task that leaves the readable backlog's held set releases
@@ -137,7 +141,24 @@
 # `not-a-command`, as does an untargeted line or one typed against an older
 # revision, so an add-on verb never acts on a changed ask. The store keeps
 # nothing for such a verb: the hook records its own work, moves the item with
-# `close`, `reopen` or `mark`, and appends any wake it needs.
+# `close`, `hand-over`, `reopen` or `mark`, and appends any wake it needs.
+#
+# HAND-OVER. `hand-over --item ID --to NAME --note TEXT` moves an open or
+# waiting item to waiting on NAME, shown under "Waiting on others" as "NAME has
+# it: TEXT", for example a ticket set to waiting on its owner or reassigned. It
+# refuses a closed item, an empty name, the captain's own name (captain_names,
+# singly or as one name) and a stale --rev; --at is when it was handed over.
+# A source change brings a handed-over item back to the captain, like a closed
+# one, and `reopen` does too.
+#
+# THE ADD-ON'S OWN SOURCE CHANGE. An add-on that changes the source itself,
+# such as closing or reassigning the ticket a row names, passes
+# `--source-change DIGEST` to `close` or `hand-over`, where DIGEST is what its
+# next pass observes that change with: the `observe --digest` value for the
+# channel-intake ledger, or a morning action's `digest`. A sync that sees that
+# revision does not reopen the item; any later, different revision, such as a
+# new message after the add-on's change, still does. Any other transition of
+# the item forgets the recorded change.
 #
 # MARKS. `mark --item ID --name NAME --text TEXT` puts one short line on the
 # item's row, under that slug name, until `mark --item ID --name NAME --clear`
@@ -147,8 +168,8 @@
 #
 # Paths: data/todo (FM_TODO_STORE_OVERRIDE), data/channel-intake, and the
 # backlog path from .tasks.toml's markdown backend (FM_TODO_BACKLOG_OVERRIDE).
-# The zone and source inventory are the ones bin/fm-todo-render.sh resolves.
-# FM_TODO_NOW pins the clock for tests.
+# The zone, source inventory and captain_names are the ones
+# bin/fm-todo-render.sh resolves. FM_TODO_NOW pins the clock for tests.
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -203,11 +224,12 @@ backlog_path() {
   esac
 }
 
-# The zone and source inventory are the ones bin/fm-todo-render.sh resolves
-# from config/channel-intake; this script reads them rather than a second copy.
+# The zone, source inventory and captain_names are the ones bin/fm-todo-render.sh
+# resolves from config/channel-intake; this script reads them rather than a second copy.
 settings=$("$SCRIPT_DIR/fm-todo-render.sh" settings) || exit 2
 zone=$(printf '%s\n' "$settings" | sed -n 's/^timezone=//p')
 sources=$(printf '%s\n' "$settings" | sed -n 's/^sources_file=//p')
+captain_names=$(printf '%s\n' "$settings" | sed -n 's/^captain_names=//p')
 [ -z "$zone" ] || export TZ="$zone"
 
 case "${1:-}" in
@@ -217,7 +239,7 @@ esac
 cmd=$1
 shift
 case "$cmd" in
-  sync|sweep-start|recheck|verify|close|reopen|ack|command|mark|list) ;;
+  sync|sweep-start|recheck|verify|close|hand-over|reopen|ack|command|mark|list) ;;
   *) die "unknown command: $cmd" ;;
 esac
 
@@ -230,7 +252,7 @@ while [ "$#" -gt 0 ]; do
   case "$1" in
     --morning-json) [ "$#" -ge 2 ] || die '--morning-json requires a value'; morning=$2; shift 2 ;;
     --pass|--clear) args+=("$1"); shift ;;
-    --item|--how|--evidence|--at|--since|--state|--rev|--actor|--reason|--name|--text)
+    --item|--how|--evidence|--at|--since|--state|--rev|--actor|--reason|--name|--text|--to|--note|--source-change)
       [ "$#" -ge 2 ] || die "$1 requires a value"
       case "$1" in
         --item) item=$2 ;;
@@ -246,7 +268,7 @@ done
 run_items() {
   python3 "$SCRIPT_DIR/fm-todo-items.py" "$cmd" --store "$STORE" --now "$(now_epoch)" \
     --intake "$INTAKE_DIR" --sources "$sources" --backlog "$(backlog_path)" \
-    --morning-json "$morning" ${args[@]+"${args[@]}"}
+    --morning-json "$morning" --captain-names "$captain_names" ${args[@]+"${args[@]}"}
 }
 
 [ "$cmd" = command ] || { run_items; exit; }

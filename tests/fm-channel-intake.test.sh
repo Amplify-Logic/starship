@@ -69,6 +69,9 @@
 #   - Observe refuses a title-less new item, keeps a partner mark across
 #     re-reads, and a wait needs a date unless it states a hand-over to someone
 #     named other than the captain.
+#   - --partner-awaiting-since takes only an epoch second, marks the ask
+#     partner-facing, moves on a later read that passes it and survives one
+#     that does not and a resolve.
 #   - Session-start bootstrap surfaces the intake through the built-in hook.
 #   - A home whose add-on still carries the intake runs the add-on's copy: its
 #     same-named bootstrap hooks replace the built-in ones and run its own
@@ -901,8 +904,8 @@ test_local_configuration_stays_private() {
     'message content was copied into the ledger'
 
   # The tracked repository ignores both the config and the private ledger.
-  assert_grep '/config/' "$ROOT/.gitignore" 'config is no longer gitignored'
-  assert_grep 'data/' "$ROOT/.gitignore" 'data is no longer gitignored'
+  git -C "$ROOT" check-ignore -q config/channel-intake || fail 'config/channel-intake is no longer gitignored'
+  git -C "$ROOT" check-ignore -q data/channel-intake/x || fail 'the private ledger is no longer gitignored'
 
   pass 'source identities and message content stay out of the tracked repository and out of config'
 }
@@ -1334,15 +1337,28 @@ test_equal_quiet_bounds_are_refused() {
   pass 'quiet hours with equal bounds are refused instead of silencing every alert forever'
 }
 
-test_both_schedules_share_one_launchd_writer() {
-  assert_grep 'fm-launchd-schedule-lib.sh' "$SCHEDULE" \
-    'the channel-intake schedule no longer reuses the shared launchd writer'
-  assert_grep 'FM_LAUNCHD_STEM=channel-intake' "$SCHEDULE" \
-    'the channel-intake schedule does not declare its own launchd stem'
-  assert_no_grep 'FM_LAUNCHD_STEM=morning-intake' "$SCHEDULE" \
-    'the channel-intake schedule collides with the morning intake agent'
+# The first <string> after a plist <key>, for one rendered schedule.
+plist_value() {  # <plist> <key>
+  awk -v k="<key>$2</key>" 'index($0, k) { found = 1; next } found && /<string>/ { gsub(/^ *<string>|<\/string>$/, ""); print; exit }' <<<"$1"
+}
 
-  pass 'the schedule reuses the one launchd writer under its own agent label'
+test_both_schedules_share_one_launchd_writer() {
+  local h channel morning
+  h="$TMP_ROOT/schedules"
+  new_home "$h"
+  channel=$(FM_HOME="$h" FM_ROOT_OVERRIDE="$ROOT" "$SCHEDULE" render)
+  morning=$(FM_HOME="$h" FM_ROOT_OVERRIDE="$ROOT" "$ROOT/bin/fm-morning-intake-schedule.sh" render)
+  # One writer: the same per-home label scheme, under each agent's own stem.
+  [ "$(plist_value "$channel" Label)" = "dev.firstmate.channel-intake.$(plist_value "$morning" Label | sed 's/.*\.//')" ] \
+    || fail "the channel-intake label does not share the morning agent's per-home scheme: $(plist_value "$channel" Label)"
+  [ "$(plist_value "$channel" Label)" != "$(plist_value "$morning" Label)" ] \
+    || fail 'the channel-intake schedule collides with the morning intake agent'
+  assert_contains "$channel" "<string>$ROOT/bin/fm-channel-intake.sh</string>
+    <string>tick</string>" 'the channel-intake agent does not run the intake tick'
+  assert_contains "$morning" "<string>$ROOT/bin/fm-morning-intake.sh</string>
+    <string>run</string>" 'the morning agent no longer runs the morning gate'
+
+  pass 'the schedule renders through the one launchd writer under its own agent label and program'
 }
 
 test_install_and_uninstall_on_a_temp_home() {
@@ -1467,6 +1483,37 @@ test_observe_and_resolve_refuse_what_rots_the_page() {
   at "$h" "$T_0915" resolve --item "$key" --waiting --reason 'Kim asks - later, back on Friday' >/dev/null \
     || fail 'a dated wait was refused'
   pass 'observe refuses untitled items and keeps a partner mark; a wait needs a date or a named hand-over to someone else'
+}
+
+# One field of a ledger record, the persisted state the to-do store folds.
+ledger_field() {  # <home> <key> <field>
+  awk -F= -v k="$3" '$1 == k { print substr($0, length(k) + 2) }' "$1/data/channel-intake/items/$2" | tail -n 1
+}
+
+test_partner_awaiting_since_is_an_epoch_second() {
+  local h out code key bad
+  h="$TMP_ROOT/awaiting"
+  new_home "$h"
+  for bad in "${T_0900}000" 2026-09-10 soon 0 '' 01789023600 -5; do
+    out=$(at "$h" "$T_0900" observe --source C_BRIEF --ref 1789023000.70 --digest a --class obligation \
+      --title 'partner waits' --partner-awaiting-since "$bad" 2>&1) && code=0 || code=$?
+    expect_code 2 "$code" "a partner-awaiting time that is not an epoch second was accepted: $bad"
+    assert_contains "$out" 'must be an epoch second' "the refusal does not say why: $bad"
+  done
+  [ -z "$(ls -A "$h/data/channel-intake/items" 2>/dev/null)" ] || fail 'a refused observe wrote a ledger record'
+
+  key=$(at "$h" "$T_0900" observe --source C_BRIEF --ref 1789023000.70 --digest a --class obligation \
+    --title 'partner waits' --partner-awaiting-since "$((T_0900 - 3600))" | awk '{ print $2 }')
+  [ "$(ledger_field "$h" "$key" awaiting_since)" = "$((T_0900 - 3600))" ] || fail 'the awaiting time was not recorded'
+  [ "$(ledger_field "$h" "$key" partner_hint)" = 1 ] || fail 'an awaiting partner was not marked partner-facing'
+  at "$h" "$T_0915" observe --source C_BRIEF --ref 1789023000.70 --digest b >/dev/null
+  [ "$(ledger_field "$h" "$key" awaiting_since)" = "$((T_0900 - 3600))" ] || fail 'a re-read without the flag dropped the awaiting time'
+  at "$h" "$T_0915" observe --source C_BRIEF --ref 1789023000.70 --digest c --partner-awaiting-since "$T_0900" >/dev/null
+  [ "$(ledger_field "$h" "$key" awaiting_since)" = "$T_0900" ] || fail 'a re-read with a new awaiting time did not move it'
+  at "$h" "$T_0915" resolve --item "$key" --waiting --reason 'handed over to Sam' >/dev/null
+  [ "$(ledger_field "$h" "$key" awaiting_since)" = "$T_0900" ] || fail 'a resolve dropped the awaiting time'
+  [ "$(ledger_field "$h" "$key" partner_hint)" = 1 ] || fail 'a resolve dropped the partner mark'
+  pass 'a partner-awaiting time is an epoch second, implies the partner mark and survives later reads and resolves'
 }
 
 test_bootstrap_surfaces_the_intake() {
@@ -1639,3 +1686,4 @@ test_an_addon_copy_of_the_intake_keeps_running
 test_team_announcements_are_information_not_asks
 test_new_source_kinds_get_their_own_reads
 test_observe_and_resolve_refuse_what_rots_the_page
+test_partner_awaiting_since_is_an_epoch_second

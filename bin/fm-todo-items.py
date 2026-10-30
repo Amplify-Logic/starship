@@ -167,8 +167,11 @@ def ledger_observations(intake_dir, labels):
             if cls == 'update':
                 o['posted'] = number(rec.get('source_epoch')) or number(rec.get('created'))
             # Partner- or customer-facing as the orchestrator marked it
-            # (`observe --partner`).
+            # (`observe --partner`), and awaiting the captain since an epoch
+            # (`observe --partner-awaiting-since`).
             o['partner'] = rec.get('partner_hint') == '1'
+            o['awaiting_since'] = number(rec.get('awaiting_since'))
+            o['partner_first'] = bool(o['awaiting_since'])
             # When the ask was made, which orders the page; never a read time.
             o['asked_at'] = number(rec.get('source_epoch')) or number(rec.get('created'))
             if state == 'closed':
@@ -317,6 +320,7 @@ def transition(store, rec, at, state, actor, reason, evidence='', **extra):
     rec['state'] = state
     rec['closure'] = ({'reason': reason, 'actor': actor, 'evidence': evidence, 'at': at}
                       if state == 'closed' else {})
+    rec.pop('source_change', None)
     rec.update(extra)
 
 
@@ -333,6 +337,18 @@ def present(rec):
     rec['asked_at'] = min([number(s.get('asked_at')) for s in slots if number(s.get('asked_at'))] or [0])
     rec['source_snooze'] = next((s['snoozed_until'] for s in slots if s.get('snoozed_until')), '')
     rec['rev'] = rev_of(rec)
+
+
+def own_change(rec, o):
+    """The source change an add-on recorded making, as this source reports its revision.
+
+    The intake ledger keeps the sha256 of what a pass observed; a morning action
+    carries its digest as written.
+    """
+    change = rec.get('source_change') or ''
+    if change and o['slot'].startswith('ledger:'):
+        return hashlib.sha256(change.encode()).hexdigest()
+    return change
 
 
 def fold(store, items, observations, now, backlog_seen, ledger_seen):
@@ -364,9 +380,16 @@ def fold(store, items, observations, now, backlog_seen, ledger_seen):
                 transition(store, rec, o['closed_at'] or now, 'closed', 'source', 'resolved', o['evidence'])
             elif fresh and o['state'] == 'waiting':
                 transition(store, rec, now, 'waiting', 'source', 'handed over', handover=o['handover'])
-        elif o['rev'] and before.get('rev', '') != o['rev'] and rec['state'] == 'closed':
-            transition(store, rec, now, 'open', 'source', 'reopened',
-                       note=f'reopened: {o["label"]} changed after it was closed ({rec["closure"].get("reason")})')
+        elif (o['rev'] and before.get('rev', '') != o['rev'] and o['rev'] != own_change(rec, o)
+              and (rec['state'] == 'closed' or 'source_change' in rec)):
+            # A closed item, or one an add-on handed over, comes back when its
+            # source changes again; the add-on's own recorded change does not count.
+            if rec['state'] == 'closed':
+                transition(store, rec, now, 'open', 'source', 'reopened',
+                           note=f'reopened: {o["label"]} changed after it was closed ({rec["closure"].get("reason")})')
+            else:
+                transition(store, rec, now, 'open', 'source', 'reopened', owner='', handover='',
+                           note=f'reopened: {o["label"]} changed after it was handed to {rec.get("owner")}')
         elif before.get('state') != o['state']:
             if o['state'] == 'closed' and rec['state'] != 'closed':
                 transition(store, rec, o['closed_at'] or now, 'closed', 'source', 'resolved', o['evidence'])
@@ -625,6 +648,29 @@ def mark(store, rec, args, now):
                    'actor': 'add-on', 'rev': rec['rev']})
 
 
+def captain_names(names):
+    """Every spelling of the captain: the internal label and the configured names, singly and as one."""
+    words = names.lower().split()
+    return {'captain'} | set(words) | ({' '.join(words)} if words else set())
+
+
+def hand_over(store, rec, args, now):
+    """An add-on's hand-over: the item waits on a named person with its note."""
+    name, note = ' '.join(args.to.split()), ' '.join(args.note.split())
+    if rec['state'] == 'closed':
+        raise Refusal(f'{rec["id"]} is closed; only an open or waiting item can be handed over')
+    if not name:
+        raise Refusal('hand-over needs --to naming who has it now')
+    if name.lower() in captain_names(args.captain_names):
+        raise Refusal(f'hand-over is to someone other than you: {name} is one of the captain_names')
+    if not note:
+        raise Refusal('hand-over needs --note saying what was handed over')
+    if args.rev and args.rev != rec['rev']:
+        raise Refusal(f'the page showed revision {args.rev} but {rec["id"]} is now {rec["rev"]}; refresh the page first')
+    transition(store, rec, args.at or now, 'waiting', 'add-on', 'handed over', note, pending={}, owner=name,
+               handover=note, source_change=args.source_change)
+
+
 def one(items, iid):
     if iid not in items:
         raise Refusal(f'no item with id {iid}')
@@ -636,7 +682,8 @@ def main():
     parser.add_argument('command')
     parser.add_argument('lines', nargs='*')
     for flag in ('--store', '--intake', '--sources', '--morning-json', '--backlog', '--item', '--how',
-                 '--evidence', '--state', '--rev', '--actor', '--reason', '--name', '--text'):
+                 '--evidence', '--state', '--rev', '--actor', '--reason', '--name', '--text', '--to', '--note',
+                 '--source-change', '--captain-names'):
         parser.add_argument(flag, default='')
     parser.add_argument('--now', type=int, required=True)
     parser.add_argument('--at', type=int, default=0)
@@ -688,6 +735,10 @@ def main():
                     raise Refusal('close --reason is fulfilled, dismissed or superseded')
                 if rec['state'] != 'closed':
                     transition(store, rec, now, 'closed', args.actor or 'unknown', reason, args.evidence, pending={})
+                if args.source_change:
+                    rec['source_change'] = args.source_change
+            elif args.command == 'hand-over':
+                hand_over(store, rec, args, now)
             elif args.command == 'reopen':
                 if rec['state'] == 'open':
                     raise Refusal(f'{rec["id"]} is already open; reopen takes a closed or waiting item')

@@ -59,6 +59,18 @@
 #     that answers takes it and a refusal fails the run, and `mark` puts the
 #     add-on's own line on the row until it clears it, without changing the
 #     item's state, revision or freshness.
+#   - `hand-over` moves an open ledger or morning item to waiting on a named
+#     owner with its note, and refuses a closed item, an empty name, the
+#     captain's own name and a stale revision.
+#   - The source change an add-on records on `close` or `hand-over` does not
+#     reopen the item when its next pass observes it; any later, different
+#     revision does, and a hand-over with no recorded change comes back on any
+#     source change.
+#   - A ledger ask observed with --partner-awaiting-since ranks in the same
+#     partner-awaiting tier as a morning one, oldest first.
+#   - A helpdesk add-on's waiting, reassign and close ticket verbs run on that
+#     contract alone: its own ticket changes never reopen the row, and a later
+#     partner reply does.
 # shellcheck disable=SC2016
 set -u
 
@@ -984,8 +996,210 @@ test_an_addon_extends_the_store_through_verbs_and_marks() {
   pass 'an add-on takes its own verbs on a row and marks the row, never on a stale or untargeted line'
 }
 
+test_hand_over_moves_an_item_to_waiting_on_its_owner() {
+  local h led mor rev out code before
+  h="$TMP_ROOT/hand-over"
+  new_home "$h"
+  printf 'captain_names = Robin Vale\n' >>"$h/config/channel-intake"
+  intake_at "$h" "$T_0900" observe --source C_BRIEF --ref h-1 --digest a --class obligation \
+    --title 'dealer wants a quote' >/dev/null
+  sidecar "$h" 2026-09-10 '{"key":"k-m","source":"helpdesk","ref":"t-7","class":"obligation","kind":"reply","title":"partner asks for a manual","digest":"m1","updated":'"$T_0900"'}'
+  render_at "$h" "$T_0900"
+  led=$(field_of "$h" 'dealer wants' 1)
+  rev=$(field_of "$h" 'dealer wants' 4)
+  mor=$(field_of "$h" 'manual' 1)
+
+  before=$(cat "$h/data/todo/items/$led.json")
+  out=$(todo_at "$h" "$T_1000" hand-over --item "$led" --to '  ' --note 'quote drafted' 2>&1) && code=0 || code=$?
+  expect_code 2 "$code" 'a hand-over to nobody was accepted'
+  assert_contains "$out" 'needs --to' 'the empty-name refusal does not say why'
+  for name in Robin vale 'Robin Vale' captain; do
+    out=$(todo_at "$h" "$T_1000" hand-over --item "$led" --to "$name" --note 'quote drafted' 2>&1) && code=0 || code=$?
+    expect_code 2 "$code" "a hand-over to the captain's own name was accepted: $name"
+    assert_contains "$out" 'is one of the captain_names' 'the captain-name refusal does not say why'
+  done
+  out=$(todo_at "$h" "$T_1000" hand-over --item "$led" --rev stale --to Sam --note 'quote drafted' 2>&1) && code=0 || code=$?
+  expect_code 2 "$code" 'a hand-over from a stale page was accepted'
+  assert_contains "$out" 'refresh the page first' 'the stale refusal does not say why'
+  [ "$(cat "$h/data/todo/items/$led.json")" = "$before" ] || fail 'a refused hand-over changed the item'
+
+  out=$(todo_at "$h" "$T_1000" hand-over --item "$led" --rev "$rev" --at "$T_0900" --to Sam \
+    --note 'quote drafted, Sam sends it') || fail "a hand-over of a ledger item failed: $out"
+  assert_contains "$out" "hand-over $led -> waiting" 'the hand-over did not move the ledger item to waiting'
+  todo_at "$h" "$T_1000" hand-over --item "$mor" --to Alex --note 'Alex has the manual to hand' >/dev/null \
+    || fail 'a hand-over of a morning-only item failed'
+  render_at "$h" "$T_1030"
+  out=$(page "$h" 2026-09-10)
+  assert_contains "$out" '<summary>Waiting on others (2)</summary>' 'the handed-over items are not waiting on others'
+  assert_contains "$out" 'Sam has it: quote drafted, Sam sends it' 'the ledger hand-over note is not shown'
+  assert_contains "$out" 'Alex has it: Alex has the manual to hand' 'the morning hand-over note is not shown'
+  [ -z "$(needs_order "$out")" ] || fail "a handed-over item still needs you: $(needs_order "$out")"
+  [ "$(field_of "$h" 'manual' 2)" = waiting ] || fail 'a re-asserted morning action took the hand-over back'
+
+  todo_at "$h" "$T_1100" close --item "$led" --evidence 'Sam sent the quote' --actor Sam >/dev/null
+  out=$(todo_at "$h" "$T_1100" hand-over --item "$led" --to Alex --note 'again' 2>&1) && code=0 || code=$?
+  expect_code 2 "$code" 'a closed item was handed over'
+  assert_contains "$out" 'is closed' 'the closed-item refusal does not say why'
+  [ "$(field_of "$h" 'dealer wants' 2)" = closed ] || fail 'a refused hand-over reopened a closed item'
+  pass 'hand-over moves a ledger or morning item to waiting on its owner and refuses closed, empty, captain and stale'
+}
+
+test_an_addons_own_source_change_does_not_reopen_the_item() {
+  local h shut held plain mor out
+  h="$TMP_ROOT/source-change"
+  new_home "$h"
+  for ref in g-done g-held g-plain; do
+    intake_at "$h" "$T_0900" observe --source C_BRIEF --ref "$ref" --digest 'ticket=open' --class obligation \
+      --title "partner ticket $ref" >/dev/null
+  done
+  sidecar "$h" 2026-09-10 '{"key":"k-m","source":"helpdesk","ref":"t-9","class":"obligation","kind":"reply","title":"partner ticket morning","digest":"d1","updated":'"$T_0900"'}'
+  render_at "$h" "$T_0900"
+  shut=$(field_of "$h" 'g-done' 1)
+  held=$(field_of "$h" 'g-held' 1)
+  plain=$(field_of "$h" 'g-plain' 1)
+  mor=$(field_of "$h" 'ticket morning' 1)
+  todo_at "$h" "$T_0900" close --item "$shut" --evidence 'ticket closed in the helpdesk' --actor helpdesk \
+    --source-change 'ticket=closed' >/dev/null
+  todo_at "$h" "$T_0900" hand-over --item "$held" --to Sam --note 'ticket waiting on Sam' \
+    --source-change 'ticket=waiting' >/dev/null
+  todo_at "$h" "$T_0900" hand-over --item "$plain" --to Sam --note 'Sam looks at it' >/dev/null
+  todo_at "$h" "$T_0900" close --item "$mor" --evidence 'ticket closed in the helpdesk' --actor helpdesk \
+    --source-change d2 >/dev/null
+
+  # The add-on's next pass observes its own changes: none of them comes back.
+  intake_at "$h" "$T_1000" observe --source C_BRIEF --ref g-done --digest 'ticket=closed' >/dev/null
+  intake_at "$h" "$T_1000" observe --source C_BRIEF --ref g-held --digest 'ticket=waiting' >/dev/null
+  sidecar "$h" 2026-09-10 '{"key":"k-m","source":"helpdesk","ref":"t-9","class":"obligation","kind":"reply","title":"partner ticket morning","digest":"d2","updated":'"$T_1000"'}'
+  render_at "$h" "$T_1000"
+  render_at "$h" "$T_1030"
+  [ "$(field_of "$h" 'g-done' 2)" = closed ] || fail "the add-on's own ledger change reopened a closed item"
+  [ "$(field_of "$h" 'g-held' 2)" = waiting ] || fail "the add-on's own ledger change took back a hand-over"
+  [ "$(field_of "$h" 'ticket morning' 2)" = closed ] || fail "the add-on's own morning digest reopened a closed item"
+  assert_contains "$(page "$h" 2026-09-10)" 'Sam has it: ticket waiting on Sam' 'the hand-over note was lost'
+
+  # A later, different revision - a partner reply after the add-on's change - brings each back.
+  intake_at "$h" "$T_1100" observe --source C_BRIEF --ref g-done --digest 'ticket=closed reply=1' >/dev/null
+  intake_at "$h" "$T_1100" observe --source C_BRIEF --ref g-held --digest 'ticket=waiting reply=1' >/dev/null
+  intake_at "$h" "$T_1100" observe --source C_BRIEF --ref g-plain --digest 'ticket=open reply=1' >/dev/null
+  sidecar "$h" 2026-09-10 '{"key":"k-m","source":"helpdesk","ref":"t-9","class":"obligation","kind":"reply","title":"partner ticket morning","digest":"d3","updated":'"$T_1100"'}'
+  render_at "$h" "$T_1100"
+  for ref in g-done g-held g-plain 'ticket morning'; do
+    [ "$(field_of "$h" "$ref" 2)" = open ] || fail "a later source change did not reopen $ref"
+  done
+  out=$(page "$h" 2026-09-10)
+  assert_contains "$out" 'changed after it was handed to Sam' 'the reopened hand-over does not say why'
+  assert_contains "$out" 'changed after it was closed (fulfilled)' 'the reopened closure does not say why'
+  assert_not_contains "$out" 'Sam has it' 'a reopened hand-over kept its owner'
+  pass "an add-on's recorded source change never reopens its item, and a later different revision does"
+}
+
+test_a_ledger_partner_awaiting_ask_ranks_with_the_morning_ones() {
+  local h out
+  h="$TMP_ROOT/ledger-awaiting"
+  new_home "$h"
+  intake_at "$h" "$T_1000" observe --source C_BRIEF --ref a-urgent --digest u --class urgent \
+    --title 'fresh urgent' >/dev/null
+  intake_at "$h" "$T_1000" observe --source C_BRIEF --ref a-relay --digest r --class obligation --partner \
+    --source-epoch "$((T_0900 - 86400 * 9))" --title 'older partner relay' >/dev/null
+  intake_at "$h" "$T_1000" observe --source C_BRIEF --ref a-wait --digest w --class obligation \
+    --partner-awaiting-since "$((T_0900 - 86400 * 2))" --title 'partner waits on the ledger' >/dev/null
+  sidecar "$h" 2026-09-10 '{"key":"k-a","source":"helpdesk","ref":"t-3","class":"obligation","kind":"reply","title":"partner waits in the morning sweep","partner_awaiting":true,"awaiting_since":'"$((T_0900 - 86400 * 3))"',"updated":'"$T_1000"'}'
+  render_at "$h" "$T_1100"
+  out=$(page "$h" 2026-09-10)
+  [ "$(needs_order "$out")" = 'partner waits in the morning sweep
+partner waits on the ledger
+older partner relay
+fresh urgent' ] || fail "a ledger ask awaiting the captain is not in the partner-awaiting tier by its age:
+$(needs_order "$out")"
+  pass 'a ledger ask awaiting the captain ranks in the partner-awaiting tier beside a morning one, oldest first'
+}
+
+# A helpdesk add-on's ticket verbs, built only on the store's contract: the
+# ticket lives in a file standing in for the helpdesk, and each verb changes it
+# there and records that change on the row it moves.
+addon_tickets() {  # <home>
+  local h=$1
+  mkdir -p "$h/addon/hooks/todo-verbs" "$h/helpdesk"
+  printf 'path = %s\n' "$h/addon" >"$h/config/addon"
+  printf 'helpdesk\thelpdesk\thelpdesk tickets\n' >>"$h/data/channel-intake/sources.tsv"
+  printf 'state=open owner=Sam' >"$h/helpdesk/T-1"
+  cat >"$h/addon/hooks/todo-verbs/10-tickets" <<'HOOK'
+#!/usr/bin/env bash
+ticket="$FM_HOME/helpdesk/T-1"
+todo="$FM_ROOT/bin/fm-todo.sh"
+owner=$(sed 's/.*owner=//' "$ticket")
+case "$1" in
+  waiting)
+    printf 'state=waiting owner=%s' "$owner" >"$ticket"
+    "$todo" hand-over --item "$FM_TODO_ITEM" --rev "$FM_TODO_REV" --at "$FM_TODO_AT" --to "$owner" \
+      --note "ticket set to waiting on $owner" --source-change "$(cat "$ticket")" >/dev/null || exit 1
+    printf 'waiting %s on %s\n' "$FM_TODO_ITEM" "$owner" ;;
+  'reassign '*)
+    name=${1#reassign }
+    printf 'state=open owner=%s' "$name" >"$ticket"
+    "$todo" hand-over --item "$FM_TODO_ITEM" --rev "$FM_TODO_REV" --at "$FM_TODO_AT" --to "$name" \
+      --note "ticket reassigned to $name" --source-change "$(cat "$ticket")" >/dev/null || exit 1
+    printf 'reassigned %s to %s\n' "$FM_TODO_ITEM" "$name" ;;
+  close)
+    printf 'state=closed owner=%s' "$owner" >"$ticket"
+    "$todo" close --item "$FM_TODO_ITEM" --evidence 'ticket closed in the helpdesk' --actor helpdesk \
+      --source-change "$(cat "$ticket")" >/dev/null || exit 1
+    printf 'closed %s\n' "$FM_TODO_ITEM" ;;
+esac
+HOOK
+  chmod +x "$h/addon/hooks/todo-verbs/10-tickets"
+}
+
+# The add-on's own intake pass: it observes the ticket as the helpdesk now has it.
+ticket_pass() {  # <home> <epoch>
+  intake_at "$1" "$2" observe --source helpdesk --ref T-1 --digest "$(cat "$1/helpdesk/T-1")" >/dev/null
+  render_at "$1" "$2"
+}
+
+test_an_addon_runs_ticket_verbs_on_the_contract() {
+  local h id rev out
+  h="$TMP_ROOT/addon-tickets"
+  new_home "$h"
+  addon_tickets "$h"
+  intake_at "$h" "$T_0900" observe --source helpdesk --ref T-1 --digest "$(cat "$h/helpdesk/T-1")" \
+    --class obligation --partner --title 'partner reports a leaking tap' >/dev/null
+  render_at "$h" "$T_0900"
+  id=$(field_of "$h" 'leaking tap' 1)
+
+  rev=$(field_of "$h" 'leaking tap' 4)
+  out=$(todo_at "$h" "$T_0900" command --item "$id" --rev "$rev" waiting) || fail "the waiting verb failed: $out"
+  assert_contains "$out" "TODO_CMD: waiting $id on Sam" 'the waiting verb was not taken'
+  ticket_pass "$h" "$T_1000"
+  [ "$(field_of "$h" 'leaking tap' 2)" = waiting ] || fail "the add-on's own waiting change took the row back"
+  assert_contains "$(page "$h" 2026-09-10)" 'Sam has it: ticket set to waiting on Sam' 'the ticket owner is not shown'
+
+  rev=$(field_of "$h" 'leaking tap' 4)
+  out=$(todo_at "$h" "$T_1000" command --item "$id" --rev "$rev" 'reassign Alex') || fail "the reassign verb failed: $out"
+  assert_contains "$out" "TODO_CMD: reassigned $id to Alex" 'the reassign verb was not taken'
+  ticket_pass "$h" "$T_1030"
+  [ "$(field_of "$h" 'leaking tap' 2)" = waiting ] || fail "the add-on's own reassignment took the row back"
+  assert_contains "$(page "$h" 2026-09-10)" 'Alex has it: ticket reassigned to Alex' 'the new owner is not shown'
+
+  rev=$(field_of "$h" 'leaking tap' 4)
+  out=$(todo_at "$h" "$T_1030" command --item "$id" --rev "$rev" close) || fail "the close verb failed: $out"
+  assert_contains "$out" "TODO_CMD: closed $id" 'the close verb was not taken'
+  ticket_pass "$h" "$T_1100"
+  [ "$(field_of "$h" 'leaking tap' 2)" = closed ] || fail "the add-on's own close reopened the row"
+
+  # The partner writes again after the close: that is news, and the row comes back.
+  printf 'state=closed owner=Alex reply=partner' >"$h/helpdesk/T-1"
+  ticket_pass "$h" "$T_1500"
+  [ "$(field_of "$h" 'leaking tap' 2)" = open ] || fail 'a partner reply after the close did not reopen the row'
+  assert_contains "$(needs_order "$(page "$h" 2026-09-10)")" 'partner reports a leaking tap' 'the reopened row does not need you'
+  pass "a helpdesk add-on's waiting, reassign and close verbs run on the contract, and only a partner reply reopens"
+}
+
 test_a_pass_judges_a_record_from_before_the_flag_by_its_aliases
 test_an_addon_extends_the_store_through_verbs_and_marks
+test_hand_over_moves_an_item_to_waiting_on_its_owner
+test_an_addons_own_source_change_does_not_reopen_the_item
+test_a_ledger_partner_awaiting_ask_ranks_with_the_morning_ones
+test_an_addon_runs_ticket_verbs_on_the_contract
 test_an_age_counts_calendar_days_across_a_clock_change
 test_time_bound_asks_expire_after_their_end
 test_expiry_leaves_marked_lines_to_the_captain

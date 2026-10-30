@@ -667,7 +667,7 @@ To turn it on:
 
 The intakes print their state into the session-start digest through the built-in `hooks/bootstrap/10-morning-intake` and `hooks/bootstrap/20-channel-intake`, and stay silent on a home that has not opted in.
 A home whose private add-on (above) carries same-named tools, hooks or skills keeps running the add-on's: its hooks and skills replace the built-in ones, and a schedule or live check it armed names its own scripts.
-An add-on can also extend the to-do page without carrying its own copy: a `todo-verbs` hook takes more verbs typed on a row, such as changes to a ticket the row names, and marks the row with `bin/fm-todo.sh mark`, and a `todo-page` hook adds a section of its own; `bin/fm-todo.sh --help` and `bin/fm-todo-render.sh --help` own those contracts.
+An add-on can also extend the to-do page without carrying its own copy: a `todo-verbs` hook takes more verbs typed on a row, such as changes to a ticket the row names, moves the row with `bin/fm-todo.sh close` or `hand-over` and marks it with `bin/fm-todo.sh mark`, and a `todo-page` hook adds a section of its own; `bin/fm-todo.sh --help` and `bin/fm-todo-render.sh --help` own those contracts.
 The configuration and records are home-local and are not inherited by secondmate homes.
 
 ## Captain ledger (config/captain-ledger)

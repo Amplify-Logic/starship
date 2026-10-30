@@ -61,7 +61,7 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-morning-intake-schedule.sh` | Install, render, report or remove the morning intake's macOS launchd schedule |
 | `fm-channel-intake.sh` | Opt-in continuous channel intake: per-source poll gate, obligation ledger, grouped private alert, brief and to-do list, and the re-check of open items on every pass (docs/channel-intake.md) |
 | `fm-channel-intake-schedule.sh` | Install, render, report or remove the channel intake's macOS launchd schedule |
-| `fm-todo.sh` | The daily to-do page's durable item store: one record per ask, its verification, the captain's page commands, and the add-on `todo-verbs` and `mark` extension point |
+| `fm-todo.sh` | The daily to-do page's durable item store: one record per ask, its verification, the captain's page commands, and the add-on `todo-verbs`, `hand-over` and `mark` extension point |
 | `fm-todo-items.py` | The engine behind `fm-todo.sh` |
 | `fm-todo-render.sh` | Rebuild the day's Lavish to-do page from the item store with no model call, including add-on `todo-page` sections |
 | `fm-todo-compose.py` | The page composer behind `fm-todo-render.sh`, styled by `bin/templates/today-page.*.html` |
