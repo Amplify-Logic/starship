@@ -12,9 +12,8 @@
 # alphabetically-low id lost its place to same-day completions that had finished
 # earlier. That is the DEFAULT tasks-axi path and the defect actually fixed here.
 #
-# SCOPE, stated plainly: the pure-upstream trial
-# (data/fm-upstream-trial-verdict-v2/report.md) reported a literally EMPTY "No recent
-# completions are in the current baseline" section. A mis-ordering cannot produce that
+# SCOPE, stated plainly: the pure-upstream trial report showed a literally EMPTY "No
+# recent completions are in the current baseline" section. A mis-ordering cannot produce that
 # state, because both caps are positive-bounded slices and the round-robin takes index
 # 0 of every non-empty home group. That symptom is NOT explained or fixed by this
 # change. Two separate causes were verified against this fork and both still return an

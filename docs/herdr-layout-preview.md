@@ -37,7 +37,7 @@ The sixth state, the paused `🟡 WAITING`, is not exercised by these captures, 
 Seven start in project order; the eighth, `Fix the crash on the settings page`, deliberately starts last, for a project whose other workers started first.
 That eighth worker is the whole experiment: it is what a normal day looks like.
 
-The rows are Herdr's own reported labels, read back after staging, not mock-ups.
+The rows follow the layout, order and states Herdr reported when read back after staging; they are not mock-ups.
 They are printed here as text rather than photographed because taking a picture would mean attaching to the throwaway workspace, and the safety helper correctly refuses that.
 Regenerate them with:
 
@@ -50,6 +50,7 @@ FM_HERDR_LAYOUT_PREVIEW_E2E=1 \
 
 Verified 2026-08-03 against Herdr 0.7.4 on macOS 25.5.0.
 The projects and task titles are invented placeholders held in the stager, so a rerun prints the same rows.
+The labels in the captured output were replaced with these placeholders after capture, while layout, widths and states are as captured.
 Raw captures: [`docs/evidence/herdr-layout-preview/`](evidence/herdr-layout-preview/).
 
 ## BEFORE: what you see today
@@ -206,7 +207,7 @@ So one first-created row could carry counts that no longer depend on where anyth
 Two things are not yet verified, and both need testing before anyone commits to the summary row.
 First, whether a first-created workspace still holds position 1 across a Herdr session restart.
 Second, whether a single summary row stays legible at realistic width, which is the more likely of the two to bite.
-[`docs/herdr-backend.md`](herdr-backend.md) records a real Herdr pane measuring 54 columns in the environment it was verified in, and the widest of the three staged project rows is already 38 characters, so concatenating every project's counts onto one row runs to several hundred characters in a sidebar that truncates.
+[`docs/herdr-backend.md`](herdr-backend.md) records a real Herdr pane measuring 54 columns in the environment it was verified in, and the widest of the three staged project rows, measured on the placeholder rows, is already 38 characters, so concatenating every project's counts onto one row runs to several hundred characters in a sidebar that truncates.
 At the twenty-five-worker scale that motivates the summary row, per-project counts on one row are very likely too wide to read, so the realistic version of that row carries fleet totals rather than a per-project breakdown.
 That is still worth having, but it is less than what the three project rows give you today, and it is the honest size of what this recovery buys.
 
