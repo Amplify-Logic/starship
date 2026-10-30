@@ -236,7 +236,7 @@ It determines whether any mailbox row is unanswered with a read-only local datab
 It must not invoke the voice tool's own pending-transcription command, OpenAI, or any other external transcription API inside the watcher check.
 This keeps the check compatible with glasses CLI versions both before and after an existence-only CLI flag is available.
 
-The mailbox half of the generated check is:
+The mailbox half of the generated check has this shape, with a placeholder mailbox path:
 
 ```bash
 HOME_DIR=/absolute/path/to/firstmate-home
