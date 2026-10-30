@@ -71,12 +71,12 @@ test_switch_links_its_skills_and_checkout_stays_clean() {
 test_captain_home_switches_link_every_skill() {
   local dir shipped entry flag
   dir=$(make_checkout captain)
-  for flag in adhd second-opinion computer-use captain-ledger; do : > "$dir/config/$flag"; done
+  for flag in adhd second-opinion computer-use captain-ledger morning-intake; do : > "$dir/config/$flag"; done
   printf 'enabled = true\n' > "$dir/config/speak"
   run_sync "$dir"
   shipped=$(for entry in "$ROOT"/.agents/opt-in-skills/*/; do entry=${entry%/}; printf '%s\n' "${entry##*/}"; done \
     | sort | tr '\n' ' ' | sed 's/ $//')
-  assert_equals "adhd adhd-auto-fire macos-computer-use second-opinion-auto-fire" \
+  assert_equals "adhd adhd-auto-fire daily-todo-freshness intake-digest-lines macos-computer-use second-opinion-auto-fire" \
     "$shipped" "the shipped opt-in skills changed; update this test and the captain home switch list"
   assert_equals "$shipped" "$(linked "$dir")" "the captain home's switches must link every shipped opt-in skill"
   assert_equals "" "$(git -C "$dir/checkout" status --porcelain)" \
@@ -95,6 +95,31 @@ test_switch_off_removes_only_its_links() {
   assert_equals "macos-computer-use" "$(linked "$dir")" "turning config/adhd off must remove only the ADHD links"
   [ -f "$dir/checkout/.agents/skills/always-on/SKILL.md" ] || fail "a tracked skill must never be touched"
   pass "turning a switch off removes only that switch's links"
+}
+
+test_either_of_two_switches_turns_a_skill_on() {
+  local dir flag
+  for flag in morning-intake channel-intake; do
+    dir=$(make_checkout "either-$flag")
+    printf 'enabled = false\n' > "$dir/config/$flag"
+    run_sync "$dir"
+    assert_equals "daily-todo-freshness intake-digest-lines" "$(linked "$dir")" \
+      "config/$flag alone must link both intake skills"
+    [ "$flag" = channel-intake ] && : > "$dir/config/morning-intake"
+    [ "$flag" = morning-intake ] && : > "$dir/config/channel-intake"
+    run_sync "$dir"
+    assert_equals "daily-todo-freshness intake-digest-lines" "$(linked "$dir")" \
+      "both switches present must keep the same links"
+    rm -f "$dir/config/$flag"
+    run_sync "$dir"
+    assert_equals "daily-todo-freshness intake-digest-lines" "$(linked "$dir")" \
+      "removing one switch must keep the links while the other is present"
+    rm -f "$dir/config/morning-intake" "$dir/config/channel-intake"
+    run_sync "$dir"
+    assert_equals "" "$(linked "$dir")" "removing both switches must unlink the intake skills"
+    assert_equals "" "$(git -C "$dir/checkout" status --porcelain)" "the checkout must stay clean"
+  done
+  pass "either of a skill's two switches turns it on, and it goes only when both are gone"
 }
 
 test_foreign_path_is_left_alone() {
@@ -255,6 +280,7 @@ test_no_switch_links_nothing
 test_switch_links_its_skills_and_checkout_stays_clean
 test_captain_home_switches_link_every_skill
 test_switch_off_removes_only_its_links
+test_either_of_two_switches_turns_a_skill_on
 test_foreign_path_is_left_alone
 test_checkout_without_opt_in_folder_is_untouched
 test_addon_skills_link_and_checkout_stays_clean

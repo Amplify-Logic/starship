@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Bootstrap hook (bin/fm-addon.sh): the opt-in continuous channel intake's
+# read-only due/ready/unknown check. Inert on every home without an
+# `enabled = true` line in config/channel-intake; the cadence, per-source
+# checkpoints, ledger and notification budget all remain owned by
+# bin/fm-channel-intake.sh.
+set -u
+root=${FM_HOOK_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}
+[ ! -x "$root/bin/fm-channel-intake.sh" ] || exec "$root/bin/fm-channel-intake.sh" pending

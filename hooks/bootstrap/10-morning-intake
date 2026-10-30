@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Bootstrap hook (bin/fm-addon.sh): the opt-in morning intake's read-only
+# owed/failed/pending check. Inert on every home without an `enabled = true`
+# line in config/morning-intake; the local day, thresholds, retries and
+# watermark all remain owned by bin/fm-morning-intake.sh.
+set -u
+root=${FM_HOOK_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}
+[ ! -x "$root/bin/fm-morning-intake.sh" ] || exec "$root/bin/fm-morning-intake.sh" pending

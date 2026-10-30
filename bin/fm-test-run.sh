@@ -228,7 +228,7 @@ CHANGED_DEFAULT_TIMEOUT_SECS=1500
 
 # How many separate-runner shards the portable serial remainder splits into.
 # One owner: CI lane names carry this count and are refused when they disagree.
-PORTABLE_SERIAL_SHARDS=12
+PORTABLE_SERIAL_SHARDS=13
 
 # Conservative balance hint for a portable-serial script with no measurement.
 # Rounded above the current CI mean, including the capability-skipped scripts.
@@ -779,6 +779,7 @@ tests/fm-calm-pi-extension.test.sh 58675
 tests/fm-calm-pi-queue-retention-live-e2e.test.sh 2152
 tests/fm-capability.test.sh 1779
 tests/fm-captain-ledger.test.sh 4137
+tests/fm-channel-intake.test.sh 64209
 tests/fm-chart-room.test.sh 18281
 tests/fm-check-unregister.test.sh 1586
 tests/fm-ci-workflow.test.sh 7236
@@ -871,6 +872,7 @@ tests/fm-live-lab-up-mate.test.sh 18729
 tests/fm-live-lab.test.sh 89754
 tests/fm-mail-check.test.sh 8173
 tests/fm-mail.test.sh 10794
+tests/fm-morning-intake.test.sh 18194
 tests/fm-muse-harness.test.sh 59782
 tests/fm-muse-signals-live-e2e.test.sh 1244
 tests/fm-nm-test-contract.test.sh 1957
@@ -990,6 +992,8 @@ tests/fm-test-isolation-proof.test.sh 5258
 tests/fm-timeout-lib-tty.test.sh 2354
 tests/fm-timeout-lib.test.sh 10750
 tests/fm-tmux-agent-liveness.test.sh 3770
+tests/fm-todo-render.test.sh 24241
+tests/fm-todo.test.sh 53145
 tests/fm-tool-update-check.test.sh 15664
 tests/fm-toolchain-drift.test.sh 1611
 tests/fm-trace-context-lib.test.sh 1474

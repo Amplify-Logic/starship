@@ -35,3 +35,5 @@ screen-steps/.build/
 /.agents/skills/adhd-auto-fire
 /.agents/skills/second-opinion-auto-fire
 /.agents/skills/macos-computer-use
+/.agents/skills/intake-digest-lines
+/.agents/skills/daily-todo-freshness

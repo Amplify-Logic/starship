@@ -40,3 +40,5 @@ These exist only in a home that switched them on with a `config/` presence flag 
 - `adhd-auto-fire` - load before committing to a genuinely divergent, fuzzy, high-leverage decision (design, architecture, API/schema shape, naming, strategy, approach-selection, hard/ambiguous debugging).
 - `second-opinion-auto-fire` - load before committing to an architectural, security-sensitive, schema/API-contract, or otherwise high-stakes design or decision output.
 - `macos-computer-use` - load before operating a macOS app's interface on the captain's Mac (reading a window, clicking, typing, answering a dialog) or a page in the captain's own browser, and before briefing a worker to do so.
+- `intake-digest-lines` - load whenever the session-start digest, a bootstrap run, or a wake prints a `MORNING_INTAKE:` or `CHANNEL_INTAKE:` line.
+- `daily-todo-freshness` - load before producing or updating a captain-facing to-do, needs-you or waiting-on-you surface, before re-checking the `recheck:` items a channel-intake claim lists, and before claiming in chat that something is waiting on the captain.

@@ -119,6 +119,14 @@
       "audience": "agent-runtime"
     },
     {
+      "path": ".agents/opt-in-skills/daily-todo-freshness/SKILL.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/opt-in-skills/intake-digest-lines/SKILL.md",
+      "audience": "agent-runtime"
+    },
+    {
       "path": ".agents/skills/afk/SKILL.md",
       "audience": "agent-runtime"
     },
@@ -380,6 +388,10 @@
     },
     {
       "path": "docs/adhd.md",
+      "audience": "operator-current"
+    },
+    {
+      "path": "docs/channel-intake.md",
       "audience": "operator-current"
     },
     {
