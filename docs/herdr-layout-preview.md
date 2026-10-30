@@ -134,7 +134,7 @@ WORKSPACE  └ Fix the crash on the settings page · 🔴 FAILED
 Full capture: [`04-after-a-late-worker.txt`](evidence/herdr-layout-preview/04-after-a-late-worker.txt).
 
 The last row is an Alpha worker, but it is sitting under the API Platform heading, and the indent makes it look like it belongs there.
-The Alpha heading four rows above correctly counts it, so the counts and the layout now disagree.
+The Alpha heading at the top of the list correctly counts it, so the counts and the layout now disagree.
 That is worse than no grouping at all: a wrong project label is a trap, and this one appears every time a worker starts out of order, which on a real fleet is most of the time.
 
 There is no way to fix this from our side.
