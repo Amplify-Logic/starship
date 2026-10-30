@@ -65,7 +65,8 @@
 #   - The source change an add-on records on `close` or `hand-over` does not
 #     reopen the item when its next pass observes it; any later, different
 #     revision does, and a hand-over with no recorded change comes back on any
-#     source change.
+#     source change, unless the source resolved it or set it waiting in the
+#     same tick.
 #   - A ledger ask observed with --partner-awaiting-since ranks in the same
 #     partner-awaiting tier as a morning one, oldest first.
 #   - A helpdesk add-on's waiting, reassign and close ticket verbs run on that
@@ -1093,6 +1094,30 @@ test_an_addons_own_source_change_does_not_reopen_the_item() {
   pass "an add-on's recorded source change never reopens its item, and a later different revision does"
 }
 
+test_a_source_that_resolves_a_handed_over_item_wins() {
+  local h res wait
+  h="$TMP_ROOT/handed-over-resolved"
+  new_home "$h"
+  res=$(intake_at "$h" "$T_0900" observe --source C_BRIEF --ref r-res --digest a --class obligation \
+    --title 'partner ticket resolved' | awk '{ print $2 }')
+  wait=$(intake_at "$h" "$T_0900" observe --source C_BRIEF --ref r-wait --digest a --class obligation \
+    --title 'partner ticket parked' | awk '{ print $2 }')
+  render_at "$h" "$T_0900"
+  todo_at "$h" "$T_0900" hand-over --item "$(field_of "$h" 'ticket resolved' 1)" --to Sam --note 'Sam answers it' >/dev/null
+  todo_at "$h" "$T_0900" hand-over --item "$(field_of "$h" 'ticket parked' 1)" --to Sam --note 'Sam answers it' >/dev/null
+  # In one tick the owner's reply lands and the source resolves the record.
+  intake_at "$h" "$T_1000" observe --source C_BRIEF --ref r-res --digest b >/dev/null
+  intake_at "$h" "$T_1000" resolve --item "$res" --reason 'Sam answered the partner' >/dev/null
+  intake_at "$h" "$T_1000" observe --source C_BRIEF --ref r-wait --digest b >/dev/null
+  intake_at "$h" "$T_1000" resolve --item "$wait" --waiting --reason 'handed over to Sam' >/dev/null
+  render_at "$h" "$T_1000"
+  render_at "$h" "$T_1030"
+  [ "$(field_of "$h" 'ticket resolved' 2)" = closed ] || fail 'a handed-over item stayed open after its source resolved it'
+  [ "$(field_of "$h" 'ticket parked' 2)" = waiting ] || fail 'a handed-over item reopened while its source set it waiting'
+  assert_not_contains "$(needs_order "$(page "$h" 2026-09-10)")" 'partner ticket' 'a resolved hand-over still needs you'
+  pass 'a source that resolves or parks a handed-over item in the same tick as a change wins over the reopen'
+}
+
 test_a_ledger_partner_awaiting_ask_ranks_with_the_morning_ones() {
   local h out
   h="$TMP_ROOT/ledger-awaiting"
@@ -1198,6 +1223,7 @@ test_a_pass_judges_a_record_from_before_the_flag_by_its_aliases
 test_an_addon_extends_the_store_through_verbs_and_marks
 test_hand_over_moves_an_item_to_waiting_on_its_owner
 test_an_addons_own_source_change_does_not_reopen_the_item
+test_a_source_that_resolves_a_handed_over_item_wins
 test_a_ledger_partner_awaiting_ask_ranks_with_the_morning_ones
 test_an_addon_runs_ticket_verbs_on_the_contract
 test_an_age_counts_calendar_days_across_a_clock_change

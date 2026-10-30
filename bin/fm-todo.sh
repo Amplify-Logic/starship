@@ -149,7 +149,7 @@
 # refuses a closed item, an empty name, the captain's own name (captain_names,
 # singly or as one name) and a stale --rev; --at is when it was handed over.
 # A source change brings a handed-over item back to the captain, like a closed
-# one, and `reopen` does too.
+# one, unless the source itself resolved it or set it waiting; `reopen` does too.
 #
 # THE ADD-ON'S OWN SOURCE CHANGE. An add-on that changes the source itself,
 # such as closing or reassigning the ticket a row names, passes

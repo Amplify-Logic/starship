@@ -381,9 +381,10 @@ def fold(store, items, observations, now, backlog_seen, ledger_seen):
             elif fresh and o['state'] == 'waiting':
                 transition(store, rec, now, 'waiting', 'source', 'handed over', handover=o['handover'])
         elif (o['rev'] and before.get('rev', '') != o['rev'] and o['rev'] != own_change(rec, o)
-              and (rec['state'] == 'closed' or 'source_change' in rec)):
-            # A closed item, or one an add-on handed over, comes back when its
-            # source changes again; the add-on's own recorded change does not count.
+              and (rec['state'] == 'closed' or ('source_change' in rec and o['state'] == 'open'))):
+            # A closed item, or one an add-on handed over whose source is still
+            # open, comes back when its source changes again; the add-on's own
+            # recorded change does not count.
             if rec['state'] == 'closed':
                 transition(store, rec, now, 'open', 'source', 'reopened',
                            note=f'reopened: {o["label"]} changed after it was closed ({rec["closure"].get("reason")})')

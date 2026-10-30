@@ -339,25 +339,36 @@ test_retries_are_bounded_and_exhaustion_is_visible() {
   pass 'retries are bounded per local day, exhaustion stays visible, and the next day starts fresh'
 }
 
+# The gate run from a copy of bin/ whose fm-spawn.sh and fm-watch.sh, and the
+# same names first on PATH, only record that they were started.
+isolated_at() {  # <home> <epoch> <args...>
+  local h=$1 now=$2
+  shift 2
+  PATH="$TMP_ROOT/isolation-fakes:$PATH" FM_HOME="$h" FM_ROOT_OVERRIDE="$ROOT" FM_MORNING_INTAKE_NOW="$now" \
+    "$TMP_ROOT/isolation-root/bin/fm-morning-intake.sh" "$@"
+}
+
 test_no_existing_fleet_is_overridden() {
-  local h other out fakebin tool
+  local h other out tool started
   h="$TMP_ROOT/isolation"
   other="$TMP_ROOT/other-home"
-  fakebin="$TMP_ROOT/isolation-bin"
+  started="$TMP_ROOT/isolation-started"
   new_home "$h"
-  mkdir -p "$other/state" "$other/data" "$fakebin"
+  mkdir -p "$other/state" "$other/data" "$TMP_ROOT/isolation-root" "$TMP_ROOT/isolation-fakes"
   printf 'held by another session\n' >"$other/state/.session.lock"
   printf 'other-home records\n' >"$other/data/backlog.md"
   printf 'other queue row\n' >"$other/state/.wake-queue"
-  # Any agent or watcher start would land in this log.
-  for tool in fm-spawn fm-spawn.sh fm-watch fm-watch.sh; do
-    printf '#!/usr/bin/env bash\nprintf "%%s %%s\\n" "%s" "$*" >>"%s/started"\n' "$tool" "$fakebin" >"$fakebin/$tool"
-    chmod +x "$fakebin/$tool"
+  cp -R "$ROOT/bin" "$TMP_ROOT/isolation-root/bin"
+  # Any agent or watcher start, as a sibling script or through PATH, lands in this log.
+  for tool in isolation-root/bin/fm-spawn.sh isolation-root/bin/fm-watch.sh \
+    isolation-fakes/fm-spawn isolation-fakes/fm-spawn.sh isolation-fakes/fm-watch isolation-fakes/fm-watch.sh; do
+    printf '#!/usr/bin/env bash\nprintf "%%s %%s\\n" "%s" "$*" >>"%s"\n' "$tool" "$started" >"$TMP_ROOT/$tool"
+    chmod +x "$TMP_ROOT/$tool"
   done
 
-  PATH="$fakebin:$PATH" at "$h" "$T_0700" run >/dev/null
-  PATH="$fakebin:$PATH" at "$h" "$T_0700" arm-check >/dev/null
-  PATH="$fakebin:$PATH" at "$h" "$T_0700" claim >/dev/null
+  isolated_at "$h" "$T_0700" run >/dev/null
+  isolated_at "$h" "$T_0700" arm-check >/dev/null
+  isolated_at "$h" "$T_0700" claim >/dev/null
 
   # The gate touches nothing outside its own home.
   [ "$(cat "$other/state/.session.lock")" = 'held by another session' ] \
@@ -379,12 +390,12 @@ test_no_existing_fleet_is_overridden() {
 
   # A live session already holding this home's lock is not displaced.
   printf 'live session\n' >"$h/state/.session.lock"
-  out=$(PATH="$fakebin:$PATH" at "$h" "$T_0715" run)
+  out=$(isolated_at "$h" "$T_0715" run)
   [ "$(cat "$h/state/.session.lock")" = 'live session' ] \
     || fail "the intake overwrote this home's live session lock"
 
   # And it never starts an agent or a watcher itself.
-  [ ! -e "$fakebin/started" ] || fail "the intake gate started an agent or a watcher: $(cat "$fakebin/started")"
+  [ ! -e "$started" ] || fail "the intake gate started an agent or a watcher: $(cat "$started")"
 
   pass 'the intake never takes a fleet lock, starts an agent, or touches another home'
 }
