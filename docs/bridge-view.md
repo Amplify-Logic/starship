@@ -51,7 +51,7 @@ Never put the passcode in a URL.
 
 Lost phone: run `FM_HOME=/path/to/home bin/fm-bridge-view.sh revoke-sessions`, and if needed remove the phone from the tailnet.
 
-A VoiceLoop compromise can still read fleet files because both processes run as the same Mac user.
+A compromise of the voice tool can still read fleet files because both processes run as the same Mac user.
 Separate passcodes only limit token leakage, not a full process break.
 
 ## Serving
@@ -194,7 +194,7 @@ Safari on iPhone typically records `audio/mp4` (m4a); the server sniffs ftyp/mp4
 The request is capped at 10 MB to match the mailbox audio limit.
 The bridge process reads the relay token from the file `config/bridge-mailbox` names under the home and POSTs a `voice-question` to `/v1/questions` on the loopback port it names, with that bearer token; without that file `/speak` answers 503 `mailbox is not configured`.
 The token is never written into HTML, JavaScript, or a response body.
-The audio filename is `bridge.m4a` (or `bridge.webm` / `bridge.wav`) so mailbox records are distinguishable from VoiceLoop captures.
+The audio filename is `bridge.m4a` (or `bridge.webm` / `bridge.wav`) so mailbox records are distinguishable from the voice tool's own captures.
 `GET /api/answer/<request_id>` is session-authenticated, polls `GET /v1/answers/<id>` on the mailbox, and returns JSON `{pending:true}` or `{text:"..."}` without audio bytes.
 The glance page has a press-and-hold microphone control; after send it shows `Sent` and renders answer text when it arrives.
 iPhone Safari `MediaRecorder` flushes `audio/mp4` in timeslice chunks; the page accumulates every `dataavailable` blob and builds the uploaded file in `onstop` after a final flush so a release cannot send only the last slice.
