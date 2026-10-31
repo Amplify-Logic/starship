@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
-# fm-pr-text-guard.py - the worker PR text check: before a spawned Claude
-# worker publishes text to a public repository's pull requests, it refuses the
-# command when the text holds a word from this home's private word list, and,
-# when that repository is this Starship repository, a word that never appeared
-# in it before or a customer data shape (bin/fm-leak-guard.sh --new-names).
+# fm-pr-text-guard.py - the PR text check: before a Claude session publishes
+# text to a public repository's pull requests, it refuses the command when the
+# text holds a word from this home's private word list or a live key or token
+# shape, and, when that repository is this Starship repository, a word that
+# never appeared in it before or a customer data shape (bin/fm-leak-guard.sh
+# --new-names).
 #
 # Usage:
 #   fm-pr-text-guard.py hook --home DIR
 #       The Claude Code PreToolUse hook on Bash that bin/fm-spawn.sh installs
-#       for every spawned Claude worker (ship or scout). Reads the hook payload
+#       for every spawned Claude worker (ship or scout), and that
+#       bin/fm-pr-text-pretool-check.sh runs for a first mate or second mate
+#       session from the tracked .claude/settings.json. Reads the hook payload
 #       on stdin. On a refusal it prints the documented PreToolUse deny object
 #       on stdout; on an allow it prints nothing. It always exits 0.
 #
@@ -17,6 +20,12 @@
 # whose --text mode this hook runs with FM_HOME set to DIR from the command's
 # working directory, so the words of the branch checked out there count as
 # known to this repository; this file never reads the list itself.
+#
+# WHERE, NEVER WHAT. A refusal says how many listed words and token shapes the
+# text holds and where, as the command or a file it names and the line, and
+# never the words or tokens themselves, so a command that names the word list
+# file does not put the list on the screen. New words, which the owner must
+# approve by name, and customer data shapes are named.
 #
 # WHAT IS CHECKED. Only a Bash command that publishes text: gh or gh-axi
 # `pr|issue create|new|edit|comment|review|close|reopen|merge`, a `gh api` call that sends
@@ -49,19 +58,19 @@
 # origin on any other dotted host is not checked, and one that cannot be
 # parsed is refused. A command whose words cannot be parsed while it names a
 # gh form, often because of an unmatched quote in a heredoc or comment, counts
-# as possibly public and is refused, naming the listed words, so the worker
+# as possibly public and is refused, placing the listed words, so the worker
 # rewrites the text without them, or drops such comments and passes the text
 # with --body-file <file> and an explicit --repo. Such a command that names a
 # `pr create` or `pr new` form and a standalone --fill flag counts as --fill.
 # A repository whose visibility cannot be
 # read, and an origin that cannot be parsed, count as possibly public too: the
-# refusal names the words and that repository, and tells the worker to rewrite
+# refusal places the words and names that repository, and tells the worker to rewrite
 # the text without them, or to append a blocked: status line and stop when the
 # repository is private and still cannot be read. The visibility read happens
 # only after a hit, so a clean command costs no network call.
 #
-# FAILURES. No list means nothing is checked, exactly as before the list
-# existed: bin/fm-leak-guard.sh --text says nothing at all then. An
+# FAILURES. No list means only token shapes are checked: bin/fm-leak-guard.sh
+# --text says nothing at all for a clean text then, and nothing is refused. An
 # unreadable payload passes, because it cannot be known to publish anything.
 # Once a command is known to publish, any failure inside the check refuses it.
 # Every call the check makes shares one deadline, BUDGET seconds from the
@@ -75,6 +84,7 @@ import re
 import shlex
 import subprocess
 import sys
+import tempfile
 import time
 
 GUARD = pathlib.Path(__file__).resolve().parent / "fm-leak-guard.sh"
@@ -97,7 +107,7 @@ PATH_CAP = 1024
 FILL = re.compile(r"--fill(?:-first|-verbose)?(?:=(?!false$).*)?|-[dwe]*f[dwe]*")
 PATHLIKE = re.compile(r"[^\s'\"`()<>|;&=]+")
 REMOTE = re.compile(r"^(?:[a-z+]+://)?(?:[^@/]+@)?([^/:]+)[:/]+(.+?)(?:\.git)?/?$")
-HIT = re.compile(r"^LEAK_HIT: ([a-z-]+): stdin: (.*)$")
+HIT = re.compile(r"^LEAK_HIT: ([a-z-]+): (.*)$")
 
 
 class UnparsedCommand(Exception):
@@ -191,23 +201,55 @@ def named_files(command, words, cwd):
     return found
 
 
-def listed_words(text, home, cwd):
-    """(listed words, new words and data shapes) in text, by bin/fm-leak-guard.sh --text --new-names run in cwd;
-    None when the home has no list or approvals file."""
+def check_text(pieces, home, cwd):
+    """Run bin/fm-leak-guard.sh --text --new-names in cwd on pieces, each (where, text): returns
+    (listed places, token places, new words and data shapes), each place a (where, line), or None when
+    the home has no list or approvals file and the text holds no token."""
     env = dict(os.environ, FM_HOME=home)
-    result = subprocess.run(["bash", str(GUARD), "--text", "--new-names", "-"], input=text.encode("utf-8", "replace"),
-                            capture_output=True, env=env, cwd=cwd, timeout=left())
+    with tempfile.TemporaryDirectory(prefix="fm-pr-text.") as tmp:
+        shown = {}
+        for i, (where, text) in enumerate(pieces):
+            path = os.path.join(tmp, str(i))
+            with open(path, "wb") as f:
+                f.write(text.encode("utf-8", "replace"))
+            shown[path] = where
+        result = subprocess.run(["bash", str(GUARD), "--text", "--new-names"] + list(shown), capture_output=True,
+                                env=env, cwd=cwd, timeout=left())
     if result.returncode == 0:
-        return ([], []) if result.stdout.strip() or result.stderr.strip() else None
-    listed, fresh = [], []
+        return ([], [], []) if result.stdout.strip() or result.stderr.strip() else None
+    places = {"private-word": [], "token": []}
+    fresh = []
     for line in result.stderr.decode("utf-8", "replace").splitlines():
         m = HIT.match(line)
-        if m:
-            (listed if m.group(1) == "private-word" else fresh).append(m.group(2))
-    if result.returncode != 1 or not (listed or fresh):
+        if not m:
+            continue
+        kind, rest = m.groups()
+        if kind in places:
+            path, line_no, _ = rest.rsplit(":", 2)
+            places[kind].append((shown.get(path, path), int(line_no)))
+        else:
+            fresh.append(rest.partition(": ")[2])
+    if result.returncode != 1 or not (places["private-word"] or places["token"] or fresh):
         raise RuntimeError("the word check exited %d: %s" % (
             result.returncode, result.stderr.decode("utf-8", "replace").strip()[:300]))
-    return listed, list(dict.fromkeys(fresh))
+    return places["private-word"], places["token"], list(dict.fromkeys(fresh))
+
+
+def counted(n, noun):
+    return "%d %s%s" % (n, noun, "" if n == 1 else "s")
+
+
+def where_lines(places):
+    """'the command, line 1; /x/body.md, lines 3 and 9' for (where, line) places."""
+    lines = {}
+    for where, n in places:
+        lines.setdefault(where, set()).add(n)
+    out = []
+    for where, numbers in lines.items():
+        numbers = [str(n) for n in sorted(numbers)]
+        joined = numbers[0] if len(numbers) == 1 else ", ".join(numbers[:-1]) + " and " + numbers[-1]
+        out.append("%s, line%s %s" % (where, "" if len(numbers) == 1 else "s", joined))
+    return "; ".join(out)
 
 
 def own_repos():
@@ -296,23 +338,30 @@ def cmd_hook(argv):
         BUDGET = float(os.environ.get("FM_PR_TEXT_GUARD_BUDGET") or BUDGET)
         DEADLINE = start + BUDGET
         words = tokens(command)
-        text = command
+        pieces = [("the command", command)]
         for path in named_files(command, words, cwd):
             with open(path, "rb") as f:
-                text += "\n" + f.read(FILE_CAP).decode("utf-8", "replace")
-        found = listed_words(text, o["home"], cwd)
+                pieces.append((str(path), f.read(FILE_CAP).decode("utf-8", "replace")))
+        found = check_text(pieces, o["home"], cwd)
         if words is None:
             fill = bool(PR_CREATE.search(command) and any(FILL.fullmatch(w) for w in command.split()))
         else:
             fill = fills(words)
         if found is None:
             return 0
-        hits, fresh = found
+        listed, keys, fresh = found
+        hits = listed + keys
         if not (hits or fresh or fill):
             return 0
         if hits:
-            named = "contains %s, from this home's private word list" % ", ".join('"%s"' % w for w in hits)
-            fix = "Rewrite the text without %s" % ("it" if len(hits) == 1 else "them")
+            parts = []
+            if listed:
+                parts.append("%s from this home's private word list (%s)"
+                             % (counted(len(listed), "word"), where_lines(listed)))
+            if keys:
+                parts.append("%s (%s)" % (counted(len(keys), "live key or token shape"), where_lines(keys)))
+            named = "contains " + " and ".join(parts)
+            fix = "Rewrite those lines without %s" % ("it" if len(hits) == 1 else "them")
         elif fill:
             named = "comes from commit messages through --fill, which this check cannot read"
             fix = "Pass --title and --body-file instead of --fill"
