@@ -5,8 +5,7 @@
 #   fm-todo-render.sh render [--out FILE] [--morning-section FILE]
 #                            [--date YYYY-MM-DD] [--if-exists]
 #   fm-todo-render.sh path [--date YYYY-MM-DD]
-#   fm-todo-render.sh settings      (timezone=, sources_file=, captain_names= and
-#                                   held_decisions_need_you= for fm-todo.sh)
+#   fm-todo-render.sh settings      (timezone=, sources_file= and captain_names= for fm-todo.sh)
 #   fm-todo-render.sh --help
 #
 # WHAT THIS IS. A DETERMINISTIC RENDERER over the to-do item store. It makes
@@ -419,8 +418,7 @@ load_config
 case "${1:-}" in
   render) shift; render_cmd "$@" ;;
   path) shift; path_cmd "$@" ;;
-  settings) printf 'timezone=%s\nsources_file=%s\ncaptain_names=%s\nheld_decisions_need_you=%s\n' \
-    "$CFG_TIMEZONE" "$CFG_SOURCES_FILE" "$CFG_CAPTAIN_NAMES" "$CFG_HELD_NEED_YOU" ;;
+  settings) printf 'timezone=%s\nsources_file=%s\ncaptain_names=%s\n' "$CFG_TIMEZONE" "$CFG_SOURCES_FILE" "$CFG_CAPTAIN_NAMES" ;;
   -h|--help) usage ;;
   '') usage; exit 2 ;;
   *) die "unknown command: $1" ;;
