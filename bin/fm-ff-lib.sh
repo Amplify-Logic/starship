@@ -378,7 +378,7 @@ live_secondmate_meta_records() {
 
 # Fast-forward one target to a base. Prints its status line. Sets globals for the
 # caller:
-#   FF_STATUS = updated|current|ahead|skipped  (ahead: release mode only)
+#   FF_STATUS = updated|current|skipped
 #   FF_INSTR  = comma list of changed instruction paths (only when updated)
 #
 # base_mode selects where the fast-forward base comes from:
@@ -386,13 +386,17 @@ live_secondmate_meta_records() {
 #                  path); requires an origin remote and network reachability.
 #   release:<name> - the origin mode narrowed to the named release tag on
 #                  origin/<default> (a home on the release channel,
-#                  bin/fm-release-lib.sh); a target already past that release
-#                  stays put as "ahead" instead of being treated as diverged.
+#                  bin/fm-release-lib.sh), with origin/<default> as its upstream.
 #   <commit-ish> - advance to that LOCAL commit with NO fetch and no origin
 #                  dependency (the local-HEAD secondmate sync). The commit must
 #                  already exist in the target's object store, which it always does
 #                  for a worktree of this same repo; a standalone clone that lacks
 #                  it is skipped rather than fetched.
+# With an upstream (release mode, or the optional 8th argument naming a commit
+# already in the target's object store), a target that is not behind the base
+# but holds no commit outside that upstream is moved onto the base with
+# reset --keep, which cannot lose work the upstream does not already hold; a
+# target with any commit outside it is diverged as in every other mode.
 # Guards are identical in every mode: never force/merge/stash; skip a dirty or
 # wrong-branch target and leave its work untouched. An optional secondmate id
 # enables the content-equivalent divergence proof and durable marker described
@@ -401,7 +405,7 @@ FF_STATUS=""
 FF_INSTR=""
 ff_target() {
   local dir=$1 label=$2 base_mode=$3 allow_detached=${4:-no} ignore_seed_marker=${5:-no}
-  local secondmate_id=${6:-} reconciliation_state=${7:-}
+  local secondmate_id=${6:-} reconciliation_state=${7:-} upstream=${8:-}
   FF_STATUS="skipped"
   FF_INSTR=""
 
@@ -415,7 +419,7 @@ ff_target() {
   fi
 
   local default base cur instr local_rev base_rev before after out
-  local release="" to_release="" on_release=""
+  local release="" to_release="" on_release="" base_label move=ff
   default=$(default_branch "$dir") || {
     echo "$label: skipped: cannot determine default branch"
     return 0
@@ -452,10 +456,13 @@ ff_target() {
       echo "$label: skipped: release $release is not on $base"
       return 0
     fi
+    upstream=$base
     base=$(git -C "$dir" rev-parse "refs/tags/$release^{commit}")
     to_release=" to release $release"
     on_release=" on release $release"
   fi
+  base_label=${release:+release $release}
+  base_label=${base_label:-$base}
 
   if ! git -C "$dir" rev-parse --verify --quiet "$base^{commit}" >/dev/null; then
     echo "$label: skipped: $base does not exist"
@@ -491,14 +498,11 @@ ff_target() {
     echo "$label: already current$on_release"
     return 0
   fi
-  # A home already past the release it follows stays where it is: the release
-  # channel never moves a home back, and being ahead is not a divergence.
-  if [ -n "$release" ] && git -C "$dir" merge-base --is-ancestor "$base" HEAD 2>/dev/null; then
-    FF_STATUS="ahead"
-    echo "$label: staying at $(git -C "$dir" rev-parse --short HEAD), ahead of release $release"
-    return 0
+  if [ -n "$upstream" ] && ! git -C "$dir" merge-base --is-ancestor HEAD "$base" 2>/dev/null \
+    && git -C "$dir" merge-base --is-ancestor HEAD "$upstream" 2>/dev/null; then
+    move=keep
   fi
-  if ! git -C "$dir" merge-base --is-ancestor HEAD "$base" 2>/dev/null; then
+  if [ "$move" = ff ] && ! git -C "$dir" merge-base --is-ancestor HEAD "$base" 2>/dev/null; then
     if [ -n "$secondmate_id" ] && [ -n "$reconciliation_state" ] \
       && divergence_is_redundant "$dir" "$local_rev" "$base_rev"; then
       instr=$(changed_instr "$dir" "$base")
@@ -520,20 +524,25 @@ ff_target() {
     fi
     if [ -n "$secondmate_id" ] && [ -n "$reconciliation_state" ]; then
       local marker
-      if marker=$(secondmate_update_reconcile_record "$reconciliation_state" "$secondmate_id" "$local_rev" "$base_rev" "$base"); then
-        echo "$label: skipped: diverged from $base; reconciliation required (record: $marker)"
+      if marker=$(secondmate_update_reconcile_record "$reconciliation_state" "$secondmate_id" "$local_rev" "$base_rev" "$base_label"); then
+        echo "$label: skipped: diverged from $base_label; reconciliation required (record: $marker)"
       else
-        echo "$label: skipped: diverged from $base; reconciliation required, but its durable record could not be written"
+        echo "$label: skipped: diverged from $base_label; reconciliation required, but its durable record could not be written"
       fi
     else
-      echo "$label: skipped: diverged from $base"
+      echo "$label: skipped: diverged from $base_label"
     fi
     return 0
   fi
 
   instr=$(changed_instr "$dir" "$base")
   before=$(git -C "$dir" rev-parse --short HEAD)
-  if ! out=$(git -C "$dir" merge --ff-only "$base" 2>&1); then
+  if [ "$move" = keep ]; then
+    if ! out=$(git -C "$dir" reset --keep "$base" 2>&1); then
+      echo "$label: skipped: reset --keep to $base_label failed: $(first_line "$out")"
+      return 0
+    fi
+  elif ! out=$(git -C "$dir" merge --ff-only "$base" 2>&1); then
     echo "$label: skipped: fast-forward failed: $(first_line "$out")"
     return 0
   fi

@@ -68,8 +68,11 @@
 # "Update channel"; parsing in bin/fm-release-lib.sh) chooses what this pass
 # follows. Absent or "main" is the behavior above, unchanged. "release" follows
 # the newest release tag on origin's default branch, and a release name stays on
-# that one release; either way every home moves only forward, never past the
-# target release, and a home already ahead of it stays put and is reported. The
+# that one release; either way every home lands exactly on the target release.
+# A home behind it fast-forwards; a home past it only by commits already on
+# origin's default branch, such as a fresh install on main's tip, moves onto it
+# with reset --keep, which cannot lose work origin does not hold; a home with
+# any commit not on origin is skipped as diverged exactly as on main. The
 # primary resolves the release once, and every local and remote secondmate
 # follows that same release, because a secondmate ahead of its primary would
 # later read as diverged to the primary-commit sync. The private add-on keeps
@@ -78,9 +81,11 @@
 #
 # --step-back moves a home on the release channel back exactly one release: it
 # refuses unless the home is clean, on its default branch, exactly on a release,
-# and has no second mates, then moves the default branch to the previous release
-# with reset --keep (the current release is on origin's default branch, so no
-# local work can be lost) and writes that release name into
+# and has no second mates (a home with them holds its current release instead
+# by writing that release's name into config/update-channel), then moves the
+# default branch to the previous release with reset --keep (the current release
+# is on origin's default branch, so no local work can be lost) and writes that
+# release name into
 # config/update-channel, so later updates stay there until the operator writes
 # "release" again. It prints the same reread/restart/nudge summary.
 #
@@ -175,7 +180,7 @@ if [ "$step_back" = yes ]; then
   sb() { echo "firstmate: step back refused: $1"; exit 1; }
   [ "$FM_UPDATE_CHANNEL" != main ] \
     || sb "this home follows main; step back works on the release channel (config/update-channel)"
-  ! has_secondmates || sb "this home has second mates; step back covers a home without them"
+  ! has_secondmates || sb "step back covers only a home without second mates; to stop taking new releases instead, write the name of the release this home is on now (the one \"update starship\" reports) into config/update-channel"
   default=$(default_branch "$FM_ROOT") || sb "cannot determine the default branch"
   [ "$(git -C "$FM_ROOT" symbolic-ref --short HEAD 2>/dev/null || true)" = "$default" ] \
     || sb "not on $default"

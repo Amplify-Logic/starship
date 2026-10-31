@@ -788,24 +788,66 @@ test_release_channel_follows_newest_release() {
   pass "R2 the release channel follows the newest release and never moves past it"
 }
 
-test_release_channel_never_moves_a_home_back() {
-  local w out tip
+test_release_channel_moves_a_newer_home_onto_the_release() {
+  local w out tip target
   w=$(new_world r3)
   add_sm "$w" sm1
   release_world "$w"
   run_update "$w" >/dev/null
   tip=$(git -C "$w/main" rev-parse HEAD)
+  [ "$tip" = "$(git -C "$w/seed" rev-parse main)" ] || fail "the fixture home must start on main's tip"
   set_channel "$w" release
+  target=$(release_commit "$w" starship-2026.10.1)
 
   out=$(run_update "$w")
 
-  assert_contains "$out" "firstmate: staying at " "a home past the newest release stays put"
-  assert_contains "$out" "ahead of release starship-2026.10.1" "the home is told which release it is ahead of"
-  assert_contains "$out" "secondmate sm1: staying at " "a second mate past the release stays put"
-  [ "$(git -C "$w/main" rev-parse HEAD)" = "$tip" ] || fail "the release channel moved a home back"
+  assert_contains "$out" "firstmate: updated " "a home past the newest release only by origin's commits moves"
+  assert_contains "$out" "to release starship-2026.10.1" "the move names the release it landed on"
+  assert_contains "$out" "secondmate sm1: updated " "a local second mate moves with its primary"
+  [ "$(git -C "$w/main" rev-parse HEAD)" = "$target" ] \
+    || fail "a home on main's tip that switches to release must land exactly on the newest release"
+  [ "$(git -C "$w/main" symbolic-ref --short HEAD)" = main ] || fail "the home left its default branch"
+  [ "$(git -C "$w/sm1" rev-parse HEAD)" = "$target" ] \
+    || fail "a local second mate must land on the same release as its primary"
+  assert_contains "$out" "restart-secondmates: fm-sm1" "a second mate moved onto the release still restarts"
   [ ! -e "$w/home/state/.secondmate-update-reconcile/sm1.pending" ] \
-    || fail "being ahead of a release is not a divergence to reconcile"
-  pass "R3 the release channel never moves a home back"
+    || fail "moving onto a release whose skipped commits are on origin is not a divergence"
+
+  out=$(run_update "$w")
+  assert_contains "$out" "firstmate: already current on release starship-2026.10.1" \
+    "a home moved onto the release stays there"
+  pass "R3 a home past the release only by origin's commits moves onto the release"
+}
+
+test_release_channel_leaves_local_commits_alone() {
+  local w out main_before sm_before marker
+  w=$(new_world r3b)
+  add_sm "$w" sm1
+  release_world "$w"
+  set_channel "$w" release
+  run_update "$w" >/dev/null
+  printf 'local only\n' > "$w/main/LOCAL.md"
+  git -C "$w/main" add LOCAL.md
+  git -C "$w/main" commit -qm local-primary
+  printf 'fork work\n' > "$w/sm1/AGENTS.md"
+  git -C "$w/sm1" commit -qam local-sm
+  main_before=$(git -C "$w/main" rev-parse HEAD)
+  sm_before=$(git -C "$w/sm1" rev-parse HEAD)
+
+  out=$(run_update "$w")
+
+  assert_contains "$out" "firstmate: skipped: diverged from release starship-2026.10.1" \
+    "a home with an unpushed commit on top of a release is reported as diverged"
+  assert_contains "$out" "secondmate sm1: skipped: diverged from release starship-2026.10.1; reconciliation required (record:" \
+    "a second mate with an unpushed commit is diverged and durably actionable"
+  [ "$(git -C "$w/main" rev-parse HEAD)" = "$main_before" ] || fail "the release channel moved a home with a local commit"
+  [ "$(git -C "$w/sm1" rev-parse HEAD)" = "$sm_before" ] || fail "the release channel moved a second mate with a local commit"
+  grep -q 'local only' "$w/main/LOCAL.md" || fail "the primary's local commit was lost"
+  marker="$w/home/state/.secondmate-update-reconcile/sm1.pending"
+  assert_present "$marker" "a diverged second mate on the release channel needs a durable reconciliation record"
+  assert_grep "local_commit=$sm_before" "$marker" "the record lost the second mate's local commit"
+  assert_not_contains "$out" "fm-sm1" "a diverged second mate is not restarted or nudged"
+  pass "R3b the release channel leaves a home with local commits alone and reports it diverged"
 }
 
 test_release_channel_never_moves_a_dirty_home() {
@@ -880,6 +922,15 @@ test_step_back_one_release() {
   set_channel "$w" main
   out=$(sb) && fail "step back must refuse on the main channel"
   assert_contains "$out" "step back works on the release channel" "the main-channel refusal names why"
+
+  set_channel "$w" release
+  add_sm "$w" sm1
+  out=$(sb) && fail "step back must refuse on a home with second mates"
+  assert_contains "$out" "step back covers only a home without second mates" \
+    "the second-mate refusal says step back covers only a home without them"
+  assert_contains "$out" "write the name of the release this home is on now" \
+    "the second-mate refusal names what such a home does instead"
+  assert_contains "$out" "into config/update-channel" "the second-mate refusal names the file to write"
   pass "R6 a home on the release channel steps back one release at a time and stays there"
 }
 
@@ -920,7 +971,8 @@ test_remote_addon_line_is_relayed
 test_remote_failure_after_addon_line_names_its_error
 test_default_channel_follows_main_past_releases
 test_release_channel_follows_newest_release
-test_release_channel_never_moves_a_home_back
+test_release_channel_moves_a_newer_home_onto_the_release
+test_release_channel_leaves_local_commits_alone
 test_release_channel_never_moves_a_dirty_home
 test_malformed_channel_refuses_before_anything_moves
 test_step_back_one_release

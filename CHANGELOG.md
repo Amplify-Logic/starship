@@ -10,7 +10,7 @@ A release's notes are exactly its own section here, and a home on the [release c
 ## Unreleased
 
 - **"update starship" can follow named monthly releases.** By default nothing changes: your home still takes the newest Starship.
-  To move only to a named monthly release with notes, `echo release > ~/starship/config/update-channel`; a home already newer than the latest release stays where it is until the next one ([configuration](docs/configuration.md#update-channel-configupdate-channel)).
+  To move only to a named monthly release with notes, `echo release > ~/starship/config/update-channel`; your next update then moves your home onto the latest release, even when the home was newer, because everything it skips is still on the default branch ([configuration](docs/configuration.md#update-channel-configupdate-channel)).
 - **Thinking level follows your plan.** With no `config/primary-effort`, the first mate now thinks at your plan's level ([ONBOARDING.md step 3](ONBOARDING.md#3-get-starship-and-start-your-first-mate)), so a Pro home drops from `xhigh` to `medium`.
   To keep the old depth, `echo xhigh > ~/starship/config/primary-effort`, then start it again; on Pro that uses your allowance much faster.
 - **Your home may still run in tmux.** Homes set up before Herdr became the default stay on tmux, and the guide's `herdr` steps do not apply to them.

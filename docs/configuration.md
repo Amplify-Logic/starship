@@ -660,14 +660,18 @@ It holds one line, with blank lines and `#` comment lines ignored:
 | `starship-YYYY.MM[.N]` | Stay on that one release; stepping back writes this. |
 
 The owner and active contributors stay on `main`; a client or a teammate who does not write code chooses `release`, so changes arrive once a month with notes.
-On a release value the update only moves forward to the release and never past it, skips a dirty or diverged home exactly as on `main`, and names the release in its result; a home already ahead of the release, such as one that just switched from `main`, stays where it is until a newer release passes it.
+On a release value the update lands the home exactly on that release, never past it, and names the release in its result.
+A home ahead of the release only by changes already on the default branch, such as a fresh install or one that just switched from `main`, moves back onto the release on its next update; nothing is lost, because every change it skips is still on the default branch.
+A dirty home is skipped, and a home with its own changes that are not on the default branch is skipped as diverged and left untouched, exactly as on `main`.
 Each release's notes are its section of [CHANGELOG.md](../CHANGELOG.md).
 Every local and remote second mate follows the same release as the primary home, while the [private add-on](#private-add-on-configaddon) keeps following its own default branch.
 A malformed file stops the update before anything moves, and names the file.
 
 To go back one release, say so to the first mate, or run `bin/fm-update.sh --step-back` in `~/starship`.
 It moves the home to the previous release and writes that release's name into this file, so later updates stay there; write `release` again to follow new releases.
-It refuses on a dirty home, a home that is not exactly on a release, a home with second mates, and the oldest release.
+It refuses on a dirty home, a home that is not exactly on a release (update it first), and the oldest release.
+Step back covers only a home without second mates.
+A home with second mates cannot step back; it can stop taking new releases instead by writing the name of the release it is on now, the one "update starship" reports, into this file.
 
 A maintainer cuts a release with `bin/fm-release.sh` after the month's reviewed catch-up has landed on a green default branch; it needs the [maintainer role](#firstmate-role-configfirstmate-role) and refuses unless every check on that commit is green.
 The file is home-local and is not inherited by secondmate homes.

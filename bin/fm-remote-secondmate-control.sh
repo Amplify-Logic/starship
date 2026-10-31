@@ -36,7 +36,9 @@
 # (bin/fm-addon.sh) from the add-on's origin, under the same guards.
 # With <release>, a parent on the release channel moves this host's code root to
 # that one release instead of origin's tip (bin/fm-update.sh --channel), so the
-# remote home follows the same release as its primary.
+# remote home follows the same release as its primary. The home then moves onto
+# that release under the release channel's rules, with the code root's freshly
+# fetched origin default branch as its upstream (bin/fm-ff-lib.sh ff_target).
 # A private parent-route state directory stores only the remote secondmate
 # agent's endpoint record; the home's own
 # state/*.meta remains reserved for workers the secondmate supervises.
@@ -375,10 +377,10 @@ import_home_commit() { # <home> <commit>
 }
 
 cmd_sync() {
-  local id=$1 commit report out
+  local id=$1 commit report out upstream=${3:-}
   validate_id "$id"
   validate_home "$id"
-  if [ "$#" -ge 2 ]; then
+  if [ -n "${2:-}" ]; then
     commit=$2
     case "$commit" in *[!0-9a-f]*) die "sync target must be a full 40-character commit id" ;; esac
     [ "${#commit}" -eq 40 ] || die "sync target must be a full 40-character commit id"
@@ -387,9 +389,11 @@ cmd_sync() {
   fi
   import_home_commit "$TARGET_HOME" "$commit" \
     || die "remote home could not import $commit from this host's Firstmate copy or the home's origin; run /updatefirstmate to refresh this host's copy, or push that commit first"
+  [ -z "$upstream" ] || import_home_commit "$TARGET_HOME" "$upstream" \
+    || die "remote home could not import origin's default branch $upstream from this host's Firstmate copy"
   # ff_target publishes its verdict in FF_STATUS, so it must run in THIS shell.
   report=$(mktemp "${TMPDIR:-/tmp}/fm-remote-sync.XXXXXX") || die "cannot stage the sync report"
-  ff_target "$TARGET_HOME" "remote home" "$commit" yes yes "$id" "$TARGET_HOME/state" > "$report" 2>&1
+  ff_target "$TARGET_HOME" "remote home" "$commit" yes yes "$id" "$TARGET_HOME/state" "$upstream" > "$report" 2>&1
   out=$(cat "$report")
   rm -f "$report"
   case "$FF_STATUS" in
@@ -405,7 +409,7 @@ cmd_sync() {
 }
 
 cmd_update() {
-  local id=$1 release=${2:-} update_out root_status
+  local id=$1 release=${2:-} update_out root_status default upstream=""
   local -a channel=()
   validate_id "$id"
   validate_home "$id"
@@ -427,7 +431,12 @@ cmd_update() {
       ;;
   esac
   update_home_addon
-  cmd_sync "$id"
+  if [ -n "$release" ]; then
+    default=$(default_branch "$FM_ROOT") || die "remote code root has no default branch"
+    upstream=$(git -C "$FM_ROOT" rev-parse --verify --quiet "refs/remotes/origin/$default^{commit}") \
+      || die "remote code root has no origin/$default"
+  fi
+  cmd_sync "$id" "" "$upstream"
 }
 
 # The remote home's own private add-on (bin/fm-addon.sh) moves under the same

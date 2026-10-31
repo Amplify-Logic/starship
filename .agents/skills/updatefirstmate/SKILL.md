@@ -51,7 +51,7 @@ This touches only the firstmate repo, its own worktrees, and a configured privat
    - `nudge-secondmates: fm-<id>...|none`
 
    The two second-mate sets are disjoint and the script owns the split; do not re-derive it.
-   A home on the release channel (`config/update-channel`, docs/configuration.md "Update channel") moves only to a named release, its lines name that release, and a home already past it reports `staying at <commit>, ahead of release <name>`, which needs no action.
+   A home on the release channel (`config/update-channel`, docs/configuration.md "Update channel") lands exactly on a named release and its lines name that release: `updated <old>..<new> to release <name>` (also when a home newer than the release, such as a fresh install, moves back onto it) or `already current on release <name>`; a home with its own commits that are not on origin is skipped as diverged exactly as on main.
    When the captain asks to go back one release, run `bin/fm-update.sh --step-back` instead and continue from step 2 with its summary; relay a refusal's reason in plain words.
    `restart-secondmates:` carries every live mate the pass left on the latest commit, whether it advanced or was already there.
    A mate reaches neither set only because its home was skipped, because it has no live endpoint recorded here, or because its endpoint was positively classified as dead or missing.
