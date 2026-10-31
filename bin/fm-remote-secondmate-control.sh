@@ -38,9 +38,11 @@
 # config/update-channel (bin/fm-update.sh --channel): without <release> it moves
 # to origin's tip, and with <release>, from a parent on the release channel, it
 # moves to that one release, so the remote home follows its primary. On a
-# release the home then moves onto it under the release channel's rules, with
-# the code root's freshly fetched origin default branch as its upstream
-# (bin/fm-ff-lib.sh ff_target).
+# release the home then follows it under the release channel's rules, with the
+# code root's freshly fetched origin default branch as its upstream
+# (bin/fm-ff-lib.sh ff_target). A code root already past the release stays
+# there, and the home still follows the release itself, so a home behind it
+# moves forward onto it and a home already past it is skipped, never moved back.
 # A private parent-route state directory stores only the remote secondmate
 # agent's endpoint record; the home's own
 # state/*.meta remains reserved for workers the secondmate supervises.
@@ -411,7 +413,7 @@ cmd_sync() {
 }
 
 cmd_update() {
-  local id=$1 release=${2:-} update_out root_status default upstream=""
+  local id=$1 release=${2:-} update_out root_status default upstream="" commit=""
   local channel=main
   validate_id "$id"
   validate_home "$id"
@@ -427,6 +429,7 @@ cmd_update() {
   root_status=$(printf '%s\n' "$update_out" | grep '^firstmate:' | tail -1)
   case "$root_status" in
     'firstmate: updated '*|'firstmate: already current'*) ;;
+    "firstmate: skipped: already past release $release; an update never moves a home back") ;;
     *)
       [ -z "$update_out" ] || printf '%s\n' "$update_out" >&2
       die "remote code root did not complete a safe origin update"
@@ -437,8 +440,10 @@ cmd_update() {
     default=$(default_branch "$FM_ROOT") || die "remote code root has no default branch"
     upstream=$(git -C "$FM_ROOT" rev-parse --verify --quiet "refs/remotes/origin/$default^{commit}") \
       || die "remote code root has no origin/$default"
+    commit=$(git -C "$FM_ROOT" rev-parse --verify --quiet "refs/tags/$release^{commit}") \
+      || die "remote code root has no release $release"
   fi
-  cmd_sync "$id" "" "$upstream"
+  cmd_sync "$id" "$commit" "$upstream"
 }
 
 # The remote home's own private add-on (bin/fm-addon.sh) moves under the same
