@@ -859,6 +859,18 @@ fm_config_reread_is_allowlisted_item() {
   return 1
 }
 
+# fm_remote_inherit_output_changed <push output>
+# True when bin/fm-remote-inherit-push.sh output reports a pushed or removed
+# item a reread covers, that is any item outside FM_REREAD_SILENT_CONFIG, so a
+# change to only those items sends a remote secondmate no reread nudge.
+fm_remote_inherit_output_changed() {
+  printf '%s\n' "$1" | awk -v silent="$FM_REREAD_SILENT_CONFIG" '
+    BEGIN { n = split(silent, s, " "); for (i = 1; i <= n; i++) quiet["config/" s[i]] = 1 }
+    /^(pushed|removed): / { rel = substr($0, index($0, ": ") + 2); if (!(rel in quiet)) found = 1 }
+    END { exit !found }
+  '
+}
+
 # fm_config_reread_changed_items <report>
 # Print bare allowlisted config item names whose report status is "pushed",
 # in FM_INHERITABLE_CONFIG order (deterministic path order). Empty when none.

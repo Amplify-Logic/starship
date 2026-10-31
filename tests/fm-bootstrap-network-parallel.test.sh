@@ -639,7 +639,7 @@ run_nudge_convergence() {
   PATH="$CF_FAKEBIN:$BASE_PATH" \
     FM_HOME="$CF_HOME" FM_ROOT_OVERRIDE="$CF_PRIMARY" \
     FM_BOOTSTRAP_NETWORK=only FM_SSH_BIN="$CF_FAKEBIN/fake-ssh" \
-    FM_FAKE_SSH_LOG="$CF_LOG" FM_INHERITABLE_CONFIG='item-a item-b' \
+    FM_FAKE_SSH_LOG="$CF_LOG" FM_INHERITABLE_CONFIG="${CF_ITEMS:-item-a item-b}" \
     FM_FAKE_TREEHOUSE_LEASE_HELP=1 FM_SEND_SETTLE=0 \
     FM_BOOTSTRAP_VERBOSE_FACTS=1 \
     "$ROOT/bin/$1" 2>&1
@@ -700,6 +700,57 @@ test_parallel_unknown_completion_overrides_known_failure() {
     FM_FAKE_ITEM_FAIL=config/item-a run_inherit_push sm 1); rc=$?
   expect_code 255 "$rc" "unknown completion must survive another item's refusal: $out"
   pass "parallel push preserves unknown completion status"
+}
+
+# The inherited word list is reread-silent (FM_REREAD_SILENT_CONFIG in
+# bin/fm-config-inherit-lib.sh): a push that changes only it sends a remote
+# secondmate no reread, while any other changed item still does.
+test_word_list_change_alone_sends_no_remote_reread() {
+  local script out marker
+  for script in fm-bootstrap.sh fm-config-push.sh; do
+    convergence_fixture "$TMP_ROOT/words-silent-$script" sm:host-sm
+    marker="$CF_HOME/state/.secondmate-nudge-pending/sm.pending"
+    out=$(CF_ITEMS='item-a leak-words.inherited' FM_FAKE_ITEM_PUSHED=config/leak-words.inherited \
+      run_nudge_convergence "$script")
+    grep -q 'START host-sm fm-remote-inherit.sh absent config/leak-words.inherited' "$CF_LOG" \
+      || fail "$script did not send the word list"$'\n'"$(cat "$CF_LOG")"
+    assert_not_contains "$out" 'config-reread:' "$script sent a reread for a word list change alone: $out"
+    assert_not_contains "$out" 'NUDGE_SECONDMATES' "$script tried a reread for a word list change alone: $out"
+    assert_not_contains "$out" 'BOOTSTRAP_INFO: nudged remote fm-sm' "$script nudged for a word list change alone: $out"
+    [ ! -e "$marker" ] || fail "$script left a reread owed for a word list change alone"
+
+    out=$(CF_ITEMS='item-a leak-words.inherited' FM_FAKE_ITEM_PUSHED=config/item-a \
+      run_nudge_convergence "$script")
+    case "$out" in
+      *'config-reread:'*|*NUDGE_SECONDMATES*|*'BOOTSTRAP_INFO: nudged remote fm-sm'*) ;;
+      *) fail "$script sent no reread for another changed item: $out" ;;
+    esac
+  done
+  pass "remote convergence: a word list change alone sends no reread, another changed item still does"
+}
+
+# While the primary's add-on is unusable the remote push keeps the secondmate's
+# inherited word list, and both callers report that item.
+test_unusable_addon_word_list_is_reported() {
+  local out rc
+  convergence_fixture "$TMP_ROOT/words-unusable-bootstrap" sm:host-sm
+  printf 'path = projects/missing-addon\n' > "$CF_HOME/config/addon"
+  out=$(CF_ITEMS='item-a leak-words.inherited' run_nudge_convergence fm-bootstrap.sh)
+  assert_contains "$out" \
+    "SECONDMATE_SYNC: secondmate sm: remote inheritance item kept on host-sm: error: config/leak-words.inherited" \
+    "bootstrap dropped the kept word list report: $out"
+  grep -q 'START host-sm fm-remote-inherit.sh .* config/item-a' "$CF_LOG" \
+    || fail "bootstrap did not converge the other item"$'\n'"$(cat "$CF_LOG")"
+  if grep -q 'config/leak-words.inherited' "$CF_LOG"; then
+    fail "bootstrap sent the word list while the add-on was unusable"$'\n'"$(cat "$CF_LOG")"
+  fi
+
+  convergence_fixture "$TMP_ROOT/words-unusable-config-push" sm:host-sm
+  printf 'path = projects/missing-addon\n' > "$CF_HOME/config/addon"
+  out=$(CF_ITEMS='item-a leak-words.inherited' run_nudge_convergence fm-config-push.sh); rc=$?
+  expect_code 1 "$rc" "config-push must report the kept word list as an error: $out"
+  assert_contains "$out" "error: config/leak-words.inherited" "config-push did not name the kept word list: $out"
+  pass "remote convergence: an unusable add-on's kept word list is reported by bootstrap and config-push"
 }
 
 # The startup network bound stops its stage the way `timeout -k 1` does: TERM to
@@ -768,4 +819,6 @@ test_config_push_partial_failure_keeps_the_reread_owed
 test_unknown_completion_keeps_the_reread_owed
 test_parallel_unknown_completion_overrides_known_failure
 test_kill_during_remote_call_keeps_the_reread_owed
+test_word_list_change_alone_sends_no_remote_reread
+test_unusable_addon_word_list_is_reported
 echo "# all fm-bootstrap-network-parallel tests passed"
