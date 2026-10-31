@@ -94,7 +94,7 @@ leak_words_home() {
 words_home=$(leak_words_home)
 WORDS_LIST=$(mktemp "${TMPDIR:-/tmp}/fm-leak-words.XXXXXX")
 trap 'rm -f "$WORDS_LIST"' EXIT
-fm_leak_words_write "$words_home" "$words_home/config" "$WORDS_LIST"
+fm_leak_words_write "$words_home" "$words_home/config" "$WORDS_LIST" || [ "$?" -eq 2 ]
 [ -s "$WORDS_LIST" ] || { rm -f "$WORDS_LIST"; WORDS_LIST=; }
 if [ "$WORDS_ONLY" -eq 1 ] && [ -z "$WORDS_LIST" ]; then
   exit 0

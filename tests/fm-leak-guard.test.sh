@@ -189,6 +189,13 @@ test_addon_list_adds_words() {
   assert_contains "$GUARD_OUT" ": Robin" "the add-on's word was dropped beside the home's list"
   assert_contains "$GUARD_OUT" ": Quillon" "the home's word was dropped beside the add-on's list"
 
+  # A home list whose last line has no newline keeps both lists' words apart.
+  word_home "$home" 'quillon'
+  guard "$repo" FM_HOME="$home" -- --text "$draft"
+  [ "$GUARD_STATUS" -eq 1 ] || fail "a home list with no final newline let the draft pass: $GUARD_OUT"
+  assert_contains "$GUARD_OUT" ": Robin" "the add-on's first word joined the home's unterminated last word"
+  assert_contains "$GUARD_OUT" ": Quillon" "the home's unterminated last word joined the add-on's first word"
+
   # An unusable add-on is named, adds nothing, and leaves the home's list working.
   printf 'path = projects/missing-addon\n' > "$home/config/addon"
   guard "$repo" FM_HOME="$home" -- --text "$draft"
@@ -220,6 +227,15 @@ test_secondmate_inherits_merged_list() {
     instruction="$TMP_ROOT/inherit-instruction"
     ! fm_config_write_reread_instruction "$mate" "$report" "$instruction" \
       || fail "a reread instruction was written for a word list change"
+
+    printf 'path = projects/missing-addon\n' > "$primary/config/addon"
+    : > "$report"
+    ! FM_CONFIG_INHERIT_REPORT="$report" propagate_inheritable_config "$primary/config" "$mate/config" "$primary" \
+      2>/dev/null || fail "propagation succeeded while the primary's add-on was unusable"
+    [ "$(awk -F '\t' '$1 == "leak-words" { print $2 }' "$report")" = error ] \
+      || fail "an unusable add-on was not reported as a word list error: $(cat "$report")"
+    grep -qx Robin "$mate/config/leak-words" || fail "an unusable add-on stripped the add-on's word from the secondmate"
+    printf 'path = projects/team-addon\n' > "$primary/config/addon"
 
     rm "$primary/config/leak-words" "$primary/projects/team-addon/leak-words"
     propagate_inheritable_config "$primary/config" "$mate/config" "$primary" || fail "absence propagation failed"

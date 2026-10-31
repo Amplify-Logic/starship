@@ -100,9 +100,11 @@ fm_leak_scan_machine_local() {
 }
 
 # fm_leak_words_clean <file>: the file's words and phrases, one per line, with
-# surrounding blanks trimmed and blank and # comment lines dropped.
+# surrounding blanks trimmed and blank and # comment lines dropped. Every line
+# it prints ends in a newline, even when the file's last line does not, so lists
+# printed one after another never join two words.
 fm_leak_words_clean() {
-  sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e '/^#/d' -e '/^$/d' "$1"
+  awk '{ sub(/^[[:space:]]+/, ""); sub(/[[:space:]]+$/, "") } $0 != "" && substr($0, 1, 1) != "#"' "$1"
 }
 
 # fm_leak_words_write <home> <config-dir> <out-file>
@@ -111,8 +113,9 @@ fm_leak_words_clean() {
 # of the home's private add-on (bin/fm-addon.sh root, read with FM_HOME=<home>
 # and that config dir), which is how a private team add-on carries the team's
 # list. <out-file> is empty when the home has neither. An add-on that is
-# configured but unusable is named on stderr and adds no words. Never prints a
-# word; returns non-zero only when <out-file> cannot be written.
+# configured but unusable is named on stderr, adds no words, and returns 2 with
+# the home's own words still written. Never prints a word; returns 1 when
+# <out-file> cannot be written.
 fm_leak_words_write() {
   local home=$1 config=$2 out=$3 addon rc=0
   : > "$out" || return 1
@@ -128,7 +131,10 @@ fm_leak_words_write() {
       fi
       ;;
     1) ;;
-    *) printf 'fm-leak-lib: the private add-on in %s/addon is unusable, so its leak-words list is not read; bin/fm-addon.sh root names why\n' "$config" >&2 ;;
+    *)
+      printf 'fm-leak-lib: the private add-on in %s/addon is unusable, so its leak-words list is not read; bin/fm-addon.sh root names why\n' "$config" >&2
+      return 2
+      ;;
   esac
   return 0
 }
@@ -138,7 +144,8 @@ fm_leak_words_write() {
 # config/leak-words (bin/fm-config-inherit-lib.sh): the merged list above, so a
 # secondmate also keeps its primary's add-on words out of what it publishes.
 # <out-file> is left absent when the home has no words, which the inheritance
-# mirrors as absence downstream.
+# mirrors as absence downstream. Fails when the add-on is unusable, so a
+# secondmate keeps its last list rather than losing the add-on's words.
 fm_leak_words_inherit_payload() {
   local out=$3
   rm -f "$out" || return 1

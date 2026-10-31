@@ -3448,6 +3448,7 @@ The guard never prints the list; a hit names only the matching word or line.
 
 Secondmate homes inherit the merged list as their own `config/leak-words` under the primary-authoritative contract in `bin/fm-config-inherit-lib.sh`, so a secondmate that inherits the right to publish to this repository through `config/firstmate-role` also keeps these words out of what it publishes.
 The primary's list replaces a secondmate home's own file, and a primary with no words removes it, so keep every word in the primary's list or its add-on.
+While the primary's add-on is configured but unusable, the list is not pushed and each secondmate home keeps its last copy.
 A changed list is never written into the reread message a live secondmate receives; its guard reads the file on every run.
 
 The same list keeps these words out of what workers publish to a public repository's pull requests: titles, descriptions, comments, and the intent and gate answers the validation pipeline turns into its PR.
