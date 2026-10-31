@@ -281,13 +281,14 @@ def main(argv):
                 hits.append((kind, where if n is None else "%s:%d" % (where, n), value))
 
     listed = sorted(approved_words(private), key=len, reverse=True)
+    entries = [re.compile(r"(?<!\w)%s(?!\w)" % re.escape(e), re.I) for e in listed]
     pattern = listed and re.compile(r"(?<!\w)(?:%s)(?!\w)" % "|".join(map(re.escape, listed)), re.I)
     spans = {}
     for i, (where, _, line, _, line_no) in enumerate(records):
-        spans[i] = [m.span() for m in pattern.finditer(line)] if pattern else []
-        if mode == "diff":
-            for start, _ in spans[i]:
-                hits.append(("private-word", "%s:%d:%d" % (where, line_no, start + 1), None))
+        spans[i] = [m.span() for e in entries for m in e.finditer(line)]
+        if pattern and mode == "diff":
+            for m in pattern.finditer(line):
+                hits.append(("private-word", "%s:%d:%d" % (where, line_no, m.start() + 1), None))
 
     if names:
         allowed = approved_words(approved)

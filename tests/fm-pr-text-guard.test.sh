@@ -259,6 +259,16 @@ EOF' "a \$(cat file) in an unquoted heredoc body runs, so its tokens must be che
     expect_allow "$home" "gh pr comment 7 --repo o/public --body-file - <<'EOF'
 Reproduce with \`cat tests/redaction.test.sh\`
 EOF" "a cat inside a quoted heredoc body is only mentioned, so it must stay words-only in $home"
+    # shellcheck disable=SC2016 # The substitution and backticks are quoted text in the checked command.
+    expect_allow "$home" "gh pr create --repo o/public -t x --body \"\$(cat <<'EOF'
+Reproduce with \`cat tests/redaction.test.sh\`
+EOF
+)\"" "a cat inside a quoted heredoc in a double-quoted substitution is only mentioned, so it must stay words-only in $home"
+    # shellcheck disable=SC2016 # The substitution runs inside the checked command, not here.
+    expect_refuse "$home" 'gh pr create --repo o/public -t x --body "$(cat <<EOF
+See $(cat tests/redaction.test.sh)
+EOF
+)"' "a \$(cat file) in an unquoted heredoc in a double-quoted substitution runs, so its tokens must be checked in $home"
     # shellcheck disable=SC2016 # The substitution runs inside the checked command, not here.
     expect_refuse "$home" 'gh pr comment 7 --repo o/public --body "`cat tests/redaction.test.sh`"' \
       "a fixture sent through a backtick cat must have its token shapes checked in $home"
@@ -647,7 +657,7 @@ test_draft_check_names_new_words_and_shapes() {
 # No part of a listed word or phrase is ever printed as a new word by the draft
 # check, not even when the word list file itself is checked.
 test_draft_check_never_names_a_listed_phrase_as_new() {
-  local home="$TMP_ROOT/phrase-home" first second
+  local home="$TMP_ROOT/phrase-home" first second third word
   first=$(cap qverblox)
   second=$(cap logistics)
   mkdir -p "$home/config"
@@ -661,6 +671,17 @@ test_draft_check_never_names_a_listed_phrase_as_new() {
     assert_not_contains "$OUT" "$first" "a word of the listed phrase in $source must never be printed"
     assert_not_contains "$OUT" "$second" "a word of the listed phrase in $source must never be printed"
   done
+  # Two listed phrases that share a word: neither phrase's words are printed.
+  third=$(cap zandrelt)
+  printf '%s %s\n%s %s\n' "$first" "$second" "$second" "$third" > "$home/config/leak-words"
+  printf 'met %s %s %s today\n' "$first" "$second" "$third" > "$WORK/shared.md"
+  STATUS=0
+  OUT=$(cd "$WORK" && FM_HOME="$home" "$COPY/bin/fm-leak-guard.sh" --text --new-names shared.md 2>&1) || STATUS=$?
+  [ "$STATUS" -eq 1 ] || fail "listed phrases sharing a word must fail: $OUT"
+  for word in "$first" "$second" "$third"; do
+    assert_not_contains "$OUT" "$word" "a word of listed phrases that share a word must never be printed"
+  done
+  printf '%s %s\n' "$first" "$second" > "$home/config/leak-words"
   printf 'ask %s alone\n' "$first" > "$WORK/alone.md"
   STATUS=0
   OUT=$(cd "$WORK" && FM_HOME="$home" "$COPY/bin/fm-leak-guard.sh" --text --new-names alone.md 2>&1) || STATUS=$?

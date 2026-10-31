@@ -213,20 +213,31 @@ def named_files(command, words, cwd):
 
 def executed(command):
     """The command with the single-quoted strings and quoted heredoc bodies the shell never runs blanked."""
-    out, i, quote, pending = [], 0, None, []
+    out, i, stack, pending = [], 0, [], []
     while i < len(command):
         c = command[i]
-        if quote == "'":
-            quote = None if c == "'" else quote
+        top = stack[-1] if stack else None
+        if top == "'":
+            if c == "'":
+                stack.pop()
             out.append(c if c in "'\n" else " ")
         elif c == "\\":
             out.append(command[i:i + 2])
             i += 1
-        elif quote == '"':
-            quote = None if c == '"' else quote
+        elif top == '"':
+            if c == '"':
+                stack.pop()
+            elif command.startswith("$(", i):
+                stack.append("(")
+                out.append("$")
+                i += 1
+                c = "("
             out.append(c)
-        elif c in "'\"":
-            quote = c
+        elif c in "'\"(":
+            stack.append(c)
+            out.append(c)
+        elif c == ")" and top == "(":
+            stack.pop()
             out.append(c)
         elif command.startswith("<<<", i):
             out.append("<<<")
