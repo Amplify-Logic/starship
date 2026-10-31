@@ -5,7 +5,8 @@
 #   fm-todo-render.sh render [--out FILE] [--morning-section FILE]
 #                            [--date YYYY-MM-DD] [--if-exists]
 #   fm-todo-render.sh path [--date YYYY-MM-DD]
-#   fm-todo-render.sh settings      (timezone=, sources_file= and captain_names= for fm-todo.sh)
+#   fm-todo-render.sh settings      (timezone=, sources_file=, captain_names= and
+#                                   held_decisions_need_you= for fm-todo.sh)
 #   fm-todo-render.sh --help
 #
 # WHAT THIS IS. A DETERMINISTIC RENDERER over the to-do item store. It makes
@@ -36,7 +37,11 @@
 # `firstmate`, or a `firstmate:` or `firstmate-backlog:` alias) or that the
 # morning sweep flagged as its tooling (`tooling`), and that is not
 # partner-facing, sits in its own "Firstmate tooling approvals" fold right
-# below the list, unless it is an outage. A line marked `mine` stays out of
+# below the list, unless it is an outage. A home that sets
+# held_decisions_need_you (below) keeps its captain-held backlog decisions
+# in the list instead: there a `firstmate-backlog:` alias alone no longer
+# makes a line tooling, while the `firstmate` label, a `firstmate:` alias and
+# the `tooling` flag still do. A line marked `mine` stays out of
 # both. Each row shows how many days ago the ask was made, computed at render.
 # An urgent class alone - which a long wait earns - never lifts a line into
 # the first tier. There is no summary strip, no separate Now box and no sweep
@@ -134,12 +139,15 @@
 # installed and no visual tool running.
 #
 # Configuration is read - never written - from the private, gitignored
-# config/channel-intake, and only the three keys this renderer needs:
+# config/channel-intake, and only the four keys this renderer needs:
 #   timezone          IANA zone for the local day and every rendered time
 #   sources_file      private inventory, read only for a source's coverage label
 #   captain_names     words naming the captain; a closure whose actor is one of
 #                     them, or all of them as one name, is the captain's own
 #                     ("by you")
+#   held_decisions_need_you  true to list the home's captain-held backlog
+#                     decisions in "Needs you now" rather than the tooling
+#                     fold (default false)
 # A value this renderer rejects for one of those exits 2, as it does for
 # a missing template. Every other key belongs to bin/fm-channel-intake.sh,
 # which owns that file.
@@ -162,6 +170,7 @@ FOOT_TEMPLATE="$TEMPLATE_DIR/today-page.foot.html"
 CFG_TIMEZONE=
 CFG_SOURCES_FILE=
 CFG_CAPTAIN_NAMES=
+CFG_HELD_NEED_YOU=false
 
 usage() {
   awk '
@@ -226,6 +235,12 @@ load_config() {
         esac
         ;;
       captain_names) CFG_CAPTAIN_NAMES=$value ;;
+      held_decisions_need_you)
+        case "$value" in
+          true|false) CFG_HELD_NEED_YOU=$value ;;
+          *) die "held_decisions_need_you must be true or false: $value" ;;
+        esac
+        ;;
     esac
   done <"$CONFIG_FILE"
   [ -n "$CFG_SOURCES_FILE" ] || CFG_SOURCES_FILE="$INTAKE_DIR/sources.tsv"
@@ -298,7 +313,7 @@ render_page() {
     "$(local_fmt "$epoch" '%A %-d %B %Y')" "$(local_fmt "$epoch" '%H:%M %Z')"
   sections=$(addon_sections "$epoch" "$day")
   python3 "$SCRIPT_DIR/fm-todo-compose.py" "$STORE" "$morning" "$day" "$epoch" "$CFG_TIMEZONE" \
-    "$FM_HOME" "$sidecar" "$INTAKE_DIR" "$CFG_SOURCES_FILE" "$CFG_CAPTAIN_NAMES" "$sections" || return 1
+    "$FM_HOME" "$sidecar" "$INTAKE_DIR" "$CFG_SOURCES_FILE" "$CFG_CAPTAIN_NAMES" "$sections" "$CFG_HELD_NEED_YOU" || return 1
   cat "$FOOT_TEMPLATE"
 }
 
@@ -404,7 +419,8 @@ load_config
 case "${1:-}" in
   render) shift; render_cmd "$@" ;;
   path) shift; path_cmd "$@" ;;
-  settings) printf 'timezone=%s\nsources_file=%s\ncaptain_names=%s\n' "$CFG_TIMEZONE" "$CFG_SOURCES_FILE" "$CFG_CAPTAIN_NAMES" ;;
+  settings) printf 'timezone=%s\nsources_file=%s\ncaptain_names=%s\nheld_decisions_need_you=%s\n' \
+    "$CFG_TIMEZONE" "$CFG_SOURCES_FILE" "$CFG_CAPTAIN_NAMES" "$CFG_HELD_NEED_YOU" ;;
   -h|--help) usage ;;
   '') usage; exit 2 ;;
   *) die "unknown command: $1" ;;

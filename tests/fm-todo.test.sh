@@ -50,6 +50,10 @@
 #     --partner mark, a morning partner flag, an awaiting partner) oldest ask
 #     first, folds Firstmate-sourced or tooling approvals below them, and keeps
 #     a mine line out of the ranked list.
+#   - A captain-held backlog decision sits in the tooling fold unless the home
+#     sets held_decisions_need_you, which puts it in Needs you now while a
+#     tooling approval keeps its fold; a value other than true or false is
+#     refused by the renderer and the intake gate.
 #   - Stored titles lose relative times but keep a deadline or duration the
 #     ask is about, the page computes ages in calendar days, and the coverage
 #     fold names what no source reads.
@@ -856,6 +860,59 @@ $(needs_order "$out")"
   pass 'Needs you ranks partners from the source, oldest ask first, folds tooling below, and honours mine'
 }
 
+# A captain-held backlog decision the morning sweep re-read, beside a genuine
+# tooling approval and an ordinary ask that keeps Needs you a table; the held decision's fold depends on the home's setting.
+held_beside_tooling() {
+  local h=$1
+  new_home "$h"
+  cat >"$h/backlog.md" <<'MD'
+## Queued
+- [ ] supplier-pick - Choose the new pump supplier (since 2026-09-01) (hold: needs the captain's pick) (hold-kind: captain)
+MD
+  sidecar "$h" 2026-09-10 '{"key":"k-t","source":"firstmate","ref":"voice-pr","class":"obligation","kind":"approval","title":"merge the voice fix?","tooling":true,"updated":'"$T_1000"'}'
+  intake_at "$h" "$T_1000" observe --source C_BRIEF --ref r-wiki --digest a --class obligation \
+    --title 'tidy the internal wiki' >/dev/null
+  render_at "$h" "$T_1000"
+  todo_at "$h" "$T_1000" verify --item "$(field_of "$h" 'pump supplier' 1)" --how 'backlog hold re-read' >/dev/null
+}
+
+# The rows inside the Firstmate tooling approvals fold.
+tooling_fold() {
+  sed -n '/<summary>Firstmate tooling approvals/,/<\/details>/p' <<<"$1"
+}
+
+test_held_decisions_stay_in_the_tooling_fold_by_default() {
+  local h out
+  h="$TMP_ROOT/held-default"
+  held_beside_tooling "$h"
+  render_at "$h" "$T_1030"
+  out=$(page "$h" 2026-09-10)
+  assert_not_contains "$(needs_order "$out")" 'pump supplier' 'a held decision left the tooling fold with the setting off'
+  assert_contains "$out" '<summary>Firstmate tooling approvals (2)</summary>' 'the tooling fold changed with the setting off'
+  assert_contains "$(tooling_fold "$out")" 'Choose the new pump supplier' 'the held decision is not in the tooling fold'
+  pass 'with the setting off a held backlog decision still renders in the tooling fold'
+}
+
+test_held_decisions_need_you_when_the_home_asks() {
+  local h out code
+  h="$TMP_ROOT/held-needs-you"
+  held_beside_tooling "$h"
+  printf 'held_decisions_need_you = true\n' >>"$h/config/channel-intake"
+  intake_at "$h" "$T_1030" status >/dev/null || fail 'the intake gate refused the held-decisions setting'
+  render_at "$h" "$T_1030"
+  out=$(page "$h" 2026-09-10)
+  assert_contains "$(needs_order "$out")" 'Choose the new pump supplier' 'the held decision is not in Needs you now'
+  assert_not_contains "$(tooling_fold "$out")" 'pump supplier' 'the held decision is still in the tooling fold'
+  assert_contains "$out" '<summary>Firstmate tooling approvals (1)</summary>' 'the tooling approval left its fold'
+  assert_contains "$(tooling_fold "$out")" 'merge the voice fix?' 'the tooling approval is not in its fold'
+  sed -i.bak 's/^held_decisions_need_you = true$/held_decisions_need_you = maybe/' "$h/config/channel-intake"
+  render_at "$h" "$T_1100" 2>/dev/null && code=0 || code=$?
+  expect_code 2 "$code" 'the renderer accepted a held-decisions value that is not true or false'
+  intake_at "$h" "$T_1100" status >/dev/null 2>&1 && code=0 || code=$?
+  expect_code 2 "$code" 'the intake gate accepted a held-decisions value that is not true or false'
+  pass 'with the setting on a held backlog decision needs you, and tooling approvals keep their fold'
+}
+
 test_page_bugs_stay_fixed() {
   local h out
   h="$TMP_ROOT/page-bugs"
@@ -1275,3 +1332,5 @@ test_a_merged_row_marks_the_source_it_presents
 test_a_pass_rechecks_open_items_and_counts_the_misses
 test_ranking_follows_partners_and_the_oldest_ask
 test_page_bugs_stay_fixed
+test_held_decisions_stay_in_the_tooling_fold_by_default
+test_held_decisions_need_you_when_the_home_asks

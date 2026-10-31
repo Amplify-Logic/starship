@@ -10,7 +10,7 @@ import re
 import sys
 import time
 
-STORE, MORNING, DAY, NOW, ZONE, HOME, MORNING_JSON, INTAKE, SOURCES, NAMES, SECTIONS = sys.argv[1:]
+STORE, MORNING, DAY, NOW, ZONE, HOME, MORNING_JSON, INTAKE, SOURCES, NAMES, SECTIONS, HELD_NEED_YOU = sys.argv[1:]
 NOW = int(NOW)
 # Every spelling of the captain a closure actor may carry: the internal label
 # and the configured captain_names, singly and as one full name.
@@ -224,11 +224,16 @@ def partner(rec):
     return bool(rec.get('partner_first') or rec.get('partner'))
 
 
+# A home that sets held_decisions_need_you keeps its captain-held backlog
+# decisions out of the tooling fold, so that alias alone no longer marks one.
+OWN_ALIASES = ('firstmate:',) if HELD_NEED_YOU == 'true' else ('firstmate:', 'firstmate-backlog:')
+
+
 def tooling(rec):
     """An ask whose source is Firstmate itself, or that the morning sweep flagged as
     its tooling; never a partner or customer ask."""
     own = rec.get('label') == 'firstmate' or any(
-        a.startswith(('firstmate:', 'firstmate-backlog:')) for a in rec.get('aliases') or [])
+        a.startswith(OWN_ALIASES) for a in rec.get('aliases') or [])
     return bool(rec.get('tooling') or own) and not partner(rec)
 
 

@@ -665,6 +665,7 @@ To turn it on:
 3. Start a new session, so the `intake-digest-lines` and `daily-todo-freshness` skills are linked in.
    Either file being present switches those two skills on, as an opt-in skill (above).
 
+By default the page folds a home's captain-held backlog decisions into its collapsed "Firstmate tooling approvals" section; a home whose held decisions are genuine calls for its owner, such as business calls, plans or purchases, adds `held_decisions_need_you = true` to `config/channel-intake` to list them in "Needs you now" instead, while approvals about Firstmate's own tooling keep their fold, and `bin/fm-todo-render.sh --help` owns how the page draws that line.
 The intakes print their state into the session-start digest through the built-in `hooks/bootstrap/10-morning-intake` and `hooks/bootstrap/20-channel-intake`, and stay silent on a home that has not opted in.
 A home whose private add-on (above) carries same-named tools, hooks or skills keeps running the add-on's: its hooks and skills replace the built-in ones, and a schedule or live check it armed names its own scripts.
 An add-on can also extend the to-do page without carrying its own copy: a `todo-verbs` hook takes more verbs typed on a row, such as changes to a ticket the row names, moves the row with `bin/fm-todo.sh close` or `hand-over` and marks it with `bin/fm-todo.sh mark`, and a `todo-page` hook adds a section of its own; `bin/fm-todo.sh --help` and `bin/fm-todo-render.sh --help` own those contracts.

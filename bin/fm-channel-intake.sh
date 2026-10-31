@@ -207,6 +207,10 @@
 #                            name; a wait handed to one of them is not a
 #                            hand-over, and the day page counts a closure by
 #                            one of them as the captain's own (default unset)
+#   held_decisions_need_you  true to list the home's captain-held backlog
+#                            decisions in the day page's "Needs you now"
+#                            rather than its tooling fold; read by
+#                            bin/fm-todo-render.sh (default false)
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -271,6 +275,7 @@ CFG_REPORT_DIR=
 CFG_OPEN_COMMAND=
 CFG_LABEL=$DEFAULT_LABEL
 CFG_CAPTAIN_NAMES=
+CFG_HELD_NEED_YOU=false
 
 usage() {
   awk '
@@ -430,6 +435,12 @@ load_config() {
             *[!A-Za-z[:space:]\'-]*) die "captain_names must be plain words: $value" ;;
           esac
           CFG_CAPTAIN_NAMES=$value
+          ;;
+        held_decisions_need_you)
+          case "$value" in
+            true|false) CFG_HELD_NEED_YOU=$value ;;
+            *) die "held_decisions_need_you must be true or false: $value" ;;
+          esac
           ;;
         *) die "unknown config key: $key" ;;
       esac
