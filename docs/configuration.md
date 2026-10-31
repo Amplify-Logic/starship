@@ -670,8 +670,8 @@ A remote second mate's host code root follows the primary home's channel too, `m
 A malformed file stops the update before anything moves, and names the file.
 
 To go back one release, say so to the first mate, or run `bin/fm-update.sh --step-back` in `~/starship`.
-It moves the home to the previous release, or from a home past every release to the newest release behind it, and writes that release's name into this file, so later updates stay there; write `release` again to follow new releases.
-It refuses on a dirty home, a home with changes that are not on the default branch, and the oldest release.
+It moves the home to the previous release, or from a home that is not on a release, to the newest release behind it, and writes that release's name into this file, so later updates stay there; write `release` again to follow new releases.
+It refuses on a dirty home, a home with changes that are not on the default branch, a home with no release behind it, and the oldest release.
 Step back covers only a home without second mates.
 A home with second mates cannot step back; it can stop taking new releases instead by writing the name of the release it is on now, the one "update starship" reports, into this file.
 

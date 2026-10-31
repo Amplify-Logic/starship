@@ -82,10 +82,10 @@
 # anything moves.
 #
 # --step-back moves a home on the release channel back exactly one release: from
-# a release to the one before it, or from a commit past every release to the
-# newest release behind it. It refuses unless the home is clean, on its default
-# branch, holds no commit that is not on origin's default branch, and has no
-# second mates (a home with them holds its current release instead by writing
+# a release to the one before it, or from a home that is not on a release, to
+# the newest release behind it. It refuses unless the home is clean, on its
+# default branch, holds no commit that is not on origin's default branch, has a
+# release behind it, and has no second mates (a home with them holds its current release instead by writing
 # that release's name into config/update-channel), then moves the default
 # branch to that release with reset --keep (every commit it leaves is on
 # origin's default branch, so no local work can be lost) and writes that release
