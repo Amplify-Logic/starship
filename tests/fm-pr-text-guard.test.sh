@@ -31,17 +31,21 @@ cat > "$FAKEBIN/gh" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$FAKE_GH_LOG"
 [ "${1:-} ${2:-}" = "repo view" ] || exit 0
+# The second answer line is the repository's owner/repo: the one named, else
+# FAKE_GH_DEFAULT_REPO for gh's default in the working directory.
+name=${3:-}
+case "$name" in --*|'') name=${FAKE_GH_DEFAULT_REPO:-o/default} ;; esac
 case " ${FAKE_GH_PUBLIC:-} " in
-  *" ${3:-} "*) echo false; exit 0 ;;
+  *" ${3:-} "*) printf 'false\n%s\n' "$name"; exit 0 ;;
 esac
 case " ${FAKE_GH_PRIVATE_REPOS:-} " in
-  *" ${3:-} "*) echo true; exit 0 ;;
+  *" ${3:-} "*) printf 'true\n%s\n' "$name"; exit 0 ;;
 esac
 if [ "${FAKE_GH_PRIVATE:-}" = unreadable ]; then
   echo "HTTP 404: Not Found" >&2
   exit 1
 fi
-echo "${FAKE_GH_PRIVATE:-false}"
+printf '%s\n%s\n' "${FAKE_GH_PRIVATE:-false}" "$name"
 EOF
 chmod +x "$FAKEBIN/gh"
 
@@ -291,15 +295,15 @@ test_hook_refuses_the_pipeline_intent_on_a_public_github_repo() {
   : > "$GH_LOG"
   expect_refuse "$HOME_WORDS" 'no-mistakes axi run --intent "Robin wants the sync fixed"' \
     "origin on github.com must be checked by name, whatever gh's default is" "$repo"
-  assert_equals "repo view o/public --json isPrivate --jq .isPrivate" "$(cat "$GH_LOG")" "gh must read origin's repository by name"
+  assert_equals "repo view o/public --json isPrivate,nameWithOwner --jq .isPrivate, .nameWithOwner" "$(cat "$GH_LOG")" "gh must read origin's repository by name"
   : > "$GH_LOG"
   expect_refuse "$HOME_WORDS" 'no-mistakes axi run --intent "Robin wants the sync fixed"' \
     "an origin behind an SSH host alias must be checked by its owner/repo" "$alias"
-  assert_equals "repo view o/public --json isPrivate --jq .isPrivate" "$(cat "$GH_LOG")" "gh must read the aliased origin by name"
+  assert_equals "repo view o/public --json isPrivate,nameWithOwner --jq .isPrivate, .nameWithOwner" "$(cat "$GH_LOG")" "gh must read the aliased origin by name"
   : > "$GH_LOG"
   expect_refuse "$HOME_WORDS" 'no-mistakes axi run --intent "Robin wants the sync fixed"' \
     "a dotless SSH alias that does not name GitHub must still be checked" "$dotless"
-  assert_equals "repo view o/public --json isPrivate --jq .isPrivate" "$(cat "$GH_LOG")" "gh must read the dotless alias by name"
+  assert_equals "repo view o/public --json isPrivate,nameWithOwner --jq .isPrivate, .nameWithOwner" "$(cat "$GH_LOG")" "gh must read the dotless alias by name"
   export FAKE_GH_PRIVATE=true
   expect_allow "$HOME_WORDS" 'no-mistakes axi run --intent "Robin wants the sync fixed"' \
     "an aliased origin gh reads as private may hold listed words" "$alias"
@@ -403,6 +407,148 @@ test_ship_brief_tells_the_worker_to_check() {
   pass "direct-PR and no-mistakes briefs tell the worker to check PR text with this home's list"
 }
 
+# cap <word>: the word with a capital first letter. The invented name below is
+# written in small letters here so this file never adds a name-shaped word of
+# its own; each test capitalises it at run time.
+cap() {
+  printf '%s%s' "$(printf '%s' "${1:0:1}" | tr '[:lower:]' '[:upper:]')" "${1:1}"
+}
+
+# A copy of this repository's guard in a checkout whose origin is o/starship-copy,
+# so what counts as this repository, and what it already holds, is fixed here.
+COPY="$TMP_ROOT/starship-copy"
+mkdir -p "$COPY/bin" "$COPY/docs"
+cp "$ROOT/bin/fm-pr-text-guard.py" "$ROOT/bin/fm-leak-guard.sh" "$ROOT/bin/fm-leak-lib.sh" \
+  "$ROOT/bin/fm-leak-shapes.py" "$ROOT/bin/fm-addon.sh" "$ROOT/bin/fm-timeout-lib.sh" "$COPY/bin/"
+printf 'The Sync fix and its Details.\n' > "$COPY/docs/notes.md"
+git -C "$COPY" init -q
+git -C "$COPY" add -A
+git -C "$COPY" -c user.name=t -c user.email=t@example.invalid commit -q -m init
+git -C "$COPY" remote add origin https://github.com/o/starship-copy.git
+HOME_APPROVED="$TMP_ROOT/approved-home"
+mkdir -p "$HOME_APPROVED/config"
+cp "$HOME_WORDS/config/leak-words" "$HOME_APPROVED/config/"
+printf 'qverblox\n' > "$HOME_APPROVED/config/leak-names-approved"
+
+test_draft_check_names_new_words_and_shapes() {
+  local name
+  name=$(cap qverblox)
+  printf 'ask %s about the Sync fix\n' "$name" > "$WORK/draft.md"
+  STATUS=0
+  OUT=$(cd "$WORK" && FM_HOME="$HOME_WORDS" "$COPY/bin/fm-leak-guard.sh" --text --new-names draft.md 2>&1) || STATUS=$?
+  [ "$STATUS" -eq 1 ] || fail "a new name in draft text for this repository must fail: $OUT"
+  assert_contains "$OUT" "LEAK_HIT: new-name: draft.md: $name" "the hit must name the source and the new word"
+  assert_not_contains "$OUT" "new-name: draft.md: Sync" "a word the repository already holds must pass"
+  STATUS=0
+  OUT=$(cd "$WORK" && FM_HOME="$HOME_APPROVED" "$COPY/bin/fm-leak-guard.sh" --text --new-names draft.md 2>&1) || STATUS=$?
+  [ "$STATUS" -eq 0 ] || fail "an approved name must pass: $OUT"
+  STATUS=0
+  OUT=$(cd "$WORK" && FM_HOME="$HOME_WORDS" "$COPY/bin/fm-leak-guard.sh" --text draft.md 2>&1) || STATUS=$?
+  [ "$STATUS" -eq 0 ] || fail "plain --text checks only the private list: $OUT"
+  STATUS=0
+  OUT=$(printf 'call +31 6 0000 0000 or pay NL51ZZZZ0123456789\n' \
+    | FM_HOME="$HOME_WORDS" "$COPY/bin/fm-leak-guard.sh" --text --new-names 2>&1) || STATUS=$?
+  [ "$STATUS" -eq 1 ] || fail "customer data shapes in draft text must fail: $OUT"
+  assert_contains "$OUT" "LEAK_HIT: phone: stdin: +31 6 0000 0000" "a phone number must be named"
+  assert_contains "$OUT" "LEAK_HIT: iban: stdin: NL51ZZZZ0123456789" "an IBAN must be named"
+  pass "the draft check with --new-names names new words and customer data shapes, and passes known and approved words"
+}
+
+test_hook_refuses_new_words_only_for_this_repository() {
+  local name pipeline="$TMP_ROOT/nm-copy"
+  name=$(cap qverblox)
+  export FAKE_GH_PUBLIC="o/starship-copy o/public"
+  HOOK="$COPY/bin/fm-pr-text-guard.py" expect_refuse "$HOME_WORDS" \
+    "gh pr create --repo o/starship-copy --title \"Sync fix for $name\" --body x" \
+    "a new word in a PR for this public repository must be refused"
+  assert_contains "$REASON" "\"$name\"" "the refusal must name the new word"
+  assert_contains "$REASON" "never appeared in this Starship repository" "the refusal must say why"
+  assert_contains "$REASON" "needs-decision:" "the refusal must say how to ask for an approval"
+  HOOK="$COPY/bin/fm-pr-text-guard.py" expect_allow "$HOME_WORDS" \
+    "gh pr create --repo o/public --title \"Sync fix for $name\" --body x" \
+    "another public repository may hold words new to this one"
+  HOOK="$COPY/bin/fm-pr-text-guard.py" expect_allow "$HOME_APPROVED" \
+    "gh pr create --repo o/starship-copy --title \"Sync fix for $name\" --body x" \
+    "an approved word must pass"
+  HOOK="$COPY/bin/fm-pr-text-guard.py" expect_allow "$HOME_WORDS" \
+    'gh pr create --repo o/starship-copy --title "Sync fix" --body "Details"' \
+    "words this repository already holds must pass"
+  HOOK="$COPY/bin/fm-pr-text-guard.py" expect_refuse "$HOME_WORDS" \
+    'gh pr comment 7 --repo o/starship-copy --body "reach me on +31 6 0000 0000"' \
+    "a phone number in a comment on this repository must be refused"
+  assert_contains "$REASON" '"+31 6 0000 0000"' "the refusal must name the shape"
+  unset FAKE_GH_PUBLIC
+  export FAKE_GH_PRIVATE=false
+  FAKE_GH_DEFAULT_REPO=o/starship-copy HOOK="$COPY/bin/fm-pr-text-guard.py" expect_refuse "$HOME_WORDS" \
+    "gh pr create --title \"Sync fix for $name\" --body x" \
+    "gh's default repository is checked by the name gh reports for it"
+  FAKE_GH_DEFAULT_REPO=o/elsewhere HOOK="$COPY/bin/fm-pr-text-guard.py" expect_allow "$HOME_WORDS" \
+    "gh pr create --title \"Sync fix for $name\" --body x" \
+    "gh's default repository that is not this one may hold new words"
+  git init -q "$pipeline" && git -C "$pipeline" remote add origin git@github.com:o/starship-copy.git
+  git -C "$pipeline" -c user.name=t -c user.email=t@example.invalid commit -q --allow-empty -m init
+  HOOK="$COPY/bin/fm-pr-text-guard.py" expect_refuse "$HOME_WORDS" \
+    "no-mistakes axi run --intent \"ask $name about the Sync fix\"" \
+    "a new word in the pipeline intent for this repository must be refused" "$pipeline"
+  assert_contains "$REASON" "\"$name\"" "the pipeline refusal must name the new word"
+  assert_contains "$REASON" "never appeared in this Starship repository" "the pipeline refusal must say why"
+  FM_PR_TEXT_GUARD_BUDGET=0.01 HOOK="$COPY/bin/fm-pr-text-guard.py" expect_refuse "$HOME_WORDS" \
+    "no-mistakes axi run --intent \"ask $name about the Sync fix\"" \
+    "a check that runs out of time must refuse, not pass" "$pipeline"
+  assert_contains "$REASON" "PR text check failed" "running out of time must say the check failed"
+  unset FAKE_GH_PRIVATE
+  HOOK="$COPY/bin/fm-pr-text-guard.py" expect_allow "$NO_LIST" \
+    "gh pr create --repo o/starship-copy --title \"Sync fix for $name\" --body x" \
+    "a home with no list or approvals checks nothing"
+  pass "a Claude worker's new words and customer data shapes are refused only for this public repository"
+}
+
+# worker_checkout <dir> <origin url>: a clone of COPY with that origin whose
+# branch adds a file that names the invented word, as a worker's branch would.
+worker_checkout() {
+  git clone -q "$COPY" "$1"
+  git -C "$1" remote set-url origin "$2"
+  git -C "$1" checkout -q -b feature
+  printf 'The %s panel.\n' "$(cap qverblox)" > "$1/docs/panel.md"
+  git -C "$1" add -A
+  git -C "$1" -c user.name=t -c user.email=t@example.invalid commit -q -m panel
+}
+
+test_branch_words_count_as_known() {
+  local name worker="$TMP_ROOT/worker" other="$TMP_ROOT/other-worker"
+  name=$(cap qverblox)
+  worker_checkout "$worker" git@github.com:o/starship-copy.git
+  worker_checkout "$other" https://github.com/o/elsewhere.git
+  printf 'adds the %s panel\n' "$name" > "$WORK/branch-draft.md"
+  STATUS=0
+  OUT=$(cd "$worker" && FM_HOME="$HOME_WORDS" "$COPY/bin/fm-leak-guard.sh" --text --new-names "$WORK/branch-draft.md" 2>&1) \
+    || STATUS=$?
+  [ "$STATUS" -eq 0 ] || fail "a word the branch being published holds must pass in its checkout: $OUT"
+  STATUS=0
+  OUT=$(cd "$other" && FM_HOME="$HOME_WORDS" "$COPY/bin/fm-leak-guard.sh" --text --new-names "$WORK/branch-draft.md" 2>&1) \
+    || STATUS=$?
+  [ "$STATUS" -eq 1 ] || fail "a checkout of another repository must not make a word known: $OUT"
+  assert_contains "$OUT" "LEAK_HIT: new-name: $WORK/branch-draft.md: $name" "the new word must be named"
+  git init -q "$TMP_ROOT/fresh-worker"
+  git -C "$TMP_ROOT/fresh-worker" remote add origin git@github.com:o/starship-copy.git
+  STATUS=0
+  OUT=$(cd "$TMP_ROOT/fresh-worker" && FM_HOME="$HOME_WORDS" "$COPY/bin/fm-leak-guard.sh" --text --new-names "$WORK/branch-draft.md" 2>&1) \
+    || STATUS=$?
+  [ "$STATUS" -eq 1 ] || fail "a checkout of this repository with no commit yet must hold no words, not break the check: $OUT"
+  assert_contains "$OUT" "LEAK_HIT: new-name: $WORK/branch-draft.md: $name" "the new word must be named from a fresh checkout"
+
+  export FAKE_GH_PUBLIC=o/starship-copy
+  HOOK="$COPY/bin/fm-pr-text-guard.py" expect_allow "$HOME_WORDS" \
+    "gh pr create --repo o/starship-copy --title \"Add the $name panel\" --body x" \
+    "a word the worker's own branch holds must pass the hook run from that checkout" "$worker"
+  HOOK="$COPY/bin/fm-pr-text-guard.py" expect_refuse "$HOME_WORDS" \
+    "gh pr create --repo o/starship-copy --title \"Add the $name panel\" --body x" \
+    "a word only another repository's checkout holds must still be refused" "$other"
+  assert_contains "$REASON" "\"$name\"" "the refusal must name the new word"
+  unset FAKE_GH_PUBLIC
+  pass "words in the branch being published count as known to the draft check and the hook"
+}
+
 test_draft_check_names_each_listed_word
 test_draft_check_passes_clean_text_and_partial_words
 test_draft_check_without_a_list_is_silent
@@ -413,3 +559,6 @@ test_hook_refuses_the_pipeline_intent_on_a_public_github_repo
 test_hook_passes_clean_private_and_unrelated_commands
 test_spawn_installs_the_hook
 test_ship_brief_tells_the_worker_to_check
+test_draft_check_names_new_words_and_shapes
+test_hook_refuses_new_words_only_for_this_repository
+test_branch_words_count_as_known

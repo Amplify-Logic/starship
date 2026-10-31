@@ -8,6 +8,8 @@
 #   - a real email address (placeholder domains are allowed)
 #   - a macOS absolute home path (/Users/<name>/...)
 #   - a live-token shape matching the portable-home credential scan
+#   - a customer data shape, such as a Slack id or a phone number (NEW NAMES
+#     AND DATA SHAPES below)
 #   - a word or phrase from the home's private word list (below)
 #
 # The credential half reuses the same token regex family as scan_path() in
@@ -37,12 +39,42 @@
 # DRAFT TEXT. --text checks text that is about to be published rather than
 # tracked files: a PR title, description or comment, or a no-mistakes intent.
 # It reads each named file, or stdin when none is named or the name is -,
-# checks only the private word list, and prints one
+# checks only the private word list (with --new-names, also the new-name and
+# shape checks below), and prints one
 # `LEAK_HIT: private-word: <source>: <word>` line per distinct listed word the
 # text contains (the source is the file as named, or stdin), so the writer
 # knows exactly what to take out. bin/fm-pr-text-guard.py runs it on what a
 # spawned Claude worker is about to publish, and the ship brief tells every
 # worker to run it on draft PR text first.
+#
+# NEW NAMES AND DATA SHAPES. A list cannot keep up with the names a home works
+# with, so a home that keeps one (or an approvals file, below) also refuses any
+# name-shaped word that has never appeared in this repository before, until the
+# owner approves it once. --new-names checks the lines this checkout adds since
+# its merge base with origin/main, committed and uncommitted changes to tracked
+# files, tests/ included, and the messages of the commits origin/main..HEAD,
+# each hit there named as `commit <short-sha>`. A word that occurs
+# anywhere in the tracked files at the merge base is never new, so once a change
+# lands its words stop being new. bin/fm-leak-shapes.py owns what counts as
+# name-shaped and as an occurrence. The approvals file is the home's optional,
+# gitignored config/leak-names-approved, one word per line in the word list's
+# format; firstmate appends a word there once the owner approves it, and the
+# guard never prints the file. The same added lines, and every scanned file in
+# the default scan, are checked for the shapes customer data takes: Slack ids
+# and workspace links, HubSpot record and portal links, phone numbers in
+# international form or as a Dutch mobile number (06 and 8 digits) and IBANs,
+# which bin/fm-leak-shapes.py also owns, with the same allowlist as the other
+# patterns; commit messages have no allowlist. bin/fm-lint.sh runs --new-names on every
+# default lint, so the pipeline's lint step checks each push; without a list or
+# approvals file, as in CI, it is silent. Each hit prints
+# `LEAK_HIT: new-name: <path>:<line>: <word>` or `LEAK_HIT: <shape>: ...`.
+# Without origin/main, or without a merge base with it, --new-names exits 2.
+# --text --new-names adds the same two checks to a draft text, with the tracked
+# files at this checkout's HEAD as what is already known, and, when the caller's
+# working directory is in a checkout that shares a remote's owner/repo with this
+# one and has a commit, the tracked files at that checkout's HEAD too, so the words of the branch
+# being published count as known; bin/fm-pr-text-guard.py uses it for text
+# bound for this repository and runs it from the publishing command's directory.
 #
 # Usage:
 #   fm-leak-guard.sh                  scan the whole tracked tree (what CI runs)
@@ -50,18 +82,36 @@
 #   fm-leak-guard.sh --private-words [<path>...]
 #                                     check only the private word list, and
 #                                     exit 0 silently when this home has none
-#   fm-leak-guard.sh --text [<file>|-]...
+#   fm-leak-guard.sh --text [--new-names] [<file>|-]...
 #                                     check draft text against the private word
-#                                     list: exit 1 naming each listed word found,
-#                                     0 when clean, and 0 silently when this home
-#                                     has no list
+#                                     list, and with --new-names for new names
+#                                     and data shapes too: exit 1 naming each
+#                                     hit, 0 when clean, and 0 silently when
+#                                     this home has no list or approvals file
+#   fm-leak-guard.sh --new-names
+#                                     check the lines and commit messages this
+#                                     checkout adds for new names and data
+#                                     shapes: exit 1 naming each hit, 2 when no
+#                                     merge base with origin/main is found, and
+#                                     0 silently without a list or approvals file
 set -eu
 
 WORDS_ONLY=0
 TEXT_MODE=0
+NAMES_MODE=0
 case "${1:-}" in
   --private-words) WORDS_ONLY=1; shift ;;
-  --text) WORDS_ONLY=1; TEXT_MODE=1; shift ;;
+  --text)
+    WORDS_ONLY=1; TEXT_MODE=1; shift
+    if [ "${1:-}" = --new-names ]; then NAMES_MODE=1; shift; fi
+    ;;
+  --new-names)
+    WORDS_ONLY=1; NAMES_MODE=1; shift
+    if [ "$#" -gt 0 ]; then
+      printf 'usage: fm-leak-guard.sh --new-names (see the header)\n' >&2
+      exit 2
+    fi
+    ;;
 esac
 CALLER_PWD=$PWD
 
@@ -97,14 +147,60 @@ WORDS_LIST=$(mktemp "${TMPDIR:-/tmp}/fm-leak-words.XXXXXX")
 trap 'rm -f "$WORDS_LIST"' EXIT
 fm_leak_words_write "$words_home" "$words_home/config" "$WORDS_LIST" || [ "$?" -eq 2 ]
 [ -s "$WORDS_LIST" ] || { rm -f "$WORDS_LIST"; WORDS_LIST=; }
-if [ "$WORDS_ONLY" -eq 1 ] && [ -z "$WORDS_LIST" ]; then
+APPROVED="$words_home/config/leak-names-approved"
+# The new-name and shape checks run where the home keeps a list or approvals.
+NAMES_ON=0
+if [ "$NAMES_MODE" -eq 1 ] && { [ -n "$WORDS_LIST" ] || [ -f "$APPROVED" ]; }; then
+  NAMES_ON=1
+fi
+if [ "$WORDS_ONLY" -eq 1 ] && [ -z "$WORDS_LIST" ] && [ "$NAMES_ON" -eq 0 ]; then
   exit 0
 fi
+
+# Paths, relative to the repo root, that may hold synthetic fixtures or the
+# pattern definitions themselves; the private word and new-name checks still
+# read them.
+ALLOWLIST=(tests 'tests/*' bin/fm-home-port.sh bin/fm-leak-guard.sh bin/fm-leak-lib.sh)
+SHAPES="$ROOT/bin/fm-leak-shapes.py"
+
+# --new-names: the lines and commit messages this checkout adds since its
+# merge base with origin/main.
+if [ "$NAMES_MODE" -eq 1 ] && [ "$TEXT_MODE" -eq 0 ]; then
+  if ! BASE=$(git merge-base origin/main HEAD 2>/dev/null) || [ -z "$BASE" ]; then
+    printf 'fm-leak-guard.sh: FAIL - no merge base with origin/main to find the new lines against; fetch origin and try again\n' >&2
+    exit 2
+  fi
+  exempt=()
+  for glob in "${ALLOWLIST[@]}"; do exempt+=(--exempt "$glob"); done
+  status=0
+  out=$(python3 "$SHAPES" "${exempt[@]}" --names "$ROOT" "$BASE" --approved "$APPROVED" --diff "$BASE") || status=$?
+  [ -z "$out" ] || printf '%s\n' "$out" >&2
+  case "$status" in
+    0)
+      printf 'fm-leak-guard.sh: PASS - no new names or customer data shapes in the lines and commit messages this branch adds\n'
+      exit 0
+      ;;
+    1)
+      printf 'fm-leak-guard.sh: FAIL - the lines or commit messages this branch adds hold words that never appeared in this repository, or customer data shapes (see LEAK_HIT lines above); rewrite each out, or have the owner approve a new word once, which firstmate records as a line of %s\n' "$APPROVED" >&2
+      exit 1
+      ;;
+    *) exit 2 ;;
+  esac
+fi
+
+# remote_repos <checkout>: the owner/repo, lowercased, of each of its remotes.
+remote_repos() {
+  git -C "$1" config --get-regexp '^remote\..*\.url$' 2>/dev/null \
+    | awk '{print tolower($2)}' \
+    | sed -E 's#/+$##; s#\.git$##; s#.*[:/]([^:/]+/[^:/]+)$#\1#' \
+    | sort -u
+}
 
 # --text: every distinct listed word in each source, named once.
 if [ "$TEXT_MODE" -eq 1 ]; then
   [ "$#" -gt 0 ] || set -- -
   found=
+  labelled=()
   for source in "$@"; do
     if [ "$source" = - ]; then
       label=stdin
@@ -129,26 +225,42 @@ if [ "$TEXT_MODE" -eq 1 ]; then
       [ -n "$word" ] || continue
       printf 'LEAK_HIT: private-word: %s: %s\n' "$label" "$word" >&2
       found="${found:+$found, }$word"
-    done < <(grep -Fiwo -f "$WORDS_LIST" "$text" 2>/dev/null | awk '!seen[tolower($0)]++')
+    done < <([ -z "$WORDS_LIST" ] || grep -Fiwo -f "$WORDS_LIST" "$text" 2>/dev/null | awk '!seen[tolower($0)]++')
+    labelled+=("$label" "$text")
   done
-  if [ -n "$found" ]; then
-    printf 'fm-leak-guard.sh: FAIL - the text contains words from the private word list of the home %s: %s; rewrite it without them\n' "$words_home" "$found" >&2
+  fresh=
+  if [ "$NAMES_ON" -eq 1 ]; then
+    known=(--names "$ROOT" HEAD)
+    caller=$(git -C "$CALLER_PWD" rev-parse --show-toplevel 2>/dev/null) || caller=
+    if [ -n "$caller" ] && [ "$caller" != "$ROOT" ] \
+      && git -C "$caller" rev-parse -q --verify 'HEAD^{commit}' >/dev/null 2>&1 \
+      && [ -n "$(comm -12 <(remote_repos "$ROOT") <(remote_repos "$caller"))" ]; then
+      known+=(--names "$caller" HEAD)
+    fi
+    status=0
+    out=$(python3 "$SHAPES" "${known[@]}" --approved "$APPROVED" --text "${labelled[@]}") || status=$?
+    [ "$status" -le 1 ] || exit 2
+    while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      printf '%s\n' "$line" >&2
+      fresh="${fresh:+$fresh, }${line##*: }"
+    done < <(printf '%s\n' "$out" | awk 'NF && !seen[$0]++')
+  fi
+  if [ -n "$found" ] || [ -n "$fresh" ]; then
+    [ -z "$found" ] || printf 'fm-leak-guard.sh: FAIL - the text contains words from the private word list of the home %s: %s; rewrite it without them\n' "$words_home" "$found" >&2
+    [ -z "$fresh" ] || printf 'fm-leak-guard.sh: FAIL - the text holds words that never appeared in this repository, or customer data shapes: %s; rewrite each out, or have the owner approve a new word once, which firstmate records as a line of %s\n' "$fresh" "$APPROVED" >&2
     exit 1
   fi
   printf 'fm-leak-guard.sh: PASS - no words from the private list in the text\n'
   exit 0
 fi
 
-# Paths relative to repo root that may contain synthetic fixtures or the
-# pattern definitions themselves.
 is_allowlisted() {
-  local rel=$1
-  case "$rel" in
-    tests/*|tests) return 0 ;;
-    bin/fm-home-port.sh|./bin/fm-home-port.sh) return 0 ;;
-    bin/fm-leak-guard.sh|./bin/fm-leak-guard.sh) return 0 ;;
-    bin/fm-leak-lib.sh|./bin/fm-leak-lib.sh) return 0 ;;
-  esac
+  local rel=${1#./} glob
+  for glob in "${ALLOWLIST[@]}"; do
+    # shellcheck disable=SC2254 # each entry is a pattern
+    case "$rel" in $glob) return 0 ;; esac
+  done
   return 1
 }
 
@@ -210,7 +322,11 @@ scan_file() {
       done <<< "$emails"
     done < <(grep -En "$FM_LEAK_EMAIL_PATTERN" "$file" 2>/dev/null | head -20)
   fi
+
+  SHAPE_FILES+=("$rel")
 }
+
+SHAPE_FILES=()
 
 if [ "$#" -gt 0 ]; then
   for path in "$@"; do
@@ -229,6 +345,18 @@ else
   done < <(git -C "$ROOT" ls-files)
 fi
 
+# Customer data shapes, in one pass over the files scan_file kept.
+if [ "$WORDS_ONLY" -eq 0 ] && [ "${#SHAPE_FILES[@]}" -gt 0 ]; then
+  status=0
+  out=$(python3 "$SHAPES" --files "${SHAPE_FILES[@]}") || status=$?
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    printf '%s\n' "$line" >&2
+    hits=1
+  done <<< "$out"
+  [ "$status" -le 1 ] || { printf 'fm-leak-guard.sh: FAIL - the customer data shape check could not run\n' >&2; exit 2; }
+fi
+
 if [ "$WORDS_ONLY" -eq 1 ]; then
   if [ "$hits" -ne 0 ]; then
     printf 'fm-leak-guard.sh: FAIL - tracked files contain words from the private word list of the home %s (see LEAK_HIT lines above)\n' "$words_home" >&2
@@ -239,7 +367,7 @@ if [ "$WORDS_ONLY" -eq 1 ]; then
 fi
 
 if [ "$hits" -ne 0 ]; then
-  printf 'fm-leak-guard.sh: FAIL - tracked files contain email, /Users/<name>, live-token shapes, or private words (see LEAK_HIT lines above)\n' >&2
+  printf 'fm-leak-guard.sh: FAIL - tracked files contain email, /Users/<name>, live-token shapes, customer data shapes, or private words (see LEAK_HIT lines above)\n' >&2
   exit 1
 fi
 
