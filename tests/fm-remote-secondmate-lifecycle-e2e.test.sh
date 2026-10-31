@@ -1306,11 +1306,18 @@ assert_contains "$UPDATE_OUT" "remote code root did not complete a safe origin u
   "the refusal must name the unsafe code root update"
 [ "$(git -C "$REMOTE_HOME" rev-parse HEAD)" = "$RELEASE_REV" ] || fail "a refused release update moved the remote home"
 git -C "$REMOTE_ROOT" reset -q --keep HEAD~1
+# A parent on main passes no release, so the code root returns to origin's tip
+# even though its own config/update-channel says release.
+mkdir -p "$REMOTE_ROOT/config"
+printf 'release\n' > "$REMOTE_ROOT/config/update-channel"
 UPDATE_OUT=$(remote_env "$ROOT/bin/fm-on.sh" ios fm-remote-secondmate-control.sh update ios) \
   || fail "the remote update back to origin's tip failed: $UPDATE_OUT"
+[ "$(git -C "$REMOTE_ROOT" rev-parse HEAD)" = "$(git -C "$REMOTE_SEED" rev-parse HEAD)" ] \
+  || fail "a parent on main must move a release-channel code root to origin's tip"
 [ "$(git -C "$REMOTE_HOME" rev-parse HEAD)" = "$(git -C "$REMOTE_SEED" rev-parse HEAD)" ] \
   || fail "the remote home did not return to origin's tip on the main channel"
-pass "remote update follows the parent's release, moving a newer code root and home onto it"
+rm -f "$REMOTE_ROOT/config/update-channel"
+pass "remote update follows the parent's channel, a release or main, whatever the code root's own channel says"
 
 # The remote restart verb is not a second implementation: its host-local leg runs
 # the ORDINARY control plane against a record that is plain and local on that

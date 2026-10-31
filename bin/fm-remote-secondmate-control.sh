@@ -34,11 +34,13 @@
 # bin/fm-ff-lib.sh, so the clean, ancestry, and branch guards have a single owner.
 # Before that sync, update also fast-forwards the home's own private add-on
 # (bin/fm-addon.sh) from the add-on's origin, under the same guards.
-# With <release>, a parent on the release channel moves this host's code root to
-# that one release instead of origin's tip (bin/fm-update.sh --channel), so the
-# remote home follows the same release as its primary. The home then moves onto
-# that release under the release channel's rules, with the code root's freshly
-# fetched origin default branch as its upstream (bin/fm-ff-lib.sh ff_target).
+# The code root follows the parent's channel, never its own
+# config/update-channel (bin/fm-update.sh --channel): without <release> it moves
+# to origin's tip, and with <release>, from a parent on the release channel, it
+# moves to that one release, so the remote home follows its primary. On a
+# release the home then moves onto it under the release channel's rules, with
+# the code root's freshly fetched origin default branch as its upstream
+# (bin/fm-ff-lib.sh ff_target).
 # A private parent-route state directory stores only the remote secondmate
 # agent's endpoint record; the home's own
 # state/*.meta remains reserved for workers the secondmate supervises.
@@ -410,15 +412,15 @@ cmd_sync() {
 
 cmd_update() {
   local id=$1 release=${2:-} update_out root_status default upstream=""
-  local -a channel=()
+  local channel=main
   validate_id "$id"
   validate_home "$id"
   if [ -n "$release" ]; then
     fm_release_name_valid "$release" || die "invalid release name: $release"
-    channel=(--channel "$release")
+    channel=$release
   fi
   if ! update_out=$(FM_HOME="$FM_ROOT" FM_ROOT_OVERRIDE="$FM_ROOT" \
-    "$SCRIPT_DIR/fm-update.sh" ${channel[@]+"${channel[@]}"} 2>&1); then
+    "$SCRIPT_DIR/fm-update.sh" --channel "$channel" 2>&1); then
     [ -z "$update_out" ] || printf '%s\n' "$update_out" >&2
     die "remote code root update failed"
   fi

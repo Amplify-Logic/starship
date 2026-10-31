@@ -665,6 +665,7 @@ A home ahead of the release only by changes already on the default branch, such 
 A dirty home is skipped, and a home with its own changes that are not on the default branch is skipped as diverged and left untouched, exactly as on `main`.
 Each release's notes are its section of [CHANGELOG.md](../CHANGELOG.md).
 Every local and remote second mate follows the same release as the primary home, while the [private add-on](#private-add-on-configaddon) keeps following its own default branch.
+A remote second mate's host code root follows the primary home's channel too, `main` or its release, whatever that host's own file says.
 A malformed file stops the update before anything moves, and names the file.
 
 To go back one release, say so to the first mate, or run `bin/fm-update.sh --step-back` in `~/starship`.

@@ -934,15 +934,16 @@ test_step_back_one_release() {
   pass "R6 a home on the release channel steps back one release at a time and stays there"
 }
 
-test_channel_flag_accepts_only_a_release_name() {
+test_channel_flag_accepts_only_main_or_a_release_name() {
   local w out before value
   w=$(new_world r8)
   release_world "$w"
+  set_channel "$w" release
   before=$(git -C "$w/main" rev-parse HEAD)
-  for value in main release; do
+  for value in release starship-latest; do
     out=$(PATH="$w/fakebin:$PATH" FM_FAKE_DIR="$w/fake" FM_ROOT_OVERRIDE="$w/main" FM_HOME="$w/home" \
       "$UPDATE" --channel "$value" 2>&1) && fail "--channel $value must be refused"
-    assert_contains "$out" "--channel must be a release name" "the --channel $value refusal names what it accepts"
+    assert_contains "$out" "--channel must be main or a release name" "the --channel $value refusal names what it accepts"
     [ "$(git -C "$w/main" rev-parse HEAD)" = "$before" ] || fail "--channel $value moved the home"
   done
 
@@ -951,7 +952,12 @@ test_channel_flag_accepts_only_a_release_name() {
   assert_contains "$out" "to release starship-2026.10" "--channel with a release name follows that release"
   [ "$(git -C "$w/main" rev-parse HEAD)" = "$(release_commit "$w" starship-2026.10)" ] \
     || fail "--channel with a release name must land on that release"
-  pass "R8 --channel accepts only a release name and refuses main and release before anything moves"
+
+  out=$(PATH="$w/fakebin:$PATH" FM_FAKE_DIR="$w/fake" FM_ROOT_OVERRIDE="$w/main" FM_HOME="$w/home" \
+    "$UPDATE" --channel main 2>/dev/null) || fail "--channel main failed: $out"
+  [ "$(git -C "$w/main" rev-parse HEAD)" = "$(git -C "$w/seed" rev-parse main)" ] \
+    || fail "--channel main must move a release-channel home to origin's tip"
+  pass "R8 --channel accepts only main or a release name and refuses release before anything moves"
 }
 
 test_remote_secondmate_follows_the_release() {
@@ -997,6 +1003,6 @@ test_release_channel_never_moves_a_dirty_home
 test_malformed_channel_refuses_before_anything_moves
 test_step_back_one_release
 test_remote_secondmate_follows_the_release
-test_channel_flag_accepts_only_a_release_name
+test_channel_flag_accepts_only_main_or_a_release_name
 
 echo "# all fm-update tests passed"
