@@ -17,6 +17,7 @@ Start with the directory layout, then use the setting reference for the behavior
 | Spoken replies | [Desk voice-out](#desk-voice-out-configspeak) |
 | The call recorder | [Call recorder](#call-recorder-configcall-companion) |
 | The morning intake, the continuous channel intake and the daily to-do page | [Daily intake and to-do page](#daily-intake-and-to-do-page-configmorning-intake-configchannel-intake) |
+| Which Starship version "update starship" follows | [Update channel](#update-channel-configupdate-channel) |
 | A home's own private tools beside the shared code | [Private add-on](#private-add-on-configaddon) and [opt-in skills](#opt-in-skills-configadhd-configsecond-opinion) |
 | Keeping private names out of this public repository | [Private leak words](#private-leak-words-configleak-words) |
 | Per-run overrides and tuning | [Environment variables](#environment-variables) |
@@ -646,6 +647,31 @@ Personal tools that serve one home only, such as glasses tools or device configu
 Register the add-on as an ordinary project when workers should change it.
 The add-on is home-local and is not inherited by secondmate homes, though its `leak-words` list reaches them inside the inherited word list.
 `bin/fm-addon.sh` owns the configuration, the hook points and their contract, and the install.
+
+## Update channel (config/update-channel)
+
+The optional local, gitignored `config/update-channel` chooses what "update starship" (`/updatefirstmate`, `bin/fm-update.sh`) moves this home to.
+It holds one line, with blank lines and `#` comment lines ignored:
+
+| Value | Effect |
+| --- | --- |
+| `main` | The default, identical to an absent file: follow the newest merged default branch. |
+| `release` | Follow the newest named release, a monthly `starship-YYYY.MM` tag, or `starship-YYYY.MM.N` for a fix release in that month, on the default branch. |
+| `starship-YYYY.MM[.N]` | Stay on that one release; stepping back writes this. |
+
+The owner and active contributors stay on `main`; a client or a teammate who does not write code chooses `release`, so changes arrive once a month with notes.
+On a release value the update only moves forward to the release and never past it, skips a dirty or diverged home exactly as on `main`, and names the release in its result; a home already ahead of the release, such as one that just switched from `main`, stays where it is until a newer release passes it.
+Each release's notes are its section of [CHANGELOG.md](../CHANGELOG.md).
+Every local and remote second mate follows the same release as the primary home, while the [private add-on](#private-add-on-configaddon) keeps following its own default branch.
+A malformed file stops the update before anything moves, and names the file.
+
+To go back one release, say so to the first mate, or run `bin/fm-update.sh --step-back` in `~/starship`.
+It moves the home to the previous release and writes that release's name into this file, so later updates stay there; write `release` again to follow new releases.
+It refuses on a dirty home, a home that is not exactly on a release, a home with second mates, and the oldest release.
+
+A maintainer cuts a release with `bin/fm-release.sh` after the month's reviewed catch-up has landed on a green default branch; it needs the [maintainer role](#firstmate-role-configfirstmate-role) and refuses unless every check on that commit is green.
+The file is home-local and is not inherited by secondmate homes.
+`bin/fm-release-lib.sh` owns the parsing and the release names and order, and `bin/fm-update.sh --help` and `bin/fm-release.sh --help` own the commands.
 
 ## Daily intake and to-do page (config/morning-intake, config/channel-intake)
 

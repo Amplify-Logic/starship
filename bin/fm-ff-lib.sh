@@ -5,7 +5,8 @@
 # This is the one implementation of "advance a firstmate checkout to a base by a
 # clean fast-forward, never forcing, merging, or stashing" used by every sync
 # path:
-#   - /updatefirstmate (bin/fm-update.sh) pulls from origin: base_mode "origin".
+#   - /updatefirstmate (bin/fm-update.sh) pulls from origin: base_mode "origin",
+#     or "release:<name>" for a home on the release channel.
 #   - the local-HEAD secondmate sync (bin/fm-spawn.sh on launch, bin/fm-bootstrap.sh
 #     on startup) follows the PRIMARY checkout's current default-branch commit:
 #     base_mode is that local commit, with NO fetch and no origin dependency.
@@ -40,6 +41,8 @@
 SUB_HOME_MARKER="${SUB_HOME_MARKER:-.fm-secondmate-home}"
 # shellcheck source=bin/fm-secondmate-registry-lib.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-secondmate-registry-lib.sh"
+# shellcheck source=bin/fm-release-lib.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-release-lib.sh"
 
 # --- helpers ---------------------------------------------------------------
 
@@ -375,18 +378,22 @@ live_secondmate_meta_records() {
 
 # Fast-forward one target to a base. Prints its status line. Sets globals for the
 # caller:
-#   FF_STATUS = updated|current|skipped
+#   FF_STATUS = updated|current|ahead|skipped  (ahead: release mode only)
 #   FF_INSTR  = comma list of changed instruction paths (only when updated)
 #
 # base_mode selects where the fast-forward base comes from:
 #   origin       - fetch origin and advance to origin/<default> (the /updatefirstmate
 #                  path); requires an origin remote and network reachability.
+#   release:<name> - the origin mode narrowed to the named release tag on
+#                  origin/<default> (a home on the release channel,
+#                  bin/fm-release-lib.sh); a target already past that release
+#                  stays put as "ahead" instead of being treated as diverged.
 #   <commit-ish> - advance to that LOCAL commit with NO fetch and no origin
 #                  dependency (the local-HEAD secondmate sync). The commit must
 #                  already exist in the target's object store, which it always does
 #                  for a worktree of this same repo; a standalone clone that lacks
 #                  it is skipped rather than fetched.
-# Guards are identical in both modes: never force/merge/stash; skip a dirty or
+# Guards are identical in every mode: never force/merge/stash; skip a dirty or
 # wrong-branch target and leave its work untouched. An optional secondmate id
 # enables the content-equivalent divergence proof and durable marker described
 # in this file's header.
@@ -408,24 +415,46 @@ ff_target() {
   fi
 
   local default base cur instr local_rev base_rev before after out
+  local release="" to_release="" on_release=""
   default=$(default_branch "$dir") || {
     echo "$label: skipped: cannot determine default branch"
     return 0
   }
 
-  # Resolve the fast-forward base from base_mode (see header).
-  if [ "$base_mode" = origin ]; then
-    if ! git -C "$dir" remote get-url origin >/dev/null 2>&1; then
-      echo "$label: skipped: no origin remote"
+  # Resolve the fast-forward base from base_mode (see header). release:<name>
+  # is the origin mode narrowed to one named release on origin's default branch
+  # (bin/fm-release-lib.sh), so the home never moves past that release.
+  case "$base_mode" in
+    origin|release:*)
+      if ! git -C "$dir" remote get-url origin >/dev/null 2>&1; then
+        echo "$label: skipped: no origin remote"
+        return 0
+      fi
+      if ! fetch_once "$dir"; then
+        echo "$label: skipped: fetch failed"
+        return 0
+      fi
+      base="origin/$default"
+      ;;
+    *) base="$base_mode" ;;
+  esac
+  if [ "${base_mode#release:}" != "$base_mode" ]; then
+    release=${base_mode#release:}
+    if ! fm_release_name_valid "$release"; then
+      echo "$label: skipped: $release is not a release name"
       return 0
     fi
-    if ! fetch_once "$dir"; then
-      echo "$label: skipped: fetch failed"
+    if ! fm_release_fetch_tags "$dir"; then
+      echo "$label: skipped: release tags could not be fetched without moving a local tag"
       return 0
     fi
-    base="origin/$default"
-  else
-    base="$base_mode"
+    if ! git -C "$dir" merge-base --is-ancestor "refs/tags/$release^{commit}" "$base" 2>/dev/null; then
+      echo "$label: skipped: release $release is not on $base"
+      return 0
+    fi
+    base=$(git -C "$dir" rev-parse "refs/tags/$release^{commit}")
+    to_release=" to release $release"
+    on_release=" on release $release"
   fi
 
   if ! git -C "$dir" rev-parse --verify --quiet "$base^{commit}" >/dev/null; then
@@ -459,7 +488,14 @@ ff_target() {
   if [ "$local_rev" = "$base_rev" ]; then
     FF_STATUS="current"
     [ -z "$reconciliation_state" ] || secondmate_update_reconcile_clear "$reconciliation_state" "$secondmate_id" || true
-    echo "$label: already current"
+    echo "$label: already current$on_release"
+    return 0
+  fi
+  # A home already past the release it follows stays where it is: the release
+  # channel never moves a home back, and being ahead is not a divergence.
+  if [ -n "$release" ] && git -C "$dir" merge-base --is-ancestor "$base" HEAD 2>/dev/null; then
+    FF_STATUS="ahead"
+    echo "$label: staying at $(git -C "$dir" rev-parse --short HEAD), ahead of release $release"
     return 0
   fi
   if ! git -C "$dir" merge-base --is-ancestor HEAD "$base" 2>/dev/null; then
@@ -506,9 +542,9 @@ ff_target() {
   FF_INSTR="$instr"
   [ -z "$reconciliation_state" ] || secondmate_update_reconcile_clear "$reconciliation_state" "$secondmate_id" || true
   if [ -n "$instr" ]; then
-    echo "$label: updated $before..$after (instructions changed: $instr)"
+    echo "$label: updated $before..$after$to_release (instructions changed: $instr)"
   else
-    echo "$label: updated $before..$after"
+    echo "$label: updated $before..$after$to_release"
   fi
   return 0
 }

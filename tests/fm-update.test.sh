@@ -699,6 +699,205 @@ test_remote_failure_after_addon_line_names_its_error() {
   pass "T16 a remote home that fails after its add-on line names its own error and still relays the add-on"
 }
 
+
+# --- Release channel ----------------------------------------------------------
+# config/update-channel chooses what the update follows (bin/fm-release-lib.sh).
+
+# Tag origin's current main tip with a release name.
+tag_origin() {
+  local w=$1 name=$2
+  git -C "$w/seed" pull -q origin main >/dev/null 2>&1 || true
+  git -C "$w/seed" tag -a -m "$name" "$name"
+  git -C "$w/seed" push -q origin "refs/tags/$name"
+}
+
+# Origin history c1 (home starts here), c2=starship-2026.09, c3=starship-2026.10,
+# c4=starship-2026.10.1 (a fix release that sorts after 2026.10), c5 untagged,
+# plus a release-shaped tag on a side branch that is not a release.
+release_world() {
+  local w=$1
+  bump_origin "$w" readme
+  tag_origin "$w" starship-2026.09
+  bump_origin "$w" instr
+  tag_origin "$w" starship-2026.10
+  bump_origin "$w" bin
+  tag_origin "$w" starship-2026.10.1
+  bump_origin "$w" readme
+  git -C "$w/seed" checkout -q -b side
+  printf 'side\n' > "$w/seed/side.txt"
+  git -C "$w/seed" add -A
+  git -C "$w/seed" commit -qm side
+  git -C "$w/seed" tag starship-2026.12
+  git -C "$w/seed" push -q origin refs/tags/starship-2026.12
+  git -C "$w/seed" checkout -q main
+}
+
+release_commit() {  # <world> <name>
+  git -C "$1/seed" rev-parse "refs/tags/$2^{commit}"
+}
+
+set_channel() {  # <world> <value>
+  mkdir -p "$1/home/config"
+  printf '%s\n' "$2" > "$1/home/config/update-channel"
+}
+
+test_default_channel_follows_main_past_releases() {
+  local w out
+  w=$(new_world r1)
+  release_world "$w"
+
+  out=$(run_update "$w")
+
+  assert_contains "$out" "firstmate: updated " "with no channel file the home still updates"
+  assert_not_contains "$out" "release" "the default channel says nothing about releases"
+  [ "$(git -C "$w/main" rev-parse HEAD)" = "$(git -C "$w/seed" rev-parse main)" ] \
+    || fail "the default channel must move the home to origin's newest main, past every release"
+
+  w=$(new_world r1b)
+  release_world "$w"
+  set_channel "$w" main
+  run_update "$w" >/dev/null
+  [ "$(git -C "$w/main" rev-parse HEAD)" = "$(git -C "$w/seed" rev-parse main)" ] \
+    || fail "an explicit main channel must behave exactly like no channel file"
+  pass "R1 the default and main channels follow origin's newest main"
+}
+
+test_release_channel_follows_newest_release() {
+  local w out target
+  w=$(new_world r2)
+  add_sm "$w" sm1
+  release_world "$w"
+  set_channel "$w" release
+  target=$(release_commit "$w" starship-2026.10.1)
+
+  out=$(run_update "$w")
+
+  assert_contains "$out" "firstmate: updated " "the release channel moves the home"
+  assert_contains "$out" "to release starship-2026.10.1" "the update names the release it moved to"
+  [ "$(git -C "$w/main" rev-parse HEAD)" = "$target" ] \
+    || fail "the home must land exactly on the newest release on main, not on main's tip or a side-branch tag"
+  [ "$(git -C "$w/main" symbolic-ref --short HEAD)" = main ] || fail "the home left its default branch"
+  [ "$(git -C "$w/sm1" rev-parse HEAD)" = "$target" ] \
+    || fail "a local second mate must follow the same release as its primary"
+  assert_contains "$out" "restart-secondmates: fm-sm1" "a second mate settled on the release still restarts"
+
+  out=$(run_update "$w")
+  assert_contains "$out" "firstmate: already current on release starship-2026.10.1" \
+    "a home on the newest release reports which release it is on"
+  [ "$(git -C "$w/main" rev-parse HEAD)" = "$target" ] || fail "a second pass moved the home past the release"
+  pass "R2 the release channel follows the newest release and never moves past it"
+}
+
+test_release_channel_never_moves_a_home_back() {
+  local w out tip
+  w=$(new_world r3)
+  add_sm "$w" sm1
+  release_world "$w"
+  run_update "$w" >/dev/null
+  tip=$(git -C "$w/main" rev-parse HEAD)
+  set_channel "$w" release
+
+  out=$(run_update "$w")
+
+  assert_contains "$out" "firstmate: staying at " "a home past the newest release stays put"
+  assert_contains "$out" "ahead of release starship-2026.10.1" "the home is told which release it is ahead of"
+  assert_contains "$out" "secondmate sm1: staying at " "a second mate past the release stays put"
+  [ "$(git -C "$w/main" rev-parse HEAD)" = "$tip" ] || fail "the release channel moved a home back"
+  [ ! -e "$w/home/state/.secondmate-update-reconcile/sm1.pending" ] \
+    || fail "being ahead of a release is not a divergence to reconcile"
+  pass "R3 the release channel never moves a home back"
+}
+
+test_release_channel_never_moves_a_dirty_home() {
+  local w out before
+  w=$(new_world r4)
+  release_world "$w"
+  set_channel "$w" release
+  before=$(git -C "$w/main" rev-parse HEAD)
+  printf 'local edit\n' >> "$w/main/README.md"
+
+  out=$(run_update "$w")
+
+  assert_contains "$out" "firstmate: skipped: dirty working tree" "a dirty home on the release channel is skipped"
+  [ "$(git -C "$w/main" rev-parse HEAD)" = "$before" ] || fail "a dirty home was moved"
+  grep -q 'local edit' "$w/main/README.md" || fail "the dirty edit was discarded"
+  pass "R4 the release channel never moves a dirty home"
+}
+
+test_malformed_channel_refuses_before_anything_moves() {
+  local w out before
+  w=$(new_world r5)
+  release_world "$w"
+  set_channel "$w" nightly
+  before=$(git -C "$w/main" rev-parse HEAD)
+
+  out=$(PATH="$w/fakebin:$PATH" FM_FAKE_DIR="$w/fake" FM_ROOT_OVERRIDE="$w/main" FM_HOME="$w/home" \
+    "$UPDATE" 2>&1) && fail "a malformed channel file must refuse the update"
+
+  assert_contains "$out" "config/update-channel must hold one line" "the refusal names the file and its values"
+  [ "$(git -C "$w/main" rev-parse HEAD)" = "$before" ] || fail "a malformed channel still moved the home"
+  pass "R5 a malformed channel file refuses before anything moves"
+}
+
+test_step_back_one_release() {
+  local w out
+  w=$(new_world r6)
+  release_world "$w"
+  set_channel "$w" release
+  run_update "$w" >/dev/null
+  sb() { PATH="$w/fakebin:$PATH" FM_FAKE_DIR="$w/fake" FM_ROOT_OVERRIDE="$w/main" FM_HOME="$w/home" \
+    "$UPDATE" --step-back 2>&1; }
+
+  out=$(sb) || fail "step back from the newest release failed: $out"
+  assert_contains "$out" "from release starship-2026.10.1 to release starship-2026.10" "step back names both releases"
+  assert_contains "$out" "reread-firstmate: yes" "stepping back across bin/ changes asks for a re-read"
+  [ "$(git -C "$w/main" rev-parse HEAD)" = "$(release_commit "$w" starship-2026.10)" ] \
+    || fail "step back must land exactly on the previous release"
+  [ "$(git -C "$w/main" symbolic-ref --short HEAD)" = main ] || fail "step back left the default branch"
+  [ "$(cat "$w/home/config/update-channel")" = starship-2026.10 ] \
+    || fail "step back must hold the home on that release"
+
+  out=$(run_update "$w")
+  assert_contains "$out" "firstmate: already current on release starship-2026.10" \
+    "a held home stays on its release across later updates"
+
+  out=$(sb) || fail "a second step back failed: $out"
+  [ "$(git -C "$w/main" rev-parse HEAD)" = "$(release_commit "$w" starship-2026.09)" ] \
+    || fail "a second step back must go one more release back"
+  out=$(sb) && fail "stepping back from the oldest release must refuse"
+  assert_contains "$out" "starship-2026.09 is the oldest release" "the refusal names the oldest release"
+
+  set_channel "$w" release
+  out=$(run_update "$w")
+  assert_contains "$out" "to release starship-2026.10.1" "writing release again follows the newest release"
+
+  printf 'local edit\n' >> "$w/main/README.md"
+  out=$(sb) && fail "step back must refuse a dirty home"
+  assert_contains "$out" "dirty working tree" "the dirty refusal names why"
+  grep -q 'local edit' "$w/main/README.md" || fail "step back discarded a local edit"
+  git -C "$w/main" checkout -q -- README.md
+
+  set_channel "$w" main
+  out=$(sb) && fail "step back must refuse on the main channel"
+  assert_contains "$out" "step back works on the release channel" "the main-channel refusal names why"
+  pass "R6 a home on the release channel steps back one release at a time and stays there"
+}
+
+test_remote_secondmate_follows_the_release() {
+  local w out fake_ssh
+  w=$(new_world r7)
+  release_world "$w"
+  set_channel "$w" release
+  fake_ssh=$(remote_world "$w" "printf '%s\\n' \"\${rargs[*]}\" > \"\${0%/*}/remote-args\"; printf 'current: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\\n'")
+
+  out=$(FM_TEST_SSH_BIN="$fake_ssh" run_update "$w")
+
+  assert_contains "$out" "remote secondmate sm1: already current on remote-mac" "the remote home still updates"
+  assert_contains "$(cat "$w/fakebin/remote-args")" "update sm1 starship-2026.10.1" \
+    "a remote second mate must be told to follow the primary's release"
+  pass "R7 a remote second mate follows the primary's release"
+}
+
 test_updates_main_and_secondmate
 test_reread_gate_is_instruction_only
 test_bin_only_advance_restarts
@@ -719,5 +918,12 @@ test_addon_fast_forwards_with_the_update
 test_addon_that_cannot_advance_is_reported_and_left
 test_remote_addon_line_is_relayed
 test_remote_failure_after_addon_line_names_its_error
+test_default_channel_follows_main_past_releases
+test_release_channel_follows_newest_release
+test_release_channel_never_moves_a_home_back
+test_release_channel_never_moves_a_dirty_home
+test_malformed_channel_refuses_before_anything_moves
+test_step_back_one_release
+test_remote_secondmate_follows_the_release
 
 echo "# all fm-update tests passed"

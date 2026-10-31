@@ -2,7 +2,7 @@
 name: updatefirstmate
 description: >-
   Self-update a running firstmate and its secondmates to the latest from origin.
-  Use when the captain invokes /updatefirstmate (e.g. "/updatefirstmate", "update firstmate", "pull the latest firstmate") or says "update starship" (e.g. "update my starship", "pull the latest starship"), which is the same request.
+  Use when the captain invokes /updatefirstmate (e.g. "/updatefirstmate", "update firstmate", "pull the latest firstmate") or says "update starship" (e.g. "update my starship", "pull the latest starship"), which is the same request, and when the captain asks to go back one Starship release.
   Updates this firstmate repo's default branch, this home's private add-on, and every local or remote secondmate through its guarded convergence path (never forced, never disruptive), then re-reads AGENTS.md and restarts every live second mate through the persist-gated restart, with a fallback re-read nudge only where a restart cannot be proven.
 user-invocable: true
 metadata:
@@ -51,6 +51,8 @@ This touches only the firstmate repo, its own worktrees, and a configured privat
    - `nudge-secondmates: fm-<id>...|none`
 
    The two second-mate sets are disjoint and the script owns the split; do not re-derive it.
+   A home on the release channel (`config/update-channel`, docs/configuration.md "Update channel") moves only to a named release, its lines name that release, and a home already past it reports `staying at <commit>, ahead of release <name>`, which needs no action.
+   When the captain asks to go back one release, run `bin/fm-update.sh --step-back` instead and continue from step 2 with its summary; relay a refusal's reason in plain words.
    `restart-secondmates:` carries every live mate the pass left on the latest commit, whether it advanced or was already there.
    A mate reaches neither set only because its home was skipped, because it has no live endpoint recorded here, or because its endpoint was positively classified as dead or missing.
    A skipped genuine divergence still requires attention through its durable reconciliation record; the other two cases need no update action from you.
@@ -92,6 +94,7 @@ This touches only the firstmate repo, its own worktrees, and a configured privat
 5. **Report to the captain in plain outcomes, in one line where you can.**
    Summarize what landed under `AGENTS.md` section 9 without firstmate's internal vocabulary: which parts of the fleet are now on the latest, and which were left as-is and why.
    For example: "Captain, firstmate and both second mates are now on the latest."
+   On the release channel, name the release instead of "the latest", for example "Captain, Starship is on the November release (starship-2026.11)."
    Say plainly when a mate got the message rather than a clean reload, and why - never let a partial reload read as a full one.
    Surface any skipped target whose reason needs the captain's attention - for instance a home with its own un-landed changes (diverged) or local edits (dirty), which were left untouched on purpose.
    Updating Starship never upgrades the tools beneath it, so also run `FM_HOME=<this-firstmate-home> bin/fm-stack-versions.sh notice`, which reuses this home's once-a-day release cache.

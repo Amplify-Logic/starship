@@ -203,6 +203,7 @@ It records only after everyone on the call has agreed; [docs/call-companion.md](
 ## Next
 
 To get the latest Starship at any time, tell your first mate "update starship": it pulls the shared Starship and restarts any second mates on it.
+A client or teammate who does not write code can choose a calm, named monthly version instead of the newest changes: `echo release > ~/starship/config/update-channel` ([configuration](docs/configuration.md#update-channel-configupdate-channel)).
 If you set up Starship before, [CHANGELOG.md](CHANGELOG.md) lists what changed for an existing home and what to do.
 
 Read [the captain's handbook](docs/handbook.md).

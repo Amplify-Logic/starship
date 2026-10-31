@@ -167,6 +167,7 @@ Workers open as tmux windows; `Ctrl-b` then `w` lists them.
 To leave everything running, press `Ctrl-b` then `d`.
 Next time: `ssh <you>@<server>` and `tmux attach -t firstmate`.
 To get the latest Starship, tell your first mate "update starship".
+A client or teammate who does not write code can choose a calm, named monthly version instead of the newest changes: `echo release > ~/starship/config/update-channel` ([configuration](docs/configuration.md#update-channel-configupdate-channel)).
 
 ---
 

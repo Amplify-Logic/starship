@@ -11,7 +11,7 @@
 #   fm-remote-secondmate-control.sh capture <id> [lines]
 #   fm-remote-secondmate-control.sh observe <id>
 #   fm-remote-secondmate-control.sh sync <id> [<parent-commit>]
-#   fm-remote-secondmate-control.sh update <id>
+#   fm-remote-secondmate-control.sh update <id> [<release>]
 #   fm-remote-secondmate-control.sh retire <id> [--force]
 #
 # Remote placement ends here, but the second-mate agent always runs on the
@@ -34,6 +34,9 @@
 # bin/fm-ff-lib.sh, so the clean, ancestry, and branch guards have a single owner.
 # Before that sync, update also fast-forwards the home's own private add-on
 # (bin/fm-addon.sh) from the add-on's origin, under the same guards.
+# With <release>, a parent on the release channel moves this host's code root to
+# that one release instead of origin's tip (bin/fm-update.sh --channel), so the
+# remote home follows the same release as its primary.
 # A private parent-route state directory stores only the remote secondmate
 # agent's endpoint record; the home's own
 # state/*.meta remains reserved for workers the secondmate supervises.
@@ -402,11 +405,16 @@ cmd_sync() {
 }
 
 cmd_update() {
-  local id=$1 update_out root_status
+  local id=$1 release=${2:-} update_out root_status
+  local -a channel=()
   validate_id "$id"
   validate_home "$id"
+  if [ -n "$release" ]; then
+    fm_release_name_valid "$release" || die "invalid release name: $release"
+    channel=(--channel "$release")
+  fi
   if ! update_out=$(FM_HOME="$FM_ROOT" FM_ROOT_OVERRIDE="$FM_ROOT" \
-    "$SCRIPT_DIR/fm-update.sh" 2>&1); then
+    "$SCRIPT_DIR/fm-update.sh" ${channel[@]+"${channel[@]}"} 2>&1); then
     [ -z "$update_out" ] || printf '%s\n' "$update_out" >&2
     die "remote code root update failed"
   fi
@@ -468,7 +476,7 @@ case "${1:-}" in
   capture) shift; [ "$#" -ge 1 ] && [ "$#" -le 2 ] || usage; cmd_capture "$@" ;;
   observe) shift; [ "$#" -eq 1 ] || usage; cmd_observe "$@" ;;
   sync) shift; [ "$#" -ge 1 ] && [ "$#" -le 2 ] || usage; cmd_sync "$@" ;;
-  update) shift; [ "$#" -eq 1 ] || usage; cmd_update "$@" ;;
+  update) shift; [ "$#" -ge 1 ] && [ "$#" -le 2 ] || usage; cmd_update "$@" ;;
   retire) shift; [ "$#" -ge 1 ] && [ "$#" -le 2 ] || usage; cmd_retire "$@" ;;
   ''|-h|--help|help) usage ;;
   *) die "unknown command: $1" ;;

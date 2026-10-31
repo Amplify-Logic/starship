@@ -64,7 +64,31 @@
 # fm-procevent-when.sh rebind-all to republish those bindings against the new
 # bytes; a failure there is swallowed rather than failing the update.
 #
-# Usage: fm-update.sh [--help]
+# Update channel: the home's config/update-channel (docs/configuration.md
+# "Update channel"; parsing in bin/fm-release-lib.sh) chooses what this pass
+# follows. Absent or "main" is the behavior above, unchanged. "release" follows
+# the newest release tag on origin's default branch, and a release name stays on
+# that one release; either way every home moves only forward, never past the
+# target release, and a home already ahead of it stays put and is reported. The
+# primary resolves the release once, and every local and remote secondmate
+# follows that same release, because a secondmate ahead of its primary would
+# later read as diverged to the primary-commit sync. The private add-on keeps
+# following its own origin's default branch. A malformed channel file refuses
+# the whole pass before anything moves.
+#
+# --step-back moves a home on the release channel back exactly one release: it
+# refuses unless the home is clean, on its default branch, exactly on a release,
+# and has no second mates, then moves the default branch to the previous release
+# with reset --keep (the current release is on origin's default branch, so no
+# local work can be lost) and writes that release name into
+# config/update-channel, so later updates stay there until the operator writes
+# "release" again. It prints the same reread/restart/nudge summary.
+#
+# Usage: fm-update.sh [--channel <main|release|starship-YYYY.MM[.N]>]
+#        fm-update.sh --step-back
+#        fm-update.sh --help
+# --channel overrides config/update-channel for one pass; a parent on the
+# release channel passes it to a remote secondmate's code-root update.
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -79,22 +103,48 @@ SECONDMATES_MD="$FM_HOME/data/secondmates.md"
 
 "$SCRIPT_DIR/fm-guard.sh" || true
 
-usage() { echo "usage: fm-update.sh [--help]" >&2; }
+CONFIG_DIR="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 
-if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
+usage() {
+  echo "usage: fm-update.sh [--channel <main|release|starship-YYYY.MM[.N]>] | --step-back | --help" >&2
+}
+
+step_back=no
+channel_arg=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --help|-h) usage; exit 0 ;;
+    --step-back) step_back=yes; shift ;;
+    --channel)
+      [ $# -ge 2 ] || { usage; exit 1; }
+      channel_arg=$2
+      shift 2
+      ;;
+    *) usage; exit 1 ;;
+  esac
+done
+if [ "$step_back" = yes ] && [ -n "$channel_arg" ]; then
   usage
-  exit 0
+  exit 1
 fi
-[ $# -eq 0 ] || { usage; exit 1; }
 
-# --- main firstmate repo ---------------------------------------------------
+# --- update channel ----------------------------------------------------------
 
-reread_firstmate="no"
-ff_target "$FM_ROOT" "firstmate" origin no no
-if [ "$FF_STATUS" = "updated" ]; then
-  if [ -n "$FF_INSTR" ]; then
-    reread_firstmate="yes"
+if [ -n "$channel_arg" ]; then
+  if ! fm_update_channel_value_valid "$channel_arg"; then
+    echo "fm-update: --channel must be main, release, or a release name such as starship-2026.11" >&2
+    exit 1
   fi
+  FM_UPDATE_CHANNEL=$channel_arg
+elif ! fm_update_channel_resolve "$CONFIG_DIR"; then
+  echo "fm-update: refusing to update: $FM_UPDATE_CHANNEL_DIAG" >&2
+  exit 1
+fi
+
+# Bring the running checkout's own tools in line with bytes that just moved
+# under it: republish procevent watch bindings and relink opt-in and add-on
+# skills.
+after_primary_moved() {
   # A fast-forward changes bin/'s bytes out from under any locally armed
   # fm-procevent-when watch's trust binding, with no tampering involved; left
   # alone, the very next fire is refused and the watch dies silently. Refresh
@@ -104,6 +154,95 @@ if [ "$FF_STATUS" = "updated" ]; then
   # always where this very script file happens to live (FM_ROOT_OVERRIDE, as
   # this test suite uses to point fm-update.sh at a fixture checkout).
   FM_HOME="$FM_HOME" FM_ROOT_OVERRIDE="$FM_ROOT" "$SCRIPT_DIR/fm-procevent-when.sh" rebind-all || true
+}
+sync_opt_in_skills() {
+  # An update can move a skill this home switched on out of .agents/skills/, or
+  # change the add-on's skills, so relink this home's opt-in and add-on skills at
+  # once rather than leaving the running session without them until the next
+  # launch (bin/fm-opt-in-skills.sh).
+  [ ! -x "$FM_ROOT/bin/fm-opt-in-skills.sh" ] \
+    || FM_HOME="$FM_HOME" "$FM_ROOT/bin/fm-opt-in-skills.sh" sync "$FM_ROOT" || true
+}
+
+has_secondmates() {
+  [ -f "$SECONDMATES_MD" ] && grep -q '^- ' "$SECONDMATES_MD" && return 0
+  grep -lqx 'kind=secondmate' "$STATE"/*.meta 2>/dev/null
+}
+
+# --- step back one release -----------------------------------------------------
+
+if [ "$step_back" = yes ]; then
+  sb() { echo "firstmate: step back refused: $1"; exit 1; }
+  [ "$FM_UPDATE_CHANNEL" != main ] \
+    || sb "this home follows main; step back works on the release channel (config/update-channel)"
+  ! has_secondmates || sb "this home has second mates; step back covers a home without them"
+  default=$(default_branch "$FM_ROOT") || sb "cannot determine the default branch"
+  [ "$(git -C "$FM_ROOT" symbolic-ref --short HEAD 2>/dev/null || true)" = "$default" ] \
+    || sb "not on $default"
+  [ -z "$(dirty_status "$FM_ROOT")" ] || sb "dirty working tree"
+  fetch_once "$FM_ROOT" || sb "fetch failed"
+  fm_release_fetch_tags "$FM_ROOT" || sb "release tags could not be fetched without moving a local tag"
+  head_rev=$(git -C "$FM_ROOT" rev-parse HEAD)
+  current=$(fm_release_at "$FM_ROOT" "$head_rev" "origin/$default") \
+    || sb "this home is not exactly on a release; update it first"
+  previous=$(fm_release_previous "$FM_ROOT" "origin/$default" "$current")
+  [ -n "$previous" ] || sb "$current is the oldest release"
+  prev_rev=$(git -C "$FM_ROOT" rev-parse "refs/tags/$previous^{commit}")
+  instr=$(changed_instr "$FM_ROOT" "$prev_rev")
+  git -C "$FM_ROOT" reset --quiet --keep "$prev_rev" 2>/dev/null || sb "reset --keep to $previous failed"
+  mkdir -p "$CONFIG_DIR"
+  tmp=$(mktemp "$CONFIG_DIR/.update-channel.XXXXXX")
+  printf '%s\n' "$previous" > "$tmp"
+  mv -f "$tmp" "$CONFIG_DIR/update-channel"
+  echo "firstmate: stepped back $(git -C "$FM_ROOT" rev-parse --short "$head_rev")..$(git -C "$FM_ROOT" rev-parse --short HEAD) from release $current to release $previous; config/update-channel now holds $previous"
+  after_primary_moved
+  sync_opt_in_skills
+  if [ -n "$instr" ]; then echo "reread-firstmate: yes"; else echo "reread-firstmate: no"; fi
+  echo "restart-secondmates: none"
+  echo "nudge-secondmates: none"
+  exit 0
+fi
+
+# Resolve the one base every home of this pass follows.
+UPDATE_BASE=origin
+release_error=""
+case "$FM_UPDATE_CHANNEL" in
+  main) ;;
+  release)
+    if ! default=$(default_branch "$FM_ROOT"); then
+      release_error="cannot determine default branch"
+    elif ! fetch_once "$FM_ROOT"; then
+      release_error="fetch failed"
+    elif ! fm_release_fetch_tags "$FM_ROOT"; then
+      release_error="release tags could not be fetched without moving a local tag"
+    else
+      newest=$(fm_release_newest "$FM_ROOT" "origin/$default")
+      if [ -n "$newest" ]; then
+        UPDATE_BASE="release:$newest"
+      else
+        release_error="the release channel has no release on origin/$default yet"
+      fi
+    fi
+    ;;
+  *) UPDATE_BASE="release:$FM_UPDATE_CHANNEL" ;;
+esac
+UPDATE_RELEASE=""
+[ "${UPDATE_BASE#release:}" = "$UPDATE_BASE" ] || UPDATE_RELEASE=${UPDATE_BASE#release:}
+
+# --- main firstmate repo ---------------------------------------------------
+
+reread_firstmate="no"
+if [ -n "$release_error" ]; then
+  FF_STATUS=skipped
+  echo "firstmate: skipped: $release_error"
+else
+  ff_target "$FM_ROOT" "firstmate" "$UPDATE_BASE" no no
+fi
+if [ "$FF_STATUS" = "updated" ]; then
+  if [ -n "$FF_INSTR" ]; then
+    reread_firstmate="yes"
+  fi
+  after_primary_moved
 fi
 
 # --- private add-on --------------------------------------------------------
@@ -123,12 +262,7 @@ case "$addon_status" in
   *) echo "add-on: skipped: ${addon_out#fm-addon: }" ;;
 esac
 
-# An update can move a skill this home switched on out of .agents/skills/, or
-# change the add-on's skills, so relink this home's opt-in and add-on skills at
-# once rather than leaving the running session without them until the next
-# launch (bin/fm-opt-in-skills.sh).
-[ ! -x "$FM_ROOT/bin/fm-opt-in-skills.sh" ] \
-  || FM_HOME="$FM_HOME" "$FM_ROOT/bin/fm-opt-in-skills.sh" sync "$FM_ROOT" || true
+sync_opt_in_skills
 
 # --- secondmates -----------------------------------------------------------
 # Every live secondmate this pass leaves on origin's tip is restarted, whether it
@@ -206,11 +340,17 @@ relay_remote_addon() {  # <id> <remote output>
 
 # Live direct reports first: state/<id>.meta with kind=secondmate carries the
 # authoritative home= path.
-sweep_live_secondmate_metas "$STATE" origin yes
+# A release that could not be resolved moves no home; the primary's line above
+# already names why.
+if [ -n "$release_error" ]; then
+  ! has_secondmates || echo "secondmates: skipped: $release_error"
+else
+  sweep_live_secondmate_metas "$STATE" "$UPDATE_BASE" yes
+fi
 
 # Registry backstop: a secondmate registered in data/secondmates.md but without
 # a live meta (e.g. between restarts) is still its persistent on-disk home.
-if [ -f "$SECONDMATES_MD" ]; then
+if [ -z "$release_error" ] && [ -f "$SECONDMATES_MD" ]; then
   while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in
       "- "*) ;;
@@ -223,7 +363,7 @@ if [ -f "$SECONDMATES_MD" ]; then
     id=$SECONDMATE_REGISTRY_ID
     home=$SECONDMATE_REGISTRY_HOME
     if [ "$SECONDMATE_REGISTRY_REMOTE" -eq 1 ]; then
-      if remote_out=$("$SCRIPT_DIR/fm-on.sh" "$id" fm-remote-secondmate-control.sh update "$id" < /dev/null 2>&1); then
+      if remote_out=$("$SCRIPT_DIR/fm-on.sh" "$id" fm-remote-secondmate-control.sh update "$id" ${UPDATE_RELEASE:+"$UPDATE_RELEASE"} < /dev/null 2>&1); then
         remote_result=$(printf '%s\n' "$remote_out" | tail -1)
         case "$remote_result" in
           synced:*)
@@ -262,13 +402,18 @@ if [ -f "$SECONDMATES_MD" ]; then
           *) echo "remote secondmate $id: skipped on $SECONDMATE_REGISTRY_HOST: malformed update result" >&2 ;;
         esac
       else
+        remote_status=$?
         remote_reason=$(printf '%s\n' "$remote_out" | awk '!/^add-on: / { print; exit }')
         [ -n "$remote_reason" ] || remote_reason=${remote_out%%$'\n'*}
+        # A host whose copy predates release updates refuses the extra argument.
+        if [ -n "$UPDATE_RELEASE" ] && [ "$remote_status" = "$REMOTE_SYNC_UNSUPPORTED_STATUS" ]; then
+          remote_reason="the Firstmate copy on that host is too old to follow a release; update that host's Firstmate code root from origin once"
+        fi
         echo "remote secondmate $id: skipped on $SECONDMATE_REGISTRY_HOST: $remote_reason" >&2
         relay_remote_addon "$id" "$remote_out"
       fi
     else
-      process_secondmate "$id" "$home" "" origin yes
+      process_secondmate "$id" "$home" "" "$UPDATE_BASE" yes
     fi
   done < "$SECONDMATES_MD"
 fi
