@@ -3477,7 +3477,7 @@ On a public repository, a listed word in the captain's intent is replaced by its
 For a spawned Claude worker (crewmate or scout), `bin/fm-pr-text-guard.py` also checks each shell command that publishes such text through `gh` or `gh-axi`, or starts or answers the pipeline, and refuses it, naming the words, when the text holds a listed word unless every repository the command could reach is proven private.
 It refuses a new word or data shape the same way when the command could reach this repository while it is public, and tells the worker to ask for the owner's approval of each new word; other public repositories may hold words new to this one.
 A private repository's PRs may hold the words, a pipeline whose origin is not on GitHub is not checked, and a repository whose visibility cannot be read counts as possibly public and is refused; the script's header owns which commands count and which repositories a command could reach.
-Without any list, nothing is refused.
+Without any list or approvals file, nothing is refused.
 The check reads the list on every command, so a list added later needs no relaunch.
 The primary, secondmates and other worker harnesses are not checked by it.
 This repository's `.no-mistakes.yaml` tells the review, document and test steps, whose summaries and findings become the pipeline's PR text, to name people, companies and projects only by role and never quote a private name from findings or evidence.

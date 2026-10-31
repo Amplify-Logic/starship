@@ -8,6 +8,8 @@
 #   - a real email address (placeholder domains are allowed)
 #   - a macOS absolute home path (/Users/<name>/...)
 #   - a live-token shape matching the portable-home credential scan
+#   - a customer data shape, such as a Slack id or a phone number (NEW NAMES
+#     AND DATA SHAPES below)
 #   - a word or phrase from the home's private word list (below)
 #
 # The credential half reuses the same token regex family as scan_path() in
@@ -37,7 +39,8 @@
 # DRAFT TEXT. --text checks text that is about to be published rather than
 # tracked files: a PR title, description or comment, or a no-mistakes intent.
 # It reads each named file, or stdin when none is named or the name is -,
-# checks only the private word list, and prints one
+# checks only the private word list (with --new-names, also the new-name and
+# shape checks below), and prints one
 # `LEAK_HIT: private-word: <source>: <word>` line per distinct listed word the
 # text contains (the source is the file as named, or stdin), so the writer
 # knows exactly what to take out. bin/fm-pr-text-guard.py runs it on what a
