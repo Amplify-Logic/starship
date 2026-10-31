@@ -913,6 +913,26 @@ test_held_decisions_need_you_when_the_home_asks() {
   pass 'with the setting on a held backlog decision needs you, and tooling approvals keep their fold'
 }
 
+test_a_held_decision_shows_its_readable_reason() {
+  local h out reason stored rev
+  h="$TMP_ROOT/held-reason"
+  new_home "$h"
+  # bin/fm-captain-hold.sh stores the reason through the hold-reason encoding.
+  reason='Pick the pump supplier (Contoso or Fabrikam)'
+  stored=$(bash -c '. "$1" && fm_hold_reason_encode "$2"' bash "$ROOT/bin/fm-hold-reason-lib.sh" "$reason")
+  printf '## Queued\n- [ ] fleet-r - Choose the pump supplier (since 2026-09-01) (hold: %s) (hold-kind: captain)\n' \
+    "$stored" >"$h/backlog.md"
+  render_at "$h" "$T_0900"
+  rev=$(field_of "$h" 'pump supplier' 4)
+  todo_at "$h" "$T_0900" verify --item "$(field_of "$h" 'pump supplier' 1)" --how 'backlog hold re-read' >/dev/null
+  render_at "$h" "$T_1000"
+  out=$(page "$h" 2026-09-10)
+  assert_contains "$out" 'Pick the pump supplier (Contoso or Fabrikam)' 'the page does not show the readable reason'
+  assert_not_contains "$out" 'fm-hold-v1:' 'the page shows the stored encoded reason'
+  [ "$(field_of "$h" 'pump supplier' 4)" = "$rev" ] || fail 'an unchanged reason changed the revision'
+  pass 'a held decision shows its readable reason on the page'
+}
+
 test_page_bugs_stay_fixed() {
   local h out
   h="$TMP_ROOT/page-bugs"
@@ -1334,3 +1354,4 @@ test_ranking_follows_partners_and_the_oldest_ask
 test_page_bugs_stay_fixed
 test_held_decisions_stay_in_the_tooling_fold_by_default
 test_held_decisions_need_you_when_the_home_asks
+test_a_held_decision_shows_its_readable_reason

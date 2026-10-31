@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import re
+import subprocess
 import sys
 import tempfile
 import time
@@ -275,6 +276,24 @@ def day_epoch(day):
     return int(time.mktime((d.year, d.month, d.day, 0, 0, 0, 0, 0, -1)))
 
 
+HOLD_REASON_LIB = Path(__file__).resolve().parent / 'fm-hold-reason-lib.sh'
+
+
+def decode_hold_reasons(reasons):
+    """Readable hold reasons; bin/fm-hold-reason-lib.sh owns the stored encoding.
+
+    A reason the decoder cannot read keeps its stored text rather than hiding the item."""
+    if not any(r.startswith('fm-hold-v1:') for r in reasons):
+        return reasons
+    snapshot = json.dumps({'records': [{'hold_reason': r} for r in reasons]})
+    try:
+        done = subprocess.run(['bash', '-c', '. "$1" && fm_hold_reason_decode_stream json', 'bash',
+                               str(HOLD_REASON_LIB)], input=snapshot, capture_output=True, text=True, check=True)
+        return [r['hold_reason'] for r in json.loads(done.stdout)['records']]
+    except (OSError, subprocess.CalledProcessError, ValueError, KeyError, TypeError):
+        return reasons
+
+
 def backlog_observations(path):
     """Captain-held tasks in the markdown backlog; None when there is no readable file."""
     backlog = Path(path) if path else None
@@ -292,7 +311,8 @@ def backlog_observations(path):
         since = notes.get('since', '')
         obs.append({
             'slot': 'backlog:' + match.group(1), 'aliases': [f'firstmate-backlog:{match.group(1)}'],
-            # The hold's reason and date are its revision; how long it has been
+            # The hold's stored reason and date are its revision, so decoding the
+            # reason for display never reopens an item; how long it has been
             # queued orders the page and must never reopen a closed item.
             'rev': digest(notes.get('hold', ''), until),
             'title': title, 'link': '', 'class': 'obligation', 'kind': 'decision',
@@ -301,6 +321,8 @@ def backlog_observations(path):
             'asked_at': day_epoch(since),
             'snoozed_until': until if re.match(r'^\d{4}-\d{2}-\d{2}$', until) else '',
         })
+    for ob, ask in zip(obs, decode_hold_reasons([ob['ask'] for ob in obs])):
+        ob['ask'] = ask
     return obs
 
 
