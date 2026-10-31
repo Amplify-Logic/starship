@@ -715,6 +715,10 @@
       "audience": "maintainer-architecture"
     },
     {
+      "path": "docs/teams-and-add-ons.md",
+      "audience": "operator-current"
+    },
+    {
       "path": "docs/tmux-backend.md",
       "audience": "operator-current"
     },
