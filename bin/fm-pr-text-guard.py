@@ -64,6 +64,10 @@
 # existed: bin/fm-leak-guard.sh --text says nothing at all then. An
 # unreadable payload passes, because it cannot be known to publish anything.
 # Once a command is known to publish, any failure inside the check refuses it.
+# Every call the check makes shares one deadline, BUDGET seconds from the
+# start (FM_PR_TEXT_GUARD_BUDGET when set), well inside the hook timeout
+# bin/fm-spawn.sh sets, so the check refuses when time runs out instead of
+# being cut off by the hook timeout, which would let the command run.
 import json
 import os
 import pathlib
@@ -71,9 +75,12 @@ import re
 import shlex
 import subprocess
 import sys
+import time
 
 GUARD = pathlib.Path(__file__).resolve().parent / "fm-leak-guard.sh"
 FILE_CAP = 1 << 20
+BUDGET = 35.0
+DEADLINE = None
 
 REPO_FLAG = r"(?:(?:(?:-R|--repo)(?:=|\s+)|-R)\S+\s+)?"
 PR_CREATE = re.compile(r"(?:^|[\s/;&|(`])gh(?:-axi)?\s+" + REPO_FLAG + r"pr\s+" + REPO_FLAG + r"(?:create|new)\b")
@@ -99,6 +106,14 @@ class UnparsedCommand(Exception):
 
 class UnknownTarget(Exception):
     """A repository the command could reach that cannot be named, so it counts as possibly public."""
+
+
+def left():
+    """The seconds left before the check's deadline; TimeoutError once it has passed."""
+    remaining = DEADLINE - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError("the check ran out of its %g seconds" % BUDGET)
+    return remaining
 
 
 def deny(reason):
@@ -181,7 +196,7 @@ def listed_words(text, home, cwd):
     None when the home has no list or approvals file."""
     env = dict(os.environ, FM_HOME=home)
     result = subprocess.run(["bash", str(GUARD), "--text", "--new-names", "-"], input=text.encode("utf-8", "replace"),
-                            capture_output=True, env=env, cwd=cwd, timeout=30)
+                            capture_output=True, env=env, cwd=cwd, timeout=left())
     if result.returncode == 0:
         return ([], []) if result.stdout.strip() or result.stderr.strip() else None
     listed, fresh = [], []
@@ -197,7 +212,7 @@ def listed_words(text, home, cwd):
 
 def own_repos():
     """The owner/repo, lowercased, of every remote of this script's own checkout: this Starship repository."""
-    out = subprocess.run(["git", "-C", str(GUARD.parent), "remote", "-v"], capture_output=True, text=True, timeout=10)
+    out = subprocess.run(["git", "-C", str(GUARD.parent), "remote", "-v"], capture_output=True, text=True, timeout=left())
     repos = set()
     for line in out.stdout.splitlines():
         fields = line.split()
@@ -234,7 +249,7 @@ def targets(command, words, cwd):
         repos += named_repos(words) + [None]
     if pipeline:
         url = subprocess.run(["git", "-C", cwd, "remote", "get-url", "origin"],
-                             capture_output=True, text=True, timeout=10).stdout.strip()
+                             capture_output=True, text=True, timeout=left()).stdout.strip()
         m = REMOTE.match(url)
         if not m:
             raise UnknownTarget("this checkout's origin remote %r is not a repository URL it can read" % url)
@@ -249,7 +264,7 @@ def visibility(repo, cwd):
     args = (["gh", "repo", "view"] + ([repo] if repo else [])
             + ["--json", "isPrivate,nameWithOwner", "--jq", ".isPrivate, .nameWithOwner"])
     try:
-        result = subprocess.run(args, capture_output=True, text=True, cwd=cwd, timeout=15)
+        result = subprocess.run(args, capture_output=True, text=True, cwd=cwd, timeout=left())
     except (OSError, subprocess.TimeoutExpired) as e:
         return "gh could not run (%s)" % type(e).__name__, None
     answer = result.stdout.split()
@@ -263,6 +278,8 @@ def check_hint(home, names=False):
 
 
 def cmd_hook(argv):
+    global BUDGET, DEADLINE
+    start = time.monotonic()
     o = opts(argv, ("home",))
     try:
         payload = json.load(sys.stdin)
@@ -276,6 +293,8 @@ def cmd_hook(argv):
     except Exception:  # an unreadable payload cannot be known to publish anything
         return 0
     try:
+        BUDGET = float(os.environ.get("FM_PR_TEXT_GUARD_BUDGET") or BUDGET)
+        DEADLINE = start + BUDGET
         words = tokens(command)
         text = command
         for path in named_files(command, words, cwd):

@@ -69,7 +69,7 @@
 # --text --new-names adds the same two checks to a draft text, with the tracked
 # files at this checkout's HEAD as what is already known, and, when the caller's
 # working directory is in a checkout that shares a remote's owner/repo with this
-# one, the tracked files at that checkout's HEAD too, so the words of the branch
+# one and has a commit, the tracked files at that checkout's HEAD too, so the words of the branch
 # being published count as known; bin/fm-pr-text-guard.py uses it for text
 # bound for this repository and runs it from the publishing command's directory.
 #
@@ -230,6 +230,7 @@ if [ "$TEXT_MODE" -eq 1 ]; then
     known=(--names "$ROOT" HEAD)
     caller=$(git -C "$CALLER_PWD" rev-parse --show-toplevel 2>/dev/null) || caller=
     if [ -n "$caller" ] && [ "$caller" != "$ROOT" ] \
+      && git -C "$caller" rev-parse -q --verify 'HEAD^{commit}' >/dev/null 2>&1 \
       && [ -n "$(comm -12 <(remote_repos "$ROOT") <(remote_repos "$caller"))" ]; then
       known+=(--names "$caller" HEAD)
     fi

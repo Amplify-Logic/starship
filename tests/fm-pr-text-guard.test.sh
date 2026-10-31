@@ -486,9 +486,16 @@ test_hook_refuses_new_words_only_for_this_repository() {
     "gh pr create --title \"Sync fix for $name\" --body x" \
     "gh's default repository that is not this one may hold new words"
   git init -q "$pipeline" && git -C "$pipeline" remote add origin git@github.com:o/starship-copy.git
+  git -C "$pipeline" -c user.name=t -c user.email=t@example.invalid commit -q --allow-empty -m init
   HOOK="$COPY/bin/fm-pr-text-guard.py" expect_refuse "$HOME_WORDS" \
     "no-mistakes axi run --intent \"ask $name about the Sync fix\"" \
     "a new word in the pipeline intent for this repository must be refused" "$pipeline"
+  assert_contains "$REASON" "\"$name\"" "the pipeline refusal must name the new word"
+  assert_contains "$REASON" "never appeared in this Starship repository" "the pipeline refusal must say why"
+  FM_PR_TEXT_GUARD_BUDGET=0.01 HOOK="$COPY/bin/fm-pr-text-guard.py" expect_refuse "$HOME_WORDS" \
+    "no-mistakes axi run --intent \"ask $name about the Sync fix\"" \
+    "a check that runs out of time must refuse, not pass" "$pipeline"
+  assert_contains "$REASON" "PR text check failed" "running out of time must say the check failed"
   unset FAKE_GH_PRIVATE
   HOOK="$COPY/bin/fm-pr-text-guard.py" expect_allow "$NO_LIST" \
     "gh pr create --repo o/starship-copy --title \"Sync fix for $name\" --body x" \
@@ -522,6 +529,13 @@ test_branch_words_count_as_known() {
     || STATUS=$?
   [ "$STATUS" -eq 1 ] || fail "a checkout of another repository must not make a word known: $OUT"
   assert_contains "$OUT" "LEAK_HIT: new-name: $WORK/branch-draft.md: $name" "the new word must be named"
+  git init -q "$TMP_ROOT/fresh-worker"
+  git -C "$TMP_ROOT/fresh-worker" remote add origin git@github.com:o/starship-copy.git
+  STATUS=0
+  OUT=$(cd "$TMP_ROOT/fresh-worker" && FM_HOME="$HOME_WORDS" "$COPY/bin/fm-leak-guard.sh" --text --new-names "$WORK/branch-draft.md" 2>&1) \
+    || STATUS=$?
+  [ "$STATUS" -eq 1 ] || fail "a checkout of this repository with no commit yet must hold no words, not break the check: $OUT"
+  assert_contains "$OUT" "LEAK_HIT: new-name: $WORK/branch-draft.md: $name" "the new word must be named from a fresh checkout"
 
   export FAKE_GH_PUBLIC=o/starship-copy
   HOOK="$COPY/bin/fm-pr-text-guard.py" expect_allow "$HOME_WORDS" \
