@@ -36,7 +36,11 @@
 # same command all count, plus every existing file the command names anywhere:
 # a body or input flag, a redirect, a `cat` or `$(cat ...)`, or a pipe into
 # `--body-file -`. A listed word in a path or branch name of such a command is
-# refused too, because a branch name is published. A `pr create` or `pr new` given
+# refused too, because a branch name is published. Token shapes are checked
+# only in the command and in the files it sends as content: a --body-file, -F
+# or --input value, or an @file value of -f, -F, --field or --raw-field, or
+# every file it names when its words cannot be parsed. A file it merely names,
+# such as a test fixture with synthetic keys, is checked for every other hit. A `pr create` or `pr new` given
 # --fill, -f, --fill-first or --fill-verbose before the next shell operator
 # takes its text from commit messages this check cannot see, so on a public
 # repository it is refused whenever the home has a list.
@@ -201,6 +205,28 @@ def named_files(command, words, cwd):
     return found
 
 
+def sent_files(words, cwd):
+    """The resolved files a command sends as content: a --body-file, -F or --input value, or an @file field value."""
+    found = set()
+    for i, word in enumerate(words):
+        flag, eq, value = word.partition("=")
+        if not eq:
+            flag, value = word, words[i + 1] if i + 1 < len(words) else ""
+        if flag in ("-f", "-F", "--field", "--raw-field") and "=" in value:
+            value = value.split("=", 1)[1]
+            if not value.startswith("@"):
+                continue
+        elif flag not in ("--body-file", "-F", "--input"):
+            continue
+        try:
+            path = pathlib.Path(cwd, os.path.expanduser(value.lstrip("@")))
+            if path.is_file():
+                found.add(path.resolve())
+        except (OSError, ValueError):
+            continue
+    return found
+
+
 def check_text(pieces, home, cwd):
     """Run bin/fm-leak-guard.sh --text --new-names in cwd on pieces, each (where, text): returns
     (listed places, token places, new words and data shapes), each place a (where, line), or None when
@@ -338,11 +364,16 @@ def cmd_hook(argv):
         BUDGET = float(os.environ.get("FM_PR_TEXT_GUARD_BUDGET") or BUDGET)
         DEADLINE = start + BUDGET
         words = tokens(command)
-        pieces = [("the command", command)]
-        for path in named_files(command, words, cwd):
+        files = named_files(command, words, cwd)
+        sent = set(files) if words is None else sent_files(words, cwd)
+        pieces, named = [("the command", command)], []
+        for path in files:
             with open(path, "rb") as f:
-                pieces.append((str(path), f.read(FILE_CAP).decode("utf-8", "replace")))
+                (pieces if path in sent else named).append((str(path), f.read(FILE_CAP).decode("utf-8", "replace")))
         found = check_text(pieces, o["home"], cwd)
+        if found is not None and named:
+            more = check_text(named, o["home"], cwd) or ([], [], [])
+            found = (found[0] + more[0], found[1], list(dict.fromkeys(found[2] + more[2])))
         if words is None:
             fill = bool(PR_CREATE.search(command) and any(FILL.fullmatch(w) for w in command.split()))
         else:

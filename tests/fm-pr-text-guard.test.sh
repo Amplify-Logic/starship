@@ -213,6 +213,44 @@ test_hook_refuses_token_shapes_and_never_prints_a_listed_word() {
   pass "a token shape is refused on a public repository with or without a list, and a refusal never prints a word or token"
 }
 
+# A file a publishing command merely names, such as a test fixture holding
+# synthetic keys, is not published, so its token shapes do not count; a file
+# it sends as content does.
+test_hook_checks_token_shapes_only_in_sent_files() {
+  local key home
+  export FAKE_GH_PRIVATE=false
+  # Built at run time so this file holds no token shape.
+  key="gl$(printf 'pat')-$(printf 'Xy7%.0s' 1 2 3 4 5 6 7)"
+  mkdir -p "$WORK/tests"
+  printf 'redact %s\nand %s\n' "$key" "$key" > "$WORK/tests/redaction.test.sh"
+  for home in "$HOME_WORDS" "$NO_LIST"; do
+    expect_allow "$home" 'gh pr create --repo o/public --title "Cover redaction" --body "Adds a case to tests/redaction.test.sh"' \
+      "a body that only mentions a fixture with synthetic keys must pass in $home"
+    expect_refuse "$home" 'gh pr create --repo o/public --title "Cover redaction" --body-file tests/redaction.test.sh' \
+      "a fixture sent with --body-file must have its token shapes checked in $home"
+    assert_contains "$REASON" "2 live key or token shapes (" "the refusal must count the sent file's tokens"
+    assert_contains "$REASON" "redaction.test.sh, lines 1 and 2)" "the refusal must place the sent file's tokens"
+    assert_not_contains "$REASON" "$key" "the refusal must never print a token"
+    expect_refuse "$home" 'gh pr comment 7 --repo o/public -F tests/redaction.test.sh' \
+      "a fixture sent with -F must have its token shapes checked in $home"
+    expect_refuse "$home" 'gh pr comment 7 --repo o/public --body-file=tests/redaction.test.sh' \
+      "a fixture sent with --body-file= must have its token shapes checked in $home"
+    expect_refuse "$home" 'gh api repos/o/public/issues/3/comments --input tests/redaction.test.sh' \
+      "a fixture sent with --input must have its token shapes checked in $home"
+    expect_refuse "$home" 'gh api repos/o/public/issues/3/comments -f "body=@tests/redaction.test.sh"' \
+      "a fixture sent as an @file field must have its token shapes checked in $home"
+  done
+  expect_allow "$NO_LIST" 'gh pr create --repo o/public --fill && cat tests/redaction.test.sh' \
+    "a home with no list must pass --fill even when the command names a fixture with synthetic keys"
+  printf 'redact %s for Robin\n' "$key" > "$WORK/tests/named.test.sh"
+  expect_refuse "$HOME_WORDS" 'gh pr create --repo o/public --title "Cover redaction" --body "See tests/named.test.sh"' \
+    "a listed word in a merely named file must still be refused"
+  assert_contains "$REASON" "contains 1 word from this home's private word list (" "the named file's word must count"
+  assert_not_contains "$REASON" "token shape" "the named file's token shape must not count"
+  unset FAKE_GH_PRIVATE
+  pass "token shapes count only in the command and the files it sends, while a named file's listed words still count"
+}
+
 test_hook_reads_body_files_however_they_are_named() {
   export FAKE_GH_PRIVATE=false
   printf 'Thanks Robin\n' > "$WORK/pr.md"
@@ -675,6 +713,7 @@ test_draft_check_passes_clean_text_and_partial_words
 test_draft_check_without_a_list_is_silent
 test_hook_refuses_title_body_and_comment_on_a_public_repo
 test_hook_refuses_token_shapes_and_never_prints_a_listed_word
+test_hook_checks_token_shapes_only_in_sent_files
 test_hook_reads_body_files_however_they_are_named
 test_hook_finds_the_repository_from_urls_and_gh_repo
 test_hook_refuses_the_pipeline_intent_on_a_public_github_repo
