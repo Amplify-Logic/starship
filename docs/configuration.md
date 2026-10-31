@@ -3436,7 +3436,7 @@ Any other content restores as off rather than refusing, because a corrupt prefer
 
 `config/leak-words` is an optional LOCAL, gitignored file listing words and phrases that must never appear in this public repository, such as the names of people and private projects.
 It holds one word or phrase per line; blank lines and lines starting with `#` are ignored, and matching ignores case and takes whole words only.
-Without the file, which is the default, the scan is unchanged.
+Without the file or one of the lists below, which is the default, the scan is unchanged.
 `bin/fm-leak-guard.sh` checks every tracked file against it, `tests/` included, and its header owns where it looks for the list, so a run from a task's isolated copy or a validation run's copy still finds the home's list.
 `bin/fm-lint.sh` runs that check on every default lint, including the validation pipeline's lint step, so these words are caught before each push; CI has no list, and without one the check is silent.
 
@@ -3458,7 +3458,7 @@ Every direct-PR and no-mistakes ship brief tells the worker to run it before ope
 On a public repository, a listed word in the captain's intent is replaced by its role before it reaches `--intent`; that is the one exception to passing the captain's words verbatim, and `bin/fm-dod-lib.sh` owns it.
 For a spawned Claude worker (crewmate or scout), `bin/fm-pr-text-guard.py` also checks each shell command that publishes such text through `gh` or `gh-axi`, or starts or answers the pipeline, and refuses it, naming the words, when the text holds a listed word unless every repository the command could reach is proven private.
 A private repository's PRs may hold the words, a pipeline whose origin is not on GitHub is not checked, and a repository whose visibility cannot be read counts as possibly public and is refused; the script's header owns which commands count and which repositories a command could reach.
-Without the file, nothing is refused.
+Without any list, nothing is refused.
 The check reads the list on every command, so a list added later needs no relaunch.
 The primary, secondmates and other worker harnesses are not checked by it.
 This repository's `.no-mistakes.yaml` tells the review, document and test steps, whose summaries and findings become the pipeline's PR text, to name people, companies and projects only by role and never quote a private name from findings or evidence.
