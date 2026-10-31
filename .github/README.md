@@ -32,6 +32,7 @@ Your setup stays yours: a fresh copy holds only the public files, and your prefe
 | Rented Linux server | [ONBOARDING-linux-server.md](../ONBOARDING-linux-server.md) |
 
 Each guide takes you from a blank machine to a first mate that has added one of your projects and brought back a worker's report.
+Working with a team, or with a private team add-on? Read [Working with Starship as a team](../docs/teams-and-add-ons.md).
 
 ## Safety
 
