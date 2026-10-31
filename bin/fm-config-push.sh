@@ -154,8 +154,11 @@ while IFS='|' read -r id home _window meta; do
     remote_out=$(FM_CONFIG_INHERIT_LIVE=1 \
       "$SCRIPT_DIR/fm-remote-inherit-push.sh" "$id" "$remote_generation" 2>&1) || remote_rc=$?
     [ -z "$remote_out" ] || printf '%s\n' "$remote_out" | sed 's/^/  /'
-    if [ "$remote_rc" -eq 255 ] || printf '%s\n' "$remote_out" | grep -Eq '^(pushed|removed):'; then
+    if [ "$remote_rc" -eq 255 ] || fm_remote_inherit_output_changed "$remote_out"; then
       remote_nudge=1
+    fi
+    if [ "$remote_rc" -eq 0 ] && printf '%s\n' "$remote_out" | grep -q '^error: '; then
+      errors=1
     fi
     if [ "$remote_rc" -ne 0 ] && [ "$remote_nudge" -eq 0 ]; then
       fm_secondmate_nudge_write "$STATE" "$id" "$home" "" remote \

@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # Single owner of email and /Users/<name> regex patterns for public-repo and
-# portable-home machine-local scans.
+# portable-home machine-local scans, and of what a home's private word list is
+# (fm_leak_words_write below).
 #
 # Sourced by:
 #   bin/fm-leak-guard.sh          CI hard-fail public-repo leak guard
 #   bin/fm-home-port.sh           --warn-machine-local advisory pass on scan
+#   bin/fm-config-inherit-lib.sh  the word list a secondmate home inherits
 #
 # Do not duplicate EMAIL or /Users/<name> patterns elsewhere.
 # Live-token shapes stay with each caller's credential scan (portable export
@@ -14,6 +16,7 @@ if [ -n "${FM_LEAK_LIB_SOURCED:-}" ]; then
   return 0
 fi
 FM_LEAK_LIB_SOURCED=1
+FM_LEAK_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Real email addresses (placeholder domains filtered by fm_leak_is_allowed_email).
 FM_LEAK_EMAIL_PATTERN='[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}'
@@ -94,4 +97,62 @@ fm_leak_scan_machine_local() {
   fi
 
   [ "$hits" -eq 0 ]
+}
+
+# fm_leak_words_clean <file>: the file's words and phrases, one per line, with
+# surrounding blanks trimmed and blank and # comment lines dropped. Every line
+# it prints ends in a newline, even when the file's last line does not, so lists
+# printed one after another never join two words.
+fm_leak_words_clean() {
+  awk '{ sub(/^[[:space:]]+/, ""); sub(/[[:space:]]+$/, "") } $0 != "" && substr($0, 1, 1) != "#"' "$1"
+}
+
+# fm_leak_words_write <home> <config-dir> <out-file>
+# Write the home's private word list to <out-file>, one fixed string per line:
+# the home's own <config-dir>/leak-words, then <config-dir>/leak-words.inherited
+# (the list a secondmate home inherits from its primary), then the leak-words
+# file at the root of the home's private add-on (bin/fm-addon.sh root, read
+# with FM_HOME=<home> and that config dir), which is how a private team add-on
+# carries the team's list. <out-file> is empty when the home has none of them. An add-on that is
+# configured but unusable is named on stderr, adds no words, and returns 2 with
+# the home's own words still written. Never prints a word; returns 1 when
+# <out-file> cannot be written.
+fm_leak_words_write() {
+  local home=$1 config=$2 out=$3 addon list rc=0
+  : > "$out" || return 1
+  for list in "$config/leak-words" "$config/leak-words.inherited"; do
+    if [ -f "$list" ]; then
+      fm_leak_words_clean "$list" >> "$out" || return 1
+    fi
+  done
+  [ -x "$FM_LEAK_LIB_DIR/fm-addon.sh" ] || return 0
+  addon=$(FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" "$FM_LEAK_LIB_DIR/fm-addon.sh" root 2>/dev/null) || rc=$?
+  case "$rc" in
+    0)
+      if [ -f "$addon/leak-words" ]; then
+        fm_leak_words_clean "$addon/leak-words" >> "$out" || return 1
+      fi
+      ;;
+    1) ;;
+    *)
+      printf 'fm-leak-lib: the private add-on in %s/addon is unusable, so its leak-words list is not read; bin/fm-addon.sh root names why\n' "$config" >&2
+      return 2
+      ;;
+  esac
+  return 0
+}
+
+# fm_leak_words_inherit_payload <home> <config-dir> <out-file>
+# Stage the word list a primary home publishes to its secondmate homes as their
+# config/leak-words.inherited (bin/fm-config-inherit-lib.sh): the merged list
+# above, so a secondmate also keeps its primary's add-on words out of what it
+# publishes. A secondmate's own config/leak-words is never touched. <out-file>
+# is left absent when the home has no words, which the inheritance mirrors as
+# absence downstream. Fails when the add-on is unusable, so a secondmate keeps
+# its last inherited list rather than losing the add-on's words.
+fm_leak_words_inherit_payload() {
+  local out=$3
+  rm -f "$out" || return 1
+  fm_leak_words_write "$1" "$2" "$out" || { rm -f "$out"; return 1; }
+  [ -s "$out" ] || rm -f "$out"
 }

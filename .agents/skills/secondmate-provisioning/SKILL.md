@@ -108,6 +108,7 @@ The declared `config/supervision-host-off` opt-out follows the same primary-auth
 `config/supervision-host` itself is not inherited; each home selects its own engine.
 `config/secondmate-harness` is not inherited because it is only the primary's knob for launching secondmate agents.
 `config/firstmate-role` is inherited under the additional [resolved-role and receipt policy](../../../docs/configuration.md#firstmate-role-configfirstmate-role), not as a raw copy of the primary file.
+The primary's word list merged with its add-on's list is inherited as `config/leak-words.inherited`, beside the secondmate's own `config/leak-words`, which inheritance never touches, and is never inlined into a reread message ([private leak words](../../../docs/configuration.md#private-leak-words-configleak-words)).
 Account pins are not inherited.
 [`docs/configuration.md` "Per-secondmate account pins"](../../../docs/configuration.md#per-secondmate-account-pins) owns the explicit `config/secondmate-accounts/<id>/` override and the independent worker pins inside each mate's home.
 `data/captain-shared.md` is main-authoritative in the primary home and read-only in secondmate homes.
@@ -136,7 +137,7 @@ A newly launched or relaunched secondmate already reads its files at launch, so 
 Quarantined pre-relaunch generations are retained in bounded private history, and cleanup skips creating an empty quarantine generation.
 Successfully delivered generations are retained only within a bounded per-home state history, while pending generations remain until delivery succeeds or a launch supersedes them.
 A remote home receives the same allowlisted bytes through `fm-remote-inherit.sh` and gets one marked re-read instruction after successful convergence when a transfer or tracked instruction-surface change requires it, or an earlier re-read remains owed.
-An unchanged transfer or a tracked advance outside `AGENTS.md`, `bin/`, and `.agents/skills/` creates no new re-read obligation.
+An unchanged transfer, a transfer that changes only `config/leak-words.inherited`, or a tracked advance outside `AGENTS.md`, `bin/`, and `.agents/skills/` creates no new re-read obligation.
 The parent records that nudge before delivery, retains it after a failed send, a partial apply, unknown completion, or an attempt killed before it reported, and retries the exact same route during locked bootstrap convergence.
 [`fm-secondmate-nudge-lib.sh`](../../../bin/fm-secondmate-nudge-lib.sh) owns the durable obligation record and compatibility behavior.
 It does not receive a pointer to a primary-local generation path that cannot exist on that host.

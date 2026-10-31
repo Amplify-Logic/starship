@@ -21,14 +21,16 @@
 # one word or phrase per line, blank lines and lines starting with # ignored,
 # matched case-insensitively as whole words. That list is checked against
 # EVERY scanned file, tests/ and the allowlisted scripts included, because a
-# fixture is exactly where a real name slips in. The list is read from
-# FM_HOME's config/ when FM_HOME is set, else from the config/ of the primary
-# checkout this checkout is a worktree of (so a task worktree finds its home's
-# list), else from ~/starship/config/, the default home, which is how a
-# no-mistakes validation copy - a worktree of the gate's own bare mirror that
-# belongs to no home - still finds it. No list means no word check; CI has
-# none. A hit prints the offending line locally, so the words never leave this
-# machine. bin/fm-lint.sh runs --private-words on every default lint, which is
+# fixture is exactly where a real name slips in. The home is FM_HOME when it is
+# set, else the primary checkout this checkout is a worktree of (so a task
+# worktree finds its home's list), else ~/starship, the default home, which is
+# how a no-mistakes validation copy - a worktree of the gate's own bare mirror
+# that belongs to no home - still finds it. The list a secondmate home inherits
+# from its primary, config/leak-words.inherited, and a file named leak-words at
+# the root of the home's private add-on (bin/fm-addon.sh), both in the same
+# format, add their words to the home's own; fm_leak_words_write in
+# bin/fm-leak-lib.sh owns that merge. No list means no word check; CI has none. A hit prints the offending
+# line locally, so the words never leave this machine. bin/fm-lint.sh runs --private-words on every default lint, which is
 # how the list is checked before each push.
 #
 #
@@ -77,27 +79,24 @@ cd "$ROOT" || exit 1
 # shellcheck disable=SC2016
 TOKEN_PATTERN='(FMX_PAIRING_TOKEN[[:space:]]*=[[:space:]]*['\''\"]?[A-Za-z0-9._-]{8,}|(^|[^A-Za-z0-9_])(ghp_|gho_|ghu_|ghs_|ghr_|github_pat_)[A-Za-z0-9_]{20,}|sk-ant-[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}|BEGIN (RSA |OPENSSH |EC |DSA )?PRIVATE KEY|api[_-]?key[[:space:]]*[=:][[:space:]]*['\''\"]?[A-Za-z0-9_-]{20,}|CMUX_SOCKET_PASSWORD[[:space:]]*=[[:space:]]*['\''\"]?[A-Za-z0-9._-]{8,})'
 
-leak_words_file() {
+leak_words_home() {
   local common
   if [ -n "${FM_HOME:-}" ]; then
-    printf '%s\n' "$FM_HOME/config/leak-words"
+    printf '%s\n' "$FM_HOME"
   elif common=$(git -C "$ROOT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) \
     && [ "${common##*/}" = .git ]; then
-    printf '%s\n' "${common%/.git}/config/leak-words"
+    printf '%s\n' "${common%/.git}"
   else
-    printf '%s\n' "${HOME:-}/starship/config/leak-words"
+    printf '%s\n' "${HOME:-}/starship"
   fi
 }
 
 # The cleaned word list (one fixed string per line), or empty when there is none.
-WORDS_LIST=
-words_source=$(leak_words_file)
-if [ -f "$words_source" ]; then
-  WORDS_LIST=$(mktemp "${TMPDIR:-/tmp}/fm-leak-words.XXXXXX")
-  trap 'rm -f "$WORDS_LIST"' EXIT
-  sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e '/^#/d' -e '/^$/d' "$words_source" > "$WORDS_LIST"
-  [ -s "$WORDS_LIST" ] || { rm -f "$WORDS_LIST"; WORDS_LIST=; }
-fi
+words_home=$(leak_words_home)
+WORDS_LIST=$(mktemp "${TMPDIR:-/tmp}/fm-leak-words.XXXXXX")
+trap 'rm -f "$WORDS_LIST"' EXIT
+fm_leak_words_write "$words_home" "$words_home/config" "$WORDS_LIST" || [ "$?" -eq 2 ]
+[ -s "$WORDS_LIST" ] || { rm -f "$WORDS_LIST"; WORDS_LIST=; }
 if [ "$WORDS_ONLY" -eq 1 ] && [ -z "$WORDS_LIST" ]; then
   exit 0
 fi
@@ -133,7 +132,7 @@ if [ "$TEXT_MODE" -eq 1 ]; then
     done < <(grep -Fiwo -f "$WORDS_LIST" "$text" 2>/dev/null | awk '!seen[tolower($0)]++')
   done
   if [ -n "$found" ]; then
-    printf 'fm-leak-guard.sh: FAIL - the text contains words from the private list %s: %s; rewrite it without them\n' "$words_source" "$found" >&2
+    printf 'fm-leak-guard.sh: FAIL - the text contains words from the private word list of the home %s: %s; rewrite it without them\n' "$words_home" "$found" >&2
     exit 1
   fi
   printf 'fm-leak-guard.sh: PASS - no words from the private list in the text\n'
@@ -232,7 +231,7 @@ fi
 
 if [ "$WORDS_ONLY" -eq 1 ]; then
   if [ "$hits" -ne 0 ]; then
-    printf 'fm-leak-guard.sh: FAIL - tracked files contain words from the private list %s (see LEAK_HIT lines above)\n' "$words_source" >&2
+    printf 'fm-leak-guard.sh: FAIL - tracked files contain words from the private word list of the home %s (see LEAK_HIT lines above)\n' "$words_home" >&2
     exit 1
   fi
   printf 'fm-leak-guard.sh: PASS - no words from the private list in scanned tracked files\n'

@@ -638,12 +638,13 @@ An add-on keeps this repository's layout, so a tool moves between the two by mov
 
 - Every skill in the add-on's `.agents/skills/` is linked into the home's checkout as an opt-in skill is, and replaces an opt-in skill of the same name.
 - Hooks in the add-on's `hooks/<point>/` run beside this repository's own built-in `hooks/<point>/`, in name order, and replace a built-in hook of the same name: `bootstrap` adds read-only startup checks, `session-start` adds standing instructions to the session-start digest, `sentinel` names work that keeps the host sentinel watching a home with no task in flight, `watcher` files are sourced into the watcher when it starts, `deck-staging` adds staging runs to the Action Deck, and `todo-verbs` and `todo-page` extend the daily to-do page (below).
+- A `leak-words` file at the add-on's root adds its words to the home's [private leak words](#private-leak-words-configleak-words), so a private team add-on can carry that team's names to every teammate.
 
 `/updatefirstmate` ("update starship") fast-forwards the add-on from its origin with the same guards as the shared code and relinks its skills, and a remote second mate's home fast-forwards the add-on its own `config/addon` names.
 `bin/fm-home-port.sh` carries `config/addon` to another machine, clones the add-on during its one-command handoff, and fails `verify` while the checkout is missing, and `bin/fm-linux-setup.sh --addon <owner>/<repo>` names one on a new Linux machine.
 Personal tools that serve one home only, such as glasses tools or device configuration staging, live in that home's own add-on rather than here.
 Register the add-on as an ordinary project when workers should change it.
-The add-on is home-local and is not inherited by secondmate homes.
+The add-on is home-local and is not inherited by secondmate homes, though its `leak-words` list reaches them inside the inherited word list.
 `bin/fm-addon.sh` owns the configuration, the hook points and their contract, and the install.
 
 ## Daily intake and to-do page (config/morning-intake, config/channel-intake)
@@ -3436,10 +3437,21 @@ Any other content restores as off rather than refusing, because a corrupt prefer
 
 `config/leak-words` is an optional LOCAL, gitignored file listing words and phrases that must never appear in this public repository, such as the names of people and private projects.
 It holds one word or phrase per line; blank lines and lines starting with `#` are ignored, and matching ignores case and takes whole words only.
-Without the file, which is the default, the scan is unchanged.
+Without the file or one of the lists below, which is the default, the scan is unchanged.
 `bin/fm-leak-guard.sh` checks every tracked file against it, `tests/` included, and its header owns where it looks for the list, so a run from a task's isolated copy or a validation run's copy still finds the home's list.
 `bin/fm-lint.sh` runs that check on every default lint, including the validation pipeline's lint step, so these words are caught before each push; CI has no list, and without one the check is silent.
-The file is not inherited by secondmate homes.
+
+A home's [private add-on](#private-add-on-configaddon) may carry more words in a file named `leak-words` at the add-on's root, in the same format, and the guard checks them together with the home's own list.
+This is how a private team add-on keeps every teammate's list current: the team's colleague, partner and customer names live in that one file, and `/updatefirstmate` ("update starship") brings each teammate the latest copy with the rest of the add-on.
+Without that file, or without an add-on, nothing changes; an add-on that is configured but unusable is named on stderr and adds no words.
+The guard never prints the list; a hit names only the matching word or line.
+`fm_leak_words_write` in `bin/fm-leak-lib.sh` owns how the lists are merged.
+
+Secondmate homes inherit the merged list as `config/leak-words.inherited` under the primary-authoritative contract in `bin/fm-config-inherit-lib.sh`, so a secondmate that inherits the right to publish to this repository through `config/firstmate-role` also keeps these words out of what it publishes.
+The guard checks a home's own `config/leak-words`, its `config/leak-words.inherited` and its add-on's list together.
+Inheritance replaces only `config/leak-words.inherited`, and removes it when the primary has no words; a secondmate home's own `config/leak-words` is never touched, so inheriting never shrinks the words that home keeps out.
+While the primary's add-on is configured but unusable, the inherited list is reported as an error and not pushed, each secondmate home keeps its last copy, and every other inherited item still converges.
+A changed list is never written into the reread message a live secondmate receives; its guard reads the file on every run.
 
 The same list keeps these words out of what workers publish to a public repository's pull requests: titles, descriptions, comments, and the intent and gate answers the validation pipeline turns into its PR.
 `bin/fm-leak-guard.sh --text [<file>|-]` checks draft text, from the named files or stdin, and names every listed word it contains; it exits 1 on a hit, 0 when the text is clean, and 0 silently without a list.
@@ -3447,7 +3459,7 @@ Every direct-PR and no-mistakes ship brief tells the worker to run it before ope
 On a public repository, a listed word in the captain's intent is replaced by its role before it reaches `--intent`; that is the one exception to passing the captain's words verbatim, and `bin/fm-dod-lib.sh` owns it.
 For a spawned Claude worker (crewmate or scout), `bin/fm-pr-text-guard.py` also checks each shell command that publishes such text through `gh` or `gh-axi`, or starts or answers the pipeline, and refuses it, naming the words, when the text holds a listed word unless every repository the command could reach is proven private.
 A private repository's PRs may hold the words, a pipeline whose origin is not on GitHub is not checked, and a repository whose visibility cannot be read counts as possibly public and is refused; the script's header owns which commands count and which repositories a command could reach.
-Without the file, nothing is refused.
+Without any list, nothing is refused.
 The check reads the list on every command, so a list added later needs no relaunch.
 The primary, secondmates and other worker harnesses are not checked by it.
 This repository's `.no-mistakes.yaml` tells the review, document and test steps, whose summaries and findings become the pipeline's PR text, to name people, companies and projects only by role and never quote a private name from findings or evidence.

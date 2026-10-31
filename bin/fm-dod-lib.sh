@@ -401,7 +401,7 @@ EOF
 # ends in a pull request: the worker checks draft PR text and the no-mistakes
 # intent with bin/fm-leak-guard.sh --text before publishing it, and checks what
 # was actually published afterwards, comments the pipeline posted included. It names this checkout's guard and the
-# caller's FM_HOME, whose config/leak-words is the list; bin/fm-pr-text-guard.py
+# caller's FM_HOME, whose word list that guard reads; bin/fm-pr-text-guard.py
 # enforces the same check on a Claude worker's publishing commands. Rendered
 # beside fm_pr_target_block.
 fm_pr_text_block() {
