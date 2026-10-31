@@ -275,7 +275,6 @@ CFG_REPORT_DIR=
 CFG_OPEN_COMMAND=
 CFG_LABEL=$DEFAULT_LABEL
 CFG_CAPTAIN_NAMES=
-CFG_HELD_NEED_YOU=false
 
 usage() {
   awk '
@@ -438,7 +437,7 @@ load_config() {
           ;;
         held_decisions_need_you)
           case "$value" in
-            true|false) CFG_HELD_NEED_YOU=$value ;;
+            true|false) ;;
             *) die "held_decisions_need_you must be true or false: $value" ;;
           esac
           ;;
