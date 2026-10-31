@@ -66,19 +66,19 @@ write_task() {  # <id> <project-key> <project-name> <ws> <tab> <pane> <wt> <kind
     "herdr_project_key=$2"
 }
 
-JOURNEY_SHIP=$(make_worktree journey-ship fm/journey-release-q7)
-JOURNEY_SCOUT=$(make_worktree journey-scout detached)
-ATELIER_BLOCK=$(make_worktree atelier-block fm/atelier-block-p2)
-ATELIER_FAIL=$(make_worktree atelier-fail fm/atelier-fail-z9)
-ATELIER_PAUSE=$(make_worktree atelier-pause fm/atelier-pause-r2)
-ATELIER_READY=$(make_worktree atelier-ready fm/atelier-ready-r8)
+ALPHA_SHIP=$(make_worktree alpha-ship fm/alpha-release-q7)
+ALPHA_SCOUT=$(make_worktree alpha-scout detached)
+BETA_BLOCK=$(make_worktree beta-block fm/beta-block-p2)
+BETA_FAIL=$(make_worktree beta-fail fm/beta-fail-z9)
+BETA_PAUSE=$(make_worktree beta-pause fm/beta-pause-r2)
+BETA_READY=$(make_worktree beta-ready fm/beta-ready-r8)
 LEGACY_WT=$(make_worktree legacy fm/legacy-k1)
-write_task journey-ship /projects/city-guide 'City Guide' w1 t1 w1:p1 "$JOURNEY_SHIP" ship pi default
-write_task journey-scout /projects/city-guide 'City Guide' w1 t2 w1:p2 "$JOURNEY_SCOUT" scout codex gpt-5.6
-write_task atelier-block /projects/atelier Atelier w2 t3 w2:p1 "$ATELIER_BLOCK" ship pi default
-write_task atelier-fail /projects/atelier Atelier w2 t4 w2:p2 "$ATELIER_FAIL" ship codex gpt-5.6
-write_task atelier-pause /projects/atelier Atelier w2 t5 w2:p3 "$ATELIER_PAUSE" scout pi default
-write_task atelier-ready /projects/atelier Atelier w2 t6 w2:p4 "$ATELIER_READY" ship codex gpt-5.6
+write_task alpha-ship /projects/alpha 'Alpha' w1 t1 w1:p1 "$ALPHA_SHIP" ship pi default
+write_task alpha-scout /projects/alpha 'Alpha' w1 t2 w1:p2 "$ALPHA_SCOUT" scout codex gpt-5.6
+write_task beta-block /projects/beta Beta w2 t3 w2:p1 "$BETA_BLOCK" ship pi default
+write_task beta-fail /projects/beta Beta w2 t4 w2:p2 "$BETA_FAIL" ship codex gpt-5.6
+write_task beta-pause /projects/beta Beta w2 t5 w2:p3 "$BETA_PAUSE" scout pi default
+write_task beta-ready /projects/beta Beta w2 t6 w2:p4 "$BETA_READY" ship codex gpt-5.6
 write_task legacy-task /projects/legacy 'Legacy Project' oldw oldt oldw:p1 "$LEGACY_WT" ship pi default 0
 fm_write_meta "$HOME_FIX/state/secondmate-task.meta" \
   "window=fm-lab-visible:sm:p1" \
@@ -94,21 +94,21 @@ fm_write_meta "$HOME_FIX/state/secondmate-task.meta" \
   "home=$HOME_FIX"
 
 cat > "$HOME_FIX/data/backlog.md" <<'EOF'
-- [ ] journey-ship - Ship the Journey release (repo: city-guide)
-- [ ] journey-scout - Validate the Journey route (repo: city-guide)
-- [ ] atelier-block - Unblock Atelier deploy (repo: atelier)
-- [ ] atelier-fail - Repair Atelier failure (repo: atelier)
-- [ ] atelier-pause - Wait for Atelier upstream (repo: atelier)
-- [ ] atelier-ready - Prepare Atelier release (repo: atelier)
+- [ ] alpha-ship - Ship the Alpha release (repo: alpha)
+- [ ] alpha-scout - Validate the Alpha route (repo: alpha)
+- [ ] beta-block - Unblock Beta deploy (repo: beta)
+- [ ] beta-fail - Repair Beta failure (repo: beta)
+- [ ] beta-pause - Wait for Beta upstream (repo: beta)
+- [ ] beta-ready - Prepare Beta release (repo: beta)
 - [ ] legacy-task - Refresh legacy task safely (repo: legacy)
 EOF
 cat > "$STATES" <<'EOF'
-journey-ship=working
-journey-scout=parked
-atelier-block=blocked
-atelier-fail=failed
-atelier-pause=paused
-atelier-ready=done
+alpha-ship=working
+alpha-scout=parked
+beta-block=blocked
+beta-fail=failed
+beta-pause=paused
+beta-ready=done
 legacy-task=working
 EOF
 
@@ -133,21 +133,21 @@ test_tasks_projects_axes_and_states() {
   local out
   run_all --republish
   out=$(cat "$LOG")
-  assert_contains "$out" 'tab rename t1 WORKER · Ship the Journey release · 🔵 WORKING' \
+  assert_contains "$out" 'tab rename t1 WORKER · Ship the Alpha release · 🔵 WORKING' \
     'Pi ship did not receive the worker contract'
-  assert_contains "$out" 'tab rename t2 WORKER · Validate the Journey route · 🟣 NEEDS YOU' \
+  assert_contains "$out" 'tab rename t2 WORKER · Validate the Alpha route · 🟣 NEEDS YOU' \
     'Codex scout did not receive the same worker contract'
-  assert_contains "$out" '--display-agent pi · fm/journey-release-q7' \
+  assert_contains "$out" '--display-agent pi · fm/alpha-release-q7' \
     'Pi runtime or named branch was not projected'
   assert_contains "$out" '--display-agent codex/gpt-5.6 · detached' \
     'Codex model or detached scout state was not projected'
-  assert_contains "$out" 'workspace rename w1 City Guide · 🟣 1 NEEDS YOU · 🔵 1 WORKING' \
-    'Journey tasks did not aggregate in one human project workspace'
-  assert_contains "$out" 'workspace rename w2 Atelier · 🔴 1 FAILED · 🟠 1 BLOCKED · 🟡 1 WAITING · 🟢 1 READY' \
-    'authoritative states were not prioritized for the concurrent Atelier project'
-  assert_contains "$out" '--token fm_task_id=journey-ship' \
+  assert_contains "$out" 'workspace rename w1 Alpha · 🟣 1 NEEDS YOU · 🔵 1 WORKING' \
+    'Alpha tasks did not aggregate in one human project workspace'
+  assert_contains "$out" 'workspace rename w2 Beta · 🔴 1 FAILED · 🟠 1 BLOCKED · 🟡 1 WAITING · 🟢 1 READY' \
+    'authoritative states were not prioritized for the concurrent Beta project'
+  assert_contains "$out" '--token fm_task_id=alpha-ship' \
     'hidden durable task identity was not preserved'
-  assert_not_contains "$out" 'tab rename t1 fm-journey-ship' \
+  assert_not_contains "$out" 'tab rename t1 fm-alpha-ship' \
     'durable task id leaked into a new human-facing tab'
   pass 'visible status: concurrent projects, ship/scout, Pi/Codex, outcomes, runtime/model, branches, and authoritative states'
 }
@@ -250,12 +250,12 @@ test_cleanup_keeps_stable_target_fallback() {
   : > "$LOG"
   PATH="$FAKEBIN:$PATH" FM_HOME="$HOME_FIX" FM_VISIBLE_HERDR_LOG="$LOG" \
     FM_BACKEND_HERDR_PRESENTATION_FORCE=1 \
-    "$ROOT/bin/fm-visible-status.sh" --clear journey-ship
+    "$ROOT/bin/fm-visible-status.sh" --clear alpha-ship
   assert_contains "$(cat "$LOG")" '--clear-title --clear-display-agent --clear-state-labels' \
     'cleanup did not clear presentation metadata'
-  assert_contains "$(cat "$LOG")" 'tab rename t1 fm-journey-ship' \
+  assert_contains "$(cat "$LOG")" 'tab rename t1 fm-alpha-ship' \
     'cleanup did not restore the legacy readable fallback before endpoint close'
-  [ -f "$HOME_FIX/state/journey-ship.meta" ] || fail 'presentation cleanup changed durable task metadata'
+  [ -f "$HOME_FIX/state/alpha-ship.meta" ] || fail 'presentation cleanup changed durable task metadata'
   pass 'visible status: cleanup clears cosmetics while preserving stable metadata and a legacy title fallback'
 }
 
@@ -292,9 +292,9 @@ Available models
 cursor-grok-4.5-medium-fast - Cursor Grok 4.5 Medium Fast
 gpt-5.6-sol-xhigh - GPT-5.6 Sol 1M Extra High
 EOF
-  # Meta claims sol-xhigh (the atelier-local-services-run-d1 shape); the pane
+  # Meta claims sol-xhigh (the beta-local-services-run-d1 shape); the pane
   # footer shows the account-default Grok the worker actually ran.
-  write_task cursor-live /projects/atelier Atelier w3 t7 w3:p7 "$wt" scout cursor gpt-5.6-sol-xhigh
+  write_task cursor-live /projects/beta Beta w3 t7 w3:p7 "$wt" scout cursor gpt-5.6-sol-xhigh
   meta="$HOME_FIX/state/cursor-live.meta"
   printf 'cursor-live=working\n' >> "$STATES"
   : > "$LOG"
@@ -328,7 +328,7 @@ test_cursor_busy_pane_keeps_meta_model() {
 Available models
 gpt-5.6-sol-xhigh - GPT-5.6 Sol 1M Extra High
 EOF
-  write_task cursor-busy /projects/atelier Atelier w3 t8 w3:p8 "$wt" ship cursor gpt-5.6-sol-xhigh
+  write_task cursor-busy /projects/beta Beta w3 t8 w3:p8 "$wt" ship cursor gpt-5.6-sol-xhigh
   printf 'cursor-busy=working\n' >> "$STATES"
   : > "$LOG"
   PATH="$FAKEBIN:$PATH" \
@@ -375,20 +375,20 @@ write_shared_task() {  # <id> <project-key> <project-name> <ws> <n>
     "herdr_project_key=$2"
 }
 
-# shared_fleet <voice-id> <journey-id>: the task ids choose which project's
+# shared_fleet <voice-id> <alpha-id>: the task ids choose which project's
 # record a pass meets first, so the two orders exercise both.
 shared_fleet() {
   rm -f "$SHARED_HOME"/state/*.meta "$SHARED_HOME"/state/*.visible-label \
     "$SHARED_HOME"/state/.visible-workspace-*
-  write_shared_task "$1" /projects/glasses-voice 'Glasses Voice' sw 1
-  write_shared_task "$2" /projects/city-guide 'City Guide' sw 2
-  write_shared_task "$2-two" /projects/city-guide 'City Guide' sw 3
-  write_shared_task solo-atelier /projects/atelier Atelier ow 4
+  write_shared_task "$1" /projects/gamma 'Gamma' sw 1
+  write_shared_task "$2" /projects/alpha 'Alpha' sw 2
+  write_shared_task "$2-two" /projects/alpha 'Alpha' sw 3
+  write_shared_task solo-beta /projects/beta Beta ow 4
   cat > "$SHARED_STATES" <<EOF
 $1=working
 $2=parked
 $2-two=working
-solo-atelier=working
+solo-beta=working
 EOF
 }
 
@@ -405,19 +405,19 @@ run_shared() {  # <fm-visible-status.sh args...>
 
 test_shared_workspace_label_is_neutral_and_stable() {
   local order expected='workspace rename sw Firstmate · 🟣 1 NEEDS YOU · 🔵 2 WORKING'
-  for order in 'a-voice z-journey' 'z-voice a-journey'; do
+  for order in 'a-voice z-alpha' 'z-voice a-alpha'; do
     # shellcheck disable=SC2086
     shared_fleet $order
     run_shared --all || fail "a pass over a shared workspace failed ($order)"
     assert_contains "$(cat "$LOG")" "$expected" \
       "a workspace shared by two projects was not labelled neutrally over all its tasks ($order)"
-    assert_not_contains "$(grep 'workspace rename sw ' "$LOG")" 'Glasses Voice' \
+    assert_not_contains "$(grep 'workspace rename sw ' "$LOG")" 'Gamma' \
       "a shared workspace was labelled with one project's name ($order)"
-    assert_not_contains "$(grep 'workspace rename sw ' "$LOG")" 'City Guide' \
+    assert_not_contains "$(grep 'workspace rename sw ' "$LOG")" 'Alpha' \
       "a shared workspace was labelled with one project's name ($order)"
     [ "$(grep -c 'workspace rename sw ' "$LOG")" -eq 1 ] \
       || fail "a shared workspace was renamed more than once in one pass ($order)"
-    assert_contains "$(cat "$LOG")" 'workspace rename ow Atelier · 🔵 1 WORKING' \
+    assert_contains "$(cat "$LOG")" 'workspace rename ow Beta · 🔵 1 WORKING' \
       "a single-project workspace lost its project name ($order)"
   done
   # A single-task refresh names the shared workspace the same way.

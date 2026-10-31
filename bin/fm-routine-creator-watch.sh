@@ -11,9 +11,8 @@
 # commits and its commits on the default branch inside the reporting window. A
 # release tag on a commit that is not on the default branch is not listed; the
 # laptop creator watch, which keeps running alongside, covers those. `run`
-# publishes that digest as the
-# single file creator-watch.md on the main branch of the dedicated public
-# reports repository Amplify-Logic/firstmate-routine-reports, replacing the
+# publishes that digest as the single file creator-watch.md on the main branch
+# of a dedicated reports repository, <owner>/<reports-repo>, replacing the
 # previous copy with one new commit, so that branch's history is the routine's
 # audit log. The firstmate clone the routine runs this from is only read: the
 # commit is built in a temporary repository and nothing is ever pushed to
@@ -54,8 +53,12 @@
 # catches a tag added after a run to a commit from just before it, and a commit
 # pushed after the run it predates; items in that day can appear in two digests.
 #
-# Test seams: FM_ROUTINE_NOW (epoch seconds), FM_ROUTINE_REMOTE (default the
-# reports repository's https URL), FM_ROUTINE_URL_BASE (default
+# Required setting: FM_ROUTINE_REMOTE, the reports repository's clone URL, such
+# as https://github.com/<owner>/<reports-repo>.git. There is no built-in
+# default: `run` refuses with exit status 2, naming the setting, while it is
+# unset or empty.
+#
+# Test seams: FM_ROUTINE_NOW (epoch seconds), FM_ROUTINE_URL_BASE (default
 # https://github.com/), and FM_ROUTINE_REPOS (a whitespace-separated
 # replacement repository list).
 set -u
@@ -70,7 +73,7 @@ ROUTINE=creator-watch
 BRANCH=main
 FILE="$ROUTINE.md"
 MARKER_PREFIX="<!-- fm-routine-report: $ROUTINE v1 window-end-epoch="
-REMOTE=${FM_ROUTINE_REMOTE:-https://github.com/Amplify-Logic/firstmate-routine-reports.git}
+REMOTE=${FM_ROUTINE_REMOTE:-}
 URL_BASE=${FM_ROUTINE_URL_BASE:-https://github.com/}
 READ_SECS=${FM_ROUTINE_READ_SECS:-45}
 BUDGET_SECS=${FM_ROUTINE_BUDGET_SECS:-240}
@@ -111,6 +114,9 @@ usage() {
 Usage:
   fm-routine-creator-watch.sh run       build the digest and publish it to the reports repository
   fm-routine-creator-watch.sh --help    print this help
+
+Requires FM_ROUTINE_REMOTE, the reports repository's clone URL, such as
+https://github.com/<owner>/<reports-repo>.git.
 
 Run by the scheduled creator-watch Claude cloud routine; see docs/cloud-routines.md.
 EOF
@@ -309,6 +315,10 @@ publish() {
 
 action_run() {
   local since since_iso now_iso unread
+  if [ -z "$REMOTE" ]; then
+    echo "fm-routine-creator-watch: FM_ROUTINE_REMOTE is not set; set it to the reports repository's clone URL, such as https://github.com/<owner>/<reports-repo>.git" >&2
+    exit 2
+  fi
   locate_parent || exit 1
   if paused; then
     printf '%s: paused by a PAUSED file on the reports %s; nothing published\n' "$ROUTINE" "$BRANCH"

@@ -83,17 +83,18 @@ The first required lane targets Linux x86_64; if a genuine unsupported platform 
 Verified with Herdr 0.7.4, protocol 16, and Pi 0.80.10 in a generated non-`default` session.
 Every operation used the hardened `bin/fm-herdr-lab.sh` helper, and guarded teardown confirmed the default-session fleet tripwire was unchanged.
 The reproducible command is `FM_HERDR_WORKER_PRESENTATION_E2E=1 HERDR_LAB_HELPER=bin/fm-herdr-lab.sh tests/fm-herdr-worker-presentation-e2e.test.sh`.
-The real `workspace list`, `tab list`, `pane list`, `agent list`, and `api snapshot` outputs reported these grouped Agents inputs:
+The `workspace list`, `tab list`, `pane list`, `agent list`, and `api snapshot` outputs reported grouped Agents inputs of this shape:
 
 ```text
-workspace_label=City Guide · 🔵 1 WORKING
-tab_label=WORKER · Validate GPS triggers across all seven harbour stops · 🔵 WORKING
+workspace_label=Alpha · 🔵 1 WORKING
+tab_label=WORKER · Fix the login timeout · 🔵 WORKING
 display_agent=pi/gpt-5.6 · detached
 native_agent=pi
-fm_task_id=journey-gps-seven-stop-v8
+fm_task_id=alpha-login-timeout-v8
 ```
 
-The project name and task title above were later renamed in place to the neutral placeholders the e2e test now stages.
+The labels in the captured output were replaced with placeholders after capture, while layout, widths and states are as captured.
+
 This verifies an actual registered Pi agent rather than only fake API logs.
 Herdr's default grouped row configuration consumes workspace and tab on its first row and agent presentation on its second row, so these are the captain-visible values on that surface.
 

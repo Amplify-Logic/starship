@@ -197,26 +197,26 @@ Stay inside the task worktree.
 BRIEF
 }
 
-JOURNEY=$(make_project city-guide)
-ATELIER=$(make_project atelier)
-for id in journey-single journey-batch-one journey-batch-two atelier-single; do
+ALPHA=$(make_project alpha)
+BETA=$(make_project beta)
+for id in alpha-single alpha-batch-one alpha-batch-two beta-single; do
   write_brief "$id"
 done
 cat > "$HOME_FIX/data/projects.md" <<'EOF'
-- city-guide [local-only] - Journey
-- atelier [local-only] - Atelier
+- alpha [local-only] - Alpha
+- beta [local-only] - Beta
 EOF
 cat > "$HOME_FIX/data/backlog.md" <<'EOF'
-- [ ] journey-single - Validate GPS triggers across all seven harbour stops (repo: city-guide)
-- [ ] journey-batch-one - Rebaseline the City Guide launch plan with a date (repo: city-guide)
-- [ ] journey-batch-two - Audit the Journey release checklist (repo: city-guide)
-- [ ] atelier-single - Align Atelier launch surfaces (repo: atelier)
+- [ ] alpha-single - Fix the login timeout (repo: alpha)
+- [ ] alpha-batch-one - Rebaseline the Alpha launch plan with a date (repo: alpha)
+- [ ] alpha-batch-two - Audit the Alpha release checklist (repo: alpha)
+- [ ] beta-single - Align Beta launch surfaces (repo: beta)
 EOF
 cat > "$TMP_ROOT/states" <<'EOF'
-journey-single=working
-journey-batch-one=parked
-journey-batch-two=working
-atelier-single=blocked
+alpha-single=working
+alpha-batch-one=parked
+alpha-batch-two=working
+beta-single=blocked
 EOF
 
 # This fixture models a firstmate that is NOT itself running inside a herdr
@@ -246,72 +246,72 @@ run_spawn() {
     "$ROOT/bin/fm-spawn.sh" "$@" $mode_args
 }
 
-run_spawn journey-single "$JOURNEY" --harness pi --backend herdr >/dev/null \
-  || fail 'single Journey Herdr spawn failed'
+run_spawn alpha-single "$ALPHA" --harness pi --backend herdr >/dev/null \
+  || fail 'single Alpha Herdr spawn failed'
 run_spawn \
-  "journey-batch-one=$JOURNEY" \
-  "journey-batch-two=$JOURNEY" \
+  "alpha-batch-one=$ALPHA" \
+  "alpha-batch-two=$ALPHA" \
   --scout --harness codex --backend herdr >/dev/null \
-  || fail 'batch Journey Herdr spawn failed'
-run_spawn atelier-single "$ATELIER" --harness codex --backend herdr --outcome 'Align Atelier launch surfaces' >/dev/null \
-  || fail 'concurrent Atelier Herdr spawn failed'
+  || fail 'batch Alpha Herdr spawn failed'
+run_spawn beta-single "$BETA" --harness codex --backend herdr --outcome 'Align Beta launch surfaces' >/dev/null \
+  || fail 'concurrent Beta Herdr spawn failed'
 
-journey_path=$(cd "$JOURNEY" && pwd -P)
-atelier_path=$(cd "$ATELIER" && pwd -P)
+alpha_path=$(cd "$ALPHA" && pwd -P)
+beta_path=$(cd "$BETA" && pwd -P)
 home_path=$(cd "$HOME_FIX" && pwd -P)
-journey_key="path-v1:$(printf '%s' "$journey_path" | git -C "$ROOT" hash-object --stdin)"
-atelier_key="path-v1:$(printf '%s' "$atelier_path" | git -C "$ROOT" hash-object --stdin)"
+alpha_key="path-v1:$(printf '%s' "$alpha_path" | git -C "$ROOT" hash-object --stdin)"
+beta_key="path-v1:$(printf '%s' "$beta_path" | git -C "$ROOT" hash-object --stdin)"
 home_key="path-v1:$(printf '%s' "$home_path" | git -C "$ROOT" hash-object --stdin)"
 workspace_count=$(jq '.workspaces|length' "$HERDR_STATE")
 [ "$workspace_count" -eq 2 ] || fail "expected one workspace per project, got $workspace_count"
-journey_ws=$(jq -r --arg owner "$home_key" --arg project "$journey_key" \
+alpha_ws=$(jq -r --arg owner "$home_key" --arg project "$alpha_key" \
   '.workspaces[]|select(.tokens.fm_owner==$owner and .tokens.fm_project==$project)|.workspace_id' "$HERDR_STATE")
-atelier_ws=$(jq -r --arg owner "$home_key" --arg project "$atelier_key" \
+beta_ws=$(jq -r --arg owner "$home_key" --arg project "$beta_key" \
   '.workspaces[]|select(.tokens.fm_owner==$owner and .tokens.fm_project==$project)|.workspace_id' "$HERDR_STATE")
-[ -n "$journey_ws" ] && [ -n "$atelier_ws" ] && [ "$journey_ws" != "$atelier_ws" ] \
+[ -n "$alpha_ws" ] && [ -n "$beta_ws" ] && [ "$alpha_ws" != "$beta_ws" ] \
   || fail 'concurrent project workspaces did not get distinct hidden identities'
-[ "$(jq --arg ws "$journey_ws" '[.tabs[]|select(.workspace_id==$ws)]|length' "$HERDR_STATE")" -eq 3 ] \
-  || fail 'single and batch Journey spawns did not converge on one project workspace'
-assert_contains "$(jq -r --arg ws "$journey_ws" '.workspaces[]|select(.workspace_id==$ws)|.label' "$HERDR_STATE")" \
-  'City Guide' 'Journey workspace lost its human project name'
-assert_contains "$(jq -r --arg ws "$atelier_ws" '.workspaces[]|select(.workspace_id==$ws)|.label' "$HERDR_STATE")" \
-  'Atelier' 'Atelier workspace lost its human project name'
+[ "$(jq --arg ws "$alpha_ws" '[.tabs[]|select(.workspace_id==$ws)]|length' "$HERDR_STATE")" -eq 3 ] \
+  || fail 'single and batch Alpha spawns did not converge on one project workspace'
+assert_contains "$(jq -r --arg ws "$alpha_ws" '.workspaces[]|select(.workspace_id==$ws)|.label' "$HERDR_STATE")" \
+  'Alpha' 'Alpha workspace lost its human project name'
+assert_contains "$(jq -r --arg ws "$beta_ws" '.workspaces[]|select(.workspace_id==$ws)|.label' "$HERDR_STATE")" \
+  'Beta' 'Beta workspace lost its human project name'
 
 labels=$(jq -r '.tabs[].label' "$HERDR_STATE")
-assert_contains "$labels" 'WORKER · Validate GPS triggers across all seven harbour stops · 🔵 WORKING' \
+assert_contains "$labels" 'WORKER · Fix the login timeout · 🔵 WORKING' \
   'single spawn did not render backlog outcome and authoritative state'
-assert_contains "$labels" 'WORKER · Rebaseline the City Guide launch plan with a date · 🟣 NEEDS YOU' \
+assert_contains "$labels" 'WORKER · Rebaseline the Alpha launch plan with a date · 🟣 NEEDS YOU' \
   'first batch scout did not render its distinct outcome'
-assert_contains "$labels" 'WORKER · Audit the Journey release checklist · 🔵 WORKING' \
+assert_contains "$labels" 'WORKER · Audit the Alpha release checklist · 🔵 WORKING' \
   'second batch scout did not render its distinct outcome'
-assert_contains "$labels" 'WORKER · Align Atelier launch surfaces · 🟠 BLOCKED' \
+assert_contains "$labels" 'WORKER · Align Beta launch surfaces · 🟠 BLOCKED' \
   'concurrent project explicit outcome did not render'
-for id in journey-single journey-batch-one journey-batch-two atelier-single; do
+for id in alpha-single alpha-batch-one alpha-batch-two beta-single; do
   [ "$(jq -r --arg id "$id" '.tabs[]|select(.tokens.fm_task_id==$id)|.tokens.fm_task_id' "$HERDR_STATE")" = "$id" ] \
     || fail "spawned pane missing hidden fm_task_id=$id"
 done
-assert_contains "$(cat "$HOME_FIX/state/journey-single.meta")" 'harness=pi' 'Pi runtime was not preserved'
-assert_contains "$(cat "$HOME_FIX/state/journey-batch-one.meta")" 'harness=codex' 'Codex runtime was not preserved'
-assert_contains "$(cat "$HOME_FIX/state/journey-single.meta")" 'kind=ship' 'ship kind was not preserved'
-assert_contains "$(cat "$HOME_FIX/state/journey-batch-one.meta")" 'kind=scout' 'scout kind was not preserved'
+assert_contains "$(cat "$HOME_FIX/state/alpha-single.meta")" 'harness=pi' 'Pi runtime was not preserved'
+assert_contains "$(cat "$HOME_FIX/state/alpha-batch-one.meta")" 'harness=codex' 'Codex runtime was not preserved'
+assert_contains "$(cat "$HOME_FIX/state/alpha-single.meta")" 'kind=ship' 'ship kind was not preserved'
+assert_contains "$(cat "$HOME_FIX/state/alpha-batch-one.meta")" 'kind=scout' 'scout kind was not preserved'
 # The presentation surfaces read the TASK RECORD, not this spawn: every later
 # refresh re-derives the project workspace aggregate, the project label and the
 # human outcome from these keys, and the aggregate runs only for a task whose
 # record marks its workspace managed.
-journey_meta="$HOME_FIX/state/journey-single.meta"
-grep -qxF 'herdr_workspace_managed=1' "$journey_meta" \
+alpha_meta="$HOME_FIX/state/alpha-single.meta"
+grep -qxF 'herdr_workspace_managed=1' "$alpha_meta" \
   || fail 'a presentation-capable spawn did not mark its workspace managed'
-grep -qxF "herdr_project_key=$journey_path" "$journey_meta" \
-  || fail "the record did not name the project its workspace belongs to: $(grep '^herdr_project_key=' "$journey_meta" || true)"
-grep -qxF 'herdr_project_name=City Guide' "$journey_meta" \
-  || fail "the record did not carry the human project name: $(grep '^herdr_project_name=' "$journey_meta" || true)"
-grep -qxF 'outcome=Validate GPS triggers across all seven harbour stops' "$journey_meta" \
-  || fail "the record did not carry the derived outcome: $(grep '^outcome=' "$journey_meta" || true)"
-grep -qxF 'outcome=Align Atelier launch surfaces' "$HOME_FIX/state/atelier-single.meta" \
+grep -qxF "herdr_project_key=$alpha_path" "$alpha_meta" \
+  || fail "the record did not name the project its workspace belongs to: $(grep '^herdr_project_key=' "$alpha_meta" || true)"
+grep -qxF 'herdr_project_name=Alpha' "$alpha_meta" \
+  || fail "the record did not carry the human project name: $(grep '^herdr_project_name=' "$alpha_meta" || true)"
+grep -qxF 'outcome=Fix the login timeout' "$alpha_meta" \
+  || fail "the record did not carry the derived outcome: $(grep '^outcome=' "$alpha_meta" || true)"
+grep -qxF 'outcome=Align Beta launch surfaces' "$HOME_FIX/state/beta-single.meta" \
   || fail "the captain's explicit --outcome was not recorded, so a refresh renames the tab over it"
 # The marker is not decoration: it is the gate on the project-workspace fleet
 # aggregate, which the spawn's own presentation refresh must have run.
-assert_grep 'City Guide · ' "$HERDR_LOG" \
+assert_grep 'Alpha · ' "$HERDR_LOG" \
   'the project workspace never received its fleet aggregate'
 pass 'fm-spawn fake Herdr E2E: single, batch, projects, axes, human labels, outcomes, states, and hidden ids converge'
 
@@ -325,21 +325,21 @@ rm -f "$HERDR_STATE.launched"
 export FM_FAKE_HERDR_PANE_FREE=1
 # Switch runtime on the way in, so the projection this relaunch publishes can be
 # told apart from the one the previous incarnation left behind.
-run_spawn journey-single --relaunch --harness codex >/dev/null \
+run_spawn alpha-single --relaunch --harness codex >/dev/null \
   || fail 'a herdr relaunch failed'
 unset FM_FAKE_HERDR_PANE_FREE
-relaunched_meta="$HOME_FIX/state/journey-single.meta"
+relaunched_meta="$HOME_FIX/state/alpha-single.meta"
 grep -qxF 'herdr_workspace_managed=1' "$relaunched_meta" \
   || fail 'the relaunch dropped the managed marker of the workspace it adopted'
-grep -qxF "herdr_project_key=$journey_path" "$relaunched_meta" \
+grep -qxF "herdr_project_key=$alpha_path" "$relaunched_meta" \
   || fail "the relaunch dropped the project key: $(grep '^herdr_project_key=' "$relaunched_meta" || true)"
-grep -qxF 'herdr_project_name=City Guide' "$relaunched_meta" \
+grep -qxF 'herdr_project_name=Alpha' "$relaunched_meta" \
   || fail "the relaunch dropped the project name: $(grep '^herdr_project_name=' "$relaunched_meta" || true)"
-grep -qxF 'outcome=Validate GPS triggers across all seven harbour stops' "$relaunched_meta" \
+grep -qxF 'outcome=Fix the login timeout' "$relaunched_meta" \
   || fail "the relaunch dropped the task outcome: $(grep '^outcome=' "$relaunched_meta" || true)"
 [ "$(grep -c '^herdr_workspace_managed=' "$relaunched_meta")" -eq 1 ] \
   || fail 'the relaunched record carries more than one managed marker'
-assert_grep 'City Guide · ' "$HERDR_LOG" \
+assert_grep 'Alpha · ' "$HERDR_LOG" \
   'the relaunched task stopped feeding its project workspace aggregate'
 # The refresh has to read the record this relaunch published, not the one it
 # replaced: the pane now runs codex, and a projection naming the previous
@@ -350,23 +350,23 @@ assert_not_contains "$(cat "$HERDR_LOG")" '<fm_runtime=pi>' \
   'the relaunch projected the previous incarnation record'
 pass 'fm-spawn fake Herdr E2E: a relaunch adopts its endpoint presentation state instead of losing it'
 
-write_brief journey-protocol14
+write_brief alpha-protocol14
 cat >> "$HOME_FIX/data/backlog.md" <<'EOF'
-- [ ] journey-protocol14 - Keep spawning on an old Herdr build (repo: city-guide)
+- [ ] alpha-protocol14 - Keep spawning on an old Herdr build (repo: alpha)
 EOF
 : > "$HERDR_LOG"
-FM_FAKE_HERDR_PROTOCOL=14 run_spawn journey-protocol14 "$JOURNEY" --harness pi --backend herdr >/dev/null \
+FM_FAKE_HERDR_PROTOCOL=14 run_spawn alpha-protocol14 "$ALPHA" --harness pi --backend herdr >/dev/null \
   || fail 'a protocol-14 Herdr build no longer spawns through the label fallback'
 legacy_ws=$(jq -r '.workspaces[]|select(.label=="firstmate")|.workspace_id' "$HERDR_STATE")
 [ -n "$legacy_ws" ] || fail 'protocol-14 fallback did not use the legacy per-home workspace label'
-[ "$(jq -r --arg ws "$legacy_ws" '.tabs[]|select(.workspace_id==$ws)|.label' "$HERDR_STATE")" = 'fm-journey-protocol14' ] \
+[ "$(jq -r --arg ws "$legacy_ws" '.tabs[]|select(.workspace_id==$ws)|.label' "$HERDR_STATE")" = 'fm-alpha-protocol14' ] \
   || fail 'protocol-14 fallback tab did not keep the legacy fm-<id> label'
 [ "$(jq -r --arg ws "$legacy_ws" '.workspaces[]|select(.workspace_id==$ws)|.tokens|length' "$HERDR_STATE")" -eq 0 ] \
   || fail 'protocol-14 fallback attempted hidden workspace identity tokens'
 legacy_log=$(cat "$HERDR_LOG")
 assert_not_contains "$legacy_log" 'report-metadata' 'protocol-14 fallback still called report-metadata'
 assert_not_contains "$legacy_log" 'rename' 'protocol-14 fallback still renamed a tab or workspace'
-legacy_meta=$(cat "$HOME_FIX/state/journey-protocol14.meta")
+legacy_meta=$(cat "$HOME_FIX/state/alpha-protocol14.meta")
 assert_contains "$legacy_meta" 'backend=herdr' 'protocol-14 fallback did not record its backend'
 assert_not_contains "$legacy_meta" 'herdr_workspace_managed' 'protocol-14 fallback claimed a managed workspace'
 pass 'fm-spawn fake Herdr E2E: a protocol-14 build spawns through the prior label-based flow untouched by presentation'
@@ -408,7 +408,7 @@ env -u HERDR_ENV -u HERDR_PANE_ID -u HERDR_TAB_ID -u HERDR_WORKSPACE_ID -u HERDR
   FM_FAKE_WT_ROOT="$WT_ROOT" \
   FM_VISIBLE_STATE_FILE="$TMP_ROOT/states" \
   HERDR_SESSION=fm-lab-fake-presentation \
-  "$degraded/bin/fm-spawn.sh" degraded-single "$JOURNEY" --harness pi --backend herdr \
+  "$degraded/bin/fm-spawn.sh" degraded-single "$ALPHA" --harness pi --backend herdr \
   --mode no-mistakes --yolo off >/dev/null \
   || fail 'a herdr spawn must still succeed with the fork presentation scripts absent'
 

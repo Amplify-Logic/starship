@@ -195,7 +195,7 @@ run_herdr_spawn() {  # <home> <proj> <id> <fakebin> <state> <log> <wt-root> [ext
 test_set_when_applicable_and_no_leak() {
   local rec home proj id fakebin state log wt_root out status pane_runs key label
   id=herdr-env-set-z1
-  rec=$(make_herdr_home set-applicable city-guide "$id")
+  rec=$(make_herdr_home set-applicable alpha "$id")
   IFS='|' read -r home proj <<EOF
 $rec
 EOF
@@ -230,7 +230,7 @@ EOF
 test_cleared_when_not_applicable_protocol14() {
   local rec home proj id fakebin state log wt_root out status pane_runs labels
   id=herdr-env-clear-p14-z1
-  rec=$(make_herdr_home clear-p14 city-guide "$id")
+  rec=$(make_herdr_home clear-p14 alpha "$id")
   IFS='|' read -r home proj <<EOF
 $rec
 EOF
@@ -267,7 +267,7 @@ test_cleared_when_not_applicable_tmux() {
   local home proj wt fakebin sendlog id out status sends
   id=herdr-env-clear-tmux-z1
   home="$TMP_ROOT/clear-tmux/home"
-  proj="$TMP_ROOT/clear-tmux/city-guide"
+  proj="$TMP_ROOT/clear-tmux/alpha"
   wt="$TMP_ROOT/clear-tmux/wt"
   sendlog="$TMP_ROOT/clear-tmux/send.log"
   fakebin=$(fm_fakebin "$TMP_ROOT/clear-tmux")

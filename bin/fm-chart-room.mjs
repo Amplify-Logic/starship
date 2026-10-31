@@ -18,7 +18,7 @@
 //
 // Commands:
 //   fm-chart-room.mjs serve  --home <dir> --port <n>
-//   fm-chart-room.mjs render --home <dir> --path </p/atelier>
+//   fm-chart-room.mjs render --home <dir> --path </p/beta>
 //   fm-chart-room.mjs data   --home <dir>
 //
 // `render` and `data` exist so the derivation can be tested without a socket.

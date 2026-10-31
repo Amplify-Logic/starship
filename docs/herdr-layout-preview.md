@@ -5,21 +5,21 @@ Nothing in this document is switched on.
 The live fleet still uses the layout shown under BEFORE, and it stays that way until the captain approves a change.
 
 The decision this preview serves was already made: converge on upstream's Herdr backend and adopt its one-worker-per-container execution unit, because isolating and inspecting a single worker is genuinely better that way, but do not adopt upstream's raw visual hierarchy.
-Upstream's list is flat, labelled by task slug, carries no project context, and degrades past about five workers (the private firstmate-home report `data/fm-upstream-trial-verdict-v2/report.md`, sections "One-worker-per-container: real opinion after using it" and "What ours does better").
+Upstream's list is flat, labelled by task slug, carries no project context, and degrades past about five workers.
 This preview shows what upstream's worker unit looks like once our human-readable project labels are put back on top of it.
 
 ## The two-minute version
 
 **What changes.** Today one row in the fleet list is one project, and you open it to see its workers.
 After convergence one row is one worker, so a fleet of eight workers is eight rows instead of three.
-Each row carries its own project name, so `Atelier · Retry the nightly artwork export · 🔴 FAILED` reads completely on its own line.
+Each row carries its own project name, so `Beta · Retry the nightly CSV export · 🔴 FAILED` reads completely on its own line.
 
 **What stays.** The words stay.
 Human outcomes instead of task slugs, `NEEDS YOU` / `FAILED` / `BLOCKED` in plain capitals with their colour, and the runtime and branch on the detail row are all unchanged.
 Opening a worker looks exactly like it does today.
 No 22-character token is ever shown, and nothing about how work is identified or controlled changes.
 
-**What is lost.** One thing: the per-project count line, `City Guide · 🟣 1 NEEDS YOU · 🔵 2 WORKING`, is not part of the recommended layout, so out of the box you read the fleet by scanning eight rows instead of three summaries.
+**What is lost.** One thing: the per-project count line, `Alpha · 🟣 1 NEEDS YOU · 🔵 2 WORKING`, is not part of the recommended layout, so out of the box you read the fleet by scanning eight rows instead of three summaries.
 Counts are partly recoverable in the fork, on a single summary row rather than one row per project, though at fleet scale that row most likely carries fleet totals rather than a per-project breakdown, for width reasons the end of this document sets out.
 At eight workers scanning is a fair trade; at thirty it would not be, and that is when the summary row becomes worth building and testing.
 
@@ -34,10 +34,10 @@ The live fleet was never touched, and the check that proves the live fleet was u
 
 The synthetic fleet is eight workers across three projects, covering five of the six states the fleet list can show: `NEEDS YOU`, `FAILED`, `BLOCKED`, `WORKING` and `READY`.
 The sixth state, the paused `🟡 WAITING`, is not exercised by these captures, so the yellow slot of the count line and the AFTER-B row format are unverified for that one state.
-Seven start in project order; the eighth, `Fix the crash on the last booking step`, deliberately starts last, for a project whose other workers started first.
+Seven start in project order; the eighth, `Fix the crash on the settings page`, deliberately starts last, for a project whose other workers started first.
 That eighth worker is the whole experiment: it is what a normal day looks like.
 
-The rows are Herdr's own reported labels, read back after staging, not mock-ups.
+The rows follow the layout, order and states Herdr reported when read back after staging; they are not mock-ups.
 They are printed here as text rather than photographed because taking a picture would mean attaching to the throwaway workspace, and the safety helper correctly refuses that.
 Regenerate them with:
 
@@ -49,7 +49,8 @@ FM_HERDR_LAYOUT_PREVIEW_E2E=1 \
 ```
 
 Verified 2026-08-03 against Herdr 0.7.4 on macOS 25.5.0.
-The project names, one task title and the waiting label were later renamed in place in the captures to neutral placeholders and `NEEDS YOU`; the stager uses the same names, so a rerun prints the same rows.
+The projects and task titles are invented placeholders held in the stager, so a rerun prints the same rows.
+The labels in the captured output were replaced with these placeholders after capture, while layout, widths and states are as captured.
 Raw captures: [`docs/evidence/herdr-layout-preview/`](evidence/herdr-layout-preview/).
 
 ## BEFORE: what you see today
@@ -57,18 +58,18 @@ Raw captures: [`docs/evidence/herdr-layout-preview/`](evidence/herdr-layout-prev
 Three rows, one per project, each with a running count of what its workers need.
 
 ```text
-WORKSPACE  City Guide · 🟣 1 NEEDS YOU · 🔵 2 WORKING
-  TAB      WORKER · Validate GPS triggers across all seven harbour stops · 🔵 WORKING
+WORKSPACE  Alpha · 🟣 1 NEEDS YOU · 🔵 2 WORKING
+  TAB      WORKER · Fix the login timeout · 🔵 WORKING
   DETAIL   pi/gpt-5.6 · detached
-  TAB      WORKER · Decide the harbour-loop audio cut · 🟣 NEEDS YOU
-  DETAIL   claude/opus-5 · fm/journey-route-audio-q2
-  TAB      WORKER · Speed up the offline map tiles · 🔵 WORKING
-  DETAIL   codex/gpt-5.6 · fm/journey-tile-cache-r3
-WORKSPACE  Atelier · 🟣 1 NEEDS YOU · 🔴 1 FAILED
+  TAB      WORKER · Decide the pricing page layout · 🟣 NEEDS YOU
+  DETAIL   claude/opus-5 · fm/alpha-pricing-layout-q2
+  TAB      WORKER · Speed up the search results · 🔵 WORKING
+  DETAIL   codex/gpt-5.6 · fm/alpha-search-speed-r3
+WORKSPACE  Beta · 🟣 1 NEEDS YOU · 🔴 1 FAILED
   TAB      WORKER · Decide the onboarding welcome copy · 🟣 NEEDS YOU
-  DETAIL   claude/opus-5 · fm/atelier-onboarding-copy-k4
-  TAB      WORKER · Retry the nightly artwork export · 🔴 FAILED
-  DETAIL   pi/gpt-5.6 · fm/atelier-export-retry-m1
+  DETAIL   claude/opus-5 · fm/beta-onboarding-copy-k4
+  TAB      WORKER · Retry the nightly CSV export · 🔴 FAILED
+  DETAIL   pi/gpt-5.6 · fm/beta-export-retry-m1
 WORKSPACE  API Platform · 🟠 1 BLOCKED · 🟢 1 READY
   TAB      WORKER · Stop rate limits dropping webhook deliveries · 🟠 BLOCKED
   DETAIL   claude/opus-5 · fm/api-platform-rate-limit-c7
@@ -83,10 +84,10 @@ When the eighth worker starts, the list does not grow.
 It joins its own project and the count on that project's row goes up:
 
 ```text
-WORKSPACE  City Guide · 🟣 1 NEEDS YOU · 🔴 1 FAILED · 🔵 2 WORKING
+WORKSPACE  Alpha · 🟣 1 NEEDS YOU · 🔴 1 FAILED · 🔵 2 WORKING
   ...
-  TAB      WORKER · Fix the crash on the last booking step · 🔴 FAILED
-  DETAIL   claude/opus-5 · fm/journey-checkout-crash-t9
+  TAB      WORKER · Fix the crash on the settings page · 🔴 FAILED
+  DETAIL   claude/opus-5 · fm/alpha-settings-crash-t9
 ```
 
 Full capture: [`02-before-late-worker.txt`](evidence/herdr-layout-preview/02-before-late-worker.txt).
@@ -98,13 +99,13 @@ The obvious way to keep project grouping on upstream's unit is to give each proj
 Staged in project order it looks almost like today:
 
 ```text
-WORKSPACE  City Guide · 🟣 1 NEEDS YOU · 🔵 2 WORKING
-WORKSPACE  └ Validate GPS triggers across all seven harbour stops · 🔵 WORKING
-WORKSPACE  └ Decide the harbour-loop audio cut · 🟣 NEEDS YOU
-WORKSPACE  └ Speed up the offline map tiles · 🔵 WORKING
-WORKSPACE  Atelier · 🟣 1 NEEDS YOU · 🔴 1 FAILED
+WORKSPACE  Alpha · 🟣 1 NEEDS YOU · 🔵 2 WORKING
+WORKSPACE  └ Fix the login timeout · 🔵 WORKING
+WORKSPACE  └ Decide the pricing page layout · 🟣 NEEDS YOU
+WORKSPACE  └ Speed up the search results · 🔵 WORKING
+WORKSPACE  Beta · 🟣 1 NEEDS YOU · 🔴 1 FAILED
 WORKSPACE  └ Decide the onboarding welcome copy · 🟣 NEEDS YOU
-WORKSPACE  └ Retry the nightly artwork export · 🔴 FAILED
+WORKSPACE  └ Retry the nightly CSV export · 🔴 FAILED
 WORKSPACE  API Platform · 🟠 1 BLOCKED · 🟢 1 READY
 WORKSPACE  └ Stop rate limits dropping webhook deliveries · 🟠 BLOCKED
 WORKSPACE  └ Audit the public schema for breaking changes · 🟢 READY
@@ -114,26 +115,26 @@ Full capture, with every worker's tab and detail row: [`03-after-a-grouped.txt`]
 
 **This is the shape that fails.**
 Herdr puts a new row at the bottom of the list and offers no way to move it.
-So when the eighth worker starts, for City Guide, whose heading is at the very top, it lands here instead:
+So when the eighth worker starts, for Alpha, whose heading is at the very top, it lands here instead:
 
 ```text
-WORKSPACE  City Guide · 🟣 1 NEEDS YOU · 🔴 1 FAILED · 🔵 2 WORKING
-WORKSPACE  └ Validate GPS triggers across all seven harbour stops · 🔵 WORKING
-WORKSPACE  └ Decide the harbour-loop audio cut · 🟣 NEEDS YOU
-WORKSPACE  └ Speed up the offline map tiles · 🔵 WORKING
-WORKSPACE  Atelier · 🟣 1 NEEDS YOU · 🔴 1 FAILED
+WORKSPACE  Alpha · 🟣 1 NEEDS YOU · 🔴 1 FAILED · 🔵 2 WORKING
+WORKSPACE  └ Fix the login timeout · 🔵 WORKING
+WORKSPACE  └ Decide the pricing page layout · 🟣 NEEDS YOU
+WORKSPACE  └ Speed up the search results · 🔵 WORKING
+WORKSPACE  Beta · 🟣 1 NEEDS YOU · 🔴 1 FAILED
 WORKSPACE  └ Decide the onboarding welcome copy · 🟣 NEEDS YOU
-WORKSPACE  └ Retry the nightly artwork export · 🔴 FAILED
+WORKSPACE  └ Retry the nightly CSV export · 🔴 FAILED
 WORKSPACE  API Platform · 🟠 1 BLOCKED · 🟢 1 READY
 WORKSPACE  └ Stop rate limits dropping webhook deliveries · 🟠 BLOCKED
 WORKSPACE  └ Audit the public schema for breaking changes · 🟢 READY
-WORKSPACE  └ Fix the crash on the last booking step · 🔴 FAILED
+WORKSPACE  └ Fix the crash on the settings page · 🔴 FAILED
 ```
 
 Full capture: [`04-after-a-late-worker.txt`](evidence/herdr-layout-preview/04-after-a-late-worker.txt).
 
-The last row is a City Guide worker, but it is sitting under the API Platform heading, and the indent makes it look like it belongs there.
-The Journey heading four rows above correctly counts it, so the counts and the layout now disagree.
+The last row is an Alpha worker, but it is sitting under the API Platform heading, and the indent makes it look like it belongs there.
+The Alpha heading at the top of the list correctly counts it, so the counts and the layout now disagree.
 That is worse than no grouping at all: a wrong project label is a trap, and this one appears every time a worker starts out of order, which on a real fleet is most of the time.
 
 There is no way to fix this from our side.
@@ -144,11 +145,11 @@ Ordering is fixed at creation and there is no reorder or nesting command, so any
 Put the project name on the worker row itself and the layout stops depending on position:
 
 ```text
-WORKSPACE  City Guide · Validate GPS triggers across all seven harbour stops · 🔵 WORKING
-WORKSPACE  City Guide · Decide the harbour-loop audio cut · 🟣 NEEDS YOU
-WORKSPACE  City Guide · Speed up the offline map tiles · 🔵 WORKING
-WORKSPACE  Atelier · Decide the onboarding welcome copy · 🟣 NEEDS YOU
-WORKSPACE  Atelier · Retry the nightly artwork export · 🔴 FAILED
+WORKSPACE  Alpha · Fix the login timeout · 🔵 WORKING
+WORKSPACE  Alpha · Decide the pricing page layout · 🟣 NEEDS YOU
+WORKSPACE  Alpha · Speed up the search results · 🔵 WORKING
+WORKSPACE  Beta · Decide the onboarding welcome copy · 🟣 NEEDS YOU
+WORKSPACE  Beta · Retry the nightly CSV export · 🔴 FAILED
 WORKSPACE  API Platform · Stop rate limits dropping webhook deliveries · 🟠 BLOCKED
 WORKSPACE  API Platform · Audit the public schema for breaking changes · 🟢 READY
 ```
@@ -158,7 +159,7 @@ Full capture, with every worker's tab and detail row: [`05-after-b-prefixed.txt`
 The eighth worker still lands at the bottom, and it still reads correctly:
 
 ```text
-WORKSPACE  City Guide · Fix the crash on the last booking step · 🔴 FAILED
+WORKSPACE  Alpha · Fix the crash on the settings page · 🔴 FAILED
 ```
 
 Full capture: [`06-after-b-late-worker.txt`](evidence/herdr-layout-preview/06-after-b-late-worker.txt).
@@ -169,7 +170,7 @@ Opening any of these workers gives exactly what you get today:
 
 ```text
   TAB      WORKER · Decide the onboarding welcome copy · 🟣 NEEDS YOU
-  DETAIL   claude/opus-5 · fm/atelier-onboarding-copy-k4
+  DETAIL   claude/opus-5 · fm/beta-onboarding-copy-k4
 ```
 
 ## Side by side
@@ -197,8 +198,8 @@ At twenty-five it would be worse than three summary rows, so at that scale it is
 The recovery works by the same mechanism that makes AFTER-B work.
 Herdr's workspace order is creation order, and a later workspace always appends, so a holder workspace created before any worker keeps position 1 permanently and never has to be moved.
 AFTER-A already proves the two halves of this are possible: a non-worker holder workspace is stageable, and its row is renamed on each state change exactly the way `update_workspace` renames project rows today.
-Capture 03 stages three such holder rows, the first of which reads `City Guide · 🟣 1 NEEDS YOU · 🔵 2 WORKING`.
-Capture 04 is the stronger evidence for the claim, because it shows that same holder row recounted after the late worker arrived, as `City Guide · 🟣 1 NEEDS YOU · 🔴 1 FAILED · 🔵 2 WORKING`.
+Capture 03 stages three such holder rows, the first of which reads `Alpha · 🟣 1 NEEDS YOU · 🔵 2 WORKING`.
+Capture 04 is the stronger evidence for the claim, because it shows that same holder row recounted after the late worker arrived, as `Alpha · 🟣 1 NEEDS YOU · 🔴 1 FAILED · 🔵 2 WORKING`.
 That recounted row is a holder row being re-rendered on a state change, which is exactly what a summary row would have to do.
 What broke AFTER-A was adjacency, and a single fleet-summary row pinned at the top does not depend on adjacency at all.
 So one first-created row could carry counts that no longer depend on where anything sits, at the cost of one extra row rather than one per project.
@@ -206,7 +207,7 @@ So one first-created row could carry counts that no longer depend on where anyth
 Two things are not yet verified, and both need testing before anyone commits to the summary row.
 First, whether a first-created workspace still holds position 1 across a Herdr session restart.
 Second, whether a single summary row stays legible at realistic width, which is the more likely of the two to bite.
-[`docs/herdr-backend.md`](herdr-backend.md) records a real Herdr pane measuring 54 columns in the environment it was verified in, and the widest of the three staged project rows is already 40 characters, so concatenating every project's counts onto one row runs to several hundred characters in a sidebar that truncates.
+[`docs/herdr-backend.md`](herdr-backend.md) records a real Herdr pane measuring 54 columns in the environment it was verified in, and the widest of the three staged project rows, measured on the placeholder rows, is already 38 characters, so concatenating every project's counts onto one row runs to several hundred characters in a sidebar that truncates.
 At the twenty-five-worker scale that motivates the summary row, per-project counts on one row are very likely too wide to read, so the realistic version of that row carries fleet totals rather than a per-project breakdown.
 That is still worth having, but it is less than what the three project rows give you today, and it is the honest size of what this recovery buys.
 

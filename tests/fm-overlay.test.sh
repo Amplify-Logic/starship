@@ -23,7 +23,7 @@ PANE_STATUS="$TMP_ROOT/pane-status"
 mkdir -p "$HOME_DIR/data/sample-report-r1" "$HOME_DIR/data/goals" "$HOME_DIR/config"
 printf '# Sample\n\nWhat the scout found.\n' > "$HOME_DIR/data/sample-report-r1/report.md"
 printf 'not markdown\n' > "$HOME_DIR/data/plain.txt"
-printf '# Atelier\n\nThe end state.\n' > "$HOME_DIR/data/goals/atelier-workspace.md"
+printf '# Beta\n\nThe end state.\n' > "$HOME_DIR/data/goals/beta-workspace.md"
 printf '# Notes\n\nBeside the report.\n' > "$HOME_DIR/data/sample-report-r1/notes.md"
 
 cat > "$FAKEBIN/herdr" <<SH
@@ -154,7 +154,7 @@ test_only_a_task_report_earns_a_chart_room_link() {
   assert_contains "$out" "http://127.0.0.1:4390/report/sample-report-r1" \
     "a task report given by path lost its chart-room link"
 
-  file="$HOME_DIR/data/goals/atelier-workspace.md"
+  file="$HOME_DIR/data/goals/beta-workspace.md"
   out=$(FM_BACKEND=tmux overlay "$file" 2>&1)
   assert_contains "$out" "$file" "a goal charter should fall back to its own path"
   assert_not_contains "$out" "/report/goals" "a goal charter must not be given a report link that 404s"
