@@ -415,6 +415,7 @@ fm_pr_text_block() {
 Personal and work details never go into a public repository's PR titles, descriptions or comments; this home keeps the words it means in a private list.
 Before you open or edit a PR, comment on one, or pass \`--intent\` or a gate answer to no-mistakes, write the draft text to a file and run \`$check --text <file>\` (or pipe the text to \`$check --text\`).
 It names every listed word the text contains; on a public repository, rewrite the text without each named word and check it again, while a private repository's PR may keep them.
+When the PR is for public Starship itself, run it as \`--text --new-names\`, which also names every word that never appeared in Starship before and every customer data shape; rewrite each out, or append a \`needs-decision:\` status line naming the new words so the owner can approve each once.
 For \`--intent\`, the Definition of done's one exception to keeping the captain's words says how to rewrite it.
 Once the PR exists, check what was actually published the same way: the title and description, and every comment on it, including those the pipeline posted.
 For example, pipe each of \`gh-axi api "repos/\$ORIGIN_REPO/pulls/<number>" --jq '.title, .body'\`, \`gh-axi api --paginate "repos/\$ORIGIN_REPO/issues/<number>/comments" --jq '.[].body'\`, \`gh-axi api --paginate "repos/\$ORIGIN_REPO/pulls/<number>/comments" --jq '.[].body'\` and \`gh-axi api --paginate "repos/\$ORIGIN_REPO/pulls/<number>/reviews" --jq '.[].body'\` into \`$check --text\`.

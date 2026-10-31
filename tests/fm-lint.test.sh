@@ -1932,7 +1932,8 @@ test_default_lint_checks_the_home_private_leak_words() {
   fakebin=$(fm_fakebin "$tmp")
   mkdir -p "$tmp/repo/bin" "$tmp/repo/tests" "$tmp/home/config" "$tmp/bare-home"
   cp "$LINT" "$tmp/repo/bin/fm-lint.sh"
-  cp "$ROOT/bin/fm-timeout-lib.sh" "$ROOT/bin/fm-leak-guard.sh" "$ROOT/bin/fm-leak-lib.sh" "$tmp/repo/bin/"
+  cp "$ROOT/bin/fm-timeout-lib.sh" "$ROOT/bin/fm-leak-guard.sh" "$ROOT/bin/fm-leak-lib.sh" \
+    "$ROOT/bin/fm-leak-shapes.py" "$tmp/repo/bin/"
   printf '#!/usr/bin/env bash\nexit 0\n' > "$tmp/repo/bin/fm-lint-workflows.sh"
   printf '#!/usr/bin/env bash\necho "Robin approved the draft."\n' > "$tmp/repo/tests/noop.test.sh"
   chmod +x "$tmp/repo/bin/fm-lint.sh" "$tmp/repo/bin/fm-lint-workflows.sh" "$tmp/repo/tests/noop.test.sh"
@@ -1953,7 +1954,21 @@ test_default_lint_checks_the_home_private_leak_words() {
     "$tmp/repo/bin/fm-lint.sh" 2>&1) || rc=$?
   [ "$rc" -eq 0 ] || fail "a home with no private list failed the default lint (exit $rc)"$'\n'"$out"
   assert_not_contains "$out" "fm-leak-guard" "a home with no private list printed a word-check line"
-  pass "default lint checks the home's private leak words and is silent without a list"
+
+  # It also refuses a name-shaped word the branch adds that the repository
+  # never held. The name is capitalised at run time so this file holds none.
+  printf '#!/usr/bin/env bash\necho "the draft is approved."\n' > "$tmp/repo/tests/noop.test.sh"
+  git -C "$tmp/repo" add -A
+  git -C "$tmp/repo" -c user.name=t -c user.email=t@example.invalid commit -q -m init
+  git -C "$tmp/repo" branch -M main
+  git -C "$tmp/repo" checkout -q -b feature
+  printf 'echo "%s%s approved it."\n' "$(printf q | tr q Q)" verblox >> "$tmp/repo/tests/noop.test.sh"
+  rc=0
+  out=$(cd "$tmp/repo" && CI=true PATH="$fakebin:$PATH" FM_HOME="$tmp/home" \
+    "$tmp/repo/bin/fm-lint.sh" 2>&1) || rc=$?
+  [ "$rc" -eq 1 ] || fail "a new name the branch adds did not fail the default lint (exit $rc)"$'\n'"$out"
+  assert_contains "$out" "LEAK_HIT: new-name: tests/noop.test.sh:3:" "the lint run did not name the new word"
+  pass "default lint checks the home's private leak words and new names, and is silent without a list"
 }
 
 test_roots_sidecar_records_per_root_lifecycle() {
