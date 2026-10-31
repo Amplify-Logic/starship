@@ -314,19 +314,20 @@ cap() {
   printf '%s%s' "$(printf '%s' "${1:0:1}" | tr '[:lower:]' '[:upper:]')" "${1:1}"
 }
 
-# branch_repo <dir>: make_repo on a main branch, then a feature branch to add to.
+# branch_repo <dir>: make_repo with its commit as origin/main, then a feature
+# branch to add to.
 branch_repo() {
   make_repo "$1"
-  git -C "$1" branch -M main
+  git -C "$1" update-ref refs/remotes/origin/main HEAD
   git -C "$1" checkout -q -b feature
 }
 
-# add_line <repo> <path> <text>: commit one more line to the path.
+# add_line <repo> <path> <text> [message]: commit one more line to the path.
 add_line() {
   mkdir -p "$(dirname "$1/$2")"
   printf '%s\n' "$3" >> "$1/$2"
   git -C "$1" add -A
-  git -C "$1" -c user.name=t -c user.email=t@example.invalid commit -q -m add
+  git -C "$1" -c user.name=t -c user.email=t@example.invalid commit -q -m "${4:-add}"
 }
 
 test_new_name_refuses_until_approved() {
@@ -355,16 +356,22 @@ test_new_name_refuses_until_approved() {
 }
 
 test_known_words_and_code_identifiers_pass() {
-  local repo="$TMP_ROOT/known" home="$TMP_ROOT/known-home"
+  local repo="$TMP_ROOT/known" home="$TMP_ROOT/known-home" product
   branch_repo "$repo"
   word_home "$home" 'unrelated-word\n'
   # Robin and Notes are in the base already (Robin in tests/, notes in small
   # letters); the rest are code identifiers, not name-shaped words.
   add_line "$repo" docs/notes.md 'Robin keeps the Notes; set FM_HOME, call fmLeakGuard, read README and v2Config.'
-  add_line "$repo" bin/tool.py "class $(cap qverblox)Panel($(cap base)View): pass"
   guard "$repo" FM_HOME="$home" -- --new-names
   [ "$GUARD_STATUS" -eq 0 ] || fail "known words or code identifiers refused: $GUARD_OUT"
   assert_contains "$GUARD_OUT" "PASS" "a clean branch did not say it passed"
+
+  # A CamelCase word in a source file is checked like any other.
+  product="$(cap qverblox)$(cap sync)"
+  add_line "$repo" bin/tool.py "label = \"$product ready\""
+  guard "$repo" FM_HOME="$home" -- --new-names
+  [ "$GUARD_STATUS" -eq 1 ] || fail "a CamelCase word in a source file passed: $GUARD_OUT"
+  assert_contains "$GUARD_OUT" "LEAK_HIT: new-name: bin/tool.py:1: $product" "the CamelCase word was not named"
 
   # Without a list or approvals file, as in CI, the check is silent.
   add_line "$repo" docs/notes.md "ask $(cap qverblox) again."
@@ -376,13 +383,36 @@ test_known_words_and_code_identifiers_pass() {
   guard "$repo" FM_HOME="$TMP_ROOT/known-approvals" -- --new-names
   [ "$GUARD_STATUS" -eq 1 ] || fail "an approvals file alone did not turn the check on: $GUARD_OUT"
 
-  # A checkout with no main to compare against cannot pass unchecked.
-  git -C "$repo" branch -q -m main trunk
+  # A checkout with no origin/main to compare against cannot pass unchecked,
+  # and a local main does not stand in for it.
+  git -C "$repo" branch -q -f main refs/remotes/origin/main
+  git -C "$repo" update-ref -d refs/remotes/origin/main
   guard "$repo" FM_HOME="$home" -- --new-names
-  [ "$GUARD_STATUS" -eq 2 ] || fail "a checkout with no merge base did not refuse: $GUARD_OUT"
-  guard "$repo" FM_HOME="$home" -- --new-names --base trunk
-  [ "$GUARD_STATUS" -eq 1 ] || fail "--base did not select the merge base: $GUARD_OUT"
-  pass "leak guard: words already in the repository and code identifiers pass, and the check is silent without a list"
+  [ "$GUARD_STATUS" -eq 2 ] || fail "a checkout with no origin/main did not refuse: $GUARD_OUT"
+  guard "$repo" FM_HOME="$home" -- --new-names --base main
+  [ "$GUARD_STATUS" -eq 2 ] || fail "--new-names took an argument: $GUARD_OUT"
+  pass "leak guard: known words and code identifiers pass, CamelCase words in code are checked, and the check is silent without a list"
+}
+
+test_commit_messages_are_checked() {
+  local repo="$TMP_ROOT/messages" home="$TMP_ROOT/messages-home" name sha
+  name=$(cap qverblox)
+  branch_repo "$repo"
+  word_home "$home" 'unrelated-word\n'
+  add_line "$repo" docs/notes.md 'the theme stays.' "fix sync for $name"
+  sha=$(git -C "$repo" rev-parse --short HEAD)
+  add_line "$repo" docs/notes.md 'the theme stays blue.' 'call back on 06-0000 0000'
+  guard "$repo" FM_HOME="$home" -- --new-names
+  [ "$GUARD_STATUS" -eq 1 ] || fail "a new name in a commit message did not refuse: $GUARD_OUT"
+  assert_contains "$GUARD_OUT" "LEAK_HIT: new-name: commit $sha: $name" "the hit did not name the commit and the word"
+  assert_contains "$GUARD_OUT" "LEAK_HIT: phone: commit $(git -C "$repo" rev-parse --short HEAD): 06-0000 0000" \
+    "a phone number in a commit message was missed"
+
+  # Commits already in origin/main are public, so only the pushed ones count.
+  git -C "$repo" update-ref refs/remotes/origin/main HEAD
+  guard "$repo" FM_HOME="$home" -- --new-names
+  [ "$GUARD_STATUS" -eq 0 ] || fail "commits already in origin/main were checked: $GUARD_OUT"
+  pass "leak guard: the messages of the commits being pushed are checked for new names and data shapes"
 }
 
 # Invented values only: none of these reaches a real account, number or person.
@@ -390,10 +420,11 @@ SHAPE_LINES='ping U0QZXW1234 in the thread.
 see https://qverblox-team.slack.com/archives/C0QZXW1234 for it.
 record https://app-eu1.hubspot.com/contacts/9990001/record/0-1/42 here.
 call +31 6 0000 0000 after nine.
-pay NL51 ZZZZ 0123 4567 89 by then.'
+pay NL51 ZZZZ 0123 4567 89 by then.
+or text 06 0000 0000, 06-00000000 or 0600000000.'
 
 test_data_shapes_refuse() {
-  local repo="$TMP_ROOT/shapes" home="$TMP_ROOT/shapes-home" kind
+  local repo="$TMP_ROOT/shapes" home="$TMP_ROOT/shapes-home" kind value
   branch_repo "$repo"
   word_home "$home" 'unrelated-word\n'
   add_line "$repo" docs/contact.md "$SHAPE_LINES"
@@ -402,6 +433,9 @@ test_data_shapes_refuse() {
   [ "$GUARD_STATUS" -eq 1 ] || fail "customer data shapes in added lines did not refuse: $GUARD_OUT"
   for kind in slack-id slack-link hubspot-link phone iban; do
     assert_contains "$GUARD_OUT" "LEAK_HIT: $kind: docs/contact.md:" "an added $kind was missed"
+  done
+  for value in '06 0000 0000' 06-00000000 0600000000; do
+    assert_contains "$GUARD_OUT" "LEAK_HIT: phone: docs/contact.md:6: $value" "the Dutch mobile form $value was missed"
   done
   assert_not_contains "$GUARD_OUT" "tests/fm-z.test.sh" "a shape in tests/ fixtures refused"
 
@@ -415,7 +449,7 @@ test_data_shapes_refuse() {
 
   # Look-alikes pass: a broken IBAN check digit, a time zone, a version, a shared
   # Slack host and a word in capitals with a digit.
-  printf 'NL50 ZZZZ 0123 4567 89, UTC+0100, +1.2.3, https://app.slack.com/client, CONTAINER2\n' > "$repo/docs/contact.md"
+  printf 'NL50 ZZZZ 0123 4567 89, UTC+0100, +1.2.3, https://app.slack.com/client, CONTAINER2, 06000000, 1.0600000000\n' > "$repo/docs/contact.md"
   git -C "$repo" add -A
   guard "$repo"
   [ "$GUARD_STATUS" -eq 0 ] || fail "look-alikes of customer data refused: $GUARD_OUT"
@@ -434,6 +468,7 @@ test_secondmate_inherits_merged_list
 test_remote_route_keeps_list_on_unusable_addon
 test_new_name_refuses_until_approved
 test_known_words_and_code_identifiers_pass
+test_commit_messages_are_checked
 test_data_shapes_refuse
 
 echo "# fm-leak-guard.test.sh: all assertions passed"

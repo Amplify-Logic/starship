@@ -14,8 +14,9 @@
 #
 # docs/configuration.md "Private leak words" owns the operator contract. The
 # word list, its format and where it is found belong to bin/fm-leak-guard.sh,
-# whose --text mode this hook runs with FM_HOME set to DIR; this file never
-# reads the list itself.
+# whose --text mode this hook runs with FM_HOME set to DIR from the command's
+# working directory, so the words of the branch checked out there count as
+# known to this repository; this file never reads the list itself.
 #
 # WHAT IS CHECKED. Only a Bash command that publishes text: gh or gh-axi
 # `pr|issue create|new|edit|comment|review|close|reopen|merge`, a `gh api` call that sends
@@ -175,12 +176,12 @@ def named_files(command, words, cwd):
     return found
 
 
-def listed_words(text, home):
-    """(listed words, new words and data shapes) in text, by bin/fm-leak-guard.sh --text --new-names;
+def listed_words(text, home, cwd):
+    """(listed words, new words and data shapes) in text, by bin/fm-leak-guard.sh --text --new-names run in cwd;
     None when the home has no list or approvals file."""
     env = dict(os.environ, FM_HOME=home)
     result = subprocess.run(["bash", str(GUARD), "--text", "--new-names", "-"], input=text.encode("utf-8", "replace"),
-                            capture_output=True, env=env, timeout=30)
+                            capture_output=True, env=env, cwd=cwd, timeout=30)
     if result.returncode == 0:
         return ([], []) if result.stdout.strip() or result.stderr.strip() else None
     listed, fresh = [], []
@@ -280,7 +281,7 @@ def cmd_hook(argv):
         for path in named_files(command, words, cwd):
             with open(path, "rb") as f:
                 text += "\n" + f.read(FILE_CAP).decode("utf-8", "replace")
-        found = listed_words(text, o["home"])
+        found = listed_words(text, o["home"], cwd)
         if words is None:
             fill = bool(PR_CREATE.search(command) and any(FILL.fullmatch(w) for w in command.split()))
         else:

@@ -3448,13 +3448,16 @@ The guard never prints the list; a hit names only the matching word or line.
 `fm_leak_words_write` in `bin/fm-leak-lib.sh` owns how the lists are merged.
 
 A list cannot keep up with every new name, so a home that keeps one also blocks new names by default.
-Before each push, `bin/fm-leak-guard.sh --new-names` reads the lines the branch adds and refuses every name-shaped word that has never appeared anywhere in this repository's tracked files at the merge base, naming each word and the file and line it is on.
-A name-shaped word is a capitalised word made only of letters, such as a first name, or a CamelCase one, such as a product name; words in capitals, words with a digit or underscore, and words that start with a small letter are never name-shaped, and in a source code file a CamelCase word counts as a code identifier.
+Before each push, `bin/fm-leak-guard.sh --new-names` reads the lines the branch adds since its merge base with `origin/main` and refuses every name-shaped word that has never appeared anywhere in this repository's tracked files at the merge base, naming each word and the file and line it is on.
+It reads the message of every commit in `origin/main..HEAD` the same way and names a hit there as `commit <short-sha>`.
+Without `origin/main`, or without a merge base with it, the check refuses with exit 2.
+A name-shaped word is a capitalised word made only of letters, such as a first name, or a CamelCase one, such as a product name, in any file; words in capitals, words with a digit or underscore, and words that start with a small letter are never name-shaped.
 A word the repository already holds, in any case, never triggers, and once a change lands its words are part of the repository and stop being new.
 The owner approves a new word once: firstmate then appends it as its own line to `config/leak-names-approved`, an optional LOCAL, gitignored file in the home's config, for example with `printf '%s\n' <word> >> "$FM_HOME/config/leak-names-approved"`, and the check passes it from then on.
 That file uses the word list's format, is never printed, and is never copied into tracked files.
 The private word lists stay as the backup for names that look like ordinary words.
-The same added lines are also checked for the shapes customer data takes: Slack user, channel and direct-message ids and links into a named Slack workspace, HubSpot record and portal links, phone numbers in international form, and IBANs with valid check digits.
+The same added lines and commit messages are also checked for the shapes customer data takes: Slack user, channel and direct-message ids and links into a named Slack workspace, HubSpot record and portal links, phone numbers, and IBANs with valid check digits.
+A phone number is one in international form, a plus and 8 to 15 digits, or a Dutch mobile number, 06 and 8 more digits, each optionally after a space or a dash.
 The full scan CI runs checks those shapes in every tracked file, beside the email, home path and key checks, with the same `tests/` exemption.
 `bin/fm-lint.sh` runs `--new-names` on every default lint, so the validation pipeline's lint step checks each push; without a word list or an approvals file, as in CI, it is silent.
 `bin/fm-leak-shapes.py` owns what counts as name-shaped, as an occurrence and as each data shape, and the guard's header owns the modes.
@@ -3468,6 +3471,7 @@ A changed list is never written into the reread message a live secondmate receiv
 The same list keeps these words out of what workers publish to a public repository's pull requests: titles, descriptions, comments, and the intent and gate answers the validation pipeline turns into its PR.
 `bin/fm-leak-guard.sh --text [<file>|-]` checks draft text, from the named files or stdin, and names every listed word it contains; it exits 1 on a hit, 0 when the text is clean, and 0 silently without a list.
 For text bound for this repository, `--text --new-names` also names every new word and data shape the text holds, with the repository's tracked files as what it already holds.
+When it runs inside a checkout of this repository, one with a remote of the same owner/repo, the tracked files at that checkout's HEAD count as known too, so the words of the branch being published need no second approval.
 Every direct-PR and no-mistakes ship brief tells the worker to run it before opening, editing or commenting on a PR and before passing intent to the pipeline, and to check the published title, description and every comment, the pipeline's included, once the PR exists.
 On a public repository, a listed word in the captain's intent is replaced by its role before it reaches `--intent`; that is the one exception to passing the captain's words verbatim, and `bin/fm-dod-lib.sh` owns it.
 For a spawned Claude worker (crewmate or scout), `bin/fm-pr-text-guard.py` also checks each shell command that publishes such text through `gh` or `gh-axi`, or starts or answers the pipeline, and refuses it, naming the words, when the text holds a listed word unless every repository the command could reach is proven private.

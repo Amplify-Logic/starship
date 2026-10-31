@@ -1960,7 +1960,7 @@ test_default_lint_checks_the_home_private_leak_words() {
   printf '#!/usr/bin/env bash\necho "the draft is approved."\n' > "$tmp/repo/tests/noop.test.sh"
   git -C "$tmp/repo" add -A
   git -C "$tmp/repo" -c user.name=t -c user.email=t@example.invalid commit -q -m init
-  git -C "$tmp/repo" branch -M main
+  git -C "$tmp/repo" update-ref refs/remotes/origin/main HEAD
   git -C "$tmp/repo" checkout -q -b feature
   printf 'echo "%s%s approved it."\n' "$(printf q | tr q Q)" verblox >> "$tmp/repo/tests/noop.test.sh"
   rc=0

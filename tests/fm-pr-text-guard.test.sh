@@ -496,6 +496,45 @@ test_hook_refuses_new_words_only_for_this_repository() {
   pass "a Claude worker's new words and customer data shapes are refused only for this public repository"
 }
 
+# worker_checkout <dir> <origin url>: a clone of COPY with that origin whose
+# branch adds a file that names the invented word, as a worker's branch would.
+worker_checkout() {
+  git clone -q "$COPY" "$1"
+  git -C "$1" remote set-url origin "$2"
+  git -C "$1" checkout -q -b feature
+  printf 'The %s panel.\n' "$(cap qverblox)" > "$1/docs/panel.md"
+  git -C "$1" add -A
+  git -C "$1" -c user.name=t -c user.email=t@example.invalid commit -q -m panel
+}
+
+test_branch_words_count_as_known() {
+  local name worker="$TMP_ROOT/worker" other="$TMP_ROOT/other-worker"
+  name=$(cap qverblox)
+  worker_checkout "$worker" git@github.com:o/starship-copy.git
+  worker_checkout "$other" https://github.com/o/elsewhere.git
+  printf 'adds the %s panel\n' "$name" > "$WORK/branch-draft.md"
+  STATUS=0
+  OUT=$(cd "$worker" && FM_HOME="$HOME_WORDS" "$COPY/bin/fm-leak-guard.sh" --text --new-names "$WORK/branch-draft.md" 2>&1) \
+    || STATUS=$?
+  [ "$STATUS" -eq 0 ] || fail "a word the branch being published holds must pass in its checkout: $OUT"
+  STATUS=0
+  OUT=$(cd "$other" && FM_HOME="$HOME_WORDS" "$COPY/bin/fm-leak-guard.sh" --text --new-names "$WORK/branch-draft.md" 2>&1) \
+    || STATUS=$?
+  [ "$STATUS" -eq 1 ] || fail "a checkout of another repository must not make a word known: $OUT"
+  assert_contains "$OUT" "LEAK_HIT: new-name: $WORK/branch-draft.md: $name" "the new word must be named"
+
+  export FAKE_GH_PUBLIC=o/starship-copy
+  HOOK="$COPY/bin/fm-pr-text-guard.py" expect_allow "$HOME_WORDS" \
+    "gh pr create --repo o/starship-copy --title \"Add the $name panel\" --body x" \
+    "a word the worker's own branch holds must pass the hook run from that checkout" "$worker"
+  HOOK="$COPY/bin/fm-pr-text-guard.py" expect_refuse "$HOME_WORDS" \
+    "gh pr create --repo o/starship-copy --title \"Add the $name panel\" --body x" \
+    "a word only another repository's checkout holds must still be refused" "$other"
+  assert_contains "$REASON" "\"$name\"" "the refusal must name the new word"
+  unset FAKE_GH_PUBLIC
+  pass "words in the branch being published count as known to the draft check and the hook"
+}
+
 test_draft_check_names_each_listed_word
 test_draft_check_passes_clean_text_and_partial_words
 test_draft_check_without_a_list_is_silent
@@ -508,3 +547,4 @@ test_spawn_installs_the_hook
 test_ship_brief_tells_the_worker_to_check
 test_draft_check_names_new_words_and_shapes
 test_hook_refuses_new_words_only_for_this_repository
+test_branch_words_count_as_known

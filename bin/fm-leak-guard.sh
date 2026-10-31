@@ -48,8 +48,9 @@
 # with, so a home that keeps one (or an approvals file, below) also refuses any
 # name-shaped word that has never appeared in this repository before, until the
 # owner approves it once. --new-names checks the lines this checkout adds since
-# its merge base with origin/main (or local main, or --base REV): committed and
-# uncommitted changes to tracked files, tests/ included. A word that occurs
+# its merge base with origin/main, committed and uncommitted changes to tracked
+# files, tests/ included, and the messages of the commits origin/main..HEAD,
+# each hit there named as `commit <short-sha>`. A word that occurs
 # anywhere in the tracked files at the merge base is never new, so once a change
 # lands its words stop being new. bin/fm-leak-shapes.py owns what counts as
 # name-shaped and as an occurrence. The approvals file is the home's optional,
@@ -58,14 +59,19 @@
 # guard never prints the file. The same added lines, and every scanned file in
 # the default scan, are checked for the shapes customer data takes: Slack ids
 # and workspace links, HubSpot record and portal links, phone numbers in
-# international form and IBANs, which bin/fm-leak-shapes.py also owns, with the
-# same allowlist as the other patterns. bin/fm-lint.sh runs --new-names on every
+# international form or as a Dutch mobile number (06 and 8 digits) and IBANs,
+# which bin/fm-leak-shapes.py also owns, with the same allowlist as the other
+# patterns; commit messages have no allowlist. bin/fm-lint.sh runs --new-names on every
 # default lint, so the pipeline's lint step checks each push; without a list or
 # approvals file, as in CI, it is silent. Each hit prints
 # `LEAK_HIT: new-name: <path>:<line>: <word>` or `LEAK_HIT: <shape>: ...`.
+# Without origin/main, or without a merge base with it, --new-names exits 2.
 # --text --new-names adds the same two checks to a draft text, with the tracked
-# files at this checkout's HEAD as what is already known; bin/fm-pr-text-guard.py
-# uses it for text bound for this repository.
+# files at this checkout's HEAD as what is already known, and, when the caller's
+# working directory is in a checkout that shares a remote's owner/repo with this
+# one, the tracked files at that checkout's HEAD too, so the words of the branch
+# being published count as known; bin/fm-pr-text-guard.py uses it for text
+# bound for this repository and runs it from the publishing command's directory.
 #
 # Usage:
 #   fm-leak-guard.sh                  scan the whole tracked tree (what CI runs)
@@ -79,17 +85,17 @@
 #                                     and data shapes too: exit 1 naming each
 #                                     hit, 0 when clean, and 0 silently when
 #                                     this home has no list or approvals file
-#   fm-leak-guard.sh --new-names [--base <rev>]
-#                                     check the lines this checkout adds for new
-#                                     names and data shapes: exit 1 naming each
-#                                     hit, 2 when no merge base can be found, and
+#   fm-leak-guard.sh --new-names
+#                                     check the lines and commit messages this
+#                                     checkout adds for new names and data
+#                                     shapes: exit 1 naming each hit, 2 when no
+#                                     merge base with origin/main is found, and
 #                                     0 silently without a list or approvals file
 set -eu
 
 WORDS_ONLY=0
 TEXT_MODE=0
 NAMES_MODE=0
-BASE=
 case "${1:-}" in
   --private-words) WORDS_ONLY=1; shift ;;
   --text)
@@ -98,9 +104,8 @@ case "${1:-}" in
     ;;
   --new-names)
     WORDS_ONLY=1; NAMES_MODE=1; shift
-    if [ "${1:-}" = --base ] && [ "$#" -ge 2 ]; then BASE=$2; shift 2; fi
     if [ "$#" -gt 0 ]; then
-      printf 'usage: fm-leak-guard.sh --new-names [--base <rev>] (see the header)\n' >&2
+      printf 'usage: fm-leak-guard.sh --new-names (see the header)\n' >&2
       exit 2
     fi
     ;;
@@ -155,18 +160,11 @@ fi
 ALLOWLIST=(tests 'tests/*' bin/fm-home-port.sh bin/fm-leak-guard.sh bin/fm-leak-lib.sh)
 SHAPES="$ROOT/bin/fm-leak-shapes.py"
 
-# --new-names: the lines this checkout adds since its merge base.
+# --new-names: the lines and commit messages this checkout adds since its
+# merge base with origin/main.
 if [ "$NAMES_MODE" -eq 1 ] && [ "$TEXT_MODE" -eq 0 ]; then
-  if [ -z "$BASE" ]; then
-    for ref in origin/main main; do
-      if git rev-parse --verify -q "$ref" >/dev/null 2>&1; then
-        BASE=$(git merge-base "$ref" HEAD 2>/dev/null) || BASE=
-        break
-      fi
-    done
-  fi
-  if [ -z "$BASE" ] || ! git rev-parse --verify -q "$BASE^{commit}" >/dev/null 2>&1; then
-    printf 'fm-leak-guard.sh: FAIL - no merge base with origin/main or main to find the new lines against; pass --base <rev>\n' >&2
+  if ! BASE=$(git merge-base origin/main HEAD 2>/dev/null) || [ -z "$BASE" ]; then
+    printf 'fm-leak-guard.sh: FAIL - no merge base with origin/main to find the new lines against; fetch origin and try again\n' >&2
     exit 2
   fi
   exempt=()
@@ -176,16 +174,24 @@ if [ "$NAMES_MODE" -eq 1 ] && [ "$TEXT_MODE" -eq 0 ]; then
   [ -z "$out" ] || printf '%s\n' "$out" >&2
   case "$status" in
     0)
-      printf 'fm-leak-guard.sh: PASS - no new names or customer data shapes in the lines this branch adds\n'
+      printf 'fm-leak-guard.sh: PASS - no new names or customer data shapes in the lines and commit messages this branch adds\n'
       exit 0
       ;;
     1)
-      printf 'fm-leak-guard.sh: FAIL - the lines this branch adds hold words that never appeared in this repository, or customer data shapes (see LEAK_HIT lines above); rewrite each out, or have the owner approve a new word once, which firstmate records as a line of %s\n' "$APPROVED" >&2
+      printf 'fm-leak-guard.sh: FAIL - the lines or commit messages this branch adds hold words that never appeared in this repository, or customer data shapes (see LEAK_HIT lines above); rewrite each out, or have the owner approve a new word once, which firstmate records as a line of %s\n' "$APPROVED" >&2
       exit 1
       ;;
     *) exit 2 ;;
   esac
 fi
+
+# remote_repos <checkout>: the owner/repo, lowercased, of each of its remotes.
+remote_repos() {
+  git -C "$1" config --get-regexp '^remote\..*\.url$' 2>/dev/null \
+    | awk '{print tolower($2)}' \
+    | sed -E 's#/+$##; s#\.git$##; s#.*[:/]([^:/]+/[^:/]+)$#\1#' \
+    | sort -u
+}
 
 # --text: every distinct listed word in each source, named once.
 if [ "$TEXT_MODE" -eq 1 ]; then
@@ -221,8 +227,14 @@ if [ "$TEXT_MODE" -eq 1 ]; then
   done
   fresh=
   if [ "$NAMES_ON" -eq 1 ]; then
+    known=(--names "$ROOT" HEAD)
+    caller=$(git -C "$CALLER_PWD" rev-parse --show-toplevel 2>/dev/null) || caller=
+    if [ -n "$caller" ] && [ "$caller" != "$ROOT" ] \
+      && [ -n "$(comm -12 <(remote_repos "$ROOT") <(remote_repos "$caller"))" ]; then
+      known+=(--names "$caller" HEAD)
+    fi
     status=0
-    out=$(python3 "$SHAPES" --names "$ROOT" HEAD --approved "$APPROVED" --text "${labelled[@]}") || status=$?
+    out=$(python3 "$SHAPES" "${known[@]}" --approved "$APPROVED" --text "${labelled[@]}") || status=$?
     [ "$status" -le 1 ] || exit 2
     while IFS= read -r line; do
       [ -n "$line" ] || continue
