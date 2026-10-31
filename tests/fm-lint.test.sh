@@ -1933,7 +1933,7 @@ test_default_lint_checks_the_home_private_leak_words() {
   mkdir -p "$tmp/repo/bin" "$tmp/repo/tests" "$tmp/home/config" "$tmp/bare-home"
   cp "$LINT" "$tmp/repo/bin/fm-lint.sh"
   cp "$ROOT/bin/fm-timeout-lib.sh" "$ROOT/bin/fm-leak-guard.sh" "$ROOT/bin/fm-leak-lib.sh" \
-    "$ROOT/bin/fm-leak-shapes.py" "$tmp/repo/bin/"
+    "$ROOT/bin/fm-leak-shapes.py" "$ROOT/bin/fm_secret_shapes.py" "$tmp/repo/bin/"
   printf '#!/usr/bin/env bash\nexit 0\n' > "$tmp/repo/bin/fm-lint-workflows.sh"
   printf '#!/usr/bin/env bash\necho "Robin approved the draft."\n' > "$tmp/repo/tests/noop.test.sh"
   chmod +x "$tmp/repo/bin/fm-lint.sh" "$tmp/repo/bin/fm-lint-workflows.sh" "$tmp/repo/tests/noop.test.sh"

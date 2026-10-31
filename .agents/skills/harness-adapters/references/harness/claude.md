@@ -85,6 +85,7 @@ Put either in user settings or the untracked `.claude/settings.local.json`, neve
 [`../../../../../docs/verification/supervision.md`](../../../../../docs/verification/supervision.md#turn-end-guard) records the current primary and Stop auto-arm live evidence.
 This differs from the worker hook, which only touches a task marker through `.claude/settings.local.json`; every crewmate and scout also gets the [worker outward check](../../../../../docs/configuration.md#worker-outward-actions-configoutward-permissions) hooks there and the [PR text check](../../../../../docs/configuration.md#private-leak-words-configleak-words)'s `PreToolUse` Bash hook, and a home that opts in to the [worker command guard](../../../../../docs/configuration.md#worker-command-guard-configcommand-guard) also adds a second `PreToolUse` Bash hook.
 A Claude secondmate's busy hooks are not that file: `bin/fm-spawn.sh` passes the parent home's `state/<id>.claude-settings.json` through `--settings` and does not edit the mate home's `settings.local.json`.
+A first mate or second mate gets the same PR text check from the tracked `.claude/settings.json` through `../../../bin/fm-pr-text-pretool-check.sh`, which stands aside in a ship or scout worker, whose spawn already installed its own copy.
 
 Primary `.claude/settings.json` registers `../../../bin/fm-turnend-guard.sh --claude` and `../../../bin/fm-claude-stop-autoarm.sh` with `asyncRewake: true` and `timeout: 28800`.
 Guard exit 2 plus stderr forces continuation.

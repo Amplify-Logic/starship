@@ -414,13 +414,13 @@ fm_pr_text_block() {
 ## Public PR text
 Personal and work details never go into a public repository's PR titles, descriptions or comments; this home keeps the words it means in a private list.
 Before you open or edit a PR, comment on one, or pass \`--intent\` or a gate answer to no-mistakes, write the draft text to a file and run \`$check --text <file>\` (or pipe the text to \`$check --text\`).
-It names every listed word the text contains; on a public repository, rewrite the text without each named word and check it again, while a private repository's PR may keep them.
+It names the line and column of every listed word and key or token shape the text contains, never the word itself; on a public repository, rewrite each of those places and check it again, while a private repository's PR may keep listed words.
 When the PR is for public Starship itself, run it as \`--text --new-names\`, which also names every word that never appeared in Starship before and every customer data shape; rewrite each out, or append a \`needs-decision:\` status line naming the new words so the owner can approve each once.
 For \`--intent\`, the Definition of done's one exception to keeping the captain's words says how to rewrite it.
 Once the PR exists, check what was actually published the same way: the title and description, and every comment on it, including those the pipeline posted.
 For example, pipe each of \`gh-axi api "repos/\$ORIGIN_REPO/pulls/<number>" --jq '.title, .body'\`, \`gh-axi api --paginate "repos/\$ORIGIN_REPO/issues/<number>/comments" --jq '.[].body'\`, \`gh-axi api --paginate "repos/\$ORIGIN_REPO/pulls/<number>/comments" --jq '.[].body'\` and \`gh-axi api --paginate "repos/\$ORIGIN_REPO/pulls/<number>/reviews" --jq '.[].body'\` into \`$check --text\`.
-On a public repository, edit any named word out of the title, description or comment, leaving any no-mistakes appendix untouched.
-A Claude worker's publishing commands are refused on a public repository while their text holds a listed word, naming the word, so rewrite and retry rather than routing around the refusal.
+On a public repository, edit each placed word out of the title, description or comment, leaving any no-mistakes appendix untouched.
+A Claude worker's publishing commands are refused on a public repository while their text holds a listed word or a token shape, naming the line it is on, so rewrite and retry rather than routing around the refusal.
 EOF
 }
 
@@ -456,7 +456,7 @@ You drive no-mistakes by responding to its gates, not by implementing fixes.
 Follow the guidance no-mistakes itself provides for the mechanics: it loads when you invoke /no-mistakes, and \`no-mistakes axi run --help\` plus the \`help\` lines in each \`axi\` response are authoritative and version-matched to the installed binary.
 When starting no-mistakes, pass \`--intent\` as only this brief's \`## Captain's intent\` subsection body, not its heading, plus any later words the captain actually said.
 Preserve the actual words without adding speaker labels or direct address; the subsection heading supplies provenance outside the pipeline input.
-The one exception to keeping the captain's words: when this brief has a \`## Public PR text\` section and origin is a public repository, replace each word its check names with that person's, company's or project's role, such as "a colleague" or "a customer", and keep every other word verbatim.
+The one exception to keeping the captain's words: when this brief has a \`## Public PR text\` section and origin is a public repository, replace each word its check places with that person's, company's or project's role, such as "a colleague" or "a customer", and keep every other word verbatim.
 For a legacy brief with no such subsection, include only words on lines marked \`[captain] \`, excluding that metadata prefix; never copy its mixed \`# Task\` wholesale.
 If it has no provenance-marked captain words, stop and ask firstmate instead of starting no-mistakes.
 Do not include \`## Firstmate spec\`, later Firstmate build constraints, or your own decisions and tradeoffs.

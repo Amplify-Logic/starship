@@ -85,23 +85,54 @@ expect_refuse() {
   REASON=$(printf '%s' "$OUT" | jq -r '.hookSpecificOutput.permissionDecisionReason')
 }
 
-test_draft_check_names_each_listed_word() {
+test_draft_check_places_each_listed_word() {
   printf 'Fix the sync that robin reported\n' > "$WORK/title.txt"
   printf 'Body\n\nAsked by ACME Corp, and Robin again.\n' > "$WORK/body.md"
   leak_text "$HOME_WORDS" title.txt
   [ "$STATUS" -eq 1 ] || fail "a title with a listed word must fail: $OUT"
-  assert_contains "$OUT" "LEAK_HIT: private-word: title.txt: robin" "the hit must name the file and the word as written"
+  assert_contains "$OUT" "LEAK_HIT: private-word: title.txt:1:19" "the hit must name the file, line and column"
+  assert_contains "$OUT" "1 word from the private word list" "the failure must count the words"
+  assert_not_contains "$OUT" "robin" "the check must never print a listed word"
   leak_text "$HOME_WORDS" body.md
   [ "$STATUS" -eq 1 ] || fail "a body with listed words must fail: $OUT"
-  assert_contains "$OUT" "body.md: ACME Corp" "a listed phrase must be found whatever its case"
-  assert_contains "$OUT" "body.md: Robin" "every listed word must be named"
+  assert_contains "$OUT" "body.md:3:10" "a listed phrase must be found whatever its case"
+  assert_contains "$OUT" "body.md:3:25" "every listed word must be placed"
+  assert_contains "$OUT" "2 words from the private word list" "the failure must count every word"
   assert_contains "$OUT" "rewrite it without them" "the failure must say what to do"
+  assert_not_contains "$OUT" "ACME" "the check must never print a listed phrase"
+  assert_not_contains "$OUT" "Robin" "the check must never print a listed word"
   STATUS=0
   OUT=$(printf 'Thanks, Robin - looks good.\n' | FM_HOME="$HOME_WORDS" "$LEAK" --text 2>&1) || STATUS=$?
   [ "$STATUS" -eq 1 ] || fail "a comment on stdin with a listed word must fail: $OUT"
-  assert_contains "$OUT" "LEAK_HIT: private-word: stdin: Robin" "stdin must be named as the source"
-  [ "$(printf '%s\n' "$OUT" | grep -c 'stdin: Robin')" -eq 1 ] || fail "a word must be named once: $OUT"
-  pass "the draft check names every listed word in a title, body or comment, whole words, any case"
+  assert_contains "$OUT" "LEAK_HIT: private-word: stdin:1:9" "stdin must be named as the source"
+  [ "$(printf '%s\n' "$OUT" | grep -c '^LEAK_HIT')" -eq 1 ] || fail "a word must be placed once: $OUT"
+  # Checking the word list file itself never prints the list.
+  leak_text "$HOME_WORDS" "$HOME_WORDS/config/leak-words"
+  [ "$STATUS" -eq 1 ] || fail "the word list checked as a draft must fail: $OUT"
+  assert_not_contains "$OUT" "Robin" "checking the word list must not print its words"
+  assert_not_contains "$OUT" "robin" "checking the word list must not print its words"
+  pass "the draft check places and counts every listed word in a title, body or comment, never printing one"
+}
+
+test_draft_check_finds_token_shapes() {
+  local key
+  # Built at run time so this file holds no token shape.
+  key="$(printf 'sk')_live_$(printf 'q9Z%.0s' 1 2 3 4 5 6 7)"
+  printf 'Deploy notes\nSTRIPE_SECRET_API_KEY=%s\n' "$(printf 'Q1w2E3r4%.0s' 1 2 3)" > "$WORK/keys.md"
+  printf 'paste %s here\n' "$key" > "$WORK/stripe.md"
+  for home in "$HOME_WORDS" "$NO_LIST"; do
+    leak_text "$home" keys.md stripe.md
+    [ "$STATUS" -eq 1 ] || fail "draft text holding token shapes must fail in $home: $OUT"
+    assert_contains "$OUT" "LEAK_HIT: token: keys.md:2:15" "an API key assignment in capitals must be found"
+    assert_contains "$OUT" "LEAK_HIT: token: stripe.md:1:7" "a Stripe live key must be found"
+    assert_contains "$OUT" "2 token shapes" "the failure must count the tokens"
+    assert_not_contains "$OUT" "Q1w2E3r4" "the check must never print a token"
+    assert_not_contains "$OUT" "$key" "the check must never print a token"
+  done
+  leak_text "$NO_LIST" title.txt
+  [ "$STATUS" -eq 0 ] || fail "a clean text in a home with no list must pass: $OUT"
+  assert_equals "" "$OUT" "a clean text in a home with no list must say nothing"
+  pass "the draft check finds and places token shapes, with or without a word list, never printing one"
 }
 
 test_draft_check_passes_clean_text_and_partial_words() {
@@ -132,12 +163,16 @@ test_hook_refuses_title_body_and_comment_on_a_public_repo() {
   export FAKE_GH_PRIVATE=false
   expect_refuse "$HOME_WORDS" 'gh pr create --repo o/public --title "Sync fix for Robin" --body "Details"' \
     "a listed word in a PR title must be refused"
-  assert_contains "$REASON" '"Robin"' "the refusal must name the word"
+  assert_contains "$REASON" "contains 1 word from this home's private word list (the command, line 1)" \
+    "the refusal must count the word and say where it is"
+  assert_not_contains "$REASON" "Robin" "the refusal must never name the word"
   assert_contains "$REASON" "o/public, a public repository" "the refusal must name the public repository"
   assert_contains "$REASON" "--text <file>" "the refusal must say how to check a draft"
   expect_refuse "$HOME_WORDS" "gh-axi pr edit 7 --repo o/public --body-file $WORK/body.md" \
     "a listed word in a body file must be refused"
-  assert_contains "$REASON" '"ACME Corp", "Robin"' "every listed word in the file must be named"
+  assert_contains "$REASON" "2 words from this home's private word list" "every listed word in the file must be counted"
+  assert_contains "$REASON" "body.md, line 3)" "the refusal must name the file and line the words are on"
+  assert_not_contains "$REASON" "ACME" "the refusal must never name a listed phrase"
   expect_refuse "$HOME_WORDS" 'gh pr create -R o/public -t "Sync fix" -F body.md' \
     "a body file given with -F must be read relative to the working directory"
   expect_refuse "$HOME_WORDS" "gh pr comment 7 --repo o/public --body \"\$(cat <<'X'
@@ -152,6 +187,110 @@ X
   assert_contains "$REASON" "o/public" "the API path must name the repository"
   unset FAKE_GH_PRIVATE
   pass "a Claude worker's PR title, body and comment with a listed word are refused on a public repository"
+}
+
+test_hook_refuses_token_shapes_and_never_prints_a_listed_word() {
+  local key
+  export FAKE_GH_PRIVATE=false
+  # Built at run time so this file holds no token shape.
+  key="gl$(printf 'pat')-$(printf 'Xy7%.0s' 1 2 3 4 5 6 7)"
+  for home in "$HOME_WORDS" "$NO_LIST"; do
+    expect_refuse "$home" "gh pr comment 7 --repo o/public --body 'use $key for the mirror'" \
+      "a token shape in a comment must be refused, with or without a word list"
+    assert_contains "$REASON" "contains 1 live key or token shape (the command, line 1)" \
+      "the refusal must count the token and say where it is"
+    assert_not_contains "$REASON" "$key" "the refusal must never print the token"
+  done
+  # The command a reviewer once ran: a gh api call beside a grep that named the
+  # word list file. The refusal places the words and prints none of them.
+  expect_refuse "$HOME_WORDS" \
+    "gh api repos/o/public/issues/3/comments -f body=done; grep -c x $HOME_WORDS/config/leak-words" \
+    "a publishing command that names the word list file must be refused"
+  assert_contains "$REASON" "leak-words, lines 2 and 3)" "the refusal must say the words are in the named list file"
+  assert_not_contains "$REASON" "Robin" "the refusal must not print the word list"
+  assert_not_contains "$REASON" "ACME" "the refusal must not print the word list"
+  unset FAKE_GH_PRIVATE
+  pass "a token shape is refused on a public repository with or without a list, and a refusal never prints a word or token"
+}
+
+# A file a publishing command merely names, such as a test fixture holding
+# synthetic keys, is not published, so its token shapes do not count; a file
+# it sends as content does.
+test_hook_checks_token_shapes_only_in_sent_files() {
+  local key home
+  export FAKE_GH_PRIVATE=false
+  # Built at run time so this file holds no token shape.
+  key="gl$(printf 'pat')-$(printf 'Xy7%.0s' 1 2 3 4 5 6 7)"
+  mkdir -p "$WORK/tests"
+  printf 'redact %s\nand %s\n' "$key" "$key" > "$WORK/tests/redaction.test.sh"
+  for home in "$HOME_WORDS" "$NO_LIST"; do
+    expect_allow "$home" 'gh pr create --repo o/public --title "Cover redaction" --body "Adds a case to tests/redaction.test.sh"' \
+      "a body that only mentions a fixture with synthetic keys must pass in $home"
+    expect_refuse "$home" 'gh pr create --repo o/public --title "Cover redaction" --body-file tests/redaction.test.sh' \
+      "a fixture sent with --body-file must have its token shapes checked in $home"
+    assert_contains "$REASON" "2 live key or token shapes (" "the refusal must count the sent file's tokens"
+    assert_contains "$REASON" "redaction.test.sh, lines 1 and 2)" "the refusal must place the sent file's tokens"
+    assert_not_contains "$REASON" "$key" "the refusal must never print a token"
+    expect_refuse "$home" 'gh pr comment 7 --repo o/public -F tests/redaction.test.sh' \
+      "a fixture sent with -F must have its token shapes checked in $home"
+    expect_refuse "$home" 'gh pr comment 7 --repo o/public --body-file=tests/redaction.test.sh' \
+      "a fixture sent with --body-file= must have its token shapes checked in $home"
+    expect_refuse "$home" 'gh api repos/o/public/issues/3/comments --input tests/redaction.test.sh' \
+      "a fixture sent with --input must have its token shapes checked in $home"
+    expect_refuse "$home" 'gh api repos/o/public/issues/3/comments -f "body=@tests/redaction.test.sh"' \
+      "a fixture sent as an @file field must have its token shapes checked in $home"
+    # shellcheck disable=SC2016 # The substitution runs inside the checked command, not here.
+    expect_refuse "$home" 'gh pr create --repo o/public -t x --body "$(cat tests/redaction.test.sh)"' \
+      "a fixture sent through \$(cat file) must have its token shapes checked in $home"
+    # shellcheck disable=SC2016 # The substitution runs inside the checked command, not here.
+    expect_refuse "$home" 'gh pr create --repo o/public -t x --body "$(<tests/redaction.test.sh)"' \
+      "a fixture sent through \$(<file) must have its token shapes checked in $home"
+    # shellcheck disable=SC2016 # The substitution runs inside the checked command, not here.
+    expect_refuse "$home" 'gh pr create --repo o/public -t x --body "$(< tests/redaction.test.sh)"' \
+      "a fixture sent through \$(< file) must have its token shapes checked in $home"
+    # shellcheck disable=SC2016 # The substitution runs inside the checked command, not here.
+    expect_refuse "$home" 'gh pr comment 7 --repo o/public --body-file - <<EOF
+See $(cat tests/redaction.test.sh)
+EOF' "a \$(cat file) in an unquoted heredoc body runs, so its tokens must be checked in $home"
+    # shellcheck disable=SC2016 # The substitution is quoted text in the checked command.
+    expect_allow "$home" "gh pr comment 7 --repo o/public --body 'Reproduce with \$(cat tests/redaction.test.sh)'" \
+      "a cat inside single quotes is only mentioned, so it must stay words-only in $home"
+    # shellcheck disable=SC2016 # The backticks are quoted text in the checked command.
+    expect_allow "$home" "gh pr comment 7 --repo o/public --body-file - <<'EOF'
+Reproduce with \`cat tests/redaction.test.sh\`
+EOF" "a cat inside a quoted heredoc body is only mentioned, so it must stay words-only in $home"
+    # shellcheck disable=SC2016 # The substitution and backticks are quoted text in the checked command.
+    expect_allow "$home" "gh pr create --repo o/public -t x --body \"\$(cat <<'EOF'
+Reproduce with \`cat tests/redaction.test.sh\`
+EOF
+)\"" "a cat inside a quoted heredoc in a double-quoted substitution is only mentioned, so it must stay words-only in $home"
+    # shellcheck disable=SC2016 # The substitution runs inside the checked command, not here.
+    expect_refuse "$home" 'gh pr create --repo o/public -t x --body "$(cat <<EOF
+See $(cat tests/redaction.test.sh)
+EOF
+)"' "a \$(cat file) in an unquoted heredoc in a double-quoted substitution runs, so its tokens must be checked in $home"
+    # shellcheck disable=SC2016 # The substitution runs inside the checked command, not here.
+    expect_refuse "$home" 'gh pr comment 7 --repo o/public --body "`cat tests/redaction.test.sh`"' \
+      "a fixture sent through a backtick cat must have its token shapes checked in $home"
+    expect_refuse "$home" 'gh pr comment 7 --repo o/public --body-file - < tests/redaction.test.sh' \
+      "a fixture redirected into --body-file - must have its token shapes checked in $home"
+    expect_refuse "$home" 'gh api repos/o/public/issues/3/comments --input - < tests/redaction.test.sh' \
+      "a fixture redirected into --input - must have its token shapes checked in $home"
+    expect_refuse "$home" 'cat tests/redaction.test.sh | gh pr comment 7 --repo o/public --body-file -' \
+      "a fixture piped from cat into --body-file - must have its token shapes checked in $home"
+    assert_contains "$REASON" "2 live key or token shapes (" "the piped file's tokens must be counted"
+    expect_allow "$home" 'cat tests/redaction.test.sh | wc -l; gh pr comment 7 --repo o/public --body "Counted"' \
+      "a fixture piped into another command is not sent in $home"
+  done
+  expect_allow "$NO_LIST" 'gh pr create --repo o/public --fill && cat tests/redaction.test.sh' \
+    "a home with no list must pass --fill even when the command names a fixture with synthetic keys"
+  printf 'redact %s for Robin\n' "$key" > "$WORK/tests/named.test.sh"
+  expect_refuse "$HOME_WORDS" 'gh pr create --repo o/public --title "Cover redaction" --body "See tests/named.test.sh"' \
+    "a listed word in a merely named file must still be refused"
+  assert_contains "$REASON" "contains 1 word from this home's private word list (" "the named file's word must count"
+  assert_not_contains "$REASON" "token shape" "the named file's token shape must not count"
+  unset FAKE_GH_PRIVATE
+  pass "token shapes count only in the command and the files it sends, while a named file's listed words still count"
 }
 
 test_hook_reads_body_files_however_they_are_named() {
@@ -331,14 +470,15 @@ test_hook_passes_clean_private_and_unrelated_commands() {
     "an unreadable visibility must refuse"
   assert_contains "$REASON" "could not confirm the repository is private" "the refusal must say why"
   assert_contains "$REASON" "HTTP 404" "the refusal must carry gh's reason"
-  assert_contains "$REASON" '"Robin"' "the refusal must name the listed word"
+  assert_contains "$REASON" "1 word from this home's private word list (the command, line 1)" "the refusal must place the listed word"
+  assert_not_contains "$REASON" "Robin" "the refusal must never name the listed word"
   assert_contains "$REASON" "o/gone: gh repo view failed" "the refusal must name the unreadable repository"
-  assert_contains "$REASON" "Rewrite the text without it" "the refusal must say how to retry"
+  assert_contains "$REASON" "Rewrite those lines without it" "the refusal must say how to retry"
   assert_contains "$REASON" "blocked:" "a private repository that cannot be read must leave the worker a way to stop"
   assert_not_contains "$REASON" "explicit --repo" "an unreadable repository must not suggest a retry that cannot help"
   unset FAKE_GH_PRIVATE
   expect_allow "$NO_LIST" 'gh pr create --repo o/public --title "Sync fix for Robin" --body x' \
-    "a home with no list must pass everything"
+    "a home with no list must pass everything but a token shape"
   hook "$HOME_WORDS" '' && assert_equals "" "$OUT" "an empty command must pass"
   local long_body
   long_body=$(printf 'A clean sentence about the sync fix and why it holds now. %.0s' $(seq 25))$(printf 'x%.0s' $(seq 300))
@@ -380,6 +520,66 @@ test_spawn_installs_the_hook() {
   pass "every claude worker gets the PR text hook, reading its home's list on every command"
 }
 
+# A first mate or second mate session is not spawned, so the tracked
+# .claude/settings.json runs the check for it. The registered command runs here
+# exactly as Claude Code runs it, from a home that is a copy of this checkout.
+test_first_and_second_mate_sessions_get_the_hook() {
+  local case_dir="$TMP_ROOT/primary" primary mate task cmd script publish payload
+  primary="$case_dir/home"
+  mate="$case_dir/mate"
+  task="$case_dir/task"
+  mkdir -p "$primary/bin" "$primary/config"
+  for script in fm-pr-text-pretool-check.sh fm-primary-scope-lib.sh fm-session-lock-lib.sh fm-cursor-lib.sh \
+    fm-hook-host-lib.sh fm-pr-text-guard.py fm-leak-guard.sh fm-leak-lib.sh fm-leak-shapes.py fm_secret_shapes.py \
+    fm-addon.sh fm-timeout-lib.sh; do
+    cp "$ROOT/bin/$script" "$primary/bin/"
+  done
+  printf '# Home\n' > "$primary/AGENTS.md"
+  printf '/config/\n/.fm-secondmate-home\n' > "$primary/.gitignore"
+  git -C "$primary" init -q
+  git -C "$primary" add -A
+  git -C "$primary" -c user.name=t -c user.email=t@example.invalid commit -q -m init
+  git -C "$primary" worktree add -q --detach "$mate" HEAD
+  git -C "$primary" worktree add -q --detach "$task" HEAD
+  mkdir -p "$mate/config"
+  printf 'mate-1\n' > "$mate/.fm-secondmate-home"
+  printf 'Robin\n' > "$primary/config/leak-words"
+  printf 'Robin\n' > "$mate/config/leak-words"
+  cmd=$(jq -r '[.hooks.PreToolUse[] | select(.matcher == "Bash") | .hooks[].command | select(test("fm-pr-text-pretool-check[.]sh"))] | if length == 1 then .[0] else error("not exactly one") end' \
+    "$ROOT/.claude/settings.json") || fail "the tracked Claude settings must register the PR text check exactly once"
+  publish='gh pr create --repo o/public --title "for Robin" --body x'
+
+  # session <project dir> [env...]: the registered hook on the publishing
+  # command, as a session in that directory; output in OUT.
+  session() {
+    local dir=$1
+    shift
+    payload=$(jq -cn --arg c "$publish" --arg cwd "$WORK" '{tool_name: "Bash", tool_input: {command: $c}, cwd: $cwd}')
+    OUT=$(printf '%s' "$payload" | env -u FM_TASK_ID -u FM_HOME PATH="$FAKEBIN:$PATH" FAKE_GH_LOG="$GH_LOG" \
+      FAKE_GH_PRIVATE=false CLAUDE_PROJECT_DIR="$dir" "$@" bash -c "$cmd") || fail "the hook exited nonzero in $dir"
+  }
+
+  session "$primary"
+  assert_contains "$OUT" '"deny"' "a first mate session must have its publishing command checked"
+  assert_contains "$OUT" "1 word from this home's private word list (the command, line 1)" \
+    "the first mate's refusal must count the word and place it"
+  assert_not_contains "$OUT" "Robin" "the first mate's refusal must never name the word"
+  session "$mate"
+  assert_contains "$OUT" '"deny"' "a second mate session must have its publishing command checked"
+  session "$primary" FM_TASK_ID=t-1
+  assert_equals "" "$OUT" "a ship or scout worker already has its own check and must not be checked twice"
+  session "$task"
+  assert_equals "" "$OUT" "a task copy that is not a home must not be checked"
+  payload=$(jq -cn --arg c "$publish" '{tool_name: "Bash", tool_input: {command: $c}, cursor_version: "1"}')
+  OUT=$(printf '%s' "$payload" | env -u FM_TASK_ID -u FM_HOME PATH="$FAKEBIN:$PATH" FAKE_GH_LOG="$GH_LOG" \
+    FAKE_GH_PRIVATE=false CLAUDE_PROJECT_DIR="$primary" bash -c "$cmd")
+  assert_equals "" "$OUT" "a payload Cursor delivered must pass, because the check answers only in Claude's shape"
+  : > "$primary/config/leak-words"
+  session "$primary"
+  assert_equals "" "$OUT" "a first mate with no word list must pass a clean command"
+  pass "the tracked Claude settings check a first mate's and a second mate's PR text, and leave workers and other copies alone"
+}
+
 test_ship_brief_tells_the_worker_to_check() {
   local home="$TMP_ROOT/brief-home" id brief check
   mkdir -p "$home/data" "$home/config"
@@ -396,7 +596,7 @@ test_ship_brief_tells_the_worker_to_check() {
     check=$(sed -n 's/.*and run `\(.*\) --text <file>`.*/\1/p' "$brief")
     [ -n "$check" ] || fail "$id: brief does not name the check command"
     OUT=$(printf 'for robin\n' | bash -c "$check --text" 2>&1) && fail "$id: the brief's command must find the home's word: $OUT"
-    assert_contains "$OUT" "stdin: robin" "$id: the brief's command must read this home's list"
+    assert_contains "$OUT" "stdin:1:5" "$id: the brief's command must read this home's list"
   done
   assert_grep "The one exception to keeping the captain's words" "$home/data/brief-prtext-nm/brief.md" \
     "a no-mistakes brief must state the public-repository exception to the verbatim intent"
@@ -419,7 +619,7 @@ cap() {
 COPY="$TMP_ROOT/starship-copy"
 mkdir -p "$COPY/bin" "$COPY/docs"
 cp "$ROOT/bin/fm-pr-text-guard.py" "$ROOT/bin/fm-leak-guard.sh" "$ROOT/bin/fm-leak-lib.sh" \
-  "$ROOT/bin/fm-leak-shapes.py" "$ROOT/bin/fm-addon.sh" "$ROOT/bin/fm-timeout-lib.sh" "$COPY/bin/"
+  "$ROOT/bin/fm-leak-shapes.py" "$ROOT/bin/fm_secret_shapes.py" "$ROOT/bin/fm-addon.sh" "$ROOT/bin/fm-timeout-lib.sh" "$COPY/bin/"
 printf 'The Sync fix and its Details.\n' > "$COPY/docs/notes.md"
 git -C "$COPY" init -q
 git -C "$COPY" add -A
@@ -452,6 +652,42 @@ test_draft_check_names_new_words_and_shapes() {
   assert_contains "$OUT" "LEAK_HIT: phone: stdin: +31 6 0000 0000" "a phone number must be named"
   assert_contains "$OUT" "LEAK_HIT: iban: stdin: NL51ZZZZ0123456789" "an IBAN must be named"
   pass "the draft check with --new-names names new words and customer data shapes, and passes known and approved words"
+}
+
+# No part of a listed word or phrase is ever printed as a new word by the draft
+# check, not even when the word list file itself is checked.
+test_draft_check_never_names_a_listed_phrase_as_new() {
+  local home="$TMP_ROOT/phrase-home" first second third word
+  first=$(cap qverblox)
+  second=$(cap logistics)
+  mkdir -p "$home/config"
+  printf '%s %s\n' "$first" "$second" > "$home/config/leak-words"
+  printf 'ask %s %s today\n' "$first" "$second" > "$WORK/phrase.md"
+  for source in phrase.md "$home/config/leak-words"; do
+    STATUS=0
+    OUT=$(cd "$WORK" && FM_HOME="$home" "$COPY/bin/fm-leak-guard.sh" --text --new-names "$source" 2>&1) || STATUS=$?
+    [ "$STATUS" -eq 1 ] || fail "a listed phrase in $source must fail: $OUT"
+    assert_contains "$OUT" "LEAK_HIT: private-word: " "the listed phrase in $source must be placed"
+    assert_not_contains "$OUT" "$first" "a word of the listed phrase in $source must never be printed"
+    assert_not_contains "$OUT" "$second" "a word of the listed phrase in $source must never be printed"
+  done
+  # Two listed phrases that share a word: neither phrase's words are printed.
+  third=$(cap zandrelt)
+  printf '%s %s\n%s %s\n' "$first" "$second" "$second" "$third" > "$home/config/leak-words"
+  printf 'met %s %s %s today\n' "$first" "$second" "$third" > "$WORK/shared.md"
+  STATUS=0
+  OUT=$(cd "$WORK" && FM_HOME="$home" "$COPY/bin/fm-leak-guard.sh" --text --new-names shared.md 2>&1) || STATUS=$?
+  [ "$STATUS" -eq 1 ] || fail "listed phrases sharing a word must fail: $OUT"
+  for word in "$first" "$second" "$third"; do
+    assert_not_contains "$OUT" "$word" "a word of listed phrases that share a word must never be printed"
+  done
+  printf '%s %s\n' "$first" "$second" > "$home/config/leak-words"
+  printf 'ask %s alone\n' "$first" > "$WORK/alone.md"
+  STATUS=0
+  OUT=$(cd "$WORK" && FM_HOME="$home" "$COPY/bin/fm-leak-guard.sh" --text --new-names alone.md 2>&1) || STATUS=$?
+  [ "$STATUS" -eq 1 ] || fail "a lone word of a listed phrase must still be new: $OUT"
+  assert_contains "$OUT" "LEAK_HIT: new-name: alone.md: $first" "a lone word of a listed phrase must be named as new"
+  pass "the draft check never names a word of a listed phrase as new, while a lone word of one still is"
 }
 
 test_hook_refuses_new_words_only_for_this_repository() {
@@ -549,16 +785,21 @@ test_branch_words_count_as_known() {
   pass "words in the branch being published count as known to the draft check and the hook"
 }
 
-test_draft_check_names_each_listed_word
+test_draft_check_places_each_listed_word
+test_draft_check_finds_token_shapes
 test_draft_check_passes_clean_text_and_partial_words
 test_draft_check_without_a_list_is_silent
 test_hook_refuses_title_body_and_comment_on_a_public_repo
+test_hook_refuses_token_shapes_and_never_prints_a_listed_word
+test_hook_checks_token_shapes_only_in_sent_files
 test_hook_reads_body_files_however_they_are_named
 test_hook_finds_the_repository_from_urls_and_gh_repo
 test_hook_refuses_the_pipeline_intent_on_a_public_github_repo
 test_hook_passes_clean_private_and_unrelated_commands
 test_spawn_installs_the_hook
+test_first_and_second_mate_sessions_get_the_hook
 test_ship_brief_tells_the_worker_to_check
 test_draft_check_names_new_words_and_shapes
+test_draft_check_never_names_a_listed_phrase_as_new
 test_hook_refuses_new_words_only_for_this_repository
 test_branch_words_count_as_known

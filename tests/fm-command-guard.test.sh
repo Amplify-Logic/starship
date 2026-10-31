@@ -413,6 +413,27 @@ PYTEST
 
 # --- never send secrets -----------------------------------------------------
 
+# The provider prefixes bin/fm_secret_shapes.py shares with the leak guard are
+# replaced even with no secret-looking name beside them. Each key is built at
+# run time so this file holds no token shape.
+test_redaction_of_shared_key_shapes() {
+  local home cmd body key keys=()
+  home=$(new_home shared-shapes 'enabled = true\n')
+  reset_server "$FIX/response-git-status.json"
+  keys+=("sk-$(printf 'proj')-$(printf 'Ab1_%.0s' 1 2 3 4 5 6)")
+  keys+=("$(printf 'sk')_live_$(printf 'Cd2%.0s' 1 2 3 4 5 6)")
+  keys+=("$(printf 'gl')pat-$(printf 'Ef3%.0s' 1 2 3 4 5 6 7)")
+  keys+=("$(printf 'AI')za$(printf 'Gh4%.0s' 1 2 3 4 5 6 7 8 9 10 11)")
+  cmd="echo ${keys[*]} | wc -c"
+  run_hook "$home" "$cmd" >/dev/null
+  body=$(cat "$SRV/requests.jsonl")
+  for key in "${keys[@]}"; do
+    assert_not_contains "$body" "$key" "the request body must not carry ${key:0:8}..."
+  done
+  assert_contains "$body" "wc -c" "the rest of the command must still be judged"
+  pass "the shared OpenAI project, Stripe live, GitLab and Google key shapes never leave the machine"
+}
+
 test_redaction() {
   local home cmd body
   home=$(new_home redact 'enabled = true\n')
@@ -805,6 +826,7 @@ test_local_list_benchmark_cases
 test_local_list_reaches_excluded_projects
 test_local_check_crash_blocks
 test_redaction
+test_redaction_of_shared_key_shapes
 test_quoted_and_short_secrets_are_redacted
 test_routine_expansions_are_judged
 test_plain_assignments_stay_visible

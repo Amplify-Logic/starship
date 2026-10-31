@@ -539,7 +539,9 @@
 # Bash hook in its settings.local.json when this home's config/command-guard
 # is on (bin/fm-command-guard.py owns the gate and the hook), and always the
 # PR text check's PreToolUse Bash hook (bin/fm-pr-text-guard.py), which refuses
-# publishing this home's private words to a public repository's PRs.
+# publishing this home's private words or a token shape to a public
+# repository's PRs. A claude secondmate gets that check from its home's tracked
+# .claude/settings.json (bin/fm-pr-text-pretool-check.sh), as a first mate does.
 # A --secondmate launch arms the same semantic busy contract (bin/fm-busy-lib.sh) in THIS
 # parent home for claude, opencode, pi, pi-signed, and omp, so the parent's active-turn
 # gate can read a busy verdict. Those hooks do not touch the parent's turn-ended marker:
@@ -6348,8 +6350,10 @@ BUSY_GEN=
         || echo "warning: python3 is not installed; $ID's outward check will refuse every connected-account and browser action until it is" >&2
       # The PR text check (bin/fm-pr-text-guard.py, docs/configuration.md
       # "Private leak words"): a PreToolUse hook on Bash that refuses a
-      # command publishing this home's private words to a public
-      # repository's PR titles, descriptions, comments or pipeline intent.
+      # command publishing this home's private words or a token shape to a
+      # public repository's PR titles, descriptions, comments or pipeline
+      # intent. A secondmate runs it from its home's tracked
+      # .claude/settings.json instead (bin/fm-pr-text-pretool-check.sh).
       # It reads the home's list on every command, so a list added later
       # needs no relaunch. Without python3 it is left out rather than
       # refusing every shell command.

@@ -106,6 +106,11 @@ import time
 import urllib.error
 import urllib.request
 
+# Known key and token shapes; bin/fm_secret_shapes.py owns them for the
+# command guard and the leak guard alike.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from fm_secret_shapes import KEY_PATTERNS  # noqa: E402
+
 ENDPOINT = os.environ.get("FM_COMMAND_GUARD_ENDPOINT",
                           "https://api.typesafe.ai/v1/systemone")
 # Pinned, never an alias: the thresholds were checked against this version.
@@ -345,16 +350,6 @@ def api_key(home):
 SECRET_NAME = re.compile(r"(?i)(key|token|secret|pass|pwd|credential|auth|cookie|session|private|signature|(?:^|_)pin(?:$|_))")
 NOT_SECRET_NAMES = {"PWD", "OLDPWD", "SSH_AUTH_SOCK", "XPC_SERVICE_NAME", "TERM_SESSION_ID"}
 
-KEY_PATTERNS = [
-    # A whole private-key block, header to footer.
-    re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(-----END [A-Z ]*PRIVATE KEY-----|$)", re.S),
-    re.compile(r"\b(gh[pousr]_[A-Za-z0-9_]{16,}|github_pat_[A-Za-z0-9_]{16,})"),
-    re.compile(r"\bsk-(ant-)?[A-Za-z0-9_-]{16,}"),
-    re.compile(r"\bxox[abprs]-[A-Za-z0-9-]{10,}"),
-    re.compile(r"\b(AKIA|ASIA)[0-9A-Z]{16}\b"),
-    re.compile(r"\bAIza[0-9A-Za-z_-]{30,}"),
-    re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"),
-]
 # The value after a credential-looking name or flag: api_key=..., token: ...,
 # --password ..., Authorization: Bearer ...
 NAMED_VALUE = re.compile(

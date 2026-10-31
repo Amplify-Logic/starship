@@ -16,7 +16,7 @@ TMP_ROOT=$(fm_test_tmproot fm-leak-guard)
 make_repo() {
   local repo=$1
   mkdir -p "$repo/bin" "$repo/tests" "$repo/docs"
-  cp "$ROOT/bin/fm-leak-guard.sh" "$ROOT/bin/fm-leak-lib.sh" "$ROOT/bin/fm-leak-shapes.py" \
+  cp "$ROOT/bin/fm-leak-guard.sh" "$ROOT/bin/fm-leak-lib.sh" "$ROOT/bin/fm-leak-shapes.py" "$ROOT/bin/fm_secret_shapes.py" \
     "$ROOT/bin/fm-addon.sh" "$ROOT/bin/fm-timeout-lib.sh" "$repo/bin/"
   printf 'run_hook "Captain, Robin approved the draft."\n' > "$repo/tests/fm-x.test.sh"
   printf '# Notes\nThe robin-egg blue theme stays.\n' > "$repo/docs/notes.md"
@@ -58,11 +58,11 @@ test_listed_word_fails_in_tests() {
   word_home "$home" '# Notes\n\n  ROBIN  \n'
   guard "$repo" FM_HOME="$home"
   [ "$GUARD_STATUS" -eq 1 ] || fail "a listed name in tests/ did not fail the scan: $GUARD_OUT"
-  assert_contains "$GUARD_OUT" "LEAK_HIT: private-word: tests/fm-x.test.sh: 1:" "the hit did not name the test file and line"
+  assert_contains "$GUARD_OUT" "LEAK_HIT: private-word: tests/fm-x.test.sh:1:" "the hit did not name the test file and line"
   assert_contains "$GUARD_OUT" "private words" "the failure did not say private words were found"
   # A dash ends a word, so robin-egg in the doc is a hit too.
-  assert_contains "$GUARD_OUT" "LEAK_HIT: private-word: docs/notes.md: 2:" "a whole word joined by a dash was missed"
-  assert_not_contains "$GUARD_OUT" "docs/notes.md: 1:" "a comment line in the list was used as a phrase"
+  assert_contains "$GUARD_OUT" "LEAK_HIT: private-word: docs/notes.md:2:" "a whole word joined by a dash was missed"
+  assert_not_contains "$GUARD_OUT" "docs/notes.md:1:" "a comment line in the list was used as a phrase"
   pass "leak guard: a listed word fails the scan in tests/ too, case-insensitively and as a whole word"
 }
 
@@ -177,24 +177,24 @@ test_addon_list_adds_words() {
   addon_home "$home" '# team names\nRobin\n'
   guard "$repo" FM_HOME="$home"
   [ "$GUARD_STATUS" -eq 1 ] || fail "a word only on the add-on's list passed the scan: $GUARD_OUT"
-  assert_contains "$GUARD_OUT" "LEAK_HIT: private-word: tests/fm-x.test.sh: 1:" "the add-on's word was missed"
+  assert_contains "$GUARD_OUT" "LEAK_HIT: private-word: tests/fm-x.test.sh:1:" "the add-on's word was missed"
   printf 'Robin reviewed the plan with Quillon.\n' > "$draft"
   guard "$repo" FM_HOME="$home" -- --text "$draft"
   [ "$GUARD_STATUS" -eq 1 ] || fail "draft text holding the add-on's word passed: $GUARD_OUT"
-  assert_contains "$GUARD_OUT" "LEAK_HIT: private-word: $draft: Robin" "the draft check did not name the add-on's word"
+  assert_contains "$GUARD_OUT" "LEAK_HIT: private-word: $draft:1:1" "the draft check did not name the add-on's word"
 
   # Both lists apply together.
   word_home "$home" 'quillon\n'
   guard "$repo" FM_HOME="$home" -- --text "$draft"
-  assert_contains "$GUARD_OUT" ": Robin" "the add-on's word was dropped beside the home's list"
-  assert_contains "$GUARD_OUT" ": Quillon" "the home's word was dropped beside the add-on's list"
+  assert_contains "$GUARD_OUT" "$draft:1:1" "the add-on's word was dropped beside the home's list"
+  assert_contains "$GUARD_OUT" "$draft:1:30" "the home's word was dropped beside the add-on's list"
 
   # A home list whose last line has no newline keeps both lists' words apart.
   word_home "$home" 'quillon'
   guard "$repo" FM_HOME="$home" -- --text "$draft"
   [ "$GUARD_STATUS" -eq 1 ] || fail "a home list with no final newline let the draft pass: $GUARD_OUT"
-  assert_contains "$GUARD_OUT" ": Robin" "the add-on's first word joined the home's unterminated last word"
-  assert_contains "$GUARD_OUT" ": Quillon" "the home's unterminated last word joined the add-on's first word"
+  assert_contains "$GUARD_OUT" "$draft:1:1" "the add-on's first word joined the home's unterminated last word"
+  assert_contains "$GUARD_OUT" "$draft:1:30" "the home's unterminated last word joined the add-on's first word"
 
   # An unusable add-on is named, adds nothing, and leaves the home's list working.
   printf 'path = projects/missing-addon\n' > "$home/config/addon"
@@ -415,6 +415,37 @@ test_commit_messages_are_checked() {
   pass "leak guard: the messages of the commits being pushed are checked for new names and data shapes"
 }
 
+# A listed word in a commit message is placed, never printed, and fails
+# --new-names, while only a single-word list entry stops counting as new: each
+# word of a listed phrase alone is still a new name.
+test_private_words_in_commit_messages_are_placed() {
+  local repo="$TMP_ROOT/private-messages" home="$TMP_ROOT/private-messages-home" name sha
+  name=$(cap qverblox)
+  branch_repo "$repo"
+  word_home "$home" 'qverblox\n'
+  add_line "$repo" docs/notes.md 'the theme stays.' "fix sync for $name"
+  sha=$(git -C "$repo" rev-parse --short HEAD)
+  guard "$repo" FM_HOME="$home" -- --new-names
+  [ "$GUARD_STATUS" -eq 1 ] || fail "a listed word in a commit message passed --new-names: $GUARD_OUT"
+  assert_contains "$GUARD_OUT" "LEAK_HIT: private-word: commit $sha:1:14" "the listed word was not placed in the commit"
+  assert_not_contains "$GUARD_OUT" "new-name" "a single-word list entry was also named as a new word"
+  assert_not_contains "$GUARD_OUT" "$name" "the listed word was printed"
+  assert_not_contains "$GUARD_OUT" "qverblox" "the listed word was printed"
+
+  word_home "$home" 'qverblox logistics\n'
+  guard "$repo" FM_HOME="$home" -- --new-names
+  [ "$GUARD_STATUS" -eq 1 ] || fail "a lone word of a listed phrase passed --new-names: $GUARD_OUT"
+  assert_contains "$GUARD_OUT" "LEAK_HIT: new-name: commit $sha: $name" "a lone word of a listed phrase must still be new"
+  assert_not_contains "$GUARD_OUT" "private-word" "a lone word of a phrase was placed as the phrase"
+  add_line "$repo" docs/notes.md "the $name $(cap logistics) theme." 'theme'
+  guard "$repo" FM_HOME="$home" -- --new-names
+  [ "$GUARD_STATUS" -eq 1 ] || fail "a listed phrase in an added line passed --new-names: $GUARD_OUT"
+  assert_contains "$GUARD_OUT" "LEAK_HIT: private-word: docs/notes.md:4:5" "the listed phrase in an added line was not placed"
+  assert_not_contains "$GUARD_OUT" "new-name: docs/notes.md" "a word of the listed phrase was named as new"
+  assert_not_contains "$GUARD_OUT" "$(cap logistics)" "a word of the listed phrase was printed"
+  pass "leak guard: a listed word in a commit message is placed and never printed, and a lone word of a listed phrase is still new"
+}
+
 # Invented values only: none of these reaches a real account, number or person.
 SHAPE_LINES='ping U0QZXW1234 in the thread.
 see https://qverblox-team.slack.com/archives/C0QZXW1234 for it.
@@ -456,6 +487,35 @@ test_data_shapes_refuse() {
   pass "leak guard: Slack ids and links, HubSpot links, phone numbers and IBANs refuse outside tests/, look-alikes pass"
 }
 
+# Key and token shapes in tracked files: an API key assigned under any name in
+# any case, and every provider prefix bin/fm_secret_shapes.py shares with the
+# command guard. Each key is built at run time so this file holds none.
+test_token_shapes_are_placed_never_printed() {
+  local repo="$TMP_ROOT/tokens" keys=() cols=(15 5 5 5 5) i
+  make_repo "$repo"
+  keys+=("$(printf 'SOMETHING_API')_KEY=$(printf 'k3y%.0s' 1 2 3 4 5 6 7)")
+  keys+=("sk-$(printf 'proj')-$(printf 'p4r_%.0s' 1 2 3 4 5 6)")
+  keys+=("$(printf 'AI')za$(printf 'g0o%.0s' 1 2 3 4 5 6 7 8 9 10 11)")
+  keys+=("$(printf 'sk')_live_$(printf 's7r%.0s' 1 2 3 4 5 6)")
+  keys+=("$(printf 'gl')pat-$(printf 'g1t%.0s' 1 2 3 4 5 6 7)")
+  printf '# setup\n' > "$repo/docs/keys.md"
+  for key in "${keys[@]}"; do printf 'use %s here\n' "$key" >> "$repo/docs/keys.md"; done
+  printf 'fixture %s\n' "${keys[0]}" > "$repo/tests/fm-keys.test.sh"
+  git -C "$repo" add -A
+  guard "$repo"
+  [ "$GUARD_STATUS" -eq 1 ] || fail "token shapes in a tracked doc passed the scan: $GUARD_OUT"
+  for i in "${!keys[@]}"; do
+    assert_contains "$GUARD_OUT" "LEAK_HIT: token: docs/keys.md:$((i + 2)):${cols[$i]}" "the key on line $((i + 2)) was not placed"
+    assert_not_contains "$GUARD_OUT" "${keys[$i]}" "the scan printed a key"
+  done
+  assert_not_contains "$GUARD_OUT" "tests/fm-keys.test.sh" "a test fixture's synthetic key was reported"
+  # shellcheck disable=SC2016 # The variable is text in the fixture, not expanded here.
+  printf '# setup\nexport API_KEY="$OPENAI_KEY"\napi_key: short\n' > "$repo/docs/keys.md"
+  guard "$repo"
+  [ "$GUARD_STATUS" -eq 0 ] || fail "a key name with no literal key value failed the scan: $GUARD_OUT"
+  pass "leak guard: API keys under any name and case, and the shared provider prefixes, are placed and never printed"
+}
+
 test_no_list_scans_as_before
 test_listed_word_fails_in_tests
 test_partial_words_do_not_hit
@@ -469,6 +529,8 @@ test_remote_route_keeps_list_on_unusable_addon
 test_new_name_refuses_until_approved
 test_known_words_and_code_identifiers_pass
 test_commit_messages_are_checked
+test_private_words_in_commit_messages_are_placed
 test_data_shapes_refuse
+test_token_shapes_are_placed_never_printed
 
 echo "# fm-leak-guard.test.sh: all assertions passed"
