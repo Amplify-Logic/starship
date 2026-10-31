@@ -58,6 +58,11 @@ Snapshot the current branch protection, amend that same rule with the authentica
 Verify missing or red checks prevent merging without creating a test merge; the rule is enforced for administrators too, so there is no administrator override.
 Coordinate any workflow rollback with its required-check names so a retired check cannot leave ordinary merges waiting forever.
 
+## Cutting a release
+
+Homes on the [release channel](docs/configuration.md#update-channel-configupdate-channel) move only to named monthly releases.
+After the month's reviewed upstream catch-up lands on a green `main`, land a pull request that turns `CHANGELOG.md`'s `## Unreleased` heading into the release's own heading, then run `bin/fm-release.sh --dry-run` and `bin/fm-release.sh` from a maintainer home; its `--help` owns the name, checks, and refusals.
+
 ## Repo conventions
 
 - This repo is a template for running a firstmate orchestrator agent.
