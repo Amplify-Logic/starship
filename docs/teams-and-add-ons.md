@@ -42,7 +42,8 @@ Standing publishing permission is for the repository's maintainers only; [Firstm
 
 Before your home raises any pull request to public Starship, put your private-word list in place.
 It is a short local file of the names and words that must never appear in public, such as people, customers and private projects; [Private leak words](configuration.md#private-leak-words-configleak-words) says how to write it.
-With the list in place, your home checks each change and each pull request's text against it before anything is published.
+With the list in place, your home checks tracked files against it before each push.
+Pull request text is checked before publishing when a worker drafts it, while text the pipeline publishes is checked by reading it back afterwards.
 
 Pull requests then go through the review pipeline that [CONTRIBUTING.md](../CONTRIBUTING.md) describes, and only the repository's maintainers merge them.
 
