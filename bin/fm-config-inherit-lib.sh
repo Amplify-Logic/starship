@@ -34,11 +34,14 @@
 # Primary config/supervision-host-off is the fleet's supervision-host opt-out,
 # so a primary that opts out opts every secondmate home out too, while each
 # home's config/supervision-host engine line stays its own.
-# Primary config/leak-words carries the primary's private word list, merged
+# config/leak-words.inherited carries the primary's private word list, merged
 # with its private add-on's list (fm_leak_words_inherit_payload in
 # bin/fm-leak-lib.sh), so a secondmate that inherits the right to publish to
 # public Starship through firstmate-role also keeps those words out of what it
-# publishes. Its bytes are never inlined into a reread instruction: the leak
+# publishes. It lands beside the secondmate's own config/leak-words, which
+# inheritance never touches, so inheriting can never shrink a home's own list.
+# While the primary's add-on is unusable the item is an error and the
+# secondmate keeps its last inherited list. Its bytes are never inlined into a reread instruction: the leak
 # guard reads the file itself on every run, so a live secondmate needs no
 # nudge (FM_REREAD_SILENT_CONFIG below).
 # It also pushes
@@ -99,12 +102,12 @@ FM_SHARED_CAPTAIN_MODE="444"
 # The declared inheritable set (space-separated, config-dir-relative item paths).
 # Extend here to inherit more of the primary's local config; override via the
 # environment only in tests. Items must not contain whitespace.
-FM_INHERITABLE_CONFIG="${FM_INHERITABLE_CONFIG:-crew-dispatch.json dispatch-never-send private-projects crew-harness backlog-backend backend herdr-presentation-spaces herdr-project-groups startup-memory-budget trace-context launch-env-allowlist claude-permission-mode lavish-axi-host keep-ai-trailers supervision-host-off firstmate-role leak-words}"
+FM_INHERITABLE_CONFIG="${FM_INHERITABLE_CONFIG:-crew-dispatch.json dispatch-never-send private-projects crew-harness backlog-backend backend herdr-presentation-spaces herdr-project-groups startup-memory-budget trace-context launch-env-allowlist claude-permission-mode lavish-axi-host keep-ai-trailers supervision-host-off firstmate-role leak-words.inherited}"
 
 # Inherited items that scripts read for themselves and whose bytes must never
 # appear in a reread instruction, which inlines a changed item's content into a
 # live secondmate's conversation. A change to only these sends no reread.
-FM_REREAD_SILENT_CONFIG="leak-words"
+FM_REREAD_SILENT_CONFIG="leak-words.inherited"
 
 # firstmate-role additionally carries a proof-of-state receipt: a scoped role
 # grant (or its recorded absence) authorizes a secondmate home only while
@@ -716,7 +719,7 @@ propagate_inheritable_config() {
       fi
       src="$role_stage/$item"
     fi
-    if [ "$item" = leak-words ]; then
+    if [ "$item" = leak-words.inherited ]; then
       if ! words_stage=$(mktemp -d "${TMPDIR:-/tmp}/fm-inherit-words.XXXXXX" 2>/dev/null) ||
         ! fm_leak_words_inherit_payload "$src_home" "$src_config" "$words_stage/$item"; then
         reason="cannot read the primary word list"

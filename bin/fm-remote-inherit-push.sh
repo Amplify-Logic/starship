@@ -72,9 +72,14 @@ while IFS= read -r rel; do
       source="$TMP/firstmate-role.resolved"
       fm_role_inherit_payload "$FM_HOME" "$CONFIG" "$source" || die "cannot resolve the primary role"
       ;;
-    config/leak-words)
+    config/leak-words.inherited)
       source="$TMP/leak-words.merged"
-      fm_leak_words_inherit_payload "$FM_HOME" "$CONFIG" "$source" || die "cannot read the primary word list"
+      if ! fm_leak_words_inherit_payload "$FM_HOME" "$CONFIG" "$source"; then
+        printf 'error: %s: cannot read the primary word list; the secondmate keeps its last inherited list\n' "$rel" \
+          > "$TMP/item.$N.note"
+        printf 'skip\n' > "$TMP/item.$N.plan"
+        continue
+      fi
       ;;
     config/*) source="$CONFIG/${rel#config/}" ;;
     data/*) source="$DATA/${rel#data/}" ;;
@@ -170,7 +175,9 @@ wait
 status=0
 i=1
 while [ "$i" -le "$launched" ]; do
-  if [ "$(cut -d' ' -f1 "$TMP/item.$i.plan")" = skip ]; then
+  if [ -f "$TMP/item.$i.note" ]; then
+    cat "$TMP/item.$i.note" >&2
+  elif [ "$(cut -d' ' -f1 "$TMP/item.$i.plan")" = skip ]; then
     printf 'unchanged: %s\n' "$(cat "$TMP/item.$i.rel")"
   else
     cat "$TMP/item.$i.out"

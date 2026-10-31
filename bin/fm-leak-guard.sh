@@ -25,10 +25,11 @@
 # set, else the primary checkout this checkout is a worktree of (so a task
 # worktree finds its home's list), else ~/starship, the default home, which is
 # how a no-mistakes validation copy - a worktree of the gate's own bare mirror
-# that belongs to no home - still finds it. A file named leak-words at the root
-# of the home's private add-on (bin/fm-addon.sh), in the same format, adds its
-# words to the home's own; fm_leak_words_write in bin/fm-leak-lib.sh owns that
-# merge. No list means no word check; CI has none. A hit prints the offending
+# that belongs to no home - still finds it. The list a secondmate home inherits
+# from its primary, config/leak-words.inherited, and a file named leak-words at
+# the root of the home's private add-on (bin/fm-addon.sh), both in the same
+# format, add their words to the home's own; fm_leak_words_write in
+# bin/fm-leak-lib.sh owns that merge. No list means no word check; CI has none. A hit prints the offending
 # line locally, so the words never leave this machine. bin/fm-lint.sh runs --private-words on every default lint, which is
 # how the list is checked before each push.
 #

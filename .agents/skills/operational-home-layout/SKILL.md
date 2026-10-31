@@ -75,7 +75,7 @@ config/desk-floater-signing-identity  optional codesigning identity for the desk
 config/bridge-links  optional LOCAL, gitignored bridge-page pinned links; see docs/configuration.md
 config/bridge-machines  optional LOCAL, gitignored machines, probes, and services the bridge's Machines page watches; absent = tailnet and this Mac only; see docs/configuration.md
 config/bridge-mailbox  optional LOCAL, gitignored loopback voice mailbox the bridge page's hold-to-speak forwards to; absent = no mailbox; see docs/configuration.md "Bridge voice mailbox"
-config/leak-words  optional LOCAL, gitignored private words bin/fm-leak-guard.sh refuses in tracked files and public PR text, merged with the add-on's leak-words; inherited by secondmate homes; absent with no add-on list = no word check; see docs/configuration.md "Private leak words"
+config/leak-words  optional LOCAL, gitignored private words bin/fm-leak-guard.sh refuses in tracked files and public PR text, merged with config/leak-words.inherited (the primary's list, inherited by secondmate homes) and the add-on's leak-words; never touched by inheritance; absent with neither other list = no word check; see docs/configuration.md "Private leak words"
 data/                personal fleet records; LOCAL, gitignored as a whole
   backlog.md         task queue, dependencies, history
   captain.md         this home's domain-local captain preferences and working style; LOCAL, gitignored, canonical even if harness memory mirrors it, and updated with inspect-then-update

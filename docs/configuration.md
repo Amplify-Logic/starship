@@ -3444,11 +3444,12 @@ A home's [private add-on](#private-add-on-configaddon) may carry more words in a
 This is how a private team add-on keeps every teammate's list current: the team's colleague, partner and customer names live in that one file, and `/updatefirstmate` ("update starship") brings each teammate the latest copy with the rest of the add-on.
 Without that file, or without an add-on, nothing changes; an add-on that is configured but unusable is named on stderr and adds no words.
 The guard never prints the list; a hit names only the matching word or line.
-`fm_leak_words_write` in `bin/fm-leak-lib.sh` owns how the two lists are merged.
+`fm_leak_words_write` in `bin/fm-leak-lib.sh` owns how the lists are merged.
 
-Secondmate homes inherit the merged list as their own `config/leak-words` under the primary-authoritative contract in `bin/fm-config-inherit-lib.sh`, so a secondmate that inherits the right to publish to this repository through `config/firstmate-role` also keeps these words out of what it publishes.
-The primary's list replaces a secondmate home's own file, and a primary with no words removes it, so keep every word in the primary's list or its add-on.
-While the primary's add-on is configured but unusable, the list is not pushed and each secondmate home keeps its last copy.
+Secondmate homes inherit the merged list as `config/leak-words.inherited` under the primary-authoritative contract in `bin/fm-config-inherit-lib.sh`, so a secondmate that inherits the right to publish to this repository through `config/firstmate-role` also keeps these words out of what it publishes.
+The guard checks a home's own `config/leak-words`, its `config/leak-words.inherited` and its add-on's list together.
+Inheritance replaces only `config/leak-words.inherited`, and removes it when the primary has no words; a secondmate home's own `config/leak-words` is never touched, so inheriting never shrinks the words that home keeps out.
+While the primary's add-on is configured but unusable, the inherited list is reported as an error and not pushed, each secondmate home keeps its last copy, and every other inherited item still converges.
 A changed list is never written into the reread message a live secondmate receives; its guard reads the file on every run.
 
 The same list keeps these words out of what workers publish to a public repository's pull requests: titles, descriptions, comments, and the intent and gate answers the validation pipeline turns into its PR.

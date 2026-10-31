@@ -3,7 +3,7 @@
 # names and plans, listed in its gitignored config/leak-words, fail the scan in
 # every tracked file, tests/ included, while a home with no list scans exactly
 # as before. A home's private add-on may carry more words in its own leak-words
-# file, and a secondmate home inherits the merged list.
+# file, and a secondmate home inherits the merged list beside its own.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -205,22 +205,25 @@ test_addon_list_adds_words() {
   pass "leak guard: a private add-on's leak-words file adds its words to the home's list"
 }
 
-# A secondmate home inherits the primary's merged list as its config/leak-words,
-# loses it when the primary has none, and never gets its words in a reread.
+# A secondmate home inherits the primary's merged list as its
+# config/leak-words.inherited, loses only that file when the primary has none,
+# keeps its own config/leak-words untouched throughout, and never gets the
+# words in a reread.
 test_secondmate_inherits_merged_list() {
   local primary="$TMP_ROOT/inherit-primary" mate="$TMP_ROOT/inherit-mate" report="$TMP_ROOT/inherit-report"
   addon_home "$primary" 'Robin\n'
   word_home "$primary" 'quillon\n'
-  mkdir -p "$mate/config"
+  word_home "$mate" 'ferrowind\n'
   (
     # shellcheck source=bin/fm-config-inherit-lib.sh
     . "$ROOT/bin/fm-config-inherit-lib.sh"
     : > "$report"
     FM_CONFIG_INHERIT_REPORT="$report" propagate_inheritable_config "$primary/config" "$mate/config" "$primary" \
       || fail "propagation failed"
-    grep -qx Robin "$mate/config/leak-words" || fail "the inherited list lost the add-on's word"
-    grep -qx quillon "$mate/config/leak-words" || fail "the inherited list lost the home's word"
-    [ "$(awk -F '\t' '$1 == "leak-words" { print $2 }' "$report")" = pushed ] \
+    grep -qx Robin "$mate/config/leak-words.inherited" || fail "the inherited list lost the add-on's word"
+    grep -qx quillon "$mate/config/leak-words.inherited" || fail "the inherited list lost the home's word"
+    [ "$(cat "$mate/config/leak-words")" = ferrowind ] || fail "inheritance changed the secondmate's own list"
+    [ "$(awk -F '\t' '$1 == "leak-words.inherited" { print $2 }' "$report")" = pushed ] \
       || fail "the inherited list was not reported as pushed: $(cat "$report")"
     [ -z "$(fm_config_reread_changed_items "$report")" ] \
       || fail "a word list change asked for a reread that would inline its words"
@@ -232,22 +235,76 @@ test_secondmate_inherits_merged_list() {
     : > "$report"
     ! FM_CONFIG_INHERIT_REPORT="$report" propagate_inheritable_config "$primary/config" "$mate/config" "$primary" \
       2>/dev/null || fail "propagation succeeded while the primary's add-on was unusable"
-    [ "$(awk -F '\t' '$1 == "leak-words" { print $2 }' "$report")" = error ] \
+    [ "$(awk -F '\t' '$1 == "leak-words.inherited" { print $2 }' "$report")" = error ] \
       || fail "an unusable add-on was not reported as a word list error: $(cat "$report")"
-    grep -qx Robin "$mate/config/leak-words" || fail "an unusable add-on stripped the add-on's word from the secondmate"
+    grep -qx Robin "$mate/config/leak-words.inherited" \
+      || fail "an unusable add-on stripped the add-on's word from the secondmate"
     printf 'path = projects/team-addon\n' > "$primary/config/addon"
 
     rm "$primary/config/leak-words" "$primary/projects/team-addon/leak-words"
     propagate_inheritable_config "$primary/config" "$mate/config" "$primary" || fail "absence propagation failed"
-    [ ! -e "$mate/config/leak-words" ] || fail "the primary's removed list stayed in the secondmate home"
+    [ ! -e "$mate/config/leak-words.inherited" ] || fail "the primary's removed list stayed in the secondmate home"
+    [ "$(cat "$mate/config/leak-words")" = ferrowind ] \
+      || fail "a primary with no words removed or changed the secondmate's own list"
   ) || exit 1
-  # The inherited list is what the secondmate's own guard reads.
-  local repo="$TMP_ROOT/inherit-repo"
+  # The secondmate's guard reads its own list and the inherited one together.
+  local repo="$TMP_ROOT/inherit-repo" draft="$TMP_ROOT/inherit-draft.txt"
   make_repo "$repo"
-  printf 'Robin\n' > "$mate/config/leak-words"
+  printf 'Robin\n' > "$mate/config/leak-words.inherited"
+  printf 'Ferrowind wrote this.\n' > "$draft"
   guard "$repo" FM_HOME="$mate"
   [ "$GUARD_STATUS" -eq 1 ] || fail "the secondmate's guard did not read its inherited list: $GUARD_OUT"
-  pass "leak guard: a secondmate home inherits the primary's merged word list and never sees it in a reread"
+  guard "$repo" FM_HOME="$mate" -- --text "$draft"
+  [ "$GUARD_STATUS" -eq 1 ] || fail "the secondmate's guard dropped its own list beside the inherited one: $GUARD_OUT"
+  pass "leak guard: a secondmate home inherits the primary's merged word list beside its own and never sees it in a reread"
+}
+
+# The remote route converges every other inherited item while the primary's
+# add-on is unusable, keeps the secondmate's last inherited list, and names
+# the problem without failing the push.
+test_remote_route_keeps_list_on_unusable_addon() {
+  local primary="$TMP_ROOT/remote-primary" mate="$TMP_ROOT/remote-mate" fakebin="$TMP_ROOT/remote-bin" out status
+  addon_home "$primary" 'Robin\n'
+  mkdir -p "$primary/data" "$mate/config" "$fakebin"
+  printf -- '- remote-words - Test route (host: words-host; root: %s; home: %s; scope: test; projects: ; added 2026-10-31)\n' \
+    "$ROOT" "$mate" > "$primary/data/secondmates.md"
+  cat > "$fakebin/ssh" <<'SH'
+#!/usr/bin/env bash
+set -eu
+while [ "$#" -gt 0 ]; do
+  case "$1" in -o) shift 2 ;; --) shift; break ;; *) exit 90 ;; esac
+done
+[ "$#" -eq 6 ] && [ "$1" = words-host ] && [ "$2" = fm-remote-entrypoint.sh ] && [ "$3" = 1 ] || exit 91
+remote_root=$(printf '%s' "$4" | base64 --decode)
+remote_home=$(printf '%s' "$5" | base64 --decode)
+args=()
+while IFS= read -r -d '' arg; do args+=("$arg"); done < <(printf '%s' "$6" | base64 --decode)
+[ "${args[0]}" = fm-remote-inherit.sh ] || exit 92
+FM_HOME="$remote_home" FM_STATE_OVERRIDE="$remote_home/state" \
+  exec "$remote_root/bin/${args[0]}" "${args[@]:1}"
+SH
+  chmod +x "$fakebin/ssh"
+  remote_push() {
+    FM_HOME="$primary" FM_ROOT_OVERRIDE="$ROOT" FM_CONFIG_OVERRIDE="$primary/config" \
+      FM_DATA_OVERRIDE="$primary/data" FM_INHERITABLE_CONFIG="launch-env-allowlist leak-words.inherited" \
+      FM_SSH_BIN="$fakebin/ssh" "$ROOT/bin/fm-remote-inherit-push.sh" remote-words "$1" 2>&1
+  }
+  printf 'FM_FIRST\n' > "$primary/config/launch-env-allowlist"
+  out=$(remote_push 1); status=$?
+  [ "$status" -eq 0 ] || fail "the remote push failed: $out"
+  grep -qx Robin "$mate/config/leak-words.inherited" || fail "the remote route did not inherit the add-on's word: $out"
+
+  printf 'path = projects/missing-addon\n' > "$primary/config/addon"
+  printf 'FM_SECOND\n' > "$primary/config/launch-env-allowlist"
+  out=$(remote_push 2); status=$?
+  [ "$status" -eq 0 ] || fail "an unusable add-on failed the whole remote push: $out"
+  [ "$(cat "$mate/config/launch-env-allowlist")" = FM_SECOND ] \
+    || fail "an unusable add-on stopped another inherited item on the remote route: $out"
+  grep -qx Robin "$mate/config/leak-words.inherited" \
+    || fail "an unusable add-on shrank the remote secondmate's inherited list: $out"
+  assert_contains "$out" "error: config/leak-words.inherited" "the remote push did not name the word list problem"
+  assert_not_contains "$out" "Robin" "the remote push printed a word"
+  pass "leak guard: the remote route keeps the inherited list and converges the rest while the add-on is unusable"
 }
 
 test_no_list_scans_as_before
@@ -259,5 +316,6 @@ test_private_words_mode
 test_vendor_bot_emails_pass
 test_addon_list_adds_words
 test_secondmate_inherits_merged_list
+test_remote_route_keeps_list_on_unusable_addon
 
 echo "# fm-leak-guard.test.sh: all assertions passed"
