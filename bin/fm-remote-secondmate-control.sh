@@ -11,7 +11,7 @@
 #   fm-remote-secondmate-control.sh capture <id> [lines]
 #   fm-remote-secondmate-control.sh observe <id>
 #   fm-remote-secondmate-control.sh sync <id> [<parent-commit>]
-#   fm-remote-secondmate-control.sh update <id>
+#   fm-remote-secondmate-control.sh update <id> [<release>]
 #   fm-remote-secondmate-control.sh retire <id> [--force]
 #
 # Remote placement ends here, but the second-mate agent always runs on the
@@ -34,6 +34,13 @@
 # bin/fm-ff-lib.sh, so the clean, ancestry, and branch guards have a single owner.
 # Before that sync, update also fast-forwards the home's own private add-on
 # (bin/fm-addon.sh) from the add-on's origin, under the same guards.
+# The code root follows the parent's channel, never its own
+# config/update-channel (bin/fm-update.sh --channel): without <release> it moves
+# to origin's tip, and with <release>, from a parent on the release channel, it
+# moves to that one release, so the remote home follows its primary. On a
+# release the home then moves onto it under the release channel's rules, with
+# the code root's freshly fetched origin default branch as its upstream
+# (bin/fm-ff-lib.sh ff_target).
 # A private parent-route state directory stores only the remote secondmate
 # agent's endpoint record; the home's own
 # state/*.meta remains reserved for workers the secondmate supervises.
@@ -372,10 +379,10 @@ import_home_commit() { # <home> <commit>
 }
 
 cmd_sync() {
-  local id=$1 commit report out
+  local id=$1 commit report out upstream=${3:-}
   validate_id "$id"
   validate_home "$id"
-  if [ "$#" -ge 2 ]; then
+  if [ -n "${2:-}" ]; then
     commit=$2
     case "$commit" in *[!0-9a-f]*) die "sync target must be a full 40-character commit id" ;; esac
     [ "${#commit}" -eq 40 ] || die "sync target must be a full 40-character commit id"
@@ -384,9 +391,11 @@ cmd_sync() {
   fi
   import_home_commit "$TARGET_HOME" "$commit" \
     || die "remote home could not import $commit from this host's Firstmate copy or the home's origin; run /updatefirstmate to refresh this host's copy, or push that commit first"
+  [ -z "$upstream" ] || import_home_commit "$TARGET_HOME" "$upstream" \
+    || die "remote home could not import origin's default branch $upstream from this host's Firstmate copy"
   # ff_target publishes its verdict in FF_STATUS, so it must run in THIS shell.
   report=$(mktemp "${TMPDIR:-/tmp}/fm-remote-sync.XXXXXX") || die "cannot stage the sync report"
-  ff_target "$TARGET_HOME" "remote home" "$commit" yes yes "$id" "$TARGET_HOME/state" > "$report" 2>&1
+  ff_target "$TARGET_HOME" "remote home" "$commit" yes yes "$id" "$TARGET_HOME/state" "$upstream" > "$report" 2>&1
   out=$(cat "$report")
   rm -f "$report"
   case "$FF_STATUS" in
@@ -402,11 +411,16 @@ cmd_sync() {
 }
 
 cmd_update() {
-  local id=$1 update_out root_status
+  local id=$1 release=${2:-} update_out root_status default upstream=""
+  local channel=main
   validate_id "$id"
   validate_home "$id"
+  if [ -n "$release" ]; then
+    fm_release_name_valid "$release" || die "invalid release name: $release"
+    channel=$release
+  fi
   if ! update_out=$(FM_HOME="$FM_ROOT" FM_ROOT_OVERRIDE="$FM_ROOT" \
-    "$SCRIPT_DIR/fm-update.sh" 2>&1); then
+    "$SCRIPT_DIR/fm-update.sh" --channel "$channel" 2>&1); then
     [ -z "$update_out" ] || printf '%s\n' "$update_out" >&2
     die "remote code root update failed"
   fi
@@ -419,7 +433,12 @@ cmd_update() {
       ;;
   esac
   update_home_addon
-  cmd_sync "$id"
+  if [ -n "$release" ]; then
+    default=$(default_branch "$FM_ROOT") || die "remote code root has no default branch"
+    upstream=$(git -C "$FM_ROOT" rev-parse --verify --quiet "refs/remotes/origin/$default^{commit}") \
+      || die "remote code root has no origin/$default"
+  fi
+  cmd_sync "$id" "" "$upstream"
 }
 
 # The remote home's own private add-on (bin/fm-addon.sh) moves under the same
@@ -468,7 +487,7 @@ case "${1:-}" in
   capture) shift; [ "$#" -ge 1 ] && [ "$#" -le 2 ] || usage; cmd_capture "$@" ;;
   observe) shift; [ "$#" -eq 1 ] || usage; cmd_observe "$@" ;;
   sync) shift; [ "$#" -ge 1 ] && [ "$#" -le 2 ] || usage; cmd_sync "$@" ;;
-  update) shift; [ "$#" -eq 1 ] || usage; cmd_update "$@" ;;
+  update) shift; [ "$#" -ge 1 ] && [ "$#" -le 2 ] || usage; cmd_update "$@" ;;
   retire) shift; [ "$#" -ge 1 ] && [ "$#" -le 2 ] || usage; cmd_retire "$@" ;;
   ''|-h|--help|help) usage ;;
   *) die "unknown command: $1" ;;

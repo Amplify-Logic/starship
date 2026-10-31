@@ -181,6 +181,7 @@ If you left Herdr with `Ctrl-b`, then `q`, while an Ubuntu window stayed open, H
 Closing the last Ubuntu window lets WSL shut Ubuntu down, which stops Herdr and your first mate; a Windows restart does the same.
 After that, Herdr reopens your spaces; if your first mate's space shows only a shell, run `cd ~/starship && bin/fm-primary.sh opus` there again, and it starts fresh and picks up its work from its records.
 To get the latest Starship, tell your first mate "update starship".
+A client or teammate who does not write code can choose a calm, named monthly version instead of the newest changes: `echo release > ~/starship/config/update-channel` ([configuration](docs/configuration.md#update-channel-configupdate-channel)).
 
 **Prefer tmux?** Herdr is the default, and tmux still works: run `echo tmux > ~/starship/config/backend`, start the first mate inside `tmux new -s firstmate`, and workers open as tmux windows instead ([docs/tmux-backend.md](docs/tmux-backend.md)).
 
