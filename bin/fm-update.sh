@@ -67,27 +67,31 @@
 # Update channel: the home's config/update-channel (docs/configuration.md
 # "Update channel"; parsing in bin/fm-release-lib.sh) chooses what this pass
 # follows. Absent or "main" is the behavior above, unchanged. "release" follows
-# the newest release tag on origin's default branch, and a release name stays on
-# that one release; either way every home lands exactly on the target release.
-# A home behind it fast-forwards; a home past it only by commits already on
-# origin's default branch, such as a fresh install on main's tip, moves onto it
-# with reset --keep, which cannot lose work origin does not hold; a home with
-# any commit not on origin is skipped as diverged exactly as on main. The
-# primary resolves the release once, and every local and remote secondmate
-# follows that same release, because a secondmate ahead of its primary would
-# later read as diverged to the primary-commit sync. The private add-on keeps
-# following its own origin's default branch. A malformed channel file refuses
-# the whole pass before anything moves.
+# the newest release tag on origin's default branch, ignoring names more than a
+# month ahead (bin/fm-release-lib.sh), and a release name stays on that one
+# release. A home behind the target release fast-forwards onto it. An update
+# never moves a home back: a home already past it only by commits on origin's
+# default branch, such as a fresh install on main's tip, is skipped and stays
+# where it is until a newer release passes it, and only --step-back goes back;
+# a home with any commit not on origin is skipped as diverged exactly as on main.
+# The primary resolves the release once, and every local and remote secondmate
+# follows that same release under the same never-back rule, because a
+# secondmate ahead of its primary would later read as diverged to the
+# primary-commit sync. The private add-on keeps following its own origin's
+# default branch. A malformed channel file refuses the whole pass before
+# anything moves.
 #
-# --step-back moves a home on the release channel back exactly one release: it
-# refuses unless the home is clean, on its default branch, exactly on a release,
-# and has no second mates (a home with them holds its current release instead
-# by writing that release's name into config/update-channel), then moves the
-# default branch to the previous release with reset --keep (the current release
-# is on origin's default branch, so no local work can be lost) and writes that
-# release name into
-# config/update-channel, so later updates stay there until the operator writes
-# "release" again. It prints the same reread/restart/nudge summary.
+# --step-back moves a home on the release channel back exactly one release: from
+# a release to the one before it, or from a commit past every release to the
+# newest release behind it. It refuses unless the home is clean, on its default
+# branch, holds no commit that is not on origin's default branch, and has no
+# second mates (a home with them holds its current release instead by writing
+# that release's name into config/update-channel), then moves the default
+# branch to that release with reset --keep (every commit it leaves is on
+# origin's default branch, so no local work can be lost) and writes that release
+# name into config/update-channel, so later updates stay there until the
+# operator writes "release" again. It prints the same reread/restart/nudge
+# summary.
 #
 # Usage: fm-update.sh [--channel main|<starship-YYYY.MM[.N]>]
 #        fm-update.sh --step-back
@@ -189,10 +193,16 @@ if [ "$step_back" = yes ]; then
   fetch_once "$FM_ROOT" || sb "fetch failed"
   fm_release_fetch_tags "$FM_ROOT" || sb "release tags could not be fetched without moving a local tag"
   head_rev=$(git -C "$FM_ROOT" rev-parse HEAD)
-  current=$(fm_release_at "$FM_ROOT" "$head_rev" "origin/$default") \
-    || sb "this home is not exactly on a release; update it first"
-  previous=$(fm_release_previous "$FM_ROOT" "origin/$default" "$current")
-  [ -n "$previous" ] || sb "$current is the oldest release"
+  git -C "$FM_ROOT" merge-base --is-ancestor "$head_rev" "origin/$default" 2>/dev/null \
+    || sb "this home has commits that are not on origin/$default"
+  if current=$(fm_release_at "$FM_ROOT" "$head_rev" "origin/$default"); then
+    previous=$(fm_release_previous "$FM_ROOT" "origin/$default" "$current")
+    [ -n "$previous" ] || sb "$current is the oldest release"
+  else
+    current=""
+    previous=$(fm_release_list "$FM_ROOT" "$head_rev" | head -1)
+    [ -n "$previous" ] || sb "no release is behind this home"
+  fi
   prev_rev=$(git -C "$FM_ROOT" rev-parse "refs/tags/$previous^{commit}")
   instr=$(changed_instr "$FM_ROOT" "$prev_rev")
   git -C "$FM_ROOT" reset --quiet --keep "$prev_rev" 2>/dev/null || sb "reset --keep to $previous failed"
@@ -200,7 +210,7 @@ if [ "$step_back" = yes ]; then
   tmp=$(mktemp "$CONFIG_DIR/.update-channel.XXXXXX")
   printf '%s\n' "$previous" > "$tmp"
   mv -f "$tmp" "$CONFIG_DIR/update-channel"
-  echo "firstmate: stepped back $(git -C "$FM_ROOT" rev-parse --short "$head_rev")..$(git -C "$FM_ROOT" rev-parse --short HEAD) from release $current to release $previous; config/update-channel now holds $previous"
+  echo "firstmate: stepped back $(git -C "$FM_ROOT" rev-parse --short "$head_rev")..$(git -C "$FM_ROOT" rev-parse --short HEAD)${current:+ from release $current} to release $previous; config/update-channel now holds $previous"
   after_primary_moved
   sync_opt_in_skills
   if [ -n "$instr" ]; then echo "reread-firstmate: yes"; else echo "reread-firstmate: no"; fi

@@ -38,9 +38,10 @@
 # config/update-channel (bin/fm-update.sh --channel): without <release> it moves
 # to origin's tip, and with <release>, from a parent on the release channel, it
 # moves to that one release, so the remote home follows its primary. On a
-# release the home then moves onto it under the release channel's rules, with
-# the code root's freshly fetched origin default branch as its upstream
-# (bin/fm-ff-lib.sh ff_target).
+# release the home then follows it under the release channel's rules, with the
+# code root's freshly fetched origin default branch as its upstream
+# (bin/fm-ff-lib.sh ff_target), so a code root or home already past the release
+# is skipped rather than moved back.
 # A private parent-route state directory stores only the remote secondmate
 # agent's endpoint record; the home's own
 # state/*.meta remains reserved for workers the secondmate supervises.

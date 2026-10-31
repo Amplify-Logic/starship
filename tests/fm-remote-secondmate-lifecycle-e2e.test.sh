@@ -1281,26 +1281,43 @@ assert_contains "$UPDATE_OUT" 'add-on: updated ' "remote update did not fast-for
 pass "remote update imports and fast-forwards the persistent home and its private add-on on its configured host"
 
 # A parent on the release channel passes its release. The code root and the
-# home are both past that release only by origin's commits, so both land
-# exactly on it; a code root with its own commit is still refused.
+# home are both past that release only by origin's commits, so the update never
+# moves them back; a newer release moves both forward onto it, and a code root
+# with its own commit is still refused.
+TIP_REV=$(git -C "$REMOTE_SEED" rev-parse HEAD)
 git -C "$REMOTE_SEED" tag -a -m starship-2026.10 starship-2026.10 HEAD~1
 git -C "$REMOTE_SEED" push -q origin refs/tags/starship-2026.10
-RELEASE_REV=$(git -C "$REMOTE_SEED" rev-parse 'starship-2026.10^{commit}')
 UPDATE_OUT=$(remote_env "$ROOT/bin/fm-on.sh" ios fm-remote-secondmate-control.sh update ios starship-2026.10 2>&1) \
-  || fail "a remote update following a release older than the home failed: $UPDATE_OUT"
+  && fail "a remote update following a release older than the code root must refuse: $UPDATE_OUT"
+assert_contains "$UPDATE_OUT" "already past release starship-2026.10; an update never moves a home back" \
+  "the refusal must say plainly that the code root stays past the release"
+[ "$(git -C "$REMOTE_ROOT" rev-parse HEAD)" = "$TIP_REV" ] || fail "an older release moved the remote code root back"
+[ "$(git -C "$REMOTE_HOME" rev-parse HEAD)" = "$TIP_REV" ] || fail "an older release moved the remote home back"
+assert_present "$REMOTE_HOME/REMOTE_UPDATE_PROBE" "the remote home lost a file from past the release"
+[ ! -e "$REMOTE_HOME/state/.secondmate-update-reconcile/ios.pending" ] \
+  || fail "staying past the release must not read as a divergence"
+printf 'release probe\n' > "$REMOTE_SEED/RELEASE_PROBE"
+git -C "$REMOTE_SEED" add RELEASE_PROBE
+git -C "$REMOTE_SEED" commit -qm 'next release'
+git -C "$REMOTE_SEED" tag -a -m starship-2026.11 starship-2026.11
+printf 'past release\n' > "$REMOTE_SEED/PAST_RELEASE"
+git -C "$REMOTE_SEED" add PAST_RELEASE
+git -C "$REMOTE_SEED" commit -qm 'past the release'
+git -C "$REMOTE_SEED" push -q origin main refs/tags/starship-2026.11
+RELEASE_REV=$(git -C "$REMOTE_SEED" rev-parse 'starship-2026.11^{commit}')
+UPDATE_OUT=$(remote_env "$ROOT/bin/fm-on.sh" ios fm-remote-secondmate-control.sh update ios starship-2026.11 2>&1) \
+  || fail "a remote update following a newer release failed: $UPDATE_OUT"
 [ "$(printf '%s\n' "$UPDATE_OUT" | tail -1 | cut -c1-7)" = 'synced:' ] \
   || fail "the remote release update must end with a synced result: $UPDATE_OUT"
 [ "$(git -C "$REMOTE_ROOT" rev-parse HEAD)" = "$RELEASE_REV" ] \
   || fail "the remote code root did not land on the release"
 [ "$(git -C "$REMOTE_HOME" rev-parse HEAD)" = "$RELEASE_REV" ] \
   || fail "the remote home did not land on the same release as its code root"
-[ ! -e "$REMOTE_HOME/REMOTE_UPDATE_PROBE" ] || fail "the remote home kept a file from past the release"
-[ ! -e "$REMOTE_HOME/state/.secondmate-update-reconcile/ios.pending" ] \
-  || fail "moving the remote home onto the release must not read as a divergence"
+[ ! -e "$REMOTE_HOME/PAST_RELEASE" ] || fail "the remote home moved past the release"
 printf 'local only\n' > "$REMOTE_ROOT/LOCAL_ONLY"
 git -C "$REMOTE_ROOT" add LOCAL_ONLY
 git -C "$REMOTE_ROOT" commit -qm 'local code root commit'
-UPDATE_OUT=$(remote_env "$ROOT/bin/fm-on.sh" ios fm-remote-secondmate-control.sh update ios starship-2026.10 2>&1) \
+UPDATE_OUT=$(remote_env "$ROOT/bin/fm-on.sh" ios fm-remote-secondmate-control.sh update ios starship-2026.11 2>&1) \
   && fail "a remote code root with its own commit must refuse the release update: $UPDATE_OUT"
 assert_contains "$UPDATE_OUT" "remote code root did not complete a safe origin update" \
   "the refusal must name the unsafe code root update"

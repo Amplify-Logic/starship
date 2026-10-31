@@ -6,7 +6,9 @@
 # starship-YYYY.MM.N for the Nth fix release of that month, cut from a green
 # default branch by bin/fm-release.sh. Release order is the numeric order of
 # year, month, and fix number, never tag date or tag-creation order. A tag of
-# that shape whose commit is not on the default branch is not a release.
+# that shape whose commit is not on the default branch is not a release, and
+# neither is one named for a month more than one month after the current UTC
+# month, so a mistaken or forged far-future name can never become "the newest".
 #
 # A home chooses what "update starship" (bin/fm-update.sh) follows in its own
 # gitignored config/update-channel; docs/configuration.md "Update channel" owns
@@ -26,8 +28,10 @@
 #                                             malformed file returns 1 with
 #                                             FM_UPDATE_CHANNEL_DIAG set
 #   fm_release_fetch_tags <dir>             - fetch origin's release tags once per
-#                                             object store; never moves a local tag
-#   fm_release_list <dir> <ref>             - releases on <ref>, newest first
+#                                             object store; never moves a local tag,
+#                                             and drops one origin no longer has
+#   fm_release_list <dir> <ref>             - releases on <ref>, newest first,
+#                                             without far-future names
 #   fm_release_newest <dir> <ref>           - newest release on <ref>
 #   fm_release_at <dir> <commit> <ref>      - newest release pointing exactly at <commit>
 #   fm_release_previous <dir> <ref> <name>  - the release just before <name>
@@ -78,6 +82,8 @@ fm_update_channel_resolve() {
 # Release tags come from an explicit refspec without "+", so a local tag that
 # already names a different commit makes the fetch fail instead of moving: a
 # rewritten release upstream stops the update rather than silently following it.
+# --prune drops a local release tag that origin deleted, so a withdrawn release
+# stops counting on the next update.
 FM_RELEASE_TAGS_FETCHED=""
 fm_release_fetch_tags() {
   local dir=$1 common
@@ -87,15 +93,23 @@ fm_release_fetch_tags() {
       *" $common "*) return 0 ;;
     esac
   fi
-  git -C "$dir" fetch --quiet --no-tags origin 'refs/tags/starship-*:refs/tags/starship-*' 2>/dev/null || return 1
+  git -C "$dir" fetch --quiet --no-tags --prune origin 'refs/tags/starship-*:refs/tags/starship-*' 2>/dev/null || return 1
   [ -z "$common" ] || FM_RELEASE_TAGS_FETCHED="$FM_RELEASE_TAGS_FETCHED $common"
 }
 
+# Months since year 0 of the latest month a release may be named for: the
+# month after the current UTC month.
+fm_release_month_limit() {
+  date -u '+%Y %m' | awk '{ print $1 * 12 + $2 + 1 }'
+}
+
 fm_release_list() {
-  local dir=$1 ref=$2 name
+  local dir=$1 ref=$2 name limit
+  limit=$(fm_release_month_limit)
   git -C "$dir" for-each-ref --format='%(refname:strip=2)' 'refs/tags/starship-*' 2>/dev/null \
     | while IFS= read -r name; do
         fm_release_name_valid "$name" || continue
+        printf '%s\n' "$name" | awk -F'[-.]' -v limit="$limit" '{ exit !($2 * 12 + $3 <= limit) }' || continue
         git -C "$dir" merge-base --is-ancestor "refs/tags/$name^{commit}" "$ref" 2>/dev/null || continue
         printf '%s\n' "$name"
       done | fm_release_sort
