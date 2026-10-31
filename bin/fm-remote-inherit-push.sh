@@ -72,6 +72,10 @@ while IFS= read -r rel; do
       source="$TMP/firstmate-role.resolved"
       fm_role_inherit_payload "$FM_HOME" "$CONFIG" "$source" || die "cannot resolve the primary role"
       ;;
+    config/leak-words)
+      source="$TMP/leak-words.merged"
+      fm_leak_words_inherit_payload "$FM_HOME" "$CONFIG" "$source" || die "cannot read the primary word list"
+      ;;
     config/*) source="$CONFIG/${rel#config/}" ;;
     data/*) source="$DATA/${rel#data/}" ;;
   esac

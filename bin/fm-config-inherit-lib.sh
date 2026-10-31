@@ -34,6 +34,13 @@
 # Primary config/supervision-host-off is the fleet's supervision-host opt-out,
 # so a primary that opts out opts every secondmate home out too, while each
 # home's config/supervision-host engine line stays its own.
+# Primary config/leak-words carries the primary's private word list, merged
+# with its private add-on's list (fm_leak_words_inherit_payload in
+# bin/fm-leak-lib.sh), so a secondmate that inherits the right to publish to
+# public Starship through firstmate-role also keeps those words out of what it
+# publishes. Its bytes are never inlined into a reread instruction: the leak
+# guard reads the file itself on every run, so a live secondmate needs no
+# nudge (FM_REREAD_SILENT_CONFIG below).
 # It also pushes
 # the one primary-authoritative shared captain-preference file,
 # data/captain-shared.md, into each secondmate home's data/ as a read-only copy.
@@ -80,6 +87,8 @@
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-startup-memory-budget-lib.sh"
 # shellcheck source=bin/fm-role-lib.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-role-lib.sh"
+# shellcheck source=bin/fm-leak-lib.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-leak-lib.sh"
 
 # The one shared data file in this inheritance contract. There is deliberately
 # no shared learnings file.
@@ -90,7 +99,12 @@ FM_SHARED_CAPTAIN_MODE="444"
 # The declared inheritable set (space-separated, config-dir-relative item paths).
 # Extend here to inherit more of the primary's local config; override via the
 # environment only in tests. Items must not contain whitespace.
-FM_INHERITABLE_CONFIG="${FM_INHERITABLE_CONFIG:-crew-dispatch.json dispatch-never-send private-projects crew-harness backlog-backend backend herdr-presentation-spaces herdr-project-groups startup-memory-budget trace-context launch-env-allowlist claude-permission-mode lavish-axi-host keep-ai-trailers supervision-host-off firstmate-role}"
+FM_INHERITABLE_CONFIG="${FM_INHERITABLE_CONFIG:-crew-dispatch.json dispatch-never-send private-projects crew-harness backlog-backend backend herdr-presentation-spaces herdr-project-groups startup-memory-budget trace-context launch-env-allowlist claude-permission-mode lavish-axi-host keep-ai-trailers supervision-host-off firstmate-role leak-words}"
+
+# Inherited items that scripts read for themselves and whose bytes must never
+# appear in a reread instruction, which inlines a changed item's content into a
+# live secondmate's conversation. A change to only these sends no reread.
+FM_REREAD_SILENT_CONFIG="leak-words"
 
 # firstmate-role additionally carries a proof-of-state receipt: a scoped role
 # grant (or its recorded absence) authorizes a secondmate home only while
@@ -668,7 +682,7 @@ propagate_secondmate_inheritance() {
 
 propagate_inheritable_config() {
   local src_config=$1 dest_config=$2 src_home=${3:-${1%/*}} item src dest source_present reason rc
-  local prior_dest_config=${FM_INHERIT_DEST_CONFIG-} role_stage=
+  local prior_dest_config=${FM_INHERIT_DEST_CONFIG-} role_stage='' words_stage=''
   [ -n "$src_config" ] || return 1
   [ -n "$dest_config" ] || return 1
   rc=0
@@ -681,6 +695,7 @@ propagate_inheritable_config() {
       ''|/*|.|..|../*|*/../*|*/..)
         FM_INHERIT_DEST_CONFIG=$prior_dest_config
         [ -z "$role_stage" ] || rm -rf "$role_stage"
+        [ -z "$words_stage" ] || rm -rf "$words_stage"
         return 1
         ;;
     esac
@@ -700,6 +715,17 @@ propagate_inheritable_config() {
         continue
       fi
       src="$role_stage/$item"
+    fi
+    if [ "$item" = leak-words ]; then
+      if ! words_stage=$(mktemp -d "${TMPDIR:-/tmp}/fm-inherit-words.XXXXXX" 2>/dev/null) ||
+        ! fm_leak_words_inherit_payload "$src_home" "$src_config" "$words_stage/$item"; then
+        reason="cannot read the primary word list"
+        warn_inheritable_config_error "$item" "$src" "$reason"
+        record_inheritable_config_result "$item" error "$reason"
+        rc=1
+        continue
+      fi
+      src="$words_stage/$item"
     fi
     if ! source_present=$(fm_config_source_present "$src"); then
       reason="cannot inspect primary source"
@@ -795,6 +821,7 @@ propagate_inheritable_config() {
   done
   FM_INHERIT_DEST_CONFIG=$prior_dest_config
   [ -z "$role_stage" ] || rm -rf "$role_stage"
+  [ -z "$words_stage" ] || rm -rf "$words_stage"
   [ -z "${FM_INHERIT_ROLE_RECEIPT_FAILED:-}" ] || rc=1
   return "$rc"
 }
@@ -815,10 +842,14 @@ FM_CONFIG_REREAD_FRAMING='These inherited config files changed. Re-read and appl
 
 # fm_config_reread_is_allowlisted_item <item>
 # True only for the declared inheritable config allowlist (bare item name as
-# recorded in FM_CONFIG_INHERIT_REPORT). data/captain-shared.md is never
-# allowlisted here and must never be inlined into a reread instruction.
+# recorded in FM_CONFIG_INHERIT_REPORT), less FM_REREAD_SILENT_CONFIG.
+# data/captain-shared.md is never allowlisted here and must never be inlined
+# into a reread instruction.
 fm_config_reread_is_allowlisted_item() {
   local item=$1 candidate
+  for candidate in $FM_REREAD_SILENT_CONFIG; do
+    [ "$candidate" = "$item" ] && return 1
+  done
   for candidate in $FM_INHERITABLE_CONFIG; do
     [ "$candidate" = "$item" ] && return 0
   done
@@ -834,6 +865,7 @@ fm_config_reread_changed_items() {
   for item in $FM_INHERITABLE_CONFIG; do
     status=$(awk -F '\t' -v item="$item" '$1 == item { print $2; exit }' "$report" 2>/dev/null) || status=""
     [ "$status" = pushed ] || continue
+    fm_config_reread_is_allowlisted_item "$item" || continue
     printf '%s\n' "$item"
   done
 }

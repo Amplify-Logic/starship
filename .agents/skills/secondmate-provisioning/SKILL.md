@@ -108,6 +108,7 @@ The declared `config/supervision-host-off` opt-out follows the same primary-auth
 `config/supervision-host` itself is not inherited; each home selects its own engine.
 `config/secondmate-harness` is not inherited because it is only the primary's knob for launching secondmate agents.
 `config/firstmate-role` is inherited under the additional [resolved-role and receipt policy](../../../docs/configuration.md#firstmate-role-configfirstmate-role), not as a raw copy of the primary file.
+`config/leak-words` is inherited as the primary's list merged with its add-on's list, never inlined into a reread message ([private leak words](../../../docs/configuration.md#private-leak-words-configleak-words)).
 Account pins are not inherited.
 [`docs/configuration.md` "Per-secondmate account pins"](../../../docs/configuration.md#per-secondmate-account-pins) owns the explicit `config/secondmate-accounts/<id>/` override and the independent worker pins inside each mate's home.
 `data/captain-shared.md` is main-authoritative in the primary home and read-only in secondmate homes.

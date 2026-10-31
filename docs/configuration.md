@@ -638,12 +638,13 @@ An add-on keeps this repository's layout, so a tool moves between the two by mov
 
 - Every skill in the add-on's `.agents/skills/` is linked into the home's checkout as an opt-in skill is, and replaces an opt-in skill of the same name.
 - Hooks in the add-on's `hooks/<point>/` run beside this repository's own built-in `hooks/<point>/`, in name order, and replace a built-in hook of the same name: `bootstrap` adds read-only startup checks, `session-start` adds standing instructions to the session-start digest, `sentinel` names work that keeps the host sentinel watching a home with no task in flight, `watcher` files are sourced into the watcher when it starts, `deck-staging` adds staging runs to the Action Deck, and `todo-verbs` and `todo-page` extend the daily to-do page (below).
+- A `leak-words` file at the add-on's root adds its words to the home's [private leak words](#private-leak-words-configleak-words), so a private team add-on can carry that team's names to every teammate.
 
 `/updatefirstmate` ("update starship") fast-forwards the add-on from its origin with the same guards as the shared code and relinks its skills, and a remote second mate's home fast-forwards the add-on its own `config/addon` names.
 `bin/fm-home-port.sh` carries `config/addon` to another machine, clones the add-on during its one-command handoff, and fails `verify` while the checkout is missing, and `bin/fm-linux-setup.sh --addon <owner>/<repo>` names one on a new Linux machine.
 Personal tools that serve one home only, such as glasses tools or device configuration staging, live in that home's own add-on rather than here.
 Register the add-on as an ordinary project when workers should change it.
-The add-on is home-local and is not inherited by secondmate homes.
+The add-on is home-local and is not inherited by secondmate homes, though its `leak-words` list reaches them inside the inherited word list.
 `bin/fm-addon.sh` owns the configuration, the hook points and their contract, and the install.
 
 ## Daily intake and to-do page (config/morning-intake, config/channel-intake)
@@ -3438,7 +3439,16 @@ It holds one word or phrase per line; blank lines and lines starting with `#` ar
 Without the file, which is the default, the scan is unchanged.
 `bin/fm-leak-guard.sh` checks every tracked file against it, `tests/` included, and its header owns where it looks for the list, so a run from a task's isolated copy or a validation run's copy still finds the home's list.
 `bin/fm-lint.sh` runs that check on every default lint, including the validation pipeline's lint step, so these words are caught before each push; CI has no list, and without one the check is silent.
-The file is not inherited by secondmate homes.
+
+A home's [private add-on](#private-add-on-configaddon) may carry more words in a file named `leak-words` at the add-on's root, in the same format, and the guard checks them together with the home's own list.
+This is how a private team add-on keeps every teammate's list current: the team's colleague, partner and customer names live in that one file, and `/updatefirstmate` ("update starship") brings each teammate the latest copy with the rest of the add-on.
+Without that file, or without an add-on, nothing changes; an add-on that is configured but unusable is named on stderr and adds no words.
+The guard never prints the list; a hit names only the matching word or line.
+`fm_leak_words_write` in `bin/fm-leak-lib.sh` owns how the two lists are merged.
+
+Secondmate homes inherit the merged list as their own `config/leak-words` under the primary-authoritative contract in `bin/fm-config-inherit-lib.sh`, so a secondmate that inherits the right to publish to this repository through `config/firstmate-role` also keeps these words out of what it publishes.
+The primary's list replaces a secondmate home's own file, and a primary with no words removes it, so keep every word in the primary's list or its add-on.
+A changed list is never written into the reread message a live secondmate receives; its guard reads the file on every run.
 
 The same list keeps these words out of what workers publish to a public repository's pull requests: titles, descriptions, comments, and the intent and gate answers the validation pipeline turns into its PR.
 `bin/fm-leak-guard.sh --text [<file>|-]` checks draft text, from the named files or stdin, and names every listed word it contains; it exits 1 on a hit, 0 when the text is clean, and 0 silently without a list.
