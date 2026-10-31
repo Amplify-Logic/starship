@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 # fm-pr-text-guard.py - the worker PR text check: before a spawned Claude
 # worker publishes text to a public repository's pull requests, it refuses the
-# command when the text holds a word from this home's private word list.
+# command when the text holds a word from this home's private word list, and,
+# when that repository is this Starship repository, a word that never appeared
+# in it before or a customer data shape (bin/fm-leak-guard.sh --new-names).
 #
 # Usage:
 #   fm-pr-text-guard.py hook --home DIR
@@ -12,8 +14,9 @@
 #
 # docs/configuration.md "Private leak words" owns the operator contract. The
 # word list, its format and where it is found belong to bin/fm-leak-guard.sh,
-# whose --text mode this hook runs with FM_HOME set to DIR; this file never
-# reads the list itself.
+# whose --text mode this hook runs with FM_HOME set to DIR from the command's
+# working directory, so the words of the branch checked out there count as
+# known to this repository; this file never reads the list itself.
 #
 # WHAT IS CHECKED. Only a Bash command that publishes text: gh or gh-axi
 # `pr|issue create|new|edit|comment|review|close|reopen|merge`, a `gh api` call that sends
@@ -30,7 +33,11 @@
 # repository it is refused whenever the home has a list.
 #
 # PUBLIC ONLY. A private repository may hold these words, so a hit is refused
-# unless every repository the command could reach is proven private. When the
+# unless every repository the command could reach is proven private. A new word
+# or data shape is refused only on a public repository that one of the remotes
+# of this script's own checkout points at, by the owner/repo gh reports for it,
+# or on one whose visibility or name cannot be read; other public repositories
+# may hold them. When the
 # command calls gh or gh-axi as a word of its own, or names a publishing gh
 # form that is not part of a no-mistakes command, those repositories are every
 # --repo/-R value, GH_REPO= value, PR or issue URL argument and
@@ -57,6 +64,10 @@
 # existed: bin/fm-leak-guard.sh --text says nothing at all then. An
 # unreadable payload passes, because it cannot be known to publish anything.
 # Once a command is known to publish, any failure inside the check refuses it.
+# Every call the check makes shares one deadline, BUDGET seconds from the
+# start (FM_PR_TEXT_GUARD_BUDGET when set), well inside the hook timeout
+# bin/fm-spawn.sh sets, so the check refuses when time runs out instead of
+# being cut off by the hook timeout, which would let the command run.
 import json
 import os
 import pathlib
@@ -64,9 +75,12 @@ import re
 import shlex
 import subprocess
 import sys
+import time
 
 GUARD = pathlib.Path(__file__).resolve().parent / "fm-leak-guard.sh"
 FILE_CAP = 1 << 20
+BUDGET = 35.0
+DEADLINE = None
 
 REPO_FLAG = r"(?:(?:(?:-R|--repo)(?:=|\s+)|-R)\S+\s+)?"
 PR_CREATE = re.compile(r"(?:^|[\s/;&|(`])gh(?:-axi)?\s+" + REPO_FLAG + r"pr\s+" + REPO_FLAG + r"(?:create|new)\b")
@@ -83,6 +97,7 @@ PATH_CAP = 1024
 FILL = re.compile(r"--fill(?:-first|-verbose)?(?:=(?!false$).*)?|-[dwe]*f[dwe]*")
 PATHLIKE = re.compile(r"[^\s'\"`()<>|;&=]+")
 REMOTE = re.compile(r"^(?:[a-z+]+://)?(?:[^@/]+@)?([^/:]+)[:/]+(.+?)(?:\.git)?/?$")
+HIT = re.compile(r"^LEAK_HIT: ([a-z-]+): stdin: (.*)$")
 
 
 class UnparsedCommand(Exception):
@@ -91,6 +106,14 @@ class UnparsedCommand(Exception):
 
 class UnknownTarget(Exception):
     """A repository the command could reach that cannot be named, so it counts as possibly public."""
+
+
+def left():
+    """The seconds left before the check's deadline; TimeoutError once it has passed."""
+    remaining = DEADLINE - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError("the check ran out of its %g seconds" % BUDGET)
+    return remaining
 
 
 def deny(reason):
@@ -168,20 +191,35 @@ def named_files(command, words, cwd):
     return found
 
 
-def listed_words(text, home):
-    """The listed words in text, by bin/fm-leak-guard.sh --text; None when the home has no list."""
+def listed_words(text, home, cwd):
+    """(listed words, new words and data shapes) in text, by bin/fm-leak-guard.sh --text --new-names run in cwd;
+    None when the home has no list or approvals file."""
     env = dict(os.environ, FM_HOME=home)
-    result = subprocess.run(["bash", str(GUARD), "--text", "-"], input=text.encode("utf-8", "replace"),
-                            capture_output=True, env=env, timeout=20)
+    result = subprocess.run(["bash", str(GUARD), "--text", "--new-names", "-"], input=text.encode("utf-8", "replace"),
+                            capture_output=True, env=env, cwd=cwd, timeout=left())
     if result.returncode == 0:
-        return [] if result.stdout.strip() or result.stderr.strip() else None
-    prefix = "LEAK_HIT: private-word: stdin: "
-    words = [line[len(prefix):] for line in result.stderr.decode("utf-8", "replace").splitlines()
-             if line.startswith(prefix)]
-    if result.returncode != 1 or not words:
+        return ([], []) if result.stdout.strip() or result.stderr.strip() else None
+    listed, fresh = [], []
+    for line in result.stderr.decode("utf-8", "replace").splitlines():
+        m = HIT.match(line)
+        if m:
+            (listed if m.group(1) == "private-word" else fresh).append(m.group(2))
+    if result.returncode != 1 or not (listed or fresh):
         raise RuntimeError("the word check exited %d: %s" % (
             result.returncode, result.stderr.decode("utf-8", "replace").strip()[:300]))
-    return words
+    return listed, list(dict.fromkeys(fresh))
+
+
+def own_repos():
+    """The owner/repo, lowercased, of every remote of this script's own checkout: this Starship repository."""
+    out = subprocess.run(["git", "-C", str(GUARD.parent), "remote", "-v"], capture_output=True, text=True, timeout=left())
+    repos = set()
+    for line in out.stdout.splitlines():
+        fields = line.split()
+        m = REMOTE.match(fields[1]) if len(fields) > 1 else None
+        if m:
+            repos.add(m.group(2).lower())
+    return repos
 
 
 def named_repos(words):
@@ -211,7 +249,7 @@ def targets(command, words, cwd):
         repos += named_repos(words) + [None]
     if pipeline:
         url = subprocess.run(["git", "-C", cwd, "remote", "get-url", "origin"],
-                             capture_output=True, text=True, timeout=10).stdout.strip()
+                             capture_output=True, text=True, timeout=left()).stdout.strip()
         m = REMOTE.match(url)
         if not m:
             raise UnknownTarget("this checkout's origin remote %r is not a repository URL it can read" % url)
@@ -222,23 +260,26 @@ def targets(command, words, cwd):
 
 
 def visibility(repo, cwd):
-    """'private', 'public', or the reason it could not be read."""
-    args = ["gh", "repo", "view"] + ([repo] if repo else []) + ["--json", "isPrivate", "--jq", ".isPrivate"]
+    """('private' or 'public' or the reason it could not be read, the owner/repo gh names or None)."""
+    args = (["gh", "repo", "view"] + ([repo] if repo else [])
+            + ["--json", "isPrivate,nameWithOwner", "--jq", ".isPrivate, .nameWithOwner"])
     try:
-        result = subprocess.run(args, capture_output=True, text=True, cwd=cwd, timeout=15)
+        result = subprocess.run(args, capture_output=True, text=True, cwd=cwd, timeout=left())
     except (OSError, subprocess.TimeoutExpired) as e:
-        return "gh could not run (%s)" % type(e).__name__
-    answer = result.stdout.strip()
-    if result.returncode == 0 and answer in ("true", "false"):
-        return "private" if answer == "true" else "public"
-    return "gh repo view failed: %s" % (result.stderr.strip().splitlines() or ["no output"])[-1][:200]
+        return "gh could not run (%s)" % type(e).__name__, None
+    answer = result.stdout.split()
+    if result.returncode == 0 and answer and answer[0] in ("true", "false"):
+        return ("private" if answer[0] == "true" else "public"), (answer[1] if len(answer) > 1 else None)
+    return "gh repo view failed: %s" % (result.stderr.strip().splitlines() or ["no output"])[-1][:200], None
 
 
-def check_hint(home):
-    return "FM_HOME=%s %s --text <file>" % (shlex.quote(home), shlex.quote(str(GUARD)))
+def check_hint(home, names=False):
+    return "FM_HOME=%s %s --text%s <file>" % (shlex.quote(home), shlex.quote(str(GUARD)), " --new-names" if names else "")
 
 
 def cmd_hook(argv):
+    global BUDGET, DEADLINE
+    start = time.monotonic()
     o = opts(argv, ("home",))
     try:
         payload = json.load(sys.stdin)
@@ -252,24 +293,35 @@ def cmd_hook(argv):
     except Exception:  # an unreadable payload cannot be known to publish anything
         return 0
     try:
+        BUDGET = float(os.environ.get("FM_PR_TEXT_GUARD_BUDGET") or BUDGET)
+        DEADLINE = start + BUDGET
         words = tokens(command)
         text = command
         for path in named_files(command, words, cwd):
             with open(path, "rb") as f:
                 text += "\n" + f.read(FILE_CAP).decode("utf-8", "replace")
-        hits = listed_words(text, o["home"])
+        found = listed_words(text, o["home"], cwd)
         if words is None:
             fill = bool(PR_CREATE.search(command) and any(FILL.fullmatch(w) for w in command.split()))
         else:
             fill = fills(words)
-        if hits is None or not (hits or fill):
+        if found is None:
+            return 0
+        hits, fresh = found
+        if not (hits or fresh or fill):
             return 0
         if hits:
             named = "contains %s, from this home's private word list" % ", ".join('"%s"' % w for w in hits)
             fix = "Rewrite the text without %s" % ("it" if len(hits) == 1 else "them")
-        else:
+        elif fill:
             named = "comes from commit messages through --fill, which this check cannot read"
             fix = "Pass --title and --body-file instead of --fill"
+        else:
+            named = ("contains %s, which never appeared in this Starship repository or are customer data shapes"
+                     % ", ".join('"%s"' % w for w in fresh))
+            fix = ("Rewrite the text without %s, or append a needs-decision: status line naming each new word"
+                   " so the owner can approve it once" % ("it" if len(fresh) == 1 else "them"))
+        own = own_repos() if fresh and not (hits or fill) else set()
         unknown = None
         try:
             reached = targets(command, words, cwd)
@@ -282,15 +334,17 @@ def cmd_hook(argv):
         except UnknownTarget as e:
             reached, unknown = [], str(e)
         for repo, where in reached:
-            seen = visibility(repo, cwd)
+            seen, name = visibility(repo, cwd)
             if seen == "private":
+                continue
+            if seen == "public" and own and name and name.lower() not in own:
                 continue
             if seen == "public":
                 deny("Starship refused this command: the text it would publish to %s, a public repository, %s."
                      " Personal and work details never go into a public"
                      " repository's PR titles, descriptions, comments or pipeline intent."
                      " %s and run it again; check a draft first with: %s"
-                     % (where, named, fix, check_hint(o["home"])))
+                     % (where, named, fix, check_hint(o["home"], bool(own))))
                 return 0
             unknown = "%s: %s" % (where, seen)
             break

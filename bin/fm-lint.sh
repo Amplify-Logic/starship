@@ -20,7 +20,9 @@
 # malformed GitHub workflow, including a self-broken ci.yml, fails locally
 # before merge instead of only failing to run as CI, and
 # `bin/fm-leak-guard.sh --private-words`, which fails on a word from the home's
-# private leak list and is a silent no-op where there is no list, as in CI.
+# private leak list, and `bin/fm-leak-guard.sh --new-names`, which fails on a
+# new name-shaped word or a customer data shape in the lines the branch adds;
+# both are silent no-ops where there is no list, as in CI.
 #
 # With no explicit paths, the file set and source-following posture depend
 # on context:
@@ -478,13 +480,18 @@ fm_lint_run_workflows() {
   "$SELF_DIR/fm-lint-workflows.sh"
 }
 
-# Default no-args lint also checks the home's private leak words, so the
-# no-mistakes lint step catches them before every push; without a list it is
-# silent, so other homes and CI are unaffected.
+# Default no-args lint also checks the home's private leak words and the new
+# names and data shapes the branch adds, so the no-mistakes lint step catches
+# them before every push; without a list they are silent, so other homes and CI
+# are unaffected.
 fm_lint_run_private_words() {
   [ "$EXPLICIT_PATHS" -eq 0 ] || return 0
   [ -x "$SELF_DIR/fm-leak-guard.sh" ] || return 0
-  "$SELF_DIR/fm-leak-guard.sh" --private-words
+  local rc=0 names_rc=0
+  "$SELF_DIR/fm-leak-guard.sh" --private-words || rc=$?
+  "$SELF_DIR/fm-leak-guard.sh" --new-names || names_rc=$?
+  [ "$rc" -ne 0 ] || rc=$names_rc
+  return "$rc"
 }
 
 # Backend adapters belong behind tasks-axi. Keep direct Beads CLI invocations
