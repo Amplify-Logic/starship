@@ -38,8 +38,10 @@
 # `--body-file -`. A listed word in a path or branch name of such a command is
 # refused too, because a branch name is published. Token shapes are checked
 # only in the command and in the files it sends as content: a --body-file, -F
-# or --input value, or an @file value of -f, -F, --field or --raw-field, or
-# every file it names when its words cannot be parsed. A file it merely names,
+# or --input value, an @file value of -f, -F, --field or --raw-field, a
+# `$(cat FILE)` or backtick `cat FILE`, a `< FILE` redirect into, or the files
+# of a `cat FILE |` stage piped into, a command reading --body-file - or
+# --input -, or every file it names when its words cannot be parsed. A file it merely names,
 # such as a test fixture with synthetic keys, is checked for every other hit. A `pr create` or `pr new` given
 # --fill, -f, --fill-first or --fill-verbose before the next shell operator
 # takes its text from commit messages this check cannot see, so on a public
@@ -109,6 +111,8 @@ ENDPOINT_REPO = re.compile(r"^/?repos/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)(?:/|$)")
 URL_REPO = re.compile(r"https?://([^/\s]+/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/(?:pull|issues)/\d+(?:[/#?]\S*)?")
 PATH_CAP = 1024
 FILL = re.compile(r"--fill(?:-first|-verbose)?(?:=(?!false$).*)?|-[dwe]*f[dwe]*")
+STAGE_BREAK = "();|&\n"
+CAT_SUB = re.compile(r"(?:\$\(|`)\s*cat\s+([^()`|;&<>]*)")
 PATHLIKE = re.compile(r"[^\s'\"`()<>|;&=]+")
 REMOTE = re.compile(r"^(?:[a-z+]+://)?(?:[^@/]+@)?([^/:]+)[:/]+(.+?)(?:\.git)?/?$")
 HIT = re.compile(r"^LEAK_HIT: ([a-z-]+): (.*)$")
@@ -205,21 +209,45 @@ def named_files(command, words, cwd):
     return found
 
 
-def sent_files(words, cwd):
-    """The resolved files a command sends as content: a --body-file, -F or --input value, or an @file field value."""
-    found = set()
-    for i, word in enumerate(words):
-        flag, eq, value = word.partition("=")
-        if not eq:
-            flag, value = word, words[i + 1] if i + 1 < len(words) else ""
-        if flag in ("-f", "-F", "--field", "--raw-field") and "=" in value:
-            value = value.split("=", 1)[1]
-            if not value.startswith("@"):
-                continue
-        elif flag not in ("--body-file", "-F", "--input"):
-            continue
+def sent_files(command, words, cwd):
+    """The resolved files a command sends as content: a --body-file, -F or --input value, an @file field value,
+    a $(cat FILE) or `cat FILE`, and a file redirected or piped from cat into --body-file - or --input -."""
+    candidates = []
+    for m in CAT_SUB.finditer(command):
         try:
-            path = pathlib.Path(cwd, os.path.expanduser(value.lstrip("@")))
+            candidates += [a for a in shlex.split(m.group(1)) if not a.startswith("-")]
+        except ValueError:
+            continue
+    stages, breaks = [[]], []
+    for word in words:
+        if word and set(word) <= set(STAGE_BREAK):
+            stages.append([])
+            breaks.append(word)
+        else:
+            stages[-1].append(word)
+    for k, stage in enumerate(stages):
+        reads_stdin = False
+        for i, word in enumerate(stage):
+            flag, eq, value = word.partition("=")
+            if not eq:
+                flag, value = word, stage[i + 1] if i + 1 < len(stage) else ""
+            if flag in ("-f", "-F", "--field", "--raw-field") and "=" in value:
+                value = value.split("=", 1)[1]
+                if value.startswith("@"):
+                    candidates.append(value[1:])
+            elif flag in ("--body-file", "-F", "--input"):
+                if value == "-":
+                    reads_stdin = True
+                else:
+                    candidates.append(value)
+        if reads_stdin:
+            candidates += [stage[i + 1] for i, word in enumerate(stage[:-1]) if word == "<"]
+            if k and breaks[k - 1] == "|" and stages[k - 1][:1] == ["cat"]:
+                candidates += [a for a in stages[k - 1][1:] if not a.startswith("-")]
+    found = set()
+    for candidate in candidates:
+        try:
+            path = pathlib.Path(cwd, os.path.expanduser(candidate))
             if path.is_file():
                 found.add(path.resolve())
         except (OSError, ValueError):
@@ -365,7 +393,7 @@ def cmd_hook(argv):
         DEADLINE = start + BUDGET
         words = tokens(command)
         files = named_files(command, words, cwd)
-        sent = set(files) if words is None else sent_files(words, cwd)
+        sent = set(files) if words is None else sent_files(command, words, cwd)
         pieces, named = [("the command", command)], []
         for path in files:
             with open(path, "rb") as f:

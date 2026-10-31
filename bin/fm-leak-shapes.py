@@ -27,10 +27,16 @@
 # name-shaped. A name-shaped word is new when it occurs in the tracked files of
 # no --names REPO at its REV, ignoring case and counting every maximal run of
 # letters there as a word, and is not a line of the approvals FILE (one word
-# per line, ignoring case, blank and # lines skipped). A word of any line of
-# the --private FILE, the home's private word list, is never reported as new,
-# because bin/fm-leak-guard.sh already places it without printing it. Each new
-# word is reported once per file, commit or label, at its first line.
+# per line, ignoring case, blank and # lines skipped). A line of the --private
+# FILE, the home's private word list, that is a single word is never reported
+# as new; each word of a listed phrase still is. Each new word is reported once
+# per file, commit or label, at its first line.
+#
+# PRIVATE WORDS (only with --private and --diff). Every occurrence of a line of
+# the --private FILE in an added line or commit message, as a whole word or
+# phrase in any case, is placed as `LEAK_HIT: private-word: <where>:<line>:
+# <column>` and never printed. In --text mode bin/fm-leak-guard.sh places them
+# itself.
 #
 # SHAPES (always). slack-id: a Slack user, channel or direct-message id (U, W,
 # C, G or D, a digit, then 7 to 9 capitals and digits); slack-link: a link
@@ -272,9 +278,16 @@ def main(argv):
             for kind, value in shapes(line):
                 hits.append((kind, where if n is None else "%s:%d" % (where, n), value))
 
+    listed = sorted(approved_words(private), key=len, reverse=True)
+    if listed and mode == "diff":
+        pattern = re.compile(r"(?<!\w)(?:%s)(?!\w)" % "|".join(map(re.escape, listed)), re.I)
+        for where, _, line, _, line_no in records:
+            for m in pattern.finditer(line):
+                hits.append(("private-word", "%s:%d:%d" % (where, line_no, m.start() + 1), None))
+
     if names:
         allowed = approved_words(approved)
-        allowed |= {w.lower() for line in approved_words(private) for w in WORD.findall(line)}
+        allowed |= {line for line in approved_words(private) if WORD.fullmatch(line)}
         first = {}
         for where, n, line, _, _ in records:
             for word in WORD.findall(line):

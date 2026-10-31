@@ -239,6 +239,21 @@ test_hook_checks_token_shapes_only_in_sent_files() {
       "a fixture sent with --input must have its token shapes checked in $home"
     expect_refuse "$home" 'gh api repos/o/public/issues/3/comments -f "body=@tests/redaction.test.sh"' \
       "a fixture sent as an @file field must have its token shapes checked in $home"
+    # shellcheck disable=SC2016 # The substitution runs inside the checked command, not here.
+    expect_refuse "$home" 'gh pr create --repo o/public -t x --body "$(cat tests/redaction.test.sh)"' \
+      "a fixture sent through \$(cat file) must have its token shapes checked in $home"
+    # shellcheck disable=SC2016 # The substitution runs inside the checked command, not here.
+    expect_refuse "$home" 'gh pr comment 7 --repo o/public --body "`cat tests/redaction.test.sh`"' \
+      "a fixture sent through a backtick cat must have its token shapes checked in $home"
+    expect_refuse "$home" 'gh pr comment 7 --repo o/public --body-file - < tests/redaction.test.sh' \
+      "a fixture redirected into --body-file - must have its token shapes checked in $home"
+    expect_refuse "$home" 'gh api repos/o/public/issues/3/comments --input - < tests/redaction.test.sh' \
+      "a fixture redirected into --input - must have its token shapes checked in $home"
+    expect_refuse "$home" 'cat tests/redaction.test.sh | gh pr comment 7 --repo o/public --body-file -' \
+      "a fixture piped from cat into --body-file - must have its token shapes checked in $home"
+    assert_contains "$REASON" "2 live key or token shapes (" "the piped file's tokens must be counted"
+    expect_allow "$home" 'cat tests/redaction.test.sh | wc -l; gh pr comment 7 --repo o/public --body "Counted"' \
+      "a fixture piped into another command is not sent in $home"
   done
   expect_allow "$NO_LIST" 'gh pr create --repo o/public --fill && cat tests/redaction.test.sh' \
     "a home with no list must pass --fill even when the command names a fixture with synthetic keys"

@@ -415,6 +415,35 @@ test_commit_messages_are_checked() {
   pass "leak guard: the messages of the commits being pushed are checked for new names and data shapes"
 }
 
+# A listed word in a commit message is placed, never printed, and fails
+# --new-names, while only a single-word list entry stops counting as new: each
+# word of a listed phrase alone is still a new name.
+test_private_words_in_commit_messages_are_placed() {
+  local repo="$TMP_ROOT/private-messages" home="$TMP_ROOT/private-messages-home" name sha
+  name=$(cap qverblox)
+  branch_repo "$repo"
+  word_home "$home" 'qverblox\n'
+  add_line "$repo" docs/notes.md 'the theme stays.' "fix sync for $name"
+  sha=$(git -C "$repo" rev-parse --short HEAD)
+  guard "$repo" FM_HOME="$home" -- --new-names
+  [ "$GUARD_STATUS" -eq 1 ] || fail "a listed word in a commit message passed --new-names: $GUARD_OUT"
+  assert_contains "$GUARD_OUT" "LEAK_HIT: private-word: commit $sha:1:14" "the listed word was not placed in the commit"
+  assert_not_contains "$GUARD_OUT" "new-name" "a single-word list entry was also named as a new word"
+  assert_not_contains "$GUARD_OUT" "$name" "the listed word was printed"
+  assert_not_contains "$GUARD_OUT" "qverblox" "the listed word was printed"
+
+  word_home "$home" 'qverblox logistics\n'
+  guard "$repo" FM_HOME="$home" -- --new-names
+  [ "$GUARD_STATUS" -eq 1 ] || fail "a lone word of a listed phrase passed --new-names: $GUARD_OUT"
+  assert_contains "$GUARD_OUT" "LEAK_HIT: new-name: commit $sha: $name" "a lone word of a listed phrase must still be new"
+  assert_not_contains "$GUARD_OUT" "private-word" "a lone word of a phrase was placed as the phrase"
+  add_line "$repo" docs/notes.md "the $name $(cap logistics) theme." 'theme'
+  guard "$repo" FM_HOME="$home" -- --new-names
+  [ "$GUARD_STATUS" -eq 1 ] || fail "a listed phrase in an added line passed --new-names: $GUARD_OUT"
+  assert_contains "$GUARD_OUT" "LEAK_HIT: private-word: docs/notes.md:4:5" "the listed phrase in an added line was not placed"
+  pass "leak guard: a listed word in a commit message is placed and never printed, and a lone word of a listed phrase is still new"
+}
+
 # Invented values only: none of these reaches a real account, number or person.
 SHAPE_LINES='ping U0QZXW1234 in the thread.
 see https://qverblox-team.slack.com/archives/C0QZXW1234 for it.
@@ -498,6 +527,7 @@ test_remote_route_keeps_list_on_unusable_addon
 test_new_name_refuses_until_approved
 test_known_words_and_code_identifiers_pass
 test_commit_messages_are_checked
+test_private_words_in_commit_messages_are_placed
 test_data_shapes_refuse
 test_token_shapes_are_placed_never_printed
 

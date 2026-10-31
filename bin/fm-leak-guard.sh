@@ -76,7 +76,10 @@
 # patterns; commit messages have no allowlist. bin/fm-lint.sh runs --new-names on every
 # default lint, so the pipeline's lint step checks each push; without a list or
 # approvals file, as in CI, it is silent. Each hit prints
-# `LEAK_HIT: new-name: <path>:<line>: <word>` or `LEAK_HIT: <shape>: ...`.
+# `LEAK_HIT: new-name: <path>:<line>: <word>` or `LEAK_HIT: <shape>: ...`. A
+# word or phrase from the private word list in those added lines or commit
+# messages is placed as `LEAK_HIT: private-word: <where>:<line>:<column>` and
+# never printed; only a single-word list entry stops counting as a new name.
 # Without origin/main, or without a merge base with it, --new-names exits 2.
 # --text --new-names adds the same two checks to a draft text, with the tracked
 # files at this checkout's HEAD as what is already known, and, when the caller's
@@ -195,11 +198,11 @@ if [ "$NAMES_MODE" -eq 1 ] && [ "$TEXT_MODE" -eq 0 ]; then
   [ -z "$out" ] || printf '%s\n' "$out" >&2
   case "$status" in
     0)
-      printf 'fm-leak-guard.sh: PASS - no new names, customer data shapes or token shapes in the lines and commit messages this branch adds\n'
+      printf 'fm-leak-guard.sh: PASS - no new names, private words, customer data shapes or token shapes in the lines and commit messages this branch adds\n'
       exit 0
       ;;
     1)
-      printf 'fm-leak-guard.sh: FAIL - the lines or commit messages this branch adds hold words that never appeared in this repository, customer data shapes or token shapes (see LEAK_HIT lines above); rewrite each out, or have the owner approve a new word once, which firstmate records as a line of %s\n' "$APPROVED" >&2
+      printf 'fm-leak-guard.sh: FAIL - the lines or commit messages this branch adds hold words that never appeared in this repository, words from the private word list, customer data shapes or token shapes (see LEAK_HIT lines above); rewrite each out, or have the owner approve a new word once, which firstmate records as a line of %s\n' "$APPROVED" >&2
       exit 1
       ;;
     *) exit 2 ;;
