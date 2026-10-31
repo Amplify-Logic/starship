@@ -89,11 +89,12 @@
 # config/update-channel, so later updates stay there until the operator writes
 # "release" again. It prints the same reread/restart/nudge summary.
 #
-# Usage: fm-update.sh [--channel <main|release|starship-YYYY.MM[.N]>]
+# Usage: fm-update.sh [--channel <starship-YYYY.MM[.N]>]
 #        fm-update.sh --step-back
 #        fm-update.sh --help
-# --channel overrides config/update-channel for one pass; a parent on the
-# release channel passes it to a remote secondmate's code-root update.
+# --channel holds this one pass on the named release instead of reading
+# config/update-channel; a parent on the release channel passes it to a remote
+# secondmate's code-root update. It accepts only a release name.
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -111,7 +112,7 @@ SECONDMATES_MD="$FM_HOME/data/secondmates.md"
 CONFIG_DIR="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 
 usage() {
-  echo "usage: fm-update.sh [--channel <main|release|starship-YYYY.MM[.N]>] | --step-back | --help" >&2
+  echo "usage: fm-update.sh [--channel <starship-YYYY.MM[.N]>] | --step-back | --help" >&2
 }
 
 step_back=no
@@ -136,8 +137,8 @@ fi
 # --- update channel ----------------------------------------------------------
 
 if [ -n "$channel_arg" ]; then
-  if ! fm_update_channel_value_valid "$channel_arg"; then
-    echo "fm-update: --channel must be main, release, or a release name such as starship-2026.11" >&2
+  if ! fm_release_name_valid "$channel_arg"; then
+    echo "fm-update: --channel must be a release name such as starship-2026.11" >&2
     exit 1
   fi
   FM_UPDATE_CHANNEL=$channel_arg
