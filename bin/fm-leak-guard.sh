@@ -79,7 +79,7 @@
 # `LEAK_HIT: new-name: <path>:<line>: <word>` or `LEAK_HIT: <shape>: ...`. A
 # word or phrase from the private word list in those added lines or commit
 # messages is placed as `LEAK_HIT: private-word: <where>:<line>:<column>` and
-# never printed; only a single-word list entry stops counting as a new name.
+# never printed, and no word inside it is named as new.
 # Without origin/main, or without a merge base with it, --new-names exits 2.
 # --text --new-names adds the same two checks to a draft text, with the tracked
 # files at this checkout's HEAD as what is already known, and, when the caller's

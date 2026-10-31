@@ -27,10 +27,12 @@
 # name-shaped. A name-shaped word is new when it occurs in the tracked files of
 # no --names REPO at its REV, ignoring case and counting every maximal run of
 # letters there as a word, and is not a line of the approvals FILE (one word
-# per line, ignoring case, blank and # lines skipped). A line of the --private
-# FILE, the home's private word list, that is a single word is never reported
-# as new; each word of a listed phrase still is. Each new word is reported once
-# per file, commit or label, at its first line.
+# per line, ignoring case, blank and # lines skipped). A word inside an
+# occurrence of a line of the --private FILE, the home's private word list, as
+# a whole word or phrase in any case, is never reported as new, so no part of
+# a listed entry is ever printed; a word of a listed phrase that occurs on its
+# own still is. Each new word is reported once per file, commit or label, at
+# its first line.
 #
 # PRIVATE WORDS (only with --private and --diff). Every occurrence of a line of
 # the --private FILE in an added line or commit message, as a whole word or
@@ -279,18 +281,22 @@ def main(argv):
                 hits.append((kind, where if n is None else "%s:%d" % (where, n), value))
 
     listed = sorted(approved_words(private), key=len, reverse=True)
-    if listed and mode == "diff":
-        pattern = re.compile(r"(?<!\w)(?:%s)(?!\w)" % "|".join(map(re.escape, listed)), re.I)
-        for where, _, line, _, line_no in records:
-            for m in pattern.finditer(line):
-                hits.append(("private-word", "%s:%d:%d" % (where, line_no, m.start() + 1), None))
+    pattern = listed and re.compile(r"(?<!\w)(?:%s)(?!\w)" % "|".join(map(re.escape, listed)), re.I)
+    spans = {}
+    for i, (where, _, line, _, line_no) in enumerate(records):
+        spans[i] = [m.span() for m in pattern.finditer(line)] if pattern else []
+        if mode == "diff":
+            for start, _ in spans[i]:
+                hits.append(("private-word", "%s:%d:%d" % (where, line_no, start + 1), None))
 
     if names:
         allowed = approved_words(approved)
-        allowed |= {line for line in approved_words(private) if WORD.fullmatch(line)}
         first = {}
-        for where, n, line, _, _ in records:
-            for word in WORD.findall(line):
+        for i, (where, n, line, _, _) in enumerate(records):
+            for m in WORD.finditer(line):
+                word = m.group()
+                if any(a <= m.start() and m.end() <= b for a, b in spans[i]):
+                    continue
                 if name_shaped(word) and word.lower() not in allowed:
                     first.setdefault((where, word.lower()), (n, word))
         try:

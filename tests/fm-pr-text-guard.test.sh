@@ -243,6 +243,23 @@ test_hook_checks_token_shapes_only_in_sent_files() {
     expect_refuse "$home" 'gh pr create --repo o/public -t x --body "$(cat tests/redaction.test.sh)"' \
       "a fixture sent through \$(cat file) must have its token shapes checked in $home"
     # shellcheck disable=SC2016 # The substitution runs inside the checked command, not here.
+    expect_refuse "$home" 'gh pr create --repo o/public -t x --body "$(<tests/redaction.test.sh)"' \
+      "a fixture sent through \$(<file) must have its token shapes checked in $home"
+    # shellcheck disable=SC2016 # The substitution runs inside the checked command, not here.
+    expect_refuse "$home" 'gh pr create --repo o/public -t x --body "$(< tests/redaction.test.sh)"' \
+      "a fixture sent through \$(< file) must have its token shapes checked in $home"
+    # shellcheck disable=SC2016 # The substitution runs inside the checked command, not here.
+    expect_refuse "$home" 'gh pr comment 7 --repo o/public --body-file - <<EOF
+See $(cat tests/redaction.test.sh)
+EOF' "a \$(cat file) in an unquoted heredoc body runs, so its tokens must be checked in $home"
+    # shellcheck disable=SC2016 # The substitution is quoted text in the checked command.
+    expect_allow "$home" "gh pr comment 7 --repo o/public --body 'Reproduce with \$(cat tests/redaction.test.sh)'" \
+      "a cat inside single quotes is only mentioned, so it must stay words-only in $home"
+    # shellcheck disable=SC2016 # The backticks are quoted text in the checked command.
+    expect_allow "$home" "gh pr comment 7 --repo o/public --body-file - <<'EOF'
+Reproduce with \`cat tests/redaction.test.sh\`
+EOF" "a cat inside a quoted heredoc body is only mentioned, so it must stay words-only in $home"
+    # shellcheck disable=SC2016 # The substitution runs inside the checked command, not here.
     expect_refuse "$home" 'gh pr comment 7 --repo o/public --body "`cat tests/redaction.test.sh`"' \
       "a fixture sent through a backtick cat must have its token shapes checked in $home"
     expect_refuse "$home" 'gh pr comment 7 --repo o/public --body-file - < tests/redaction.test.sh' \
@@ -627,6 +644,31 @@ test_draft_check_names_new_words_and_shapes() {
   pass "the draft check with --new-names names new words and customer data shapes, and passes known and approved words"
 }
 
+# No part of a listed word or phrase is ever printed as a new word by the draft
+# check, not even when the word list file itself is checked.
+test_draft_check_never_names_a_listed_phrase_as_new() {
+  local home="$TMP_ROOT/phrase-home" first second
+  first=$(cap qverblox)
+  second=$(cap logistics)
+  mkdir -p "$home/config"
+  printf '%s %s\n' "$first" "$second" > "$home/config/leak-words"
+  printf 'ask %s %s today\n' "$first" "$second" > "$WORK/phrase.md"
+  for source in phrase.md "$home/config/leak-words"; do
+    STATUS=0
+    OUT=$(cd "$WORK" && FM_HOME="$home" "$COPY/bin/fm-leak-guard.sh" --text --new-names "$source" 2>&1) || STATUS=$?
+    [ "$STATUS" -eq 1 ] || fail "a listed phrase in $source must fail: $OUT"
+    assert_contains "$OUT" "LEAK_HIT: private-word: " "the listed phrase in $source must be placed"
+    assert_not_contains "$OUT" "$first" "a word of the listed phrase in $source must never be printed"
+    assert_not_contains "$OUT" "$second" "a word of the listed phrase in $source must never be printed"
+  done
+  printf 'ask %s alone\n' "$first" > "$WORK/alone.md"
+  STATUS=0
+  OUT=$(cd "$WORK" && FM_HOME="$home" "$COPY/bin/fm-leak-guard.sh" --text --new-names alone.md 2>&1) || STATUS=$?
+  [ "$STATUS" -eq 1 ] || fail "a lone word of a listed phrase must still be new: $OUT"
+  assert_contains "$OUT" "LEAK_HIT: new-name: alone.md: $first" "a lone word of a listed phrase must be named as new"
+  pass "the draft check never names a word of a listed phrase as new, while a lone word of one still is"
+}
+
 test_hook_refuses_new_words_only_for_this_repository() {
   local name pipeline="$TMP_ROOT/nm-copy"
   name=$(cap qverblox)
@@ -737,5 +779,6 @@ test_spawn_installs_the_hook
 test_first_and_second_mate_sessions_get_the_hook
 test_ship_brief_tells_the_worker_to_check
 test_draft_check_names_new_words_and_shapes
+test_draft_check_never_names_a_listed_phrase_as_new
 test_hook_refuses_new_words_only_for_this_repository
 test_branch_words_count_as_known

@@ -441,6 +441,8 @@ test_private_words_in_commit_messages_are_placed() {
   guard "$repo" FM_HOME="$home" -- --new-names
   [ "$GUARD_STATUS" -eq 1 ] || fail "a listed phrase in an added line passed --new-names: $GUARD_OUT"
   assert_contains "$GUARD_OUT" "LEAK_HIT: private-word: docs/notes.md:4:5" "the listed phrase in an added line was not placed"
+  assert_not_contains "$GUARD_OUT" "new-name: docs/notes.md" "a word of the listed phrase was named as new"
+  assert_not_contains "$GUARD_OUT" "$(cap logistics)" "a word of the listed phrase was printed"
   pass "leak guard: a listed word in a commit message is placed and never printed, and a lone word of a listed phrase is still new"
 }
 

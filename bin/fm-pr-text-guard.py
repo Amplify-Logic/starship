@@ -39,7 +39,8 @@
 # refused too, because a branch name is published. Token shapes are checked
 # only in the command and in the files it sends as content: a --body-file, -F
 # or --input value, an @file value of -f, -F, --field or --raw-field, a
-# `$(cat FILE)` or backtick `cat FILE`, a `< FILE` redirect into, or the files
+# `$(cat FILE)`, `$(<FILE)` or backtick `cat FILE` outside single quotes and
+# quoted heredoc bodies, a `< FILE` redirect into, or the files
 # of a `cat FILE |` stage piped into, a command reading --body-file - or
 # --input -, or every file it names when its words cannot be parsed. A file it merely names,
 # such as a test fixture with synthetic keys, is checked for every other hit. A `pr create` or `pr new` given
@@ -112,7 +113,8 @@ URL_REPO = re.compile(r"https?://([^/\s]+/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/(?:pu
 PATH_CAP = 1024
 FILL = re.compile(r"--fill(?:-first|-verbose)?(?:=(?!false$).*)?|-[dwe]*f[dwe]*")
 STAGE_BREAK = "();|&\n"
-CAT_SUB = re.compile(r"(?:\$\(|`)\s*cat\s+([^()`|;&<>]*)")
+CAT_SUB = re.compile(r"(?:\$\(|`)\s*(?:cat\s+|<\s*)([^()`|;&<>]*)")
+HEREDOC = re.compile(r"<<(-?)\s*(?:'([^'\n]*)'|\"([^\"\n]*)\"|\\?([^\s;&|<>()'\"]+))")
 PATHLIKE = re.compile(r"[^\s'\"`()<>|;&=]+")
 REMOTE = re.compile(r"^(?:[a-z+]+://)?(?:[^@/]+@)?([^/:]+)[:/]+(.+?)(?:\.git)?/?$")
 HIT = re.compile(r"^LEAK_HIT: ([a-z-]+): (.*)$")
@@ -209,11 +211,58 @@ def named_files(command, words, cwd):
     return found
 
 
+def executed(command):
+    """The command with the single-quoted strings and quoted heredoc bodies the shell never runs blanked."""
+    out, i, quote, pending = [], 0, None, []
+    while i < len(command):
+        c = command[i]
+        if quote == "'":
+            quote = None if c == "'" else quote
+            out.append(c if c in "'\n" else " ")
+        elif c == "\\":
+            out.append(command[i:i + 2])
+            i += 1
+        elif quote == '"':
+            quote = None if c == '"' else quote
+            out.append(c)
+        elif c in "'\"":
+            quote = c
+            out.append(c)
+        elif command.startswith("<<<", i):
+            out.append("<<<")
+            i += 2
+        elif HEREDOC.match(command, i):
+            m = HEREDOC.match(command, i)
+            pending.append((m.group(1), m.group(2) if m.group(2) is not None else m.group(3), m.group(4)))
+            out.append(m.group())
+            i = m.end() - 1
+        elif c == "\n" and pending:
+            out.append(c)
+            for dash, quoted, bare in pending:
+                delim = bare if quoted is None else quoted
+                while i + 1 < len(command):
+                    end = command.find("\n", i + 1)
+                    end = len(command) if end < 0 else end
+                    line = command[i + 1:end]
+                    out.append(line if quoted is None or (line.lstrip("\t") if dash else line) == delim
+                               else " " * len(line))
+                    out.append(command[end:end + 1])
+                    i = end
+                    if (line.lstrip("\t") if dash else line) == delim:
+                        break
+            pending = []
+        else:
+            out.append(c)
+        i += 1
+    return "".join(out)
+
+
 def sent_files(command, words, cwd):
     """The resolved files a command sends as content: a --body-file, -F or --input value, an @file field value,
-    a $(cat FILE) or `cat FILE`, and a file redirected or piped from cat into --body-file - or --input -."""
+    a $(cat FILE), $(<FILE) or `cat FILE` the shell runs, and a file redirected or piped from cat into
+    --body-file - or --input -."""
     candidates = []
-    for m in CAT_SUB.finditer(command):
+    for m in CAT_SUB.finditer(executed(command)):
         try:
             candidates += [a for a in shlex.split(m.group(1)) if not a.startswith("-")]
         except ValueError:
