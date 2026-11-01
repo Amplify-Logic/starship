@@ -460,9 +460,16 @@ fm_remote_job_ensure_worker "$REMOTE_ROOT" "$ACCOUNT_HOME" || fail "$FM_REMOTE_J
 NEW_WORKER_PID=$(cat "$STATE_ROOT/worker.pid")
 pass "worker identity binds the canonical configured code root"
 
-CRASHED_WORKER_PID=$NEW_WORKER_PID
-kill -KILL "$CRASHED_WORKER_PID"
-wait "$CRASHED_WORKER_PID" 2>/dev/null || true
+# Crash the whole worker tree at once: a surviving supervisor would clean up
+# after its dead child and restart it while this fixture writes stale state.
+CRASHED_WORKER_PGID=$(fm_remote_job_process_pgid "$NEW_WORKER_PID") \
+  || fail "the crash fixture could not resolve the worker process group"
+kill -KILL -- "-$CRASHED_WORKER_PGID"
+for _ in $(seq 1 100); do
+  kill -0 -- "-$CRASHED_WORKER_PGID" 2>/dev/null || break
+  sleep 0.05
+done
+! kill -0 -- "-$CRASHED_WORKER_PGID" 2>/dev/null || fail "the crashed worker tree did not exit"
 assert_present "$STATE_ROOT/worker.lock" "an unclean exit did not retain the worker ownership lock"
 sleep 20 &
 OTHER_PID=$!

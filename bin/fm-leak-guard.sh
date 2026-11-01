@@ -81,6 +81,18 @@
 # messages is placed as `LEAK_HIT: private-word: <where>:<line>:<column>` and
 # never printed, and no word inside it is named as new.
 # Without origin/main, or without a merge base with it, --new-names exits 2.
+#
+# UPSTREAM CONTENT. A fork that records the upstream it tracks as
+# upstream_base in fork-surface.conf (bin/fm-fork-surface.sh owns that file)
+# merges the upstream's public content, which this home cannot rewrite. So
+# --new-names also counts every word in the tracked files at that commit as
+# known, and does not check the messages of commits reachable from it for new
+# names. Everything else stays as strict: those messages and the lines the
+# upstream adds are still checked for private words, customer data shapes and
+# token shapes, and this home's own lines and commit messages for new names. A
+# recorded base that is not a commit in this checkout, or that already holds
+# the branch's merge base with origin/main and so is not upstream content, is
+# named on stderr and ignored; with none recorded nothing changes.
 # --text --new-names adds the same two checks to a draft text, with the tracked
 # files at this checkout's HEAD as what is already known, and, when the caller's
 # working directory is in a checkout that shares a remote's owner/repo with this
@@ -192,8 +204,21 @@ if [ "$NAMES_MODE" -eq 1 ] && [ "$TEXT_MODE" -eq 0 ]; then
   fi
   exempt=()
   for glob in "${ALLOWLIST[@]}"; do exempt+=(--exempt "$glob"); done
+  # UPSTREAM CONTENT in the header: the recorded upstream base's files and
+  # commit messages are already public.
+  upstream=()
+  recorded=$(awk '/^\[/ { exit } $1 == "upstream_base" && $2 == "=" { print $3; exit }' \
+    "$ROOT/fork-surface.conf" 2>/dev/null) || recorded=
+  if [ -n "$recorded" ]; then
+    if ub=$(git rev-parse -q --verify "$recorded^{commit}" 2>/dev/null) \
+      && ! git merge-base --is-ancestor "$BASE" "$ub" 2>/dev/null; then
+      upstream=(--names "$ROOT" "$ub" --public-commits "$ub")
+    else
+      printf 'fm-leak-guard.sh: note - the recorded upstream base %s is not a commit here or already holds this branch'"'"'s merge base with origin/main, so it is not treated as upstream content\n' "$recorded" >&2
+    fi
+  fi
   status=0
-  out=$(python3 "$SHAPES" "${exempt[@]}" --names "$ROOT" "$BASE" --approved "$APPROVED" \
+  out=$(python3 "$SHAPES" "${exempt[@]}" --names "$ROOT" "$BASE" ${upstream[@]+"${upstream[@]}"} --approved "$APPROVED" \
     ${WORDS_LIST:+--private "$WORDS_LIST"} --diff "$BASE") || status=$?
   [ -z "$out" ] || printf '%s\n' "$out" >&2
   case "$status" in

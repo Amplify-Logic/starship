@@ -266,7 +266,7 @@ main() {
     --config "$auth_cfg" \
     --header "Content-Type: ${ctype}" \
     --data-binary @"$audio" \
-    --url "https://api.deepgram.com/v1/listen?model=${model}&smart_format=true${extra}") || {
+    --url "https://api.deepgram.com/v1/listen?model=${model}&smart_format=true&mip_opt_out=true${extra}") || {
     rm -f "$tmp"
     die "curl failed talking to Deepgram (no answer within ${max_time}s, nothing moving for ${stall_time}s, or the connection failed)"
   }

@@ -240,6 +240,8 @@ test_stt_prints_transcript_from_mocked_deepgram() {
     "$STT" "$home/clip.wav" 2>&1) || fail "stt failed: $out"
   [ "$out" = "merge the finances pull request" ] || fail "unexpected transcript: $out"
   assert_contains "$(cat "$home/curl.log")" "model=nova-3" "default model reaches the request"
+  assert_contains "$(cat "$home/curl.log")" "/v1/listen?" "the request goes to the listen endpoint"
+  assert_contains "$(cat "$home/curl.log")" "mip_opt_out=true" "the listen request opts out of model improvement"
   assert_contains "$(cat "$home/curl.log")" "Content-Type: audio/wav" "wav content type"
   case "$(cat "$home/curl.log")" in
     *super-secret*) fail "key leaked into curl argv" ;;
@@ -489,7 +491,7 @@ test_stt_without_vocabulary_sends_no_hints() {
   case "$(cat "$home/curl.log")" in
     *keyterm=*|*keywords=*) fail "hints sent without a vocabulary: $(cat "$home/curl.log")" ;;
   esac
-  printf '%s\n' "$(cat "$home/curl.log")" | grep -q 'smart_format=true$' || fail "the request must be unchanged"
+  printf '%s\n' "$(cat "$home/curl.log")" | grep -q 'smart_format=true&mip_opt_out=true$' || fail "the request must be unchanged"
   pass "fm-deepgram-stt: an absent vocabulary changes nothing"
 }
 
@@ -632,11 +634,11 @@ test_stt_reads_the_model_from_dotenv() {
     || fail "stt failed: $out"
   [ "$out" = 'Hello.' ] || fail "model settings must not appear in the transcript output"
   log=$(cat "$home/curl.log")
-  case "$log" in *'model=nova-2&smart_format=true&keywords=Quillan%3A2'*) ;; *) fail "home .env must select model and keyword hints" ;; esac
+  case "$log" in *'model=nova-2&smart_format=true&mip_opt_out=true&keywords=Quillan%3A2'*) ;; *) fail "home .env must select model and keyword hints" ;; esac
   out=$(unset FM_DEEPGRAM_ENV_FILE; DEEPGRAM_STT_MODEL=nova-3 stt_with_vocab "$home" 'Hello.' 'Quillan' 2>&1) \
     || fail "stt failed: $out"
   log=$(cat "$home/curl.log")
-  case "$log" in *'model=nova-3&smart_format=true&keyterm=Quillan'*) ;; *) fail "the environment must win over .env" ;; esac
+  case "$log" in *'model=nova-3&smart_format=true&mip_opt_out=true&keyterm=Quillan'*) ;; *) fail "the environment must win over .env" ;; esac
   printf 'DEEPGRAM_STT_MODEL=\n' > "$home/.env"
   out=$(unset FM_DEEPGRAM_ENV_FILE; stt_with_vocab "$home" 'Hello.' 'Quillan' 2>&1) \
     || fail "stt failed: $out"
@@ -2983,8 +2985,20 @@ test_tts_reads_the_voice_from_dotenv() {
   pass "fm-deepgram-tts: reads the voice from .env, the environment wins, else the default"
 }
 
+test_tts_request_opts_out_of_model_improvement() {
+  local home out
+  home=$(new_home tts-mip)
+  install_stt_curl "$home" 200 'mp3-bytes'
+  out=$(DEEPGRAM_API_KEY=test-key-not-real FM_DEEPGRAM_ENV_FILE=/dev/null FM_DEEPGRAM_CURL="$home/curl" \
+    "$TTS" --to "$home/out.mp3" -- "Captain, checks are green." 2>&1) || fail "tts failed: $out"
+  assert_contains "$(cat "$home/curl.log")" "/v1/speak?" "the request goes to the speak endpoint"
+  assert_contains "$(cat "$home/curl.log")" "mip_opt_out=true" "the speak request opts out of model improvement"
+  pass "fm-deepgram-tts: the speak request opts out of Deepgram model improvement"
+}
+
 test_tts_refuses_without_key
 test_tts_dry_run_with_key
+test_tts_request_opts_out_of_model_improvement
 test_stt_refuses_without_key_or_file
 test_stt_prints_transcript_from_mocked_deepgram
 test_stt_reports_http_failure
