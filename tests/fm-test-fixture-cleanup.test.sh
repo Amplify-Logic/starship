@@ -203,6 +203,40 @@ test_run_reaped_ends_leftovers_and_spares_outsiders() {
   pass "fm_test_run_reaped reaps the command's leftovers and nothing outside its group"
 }
 
+# A fixture poller that reparented to init and names its root on its command
+# line - the shape of the leaked stub arms, hook-home watchers, and fake harness
+# loops - must be stopped by the owning suite's teardown before the root is
+# removed, rather than left polling for a file that removal makes impossible.
+test_cleanup_reaps_orphaned_poller_naming_its_root() {
+  local harness out child_dir poller i survivors
+  harness=$(fm_test_tmproot fm-test-cleanup-poller-harness)
+  out=$(bash -c '
+    # shellcheck source=tests/lib.sh
+    . "'"$LIB"'"
+    d=$(fm_test_tmproot fm-test-cleanup-poller)
+    printf "%s\n" "while [ ! -e \"\$1\" ]; do sleep 0.1; done" > "$d/poller.sh"
+    ( bash "$d/poller.sh" "$d/never" </dev/null >/dev/null 2>&1 &
+      printf "%s\n" "$!" > "'"$harness"'/poller.pid" )
+    printf "%s\n" "$d"
+  ')
+  child_dir=$(printf '%s\n' "$out" | sed -n '1p')
+  poller=$(cat "$harness/poller.pid" 2>/dev/null || true)
+  [ -n "$poller" ] || fail "the child suite never started its poller"
+  i=0
+  while [ "$i" -lt 30 ] && kill -0 "$poller" 2>/dev/null; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  if kill -0 "$poller" 2>/dev/null; then
+    kill -KILL "$poller" 2>/dev/null || true
+    fail "the owning suite's teardown left its fixture poller pid $poller running"
+  fi
+  survivors=$(ps -ww -eo pid=,args= | FM_ROOT_MATCH="$child_dir/" awk 'index($0, ENVIRON["FM_ROOT_MATCH"])')
+  [ -z "$survivors" ] || fail "processes naming the removed fixture root survived: $survivors"
+  assert_absent "$child_dir" "the fixture root survived its owning process's normal exit"
+  pass "fm_test_cleanup stops an orphaned poller that names its fixture root"
+}
+
 test_registries_avoid_git_worktree_root() {
   # A TMPDIR pointed at a repository root used to place live `.fm-test-*`
   # registries beside tracked files. A concurrent git add during a suite then
@@ -256,3 +290,4 @@ test_orphan_sweep_respects_fixture_ownership
 test_orphan_sweep_reaps_read_only_package_tree
 test_run_reaped_ends_leftovers_and_spares_outsiders
 test_registries_avoid_git_worktree_root
+test_cleanup_reaps_orphaned_poller_naming_its_root
