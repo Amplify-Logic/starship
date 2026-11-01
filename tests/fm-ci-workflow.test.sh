@@ -519,7 +519,7 @@ test_unrelated_label_never_masks_an_earlier_failure() {
       case "$expect:$name" in
         all-failed:*) want=failure ;;
         waiting:'Full suite') want=failure ;;
-        waiting:'Test coverage guard'|waiting:'Repo invariants') want=success ;;
+        waiting:'Test coverage guard'|waiting:'Repo invariants'|waiting:'Declared fork surface'|waiting:'Public-repo leak guard') want=success ;;
         waiting:*) want=skipped ;;
       esac
       [ "$conclusion" = "$want" ] \

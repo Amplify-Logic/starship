@@ -1148,7 +1148,7 @@ write_source() {
 # --- T13: the primary follows the configured branch; secondmates follow it ---
 test_self_update_source_follows_branch() {
   local w out carry
-  w=$(new_world t13)
+  w=$(new_world src13)
   add_sm "$w" sm1
   add_standalone_sm "$w" sm2
   carry=$(add_fork_carry "$w")
@@ -1184,7 +1184,7 @@ test_self_update_source_follows_branch() {
 # --- T14: an unusable config refuses before anything moves ------------------
 test_self_update_source_refuses_unusable_config() {
   local w before value rc err
-  w=$(new_world t14)
+  w=$(new_world src14)
   add_sm "$w" sm1
   add_fork_carry "$w" >/dev/null
   bump_origin "$w" instr
@@ -1205,7 +1205,7 @@ test_self_update_source_refuses_unusable_config() {
 
 test_self_update_source_refuses_a_release_channel() {
   local w before rc err
-  w=$(new_world t16)
+  w=$(new_world src16)
   add_sm "$w" sm1
   add_fork_carry "$w" >/dev/null
   release_world "$w"
@@ -1235,7 +1235,7 @@ test_self_update_source_refuses_a_release_channel() {
 # --- T15: a rewritten (non-fast-forward) branch is skipped, never forced -------
 test_self_update_source_rewrite_is_skipped() {
   local w out carry other
-  w=$(new_world t15)
+  w=$(new_world src15)
   add_sm "$w" sm1
   carry=$(add_fork_carry "$w")
   write_source "$w" "fork carry"
