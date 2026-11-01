@@ -971,7 +971,6 @@ tests/fm-rovo-signals-live-e2e.test.sh 52
 tests/fm-second-opinion.test.sh 1482
 tests/fm-secondmate-harness.test.sh 188187
 tests/fm-secondmate-busy-contract-live-e2e.test.sh 90000
-tests/fm-secondmate-harness.test.sh 219745
 tests/fm-secondmate-lifecycle-e2e.test.sh 15426
 tests/fm-secondmate-liveness.test.sh 145069
 tests/fm-secondmate-reconcile.test.sh 100853
