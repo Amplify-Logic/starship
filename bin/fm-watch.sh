@@ -3153,9 +3153,12 @@ procevent_surface_queued() {
 # started this cycle or to its recovery check, so only newer rows count; the
 # drain stays the presenter and the acknowledgement owner.
 CAPTAIN_INPUT_BASELINE=0
+# It runs during startup, so it takes the wake-queue lock under the same
+# startup bound as the recovery checks after it and refuses with their typed
+# line instead of blocking behind a live holder.
 captain_input_baseline_read() {
   local seq
-  fm_lock_acquire_wait "$FM_WAKE_QUEUE_LOCK"
+  fm_recovery_lock_wait "$FM_WAKE_QUEUE_LOCK" "$STARTUP_LOCK_BOUND" || return 1
   seq=$(cat "$STATE/.wake-queue.seq" 2>/dev/null || true)
   fm_lock_release "$FM_WAKE_QUEUE_LOCK"
   case "$seq" in ''|*[!0-9]*) seq=0 ;; esac
@@ -3938,7 +3941,7 @@ startup_lock_failed() {
 }
 # Read before the recovery check below, so a row appended after it is newer
 # than this baseline even when that check has already announced the episode.
-captain_input_baseline_read
+captain_input_baseline_read || startup_lock_failed "baseline could not be read safely"
 WATCHER_RECOVERY_PENDING=0
 if [ -n "${FM_LOCK_RECOVERED_PID:-}" ]; then
   WATCHER_RECOVERY_PENDING=1
