@@ -4261,9 +4261,11 @@ fi
 # Refuse before the endpoint exists when the resolved launch binary is missing
 # or fails its version probe: a task window holding a dead shell is far worse to
 # recover from than a spawn that never started. Raw launch commands are exempt
-# (see the header); this sits after every resolve_*_binary owner above so the
-# probe runs against the same executable the launch will.
-if [ "$RAW_LAUNCH" -eq 0 ]; then
+# (see the header). So is t3code: T3 Code starts the agent itself on its own
+# host, so no local launch binary runs and probing one would refuse healthy
+# work. This sits after every resolve_*_binary owner above so the probe runs
+# against the same executable the launch will.
+if [ "$RAW_LAUNCH" -eq 0 ] && [ "$BACKEND" != t3code ]; then
   preflight_verified_launch_binary "$BACKEND" "$HARNESS" "$LAUNCH" || exit 1
 fi
 
