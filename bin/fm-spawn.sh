@@ -2094,12 +2094,15 @@ trap spawn_abort_cleanup EXIT
 # is required so secondmate and primary spawns serialize against the same
 # session without writing any other home's state directory.
 #
-# The second argument is a bounded attempt count (50 x 0.1 s by default) or
-# `wait`. A clean create uses the short default and falls back to the ordinary
-# flat layout on contention. An exact resume waits a bounded ~2 minutes for a
-# live holder, whose critical section through treehouse get and launch staging
-# was measured at 7.7-11.2 s, and hard-refuses only past that bound (it does
-# not degrade flat). Passing `wait` makes this call WAIT for the lock instead
+# The second argument is a bounded attempt count (50 x 0.1 s by default),
+# `seconds:<n>`, or `wait`. A clean create uses the short default and falls
+# back to the ordinary flat layout on contention. An exact resume waits a
+# bounded 120 s of wall clock (`seconds:120`) for a live holder, whose critical
+# section through treehouse get and launch staging was measured at 7.7-11.2 s,
+# and hard-refuses only past that bound (it does not degrade flat). That bound
+# is wall clock rather than an attempt count because each attempt's own cost
+# varies with the host, so a count would stretch the wait past its stated
+# bound on a slow one. Passing `wait` makes this call WAIT for the lock instead
 # (`fm_lock_acquire_wait`, the same unbounded-wait idiom this file already uses
 # for its other fleet-shared locks). Only the recovery path under the explicit
 # --herdr-resume-lock-wait opt-in passes `wait`, so unbounded blocking on a
@@ -2116,6 +2119,19 @@ spawn_herdr_presentation_order_lock_acquire() {
     HERDR_PRESENTATION_ORDER_LOCK_HELD=1
     return 0
   fi
+  case "$mode" in
+    seconds:*)
+      local deadline=$((SECONDS + ${mode#seconds:}))
+      while :; do
+        if fm_lock_try_acquire "$HERDR_PRESENTATION_ORDER_LOCK"; then
+          HERDR_PRESENTATION_ORDER_LOCK_HELD=1
+          return 0
+        fi
+        [ "$SECONDS" -lt "$deadline" ] || return 1
+        sleep 0.1
+      done
+      ;;
+  esac
   max_attempts=$mode
   attempt=0
   while [ "$attempt" -lt "$max_attempts" ]; do
@@ -5493,7 +5509,7 @@ else
             exit 1
           }
         else
-          spawn_herdr_presentation_order_lock_acquire "$HERDR_SES" 1200 || {
+          spawn_herdr_presentation_order_lock_acquire "$HERDR_SES" seconds:120 || {
             echo "error: herdr presentation recovery could not acquire its session lock; refusing a concurrent resume" >&2
             exit 1
           }
