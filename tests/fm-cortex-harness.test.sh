@@ -90,7 +90,11 @@ dialog() {  # <title> <row>...: a titled rounded box exactly $width columns wide
 dialog_rows=$(dialog 'Select a model' ' ❯ 1. Opus' '   2. Sonnet')
 dialog_filter=$(dialog 'Select a model' ' ❯ Type to filter...')
 dialog_empty=$(dialog 'Rename session' ' ❯')
-for dialog in "$dialog_rows" "$dialog_filter" "$dialog_empty"; do
+# A numbered selection list is a selection dialog for every harness, so the
+# shared classifier reads it unknown before any identity gate applies.
+[ "$(fm_composer_classify_screen "$caps" "$dialog_rows")" = unknown ] \
+  || fail 'numbered selection dialog read as a composer with the cortex capability'
+for dialog in "$dialog_filter" "$dialog_empty"; do
   [ "$(fm_composer_classify_screen "$caps" "$dialog")" != "$(fm_composer_classify_screen "$plain_caps" "$dialog")" ] \
     || fail 'dialog fixture is not exercising the identity gate'
 done
