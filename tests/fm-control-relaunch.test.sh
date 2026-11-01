@@ -2006,7 +2006,9 @@ test_prepublication_failure_keeps_concurrent_durable_metadata() {
     run_control "$dir" rl30 relaunch --harness codex --note "preserve concurrent metadata" \
       > "$dir/control.out" &
   control_pid=$!
-  while [ ! -e "$dir/cwd-race-ready" ] && [ "$i" -lt 200 ]; do
+  # The relaunch reaches its endpoint check after about two seconds on a quiet
+  # Mac and later on a loaded runner, so the wait allows about thirty.
+  while [ ! -e "$dir/cwd-race-ready" ] && [ "$i" -lt 3000 ]; do
     /bin/sleep 0.01
     i=$((i + 1))
   done
