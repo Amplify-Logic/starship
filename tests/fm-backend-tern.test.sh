@@ -1571,13 +1571,18 @@ case "$cmd" in
           ;;
       esac
       printf '%s\n' "$a" >> "${FM_FAKE_LAUNCH_LOG:-/dev/null}"
+      : > "$S/launched"
     fi
     ;;
   process)
-    printf '{"pane":%s,"child":{"pid":1,"name":"bash","argv":["bash"],"cwd":"/tmp"},"group":1,"foreground":{"pid":2,"name":"bash","argv":["bash"],"cwd":"%s"}}\n' \
-      "$BLK" "${FM_FAKE_PANE_PATH:-/tmp}"
+    # Once a launch line was typed, the agent owns the foreground, as a real
+    # block would show it; the fork's spawn proves that before reporting.
+    fg=bash
+    [ ! -f "$S/launched" ] || fg=claude
+    printf '{"pane":%s,"child":{"pid":1,"name":"bash","argv":["bash"],"cwd":"/tmp"},"group":1,"foreground":{"pid":2,"name":"%s","argv":["%s"],"cwd":"%s"}}\n' \
+      "$BLK" "$fg" "$fg" "${FM_FAKE_PANE_PATH:-/tmp}"
     ;;
-  close) rm -f "$S/block" ;;
+  close) rm -f "$S/block" "$S/launched" ;;
   ctl)
     printf '{"ok":false,"error":"no Tern window on this machine shows this pane"}\n'
     exit 1
