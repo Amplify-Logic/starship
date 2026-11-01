@@ -446,6 +446,98 @@ test_private_words_in_commit_messages_are_placed() {
   pass "leak guard: a listed word in a commit message is placed and never printed, and a lone word of a listed phrase is still new"
 }
 
+# upstream_repo <dir> <upstream file line> <upstream commit message>: a fork
+# whose origin/main has its own commit after the history it shares with an
+# upstream, and a feature branch that merges one upstream commit adding the
+# line to bin/up.sh with the message. UP_SHA is that upstream commit; nothing
+# records it as the upstream base yet.
+upstream_repo() {
+  make_repo "$1"
+  git -C "$1" branch -q up
+  add_line "$1" docs/fork.md 'fork notes.' 'fork notes'
+  git -C "$1" update-ref refs/remotes/origin/main HEAD
+  git -C "$1" checkout -q -b feature
+  git -C "$1" checkout -q up
+  add_line "$1" bin/up.sh "$2" "$3"
+  UP_SHA=$(git -C "$1" rev-parse HEAD)
+  git -C "$1" checkout -q feature
+  git -C "$1" -c user.name=t -c user.email=t@example.invalid merge -q --no-ff -m 'merge upstream' up
+}
+
+# record_base <repo> <rev>: commit fork-surface.conf naming rev as upstream_base.
+record_base() {
+  printf 'schema = 1\nupstream_base = %s\n\n[capability]\nid = x\n' "$2" > "$1/fork-surface.conf"
+  git -C "$1" add -A
+  git -C "$1" -c user.name=t -c user.email=t@example.invalid commit -q -m 'record the upstream base'
+}
+
+# The upstream's own files and commit messages are already public, so the
+# words they bring in a merge are not new; this home's own lines and commit
+# messages are checked exactly as before, and with no upstream base recorded
+# nothing changes.
+test_upstream_content_is_known() {
+  local repo="$TMP_ROOT/upstream" home="$TMP_ROOT/upstream-home" file_word msg_word sha
+  file_word=$(cap tarvenk)
+  msg_word=$(cap morlisk)
+  word_home "$home" 'unrelated-word\n'
+  upstream_repo "$repo" "label=\"$file_word ready\"" "add the backend, thanks $msg_word"
+  guard "$repo" FM_HOME="$home" -- --new-names
+  [ "$GUARD_STATUS" -eq 1 ] || fail "with no upstream base recorded the upstream words passed: $GUARD_OUT"
+  assert_contains "$GUARD_OUT" "LEAK_HIT: new-name: bin/up.sh:1: $file_word" "with no upstream base an upstream file word was not new"
+  assert_contains "$GUARD_OUT" "LEAK_HIT: new-name: commit $(git -C "$repo" rev-parse --short "$UP_SHA"): $msg_word" "with no upstream base an upstream commit word was not new"
+
+  record_base "$repo" "$UP_SHA"
+  guard "$repo" FM_HOME="$home" -- --new-names
+  [ "$GUARD_STATUS" -eq 0 ] || fail "words from the upstream's files and commit messages refused: $GUARD_OUT"
+
+  # A name only the upstream's commit messages hold is still new in this
+  # home's own commit messages and files.
+  add_line "$repo" docs/notes.md 'the theme stays.' "ask $msg_word"
+  sha=$(git -C "$repo" rev-parse --short HEAD)
+  add_line "$repo" docs/notes.md "and $msg_word agreed."
+  guard "$repo" FM_HOME="$home" -- --new-names
+  [ "$GUARD_STATUS" -eq 1 ] || fail "an upstream contributor's name passed in this home's own text: $GUARD_OUT"
+  assert_contains "$GUARD_OUT" "LEAK_HIT: new-name: commit $sha: $msg_word" "the name in this home's own commit message was missed"
+  assert_contains "$GUARD_OUT" "LEAK_HIT: new-name: docs/notes.md:4: $msg_word" "the name in this home's own file was missed"
+  assert_not_contains "$GUARD_OUT" "bin/up.sh" "an upstream file word was named once the base was recorded"
+  pass "leak guard: the recorded upstream base's files and commit messages are known, while this home's own text is still checked"
+}
+
+# Upstream content is still checked for private words, key shapes and customer
+# data shapes, and an upstream base that is not upstream content is ignored.
+test_upstream_content_still_checked_for_leaks() {
+  local repo="$TMP_ROOT/upstream-leaks" home="$TMP_ROOT/upstream-leaks-home" key up_short
+  key="sk-$(printf 'proj')-$(printf 'p4r_%.0s' 1 2 3 4 5 6)"
+  word_home "$home" 'zandrelt\n'
+  upstream_repo "$repo" "use $key here" "fix it for $(cap zandrelt), call +31 6 0000 0000"
+  record_base "$repo" "$UP_SHA"
+  up_short=$(git -C "$repo" rev-parse --short "$UP_SHA")
+  guard "$repo" FM_HOME="$home" -- --new-names
+  [ "$GUARD_STATUS" -eq 1 ] || fail "a private word and key shape in upstream content passed: $GUARD_OUT"
+  assert_contains "$GUARD_OUT" "LEAK_HIT: private-word: commit $up_short:1:12" "a private word in an upstream commit message was not placed"
+  assert_contains "$GUARD_OUT" "LEAK_HIT: token: bin/up.sh:1:5" "a key shape in an upstream file was not placed"
+  assert_contains "$GUARD_OUT" "LEAK_HIT: phone: commit $up_short:" "a phone number in an upstream commit message was missed"
+  assert_not_contains "$GUARD_OUT" "$key" "the key was printed"
+  assert_not_contains "$GUARD_OUT" "$(cap zandrelt)" "the private word was printed"
+
+  # A recorded base that holds this branch's own merge base, or that is no
+  # commit here, is not upstream content: own words are new again.
+  repo="$TMP_ROOT/upstream-self"
+  word_home "$home" 'unrelated-word\n'
+  upstream_repo "$repo" 'clean line' 'upstream fix'
+  add_line "$repo" docs/notes.md "ask $(cap qverblox)."
+  record_base "$repo" "$(git -C "$repo" rev-parse HEAD)"
+  guard "$repo" FM_HOME="$home" -- --new-names
+  [ "$GUARD_STATUS" -eq 1 ] || fail "an upstream base at this branch's own commit hid its words: $GUARD_OUT"
+  assert_contains "$GUARD_OUT" "LEAK_HIT: new-name: docs/notes.md:3: $(cap qverblox)" "an own word passed under a self-made upstream base"
+  assert_contains "$GUARD_OUT" "upstream base" "the ignored upstream base was not named"
+  record_base "$repo" 0123456789abcdef0123456789abcdef01234567
+  guard "$repo" FM_HOME="$home" -- --new-names
+  [ "$GUARD_STATUS" -eq 1 ] || fail "an upstream base that is no commit here changed the check: $GUARD_OUT"
+  assert_contains "$GUARD_OUT" "LEAK_HIT: new-name: docs/notes.md:3: $(cap qverblox)" "an own word passed under a missing upstream base"
+  pass "leak guard: upstream content is still checked for private words, keys and data shapes, and a base that is not upstream content is ignored"
+}
+
 # Invented values only: none of these reaches a real account, number or person.
 SHAPE_LINES='ping U0QZXW1234 in the thread.
 see https://qverblox-team.slack.com/archives/C0QZXW1234 for it.
@@ -530,6 +622,8 @@ test_new_name_refuses_until_approved
 test_known_words_and_code_identifiers_pass
 test_commit_messages_are_checked
 test_private_words_in_commit_messages_are_placed
+test_upstream_content_is_known
+test_upstream_content_still_checked_for_leaks
 test_data_shapes_refuse
 test_token_shapes_are_placed_never_printed
 

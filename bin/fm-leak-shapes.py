@@ -6,7 +6,7 @@
 #
 # Usage:
 #   fm-leak-shapes.py [--exempt GLOB]... [--names REPO REV]... [--approved FILE]
-#                     [--private FILE] [--tokens-only]
+#                     [--private FILE] [--public-commits REV] [--tokens-only]
 #                     (--files PATH... | --diff BASE | --text LABEL PATH...)
 #
 # INPUT. --files reads whole files (each named relative to the current
@@ -14,7 +14,9 @@
 # directory's checkout (committed and uncommitted changes to tracked files)
 # and the message of every commit in BASE..HEAD there, each shown as
 # `commit <short-sha>`, and --text reads draft text, each file shown by its
-# LABEL. A file matching an --exempt glob (fnmatch on its path) skips the shape
+# LABEL. With --public-commits REV, the message of a commit reachable from REV
+# is already public, so the new-name check skips it; every other check still
+# reads it. A file matching an --exempt glob (fnmatch on its path) skips the shape
 # checks; the new-name check still reads it.
 #
 # NEW NAMES (only with --names). A word is a maximal run of letters, digits and
@@ -176,15 +178,22 @@ def diff_lines(base):
             path = name[2:] if name.startswith("b/") else name
 
 
-def commit_messages(base):
-    """(short sha, message) for every commit in base..HEAD."""
-    out = subprocess.run(["git", "log", "-z", "--format=%h%n%B", base + "..HEAD", "--"], capture_output=True)
+def commit_messages(base, public=None):
+    """(short sha, message, reachable from public) for every commit in base..HEAD."""
+    out = subprocess.run(["git", "log", "-z", "--format=%H%n%h%n%B", base + "..HEAD", "--"], capture_output=True)
     if out.returncode != 0:
         raise RuntimeError("git log %s..HEAD failed: %s" % (base, out.stderr.decode("utf-8", "replace").strip()))
+    reachable = set()
+    if public:
+        rev = subprocess.run(["git", "rev-list", public, "^" + base, "--"], capture_output=True)
+        if rev.returncode != 0:
+            raise RuntimeError("git rev-list %s failed: %s" % (public, rev.stderr.decode("utf-8", "replace").strip()))
+        reachable = set(rev.stdout.decode().split())
     for entry in out.stdout.decode("utf-8", "replace").split("\0"):
-        sha, _, message = entry.strip("\n").partition("\n")
+        full, _, rest = entry.strip("\n").partition("\n")
+        sha, _, message = rest.partition("\n")
         if sha:
-            yield sha, message
+            yield sha, message, full in reachable
 
 
 def approved_words(path):
@@ -217,6 +226,7 @@ def known_words(repo, rev, candidates):
 
 def main(argv):
     exempt, names, approved, private, mode, inputs, tokens_only = [], [], None, None, None, [], False
+    public = None
     i = 0
     try:
         while i < len(argv):
@@ -229,6 +239,8 @@ def main(argv):
                 approved = argv[i + 1]; i += 2
             elif arg == "--private":
                 private = argv[i + 1]; i += 2
+            elif arg == "--public-commits":
+                public = argv[i + 1]; i += 2
             elif arg == "--tokens-only":
                 tokens_only = True; i += 1
             elif arg in ("--files", "--diff", "--text") and mode is None:
@@ -239,11 +251,12 @@ def main(argv):
         mode = None
     if mode is None or (mode == "diff" and len(inputs) != 1) or (mode == "text" and (not inputs or len(inputs) % 2)):
         print("usage: fm-leak-shapes.py [--exempt GLOB]... [--names REPO REV]... [--approved FILE] [--private FILE]"
-              " [--tokens-only]"
+              " [--public-commits REV] [--tokens-only]"
               " (--files PATH... | --diff BASE | --text LABEL PATH...)", file=sys.stderr)
         return 2
 
-    # records: (where-prefix, line number or None, text, shapes apply, line number for a token)
+    # records: (where-prefix, line number or None, text, shapes apply, line number for a token,
+    # new-name check applies)
     def is_exempt(path):
         return any(fnmatch.fnmatch(path, g) for g in exempt)
 
@@ -255,23 +268,23 @@ def main(argv):
                     continue
                 skip = is_exempt(path)
                 for n, line in enumerate(read_lines(path), 1):
-                    records.append((path, n, line, not skip, n))
+                    records.append((path, n, line, not skip, n, True))
         elif mode == "diff":
             for path, n, line in diff_lines(inputs[0]):
-                records.append((path, n, line, not is_exempt(path), n))
-            for sha, message in commit_messages(inputs[0]):
+                records.append((path, n, line, not is_exempt(path), n, True))
+            for sha, message, already_public in commit_messages(inputs[0], public):
                 for n, line in enumerate(message.splitlines(), 1):
-                    records.append(("commit " + sha, None, line, True, n))
+                    records.append(("commit " + sha, None, line, True, n, not already_public))
         else:
             for label, path in zip(inputs[::2], inputs[1::2]):
                 for n, line in enumerate(read_lines(path), 1):
-                    records.append((label, None, line, True, n))
+                    records.append((label, None, line, True, n, True))
     except (OSError, RuntimeError) as e:
         print("fm-leak-shapes.py: %s" % e, file=sys.stderr)
         return 2
 
     hits = []
-    for where, n, line, check, line_no in records:
+    for where, n, line, check, line_no, _ in records:
         if check:
             for column in tokens(line):
                 hits.append(("token", "%s:%d:%d" % (where, line_no, column), None))
@@ -284,7 +297,7 @@ def main(argv):
     entries = [re.compile(r"(?<!\w)%s(?!\w)" % re.escape(e), re.I) for e in listed]
     pattern = listed and re.compile(r"(?<!\w)(?:%s)(?!\w)" % "|".join(map(re.escape, listed)), re.I)
     spans = {}
-    for i, (where, _, line, _, line_no) in enumerate(records):
+    for i, (where, _, line, _, line_no, _) in enumerate(records):
         spans[i] = [m.span() for e in entries for m in e.finditer(line)]
         if pattern and mode == "diff":
             for m in pattern.finditer(line):
@@ -293,7 +306,9 @@ def main(argv):
     if names:
         allowed = approved_words(approved)
         first = {}
-        for i, (where, n, line, _, _) in enumerate(records):
+        for i, (where, n, line, _, _, check_names) in enumerate(records):
+            if not check_names:
+                continue
             for m in WORD.finditer(line):
                 word = m.group()
                 if any(a <= m.start() and m.end() <= b for a, b in spans[i]):
