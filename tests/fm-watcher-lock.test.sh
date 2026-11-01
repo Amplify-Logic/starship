@@ -1375,6 +1375,16 @@ test_watcher_exits_on_state_teardown_during_startup() {
     [ -e "$state/.watch.lock/watcher-path" ] && kill -STOP "$pid" 2>/dev/null && { stopped=1; break; }
   done
   [ "$stopped" -eq 1 ] || fail "watcher never finished claiming its lock: $(cat "$out")"
+  # SIGSTOP pauses only the watcher's own shell: a child it already forked, such
+  # as the mktemp behind a lock's owner directory, keeps running and can write
+  # into the directory mid-removal, leaving it half torn down. Let those
+  # children finish first; caffeinate is long-lived and never writes state.
+  end=$((SECONDS + 20))
+  while [ "$SECONDS" -lt "$end" ] \
+    && ps -A -o ppid= -o stat= -o args= | awk -v p="$pid" '$1 == p && $2 !~ /^Z/ && !/caffeinate/ { found = 1 } END { exit !found }'; do
+    sleep 0.05
+  done
+  [ "$SECONDS" -lt "$end" ] || fail "the paused watcher's children never finished"
   rm -rf "$state"
   mkdir -p "$state"
   kill -CONT "$pid" 2>/dev/null || true
