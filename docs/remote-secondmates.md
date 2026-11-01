@@ -83,6 +83,9 @@ After that bootstrap, every non-doctor `fm-on.sh` target runs through that worke
 It never runs in the SSH process or a Herdr pane.
 Linux uses the same queue and worker protocol without the Aqua-session requirement.
 Each account queue has one serving worker: a worker that finds another worker recorded as the queue's owner stops its own work and exits rather than serving beside it.
+Linux ownership records use the clock-stable `/proc` starttime when it is available, because `ps` start times can drift on hosts such as WSL2 and would otherwise make a healthy worker look dead.
+A pre-update worker whose lock still records bare `ps` lstart still verifies against that legacy rendering, so ensure does not treat the live owner as dead and pile another supervisor beside it; when the configured code root's identity is stale, the ordinary code-identity path stops that one worker and replaces it once.
+[`bin/fm-remote-job-lib.sh`](../bin/fm-remote-job-lib.sh) owns the start identity format and the legacy comparison.
 The [`fm-remote-job-worker.sh` header](../bin/fm-remote-job-worker.sh) owns dispatch cadence and the quiet-scan latency for work arriving after its post-activity burst.
 Active-command and result waits use a separate sampling interval; the [`fm-remote-job-lib.sh` header](../bin/fm-remote-job-lib.sh) owns its defaults, overrides, and completion, cancellation, and timeout latency contract.
 
@@ -321,7 +324,7 @@ A file at `~/.local/bin/fm-remote-entrypoint.sh` that is not Firstmate's own sym
 | Requirement | Tools |
 | --- | --- |
 | Always required | `git`, `jq`, `herdr`, compatible `tasks-axi`, and `treehouse` |
-| At least one of | `claude`, `codex`, `opencode`, `pi`, `pi-signed`, `grok`, or `kimi` |
+| At least one of | `claude`, `codex`, `opencode`, `pi`, `pi-signed`, `grok`, `kimi`, or `omp` |
 | Additionally required on macOS | `lsof`, so the doctor and guard can prove which process owns the session socket |
 
 ## Provision a route
@@ -522,6 +525,7 @@ A process-event source takes these steps:
 - It mirrors content-bearing lines into the primary status channel.
 - It does not carry blank separators.
 
+A failed remote delta read or non-schema remote output is discarded before capture, so it emits no result, leaves the cursor unchanged, and keeps the source registered for retry and liveness recovery.
 The listener holds its claim across an empty wait and across a delta it re-arms, so a line appended during either is collected without waiting for the next supervision cycle.
 The [`fm-remote-delta-read.sh` header](../bin/fm-remote-delta-read.sh) owns snapshot sampling and its line-visibility and wait-window latency contract.
 It stops when that registration is retired, the registered command changes, or the home's owner lease lapses.
@@ -530,6 +534,9 @@ It stops when that registration is retired, the registered command changes, or t
 Only a structured `report=data/....md` pointer offers a document.
 A bare path inside prose is a mention.
 So writing about a document, including one the mate has not created yet, never asks this channel to fetch it.
+
+The adapter cleans up ingest staging, in-flight document-fetch, and source-read temporary files after normal handling, continuity breaks, payload validation failures, and SIGTERM during a fetch or source read.
+The focused cleanup regression is in [`tests/fm-remote-reply.test.sh`](../tests/fm-remote-reply.test.sh).
 
 ### Replay identity
 
@@ -631,6 +638,9 @@ There is no two-phase journal and no additional tasks-axi release requirement.
 ### Inherited-material transfer
 
 Locked startup convergence and `bin/fm-config-push.sh` transfer only the declared inherited-material allowlist.
+The receiver accepts only the items its own remote Firstmate code root declares, so a remote secondmate must run code at least as new as its primary before the primary pushes newly declared inherited material it actually has: an older receiver refuses a present `config/t3code-instances`, and the remaining items of that push are skipped.
+When the primary does not have a newly declared item, the older receiver's refusal of its `absent` record counts as `unchanged` and the push continues, so a home that never configures `config/t3code-instances` converges as before.
+That item still costs one extra `absent` call on every inheritance push to a remote secondmate, on every home, including one that never selects `config/backend=t3code`: the remote job worker runs one home's commands one after another, and the lifecycle test legs that push inheritance measure about 5-12% slower; an older remote code root tolerates the call as above.
 The [`secondmate-provisioning` skill](../.agents/skills/secondmate-provisioning/SKILL.md#charter-and-seed) owns the placement-specific re-read contract, including changed transfers, unchanged retries, and partial or unknown completion.
 
 ### Relaunch a live remote second mate
@@ -716,6 +726,7 @@ bin/fm-test-run.sh tests/fm-secondmate-sync.test.sh
 bin/fm-test-run.sh tests/fm-remote-reply.test.sh
 bin/fm-test-run.sh tests/fm-remote-backlog-handoff.test.sh
 bin/fm-test-run.sh tests/fm-remote-secondmate-lifecycle-e2e.test.sh
+bin/fm-test-run.sh tests/fm-remote-secondmate-omp.test.sh
 bin/fm-test-run.sh tests/fm-remote-secondmate-trace-context.test.sh
 ```
 
