@@ -204,7 +204,7 @@
 #   canonical socket, outside any home's state/) through launch handoff.
 #   On contention a create makes one bounded attempt and falls back to the
 #   ordinary flat layout before any projection mutation. A resume waits a
-#   bounded ~2 minutes for a live holder on the same contention and refuses
+#   bounded 120 s of wall clock for a live holder on the same contention and refuses
 #   only past that bound (it does not degrade flat; a concurrent resume that
 #   outlasts the bound is a hard failure). Pass --herdr-resume-lock-wait to
 #   opt that resume into waiting for the lock without a bound instead, so two
