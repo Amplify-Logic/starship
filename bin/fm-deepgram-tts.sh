@@ -99,7 +99,7 @@ main() {
     --config "$auth_cfg" \
     --header "Content-Type: application/json" \
     --data "$body" \
-    --url "https://api.deepgram.com/v1/speak?model=${model}&encoding=mp3") || {
+    --url "https://api.deepgram.com/v1/speak?model=${model}&encoding=mp3&mip_opt_out=true") || {
     rm -f "$tmp"
     die "curl failed talking to Deepgram"
   }
