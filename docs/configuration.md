@@ -4065,7 +4065,7 @@ Any other content restores as off rather than refusing, because a corrupt prefer
 It holds one word or phrase per line; blank lines and lines starting with `#` are ignored, and matching ignores case and takes whole words only.
 Without the file or one of the lists below, which is the default, the scan is unchanged.
 `bin/fm-leak-guard.sh` checks every tracked file against it, `tests/` included, and its header owns where it looks for the list, so a run from a task's isolated copy or a validation run's copy still finds the home's list.
-`bin/fm-lint.sh` runs that check on every default lint, including the validation pipeline's lint step, so these words are caught before each push; CI has no list, and without one the check is silent.
+`bin/fm-lint.sh` runs that check on every default lint, including the validation pipeline's lint step, and the pre-push hook below runs it on a push typed by hand, so these words are caught before each push; CI has no list, and without one the check is silent.
 
 A home's [private add-on](#private-add-on-configaddon) may carry more words in a file named `leak-words` at the add-on's root, in the same format, and the guard checks them together with the home's own list.
 This is how a private team add-on keeps every teammate's list current: the team's colleague, partner and customer names live in that one file, and `/updatefirstmate` ("update starship") brings each teammate the latest copy with the rest of the add-on.
@@ -4091,6 +4091,14 @@ The full scan CI runs checks those shapes in every tracked file, beside the emai
 The key check finds the provider key and token prefixes `bin/fm_secret_shapes.py` owns, the same list the worker command guard redacts, and an API key assigned a literal value under any name and in any case, such as `SOMETHING_API_KEY=...`; like a listed word, a key is reported by where it is and never printed.
 `bin/fm-lint.sh` runs `--new-names` on every default lint, so the validation pipeline's lint step checks each push; without a word list or an approvals file, as in CI, it is silent.
 `bin/fm-leak-shapes.py` owns what counts as name-shaped, as an occurrence and as each data shape, and the guard's header owns the modes.
+
+A pre-push hook runs these checks on every push from a home's Starship checkout and its private add-on too, so a plain `git push` typed by hand is checked like a push through the pipeline.
+Session-start bootstrap installs it, and keeps it current, in each checkout's hooks directory, which every task worktree of that checkout shares; a pre-push hook already there is kept and runs once the check passes.
+In the Starship checkout a push runs the guard's full scan over every file the branch changes since its merge base with `origin/main`, then `--new-names`, and refuses the push on any hit with the guard's own lines; a push to the validation pipeline's gate is left to the pipeline's lint step.
+In the add-on, which holds its own private words and names, a push is refused only for key and token shapes and customer data shapes in what it adds.
+Only commits the remote does not have yet are checked, and because the checks read the checked-out commit, a ref that brings new commits must be that commit; any other is refused, naming the ref.
+For one push the owner can skip the check with `FM_PUSH_LEAK_CHECK=skip git push ...`, which warns loudly that nothing was checked; git's own `--no-verify` skips every hook silently and is not that escape.
+`bin/fm-leak-prepush.sh`'s header owns the details.
 
 Secondmate homes inherit the merged list as `config/leak-words.inherited` under the primary-authoritative contract in `bin/fm-config-inherit-lib.sh`, so a secondmate that inherits the right to publish to this repository through `config/firstmate-role` also keeps these words out of what it publishes.
 The guard checks a home's own `config/leak-words`, its `config/leak-words.inherited` and its add-on's list together.
