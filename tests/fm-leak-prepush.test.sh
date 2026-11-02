@@ -194,7 +194,33 @@ test_existing_hook_is_kept_and_chained() {
   pass "leak prepush: an existing pre-push hook is kept, chained after a pass and skipped on a refusal"
 }
 
-test_gate_push_and_escape() {
+# The checks read the working tree, so a leak that is committed but undone only
+# on disk must not slip out with the commit that carries it.
+test_dirty_tree_is_refused() {
+  local home="$TMP_ROOT/dirty" key
+  key="$(printf 'SOMETHING_API')_KEY=$(printf 'k3y%.0s' 1 2 3 4 5 6 7)"
+  make_home "$home"
+  "$PREPUSH" install "$home" starship || fail "install failed"
+  git -C "$home" checkout -q -b feature
+  add_line "$home" docs/x.md "use $key here"
+  printf 'a clean line.\n' > "$home/docs/x.md"
+  push "$home" origin feature
+  refused "a push whose leak is undone only in the working tree" "$home.origin.git" feature
+  assert_contains "$PUSH_OUT" "docs/x.md" "the refusal did not name the changed file"
+
+  rm "$home/docs/x.md"
+  push "$home" origin feature
+  refused "a push whose leaking file is deleted only in the working tree" "$home.origin.git" feature
+  assert_contains "$PUSH_OUT" "docs/x.md" "the refusal did not name the deleted file"
+
+  git -C "$home" checkout -q -- docs/x.md
+  push "$home" origin feature
+  refused "the same push once the working tree matches the commit" "$home.origin.git" feature
+  assert_contains "$PUSH_OUT" "LEAK_HIT: token: docs/x.md:1:" "the committed key was not found"
+  pass "leak prepush: a working tree that differs from the pushed commit refuses the push"
+}
+
+test_gate_push_is_left_to_the_pipeline() {
   local home="$TMP_ROOT/gate" gate="$TMP_ROOT/gate-mirror.git" name
   name=$(cap tromvell)
   make_home "$home"
@@ -207,14 +233,9 @@ test_gate_push_and_escape() {
   accepted "a push to the pipeline's gate" "$gate" feature
   assert_contains "$PUSH_OUT" "validation pipeline's gate" "the gate push did not say why it was not checked here"
 
-  FM_PUSH_LEAK_CHECK=off push "$home" origin feature
-  refused "a push with an unknown escape value" "$home.origin.git" feature
-  assert_contains "$PUSH_OUT" "is not 'skip'" "an unknown escape value was not named"
-
-  FM_PUSH_LEAK_CHECK=skip push "$home" origin feature
-  accepted "a push with the named escape" "$home.origin.git" feature
-  assert_contains "$PUSH_OUT" "LEAK CHECK SKIPPED for this push to origin" "the escape was not loud"
-  pass "leak prepush: the pipeline's gate is left to its lint step, and the one-push escape is named and loud"
+  push "$home" origin feature
+  refused "the same branch pushed to origin" "$home.origin.git" feature
+  pass "leak prepush: the pipeline's gate is left to its lint step, and the same branch is checked on origin"
 }
 
 test_only_new_commits_at_the_checked_out_commit() {
@@ -284,11 +305,18 @@ test_install_skips_copies_it_does_not_own() {
   [ ! -e "$repo/.git/hooks/pre-push" ] || fail "a linked worktree or subdirectory installed its primary's hook"
   [ ! -e "$bare/hooks/pre-push" ] || fail "a bare repository got the hook"
 
+  mkdir -p "$TMP_ROOT/own-global-hooks"
+  printf '[core]\n\thooksPath = %s\n' "$TMP_ROOT/own-global-hooks" > "$TMP_ROOT/own-global.gitconfig"
+  out=$(GIT_CONFIG_GLOBAL="$TMP_ROOT/own-global.gitconfig" "$PREPUSH" install "$repo" starship) \
+    && fail "install into a user-global hooks path succeeded"
+  assert_contains "$out" "LEAK_PREPUSH: $repo: core.hooksPath points outside" "the global hooks path was not named"
+  [ -z "$(ls -A "$TMP_ROOT/own-global-hooks")" ] || fail "install wrote into a hooks directory every repository shares"
+
   git -C "$repo" config core.hooksPath .githooks
   out=$("$PREPUSH" install "$repo" starship) && fail "install into a hooks path inside the checkout succeeded"
-  assert_contains "$out" "LEAK_PREPUSH: $repo: core.hooksPath points inside the checkout" "the tracked hooks path was not named"
+  assert_contains "$out" "LEAK_PREPUSH: $repo: core.hooksPath points outside" "the tracked hooks path was not named"
   [ ! -e "$repo/.githooks/pre-push" ] || fail "install wrote into the checkout's tracked files"
-  pass "leak prepush: install covers only a main working tree's own hooks and never writes into tracked files"
+  pass "leak prepush: install covers only a main working tree's own hooks and never writes into tracked or user-global hooks"
 }
 
 test_bootstrap_installs_on_home_and_addon() {
@@ -312,7 +340,8 @@ fm_test_run \
   test_changed_files_get_the_full_scan \
   test_task_worktree_and_pane_wrapper_are_checked \
   test_existing_hook_is_kept_and_chained \
-  test_gate_push_and_escape \
+  test_dirty_tree_is_refused \
+  test_gate_push_is_left_to_the_pipeline \
   test_only_new_commits_at_the_checked_out_commit \
   test_addon_keeps_its_own_words \
   test_install_skips_copies_it_does_not_own \

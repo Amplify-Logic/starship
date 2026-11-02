@@ -4096,8 +4096,9 @@ A pre-push hook runs these checks on every push from a home's Starship checkout 
 Session-start bootstrap installs it, and keeps it current, in each checkout's hooks directory, which every task worktree of that checkout shares; a pre-push hook already there is kept and runs once the check passes.
 In the Starship checkout a push runs the guard's full scan over every file the branch changes since its merge base with `origin/main`, then `--new-names`, and refuses the push on any hit with the guard's own lines; a push to the validation pipeline's gate is left to the pipeline's lint step.
 In the add-on, which holds its own private words and names, a push is refused only for key and token shapes and customer data shapes in what it adds.
-Only commits the remote does not have yet are checked, and because the checks read the checked-out commit, a ref that brings new commits must be that commit; any other is refused, naming the ref.
-For one push the owner can skip the check with `FM_PUSH_LEAK_CHECK=skip git push ...`, which warns loudly that nothing was checked; git's own `--no-verify` skips every hook silently and is not that escape.
+Only commits the remote does not have yet are checked, and because the checks read the checked-out commit and its working tree, a ref that brings new commits must be that commit and the tracked files must match it; any other ref is refused, naming it, and so is a working tree that differs, naming the files that do.
+Bootstrap installs the hook only into the git directory's own hooks; a `core.hooksPath` pointing anywhere else, such as a tracked directory or a user-global one, is reported as a `LEAK_PREPUSH` line and nothing is installed.
+git's own `--no-verify` is the only way past the check.
 `bin/fm-leak-prepush.sh`'s header owns the details.
 
 Secondmate homes inherit the merged list as `config/leak-words.inherited` under the primary-authoritative contract in `bin/fm-config-inherit-lib.sh`, so a secondmate that inherits the right to publish to this repository through `config/firstmate-role` also keeps these words out of what it publishes.

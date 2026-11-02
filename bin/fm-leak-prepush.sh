@@ -14,7 +14,9 @@
 # pushed ref whose commits all sit on that remote's tracking refs, or on the
 # ref being replaced there, and a deletion pass at once. The checks read the
 # checked-out commit and its working tree, so a ref that brings new commits must
-# be the commit checked out here; any other is refused, naming the ref.
+# be the commit checked out here, and the tracked files must match that commit;
+# any other ref is refused, naming it, and so is a working tree that differs,
+# naming the files that do.
 #   starship  the pushing checkout's own bin/fm-leak-guard.sh, in the scope the
 #             pipeline's lint gives it: the guard's full file scan (email,
 #             /Users/<name>, key and token shapes, customer data shapes and
@@ -37,14 +39,13 @@
 # a private word or a token without printing it. A check that cannot run
 # refuses too.
 #
-# ESCAPE. FM_PUSH_LEAK_CHECK=skip git push ... skips the check for that one
-# push and says so loudly on stderr; any other value checks as usual. git's own
-# --no-verify skips every hook silently and is not the escape.
+# BYPASS. git's own --no-verify, which skips every pre-push hook, is the only
+# way past the check.
 #
 # CHAINING. install moves a pre-push hook that is not this one to
 # pre-push.fm-chained in the same directory, and the check runs it, with git's
-# arguments and ref lines, after it passes (or is skipped); a refused push never
-# reaches it. A fleet pane's own pre-push wrapper (bin/fm-git-strip-ai-trailers.sh)
+# arguments and ref lines, after it passes (or leaves a gate push to the
+# pipeline); a refused push never reaches it. A fleet pane's own pre-push wrapper (bin/fm-git-strip-ai-trailers.sh)
 # chains to this hook in turn.
 #
 # Usage:
@@ -54,7 +55,9 @@
 #       when <checkout> is not the top of a non-bare repository's main working
 #       tree (a task worktree or a validation copy shares its primary's hooks);
 #       prints one `LEAK_PREPUSH: <checkout>: <problem>` line on stdout and
-#       exits 1 when it cannot install. Session-start bootstrap
+#       exits 1 when it cannot install, including when core.hooksPath names a
+#       directory outside the repository's git directory, such as a tracked one
+#       or a user-global one every repository on the Mac shares. Session-start bootstrap
 #       (bin/fm-bootstrap.sh) runs it for the home's checkout and its add-on.
 #   fm-leak-prepush.sh check starship|addon <hooks-dir> <remote> <url>
 #       What the installed hook runs: git's ref lines on stdin. Exits 1 to
@@ -117,7 +120,7 @@ install_hook() {  # <checkout> <kind>
   [ ! -d "$hooks" ] || hooks=$(cd "$hooks" && pwd -P) || return 0
   case "$hooks/" in
     "$common/"*) ;;
-    "$top/"*) report "core.hooksPath points inside the checkout ($hooks), so the pre-push leak check is not installed there"; return 1 ;;
+    *) report "core.hooksPath points outside this repository's git directory ($hooks), so the pre-push leak check is not installed there"; return 1 ;;
   esac
   mkdir -p "$hooks" || { report "cannot create $hooks"; return 1; }
   hook="$hooks/pre-push"
@@ -230,6 +233,10 @@ check_refs() {  # <kind> <remote> <refs>
     [ -n "$dest" ] || dest=$rref
   done <<<"$refs"
   [ -n "$dest" ] || return 0
+  if ! git -C "$top" diff --quiet HEAD --; then
+    say "push refused: the leak check reads the working tree, and these tracked files differ from the commit being pushed: $(git -C "$top" -c core.quotePath=false diff --name-only HEAD -- | paste -sd ' ' -); commit, stash or restore them and push again"
+    return 1
+  fi
   case "$kind" in
     starship) check_starship "$top" ;;
     addon) check_addon "$top" "$remote" "$dest" ;;
@@ -239,13 +246,9 @@ check_refs() {  # <kind> <remote> <refs>
 check_push() {  # <kind> <hooks-dir> <remote> <url>
   local kind=$1 hooks=$2 remote=$3 url=$4 refs chained
   refs=$(cat)
-  if [ "${FM_PUSH_LEAK_CHECK:-}" = skip ]; then
-    say "!!! LEAK CHECK SKIPPED for this push to $remote, because FM_PUSH_LEAK_CHECK=skip is set !!!"
-    say "!!! nothing in it was checked for private words, new names, keys or customer data !!!"
-  elif [ "$kind" = starship ] && is_gate "$remote" "$url"; then
+  if [ "$kind" = starship ] && is_gate "$remote" "$url"; then
     say "push to the validation pipeline's gate: its lint step runs the leak check before anything leaves this machine"
   else
-    [ -z "${FM_PUSH_LEAK_CHECK:-}" ] || say "FM_PUSH_LEAK_CHECK=${FM_PUSH_LEAK_CHECK} is not 'skip', so this push is checked as usual"
     check_refs "$kind" "$remote" "$refs" || exit 1
   fi
   chained="$hooks/pre-push.fm-chained"
