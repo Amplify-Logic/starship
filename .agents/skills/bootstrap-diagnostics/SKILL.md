@@ -123,6 +123,8 @@ When any diagnostic needs captain attention, report the plain consequence and re
   When a held item already books that upgrade, or the captain already declined these exact versions, do not ask again; mention it only if the versions changed.
   A `could not check: <tool>, ...` clause, or a line carrying only that clause, means the installed version or the target version could not be read (often offline); it is unknown, never a claim the tool is current, appears at most once a day, and needs no action beyond a mention.
 - `LEAK_PREPUSH: <checkout>: <problem>` - bootstrap could not install the pre-push leak check on this home's checkout or its add-on, so a push typed by hand there is not checked; the line names the problem, and `bin/fm-leak-prepush.sh`'s header owns the hook.
-  When the problem is two other pre-push hooks, ask the captain which one to keep rather than removing either; otherwise fix what the line names and rerun bootstrap.
+  When the problem is two other pre-push hooks, ask the captain which one to keep rather than removing either.
+  When the problem is a `core.hooksPath` outside the repository's git directory (a user-global one, or a tracked hook manager's directory), tell the captain that hand pushes from that checkout go unchecked and ask how they want it handled; that setting is the owner's, so never unset, change or write into it yourself.
+  Otherwise fix what the line names and rerun bootstrap.
 - `FMX: X mode on ...` / `FMX: X mode off ...` - bootstrap confirmed or removed the local Relay poll artifacts (`docs/configuration.md` "Relay (.env)"); the emitted line still carries Relay's former `X mode` wording.
   Only when a running watcher needs the cadence transition applied immediately, restart the home-scoped watcher through the emitted harness supervision protocol; bootstrap deliberately never restarts the watcher itself.
