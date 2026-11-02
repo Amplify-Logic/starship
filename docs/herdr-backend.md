@@ -7,6 +7,8 @@ A 2026-07-02 cleanup bug proved that `HERDR_SESSION` alone is not a safe way to 
 
 Herdr is an agent-native terminal backend with native per-pane agent state and push events.
 Starship's setup makes it the runtime of a fresh home on a Mac and inside WSL 2 on Windows, while a server and any home that already chose tmux keep tmux (see [Setup](#setup)).
+This backend uses the existing `herdr` product line, not the separate preview products herdr-core (`hc`) and herdr-app.
+Those previews are not upgrades to `herdr` 0.9.x and are not currently supported by this adapter.
 Firstmate requires Herdr protocol 14 or newer.
 Broad backend verification covers versions 0.7.1, 0.7.3, 0.7.4, 0.7.5, 0.8.0, and 0.9.5, the version the required real-Herdr CI lane pins.
 Protocol-16 features remain gated by availability.
@@ -27,6 +29,7 @@ Herdr provides the terminal session while Treehouse continues to provide task wo
 | What task metadata records for a Herdr endpoint | [Endpoint metadata](#target-string-and-meta-fields) |
 | How text and keys reach a worker and how delivery is confirmed | [Current transport behavior](#current-transport-behavior) and [Composer and injection safety](#composer-and-injection-safety) |
 | What happens after a Herdr server restart and how liveness is judged | [Restart and liveness behavior](#restart-and-liveness-behavior) |
+| Keeping Firstmate from starting a server a service manager owns | [Externally managed servers](#externally-managed-servers) |
 | How blocked transitions arrive and what happens without protocol 16 | [Push events and polling fallback](#push-events-and-polling-fallback) |
 | Where the away daemon runs and how it stops | [Away-mode supervisor support](#away-mode-supervisor-support) |
 | Stopping or deleting Herdr sessions during verification | [Destructive lab safety](#destructive-lab-safety) |
@@ -47,7 +50,8 @@ Prerequisites:
 - `python3` only for optional protocol-16 presentation-space ordering, native event subscription, and opt-in [project groups](#project-groups) agent-view transport.
 - `perl`, present on stock macOS and Linux, to start a detached server (see [Server ownership](#server-ownership)).
 
-Herdr is dual-licensed AGPL-3.0-or-later or commercial.
+Herdr is Apache-2.0 licensed.
+Releases before 0.8.0 were dual-licensed AGPL-3.0-or-later or commercial.
 Firstmate invokes its CLI as a separate process.
 
 ### Selecting Herdr
@@ -539,7 +543,7 @@ Any of these preserves the candidate and lets session startup continue with at m
 - A failed journal publication or projected workspace create stops that spawn instead of falling back flat.
   So a Herdr create failure surfaces as a spawn failure in every Herdr home, rather than only in homes that opted in.
   Every earlier degradation on the fresh projected-create path (no session server, contended presentation lock, absent or ambiguous parent) still warns and continues flat.
-- Recovery of an existing presentation journal waits a bounded time, about two minutes, for a live holder of the shared presentation lock to finish, and refuses the spawn only if the lock stays held past that bound, rather than falling back flat.
+- Recovery of an existing presentation journal waits a bounded 120 seconds of wall clock for a live holder of the shared presentation lock to finish, and refuses the spawn only if the lock stays held past that bound, rather than falling back flat.
   Default-on makes that refusal reachable in any Herdr home.
   Pass `fm-spawn.sh --herdr-resume-lock-wait` to opt that recovery into waiting for the lock without a bound instead, so concurrent recoveries always serialize.
   The flag applies to a fresh ship or scout spawn that recovers a journal.
@@ -1184,7 +1188,9 @@ Typed-plane text is typed once; only Enter is retried.
 When native `agent get` identity is Claude, the adapter types only into an empty composer.
 A Claude composer that already holds text, or cannot be read, before the send is refused with nothing typed.
 Before that Enter, the adapter continues only when the selected composer shows the typed payload, or only Claude paste placeholders with no literal remainder.
-Every herdr adapter composer read (`fm_backend_herdr_composer_state`, `fm_backend_herdr_composer_content`) captures the full visible viewport, never a bounded tail, while the shared inbox pending-line confirmation read (bin/fm-task-inbox-lib.sh) stays a bounded tail on every backend: an overlay Claude renders between the composer and the pane bottom - the slash-command popup is the verified shape - pushes the composer outside a tail window, and the composer is by definition inside the viewport.
+Every herdr adapter composer read (`fm_backend_herdr_composer_state`, `fm_backend_herdr_composer_content`) captures the full visible viewport, never a bounded tail.
+An overlay Claude renders between the composer and the pane bottom - the slash-command popup is the verified shape - pushes the composer outside a tail window, and the composer is by definition inside the viewport.
+[`bin/fm-task-inbox-lib.sh`](../bin/fm-task-inbox-lib.sh) owns the separate shared inbox pending-line confirmation read.
 Dated measurement: docs/verification/runtime-backends.md "Claude exit behind the slash-command popup".
 
 That comparison ignores whitespace and U+2063, the invisible mark that starts operational inputs and ends the from-firstmate label.
@@ -1266,6 +1272,7 @@ It hands the visible pane's ANSI viewport plus Herdr's capability facts to the f
 - Bare agent-glyph rows, including muse's `⟩`, which the adapter's retired local pattern silently omitted.
 - opencode's left bar.
 - The Pi separator region this adapter pioneered, admitted only when native `agent get` identity is exactly Pi and state is idle or done.
+- Cortex Code's titled rounded top rule, admitted only when native `agent get` identity is exactly `cortex`, which the adapter reads lazily and only when the classifier answers `need-identity` for a titled rounded box holding an agent prompt glyph; the same box on any other pane stays ambiguous, and Cortex is [verified](verification/cortex.md) on Herdr for crewmates and scouts only.
 
 ### Pi composer states
 
@@ -1299,6 +1306,25 @@ Claude Code itself then removes it from the submitted prompt, so a Claude Code p
 No Herdr-specific copy of that protocol exists.
 
 ## Restart and liveness behavior
+
+### Externally managed servers
+
+By default Firstmate starts a session's Herdr server itself, headless, whenever an operation finds it not running.
+That is wrong when a service manager, such as a systemd user unit, owns the server.
+During a unit restart or a `server live-handoff`, `status` can briefly report not running, and a server Firstmate started would race the owner and split panes across two servers.
+
+The owner opts out by writing marker files into the session directory, the directory holding the socket that `herdr --session <name> status --json` reports as `.server.socket`:
+
+| Marker | Written by the owner | Firstmate behavior |
+| --- | --- | --- |
+| `firstmate-server-owner` | Once, for as long as it owns the server; the first line names the owner | Uses a running server; never starts a stopped one, and waits a bounded time for it to report running, then fails naming the owner |
+| `firstmate-server-replacing` | Only for the duration of a restart or handoff | Never starts or uses a server, even one that reports running; waits a bounded time for the marker to clear and the server to report running, then fails naming the marker |
+
+The wait is up to 60 checks half a second apart, 30 seconds in all.
+A replacement marker that clears with no owner marker hands the session back to the default, so Firstmate starts the server if it is still down.
+A replacement marker left behind fails every operation naming its path, so the owner must remove it when the replacement ends.
+Every operation checks the session directory for a replacement marker once, even when the server reports running, so a replacement marker holds callers off the old server as well as the new one.
+That check reuses the `status` read Firstmate already makes, which reports the socket even while the server is stopped ([verification](verification/runtime-backends.md#session-directory)); a Herdr whose `status` omits the socket cannot carry the markers and keeps the default behavior.
 
 ### Husks after a server restart
 

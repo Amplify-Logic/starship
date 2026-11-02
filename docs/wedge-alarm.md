@@ -1,6 +1,6 @@
 # Supervision active alert channels
 
-The away-mode sub-supervisor (`bin/fm-supervise-daemon.sh`) buffers escalations and injects them into firstmate's own pane.
+The away-mode sub-supervisor (`bin/fm-supervise-daemon.sh`) buffers escalations and injects them into Firstmate's own supervisor endpoint.
 When injection cannot confirm a submit past `FM_MAX_DEFER_SECS` (the pane is genuinely busy or wedged, or its Enter is swallowed), `inject_wedge_alarm` raises a loud, rate-limited alarm so the stall never stays invisible.
 
 ## Why an active channel beyond the status-line flash
@@ -37,6 +37,7 @@ A failed channel leaves delivery pending and retries on the next host check afte
   OS-level delivery reaches the captain even when every pane and its status-line is unreadable.
   The title identifies either `firstmate: away-mode escalations WEDGED` or `firstmate: SUPERVISION DOWN`.
 - `herdr` - a herdr UI notification via `herdr notification show`. herdr's own surface, separate from the pane and its status-line.
+- `rex` - writes a blocked `id=fm-wedge` program-status record plus a desktop notification on Firstmate's own Rex pane, and removes the record after the next delivered digest; it needs a Rex supervisor pane, and `auto` never selects it.
 - `command:<cmd>` - run `<cmd>` via `sh -c`, with the alarm summary passed as `$1` and on stdin. Lets the alert reach a phone or pager (ntfy, Slack, SMS) even when the captain is away from the machine entirely.
 
 An absent `config/wedge-alarm` behaves as `auto`, i.e. default-on on macOS.

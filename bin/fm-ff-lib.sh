@@ -7,6 +7,9 @@
 # path:
 #   - /updatefirstmate (bin/fm-update.sh) pulls from origin: base_mode "origin",
 #     or "release:<name>" for a home on the release channel.
+#     With an optional config/self-update-source, it instead fetches that one
+#     remote branch for the primary and passes it as a local base, and its
+#     secondmates follow the primary's resulting commit (bin/fm-update.sh owns it).
 #   - the local-HEAD secondmate sync (bin/fm-spawn.sh on launch, bin/fm-bootstrap.sh
 #     on startup) follows the PRIMARY checkout's current default-branch commit:
 #     base_mode is that local commit, with NO fetch and no origin dependency.
@@ -391,7 +394,13 @@ live_secondmate_meta_records() {
 #                  dependency (the local-HEAD secondmate sync). The commit must
 #                  already exist in the target's object store, which it always does
 #                  for a worktree of this same repo; a standalone clone that lacks
-#                  it is skipped rather than fetched.
+#                  it is skipped rather than fetched, unless the caller sets
+#                  FF_IMPORT_FROM to a local repository path that holds it. Then
+#                  that one commit is imported from there first (objects only,
+#                  no ref of the target moves), the same read-only import the
+#                  remote home sync uses. /updatefirstmate sets it to the primary
+#                  checkout when config/self-update-source is in use, because no
+#                  origin fetch then refreshes a standalone clone.
 # With an upstream (release mode, or the optional 8th argument naming a commit
 # already in the target's object store), a target that is not behind the base
 # but holds no commit outside that upstream is already past the base, and is
@@ -404,6 +413,7 @@ live_secondmate_meta_records() {
 # in this file's header.
 FF_STATUS=""
 FF_INSTR=""
+FF_IMPORT_FROM=""
 ff_target() {
   local dir=$1 label=$2 base_mode=$3 allow_detached=${4:-no} ignore_seed_marker=${5:-no}
   local secondmate_id=${6:-} reconciliation_state=${7:-} upstream=${8:-}
@@ -441,7 +451,13 @@ ff_target() {
       fi
       base="origin/$default"
       ;;
-    *) base="$base_mode" ;;
+    *)
+      base="$base_mode"
+      if [ -n "$FF_IMPORT_FROM" ] \
+        && ! git -C "$dir" rev-parse --verify --quiet "$base^{commit}" >/dev/null; then
+        git -C "$dir" fetch --quiet --no-tags -- "$FF_IMPORT_FROM" "$base" >/dev/null 2>&1 || true
+      fi
+      ;;
   esac
   if [ "${base_mode#release:}" != "$base_mode" ]; then
     release=${base_mode#release:}

@@ -111,7 +111,7 @@ It rides the same 30-second observation as the buckets above, so it never adds a
 The server reads it from `bin/fm-routing-snapshot.sh --json`, whose header owns the `fm-routing.v1` fields, and joins it to the bearings read the glance already made:
 
 - The model roster is every rule in `config/crew-dispatch.json`, as a short label cut from its `when` text, beside its model and effort, then the default.
-- The decisions are the newest few lines of the local dispatch decision record ([`docs/configuration.md`](configuration.md#typed-dispatch-resolution-env-typesafe_api_key) owns it): outcome, probability, rule, and chosen profile.
+- The decisions are the newest few lines of the local dispatch decision record ([`docs/configuration.md`](configuration.md#typed-dispatch-resolution-env-fm_dispatch_provider-fm_dispatch_model) owns it): outcome, probability, rule, and chosen profile.
 - The live workers are the bearings `in_flight` rows, so they list exactly the work Under way, Waiting, and Needs you already show, each with its record's kind, model, effort, and spawn time.
 - The graph shows the same rows under firstmate, plus each second mate from the bearings `secondmates` rows with its own workers hanging beneath it.
 
