@@ -34,6 +34,7 @@
 #                 "STACK_TOOLS: behind: <tool> installed <version>, latest|pinned
 #                  <version> (small update|quiet-window upgrade); ...",
 #                 "STACK_TOOLS: could not check: <tool>, ...",
+#                 "LEAK_PREPUSH: <checkout>: <problem>",
 #                 "FMX: X mode on ..." or "FMX: X mode off ...".
 #          When a RUNNING secondmate home is fast-forwarded, its target is
 #          firstmate's own current default-branch commit. A local worktree uses
@@ -145,6 +146,9 @@
 #          sessions stay quiet.
 #          Bootstrap hooks (bin/fm-addon.sh) add their own read-only lines,
 #          which the hook's owner documents.
+#          Outside detect-only, the local phase installs or refreshes the
+#          pre-push leak check (bin/fm-leak-prepush.sh) on FM_ROOT and on the
+#          add-on checkout; LEAK_PREPUSH names a checkout it could not install on.
 #          X mode is OPTIONAL and inert unless FM_HOME/.env has a non-empty
 #          FMX_PAIRING_TOKEN. When opted in, bootstrap requires curl+jq, writes
 #          the relay poll shim and 30s cadence config, and prints an FMX line.
@@ -1989,6 +1993,14 @@ if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then
   # next session; bin/fm-opt-in-skills.sh owns the switches and the links.
   if local_phase && [ -x "$SCRIPT_DIR/fm-opt-in-skills.sh" ]; then
     FM_HOME="$FM_HOME" FM_CONFIG_OVERRIDE="$CONFIG" "$SCRIPT_DIR/fm-opt-in-skills.sh" sync "$FM_ROOT" || true
+  fi
+  # Keep the pre-push leak check on this checkout and the add-on's, so a push
+  # typed by hand is checked too; bin/fm-leak-prepush.sh owns the hook.
+  if local_phase && [ -x "$SCRIPT_DIR/fm-leak-prepush.sh" ]; then
+    "$SCRIPT_DIR/fm-leak-prepush.sh" install "$FM_ROOT" starship || true
+    if addon_root=$(FM_HOME="$FM_HOME" FM_CONFIG_OVERRIDE="$CONFIG" "$SCRIPT_DIR/fm-addon.sh" root 2>/dev/null); then
+      "$SCRIPT_DIR/fm-leak-prepush.sh" install "$addon_root" addon || true
+    fi
   fi
   # Adopt existing durable contribution links without making a network call.
   # Detection-only startup must never publish a check registration.

@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 # fm-leak-shapes.py - the new-name check and the customer-data shape checks of
-# the public-repo leak guard. bin/fm-leak-guard.sh is the only caller and owns
-# when each check runs; docs/configuration.md "Private leak words" owns the
-# operator contract.
+# the public-repo leak guard. bin/fm-leak-guard.sh calls it and owns when each
+# check runs; bin/fm-leak-prepush.sh's add-on check is the only other caller,
+# running the shape checks itself with --exempt and --diff or --files.
+# docs/configuration.md "Private leak words" owns the operator contract.
 #
 # Usage:
 #   fm-leak-shapes.py [--exempt GLOB]... [--names REPO REV]... [--approved FILE]

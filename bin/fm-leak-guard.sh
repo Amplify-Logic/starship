@@ -32,8 +32,9 @@
 # the root of the home's private add-on (bin/fm-addon.sh), both in the same
 # format, add their words to the home's own; fm_leak_words_write in
 # bin/fm-leak-lib.sh owns that merge. No list means no word check; CI has none.
-# bin/fm-lint.sh runs --private-words on every default lint, which is how the
-# list is checked before each push.
+# bin/fm-lint.sh runs --private-words on every default lint, and the pre-push
+# hook bin/fm-leak-prepush.sh installs in the Starship checkout scans the
+# files a hand push changes, which is how the list is checked before each push.
 #
 # WHERE, NEVER WHAT. A private word or a token is reported only by where it
 # sits, `LEAK_HIT: private-word: <where>:<line>:<column>` or `LEAK_HIT: token:
