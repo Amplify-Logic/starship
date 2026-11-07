@@ -323,6 +323,8 @@ run_legacy_identity_takeover() {  # <case> <successor-first>
   old_out="$dir/old-watch.out"
   new_out="$dir/new-watch.out"
   mkdir -p "$no_proc"
+  # A task in flight gives the downtime recovery something to surface.
+  : > "$state/in-flight-task.meta"
   PATH="$fakebin:$PATH" FM_PROC_ROOT_OVERRIDE="$no_proc" TZ=America/Los_Angeles FM_HOME="$dir" FM_STATE_OVERRIDE="$state" FM_GUARD_GRACE=1 FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$old_out" 2>&1 &
   old=$!
   i=0
@@ -1255,6 +1257,8 @@ test_watch_restart_rejects_reused_pid() {
   state="$dir/state"
   fakebin="$dir/fakebin"
   out="$dir/restart.out"
+  # A task in flight gives the downtime recovery something to surface.
+  : > "$state/in-flight-task.meta"
   sleep 300 &
   live=$!
   mkdir "$state/.watch.lock"
@@ -1624,6 +1628,8 @@ test_arm_starts_and_self_heals() {
       printf '%s\n' "$WATCH" > "$state/.watch.lock/watcher-path"
       printf '%s\n' "dead watcher identity" > "$state/.watch.lock/pid-identity"
       touch "$state/.last-watcher-beat"
+      # A task in flight gives the downtime recovery something to surface.
+      : > "$state/in-flight-task.meta"
     fi
     PATH="$fakebin:$PATH" FM_HOME="$dir" FM_POLL=5 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH_ARM" > "$armout" &
     armpid=$!

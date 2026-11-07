@@ -372,6 +372,8 @@ test_attached_arm_hands_a_stalled_holder_to_its_replacement() {
   # The owner's retry: a fresh arm reaches the watcher's eviction path, and the
   # replacement surfaces an ordinary wake instead of the refusal that used to
   # end in the auto-arm FAILED notice.
+  # A task in flight gives the downtime recovery something to surface.
+  : > "$state/in-flight-task.meta"
   PATH="$fakebin:$PATH" FM_HOME="$dir" FM_STATE_OVERRIDE="$state" \
     FM_POLL=1 FM_SIGNAL_GRACE=0 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
     FM_ARM_CONFIRM_TIMEOUT=10 FM_GUARD_GRACE=5 FM_WATCHER_STALL_BOUND=12 "$WATCH_ARM" > "$rearmout" 2>&1 &
@@ -564,12 +566,31 @@ test_rearm_resurfaces_durable_queue_and_remote_open_decision() {
   start_rearm_arm "$home" "$state" "$fakebin" "$dir/recovery-successor-arm.out"
   is_live_non_zombie "$ARM_PID" || fail "recovery successor did not stay live after the drain"
 
-  # A later down interval can have no new queue rows at all. The unchanged
-  # remote decision must still trigger a recovery wake and be folded again.
+  # A later down interval can have no new queue rows at all. With only the
+  # owner's already-seen decision open and nothing in flight, the downtime has
+  # nothing to recover and must stay quiet; the decision is still folded at the
+  # next drain.
   kill "$ARM_PID" 2>/dev/null || true
   wait "$ARM_PID" 2>/dev/null || true
+  case "$(cat "$state/.watcher-down" 2>/dev/null || true)" in
+    pending:downtime:*|announced:downtime:*) ;;
+    *) fail "interrupted successor did not record its downtime: $(cat "$state/.watcher-down" 2>/dev/null)" ;;
+  esac
+  start_rearm_arm "$home" "$state" "$fakebin" "$dir/stale-decision-arm.out"
+  wait_for_file_text "$state/.watcher-down" 'acked:downtime:' \
+    || fail "downtime with only a stale open decision was not retired: $(cat "$state/.watcher-down" 2>/dev/null) $(cat "$dir/stale-decision-arm.out")"
+  is_live_non_zombie "$ARM_PID" \
+    || fail "downtime with only a stale open decision woke the supervisor: $(cat "$dir/stale-decision-arm.out")"
+  ! grep -F 'check: rearm-resurface' "$dir/stale-decision-arm.out" >/dev/null \
+    || fail "downtime with only a stale open decision emitted a recovery wake"
+
+  # The same empty-queue downtime with a task in flight still wakes, and its
+  # recovery drain re-folds the unchanged open decision.
+  kill "$ARM_PID" 2>/dev/null || true
+  wait "$ARM_PID" 2>/dev/null || true
+  : > "$state/in-flight-task.meta"
   start_rearm_arm "$home" "$state" "$fakebin" "$dir/decision-only-arm.out"
-  wait_for_exit "$ARM_PID" "$REARM_EXIT_POLLS" || fail "decision-only re-arm did not surface the open decision"
+  wait_for_exit "$ARM_PID" "$REARM_EXIT_POLLS" || fail "in-flight empty-queue re-arm did not surface recovery"
   decision_recovery_arm=$ARM_PID
   start_rearm_arm "$home" "$state" "$fakebin" "$dir/decision-handling-successor.out" "$decision_recovery_arm"
   is_live_non_zombie "$ARM_PID" || fail "decision handling successor re-triggered before the drain"
@@ -609,7 +630,7 @@ test_rearm_resurfaces_durable_queue_and_remote_open_decision() {
   is_live_non_zombie "$ARM_PID" || fail "acknowledged decision recovery did not leave a live successor"
   kill "$ARM_PID" 2>/dev/null || true
   wait "$ARM_PID" 2>/dev/null || true
-  pass "watch-arm: re-arm surfaces every queued wake and an open remote decision after downtime"
+  pass "watch-arm: re-arm surfaces every queued wake, folds an open remote decision, and stays quiet on a stale decision alone"
 }
 
 # A contended host starves the short-lived processes a recovery cycle runs while
@@ -806,6 +827,8 @@ test_marker_publish_failure_retains_recovery_evidence() {
   state="$dir/state"
   fakebin="$dir/fakebin"
   mkdir -p "$home/data"
+  # A task in flight gives the downtime recovery something to surface.
+  : > "$state/in-flight-task.meta"
 
   start_rearm_arm "$home" "$state" "$fakebin" "$dir/first-arm.out"
   first_arm=$ARM_PID
@@ -969,6 +992,8 @@ test_malformed_marker_is_quarantined_once() {
   fakebin="$dir/fakebin"
   mkdir -p "$home/data" "$state/.watcher-down"
   printf 'foreign state\n' > "$state/.watcher-down/payload"
+  # A task in flight gives the downtime recovery something to surface.
+  : > "$state/in-flight-task.meta"
 
   start_rearm_arm "$home" "$state" "$fakebin" "$dir/recovery-arm.out"
   wait_for_exit "$ARM_PID" "$REARM_EXIT_POLLS" || fail "malformed marker did not produce a bounded recovery wake"
@@ -1023,6 +1048,8 @@ test_restart_preserves_recovery_across_reused_pid_lock() {
   armout="$dir/arm.out"
   owner="$state/.watch.lock.owner.fixture"
   mkdir -p "$home/data" "$owner"
+  # A task in flight gives the downtime recovery something to surface.
+  : > "$state/in-flight-task.meta"
 
   sleep 300 &
   unrelated=$!
@@ -1079,6 +1106,8 @@ test_idle_lavish_source_stays_quiet_until_result() {
   first_out="$dir/first-arm.out"
   idle_out="$dir/idle-arm.out"
   mkdir -p "$home/data"
+  # A task in flight gives the downtime recovery something to surface.
+  : > "$state/in-flight-task.meta"
   cat > "$source" <<'SH'
 #!/usr/bin/env bash
 set -u
@@ -1150,6 +1179,8 @@ test_append_wakes_live_announced_watcher() {
   first_out="$dir/first-arm.out"
   idle_out="$dir/idle-arm.out"
   mkdir -p "$home/data"
+  # A task in flight gives the downtime recovery something to surface.
+  : > "$state/in-flight-task.meta"
   printf 'pending:downtime:append-after-empty.fixture\n' > "$state/.watcher-down"
 
   start_rearm_arm "$home" "$state" "$fakebin" "$first_out"
@@ -1171,6 +1202,70 @@ test_append_wakes_live_announced_watcher() {
   grep "$(printf '\tcheck\tinbox:fixture\t')" "$state/.wake-queue" >/dev/null \
     || fail "the appended wake was not durable when recovery surfaced"
   pass "watch-arm: appending work reopens an announced empty recovery"
+}
+
+# Monitoring downtime with nothing queued and no task in flight left nothing
+# for the supervisor to recover, yet the re-arm used to close its cycle with a
+# recovery wake anyway: a model turn that could only end in a no-op. The
+# downtime alone must stay quiet, while durable work queued afterwards still
+# surfaces as recovery.
+test_idle_downtime_recovery_stays_quiet() {
+  local dir home state fakebin armout i
+  dir=$(make_case idle-downtime-recovery)
+  home="$dir/home"
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  armout="$dir/arm.out"
+  mkdir -p "$home/data"
+  printf 'pending:downtime:idle-downtime.fixture\n' > "$state/.watcher-down"
+
+  start_rearm_arm "$home" "$state" "$fakebin" "$armout"
+  # The watcher polls every second here, so this spans several recovery checks.
+  i=0
+  while [ "$i" -lt 40 ] && is_live_non_zombie "$ARM_PID"; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  if ! is_live_non_zombie "$ARM_PID"; then
+    wait "$ARM_PID" 2>/dev/null || true
+    fail "downtime with nothing queued and nothing in flight woke the supervisor: $(cat "$armout")"
+  fi
+  ! grep -F 'check: rearm-resurface' "$armout" >/dev/null \
+    || fail "idle downtime emitted a recovery wake: $(cat "$armout")"
+
+  append_wake "$state" check inbox:idle-fixture 'check: captain inbox note fixture' \
+    || fail "the generic producer could not append its wake"
+  wait_for_exit "$ARM_PID" 80 \
+    || fail "work queued after idle downtime did not wake the supervisor"
+  grep -F 'check: rearm-resurface' "$armout" >/dev/null \
+    || fail "work queued after idle downtime did not surface as recovery: $(cat "$armout")"
+  grep "$(printf '\tcheck\tinbox:idle-fixture\t')" "$state/.wake-queue" >/dev/null \
+    || fail "the queued wake was not durable when recovery surfaced"
+  ack_wakes "$state" || fail "the recovered wake could not be acknowledged"
+  pass "watch-arm: idle downtime stays quiet and later queued work still surfaces"
+}
+
+# The same empty-queue downtime with a task in flight still wakes, because a
+# worker may have changed state while nothing was watching it.
+test_downtime_recovery_with_work_in_flight_wakes() {
+  local dir home state fakebin armout
+  dir=$(make_case in-flight-downtime-recovery)
+  home="$dir/home"
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  armout="$dir/arm.out"
+  mkdir -p "$home/data"
+  : > "$state/in-flight-task.meta"
+  printf 'pending:downtime:in-flight-downtime.fixture\n' > "$state/.watcher-down"
+
+  start_rearm_arm "$home" "$state" "$fakebin" "$armout"
+  wait_for_exit "$ARM_PID" 80 \
+    || fail "downtime with a task in flight did not wake the supervisor: $(cat "$armout")"
+  grep -F 'check: rearm-resurface' "$armout" >/dev/null \
+    || fail "downtime with a task in flight did not surface as recovery: $(cat "$armout")"
+  [ ! -s "$state/.wake-queue" ] \
+    || fail "the in-flight recovery unexpectedly queued durable work"
+  pass "watch-arm: downtime with a task in flight still surfaces as recovery"
 }
 
 test_append_wakes_handling_successor() {
@@ -1632,6 +1727,8 @@ test_take_over_preserves_downtime_from_watcher_self_exit() {
   state="$dir/state"
   fakebin="$dir/fakebin"
   armout="$dir/arm.out"
+  # A task in flight gives the downtime recovery something to surface.
+  : > "$state/in-flight-task.meta"
   real_touch=$(command -v touch)
   printf '#!/usr/bin/env bash\nif [ "$*" = "%s/.secondmate-liveness-tick" ] && [ -e "%s/fail-tick" ]; then exit 1; fi\nexec "%s" "$@"\n' \
     "$state" "$dir" "$real_touch" > "$fakebin/touch"
@@ -2220,6 +2317,8 @@ test_restart_preserves_recovery_across_reused_pid_lock
 test_markerless_legacy_queue_is_recovered_on_arm
 test_idle_lavish_source_stays_quiet_until_result
 test_append_wakes_live_announced_watcher
+test_idle_downtime_recovery_stays_quiet
+test_downtime_recovery_with_work_in_flight_wakes
 test_handling_window_close_keeps_the_acknowledgement_valid
 test_moved_generation_acknowledgement_is_self_healing
 test_downtime_marker_does_not_follow_symlink

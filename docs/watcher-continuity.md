@@ -225,7 +225,7 @@ In its `--claude` mode it cooperates with the auto-arm.
 ## Recovery episode acknowledgement
 
 A recovery episode is one generation of the `state/.watcher-down` marker.
-It is retired only by the generation-bound acknowledgement the drain prints as `WAKE_ACK_REQUIRED`.
+It is retired by the generation-bound acknowledgement the drain prints as `WAKE_ACK_REQUIRED`, or by the watcher itself when it has nothing to recover (see [Announcement](#announcement)).
 The away return brief treats a still-open handling episode as a wake in progress, not watcher downtime; an open downtime episode remains a gap.
 
 ### Announcement
@@ -235,6 +235,8 @@ The first recovery marks that generation announced, and later empty-queue arms l
 A non-successor watcher start checks the durable queue and recovery marker under their locks.
 If an announced-but-unacknowledged episode has an empty queue, the arm leaves that generation announced, making repeated empty-queue arms idempotent while a long-poll source is merely alive.
 If a durable row arrived after the announcement, the arm opens a fresh pending downtime generation so buried work still resurfaces once.
+A non-successor watcher about to wake on a downtime episode first checks for something to recover: when the durable queue is empty and no task is in flight (`fm_supervision_status` in `bin/fm-supervision-lib.sh` owns that count), it retires the announced episode as acknowledged and keeps supervising instead of waking for a turn with nothing to do.
+The retirement re-reads the queue under the queue and marker locks, so a row appended after that check opens a fresh generation that still wakes; anything else that stops the retirement falls back to the wake.
 A Codex foreground checkpoint skips the announced-episode reopen transition, so an already-announced generation stays announced while the checkpoint continues its bounded supervision.
 Its ordinary arm check still announces a never-announced generation, including one made pending by a durable queue append during the checkpoint.
 
@@ -591,12 +593,13 @@ They also prove that a legacy or handoff-phase watcher marker from an absent rep
 
 - Durable queue replay.
 - Real remote parent-replies ingestion into the authoritative status log.
-- Decision-only OPEN DECISIONS recovery.
+- Empty-queue OPEN DECISIONS recovery while a task is in flight, and quiet downtime when only a stale open decision remains.
 - Interrupted handling replay.
 - Generation-bound acknowledgement.
 - A persistent live successor after recovery.
 - An idle live Lavish source that stays quiet until its real result wakes promptly.
 - An append that reopens an announced empty recovery.
+- Downtime with nothing queued and no task in flight that stays quiet until later queued work surfaces as recovery, and the same downtime with a task in flight that still wakes.
 - An external append beside a handling successor's inherited rows that surfaces both before and after the prior handling turn acknowledges its rows, including after a lost or malformed sequence counter and when the new row repeats an acknowledged inherited row byte for byte.
 - A watcher close inside the handling window that must leave the printed acknowledgement valid.
 - A re-arm whose recovery cycle is slowed after confirmation and must still surface rather than read as a watcher that stayed live.

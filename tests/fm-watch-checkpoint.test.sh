@@ -211,6 +211,8 @@ test_never_announced_recovery_is_announced_once() {
   out="$home/out.txt"
   err="$home/err.txt"
   printf 'pending:downtime:unreported.1.aaa\n' > "$home/state/.watcher-down"
+  # A task in flight gives the downtime recovery something to surface.
+  : > "$home/state/in-flight-task.meta"
 
   status=0
   FM_HOME="$home" FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 \
