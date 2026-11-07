@@ -566,12 +566,31 @@ test_rearm_resurfaces_durable_queue_and_remote_open_decision() {
   start_rearm_arm "$home" "$state" "$fakebin" "$dir/recovery-successor-arm.out"
   is_live_non_zombie "$ARM_PID" || fail "recovery successor did not stay live after the drain"
 
-  # A later down interval can have no new queue rows at all. The unchanged
-  # remote decision must still trigger a recovery wake and be folded again.
+  # A later down interval can have no new queue rows at all. With only the
+  # owner's already-seen decision open and nothing in flight, the downtime has
+  # nothing to recover and must stay quiet; the decision is still folded at the
+  # next drain.
   kill "$ARM_PID" 2>/dev/null || true
   wait "$ARM_PID" 2>/dev/null || true
+  case "$(cat "$state/.watcher-down" 2>/dev/null || true)" in
+    pending:downtime:*|announced:downtime:*) ;;
+    *) fail "interrupted successor did not record its downtime: $(cat "$state/.watcher-down" 2>/dev/null)" ;;
+  esac
+  start_rearm_arm "$home" "$state" "$fakebin" "$dir/stale-decision-arm.out"
+  wait_for_file_text "$state/.watcher-down" 'acked:downtime:' \
+    || fail "downtime with only a stale open decision was not retired: $(cat "$state/.watcher-down" 2>/dev/null) $(cat "$dir/stale-decision-arm.out")"
+  is_live_non_zombie "$ARM_PID" \
+    || fail "downtime with only a stale open decision woke the supervisor: $(cat "$dir/stale-decision-arm.out")"
+  ! grep -F 'check: rearm-resurface' "$dir/stale-decision-arm.out" >/dev/null \
+    || fail "downtime with only a stale open decision emitted a recovery wake"
+
+  # The same empty-queue downtime with a task in flight still wakes, and its
+  # recovery drain re-folds the unchanged open decision.
+  kill "$ARM_PID" 2>/dev/null || true
+  wait "$ARM_PID" 2>/dev/null || true
+  : > "$state/in-flight-task.meta"
   start_rearm_arm "$home" "$state" "$fakebin" "$dir/decision-only-arm.out"
-  wait_for_exit "$ARM_PID" "$REARM_EXIT_POLLS" || fail "decision-only re-arm did not surface the open decision"
+  wait_for_exit "$ARM_PID" "$REARM_EXIT_POLLS" || fail "in-flight empty-queue re-arm did not surface recovery"
   decision_recovery_arm=$ARM_PID
   start_rearm_arm "$home" "$state" "$fakebin" "$dir/decision-handling-successor.out" "$decision_recovery_arm"
   is_live_non_zombie "$ARM_PID" || fail "decision handling successor re-triggered before the drain"
@@ -611,7 +630,7 @@ test_rearm_resurfaces_durable_queue_and_remote_open_decision() {
   is_live_non_zombie "$ARM_PID" || fail "acknowledged decision recovery did not leave a live successor"
   kill "$ARM_PID" 2>/dev/null || true
   wait "$ARM_PID" 2>/dev/null || true
-  pass "watch-arm: re-arm surfaces every queued wake and an open remote decision after downtime"
+  pass "watch-arm: re-arm surfaces every queued wake, folds an open remote decision, and stays quiet on a stale decision alone"
 }
 
 # A contended host starves the short-lived processes a recovery cycle runs while

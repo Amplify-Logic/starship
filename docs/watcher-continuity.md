@@ -235,7 +235,7 @@ The first recovery marks that generation announced, and later empty-queue arms l
 A non-successor watcher start checks the durable queue and recovery marker under their locks.
 If an announced-but-unacknowledged episode has an empty queue, the arm leaves that generation announced, making repeated empty-queue arms idempotent while a long-poll source is merely alive.
 If a durable row arrived after the announcement, the arm opens a fresh pending downtime generation so buried work still resurfaces once.
-A non-successor watcher about to wake on a downtime episode first checks for something to recover: when the durable queue is empty, no task is in flight (`fm_supervision_status` in `bin/fm-supervision-lib.sh` owns that count), and no decision is still open, it retires the announced episode as acknowledged and keeps supervising instead of waking for a turn with nothing to do.
+A non-successor watcher about to wake on a downtime episode first checks for something to recover: when the durable queue is empty and no task is in flight (`fm_supervision_status` in `bin/fm-supervision-lib.sh` owns that count), it retires the announced episode as acknowledged and keeps supervising instead of waking for a turn with nothing to do.
 The retirement re-reads the queue under the queue and marker locks, so a row appended after that check opens a fresh generation that still wakes; anything else that stops the retirement falls back to the wake.
 A Codex foreground checkpoint skips the announced-episode reopen transition, so an already-announced generation stays announced while the checkpoint continues its bounded supervision.
 Its ordinary arm check still announces a never-announced generation, including one made pending by a durable queue append during the checkpoint.
@@ -593,7 +593,7 @@ They also prove that a legacy or handoff-phase watcher marker from an absent rep
 
 - Durable queue replay.
 - Real remote parent-replies ingestion into the authoritative status log.
-- Decision-only OPEN DECISIONS recovery.
+- Empty-queue OPEN DECISIONS recovery while a task is in flight, and quiet downtime when only a stale open decision remains.
 - Interrupted handling replay.
 - Generation-bound acknowledgement.
 - A persistent live successor after recovery.

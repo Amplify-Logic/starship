@@ -4116,16 +4116,12 @@ resurface_after_downtime() {
   wake "check: rearm-resurface"
 }
 
-# What a downtime recovery wake gives the supervisor to act on: a queued row, a
-# task in flight (fm_supervision_status owns that count), or a still-open
-# decision the recovery drain re-folds. A scan that cannot read counts as work.
+# What a downtime recovery wake gives the supervisor to act on: a queued row or
+# a task in flight (fm_supervision_status owns that count).
 downtime_recovery_has_work() {
-  local open
   [ ! -s "$FM_WAKE_QUEUE" ] || return 0
   fm_supervision_status "$STATE"
-  [ "$FM_SUP_IN_FLIGHT" -eq 0 ] || return 0
-  open=$(scan_open_decisions_incremental "$STATE" 2>/dev/null) || return 0
-  [ -n "$open" ]
+  [ "$FM_SUP_IN_FLIGHT" -ne 0 ]
 }
 
 WATCH_POLLING=1
