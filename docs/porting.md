@@ -233,6 +233,20 @@ The seed transport is not a shared ongoing sync channel.
 If a specific file later needs to move by hand, that is a named one-off the captain triggers, with an explicit source of truth for that file.
 Each home may also push *its own* portable material to *its own* private backup remote; those backups must not cross.
 
+### Leaving notes between two homes
+
+Two homes, on two Macs joined by Tailscale, can leave each other notes in their [captain inbox](scripts.md) over SSH.
+Use a key that can do nothing but leave a note from the start, never a plain key: a plain key in `authorized_keys` hands the other machine a full shell on this one.
+On the receiving Mac, add the other machine's key to `~/.ssh/authorized_keys` as one line:
+
+```text
+restrict,from="<other machine's Tailscale address>",command="<this Firstmate checkout>/bin/fm-inbox.sh note -" ssh-ed25519 AAAA... notes-from-other-home
+```
+
+`restrict` turns off forwarding and terminals, `from=` accepts the key only from that machine, and the forced command takes whatever is sent on stdin as one note.
+Then turn on Remote Login in System Settings, General, Sharing, and set "Allow access for" to "Only these users" with just your own account.
+The other machine sends a note with `echo "text of the note" | ssh -i <its notes key> <this Mac>`.
+
 ## Required tooling
 
 Do not maintain a second missing-tool list here.

@@ -130,6 +130,17 @@ The preference persists for the effective Firstmate home, and toggling it off re
 [Calm's current behavior and supported limits](docs/calm.md) are separate from its [version-scoped maintainer evidence](docs/calm-mode-feasibility.md).
 Pi's `/supervision-model` command pins a cheaper model and a shallower reasoning effort for the supervision branch alone, from the eligible models and thinking levels Pi itself reports, and with no pin the branch normally follows your own conversation's model and effort; see the [configuration schema](docs/configuration.md#pi-supervision-branch-model-and-effort-configsupervision-branch-model-configsupervision-branch-effort).
 
+### Recommended order on a new Mac
+
+A first install on a fresh 8 GB MacBook settled this order:
+
+1. Let the first mate install its own tools first, before any optional extra.
+2. Install Tailscale, if you use it, with Tailscale's own signed installer rather than Homebrew, since Homebrew cannot ask for the Mac password from an agent session.
+3. Restart Claude Code once after setup so its background helpers load.
+4. On an 8 GB Mac, run one worker at a time.
+5. If two Starship homes should leave each other notes, give each a [restricted notes-only key](docs/porting.md#leaving-notes-between-two-homes) from the start.
+6. Set up the [desk floater](docs/desk-floater.md) last, signing up for its speech-to-text provider in Chrome first (a Safari sign-up failed).
+
 ### Talk to it
 
 ```sh
