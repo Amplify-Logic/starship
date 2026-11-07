@@ -290,6 +290,9 @@ unset _fm_watch_hook_lines _fm_watch_hook FM_HOOK_ROOT
 . "$SCRIPT_DIR/fm-pending-reply-lib.sh"
 # shellcheck source=bin/fm-busy-lib.sh
 . "$SCRIPT_DIR/fm-busy-lib.sh"
+# Owns which tasks count as in flight, for resurface_after_downtime below.
+# shellcheck source=bin/fm-supervision-lib.sh
+. "$SCRIPT_DIR/fm-supervision-lib.sh"
 # Steering-inbox loss detection: bin/fm-task-inbox-lib.sh owns the record,
 # doorbell, re-ring ladder, and unavailable-endpoint contracts; this watcher
 # supplies their live endpoint and busy checks plus wake emission
@@ -4102,7 +4105,27 @@ resurface_after_downtime() {
     fi
     [ "$FM_RECOVERY_MARKER_ACTION" = recover ] || return 0
   fi
+  # Downtime that left nothing to recover is retired instead of waking for a
+  # no-op turn. The retirement re-reads the queue under its lock; anything
+  # that stops it (a row, a moved episode, a failure) falls through to the wake.
+  if ! downtime_recovery_has_work \
+    && fm_recovery_marker_retire_idle "$WATCHER_DOWNTIME_MARKER"; then
+    WATCHER_RECOVERY_PENDING=0
+    return 0
+  fi
   wake "check: rearm-resurface"
+}
+
+# What a downtime recovery wake gives the supervisor to act on: a queued row, a
+# task in flight (fm_supervision_status owns that count), or a still-open
+# decision the recovery drain re-folds. A scan that cannot read counts as work.
+downtime_recovery_has_work() {
+  local open
+  [ ! -s "$FM_WAKE_QUEUE" ] || return 0
+  fm_supervision_status "$STATE"
+  [ "$FM_SUP_IN_FLIGHT" -eq 0 ] || return 0
+  open=$(scan_open_decisions_incremental "$STATE" 2>/dev/null) || return 0
+  [ -n "$open" ]
 }
 
 WATCH_POLLING=1
