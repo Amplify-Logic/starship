@@ -170,7 +170,8 @@ Clicking the badge asks macOS again and opens the Accessibility settings.
 
 Screen Recording works the same way, with its own orange "!" on the Camera control.
 Until it is granted, screenshots are off and the Camera control and Right Shift take none; clicking the Camera control asks macOS again and opens the Screen Recording settings.
-macOS may only notice a new Screen Recording grant after the floater restarts, so choose "Quit & Reopen" if it offers, or restart it with `bin/fm-desk-floater.sh`.
+The Screen Recording list may not show DeskFloater, because the app lives in the hidden `desk-floater/.build` folder: click +, press Cmd+Shift+. to show hidden folders, and pick `DeskFloater.app` there.
+macOS may only notice a new Screen Recording grant after the floater restarts, so after granting the permissions relaunch it with `bin/fm-desk-floater.sh` rather than choosing "Quit & Reopen" when macOS offers it (see [Quit & Reopen](#quit--reopen)).
 
 ### Keeping the permissions across rebuilds
 
@@ -189,6 +190,7 @@ The floater then finds its home from where it is: the Firstmate folder holding `
 If it is not inside a Firstmate folder, it says so and quits rather than guessing.
 Such a start also inherits the login session's `TMPDIR`, which an installer can leave pointing at a folder that no longer exists, and then every helper that makes a temporary file fails, transcription and delivery to the chat among them.
 So at launch the floater keeps `TMPDIR` only when it is an existing folder it can write to, and otherwise points it, for itself and every helper it starts, at macOS's own per-user temporary folder, then `/tmp`.
+That repair keeps such a start working, but relaunching through `bin/fm-desk-floater.sh` remains the clean path.
 
 macOS can reopen any copy it knows under the app's identifier, so only the floater `bin/fm-desk-floater.sh` launches carries that identifier.
 A copy built with `--build-only`, such as one a worker builds to check a change, goes to its own `desk-floater/.build/DeskFloater-build-only.app` with an identifier of its own and stays ad-hoc signed, so it never changes the floater you launched and macOS never reopens it in place of this home's floater.
