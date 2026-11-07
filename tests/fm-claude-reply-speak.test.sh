@@ -320,7 +320,11 @@ test_recorded_address_names_the_notices() {
   run_hook "$dir" "Unspeakable lead only."
   assert_equals "Partner, my reply is on screen." "$(spoken "$dir")" \
     "the on-screen notice must use the recorded address"
-  pass "the voice notices use the recorded address"
+  rm -f "$dir/spoken.log"
+  run_hook "$dir" "partner, shipshape."
+  run_hook "$dir" "Partner, shipshape."
+  assert_absent "$dir/spoken.log" "the verbatim no-news reply of a lowercase address must not be spoken"
+  pass "the voice notices use the recorded address and its no-news reply stays silent"
 }
 
 test_shared_address_applies_and_local_wins() {

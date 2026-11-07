@@ -243,17 +243,17 @@ address_field() {  # <file> <label>
   ' "$1" 2>/dev/null
 }
 ADDRESS_FILE=$(address_file)
-ADDRESS=$(address_field "$ADDRESS_FILE" "Call me")
+RECORDED_ADDRESS=$(address_field "$ADDRESS_FILE" "Call me")
 NO_NEWS=$(address_field "$ADDRESS_FILE" "No-news reply")
-[ -n "$ADDRESS" ] || ADDRESS=Captain
+[ -n "$RECORDED_ADDRESS" ] || RECORDED_ADDRESS=Captain
 # Opening a spoken sentence, the address starts with a capital.
-ADDRESS=$(printf '%s' "$ADDRESS" | awk '{ print toupper(substr($0, 1, 1)) substr($0, 2) }')
+ADDRESS=$(printf '%s' "$RECORDED_ADDRESS" | awk '{ print toupper(substr($0, 1, 1)) substr($0, 2) }')
 DECISION_NOTICE="$ADDRESS, a decision is waiting for you on screen."
 REPLY_NOTICE="$ADDRESS, my reply is on screen."
 
 # --- routine no-news line: never spoken -------------------------------------
 MSG=${MSG#"${MSG%%[![:space:]]*}"}
-for routine in "$NO_NEWS" "$ADDRESS, shipshape." "$ROUTINE_LINE"; do
+for routine in "$NO_NEWS" "$RECORDED_ADDRESS, shipshape." "$ADDRESS, shipshape." "$ROUTINE_LINE"; do
   [ -n "$routine" ] || continue
   case "$MSG" in
     "$routine"|"$routine"[[:space:]]*) MSG=${MSG#"$routine"}; break ;;

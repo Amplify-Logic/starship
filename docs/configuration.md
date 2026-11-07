@@ -1385,8 +1385,9 @@ A local section wins whole when both files have one.
 
 Every bullet is optional free text.
 `Call me:` replaces "captain" as the direct address, and `No-news reply:` replaces the routine no-news reply, which is otherwise `<Call me>, shipshape.` (`Captain, shipshape.` with no `Call me:`).
-The recorded form governs every chat reply from the first message of every session, including short confirmations, the no-news reply, bad news, and technical updates; the plain-language, outcome-first, and safety rules in [`AGENTS.md`](../AGENTS.md) stay in force.
-With no section in either file, the first mate uses the default "captain" address and house style, asks once early in the session how the person wants to be spoken to, and records the answer here, even when the answer is to keep the defaults.
+The recorded tone, emoji use, and length govern every other chat reply from the first message of every session, including short confirmations, bad news, and technical updates; the plain-language, outcome-first, and safety rules in [`AGENTS.md`](../AGENTS.md) stay in force.
+The no-news reply is used verbatim as recorded, never reworded to fit the tone or emoji preferences.
+With no section in either file, the first mate uses the default "captain" address and house style, asks once early in the session how the person wants to be spoken to, and records the answer as this section in `data/captain.md`, even when the answer is to keep the defaults.
 The person changes it any time by saying so, and the first mate updates this section.
 On a home with [desk voice-out](#desk-voice-out-configspeak), `bin/fm-claude-reply-speak.sh` reads `Call me:` and `No-news reply:` so the routine reply stays silent and its spoken notices use the recorded address.
 
