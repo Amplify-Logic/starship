@@ -3684,6 +3684,22 @@ This live proof covers the watcher and queue boundary; it does not establish liv
 `bin/fm-test-run.sh tests/fm-daemon.test.sh` exercises that consumer routing separately with portable regressions for busy escalation and busy-bookkeeping failures in away and quiet mode.
 Repeat the hooked-worker check above before publication if watcher or task-inbox busy code changes; `bin/fm-test-run.sh tests/fm-task-inbox.test.sh` refreshes the portable ladder regressions.
 
+## Claude Code shell reset outside the working folders
+
+Verified on 2026-11-07 on macOS against Claude Code 2.1.319.
+`bin/fm-cd-pretool-check.sh --claude` allows a `cd` that ends outside every working folder because Claude Code returns the shell to its start folder after such a command; `docs/cd-guard.md` owns that contract.
+
+```
+$ FM_CD_GUARD_CLAUDE_LIVE_E2E=1 bash tests/fm-cd-guard-claude-reset-live-e2e.test.sh
+claude 2.1.319 (Claude Code)
+ok - Claude Code 2.1.319 (Claude Code): a cd outside every working folder does not persist
+ok - Claude Code 2.1.319 (Claude Code): a compound command runs outside, then the shell returns
+ok - Claude Code 2.1.319 (Claude Code): a cd into a working folder or a subfolder persists, so the guard keeps denying it
+```
+
+The same session printed `Shell cwd was reset to <start folder>` after each outside `cd`, and the session scratchpad folder behaved as outside.
+Re-run the guard after every Claude Code upgrade; if the outside case starts to persist, the allowance must be withdrawn.
+
 ## OpenCode 2 launch and brief delivery
 
 Verified on 2026-10-15 on Linux x86_64 against OpenCode 2.0.11 and 2.0.22, each installed into a scratch npm prefix with scratch `HOME`, XDG directories, and `OPENCODE_DB`, while the host's global OpenCode 1.18 stayed in place.

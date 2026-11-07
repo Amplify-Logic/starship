@@ -17,6 +17,12 @@
 // glob, or option-bearing target is never resolved and stays denied, as does
 // every pushd and popd. Without --home no target is exempt.
 //
+// --resets-outside declares that the harness itself returns the shell to its
+// start folder after any command that ends outside its working folders (the
+// transport passes it only for a harness verified to do so). A literal absolute
+// cd whose target resolves, under every path rule, outside the home and outside
+// every --working-dir folder is then allowed too, because it cannot persist.
+//
 // The shell tokenizer and command-position analysis are imported from
 // bin/fm-arm-command-policy.mjs, the sole owner of firstmate's shell
 // classification, so this guard never duplicates shell lexing. This policy
@@ -26,6 +32,7 @@
 
 import { Lexer, splitProgram, commandPosition } from "./fm-arm-command-policy.mjs";
 import { realpathSync } from "node:fs";
+import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const REASONS = {
@@ -85,24 +92,49 @@ function resolvedPaths(path) {
   }
 }
 
-// The exempt shape is exactly `cd <literal-absolute-path>`, optionally after
-// `--`. A word carrying an expansion, substitution, glob, or tilde has a value
-// this policy cannot know without evaluating it, so it is never resolved.
-function cdTargetsHome(command, position, wordIndex, home) {
-  if (!home || command.value !== "cd") return false;
+// The only cd shape this policy ever resolves is exactly `cd <literal-absolute-path>`,
+// optionally after `--`. A word carrying an expansion, substitution, glob, or
+// tilde has a value this policy cannot know without evaluating it, so it is
+// never resolved. Returns that literal target, or null.
+function literalAbsoluteCdTarget(command, position, wordIndex) {
+  if (command.value !== "cd") return null;
   const args = position.words.slice(wordIndex + 1);
   if (args[0]?.value === "--" && args[0].literal) args.shift();
-  if (args.length !== 1) return false;
+  if (args.length !== 1) return null;
   const [target] = args;
-  if (!target.literal || target.subs.length > 0 || target.unquotedExpansion) return false;
-  if (!target.value.startsWith("/")) return false;
-  const resolvedTarget = resolvedPaths(target.value);
+  if (!target.literal || target.subs.length > 0 || target.unquotedExpansion) return null;
+  if (!target.value.startsWith("/")) return null;
+  return target.value;
+}
+
+function cdTargetsHome(target, home) {
+  if (!home) return false;
+  const resolvedTarget = resolvedPaths(target);
   const resolvedHome = resolvedPaths(home);
   if (resolvedTarget === null || resolvedHome === null) return false;
   return resolvedTarget.every((path) => path === resolvedHome[1]);
 }
 
-function decision(command, { home = "" } = {}) {
+function isWithin(path, root) {
+  return path === root || path.startsWith(root === "/" ? "/" : `${root}/`);
+}
+
+// Every form a folder can take: its lexical path plus both resolved paths.
+function pathForms(path) {
+  return [resolve(path), ...(resolvedPaths(path) ?? [])];
+}
+
+// True only when the target exists and every form of it lies outside every form
+// of the home and of each declared working folder, so the harness is certain to
+// treat the shell as having left its working folders.
+function cdLeavesWorkingFolders(target, home, workingDirs) {
+  if (!home || resolvedPaths(home) === null) return false;
+  if (resolvedPaths(target) === null) return false;
+  const roots = [home, ...workingDirs].flatMap(pathForms);
+  return pathForms(target).every((path) => !roots.some((root) => isWithin(path, root)));
+}
+
+function decision(command, { home = "", resetsOutside = false, workingDirs = [] } = {}) {
   const lexed = new Lexer(command).tokenize();
   // Fail open on syntax this classifier cannot tokenize. The cd-guard's threat
   // model is agent mistakes - an accidental bare `cd projects/foo` always
@@ -128,14 +160,16 @@ function decision(command, { home = "" } = {}) {
     if (!command) continue;
     if (!CD_BUILTINS.has(command.value)) continue;
     if (position.wrappers.some((wrapper) => FORKING_WRAPPERS.has(wrapper))) continue;
-    if (cdTargetsHome(command, position, wordIndex, home)) continue;
+    const target = literalAbsoluteCdTarget(command, position, wordIndex);
+    if (target !== null && cdTargetsHome(target, home)) continue;
+    if (target !== null && resetsOutside && cdLeavesWorkingFolders(target, home, workingDirs)) continue;
     return deny("persistent-cd");
   }
   return { decision: "allow" };
 }
 
 function parseArguments(argv) {
-  const result = { command: "", commandSet: false, home: "" };
+  const result = { command: "", commandSet: false, home: "", resetsOutside: false, workingDirs: [] };
   for (let i = 0; i < argv.length; i += 1) {
     const name = argv[i];
     if (name === "--command") {
@@ -160,6 +194,16 @@ function parseArguments(argv) {
       result.home = name.slice("--home=".length);
       continue;
     }
+    if (name === "--resets-outside") {
+      result.resetsOutside = true;
+      continue;
+    }
+    if (name === "--working-dir") {
+      if (i + 1 >= argv.length) throw new Error("--working-dir requires a value");
+      result.workingDirs.push(argv[i + 1]);
+      i += 1;
+      continue;
+    }
     throw new Error(`unknown argument: ${name}`);
   }
   return result;
@@ -182,7 +226,11 @@ if (invokedDirectly()) {
     if (!args.commandSet || !args.command) {
       process.stdout.write("allow\n");
     } else {
-      const result = decision(args.command, { home: args.home });
+      const result = decision(args.command, {
+        home: args.home,
+        resetsOutside: args.resetsOutside,
+        workingDirs: args.workingDirs,
+      });
       if (result.decision === "allow") {
         process.stdout.write("allow\n");
       } else {

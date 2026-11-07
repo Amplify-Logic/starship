@@ -38,7 +38,7 @@ Secondmate child crew and scout worktrees are likewise inert under the linked-wo
 The discriminator is persistence to the parent shell's cwd, not the mere presence of the token `cd`.
 
 The guard **blocks** a `cd`, `pushd`, or `popd` builtin that runs in an executed top-level position in the parent shell, because such a command persistently changes the primary shell's own working directory.
-This covers a bare `cd projects/foo`, `cd ..`, `cd`, `cd -`, an absolute `cd /some/path` other than the home itself (still a persistent relocation of the parent shell), `pushd <dir>`, `popd`, a leading-assignment form such as `X=1 cd foo`, quoted or escaped command-word fragments that cook to a bare builtin, and any list form where the builtin runs in the parent shell (`cd x && cmd`, `cmd; cd x`, `cmd || cd x`, `command cd x`, `command -p cd x`, `command -- cd x`, `builtin cd x`, `command builtin cd x`, `cd x >/dev/null`, and newline-separated lists).
+This covers a bare `cd projects/foo`, `cd ..`, `cd`, `cd -`, an absolute `cd /some/path` other than the home itself and, under Claude, other than a folder outside every working folder (still a persistent relocation of the parent shell), `pushd <dir>`, `popd`, a leading-assignment form such as `X=1 cd foo`, quoted or escaped command-word fragments that cook to a bare builtin, and any list form where the builtin runs in the parent shell (`cd x && cmd`, `cmd; cd x`, `cmd || cd x`, `command cd x`, `command -p cd x`, `command -- cd x`, `builtin cd x`, `command builtin cd x`, `cd x >/dev/null`, and newline-separated lists).
 
 The guard **allows** everything else, including these safe scoped forms that must never be blocked:
 
@@ -49,7 +49,7 @@ The guard **allows** everything else, including these safe scoped forms that mus
 - A `command` query such as `command -v cd`, `command -V cd`, or a clustered form such as `command -pv cd`, because it reports command resolution without executing the named builtin.
 - The token `cd` appearing as data: quoted text (`echo "cd projects/foo"`), a comment, a substring of another word (`cdk`, `abcd`, `record`), a `printf` payload, or any later argument word.
 
-An absolute-path `cd` is otherwise blocked on purpose: the ALLOW carve-out for absolute paths is for commands that address a target by absolute path, not for `cd`, which relocates the shell itself regardless of whether its argument is relative or absolute.
+An absolute-path `cd` is otherwise blocked on purpose, apart from the two exemptions below: the ALLOW carve-out for absolute paths is for commands that address a target by absolute path, not for `cd`, which relocates the shell itself regardless of whether its argument is relative or absolute.
 Blocking a top-level `cd` is safe in the strong sense: the guard's steady state is "always at the home", so a return-to-home `cd` is redundant rather than necessary, and the block never causes a wrong-directory write.
 
 ### The home itself
@@ -59,6 +59,19 @@ That command cannot move the shell out of the home, so denying it was only frict
 The transport passes the checkout as `--home` to the policy, which compares the resolved target against the resolved home by exact path under both rules; a target that leaves the home under either rule, such as `cd /path/to/home/link/..` where `link` points outside the home, is denied.
 Everything else stays denied: a child (`cd /path/to/home/bin`), sibling, or parent directory, a relative target such as `cd .`, a target carrying an expansion, substitution, tilde, or glob the policy would have to evaluate (`cd "$PWD"`, `cd ~`), a `cd` with options (`cd -P /path/to/home`) or extra arguments, a `pushd` or `popd` to any target, and a later `cd` in the same command list (`cd /path/to/home && cd projects/foo`).
 Without `--home` the policy exempts no target.
+
+### Claude: a cd that ends outside every working folder
+
+Claude Code returns the shell to its start folder after any command that ends outside its working folders, so under the Claude transport such a `cd` cannot move the primary shell.
+The command it starts still runs in the folder the `cd` chose; only the next tool call starts back at the home.
+A `cd` into a working folder, including any subfolder of the home, persists, which is why those targets stay denied.
+`docs/verification/runtime-backends.md` records the verified Claude Code version, and `tests/fm-cd-guard-claude-reset-live-e2e.test.sh` (opt-in, `FM_CD_GUARD_CLAUDE_LIVE_E2E=1`) re-proves the behavior after an upgrade.
+
+With `--claude` the transport passes `--resets-outside` and one `--working-dir` per Claude working folder it can see: `FM_HOME` when set, and each `permissions.additionalDirectories` entry in the managed, user (`CLAUDE_CONFIG_DIR` or `~/.claude`), project, and local Claude settings, with `~` and project-relative entries resolved.
+The policy then allows a `cd` of the same literal absolute shape the home exemption accepts when the target exists and every form of it (lexical, logical, and physical) lies outside every form of the home and of each working folder (`cd /tmp/x`, `cd /tmp/x && make`, `cd /path/to/home/..`).
+Everything the home exemption denies by shape stays denied, as does a missing target, a symlink that resolves into the home or a working folder, and every target when a settings file exists but cannot be read.
+Every other harness entry form keeps denying an outside `cd`, because no other harness is verified to reset the shell.
+A folder added only with `--add-dir` or `/add-dir` is invisible to the hook, so a `cd` into it would persist; `bin/fm-primary.sh` launches the primary Claude session without one.
 
 ### Accepted non-goals
 
@@ -136,7 +149,7 @@ Every shell variable reference in the Grok hook command carries an inline defaul
 
 `tests/fm-cd-pretool-check.test.sh` owns the acceptance matrix.
 Every block and allow case runs through Codex-shaped stdin, Claude-shaped stdin, Grok-shaped stdin, OpenCode-shaped CLI, and Pi-shaped CLI entry forms.
-The suite also proves the home exemption (a literal absolute `cd` to the primary checkout, with and without a symlink, allowed; a child, sibling, parent, `pushd`, option-bearing, unexpanded, or glob target denied), the end-to-end cwd-leak regression (a firstmate-owned backlog write leaking into a project clone, then denied at the exact command), the checkout scoping (fires in a git-cloned secondmate fixture, inert in a crewmate/scout linked worktree, inert outside a firstmate checkout, inert outside a git repo), the fail-open transport behavior, the prefilter fast path, the policy CLI output contract, and the per-harness wiring.
+The suite also proves the home exemption (a literal absolute `cd` to the primary checkout, with and without a symlink and in compound commands, allowed; a child, sibling, parent, `pushd`, option-bearing, unexpanded, or glob target denied), the Claude outside-working-folder allowance (allowed only under Claude, denied for every home subfolder, settings or `FM_HOME` working folder, symlink into the home, missing target, and unreadable settings), the end-to-end cwd-leak regression (a firstmate-owned backlog write leaking into a project clone, then denied at the exact command), the checkout scoping (fires in a git-cloned secondmate fixture, inert in a crewmate/scout linked worktree, inert outside a firstmate checkout, inert outside a git repo), the fail-open transport behavior, the prefilter fast path, the policy CLI output contract, and the per-harness wiring.
 
 Run:
 
