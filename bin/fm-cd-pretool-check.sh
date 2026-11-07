@@ -12,6 +12,17 @@
 # responses. It never executes, sources, evaluates, or expands the command.
 # See docs/cd-guard.md for the complete contract and validation record.
 #
+# Under --claude only, the policy is also told that the harness resets the
+# shell: Claude Code returns the shell to its start folder after any command
+# that ends outside its working folders (verified on Claude Code 2.1.319,
+# 2026-11-07, by tests/fm-cd-guard-claude-reset-live-e2e.test.sh), so a cd that
+# ends outside the home and outside every working folder this wrapper can see
+# cannot persist. The visible working folders are FM_HOME and each
+# permissions.additionalDirectories entry in the managed, user, project, and
+# local Claude settings; an unreadable settings file withdraws the allowance.
+# A folder added only by --add-dir or /add-dir is invisible here, and the
+# primary launch in bin/fm-primary.sh adds none.
+#
 # Usage:
 #   <PreToolUse JSON on stdin> | bin/fm-cd-pretool-check.sh
 #   bin/fm-cd-pretool-check.sh --command '<cmd>'
@@ -59,6 +70,9 @@ crewmate/scout task worktree or any non-firstmate repo.
 Exits 0 to allow and 2 to deny a persistent top-level cwd change.
 A cd whose single literal absolute target resolves to this checkout itself is
 allowed, because it cannot move the shell out of the home.
+With --claude, a cd whose single literal absolute target resolves outside the
+home and outside every visible Claude working folder is allowed too, because
+Claude Code returns the shell to the home after such a command.
 The deny reason is written to stderr, with a Grok decision object on stdout
 unless --claude is supplied.
 With --cursor, a deny is Cursor's own decision object on stdout and exit 0,
@@ -173,7 +187,41 @@ POLICY="$FM_ROOT/bin/fm-cd-command-policy.mjs"
 command -v node >/dev/null 2>&1 || exit 0
 [ -f "$POLICY" ] || exit 0
 
-POLICY_OUTPUT=$(node "$POLICY" --home "$FM_ROOT" --command "$CMD" 2>/dev/null) || exit 0
+# Print each Claude working folder this wrapper can see, one per line, or fail
+# when a settings file that exists cannot be read, so the caller withholds the
+# outside-the-working-folders allowance instead of guessing.
+claude_working_dirs() {
+  local file dirs dir
+  [ -n "${HOME:-}" ] || return 1
+  [ -z "${FM_HOME:-}" ] || printf '%s\n' "$FM_HOME"
+  for file in "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" \
+    "$FM_ROOT/.claude/settings.json" "$FM_ROOT/.claude/settings.local.json" \
+    "/Library/Application Support/ClaudeCode/managed-settings.json" \
+    /etc/claude-code/managed-settings.json; do
+    [ -e "$file" ] || continue
+    dirs=$(jq -r '.permissions.additionalDirectories // [] | .[] | strings' "$file" 2>/dev/null) || return 1
+    while IFS= read -r dir; do
+      case "$dir" in
+        '') continue ;;
+        \~) dir=$HOME ;;
+        \~/*) dir=$HOME/${dir#\~/} ;;
+        /*) ;;
+        *) dir=$FM_ROOT/$dir ;;
+      esac
+      printf '%s\n' "$dir"
+    done <<<"$dirs"
+  done
+}
+
+POLICY_ARGS=(--home "$FM_ROOT")
+if [ "$CLAUDE_MODE" -eq 1 ] && WORKING_DIRS=$(claude_working_dirs); then
+  POLICY_ARGS+=(--resets-outside)
+  while IFS= read -r dir; do
+    [ -z "$dir" ] || POLICY_ARGS+=(--working-dir "$dir")
+  done <<<"$WORKING_DIRS"
+fi
+
+POLICY_OUTPUT=$(node "$POLICY" "${POLICY_ARGS[@]}" --command "$CMD" 2>/dev/null) || exit 0
 [ -n "$POLICY_OUTPUT" ] || exit 0
 
 TAB=$(printf '\t')

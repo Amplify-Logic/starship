@@ -18,6 +18,10 @@ set -u
 
 fm_git_identity fmtest fmtest@example.invalid
 TMP_ROOT=$(fm_test_tmproot fm-cd-pretool-check)
+# Claude-mode decisions read the user's Claude settings, so point them at an
+# empty fixture rather than the host's own.
+export CLAUDE_CONFIG_DIR="$TMP_ROOT/claude-config"
+mkdir -p "$CLAUDE_CONFIG_DIR"
 
 # A primary-shaped checkout: plain (non-worktree) git repo, AGENTS.md, bin/ with
 # the transport plus both policy files (fm-cd-command-policy.mjs imports the
@@ -146,6 +150,8 @@ matrix_case A36 allow 'command -vp cd'
 # HOME: the one allowed cd target is a single literal absolute path that
 # resolves, symlinks included, to the primary checkout itself; a child, sibling,
 # parent, pushd, option-bearing, unexpanded, or glob target stays denied.
+# "outside" marks a target outside the home: Claude allows it because Claude
+# Code resets the shell after it, and every other entry form denies it.
 HOME_LINK="$TMP_ROOT/primary-link"
 ln -s "$PRIMARY" "$HOME_LINK"
 mkdir -p "$TMP_ROOT/primary-sibling/child"
@@ -158,20 +164,26 @@ matrix_case H05 allow "cd $PRIMARY/bin/.."
 matrix_case H06 allow "cd $HOME_LINK"
 matrix_case H07 allow "cd $PRIMARY && git status"
 matrix_case H08 deny "cd $PRIMARY/bin"
-matrix_case H09 deny "cd $TMP_ROOT/primary-sibling"
-matrix_case H10 deny "cd $TMP_ROOT"
+matrix_case H09 outside "cd $TMP_ROOT/primary-sibling"
+matrix_case H10 outside "cd $TMP_ROOT"
 matrix_case H11 deny "cd $PRIMARY && cd projects/foo"
 matrix_case H12 deny "pushd $PRIMARY"
 matrix_case H13 deny "cd -P $PRIMARY"
 matrix_case H14 deny 'cd "$PWD"'
 matrix_case H15 deny "cd $PRIMARY/*"
 matrix_case H16 deny "cd $PRIMARY/escape-link/.."
+matrix_case H17 allow "cd $PRIMARY && bin/x"
+matrix_case H18 allow "cd $PRIMARY 2>/dev/null; bin/x"
 
 MATRIX_TMP=$(mktemp -d "${TMPDIR:-/tmp}/fm-cd-policy-matrix.XXXXXX")
 FM_TEST_CLEANUP_DIRS+=("$MATRIX_TMP")
 
 run_matrix_entry() {
   local id=$1 expected=$2 entry=$3 cmd=$4 payload out_file err_file rc
+  if [ "$expected" = outside ]; then
+    expected=deny
+    [ "$entry" != claude ] || expected=allow
+  fi
   out_file="$MATRIX_TMP/$id-$entry.out"
   err_file="$MATRIX_TMP/$id-$entry.err"
 
@@ -226,6 +238,83 @@ test_full_acceptance_matrix() {
     done
   done
   pass "cd-guard acceptance matrix: ${#MATRIX_IDS[@]} cases x 5 harness entry forms, block/allow all correct"
+}
+
+# --- Claude: a cd that ends outside every working folder ---------------------
+
+# Claude Code returns the shell to its start folder after any command that ends
+# outside its working folders, so under the Claude transport that cd cannot move
+# the primary shell. Every other harness keeps denying it, and every target
+# inside the home or a known working folder stays denied.
+claude_check() {
+  local cmd=$1
+  shift
+  jq -cn --arg command "$cmd" '{tool_name:"Bash",tool_input:{command:$command}}' \
+    | env "$@" "$CHECK" --claude 2>&1
+}
+
+test_claude_allows_cd_outside_working_folders() {
+  local cfg outside added fmhome out rc entry
+  cfg=$CLAUDE_CONFIG_DIR
+  outside="$TMP_ROOT/outside"
+  added="$TMP_ROOT/added"
+  fmhome="$TMP_ROOT/fm-home"
+  mkdir -p "$cfg" "$outside/sub" "$added/sub" "$fmhome/projects/x" "$PRIMARY/projects/x"
+  ln -s "$PRIMARY/projects" "$TMP_ROOT/into-home-link"
+
+  for cmd in "cd $outside" "cd $outside && ls" "cd $outside/sub 2>/dev/null; ls" "cd -- $outside" "cd $PRIMARY/.."; do
+    out=$(claude_check "$cmd" CLAUDE_CONFIG_DIR="$cfg"); rc=$?
+    expect_code 0 "$rc" "claude must allow a cd that ends outside every working folder: $cmd"
+    [ -z "$out" ] || fail "claude allow must stay silent for: $cmd: $out"
+  done
+
+  # Only Claude is verified to reset the shell; the other entry forms still deny.
+  for entry in codex grok opencode pi; do
+    run_matrix_entry O01 deny "$entry" "cd $outside && ls"
+  done
+
+  for cmd in "cd $PRIMARY/projects/x" "cd $PRIMARY/bin && ls" "cd $outside && cd $PRIMARY/projects/x" \
+    "cd $TMP_ROOT/into-home-link/x" "cd $TMP_ROOT/missing-dir" "cd ../outside" "cd ~" 'cd "$TMPDIR"' \
+    "pushd $outside" "cd -P $outside" "cd $outside $added"; do
+    out=$(claude_check "$cmd" CLAUDE_CONFIG_DIR="$cfg"); rc=$?
+    expect_code 2 "$rc" "claude must still deny: $cmd"
+    assert_contains "$out" '[persistent-cd]' "claude deny must carry the reason code: $cmd"
+  done
+
+  # A folder Claude Code was told to keep is a working folder, so a cd into it
+  # persists and stays denied: settings additionalDirectories (project, local and
+  # user settings) and a separate FM_HOME.
+  printf '{"permissions":{"additionalDirectories":["%s"]}}\n' "$added" > "$PRIMARY/.claude-local.tmp"
+  mkdir -p "$PRIMARY/.claude"
+  mv "$PRIMARY/.claude-local.tmp" "$PRIMARY/.claude/settings.local.json"
+  for cmd in "cd $added" "cd $added/sub && ls"; do
+    out=$(claude_check "$cmd" CLAUDE_CONFIG_DIR="$cfg"); rc=$?
+    expect_code 2 "$rc" "claude must deny a cd into a settings additional directory: $cmd"
+  done
+  out=$(claude_check "cd $outside" CLAUDE_CONFIG_DIR="$cfg"); rc=$?
+  expect_code 0 "$rc" "an additional directory must not block an unrelated outside folder: $out"
+  rm -f "$PRIMARY/.claude/settings.local.json"
+
+  printf '{"permissions":{"additionalDirectories":["~/added"]}}\n' > "$cfg/settings.json"
+  out=$(claude_check "cd $added/sub" CLAUDE_CONFIG_DIR="$cfg" HOME="$TMP_ROOT"); rc=$?
+  expect_code 2 "$rc" "claude must deny a cd into a user-settings additional directory written with ~"
+  printf '{"permissions":{"additionalDirectories":["../added"]}}\n' > "$PRIMARY/.claude/settings.json"
+  out=$(claude_check "cd $added" CLAUDE_CONFIG_DIR="$TMP_ROOT/no-config"); rc=$?
+  expect_code 2 "$rc" "claude must deny a cd into a project-relative additional directory"
+  rm -f "$PRIMARY/.claude/settings.json" "$cfg/settings.json"
+
+  out=$(claude_check "cd $fmhome/projects/x" CLAUDE_CONFIG_DIR="$cfg" FM_HOME="$fmhome"); rc=$?
+  expect_code 2 "$rc" "claude must deny a cd into a separate FM_HOME"
+
+  # A settings file that cannot be read leaves the working folders unknown, so
+  # the outside allowance is withdrawn rather than guessed.
+  printf 'not json\n' > "$cfg/settings.json"
+  out=$(claude_check "cd $outside" CLAUDE_CONFIG_DIR="$cfg"); rc=$?
+  expect_code 2 "$rc" "claude must deny an outside cd when a settings file is unreadable"
+  rm -f "$cfg/settings.json"
+  rmdir "$PRIMARY/.claude"
+
+  pass "cd-guard: under Claude, a cd that ends outside every working folder is allowed; home subfolders, working folders and other harnesses stay denied"
 }
 
 # --- primary-checkout scoping ----------------------------------------------
@@ -414,6 +503,7 @@ test_scripts_are_shellcheck_clean() {
 }
 
 test_full_acceptance_matrix
+test_claude_allows_cd_outside_working_folders
 test_fires_in_secondmate_home
 test_inert_in_child_worktree
 test_inert_when_not_firstmate_repo
