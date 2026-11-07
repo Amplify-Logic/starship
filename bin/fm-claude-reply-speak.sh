@@ -59,8 +59,8 @@
 #     tool calls only;
 #   - the routine no-news reply: exactly "Captain, shipshape.", "<address>,
 #     shipshape.", or the recorded no-news reply after trimming, so a bare
-#     routine update costs no speech; the recorded reply opens a longer reply
-#     as a routine line only when a line break follows it;
+#     routine update costs no speech; the recorded reply counts as a routine
+#     opener only as the reply's whole first line;
 #   - a turn in which bin/fm-speak.sh already handed a line over: the hook
 #     records the newest reply number in state/speak-history/ (numbers only
 #     grow) after each Stop it accounts for, including after its own speech, and
@@ -244,17 +244,18 @@ DECISION_NOTICE="$ADDRESS, a decision is waiting for you on screen."
 REPLY_NOTICE="$ADDRESS, my reply is on screen."
 
 # --- routine no-news line: never spoken -------------------------------------
+MSG=${MSG//$'\r'/}
 MSG=${MSG#"${MSG%%[![:space:]]*}"}
-case "$MSG" in
-  "$NO_NEWS"|"$NO_NEWS"$'\n'*) [ -z "$NO_NEWS" ] || MSG=${MSG#"$NO_NEWS"} ;;
-  *)
-    for routine in "$RECORDED_ADDRESS, shipshape." "$ADDRESS, shipshape." "$ROUTINE_LINE"; do
-      case "$MSG" in
-        "$routine"|"$routine"[[:space:]]*) MSG=${MSG#"$routine"}; break ;;
-      esac
-    done
-    ;;
-esac
+FIRST_LINE=${MSG%%$'\n'*}
+if [ -n "$NO_NEWS" ] && [ "${FIRST_LINE%"${FIRST_LINE##*[![:space:]]}"}" = "$NO_NEWS" ]; then
+  MSG=${MSG#"$FIRST_LINE"}
+else
+  for routine in "$RECORDED_ADDRESS, shipshape." "$ADDRESS, shipshape." "$ROUTINE_LINE"; do
+    case "$MSG" in
+      "$routine"|"$routine"[[:space:]]*) MSG=${MSG#"$routine"}; break ;;
+    esac
+  done
+fi
 case "$MSG" in
   *[![:space:]]*) ;;
   *) exit 0 ;;
