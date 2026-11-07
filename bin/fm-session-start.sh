@@ -175,6 +175,31 @@
 # compatible tasks-axi is available, or `data/backlog.md` when the file body is
 # truly needed.
 #
+# DIGEST TRIM (opt-in): a home that creates the presence flag
+# config/startup-digest-trim (docs/configuration.md "Startup digest trim")
+# changes two things, and only these two; without the flag every byte above
+# and below is unchanged.
+#   - The held group of the tasks-axi listing prints counts by hold kind plus
+#     only the held rows that need a look now: rows that gate in-flight work
+#     (the row is itself in flight, or an in-flight row is blocked by it), rows
+#     whose recorded hold date (hold_until) is today or earlier, and rows that
+#     are new or changed since the previous digest this home printed. Held rows
+#     that stopped being held since then are named by id. One line gives the
+#     command for the full held list. "Changed" compares each held row's
+#     listed fields verbatim against STATE/.session-start-held-snapshot, which
+#     only a lock-holding session start rewrites; a read-only session
+#     compares against it without writing it. The snapshot also keeps the rows
+#     that start compared against, and a context re-emit (--reemit) compares
+#     against those without writing, so held changes shown at start are shown
+#     again after a compaction. With no snapshot yet, every held row counts as
+#     new. If the trimmed rendering itself fails, the full held group prints
+#     instead. The title-line renderer (manual backend, or the tasks-axi
+#     fallback) is not trimmed.
+#   - NETWORK CHECKS drops a TOOLCHAIN_DRIFT, UPSTREAM, UPSTREAM_REPORT, or
+#     UPSTREAM_CATCHUP line that BOOTSTRAP already printed verbatim, because
+#     the deferred bootstrap run reprints those local checks, and says how many
+#     it dropped. A line whose text differs still prints.
+#
 # STATUS TAILS: FM_SESSION_START_STATUS_TAIL bounds how many lines each task's
 # tail prints, and bin/fm-line-cap-lib.sh bounds how long each of those lines
 # may be. Both bounds are safe because the section prints every task's full
@@ -406,6 +431,10 @@ ENDPOINT_TIMEOUT=${FM_SESSION_START_ENDPOINT_TIMEOUT:-10}
 case "$ENDPOINT_TIMEOUT" in ''|*[!0-9]*) ENDPOINT_TIMEOUT=10 ;; esac
 [ "$ENDPOINT_TIMEOUT" -gt 0 ] 2>/dev/null || ENDPOINT_TIMEOUT=10
 BACKLOG_FIELDS=blocked_by,hold_kind,hold_reason
+# Default off; see this file's DIGEST TRIM note.
+DIGEST_TRIM=0
+[ ! -e "$CONFIG/startup-digest-trim" ] || DIGEST_TRIM=1
+HELD_SNAPSHOT_FILE="$STATE/.session-start-held-snapshot"
 
 RULE='================================================================================'
 SUBRULE='--------------------------------------------------------------------------------'
@@ -522,11 +551,143 @@ print_ready_queued_bounded() {
   '
 }
 
+# print_held_trimmed <in-flight-listing>: the held group under DIGEST TRIM (this
+# file's header). Reads the decoded, help-stripped held listing on stdin and
+# prints the trimmed group; a lock-holding session start (not a re-emit) also
+# rewrites the held snapshot, keeping the rows it compared against as the
+# baseline a re-emit compares against. Exits nonzero without printing when it
+# cannot render, so the caller prints the full group instead.
+print_held_trimmed() {
+  local in_flight=$1 snapshot_out=
+  [ "$READ_ONLY" -eq 1 ] || [ "$REEMIT" -eq 1 ] || snapshot_out=$HELD_SNAPSHOT_FILE
+  FM_HELD_IN_FLIGHT=$in_flight perl -MJSON::PP -e '
+    use strict;
+    use warnings;
+    binmode STDIN, ":encoding(UTF-8)";
+    binmode STDOUT, ":encoding(UTF-8)";
+    my ($snapshot_in, $snapshot_out, $today, $reemit) = @ARGV;
+    my $json = JSON::PP->new->allow_nonref;
+    sub cells {
+      my ($row) = @_;
+      my @out;
+      while ($row =~ /\G("(?:[^"\\]|\\.)*"|[^,]*)(,|\z)/g) {
+        my ($cell, $sep) = ($1, $2);
+        push @out, $cell =~ /^"/ ? $json->decode($cell) : $cell;
+        last if $sep eq "";
+      }
+      return @out;
+    }
+    sub parse {
+      my ($text) = @_;
+      my ($fields, @rows, @other);
+      for my $line (split /\n/, $text) {
+        if ($line =~ /^tasks\[\d+\]\{([^}]*)\}:$/) { $fields = $1; next }
+        if (defined $fields && $line =~ /^  (.*)$/) { push @rows, $1; next }
+        push @other, $line;
+      }
+      return ($fields, \@rows, \@other);
+    }
+    sub column {
+      my ($fields, $name) = @_;
+      my @names = split /,/, $fields;
+      my ($i) = grep { $names[$_] eq $name } 0 .. $#names;
+      return $i;
+    }
+    my ($fields, $rows, $other) = parse(do { local $/; <STDIN> });
+    my ($ID, $STATE, $KIND, $UNTIL);
+    if (defined $fields) {
+      ($ID, $STATE, $KIND, $UNTIL) = map { column($fields, $_) } qw(id state hold_kind hold_until);
+      die "held listing lacks a needed column\n"
+        unless defined $ID && defined $STATE && defined $KIND && defined $UNTIL;
+    }
+
+    # Which held ids gate in-flight work: any in-flight row blocked by them.
+    my %gates;
+    my ($if_fields, $if_rows) = parse($ENV{FM_HELD_IN_FLIGHT} // "");
+    if (defined $if_fields) {
+      my $by_i = column($if_fields, "blocked_by");
+      if (defined $by_i) {
+        for my $row (@$if_rows) {
+          my $by = (cells($row))[$by_i] // "";
+          $gates{$_} = 1 for grep { $_ ne "" && $_ ne "none" && $_ ne "-" } split /,/, $by;
+        }
+      }
+    }
+
+    # The previous digest snapshot: its field header and its verbatim rows. A
+    # re-emit reads the baseline the last session start compared against.
+    my $pre = $reemit ? "base" : "";
+    my ($had_snapshot, $prev_fields, %prev_row, @prev_ids, @prev_lines) = (0, undef);
+    if (open my $fh, "<:encoding(UTF-8)", $snapshot_in) {
+      while (my $line = <$fh>) {
+        chomp $line;
+        push @prev_lines, $line if $line =~ /^(?:fields|row)\t/;
+        if ($line =~ /^${pre}fields\t(.*)$/) { $had_snapshot = 1; $prev_fields = $1 }
+        elsif ($line =~ /^${pre}row\t(.*)$/) {
+          $prev_row{$1} = 1;
+          my ($pid) = $1 =~ /^("(?:[^"\\]|\\.)*"|[^,]*)/;
+          $pid = $json->decode($pid) if $pid =~ /^"/;
+          push @prev_ids, $pid;
+        }
+      }
+      close $fh;
+    }
+    %prev_row = () unless defined $fields && defined $prev_fields && $prev_fields eq $fields;
+
+    my %current;
+    if (!defined $fields) {
+      # No rows to trim (an empty held group): print what the tool said.
+      print "$_\n" for @$other;
+    } else {
+      my (%kinds, @gate, @due, @changed);
+      for my $row (@$rows) {
+        my @c = cells($row);
+        my $kind = $c[$KIND] // "-";
+        $kind = "none" if $kind eq "-" || $kind eq "";
+        $kinds{$kind}++;
+        $current{$c[$ID]} = 1;
+        my $until = $c[$UNTIL] // "-";
+        if (($c[$STATE] // "") eq "in_flight" || $gates{$c[$ID]}) { push @gate, $row }
+        elsif ($until =~ /^\d{4}-\d{2}-\d{2}$/ && $until le $today) { push @due, $row }
+        elsif (!$prev_row{$row}) { push @changed, $row }
+      }
+      my $total = scalar @$rows;
+      my $shown = @gate + @due + @changed;
+      print "$_\n" for grep { $_ ne "" } @$other;
+      print "by kind: ", join(", ", map { "$_ $kinds{$_}" } sort { $kinds{$b} <=> $kinds{$a} || $a cmp $b } keys %kinds), "\n";
+      print "trimmed (config/startup-digest-trim): $shown of $total held row(s) shown - those gating in-flight work, whose hold date has come, or new or changed since the previous digest\n";
+      print "no earlier held snapshot for this home, so every held row counts as new this once\n" unless $had_snapshot;
+      if ($shown) {
+        print "fields: $fields\n";
+        for my $group (["gating in-flight work", \@gate], ["hold date reached", \@due], ["new or changed since the previous digest", \@changed]) {
+          next unless @{ $group->[1] };
+          print "$group->[0]:\n";
+          print "  $_\n" for @{ $group->[1] };
+        }
+      }
+    }
+    my @released = grep { !$current{$_} } @prev_ids;
+    print "no longer held since the previous digest: ", join(", ", @released), "\n" if @released;
+    print "full held list: bin/fm-tasks-axi.sh list --state held --fields blocked_by,hold_kind,hold_reason,hold_until\n";
+
+    if ($snapshot_out ne "") {
+      my $tmp = "$snapshot_out.tmp.$$";
+      if (open my $out, ">:encoding(UTF-8)", $tmp) {
+        print $out "fields\t", ($fields // ""), "\n";
+        print $out "row\t$_\n" for (defined $fields ? @$rows : ());
+        print $out "base$_\n" for @prev_lines;
+        close $out and rename $tmp, $snapshot_out or unlink $tmp;
+      }
+    }
+  ' "$HELD_SNAPSHOT_FILE" "$snapshot_out" "$(date +%Y-%m-%d)" "$REEMIT"
+}
+
 print_backlog_tasks_axi_compact() {
-  local path=$1 in_flight held blocked ready err
+  local path=$1 in_flight held blocked ready err held_fields=$BACKLOG_FIELDS trimmed
+  [ "$DIGEST_TRIM" -eq 0 ] || held_fields="$BACKLOG_FIELDS,hold_until"
   if ! in_flight=$(tasks-axi list --file "$path" --state in_flight --fields "$BACKLOG_FIELDS" 2>&1); then
     err=$in_flight
-  elif ! held=$(tasks-axi list --file "$path" --state held --fields "$BACKLOG_FIELDS" 2>&1); then
+  elif ! held=$(tasks-axi list --file "$path" --state held --fields "$held_fields" 2>&1); then
     err=$held
   elif ! blocked=$(tasks-axi list --file "$path" --state queued --blocked --fields "$BACKLOG_FIELDS" 2>&1); then
     err=$blocked
@@ -538,7 +699,13 @@ print_backlog_tasks_axi_compact() {
     printf '\nin flight:\n'
     printf '%s\n' "$in_flight" | fm_hold_reason_decode_stream | strip_axi_help
     printf '\nheld (captain- or time-gated; an in-flight item that is also held appears in both groups):\n'
-    printf '%s\n' "$held" | fm_hold_reason_decode_stream | strip_axi_help
+    if [ "$DIGEST_TRIM" -eq 1 ] \
+      && trimmed=$(printf '%s\n' "$held" | fm_hold_reason_decode_stream | strip_axi_help \
+        | print_held_trimmed "$in_flight" 2>/dev/null); then
+      printf '%s\n' "$trimmed"
+    else
+      printf '%s\n' "$held" | fm_hold_reason_decode_stream | strip_axi_help
+    fi
     printf '\nblocked queued:\n'
     printf '%s\n' "$blocked" | fm_hold_reason_decode_stream | strip_axi_help
     printf '\nready queued (dispatchable now):\n'
@@ -1106,6 +1273,29 @@ if [ "$READ_ONLY" -eq 1 ]; then
   printf 'secondmate liveness and convergence, and pending handoff delivery were not run.\n'
   printf 'They need the fleet lock, and this session must not spawn, steer, or merge, so it\n'
   printf 'has no action they would gate. The session holding the lock runs them.\n'
+elif [ "$DIGEST_TRIM" -eq 1 ]; then
+  # DIGEST TRIM (this file's header): drop drift and upstream lines BOOTSTRAP
+  # already printed verbatim.
+  NETWORK_OUT=$("$SCRIPT_DIR/fm-startup-network.sh" harvest --pid $$ 2>&1) || true
+  [ -z "$NETWORK_OUT" ] || printf '%s\n' "$NETWORK_OUT" | FM_BOOT_OUT=$BOOT_OUT awk '
+    BEGIN {
+      re = "^(TOOLCHAIN_DRIFT|UPSTREAM|UPSTREAM_REPORT|UPSTREAM_CATCHUP): "
+      n = split(ENVIRON["FM_BOOT_OUT"], boot, "\n")
+      for (i = 1; i <= n; i++) if (boot[i] ~ re) seen[boot[i]] = 1
+    }
+    $0 ~ re && ($0 in seen) {
+      if (!dropped++) marker = NR
+      held_back[NR] = 1
+      next
+    }
+    { lines[NR] = $0 }
+    END {
+      for (i = 1; i <= NR; i++) {
+        if (i == marker) printf "(%d drift or upstream line(s) already printed under BOOTSTRAP above are not repeated)\n", dropped
+        if (!(i in held_back)) print lines[i]
+      }
+    }
+  '
 else
   "$SCRIPT_DIR/fm-startup-network.sh" harvest --pid $$ 2>&1 || true
 fi
