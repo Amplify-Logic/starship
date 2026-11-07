@@ -187,10 +187,14 @@
 #     that stopped being held since then are named by id. One line gives the
 #     command for the full held list. "Changed" compares each held row's
 #     listed fields verbatim against STATE/.session-start-held-snapshot, which
-#     only a lock-holding run rewrites; with no snapshot yet, every held row
-#     counts as new once. If the trimmed rendering itself fails, the full held
-#     group prints instead. The title-line renderer (manual backend, or the
-#     tasks-axi fallback) is not trimmed.
+#     only a lock-holding session start rewrites; a read-only session
+#     compares against it without writing it. The snapshot also keeps the rows
+#     that start compared against, and a context re-emit (--reemit) compares
+#     against those without writing, so held changes shown at start are shown
+#     again after a compaction. With no snapshot yet, every held row counts as
+#     new. If the trimmed rendering itself fails, the full held group prints
+#     instead. The title-line renderer (manual backend, or the tasks-axi
+#     fallback) is not trimmed.
 #   - NETWORK CHECKS drops a TOOLCHAIN_DRIFT, UPSTREAM, UPSTREAM_REPORT, or
 #     UPSTREAM_CATCHUP line that BOOTSTRAP already printed verbatim, because
 #     the deferred bootstrap run reprints those local checks, and says how many
@@ -549,18 +553,19 @@ print_ready_queued_bounded() {
 
 # print_held_trimmed <in-flight-listing>: the held group under DIGEST TRIM (this
 # file's header). Reads the decoded, help-stripped held listing on stdin and
-# prints the trimmed group; a lock-holding run also rewrites the held snapshot.
-# Exits nonzero without printing when it cannot render, so the caller prints
-# the full group instead.
+# prints the trimmed group; a lock-holding session start (not a re-emit) also
+# rewrites the held snapshot, keeping the rows it compared against as the
+# baseline a re-emit compares against. Exits nonzero without printing when it
+# cannot render, so the caller prints the full group instead.
 print_held_trimmed() {
   local in_flight=$1 snapshot_out=
-  [ "$READ_ONLY" -eq 1 ] || snapshot_out=$HELD_SNAPSHOT_FILE
+  [ "$READ_ONLY" -eq 1 ] || [ "$REEMIT" -eq 1 ] || snapshot_out=$HELD_SNAPSHOT_FILE
   FM_HELD_IN_FLIGHT=$in_flight perl -MJSON::PP -e '
     use strict;
     use warnings;
     binmode STDIN, ":encoding(UTF-8)";
     binmode STDOUT, ":encoding(UTF-8)";
-    my ($snapshot_in, $snapshot_out, $today) = @ARGV;
+    my ($snapshot_in, $snapshot_out, $today, $reemit) = @ARGV;
     my $json = JSON::PP->new->allow_nonref;
     sub cells {
       my ($row) = @_;
@@ -609,14 +614,16 @@ print_held_trimmed() {
       }
     }
 
-    # The previous digest snapshot: its field header and its verbatim rows.
-    my ($had_snapshot, $prev_fields, %prev_row, @prev_ids) = (0, undef);
+    # The previous digest snapshot: its field header and its verbatim rows. A
+    # re-emit reads the baseline the last session start compared against.
+    my $pre = $reemit ? "base" : "";
+    my ($had_snapshot, $prev_fields, %prev_row, @prev_ids, @prev_lines) = (0, undef);
     if (open my $fh, "<:encoding(UTF-8)", $snapshot_in) {
-      $had_snapshot = 1;
       while (my $line = <$fh>) {
         chomp $line;
-        if ($line =~ /^fields\t(.*)$/) { $prev_fields = $1 }
-        elsif ($line =~ /^row\t(.*)$/) {
+        push @prev_lines, $line if $line =~ /^(?:fields|row)\t/;
+        if ($line =~ /^${pre}fields\t(.*)$/) { $had_snapshot = 1; $prev_fields = $1 }
+        elsif ($line =~ /^${pre}row\t(.*)$/) {
           $prev_row{$1} = 1;
           my ($pid) = $1 =~ /^("(?:[^"\\]|\\.)*"|[^,]*)/;
           $pid = $json->decode($pid) if $pid =~ /^"/;
@@ -668,10 +675,11 @@ print_held_trimmed() {
       if (open my $out, ">:encoding(UTF-8)", $tmp) {
         print $out "fields\t", ($fields // ""), "\n";
         print $out "row\t$_\n" for (defined $fields ? @$rows : ());
+        print $out "base$_\n" for @prev_lines;
         close $out and rename $tmp, $snapshot_out or unlink $tmp;
       }
     }
-  ' "$HELD_SNAPSHOT_FILE" "$snapshot_out" "$(date +%Y-%m-%d)"
+  ' "$HELD_SNAPSHOT_FILE" "$snapshot_out" "$(date +%Y-%m-%d)" "$REEMIT"
 }
 
 print_backlog_tasks_axi_compact() {

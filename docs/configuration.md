@@ -1405,7 +1405,9 @@ With it present, the held part of the backlog listing prints counts by hold kind
 Drift and upstream lines that the bootstrap part already printed are also not repeated under the network checks.
 
 With the flag absent the digest is unchanged.
-Only a session that holds the fleet lock updates the record of what the previous digest showed; with no such record yet, every held item is shown once.
+Only a session start that holds the fleet lock updates the record of what the previous digest showed, and a read-only session compares against that record without updating it.
+The digest reprinted after a context compaction compares against the same earlier record the session start compared against, without updating anything, so held changes shown at start are shown again after a compaction.
+With no such record yet, every held item is shown once.
 Only the recorded hold date counts as a date, not dates written inside a hold reason.
 The flag is a home-local preference and is not inherited by secondmate homes.
 [`bin/fm-session-start.sh`](../bin/fm-session-start.sh)'s header owns the exact rules.

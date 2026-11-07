@@ -2469,6 +2469,56 @@ EOF
   pass "digest trim: held rows print as kind counts plus the rows that gate work, are due, or changed"
 }
 
+# Reproduction: a session start shows a reworded and a new hold and advances the
+# held snapshot; the context re-emit after a compaction then compared against
+# that new snapshot and hid both. A re-emit must compare without writing.
+test_digest_trim_reemit_reshows_held_changes_without_advancing_snapshot() {
+  local rec root home fakebin out held inflight snapshot before after
+  rec=$(new_world digest-trim-reemit)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_tasks_axi_held_rows "$fakebin"
+  make_fake_ps_claude "$fakebin"
+  printf '%s\n' '# Backlog' > "$home/data/backlog.md"
+  held="$home/held.rows"
+  inflight="$home/inflight.rows"
+  snapshot="$home/state/.session-start-held-snapshot"
+  write_held_rows "$held"
+  printf '%s\n' 'work-a,in_flight,ship,firstmate,Work that waits on a held item,held-gate,"-","-"' > "$inflight"
+  export FM_FAKE_HELD_ROWS="$held" FM_FAKE_IN_FLIGHT_ROWS="$inflight"
+  : > "$home/config/startup-digest-trim"
+
+  FM_FAKE_HARNESS_PID=$$ run_session_start "$home" "$root" "$fakebin:$BASE_PATH" >/dev/null
+  assert_present "$snapshot" "the first trimmed start recorded no held snapshot"
+
+  sed -i.bak 's/^held-5,\(.*\)"reason 5, waiting"/held-5,\1"reason 5, now answered in part"/' "$held"
+  printf '%s\n' 'held-new,queued,ship,firstmate,A new held decision,none,captain,new decision,"-"' >> "$held"
+
+  before=$(cat "$snapshot")
+  out=$(FM_FAKE_HARNESS_PID=$$ run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_not_contains "$out" "READ-ONLY SESSION" "the session start ran read-only"
+  assert_contains "$out" $'new or changed since the previous digest:\n  held-5,queued' \
+    "the session start hid a held row whose hold changed"
+  assert_contains "$out" "  held-new,queued" "the session start hid a new held row"
+  after=$(cat "$snapshot")
+  [ "$before" != "$after" ] || fail "the session start did not advance the held snapshot"
+
+  out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$root" FM_FAKE_HARNESS_PID=$$ PATH="$fakebin:$BASE_PATH" \
+    env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
+    "$SESSION_START" --reemit)
+  assert_contains "$out" "SESSION START (CONTEXT RE-EMIT)" "the re-emit case did not run as a re-emit"
+  assert_not_contains "$out" "READ-ONLY SESSION" "the re-emit ran read-only, so it cannot show the snapshot write"
+  assert_contains "$out" $'new or changed since the previous digest:\n  held-5,queued' \
+    "the re-emit hid a reworded hold the session start had shown"
+  assert_contains "$out" "  held-new,queued" "the re-emit hid a new hold the session start had shown"
+  assert_equals "$after" "$(cat "$snapshot")" "the re-emit rewrote the held snapshot"
+
+  unset FM_FAKE_HELD_ROWS FM_FAKE_IN_FLIGHT_ROWS
+  pass "digest trim: a re-emit reshows held changes from the start and leaves the snapshot alone"
+}
+
 # Reproduction: the deferred bootstrap run reprints the local drift line, so the
 # digest carries it twice. With the flag it prints once, and the drop is named.
 test_digest_trim_prints_drift_lines_once() {
@@ -3568,6 +3618,7 @@ test_backlog_queued_bound_discloses_its_remainder
 test_backlog_compact_manual_backend_skips_indented_bodies
 test_backlog_compact_tasks_axi_unavailable_uses_manual_fallback
 test_digest_trim_shows_held_counts_and_only_rows_needing_attention
+test_digest_trim_reemit_reshows_held_changes_without_advancing_snapshot
 test_digest_trim_prints_drift_lines_once
 test_fleet_digest_empty_fleet
 test_next_step_sources_x_mode_cadence
