@@ -1369,6 +1369,27 @@ Before changing it, inspect the current file and curate the matching bullet in p
 Shared captain preferences that apply across secondmate domains live only in the primary home's optional `data/captain-shared.md`.
 `secondmate-provisioning` owns its propagation contract, including the required header, read-only secondmate copies, quarantine diagnostics, and the rollout rule that existing homes trim `data/captain.md` by hand after first propagation rather than deleting private content automatically.
 
+### Address and tone
+
+How the first mate speaks to the person is recorded as a `## Address and tone` section in `data/captain.md`, or in the primary home's `data/captain-shared.md` to cover every home.
+A local section wins whole when both files have one.
+
+```markdown
+## Address and tone
+- Call me: Partner
+- Tone: warm and playful, like a close friend, still clear underneath
+- Emoji: yes, a few per reply
+- Length: short
+- No-news reply: All good, Partner! ✨
+```
+
+Every bullet is optional free text.
+`Call me:` replaces "captain" as the direct address, and `No-news reply:` replaces the routine no-news reply, which is otherwise `<Call me>, shipshape.` (`Captain, shipshape.` with no `Call me:`).
+The recorded form governs every chat reply from the first message of every session, including short confirmations, the no-news reply, bad news, and technical updates; the plain-language, outcome-first, and safety rules in [`AGENTS.md`](../AGENTS.md) stay in force.
+With no section in either file, the first mate uses the default "captain" address and house style, asks once early in the session how the person wants to be spoken to, and records the answer here, even when the answer is to keep the defaults.
+The person changes it any time by saying so, and the first mate updates this section.
+On a home with [desk voice-out](#desk-voice-out-configspeak), `bin/fm-claude-reply-speak.sh` reads `Call me:` and `No-news reply:` so the routine reply stays silent and its spoken notices use the recorded address.
+
 ## Operational learnings (data/learnings.md)
 
 Fleet-local operational facts and gotchas live locally in `data/learnings.md`; it is gitignored and printed after the captain-preference files in the session-start context digest.
@@ -3921,7 +3942,7 @@ The script's header and `--help` own the exact invocation, the environment overr
 **Automatic reply speech.** On a Claude primary, the tracked `Stop` hook `bin/fm-claude-reply-speak.sh` carries out that duty.
 It runs in the background after every turn of the lock-holding plain primary checkout, never in a crew or scout worktree or a secondmate home, and speaks the turn's final reply through `bin/fm-speak.sh` only when nothing was spoken during that turn.
 It speaks the reply's opening lead ([`desk-voice-replies.md`](desk-voice-replies.md)): the first plain paragraph, at most six sentences and about 75 words, without a trailing list lead-in, plus one short pointer when the rest of the reply holds a choice, a question, steps, or more than a one-line sign-off, with the lead cut back so the pointer fits the spoken budget; a line the register refuses is retried with only the lead sentences it refuses on their own dropped, then falls back to its first sentence, then to a short notice that names a waiting decision only when the register refused the line as one and the reply itself offers a choice, a question, or steps, or the lead asks a question.
-A routine `Captain, shipshape.` reply stays silent to save speech credits, and a reply that opens with that line speaks only what follows it.
+The routine no-news reply, by default `Captain, shipshape.` and otherwise the form recorded under [address and tone](#address-and-tone), stays silent to save speech credits, and a reply that opens with that line speaks only what follows it.
 In a home that has not opted in, the hook runs only its plain-language reply check, then asks `bin/fm-speak.sh --enabled` and does nothing else; mute applies unchanged, and the hook's header owns the exact rules and that check.
 The Mac push-to-talk floater that feeds captain input into this home is documented in [`desk-floater.md`](desk-floater.md).
 

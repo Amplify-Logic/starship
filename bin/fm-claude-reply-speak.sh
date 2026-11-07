@@ -10,7 +10,7 @@
 #
 # What it speaks: the reply's opening lead (docs/desk-voice-replies.md), taken from the
 # Stop payload's `last_assistant_message`, which is the exact final reply:
-#   - a leading routine "Captain, shipshape." is dropped first, so that line is
+#   - a leading routine no-news line (below) is dropped first, so that line is
 #     never spoken and the news after it is;
 #   - only the first plain paragraph, with headings, tables, fenced code, and
 #     rules dropped, and list markers, emphasis, backticks, and link targets
@@ -46,7 +46,8 @@
 # When that is refused too, it speaks only the lead's first sentence with the
 # same pointer, and when that is refused, or the lead was a single sentence, it
 # speaks "Captain, a decision is waiting for you on screen." or "Captain, my
-# reply is on screen." A decision is named
+# reply is on screen.", with the recorded address (below) in place of "Captain".
+# A decision is named
 # only when a refusal reason said the line asked the captain to decide AND the
 # reply itself agrees: the rest offers a choice, a question, or steps, or the
 # lead asks a question. The reason is the register's own "refused: <reason>"
@@ -56,8 +57,9 @@
 # What stays silent:
 #   - an empty or missing `last_assistant_message`, such as a turn that ended on
 #     tool calls only;
-#   - the routine no-news reply: exactly "Captain, shipshape." after trimming,
-#     so a bare routine update costs no speech;
+#   - the routine no-news reply: exactly "Captain, shipshape.", "<address>,
+#     shipshape.", or the recorded no-news reply after trimming, so a bare
+#     routine update costs no speech;
 #   - a turn in which bin/fm-speak.sh already handed a line over: the hook
 #     records the newest reply number in state/speak-history/ (numbers only
 #     grow) after each Stop it accounts for, including after its own speech, and
@@ -74,6 +76,11 @@
 #     hook asks bin/fm-speak.sh --enabled and does nothing else at all, so a
 #     home without config/speak pays no settle wait and writes no state;
 #   - a muted home: bin/fm-speak.sh owns the mute and exits 0 without a sound.
+#
+# Recorded address and tone: docs/configuration.md "Address and tone" owns the
+# format. The first "## Address and tone" section found in data/captain.md, then
+# data/captain-shared.md, is the home's; its optional "Call me:" bullet replaces
+# "Captain" and its optional "No-news reply:" bullet is one more routine line.
 #
 # Scope, so workers never speak: every worktree of this repo loads the same
 # tracked settings, so the hook runs only in the plain primary checkout (not a
@@ -113,9 +120,6 @@ SPEAK="${FM_REPLY_SPEAK_CMD:-$SCRIPT_DIR/fm-speak.sh}"
 STOP_TOKEN_FILE="$STATE/.reply-speak-stop"
 SEEN_FILE="$STATE/.reply-speak-seen"
 SPEAK_HISTORY="$STATE/speak-history"
-DECISION_NOTICE="Captain, a decision is waiting for you on screen."
-REPLY_NOTICE="Captain, my reply is on screen."
-
 ROUTINE_LINE="Captain, shipshape."
 # docs/desk-voice-replies.md sizes the lead to what matters, roughly 75 words at most;
 # one sentence short of the register's seven leaves room for the pointer.
@@ -212,11 +216,49 @@ fi
 record_seen
 [ "$SPOKE_THIS_TURN" -eq 0 ] || exit 0
 
+# --- the home's recorded address and tone -----------------------------------
+# Prints the first file, local before shared, that holds the section.
+address_file() {
+  local file
+  for file in "$FM_HOME/data/captain.md" "$FM_HOME/data/captain-shared.md"; do
+    [ -f "$file" ] && grep -Eq '^##[[:space:]]+Address and tone[[:space:]]*$' "$file" \
+      && { printf '%s\n' "$file"; return 0; }
+  done
+  return 0
+}
+# Prints one bullet's value from the section, without one pair of surrounding
+# quotes or backticks.
+address_field() {  # <file> <label>
+  [ -n "$1" ] || return 0
+  awk -v want="$2" '
+    /^#/ { inside = ($0 ~ /^##[[:space:]]+Address and tone[[:space:]]*$/); next }
+    inside && index($0, want ":") {
+      line = $0
+      if (!sub("^[[:space:]]*[-*+][[:space:]]+" want ":[[:space:]]*", "", line)) next
+      sub(/[[:space:]]+$/, "", line)
+      if (length(line) > 1 && (line ~ /^".*"$/ || line ~ /^`.*`$/)) line = substr(line, 2, length(line) - 2)
+      print line
+      exit
+    }
+  ' "$1" 2>/dev/null
+}
+ADDRESS_FILE=$(address_file)
+ADDRESS=$(address_field "$ADDRESS_FILE" "Call me")
+NO_NEWS=$(address_field "$ADDRESS_FILE" "No-news reply")
+[ -n "$ADDRESS" ] || ADDRESS=Captain
+# Opening a spoken sentence, the address starts with a capital.
+ADDRESS=$(printf '%s' "$ADDRESS" | awk '{ print toupper(substr($0, 1, 1)) substr($0, 2) }')
+DECISION_NOTICE="$ADDRESS, a decision is waiting for you on screen."
+REPLY_NOTICE="$ADDRESS, my reply is on screen."
+
 # --- routine no-news line: never spoken -------------------------------------
 MSG=${MSG#"${MSG%%[![:space:]]*}"}
-case "$MSG" in
-  "$ROUTINE_LINE"|"$ROUTINE_LINE"[[:space:]]*) MSG=${MSG#"$ROUTINE_LINE"} ;;
-esac
+for routine in "$NO_NEWS" "$ADDRESS, shipshape." "$ROUTINE_LINE"; do
+  [ -n "$routine" ] || continue
+  case "$MSG" in
+    "$routine"|"$routine"[[:space:]]*) MSG=${MSG#"$routine"}; break ;;
+  esac
+done
 case "$MSG" in
   *[![:space:]]*) ;;
   *) exit 0 ;;

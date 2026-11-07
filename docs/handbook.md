@@ -69,6 +69,9 @@ record this as a learning: project X's tests only pass with Docker running
 from now on, for project X, you may merge green pull requests yourself
 ```
 
+How it talks to you lives in `data/captain.md` too: what to call you, the tone, emojis or not, and how short.
+It asks once in your first session, uses your answer in every reply, and changes it whenever you say so, for example "call me Partner, be playful, and keep it short" ([address and tone](configuration.md#address-and-tone)).
+
 Good entries are short, specific, and say why when the reason is not obvious.
 A rule with a reason is followed more sensibly at the edges than a bare command.
 
@@ -92,7 +95,7 @@ Claude Code, for example, has a per-folder memory it can write notes into and lo
 Use the home's records (`data/captain.md`, `data/learnings.md`, and the backlog) for anything the first mate must act on.
 They load on every supported AI tool, travel with your home if you move it to another machine, and are curated by `/stow`.
 
-The AI tool's own memory is fine for small notes about how you like to be spoken to, but it is tied to that one tool and that one folder.
+The AI tool's own memory is fine for small personal notes, but it is tied to that one tool and that one folder; how you like to be spoken to belongs in `data/captain.md`, where it outranks the default style.
 If both disagree, the home's records win.
 
 Two more records hold work rather than preferences:
