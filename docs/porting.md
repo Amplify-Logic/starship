@@ -240,12 +240,13 @@ Use a key that can do nothing but leave a note from the start, never a plain key
 On the receiving Mac, add the other machine's key to `~/.ssh/authorized_keys` as one line:
 
 ```text
-restrict,from="<other machine's Tailscale address>",command="<this Firstmate checkout>/bin/fm-inbox.sh note -" ssh-ed25519 AAAA... notes-from-other-home
+restrict,from="<other machine's Tailscale IPv4 address>",command="<this Firstmate checkout>/bin/fm-inbox.sh note -" ssh-ed25519 AAAA... notes-from-other-home
 ```
 
-`restrict` turns off forwarding and terminals, `from=` accepts the key only from that machine, and the forced command takes whatever is sent on stdin as one note.
+`restrict` turns off forwarding and terminals, `from=` accepts the key only from that machine's 100.x address, and the forced command takes whatever is sent on stdin as one note.
 Then turn on Remote Login in System Settings, General, Sharing, and set "Allow access for" to "Only these users" with just your own account.
-The other machine sends a note with `echo "text of the note" | ssh -i <its notes key> <this Mac>`.
+The other machine sends a note with `echo "text of the note" | ssh -i <its notes key> <you>@<this Mac's Tailscale IPv4 address>`.
+Connect to the 100.x address, not the MagicDNS name: the name also answers over IPv6, and a connection from the other machine's IPv6 address does not match `from=`, so the key is quietly refused.
 
 ## Required tooling
 
