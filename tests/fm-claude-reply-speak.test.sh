@@ -306,6 +306,13 @@ test_recorded_no_news_reply_is_silent() {
   run_hook "$dir" "$(printf '%s\n\n%s\n' "All good, Partner! ✨" "The deploy failed overnight.")"
   assert_equals "The deploy failed overnight." "$(spoken "$dir")" \
     "a recorded no-news opener must be dropped and the news after it spoken"
+  rm -f "$dir/spoken.log"
+  write_address "$dir/data/captain.md" "- Call me: Partner" "- No-news reply: all good"
+  run_hook "$dir" "all good"
+  assert_absent "$dir/spoken.log" "an unpunctuated recorded no-news reply must not be spoken"
+  run_hook "$dir" "all good on the deploy, but one pull request needs your review."
+  assert_equals "all good on the deploy, but one pull request needs your review." "$(spoken "$dir")" \
+    "a reply that only starts with the recorded no-news line must be spoken in full"
   pass "the recorded no-news reply is silent and dropped as an opener"
 }
 
