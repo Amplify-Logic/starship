@@ -10,7 +10,7 @@ Start with the directory layout, then use the setting reference for the behavior
 | Firstmate's code, private files, or project location | [FM_HOME](#fm_home) and [operational home layout](#operational-home-layout-and-state) |
 | Task windows and worker tools | [Runtime backend](#runtime-backend-configbackend--fm_backend) and [harness support](#harness-support) |
 | Worker permissions, accounts, or environment | [Codex approval review](#codex-automatic-approval-review), [Claude permission mode](#claude-permission-mode-configclaude-permission-mode), [Codex permission mode](#codex-permission-mode-configcodex-permission-mode), [persistent managed-policy failover](#persistent-managed-policy-failover), [worker command guard](#worker-command-guard-configcommand-guard), [worker outward actions](#worker-outward-actions-configoutward-permissions), [Claude concise prompt](#claude-concise-prompt-configclaude-concise-prompt), [worker account pin](#worker-account-pin-configclaude-account-configpi-account), [worker tool exclusions](#worker-tool-exclusions-configcrew-exclude-tools), [worker launch environment](#worker-launch-environment-configlaunch-env-allowlist), and its [Orca environment source](#orca-environment-source-configlaunch-env-tmux-session) |
-| Backlog, preferences, and memory | [Backlog backend](#backlog-backend-taskstoml--configbacklog-backend), [captain preferences](#captain-preferences-datacaptainmd--datacaptain-sharedmd), [external memory tiers](#external-memory-tiers-memory-layering-section), [record export](#record-export-configrecord-export-root), and [startup memory budget](#startup-memory-budget-configstartup-memory-budget) |
+| Backlog, preferences, and memory | [Backlog backend](#backlog-backend-taskstoml--configbacklog-backend), [captain preferences](#captain-preferences-datacaptainmd--datacaptain-sharedmd), [external memory tiers](#external-memory-tiers-memory-layering-section), [record export](#record-export-configrecord-export-root), [startup memory budget](#startup-memory-budget-configstartup-memory-budget), and [startup digest trim](#startup-digest-trim-configstartup-digest-trim) |
 | Supervision and presentation | [Pi supervision branch](#pi-supervision-branch), [supervision host](#supervision-host-configsupervision-host), [warm-cache compaction](#warm-cache-compaction-configwarm-compact), and [Calm preference](#calm-preference-configcalm) |
 | Persistent secondmates | [Secondmate routes](#secondmate-routes-datasecondmatesmd) |
 | Review bots on owned GitHub pull requests | [Contribution review bots](#contribution-review-bots-configcontribution-review-bots) |
@@ -1397,6 +1397,18 @@ Until then local files are the only memory owners.
 
 [`AGENTS.md`](../AGENTS.md) section 6 owns what a declaration changes about knowledge routing, and the internal [`stow` skill](../.agents/skills/stow/SKILL.md) owns how curation reads the declaration and protects tier-owned entries from pruning.
 The section counts toward the startup memory budget like the rest of its file, so keep it to the mapping rather than restating these rules.
+
+## Startup digest trim (config/startup-digest-trim)
+
+The optional local, gitignored `config/startup-digest-trim` presence flag opts this home into a default-off, shorter session-start digest.
+With it present, the held part of the backlog listing prints counts by hold kind plus only the held items that need a look now: items that gate in-flight work, items whose recorded hold date has come, and items that are new or changed since the previous digest; items that stopped being held since then are named, and one line gives the command for the full held list.
+Drift and upstream lines that the bootstrap part already printed are also not repeated under the network checks.
+
+With the flag absent the digest is unchanged.
+Only a session that holds the fleet lock updates the record of what the previous digest showed; with no such record yet, every held item is shown once.
+Only the recorded hold date counts as a date, not dates written inside a hold reason.
+The flag is a home-local preference and is not inherited by secondmate homes.
+[`bin/fm-session-start.sh`](../bin/fm-session-start.sh)'s header owns the exact rules.
 
 ## Startup memory budget (config/startup-memory-budget)
 

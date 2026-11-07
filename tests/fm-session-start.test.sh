@@ -18,6 +18,10 @@
 #   - startup backlog composition: done rows dropped, every in-flight/held/
 #     blocked row kept whole, the dispatchable queued listing bounded with an
 #     exact disclosed remainder
+#   - the opt-in digest trim (config/startup-digest-trim): held rows as kind
+#     counts plus only the rows that gate in-flight work, are due, or changed
+#     since the previous digest, and drift lines printed once; unflagged output
+#     keeps the full listing
 #   - orphan status logs whose task meta has already disappeared
 #   - per-task endpoint-liveness lines for a live and a dead recorded target,
 #     tmux and herdr both
@@ -154,6 +158,11 @@ case "${1:-}" in
     ;;
   ready)
     require_file "$@"
+    # Optional: hold the digest here until the deferred network stage has
+    # published, so its NETWORK CHECKS result prints inline deterministically.
+    if [ -n "${FM_FAKE_TASKS_AXI_WAIT_NETWORK:-}" ]; then
+      "$FM_FAKE_TASKS_AXI_WAIT_NETWORK" wait 30 >/dev/null 2>&1 || true
+    fi
     printf 'count: %s\n' "$ready_count"
     printf 'ready[%s]{id,state,kind,repo,title}:\n' "$ready_count"
     i=1
@@ -2298,6 +2307,203 @@ EOF
   pass "unavailable or incompatible tasks-axi falls back to compact manual backlog rendering"
 }
 
+# --- digest trim (config/startup-digest-trim) --------------------------------
+
+# make_fake_tasks_axi_held_rows <fakebin>: a tasks-axi boundary whose held and
+# in-flight groups come from row files the test edits between starts
+# (FM_FAKE_HELD_ROWS holds rows with hold_until as the last column,
+# FM_FAKE_IN_FLIGHT_ROWS rows without it). A held listing that does not ask for
+# hold_until gets that column cut, as the real tool would.
+make_fake_tasks_axi_held_rows() {
+  local fakebin=$1
+  cat > "$fakebin/tasks-axi" <<'SH'
+#!/usr/bin/env bash
+set -u
+log=${FM_FAKE_TASKS_AXI_LOG:-}
+[ -n "$log" ] && printf '%s\n' "$*" >> "$log"
+base='id,state,kind,repo,title,blocked_by,hold_kind,hold_reason'
+rows() {  # <header-fields> <file> [cut-last-column]
+  local n
+  n=$(grep -c . "$2" 2>/dev/null) || n=0
+  printf 'count: %s\n' "$n"
+  printf 'tasks[%s]{%s}:\n' "$n" "$1"
+  if [ -n "${3:-}" ]; then sed 's/,[^,]*$//; s/^/  /' "$2"; else sed 's/^/  /' "$2"; fi
+  printf 'help[1]:\n'
+  printf '%s\n' '  - Run `tasks-axi show <id>` for full notes on a task'
+}
+case "${1:-}" in
+  --version|-v|-V) printf '%s\n' '0.2.6' ;;
+  update) [ "${2:-}" = --help ] && printf '%s\n' 'usage: tasks-axi update <id> [--archive-body]' ;;
+  mv) [ "${2:-}" = --help ] && printf '%s\n' 'usage: tasks-axi mv <dest> [<id>...]' ;;
+  ready)
+    printf 'count: 0\n'
+    printf 'ready_public_followups: 0 delivery-ready obligations\n'
+    ;;
+  list)
+    case "$*" in
+      *'--state in_flight'*) rows "$base" "$FM_FAKE_IN_FLIGHT_ROWS" ;;
+      *'--state held'*'hold_until'*) rows "$base,hold_until" "$FM_FAKE_HELD_ROWS" ;;
+      *'--state held'*) rows "$base" "$FM_FAKE_HELD_ROWS" cut ;;
+      *'--state queued'*'--blocked'*)
+        printf 'count: 0\n'
+        printf 'tasks: 0 blocked queued tasks in this backlog\n'
+        ;;
+      *) exit 9 ;;
+    esac
+    ;;
+  *) exit 1 ;;
+esac
+exit 0
+SH
+  chmod +x "$fakebin/tasks-axi"
+}
+
+# write_held_rows <file>: 120 held rows - one gating an in-flight row, one
+# itself in flight, one whose hold date has come, one dated in the future, and
+# 116 ordinary rows spread over the hold kinds.
+write_held_rows() {
+  local file=$1 i=1 kind
+  {
+    printf '%s\n' 'held-gate,queued,ship,firstmate,"Held, and an in-flight task waits on it",none,captain,decide the shape,"-"'
+    printf '%s\n' 'held-running,in_flight,ship,firstmate,Held while it runs,none,external,waiting on a vendor,"-"'
+    printf '%s\n' 'held-due,queued,ship,firstmate,Revisit date has come,none,future,revisit in spring,2020-01-01'
+    printf '%s\n' 'held-later,queued,ship,firstmate,Revisit date still ahead,none,future,revisit next decade,2099-01-01'
+    while [ "$i" -le 116 ]; do
+      case $((i % 4)) in 0) kind=captain ;; 1) kind=future ;; 2) kind=parked ;; *) kind=load ;; esac
+      printf 'held-%s,queued,ship,firstmate,Ordinary held item %s with a title of ordinary length,none,%s,"reason %s, waiting",\"-\"\n' \
+        "$i" "$i" "$kind" "$i"
+      i=$((i + 1))
+    done
+  } > "$file"
+}
+
+# Reproduction: a home with 120 held items reprints every one of them at every
+# session start. With the flag, a steady-state start prints kind counts plus
+# only the rows that need a look now, a changed, new, or released hold surfaces
+# at the next start, a read-only session leaves the snapshot alone, and without
+# the flag the listing stays the full one.
+test_digest_trim_shows_held_counts_and_only_rows_needing_attention() {
+  local rec root home fakebin out full held inflight log snapshot before holder_pid
+  rec=$(new_world digest-trim-held)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_tasks_axi_held_rows "$fakebin"
+  make_fake_ps_claude "$fakebin"
+  printf '%s\n' '# Backlog' > "$home/data/backlog.md"
+  held="$home/held.rows"
+  inflight="$home/inflight.rows"
+  log="$home/tasks-axi.log"
+  snapshot="$home/state/.session-start-held-snapshot"
+  write_held_rows "$held"
+  printf '%s\n' 'work-a,in_flight,ship,firstmate,Work that waits on a held item,held-gate,"-","-"' > "$inflight"
+  export FM_FAKE_HELD_ROWS="$held" FM_FAKE_IN_FLIGHT_ROWS="$inflight" FM_FAKE_TASKS_AXI_LOG="$log"
+
+  # Without the flag: the full held group, the unchanged query, no snapshot.
+  full=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_contains "$full" "held-116,queued,ship,firstmate,Ordinary held item 116" \
+    "the unflagged digest dropped an ordinary held row"
+  assert_contains "$full" "count: 120" "the unflagged digest did not list all 120 held rows"
+  assert_not_contains "$full" "by kind:" "the unflagged digest printed trimmed kind counts"
+  assert_grep "--state held --fields blocked_by,hold_kind,hold_reason" "$log" \
+    "the unflagged digest did not ask for the held group"
+  assert_no_grep "hold_until" "$log" "the unflagged digest changed its held query"
+  assert_absent "$snapshot" "the unflagged digest wrote a held snapshot"
+
+  : > "$home/config/startup-digest-trim"
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_contains "$out" "no earlier held snapshot for this home, so every held row counts as new this once" \
+    "the first trimmed start did not say why it shows every held row"
+  assert_contains "$out" "held-116,queued" "the first trimmed start hid a held row it had never shown"
+  assert_present "$snapshot" "the first trimmed start recorded no held snapshot"
+
+  # Steady state: nothing changed since the previous digest.
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_contains "$out" "by kind: future 31, captain 30, load 29, parked 29, external 1" \
+    "the trimmed digest did not count held rows by kind"
+  assert_contains "$out" "trimmed (config/startup-digest-trim): 3 of 120 held row(s) shown" \
+    "the trimmed digest did not say how many held rows it shows"
+  assert_contains "$out" $'gating in-flight work:\n  held-gate,queued' \
+    "the trimmed digest hid a held row an in-flight task is blocked by"
+  assert_contains "$out" "  held-running,in_flight" "the trimmed digest hid a held row that is itself in flight"
+  assert_contains "$out" $'hold date reached:\n  held-due,queued' \
+    "the trimmed digest hid a held row whose date has come"
+  assert_not_contains "$out" "held-later," "the trimmed digest showed a held row whose date is still ahead"
+  assert_not_contains "$out" "held-116," "the trimmed digest showed an unchanged ordinary held row"
+  assert_not_contains "$out" "no earlier held snapshot" "a later trimmed start still claimed it had no snapshot"
+  assert_contains "$out" "full held list: bin/fm-tasks-axi.sh list --state held" \
+    "the trimmed digest gave no pointer to the full held list"
+  assert_contains "$out" "work-a,in_flight" "the trimmed digest changed the in-flight group"
+  [ "${#out}" -lt $(( ${#full} - 10000 )) ] \
+    || fail "the trimmed digest (${#out} bytes) is not clearly smaller than the full one (${#full} bytes)"
+
+  # One reworded hold, one new hold, one released hold.
+  sed -i.bak 's/^held-5,\(.*\)"reason 5, waiting"/held-5,\1"reason 5, now answered in part"/; /^held-6,/d' "$held"
+  printf '%s\n' 'held-new,queued,ship,firstmate,A new held decision,none,captain,new decision,"-"' >> "$held"
+
+  # A read-only session sees the changes but must not advance the snapshot.
+  before=$(cat "$snapshot")
+  sleep 300 &
+  holder_pid=$!
+  printf '%s\n' "$holder_pid" > "$home/state/.lock"
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  kill "$holder_pid" 2>/dev/null || true
+  wait "$holder_pid" 2>/dev/null || true
+  rm -f "$home/state/.lock"
+  assert_contains "$out" "READ-ONLY SESSION" "the read-only case did not run read-only"
+  assert_contains "$out" "  held-new,queued" "a read-only trimmed start hid a new held row"
+  assert_equals "$before" "$(cat "$snapshot")" "a read-only session rewrote the held snapshot"
+
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_contains "$out" $'new or changed since the previous digest:\n  held-5,queued' \
+    "the trimmed digest hid a held row whose hold changed"
+  assert_contains "$out" "  held-new,queued" "the trimmed digest hid a new held row"
+  assert_contains "$out" "no longer held since the previous digest: held-6" \
+    "the trimmed digest did not name a hold released since the previous digest"
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_not_contains "$out" "held-5," "a change already shown kept reprinting"
+  assert_not_contains "$out" "no longer held since the previous digest" "a release already shown kept reprinting"
+
+  unset FM_FAKE_HELD_ROWS FM_FAKE_IN_FLIGHT_ROWS FM_FAKE_TASKS_AXI_LOG
+  pass "digest trim: held rows print as kind counts plus the rows that gate work, are due, or changed"
+}
+
+# Reproduction: the deferred bootstrap run reprints the local drift line, so the
+# digest carries it twice. With the flag it prints once, and the drop is named.
+test_digest_trim_prints_drift_lines_once() {
+  local rec root home fakebin out
+  rec=$(new_world digest-trim-drift)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_tasks_axi_compact "$fakebin"
+  make_fake_ps_claude "$fakebin"
+  write_long_body_backlog "$home/data/backlog.md"
+  mkdir -p "$root/docs"
+  printf 'faketool\tfaketool\t1.0.0\tfixture runtime\tdocs/none.md\n' > "$root/docs/toolchain-manifest.tsv"
+  printf '#!/usr/bin/env bash\necho "faketool 2.0.0"\n' > "$fakebin/faketool"
+  chmod +x "$fakebin/faketool"
+
+  out=$(FM_FAKE_HARNESS_PID=$$ FM_FAKE_TASKS_AXI_WAIT_NETWORK="$ROOT/bin/fm-startup-network.sh" \
+    run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_equals 2 "$(grep -c '^TOOLCHAIN_DRIFT: faketool installed 2.0.0' <<<"$out")" \
+    "the unflagged digest no longer prints the drift line in both sections, so this case lost its reproduction"
+  assert_not_contains "$out" "already printed under BOOTSTRAP above" "the unflagged digest dropped a line"
+
+  : > "$home/config/startup-digest-trim"
+  out=$(FM_FAKE_HARNESS_PID=$$ FM_FAKE_TASKS_AXI_WAIT_NETWORK="$ROOT/bin/fm-startup-network.sh" \
+    run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_equals 1 "$(grep -c '^TOOLCHAIN_DRIFT: faketool installed 2.0.0' <<<"$out")" \
+    "the trimmed digest still printed the drift line twice"
+  assert_contains "$(sed -n '/^BOOTSTRAP$/,/^WAKE QUEUE$/p' <<<"$out")" "TOOLCHAIN_DRIFT: faketool installed 2.0.0" \
+    "the trimmed digest dropped the drift line from BOOTSTRAP instead of NETWORK CHECKS"
+  assert_contains "$out" "(1 drift or upstream line(s) already printed under BOOTSTRAP above are not repeated)" \
+    "the trimmed digest did not say it dropped a repeated line"
+  pass "digest trim: a drift line BOOTSTRAP printed is not repeated under NETWORK CHECKS"
+}
+
 # --- runtime bound -----------------------------------------------------------
 #
 # The digest runs on a session-open hook that blocks session initialization, so
@@ -3361,6 +3567,8 @@ test_backlog_compact_tasks_axi_omits_bodies_and_keeps_metadata
 test_backlog_queued_bound_discloses_its_remainder
 test_backlog_compact_manual_backend_skips_indented_bodies
 test_backlog_compact_tasks_axi_unavailable_uses_manual_fallback
+test_digest_trim_shows_held_counts_and_only_rows_needing_attention
+test_digest_trim_prints_drift_lines_once
 test_fleet_digest_empty_fleet
 test_next_step_sources_x_mode_cadence
 test_next_step_afk_delegates_to_daemon
