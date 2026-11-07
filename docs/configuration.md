@@ -1371,8 +1371,7 @@ Shared captain preferences that apply across secondmate domains live only in the
 
 ### Address and tone
 
-How the first mate speaks to the person is recorded as a `## Address and tone` section in `data/captain.md`, or in the primary home's `data/captain-shared.md` to cover every home.
-A local section wins whole when both files have one.
+How the first mate speaks to the person is recorded only as a `## Address and tone` section in the home's own `data/captain.md`; a section in `data/captain-shared.md` is not read for it.
 
 ```markdown
 ## Address and tone
@@ -1387,7 +1386,7 @@ Every bullet is optional free text.
 `Call me:` replaces "captain" as the direct address, and `No-news reply:` replaces the routine no-news reply, which is otherwise `<Call me>, shipshape.` (`Captain, shipshape.` with no `Call me:`).
 The recorded tone, emoji use, and length govern every other chat reply from the first message of every session, including short confirmations, bad news, and technical updates; the plain-language, outcome-first, and safety rules in [`AGENTS.md`](../AGENTS.md) stay in force.
 The no-news reply is used verbatim as recorded, never reworded to fit the tone or emoji preferences.
-With no section in either file, the first mate uses the default "captain" address and house style, asks once early in the session how the person wants to be spoken to, and records the answer as this section in `data/captain.md`, even when the answer is to keep the defaults.
+With no section, the first mate moves any address or tone preferences already written elsewhere in `data/captain.md` into this section, asks once early in the session only for what is still missing, and records the answer in that section, even when the answer is to keep the defaults; until then it uses the default "captain" address and house style.
 The person changes it any time by saying so, and the first mate updates this section.
 On a home with [desk voice-out](#desk-voice-out-configspeak), `bin/fm-claude-reply-speak.sh` reads `Call me:` and `No-news reply:` so the routine reply stays silent and its spoken notices use the recorded address.
 

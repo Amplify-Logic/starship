@@ -78,9 +78,9 @@
 #   - a muted home: bin/fm-speak.sh owns the mute and exits 0 without a sound.
 #
 # Recorded address and tone: docs/configuration.md "Address and tone" owns the
-# format. The first "## Address and tone" section found in data/captain.md, then
-# data/captain-shared.md, is the home's; its optional "Call me:" bullet replaces
-# "Captain" and its optional "No-news reply:" bullet is one more routine line.
+# format. The "## Address and tone" section of the home's own data/captain.md
+# is the only record; its optional "Call me:" bullet replaces "Captain" and its
+# optional "No-news reply:" bullet is one more routine line.
 #
 # Scope, so workers never speak: every worktree of this repo loads the same
 # tracked settings, so the hook runs only in the plain primary checkout (not a
@@ -217,19 +217,10 @@ record_seen
 [ "$SPOKE_THIS_TURN" -eq 0 ] || exit 0
 
 # --- the home's recorded address and tone -----------------------------------
-# Prints the first file, local before shared, that holds the section.
-address_file() {
-  local file
-  for file in "$FM_HOME/data/captain.md" "$FM_HOME/data/captain-shared.md"; do
-    [ -f "$file" ] && grep -Eq '^##[[:space:]]+Address and tone[[:space:]]*$' "$file" \
-      && { printf '%s\n' "$file"; return 0; }
-  done
-  return 0
-}
 # Prints one bullet's value from the section, without one pair of surrounding
 # quotes or backticks.
 address_field() {  # <file> <label>
-  [ -n "$1" ] || return 0
+  [ -f "$1" ] || return 0
   awk -v want="$2" '
     /^#/ { inside = ($0 ~ /^##[[:space:]]+Address and tone[[:space:]]*$/); next }
     inside && index($0, want ":") {
@@ -242,7 +233,7 @@ address_field() {  # <file> <label>
     }
   ' "$1" 2>/dev/null
 }
-ADDRESS_FILE=$(address_file)
+ADDRESS_FILE="$FM_HOME/data/captain.md"
 RECORDED_ADDRESS=$(address_field "$ADDRESS_FILE" "Call me")
 NO_NEWS=$(address_field "$ADDRESS_FILE" "No-news reply")
 [ -n "$RECORDED_ADDRESS" ] || RECORDED_ADDRESS=Captain

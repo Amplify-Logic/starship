@@ -327,20 +327,19 @@ test_recorded_address_names_the_notices() {
   pass "the voice notices use the recorded address and its no-news reply stays silent"
 }
 
-test_shared_address_applies_and_local_wins() {
+test_shared_address_is_ignored() {
   local dir
   dir=$(make_primary_dir "$TMP_ROOT/address-shared")
-  write_address "$dir/data/captain-shared.md" "- Call me: Pilot"
+  write_address "$dir/data/captain-shared.md" "- Call me: Pilot" "- No-news reply: Pilot, all calm."
   printf '# Preferences\n\n- Keep replies short.\n' > "$dir/data/captain.md"
   run_hook "$dir" "Unspeakable lead only."
-  assert_equals "Pilot, my reply is on screen." "$(spoken "$dir")" \
-    "a shared address must apply when the local file records none"
-  rm -f "$dir/spoken.log"
-  write_address "$dir/data/captain.md" "- Tone: plain"
-  run_hook "$dir" "Unspeakable lead only."
   assert_equals "Captain, my reply is on screen." "$(spoken "$dir")" \
-    "a local address-and-tone section must win whole, even without a Call me bullet"
-  pass "a shared address applies and a local section wins"
+    "a shared-file address must not replace the home's own default address"
+  rm -f "$dir/spoken.log"
+  run_hook "$dir" "Pilot, all calm."
+  assert_equals "Pilot, all calm." "$(spoken "$dir")" \
+    "a shared-file no-news reply must not be treated as routine"
+  pass "an address-and-tone section in the shared file is ignored"
 }
 
 test_long_reply_is_capped() {
@@ -780,7 +779,7 @@ test_shipshape_opener_is_dropped_one_line
 test_shipshape_opener_is_dropped_two_paragraphs
 test_recorded_no_news_reply_is_silent
 test_recorded_address_names_the_notices
-test_shared_address_applies_and_local_wins
+test_shared_address_is_ignored
 test_long_reply_is_capped
 test_lead_written_to_the_rule_is_kept_whole
 test_lead_keeps_at_most_six_sentences
