@@ -187,6 +187,8 @@ When a build is asked about while DeskFloater already shows as switched on in th
 "Quit & Reopen", Finder and a login item start the floater without the home the launcher passes it.
 The floater then finds its home from where it is: the Firstmate folder holding `desk-floater/.build/DeskFloater.app`.
 If it is not inside a Firstmate folder, it says so and quits rather than guessing.
+Such a start also inherits the login session's `TMPDIR`, which an installer can leave pointing at a folder that no longer exists, and then every helper that makes a temporary file fails, transcription and delivery to the chat among them.
+So at launch the floater keeps `TMPDIR` only when it is an existing folder it can write to, and otherwise points it, for itself and every helper it starts, at macOS's own per-user temporary folder, then `/tmp`.
 
 macOS can reopen any copy it knows under the app's identifier, so only the floater `bin/fm-desk-floater.sh` launches carries that identifier.
 A copy built with `--build-only`, such as one a worker builds to check a change, goes to its own `desk-floater/.build/DeskFloater-build-only.app` with an identifier of its own and stays ad-hoc signed, so it never changes the floater you launched and macOS never reopens it in place of this home's floater.

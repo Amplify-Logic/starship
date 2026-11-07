@@ -22,6 +22,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @MainActor
     func applicationDidFinishLaunching(_ notification: Notification) {
+        if let folder = HomeLocation.repairTemporaryDirectory() {
+            NSLog("DeskFloater: TMPDIR was not a usable folder; using %@", folder)
+        }
         NSApp.setActivationPolicy(.accessory)
         guard let location = HomeLocation.resolve(
             environment: ProcessInfo.processInfo.environment,
@@ -104,6 +107,61 @@ enum HomeLocation {
     private static func nonEmpty(_ value: String?) -> String? {
         guard let value, !value.isEmpty else { return nil }
         return value
+    }
+}
+
+/// The temporary folder the floater and every helper it starts use, through
+/// TMPDIR. A floater macOS starts by itself inherits whatever TMPDIR the login
+/// session holds, and that can name a folder that no longer exists. Every
+/// helper that makes a temporary file then fails: transcription and delivery
+/// to the chat among them. So at launch the floater keeps TMPDIR only when it
+/// is an existing folder it can write to, and otherwise points it at macOS's
+/// own per-user temporary folder, then /tmp.
+extension HomeLocation {
+    /// True when <path> is an existing folder this process can create files in.
+    static func isUsableTemporaryDirectory(_ path: String) -> Bool {
+        var info = stat()
+        guard !path.isEmpty, stat(path, &info) == 0, info.st_mode & S_IFMT == S_IFDIR else {
+            return false
+        }
+        return access(path, W_OK | X_OK) == 0
+    }
+
+    /// The folder to use: <current> when usable, else the first usable of
+    /// <systemDefault> and /tmp. Nil when none is usable, so the caller leaves
+    /// TMPDIR as it is rather than swapping one broken folder for another.
+    static func temporaryDirectory(
+        current: String?,
+        systemDefault: String?,
+        isUsable: (String) -> Bool = HomeLocation.isUsableTemporaryDirectory
+    ) -> String? {
+        [current, systemDefault, "/tmp"]
+            .compactMap { $0 }
+            .first(where: isUsable)
+    }
+
+    /// macOS's per-user temporary folder, which TMPDIR normally names.
+    static func systemTemporaryDirectory() -> String? {
+        let size = confstr(_CS_DARWIN_USER_TEMP_DIR, nil, 0)
+        guard size > 0 else { return nil }
+        var buffer = [CChar](repeating: 0, count: size)
+        guard confstr(_CS_DARWIN_USER_TEMP_DIR, &buffer, size) > 0 else { return nil }
+        let path = String(cString: buffer)
+        return path.isEmpty ? nil : path
+    }
+
+    /// Points this process's TMPDIR, which every helper it starts inherits,
+    /// at a usable folder. Returns the replacement, or nil when TMPDIR was
+    /// already usable or nothing better exists.
+    @discardableResult
+    static func repairTemporaryDirectory() -> String? {
+        let current = ProcessInfo.processInfo.environment["TMPDIR"]
+        guard let folder = temporaryDirectory(current: current, systemDefault: systemTemporaryDirectory()),
+              folder != current else {
+            return nil
+        }
+        setenv("TMPDIR", folder, 1)
+        return folder
     }
 }
 
