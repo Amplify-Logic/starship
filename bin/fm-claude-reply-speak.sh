@@ -219,7 +219,7 @@ record_seen
 
 # --- the home's recorded address and tone -----------------------------------
 # Prints one bullet's value from the section, without one pair of surrounding
-# quotes or backticks.
+# quotes or backticks; "keep the defaults" prints nothing, as if unset.
 address_field() {  # <file> <label>
   [ -f "$1" ] || return 0
   awk -v want="$2" '
@@ -229,7 +229,7 @@ address_field() {  # <file> <label>
       if (!sub("^[[:space:]]*[-*+][[:space:]]+" want ":[[:space:]]*", "", line)) next
       sub(/[[:space:]]+$/, "", line)
       if (length(line) > 1 && (line ~ /^".*"$/ || line ~ /^`.*`$/)) line = substr(line, 2, length(line) - 2)
-      print line
+      if (tolower(line) !~ /^keep the defaults?[.!]?$/) print line
       exit
     }
   ' "$1" 2>/dev/null

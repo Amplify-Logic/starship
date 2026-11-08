@@ -337,6 +337,13 @@ test_recorded_address_names_the_notices() {
   run_hook "$dir" "partner, shipshape."
   run_hook "$dir" "Partner, shipshape."
   assert_absent "$dir/spoken.log" "the verbatim no-news reply of a lowercase address must not be spoken"
+  write_address "$dir/data/captain.md" "- Call me: keep the defaults" "- No-news reply: Keep the defaults."
+  run_hook "$dir" "Unspeakable lead only."
+  assert_equals "Captain, my reply is on screen." "$(spoken "$dir")" \
+    "a recorded \"keep the defaults\" must leave the default address in place"
+  rm -f "$dir/spoken.log"
+  run_hook "$dir" "Captain, shipshape."
+  assert_absent "$dir/spoken.log" "the default no-news reply must stay silent when the defaults are kept"
   pass "the voice notices use the recorded address and its no-news reply stays silent"
 }
 
