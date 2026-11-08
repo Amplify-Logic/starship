@@ -1383,7 +1383,7 @@ How the first mate speaks to the person is recorded only as a `## Address and to
 - No-news reply: All good, Partner! ✨
 ```
 
-Every bullet is optional free text.
+Every bullet is optional free text, and a bullet that reads "keep the defaults" counts as absent.
 `Call me:` replaces "captain" as the direct address, and `No-news reply:` replaces the routine no-news reply, which is otherwise `<Call me>, shipshape.` (`Captain, shipshape.` with no `Call me:`).
 The recorded tone, emoji use, and length govern every other chat reply from the first message of every session, including short confirmations, bad news, and technical updates; the plain-language, outcome-first, and safety rules in [`AGENTS.md`](../AGENTS.md) stay in force.
 The no-news reply is used verbatim as recorded, never reworded to fit the tone or emoji preferences.
