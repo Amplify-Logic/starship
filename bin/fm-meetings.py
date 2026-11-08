@@ -20,7 +20,7 @@ import tempfile
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from fm_meeting_sources import KIND_TEXT, SOURCES, Failure, meeting_text, notice, now  # noqa: E402
+from fm_meeting_sources import KIND_TEXT, SOURCES, Failure, Unreachable, meeting_text, notice, now  # noqa: E402
 
 TAKING_STALE_SECONDS = 1800   # an intake that never finished frees its meeting after this long
 REANNOUNCE_SECONDS = 43200    # a meeting still waiting for intake is announced again after this long
@@ -150,7 +150,7 @@ class Home:
         if name in self.sources:
             return self.sources[name]
         if name:
-            raise Failure(f"{record.get('title') or record['id']} came from {name}, which config/meetings no longer names")
+            raise Unreachable(f"{record.get('title') or record['id']} came from {name}, which config/meetings no longer names")
         if len(self.sources) == 1:
             return next(iter(self.sources.values()))
         raise Failure(f"{record['id']} is not a meeting the check has seen; name one it has, or configure one source")
@@ -638,7 +638,7 @@ def intake_records(home):
     if not os.path.isdir(home.data):
         return []
     found = []
-    for name in os.listdir(home.data):
+    for name in sorted(os.listdir(home.data)):
         path = os.path.join(home.data, name, "intake.json")
         try:
             with open(path, encoding="utf-8") as handle:
@@ -650,15 +650,18 @@ def intake_records(home):
 
 def excluded_now(home, record, saved_text, unreachable):
     """Whether the exclude words mark a meeting already taken in: its saved record, and the whole meeting while
-    its source can still load it. A source that fails one load is added to unreachable and not asked again."""
+    its source can still load it. A source that cannot be reached is added to unreachable and not asked again; a
+    meeting the source no longer holds is checked by its saved record alone."""
     if home.exclusion_hits(saved_text):
         return True
     if not record or record.get("source") in unreachable:
         return False
     try:
         return bool(home.exclusion_hits(meeting_text(home.source_of(record).load(record))))
-    except Failure:
+    except Unreachable:
         unreachable.add(record.get("source"))
+        return False
+    except Failure:
         return False
 
 

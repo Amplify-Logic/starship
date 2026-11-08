@@ -29,6 +29,7 @@ mkdir -p "$FAKES"
 #   import-fails              when present, every import is refused
 #   list-fails                when present, every list call fails
 #   export-fails              when present, every export call fails
+#   export-hangs              when present, every export call hangs past the CLI timeout
 #   doctor-fails              when present, every doctor call fails
 # Every call is appended to calls.log; imports also to imports.jsonl.
 cat > "$FAKES/anarlog" <<'PY'
@@ -75,6 +76,9 @@ elif verb == "get":
     data.setdefault("recording_import", None)
     out("meetings.get", data)
 elif verb == "export":
+    if os.path.exists(os.path.join(base, "export-hangs")):
+        import time
+        time.sleep(60)
     if os.path.exists(os.path.join(base, "export-fails")):
         fail("database is locked")
     data = meeting(rest[0])
@@ -844,13 +848,27 @@ test_recall_stops_asking_a_source_that_fails() {
   run "$home" 0 check >/dev/null
   model_says "$home" '{"outcome":"They agreed to compare shed kits.","actions":[],"spoken_orders":[]}'
   run "$home" 60 intake >/dev/null
-  touch "$home/anarlog/export-fails"
+  touch "$home/anarlog/export-hangs"
   : > "$home/anarlog/calls.log"
   out=$(run "$home" 120 recall shed kits)
+  rm -f "$home/anarlog/export-hangs"
   assert_contains "$out" "Garden chat 1" "recall still answers from the saved records"
   assert_contains "$out" "Garden chat 3" "for every matching meeting"
-  assert_equals 1 "$(grep -c "export" "$home/anarlog/calls.log")" "a source that failed once is not asked again in the same recall"
-  pass "fm-meetings: recall stops asking a source that failed and checks the saved records instead"
+  assert_equals 1 "$(grep -c "export" "$home/anarlog/calls.log")" "a source that does not answer is not asked again in the same recall"
+
+  home=$(new_home recall-one-gone)
+  baseline "$home"
+  meeting "$home" '{"id":"m-a-gone","title":"Gone chat","ended":-901,"source":"batch_transcription"}'
+  meeting "$home" '{"id":"m-b-secret","title":"Secret chat","ended":-902,"source":"batch_transcription","transcript":"Captain: Let us compare three shed kits for Zephyr.\n\nRobin: Sounds good."}'
+  run "$home" 0 check >/dev/null
+  model_says "$home" '{"outcome":"They agreed to compare shed kits.","actions":[],"spoken_orders":[]}'
+  run "$home" 60 intake >/dev/null
+  rm -f "$home/anarlog/meetings/m-a-gone.json"
+  printf 'exclude_word = Zephyr\n' >> "$home/config/meetings"
+  out=$(run "$home" 120 recall shed kits)
+  assert_contains "$out" "Gone chat" "a meeting the recorder no longer holds is answered from its saved record"
+  assert_not_contains "$out" "Secret chat" "and does not stop the whole-meeting check of the next one"
+  pass "fm-meetings: recall stops asking a source that does not answer, but not one that lost a single meeting"
 }
 
 test_recall_answers_from_included_meetings_only() {

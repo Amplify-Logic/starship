@@ -26,7 +26,9 @@ exclusion_hits(text), the exclude words found in a text) and provides:
                     sends a meeting anywhere, such as to a transcription
                     service, while home.exclusion_hits(meeting_text(...))
                     finds an exclude word in it.
-  load(record)      the finished meeting as a Meeting (below) for intake
+  load(record)      the finished meeting as a Meeting (below) for intake,
+                    raising Unreachable when the recorder itself cannot be
+                    reached and Failure when only this meeting cannot be read
   search(terms, limit)
                     brief Meetings matching the recall words that no intake
                     record covers yet; [] by default
@@ -68,6 +70,10 @@ KIND_TEXT = {"final": "final transcript with speaker labels", "live": "live tran
 
 class Failure(Exception):
     pass
+
+
+class Unreachable(Failure):
+    """A Failure about the recorder itself, such as its tool missing or not answering, not about one meeting."""
 
 
 def now():
@@ -213,9 +219,9 @@ class Anarlog(Source):
         try:
             result = subprocess.run(command, capture_output=True, text=True, timeout=timeout)
         except FileNotFoundError:
-            raise Failure(f"the Anarlog command-line tool is not installed at {self.binary}")
+            raise Unreachable(f"the Anarlog command-line tool is not installed at {self.binary}")
         except subprocess.TimeoutExpired:
-            raise Failure(f"{label} did not answer within {timeout}s")
+            raise Unreachable(f"{label} did not answer within {timeout}s")
         if result.returncode != 0:
             detail = ""
             for stream in (result.stdout, result.stderr):
