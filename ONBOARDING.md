@@ -218,7 +218,7 @@ It explains the whole system in plain words, how to connect your mail, calendar 
 | `permission denied` on `bin/fm-primary.sh` | `chmod +x bin/*.sh`, then launch again. |
 | `refuses another live Firstmate session` | One is already running, perhaps in another Herdr space or Terminal window; type `/exit` in the spare one, then launch again. |
 | `command not found: herdr` | Open a new Terminal window; if it is still not found, run `bin/fm-herdr-setup.sh` again from `~/starship`. |
-| It doesn't call you captain | You are not in the Starship folder; `cd ~/starship` and launch again. |
+| It doesn't call you captain, or the name you gave it | You are not in the Starship folder; `cd ~/starship` and launch again. |
 | Claude says you reached your usage limit, or workers stop until a reset time | On Claude Pro, your first mate and every Opus worker share one usage window. Wait for the reset time Claude names, then ask the first mate to run fewer workers at a time, or lower its thinking level with `echo low > config/primary-effort` and start it again. |
 | It asks whether to re-certify or pin Claude Code | Ignore it; say "leave it as it is". Nothing is blocked, and that check is the maintainers' job. |
 | `skipped: dirty working tree` after "update starship" | `git -C ~/starship status --short` lists the cause. Move a `??` file out of `~/starship`; for an `M` file, save a copy elsewhere if you want it, then `git -C ~/starship restore <path>`. Then update again. |

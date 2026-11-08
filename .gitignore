@@ -37,3 +37,4 @@ screen-steps/.build/
 /.agents/skills/macos-computer-use
 /.agents/skills/intake-digest-lines
 /.agents/skills/daily-todo-freshness
+/.agents/skills/meeting-intake

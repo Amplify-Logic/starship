@@ -1,0 +1,35 @@
+# config/meetings - settings for the meeting intake (bin/fm-meetings.sh).
+# Copy this into a local, gitignored config/meetings and edit.
+# `key = value` lines; `#` comments and blank lines are ignored; an unknown key
+# is refused. Every line below shows the default, so an absent file behaves the
+# same as this one. See docs/meetings.md.
+
+# The intake runs only while this is true. Then arm its check once with
+# `bin/fm-meetings.sh arm`; `bin/fm-meetings.sh disarm` or `enabled = false`
+# turns it off again.
+enabled = false
+
+# Where finished meetings come from. Repeat the line for each source:
+#   call-recorder   calls recorded with bin/fm-call-companion.sh on this machine
+#   anarlog         meetings recorded by Anarlog (anarlog.so), through its
+#                   command-line tool
+source = call-recorder
+
+# Words that mark a meeting the intake never reads or acts on, such as an
+# employer's name. Repeat the line for each word or phrase. Every line of the
+# private config/meeting-exclude-words (one word or phrase per line, `#`
+# comments) counts too. None ship by default.
+# exclude_word = Example Corp
+
+# Another transcript speaker label that is you, beyond the one the recorder
+# marks as you. Repeat the line for each.
+# self_label = Me
+
+# Claude model for the intake, and how much of the meeting it reads.
+intake_model = sonnet
+transcript_chars = 60000
+
+# Anarlog only. Starship asks Anarlog for its after-the-call batch pass
+# (speaker labels) when it ran none itself; minutes to wait for that speaker
+# pass before using the live transcript.
+anarlog_speaker_pass_wait_minutes = 180

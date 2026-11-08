@@ -45,7 +45,7 @@ Ask, in one message:
 
 Record the answer as the `## Address and tone` section of `data/captain.md`, as `Call me`, `Tone`, `Emoji`, and `Length` bullets, writing "keep the defaults" when that is the answer.
 Keep to the tone, emoji and length from the very next reply.
-Use the name they gave alongside "captain", which the address rule at the top of `AGENTS.md` still requires once in every chat message; when they gave one, say in a line that you will use it and that "captain" stays in every message as the house address.
+Use the name they gave in place of "captain" from the very next reply, as the address rule at the top of `AGENTS.md` requires once in every chat message.
 
 ## 2. What matters
 

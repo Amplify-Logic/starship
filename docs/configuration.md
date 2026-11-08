@@ -17,6 +17,7 @@ Start with the directory layout, then use the setting reference for the behavior
 | Starter settings for a new home: which model does which job, transcription words, and how hard the first mate thinks | [Starter settings](#starter-settings-first-launch), [crew dispatch profiles](#crew-dispatch-profiles-configcrew-dispatchjson), [speech-to-text vocabulary](#speech-to-text-vocabulary-configstt-vocabulary), and [primary effort](#primary-effort-configprimary-effort) |
 | Spoken replies | [Desk voice-out](#desk-voice-out-configspeak) |
 | The call recorder | [Call recorder](#call-recorder-configcall-companion) |
+| The meeting intake | [Meeting intake](#meeting-intake-configmeetings) |
 | The morning intake, the continuous channel intake and the daily to-do page | [Daily intake and to-do page](#daily-intake-and-to-do-page-configmorning-intake-configchannel-intake) |
 | Which Starship version "update starship" follows | [Update channel](#update-channel-configupdate-channel) |
 | A home's own private tools beside the shared code | [Private add-on](#private-add-on-configaddon) and [opt-in skills](#opt-in-skills-configadhd-configsecond-opinion) |
@@ -106,6 +107,7 @@ Each effective `FM_HOME` contains private operational directories.
 - Explicitly installed content-addressed extension packages under `data/extensions/packages/`.
 - The captain ledger `data/captain-ledger.jsonl`, every captain prompt recorded before the primary answers in a home opted in through `config/captain-ledger` (`bin/fm-captain-ledger.sh`).
 - Call recordings under `data/calls/`: the transcript, live desk, end-of-call notes and archive (`bin/fm-call-lib.sh`; [call-companion.md](call-companion.md)).
+- The meeting intake's record of each meeting taken in under `data/meetings/` (`bin/fm-meetings.sh`; [meetings.md](meetings.md)).
 
 `state/` holds runtime records:
 
@@ -122,6 +124,7 @@ Each effective `FM_HOME` contains private operational directories.
 - The dispatch decision record `state/dispatch-decisions.jsonl` (`bin/fm-dispatch-resolve.sh`; "Typed dispatch resolution" below).
 - The localhost web page's token, pid, port and request log under `state/web/` (`bin/fm-web.sh`; [web.md](web.md)).
 - The call recorder's process records, logs, short-lived audio chunks and decision logs under `state/calls/` (`bin/fm-call-lib.sh`; [call-companion.md](call-companion.md)).
+- The meeting intake's check records under `state/meetings/` (`bin/fm-meetings.sh`; [meetings.md](meetings.md)).
 
 `config/` holds local gitignored operating choices, including explicit extension bindings under `config/extensions.d/`.
 
@@ -781,6 +784,7 @@ Each switch is an optional local, gitignored presence flag; any file at the path
 | `second-opinion-auto-fire` ([second-opinion.md](second-opinion.md)) | `config/second-opinion` |
 | `macos-computer-use` | `config/computer-use` (above) |
 | `intake-digest-lines` and `daily-todo-freshness` | `config/morning-intake` or `config/channel-intake` ([below](#daily-intake-and-to-do-page-configmorning-intake-configchannel-intake)) |
+| `meeting-intake` ([meetings.md](meetings.md)) | `config/meetings` ([below](#meeting-intake-configmeetings)) |
 
 A switched-on skill is linked into `.agents/skills/` under its usual name, so it loads exactly as a tracked skill does, and the link is gitignored.
 A harness lists skills when it starts, so a changed switch takes effect from the next launch.
@@ -1408,6 +1412,29 @@ Before changing it, inspect the current file and curate the matching bullet in p
 
 Shared captain preferences that apply across secondmate domains live only in the primary home's optional `data/captain-shared.md`.
 `secondmate-provisioning` owns its propagation contract, including the required header, read-only secondmate copies, quarantine diagnostics, and the rollout rule that existing homes trim `data/captain.md` by hand after first propagation rather than deleting private content automatically.
+
+### Address and tone
+
+How the first mate speaks to the person is recorded only as a `## Address and tone` section in the home's own `data/captain.md`; a section in `data/captain-shared.md` is not read for it.
+
+```markdown
+## Address and tone
+- Call me: Partner
+- Tone: warm and playful, like a close friend, still clear underneath
+- Emoji: yes, a few per reply
+- Length: short
+- No-news reply: All good, Partner! ✨
+```
+
+Every bullet is optional free text, and a bullet that reads "keep the defaults" counts as absent.
+`Call me:` replaces "captain" as the direct address, and `No-news reply:` replaces the routine no-news reply, which is otherwise `<Call me>, shipshape.` (`Captain, shipshape.` with no `Call me:`).
+The recorded tone, emoji use, and length govern every other chat reply from the first message of every session, including short confirmations, bad news, and technical updates; the plain-language, outcome-first, and safety rules in [`AGENTS.md`](../AGENTS.md) stay in force.
+The no-news reply is used verbatim as recorded, never reworded to fit the tone or emoji preferences.
+A new owner's first conversation asks for it as its first question ([`first-voyage`](../.agents/skills/first-voyage/SKILL.md)).
+Otherwise, in a primary home with no section, the first mate moves any address or tone preferences already written elsewhere in `data/captain.md` into this section, asks once early in the session only for what is still missing, and records the answer in that section, even when the answer is to keep the defaults; until then it uses the default "captain" address and house style.
+The person changes it any time by saying so, and the first mate updates this section.
+`bin/fm-session-start.sh` prints the section's first 15 non-blank lines, or in a primary home without one that is not cued for its first voyage the cue to ask, at the very top of the session-start digest, so it reaches the first reply even when the harness shows only a short preview of a large digest.
+On a home with [desk voice-out](#desk-voice-out-configspeak), `bin/fm-claude-reply-speak.sh` reads `Call me:` and `No-news reply:` so the routine reply stays silent and its spoken notices use the recorded address.
 
 ## Operational learnings (data/learnings.md)
 
@@ -4064,7 +4091,7 @@ The script's header and `--help` own the exact invocation, the environment overr
 **Automatic reply speech.** On a Claude primary, the tracked `Stop` hook `bin/fm-claude-reply-speak.sh` carries out that duty.
 It runs in the background after every turn of the lock-holding plain primary checkout, never in a crew or scout worktree or a secondmate home, and speaks the turn's final reply through `bin/fm-speak.sh` only when nothing was spoken during that turn.
 It speaks the reply's opening lead ([`desk-voice-replies.md`](desk-voice-replies.md)): the first plain paragraph, at most six sentences and about 75 words, without a trailing list lead-in, plus one short pointer when the rest of the reply holds a choice, a question, steps, or more than a one-line sign-off, with the lead cut back so the pointer fits the spoken budget; a line the register refuses is retried with only the lead sentences it refuses on their own dropped, then falls back to its first sentence, then to a short notice that names a waiting decision only when the register refused the line as one and the reply itself offers a choice, a question, or steps, or the lead asks a question.
-A routine `Captain, shipshape.` reply stays silent to save speech credits, and a reply that opens with that line speaks only what follows it.
+The routine no-news reply, by default `Captain, shipshape.` and otherwise the form recorded under [address and tone](#address-and-tone), stays silent to save speech credits, and a reply that opens with that line speaks only what follows it.
 In a home that has not opted in, the hook runs only its plain-language reply check, then asks `bin/fm-speak.sh --enabled` and does nothing else; mute applies unchanged, and the hook's header owns the exact rules and that check.
 The Mac push-to-talk floater that feeds captain input into this home is documented in [`desk-floater.md`](desk-floater.md).
 
@@ -4109,6 +4136,15 @@ It holds the call recorder's settings: the label for your own speech, the microp
 Absent, every setting takes its default.
 `key = value` lines; `#` comments and blank lines are ignored, and an unknown key is refused so a typo never silently changes what is recorded.
 [`docs/examples/call-companion`](examples/call-companion) lists every key with its default, `bin/fm-call-lib.sh`'s header owns their meaning, and [call-companion.md](call-companion.md) covers consent, setup, stopping and deleting.
+
+## Meeting intake (config/meetings)
+
+Optional, private, gitignored, and not inherited by secondmate homes.
+Nothing polls, reads or acts until it holds `enabled = true`; `bin/fm-meetings.sh arm` then binds the standing check, and `enabled = false` or `bin/fm-meetings.sh disarm` turns the intake off again.
+It names the sources finished meetings come from (`source = call-recorder`, the default, for calls recorded with the call recorder above, and `source = anarlog` for meetings recorded by Anarlog), the words that keep a meeting out of the intake altogether, any further transcript label that is you, the Claude model for the intake, and the Anarlog speaker-pass wait.
+`key = value` lines; `#` comments and blank lines are ignored, and an unknown key or source is refused so a typo never silently changes what is read.
+[`docs/examples/meetings`](examples/meetings) lists every key with its default, `bin/fm-meetings.sh`'s header owns their meaning and the intake's rules, `bin/fm_meeting_sources.py`'s header owns each source and the seam a new one plugs into, and [meetings.md](meetings.md) covers what Anarlog is, setup, keys and turning the intake off.
+The file's presence also switches on the `meeting-intake` skill as an [opt-in skill](#opt-in-skills-configadhd-configsecond-opinion).
 
 ## Supervision active alert channels (config/wedge-alarm)
 

@@ -26,6 +26,9 @@
 # ORDERING, and why LOCK now runs before BOOTSTRAP (the old AGENTS.md order
 # was bootstrap-then-lock):
 #
+#   0. address and tone - read-only, not a stage: the recorded section from
+#                       data/captain.md (or the cue to ask for one) leads the
+#                       output so the first reply survives a spilled digest.
 #   1. lock          - acquire the per-home session lock FIRST, before any
 #                       mutating step runs.
 #   1b. home role    - the resolved firstmate-repository role line
@@ -473,15 +476,20 @@ print_backlog_pointer() {
 # clone under projects/, and an older home like that is never onboarded again
 # just because it has no preferences file. A secondmate home never chats with
 # the owner, so it never prints one.
-print_first_voyage() {
+first_voyage_due() {
   local projects="${FM_PROJECTS_OVERRIDE:-$FM_HOME/projects}" clone
   if [ -e "$FM_HOME/.fm-secondmate-home" ] || [ -L "$FM_HOME/.fm-secondmate-home" ]; then
-    return 0
+    return 1
   fi
-  [ ! -e "$DATA/captain.md" ] && [ ! -e "$DATA/projects.md" ] || return 0
+  [ ! -e "$DATA/captain.md" ] && [ ! -e "$DATA/projects.md" ] || return 1
   for clone in "$projects"/*/; do
-    [ -d "$clone" ] && return 0
+    [ -d "$clone" ] && return 1
   done
+  return 0
+}
+
+print_first_voyage() {
+  first_voyage_due || return 0
   printf 'FIRST VOYAGE: this home has not met its owner yet (no data/captain.md, no project) - load the first-voyage skill before anything else and let it lead the first conversation (AGENTS.md section 3).\n'
 }
 
@@ -877,6 +885,25 @@ if [ "$REEMIT" -eq 0 ] && [ "$SESSION_SOURCE" = startup ]; then
   AGENTS_START_HASH=$(hash_file_sha256 "$FM_ROOT/AGENTS.md" 2>/dev/null || true)
 fi
 
+# The home's recorded address and tone (docs/configuration.md "Address and
+# tone") governs the very first reply, so it leads the output for the same
+# preview reason as the re-emit cue below: CONTEXT prints last and a spilled
+# digest shows only its head. Bounded to the section's first 15 non-blank
+# lines; a primary home with no section gets the one-line cue to ask instead,
+# unless its first voyage is due, whose first question asks for it.
+print_address_and_tone() {
+  local section
+  section=$(awk '
+    /^#/ { if (inside) exit; inside = ($0 ~ /^##[[:space:]]+Address and tone[[:space:]]*$/); next }
+    inside && NF { print; if (++n == 15) exit }
+  ' "$DATA/captain.md" 2>/dev/null || true)
+  if [ -n "$section" ]; then
+    printf 'ADDRESS AND TONE (data/captain.md) - apply to every reply from the first:\n%s\n' "$section"
+  elif [ ! -e "$FM_HOME/.fm-secondmate-home" ] && ! first_voyage_due; then
+    printf 'ADDRESS AND TONE: data/captain.md has no ## Address and tone section; ask once, early (AGENTS.md section 3).\n'
+  fi
+}
+
 if [ "$REEMIT" -eq 1 ]; then
   # First in the output on purpose: a harness that spills a large hook output
   # delivers only a short head inline (Claude: about 2,000 characters), and
@@ -884,6 +911,7 @@ if [ "$REEMIT" -eq 1 ]; then
   printf 'RE-EMIT CUE: if this output ends with "Output too large ... Full output saved to <path>",\n'
   printf 'read that whole file now, before acting. Otherwise read data/captain.md, data/captain-shared.md,\n'
   printf 'and data/learnings.md under %s now if any of them is missing below.\n' "$DATA"
+  print_address_and_tone
   section "SESSION START (CONTEXT RE-EMIT) - $FM_HOME"
   printf 'This session already took the helm at its own startup and has only lost its\n'
   printf 'context. Lock ownership is re-verified and the durable records below are\n'
@@ -892,6 +920,7 @@ if [ "$REEMIT" -eq 1 ]; then
   printf 'retry, X-mode artifact writes, and stale Herdr child cleanup - are NOT repeated.\n'
   printf 'Queued wakes ARE still drained: they arrived after startup and are this turn work.\n'
 else
+  print_address_and_tone
   section "SESSION START - $FM_HOME"
 fi
 print_first_voyage

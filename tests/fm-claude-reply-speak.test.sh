@@ -282,6 +282,86 @@ test_shipshape_opener_is_dropped_two_paragraphs() {
   pass "two-paragraph shipshape opener is dropped, the news is spoken"
 }
 
+# --- the home's recorded address and tone --------------------------------------
+
+write_address() {  # <file> <bullet lines...>
+  local file=$1
+  shift
+  mkdir -p "$(dirname "$file")"
+  {
+    printf '# Preferences\n\n- Keep replies short.\n\n## Address and tone\n'
+    printf '%s\n' "$@"
+    printf '\n## Other\n- Call me: not this one\n'
+  } > "$file"
+}
+
+test_recorded_no_news_reply_is_silent() {
+  local dir
+  dir=$(make_primary_dir "$TMP_ROOT/address-no-news")
+  write_address "$dir/data/captain.md" "- Call me: Partner" '- No-news reply: "All good, Partner! ✨"'
+  run_hook "$dir" "All good, Partner! ✨"
+  run_hook "$dir" "Partner, shipshape."
+  run_hook "$dir" "Captain, shipshape."
+  assert_absent "$dir/spoken.log" "the recorded no-news reply and its default forms must not be spoken"
+  run_hook "$dir" "$(printf '%s\n\n%s\n' "All good, Partner! ✨" "The deploy failed overnight.")"
+  assert_equals "The deploy failed overnight." "$(spoken "$dir")" \
+    "a recorded no-news opener must be dropped and the news after it spoken"
+  rm -f "$dir/spoken.log"
+  write_address "$dir/data/captain.md" "- Call me: Partner" "- No-news reply: all good"
+  run_hook "$dir" "all good"
+  run_hook "$dir" "all good  "
+  run_hook "$dir" "$(printf 'all good\r\n')"
+  assert_absent "$dir/spoken.log" "an unpunctuated recorded no-news reply must not be spoken"
+  run_hook "$dir" "$(printf 'all good \r\n\r\nThe deploy failed overnight.\r\n')"
+  assert_equals "The deploy failed overnight." "$(spoken "$dir")" \
+    "a recorded no-news first line with trailing blanks and CRLF must be dropped"
+  rm -f "$dir/spoken.log"
+  run_hook "$dir" "all good on the deploy, but one pull request needs your review."
+  assert_equals "all good on the deploy, but one pull request needs your review." "$(spoken "$dir")" \
+    "a reply that only starts with the recorded no-news line must be spoken in full"
+  pass "the recorded no-news reply is silent and dropped as an opener"
+}
+
+test_recorded_address_names_the_notices() {
+  local dir
+  dir=$(make_primary_dir "$TMP_ROOT/address-notices")
+  write_address "$dir/data/captain.md" "- Tone: warm and playful" "- Call me: partner"
+  run_hook "$dir" "Shall I merge the green PR now?"
+  assert_equals "Partner, a decision is waiting for you on screen." "$(spoken "$dir")" \
+    "the decision notice must use the recorded address"
+  rm -f "$dir/spoken.log"
+  run_hook "$dir" "Unspeakable lead only."
+  assert_equals "Partner, my reply is on screen." "$(spoken "$dir")" \
+    "the on-screen notice must use the recorded address"
+  rm -f "$dir/spoken.log"
+  run_hook "$dir" "partner, shipshape."
+  run_hook "$dir" "Partner, shipshape."
+  assert_absent "$dir/spoken.log" "the verbatim no-news reply of a lowercase address must not be spoken"
+  write_address "$dir/data/captain.md" "- Call me: keep the defaults" "- No-news reply: Keep the defaults."
+  run_hook "$dir" "Unspeakable lead only."
+  assert_equals "Captain, my reply is on screen." "$(spoken "$dir")" \
+    "a recorded \"keep the defaults\" must leave the default address in place"
+  rm -f "$dir/spoken.log"
+  run_hook "$dir" "Captain, shipshape."
+  assert_absent "$dir/spoken.log" "the default no-news reply must stay silent when the defaults are kept"
+  pass "the voice notices use the recorded address and its no-news reply stays silent"
+}
+
+test_shared_address_is_ignored() {
+  local dir
+  dir=$(make_primary_dir "$TMP_ROOT/address-shared")
+  write_address "$dir/data/captain-shared.md" "- Call me: Pilot" "- No-news reply: Pilot, all calm."
+  printf '# Preferences\n\n- Keep replies short.\n' > "$dir/data/captain.md"
+  run_hook "$dir" "Unspeakable lead only."
+  assert_equals "Captain, my reply is on screen." "$(spoken "$dir")" \
+    "a shared-file address must not replace the home's own default address"
+  rm -f "$dir/spoken.log"
+  run_hook "$dir" "Pilot, all calm."
+  assert_equals "Pilot, all calm." "$(spoken "$dir")" \
+    "a shared-file no-news reply must not be treated as routine"
+  pass "an address-and-tone section in the shared file is ignored"
+}
+
 test_long_reply_is_capped() {
   local dir reply out
   dir=$(make_primary_dir "$TMP_ROOT/long")
@@ -717,6 +797,9 @@ test_routine_shipshape_is_silent
 test_shipshape_near_misses_are_spoken
 test_shipshape_opener_is_dropped_one_line
 test_shipshape_opener_is_dropped_two_paragraphs
+test_recorded_no_news_reply_is_silent
+test_recorded_address_names_the_notices
+test_shared_address_is_ignored
 test_long_reply_is_capped
 test_lead_written_to_the_rule_is_kept_whole
 test_lead_keeps_at_most_six_sentences
