@@ -648,16 +648,17 @@ def intake_records(home):
     return found
 
 
-def excluded_now(home, record, saved_text):
+def excluded_now(home, record, saved_text, unreachable):
     """Whether the exclude words mark a meeting already taken in: its saved record, and the whole meeting while
-    its source can still load it."""
+    its source can still load it. A source that fails one load is added to unreachable and not asked again."""
     if home.exclusion_hits(saved_text):
         return True
-    if not record:
+    if not record or record.get("source") in unreachable:
         return False
     try:
         return bool(home.exclusion_hits(meeting_text(home.source_of(record).load(record))))
     except Failure:
+        unreachable.add(record.get("source"))
         return False
 
 
@@ -680,13 +681,13 @@ def cmd_recall(home, args):
         raise Failure("recall needs a person, topic or title to look for")
     with locked(home):
         records = load_records(home)
-    scored, seen = [], set()
+    scored, seen, unreachable = [], set(), set()
     for intake in intake_records(home):
         seen.add(intake.get("id"))
         text = values_text(intake)
         haystack = set(normalize(text).split())
         score = sum(term in haystack for term in terms)
-        if score and not excluded_now(home, records["meetings"].get(intake.get("id")), text):
+        if score and not excluded_now(home, records["meetings"].get(intake.get("id")), text, unreachable):
             scored.append((score, intake))
     for name, source in home.sources.items():
         try:

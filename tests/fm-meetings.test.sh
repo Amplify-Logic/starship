@@ -834,6 +834,25 @@ test_unreadable_source_or_config_is_reported_once() {
   pass "fm-meetings: an unreadable source or config is reported once until it clears"
 }
 
+test_recall_stops_asking_a_source_that_fails() {
+  local home out n
+  home=$(new_home recall-unreachable)
+  baseline "$home"
+  for n in 1 2 3; do
+    meeting "$home" "{\"id\":\"m-garden-$n\",\"title\":\"Garden chat $n\",\"ended\":-$((900 + n)),\"source\":\"batch_transcription\"}"
+  done
+  run "$home" 0 check >/dev/null
+  model_says "$home" '{"outcome":"They agreed to compare shed kits.","actions":[],"spoken_orders":[]}'
+  run "$home" 60 intake >/dev/null
+  touch "$home/anarlog/export-fails"
+  : > "$home/anarlog/calls.log"
+  out=$(run "$home" 120 recall shed kits)
+  assert_contains "$out" "Garden chat 1" "recall still answers from the saved records"
+  assert_contains "$out" "Garden chat 3" "for every matching meeting"
+  assert_equals 1 "$(grep -c "export" "$home/anarlog/calls.log")" "a source that failed once is not asked again in the same recall"
+  pass "fm-meetings: recall stops asking a source that failed and checks the saved records instead"
+}
+
 test_recall_answers_from_included_meetings_only() {
   local home out
   home=$(new_home recall)
@@ -1093,6 +1112,7 @@ fm_test_run \
   test_imported_recordings_flow_into_the_same_intake \
   test_unreadable_source_or_config_is_reported_once \
   test_recall_answers_from_included_meetings_only \
+  test_recall_stops_asking_a_source_that_fails \
   test_archived_calls_feed_the_intake \
   test_call_without_notes_waits_ten_minutes_and_exclusion_applies \
   test_both_sources_run_together \
