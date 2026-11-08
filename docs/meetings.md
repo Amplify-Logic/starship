@@ -10,7 +10,7 @@ It is off until a home turns it on, and it acts toward no one outside Starship; 
 
 The intake reads finished meetings from the sources `config/meetings` names:
 
-- **The call recorder** (`source = call-recorder`, the default): every call you record with [`bin/fm-call-companion.sh`](call-companion.md) feeds the intake once it is stopped and its end-of-call notes are written.
+- **The call recorder** (`source = call-recorder`, the default): every call you record with [`bin/fm-call-companion.sh`](call-companion.md) feeds the intake once it is stopped and its end-of-call notes are written, or ten minutes after it was archived without them.
   Nothing more to install.
 - **Anarlog** (`source = anarlog`): [Anarlog](https://anarlog.so) is a free meeting recorder for the Mac that records any meeting, in any app or in person, and writes its transcript and summary on your Mac, in its own local database.
   Anarlog labels speakers itself and transcribes with whichever engine its own settings name.
@@ -21,7 +21,7 @@ The intake reads finished meetings from the sources `config/meetings` names:
 
 ## What happens after a meeting
 
-1. A standing check notices the meeting has finished: the call recorder archived the call with its notes, or Anarlog shows the meeting ended, nothing is still being saved, and its summary is in (or ten minutes have passed).
+1. A standing check notices the meeting has finished: the call recorder archived the call with its notes (or ten minutes passed without them), or Anarlog shows the meeting ended, nothing is still being saved, and its summary is in (or ten minutes have passed).
 2. For an Anarlog meeting, Starship makes sure it reads the best transcript.
    Anarlog writes a live transcript during the meeting and, in some cases, rewrites it after the meeting with speaker labels.
    For every other meeting, Starship asks Anarlog to run that after-the-meeting pass by importing the meeting's own recording, which appears in Anarlog as a second meeting titled "... (speaker pass)".
