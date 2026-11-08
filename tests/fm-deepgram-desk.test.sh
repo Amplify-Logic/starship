@@ -198,8 +198,8 @@ test_tts_dry_run_with_key() {
 
 # --- Deepgram STT helper ----------------------------------------------------
 
-install_stt_curl() {  # <home> <http-code> <body>
-  local home=$1 code=$2 body=$3
+install_stt_curl() {  # <home> <http-code> <body> [curl-exit]
+  local home=$1 code=$2 body=$3 rc=${4:-0}
   printf '%s' "$body" > "$home/stt-body.json"
   cat > "$home/curl" <<EOF
 #!/usr/bin/env bash
@@ -212,6 +212,7 @@ done
 printf 'curl-argv: %s\n' "\$*" >> "$home/curl.log"
 cat "$home/stt-body.json" > "\$out"
 printf '%s' "$code"
+exit $rc
 EOF
   chmod +x "$home/curl"
 }
@@ -290,6 +291,14 @@ test_stt_reports_http_failure() {
   out=$(DEEPGRAM_API_KEY=test-key-not-real FM_DEEPGRAM_CURL="$home/curl" \
     "$STT" "$home/clip.wav" 2>&1) || status=$?
   [ "$status" -eq 3 ] || fail "expected exit 3 for an account out of credit, got $status: $out"
+  # Deepgram can answer 401 and then cancel the HTTP/2 stream while the chunk
+  # is still uploading, so curl exits 92 after the status line arrived.
+  install_stt_curl "$home" 401 '{"err_msg":"invalid credentials"}' 92
+  status=0
+  out=$(DEEPGRAM_API_KEY=test-key-not-real FM_DEEPGRAM_CURL="$home/curl" \
+    "$STT" --segments "$home/clip.wav" 2>&1) || status=$?
+  [ "$status" -eq 3 ] || fail "expected exit 3 when Deepgram rejects the key and cancels the upload, got $status: $out"
+  assert_contains "$out" "rejected the key" "a rejected key that cut the upload short is named"
   install_stt_curl "$home" 500 '{"err_msg":"internal"}'
   status=0
   out=$(DEEPGRAM_API_KEY=test-key-not-real FM_DEEPGRAM_CURL="$home/curl" \

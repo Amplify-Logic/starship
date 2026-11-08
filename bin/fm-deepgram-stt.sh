@@ -403,7 +403,15 @@ main() {
     --header "Content-Type: ${ctype}" \
     --data-binary @"$audio" \
     --url "https://api.deepgram.com/v1/listen?model=${model}&smart_format=true&mip_opt_out=true${extra}" \
-    || die "curl failed talking to Deepgram (no answer within ${max_time}s, nothing moving for ${stall_time}s, or the connection failed)"
+    || {
+      # Deepgram can answer 401 or 402 and then cancel the upload, so curl
+      # fails after the status arrived; that is still a rejected key.
+      if key_refused; then
+        note "Deepgram rejected the key (HTTP $http) and cut the upload short"
+        exit 3
+      fi
+      die "curl failed talking to Deepgram (no answer within ${max_time}s, nothing moving for ${stall_time}s, or the connection failed)"
+    }
 
   if [ "$http" != "200" ]; then
     note "Deepgram listen failed HTTP $http"
