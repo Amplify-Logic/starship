@@ -127,7 +127,7 @@ The crew-hosted recovery ordering and arm-and-acknowledge rule are owned by the 
      It prints each item not yet told, as labelled fields, or `nothing new`, or a `refused` or `error` stop with its meaning.
   2. Tell the owner in plain words, in one message for the batch: the room, who, what they asked or said, and the card title, with no internal terms such as pull, card id, sequence or source.
      A request to the ship is a decision for the owner, so ask whether to take it on and under which project.
-  3. Run `bin/fm-procevent-mothership.sh told <result-file>`, which records what was told so a batch captured twice is told once, then acknowledge the wake as usual.
+  3. Run `bin/fm-procevent-mothership.sh told <result-file>`, which records what was told so a batch captured twice is told once, and acknowledges the capture itself.
      Use `told`, never the generic `handled` above.
   Taking a request on, declining it, answering or reporting progress needs the owner's yes first; only then run `mothership accept <card> --project <p>` or the matching command, and file accepted work through ordinary intake.
   A `refused` or `error` stop has already ended monitoring for that room: tell the owner why, and that the next session start or `on <room>` tries again.
