@@ -71,45 +71,55 @@ Backend-specific setup is linked in [Documentation](#documentation).
 
 ### Recommended harnesses
 
-**Claude Code, Grok, and Pi are equal co-primary recommendations** for running the primary firstmate session, with `pi-signed` supported as Pi's distinct signed-wrapper identity.
-Claude Code uses a tracked Stop hook for tokenless watcher re-arm and rewake, Grok uses background-notify wake cycles, and Pi uses its tracked primary watcher extension.
-All three have verified turn-end guard paths when launched with their documented setup.
-Pick whichever one matches your subscription and workflow.
+**Claude Code with a Claude plan is the recommended harness** for the primary first mate session, and it is the one the onboarding guides install and sign in.
+It uses a tracked Stop hook for tokenless watcher re-arm and rewake, with a verified turn-end guard when launched through `bin/fm-primary.sh`.
 
-Oh My Pi (`omp`), a Pi fork, is verified as a primary with the same extension-owned watcher model as Pi and a stronger turn-end guard: its blocking `session_stop` hook compels a continuation instead of requesting one.
-Codex and OpenCode are also verified and supported as primary harnesses; Codex uses bounded foreground checkpoints, and OpenCode uses a TUI plugin, so both carry more harness-specific supervision tradeoffs than the three co-primaries.
-Cursor Agent CLI is verified as a primary too, using a tracked project-scope `.cursor/hooks.json` whose `stop` hook parks on the watcher between turns, closest in shape to Claude Code's.
-Launch it with `--trust`, or none of its project hooks load; it also has no turn-end hook in headless `cursor-agent -p`, so run the primary session interactively.
-Antigravity CLI (`agy`) is verified as a primary too, using a tracked project-local `.agents/hooks.json` whose Stop hook parks on the watcher between turns like Cursor's.
+**Codex and Pi are supported alternatives.**
+Both are verified primaries with the same supervision contract: Codex uses bounded foreground checkpoints, and Pi uses its tracked primary watcher extension, with `pi-signed` supported as Pi's distinct signed-wrapper identity.
+Install and sign in to either, then launch the first mate with `bin/fm-primary.sh codex` or `bin/fm-primary.sh pi`, or keep Claude Code as the first mate and give workers to the other through `config/crew-harness` or your dispatch rules; [the handbook](docs/handbook.md#models-usage-and-second-mates) has the commands.
+
+Other verified primaries, each with its own notes:
+
+- Grok uses background-notify wake cycles; launch it with `--trust` once per clone so project hooks and the turn-end guard load (`/hooks-trust` inside Grok works too).
+- Oh My Pi (`omp`), a Pi fork, uses the same extension-owned watcher model as Pi and a stronger turn-end guard: its blocking `session_stop` hook compels a continuation instead of requesting one.
+- OpenCode uses a TUI plugin, so it carries more harness-specific supervision tradeoffs.
+- Cursor Agent CLI uses a tracked project-scope `.cursor/hooks.json` whose `stop` hook parks on the watcher between turns, closest in shape to Claude Code's.
+  Launch it with `--trust`, or none of its project hooks load; it also has no turn-end hook in headless `cursor-agent -p`, so run the primary session interactively.
+- Antigravity CLI (`agy`) uses a tracked project-local `.agents/hooks.json` whose Stop hook parks on the watcher between turns like Cursor's.
 
 ### Install and launch
 
+Follow the guide for your machine: [ONBOARDING.md](ONBOARDING.md) on a Mac, [ONBOARDING-windows.md](ONBOARDING-windows.md) on a Windows PC, or [ONBOARDING-linux-server.md](ONBOARDING-linux-server.md) on a rented server.
+In short, once Git, the GitHub CLI and Claude Code are installed and signed in:
+
 ```sh
 gh auth login
-git clone https://github.com/kunchenguid/firstmate
-cd firstmate
+git clone https://github.com/Amplify-Logic/starship ~/starship
+cd ~/starship
+bin/fm-primary.sh opus
 ```
 
-Then launch one of the co-primary harnesses; AGENTS.md takes over from there:
+`bin/fm-primary.sh` launches the first mate with the verified flags for its profile; AGENTS.md takes over from there.
+The alternatives launch the same way:
 
-**Claude Code**
+**Codex**
 
 ```sh
-claude
+bin/fm-primary.sh codex
+```
+
+**Pi**
+
+```sh
+bin/fm-primary.sh pi
+# or, when the signed wrapper is installed
+FM_PI_HARNESS=pi-signed pi-signed
 ```
 
 **Grok**
 
 ```sh
 grok --trust
-```
-
-**Pi**
-
-```sh
-pi
-# or, when the signed wrapper is installed
-FM_PI_HARNESS=pi-signed pi-signed
 ```
 
 **Oh My Pi**
@@ -122,7 +132,6 @@ FM_OMP_HARNESS=omp omp
 
 Start `omp` with this checkout as its working directory: it auto-discovers the tracked `.omp/extensions/*.ts` files with no trust dialog, and naming them with `-e` as well would load each twice.
 
-For Grok, `--trust` is needed once per clone so project hooks and the turn-end guard load; `/hooks-trust` inside Grok works too.
 For Pi, approve the project trust prompt once per clone on first launch so the tracked `.pi/extensions/*.ts` files auto-load.
 The `/calm` toggle on Pi, and on Claude Code behind its default-off early-access function-hooks flag, hides supported transcript chrome, including canonically classified Firstmate operational user rows, and uses a Calm-only animated working boat during active runs while preserving all model context and session data.
 Calm changes only presentation, not the user-role delivery, ordering, authority, persistence, or exports of the operational inputs it hides.

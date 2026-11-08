@@ -23,7 +23,7 @@ Transcription is English only.
 ## What it records, and where it goes
 
 - **Microphone mode** (`start --mic`) records this Mac's microphone and, when a loopback input such as BlackHole carries the call audio, the far side as a separate track.
-  Each 30-second chunk is transcribed on this Mac by whisper.cpp, and its audio is deleted as soon as its line is written, so no recording outlives its text.
+  Each 30-second chunk is transcribed by the engine you chose, on this Mac by whisper.cpp or by Deepgram (see [Transcription engine](#transcription-engine-on-this-mac-or-deepgram)), and its audio is deleted as soon as its line is written, so no recording outlives its text.
 - **Captions mode** (`start --page <id>`) reads the captions a Google Meet tab shows and records no audio at all.
 - Speech is labelled by how it was heard, never by a guess at who spoke: your `speaker_name` for speech only your microphone heard, `others` for the call audio, `unknown speaker` otherwise, or the name Meet's captions show.
 - The live desk sends the last hour of transcript to Claude (`claude -p`, Sonnet by default) about once a minute, and the end-of-call notes send the whole transcript once (Opus by default).
@@ -33,7 +33,8 @@ Transcription is English only.
 ## Set up
 
 1. Install the tools: `brew install ffmpeg whisper-cpp jq switchaudio-osx`.
-2. Download a speech model:
+   `whisper-cpp` is what transcribes on this Mac; a home that uses Deepgram can leave it out, but then a chunk Deepgram cannot take has nothing to fall back to and those seconds are lost (see [When Deepgram cannot be used](#transcription-engine-on-this-mac-or-deepgram)).
+2. Download a speech model, for transcribing on this Mac:
 
    ```sh
    mkdir -p ~/.cache/whisper
@@ -41,6 +42,8 @@ Transcription is English only.
    ```
 
    `ggml-large-v3-turbo.bin` from the same place is more accurate and is used when present; a chunk that takes it more than 20 seconds switches the rest of the call to `base.en`.
+   On a Mac that is short of memory or slow, use Deepgram instead; `bin/fm-call-companion.sh engine` says which suits your Mac (see [Transcription engine](#transcription-engine-on-this-mac-or-deepgram)).
+   A Deepgram home can skip this step, but keeping `whisper-cpp` and `ggml-base.en.bin` installed is what lets a chunk Deepgram misses still be transcribed here; without them those seconds are lost.
 3. To capture the far side of the call, install [BlackHole](https://existential.audio/blackhole/) and, in Audio MIDI Setup, create a Multi-Output Device that plays to both your speakers or headphones and BlackHole.
    The recorder switches the system output to it while recording and switches it back when it stops.
    Without it, only your microphone is recorded and the desk says the far side was not captured.
@@ -61,6 +64,57 @@ bin/fm-call-companion.sh stop
 Saying "Firstmate, do it", "Firstmate, build that" or "captain's order:" followed by an instruction still shows that order on the desk under "Spoken orders" and logs it, but the live desk is no longer how spoken orders are caught.
 They are caught after the call by a meeting intake's scan of the finished meeting, where the home has one, which starts the clear ones.
 `bin/fm-call-digest.sh`'s header owns the logs a home can watch for that.
+
+## Transcription engine: on this Mac or Deepgram
+
+Microphone mode transcribes each half minute of audio with one of two engines, chosen by `transcription_engine` in `config/call-companion`:
+
+- `local` (the default) runs whisper.cpp on this Mac.
+  The audio never leaves the Mac, and nothing is paid per call.
+  On a Mac that is slow or short of memory the transcript falls behind the call, because each half minute takes longer than half a minute to transcribe.
+- `deepgram` sends each half minute to Deepgram's speech-to-text and writes its answer a few seconds later, so the transcript keeps up on any Mac.
+  The audio chunk leaves this Mac for Deepgram and is deleted here as soon as its lines are written, as with the local engine.
+  Every request asks Deepgram not to keep the audio to improve its models (`mip_opt_out`); what else Deepgram retains is governed by its own terms, so read them before recording a call this way.
+  Speech is labelled by track exactly as with the local engine, and the names in `config/stt-vocabulary`, where the home has one, are passed to Deepgram as hints.
+
+Either way the transcript is about half a minute behind the call, and `start` says which engine the recording uses and writes it into the transcript under the agreement line.
+
+**Which one suits this Mac.** Run `bin/fm-call-companion.sh engine`.
+It prints the engine set, the one a recording would use now, whether a Deepgram key is in place and whether Deepgram accepts it (one free, read-only check that transcribes nothing: working, rejected, or could not check), what is installed for the local engine, this Mac's memory and chip, and a recommendation: Deepgram when the Mac has less than 16 GB of memory, is not Apple silicon, or a past recording fell behind on it; otherwise either works.
+When your first mate sets the recorder up for you, it runs this and recommends the same.
+
+**Setting Deepgram up safely.**
+
+1. Make a Deepgram account and create an API key in its console.
+   Deepgram charges by the minute of audio transcribed, at a rate its pricing page shows, so an hour's call costs an hour of its per-minute rate; a new account usually starts with some free credit.
+   Check the current price there rather than relying on a figure written here.
+2. Put the key in this home's gitignored `.env` yourself, so it never passes through a chat.
+   In Terminal (zsh, the Mac's default shell), run this line, paste the key at the `Deepgram key:` prompt and press Return:
+
+   ```sh
+   read -rs 'k?Deepgram key: ' && printf '\nDEEPGRAM_API_KEY=%s\n' "$k" >> ~/starship/.env && unset k && chmod 600 ~/starship/.env && echo
+   ```
+
+   The key is not shown as you paste it and never becomes part of the command, so it stays out of the shell's history; the line holds only the prompt.
+   Adding `DEEPGRAM_API_KEY=<the key>` to `~/starship/.env` with a text editor works too.
+   Never type the key into the command itself, where the shell's history file would keep a copy, and never paste the key into a chat with your first mate, a message, or a document; the scripts read it from `.env` and never print or log it.
+   This is the same key and the same file the [desk floater](desk-floater.md) uses, so a home with the floater already has it.
+3. Set the engine:
+
+   ```sh
+   echo 'transcription_engine = deepgram' >> ~/starship/config/call-companion
+   ```
+
+4. Run `bin/fm-call-companion.sh engine` and check that it says `found and working` for the key and `deepgram` in use.
+   `found but rejected` means Deepgram refused the key or its account is out of credit: make a new key in the console and replace the line in `.env`.
+   `could not check it` means Deepgram could not be reached; run it again once online.
+
+**When Deepgram cannot be used.** With `deepgram` set but no key found, the whole recording transcribes on this Mac, `start` says so, and the desk shows a note.
+When Deepgram cannot be reached during a call, or rejects the key there (a revoked key or an account out of credit), each chunk it misses transcribes on this Mac when whisper.cpp and a model are installed, and the desk says which of the two happened until Deepgram answers again; without a local model those seconds are lost, and the transcript and the desk both say so.
+Nothing is ever recorded or sent without the agreement above.
+
+**Switching back.** Set `transcription_engine = local` in `config/call-companion`, or remove the line; the next `start` transcribes on this Mac again.
+Leaving the key in `.env` changes nothing while `local` is set.
 
 ## Stop a recording
 

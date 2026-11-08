@@ -469,6 +469,30 @@ print_backlog_pointer() {
   printf 'Full task bodies remain available on demand: bin/fm-tasks-axi.sh show <id> --full when compatible tasks-axi is available, or data/backlog.md.\n'
 }
 
+# print_first_voyage: the cue that hands a new owner's first conversation to
+# the first-voyage skill. It prints right under the SESSION START heading, so a
+# spilled digest still shows it in its head. A home that has met its owner has
+# data/captain.md; one that has done work before has data/projects.md or a
+# clone under projects/, and an older home like that is never onboarded again
+# just because it has no preferences file. A secondmate home never chats with
+# the owner, so it never prints one.
+first_voyage_due() {
+  local projects="${FM_PROJECTS_OVERRIDE:-$FM_HOME/projects}" clone
+  if [ -e "$FM_HOME/.fm-secondmate-home" ] || [ -L "$FM_HOME/.fm-secondmate-home" ]; then
+    return 1
+  fi
+  [ ! -e "$DATA/captain.md" ] && [ ! -e "$DATA/projects.md" ] || return 1
+  for clone in "$projects"/*/; do
+    [ -d "$clone" ] && return 1
+  done
+  return 0
+}
+
+print_first_voyage() {
+  first_voyage_due || return 0
+  printf 'FIRST VOYAGE: this home has not met its owner yet (no data/captain.md, no project) - load the first-voyage skill before anything else and let it lead the first conversation (AGENTS.md section 3).\n'
+}
+
 # A queued title line whose own text already marks it held or blocked. The
 # manual renderer has no task model, so this is the only signal it gets, and it
 # is the one tasks-axi's markdown backend writes: "(hold: ...)", "(hold-kind:
@@ -865,7 +889,8 @@ fi
 # tone") governs the very first reply, so it leads the output for the same
 # preview reason as the re-emit cue below: CONTEXT prints last and a spilled
 # digest shows only its head. Bounded to the section's first 15 non-blank
-# lines; a primary home with no section gets the one-line cue to ask instead.
+# lines; a primary home with no section gets the one-line cue to ask instead,
+# unless its first voyage is due, whose first question asks for it.
 print_address_and_tone() {
   local section
   section=$(awk '
@@ -874,7 +899,7 @@ print_address_and_tone() {
   ' "$DATA/captain.md" 2>/dev/null || true)
   if [ -n "$section" ]; then
     printf 'ADDRESS AND TONE (data/captain.md) - apply to every reply from the first:\n%s\n' "$section"
-  elif [ ! -e "$FM_HOME/.fm-secondmate-home" ]; then
+  elif [ ! -e "$FM_HOME/.fm-secondmate-home" ] && ! first_voyage_due; then
     printf 'ADDRESS AND TONE: data/captain.md has no ## Address and tone section; ask once, early (AGENTS.md section 3).\n'
   fi
 }
@@ -898,6 +923,7 @@ else
   print_address_and_tone
   section "SESSION START - $FM_HOME"
 fi
+print_first_voyage
 # --- 1. lock -----------------------------------------------------------
 stage lock
 subsection "LOCK"

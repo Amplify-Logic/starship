@@ -1364,6 +1364,7 @@ Portable shard evidence and coverage rules are in [fm-test-portable-shards.md](f
 ## Captain Preferences (data/captain.md / data/captain-shared.md)
 
 Domain-local preferences for one captain's fleet live locally in each home's `data/captain.md`; it is gitignored and printed in the session-start context digest after `data/projects.md` and optional `data/secondmates.md`.
+A new primary home has none until its owner's first conversation writes it; the [`first-voyage`](../.agents/skills/first-voyage/SKILL.md) skill owns that conversation and the sections it records, and `bin/fm-session-start.sh` cues it with a `FIRST VOYAGE:` line while the file is missing in a home with no `data/projects.md` and no clone under `projects/`.
 Before changing it, inspect the current file and curate the matching bullet in place under the internal [`stow` skill's](../.agents/skills/stow/SKILL.md) tiering and archive contract; add a new bullet only for a genuinely new durable preference.
 
 Shared captain preferences that apply across secondmate domains live only in the primary home's optional `data/captain-shared.md`.
@@ -1386,9 +1387,10 @@ Every bullet is optional free text.
 `Call me:` replaces "captain" as the direct address, and `No-news reply:` replaces the routine no-news reply, which is otherwise `<Call me>, shipshape.` (`Captain, shipshape.` with no `Call me:`).
 The recorded tone, emoji use, and length govern every other chat reply from the first message of every session, including short confirmations, bad news, and technical updates; the plain-language, outcome-first, and safety rules in [`AGENTS.md`](../AGENTS.md) stay in force.
 The no-news reply is used verbatim as recorded, never reworded to fit the tone or emoji preferences.
-In a primary home with no section, the first mate moves any address or tone preferences already written elsewhere in `data/captain.md` into this section, asks once early in the session only for what is still missing, and records the answer in that section, even when the answer is to keep the defaults; until then it uses the default "captain" address and house style.
+A new owner's first conversation asks for it as its first question ([`first-voyage`](../.agents/skills/first-voyage/SKILL.md)).
+Otherwise, in a primary home with no section, the first mate moves any address or tone preferences already written elsewhere in `data/captain.md` into this section, asks once early in the session only for what is still missing, and records the answer in that section, even when the answer is to keep the defaults; until then it uses the default "captain" address and house style.
 The person changes it any time by saying so, and the first mate updates this section.
-`bin/fm-session-start.sh` prints the section's first 15 non-blank lines, or in a primary home without one the cue to ask, at the very top of the session-start digest, so it reaches the first reply even when the harness shows only a short preview of a large digest.
+`bin/fm-session-start.sh` prints the section's first 15 non-blank lines, or in a primary home without one that is not cued for its first voyage the cue to ask, at the very top of the session-start digest, so it reaches the first reply even when the harness shows only a short preview of a large digest.
 On a home with [desk voice-out](#desk-voice-out-configspeak), `bin/fm-claude-reply-speak.sh` reads `Call me:` and `No-news reply:` so the routine reply stays silent and its spoken notices use the recorded address.
 
 ## Operational learnings (data/learnings.md)
@@ -1950,6 +1952,7 @@ The address selects the existing shared server; it does not authorize starting o
 
 The optional local, gitignored `config/brief-include.md` adds standing worker instructions to every ship and scout brief.
 This keeps private brief content out of tracked files.
+A new home's first conversation seeds it with the owner's outward-send house rule, as the owner left it, in worker form ([`first-voyage`](../.agents/skills/first-voyage/SKILL.md)).
 When the file exists, `bin/fm-brief.sh` appends its text verbatim as the scaffold's last section, `# Home brief additions`, which defers to every other section of the brief, including the ship contract a later scout promotion appends below it.
 
 An absent or blank file changes nothing, while a present path that is not a readable regular file, or text carrying its own `Delivery contract: mode=` line, stops the scaffold before anything is written.
@@ -3984,7 +3987,7 @@ The script's header owns the hint parameters, the term caps, and the matching ru
 ## Call recorder (config/call-companion)
 
 Optional, private, gitignored, and not inherited by secondmate homes.
-It holds the call recorder's settings: the label for your own speech, the microphone and loopback devices, the speech model, the Claude models for the live desk and the notes, and an optional second screen.
+It holds the call recorder's settings: the label for your own speech, the microphone and loopback devices, the transcription engine (whisper.cpp on this Mac, or Deepgram with the key the desk floater uses) and speech model, the Claude models for the live desk and the notes, and an optional second screen.
 Absent, every setting takes its default.
 `key = value` lines; `#` comments and blank lines are ignored, and an unknown key is refused so a typo never silently changes what is recorded.
 [`docs/examples/call-companion`](examples/call-companion) lists every key with its default, `bin/fm-call-lib.sh`'s header owns their meaning, and [call-companion.md](call-companion.md) covers consent, setup, stopping and deleting.

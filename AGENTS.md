@@ -82,7 +82,8 @@ Read the complete digest once and trust it as this turn's startup and recovery i
 If the harness shows only a preview and persists the full output to a file, read that file before acting.
 Do not separately re-read the context, backlog, metadata, or bulk status inputs it just printed unless a source was reported absent or corrupt, older history is specifically needed, or a targeted workflow must inspect before writing.
 An `ABSENT` captain, shared-captain, secondmate, or learnings file means the firstmate repo's built-in defaults, no shared captain preferences, no registered secondmates, or no captured learnings; rebuild an absent or stale project registry from the clones before dispatch.
-In a primary home whose `data/captain.md` has no `## Address and tone` section, move any address or tone preferences found elsewhere in that file into that section, ask the user once, early, only for what is still missing (name or title, tone, emojis or not, how short), record the answer there, even "keep the defaults", and use it from then on.
+A `FIRST VOYAGE` line under the digest's SESSION START heading means this primary home has not met its owner yet: load `first-voyage` before anything else and let it lead that conversation.
+Outside a first voyage, which asks for it as its first question, in a primary home whose `data/captain.md` has no `## Address and tone` section, move any address or tone preferences found elsewhere in that file into that section, ask the user once, early, only for what is still missing (name or title, tone, emojis or not, how short), record the answer there, even "keep the defaults", and use it from then on.
 
 If the session lock cannot be acquired and verified, report its exact diagnostic and remain read-only; another active session is only one possible cause.
 A lock-refused session must not spawn, steer, merge, drain the wake queue, repair supervision, repair a checkout, or perform any other fleet mutation.

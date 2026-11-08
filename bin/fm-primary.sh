@@ -98,6 +98,14 @@
 # --preflight checks the CLI, integrations, configuration, and account without
 # acquiring a session, changing a terminal, or launching the CLI. It permits an
 # existing owner so handoff can validate the replacement before stopping it.
+# The account check includes the sign-in for the CLIs that can report one:
+# `claude auth status` with loggedIn false, `codex login status` saying not
+# logged in, and Cursor's `status` saying not logged in each refuse, so an
+# owner who skipped the sign-in learns it here rather than at a login screen
+# inside the session; an unreadable status is never treated as logged out.
+# The Claude sign-in check runs only under --preflight: a live Claude launch
+# still opens Claude Code at its login screen, where the owner can sign in,
+# while the Codex and Cursor checks refuse a live launch too.
 # --account <name> is the only other argument a profile accepts; every other one
 # still refuses, because that refusal exists to keep resume arguments away from
 # the launched CLI.
@@ -1032,6 +1040,18 @@ fi
 # own; the Codex gate below and the Cursor gate above keep their pre-existing
 # placement, so this is not a fleet-wide promise about every credential check.
 require_account_usable
+
+if [ "$PREFLIGHT" = 1 ] && [ "$CLI" = claude ]; then
+  # Only an EXPLICIT negative blocks: `claude auth status` prints JSON with
+  # loggedIn false when nobody is signed in, and an unreadable status (no jq,
+  # a hung or older CLI) is not evidence of a logged-out CLI. The pinned
+  # account home is already exported above, so this reads the right login.
+  # A live launch skips this check and opens Claude Code at its login screen.
+  claude_logged_in=$(fm_run_timed 10 "$CLI" auth status </dev/null 2>/dev/null \
+    | jq -r '.loggedIn' 2>/dev/null) || claude_logged_in=
+  [ "$claude_logged_in" != false ] \
+    || die "Claude Code is not logged in ('$CLI auth status'); the primary would boot to its login screen instead of a session - run '$CLI', sign in, then launch again"
+fi
 
 if [ "$PROFILE" = codex ] || [ "$PROFILE" = astra ]; then
   # Only an EXPLICIT negative blocks: "Not logged in" contains "logged in", and

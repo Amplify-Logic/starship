@@ -391,6 +391,7 @@ family_for_basename() {
     fm-afk-pi-herdr-return-e2e.test.sh|\
     fm-bearings-board-lavish-live-e2e.test.sh|\
     fm-claude-stop-autoarm-live-e2e.test.sh|fm-claude-reply-speak-live-e2e.test.sh|\
+    fm-call-deepgram-live-e2e.test.sh|\
     fm-cmux-claude-composer-live-e2e.test.sh|\
     fm-composer-matrix-live-e2e.test.sh|\
     fm-desk-voice-claude-draft-live-e2e.test.sh|\
