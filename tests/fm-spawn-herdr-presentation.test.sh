@@ -24,6 +24,15 @@ printf '{"next":1,"workspaces":[],"tabs":[]}\n' > "$HERDR_STATE"
 
 cat > "$FAKEBIN/treehouse" <<'SH'
 #!/usr/bin/env bash
+# A Herdr spawn leases its copy out of pane from the project (fm-spawn.sh
+# spawn_lease_herdr_slot) and then cds the pane into the printed path.
+set -u
+case "${1:-} ${2:-} ${3:-}" in
+  'get --lease --lease-holder')
+    wt="$FM_FAKE_WT_ROOT/${4:?}"
+    git worktree add -q --detach "$wt" HEAD >&2
+    printf '%s\n' "$wt" ;;
+esac
 exit 0
 SH
 
@@ -129,13 +138,12 @@ case "$cmd $sub" in
     ;;
   'pane run')
     target=${3:-}; command=${4:-}
-    if [ "$command" = 'treehouse get' ]; then
-      project=$(query -r --arg id "$target" '.tabs[]|select(.pane_id==$id)|.cwd')
-      safe=${target//[:\/]/_}; wt="$FM_FAKE_WT_ROOT/$safe"
-      git -C "$project" worktree add -q --detach "$wt" HEAD
-      query --arg id "$target" --arg wt "$wt" \
-        '.tabs |= map(if .pane_id == $id then .cwd=$wt else . end)' | save
-    fi
+    case "$command" in
+      "cd -- '"*"'")
+        wt=${command#"cd -- '"}; wt=${wt%"'"}
+        query --arg id "$target" --arg wt "$wt" \
+          '.tabs |= map(if .pane_id == $id then .cwd=$wt else . end)' | save ;;
+    esac
     ;;
   'pane close')
     target=${3:-}

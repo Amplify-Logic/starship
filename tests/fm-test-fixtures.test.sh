@@ -412,13 +412,17 @@ test_inherited_launcher_env_is_cleared() (
     . "$1/tests/lib.sh"
     for name in HERDR_ENV HERDR_PANE_ID HERDR_TAB_ID HERDR_WORKSPACE_ID \
       HERDR_SOCKET_PATH HERDR_SESSION HERDR_BIN_PATH TERM_PROGRAM FM_BACKEND \
-      FM_HOME FM_ROOT FM_ROOT_OVERRIDE FM_STATE_OVERRIDE FM_DATA_OVERRIDE \
+      FM_ROOT FM_ROOT_OVERRIDE FM_STATE_OVERRIDE FM_DATA_OVERRIDE \
       FM_CONFIG_OVERRIDE FM_PROJECTS_OVERRIDE; do
       [ -z "${!name+x}" ] || { echo "$name survived tests/lib.sh"; exit 1; }
     done
+    # This fork replaces the inherited home with the suite'"'"'s hermetic home
+    # rather than leaving FM_HOME unset.
+    [ "$FM_HOME" = "$FM_TEST_HERMETIC_HOME" ] \
+      || { echo "FM_HOME is $FM_HOME, not the hermetic suite home"; exit 1; }
     (
       . "$ROOT/bin/fm-backend.sh"
-      [ "$FM_BACKEND_CONFIG_DIR" = "$ROOT/config" ] \
+      [ "$FM_BACKEND_CONFIG_DIR" = "$FM_TEST_HERMETIC_HOME/config" ] \
         || { echo "cleared home still resolves config at $FM_BACKEND_CONFIG_DIR"; exit 1; }
     ) || exit 1
     (

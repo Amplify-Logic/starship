@@ -34,6 +34,9 @@ make_lease_case() {
   d="$dir/fake"
   fb="$dir/fakebin"
   mkdir -p "$d" "$fb" "$dir/user-home"
+  # The spawn preflight refuses a harness whose launch binary is absent; the
+  # polytoken stub written below replaces this shim for that harness.
+  fm_fake_launch_binary "$fb" "$harness"
   fm_test_spawn_home "$home" "$harness"
   fm_git_init_commit "$proj"
   git clone -q "$proj" "$wt"

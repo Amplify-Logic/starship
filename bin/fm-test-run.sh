@@ -777,8 +777,10 @@ tests/fm-agy-primary.test.sh 45000
 tests/fm-agy-signals-live-e2e.test.sh 53
 tests/fm-approval-failover.test.sh 5410
 tests/fm-ask-user-authority.test.sh 171
+tests/fm-assertions.test.sh 1316
 tests/fm-backend-cmux-smoke.test.sh 34
 tests/fm-backend-cmux.test.sh 3754
+tests/fm-backend-hc-appdetect-smoke.test.sh 1027
 tests/fm-backend-hc-liveness-live-e2e.test.sh 9000
 tests/fm-backend-hc-smoke.test.sh 3700
 tests/fm-backend-hc.test.sh 4000
@@ -894,6 +896,10 @@ tests/fm-herdr-setup.test.sh 1559
 tests/fm-herdr-submit-confirm-live-e2e.test.sh 1131
 tests/fm-herdr-version-floor-live-e2e.test.sh 1190
 tests/fm-herdr-worker-presentation-e2e.test.sh 1154
+tests/fm-hermes-gateway-coexistence-live-e2e.test.sh 813
+tests/fm-hermes-harness.test.sh 15264
+tests/fm-hermes-profile-safety-live-e2e.test.sh 920
+tests/fm-hermes-signals-live-e2e.test.sh 1328
 tests/fm-home-manifest.test.sh 1522
 tests/fm-home-port.test.sh 7604
 tests/fm-home-summary-refresh.test.sh 43308
@@ -966,6 +972,7 @@ tests/fm-remote-delta-read.test.sh 7426
 tests/fm-remote-doctor.test.sh 14460
 tests/fm-remote-entrypoint.test.sh 134
 tests/fm-remote-herdr-guard.test.sh 3140
+tests/fm-remote-inherit-generation.test.sh 6502
 tests/fm-remote-job-orphan-reap.test.sh 2985
 tests/fm-remote-job-process-start.test.sh 11871
 tests/fm-remote-job.test.sh 81046

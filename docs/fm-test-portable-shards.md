@@ -63,6 +63,8 @@ Its serial 2 job was cancelled at the 30-minute cap and uploaded no artifact, so
 `tests/fm-herdr-setup.test.sh` (1559 ms) joined the lane later and carries its first successful `duration_ms` from run 39159091513 of the earlier repository; its 45000 ms default weight had left the shards no room for the packing-boundary case in `tests/fm-test-run.test.sh`.
 The opt-in channel intake and daily to-do scripts joined the lane together and carry their first successful `duration_ms` from run [41103972215](https://github.com/Amplify-Logic/starship/actions/runs/41103972215): `tests/fm-channel-intake.test.sh` (64209 ms), `tests/fm-todo.test.sh` (53145 ms), `tests/fm-todo-render.test.sh` (24241 ms) and `tests/fm-morning-intake.test.sh` (18194 ms).
 Even measured, their work left twelve shards no room for that packing-boundary case, so the lane went to thirteen shards.
+The 2026-11-08 creator catch-up brought in serial scripts the creator's table never measured, which pushed the unmeasured share past the coverage guard's cap. Seven of them carry their first successful `duration_ms` from run [42519113644](https://github.com/Amplify-Logic/starship/actions/runs/42519113644): `tests/fm-hermes-harness.test.sh` (15264 ms), `tests/fm-remote-inherit-generation.test.sh` (6502 ms), `tests/fm-assertions.test.sh` (1316 ms), and the live-guard or optional-binary skips `tests/fm-hermes-signals-live-e2e.test.sh` (1328 ms), `tests/fm-backend-hc-appdetect-smoke.test.sh` (1027 ms), `tests/fm-hermes-profile-safety-live-e2e.test.sh` (920 ms) and `tests/fm-hermes-gateway-coexistence-live-e2e.test.sh` (813 ms).
+`tests/fm-spawn-herdr-lease.test.sh` failed in that run, so it has no successful sample yet and stays on the default weight until the next refresh.
 
 ## Parallel lanes
 
