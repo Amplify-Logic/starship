@@ -80,8 +80,10 @@ Append rule 1 as it stands after any change, rewritten as a line that speaks to 
 Never send, post or reply to anyone outside on the captain's behalf without showing the draft first.
 ```
 
-If the owner dropped rule 1, append nothing.
-Then tell the owner, in one line, that their answers are written in their preferences file and, unless they dropped it, that every worker now carries rule 1.
+A loosened rule 1 is written in its loosened form in both files, so the two never disagree.
+If the owner dropped rule 1, write nothing to `config/brief-include.md`.
+Then tell the owner, in one line, that their answers are written in their preferences file, `data/captain.md`, and that every worker now carries their first rule as they left it.
+If they dropped it, say instead that workers now carry no such rule.
 Showing them this is the first small proof that saying something once is enough.
 
 ## 4. The first job
@@ -140,5 +142,5 @@ Changes later come the way the handbook says: by telling the first mate.
 
 ## Picking it up again
 
-If the conversation stops partway after the first answer is recorded, nothing raises it again at the next session start.
-When the owner asks to carry on, greet them by the recorded address and continue at the first step whose answer is not yet recorded: a missing section of `data/captain.md` for steps 1 to 3, or no project for step 4.
+If the session ends before the first report lands and the first answer is already recorded, nothing raises it again at the next session start.
+When the owner says so next time, for example "let's finish setting up", greet them by the recorded address and pick up where it left off: the first step whose answer is not yet recorded (a missing section of `data/captain.md` for steps 1 to 3, or no project for step 4), or else the first report, handed over when it lands or proposed again if it never started.

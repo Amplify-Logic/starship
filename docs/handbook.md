@@ -221,7 +221,7 @@ Three commands switch the style for every worker in your home:
 [docs/configuration.md](configuration.md#worker-outward-actions-configoutward-permissions) owns the permissions and styles.
 
 The check covers only workers: the first mate itself and second mates are not checked, so a connector they use can send, post, or change something without asking you first.
-Your first conversation set the standing rule for that before you connected anything ([ONBOARDING step 4](../ONBOARDING.md#4-say-hello-your-first-mate-takes-it-from-here)): the first mate never sends, posts or replies to anyone outside on your behalf without showing you the draft first.
+Your first conversation set the standing rule for that before you connected anything ([ONBOARDING step 4](../ONBOARDING.md#4-say-hello-your-first-mate-takes-it-from-here)): it is the first house rule as you confirmed or changed it there, by default that the first mate never sends, posts or replies to anyone outside on your behalf without showing you the draft first.
 It lives in both places that matter: `data/captain.md` binds the first mate, and the same line in `config/brief-include.md` puts it in every worker brief, which also covers what the check does not, such as tools outside your connectors.
 Ask "what's in captain.md now?" to see it, and if you ever changed it, say the rule again in plain words and the first mate records it in both places.
 
@@ -279,7 +279,7 @@ Each step is small and proves one part of the system.
 **Day 1 - running and connected.**
 
 1. Finish [ONBOARDING.md](../ONBOARDING.md), including its first report.
-2. Add your connectors from [Connectors and tools](#a-rounded-starter-set-for-a-work-setup) and check each with one real question; the outward-send rule from your first conversation already covers them.
+2. Add your connectors from [Connectors and tools](#a-rounded-starter-set-for-a-work-setup) and check each with one real question; they fall under the outward-send rule as you confirmed or changed it in your first conversation.
 3. Tell the first mate three more things about how you work, as standing preferences, then ask "what's in captain.md now?".
 4. Run `/bearings`.
 

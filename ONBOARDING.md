@@ -150,10 +150,10 @@ Then it asks you four questions, one at a time, each with its reason:
 
 Answer in your own words; "keep the defaults" is a fine answer to the first and the third.
 The three rules it offers are the ones that keep it safe: it never sends, posts or replies to anyone outside on your behalf without showing you the draft first, nothing merges without your word, and nothing destructive or irreversible happens without you saying so.
-It writes your answers into your private preferences file (`data/captain.md`) and gives every worker your first rule as you left it.
+It writes your answers into your private preferences file (`data/captain.md`) and gives every worker your first rule as you left it, or no such rule if you dropped it.
 The conversation itself lives in [the first-voyage skill](.agents/skills/first-voyage/SKILL.md), which is what your first mate follows.
 
-You should see: it tells you your answers are written in your preferences file and that every worker now carries your first rule.
+You should see: it tells you your answers are written in your preferences file, `data/captain.md`, and that every worker now carries your first rule as you left it.
 
 ---
 
@@ -169,6 +169,7 @@ Check it against what you know.
 That one report proves the whole stack end to end: your GitHub access to the project, a worker starting in its own isolated copy, its Claude sign-in, and the report coming back to you.
 Your setup is finished.
 
+If the session ends before the first report, just say so next time, for example "let's finish setting up", and your first mate picks up where it left off.
 If the report never comes back, ask "why can't you start a worker?" and fix what it names.
 
 ---
