@@ -555,9 +555,10 @@
 #   relaunch reuses the recorded entry unless --account moves it. The list
 #   owns --account only for a Claude launch in a home that declares it; every
 #   other --account names a config/accounts.json registry account (--account
-#   <name> above), and a Claude --account with neither the list nor the
-#   registry refuses. A secondmate --account refuses whenever the list is
-#   declared. docs/configuration.md "Several Claude accounts" owns the contract.
+#   <name> above), except that with the list and no registry another runner's
+#   --account refuses as Claude-only, and a Claude --account with neither the
+#   list nor the registry refuses. A secondmate --account refuses whenever the
+#   list is declared. docs/configuration.md "Several Claude accounts" owns the contract.
 # Per-secondmate omp profile (config/secondmate-accounts/<id>/omp-profile):
 #   Opt-in, and read only for a local secondmate's own omp agent;
 #   bin/fm-omp-profile-lib.sh owns the file and its refusals. A pinned launch

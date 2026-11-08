@@ -1970,7 +1970,7 @@ A task with no recorded account, or one whose account is no longer declared, ref
 
 The list covers Claude ships and scouts only.
 A local secondmate's own agent never draws from it: under a list it needs its own [per-secondmate account pin](#per-secondmate-account-pins), and `--account` refuses for every secondmate, local or remote.
-Other runners ignore the list, and their `--account` keeps naming a vendor account registry entry, refusing where that registry has no account concept for them.
+Other runners ignore the list, and their `--account` keeps naming a vendor account registry entry, refusing where that registry has no account concept for them; in a home with the list and no `config/accounts.json`, their `--account` refuses because the list applies to Claude workers only.
 Like the single pin, the list is not inherited into secondmate homes.
 
 ### Per-secondmate account pins

@@ -42,8 +42,10 @@
 #                    tmux-dir, with no user tmux config (its plugins never run
 #                    in a lab), started from an empty environment so no inherited
 #                    TMUX, Herdr, or Pi marker reaches a lab process.
-#                    TREEHOUSE_ROOT points into <lab-root>, so a worker's pool
-#                    never lands in ~/.treehouse, and DISABLE_AUTOUPDATER=1
+#                    TREEHOUSE_ROOT points into <lab-root>, and the lab's notes
+#                    project commits a treehouse.toml whose root is that same
+#                    directory (Treehouse 2 reads only the file), so a worker's
+#                    pool never lands in ~/.treehouse, and DISABLE_AUTOUPDATER=1
 #                    keeps Claude Code from replacing the shared binary under
 #                    a running lab, as every live run does (tests/lib.sh).
 #                    A set CLAUDE_CONFIG_DIR (absolute) is passed to every lab
@@ -458,6 +460,9 @@ PY
 A tiny notes library for lab work.
 Run the checks with `python3 -m unittest discover -s tests`.
 MD
+  # Treehouse 2 takes its pool root only from the project's treehouse.toml and
+  # ignores TREEHOUSE_ROOT, so the lab pins the pool inside <lab-root> here.
+  printf 'max_trees = 4\nroot = "%s"\n' "$ROOT/treehouse" > "$seed/treehouse.toml"
   git -C "$seed" add -A
   git -C "$seed" -c user.name=lab -c user.email=lab@example.invalid commit -q -m "seed notes"
   git clone -q --bare "$seed" "$origin"

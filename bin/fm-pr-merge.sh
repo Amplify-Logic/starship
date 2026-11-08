@@ -243,7 +243,8 @@
 # passing --no-task in place of the task id. It meets every live pre-merge
 # condition above, the author and rules refusals included (with no recorded
 # project, the rules check always runs), and binds the verified head the same
-# way. With no task record there is no task lock, recorded pr= or merge poll,
+# way. With no task record there is no task lock, recorded pr= or pr_head=
+# (even after an --update-branch update), merge poll,
 # captain-hold read, persisted merge authority, or merge wake; it is
 # attended-only, refused while the away-posture record exists, and refused on
 # GitLab and Forgejo.
