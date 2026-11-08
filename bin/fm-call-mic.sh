@@ -22,10 +22,11 @@
 # like a local chunk; the audio therefore leaves this Mac for Deepgram, which
 # every request asks not to keep it (mip_opt_out). Deepgram is chosen but no
 # key is found: the whole recording transcribes locally. Deepgram cannot be
-# reached for a chunk: that chunk transcribes locally when whisper-cli and a
-# model are installed, else its seconds are lost and the transcript says so.
-# Each of these is written to state/calls/engine-note, which the desk shows,
-# and the engine in use to state/calls/engine. A local chunk that takes longer
+# reached for a chunk, or rejects the key (the helper's exit 3): that chunk
+# transcribes locally when whisper-cli and a model are installed, else its
+# seconds are lost and the transcript says so. Each of these is written to
+# state/calls/engine-note, which the desk shows, naming whether Deepgram was
+# unreachable or rejected the key. A local chunk that takes longer
 # than 20 seconds marks state/calls/slow-transcription, which
 # `fm-call-companion.sh engine` reads when it recommends an engine.
 #
@@ -33,8 +34,7 @@
 # from bin/fm-call-lib.sh. Environment overrides: FFMPEG_BIN, WHISPER_BIN,
 # WHISPER_MODEL, MIC_DEVICE_NAME, LOOPBACK_DEVICE_PATTERN, MIC_CHUNK_SECONDS,
 # MIC_CHUNK_OVERLAP_SECONDS, MIC_MAX_CHUNKS (0 = unlimited),
-# CALL_COMPANION_TRANSCRIPT, CALL_COMPANION_WORK_DIR, CALL_COMPANION_PYTHON_BIN,
-# CALL_COMPANION_DEEPGRAM_STT (the Deepgram helper to run).
+# CALL_COMPANION_TRANSCRIPT, CALL_COMPANION_WORK_DIR, CALL_COMPANION_PYTHON_BIN.
 
 set -euo pipefail
 
@@ -60,13 +60,13 @@ PYTHON_BIN=${CALL_COMPANION_PYTHON_BIN:-$(fm_call_tool python3 /usr/bin/python3)
 SPEAKER_SPLIT=${CALL_COMPANION_SPEAKER_SPLIT:-$FM_CALL_BIN/fm-call-speaker-split.py}
 LOCAL_SPEAKER=$(fm_call_setting speaker_name me)
 ENGINE_SETTING=$(fm_call_engine_setting) || exit 2
-DEEPGRAM_STT=${CALL_COMPANION_DEEPGRAM_STT:-$FM_CALL_BIN/fm-deepgram-stt.sh}
-ENGINE_STATE="$STATE_DIR/engine"
+DEEPGRAM_STT=$FM_CALL_BIN/fm-deepgram-stt.sh
 ENGINE_NOTE="$STATE_DIR/engine-note"
 SLOW_MARK="$STATE_DIR/slow-transcription"
 SLOW_SECONDS=20
 
 engine=
+deepgram_problem=
 child_pid=
 mic_device=
 loopback_device=
@@ -287,12 +287,13 @@ whisper_chunk() {
 }
 
 # One chunk through Deepgram: the same two files whisper writes, so the speaker
-# labelling reads either engine's result. Fails when Deepgram did not answer.
+# labelling reads either engine's result. Fails with the helper's status when
+# Deepgram did not answer (3: it rejected the key).
 deepgram_chunk() {
-  local prefix=$1 mixed segments
+  local prefix=$1 mixed segments status
   mixed="$prefix-mix.wav"
   segments="$prefix-mix.json"
-  FM_HOME="$FM_CALL_HOME" run_child "$DEEPGRAM_STT" --segments "$mixed" > "$segments.tmp" || { rm -f "$segments.tmp"; return 1; }
+  FM_HOME="$FM_CALL_HOME" run_child "$DEEPGRAM_STT" --segments "$mixed" > "$segments.tmp" || { status=$?; rm -f "$segments.tmp"; return "$status"; }
   [ -s "$segments.tmp" ] || { rm -f "$segments.tmp"; return 1; }
   mv "$segments.tmp" "$segments"
   jq -r '[.transcription[].text] | join(" ")' "$segments" > "$prefix-mix.txt"
@@ -301,23 +302,29 @@ deepgram_chunk() {
 # The chunk through the engine in use; a Deepgram chunk that fails transcribes
 # locally when it can, and the desk says so until Deepgram answers again.
 transcribe_chunk() {
-  local prefix=$1
+  local prefix=$1 status=0
   if [ "$engine" != deepgram ]; then
     whisper_chunk "$prefix"
     return
   fi
-  if deepgram_chunk "$prefix"; then
+  deepgram_chunk "$prefix" || status=$?
+  if [ "$status" -eq 0 ]; then
     rm -f "$ENGINE_NOTE"
     return 0
   fi
+  if [ "$status" -eq 3 ]; then
+    deepgram_problem='Deepgram rejected the key (DEEPGRAM_API_KEY)'
+  else
+    deepgram_problem='Deepgram could not be reached'
+  fi
   if whisper_available; then
-    printf 'fm-call-mic: Deepgram did not take this chunk; transcribing it on this Mac\n' >&2
-    write_engine_note 'Transcribing on this Mac for now: Deepgram could not be reached'
+    printf 'fm-call-mic: Deepgram did not take this chunk (%s); transcribing it on this Mac\n' "$deepgram_problem" >&2
+    write_engine_note "Transcribing on this Mac for now: $deepgram_problem"
     whisper_chunk "$prefix"
     return
   fi
-  printf 'fm-call-mic: Deepgram did not take this chunk and there is no local speech model; its words are lost\n' >&2
-  write_engine_note 'Part of the call was not transcribed: Deepgram could not be reached and no speech model is installed on this Mac'
+  printf 'fm-call-mic: Deepgram did not take this chunk (%s) and there is no local speech model; its words are lost\n' "$deepgram_problem" >&2
+  write_engine_note "Part of the call was not transcribed: $deepgram_problem and no speech model is installed on this Mac"
   return 1
 }
 
@@ -330,8 +337,8 @@ transcribe_worker() {
   chunk_prefixes+=("$prefix")
   mix_sources "$prefix"
   if ! transcribe_chunk "$prefix"; then
-    [ "${MIC_TRANSCRIBE_STDOUT:-0}" = 1 ] || printf '# %s the %s seconds from %s were not transcribed: Deepgram could not be reached and no speech model is installed on this Mac\n' \
-      "$(date '+%Y-%m-%d %H:%M:%S %Z')" "$CHUNK_SECONDS" "$spoken_at" >> "$TRANSCRIPT"
+    [ "${MIC_TRANSCRIBE_STDOUT:-0}" = 1 ] || printf '# %s the %s seconds from %s were not transcribed: %s and no speech model is installed on this Mac\n' \
+      "$(date '+%Y-%m-%d %H:%M:%S %Z')" "$CHUNK_SECONDS" "$spoken_at" "$deepgram_problem" >> "$TRANSCRIPT"
     return 0
   fi
   if lines=$(speaker_lines "$prefix" "$spoken_at"); then
@@ -442,14 +449,10 @@ main() {
       exit 2
     fi
   fi
-  [ -n "$test_seconds" ] || rm -f "$MODEL_STATE" "$ENGINE_NOTE" "$ENGINE_STATE"
+  [ -n "$test_seconds" ] || rm -f "$MODEL_STATE" "$ENGINE_NOTE"
   require_tools
   validate_timing
   mkdir -p "$WORK_DIR" "$(dirname "$TRANSCRIPT")"
-  if [ -z "$test_seconds" ]; then
-    printf '%s\n' "$engine" > "$ENGINE_STATE.tmp.$$"
-    mv "$ENGINE_STATE.tmp.$$" "$ENGINE_STATE"
-  fi
   resolve_devices
   trap cleanup EXIT
   trap on_signal INT TERM

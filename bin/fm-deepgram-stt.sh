@@ -3,6 +3,7 @@
 #
 # Usage:
 #   fm-deepgram-stt.sh [--json | --segments] <audio-file>
+#   fm-deepgram-stt.sh --check-key
 #   fm-deepgram-stt.sh --help
 #
 # Reads DEEPGRAM_API_KEY from the environment or the home's gitignored .env.
@@ -56,10 +57,19 @@
 # fails; the retry of a stalled attempt usually answers at once. The worst
 # case is three full attempts: about 16 minutes for a 10-minute recording.
 #
+# --check-key asks Deepgram whether it accepts the key, with one free,
+# read-only request (GET /v1/auth/token) that transcribes nothing.
+#
+# A TERM or INT stops the request at once and removes the temporary key file
+# and Deepgram's answer.
+#
 # Exit:
-#   0  transcript printed (may be empty if Deepgram heard silence)
-#   1  request failure
+#   0  transcript printed (may be empty if Deepgram heard silence), or the key
+#      was accepted
+#   1  request failure: Deepgram could not be reached or did not answer well
 #   2  missing key, missing file, or bad usage
+#   3  Deepgram rejected the key (HTTP 401 or 403) or its account is out of
+#      credit (HTTP 402)
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -281,18 +291,82 @@ extract_segments() {  # <vocab> <json-file>
   python3 -c "$(vocab_py)" segments "$1" "$2"
 }
 
+tmp=
+auth_cfg=
+curl_pid=
+
+# shellcheck disable=SC2329 # Invoked by the EXIT trap prepare_request sets.
+remove_temp_files() {
+  rm -f "${auth_cfg:-}"
+  [ -z "$tmp" ] || rm -f "$tmp" "$tmp.code"
+}
+
+# shellcheck disable=SC2329 # Invoked by the signal traps prepare_request sets.
+on_signal() {
+  [ -z "$curl_pid" ] || kill "$curl_pid" 2>/dev/null || true
+  exit 143
+}
+
+# request <curl-args...> - one Deepgram request with the key from $auth_cfg;
+# the body lands in $tmp and the HTTP status in $http. curl runs in the
+# background so a TERM or INT stops it and removes the key and the answer at
+# once instead of after curl returns. Returns curl's own status.
+request() {
+  local status=0
+  "$CURL_BIN" -sS -o "$tmp" -w "%{http_code}" --config "$auth_cfg" "$@" > "$tmp.code" &
+  curl_pid=$!
+  wait "$curl_pid" || status=$?
+  curl_pid=
+  rm -f "$auth_cfg"
+  http=$(cat "$tmp.code" 2>/dev/null || true)
+  return "$status"
+}
+
+prepare_request() {  # <key>
+  trap remove_temp_files EXIT
+  trap on_signal INT TERM
+  tmp=$(mktemp "${TMPDIR:-/tmp}/fm-deepgram-stt.XXXXXX") || die "cannot create a temporary file"
+  auth_cfg=$(fm_deepgram_auth_config "$1") || die "cannot create the auth config file"
+}
+
+# Deepgram refused the key itself: unknown or revoked (401, 403) or out of
+# credit (402).
+key_refused() {
+  case "$http" in 401|402|403) return 0 ;; *) return 1 ;; esac
+}
+
+check_key() {  # <key>
+  prepare_request "$1"
+  request --request GET --connect-timeout 15 --max-time 30 --url "https://api.deepgram.com/v1/auth/token" \
+    || die "could not check the key: Deepgram could not be reached"
+  if key_refused; then
+    note "Deepgram rejected the key (HTTP $http)"
+    exit 3
+  fi
+  [ "$http" = "200" ] || die "could not check the key: Deepgram answered HTTP $http"
+  printf 'Deepgram accepted the key\n'
+  exit 0
+}
+
 main() {
-  local output=text audio='' key model http tmp ctype auth_cfg vocab extra bytes max_time
+  local output=text audio='' key model http ctype vocab extra bytes max_time stall_time
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --help|-h) usage; exit 0 ;;
       --json) output=json; shift ;;
       --segments) output=segments; shift ;;
+      --check-key) output=check; shift ;;
       --) shift; break ;;
       -*) refuse "unexpected option: $1" ;;
       *) break ;;
     esac
   done
+  if [ "$output" = check ]; then
+    [ "$#" -eq 0 ] || refuse "usage: fm-deepgram-stt.sh --check-key"
+    key=$(fm_deepgram_api_key)
+    [ -n "$key" ] || refuse "DEEPGRAM_API_KEY is not set (env or gitignored .env)"
+    check_key "$key"
+  fi
   [ "$#" -eq 1 ] || refuse "usage: fm-deepgram-stt.sh [--json | --segments] <audio-file>"
   audio=$1
   [ -f "$audio" ] || refuse "audio file not found: $audio"
@@ -316,13 +390,8 @@ main() {
   max_time=$(( 120 + ${bytes:-0} / 100000 ))
   stall_time=$(( 20 + ${bytes:-0} / 1000000 ))
 
-  tmp=$(mktemp "${TMPDIR:-/tmp}/fm-deepgram-stt.XXXXXX") || die "cannot create a temporary file"
-  auth_cfg=$(fm_deepgram_auth_config "$key") || {
-    rm -f "$tmp"
-    die "cannot create the auth config file"
-  }
-  trap 'rm -f "$auth_cfg"' EXIT
-  http=$("$CURL_BIN" -sS -o "$tmp" -w "%{http_code}" \
+  prepare_request "$key"
+  request \
     --request POST \
     --connect-timeout 15 \
     --max-time "$max_time" \
@@ -331,43 +400,30 @@ main() {
     --retry 2 \
     --retry-delay 3 \
     --retry-connrefused \
-    --config "$auth_cfg" \
     --header "Content-Type: ${ctype}" \
     --data-binary @"$audio" \
-    --url "https://api.deepgram.com/v1/listen?model=${model}&smart_format=true&mip_opt_out=true${extra}") || {
-    rm -f "$tmp"
-    die "curl failed talking to Deepgram (no answer within ${max_time}s, nothing moving for ${stall_time}s, or the connection failed)"
-  }
-  rm -f "$auth_cfg"
+    --url "https://api.deepgram.com/v1/listen?model=${model}&smart_format=true&mip_opt_out=true${extra}" \
+    || die "curl failed talking to Deepgram (no answer within ${max_time}s, nothing moving for ${stall_time}s, or the connection failed)"
 
   if [ "$http" != "200" ]; then
     note "Deepgram listen failed HTTP $http"
     head -c 400 "$tmp" >&2 || true
     printf '\n' >&2
-    rm -f "$tmp"
+    ! key_refused || exit 3
     exit 1
   fi
 
   if [ "$output" = json ]; then
     cat "$tmp"
-    rm -f "$tmp"
     exit 0
   fi
 
   if [ "$output" = segments ]; then
-    if ! extract_segments "$vocab" "$tmp"; then
-      rm -f "$tmp"
-      die "could not parse Deepgram transcript JSON"
-    fi
-    rm -f "$tmp"
+    extract_segments "$vocab" "$tmp" || die "could not parse Deepgram transcript JSON"
     exit 0
   fi
 
-  if ! extract_transcript "$vocab" "$tmp"; then
-    rm -f "$tmp"
-    die "could not parse Deepgram transcript JSON"
-  fi
-  rm -f "$tmp"
+  extract_transcript "$vocab" "$tmp" || die "could not parse Deepgram transcript JSON"
   exit 0
 }
 

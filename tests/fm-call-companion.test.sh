@@ -588,8 +588,9 @@ PYEOF
 }
 
 # A stand-in for curl under the real Deepgram helper: answers one timed
-# transcript, or fails to connect when FIXTURE_DEEPGRAM_DOWN is set, and logs
-# its argv so the key can be shown absent from it.
+# transcript with FIXTURE_DEEPGRAM_HTTP (200 by default), or fails to connect
+# when FIXTURE_DEEPGRAM_DOWN is set, and logs its argv so the key can be shown
+# absent from it.
 install_fake_deepgram_curl() {  # <bin>
   local bin=$1
   cat > "$bin/curl" <<'EOF'
@@ -603,7 +604,7 @@ done
 printf 'curl-argv: %s\n' "$*" >> "${DEEPGRAM_CURL_LOG:?}"
 [ "${FIXTURE_DEEPGRAM_DOWN:-0}" = 0 ] || exit 7
 printf '%s' '{"results":{"channels":[{"alternatives":[{"transcript":"fixture via deepgram","words":[{"word":"fixture","start":0.2,"end":0.6,"punctuated_word":"Fixture"},{"word":"via","start":0.6,"end":0.8,"punctuated_word":"via"},{"word":"deepgram","start":0.8,"end":1.3,"punctuated_word":"Deepgram."}]}]}]}}' > "$out"
-printf 200
+printf '%s' "${FIXTURE_DEEPGRAM_HTTP:-200}"
 EOF
   chmod +x "$bin/curl"
 }
@@ -628,12 +629,14 @@ test_transcription_engine_selection_and_fallback() {
       CALL_COMPANION_CLAUDE_BIN="$bin/claude" "$ROOT/bin/fm-call-companion.sh" "$@"
   }
 
-  # A value that is neither engine is refused before anything records.
+  # A value that is neither engine is refused before anything records, and
+  # leaves no call behind: no stamp, no agreement line.
   printf 'transcription_engine = cloud\n' > "$home/config/call-companion"
   out=$(run_companion start --mic --everyone-agreed 2>&1) && rc=0 || rc=$?
   [ "$rc" -ne 0 ] || fail 'an unknown engine started a recording'
   assert_contains "$out" 'must be local or deepgram' 'the unknown engine was not named'
-  run_companion delete >/dev/null 2>&1 || true
+  [ ! -e "$home/state/calls/call-stamp" ] || fail "an unknown engine left a call stamp: $(cat "$home/state/calls/call-stamp")"
+  [ ! -e "$home/data/calls/transcript.txt" ] || fail "an unknown engine left a transcript: $(cat "$home/data/calls/transcript.txt")"
 
   # Deepgram set, the key found in the home's .env: the chunk goes to Deepgram,
   # whisper never runs, the start and the transcript say so, and the key stays
@@ -647,10 +650,9 @@ test_transcription_engine_selection_and_fallback() {
     || fail "no Deepgram transcript line was written: $(cat "$home/data/calls/transcript.txt")"
   sed -n '2p' "$home/data/calls/transcript.txt" | grep -q '^# .* transcribed by Deepgram: each half minute of audio is sent to Deepgram, then deleted here$' \
     || fail "the transcript does not say the audio went to Deepgram: $(cat "$home/data/calls/transcript.txt")"
-  [ "$(cat "$home/state/calls/engine")" = deepgram ] || fail "the engine in use was not recorded: $(cat "$home/state/calls/engine" 2>/dev/null)"
   out=$(run_companion engine 2>&1) || fail "engine report failed while recording: $out"
-  assert_contains "$out" 'recording now:  transcribing with deepgram' 'the engine report does not show the recording in progress'
-  assert_contains "$out" 'deepgram key:   found' 'the engine report did not find the key in .env'
+  assert_contains "$out" 'deepgram key:   found and working' 'the engine report did not find and check the key in .env'
+  assert_contains "$(cat "$DEEPGRAM_CURL_LOG")" 'https://api.deepgram.com/v1/auth/token' 'the key was not checked with the read-only token endpoint'
   out=$(run_companion stop 2>&1) || fail "deepgram stop failed: $out"
   [ ! -s "$WHISPER_LOG" ] || fail "whisper ran under the Deepgram engine: $(cat "$WHISPER_LOG")"
   grep -q -- '--segments' "$DEEPGRAM_CURL_LOG" 2>/dev/null && fail 'curl saw the helper flag' || true
@@ -671,7 +673,6 @@ test_transcription_engine_selection_and_fallback() {
   sed -n '2p' "$home/data/calls/transcript.txt" | grep -q 'transcribed on this Mac by whisper.cpp' || fail "the transcript does not say the audio stayed here: $(cat "$home/data/calls/transcript.txt")"
   note=$(cat "$home/state/calls/engine-note" 2>/dev/null)
   assert_contains "$note" 'no key was found' 'the desk note does not explain the fallback'
-  [ "$(cat "$home/state/calls/engine")" = local ] || fail 'the engine in use is not local'
   run_companion stop >/dev/null 2>&1 || fail 'keyless stop failed'
   [ ! -s "$DEEPGRAM_CURL_LOG" ] || fail "Deepgram was called without a key: $(cat "$DEEPGRAM_CURL_LOG")"
   out=$(run_companion engine 2>&1) || fail "engine report failed: $out"
@@ -696,6 +697,19 @@ test_transcription_engine_selection_and_fallback() {
     || fail "the lost chunk was not noted in the transcript: $(cat "$home/data/calls/transcript.txt")"
   assert_contains "$(cat "$home/state/calls/engine-note")" 'not transcribed' 'the desk note does not say words were lost'
   [ -z "$(find "$home/state/calls/audio" -type f 2>/dev/null)" ] || fail "a lost chunk's audio was kept: $(find "$home/state/calls/audio" -type f)"
+  # Deepgram rejecting the key mid-call is named as that, not as a network
+  # failure, both when the chunk falls back and when it is lost.
+  : > "$WHISPER_LOG"; rm -f "$home/data/calls/transcript.txt"
+  run_mic FIXTURE_DEEPGRAM_HTTP=401 WHISPER_BIN="$bin/whisper-cli" 2> "$stderr" || fail "recording with the key rejected failed: $(cat "$stderr")"
+  [ -s "$WHISPER_LOG" ] || fail 'the chunk Deepgram rejected was not transcribed locally'
+  note=$(cat "$home/state/calls/engine-note")
+  assert_contains "$note" 'Transcribing on this Mac for now: Deepgram rejected the key' 'the desk note does not say the key was rejected'
+  ! grep -q 'could not be reached' <<< "$note" || fail "a rejected key was reported as unreachable: $note"
+  rm -f "$home/data/calls/transcript.txt"
+  run_mic FIXTURE_DEEPGRAM_HTTP=402 WHISPER_BIN="$bin/no-whisper-here" 2> "$stderr" || fail "recording with the key rejected and no local model failed: $(cat "$stderr")"
+  grep -q '^# .* were not transcribed: Deepgram rejected the key (DEEPGRAM_API_KEY) and no speech model is installed on this Mac$' "$home/data/calls/transcript.txt" \
+    || fail "the lost chunk does not say the key was rejected: $(cat "$home/data/calls/transcript.txt")"
+  assert_contains "$(cat "$home/state/calls/engine-note")" 'not transcribed: Deepgram rejected the key' 'the desk note does not say the key was rejected'
   # Deepgram answering again clears the note.
   : > "$DEEPGRAM_CURL_LOG"; rm -f "$home/data/calls/transcript.txt"
   run_mic WHISPER_BIN="$bin/whisper-cli" 2> "$stderr" || fail "recording with Deepgram back failed: $(cat "$stderr")"
@@ -717,7 +731,7 @@ EOF
 
   # The engine report recommends Deepgram for a small, Intel, or slow Mac, and
   # knows whether the key is already in place.
-  report() { env "$@" FM_HOME="$home" WHISPER_BIN="$bin/whisper-cli" HOME="$TMP_ROOT/engine-home" "$ROOT/bin/fm-call-companion.sh" engine; }
+  report() { env "$@" FM_HOME="$home" WHISPER_BIN="$bin/whisper-cli" HOME="$TMP_ROOT/engine-home" FM_DEEPGRAM_CURL="$bin/curl" "$ROOT/bin/fm-call-companion.sh" engine; }
   printf 'transcription_engine = local\n' > "$home/config/call-companion"
   rm -f "$home/.env"
   mkdir -p "$TMP_ROOT/engine-home/.cache/whisper"; : > "$TMP_ROOT/engine-home/.cache/whisper/ggml-base.en.bin"
@@ -729,6 +743,12 @@ EOF
   out=$(report CALL_COMPANION_MEMORY_BYTES=$((32 * 1024 * 1024 * 1024)) CALL_COMPANION_CPU_BRAND='Intel(R) Core(TM) i7') || fail "engine report failed: $out"
   assert_contains "$out" 'recommendation: use Deepgram: it is not Apple silicon. Set transcription_engine = deepgram' 'an Intel Mac with the key in place was not told the one line to add'
   ! grep -q 'fixture-key-never-real' <<< "$out" || fail 'the engine report printed the key'
+  # The key check tells a working key from a rejected one and from no answer.
+  out=$(report FIXTURE_DEEPGRAM_HTTP=401 CALL_COMPANION_MEMORY_BYTES=$((32 * 1024 * 1024 * 1024)) CALL_COMPANION_CPU_BRAND='Apple M2') || fail "engine report failed: $out"
+  assert_contains "$out" 'deepgram key:   found but rejected' 'a rejected key was not reported as rejected'
+  out=$(report FIXTURE_DEEPGRAM_DOWN=1 CALL_COMPANION_MEMORY_BYTES=$((32 * 1024 * 1024 * 1024)) CALL_COMPANION_CPU_BRAND='Apple M2') || fail "engine report failed: $out"
+  assert_contains "$out" 'deepgram key:   found, but could not check it' 'an unreachable Deepgram was not reported as unchecked'
+  ! grep -q 'fixture-key-never-real' "$DEEPGRAM_CURL_LOG" || fail 'the key check put the key in curl argv'
   printf '2026-10-18: a 30-second chunk took 41 seconds to transcribe with ggml-base.en.bin\n' > "$home/state/calls/slow-transcription"
   out=$(report CALL_COMPANION_MEMORY_BYTES=$((32 * 1024 * 1024 * 1024)) CALL_COMPANION_CPU_BRAND='Apple M2') || fail "engine report failed: $out"
   assert_contains "$out" 'last recording: 2026-10-18: a 30-second chunk took 41 seconds' 'the slow recording was not reported'

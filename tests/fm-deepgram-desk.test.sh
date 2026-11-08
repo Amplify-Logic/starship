@@ -283,9 +283,82 @@ test_stt_reports_http_failure() {
   install_stt_curl "$home" 401 '{"err_msg":"invalid credentials"}'
   out=$(DEEPGRAM_API_KEY=test-key-not-real FM_DEEPGRAM_CURL="$home/curl" \
     "$STT" "$home/clip.wav" 2>&1) || status=$?
-  [ "$status" -eq 1 ] || fail "expected exit 1 on HTTP failure, got $status: $out"
+  [ "$status" -eq 3 ] || fail "expected exit 3 when Deepgram rejects the key, got $status: $out"
   assert_contains "$out" "HTTP 401" "HTTP status is reported"
-  pass "fm-deepgram-stt: a Deepgram failure exits 1 with the status"
+  install_stt_curl "$home" 402 '{"err_msg":"insufficient credits"}'
+  status=0
+  out=$(DEEPGRAM_API_KEY=test-key-not-real FM_DEEPGRAM_CURL="$home/curl" \
+    "$STT" "$home/clip.wav" 2>&1) || status=$?
+  [ "$status" -eq 3 ] || fail "expected exit 3 for an account out of credit, got $status: $out"
+  install_stt_curl "$home" 500 '{"err_msg":"internal"}'
+  status=0
+  out=$(DEEPGRAM_API_KEY=test-key-not-real FM_DEEPGRAM_CURL="$home/curl" \
+    "$STT" "$home/clip.wav" 2>&1) || status=$?
+  [ "$status" -eq 1 ] || fail "expected exit 1 on a server failure, got $status: $out"
+  assert_contains "$out" "HTTP 500" "HTTP status is reported"
+  pass "fm-deepgram-stt: a rejected key exits 3 and any other Deepgram failure exits 1, each with the status"
+}
+
+test_stt_check_key_reports_accepted_rejected_or_unreachable() {
+  local home out status=0
+  home=$(new_home stt-check)
+  install_stt_curl "$home" 200 '{"api_key_id":"fixture","scopes":["member"]}'
+  out=$(DEEPGRAM_API_KEY=test-key-not-real FM_DEEPGRAM_CURL="$home/curl" "$STT" --check-key 2>&1) \
+    || fail "an accepted key failed the check: $out"
+  assert_contains "$out" "Deepgram accepted the key" "the accepted key is reported"
+  assert_contains "$(cat "$home/curl.log")" "--request GET" "the check is a read-only GET"
+  assert_contains "$(cat "$home/curl.log")" "https://api.deepgram.com/v1/auth/token" "the check uses the token endpoint"
+  ! grep -q -- '/v1/listen' "$home/curl.log" || fail "the key check transcribed something: $(cat "$home/curl.log")"
+  ! grep -q 'test-key-not-real' "$home/curl.log" || fail "the key reached curl argv"
+  install_stt_curl "$home" 401 '{"err_msg":"invalid credentials"}'
+  out=$(DEEPGRAM_API_KEY=test-key-not-real FM_DEEPGRAM_CURL="$home/curl" "$STT" --check-key 2>&1) || status=$?
+  [ "$status" -eq 3 ] || fail "expected exit 3 for a rejected key, got $status: $out"
+  assert_contains "$out" "rejected the key" "the rejected key is named"
+  printf '#!/usr/bin/env bash\nexit 6\n' > "$home/curl"
+  status=0
+  out=$(DEEPGRAM_API_KEY=test-key-not-real FM_DEEPGRAM_CURL="$home/curl" "$STT" --check-key 2>&1) || status=$?
+  [ "$status" -eq 1 ] || fail "expected exit 1 when Deepgram cannot be reached, got $status: $out"
+  assert_contains "$out" "could not be reached" "the unreachable Deepgram is named"
+  status=0
+  out=$(FM_DEEPGRAM_ENV_FILE=/dev/null env -u DEEPGRAM_API_KEY "$STT" --check-key 2>&1) || status=$?
+  [ "$status" -eq 2 ] || fail "expected exit 2 with no key to check, got $status: $out"
+  pass "fm-deepgram-stt: --check-key tells an accepted key from a rejected one and from no answer"
+}
+
+# A TERM while Deepgram has not answered stops the helper at once and leaves
+# neither the key file nor Deepgram's answer behind in TMPDIR.
+test_stt_term_mid_request_removes_temp_files() {
+  local home tmpdir pid gone=0
+  home=$(new_home stt-term)
+  tmpdir="$home/tmp"
+  mkdir -p "$tmpdir"
+  printf 'RIFF' > "$home/clip.wav"
+  cat > "$home/curl" <<EOF
+#!/usr/bin/env bash
+out=
+prev=
+for a in "\$@"; do
+  [ "\$prev" != -o ] || out=\$a
+  prev=\$a
+done
+printf '{"partial":"words never written to a transcript"}' > "\$out"
+: > "$home/curl-started"
+exec -a fm-stt-term-fixture-curl sleep 30
+EOF
+  chmod +x "$home/curl"
+  DEEPGRAM_API_KEY=test-key-not-real FM_DEEPGRAM_CURL="$home/curl" TMPDIR="$tmpdir" \
+    "$STT" --segments "$home/clip.wav" > /dev/null 2>&1 &
+  pid=$!
+  for _ in $(seq 1 50); do [ -e "$home/curl-started" ] && break; sleep 0.1; done
+  [ -e "$home/curl-started" ] || fail "the stand-in curl never started"
+  kill -TERM "$pid"
+  for _ in $(seq 1 20); do kill -0 "$pid" 2>/dev/null || { gone=1; break; }; sleep 0.1; done
+  [ "$gone" = 1 ] || { kill -KILL "$pid" 2>/dev/null; pkill -f fm-stt-term-fixture-curl 2>/dev/null; fail "the helper outlived a TERM by more than 2 seconds while curl waited"; }
+  wait "$pid" 2>/dev/null || true
+  sleep 0.2
+  ! pgrep -f fm-stt-term-fixture-curl >/dev/null 2>&1 || { pkill -f fm-stt-term-fixture-curl; fail "curl outlived the helper"; }
+  [ -z "$(ls -A "$tmpdir")" ] || fail "temporary files outlived the TERM: $(ls -A "$tmpdir")"
+  pass "fm-deepgram-stt: a TERM mid-request stops at once and removes the key file and the answer"
 }
 
 # A desk recording of <seconds>: 16 kHz, 16-bit, mono, as the floater records.
@@ -3027,6 +3100,8 @@ test_stt_refuses_without_key_or_file
 test_stt_prints_transcript_from_mocked_deepgram
 test_stt_segments_group_timed_words
 test_stt_reports_http_failure
+test_stt_check_key_reports_accepted_rejected_or_unreachable
+test_stt_term_mid_request_removes_temp_files
 test_stt_bounds_a_long_request_and_retries_without_a_length_cap
 test_stt_names_the_bound_when_deepgram_never_answers
 test_stt_gives_up_on_a_stalled_request_and_retries

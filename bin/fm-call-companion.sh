@@ -25,9 +25,11 @@
 # whisper.cpp or, with transcription_engine = deepgram and a Deepgram key, by
 # Deepgram; start says which, and writes it into the transcript under the
 # agreement line). engine prints the engine set, the one a recording would use
-# now, what this Mac has for each, and which one suits it: Deepgram when the
-# Mac has less than 16 GB of memory, is not Apple silicon, or a past recording
-# fell behind (state/calls/slow-transcription, left by bin/fm-call-mic.sh);
+# now, what this Mac has for each, whether Deepgram accepts the key (one free,
+# read-only check: working, rejected, or could not check), and which one suits
+# it: Deepgram when the Mac has less than 16 GB of memory, is not Apple
+# silicon, or a past recording fell behind (state/calls/slow-transcription,
+# left by bin/fm-call-mic.sh);
 # CALL_COMPANION_MEMORY_BYTES and CALL_COMPANION_CPU_BRAND stand in for
 # sysctl's answers. start --page <id> reads a Google Meet tab's captions instead
 # (bin/fm-call-captions.sh; `fm-call-captions.sh --find-meet` lists ids). Both
@@ -402,8 +404,7 @@ has_transcript_lines() {
 # the terminal and written into the transcript under the agreement line, so
 # the record itself says whether the audio stayed on this Mac.
 announce_engine() {
-  local setting engine
-  setting=$(fm_call_engine_setting) || exit 2
+  local setting=$1 engine
   engine=$(fm_call_engine_in_use)
   if [ "$engine" = deepgram ]; then
     transcript_note 'transcribed by Deepgram: each half minute of audio is sent to Deepgram, then deleted here'
@@ -418,12 +419,27 @@ announce_engine() {
   fi
 }
 
-# The engine set, the one in use, what this Mac has for each, and which suits it.
+# Whether Deepgram accepts the home's key, with one free, read-only request:
+# working, rejected, or unchecked when Deepgram could not be reached.
+check_deepgram_key() {
+  local status=0
+  FM_HOME="$FM_CALL_HOME" "$FM_CALL_BIN/fm-deepgram-stt.sh" --check-key >/dev/null 2>&1 || status=$?
+  case "$status" in
+    0) printf 'working\n' ;;
+    3) printf 'rejected\n' ;;
+    *) printf 'unchecked\n' ;;
+  esac
+}
+
+# The engine set, the one in use, what this Mac has for each, whether Deepgram
+# accepts the key, and which engine suits this Mac.
 engine_report() {
-  local setting in_use key='not found' whisper=missing model=none candidate memory_bytes memory_gb cpu chip slow='' reason='' advice
+  local setting in_use key='not found' key_line whisper=missing model=none candidate memory_bytes memory_gb cpu chip slow='' reason='' advice
   setting=$(fm_call_engine_setting) || exit 2
   in_use=$(fm_call_engine_in_use)
-  ! fm_call_deepgram_key_present || key=found
+  if fm_call_deepgram_key_present; then
+    key=$(check_deepgram_key)
+  fi
   [ ! -x "$WHISPER_BIN" ] || whisper=installed
   candidate=$(fm_call_setting whisper_model '')
   if [ -n "$candidate" ]; then
@@ -445,8 +461,13 @@ engine_report() {
   else
     printf 'in use now:     %s\n' "$in_use"
   fi
-  if any_running && [ -s "$STATE_DIR/engine" ]; then printf 'recording now:  transcribing with %s\n' "$(sed -n '1p' "$STATE_DIR/engine")"; fi
-  printf 'deepgram key:   %s (DEEPGRAM_API_KEY in this home'"'"'s .env or the environment)\n' "$key"
+  case "$key" in
+    working) key_line='found and working: Deepgram accepted it' ;;
+    rejected) key_line='found but rejected: Deepgram refused it or its account is out of credit; put a new key from the Deepgram console in DEEPGRAM_API_KEY' ;;
+    unchecked) key_line='found, but could not check it: Deepgram could not be reached; run engine again once online' ;;
+    *) key_line='not found (DEEPGRAM_API_KEY in this home'"'"'s .env or the environment)' ;;
+  esac
+  printf 'deepgram key:   %s\n' "$key_line"
   printf 'local engine:   whisper-cli %s, model %s\n' "$whisper" "$model"
   if [ "$memory_gb" -gt 0 ]; then printf 'this mac:       %s GB memory, %s\n' "$memory_gb" "$chip"; else printf 'this mac:       memory unknown, %s\n' "$chip"; fi
   [ -z "$slow" ] || printf 'last recording: %s\n' "$slow"
@@ -456,7 +477,7 @@ engine_report() {
   if [ -n "$reason" ]; then
     if [ "$in_use" = deepgram ]; then
       advice="keep Deepgram: $reason."
-    elif [ "$key" = found ]; then
+    elif [ "$key" != 'not found' ]; then
       advice="use Deepgram: $reason. Set transcription_engine = deepgram in config/call-companion; the key is already in place."
     else
       advice="use Deepgram: $reason. Put DEEPGRAM_API_KEY in this home's .env and set transcription_engine = deepgram in config/call-companion (docs/call-companion.md)."
@@ -472,7 +493,8 @@ engine_report() {
 }
 
 start_companion() {
-  local source=$1 page=${2:-}
+  local source=$1 page=${2:-} setting=
+  [ "$source" = captions ] || setting=$(fm_call_engine_setting) || exit 2
   if any_running; then
     printf 'companion: already running; use fm-call-companion.sh status or stop first\n' >&2
     exit 1
@@ -487,7 +509,7 @@ start_companion() {
   if [ "$source" = captions ]; then
     start_component captions fm-call-captions.sh captions.log --page "$page"
   else
-    announce_engine
+    announce_engine "$setting"
     prepare_loopback_output
     start_component mic fm-call-mic.sh mic.log
   fi
