@@ -104,9 +104,11 @@
 # reason saying how many meetings it withheld. The reason is what stopped the
 # check: the source cannot be reached, it no longer holds the meeting, the
 # meeting's speaker-pass copy is missing in Anarlog, the source failed to load
-# it (with the source's own error), or config/meetings no longer names the
-# source. With no exclude word set, saved records are answered from without
-# asking the source.
+# it (with the source's own error), config/meetings no longer names the
+# source, or the check has no record of the meeting because
+# state/meetings/records.json no longer lists it (for example after that file
+# was deleted). With no exclude word set, saved records are answered from
+# without asking the source.
 #
 # DELETED CALLS. `fm-call-companion.sh delete` runs `fm-meetings.sh forget
 # call-<stamp>...` after it deletes a call, with the intake on or off; it is

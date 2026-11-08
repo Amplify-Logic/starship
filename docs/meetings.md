@@ -45,7 +45,7 @@ The exclude words are each `exclude_word` line in `config/meetings` plus every l
 Neither ships with any word, so list an employer, its clients and its products there yourself if those meetings must stay out.
 A word added later also keeps meetings already taken in out of `recall`: while any exclude word is set, each saved meeting is checked against the whole meeting its recorder still holds, not only against what the intake saved of it.
 A saved meeting that cannot be checked that way is withheld from the answer, and `recall` says how many it withheld and why.
-The reason it gives is the one that stopped the check: the recorder cannot be reached, it no longer holds the meeting, the meeting's speaker-pass copy is missing in Anarlog, the recorder could not load the meeting (with its own error), or `config/meetings` no longer names that recorder.
+The reason it gives is the one that stopped the check: the recorder cannot be reached, it no longer holds the meeting, the meeting's speaker-pass copy is missing in Anarlog, the recorder could not load the meeting (with its own error), `config/meetings` no longer names that recorder, or the check has no record of the meeting because `state/meetings/records.json` no longer lists it (for example after that file was deleted).
 If you use Anarlog, keep its automatic meeting detection off, or limited to the calendars you want recorded, so a meeting you never meant to record is not recorded into its store in the first place.
 
 ## Set up
