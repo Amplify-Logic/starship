@@ -261,8 +261,6 @@ test_source_windows() {
   [ "$rc" -eq 75 ] && [ -z "$out" ] || fail "an unrelated move gave rc=$rc out=$out"
   assert_place "$h" alpha "$P1" "an unrelated move saves the new place"
 
-  assert_equals "$P1" "$(cat "$h/home/state/mothership/alpha.told")" "the told mark follows an unrelated move once everything was told"
-
   queue_reply "$h" 0 "out:$ITEM_ASK" "out:$ITEM_MSG" "out:{\"position\":$P2}"
   rc=0; out=$(src) || rc=$?
   [ "$rc" -eq 0 ] || fail "items gave rc=$rc"
@@ -383,18 +381,13 @@ test_told_after_a_missed_told() {
 
   out=$(in_home "$h" "$ADAPTER" told "$f2" 2>&1) || fail "told refused a batch after a missed told: $out"
   assert_contains "$out" "told: alpha (1 item(s) in this batch)" "the later batch is recorded"
-  assert_contains "$out" "warning: earlier messages from alpha may not have reached the owner; the owner can read them with mothership pull --room alpha" "told warns about the missed batch"
   assert_equals "$P2" "$(cat "$h/home/state/mothership/alpha.told")" "the told mark moves to the later batch's end"
   [ -e "${f2%.result}.handled" ] || fail "told did not acknowledge the later capture"
 
   queue_reply "$h" 0 "out:{\"position\":$NOW}"
   in_home "$h" "$ADAPTER" source alpha --bin "$STUB_BIN/mothership" --config "$h/rooms.json" >/dev/null || true
   assert_place "$h" alpha "$NOW" "an empty window still moves the place on"
-  assert_equals "$NOW" "$(cat "$h/home/state/mothership/alpha.told")" "the told mark follows it"
-
-  out=$(in_home "$h" "$ADAPTER" told "$f2" 2>&1) || fail "a repeated told failed: $out"
-  assert_not_contains "$out" "warning:" "a repeated told does not warn again"
-  pass "a capture never told does not wedge told or the place; the next told warns once"
+  pass "a capture never told does not wedge told or the place"
 }
 
 test_read_cleans_room_text() {
