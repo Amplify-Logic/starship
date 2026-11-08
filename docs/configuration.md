@@ -3964,7 +3964,7 @@ The script's header owns the hint parameters, the term caps, and the matching ru
 ## Call recorder (config/call-companion)
 
 Optional, private, gitignored, and not inherited by secondmate homes.
-It holds the call recorder's settings: the label for your own speech, the microphone and loopback devices, the speech model, the Claude models for the live desk and the notes, and an optional second screen.
+It holds the call recorder's settings: the label for your own speech, the microphone and loopback devices, the transcription engine (whisper.cpp on this Mac, or Deepgram with the key the desk floater uses) and speech model, the Claude models for the live desk and the notes, and an optional second screen.
 Absent, every setting takes its default.
 `key = value` lines; `#` comments and blank lines are ignored, and an unknown key is refused so a typo never silently changes what is recorded.
 [`docs/examples/call-companion`](examples/call-companion) lists every key with its default, `bin/fm-call-lib.sh`'s header owns their meaning, and [call-companion.md](call-companion.md) covers consent, setup, stopping and deleting.

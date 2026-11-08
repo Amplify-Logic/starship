@@ -19,6 +19,11 @@
 #   - The microphone pipeline keeps overlapping chunks, labels speech by the
 #     track that carried it, deletes each chunk's audio once transcribed, and
 #     starts each recording on the preferred whisper model.
+#   - transcription_engine = deepgram sends each chunk to Deepgram with the key
+#     found where the voice scripts look, never in argv or a log; with no key
+#     the recording transcribes locally and says so, a chunk Deepgram cannot
+#     take transcribes locally or is noted as lost, the desk shows the note,
+#     and `engine` recommends Deepgram for a small, Intel or slow Mac.
 #   - The caption reader stops within the stop timeout, and its last caption
 #     lands before "recording stopped".
 #   - The live desk keeps only grounded items, records each once, and the
@@ -39,6 +44,9 @@ set -u
 TMP_ROOT=$(fm_test_tmproot fm-call-companion-tests)
 PY=$(command -v python3)
 command -v jq >/dev/null 2>&1 || { echo 'ok - skipped: jq is not installed'; exit 0; }
+
+# A Deepgram key in the captain's shell must never decide a fixture's engine.
+unset DEEPGRAM_API_KEY FM_DEEPGRAM_ENV_FILE || true
 
 # new_home <name> - an operational home with empty config, data and state.
 new_home() {
@@ -579,6 +587,199 @@ PYEOF
   pass "microphone pipeline keeps ${duty}% capture, cleans up on stop, and deletes chunk audio"
 }
 
+# A stand-in for curl under the real Deepgram helper: answers one timed
+# transcript with FIXTURE_DEEPGRAM_HTTP (200 by default), or fails to connect
+# when FIXTURE_DEEPGRAM_DOWN is set, and logs its argv so the key can be shown
+# absent from it.
+install_fake_deepgram_curl() {  # <bin>
+  local bin=$1
+  cat > "$bin/curl" <<'EOF'
+#!/usr/bin/env bash
+out=
+prev=
+for a in "$@"; do
+  [ "$prev" != -o ] || out=$a
+  prev=$a
+done
+printf 'curl-argv: %s\n' "$*" >> "${DEEPGRAM_CURL_LOG:?}"
+[ "${FIXTURE_DEEPGRAM_DOWN:-0}" = 0 ] || exit 7
+printf '%s' '{"results":{"channels":[{"alternatives":[{"transcript":"fixture via deepgram","words":[{"word":"fixture","start":0.2,"end":0.6,"punctuated_word":"Fixture"},{"word":"via","start":0.6,"end":0.8,"punctuated_word":"via"},{"word":"deepgram","start":0.8,"end":1.3,"punctuated_word":"Deepgram."}]}]}]}}' > "$out"
+printf '%s' "${FIXTURE_DEEPGRAM_HTTP:-200}"
+EOF
+  chmod +x "$bin/curl"
+}
+
+test_transcription_engine_selection_and_fallback() {
+  local home bin out rc stderr note
+  home=$(new_home engine)
+  bin="$TMP_ROOT/engine-bin"
+  install_fake_audio_tools "$bin"
+  install_fake_deepgram_curl "$bin"
+  export FFMPEG_LOG="$TMP_ROOT/engine-ffmpeg.log" WHISPER_LOG="$TMP_ROOT/engine-whisper.log" DEEPGRAM_CURL_LOG="$TMP_ROOT/engine-curl.log"
+  : > "$FFMPEG_LOG"; : > "$WHISPER_LOG"; : > "$DEEPGRAM_CURL_LOG"
+  printf '%s\n' '#!/usr/bin/env bash' 'cat > /dev/null' 'exit 1' > "$bin/claude"
+  chmod +x "$bin/claude"
+  run_mic() {  # one two-second chunk through the recorder, with the arguments given first as env assignments
+    env "$@" FM_HOME="$home" FFMPEG_BIN="$bin/ffmpeg" WHISPER_MODEL="$bin/model.bin" FM_DEEPGRAM_CURL="$bin/curl" \
+      MIC_CHUNK_SECONDS=2 MIC_CHUNK_OVERLAP_SECONDS=1 MIC_MAX_CHUNKS=1 "$ROOT/bin/fm-call-mic.sh"
+  }
+  run_companion() {
+    FM_HOME="$home" FFMPEG_BIN="$bin/ffmpeg" WHISPER_BIN="$bin/whisper-cli" WHISPER_MODEL="$bin/model.bin" FM_DEEPGRAM_CURL="$bin/curl" \
+      MIC_CHUNK_SECONDS=2 MIC_CHUNK_OVERLAP_SECONDS=1 CALL_COMPANION_OPEN_BIN=true CALL_COMPANION_FINAL_NOTES=0 \
+      CALL_COMPANION_CLAUDE_BIN="$bin/claude" "$ROOT/bin/fm-call-companion.sh" "$@"
+  }
+
+  # A value that is neither engine is refused before anything records, and
+  # leaves no call behind: no stamp, no agreement line.
+  printf 'transcription_engine = cloud\n' > "$home/config/call-companion"
+  out=$(run_companion start --mic --everyone-agreed 2>&1) && rc=0 || rc=$?
+  [ "$rc" -ne 0 ] || fail 'an unknown engine started a recording'
+  assert_contains "$out" 'must be local or deepgram' 'the unknown engine was not named'
+  [ ! -e "$home/state/calls/call-stamp" ] || fail "an unknown engine left a call stamp: $(cat "$home/state/calls/call-stamp")"
+  [ ! -e "$home/data/calls/transcript.txt" ] || fail "an unknown engine left a transcript: $(cat "$home/data/calls/transcript.txt")"
+
+  # Deepgram set, the key found in the home's .env: the chunk goes to Deepgram,
+  # whisper never runs, the start and the transcript say so, and the key stays
+  # out of every argv and log.
+  printf 'transcription_engine = deepgram\n' > "$home/config/call-companion"
+  printf 'DEEPGRAM_API_KEY=fixture-key-never-real\n' > "$home/.env"
+  out=$(run_companion start --mic --everyone-agreed 2>&1) || fail "deepgram start failed: $out"
+  assert_contains "$out" 'transcribing with Deepgram' 'start did not say Deepgram is in use'
+  for _ in $(seq 1 80); do grep -q 'Fixture via Deepgram' "$home/data/calls/transcript.txt" && break; sleep 0.1; done
+  grep -q '^\[[0-9:]*\] unknown speaker: Fixture via Deepgram\.$' "$home/data/calls/transcript.txt" \
+    || fail "no Deepgram transcript line was written: $(cat "$home/data/calls/transcript.txt")"
+  sed -n '2p' "$home/data/calls/transcript.txt" | grep -q '^# .* transcribed by Deepgram: each half minute of audio is sent to Deepgram, then deleted here$' \
+    || fail "the transcript does not say the audio went to Deepgram: $(cat "$home/data/calls/transcript.txt")"
+  out=$(run_companion engine 2>&1) || fail "engine report failed while recording: $out"
+  assert_contains "$out" 'deepgram key:   found and working' 'the engine report did not find and check the key in .env'
+  assert_contains "$(cat "$DEEPGRAM_CURL_LOG")" 'https://api.deepgram.com/v1/auth/token' 'the key was not checked with the read-only token endpoint'
+  out=$(run_companion stop 2>&1) || fail "deepgram stop failed: $out"
+  [ ! -s "$WHISPER_LOG" ] || fail "whisper ran under the Deepgram engine: $(cat "$WHISPER_LOG")"
+  grep -q -- '--segments' "$DEEPGRAM_CURL_LOG" 2>/dev/null && fail 'curl saw the helper flag' || true
+  assert_contains "$(cat "$DEEPGRAM_CURL_LOG")" '/v1/listen?' 'the chunk did not reach the listen endpoint'
+  assert_contains "$(cat "$DEEPGRAM_CURL_LOG")" 'mip_opt_out=true' 'the chunk request did not opt out of model improvement'
+  ! grep -rq 'fixture-key-never-real' "$DEEPGRAM_CURL_LOG" "$home/state/calls" "$home/data/calls" || fail 'the Deepgram key leaked into argv, a log, or the call record'
+  [ -z "$(find "$home/state/calls/audio" -type f 2>/dev/null)" ] || fail "chunk audio outlived its Deepgram transcript: $(find "$home/state/calls/audio" -type f)"
+  [ ! -e "$home/state/calls/engine-note" ] || fail "a working Deepgram left a note on the desk: $(cat "$home/state/calls/engine-note")"
+
+  # Deepgram set but no key anywhere: the recording transcribes locally, says
+  # so at start, on the desk, and in the transcript, and never calls out.
+  rm -f "$home/.env"; : > "$DEEPGRAM_CURL_LOG"; : > "$WHISPER_LOG"
+  out=$(run_companion start --mic --everyone-agreed 2>&1) || fail "keyless start failed: $out"
+  assert_contains "$out" 'no key was found' 'start did not say the key is missing'
+  assert_contains "$out" 'transcribing on this Mac' 'start did not say it falls back to this Mac'
+  for _ in $(seq 1 80); do grep -q 'fixture transcript' "$home/data/calls/transcript.txt" && break; sleep 0.1; done
+  grep -q 'unknown speaker: fixture transcript' "$home/data/calls/transcript.txt" || fail "the keyless recording was not transcribed locally: $(cat "$home/data/calls/transcript.txt")"
+  sed -n '2p' "$home/data/calls/transcript.txt" | grep -q 'transcribed on this Mac by whisper.cpp' || fail "the transcript does not say the audio stayed here: $(cat "$home/data/calls/transcript.txt")"
+  note=$(cat "$home/state/calls/engine-note" 2>/dev/null)
+  assert_contains "$note" 'no key was found' 'the desk note does not explain the fallback'
+  run_companion stop >/dev/null 2>&1 || fail 'keyless stop failed'
+  [ ! -s "$DEEPGRAM_CURL_LOG" ] || fail "Deepgram was called without a key: $(cat "$DEEPGRAM_CURL_LOG")"
+  out=$(run_companion engine 2>&1) || fail "engine report failed: $out"
+  assert_contains "$out" 'in use now:     local, because no Deepgram key was found' 'the engine report does not explain the fallback'
+  unset -f run_companion
+
+  # Deepgram set with a key, but unreachable: the chunk transcribes locally
+  # and the desk says so; with no local model the chunk is noted as lost.
+  printf 'DEEPGRAM_API_KEY=fixture-key-never-real\n' > "$home/.env"
+  : > "$WHISPER_LOG"; : > "$DEEPGRAM_CURL_LOG"; rm -f "$home/data/calls/transcript.txt"
+  stderr="$TMP_ROOT/engine-down.stderr"
+  run_mic FIXTURE_DEEPGRAM_DOWN=1 WHISPER_BIN="$bin/whisper-cli" 2> "$stderr" || fail "recording with Deepgram down failed: $(cat "$stderr")"
+  [ -s "$DEEPGRAM_CURL_LOG" ] || fail 'Deepgram was not tried'
+  [ -s "$WHISPER_LOG" ] || fail 'the chunk Deepgram refused was not transcribed locally'
+  grep -q 'unknown speaker: fixture transcript' "$home/data/calls/transcript.txt" || fail "the refused chunk's local transcript is missing: $(cat "$home/data/calls/transcript.txt")"
+  assert_contains "$(cat "$home/state/calls/engine-note")" 'could not be reached' 'the desk note does not say Deepgram was unreachable'
+  ! grep -q 'fixture-key-never-real' "$stderr" "$DEEPGRAM_CURL_LOG" || fail 'the key leaked while Deepgram was down'
+  : > "$WHISPER_LOG"; : > "$DEEPGRAM_CURL_LOG"; rm -f "$home/data/calls/transcript.txt"
+  run_mic FIXTURE_DEEPGRAM_DOWN=1 WHISPER_BIN="$bin/no-whisper-here" 2> "$stderr" || fail "recording with Deepgram down and no local model failed: $(cat "$stderr")"
+  [ ! -s "$WHISPER_LOG" ] || fail 'a missing whisper ran'
+  grep -q '^# .* the 2 seconds from [0-9:]* were not transcribed: Deepgram could not be reached and no speech model is installed on this Mac$' "$home/data/calls/transcript.txt" \
+    || fail "the lost chunk was not noted in the transcript: $(cat "$home/data/calls/transcript.txt")"
+  assert_contains "$(cat "$home/state/calls/engine-note")" 'not transcribed' 'the desk note does not say words were lost'
+  [ -z "$(find "$home/state/calls/audio" -type f 2>/dev/null)" ] || fail "a lost chunk's audio was kept: $(find "$home/state/calls/audio" -type f)"
+  # Deepgram rejecting the key mid-call is named as that, not as a network
+  # failure, both when the chunk falls back and when it is lost.
+  : > "$WHISPER_LOG"; rm -f "$home/data/calls/transcript.txt"
+  run_mic FIXTURE_DEEPGRAM_HTTP=401 WHISPER_BIN="$bin/whisper-cli" 2> "$stderr" || fail "recording with the key rejected failed: $(cat "$stderr")"
+  [ -s "$WHISPER_LOG" ] || fail 'the chunk Deepgram rejected was not transcribed locally'
+  note=$(cat "$home/state/calls/engine-note")
+  assert_contains "$note" 'Transcribing on this Mac for now: Deepgram rejected the key' 'the desk note does not say the key was rejected'
+  ! grep -q 'could not be reached' <<< "$note" || fail "a rejected key was reported as unreachable: $note"
+  rm -f "$home/data/calls/transcript.txt"
+  run_mic FIXTURE_DEEPGRAM_HTTP=402 WHISPER_BIN="$bin/no-whisper-here" 2> "$stderr" || fail "recording with the key rejected and no local model failed: $(cat "$stderr")"
+  grep -q '^# .* were not transcribed: Deepgram rejected the key (DEEPGRAM_API_KEY) and no speech model is installed on this Mac$' "$home/data/calls/transcript.txt" \
+    || fail "the lost chunk does not say the key was rejected: $(cat "$home/data/calls/transcript.txt")"
+  assert_contains "$(cat "$home/state/calls/engine-note")" 'not transcribed: Deepgram rejected the key' 'the desk note does not say the key was rejected'
+  # Deepgram answering again clears the note.
+  : > "$DEEPGRAM_CURL_LOG"; rm -f "$home/data/calls/transcript.txt"
+  run_mic WHISPER_BIN="$bin/whisper-cli" 2> "$stderr" || fail "recording with Deepgram back failed: $(cat "$stderr")"
+  [ ! -e "$home/state/calls/engine-note" ] || fail "the note outlived Deepgram's return: $(cat "$home/state/calls/engine-note")"
+
+  # The desk shows the note while it stands.
+  printf 'Transcribing on this Mac for now: Deepgram could not be reached\n' > "$home/state/calls/engine-note"
+  printf '20261018-130000\n' > "$home/state/calls/call-stamp"
+  printf '[%s] unknown speaker: Fixture via Deepgram.\n' "$(date '+%H:%M:%S')" > "$home/data/calls/transcript.txt"
+  cat > "$bin/claude" <<'EOF'
+#!/usr/bin/env bash
+cat > /dev/null
+printf '```json\n{"where_we_are":"Talking [12:00:00]","decisions":[],"next_steps":[],"open_questions":[],"triggered_actions":[]}\n```\n'
+EOF
+  FM_HOME="$home" CALL_COMPANION_CLAUDE_BIN="$bin/claude" "$ROOT/bin/fm-call-digest.sh" --once 2> "$stderr" || fail "desk render failed: $(cat "$stderr")"
+  grep -q 'Deepgram could not be reached' "$home/data/calls/glance.html" || fail 'the glance page does not show the engine note'
+  grep -q 'Deepgram could not be reached' "$home/data/calls/desk.md" || fail 'the desk does not show the engine note'
+  rm -f "$home/state/calls/engine-note" "$home/state/calls/call-stamp"
+
+  # The engine report recommends Deepgram for a small, Intel, or slow Mac, and
+  # knows whether the key is already in place.
+  report() { env "$@" FM_HOME="$home" WHISPER_BIN="$bin/whisper-cli" HOME="$TMP_ROOT/engine-home" FM_DEEPGRAM_CURL="$bin/curl" "$ROOT/bin/fm-call-companion.sh" engine; }
+  printf 'transcription_engine = local\n' > "$home/config/call-companion"
+  rm -f "$home/.env"
+  mkdir -p "$TMP_ROOT/engine-home/.cache/whisper"; : > "$TMP_ROOT/engine-home/.cache/whisper/ggml-base.en.bin"
+  out=$(report CALL_COMPANION_MEMORY_BYTES=$((8 * 1024 * 1024 * 1024)) CALL_COMPANION_CPU_BRAND='Apple M1') || fail "engine report failed: $out"
+  assert_contains "$out" 'this mac:       8 GB memory, Apple silicon' 'the report misread the machine'
+  assert_contains "$out" 'recommendation: use Deepgram: this Mac has 8 GB of memory.' 'a small Mac was not steered to Deepgram'
+  assert_contains "$out" 'Put DEEPGRAM_API_KEY in this home' 'the report did not say the key is still needed'
+  printf 'DEEPGRAM_API_KEY=fixture-key-never-real\n' > "$home/.env"
+  out=$(report CALL_COMPANION_MEMORY_BYTES=$((32 * 1024 * 1024 * 1024)) CALL_COMPANION_CPU_BRAND='Intel(R) Core(TM) i7') || fail "engine report failed: $out"
+  assert_contains "$out" 'recommendation: use Deepgram: it is not Apple silicon. Set transcription_engine = deepgram' 'an Intel Mac with the key in place was not told the one line to add'
+  ! grep -q 'fixture-key-never-real' <<< "$out" || fail 'the engine report printed the key'
+  # The key check tells a working key from a rejected one and from no answer.
+  out=$(report FIXTURE_DEEPGRAM_HTTP=401 CALL_COMPANION_MEMORY_BYTES=$((32 * 1024 * 1024 * 1024)) CALL_COMPANION_CPU_BRAND='Apple M2') || fail "engine report failed: $out"
+  assert_contains "$out" 'deepgram key:   found but rejected' 'a rejected key was not reported as rejected'
+  # A rejected key never reads as ready, whichever engine is set.
+  out=$(report FIXTURE_DEEPGRAM_HTTP=401 CALL_COMPANION_MEMORY_BYTES=$((8 * 1024 * 1024 * 1024)) CALL_COMPANION_CPU_BRAND='Apple M1') || fail "engine report failed: $out"
+  assert_contains "$out" 'Deepgram rejected the key in .env, so first put a new key from the Deepgram console' 'a small Mac with a rejected key was not told to replace it'
+  assert_not_contains "$out" 'already in place' 'a rejected key was called already in place'
+  printf 'transcription_engine = deepgram\n' > "$home/config/call-companion"
+  for memory in 8 32; do
+    out=$(report FIXTURE_DEEPGRAM_HTTP=401 CALL_COMPANION_MEMORY_BYTES=$((memory * 1024 * 1024 * 1024)) CALL_COMPANION_CPU_BRAND='Apple M2') || fail "engine report failed: $out"
+    assert_contains "$out" 'in use now:     deepgram, but Deepgram rejected the key, so every chunk falls back to this Mac' "the in-use line hides the rejected key on a ${memory} GB Mac"
+    assert_contains "$out" 'recommendation: replace the Deepgram key: Deepgram rejected it; put a new key from the Deepgram console' "a ${memory} GB Mac was not told to replace the rejected key"
+    assert_not_contains "$out" 'set up and in use' 'a rejected key was called set up and in use'
+  done
+  out=$(report CALL_COMPANION_MEMORY_BYTES=$((32 * 1024 * 1024 * 1024)) CALL_COMPANION_CPU_BRAND='Apple M2') || fail "engine report failed: $out"
+  assert_contains "$out" 'in use now:     deepgram
+' 'a working key does not read as plainly in use'
+  assert_contains "$out" 'recommendation: Deepgram is set up and in use' 'a working key was not called set up and in use'
+  printf 'transcription_engine = local\n' > "$home/config/call-companion"
+  out=$(report FIXTURE_DEEPGRAM_DOWN=1 CALL_COMPANION_MEMORY_BYTES=$((32 * 1024 * 1024 * 1024)) CALL_COMPANION_CPU_BRAND='Apple M2') || fail "engine report failed: $out"
+  assert_contains "$out" 'deepgram key:   found, but could not check it' 'an unreachable Deepgram was not reported as unchecked'
+  ! grep -q 'fixture-key-never-real' "$DEEPGRAM_CURL_LOG" || fail 'the key check put the key in curl argv'
+  printf '2026-10-18: a 30-second chunk took 41 seconds to transcribe with ggml-base.en.bin\n' > "$home/state/calls/slow-transcription"
+  out=$(report CALL_COMPANION_MEMORY_BYTES=$((32 * 1024 * 1024 * 1024)) CALL_COMPANION_CPU_BRAND='Apple M2') || fail "engine report failed: $out"
+  assert_contains "$out" 'last recording: 2026-10-18: a 30-second chunk took 41 seconds' 'the slow recording was not reported'
+  assert_contains "$out" 'recommendation: use Deepgram: a recording fell behind on it.' 'a slow recording did not steer to Deepgram'
+  rm -f "$home/state/calls/slow-transcription"
+  out=$(report CALL_COMPANION_MEMORY_BYTES=$((32 * 1024 * 1024 * 1024)) CALL_COMPANION_CPU_BRAND='Apple M2') || fail "engine report failed: $out"
+  assert_contains "$out" 'recommendation: this Mac can transcribe on its own; local is fine' 'a capable Mac was steered away from local'
+  # A local chunk slower than 20 seconds leaves the mark the report reads.
+  : > "$WHISPER_LOG"; rm -f "$home/data/calls/transcript.txt"
+  WHISPER_SLEEP=0 run_mic WHISPER_BIN="$bin/whisper-cli" 2> "$stderr" || fail "local recording failed: $(cat "$stderr")"
+  [ ! -e "$home/state/calls/slow-transcription" ] || fail 'a quick chunk was marked slow'
+  unset -f run_mic report
+  pass 'the Deepgram engine sends chunks with the key kept private, falls back to this Mac and says so, and the engine report steers a small or slow Mac to Deepgram'
+}
+
 test_live_desk_grounding() {
   local home bin now
   home=$(new_home desk)
@@ -837,7 +1038,12 @@ EOF
     FM_HOME="$home" FIXTURE_POLLED="$TMP_ROOT/captions-polled" CHROME_DEVTOOLS_AXI_BIN="$bin/chrome-devtools-axi" MEET_CAPTIONS_POLL_SECONDS=10 CALL_COMPANION_OPEN_BIN=true \
       CALL_COMPANION_FINAL_NOTES=0 CALL_COMPANION_CLAUDE_BIN="$bin/claude" "$ROOT/bin/fm-call-companion.sh" "$@"
   }
+  mkdir -p "$home/state/calls"
+  printf 'Transcribing on this Mac for now: Deepgram could not be reached\n' > "$home/state/calls/engine-note"
+  printf 'Far side not captured: no loopback input\n' > "$home/state/calls/far-side-note"
   out=$(run_companion start --page 5 --everyone-agreed 2>&1) || fail "caption start failed: $out"
+  [ ! -e "$home/state/calls/engine-note" ] || fail "a microphone call's engine note outlived the start of a captions call"
+  [ ! -e "$home/state/calls/far-side-note" ] || fail "a microphone call's far-side note outlived the start of a captions call"
   for _ in $(seq 1 50); do [ -e "$TMP_ROOT/captions-polled" ] && break; sleep 0.1; done
   sleep 1
   out=$(run_companion stop 2>&1) || fail "caption stop failed: $out"
@@ -857,6 +1063,7 @@ test_new_stamp_skips_archived_stamps
 test_delete_while_stop_waits_wins
 test_watch_reminds_and_stops_but_never_starts
 test_mic_pipeline_overlap_and_cleanup
+test_transcription_engine_selection_and_fallback
 test_live_desk_grounding
 test_speaker_labels_and_final_notes
 test_delete_current_archived_and_all
