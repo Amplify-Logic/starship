@@ -20,7 +20,7 @@ import tempfile
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from fm_meeting_sources import KIND_TEXT, SOURCES, Failure, Unreachable, meeting_text, notice, now  # noqa: E402
+from fm_meeting_sources import KIND_TEXT, SOURCES, Failure, Missing, Unreachable, meeting_text, notice, now  # noqa: E402
 
 TAKING_STALE_SECONDS = 1800   # an intake that never finished frees its meeting after this long
 REANNOUNCE_SECONDS = 43200    # a meeting still waiting for intake is announced again after this long
@@ -150,7 +150,7 @@ class Home:
         if name in self.sources:
             return self.sources[name]
         if name:
-            raise Unreachable(f"{record.get('title') or record['id']} came from {name}, which config/meetings no longer names")
+            raise Unreachable(f"{name} is no longer named in config/meetings")
         if len(self.sources) == 1:
             return next(iter(self.sources.values()))
         raise Failure(f"{record['id']} is not a meeting the check has seen; name one it has, or configure one source")
@@ -667,8 +667,10 @@ def excluded_now(home, record, saved_text, unreachable, withheld):
             return bool(home.exclusion_hits(meeting_text(home.source_of(record).load(record))))
         except Unreachable as error:
             unreachable[source] = reason = str(error)
-        except Failure:
+        except Missing:
             reason = f"{source} no longer holds them"
+        except Failure as error:
+            reason = str(error)
     withheld[reason] = withheld.get(reason, 0) + 1
     return True
 

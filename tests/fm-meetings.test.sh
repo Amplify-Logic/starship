@@ -43,13 +43,13 @@ as_json = "--json" in args
 args = [a for a in args if a != "--json"]
 def out(command, data):
     print(json.dumps({"schema_version": "1", "command": command, "data": data}))
-def fail(message):
-    print(json.dumps({"error": {"code": "invalid", "exit_code": 1, "message": message}, "schema_version": "1"}, indent=2))
+def fail(message, code="invalid"):
+    print(json.dumps({"error": {"code": code, "exit_code": 1, "message": message}, "schema_version": "1"}, indent=2))
     sys.exit(1)
 def meeting(mid):
     path = os.path.join(base, "meetings", mid + ".json")
     if not os.path.exists(path):
-        fail("meeting not found")
+        fail(f"meeting '{mid}' not found", "not_found")
     with open(path) as handle:
         return json.load(handle)
 if args[0] == "doctor":
@@ -883,6 +883,27 @@ test_recall_withholds_what_it_cannot_check_against_the_exclude_words() {
   assert_contains "$out" "(1 meeting(s) withheld: anarlog no longer holds them, so they could not be checked against the exclude words)" "and recall says so"
   assert_not_contains "$out" "Secret chat" "a meeting the word marks only in its transcript stays out, silently"
   assert_contains "$out" "Plain chat" "and a meeting the source confirms is answered"
+  touch "$home/anarlog/export-fails"
+  out=$(run "$home" 240 recall shed kits)
+  rm -f "$home/anarlog/export-fails"
+  assert_contains "$out" "(3 meeting(s) withheld: anarlog meetings export failed: database is locked, so they could not be checked against the exclude words)" "a meeting the source could not load is withheld with the source's own error"
+  assert_not_contains "$out" "no longer holds" "and is not called gone"
+  printf 'enabled = true\nsource = call-recorder\nexclude_word = Sam\n' > "$home/config/meetings"
+  out=$(run "$home" 300 recall shed kits)
+  assert_contains "$out" "(3 meeting(s) withheld: anarlog is no longer named in config/meetings, so they could not be checked against the exclude words)" "meetings from a source config/meetings no longer names are counted under that source"
+
+  home=$(new_home recall-pass-gone)
+  baseline "$home"
+  speaker_pass_meeting "$home" m-route "Captain: Let us compare three shed kits." "Speaker 1: Let us compare three shed kits."
+  model_says "$home" '{"outcome":"They agreed to compare shed kits.","actions":[],"spoken_orders":[]}'
+  run "$home" 180 intake >/dev/null
+  printf 'exclude_word = Acme\n' >> "$home/config/meetings"
+  out=$(run "$home" 240 recall shed kits)
+  assert_contains "$out" "Route chat" "a meeting checked against its speaker pass is answered"
+  rm -f "$home"/anarlog/meetings/imp-*.json
+  out=$(run "$home" 300 recall shed kits)
+  assert_not_contains "$out" "Route chat" "a meeting whose speaker-pass copy is gone is not shown while an exclude word is set"
+  assert_contains "$out" "(1 meeting(s) withheld: the meeting's speaker-pass copy is missing in Anarlog, so they could not be checked against the exclude words)" "and recall says the speaker-pass copy is missing"
   pass "fm-meetings: recall withholds a saved meeting it cannot check against the exclude words"
 }
 
@@ -955,6 +976,9 @@ test_archived_calls_feed_the_intake() {
   printf 'exclude_word = sounds good\n' >> "$home/config/meetings"
   out=$(run "$home" 460 recall shed kits)
   assert_equals "no meeting matches shed kits" "$out" "a word added later that only the call's transcript holds keeps the call out of recall"
+  rm -f "$home/data/calls/archive/$stamp-transcript.txt"
+  out=$(run "$home" 520 recall shed kits)
+  assert_contains "$out" "(1 meeting(s) withheld: call-recorder no longer holds them, so they could not be checked against the exclude words)" "a call whose transcript is gone from the archive is withheld as gone"
   pass "fm-meetings: calls archived by the call recorder feed the same intake, with the owner's label as the owner"
 }
 

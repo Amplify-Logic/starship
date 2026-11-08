@@ -25,6 +25,8 @@ The intake reads finished meetings from the sources `config/meetings` names:
 2. For an Anarlog meeting, Starship makes sure it reads the best transcript.
    Anarlog writes a live transcript during the meeting and, in some cases, rewrites it after the meeting with speaker labels.
    For every other meeting, Starship asks Anarlog to run that after-the-meeting pass by importing the meeting's own recording, which appears in Anarlog as a second meeting titled "... (speaker pass)".
+   Do not delete those "(speaker pass)" entries in Anarlog.
+   While any exclude word is set, `recall` checks a saved meeting against its speaker pass too, so a meeting whose speaker-pass copy is gone is withheld from `recall` from then on, and `recall` says its speaker-pass copy is missing in Anarlog.
    Only when that cannot run (no recording was kept, or the pass failed or took too long) does the intake read the live transcript, and its outcome says so.
 3. The intake reads the summary, your own notes, the action items and a bounded part of the transcript in one Claude pass, and sorts what came out:
    - Clear, low-risk, internal follow-ups, such as research, planning, drafting something for you to read, or building in your own projects, go to Starship ready to start, with the snippet they came from.
@@ -42,7 +44,8 @@ A meeting whose title, participants, notes, summary or transcript contain an exc
 The exclude words are each `exclude_word` line in `config/meetings` plus every line of the private `config/meeting-exclude-words` (one word or phrase per line, `#` comments).
 Neither ships with any word, so list an employer, its clients and its products there yourself if those meetings must stay out.
 A word added later also keeps meetings already taken in out of `recall`: while any exclude word is set, each saved meeting is checked against the whole meeting its recorder still holds, not only against what the intake saved of it.
-A saved meeting that cannot be checked that way, because its recorder cannot be reached or no longer holds it, is withheld from the answer, and `recall` says how many it withheld and why.
+A saved meeting that cannot be checked that way is withheld from the answer, and `recall` says how many it withheld and why.
+The reason it gives is the one that stopped the check: the recorder cannot be reached, it no longer holds the meeting, the meeting's speaker-pass copy is missing in Anarlog, the recorder could not load the meeting (with its own error), or `config/meetings` no longer names that recorder.
 If you use Anarlog, keep its automatic meeting detection off, or limited to the calendars you want recorded, so a meeting you never meant to record is not recorded into its store in the first place.
 
 ## Set up

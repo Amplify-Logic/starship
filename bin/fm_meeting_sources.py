@@ -76,6 +76,10 @@ class Unreachable(Failure):
     """A Failure about the recorder itself, such as its tool missing or not answering, not about one meeting."""
 
 
+class Missing(Failure):
+    """A Failure where the recorder confirms it no longer holds the meeting asked for."""
+
+
 def now():
     value = os.environ.get("FM_MEETINGS_NOW", "")
     return int(value) if value.isdigit() else int(time.time())
@@ -223,11 +227,12 @@ class Anarlog(Source):
         except subprocess.TimeoutExpired:
             raise Unreachable(f"{label} did not answer within {timeout}s")
         if result.returncode != 0:
-            detail = ""
+            detail, code = "", ""
             for stream in (result.stdout, result.stderr):
                 try:
                     error = json.loads(stream).get("error")
                     detail = error.get("message", "") if isinstance(error, dict) else str(error or "")
+                    code = error.get("code", "") if isinstance(error, dict) else ""
                 except (ValueError, AttributeError):
                     continue
                 if detail:
@@ -235,7 +240,7 @@ class Anarlog(Source):
             if not detail:
                 lines = (result.stderr or result.stdout).strip().splitlines()
                 detail = lines[-1] if lines else f"exit {result.returncode}"
-            raise Failure(f"{label} failed: {detail[:200]}")
+            raise (Missing if code == "not_found" else Failure)(f"{label} failed: {detail[:200]}")
         if not as_json:
             return result.stdout
         try:
@@ -485,8 +490,11 @@ class Anarlog(Source):
         final = ""
         pass_id = transcript.get("source_meeting")
         if pass_id and pass_id != meeting_id:
-            exports.append(self.export_json(pass_id))
-            final = self.split_transcript(self.export_markdown(pass_id))[1]
+            try:
+                exports.append(self.export_json(pass_id))
+                final = self.split_transcript(self.export_markdown(pass_id))[1]
+            except Missing:
+                raise Failure("the meeting's speaker-pass copy is missing in Anarlog")
         origin = "imported recording" if record.get("origin") == "imported" else "meeting"
         return meeting(
             id=meeting_id, source=self.name, **self.described(export, record.get("title") or "Untitled meeting"),
@@ -593,8 +601,10 @@ class Recorder(Source):
         try:
             with open(os.path.join(folder, f"{stamp}-transcript.txt"), encoding="utf-8") as handle:
                 lines = [CALL_LINE.match(raw.rstrip("\n")) for raw in handle]
+        except FileNotFoundError:
+            raise Missing("the call's transcript is gone from the call archive")
         except OSError as error:
-            raise Failure(f"the call's transcript cannot be read ({error})")
+            raise Failure(f"the call's transcript cannot be read ({error.strerror or error})")
         paragraphs, labels = [], []
         for match in lines:
             if not match:

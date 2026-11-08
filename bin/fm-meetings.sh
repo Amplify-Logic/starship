@@ -99,11 +99,14 @@
 # recorder's own action items and summary for the asker to answer from. A
 # search hit is checked against the same fields intake checks. A saved intake
 # record is checked against the current words and, while any exclude word is
-# set, against the whole meeting its source still holds; a saved meeting whose
-# source cannot be reached, or no longer holds it, cannot be checked that way
-# and is withheld, and recall ends with one line per reason saying how many
-# meetings it withheld. With no exclude word set, saved records are answered
-# from without asking the source.
+# set, against the whole meeting its source still holds. A saved meeting that
+# cannot be checked that way is withheld, and recall ends with one line per
+# reason saying how many meetings it withheld. The reason is what stopped the
+# check: the source cannot be reached, it no longer holds the meeting, the
+# meeting's speaker-pass copy is missing in Anarlog, the source failed to load
+# it (with the source's own error), or config/meetings no longer names the
+# source. With no exclude word set, saved records are answered from without
+# asking the source.
 #
 # DELETED CALLS. `fm-call-companion.sh delete` runs `fm-meetings.sh forget
 # call-<stamp>...` after it deletes a call, with the intake on or off; it is
