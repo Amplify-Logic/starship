@@ -28,7 +28,11 @@ exclusion_hits(text), the exclude words found in a text) and provides:
                     finds an exclude word in it.
   load(record)      the finished meeting as a Meeting (below) for intake,
                     raising Unreachable when the recorder itself cannot be
-                    reached and Failure when only this meeting cannot be read
+                    reached, Missing when the recorder confirms it no longer
+                    holds this meeting, and Failure, with a message that says
+                    why in the owner's words, when this meeting cannot be read
+                    for any other reason; recall uses which one was raised to
+                    tell the owner why it withholds a meeting
   search(terms, limit)
                     brief Meetings matching the recall words that no intake
                     record covers yet; [] by default
