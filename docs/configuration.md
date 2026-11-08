@@ -1364,7 +1364,7 @@ Portable shard evidence and coverage rules are in [fm-test-portable-shards.md](f
 ## Captain Preferences (data/captain.md / data/captain-shared.md)
 
 Domain-local preferences for one captain's fleet live locally in each home's `data/captain.md`; it is gitignored and printed in the session-start context digest after `data/projects.md` and optional `data/secondmates.md`.
-A new primary home has none until its owner's first conversation writes it; the [`first-voyage`](../.agents/skills/first-voyage/SKILL.md) skill owns that conversation and the sections it records, and `bin/fm-session-start.sh` cues it with a `FIRST VOYAGE:` line while the file, or the first project, is still missing.
+A new primary home has none until its owner's first conversation writes it; the [`first-voyage`](../.agents/skills/first-voyage/SKILL.md) skill owns that conversation and the sections it records, and `bin/fm-session-start.sh` cues it with a `FIRST VOYAGE:` line while the file is missing in a home with no `data/projects.md` and no clone under `projects/`.
 Before changing it, inspect the current file and curate the matching bullet in place under the internal [`stow` skill's](../.agents/skills/stow/SKILL.md) tiering and archive contract; add a new bullet only for a genuinely new durable preference.
 
 Shared captain preferences that apply across secondmate domains live only in the primary home's optional `data/captain-shared.md`.
@@ -1929,7 +1929,7 @@ The address selects the existing shared server; it does not authorize starting o
 
 The optional local, gitignored `config/brief-include.md` adds standing worker instructions to every ship and scout brief.
 This keeps private brief content out of tracked files.
-A new home's first conversation seeds it with the owner's rule that nothing is sent outside without showing the draft first ([`first-voyage`](../.agents/skills/first-voyage/SKILL.md)).
+A new home's first conversation seeds it with the owner's outward-send house rule, as the owner left it, in worker form ([`first-voyage`](../.agents/skills/first-voyage/SKILL.md)).
 When the file exists, `bin/fm-brief.sh` appends its text verbatim as the scaffold's last section, `# Home brief additions`, which defers to every other section of the brief, including the ship contract a later scout promotion appends below it.
 
 An absent or blank file changes nothing, while a present path that is not a readable regular file, or text carrying its own `Delivery contract: mode=` line, stops the scaffold before anything is written.

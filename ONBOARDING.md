@@ -132,7 +132,16 @@ On Windows, follow the daily steps in [ONBOARDING-windows.md step 9](ONBOARDING-
 
 Type anything; `hello` is enough.
 
-Your first mate introduces itself and leads the rest: it asks whether it may install the two tools it still needs (say **yes**), then asks you four questions, one at a time, each with its reason:
+Your first mate introduces itself and leads the rest of your setup.
+It lists the tools still missing (for example `treehouse` and `no-mistakes`), says what each is for, and asks before installing.
+Say **yes**.
+
+You should see: it reports the tools installed, with nothing required still missing.
+
+It may also mention that your Claude Code version is newer than the one Starship was checked with, and ask whether to re-certify or pin it.
+You can ignore that: nothing is blocked, keeping that check current is the maintainers' job, and you can answer "leave it as it is".
+
+Then it asks you four questions, one at a time, each with its reason:
 
 1. What to call you, and how you like to be talked to.
 2. The one thing you'd most like off your plate.
@@ -141,19 +150,17 @@ Your first mate introduces itself and leads the rest: it asks whether it may ins
 
 Answer in your own words; "keep the defaults" is a fine answer to the first and the third.
 The three rules it offers are the ones that keep it safe: it never sends, posts or replies to anyone outside on your behalf without showing you the draft first, nothing merges without your word, and nothing destructive or irreversible happens without you saying so.
-It writes your answers into your private preferences file (`data/captain.md`) and gives every worker the first rule, and it tells you so.
+It writes your answers into your private preferences file (`data/captain.md`) and gives every worker your first rule as you left it.
 The conversation itself lives in [the first-voyage skill](.agents/skills/first-voyage/SKILL.md), which is what your first mate follows.
 
-You should see: it talks to you the way you asked from its next reply on, and it names the file your answers went into.
-
-It may also mention that your Claude Code version is newer than the one Starship was checked with, and ask whether to re-certify or pin it.
-You can ignore that: nothing is blocked, keeping that check current is the maintainers' job, and you can answer "leave it as it is".
+You should see: it tells you your answers are written in your preferences file and that every worker now carries your first rule.
 
 ---
 
 ## 5. Finish line: the first report comes back
 
-Right after the fourth answer, your first mate adds that repository as your first project, with every change coming to you as a pull request and nothing merging until you say so, and tells you one or two true things about it.
+Right after the fourth answer, your first mate adds that repository as your first project, delivered through no-mistakes: every change goes through the full no-mistakes checks and comes to you as a pull request, and nothing merges until you say so.
+It also tells you one or two true things about the repository.
 Then it proposes the first job from what you said you want off your plate: a report on the part of that repository closest to it, with no changes.
 Say **go**, or name a different part you know well.
 

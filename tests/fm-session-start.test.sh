@@ -2819,33 +2819,31 @@ FIXTURE
   assert_contains "$(printf '%s' "$reemit" | head -c 2000)" "FIRST VOYAGE: this home has not met its owner yet" \
     "a context re-emit dropped the first-voyage cue from the preview"
 
-  # The owner is known but no project was ever added: the first job is open.
+  # A home that has met its owner is never cued again, project or not.
   printf '# Captain preferences\n\n## Address and tone\n- Call me: Sam\n' > "$home/data/captain.md"
   out=$(FM_FAKE_HARNESS_PID=$$ run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
-  assert_contains "$(printf '%s' "$out" | head -c 2000)" "FIRST VOYAGE: the first job is still open" \
-    "a known owner with no project did not get the first-job cue"
-  assert_not_contains "$out" "has not met its owner yet" "a known owner was treated as unmet"
+  assert_not_contains "$out" "FIRST VOYAGE" "a home with a captain record was cued as a first voyage"
+  rm -f "$home/data/captain.md"
 
-  # A clone under projects/ with no registry is an existing home whose registry
-  # is rebuilt, never a first voyage.
+  # An older home with no captain record but a registry has done work before.
+  printf '# Projects\n' > "$home/data/projects.md"
+  out=$(FM_FAKE_HARNESS_PID=$$ run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_not_contains "$out" "FIRST VOYAGE" "a home with a registry but no captain record was onboarded again"
+  rm -f "$home/data/projects.md"
+
+  # The same home with only a clone under projects/ is not onboarded either.
   mkdir -p "$home/projects/app"
   out=$(FM_FAKE_HARNESS_PID=$$ run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
-  assert_not_contains "$out" "FIRST VOYAGE" "a home with a project clone was told its first job is open"
+  assert_not_contains "$out" "FIRST VOYAGE" "a home with a project clone but no captain record was onboarded again"
   rmdir "$home/projects/app"
 
-  # An empty registry is how the skill records an owner who declined a project.
-  : > "$home/data/projects.md"
-  out=$(FM_FAKE_HARNESS_PID=$$ run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
-  assert_not_contains "$out" "FIRST VOYAGE" "an empty registry still raised the first job"
-
   # A secondmate home never chats with the owner, so it never gets the cue.
-  rm -f "$home/data/captain.md" "$home/data/projects.md"
   printf 'mate-1\n' > "$home/.fm-secondmate-home"
   out=$(FM_FAKE_HARNESS_PID=$$ run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
   assert_not_contains "$out" "FIRST VOYAGE" "a secondmate home was told to meet an owner"
   rm -f "$home/.fm-secondmate-home"
 
-  pass "the first-voyage cue leads a new home's digest, names the open first job, and stays off elsewhere"
+  pass "the first-voyage cue leads a new home's digest and stays off in a home that has met its owner or done work"
 }
 
 test_reemit_skips_startup_sweeps_but_keeps_the_wake_drain() {
