@@ -2776,7 +2776,7 @@ test_claude_concise_prompt_off_leaves_the_launch_unchanged() {
     out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
     status=$?
     expect_code 0 "$status" "claude spawn with claude-concise-prompt $token should succeed"$'\n'"$out"
-    launch=$(cat "$LAUNCH_LOG")
+    launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
     expected=$(claude_expected_launch "$launch" "$HOME_DIR" "$id" --dangerously-skip-permissions)
     [ "$launch" = "$expected" ] || fail "claude-concise-prompt $token changed the launch"$'\n'"expected: $expected"$'\n'"actual:   $launch"
     assert_not_contains "$launch" "claude-concise.md" "claude-concise-prompt $token must not reference the prompt"
