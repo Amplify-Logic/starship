@@ -43,7 +43,8 @@
 # as root (Homebrew refuses root; make your own user first); the current
 # directory, $HOME, or ~/starship is on a Windows drive under /mnt/<letter>/
 # (WSL's cross-filesystem bridge breaks git, file watching, and permissions);
-# the kernel is WSL 1 (Claude Code needs WSL 2); apt-get is absent; or
+# the kernel is WSL 1 (Herdr, mirrored networking and systemd need WSL 2, even
+# though Claude Code alone now runs on WSL 1); apt-get is absent; or
 # ~/starship exists but is not a Firstmate clone.
 #
 # With --addon, it also names this home's private add-on in
@@ -104,14 +105,17 @@ ensure_line() {  # <file> <line>
 }
 
 check() {  # <label> <command...>: sets missing=1 when the tool does not answer
+  # A version line carries a digit; any other first line is a tool that ran
+  # but cannot work, such as wslview answering that WSL interop is disabled
+  # when Windows interop is switched off, and is reported with that line.
   local label=$1 version
   shift
-  if version=$("$@" 2>/dev/null | head -n 1) && [ -n "$version" ]; then
-    printf '  ok  %-14s %s\n' "$label" "$version"
-  else
-    printf '  --  %-14s missing\n' "$label"
-    missing=1
-  fi
+  version=$("$@" 2>/dev/null | head -n 1) || version=
+  case "$version" in
+    *[0-9]*) printf '  ok  %-14s %s\n' "$label" "$version" ;;
+    '') printf '  --  %-14s missing\n' "$label"; missing=1 ;;
+    *) printf '  --  %-14s not working: %s\n' "$label" "$version"; missing=1 ;;
+  esac
 }
 
 # addon_origin <OWNER/REPO>: the GitHub clone URL for an add-on argument.
@@ -182,7 +186,7 @@ main() {
   if [ -r /proc/version ]; then
     case "$(cat /proc/version)" in
       *microsoft-standard*|*WSL2*) ;;
-      *Microsoft*) die "this is WSL 1; Claude Code needs WSL 2: in Windows PowerShell run 'wsl --set-version Ubuntu-24.04 2', then run this again" ;;
+      *Microsoft*) die "this is WSL 1; Starship needs WSL 2 for Herdr, mirrored networking and systemd (Claude Code alone would run on WSL 1): in Windows PowerShell run 'wsl --set-version Ubuntu-24.04 2', then run this again" ;;
     esac
   fi
 
@@ -366,6 +370,11 @@ Then go back to the guide you are following:
     tmux.
 Each then hands over to step 3 of ONBOARDING.md. Starship is already cloned
 in ~/starship.
+
+Claude Code is the recommended setup and all this installs. Codex and Pi work
+inside Starship too, as the first mate or for its workers; the handbook's
+"Models, usage, and second mates" section (docs/handbook.md) has the install
+and sign-in commands and the one file that switches workers over.
 EOF
 }
 

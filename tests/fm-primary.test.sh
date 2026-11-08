@@ -1681,7 +1681,21 @@ test_preflight_is_read_only_and_checks_accounts() {
   out=$(FM_PRIMARY_TEST_CODEX_LOGIN_STATUS='Not logged in' live codex --preflight 2>&1) || status=$?
   [ "$status" -ne 0 ] || fail "preflight skipped account availability"
   assert_contains "$out" 'not logged in' "preflight account failure was unclear"
-  pass "fm-primary: preflight checks all profile gates without launch, state, or terminal changes"
+  # A Claude CLI nobody signed in to is refused the same way, naming the fix,
+  # and the refusal never reaches the launch.
+  for profile in claude-opus claude-fable; do
+    status=0
+    : > "$LOG"
+    out=$(FM_PRIMARY_TEST_LOGGED_OUT=1 live "$profile" --preflight 2>&1) || status=$?
+    [ "$status" -ne 0 ] || fail "$profile preflight accepted a logged-out Claude Code"
+    assert_contains "$out" "Claude Code is not logged in ('claude auth status')" "$profile logged-out refusal was unclear: $out"
+    assert_contains "$out" "run 'claude', sign in, then launch again" "$profile logged-out refusal did not name the fix: $out"
+    status=0
+    out=$(FM_PRIMARY_TEST_LOGGED_OUT=1 live "$profile" 2>&1) || status=$?
+    [ "$status" -ne 0 ] || fail "$profile launched a logged-out Claude Code to its login screen"
+    [ ! -s "$LOG" ] || fail "$profile logged-out refusal still launched the CLI: $(cat "$LOG")"
+  done
+  pass "fm-primary: preflight checks all profile gates without launch, state, or terminal changes, and refuses a logged-out Claude Code"
 }
 
 test_preflight_is_read_only_and_checks_accounts

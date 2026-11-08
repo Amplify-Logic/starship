@@ -98,6 +98,7 @@ When any diagnostic needs captain attention, report the plain consequence and re
   Report it to the captain as the concrete consequence - which runtime is running past the evidence, and what that evidence covered - never as a version-number dump.
   Absence of this line means every listed runtime matched, was not installed, or printed no readable version; it is never a claim that a runtime was verified.
 - `HOST_ENV: WSL: ...` - the WSL home this first mate runs in needs a change the line names; nothing is blocked, and [`ONBOARDING-windows.md`](../../../ONBOARDING-windows.md) owns the setup it points at.
+- `HOST_ENV: Linux on aarch64: no Chrome is installed ...` - this Arm machine has no browser for `chrome-devtools-axi`, so do not dispatch or attempt browser checks here and say so when a task needs one; nothing else is blocked, and only an x86 machine or an installed Chromium changes it.
   A path on the Windows drive is the captain's to move into the Linux home; never move a home or clone yourself, because that strands live workers and unlanded work.
   Localhost forwarding off means review boards and dev servers will not open in the Windows browser until the captain edits the named `.wslconfig` and restarts WSL, which also ends this session.
   Networking mode none means this Ubuntu has no network at all, so every network check and install fails, until the captain removes the mirrored line from `.wslconfig` and restarts WSL, which also ends this session.

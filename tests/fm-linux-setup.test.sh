@@ -53,7 +53,14 @@ printf 'apt-get %s\n' "$*" >> "$FAKE_WORLD/calls.log"
 for arg in "$@"; do
   case "$arg" in
     wslu)
-      printf '#!/usr/bin/env bash\necho "wslu v3.2.3-1; wslview v10"\n' > "$FAKE_WORLD/sysbin/wslview"
+      # With Windows interop switched off, wslview answers --version with
+      # WSL's own complaint (spelled slightly differently by WSL itself)
+      # instead of a version, and exits 0.
+      if [ "${FAKE_WSL_INTEROP_OFF:-}" = 1 ]; then
+        printf '#!/usr/bin/env bash\necho "WSL interop is disabled. Please enable it before using WSL."\n' > "$FAKE_WORLD/sysbin/wslview"
+      else
+        printf '#!/usr/bin/env bash\necho "wslu v3.2.3-1; wslview v10"\n' > "$FAKE_WORLD/sysbin/wslview"
+      fi
       chmod +x "$FAKE_WORLD/sysbin/wslview"
       ;;
     *.deb)
@@ -265,6 +272,8 @@ test_fresh_install_then_rerun_is_idempotent() {
   assert_contains "$out" "step 8 of ONBOARDING-windows.md" "the closing text sends Windows users to the guide's Herdr step"
   assert_contains "$out" "inside Herdr;" "the Windows step starts the first mate in Herdr"
   assert_contains "$out" "step 6 of ONBOARDING-linux-server.md" "the closing text sends server users to the guide's tmux step"
+  assert_contains "$out" "Codex and Pi work" "the closing text names the supported alternatives to Claude Code"
+  assert_contains "$out" "docs/handbook.md" "the closing text points at the handbook section with their commands"
   [ "$(grep -c 'brew shellenv' "$w/home/.profile")" -eq 1 ] \
     || fail "a re-run duplicated the profile lines: $(cat "$w/home/.profile")"
   pass "a fresh install runs every step once, and a re-run keeps everything and only prints the new-terminal step and the sign-ins"
@@ -290,6 +299,19 @@ test_wsl_sends_sign_ins_to_the_windows_browser() {
   [ "$(grep -cx 'export BROWSER=wslview' "$w/home/.bashrc")" -eq 1 ] \
     || fail "a re-run duplicated the browser line: $(cat "$w/home/.bashrc")"
   pass "inside WSL the setup installs wslu and Herdr, and points BROWSER at wslview, so sign-ins open in Windows"
+}
+
+test_wslview_without_interop_is_not_ok() {
+  local w out status
+  w=$(make_world wsl-interop-off)
+  out=$(FAKE_WSL_DISTRO=Ubuntu-24.04 FAKE_WSL_INTEROP_OFF=1 run_setup "$w" --ci)
+  status=$?
+  [ "$status" -eq 1 ] || fail "a wslview that cannot reach Windows should fail the closing check, got $status: $out"
+  assert_not_contains "$out" "ok  wslview" "WSL's interop complaint must not pass as a wslview version"
+  assert_contains "$out" "--  wslview        not working: WSL interop is disabled" \
+    "the closing check names the tool and shows what it printed instead of a version"
+  assert_contains "$out" "ok  herdr" "the other tools are still checked and reported"
+  pass "a wslview that prints WSL's interop complaint instead of a version is reported as not working"
 }
 
 test_arm64_skips_chrome() {
@@ -405,6 +427,7 @@ test_piped_install_runs_to_the_end
 test_refusals_change_nothing
 test_fresh_install_then_rerun_is_idempotent
 test_wsl_sends_sign_ins_to_the_windows_browser
+test_wslview_without_interop_is_not_ok
 test_arm64_skips_chrome
 test_windows_claude_does_not_count_as_installed
 test_missing_tool_fails_the_closing_check
