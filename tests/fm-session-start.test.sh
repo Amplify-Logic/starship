@@ -2800,6 +2800,47 @@ FIXTURE
   pass "--reemit puts its read cue in the first 2000 characters and a normal start omits it"
 }
 
+test_address_and_tone_survives_the_hook_output_preview() {
+  local rec root home fakebin out head2k reemit
+  rec=$(new_world address-tone)
+  IFS='|' read -r root home fakebin <<FIXTURE
+$rec
+FIXTURE
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+  mkdir -p "$home/data"
+  {
+    awk 'BEGIN { for (i = 0; i < 400; i++) printf "preference line %04d padding padding padding\n", i }'
+    printf '\n## Address and tone\n- Call me: Partner\n- Emoji: yes, a few per reply\n\n## Later\n- Not part of the section\n'
+  } > "$home/data/captain.md"
+
+  out=$(FM_FAKE_HARNESS_PID=$$ run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  [ "${#out}" -gt 10000 ] || fail "address fixture did not exceed the hook output limit"
+  head2k=$(printf '%s' "$out" | head -c 2000)
+  assert_contains "$head2k" "- Call me: Partner" "the recorded address is not inside the first 2000 characters"
+  assert_contains "$head2k" "- Emoji: yes, a few per reply" "the recorded tone is not inside the first 2000 characters"
+  assert_not_contains "$head2k" "Not part of the section" "the address block ran past its own section"
+
+  reemit=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$root" FM_FAKE_HARNESS_PID=$$ PATH="$fakebin:$BASE_PATH" \
+    env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
+    "$SESSION_START" --reemit)
+  assert_contains "$(printf '%s' "$reemit" | head -c 2000)" "- Call me: Partner" \
+    "a context re-emit dropped the recorded address from the first 2000 characters"
+
+  printf '# Preferences\n- Keep replies short.\n' > "$home/data/captain.md"
+  out=$(FM_FAKE_HARNESS_PID=$$ run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_contains "$(printf '%s' "$out" | head -c 2000)" "no ## Address and tone section" \
+    "a home with no recorded address does not get the ask cue up front"
+
+  printf 'mate-1\n' > "$home/.fm-secondmate-home"
+  out=$(FM_FAKE_HARNESS_PID=$$ run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_not_contains "$out" "no ## Address and tone section" \
+    "a secondmate home, which never chats with the person, was told to ask"
+  rm -f "$home/.fm-secondmate-home"
+
+  pass "the recorded address and tone, or the ask cue, lead the digest inside the preview"
+}
+
 test_reemit_skips_startup_sweeps_but_keeps_the_wake_drain() {
   local rec root home fakebin network_report reemit sequence generation
   rec=$(new_world reemit)
@@ -3645,6 +3686,7 @@ test_unreconciled_captain_words_print_until_marked
 test_desk_voice_reply_rules_print_only_when_opted_in
 test_private_addon_hooks_print_in_the_digest
 test_reemit_cue_survives_the_hook_output_preview
+test_address_and_tone_survives_the_hook_output_preview
 test_agents_baseline_stays_at_true_start_and_reemits_on_every_drifted_pi_compact
 test_read_only_pi_compact_refreshes_against_its_own_session_identity
 test_codex_unreachable_reset_sources_do_not_claim_instruction_refresh
