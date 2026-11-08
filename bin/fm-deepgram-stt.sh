@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Transcribe one audio file with Deepgram (push-to-talk desk floater path).
+# Transcribe one audio file with Deepgram (push-to-talk desk floater path, and
+# the call recorder's Deepgram engine through --segments).
 #
 # Usage:
 #   fm-deepgram-stt.sh [--json | --segments] <audio-file>
