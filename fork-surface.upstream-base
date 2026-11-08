@@ -1,4 +1,4 @@
-# upstream_base = 49dc31b287f6f36b5663ac2b9f73bc45c2ebb3bf
+# upstream_base = 47e07b404afb9a4f9deeada886cce01d012c4749
 .agents/hooks.json
 .agents/skills/afk/SKILL.md
 .agents/skills/agent-skill-trigger-index/SKILL.md
@@ -31,6 +31,7 @@
 .agents/skills/harness-adapters/references/harness/devin.md
 .agents/skills/harness-adapters/references/harness/gemini.md
 .agents/skills/harness-adapters/references/harness/grok.md
+.agents/skills/harness-adapters/references/harness/hermes.md
 .agents/skills/harness-adapters/references/harness/kimi.md
 .agents/skills/harness-adapters/references/harness/kiro.md
 .agents/skills/harness-adapters/references/harness/muse.md
@@ -166,8 +167,10 @@ bin/fm-check-lib.sh
 bin/fm-check-register.sh
 bin/fm-check-unregister.sh
 bin/fm-classify-lib.sh
+bin/fm-claude-account-quota.sh
 bin/fm-claude-stop-autoarm.sh
 bin/fm-claude-trust.sh
+bin/fm-codex-stop-park.sh
 bin/fm-commandcode-mod.ts
 bin/fm-composer-lib.sh
 bin/fm-config-inherit-lib.sh
@@ -211,6 +214,9 @@ bin/fm-herdr-groups.sh
 bin/fm-herdr-lab-viewer.py
 bin/fm-herdr-lab.sh
 bin/fm-herdr-session-cleanup.sh
+bin/fm-hermes-hook.sh
+bin/fm-hermes-lib.sh
+bin/fm-hermes-process-lib.sh
 bin/fm-hold-reason-lib.sh
 bin/fm-home-seed.sh
 bin/fm-home-summary-refresh.sh
@@ -248,6 +254,7 @@ bin/fm-nm-run-lib.sh
 bin/fm-omp-profile-lib.sh
 bin/fm-on.sh
 bin/fm-operational-input.sh
+bin/fm-osc7501.sh
 bin/fm-parent-channel-lib.sh
 bin/fm-path-lib.sh
 bin/fm-peek.sh
@@ -269,6 +276,7 @@ bin/fm-procevent-quota.sh
 bin/fm-procevent-remote-reply.sh
 bin/fm-procevent-when.sh
 bin/fm-procevent.sh
+bin/fm-procinfo.py
 bin/fm-project-capacity-lib.sh
 bin/fm-project-mode.sh
 bin/fm-project-origin-lib.sh
@@ -342,6 +350,7 @@ bin/fm-tasks-axi-lib.sh
 bin/fm-tasks-axi.sh
 bin/fm-teardown.sh
 bin/fm-test-isolation-proof.sh
+bin/fm-test-linux.sh
 bin/fm-test-run.sh
 bin/fm-test-tap-verify.sh
 bin/fm-timeout-lib.sh
@@ -365,6 +374,7 @@ bin/fm-wake-lib.sh
 bin/fm-warm-compact-lib.sh
 bin/fm-watch-arm.sh
 bin/fm-watch-checkpoint.sh
+bin/fm-watch-key-lib.sh
 bin/fm-watch.sh
 bin/fm-worker-account-lib.sh
 bin/fm-x-dismiss.sh
@@ -421,6 +431,7 @@ docs/subagent-guard.md
 docs/supervision-host.md
 docs/supervision-protocols/agy.md
 docs/supervision-protocols/claude.md
+docs/supervision-protocols/codex-checkpoint.md
 docs/supervision-protocols/codex.md
 docs/supervision-protocols/cursor.md
 docs/supervision-protocols/grok.md
@@ -441,6 +452,7 @@ docs/verification/cortex.md
 docs/verification/devin.md
 docs/verification/dispatch-auth.md
 docs/verification/dispatch-resolve.md
+docs/verification/hermes.md
 docs/verification/kiro.md
 docs/verification/lint-option-a.md
 docs/verification/muse.md
@@ -459,6 +471,12 @@ docs/wedge-alarm.md
 docs/zellij-backend.md
 skills/stow/SKILL.md
 tests/assets/board-render-harness.mjs
+tests/captures/claude-2.1.291-slash-popup/exit-typed-with-notice.ansi
+tests/captures/claude-2.1.291-slash-popup/exit-typed.ansi
+tests/captures/claude-2.1.291-slash-popup/idle.ansi
+tests/captures/claude-2.1.291-slash-popup/no-mistakes-typed.ansi
+tests/captures/claude-2.1.291-slash-popup/slash-only.ansi
+tests/captures/claude-2.1.291-slash-popup/truncated-name.ansi
 tests/captures/kimi-code-2.3.0/README.md
 tests/captures/kimi-code-2.3.0/kimi-code-mcp-json.pane
 tests/captures/kimi-code-2.3.0/paged.pane
@@ -496,9 +514,11 @@ tests/fm-agy-signals-live-e2e.test.sh
 tests/fm-approval-failover.test.sh
 tests/fm-arm-pretool-check.test.sh
 tests/fm-ask-user-authority.test.sh
+tests/fm-assertions.test.sh
 tests/fm-backend-autodetect-smoke.test.sh
 tests/fm-backend-cmux-smoke.test.sh
 tests/fm-backend-cmux.test.sh
+tests/fm-backend-hc-appdetect-smoke.test.sh
 tests/fm-backend-hc-liveness-live-e2e.test.sh
 tests/fm-backend-hc-smoke.test.sh
 tests/fm-backend-hc.test.sh
@@ -555,12 +575,14 @@ tests/fm-check-unregister.test.sh
 tests/fm-ci-workflow.test.sh
 tests/fm-classify-corr-token.test.sh
 tests/fm-classify-decision-key.test.sh
+tests/fm-claude-account-quota.test.sh
 tests/fm-claude-stop-autoarm-live-e2e.test.sh
 tests/fm-claude-stop-autoarm.test.sh
 tests/fm-claude-trust.test.sh
 tests/fm-cmux-claude-composer-live-e2e.test.sh
 tests/fm-codex-continuity-live-e2e.test.sh
 tests/fm-codex-hook-layer-live-e2e.test.sh
+tests/fm-codex-stop-park.test.sh
 tests/fm-commandcode-harness.test.sh
 tests/fm-commandcode-signals-live-e2e.test.sh
 tests/fm-composer-codex-idle-live-e2e.test.sh
@@ -610,15 +632,21 @@ tests/fm-herdr-attached-viewer-live-e2e.test.sh
 tests/fm-herdr-groups.test.sh
 tests/fm-herdr-lab.test.sh
 tests/fm-herdr-pi-stale-registration-live-e2e.test.sh
+tests/fm-herdr-projected-cd-live-e2e.test.sh
 tests/fm-herdr-session-cleanup-e2e.test.sh
 tests/fm-herdr-session-cleanup.test.sh
 tests/fm-herdr-submit-confirm-live-e2e.test.sh
 tests/fm-herdr-version-floor-live-e2e.test.sh
+tests/fm-hermes-gateway-coexistence-live-e2e.test.sh
+tests/fm-hermes-harness.test.sh
+tests/fm-hermes-profile-safety-live-e2e.test.sh
+tests/fm-hermes-signals-live-e2e.test.sh
 tests/fm-home-summary-refresh.test.sh
 tests/fm-host-mirror-live-e2e.test.sh
 tests/fm-host-mirror.test.sh
 tests/fm-inactive-reconcile.test.sh
 tests/fm-inbox.test.sh
+tests/fm-install-herdr.test.sh
 tests/fm-jev-mem-guard.test.sh
 tests/fm-kimi-harness.test.sh
 tests/fm-kimi-trust-prompt-live-e2e.test.sh
@@ -628,6 +656,7 @@ tests/fm-launch-prompt-signals-live-e2e.test.sh
 tests/fm-lint-workflows.test.sh
 tests/fm-lint.test.sh
 tests/fm-live-gate.test.sh
+tests/fm-live-lab-isolation.test.sh
 tests/fm-live-lab-up-mate.test.sh
 tests/fm-live-lab.test.sh
 tests/fm-mail-check.test.sh
@@ -643,6 +672,7 @@ tests/fm-on.test.sh
 tests/fm-opencode-abs-cwd-rail-live-e2e.test.sh
 tests/fm-opencode-primary-live-e2e.test.sh
 tests/fm-operational-input.test.sh
+tests/fm-osc7501.test.sh
 tests/fm-parent-channel-scan-exclusion.test.sh
 tests/fm-peek-remote.test.sh
 tests/fm-pending-reply.test.sh
@@ -685,6 +715,7 @@ tests/fm-remote-delta-read.test.sh
 tests/fm-remote-doctor.test.sh
 tests/fm-remote-entrypoint.test.sh
 tests/fm-remote-herdr-guard.test.sh
+tests/fm-remote-inherit-generation.test.sh
 tests/fm-remote-job-claim-reap.test.sh
 tests/fm-remote-job-claim-retention.test.sh
 tests/fm-remote-job-launchagent.test.sh
@@ -723,6 +754,7 @@ tests/fm-send-secondmate-marker.test.sh
 tests/fm-send-settle.test.sh
 tests/fm-send-strict.test.sh
 tests/fm-session-lock-ancestry.test.sh
+tests/fm-session-lock-ps-denied.test.sh
 tests/fm-session-lock-windows-consumers.test.sh
 tests/fm-session-start.test.sh
 tests/fm-sessionstart-hook-live-e2e.test.sh
@@ -734,6 +766,7 @@ tests/fm-spawn-compact-adviser-disable-remote.test.sh
 tests/fm-spawn-compact-adviser-disable.test.sh
 tests/fm-spawn-dispatch-profile.test.sh
 tests/fm-spawn-external-review.test.sh
+tests/fm-spawn-herdr-lease.test.sh
 tests/fm-spawn-manual-pr-text.test.sh
 tests/fm-spawn-orca-worktree.test.sh
 tests/fm-spawn-pool-base-freshen.test.sh
@@ -762,6 +795,7 @@ tests/fm-teardown.test.sh
 tests/fm-test-fixture-cleanup.test.sh
 tests/fm-test-fixtures.test.sh
 tests/fm-test-isolation-proof.test.sh
+tests/fm-test-linux.test.sh
 tests/fm-test-run.test.sh
 tests/fm-test-tap-verify.test.sh
 tests/fm-timeout-lib.test.sh
@@ -806,8 +840,10 @@ tests/hc-test-safety.sh
 tests/herdr-client-pair-fixture.sh
 tests/herdr-test-safety.sh
 tests/lib.sh
+tests/linux/Dockerfile
 tests/opencode-v2-live-fixture.py
 tests/remote-herdr-fixture.sh
+tests/rex-fake-fixture.sh
 tests/rex-test-safety.sh
 tests/secondmate-helpers.sh
 tests/supervision-host-helpers.sh

@@ -35,9 +35,11 @@
 # lock stays busy past LEASE_LOCK_WAIT seconds, the confirmation only refreshes
 # the sidecar, as for a line 1 in the ancestry, and a later acquisition
 # re-anchors.
-# A live holder is judged by the fork's fm_harness_holder_alive
-# (bin/fm-primary-scope-lib.sh), which adds a loose argv tier so a live primary
-# the strict matcher misses is never taken over as stale.
+# A live holder blocks reclaim under fm_session_lock_pid_blocks_reclaim
+# (bin/fm-session-lock-lib.sh), or under the fork's fm_harness_holder_alive
+# (bin/fm-primary-scope-lib.sh) for a well-formed nonzero pid, which adds a
+# loose argv tier so a live primary the strict matcher misses is never taken
+# over as stale.
 #
 # Usage: fm-lock.sh              acquire; see the acquire exit codes below
 #        fm-lock.sh status       print holder and liveness; always exits 0.
@@ -81,6 +83,20 @@ mkdir -p "$STATE" 2>/dev/null || {
 # live-holder tier (fm_harness_holder_alive) used below to judge a live owner.
 # shellcheck source=bin/fm-primary-scope-lib.sh
 . "$SCRIPT_DIR/fm-primary-scope-lib.sh"
+
+# lock_owner_blocks_reclaim <pid>: the acquisition's live-owner verdict, the
+# session-lock owner's refusal widened by the fork's loose live-holder tier. A
+# malformed or all-zero record never reaches the loose tier, whose kill -0
+# would otherwise signal a process group and wedge the home read-only.
+lock_owner_blocks_reclaim() {
+  fm_session_lock_pid_blocks_reclaim "$1" && return 0
+  fm_session_pid_valid "$1" || return 1
+  case "$1" in
+    *[1-9]*) ;;
+    *) return 1 ;;
+  esac
+  fm_harness_holder_alive "$1"
+}
 
 # release-stale belongs to the fork's primary handoff, and this dispatch FAILS
 # CLOSED on purpose: with the fork file missing it refuses the release rather
@@ -307,7 +323,7 @@ if [ -f "$LOCK" ] && [ ! -L "$LOCK" ]; then
     confirm_own_lock "$old"
     old=$(cat "$LOCK" 2>/dev/null || true)
   fi
-  if [ -z "$REANCHOR" ] && fm_harness_holder_alive "$old"; then
+  if [ -z "$REANCHOR" ] && lock_owner_blocks_reclaim "$old"; then
     refuse_live_owner "$old"
   fi
 fi
@@ -335,10 +351,10 @@ if [ -e "$LOCK" ] || [ -L "$LOCK" ]; then
   }
   # A re-anchor decided above has held the claim lock since, so line 1 is the
   # pid it recorded and needs no second verdict.
-  if [ -z "$REANCHOR" ] && [ "$old" != "$me" ] && fm_harness_holder_alive "$old"; then
+  if [ -z "$REANCHOR" ] && [ "$old" != "$me" ] && lock_owner_blocks_reclaim "$old"; then
     fm_session_lock_owned_by_self "$STATE" && confirm_own_lock "$old"
     old=$(cat "$LOCK" 2>/dev/null || true)
-    if [ -z "$REANCHOR" ] && [ "$old" != "$me" ] && fm_harness_holder_alive "$old"; then
+    if [ -z "$REANCHOR" ] && [ "$old" != "$me" ] && lock_owner_blocks_reclaim "$old"; then
       refuse_live_owner "$old"
     fi
   fi

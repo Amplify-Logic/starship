@@ -195,7 +195,34 @@ test_ci_wires_installers_and_required_lane() {
   pass "CI wires pinned installers into a required serial Herdr lane"
 }
 
+# A refused download must leave nothing installed and must have asked Herdr's
+# current repository for the release asset.
+test_herdr_installer_refuses_a_failed_download() {
+  local case_dir fakebin code=0
+  case_dir="$TMP_ROOT/herdr-download-refused"
+  fakebin=$(fm_fakebin "$case_dir")
+  cat > "$fakebin/curl" <<'SH'
+#!/usr/bin/env bash
+for arg in "$@"; do
+  case "$arg" in https://*) printf '%s\n' "$arg" > "$FM_CURL_URL_LOG" ;; esac
+done
+exit 22
+SH
+  chmod +x "$fakebin/curl"
+  FM_CURL_URL_LOG="$case_dir/url" PATH="$fakebin:$PATH" RUNNER_TEMP="$case_dir" \
+    bash "$HERDR_INSTALL" "$case_dir/dest" 2>"$case_dir/err" || code=$?
+  [ "$code" -ne 0 ] || fail "installer succeeded although the download was refused"
+  [ -s "$case_dir/url" ] || fail "installer requested no release URL: $(cat "$case_dir/err")"
+  case "$(cat "$case_dir/url")" in
+    https://github.com/herdrdev/herdr/releases/download/v*/herdr-*) ;;
+    *) fail "installer requested $(cat "$case_dir/url"), not a herdrdev/herdr release asset" ;;
+  esac
+  [ ! -e "$case_dir/dest/herdr" ] || fail "installer installed a binary after a refused download"
+  pass "installer downloads the pinned asset from herdrdev/herdr and installs nothing when that download is refused"
+}
+
 test_herdr_installer_pins_exact_version_and_checksums
+test_herdr_installer_refuses_a_failed_download
 test_treehouse_installer_pins_exact_version_and_checksums
 test_cleanup_only_targets_job_owned_lab_sessions
 test_ci_wires_installers_and_required_lane
