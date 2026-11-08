@@ -981,12 +981,12 @@ beta = off
 
 Each switched-on room is one built-in [process-event source](#process-to-event-sources-stateprocevent) that long-polls the room with `mothership pull --from <place> --wait 55`.
 That read neither reads nor moves the place plain `mothership pull` keeps, so monitoring keeps its own place in the room under `state/mothership/`, and a manual pull and the monitor never move each other's place.
-Switching a room on carries on from plain `pull`'s saved place, or starts at the room's current end for a room never pulled (or with `on <room> --now`), so it replays no history; `on` lists the requests already open for the ship instead.
+Switching a room on carries on from plain `pull`'s saved place, or starts at the room's current end for a room never pulled, so it replays no history; `on` lists the requests already open for the ship instead.
 Switching it off hands the monitor's place back to plain `pull`, so a later manual pull does not repeat what the owner was already told.
 While a room is on, the first mate does not run `mothership pull` for it.
 
 What arrives is captured durably, announced as an ordinary `check` wake on the watcher's next cycle, and only then is the monitor's place moved on, so a crash before the capture was saved reads the same items again rather than skipping them.
-The first mate reads each capture through the adapter, tells the owner in plain words, and records what it told, so a batch read twice after a crash is told once; a crash between telling the owner and recording it can still repeat one batch once.
+The first mate reads each capture through the adapter, oldest first, tells the owner in plain words, and records what it told, so a batch read twice after a crash is told once; recording a batch while an earlier one is still untold is refused, so a later batch never hides an earlier one; a crash between telling the owner and recording it can still repeat one batch once.
 A room that cannot be reached, such as an offline or sleeping machine, costs one attempt a minute and wakes no one.
 A room that refuses the ship's key, or repeated failures the link cannot explain, end that room's monitoring and wake the first mate once to tell the owner; the next session start arms an `on` room again.
 Monitoring runs whenever this Starship runs: continuously on a server, and while the machine is awake on a Mac or under WSL 2, picking up everything that arrived in between when it next runs.

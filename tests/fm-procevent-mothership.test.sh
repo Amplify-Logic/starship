@@ -107,6 +107,7 @@ queue_reply() {
 position_of() { cat "$1/home/state/mothership/$2.position" 2>/dev/null; }
 assert_place() { assert_equals "$3" "$(position_of "$1" "$2")" "$4"; }
 set_position() { mkdir -p "$1/home/state/mothership"; printf '%s\n' "$3" > "$1/home/state/mothership/$2.position"; }
+set_told() { mkdir -p "$1/home/state/mothership"; printf '%s\n' "$3" > "$1/home/state/mothership/$2.told"; }
 
 # capture <dir> <seq> <file-with-source-output>: file it the way the runner does.
 capture() {
@@ -129,7 +130,8 @@ wait_for_file() {  # <path> [tries of 0.1s]
 test_help() {
   local help
   if help=$("$ADAPTER" --help 2>&1); then fail "help exited zero"; fi
-  assert_contains "$help" "fm-procevent-mothership.sh on <room> [--now]" "help names on"
+  assert_contains "$help" "fm-procevent-mothership.sh on <room>" "help names on"
+  assert_not_contains "$help" "--now" "help offers no --now mode"
   assert_contains "$help" "config/mothership-monitor" "help names the setting"
   assert_not_contains "$help" "set -u" "help leaked source"
   pass "help renders the header"
@@ -171,6 +173,8 @@ test_on_off_status() {
   assert_place "$h" alpha "$P0" "on carries on from plain pull's saved place"
   grep -q "config=$h/rooms.json" "$h/stub/calls" || fail "the link did not get the resolved config"
 
+  if out=$(in_home "$h" "$ADAPTER" on beta --now 2>&1); then fail "on accepted a --now mode"; fi
+  [ ! -e "$h/home/state/procevent/mothership-beta.source" ] || fail "a refused on beta --now registered the room"
   out=$(in_home "$h" "$ADAPTER" on beta 2>&1) || fail "on beta failed: $out"
   assert_place "$h" beta "$NOW" "a room never pulled starts at its current end"
 
@@ -244,6 +248,7 @@ test_source_windows() {
   local h out rc started elapsed
   h=$(make_home source)
   set_position "$h" alpha "$P0"
+  set_told "$h" alpha "$P0"
   src() { in_home "$h" "$ADAPTER" source alpha --bin "$STUB_BIN/mothership" --config "$h/rooms.json"; }
 
   rc=0; out=$(src) || rc=$?
@@ -255,6 +260,16 @@ test_source_windows() {
   rc=0; out=$(src) || rc=$?
   [ "$rc" -eq 75 ] && [ -z "$out" ] || fail "an unrelated move gave rc=$rc out=$out"
   assert_place "$h" alpha "$P1" "an unrelated move saves the new place"
+
+  set_told "$h" alpha "$P0"
+  queue_reply "$h" 0 "out:{\"position\":$P2}"
+  started=$(date +%s)
+  rc=0; out=$(src) || rc=$?
+  elapsed=$(( $(date +%s) - started ))
+  [ "$rc" -eq 75 ] && [ -z "$out" ] || fail "a held move gave rc=$rc out=$out"
+  assert_place "$h" alpha "$P1" "an unrelated move keeps the place while a batch is still untold"
+  [ "$elapsed" -ge 1 ] || fail "a held move did not wait out its window"
+  set_told "$h" alpha "$P1"
 
   queue_reply "$h" 0 "out:$ITEM_ASK" "out:$ITEM_MSG" "out:{\"position\":$P2}"
   rc=0; out=$(src) || rc=$?
@@ -357,6 +372,41 @@ test_autohandle_and_told() {
   pass "autohandle and told move the place only forward, and told keeps a repeated batch from being shown twice"
 }
 
+test_told_out_of_order() {
+  local h out doc f1 f2 late
+  h=$(make_home order)
+  set_position "$h" alpha "$P0"
+  set_told "$h" alpha "$P0"
+  late=$(printf '%s' "$ITEM_MSG" | jq -c '.seq = 6')
+  doc="$TMP_ROOT/order.out"
+  queue_reply "$h" 0 "out:$ITEM_ASK" "out:{\"position\":$P1}"
+  in_home "$h" "$ADAPTER" source alpha --bin "$STUB_BIN/mothership" --config "$h/rooms.json" > "$doc"
+  f1=$(capture "$h" 1 "$doc")
+  in_home "$h" "$ADAPTER" autohandle mothership-alpha 1 "$f1" || fail "autohandle 1 failed"
+  queue_reply "$h" 0 "out:$late" "out:{\"position\":$P2}"
+  in_home "$h" "$ADAPTER" source alpha --bin "$STUB_BIN/mothership" --config "$h/rooms.json" > "$doc"
+  f2=$(capture "$h" 2 "$doc")
+  in_home "$h" "$ADAPTER" autohandle mothership-alpha 2 "$f2" || fail "autohandle 2 failed"
+  assert_place "$h" alpha "$P2" "both captures moved the place on"
+
+  if out=$(in_home "$h" "$ADAPTER" told "$f2" 2>&1); then fail "told recorded a later batch before an earlier one: $out"; fi
+  assert_contains "$out" "an earlier batch for alpha is still untold" "told names the untold earlier batch"
+  out=$(in_home "$h" "$ADAPTER" read "$f1") || fail "read 1 failed"
+  assert_contains "$out" "new: 1" "the earlier batch is still shown after the later one was told first"
+  assert_contains "$out" "text: Blue or green for the new page" "the earlier item is shown"
+  out=$(in_home "$h" "$ADAPTER" told "$f1" 2>&1) || fail "told 1 failed: $out"
+  out=$(in_home "$h" "$ADAPTER" read "$f2") || fail "read 2 failed"
+  assert_contains "$out" "new: 1" "the later batch is still untold"
+  out=$(in_home "$h" "$ADAPTER" told "$f2" 2>&1) || fail "told 2 after told 1 failed: $out"
+  assert_equals "$(printf 'room: alpha\nnothing new')" "$(in_home "$h" "$ADAPTER" read "$f1")" "the earlier batch is told once"
+  assert_equals "$(printf 'room: alpha\nnothing new')" "$(in_home "$h" "$ADAPTER" read "$f2")" "the later batch is told once"
+
+  queue_reply "$h" 0 "out:{\"position\":$NOW}"
+  in_home "$h" "$ADAPTER" source alpha --bin "$STUB_BIN/mothership" --config "$h/rooms.json" >/dev/null || true
+  assert_place "$h" alpha "$NOW" "once everything is told an unrelated move saves the place again"
+  pass "told refuses a later batch while an earlier one is untold, so the earlier batch is never hidden"
+}
+
 test_read_cleans_room_text() {
   local h out doc f long item
   h=$(make_home clean)
@@ -424,5 +474,6 @@ fm_test_run \
   test_ensure_follows_the_setting \
   test_source_windows \
   test_autohandle_and_told \
+  test_told_out_of_order \
   test_read_cleans_room_text \
   test_runner_wakes_once_and_keeps_listening
