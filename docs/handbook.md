@@ -53,6 +53,7 @@ The rest of the clone (instructions, scripts, skills, and these docs) is shared 
 
 Three plain-text files carry what the first mate should always know.
 It reads all three at the start of every session, whichever AI tool you run it on.
+Your first conversation starts the first of them: what to call you, what you want off your plate, and your house rules go in as you answer ([first-voyage](../.agents/skills/first-voyage/SKILL.md) owns that conversation).
 
 | File | Holds | Example entries |
 | --- | --- | --- |
@@ -228,9 +229,10 @@ Three commands switch the style for every worker in your home:
 [docs/configuration.md](configuration.md#worker-outward-actions-configoutward-permissions) owns the permissions and styles.
 
 The check covers only workers: the first mate itself and second mates are not checked, so a connector they use can send, post, or change something without asking you first.
-Record a standing rule before you connect mail or chat ([ONBOARDING step 4](../ONBOARDING.md#4-let-it-finish-its-own-setup-and-set-one-standing-rule) prompts for it).
-Record it in both places: `data/captain.md` binds the first mate, and the same line in `config/brief-include.md` puts it in every worker brief, which also covers what the check does not, such as tools outside your connectors.
-That onboarding step has the exact words to send.
+Your first conversation offered a standing rule for that, that the first mate never sends, posts or replies to anyone outside on your behalf without showing you the draft first, and recorded the version you kept, changed, or dropped ([ONBOARDING step 4](../ONBOARDING.md#4-say-hello-your-first-mate-takes-it-from-here)).
+When kept, it lives in `data/captain.md` for the first mate and in `config/brief-include.md` for every worker, which also covers what the check does not, such as tools outside your connectors.
+If you dropped or loosened it, workers carry only what you kept, so say the rule again in plain words before you connect mail or chat, and the first mate records it in both places.
+Ask "what's in captain.md now?" to see the version you have.
 
 Once you run second mates, also put the rule in `data/captain-shared.md`, which second mates inherit, and in each second mate home's `config/brief-include.md`, since neither of your main home's copies reaches them.
 
@@ -286,8 +288,8 @@ Each step is small and proves one part of the system.
 **Day 1 - running and connected.**
 
 1. Finish [ONBOARDING.md](../ONBOARDING.md), including its first report.
-2. Record the outward-send standing rule from [Connectors and tools](#a-rounded-starter-set-for-a-work-setup), then add your connectors and check each with one real question.
-3. Tell the first mate three things about how you work, as standing preferences, then ask "what's in captain.md now?".
+2. Add your connectors from [Connectors and tools](#a-rounded-starter-set-for-a-work-setup) and check each with one real question; if you kept the outward-send rule in your first conversation, it already covers them, and if not, say it again first.
+3. Tell the first mate three more things about how you work, as standing preferences, then ask "what's in captain.md now?".
 4. Run `/bearings`.
 
 **Day 2 - a first investigation.**
