@@ -66,16 +66,21 @@ Even measured, their work left twelve shards no room for that packing-boundary c
 The 2026-11-08 creator catch-up brought in serial scripts the creator's table never measured, which pushed the unmeasured share past the coverage guard's cap. Seven of them carry their first successful `duration_ms` from run [42519113644](https://github.com/Amplify-Logic/starship/actions/runs/42519113644): `tests/fm-hermes-harness.test.sh` (15264 ms), `tests/fm-remote-inherit-generation.test.sh` (6502 ms), `tests/fm-assertions.test.sh` (1316 ms), and the live-guard or optional-binary skips `tests/fm-hermes-signals-live-e2e.test.sh` (1328 ms), `tests/fm-backend-hc-appdetect-smoke.test.sh` (1027 ms), `tests/fm-hermes-profile-safety-live-e2e.test.sh` (920 ms) and `tests/fm-hermes-gateway-coexistence-live-e2e.test.sh` (813 ms).
 `tests/fm-spawn-herdr-lease.test.sh` failed in that run, so it has no successful sample yet and stays on the default weight until the next refresh.
 
+Both tables were refreshed again for that catch-up after its runs [42527277677](https://github.com/Amplify-Logic/starship/actions/runs/42527277677) and [42531129942](https://github.com/Amplify-Logic/starship/actions/runs/42531129942) reached the 30-minute job cap on serial 13 and parallel 2 with every completed script still passing.
+The catch-up grew several suites, and both hint tables had gone stale: 314 of 390 serial scripts ran slower than their hints, and the parallel set summed to about 3377 seconds, so no two-lane split could stay clear of the cap.
+Each serial and parallel row keeps the larger of its previous value and the slowest successful `duration_ms` across green main run [42504916826](https://github.com/Amplify-Logic/starship/actions/runs/42504916826) and PR runs [42519113644](https://github.com/Amplify-Logic/starship/actions/runs/42519113644), 42527277677 (both attempts) and 42531129942, read from completed `FM_TEST_END` markers where a cancelled job uploaded no artifact.
+Every serial member now has a measured hint, which needs seventeen serial shards to fit under the packing target, and the parallel set moved to three lanes.
+
 ## Parallel lanes
 
-The two parallel lanes use longest-processing-time assignment over those hints.
+The three parallel lanes use longest-processing-time assignment over those hints.
 [`tests/fm-pi-primary-types.test.sh`](../tests/fm-pi-primary-types.test.sh) owns its typecheck dependencies independently of the lane's installed Pi runtime.
-[`bin/fm-test-run.sh`](../bin/fm-test-run.sh) holds the duration values in `portable_parallel_weight_hints` and the ordered memberships and lane-specific prerequisite constraints beside `list_portable_parallel_1` and `list_portable_parallel_2`.
+[`bin/fm-test-run.sh`](../bin/fm-test-run.sh) holds the duration values in `portable_parallel_weight_hints` and the ordered memberships and lane-specific prerequisite constraints beside `list_portable_parallel_1`, `list_portable_parallel_2` and `list_portable_parallel_3`.
 Read the derived packing estimates with that runner's `--check-coverage`; its header and `--help` own the output fields and the selection-specific `--list-scheduled` weight rules.
 The largest individual hint sets a lower bound on the estimated duration of any split, regardless of how evenly the remaining work is assigned.
 The CI cap follows the three-tier timeout policy in [Timeouts](#timeouts) below.
 
-[`tests/fm-test-run.test.sh`](../tests/fm-test-run.test.sh), in `test_portable_parallel_lanes_stay_duration_balanced`, requires every parallel member to have a hint and the lane sums to differ by no more than five percent of the larger sum.
+[`tests/fm-test-run.test.sh`](../tests/fm-test-run.test.sh), in `test_portable_parallel_lanes_stay_duration_balanced`, requires every parallel member to have a hint and the largest and smallest lane sums to differ by no more than five percent of the largest.
 Its scheduling regressions also check stored parallel lane order and preserve serial-weight scheduling for other selections.
 These checks do not detect a script outgrowing an existing hint or establish measured job headroom.
 Refresh `portable_parallel_weight_hints` with the slowest completed `duration_ms` per script from several green CI runs' `fm-test-timing-portable-parallel-*` artifacts whenever the parallel set gains scripts or a member grows materially.
@@ -135,7 +140,7 @@ Measure native-Windows-only scripts through the focused Git Bash runner and reta
 
 ## Coverage guard
 
-`bin/fm-test-run.sh --check-coverage` verifies that both parallel lanes partition the proven-isolated set.
+`bin/fm-test-run.sh --check-coverage` verifies that the parallel lanes partition the proven-isolated set.
 It also verifies that the parallel lanes, portable serial lane, and real-Herdr family are disjoint and cover every `tests/*.test.sh` script.
 It separately verifies that the portable serial CI shards are non-empty, disjoint, and together equal the portable serial lane.
 Its hint-coverage and modeled-budget checks are described in [Portable serial CI shards](#portable-serial-ci-shards); neither replaces inspection of actual CI timing artifacts.
@@ -157,7 +162,7 @@ No fast mode, path skips, or paid runner provisioning is part of this layout.
 
 The longer-term performance objective remains a complete green run under fifteen minutes including start delay, but the three watch-triage members still sum to about 26 minutes of CI test time.
 The immediate packing target is the runner's modeled script budget, not a claim that more shards alone can make an indivisible script faster.
-The layout uses twenty long-lived Linux jobs (thirteen serial, two parallel, Herdr, four lint), plus short checks and macOS; insufficient shared account capacity can erase the packing gain.
+The layout uses twenty-five long-lived Linux jobs (seventeen serial, three parallel, Herdr, four lint), plus short checks and macOS; insufficient shared account capacity can erase the packing gain.
 Compare complete before/after runs, preserve cancelled and partial-run evidence, and measure a representative normal-run sample before claiming a P95 improvement.
 The workflow retains per-PR supersession and keeps only the newest of close main pushes' runs, without changing the compliance workflow's event semantics.
 

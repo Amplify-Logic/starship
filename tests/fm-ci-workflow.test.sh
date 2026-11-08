@@ -331,7 +331,7 @@ puts YAML.load_file(ARGV[0]).fetch("jobs").fetch(ARGV[1]).fetch("timeout-minutes
 # must join a tier, and a job-level value outside these tiers is exactly the
 # one-off number the policy removed.
 FAST_TIER_JOBS='test-coverage invariants tests-timing-aggregate fork-surface leak-guard full-suite'
-NORMAL_TIER_JOBS='lint tests-portable-parallel-1 tests-portable-parallel-2 tests-portable-serial macos-stock-bash'
+NORMAL_TIER_JOBS='lint tests-portable-parallel-1 tests-portable-parallel-2 tests-portable-parallel-3 tests-portable-serial macos-stock-bash'
 HEAVY_TIER_JOBS='tests-herdr tests-hc'
 
 # Print the one timeout every listed job shares; fail on any disagreement.
@@ -707,6 +707,11 @@ raise "cannot list runner lanes" unless status.success?
 actual = lanes.lines.map(&:strip).select { |l| l.match?(/\Aportable-serial-\d+of\d+\z/) }
 expected = shards.map { |s| "portable-serial-#{s}of#{shards.length}" }
 raise "CI matrix and runner disagree" unless actual.sort == expected.sort
+parallel = lanes.lines.map(&:strip).select { |l| l.match?(/\Aportable-parallel-\d+\z/) }
+raise "runner lists no portable parallel lanes" if parallel.empty?
+ran = jobs.values.flat_map { |job| (job["steps"] || []).map { |step| step["run"].to_s } }
+  .flat_map { |run| run.scan(%r{bin/fm-test-run\.sh --lane (portable-parallel-\d+)\b}).flatten }
+raise "CI must run every portable parallel lane exactly once, got #{ran.sort}" unless ran.sort == parallel.sort
 lint = jobs.fetch("lint").fetch("strategy")
 raise "lint failures must not cancel another partition" unless lint.fetch("fail-fast") == false
 matrix = lint.fetch("matrix")
@@ -720,7 +725,7 @@ end
 canonical, result = Open3.capture2({"CI" => "true"}, File.join(root, "bin/fm-lint.sh"), "--list-files")
 raise "lint matrix loses or duplicates canonical roots" unless result.success? && roots.sort == canonical.lines.map(&:strip).sort
 RUBY
-  pass "CI matrices cover every executable serial lane and canonical lint root exactly once"
+  pass "CI runs every executable parallel and serial lane and canonical lint root exactly once"
 }
 
 test_ci_matrices_match_executable_partitions
