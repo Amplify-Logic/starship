@@ -2800,6 +2800,54 @@ FIXTURE
   pass "--reemit puts its read cue in the first 2000 characters and a normal start omits it"
 }
 
+test_first_voyage_cue_leads_a_new_home() {
+  local rec root home fakebin out reemit
+  rec=$(new_world first-voyage)
+  IFS='|' read -r root home fakebin <<FIXTURE
+$rec
+FIXTURE
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+
+  # A home that has never met its owner: no data/captain.md at all.
+  out=$(FM_FAKE_HARNESS_PID=$$ run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_contains "$(printf '%s' "$out" | head -c 2000)" "FIRST VOYAGE: this home has not met its owner yet" \
+    "a home with no captain record did not get the first-voyage cue inside the preview"
+  reemit=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$root" FM_FAKE_HARNESS_PID=$$ PATH="$fakebin:$BASE_PATH" \
+    env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
+    "$SESSION_START" --reemit)
+  assert_contains "$(printf '%s' "$reemit" | head -c 2000)" "FIRST VOYAGE: this home has not met its owner yet" \
+    "a context re-emit dropped the first-voyage cue from the preview"
+
+  # The owner is known but no project was ever added: the first job is open.
+  printf '# Captain preferences\n\n## Address and tone\n- Call me: Sam\n' > "$home/data/captain.md"
+  out=$(FM_FAKE_HARNESS_PID=$$ run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_contains "$(printf '%s' "$out" | head -c 2000)" "FIRST VOYAGE: the first job is still open" \
+    "a known owner with no project did not get the first-job cue"
+  assert_not_contains "$out" "has not met its owner yet" "a known owner was treated as unmet"
+
+  # A clone under projects/ with no registry is an existing home whose registry
+  # is rebuilt, never a first voyage.
+  mkdir -p "$home/projects/app"
+  out=$(FM_FAKE_HARNESS_PID=$$ run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_not_contains "$out" "FIRST VOYAGE" "a home with a project clone was told its first job is open"
+  rmdir "$home/projects/app"
+
+  # An empty registry is how the skill records an owner who declined a project.
+  : > "$home/data/projects.md"
+  out=$(FM_FAKE_HARNESS_PID=$$ run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_not_contains "$out" "FIRST VOYAGE" "an empty registry still raised the first job"
+
+  # A secondmate home never chats with the owner, so it never gets the cue.
+  rm -f "$home/data/captain.md" "$home/data/projects.md"
+  printf 'mate-1\n' > "$home/.fm-secondmate-home"
+  out=$(FM_FAKE_HARNESS_PID=$$ run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_not_contains "$out" "FIRST VOYAGE" "a secondmate home was told to meet an owner"
+  rm -f "$home/.fm-secondmate-home"
+
+  pass "the first-voyage cue leads a new home's digest, names the open first job, and stays off elsewhere"
+}
+
 test_reemit_skips_startup_sweeps_but_keeps_the_wake_drain() {
   local rec root home fakebin network_report reemit sequence generation
   rec=$(new_world reemit)
@@ -3645,6 +3693,7 @@ test_unreconciled_captain_words_print_until_marked
 test_desk_voice_reply_rules_print_only_when_opted_in
 test_private_addon_hooks_print_in_the_digest
 test_reemit_cue_survives_the_hook_output_preview
+test_first_voyage_cue_leads_a_new_home
 test_agents_baseline_stays_at_true_start_and_reemits_on_every_drifted_pi_compact
 test_read_only_pi_compact_refreshes_against_its_own_session_identity
 test_codex_unreachable_reset_sources_do_not_claim_instruction_refresh

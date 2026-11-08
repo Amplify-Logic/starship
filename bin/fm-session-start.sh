@@ -26,6 +26,11 @@
 # ORDERING, and why LOCK now runs before BOOTSTRAP (the old AGENTS.md order
 # was bootstrap-then-lock):
 #
+#   0. first voyage  - read-only, not a stage: a primary home that has no
+#                       data/captain.md yet, or has one but never added a
+#                       project, leads the output with a FIRST VOYAGE cue so the
+#                       first-voyage skill is loaded even when a spilled digest
+#                       shows only its head.
 #   1. lock          - acquire the per-home session lock FIRST, before any
 #                       mutating step runs.
 #   1b. home role    - the resolved firstmate-repository role line
@@ -466,6 +471,29 @@ print_backlog_pointer() {
   printf 'Full task bodies remain available on demand: bin/fm-tasks-axi.sh show <id> --full when compatible tasks-axi is available, or data/backlog.md.\n'
 }
 
+# print_first_voyage: the cue that hands a new owner's first conversation to
+# the first-voyage skill (header ORDERING, item 0). Two forms: no
+# data/captain.md means the home has never met its owner; data/captain.md
+# without data/projects.md and without a clone under projects/ means the first
+# job is still open. A secondmate home never chats with the owner, so it never
+# prints one. An empty data/projects.md counts as a registry, which is how the
+# skill records an owner who declined a first project.
+print_first_voyage() {
+  local projects="${FM_PROJECTS_OVERRIDE:-$FM_HOME/projects}" clone
+  if [ -e "$FM_HOME/.fm-secondmate-home" ] || [ -L "$FM_HOME/.fm-secondmate-home" ]; then
+    return 0
+  fi
+  if [ ! -f "$DATA/captain.md" ]; then
+    printf 'FIRST VOYAGE: this home has not met its owner yet (no data/captain.md) - load the first-voyage skill before anything else and let it lead the first conversation (AGENTS.md section 3).\n'
+    return 0
+  fi
+  [ ! -f "$DATA/projects.md" ] || return 0
+  for clone in "$projects"/*/; do
+    [ -d "$clone" ] && return 0
+  done
+  printf 'FIRST VOYAGE: the first job is still open (data/captain.md exists, no project yet) - load the first-voyage skill and resume at its first-job step (AGENTS.md section 3).\n'
+}
+
 # A queued title line whose own text already marks it held or blocked. The
 # manual renderer has no task model, so this is the only signal it gets, and it
 # is the one tasks-axi's markdown backend writes: "(hold: ...)", "(hold-kind:
@@ -865,6 +893,7 @@ if [ "$REEMIT" -eq 1 ]; then
   printf 'RE-EMIT CUE: if this output ends with "Output too large ... Full output saved to <path>",\n'
   printf 'read that whole file now, before acting. Otherwise read data/captain.md, data/captain-shared.md,\n'
   printf 'and data/learnings.md under %s now if any of them is missing below.\n' "$DATA"
+  print_first_voyage
   section "SESSION START (CONTEXT RE-EMIT) - $FM_HOME"
   printf 'This session already took the helm at its own startup and has only lost its\n'
   printf 'context. Lock ownership is re-verified and the durable records below are\n'
@@ -873,6 +902,7 @@ if [ "$REEMIT" -eq 1 ]; then
   printf 'retry, X-mode artifact writes, and stale Herdr child cleanup - are NOT repeated.\n'
   printf 'Queued wakes ARE still drained: they arrived after startup and are this turn work.\n'
 else
+  print_first_voyage
   section "SESSION START - $FM_HOME"
 fi
 # --- 1. lock -----------------------------------------------------------

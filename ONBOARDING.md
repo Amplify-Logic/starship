@@ -128,49 +128,36 @@ On Windows, follow the daily steps in [ONBOARDING-windows.md step 9](ONBOARDING-
 
 ---
 
-## 4. Let it finish its own setup, and set one standing rule
+## 4. Say hello: your first mate takes it from here
 
-Type:
+Type anything; `hello` is enough.
 
-```text
-run your startup checks and install what's missing
-```
+Your first mate introduces itself and leads the rest: it asks whether it may install the two tools it still needs (say **yes**), then asks you four questions, one at a time, each with its reason:
 
-It lists the tools still missing (for example `treehouse` and `no-mistakes`), says what each is for, and asks before installing.
-Say **yes**.
+1. What to call you, and how you like to be talked to.
+2. The one thing you'd most like off your plate.
+3. Three house rules it keeps unless you change them, and the one rule that is yours.
+4. The address of one GitHub repository you know well.
 
-You should see: it reports the tools installed, with nothing required still missing.
+Answer in your own words; "keep the defaults" is a fine answer to the first and the third.
+The three rules it offers are the ones that keep it safe: it never sends, posts or replies to anyone outside on your behalf without showing you the draft first, nothing merges without your word, and nothing destructive or irreversible happens without you saying so.
+It writes your answers into your private preferences file (`data/captain.md`) and gives every worker the first rule, and it tells you so.
+The conversation itself lives in [the first-voyage skill](.agents/skills/first-voyage/SKILL.md), which is what your first mate follows.
+
+You should see: it talks to you the way you asked from its next reply on, and it names the file your answers went into.
 
 It may also mention that your Claude Code version is newer than the one Starship was checked with, and ask whether to re-certify or pin it.
 You can ignore that: nothing is blocked, keeping that check current is the maintainers' job, and you can answer "leave it as it is".
 
-Next, before you ever connect mail or chat, tell it how to treat anything it would send on your behalf:
-
-```text
-remember this as a standing rule, and add the same line to config/brief-include.md so every worker brief carries it: never send, post, or reply to anyone outside on my behalf without showing me the draft first
-```
-
-You should see: it confirms it recorded the rule in `data/captain.md` and in `config/brief-include.md`.
-
 ---
 
-## 5. Finish line: add your first project and get one report back
+## 5. Finish line: the first report comes back
 
-Pick one repository you know well and can see on GitHub, then type, with its real address:
+Right after the fourth answer, your first mate adds that repository as your first project, with every change coming to you as a pull request and nothing merging until you say so, and tells you one or two true things about it.
+Then it proposes the first job from what you said you want off your plate: a report on the part of that repository closest to it, with no changes.
+Say **go**, or name a different part you know well.
 
-```text
-add github.com/<org>/<repo> as a project, delivered through no-mistakes, and never merge anything there without asking me
-```
-
-Every change then goes through the full no-mistakes checks and comes to you as a pull request, and nothing merges until you say so.
-
-Then ask for one report about a part of it you know, with no changes:
-
-```text
-how does <a feature you know> work in <repo>? report only, no changes
-```
-
-You should see: a few minutes later, a short plain-English report on that feature.
+You should see: a few minutes later, a short plain-English report on that part.
 Check it against what you know.
 That one report proves the whole stack end to end: your GitHub access to the project, a worker starting in its own isolated copy, its Claude sign-in, and the report coming back to you.
 Your setup is finished.
