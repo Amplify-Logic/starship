@@ -423,9 +423,13 @@ test_claude_slash_popup_demotion_only_ever_refuses() {
     '/exit Exit the CLI'*) ;;
     *) fail "the lower row must stay the composer read when the envelope is empty, got '$out'" ;;
   esac
-  # 2. A numbered-choice dialog row has neither the `/` opening nor the gap.
+  # 2. A numbered-choice dialog row has neither the `/` opening nor the gap, so
+  #    it is never demoted. This fork reads a highlighted `❯ 1.` row with a
+  #    sibling numbered option as a selection dialog (THE SELECTION DIALOG RULE
+  #    in bin/fm-composer-lib.sh), which is `unknown` rather than `pending`:
+  #    still a refusal, never empty.
   screen=$rule$'\n❯'"$NBSP"$'/exit\n'"$rule"$'\n  ❯ 1. Yes\n    2. No'
-  assert_screen "a numbered choice below a typed command" pending "$CAPS_STYLED_NOID" "$screen"
+  assert_screen "a numbered choice below a typed command" unknown "$CAPS_STYLED_NOID" "$screen"
   out=$(fm_composer_extract_selected_content "$CAPS_STYLED_NOID" "$screen")
   case "$out" in
     '1. Yes'*) ;;

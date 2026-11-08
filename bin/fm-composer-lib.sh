@@ -1932,11 +1932,12 @@ _fm_composer_row_is_composer_furniture() {  # <trimmed-row> <proof-glyph>
 # Both ends must agree before the run counts as the popup: the envelope's own
 # glyph row must hold a slash command (the popup never opens over anything
 # else), and the opening row must be the proof glyph then one slash command,
-# alone or followed by a two-space-separated description. The envelope that is
-# then selected holds that slash command, so this can never move a verdict to
-# `empty`.
+# followed by a two-space-separated description or, alone, by at least one more
+# popup row. A lone `❯ /draft` row with nothing under it is a live draft, not a
+# popup. The envelope that is then selected holds that slash command, so this
+# can never move a verdict to `empty`.
 _fm_composer_slash_popup_opens() {  # <plain> <proof-glyph>
-  local plain=$1 proof=$2 typed head
+  local plain=$1 proof=$2 typed head below
   [ -n "$proof" ] && [ "$FM_COMPOSER_FOOTER_GLYPH" -ge 0 ] || return 1
   typed=$(_fm_composer_screen_row "$FM_COMPOSER_FOOTER_GLYPH" "$plain")
   fm_composer_normalize_trim_var typed
@@ -1946,7 +1947,11 @@ _fm_composer_slash_popup_opens() {  # <plain> <proof-glyph>
   head=$(_fm_composer_screen_row "$((FM_COMPOSER_FOOTER_AFTER + 1))" "$plain")
   fm_composer_normalize_trim_var head
   case "$head" in "$proof "/?*) head=${head#"$proof "} ;; *) return 1 ;; esac
-  [[ $head =~ ^/[^[:space:]]+([[:space:]]{2,}[^[:space:]].*)?$ ]]
+  [[ $head =~ ^/[^[:space:]]+[[:space:]]{2,}[^[:space:]] ]] && return 0
+  [[ $head =~ ^/[^[:space:]]+$ ]] || return 1
+  below=$(_fm_composer_screen_row "$((FM_COMPOSER_FOOTER_AFTER + 2))" "$plain")
+  fm_composer_normalize_trim_var below
+  [ -n "$below" ]
 }
 
 # _fm_composer_locate_footer_zone: THE composer footer zone of <plain> (see THE
@@ -1970,6 +1975,7 @@ _fm_composer_locate_footer_zone() {  # <plain>
   FM_COMPOSER_FOOTER_AFTER=-1
   FM_COMPOSER_FOOTER_GLYPH=-1
   FM_COMPOSER_FOOTER_LAST=-1
+  FM_COMPOSER_FOOTER_POPUP=0
   if [ "$FM_COMPOSER_SCAN_BOX_BOTTOM" -gt "$FM_COMPOSER_FOOTER_AFTER" ] \
      && [ "$FM_COMPOSER_SCAN_BOX_GLYPH_ROW" -ge 0 ]; then
     FM_COMPOSER_FOOTER_AFTER=$FM_COMPOSER_SCAN_BOX_BOTTOM
@@ -2003,6 +2009,7 @@ _fm_composer_locate_footer_zone() {  # <plain>
   FM_COMPOSER_FOOTER_LAST=$FM_COMPOSER_FOOTER_AFTER
   popup=0
   if _fm_composer_slash_popup_opens "$plain" "$proof"; then popup=1; fi
+  FM_COMPOSER_FOOTER_POPUP=$popup
   next=$((FM_COMPOSER_FOOTER_AFTER + 1))
   while :; do
     trimmed=$(_fm_composer_screen_row "$next" "$plain")
@@ -2098,6 +2105,21 @@ _fm_composer_select_cursorless() {  # <plain-screen> <screen> <styled>
   FM_COMPOSER_SELECTED_LAST=-1
   FM_COMPOSER_SELECTED_AMBIG=0
   if _fm_composer_locate_footer_zone "$plain"; then footer=1; fi
+  # A zone that is furniture only because a slash popup opened under it must
+  # also show the typed slash command in the ghost-stripped view the verdict
+  # reads, or falling back to that envelope would read a ghost as `empty`.
+  if [ "$footer" = 1 ] && [ "$FM_COMPOSER_FOOTER_POPUP" = 1 ]; then
+    raw=$(_fm_composer_screen_row "$FM_COMPOSER_FOOTER_GLYPH" "$plain")
+    fm_composer_normalize_trim_var raw
+    glyph=
+    if fm_composer_leading_agent_glyph_var glyph "$raw"; then
+      raw=$(_fm_composer_screen_row "$FM_COMPOSER_FOOTER_GLYPH" "$screen")
+      raw=$(_fm_composer_row_content "$raw" "$styled")
+      raw=${raw#"$glyph"}
+      fm_composer_normalize_trim_var raw
+    fi
+    case "$raw" in /?*) ;; *) footer=0 ;; esac
+  fi
   if [ "$FM_COMPOSER_SCAN_BOX_BOTTOM" -ge 0 ]; then
     generic=$FM_COMPOSER_SCAN_BOX_BOTTOM
     FM_COMPOSER_SELECTED_KIND=box
