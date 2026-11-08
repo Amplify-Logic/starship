@@ -246,6 +246,7 @@ Two lighter ways to use Claude work on Windows with no Linux at all:
 | `fm-linux-setup.sh: ... is on the Windows drive` | Run `cd ~` and start the setup again. |
 | `this is WSL 1` | In PowerShell: `wsl --set-version Ubuntu-24.04 2`, then run the setup again. |
 | No `Setup finished.` at the end of the setup | Run the setup command again. |
+| `not working: ... interop` for `wslview` or another tool that opens something in Windows | Windows interop is switched off in WSL. Open the file in Ubuntu with `sudo nano /etc/wsl.conf`. If it has an `[interop]` section with `enabled=false`, change it to `enabled=true` or delete that line. Save the file. In Windows PowerShell run `wsl --shutdown`, then reopen Ubuntu and run the setup again. For any other tool marked `not working`, the text after the colon is that tool's own error, so search or ask about that text. |
 | A board link or `localhost` page does not open in Windows | Check `.wslconfig` from step 4, run `wsl --shutdown`, open a new Ubuntu tab, and start again. |
 | `command not found: brew`, `claude`, `gh`, or `herdr` after setup | Open a new Ubuntu tab; the old one has the old PATH. |
 | A sign-in opens a Linux Chrome window instead of your normal browser | Open a new Ubuntu tab and sign in again; you can also just finish in that Chrome window. |
