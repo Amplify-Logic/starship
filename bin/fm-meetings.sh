@@ -95,11 +95,15 @@
 #
 # RECALL. `recall` answers "what did we agree with <person>" from the intake
 # records and each source's own search, leaving out any meeting the exclude
-# words mark now (a saved intake record is checked again against the current
-# words, and against the whole meeting while its source can still load it; a
-# search hit is checked against the same fields intake checks), and prints
-# date, title, people, outcome, follow-ups and the recorder's own action items
-# and summary for the asker to answer from.
+# words mark now, and prints date, title, people, outcome, follow-ups and the
+# recorder's own action items and summary for the asker to answer from. A
+# search hit is checked against the same fields intake checks. A saved intake
+# record is checked against the current words and, while any exclude word is
+# set, against the whole meeting its source still holds; a saved meeting whose
+# source cannot be reached, or no longer holds it, cannot be checked that way
+# and is withheld, and recall ends with one line per reason saying how many
+# meetings it withheld. With no exclude word set, saved records are answered
+# from without asking the source.
 #
 # DELETED CALLS. `fm-call-companion.sh delete` runs `fm-meetings.sh forget
 # call-<stamp>...` after it deletes a call, with the intake on or off; it is

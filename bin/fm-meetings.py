@@ -648,21 +648,29 @@ def intake_records(home):
     return found
 
 
-def excluded_now(home, record, saved_text, unreachable):
-    """Whether the exclude words mark a meeting already taken in: its saved record, and the whole meeting while
-    its source can still load it. A source that cannot be reached is added to unreachable and not asked again; a
-    meeting the source no longer holds is checked by its saved record alone."""
+def excluded_now(home, record, saved_text, unreachable, withheld):
+    """Whether the exclude words mark a meeting already taken in. Its saved record is checked first. While any
+    exclude word is set, the whole meeting is checked too, because the saved record is not all of it; a meeting
+    that cannot be checked that way is withheld rather than shown, and counted in withheld by reason. A source
+    that cannot be reached is remembered in unreachable, with the reason, and not asked again."""
     if home.exclusion_hits(saved_text):
         return True
-    if not record or record.get("source") in unreachable:
+    if not home.exclude_words():
         return False
-    try:
-        return bool(home.exclusion_hits(meeting_text(home.source_of(record).load(record))))
-    except Unreachable:
-        unreachable.add(record.get("source"))
-        return False
-    except Failure:
-        return False
+    source = (record or {}).get("source") or ""
+    if not record:
+        reason = "the check has no record of them"
+    elif source in unreachable:
+        reason = unreachable[source]
+    else:
+        try:
+            return bool(home.exclusion_hits(meeting_text(home.source_of(record).load(record))))
+        except Unreachable as error:
+            unreachable[source] = reason = str(error)
+        except Failure:
+            reason = f"{source} no longer holds them"
+    withheld[reason] = withheld.get(reason, 0) + 1
+    return True
 
 
 STOPWORDS = set("""a an and are as at about did do does for from had has have how i in is it me my of on or our
@@ -684,13 +692,13 @@ def cmd_recall(home, args):
         raise Failure("recall needs a person, topic or title to look for")
     with locked(home):
         records = load_records(home)
-    scored, seen, unreachable = [], set(), set()
+    scored, seen, unreachable, withheld = [], set(), {}, {}
     for intake in intake_records(home):
         seen.add(intake.get("id"))
         text = values_text(intake)
         haystack = set(normalize(text).split())
         score = sum(term in haystack for term in terms)
-        if score and not excluded_now(home, records["meetings"].get(intake.get("id")), text, unreachable):
+        if score and not excluded_now(home, records["meetings"].get(intake.get("id")), text, unreachable, withheld):
             scored.append((score, intake))
     for name, source in home.sources.items():
         try:
@@ -713,6 +721,7 @@ def cmd_recall(home, args):
                 scored.append((score, brief))
     if not scored:
         print("no meeting matches " + " ".join(args.query))
+        print_withheld(withheld)
         return 0
     best = max(score for score, _ in scored)
     hits = [hit for score, hit in scored if score == best]
@@ -730,7 +739,13 @@ def cmd_recall(home, args):
             print(f"  Recorder's action item: {text}")
         if hit.get("summary"):
             print("  Summary: " + " ".join(hit["summary"].split())[:600])
+    print_withheld(withheld)
     return 0
+
+
+def print_withheld(withheld):
+    for reason, count in withheld.items():
+        print(f"({count} meeting(s) withheld: {reason}, so they could not be checked against the exclude words)")
 
 
 def cmd_status(home, _args):

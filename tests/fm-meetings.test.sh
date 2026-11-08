@@ -838,7 +838,7 @@ test_unreadable_source_or_config_is_reported_once() {
   pass "fm-meetings: an unreadable source or config is reported once until it clears"
 }
 
-test_recall_stops_asking_a_source_that_fails() {
+test_recall_withholds_what_it_cannot_check_against_the_exclude_words() {
   local home out n
   home=$(new_home recall-unreachable)
   baseline "$home"
@@ -851,24 +851,39 @@ test_recall_stops_asking_a_source_that_fails() {
   touch "$home/anarlog/export-hangs"
   : > "$home/anarlog/calls.log"
   out=$(run "$home" 120 recall shed kits)
-  rm -f "$home/anarlog/export-hangs"
-  assert_contains "$out" "Garden chat 1" "recall still answers from the saved records"
+  assert_contains "$out" "Garden chat 1" "with no exclude word set, recall answers from the saved records"
   assert_contains "$out" "Garden chat 3" "for every matching meeting"
+  assert_equals 0 "$(grep -c "export" "$home/anarlog/calls.log")" "without asking the source for the whole meeting"
+  printf 'exclude_word = Acme\n' >> "$home/config/meetings"
+  : > "$home/anarlog/calls.log"
+  out=$(run "$home" 180 recall shed kits)
+  rm -f "$home/anarlog/export-hangs"
+  assert_not_contains "$out" "Garden chat" "with an exclude word set, a meeting the source cannot confirm is not shown"
+  assert_contains "$out" "no meeting matches shed kits" "so nothing is answered"
+  assert_contains "$out" "(3 meeting(s) withheld: anarlog meetings export did not answer within 15s, so they could not be checked against the exclude words)" "and recall says how many it withheld and why"
   assert_equals 1 "$(grep -c "export" "$home/anarlog/calls.log")" "a source that does not answer is not asked again in the same recall"
+  out=$(run "$home" 240 recall shed kits)
+  assert_contains "$out" "Garden chat 2" "once the source answers again, the meetings are back"
+  assert_not_contains "$out" "withheld" "and nothing is withheld"
 
   home=$(new_home recall-one-gone)
   baseline "$home"
-  meeting "$home" '{"id":"m-a-gone","title":"Gone chat","ended":-901,"source":"batch_transcription"}'
+  meeting "$home" '{"id":"m-a-gone","title":"Gone chat","ended":-901,"source":"batch_transcription","note":"Sam asked about the shed."}'
   meeting "$home" '{"id":"m-b-secret","title":"Secret chat","ended":-902,"source":"batch_transcription","transcript":"Captain: Let us compare three shed kits for Sam.\n\nRobin: Sounds good."}'
+  meeting "$home" '{"id":"m-c-plain","title":"Plain chat","ended":-903,"source":"batch_transcription"}'
   run "$home" 0 check >/dev/null
   model_says "$home" '{"outcome":"They agreed to compare shed kits.","actions":[],"spoken_orders":[]}'
   run "$home" 60 intake >/dev/null
   rm -f "$home/anarlog/meetings/m-a-gone.json"
-  printf 'exclude_word = Sam\n' >> "$home/config/meetings"
   out=$(run "$home" 120 recall shed kits)
-  assert_contains "$out" "Gone chat" "a meeting the recorder no longer holds is answered from its saved record"
-  assert_not_contains "$out" "Secret chat" "and does not stop the whole-meeting check of the next one"
-  pass "fm-meetings: recall stops asking a source that does not answer, but not one that lost a single meeting"
+  assert_contains "$out" "Gone chat" "with no exclude word set, a meeting the recorder no longer holds is answered from its saved record"
+  printf 'exclude_word = Sam\n' >> "$home/config/meetings"
+  out=$(run "$home" 180 recall shed kits)
+  assert_not_contains "$out" "Gone chat" "a meeting the recorder no longer holds is not shown while an exclude word is set, since its note or transcript may hold the word"
+  assert_contains "$out" "(1 meeting(s) withheld: anarlog no longer holds them, so they could not be checked against the exclude words)" "and recall says so"
+  assert_not_contains "$out" "Secret chat" "a meeting the word marks only in its transcript stays out, silently"
+  assert_contains "$out" "Plain chat" "and a meeting the source confirms is answered"
+  pass "fm-meetings: recall withholds a saved meeting it cannot check against the exclude words"
 }
 
 test_recall_answers_from_included_meetings_only() {
@@ -1130,7 +1145,7 @@ fm_test_run \
   test_imported_recordings_flow_into_the_same_intake \
   test_unreadable_source_or_config_is_reported_once \
   test_recall_answers_from_included_meetings_only \
-  test_recall_stops_asking_a_source_that_fails \
+  test_recall_withholds_what_it_cannot_check_against_the_exclude_words \
   test_archived_calls_feed_the_intake \
   test_call_without_notes_waits_ten_minutes_and_exclusion_applies \
   test_both_sources_run_together \

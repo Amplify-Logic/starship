@@ -41,7 +41,8 @@ Starting a follow-up never lands it: merges and outward actions still need your 
 A meeting whose title, participants, notes, summary or transcript contain an exclude word is never sent to a model or actioned, and Starship never asks Anarlog to run its speaker pass on it; Starship only tells you "excluded meeting, not processed".
 The exclude words are each `exclude_word` line in `config/meetings` plus every line of the private `config/meeting-exclude-words` (one word or phrase per line, `#` comments).
 Neither ships with any word, so list an employer, its clients and its products there yourself if those meetings must stay out.
-A word added later also keeps meetings already taken in out of `recall`, checked against the whole meeting while its recorder still holds it, and otherwise against what the intake saved of it.
+A word added later also keeps meetings already taken in out of `recall`: while any exclude word is set, each saved meeting is checked against the whole meeting its recorder still holds, not only against what the intake saved of it.
+A saved meeting that cannot be checked that way, because its recorder cannot be reached or no longer holds it, is withheld from the answer, and `recall` says how many it withheld and why.
 If you use Anarlog, keep its automatic meeting detection off, or limited to the calendars you want recorded, so a meeting you never meant to record is not recorded into its store in the first place.
 
 ## Set up

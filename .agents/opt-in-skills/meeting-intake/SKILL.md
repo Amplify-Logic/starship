@@ -46,4 +46,5 @@ Acknowledge the note once every item is held.
 
 For "what did we agree with <person>" and similar, run `bin/fm-meetings.sh recall <person or topic>` and answer from what it prints.
 It covers included meetings only; never answer a meeting question from an excluded meeting.
+A closing line in parentheses saying that meetings were withheld because they could not be checked against the exclude words is relayed to the captain as it stands; never read those meetings another way to answer.
 Answer in the captain's spoken register when the question came by voice.
