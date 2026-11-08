@@ -2,7 +2,7 @@
 # Transcribe one audio file with Deepgram (push-to-talk desk floater path).
 #
 # Usage:
-#   fm-deepgram-stt.sh [--json] <audio-file>
+#   fm-deepgram-stt.sh [--json | --segments] <audio-file>
 #   fm-deepgram-stt.sh --help
 #
 # Reads DEEPGRAM_API_KEY from the environment or the home's gitignored .env.
@@ -10,6 +10,14 @@
 # in the environment or the home's gitignored .env; the environment wins).
 #
 # Prints the transcript text on stdout (or the raw JSON with --json).
+# --segments prints the transcript as timed segments in whisper.cpp's JSON
+# shape, {"transcription": [{"text", "offsets": {"from", "to"}}]} with the
+# offsets in milliseconds from the start of the file, which is what the call
+# recorder's speaker labelling (bin/fm-call-speaker-split.py) reads. Deepgram's
+# words are grouped into a segment until a sentence ends, a pause longer than
+# 0.8 seconds follows, or the segment reaches 12 seconds; the vocabulary's
+# rewrites below apply to each segment's text. A response with no words gives
+# an empty list.
 #
 # Vocabulary: an optional private $FM_HOME/config/stt-vocabulary (gitignored;
 # absent changes nothing).
@@ -84,7 +92,8 @@ die() {
 
 # The vocabulary parser and transcript reader, run by python3 with argv: <mode> <vocab> ...
 # Modes: `query <model>` prints the extra query string (leading `&`, or
-# nothing); `transcript <json-file>` prints the rewritten transcript.
+# nothing); `transcript <json-file>` prints the rewritten transcript;
+# `segments <json-file>` prints the rewritten transcript as timed segments.
 vocab_py() {
   cat <<'PY'
 import json, re, sys
@@ -180,6 +189,36 @@ def rewrite(text, rewrites):
     pieces.append(text[cursor:])
     return "".join(pieces)
 
+SEGMENT_GAP_SECONDS = 0.8
+SEGMENT_MAX_SECONDS = 12.0
+
+def segments(words):
+    """Deepgram's timed words as whisper-shaped segments: a segment ends at a
+    sentence end, before a pause longer than SEGMENT_GAP_SECONDS, or once it
+    is SEGMENT_MAX_SECONDS long."""
+    found, current = [], None
+    for word in words:
+        text = str(word.get("punctuated_word") or word.get("word") or "").strip()
+        if not text:
+            continue
+        start = float(word.get("start", 0.0))
+        end = float(word.get("end", start))
+        if current is not None and (
+            start - current["end"] > SEGMENT_GAP_SECONDS
+            or current["end"] - current["start"] >= SEGMENT_MAX_SECONDS
+            or current["text"][-1] in ".?!"
+        ):
+            found.append(current)
+            current = None
+        if current is None:
+            current = {"text": text, "start": start, "end": end}
+        else:
+            current["text"] += " " + text
+            current["end"] = max(current["end"], end)
+    if current is not None:
+        found.append(current)
+    return found
+
 mode, vocab = sys.argv[1], sys.argv[2]
 if mode == "query":
     try:
@@ -191,12 +230,36 @@ if mode == "query":
 
 data = json.load(open(sys.argv[3], encoding="utf-8"))
 try:
-    text = data["results"]["channels"][0]["alternatives"][0].get("transcript", "")
-except (KeyError, IndexError, TypeError) as exc:
+    alternative = data["results"]["channels"][0]["alternatives"][0]
+    text = alternative.get("transcript", "")
+    words = alternative.get("words") or []
+except (KeyError, IndexError, TypeError, AttributeError) as exc:
     note(f"unexpected JSON shape: {exc}")
     raise SystemExit(1)
 try:
     _, rewrites = load_vocab(vocab)
+except Exception as exc:
+    note(f"vocabulary rewrites skipped: {exc}")
+    rewrites = []
+if mode == "segments":
+    try:
+        timed = segments(words)
+    except (TypeError, ValueError, AttributeError) as exc:
+        note(f"unexpected words shape: {exc}")
+        raise SystemExit(1)
+    rows = []
+    for segment in timed:
+        try:
+            spoken = rewrite(segment["text"], rewrites)
+        except Exception as exc:
+            note(f"vocabulary rewrites skipped: {exc}")
+            spoken = segment["text"]
+        rows.append({"text": spoken, "offsets": {"from": int(round(segment["start"] * 1000)),
+                                                  "to": int(round(segment["end"] * 1000))}})
+    json.dump({"transcription": rows}, sys.stdout)
+    sys.stdout.write("\n")
+    raise SystemExit(0)
+try:
     text = rewrite(text, rewrites)
 except Exception as exc:
     note(f"vocabulary rewrites skipped: {exc}")
@@ -214,18 +277,23 @@ extract_transcript() {  # <vocab> <json-file>
   python3 -c "$(vocab_py)" transcript "$1" "$2"
 }
 
+extract_segments() {  # <vocab> <json-file>
+  python3 -c "$(vocab_py)" segments "$1" "$2"
+}
+
 main() {
-  local json_out=false audio='' key model http tmp ctype auth_cfg vocab extra bytes max_time
+  local output=text audio='' key model http tmp ctype auth_cfg vocab extra bytes max_time
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --help|-h) usage; exit 0 ;;
-      --json) json_out=true; shift ;;
+      --json) output=json; shift ;;
+      --segments) output=segments; shift ;;
       --) shift; break ;;
       -*) refuse "unexpected option: $1" ;;
       *) break ;;
     esac
   done
-  [ "$#" -eq 1 ] || refuse "usage: fm-deepgram-stt.sh [--json] <audio-file>"
+  [ "$#" -eq 1 ] || refuse "usage: fm-deepgram-stt.sh [--json | --segments] <audio-file>"
   audio=$1
   [ -f "$audio" ] || refuse "audio file not found: $audio"
 
@@ -280,8 +348,17 @@ main() {
     exit 1
   fi
 
-  if [ "$json_out" = true ]; then
+  if [ "$output" = json ]; then
     cat "$tmp"
+    rm -f "$tmp"
+    exit 0
+  fi
+
+  if [ "$output" = segments ]; then
+    if ! extract_segments "$vocab" "$tmp"; then
+      rm -f "$tmp"
+      die "could not parse Deepgram transcript JSON"
+    fi
     rm -f "$tmp"
     exit 0
   fi

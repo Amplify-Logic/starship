@@ -18,6 +18,13 @@ loopback_device = BlackHole
 # loopback; the previous output is restored on stop (empty: never switch).
 multi_output_device = Multi-Output Device
 
+# Where the microphone recording is transcribed: "local" runs whisper.cpp on
+# this Mac; "deepgram" sends each half-minute of audio to Deepgram, using the
+# DEEPGRAM_API_KEY from this home's .env (the key the desk floater uses), and
+# falls back to local, saying so on the desk, when no key is found or Deepgram
+# cannot be reached. `bin/fm-call-companion.sh engine` says which suits this Mac.
+transcription_engine = local
+
 # whisper.cpp model file (empty: ~/.cache/whisper/ggml-large-v3-turbo.bin when
 # present, else ~/.cache/whisper/ggml-base.en.bin).
 whisper_model =

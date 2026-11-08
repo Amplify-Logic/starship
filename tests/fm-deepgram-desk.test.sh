@@ -252,6 +252,30 @@ test_stt_prints_transcript_from_mocked_deepgram() {
   pass "fm-deepgram-stt: mocked Deepgram transcript is printed and the key stays out of argv"
 }
 
+test_stt_segments_group_timed_words() {
+  local home out
+  home=$(new_home stt-segments)
+  printf 'RIFF' > "$home/clip.wav"
+  mkdir -p "$home/config"
+  printf 'deep gram => Deepgram\n' > "$home/config/stt-vocabulary"
+  install_stt_curl "$home" 200 \
+    '{"results":{"channels":[{"alternatives":[{"transcript":"we ship on friday yes let us ask deep gram","words":[{"word":"we","start":0.1,"end":0.3,"punctuated_word":"We"},{"word":"ship","start":0.3,"end":0.6,"punctuated_word":"ship"},{"word":"on","start":0.6,"end":0.7,"punctuated_word":"on"},{"word":"friday","start":0.7,"end":1.2,"punctuated_word":"Friday."},{"word":"yes","start":2.5,"end":2.8,"punctuated_word":"Yes,"},{"word":"let","start":2.8,"end":2.9,"punctuated_word":"let"},{"word":"us","start":2.9,"end":3.0,"punctuated_word":"us"},{"word":"ask","start":3.0,"end":3.1},{"word":"deep","start":3.2,"end":3.4,"punctuated_word":"deep"},{"word":"gram","start":3.4,"end":3.6,"punctuated_word":"gram"}]}]}]}}'
+  out=$(DEEPGRAM_API_KEY=test-key-not-real FM_HOME="$home" FM_DEEPGRAM_CURL="$home/curl" \
+    "$STT" --segments "$home/clip.wav" 2>&1) || fail "stt --segments failed: $out"
+  [ "$out" = '{"transcription": [{"text": "We ship on Friday.", "offsets": {"from": 100, "to": 1200}}, {"text": "Yes, let us ask Deepgram", "offsets": {"from": 2500, "to": 3600}}]}' ] \
+    || fail "segments were not grouped at the sentence end with the vocabulary applied: $out"
+  install_stt_curl "$home" 200 '{"results":{"channels":[{"alternatives":[{"transcript":"","words":[]}]}]}}'
+  out=$(DEEPGRAM_API_KEY=test-key-not-real FM_HOME="$home" FM_DEEPGRAM_CURL="$home/curl" \
+    "$STT" --segments "$home/clip.wav" 2>&1) || fail "stt --segments on silence failed: $out"
+  [ "$out" = '{"transcription": []}' ] || fail "silence did not give an empty list: $out"
+  install_stt_curl "$home" 200 '{"results":{"channels":[{"alternatives":[{"transcript":"a b","words":[{"word":"a","start":0.0,"end":0.2},{"word":"b","start":1.5,"end":1.7},{"word":"c","start":1.8,"end":2.0}]}]}]}}'
+  out=$(DEEPGRAM_API_KEY=test-key-not-real FM_HOME="$home" FM_DEEPGRAM_CURL="$home/curl" \
+    "$STT" --segments "$home/clip.wav" 2>&1) || fail "stt --segments on a pause failed: $out"
+  [ "$out" = '{"transcription": [{"text": "a", "offsets": {"from": 0, "to": 200}}, {"text": "b c", "offsets": {"from": 1500, "to": 2000}}]}' ] \
+    || fail "a pause longer than 0.8 seconds did not split the segment: $out"
+  pass "fm-deepgram-stt: --segments groups timed words into whisper-shaped segments"
+}
+
 test_stt_reports_http_failure() {
   local home out status=0
   home=$(new_home stt-fail)
@@ -3001,6 +3025,7 @@ test_tts_dry_run_with_key
 test_tts_request_opts_out_of_model_improvement
 test_stt_refuses_without_key_or_file
 test_stt_prints_transcript_from_mocked_deepgram
+test_stt_segments_group_timed_words
 test_stt_reports_http_failure
 test_stt_bounds_a_long_request_and_retries_without_a_length_cap
 test_stt_names_the_bound_when_deepgram_never_answers

@@ -197,6 +197,8 @@ You should see: after a restart, your first mate dispatches workers on Claude on
 
 Starship also carries a call recorder that turns a call into a live desk and end-of-call notes, on macOS.
 It records only after everyone on the call has agreed; [docs/call-companion.md](docs/call-companion.md) explains setup, stopping and deleting.
+It transcribes on your Mac by default, which needs a reasonably fast Mac; on a slower one or one short of memory, ask your first mate to set it to Deepgram instead, which transcribes the call as it happens on any Mac for a per-minute price shown on Deepgram's pricing page.
+That needs a Deepgram key, the same one the desk floater uses, in your home's private `.env` file; put it there yourself and never paste it into the chat, as [the engine section](docs/call-companion.md#transcription-engine-on-this-mac-or-deepgram) shows, and `bin/fm-call-companion.sh engine` tells you which engine suits your Mac and how to switch back.
 
 ---
 

@@ -203,6 +203,7 @@ render_markdown() {
   local out="$DESK.tmp.$$" updated note='' display_note=''
   updated=$(date '+%Y-%m-%d %H:%M:%S %Z')
   [ ! -s "$STATE_DIR/far-side-note" ] || note=$(cat "$STATE_DIR/far-side-note")
+  if [ -s "$STATE_DIR/engine-note" ]; then note=${note:+"$note · "}$(cat "$STATE_DIR/engine-note"); fi
   [ ! -s "$STATE_DIR/display-note" ] || display_note=$(cat "$STATE_DIR/display-note")
   if [ -n "$display_note" ]; then note=${note:+"$note · "}$display_note; fi
   jq -r --arg updated "$updated" --arg note "$note" '
@@ -250,6 +251,7 @@ render_glance() {
   triggers=$(cards_html triggered_actions trigger 'No spoken order heard')
   actions=$(actions_html)
   [ ! -s "$STATE_DIR/far-side-note" ] || note=$(cat "$STATE_DIR/far-side-note")
+  if [ -s "$STATE_DIR/engine-note" ]; then note=${note:+"$note · "}$(cat "$STATE_DIR/engine-note"); fi
   if [ -s "$STATE_DIR/display-note" ]; then note=${note:+"$note · "}$(cat "$STATE_DIR/display-note"); fi
   if [ -n "$note" ]; then note_html="<span class=stamp>$(printf '%s' "$note" | jq -Rr '@html')</span>"; fi
   out="$GLANCE.tmp.$$"

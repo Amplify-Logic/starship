@@ -22,6 +22,12 @@
 #   loopback_device      loopback input carrying the call audio (BlackHole)
 #   multi_output_device  output switched to while recording, so the call audio
 #                        also reaches the loopback (empty: never switch)
+#   transcription_engine where the microphone recording is transcribed: local
+#                        (whisper.cpp on this Mac, the default) or deepgram
+#                        (each chunk is sent to Deepgram with the key the home
+#                        sets for voice, DEEPGRAM_API_KEY in its .env or the
+#                        environment, read by bin/fm-deepgram-lib.sh; with no
+#                        key the recording transcribes locally and says so)
 #   whisper_model        whisper.cpp model file (empty: large-v3-turbo, then
 #                        base.en, under ~/.cache/whisper)
 #   digest_model         Claude model for the live desk (sonnet)
@@ -50,7 +56,7 @@ FM_CALL_DATA=$CALL_COMPANION_DATA_DIR
 # shellcheck disable=SC2034
 FM_CALL_STATE=$CALL_COMPANION_STATE_DIR
 
-FM_CALL_KEYS='speaker_name mic_device loopback_device multi_output_device whisper_model digest_model notes_model display_host display_url'
+FM_CALL_KEYS='speaker_name mic_device loopback_device multi_output_device transcription_engine whisper_model digest_model notes_model display_host display_url'
 
 # fm_call_setting <key> <default> - print one setting, or the default when the
 # file or the key is absent. A malformed line or an unknown key is reported and
@@ -80,6 +86,37 @@ fm_call_stamp() {
   stamp=$(sed -n '1p' "$FM_CALL_STATE/call-stamp" 2>/dev/null) || return 1
   [[ "$stamp" =~ ^[0-9]{8}-[0-9]{6}$ ]] || return 1
   printf '%s\n' "$stamp"
+}
+
+# fm_call_deepgram_key_present - whether the home has a Deepgram key where the
+# voice scripts look (bin/fm-deepgram-lib.sh); never prints the key.
+fm_call_deepgram_key_present() {
+  (
+    export FM_HOME="$FM_CALL_HOME"
+    # shellcheck source=bin/fm-deepgram-lib.sh disable=SC1091
+    . "$FM_CALL_BIN/fm-deepgram-lib.sh"
+    [ -n "$(fm_deepgram_api_key)" ]
+  )
+}
+
+# fm_call_engine_setting - the transcription_engine setting, checked; fails on
+# any value but local or deepgram.
+fm_call_engine_setting() {
+  local setting
+  setting=$(fm_call_setting transcription_engine local) || return 2
+  case "$setting" in
+    local|deepgram) printf '%s\n' "$setting" ;;
+    *) printf 'call-companion: transcription_engine must be local or deepgram, not %s\n' "$setting" >&2; return 2 ;;
+  esac
+}
+
+# fm_call_engine_in_use - the engine a recording started now transcribes with:
+# the setting, or local when deepgram is set but no key is found.
+fm_call_engine_in_use() {
+  local setting
+  setting=$(fm_call_engine_setting) || return 2
+  if [ "$setting" = deepgram ] && ! fm_call_deepgram_key_present; then setting=local; fi
+  printf '%s\n' "$setting"
 }
 
 # fm_call_tool <name> <fallback-path> - the first <name> on PATH, else the

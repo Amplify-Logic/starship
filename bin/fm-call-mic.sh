@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # fm-call-mic.sh - record the microphone and the call audio as separate tracks
-# in overlapping chunks, and transcribe each chunk locally with whisper.cpp.
+# in overlapping chunks, and transcribe each chunk with the home's chosen
+# engine: whisper.cpp on this Mac, or Deepgram.
 #
 # Usage:
 #   fm-call-mic.sh                 run until stopped (started by fm-call-companion.sh)
@@ -13,11 +14,27 @@
 # (bin/fm-call-speaker-split.py): the speaker_name setting for microphone-only
 # speech, "others" for the call audio, "unknown speaker" otherwise.
 #
+# The transcription_engine setting picks the engine (bin/fm-call-lib.sh). With
+# "local" each chunk goes through whisper-cli on this Mac. With "deepgram" each
+# mixed chunk is sent to Deepgram by bin/fm-deepgram-stt.sh --segments (the key
+# comes from DEEPGRAM_API_KEY in the home's .env or the environment, and is
+# never written anywhere here) and deleted as soon as its lines are written,
+# like a local chunk; the audio therefore leaves this Mac for Deepgram, which
+# every request asks not to keep it (mip_opt_out). Deepgram is chosen but no
+# key is found: the whole recording transcribes locally. Deepgram cannot be
+# reached for a chunk: that chunk transcribes locally when whisper-cli and a
+# model are installed, else its seconds are lost and the transcript says so.
+# Each of these is written to state/calls/engine-note, which the desk shows,
+# and the engine in use to state/calls/engine. A local chunk that takes longer
+# than 20 seconds marks state/calls/slow-transcription, which
+# `fm-call-companion.sh engine` reads when it recommends an engine.
+#
 # macOS only: capture uses ffmpeg's avfoundation input. Settings and paths come
 # from bin/fm-call-lib.sh. Environment overrides: FFMPEG_BIN, WHISPER_BIN,
 # WHISPER_MODEL, MIC_DEVICE_NAME, LOOPBACK_DEVICE_PATTERN, MIC_CHUNK_SECONDS,
 # MIC_CHUNK_OVERLAP_SECONDS, MIC_MAX_CHUNKS (0 = unlimited),
-# CALL_COMPANION_TRANSCRIPT, CALL_COMPANION_WORK_DIR, CALL_COMPANION_PYTHON_BIN.
+# CALL_COMPANION_TRANSCRIPT, CALL_COMPANION_WORK_DIR, CALL_COMPANION_PYTHON_BIN,
+# CALL_COMPANION_DEEPGRAM_STT (the Deepgram helper to run).
 
 set -euo pipefail
 
@@ -42,7 +59,14 @@ MAX_CHUNKS=${MIC_MAX_CHUNKS:-0}
 PYTHON_BIN=${CALL_COMPANION_PYTHON_BIN:-$(fm_call_tool python3 /usr/bin/python3)}
 SPEAKER_SPLIT=${CALL_COMPANION_SPEAKER_SPLIT:-$FM_CALL_BIN/fm-call-speaker-split.py}
 LOCAL_SPEAKER=$(fm_call_setting speaker_name me)
+ENGINE_SETTING=$(fm_call_engine_setting) || exit 2
+DEEPGRAM_STT=${CALL_COMPANION_DEEPGRAM_STT:-$FM_CALL_BIN/fm-deepgram-stt.sh}
+ENGINE_STATE="$STATE_DIR/engine"
+ENGINE_NOTE="$STATE_DIR/engine-note"
+SLOW_MARK="$STATE_DIR/slow-transcription"
+SLOW_SECONDS=20
 
+engine=
 child_pid=
 mic_device=
 loopback_device=
@@ -75,10 +99,41 @@ select_model() {
   fi
 }
 
+write_engine_note() {
+  mkdir -p "$STATE_DIR"
+  printf '%s\n' "$1" > "$ENGINE_NOTE.tmp.$$"
+  mv "$ENGINE_NOTE.tmp.$$" "$ENGINE_NOTE"
+}
+
+whisper_available() {
+  [ -x "$WHISPER_BIN" ] && [ -f "$WHISPER_MODEL" ]
+}
+
+# The engine this process transcribes with. A worker takes the recorder's
+# choice (MIC_ENGINE); the recorder resolves the setting, and when Deepgram is
+# set without a key it records locally and says so on the desk.
+select_engine() {
+  if [ -n "${MIC_ENGINE:-}" ]; then
+    engine=$MIC_ENGINE
+    return 0
+  fi
+  engine=$(fm_call_engine_in_use) || exit 2
+  if [ "$ENGINE_SETTING" = deepgram ] && [ "$engine" = local ]; then
+    write_engine_note 'Transcribing on this Mac: Deepgram is set but no key was found (DEEPGRAM_API_KEY in this home'"'"'s .env)'
+    printf 'fm-call-mic: transcription_engine is deepgram but no Deepgram key was found; transcribing on this Mac\n' >&2
+  fi
+}
+
 require_tools() {
   [ -x "$FFMPEG_BIN" ] || { printf 'fm-call-mic: ffmpeg not executable at %s\n' "$FFMPEG_BIN" >&2; exit 127; }
-  [ -x "$WHISPER_BIN" ] || { printf 'fm-call-mic: whisper-cli not executable at %s\n' "$WHISPER_BIN" >&2; exit 127; }
+  select_engine
   select_model
+  if [ "$engine" = deepgram ]; then
+    [ -x "$DEEPGRAM_STT" ] || { printf 'fm-call-mic: Deepgram helper not executable at %s\n' "$DEEPGRAM_STT" >&2; exit 127; }
+    whisper_available || printf 'fm-call-mic: no local speech model; a chunk Deepgram cannot take will be lost\n' >&2
+    return 0
+  fi
+  [ -x "$WHISPER_BIN" ] || { printf 'fm-call-mic: whisper-cli not executable at %s\n' "$WHISPER_BIN" >&2; exit 127; }
   [ -f "$WHISPER_MODEL" ] || { printf 'fm-call-mic: Whisper model not found at %s\n' "$WHISPER_MODEL" >&2; exit 1; }
 }
 
@@ -124,7 +179,7 @@ cleanup() {
   terminate_and_reap "$child_pid"
   for pid in "${record_pids[@]-}"; do terminate_and_reap "$pid"; done
   for pid in "${worker_pids[@]-}"; do terminate_and_reap "$pid"; done
-  for prefix in "${chunk_prefixes[@]-}"; do [ -z "$prefix" ] || rm -f "$prefix"-mic.wav "$prefix"-loop.wav "$prefix"-mic.wav.level "$prefix"-loop.wav.level "$prefix"-mix.wav "$prefix"-mix.txt "$prefix"-mix.json; done
+  for prefix in "${chunk_prefixes[@]-}"; do [ -z "$prefix" ] || rm -f "$prefix"-mic.wav "$prefix"-loop.wav "$prefix"-mic.wav.level "$prefix"-loop.wav.level "$prefix"-mix.wav "$prefix"-mix.txt "$prefix"-mix.json "$prefix"-mix.json.tmp; done
 }
 
 on_signal() {
@@ -157,10 +212,12 @@ forget_record_pid() {
 }
 
 run_child() {
+  local status=0
   "$@" &
   child_pid=$!
-  wait "$child_pid"
+  wait "$child_pid" || status=$?
   child_pid=
+  return "$status"
 }
 
 measure_level() {
@@ -206,23 +263,76 @@ mix_sources() {
   fi
 }
 
+# One chunk through whisper.cpp on this Mac. A chunk that takes longer than
+# SLOW_SECONDS leaves a durable mark for the engine recommendation, and turbo
+# taking that long hands the rest of the call to base.en.
+whisper_chunk() {
+  local prefix=$1 mixed started elapsed model_tmp
+  mixed="$prefix-mix.wav"
+  started=$(date +%s)
+  run_child "$WHISPER_BIN" -m "$WHISPER_MODEL" -f "$mixed" -l en -np -otxt -oj -of "$prefix-mix" > /dev/null
+  elapsed=$(($(date +%s) - started))
+  if [ "$elapsed" -gt "$SLOW_SECONDS" ]; then
+    mkdir -p "$STATE_DIR"
+    printf '%s: a %s-second chunk took %s seconds to transcribe with %s\n' "$(date '+%Y-%m-%d')" "$CHUNK_SECONDS" "$elapsed" "$(basename "$WHISPER_MODEL")" > "$SLOW_MARK.tmp.$$"
+    mv "$SLOW_MARK.tmp.$$" "$SLOW_MARK"
+  fi
+  if [ "$WHISPER_MODEL" = "$TURBO_MODEL" ] && [ "$elapsed" -gt "$SLOW_SECONDS" ] && [ -f "$BASE_MODEL" ]; then
+    mkdir -p "$STATE_DIR"
+    model_tmp="$MODEL_STATE.tmp.$$"
+    printf '%s\n' "$BASE_MODEL" > "$model_tmp"
+    mv "$model_tmp" "$MODEL_STATE"
+    printf 'fm-call-mic: turbo took %ss; using base.en for later chunks\n' "$elapsed" >&2
+  fi
+}
+
+# One chunk through Deepgram: the same two files whisper writes, so the speaker
+# labelling reads either engine's result. Fails when Deepgram did not answer.
+deepgram_chunk() {
+  local prefix=$1 mixed segments
+  mixed="$prefix-mix.wav"
+  segments="$prefix-mix.json"
+  FM_HOME="$FM_CALL_HOME" run_child "$DEEPGRAM_STT" --segments "$mixed" > "$segments.tmp" || { rm -f "$segments.tmp"; return 1; }
+  [ -s "$segments.tmp" ] || { rm -f "$segments.tmp"; return 1; }
+  mv "$segments.tmp" "$segments"
+  jq -r '[.transcription[].text] | join(" ")' "$segments" > "$prefix-mix.txt"
+}
+
+# The chunk through the engine in use; a Deepgram chunk that fails transcribes
+# locally when it can, and the desk says so until Deepgram answers again.
+transcribe_chunk() {
+  local prefix=$1
+  if [ "$engine" != deepgram ]; then
+    whisper_chunk "$prefix"
+    return
+  fi
+  if deepgram_chunk "$prefix"; then
+    rm -f "$ENGINE_NOTE"
+    return 0
+  fi
+  if whisper_available; then
+    printf 'fm-call-mic: Deepgram did not take this chunk; transcribing it on this Mac\n' >&2
+    write_engine_note 'Transcribing on this Mac for now: Deepgram could not be reached'
+    whisper_chunk "$prefix"
+    return
+  fi
+  printf 'fm-call-mic: Deepgram did not take this chunk and there is no local speech model; its words are lost\n' >&2
+  write_engine_note 'Part of the call was not transcribed: Deepgram could not be reached and no speech model is installed on this Mac'
+  return 1
+}
+
 transcribe_worker() {
-  local prefix=$1 spoken_at=$2 mixed text_file text lines started elapsed model_tmp
+  local prefix=$1 spoken_at=$2 mixed text_file text lines
   mixed="$prefix-mix.wav"
   text_file="$prefix-mix.txt"
   trap cleanup EXIT
   trap on_signal INT TERM
   chunk_prefixes+=("$prefix")
   mix_sources "$prefix"
-  started=$(date +%s)
-  run_child "$WHISPER_BIN" -m "$WHISPER_MODEL" -f "$mixed" -l en -np -otxt -oj -of "$prefix-mix" > /dev/null
-  elapsed=$(($(date +%s) - started))
-  if [ "$WHISPER_MODEL" = "$TURBO_MODEL" ] && [ "$elapsed" -gt 20 ] && [ -f "$BASE_MODEL" ]; then
-    mkdir -p "$STATE_DIR"
-    model_tmp="$MODEL_STATE.tmp.$$"
-    printf '%s\n' "$BASE_MODEL" > "$model_tmp"
-    mv "$model_tmp" "$MODEL_STATE"
-    printf 'fm-call-mic: turbo took %ss; using base.en for later chunks\n' "$elapsed" >&2
+  if ! transcribe_chunk "$prefix"; then
+    [ "${MIC_TRANSCRIBE_STDOUT:-0}" = 1 ] || printf '# %s the %s seconds from %s were not transcribed: Deepgram could not be reached and no speech model is installed on this Mac\n' \
+      "$(date '+%Y-%m-%d %H:%M:%S %Z')" "$CHUNK_SECONDS" "$spoken_at" >> "$TRANSCRIPT"
+    return 0
   fi
   if lines=$(speaker_lines "$prefix" "$spoken_at"); then
     [ -n "$lines" ] || return 0
@@ -263,7 +373,7 @@ sleep_until() {
 launch_worker() {
   local prefix=$1 spoken_at=$2
   CALL_COMPANION_TRANSCRIPT="$TRANSCRIPT" CALL_COMPANION_WORK_DIR="$WORK_DIR" CALL_COMPANION_STATE_DIR="$STATE_DIR" \
-    FFMPEG_BIN="$FFMPEG_BIN" WHISPER_BIN="$WHISPER_BIN" WHISPER_MODEL="$MODEL_OVERRIDE" \
+    FFMPEG_BIN="$FFMPEG_BIN" WHISPER_BIN="$WHISPER_BIN" WHISPER_MODEL="$MODEL_OVERRIDE" MIC_ENGINE="$engine" \
     "$SCRIPT_PATH" --transcribe "$prefix" "$spoken_at" &
   worker_pids+=("$!")
 }
@@ -332,10 +442,14 @@ main() {
       exit 2
     fi
   fi
-  [ -n "$test_seconds" ] || rm -f "$MODEL_STATE"
+  [ -n "$test_seconds" ] || rm -f "$MODEL_STATE" "$ENGINE_NOTE" "$ENGINE_STATE"
   require_tools
   validate_timing
   mkdir -p "$WORK_DIR" "$(dirname "$TRANSCRIPT")"
+  if [ -z "$test_seconds" ]; then
+    printf '%s\n' "$engine" > "$ENGINE_STATE.tmp.$$"
+    mv "$ENGINE_STATE.tmp.$$" "$ENGINE_STATE"
+  fi
   resolve_devices
   trap cleanup EXIT
   trap on_signal INT TERM
