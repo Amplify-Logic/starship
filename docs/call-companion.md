@@ -62,7 +62,7 @@ bin/fm-call-companion.sh stop
 
 `start` opens the desk page, `data/calls/glance.html`, which refreshes every 20 seconds.
 Saying "Firstmate, do it", "Firstmate, build that" or "captain's order:" followed by an instruction still shows that order on the desk under "Spoken orders" and logs it, but the live desk is no longer how spoken orders are caught.
-They are caught after the call by a meeting intake's scan of the finished meeting, where the home has one, which starts the clear ones.
+They are caught after the call by the [meeting intake](meetings.md), where the home has turned it on, which reads the archived call once its notes are written and starts the clear ones.
 `bin/fm-call-digest.sh`'s header owns the logs a home can watch for that.
 
 ## Transcription engine: on this Mac or Deepgram
@@ -141,6 +141,8 @@ bin/fm-call-companion.sh delete --all        # every call, the archive, and the 
 
 Deleting one call removes its transcript, desk, digest, live items and notes, prints its stamp and start time, and also removes its lines from the decision and spoken-order logs in `state/calls/`, which carry each call's stamp, and the notes it left on the desk.
 Lines written before calls had stamps carry none, so only `delete --all` removes them.
+When the [meeting intake](meetings.md) took a call in, deleting the call also removes that call's intake record and the inbox notes the intake created for it.
+Items the first mate already filed from those notes, such as backlog items or held decisions that quote the call, stay until you ask the first mate to remove them.
 `reset` moves the call still in place into the archive by hand.
 
 ## The call watcher (optional)

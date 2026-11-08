@@ -51,7 +51,13 @@
 # writing the notes of a call deleted meanwhile discards them. delete --all
 # removes every call, the archive, and the decision, spoken-order and action
 # logs, including untagged lines written before calls had stamps. delete
-# <stamp> and delete --all refuse while recording.
+# <stamp> and delete --all refuse while recording. Every delete of an archived
+# call also removes that call's meeting intake record and the inbox notes the
+# intake created for it (`fm-meetings.sh forget call-<stamp>`); when that
+# fails, the call is still deleted and the delete says so and exits 1. Items
+# firstmate already filed from those notes, such as backlog items or held
+# decisions that quote the call, stay until the owner asks firstmate to remove
+# them.
 #
 # desk opens the desk page; with --display, or on start when the display_host
 # setting is set, it also shows display_url full screen on that ssh host's
@@ -726,6 +732,19 @@ forget_call_lines() {
   done
 }
 
+# The meeting intake keeps its own record and inbox notes of an archived call it
+# took in; withdrawn consent removes those too.
+forget_intake() {
+  local out
+  [ "$#" -gt 0 ] || return 0
+  if ! out=$("$FM_CALL_BIN/fm-meetings.sh" forget "$@" 2>&1); then
+    printf 'companion: the meeting intake still holds a copy of the deleted call: %s\n' "$out" >&2
+    printf 'companion: once that is fixed, run bin/fm-meetings.sh forget %s\n' "$*" >&2
+    return 1
+  fi
+  [ -z "$out" ] || printf '%s\n' "$out"
+}
+
 delete_in_place() {
   local stamp
   stamp=$(fm_call_stamp) || stamp=
@@ -758,6 +777,7 @@ delete_archived() {
   [ "$notes_removed" = false ] || write_idle_glance
   delete_logs
   printf 'companion: deleted archived call %s (started %s; %s files) and the logs\n' "$stamp" "$(stamp_time "$stamp")" "$count"
+  forget_intake "call-$stamp" || exit 1
 }
 
 delete_latest() {
@@ -784,12 +804,17 @@ delete_stamp() {
 }
 
 delete_all() {
+  local stamp ids=()
   refuse_while_recording delete
+  while IFS= read -r stamp; do
+    ids+=("call-$stamp")
+  done < <(list_archive)
   clear_pid_files
   rm -rf "$DATA_DIR"
   rm -f "$LIVE_ITEMS" "$CALL_STAMP" "$STATE_DIR/triggers.log" "$STATE_DIR/decisions.log" "$STATE_DIR/decisions-batch.log" "$STATE_DIR/actions.log"
   delete_logs
   printf 'companion: deleted every call, the archive, and the decision, spoken-order and action logs\n'
+  forget_intake ${ids[@]+"${ids[@]}"} || exit 1
 }
 
 main() {

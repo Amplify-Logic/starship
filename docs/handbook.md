@@ -271,6 +271,7 @@ Ask the first mate to set one up; each owner page lists what it needs.
 | Second opinion ([second-opinion.md](second-opinion.md)) | A rival AI model stress-tests a big design or decision before work starts | `config/second-opinion`; each review draws on your Claude plan, and the different-vendor pass on a Cursor plan |
 | Divergent ideas ([adhd.md](adhd.md)) | Fans out many options before a fuzzy, high-stakes choice | The `adhd-agent` CLI and `config/adhd` |
 | Prompt ledger ([configuration](configuration.md#captain-ledger-configcaptain-ledger)) | Writes every prompt you type to disk until the first mate has filed what you decided | `config/captain-ledger` |
+| Meeting intake ([meetings.md](meetings.md)) | Turns each recorded call or meeting into a one-line outcome, follow-ups the first mate starts, and items held for your decision | `config/meetings`; the call recorder, or the free Anarlog meeting recorder for the Mac |
 
 ## Keeping it current
 

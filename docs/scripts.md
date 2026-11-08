@@ -196,7 +196,7 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-public-followup.sh`  | Brief, reconcile, and deliver typed public commitments, surface refusals, then rechain or retire retained loops |
 | `fm-public-followup-emit.sh` | Validate and report one typed terminal work result into its owning home, or stage it when that home is remote |
 | `fm-public-followup-collect.sh` | Read and retire the typed terminal results a remote work home staged for the home that owes the public reply |
-| `fm-inbox.sh`            | The captain's out-of-band capture surface: queue a note (optionally idempotent by request id), announce or repair its wake, ring a busy primary, record progress lines and a durable primary reply, and emit bounded receipts and primary-readiness JSON |
+| `fm-inbox.sh`            | The captain's out-of-band capture surface: queue a note (optionally idempotent by request id), announce or repair its wake, ring a busy primary, record progress lines and a durable primary reply, forget a note by request id, and emit bounded receipts and primary-readiness JSON |
 | `fm-mail.sh`             | General-purpose mail plane: read unseen IMAP mail, send one SMTP message, or surface new mail as a `check` wake via `poll` (configuration in the home's gitignored `.env`) |
 | `fm-mail.py`             | The IMAP/SMTP engine behind `fm-mail.sh` |
 | `fm-mail-check.sh`       | Standing received-mail poll: `arm` registers a watcher check that runs `fm-mail.sh poll` on the watcher cadence (new mail still wakes via the poll; the check's own line also wakes unless the poll is a proven no-op), `disarm` removes it |
@@ -240,6 +240,9 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-call-final-notes.py` | Write paraphrased end-of-call notes that account for every item the live desk showed |
 | `fm-call-speaker-split.py` | Label transcribed speech by the recorded track that carried it |
 | `fm-call-lib.sh` | Shared call-recorder paths and `config/call-companion` settings |
+| `fm-meetings.sh` | Opt-in meeting intake: arm its standing check, take finished meetings and calls in as a summary, follow-ups to start and items held for the captain, and recall what was agreed (docs/meetings.md) |
+| `fm-meetings.py` | The meeting intake behind `fm-meetings.sh`: the poll, the model pass, the sorting rules and the records |
+| `fm_meeting_sources.py` | The meeting sources the intake reads, Anarlog and the call recorder, and the seam a new source plugs into |
 | `fm-desk-floater-windows.sh` | From inside WSL 2, build, install, update, start, stop and remove the Windows floater with Windows' own C# compiler, and serve its `bridge` calls through the shared desk-voice, speech-to-text and speak scripts (docs/desk-floater-windows.md) |
 | `fm-desk-play-windows.sh` | afplay stand-in `fm-speak.sh` uses inside WSL 2 once the Windows floater is installed: plays one reply through the Windows speakers and stops on a stop (docs/desk-floater-windows.md) |
 | `fm-web.sh` | Serve the localhost chat page onto the primary first mate: its conversation, a message box that sends through `fm-desk-voice.sh send`, and the bridge glance (docs/web.md) |

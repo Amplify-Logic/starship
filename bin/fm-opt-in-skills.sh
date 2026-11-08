@@ -82,6 +82,7 @@ second-opinion-auto-fire second-opinion
 macos-computer-use computer-use
 intake-digest-lines morning-intake|channel-intake
 daily-todo-freshness morning-intake|channel-intake
+meeting-intake meetings
 EOF
 }
 

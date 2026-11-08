@@ -32,6 +32,7 @@
 #   fm-inbox.sh ask  <question>...
 #   fm-inbox.sh list
 #   fm-inbox.sh drain [--ack <id>...]
+#   fm-inbox.sh forget <request-id>
 #
 # `note --request-id` is the idempotent capture path: a repeat of the same
 # request id returns the original note instead of creating a second one, and
@@ -73,6 +74,11 @@
 # `ready` is the read-only primary-readiness projection (lock, wake-consumer
 # health, away posture, observation time). It never acquires the session lock
 # and never infers liveness from a lock file, a session, or a pane.
+# `forget` removes the note saved under a request id, pending or acknowledged,
+# with its announcement marker, reply and progress, and frees the request id,
+# for a caller whose source is withdrawn (a call deleted when consent is
+# withdrawn). It prints `forgot <id>` for a request id it held and nothing for
+# one it does not, and touches no wake.
 #
 # Configuration. A region, a model id and an AWS profile name somebody's account
 # and somebody's choices, so this file carries no default for any of them. Each is
@@ -1214,6 +1220,22 @@ cmd_drain() {
   printf '\nAck with: fm-inbox.sh drain --ack <id>...\n'
 }
 
+cmd_forget() {
+  local request_id=${1:-} reserved id
+  if [ "$#" -ne 1 ] || ! valid_request_id "$request_id"; then
+    die "usage: fm-inbox.sh forget <request-id>"
+  fi
+  reserved="$REQUESTS/$request_id"
+  [ -f "$reserved" ] || return 0
+  id=$(tr -d '\r' <"$reserved")
+  id=${id%%$'\n'*}
+  if valid_note_id "$id"; then
+    rm -f -- "$INBOX/$id.note" "$INBOX/handled/$id.note" "$ANNOUNCED_DIR/$id" "$REPLIES/$id" "$PROGRESS/$id"
+  fi
+  rm -f -- "$reserved"
+  printf 'forgot %s\n' "$id"
+}
+
 # ---------------------------------------------------------------- dispatch
 
 case "${1:-}" in
@@ -1228,6 +1250,7 @@ case "${1:-}" in
   ask)      shift; cmd_ask "$@" ;;
   list)     shift; cmd_list ;;
   drain)    shift; cmd_drain "$@" ;;
+  forget)   shift; cmd_forget "$@" ;;
   ''|-h|--help|help)
     # The whole header block, found rather than counted: everything after the
     # shebang up to the first line that is not a comment. A fixed line range
