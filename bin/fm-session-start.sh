@@ -864,8 +864,8 @@ fi
 # The home's recorded address and tone (docs/configuration.md "Address and
 # tone") governs the very first reply, so it leads the output for the same
 # preview reason as the re-emit cue below: CONTEXT prints last and a spilled
-# digest shows only its head. Bounded to the section's first 15 lines; a primary
-# home with no section gets the one-line cue to ask instead.
+# digest shows only its head. Bounded to the section's first 15 non-blank
+# lines; a primary home with no section gets the one-line cue to ask instead.
 print_address_and_tone() {
   local section
   section=$(awk '
