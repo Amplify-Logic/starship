@@ -724,7 +724,7 @@ test_host_environment_reports() {
   out=$(run_host_env_bootstrap "$case_dir" "$fakebin" WSL_DISTRO_NAME=Ubuntu-24.04 FAKE_WSL_MODE=mirrored)
   [ -z "$out" ] || fail "mirrored networking needs no forwarding advice, got: $out"
   out=$(run_host_env_bootstrap "$case_dir" "$fakebin" WSL_DISTRO_NAME=Ubuntu-24.04 FAKE_WSL_MODE=none)
-  expected="HOST_ENV: WSL: Ubuntu has no network (WSL networking mode is none, which is where WSL falls back when this Windows cannot use networkingMode=mirrored) - remove the networkingMode=mirrored line from .wslconfig in your Windows user folder, then run wsl --shutdown from Windows (ONBOARDING-windows.md)"
+  expected="HOST_ENV: WSL: Ubuntu has no network (WSL networking mode is none; a Windows that cannot use networkingMode=mirrored normally falls back to NAT, where localhost still works and nothing needs changing, so this is the rarer no-network fallback) - remove the networkingMode=mirrored line from .wslconfig in your Windows user folder, then run wsl --shutdown from Windows (ONBOARDING-windows.md)"
   [ "$out" = "$expected" ] || fail "networking mode none should be named instead of the mirrored advice, got: $out"
   out=$(run_host_env_bootstrap "$case_dir" "$fakebin" FAKE_WSL_MODE=none)
   [ -z "$out" ] || fail "the networking check is WSL-only, got: $out"
@@ -769,6 +769,97 @@ test_host_environment_reports() {
   out=$(run_host_env_bootstrap "$case_dir" "$fakebin" SSH_CONNECTION="$ssh")
   [ -z "$out" ] || fail "the board advice is shown once per home, got it again: $out"
   pass "bootstrap HOST_ENV names WSL Windows-drive paths, WSL networking none, and WSL forwarding off, and a headless server gets its board advice once per home as an info fact"
+}
+
+# Arm Linux without a browser: Google ships no Chrome for it, so the first
+# mate is told browser checks are unavailable. uname is faked for -s and -m
+# only, so the case runs on a macOS host too; everything else passes through.
+test_host_environment_names_arm_without_chrome() {
+  local c case_dir fakebin base out expected
+  c=$(make_host_env_case arm); case_dir=${c%%|*}; fakebin=${c#*|}
+  cat > "$fakebin/uname" <<'SH'
+#!/usr/bin/env bash
+case "${1:-}" in
+  -m) printf '%s\n' "${FAKE_UNAME_M:-aarch64}" ;;
+  -s) printf 'Linux\n' ;;
+  *) exec /usr/bin/uname "$@" ;;
+esac
+SH
+  chmod +x "$fakebin/uname"
+  base=$(fm_test_base_path_sans "$BASE_PATH" google-chrome google-chrome-stable chromium chromium-browser)
+  expected="HOST_ENV: Linux on aarch64: no Chrome is installed and Google publishes none for Arm Linux, so browser checks (chrome-devtools-axi) are unavailable on this machine; everything else works, and an x86 machine has them (ONBOARDING-linux-server.md step 1)"
+  out=$(env PATH="$fakebin:$base" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
+  [ "$out" = "$expected" ] || fail "Arm Linux without Chrome should say browser checks are unavailable, got: $out"
+  out=$(env PATH="$fakebin:$base" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 FAKE_UNAME_M=x86_64 "$ROOT/bin/fm-bootstrap.sh")
+  [ -z "$out" ] || fail "x86 Linux without Chrome is a MISSING matter, not a host limit, got: $out"
+  out=$(env PATH="$fakebin:$base" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 WSL_DISTRO_NAME=Ubuntu-24.04 "$ROOT/bin/fm-bootstrap.sh")
+  [ "$out" = "${expected%(*}(ONBOARDING-windows.md)" ] \
+    || fail "WSL on a Windows on Arm PC without Chrome should say browser checks are unavailable and point at the Windows guide, got: $out"
+  fm_fake_version_tool "$fakebin" google-chrome FM_FAKE_CHROME_VERSION "Google Chrome 141.0.0.0"
+  out=$(env PATH="$fakebin:$base" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
+  [ -z "$out" ] || fail "Arm Linux with a Chrome on PATH needs no browser warning, got: $out"
+  out=$(env PATH="$fakebin:$base" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 WSL_DISTRO_NAME=Ubuntu-24.04 "$ROOT/bin/fm-bootstrap.sh")
+  [ -z "$out" ] || fail "WSL on Arm with a Chrome on PATH needs no browser warning, got: $out"
+  pass "bootstrap HOST_ENV says browser checks are unavailable on Arm Linux, server or WSL, without Chrome, and only there"
+}
+
+# `install` runs every approved installer and exits non-zero naming the ones
+# that failed, instead of exiting 0 while a download got an HTTP error: the
+# release installers are `curl ... | sh`, where a failed curl leaves sh with
+# nothing to run and a clean exit.
+test_install_reports_failed_installers() {
+  local case_dir fakebin out status
+  case_dir="$TMP_ROOT/install-failures"
+  mkdir -p "$case_dir"
+  fakebin=$(fm_fakebin "$case_dir")
+  cat > "$fakebin/curl" <<'SH'
+#!/usr/bin/env bash
+url=
+for arg in "$@"; do case "$arg" in -*) ;; *) url=$arg ;; esac; done
+printf 'curl %s\n' "$url" >> "$FAKE_CURL_LOG"
+case "$url" in
+  *"${FAKE_CURL_FAILS:-//nothing-fails//}"*)
+    echo "curl: (22) The requested URL returned error: 504" >&2
+    exit 22 ;;
+esac
+printf 'echo installed from %s\n' "$url"
+SH
+  chmod +x "$fakebin/curl"
+  : > "$case_dir/curl.log"
+
+  status=0
+  out=$(PATH="$fakebin:$BASE_PATH" FAKE_CURL_LOG="$case_dir/curl.log" \
+    "$ROOT/bin/fm-bootstrap.sh" install treehouse no-mistakes 2>&1) || status=$?
+  [ "$status" -eq 0 ] || fail "install with working downloads should exit 0, got $status: $out"
+  assert_contains "$out" "installed from https://kunchenguid.github.io/treehouse/install.sh" "the treehouse installer ran"
+  assert_contains "$out" "installed from https://raw.githubusercontent.com/kunchenguid/no-mistakes/main/docs/install.sh" \
+    "the no-mistakes installer ran"
+  assert_not_contains "$out" "error:" "working installs report no error"
+
+  : > "$case_dir/curl.log"
+  status=0
+  out=$(PATH="$fakebin:$BASE_PATH" FAKE_CURL_LOG="$case_dir/curl.log" FAKE_CURL_FAILS=github \
+    "$ROOT/bin/fm-bootstrap.sh" install treehouse no-mistakes 2>&1) || status=$?
+  [ "$status" -eq 1 ] || fail "install should exit 1 when a download fails, got $status: $out"
+  assert_contains "$out" "error: installing treehouse failed (exit 22)" "the failed treehouse install is named with its exit status"
+  assert_contains "$out" "error: installing no-mistakes failed (exit 22)" "the failed no-mistakes install is named too"
+  assert_contains "$out" "error: not installed: treehouse no-mistakes - treehouse and no-mistakes download from GitHub releases, which fail together during a GitHub outage; try again in a few minutes" \
+    "a GitHub release failure says to try again in a few minutes"
+  [ "$(grep -c '^curl ' "$case_dir/curl.log")" -eq 2 ] \
+    || fail "every approved tool is attempted even after one fails: $(cat "$case_dir/curl.log")"
+
+  status=0
+  out=$(PATH="$fakebin:$BASE_PATH" FAKE_CURL_LOG="$case_dir/curl.log" FAKE_CURL_FAILS=treehouse \
+    "$ROOT/bin/fm-bootstrap.sh" install treehouse 2>&1) || status=$?
+  [ "$status" -eq 1 ] || fail "one failed install still exits 1, got $status: $out"
+  assert_contains "$out" "error: not installed: treehouse - treehouse and no-mistakes download" \
+    "the summary names only the tool that failed"
+  pass "bootstrap: install attempts every approved tool, exits 1 naming the ones whose installer failed, and blames a GitHub outage for release downloads"
 }
 
 test_orca_backend_gates_orca_tool_only_when_selected() {
@@ -1727,6 +1818,8 @@ test_tasks_axi_min_version
 test_quota_axi_min_version
 test_git_is_required_with_supported_install_instruction
 test_host_environment_reports
+test_host_environment_names_arm_without_chrome
+test_install_reports_failed_installers
 test_orca_backend_gates_orca_tool_only_when_selected
 test_session_provider_backends_do_not_require_tmux
 test_session_provider_backends_gate_own_cli_not_tmux

@@ -19,6 +19,7 @@
 #                 "BACKLOG_RECONCILE: code-root <file> is not this home's <file>; ...",
 #                 "TANGLE: <remediation>",
 #                 "HOST_ENV: WSL: <problem> - <advice>",
+#                 "HOST_ENV: Linux on <arm arch>: no Chrome is installed ...",
 #                 "BOOTSTRAP_INFO: headless server: <board-access advice>",
 #                 "SECONDMATE_SYNC: secondmate <id>: skipped: <reason>",
 #                 "NUDGE_SECONDMATES: secondmate <id>: send failed: <reason>",
@@ -118,6 +119,10 @@
 #          while networking is not mirrored (read through wslinfo, cmd.exe,
 #          and wslpath; silent when they are unavailable or cmd.exe or wslpath
 #          does not answer within 5 seconds).
+#          On Arm Linux (aarch64 or arm64), a server or WSL on a Windows on
+#          Arm PC alike, with no Chrome or Chromium on PATH it says browser
+#          checks are unavailable there, since Google ships no Chrome for Arm
+#          Linux; silent when a browser is installed.
 #          On a headless server (no DISPLAY or WAYLAND_DISPLAY, reached over
 #          SSH) without Tailscale up, it prints one BOOTSTRAP_INFO fact that
 #          review boards and dev servers are reached from the person's own
@@ -229,7 +234,11 @@
 #          told to leave that work to the lock holder. Unset/0 (the default)
 #          keeps detect-only meaning unlocked, exactly as before.
 #        fm-bootstrap.sh install <tool>...
-#          Install the named tools (only ones the captain approved).
+#          Install the named tools (only ones the captain approved). Every
+#          tool is attempted; exit 1 names the ones whose installer failed,
+#          and when treehouse or no-mistakes is among them says their GitHub
+#          release downloads fail together during a GitHub outage, so the
+#          right move is to try again in a few minutes.
 #        fm-bootstrap.sh lavish-compatible
 #          Exit 0 when lavish-axi meets LAVISH_AXI_BOARD_MIN, 1 otherwise,
 #          printing nothing; bin/fm-brief.sh uses it to gate scout Lavish hosting.
@@ -1640,8 +1649,22 @@ if [ "${1:-}" = "install" ]; then
     fi
     cmd=${cmd%%  #*}
     echo "installing $t: $cmd"
-    eval "$cmd"
+    # pipefail inside the subshell, so a `curl ... | sh` installer whose
+    # download fails (sh then reads nothing and exits 0) still counts as failed.
+    install_status=0
+    (set -o pipefail; eval "$cmd") || install_status=$?
+    [ "$install_status" -ne 0 ] || continue
+    echo "error: installing $t failed (exit $install_status)" >&2
+    failed_installs="${failed_installs:+$failed_installs }$t"
   done
+  if [ -n "${failed_installs:-}" ]; then
+    case " $failed_installs " in
+      *' treehouse '*|*' no-mistakes '*)
+        echo "error: not installed: $failed_installs - treehouse and no-mistakes download from GitHub releases, which fail together during a GitHub outage; try again in a few minutes" >&2 ;;
+      *) echo "error: not installed: $failed_installs" >&2 ;;
+    esac
+    exit 1
+  fi
   exit 0
 fi
 
@@ -1800,10 +1823,25 @@ host_env_wslconfig() {  # prints the Windows user's .wslconfig path when readabl
   printf '%s\n' "$path"
 }
 
+# host_env_arm_without_chrome <guide>: Google publishes no Chrome for Arm Linux,
+# so bin/fm-linux-setup.sh skips it there with a warning, on a server and inside
+# WSL on a Windows on Arm PC alike; this line keeps that fact in front of the
+# first mate, whose browser tool otherwise fails with an error that never says so.
+host_env_arm_without_chrome() {
+  case "$(uname -s 2>/dev/null) $(uname -m 2>/dev/null)" in
+    'Linux aarch64'|'Linux arm64')
+      command -v google-chrome >/dev/null 2>&1 || command -v google-chrome-stable >/dev/null 2>&1 \
+        || command -v chromium >/dev/null 2>&1 || command -v chromium-browser >/dev/null 2>&1 \
+        || echo "HOST_ENV: Linux on $(uname -m): no Chrome is installed and Google publishes none for Arm Linux, so browser checks (chrome-devtools-axi) are unavailable on this machine; everything else works, and an x86 machine has them ($1)"
+      ;;
+  esac
+}
+
 detect_host_environment() {
   local path seen='' wslconfig mode forwarding advised="$STATE/.host-env-headless-advised"
   # WSL exports WSL_DISTRO_NAME into every process it starts; nothing else does.
   if [ -n "${WSL_DISTRO_NAME:-}" ]; then
+    host_env_arm_without_chrome ONBOARDING-windows.md
     for path in "$FM_ROOT" "$FM_HOME" "$PROJECTS" "$PROJECTS"/*; do
       [ "$path" = "$PROJECTS/*" ] && continue
       path=$(host_env_resolve "$path")
@@ -1814,7 +1852,7 @@ detect_host_environment() {
     done
     mode=$(wslinfo --networking-mode 2>/dev/null | tr -d '\r' || true)
     if [ "$mode" = none ]; then
-      echo "HOST_ENV: WSL: Ubuntu has no network (WSL networking mode is none, which is where WSL falls back when this Windows cannot use networkingMode=mirrored) - remove the networkingMode=mirrored line from .wslconfig in your Windows user folder, then run wsl --shutdown from Windows (ONBOARDING-windows.md)"
+      echo "HOST_ENV: WSL: Ubuntu has no network (WSL networking mode is none; a Windows that cannot use networkingMode=mirrored normally falls back to NAT, where localhost still works and nothing needs changing, so this is the rarer no-network fallback) - remove the networkingMode=mirrored line from .wslconfig in your Windows user folder, then run wsl --shutdown from Windows (ONBOARDING-windows.md)"
     elif [ "$mode" != mirrored ] && wslconfig=$(host_env_wslconfig); then
       forwarding=$(LC_ALL=C awk -F= '
         /^[[:space:]]*\[/ { section = tolower($0); gsub(/[[:space:]]/, "", section) }
@@ -1828,6 +1866,7 @@ detect_host_environment() {
     return 0
   fi
   [ "$(uname -s 2>/dev/null)" = Linux ] || return 0
+  host_env_arm_without_chrome "ONBOARDING-linux-server.md step 1"
   [ -z "${DISPLAY:-}" ] && [ -z "${WAYLAND_DISPLAY:-}" ] || return 0
   [ -n "${SSH_CONNECTION:-}" ] || [ -n "${SSH_TTY:-}" ] || return 0
   [ -e "$advised" ] && return 0

@@ -162,8 +162,16 @@ Ask for one when a comparison, plan, or report would be easier to read than chat
 ## Models, usage, and second mates
 
 The first mate can start workers on several AI tools (Claude Code, Cursor, Codex, Pi, and others) once each is installed and signed in.
-If you only have Claude Code, everything simply runs there.
+If you only have Claude Code, everything simply runs there, and that is the recommended setup.
 With more than one, your dispatch rules say which kinds of job may go where, and when a rule offers a choice the first mate checks how much usage each subscription has left with `quota-axi` before picking.
+
+Codex and Pi are the supported alternatives, and adding one takes three steps:
+
+1. Install and sign in, in a terminal: Codex with `npm install -g @openai/codex` and then `codex login`; Pi with `npm install -g @earendil-works/pi-coding-agent`, then start `pi` and type `/login`.
+   Each needs its own subscription or API key.
+2. To run every worker on it, write its name into one file: `echo codex > ~/starship/config/crew-harness` (or `pi`); the next worker starts on it, and `default` or no file keeps workers on the first mate's own tool ([configuration](configuration.md#choose-the-worker-harness)).
+   To mix tools by kind of job instead, copy [`docs/examples/crew-dispatch.json`](examples/crew-dispatch.json) to `~/starship/config/crew-dispatch.json` and edit its rules; it already shows Codex and Pi profiles.
+3. To run the first mate itself on it, start it with `bin/fm-primary.sh codex` or `bin/fm-primary.sh pi` instead of `opus`.
 
 A **second mate** is an optional, persistent helper first mate with its own home, for one area of work that has grown big enough to deserve one (for example "all website work").
 You still talk only to your first mate; it routes matching work to the second mate.

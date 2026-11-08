@@ -16,14 +16,18 @@ Your own computer only needs a terminal with `ssh` (built into macOS, Linux, and
 Any provider with Ubuntu 24.04 on an **x86** (Intel or AMD) machine works; Chrome has no Linux package for Arm.
 The example here is Hetzner Cloud (Germany and Finland, billed by the hour with a monthly cap).
 
-| Use | Hetzner plan | Monthly price |
+| Use | Hetzner plan | Monthly price, IPv4 address included |
 |---|---|---|
-| **Recommended:** a first mate, a few workers, a dev server and Chrome | **CX43**: 8 vCPU, 16 GB RAM, 160 GB disk | EUR 15.99 + EUR 0.50 for the IPv4 address |
-| Light use, one or two workers | CX33: 4 vCPU, 8 GB RAM, 80 GB disk | EUR 8.49 + EUR 0.50 for the IPv4 address |
+| **Recommended:** a first mate, a few workers, a dev server and Chrome | **CX43**: 8 vCPU, 16 GB RAM, 160 GB disk | EUR 16.49 |
+| Light use, one or two workers | CX33: 4 vCPU, 8 GB RAM, 80 GB disk | EUR 8.99 |
 
-Prices exclude VAT (about EUR 20 a month for a CX43 with Dutch VAT) and are the ones in force since 15 June 2026; check [Hetzner's price page](https://docs.hetzner.com/general/infrastructure-and-availability/price-adjustment/) before you buy.
+Prices exclude VAT (about EUR 20 a month for a CX43 with Dutch VAT) and are the ones Hetzner's [cost-optimized page](https://www.hetzner.com/cloud/cost-optimized/) showed on 8 November 2026; check it before you buy, because they change.
 Avoid the Arm `CAX` plans, because Chrome has no Arm Linux package.
-If a plan shows as unavailable, try another location.
+
+The CX plans sell out: on that date every one of them showed "This product is currently unavailable".
+If that is what you see, try another location first.
+If none has stock, Hetzner's **Regular Performance** (`CPX`) plans are x86 too, at a higher price: CPX32 (4 vCPU, 8 GB RAM, 160 GB disk) was EUR 35.99 a month and CPX42 (8 vCPU, 16 GB RAM, 320 GB disk) EUR 69.99 a month, IPv4 included, on the same date.
+Any other provider's Ubuntu 24.04 x86 machine with 8 to 16 GB of RAM works just as well; only steps 1, 2 and 8 are Hetzner-specific.
 
 ---
 
@@ -46,7 +50,7 @@ In the [Hetzner Console](https://console.hetzner.com), create a project, then **
 
 1. **Location:** Nuremberg, Falkenstein or Helsinki.
 2. **Image:** Ubuntu 24.04.
-3. **Type:** Shared vCPU, x86, CX43 (or CX33).
+3. **Type:** Shared vCPU, x86, CX43 (or CX33; CPX42 or CPX32 when the CX plans are sold out).
 4. **SSH keys:** add a key and paste the `ssh-ed25519 ...` line you printed.
 5. **Name:** for example `starship-<your-name>`, then **Create & Buy now**.
 
@@ -70,6 +74,8 @@ usermod -aG sudo <you>
 rsync --archive --chown=<you>:<you> ~/.ssh /home/<you>
 ```
 
+`adduser` asks for a password twice (this is the password `sudo` asks for later), then for a full name, room number and three more details you can leave empty with Enter, then `Is the information correct? [Y/n]`: press Enter.
+
 Turn off password logins and root logins:
 
 ```sh
@@ -86,6 +92,8 @@ Turn on the firewall, allowing only SSH:
 sudo ufw allow OpenSSH
 sudo ufw enable
 ```
+
+`ufw enable` warns that it may disrupt existing SSH connections and asks `Proceed with operation (y|n)?`; answer `y`, and your connection stays up because SSH was allowed first.
 
 Keep security updates automatic (Ubuntu's server image has this on; this confirms it):
 
