@@ -17,6 +17,7 @@ Start with the directory layout, then use the setting reference for the behavior
 | Starter settings for a new home: which model does which job, transcription words, and how hard the first mate thinks | [Starter settings](#starter-settings-first-launch), [crew dispatch profiles](#crew-dispatch-profiles-configcrew-dispatchjson), [speech-to-text vocabulary](#speech-to-text-vocabulary-configstt-vocabulary), and [primary effort](#primary-effort-configprimary-effort) |
 | Spoken replies | [Desk voice-out](#desk-voice-out-configspeak) |
 | The call recorder | [Call recorder](#call-recorder-configcall-companion) |
+| The meeting intake | [Meeting intake](#meeting-intake-configmeetings) |
 | The morning intake, the continuous channel intake and the daily to-do page | [Daily intake and to-do page](#daily-intake-and-to-do-page-configmorning-intake-configchannel-intake) |
 | Which Starship version "update starship" follows | [Update channel](#update-channel-configupdate-channel) |
 | A home's own private tools beside the shared code | [Private add-on](#private-add-on-configaddon) and [opt-in skills](#opt-in-skills-configadhd-configsecond-opinion) |
@@ -106,6 +107,7 @@ Each effective `FM_HOME` contains private operational directories.
 - Explicitly installed content-addressed extension packages under `data/extensions/packages/`.
 - The captain ledger `data/captain-ledger.jsonl`, every captain prompt recorded before the primary answers in a home opted in through `config/captain-ledger` (`bin/fm-captain-ledger.sh`).
 - Call recordings under `data/calls/`: the transcript, live desk, end-of-call notes and archive (`bin/fm-call-lib.sh`; [call-companion.md](call-companion.md)).
+- The meeting intake's record of each meeting taken in under `data/meetings/` (`bin/fm-meetings.sh`; [meetings.md](meetings.md)).
 
 `state/` holds runtime records:
 
@@ -122,6 +124,7 @@ Each effective `FM_HOME` contains private operational directories.
 - The dispatch decision record `state/dispatch-decisions.jsonl` (`bin/fm-dispatch-resolve.sh`; "Typed dispatch resolution" below).
 - The localhost web page's token, pid, port and request log under `state/web/` (`bin/fm-web.sh`; [web.md](web.md)).
 - The call recorder's process records, logs, short-lived audio chunks and decision logs under `state/calls/` (`bin/fm-call-lib.sh`; [call-companion.md](call-companion.md)).
+- The meeting intake's check records under `state/meetings/` (`bin/fm-meetings.sh`; [meetings.md](meetings.md)).
 
 `config/` holds local gitignored operating choices, including explicit extension bindings under `config/extensions.d/`.
 
@@ -763,6 +766,7 @@ Each switch is an optional local, gitignored presence flag; any file at the path
 | `second-opinion-auto-fire` ([second-opinion.md](second-opinion.md)) | `config/second-opinion` |
 | `macos-computer-use` | `config/computer-use` (above) |
 | `intake-digest-lines` and `daily-todo-freshness` | `config/morning-intake` or `config/channel-intake` ([below](#daily-intake-and-to-do-page-configmorning-intake-configchannel-intake)) |
+| `meeting-intake` ([meetings.md](meetings.md)) | `config/meetings` ([below](#meeting-intake-configmeetings)) |
 
 A switched-on skill is linked into `.agents/skills/` under its usual name, so it loads exactly as a tracked skill does, and the link is gitignored.
 A harness lists skills when it starts, so a changed switch takes effect from the next launch.
@@ -3968,6 +3972,15 @@ It holds the call recorder's settings: the label for your own speech, the microp
 Absent, every setting takes its default.
 `key = value` lines; `#` comments and blank lines are ignored, and an unknown key is refused so a typo never silently changes what is recorded.
 [`docs/examples/call-companion`](examples/call-companion) lists every key with its default, `bin/fm-call-lib.sh`'s header owns their meaning, and [call-companion.md](call-companion.md) covers consent, setup, stopping and deleting.
+
+## Meeting intake (config/meetings)
+
+Optional, private, gitignored, and not inherited by secondmate homes.
+Nothing polls, reads or acts until it holds `enabled = true`; `bin/fm-meetings.sh arm` then binds the standing check, and `enabled = false` or `bin/fm-meetings.sh disarm` turns the intake off again.
+It names the sources finished meetings come from (`source = call-recorder`, the default, for calls recorded with the call recorder above, and `source = anarlog` for meetings recorded by Anarlog), the words that keep a meeting out of the intake altogether, any further transcript label that is you, the Claude model for the intake, and the Anarlog speaker-pass wait and import folder.
+`key = value` lines; `#` comments and blank lines are ignored, and an unknown key or source is refused so a typo never silently changes what is read.
+[`docs/examples/meetings`](examples/meetings) lists every key with its default, `bin/fm-meetings.sh`'s header owns their meaning and the intake's rules, `bin/fm_meeting_sources.py`'s header owns each source and the seam a new one plugs into, and [meetings.md](meetings.md) covers what Anarlog is, setup, keys and turning the intake off.
+The file's presence also switches on the `meeting-intake` skill as an [opt-in skill](#opt-in-skills-configadhd-configsecond-opinion).
 
 ## Supervision active alert channels (config/wedge-alarm)
 
