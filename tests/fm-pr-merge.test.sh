@@ -5888,6 +5888,29 @@ test_no_task_merge_runs_the_same_guards() {
   set -e
   expect_code 1 "$rc" "no-task-red: a red pull request must be refused"
   assert_grep "check 'lint' is not green" "$case_dir/stderr" "no-task-red: the red check was not reported"
+
+  local new_head=dddddddddddddddddddddddddddddddddddddddd
+  case_dir=$(make_case no-task-behind)
+  add_gh_mocks "$case_dir" "$head"
+  write_github_required "$case_dir" classic:ci
+  jq -c '.mergeStateStatus = "BEHIND" | .author.login = "teammate"' "$case_dir/github-view.json" > "$case_dir/view.tmp"
+  mv "$case_dir/view.tmp" "$case_dir/github-view.json"
+  jq --arg head "$new_head" '.mergeStateStatus = "CLEAN" | .headRefOid = $head' \
+    "$case_dir/github-view.json" > "$case_dir/github-view-after-update.json"
+  printf '%s\n' "$new_head" > "$case_dir/github-head-after-update"
+  set +e
+  run_pr_merge "$case_dir" --no-task https://github.com/example/repo/pull/99 --captain-approved --update-branch \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "no-task-behind: a behind task-less pull request must update and merge: $(cat "$case_dir/stderr")"
+  assert_grep "api --method PUT repos/example/repo/pulls/99/update-branch -f expected_head_sha=$head" "$case_dir/gh.log" \
+    "no-task-behind: the branch was not updated"
+  assert_grep "--match-head-commit $new_head" "$case_dir/gh.log" \
+    "no-task-behind: did not merge the verified new head"
+  assert_no_grep 'pr=' "$case_dir/state/task-x1.meta" "no-task-behind: a task record was written"
+  [ -z "$(find "$case_dir/state" -name '*no-task*' -print)" ] \
+    || fail "no-task-behind: a record was created for the --no-task placeholder"
   pass "fm-pr-merge merges a task-less pull request only through the same guards"
 }
 

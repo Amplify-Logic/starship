@@ -1463,7 +1463,7 @@ github_update_behind_branch() {
     fi
     if [ -z "$new_head" ] && [ "$FM_PR_GITHUB_LIVE_HEAD" != "$old_head" ]; then
       new_head=$FM_PR_GITHUB_LIVE_HEAD
-      if ! record_pr_metadata || ! grep -qxF "pr_head=$new_head" "$META"; then
+      if [ "$NO_TASK" = false ] && { ! record_pr_metadata || ! grep -qxF "pr_head=$new_head" "$META"; }; then
         echo "error: could not record the updated GitHub head $new_head" >&2
         rm -f "$attempt_error"
         return 1
