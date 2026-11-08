@@ -37,6 +37,12 @@ launch_without_case_paths() {  # <launch-line> <home> <task-id> <spawn-bin-dir>
   launch=${launch//$home\/state\/operational-inbox/<OPERATIONAL-INBOX>}
   launch=${launch//$coderoot\/.agents\/skills/<SKILLS>}
   launch=${launch//\/tmp\/fm-$id+/<LAUNCH-DIR>+}
+  # The worker status reporter's arm and disarm lines name the task, its window,
+  # and the case home's state and config directories.
+  launch=${launch//$home\/state/<STATE>}
+  launch=${launch//$home\/config/<CONFIG>}
+  launch=${launch//fm-$id/fm-<ID>}
+  launch=${launch//\'$id\'/\'<ID>\'}
   # The launch-brief doorbell names a fresh record on every spawn, and the Git
   # config env file carries the home token and a fresh spawn nonce.
   printf '%s' "${launch//$bindir/<BIN>}" \

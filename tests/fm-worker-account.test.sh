@@ -25,6 +25,9 @@ make_account_fakes() {
   local fakebin=$1 dir=$2
   cat > "$fakebin/claude" <<SH
 #!/usr/bin/env bash
+# fm-spawn's launch-binary preflight probes --version before any endpoint
+# exists; that probe is not a worker start.
+[ "\${1:-}" = --version ] && { printf '%s\\n' '2.1.0 (Claude Code)'; exit 0; }
 if [ "\${1:-}" = auth ] && [ "\${2:-}" = status ]; then
   printf '%s\n' "\${CLAUDE_CONFIG_DIR-unset}" >> '$dir/claude-checks'
   [ -z "\${ANTHROPIC_API_KEY:-}\${CLAUDE_CODE_OAUTH_TOKEN:-}" ] || exit 0

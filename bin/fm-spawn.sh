@@ -3728,10 +3728,16 @@ WORKER_ACCOUNT_MATE=
 # launch spends: --account on a fresh spawn, and on a relaunch that flag or
 # else the account the task already records. --account reaches the list only
 # when this launch is Claude and the home declares the list; otherwise it keeps
-# naming a config/accounts.json registry account, resolved further below.
+# naming a config/accounts.json registry account, resolved further below. In a
+# home with the list and no registry, any other runner's --account goes to the
+# list too, whose refusal names it as Claude-only.
 WORKER_ACCOUNT_LISTED=$(fm_worker_account_list "$HARNESS" "$CONFIG") || exit 1
 WORKER_ACCOUNT_REQUEST=
-if [ -n "$WORKER_ACCOUNT_LISTED" ]; then
+if [ -z "$WORKER_ACCOUNT_LISTED" ] && [ "$ACCOUNT_SET" -eq 1 ] \
+  && { [ -e "$CONFIG/claude-accounts" ] || [ -L "$CONFIG/claude-accounts" ]; } \
+  && [ ! -e "$CONFIG/accounts.json" ] && [ ! -L "$CONFIG/accounts.json" ]; then
+  WORKER_ACCOUNT_REQUEST=$ACCOUNT_ARG
+elif [ -n "$WORKER_ACCOUNT_LISTED" ]; then
   WORKER_ACCOUNT_REQUEST=$ACCOUNT_ARG
   if [ "$RELAUNCH" -eq 1 ]; then
     WORKER_ACCOUNT_REQUEST=$(fm_worker_account_relaunch_request "$HARNESS" "$CONFIG" "$RELAUNCH_PRIOR_HARNESS" \
