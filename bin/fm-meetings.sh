@@ -10,7 +10,8 @@
 #   fm-meetings.sh poll                one unbounded poll, printing what check would print
 #   fm-meetings.sh intake [<id>...]    take in every meeting the check announced, or the named ones
 #   fm-meetings.sh recall <words>...   what was said or agreed: a person, topic or title
-#   fm-meetings.sh status              every tracked meeting and shared file, and any standing problem
+#   fm-meetings.sh status              every tracked meeting, and any standing problem
+#   fm-meetings.sh forget <id>...      remove what the intake keeps of a meeting
 #   fm-meetings.sh --help
 #
 # OPT-IN. Nothing runs until the home's private, gitignored config/meetings
@@ -26,16 +27,18 @@
 #   anarlog        meetings recorded by Anarlog (anarlog.so), a local meeting
 #                  recorder, read only through its own command-line tool; the
 #                  one thing it is asked to add is a recording import, for the
-#                  speaker pass and for audio dropped into anarlog_import_folder
+#                  speaker pass
 # That module's header owns each source's rules and the seam a new source
 # plugs into.
 #
 # THE CHECK. `arm` writes state/meetings.check.sh, a byte-static shim that runs
 # `check`, and binds it with fm-check-register.sh, so the watcher runs it on its
 # slow-check cadence and turns its one printed line into a `check:` wake. The
-# line starts `meetings:` and names each meeting that became ready for intake
-# since the last poll, once, plus any problem worth a wake, once until it
-# clears. `arm` also records the arming time: a meeting that ended before it is
+# line starts `meetings:`, says how many meetings are ready for intake and the
+# command to run, then any problem worth a wake, once until it clears, and last
+# the titles of up to three of those meetings, each cut to 40 characters. A
+# ready meeting is announced once, again after each failed intake, and again
+# every twelve hours while it still waits. `arm` also records the arming time: a meeting that ended before it is
 # left alone (intake can still take one in by id). The poll must finish inside
 # the watcher's per-check bound (FM_CHECK_TIMEOUT, default 30); unfinished work
 # carries over to the next poll.
@@ -45,8 +48,8 @@
 #     summary or transcript match an exclude word (each `exclude_word`, plus
 #     every line of the private config/meeting-exclude-words, one word or
 #     phrase per line with `#` comments; neither ships with any word) is never
-#     sent to a model or actioned; intake prints only `excluded meeting, not
-#     processed: <title>`.
+#     sent to a model or actioned, and gets no speaker pass; intake prints only
+#     `excluded meeting, not processed: <title>`.
 #   - Otherwise one model pass (`claude -p`, no tools, no session) reads a
 #     bounded copy of the meeting: the recorder's summary, the owner's own
 #     notes, action items and the transcript, capped at transcript_chars
@@ -76,19 +79,29 @@
 #     "our" or "on"), destructive (delete or remove), touching another
 #     person's commitment, or whose source cannot be found - goes in a second
 #     note (`meeting-<id>-review`) for firstmate to hold for the owner's
-#     decision, where it waits. This layer itself sends nothing anywhere
-#     outside this machine's own inbox.
+#     decision, where it waits. This layer acts toward no one: what leaves
+#     this machine is the bounded meeting text, to the intake model, and, for
+#     the speaker pass, the meeting's recording, which Anarlog transcribes with
+#     whichever provider its own settings name, local or cloud.
 #   - One spoken line goes to the desk through fm-speak.sh (inert unless the
 #     home turned desk voice on), and the record is kept in
 #     data/meetings/<id>/intake.json, which `recall` searches.
-# A failed intake leaves the meeting ready for the next `intake`, and after
-# three failures marks it failed. The request ids make a repeated intake reuse
+# A failed intake leaves the meeting ready, for the next check to announce
+# again, and after three failures marks it failed. The request ids make a repeated intake reuse
 # its notes rather than file them twice.
 #
 # RECALL. `recall` answers "what did we agree with <person>" from the intake
-# records and each source's own search, leaving out excluded meetings, and
-# prints date, title, people, outcome, follow-ups and the recorder's own action
+# records and each source's own search, leaving out any meeting the exclude
+# words mark now (a saved intake record is checked again against the current
+# words, and a search hit against the same fields intake checks), and prints date, title, people, outcome, follow-ups and the recorder's own action
 # items and summary for the asker to answer from.
+#
+# FORGET. `forget <id>...` removes what the intake keeps of each meeting: its
+# record in state/meetings/records.json, data/meetings/<id>/, and the inbox
+# notes it filed (request ids meeting-<id>-start and meeting-<id>-review,
+# through `fm-inbox.sh forget`). It works with the intake off, and
+# `fm-call-companion.sh delete` runs it for each call it deletes, so withdrawn
+# consent removes everything derived from the call.
 #
 # CONFIG. Private, gitignored config/meetings: `key = value` lines, `#`
 # comments; an unknown key is refused. docs/examples/meetings lists every key
@@ -101,10 +114,8 @@
 #   transcript_chars            how much of the meeting the model reads (60000)
 #   anarlog_speaker_pass_wait_minutes
 #                               minutes to wait for Anarlog's speaker pass before using the live transcript (180)
-#   anarlog_import_folder       a folder of audio files to hand to Anarlog, or off (off)
 #
-# RECORDS. state/meetings/records.json (what each meeting and shared file has
-# reached; locked, written by rename), state/meetings/check-problem (the last
+# RECORDS. state/meetings/records.json (what each meeting has reached; locked, written by rename), state/meetings/check-problem (the last
 # failed or timed-out check line, so it wakes once until a poll succeeds) and
 # data/meetings/<id>/intake.json.
 #
@@ -137,7 +148,7 @@ MAX_LINE=400
 . "$SCRIPT_DIR/fm-check-lib.sh"
 
 usage() {
-  sed -n '6,14p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  sed -n '6,15p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
   printf '\nThe header of %s owns the full contract; docs/meetings.md is the operator guide.\n' "${BASH_SOURCE[0]}"
 }
 
@@ -304,7 +315,7 @@ case "${1:-}" in
   check) action_check ;;
   arm) action_arm ;;
   disarm) action_disarm ;;
-  poll|intake|recall|status) core "$@" ;;
+  poll|intake|recall|status|forget) core "$@" ;;
   -h|--help) usage ;;
   '') die_usage "an action is required" ;;
   *) die_usage "unknown action: $1" ;;

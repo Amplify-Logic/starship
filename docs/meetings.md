@@ -2,7 +2,7 @@
 
 The meeting intake turns every finished meeting or call into Starship work.
 When a meeting is finished, Starship reads its transcript and notes once, writes a one-line outcome, starts the clear follow-ups on its own, and holds everything that needs your eye for your decision.
-It is off until a home turns it on, and it sends nothing to anyone outside this machine.
+It is off until a home turns it on, and it acts toward no one outside Starship; [Privacy](#privacy) lists what leaves this machine.
 
 `bin/fm-meetings.sh`'s header owns the exact rules; this page is the operator guide.
 
@@ -13,7 +13,8 @@ The intake reads finished meetings from the sources `config/meetings` names:
 - **The call recorder** (`source = call-recorder`, the default): every call you record with [`bin/fm-call-companion.sh`](call-companion.md) feeds the intake once it is stopped and its end-of-call notes are written.
   Nothing more to install.
 - **Anarlog** (`source = anarlog`): [Anarlog](https://anarlog.so) is a free meeting recorder for the Mac that records any meeting, in any app or in person, and writes its transcript and summary on your Mac, in its own local database.
-  Where the call recorder needs a loopback device and a local speech model, Anarlog is a complete recorder with speaker labels, and it can transcribe with a cloud provider when a laptop is too slow for local models.
+  Anarlog labels speakers itself and transcribes with whichever engine its own settings name.
+  The call recorder's transcription engine, and what it needs on this laptop, is covered in [call-companion.md](call-companion.md).
   Starship reads it only through Anarlog's own command-line tool and never opens its database.
 
 `bin/fm_meeting_sources.py`'s header owns the seam a further source plugs into.
@@ -37,9 +38,10 @@ Starting a follow-up never lands it: merges and outward actions still need your 
 
 ## Keep some meetings out
 
-A meeting whose title, participants, notes, summary or transcript contain an exclude word is never sent to a model or actioned; Starship only tells you "excluded meeting, not processed".
+A meeting whose title, participants, notes, summary or transcript contain an exclude word is never sent to a model or actioned, and Starship never asks Anarlog to run its speaker pass on it; Starship only tells you "excluded meeting, not processed".
 The exclude words are each `exclude_word` line in `config/meetings` plus every line of the private `config/meeting-exclude-words` (one word or phrase per line, `#` comments).
 Neither ships with any word, so list an employer, its clients and its products there yourself if those meetings must stay out.
+A word added later also keeps meetings already taken in out of `recall`.
 If you use Anarlog, keep its automatic meeting detection off, or limited to the calendars you want recorded, so a meeting you never meant to record is not recorded into its store in the first place.
 
 ## Set up
@@ -52,7 +54,6 @@ If you use Anarlog, keep its automatic meeting detection off, or limited to the 
    2. Install Anarlog's command-line tool, `anarlog`, which Anarlog provides, so that `anarlog --json meetings --source local list` prints your meetings in a terminal.
    3. Under its transcription settings, choose a local model that labels speakers (a batch model) beside the live one, or a cloud provider when this laptop is too slow for local models.
    4. Under its meeting settings, keep audio recordings for at least a day; with no recording kept there is nothing to run the speaker pass on.
-   5. Optionally set `anarlog_import_folder` to a folder where you drop recordings made elsewhere, such as calls shared from a phone; Anarlog transcribes them and they flow through the same intake.
 4. Arm the check: `bin/fm-meetings.sh arm`.
    Meetings that ended before arming are left alone; `bin/fm-meetings.sh intake <id>` takes one in by hand.
 5. Start a new session, so the `meeting-intake` skill is linked in; the presence of `config/meetings` switches it on as an [opt-in skill](configuration.md#opt-in-skills-configadhd-configsecond-opinion).
@@ -83,8 +84,16 @@ Setting `enabled = false` in `config/meetings` also stops everything: an armed c
 Delete `config/meetings` to unlink the skill at the next session as well.
 Records of meetings already taken in stay in `data/meetings/` until you delete them.
 
+## Delete a call
+
+When someone withdraws consent and you delete a call with `bin/fm-call-companion.sh delete`, the delete also removes what the intake kept of that call: its record in `data/meetings/call-<stamp>/` and the two inbox notes it filed.
+`bin/fm-meetings.sh forget <id>` does the same by hand for any meeting, and works with the intake off.
+
 ## Privacy
 
 The call recorder keeps its transcripts under this home's `data/calls/`, and Anarlog keeps meetings in its own local database, which this layer reads only through Anarlog's own command-line tool.
-The intake sends the bounded meeting text, never audio, to Claude under the account this home uses; excluded meetings are never sent.
+Two things leave this machine.
+The intake sends the bounded meeting text to Claude under the account this home uses.
+For an Anarlog meeting that needs a speaker pass, Starship asks Anarlog to transcribe the meeting's recording again, which goes to Anarlog's transcription provider when a cloud provider is set there.
+Excluded meetings get neither.
 The intake record for each meeting stays in this home's private `data/meetings/`, and the check's records in `state/meetings/`.

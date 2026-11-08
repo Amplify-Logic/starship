@@ -13,18 +13,23 @@ import fcntl
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from fm_meeting_sources import KIND_TEXT, SOURCES, Failure, notice, now  # noqa: E402
+from fm_meeting_sources import KIND_TEXT, SOURCES, Failure, meeting_text, notice, now  # noqa: E402
 
 TAKING_STALE_SECONDS = 1800   # an intake that never finished frees its meeting after this long
+REANNOUNCE_SECONDS = 43200    # a meeting still waiting for intake is announced again after this long
+TITLES_SHOWN = 3              # ready meetings named in a wake line, each cut to TITLE_CHARS
+TITLE_CHARS = 40
 MAX_INTAKE_FAILURES = 3
 SUMMARY_KEEP_CHARS = 4000
 SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fm-meetings.sh")
+MEETING_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,100}$")
 
 CONFIG_DEFAULTS = {
     "enabled": "false",
@@ -130,6 +135,15 @@ class Home:
                 words += [line.strip() for line in handle if line.strip() and not line.lstrip().startswith("#")]
         return words
 
+    def exclusion_hits(self, text):
+        """The exclude words found in text, each as a whole word or phrase, whatever its case."""
+        hits = []
+        for word in self.exclude_words():
+            pattern = r"(?<!\w)" + r"\s+".join(re.escape(part) for part in word.split()) + r"(?!\w)"
+            if re.search(pattern, text, re.IGNORECASE):
+                hits.append(word)
+        return hits
+
     def source_of(self, record):
         name = record.get("source") or ""
         if name in self.sources:
@@ -164,7 +178,6 @@ def load_records(home):
         raise Failure(f"the meeting records at {home.records_path} are unreadable: {error}")
     records.setdefault("version", 1)
     records.setdefault("meetings", {})
-    records.setdefault("files", {})
     records.setdefault("notices", {})
     return records
 
@@ -194,7 +207,6 @@ def cmd_poll(home, args):
     with locked(home):
         records = load_records(home)
         ensure_baseline(records)
-        before = {mid for mid, rec in records["meetings"].items() if rec.get("phase") == "ready"}
         for name, source in home.sources.items():
             try:
                 source.poll(records, problems, deadline)
@@ -203,14 +215,19 @@ def cmd_poll(home, args):
                 line = notice(records, name, f"{name} cannot be read: {error}")
                 if line:
                     lines.append(line)
-        ready = [rec for mid, rec in records["meetings"].items() if rec.get("phase") == "ready" and mid not in before]
+        ready = [rec for rec in records["meetings"].values() if rec.get("phase") == "ready"
+                 and now() - rec.get("announced_at", 0) >= REANNOUNCE_SECONDS]
         for record in ready:
             record["announced_at"] = now()
         save_records(home, records)
     if ready:
-        titles = "; ".join(rec.get("title") or rec["id"] for rec in ready)
-        lines.insert(0, f"{len(ready)} meeting(s) ready for intake ({titles}) - run {SCRIPT} intake")
+        lines.insert(0, f"{len(ready)} meeting(s) ready for intake - run {SCRIPT} intake")
     lines += problems
+    if ready:
+        titles = [rec.get("title") or rec["id"] for rec in ready[:TITLES_SHOWN]]
+        titles = [t if len(t) <= TITLE_CHARS else t[:TITLE_CHARS - 3].rstrip() + "..." for t in titles]
+        more = f"; and {len(ready) - TITLES_SHOWN} more" if len(ready) > TITLES_SHOWN else ""
+        lines.append("ready: " + "; ".join(titles) + more)
     if lines:
         print("meetings: " + "; ".join(lines))
     return 0
@@ -227,17 +244,6 @@ def cmd_baseline(home, _args):
 
 
 # --- intake ----------------------------------------------------------------
-
-def exclusion_hits(home, meeting):
-    text = "\n".join([meeting["title"], meeting["participant_details"], meeting["note"], meeting["summary"],
-                      meeting["transcript"], meeting["final_transcript"]] + list(meeting["action_items"]))
-    hits = []
-    for word in home.exclude_words():
-        pattern = r"(?<!\w)" + r"\s+".join(re.escape(part) for part in word.split()) + r"(?!\w)"
-        if re.search(pattern, text, re.IGNORECASE):
-            hits.append(word)
-    return hits
-
 
 def self_labels(home, meeting):
     labels = {label.strip().lower() for label in home.config["self_label"]}
@@ -404,7 +410,7 @@ def sort_outcomes(output, text, orders):
     for item in output.get("actions") or []:
         evidence = (item.get("evidence") or "").strip()
         said, wanted = normalize(evidence), normalize(item.get("instruction"))
-        if any((said and quoted and (said in quoted or quoted in said)) or (wanted and wanted == instruction)
+        if any((said and quoted and said in quoted) or (wanted and wanted == instruction)
                for quoted, instruction in filed):
             continue  # the same step as a spoken order: only the spoken-order rule decides whether it starts
         found = bool(said) and said in haystack
@@ -508,7 +514,7 @@ def intake_one(home, meeting_id):
         phase = "failed" if failures >= MAX_INTAKE_FAILURES else (record.get("phase_before") or "ready")
         if phase in (None, "idle", "waiting", "baseline", "taking"):
             phase = "ready"
-        finish(home, meeting_id, phase=phase, intake_failures=failures, error=str(error))
+        finish(home, meeting_id, phase=phase, intake_failures=failures, error=str(error), announced_at=0)
         raise Failure(f"{record.get('title', meeting_id)}: {error}")
 
 
@@ -521,7 +527,7 @@ def intake_claimed(home, record):
     own = meeting["transcript"]
     text = meeting["final_transcript"] or own
     full_text = record_text(meeting, text)
-    if exclusion_hits(home, meeting):
+    if home.exclusion_hits(meeting_text(meeting)):
         finish(home, meeting_id, phase="excluded", title=title, taken_at=now())
         return f"excluded meeting, not processed: {title}"
     labels = self_labels(home, meeting)
@@ -539,8 +545,8 @@ def intake_claimed(home, record):
     clear, review = sort_outcomes(output, full_text, orders)
     intake = {
         "id": meeting_id, "source": meeting["source"], "title": title, "date": meeting["date"],
-        "origin": meeting["origin"], "file": record.get("file", ""),
-        "participants": meeting["participants"],
+        "origin": meeting["origin"],
+        "participants": meeting["participants"], "participant_details": meeting["participant_details"],
         "speakers": sorted({s["name"] for s in meeting["speakers"] if s.get("name")}),
         "language": meeting["language"],
         "outcome": (output.get("outcome") or "").strip() or "No clear outcome was recorded",
@@ -639,7 +645,10 @@ def cmd_recall(home, args):
         records = load_records(home)
     scored = []
     for intake in intake_records(home):
-        haystack = set(normalize(values_text(intake)).split())
+        text = values_text(intake)
+        if home.exclusion_hits(text):
+            continue
+        haystack = set(normalize(text).split())
         score = sum(term in haystack for term in terms)
         if score:
             scored.append((score, intake))
@@ -654,7 +663,7 @@ def cmd_recall(home, args):
             if hit["id"] in seen or records["meetings"].get(hit["id"], {}).get("phase") in ("excluded", "child"):
                 continue
             seen.add(hit["id"])
-            if exclusion_hits(home, hit):
+            if home.exclusion_hits(meeting_text(hit)):
                 continue
             brief = {"id": hit["id"], "title": hit["title"], "date": hit["date"], "participants": hit["participants"],
                      "summary": hit["summary"][:SUMMARY_KEEP_CHARS], "action_items": hit["action_items"],
@@ -690,17 +699,47 @@ def cmd_status(home, _args):
         records = load_records(home)
     print("intake: " + ("on" if home.enabled else "off") + "; sources: " + ", ".join(home.config["source"]))
     shown = [r for r in records["meetings"].values() if r.get("phase") not in ("idle", "baseline", "child")]
-    if not shown and not records["files"]:
+    if not shown:
         print("no meetings tracked yet")
     for record in sorted(shown, key=lambda r: r.get("first_seen", 0)):
         kind = (record.get("transcript") or {}).get("kind", "")
         extra = f" error: {record['error']}" if record.get("error") else ""
         print(f"{record.get('phase', ''):12} {record.get('source', ''):14} {kind:6} {record.get('title', record['id'])}{extra}")
-    for path, entry in sorted(records["files"].items()):
-        print(f"{entry.get('phase', ''):12} {'shared file':14} {'':6} {os.path.basename(path)}"
-              + (f" error: {entry['error']}" if entry.get("error") else ""))
     for text in records["notices"].values():
         print(f"notice: {text}")
+    return 0
+
+
+def cmd_forget(home, args):
+    """Remove what the intake keeps of each named meeting: its check record, its intake record and its inbox notes."""
+    for meeting_id in args.ids:
+        if not MEETING_ID.match(meeting_id) or ".." in meeting_id:
+            raise Failure(f"{meeting_id} is not a meeting id")
+    for meeting_id in args.ids:
+        removed = False
+        if os.path.exists(home.records_path):
+            with locked(home):
+                records = load_records(home)
+                if records["meetings"].pop(meeting_id, None) is not None:
+                    save_records(home, records)
+                    removed = True
+        folder = os.path.join(home.data, meeting_id)
+        if os.path.isdir(folder):
+            try:
+                shutil.rmtree(folder)
+            except OSError as error:
+                raise Failure(f"the intake record of {meeting_id} could not be removed ({error})")
+            removed = True
+        for kind in ("start", "review"):
+            request_id = f"meeting-{meeting_id}-{kind}"
+            result = subprocess.run([home.inbox, "forget", request_id], capture_output=True, text=True,
+                                    env=dict(os.environ, FM_HOME=home.home))
+            if result.returncode != 0:
+                raise Failure(f"the inbox note {request_id} could not be removed: "
+                              f"{(result.stderr or result.stdout).strip()[:200]}")
+            removed = removed or bool(result.stdout.strip())
+        if removed:
+            print(f"fm-meetings: removed the meeting intake's record and inbox notes of {meeting_id}")
     return 0
 
 
@@ -716,11 +755,13 @@ def main(argv):
     recall.add_argument("--limit", type=int, default=5)
     recall.add_argument("query", nargs="+")
     sub.add_parser("status")
+    forget = sub.add_parser("forget")
+    forget.add_argument("ids", nargs="+")
     args = parser.parse_args(argv)
     try:
         home = Home()
         return {"poll": cmd_poll, "baseline": cmd_baseline, "intake": cmd_intake,
-                "recall": cmd_recall, "status": cmd_status}[args.command](home, args)
+                "recall": cmd_recall, "status": cmd_status, "forget": cmd_forget}[args.command](home, args)
     except Failure as error:
         print(f"fm-meetings: {error}", file=sys.stderr)
         return 1

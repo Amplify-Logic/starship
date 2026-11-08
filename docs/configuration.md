@@ -3977,7 +3977,7 @@ Absent, every setting takes its default.
 
 Optional, private, gitignored, and not inherited by secondmate homes.
 Nothing polls, reads or acts until it holds `enabled = true`; `bin/fm-meetings.sh arm` then binds the standing check, and `enabled = false` or `bin/fm-meetings.sh disarm` turns the intake off again.
-It names the sources finished meetings come from (`source = call-recorder`, the default, for calls recorded with the call recorder above, and `source = anarlog` for meetings recorded by Anarlog), the words that keep a meeting out of the intake altogether, any further transcript label that is you, the Claude model for the intake, and the Anarlog speaker-pass wait and import folder.
+It names the sources finished meetings come from (`source = call-recorder`, the default, for calls recorded with the call recorder above, and `source = anarlog` for meetings recorded by Anarlog), the words that keep a meeting out of the intake altogether, any further transcript label that is you, the Claude model for the intake, and the Anarlog speaker-pass wait.
 `key = value` lines; `#` comments and blank lines are ignored, and an unknown key or source is refused so a typo never silently changes what is read.
 [`docs/examples/meetings`](examples/meetings) lists every key with its default, `bin/fm-meetings.sh`'s header owns their meaning and the intake's rules, `bin/fm_meeting_sources.py`'s header owns each source and the seam a new one plugs into, and [meetings.md](meetings.md) covers what Anarlog is, setup, keys and turning the intake off.
 The file's presence also switches on the `meeting-intake` skill as an [opt-in skill](#opt-in-skills-configadhd-configsecond-opinion).

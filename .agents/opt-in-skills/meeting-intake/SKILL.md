@@ -17,13 +17,13 @@ The `meetings:` wake line prints the absolute command to run, which is the add-o
 
 ## On a `meetings:` wake
 
-- `N meeting(s) ready for intake (...)`: run `bin/fm-meetings.sh intake` in this turn.
+- `N meeting(s) ready for intake - run <command> intake`: run that command in this turn; the `ready:` part at the end names some of those meetings.
   It takes in every announced meeting once, saves its follow-ups as inbox notes, and speaks one outcome line on the desk itself, so do not speak it again.
   Then drain the wake queue and handle the notes it saved as below.
 - A line `excluded meeting, not processed: <title>` from the intake is relayed to the captain as that one line, batched into the next natural reply.
   Never read, summarise or act on an excluded meeting's content from this layer.
-- `intake failed: ...` leaves the meeting ready; one retry at the next wake is enough, and a meeting the intake marks failed after its third try is a blocker to report with the error.
-- `<source> cannot be read`, a recording that could not be handed to or transcribed by its recorder, or a call archive that cannot be read is a standing problem: report it to the captain once, in plain words, with what would fix it (for Anarlog, usually opening its desktop app).
+- `intake failed: ...` leaves the meeting ready, and the next check announces it again; that one retry is enough, and a meeting the intake marks failed after its third try is a blocker to report with the error.
+- `<source> cannot be read`, a recording its recorder could not transcribe, or a call archive that cannot be read is a standing problem: report it to the captain once, in plain words, with what would fix it (for Anarlog, usually opening its desktop app).
 
 ## Meeting follow-ups ready to start
 

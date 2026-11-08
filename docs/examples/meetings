@@ -33,7 +33,3 @@ transcript_chars = 60000
 # (speaker labels) when it ran none itself; minutes to wait for that speaker
 # pass before using the live transcript.
 anarlog_speaker_pass_wait_minutes = 180
-
-# Anarlog only. A folder of audio files, such as calls shared from a phone, to
-# hand to Anarlog for transcription, or off.
-anarlog_import_folder = off

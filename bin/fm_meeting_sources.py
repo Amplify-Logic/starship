@@ -7,8 +7,8 @@ turns one place meetings are recorded into the records the intake reads, and
 the intake itself never knows which recorder a meeting came from.
 
 A source is a class registered in SOURCES under the word `config/meetings`
-names it by (`source = <name>`). It gets the intake's Home (paths and config)
-and provides:
+names it by (`source = <name>`). It gets the intake's Home (paths, config, and
+exclusion_hits(text), the exclude words found in a text) and provides:
 
   config_defaults   the config/meetings keys it adds, each with its default,
                     prefixed with its name so a key reads as its owner's
@@ -22,7 +22,10 @@ and provides:
                     records["baseline"] gets phase "baseline" and is left
                     alone. A problem worth one wake is appended to `problems`;
                     a Failure raised here is reported once as
-                    "<name> cannot be read: ..." until it clears.
+                    "<name> cannot be read: ..." until it clears. A poll never
+                    sends a meeting anywhere, such as to a transcription
+                    service, while home.exclusion_hits(meeting_text(...))
+                    finds an exclude word in it.
   load(record)      the finished meeting as a Meeting (below) for intake
   search(terms, limit)
                     brief Meetings matching the recall words that no intake
@@ -37,7 +40,7 @@ the source.
 
 A Meeting is a plain dict with:
   id, source, title, date (ISO 8601), origin (how it was captured, in words:
-  "meeting", "imported recording", "shared recording", "call"),
+  "meeting", "imported recording", "call"),
   participants ([display names]), participant_details (one string of every
   participant field, for the exclusion check), speakers ([{"name", "is_self"}]),
   note (the owner's own notes), summary, action_items ([str]),
@@ -47,9 +50,7 @@ A Meeting is a plain dict with:
   transcript_note (why that kind) and language.
 """
 
-import contextlib
 import datetime
-import hashlib
 import json
 import os
 import re
@@ -58,7 +59,6 @@ import time
 
 SETTLE_SECONDS = 120          # quiet time after the last change before a meeting counts as finished
 SUMMARY_WAIT_SECONDS = 600    # how long after the end to wait for the recorder's own summary or notes
-FILE_STABLE_SECONDS = 60      # a shared audio file must be this old and unchanged before import
 CLI_TIMEOUT = 15
 LIST_LIMIT = 50
 AUDIO_EXTENSIONS = {".wav", ".mp3", ".ogg", ".mp4", ".m4a", ".flac", ".webm", ".aac"}
@@ -120,6 +120,12 @@ def meeting(**fields):
     return base
 
 
+def meeting_text(found):
+    """Every part of a Meeting the exclude words are checked against, as one text."""
+    return "\n".join([found["title"], found["participant_details"], found["note"], found["summary"],
+                      found["transcript"], found["final_transcript"]] + list(found["action_items"]))
+
+
 def key_value_setting(path, key, default):
     """One `key = value` setting from a file in this repository's config format, or the default."""
     try:
@@ -174,14 +180,8 @@ class Source:
 # pass)" whose batch transcript the intake reads; and the live transcript is
 # used only when no recording was kept, or the speaker pass failed or did not
 # finish within anarlog_speaker_pass_wait_minutes, which the intake's outcome
-# then says.
-#
-# Audio files dropped into anarlog_import_folder (off by default) are imported
-# the same way once they have stopped changing for FILE_STABLE_SECONDS, and
-# flow through the intake once Anarlog's summary of them is in or
-# SUMMARY_WAIT_SECONDS after their transcript. iCloud placeholders are asked to
-# download first. Files in the folder are never moved or deleted; non-audio
-# files are listed by `status` and skipped.
+# then says. A meeting an exclude word marks gets no speaker pass: it goes to
+# the intake as it stands, which keeps it out.
 
 SPEAKER_PASS_TITLE = " (speaker pass)"
 REQUEST_PREFIX = "fm-meetings-"
@@ -190,7 +190,7 @@ UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 
 class Anarlog(Source):
     name = "anarlog"
-    config_defaults = {"anarlog_speaker_pass_wait_minutes": "180", "anarlog_import_folder": "off"}
+    config_defaults = {"anarlog_speaker_pass_wait_minutes": "180"}
     numeric_keys = ("anarlog_speaker_pass_wait_minutes",)
 
     def __init__(self, home):
@@ -267,6 +267,26 @@ class Anarlog(Source):
                     return found
         return None
 
+    @staticmethod
+    def described(export, title="Untitled meeting"):
+        """The Meeting fields an export carries, mapped the same way for intake, the exclusion check and recall."""
+        details = []
+        for person in export.get("participants") or []:
+            details += [person.get(key) or "" for key in ("display_name", "email", "organization_name", "job_title")]
+        return {
+            "title": (export.get("title") or title).strip(),
+            "date": export.get("started_at") or export.get("created_at") or "",
+            "participants": [p.get("display_name") for p in export.get("participants") or [] if p.get("display_name")],
+            "participant_details": "\n".join(d for d in details if d),
+            "note": (export.get("note") or {}).get("markdown") or "",
+            "summary": "\n\n".join(s.get("markdown") or "" for s in export.get("summaries") or []).strip(),
+            "action_items": [a.get("text") for a in export.get("action_items") or [] if a.get("text")],
+        }
+
+    def excluded(self, export):
+        transcript = self.split_transcript(self.export_markdown(export["id"]))[1]
+        return self.home.exclusion_hits(meeting_text(meeting(**self.described(export), transcript=transcript)))
+
     def recording_path(self, export):
         """The meeting's own audio recording on this Mac, and why there is none when there is none."""
         audio = []
@@ -325,6 +345,9 @@ class Anarlog(Source):
             return None
         title = (export.get("title") or "Meeting").strip() + SPEAKER_PASS_TITLE
         try:
+            if self.excluded(export):
+                mark_ready(record, "live", "an exclude word marks it, so no speaker pass was asked for")
+                return None
             path, why = self.recording_path(export)
             if not path:
                 mark_ready(record, "live", why)
@@ -412,7 +435,7 @@ class Anarlog(Source):
             new_record(records, child, self.name, phase="child", origin="speaker-pass", parent=meeting_id,
                        title=record["title"] + SPEAKER_PASS_TITLE)
 
-    def poll_meetings(self, records, problems, deadline):
+    def poll(self, records, problems, deadline):
         listing = self.meetings("list", "--limit", str(LIST_LIMIT)) or []
         known = records["meetings"]
         ids = [item["id"] for item in listing]
@@ -436,80 +459,6 @@ class Anarlog(Source):
             except Failure as error:
                 (known.get(meeting_id) or {})["error"] = str(error)
 
-    def poll_folder(self, records, problems, deadline):
-        folder = self.home.config["anarlog_import_folder"]
-        if not folder or folder == "off":
-            return
-        folder = os.path.expanduser(folder)
-        if not os.path.isdir(folder):
-            return
-        files = records["files"]
-        for name in sorted(os.listdir(folder)):
-            if time.time() > deadline:
-                break
-            path = os.path.join(folder, name)
-            placeholder = re.match(r"^\.(.+)\.icloud$", name)
-            if placeholder:
-                real = os.path.join(folder, placeholder.group(1))
-                entry = files.setdefault(real, {"phase": "downloading", "first_seen": now()})
-                if entry["phase"] == "downloading":
-                    with contextlib.suppress(OSError, subprocess.TimeoutExpired):
-                        subprocess.run(["brctl", "download", real], capture_output=True, timeout=CLI_TIMEOUT,
-                                       check=False)
-                continue
-            if name.startswith(".") or not os.path.isfile(path):
-                continue
-            entry = files.get(path)
-            if entry and entry.get("phase") not in ("downloading", "seen", "retry"):
-                continue
-            if os.path.splitext(name)[1].lower() not in AUDIO_EXTENSIONS:
-                files[path] = {"phase": "skipped", "reason": "not an audio file", "first_seen": now()}
-                continue
-            fresh = {key: value for key, value in (entry or {}).items() if key != "error"}
-            try:
-                stat = os.stat(path)
-                size, mtime = stat.st_size, int(stat.st_mtime)
-                if not entry or entry.get("size") != size or entry.get("mtime") != mtime \
-                        or now() - mtime < FILE_STABLE_SECONDS or size == 0:
-                    files[path] = dict(fresh, phase="seen", size=size, mtime=mtime,
-                                       first_seen=fresh.get("first_seen", now()))
-                    continue
-                sha = hashlib.sha256()
-                with open(path, "rb") as handle:
-                    for chunk in iter(lambda: handle.read(1 << 20), b""):
-                        sha.update(chunk)
-            except OSError as error:
-                files[path] = dict(entry or {}, phase="retry", error=f"the file cannot be read ({error})",
-                                   first_seen=(entry or {}).get("first_seen", now()))
-                continue
-            digest = sha.hexdigest()
-            stamp = datetime.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M")
-            title = f"Shared recording {stamp}"
-            try:
-                job = self.import_recording(path, title, REQUEST_PREFIX + "shared-" + digest[:32])
-            except Failure as error:
-                tries = entry.get("tries", 0) + 1
-                files[path] = dict(entry, phase="retry", tries=tries, error=str(error))
-                if tries == 3:
-                    problems.append(f"the shared recording {name} could not be handed to Anarlog ({error})")
-                continue
-            meeting_id = job.get("meeting_id")
-            files[path] = dict(fresh, phase="imported", sha256=digest, meeting_id=meeting_id,
-                               job_id=job.get("job_id"))
-            if meeting_id and meeting_id not in records["meetings"]:
-                new_record(records, meeting_id, self.name, origin="shared", title=title, file=name)
-
-    def poll(self, records, problems, deadline):
-        records.setdefault("files", {})
-        try:
-            self.poll_folder(records, problems, deadline)
-            records["notices"].pop("anarlog-folder", None)
-        except OSError as error:
-            line = notice(records, "anarlog-folder", f"the import folder cannot be read ({error})")
-            if line:
-                problems.append(line)
-        self.poll_meetings(records, problems, deadline)
-
     # -- load --
 
     @staticmethod
@@ -532,20 +481,12 @@ class Anarlog(Source):
         if pass_id and pass_id != meeting_id:
             exports.append(self.export_json(pass_id))
             final = self.split_transcript(self.export_markdown(pass_id))[1]
-        details = []
-        for person in export.get("participants") or []:
-            details += [person.get(key) or "" for key in ("display_name", "email", "organization_name", "job_title")]
-        origin = {"shared": "shared recording", "imported": "imported recording"}.get(record.get("origin"), "meeting")
+        origin = "imported recording" if record.get("origin") == "imported" else "meeting"
         return meeting(
-            id=meeting_id, source=self.name, title=(export.get("title") or record.get("title") or "Untitled meeting").strip(),
-            date=export.get("started_at") or export.get("created_at") or "", origin=origin,
-            participants=[p.get("display_name") for p in export.get("participants") or [] if p.get("display_name")],
-            participant_details="\n".join(d for d in details if d),
+            id=meeting_id, source=self.name, **self.described(export, record.get("title") or "Untitled meeting"),
+            origin=origin,
             speakers=[{"name": (s.get("name") or "").strip(), "is_self": bool(s.get("is_self"))}
                       for e in exports for s in e.get("speakers") or [] if (s.get("name") or "").strip()],
-            note=(export.get("note") or {}).get("markdown") or "",
-            summary="\n\n".join(s.get("markdown") or "" for s in export.get("summaries") or []).strip(),
-            action_items=[a.get("text") for a in export.get("action_items") or [] if a.get("text")],
             transcript=own, final_transcript=final if final and final != own else "",
             transcript_kind=kind, transcript_note=transcript.get("note") or "read as it stood when the intake ran",
             language=next((t.get("language") for e in exports for t in e.get("transcripts") or [] if t.get("language")), ""),
@@ -557,13 +498,8 @@ class Anarlog(Source):
             for item in self.meetings("list", "--query", term, "--limit", str(limit)) or []:
                 if any(hit["id"] == item["id"] for hit in hits):
                     continue
-                found = self.meetings("get", item["id"])
                 hits.append(meeting(
-                    id=item["id"], source=self.name, title=found.get("title") or "Untitled meeting",
-                    date=found.get("started_at") or found.get("created_at") or "",
-                    participants=[p.get("display_name") for p in found.get("participants") or [] if p.get("display_name")],
-                    summary="\n\n".join(s.get("markdown") or "" for s in found.get("summaries") or []),
-                    action_items=[a.get("text") for a in found.get("action_items") or [] if a.get("text")],
+                    id=item["id"], source=self.name, **self.described(self.export_json(item["id"])),
                     transcript=self.split_transcript(self.export_markdown(item["id"]))[1],
                 ))
         return hits

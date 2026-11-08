@@ -580,3 +580,24 @@ empty_code=0
 run_inbox "$home" progress "$pid" "   " >/dev/null 2>&1 || empty_code=$?
 expect_code 1 "$empty_code" "an empty progress line is refused"
 pass "progress lines publish in order before the one reply and close with it"
+
+# forget removes the note saved under a request id, acknowledged or not, with
+# its reply and progress, and frees the request id; an unknown one is a no-op.
+home=$(make_home forget)
+fid=$(run_inbox "$home" note --request-id meeting-call-1-start --json "follow-ups from a deleted call" | json_get id) \
+  || fail "the note to forget could not be saved"
+run_inbox "$home" progress "$fid" "Looking at the deleted call." >/dev/null || fail "progress on the note failed"
+run_inbox "$home" reply "$fid" "Filed the follow-ups from the deleted call." >/dev/null || fail "reply on the note failed"
+run_inbox "$home" drain --ack "$fid" >/dev/null || fail "ack of the note failed"
+out=$(run_inbox "$home" forget meeting-call-1-start) || fail "forget failed"
+assert_equals "forgot $fid" "$out" "forget names the note it removed"
+receipts=$(run_inbox "$home" receipts --all-pending --all-handled --all-replies)
+assert_not_contains "$receipts" "deleted call" "nothing of a forgotten note, its progress or its reply is left in the receipts"
+again=$(run_inbox "$home" note --request-id meeting-call-1-start --json "a new note") || fail "a new note under the freed request id failed"
+assert_equals created "$(printf '%s' "$again" | json_get outcome)" "the request id is free again"
+out=$(run_inbox "$home" forget meeting-call-2-start) || fail "forgetting an unknown request id failed"
+assert_equals "" "$out" "an unknown request id is forgotten silently"
+bad_code=0
+run_inbox "$home" forget ../escape >/dev/null 2>&1 || bad_code=$?
+expect_code 1 "$bad_code" "a request id that is not one is refused"
+pass "forget removes a note by request id, with its progress and reply"

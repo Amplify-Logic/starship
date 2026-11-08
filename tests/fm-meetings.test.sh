@@ -114,9 +114,14 @@ printf 'called\n' >> "$FAKE_MODEL_DIR/calls"
 printf '{"type":"result","structured_output":%s}\n' "$(cat "$FAKE_MODEL_OUTPUT")"
 SH
 
-# The fake inbox records each note's request id and body.
+# The fake inbox records each note's request id and body, and forgets one by
+# its request id.
 cat > "$FAKES/inbox" <<'SH'
 #!/usr/bin/env bash
+if [ "$1" = forget ]; then
+  [ ! -e "$FAKE_INBOX_DIR/$2" ] || { rm -f "$FAKE_INBOX_DIR/$2"; echo "forgot $2"; }
+  exit 0
+fi
 [ "$1" = note ] && [ "$2" = --request-id ] && [ "$4" = - ] || { echo "bad inbox call: $*" >&2; exit 2; }
 mkdir -p "$FAKE_INBOX_DIR"
 if [ -e "$FAKE_INBOX_DIR/$3" ]; then echo "replay $3"; exit 0; fi
@@ -193,7 +198,7 @@ PY
 new_home() {
   local home="$TMP_ROOT/$1"
   mkdir -p "$home/state" "$home/config" "$home/anarlog/jobs" "$home/model" "$home/inbox"
-  printf 'enabled = true\nsource = anarlog\nanarlog_import_folder = %s\n' "$home/shared" > "$home/config/meetings"
+  printf 'enabled = true\nsource = anarlog\n' > "$home/config/meetings"
   printf '[]\n' > "$home/anarlog/list.json"
   : > "$home/anarlog/calls.log"
   printf '%s\n' "$home"
@@ -219,7 +224,7 @@ run() {
 # baseline <home>: arm-time record well before the fixtures' meetings ended.
 baseline() {
   mkdir -p "$1/state/meetings"
-  printf '{"version":1,"baseline":%s,"meetings":{},"files":{},"notices":{}}\n' $((NOW - 86400)) \
+  printf '{"version":1,"baseline":%s,"meetings":{},"notices":{}}\n' $((NOW - 86400)) \
     > "$1/state/meetings/records.json"
 }
 
@@ -332,8 +337,8 @@ test_native_batch_meeting_is_announced_once() {
   out=$(run "$home" 0 check)
   assert_equals "" "$out" "a meeting that changed a minute ago is still settling"
   out=$(run "$home" 300 check)
-  assert_contains "$out" "meetings: 1 meeting(s) ready for intake (Shed plans)" "a settled meeting is announced"
-  assert_contains "$out" "run $ROOT/bin/fm-meetings.sh intake" "the wake line names the command to run"
+  assert_contains "$out" "meetings: 1 meeting(s) ready for intake - run $ROOT/bin/fm-meetings.sh intake" "a settled meeting is announced with the command to run"
+  assert_contains "$out" "; ready: Shed plans" "the wake line names the meeting"
   out=$(run "$home" 600 check)
   assert_equals "" "$out" "it is announced only once"
   assert_no_grep "import" "$home/anarlog/calls.log" "Anarlog's own batch transcript needs no speaker pass"
@@ -351,7 +356,7 @@ test_meeting_whose_first_read_fails_is_retried() {
   assert_equals waiting "$(phase_of "$home" m-late)" "it stays waiting for the next poll"
   rm -f "$home/anarlog/export-fails"
   out=$(run "$home" 300 check)
-  assert_contains "$out" "ready for intake (Late find)" "the next poll retries it and announces it"
+  assert_contains "$out" "ready: Late find" "the next poll retries it and announces it"
   pass "fm-meetings: a meeting whose first read fails is retried on the next poll"
 }
 
@@ -392,7 +397,8 @@ test_live_only_meeting_gets_a_speaker_pass() {
   assert_equals "" "$out" "an unfinished speaker pass keeps waiting"
   printf '{"processing_status":"done","error":null}\n' > "$home/anarlog/jobs/$job.json"
   out=$(run "$home" 120 check)
-  assert_contains "$out" "1 meeting(s) ready for intake (Road trip)" "the meeting is announced once its speaker pass is done"
+  assert_contains "$out" "1 meeting(s) ready for intake" "the meeting is announced once its speaker pass is done"
+  assert_contains "$out" "ready: Road trip" "under its own title"
   assert_not_contains "$out" "(speaker pass)" "the speaker-pass copy is never announced on its own"
   assert_equals 1 "$(grep -c . "$home/anarlog/imports.jsonl")" "the speaker pass is requested once"
 
@@ -501,6 +507,66 @@ test_action_said_alongside_a_spoken_order_is_kept() {
   pass "fm-meetings: a step said in the same turn as a spoken order is kept and waits"
 }
 
+test_action_whose_quote_holds_a_spoken_order_is_kept() {
+  local home out
+  home=$(new_home alongside-whole-turn)
+  baseline "$home"
+  meeting "$home" '{"id":"m-turn","title":"Shed chat","ended":-900,"source":"batch_transcription","transcript":"Captain: We should compare the shed kits. Firstmate, do it. And I will email the builder myself.\n\nRobin: Sounds good."}'
+  run "$home" 0 check >/dev/null
+  model_says "$home" '{"outcome":"They will compare shed kits.","actions":[{"title":"Email the builder","instruction":"Email the builder about the shed","evidence":"We should compare the shed kits. Firstmate, do it. And I will email the builder myself.","clear":true,"why_review":"","outward":false,"destructive":false,"other_person":false}],"spoken_orders":[{"candidates":[1],"instruction":"Compare the shed kits","evidence":"compare the shed kits. Firstmate, do it","outward":false,"destructive":false,"other_person":false}]}'
+  out=$(run "$home" 60 intake)
+  assert_contains "$out" "Shed chat: 1 clear follow-up(s) to start, 1 for the captain's decision" "the order starts and the step quoted around it waits"
+  assert_grep "Email the builder (waits because it was said alongside a spoken order" "$home/inbox/meeting-m-turn-review" "a step whose quote holds the order's quote is kept for the captain"
+  pass "fm-meetings: an action whose quote holds a spoken order's quote is kept, not dropped as that order"
+}
+
+test_ready_meeting_is_announced_again_until_taken_in() {
+  local home out
+  home=$(new_home reannounce)
+  baseline "$home"
+  meeting "$home" '{"id":"m-again","title":"Again","ended":-900,"source":"batch_transcription"}'
+  out=$(run "$home" 0 check)
+  assert_contains "$out" "ready: Again" "a ready meeting is announced"
+  out=$(run "$home" 300 check)
+  assert_equals "" "$out" "it is not announced again while that wake is fresh"
+  printf 'not json' > "$home/model/output.json"
+  run "$home" 360 intake >/dev/null 2>&1
+  out=$(run "$home" 420 check)
+  assert_contains "$out" "1 meeting(s) ready for intake" "a meeting whose intake failed is announced again at the next check"
+  assert_contains "$out" "ready: Again" "by name"
+  out=$(run "$home" 480 check)
+  assert_equals "" "$out" "and then only once"
+  out=$(run "$home" $((420 + 43200)) check)
+  assert_contains "$out" "ready: Again" "a meeting still waiting is announced again after twelve hours"
+  pass "fm-meetings: a ready meeting is announced again after a failed intake and while it still waits"
+}
+
+test_wake_line_keeps_the_command_and_problems_whatever_the_titles() {
+  local home out n
+  home=$(new_home long-titles)
+  printf 'enabled = true\nsource = anarlog\nsource = call-recorder\n' > "$home/config/meetings"
+  baseline "$home"
+  for n in 1 2 3 4 5 6; do
+    meeting "$home" "{\"id\":\"m-long-$n\",\"title\":\"Quarterly garden planning with the whole allotment committee, part $n\",\"ended\":-900,\"source\":\"batch_transcription\"}"
+  done
+  mkdir -p "$home/data/calls"
+  printf 'not a folder' > "$home/data/calls/archive"
+  out=$(run "$home" 0 check)
+  assert_contains "$out" "meetings: 6 meeting(s) ready for intake - run $ROOT/bin/fm-meetings.sh intake" "the command to run comes first"
+  assert_contains "$out" "call-recorder cannot be read: the call archive cannot be read" "a problem reported once is not cut off by long titles"
+
+  home=$(new_home long-titles-shown)
+  baseline "$home"
+  for n in 1 2 3 4 5 6; do
+    meeting "$home" "{\"id\":\"m-long-$n\",\"title\":\"Quarterly garden planning with the whole allotment committee, part $n\",\"ended\":-900,\"source\":\"batch_transcription\"}"
+  done
+  out=$(run "$home" 0 check)
+  assert_contains "$out" "ready: Quarterly garden planning with the wh..." "each title is cut short"
+  assert_not_contains "$out" "allotment committee" "a long title is never shown whole"
+  assert_contains "$out" "; and 3 more" "only the first few are named"
+  pass "fm-meetings: the wake line puts the command and problems before a bounded list of titles"
+}
+
 test_speaker_pass_falls_back_to_the_live_transcript() {
   local home out
   home=$(new_home fallback)
@@ -578,18 +644,31 @@ test_excluded_meeting_is_never_processed() {
   assert_contains "$out" "excluded meeting, not processed: Planning" "a word from the home's exclude-words file marks an excluded meeting"
   assert_contains "$out" "Walk with Robin: 0 clear follow-up(s)" "a friend named in the leak-word list does not exclude a meeting"
 
-  home=$(new_home exclude-shared)
+  home=$(new_home exclude-imported)
   baseline "$home"
   printf 'exclude_word = Acme\n' >> "$home/config/meetings"
-  meeting "$home" '{"id":"imp-work","title":"Shared recording 2026-01-02 09:00","ended":-60,"unfinished":true,"no_summary":true,"note":"","participants":[],"source":"batch_transcription","transcript":"Speaker 1: The Acme launch slips a week.\n\nSpeaker 2: Noted.","recording_import":{"job_id":"job-w","meeting_id":"imp-work","processing_status":"done","summary_status":"pending","error":null}}'
+  meeting "$home" '{"id":"imp-work","title":"Imported voice memo","ended":-60,"unfinished":true,"no_summary":true,"note":"","participants":[],"source":"batch_transcription","transcript":"Speaker 1: The Acme launch slips a week.\n\nSpeaker 2: Noted.","recording_import":{"job_id":"job-w","meeting_id":"imp-work","processing_status":"done","summary_status":"pending","error":null}}'
   out=$(run "$home" 0 check)
   assert_equals "" "$out" "an imported recording waits for Anarlog's summary"
   out=$(run "$home" 700 check)
-  assert_contains "$out" "ready for intake (Shared recording 2026-01-02 09:00)" "after ten minutes it goes ahead without one"
+  assert_contains "$out" "ready: Imported voice memo" "after ten minutes it goes ahead without one"
   out=$(run "$home" 760 intake)
-  assert_equals "excluded meeting, not processed: Shared recording 2026-01-02 09:00" "$out" "an exclude word in the transcript alone excludes a meeting"
+  assert_equals "excluded meeting, not processed: Imported voice memo" "$out" "an exclude word in the transcript alone excludes a meeting"
   assert_absent "$home/model/calls" "an excluded imported recording never reaches the model"
   assert_equals "" "$(ls "$home/inbox")" "an excluded imported recording files nothing"
+
+  home=$(new_home exclude-speaker-pass)
+  baseline "$home"
+  printf 'exclude_word = Acme\n' >> "$home/config/meetings"
+  mkdir -p "$home/anarlog/sessions/m-live-work"
+  printf 'RIFF-fake-audio' > "$home/anarlog/sessions/m-live-work/audio.wav"
+  meeting "$home" '{"id":"m-live-work","title":"Weekly sync","ended":-900,"participants":[{"human_id":"p1","display_name":"Sam","email":"","organization_name":"Acme"}],"attachments":[{"relative_path":"audio.wav","filename":"audio.wav","content_type":"audio/wav"}]}'
+  out=$(run "$home" 0 check)
+  assert_absent "$home/anarlog/imports.jsonl" "an excluded live-only meeting's recording is never handed back for a speaker pass"
+  assert_contains "$out" "ready: Weekly sync" "it goes to the intake as it stands"
+  out=$(run "$home" 60 intake)
+  assert_equals "excluded meeting, not processed: Weekly sync" "$out" "and the intake keeps it out"
+  assert_absent "$home/model/calls" "an excluded live-only meeting never reaches the model"
   pass "fm-meetings: an excluded meeting is never sent to a model or actioned"
 }
 
@@ -679,48 +758,32 @@ test_failed_intake_stays_ready() {
   pass "fm-meetings: a failed intake leaves the meeting ready"
 }
 
-test_shared_recordings_flow_into_the_same_intake() {
-  local home out key tag spec
-  home=$(new_home shared)
+test_imported_recordings_flow_into_the_same_intake() {
+  local home out spec
+  home=$(new_home imported)
   baseline "$home"
-  mkdir -p "$home/shared"
-  printf 'fake-m4a' > "$home/shared/call one.m4a"
-  printf 'notes' > "$home/shared/call one.txt"
-  touch -t 202601010101 "$home/shared/call one.m4a"
-  out=$(run "$home" 0 check)
-  assert_absent "$home/anarlog/imports.jsonl" "a file is not imported the first time it is seen"
-  out=$(run "$home" 300 check)
-  assert_grep '"request_key": "fm-meetings-shared-' "$home/anarlog/imports.jsonl" "a stable shared recording is imported into Anarlog"
-  assert_grep '"title": "Shared recording 2026-01-01 01:01"' "$home/anarlog/imports.jsonl" "the import is titled as a shared recording"
-  key=$(python3 -c 'import json,sys; print(json.loads(open(sys.argv[1]).readline())["request_key"])' "$home/anarlog/imports.jsonl")
-  tag=$(printf '%s' "$key" | python3 -c 'import hashlib,sys; print(hashlib.sha1(sys.stdin.read().encode()).hexdigest()[:8])')
-  spec="{\"id\":\"imp-$tag\",\"title\":\"Shared recording 2026-01-01 01:01\",\"ended\":-60,\"unfinished\":true,\"source\":\"batch_transcription\",\"language\":\"nl\",\"transcript\":\"Speaker 1: Firstmate, do it, plan the lunch menu.\\n\\nSpeaker 2: Sounds good.\",\"recording_import\":{\"job_id\":\"job-$tag\",\"meeting_id\":\"imp-$tag\",\"processing_status\":\"done\",\"summary_status\":\"@SUMMARY@\",\"error\":null}}"
+  spec='{"id":"imp-memo","title":"Voice memo","ended":-60,"unfinished":true,"source":"batch_transcription","language":"nl","transcript":"Speaker 1: Firstmate, do it, plan the lunch menu.\n\nSpeaker 2: Sounds good.","recording_import":{"job_id":"job-memo","meeting_id":"imp-memo","processing_status":"done","summary_status":"@SUMMARY@","error":null}}'
   meeting "$home" "${spec//@SUMMARY@/pending}"
-  out=$(run "$home" 330 check)
-  assert_equals "" "$out" "a transcribed shared recording waits for Anarlog's summary"
+  out=$(run "$home" 0 check)
+  assert_equals "" "$out" "a transcribed imported recording waits for Anarlog's summary"
   meeting "$home" "${spec//@SUMMARY@/done}"
-  out=$(run "$home" 360 check)
-  assert_contains "$out" "ready for intake (Shared recording 2026-01-01 01:01)" "the transcribed shared recording is announced"
-  out=$(run "$home" 600 check)
-  assert_equals 1 "$(grep -c . "$home/anarlog/imports.jsonl")" "a shared file is imported once"
-  assert_present "$home/shared/call one.m4a" "the shared file is left in place"
-  out=$(run "$home" 600 status)
-  assert_contains "$out" "call one.txt" "a non-audio file is listed"
-  assert_contains "$out" "skipped" "and skipped"
+  out=$(run "$home" 60 check)
+  assert_contains "$out" "ready: Voice memo" "the transcribed imported recording is announced"
+  assert_absent "$home/anarlog/imports.jsonl" "a recording Anarlog already transcribed is not imported again"
   model_says "$home" '{"outcome":"Lunch is on Friday.","actions":[],"spoken_orders":[{"candidates":[1],"instruction":"Plan the lunch menu","evidence":"plan the lunch menu","outward":false,"destructive":false,"other_person":false}]}'
   touch "$home/spoken.txt.off"
-  out=$(run "$home" 660 intake)
-  assert_contains "$out" "Shared recording 2026-01-01 01:01: 0 clear follow-up(s) to start, 1 for the captain's decision" "the shared recording runs through the same intake"
-  assert_grep "could not tell who said it" "$home/inbox/meeting-imp-$tag-review" "a spoken order under diarized labels waits because no one can tell who said it"
-  assert_no_grep "someone other than the captain" "$home/inbox/meeting-imp-$tag-review" "it is never blamed on someone else"
+  out=$(run "$home" 120 intake)
+  assert_contains "$out" "Voice memo: 0 clear follow-up(s) to start, 1 for the captain's decision" "the imported recording runs through the same intake"
+  assert_grep "could not tell who said it" "$home/inbox/meeting-imp-memo-review" "a spoken order under diarized labels waits because no one can tell who said it"
+  assert_no_grep "someone other than the captain" "$home/inbox/meeting-imp-memo-review" "it is never blamed on someone else"
   assert_contains "$out" "desk voice is off" "a home without desk voice is told so rather than told it spoke"
   assert_absent "$home/spoken.txt" "nothing is handed to a desk voice that is off"
-  assert_grep '"origin": "shared recording"' "$home/data/meetings/imp-$tag/intake.json" "its record says it came from a shared recording"
-  assert_grep '"language": "nl"' "$home/data/meetings/imp-$tag/intake.json" "its record keeps the language Anarlog heard"
-  pass "fm-meetings: shared recordings are imported once and flow into the same intake"
+  assert_grep '"origin": "imported recording"' "$home/data/meetings/imp-memo/intake.json" "its record says it came from an imported recording"
+  assert_grep '"language": "nl"' "$home/data/meetings/imp-memo/intake.json" "its record keeps the language Anarlog heard"
+  pass "fm-meetings: recordings imported into Anarlog flow into the same intake"
 }
 
-test_unreadable_source_config_or_folder_is_reported_once() {
+test_unreadable_source_or_config_is_reported_once() {
   local home out
   home=$(new_home broken)
   baseline "$home"
@@ -737,44 +800,18 @@ test_unreadable_source_config_or_folder_is_reported_once() {
 
   home=$(new_home broken-config)
   baseline "$home"
-  printf 'anarlog_import_foldr = off\n' >> "$home/config/meetings"
+  printf 'anarlog_speaker_pass_wait = 60\n' >> "$home/config/meetings"
   out=$(run "$home" 0 check)
-  assert_contains "$out" "meetings: the poll failed: fm-meetings: config/meetings line 4: unknown key anarlog_import_foldr" "a broken config is reported"
+  assert_contains "$out" "meetings: the poll failed: fm-meetings: config/meetings line 3: unknown key anarlog_speaker_pass_wait" "a broken config is reported"
   out=$(run "$home" 300 check)
   assert_equals "" "$out" "a broken config is reported only once"
-  printf 'enabled = true\nsource = anarlog\nanarlog_import_folder = %s\n' "$home/shared" > "$home/config/meetings"
+  printf 'enabled = true\nsource = anarlog\n' > "$home/config/meetings"
   run "$home" 600 check >/dev/null
-  printf 'anarlog_import_foldr = off\n' >> "$home/config/meetings"
+  printf 'anarlog_speaker_pass_wait = 60\n' >> "$home/config/meetings"
   out=$(run "$home" 900 check)
-  assert_contains "$out" "unknown key anarlog_import_foldr" "a broken config is reported again after it cleared and came back"
+  assert_contains "$out" "unknown key anarlog_speaker_pass_wait" "a broken config is reported again after it cleared and came back"
 
-  home=$(new_home broken-folder)
-  baseline "$home"
-  mkdir -p "$home/shared"
-  chmod 000 "$home/shared"
-  out=$(run "$home" 0 check)
-  assert_contains "$out" "the import folder cannot be read" "an unreadable import folder is reported"
-  out=$(run "$home" 300 check)
-  chmod 700 "$home/shared"
-  assert_equals "" "$out" "an unreadable import folder is reported only once"
-
-  home=$(new_home broken-folder-file)
-  baseline "$home"
-  mkdir -p "$home/shared"
-  printf 'locked' > "$home/shared/a call.m4a"
-  printf 'fine' > "$home/shared/b call.m4a"
-  touch -t 202601010101 "$home/shared/a call.m4a" "$home/shared/b call.m4a"
-  run "$home" 0 check >/dev/null
-  chmod 000 "$home/shared/a call.m4a"
-  out=$(run "$home" 300 check)
-  chmod 600 "$home/shared/a call.m4a"
-  assert_not_contains "$out" "the import folder cannot be read" "one unreadable file is not reported as an unreadable folder"
-  assert_grep "b call.m4a" "$home/anarlog/imports.jsonl" "the files after an unreadable one are still imported"
-  assert_contains "$(run "$home" 300 status)" "the file cannot be read" "the unreadable file is listed with its error"
-  out=$(run "$home" 600 check)
-  assert_grep "a call.m4a" "$home/anarlog/imports.jsonl" "the file is retried once it can be read"
-  assert_not_contains "$(run "$home" 600 status)" "the file cannot be read" "an imported file no longer shows its old error"
-  pass "fm-meetings: an unreadable source, config or import folder is reported once until it clears"
+  pass "fm-meetings: an unreadable source or config is reported once until it clears"
 }
 
 test_recall_answers_from_included_meetings_only() {
@@ -782,8 +819,9 @@ test_recall_answers_from_included_meetings_only() {
   home=$(new_home recall)
   baseline "$home"
   printf 'exclude_word = Acme\n' >> "$home/config/meetings"
-  meeting "$home" '{"id":"m-robin","title":"Garden planning","ended":-900,"source":"batch_transcription","participants":[{"human_id":"r","display_name":"Robin","email":""}]}'
+  meeting "$home" '{"id":"m-robin","title":"Garden planning","ended":-900,"source":"batch_transcription","participants":[{"human_id":"r","display_name":"Robin","email":"robin@gardenclub.test"}]}'
   meeting "$home" '{"id":"m-robin-work","title":"Robin at Acme","ended":-800,"source":"batch_transcription"}'
+  meeting "$home" '{"id":"m-robin-org","title":"Robin sync","ended":-100000,"source":"batch_transcription","summary":"Robin walked through the launch plan.","participants":[{"human_id":"r","display_name":"Robin","email":"","organization_name":"Acme","job_title":"Engineer"}]}'
   meeting "$home" '{"id":"m-robin-old","title":"Robin catch-up","ended":-100000,"source":"batch_transcription","summary":"Robin shared launch dates.","transcript":"Robin: The Acme launch slips a week.\n\nCaptain: Noted."}'
   run "$home" 0 check >/dev/null
   model_says "$home" '{"outcome":"They agreed to compare shed kits.","actions":[{"title":"Compare shed kits","instruction":"Compare shed kits","evidence":"compare three shed kits","clear":true,"why_review":"","outward":false,"destructive":false,"other_person":false}],"spoken_orders":[]}'
@@ -794,6 +832,11 @@ test_recall_answers_from_included_meetings_only() {
   assert_contains "$out" "Follow-up started: Compare shed kits" "recall lists the follow-ups"
   assert_not_contains "$out" "Acme" "recall never answers from an excluded meeting"
   assert_not_contains "$out" "Robin catch-up" "recall never answers from a meeting that only its transcript excludes"
+  assert_not_contains "$out" "Robin sync" "recall never answers from a meeting whose participant's organisation alone excludes it"
+  assert_not_contains "$out" "launch plan" "nothing of that meeting reaches the asker"
+  printf 'exclude_word = gardenclub\n' >> "$home/config/meetings"
+  out=$(run "$home" 180 recall what did we agree with Robin)
+  assert_equals "no meeting matches what did we agree with Robin" "$out" "a word added later keeps a meeting already taken in out of recall"
   pass "fm-meetings: recall answers from included meetings only"
 }
 
@@ -812,7 +855,8 @@ test_archived_calls_feed_the_intake() {
     "[10:00:20] others: Sounds good. Firstmate, do it, order the cheapest one." \
     "[10:00:30] unknown speaker: Maybe."
   out=$(run "$home" 0 check)
-  assert_contains "$out" "meetings: 1 meeting(s) ready for intake (Call " "an archived call with its notes is announced"
+  assert_contains "$out" "meetings: 1 meeting(s) ready for intake" "an archived call with its notes is announced"
+  assert_contains "$out" "ready: Call " "as a call"
   assert_equals baseline "$(phase_of "$home" "call-$old")" "a call archived before arming is left alone"
   assert_equals ready "$(phase_of "$home" "call-$stamp")" "the call is ready for intake"
   out=$(run "$home" 300 check)
@@ -852,7 +896,7 @@ test_call_without_notes_waits_ten_minutes_and_exclusion_applies() {
   out=$(run "$home" 300 check)
   assert_equals "" "$out" "it keeps waiting while the notes may still come"
   out=$(run "$home" 700 check)
-  assert_contains "$out" "ready for intake (Call " "after ten minutes it goes ahead without notes"
+  assert_contains "$out" "ready: Call " "after ten minutes it goes ahead without notes"
   model_says "$home" '{"outcome":"Nothing was settled.","actions":[],"spoken_orders":[]}'
   out=$(run "$home" 760 intake)
   assert_contains "$out" "0 clear follow-up(s) to start, 0 for the captain's decision" "the call is taken in from its transcript alone"
@@ -879,12 +923,65 @@ test_both_sources_run_together() {
   stamp=$(stamp_at -900)
   archived_call "$home" "$stamp" "[10:00:05] me: Hello."
   out=$(run "$home" 0 check)
-  assert_contains "$out" "1 meeting(s) ready for intake (Call " "a broken source does not stop the other"
+  assert_contains "$out" "1 meeting(s) ready for intake" "a broken source does not stop the other"
+  assert_contains "$out" "ready: Call " "and the call is named"
   assert_contains "$out" "anarlog cannot be read" "and the broken source is named"
   out=$(run "$home" 0 status)
   assert_contains "$out" "intake: on; sources: anarlog, call-recorder" "status names every configured source"
   assert_contains "$out" "call-recorder" "and the call's source"
   pass "fm-meetings: configured sources run together, each reported on its own"
+}
+
+# real_inbox <home> <now-offset> <args...>: run the subject against the real inbox.
+real_inbox() {
+  local home=$1 offset=$2
+  shift 2
+  env FM_MEETINGS_INBOX="$ROOT/bin/fm-inbox.sh" FM_HOME="$home" FM_MEETINGS_NOW=$((NOW + offset)) \
+    FM_MEETINGS_ANARLOG="$FAKES/anarlog" FAKE_ANARLOG_DIR="$home/anarlog" \
+    FM_MEETINGS_CLAUDE="$FAKES/claude" FAKE_MODEL_DIR="$home/model" FAKE_MODEL_OUTPUT="$home/model/output.json" \
+    FM_MEETINGS_SPEAK="$FAKES/speak" FAKE_SPOKEN="$home/spoken.txt" "$SUBJECT" "$@"
+}
+
+# call_notes <home> <stamp>: the inbox notes the intake filed for that call.
+call_notes() {
+  grep -rl "^request_id=meeting-call-$2-" "$1/state/inbox" 2>/dev/null
+}
+
+test_deleting_a_call_removes_what_the_intake_kept() {
+  local home out stamp other start
+  home=$(new_home consent)
+  printf 'enabled = true\n' > "$home/config/meetings"
+  baseline "$home"
+  touch "$home/state/.afk"
+  stamp=$(stamp_at -900)
+  other=$(stamp_at -800)
+  archived_call "$home" "$stamp" "[10:00:05] me: Let us compare three shed kits."
+  archived_call "$home" "$other" "[10:00:05] me: Let us compare three shed kits again."
+  run "$home" 0 check >/dev/null
+  model_says "$home" '{"outcome":"They will compare shed kits.","actions":[{"title":"Compare shed kits","instruction":"Compare three shed kits","evidence":"compare three shed kits","clear":true,"why_review":"","outward":false,"destructive":false,"other_person":false},{"title":"Email the builder","instruction":"Email the builder","evidence":"compare three shed kits","clear":true,"why_review":"","outward":false,"destructive":false,"other_person":false}],"spoken_orders":[]}'
+  out=$(real_inbox "$home" 60 intake)
+  assert_contains "$out" "1 clear follow-up(s) to start, 1 for the captain's decision" "both calls are taken in"
+  assert_equals 2 "$(call_notes "$home" "$stamp" | grep -c .)" "the call has a start and a review note"
+  start=$(basename "$(grep -rl "^request_id=meeting-call-$stamp-start" "$home/state/inbox")" .note)
+  FM_HOME="$home" "$ROOT/bin/fm-inbox.sh" drain --ack "$start" >/dev/null
+  out=$(FM_HOME="$home" CALL_COMPANION_OPEN_BIN=true "$ROOT/bin/fm-call-companion.sh" delete "$stamp" 2>&1) \
+    || fail "deleting the call failed: $out"
+  assert_contains "$out" "deleted archived call $stamp" "the call is deleted"
+  assert_contains "$out" "removed the meeting intake's record and inbox notes of call-$stamp" "and the delete says the intake's copies went too"
+  assert_absent "$home/data/meetings/call-$stamp" "the intake record of the deleted call is gone"
+  assert_equals "" "$(call_notes "$home" "$stamp")" "its inbox notes are gone, acknowledged or not"
+  assert_equals "" "$(phase_of "$home" "call-$stamp")" "the check no longer tracks it"
+  assert_present "$home/data/meetings/call-$other/intake.json" "another call's intake record stays"
+  assert_equals 2 "$(call_notes "$home" "$other" | grep -c .)" "and so do its notes"
+  run "$home" 120 check >/dev/null
+  assert_equals "" "$(phase_of "$home" "call-$stamp")" "the next check does not bring it back"
+  out=$(FM_HOME="$home" CALL_COMPANION_OPEN_BIN=true "$ROOT/bin/fm-call-companion.sh" delete --all 2>&1) \
+    || fail "deleting every call failed: $out"
+  assert_absent "$home/data/meetings/call-$other" "deleting every call removes every call's intake record"
+  assert_equals "" "$(call_notes "$home" "$other")" "and every call's notes"
+  out=$(run "$home" 180 recall shed kits)
+  assert_equals "no meeting matches shed kits" "$out" "recall no longer answers from a deleted call"
+  pass "fm-meetings: deleting a call removes the intake's record and notes of it"
 }
 
 test_notes_land_in_the_real_inbox() {
@@ -897,10 +994,7 @@ test_notes_land_in_the_real_inbox() {
   meeting "$home" '{"id":"m-real","title":"Garden planning","ended":-900,"source":"batch_transcription"}'
   run "$home" 0 check >/dev/null
   model_says "$home" '{"outcome":"They will compare shed kits.","actions":[{"title":"Compare shed kits","instruction":"Compare three shed kits","evidence":"compare three shed kits","clear":true,"why_review":"","outward":false,"destructive":false,"other_person":false}],"spoken_orders":[]}'
-  out=$(env FM_MEETINGS_INBOX="$ROOT/bin/fm-inbox.sh" FM_HOME="$home" FM_MEETINGS_NOW=$((NOW + 60)) \
-    FM_MEETINGS_ANARLOG="$FAKES/anarlog" FAKE_ANARLOG_DIR="$home/anarlog" \
-    FM_MEETINGS_CLAUDE="$FAKES/claude" FAKE_MODEL_DIR="$home/model" FAKE_MODEL_OUTPUT="$home/model/output.json" \
-    FM_MEETINGS_SPEAK="$FAKES/speak" FAKE_SPOKEN="$home/spoken.txt" "$SUBJECT" intake)
+  out=$(real_inbox "$home" 60 intake)
   assert_contains "$out" "Garden planning: 1 clear follow-up(s) to start" "the intake ran against the real inbox"
   assert_grep "request_id=meeting-m-real-start" "$(ls "$home"/state/inbox/*.note)" "the start note is a durable inbox note keyed by meeting"
   assert_grep "Meeting follow-ups ready to start" "$(ls "$home"/state/inbox/*.note)" "the note opens with the line the skill is loaded on"
@@ -946,17 +1040,21 @@ fm_test_run \
   test_spoken_order_evidence_from_the_live_copy_credits_the_captain \
   test_spoken_order_also_listed_as_an_action_is_filed_once \
   test_action_said_alongside_a_spoken_order_is_kept \
+  test_action_whose_quote_holds_a_spoken_order_is_kept \
+  test_ready_meeting_is_announced_again_until_taken_in \
+  test_wake_line_keeps_the_command_and_problems_whatever_the_titles \
   test_speaker_pass_falls_back_to_the_live_transcript \
   test_excluded_meeting_is_never_processed \
   test_intake_sorts_clear_actions_from_review_items \
   test_outward_instructions_wait_whatever_the_model_says \
   test_failed_intake_stays_ready \
-  test_shared_recordings_flow_into_the_same_intake \
-  test_unreadable_source_config_or_folder_is_reported_once \
+  test_imported_recordings_flow_into_the_same_intake \
+  test_unreadable_source_or_config_is_reported_once \
   test_recall_answers_from_included_meetings_only \
   test_archived_calls_feed_the_intake \
   test_call_without_notes_waits_ten_minutes_and_exclusion_applies \
   test_both_sources_run_together \
+  test_deleting_a_call_removes_what_the_intake_kept \
   test_notes_land_in_the_real_inbox \
   test_example_config_is_accepted_and_typos_refused \
   test_layer_only_reads_anarlog_and_imports
