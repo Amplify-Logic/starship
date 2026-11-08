@@ -571,7 +571,7 @@ test_wake_line_keeps_the_command_and_problems_whatever_the_titles() {
   printf 'enabled = true\nsource = anarlog\nsource = call-recorder\n' > "$home/config/meetings"
   baseline "$home"
   for n in 1 2 3 4 5 6; do
-    meeting "$home" "{\"id\":\"m-long-$n\",\"title\":\"Quarterly garden planning with the whole allotment committee, part $n\",\"ended\":-900,\"source\":\"batch_transcription\"}"
+    meeting "$home" "{\"id\":\"m-long-$n\",\"title\":\"Team sync garden planning with the whole allotment committee, part $n\",\"ended\":-900,\"source\":\"batch_transcription\"}"
   done
   mkdir -p "$home/data/calls"
   printf 'not a folder' > "$home/data/calls/archive"
@@ -582,10 +582,10 @@ test_wake_line_keeps_the_command_and_problems_whatever_the_titles() {
   home=$(new_home long-titles-shown)
   baseline "$home"
   for n in 1 2 3 4 5 6; do
-    meeting "$home" "{\"id\":\"m-long-$n\",\"title\":\"Quarterly garden planning with the whole allotment committee, part $n\",\"ended\":-900,\"source\":\"batch_transcription\"}"
+    meeting "$home" "{\"id\":\"m-long-$n\",\"title\":\"Team sync garden planning with the whole allotment committee, part $n\",\"ended\":-900,\"source\":\"batch_transcription\"}"
   done
   out=$(run "$home" 0 check)
-  assert_contains "$out" "ready: Quarterly garden planning with the wh..." "each title is cut short"
+  assert_contains "$out" "ready: Team sync garden planning with the wh..." "each title is cut short"
   assert_not_contains "$out" "allotment committee" "a long title is never shown whole"
   assert_contains "$out" "; and 3 more" "only the first few are named"
   pass "fm-meetings: the wake line puts the command and problems before a bounded list of titles"
@@ -859,12 +859,12 @@ test_recall_stops_asking_a_source_that_fails() {
   home=$(new_home recall-one-gone)
   baseline "$home"
   meeting "$home" '{"id":"m-a-gone","title":"Gone chat","ended":-901,"source":"batch_transcription"}'
-  meeting "$home" '{"id":"m-b-secret","title":"Secret chat","ended":-902,"source":"batch_transcription","transcript":"Captain: Let us compare three shed kits for Zephyr.\n\nRobin: Sounds good."}'
+  meeting "$home" '{"id":"m-b-secret","title":"Secret chat","ended":-902,"source":"batch_transcription","transcript":"Captain: Let us compare three shed kits for Sam.\n\nRobin: Sounds good."}'
   run "$home" 0 check >/dev/null
   model_says "$home" '{"outcome":"They agreed to compare shed kits.","actions":[],"spoken_orders":[]}'
   run "$home" 60 intake >/dev/null
   rm -f "$home/anarlog/meetings/m-a-gone.json"
-  printf 'exclude_word = Zephyr\n' >> "$home/config/meetings"
+  printf 'exclude_word = Sam\n' >> "$home/config/meetings"
   out=$(run "$home" 120 recall shed kits)
   assert_contains "$out" "Gone chat" "a meeting the recorder no longer holds is answered from its saved record"
   assert_not_contains "$out" "Secret chat" "and does not stop the whole-meeting check of the next one"
