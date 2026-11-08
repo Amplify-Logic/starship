@@ -215,7 +215,17 @@ test_refusals_change_nothing() {
   [ "$status" -eq 1 ] || fail "a foreign ~/starship should be refused, got $status: $out"
   assert_contains "$out" "exists but is not a Firstmate clone" "the foreign-directory refusal says so"
   [ ! -s "$w/calls.log" ] || fail "the foreign-directory refusal changed something: $(calls "$w")"
-  pass "a non-Linux host, root, a home under /mnt/<drive>/, and a foreign ~/starship are refused before any change"
+  w=$(make_world wsl1)
+  printf '%s\n' "Linux version 4.4.0-22621-Microsoft (Microsoft@Microsoft.com) (gcc version 5.4.0 (GCC) ) #2506-Microsoft Fri Jan 01 08:00:00 PST 2016" \
+    > "$w/proc-version"
+  out=$(FM_PROC_VERSION_OVERRIDE="$w/proc-version" FAKE_WSL_DISTRO=Ubuntu-24.04 run_setup "$w" --ci)
+  status=$?
+  [ "$status" -eq 1 ] || fail "WSL 1 should be refused, got $status: $out"
+  assert_contains "$out" "this is WSL 1; Starship needs WSL 2 for Herdr, mirrored networking and systemd" \
+    "the WSL 1 refusal names what needs WSL 2"
+  assert_contains "$out" "wsl --set-version Ubuntu-24.04 2" "the WSL 1 refusal names the conversion command"
+  [ ! -s "$w/calls.log" ] || fail "the WSL 1 refusal changed something: $(calls "$w")"
+  pass "a non-Linux host, root, a home under /mnt/<drive>/, a foreign ~/starship, and WSL 1 are refused before any change"
 }
 
 test_fresh_install_then_rerun_is_idempotent() {

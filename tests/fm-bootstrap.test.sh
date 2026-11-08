@@ -794,11 +794,18 @@ SH
   out=$(env PATH="$fakebin:$base" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
     FM_FAKE_TREEHOUSE_LEASE_HELP=1 FAKE_UNAME_M=x86_64 "$ROOT/bin/fm-bootstrap.sh")
   [ -z "$out" ] || fail "x86 Linux without Chrome is a MISSING matter, not a host limit, got: $out"
+  out=$(env PATH="$fakebin:$base" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 WSL_DISTRO_NAME=Ubuntu-24.04 "$ROOT/bin/fm-bootstrap.sh")
+  [ "$out" = "${expected%(*}(ONBOARDING-windows.md)" ] \
+    || fail "WSL on a Windows on Arm PC without Chrome should say browser checks are unavailable and point at the Windows guide, got: $out"
   fm_fake_version_tool "$fakebin" google-chrome FM_FAKE_CHROME_VERSION "Google Chrome 141.0.0.0"
   out=$(env PATH="$fakebin:$base" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
     FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
   [ -z "$out" ] || fail "Arm Linux with a Chrome on PATH needs no browser warning, got: $out"
-  pass "bootstrap HOST_ENV says browser checks are unavailable on Arm Linux without Chrome, and only there"
+  out=$(env PATH="$fakebin:$base" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 WSL_DISTRO_NAME=Ubuntu-24.04 "$ROOT/bin/fm-bootstrap.sh")
+  [ -z "$out" ] || fail "WSL on Arm with a Chrome on PATH needs no browser warning, got: $out"
+  pass "bootstrap HOST_ENV says browser checks are unavailable on Arm Linux, server or WSL, without Chrome, and only there"
 }
 
 # `install` runs every approved installer and exits non-zero naming the ones

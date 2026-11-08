@@ -119,9 +119,10 @@
 #          while networking is not mirrored (read through wslinfo, cmd.exe,
 #          and wslpath; silent when they are unavailable or cmd.exe or wslpath
 #          does not answer within 5 seconds).
-#          On Arm Linux (aarch64 or arm64) with no Chrome or Chromium on PATH
-#          it says browser checks are unavailable there, since Google ships
-#          no Chrome for Arm Linux; silent when a browser is installed.
+#          On Arm Linux (aarch64 or arm64), a server or WSL on a Windows on
+#          Arm PC alike, with no Chrome or Chromium on PATH it says browser
+#          checks are unavailable there, since Google ships no Chrome for Arm
+#          Linux; silent when a browser is installed.
 #          On a headless server (no DISPLAY or WAYLAND_DISPLAY, reached over
 #          SSH) without Tailscale up, it prints one BOOTSTRAP_INFO fact that
 #          review boards and dev servers are reached from the person's own
@@ -1822,10 +1823,25 @@ host_env_wslconfig() {  # prints the Windows user's .wslconfig path when readabl
   printf '%s\n' "$path"
 }
 
+# host_env_arm_without_chrome <guide>: Google publishes no Chrome for Arm Linux,
+# so bin/fm-linux-setup.sh skips it there with a warning, on a server and inside
+# WSL on a Windows on Arm PC alike; this line keeps that fact in front of the
+# first mate, whose browser tool otherwise fails with an error that never says so.
+host_env_arm_without_chrome() {
+  case "$(uname -s 2>/dev/null) $(uname -m 2>/dev/null)" in
+    'Linux aarch64'|'Linux arm64')
+      command -v google-chrome >/dev/null 2>&1 || command -v google-chrome-stable >/dev/null 2>&1 \
+        || command -v chromium >/dev/null 2>&1 || command -v chromium-browser >/dev/null 2>&1 \
+        || echo "HOST_ENV: Linux on $(uname -m): no Chrome is installed and Google publishes none for Arm Linux, so browser checks (chrome-devtools-axi) are unavailable on this machine; everything else works, and an x86 machine has them ($1)"
+      ;;
+  esac
+}
+
 detect_host_environment() {
   local path seen='' wslconfig mode forwarding advised="$STATE/.host-env-headless-advised"
   # WSL exports WSL_DISTRO_NAME into every process it starts; nothing else does.
   if [ -n "${WSL_DISTRO_NAME:-}" ]; then
+    host_env_arm_without_chrome ONBOARDING-windows.md
     for path in "$FM_ROOT" "$FM_HOME" "$PROJECTS" "$PROJECTS"/*; do
       [ "$path" = "$PROJECTS/*" ] && continue
       path=$(host_env_resolve "$path")
@@ -1850,16 +1866,7 @@ detect_host_environment() {
     return 0
   fi
   [ "$(uname -s 2>/dev/null)" = Linux ] || return 0
-  # Google publishes no Chrome for Arm Linux, so bin/fm-linux-setup.sh skips
-  # it there with a warning; this line keeps that fact in front of the first
-  # mate, whose browser tool otherwise fails with an error that never says so.
-  case "$(uname -m 2>/dev/null)" in
-    aarch64|arm64)
-      command -v google-chrome >/dev/null 2>&1 || command -v google-chrome-stable >/dev/null 2>&1 \
-        || command -v chromium >/dev/null 2>&1 || command -v chromium-browser >/dev/null 2>&1 \
-        || echo "HOST_ENV: Linux on $(uname -m): no Chrome is installed and Google publishes none for Arm Linux, so browser checks (chrome-devtools-axi) are unavailable on this machine; everything else works, and an x86 machine has them (ONBOARDING-linux-server.md step 1)"
-      ;;
-  esac
+  host_env_arm_without_chrome "ONBOARDING-linux-server.md step 1"
   [ -z "${DISPLAY:-}" ] && [ -z "${WAYLAND_DISPLAY:-}" ] || return 0
   [ -n "${SSH_CONNECTION:-}" ] || [ -n "${SSH_TTY:-}" ] || return 0
   [ -e "$advised" ] && return 0

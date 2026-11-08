@@ -1681,8 +1681,8 @@ test_preflight_is_read_only_and_checks_accounts() {
   out=$(FM_PRIMARY_TEST_CODEX_LOGIN_STATUS='Not logged in' live codex --preflight 2>&1) || status=$?
   [ "$status" -ne 0 ] || fail "preflight skipped account availability"
   assert_contains "$out" 'not logged in' "preflight account failure was unclear"
-  # A Claude CLI nobody signed in to is refused the same way, naming the fix,
-  # and the refusal never reaches the launch.
+  # A Claude CLI nobody signed in to is refused the same way under --preflight,
+  # naming the fix, while a live launch still opens it at its login screen.
   for profile in claude-opus claude-fable; do
     status=0
     : > "$LOG"
@@ -1690,12 +1690,14 @@ test_preflight_is_read_only_and_checks_accounts() {
     [ "$status" -ne 0 ] || fail "$profile preflight accepted a logged-out Claude Code"
     assert_contains "$out" "Claude Code is not logged in ('claude auth status')" "$profile logged-out refusal was unclear: $out"
     assert_contains "$out" "run 'claude', sign in, then launch again" "$profile logged-out refusal did not name the fix: $out"
+    [ ! -s "$LOG" ] || fail "$profile logged-out preflight launched the CLI: $(cat "$LOG")"
     status=0
     out=$(FM_PRIMARY_TEST_LOGGED_OUT=1 live "$profile" 2>&1) || status=$?
-    [ "$status" -ne 0 ] || fail "$profile launched a logged-out Claude Code to its login screen"
-    [ ! -s "$LOG" ] || fail "$profile logged-out refusal still launched the CLI: $(cat "$LOG")"
+    [ "$status" -eq 0 ] || fail "$profile live launch of a logged-out Claude Code was refused: $out"
+    assert_not_contains "$out" "Claude Code is not logged in" "$profile live launch hit the preflight sign-in check: $out"
+    assert_contains "$(cat "$LOG")" "cli=claude" "$profile live launch did not open Claude Code at its login screen"
   done
-  pass "fm-primary: preflight checks all profile gates without launch, state, or terminal changes, and refuses a logged-out Claude Code"
+  pass "fm-primary: preflight checks all profile gates without launch, state, or terminal changes, and refuses a logged-out Claude Code only under --preflight"
 }
 
 test_preflight_is_read_only_and_checks_accounts

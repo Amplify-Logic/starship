@@ -45,7 +45,9 @@
 # (WSL's cross-filesystem bridge breaks git, file watching, and permissions);
 # the kernel is WSL 1 (Herdr, mirrored networking and systemd need WSL 2, even
 # though Claude Code alone now runs on WSL 1); apt-get is absent; or
-# ~/starship exists but is not a Firstmate clone.
+# ~/starship exists but is not a Firstmate clone. The WSL version is read from
+# /proc/version; FM_PROC_VERSION_OVERRIDE names another file to read instead,
+# a seam for tests/fm-linux-setup.test.sh.
 #
 # With --addon, it also names this home's private add-on in
 # ~/starship/config/addon (bin/fm-addon.sh): the add-on's GitHub repository as
@@ -183,8 +185,9 @@ main() {
       && die "$path is on the Windows drive; run this from your Linux home (cd ~), never under /mnt/ - git, file watching and file permissions break there"
   done
 
-  if [ -r /proc/version ]; then
-    case "$(cat /proc/version)" in
+  proc_version=${FM_PROC_VERSION_OVERRIDE:-/proc/version}
+  if [ -r "$proc_version" ]; then
+    case "$(cat "$proc_version")" in
       *microsoft-standard*|*WSL2*) ;;
       *Microsoft*) die "this is WSL 1; Starship needs WSL 2 for Herdr, mirrored networking and systemd (Claude Code alone would run on WSL 1): in Windows PowerShell run 'wsl --set-version Ubuntu-24.04 2', then run this again" ;;
     esac
