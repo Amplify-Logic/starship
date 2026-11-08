@@ -240,7 +240,7 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-call-final-notes.py` | Write paraphrased end-of-call notes that account for every item the live desk showed |
 | `fm-call-speaker-split.py` | Label transcribed speech by the recorded track that carried it |
 | `fm-call-lib.sh` | Shared call-recorder paths and `config/call-companion` settings |
-| `fm-meetings.sh` | Opt-in meeting intake: arm its standing check, take finished meetings and calls in as a summary, follow-ups to start and items held for the captain, recall what was agreed, and forget a deleted call (docs/meetings.md) |
+| `fm-meetings.sh` | Opt-in meeting intake: arm its standing check, take finished meetings and calls in as a summary, follow-ups to start and items held for the captain, and recall what was agreed (docs/meetings.md) |
 | `fm-meetings.py` | The meeting intake behind `fm-meetings.sh`: the poll, the model pass, the sorting rules and the records |
 | `fm_meeting_sources.py` | The meeting sources the intake reads, Anarlog and the call recorder, and the seam a new source plugs into |
 | `fm-desk-floater-windows.sh` | From inside WSL 2, build, install, update, start, stop and remove the Windows floater with Windows' own C# compiler, and serve its `bridge` calls through the shared desk-voice, speech-to-text and speak scripts (docs/desk-floater-windows.md) |

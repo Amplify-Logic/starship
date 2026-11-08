@@ -11,7 +11,6 @@
 #   fm-meetings.sh intake [<id>...]    take in every meeting the check announced, or the named ones
 #   fm-meetings.sh recall <words>...   what was said or agreed: a person, topic or title
 #   fm-meetings.sh status              every tracked meeting, and any standing problem
-#   fm-meetings.sh forget <id>...      remove what the intake keeps of a meeting
 #   fm-meetings.sh --help
 #
 # OPT-IN. Nothing runs until the home's private, gitignored config/meetings
@@ -37,9 +36,11 @@
 # line starts `meetings:`, says how many meetings are ready for intake and the
 # command to run, then any problem worth a wake, once until it clears, and last
 # the titles of up to three of those meetings, each cut to 40 characters. A
-# ready meeting is announced once, again after each failed intake, and again
-# every twelve hours while it still waits. `arm` also records the arming time: a meeting that ended before it is
-# left alone (intake can still take one in by id). The poll must finish inside
+# meeting waiting for intake is announced once, again after each failed
+# intake or an intake that stopped without finishing (once its claim is 30
+# minutes old), and again every twelve hours while it still waits. `arm` also
+# records the arming time: a meeting that ended before it is left alone
+# (intake can still take one in by id). The poll must finish inside
 # the watcher's per-check bound (FM_CHECK_TIMEOUT, default 30); unfinished work
 # carries over to the next poll.
 #
@@ -87,21 +88,29 @@
 #     home turned desk voice on), and the record is kept in
 #     data/meetings/<id>/intake.json, which `recall` searches.
 # A failed intake leaves the meeting ready, for the next check to announce
-# again, and after three failures marks it failed. The request ids make a repeated intake reuse
-# its notes rather than file them twice.
+# again, and after three failures marks it failed. The request ids make a
+# repeated intake reuse its notes rather than file them twice. An intake whose
+# meeting was deleted, or claimed again by another intake, while the model read
+# it writes and files nothing.
 #
 # RECALL. `recall` answers "what did we agree with <person>" from the intake
 # records and each source's own search, leaving out any meeting the exclude
 # words mark now (a saved intake record is checked again against the current
-# words, and a search hit against the same fields intake checks), and prints date, title, people, outcome, follow-ups and the recorder's own action
-# items and summary for the asker to answer from.
+# words, and against the whole meeting while its source can still load it; a
+# search hit is checked against the same fields intake checks), and prints
+# date, title, people, outcome, follow-ups and the recorder's own action items
+# and summary for the asker to answer from.
 #
-# FORGET. `forget <id>...` removes what the intake keeps of each meeting: its
-# record in state/meetings/records.json, data/meetings/<id>/, and the inbox
-# notes it filed (request ids meeting-<id>-start and meeting-<id>-review,
-# through `fm-inbox.sh forget`). It works with the intake off, and
-# `fm-call-companion.sh delete` runs it for each call it deletes, so withdrawn
-# consent removes everything derived from the call.
+# DELETED CALLS. `fm-call-companion.sh delete` runs `fm-meetings.sh forget
+# call-<stamp>...` after it deletes a call, with the intake on or off; it is
+# not meant to be run on a meeting its source still holds. It removes that
+# call's intake record, data/meetings/call-<stamp>/, and the inbox notes the
+# intake created for it (request ids meeting-call-<stamp>-start and
+# meeting-call-<stamp>-review, through `fm-inbox.sh forget`), and keeps the
+# call's check record only as a deleted mark, so it is never taken in again.
+# Items firstmate already filed from those notes, such as backlog items or held
+# decisions that quote the call, stay until the owner asks firstmate to remove
+# them.
 #
 # CONFIG. Private, gitignored config/meetings: `key = value` lines, `#`
 # comments; an unknown key is refused. docs/examples/meetings lists every key
@@ -148,7 +157,7 @@ MAX_LINE=400
 . "$SCRIPT_DIR/fm-check-lib.sh"
 
 usage() {
-  sed -n '6,15p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  sed -n '6,14p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
   printf '\nThe header of %s owns the full contract; docs/meetings.md is the operator guide.\n' "${BASH_SOURCE[0]}"
 }
 

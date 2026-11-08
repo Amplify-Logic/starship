@@ -27,9 +27,10 @@ REANNOUNCE_SECONDS = 43200    # a meeting still waiting for intake is announced 
 TITLES_SHOWN = 3              # ready meetings named in a wake line, each cut to TITLE_CHARS
 TITLE_CHARS = 40
 MAX_INTAKE_FAILURES = 3
+DROPPED = "it was deleted, or claimed by another intake, while it was read, so nothing was filed"
 SUMMARY_KEEP_CHARS = 4000
 SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fm-meetings.sh")
-MEETING_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,100}$")
+CALL_ID = re.compile(r"^call-\d{8}-\d{6}$")
 
 CONFIG_DEFAULTS = {
     "enabled": "false",
@@ -215,7 +216,7 @@ def cmd_poll(home, args):
                 line = notice(records, name, f"{name} cannot be read: {error}")
                 if line:
                     lines.append(line)
-        ready = [rec for rec in records["meetings"].values() if rec.get("phase") == "ready"
+        ready = [rec for rec in records["meetings"].values() if waiting_for_intake(rec)
                  and now() - rec.get("announced_at", 0) >= REANNOUNCE_SECONDS]
         for record in ready:
             record["announced_at"] = now()
@@ -475,6 +476,12 @@ def speak(home, line):
     return "outcome spoken" if result.returncode == 0 else "outcome not spoken"
 
 
+def waiting_for_intake(record):
+    """Ready, or claimed by an intake that stopped without finishing."""
+    return record.get("phase") == "ready" or \
+        (record.get("phase") == "taking" and now() - record.get("taking_at", 0) >= TAKING_STALE_SECONDS)
+
+
 def take(home, meeting_id):
     """Claim one meeting for intake, so two intakes never process it twice."""
     with locked(home):
@@ -487,20 +494,31 @@ def take(home, meeting_id):
         phase = record.get("phase")
         if phase == "taking" and now() - record.get("taking_at", 0) < TAKING_STALE_SECONDS:
             return None, "another intake is already reading it"
-        if phase in ("taken", "excluded", "child"):
+        if phase in ("taken", "excluded", "child", "deleted"):
             return None, f"it was already handled ({phase})"
         record["phase"], record["taking_at"], record["phase_before"] = "taking", now(), phase
+        record["announced_at"] = 0
         save_records(home, records)
         return dict(record), ""
 
 
-def finish(home, meeting_id, **changes):
+def still_claimed(records, claim):
+    """The record, when it is still the one this intake claimed; None once deleted or claimed again."""
+    record = records["meetings"].get(claim["id"])
+    if record and record.get("phase") == "taking" and record.get("taking_at") == claim.get("taking_at"):
+        return record
+    return None
+
+
+def finish(home, claim, **changes):
     with locked(home):
         records = load_records(home)
-        record = records["meetings"].setdefault(meeting_id, {"id": meeting_id})
+        record = still_claimed(records, claim)
+        if record is None:
+            return False
         record.update(changes)
         save_records(home, records)
-        return record
+        return True
 
 
 def intake_one(home, meeting_id):
@@ -514,7 +532,7 @@ def intake_one(home, meeting_id):
         phase = "failed" if failures >= MAX_INTAKE_FAILURES else (record.get("phase_before") or "ready")
         if phase in (None, "idle", "waiting", "baseline", "taking"):
             phase = "ready"
-        finish(home, meeting_id, phase=phase, intake_failures=failures, error=str(error), announced_at=0)
+        finish(home, record, phase=phase, intake_failures=failures, error=str(error))
         raise Failure(f"{record.get('title', meeting_id)}: {error}")
 
 
@@ -528,7 +546,8 @@ def intake_claimed(home, record):
     text = meeting["final_transcript"] or own
     full_text = record_text(meeting, text)
     if home.exclusion_hits(meeting_text(meeting)):
-        finish(home, meeting_id, phase="excluded", title=title, taken_at=now())
+        if not finish(home, record, phase="excluded", title=title, taken_at=now()):
+            return f"skipped {meeting_id}: {DROPPED}"
         return f"excluded meeting, not processed: {title}"
     labels = self_labels(home, meeting)
     orders = [dict(order, source="meeting") for order in scan_spoken_orders(own, labels)]
@@ -555,33 +574,39 @@ def intake_claimed(home, record):
         "transcript": transcript, "clear": clear, "review": review, "spoken_orders_heard": len(orders),
         "taken_at": now(),
     }
-    folder = os.path.join(home.data, meeting_id)
-    os.makedirs(folder, exist_ok=True)
-    with open(os.path.join(folder, "intake.json"), "w", encoding="utf-8") as out:
-        json.dump(intake, out, indent=1, ensure_ascii=False)
-        out.write("\n")
     where = f"data/meetings/{meeting_id}/intake.json"
     when = intake["date"][:10]
     provenance = ("Extracted by bin/fm-meetings.sh from the recorded meeting, not typed by the captain. "
                   f"Read from the {KIND_TEXT.get(transcript['kind'], transcript['kind'])}"
                   f" ({transcript.get('note') or 'no note'}).")
-    if clear:
-        note(home, f"meeting-{meeting_id}-start", "\n".join([
-            f"Meeting follow-ups ready to start, from the {meeting['origin']} \"{title}\" ({when}).",
-            provenance,
-            "The captain asked for clear follow-ups like these to start without waiting: file each one and start it "
-            "under the meeting-intake skill. Nothing here may send, reply, invite, pay or publish.",
-            items_text(clear), f"Record: {where}"]) + "\n")
-    if review:
-        note(home, f"meeting-{meeting_id}-review", "\n".join([
-            f"Meeting items waiting for the captain's decision, from the {meeting['origin']} \"{title}\" ({when}).",
-            provenance,
-            "Hold each one for the captain's decision under the meeting-intake skill, "
-            "and start one only after the captain approves it.",
-            items_text(review, review=True), f"Record: {where}"]) + "\n")
+    with locked(home):
+        records = load_records(home)
+        claimed = still_claimed(records, record)
+        if claimed is None:
+            return f"skipped {meeting_id}: {DROPPED}"
+        folder = os.path.join(home.data, meeting_id)
+        os.makedirs(folder, exist_ok=True)
+        with open(os.path.join(folder, "intake.json"), "w", encoding="utf-8") as out:
+            json.dump(intake, out, indent=1, ensure_ascii=False)
+            out.write("\n")
+        if clear:
+            note(home, f"meeting-{meeting_id}-start", "\n".join([
+                f"Meeting follow-ups ready to start, from the {meeting['origin']} \"{title}\" ({when}).",
+                provenance,
+                "The captain asked for clear follow-ups like these to start without waiting: file each one and start "
+                "it under the meeting-intake skill. Nothing here may send, reply, invite, pay or publish.",
+                items_text(clear), f"Record: {where}"]) + "\n")
+        if review:
+            note(home, f"meeting-{meeting_id}-review", "\n".join([
+                f"Meeting items waiting for the captain's decision, from the {meeting['origin']} \"{title}\" ({when}).",
+                provenance,
+                "Hold each one for the captain's decision under the meeting-intake skill, "
+                "and start one only after the captain approves it.",
+                items_text(review, review=True), f"Record: {where}"]) + "\n")
+        claimed.update(phase="taken", title=title, taken_at=now(), transcript=transcript,
+                       clear=len(clear), review=len(review), error="")
+        save_records(home, records)
     spoken = speak(home, spoken_line(intake))
-    finish(home, meeting_id, phase="taken", title=title, taken_at=now(), transcript=transcript,
-           clear=len(clear), review=len(review), error="")
     fallback = "" if transcript["kind"] == "final" else \
         f"; {KIND_TEXT.get(transcript['kind'], transcript['kind'])}: {transcript.get('note')}"
     return f"{title}: {len(clear)} clear follow-up(s) to start, {len(review)} for the captain's decision, {spoken}{fallback}"
@@ -593,8 +618,7 @@ def cmd_intake(home, args):
     if not ids:
         with locked(home):
             records = load_records(home)
-        ids = [mid for mid, rec in records["meetings"].items() if rec.get("phase") == "ready"
-               or (rec.get("phase") == "taking" and now() - rec.get("taking_at", 0) >= TAKING_STALE_SECONDS)]
+        ids = [mid for mid, rec in records["meetings"].items() if waiting_for_intake(rec)]
         if not ids:
             print("no meetings are waiting for intake")
             return 0
@@ -624,6 +648,19 @@ def intake_records(home):
     return found
 
 
+def excluded_now(home, record, saved_text):
+    """Whether the exclude words mark a meeting already taken in: its saved record, and the whole meeting while
+    its source can still load it."""
+    if home.exclusion_hits(saved_text):
+        return True
+    if not record:
+        return False
+    try:
+        return bool(home.exclusion_hits(meeting_text(home.source_of(record).load(record))))
+    except Failure:
+        return False
+
+
 STOPWORDS = set("""a an and are as at about did do does for from had has have how i in is it me my of on or our
 the their them they this to us was we were what when where which who with you your agree agreed agreement say said
 talk talked decide decided meeting meetings call calls last week""".split())
@@ -643,16 +680,14 @@ def cmd_recall(home, args):
         raise Failure("recall needs a person, topic or title to look for")
     with locked(home):
         records = load_records(home)
-    scored = []
+    scored, seen = [], set()
     for intake in intake_records(home):
+        seen.add(intake.get("id"))
         text = values_text(intake)
-        if home.exclusion_hits(text):
-            continue
         haystack = set(normalize(text).split())
         score = sum(term in haystack for term in terms)
-        if score:
+        if score and not excluded_now(home, records["meetings"].get(intake.get("id")), text):
             scored.append((score, intake))
-    seen = {intake["id"] for _, intake in scored}
     for name, source in home.sources.items():
         try:
             hits = source.search(terms, 20)
@@ -660,7 +695,7 @@ def cmd_recall(home, args):
             print(f"({name} search unavailable: {error})")
             continue
         for hit in hits:
-            if hit["id"] in seen or records["meetings"].get(hit["id"], {}).get("phase") in ("excluded", "child"):
+            if hit["id"] in seen or records["meetings"].get(hit["id"], {}).get("phase") in ("excluded", "child", "deleted"):
                 continue
             seen.add(hit["id"])
             if home.exclusion_hits(meeting_text(hit)):
@@ -698,7 +733,7 @@ def cmd_status(home, _args):
     with locked(home):
         records = load_records(home)
     print("intake: " + ("on" if home.enabled else "off") + "; sources: " + ", ".join(home.config["source"]))
-    shown = [r for r in records["meetings"].values() if r.get("phase") not in ("idle", "baseline", "child")]
+    shown = [r for r in records["meetings"].values() if r.get("phase") not in ("idle", "baseline", "child", "deleted")]
     if not shown:
         print("no meetings tracked yet")
     for record in sorted(shown, key=lambda r: r.get("first_seen", 0)):
@@ -711,16 +746,20 @@ def cmd_status(home, _args):
 
 
 def cmd_forget(home, args):
-    """Remove what the intake keeps of each named meeting: its check record, its intake record and its inbox notes."""
+    """The step fm-call-companion.sh delete runs after deleting a call: keep only a deleted mark for the call, so
+    neither the check nor an intake still reading it brings it back, and remove its intake record and inbox notes."""
     for meeting_id in args.ids:
-        if not MEETING_ID.match(meeting_id) or ".." in meeting_id:
-            raise Failure(f"{meeting_id} is not a meeting id")
+        if not CALL_ID.match(meeting_id):
+            raise Failure(f"forget takes the calls fm-call-companion.sh delete names (call-<stamp>), not {meeting_id}")
     for meeting_id in args.ids:
         removed = False
         if os.path.exists(home.records_path):
             with locked(home):
                 records = load_records(home)
-                if records["meetings"].pop(meeting_id, None) is not None:
+                record = records["meetings"].get(meeting_id)
+                if record and record.get("phase") != "deleted":
+                    records["meetings"][meeting_id] = {"id": meeting_id, "source": record.get("source", ""),
+                                                       "phase": "deleted", "deleted_at": now()}
                     save_records(home, records)
                     removed = True
         folder = os.path.join(home.data, meeting_id)

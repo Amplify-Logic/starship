@@ -106,11 +106,14 @@ else:
     fail("unexpected command " + verb)
 PY
 
-# The fake intake model: saves the prompt and answers with $FAKE_MODEL_OUTPUT.
+# The fake intake model: saves the prompt, runs $FAKE_MODEL_HOOK while it
+# "reads" (with $PPID the intake that called it), and answers with
+# $FAKE_MODEL_OUTPUT.
 cat > "$FAKES/claude" <<'SH'
 #!/usr/bin/env bash
 cat > "$FAKE_MODEL_DIR/prompt.$(date +%s%N 2>/dev/null || date +%s).txt"
 printf 'called\n' >> "$FAKE_MODEL_DIR/calls"
+[ -z "${FAKE_MODEL_HOOK:-}" ] || eval "$FAKE_MODEL_HOOK"
 printf '{"type":"result","structured_output":%s}\n' "$(cat "$FAKE_MODEL_OUTPUT")"
 SH
 
@@ -538,7 +541,24 @@ test_ready_meeting_is_announced_again_until_taken_in() {
   assert_equals "" "$out" "and then only once"
   out=$(run "$home" $((420 + 43200)) check)
   assert_contains "$out" "ready: Again" "a meeting still waiting is announced again after twelve hours"
-  pass "fm-meetings: a ready meeting is announced again after a failed intake and while it still waits"
+
+  home=$(new_home reannounce-killed)
+  baseline "$home"
+  meeting "$home" '{"id":"m-killed","title":"Killed","ended":-900,"source":"batch_transcription"}'
+  run "$home" 0 check >/dev/null
+  model_says "$home" '{"outcome":"Nothing was settled.","actions":[],"spoken_orders":[]}'
+  # shellcheck disable=SC2016 # The fake model expands $PPID, the intake that called it.
+  FAKE_MODEL_HOOK='kill -9 $PPID; exit 0' run "$home" 60 intake >/dev/null 2>&1
+  assert_equals taking "$(phase_of "$home" m-killed)" "an intake killed while the model read leaves its claim behind"
+  out=$(run "$home" 600 check)
+  assert_equals "" "$out" "a fresh claim is not announced"
+  out=$(run "$home" $((60 + 1800)) check)
+  assert_contains "$out" "ready: Killed" "a claim left by an intake that stopped is announced again once it is stale"
+  out=$(run "$home" $((60 + 1900)) check)
+  assert_equals "" "$out" "and then only once"
+  out=$(run "$home" $((60 + 1900)) intake)
+  assert_contains "$out" "Killed: 0 clear follow-up(s) to start" "the next intake takes it in"
+  pass "fm-meetings: a ready meeting is announced again after a failed or stopped intake and while it still waits"
 }
 
 test_wake_line_keeps_the_command_and_problems_whatever_the_titles() {
@@ -880,6 +900,9 @@ test_archived_calls_feed_the_intake() {
   out=$(run "$home" 400 recall shed kits)
   assert_contains "$out" "Call " "recall finds the call"
   assert_contains "$out" "Follow-up started: Spoken order: Compare the shed kits" "and what started from it"
+  printf 'exclude_word = sounds good\n' >> "$home/config/meetings"
+  out=$(run "$home" 460 recall shed kits)
+  assert_equals "no meeting matches shed kits" "$out" "a word added later that only the call's transcript holds keeps the call out of recall"
   pass "fm-meetings: calls archived by the call recorder feed the same intake, with the owner's label as the owner"
 }
 
@@ -948,7 +971,7 @@ call_notes() {
 }
 
 test_deleting_a_call_removes_what_the_intake_kept() {
-  local home out stamp other start
+  local home out stamp other start rc
   home=$(new_home consent)
   printf 'enabled = true\n' > "$home/config/meetings"
   baseline "$home"
@@ -970,18 +993,37 @@ test_deleting_a_call_removes_what_the_intake_kept() {
   assert_contains "$out" "removed the meeting intake's record and inbox notes of call-$stamp" "and the delete says the intake's copies went too"
   assert_absent "$home/data/meetings/call-$stamp" "the intake record of the deleted call is gone"
   assert_equals "" "$(call_notes "$home" "$stamp")" "its inbox notes are gone, acknowledged or not"
-  assert_equals "" "$(phase_of "$home" "call-$stamp")" "the check no longer tracks it"
+  assert_equals deleted "$(phase_of "$home" "call-$stamp")" "the check keeps only a deleted mark for it"
   assert_present "$home/data/meetings/call-$other/intake.json" "another call's intake record stays"
   assert_equals 2 "$(call_notes "$home" "$other" | grep -c .)" "and so do its notes"
   run "$home" 120 check >/dev/null
-  assert_equals "" "$(phase_of "$home" "call-$stamp")" "the next check does not bring it back"
+  assert_equals deleted "$(phase_of "$home" "call-$stamp")" "the next check does not bring it back"
+  assert_not_contains "$(run "$home" 120 status)" "call-$stamp" "status does not list it"
   out=$(FM_HOME="$home" CALL_COMPANION_OPEN_BIN=true "$ROOT/bin/fm-call-companion.sh" delete --all 2>&1) \
     || fail "deleting every call failed: $out"
   assert_absent "$home/data/meetings/call-$other" "deleting every call removes every call's intake record"
   assert_equals "" "$(call_notes "$home" "$other")" "and every call's notes"
   out=$(run "$home" 180 recall shed kits)
   assert_equals "no meeting matches shed kits" "$out" "recall no longer answers from a deleted call"
-  pass "fm-meetings: deleting a call removes the intake's record and notes of it"
+  rc=0
+  out=$(run "$home" 180 forget m-robin 2>&1) || rc=$?
+  expect_code 1 "$rc" "forget refuses anything but a deleted call"
+
+  home=$(new_home consent-race)
+  printf 'enabled = true\n' > "$home/config/meetings"
+  baseline "$home"
+  touch "$home/state/.afk"
+  stamp=$(stamp_at -900)
+  archived_call "$home" "$stamp" "[10:00:05] me: Let us compare three shed kits."
+  run "$home" 0 check >/dev/null
+  model_says "$home" '{"outcome":"They will compare shed kits.","actions":[{"title":"Compare shed kits","instruction":"Compare three shed kits","evidence":"compare three shed kits","clear":true,"why_review":"","outward":false,"destructive":false,"other_person":false}],"spoken_orders":[]}'
+  out=$(FAKE_MODEL_HOOK="FM_HOME='$home' CALL_COMPANION_OPEN_BIN=true '$ROOT/bin/fm-call-companion.sh' delete $stamp >/dev/null 2>&1" \
+    real_inbox "$home" 60 intake)
+  assert_contains "$out" "skipped call-$stamp: it was deleted" "a call deleted while the model read it is not filed"
+  assert_absent "$home/data/meetings/call-$stamp" "no intake record comes back"
+  assert_equals "" "$(call_notes "$home" "$stamp")" "and no inbox note"
+  assert_equals deleted "$(phase_of "$home" "call-$stamp")" "the call stays deleted"
+  pass "fm-meetings: deleting a call removes the intake's record and notes of it, even while it is read"
 }
 
 test_notes_land_in_the_real_inbox() {

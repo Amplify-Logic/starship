@@ -41,7 +41,7 @@ Starting a follow-up never lands it: merges and outward actions still need your 
 A meeting whose title, participants, notes, summary or transcript contain an exclude word is never sent to a model or actioned, and Starship never asks Anarlog to run its speaker pass on it; Starship only tells you "excluded meeting, not processed".
 The exclude words are each `exclude_word` line in `config/meetings` plus every line of the private `config/meeting-exclude-words` (one word or phrase per line, `#` comments).
 Neither ships with any word, so list an employer, its clients and its products there yourself if those meetings must stay out.
-A word added later also keeps meetings already taken in out of `recall`.
+A word added later also keeps meetings already taken in out of `recall`, checked against the whole meeting while its recorder still holds it, and otherwise against what the intake saved of it.
 If you use Anarlog, keep its automatic meeting detection off, or limited to the calendars you want recorded, so a meeting you never meant to record is not recorded into its store in the first place.
 
 ## Set up
@@ -86,8 +86,8 @@ Records of meetings already taken in stay in `data/meetings/` until you delete t
 
 ## Delete a call
 
-When someone withdraws consent and you delete a call with `bin/fm-call-companion.sh delete`, the delete also removes what the intake kept of that call: its record in `data/meetings/call-<stamp>/` and the two inbox notes it filed.
-`bin/fm-meetings.sh forget <id>` does the same by hand for any meeting, and works with the intake off.
+When someone withdraws consent and you delete a call with `bin/fm-call-companion.sh delete`, the delete also removes that call's intake record in `data/meetings/call-<stamp>/` and the inbox notes the intake created for it, and the intake never takes that call in again.
+Items the first mate already filed from those notes, such as backlog items or held decisions that quote the call, stay until you ask the first mate to remove them.
 
 ## Privacy
 

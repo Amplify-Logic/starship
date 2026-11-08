@@ -52,10 +52,12 @@
 # removes every call, the archive, and the decision, spoken-order and action
 # logs, including untagged lines written before calls had stamps. delete
 # <stamp> and delete --all refuse while recording. Every delete of an archived
-# call also removes what the meeting intake keeps of it (its intake record and
-# the inbox notes it filed, through `fm-meetings.sh forget call-<stamp>`), so
-# withdrawn consent removes everything derived from the call; when that fails,
-# the call is still deleted and the delete says so and exits 1.
+# call also removes that call's meeting intake record and the inbox notes the
+# intake created for it (`fm-meetings.sh forget call-<stamp>`); when that
+# fails, the call is still deleted and the delete says so and exits 1. Items
+# firstmate already filed from those notes, such as backlog items or held
+# decisions that quote the call, stay until the owner asks firstmate to remove
+# them.
 #
 # desk opens the desk page; with --display, or on start when the display_host
 # setting is set, it also shows display_url full screen on that ssh host's

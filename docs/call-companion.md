@@ -141,7 +141,8 @@ bin/fm-call-companion.sh delete --all        # every call, the archive, and the 
 
 Deleting one call removes its transcript, desk, digest, live items and notes, prints its stamp and start time, and also removes its lines from the decision and spoken-order logs in `state/calls/`, which carry each call's stamp, and the notes it left on the desk.
 Lines written before calls had stamps carry none, so only `delete --all` removes them.
-When the [meeting intake](meetings.md) took a call in, deleting the call also removes the intake's record of it and the inbox notes it filed, so withdrawn consent removes everything derived from the call.
+When the [meeting intake](meetings.md) took a call in, deleting the call also removes that call's intake record and the inbox notes the intake created for it.
+Items the first mate already filed from those notes, such as backlog items or held decisions that quote the call, stay until you ask the first mate to remove them.
 `reset` moves the call still in place into the archive by hand.
 
 ## The call watcher (optional)
