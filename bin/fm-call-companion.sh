@@ -434,7 +434,7 @@ check_deepgram_key() {
 # The engine set, the one in use, what this Mac has for each, whether Deepgram
 # accepts the key, and which engine suits this Mac.
 engine_report() {
-  local setting in_use key='not found' key_line whisper=missing model=none candidate memory_bytes memory_gb cpu chip slow='' reason='' advice
+  local setting in_use key='not found' key_line replace_key whisper=missing model=none candidate memory_bytes memory_gb cpu chip slow='' reason='' advice
   setting=$(fm_call_engine_setting) || exit 2
   in_use=$(fm_call_engine_in_use)
   if fm_call_deepgram_key_present; then
@@ -458,6 +458,8 @@ engine_report() {
   printf 'engine set:     %s (transcription_engine in config/call-companion; default local)\n' "$setting"
   if [ "$setting" = deepgram ] && [ "$in_use" = local ]; then
     printf 'in use now:     local, because no Deepgram key was found\n'
+  elif [ "$in_use" = deepgram ] && [ "$key" = rejected ]; then
+    printf 'in use now:     deepgram, but Deepgram rejected the key, so every chunk falls back to this Mac (or is lost without a local model) until the key is replaced\n'
   else
     printf 'in use now:     %s\n' "$in_use"
   fi
@@ -474,7 +476,12 @@ engine_report() {
   if [ "$memory_gb" -gt 0 ] && [ "$memory_gb" -lt 16 ]; then reason="this Mac has $memory_gb GB of memory"; fi
   if [ "$chip" != 'Apple silicon' ]; then reason="${reason:+$reason and }it is not Apple silicon"; fi
   if [ -n "$slow" ]; then reason="${reason:+$reason, and }a recording fell behind on it"; fi
-  if [ -n "$reason" ]; then
+  replace_key="put a new key from the Deepgram console in DEEPGRAM_API_KEY in this home's .env (docs/call-companion.md)"
+  if [ "$key" = rejected ] && [ "$in_use" = deepgram ]; then
+    advice="replace the Deepgram key: Deepgram rejected it; ${replace_key}${reason:+, then keep Deepgram: $reason}."
+  elif [ "$key" = rejected ] && [ -n "$reason" ]; then
+    advice="use Deepgram: $reason. Deepgram rejected the key in .env, so first $replace_key, then set transcription_engine = deepgram in config/call-companion."
+  elif [ -n "$reason" ]; then
     if [ "$in_use" = deepgram ]; then
       advice="keep Deepgram: $reason."
     elif [ "$key" != 'not found' ]; then
@@ -503,6 +510,7 @@ start_companion() {
   ! call_in_place || reset_companion
   prepare_views
   mkdir -p "$STATE_DIR"
+  rm -f "$STATE_DIR/engine-note" "$STATE_DIR/far-side-note"
   new_call_stamp > "$CALL_STAMP"
   transcript_note "recording started ($source) after everyone on the call agreed to be recorded"
 

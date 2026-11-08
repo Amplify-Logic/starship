@@ -746,6 +746,22 @@ EOF
   # The key check tells a working key from a rejected one and from no answer.
   out=$(report FIXTURE_DEEPGRAM_HTTP=401 CALL_COMPANION_MEMORY_BYTES=$((32 * 1024 * 1024 * 1024)) CALL_COMPANION_CPU_BRAND='Apple M2') || fail "engine report failed: $out"
   assert_contains "$out" 'deepgram key:   found but rejected' 'a rejected key was not reported as rejected'
+  # A rejected key never reads as ready, whichever engine is set.
+  out=$(report FIXTURE_DEEPGRAM_HTTP=401 CALL_COMPANION_MEMORY_BYTES=$((8 * 1024 * 1024 * 1024)) CALL_COMPANION_CPU_BRAND='Apple M1') || fail "engine report failed: $out"
+  assert_contains "$out" 'Deepgram rejected the key in .env, so first put a new key from the Deepgram console' 'a small Mac with a rejected key was not told to replace it'
+  assert_not_contains "$out" 'already in place' 'a rejected key was called already in place'
+  printf 'transcription_engine = deepgram\n' > "$home/config/call-companion"
+  for memory in 8 32; do
+    out=$(report FIXTURE_DEEPGRAM_HTTP=401 CALL_COMPANION_MEMORY_BYTES=$((memory * 1024 * 1024 * 1024)) CALL_COMPANION_CPU_BRAND='Apple M2') || fail "engine report failed: $out"
+    assert_contains "$out" 'in use now:     deepgram, but Deepgram rejected the key, so every chunk falls back to this Mac' "the in-use line hides the rejected key on a ${memory} GB Mac"
+    assert_contains "$out" 'recommendation: replace the Deepgram key: Deepgram rejected it; put a new key from the Deepgram console' "a ${memory} GB Mac was not told to replace the rejected key"
+    assert_not_contains "$out" 'set up and in use' 'a rejected key was called set up and in use'
+  done
+  out=$(report CALL_COMPANION_MEMORY_BYTES=$((32 * 1024 * 1024 * 1024)) CALL_COMPANION_CPU_BRAND='Apple M2') || fail "engine report failed: $out"
+  assert_contains "$out" 'in use now:     deepgram
+' 'a working key does not read as plainly in use'
+  assert_contains "$out" 'recommendation: Deepgram is set up and in use' 'a working key was not called set up and in use'
+  printf 'transcription_engine = local\n' > "$home/config/call-companion"
   out=$(report FIXTURE_DEEPGRAM_DOWN=1 CALL_COMPANION_MEMORY_BYTES=$((32 * 1024 * 1024 * 1024)) CALL_COMPANION_CPU_BRAND='Apple M2') || fail "engine report failed: $out"
   assert_contains "$out" 'deepgram key:   found, but could not check it' 'an unreachable Deepgram was not reported as unchecked'
   ! grep -q 'fixture-key-never-real' "$DEEPGRAM_CURL_LOG" || fail 'the key check put the key in curl argv'
@@ -1022,7 +1038,12 @@ EOF
     FM_HOME="$home" FIXTURE_POLLED="$TMP_ROOT/captions-polled" CHROME_DEVTOOLS_AXI_BIN="$bin/chrome-devtools-axi" MEET_CAPTIONS_POLL_SECONDS=10 CALL_COMPANION_OPEN_BIN=true \
       CALL_COMPANION_FINAL_NOTES=0 CALL_COMPANION_CLAUDE_BIN="$bin/claude" "$ROOT/bin/fm-call-companion.sh" "$@"
   }
+  mkdir -p "$home/state/calls"
+  printf 'Transcribing on this Mac for now: Deepgram could not be reached\n' > "$home/state/calls/engine-note"
+  printf 'Far side not captured: no loopback input\n' > "$home/state/calls/far-side-note"
   out=$(run_companion start --page 5 --everyone-agreed 2>&1) || fail "caption start failed: $out"
+  [ ! -e "$home/state/calls/engine-note" ] || fail "a microphone call's engine note outlived the start of a captions call"
+  [ ! -e "$home/state/calls/far-side-note" ] || fail "a microphone call's far-side note outlived the start of a captions call"
   for _ in $(seq 1 50); do [ -e "$TMP_ROOT/captions-polled" ] && break; sleep 0.1; done
   sleep 1
   out=$(run_companion stop 2>&1) || fail "caption stop failed: $out"
