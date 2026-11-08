@@ -261,15 +261,7 @@ test_source_windows() {
   [ "$rc" -eq 75 ] && [ -z "$out" ] || fail "an unrelated move gave rc=$rc out=$out"
   assert_place "$h" alpha "$P1" "an unrelated move saves the new place"
 
-  set_told "$h" alpha "$P0"
-  queue_reply "$h" 0 "out:{\"position\":$P2}"
-  started=$(date +%s)
-  rc=0; out=$(src) || rc=$?
-  elapsed=$(( $(date +%s) - started ))
-  [ "$rc" -eq 75 ] && [ -z "$out" ] || fail "a held move gave rc=$rc out=$out"
-  assert_place "$h" alpha "$P1" "an unrelated move keeps the place while a batch is still untold"
-  [ "$elapsed" -ge 1 ] || fail "a held move did not wait out its window"
-  set_told "$h" alpha "$P1"
+  assert_equals "$P1" "$(cat "$h/home/state/mothership/alpha.told")" "the told mark follows an unrelated move once everything was told"
 
   queue_reply "$h" 0 "out:$ITEM_ASK" "out:$ITEM_MSG" "out:{\"position\":$P2}"
   rc=0; out=$(src) || rc=$?
@@ -372,39 +364,37 @@ test_autohandle_and_told() {
   pass "autohandle and told move the place only forward, and told keeps a repeated batch from being shown twice"
 }
 
-test_told_out_of_order() {
+test_told_after_a_missed_told() {
   local h out doc f1 f2 late
-  h=$(make_home order)
+  h=$(make_home missed)
   set_position "$h" alpha "$P0"
   set_told "$h" alpha "$P0"
   late=$(printf '%s' "$ITEM_MSG" | jq -c '.seq = 6')
-  doc="$TMP_ROOT/order.out"
+  doc="$TMP_ROOT/missed.out"
   queue_reply "$h" 0 "out:$ITEM_ASK" "out:{\"position\":$P1}"
   in_home "$h" "$ADAPTER" source alpha --bin "$STUB_BIN/mothership" --config "$h/rooms.json" > "$doc"
   f1=$(capture "$h" 1 "$doc")
   in_home "$h" "$ADAPTER" autohandle mothership-alpha 1 "$f1" || fail "autohandle 1 failed"
+  # The turn ends before told runs for the first capture.
   queue_reply "$h" 0 "out:$late" "out:{\"position\":$P2}"
   in_home "$h" "$ADAPTER" source alpha --bin "$STUB_BIN/mothership" --config "$h/rooms.json" > "$doc"
   f2=$(capture "$h" 2 "$doc")
   in_home "$h" "$ADAPTER" autohandle mothership-alpha 2 "$f2" || fail "autohandle 2 failed"
-  assert_place "$h" alpha "$P2" "both captures moved the place on"
 
-  if out=$(in_home "$h" "$ADAPTER" told "$f2" 2>&1); then fail "told recorded a later batch before an earlier one: $out"; fi
-  assert_contains "$out" "an earlier batch for alpha is still untold" "told names the untold earlier batch"
-  out=$(in_home "$h" "$ADAPTER" read "$f1") || fail "read 1 failed"
-  assert_contains "$out" "new: 1" "the earlier batch is still shown after the later one was told first"
-  assert_contains "$out" "text: Blue or green for the new page" "the earlier item is shown"
-  out=$(in_home "$h" "$ADAPTER" told "$f1" 2>&1) || fail "told 1 failed: $out"
-  out=$(in_home "$h" "$ADAPTER" read "$f2") || fail "read 2 failed"
-  assert_contains "$out" "new: 1" "the later batch is still untold"
-  out=$(in_home "$h" "$ADAPTER" told "$f2" 2>&1) || fail "told 2 after told 1 failed: $out"
-  assert_equals "$(printf 'room: alpha\nnothing new')" "$(in_home "$h" "$ADAPTER" read "$f1")" "the earlier batch is told once"
-  assert_equals "$(printf 'room: alpha\nnothing new')" "$(in_home "$h" "$ADAPTER" read "$f2")" "the later batch is told once"
+  out=$(in_home "$h" "$ADAPTER" told "$f2" 2>&1) || fail "told refused a batch after a missed told: $out"
+  assert_contains "$out" "told: alpha (1 item(s) in this batch)" "the later batch is recorded"
+  assert_contains "$out" "warning: earlier messages from alpha may not have reached the owner; the owner can read them with mothership pull --room alpha" "told warns about the missed batch"
+  assert_equals "$P2" "$(cat "$h/home/state/mothership/alpha.told")" "the told mark moves to the later batch's end"
+  [ -e "${f2%.result}.handled" ] || fail "told did not acknowledge the later capture"
 
   queue_reply "$h" 0 "out:{\"position\":$NOW}"
   in_home "$h" "$ADAPTER" source alpha --bin "$STUB_BIN/mothership" --config "$h/rooms.json" >/dev/null || true
-  assert_place "$h" alpha "$NOW" "once everything is told an unrelated move saves the place again"
-  pass "told refuses a later batch while an earlier one is untold, so the earlier batch is never hidden"
+  assert_place "$h" alpha "$NOW" "an empty window still moves the place on"
+  assert_equals "$NOW" "$(cat "$h/home/state/mothership/alpha.told")" "the told mark follows it"
+
+  out=$(in_home "$h" "$ADAPTER" told "$f2" 2>&1) || fail "a repeated told failed: $out"
+  assert_not_contains "$out" "warning:" "a repeated told does not warn again"
+  pass "a capture never told does not wedge told or the place; the next told warns once"
 }
 
 test_read_cleans_room_text() {
@@ -474,6 +464,6 @@ fm_test_run \
   test_ensure_follows_the_setting \
   test_source_windows \
   test_autohandle_and_told \
-  test_told_out_of_order \
+  test_told_after_a_missed_told \
   test_read_cleans_room_text \
   test_runner_wakes_once_and_keeps_listening
