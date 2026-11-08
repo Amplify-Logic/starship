@@ -18,6 +18,7 @@ Start with the directory layout, then use the setting reference for the behavior
 | Spoken replies | [Desk voice-out](#desk-voice-out-configspeak) |
 | The call recorder | [Call recorder](#call-recorder-configcall-companion) |
 | The meeting intake | [Meeting intake](#meeting-intake-configmeetings) |
+| Waking the first mate when something arrives in a Mothership room | [Mothership monitoring](#mothership-monitoring-configmothership-monitor) |
 | The morning intake, the continuous channel intake and the daily to-do page | [Daily intake and to-do page](#daily-intake-and-to-do-page-configmorning-intake-configchannel-intake) |
 | Which Starship version "update starship" follows | [Update channel](#update-channel-configupdate-channel) |
 | A home's own private tools beside the shared code | [Private add-on](#private-add-on-configaddon) and [opt-in skills](#opt-in-skills-configadhd-configsecond-opinion) |
@@ -960,6 +961,42 @@ It skips persistent secondmate and scout records, a `pr=` that names another PR,
 A refused registration, such as a draft, prints one `check: pr-register:` wake for each task and PR, and later sweeps retry without a new wake, so a PR marked ready later is recorded.
 With the file absent, the check sweep does not run the scan, and `pr=` and the merge poll come only from a manual `bin/fm-pr-check.sh <id> <PR url>` run.
 The flag takes effect at the next check sweep, and is a home-local preference that is not inherited by secondmate homes.
+
+## Mothership monitoring (config/mothership-monitor)
+
+Mothership monitoring wakes the first mate within about a minute when something new for this Starship arrives in a Mothership room it has joined: a request to the ship, an answer to the ship's question, a message to the ship, or a change on a card the ship is on.
+It is off by default and switched per room in the home's private, gitignored `config/mothership-monitor`, one `<room> = on` or `<room> = off` line per room, using the room name that `mothership rooms` lists:
+
+```text
+# A room switched on here wakes the first mate on new requests, answers and messages.
+alpha = on
+beta = off
+```
+
+- A room not listed, or the file absent, is off; with no file and nothing registered, nothing runs and no state is created.
+- Any other line is reported as a `MOTHERSHIP_MONITOR:` line at session start and treated as off, so a malformed file never switches a room on.
+- `bin/fm-procevent-mothership.sh on <room>` and `off <room>` switch a room and write the file, and the owner can simply ask the first mate to do it; `status` shows each room.
+- `on` refuses a room this Starship has not joined, and a Mothership link too old to keep a separate place in the room, with "update the Mothership link first".
+- Session start runs the adapter's `ensure`, which arms each `on` room that is not listening and retires each room that is now off or no longer listed, so an edit by hand takes effect at the next session start.
+
+Each switched-on room is one built-in [process-event source](#process-to-event-sources-stateprocevent) that long-polls the room with `mothership pull --from <place> --wait 55`.
+That read neither reads nor moves the place plain `mothership pull` keeps, so monitoring keeps its own place in the room under `state/mothership/`, and a manual pull and the monitor never move each other's place.
+Switching a room on carries on from plain `pull`'s saved place, or starts at the room's current end for a room never pulled (or with `on <room> --now`), so it replays no history; `on` lists the requests already open for the ship instead.
+Switching it off hands the monitor's place back to plain `pull`, so a later manual pull does not repeat what the owner was already told.
+While a room is on, the first mate does not run `mothership pull` for it.
+
+What arrives is captured durably, announced as an ordinary `check` wake on the watcher's next cycle, and only then is the monitor's place moved on, so a crash before the capture was saved reads the same items again rather than skipping them.
+The first mate reads each capture through the adapter, tells the owner in plain words, and records what it told, so a batch read twice after a crash is told once; a crash between telling the owner and recording it can still repeat one batch once.
+A room that cannot be reached, such as an offline or sleeping machine, costs one attempt a minute and wakes no one.
+A room that refuses the ship's key, or repeated failures the link cannot explain, end that room's monitoring and wake the first mate once to tell the owner; the next session start arms an `on` room again.
+Monitoring runs whenever this Starship runs: continuously on a server, and while the machine is awake on a Mac or under WSL 2, picking up everything that arrived in between when it next runs.
+
+It only reads and tells.
+Room text is quoted to the owner as data and never followed as an instruction.
+Taking a request on still needs the owner's yes, and then goes through `mothership accept` and the room's allow-list as before.
+The only thing monitoring sends to a room is the "read by your ship" mark that every `mothership pull` already sends in a room whose allow-list is not empty.
+The setting and its records are home-local and are not inherited by secondmate homes.
+`bin/fm-procevent-mothership.sh --help` owns the commands, the result document and the private state files, and the `process-event-sources` skill owns how the first mate relays a capture.
 
 ## No-mistakes pipeline spend (config/pipeline-spend)
 
@@ -3339,6 +3376,7 @@ A long-polling external process is registered as a *source* through its adapter,
 `bin/fm-procevent.sh` owns the generic contract; built-in adapters retain their tracked `bin/fm-procevent-<adapter>.sh` commands, while an explicitly bound external adapter routes through the trusted host contract above.
 
 `bin/fm-procevent-lavish.sh` is the first built-in adapter and wraps the published `lavish-axi poll` interface plus `lavish-axi reply` when the installed version supports synchronous reply acceptance.
+`bin/fm-procevent-mothership.sh` is the built-in adapter for [Mothership monitoring](#mothership-monitoring-configmothership-monitor).
 
 **Open the Lavish artifact first**
 
