@@ -223,7 +223,7 @@ check_manifest() {
 
   # Cache lane membership once for G3.
   : >"$tmp/lanes"
-  for lanes in portable-parallel-1 portable-parallel-2 portable-serial real-herdr-gated; do
+  for lanes in portable-parallel-1 portable-parallel-2 portable-parallel-3 portable-serial real-herdr-gated; do
     while IFS= read -r proof; do
       [ -n "$proof" ] && printf '%s\t%s\n' "$proof" "$lanes" >>"$tmp/lanes"
     done < <("$ROOT/bin/fm-test-run.sh" --list --lane "$lanes")

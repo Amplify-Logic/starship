@@ -312,6 +312,33 @@ test_shell_line_ending_policy_selects_runner_contract() {
   pass "shell line-ending policy selects runner coverage"
 }
 
+test_changed_remote_inheritance_selects_generation_contract() {
+  local tmp repo listed source
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-inheritance.XXXXXX")
+  repo="$tmp/repo"
+  init_changed_fixture_repo "$repo"
+  printf '#!/usr/bin/env bash\n' >"$repo/tests/fm-remote-inherit-generation.test.sh"
+  chmod +x "$repo/tests/fm-remote-inherit-generation.test.sh"
+  for source in fm-remote-inherit-push.sh fm-remote-inherit.sh fm-secondmate-nudge-lib.sh; do
+    : >"$repo/bin/$source"
+  done
+  git -C "$repo" add .
+  git -C "$repo" -c user.name=test -c user.email=test@example.invalid commit -qm inheritance-fixture
+  for source in fm-remote-inherit-push.sh fm-remote-inherit.sh fm-secondmate-nudge-lib.sh; do
+    printf '\n' >>"$repo/bin/$source"
+    listed=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD)
+    assert_contains "$listed" "tests/fm-remote-inherit-generation.test.sh" \
+      "$source change must select the generation regression"
+    assert_contains "$listed" "tests/fm-secondmate-safety.test.sh" \
+      "$source change must retain secondmate coverage"
+    assert_not_contains "$listed" "tests/fm-ask-user-authority.test.sh" \
+      "$source change must not select the whole pure-contract-unit family"
+    git -C "$repo" checkout -q -- "bin/$source"
+  done
+  rm -rf "$tmp"
+  pass "changed inheritance sender, receiver and counter select the focused generation contract"
+}
+
 test_changed_dependency_selection_and_unmapped_failure() {
   local tmp repo listed rc
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-changed.XXXXXX")
@@ -1347,45 +1374,46 @@ test_list_scheduled_non_lane_selections_use_serial_weights() {
 }
 
 test_portable_shard_union_and_coverage_guard() {
-  local s1 s2 proven serial herdr all_count union_count overlap out lane
+  local s1 s2 s3 proven serial herdr all_count union_count out lane
   s1=$("$RUNNER" --list --lane portable-parallel-1)
   s2=$("$RUNNER" --list --lane portable-parallel-2)
+  s3=$("$RUNNER" --list --lane portable-parallel-3)
   proven=$("$RUNNER" --list --proven-isolated)
   serial=$("$RUNNER" --list --lane portable-serial)
   herdr=$("$RUNNER" --list --family real-herdr-gated)
-  [ -n "$s1" ] && [ -n "$s2" ] || fail "portable parallel shards must be non-empty"
+  [ -n "$s1" ] && [ -n "$s2" ] && [ -n "$s3" ] || fail "portable parallel shards must be non-empty"
   # Shards disjoint.
-  overlap=$(comm -12 <(printf '%s\n' "$s1" | LC_ALL=C sort) <(printf '%s\n' "$s2" | LC_ALL=C sort) || true)
-  [ -z "$overlap" ] || fail "portable parallel shards overlap: $overlap"
+  [ -z "$(printf '%s\n' "$s1" "$s2" "$s3" | LC_ALL=C sort | uniq -d)" ] \
+    || fail "portable parallel shards overlap"
   # Union of shards equals proven-isolated.
-  [ "$(printf '%s\n' "$s1" "$s2" | LC_ALL=C sort -u)" = \
+  [ "$(printf '%s\n' "$s1" "$s2" "$s3" | LC_ALL=C sort -u)" = \
     "$(printf '%s\n' "$proven" | LC_ALL=C sort -u)" ] \
     || fail "shard union must equal proven-isolated set"
   # No herdr in portable lanes.
-  printf '%s\n' "$s1" "$s2" "$serial" | grep -Fq 'tests/fm-backend-herdr-smoke.test.sh' \
+  printf '%s\n' "$s1" "$s2" "$s3" "$serial" | grep -Fq 'tests/fm-backend-herdr-smoke.test.sh' \
     && fail "portable lanes must not include real-herdr-gated smoke"
   printf '%s\n' "$herdr" | grep -Fq 'tests/fm-backend-herdr-smoke.test.sh' \
     || fail "herdr family must include smoke"
   out=$("$RUNNER" --check-coverage)
   assert_contains "$out" "FM_TEST_COVERAGE ok" "coverage guard success marker"
   all_count=$("$RUNNER" --list --all | wc -l | tr -d ' ')
-  union_count=$(printf '%s\n' "$s1" "$s2" "$serial" "$herdr" | LC_ALL=C sort -u | wc -l | tr -d ' ')
+  union_count=$(printf '%s\n' "$s1" "$s2" "$s3" "$serial" "$herdr" | LC_ALL=C sort -u | wc -l | tr -d ' ')
   [ "$union_count" = "$all_count" ] \
     || fail "union of lanes ($union_count) must equal --all ($all_count)"
-  # No duplicates across the four partitions.
-  [ "$(printf '%s\n' "$s1" "$s2" "$serial" "$herdr" | LC_ALL=C sort | uniq -d | wc -l | tr -d ' ')" = "0" ] \
+  # No duplicates across the five partitions.
+  [ "$(printf '%s\n' "$s1" "$s2" "$s3" "$serial" "$herdr" | LC_ALL=C sort | uniq -d | wc -l | tr -d ' ')" = "0" ] \
     || fail "lanes must not duplicate scripts"
   # LPT execution order, asserted against the runner's own measured schedule
   # rather than against a script name: naming the current longest script here is
   # what let the recorded lane duration go stale unnoticed in the first place.
-  for lane in portable-parallel-1 portable-parallel-2; do
+  for lane in portable-parallel-1 portable-parallel-2 portable-parallel-3; do
     [ "$("$RUNNER" --list --lane "$lane")" = "$("$RUNNER" --list-scheduled --lane "$lane")" ] \
       || fail "$lane membership must be stored longest-measured-first"
   done
   pass "portable shard union, disjointness, and coverage guard hold"
 }
 
-# The two parallel lanes are only "duration-balanced" while every member has a
+# The parallel lanes are only "duration-balanced" while every member has a
 # measured hint and the packing over those hints stays even. Both halves went
 # unchecked until one lane grew past its CI job cap and was cancelled on every
 # run, so assert them through the guard's own reported numbers.
@@ -2188,6 +2216,7 @@ test_changed_file_selection_is_conservative
 test_task_marker_refuses_the_primary_checkout
 test_changed_runner_surfaces_select_their_family
 test_shell_line_ending_policy_selects_runner_contract
+test_changed_remote_inheritance_selects_generation_contract
 test_changed_dependency_selection_and_unmapped_failure
 test_changed_bin_reference_selects_per_script_not_per_family
 test_changed_uses_bounded_automatic_concurrency

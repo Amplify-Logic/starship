@@ -257,9 +257,10 @@ test_raw_launch_command_remains_exempt() {
   expect_code 0 "$status" "raw launch command should remain exempt from verified-adapter preflight"
   assert_contains "$out" "spawned $ID harness=custom-agent" "raw launch command did not spawn"
   assert_absent "$PROBE_LOG" "raw launch command unexpectedly ran a first-word probe"
-  launch=$(cat "$LAUNCH_LOG")
-  # The raw command runs verbatim; only the spawn's shared environment exports
-  # (compact-adviser kill switch, commit-msg hook path) may precede it.
+  launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
+  # The raw command runs verbatim inside the OSC 7501 status reporter frame;
+  # only the spawn's shared environment exports (compact-adviser kill switch,
+  # commit-msg hook path) may precede it.
   case "$launch" in
     "custom-agent --flag" | *"; custom-agent --flag") ;;
     *) fail "raw launch command changed"$'\n'"actual: $launch" ;;

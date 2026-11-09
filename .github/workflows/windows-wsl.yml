@@ -17,7 +17,7 @@ name: Windows (WSL 2) and Linux server kit
 #     teammate's install builds it, and its decisions and WSL side tested.
 #   portable test shards inside WSL 2: the same lanes ci.yml runs on Ubuntu,
 #     each on its own Windows runner. fm-test-run.sh refuses a serial lane
-#     whose "of13" no longer matches its shard count, so a shard change fails
+#     whose "of17" no longer matches its shard count, so a shard change fails
 #     here loudly rather than leaving a shard unrun. Until a tracked follow-up
 #     makes them green, the shards run and report without gating: their test
 #     steps continue on error and a failure shows as a warning, while both kit
@@ -64,19 +64,24 @@ jobs:
           - floater
           - portable-parallel-1
           - portable-parallel-2
-          - portable-serial-1of13
-          - portable-serial-2of13
-          - portable-serial-3of13
-          - portable-serial-4of13
-          - portable-serial-5of13
-          - portable-serial-6of13
-          - portable-serial-7of13
-          - portable-serial-8of13
-          - portable-serial-9of13
-          - portable-serial-10of13
-          - portable-serial-11of13
-          - portable-serial-12of13
-          - portable-serial-13of13
+          - portable-parallel-3
+          - portable-serial-1of17
+          - portable-serial-2of17
+          - portable-serial-3of17
+          - portable-serial-4of17
+          - portable-serial-5of17
+          - portable-serial-6of17
+          - portable-serial-7of17
+          - portable-serial-8of17
+          - portable-serial-9of17
+          - portable-serial-10of17
+          - portable-serial-11of17
+          - portable-serial-12of17
+          - portable-serial-13of17
+          - portable-serial-14of17
+          - portable-serial-15of17
+          - portable-serial-16of17
+          - portable-serial-17of17
         include:
           - kind: server
             lane: kit

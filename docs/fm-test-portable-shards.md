@@ -33,10 +33,15 @@ The native-Windows-only `tests/fm-pi-windows-shell-invocation.test.sh` retains i
 The 2026-10-07 polytoken adapter tests carry provisional local measurements instead - 21090 ms for `tests/fm-polytoken-harness.test.sh` and the 103 ms live-guard skip for `tests/fm-polytoken-signals-live-e2e.test.sh`, both measured on the adapter-verification macOS host - until the next CI refresh replaces them with Ubuntu measurements, because they postdate the 2026-09-30 baseline.
 The 2026-10-23 `tests/fm-approval-failover.test.sh` serial hint is a provisional local measurement of 5410 ms, the slowest of five local `bin/fm-test-run.sh` samples (4991-5410 ms), until the next CI refresh replaces it with an Ubuntu timing-artifact maximum.
 The 2026-10-23 Kimi folder-prompt live guard, `tests/fm-kimi-trust-prompt-live-e2e.test.sh`, carries a provisional 60 ms skip measured on the Linux host that recorded its captures, until the next CI refresh replaces it with an Ubuntu measurement.
+The 2026-11-03 `tests/fm-herdr-projected-cd-live-e2e.test.sh` serial hint is provisionally 28000 ms, above a successful 27692 ms local runner sample exercising Herdr 0.9.5 on macOS arm64, until the next CI refresh replaces it with an Ubuntu timing-artifact maximum.
+The 2026-10-27 `tests/fm-claude-account-quota.test.sh` serial hint is a provisional local measurement of 2492 ms, the slowest of five local `bin/fm-test-run.sh` samples (1930-2492 ms) on a Linux host, until the next CI refresh replaces it with an Ubuntu timing-artifact maximum.
+The 2026-11-04 `tests/fm-install-herdr.test.sh` serial hint is a provisional local measurement of 1000 ms, above the slowest of five `bin/fm-test-run.sh` samples (155-223 ms) on a Linux host, until the next CI refresh replaces it with an Ubuntu timing-artifact maximum.
 The 2026-10-26 `tests/fm-test-tap-verify.test.sh` serial hint is a provisional local measurement of 1000 ms, above a 238 ms `bin/fm-test-run.sh` sample on this Linux host, until the next CI refresh replaces it with an Ubuntu timing-artifact maximum.
 The 2026-10-27 read-repetition suites carry provisional Linux x86_64 local runner maxima: 602 ms for `tests/fm-read-repetition.test.sh` (six successful samples, 528-602 ms) and 1110 ms for `tests/fm-read-repetition-live.test.sh` (five successful samples, 949-1110 ms).
 The live samples exercised installed Pi 1.4.0 RPC without capability skips; they are not CI timing evidence or timings for unavailable harnesses.
 Both suites retain serial placement and full coverage; replace these provisional hints with Ubuntu timing-artifact maxima at the next CI refresh.
+The 2026-10-29 `tests/fm-live-lab-isolation.test.sh` serial hint is a provisional local measurement of 6459 ms, the slowest of six `bin/fm-test-run.sh` samples (4308-6459 ms) taken inside a private `unshare -Urm` /tmp on this Linux host, until the next CI refresh replaces it with an Ubuntu timing-artifact maximum.
+The 2026-10-27 `tests/fm-codex-stop-park.test.sh` serial hint is a provisional local measurement of 35000 ms, above the slowest of the `bin/fm-test-run.sh` samples (20170-34700 ms) on a macOS arm64 host, until the next CI refresh replaces it with an Ubuntu timing-artifact maximum.
 The 2026-10-28 Antigravity primary tests carry provisional serial hints - 45000 ms for `tests/fm-agy-primary.test.sh` and the 75 ms live-guard skip for `tests/fm-agy-primary-live-e2e.test.sh` - until the next CI refresh replaces them with Ubuntu timing-artifact maxima.
 The wedge-cap suite carries the Ubuntu measurements from CI run [39597689178](https://github.com/kunchenguid/firstmate/actions/runs/39597689178) - 374225 ms for `tests/fm-watch-wedge-cap.test.sh` and the 74 ms live-guard skip for `tests/fm-watch-wedge-cap-live.test.sh` - in place of the provisional local measurements the suite first carried (1003000 ms and the 155 ms skip), which overstated the CI cost of both.
 They are not a formality: without a hint the suite is packed on the 45000 ms default, which puts it beside a shard already holding about 17 minutes of measured work, so that shard would really have run for about 23 minutes - past the 20-minute target the guard reserves - while the coverage guard still passed.
@@ -58,20 +63,29 @@ Its serial 2 job was cancelled at the 30-minute cap and uploaded no artifact, so
 `tests/fm-herdr-setup.test.sh` (1559 ms) joined the lane later and carries its first successful `duration_ms` from run 39159091513 of the earlier repository; its 45000 ms default weight had left the shards no room for the packing-boundary case in `tests/fm-test-run.test.sh`.
 The opt-in channel intake and daily to-do scripts joined the lane together and carry their first successful `duration_ms` from run [41103972215](https://github.com/Amplify-Logic/starship/actions/runs/41103972215): `tests/fm-channel-intake.test.sh` (64209 ms), `tests/fm-todo.test.sh` (53145 ms), `tests/fm-todo-render.test.sh` (24241 ms) and `tests/fm-morning-intake.test.sh` (18194 ms).
 Even measured, their work left twelve shards no room for that packing-boundary case, so the lane went to thirteen shards.
+The 2026-11-08 creator catch-up brought in serial scripts the creator's table never measured, which pushed the unmeasured share past the coverage guard's cap. Seven of them carry their first successful `duration_ms` from run [42519113644](https://github.com/Amplify-Logic/starship/actions/runs/42519113644): `tests/fm-hermes-harness.test.sh` (15264 ms), `tests/fm-remote-inherit-generation.test.sh` (6502 ms), `tests/fm-assertions.test.sh` (1316 ms), and the live-guard or optional-binary skips `tests/fm-hermes-signals-live-e2e.test.sh` (1328 ms), `tests/fm-backend-hc-appdetect-smoke.test.sh` (1027 ms), `tests/fm-hermes-profile-safety-live-e2e.test.sh` (920 ms) and `tests/fm-hermes-gateway-coexistence-live-e2e.test.sh` (813 ms).
+`tests/fm-spawn-herdr-lease.test.sh` failed in that run, so it has no successful sample yet and stays on the default weight until the next refresh.
+
+Both tables were refreshed again for that catch-up after its runs [42527277677](https://github.com/Amplify-Logic/starship/actions/runs/42527277677) and [42531129942](https://github.com/Amplify-Logic/starship/actions/runs/42531129942) reached the 30-minute job cap on serial 13 and parallel 2 with every completed script still passing.
+The catch-up grew several suites, and both hint tables had gone stale: 314 of 390 serial scripts ran slower than their hints, and the parallel set summed to about 3377 seconds, so no two-lane split could stay clear of the cap.
+Each serial and parallel row keeps the larger of its previous value and the slowest successful `duration_ms` across green main run [42504916826](https://github.com/Amplify-Logic/starship/actions/runs/42504916826) and PR runs [42519113644](https://github.com/Amplify-Logic/starship/actions/runs/42519113644), 42527277677 (both attempts) and 42531129942, read from completed `FM_TEST_END` markers where a cancelled job uploaded no artifact.
+Every serial member now has a measured hint, which needs seventeen serial shards to fit under the packing target, and the parallel set moved to three lanes.
 
 ## Parallel lanes
 
-The two parallel lanes use longest-processing-time assignment over those hints.
+The three parallel lanes use longest-processing-time assignment over those hints.
 [`tests/fm-pi-primary-types.test.sh`](../tests/fm-pi-primary-types.test.sh) owns its typecheck dependencies independently of the lane's installed Pi runtime.
-[`bin/fm-test-run.sh`](../bin/fm-test-run.sh) holds the duration values in `portable_parallel_weight_hints` and the ordered memberships and lane-specific prerequisite constraints beside `list_portable_parallel_1` and `list_portable_parallel_2`.
+[`bin/fm-test-run.sh`](../bin/fm-test-run.sh) holds the duration values in `portable_parallel_weight_hints` and the ordered memberships and lane-specific prerequisite constraints beside `list_portable_parallel_1`, `list_portable_parallel_2` and `list_portable_parallel_3`.
 Read the derived packing estimates with that runner's `--check-coverage`; its header and `--help` own the output fields and the selection-specific `--list-scheduled` weight rules.
 The largest individual hint sets a lower bound on the estimated duration of any split, regardless of how evenly the remaining work is assigned.
 The CI cap follows the three-tier timeout policy in [Timeouts](#timeouts) below.
 
-[`tests/fm-test-run.test.sh`](../tests/fm-test-run.test.sh), in `test_portable_parallel_lanes_stay_duration_balanced`, requires every parallel member to have a hint and the lane sums to differ by no more than five percent of the larger sum.
+[`tests/fm-test-run.test.sh`](../tests/fm-test-run.test.sh), in `test_portable_parallel_lanes_stay_duration_balanced`, requires every parallel member to have a hint and the largest and smallest lane sums to differ by no more than five percent of the largest.
 Its scheduling regressions also check stored parallel lane order and preserve serial-weight scheduling for other selections.
 These checks do not detect a script outgrowing an existing hint or establish measured job headroom.
 Refresh `portable_parallel_weight_hints` with the slowest completed `duration_ms` per script from several green CI runs' `fm-test-timing-portable-parallel-*` artifacts whenever the parallel set gains scripts or a member grows materially.
+
+The remote-secondmate lifecycle hint is 1005249 ms, its completed, passing `FM_TEST_END` sample from Ubuntu run [41289019354](https://github.com/kunchenguid/firstmate/actions/runs/41289019354). Rex lifecycle coverage outgrew the previous 345655 ms hint; serial shard 9 then reached the 30-minute job cap while running later tests. Eleven serial shards accommodate the refreshed weight within the unchanged modeled budget and timeout policy. This is a completed-script measurement from a partial run, not a successful whole-shard timing or a guarantee of future headroom.
 
 ## Portable serial remainder
 
@@ -126,7 +140,7 @@ Measure native-Windows-only scripts through the focused Git Bash runner and reta
 
 ## Coverage guard
 
-`bin/fm-test-run.sh --check-coverage` verifies that both parallel lanes partition the proven-isolated set.
+`bin/fm-test-run.sh --check-coverage` verifies that the parallel lanes partition the proven-isolated set.
 It also verifies that the parallel lanes, portable serial lane, and real-Herdr family are disjoint and cover every `tests/*.test.sh` script.
 It separately verifies that the portable serial CI shards are non-empty, disjoint, and together equal the portable serial lane.
 Its hint-coverage and modeled-budget checks are described in [Portable serial CI shards](#portable-serial-ci-shards); neither replaces inspection of actual CI timing artifacts.
@@ -148,7 +162,7 @@ No fast mode, path skips, or paid runner provisioning is part of this layout.
 
 The longer-term performance objective remains a complete green run under fifteen minutes including start delay, but the three watch-triage members still sum to about 26 minutes of CI test time.
 The immediate packing target is the runner's modeled script budget, not a claim that more shards alone can make an indivisible script faster.
-The layout uses twenty long-lived Linux jobs (thirteen serial, two parallel, Herdr, four lint), plus short checks and macOS; insufficient shared account capacity can erase the packing gain.
+The layout uses twenty-five long-lived Linux jobs (seventeen serial, three parallel, Herdr, four lint), plus short checks and macOS; insufficient shared account capacity can erase the packing gain.
 Compare complete before/after runs, preserve cancelled and partial-run evidence, and measure a representative normal-run sample before claiming a P95 improvement.
 The workflow retains per-PR supersession and keeps only the newest of close main pushes' runs, without changing the compliance workflow's event semantics.
 

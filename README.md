@@ -55,7 +55,7 @@ Launching a supported harness inside it for your primary session instantiates yo
 - **Strict project boundary** - the first mate is read-only over your projects except for the narrow guarded and captain-approved operations authorized by [hard rule 1](AGENTS.md#1-identity-and-prime-directives), including fleet sync's guarded safe branch pruning; crewmates make every other project change behind the configured merge authority.
 - **Optional daily intake** - off until a home turns it on: a morning intake and a continuous channel intake read the sources the home names (such as Slack, mail, calendar and Asana), keep a ledger of what you still owe, send one grouped private alert for anything urgent, and rebuild a daily to-do page where every line says when it was last checked at its source ([setup](docs/configuration.md#daily-intake-and-to-do-page-configmorning-intake-configchannel-intake)).
 - **Optional meeting intake** - off until a home turns it on: every call recorded with the call recorder, and every meeting recorded by Anarlog, becomes a one-line outcome, clear follow-ups the first mate starts on its own, and items held for your decision; nothing is sent to anyone without your word ([setup](docs/meetings.md)).
-- **Restart-proof** - all state lives on disk and in the active session backend (tmux by hard default, herdr, rex, or cmux when selected or auto-detected, zellij/orca/paseo/t3code/tern/hc when explicitly selected); the next session reconciles after a restart, while ordinary supervision recovers confirmed-dead secondmate agents without waiting for one.
+- **Restart-proof** - all state lives on disk and in the active session backend (see [backend selection](docs/configuration.md#backend-selection-order)); the next session reconciles after a restart, while ordinary supervision recovers confirmed-dead secondmate agents without waiting for one.
 
 Full detail on every feature lives in [docs/architecture.md](docs/architecture.md).
 
@@ -73,10 +73,10 @@ Backend-specific setup is linked in [Documentation](#documentation).
 ### Recommended harnesses
 
 **Claude Code with a Claude plan is the recommended harness** for the primary first mate session, and it is the one the onboarding guides install and sign in.
-It uses a tracked Stop hook for tokenless watcher re-arm and rewake, with a verified turn-end guard when launched through `bin/fm-primary.sh`.
+It uses tracked Stop and StopFailure hooks for [tokenless watcher re-arm and rewake](docs/watcher-continuity.md#claude-stop-hook), including API-error turn ends, with a verified turn-end guard when launched through `bin/fm-primary.sh`.
 
 **Codex and Pi are supported alternatives.**
-Both are verified primaries with the same supervision contract: Codex uses bounded foreground checkpoints, and Pi uses its tracked primary watcher extension, with `pi-signed` supported as Pi's distinct signed-wrapper identity.
+Both are verified primaries with the same supervision contract: Codex uses bounded foreground checkpoints unless a home opts in to its model-free native Stop park, and Pi uses its tracked primary watcher extension, with `pi-signed` supported as Pi's distinct signed-wrapper identity.
 Install and sign in to either, then launch the first mate with `bin/fm-primary.sh codex` or `bin/fm-primary.sh pi`, or keep Claude Code as the first mate and give workers to the other through `config/crew-harness` or your dispatch rules; [the handbook](docs/handbook.md#models-usage-and-second-mates) has the commands.
 
 Other verified primaries, each with its own notes:

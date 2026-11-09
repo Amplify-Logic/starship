@@ -42,8 +42,10 @@
 #                    tmux-dir, with no user tmux config (its plugins never run
 #                    in a lab), started from an empty environment so no inherited
 #                    TMUX, Herdr, or Pi marker reaches a lab process.
-#                    TREEHOUSE_ROOT points into <lab-root>, so a worker's pool
-#                    never lands in ~/.treehouse, and DISABLE_AUTOUPDATER=1
+#                    TREEHOUSE_ROOT points into <lab-root>, and the lab's notes
+#                    project commits a treehouse.toml whose root is that same
+#                    directory (Treehouse 2 reads only the file), so a worker's
+#                    pool never lands in ~/.treehouse, and DISABLE_AUTOUPDATER=1
 #                    keeps Claude Code from replacing the shared binary under
 #                    a running lab, as every live run does (tests/lib.sh).
 #                    A set CLAUDE_CONFIG_DIR (absolute) is passed to every lab
@@ -99,8 +101,13 @@
 #   worker        --worker: its current crew state is paused on the gate.
 #   treehouse     ~/.treehouse gained no entry since up began.
 #
+# Every tmux call names the lab's socket explicitly (tmux -S), never through
+# TMUX_TMPDIR alone, so no lab command can reach another tmux server even after
+# the private tmux directory is gone.
+#
 # down refuses any path without the lab record up writes. It kills only the
-# lab's recorded private tmux server and launch pane PIDs, and their descendants;
+# lab's recorded launch pane PIDs and their descendants, and the lab's private
+# tmux server, which it touches only while that server's socket exists;
 # runs bin/fm-lab-home.sh teardown; removes the task temp and launch dirs the
 # lab's spawns kept under /tmp, including a failed spawn's; removes every
 # project entry at or under <lab-root> from the recorded Claude store, following
@@ -170,15 +177,34 @@ load_lab() {  # <root>: refuse anything up did not build, then load its record
   TREEHOUSE_DIR=$(rec_get "$ROOT" treehouse_dir)
 }
 
-# tmux silently falls back to the default socket when TMUX_TMPDIR names a
-# missing directory, so a vanished lab directory must never reach tmux: that
-# call would land on the person's own sessions, which a kill-server ends.
-lab_tmux() {
-  [ -n "${TMUX_DIR:-}" ] && [ -d "$TMUX_DIR" ] || return 1
-  env -u TMUX TMUX_TMPDIR="$TMUX_DIR" tmux "$@"
+# lab_socket: the explicit path of the lab's tmux socket, the one a lab process
+# reaches through TMUX_TMPDIR=$TMUX_DIR. Every tmux call this script makes names
+# it with -S, never TMUX_TMPDIR alone: tmux uses TMUX_TMPDIR only while that
+# directory exists and otherwise silently falls back to /tmp/tmux-<uid>, where a
+# lab command would reach the user's own default server.
+lab_socket() {
+  [ -n "${TMUX_DIR:-}" ] || return 1
+  printf '%s/tmux-%s/default\n' "$TMUX_DIR" "$(id -u)"
 }
 
-# The empty-environment base every lab process starts from.
+lab_tmux() {
+  local socket
+  socket=$(lab_socket) || return 1
+  env -u TMUX tmux -S "$socket" "$@"
+}
+
+# lab_kill_server: stop the lab's tmux server, and do nothing at all when its
+# socket does not exist.
+lab_kill_server() {
+  local socket
+  socket=$(lab_socket) || return 0
+  [ -S "$socket" ] || return 0
+  lab_tmux kill-server 2>/dev/null || true
+}
+
+# The empty-environment base every lab process starts from. TMUX_TMPDIR here is
+# how the lab's own firstmate backend finds the lab server; those processes run
+# only while that server, and so its directory, exists.
 lab_env_base() {
   printf '%s\n' "HOME=$HOME" "USER=${USER:-$(id -un)}" "LOGNAME=${USER:-$(id -un)}" \
     "PATH=$PATH" "SHELL=${SHELL:-/bin/zsh}" "TERM=xterm-256color" "LANG=${LANG:-en_US.UTF-8}" \
@@ -434,6 +460,9 @@ PY
 A tiny notes library for lab work.
 Run the checks with `python3 -m unittest discover -s tests`.
 MD
+  # Treehouse 2 takes its pool root only from the project's treehouse.toml and
+  # ignores TREEHOUSE_ROOT, so the lab pins the pool inside <lab-root> here.
+  printf 'max_trees = 4\nroot = "%s"\n' "$ROOT/treehouse" > "$seed/treehouse.toml"
   git -C "$seed" add -A
   git -C "$seed" -c user.name=lab -c user.email=lab@example.invalid commit -q -m "seed notes"
   git clone -q --bare "$seed" "$origin"
@@ -558,7 +587,8 @@ cmd_up() {
 
   TMUX_DIR=$("$LAB_HOME_HELPER" tmux-dir "$LAB") || die "cannot create the private tmux directory"
   echo "tmux_dir=$TMUX_DIR" >> "$ROOT/$RECORD_NAME"
-  lab_run tmux -f /dev/null new-session -d -s firstmate -n lab -x 220 -y 60 -c "$ROOT" || die "cannot start the lab tmux server"
+  mkdir -m 700 "$TMUX_DIR/tmux-$(id -u)" || die "cannot create the lab tmux socket directory"
+  lab_run tmux -S "$(lab_socket)" -f /dev/null new-session -d -s firstmate -n lab -x 220 -y 60 -c "$ROOT" || die "cannot start the lab tmux server"
   record_launch_pid "$(lab_tmux display-message -p '#{pid}')"
 
   if [ "$mate" = yes ]; then
@@ -774,7 +804,7 @@ cmd_down() {
     case "$pgid" in ''|0|1|*[!0-9]*) continue ;; esac
     [ "$pgid" = "$own_group" ] || [ "$pgid" = "$caller_group" ] || groups+="$pgid "
   done
-  lab_tmux kill-server 2>/dev/null || true
+  lab_kill_server
   refresh_pairs
   survivors=$(live_pids "$pairs")
   if [ -n "$survivors" ]; then
