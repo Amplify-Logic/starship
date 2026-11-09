@@ -1588,6 +1588,39 @@ test_pr_health_monitor_arms_only_with_its_flag() {
   pass "bootstrap arms the PR health monitor only when config/pr-health-monitor exists"
 }
 
+# config/mothership-monitor arms each room it switches on, and reports the rest.
+test_mothership_monitor_follows_its_setting() {
+  local case_dir fakebin out
+  case_dir="$TMP_ROOT/mothership-monitor"
+  mkdir -p "$case_dir/home/config" "$case_dir/home/data" "$case_dir/home/state"
+  printf '%s\n' manual > "$case_dir/home/config/backlog-backend"
+  printf 'alpha = on\nbeta = sometimes\n' > "$case_dir/home/config/mothership-monitor"
+  # The runner finds built-in adapters under the code root this case points at.
+  ln -s "$ROOT/bin" "$case_dir/home/bin"
+  fakebin=$(make_fake_toolchain "$case_dir")
+  add_real_jq "$fakebin"
+  cat > "$fakebin/mothership" <<'SH'
+#!/usr/bin/env bash
+case "$1" in
+  rooms) printf 'alpha  https://room.example.test\n' ;;
+  position) printf '{"position":{"recordId":"r1","cursor":3,"at":1000}}\n' ;;
+  *) exit 1 ;;
+esac
+SH
+  chmod +x "$fakebin/mothership"
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+    FM_PROCEVENT_CLAIM_ROOT="$case_dir/claims" FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
+  [ "$out" = 'MOTHERSHIP_MONITOR: config/mothership-monitor line 2 is not "<room> = on" or "<room> = off"; treated as off' ] \
+    || fail "bootstrap with a Mothership setting printed: $out"
+  [ -f "$case_dir/home/state/procevent/mothership-alpha.source" ] \
+    || fail "bootstrap did not arm the switched-on room: $(ls -A "$case_dir/home/state")"
+  [ ! -e "$case_dir/home/state/procevent/mothership-beta.source" ] \
+    || fail "bootstrap armed a room from a malformed line"
+  FM_HOME="$case_dir/home" FM_PROCEVENT_CLAIM_ROOT="$case_dir/claims" \
+    "$ROOT/bin/fm-procevent.sh" sweep-home >/dev/null 2>&1 || true
+  pass "bootstrap arms the rooms config/mothership-monitor switches on and reports a malformed line"
+}
+
 test_preferred_provider_validation() {
   local case_dir fakebin out value key
   case_dir="$TMP_ROOT/preferred-provider"
@@ -1842,5 +1875,6 @@ test_stack_tools_notice_runs_in_the_network_half
 test_tasks_axi_verdict_handoff_is_consumed_once
 test_crew_dispatch_active_rules_are_verbose_bootstrap_info
 test_pr_health_monitor_arms_only_with_its_flag
+test_mothership_monitor_follows_its_setting
 test_preferred_provider_validation
 test_crew_dispatch_validation

@@ -1,7 +1,7 @@
 ---
 name: bootstrap-diagnostics
 description: >-
-  Load when the session-start digest's bootstrap or network-checks section, or a standalone bin/fm-bootstrap.sh or bin/fm-startup-network.sh run, prints an actionable diagnostic line - MISSING, MISSING_MANUAL, OUTDATED, PRESENTATION_UNAVAILABLE, BACKEND_INVALID, NEEDS_GH_AUTH, TANGLE, STARTUP_MEMORY_BUDGET, CREW_DISPATCH invalid, FLEET_SYNC, NETWORK_CHECKS, HOME_SUMMARY, BACKLOG_RECONCILE, SECONDMATE_SYNC, SECONDMATE_LIVENESS, SECONDMATE_HANDOFF, NUDGE_SECONDMATES, CONFIG_REREAD, ACCOUNTS invalid, PR_CHECK_MIGRATION, TOOLCHAIN_DRIFT, HOST_ENV, UPSTREAM, UPSTREAM_REPORT, UPSTREAM_CATCHUP, STACK_TOOLS, LEAK_PREPUSH, or FMX - or reports that an interrupted backlog cleanup may have left an endpoint or local copy.
+  Load when the session-start digest's bootstrap or network-checks section, or a standalone bin/fm-bootstrap.sh or bin/fm-startup-network.sh run, prints an actionable diagnostic line - MISSING, MISSING_MANUAL, OUTDATED, PRESENTATION_UNAVAILABLE, BACKEND_INVALID, NEEDS_GH_AUTH, TANGLE, STARTUP_MEMORY_BUDGET, CREW_DISPATCH invalid, FLEET_SYNC, NETWORK_CHECKS, HOME_SUMMARY, BACKLOG_RECONCILE, SECONDMATE_SYNC, SECONDMATE_LIVENESS, SECONDMATE_HANDOFF, NUDGE_SECONDMATES, CONFIG_REREAD, ACCOUNTS invalid, PR_CHECK_MIGRATION, TOOLCHAIN_DRIFT, HOST_ENV, UPSTREAM, UPSTREAM_REPORT, UPSTREAM_CATCHUP, STACK_TOOLS, LEAK_PREPUSH, MOTHERSHIP_MONITOR, or FMX - or reports that an interrupted backlog cleanup may have left an endpoint or local copy.
   A silent bootstrap section, or any other BOOTSTRAP_INFO fact, means no skill load.
 user-invocable: false
 metadata:
@@ -127,5 +127,7 @@ When any diagnostic needs captain attention, report the plain consequence and re
   When the problem is two other pre-push hooks, ask the captain which one to keep rather than removing either.
   When the problem is a `core.hooksPath` outside the repository's git directory (a user-global one, or a tracked hook manager's directory), tell the captain that hand pushes from that checkout go unchecked and ask how they want it handled; that setting is the owner's, so never unset, change or write into it yourself.
   Otherwise fix what the line names and rerun bootstrap.
+- `MOTHERSHIP_MONITOR: <room|config line>: <problem>` - a room `config/mothership-monitor` switches on is not listening, or a line in that file is not `<room> = on|off` and counts as off; the line names the problem, and `bin/fm-procevent-mothership.sh`'s header owns the setting.
+  Tell the captain in plain words which room is not being watched and why, such as a room this Starship has not joined or a Mothership link that needs updating, and switch it on again with `bin/fm-procevent-mothership.sh on <room>` once that is fixed.
 - `FMX: X mode on ...` / `FMX: X mode off ...` - bootstrap confirmed or removed the local Relay poll artifacts (`docs/configuration.md` "Relay (.env)"); the emitted line still carries Relay's former `X mode` wording.
   Only when a running watcher needs the cadence transition applied immediately, restart the home-scoped watcher through the emitted harness supervision protocol; bootstrap deliberately never restarts the watcher itself.

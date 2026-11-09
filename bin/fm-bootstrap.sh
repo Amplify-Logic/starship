@@ -36,6 +36,7 @@
 #                  <version> (small update|quiet-window upgrade); ...",
 #                 "STACK_TOOLS: could not check: <tool>, ...",
 #                 "LEAK_PREPUSH: <checkout>: <problem>",
+#                 "MOTHERSHIP_MONITOR: <room|config line>: <problem>",
 #                 "FMX: X mode on ..." or "FMX: X mode off ...".
 #          When a RUNNING secondmate home is fast-forwarded, its target is
 #          firstmate's own current default-branch commit. A local worktree uses
@@ -154,6 +155,10 @@
 #          Outside detect-only, the local phase installs or refreshes the
 #          pre-push leak check (bin/fm-leak-prepush.sh) on FM_ROOT and on the
 #          add-on checkout; LEAK_PREPUSH names a checkout it could not install on.
+#          Outside detect-only, the local phase also runs
+#          bin/fm-procevent-mothership.sh ensure when config/mothership-monitor
+#          exists or a Mothership room is registered; MOTHERSHIP_MONITOR names a
+#          room it could not arm or a malformed setting line.
 #          X mode is OPTIONAL and inert unless FM_HOME/.env has a non-empty
 #          FMX_PAIRING_TOKEN. When opted in, bootstrap requires curl+jq, writes
 #          the relay poll shim and 30s cadence config, and prints an FMX line.
@@ -2052,6 +2057,13 @@ if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then
     && [ -d "$DATA" ] && [ -x "$SCRIPT_DIR/fm-pr-health.sh" ]; then
     "$SCRIPT_DIR/fm-pr-health.sh" arm >/dev/null \
       || echo "MISSING: the PR health monitor could not be armed; owned PRs are not watched"
+  fi
+  # Arm each room config/mothership-monitor switches on and retire the rest;
+  # bin/fm-procevent-mothership.sh owns the setting and prints only problems.
+  if local_phase && command -v jq >/dev/null 2>&1 && [ -x "$SCRIPT_DIR/fm-procevent-mothership.sh" ] \
+    && { [ -e "$CONFIG/mothership-monitor" ] || ls "$STATE"/procevent/mothership-*.source >/dev/null 2>&1; }; then
+    FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_CONFIG_OVERRIDE="$CONFIG" \
+      "$SCRIPT_DIR/fm-procevent-mothership.sh" ensure 2>&1 || true
   fi
   if [ -n "$fleet_sync_pid" ]; then
     wait "$fleet_sync_pid" || true

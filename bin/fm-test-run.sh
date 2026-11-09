@@ -814,7 +814,7 @@ tests/fm-bearings-board-render.test.sh 20657
 tests/fm-bearings-board.test.sh 47887
 tests/fm-bearings-snapshot.test.sh 194213
 tests/fm-bootstrap-network-parallel.test.sh 98356
-tests/fm-bootstrap.test.sh 157882
+tests/fm-bootstrap.test.sh 159898
 tests/fm-branch-supervision.test.sh 33322
 tests/fm-bridge-view.test.sh 16588
 tests/fm-browse-session.test.sh 1737
@@ -994,6 +994,7 @@ tests/fm-primary-plan-live-e2e.test.sh 1312
 tests/fm-primary.test.sh 10691
 tests/fm-prime-agent-adapter.test.sh 6998
 tests/fm-procevent-extension-errors.test.sh 103911
+tests/fm-procevent-mothership.test.sh 21282
 tests/fm-procevent-quota.test.sh 19422
 tests/fm-procevent-when.test.sh 31299
 tests/fm-procevent.test.sh 335598
