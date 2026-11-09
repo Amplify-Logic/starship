@@ -19,8 +19,9 @@ mkdir -p "$CLAIMS" "$STUB_BIN"
 # requests, `old` makes it a link without `position`, and each file in
 # `pull.d/` is one scripted pull reply (first line the exit code, then `out:`
 # and `err:` lines). With no reply queued, a pull waits out its window and
-# returns the place it was given. A `hang` file makes `position --now` never
-# answer. Every call is logged to `calls`.
+# returns the place it was given. A `hang-now` file makes `position --now`
+# never answer, and `hang-rooms` does the same to `rooms`. Every call is logged
+# to `calls`.
 cat > "$STUB_BIN/mothership" <<'SH'
 #!/usr/bin/env bash
 set -u
@@ -42,11 +43,11 @@ done
 printf '%s room=%s from=%s now=%s set=%s max=%s config=%s\n' \
   "$cmd" "$room" "$from" "$now" "$set_pos" "$max" "${MOTHERSHIP_CONFIG-}" >> "$d/calls"
 case "$cmd" in
-  rooms) cat "$d/rooms" 2>/dev/null; exit 0 ;;
+  rooms) [ ! -e "$d/hang-rooms" ] || sleep 300; cat "$d/rooms" 2>/dev/null; exit 0 ;;
   position)
     if [ -e "$d/old" ]; then echo "Unknown command position. Run mothership help." >&2; exit 1; fi
     if [ -n "$set_pos" ]; then printf '{"position":%s}\n' "$set_pos" > "$d/saved.$room"; cat "$d/saved.$room"; exit 0; fi
-    if [ "$now" = 1 ]; then [ ! -e "$d/hang" ] || sleep 300; cat "$d/now"; exit 0; fi
+    if [ "$now" = 1 ]; then [ ! -e "$d/hang-now" ] || sleep 300; cat "$d/now"; exit 0; fi
     cat "$d/saved.$room" 2>/dev/null || echo '{"position":{"recordId":null,"cursor":0,"at":0}}'
     exit 0
     ;;
@@ -248,16 +249,24 @@ test_ensure_follows_the_setting() {
 test_ensure_bounds_a_room_that_never_answers() {
   local h out started elapsed
   h=$(make_home hang)
-  : > "$h/stub/hang"
+  : > "$h/stub/hang-now"
   printf 'alpha = on\n' > "$h/home/config/mothership-monitor"
   started=$(date +%s)
   out=$(in_home "$h" env FM_MOTHERSHIP_LINK_TIMEOUT=2 "$ADAPTER" ensure 2>&1) || fail "ensure failed: $out"
   elapsed=$(( $(date +%s) - started ))
   [ "$elapsed" -lt 10 ] || fail "ensure waited ${elapsed}s on a room that never answers"
-  assert_contains "$out" "MOTHERSHIP_MONITOR: alpha: could not read where the room ends" "the unreachable room is reported"
-  assert_contains "$out" "nothing is listening" "the report says nothing is listening"
+  assert_equals "MOTHERSHIP_MONITOR: alpha: the Mothership link did not answer within 2s; nothing is listening" "$out" \
+    "a room whose end never arrives is reported as a link that did not answer"
   [ ! -e "$h/home/state/procevent/mothership-alpha.source" ] || fail "a room that never answered was armed"
   [ ! -e "$h/home/state/mothership/alpha.position" ] || fail "a room that never answered got a place"
+
+  rm -f "$h/stub/hang-now"
+  : > "$h/stub/hang-rooms"
+  out=$(in_home "$h" env FM_MOTHERSHIP_LINK_TIMEOUT=2 "$ADAPTER" ensure 2>&1) || fail "ensure failed: $out"
+  assert_equals "MOTHERSHIP_MONITOR: alpha: the Mothership link did not answer within 2s; nothing is listening" "$out" \
+    "a rooms list that never arrives is not reported as an unjoined room"
+  out=$(in_home "$h" env FM_MOTHERSHIP_LINK_TIMEOUT=2 "$ADAPTER" on alpha 2>&1) && fail "on succeeded with a link that never answers"
+  assert_equals "error: alpha: the Mothership link did not answer within 2s" "$out" "on reports a link that did not answer"
   pass "ensure gives up on a link call that never returns and reports the room"
 }
 

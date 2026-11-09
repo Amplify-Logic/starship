@@ -304,23 +304,38 @@ link_run_for() {  # <seconds> <args...>: run the link with the resolved command,
 
 link_run() { link_run_for "$LINK_TIMEOUT" "$@"; }  # <args...>
 
-room_joined() {  # <room>
-  link_run rooms 2>/dev/null | awk -v room="$1" '$1 == room { found = 1 } END { exit !found }'
+link_timeout_note() { printf 'the Mothership link did not answer within %ss\n' "$LINK_TIMEOUT"; }
+
+joined_rooms() {  # print the joined rooms, or fail with the link's status
+  local out rc=0
+  out=$(link_run rooms 2>/dev/null) || rc=$?
+  [ "$rc" -eq 0 ] || return "$rc"
+  printf '%s\n' "$out" | awk 'NF { print $1 }'
 }
 
-joined_rooms() { link_run rooms 2>/dev/null | awk 'NF { print $1 }'; }
+room_joined() {  # <room>: fails 1 when it is not joined, 2 when the link timed out
+  local rooms rc=0
+  rooms=$(joined_rooms) || rc=$?
+  ! fm_timed_out "$rc" || return 2
+  printf '%s\n' "$rooms" | awk -v room="$1" '$1 == room { found = 1 } END { exit !found }'
+}
 
 # ----- the monitor's place and told mark -----
 
 # Seed this monitor's place and told mark for <room> if it has no place. Prints a
 # problem and fails.
 seed_position() {  # <room>
-  local room=$1 line saved err
+  local room=$1 line saved err rc=0
   read_position "$room" >/dev/null && return 0
   err=$(mktemp "${TMPDIR:-/tmp}/fm-mothership-err.XXXXXX") || { printf 'cannot stage output\n'; return 1; }
-  if ! line=$(link_run position --room "$room" 2>"$err"); then
-    printf 'your Mothership link cannot keep a separate place (%s); update the Mothership link first\n' \
-      "$(sanitize_line "$(tail -n 1 "$err")" 200)"
+  line=$(link_run position --room "$room" 2>"$err") || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    if fm_timed_out "$rc"; then
+      link_timeout_note
+    else
+      printf 'your Mothership link cannot keep a separate place (%s); update the Mothership link first\n' \
+        "$(sanitize_line "$(tail -n 1 "$err")" 200)"
+    fi
     rm -f -- "$err"
     return 1
   fi
@@ -330,8 +345,13 @@ seed_position() {  # <room>
     return 1
   }
   if [ "$(printf '%s' "$saved" | jq -r '.recordId == null and .cursor == 0')" = true ]; then
-    if ! line=$(link_run position --room "$room" --now 2>"$err"); then
-      printf 'could not read where the room ends: %s\n' "$(sanitize_line "$(tail -n 1 "$err")" 200)"
+    line=$(link_run position --room "$room" --now 2>"$err") || rc=$?
+    if [ "$rc" -ne 0 ]; then
+      if fm_timed_out "$rc"; then
+        link_timeout_note
+      else
+        printf 'could not read where the room ends: %s\n' "$(sanitize_line "$(tail -n 1 "$err")" 200)"
+      fi
       rm -f -- "$err"
       return 1
     fi
@@ -676,12 +696,14 @@ disarm_room() {  # <room>
 }
 
 cmd_on() {
-  local room=${1-} problem id requests
+  local room=${1-} problem id requests rc=0
   [ -n "$room" ] || usage
   [ "$#" -eq 1 ] || usage
   require_room "$room"
   resolve_link || die "$LINK_PROBLEM"
-  room_joined "$room" || die "$room is not one of this Starship's rooms (mothership rooms lists: $(joined_rooms | tr '\n' ' ' | sed 's/ $//'))"
+  room_joined "$room" || rc=$?
+  [ "$rc" -ne 2 ] || die "$room: $(link_timeout_note)"
+  [ "$rc" -eq 0 ] || die "$room is not one of this Starship's rooms (mothership rooms lists: $(joined_rooms | tr '\n' ' ' | sed 's/ $//'))"
   problem=$(arm_room "$room") || die "$room: $problem"
   setting_write "$room" on
   id=$(source_id "$room")
@@ -710,7 +732,7 @@ cmd_off() {
 }
 
 cmd_ensure() {
-  local entries room value id rec problem have_link=1
+  local entries room value id rec problem rc have_link=1
   entries=$(setting_entries)
   if [ -n "$entries" ] && printf '%s\n' "$entries" | awk '$2 == "on" { f = 1 } END { exit !f }'; then
     resolve_link || { have_link=0; printf 'MOTHERSHIP_MONITOR: %s\n' "$LINK_PROBLEM"; }
@@ -730,7 +752,13 @@ cmd_ensure() {
   printf '%s\n' "$entries" | while read -r room value; do
     [ "$value" = on ] || continue
     registered "$room" && continue
-    if ! room_joined "$room"; then
+    rc=0
+    room_joined "$room" || rc=$?
+    if [ "$rc" -eq 2 ]; then
+      printf 'MOTHERSHIP_MONITOR: %s: %s; nothing is listening\n' "$room" "$(link_timeout_note)"
+      continue
+    fi
+    if [ "$rc" -ne 0 ]; then
       printf 'MOTHERSHIP_MONITOR: %s: switched on but not one of this Starship'"'"'s rooms (mothership rooms); nothing is listening\n' "$room"
       continue
     fi
