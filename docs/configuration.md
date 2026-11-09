@@ -976,8 +976,8 @@ beta = off
 - A room not listed, or the file absent, is off; with no file and nothing registered, nothing runs and no state is created.
 - Any other line is reported as a `MOTHERSHIP_MONITOR:` line at session start and treated as off, so a malformed file never switches a room on.
 - `bin/fm-procevent-mothership.sh on <room>` and `off <room>` switch a room and write the file, and the owner can simply ask the first mate to do it; `status` shows each room.
-- `on` refuses a room this Starship has not joined, and a Mothership link too old to keep a separate place in the room, with "update the Mothership link first".
-- Session start runs the adapter's `ensure`, which arms each `on` room that is not listening and retires each room that is now off or no longer listed, so an edit by hand takes effect at the next session start.
+- `on` refuses a room this Starship has not joined, a Mothership link too old to keep a separate place in the room, with "update the Mothership link first", and a link that does not answer within 20 seconds.
+- Session start runs the adapter's `ensure`, which arms each `on` room that is not listening and retires each room that is now off or no longer listed, so an edit by hand takes effect at the next session start; a room the link does not answer for within 20 seconds is reported as a `MOTHERSHIP_MONITOR:` line instead of holding session start, and is tried again at the next one.
 
 Each switched-on room is one built-in [process-event source](#process-to-event-sources-stateprocevent) that long-polls the room with `mothership pull --from <place> --wait 55`.
 That read neither reads nor moves the place plain `mothership pull` keeps, so monitoring keeps its own place in the room under `state/mothership/`, and a manual pull and the monitor never move each other's place.
