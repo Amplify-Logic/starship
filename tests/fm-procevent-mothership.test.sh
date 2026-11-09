@@ -19,7 +19,8 @@ mkdir -p "$CLAIMS" "$STUB_BIN"
 # requests, `old` makes it a link without `position`, and each file in
 # `pull.d/` is one scripted pull reply (first line the exit code, then `out:`
 # and `err:` lines). With no reply queued, a pull waits out its window and
-# returns the place it was given. Every call is logged to `calls`.
+# returns the place it was given. A `hang` file makes `position --now` never
+# answer. Every call is logged to `calls`.
 cat > "$STUB_BIN/mothership" <<'SH'
 #!/usr/bin/env bash
 set -u
@@ -45,7 +46,7 @@ case "$cmd" in
   position)
     if [ -e "$d/old" ]; then echo "Unknown command position. Run mothership help." >&2; exit 1; fi
     if [ -n "$set_pos" ]; then printf '{"position":%s}\n' "$set_pos" > "$d/saved.$room"; cat "$d/saved.$room"; exit 0; fi
-    if [ "$now" = 1 ]; then cat "$d/now"; exit 0; fi
+    if [ "$now" = 1 ]; then [ ! -e "$d/hang" ] || sleep 300; cat "$d/now"; exit 0; fi
     cat "$d/saved.$room" 2>/dev/null || echo '{"position":{"recordId":null,"cursor":0,"at":0}}'
     exit 0
     ;;
@@ -242,6 +243,22 @@ test_ensure_follows_the_setting() {
   out=$(in_home "$h" "$ADAPTER" ensure 2>&1) || fail "ensure with the setting removed failed: $out"
   [ ! -e "$h/home/state/procevent/mothership-alpha.source" ] || fail "a removed setting left a room registered"
   pass "ensure arms on rooms, retires off and unlisted ones, and reports bad lines"
+}
+
+test_ensure_bounds_a_room_that_never_answers() {
+  local h out started elapsed
+  h=$(make_home hang)
+  : > "$h/stub/hang"
+  printf 'alpha = on\n' > "$h/home/config/mothership-monitor"
+  started=$(date +%s)
+  out=$(in_home "$h" env FM_MOTHERSHIP_LINK_TIMEOUT=2 "$ADAPTER" ensure 2>&1) || fail "ensure failed: $out"
+  elapsed=$(( $(date +%s) - started ))
+  [ "$elapsed" -lt 10 ] || fail "ensure waited ${elapsed}s on a room that never answers"
+  assert_contains "$out" "MOTHERSHIP_MONITOR: alpha: could not read where the room ends" "the unreachable room is reported"
+  assert_contains "$out" "nothing is listening" "the report says nothing is listening"
+  [ ! -e "$h/home/state/procevent/mothership-alpha.source" ] || fail "a room that never answered was armed"
+  [ ! -e "$h/home/state/mothership/alpha.position" ] || fail "a room that never answered got a place"
+  pass "ensure gives up on a link call that never returns and reports the room"
 }
 
 test_source_windows() {
@@ -455,6 +472,7 @@ fm_test_run \
   test_on_off_status \
   test_config_pinned_only_when_named \
   test_ensure_follows_the_setting \
+  test_ensure_bounds_a_room_that_never_answers \
   test_source_windows \
   test_autohandle_and_told \
   test_told_after_a_missed_told \

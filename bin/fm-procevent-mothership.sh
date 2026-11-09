@@ -93,7 +93,9 @@
 # (when the room last answered), <room>.failures (failures in a row).
 #
 # Environment: FM_MOTHERSHIP_BIN names the mothership command instead of the
-# one on PATH; FM_MOTHERSHIP_WAIT_SECONDS (1..55, default 55) is the window.
+# one on PATH; FM_MOTHERSHIP_WAIT_SECONDS (1..55, default 55) is the window;
+# FM_MOTHERSHIP_LINK_TIMEOUT (seconds, default 20) bounds every other link
+# call, and a call that runs past it counts as failed.
 # docs/configuration.md "Mothership monitoring (config/mothership-monitor)"
 # owns the setting and its operating contract.
 set -u
@@ -124,6 +126,8 @@ TEXT_CAP=600
 WAIT_SECONDS=${FM_MOTHERSHIP_WAIT_SECONDS:-55}
 case "$WAIT_SECONDS" in ''|*[!0-9]*) WAIT_SECONDS=55 ;; esac
 [ "$WAIT_SECONDS" -ge 1 ] && [ "$WAIT_SECONDS" -le 55 ] || WAIT_SECONDS=55
+LINK_TIMEOUT=${FM_MOTHERSHIP_LINK_TIMEOUT:-20}
+case "$LINK_TIMEOUT" in ''|*[!0-9]*|0) LINK_TIMEOUT=20 ;; esac
 
 usage() {
   awk '
@@ -288,15 +292,17 @@ resolve_link() {
   return 0
 }
 
-link_run() {  # <args...>: run the link with the resolved command, config and node
-  local path=$PATH
-  [ -z "$LINK_NODE_DIR" ] || path="$LINK_NODE_DIR:$PATH"
-  if [ -n "$LINK_CONFIG" ]; then
-    PATH=$path MOTHERSHIP_CONFIG=$LINK_CONFIG "$LINK_BIN" "$@" < /dev/null
-  else
-    PATH=$path "$LINK_BIN" "$@" < /dev/null
-  fi
+# The timeout runs a program, never a shell function, so the environment the
+# link needs is spelled out through env.
+link_run_for() {  # <seconds> <args...>: run the link with the resolved command, config and node
+  local seconds=$1
+  shift
+  local -a link_env=(PATH="${LINK_NODE_DIR:+$LINK_NODE_DIR:}$PATH")
+  [ -z "$LINK_CONFIG" ] || link_env+=(MOTHERSHIP_CONFIG="$LINK_CONFIG")
+  fm_run_timed "$seconds" env "${link_env[@]}" "$LINK_BIN" "$@" < /dev/null
 }
+
+link_run() { link_run_for "$LINK_TIMEOUT" "$@"; }  # <args...>
 
 room_joined() {  # <room>
   link_run rooms 2>/dev/null | awk -v room="$1" '$1 == room { found = 1 } END { exit !found }'
@@ -581,12 +587,8 @@ cmd_source() {
   err=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-mothership-err.XXXXXX") || { rm -f -- "$out"; return 1; }
   started=$(date +%s)
   rc=0
-  # The timeout runs a program, never a shell function, so the environment
-  # link_run sets is spelled out through env here.
-  local -a link_env=(PATH="${LINK_NODE_DIR:+$LINK_NODE_DIR:}$PATH")
-  [ -z "$LINK_CONFIG" ] || link_env+=(MOTHERSHIP_CONFIG="$LINK_CONFIG")
-  fm_run_timed $((WAIT_SECONDS + 30)) env "${link_env[@]}" "$LINK_BIN" pull --room "$room" --from "$pos" \
-    --wait "$WAIT_SECONDS" --max "$MAX_ITEMS" < /dev/null > "$out" 2> "$err" || rc=$?
+  link_run_for $((WAIT_SECONDS + 30)) pull --room "$room" --from "$pos" \
+    --wait "$WAIT_SECONDS" --max "$MAX_ITEMS" > "$out" 2> "$err" || rc=$?
   if fm_timed_out "$rc"; then rc=3; fi
   case "$rc" in
     0) ;;
