@@ -1454,7 +1454,10 @@ make_poll_fixture() {
 
 run_poll() {
   local dir=$1
-  FM_TEST_GH_LOG="$dir/gh.log" FM_TEST_GLAB_LOG="$dir/glab.log" \
+  # The published check resolves its home from FM_HOME first, as the watcher
+  # that runs it in a real home does, so the case home must be named here
+  # rather than inherited from the suite's hermetic home.
+  FM_HOME="$dir/home" FM_TEST_GH_LOG="$dir/gh.log" FM_TEST_GLAB_LOG="$dir/glab.log" \
     FM_TEST_GERRIT_AXI_LOG="$dir/gerrit-axi.log" FM_TEST_JQ="$REAL_JQ" \
     PATH="$dir/fakebin:$BASE_PATH" \
     bash "$dir/home/state/task-a.check.sh"
@@ -3378,7 +3381,7 @@ group/subgroup/project
   # TERM to the poll's process group, takes the hung read's own process
   # group down with it rather than leaving glab running after the watcher.
   rm -f "$dir/glab.log.train" "$dir/glab.log.hangpid"
-  FM_TEST_GLAB_STATE=opened FM_TEST_GLAB_PIPELINE=failed FM_TEST_GLAB_DETAIL_HANG=1 \
+  FM_HOME="$dir/home" FM_TEST_GLAB_STATE=opened FM_TEST_GLAB_PIPELINE=failed FM_TEST_GLAB_DETAIL_HANG=1 \
     FM_TEST_GH_LOG="$dir/gh.log" FM_TEST_GLAB_LOG="$dir/glab.log" FM_TEST_JQ="$REAL_JQ" \
     PATH="$dir/fakebin:$BASE_PATH" \
     perl -e 'setpgrp(0, 0) or die "setpgrp: $!"; exec @ARGV or die "exec: $!"' \
@@ -3424,7 +3427,7 @@ EOF
     started=$SECONDS
     out=$(FM_TEST_GLAB_STATE=opened FM_TEST_GLAB_PIPELINE="$([ -n "$train" ] && echo success || echo failed)" \
       FM_TEST_GLAB_TRAIN="$train" FM_TEST_GLAB_DETAIL_HANG=1 FM_TEST_GLAB_LOG="$dir/glab.log" \
-      FM_TEST_JQ="$REAL_JQ" PATH="$noperl" bash "$dir/home/state/task-a.check.sh")
+      FM_HOME="$dir/home" FM_TEST_JQ="$REAL_JQ" PATH="$noperl" bash "$dir/home/state/task-a.check.sh")
     elapsed=$((SECONDS - started))
     case $out in
       'degraded pipeline=941 url=https://gitlab.example/group/subgroup/project/-/pipelines/941') [ -z "$train" ] || fail "GitLab train drop emitted a pipeline line without perl: $out" ;;
