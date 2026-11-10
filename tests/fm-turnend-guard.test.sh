@@ -999,7 +999,8 @@ test_tracked_claude_entries_inert_under_grok() {
   mkdir -p "$dir/bin"
   for script in fm-turnend-guard.sh fm-claude-stop-autoarm.sh fm-claude-reply-speak.sh \
     fm-sessionstart-run.sh fm-arm-pretool-check.sh fm-cd-pretool-check.sh fm-subagent-pretool-check.sh \
-    fm-continuity-pretool-check.sh fm-captain-ledger.sh fm-host-mirror.sh fm-pr-text-pretool-check.sh; do
+    fm-continuity-pretool-check.sh fm-captain-ledger.sh fm-host-mirror.sh fm-pr-text-pretool-check.sh \
+    fm-stow-guard.sh; do
     printf '#!/usr/bin/env bash\nprintf ran >> %q\n' "$dir/invoked" > "$dir/bin/$script"
     chmod +x "$dir/bin/$script"
   done
@@ -1040,12 +1041,12 @@ test_tracked_claude_entries_inert_under_grok() {
       || fail "tracked entry for $target ran under a legacy GROK_AGENT environment"
   done < <(jq -r '.hooks[][].hooks[].command' "$ROOT/.claude/settings.json")
 
-  # Twelve: upstream's eight (five plus the dialog-mirror prompt-submit and Stop
-  # hooks and the StopFailure auto-arm) plus this fork's own watcher-continuity
-  # pre-tool check, its primary reply-speak Stop hook, its captain-ledger
-  # prompt-submit hook, and its PR text check, which answers only in Claude's
-  # shape and so does nothing for Grok.
-  [ "$guarded" -eq 12 ] || fail "expected 12 grok-guarded tracked entries, saw $guarded"
+  # Thirteen: upstream's nine (five plus the dialog-mirror prompt-submit and Stop
+  # hooks, the StopFailure auto-arm, and the pre-compaction stow guard) plus this
+  # fork's own watcher-continuity pre-tool check, its primary reply-speak Stop
+  # hook, its captain-ledger prompt-submit hook, and its PR text check, which
+  # answers only in Claude's shape and so does nothing for Grok.
+  [ "$guarded" -eq 13 ] || fail "expected 13 grok-guarded tracked entries, saw $guarded"
   [ "$unguarded" -eq 1 ] || fail "expected 1 documented unguarded tracked entry, saw $unguarded"
   pass "tracked .claude/settings.json entries: $guarded inert under grok, the documented subagent exception still armed, all live under Claude"
 }

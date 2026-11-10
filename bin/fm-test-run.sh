@@ -441,7 +441,7 @@ family_for_basename() {
     fm-trace-context-spawn.test.sh|fm-spawn-worktree-settle.test.sh|\
     fm-spawn-compact-adviser-disable.test.sh|\
     fm-spawn-compact-adviser-disable-remote.test.sh|\
-    fm-project-capacity.test.sh|\
+    fm-project-capacity.test.sh|fm-lane-capacity-integration.test.sh|\
     fm-teardown-endpoint-safety.test.sh)
       printf '%s\n' backend-dispatch
       ;;
@@ -482,7 +482,8 @@ family_for_basename() {
       printf '%s\n' hc
       ;;
     fm-branch-supervision.test.sh|fm-busy-adapter-wiring.test.sh|\
-    fm-busy-state.test.sh|fm-capacity.test.sh|fm-classify-corr-token.test.sh|\
+    fm-busy-state.test.sh|fm-capacity.test.sh|fm-capacity-auto.test.sh|fm-lane-vitals.test.sh|\
+    fm-classify-corr-token.test.sh|\
     fm-claude-account-quota.test.sh|\
     fm-claude-stop-autoarm.test.sh|fm-cursor-harness.test.sh|\
     fm-dispatch-resolve.test.sh|\
@@ -829,6 +830,7 @@ tests/fm-calm-extension.test.sh 6150
 tests/fm-calm-pi-extension.test.sh 58845
 tests/fm-calm-pi-queue-retention-live-e2e.test.sh 2441
 tests/fm-capability.test.sh 1779
+tests/fm-capacity-auto.test.sh 36243
 tests/fm-capacity.test.sh 9088
 tests/fm-captain-ledger.test.sh 6277
 tests/fm-cd-guard-claude-reset-live-e2e.test.sh 1186
@@ -935,7 +937,10 @@ tests/fm-kimi-worker.test.sh 1291
 tests/fm-kiro-harness.test.sh 45967
 tests/fm-kiro-signals-live-e2e.test.sh 1284
 tests/fm-landed-completion-truth.test.sh 9667
+tests/fm-lane-capacity-integration.test.sh 48000
+tests/fm-lane-vitals.test.sh 5077
 tests/fm-launch-prompt-signals-live-e2e.test.sh 92
+tests/fm-lavish-url.test.sh 30000
 tests/fm-leak-guard.test.sh 7054
 tests/fm-leak-prepush.test.sh 5411
 tests/fm-lint-workflows.test.sh 2998
@@ -1016,6 +1021,7 @@ tests/fm-remote-delta-read.test.sh 7426
 tests/fm-remote-doctor.test.sh 24714
 tests/fm-remote-entrypoint.test.sh 1620
 tests/fm-remote-herdr-guard.test.sh 4211
+tests/fm-remote-herdr-identity.test.sh 6158
 tests/fm-remote-inherit-generation.test.sh 6502
 tests/fm-remote-job-claim-reap.test.sh 3701
 tests/fm-remote-job-claim-retention.test.sh 189
@@ -1086,10 +1092,12 @@ tests/fm-stat-shadowing.test.sh 1015
 tests/fm-status-bar.test.sh 15828
 tests/fm-stow-cascade.test.sh 4531
 tests/fm-stow-contract.test.sh 1204
+tests/fm-stow-guard.test.sh 30000
 tests/fm-subagent-pretool-check.test.sh 2907
 tests/fm-supervision-events.test.sh 4812
 tests/fm-supervision-host-attended-live-e2e.test.sh 1335
 tests/fm-supervision-host-drain.test.sh 45950
+tests/fm-supervision-host-herdr-live-e2e.test.sh 1000
 tests/fm-supervision-host-hook.test.sh 403793
 tests/fm-supervision-host-live-e2e.test.sh 1275
 tests/fm-supervision-host-park.test.sh 329326
@@ -1862,6 +1870,14 @@ families_for_changed_path() {
       ;;
     bin/fm-capacity.sh)
       printf '%s\n' "__script__:fm-capacity.test.sh"
+      printf '%s\n' "__script__:fm-capacity-auto.test.sh"
+      printf '%s\n' "__script__:fm-project-capacity.test.sh"
+      printf '%s\n' "__script__:fm-lane-capacity-integration.test.sh"
+      ;;
+    bin/fm-lane-vitals-lib.sh)
+      printf '%s\n' "__script__:fm-lane-vitals.test.sh"
+      printf '%s\n' "__script__:fm-capacity-auto.test.sh"
+      printf '%s\n' "__script__:fm-lane-capacity-integration.test.sh"
       ;;
     bin/fm-env-lib.sh)
       # The one .env accessor, sourced by bin/fm-x-lib.sh (Relay token) and
@@ -2031,6 +2047,10 @@ families_for_changed_path() {
     .agents/skills/harness-adapters/SKILL.md|.agents/skills/harness-adapters/references/*)
       printf '%s\n' pure-contract-unit
       printf '%s\n' live-harness-optin
+      ;;
+    .agents/skills/lavish-url/assets/*|.agents/skills/lavish-url/enhancers/*)
+      # The layers bin/fm-lavish-url.sh injects into every snapshot.
+      printf '%s\n' "__script__:fm-lavish-url.test.sh"
       ;;
     .agents/skills/*/SKILL.md|.agents/opt-in-skills/*/SKILL.md|.agents/opt-in-skills/macos-computer-use/recipes.md)
       printf '%s\n' pure-contract-unit

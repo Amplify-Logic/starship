@@ -142,6 +142,8 @@ state/               runtime records and signals; gitignored
   <id>.merge-authority  private canonical-PR-bound authority persisted after firstmate's forge merge request is accepted and consumed by a later merged poll; bin/fm-merge-authority-lib.sh owns its format and lifecycle
   <id>.pr-poll-merge-notified  canonical PR identity of the last merge outcome delivered for this task; bin/fm-pr-lib.sh owns the marker format and identity mechanics, while bin/fm-merge-outcome-lib.sh owns locked publication, duplicate suppression, and replacement
   dispatch-decisions.jsonl  append-only local record of answered dispatch resolves (task id, outcome, rule, probability, chosen profile; no brief text); written only by bin/fm-dispatch-resolve.sh and read by bin/fm-routing-snapshot.sh (docs/configuration.md "Typed dispatch resolution")
+  <id>.pr-poll-degraded  identity of the last degraded-after-ready state (head, pipeline, or merge-train transition) woken for this task, so a repeat stays silent; bin/fm-pr-lib.sh owns the marker format, removed at teardown and replaced by the arming baseline at re-arm
+  <id>.pr-poll-train  record that the watched merge request was seen on its merge train since its last drop wake, so only a drop after a (re-)queue wakes; same format owner, written at arming or on an on-train poll, cleared by the drop wake and at teardown
   branch-outcomes.jsonl .branch-outcomes-cursor .branch-outcomes-processed .<task>.branch-outcome-index .branch-outcome-index-ready .branch-outcomes-tail.jsonl  Pi supervision-branch durable outcome store, its read cursor, main's processed marker, bounded latest per-task status-coverage caches, their recovery marker, and a bounded display copy of the newest rows; bin/fm-branch-outcome.sh owns the formats
   branch-session/ .branch-session .branch-mirror-cursor  the branch's per-main-session conversations, the pointer to the current one, and the dialog-mirror cursor; extension-owned (docs/pi-supervision-branch.md)
   .branch-eligible-rows .branch-eligible-owner .main-eligible-rows  per-actor wake-row claims and branch-owner evidence; docs/watcher-continuity.md owns the acknowledgement contract
@@ -202,6 +204,9 @@ state/               runtime records and signals; gitignored
   command-guard.log .command-guard-outage  worker command guard decision log (redacted commands, rotated) and its open-outage marker; bin/fm-command-guard.py owns both
   outward-check.log  worker outward check record of every refusal and every outward action a permission, a broad switch or no block allowed (no message contents); bin/fm-outward-check.py owns it
   lane-capacity.json  this home's published lane facts, refreshed only while config/lane-capacity exists; written only by bin/fm-capacity.sh --publish, whose header owns the document
+  lane-footprint.json  auto lane budget's per-lane footprint ledger, written only by bin/fm-capacity.sh --publish in auto mode, whose header owns the format
+  .lane-vitals-host  cached Windows host view for the auto budget under WSL2 and on native Windows, written only by bin/fm-capacity.sh --publish; safe to delete
+  .lane-admission.lock  bin/fm-spawn.sh's machine-wide lane admission lock in the local root home, taken only with admit-spawns; never touch
   .last-watcher-beat watcher liveness beacon, touched every poll (including while absorbing benign wakes); guard scripts read it
   .subsuper-* .supervise-daemon.*   sub-supervisor internals; never touch
 .no-mistakes/        local validation state and evidence; gitignored
