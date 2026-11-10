@@ -123,7 +123,7 @@ SH
   # No Windows host view, so a WSL2 run never reads the live Windows host's memory.
   printf '#!/usr/bin/env bash\nexit 1\n' > "$fakebin/powershell.exe"
   chmod +x "$fakebin"/*
-  fm_fake_exit0 "$fakebin" gh gh-axi no-mistakes
+  fm_fake_exit0 "$fakebin" gh gh-axi no-mistakes codex
   fm_git_init_commit "$case_dir/project"
   fm_git_add_origin "$case_dir/project" "$case_dir/project.origin.git"
   touch "$home/state/.last-watcher-beat"
@@ -518,7 +518,7 @@ test_live_load_shrinks_and_recovers() {
   h="$c/home"
   # Only the terminal and worktree tool are faked for the spawn; every probe is real.
   mkdir -p "$c/fakebin-spawn"
-  cp "$c/fakebin/tmux" "$c/fakebin/treehouse" "$c/fakebin/gh" "$c/fakebin/gh-axi" "$c/fakebin/no-mistakes" "$c/fakebin-spawn/"
+  cp "$c/fakebin/tmux" "$c/fakebin/treehouse" "$c/fakebin/gh" "$c/fakebin/gh-axi" "$c/fakebin/no-mistakes" "$c/fakebin/codex" "$c/fakebin-spawn/"
   printf 'auto\nadmit-spawns\nmin-avail-gb 2\nmin-disk-gb 1\n' > "$h/config/lane-capacity"
   cores=$(getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.logicalcpu)
   n=$((cores * 2 + 2))

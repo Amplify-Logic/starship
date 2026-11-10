@@ -479,6 +479,8 @@ function makeHost(session) {
     // Pi reads its session through runtimeHost, which a session replacement swaps.
     runtimeHost: { session },
     compactionQueuedMessages: [],
+    // Pi 1.5.1+ lists user bash output in the pending area before queued rows.
+    pendingBashComponents: [],
     statuses: [],
     warnings: [],
     editorText: "",

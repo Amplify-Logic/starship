@@ -41,6 +41,8 @@ launch_without_case_paths() {  # <launch-line> <home> <task-id> <spawn-bin-dir>
   # and the case home's state and config directories.
   launch=${launch//$home\/state/<STATE>}
   launch=${launch//$home\/config/<CONFIG>}
+  # The worker's exported FM_HOME names the case home itself.
+  launch=${launch//$home/<HOME>}
   launch=${launch//fm-$id/fm-<ID>}
   launch=${launch//\'$id\'/\'<ID>\'}
   # The launch-brief doorbell names a fresh record on every spawn, and the Git
