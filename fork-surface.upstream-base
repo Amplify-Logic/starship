@@ -1,4 +1,4 @@
-# upstream_base = 47e07b404afb9a4f9deeada886cce01d012c4749
+# upstream_base = 913bb7a7b6e68a107c2d0ee755ee29c6f9e7b208
 .agents/hooks.json
 .agents/skills/afk/SKILL.md
 .agents/skills/agent-skill-trigger-index/SKILL.md
@@ -40,6 +40,11 @@
 .agents/skills/harness-adapters/references/harness/pi.md
 .agents/skills/harness-adapters/references/harness/polytoken.md
 .agents/skills/harness-adapters/references/harness/rovo.md
+.agents/skills/lavish-url/SKILL.md
+.agents/skills/lavish-url/assets/core.css
+.agents/skills/lavish-url/assets/core.js
+.agents/skills/lavish-url/enhancers/default.js
+.agents/skills/lavish-url/enhancers/odoo.js
 .agents/skills/operational-home-layout/SKILL.md
 .agents/skills/process-event-sources/SKILL.md
 .agents/skills/project-management/SKILL.md
@@ -235,6 +240,9 @@ bin/fm-kimi-trust-lib.sh
 bin/fm-kimi-turnend-hook.sh
 bin/fm-lab-home.sh
 bin/fm-landed-lib.sh
+bin/fm-lane-vitals-lib.sh
+bin/fm-lavish-url.py
+bin/fm-lavish-url.sh
 bin/fm-lease-lib.sh
 bin/fm-lease.sh
 bin/fm-line-cap-lib.sh
@@ -295,6 +303,7 @@ bin/fm-remote-doctor.sh
 bin/fm-remote-entrypoint.sh
 bin/fm-remote-file.sh
 bin/fm-remote-herdr-guard.sh
+bin/fm-remote-herdr-identity-lib.sh
 bin/fm-remote-herdr-owner-lib.sh
 bin/fm-remote-home-provision.sh
 bin/fm-remote-home-seed.sh
@@ -333,6 +342,7 @@ bin/fm-startup-memory-budget-lib.sh
 bin/fm-startup-memory-budget.sh
 bin/fm-startup-network.sh
 bin/fm-stow-cascade.sh
+bin/fm-stow-guard.sh
 bin/fm-subagent-pretool-check.sh
 bin/fm-supervise-daemon.sh
 bin/fm-supervision-engine-lib.sh
@@ -568,6 +578,7 @@ tests/fm-calm-claude-mod-plugin.test.sh
 tests/fm-calm-claude-mod.test.sh
 tests/fm-calm-pi-extension.test.sh
 tests/fm-calm-pi-queue-retention-live-e2e.test.sh
+tests/fm-capacity-auto.test.sh
 tests/fm-capacity.test.sh
 tests/fm-captain-hold-lifecycle.test.sh
 tests/fm-cd-pretool-check.test.sh
@@ -652,7 +663,10 @@ tests/fm-kimi-harness.test.sh
 tests/fm-kimi-trust-prompt-live-e2e.test.sh
 tests/fm-kiro-harness.test.sh
 tests/fm-kiro-signals-live-e2e.test.sh
+tests/fm-lane-capacity-integration.test.sh
+tests/fm-lane-vitals.test.sh
 tests/fm-launch-prompt-signals-live-e2e.test.sh
+tests/fm-lavish-url.test.sh
 tests/fm-lint-workflows.test.sh
 tests/fm-lint.test.sh
 tests/fm-live-gate.test.sh
@@ -715,6 +729,7 @@ tests/fm-remote-delta-read.test.sh
 tests/fm-remote-doctor.test.sh
 tests/fm-remote-entrypoint.test.sh
 tests/fm-remote-herdr-guard.test.sh
+tests/fm-remote-herdr-identity.test.sh
 tests/fm-remote-inherit-generation.test.sh
 tests/fm-remote-job-claim-reap.test.sh
 tests/fm-remote-job-claim-retention.test.sh
@@ -776,10 +791,12 @@ tests/fm-startup-memory-budget.test.sh
 tests/fm-startup-network.test.sh
 tests/fm-stat-shadowing.test.sh
 tests/fm-stow-cascade.test.sh
+tests/fm-stow-guard.test.sh
 tests/fm-subagent-pretool-check.test.sh
 tests/fm-supervision-events.test.sh
 tests/fm-supervision-host-attended-live-e2e.test.sh
 tests/fm-supervision-host-drain.test.sh
+tests/fm-supervision-host-herdr-live-e2e.test.sh
 tests/fm-supervision-host-hook.test.sh
 tests/fm-supervision-host-live-e2e.test.sh
 tests/fm-supervision-host-park.test.sh

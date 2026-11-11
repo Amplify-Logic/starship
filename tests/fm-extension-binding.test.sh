@@ -459,9 +459,10 @@ run_extension_section_lanes() {
   section_result_root=$(mktemp -d "$TMP_ROOT/section-lanes.XXXXXX") || return 1
   total=${#sections[@]}
   # Sixteen selectors are validated here. The bounded aggregate keeps its
-  # required end-to-end bind/invoke/capture/retirement, registration lock-order,
-  # remote, and shipped example lanes; the other conformance cuts remain
-  # independently selectable.
+  # required end-to-end bind/invoke/capture/retirement, ownerless readiness
+  # recovery, registration lock-order, remote, and shipped example lanes, each
+  # in its own concurrent lane so none nears the per-lane bound; the other
+  # conformance cuts remain independently selectable.
   maximum_sections=16
   maximum_concurrent=12
   [ "$total" -le "$maximum_sections" ] || return 64
@@ -574,7 +575,7 @@ if [ "$extension_segment" = all ] || [ "$extension_segment" = coordinator ]; the
     (
       trap - EXIT HUP INT
       trap 'terminate_section_lanes; exit 143' TERM
-      run_extension_section_lanes lifecycle-flow lifecycle-order remote-lifecycle example
+      run_extension_section_lanes lifecycle-flow lifecycle-orphan-readiness lifecycle-order remote-lifecycle example
     ) &
     section_coordinator_pid=$!
   fi
@@ -2062,7 +2063,7 @@ assert_absent "$H_INVOCATION_CLEANUP/config/extensions.d/org.example.invocation-
 pass "host-crash recovery retires only after exact invocation-group extinction"
 fi
 
-if section_enabled lifecycle-flow lifecycle-orphan-readiness; then
+if section_enabled lifecycle-orphan-readiness; then
 # Ownerless readiness records have no source selector or signalling authority.
 # Use only private fixture groups, and keep an unrelated live PID as a reuse case.
 P_INVOCATION_CLEANUP="$PACKAGES/orphan-cleanup"
