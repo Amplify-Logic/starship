@@ -15,7 +15,7 @@
 #                 --dangerously-skip-permissions
 #   claude-opus   claude --model claude-opus-5-5 --effort <value> --name FIRSTMATE
 #                 --dangerously-skip-permissions
-#                 Both Claude profiles use the first trimmed line of local
+#                 claude-fable and claude-opus use the first trimmed line of local
 #                 gitignored config/primary-effort when that file exists,
 #                 otherwise the default for the signed-in Claude plan:
 #                 medium on Pro, high on Max 5x, xhigh on Max 20x, and high
