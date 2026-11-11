@@ -128,9 +128,10 @@ fm_handoff_load_config() {
 fm_handoff_normalize_profile() {
   case "$1" in
     claude) printf 'claude-fable\n' ;;
+    fable) printf 'claude-fable52\n' ;;
     opus) printf 'claude-opus\n' ;;
     cursor) printf 'cursor-grok\n' ;;
-    pi|claude-fable|claude-opus|codex|astra|opencode|grok|cursor-grok|cursor-grok45) printf '%s\n' "$1" ;;
+    pi|claude-fable|claude-fable52|claude-opus|codex|astra|opencode|grok|cursor-grok|cursor-grok45) printf '%s\n' "$1" ;;
     *) return 1 ;;
   esac
 }
@@ -138,7 +139,7 @@ fm_handoff_normalize_profile() {
 fm_handoff_profile_cli() {
   case "$1" in
     pi) printf 'pi\n' ;;
-    claude-fable|claude-opus) printf 'claude\n' ;;
+    claude-fable|claude-fable52|claude-opus) printf 'claude\n' ;;
     codex|astra) printf 'codex\n' ;;
     opencode) printf 'opencode\n' ;;
     grok) printf 'grok\n' ;;
@@ -156,7 +157,7 @@ fm_handoff_profile_cli() {
 # the profile's own model window (fm_handoff_profile_model_window) still reads.
 fm_handoff_profile_provider() {
   case "$1" in
-    claude|claude-fable|claude-opus|opus) printf 'claude\n' ;;
+    claude|claude-fable|claude-fable52|claude-opus|fable|opus) printf 'claude\n' ;;
     codex|astra) printf 'codex\n' ;;
     grok) printf 'grok\n' ;;
     cursor|cursor-grok|cursor-grok45) printf 'cursor\n' ;;
@@ -166,11 +167,12 @@ fm_handoff_profile_provider() {
 
 # Map a primary profile onto the one quota-axi model window that bounds it
 # beyond its provider's general windows. An empty result means only the
-# general windows apply. claude-fable is additionally bounded by the Fable
-# weekly window, so its exhaustion rotates to claude-opus, which is not.
+# general windows apply. claude-fable and claude-fable52 are additionally
+# bounded by the Fable weekly window, so its exhaustion rotates to claude-opus,
+# which is not.
 fm_handoff_profile_model_window() {
   case "$1" in
-    claude-fable) printf 'model:fable\n' ;;
+    claude-fable|claude-fable52) printf 'model:fable\n' ;;
     *) printf '\n' ;;
   esac
 }

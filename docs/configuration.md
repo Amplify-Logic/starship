@@ -4317,6 +4317,7 @@ The launcher prints the files it installed, and `bin/fm-primary.sh`'s header own
 ## Primary effort (config/primary-effort)
 
 `config/primary-effort` is an optional local, gitignored one-token file that sets the launch effort for the `claude-fable` and `claude-opus` primary profiles.
+The `claude-fable52` profile (`firstmate fable`) always launches at `medium` and does not read it.
 `bin/fm-primary.sh` reads it only at launch.
 When the file is absent, the effort follows the Claude plan the first mate is signed in to:
 
@@ -4493,7 +4494,7 @@ The file is not inherited by secondmate homes.
 Absent or `"enabled": false` starts no handoff and leaves `bin/fm-primary.sh` launch behavior unchanged; `bin/fm-primary-handoff.sh` only reconciles an interrupted earlier attempt, as [`docs/primary-handoff.md`](primary-handoff.md) describes.
 When enabled, `bin/fm-primary-handoff.sh` evaluates:
 
-- **Quota** - when the minimum `percentRemaining` from `quota-axi` over the provider's general windows and the active profile's own model window (`model:fable` for `claude-fable`) is at or below `threshold_percent_remaining`, rotate to the next profile in `chain`.
+- **Quota** - when the minimum `percentRemaining` from `quota-axi` over the provider's general windows and the active profile's own model window (`model:fable` for `claude-fable` and `claude-fable52`) is at or below `threshold_percent_remaining`, rotate to the next profile in `chain`.
 - **Context** - when durable context used (from `state/.primary-context`, written by `bin/fm-status-bar.sh`) is at or above `threshold_context_percent_used`, rotate to the **same** profile for a fresh empty session.
   Absent or null `threshold_context_percent_used` disables the context axis only.
 

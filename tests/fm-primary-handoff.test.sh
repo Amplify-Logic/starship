@@ -995,6 +995,29 @@ test_claude_opus_chain_profile() {
   pass "handoff accepts claude-opus and the opus alias as launcher profiles"
 }
 
+test_claude_fable52_registered_profile() {
+  local norm cli next
+  norm=$(
+    # shellcheck source=/dev/null
+    . "$ROOT/bin/fm-primary-handoff-lib.sh"
+    fm_handoff_normalize_profile fable
+  )
+  [ "$norm" = claude-fable52 ] || fail "handoff did not normalize the fable launcher alias: $norm"
+  cli=$(
+    # shellcheck source=/dev/null
+    . "$ROOT/bin/fm-primary-handoff-lib.sh"
+    fm_handoff_profile_cli claude-fable52
+  )
+  [ "$cli" = claude ] || fail "handoff did not map claude-fable52 to the claude CLI: $cli"
+  next=$(
+    # shellcheck source=/dev/null
+    . "$ROOT/bin/fm-primary-handoff-lib.sh"
+    FM_HANDOFF_SKIP_CLI_CHECK=1 fm_handoff_next_profile claude-fable52 '["claude-fable52","claude-opus"]'
+  )
+  [ "$next" = claude-opus ] || fail "handoff chain did not accept claude-opus after claude-fable52: $next"
+  pass "handoff accepts claude-fable52 and the fable alias as launcher profiles on the claude CLI"
+}
+
 test_astra_registered_profile() {
   local norm cli provider remaining next chain default_config="$TMP_ROOT/astra-default-config"
   mkdir -p "$default_config"
@@ -1140,6 +1163,12 @@ JSON
     FM_HANDOFF_QUOTA_JSON="$TMP_ROOT/quota.json" fm_handoff_min_remaining_for_profile claude-opus
   )
   [ "$opus" = 70 ] || fail "claude-opus did not read only the general claude windows: $opus"
+  fable=$(
+    # shellcheck source=/dev/null
+    . "$ROOT/bin/fm-primary-handoff-lib.sh"
+    FM_HANDOFF_QUOTA_JSON="$TMP_ROOT/quota.json" fm_handoff_min_remaining_for_profile claude-fable52
+  )
+  [ "$fable" = 10 ] || fail "claude-fable52 did not read its Fable model window: $fable"
   write_exhausted_chain_config
   write_context_sample 80
   write_active claude-fable
@@ -1462,6 +1491,7 @@ test_wakes_survive_flush
 test_status_bar_persists_context_sample
 test_context_axis_absent_is_quota_only
 test_claude_opus_chain_profile
+test_claude_fable52_registered_profile
 test_check_stays_put_when_chain_exhausted
 test_check_context_refresh_when_chain_exhausted
 test_fable_model_window_rotates_to_opus

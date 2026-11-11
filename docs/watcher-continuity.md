@@ -488,7 +488,7 @@ Claude Code 2.1.193 and later can terminate a main-session background shell when
 By default that reap also waits until 30 minutes have passed since the last user interaction, with no turn or subagent running.
 A freshly armed watcher therefore gets no 30-minute grace once the captain has already been away that long.
 The watcher arm, the watcher, caffeinate, and the event-wait helper share one process group, so that signal takes the whole supervision cycle down together.
-`bin/fm-primary.sh` exports `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1` for both `claude-fable` and `claude-opus` so the tracked arm remains the live wait.
+`bin/fm-primary.sh` exports `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1` for every Claude profile (`claude-fable`, `claude-fable52` and `claude-opus`) so the tracked arm remains the live wait.
 tmux crewmates do not inherit the primary's `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP` export (verified 2026-09-09).
 `bin/backends/tmux.sh` creates the worker with `tmux new-window` and then send-keys, so the pane environment comes from the tmux server, not from the primary process.
 This home runs herdr, not tmux, and the herdr spawn path was not live-tested for this variable.
