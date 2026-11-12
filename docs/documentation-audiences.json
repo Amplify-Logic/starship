@@ -442,6 +442,10 @@
       "audience": "maintainer-architecture"
     },
     {
+      "path": "docs/bridge-strip.md",
+      "audience": "operator-current"
+    },
+    {
       "path": "docs/bridge-view.md",
       "audience": "operator-current"
     },

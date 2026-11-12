@@ -267,6 +267,7 @@ Ask the first mate to set one up; each owner page lists what it needs.
 | Chart room ([chart-room.md](chart-room.md)) | A private local page showing where every project stands | Nothing extra |
 | Desk floater ([Mac](desk-floater.md), [Windows](desk-floater-windows.md)) | Push-to-talk button that types what you say into the first mate | A Deepgram API key, from a paid account at deepgram.com |
 | Spoken replies ([configuration](configuration.md#desk-voice-out-configspeak)) | The first mate reads the start of each reply aloud | An external speech shaper named in `config/speak`, which this repository does not include |
+| Bridge strip ([bridge-strip.md](bridge-strip.md)) | A strip across the top of the Herdr workspace with the STARSHIP wordmark, the crew's lamps and the battery | Herdr |
 | Phone bridge page ([bridge-view.md](bridge-view.md)) | A phone page showing what needs you, with photo drop and hold-to-speak | Tailscale and Python 3.12 |
 | Dropped-threads digest ([configuration](configuration.md#dropped-threads-digest-configdropped-threads)) | A twice-daily "what is left hanging" summary | A scheduled job on this Mac |
 | Computer use ([macos-computer-use](../.agents/opt-in-skills/macos-computer-use/SKILL.md)) | Lets the agents operate Mac apps and windows | Peekaboo, which the first mate installs, and Mac Accessibility permissions |

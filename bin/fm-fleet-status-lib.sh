@@ -68,6 +68,10 @@
 #   ready       the work waits on the captain: a PR ready for review or merge,
 #               a ready branch awaiting the merge word, or a decision the reader
 #               says a human owes.
+#   decisions   the part of ready that is a decision a human owes rather than
+#               work ready to land. It is a subset of ready, never added to it,
+#               and only bin/fm-bridge-strip.sh asks for it, because the strip
+#               shows "waiting for you" and "ready to merge" as two lamps.
 #
 # working and stopped are separate readings of the same fleet rather than two
 # ends of one axis, and a task counts toward NEITHER unless its state was
@@ -333,7 +337,11 @@ _fm_fleet_liveness() {  # <meta> <busy: 1 when the fold read a busy pane worker>
 # _fm_fleet_collect: fold the canonical reader and the endpoint prober over every
 # ordinary task and print one reading:
 #   <stamp> <working> <stopped> <validating> <paused> <attention> <ready>
-#   <signature>
+#   <signature> <decisions>
+#
+# <decisions> comes last so a reading written before it existed still parses
+# for every older field; fm_fleet_status_counts owns how such a reading is
+# treated.
 #
 # Every field but stopped claims a task for itself: working is a live agent on
 # a task no state field claimed. Done work spends no endpoint probe at all,
@@ -355,7 +363,7 @@ _fm_fleet_liveness() {  # <meta> <busy: 1 when the fold read a busy pane worker>
 _fm_fleet_collect() {  # <state-dir> <now> <reader> [prober]
   local state=$1 now=$2 reader=$3 probe=${4:-} id line bucket signature life busy
   local working=0 stopped=0 validating=0 paused=0 attention=0 ready=0
-  local asked=0 answered=0
+  local decisions=0 asked=0 answered=0
   local ids=()
   [ -n "$probe" ] || probe=${FM_FLEET_STATE_PROBE:-_fm_fleet_probe_default}
   _fm_fleet_classify_ready || return 1
@@ -376,7 +384,7 @@ _fm_fleet_collect() {  # <state-dir> <now> <reader> [prober]
       validating) validating=$((validating + 1)) ;;
       paused) paused=$((paused + 1)) ;;
       attention) attention=$((attention + 1)) ;;
-      decision) ready=$((ready + 1)) ;;
+      decision) ready=$((ready + 1)); decisions=$((decisions + 1)) ;;
       ready) ready=$((ready + 1)); continue ;;
       finished) continue ;;
     esac
@@ -391,9 +399,9 @@ _fm_fleet_collect() {  # <state-dir> <now> <reader> [prober]
     esac
   done
   [ "$answered" -eq "$asked" ] || return 1
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s' \
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s' \
     "$now" "$working" "$stopped" "$validating" "$paused" "$attention" \
-    "$ready" "$signature"
+    "$ready" "$signature" "$decisions"
 }
 
 # _fm_fleet_refresh_detached: start at most ONE bounded refresh and return at
@@ -437,13 +445,19 @@ _fm_fleet_refresh_detached() {  # <cache> <state-dir> <now> <reader>
 }
 
 # _fm_fleet_unknown: the reading a frame gets when the live fields are not known.
-_fm_fleet_unknown() {  # <records>
+_fm_fleet_unknown() {  # <records> [decisions]
   printf '%s\t0\t0\t0\t0\t0\t0\t0\t0' "$1"
+  [ "${2:-}" != decisions ] || printf '\t0'
 }
 
 # fm_fleet_status_counts: the fleet fields for one frame, as
 #   <records> <working> <stopped> <validating> <paused> <attention> <ready>
 #   <known> <age>
+# and, only when the second argument is the word `decisions`, a tenth field
+# <decisions>: how many of <ready> are decisions a human owes. A cached reading
+# taken before that field existed cannot split <ready>, so with `decisions` it
+# is reported exactly as no reading (<known> 0), and either way a refresh is
+# started at once so the next frame has the field.
 # tab separated. <known> is 1 when the six live fields are a current reading of
 # THIS fleet, 2 when they are the last good reading but no longer current - it
 # aged past its maximum, or the fleet changed since - and 0 when no good reading
@@ -457,13 +471,13 @@ _fm_fleet_unknown() {  # <records>
 # can see is old, beside a refresh that keeps being tried, tells him more than a
 # placeholder; unknown is kept for a home that has never had a good reading.
 # Records stay the live count either way, so a dispatch shows up at once.
-fm_fleet_status_counts() {  # <state-dir>
-  local state=$1 now cache reader records ttl max_age
+fm_fleet_status_counts() {  # <state-dir> [decisions]
+  local state=$1 want=${2:-} now cache reader records ttl max_age
   local cached='' stamp='' working='' stopped='' validating='' paused=''
-  local attention='' ready='' signature='' current known age fresh=1
+  local attention='' ready='' signature='' decisions='' current known age fresh=1
   records=$(_fm_fleet_ids "$state" | grep -c '') || records=0
   now=$(_fm_fleet_now) || {
-    _fm_fleet_unknown "$records"
+    _fm_fleet_unknown "$records" "$want"
     return 0
   }
   reader=${FM_FLEET_STATE_READER:-$_FM_FLEET_LIB_DIR/fm-crew-state.sh}
@@ -480,7 +494,7 @@ fm_fleet_status_counts() {  # <state-dir>
 
   if [ -n "$cached" ]; then
     IFS=$'\t' read -r stamp working stopped validating paused attention ready \
-      signature <<READING
+      signature decisions <<READING
 $cached
 READING
   fi
@@ -489,6 +503,16 @@ READING
     ''|*[!0-9]*) cached= ;;
   esac
   [ -n "$signature" ] || cached=
+  # A reading from before <decisions> existed is still good for every older
+  # field, but it cannot split ready, so it is refreshed now and, for a caller
+  # that asked for the split, it is no reading at all.
+  case "$decisions" in
+    ''|*[!0-9]*)
+      decisions=
+      fresh=0
+      [ "$want" != decisions ] || cached=
+      ;;
+  esac
   [ -n "$cached" ] || fresh=0
   known=1
   if [ -n "$cached" ]; then
@@ -508,7 +532,7 @@ READING
   fi
 
   [ -n "$cached" ] || {
-    _fm_fleet_unknown "$records"
+    _fm_fleet_unknown "$records" "$want"
     return 0
   }
   age=$((now - stamp))
@@ -516,4 +540,5 @@ READING
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s' \
     "$records" "$working" "$stopped" "$validating" "$paused" "$attention" \
     "$ready" "$known" "$age"
+  [ "$want" != decisions ] || printf '\t%s' "$decisions"
 }

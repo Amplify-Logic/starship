@@ -1,0 +1,21 @@
+# The Starship bridge: a slim strip across the top of a Herdr workspace.
+# bin/fm-bridge-strip.sh owns every command below; docs/bridge-strip.md owns
+# what the strip shows. Link this directory with `bin/fm-bridge-strip.sh install`.
+id = "starship.bridge"
+name = "Starship bridge"
+version = "0.1.0"
+min_herdr_version = "0.9.5"
+description = "The STARSHIP wordmark, the crew's lamps and the battery across the top of the workspace"
+platforms = ["linux", "macos"]
+
+[[actions]]
+id = "open"
+title = "Show the Starship bridge"
+contexts = ["pane", "workspace"]
+command = ["bash", "../../bin/fm-bridge-strip.sh", "open"]
+
+[[panes]]
+id = "bridge"
+title = "Starship bridge"
+placement = "split"
+command = ["bash", "../../bin/fm-bridge-strip.sh", "run"]
