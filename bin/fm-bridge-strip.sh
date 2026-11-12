@@ -18,7 +18,8 @@
 #                                show the strip above a pane (default: the pane
 #                                this runs in, or the focused pane when Herdr
 #                                runs it as the plugin's action)
-#   fm-bridge-strip.sh run       the pane's own loop; Herdr starts it
+#   fm-bridge-strip.sh run       the pane's own loop, redrawn every 5 seconds;
+#                                Herdr starts it
 #   fm-bridge-strip.sh render [--width N] [--height N]
 #                                print one frame and exit
 #
@@ -35,7 +36,6 @@
 # Environment:
 #   FM_HOME                       the home whose crew is shown. Unset, the home
 #                                 `install` recorded is used, else this code root.
-#   FM_BRIDGE_STRIP_INTERVAL      seconds between redraws (default 5)
 #   HERDR_BIN_PATH                the Herdr binary (default: herdr on PATH)
 # Test seams:
 #   FM_BRIDGE_STRIP_PMSET         battery reader run as `<cmd> -g batt`; empty
@@ -114,9 +114,9 @@ TO_MERGE=0
 READING_AGE=0
 
 # read_crew: the fleet reading, folded into the three lamps the strip shows.
-# Busy is a worker typing plus work the validation pipeline is carrying, waiting
-# for you is a decision a human owes, and ready to merge is the rest of what
-# waits on the owner: a PR or branch ready to land.
+# Busy is a worker typing plus work the validation pipeline is carrying,
+# decisions for you are what a human owes, and ready to merge is the rest of
+# what waits on the owner: a PR or branch ready to land.
 read_crew() {  # <home>
   local reading records working stopped validating paused attention ready
   local known age decisions
@@ -163,7 +163,7 @@ gap() {  # <columns>; appends plain spaces
 }
 
 crew() {  # long|short|numbers|none
-  local mode=$1 sep busy_w you_w merge_w note
+  local mode=$1 sep busy_w you_w merge_w note decisions=decisions
   SEG=
   SEG_W=0
   [ "$mode" = none ] && return 0
@@ -176,9 +176,10 @@ crew() {  # long|short|numbers|none
     SEG_W=${#note}
     return 0
   fi
+  [ "$FOR_YOU" != 1 ] || decisions=decision
   case "$mode" in
-    long) sep=3; busy_w='busy'; you_w='waiting for you'; merge_w='ready to merge' ;;
-    short) sep=2; busy_w='busy'; you_w='for you'; merge_w='to merge' ;;
+    long) sep=3; busy_w='busy'; you_w="$decisions for you"; merge_w='ready to merge' ;;
+    short) sep=2; busy_w='busy'; you_w=$decisions; merge_w='to merge' ;;
     *) sep=1; busy_w=; you_w=; merge_w= ;;
   esac
   lamp "$BUSY" "$AMBER" "$busy_w"
@@ -283,6 +284,7 @@ battery() {  # full|mid|short|none
 TIERS='spaced long full
 spaced long mid
 compact long mid
+compact long short
 compact short mid
 compact short short
 compact numbers short
@@ -394,7 +396,7 @@ is_strip_pid() {  # <pid>
   local cmd
   case "$1" in ''|*[!0-9]*) return 1 ;; esac
   cmd=$(ps -p "$1" -o command= 2>/dev/null) || return 1
-  case "$cmd" in *"$ME"*) return 0 ;; esac
+  case "$cmd" in *"$ME run"|*"$ME run "*) return 0 ;; esac
   return 1
 }
 
@@ -436,10 +438,8 @@ cleanup() {
 }
 
 cmd_run() {
-  local home interval sleeper frame
+  local home sleeper frame
   home=$(resolve_home)
-  interval=${FM_BRIDGE_STRIP_INTERVAL:-5}
-  case "$interval" in ''|*[!0-9]*|0) interval=5 ;; esac
   record_self
   trap cleanup EXIT
   trap 'exit 0' TERM HUP INT
@@ -455,7 +455,7 @@ cmd_run() {
     [ "$RESIZED" = 0 ] || printf '%s[2J' "$E"
     RESIZED=0
     printf '%s[H%s' "$E" "$frame"
-    sleep "$interval" &
+    sleep 5 &
     sleeper=$!
     wait "$sleeper" 2>/dev/null
     kill "$sleeper" 2>/dev/null

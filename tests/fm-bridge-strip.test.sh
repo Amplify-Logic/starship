@@ -127,14 +127,14 @@ a_busy_fleet() {
 
 # --- the crew -----------------------------------------------------------------
 
-test_a_fleet_lights_busy_waiting_and_ready_lamps() {
+test_a_fleet_lights_busy_decision_and_ready_lamps() {
   local out row
   reset_case
   a_busy_fleet
   on_battery 57 discharging 3:12
   out=$(frame 110)
   row=$(printf '%s' "$out" | plain)
-  assert_equals "$row" "$(row_of 110 'S T A R S H I P  │  ■ 2 busy   ■ 1 waiting for you   ■ 1 ready to merge' \
+  assert_equals "$row" "$(row_of 110 'S T A R S H I P  │  ■ 2 busy   ■ 1 decision for you   ■ 1 ready to merge' \
     'battery 57%, 3:12 left')" "the wide strip"
   assert_contains "$out" "${AMBER}${LAMP} " "busy work did not light the amber lamp"
   assert_contains "$out" "${RED}${LAMP} " "a decision for the owner did not light the red lamp"
@@ -142,7 +142,17 @@ test_a_fleet_lights_busy_waiting_and_ready_lamps() {
   assert_contains "$out" "${CYAN}S T A R S H I P" "the wordmark is not cyan"
   assert_contains "$out" "$HULL_BG" "the strip is not painted in the hull colour"
   assert_not_contains "$row" 'typing' "a task id reached the strip"
-  pass "bridge strip: busy, waiting-for-you and ready-to-merge lamps light from the fleet reading"
+  pass "bridge strip: busy, decisions-for-you and ready-to-merge lamps light from the fleet reading"
+}
+
+test_the_decision_lamp_counts_in_its_own_words() {
+  reset_case
+  task asking 'state: parked · source: status-log · which of two designs'
+  task naming 'state: parked · source: status-log · what to call the release'
+  assert_contains "$(frame 110 | plain)" '■ 2 decisions for you ' "two decisions in the long form"
+  assert_contains "$(frame 60 | plain)" '■ 2 decisions ' "two decisions in the short form"
+  assert_not_contains "$(frame 110 | plain)" 'waiting for you' "the strip reused the status bar's words for a different count"
+  pass "bridge strip: the red lamp names decisions, never the status bar's waiting for you"
 }
 
 test_an_idle_fleet_shows_unlit_lamps() {
@@ -150,7 +160,7 @@ test_an_idle_fleet_shows_unlit_lamps() {
   reset_case
   out=$(frame 110)
   assert_equals "$(printf '%s' "$out" | plain)" \
-    "$(row_of 110 'S T A R S H I P  │  ■ 0 busy   ■ 0 waiting for you   ■ 0 ready to merge')" \
+    "$(row_of 110 'S T A R S H I P  │  ■ 0 busy   ■ 0 decisions for you   ■ 0 ready to merge')" \
     "the idle strip"
   assert_contains "$out" "${LAMP_OFF}${LAMP} " "an empty lamp was lit"
   assert_not_contains "$out" "${AMBER}${LAMP}" "an idle fleet lit the busy lamp"
@@ -173,7 +183,7 @@ test_a_last_good_reading_is_marked_with_its_age() {
   task typing 'state: working · source: pane · harness busy'
   printf '400\t1\t0\t2\t0\t0\t3\tstale-signature\t1' > "$HOME_FIX/state/.status-fleet-state"
   out=$(FM_FLEET_STATE_NO_CACHE=0 FM_FLEET_STATE_NOW=1000 READER="$BINDIR/absent-reader" frame 110 | plain)
-  assert_contains "$out" '■ 3 busy   ■ 1 waiting for you   ■ 2 ready to merge (10m ago)' \
+  assert_contains "$out" '■ 3 busy   ■ 1 decision for you   ■ 2 ready to merge (10m ago)' \
     "a reading that is no longer current was not marked with its age"
   pass "bridge strip: a last good reading stands in with its age"
 }
@@ -263,10 +273,10 @@ test_a_narrow_pane_keeps_the_crew_and_a_low_battery() {
   a_busy_fleet
   on_battery 57 discharging 3:12
   assert_equals "$(frame 80 | plain)" \
-    "$(row_of 80 'STARSHIP  │  ■ 2 busy   ■ 1 waiting for you   ■ 1 ready to merge' 'battery 57%')" \
+    "$(row_of 80 'STARSHIP  │  ■ 2 busy   ■ 1 decision for you   ■ 1 ready to merge' '57%')" \
     "an 80-column strip"
   assert_equals "$(frame 60 | plain)" \
-    "$(row_of 60 'STARSHIP  │  ■ 2 busy  ■ 1 for you  ■ 1 to merge' '57%')" "a 60-column strip"
+    "$(row_of 60 'STARSHIP  │  ■ 2 busy  ■ 1 decision  ■ 1 to merge' '57%')" "a 60-column strip"
   assert_equals "$(frame 34 | plain)" "$(row_of 34 'STARSHIP  │  ■ 2 ■ 1 ■ 1' '57%')" "a 34-column strip"
   assert_equals "$(frame 18 | plain)" "$(row_of 18 '■ 2 ■ 1 ■ 1')" "an 18-column strip"
   on_battery 8 discharging 0:12
@@ -322,7 +332,7 @@ test_open_does_not_stack_a_second_strip_in_a_tab() {
   local out strip_pid
   reset_case
   mkdir -p "$CONFIG_FIX/panes"
-  bash -c 'exec -a fm-bridge-strip.sh sleep 30' &
+  bash -c "exec -a 'fm-bridge-strip.sh run' sleep 30" &
   strip_pid=$!
   printf 'pane=w1:p9\ntab=w1:t1\n' > "$CONFIG_FIX/panes/$strip_pid"
   out=$(herdr_env; FM_HOME="$HOME_FIX" HERDR_PANE_ID=w1:p2 HERDR_TAB_ID=w1:t1 bash "$STRIP" open 2>&1)
@@ -331,6 +341,23 @@ test_open_does_not_stack_a_second_strip_in_a_tab() {
   assert_contains "$out" 'already showing' "a second strip was opened in the same tab"
   assert_no_grep 'plugin pane open' "$CALLS" "a second strip was opened in the same tab"
   pass "bridge strip: open leaves a tab that already shows the strip alone"
+}
+
+test_open_is_not_stopped_by_a_recycled_pid() {
+  local out editor_pid
+  reset_case
+  mkdir -p "$CONFIG_FIX/panes"
+  # A strip that died without clearing its record, its pid now an editor open
+  # on the script: that is no strip, so the tab is free.
+  bash -c "exec -a 'vim bin/fm-bridge-strip.sh' sleep 30" &
+  editor_pid=$!
+  printf 'pane=w1:p9\ntab=w1:t1\n' > "$CONFIG_FIX/panes/$editor_pid"
+  out=$(herdr_env; FM_HOME="$HOME_FIX" HERDR_PANE_ID=w1:p2 HERDR_TAB_ID=w1:t1 bash "$STRIP" open 2>&1)
+  kill "$editor_pid" 2>/dev/null
+  wait "$editor_pid" 2>/dev/null
+  assert_not_contains "$out" 'already showing' "a recycled pid was taken for a running strip"
+  assert_grep 'plugin pane open' "$CALLS" "a recycled pid kept the strip from opening"
+  pass "bridge strip: open is not stopped by a record whose pid now runs something else"
 }
 
 test_install_links_the_plugin_and_records_the_home() {
@@ -346,22 +373,27 @@ test_install_links_the_plugin_and_records_the_home() {
 }
 
 test_remove_stops_only_its_own_strips_and_unlinks() {
-  local out strip_pid other_pid
+  local out strip_pid other_pid editor_pid
   reset_case
   mkdir -p "$CONFIG_FIX/panes"
   printf '%s\n' "$HOME_FIX" > "$CONFIG_FIX/home"
-  bash -c 'exec -a fm-bridge-strip.sh sleep 30' &
+  bash -c "exec -a 'fm-bridge-strip.sh run' sleep 30" &
   strip_pid=$!
   sleep 30 &
   other_pid=$!
+  bash -c "exec -a 'vim bin/fm-bridge-strip.sh' sleep 30" &
+  editor_pid=$!
   printf 'pane=w1:p9\ntab=w1:t1\n' > "$CONFIG_FIX/panes/$strip_pid"
-  # A record whose pid now belongs to an unrelated process: it must survive.
+  # Records whose pid now belongs to another process, even one that names the
+  # script without running the strip: each must survive.
   printf 'pane=w1:p3\ntab=w1:t1\n' > "$CONFIG_FIX/panes/$other_pid"
+  printf 'pane=w1:p4\ntab=w1:t1\n' > "$CONFIG_FIX/panes/$editor_pid"
   out=$(herdr_env; bash "$STRIP" remove 2>&1) || fail "remove failed: $out"
   wait "$strip_pid" 2>/dev/null
   kill -0 "$other_pid" 2>/dev/null || fail "remove stopped a process that was not a strip"
-  kill "$other_pid" 2>/dev/null
-  wait "$other_pid" 2>/dev/null
+  kill -0 "$editor_pid" 2>/dev/null || fail "remove stopped a process that names the script but is not a strip"
+  kill "$other_pid" "$editor_pid" 2>/dev/null
+  wait "$other_pid" "$editor_pid" 2>/dev/null
   kill -0 "$strip_pid" 2>/dev/null && fail "remove left a running strip"
   assert_grep 'plugin unlink starship.bridge' "$CALLS" "remove did not unlink the plugin"
   assert_no_grep 'pane close' "$CALLS" "remove closed a pane by id"
@@ -371,7 +403,8 @@ test_remove_stops_only_its_own_strips_and_unlinks() {
 }
 
 fm_test_run \
-  test_a_fleet_lights_busy_waiting_and_ready_lamps \
+  test_a_fleet_lights_busy_decision_and_ready_lamps \
+  test_the_decision_lamp_counts_in_its_own_words \
   test_an_idle_fleet_shows_unlit_lamps \
   test_an_unread_fleet_says_so_instead_of_zero \
   test_a_last_good_reading_is_marked_with_its_age \
@@ -384,5 +417,6 @@ fm_test_run \
   test_open_puts_the_strip_above_the_pane \
   test_open_stops_when_herdr_does_not_name_the_strip \
   test_open_does_not_stack_a_second_strip_in_a_tab \
+  test_open_is_not_stopped_by_a_recycled_pid \
   test_install_links_the_plugin_and_records_the_home \
   test_remove_stops_only_its_own_strips_and_unlinks

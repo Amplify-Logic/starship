@@ -8,19 +8,20 @@ It shows the STARSHIP wordmark, three lamps for the crew, and the Mac's battery.
 ## What it shows
 
 ```text
- S T A R S H I P  │  ■ 2 busy   ■ 1 waiting for you   ■ 1 ready to merge          battery 57%, 3:12 left
+ S T A R S H I P  │  ■ 2 busy   ■ 1 decision for you   ■ 1 ready to merge         battery 57%, 3:12 left
 ```
 
 | Lamp | Colour when lit | Counts |
 | --- | --- | --- |
 | `busy` | amber | Workers busy on a task, plus work the validation pipeline is carrying. |
-| `waiting for you` | red | Decisions a human owes. |
+| `decisions for you` | red | Decisions a human owes; `decision for you` when there is one. |
 | `ready to merge` | green | PRs and ready branches waiting for the merge word. |
 
 A lamp with nothing to count stays unlit, so the row keeps its shape.
-The counts are the status bar's figures: `busy` is its `working` plus `checking`, and `waiting for you` plus `ready to merge` together are its `waiting for you`.
+The counts are the status bar's figures: `busy` is its `working` plus `checking`, and `decisions for you` plus `ready to merge` together are its `waiting for you`.
 [status-bar.md](status-bar.md#fleet-fields) owns what each figure means and how the reading is taken.
 The strip reads that same cached reading, so it costs the fleet nothing extra.
+The strip redraws every 5 seconds.
 Before the first reading it says `reading the crew` rather than showing zeros, and a reading that is no longer current carries its age, such as `(10m ago)`.
 
 The battery comes from `pmset -g batt`.
@@ -64,7 +65,7 @@ Herdr keeps every split share between a tenth and nine tenths of the pane, so th
 The strip paints every row of its pane in the hull colour and puts its content on the middle row.
 A strip covers the width of the pane it was opened above, because Herdr has no split across a whole tab.
 
-On a narrow pane it drops words before lamps: the wordmark loses its letter spacing, the lamp words shorten to `for you` and `to merge`, then only the numbers remain.
+On a narrow pane it drops words before lamps: the wordmark loses its letter spacing, the battery keeps only its figure, the lamp words shorten to `decision` or `decisions` and `to merge`, then only the numbers remain.
 A low battery is never dropped while anything else is shown.
 
 ## Verification
