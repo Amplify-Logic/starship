@@ -851,6 +851,71 @@ test_cursor_grok45_primary_profile() {
   pass "fm-primary: Cursor Grok 4.5 differs from the certified profile in the model id alone"
 }
 
+# `firstmate fable`: Fable 5.2 at medium through the same Claude launch path as
+# claude-fable, so the environment that wires the status bar and every other
+# export is identical and only the model and effort differ.
+test_claude_fable52_primary_profile() {
+  local out status=0 fable new effort_file="$HOME_FIX/config/primary-effort"
+  mkdir -p "$HOME_FIX/config"
+  out=$("$ROOT/bin/fm-primary.sh" --help)
+  assert_contains "$out" 'claude-fable52' "help omitted the Claude Fable 5.2 profile"
+  assert_contains "$out" 'fable -> claude-fable52' "help omitted the fable alias"
+
+  rm -f "$effort_file"
+  out=$(dry fable 2>&1)
+  assert_contains "$out" "profile=claude-fable52" "the fable alias did not resolve to claude-fable52"
+  assert_contains "$out" "'claude' '--model' 'claude-fable-5-2' '--effort' 'medium' '--name' 'FIRSTMATE' '--dangerously-skip-permissions'" \
+    "claude-fable52 did not pin Fable 5.2, medium effort, role, and bypass"
+  assert_contains "$out" "launching model claude-fable-5-2 at effort medium (this profile's own effort; config/primary-effort does not apply)" \
+    "claude-fable52 did not print its model, effort, and effort source"
+  [ "$(dry fable 2>/dev/null)" = "$(dry claude-fable52 2>/dev/null)" ] \
+    || fail "fable alias did not expand exactly to claude-fable52"
+
+  # Every preview field except the profile name, model, and effort matches
+  # claude-fable's, so the exports and role are the same launch.
+  fable=$(dry claude-fable 2>/dev/null | sed "s/claude-fable-5-1/MODEL/; s/'--effort' '[a-z]*'/EFFORT/; s/^profile=.*/profile=PROFILE/")
+  new=$(dry claude-fable52 2>/dev/null | sed "s/claude-fable-5-2/MODEL/; s/'--effort' '[a-z]*'/EFFORT/; s/^profile=.*/profile=PROFILE/")
+  [ "$fable" = "$new" ] || fail "claude-fable52 diverges from claude-fable beyond model and effort: '$fable' vs '$new'"
+
+  # Medium is fixed: neither a standing nor an invalid config/primary-effort
+  # moves it, while claude-fable still reads the file.
+  printf 'xhigh\n' > "$effort_file"
+  assert_contains "$(dry claude-fable52 2>/dev/null)" "'--effort' 'medium'" \
+    "config/primary-effort moved claude-fable52 off medium"
+  assert_contains "$(dry claude-fable 2>/dev/null)" "'--model' 'claude-fable-5-1' '--effort' 'xhigh'" \
+    "claude-fable stopped reading config/primary-effort"
+  printf 'turbo\n' > "$effort_file"
+  status=0
+  out=$(dry claude-fable52 2>&1) || status=$?
+  [ "$status" -eq 0 ] || fail "an invalid config/primary-effort blocked claude-fable52: $out"
+  rm -f "$effort_file"
+
+  # The real exec path: the launched CLI sees the Claude primary environment,
+  # including FM_PRIMARY_HARNESS=claude, which the status bar needs to render.
+  : > "$LOG"
+  ( cd "$TMP_ROOT" && \
+    env -u HERDR_ENV -u HERDR_SESSION -u HERDR_PANE_ID -u TMUX_PANE \
+      -u CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP -u CLAUDE_CODE_AUTO_COMPACT_WINDOW \
+      PATH="$FAKEBIN:$PATH" \
+      TERM=dumb \
+      FM_HOME="$HOME_FIX" \
+      FM_PRIMARY_TEST_LOG="$LOG" \
+      "$ROOT/bin/fm-primary.sh" fable ) 2>/dev/null
+  out=$(cat "$LOG")
+  assert_contains "$out" 'cli=claude' "the fable primary did not exec claude"
+  assert_contains "$out" 'harness=claude' "the fable primary did not export FM_PRIMARY_HARNESS=claude"
+  assert_contains "$out" 'role=FIRSTMATE' "the fable primary did not export its role"
+  assert_contains "$out" 'claude_bg_shell_pressure_reap=1' "the fable primary lost the pressure-reap disable"
+  assert_contains "$out" 'claude_auto_compact_window=500000' "the fable primary lost the 500k compaction window"
+  assert_contains "$out" 'argv=<--model><claude-fable-5-2><--effort><medium><--name><FIRSTMATE><--dangerously-skip-permissions>' \
+    "the fable primary exec argv is wrong"
+
+  # `claude` keeps resolving to the 5.1 profile.
+  assert_contains "$(dry claude 2>/dev/null)" "'--model' 'claude-fable-5-1'" \
+    "the claude alias stopped resolving to claude-fable"
+  pass "fm-primary: fable launches Fable 5.2 at medium through the same Claude launch as claude-fable"
+}
+
 test_claude_effort() {
   local out status=0 effort_file="$HOME_FIX/config/primary-effort"
   mkdir -p "$HOME_FIX/config"
@@ -1300,7 +1365,7 @@ test_account_absent_registry_changes_nothing() {
   local profile out registry="$HOME_FIX/config/accounts.json"
   mkdir -p "$HOME_FIX/config"
   rm -f "$registry"
-  for profile in pi claude-fable claude-opus codex opencode grok cursor-grok cursor-grok45; do
+  for profile in pi claude-fable claude-fable52 claude-opus codex opencode grok cursor-grok cursor-grok45; do
     out=$(dry "$profile" 2>/dev/null)
     assert_not_contains "$out" 'account=' "$profile leaked an account line with no registry"
     assert_not_contains "$out" 'CLAUDE_CONFIG_DIR' "$profile pinned a Claude home with no registry"
@@ -1592,7 +1657,7 @@ test_claude_disables_bg_shell_pressure_reap() {
 # quietly drop the cap or invent a knob that does not exist.
 test_context_window_is_capped_at_500k() {
   local out profile
-  for profile in claude-fable claude-opus; do
+  for profile in claude-fable claude-fable52 claude-opus; do
     out=$(dry "$profile")
     assert_contains "$out" 'CLAUDE_CODE_AUTO_COMPACT_WINDOW=500000' \
       "$profile dry-run omitted the 500k auto-compact window"
@@ -1668,7 +1733,7 @@ test_preflight_is_read_only_and_checks_accounts() {
   holder=$!
   printf '%s\n' "$holder" > "$HOME_FIX/state/.lock"
   : > "$LOG"
-  for profile in pi claude-fable claude-opus codex astra opencode grok cursor-grok cursor-grok45; do
+  for profile in pi claude-fable claude-fable52 claude-opus codex astra opencode grok cursor-grok cursor-grok45; do
     out=$(live "$profile" --preflight 2>&1) || status=$?
     [ "$status" -eq 0 ] || { kill "$holder"; fail "$profile preflight failed: $out"; }
   done
@@ -1683,7 +1748,7 @@ test_preflight_is_read_only_and_checks_accounts() {
   assert_contains "$out" 'not logged in' "preflight account failure was unclear"
   # A Claude CLI nobody signed in to is refused the same way under --preflight,
   # naming the fix, while a live launch still opens it at its login screen.
-  for profile in claude-opus claude-fable; do
+  for profile in claude-opus claude-fable claude-fable52; do
     status=0
     : > "$LOG"
     out=$(FM_PRIMARY_TEST_LOGGED_OUT=1 live "$profile" --preflight 2>&1) || status=$?
@@ -1705,6 +1770,7 @@ test_preflight_is_read_only_and_checks_accounts
 test_profiles_and_root
 test_context_window_is_capped_at_500k
 test_claude_effort
+test_claude_fable52_primary_profile
 test_claude_effort_follows_the_plan
 test_fresh_home_gets_the_starter_settings
 test_astra_primary_profile

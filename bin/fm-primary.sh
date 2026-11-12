@@ -15,7 +15,7 @@
 #                 --dangerously-skip-permissions
 #   claude-opus   claude --model claude-opus-5-5 --effort <value> --name FIRSTMATE
 #                 --dangerously-skip-permissions
-#                 Both Claude profiles use the first trimmed line of local
+#                 claude-fable and claude-opus use the first trimmed line of local
 #                 gitignored config/primary-effort when that file exists,
 #                 otherwise the default for the signed-in Claude plan:
 #                 medium on Pro, high on Max 5x, xhigh on Max 20x, and high
@@ -30,6 +30,17 @@
 #                 or later.
 #                 Also exports CLAUDE_CODE_AUTO_COMPACT_WINDOW=500000; see
 #                 "Context window" below.
+#   claude-fable52
+#                 claude --model claude-fable-5-2 --effort medium --name FIRSTMATE
+#                 --dangerously-skip-permissions
+#                 The same Claude launch as claude-fable in every other
+#                 respect: exports, role name, account pinning, preflight,
+#                 sign-in check, starter settings, FM_PRIMARY_HARNESS=claude
+#                 and the status bar. Medium is this profile's own fixed
+#                 effort: config/primary-effort and the plan default do not
+#                 apply to it, because choosing this profile is choosing
+#                 medium. For another effort, use claude-fable or claude-opus
+#                 with config/primary-effort.
 #   codex         codex --dangerously-bypass-hook-trust
 #                 --dangerously-bypass-approvals-and-sandbox
 #                 -c model_auto_compact_token_limit=500000
@@ -80,7 +91,8 @@
 # tokens so the orchestrator compacts itself). The exact per-harness mechanism,
 # with the one-sentence evidence for each in docs/configuration.md "Context
 # window":
-#   claude-fable / claude-opus  export CLAUDE_CODE_AUTO_COMPACT_WINDOW=500000.
+#   claude-fable / claude-fable52 / claude-opus  export
+#     CLAUDE_CODE_AUTO_COMPACT_WINDOW=500000.
 #     The CLI reads that variable directly and it outranks the autoCompactWindow
 #     user setting, so the cap rides the launch and the captain's global config
 #     is never touched. The effective threshold is min(500000, the model's own
@@ -143,7 +155,8 @@
 # Two seats can share one email address, so an email is not enough to tell them
 # apart; the org and plan are. That is what an account's expect value is for.
 #
-# Aliases: claude -> claude-fable; opus -> claude-opus; cursor -> cursor-grok. There is no alias for cursor-grok45; name it in full so
+# Aliases: claude -> claude-fable; fable -> claude-fable52; opus -> claude-opus;
+# cursor -> cursor-grok. There is no alias for cursor-grok45; name it in full so
 # the previous Grok generation is never launched by accident.
 # The aliases are primary-launch conveniences only.
 # They never change config/crew-harness, config/secondmate-harness, dispatch
@@ -172,7 +185,7 @@
 # Never launch a cursor WORKER from the primary checkout (that checkout's
 # .claude/settings.json Stop wiring is for the primary session).
 #
-# Plan default: with no config/primary-effort, a Claude profile asks the
+# Plan default: with no config/primary-effort, claude-fable and claude-opus ask the
 # signed-in account (the pinned one under --account) for its plan. `claude auth
 # status` names the subscription (pro, max) and the account record beside the
 # Claude config directory ($CLAUDE_CONFIG_DIR/.claude.json, else ~/.claude.json)
@@ -423,8 +436,8 @@ claude_plan() {
 # An absent file takes the signed-in plan's default (header "Plan default").
 # A present file must have a first line that trims to exactly one accepted
 # token; anything else, including an empty token, refuses rather than falling
-# back. Call this only for a Claude profile so a bad file cannot block other
-# primaries.
+# back. Call this only for claude-fable or claude-opus so a bad file cannot
+# block other primaries; claude-fable52 has its own fixed effort.
 resolve_claude_effort() {
   local file value
   file="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}/primary-effort"
@@ -573,7 +586,7 @@ resolve_astra_compact_at() {
 # on one refuses instead of being silently ignored.
 profile_account_vendor() {
   case "$PROFILE" in
-    claude-fable|claude-opus) printf 'claude' ;;
+    claude-fable|claude-fable52|claude-opus) printf 'claude' ;;
     codex|astra) printf 'codex' ;;
     *) return 1 ;;
   esac
@@ -821,7 +834,7 @@ verify_integrations() {
       require_file .pi/extensions/fm-primary-status-bar.ts
       require_file bin/fm-status-bar.sh
       ;;
-    claude-fable|claude-opus)
+    claude-fable|claude-fable52|claude-opus)
       require_file .claude/settings.json
       require_file bin/fm-status-bar.sh
       require_command jq
@@ -905,12 +918,13 @@ done
 [ "$ACCOUNT_SET" -eq 0 ] || [ -n "$ACCOUNT_ARG" ] || die "--account requires an account name"
 case "$PROFILE" in
   claude) PROFILE=claude-fable ;;
+  fable) PROFILE=claude-fable52 ;;
   opus) PROFILE=claude-opus ;;
   cursor) PROFILE=cursor-grok ;;
 esac
 case "$PROFILE" in
-  pi|claude-fable|claude-opus|codex|astra|opencode|grok|cursor-grok|cursor-grok45) ;;
-  *) die "unknown or unverified primary profile '$PROFILE' (verified: pi claude-fable claude-opus codex astra opencode grok cursor-grok cursor-grok45)" ;;
+  pi|claude-fable|claude-fable52|claude-opus|codex|astra|opencode|grok|cursor-grok|cursor-grok45) ;;
+  *) die "unknown or unverified primary profile '$PROFILE' (verified: pi claude-fable claude-fable52 claude-opus codex astra opencode grok cursor-grok cursor-grok45)" ;;
 esac
 
 validate_visible_prefix
@@ -927,6 +941,7 @@ fi
 case "$PROFILE" in
   pi) CLI=pi ;;
   claude-fable) CLI=claude; CLAUDE_MODEL=claude-fable-5-1 ;;
+  claude-fable52) CLI=claude; CLAUDE_MODEL=claude-fable-5-2 ;;
   claude-opus) CLI=claude; CLAUDE_MODEL=claude-opus-5-5 ;;
   codex) CLI=codex ;;
   astra) CLI=codex ;;
@@ -964,8 +979,13 @@ case "$PROFILE" in
   pi)
     argv=(pi --name "$role")
     ;;
-  claude-fable|claude-opus)
-    resolve_claude_effort
+  claude-fable|claude-fable52|claude-opus)
+    if [ "$PROFILE" = claude-fable52 ]; then
+      CLAUDE_EFFORT=medium
+      CLAUDE_EFFORT_SOURCE="this profile's own effort; config/primary-effort does not apply"
+    else
+      resolve_claude_effort
+    fi
     # Vendor escape hatch (Claude Code v2.1.193+): without this, the
     # primary reaps the tracked watcher-arm background shell on a
     # memory-pressure signal once 30 minutes have passed since the last
@@ -1070,7 +1090,7 @@ fi
 [ "$PREFLIGHT" -ne 1 ] || exit 0
 
 case "$PROFILE" in
-  claude-fable|claude-opus) [ "$FRESH_HOME" -ne 1 ] || install_starter_settings ;;
+  claude-fable|claude-fable52|claude-opus) [ "$FRESH_HOME" -ne 1 ] || install_starter_settings ;;
 esac
 mark_current_surface
 export FM_PRIMARY_HARNESS=${PROFILE%%-*}
