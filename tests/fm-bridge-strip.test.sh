@@ -347,13 +347,53 @@ test_open_does_not_stack_a_second_strip_in_a_tab() {
   mkdir -p "$CONFIG_FIX/panes"
   bash -c "exec -a 'fm-bridge-strip.sh run' sleep 30" &
   strip_pid=$!
-  printf 'pane=w1:p9\ntab=w1:t1\n' > "$CONFIG_FIX/panes/$strip_pid"
-  out=$(herdr_env; FM_HOME="$HOME_FIX" HERDR_PANE_ID=w1:p2 HERDR_TAB_ID=w1:t1 bash "$STRIP" open 2>&1)
+  printf 'pane=w1:p9\ntab=w1:t1\nsession=/run/herdr-a.sock\n' > "$CONFIG_FIX/panes/$strip_pid"
+  out=$(herdr_env; FM_HOME="$HOME_FIX" HERDR_PANE_ID=w1:p2 HERDR_TAB_ID=w1:t1 \
+    HERDR_SOCKET_PATH=/run/herdr-a.sock bash "$STRIP" open 2>&1)
   kill "$strip_pid" 2>/dev/null
   wait "$strip_pid" 2>/dev/null
   assert_contains "$out" 'already showing' "a second strip was opened in the same tab"
   assert_no_grep 'plugin pane open' "$CALLS" "a second strip was opened in the same tab"
   pass "bridge strip: open leaves a tab that already shows the strip alone"
+}
+
+test_open_is_not_stopped_by_the_same_tab_in_another_session() {
+  local out strip_pid
+  reset_case
+  mkdir -p "$CONFIG_FIX/panes"
+  # Herdr shares the plugin's config dir across sessions, and tab ids repeat
+  # between them: a strip in session A's w1:t1 says nothing of session B's.
+  bash -c "exec -a 'fm-bridge-strip.sh run' sleep 30" &
+  strip_pid=$!
+  printf 'pane=w1:p9\ntab=w1:t1\nsession=/run/herdr-a.sock\n' > "$CONFIG_FIX/panes/$strip_pid"
+  out=$(herdr_env; FM_HOME="$HOME_FIX" HERDR_PANE_ID=w1:p2 HERDR_TAB_ID=w1:t1 \
+    HERDR_SOCKET_PATH=/run/herdr-b.sock bash "$STRIP" open 2>&1)
+  kill "$strip_pid" 2>/dev/null
+  wait "$strip_pid" 2>/dev/null
+  assert_not_contains "$out" 'already showing' "a strip in another session's tab was taken for this tab's"
+  assert_grep 'plugin pane open' "$CALLS" "a strip in another session kept this tab from showing one"
+  pass "bridge strip: open is not stopped by a strip in the same tab id of another Herdr session"
+}
+
+test_a_running_strip_records_its_session() {
+  local out pid rec
+  reset_case
+  # The renderer records itself before its first frame; read that record back.
+  (herdr_env; FM_HOME="$HOME_FIX" HERDR_PANE_ID=w1:p9 HERDR_TAB_ID=w1:t1 \
+    HERDR_SOCKET_PATH=/run/herdr-a.sock exec bash "$STRIP" run >/dev/null 2>&1) &
+  pid=$!
+  rec="$CONFIG_FIX/panes/$pid"
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+    [ -s "$rec" ] && break
+    sleep 0.1
+  done
+  out=$(cat "$rec" 2>/dev/null)
+  kill "$pid" 2>/dev/null
+  wait "$pid" 2>/dev/null
+  assert_contains "$out" 'tab=w1:t1' "the strip did not record its tab"
+  assert_contains "$out" 'session=/run/herdr-a.sock' "the strip did not record its Herdr session"
+  assert_absent "$rec" "the strip left its record behind when stopped"
+  pass "bridge strip: a running strip records its tab and Herdr session, and clears them on exit"
 }
 
 test_open_is_not_stopped_by_a_recycled_pid() {
@@ -430,6 +470,8 @@ fm_test_run \
   test_open_puts_the_strip_above_the_pane \
   test_open_stops_when_herdr_does_not_name_the_strip \
   test_open_does_not_stack_a_second_strip_in_a_tab \
+  test_open_is_not_stopped_by_the_same_tab_in_another_session \
+  test_a_running_strip_records_its_session \
   test_open_is_not_stopped_by_a_recycled_pid \
   test_install_links_the_plugin_and_records_the_home \
   test_remove_stops_only_its_own_strips_and_unlinks

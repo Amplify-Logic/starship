@@ -380,15 +380,19 @@ resolve_home() {
   printf '%s' "$ROOT"
 }
 
-# A running strip is recorded as panes/<pid>, holding its pane and tab, so
-# `open` can tell a tab already has one and `remove` can stop each one.
+# A running strip is recorded as panes/<pid>, holding its pane, tab and Herdr
+# session, so `open` can tell a tab already has one and `remove` can stop each
+# one. Herdr shares this directory across sessions and tab ids repeat between
+# them, so a tab is only the same tab in the same session, named by the socket
+# path every pane inherits from it.
 RECORD=
 record_self() {
   local dir
   dir=$(config_dir) || return 0
   mkdir -p "$dir/panes" 2>/dev/null || return 0
   RECORD="$dir/panes/$$"
-  printf 'pane=%s\ntab=%s\n' "${HERDR_PANE_ID:-}" "${HERDR_TAB_ID:-}" > "$RECORD" 2>/dev/null || RECORD=
+  printf 'pane=%s\ntab=%s\nsession=%s\n' "${HERDR_PANE_ID:-}" "${HERDR_TAB_ID:-}" \
+    "${HERDR_SOCKET_PATH:-}" > "$RECORD" 2>/dev/null || RECORD=
 }
 
 # is_strip_pid: the recorded process is still this renderer, not a recycled pid.
@@ -479,7 +483,8 @@ cmd_open() {
     for rec in "$dir"/panes/*; do
       [ -f "$rec" ] || continue
       is_strip_pid "$(basename "$rec")" || continue
-      if [ "$(record_value "$rec" tab)" = "$HERDR_TAB_ID" ]; then
+      if [ "$(record_value "$rec" tab)" = "$HERDR_TAB_ID" ] \
+        && [ "$(record_value "$rec" session)" = "${HERDR_SOCKET_PATH:-}" ]; then
         printf 'The Starship bridge is already showing in this tab.\n'
         return 0
       fi
