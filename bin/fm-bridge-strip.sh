@@ -284,7 +284,6 @@ battery() {  # full|mid|short|none
 TIERS='spaced long full
 spaced long mid
 compact long mid
-compact long short
 compact short mid
 compact short short
 compact numbers short

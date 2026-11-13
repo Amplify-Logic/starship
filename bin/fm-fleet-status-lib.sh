@@ -71,7 +71,7 @@
 #   decisions   the part of ready that is a decision a human owes rather than
 #               work ready to land. It is a subset of ready, never added to it,
 #               and only bin/fm-bridge-strip.sh asks for it, because the strip
-#               shows "waiting for you" and "ready to merge" as two lamps.
+#               shows "decisions for you" and "ready to merge" as two lamps.
 #
 # working and stopped are separate readings of the same fleet rather than two
 # ends of one axis, and a task counts toward NEITHER unless its state was

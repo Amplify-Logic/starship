@@ -65,7 +65,7 @@ Herdr keeps every split share between a tenth and nine tenths of the pane, so th
 The strip paints every row of its pane in the hull colour and puts its content on the middle row.
 A strip covers the width of the pane it was opened above, because Herdr has no split across a whole tab.
 
-On a narrow pane it drops words before lamps: the wordmark loses its letter spacing, the battery keeps only its figure, the lamp words shorten to `decision` or `decisions` and `to merge`, then only the numbers remain.
+On a narrow pane it drops words before lamps: the wordmark loses its letter spacing, the lamp words shorten to `decision` or `decisions` and `to merge`, then only the numbers remain.
 A low battery is never dropped while anything else is shown.
 
 ## Verification

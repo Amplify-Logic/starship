@@ -622,7 +622,7 @@ test_only_a_decision_a_human_owes_waits_on_the_captain() {
   pass "fleet status: only a decision a human owes waits on the captain, and a lost parked worker is stopped"
 }
 
-# The bridge strip shows "waiting for you" and "ready to merge" as two lamps, so
+# The bridge strip shows "decisions for you" and "ready to merge" as two lamps, so
 # it asks for the decisions inside ready as a tenth field. The status bar's nine
 # fields are unchanged, and a reading taken before the field existed is never
 # split by guesswork.

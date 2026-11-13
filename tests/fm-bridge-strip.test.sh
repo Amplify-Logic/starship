@@ -273,7 +273,7 @@ test_a_narrow_pane_keeps_the_crew_and_a_low_battery() {
   a_busy_fleet
   on_battery 57 discharging 3:12
   assert_equals "$(frame 80 | plain)" \
-    "$(row_of 80 'STARSHIP  │  ■ 2 busy   ■ 1 decision for you   ■ 1 ready to merge' '57%')" \
+    "$(row_of 80 'STARSHIP  │  ■ 2 busy  ■ 1 decision  ■ 1 to merge' 'battery 57%')" \
     "an 80-column strip"
   assert_equals "$(frame 60 | plain)" \
     "$(row_of 60 'STARSHIP  │  ■ 2 busy  ■ 1 decision  ■ 1 to merge' '57%')" "a 60-column strip"
