@@ -26,7 +26,8 @@
 # Placement: Herdr splits a pane only right or down, so `open` splits the
 # target pane down, swaps the two panes (a swap trades places and keeps the
 # cells, so the strip moves into the top cell), then shrinks the top cell to
-# Herdr's smallest split share, a tenth of the pane. Every step names the exact
+# Herdr's smallest split share, a tenth of the pane, and hands keyboard focus
+# back to the pane below (the swap gives it to the strip). Every step names the exact
 # panes involved; a step that fails stops there and says which.
 #
 # `remove` finds running strips only through the records each one keeps in the
@@ -461,7 +462,7 @@ cmd_run() {
   done
 }
 
-# open: the three Herdr calls that put the strip on top of a pane.
+# open: the Herdr calls that put the strip on top of a pane and leave focus below it.
 cmd_open() {
   local target=${HERDR_PANE_ID:-} herdr dir rec out strip home
   while [ "$#" -gt 0 ]; do
@@ -497,6 +498,9 @@ cmd_open() {
   # edge upward by the largest step takes that share to Herdr's floor.
   "$herdr" pane resize --pane "$target" --direction up --amount 0.5 >/dev/null 2>&1 \
     || die "the strip is above pane $target as pane $strip, but could not be made slim"
+  # The swap handed keyboard focus to the strip; give it back to the pane below.
+  "$herdr" pane focus --pane "$strip" --direction down >/dev/null 2>&1 \
+    || die "the strip is showing above pane $target, but focus could not be given back to it"
   printf 'The Starship bridge is showing above this pane.\n'
 }
 

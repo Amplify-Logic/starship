@@ -46,10 +46,20 @@ chmod +x "$BINDIR/fake-pmset"
 cat > "$BINDIR/herdr" <<'SH'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$FM_BRIDGE_TEST_CALLS"
+# Keyboard focus, kept as real Herdr does: --no-focus leaves it where it was,
+# a swap hands it to the source pane, and a focus call moves it to the pane on
+# that side (here the strip has only the target pane below it).
+focus="${FM_BRIDGE_TEST_CALLS%/*}/focus"
+arg() { local want=$1; shift; while [ "$#" -gt 1 ]; do [ "$1" = "$want" ] && { printf '%s' "$2"; return; }; shift; done; }
 case "$1 $2 ${3:-}" in
   'plugin pane open')
     [ -z "${FM_BRIDGE_TEST_NO_PANE:-}" ] || { printf '{"result":{}}\n'; exit 0; }
+    case " $* " in *' --no-focus '*) ;; *) printf 'w1:p9\n' > "$focus" ;; esac
     printf '{"id":"cli","result":{"type":"plugin_pane_opened","plugin_pane":{"plugin_id":"starship.bridge","entrypoint":"bridge","pane":{"pane_id":"w1:p9"}}}}\n'
+    ;;
+  'pane swap '*) arg --source-pane "$@" > "$focus" ;;
+  'pane focus '*)
+    [ "$(arg --pane "$@")" = w1:p9 ] && [ "$(arg --direction "$@")" = down ] && printf 'w1:p2' > "$focus"
     ;;
   'plugin config-dir starship.bridge') printf '%s\n' "$FM_BRIDGE_TEST_CONFIG" ;;
 esac
@@ -308,12 +318,15 @@ herdr_env() {
 test_open_puts_the_strip_above_the_pane() {
   local out
   reset_case
+  printf 'w1:p2' > "${CALLS%/*}/focus"
   out=$(herdr_env; FM_HOME="$HOME_FIX" HERDR_PANE_ID=w1:p2 HERDR_TAB_ID=w1:t1 bash "$STRIP" open 2>&1) \
     || fail "open failed: $out"
   assert_equals "$(cat "$CALLS")" "plugin pane open --plugin starship.bridge --entrypoint bridge --placement split --direction down --target-pane w1:p2 --no-focus --env FM_HOME=$HOME_FIX
 pane swap --source-pane w1:p9 --target-pane w1:p2
-pane resize --pane w1:p2 --direction up --amount 0.5" "the Herdr calls behind open"
-  pass "bridge strip: open splits the pane, swaps the strip on top and makes it slim"
+pane resize --pane w1:p2 --direction up --amount 0.5
+pane focus --pane w1:p9 --direction down" "the Herdr calls behind open"
+  assert_equals w1:p2 "$(cat "${CALLS%/*}/focus")" "keyboard focus was left on the strip instead of the owner's pane"
+  pass "bridge strip: open splits the pane, swaps the strip on top, makes it slim and leaves focus on the pane"
 }
 
 test_open_stops_when_herdr_does_not_name_the_strip() {

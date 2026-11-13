@@ -60,7 +60,7 @@ Closing the strip's pane like any other pane hides it until it is shown again.
 
 ## Size and placement
 
-Herdr splits a pane only right or down, so the strip opens below the pane, is swapped into the top place, and is then shrunk to Herdr's smallest split share.
+Herdr splits a pane only right or down, so the strip opens below the pane, is swapped into the top place, and is then shrunk to Herdr's smallest split share. Keyboard focus then goes back to the pane below, so typing never lands in the strip.
 Herdr keeps every split share between a tenth and nine tenths of the pane, so the strip is about a tenth of the pane's height rather than exactly one row.
 The strip paints every row of its pane in the hull colour and puts its content on the middle row.
 A strip covers the width of the pane it was opened above, because Herdr has no split across a whole tab.
