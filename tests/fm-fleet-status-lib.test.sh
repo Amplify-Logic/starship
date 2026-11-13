@@ -622,6 +622,44 @@ test_only_a_decision_a_human_owes_waits_on_the_captain() {
   pass "fleet status: only a decision a human owes waits on the captain, and a lost parked worker is stopped"
 }
 
+# The bridge strip shows "decisions for you" and "ready to merge" as two lamps, so
+# it asks for the decisions inside ready as a tenth field. The status bar's nine
+# fields are unchanged, and a reading taken before the field existed is never
+# split by guesswork.
+test_decisions_are_counted_apart_inside_ready() {
+  local out now=1000
+  reset_state
+  task asked crew 'state: parked · source: status-log · needs-decision: pick a schema'
+  task owed crew 'state: parked · source: run-step · parked at review: 1 finding(s) · ask-user: authority decision · run: r1'
+  task green crew 'state: done · source: run-step · checks passed'
+
+  out=$(FM_FLEET_STATE_NO_CACHE=1 FM_FLEET_STATE_READER="$BINDIR/fake-crew-state" counts)
+  [ "$out" = $'3\t0\t0\t0\t0\t0\t3\t1\t0' ] \
+    || fail "the status bar's fields changed shape: $(printf '%s' "$out" | tr '\t' ' ')"
+  out=$(FM_FLEET_STATE_NO_CACHE=1 FM_FLEET_STATE_READER="$BINDIR/fake-crew-state" \
+    bash -c '. "$1/bin/fm-fleet-status-lib.sh"; fm_fleet_status_counts "$2" decisions' _ "$ROOT" "$STATE")
+  [ "$out" = $'3\t0\t0\t0\t0\t0\t3\t1\t0\t2' ] \
+    || fail "the decisions inside ready were not counted apart: $(printf '%s' "$out" | tr '\t' ' ')"
+
+  # A cached reading from before the field: still good for the status bar, no
+  # reading at all for a caller that needs the split, and refreshed at once.
+  bash -c '
+    . "$1/bin/fm-fleet-status-lib.sh"
+    printf "%s\t0\t0\t0\t0\t0\t3\t%s" "$3" "$(_fm_fleet_ids "$2" | _fm_fleet_signature)"
+  ' _ "$ROOT" "$STATE" "$now" > "$STATE/.status-fleet-state"
+  out=$(FM_FLEET_STATE_NOW=$now FM_FLEET_STATE_READER="$BINDIR/no-such-crew-state" \
+    bash -c '. "$1/bin/fm-fleet-status-lib.sh"; fm_fleet_status_counts "$2" decisions' _ "$ROOT" "$STATE")
+  [ "$out" = $'3\t0\t0\t0\t0\t0\t0\t0\t0\t0' ] \
+    || fail "a reading from before the split was split by guesswork: $(printf '%s' "$out" | tr '\t' ' ')"
+  [ -e "$STATE/.status-fleet-state.refreshing" ] \
+    || fail "a reading from before the split did not start a refresh"
+  rm -f "$STATE/.status-fleet-state.refreshing"
+  out=$(FM_FLEET_STATE_NOW=$now FM_FLEET_STATE_READER="$BINDIR/no-such-crew-state" counts)
+  [ "$out" = $'3\t0\t0\t0\t0\t0\t3\t1\t0' ] \
+    || fail "a reading from before the split was lost to the status bar: $(printf '%s' "$out" | tr '\t' ' ')"
+  pass "fleet status: decisions are counted apart inside ready, and an older reading is never split by guesswork"
+}
+
 # AGENTS.md section 8: a status line is a wake EVENT, not current state. A task
 # that paused and then resumed leaves `paused:` as the last line of its log
 # forever, and the old row counted it as parked for as long as that line sat
@@ -744,6 +782,7 @@ test_finished_work_is_neither_working_nor_stopped
 test_under_load_the_last_good_reading_stands_in_for_unknown
 test_a_done_waits_on_the_captain_only_when_it_is_the_ready_report
 test_only_a_decision_a_human_owes_waits_on_the_captain
+test_decisions_are_counted_apart_inside_ready
 test_canonical_states_fold_into_the_six_fields
 test_records_are_counted_apart_from_live_workers
 test_an_incomplete_fold_is_refused_rather_than_published_short
