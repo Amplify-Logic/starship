@@ -1158,6 +1158,40 @@ SH
   }
 }
 
+# fm_install_markdown_tasks_axi <fakebin-dir>: drop a PATH stand-in for
+# tasks-axi's markdown adapter that answers `list` and `show` from the home's
+# data/backlog.md (the file bin/fm-tasks-axi.sh pins through TASKS_AXI_FILE), so
+# a suite whose fixtures write markdown rows can reach readers that go through
+# the adapter on a host without tasks-axi. It parses the rows the way
+# bin/fm-fleet-snapshot.sh --backlog does; a missing backlog lists nothing.
+fm_install_markdown_tasks_axi() {
+  local fb=$1
+  mkdir -p "$fb"
+  { printf '#!/usr/bin/env bash\nset -u\nROOT=%q\n' "$ROOT"; cat <<'SH'; } > "$fb/tasks-axi"
+file=${TASKS_AXI_FILE:-$PWD/data/backlog.md}
+data=$(dirname "$file")
+backlog=$(FM_HOME=$(dirname "$data") FM_DATA_OVERRIDE=$data bash "$ROOT/bin/fm-fleet-snapshot.sh" --backlog) || exit 1
+case "${1:-}" in
+  list)
+    jq -r '[.records[] | select(.structured)] as $rows
+      | "count: \($rows | length)",
+        "tasks[\($rows | length)]{id,state,kind,repo,title,hold_kind,hold_reason,hold_until,blocked_by}:",
+        ($rows[] | "  " + ([.id, .state, (.kind // "-"), (.repo // "-"), ((.title // "") | @json),
+          (.hold_kind // "-"), ((.hold_reason // "-") | @json), (.hold_until // "-"),
+          (if (.blocked_by_ids | length) > 0 then (.blocked_by_ids | join(",") | @json) else "none" end)]
+          | join(",")))' <<<"$backlog"
+    ;;
+  show)
+    jq -er --arg id "${2:-}" '[.records[] | select(.structured and .id == $id)][0]
+      | "task:", "  id: \(.id)", "  state: \(.state)", "  created: \(.since // "-")",
+        "  body: \(.body_lines | join("\n") | @json)"' <<<"$backlog"
+    ;;
+  *) exit 0 ;;
+esac
+SH
+  chmod +x "$fb/tasks-axi"
+}
+
 # fm_fake_crash_injector <fakebin>
 # Drops an `fm-crash-inject <pid>` shim that a PATH fake calls to simulate a
 # hard crash of the process under test. It SIGKILLs <pid> and then returns only

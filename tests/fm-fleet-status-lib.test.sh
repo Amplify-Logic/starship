@@ -12,6 +12,10 @@ set -u
 TMP_ROOT=$(fm_test_tmproot fm-fleet-status-lib)
 BINDIR="$TMP_ROOT/bin"
 mkdir -p "$BINDIR"
+# The owner's calls read the backlog through the tasks-axi adapter; this
+# stand-in serves each case's markdown rows.
+fm_install_markdown_tasks_axi "$TMP_ROOT/axibin"
+export PATH="$TMP_ROOT/axibin:$PATH"
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 
@@ -94,7 +98,7 @@ reset_state() {
   STATE="$TMP_ROOT/case$FLEET_CASE/state"
   FLEET_FIX="$TMP_ROOT/case$FLEET_CASE/fleet"
   CALLS="$TMP_ROOT/case$FLEET_CASE/calls"
-  mkdir -p "$STATE" "$FLEET_FIX"
+  mkdir -p "$STATE" "$STATE/../data" "$FLEET_FIX"
   export FM_FLEET_FIXTURE="$FLEET_FIX"
 }
 
@@ -700,6 +704,54 @@ test_the_owners_calls_are_live_decisions_and_ready_merges() {
   pass "fleet status: the owner's calls are his live held decisions and the ready merges no captain hold holds, nothing else"
 }
 
+# A home whose backlog is not markdown (here Beads, answered by a stand-in for
+# tasks-axi) keeps its calls: the held decisions come through the adapter, with
+# the same live rule, and a backlog the adapter cannot read is no list at all.
+test_the_owners_calls_come_through_a_non_markdown_adapter() {
+  local out dir stamp
+  reset_state
+  dir="$TMP_ROOT/case$FLEET_CASE/beads-axi"
+  mkdir -p "$dir"
+  printf 'backend = "beads"\n' > "$STATE/../.tasks.toml"
+  stamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  task green crew 'state: done · source: run-step · checks passed'
+  task held-work crew 'state: done · source: run-step · checks passed'
+  cat > "$dir/tasks-axi" <<SH
+#!/usr/bin/env bash
+[ -z "\${TASKS_AXI_FILE:-}" ] || exit 3
+[ ! -e "$STATE/../list-fails" ] || [ "\$1" != list ] || exit 1
+case "\$1" in
+  list)
+    printf 'count: 5 of 5 total\n'
+    printf 'tasks[5]{id,state,kind,repo,title,hold_kind,hold_reason,hold_until,blocked_by}:\n'
+    printf '  beads-call,queued,captain,r,"Pick a colour, red or blue",captain,"choose red or blue",-,none\n'
+    printf '  held-work,in_flight,ship,r,"Held work",captain,"merge after the call",-,none\n'
+    printf '  old-call,queued,captain,r,"An old call",captain,"old",-,none\n'
+    printf '  waits,queued,captain,r,"After other work",captain,"after other",-,other\n'
+    printf '  other,queued,ship,r,"The other work",-,-,-,none\n'
+    ;;
+  show)
+    case "\$2" in
+      old-call) printf 'task:\n  id: old-call\n  created: 2020-01-01\n  body: ""\n' ;;
+      *) printf 'task:\n  id: %s\n  created: 2026-01-01\n  body: "Captain hold set: $stamp\\\\nwhy"\n' "\$2" ;;
+    esac
+    ;;
+esac
+SH
+  chmod +x "$dir/tasks-axi"
+  out=$(PATH="$dir:$PATH" FM_FLEET_STATE_READER="$BINDIR/fake-crew-state" \
+    bash -c '. "$1/bin/fm-fleet-status-lib.sh"; fm_owner_calls "$2"' _ "$ROOT" "$STATE") \
+    || fail "the owner's calls could not be read through a non-markdown adapter"
+  assert_equals "$(printf 'decision\tbeads-call\ndecision\theld-work\nmerge\tgreen')" "$out" \
+    "the owner's calls through a non-markdown adapter"
+  touch "$STATE/../list-fails"
+  if PATH="$dir:$PATH" FM_FLEET_STATE_READER="$BINDIR/fake-crew-state" \
+    bash -c '. "$1/bin/fm-fleet-status-lib.sh"; fm_owner_calls "$2"' _ "$ROOT" "$STATE" >/dev/null; then
+    fail "a backlog the adapter could not read still gave a list of calls"
+  fi
+  pass "fleet status: the owner's calls come through a non-markdown adapter, and an unreadable backlog is no list"
+}
+
 # The bridge strip shows "decisions for you" and "ready to merge" as two lamps, so
 # it asks for the decisions inside ready as a tenth field. The status bar's nine
 # fields are unchanged, and a reading taken before the owner's calls supplied
@@ -866,6 +918,7 @@ test_under_load_the_last_good_reading_stands_in_for_unknown
 test_a_done_waits_on_the_captain_only_when_it_is_the_ready_report
 test_a_workers_question_needs_firstmate_not_the_captain
 test_the_owners_calls_are_live_decisions_and_ready_merges
+test_the_owners_calls_come_through_a_non_markdown_adapter
 test_decisions_are_counted_apart_inside_ready
 test_canonical_states_fold_into_the_six_fields
 test_records_are_counted_apart_from_live_workers

@@ -298,7 +298,9 @@ fm_fleet_status_bucket() {  # <canonical line> [<meta>]
 # `ready` lines matter. Without it each ordinary task is read here. <backlog> is
 # an optional file holding the backlog object of a snapshot the caller already
 # took (`fm-fleet-snapshot.sh --backlog`, or the `backlog` of `--json`); without
-# it the backlog is read for the home that owns <state-dir>. It fails, printing
+# it the backlog is read for the home that owns <state-dir> through its
+# configured tasks-axi adapter, so a home whose backlog is not markdown keeps
+# its calls. It fails, printing
 # nothing, when the backlog or any task cannot be read, because a short list of
 # calls reads exactly like fewer calls.
 fm_owner_calls() {  # <state-dir> [<buckets-file> [<backlog-file>]]
@@ -333,13 +335,14 @@ fm_owner_calls() {  # <state-dir> [<buckets-file> [<backlog-file>]]
   [ -z "$out" ] || printf '%s\n' "$out"
 }
 
-# _fm_owner_backlog: the backlog object of the home that owns <state-dir>, as
-# bin/fm-fleet-snapshot.sh --backlog classifies it. The home is the state
-# directory's parent, which is where every caller keeps it.
+# _fm_owner_backlog: the backlog object of the home that owns <state-dir>, read
+# through its configured tasks-axi adapter and classified as
+# bin/fm-fleet-snapshot.sh classifies every captain hold (--axi-backlog). The
+# home is the state directory's parent, which is where every caller keeps it.
 _fm_owner_backlog() {  # <state-dir>
   local home
   home=$(CDPATH='' cd -P -- "$1/.." 2>/dev/null && pwd -P) || return 1
-  FM_HOME=$home FM_STATE_OVERRIDE=$1 bash "$_FM_FLEET_LIB_DIR/fm-fleet-snapshot.sh" --backlog </dev/null 2>/dev/null
+  FM_HOME=$home FM_STATE_OVERRIDE=$1 bash "$_FM_FLEET_LIB_DIR/fm-fleet-snapshot.sh" --axi-backlog </dev/null 2>/dev/null
 }
 
 # _fm_fleet_backend_ready: load bin/fm-backend.sh once, on first use.

@@ -8,7 +8,11 @@ set -u
 TMP_ROOT=$(fm_test_tmproot fm-status-bar)
 HOME_FIX="$TMP_ROOT/home"
 FAKEBIN=$(fm_fakebin "$TMP_ROOT")
-mkdir -p "$HOME_FIX/state"
+# The owner's calls read the backlog through the tasks-axi adapter; this
+# stand-in serves the home's markdown rows.
+fm_install_markdown_tasks_axi "$TMP_ROOT/axibin"
+export PATH="$TMP_ROOT/axibin:$PATH"
+mkdir -p "$HOME_FIX/state" "$HOME_FIX/data"
 
 cat > "$FAKEBIN/stat" <<'SH'
 #!/usr/bin/env bash

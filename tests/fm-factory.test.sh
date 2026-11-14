@@ -407,8 +407,6 @@ test_a_changing_pane_is_a_sign_of_life() {
   pass "factory record: a worker's pane text changing is a sign of life; a first sight is not"
 }
 
-# A ship spawned without a mode records no mode= at all; its ready report is
-# still the ready report, read as the status bar reads an empty mode.
 # Ready work the owner re-held until a later date is no call of his until then:
 # its job reads as on hold, and it is not under NEEDS YOU.
 test_ready_work_held_until_a_date_is_not_ready_for_you() {
@@ -429,6 +427,8 @@ test_ready_work_held_until_a_date_is_not_ready_for_you() {
   pass "factory record: ready work the owner held until a date reads on hold, not ready for you"
 }
 
+# A ship spawned without a mode records no mode= at all; its ready report is
+# still the ready report, read as the status bar reads an empty mode.
 test_a_ship_with_no_mode_still_reports_its_pr_ready() {
   reset_case
   write_registry

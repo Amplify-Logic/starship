@@ -14,6 +14,10 @@ set -u
 TMP_ROOT=$(fm_test_tmproot fm-bridge-strip)
 BINDIR="$TMP_ROOT/bin"
 mkdir -p "$BINDIR"
+# The owner's calls read the backlog through the tasks-axi adapter; this
+# stand-in serves the home's markdown rows.
+fm_install_markdown_tasks_axi "$TMP_ROOT/axibin"
+export PATH="$TMP_ROOT/axibin:$PATH"
 STRIP="$ROOT/bin/fm-bridge-strip.sh"
 
 E=$'\033'
@@ -74,7 +78,7 @@ reset_case() {
   FLEET_FIX="$TMP_ROOT/case$CASE/fleet"
   CONFIG_FIX="$TMP_ROOT/case$CASE/config"
   CALLS="$TMP_ROOT/case$CASE/calls"
-  mkdir -p "$HOME_FIX/state" "$FLEET_FIX"
+  mkdir -p "$HOME_FIX/state" "$HOME_FIX/data" "$FLEET_FIX"
   : > "$CALLS"
   export FM_FLEET_FIXTURE="$FLEET_FIX"
   battery_reading ''
