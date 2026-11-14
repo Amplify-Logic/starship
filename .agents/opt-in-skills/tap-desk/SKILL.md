@@ -53,7 +53,7 @@ A tap with a reason also leaves a rule candidate in `data/learnings.md`; curate 
 ## The seven-day default
 
 Once a day, and at the first heartbeat after a long gap, run `bin/fm-tap-desk.sh defaults`, then `defaults --apply` when it lists anything due.
-It answers only decisions marked easy to undo for the current question that waited seven days and carry a recorded recommendation, and the script refuses the rest, including any the captain deferred with `--until`.
+It answers only decisions the page cards, marked easy to undo for the current question, that waited seven days and carry a recorded recommendation, and the script refuses the rest, including any the captain deferred with `--until`.
 Tell the captain each `defaulted:` line in the next natural reply: what was decided and that it can be undone, so the captain is never surprised by a default.
 
 ## Marking a decision easy to undo

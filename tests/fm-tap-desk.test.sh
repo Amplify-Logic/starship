@@ -472,9 +472,13 @@ test_defaults_apply_only_marked_easy_old_safe_decisions() {
   hold hold wordy --title "Choose the layout" --reason "Choose: grid; OR list." --repo sample >/dev/null
   hold hold past-deferred --title "Choose the sidebar" --reason "Choose: left; OR right." --repo sample --until 2020-01-02 >/dev/null
   hold hold stale-one --title "Choose the footer" --reason "Choose: short; OR tall." --repo sample >/dev/null
+  # A hold waiting on other work is no call of the owner's until that work lands.
+  tasks add other-work "The other work" --kind ship --repo sample >/dev/null
+  tasks add blocked-one "Choose the frame" --kind ship --repo sample --blocked-by other-work >/dev/null
+  hold hold blocked-one --reason "Choose: oak; OR pine." >/dev/null || fail "could not hold the blocked question"
   local id ten_days_ago
   ten_days_ago=$(node -e 'process.stdout.write(new Date(Date.now() - 10 * 864e5).toISOString().replace(/\.\d+Z$/, "Z"))')
-  for id in due-one unmarked kept-one wordy; do backdate_hold "$id" "$ten_days_ago"; done
+  for id in due-one unmarked kept-one wordy blocked-one; do backdate_hold "$id" "$ten_days_ago"; done
   for id in deferred past-deferred stale-one; do backdate_hold "$id" 2020-01-01T00:00:00Z; done
   desk mark due-one --recommend blue --easy-undo >/dev/null || fail "could not mark due-one"
   desk mark young-one --recommend sans --easy-undo >/dev/null || fail "could not mark young-one"
@@ -482,6 +486,8 @@ test_defaults_apply_only_marked_easy_old_safe_decisions() {
   desk mark deferred --recommend dark --easy-undo >/dev/null || fail "could not mark deferred"
   desk mark wordy --recommend grid --easy-undo >/dev/null || fail "could not mark wordy"
   desk mark past-deferred --recommend left --easy-undo >/dev/null || fail "could not mark past-deferred"
+  desk mark stale-one --recommend short --easy-undo >/dev/null || fail "could not mark stale-one"
+  desk mark blocked-one --recommend oak --easy-undo >/dev/null || fail "could not mark blocked-one"
   # A body edit made after marking cannot smuggle a refused class past the default.
   tasks update wordy --title "Choose the layout and delete the old one" >/dev/null
   write_tap "$HOME_DIR/taps" d.kept-one decision kept-one "$(identity_of kept-one)" keep "" ""
@@ -504,6 +510,7 @@ test_defaults_apply_only_marked_easy_old_safe_decisions() {
       // An undated hold past the aging threshold no longer waits on the owner,
       // as the bearings Captain'"'"'s Call reads it, so it has no card either.
       check(!by["stale-one"], 7);
+      check(!by["blocked-one"], 8);
     });' || fail "a card promises a default that defaults would never apply"
   desk defaults > "$HOME_DIR/dry.out" || fail "the defaults dry run failed"
   assert_grep "would default: due-one: blue" "$HOME_DIR/dry.out" "the due decision was not listed"
@@ -522,6 +529,12 @@ test_defaults_apply_only_marked_easy_old_safe_decisions() {
   assert_no_grep "past-deferred" "$HOME_DIR/apply.out" "a decision whose deferral date passed was offered a default"
   assert_equals "queued" "$(field wordy state)" "a destructive-sounding decision was defaulted"
   assert_grep "skipped: wordy: it reads as destructive" "$HOME_DIR/apply.out" "the class refusal was not explained"
+  # A marked, old hold the page does not card is never answered unseen.
+  for id in stale-one blocked-one; do
+    assert_no_grep "$id" "$HOME_DIR/dry.out" "the dry run offered a default for $id, which has no card"
+    assert_no_grep "$id" "$HOME_DIR/apply.out" "defaults --apply reached $id, which has no card"
+    assert_not_contains "$(field "$id" body)" "Default applied" "$id was defaulted without a card"
+  done
   local rc=0
   desk defaults --days 3 >/dev/null 2>&1 || rc=$?
   expect_code 2 "$rc" "a default window under seven days"

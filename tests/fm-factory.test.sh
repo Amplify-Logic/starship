@@ -407,6 +407,21 @@ test_a_changing_pane_is_a_sign_of_life() {
   pass "factory record: a worker's pane text changing is a sign of life; a first sight is not"
 }
 
+# A ship spawned without a mode records no mode= at all; its ready report is
+# still the ready report, read as the status bar reads an empty mode.
+test_a_ship_with_no_mode_still_reports_its_pr_ready() {
+  reset_case
+  write_registry
+  write_world
+  printf 'kind=ship\nyolo=off\nspawn_gen=s%d.1.1\n' $((NOW - 1800)) > "$HOME_FIX/state/garden-share.meta"
+  printf 'done [at=%d]: PR https://example.invalid/g/pull/12 checks green\n' $((NOW - 109 * 60)) \
+    > "$HOME_FIX/state/garden-share.status"
+  take_record
+  assert_equals "$(q '[.feed[] | select(.job == "garden-share") | .word] | join(",")')" "PR ready" \
+    "a ship with no mode lost its ready report"
+  pass "factory feed: a ship with no recorded mode still reports its PR ready"
+}
+
 test_without_a_registry_each_project_is_a_factory() {
   reset_case
   write_world
@@ -667,6 +682,7 @@ fm_test_run \
   test_the_plain_screen_is_the_record_as_text \
   test_a_job_with_no_sign_of_life_reads_quiet \
   test_a_changing_pane_is_a_sign_of_life \
+  test_a_ship_with_no_mode_still_reports_its_pr_ready \
   test_without_a_registry_each_project_is_a_factory \
   test_work_no_factory_claims_is_still_shown \
   test_writing_keys_go_through_the_inbox_and_act_on_the_highlighted_row \

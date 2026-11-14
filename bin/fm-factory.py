@@ -410,11 +410,11 @@ def ready_reports(rows: List[Tuple[str, str, str]]) -> List[bool]:
         return []
     script = (
         '. "$1/fm-classify-lib.sh" && . "$1/fm-dod-lib.sh" || exit 1\n'
-        'while IFS="$(printf "\\t")" read -r kind mode line; do\n'
+        'while IFS="$(printf "\\037")" read -r kind mode line; do\n'
         '  if fm_dod_should_gate_ship_done "$kind" "$mode" "$line"; then echo yes; else echo no; fi\n'
         'done\n'
     )
-    text = "".join("%s\t%s\t%s\n" % tuple(c.replace("\t", " ").replace("\n", " ") for c in row) for row in rows)
+    text = "".join("%s\x1f%s\x1f%s\n" % tuple(c.replace("\x1f", " ").replace("\n", " ") for c in row) for row in rows)
     try:
         out = subprocess.run(["bash", "-c", script, "fm-factory", BIN], input=text,
                              capture_output=True, text=True, timeout=60)

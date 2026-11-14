@@ -87,16 +87,17 @@
 # one-line rule candidate under "## Tap rule candidates" in data/learnings.md.
 # `route` exits 1 when any tap was refused or unreadable.
 #
-# DEFAULTS. `defaults` lists open captain calls that waited at least --days
+# DEFAULTS. `defaults` lists the owner's calls that are decisions, exactly the
+# ones `export` cards (fm_owner_calls), that waited at least --days
 # (default and minimum 7) since their hold was set, carry the explicit
 # easy-to-undo mark for the current question, and have a recorded recommended
 # option; with --apply it answers each with that option through the same
 # compare-and-answer path and records the answer as a default, not the
-# captain's tap. It never defaults a call the captain deferred with --until,
-# even once that date has passed, or kept, and never one whose words read as
-# destructive, irreversible,
-# security-sensitive, money, outward to people, or a merge; that word check
-# only ever refuses. Firstmate tells the captain each `defaulted:` line.
+# captain's tap. A hold that is aged, deferred, or waiting on other work gets
+# no card, so it is never defaulted unseen. It never defaults a call the
+# captain deferred with --until, even once that date has passed, or kept, and
+# never one whose words read as destructive, irreversible, security-sensitive,
+# money, outward to people, or a merge; that word check only ever refuses. Firstmate tells the captain each `defaulted:` line.
 #
 # MARKS. `mark` records explicit options, the recommended option, and the
 # easy-to-undo field as body lines bound to the current lifecycle identity, so a

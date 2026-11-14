@@ -8,7 +8,7 @@ import { createHash } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { optionsFrom, parseShow, recommendationFrom, taskIdsFromList } from "./fm-decision-surface.mjs";
+import { optionsFrom, parseShow, recommendationFrom } from "./fm-decision-surface.mjs";
 
 const CARDS_SCHEMA = "fm-tap-cards.v1";
 const PAGE_PLACEHOLDER = "__FM_TAP_CARDS__";
@@ -346,15 +346,10 @@ function ownerCalls(ctx) {
   return calls;
 }
 
-// Every held captain call, or only the named ones (export passes the owner's
-// calls; the seven-day default still considers every open call).
-async function loadDecisions(ctx, only) {
-  let ids = only;
-  if (!ids) {
-    const listed = runSync(ctx, tasksAxi(ctx), ["list", "--state", "held", "--fields", "hold_kind", "--limit", "100000"]);
-    if (listed.status !== 0) fail(`could not list held tasks: ${lastLine(listed.stderr || listed.stdout)}`);
-    ({ ids } = taskIdsFromList(listed.stdout.replace(/^count: (\d+) of \d+ total$/m, "count: $1")));
-  }
+// The named held captain calls that are still open. Export and the seven-day
+// default both pass the owner's calls, so a default only ever answers a call
+// the page cards; shapes passes the ids it was asked for.
+async function loadDecisions(ctx, ids) {
   const notShown = [];
   const rows = await pool(ids, 8, async (id) => {
     const [shown, opened] = await Promise.all([
@@ -752,7 +747,7 @@ async function commandDefaults(args) {
   if (!Number.isInteger(days) || days < 7) fail("--days must be a whole number of at least 7", 2);
   const ledger = readLedger(ctx);
   const now = Date.now();
-  const { decisions, notShown } = await loadDecisions(ctx);
+  const { decisions, notShown } = await loadDecisions(ctx, ownerCalls(ctx).decisions);
   for (const item of notShown) console.log(`not checked: ${item.id}: ${item.reason}`);
   let due = 0;
   let refusedCount = 0;
