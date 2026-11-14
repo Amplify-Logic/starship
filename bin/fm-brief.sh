@@ -724,6 +724,12 @@ Reading, searching, listing and creating drafts in connected accounts such as ma
 Sending, replying, forwarding, answering or changing calendar events, sharing, trashing, Zapier actions, and opening a URL, clicking, typing or running scripts through the Claude in Chrome tools need the captain's word, and a check refuses them unless this job or this home allows them.
 When the check refuses something the job needs, do not retry it or reach the same result another way; append \`blocked:\` naming the refused action and stop."
 
+# One shared string keeps the ship and scout push-back line identical. A worker
+# that sees a better approach suggests it through the decision channel; it never
+# builds the alternative on its own, so scope stays with firstmate.
+# shellcheck disable=SC2016 # Literal backticks are brief text, not expansions.
+PUSH_BACK_LINE='If you think this is a good idea, do it. Otherwise, suggest something else: append `needs-decision [at=<epoch>]: {what you would do instead and why}` and wait; never build your alternative unless firstmate agrees.'
+
 # One shared string keeps the ship and scout shell-path rule identical.
 IFS= read -r -d '' SHARED_NO_CD_RULE <<'EOF' || true
 8. Never start a shell command with `cd`, and never run a search whose path depends on the current directory.
@@ -747,6 +753,7 @@ else
 fi
 cat > "$BRIEF" <<EOF
 You are a crewmate: an autonomous worker agent managed by firstmate. Work on your own; do not wait for a human.
+$PUSH_BACK_LINE
 
 $TASK_SECTION
 
@@ -825,6 +832,7 @@ DOD=$(fm_dod_block "$MODE" "$ID" "$BRANCH" "$FORGE" "$BASE_BRANCH" "$UPSTREAM_CO
 
 cat > "$BRIEF" <<EOF
 You are a crewmate: an autonomous worker agent managed by firstmate. Work on your own; do not wait for a human.
+$PUSH_BACK_LINE
 
 $TASK_SECTION
 

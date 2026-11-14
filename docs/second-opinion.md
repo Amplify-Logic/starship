@@ -11,18 +11,20 @@ The skill is opt-in: a home lists it only with the `config/second-opinion` prese
 
 Reach for a second opinion on architectural, security-sensitive, schema or API-contract, and other high-stakes design or decision outputs.
 Do not use it for routine coding, mechanical ports, status work, already-stress-tested decisions, or cheap time-critical work.
+The same wrapper's `--ship-verdict` mode is the ship-or-fix tie-breaker when automatic review keeps returning findings on work that may already be good enough to ship; the `ask-user-authority` skill owns when firstmate runs it and how the verdict is used.
 
 ## Which reviewer
 
-The default reviewer is `fable` (Fable 5.1 at medium effort), which draws the Fable slice of the Claude week.
+The default reviewer is `fable` (Fable 5.2 at high effort), which draws the Fable slice of the Claude week.
+High is chosen because Anthropic's model guidance reports Fable 5.2 at high effort beating Opus 5.5 at max, while max effort tends to overthink.
 `grok` (Grok 4.7 at xhigh through the Cursor CLI) is the different-vendor check run beside it on high-stakes calls, and draws Cursor's included usage pool; the auto-fire skill owns when to add that pass.
 A side-by-side comparison on real plans and PRs found that neither reviewer alone matched the earlier Codex reviewer's findings, and the two together came closest.
 `sol` (Codex through Pi) stays registered but is no longer the default, and stops working once the Codex subscription lapses.
-Every review prompt asks the reviewer to check threading, concurrency, timeouts, retries, and idempotency explicitly, because those were the findings the other reviewers most often missed.
+Every hostile review prompt asks the reviewer to check threading, concurrency, timeouts, retries, and idempotency explicitly, because those were the findings the other reviewers most often missed.
 
 ## Cost policy
 
-Whenever a review fires - orchestrator auto-fire or an accepted offer - the orchestrator must announce that a rival-model second opinion was spent and which pool it drew.
+Whenever a review fires - orchestrator auto-fire, an accepted offer, or a ship-verdict tie-breaker - the orchestrator must announce that a rival-model second opinion was spent and which pool it drew; a tie-breaker's announcement waits for the next natural captain reply rather than sending a message of its own.
 On a borderline call, the orchestrator offers rather than silently spending or silently skipping.
 Never set or require `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`; the wrapper strips ambient ones so every reviewer stays on its subscription.
 Before invoking, the wrapper reads the reviewer's pool from `quota-axi --json`, prints one advisory stderr line, and refuses below a floor of 10% remaining unless `FM_SECOND_OPINION_FORCE=1`.
@@ -47,7 +49,7 @@ The verified reviewers are:
 
 | Name | Invocation | Pool |
 | ---- | ---------- | ---- |
-| `fable` (default) | `claude -p --model claude-fable-5-1 --effort medium --strict-mcp-config --no-session-persistence` | Claude Fable week and Claude week |
+| `fable` (default) | `claude -p --model claude-fable-5-2 --effort high --strict-mcp-config --no-session-persistence` | Claude Fable week and Claude week |
 | `grok` | `cursor-agent -p --model grok-4.7-xhigh --mode ask --trust` | Cursor all-model availability (lowest of included, auto and API usage) |
 | `sol` | `pi --print --model openai-codex/gpt-5.6-sol --thinking xhigh` | Codex general window |
 | `k3` | `kimi --model kimi-code/k3 --prompt` | none checked |
@@ -64,8 +66,9 @@ bin/fm-second-opinion.sh --out data/second-opinion/example.md -- \
 ```
 
 `--out` is required.
-Pass `--context <file>` one or more times to inline supporting documents into the hostile-reviewer prompt.
+Pass `--context <file>` one or more times to inline supporting documents into the reviewer prompt.
 Pass `--reviewer grok` for the different-vendor pass on a high-stakes call, or another verified name when needed; the default is `fable`.
+Pass `--ship-verdict` to ask whether the findings still open block shipping instead of running a hostile review; the reviewer ends with one `VERDICT: SHIP` or `VERDICT: FIX <ids>` line.
 The wrapper refuses oversized prompts rather than truncating silently.
 Empty reviewer output or a reviewer process failure is a loud failure; `--out` is not written as an empty file.
 
@@ -73,4 +76,5 @@ Empty reviewer output or a reviewer process failure is a loud failure; `--out` i
 
 - Wrapper flags, registry, per-reviewer quota pools, and neutral-cwd enforcement: `bin/fm-second-opinion.sh` header and `--help`
 - Auto-fire trigger, when to add the `grok` pass, and the borderline-offer rule: `.agents/opt-in-skills/second-opinion-auto-fire/SKILL.md`
+- When firstmate runs the `--ship-verdict` tie-breaker and how its verdict is used: `.agents/skills/ask-user-authority/SKILL.md`
 - This file: usage overview, reviewer choice, cost policy, registry summary, and the neutral-cwd rule

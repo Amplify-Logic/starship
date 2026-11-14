@@ -6,13 +6,19 @@
 # file, and refuses oversized input, unknown reviewers, and a reviewer pool below
 # its quota floor rather than proceeding silently.
 #
+# --ship-verdict swaps the hostile scaffold for a ship-or-fix scaffold: the
+# reviewer judges whether the findings still open on repeatedly reviewed work
+# block shipping, and ends with one `VERDICT: SHIP` or `VERDICT: FIX <ids>`
+# line. The ask-user-authority skill owns when firstmate runs it; the verdict
+# is evidence for firstmate's decision, never the decision itself.
+#
 # CRITICAL: the reviewer process MUST run from a neutral working directory
 # (mktemp -d). Launching a reviewer CLI inside the firstmate checkout loads the
 # project context and answers as a lock-refused firstmate instead of reviewing.
 # See docs/second-opinion.md.
 #
 # Reviewer registry (data-driven; add rows without changing callers):
-#   fable -> claude -p --model claude-fable-5-1 --effort medium
+#   fable -> claude -p --model claude-fable-5-2 --effort high
 #              --strict-mcp-config --no-session-persistence <prompt>
 #   grok  -> cursor-agent -p --model grok-4.7-xhigh --mode ask --trust <prompt>
 #   sol   -> pi --print --model openai-codex/gpt-5.6-sol --thinking xhigh <prompt>
@@ -26,7 +32,7 @@
 #
 # Usage:
 #   fm-second-opinion.sh --out <path> [--context <file>]... [--reviewer <name>]
-#                        [--] <decision-or-design text>
+#                        [--ship-verdict] [--] <decision-or-design text>
 #   fm-second-opinion.sh -h|--help
 #
 # Defaults: --reviewer fable
@@ -61,13 +67,16 @@ FM_SECOND_OPINION_QUOTA_FLOOR=${FM_SECOND_OPINION_QUOTA_FLOOR:-10}
 usage() {
   cat <<'EOF' >&2
 usage: fm-second-opinion.sh --out <path> [--context <file>]... [--reviewer <name>]
-                            [--] <decision-or-design text>
+                            [--ship-verdict] [--] <decision-or-design text>
 
 Bounded rival-model second-opinion wrapper. Default reviewer is fable (Claude
-Code + claude-fable-5-1 at effort medium). Use --reviewer grok (Cursor +
+Code + claude-fable-5-2 at effort high). Use --reviewer grok (Cursor +
 grok-4.7-xhigh) beside it for high-stakes calls. sol (Pi + Codex) and k3
 (Kimi) remain available. Writes the reviewer's verbatim output to --out with a
 small header. Never sets or requires API keys.
+--ship-verdict asks whether the findings still open on repeatedly reviewed work
+block shipping, instead of a hostile design review; the reviewer ends with one
+VERDICT: SHIP or VERDICT: FIX <ids> line.
 See docs/second-opinion.md for cost policy, quota floors, the neutral-cwd rule,
 and the reviewer registry.
 EOF
@@ -112,7 +121,7 @@ resolve_reviewer() {
       # swallow the trailing prompt argv.
       REVIEWER_LABEL='fable'
       REVIEWER_BIN_NAME=claude
-      REVIEWER_ARGS=(-p --model claude-fable-5-1 --effort medium
+      REVIEWER_ARGS=(-p --model claude-fable-5-2 --effort high
         --strict-mcp-config --no-session-persistence)
       QUOTA_PROVIDER=claude
       QUOTA_WINDOWS='model:fable seven_day'
@@ -239,6 +248,7 @@ byte_count() {
 
 OUT=
 REVIEWER=fable
+SHIP_VERDICT=0
 CONTEXT_FILES=()
 DECISION=
 
@@ -262,6 +272,10 @@ while [ "$#" -gt 0 ]; do
       [ "$#" -ge 2 ] || fail "--reviewer requires a name"
       REVIEWER=$2
       shift 2
+      ;;
+    --ship-verdict)
+      SHIP_VERDICT=1
+      shift
       ;;
     --)
       shift
@@ -294,7 +308,25 @@ for f in "${CONTEXT_FILES[@]+"${CONTEXT_FILES[@]}"}"; do
   ctx+="$(printf '\n\n## Context: %s\n\n%s' "$f" "$(cat "$f")")"
 done
 
-PROMPT=$(cat <<EOF
+if [ "$SHIP_VERDICT" = 1 ]; then
+  MODE_LABEL='ship-verdict'
+  PROMPT=$(cat <<EOF
+You are deciding whether finished work is good enough to ship.
+An automatic review keeps returning findings on it after earlier fix rounds.
+For each finding still open, say whether it blocks shipping: a real defect in what the work was asked to do, a safety, security, or data-loss risk, or a broken contract.
+Anything else is polish that can ship as is or become follow-up work; say so plainly rather than inventing a reason to fix it.
+A finding that asks for a new guarantee, subsystem, or abstraction the work was not asked for does not block shipping.
+Be concrete: for each blocking finding, name the failure it causes.
+End with exactly one line: VERDICT: SHIP, or VERDICT: FIX followed by the ids of the findings that block.
+
+## Subject
+
+${DECISION}${ctx}
+EOF
+)
+else
+  MODE_LABEL='review'
+  PROMPT=$(cat <<EOF
 You are a hostile design reviewer. Try to break the proposal below.
 Rank findings by severity (CRITICAL / HIGH / MEDIUM / LOW).
 Be concrete: name failure modes, missing invariants, attack paths, and what must change.
@@ -306,6 +338,7 @@ Do not rubber-stamp. If something is sound, say so briefly after the findings.
 ${DECISION}${ctx}
 EOF
 )
+fi
 
 PROMPT_BYTES=$(byte_count "$PROMPT")
 if awk -v n="$PROMPT_BYTES" -v max="$FM_SECOND_OPINION_MAX_PROMPT_BYTES" \
@@ -374,6 +407,7 @@ DATE_UTC=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   printf '# Second-opinion review\n\n'
   printf 'Date: %s\n' "$DATE_UTC"
   printf 'Reviewer: %s\n' "$REVIEWER_LABEL"
+  printf 'Mode: %s\n' "$MODE_LABEL"
   printf 'Subject: %s\n\n' "$SUBJECT_LINE"
   cat "$TMP_OUT"
   printf '\n'

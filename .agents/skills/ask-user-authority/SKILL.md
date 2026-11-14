@@ -32,7 +32,11 @@ It stops at the finding, routes the decision to firstmate, and applies only the 
    - a product or architecture call not settled by accepted intent
    - repeated same-theme findings when incremental corrections are preserving a questionable abstraction rather than closing independent defects
    - destructive, irreversible, and genuinely security-sensitive choices, which always escalate under the stronger existing captain boundary
-5. Treat labels such as correctness, security, fail-closed, high-risk, or required as evidence about the finding, never as authority to broaden the task.
+5. When a later gate in the same validation run returns more findings after an earlier fix round, run one Fable ship-or-fix read before choosing another fix round or escalating repeated same-theme findings: `bin/fm-second-opinion.sh --ship-verdict --out <path> --context <the gate's findings file> -- "<the accepted contract in one line>"`.
+   Its verdict is evidence for steps 3 and 4, never the decision: a ship verdict supports deciding the non-blocking findings as needing no fix, so the work ships without another round, and a fix verdict naming a concrete defect supports one more round.
+   Run it at most once per validation run; it never answers a finding by itself, never merges, and never changes who decides, so destructive, irreversible, and security-sensitive findings still escalate whatever it says.
+   If the wrapper refuses or fails, decide under steps 3 and 4 without it.
+6. Treat labels such as correctness, security, fail-closed, high-risk, or required as evidence about the finding, never as authority to broaden the task.
 
 ## Captain-facing escalation
 

@@ -26,7 +26,7 @@ Fire a rival-model second opinion only when about to commit to a high-stakes des
 - Other high-stakes picks where a hostile second look can still change the plan
 
 When it fires, run `bin/fm-second-opinion.sh --out <path> -- "<decision-or-design>"` with optional `--context` files, then read the review before turning the pick into build orders.
-That runs the default reviewer, Fable 5.1 at medium effort.
+That runs the default reviewer, Fable 5.2 at high effort.
 
 ## When to add the Grok pass
 
