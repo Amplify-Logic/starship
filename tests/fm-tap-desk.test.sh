@@ -50,13 +50,13 @@ backdate_hold() {  # <task-id> <stamp>
   tasks update "$1" --body-file "$HOME_DIR/body.txt" >/dev/null
 }
 
-write_tap() {  # <dir> <key> <kind> <id> <identity> <choice> [option] [reason]
+write_tap() {  # <dir> <key> <kind> <id> <identity> <choice> [option] [reason] [pr]
   mkdir -p "$1"
   node -e '
-    const [file, card, kind, id, identity, choice, option, reason] = process.argv.slice(1);
-    const tap = { card, kind, id, identity, choice, option, reason, tapped_at: new Date().toISOString() };
+    const [file, card, kind, id, identity, choice, option, reason, pr] = process.argv.slice(1);
+    const tap = { card, kind, id, identity, choice, option, pr, reason, tapped_at: new Date().toISOString() };
     require("node:fs").writeFileSync(file, JSON.stringify({ id: card, version: 2, data: tap }));
-  ' "$1/$2.json" "$2" "$3" "$4" "$5" "$6" "${7:-}" "${8:-}"
+  ' "$1/$2.json" "$2" "$3" "$4" "$5" "$6" "${7:-}" "${8:-}" "${9:-}"
 }
 
 field() {  # <task-id> <field>
@@ -75,23 +75,56 @@ test_export_lists_decisions_and_ready_merges() {
   tasks add ship-pr "Ship the fix" --kind ship --repo sample >/dev/null
   tasks add ship-draft "Draft fix" --kind ship --repo sample >/dev/null
   tasks add ship-merged "Merged fix" --kind ship --repo sample >/dev/null
+  tasks add ship-validating "Still validating" --kind ship --repo sample >/dev/null
+  tasks add ship-red "Red checks" --kind ship --repo sample >/dev/null
+  tasks add ship-rules "Rules change" --kind ship --repo sample >/dev/null
   fm_write_meta "$HOME_DIR/state/ship-pr.meta" "kind=ship" "project=/x/sample" "pr=https://github.com/o/sample/pull/7"
   fm_write_meta "$HOME_DIR/state/ship-draft.meta" "kind=ship" "pr=https://github.com/o/sample/pull/8"
   fm_write_meta "$HOME_DIR/state/ship-merged.meta" "kind=ship" "pr=https://github.com/o/sample/pull/9"
+  fm_write_meta "$HOME_DIR/state/ship-validating.meta" "kind=ship" "pr=https://github.com/o/sample/pull/10"
+  fm_write_meta "$HOME_DIR/state/ship-red.meta" "kind=ship" "pr=https://github.com/o/sample/pull/11"
+  fm_write_meta "$HOME_DIR/state/ship-rules.meta" "kind=ship" "pr=https://github.com/o/sample/pull/12"
   fm_write_meta "$HOME_DIR/state/ship-nopr.meta" "kind=ship"
+  # Every open PR reads as open and non-draft to gh; only the fleet reader
+  # says which of them is ready.
   cat > "$FAKEBIN/gh" <<'EOF'
 #!/usr/bin/env bash
-case "$3" in
-  */pull/7) echo '{"state":"OPEN","isDraft":false,"title":"Fix the widget","headRefOid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}' ;;
-  */pull/8) echo '{"state":"OPEN","isDraft":true,"title":"Draft","headRefOid":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}' ;;
-  */pull/9) echo '{"state":"MERGED","isDraft":false,"title":"Merged","headRefOid":"cccccccccccccccccccccccccccccccccccccccc"}' ;;
+case "$1 $2" in
+  "pr view")
+    case "$3" in
+      */pull/7) echo '{"state":"OPEN","isDraft":false,"title":"Fix the widget","headRefOid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","author":{"login":"Me"}}' ;;
+      */pull/8) echo '{"state":"OPEN","isDraft":true,"title":"Draft","headRefOid":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","author":{"login":"me"}}' ;;
+      */pull/9) echo '{"state":"MERGED","isDraft":false,"title":"Merged","headRefOid":"cccccccccccccccccccccccccccccccccccccccc","author":{"login":"me"}}' ;;
+      */pull/10|*/pull/11) echo '{"state":"OPEN","isDraft":false,"title":"Not ready","headRefOid":"dddddddddddddddddddddddddddddddddddddddd","author":{"login":"me"}}' ;;
+      */pull/12) echo '{"state":"OPEN","isDraft":false,"title":"Rules","headRefOid":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","author":{"login":"teammate"}}' ;;
+      *) exit 1 ;;
+    esac
+    ;;
+  "api --hostname")
+    case "$*" in
+      *" user "*) echo me ;;
+      *pulls/7/files*) printf 'src/widget.js\ndocs/AGENTS-notes.md\n' ;;
+      *pulls/12/files*) printf 'src/x.js\n.agents/skills/demo/SKILL.md\nAGENTS.md\n' ;;
+      *) exit 1 ;;
+    esac
+    ;;
   *) exit 1 ;;
 esac
 EOF
   chmod +x "$FAKEBIN/gh"
-  desk export > "$HOME_DIR/export.out" || fail "export failed"
+  cat > "$FAKEBIN/reader" <<'EOF'
+#!/usr/bin/env bash
+case "$1" in
+  ship-validating) echo "state: working · source: run-step · ci · run: r10" ;;
+  ship-red) echo "state: failed · source: run-step · ci failed · run: r11" ;;
+  ship-merged) echo "state: done · source: run-step · passed · PR merged · run: r9" ;;
+  *) echo "state: done · source: run-step · passed · run: r1" ;;
+esac
+EOF
+  chmod +x "$FAKEBIN/reader"
+  home_env FM_FLEET_STATE_READER="$FAKEBIN/reader" "$DESK" export > "$HOME_DIR/export.out" || fail "export failed"
   assert_grep "decisions: 2" "$HOME_DIR/export.out" "export did not count both captain calls"
-  assert_grep "merges: 1" "$HOME_DIR/export.out" "export did not count the one ready merge"
+  assert_grep "merges: 2" "$HOME_DIR/export.out" "export did not count only the ready merges"
   assert_grep "not shown: ship-draft:" "$HOME_DIR/export.out" "a draft PR was not named as not shown"
   local route_id work_id perms
   route_id=$(identity_of pick-route)
@@ -110,12 +143,17 @@ EOF
       check(!by["d.work-later"], 7);
       check(by["m.ship-pr"] && by["m.ship-pr"].identity === "a".repeat(40) && by["m.ship-pr"].pr_url === "https://github.com/o/sample/pull/7", 8);
       check(!by["m.ship-draft"] && !by["m.ship-merged"] && !by["m.ship-nopr"], 9);
+      check(!by["m.ship-validating"] && !by["m.ship-red"], 10);
+      check(by["m.ship-pr"].opened_by_other === false && by["m.ship-pr"].rules_files.length === 0, 11);
+      const rules = by["m.ship-rules"];
+      check(rules && rules.opened_by === "teammate" && rules.opened_by_other === true, 12);
+      check(JSON.stringify(rules.rules_files) === JSON.stringify([".agents/skills/demo/SKILL.md", "AGENTS.md"]), 13);
     });' "$route_id" "$work_id" || fail "card file contract failed"
   assert_no_grep "__FM_TAP_CARDS__" "$HOME_DIR/data/tap-desk/page.html" "the page kept its card placeholder"
   assert_grep '"key":"d.pick-route"' "$HOME_DIR/data/tap-desk/page.html" "the page does not carry the cards"
   perms=$(stat -f '%Lp' "$HOME_DIR/data/tap-desk/cards.json" 2>/dev/null || stat -c '%a' "$HOME_DIR/data/tap-desk/cards.json")
   assert_equals "600" "$perms" "the card file is not private"
-  pass "export lists every captain call, held work included, and only open non-draft merges"
+  pass "export lists every captain call, held work included, and only merges the fleet reader calls ready, naming who opened them and any rules they change"
 }
 
 test_mark_records_explicit_fields_and_refuses_unsafe_marks() {
@@ -247,7 +285,15 @@ test_route_merges_only_through_pr_merge() {
   new_home merge
   tasks add ship-pr "Ship the fix" --kind ship --repo sample >/dev/null
   fm_write_meta "$HOME_DIR/state/ship-pr.meta" "kind=ship" "pr=https://github.com/o/sample/pull/7"
-  local head=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa taps="$HOME_DIR/taps" out rc
+  local head=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa pr=https://github.com/o/sample/pull/7 taps="$HOME_DIR/taps" out rc
+  printf 'OPEN %s\n' "$head" > "$HOME_DIR/live.pr"
+  cat > "$FAKEBIN/gh" <<EOF
+#!/usr/bin/env bash
+[ "\$1 \$2 \$3" = "pr view $pr" ] || exit 1
+read -r state head < "$HOME_DIR/live.pr"
+printf '{"state":"%s","headRefOid":"%s"}\n' "\$state" "\$head"
+EOF
+  chmod +x "$FAKEBIN/gh"
   cat > "$FAKEBIN/fake-merge" <<EOF
 #!/usr/bin/env bash
 printf '%s\n' "\$*" >> "$HOME_DIR/merge.calls"
@@ -255,25 +301,45 @@ printf '%s\n' "\$*" >> "$HOME_DIR/merge.calls"
 exit 0
 EOF
   chmod +x "$FAKEBIN/fake-merge"
-  write_tap "$taps" m.ship-pr merge ship-pr "$head" not-yet "" "Wait for the demo"
+  write_tap "$taps" m.ship-pr merge ship-pr "$head" not-yet "" "Wait for the demo" "$pr"
   home_env FM_TAP_DESK_MERGE_BIN="$FAKEBIN/fake-merge" "$DESK" route --taps "$taps" --apply > "$HOME_DIR/notyet.out" || fail "not yet failed"
   assert_absent "$HOME_DIR/merge.calls" "not yet called the merge command"
   assert_contains "$(field ship-pr body)" "not yet for head $head: Wait for the demo" "not yet was not noted with its reason"
 
   rm -rf "$taps"
   touch "$HOME_DIR/merge.refuse"
-  write_tap "$taps" m.ship-pr merge ship-pr "$head" merge "" ""
+  write_tap "$taps" m.ship-pr merge ship-pr "$head" merge "" "" "$pr"
   rc=0; out=$(home_env FM_TAP_DESK_MERGE_BIN="$FAKEBIN/fake-merge" "$DESK" route --taps "$taps" --apply) || rc=$?
   expect_code 1 "$rc" "a refused merge"
   assert_contains "$out" "refused: ship-pr: https://github.com/o/sample/pull/7: error: required check build has not reported" "the merge refusal was not reported"
-  assert_grep "ship-pr https://github.com/o/sample/pull/7 --expected-head $head" "$HOME_DIR/merge.calls" "the merge did not pin the card's head"
+  assert_grep "ship-pr $pr --captain-approved --expected-head $head" "$HOME_DIR/merge.calls" "the merge was not the captain's yes pinned to the card's head"
   rm -f "$HOME_DIR/merge.refuse"
   out=$(home_env FM_TAP_DESK_MERGE_BIN="$FAKEBIN/fake-merge" "$DESK" route --taps "$taps" --apply) || fail "the retried merge failed"
   assert_contains "$out" "merged: ship-pr: https://github.com/o/sample/pull/7" "the retried merge was not reported"
   [ "$(wc -l < "$HOME_DIR/merge.calls" | tr -d ' ')" = 2 ] || fail "the merge was not retried exactly once"
   home_env FM_TAP_DESK_MERGE_BIN="$FAKEBIN/fake-merge" "$DESK" route --taps "$taps" --apply >/dev/null
   [ "$(wc -l < "$HOME_DIR/merge.calls" | tr -d ' ')" = 2 ] || fail "a handled merge tap merged again"
-  pass "a merge tap runs only the guarded merge with the card's head, and not yet never merges"
+
+  # A PR that changed after its card is stale once, never a retried refusal.
+  local case_name
+  for case_name in pushed closed moved; do
+    rm -rf "$taps"
+    printf 'OPEN %s\n' "$head" > "$HOME_DIR/live.pr"
+    fm_write_meta "$HOME_DIR/state/ship-pr.meta" "kind=ship" "pr=$pr"
+    case "$case_name" in
+      pushed) printf 'OPEN %s\n' "$(printf 'f%.0s' $(seq 40))" > "$HOME_DIR/live.pr" ;;
+      closed) printf 'CLOSED %s\n' "$head" > "$HOME_DIR/live.pr" ;;
+      moved) fm_write_meta "$HOME_DIR/state/ship-pr.meta" "kind=ship" "pr=https://github.com/o/sample/pull/70" ;;
+    esac
+    write_tap "$taps" m.ship-pr merge ship-pr "$head" merge "" "$case_name" "$pr"
+    rc=0; out=$(home_env FM_TAP_DESK_MERGE_BIN="$FAKEBIN/fake-merge" "$DESK" route --taps "$taps" --apply) || rc=$?
+    expect_code 0 "$rc" "a merge tap on a $case_name PR"
+    assert_contains "$out" "stale: ship-pr" "a merge tap on a $case_name PR was not stale"
+    out=$(home_env FM_TAP_DESK_MERGE_BIN="$FAKEBIN/fake-merge" "$DESK" route --taps "$taps" --apply) || fail "a replayed $case_name tap failed"
+    assert_contains "$out" "already handled: 1" "a stale $case_name tap was not recorded once"
+  done
+  [ "$(wc -l < "$HOME_DIR/merge.calls" | tr -d ' ')" = 2 ] || fail "a stale merge tap reached the merge command"
+  pass "a merge tap is the captain's yes for the card's PR and head only, stale once when that PR changed, and not yet never merges"
 }
 
 test_defaults_apply_only_marked_easy_old_safe_decisions() {
@@ -296,6 +362,16 @@ test_defaults_apply_only_marked_easy_old_safe_decisions() {
   write_tap "$HOME_DIR/taps" d.kept-one decision kept-one "$(identity_of kept-one)" keep "" ""
   desk route --taps "$HOME_DIR/taps" --apply >/dev/null || fail "could not record the keep"
 
+  desk export >/dev/null || fail "export failed"
+  cards_json | node -e '
+    let s = ""; process.stdin.on("data", (c) => s += c).on("end", () => {
+      const by = Object.fromEntries(JSON.parse(s).cards.map((c) => [c.id, c]));
+      const check = (ok, code) => { if (!ok) { console.error(s); process.exit(code); } };
+      check(by["due-one"].default_in_days === 0, 2);
+      check(by["young-one"].default_in_days === 7, 3);
+      check(by["deferred"].easy_undo === true && by["deferred"].default_in_days === null, 4);
+      check(by["kept-one"].default_in_days === null && by["wordy"].default_in_days === null && by["unmarked"].default_in_days === null, 5);
+    });' || fail "a card promises a default that defaults would never apply"
   desk defaults > "$HOME_DIR/dry.out" || fail "the defaults dry run failed"
   assert_grep "would default: due-one: blue" "$HOME_DIR/dry.out" "the due decision was not listed"
   assert_equals "queued" "$(field due-one state)" "the dry run applied a default"

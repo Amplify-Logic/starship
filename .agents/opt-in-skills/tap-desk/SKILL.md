@@ -12,7 +12,8 @@ metadata:
 
 The captain answers held decisions and ready merges from the phone with one tap each, never by voice and never as chat questions.
 `bin/fm-tap-desk.sh` owns the mechanics: the card format, how a tap is checked and routed, the default rules, and the records it keeps; read its header for anything this skill does not say.
-Every answer still lands through `bin/fm-captain-hold.sh` and every merge through `bin/fm-pr-merge.sh`, so this skill adds no authority: a merge tap is the captain's explicit word for that one PR at that one head, and nothing else.
+Every answer still lands through `bin/fm-captain-hold.sh` and every merge through `bin/fm-pr-merge.sh`.
+A merge tap is the captain's explicit word for that one PR at that one head, and nothing else: route passes it as `--captain-approved` with the card's head pinned, so the card says plainly when the PR was opened by another account or changes Starship's own rules, and fm-pr-merge still runs every other check and refuses that yes while the away record exists.
 
 ## The page
 
@@ -25,7 +26,7 @@ Keep one tap page per home: a private claude.ai artifact whose link is recorded 
 3. Re-export and republish whenever the set of waiting cards changes: a new hold, a PR that became ready, or after routing taps.
    Send the captain the link once, and afterwards only when new cards are waiting, in one plain line rather than a question.
 
-A PR that is ready to merge goes on the page instead of into a chat question; the captain-facing line names the PR's full URL and says it is waiting on the tap page.
+Only a PR the fleet reader calls ready (green, not validating, not needing attention) gets a merge card. A PR that is ready to merge goes on the page instead of into a chat question; the captain-facing line names the PR's full URL and says it is waiting on the tap page.
 
 ## Reading taps
 
@@ -42,8 +43,8 @@ At every wake while the page is published, and whenever the captain says they ta
    - `kept`: leave it held; it moves to the page's kept list and never gets the seven-day default.
    - `merged`: give the captain the one-line outcome with the PR's full URL, as for any merge.
    - `not-yet`: leave the PR open; do not ask again until its head changes or the captain raises it.
-   - `stale`: the question or PR changed after the card was made; republish so the captain sees the current card.
-   - `refused`: the guarded path said no; read why. A refusal that will clear by itself, such as checks still running or the away record blocking a release, is retried on the next route; anything else is a blocker to report in plain words.
+   - `stale`: the question or PR changed after the card was made (for a merge: a new head, a PR closed or merged elsewhere, or the task's next PR); it is recorded once, so republish so the captain sees the current card.
+   - `refused`: the guarded path said no; read why. A refusal that will clear by itself, such as checks still running or the away record blocking a release or a merge, is retried on the next route; anything else is a blocker to report in plain words.
 4. Re-export and republish, then tell the captain what landed in one short reply.
 
 A tap with a reason also leaves a rule candidate in `data/learnings.md`; curate those at `/stow` into a lasting preference in `data/captain.md` when one reason clearly generalizes, so the same question is not asked again.
@@ -51,7 +52,7 @@ A tap with a reason also leaves a rule candidate in `data/learnings.md`; curate 
 ## The seven-day default
 
 Once a day, and at the first heartbeat after a long gap, run `bin/fm-tap-desk.sh defaults`, then `defaults --apply` when it lists anything due.
-It answers only decisions marked easy to undo for the current question that waited seven days and carry a recorded recommendation, and the script refuses the rest.
+It answers only decisions marked easy to undo for the current question that waited seven days and carry a recorded recommendation, and the script refuses the rest, including any the captain deferred with `--until`.
 Tell the captain each `defaulted:` line in the next natural reply: what was decided and that it can be undone, so the captain is never surprised by a default.
 
 ## Marking a decision easy to undo

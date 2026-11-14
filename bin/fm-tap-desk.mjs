@@ -46,7 +46,7 @@ function fail(message, code = 1) {
 function parseArgs(argv) {
   const command = argv.shift() || "";
   const values = { command, flags: new Set(), options: [] };
-  const booleans = new Set(["--apply", "--easy-undo", "--clear", "--clear-marks"]);
+  const booleans = new Set(["--apply", "--easy-undo", "--clear"]);
   while (argv.length > 0) {
     const name = argv.shift();
     if (booleans.has(name)) {
@@ -232,6 +232,19 @@ function neverDefaultClass(...texts) {
   return "";
 }
 
+// Why a decision never gets the seven-day default, or "" when only its age
+// decides; export and defaults both ask here.
+function defaultRefusal(task, identity, shape, ledger) {
+  if (!shape.easyUndo) return "it is not marked easy to undo";
+  if (!shape.recommended) return "no recorded recommendation is one of its options";
+  const holdUntil = task.hold_until && task.hold_until !== "-" ? task.hold_until : "";
+  if (holdUntil) return `the owner deferred it until ${holdUntil}`;
+  if (latestOutcome(ledger, "decision", task.id, identity, "kept")) return "the owner tapped keep on this question";
+  const sensitive = neverDefaultClass(task.title, shape.reason, ...shape.options);
+  if (sensitive) return `it reads as ${sensitive}, which a default never decides`;
+  return "";
+}
+
 function readLedger(ctx) {
   if (!existsSync(ctx.ledger)) return [];
   const entries = [];
@@ -286,7 +299,32 @@ function parseMeta(file) {
 }
 
 function githubPull(url) {
-  return /^https:\/\/[^/\s]+\/[^/\s]+\/[^/\s]+\/pull\/\d+$/.test(url);
+  const match = /^https:\/\/([^/\s]+)\/([^/\s]+)\/([^/\s]+)\/pull\/(\d+)$/.exec(url || "");
+  return match ? { host: match[1], owner: match[2], repo: match[3], number: match[4] } : null;
+}
+
+function livePull(result, url) {
+  if (result.status !== 0) return { error: `could not read ${url}: ${lastLine(result.stderr) || `exit ${result.status}`}` };
+  try {
+    return { pr: JSON.parse(result.stdout) };
+  } catch {
+    return { error: `could not read ${url}: the forge answer was not JSON` };
+  }
+}
+
+// The paths bin/fm-pr-merge.sh treats as Starship's own rules; that script owns
+// the list, and a merge tap's --captain-approved skips its check, so the card
+// names them instead.
+function rulesFile(name) {
+  return name === "AGENTS.md" || name.endsWith("/AGENTS.md") || name === "CLAUDE.md"
+    || name === ".claude/settings.json" || name.startsWith(".agents/skills/")
+    || name.startsWith(".agents/opt-in-skills/") || name.startsWith("hooks/");
+}
+
+// bin/fm-fleet-status-lib.sh owns whether a task's work waits on the captain;
+// only its `ready` reading makes a merge card.
+function fleetBucket(ctx, id) {
+  return runAsync(ctx, "bash", ["-c", '. "$0" && fm_fleet_task_bucket "$1" "$2"', path.join(ctx.root, "bin/fm-fleet-status-lib.sh"), ctx.state, id]);
 }
 
 async function loadDecisions(ctx) {
@@ -316,12 +354,14 @@ async function loadDecisions(ctx) {
   return { decisions, notShown };
 }
 
-function decisionCard(row, ledger, now) {
+function decisionCard(row, ledger, now, days) {
   const { task, identity } = row;
   const shape = decisionShape(task, identity);
   const since = heldSince(identity, task.created);
+  const ageDays = since ? Math.floor((now - since.getTime()) / DAY_MS) : null;
   const kept = latestOutcome(ledger, "decision", task.id, identity, "kept");
   const holdUntil = task.hold_until && task.hold_until !== "-" ? task.hold_until : "";
+  const defaults = ageDays !== null && !defaultRefusal(task, identity, shape, ledger);
   return {
     key: `d.${task.id}`,
     kind: "decision",
@@ -331,12 +371,13 @@ function decisionCard(row, ledger, now) {
     reason: shape.reason,
     repo: task.repo && task.repo !== "-" ? task.repo.replace(/\/$/, "").split("/").at(-1) : "",
     held_since: since ? since.toISOString() : "",
-    age_days: since ? Math.floor((now - since.getTime()) / DAY_MS) : null,
+    age_days: ageDays,
     deferred_until: holdUntil,
     options: shape.options,
     recommendation: shape.recommendationText,
     recommended_option: shape.recommended,
     easy_undo: shape.easyUndo,
+    default_in_days: defaults ? Math.max(0, days - ageDays) : null,
     closes_on_answer: task.kind === "captain",
     kept: kept ? { at: kept.at, reason: kept.reason || "" } : null,
   };
@@ -345,6 +386,14 @@ function decisionCard(row, ledger, now) {
 async function loadMergeCards(ctx, ledger) {
   const cards = [];
   const notShown = [];
+  const logins = new Map();
+  const ownLogin = (host) => {
+    if (!logins.has(host)) {
+      logins.set(host, runAsync(ctx, "gh", ["api", "--hostname", host, "user", "--jq", ".login"])
+        .then((result) => (result.status === 0 ? result.stdout.trim() : "")));
+    }
+    return logins.get(host);
+  };
   if (!existsSync(ctx.state)) return { cards, notShown };
   const metas = readdirSync(ctx.state).filter((name) => name.endsWith(".meta")).sort();
   const candidates = [];
@@ -364,18 +413,22 @@ async function loadMergeCards(ctx, ledger) {
     const shown = await runAsync(ctx, tasksAxi(ctx), ["show", id, "--full"]);
     const task = shown.status === 0 ? readShow(shown.stdout) : null;
     if (task && task.state === "done") return null;
-    if (!githubPull(meta.pr)) return { id, error: `${meta.pr} is not a GitHub pull request, so it has no tap card yet` };
-    const live = await runAsync(ctx, "gh", ["pr", "view", meta.pr, "--json", "state,isDraft,title,headRefOid"]);
-    if (live.status !== 0) return { id, error: `could not read ${meta.pr}: ${lastLine(live.stderr) || `exit ${live.status}`}` };
-    let pr;
-    try {
-      pr = JSON.parse(live.stdout);
-    } catch {
-      return { id, error: `could not read ${meta.pr}: the forge answer was not JSON` };
-    }
+    const parts = githubPull(meta.pr);
+    if (!parts) return { id, error: `${meta.pr} is not a GitHub pull request, so it has no tap card yet` };
+    const bucket = await fleetBucket(ctx, id);
+    if (bucket.status !== 0) return { id, error: `could not read whether ${meta.pr} is ready: ${lastLine(bucket.stderr) || `exit ${bucket.status}`}` };
+    if (bucket.stdout.trim() !== "ready") return null;
+    const { pr, error } = livePull(await runAsync(ctx, "gh", ["pr", "view", meta.pr, "--json", "state,isDraft,title,headRefOid,author"]), meta.pr);
+    if (error) return { id, error };
     if (pr.state !== "OPEN") return null;
     if (pr.isDraft) return { id, error: `${meta.pr} is still a draft` };
     if (!HEAD.test(pr.headRefOid || "")) return { id, error: `${meta.pr} reported no head commit` };
+    const author = typeof pr.author?.login === "string" ? pr.author.login : "";
+    const login = await ownLogin(parts.host);
+    if (!author || !login) return { id, error: `could not read who opened ${meta.pr}, so its card could not say what a tap approves` };
+    const files = await runAsync(ctx, "gh", ["api", "--hostname", parts.host, "--paginate", `repos/${parts.owner}/${parts.repo}/pulls/${parts.number}/files`, "--jq", ".[] | .filename, (.previous_filename // empty)"]);
+    if (files.status !== 0) return { id, error: `could not read which files ${meta.pr} changes, so its card could not say what a tap approves` };
+    const rulesFiles = [...new Set(files.stdout.split("\n").map((name) => name.trim()).filter(rulesFile))].sort();
     const notYet = latestOutcome(ledger, "merge", id, pr.headRefOid, "not-yet");
     return {
       card: {
@@ -386,6 +439,9 @@ async function loadMergeCards(ctx, ledger) {
         title: pr.title || (task && task.title) || id,
         repo: meta.project ? meta.project.replace(/\/$/, "").split("/").at(-1) : "",
         pr_url: meta.pr,
+        opened_by: author,
+        opened_by_other: author.toLowerCase() !== login.toLowerCase(),
+        rules_files: rulesFiles,
         held_for_captain: Boolean(task && task.held === "yes" && task.hold_kind === "captain"),
         not_yet: notYet ? { at: notYet.at, reason: notYet.reason || "" } : null,
       },
@@ -409,16 +465,18 @@ async function commandExport(args) {
   const pageOut = args.page || path.join(path.dirname(output), "page.html");
   const template = args.template;
   if (!template || !existsSync(template)) fail("export requires the page --template");
+  const days = Number(args.days || 7);
+  if (!Number.isInteger(days) || days < 7) fail("--days must be a whole number of at least 7", 2);
   const ledger = readLedger(ctx);
   const now = Date.now();
   const [decisions, merges] = await Promise.all([loadDecisions(ctx), loadMergeCards(ctx, ledger)]);
   const decisionCards = decisions.decisions
-    .map((row) => decisionCard(row, ledger, now))
+    .map((row) => decisionCard(row, ledger, now, days))
     .sort((left, right) => (left.held_since || "").localeCompare(right.held_since || "") || left.id.localeCompare(right.id));
   const cards = {
     schema: CARDS_SCHEMA,
     generated_at: new Date(now).toISOString(),
-    default_after_days: Number(args.days || 7),
+    default_after_days: days,
     cards: [...merges.cards, ...decisionCards],
     not_shown: [...merges.notShown, ...decisions.notShown],
   };
@@ -445,6 +503,7 @@ function normalizeTap(raw, source) {
     identity: String(value.identity ?? ""),
     choice: String(value.choice ?? ""),
     option: value.option == null ? "" : String(value.option),
+    pr: value.pr == null ? "" : String(value.pr),
     reason: oneLine(value.reason, REASON_MAX + 1),
     tapped_at: String(value.tapped_at ?? ""),
   };
@@ -454,10 +513,12 @@ function normalizeTap(raw, source) {
     if (!DECISION_CHOICES.includes(tap.choice)) return { error: `${source}: ${tap.choice || "no choice"} is not a decision choice` };
     if (tap.choice === "option" && (!tap.option.trim() || tap.option.length > OPTION_MAX * 4)) return { error: `${source}: the chosen option is empty or too long` };
     if (tap.choice !== "option") tap.option = "";
+    tap.pr = "";
   } else if (tap.kind === "merge") {
     if (tap.card !== `m.${tap.id}`) return { error: `${source}: the card key does not match the task` };
     if (!MERGE_CHOICES.includes(tap.choice)) return { error: `${source}: ${tap.choice || "no choice"} is not a merge choice` };
     if (!HEAD.test(tap.identity)) return { error: `${source}: the merge card carries no head commit` };
+    if (!githubPull(tap.pr)) return { error: `${source}: the merge card names no GitHub pull request` };
     tap.option = "";
   } else {
     return { error: `${source}: unknown card kind ${tap.kind || "(none)"}` };
@@ -485,8 +546,7 @@ function readTaps(input) {
     const list = Array.isArray(parsed)
       ? parsed
       : Array.isArray(parsed?.documents) ? parsed.documents
-        : Array.isArray(parsed?.docs) ? parsed.docs
-          : [parsed];
+        : [parsed];
     list.forEach((item, index) => {
       const label = list.length > 1 ? `${path.basename(file)}#${index + 1}` : path.basename(file);
       const { tap, error } = normalizeTap(item, label);
@@ -568,8 +628,12 @@ function planMerge(ctx, tap) {
   const metaFile = path.join(ctx.state, `${tap.id}.meta`);
   if (!existsSync(metaFile)) return { final: true, outcome: "stale", detail: "the task no longer has a record" };
   const meta = parseMeta(metaFile);
-  if (!meta.pr) return { final: true, outcome: "stale", detail: "the task no longer records a pull request" };
-  return { action: tap.choice === "merge" ? "merge" : "not-yet", pr: meta.pr };
+  if (meta.pr !== tap.pr) return { final: true, outcome: "stale", detail: `the task no longer records ${tap.pr}` };
+  const { pr, error } = livePull(runSync(ctx, "gh", ["pr", "view", tap.pr, "--json", "state,headRefOid"]), tap.pr);
+  if (error) return { final: false, outcome: "refused", detail: error };
+  if (pr.state !== "OPEN") return { final: true, outcome: "stale", detail: `${tap.pr} is no longer open` };
+  if (pr.headRefOid !== tap.identity) return { final: true, outcome: "stale", detail: `${tap.pr} changed since this card was shown` };
+  return { action: tap.choice === "merge" ? "merge" : "not-yet", pr: tap.pr };
 }
 
 function mergeBin(ctx) {
@@ -621,7 +685,7 @@ function commandRoute(args) {
         ? { final: true, outcome: "not-yet" }
         : { final: false, outcome: "refused", detail: `could not note it on the task: ${lastLine(noted.stderr) || `exit ${noted.status}`}` };
     } else {
-      const merged = runSync(ctx, mergeBin(ctx), [tap.id, plan.pr, "--expected-head", tap.identity]);
+      const merged = runSync(ctx, mergeBin(ctx), [tap.id, plan.pr, "--captain-approved", "--expected-head", tap.identity]);
       result = merged.status === 0
         ? { final: true, outcome: "merged", detail: plan.pr }
         : { final: false, outcome: "refused", detail: `${plan.pr}: ${lastLine(merged.stderr || merged.stdout) || `exit ${merged.status}`}` };
@@ -675,12 +739,8 @@ async function commandDefaults(args) {
     const skip = (why) => console.log(`skipped: ${task.id}: ${why}`);
     if (age === null) { skip("its hold time cannot be read"); continue; }
     if (age < days) continue;
-    if (!shape.recommended) { skip("no recorded recommendation is one of its options"); continue; }
-    const holdUntil = task.hold_until && task.hold_until !== "-" ? task.hold_until : "";
-    if (holdUntil && Date.parse(`${holdUntil}T00:00:00Z`) > now) { skip(`the owner deferred it until ${holdUntil}`); continue; }
-    if (latestOutcome(ledger, "decision", task.id, identity, "kept")) { skip("the owner tapped keep on this question"); continue; }
-    const sensitive = neverDefaultClass(task.title, shape.reason, ...shape.options);
-    if (sensitive) { skip(`it reads as ${sensitive}, which a default never decides`); continue; }
+    const refusal = defaultRefusal(task, identity, shape, ledger);
+    if (refusal) { skip(refusal); continue; }
     due += 1;
     if (!apply) {
       console.log(`would default: ${task.id}: ${shape.recommended} (waited ${age} days)`);

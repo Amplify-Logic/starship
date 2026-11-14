@@ -20,24 +20,31 @@
 # CARDS. `export` reads every open captain call (a held task whose hold kind is
 # captain and that `fm-captain-hold.sh open --identity` calls open, whatever
 # the task's own kind) and every task whose metadata records pr= for an open,
-# non-draft GitHub pull request, read live with gh. It writes the card file
+# non-draft GitHub pull request, read live with gh, that is ready: its work
+# reads `ready` through bin/fm-fleet-status-lib.sh fm_fleet_task_bucket (a
+# green PR waiting on the captain), so a PR still validating, red, or needing
+# attention gets no card. It writes the card file
 # (schema fm-tap-cards.v1, default data/tap-desk/cards.json) and the phone page
 # (default data/tap-desk/page.html: bin/fm-tap-desk.html with the cards
 # inlined). Both are private, mode 0600, and stay under the home's data/; a row
 # that cannot be read is named under not_shown rather than stopping the export.
 # A decision card carries its options, firstmate's recommendation, its
 # lifecycle identity, how long it has waited, whether it is marked easy to undo,
+# in how many days the seven-day default answers it (null when it never will),
 # and a keep the captain already tapped on this same question. Its choices are
-# each option, keep, drop, and you decide. A merge card carries the PR URL and
-# the live head commit as its identity; its choices are merge and not yet.
+# each option, keep, drop, and you decide. A merge card carries the PR URL, the
+# live head commit as its identity, who opened it and whether that is another
+# account, and every file it changes among Starship's own rules (the list
+# bin/fm-pr-merge.sh guards); a PR whose author, this home's account, or changed
+# files cannot be read gets no card. Its choices are merge and not yet.
 # Every card takes an optional short reason.
 #
 # Options and the recommendation are read the way bin/fm-decision-surface.mjs
 # reads them, unless `mark` recorded explicit ones for the current question.
 #
 # TAPS. The page writes one document per card to its artifact database
-# collection `taps`: {card, kind, id, identity, choice, option, reason,
-# tapped_at}. `route` reads those documents from a JSON file (one document, an
+# collection `taps`: {card, kind, id, identity, choice, option, pr, reason,
+# tapped_at}, where pr is the merge card's PR URL and empty on a decision. `route` reads those documents from a JSON file (one document, an
 # array, or an object with a documents array) or a directory of *.json files,
 # such as the out_dir an artifact database list writes. It is a dry run unless
 # --apply is given. For each tap it re-reads the current state rather than
@@ -51,14 +58,20 @@
 #     which fm-captain-hold refuses while the away record exists;
 #   - keep leaves the hold in place and notes the keep and its reason in the
 #     task body, and that question is then never given the seven-day default;
-#   - merge runs `fm-pr-merge.sh <task> <pr> --expected-head <card head>`, so
-#     a push after the card was made refuses instead of merging unseen commits;
-#     not yet notes the reason in the task body.
+#   - a merge tap is stale and records once when the task no longer records
+#     the card's PR, or that PR, read live, is no longer open or has a head
+#     other than the card's;
+#   - merge runs `fm-pr-merge.sh <task> <pr> --captain-approved --expected-head
+#     <card head>`: the tap on a card naming that PR at that head, with its
+#     author and rule changes shown, is the captain's explicit yes, and the
+#     pinned head still refuses a push that races the tap. fm-pr-merge keeps
+#     every other check and still refuses --captain-approved while the away
+#     record exists; not yet notes the reason in the task body.
 # The decision text handed to fm-captain-hold names the chosen option, the
 # reason, and that it came from the captain's tap. Every finished tap is
 # appended to data/tap-desk/ledger.jsonl, so reading the same taps again is a
-# no-op; a refused tap (for example checks still running) is not recorded and
-# is tried again on the next route. A finished tap with a reason also appends a
+# no-op; a refused tap (for example checks still running, or the away record)
+# is not recorded and is tried again on the next route. A finished tap with a reason also appends a
 # one-line rule candidate under "## Tap rule candidates" in data/learnings.md.
 # `route` exits 1 when any tap was refused or unreadable.
 #
@@ -67,8 +80,9 @@
 # easy-to-undo mark for the current question, and have a recorded recommended
 # option; with --apply it answers each with that option through the same
 # compare-and-answer path and records the answer as a default, not the
-# captain's tap. It never defaults a call the captain deferred with --until or
-# kept, and never one whose words read as destructive, irreversible,
+# captain's tap. It never defaults a call the captain deferred with --until,
+# even once that date has passed, or kept, and never one whose words read as
+# destructive, irreversible,
 # security-sensitive, money, outward to people, or a merge; that word check
 # only ever refuses. Firstmate tells the captain each `defaulted:` line.
 #

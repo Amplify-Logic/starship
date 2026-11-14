@@ -121,7 +121,7 @@
     if (!db) { status("Taps cannot be saved from this view. Open the page on claude.ai as its owner."); return; }
     const tap = {
       card: card.key, kind: card.kind, id: card.id, identity: card.identity,
-      choice, option: option || "", reason: reasonInput.value.trim().slice(0, 280),
+      choice, option: option || "", pr: card.kind === "merge" ? card.pr_url : "", reason: reasonInput.value.trim().slice(0, 280),
       tapped_at: new Date().toISOString(),
     };
     buttons.forEach((button) => { button.disabled = true; });
@@ -152,6 +152,8 @@
       const line = el("p", { class: "meta" });
       line.append(link);
       box.append(line);
+      if (card.opened_by_other) box.append(el("div", { class: "notice" }, `Opened by ${card.opened_by}, not by your account. Merge here is your yes to land their change.`));
+      if (Array.isArray(card.rules_files) && card.rules_files.length > 0) box.append(el("div", { class: "notice" }, `Changes Starship's own rules: ${card.rules_files.join(", ")}. Merge here is your yes to that change.`));
       if (card.held_for_captain) box.append(el("div", { class: "notice" }, "This work also has an open question for you; the merge waits until that is answered."));
     }
     if (card.reason) {
@@ -163,8 +165,8 @@
       const suggest = el("div", { class: "suggest" });
       const said = /[.!?]$/.test(card.recommendation.trim()) ? card.recommendation.trim() : `${card.recommendation.trim()}.`;
       suggest.append(el("b", {}, "Firstmate suggests: "), document.createTextNode(said));
-      if (card.easy_undo && card.recommended_option && card.age_days !== null && card.age_days !== undefined) {
-        const left = Math.max(0, (data.default_after_days || 7) - card.age_days);
+      if (typeof card.default_in_days === "number") {
+        const left = card.default_in_days;
         suggest.append(document.createTextNode(left > 0 ? ` Easy to undo, so it applies by itself in ${ago(left)} unless you choose.` : " Easy to undo, so it applies by itself soon unless you choose."));
       }
       box.append(suggest);
