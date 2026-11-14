@@ -11,23 +11,29 @@
 #
 # Usage:
 #   fm-tap-desk.sh export [--output <cards.json>] [--page <page.html>]
+#   fm-tap-desk.sh shapes <task-id>...
 #   fm-tap-desk.sh route --taps <file-or-directory> [--apply]
 #   fm-tap-desk.sh defaults [--days <n>] [--apply]
 #   fm-tap-desk.sh mark <task-id> [--option <text>]... [--recommend <option>] [--easy-undo]
 #   fm-tap-desk.sh mark <task-id> --clear
 #   fm-tap-desk.sh body <task-id> (--marks-file <f> | --note-file <f>) [--expect-identity <identity>]
 #
-# CARDS. `export` reads every open captain call (a held task whose hold kind is
-# captain and that `fm-captain-hold.sh open --identity` calls open, whatever
-# the task's own kind) and every task whose metadata records pr= for an open,
-# non-draft GitHub pull request, read live with gh, that is ready: its work
-# reads `ready` through bin/fm-fleet-status-lib.sh fm_fleet_task_bucket (a
-# green PR waiting on the captain), so a PR still validating, red, or needing
-# attention gets no card. It writes the card file
+# CARDS. `export` makes one card for each of the owner's calls, as
+# bin/fm-fleet-status-lib.sh fm_owner_calls lists them (the same count the
+# bridge strip and the Factory pane show): each decision held for the captain
+# that waits on him now, read through `fm-captain-hold.sh open --identity`
+# whatever the task's own kind, and each task whose work is ready to land and
+# not already one of those decisions. A merge card needs pr= in the task's
+# metadata naming an open, non-draft GitHub pull request, read live with gh. A
+# PR still validating, red, or needing attention is no call and gets no card; a
+# hold deferred to a date that has not come, or waiting on other work, is set
+# aside and only counted under set_aside; and a call that cannot be carded (no PR, a draft,
+# a PR no longer open, a row that cannot be read) is named under not_shown
+# rather than stopping the export, so owner_calls, the cards plus not_shown, is
+# always the shared count. It writes the card file
 # (schema fm-tap-cards.v1, default data/tap-desk/cards.json) and the phone page
 # (default data/tap-desk/page.html: bin/fm-tap-desk.html with the cards
-# inlined). Both are private, mode 0600, and stay under the home's data/; a row
-# that cannot be read is named under not_shown rather than stopping the export.
+# inlined). Both are private, mode 0600, and stay under the home's data/.
 # A decision card carries its options, firstmate's recommendation, its
 # lifecycle identity, how long it has waited, whether it is marked easy to undo,
 # in how many days the seven-day default answers it (null when it never will),
@@ -43,6 +49,10 @@
 #
 # Options and the recommendation are read the way bin/fm-decision-surface.mjs
 # reads them, unless `mark` recorded explicit ones for the current question.
+# `shapes` prints that same reading for the named held decisions as JSON
+# (schema fm-tap-shapes.v1: decisions[] with id, identity, title, question,
+# options, recommended_option, recommendation, held_since; and not_shown[]), so
+# bin/fm-factory.py shows each question exactly as its card does.
 #
 # TAPS. The page writes one document per card to its artifact database
 # collection `taps`: {card, kind, id, identity, choice, option, pr, reason,
@@ -196,6 +206,16 @@ command_body() {
 
 case "${1:-}" in
   export) shift; require_runtime; engine export --template "$TEMPLATE" "$@" ;;
+  shapes)
+    shift
+    ids=''
+    for id in "$@"; do
+      validate_slug task-id "$id"
+      ids="${ids:+$ids,}$id"
+    done
+    require_runtime
+    engine shapes --ids "$ids"
+    ;;
   route) shift; require_runtime; engine route "$@" ;;
   defaults) shift; require_runtime; engine defaults "$@" ;;
   mark)

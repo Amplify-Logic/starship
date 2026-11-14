@@ -69,6 +69,7 @@ reset_fleet() {
   rm -f "$HOME_FIX"/state/*.meta "$HOME_FIX"/state/*.status 2>/dev/null || true
   rm -f "$HOME_FIX"/state/.status-fleet-state* 2>/dev/null || true
   rm -f "$FLEET_FIX"/* 2>/dev/null || true
+  rm -f "$HOME_FIX"/data/backlog.md 2>/dev/null || true
 }
 
 strip_ansi() {
@@ -311,10 +312,14 @@ test_finished_work_waiting_on_the_captain_is_not_counted_as_working() {
   assert_contains "$out" '│ 1 working, 1 waiting for you │' \
     "a worker whose PR waits for the merge word was still counted as working"
 
-  # An open decision, a ready branch whose worker has exited, and a merged PR
-  # awaiting cleanup: two wait on the captain, none is working, the exited
-  # worker is not a lost one, and the merged PR waits on nobody.
+  # A decision held for the captain, a ready branch whose worker has exited,
+  # a worker's own question, and a merged PR awaiting cleanup: two wait on the
+  # captain, none is working, the exited worker is not a lost one, the worker's
+  # question is firstmate's to answer, and the merged PR waits on nobody.
   reset_fleet
+  mkdir -p "$HOME_FIX/data"
+  printf '## In flight\n\n## Queued\n- [ ] pick-schema - Pick a schema (repo: sample) (kind: captain) (hold: choose one) (hold-kind: captain)\n' \
+    > "$HOME_FIX/data/backlog.md"
   fleet_endpoint_task gate live-1 "$HOME_FIX/wt" \
     'state: parked · source: status-log · needs-decision: pick a schema'
   fleet_endpoint_task branch dead-1 "$HOME_FIX/wt" \
@@ -323,8 +328,8 @@ test_finished_work_waiting_on_the_captain_is_not_counted_as_working() {
   fleet_endpoint_task merged live-2 "$HOME_FIX/wt" \
     'state: done · source: run-step · checks green: PR merged (ci monitor ended)'
   out=$(render Opus high -- -- -- | strip_ansi)
-  assert_contains "$out" '│ 2 waiting for you │' \
-    "decisions, ready branches, and merged work were not told apart from working"
+  assert_contains "$out" '│ 2 waiting for you, 1 needs a look │' \
+    "held decisions, ready branches, workers' questions, and merged work were not told apart from working"
 
   # A worker that committed its build and reported done before validation has
   # no PR and waits on firstmate, not the captain, and no worker is busy on it,
@@ -341,10 +346,11 @@ test_finished_work_waiting_on_the_captain_is_not_counted_as_working() {
   pass "status bar: finished work waiting on the captain is counted apart from working workers"
 }
 
-# A parked gate waits on the captain only when the reader says a human owes the
-# answer. Any other gate is the worker's own turn, and a parked worker that is
-# lost is still a stopped one, whoever owes the answer.
-test_only_a_gate_a_human_owes_reads_as_waiting_for_you() {
+# A worker waiting on an answer - its own needs-decision, or an ask-user review
+# finding - is firstmate's to answer, so it needs a look rather than waiting on
+# the captain. Any other gate is the worker's own turn, and a parked worker that
+# is lost is still a stopped one, whoever owes the answer.
+test_a_workers_question_reads_as_needs_a_look() {
   local out
   reset_fleet
   mkdir -p "$HOME_FIX/wt"
@@ -359,9 +365,9 @@ test_only_a_gate_a_human_owes_reads_as_waiting_for_you() {
   : > "$HOME_FIX/state/.last-watcher-beat"
 
   out=$(render Opus high -- -- -- | strip_ansi)
-  assert_contains "$out" '│ 1 working, 2 waiting for you, 2 stopped │' \
+  assert_contains "$out" '│ 1 working, 2 need a look, 2 stopped │' \
     "parked gates were not split by who owes the answer, or a lost parked worker was hidden"
-  pass "status bar: only a gate a human owes reads as waiting for you, and a lost parked worker is stopped"
+  pass "status bar: a worker's question needs a look rather than waiting for the captain, and a lost parked worker is stopped"
 }
 
 # The defect the captain photographed: twelve task records rendered as twelve
@@ -1817,7 +1823,7 @@ SH
 test_contract_order_and_fleet_projection
 test_the_headline_is_live_agents_and_stopped_records_are_visible
 test_finished_work_waiting_on_the_captain_is_not_counted_as_working
-test_only_a_gate_a_human_owes_reads_as_waiting_for_you
+test_a_workers_question_reads_as_needs_a_look
 test_task_records_are_never_counted_as_running_workers
 test_validating_work_is_distinguished_from_a_busy_worker
 test_unknown_fleet_state_shows_placeholders_and_never_zero

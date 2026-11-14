@@ -4299,7 +4299,7 @@ The file's presence also switches on the `meeting-intake` skill as an [opt-in sk
 ## Phone tap desk (config/tap-desk)
 
 Optional, private, gitignored, and not inherited by secondmate homes; any file at the path turns it on, whatever it holds.
-Its presence switches on the `tap-desk` [opt-in skill](#opt-in-skills-configadhd-configsecond-opinion), which has firstmate put every decision held for the captain, and every ready task PR, on one private claude.ai artifact page where each is answered with a single tap, optionally with a short reason.
+Its presence switches on the `tap-desk` [opt-in skill](#opt-in-skills-configadhd-configsecond-opinion), which has firstmate put every decision held for the captain that waits on him now, and every ready task PR, on one private claude.ai artifact page where each is answered with a single tap, optionally with a short reason.
 The page needs a Claude Code primary that can publish artifacts and read their database.
 Its private records live under `data/tap-desk/`: the card file and page `bin/fm-tap-desk.sh export` writes, the artifact link, the downloaded taps, and `ledger.jsonl`, the record of every routed tap and seven-day default; reasons also land in the decision record and as rule candidates in `data/learnings.md`.
 `bin/fm-tap-desk.sh`'s header owns the card format, routing, refusals, and default rules, and the skill owns when firstmate runs them.

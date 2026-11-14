@@ -73,10 +73,18 @@ exit 0
 SH
 chmod +x "$BINDIR/herdr"
 
-# edit-world drop <task> | rekey <old> <new> | reask <task> <key> <at>: change
-# the fleet while the pane runs (a task leaves, the same task asks a new
-# question, or asks the same question again later), then refresh the record
-# the way the background refresh does.
+# A stand-in for bin/fm-tap-desk.sh shapes: the options and recommendation each
+# held decision's tap card shows, from the case's fixture file.
+cat > "$BINDIR/shapes" <<'SH'
+#!/usr/bin/env bash
+cat "$FM_HOME/shapes.json"
+SH
+chmod +x "$BINDIR/shapes"
+export FM_FACTORY_SHAPES="$BINDIR/shapes"
+
+# edit-world drop <task> | reask <task> <at>: change the fleet while the pane
+# runs (a task leaves, or its held question is held again later), then refresh
+# the record the way the background refresh does.
 cat > "$BINDIR/edit-world" <<SH
 #!/usr/bin/env bash
 python3 - "\$FM_FACTORY_SNAPSHOT" "\$@" <<'PY'
@@ -86,11 +94,17 @@ world = json.load(open(path))
 if how == "drop":
     world["tasks"] = [t for t in world["tasks"] if t["id"] != args[0]]
 elif how == "reask":
-    task = next(t for t in world["tasks"] if t["id"] == args[0])
-    with open(task["paths"]["status_log"]["path"], "a") as log:
-        log.write("needs-decision [at=%s] [key=%s]: asked again\n" % (args[2], args[1]))
-else:
-    world = json.loads(json.dumps(world).replace(args[0], args[1]))
+    import os, time
+    stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(int(args[1])))
+    for row in world["backlog"]["records"]:
+        if row["id"] == args[0]:
+            row["hold_set"] = stamp
+    shapes_path = os.path.join(os.path.dirname(path), "shapes.json")
+    shapes = json.load(open(shapes_path))
+    for shape in shapes["decisions"]:
+        if shape["id"] == args[0]:
+            shape["held_since"], shape["identity"] = stamp, stamp + "#0"
+    json.dump(shapes, open(shapes_path, "w"))
 json.dump(world, open(path, "w"))
 PY
 exec python3 "$FACTORY" refresh
@@ -148,7 +162,7 @@ MD
 write_world() {
   write_projects
   python3 - "$HOME_FIX" "$NOW" "${1:-}" <<'PY'
-import json, os, sys
+import json, os, sys, time
 home, now, quiet = sys.argv[1], int(sys.argv[2]), sys.argv[3] == "quiet"
 state = os.path.join(home, "state")
 
@@ -199,20 +213,39 @@ tasks.append(task("shop-images", ("blocked", "status-log"), "cannot reach the im
                   lines=["blocked [at=%d]: cannot reach the image store" % (now - 1200)]))
 rows.append(row("shop-images", "Sharper cup photos", "sample-shop"))
 tasks.append(task("shop-labels", ("paused", "status-log"), "waiting on the carrier until 2026-11-14T09:30Z",
-                  "sample-shop"))
+                  "sample-shop",
+                  lines=["paused [at=%d]: waiting on the carrier until 2026-11-14T09:30Z" % (now - 900)]))
 rows.append(row("shop-labels", "Print shipping labels", "sample-shop"))
+# A review finding the checks put to Starship (ask-user) is the checks' work.
+tasks.append(task("shop-coupons", ("parked", "run-step"),
+                  "parked at review: 1 finding(s) · ask-user: authority decision · run: r7", "sample-shop",
+                  started=now - 20 * 60,
+                  lines=["needs-decision [at=%d] [key=nm-r7-review]: ask-user findings=f1" % (now - 600)]))
+rows.append(row("shop-coupons", "Gift cards at checkout", "sample-shop"))
 tasks.append(task("shop-old", ("unknown", "none"), "worktree gone (torn down?)", "sample-shop"))
 rows.append(row("shop-old", "Old banner swap", "sample-shop"))
 rows.append(row("shop-gift", "Gift wrap at checkout", "sample-shop", "queued"))
 rows.append(row("shop-reviews", "Reviews under each cup", "sample-shop", "queued"))
 rows.append(row("shop-later", "Discount codes", "sample-shop", "queued", hold_kind="future",
                 hold_reason="after the holidays"))
+# The worker asked Starship, and Starship held the question for the owner:
+# only the held decision is his.
 summary = ("The harvest chart can open on this week or this season. "
            "Options: 1 this week (recommended), 2 this season, 3 both side by side. See /tmp/x/report.md")
+asked_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - 3 * 3600))
 tasks.append(task("garden-chart", ("parked", "status-log"), summary, "garden-journal",
-                  lines=["needs-decision [at=%d] [key=chart-range]: %s" % (now - 3 * 3600, summary)],
+                  lines=["needs-decision [at=%d] [key=chart-range]: %s" % (now - 4 * 3600, summary)],
                   decisions=[{"key": "chart-range", "verb": "needs-decision", "summary": summary}]))
-rows.append(row("garden-chart", "Harvest chart", "garden-journal"))
+rows.append(row("garden-chart", "Harvest chart", "garden-journal", captain_actionable=True, hold_kind="captain",
+                hold_bucket="live", hold_set=asked_at, hold_reason=summary))
+# A worker's own question Starship answers: never the owner's.
+tasks.append(task("recipe-search", ("parked", "status-log"), "needs-decision: index titles only?", "recipe-box",
+                  lines=["needs-decision [at=%d] [key=index]: index titles only?" % (now - 1800)],
+                  decisions=[{"key": "index", "verb": "needs-decision", "summary": "index titles only?"}]))
+rows.append(row("recipe-search", "Search recipes", "recipe-box"))
+tasks.append(task("garden-water", ("failed", "status-log"), "the reminder test failed", "garden-journal",
+                  lines=["failed [at=%d]: the reminder test failed" % (now - 40 * 60)]))
+rows.append(row("garden-water", "Garden reminders", "garden-journal"))
 tasks.append(task("garden-share", ("done", "status-log"), "PR https://example.invalid/g/pull/12 ready",
                   "garden-journal", mode="direct-PR", pr="https://example.invalid/g/pull/12",
                   lines=["done [at=%d]: PR https://example.invalid/g/pull/12 ready" % (now - 109 * 60)]))
@@ -223,8 +256,29 @@ rows.append(row("recipe-start", "Calmer start screen", "recipe-box", "done",
                 completion={"verb": "merged", "date": "2026-11-14"}))
 rows.append(row("shop-provider", "Which payment provider for the shop", "sample-shop", "queued", kind="captain",
                 captain_actionable=True, hold_kind="captain", hold_bucket="live", hold_set="2026-11-13T23:00:00Z",
-                hold_reason="Saved cards need a provider. Options: A the current one, B a cheaper new one, "
-                            "C wait until after the holidays."))
+                hold_reason="Saved cards need a provider."))
+# An old decision with nothing recorded but its title is shown plainly.
+rows.append(row("recipe-units", "Metric or cups in the recipes", "garden-journal", "queued", kind="captain",
+                captain_actionable=False, hold_kind="captain", hold_bucket="aged", hold_set="2026-10-01T09:00:00Z",
+                hold_reason=None))
+# A decision deferred to a date is not the owner's call until then.
+rows.append(row("shop-tax", "Charge tax abroad", "sample-shop", "queued", kind="captain",
+                hold_kind="captain", hold_bucket="dated", hold_set="2026-11-12T09:00:00Z",
+                hold_reason="Ask again next month.", hold_until="2026-12-01"))
+shapes = {"schema": "fm-tap-shapes.v1", "not_shown": [], "decisions": [
+    {"id": "garden-chart", "identity": asked_at + "#0", "title": "Harvest chart", "question": summary,
+     "options": ["this week", "this season", "both side by side"], "recommended_option": "this week",
+     "recommendation": "this week", "held_since": asked_at},
+    # Its options were recorded with fm-tap-desk.sh mark; its reason names none.
+    {"id": "shop-provider", "identity": "2026-11-13T23:00:00Z#0", "title": "Which payment provider for the shop",
+     "question": "Saved cards need a provider.",
+     "options": ["the current one", "a cheaper new one", "wait until after the holidays"],
+     "recommended_option": "", "recommendation": "Stay with the current one until the holidays are over.",
+     "held_since": "2026-11-13T23:00:00Z"},
+    {"id": "recipe-units", "identity": "2026-10-01T09:00:00Z#0", "title": "Metric or cups in the recipes",
+     "question": "", "options": [], "recommended_option": "", "recommendation": "",
+     "held_since": "2026-10-01T09:00:00Z"}]}
+json.dump(shapes, open(os.path.join(home, "shapes.json"), "w"), indent=1)
 json.dump({"schema": "fm-fleet-snapshot.v1", "generated": "2026-11-14T08:00:00Z", "tasks": tasks,
            "backlog": {"records": rows}}, open(os.path.join(home, "snapshot.json"), "w"), indent=1)
 PY
@@ -244,12 +298,16 @@ test_the_record_words_every_state() {
   write_world
   take_record
   assert_equals "$(q .schema)" "fm-factory.v1" "schema"
-  assert_equals "$(q .count_line)" "2 jobs running · 3 need you · 1 idle" "count line"
+  assert_equals "$(q .count_line)" "3 jobs running · 4 need you · 1 idle" "count line"
   assert_equals "$(q '[.factories[] | .name] | join(",")')" "Sample Shop,Garden Journal,Recipe Box" "factories"
   local shop='.factories[] | select(.id == "sample-shop") | .jobs[]'
   assert_equals "$(q "[$shop | \"\(.id)=\(.state)/\(.step // \"-\")\"] | join(\" \")")" \
-    "shop-search=running/building shop-checkout=running/checking shop-provider=waiting on you/- shop-images=stuck/- shop-labels=waiting/- shop-old=stopped/- shop-gift=next/- shop-reviews=later/- shop-later=on hold/-" \
+    "shop-search=running/building shop-checkout=running/checking shop-coupons=running/checking shop-provider=waiting on you/- shop-images=stuck/- shop-labels=waiting/- shop-old=stopped/- shop-gift=next/- shop-reviews=later/- shop-later=on hold/- shop-tax=on hold until 2026-12-01/-" \
     "every shop job state is a word"
+  assert_equals "$(q "$shop | select(.id == \"shop-coupons\") | .doing")" "answering the 1 point the checks found" \
+    "a review finding the checks put to Starship is the checks' work"
+  assert_equals "$(q '.factories[] | select(.id == "recipe-box") | .jobs[] | select(.id == "recipe-search") | .state')" \
+    "with Starship" "a worker's own question is Starship's to answer"
   assert_equals "$(q "$shop | select(.id == \"shop-search\") | .doing")" "running the search tests: 41 of 58 passed" \
     "a stated step is the doing sentence"
   assert_equals "$(q "$shop | select(.id == \"shop-search\") | .sign_of_life_from")" "a turn" "sign of life source"
@@ -257,19 +315,26 @@ test_the_record_words_every_state() {
     "the checks say what they are doing"
   assert_equals "$(q "$shop | select(.id == \"shop-labels\") | .until")" "1794648600" "a wait says when it tries again"
   assert_equals "$(q '[.needs_you[] | "\(.id):\(.kind)"] | join(" ")')" \
-    "garden-chart:question shop-provider:question garden-share:finished work" "needs you, questions first"
+    "garden-chart:question shop-provider:question recipe-units:question garden-share:finished work" \
+    "needs you is the owner's calls, questions first"
   assert_equals "$(q '.needs_you[0].options | map("\(.key) \(.label) \(.suggested)") | join("; ")')" \
-    "1 this week true; 2 this season false; 3 both side by side false" "options are parsed with the suggestion"
-  assert_equals "$(q '.needs_you[0].why')" "The harvest chart can open on this week or this season. See" \
-    "the why keeps no path"
-  assert_equals "$(q '.needs_you[0].suggested_by')" "the crew" "a worker's suggestion is the crew's"
-  assert_equals "$(q '.needs_you[1].options | map(.key) | join("")')" "ABC" "lettered options"
-  assert_equals "$(q '.needs_you[2].pr')" "https://example.invalid/g/pull/12" "finished work names its change"
+    "1 this week true; 2 this season false; 3 both side by side false" "the card's options with its suggestion"
+  assert_equals "$(q '.needs_you[0].why')" "The harvest chart can open on this week or this season." \
+    "the why keeps no option list and no path"
+  assert_equals "$(q '.needs_you[0].suggested_by')" "Starship" "the suggestion is Starship's"
+  assert_equals "$(q '.needs_you[1].options | map(.label) | join(", ")')" \
+    "the current one, a cheaper new one, wait until after the holidays" "options recorded with the tap desk's mark"
+  assert_equals "$(q '.needs_you[1].recommendation')" "Stay with the current one until the holidays are over." \
+    "a recommendation that is no option is still shown"
+  assert_equals "$(q '.needs_you[2] | "\(.ask)|\(.why)|\(.options | length)"')" "Metric or cups in the recipes||0" \
+    "a question with nothing recorded is its plain question"
+  assert_equals "$(q '.needs_you[3].pr')" "https://example.invalid/g/pull/12" "finished work names its change"
   assert_equals "$(q '[.needs_you[].for] | unique | join(",")')" "you" "every waiting item names who it is for"
   assert_equals "$(q '.factories[] | select(.id == "recipe-box") | "\(.state) \(.idle_since)"')" "idle 1794636000" \
     "an idle factory knows since when"
   assert_equals "$(q '[.feed[] | "\(.word)|\(.actor)"] | join(" ")')" \
-    "stuck|Sample Shop finished|Garden Journal finished|Recipe Box asked you|Garden Journal" "the feed, newest first"
+    "failed|Garden Journal PR ready|Garden Journal finished|Recipe Box asked you|Garden Journal landed|Recipe Box asked you|Sample Shop" \
+    "the feed, newest first: outcomes and the owner's calls only"
   pass "factory record: every state is a word, needs you is ordered, the feed reads newest first"
 }
 
@@ -279,10 +344,13 @@ test_the_plain_screen_is_the_record_as_text() {
   write_world
   local out
   out=$(python3 "$FACTORY" --plain --width 92) || fail "--plain failed"
-  assert_contains "$out" " S T A R S H I P  │  2 jobs running  ·  3 need you  ·  1 idle" "count line"
+  assert_contains "$out" " S T A R S H I P  │  3 jobs running  ·  4 need you  ·  1 idle" "count line"
   assert_equals "$(printf '%s\n' "$out" | grep -F ' ▸ ● ' | tr -s ' ')" \
-    " ▸ ● Harvest chart: a question for you Garden Journal · waiting 3 h" "the cursor starts on the first question"
-  assert_contains "$out" "       1  this week  · the crew suggests this" "suggested option"
+    " ▸ ● Harvest chart Garden Journal · waiting 3 h" "the cursor starts on the first question"
+  assert_contains "$out" "       1  this week  · Starship suggests this" "suggested option"
+  assert_contains "$out" "       Starship suggests: Stay with the current one until the holidays are over." \
+    "a recommendation of its own"
+  assert_not_contains "$out" "None" "a missing value printed as None"
   assert_contains "$out" "       t  Talk it through" "talk it through"
   assert_contains "$out" "       ✓ planning ••••• ▸ building •••••   checking ·····   ready for you" "four steps"
   assert_contains "$out" "       running the search tests: 41 of 58 passed" "doing this minute"
@@ -291,12 +359,19 @@ test_the_plain_screen_is_the_record_as_text() {
   has_line "$out" " next Gift wrap at checkout · then 2 more" "next in line"
   has_line "$out" " Recipe Box idle since 06:00 · nothing in line Starship steers" "an idle factory is one row"
   has_line "$out" " 06:00 Recipe Box finished Calmer start screen is finished." "feed row"
+  has_line "$out" " 06:11 Garden Journal PR ready Share a garden page as a picture has its PR ready." "a PR ready row"
+  local feed
+  feed=$(printf '%s\n' "$out" | sed -n '/SINCE YOU LAST LOOKED/,$p')
+  assert_not_contains "$feed" "tries again" "a worker's pause reached the feed"
+  assert_not_contains "$feed" "Search recipes" "a worker's own question reached the feed"
+  assert_not_contains "$feed" "Gift cards" "a review finding Starship decides reached the feed"
+  assert_not_contains "$feed" "stuck" "a blocker reached the feed"
   assert_contains "$out" " ↑↓ move · 1/2/3 answer · enter open · t talk · s who steers · q quit" "keys"
   out=$(python3 "$FACTORY" --plain --width 92 --factory sample-shop) || fail "--plain --factory failed"
   assert_contains "$out" " RULES THIS CREW FOLLOWS" "rules heading"
   assert_contains "$out" "   · Anything that touches payments waits for your yes." "a rule"
   assert_contains "$out" "   12 Nov  Search results read better with the price on the first line." "a lesson"
-  has_line "$out" " · 1 on hold" "held work folds into a count"
+  has_line "$out" " · 2 on hold" "held work folds into a count"
   pass "factory record: the plain screen carries every state as a word"
 }
 
@@ -352,7 +427,7 @@ test_work_no_factory_claims_is_still_shown() {
   sed -i.bak 's/^projects: garden-journal$/projects: something-else/' "$HOME_FIX/data/factories.md"
   take_record
   assert_equals "$(q '.factories[] | select(.id == "other-work") | [.jobs[].id] | join(",")')" \
-    "garden-chart,garden-share" \
+    "garden-chart,recipe-units,garden-share,garden-water" \
     "unclaimed work lands in Other work"
   pass "factory registry: work no factory claims is shown under Other work"
 }
@@ -399,7 +474,7 @@ test_writing_keys_go_through_the_inbox_and_act_on_the_highlighted_row() {
   write_world
   drive_keys 2 ENTER
   assert_equals "$(jq -r .request_id "$FM_FACTORY_TEST_NOTES")" \
-    "factory.garden-journal.answer.garden-chart.chart-range.$((NOW - 3 * 3600)).2" \
+    "factory.garden-journal.answer.garden-chart.$((NOW - 3 * 3600)).2" \
     "the answer acts on the highlighted question"
   assert_contains "$(jq -r .body "$FM_FACTORY_TEST_NOTES")" "Answer for Harvest chart: 2 this season" "answer body"
   : > "$FM_FACTORY_TEST_NOTES"
@@ -407,7 +482,7 @@ test_writing_keys_go_through_the_inbox_and_act_on_the_highlighted_row() {
   assert_equals "$(cat "$FM_FACTORY_TEST_NOTES")" "" "a letter for another question sends nothing; esc cancels"
   drive_keys 2 x
   assert_equals "$(cat "$FM_FACTORY_TEST_NOTES")" "" "any key but enter cancels the answer"
-  drive_keys DOWN DOWN k ENTER
+  drive_keys DOWN DOWN DOWN k ENTER
   assert_equals "$(jq -r .request_id "$FM_FACTORY_TEST_NOTES")" \
     "factory.garden-journal.keep.garden-share.$((NOW - 109 * 60))" "keep names the item and when it became ready"
   assert_contains "$(jq -r .body "$FM_FACTORY_TEST_NOTES")" "https://example.invalid/g/pull/12" "keep names the change"
@@ -422,25 +497,19 @@ test_a_note_reaches_starship_through_the_real_inbox() {
   (unset FM_FACTORY_INBOX; drive_keys 2 ENTER)
   local note
   note=$(cat "$HOME_FIX"/state/inbox/*.note 2>/dev/null)
-  assert_contains "$note" "request_id=factory.garden-journal.answer.garden-chart.chart-range.$((NOW - 3 * 3600)).2" \
+  assert_contains "$note" "request_id=factory.garden-journal.answer.garden-chart.$((NOW - 3 * 3600)).2" \
     "the note is saved under its id"
   assert_contains "$note" "Answer for Harvest chart: 2 this season" "the note carries the answer"
   (unset FM_FACTORY_INBOX; drive_keys 2 ENTER)
   assert_equals "$(find "$HOME_FIX/state/inbox" -maxdepth 1 -name '*.note' | wc -l | tr -d ' ')" "1" \
     "the same answer twice is one note"
-  "$BINDIR/edit-world" reask garden-chart chart-range $((NOW - 600)) >/dev/null || fail "edit-world failed"
+  "$BINDIR/edit-world" reask garden-chart $((NOW - 600)) >/dev/null || fail "edit-world failed"
   (unset FM_FACTORY_INBOX; drive_keys 2 ENTER)
   assert_equals "$(find "$HOME_FIX/state/inbox" -maxdepth 1 -name '*.note' | wc -l | tr -d ' ')" "2" \
     "the same question asked again later is a new note"
   assert_contains "$(cat "$HOME_FIX"/state/inbox/*.note)" \
-    "request_id=factory.garden-journal.answer.garden-chart.chart-range.$((NOW - 600)).2" \
+    "request_id=factory.garden-journal.answer.garden-chart.$((NOW - 600)).2" \
     "the new note names when the question was asked again"
-  "$BINDIR/edit-world" rekey chart-range chart-colour >/dev/null || fail "edit-world failed"
-  (unset FM_FACTORY_INBOX; drive_keys 2 ENTER)
-  assert_equals "$(find "$HOME_FIX/state/inbox" -maxdepth 1 -name '*.note' | wc -l | tr -d ' ')" "3" \
-    "a new question from the same task is a new note"
-  assert_contains "$(cat "$HOME_FIX"/state/inbox/*.note)" \
-    "request_id=factory.garden-journal.answer.garden-chart.chart-colour.2" "the new note names the new question"
   pass "factory pane: an answer is a captain inbox note, saved once per question under its request id"
 }
 
@@ -448,7 +517,7 @@ test_the_highlight_and_open_boxes_follow_the_record() {
   reset_case
   write_registry
   write_world
-  drive_keys DOWN DOWN DOWN "SH:$BINDIR/edit-world drop garden-share" s
+  drive_keys DOWN DOWN DOWN DOWN "SH:$BINDIR/edit-world drop garden-share" s
   assert_equals "$(cut -f2- "$HOME_FIX/state/factory/steer.log")" "$(printf 'sample-shop\tyou')" \
     "s acts on the highlighted factory after a row above it left"
   reset_case
@@ -456,12 +525,12 @@ test_the_highlight_and_open_boxes_follow_the_record() {
   write_world
   : > "$FM_FACTORY_TEST_NOTES"
   local screen="$TMP_ROOT/case$CASE/screen"
-  drive_keys DOWN DOWN c "Bigger picture" "SH:$BINDIR/edit-world drop garden-share" s q 2 k ENTER "SNAP:$screen" ESC
+  drive_keys DOWN DOWN DOWN c "Bigger picture" "SH:$BINDIR/edit-world drop garden-share" s q 2 k ENTER "SNAP:$screen" ESC
   assert_equals "$(cat "$FM_FACTORY_TEST_NOTES")" "" "a talk box whose work left sends nothing"
   assert_absent "$HOME_FIX/state/factory/steer.log" "keys typed into the box never steer"
   assert_contains "$(cat "$screen")" "Bigger picturesq2k" "the pane still runs and the box keeps every typed key"
   assert_contains "$(cat "$screen")" "This was settled elsewhere, so nothing will be sent" "the box says why"
-  drive_keys 2 "SH:$BINDIR/edit-world reask garden-chart chart-range $((NOW - 600))" ENTER
+  drive_keys 2 "SH:$BINDIR/edit-world reask garden-chart $((NOW - 600))" ENTER
   assert_equals "$(cat "$FM_FACTORY_TEST_NOTES")" "" "a pending answer closes when its question is asked again"
   pass "factory pane: the highlight stays on its row; a talk box whose row left keeps its text and sends nothing"
 }
@@ -470,12 +539,12 @@ test_talking_never_changes_who_steers() {
   reset_case
   write_registry
   write_world
-  drive_keys DOWN DOWN DOWN t "Price on the first line" ENTER
+  drive_keys DOWN DOWN DOWN DOWN t "Price on the first line" ENTER
   assert_contains "$(jq -r .request_id "$FM_FACTORY_TEST_NOTES")" "factory.sample-shop.talk." "talk note"
   assert_contains "$(jq -r .body "$FM_FACTORY_TEST_NOTES")" "To the Sample Shop crew: Price on the first line" \
     "talk body"
   assert_absent "$HOME_FIX/state/factory/steer.log" "talking changed who steers"
-  drive_keys DOWN DOWN DOWN s
+  drive_keys DOWN DOWN DOWN DOWN s
   assert_contains "$(cat "$HOME_FIX/state/factory/steer.log")" "$(printf '\tsample-shop\tyou')" "s takes the helm"
   assert_contains "$(tail -n 1 "$FM_FACTORY_TEST_NOTES" | jq -r .body)" "I steer Sample Shop myself from now on." \
     "Starship is told"
@@ -485,7 +554,7 @@ test_talking_never_changes_who_steers() {
     "the change shows in the feed"
   assert_equals "$(q '[.factories[0].talk[] | "\(.who): \(.said)"] | join(" | ")')" \
     "you: Price on the first line" "the talk keeps its history"
-  drive_keys DOWN DOWN DOWN s
+  drive_keys DOWN DOWN DOWN DOWN s
   take_record
   assert_equals "$(q '.factories[0].steered_by')" "Starship" "s hands it back"
   pass "factory pane: talking goes to Starship and never moves the helm; only s does, both ways"

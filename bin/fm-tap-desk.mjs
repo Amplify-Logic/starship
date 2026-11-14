@@ -330,16 +330,32 @@ async function rulesGuarded(ctx, project) {
   return result.status === 0;
 }
 
-// bin/fm-fleet-status-lib.sh owns whether a task's work waits on the captain;
-// only its `ready` reading makes a merge card.
-function fleetBucket(ctx, id) {
-  return runAsync(ctx, "bash", ["-c", '. "$0" && fm_fleet_task_bucket "$1" "$2"', path.join(ctx.root, "bin/fm-fleet-status-lib.sh"), ctx.state, id]);
+// bin/fm-fleet-status-lib.sh fm_owner_calls owns which decisions and merges
+// are the owner's calls, the one count the bridge strip and the Factory pane
+// also show; the page makes cards from exactly those.
+function ownerCalls(ctx) {
+  const result = runSync(ctx, "bash", ["-c", '. "$0" && fm_owner_calls "$1"', path.join(ctx.root, "bin/fm-fleet-status-lib.sh"), ctx.state]);
+  if (result.status !== 0) fail(`could not read what waits on the owner: ${lastLine(result.stderr) || `exit ${result.status}`}`);
+  const calls = { decisions: [], merges: [], aside: {} };
+  for (const line of result.stdout.split("\n")) {
+    const [kind, id, why] = line.split("\t");
+    if (!id || !SLUG.test(id)) continue;
+    if (kind === "decision") calls.decisions.push(id);
+    else if (kind === "merge") calls.merges.push(id);
+    else if (kind === "aside" && why) calls.aside[why] = (calls.aside[why] || 0) + 1;
+  }
+  return calls;
 }
 
-async function loadDecisions(ctx) {
-  const listed = runSync(ctx, tasksAxi(ctx), ["list", "--state", "held", "--fields", "hold_kind", "--limit", "100000"]);
-  if (listed.status !== 0) fail(`could not list held tasks: ${lastLine(listed.stderr || listed.stdout)}`);
-  const { ids } = taskIdsFromList(listed.stdout.replace(/^count: (\d+) of \d+ total$/m, "count: $1"));
+// Every held captain call, or only the named ones (export passes the owner's
+// calls; the seven-day default still considers every open call).
+async function loadDecisions(ctx, only) {
+  let ids = only;
+  if (!ids) {
+    const listed = runSync(ctx, tasksAxi(ctx), ["list", "--state", "held", "--fields", "hold_kind", "--limit", "100000"]);
+    if (listed.status !== 0) fail(`could not list held tasks: ${lastLine(listed.stderr || listed.stdout)}`);
+    ({ ids } = taskIdsFromList(listed.stdout.replace(/^count: (\d+) of \d+ total$/m, "count: $1")));
+  }
   const notShown = [];
   const rows = await pool(ids, 8, async (id) => {
     const [shown, opened] = await Promise.all([
@@ -392,7 +408,7 @@ function decisionCard(row, ledger, now, days) {
   };
 }
 
-async function loadMergeCards(ctx, ledger) {
+async function loadMergeCards(ctx, ledger, ids) {
   const cards = [];
   const notShown = [];
   const logins = new Map();
@@ -403,33 +419,28 @@ async function loadMergeCards(ctx, ledger) {
     }
     return logins.get(host);
   };
-  if (!existsSync(ctx.state)) return { cards, notShown };
-  const metas = readdirSync(ctx.state).filter((name) => name.endsWith(".meta")).sort();
+  // Every id is a merge call already: its work reads ready and no held
+  // decision or finished work item claims it, so each one gets a card or is
+  // named under not_shown, and the page's count stays the owner's calls.
   const candidates = [];
-  for (const name of metas) {
-    const id = name.slice(0, -".meta".length);
-    if (!SLUG.test(id)) continue;
-    let meta;
+  for (const id of ids) {
+    let meta = {};
     try {
-      meta = parseMeta(path.join(ctx.state, name));
+      meta = parseMeta(path.join(ctx.state, `${id}.meta`));
     } catch {
-      continue;
+      // A record that vanished is named below like any other unreadable row.
     }
-    if (!meta.pr) continue;
     candidates.push({ id, meta });
   }
   const read = await pool(candidates, 6, async ({ id, meta }) => {
+    if (!meta.pr) return { id, error: "it is ready to land but records no pull request, so it has no tap card" };
     const shown = await runAsync(ctx, tasksAxi(ctx), ["show", id, "--full"]);
     const task = shown.status === 0 ? readShow(shown.stdout) : null;
-    if (task && task.state === "done") return null;
     const parts = githubPull(meta.pr);
     if (!parts) return { id, error: `${meta.pr} is not a GitHub pull request, so it has no tap card yet` };
-    const bucket = await fleetBucket(ctx, id);
-    if (bucket.status !== 0) return { id, error: `could not read whether ${meta.pr} is ready: ${lastLine(bucket.stderr) || `exit ${bucket.status}`}` };
-    if (bucket.stdout.trim() !== "ready") return null;
     const { pr, error } = livePull(await runAsync(ctx, "gh", ["pr", "view", meta.pr, "--json", "state,isDraft,title,headRefOid,author"]), meta.pr);
     if (error) return { id, error };
-    if (pr.state !== "OPEN") return null;
+    if (pr.state !== "OPEN") return { id, error: `${meta.pr} is no longer open` };
     if (pr.isDraft) return { id, error: `${meta.pr} is still a draft` };
     if (!HEAD.test(pr.headRefOid || "")) return { id, error: `${meta.pr} reported no head commit` };
     const author = typeof pr.author?.login === "string" ? pr.author.login : "";
@@ -481,16 +492,20 @@ async function commandExport(args) {
   if (!Number.isInteger(days) || days < 7) fail("--days must be a whole number of at least 7", 2);
   const ledger = readLedger(ctx);
   const now = Date.now();
-  const [decisions, merges] = await Promise.all([loadDecisions(ctx), loadMergeCards(ctx, ledger)]);
+  const calls = ownerCalls(ctx);
+  const [decisions, merges] = await Promise.all([loadDecisions(ctx, calls.decisions), loadMergeCards(ctx, ledger, calls.merges)]);
   const decisionCards = decisions.decisions
     .map((row) => decisionCard(row, ledger, now, days))
     .sort((left, right) => (left.held_since || "").localeCompare(right.held_since || "") || left.id.localeCompare(right.id));
+  const notShown = [...merges.notShown, ...decisions.notShown];
   const cards = {
     schema: CARDS_SCHEMA,
     generated_at: new Date(now).toISOString(),
     default_after_days: days,
+    owner_calls: merges.cards.length + decisionCards.length + notShown.length,
+    set_aside: calls.aside,
     cards: [...merges.cards, ...decisionCards],
-    not_shown: [...merges.notShown, ...decisions.notShown],
+    not_shown: notShown,
   };
   const html = readFileSync(template, "utf8");
   if (!html.includes(PAGE_PLACEHOLDER)) fail(`the page template lacks ${PAGE_PLACEHOLDER}`);
@@ -499,6 +514,9 @@ async function commandExport(args) {
   const kept = decisionCards.filter((card) => card.kept).length;
   console.log(`decisions: ${decisionCards.length} (kept for later: ${kept}; easy to undo: ${decisionCards.filter((card) => card.easy_undo).length})`);
   console.log(`merges: ${merges.cards.length}`);
+  console.log(`owner's calls: ${cards.owner_calls}`);
+  const aside = Object.entries(calls.aside).sort().map(([why, count]) => `${why} ${count}`);
+  if (aside.length > 0) console.log(`set aside: ${aside.join(", ")}`);
   for (const item of cards.not_shown) console.log(`not shown: ${item.id}: ${item.reason}`);
   console.log(`cards: ${output}`);
   console.log(`page: ${pageOut}`);
@@ -861,8 +879,36 @@ function commandBodyWrite(args) {
   if (result.status !== 0) fail(`could not write the body of ${id}: ${lastLine(result.stderr || result.stdout)}`);
 }
 
+// The options and recommendation every surface shows for a held decision, read
+// the one way decisionShape reads them; bin/fm-factory.py draws its questions
+// from this rather than parsing them a second way.
+async function commandShapes(args) {
+  const ctx = context(args);
+  const ids = String(args.ids || "").split(",").map((id) => id.trim()).filter(Boolean);
+  for (const id of ids) if (!SLUG.test(id)) fail(`not a task id: ${id}`, 2);
+  const { decisions, notShown } = await loadDecisions(ctx, ids);
+  const shapes = decisions.map(({ task, identity }) => {
+    const shape = decisionShape(task, identity);
+    const since = heldSince(identity, task.created);
+    return {
+      id: task.id,
+      identity,
+      title: task.title || task.id,
+      question: shape.reason,
+      options: shape.options,
+      recommended_option: shape.recommended,
+      recommendation: shape.recommendationText,
+      held_since: since ? since.toISOString() : "",
+    };
+  });
+  process.stdout.write(`${JSON.stringify({ schema: "fm-tap-shapes.v1", decisions: shapes, not_shown: notShown })}\n`);
+}
+
 const args = parseArgs(process.argv.slice(2));
 switch (args.command) {
+  case "shapes":
+    await commandShapes(args);
+    break;
   case "export":
     await commandExport(args);
     break;

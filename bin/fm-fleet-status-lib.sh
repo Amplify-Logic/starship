@@ -64,14 +64,18 @@
 #   validating  the validation pipeline owns the task - it is progressing, but
 #               no worker is typing at it.
 #   paused      a declared bounded external wait.
-#   attention   firstmate has to act: a blocker or a failure.
-#   ready       the work waits on the captain: a PR ready for review or merge,
-#               a ready branch awaiting the merge word, or a decision the reader
-#               says a human owes.
-#   decisions   the part of ready that is a decision a human owes rather than
-#               work ready to land. It is a subset of ready, never added to it,
-#               and only bin/fm-bridge-strip.sh asks for it, because the strip
-#               shows "decisions for you" and "ready to merge" as two lamps.
+#   attention   firstmate has to act: a blocker, a failure, or a question a
+#               worker or the checks put to firstmate (a status-log needs-decision
+#               or an ask-user review finding, which ask-user-authority gives
+#               firstmate to decide, never the captain).
+#   ready       the owner's calls: fm_owner_calls below, the one count of what
+#               really waits on the captain - the held decisions that wait on
+#               him now plus the PRs and ready branches waiting for his merge
+#               word.
+#   decisions   the part of ready that is a held decision rather than work
+#               ready to land. It is a subset of ready, never added to it, and
+#               only bin/fm-bridge-strip.sh asks for it, because the strip shows
+#               "decisions for you" and "ready to merge" as two lamps.
 #
 # working and stopped are separate readings of the same fleet rather than two
 # ends of one axis, and a task counts toward NEITHER unless its state was
@@ -184,11 +188,15 @@ _fm_fleet_id_stream() {  # <id>...
 # firstmate's turn, with no busy worker and nothing for the captain, so it is
 # `finished` too.
 #
-# `parked` alone does not say who owes the answer. It is a `decision` for the
-# captain only when the reader says a human owes it: a status-log needs-decision,
-# or a gate line carrying the reader's whole FM_GATE_HUMAN_DECISION component.
-# Any other parked gate is the worker's or firstmate's turn, so it claims no
-# field and is read by liveness alone, like any other unclaimed task.
+# `parked` alone does not say who owes the answer. It is a `decision` only when
+# the reader says the worker is waiting on an answer from above it: a status-log
+# needs-decision, or a gate line carrying the reader's whole
+# FM_GATE_HUMAN_DECISION component (an ask-user review finding). Both are put to
+# firstmate, which answers them or takes them to the captain as a held decision,
+# so a `decision` is firstmate's to act on and never one of the owner's calls by
+# itself; the fold counts it under attention. Any other parked gate is the
+# worker's or firstmate's turn, so it claims no field and is read by liveness
+# alone, like any other unclaimed task.
 _fm_fleet_bucket() {  # <canonical line> [<meta>]
   local line=$1 meta=${2:-} state source kind
   state=${line#*state: }
@@ -238,8 +246,8 @@ _fm_fleet_bucket() {  # <canonical line> [<meta>]
 
 # fm_fleet_task_bucket: the field one task belongs in, as _fm_fleet_bucket reads
 # the canonical reader's line for it; nothing for a record no field claims. It
-# fails when the reader cannot answer. The fold below and bin/fm-tap-desk.sh,
-# which makes a merge card only for `ready`, share this one reading.
+# fails when the reader cannot answer. The fold below and fm_owner_calls share
+# this one reading.
 fm_fleet_task_bucket() {  # <state-dir> <id> [reader]
   local state=$1 id=$2 reader=${3:-${FM_FLEET_STATE_READER:-$_FM_FLEET_LIB_DIR/fm-crew-state.sh}} line
   _fm_fleet_classify_ready || return 1
@@ -255,6 +263,86 @@ fm_fleet_task_bucket() {  # <state-dir> <id> [reader]
 fm_fleet_status_bucket() {  # <canonical line> [<meta>]
   _fm_fleet_classify_ready || return 1
   _fm_fleet_bucket "$@"
+}
+
+# fm_owner_calls: the owner's calls - what really waits on the captain - one per
+# line, decisions first, then merges, then the holds set aside:
+#
+#   decision<TAB><id>          a decision held for the captain that waits on him now
+#   merge<TAB><id>             a PR or ready branch waiting for his merge word
+#   aside<TAB><id><TAB><why>   a captain hold that is not his call right now
+#
+# This is the one definition of that count. The fold below publishes it as
+# <ready> and <decisions>, so the bridge strip and the status bar show it;
+# bin/fm-factory.py lists exactly these as NEEDS YOU; and bin/fm-tap-desk.sh
+# export makes its cards from exactly these. On 2026-11-14 those three surfaces
+# showed 0 to 2, 17 to 36 and 112 at the same moment, because each had its own
+# reading of what needs him.
+#
+# A decision is a captain hold as bin/fm-fleet-snapshot.sh classifies it, the
+# one classifier of a captain hold, whose hold_bucket is `live` or `aged`: an
+# undated hold past the snapshot's aging threshold is still an open question
+# nobody deferred, so it still waits on him. A hold deferred to a date that has
+# not come (`dated`) and one waiting on other work (`blocked`) are listed as
+# `aside` with that bucket, so a surface can say they exist, and never counted.
+# A merge is a task whose work reads `ready` (fm_fleet_task_bucket), unless its
+# row is done or it is already a decision: the merge of held work waits on the
+# answer, so it is one call, not two.
+#
+# Nothing else is ever a call. A worker's question and an ask-user review
+# finding are firstmate's to answer (ask-user-authority) and reach the captain
+# only as a held decision; a worker's pause and work in the checks wait on time
+# or the pipeline, not on him.
+#
+# <buckets> is an optional file of `<id><TAB><bucket>` lines for a caller that
+# has already read every ordinary task's bucket, so no task is read twice; only
+# `ready` lines matter. Without it each ordinary task is read here. <backlog> is
+# an optional file holding the backlog object of a snapshot the caller already
+# took (`fm-fleet-snapshot.sh --backlog`, or the `backlog` of `--json`); without
+# it the backlog is read for the home that owns <state-dir>. It fails, printing
+# nothing, when the backlog or any task cannot be read, because a short list of
+# calls reads exactly like fewer calls.
+fm_owner_calls() {  # <state-dir> [<buckets-file> [<backlog-file>]]
+  local state=$1 buckets=${2:-} backlog=${3:-} dir id bucket out rc=0
+  command -v jq >/dev/null 2>&1 || return 1
+  dir=$(mktemp -d "${TMPDIR:-/tmp}/fm-owner-calls.XXXXXX") || return 1
+  if [ -z "$buckets" ]; then
+    buckets="$dir/buckets"
+    : > "$buckets"
+    while IFS= read -r id; do
+      [ -n "$id" ] || continue
+      bucket=$(fm_fleet_task_bucket "$state" "$id") || { rc=1; break; }
+      printf '%s\t%s\n' "$id" "$bucket" >> "$buckets"
+    done < <(_fm_fleet_ids "$state")
+  fi
+  if [ "$rc" = 0 ] && [ -z "$backlog" ]; then
+    backlog="$dir/backlog"
+    _fm_owner_backlog "$state" > "$backlog" || rc=1
+  fi
+  if [ "$rc" = 0 ]; then
+    out=$(jq -r --rawfile buckets "$buckets" '
+      [(.records // [])[] | select(.structured == true and (.id | type) == "string")] as $rows
+      | [$rows[] | select(.state != "done" and (.hold_bucket == "live" or .hold_bucket == "aged")) | .id] as $decisions
+      | (reduce ($decisions[], ($rows[] | select(.state == "done") | .id)) as $id ({}; .[$id] = true)) as $taken
+      | ($decisions[] | "decision\t\(.)"),
+        ($buckets | split("\n")[] | split("\t") | select(length >= 2 and .[1] == "ready" and .[0] != "")
+          | .[0] | select($taken[.] != true) | "merge\t\(.)"),
+        ($rows[] | select(.state != "done" and (.hold_bucket == "dated" or .hold_bucket == "blocked"))
+          | "aside\t\(.id)\t\(.hold_bucket)")
+    ' "$backlog" 2>/dev/null) || rc=1
+  fi
+  rm -rf "$dir"
+  [ "$rc" = 0 ] || return 1
+  [ -z "$out" ] || printf '%s\n' "$out"
+}
+
+# _fm_owner_backlog: the backlog object of the home that owns <state-dir>, as
+# bin/fm-fleet-snapshot.sh --backlog classifies it. The home is the state
+# directory's parent, which is where every caller keeps it.
+_fm_owner_backlog() {  # <state-dir>
+  local home
+  home=$(CDPATH='' cd -P -- "$1/.." 2>/dev/null && pwd -P) || return 1
+  FM_HOME=$home FM_STATE_OVERRIDE=$1 bash "$_FM_FLEET_LIB_DIR/fm-fleet-snapshot.sh" --backlog </dev/null 2>/dev/null
 }
 
 # _fm_fleet_backend_ready: load bin/fm-backend.sh once, on first use.
@@ -360,14 +448,18 @@ _fm_fleet_liveness() {  # <meta> <busy: 1 when the fold read a busy pane worker>
 #   <stamp> <working> <stopped> <validating> <paused> <attention> <ready>
 #   <signature> <decisions>
 #
-# <decisions> comes last so a reading written before it existed still parses
-# for every older field; fm_fleet_status_counts owns how such a reading is
-# treated.
+#   <signature> <decisions> calls
 #
-# Every field but stopped claims a task for itself: working is a live agent on
-# a task no state field claimed. Done work spends no endpoint probe at all,
-# because its worker is never a lost one; a decision is still probed, so a
-# worker lost while it waits is counted stopped.
+# <decisions> and the closing `calls` mark come last so a reading written before
+# them still parses for every older field; fm_fleet_status_counts owns how such
+# a reading is treated. <ready> and <decisions> are fm_owner_calls over the
+# buckets this fold read, so they can count a held decision that has no task
+# record at all.
+#
+# Every task field but stopped claims a task for itself: working is a live agent
+# on a task no state field claimed. Done work spends no endpoint probe at all,
+# because its worker is never a lost one; a worker's question is still probed,
+# so a worker lost while it waits is counted stopped.
 #
 # A reading is COMPLETE or it is not a reading. If the canonical reader cannot
 # answer for even one task - it is missing, it failed, the fleet changed under
@@ -384,8 +476,8 @@ _fm_fleet_liveness() {  # <meta> <busy: 1 when the fold read a busy pane worker>
 _fm_fleet_collect() {  # <state-dir> <now> <reader> [prober]
   local state=$1 now=$2 reader=$3 probe=${4:-} id bucket signature life busy
   local working=0 stopped=0 validating=0 paused=0 attention=0 ready=0
-  local decisions=0 asked=0 answered=0
-  local ids=()
+  local decisions=0 asked=0 answered=0 calls kind readyfile
+  local ids=() ready_ids=()
   [ -n "$probe" ] || probe=${FM_FLEET_STATE_PROBE:-_fm_fleet_probe_default}
   _fm_fleet_classify_ready || return 1
   while IFS= read -r id; do
@@ -402,9 +494,8 @@ _fm_fleet_collect() {  # <state-dir> <now> <reader> [prober]
       working) busy=1 ;;
       validating) validating=$((validating + 1)) ;;
       paused) paused=$((paused + 1)) ;;
-      attention) attention=$((attention + 1)) ;;
-      decision) ready=$((ready + 1)); decisions=$((decisions + 1)) ;;
-      ready) ready=$((ready + 1)); continue ;;
+      attention|decision) attention=$((attention + 1)) ;;
+      ready) ready_ids+=("$id"); continue ;;
       finished) continue ;;
     esac
     life=$(_fm_fleet_liveness "$state/$id.meta" "$busy" "$probe")
@@ -418,7 +509,22 @@ _fm_fleet_collect() {  # <state-dir> <now> <reader> [prober]
     esac
   done
   [ "$answered" -eq "$asked" ] || return 1
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s' \
+  # The ready tasks go in a file rather than a process substitution, whose
+  # descriptor bash may close before the function reading it gets there.
+  readyfile=$(mktemp "${TMPDIR:-/tmp}/fm-fleet-ready.XXXXXX") || return 1
+  for id in ${ready_ids[@]+"${ready_ids[@]}"}; do printf '%s\tready\n' "$id"; done > "$readyfile"
+  calls=$(fm_owner_calls "$state" "$readyfile") || calls=__failed__
+  rm -f "$readyfile"
+  [ "$calls" != __failed__ ] || return 1
+  while IFS=$'\t' read -r kind _; do
+    case "$kind" in
+      decision) ready=$((ready + 1)); decisions=$((decisions + 1)) ;;
+      merge) ready=$((ready + 1)) ;;
+    esac
+  done <<CALLS
+$calls
+CALLS
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\tcalls' \
     "$now" "$working" "$stopped" "$validating" "$paused" "$attention" \
     "$ready" "$signature" "$decisions"
 }
@@ -473,9 +579,10 @@ _fm_fleet_unknown() {  # <records> [decisions]
 #   <records> <working> <stopped> <validating> <paused> <attention> <ready>
 #   <known> <age>
 # and, only when the second argument is the word `decisions`, a tenth field
-# <decisions>: how many of <ready> are decisions a human owes. A cached reading
-# taken before that field existed cannot split <ready>, so with `decisions` it
-# is reported exactly as no reading (<known> 0), and either way a refresh is
+# <decisions>: how many of <ready> are held decisions. A cached reading taken
+# before fm_owner_calls supplied <ready> and <decisions> (it lacks the closing
+# `calls` mark) cannot be trusted to split <ready>, so with `decisions` it is
+# reported exactly as no reading (<known> 0), and either way a refresh is
 # started at once so the next frame has the field.
 # tab separated. <known> is 1 when the six live fields are a current reading of
 # THIS fleet, 2 when they are the last good reading but no longer current - it
@@ -493,7 +600,7 @@ _fm_fleet_unknown() {  # <records> [decisions]
 fm_fleet_status_counts() {  # <state-dir> [decisions]
   local state=$1 want=${2:-} now cache reader records ttl max_age
   local cached='' stamp='' working='' stopped='' validating='' paused=''
-  local attention='' ready='' signature='' decisions='' current known age fresh=1
+  local attention='' ready='' signature='' decisions='' mark='' current known age fresh=1
   records=$(_fm_fleet_ids "$state" | grep -c '') || records=0
   now=$(_fm_fleet_now) || {
     _fm_fleet_unknown "$records" "$want"
@@ -513,7 +620,7 @@ fm_fleet_status_counts() {  # <state-dir> [decisions]
 
   if [ -n "$cached" ]; then
     IFS=$'\t' read -r stamp working stopped validating paused attention ready \
-      signature decisions <<READING
+      signature decisions mark <<READING
 $cached
 READING
   fi
@@ -522,9 +629,10 @@ READING
     ''|*[!0-9]*) cached= ;;
   esac
   [ -n "$signature" ] || cached=
-  # A reading from before <decisions> existed is still good for every older
-  # field, but it cannot split ready, so it is refreshed now and, for a caller
-  # that asked for the split, it is no reading at all.
+  # A reading from before the owner's calls supplied <ready> and <decisions> is
+  # still good for every older field, but it cannot split ready, so it is
+  # refreshed now and, for a caller that asked for the split, it is no reading.
+  [ "$mark" = calls ] || decisions=
   case "$decisions" in
     ''|*[!0-9]*)
       decisions=

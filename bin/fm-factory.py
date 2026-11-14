@@ -27,7 +27,10 @@ state is a word, so an agent reading the pane as text loses nothing.
 Where the record comes from. Live work, decisions and the work list come only
 from bin/fm-fleet-snapshot.sh --json, and each task's state word comes from the
 same fold the status bar counts with (fm_fleet_status_bucket in
-bin/fm-fleet-status-lib.sh), so the pane can never disagree with the strip.
+bin/fm-fleet-status-lib.sh). NEEDS YOU is exactly fm_owner_calls in that
+library, the count the bridge strip and the tap page show, and each question's
+options and suggestion come from bin/fm-tap-desk.sh shapes, the reading its tap
+card shows, so the pane can never disagree with either.
 The rest are event records the home already keeps: the [at=] times on status
 lines, the turn times in state/<id>.busy-state, state/<id>.turn-ended, the
 optional one-line state/<id>.step a worker may write to say what it is doing,
@@ -60,6 +63,9 @@ Test seams:
   FM_FACTORY_PEEK             pane reader run as `<cmd> <task-id> <lines>`
                               (default bin/fm-peek.sh); empty skips pane reads
   FM_FACTORY_INBOX            inbox command (default bin/fm-inbox.sh)
+  FM_FACTORY_SHAPES           decision shapes command, run with the decision
+                              ids as arguments (default bin/fm-tap-desk.sh
+                              shapes)
 Exit: 0 on success; 1 when a step fails, with the reason on stderr; 2 on a usage
 error.
 """
@@ -76,6 +82,7 @@ import shlex
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -337,6 +344,86 @@ def buckets_for(tasks: List[Dict[str, Any]]) -> Dict[str, str]:
     return result
 
 
+def owner_calls(home: str, buckets: Dict[str, str], backlog: Dict[str, Any]
+                ) -> Tuple[List[str], List[str]]:
+    """The owner's calls, from fm_owner_calls in bin/fm-fleet-status-lib.sh.
+
+    That function is the one definition of what really waits on the owner, the
+    count the bridge strip and the tap page show too: the held decisions that
+    wait on him now, and the PRs and ready branches waiting for his merge word. The pane hands
+    it the buckets and the backlog it already read, so nothing is read twice.
+    """
+    with tempfile.TemporaryDirectory(prefix="fm-factory-calls.") as tmp:
+        bucket_file = os.path.join(tmp, "buckets")
+        backlog_file = os.path.join(tmp, "backlog.json")
+        with open(bucket_file, "w", encoding="utf-8") as handle:
+            for task_id, bucket in buckets.items():
+                handle.write("%s\t%s\n" % (task_id, bucket))
+        with open(backlog_file, "w", encoding="utf-8") as handle:
+            json.dump(backlog or {}, handle)
+        script = '. "$1/fm-fleet-status-lib.sh" && fm_owner_calls "$2" "$3" "$4"'
+        out = subprocess.run(["bash", "-c", script, "fm-factory", BIN, os.path.join(home, "state"),
+                              bucket_file, backlog_file], capture_output=True, text=True, timeout=60)
+    if out.returncode != 0:
+        raise RuntimeError("could not read what waits on the owner")
+    decisions, merges = [], []
+    for line in out.stdout.splitlines():
+        parts = line.split("\t")
+        if len(parts) >= 2 and parts[0] == "decision":
+            decisions.append(parts[1])
+        elif len(parts) >= 2 and parts[0] == "merge":
+            merges.append(parts[1])
+    return decisions, merges
+
+
+def decision_shapes(home: str, ids: List[str]) -> Dict[str, Dict[str, Any]]:
+    """Each held decision's options and recommendation, as its tap card shows them.
+
+    bin/fm-tap-desk.sh shapes owns that reading, including the options and the
+    recommendation `fm-tap-desk.sh mark` records. A decision it cannot read is
+    simply missing here and is shown as its plain question.
+    """
+    if not ids:
+        return {}
+    seam = os.environ.get("FM_FACTORY_SHAPES")
+    cmd = shlex.split(seam) if seam else ["bash", os.path.join(BIN, "fm-tap-desk.sh"), "shapes"]
+    try:
+        out = subprocess.run(cmd + ids, capture_output=True, text=True, timeout=60,
+                             env=dict(os.environ, FM_HOME=home))
+        data = json.loads(out.stdout) if out.returncode == 0 and out.stdout.strip() else {}
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return {}
+    shapes = {}
+    for shape in data.get("decisions") or []:
+        if isinstance(shape, dict) and shape.get("id") in ids:
+            shapes[shape["id"]] = shape
+    return shapes
+
+
+def ready_reports(rows: List[Tuple[str, str, str]]) -> List[bool]:
+    """Whether each ship `done:` line is its ready report, not a handoff to the checks.
+
+    fm_dod_should_gate_ship_done in bin/fm-dod-lib.sh owns that reading, the one
+    the status bar counts with. Each row is (kind, mode, status line).
+    """
+    if not rows:
+        return []
+    script = (
+        '. "$1/fm-classify-lib.sh" && . "$1/fm-dod-lib.sh" || exit 1\n'
+        'while IFS="$(printf "\\t")" read -r kind mode line; do\n'
+        '  if fm_dod_should_gate_ship_done "$kind" "$mode" "$line"; then echo yes; else echo no; fi\n'
+        'done\n'
+    )
+    text = "".join("%s\t%s\t%s\n" % tuple(c.replace("\t", " ").replace("\n", " ") for c in row) for row in rows)
+    try:
+        out = subprocess.run(["bash", "-c", script, "fm-factory", BIN], input=text,
+                             capture_output=True, text=True, timeout=60)
+        answers = out.stdout.split()
+    except (OSError, subprocess.SubprocessError):
+        answers = []
+    return [index < len(answers) and answers[index] == "yes" for index in range(len(rows))]
+
+
 STATUS_RE = re.compile(r"^([a-z][a-z-]*)((?:\s*\[[^\]]*\])*)\s*:\s?(.*)$")
 
 
@@ -467,56 +554,10 @@ def tidy(text: Optional[str], limit: int = 170) -> str:
     return text
 
 
-OPTION_SPLIT_RE = re.compile(r"\bOptions?\b\s*[:,-]?\s*", re.I)
-
-
-def parse_options(text: Optional[str]) -> Tuple[str, List[Dict[str, Any]]]:
-    """Split "Options: 1 x, 2 y, 3 z." (or A, B, C) out of a question's prose.
-
-    Returns the prose without the options and the options found. Anything that
-    does not read as a run of consecutive keys stays prose and yields no options.
-    """
-    text = text or ""
-    match = OPTION_SPLIT_RE.search(text)
-    if not match:
-        return text, []
-    head, tail = text[:match.start()], text[match.end():]
-    first = re.match(r"\s*\(?([1A])[.):]?\s", tail)
-    if not first:
-        return text, []
-    numeric = first.group(1) == "1"
-    keys = [str(i) for i in range(1, 10)] if numeric else [chr(c) for c in range(ord("A"), ord("I"))]
-    spots = []
-    pos = 0
-    for key in keys:
-        pattern = re.compile(r"(?:^|[,;]\s*|\s|\()\(?%s[.):]?\s+" % re.escape(key))
-        found = pattern.search(tail, pos)
-        if not found:
-            break
-        spots.append((key, found.start(), found.end()))
-        pos = found.end()
-    if len(spots) < 2:
-        return text, []
-    options = []
-    rest = ""
-    for index, (key, _start, end) in enumerate(spots):
-        stop = spots[index + 1][1] if index + 1 < len(spots) else len(tail)
-        label = tail[end:stop]
-        if index + 1 == len(spots):
-            sentence = re.search(r"\.\s+(?=[A-Z])", label)
-            if sentence:
-                rest = label[sentence.end():]
-                label = label[:sentence.start()]
-        label = label.strip().strip(",;.").strip()
-        suggested = bool(re.search(r"\(?\brecommended\b\)?", label, re.I))
-        label = re.sub(r"\s*\(?\brecommended\b\)?", "", label, flags=re.I).strip(" ,;")
-        options.append({"key": key, "label": tidy(label, 70), "suggested": suggested})
-    recommend = re.search(r"\brecommend(?:ed|ation)?\b[:\s]+(?:option\s+)?\(?([1-9A-H])\b", head + " " + rest, re.I)
-    if recommend and not any(o["suggested"] for o in options):
-        for option in options:
-            if option["key"].upper() == recommend.group(1).upper():
-                option["suggested"] = True
-    return (head + " " + rest).strip(), options
+def plain_words(value: Any) -> str:
+    """Text to show, or nothing: a missing value never prints as None or null."""
+    text = value if isinstance(value, str) else ""
+    return "" if text.strip().lower() in ("", "none", "null", "-", "undefined") else text
 
 
 # --------------------------------------------------------------------------
@@ -589,6 +630,10 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
     row_of = {r["id"]: r for r in rows}
     tasks = [t for t in snapshot.get("tasks") or [] if t.get("kind") != "secondmate" and t.get("id")]
     buckets = buckets_for(tasks)
+    # NEEDS YOU is exactly the owner's calls, the one count the bridge strip and
+    # the tap page show; a worker's question, a pause or the checks never are.
+    decision_ids, merge_ids = owner_calls(home, buckets, snapshot.get("backlog") or {})
+    shapes = decision_shapes(home, decision_ids)
     needs: List[Dict[str, Any]] = []
     feed: List[Dict[str, Any]] = []
     titles: Dict[str, str] = {}
@@ -607,20 +652,36 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
                 if task_id in (r.get("unresolved_blocker_ids") or []) and r.get("state") != "done"]
 
     def hold_need(row: Dict[str, Any], fid: str) -> Dict[str, Any]:
-        prose, options = parse_options(row.get("hold_reason"))
-        since_at = parse_iso(row.get("hold_set")) or parse_iso(row.get("since"))
-        held = holds_up(row["id"])
-        return {"id": row["id"], "factory": fid, "kind": "question", "ask": row.get("title") or row["id"],
-                "title": row.get("title") or row["id"],
-                "why": tidy(prose), "options": options, "suggested_by": "Starship" if any(
-                    o["suggested"] for o in options) else None,
-                "holds_up": held, "since": since_at, "for": "you", "pr": None}
+        # The options and recommendation are the ones its tap card shows; with
+        # none recorded the question is shown plainly, never as a stand-in word.
+        shape = shapes.get(row["id"]) or {}
+        title = plain_words(shape.get("title")) or plain_words(row.get("title")) or row["id"]
+        question = plain_words(shape.get("question")) if shape else plain_words(row.get("hold_reason"))
+        labels = [plain_words(o) for o in shape.get("options") or []]
+        labels = [label for label in labels if label][:9]
+        recommended = plain_words(shape.get("recommended_option"))
+        options = [{"key": str(index + 1), "label": tidy(label, 70), "suggested": label == recommended}
+                   for index, label in enumerate(labels)]
+        recommendation = plain_words(shape.get("recommendation"))
+        if any(o["suggested"] for o in options) or recommendation in labels:
+            recommendation = ""
+        if options or recommendation:
+            # The options and the suggestion get rows of their own below.
+            cut = re.search(r"\b(?:Options?|Choose|Captain must choose|Recommend(?:ation|ed)?)\s*:", question, re.I)
+            question = question[:cut.start()] if cut else question
+        since_at = (parse_iso(shape.get("held_since")) or parse_iso(row.get("hold_set"))
+                    or parse_iso(row.get("since")))
+        return {"id": row["id"], "factory": fid, "kind": "question", "ask": title, "title": title,
+                "why": tidy(question), "options": options,
+                "suggested_by": "Starship" if any(o["suggested"] for o in options) else None,
+                "recommendation": tidy(recommendation, 140) or None,
+                "holds_up": holds_up(row["id"]), "since": since_at, "for": "you", "pr": row.get("pr_url")}
 
     # Live work: every task with metadata whose work item is not queued or done.
     running_ids = []
     for task in tasks:
         row = row_of.get(task["id"])
-        if row and row.get("state") in ("queued", "done"):
+        if row and row.get("state") in ("queued", "done") and task["id"] not in merge_ids:
             continue
         meta_path = ((task.get("paths") or {}).get("meta") or {}).get("path")
         meta = meta_values(meta_path)
@@ -639,22 +700,14 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
                                "until": None, "pr": (task.get("pr") or {}).get("url")}
         if bucket == "working":
             job.update(state="running", step="planning" if kind == "scout" else "building")
-        elif bucket == "validating" or (state.get("state") == "parked" and state.get("source") == "run-step"
-                                         and bucket != "decision"):
+        elif bucket == "validating" or (state.get("state") == "parked" and state.get("source") == "run-step"):
+            # A review finding the checks put to Starship (ask-user) is still
+            # the checks' work in progress, answered by Starship, not the owner.
             job.update(state="running", step="checking", doing=checking_sentence(detail), doing_from="checks")
         elif bucket == "decision":
-            job.update(state="waiting on you")
-            decision = ((task.get("hints") or {}).get("open_decisions") or [{}])[0]
-            asked = [e["at"] for e in status_events(((task.get("paths") or {}).get("status_log") or {}).get("path"))
-                     if e["verb"] == "needs-decision" and e["key"] == decision.get("key") and e["at"]]
-            prose, options = parse_options(decision.get("summary") or detail)
-            needs.append({"id": task["id"], "factory": fid, "kind": "question",
-                          "ask": "%s: a question for you" % title, "title": title, "why": tidy(prose),
-                          "options": options,
-                          "suggested_by": "the crew" if any(o["suggested"] for o in options) else None,
-                          "holds_up": holds_up(task["id"]), "since": asked[-1] if asked else None, "for": "you",
-                          "pr": None,
-                          "key": decision.get("key")})
+            # A worker's own question goes to Starship, which answers it or
+            # brings it to the owner as a held decision.
+            job.update(state="with Starship")
         elif bucket == "ready":
             job.update(state="ready for you", step="ready for you")
             pr = job["pr"]
@@ -663,11 +716,12 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
                 pr = found.group(1)
             done_at = [e["at"] for e in status_events(((task.get("paths") or {}).get("status_log") or {}).get("path"))
                        if e["verb"] == "done" and e["at"]]
-            needs.append({"id": task["id"], "factory": fid, "kind": "finished work",
-                          "ask": "%s is ready for you to look at" % title, "title": title, "why": None,
-                          "options": [],
-                          "suggested_by": None, "holds_up": [], "since": done_at[-1] if done_at else None,
-                          "for": "you", "pr": pr})
+            if task["id"] in merge_ids:
+                needs.append({"id": task["id"], "factory": fid, "kind": "finished work",
+                              "ask": "%s is ready for you to look at" % title, "title": title, "why": None,
+                              "options": [], "suggested_by": None, "recommendation": None,
+                              "holds_up": [], "since": done_at[-1] if done_at else None,
+                              "for": "you", "pr": pr})
         elif bucket == "finished":
             job.update(state="finished" if "PR merged" in detail else "with Starship")
         elif bucket == "paused":
@@ -680,12 +734,9 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
             job.update(state="stopped")
         else:
             job.update(state="no reading")
-        if row and row.get("captain_actionable"):
-            if not any(n["id"] == row["id"] for n in needs):
-                needs.append(hold_need(row, fid))
-            else:
-                needs[:] = [hold_need(row, fid) if n["id"] == row["id"] else n for n in needs]
-            if job["state"] in ("stopped", "no reading", "with Starship"):
+        if row and row["id"] in decision_ids:
+            needs.append(hold_need(row, fid))
+            if job["state"] in ("stopped", "no reading", "with Starship", "ready for you"):
                 job["state"] = "waiting on you"
         if job["state"] == "running":
             running_ids.append(task["id"])
@@ -729,7 +780,7 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
         job = {"id": row["id"], "title": title, "kind": row.get("kind") or "task", "state": None, "step": None,
                "started": None, "doing": None, "doing_from": None, "last_sign_of_life": None,
                "sign_of_life_from": None, "quiet": False, "until": None, "pr": row.get("pr_url")}
-        if row.get("captain_actionable"):
+        if row["id"] in decision_ids:
             job["state"] = "waiting on you"
             needs.append(hold_need(row, fid))
         elif row.get("hold_kind"):
@@ -767,7 +818,9 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
                                "once_you_answer": first["state"] == "waiting on you",
                                "then": len(lined) - 1}
 
-    # Since you last looked: status events, completions, the owner's own notes.
+    # Since you last looked: outcomes and the owner's own calls, never a
+    # worker's pause, a question a worker put to Starship, or a blocker.
+    done_rows: List[Tuple[Dict[str, Any], str, Dict[str, str]]] = []
     for task in snapshot.get("tasks") or []:
         task_id = task.get("id")
         if not task_id or task.get("kind") == "secondmate":
@@ -776,41 +829,47 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
         if not fid:
             row = row_of.get(task_id)
             fid = factory_of((row or {}).get("repo") or os.path.basename((task.get("project") or "").rstrip("/")))
-        title = titles.get(task_id) or title_of(task_id, meta_values(
-            ((task.get("paths") or {}).get("meta") or {}).get("path")))
-        events = status_events(((task.get("paths") or {}).get("status_log") or {}).get("path"))
-        last_verb = None
-        for event in events:
+        meta = meta_values(((task.get("paths") or {}).get("meta") or {}).get("path"))
+        title = titles.get(task_id) or title_of(task_id, meta)
+        for event in status_events(((task.get("paths") or {}).get("status_log") or {}).get("path")):
             verb, at = event["verb"], event["at"]
-            word = text = None
-            if verb == "done":
-                word, text = "finished", "%s is finished." % title
-            elif verb == "needs-decision":
-                word, text = "asked you", "%s has a question for you." % title
-            elif verb in ("blocked", "failed"):
-                word, text = "stuck", "%s is stuck; Starship is on it." % title
-            elif verb == "paused":
-                found = re.search(r"\buntil (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}Z)", event["text"])
-                again = parse_iso(found.group(1)) if found else None
-                if again:
-                    word = "waiting · tries again %s" % clock(again)
-                    text = "%s is waiting and tries again at %s." % (title, clock(again))
-            elif verb == "resolved" and last_verb in ("blocked", "failed"):
-                word, text = "fixed itself", "%s is moving again." % title
-            if verb != "note":
-                last_verb = verb
-            if word and at and since <= at <= now:
-                feed.append({"at": at, "date": None, "actor": by_id[fid]["name"], "factory": fid, "job": task_id,
-                             "word": word, "text": text})
-    done_in_feed = {e["job"] for e in feed if e["word"] == "finished"}
+            if not at or not since <= at <= now:
+                continue
+            base = {"at": at, "date": None, "actor": by_id[fid]["name"], "factory": fid, "job": task_id}
+            if verb == "failed":
+                feed.append(dict(base, word="failed", text="%s failed; Starship is on it." % title))
+            elif verb == "done":
+                done_rows.append((dict(base, title=title, line=event),
+                                  task.get("kind") or meta.get("kind") or "ship", meta))
+    # A ship's done is an outcome only when it is the ready report; the handoff
+    # of a build into the checks is not, and a scout's report always is.
+    gated = ready_reports([(kind, meta.get("mode", ""), "done: %s" % item["line"]["text"])
+                           for item, kind, meta in done_rows if kind == "ship"])
+    answers = iter(gated)
+    for item, kind, _meta in done_rows:
+        if kind == "ship" and not next(answers, False):
+            continue
+        text, title = item.pop("line")["text"], item.pop("title")
+        if kind == "ship" and re.search(r"https?://\S+/(?:pull|merge_requests)/\d+", text):
+            feed.append(dict(item, word="PR ready", text="%s has its PR ready." % title))
+        else:
+            feed.append(dict(item, word="finished", text="%s is finished." % title))
+    for need in needs:
+        if need["kind"] == "question" and need.get("since") and since <= need["since"] <= now:
+            feed.append({"at": need["since"], "date": None, "actor": by_id[need["factory"]]["name"],
+                         "factory": need["factory"], "job": need["id"], "word": "asked you",
+                         "text": "%s needs your call." % need["title"]})
+    done_in_feed = {e["job"] for e in feed if e["word"] in ("finished", "PR ready")}
     since_day = time.strftime("%Y-%m-%d", time.localtime(since))
     for row in rows:
         completion = row.get("completion") or {}
         date = completion.get("date")
-        if row.get("state") != "done" or not date or date < since_day or row["id"] in done_in_feed:
+        if row.get("state") != "done" or not date or date < since_day:
+            continue
+        merged = completion.get("verb") == "merged"
+        if row["id"] in done_in_feed and not merged:
             continue
         fid = factory_of(row.get("repo"))
-        merged = completion.get("verb") == "merged"
         feed.append({"at": None, "date": date, "actor": by_id[fid]["name"], "factory": fid, "job": row["id"],
                      "word": "landed" if merged else "finished",
                      "text": "%s is %s." % (row.get("title") or row["id"], "in" if merged else "done")})
@@ -1026,8 +1085,8 @@ def wrap(text: str, width: int) -> List[str]:
 STATE_COLOUR = {"running": "amber", "waiting on you": "red", "ready for you": "green", "stuck": "amber",
                 "waiting": "amber", "stopped": "faint", "no worker": "faint", "no reading": "faint",
                 "with Starship": "mist", "finished": "green", "next": "mist", "later": "faint"}
-FEED_COLOUR = {"finished": "green", "landed": "green", "asked you": "red", "stuck": "amber",
-               "fixed itself": "mist", "took the helm": "cyan", "handed back": "cyan", "replied": "cyan",
+FEED_COLOUR = {"finished": "green", "PR ready": "green", "landed": "green", "asked you": "red", "failed": "amber",
+               "took the helm": "cyan", "handed back": "cyan", "replied": "cyan",
                "answered": "cyan", "asked to keep": "cyan", "asked for changes": "cyan", "said": "cyan"}
 
 
@@ -1156,6 +1215,10 @@ class View:
                     note = "  · %s suggests this" % (need.get("suggested_by") or "Starship")
                 rows.append(row(width, [pad, S(option["key"], "cyan", True), S("  "), S(option["label"], "ice"),
                                         S(note, "mist")]))
+            if need.get("recommendation"):
+                for index, line in enumerate(wrap("Starship suggests: %s" % need["recommendation"],
+                                                  max(width - 9, 20))[:2]):
+                    rows.append(row(width, [pad, S(line, "mist" if index else "ice")]))
             rows.append(row(width, [pad, S("t", "cyan", True), S("  "), S("Talk it through", "ice")]))
             if need.get("holds_up"):
                 rows.append(row(width, [pad, S("holds up ", "faint"), S(", ".join(need["holds_up"][:3]), "mist")]))
@@ -1264,7 +1327,7 @@ class View:
                 stamp = "today"
             else:
                 stamp = time.strftime("%d %b", time.gmtime(parse_iso(event["date"]) or now))
-            left = [S("   "), S(stamp.ljust(9), "faint")]
+            left = [S("   "), S(stamp.ljust(10), "faint")]
             if not fid:
                 left.append(S(event["actor"].ljust(names + 2), "mist"))
             left.append(S(event["word"].ljust(words + 2), FEED_COLOUR.get(event["word"].split(" ·")[0], "amber")))

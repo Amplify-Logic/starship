@@ -14,10 +14,12 @@ It shows the STARSHIP wordmark, three lamps for the crew, and the Mac's battery.
 | Lamp | Colour when lit | Counts |
 | --- | --- | --- |
 | `busy` | amber | Workers busy on a task, plus work the validation pipeline is carrying. |
-| `decisions for you` | red | Decisions a human owes; `decision for you` when there is one. |
+| `decisions for you` | red | Decisions held for the owner that wait on him now, not deferred to a date or waiting on other work; `decision for you` when there is one. |
 | `ready to merge` | green | PRs and ready branches waiting for the merge word. |
 
 A lamp with nothing to count stays unlit, so the row keeps its shape.
+`decisions for you` and `ready to merge` are the owner's calls, the one count the [Factory pane](factory-pane.md) and the tap page also show; `fm_owner_calls` in `bin/fm-fleet-status-lib.sh` owns it.
+A worker's question, an ask-user review finding, a worker's pause, and a hold deferred to a date are never counted there.
 The counts are the status bar's figures: `busy` is its `working` plus `checking`, and `decisions for you` plus `ready to merge` together are its `waiting for you`.
 [status-bar.md](status-bar.md#fleet-fields) owns what each figure means and how the reading is taken.
 The strip reads that same cached reading, so it costs the fleet nothing extra.
