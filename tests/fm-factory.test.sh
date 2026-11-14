@@ -520,6 +520,7 @@ test_a_live_copy_shows_text_at_the_top_of_a_taller_pane() {
   write_world
   # The worker's pane holds its text on the first line and blank rows below,
   # the way an inline agent early in its session looks to bin/fm-peek.sh.
+  # shellcheck disable=SC2016 # $(seq 30) must expand when the stub runs
   printf '#!/usr/bin/env bash\nprintf "waiting for the captain\\n"; for i in $(seq 30); do echo; done\n' \
     > "$BINDIR/peek$CASE"
   chmod +x "$BINDIR/peek$CASE"
