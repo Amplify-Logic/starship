@@ -1336,6 +1336,38 @@ test_worker_role_scope() {
   pass "fm-brief: scaffolds leave the worker role scope to the launch boundary and keep the secondmate contract"
 }
 
+# Every ship and scout worker is told to push back on a weak approach: do the
+# work when it is a good idea, otherwise suggest something better through the
+# decision channel and stop, never building the alternative on its own. The
+# line appears once per brief, identical across kinds, and not in a charter.
+test_ship_and_scout_carry_push_back_line() {
+  local kind home brief line first=''
+  home="$TMP_ROOT/push-back"
+  for kind in no-mistakes direct-PR local-only scout; do
+    if [ "$kind" = scout ]; then
+      FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$kind" arbitrary-project-name --scout >/dev/null || fail "scout scaffold failed"
+    else
+      FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$kind" arbitrary-project-name --mode "$kind" >/dev/null || fail "$kind scaffold failed"
+    fi
+    brief="$home/data/$kind/brief.md"
+    [ "$(grep -c 'If you think the approach in these instructions is a good idea, do it. Otherwise, suggest something better' "$brief")" = 1 ] \
+      || fail "$kind brief must carry the push-back line exactly once"
+    line=$(grep 'If you think the approach in these instructions is a good idea' "$brief")
+    # shellcheck disable=SC2016 # Literal backticks and braces must remain unexpanded.
+    assert_contains "$line" '`needs-decision [at=<epoch>]: {what you would do instead and why}` and stop' \
+      "$kind push-back line must route a better idea through needs-decision"
+    assert_contains "$line" 'never build your alternative unless firstmate agrees' \
+      "$kind push-back line must not let the worker change scope on its own"
+    [ -z "$first" ] || [ "$line" = "$first" ] || fail "$kind push-back line drifted from the first scaffold"
+    first=$line
+  done
+  FM_HOME="$home" FM_SECONDMATE_CHARTER='Supervise assigned work.' \
+    "$ROOT/bin/fm-brief.sh" supervisor --secondmate --no-projects >/dev/null || fail "secondmate scaffold failed"
+  assert_no_grep 'If you think the approach in these instructions is a good idea' "$home/data/supervisor/brief.md" \
+    "secondmate charter must not receive the worker push-back line"
+  pass "fm-brief.sh: ship and scout briefs tell the worker to do a good approach or suggest a better one first"
+}
+
 # Both PR-ending modes must tell the worker to aim the PR at the repository the
 # worktree's origin points at: gh defaults a fork's PR to the parent repository,
 # which twice landed a task PR on the upstream parent. The command lives in one
@@ -1652,6 +1684,7 @@ test_branch_prefix_command_is_shell_safe() {
 }
 
 test_worker_role_scope
+test_ship_and_scout_carry_push_back_line
 
 # Rule 2 governs file edits rather than pool administration, so every crewmate
 # scaffold must prohibit the administrative act itself. The rule is emitted from

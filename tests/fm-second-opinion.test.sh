@@ -2,7 +2,8 @@
 # Behavior tests for bin/fm-second-opinion.sh: rival-model second-opinion wrapper.
 #
 # Covers happy-path --out header writes for the default fable reviewer and the
-# grok and sol reviewers, the hostile-review prompt reaching the reviewer,
+# grok and sol reviewers, the hostile-review prompt reaching the reviewer, the
+# --ship-verdict ship-or-fix prompt replacing it,
 # neutral-cwd enforcement, unknown reviewer refusal, per-reviewer quota floors
 # plus FM_SECOND_OPINION_FORCE override, grok's floor on Cursor's all-model
 # effective availability, grok's refusal on an unavailable or stale reading,
@@ -153,12 +154,14 @@ test_default_fable_happy_path() {
     "fable: header present"
   assert_contains "$(cat "$dir/out.md")" 'Reviewer: fable' \
     "fable: default reviewer in header"
+  assert_contains "$(cat "$dir/out.md")" 'Mode: review' \
+    "fable: default mode is the hostile review"
   assert_contains "$(cat "$dir/out.md")" 'Subject: adopt the gateway design' \
     "fable: subject in header"
   assert_contains "$(cat "$dir/out.md")" 'hostile review body' \
     "fable: reviewer body written"
-  assert_contains "$(cat "$dir/argv.txt")" '-p --model claude-fable-5-1 --effort medium' \
-    "fable: claude print mode on Fable at medium effort"
+  assert_contains "$(cat "$dir/argv.txt")" '-p --model claude-fable-5-2 --effort high' \
+    "fable: claude print mode on Fable 5.2 at high effort"
   assert_contains "$(cat "$dir/argv.txt")" '--strict-mcp-config' \
     "fable: user MCP servers excluded"
   assert_contains "$(cat "$dir/argv.txt")" 'You are a hostile design reviewer' \
@@ -172,6 +175,38 @@ test_default_fable_happy_path() {
   assert_not_contains "$RUN_OUT" 'API key was set' \
     "fable: must not pass ambient API keys into claude"
   pass "fm-second-opinion defaults to fable, writes --out, and strips API keys"
+}
+
+# --ship-verdict replaces the hostile scaffold with the ship-or-fix question, so
+# a tie-breaker read on repeatedly reviewed work is not told to hunt for more
+# findings; reviewer, quota floor, and neutral cwd stay the same.
+test_ship_verdict_mode() {
+  local dir="$TMP/ship-verdict" argv
+  fm_fakebin "$dir" >/dev/null
+  install_reviewer_stub "$dir/fakebin" claude ok
+  write_quota_fixture "$dir/quota.json" 80 60 70 50
+  printf 'f1 LOW docs wording\nf2 LOW extra guard\n' >"$dir/findings.txt"
+
+  run_so "$dir" "$dir/quota.json" -- \
+    --ship-verdict --out "$dir/out.md" --context "$dir/findings.txt" -- "task: add a flag"
+
+  expect_code 0 "$RUN_RC" "ship-verdict exit"
+  argv=$(cat "$dir/argv.txt")
+  assert_contains "$argv" '-p --model claude-fable-5-2 --effort high' \
+    "ship-verdict: runs the default Fable reviewer"
+  assert_contains "$argv" 'You are deciding whether finished work is good enough to ship' \
+    "ship-verdict: ship-or-fix question reaches the reviewer"
+  assert_contains "$argv" 'End with exactly one line: VERDICT: SHIP, or VERDICT: FIX' \
+    "ship-verdict: reviewer must end with one verdict line"
+  assert_contains "$argv" 'f2 LOW extra guard' \
+    "ship-verdict: the open findings reach the reviewer as context"
+  assert_not_contains "$argv" 'You are a hostile design reviewer' \
+    "ship-verdict: the hostile scaffold must not be sent"
+  assert_contains "$(cat "$dir/out.md")" 'Mode: ship-verdict' \
+    "ship-verdict: mode recorded in the header"
+  assert_contains "$RUN_OUT" 'Claude Fable week percentRemaining=60' \
+    "ship-verdict: the Fable quota floor still applies"
+  pass "fm-second-opinion --ship-verdict asks the ship-or-fix question on Fable"
 }
 
 test_fable_quota_floor() {
@@ -393,6 +428,7 @@ test_empty_reviewer_output_fails_loudly() {
 
 test_help_exits_zero
 test_default_fable_happy_path
+test_ship_verdict_mode
 test_fable_quota_floor
 test_grok_happy_path_and_floor
 test_grok_refuses_unavailable_reading
