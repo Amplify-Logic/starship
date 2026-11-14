@@ -154,7 +154,7 @@ EOF
     });' "$route_id" "$work_id" || fail "card file contract failed"
   assert_no_grep "__FM_TAP_CARDS__" "$HOME_DIR/data/tap-desk/page.html" "the page kept its card placeholder"
   assert_grep '"key":"d.pick-route"' "$HOME_DIR/data/tap-desk/page.html" "the page does not carry the cards"
-  perms=$(stat -f '%Lp' "$HOME_DIR/data/tap-desk/cards.json" 2>/dev/null || stat -c '%a' "$HOME_DIR/data/tap-desk/cards.json")
+  if [ "$(uname)" = Darwin ]; then perms=$(stat -f '%Lp' "$HOME_DIR/data/tap-desk/cards.json"); else perms=$(stat -c '%a' "$HOME_DIR/data/tap-desk/cards.json"); fi
   assert_equals "600" "$perms" "the card file is not private"
   pass "export lists every captain call, held work included, and only merges the fleet reader calls ready, naming who opened them and any rules they change"
 }
