@@ -18,6 +18,7 @@ Start with the directory layout, then use the setting reference for the behavior
 | Spoken replies | [Desk voice-out](#desk-voice-out-configspeak) |
 | The call recorder | [Call recorder](#call-recorder-configcall-companion) |
 | The meeting intake | [Meeting intake](#meeting-intake-configmeetings) |
+| Answering held decisions and ready merges by tapping on the phone | [Phone tap desk](#phone-tap-desk-configtap-desk) |
 | Waking the first mate when something arrives in a Mothership room | [Mothership monitoring](#mothership-monitoring-configmothership-monitor) |
 | The morning intake, the continuous channel intake and the daily to-do page | [Daily intake and to-do page](#daily-intake-and-to-do-page-configmorning-intake-configchannel-intake) |
 | Which Starship version "update starship" follows | [Update channel](#update-channel-configupdate-channel) |
@@ -789,6 +790,7 @@ Each switch is an optional local, gitignored presence flag; any file at the path
 | `macos-computer-use` | `config/computer-use` (above) |
 | `intake-digest-lines` and `daily-todo-freshness` | `config/morning-intake` or `config/channel-intake` ([below](#daily-intake-and-to-do-page-configmorning-intake-configchannel-intake)) |
 | `meeting-intake` ([meetings.md](meetings.md)) | `config/meetings` ([below](#meeting-intake-configmeetings)) |
+| `tap-desk` | `config/tap-desk` ([below](#phone-tap-desk-configtap-desk)) |
 
 A switched-on skill is linked into `.agents/skills/` under its usual name, so it loads exactly as a tracked skill does, and the link is gitignored.
 A harness lists skills when it starts, so a changed switch takes effect from the next launch.
@@ -4267,6 +4269,14 @@ It names the sources finished meetings come from (`source = call-recorder`, the 
 `key = value` lines; `#` comments and blank lines are ignored, and an unknown key or source is refused so a typo never silently changes what is read.
 [`docs/examples/meetings`](examples/meetings) lists every key with its default, `bin/fm-meetings.sh`'s header owns their meaning and the intake's rules, `bin/fm_meeting_sources.py`'s header owns each source and the seam a new one plugs into, and [meetings.md](meetings.md) covers what Anarlog is, setup, keys and turning the intake off.
 The file's presence also switches on the `meeting-intake` skill as an [opt-in skill](#opt-in-skills-configadhd-configsecond-opinion).
+
+## Phone tap desk (config/tap-desk)
+
+Optional, private, gitignored, and not inherited by secondmate homes; any file at the path turns it on, whatever it holds.
+Its presence switches on the `tap-desk` [opt-in skill](#opt-in-skills-configadhd-configsecond-opinion), which has firstmate put every decision held for the captain, and every ready task PR, on one private claude.ai artifact page where each is answered with a single tap, optionally with a short reason.
+The page needs a Claude Code primary that can publish artifacts and read their database.
+Its private records live under `data/tap-desk/`: the card file and page `bin/fm-tap-desk.sh export` writes, the artifact link, the downloaded taps, and `ledger.jsonl`, the record of every routed tap and seven-day default; reasons also land in the decision record and as rule candidates in `data/learnings.md`.
+`bin/fm-tap-desk.sh`'s header owns the card format, routing, refusals, and default rules, and the skill owns when firstmate runs them.
 
 ## Supervision active alert channels (config/wedge-alarm)
 

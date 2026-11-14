@@ -83,6 +83,7 @@ macos-computer-use computer-use
 intake-digest-lines morning-intake|channel-intake
 daily-todo-freshness morning-intake|channel-intake
 meeting-intake meetings
+tap-desk tap-desk
 EOF
 }
 

@@ -71,12 +71,12 @@ test_switch_links_its_skills_and_checkout_stays_clean() {
 test_captain_home_switches_link_every_skill() {
   local dir shipped entry flag
   dir=$(make_checkout captain)
-  for flag in adhd second-opinion computer-use captain-ledger morning-intake meetings; do : > "$dir/config/$flag"; done
+  for flag in adhd second-opinion computer-use captain-ledger morning-intake meetings tap-desk; do : > "$dir/config/$flag"; done
   printf 'enabled = true\n' > "$dir/config/speak"
   run_sync "$dir"
   shipped=$(for entry in "$ROOT"/.agents/opt-in-skills/*/; do entry=${entry%/}; printf '%s\n' "${entry##*/}"; done \
     | sort | tr '\n' ' ' | sed 's/ $//')
-  assert_equals "adhd adhd-auto-fire daily-todo-freshness intake-digest-lines macos-computer-use meeting-intake second-opinion-auto-fire" \
+  assert_equals "adhd adhd-auto-fire daily-todo-freshness intake-digest-lines macos-computer-use meeting-intake second-opinion-auto-fire tap-desk" \
     "$shipped" "the shipped opt-in skills changed; update this test and the captain home switch list"
   assert_equals "$shipped" "$(linked "$dir")" "the captain home's switches must link every shipped opt-in skill"
   assert_equals "" "$(git -C "$dir/checkout" status --porcelain)" \

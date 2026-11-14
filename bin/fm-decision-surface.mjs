@@ -1,9 +1,12 @@
 #!/usr/bin/env node
 // Data and rendering engine for fm-decision-surface.sh.
 // The shell wrapper owns the operator-facing commands and loopback-only Lavish launch.
+// The option, recommendation, and listing parsers are exported so bin/fm-tap-desk.mjs
+// reads a captain decision exactly the way this surface does; importing this file
+// never runs the command below.
 
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -62,7 +65,7 @@ function parseYamlScalar(value) {
   return trimmed;
 }
 
-function parseShow(output) {
+export function parseShow(output) {
   const task = {};
   for (const line of output.split("\n")) {
     const match = line.match(/^  ([a-z_]+): (.*)$/);
@@ -101,7 +104,7 @@ function taskShow(home, id) {
   return task;
 }
 
-function taskIdsFromList(output) {
+export function taskIdsFromList(output) {
   const countMatch = output.match(/^count: (\d+)$/m);
   if (!countMatch) fail("tasks-axi list returned no count");
   const ids = [];
@@ -132,7 +135,7 @@ function sentences(text) {
   return text.match(/[^.!?]+[.!?]?/g)?.map((item) => item.trim()).filter(Boolean) || [];
 }
 
-function recommendationFrom(reason) {
+export function recommendationFrom(reason) {
   const explicit = reason.match(/\bRecommendation:\s*(.*?)(?=(?:\s+(?:Report|Evidence|Follow-on|See)\b)|$)/i);
   if (explicit) return explicit[1].trim();
   const recommended = sentences(reason).find((sentence) => /\b(recommend(?:s|ed|ation)?|advises?)\b/i.test(sentence));
@@ -164,7 +167,7 @@ function splitTitleOptions(value) {
   return [...new Set(pieces)];
 }
 
-function optionsFrom(title, reason, recommendation) {
+export function optionsFrom(title, reason, recommendation) {
   let source = "";
   const explicit = reason.match(/\b(?:Options?|Choose|Captain must choose)\s*:\s*(.*)/i);
   if (explicit) source = explicit[1];
@@ -697,46 +700,57 @@ function showDecision(page, id) {
   console.log(`Blocking: ${decision.dependents.length} dependent item${decision.dependents.length === 1 ? "" : "s"}`);
 }
 
-const args = parseArgs(process.argv.slice(2));
-switch (args.command) {
-  case "generate": {
-    if (!args.home || !args.output) fail("generate requires --home and --output", 2);
-    const loaded = loadTasks(args.home);
-    const manifest = {
-      schema: "fm-decision-surface.v1",
-      generated_at: new Date().toISOString(),
-      count: loaded.tasks.length,
-      decisions: loaded.tasks,
-      unshown: loaded.unshown,
-    };
-    mkdirSync(path.dirname(args.output), { recursive: true, mode: 0o700 });
-    // Rename into place so an interrupted run never leaves a half-written page.
-    const staging = `${args.output}.${process.pid}.tmp`;
-    writeFileSync(staging, renderHtml(manifest), { mode: 0o600 });
-    renameSync(staging, args.output);
-    for (const warning of loaded.warnings) console.error(`fm-decision-surface: ${warning}`);
-    const grouped = new Set(manifest.decisions.map((item) => item.group)).size;
-    const blocking = manifest.decisions.filter((item) => item.dependents.length > 0).length;
-    const lifecycle = manifest.decisions.filter((item) => item.origin && item.key).length;
-    console.log(`generated: ${manifest.count} captain decisions (tasks-axi count: ${loaded.count})`);
-    for (const note of loaded.skipped) console.log(note);
-    for (const item of loaded.unshown) console.log(`not shown: ${item.id} ${item.reason}`);
-    console.log(`groups: ${grouped}; blocking other work: ${blocking}; lifecycle-routable: ${lifecycle}`);
-    console.log(`page: ${args.output}`);
-    break;
+function invokedDirectly() {
+  if (!process.argv[1]) return false;
+  try {
+    return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
   }
-  case "read-poll":
-    if (!args.page || !args.poll_file || !args.output) fail("read-poll requires --page, --poll-file, and --output", 2);
-    readPoll(args.page, args.poll_file, args.output);
-    break;
-  case "route":
-    if (!args.home || !args.root || !args.page || !args.answers) fail("route requires --home, --root, --page, and --answers", 2);
-    routeAnswers({ home: args.home, root: args.root, page: args.page, answersFile: args.answers, apply: args.apply });
-    break;
-  case "show":
-    if (!args.page || !args.id) fail("show requires --page and --id", 2);
-    showDecision(args.page, args.id);
-    break;
-  default:
-    fail(`unknown engine command: ${args.command}`, 2);
+}
+
+if (invokedDirectly()) {
+  const args = parseArgs(process.argv.slice(2));
+  switch (args.command) {
+    case "generate": {
+      if (!args.home || !args.output) fail("generate requires --home and --output", 2);
+      const loaded = loadTasks(args.home);
+      const manifest = {
+        schema: "fm-decision-surface.v1",
+        generated_at: new Date().toISOString(),
+        count: loaded.tasks.length,
+        decisions: loaded.tasks,
+        unshown: loaded.unshown,
+      };
+      mkdirSync(path.dirname(args.output), { recursive: true, mode: 0o700 });
+      // Rename into place so an interrupted run never leaves a half-written page.
+      const staging = `${args.output}.${process.pid}.tmp`;
+      writeFileSync(staging, renderHtml(manifest), { mode: 0o600 });
+      renameSync(staging, args.output);
+      for (const warning of loaded.warnings) console.error(`fm-decision-surface: ${warning}`);
+      const grouped = new Set(manifest.decisions.map((item) => item.group)).size;
+      const blocking = manifest.decisions.filter((item) => item.dependents.length > 0).length;
+      const lifecycle = manifest.decisions.filter((item) => item.origin && item.key).length;
+      console.log(`generated: ${manifest.count} captain decisions (tasks-axi count: ${loaded.count})`);
+      for (const note of loaded.skipped) console.log(note);
+      for (const item of loaded.unshown) console.log(`not shown: ${item.id} ${item.reason}`);
+      console.log(`groups: ${grouped}; blocking other work: ${blocking}; lifecycle-routable: ${lifecycle}`);
+      console.log(`page: ${args.output}`);
+      break;
+    }
+    case "read-poll":
+      if (!args.page || !args.poll_file || !args.output) fail("read-poll requires --page, --poll-file, and --output", 2);
+      readPoll(args.page, args.poll_file, args.output);
+      break;
+    case "route":
+      if (!args.home || !args.root || !args.page || !args.answers) fail("route requires --home, --root, --page, and --answers", 2);
+      routeAnswers({ home: args.home, root: args.root, page: args.page, answersFile: args.answers, apply: args.apply });
+      break;
+    case "show":
+      if (!args.page || !args.id) fail("show requires --page and --id", 2);
+      showDecision(args.page, args.id);
+      break;
+    default:
+      fail(`unknown engine command: ${args.command}`, 2);
+  }
 }

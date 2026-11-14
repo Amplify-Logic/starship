@@ -146,6 +146,10 @@
       "audience": "agent-runtime"
     },
     {
+      "path": ".agents/opt-in-skills/tap-desk/SKILL.md",
+      "audience": "agent-runtime"
+    },
+    {
       "path": ".agents/skills/afk/SKILL.md",
       "audience": "agent-runtime"
     },
