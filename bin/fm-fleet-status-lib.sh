@@ -236,6 +236,18 @@ _fm_fleet_bucket() {  # <canonical line> [<meta>]
   esac
 }
 
+# fm_fleet_task_bucket: the field one task belongs in, as _fm_fleet_bucket reads
+# the canonical reader's line for it; nothing for a record no field claims. It
+# fails when the reader cannot answer. The fold below and bin/fm-tap-desk.sh,
+# which makes a merge card only for `ready`, share this one reading.
+fm_fleet_task_bucket() {  # <state-dir> <id> [reader]
+  local state=$1 id=$2 reader=${3:-${FM_FLEET_STATE_READER:-$_FM_FLEET_LIB_DIR/fm-crew-state.sh}} line
+  _fm_fleet_classify_ready || return 1
+  line=$("$reader" "$id" </dev/null 2>/dev/null) || return 1
+  [ -n "$line" ] || return 1
+  _fm_fleet_bucket "$line" "$state/$id.meta"
+}
+
 # _fm_fleet_backend_ready: load bin/fm-backend.sh once, on first use.
 #
 # It is sourced HERE rather than at library load because the renderer sources
@@ -361,7 +373,7 @@ _fm_fleet_liveness() {  # <meta> <busy: 1 when the fold read a busy pane worker>
 # would swallow the remaining ids and end the loop with asked == answered on a
 # fraction of the fleet. The reader's stdin is detached for the same reason.
 _fm_fleet_collect() {  # <state-dir> <now> <reader> [prober]
-  local state=$1 now=$2 reader=$3 probe=${4:-} id line bucket signature life busy
+  local state=$1 now=$2 reader=$3 probe=${4:-} id bucket signature life busy
   local working=0 stopped=0 validating=0 paused=0 attention=0 ready=0
   local decisions=0 asked=0 answered=0
   local ids=()
@@ -374,10 +386,8 @@ _fm_fleet_collect() {  # <state-dir> <now> <reader> [prober]
   asked=${#ids[@]}
   signature=$(_fm_fleet_id_stream ${ids[@]+"${ids[@]}"} | _fm_fleet_signature) || return 1
   for id in ${ids[@]+"${ids[@]}"}; do
-    line=$("$reader" "$id" </dev/null 2>/dev/null) || continue
-    [ -n "$line" ] || continue
+    bucket=$(fm_fleet_task_bucket "$state" "$id" "$reader") || continue
     answered=$((answered + 1))
-    bucket=$(_fm_fleet_bucket "$line" "$state/$id.meta")
     busy=0
     case "$bucket" in
       working) busy=1 ;;

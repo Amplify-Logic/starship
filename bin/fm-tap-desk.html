@@ -1,0 +1,276 @@
+<title>Tap desk</title>
+<style>
+  :root {
+    --bg: #f6f4ef;
+    --card: #ffffff;
+    --ink: #1d2327;
+    --muted: #5d676e;
+    --line: #e2ded5;
+    --accent: #1f6f5c;
+    --accent-ink: #ffffff;
+    --accent-soft: #e3f1ec;
+    --warn: #8a5a12;
+    --warn-soft: #f8eedb;
+    --sent: #2f5d8a;
+    --sent-soft: #e4edf7;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #12171a;
+      --card: #1b2226;
+      --ink: #e7ebed;
+      --muted: #9aa6ad;
+      --line: #2c363c;
+      --accent: #5cc0a2;
+      --accent-ink: #0d1a16;
+      --accent-soft: #1d3530;
+      --warn: #e7b866;
+      --warn-soft: #382c17;
+      --sent: #8ab8e6;
+      --sent-soft: #1d2b3a;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #12171a;
+    --card: #1b2226;
+    --ink: #e7ebed;
+    --muted: #9aa6ad;
+    --line: #2c363c;
+    --accent: #5cc0a2;
+    --accent-ink: #0d1a16;
+    --accent-soft: #1d3530;
+    --warn: #e7b866;
+    --warn-soft: #382c17;
+    --sent: #8ab8e6;
+    --sent-soft: #1d2b3a;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 640px; margin: 0 auto; padding: 20px 16px 64px; }
+  h1 { font-size: 1.5rem; margin: 0 0 4px; }
+  h2 { font-size: .8rem; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 28px 0 10px; }
+  .lede { color: var(--muted); margin: 0 0 8px; font-size: .95rem; }
+  .notice { background: var(--warn-soft); color: var(--warn); border-radius: 10px; padding: 10px 12px; margin: 12px 0; font-size: .92rem; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 14px; margin: 0 0 12px; }
+  .card h3 { font-size: 1.05rem; margin: 0 0 4px; overflow-wrap: anywhere; }
+  .meta { color: var(--muted); font-size: .85rem; margin: 0 0 8px; }
+  details { margin: 6px 0 10px; font-size: .92rem; }
+  summary { cursor: pointer; color: var(--muted); }
+  details p { white-space: pre-wrap; overflow-wrap: anywhere; margin: 6px 0 0; }
+  .suggest { background: var(--accent-soft); border-radius: 10px; padding: 8px 10px; margin: 8px 0; font-size: .92rem; overflow-wrap: anywhere; }
+  .suggest b { color: var(--accent); }
+  .choices { display: grid; gap: 8px; margin: 10px 0 8px; }
+  .row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+  .row.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  button { font: inherit; min-height: 46px; border-radius: 11px; border: 1px solid var(--line); background: var(--card); color: var(--ink); padding: 8px 10px; text-align: left; cursor: pointer; overflow-wrap: anywhere; }
+  .row button { text-align: center; }
+  button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+  button.tag::after { content: " · suggested"; font-weight: 400; opacity: .85; }
+  button.chosen { outline: 3px solid var(--sent); outline-offset: 1px; }
+  button:disabled { opacity: .55; cursor: default; }
+  input[type="text"] { width: 100%; font: inherit; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); }
+  .sent { background: var(--sent-soft); color: var(--sent); border-radius: 10px; padding: 8px 10px; margin-top: 8px; font-size: .9rem; overflow-wrap: anywhere; }
+  .empty { color: var(--muted); }
+  a { color: var(--accent); overflow-wrap: anywhere; }
+</style>
+<main>
+  <h1>Tap desk</h1>
+  <p class="lede" id="lede">Loading cards…</p>
+  <div id="status"></div>
+  <section id="merges"></section>
+  <section id="decisions"></section>
+  <section id="kept"></section>
+  <section id="notshown"></section>
+</main>
+<script id="fm-tap-cards" type="application/json">__FM_TAP_CARDS__</script>
+<script>
+(() => {
+  let data = { cards: [], not_shown: [], default_after_days: 7 };
+  try { data = JSON.parse(document.getElementById("fm-tap-cards").textContent); } catch (error) { /* rendered as empty */ }
+  const cards = Array.isArray(data.cards) ? data.cards : [];
+  const taps = new Map();
+  let db = null;
+
+  const el = (tag, attrs = {}, text) => {
+    const node = document.createElement(tag);
+    for (const [key, value] of Object.entries(attrs)) {
+      if (key === "class") node.className = value;
+      else node.setAttribute(key, value);
+    }
+    if (text !== undefined) node.textContent = text;
+    return node;
+  };
+
+  const status = (text) => {
+    const box = document.getElementById("status");
+    box.replaceChildren();
+    if (text) box.append(el("div", { class: "notice" }, text));
+  };
+
+  const ago = (days) => days === null || days === undefined ? "" : days === 0 ? "today" : days === 1 ? "1 day" : `${days} days`;
+
+  function sentLabel(card, tap) {
+    if (tap.choice === "option") return `Sent: ${tap.option}`;
+    return { keep: "Sent: keep for later", drop: "Sent: drop it", "you-decide": "Sent: you decide", merge: "Sent: merge", "not-yet": "Sent: not yet" }[tap.choice] || "Sent";
+  }
+
+  async function sendTap(card, choice, option, reasonInput, buttons, sentBox) {
+    if (!db) { status("Taps cannot be saved from this view. Open the page on claude.ai as its owner."); return; }
+    const tap = {
+      card: card.key, kind: card.kind, id: card.id, identity: card.identity,
+      choice, option: option || "", pr: card.kind === "merge" ? card.pr_url : "", reason: reasonInput.value.trim().slice(0, 280),
+      tapped_at: new Date().toISOString(),
+    };
+    buttons.forEach((button) => { button.disabled = true; });
+    try {
+      await db.doc(`taps/${card.key}`).set(tap);
+      taps.set(card.key, tap);
+      buttons.forEach((button) => { button.classList.toggle("chosen", button.dataset.choice === choice && (button.dataset.option || "") === (option || "")); });
+      sentBox.textContent = `${sentLabel(card, tap)}${tap.reason ? ` · “${tap.reason}”` : ""}. Tap another choice to change it.`;
+      sentBox.hidden = false;
+    } catch (error) {
+      status(`That tap was not saved (${error && error.code ? error.code : "error"}). Try again.`);
+    } finally {
+      buttons.forEach((button) => { button.disabled = false; });
+    }
+  }
+
+  function renderCard(card) {
+    const box = el("article", { class: "card" });
+    box.append(el("h3", {}, card.title));
+    const bits = [];
+    if (card.repo) bits.push(card.repo);
+    if (card.kind === "decision" && card.age_days !== null && card.age_days !== undefined) bits.push(`waiting ${ago(card.age_days)}`);
+    if (card.kind === "decision" && card.deferred_until) bits.push(`deferred until ${card.deferred_until}`);
+    if (card.kind === "merge") bits.push("ready to merge");
+    box.append(el("p", { class: "meta" }, bits.join(" · ")));
+    if (card.kind === "merge" && card.pr_url) {
+      const link = el("a", { href: card.pr_url, target: "_blank", rel: "noopener" }, card.pr_url);
+      const line = el("p", { class: "meta" });
+      line.append(link);
+      box.append(line);
+      if (card.opened_by_other) box.append(el("div", { class: "notice" }, `Opened by ${card.opened_by}, not by your account. Merge here is your yes to land their change.`));
+      if (Array.isArray(card.rules_files) && card.rules_files.length > 0) box.append(el("div", { class: "notice" }, `Changes Starship's own rules: ${card.rules_files.join(", ")}. Merge here is your yes to that change.`));
+      if (card.held_for_captain) box.append(el("div", { class: "notice" }, "This work also has an open question for you; the merge waits until that is answered."));
+    }
+    if (card.reason) {
+      const details = el("details");
+      details.append(el("summary", {}, "Why it is waiting"), el("p", {}, card.reason));
+      box.append(details);
+    }
+    if (card.kind === "decision" && card.recommendation) {
+      const suggest = el("div", { class: "suggest" });
+      const said = /[.!?]$/.test(card.recommendation.trim()) ? card.recommendation.trim() : `${card.recommendation.trim()}.`;
+      suggest.append(el("b", {}, "Firstmate suggests: "), document.createTextNode(said));
+      if (typeof card.default_in_days === "number") {
+        const left = card.default_in_days;
+        suggest.append(document.createTextNode(left > 0 ? ` Easy to undo, so it applies by itself in ${ago(left)} unless you choose.` : " Easy to undo, so it applies by itself soon unless you choose."));
+      }
+      box.append(suggest);
+    }
+    const reasonInput = el("input", { type: "text", maxlength: "280", placeholder: "Why? (optional, saved so this does not come back)" });
+    const sentBox = el("div", { class: "sent" });
+    sentBox.hidden = true;
+    const buttons = [];
+    const choices = el("div", { class: "choices" });
+    const button = (label, choice, option, cls) => {
+      const b = el("button", { type: "button", class: cls || "" }, label);
+      b.dataset.choice = choice;
+      if (option) b.dataset.option = option;
+      b.addEventListener("click", () => sendTap(card, choice, option, reasonInput, buttons, sentBox));
+      buttons.push(b);
+      return b;
+    };
+    if (card.kind === "merge") {
+      const row = el("div", { class: "row two" });
+      row.append(button("Merge", "merge", "", "primary"), button("Not yet", "not-yet", ""));
+      choices.append(row);
+    } else {
+      for (const option of card.options || []) {
+        const suggested = option === card.recommended_option;
+        choices.append(button(option, "option", option, suggested ? "primary tag" : ""));
+      }
+      const row = el("div", { class: "row" });
+      row.append(button("Keep", "keep", ""), button("Drop", "drop", ""), button("You decide", "you-decide", ""));
+      choices.append(row);
+    }
+    box.append(reasonInput, choices, sentBox);
+    box.dataset.key = card.key;
+    box.refresh = () => {
+      const tap = taps.get(card.key);
+      if (!tap || tap.identity !== card.identity) return;
+      buttons.forEach((b) => { b.classList.toggle("chosen", b.dataset.choice === tap.choice && (b.dataset.option || "") === (tap.option || "")); });
+      if (tap.reason && !reasonInput.value) reasonInput.value = tap.reason;
+      sentBox.textContent = `${sentLabel(card, tap)}. Tap another choice to change it.`;
+      sentBox.hidden = false;
+    };
+    return box;
+  }
+
+  function section(id, title, list, collapsed) {
+    const host = document.getElementById(id);
+    host.replaceChildren();
+    if (list.length === 0) return [];
+    const rendered = list.map(renderCard);
+    if (collapsed) {
+      const details = el("details");
+      details.append(el("summary", {}, `${title} (${list.length})`), ...rendered);
+      host.append(details);
+    } else {
+      host.append(el("h2", {}, `${title} (${list.length})`), ...rendered);
+    }
+    return rendered;
+  }
+
+  const merges = cards.filter((card) => card.kind === "merge" && !card.not_yet);
+  const decisions = cards.filter((card) => card.kind === "decision" && !card.kept);
+  const later = cards.filter((card) => card.not_yet || card.kept);
+  const rendered = [
+    ...section("merges", "Ready to merge", merges, false),
+    ...section("decisions", "Waiting on you", decisions, false),
+    ...section("kept", "Kept for later", later, true),
+  ];
+  const notShown = Array.isArray(data.not_shown) ? data.not_shown : [];
+  if (notShown.length > 0) {
+    const host = document.getElementById("notshown");
+    const details = el("details");
+    details.append(el("summary", {}, `Not on this page (${notShown.length})`));
+    for (const item of notShown) details.append(el("p", {}, `${item.id}: ${item.reason}`));
+    host.append(details);
+  }
+  const when = data.generated_at ? new Date(data.generated_at).toLocaleString() : "";
+  document.getElementById("lede").textContent = cards.length === 0
+    ? "Nothing is waiting on you."
+    : `${merges.length + decisions.length} waiting${when ? ` · cards from ${when}` : ""}. One tap answers a card; a reason is optional.`;
+
+  (async () => {
+    const timer = setTimeout(() => status("Your earlier taps cannot be read yet; new taps may still save."), 10000);
+    try {
+      db = window.claude && window.claude.use ? await window.claude.use("db") : null;
+    } catch (error) {
+      db = null;
+    }
+    if (!db) {
+      clearTimeout(timer);
+      if (cards.length > 0) status("Taps cannot be saved from this view. Open the page on claude.ai as its owner.");
+      return;
+    }
+    try {
+      const snap = await db.collection("taps").limit(1000).get();
+      clearTimeout(timer);
+      status("");
+      for (const doc of snap.docs) {
+        const tap = doc.data();
+        if (tap && tap.card) taps.set(tap.card, tap);
+      }
+      rendered.forEach((box) => box.refresh && box.refresh());
+    } catch (error) {
+      clearTimeout(timer);
+      status("Your earlier taps could not be read; new taps may still save.");
+    }
+  })();
+})();
+</script>
