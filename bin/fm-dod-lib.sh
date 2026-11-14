@@ -868,13 +868,15 @@ fm_dod_should_gate_ship_done() {  # <kind> <mode> <line>
 # the ready report fm_dod_should_gate_ship_done gates, so the work is not
 # validated. stdout then holds the one-line reason a current-state reader
 # reports instead of done: a PR whose checks are not confirmed green when the
-# note names a PR, else the handoff; bin/fm-crew-state.sh is the caller. Only a recorded mode=no-mistakes counts: a record with no mode
-# predates the handoff contract, so its done keeps its old reading.
+# note is itself a `PR <url>` report, else the handoff, even when its summary
+# mentions a PR; bin/fm-crew-state.sh is the caller. Only a recorded
+# mode=no-mistakes counts: a record with no mode predates the handoff
+# contract, so its done keeps its old reading.
 fm_dod_nm_handoff_done() {  # <kind> <mode> <line>
   [ "$1" = ship ] && [ "$2" = no-mistakes ] || return 1
   [ "$(status_line_verb "$3")" = "done" ] || return 1
   ! fm_dod_should_gate_ship_done "$1" "$2" "$3" || return 1
-  if fm_dod_note_has_pr_reference "$(status_line_note "$3")"; then
+  if fm_dod_pr_url_from_done_note "$(status_line_note "$3")" >/dev/null; then
     printf '%s\n' "PR opened, checks not confirmed green: check the PR's CI before landing"
     return 0
   fi

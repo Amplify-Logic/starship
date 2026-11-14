@@ -2607,7 +2607,8 @@ test_no_mistakes_handoff_done_reads_as_handoff_not_done() {
   FM_FAKE_AXI_STATUS=""
   FM_FAKE_RUNS_LIST=""
   FM_FAKE_BUSY=0
-  for note in 'handoff, ready for no-mistakes - parser fixed' 'committed 1a2b3c4 on fm/preval'; do
+  for note in 'handoff, ready for no-mistakes - parser fixed' 'committed 1a2b3c4 on fm/preval' \
+    'handoff, ready for no-mistakes - follow-up to PR #34, parser fixed'; do
     fm_write_meta "$d/state/preval.meta" \
       "window=fm:fm-preval" "worktree=$d/wt" "project=$d/wt" \
       "kind=ship" "mode=no-mistakes" "harness=claude"
@@ -2618,6 +2619,7 @@ test_no_mistakes_handoff_done_reads_as_handoff_not_done() {
       "a no-mistakes done without a green PR did not read as a handoff ($note)"
     assert_contains "$out" "$note" "the handoff reading dropped the worker's note ($note)"
     assert_not_contains "$out" "state: done" "a no-mistakes handoff read as done ($note)"
+    assert_not_contains "$out" "PR opened" "a no-mistakes handoff was read as a PR report ($note)"
   done
 
   # A PR without green checks is still not done, but it is past the trigger, so

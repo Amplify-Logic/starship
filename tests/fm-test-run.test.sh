@@ -16,6 +16,9 @@ RUNNER="$ROOT/bin/fm-test-run.sh"
 # labels when a developer's shell exports the key; the cases that exercise that
 # path supply their own home, key, and endpoint or recorded answer.
 unset TYPESAFE_API_KEY FM_TEST_FAILURE_CAUSE_RESPONSE FM_TEST_FAILURE_CAUSE_ENDPOINT
+# Under GitHub Actions every step names a real run summary page; fixture lanes
+# must never reach it, so only a case that names its own summary file sees one.
+unset GITHUB_STEP_SUMMARY
 
 assert_present "$RUNNER" "bin/fm-test-run.sh is missing"
 [ -x "$RUNNER" ] || fail "bin/fm-test-run.sh must be executable"
@@ -2231,7 +2234,7 @@ test_aggregate_reports_each_lane_against_its_limit() {
   lane_json "$tmp/near.json" "family=real-herdr-gated" 1100000 1200000
   lane_json "$tmp/under.json" "lane=portable-serial-3of17" 1529999 1800000
   mkdir "$tmp/cwd" "$tmp/tmpdir"
-  out=$(cd "$tmp/cwd" && env -u GITHUB_ACTIONS -u GITHUB_STEP_SUMMARY TMPDIR="$tmp/tmpdir" "$RUNNER" --aggregate-json "$tmp/out.json" \
+  out=$(cd "$tmp/cwd" && env -u GITHUB_ACTIONS TMPDIR="$tmp/tmpdir" "$RUNNER" --aggregate-json "$tmp/out.json" \
     "$tmp/fast.json" "$tmp/edge.json" "$tmp/near.json" "$tmp/under.json")
   [ "$(ls -A "$tmp")" = "cwd
 edge.json
