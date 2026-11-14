@@ -2230,8 +2230,17 @@ test_aggregate_reports_each_lane_against_its_limit() {
   lane_json "$tmp/edge.json" "lane=portable-serial-2of17" 1530000 1800000
   lane_json "$tmp/near.json" "family=real-herdr-gated" 1100000 1200000
   lane_json "$tmp/under.json" "lane=portable-serial-3of17" 1529999 1800000
-  out=$(env -u GITHUB_ACTIONS -u GITHUB_STEP_SUMMARY "$RUNNER" --aggregate-json "$tmp/out.json" \
+  mkdir "$tmp/cwd" "$tmp/tmpdir"
+  out=$(cd "$tmp/cwd" && env -u GITHUB_ACTIONS -u GITHUB_STEP_SUMMARY TMPDIR="$tmp/tmpdir" "$RUNNER" --aggregate-json "$tmp/out.json" \
     "$tmp/fast.json" "$tmp/edge.json" "$tmp/near.json" "$tmp/under.json")
+  [ "$(ls -A "$tmp")" = "cwd
+edge.json
+fast.json
+near.json
+out.json
+tmpdir
+under.json" ] && [ -z "$(find "$tmp/cwd" "$tmp/tmpdir" -mindepth 1)" ] \
+    || fail "a run summary was written with GITHUB_STEP_SUMMARY unset: $(ls -AR "$tmp")"
   assert_contains "$out" "FM_TEST_LANE lane=family=real-herdr-gated duration_ms=1100000 limit_ms=1200000 used_percent=91 near_limit=true" \
     "a lane past 85 percent of its limit was not flagged"
   assert_contains "$out" "FM_TEST_LANE lane=portable-serial-2of17 duration_ms=1530000 limit_ms=1800000 used_percent=85 near_limit=true" \

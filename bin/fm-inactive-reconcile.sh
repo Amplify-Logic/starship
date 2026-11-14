@@ -530,14 +530,10 @@ report_child_ledger_locked() { # <id> <meta>
   # child reports its PR.
   if [ "$state" = "done" ] && [ ! -f "$(record_path "$fingerprint" reported)" ] \
     && [ ! -f "$(record_path "$fingerprint" pending)" ] \
-    && fm_dod_nm_handoff_done "$(meta_field "$meta" kind)" "$(meta_field "$meta" mode)" "$last" >/dev/null; then
-    return 0
-  fi
-  if [ "$state" = "done" ] && [ ! -f "$(record_path "$fingerprint" reported)" ] \
-    && [ ! -f "$(record_path "$fingerprint" pending)" ] \
-    && ! fm_dod_accept_ship_done "$(meta_field "$meta" kind)" "$(meta_field "$meta" mode)" \
-      "$(meta_field "$meta" worktree)" "$(meta_field "$meta" project)" "$last" \
-      "$STATE" "$id" "$meta" meta-locked >/dev/null; then
+    && { fm_dod_nm_handoff_done "$(meta_field "$meta" kind)" "$(meta_field "$meta" mode)" "$last" >/dev/null \
+      || ! fm_dod_accept_ship_done "$(meta_field "$meta" kind)" "$(meta_field "$meta" mode)" \
+        "$(meta_field "$meta" worktree)" "$(meta_field "$meta" project)" "$last" \
+        "$STATE" "$id" "$meta" meta-locked >/dev/null; }; then
     return 0
   fi
   outcome_key="child-outcome-$id-$state-${fingerprint:0:8}"

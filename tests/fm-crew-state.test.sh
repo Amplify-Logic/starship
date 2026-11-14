@@ -2607,7 +2607,7 @@ test_no_mistakes_handoff_done_reads_as_handoff_not_done() {
   FM_FAKE_AXI_STATUS=""
   FM_FAKE_RUNS_LIST=""
   FM_FAKE_BUSY=0
-  for note in 'handoff, ready for no-mistakes - parser fixed' 'committed 1a2b3c4 on fm/preval' 'PR https://github.com/o/r/pull/7'; do
+  for note in 'handoff, ready for no-mistakes - parser fixed' 'committed 1a2b3c4 on fm/preval'; do
     fm_write_meta "$d/state/preval.meta" \
       "window=fm:fm-preval" "worktree=$d/wt" "project=$d/wt" \
       "kind=ship" "mode=no-mistakes" "harness=claude"
@@ -2619,6 +2619,18 @@ test_no_mistakes_handoff_done_reads_as_handoff_not_done() {
     assert_contains "$out" "$note" "the handoff reading dropped the worker's note ($note)"
     assert_not_contains "$out" "state: done" "a no-mistakes handoff read as done ($note)"
   done
+
+  # A PR without green checks is still not done, but it is past the trigger, so
+  # it says to check the PR's CI, not that there is no PR.
+  note='PR https://github.com/o/r/pull/7'
+  printf 'done: %s\n' "$note" > "$d/state/preval.status"
+  arm_idle_record "$d/state" preval
+  out=$(run_crew_state "$d" preval)
+  assert_contains "$out" "state: blocked · source: status-log · PR opened, checks not confirmed green: check the PR's CI before landing" \
+    "a no-mistakes PR without green checks did not say to check its CI"
+  assert_contains "$out" "$note" "the PR reading dropped the worker's note"
+  assert_not_contains "$out" "no PR yet" "a no-mistakes done naming a PR said there was no PR yet"
+  assert_not_contains "$out" "state: done" "a no-mistakes PR without green checks read as done"
 
   # The same handoff line in a mode whose done is the delivery itself is not a
   # handoff: direct-PR keeps the named-head gate's own reading.
