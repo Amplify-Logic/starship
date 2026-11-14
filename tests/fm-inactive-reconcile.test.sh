@@ -383,6 +383,29 @@ test_local_secondmate_delivers_terminal_ledger_line() {
   pass "secondmate delivers a child's terminal ledger line once, on the next poll, from the ledger alone"
 }
 
+# A no-mistakes child's handoff done is committed, unvalidated work with no PR,
+# not an outcome: the ledger path owes the parent nothing for it, and the
+# child's later green-PR report is still delivered exactly once.
+test_secondmate_ledger_skips_a_no_mistakes_handoff() {
+  local key
+  make_world ledger-handoff; bind_secondmate local
+  write_child "$MATE" child 'done: handoff, ready for no-mistakes - parser fixed'
+  FM_FAKE_CREW_STATE='unknown' run_reconcile "$MATE"
+  ! grep -q 'child-outcome-child' "$MAIN/state/mate.status" 2>/dev/null \
+    || fail "a no-mistakes handoff was reported upstream as a finished child: $(cat "$MAIN/state/mate.status")"
+  [ "$(outcome_count "$MATE" reported)" = 0 ] || fail "a no-mistakes handoff minted an outcome receipt"
+  printf 'done: PR https://example.test/owner/repo/pull/1 checks green\n' >> "$MATE/state/child.status"
+  age "$MATE/state/child.status"
+  FM_FAKE_CREW_STATE='unknown' run_reconcile "$MATE"
+  key=$(reported_outcome_key "$MATE" child 'done') || fail "the green-PR report after a handoff was not delivered"
+  sed -E 's/ \[at=[0-9]+\]//' "$MAIN/state/mate.status" \
+    | grep -Fq "done [key=$key]: child child done: PR https://example.test/owner/repo/pull/1 checks green" \
+    || fail "the green-PR report after a handoff was lost: $(cat "$MAIN/state/mate.status")"
+  [ "$(grep -c 'child-outcome-child-done' "$MAIN/state/mate.status")" = 1 ] \
+    || fail "the child was reported done more than once"
+  pass "secondmate ledger owes nothing for a no-mistakes handoff and still delivers the green PR once"
+}
+
 # A terminal record written as a multi-line block belongs to the ledger path
 # whether the block lands before or during the state read: it is delivered once,
 # under the ledger's own outcome key, and the inactive fallback stays out of it.
@@ -1429,6 +1452,7 @@ test_unpushed_ci_ready_done_is_not_published
 test_local_done_head_is_pinned_before_parent_delivery
 test_delivered_ledger_done_skips_git_gate
 test_local_secondmate_delivers_terminal_ledger_line
+test_secondmate_ledger_skips_a_no_mistakes_handoff
 test_secondmate_multiline_terminal_outcome_is_delivered_once
 test_secondmate_unterminated_prose_reports_run_outcome
 test_inactive_receipt_ignores_later_status_prose

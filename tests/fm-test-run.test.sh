@@ -2230,7 +2230,7 @@ test_aggregate_reports_each_lane_against_its_limit() {
   lane_json "$tmp/edge.json" "lane=portable-serial-2of17" 1530000 1800000
   lane_json "$tmp/near.json" "family=real-herdr-gated" 1100000 1200000
   lane_json "$tmp/under.json" "lane=portable-serial-3of17" 1529999 1800000
-  out=$(env -u GITHUB_ACTIONS "$RUNNER" --aggregate-json "$tmp/out.json" \
+  out=$(env -u GITHUB_ACTIONS -u GITHUB_STEP_SUMMARY "$RUNNER" --aggregate-json "$tmp/out.json" \
     "$tmp/fast.json" "$tmp/edge.json" "$tmp/near.json" "$tmp/under.json")
   assert_contains "$out" "FM_TEST_LANE lane=family=real-herdr-gated duration_ms=1100000 limit_ms=1200000 used_percent=91 near_limit=true" \
     "a lane past 85 percent of its limit was not flagged"
@@ -2256,6 +2256,20 @@ assert lanes["portable-parallel-1"]["limit_ms"]==1800000 and lanes["portable-par
     "a near-limit lane did not raise a GitHub annotation under GitHub Actions"
   [ "$(printf '%s\n' "$out" | grep -c '^::warning')" = 1 ] \
     || fail "a lane inside its limit raised a GitHub annotation: $out"
+
+  # The run's summary page gets the same lanes as a table, appended after
+  # whatever an earlier step wrote there.
+  printf 'earlier step\n' > "$tmp/summary.md"
+  GITHUB_STEP_SUMMARY="$tmp/summary.md" "$RUNNER" --aggregate-json "$tmp/out.json" \
+    "$tmp/fast.json" "$tmp/near.json" >/dev/null
+  [ "$(cat "$tmp/summary.md")" = "earlier step
+### Test time per lane
+
+| Lane | Time | Limit | Used | Near limit |
+|---|---|---|---|---|
+| family=real-herdr-gated | 18m20s | 20m00s | 91% | yes |
+| portable-parallel-1 | 15m00s | 30m00s | 50% | no |" ] \
+    || fail "the run summary table was wrong: $(cat "$tmp/summary.md")"
   rm -rf "$tmp"
   pass "aggregate-json reports each lane's time against its limit and flags lanes within 15 percent"
 }

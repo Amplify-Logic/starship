@@ -535,8 +535,9 @@ jobs:
 
   # Aggregate per-lane timing into one summary artifact for critical-path review.
   # Each lane records its own tripwire as --max-wall-ms, so this step prints how
-  # long every lane took against its limit and warns on any lane within 15
-  # percent of it (tests/fm-ci-workflow.test.sh keeps the two values equal).
+  # long every lane took against its limit, in its log and on the run summary
+  # page, and warns on any lane within 15 percent of it
+  # (tests/fm-ci-workflow.test.sh keeps the two values equal).
   tests-timing-aggregate:
     name: ${{ (github.event.action == 'labeled' && github.event.label.name != 'full-ci') && 'Not run for label - ' || '' }}Behavior timing aggregate
     runs-on: ubuntu-24.04

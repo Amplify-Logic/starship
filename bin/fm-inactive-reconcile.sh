@@ -17,7 +17,8 @@
 # carrying the child's recorded PR, delivery mode, merge posture, and scout
 # report pointer, without consulting fm-crew-state.sh. A ship `done:` is
 # published only when bin/fm-dod-lib.sh accepts the named head, so an
-# unpushed copy is not reported upstream as ready. The cadence path uses
+# unpushed copy is not reported upstream as ready, and a no-mistakes handoff
+# `done:` (fm_dod_nm_handoff_done) is not published at all. The cadence path uses
 # fm-crew-state.sh, which applies the same gate: a no-mistakes
 # pre-validation handoff `done:` reads blocked as a handoff waiting for the
 # pipeline trigger, and a CI-ready or direct-PR/local-only done whose head
@@ -525,6 +526,13 @@ report_child_ledger_locked() { # <id> <meta>
   pr=$(pr_for_task "$meta" "$last")
   incarnation=$(meta_incarnation "$meta")
   fingerprint=$(sha256_text "$incarnation|$id|$state|ledger|$last")
+  # A no-mistakes handoff is not an outcome: nothing is owed upstream until the
+  # child reports its PR.
+  if [ "$state" = "done" ] && [ ! -f "$(record_path "$fingerprint" reported)" ] \
+    && [ ! -f "$(record_path "$fingerprint" pending)" ] \
+    && fm_dod_nm_handoff_done "$(meta_field "$meta" kind)" "$(meta_field "$meta" mode)" "$last" >/dev/null; then
+    return 0
+  fi
   if [ "$state" = "done" ] && [ ! -f "$(record_path "$fingerprint" reported)" ] \
     && [ ! -f "$(record_path "$fingerprint" pending)" ] \
     && ! fm_dod_accept_ship_done "$(meta_field "$meta" kind)" "$(meta_field "$meta" mode)" \

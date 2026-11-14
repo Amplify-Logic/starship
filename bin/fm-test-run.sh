@@ -33,6 +33,9 @@
 #   A lane's limit is the --max-wall-ms its run recorded in its timing JSON.
 #   near_limit is true when the lane used 85 percent or more of that limit;
 #   under GitHub Actions each such lane also prints a ::warning:: annotation.
+#   When GITHUB_STEP_SUMMARY names a file, the same lanes in the same order are
+#   appended to it as a Markdown table (lane, time, limit, percent used, near
+#   limit), so the run's summary page shows them without opening a job log.
 #
 # Options:
 #   --json <path>   write a deterministic timing artifact after the run. Each
@@ -1576,6 +1579,12 @@ out.parent.mkdir(parents=True, exist_ok=True)
 out.write_text(json.dumps(agg, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 print(f"FM_TEST_AGGREGATE lanes={len(lanes)} total={total} failed={failed} skipped_gate={skipped} critical_path_duration_ms={wall_ms}")
 github = os.environ.get("GITHUB_ACTIONS") == "true"
+step_summary = os.environ.get("GITHUB_STEP_SUMMARY")
+rows = ["| Lane | Time | Limit | Used | Near limit |", "|---|---|---|---|---|"]
+
+def clock(ms):
+    return f"{ms // 60000}m{ms // 1000 % 60:02d}s"
+
 for lane in sorted(lanes, key=lambda l: (-(l["used_percent"] if l["used_percent"] is not None else -1),
                                          -int(l["summary"].get("duration_ms") or 0), l["name"])):
     duration_ms = int(lane["summary"].get("duration_ms") or 0)
@@ -1585,6 +1594,14 @@ for lane in sorted(lanes, key=lambda l: (-(l["used_percent"] if l["used_percent"
     print(f"FM_TEST_LANE lane={lane['name']} duration_ms={duration_ms} limit_ms={limit} used_percent={used} near_limit={near}")
     if lane["near_limit"] and github:
         print(f"::warning title=Slow test lane::{lane['name']} took {duration_ms // 1000}s, {used} percent of its {lane['limit_ms'] // 1000}s limit")
+    rows.append("| {} | {} | {} | {} | {} |".format(
+        lane["name"], clock(duration_ms),
+        clock(lane["limit_ms"]) if lane["limit_ms"] else "none",
+        f"{used}%" if lane["used_percent"] is not None else "none",
+        "yes" if lane["near_limit"] else "no"))
+if step_summary:
+    with open(step_summary, "a", encoding="utf-8") as fh:
+        fh.write("### Test time per lane\n\n" + "\n".join(rows) + "\n")
 PY
 }
 
