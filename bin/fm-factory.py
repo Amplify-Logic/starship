@@ -155,7 +155,8 @@ def iso(epoch: Optional[int]) -> Optional[str]:
 def parse_iso(text: Optional[str]) -> Optional[int]:
     if not text:
         return None
-    text = text.strip()
+    # toISOString() stamps (the tap shapes' held_since) carry milliseconds.
+    text = re.sub(r"\.\d+Z$", "Z", text.strip())
     for fmt in ("%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%MZ", "%Y-%m-%d"):
         try:
             import calendar

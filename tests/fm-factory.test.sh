@@ -447,6 +447,15 @@ test_held_decisions_come_through_a_non_markdown_adapter() {
     "garden-chart:question shop-provider:question garden-share:finished work" \
     "the adapter's held decisions are not under NEEDS YOU"
   assert_equals "$(q .counts.need_you)" "3" "the adapter's held decisions are not counted"
+  # The adapter backlog may carry no hold time; the tap shapes' held_since,
+  # written with milliseconds, still says how long the decision has waited.
+  jq '(.records[] | select(.id == "shop-provider")) |= del(.hold_set)' "$FM_TEST_AXI_BACKLOG" \
+    > "$HOME_FIX/adapter.next" && mv "$HOME_FIX/adapter.next" "$FM_TEST_AXI_BACKLOG"
+  jq '(.decisions[] | select(.id == "shop-provider")).held_since = "2026-11-13T23:00:00.000Z"' "$HOME_FIX/shapes.json" \
+    > "$HOME_FIX/shapes.next" && mv "$HOME_FIX/shapes.next" "$HOME_FIX/shapes.json"
+  take_record
+  assert_equals "$(q '.needs_you[] | select(.id == "shop-provider") | .since')" "1794610800" \
+    "a held_since with milliseconds lost the decision's waiting time"
   # Ready work held there until a date reads on hold, exactly as on a markdown home.
   local held
   held=$(jq '(.records[] | select(.id == "garden-share")) += {hold_kind: "captain", hold_reason: "Merge after the release.",
