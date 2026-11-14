@@ -156,7 +156,7 @@ Its hint-coverage and modeled-budget checks are described in [Portable serial CI
 
 ## Timing artifacts
 
-Portable shards, each portable serial shard, and the Herdr lane upload runner-generated timing JSON.
+Portable shards, each portable serial shard, the Herdr lane, and the hc lane upload runner-generated timing JSON.
 `bin/fm-test-run.sh --aggregate-json` creates the combined summary artifact.
 Each lane records its own CI tripwire as its `--max-wall-ms` limit, and the aggregate step lists every lane's duration against that limit in its log and as a table on the run's summary page, flagging any lane within 15 percent of it with a warning on the pull request, so a lane drifting toward its tripwire is visible on every PR before it fails one.
 `.github/workflows/ci.yml` owns the exact artifact names and aggregation wiring.
