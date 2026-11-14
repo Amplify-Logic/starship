@@ -96,12 +96,12 @@ The record's schema is `fm-factory.v1`:
 | --- | --- |
 | `as_of`, `since` | When the record was built and the start of SINCE YOU LAST LOOKED, as UTC times and epochs. |
 | `counts`, `count_line` | Running jobs, items that need you, and idle factories. |
-| `needs_you[]` | Each question or finished work: its `id`, `factory`, `kind`, `ask`, `why`, `options[]` (`key`, `label`, `suggested`), `suggested_by`, `holds_up[]`, `since`, `pr`, and `for`, the person it waits on. |
-| `factories[]` | Each factory: `id`, `name`, `about`, `projects`, `steered_by`, `state`, `idle_since`, `crew`, `jobs[]`, `next`, `rules`, `learned`, and `talk`. |
-| `factories[].jobs[]` | Each job: `id`, `title`, `state`, `step`, `started`, `doing` and where it came from, `last_sign_of_life` and where it came from, `quiet`, `until`, and `pr`. |
+| `needs_you[]` | Each question or finished work: its `id`, `factory`, `kind`, `title`, `ask`, `why`, `options[]` (`key`, `label`, `suggested`), `suggested_by`, `holds_up[]`, `since`, `pr`, `for`, the person it waits on, and a worker question's decision `key`. |
+| `factories[]` | Each factory: `id`, `name`, `about`, `projects`, `steered_by`, `state`, `idle_since`, `crew`, `needs` (the ids of its items in `needs_you`), `jobs[]`, `next`, `rules`, `learned`, and `talk`. |
+| `factories[].jobs[]` | Each job: `id`, `title`, `kind`, `state`, `step`, `started`, `doing` and where it came from, `last_sign_of_life` and where it came from, `quiet`, `until`, and `pr`. |
 | `feed[]` | Each event: `at` (or a `date` when only the day is known), `actor`, `factory`, `word`, and `text`. |
 
-Every state is a word: a job is `running`, `waiting on you`, `ready for you`, `stuck`, `waiting`, `stopped`, `no worker`, `no reading`, `with Starship`, `finished`, `next`, `later`, `on hold`, or `waits on other work`; a factory is `needs you`, `at work`, or `idle`.
+Every state is a word: a job is `running`, `waiting on you`, `ready for you`, `stuck`, `waiting`, `stopped`, `no worker`, `no reading`, `with Starship`, `finished`, `next`, `later`, `on hold`, `on hold until <date>`, or `waits on other work`; a factory is `needs you`, `at work`, or `idle`.
 
 ## Where each part comes from
 
