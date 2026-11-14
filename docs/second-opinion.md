@@ -16,7 +16,7 @@ The same wrapper's `--ship-verdict` mode is the ship-or-fix tie-breaker when aut
 ## Which reviewer
 
 The default reviewer is `fable` (Fable 5.2 at high effort), which draws the Fable slice of the Claude week.
-High is the recommended everyday Fable level; max effort scored worse in the comparison behind this choice.
+High is chosen because Anthropic's model guidance reports Fable 5.2 at high effort beating Opus 5.5 at max, while max effort tends to overthink.
 `grok` (Grok 4.7 at xhigh through the Cursor CLI) is the different-vendor check run beside it on high-stakes calls, and draws Cursor's included usage pool; the auto-fire skill owns when to add that pass.
 A side-by-side comparison on real plans and PRs found that neither reviewer alone matched the earlier Codex reviewer's findings, and the two together came closest.
 `sol` (Codex through Pi) stays registered but is no longer the default, and stops working once the Codex subscription lapses.

@@ -728,7 +728,7 @@ When the check refuses something the job needs, do not retry it or reach the sam
 # that sees a better approach suggests it through the decision channel; it never
 # builds the alternative on its own, so scope stays with firstmate.
 # shellcheck disable=SC2016 # Literal backticks are brief text, not expansions.
-PUSH_BACK_LINE='If you think the approach in these instructions is a good idea, do it. Otherwise, suggest something better before you act on it: append `needs-decision [at=<epoch>]: {what you would do instead and why}` and stop; never build your alternative unless firstmate agrees.'
+PUSH_BACK_LINE='If you think this is a good idea, do it. Otherwise, suggest something else: append `needs-decision [at=<epoch>]: {what you would do instead and why}` and wait; never build your alternative unless firstmate agrees.'
 
 # One shared string keeps the ship and scout shell-path rule identical.
 IFS= read -r -d '' SHARED_NO_CD_RULE <<'EOF' || true

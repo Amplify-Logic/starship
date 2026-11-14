@@ -1337,8 +1337,8 @@ test_worker_role_scope() {
 }
 
 # Every ship and scout worker is told to push back on a weak approach: do the
-# work when it is a good idea, otherwise suggest something better through the
-# decision channel and stop, never building the alternative on its own. The
+# work when it is a good idea, otherwise suggest something else through the
+# decision channel and wait, never building the alternative on its own. The
 # line appears once per brief, identical across kinds, and not in a charter.
 test_ship_and_scout_carry_push_back_line() {
   local kind home brief line first=''
@@ -1350,11 +1350,11 @@ test_ship_and_scout_carry_push_back_line() {
       FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$kind" arbitrary-project-name --mode "$kind" >/dev/null || fail "$kind scaffold failed"
     fi
     brief="$home/data/$kind/brief.md"
-    [ "$(grep -c 'If you think the approach in these instructions is a good idea, do it. Otherwise, suggest something better' "$brief")" = 1 ] \
+    [ "$(grep -c 'If you think this is a good idea, do it. Otherwise, suggest something else' "$brief")" = 1 ] \
       || fail "$kind brief must carry the push-back line exactly once"
-    line=$(grep 'If you think the approach in these instructions is a good idea' "$brief")
+    line=$(grep 'If you think this is a good idea' "$brief")
     # shellcheck disable=SC2016 # Literal backticks and braces must remain unexpanded.
-    assert_contains "$line" '`needs-decision [at=<epoch>]: {what you would do instead and why}` and stop' \
+    assert_contains "$line" '`needs-decision [at=<epoch>]: {what you would do instead and why}` and wait' \
       "$kind push-back line must route a better idea through needs-decision"
     assert_contains "$line" 'never build your alternative unless firstmate agrees' \
       "$kind push-back line must not let the worker change scope on its own"
@@ -1363,9 +1363,9 @@ test_ship_and_scout_carry_push_back_line() {
   done
   FM_HOME="$home" FM_SECONDMATE_CHARTER='Supervise assigned work.' \
     "$ROOT/bin/fm-brief.sh" supervisor --secondmate --no-projects >/dev/null || fail "secondmate scaffold failed"
-  assert_no_grep 'If you think the approach in these instructions is a good idea' "$home/data/supervisor/brief.md" \
+  assert_no_grep 'If you think this is a good idea' "$home/data/supervisor/brief.md" \
     "secondmate charter must not receive the worker push-back line"
-  pass "fm-brief.sh: ship and scout briefs tell the worker to do a good approach or suggest a better one first"
+  pass "fm-brief.sh: ship and scout briefs tell the worker to do a good approach or suggest something else first"
 }
 
 # Both PR-ending modes must tell the worker to aim the PR at the repository the
