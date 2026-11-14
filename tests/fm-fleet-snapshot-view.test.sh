@@ -1140,8 +1140,13 @@ EOF
     "harness=claude" \
     "kind=ship" \
     "mode=no-mistakes"
+  # A no-mistakes ship is terminal-done only at its green-PR ready report, with
+  # the named head preserved outside the worker copy; any other done there is
+  # the pipeline handoff, which reads blocked.
+  fm_git_init_commit "$home/projects/terminal"
+  git -C "$home/projects/terminal" update-ref refs/remotes/origin/main HEAD
   record_claude_idle "$home/state" terminal-ship
-  printf 'done: complete\n' > "$home/state/terminal-ship.status"
+  printf 'done: PR https://github.com/acme/alpha/pull/7 checks green\n' > "$home/state/terminal-ship.status"
   out=$(PATH="$fakebin:$PATH" FM_HOME="$home" "$SNAPSHOT" --secondmate-home-summary)
   printf '%s' "$out" | jq -e '
     .valid == false
