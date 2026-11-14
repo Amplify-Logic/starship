@@ -1797,6 +1797,10 @@ def follow(home: str, task_id: str) -> None:
                 lines = got.stdout.splitlines() if got.returncode == 0 else ["(this worker's pane cannot be read)"]
             except (OSError, subprocess.SubprocessError):
                 lines = ["(this worker's pane cannot be read)"]
+            # The peek is the whole visible pane, blank rows below the text
+            # included; drop those so the tail keeps the worker's real text.
+            while lines and not lines[-1].strip():
+                lines.pop()
             head = paint(row(size.columns, [S(" " + title, "cyan", True)], [S("live copy · read only", "faint")]))
             body = [line[:size.columns] for line in lines[-(size.lines - 2):]]
             out.write("\x1b[H\x1b[2J" + head + "\r\n\r\n" + "\r\n".join(body))

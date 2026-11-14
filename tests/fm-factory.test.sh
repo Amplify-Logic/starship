@@ -514,6 +514,49 @@ test_enter_opens_the_factory_tab_with_its_live_workers() {
   pass "factory tab: enter opens the factory's tab with its page left and live workers right, once"
 }
 
+test_a_live_copy_shows_text_at_the_top_of_a_taller_pane() {
+  reset_case
+  write_registry
+  write_world
+  # The worker's pane holds its text on the first line and blank rows below,
+  # the way an inline agent early in its session looks to bin/fm-peek.sh.
+  printf '#!/usr/bin/env bash\nprintf "waiting for the captain\\n"; for i in $(seq 30); do echo; done\n' \
+    > "$BINDIR/peek$CASE"
+  chmod +x "$BINDIR/peek$CASE"
+  local screen
+  screen=$(FM_FACTORY_PEEK="$BINDIR/peek$CASE" python3 - "$FACTORY" <<'PY'
+import fcntl, os, pty, select, signal, struct, sys, termios, time
+pid, fd = pty.fork()
+if pid == 0:
+    fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack("HHHH", 12, 80, 0, 0))
+    os.execvp("python3", ["python3", sys.argv[1], "follow", "shop-search"])
+# Read until the first frame's header has drawn, then the rest of that frame.
+end, seen = time.time() + 30, b""
+while time.time() < end:
+    r, _, _ = select.select([fd], [], [], 0.1)
+    if r:
+        try:
+            seen += os.read(fd, 65536)
+        except OSError:
+            break
+    if b"live copy" in seen:
+        end = min(end, time.time() + 0.5)
+os.kill(pid, signal.SIGTERM)
+while True:   # keep reading so its last writes drain and it can exit
+    try:
+        if not os.read(fd, 65536):
+            break
+    except OSError:
+        break
+os.waitpid(pid, 0)
+sys.stdout.write(seen.decode("utf-8", "replace"))
+PY
+)
+  assert_contains "$screen" "live copy" "the copy draws"
+  assert_contains "$screen" "waiting for the captain" "the worker's text shows, not the blank rows below it"
+  pass "factory tab: a worker's live copy shows its text even when blank rows follow it"
+}
+
 test_open_tab_stops_when_herdr_does_not_name_the_tab() {
   reset_case
   write_registry
@@ -561,5 +604,6 @@ fm_test_run \
   test_the_highlight_and_open_boxes_follow_the_record \
   test_talking_never_changes_who_steers \
   test_enter_opens_the_factory_tab_with_its_live_workers \
+  test_a_live_copy_shows_text_at_the_top_of_a_taller_pane \
   test_open_tab_stops_when_herdr_does_not_name_the_tab \
   test_the_plugin_installs_opens_and_removes
