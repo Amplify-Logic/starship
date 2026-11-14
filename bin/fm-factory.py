@@ -398,7 +398,8 @@ def pane_activity(home: str, running_ids: List[str], now: int, write: bool) -> D
                 text = ""
             if text:
                 digest = hashlib.sha256(text.encode("utf-8", "replace")).hexdigest()
-                changed = old.get("changed_at") if old.get("hash") == digest else now
+                # A first sight says nothing about when the text last changed.
+                changed = now if old.get("hash") and old["hash"] != digest else old.get("changed_at")
                 fresh[task_id] = {"hash": digest, "changed_at": changed}
             elif old:
                 fresh[task_id] = old
@@ -837,7 +838,7 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
                                        "said": tidy(reply["body"], 200)})
         if at and since <= at <= now:
             feed.append({"at": at, "date": None, "actor": "you", "factory": fid, "job": None,
-                         "word": note_words.get(kind, "said"), "text": tidy(said, 120)})
+                         "word": note_words.get(kind, "said"), "text": tidy(first[0] if first else "", 120)})
         reply_at = parse_iso(reply.get("at"))
         if reply.get("body") and reply_at and since <= reply_at <= now:
             feed.append({"at": reply_at, "date": None, "actor": "Starship", "factory": fid, "job": None,

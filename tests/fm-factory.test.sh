@@ -289,6 +289,25 @@ test_a_job_with_no_sign_of_life_reads_quiet() {
   pass "factory record: a stalled job says how long it has been quiet"
 }
 
+test_a_changing_pane_is_a_sign_of_life() {
+  reset_case
+  write_registry
+  write_world quiet
+  printf '#!/usr/bin/env bash\ncat "%s"\n' "$TMP_ROOT/case$CASE/pane" > "$BINDIR/peek$CASE"
+  chmod +x "$BINDIR/peek$CASE"
+  export FM_FACTORY_PEEK="$BINDIR/peek$CASE"
+  printf 'reading the search module\n' > "$TMP_ROOT/case$CASE/pane"
+  take_record
+  assert_equals "$(q '.factories[0].jobs[0] | "\(.quiet) \(.sign_of_life_from)"')" "true a turn" \
+    "a first sight of a pane says nothing about when it last changed"
+  printf 'running the tests\n' > "$TMP_ROOT/case$CASE/pane"
+  take_record
+  assert_equals "$(q '.factories[0].jobs[0] | "\(.quiet) \(.sign_of_life_from) \(.last_sign_of_life)"')" \
+    "false pane activity $NOW" "a pane whose text changed is alive"
+  export FM_FACTORY_PEEK=
+  pass "factory record: a worker's pane text changing is a sign of life; a first sight is not"
+}
+
 test_without_a_registry_each_project_is_a_factory() {
   reset_case
   write_world
@@ -461,6 +480,7 @@ fm_test_run \
   test_the_record_words_every_state \
   test_the_plain_screen_is_the_record_as_text \
   test_a_job_with_no_sign_of_life_reads_quiet \
+  test_a_changing_pane_is_a_sign_of_life \
   test_without_a_registry_each_project_is_a_factory \
   test_work_no_factory_claims_is_still_shown \
   test_writing_keys_go_through_the_inbox_and_act_on_the_highlighted_row \
