@@ -220,6 +220,8 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-cursor-statusline.sh` | Opt-in install, status, and exact-restore uninstall of Firstmate's status line in Cursor CLI's own user config (docs/status-bar.md) |
 | `fm-fleet-status-lib.sh`  | Fold `fm-crew-state.sh` and the endpoint classifier into the status row's working/validating/paused/attention/ready/stopped counts, and on request the decisions inside ready, out of band and cached (docs/status-bar.md) |
 | `fm-bridge-strip.sh`     | Install, show, run, and remove the read-only Starship bridge strip across the top of a Herdr workspace: wordmark, crew lamps, and battery (docs/bridge-strip.md) |
+| `fm-factory-pane.sh`     | Install, show, run, and remove the Factory pane, every factory at a glance in a Herdr pane (docs/factory-pane.md) |
+| `fm-factory.py`          | Build the factory record (`--data`, `--plain`), draw the live Factory pane, and open a factory's own tab with live copies of its workers (docs/factory-pane.md) |
 | `fm-codex-session-metrics-lib.sh` | Supply the Codex companion's real context and provider-quota figures from the exact followed session and the account owner (docs/status-bar.md) |
 | `fm-status-cache-lib.sh` | Shared status-row cache freshness, staleness bounds, and single-refresh claim ownership |
 | `fm-landed-lib.sh`       | Shared newest-first completion-recency ordering for every capped landed surface       |
