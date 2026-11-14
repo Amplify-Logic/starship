@@ -656,7 +656,7 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
     # the tap page show; a worker's question, a pause or the checks never are.
     decision_ids, merge_ids, adapter_rows = owner_calls(home, buckets)
     known = {r["id"] for r in rows}
-    rows += [r for r in adapter_rows if r["id"] in decision_ids and r["id"] not in known]
+    rows += [r for r in adapter_rows if r.get("hold_bucket") and r["id"] not in known]
     row_of = {r["id"]: r for r in rows}
     shapes = decision_shapes(home, decision_ids)
     needs: List[Dict[str, Any]] = []

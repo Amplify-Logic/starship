@@ -447,6 +447,16 @@ test_held_decisions_come_through_a_non_markdown_adapter() {
     "garden-chart:question shop-provider:question garden-share:finished work" \
     "the adapter's held decisions are not under NEEDS YOU"
   assert_equals "$(q .counts.need_you)" "3" "the adapter's held decisions are not counted"
+  # Ready work held there until a date reads on hold, exactly as on a markdown home.
+  local held
+  held=$(jq '(.records[] | select(.id == "garden-share")) += {hold_kind: "captain", hold_reason: "Merge after the release.",
+    hold_set: "2026-11-13T09:00:00Z", hold_until: "2026-12-01"}' "$FM_TEST_AXI_BACKLOG") || fail "could not hold the ready work"
+  printf '%s\n' "$held" > "$FM_TEST_AXI_BACKLOG"
+  take_record
+  assert_equals "$(q '.factories[] | .jobs[] | select(.id == "garden-share") | .state')" "on hold until 2026-12-01" \
+    "ready work held until a date on a non-markdown backlog lost its held word"
+  assert_equals "$(q '[.needs_you[] | .id] | join(" ")')" "garden-chart shop-provider" \
+    "ready work held until a date on a non-markdown backlog is under NEEDS YOU"
   pass "factory record: held decisions on a non-markdown backlog reach NEEDS YOU through the adapter"
 }
 
