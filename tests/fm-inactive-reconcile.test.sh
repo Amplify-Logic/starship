@@ -417,7 +417,7 @@ test_secondmate_multiline_terminal_outcome_is_delivered_once() {
   local terminal timing key note
   for terminal in 'done' failed; do
     note='validation finished'
-    [ "$terminal" = done ] && note='PR https://example.test/owner/repo/pull/1 checks green'
+    [ "$terminal" = 'done' ] && note='PR https://example.test/owner/repo/pull/1 checks green'
     for timing in before during; do
       make_world "multiline-$terminal-$timing"; bind_secondmate local
       write_child "$MATE" child 'working: finishing validation'
