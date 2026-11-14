@@ -245,7 +245,7 @@ def load_registry(home: str) -> Tuple[List[Dict[str, Any]], str]:
         line = raw.rstrip()
         if line.startswith("## "):
             current = {"name": line[3:].strip(), "id": None, "about": None, "projects": [],
-                       "secondmate": None, "rules": [], "learned": []}
+                       "rules": [], "learned": []}
             factories.append(current)
             section = None
             continue
@@ -267,7 +267,7 @@ def load_registry(home: str) -> Tuple[List[Dict[str, Any]], str]:
                 else:
                     current["learned"].append({"when": None, "what": item})
             continue
-        match = re.match(r"^(id|about|projects|secondmate):\s*(.*)$", stripped, re.I)
+        match = re.match(r"^(id|about|projects):\s*(.*)$", stripped, re.I)
         if match:
             key, value = match.group(1).lower(), match.group(2).strip()
             section = None
@@ -287,7 +287,7 @@ def load_registry(home: str) -> Tuple[List[Dict[str, Any]], str]:
         return factories, "registry"
     for row in load_projects(home):
         factories.append({"name": row["label"] or display_name(row["name"]), "id": slug(row["name"]),
-                          "about": None, "projects": [row["name"]], "secondmate": None,
+                          "about": None, "projects": [row["name"]],
                           "rules": [], "learned": []})
     return factories, "projects"
 
@@ -562,7 +562,7 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
         for project in factory["projects"]:
             owner[project.lower()] = factory["id"]
     other = {"name": "Other work", "id": "other-work", "about": "work no factory claims", "projects": [],
-             "secondmate": None, "rules": [], "learned": []}
+             "rules": [], "learned": []}
 
     def factory_of(project: Optional[str]) -> str:
         key = (project or "").strip().lower()
@@ -884,7 +884,7 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
         "counts": {"running": running_total, "need_you": len(needs), "idle": idle_total},
         "count_line": count_line,
         "needs_you": needs,
-        "factories": [{k: f[k] for k in ("id", "name", "about", "projects", "secondmate", "steered_by", "state",
+        "factories": [{k: f[k] for k in ("id", "name", "about", "projects", "steered_by", "state",
                                          "idle_since", "crew", "needs", "jobs", "next", "rules", "learned", "talk")}
                       for f in factories],
         "feed": feed,
@@ -1031,18 +1031,39 @@ FEED_COLOUR = {"finished": "green", "landed": "green", "asked you": "red", "stuc
                "answered": "cyan", "asked to keep": "cyan", "asked for changes": "cyan", "said": "cyan"}
 
 
+def asking(need: Dict[str, Any]) -> str:
+    """Which asking of a need this is: the decision key, or when it was held or became ready."""
+    return str(need.get("key") or need.get("since") or 0)
+
+
 class View:
     """Draws a record; holds the cursor, the talk box and pending notices."""
 
     def __init__(self, record: Dict[str, Any], opened: Optional[str] = None, in_tab: bool = False):
-        self.record = record
         self.opened = opened
         self.in_tab = in_tab
         self.cursor = 0
+        self.selected: Optional[Tuple[str, str]] = None
         self.tick = 0
         self.talking: Optional[Dict[str, Any]] = None
         self.confirm: Optional[Dict[str, Any]] = None
         self.notice: Optional[Tuple[str, str, float]] = None
+        self.adopt(record)
+
+    def adopt(self, record: Dict[str, Any]) -> None:
+        """Take a new record, dropping whatever pointed at something it no longer holds."""
+        self.record = record
+        if self.opened and not self.has_factory(self.opened):
+            self.opened = None
+        talk = self.talking
+        if talk is not None and not (self.has_factory(talk["factory"]) and (
+                "item" not in talk or self.need(talk["item"]))):
+            self.talking = None
+        confirm = self.confirm
+        if confirm is not None:
+            need = self.need(confirm["item"])
+            if need is None or asking(need) != confirm["asked"]:
+                self.confirm = None
 
     # ---- record lookups ----------------------------------------------------
 
@@ -1058,6 +1079,9 @@ class View:
     def needs(self, fid: Optional[str] = None) -> List[Dict[str, Any]]:
         return [n for n in self.record["needs_you"] if fid in (None, n["factory"])]
 
+    def need(self, ident: str) -> Optional[Dict[str, Any]]:
+        return next((n for n in self.record["needs_you"] if n["id"] == ident), None)
+
     def stops(self) -> List[Tuple[str, str]]:
         if self.opened:
             return [("need", n["id"]) for n in self.needs(self.opened)] or [("factory", self.opened)]
@@ -1067,8 +1091,19 @@ class View:
         stops = self.stops()
         if not stops:
             return ("none", "")
+        if self.selected in stops:
+            self.cursor = stops.index(self.selected)
         self.cursor = max(0, min(self.cursor, len(stops) - 1))
-        return stops[self.cursor]
+        self.selected = stops[self.cursor]
+        return self.selected
+
+    def move(self, step: int) -> None:
+        self.at()
+        self.cursor += step
+        self.selected = None
+
+    def show(self, fid: Optional[str]) -> None:
+        self.opened, self.cursor, self.selected = fid, 0, None
 
     def here(self, kind: str, ident: str) -> bool:
         return self.at() == (kind, ident)
@@ -1259,7 +1294,7 @@ class View:
         kind, ident = self.at()
         keys = ["↑↓ move"]
         if kind == "need":
-            need = next(n for n in self.record["needs_you"] if n["id"] == ident)
+            need = self.need(ident)
             if need["kind"] == "question" and need["options"]:
                 keys.append("%s answer" % "/".join(o["key"] for o in need["options"]))
             elif need["kind"] != "question":
@@ -1370,8 +1405,6 @@ class View:
 
     def frame(self, width: int, height: Optional[int] = None) -> List[Row]:
         width = max(width, 40)
-        if self.opened and not self.has_factory(self.opened):
-            self.opened = None
         body = self.factory_page(width) if self.opened else self.overview(width)
         foot = self.footer(width)
         if height:
@@ -1402,8 +1435,9 @@ def paint(segs: Row) -> str:
 
 def send_note(home: str, request_id: str, body: str) -> Tuple[bool, str]:
     """A captain inbox note: the existing path for the owner to tell Starship."""
+    request_id = re.sub(r"[^A-Za-z0-9._:-]", "-", request_id)[:128]
     try:
-        out = subprocess.run(inbox_cmd() + ["note", "--request-id", request_id[:128], "--json", "-"], input=body,
+        out = subprocess.run(inbox_cmd() + ["note", "--request-id", request_id, "--json", "-"], input=body,
                              capture_output=True, text=True, timeout=30, env=dict(os.environ, FM_HOME=home))
     except (OSError, subprocess.SubprocessError) as error:
         return False, str(error)
@@ -1439,7 +1473,7 @@ class Pane:
         if stamp != self.loaded:
             record = cached(self.home)
             if record:
-                self.view.record = record
+                self.view.adopt(record)
                 self.loaded = stamp
         age = now_epoch() - int(self.view.record.get("as_of_epoch") or 0)
         if age > env_int("FM_FACTORY_TTL", 20):
@@ -1452,14 +1486,12 @@ class Pane:
         if kind == "factory":
             return ident
         if kind == "need":
-            return next(n for n in self.view.record["needs_you"] if n["id"] == ident)["factory"]
+            return self.view.need(ident)["factory"]
         return None
 
     def need_at(self) -> Optional[Dict[str, Any]]:
         kind, ident = self.view.at()
-        if kind != "need":
-            return None
-        return next((n for n in self.view.record["needs_you"] if n["id"] == ident), None)
+        return self.view.need(ident) if kind == "need" else None
 
     def send(self, request_id: str, body: str, done: str) -> None:
         ok, why = send_note(self.home, request_id, body)
@@ -1515,9 +1547,9 @@ class Pane:
                 herdr(["tab", "close", os.environ["HERDR_TAB_ID"]])
             return False
         if key == "up":
-            view.cursor -= 1
+            view.move(-1)
         elif key == "down":
-            view.cursor += 1
+            view.move(1)
         elif key == "enter":
             fid = self.factory_of_stop()
             if fid and not view.opened:
@@ -1526,20 +1558,21 @@ class Pane:
                     if not ok:
                         self.say("The factory tab did not open: %s" % why, "red", 12)
                 else:
-                    view.opened, view.cursor = fid, 0
+                    view.show(fid)
         elif key == "esc":
             if view.in_tab:
                 origin = os.environ.get("FM_FACTORY_ORIGIN_TAB")
                 if origin:
                     herdr(["tab", "focus", origin])
             elif view.opened:
-                view.opened, view.cursor = None, 0
+                view.show(None)
         elif need and need["kind"] == "question" and any(o["key"].lower() == lower for o in need["options"]):
             option = next(o for o in need["options"] if o["key"].lower() == lower)
             fac = view.factory(need["factory"])
             view.confirm = {
-                "prompt": "Answer %s: %s?" % (option["key"], option["label"]),
-                "request_id": "factory.%s.answer.%s.%s" % (fac["id"], need["id"], option["key"]),
+                "item": need["id"], "asked": asking(need),
+                "prompt": "%s: answer %s, %s?" % (need["title"], option["key"], option["label"]),
+                "request_id": "factory.%s.answer.%s.%s.%s" % (fac["id"], need["id"], asking(need), option["key"]),
                 "body": "Answer for %s: %s %s\n\n(from the Factory pane; item %s%s)" % (
                     need["title"], option["key"], option["label"], need["id"],
                     ", key " + need["key"] if need.get("key") else ""),
@@ -1547,8 +1580,9 @@ class Pane:
         elif need and need["kind"] == "finished work" and lower == "k":
             fac = view.factory(need["factory"])
             view.confirm = {
+                "item": need["id"], "asked": asking(need),
                 "prompt": "Keep %s and ask Starship to land it?" % need["title"],
-                "request_id": "factory.%s.keep.%s" % (fac["id"], need["id"]),
+                "request_id": "factory.%s.keep.%s.%s" % (fac["id"], need["id"], asking(need)),
                 "body": "Keep %s: please land it.\n\n(from the Factory pane; item %s%s)" % (
                     need["title"], need["id"],
                     ", " + need["pr"] if need.get("pr") else ""),

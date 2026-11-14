@@ -1681,7 +1681,6 @@ Each factory is one `## <name>` heading followed by optional fields, one per lin
 id: sample-shop
 about: online shop for handmade cups
 projects: sample-shop, shop-api
-secondmate: shop-mate
 
 Rules:
 - English only.
@@ -1692,7 +1691,6 @@ Learned:
 
 - `id` is the factory's stable name in the record and the pane's own records; it defaults to the heading turned into lowercase words joined by dashes.
 - `projects` maps work to the factory by each work item's project, as registered in `data/projects.md`, an `alias=` included; work no factory claims shows under `Other work`.
-- `secondmate` is reserved for mapping a factory to a second mate later; the pane does not read that second mate's own records yet.
 - `Rules:` and `Learned:` are what the factory page shows under its rules and what it has learned lately; a learned line may start with its date.
 
 ## Secondmate routes (data/secondmates.md)

@@ -73,6 +73,25 @@ exit 0
 SH
 chmod +x "$BINDIR/herdr"
 
+# edit-world drop <task> | rekey <old> <new>: change the fleet snapshot while
+# the pane runs (a task leaves, or the same task asks a new question), then
+# refresh the record the way the background refresh does.
+cat > "$BINDIR/edit-world" <<SH
+#!/usr/bin/env bash
+python3 - "\$FM_FACTORY_SNAPSHOT" "\$@" <<'PY'
+import json, sys
+path, how, args = sys.argv[1], sys.argv[2], sys.argv[3:]
+world = json.load(open(path))
+if how == "drop":
+    world["tasks"] = [t for t in world["tasks"] if t["id"] != args[0]]
+else:
+    world = json.loads(json.dumps(world).replace(args[0], args[1]))
+json.dump(world, open(path, "w"))
+PY
+exec python3 "$FACTORY" refresh
+SH
+chmod +x "$BINDIR/edit-world"
+
 CASE=0
 reset_case() {
   CASE=$((CASE + 1))
@@ -333,25 +352,32 @@ test_work_no_factory_claims_is_still_shown() {
   pass "factory registry: work no factory claims is shown under Other work"
 }
 
-# drive_keys <keys...>: press keys in the real live view under a pty, one per
-# half second, then q.
+# drive_keys <keys...>: once the first screen is up, press keys in the real
+# live view under a pty, one per third of a second, then q. A `SH:<command>`
+# step runs the command instead and waits for the pane to pick up the
+# refreshed record.
 drive_keys() {
   python3 - "$FACTORY" "$@" <<'PY'
-import os, pty, select, sys, time
+import fcntl, os, pty, select, struct, subprocess, sys, termios, time
 pid, fd = pty.fork()
 if pid == 0:
+    fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack("HHHH", 50, 100, 0, 0))
     os.execvp("python3", ["python3", sys.argv[1], "view"])
-def drain(seconds):
-    end = time.time() + seconds
-    while time.time() < end:
+def drain(seconds, until=None):
+    end, seen = time.time() + seconds, b""
+    while time.time() < end and not (until and until in seen):
         r, _, _ = select.select([fd], [], [], 0.1)
         if r:
             try:
-                os.read(fd, 65536)
+                seen += os.read(fd, 65536)
             except OSError:
                 return
-drain(1.0)
+drain(20, until=b"q quit")
 for key in sys.argv[2:] + ["q"]:
+    if key.startswith("SH:"):
+        subprocess.run(key[3:], shell=True, check=True, stdout=subprocess.DEVNULL)
+        drain(3.6)
+        continue
     os.write(fd, {"ENTER": b"\r", "DOWN": b"\x1b[B", "ESC": b"\x1b"}.get(key, key.encode()))
     drain(0.35)
 os.waitpid(pid, 0)
@@ -363,7 +389,7 @@ test_writing_keys_go_through_the_inbox_and_act_on_the_highlighted_row() {
   write_registry
   write_world
   drive_keys 2 ENTER
-  assert_equals "$(jq -r .request_id "$FM_FACTORY_TEST_NOTES")" "factory.garden-journal.answer.garden-chart.2" \
+  assert_equals "$(jq -r .request_id "$FM_FACTORY_TEST_NOTES")" "factory.garden-journal.answer.garden-chart.chart-range.2" \
     "the answer acts on the highlighted question"
   assert_contains "$(jq -r .body "$FM_FACTORY_TEST_NOTES")" "Answer for Harvest chart: 2 this season" "answer body"
   : > "$FM_FACTORY_TEST_NOTES"
@@ -372,7 +398,8 @@ test_writing_keys_go_through_the_inbox_and_act_on_the_highlighted_row() {
   drive_keys 2 x
   assert_equals "$(cat "$FM_FACTORY_TEST_NOTES")" "" "any key but enter cancels the answer"
   drive_keys DOWN DOWN k ENTER
-  assert_equals "$(jq -r .request_id "$FM_FACTORY_TEST_NOTES")" "factory.garden-journal.keep.garden-share" "keep"
+  assert_equals "$(jq -r .request_id "$FM_FACTORY_TEST_NOTES")" \
+    "factory.garden-journal.keep.garden-share.$((NOW - 109 * 60))" "keep names the item and when it became ready"
   assert_contains "$(jq -r .body "$FM_FACTORY_TEST_NOTES")" "https://example.invalid/g/pull/12" "keep names the change"
   pass "factory pane: answer and keep go to Starship's inbox for the highlighted row only, after enter"
 }
@@ -385,12 +412,37 @@ test_a_note_reaches_starship_through_the_real_inbox() {
   (unset FM_FACTORY_INBOX; drive_keys 2 ENTER)
   local note
   note=$(cat "$HOME_FIX"/state/inbox/*.note 2>/dev/null)
-  assert_contains "$note" "request_id=factory.garden-journal.answer.garden-chart.2" "the note is saved under its id"
+  assert_contains "$note" "request_id=factory.garden-journal.answer.garden-chart.chart-range.2" \
+    "the note is saved under its id"
   assert_contains "$note" "Answer for Harvest chart: 2 this season" "the note carries the answer"
   (unset FM_FACTORY_INBOX; drive_keys 2 ENTER)
   assert_equals "$(find "$HOME_FIX/state/inbox" -maxdepth 1 -name '*.note' | wc -l | tr -d ' ')" "1" \
     "the same answer twice is one note"
-  pass "factory pane: an answer is a captain inbox note, saved once under its request id"
+  "$BINDIR/edit-world" rekey chart-range chart-colour >/dev/null || fail "edit-world failed"
+  (unset FM_FACTORY_INBOX; drive_keys 2 ENTER)
+  assert_equals "$(find "$HOME_FIX/state/inbox" -maxdepth 1 -name '*.note' | wc -l | tr -d ' ')" "2" \
+    "a new question from the same task is a new note"
+  assert_contains "$(cat "$HOME_FIX"/state/inbox/*.note)" \
+    "request_id=factory.garden-journal.answer.garden-chart.chart-colour.2" "the new note names the new question"
+  pass "factory pane: an answer is a captain inbox note, saved once per question under its request id"
+}
+
+test_the_highlight_and_open_boxes_follow_the_record() {
+  reset_case
+  write_registry
+  write_world
+  drive_keys DOWN DOWN DOWN "SH:$BINDIR/edit-world drop garden-share" s
+  assert_equals "$(cut -f2- "$HOME_FIX/state/factory/steer.log")" "$(printf 'sample-shop\tyou')" \
+    "s acts on the highlighted factory after a row above it left"
+  reset_case
+  write_registry
+  write_world
+  : > "$FM_FACTORY_TEST_NOTES"
+  drive_keys DOWN DOWN c "Bigger picture" "SH:$BINDIR/edit-world drop garden-share" " please" ENTER
+  assert_equals "$(cat "$FM_FACTORY_TEST_NOTES")" "" "the talk box closes when its work leaves the record"
+  drive_keys 2 "SH:$BINDIR/edit-world rekey chart-range chart-colour" ENTER
+  assert_equals "$(cat "$FM_FACTORY_TEST_NOTES")" "" "a pending answer closes when its question changes"
+  pass "factory pane: the highlight stays on its row and open boxes close when their row leaves the record"
 }
 
 test_talking_never_changes_who_steers() {
@@ -485,6 +537,7 @@ fm_test_run \
   test_work_no_factory_claims_is_still_shown \
   test_writing_keys_go_through_the_inbox_and_act_on_the_highlighted_row \
   test_a_note_reaches_starship_through_the_real_inbox \
+  test_the_highlight_and_open_boxes_follow_the_record \
   test_talking_never_changes_who_steers \
   test_enter_opens_the_factory_tab_with_its_live_workers \
   test_open_tab_stops_when_herdr_does_not_name_the_tab \

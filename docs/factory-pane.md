@@ -75,8 +75,8 @@ Outside Herdr, `enter` opens the same page in place instead.
 | `esc` | Back, or cancel a confirmation or the talk box. |
 | `q` | Quit. |
 
-Every writing key acts on the highlighted row only.
-An answer, a keep, a change request and anything said in the talk box become a captain inbox note (`bin/fm-inbox.sh note`), the existing path for the owner to tell Starship something, saved once under a request id that names the factory and the item.
+Every writing key acts on the highlighted row only; the highlight stays on the same question or factory when the record refreshes, and a talk box or pending confirmation closes when what it is about leaves the record.
+An answer, a keep, a change request and anything said in the talk box become a captain inbox note (`bin/fm-inbox.sh note`), the existing path for the owner to tell Starship something, saved once under a request id that names the factory and the item; an answer's id also names the question it answers and a keep's id the time the work became ready, so a repeated press is one note but a new question or returned work is a new one.
 Starship then acts on it under its own rules: it records the answer on the held decision, merges only under its merge rules, and passes words on to the crew.
 The pane itself merges nothing, answers no held decision itself, and types into no worker, which is why the talk box says `Starship hears this too`.
 
@@ -127,7 +127,6 @@ It is optional: without it the pane falls back to the sources above.
 ## Not in this first draft
 
 - The night-shift `Tonight` row is left out, because no night-shift work list exists in the shared code for it to read.
-- The registry's `secondmate` field is reserved; a factory's second mate's own records are not read yet.
 - There is no key to add work.
 
 ## Install, show, and remove
