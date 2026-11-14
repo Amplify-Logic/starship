@@ -20,14 +20,14 @@
 #
 # CARDS. `export` makes one card for each of the owner's calls, as
 # bin/fm-fleet-status-lib.sh fm_owner_calls lists them (the same count the
-# bridge strip and the Factory pane show): each decision held for the captain
-# that waits on him now, read through `fm-captain-hold.sh open --identity`
-# whatever the task's own kind, and each task whose work is ready to land and
-# not already one of those decisions. A merge card needs pr= in the task's
-# metadata naming an open, non-draft GitHub pull request, read live with gh. A
-# PR still validating, red, or needing attention is no call and gets no card; a
-# hold deferred to a date that has not come, or waiting on other work, is set
-# aside and only counted under set_aside; and a call that cannot be carded (no PR, a draft,
+# bridge strip and the Factory pane show): each live decision held for the
+# captain, read through `fm-captain-hold.sh open --identity` whatever the
+# task's own kind, and each task whose work is ready to land and carries no
+# open captain hold. A merge card needs pr= in the task's metadata naming an
+# open, non-draft GitHub pull request, read live with gh. A PR still
+# validating, red, or needing attention is no call and gets no card; a hold
+# that is aged, deferred to a date that has not come, or waiting on other work
+# is no call either; and a call that cannot be carded (no PR, a draft,
 # a PR no longer open, a row that cannot be read) is named under not_shown
 # rather than stopping the export, so owner_calls, the cards plus not_shown, is
 # always the shared count. It writes the card file

@@ -72,7 +72,7 @@ test_export_lists_decisions_and_ready_merges() {
   hold hold work-a --reason "Waiting on the owner" >/dev/null || fail "could not hold the work item"
   tasks add work-later "Later idea" --kind ship --repo sample >/dev/null
   tasks hold work-later --reason "someday" --kind future >/dev/null
-  # A call the owner deferred to a date is set aside, not one of his calls.
+  # A call the owner deferred to a date is not one of his calls.
   hold hold revisit --title "Revisit the pricing" --reason "Choose: keep; OR raise." --repo sample --until 2999-01-01 >/dev/null \
     || fail "could not hold the deferred question"
   tasks add ship-pr "Ship the fix" --kind ship --repo sample >/dev/null
@@ -137,7 +137,6 @@ EOF
   # Two decisions, two merge cards, and the draft and the PR-less ready work:
   # the same count the bridge strip and the Factory pane show.
   assert_grep "owner's calls: 6" "$HOME_DIR/export.out" "export did not report the owner's calls"
-  assert_grep "set aside: dated 1" "$HOME_DIR/export.out" "export did not say a deferred call was set aside"
   local route_id work_id perms
   route_id=$(identity_of pick-route)
   work_id=$(identity_of work-a)
@@ -153,7 +152,7 @@ EOF
       check(by["d.pick-route"].closes_on_answer === true && by["d.pick-route"].easy_undo === false, 5);
       check(by["d.work-a"] && by["d.work-a"].identity === workId && by["d.work-a"].closes_on_answer === false, 6);
       check(!by["d.work-later"] && !by["d.revisit"], 7);
-      check(doc.owner_calls === 6 && doc.set_aside.dated === 1, 14);
+      check(doc.owner_calls === 6 && !("set_aside" in doc), 14);
       check(by["m.ship-pr"] && by["m.ship-pr"].identity === "a".repeat(40) && by["m.ship-pr"].pr_url === "https://github.com/o/sample/pull/7", 8);
       check(!by["m.ship-draft"] && !by["m.ship-merged"] && !by["m.ship-nopr"], 9);
       check(!by["m.ship-validating"] && !by["m.ship-red"], 10);
@@ -472,8 +471,11 @@ test_defaults_apply_only_marked_easy_old_safe_decisions() {
   hold hold deferred --title "Choose the theme" --reason "Choose: dark; OR light." --repo sample --until 2999-01-01 >/dev/null
   hold hold wordy --title "Choose the layout" --reason "Choose: grid; OR list." --repo sample >/dev/null
   hold hold past-deferred --title "Choose the sidebar" --reason "Choose: left; OR right." --repo sample --until 2020-01-02 >/dev/null
-  local id
-  for id in due-one unmarked kept-one deferred wordy past-deferred; do backdate_hold "$id" 2020-01-01T00:00:00Z; done
+  hold hold stale-one --title "Choose the footer" --reason "Choose: short; OR tall." --repo sample >/dev/null
+  local id ten_days_ago
+  ten_days_ago=$(node -e 'process.stdout.write(new Date(Date.now() - 10 * 864e5).toISOString().replace(/\.\d+Z$/, "Z"))')
+  for id in due-one unmarked kept-one wordy; do backdate_hold "$id" "$ten_days_ago"; done
+  for id in deferred past-deferred stale-one; do backdate_hold "$id" 2020-01-01T00:00:00Z; done
   desk mark due-one --recommend blue --easy-undo >/dev/null || fail "could not mark due-one"
   desk mark young-one --recommend sans --easy-undo >/dev/null || fail "could not mark young-one"
   desk mark kept-one --recommend wide --easy-undo >/dev/null || fail "could not mark kept-one"
@@ -499,6 +501,9 @@ test_defaults_apply_only_marked_easy_old_safe_decisions() {
       // Once its date has passed it waits on the owner again and is carded,
       // but a deferred call is still never given the seven-day default.
       check(by["past-deferred"] && by["past-deferred"].default_in_days === null, 6);
+      // An undated hold past the aging threshold no longer waits on the owner,
+      // as the bearings Captain'"'"'s Call reads it, so it has no card either.
+      check(!by["stale-one"], 7);
     });' || fail "a card promises a default that defaults would never apply"
   desk defaults > "$HOME_DIR/dry.out" || fail "the defaults dry run failed"
   assert_grep "would default: due-one: blue" "$HOME_DIR/dry.out" "the due decision was not listed"

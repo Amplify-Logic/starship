@@ -266,11 +266,10 @@ fm_fleet_status_bucket() {  # <canonical line> [<meta>]
 }
 
 # fm_owner_calls: the owner's calls - what really waits on the captain - one per
-# line, decisions first, then merges, then the holds set aside:
+# line, decisions first, then merges:
 #
-#   decision<TAB><id>          a decision held for the captain that waits on him now
-#   merge<TAB><id>             a PR or ready branch waiting for his merge word
-#   aside<TAB><id><TAB><why>   a captain hold that is not his call right now
+#   decision<TAB><id>   a decision held for the captain that waits on him now
+#   merge<TAB><id>      a PR or ready branch waiting for his merge word
 #
 # This is the one definition of that count. The fold below publishes it as
 # <ready> and <decisions>, so the bridge strip and the status bar show it;
@@ -280,14 +279,14 @@ fm_fleet_status_bucket() {  # <canonical line> [<meta>]
 # reading of what needs him.
 #
 # A decision is a captain hold as bin/fm-fleet-snapshot.sh classifies it, the
-# one classifier of a captain hold, whose hold_bucket is `live` or `aged`: an
-# undated hold past the snapshot's aging threshold is still an open question
-# nobody deferred, so it still waits on him. A hold deferred to a date that has
-# not come (`dated`) and one waiting on other work (`blocked`) are listed as
-# `aside` with that bucket, so a surface can say they exist, and never counted.
-# A merge is a task whose work reads `ready` (fm_fleet_task_bucket), unless its
-# row is done or it is already a decision: the merge of held work waits on the
-# answer, so it is one call, not two.
+# one classifier of a captain hold, whose hold_bucket is `live`: the same
+# captain_actionable test bin/fm-bearings-snapshot.sh's Captain's Call uses. An
+# undated hold past the snapshot's aging threshold (`aged`), a hold deferred to
+# a date that has not come (`dated`) and one waiting on other work (`blocked`)
+# are never counted. A merge is a task whose work reads `ready`
+# (fm_fleet_task_bucket), unless its row is done or it carries any captain hold
+# that is not done: the merge of held work waits on the answer, so it is one
+# call, not two, and never a call while that hold is not his call right now.
 #
 # Nothing else is ever a call. A worker's question and an ask-user review
 # finding are firstmate's to answer (ask-user-authority) and reach the captain
@@ -322,13 +321,11 @@ fm_owner_calls() {  # <state-dir> [<buckets-file> [<backlog-file>]]
   if [ "$rc" = 0 ]; then
     out=$(jq -r --rawfile buckets "$buckets" '
       [(.records // [])[] | select(.structured == true and (.id | type) == "string")] as $rows
-      | [$rows[] | select(.state != "done" and (.hold_bucket == "live" or .hold_bucket == "aged")) | .id] as $decisions
-      | (reduce ($decisions[], ($rows[] | select(.state == "done") | .id)) as $id ({}; .[$id] = true)) as $taken
+      | [$rows[] | select(.state != "done" and .hold_bucket == "live") | .id] as $decisions
+      | (reduce ($rows[] | select(.state == "done" or .hold_bucket != null) | .id) as $id ({}; .[$id] = true)) as $taken
       | ($decisions[] | "decision\t\(.)"),
         ($buckets | split("\n")[] | split("\t") | select(length >= 2 and .[1] == "ready" and .[0] != "")
-          | .[0] | select($taken[.] != true) | "merge\t\(.)"),
-        ($rows[] | select(.state != "done" and (.hold_bucket == "dated" or .hold_bucket == "blocked"))
-          | "aside\t\(.id)\t\(.hold_bucket)")
+          | .[0] | select($taken[.] != true) | "merge\t\(.)")
     ' "$backlog" 2>/dev/null) || rc=1
   fi
   rm -rf "$dir"

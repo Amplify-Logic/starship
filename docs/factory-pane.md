@@ -42,7 +42,7 @@ The [factory registry](configuration.md#factory-registry-datafactoriesmd) names 
 
 - The count line is the bridge strip's look: running jobs, what needs you, idle factories, and the time.
 - NEEDS YOU comes first, across all factories, questions before finished work.
-  It lists exactly the owner's calls, the one count the bridge strip and the tap page also show: each decision held for the owner that is not deferred to a date or waiting on other work, and each PR or ready branch waiting for the merge word.
+  It lists exactly the owner's calls, the one count the bridge strip and the tap page also show: each decision held for the owner that waits on him now (not aged, deferred to a date, or waiting on other work), and each PR or ready branch waiting for the merge word whose task carries no open captain hold.
   `fm_owner_calls` in `bin/fm-fleet-status-lib.sh` owns that count.
   A worker's question and an ask-user review finding go to Starship, which answers them or holds them for the owner, so they never appear here; their jobs read `with Starship` or are still in the checks.
   A question shows its why in one or two lines, the options and suggestion its tap card carries (`bin/fm-tap-desk.sh shapes`, including any recorded with `fm-tap-desk.sh mark`), and what it holds up.

@@ -645,10 +645,10 @@ PY2
 }
 
 # The owner's calls are one list: every held decision that waits on him now,
-# and every PR or ready branch waiting for the merge word that is not already
-# one of those decisions or finished work. An old undated hold still waits on
-# him; a hold deferred to a date and one waiting on other work are set aside and
-# named, and never counted.
+# and every PR or ready branch waiting for the merge word whose task carries no
+# open captain hold and is not finished work. An aged undated hold, a hold
+# deferred to a date and one waiting on other work are never counted, and ready
+# work under any of those holds is no merge call either.
 test_the_owners_calls_are_live_decisions_and_ready_merges() {
   local out
   reset_state
@@ -656,37 +656,39 @@ test_the_owners_calls_are_live_decisions_and_ready_merges() {
   task gated crew 'state: done · source: run-step · checks passed'
   task landed crew 'state: done · source: run-step · checks passed'
   task asked crew 'state: parked · source: status-log · needs-decision: pick a schema'
+  task deferred crew 'state: done · source: run-step · checks passed'
   backlog_row '- [ ] pick-a - Pick a colour (repo: r) (kind: captain) (hold: choose red or blue) (hold-kind: captain)'
   backlog_row '- [ ] gated - Gated work (repo: r) (kind: ship) (hold: merge only after the launch call) (hold-kind: captain)'
   backlog_row '- [ ] later - Revisit later (repo: r) (kind: captain) (hold: later) (hold-kind: captain) (hold-until: 2099-01-01)'
   backlog_row '- [ ] waits - After other work (repo: r) (kind: captain) (blocked-by: other) (hold: after other) (hold-kind: captain)'
   backlog_row '- [ ] other - The other work (repo: r) (kind: ship)'
   backlog_row '- [ ] stale - An old call (repo: r) (kind: captain) (since 2020-01-01) (hold: old) (hold-kind: captain)'
+  backlog_row '- [ ] deferred - Merge after the release (repo: r) (kind: ship) (hold: merge after the release) (hold-kind: captain) (hold-until: 2099-01-01)'
   backlog_row '- [ ] parked - Parked for later (repo: r) (kind: ship) (hold: someday) (hold-kind: future)'
   backlog_row '- [x] landed - Landed work (repo: r) (kind: ship) (done 2026-11-01)'
 
   out=$(FM_FLEET_STATE_READER="$BINDIR/fake-crew-state" \
     bash -c '. "$1/bin/fm-fleet-status-lib.sh"; fm_owner_calls "$2"' _ "$ROOT" "$STATE") \
     || fail "the owner's calls could not be read"
-  assert_equals "$(printf 'decision\tpick-a\ndecision\tgated\ndecision\tstale\nmerge\tgreen\naside\tlater\tdated\naside\twaits\tblocked')" \
+  assert_equals "$(printf 'decision\tpick-a\ndecision\tgated\nmerge\tgreen')" \
     "$out" "the owner's calls"
 
   out=$(FM_FLEET_STATE_NO_CACHE=1 FM_FLEET_STATE_READER="$BINDIR/fake-crew-state" \
     bash -c '. "$1/bin/fm-fleet-status-lib.sh"; fm_fleet_status_counts "$2" decisions' _ "$ROOT" "$STATE")
   # records working stopped validating paused attention ready known age decisions
-  [ "$out" = $'4\t0\t0\t0\t0\t1\t4\t1\t0\t3' ] \
+  [ "$out" = $'5\t0\t0\t0\t0\t1\t3\t1\t0\t2' ] \
     || fail "the fold did not count the owner's calls: $(printf '%s' "$out" | tr '\t' ' ')"
 
   # A caller that already read the buckets and the backlog passes them in, and
   # gets the same calls without a second read.
-  printf 'green\tready\ngated\tready\nlanded\tready\nasked\tdecision\n' > "$STATE/../buckets"
+  printf 'green\tready\ngated\tready\nlanded\tready\ndeferred\tready\nasked\tdecision\n' > "$STATE/../buckets"
   FM_HOME="$STATE/.." FM_STATE_OVERRIDE="$STATE" bash "$ROOT/bin/fm-fleet-snapshot.sh" --backlog > "$STATE/../backlog.json" \
     || fail "the backlog snapshot failed"
   out=$(FM_FLEET_STATE_READER="$BINDIR/no-such-crew-state" \
     bash -c '. "$1/bin/fm-fleet-status-lib.sh"; fm_owner_calls "$2" "$3" "$4"' _ "$ROOT" "$STATE" \
     "$STATE/../buckets" "$STATE/../backlog.json") || fail "the owner's calls from given readings failed"
-  assert_equals "$(printf 'decision\tpick-a\ndecision\tgated\ndecision\tstale\nmerge\tgreen')" \
-    "$(printf '%s\n' "$out" | grep -v '^aside')" "the owner's calls from given readings"
+  assert_equals "$(printf 'decision\tpick-a\ndecision\tgated\nmerge\tgreen')" \
+    "$out" "the owner's calls from given readings"
 
   # A task the reader cannot answer for makes no list at all.
   task lost crew 'state: done · source: run-step · checks passed'
@@ -695,7 +697,7 @@ test_the_owners_calls_are_live_decisions_and_ready_merges() {
     bash -c '. "$1/bin/fm-fleet-status-lib.sh"; fm_owner_calls "$2"' _ "$ROOT" "$STATE" >/dev/null; then
     fail "a task that could not be read still gave a list of calls"
   fi
-  pass "fleet status: the owner's calls are his held decisions not deferred to a date and the ready merges no decision holds, nothing else"
+  pass "fleet status: the owner's calls are his live held decisions and the ready merges no captain hold holds, nothing else"
 }
 
 # The bridge strip shows "decisions for you" and "ready to merge" as two lamps, so

@@ -336,13 +336,12 @@ async function rulesGuarded(ctx, project) {
 function ownerCalls(ctx) {
   const result = runSync(ctx, "bash", ["-c", '. "$0" && fm_owner_calls "$1"', path.join(ctx.root, "bin/fm-fleet-status-lib.sh"), ctx.state]);
   if (result.status !== 0) fail(`could not read what waits on the owner: ${lastLine(result.stderr) || `exit ${result.status}`}`);
-  const calls = { decisions: [], merges: [], aside: {} };
+  const calls = { decisions: [], merges: [] };
   for (const line of result.stdout.split("\n")) {
-    const [kind, id, why] = line.split("\t");
+    const [kind, id] = line.split("\t");
     if (!id || !SLUG.test(id)) continue;
     if (kind === "decision") calls.decisions.push(id);
     else if (kind === "merge") calls.merges.push(id);
-    else if (kind === "aside" && why) calls.aside[why] = (calls.aside[why] || 0) + 1;
   }
   return calls;
 }
@@ -503,7 +502,6 @@ async function commandExport(args) {
     generated_at: new Date(now).toISOString(),
     default_after_days: days,
     owner_calls: merges.cards.length + decisionCards.length + notShown.length,
-    set_aside: calls.aside,
     cards: [...merges.cards, ...decisionCards],
     not_shown: notShown,
   };
@@ -515,8 +513,6 @@ async function commandExport(args) {
   console.log(`decisions: ${decisionCards.length} (kept for later: ${kept}; easy to undo: ${decisionCards.filter((card) => card.easy_undo).length})`);
   console.log(`merges: ${merges.cards.length}`);
   console.log(`owner's calls: ${cards.owner_calls}`);
-  const aside = Object.entries(calls.aside).sort().map(([why, count]) => `${why} ${count}`);
-  if (aside.length > 0) console.log(`set aside: ${aside.join(", ")}`);
   for (const item of cards.not_shown) console.log(`not shown: ${item.id}: ${item.reason}`);
   console.log(`cards: ${output}`);
   console.log(`page: ${pageOut}`);

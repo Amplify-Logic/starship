@@ -245,14 +245,9 @@
   // owner_calls is the one count the bridge strip and the Factory pane show too:
   // every card here plus each call named under "Not on this page".
   const calls = Number.isInteger(data.owner_calls) ? data.owner_calls : cards.length + notShown.length;
-  const asideWords = { dated: "deferred to a date", blocked: "waiting on other work" };
-  const aside = Object.entries(data.set_aside && typeof data.set_aside === "object" ? data.set_aside : {})
-    .filter(([why, count]) => asideWords[why] && Number.isInteger(count) && count > 0)
-    .map(([why, count]) => `${count} ${asideWords[why]}`);
-  const asideText = aside.length > 0 ? ` Not counted, still on hold: ${aside.join(", ")}.` : "";
   document.getElementById("lede").textContent = calls === 0
-    ? `Nothing is waiting on you.${asideText}`
-    : `${calls} waiting on you${when ? ` · cards from ${when}` : ""}. One tap answers a card; a reason is optional.${asideText}`;
+    ? "Nothing is waiting on you."
+    : `${calls} waiting on you${when ? ` · cards from ${when}` : ""}. One tap answers a card; a reason is optional.`;
 
   (async () => {
     const timer = setTimeout(() => status("Your earlier taps cannot be read yet; new taps may still save."), 10000);
