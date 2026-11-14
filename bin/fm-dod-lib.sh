@@ -37,8 +37,10 @@
 # (secondmate ledger-first publish of a child done). A ship `done:` is not
 # accepted while the named head exists only in the worker's disposable copy.
 # The check tests that head, not whether some branch moved. In no-mistakes
-# mode the pre-validation `done: {summary}` is the pipeline handoff and is
-# not gated; only the later CI-ready `done: PR <url> checks green` is, or on a
+# mode the pre-validation `done: handoff, ready for no-mistakes - {summary}` is
+# the pipeline handoff and is not gated here (fm_dod_nm_handoff_done names it
+# for readers that must not call it finished); only the later CI-ready
+# `done: PR <url> checks green` is, or on a
 # Gerrit project the later `done: PR <change url> published for review`. The
 # named head is the worker copy's HEAD, except that a done naming the task's
 # recorded pr= passes when the forge holds that head: a forge-reported
@@ -565,10 +567,10 @@ Delivery contract: mode=no-mistakes$suffix pr=manual
 Ship branch: $branch
 This project's pull-request text is written by hand: the pipeline's \`pr\` step would rewrite the title and body you write on every validated push, so **no-mistakes runs here as a validation pass that pushes the branch**, and you then open the PR yourself.
 Pass \`--skip pr,ci\` on every \`no-mistakes axi run\` for this task, and skip nothing else: \`review\`, \`test\`, \`document\`, \`lint\`, and \`push\` still run, and \`ci\` has no pipeline-opened PR to watch.
-The task is complete only when committed on your branch.
-When you believe it is complete, append \`done [at=<epoch>]: {summary}\` to the status file and stop.
+Committing on your branch finishes the implementation, not the task: the task is finished only at the ready report this section ends with.
+When the implementation is committed, append \`done [at=<epoch>]: handoff, ready for no-mistakes - {summary}\` to the status file and stop.
+That first \`done:\` is the handoff that starts the pipeline, which owns the push; it never reports the task finished, and it is not a request to push from this copy.
 Firstmate will then instruct you to run /no-mistakes to validate and push.
-That first \`done:\` is the handoff that starts the pipeline, which owns the push; it is not a request to push from this copy.
 ${nm_base}
 EOF
   fm_nm_driving_block no-ci
@@ -636,10 +638,10 @@ Ship branch: $branch
 This project's review server is Gerrit: it has no pull requests and no forge CI the pipeline can watch, so **no-mistakes runs here as a review pass that ends at a ready branch**, and you then publish that branch as one change.
 Pass \`--skip push,pr,ci\` on every \`no-mistakes axi run\` for this task, and skip nothing else: \`review\`, \`test\`, \`document\`, and \`lint\` are the whole point of the run.
 Those three are the only steps that reach a forge, and skipping them is a supported outcome, not a degraded one.
-The task is complete only when committed on your branch.
-When you believe it is complete, append \`done [at=<epoch>]: {summary}\` to the status file and stop.
+Committing on your branch finishes the implementation, not the task: the task is finished only at the ready report this section ends with.
+When the implementation is committed, append \`done [at=<epoch>]: handoff, ready for no-mistakes - {summary}\` to the status file and stop.
+That first \`done:\` is the handoff that starts the pipeline; it never reports the task finished, and it is not a request to publish.
 Firstmate will then instruct you to run /no-mistakes to validate.
-That first \`done:\` is the handoff that starts the pipeline; it is not a request to publish.
 
 EOF
       fm_nm_driving_block "$forge"
@@ -732,10 +734,10 @@ EOF
 # Definition of done
 Delivery contract: mode=no-mistakes$contract_forge$contract_consent
 Ship branch: $branch
-The task is complete only when committed on your branch.
-When you believe it is complete, append \`done [at=<epoch>]: {summary}\` to the status file and stop.
+Committing on your branch finishes the implementation, not the task: the task is finished only at the ready report this section ends with.
+When the implementation is committed, append \`done [at=<epoch>]: handoff, ready for no-mistakes - {summary}\` to the status file and stop.
+That first \`done:\` is the handoff that starts the pipeline, which owns the push; it never reports the task finished, and it is not a request to push from this copy.
 Firstmate will then instruct you to run /no-mistakes to validate and ship a PR.
-That first \`done:\` is the handoff that starts the pipeline, which owns the push; it is not a request to push from this copy.
 ${nm_base}
 EOF
       fm_nm_driving_block "$forge"
@@ -860,6 +862,19 @@ fm_dod_should_gate_ship_done() {  # <kind> <mode> <line>
       fm_dod_note_reports_ci_ready "$note" || fm_dod_note_reports_published_change "$note" ;;
     *) return 1 ;;
   esac
+}
+
+# 0 when <line> is a no-mistakes ship's pipeline handoff: a done: that is not
+# the ready report fm_dod_should_gate_ship_done gates, so the work is committed
+# but not validated and has no PR. stdout then holds the one-line reason a
+# current-state reader reports instead of done; bin/fm-crew-state.sh is the
+# caller. Only a recorded mode=no-mistakes counts: a record with no mode
+# predates the handoff contract, so its done keeps its old reading.
+fm_dod_nm_handoff_done() {  # <kind> <mode> <line>
+  [ "$1" = ship ] && [ "$2" = no-mistakes ] || return 1
+  [ "$(status_line_verb "$3")" = "done" ] || return 1
+  ! fm_dod_should_gate_ship_done "$1" "$2" "$3" || return 1
+  printf '%s\n' "handoff, waiting for the pipeline trigger: committed but not validated and no PR yet, not finished; send the worker its /no-mistakes invocation"
 }
 
 # The PR/MR URL from a `done: PR <url>...` note, or empty.

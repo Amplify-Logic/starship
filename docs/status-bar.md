@@ -52,7 +52,8 @@ That library selects no run and re-implements no attribution; run selection stay
 The distinction between a busy worker and `checking` is the reader's SOURCE, not its state word: `working · run-step` is the pipeline carrying a task, and `working · pane` is a worker busy on one.
 `waiting for you` covers a `done` the captain acts on, and a `parked` the reader says a human owes: a status-log needs-decision, or a gate line carrying the reader's whole `ask-user: authority decision` component.
 A `done` the captain acts on is a pipeline (`run-step`) verdict on a PR, or a worker's status-log `done` that `fm_dod_should_gate_ship_done` in `bin/fm-dod-lib.sh` reads as the ready report: a green PR, or a ready branch or PR in a mode whose `done` is the delivery itself.
-Any other status-log `done` - a build committed and handed back before validation, or a scout report Firstmate reads first - is Firstmate's turn and counts in no figure, because no worker is busy on it and nothing waits on the captain: on 2026-10-25 the row read `1 waiting for you` for a ship that had no PR yet.
+Any other status-log `done`, such as a scout report Firstmate reads first, is Firstmate's turn and counts in no figure, because no worker is busy on it and nothing waits on the captain: on 2026-10-25 the row read `1 waiting for you` for a ship that had no PR yet.
+A no-mistakes build committed and handed off before validation reads `blocked` from the canonical reader, a handoff waiting for the pipeline trigger, so it counts under `needs a look` as Firstmate's turn and never as `waiting for you`.
 Any other `parked` gate is the worker's or Firstmate's turn and claims no figure, so it counts as `working` or `stopped` by liveness alone; a `done` whose PR was merged or closed waits on nobody and counts in no figure at all.
 `needs a look` covers `blocked` and `failed`, which are the states that need Firstmate rather than time.
 
