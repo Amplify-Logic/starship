@@ -248,6 +248,15 @@ fm_fleet_task_bucket() {  # <state-dir> <id> [reader]
   _fm_fleet_bucket "$line" "$state/$id.meta"
 }
 
+# fm_fleet_status_bucket: the same fold for one task, for a view that draws
+# each task rather than counting them (bin/fm-factory.py). It prints the field
+# name above, or nothing for a record that is not live work, so a per-task view
+# can never disagree with the counts on what a state means.
+fm_fleet_status_bucket() {  # <canonical line> [<meta>]
+  _fm_fleet_classify_ready || return 1
+  _fm_fleet_bucket "$@"
+}
+
 # _fm_fleet_backend_ready: load bin/fm-backend.sh once, on first use.
 #
 # It is sourced HERE rather than at library load because the renderer sources

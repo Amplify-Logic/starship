@@ -454,6 +454,10 @@
       "audience": "operator-current"
     },
     {
+      "path": "docs/factory-pane.md",
+      "audience": "operator-current"
+    },
+    {
       "path": "docs/calm-mode-feasibility.md",
       "audience": "maintainer-verification"
     },

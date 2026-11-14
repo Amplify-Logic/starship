@@ -13,6 +13,7 @@ Start with the directory layout, then use the setting reference for the behavior
 | Backlog, preferences, and memory | [Backlog backend](#backlog-backend-taskstoml--configbacklog-backend), [captain preferences](#captain-preferences-datacaptainmd--datacaptain-sharedmd), [external memory tiers](#external-memory-tiers-memory-layering-section), [record export](#record-export-configrecord-export-root), [startup memory budget](#startup-memory-budget-configstartup-memory-budget), [startup digest trim](#startup-digest-trim-configstartup-digest-trim), and [stow guard](#stow-guard-configstow-guard) |
 | Supervision and presentation | [Pi supervision branch](#pi-supervision-branch), [supervision host](#supervision-host-configsupervision-host), [Codex native Stop park](#codex-native-stop-park-configcodex-stop-park), [warm-cache compaction](#warm-cache-compaction-configwarm-compact), and [Calm preference](#calm-preference-configcalm) |
 | Persistent secondmates | [Secondmate routes](#secondmate-routes-datasecondmatesmd) |
+| Naming the factories the Factory pane shows | [Factory registry](#factory-registry-datafactoriesmd) |
 | Review bots on owned GitHub pull requests | [Contribution review bots](#contribution-review-bots-configcontribution-review-bots) |
 | Starter settings for a new home: which model does which job, transcription words, and how hard the first mate thinks | [Starter settings](#starter-settings-first-launch), [crew dispatch profiles](#crew-dispatch-profiles-configcrew-dispatchjson), [speech-to-text vocabulary](#speech-to-text-vocabulary-configstt-vocabulary), and [primary effort](#primary-effort-configprimary-effort) |
 | Spoken replies | [Desk voice-out](#desk-voice-out-configspeak) |
@@ -106,7 +107,7 @@ Each effective `FM_HOME` contains private operational directories.
 
 `data/` holds durable private fleet records:
 
-- Project and secondmate registries.
+- Project, secondmate, and factory registries.
 - Captain preferences and optional shared captain preferences.
 - Learnings, backlog, briefs, scout reports, optional task status archives, and the optional per-task no-mistakes pipeline-spend ledger.
 - Explicitly installed content-addressed extension packages under `data/extensions/packages/`.
@@ -130,6 +131,7 @@ Each effective `FM_HOME` contains private operational directories.
 - The localhost web page's token, pid, port and request log under `state/web/` (`bin/fm-web.sh`; [web.md](web.md)).
 - The call recorder's process records, logs, short-lived audio chunks and decision logs under `state/calls/` (`bin/fm-call-lib.sh`; [call-companion.md](call-companion.md)).
 - The meeting intake's check records under `state/meetings/` (`bin/fm-meetings.sh`; [meetings.md](meetings.md)).
+- The Factory pane's cached record, pane activity, last look, who-steers log and opened tabs under `state/factory/` (`bin/fm-factory.py`; [factory-pane.md](factory-pane.md)).
 
 `config/` holds local gitignored operating choices, including explicit extension bindings under `config/extensions.d/`.
 
@@ -1666,6 +1668,30 @@ A source follows a branch, so it works only on the `main` [update channel](#upda
 The file is per home and is not inherited by secondmate homes.
 To stop following the branch, remove the file; a primary already ahead of `origin` is then reported as diverged until it is brought back by hand.
 The script's header owns the exact parsing and the per-home outcome lines.
+
+## Factory registry (data/factories.md)
+
+The optional local `data/factories.md` names this home's factories for the [Factory pane](factory-pane.md).
+Without it, every project in `data/projects.md` is its own factory, named by its `label=` token or its display name.
+
+Each factory is one `## <name>` heading followed by optional fields, one per line, and two optional lists:
+
+```markdown
+## Sample Shop
+id: sample-shop
+about: online shop for handmade cups
+projects: sample-shop, shop-api
+
+Rules:
+- English only.
+
+Learned:
+- 2026-11-12: Search results read better with the price on the first line.
+```
+
+- `id` is the factory's stable name in the record and the pane's own records; it defaults to the heading turned into lowercase words joined by dashes.
+- `projects` maps work to the factory by each work item's project, as registered in `data/projects.md`, an `alias=` included; work no factory claims shows under `Other work`.
+- `Rules:` and `Learned:` are what the factory page shows under its rules and what it has learned lately; a learned line may start with its date.
 
 ## Secondmate routes (data/secondmates.md)
 

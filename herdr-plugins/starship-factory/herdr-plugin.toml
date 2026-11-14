@@ -1,0 +1,21 @@
+# The Starship Factory pane: every factory at a glance, beside a pane.
+# bin/fm-factory-pane.sh owns every command below; docs/factory-pane.md owns
+# what the pane shows. Link this directory with `bin/fm-factory-pane.sh install`.
+id = "starship.factory"
+name = "Starship factories"
+version = "0.1.0"
+min_herdr_version = "0.9.5"
+description = "Every factory at a glance: what needs you, what each crew is doing right now, and what happened since you last looked"
+platforms = ["linux", "macos"]
+
+[[actions]]
+id = "open"
+title = "Show the Factory pane"
+contexts = ["pane", "workspace"]
+command = ["bash", "../../bin/fm-factory-pane.sh", "open"]
+
+[[panes]]
+id = "factory"
+title = "Factories"
+placement = "split"
+command = ["bash", "../../bin/fm-factory-pane.sh", "run"]
