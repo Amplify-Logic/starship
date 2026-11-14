@@ -344,15 +344,28 @@ def buckets_for(tasks: List[Dict[str, Any]]) -> Dict[str, str]:
     return result
 
 
-def owner_calls(home: str, buckets: Dict[str, str], backlog: Dict[str, Any]
-                ) -> Tuple[List[str], List[str]]:
+def owner_calls(home: str, buckets: Dict[str, str]
+                ) -> Tuple[List[str], List[str], List[Dict[str, Any]]]:
     """The owner's calls, from fm_owner_calls in bin/fm-fleet-status-lib.sh.
 
     That function is the one definition of what really waits on the owner, the
     count the bridge strip and the tap page show too: the held decisions that
-    wait on him now, and the PRs and ready branches waiting for his merge word. The pane hands
-    it the buckets and the backlog it already read, so nothing is read twice.
+    wait on him now, and the PRs and ready branches waiting for his merge word.
+    Its decisions come from the backlog as the home's tasks-axi adapter reads it
+    (`fm-fleet-snapshot.sh --axi-backlog`), read once here and handed over with
+    the buckets the pane already read; those records come back too, so a held
+    decision the markdown snapshot lacks can still be drawn.
     """
+    state = os.path.join(home, "state")
+    read = subprocess.run(["bash", os.path.join(BIN, "fm-fleet-snapshot.sh"), "--axi-backlog"],
+                          capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL,
+                          env=dict(os.environ, FM_HOME=home, FM_STATE_OVERRIDE=state))
+    try:
+        backlog = json.loads(read.stdout) if read.returncode == 0 else None
+    except ValueError:
+        backlog = None
+    if not isinstance(backlog, dict):
+        raise RuntimeError("could not read what waits on the owner")
     with tempfile.TemporaryDirectory(prefix="fm-factory-calls.") as tmp:
         bucket_file = os.path.join(tmp, "buckets")
         backlog_file = os.path.join(tmp, "backlog.json")
@@ -360,9 +373,9 @@ def owner_calls(home: str, buckets: Dict[str, str], backlog: Dict[str, Any]
             for task_id, bucket in buckets.items():
                 handle.write("%s\t%s\n" % (task_id, bucket))
         with open(backlog_file, "w", encoding="utf-8") as handle:
-            json.dump(backlog or {}, handle)
+            json.dump(backlog, handle)
         script = '. "$1/fm-fleet-status-lib.sh" && fm_owner_calls "$2" "$3" "$4"'
-        out = subprocess.run(["bash", "-c", script, "fm-factory", BIN, os.path.join(home, "state"),
+        out = subprocess.run(["bash", "-c", script, "fm-factory", BIN, state,
                               bucket_file, backlog_file], capture_output=True, text=True, timeout=60)
     if out.returncode != 0:
         raise RuntimeError("could not read what waits on the owner")
@@ -373,7 +386,8 @@ def owner_calls(home: str, buckets: Dict[str, str], backlog: Dict[str, Any]
             decisions.append(parts[1])
         elif len(parts) >= 2 and parts[0] == "merge":
             merges.append(parts[1])
-    return decisions, merges
+    records = [r for r in backlog.get("records") or [] if r.get("structured") and r.get("id")]
+    return decisions, merges, records
 
 
 def decision_shapes(home: str, ids: List[str]) -> Dict[str, Dict[str, Any]]:
@@ -636,12 +650,14 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
         factory.update(steered_by=steering.get(factory["id"], "Starship"), jobs=[], needs=[], talk=[])
 
     rows = [r for r in (snapshot.get("backlog") or {}).get("records") or [] if r.get("structured") and r.get("id")]
-    row_of = {r["id"]: r for r in rows}
     tasks = [t for t in snapshot.get("tasks") or [] if t.get("kind") != "secondmate" and t.get("id")]
     buckets = buckets_for(tasks)
     # NEEDS YOU is exactly the owner's calls, the one count the bridge strip and
     # the tap page show; a worker's question, a pause or the checks never are.
-    decision_ids, merge_ids = owner_calls(home, buckets, snapshot.get("backlog") or {})
+    decision_ids, merge_ids, adapter_rows = owner_calls(home, buckets)
+    known = {r["id"] for r in rows}
+    rows += [r for r in adapter_rows if r["id"] in decision_ids and r["id"] not in known]
+    row_of = {r["id"]: r for r in rows}
     shapes = decision_shapes(home, decision_ids)
     needs: List[Dict[str, Any]] = []
     feed: List[Dict[str, Any]] = []

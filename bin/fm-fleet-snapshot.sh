@@ -619,11 +619,12 @@ backlog_json() (  # [<backlog-path>] - defaults to this home's $BACKLOG
 # rows: id, state, kind, title, the hold fields, and the blockers, classified by
 # classify_holds above. Only an undated captain hold needs its body, for the
 # hold-set stamp its age is read from (its created date for a legacy unstamped
-# hold), so only those are shown. It fails, printing nothing, when the listing
+# hold), so only those are shown, up to eight at a time. Rows end at the first
+# line after the table that is not one, such as the help block. It fails, printing nothing, when the listing
 # or any of those rows cannot be read, or the listing is cut short.
 axi_backlog_json() (
   set -o pipefail
-  local axi=$SCRIPT_DIR/fm-tasks-axi.sh listing rows ids id shown stamps
+  local axi=$SCRIPT_DIR/fm-tasks-axi.sh listing rows ids stamps
   listing=$(FM_HOME=$FM_HOME FM_DATA_OVERRIDE=$DATA "$axi" list --limit 100000 \
     --fields hold_kind,hold_reason,hold_until,blocked_by </dev/null 2>/dev/null) || return 1
   rows=$(printf '%s\n' "$listing" | perl -MJSON::PP -e '
@@ -632,8 +633,10 @@ axi_backlog_json() (
     while (my $line = <STDIN>) {
       chomp $line;
       if ($line =~ /^count: (\d+)(?: of (\d+) total)?$/) { ($count, $total) = ($1, $2 // $1); next }
-      if ($line =~ /^tasks\[\d+\]\{([^}]*)\}:\s*$/) { $fields = [split /,/, $1]; next }
-      next unless $fields && $line =~ /^  \S/;
+      if (!$fields && $line =~ /^tasks\[\d+\]\{([^}]*)\}:\s*$/) { $fields = [split /,/, $1]; next }
+      next unless $fields;
+      next if $line eq "";
+      last unless $line =~ /^  \S/;
       my ($rest, @values) = (substr($line, 2));
       while (1) {
         if ($rest =~ s/^("(?:[^"\\]|\\.)*")//) { push @values, $json->decode($1) }
@@ -646,7 +649,7 @@ axi_backlog_json() (
       my $absent = sub { my $v = shift; (!defined $v || $v eq "" || $v eq "-") ? undef : $v };
       my $blocked = $absent->($row{blocked_by});
       push @rows, {structured => JSON::PP::true, id => $row{id}, state => $row{state},
-                   kind => $absent->($row{kind}), title => $row{title},
+                   kind => $absent->($row{kind}), repo => $absent->($row{repo}), title => $row{title},
                    hold_kind => $absent->($row{hold_kind}), hold_reason => $absent->($row{hold_reason}),
                    hold_until => $absent->($row{hold_until}), hold_set => undef, since => undef,
                    blocked_by_ids => [grep { $_ ne "" && $_ ne "none" } split /\s*,\s*/, ($blocked // "")]};
@@ -657,10 +660,9 @@ axi_backlog_json() (
   ids=$(printf '%s' "$rows" | jq -r '.[] | select(.hold_kind == "captain" and .hold_reason != null
     and .state != "done" and .hold_until == null) | .id') || return 1
   stamps='{}'
-  while IFS= read -r id; do
-    [ -n "$id" ] || continue
-    shown=$(FM_HOME=$FM_HOME FM_DATA_OVERRIDE=$DATA "$axi" show "$id" --full </dev/null 2>/dev/null) || return 1
-    stamps=$(printf '%s\n' "$shown" | perl -MJSON::PP -e '
+  if [ -n "$ids" ]; then
+    # shellcheck disable=SC2016
+    stamps=$(printf '%s\n' "$ids" | FM_HOME=$FM_HOME FM_DATA_OVERRIDE=$DATA AXI=$axi STAMP_PL='
       my $json = JSON::PP->new->allow_nonref;
       my %task;
       while (my $line = <STDIN>) {
@@ -672,11 +674,12 @@ axi_backlog_json() (
       my ($first) = split /\n/, ($task{body} // "");
       my ($set) = ($first // "") =~ /^Captain hold set:\s*(\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}Z)?)$/;
       my $created = defined $task{created} && $task{created} ne "-" && $task{created} ne "" ? $task{created} : undef;
-      print $json->encode({hold_set => $set, since => $created});
-    ' | jq -c --argjson stamps "$stamps" --arg id "$id" '. as $s | $stamps | .[$id] = $s') || return 1
-  done <<IDS
-$ids
-IDS
+      print $json->encode({id => $ARGV[0], hold_set => $set, since => $created}), "\n";
+    ' \
+      xargs -n 1 -P 8 bash -c 'shown=$("$AXI" show "$1" --full </dev/null 2>/dev/null) || exit 1
+        printf "%s\n" "$shown" | perl -MJSON::PP -e "$STAMP_PL" "$1"' fm-fleet-snapshot \
+      | jq -s 'map({(.id): {hold_set, since}}) | add // {}') || return 1
+  fi
   jq -n --argjson rows "$rows" --argjson stamps "$stamps" --arg today "$SNAPSHOT_TODAY" \
     --arg now "$SNAPSHOT_NOW" --argjson age_days "$FM_SNAPSHOT_UNDATED_HOLD_AGE_DAYS" "$HOLD_CLASSIFY_JQ_DEFS"'
     {path:"tasks-axi", present:true,

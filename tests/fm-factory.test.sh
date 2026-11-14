@@ -18,7 +18,11 @@ mkdir -p "$BINDIR"
 FACTORY="$ROOT/bin/fm-factory.py"
 PANE="$ROOT/bin/fm-factory-pane.sh"
 NOW=1794643200   # 2026-11-14T08:00:00Z
-export TZ=UTC FM_FACTORY_NOW=$NOW FM_FACTORY_PEEK=
+export TZ=UTC FM_FACTORY_NOW=$NOW FM_FACTORY_PEEK= FM_SNAPSHOT_NOW=2026-11-14T08:00:00Z
+# The owner's calls read the backlog through the tasks-axi adapter; this
+# stand-in serves each case's fixture backlog (FM_TEST_AXI_BACKLOG).
+fm_install_markdown_tasks_axi "$TMP_ROOT/axibin"
+export PATH="$TMP_ROOT/axibin:$PATH"
 
 # A stand-in inbox: `note` records its arguments and body, `receipts` answers
 # with the notes recorded so far, the shape bin/fm-inbox.sh receipts prints.
@@ -120,6 +124,7 @@ reset_case() {
   : > "$CALLS"
   export FM_HOME="$HOME_FIX" FM_FACTORY_TEST_CALLS="$CALLS" FM_FACTORY_TEST_NOTES="$TMP_ROOT/case$CASE/notes"
   export FM_FACTORY_SNAPSHOT="$HOME_FIX/snapshot.json" FM_FACTORY_TEST_CONFIG="$TMP_ROOT/case$CASE/config"
+  export FM_TEST_AXI_BACKLOG="$HOME_FIX/snapshot.json"
   unset FM_FACTORY_TEST_NO_TAB FM_FACTORY_TEST_TAB_GONE HERDR_BIN_PATH HERDR_PANE_ID HERDR_TAB_ID \
     HERDR_WORKSPACE_ID HERDR_SOCKET_PATH
 }
@@ -427,6 +432,24 @@ test_ready_work_held_until_a_date_is_not_ready_for_you() {
   pass "factory record: ready work the owner held until a date reads on hold, not ready for you"
 }
 
+# A home whose backlog is not markdown has no rows in the snapshot's markdown
+# read; its held decisions still reach NEEDS YOU through the tasks-axi adapter.
+test_held_decisions_come_through_a_non_markdown_adapter() {
+  reset_case
+  write_registry
+  write_world
+  jq '.backlog' "$FM_FACTORY_SNAPSHOT" > "$HOME_FIX/adapter-backlog.json"
+  jq '.backlog = {path: "data/backlog.md", present: false, records: []}' "$FM_FACTORY_SNAPSHOT" \
+    > "$HOME_FIX/snapshot.next" && mv "$HOME_FIX/snapshot.next" "$FM_FACTORY_SNAPSHOT"
+  export FM_TEST_AXI_BACKLOG="$HOME_FIX/adapter-backlog.json"
+  take_record
+  assert_equals "$(q '[.needs_you[] | "\(.id):\(.kind)"] | join(" ")')" \
+    "garden-chart:question shop-provider:question garden-share:finished work" \
+    "the adapter's held decisions are not under NEEDS YOU"
+  assert_equals "$(q .counts.need_you)" "3" "the adapter's held decisions are not counted"
+  pass "factory record: held decisions on a non-markdown backlog reach NEEDS YOU through the adapter"
+}
+
 # A ship spawned without a mode records no mode= at all; its ready report is
 # still the ready report, read as the status bar reads an empty mode.
 test_a_ship_with_no_mode_still_reports_its_pr_ready() {
@@ -703,6 +726,7 @@ fm_test_run \
   test_a_job_with_no_sign_of_life_reads_quiet \
   test_a_changing_pane_is_a_sign_of_life \
   test_ready_work_held_until_a_date_is_not_ready_for_you \
+  test_held_decisions_come_through_a_non_markdown_adapter \
   test_a_ship_with_no_mode_still_reports_its_pr_ready \
   test_without_a_registry_each_project_is_a_factory \
   test_work_no_factory_claims_is_still_shown \

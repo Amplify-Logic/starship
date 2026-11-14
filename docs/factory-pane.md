@@ -115,7 +115,7 @@ Every state is a word: a job is `running`, `waiting on you`, `ready for you`, `s
 | --- | --- |
 | Jobs, decisions, finished work, the work list | `bin/fm-fleet-snapshot.sh --json`, the canonical fleet reading |
 | Each job's state word | `fm_fleet_status_bucket` in `bin/fm-fleet-status-lib.sh`, the same fold the status bar and bridge strip count with |
-| What needs you | `fm_owner_calls` in `bin/fm-fleet-status-lib.sh`, over that snapshot's backlog and those state words |
+| What needs you | `fm_owner_calls` in `bin/fm-fleet-status-lib.sh`, over the backlog as the home's tasks-axi adapter reads it (`bin/fm-fleet-snapshot.sh --axi-backlog`) and those state words |
 | A question's options and suggestion | `bin/fm-tap-desk.sh shapes`, the reading its tap card shows |
 | Which factory a job belongs to | Its work item's project, through the factory registry |
 | How long a job has run | Its spawn time in the task's metadata |

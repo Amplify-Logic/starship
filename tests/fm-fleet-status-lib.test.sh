@@ -729,6 +729,7 @@ case "\$1" in
     printf '  old-call,queued,captain,r,"An old call",captain,"old",-,none\n'
     printf '  waits,queued,captain,r,"After other work",captain,"after other",-,other\n'
     printf '  other,queued,ship,r,"The other work",-,-,-,none\n'
+    printf 'help[1]:\n  - Run \`tasks-axi show <id> --full\` for full notes on a task\n'
     ;;
   show)
     case "\$2" in
