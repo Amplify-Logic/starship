@@ -321,6 +321,15 @@ function rulesFile(name) {
     || name.startsWith(".agents/opt-in-skills/") || name.startsWith("hooks/");
 }
 
+// bin/fm-role-lib.sh owns which projects fm-pr-merge guards for Starship's own
+// rules; a card names rule files only for those, and a project-less task is
+// guarded as fm-pr-merge guards it.
+async function rulesGuarded(ctx, project) {
+  if (!project) return true;
+  const result = await runAsync(ctx, "bash", ["-c", '. "$0" && fm_role_rules_guarded "$1" "$2" "$3"', path.join(ctx.root, "bin/fm-role-lib.sh"), project, ctx.root, ctx.home]);
+  return result.status === 0;
+}
+
 // bin/fm-fleet-status-lib.sh owns whether a task's work waits on the captain;
 // only its `ready` reading makes a merge card.
 function fleetBucket(ctx, id) {
@@ -426,9 +435,12 @@ async function loadMergeCards(ctx, ledger) {
     const author = typeof pr.author?.login === "string" ? pr.author.login : "";
     const login = await ownLogin(parts.host);
     if (!author || !login) return { id, error: `could not read who opened ${meta.pr}, so its card could not say what a tap approves` };
-    const files = await runAsync(ctx, "gh", ["api", "--hostname", parts.host, "--paginate", `repos/${parts.owner}/${parts.repo}/pulls/${parts.number}/files`, "--jq", ".[] | .filename, (.previous_filename // empty)"]);
-    if (files.status !== 0) return { id, error: `could not read which files ${meta.pr} changes, so its card could not say what a tap approves` };
-    const rulesFiles = [...new Set(files.stdout.split("\n").map((name) => name.trim()).filter(rulesFile))].sort();
+    let rulesFiles = [];
+    if (await rulesGuarded(ctx, meta.project)) {
+      const files = await runAsync(ctx, "gh", ["api", "--hostname", parts.host, "--paginate", `repos/${parts.owner}/${parts.repo}/pulls/${parts.number}/files`, "--jq", ".[] | .filename, (.previous_filename // empty)"]);
+      if (files.status !== 0) return { id, error: `could not read which files ${meta.pr} changes, so its card could not say what a tap approves` };
+      rulesFiles = [...new Set(files.stdout.split("\n").map((name) => name.trim()).filter(rulesFile))].sort();
+    }
     const notYet = latestOutcome(ledger, "merge", id, pr.headRefOid, "not-yet");
     return {
       card: {

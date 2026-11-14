@@ -229,7 +229,8 @@
 # project shares firstmate's lineage, or when that cannot be ruled out
 # (bin/fm-role-lib.sh fm_role_self_repo), and when it is a Starship add-on:
 # this home's configured add-on (bin/fm-addon.sh root) or any repository with
-# bin/fm-team-root.sh at its root. Any other project proven unrelated skips it.
+# bin/fm-team-root.sh at its root; bin/fm-role-lib.sh fm_role_rules_guarded
+# owns that test. Any other project proven unrelated skips it.
 # Both are read live at merge time, and an author, account, or changed-file
 # read that fails refuses rather than passing. --captain-approved, parsed
 # before the optional -- separator, records that the captain explicitly
@@ -638,18 +639,8 @@ if [ "$NO_TASK" = false ]; then
   fi
   MERGE_EXPECTED_SPAWN_GEN=$FM_BACKLOG_META_SPAWN_GEN
   MERGE_PROJECT=$(grep '^project=' "$META" | tail -1 | cut -d= -f2- || true)
-  if [ -n "$MERGE_PROJECT" ]; then
-    rules_lineage=0
-    fm_role_self_repo "$MERGE_PROJECT" "$FM_ROOT" || rules_lineage=$?
-    [ "$rules_lineage" -ne 1 ] || RULES_GUARDED=false
-    if [ "$RULES_GUARDED" = false ]; then
-      if [ -f "$MERGE_PROJECT/bin/fm-team-root.sh" ]; then
-        RULES_GUARDED=true
-      elif addon_root=$(FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-addon.sh" root 2>/dev/null) \
-        && [ "$addon_root" = "$(cd "$MERGE_PROJECT" 2>/dev/null && pwd -P)" ]; then
-        RULES_GUARDED=true
-      fi
-    fi
+  if [ -n "$MERGE_PROJECT" ] && ! fm_role_rules_guarded "$MERGE_PROJECT" "$FM_ROOT" "$FM_HOME"; then
+    RULES_GUARDED=false
   fi
 fi
 

@@ -52,6 +52,8 @@
 #   fm_role_remote_identity <url> [<dir>]- host/owner/repo or path:<abs> or empty
 #   fm_role_publication_target <git-dir> - identity a default publication reaches
 #   fm_role_self_repo <project> <root>   - 0 firstmate lineage, 1 not, 2 unknown
+#   fm_role_rules_guarded <project> <root> <home>
+#                                        - 0 a change to Starship's rules there needs the captain's yes
 #   fm_role_parse_file <file>            - sets FM_ROLE/FM_ROLE_SCOPE/FM_ROLE_DIAG
 #   fm_role_resolve <home> <config-dir>  - effective role; adds FM_ROLE_SOURCE
 #   fm_role_inherit_payload <home> <config-dir> <out-file>
@@ -291,6 +293,21 @@ fm_role_self_repo() {
     return 2
   fi
   return 1
+}
+
+# fm_role_rules_guarded <project-dir> <code-root> <home> - rc 0 when a pull
+# request on <project-dir> can change Starship's own rules: the project shares
+# firstmate's lineage or that cannot be ruled out (fm_role_self_repo), it has
+# bin/fm-team-root.sh at its root, or it is <home>'s configured add-on
+# (bin/fm-addon.sh root). rc 1 only for a project proven unrelated.
+# bin/fm-pr-merge.sh guards such a merge, and bin/fm-tap-desk.sh labels its card.
+fm_role_rules_guarded() {
+  local proj=$1 root=$2 home=$3 rc=0 addon
+  fm_role_self_repo "$proj" "$root" || rc=$?
+  [ "$rc" -eq 1 ] || return 0
+  [ ! -f "$proj/bin/fm-team-root.sh" ] || return 0
+  addon=$(FM_HOME="$home" "$(dirname "${BASH_SOURCE[0]}")/fm-addon.sh" root 2>/dev/null) || return 1
+  [ "$addon" = "$(cd "$proj" 2>/dev/null && pwd -P)" ]
 }
 
 # fm_role_parse_file <file> - parse one role file. Sets FM_ROLE, FM_ROLE_SCOPE,

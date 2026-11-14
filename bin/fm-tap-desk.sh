@@ -35,8 +35,10 @@
 # each option, keep, drop, and you decide. A merge card carries the PR URL, the
 # live head commit as its identity, who opened it and whether that is another
 # account, and every file it changes among Starship's own rules (the list
-# bin/fm-pr-merge.sh guards); a PR whose author, this home's account, or changed
-# files cannot be read gets no card. Its choices are merge and not yet.
+# bin/fm-pr-merge.sh guards), read only for a project that script guards
+# (bin/fm-role-lib.sh fm_role_rules_guarded), so a proven-unrelated project's
+# own AGENTS.md is never labelled Starship's rules; a PR whose author, this
+# home's account, or guarded changed files cannot be read gets no card. Its choices are merge and not yet.
 # Every card takes an optional short reason.
 #
 # Options and the recommendation are read the way bin/fm-decision-surface.mjs

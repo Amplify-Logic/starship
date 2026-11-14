@@ -78,12 +78,15 @@ test_export_lists_decisions_and_ready_merges() {
   tasks add ship-validating "Still validating" --kind ship --repo sample >/dev/null
   tasks add ship-red "Red checks" --kind ship --repo sample >/dev/null
   tasks add ship-rules "Rules change" --kind ship --repo sample >/dev/null
-  fm_write_meta "$HOME_DIR/state/ship-pr.meta" "kind=ship" "project=/x/sample" "pr=https://github.com/o/sample/pull/7"
+  # An unrelated project's own agent rules are not Starship's; this repository's are.
+  git init -q "$HOME_DIR/unrelated"
+  git -C "$HOME_DIR/unrelated" -c user.name=t -c user.email=t@example.invalid commit -q --allow-empty -m init
+  fm_write_meta "$HOME_DIR/state/ship-pr.meta" "kind=ship" "project=$HOME_DIR/unrelated" "pr=https://github.com/o/sample/pull/7"
   fm_write_meta "$HOME_DIR/state/ship-draft.meta" "kind=ship" "pr=https://github.com/o/sample/pull/8"
   fm_write_meta "$HOME_DIR/state/ship-merged.meta" "kind=ship" "pr=https://github.com/o/sample/pull/9"
   fm_write_meta "$HOME_DIR/state/ship-validating.meta" "kind=ship" "pr=https://github.com/o/sample/pull/10"
   fm_write_meta "$HOME_DIR/state/ship-red.meta" "kind=ship" "pr=https://github.com/o/sample/pull/11"
-  fm_write_meta "$HOME_DIR/state/ship-rules.meta" "kind=ship" "pr=https://github.com/o/sample/pull/12"
+  fm_write_meta "$HOME_DIR/state/ship-rules.meta" "kind=ship" "project=$ROOT" "pr=https://github.com/o/sample/pull/12"
   fm_write_meta "$HOME_DIR/state/ship-nopr.meta" "kind=ship"
   # Every open PR reads as open and non-draft to gh; only the fleet reader
   # says which of them is ready.
@@ -103,7 +106,7 @@ case "$1 $2" in
   "api --hostname")
     case "$*" in
       *" user "*) echo me ;;
-      *pulls/7/files*) printf 'src/widget.js\ndocs/AGENTS-notes.md\n' ;;
+      *pulls/7/files*) printf 'src/widget.js\nAGENTS.md\nCLAUDE.md\n' ;;
       *pulls/12/files*) printf 'src/x.js\n.agents/skills/demo/SKILL.md\nAGENTS.md\n' ;;
       *) exit 1 ;;
     esac
@@ -350,13 +353,15 @@ test_defaults_apply_only_marked_easy_old_safe_decisions() {
   hold hold kept-one --title "Choose the banner" --reason "Choose: wide; OR narrow." --repo sample >/dev/null
   hold hold deferred --title "Choose the theme" --reason "Choose: dark; OR light." --repo sample --until 2999-01-01 >/dev/null
   hold hold wordy --title "Choose the layout" --reason "Choose: grid; OR list." --repo sample >/dev/null
+  hold hold past-deferred --title "Choose the sidebar" --reason "Choose: left; OR right." --repo sample --until 2020-01-02 >/dev/null
   local id
-  for id in due-one unmarked kept-one deferred wordy; do backdate_hold "$id" 2020-01-01T00:00:00Z; done
+  for id in due-one unmarked kept-one deferred wordy past-deferred; do backdate_hold "$id" 2020-01-01T00:00:00Z; done
   desk mark due-one --recommend blue --easy-undo >/dev/null || fail "could not mark due-one"
   desk mark young-one --recommend sans --easy-undo >/dev/null || fail "could not mark young-one"
   desk mark kept-one --recommend wide --easy-undo >/dev/null || fail "could not mark kept-one"
   desk mark deferred --recommend dark --easy-undo >/dev/null || fail "could not mark deferred"
   desk mark wordy --recommend grid --easy-undo >/dev/null || fail "could not mark wordy"
+  desk mark past-deferred --recommend left --easy-undo >/dev/null || fail "could not mark past-deferred"
   # A body edit made after marking cannot smuggle a refused class past the default.
   tasks update wordy --title "Choose the layout and delete the old one" >/dev/null
   write_tap "$HOME_DIR/taps" d.kept-one decision kept-one "$(identity_of kept-one)" keep "" ""
@@ -371,6 +376,9 @@ test_defaults_apply_only_marked_easy_old_safe_decisions() {
       check(by["young-one"].default_in_days === 7, 3);
       check(by["deferred"].easy_undo === true && by["deferred"].default_in_days === null, 4);
       check(by["kept-one"].default_in_days === null && by["wordy"].default_in_days === null && by["unmarked"].default_in_days === null, 5);
+      // tasks-axi drops a hold whose --until date has passed from the held
+      // listing, so neither the page nor the default ever reaches it.
+      check(!by["past-deferred"], 6);
     });' || fail "a card promises a default that defaults would never apply"
   desk defaults > "$HOME_DIR/dry.out" || fail "the defaults dry run failed"
   assert_grep "would default: due-one: blue" "$HOME_DIR/dry.out" "the due decision was not listed"
@@ -385,6 +393,8 @@ test_defaults_apply_only_marked_easy_old_safe_decisions() {
   assert_equals "queued" "$(field kept-one state)" "a kept decision was defaulted"
   assert_grep "skipped: kept-one: the owner tapped keep" "$HOME_DIR/apply.out" "the keep skip was not explained"
   assert_equals "queued" "$(field deferred state)" "a deferred decision was defaulted"
+  assert_equals "queued" "$(field past-deferred state)" "a decision whose deferral date passed was defaulted"
+  assert_no_grep "past-deferred" "$HOME_DIR/apply.out" "a decision whose deferral date passed was offered a default"
   assert_equals "queued" "$(field wordy state)" "a destructive-sounding decision was defaulted"
   assert_grep "skipped: wordy: it reads as destructive" "$HOME_DIR/apply.out" "the class refusal was not explained"
   local rc=0
