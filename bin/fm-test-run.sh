@@ -27,13 +27,24 @@
 #
 # Aggregation (no suite execution):
 #   fm-test-run.sh --aggregate-json <out.json> <lane.json> [more lane.json...]
+#   After the summary line it prints one line per lane, slowest share of its
+#   limit first, so the CI log shows how long each lane took against its limit:
+#     FM_TEST_LANE lane=<name> duration_ms=<n> limit_ms=<n|none> used_percent=<n|none> near_limit=<true|false>
+#   A lane's limit is the --max-wall-ms its run recorded in its timing JSON.
+#   near_limit is true when the lane used 85 percent or more of that limit;
+#   under GitHub Actions each such lane also prints a ::warning:: annotation.
+#   When GITHUB_STEP_SUMMARY names a file, the same lanes in the same order are
+#   appended to it as a Markdown table (lane, time, limit, percent used, near
+#   limit), so the run's summary page shows them without opening a job log.
 #
 # Options:
 #   --json <path>   write a deterministic timing artifact after the run. Each
 #                   script record carries its family, expected gate-skip class,
 #                   exit, duration, whether it gate-skipped, and the reason it
 #                   gave (empty when it ran), so a lane can say which harness or
-#                   tool this host could not exercise.
+#                   tool this host could not exercise. With --max-wall-ms the
+#                   summary also records it as max_wall_ms, the lane limit
+#                   --aggregate-json reports against.
 #   --list          print selected script paths (one per line) and exit 0
 #   --list-scheduled
 #                   print selected paths longest-hint-first and exit 0.
@@ -1506,8 +1517,11 @@ aggregate_timing_json() {
   [ "$#" -gt 0 ] || die "--aggregate-json requires at least one input timing JSON"
   command -v python3 >/dev/null 2>&1 || die "--aggregate-json requires python3"
   python3 - "$out" "$@" <<'PY'
-import json, sys
+import json, os, sys
 from pathlib import Path
+
+# A lane at or above this share of its limit is flagged: within 15 percent.
+NEAR_LIMIT_PERCENT = 85
 
 out = Path(sys.argv[1])
 inputs = [Path(p) for p in sys.argv[2:]]
@@ -1520,13 +1534,21 @@ wall_ms = 0
 for path in inputs:
     doc = json.loads(path.read_text(encoding="utf-8"))
     summary = doc.get("summary") or {}
+    selection = doc.get("selection") or ""
+    duration_ms = int(summary.get("duration_ms") or 0)
+    limit_ms = int(summary.get("max_wall_ms") or 0) or None
+    used_percent = duration_ms * 100 // limit_ms if limit_ms else None
     lane = {
         "path": str(path),
         "run_id": doc.get("run_id"),
         "selection": doc.get("selection"),
+        "name": selection.split(";", 1)[0].removeprefix("lane=") or path.stem,
         "started_at": doc.get("started_at"),
         "finished_at": doc.get("finished_at"),
         "summary": summary,
+        "limit_ms": limit_ms,
+        "used_percent": used_percent,
+        "near_limit": bool(limit_ms) and duration_ms * 100 >= limit_ms * NEAR_LIMIT_PERCENT,
     }
     lanes.append(lane)
     total += int(summary.get("total") or 0)
@@ -1556,6 +1578,30 @@ agg = {
 out.parent.mkdir(parents=True, exist_ok=True)
 out.write_text(json.dumps(agg, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 print(f"FM_TEST_AGGREGATE lanes={len(lanes)} total={total} failed={failed} skipped_gate={skipped} critical_path_duration_ms={wall_ms}")
+github = os.environ.get("GITHUB_ACTIONS") == "true"
+step_summary = os.environ.get("GITHUB_STEP_SUMMARY")
+rows = ["| Lane | Time | Limit | Used | Near limit |", "|---|---|---|---|---|"]
+
+def clock(ms):
+    return f"{ms // 60000}m{ms // 1000 % 60:02d}s"
+
+for lane in sorted(lanes, key=lambda l: (-(l["used_percent"] if l["used_percent"] is not None else -1),
+                                         -int(l["summary"].get("duration_ms") or 0), l["name"])):
+    duration_ms = int(lane["summary"].get("duration_ms") or 0)
+    limit = lane["limit_ms"] if lane["limit_ms"] else "none"
+    used = lane["used_percent"] if lane["used_percent"] is not None else "none"
+    near = "true" if lane["near_limit"] else "false"
+    print(f"FM_TEST_LANE lane={lane['name']} duration_ms={duration_ms} limit_ms={limit} used_percent={used} near_limit={near}")
+    if lane["near_limit"] and github:
+        print(f"::warning title=Slow test lane::{lane['name']} took {duration_ms // 1000}s, {used} percent of its {lane['limit_ms'] // 1000}s limit")
+    rows.append("| {} | {} | {} | {} | {} |".format(
+        lane["name"], clock(duration_ms),
+        clock(lane["limit_ms"]) if lane["limit_ms"] else "none",
+        f"{used}%" if lane["used_percent"] is not None else "none",
+        "yes" if lane["near_limit"] else "no"))
+if step_summary:
+    with open(step_summary, "a", encoding="utf-8") as fh:
+        fh.write("### Test time per lane\n\n" + "\n".join(rows) + "\n")
 PY
 }
 
@@ -2266,15 +2312,16 @@ write_json_artifact() {
   local selection=$9
   local records_file=${10}
   local families_file=${11}
+  local max_wall_ms=${12:-}
 
   if ! command -v python3 >/dev/null 2>&1; then
     die "--json requires python3 to emit a valid timing artifact"
   fi
 
-  python3 - "$out" "$started" "$finished" "$run_id" "$total" "$failed" "$skipped" "$duration" "$selection" "$records_file" "$families_file" <<'PY'
+  python3 - "$out" "$started" "$finished" "$run_id" "$total" "$failed" "$skipped" "$duration" "$selection" "$records_file" "$families_file" "$max_wall_ms" <<'PY'
 import json, sys
 
-out, started, finished, run_id, total, failed, skipped, duration, selection, records_file, families_file = sys.argv[1:]
+out, started, finished, run_id, total, failed, skipped, duration, selection, records_file, families_file, max_wall_ms = sys.argv[1:]
 
 scripts = []
 with open(records_file, encoding="utf-8") as fh:
@@ -2321,6 +2368,8 @@ doc = {
     "scripts": scripts,
     "families": families,
 }
+if max_wall_ms:
+    doc["summary"]["max_wall_ms"] = int(max_wall_ms)
 with open(out, "w", encoding="utf-8") as fh:
     json.dump(doc, fh, indent=2, sort_keys=True)
     fh.write("\n")
@@ -2658,7 +2707,7 @@ if [ "${#SCRIPTS[@]}" -eq 0 ]; then
     mkdir -p "$(dirname "$JSON_PATH")"
     write_json_artifact "$JSON_PATH" "$RUN_STARTED_ISO" "$empty_finished_iso" \
       "fm-test-run-${RUN_STARTED_MS}-$$" 0 0 0 "$empty_duration" \
-      "$SELECTION_DESC" "$empty_rec" "$empty_fam"
+      "$SELECTION_DESC" "$empty_rec" "$empty_fam" "$MAX_WALL_MS"
     rm -f "$empty_rec" "$empty_fam"
   fi
   exit "$empty_rc"
@@ -3134,7 +3183,7 @@ if [ -n "$JSON_PATH" ]; then
   write_json_artifact "$JSON_PATH" \
     "$RUN_STARTED_ISO" "$RUN_FINISHED_ISO" "$RUN_ID" \
     "$TOTAL" "$FAILED" "$SKIPPED_GATE" "$RUN_DURATION" \
-    "$SELECTION_DESC" "$RECORDS" "$FAMILIES_TSV"
+    "$SELECTION_DESC" "$RECORDS" "$FAMILIES_TSV" "$MAX_WALL_MS"
   json_rc=$?
   set -e
   if [ "$json_rc" -eq 0 ]; then

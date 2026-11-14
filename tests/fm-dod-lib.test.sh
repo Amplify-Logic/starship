@@ -406,6 +406,49 @@ test_pr_based_dod_draft_check_uses_gh_axi() {
   pass "PR-based DoD draft check uses gh-axi"
 }
 
+# Every no-mistakes DoD stops the worker after its commit with a handoff done.
+# Worded "The task is complete only when committed", that handoff read as the
+# finish to workers and supervisor alike. Each variant must say a commit finishes
+# the implementation, not the task, and name the handoff line it asks for; that
+# exact line must read as a handoff, while the variant's own ready report must
+# not.
+test_no_mistakes_dod_names_the_handoff_never_the_finish() {
+  local label forge pr out handoff ready
+  while IFS='|' read -r label forge pr ready; do
+    [ -n "$label" ] || continue
+    out="$TMP_ROOT/dod-handoff-$label.md"
+    fm_dod_block no-mistakes dod-handoff fm/dod-handoff "$forge" '' '' "$pr" > "$out" \
+      || fail "$label: no-mistakes DoD did not render"
+    assert_no_grep 'The task is complete only when committed' "$out" \
+      "$label: the DoD still calls a local commit the finished task"
+    assert_grep 'Committing on your branch finishes the implementation, not the task' "$out" \
+      "$label: the DoD does not say a commit is not the finish"
+    # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
+    assert_grep 'append `done [at=<epoch>]: handoff, ready for no-mistakes - {summary}`' "$out" \
+      "$label: the DoD does not name the handoff line"
+    assert_grep 'it never reports the task finished' "$out" \
+      "$label: the DoD does not say the handoff is never the finish"
+    handoff='done [at=1]: handoff, ready for no-mistakes - parser fixed'
+    fm_dod_nm_handoff_done ship no-mistakes "$handoff" >/dev/null \
+      || fail "$label: the DoD's own handoff line was not read as a handoff"
+    ! fm_dod_nm_handoff_done ship no-mistakes "$ready" >/dev/null \
+      || fail "$label: the DoD's ready report was read as a handoff"
+  done <<'ROWS'
+pr-auto|none|auto|done [at=1]: PR https://github.com/o/r/pull/7 checks green
+pr-manual|none|manual|done [at=1]: PR https://github.com/o/r/pull/7 checks green
+gerrit|gerrit|auto|done [at=1]: PR https://review.example.test/c/proj/+/42 published for review
+ROWS
+  ! fm_dod_nm_handoff_done ship '' 'done [at=1]: committed 1a2b3c4' >/dev/null \
+    || fail "a record with no mode, which predates the handoff contract, was read as a handoff"
+  ! fm_dod_nm_handoff_done ship direct-PR 'done [at=1]: committed 1a2b3c4' >/dev/null \
+    || fail "a direct-PR done was read as a no-mistakes handoff"
+  ! fm_dod_nm_handoff_done scout no-mistakes 'done [at=1]: report written' >/dev/null \
+    || fail "a scout report was read as a no-mistakes handoff"
+  ! fm_dod_nm_handoff_done ship no-mistakes 'working [at=1]: handoff soon' >/dev/null \
+    || fail "a non-done line was read as a handoff"
+  pass "every no-mistakes DoD names the handoff line, never the finish, and only that line reads as a handoff"
+}
+
 # A scout spawned on a named base keeps that base through promotion: the ship
 # instructions start from it and the PR targets it; local-only cannot carry it.
 test_promotion_keeps_the_recorded_base_branch() {
@@ -467,6 +510,7 @@ test_standalone_local_only_needs_project_ref
 test_non_done_lines_are_not_gated
 test_fenced_and_indented_captain_lines_are_not_intent
 test_pr_based_dod_draft_check_uses_gh_axi
+test_no_mistakes_dod_names_the_handoff_never_the_finish
 test_promotion_keeps_the_recorded_base_branch
 
 # The launch role is the generated text a worker receives. It must keep the

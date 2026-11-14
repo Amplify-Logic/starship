@@ -922,9 +922,14 @@ EOF
   fm_write_meta "$mate/state/failed.meta" \
     "window=firstmate:fm-failed" "worktree=$mate/projects/failed" "project=sample" \
     "harness=claude" "kind=ship" "mode=no-mistakes"
+  # A no-mistakes ship is terminal-done only at its green-PR ready report, with
+  # the named head preserved outside the worker copy; any other done there is
+  # the pipeline handoff, which reads blocked.
+  fm_git_init_commit "$mate/projects/done"
+  git -C "$mate/projects/done" update-ref refs/remotes/origin/main HEAD
   record_claude_state "$mate/state" "done" idle
   record_claude_state "$mate/state" failed idle
-  printf 'done: complete\n' > "$mate/state/done.status"
+  printf 'done: PR https://github.com/acme/sample/pull/7 checks green\n' > "$mate/state/done.status"
   printf 'failed: stopped\n' > "$mate/state/failed.status"
   rm "$mate/state/parked.meta" "$mate/state/parked.status"
   refresh_local_secondmate_ledgers "$home"

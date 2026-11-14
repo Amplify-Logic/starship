@@ -632,6 +632,30 @@ LANES
   pass "each heavy lane keeps a 20 minute step tripwire under a $heavy minute job backstop"
 }
 
+# Every timed test lane records its own CI tripwire as --max-wall-ms, so the
+# timing aggregate reports each lane against the limit that would really cancel
+# it: the step's own timeout when it has one, otherwise the job's.
+test_every_timed_lane_records_its_tripwire_as_its_limit() {
+  local reported
+  reported=$(ruby -ryaml -e '
+lanes = 0
+YAML.load_file(ARGV[0]).fetch("jobs").each do |name, job|
+  (job["steps"] || []).each do |step|
+    run = step["run"].to_s
+    next unless run.include?("bin/fm-test-run.sh") && run.include?("--json")
+    lanes += 1
+    limit = run[/--max-wall-ms[ \t]+([0-9]+)/, 1]
+    minutes = step["timeout-minutes"] || job["timeout-minutes"]
+    want = minutes.to_i * 60_000
+    puts "#{name}: --max-wall-ms #{limit.inspect}, tripwire #{want}" unless limit == want.to_s
+  end
+end
+puts "no timed test lane found" if lanes.zero?
+' "$CI_WORKFLOW") || fail "could not read the timed test lanes from ci.yml"
+  [ -z "$reported" ] || fail "these lanes do not record their tripwire as their limit:"$'\n'"$reported"
+  pass "every timed test lane records its CI tripwire as its --max-wall-ms limit"
+}
+
 # The fork opt-out is opt-in: with neither variable set every job runs on both
 # events, FM_CI_SKIP_PUSH=1 empties only the push run, and FM_CI_SKIP_MACOS=1
 # removes only the macOS job. A "-" in the table means the variable is unset.
@@ -746,3 +770,4 @@ test_every_job_belongs_to_exactly_one_timeout_tier
 test_fast_tier_shares_one_short_tripwire
 test_normal_tier_shares_one_budget
 test_heavy_tier_keeps_a_step_tripwire_under_a_job_backstop
+test_every_timed_lane_records_its_tripwire_as_its_limit

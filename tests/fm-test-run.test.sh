@@ -16,6 +16,9 @@ RUNNER="$ROOT/bin/fm-test-run.sh"
 # labels when a developer's shell exports the key; the cases that exercise that
 # path supply their own home, key, and endpoint or recorded answer.
 unset TYPESAFE_API_KEY FM_TEST_FAILURE_CAUSE_RESPONSE FM_TEST_FAILURE_CAUSE_ENDPOINT
+# Under GitHub Actions every step names a real run summary page; fixture lanes
+# must never reach it, so only a case that names its own summary file sees one.
+unset GITHUB_STEP_SUMMARY
 
 assert_present "$RUNNER" "bin/fm-test-run.sh is missing"
 [ -x "$RUNNER" ] || fail "bin/fm-test-run.sh must be executable"
@@ -1957,12 +1960,16 @@ SH
 
   # Comfortably inside budget: the run passes and states the budget it met.
   set +e
-  "$runner" --max-wall-ms 60000 "$fast" >"$tmp/under" 2>"$tmp/under.err"
+  "$runner" --max-wall-ms 60000 --json "$tmp/under.json" "$fast" >"$tmp/under" 2>"$tmp/under.err"
   rc=$?
   set -e
   [ "$rc" -eq 0 ] || fail "a run inside its budget must pass, got $rc: $(cat "$tmp/under.err")"
   grep -Eq '^FM_TEST_BUDGET max_wall_ms=60000 duration_ms=[0-9]+$' "$tmp/under" \
     || fail "an inside-budget run did not report the budget: $(cat "$tmp/under")"
+  # The timing artifact records the budget as the lane limit the aggregate
+  # reports against.
+  python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["summary"]["max_wall_ms"] == 60000' \
+    "$tmp/under.json" || fail "the timing artifact did not record the budget as max_wall_ms"
 
   # Same green script, budget it cannot meet: the run must FAIL.
   set +e
@@ -2205,8 +2212,78 @@ assert doc["summary"]["failed"]==1
 assert doc["summary"]["critical_path_duration_ms"]==2000
 assert len(doc["scripts"])==3
 ' "$tmp/out.json" || { rm -rf "$tmp"; fail "aggregate JSON shape wrong"; }
+  # With no recorded limit a lane still reports its time, and nothing is flagged.
+  assert_contains "$out" "FM_TEST_LANE lane=portable-serial duration_ms=2000 limit_ms=none used_percent=none near_limit=false" \
+    "a lane with no recorded limit did not report its time"
   rm -rf "$tmp"
   pass "aggregate-json merges lane timing artifacts"
+}
+
+# Each lane's time is printed against the limit its run recorded, slowest share
+# first, and a lane within 15 percent of its limit is flagged, with a GitHub
+# annotation only under GitHub Actions.
+test_aggregate_reports_each_lane_against_its_limit() {
+  local tmp out
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-agglimit.XXXXXX")
+  lane_json() {  # <file> <selection> <duration_ms> <max_wall_ms>
+    printf '{"run_id":"r","selection":"%s","summary":{"total":1,"failed":0,"skipped_gate":0,"duration_ms":%s,"max_wall_ms":%s},"scripts":[]}\n' \
+      "$2" "$3" "$4" >"$1"
+  }
+  lane_json "$tmp/fast.json" "lane=portable-parallel-1;fail-on-gate-skip=x" 900000 1800000
+  lane_json "$tmp/edge.json" "lane=portable-serial-2of17" 1530000 1800000
+  lane_json "$tmp/near.json" "family=real-herdr-gated" 1100000 1200000
+  lane_json "$tmp/under.json" "lane=portable-serial-3of17" 1529999 1800000
+  mkdir "$tmp/cwd" "$tmp/tmpdir"
+  out=$(cd "$tmp/cwd" && env -u GITHUB_ACTIONS TMPDIR="$tmp/tmpdir" "$RUNNER" --aggregate-json "$tmp/out.json" \
+    "$tmp/fast.json" "$tmp/edge.json" "$tmp/near.json" "$tmp/under.json")
+  [ "$(ls -A "$tmp")" = "cwd
+edge.json
+fast.json
+near.json
+out.json
+tmpdir
+under.json" ] && [ -z "$(find "$tmp/cwd" "$tmp/tmpdir" -mindepth 1)" ] \
+    || fail "a run summary was written with GITHUB_STEP_SUMMARY unset: $(ls -AR "$tmp")"
+  assert_contains "$out" "FM_TEST_LANE lane=family=real-herdr-gated duration_ms=1100000 limit_ms=1200000 used_percent=91 near_limit=true" \
+    "a lane past 85 percent of its limit was not flagged"
+  assert_contains "$out" "FM_TEST_LANE lane=portable-serial-2of17 duration_ms=1530000 limit_ms=1800000 used_percent=85 near_limit=true" \
+    "a lane at exactly 85 percent of its limit was not flagged"
+  assert_contains "$out" "FM_TEST_LANE lane=portable-serial-3of17 duration_ms=1529999 limit_ms=1800000 used_percent=84 near_limit=false" \
+    "a lane just under 85 percent of its limit was flagged"
+  assert_contains "$out" "FM_TEST_LANE lane=portable-parallel-1 duration_ms=900000 limit_ms=1800000 used_percent=50 near_limit=false" \
+    "a lane well inside its limit was flagged or not reported"
+  [ "$(printf '%s\n' "$out" | awk '/^FM_TEST_LANE /{ sub(/^FM_TEST_LANE lane=/, ""); sub(/ .*/, ""); printf "%s,", $0 }')" \
+    = "family=real-herdr-gated,portable-serial-2of17,portable-serial-3of17,portable-parallel-1," ] \
+    || fail "lanes were not listed by their share of the limit, largest first: $out"
+  case "$out" in *'::warning'*) fail "a GitHub annotation was printed outside GitHub Actions: $out" ;; esac
+  python3 -c '
+import json,sys
+lanes={l["name"]: l for l in json.load(open(sys.argv[1]))["lanes"]}
+assert lanes["family=real-herdr-gated"]["near_limit"] is True
+assert lanes["portable-parallel-1"]["limit_ms"]==1800000 and lanes["portable-parallel-1"]["near_limit"] is False
+' "$tmp/out.json" || { rm -rf "$tmp"; fail "aggregate JSON lacks the per-lane limit"; }
+
+  out=$(GITHUB_ACTIONS=true "$RUNNER" --aggregate-json "$tmp/out.json" "$tmp/fast.json" "$tmp/near.json")
+  assert_contains "$out" "::warning title=Slow test lane::family=real-herdr-gated took 1100s, 91 percent of its 1200s limit" \
+    "a near-limit lane did not raise a GitHub annotation under GitHub Actions"
+  [ "$(printf '%s\n' "$out" | grep -c '^::warning')" = 1 ] \
+    || fail "a lane inside its limit raised a GitHub annotation: $out"
+
+  # The run's summary page gets the same lanes as a table, appended after
+  # whatever an earlier step wrote there.
+  printf 'earlier step\n' > "$tmp/summary.md"
+  GITHUB_STEP_SUMMARY="$tmp/summary.md" "$RUNNER" --aggregate-json "$tmp/out.json" \
+    "$tmp/fast.json" "$tmp/near.json" >/dev/null
+  [ "$(cat "$tmp/summary.md")" = "earlier step
+### Test time per lane
+
+| Lane | Time | Limit | Used | Near limit |
+|---|---|---|---|---|
+| family=real-herdr-gated | 18m20s | 20m00s | 91% | yes |
+| portable-parallel-1 | 15m00s | 30m00s | 50% | no |" ] \
+    || fail "the run summary table was wrong: $(cat "$tmp/summary.md")"
+  rm -rf "$tmp"
+  pass "aggregate-json reports each lane's time against its limit and flags lanes within 15 percent"
 }
 
 test_list_all_exact_suite_coverage
@@ -2257,3 +2334,4 @@ test_max_wall_ms_is_a_result_not_advice
 test_jobs_parallel_scheduler_and_failure_propagation
 test_herdr_ci_family_run_has_a_step_timeout
 test_aggregate_json
+test_aggregate_reports_each_lane_against_its_limit

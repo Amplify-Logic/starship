@@ -2592,25 +2592,58 @@ test_merged_pr_reads_done_under_captured_meta() {
   pass "recorded merged PR reads done under the fleet snapshot's captured meta"
 }
 
-test_no_mistakes_prevalidation_done_stays_done() {
+# A no-mistakes worker reports `done:` after its implementation commit as the
+# handoff that starts the pipeline. Read as plain done, that handoff showed as
+# finished and READY with no PR, and five workers in a row were sent "back" for
+# following their instructions. It reads blocked as a handoff waiting for the
+# pipeline trigger instead, carrying the worker's note, and is never done.
+test_no_mistakes_handoff_done_reads_as_handoff_not_done() {
   reset_fakes
-  local d out
+  local d out note
   d=$(new_case preval-done)
   make_repo_on_branch "$d/wt" fm/preval
   git -C "$d/wt" commit -q --allow-empty -m 'fix only in the worktree'
   make_fakebin "$d" >/dev/null
-  fm_write_meta "$d/state/preval.meta" \
-    "window=fm:fm-preval" "worktree=$d/wt" "project=$d/wt" \
-    "kind=ship" "mode=no-mistakes" "harness=claude"
-  printf 'done: implementation complete\n' > "$d/state/preval.status"
   FM_FAKE_AXI_STATUS=""
   FM_FAKE_RUNS_LIST=""
   FM_FAKE_BUSY=0
+  for note in 'handoff, ready for no-mistakes - parser fixed' 'committed 1a2b3c4 on fm/preval' \
+    'handoff, ready for no-mistakes - follow-up to PR #34, parser fixed'; do
+    fm_write_meta "$d/state/preval.meta" \
+      "window=fm:fm-preval" "worktree=$d/wt" "project=$d/wt" \
+      "kind=ship" "mode=no-mistakes" "harness=claude"
+    printf 'done: %s\n' "$note" > "$d/state/preval.status"
+    arm_idle_record "$d/state" preval
+    out=$(run_crew_state "$d" preval)
+    assert_contains "$out" "state: blocked · source: status-log · handoff, waiting for the pipeline trigger" \
+      "a no-mistakes done without a green PR did not read as a handoff ($note)"
+    assert_contains "$out" "$note" "the handoff reading dropped the worker's note ($note)"
+    assert_not_contains "$out" "state: done" "a no-mistakes handoff read as done ($note)"
+    assert_not_contains "$out" "PR opened" "a no-mistakes handoff was read as a PR report ($note)"
+  done
+
+  # A PR without green checks is still not done, but it is past the trigger, so
+  # it says to check the PR's CI, not that there is no PR.
+  note='PR https://github.com/o/r/pull/7'
+  printf 'done: %s\n' "$note" > "$d/state/preval.status"
   arm_idle_record "$d/state" preval
   out=$(run_crew_state "$d" preval)
-  assert_contains "$out" "state: done" "no-mistakes pre-validation done: remains done"
-  assert_not_contains "$out" "state: blocked" "pre-validation done: must not be the named-head gate"
-  pass "no-mistakes pre-validation done: stays current-state done"
+  assert_contains "$out" "state: blocked · source: status-log · PR opened, checks not confirmed green: check the PR's CI before landing" \
+    "a no-mistakes PR without green checks did not say to check its CI"
+  assert_contains "$out" "$note" "the PR reading dropped the worker's note"
+  assert_not_contains "$out" "no PR yet" "a no-mistakes done naming a PR said there was no PR yet"
+  assert_not_contains "$out" "state: done" "a no-mistakes PR without green checks read as done"
+
+  # The same handoff line in a mode whose done is the delivery itself is not a
+  # handoff: direct-PR keeps the named-head gate's own reading.
+  fm_write_meta "$d/state/preval.meta" \
+    "window=fm:fm-preval" "worktree=$d/wt" "project=$d/wt" \
+    "kind=ship" "mode=direct-PR" "harness=claude"
+  printf 'done: committed 1a2b3c4 on fm/preval\n' > "$d/state/preval.status"
+  arm_idle_record "$d/state" preval
+  out=$(run_crew_state "$d" preval)
+  assert_not_contains "$out" "handoff" "a direct-PR done was read as a no-mistakes handoff"
+  pass "no-mistakes handoff done: reads blocked as a handoff waiting for the pipeline trigger, never done"
 }
 
 test_moved_remote_branch_without_named_head_is_blocked() {
@@ -6878,7 +6911,7 @@ test_coarse_run_does_not_probe_other_branch_ci_log_for_ready_status
 test_other_branch_run_ignored
 test_unpushed_ship_done_is_blocked
 test_merged_pr_reads_done_under_captured_meta
-test_no_mistakes_prevalidation_done_stays_done
+test_no_mistakes_handoff_done_reads_as_handoff_not_done
 test_moved_remote_branch_without_named_head_is_blocked
 test_external_review_done_reads_ready
 test_no_run_busy_pane

@@ -32,14 +32,15 @@
 # on the captain - is counted there and only there, finished work whose PR was
 # merged or closed is counted nowhere, and the working figure is what is left.
 #
-# Finished is not the same as waiting on the captain either. A ship whose worker
-# committed its build and reported done before validation has no PR and nothing
-# for the captain to act on - it is firstmate's turn to send it into the
-# pipeline - and counting it as waiting for the captain told him a job needed
-# him when it did not. So a done waits on the captain only when the delivery
-# contract reads it as the ready report. A done that is firstmate's turn,
-# including a scout report firstmate reads first, has no busy worker behind it
-# either, so like merged work it is counted nowhere.
+# Finished is not the same as waiting on the captain either. A no-mistakes
+# ship whose worker committed its build and handed it off before validation has
+# no PR and nothing for the captain to act on - it is firstmate's turn to send
+# it into the pipeline - and counting it as waiting for the captain told him a
+# job needed him when it did not. The reader reports that handoff blocked, so it
+# counts as attention for firstmate, never as ready. So a done waits on the
+# captain only when the delivery contract reads it as the ready report. A done
+# that is firstmate's turn, such as a scout report firstmate reads first, has no
+# busy worker behind it either, so like merged work it is counted nowhere.
 #
 # The cost is why the answers are cached. A canonical read is about a second per
 # task because it consults the pipeline, so a twelve-task fleet is over ten
@@ -180,9 +181,9 @@ _fm_fleet_id_stream() {  # <id>...
 # `ready` only when bin/fm-dod-lib.sh's fm_dod_should_gate_ship_done - the one
 # owner of which ship done is the ready report - says so: a green PR, or any
 # done in a mode whose done is the PR or ready branch itself. Every other one -
-# a no-mistakes build handed back before validation, a scout report - is
-# firstmate's turn, with no busy worker and nothing for the captain, so it is
-# `finished` too.
+# a scout report, or a no-mistakes handoff from a reader older than its blocked
+# handoff reading - is firstmate's turn, with no busy worker and nothing for the
+# captain, so it is `finished` too.
 #
 # `parked` alone does not say who owes the answer. It is a `decision` for the
 # captain only when the reader says a human owes it: a status-log needs-decision,

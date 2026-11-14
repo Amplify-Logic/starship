@@ -12,6 +12,9 @@
 # the pane busy-signature) and reconciles the possibly-stale log against it.
 # A ship `done:` is current-state done only when bin/fm-dod-lib.sh accepts the
 # named head as reachable outside the worker's disposable copy; otherwise blocked.
+# A no-mistakes ship's pipeline handoff - a `done:` that names no PR with green
+# checks - is never done either: it reads blocked with a reason saying it is a
+# handoff waiting for the /no-mistakes trigger (fm_dod_nm_handoff_done).
 #
 # The determinism lives entirely here - run-step / pane / log reads, fixed
 # mapping logic, and terminal passed-run PR detail from bounded evidence only,
@@ -326,9 +329,13 @@ fi
 # and its reason rather than a wedge-suspect idle.
 # A ship `done:` is not current-state done while bin/fm-dod-lib.sh refuses the
 # named-head reachability gate: that claim is blocked so a disposable copy is
-# not treated as finished-and-safe.
+# not treated as finished-and-safe, and a no-mistakes pipeline handoff is
+# blocked as a handoff waiting for its trigger, never done.
 emit_ship_status_done() {  # [extra-detail]
   local extra=${1:-} reason
+  if reason=$(fm_dod_nm_handoff_done "$KIND" "$(meta_value mode)" "$LOG_LINE"); then
+    emit blocked status-log "$reason${SEP}$(status_line_note "$LOG_LINE")"
+  fi
   if reason=$(fm_dod_accept_ship_done "$KIND" "$(meta_value mode)" "$WT" "$(meta_value project)" "$LOG_LINE" "$STATE" "$ID" "$META"); then
     emit "done" status-log "$(status_line_note "$LOG_LINE")${extra:+${SEP}$extra}"
   fi
