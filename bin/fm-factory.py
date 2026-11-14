@@ -581,6 +581,15 @@ def checking_sentence(detail: str) -> str:
     return "running the checks"
 
 
+def held_state(row: Dict[str, Any]) -> str:
+    """The state word for work held back by its hold rather than waiting on the owner."""
+    if row.get("hold_bucket") == "dated" and row.get("hold_until"):
+        return "on hold until %s" % row["hold_until"]
+    if row.get("hold_bucket") == "blocked" or row.get("unresolved_blocker_ids"):
+        return "waits on other work"
+    return "on hold"
+
+
 def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[int] = None,
                  activity: Optional[Dict[str, int]] = None, notes: Optional[List[Dict[str, Any]]] = None
                  ) -> Dict[str, Any]:
@@ -708,6 +717,8 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
             # A worker's own question goes to Starship, which answers it or
             # brings it to the owner as a held decision.
             job.update(state="with Starship")
+        elif bucket == "ready" and task["id"] not in merge_ids and not (row and row["id"] in decision_ids):
+            job["state"] = held_state(row or {})
         elif bucket == "ready":
             job.update(state="ready for you", step="ready for you")
             pr = job["pr"]
@@ -784,13 +795,7 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
             job["state"] = "waiting on you"
             needs.append(hold_need(row, fid))
         elif row.get("hold_kind"):
-            bucket = row.get("hold_bucket")
-            if bucket == "dated" and row.get("hold_until"):
-                job["state"] = "on hold until %s" % row["hold_until"]
-            elif bucket == "blocked" or row.get("unresolved_blocker_ids"):
-                job["state"] = "waits on other work"
-            else:
-                job["state"] = "on hold"
+            job["state"] = held_state(row)
         elif row.get("unresolved_blocker_ids"):
             job["state"] = "waits on other work"
         elif row.get("state") == "in_flight":

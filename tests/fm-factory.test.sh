@@ -409,6 +409,26 @@ test_a_changing_pane_is_a_sign_of_life() {
 
 # A ship spawned without a mode records no mode= at all; its ready report is
 # still the ready report, read as the status bar reads an empty mode.
+# Ready work the owner re-held until a later date is no call of his until then:
+# its job reads as on hold, and it is not under NEEDS YOU.
+test_ready_work_held_until_a_date_is_not_ready_for_you() {
+  reset_case
+  write_registry
+  write_world
+  local snap
+  snap=$(jq '(.backlog.records[] | select(.id == "garden-share")) += {hold_kind: "captain", hold_bucket: "dated",
+    hold_reason: "Merge after the release.", hold_set: "2026-11-13T09:00:00Z", hold_until: "2026-12-01"}' \
+    "$FM_FACTORY_SNAPSHOT") || fail "could not hold the ready work"
+  printf '%s\n' "$snap" > "$FM_FACTORY_SNAPSHOT"
+  take_record
+  assert_equals "$(q '.factories[] | .jobs[] | select(.id == "garden-share") | "\(.state)|\(.step // "-")"')" \
+    "on hold until 2026-12-01|-" "ready work held until a date read as ready for the owner"
+  assert_equals "$(q '[.needs_you[] | select(.id == "garden-share")] | length')" "0" \
+    "ready work held until a date is under NEEDS YOU"
+  assert_equals "$(q .count_line)" "3 jobs running · 2 need you · 1 idle" "count line"
+  pass "factory record: ready work the owner held until a date reads on hold, not ready for you"
+}
+
 test_a_ship_with_no_mode_still_reports_its_pr_ready() {
   reset_case
   write_registry
@@ -682,6 +702,7 @@ fm_test_run \
   test_the_plain_screen_is_the_record_as_text \
   test_a_job_with_no_sign_of_life_reads_quiet \
   test_a_changing_pane_is_a_sign_of_life \
+  test_ready_work_held_until_a_date_is_not_ready_for_you \
   test_a_ship_with_no_mode_still_reports_its_pr_ready \
   test_without_a_registry_each_project_is_a_factory \
   test_work_no_factory_claims_is_still_shown \
