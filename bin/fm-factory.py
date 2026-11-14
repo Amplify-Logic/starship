@@ -1032,8 +1032,8 @@ FEED_COLOUR = {"finished": "green", "landed": "green", "asked you": "red", "stuc
 
 
 def asking(need: Dict[str, Any]) -> str:
-    """Which asking of a need this is: the decision key, or when it was held or became ready."""
-    return str(need.get("key") or need.get("since") or 0)
+    """Which asking of a need this is: its decision key and when it was asked, held or became ready."""
+    return ".".join(str(part) for part in (need.get("key"), need.get("since")) if part) or "0"
 
 
 class View:
@@ -1051,14 +1051,14 @@ class View:
         self.adopt(record)
 
     def adopt(self, record: Dict[str, Any]) -> None:
-        """Take a new record, dropping whatever pointed at something it no longer holds."""
+        """Take a new record; whatever pointed at something it no longer holds lets go of it."""
         self.record = record
         if self.opened and not self.has_factory(self.opened):
             self.opened = None
         talk = self.talking
         if talk is not None and not (self.has_factory(talk["factory"]) and (
                 "item" not in talk or self.need(talk["item"]))):
-            self.talking = None
+            talk["gone"] = True
         confirm = self.confirm
         if confirm is not None:
             need = self.need(confirm["item"])
@@ -1284,12 +1284,12 @@ class View:
         return [row(width, [S(" "), S(self.notice[0], self.notice[1], True)]), row(width)]
 
     def footer(self, width: int) -> List[Row]:
-        if self.talking is not None:
-            fac = self.factory(self.talking["factory"])
-            label = {"talk": "To the %s crew" % fac["name"], "change": "What should change in %s" % self.talking.get(
-                "title", "this work"), "discuss": "About %s" % self.talking.get("title", "this question")}[
-                self.talking["kind"]]
-            left = [S(" %s ▸ " % label, "cyan", True), S(self.talking["text"], "ice"), S("_", "cyan")]
+        talk = self.talking
+        if talk is not None:
+            left = [S(" %s ▸ " % talk["label"], "cyan", True), S(talk["text"], "ice"), S("_", "cyan")]
+            if talk.get("gone"):
+                return [row(width, left),
+                        row(width, [S(" This was settled elsewhere, so nothing will be sent · esc close", "amber")])]
             return [row(width, left), row(width, [S(" enter send · esc close · Starship hears this too", "faint")])]
         kind, ident = self.at()
         keys = ["↑↓ move"]
@@ -1508,6 +1508,8 @@ class Pane:
             talk = view.talking
             if key == "esc":
                 view.talking = None
+            elif key == "enter" and talk.get("gone"):
+                pass
             elif key == "enter":
                 text = talk["text"].strip()
                 view.talking = None
@@ -1589,14 +1591,16 @@ class Pane:
                 "done": "Sent to Starship: keep it."}
         elif need and need["kind"] == "finished work" and lower == "c":
             view.talking = {"kind": "change", "factory": need["factory"], "text": "", "item": need["id"],
-                            "title": need["title"], "pr": need.get("pr")}
+                            "title": need["title"], "pr": need.get("pr"),
+                            "label": "What should change in %s" % need["title"]}
         elif lower == "t":
             fid = self.factory_of_stop()
             if need and need["kind"] == "question":
                 view.talking = {"kind": "discuss", "factory": need["factory"], "text": "", "item": need["id"],
-                                "title": need["title"]}
+                                "title": need["title"], "label": "About %s" % need["title"]}
             elif fid:
-                view.talking = {"kind": "talk", "factory": fid, "text": ""}
+                view.talking = {"kind": "talk", "factory": fid, "text": "",
+                                "label": "To the %s crew" % view.factory(fid)["name"]}
         elif lower == "s":
             fid = self.factory_of_stop()
             if fid:
