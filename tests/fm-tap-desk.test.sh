@@ -526,7 +526,11 @@ test_defaults_apply_only_marked_easy_old_safe_decisions() {
   assert_grep "skipped: kept-one: the owner tapped keep" "$HOME_DIR/apply.out" "the keep skip was not explained"
   assert_equals "queued" "$(field deferred state)" "a deferred decision was defaulted"
   assert_equals "queued" "$(field past-deferred state)" "a decision whose deferral date passed was defaulted"
-  assert_no_grep "past-deferred" "$HOME_DIR/apply.out" "a decision whose deferral date passed was offered a default"
+  # Its date has passed, so it is one of the owner's calls again and defaults
+  # reads it, but only to say why it is never defaulted.
+  assert_no_grep "defaulted: past-deferred" "$HOME_DIR/apply.out" "a decision whose deferral date passed was offered a default"
+  assert_grep "skipped: past-deferred: the owner deferred it until 2020-01-02" "$HOME_DIR/apply.out" \
+    "a decision whose deferral date passed was not named as never defaulted"
   assert_equals "queued" "$(field wordy state)" "a destructive-sounding decision was defaulted"
   assert_grep "skipped: wordy: it reads as destructive" "$HOME_DIR/apply.out" "the class refusal was not explained"
   # A marked, old hold the page does not card is never answered unseen.
