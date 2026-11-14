@@ -348,8 +348,8 @@ old PATH, so gh and claude are not found here.
 Then, in the new terminal, two sign-ins are yours to do:
 
   1. gh auth login
-     Press Enter at each of its four questions: GitHub.com, HTTPS, Yes, and
-     "Login with a web browser". Then press Enter again to open the browser.
+     Press Enter at each of its four questions: GitHub.com, "Login with a
+     web browser", HTTPS, and Yes. Then press Enter again to open the browser.
      On a server, open the link it prints on your own computer and type the code.
 
   2. claude
