@@ -2047,8 +2047,7 @@ class View:
         if confirm is not None:
             title, corner = confirm["title"], "not sent yet"
             lines = [[S(line, "ice", True)] for line in wrap(confirm["prompt"], inner)[:3]]
-            hint = "enter sends it to Starship · esc cancels%s" % (
-                " · another option key changes it" if confirm.get("option") else "")
+            hint = "enter sends it to Starship · esc cancels"
         else:
             title, mode = talk["about"], talk.get("mode")
             heard = [[S(line, "ice", True)] for line in wrap(talk.get("live") or "", inner - 1)[-3:]]
@@ -2784,7 +2783,7 @@ class Pane:
             "mark": {"item": need["id"], "key": option["key"]}}
 
     def confirm_key(self, key: str) -> bool:
-        """A key while a confirmation is open: only enter, esc or another option does anything."""
+        """A key while a confirmation is open: only enter or esc does anything."""
         view, confirm = self.view, self.view.confirm
         if key == "ctrl-c":
             return False
@@ -2795,13 +2794,7 @@ class Pane:
             view.confirm = None
             self.say("Not sent: %s was cancelled." % confirm["what"], "amber")
         else:
-            need = view.need(confirm["item"])
-            option = next((o for o in (need or {}).get("options") or []
-                           if confirm.get("option") and o["key"].lower() == key.lower()), None)
-            if option:
-                view.confirm = self.answer(need, option)
-            else:
-                self.say("Press enter to send %s, or esc to cancel." % confirm["what"], "amber")
+            self.say("Press enter to send %s, or esc to cancel." % confirm["what"], "amber")
         return True
 
     # ---- the talk box ----------------------------------------------------------

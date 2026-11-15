@@ -1062,31 +1062,34 @@ test_an_answer_is_never_dropped_silently() {
   assert_contains "$(printf '%s\n' "$screen" | sed -n '/Already settled/{n;p;}' | tr -s '─')" \
     "╭─ Your answer · Harvest chart ─ not sent yet ─╮" "no box under the card says the answer is not sent yet"
   assert_contains "$screen" "│  2 this season " "the box does not show the answer picked"
-  assert_contains "$screen" "enter sends it to Starship · esc cancels · another option key changes it" \
+  assert_contains "$screen" "enter sends it to Starship · esc cancels " \
     "the box does not say which key sends the answer"
+  assert_not_contains "$screen" "another option key" "the box offers to change the answer while it waits"
   has_line "$screen" " ▸ 2 this season" "the picked option is not marked on the card"
   has_line "$screen" " ENTER send answer 2 to Starship ESC cancel" "the keys line does not say what sends the answer"
   screen=$(screen_of "$dir/held" 50 100)
   has_line "$screen" " Press enter to send answer 2, or esc to cancel." "a stray key was not answered with what to press"
   assert_contains "$screen" "│  2 this season " "a stray key closed the confirmation"
-  assert_contains "$(screen_of "$dir/changed" 50 100)" "│  3 both side by side " \
-    "another option key did not change the answer"
+  screen=$(screen_of "$dir/changed" 50 100)
+  has_line "$screen" " Press enter to send answer 2, or esc to cancel." "another option key was not answered with what to press"
+  assert_contains "$screen" "│  2 this season " "another option key changed the answer waiting to be sent"
+  assert_not_contains "$screen" "│  3 both side by side " "another option key changed the answer waiting to be sent"
   assert_equals "$(jq -r .request_id "$FM_FACTORY_TEST_NOTES")" \
-    "factory.garden-journal.answer.garden-chart.$((NOW - 3 * 3600)).3" "one answer went, the last one picked"
+    "factory.garden-journal.answer.garden-chart.$((NOW - 3 * 3600)).2" "one answer went, the first one picked"
   screen=$(screen_of "$dir/sent" 50 100)
-  has_line "$screen" " ✓ SENT to Starship: answer 3, both side by side (Harvest chart)" "the pane does not say the answer was sent"
+  has_line "$screen" " ✓ SENT to Starship: answer 2, this season (Harvest chart)" "the pane does not say the answer was sent"
   has_line "$screen" " ▸ ● Harvest chart Garden Journal · answered 08:00, waiting for Starship" \
     "the card does not say it was answered"
-  has_line "$screen" " ✓ 3 both side by side" "the answered option is not marked on the card"
+  has_line "$screen" " ✓ 2 this season" "the answered option is not marked on the card"
   # The record carries it too, so the card keeps saying so after a restart,
   # until the call is settled and leaves the list.
   take_record
-  assert_equals "$(q '.needs_you[0].answered | "\(.key) \(.at)"')" "3 $((NOW - 60))" \
+  assert_equals "$(q '.needs_you[0].answered | "\(.key) \(.at)"')" "2 $((NOW - 60))" \
     "the record does not carry when a call was answered"
   out=$(python3 "$FACTORY" --plain --width 92) || fail "--plain failed"
   has_line "$out" " ▸ ● Harvest chart Garden Journal · answered 07:59, waiting for Starship" \
     "an answered call still reads as waiting"
-  has_line "$out" " ✓ 3 both side by side" "the answered option is not marked on the card"
+  has_line "$out" " ✓ 2 this season" "the answered option is not marked on the card"
   assert_equals "$(q '[.needs_you[1:][] | .answered] | unique | tostring')" "[null]" "a call nobody answered reads as answered"
   : > "$FM_FACTORY_TEST_NOTES"
   drive_keys 2 ESC "SNAP:$dir/cancelled"

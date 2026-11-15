@@ -10,8 +10,8 @@ The [factory registry](configuration.md#factory-registry-datafactoriesmd) names 
 
 ```text
  S T A R S H I P  │  2 jobs running  ·  3 need you  ·  1 idle                    Sat 15:47
- 9 queued  ·  1 starts on its own  ·  4 in line  ·  1 on hold  ·  3 wait on you, 1 of them
-           deferred to a date
+ 9 queued  ·  1 starts on its own  ·  4 in line  ·  1 on hold
+           ·  3 wait on you, 1 of them deferred to a date
 
  NEEDS YOU
 
@@ -123,13 +123,13 @@ The keys line at the bottom turns into the same instruction in the highlight col
    │                                                                              │
    │  2 this season                                                               │
    │                                                                              │
-   │  enter sends it to Starship · esc cancels · another option key changes it    │
+   │  enter sends it to Starship · esc cancels                                    │
    ╰──────────────────────────────────────────────────────────────────────────────╯
  ...
  ENTER  send answer 2 to Starship      ESC  cancel
 ```
 
-While a confirmation is open only `enter`, `esc` and, on a question, another option key do anything; any other key is answered with which key to press, so an answer is never dropped by a stray key.
+While a confirmation is open only `enter` and `esc` do anything; any other key is answered with which key to press, so an answer is never dropped by a stray key.
 What happened is then said on the line under the queue line: `✓ SENT to Starship: ...` in green, `Not sent: answer 2 was cancelled.`, or `✗ NOT SENT: ...` in red with the reason, which stays until the next key.
 
 `t` opens the same box as a talk box.
