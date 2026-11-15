@@ -34,8 +34,10 @@
 # off        Retire the room's source, hand this monitor's place back to plain
 #            `pull` (`mothership position --set`) so a later manual pull does
 #            not repeat what was already told, and write `<room> = off`.
-# status     One line per room: on or off, whether it is listening, when the
-#            room last answered, and the last item told.
+# status     One line per room joined in the Mothership config (or listed in the
+#            setting): on or off, whether it is listening, when the room last
+#            answered, and the last item told; then a line naming the problem
+#            when the link cannot be found or run.
 # ensure     Session-start reconciliation, run by bin/fm-bootstrap.sh: arm each
 #            `on` room that has no registration, and retire (handing the place
 #            back) each registered room that is now off or not listed. Prints
@@ -92,8 +94,17 @@
 # place), <room>.contact
 # (when the room last answered), <room>.failures (failures in a row).
 #
-# Environment: FM_MOTHERSHIP_BIN names the mothership command instead of the
-# one on PATH; FM_MOTHERSHIP_WAIT_SECONDS (1..55, default 55) is the window;
+# The link is the first of: FM_MOTHERSHIP_BIN; the mothership command on PATH;
+# and projects/mothership/bin/mothership in the home. A path FM_MOTHERSHIP_BIN
+# names that cannot be run is reported, never passed over. A link that is a
+# Node script runs with a node that can run TypeScript (22.18+, 23.6+ or 24+):
+# the first such node on PATH, else the newest under $NVM_DIR (default
+# ~/.nvm), because the first node on PATH may be
+# an older one that stops with ERR_UNKNOWN_FILE_EXTENSION ".ts". The Mothership
+# config `status` reads rooms from is $MOTHERSHIP_CONFIG, else
+# ~/.config/mothership/rooms.json.
+#
+# Environment: FM_MOTHERSHIP_WAIT_SECONDS (1..55, default 55) is the window;
 # FM_MOTHERSHIP_LINK_TIMEOUT (seconds, default 20) bounds every other link
 # call, and a call that runs past it counts as failed.
 # docs/configuration.md "Mothership monitoring (config/mothership-monitor)"
@@ -272,22 +283,82 @@ setting_write() {  # <room> <on|off>
 LINK_BIN=
 LINK_CONFIG=
 LINK_NODE_DIR=
+LINK_NODE=
 LINK_PROBLEM=
 
-# Sets LINK_BIN, LINK_CONFIG and LINK_NODE_DIR, or LINK_PROBLEM and fails.
+# Whether <file> is a Node script, by its first line.
+link_is_node() { head -n 1 "$1" 2>/dev/null | LC_ALL=C grep -aq '^#!.*node'; }
+
+# Whether <node> runs a .ts file without flags: 22.18+, 23.6+ or 24+.
+node_runs_typescript() {
+  local said major minor
+  [ -f "$1" ] && [ -x "$1" ] || return 1
+  said=$(fm_run_timed 5 "$1" --version 2>/dev/null < /dev/null) || return 1
+  [[ "$said" =~ ^v([0-9]+)\.([0-9]+) ]] || return 1
+  major=$((10#${BASH_REMATCH[1]})) minor=$((10#${BASH_REMATCH[2]}))
+  [ "$major" -ge 24 ] || { [ "$major" -eq 23 ] && [ "$minor" -ge 6 ]; } || { [ "$major" -eq 22 ] && [ "$minor" -ge 18 ]; }
+}
+
+# Every node worth trying, best first: each node on PATH in PATH order, then
+# each nvm node, newest first.
+node_candidates() {
+  local dir path
+  printf '%s\n' "$PATH" | tr ':' '\n' | while IFS= read -r dir; do
+    [ -n "$dir" ] && [ -x "$dir/node" ] && printf '%s\n' "$dir/node"
+  done
+  for path in "${NVM_DIR:-$HOME/.nvm}"/versions/node/v*/bin/node; do
+    [ -x "$path" ] && printf '%s\n' "$path"
+  done | awk '{
+      v = $0; sub(/.*\/versions\/node\/v/, "", v); sub(/\/.*/, "", v)
+      split(v, p, /[^0-9]+/)
+      printf "%d %d %d %s\n", p[1], p[2], p[3], $0
+    }' | sort -k1,1nr -k2,2nr -k3,3nr | cut -d' ' -f4-
+}
+
+# Set LINK_NODE to the node that runs the link's TypeScript, or set
+# LINK_PROBLEM and fail.
+pick_node() {
+  local node
+  LINK_NODE=
+  while IFS= read -r node; do
+    node_runs_typescript "$node" && { LINK_NODE=$node; return 0; }
+  done < <(node_candidates | awk '!seen[$0]++')
+  LINK_PROBLEM="no node on this machine can run the Mothership link's TypeScript (it needs node 22.18 or newer); install one"
+  return 1
+}
+
+# Sets LINK_BIN, LINK_CONFIG and LINK_NODE_DIR, or LINK_PROBLEM and fails. The
+# link is the first of FM_MOTHERSHIP_BIN, the mothership command on PATH, and
+# projects/mothership/bin/mothership in the home; a path FM_MOTHERSHIP_BIN
+# names that cannot be run is reported rather than passed over.
 resolve_link() {
-  local bin=${FM_MOTHERSHIP_BIN:-} node
-  [ -n "$bin" ] || bin=$(command -v mothership 2>/dev/null || true)
-  [ -n "$bin" ] || { LINK_PROBLEM="the mothership command is not installed on this machine (join a room first)"; return 1; }
+  local bin from node
+  LINK_BIN='' LINK_NODE_DIR='' LINK_PROBLEM=''
+  if [ -n "${FM_MOTHERSHIP_BIN:-}" ]; then
+    bin=$FM_MOTHERSHIP_BIN from=FM_MOTHERSHIP_BIN
+  elif bin=$(command -v mothership 2>/dev/null) && [ -n "$bin" ]; then
+    from=PATH
+  elif [ -f "$FM_HOME/projects/mothership/bin/mothership" ]; then
+    bin="$FM_HOME/projects/mothership/bin/mothership" from=projects/mothership
+  else
+    LINK_PROBLEM="the Mothership link is not installed: there is no mothership command on PATH or at projects/mothership/bin/mothership in this home (name its path in FM_MOTHERSHIP_BIN)"
+    return 1
+  fi
   case "$bin" in /*) ;; *) bin="$(cd "$(dirname "$bin")" 2>/dev/null && pwd)/$(basename "$bin")" ;; esac
-  [ -x "$bin" ] || { LINK_PROBLEM="the mothership command at $bin cannot be run"; return 1; }
+  [ -f "$bin" ] && [ -x "$bin" ] || { LINK_PROBLEM="the mothership command at $bin (from $from) cannot be run"; return 1; }
   LINK_BIN=$bin
   # The link's own default config location is its business; only a config
   # this shell names is pinned, so the runner uses the same one later.
   LINK_CONFIG=${MOTHERSHIP_CONFIG:-}
   case "$LINK_CONFIG" in ''|/*) ;; *) LINK_CONFIG="$(pwd)/$LINK_CONFIG" ;; esac
-  node=$(command -v node 2>/dev/null || true)
-  LINK_NODE_DIR=
+  # A link written in TypeScript needs a node that runs it; the first node on
+  # PATH may be an older one that stops with ERR_UNKNOWN_FILE_EXTENSION.
+  if link_is_node "$bin"; then
+    pick_node || { LINK_BIN=; return 1; }
+    node=$LINK_NODE
+  else
+    node=$(command -v node 2>/dev/null || true)
+  fi
   [ -z "$node" ] || LINK_NODE_DIR=$(cd "$(dirname "$node")" 2>/dev/null && pwd)
   return 0
 }
@@ -766,12 +837,22 @@ cmd_ensure() {
   done
 }
 
+# The rooms the Mothership config has joined, read from the file itself so they
+# show even when the link cannot run: $MOTHERSHIP_CONFIG, else the link's
+# default ~/.config/mothership/rooms.json.
+config_rooms() {
+  local file=${MOTHERSHIP_CONFIG:-$HOME/.config/mothership/rooms.json}
+  [ -f "$file" ] || return 0
+  jq -r '.rooms | if type == "object" then keys[] else empty end' "$file" 2>/dev/null || true
+}
+
 cmd_status() {
-  local rooms room listening contact told list
-  resolve_link >/dev/null 2>&1 || true
-  rooms=$( { [ -z "$LINK_BIN" ] || joined_rooms; setting_entries 2>/dev/null | awk '{ print $1 }'; } | awk 'NF && !seen[$1]++')
+  local rooms room listening contact told list have_link=1
+  resolve_link >/dev/null 2>&1 || have_link=0
+  rooms=$( { config_rooms; [ "$have_link" -eq 0 ] || joined_rooms; setting_entries 2>/dev/null | awk '{ print $1 }'; } | awk 'NF && !seen[$1]++')
   if [ -z "$rooms" ]; then
-    printf 'no Mothership rooms\n'
+    printf 'no Mothership rooms joined\n'
+    [ "$have_link" -eq 1 ] || printf '%s\n' "$LINK_PROBLEM"
     return 0
   fi
   list=$("$SCRIPT_DIR/fm-procevent.sh" list 2>/dev/null || true)
@@ -788,6 +869,7 @@ cmd_status() {
     told=$(told_mark "$room" 2>/dev/null | jq -r '.cursor' 2>/dev/null || true)
     printf '%s: %s, %s, last contact %s, last told %s\n' "$room" "$(setting_of "$room")" "$listening" "$contact" "${told:-nothing yet}"
   done
+  [ "$have_link" -eq 1 ] || printf '%s\n' "$LINK_PROBLEM"
 }
 
 case "${1-}" in
