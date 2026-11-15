@@ -861,9 +861,11 @@ test_a_calls_rebuild_on_an_older_reading_keeps_the_newer_record() {
   write_world
   python3 "$FACTORY" refresh >/dev/null || fail "the first record could not be built"
   epoch=$(jq -r .snapshot_epoch "$HOME_FIX/state/factory/record.json")
-  jq '.taken_epoch -= 100
+  if ! { jq '.taken_epoch -= 100
       | .snapshot.tasks |= map(if .id == "shop-search" then .current_state.state = "unknown" else . end)' \
-    "$basis" > "$basis.old" && mv "$basis.old" "$basis" || fail "the older reading could not be staged"
+    "$basis" > "$basis.old" && mv "$basis.old" "$basis"; }; then
+    fail "the older reading could not be staged"
+  fi
   python3 "$FACTORY" refresh-calls >/dev/null || fail "the calls could not be rebuilt"
   cp "$HOME_FIX/state/factory/record.json" "$TMP_ROOT/case$CASE/record.json" || fail "the record is gone"
   assert_equals "$(q .snapshot_epoch)" "$epoch" "the record went back to the older reading"
