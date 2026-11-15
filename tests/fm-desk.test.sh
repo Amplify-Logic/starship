@@ -7,7 +7,7 @@
 # changes as the desk acts. Fake bridge, Factory pane and factory-tab scripts
 # add their panes to that session the way the real ones do; a fake process
 # list stands in for the Herdr clients, and a fake osascript for Terminal.
-# No real Herdr, Terminal or LaunchAgent is touched.
+# No real Herdr or Terminal is touched.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -99,7 +99,7 @@ elif args[0] == "_add-pane":          # fake scripts: <tab> <label> <cmd>
     new_pane(tab, args[2], args[3]); save()
 elif args[0] == "_add-tab":           # fake scripts: <workspace> <label> <cmd>
     tab = {"tab_id": new_id("w:t"), "label": args[2], "panes": []}
-    tabs_of(args[1]).append(tab); new_pane(tab, None, args[3]); save()
+    tabs_of(args[1]).append(tab); new_pane(tab, None, args[3]); save(); print(tab["tab_id"])
 else:
     sys.stderr.write("fake herdr: unknown call %s\n" % " ".join(args)); sys.exit(2)
 PY
@@ -122,8 +122,14 @@ names = dict(line.strip().split("=", 1) for line in open(os.environ["FAKE_FACTOR
 fid = sys.argv[2]
 with open(os.environ["FAKE_HERDR_CALLS"], "a") as log:
     log.write("factory-tab %s origin=%s\n" % (fid, os.environ.get("HERDR_TAB_ID", "")))
-subprocess.run([os.environ["HERDR_BIN_PATH"], "_add-tab", os.environ["HERDR_WORKSPACE_ID"], names[fid],
-                "bash x/fm-factory-pane.sh run --factory %s" % fid], check=True)
+tab = subprocess.run([os.environ["HERDR_BIN_PATH"], "_add-tab", os.environ["HERDR_WORKSPACE_ID"], names[fid],
+                      "bash x/fm-factory-pane.sh run --factory %s" % fid], check=True,
+                     capture_output=True, text=True).stdout.strip()
+# The real open-tab records the tab it opened and the session it lives in.
+records = os.path.join(os.environ["FM_HOME"], "state", "factory", "tabs")
+os.makedirs(records, exist_ok=True)
+with open(os.path.join(records, fid), "w") as record:
+    record.write("%s\n%s\n" % (tab, os.environ.get("HERDR_SOCKET_PATH", "")))
 PY
 
 # --- fake process list and Terminal -----------------------------------------
@@ -154,8 +160,7 @@ new_case() {  # <session> <running:true|false>
   export FM_HOME="$C/home" FAKE_HERDR_STATE="$C/state.json" FAKE_HERDR_CALLS="$C/calls" \
     FAKE_PS="$C/ps" FAKE_TERMINAL_TABS="$C/terminal" FAKE_FACTORY_NAMES="$C/factories" \
     HERDR_BIN_PATH="$FAKE/bin/herdr" HERDR_CONFIG_PATH="$C/herdr-config.toml" \
-    FM_DESK_BIN="$FAKE/tools" FM_DESK_PS="cat $C/ps" FM_DESK_OSASCRIPT="$FAKE/bin/osascript" \
-    FM_DESK_LAUNCH_AGENTS="$C/LaunchAgents" FM_DESK_LAUNCHCTL="true" FM_DESK_WAIT=3
+    FM_DESK_BIN="$FAKE/tools" FM_DESK_PS="cat $C/ps" FM_DESK_OSASCRIPT="$FAKE/bin/osascript" FM_DESK_WAIT=3
   unset HERDR_SOCKET_PATH HERDR_PANE_ID HERDR_TAB_ID HERDR_WORKSPACE_ID HERDR_SESSION
   printf '{"session": "%s", "running": %s, "workspaces": [], "n": 0}\n' "$1" "$2" > "$FAKE_HERDR_STATE"
   : > "$FAKE_HERDR_CALLS"; : > "$FAKE_PS"; : > "$FAKE_TERMINAL_TABS"
@@ -182,20 +187,18 @@ state_query() {
 test_an_empty_session_gets_the_whole_desk_in_order() {
   new_case lab true
   layout lab
-  local plan out
-  plan=$(desk plan) || fail "plan failed"
-  assert_contains "$plan" "  - make Herdr start with the sidebar collapsed
-  - create the workspace starship
-  - start the first mate (firstmate claude-opus)
-  - show the Starship bridge
-  - show the Factory pane
-  - open the Sample Shop tab
-  - open the Recipe Box tab
-  - open the Notes tab
-  - open view 1 in Terminal (profile Big Profile, size 13)
-  - open view 2 in Terminal (profile Small Profile, size 10)" "plan did not list the whole desk in order"
-  [ "$(state_query 'len(st["workspaces"])')" = 0 ] || fail "plan changed the session"
+  local out
   out=$(desk open) || fail "open failed: $out"
+  assert_contains "$out" "  done: make Herdr start with the sidebar collapsed
+  done: create the workspace starship
+  done: start the first mate (firstmate claude-opus)
+  done: show the Starship bridge
+  done: show the Factory pane
+  done: open the Sample Shop tab
+  done: open the Recipe Box tab
+  done: open the Notes tab
+  done: open view 1 in Terminal (profile Big Profile, size 13)
+  done: open view 2 in Terminal (profile Small Profile, size 10)" "open did not build the whole desk in order"
   assert_contains "$out" "10 thing(s) started" "open did not report what it started"
   assert_equals "1|Sample Shop|Recipe Box|Notes" "$(state_query '"|".join(t["label"] for t in st["workspaces"][0]["tabs"])')" \
     "open did not build the tabs in layout order"
@@ -223,8 +226,6 @@ test_a_second_run_changes_nothing() {
   cmp -s "$FAKE_HERDR_STATE" "$C/after-first.json" || fail "a second run changed the session"
   assert_no_regex ' (create|run|focus) ' "$FAKE_HERDR_CALLS" "a second run created, ran or focused something"
   assert_no_grep "terminal open" "$FAKE_HERDR_CALLS" "a second run opened another Terminal view"
-  out=$(desk plan)
-  assert_contains "$out" "would change nothing" "plan after the desk is open is not empty"
   pass "desk: a second run changes nothing"
 }
 
@@ -235,8 +236,11 @@ test_every_herdr_call_names_the_layouts_session() {
   local bad
   bad=$(grep -v -E '^(--session lab |bridge |factory-pane |factory-tab |terminal |_add-)' "$FAKE_HERDR_CALLS" || true)
   [ -z "$bad" ] || fail "a Herdr call did not name the session: $bad"
-  HERDR_SOCKET_PATH=/live.sock HERDR_PANE_ID=w9:p9 HERDR_TAB_ID=w9:t9 desk plan >/dev/null \
+  : > "$FAKE_HERDR_CALLS"
+  HERDR_SOCKET_PATH=/live.sock HERDR_PANE_ID=w9:p9 HERDR_TAB_ID=w9:t9 desk open >/dev/null \
     || fail "a run from inside another pane failed"
+  bad=$(grep -v -E '^--session lab ' "$FAKE_HERDR_CALLS" || true)
+  [ -z "$bad" ] || fail "a run from inside another pane reached another session: $bad"
   pass "desk: every Herdr call names the layout's session"
 }
 
@@ -292,11 +296,9 @@ test_a_restored_session_gets_its_dead_panes_started_in_place() {
 test_a_session_that_is_not_running_is_started_before_any_view() {
   new_case lab false
   layout lab
-  local plan out first_view started
-  plan=$(desk plan)
-  assert_contains "$plan" "  - start Herdr" "plan did not say Herdr would be started"
-  assert_contains "$plan" "note: the rest of the desk is filled in once Herdr is running" "plan did not say the rest follows"
+  local out first_view started
   out=$(desk open) || fail "open failed: $out"
+  assert_contains "$out" "  done: start Herdr" "open did not say Herdr was started"
   started=$(grep -n -- '--session lab server' "$FAKE_HERDR_CALLS" | head -1 | cut -d: -f1)
   first_view=$(grep -n 'terminal open' "$FAKE_HERDR_CALLS" | head -1 | cut -d: -f1)
   [ -n "$started" ] || fail "Herdr was not started"
@@ -369,14 +371,14 @@ test_a_bad_or_missing_layout_stops_with_the_reason() {
   expect_code 2 "$status" "a missing layout"
   assert_contains "$out" "starship layout >" "a missing layout did not say how to write one"
   printf 'session = lab\nview = Big | huge\n' > "$FM_HOME/config/desk-layout"
-  out=$(desk plan 2>&1); status=$?
+  out=$(desk open 2>&1); status=$?
   expect_code 2 "$status" "a bad view size"
   assert_contains "$out" "line 2: a view's font size is a whole number" "a bad line was not named"
   printf 'session = lab\ntab = Sample Shop | page sample-shop\n' > "$FM_HOME/config/desk-layout"
-  out=$(desk plan 2>&1); status=$?
+  out=$(desk open 2>&1); status=$?
   expect_code 2 "$status" "a bad tab"
   printf 'session = lab\nsession = other\n' > "$FM_HOME/config/desk-layout"
-  out=$(desk plan 2>&1); status=$?
+  out=$(desk open 2>&1); status=$?
   expect_code 2 "$status" "a setting given twice"
   assert_contains "$out" "session is set twice" "a repeated setting was not named"
   [ ! -s "$FAKE_HERDR_CALLS" ] || fail "a bad layout still reached Herdr"
@@ -418,27 +420,21 @@ view = Small Profile | 10" "layout did not read the desk back"
   pass "desk: layout reads the running desk back as a layout that opens it unchanged"
 }
 
-test_login_start_is_off_until_turned_on() {
+# open-tab names a factory's tab after the registry, which need not match the
+# layout's label; the tab open-tab recorded is that factory's tab all the same.
+test_a_factory_tab_is_found_by_its_record_whatever_its_label() {
   new_case lab true
-  layout lab
-  local out plist="$C/LaunchAgents/com.firstmate.starship-desk.plist"
-  out=$(desk login status)
-  assert_contains "$out" "does not open at login" "login start was on before it was turned on"
-  desk login on >/dev/null || fail "login on failed"
-  assert_present "$plist" "login on wrote no LaunchAgent"
-  python3 - "$plist" "$DESK" "$FM_HOME" <<'PY' || fail "the LaunchAgent does not run the desk for this home"
-import plistlib, sys
-p = plistlib.load(open(sys.argv[1], "rb"))
-assert p["Label"] == "com.firstmate.starship-desk"
-assert p["ProgramArguments"][1:] == [sys.argv[2], "open"], p["ProgramArguments"]
-assert p["RunAtLoad"] is True
-assert p["EnvironmentVariables"]["FM_HOME"] == sys.argv[3]
-PY
-  out=$(desk login status)
-  assert_contains "$out" "opens at login" "status did not see the LaunchAgent"
-  desk login off >/dev/null || fail "login off failed"
-  assert_absent "$plist" "login off left the LaunchAgent"
-  pass "desk: login start is off until turned on, and off removes it"
+  printf 'session = lab\nbridge = off\nfactory = off\ntab = Shop | factory sample-shop\n' > "$FM_HOME/config/desk-layout"
+  local out
+  out=$(desk open) || fail "first open failed: $out"
+  assert_not_contains "$out" "has not shown up yet" "the opened factory tab was not recognised"
+  assert_equals "1|Sample Shop" "$(state_query '"|".join(t["label"] for t in st["workspaces"][0]["tabs"])')" \
+    "the factory tab was not opened once"
+  : > "$FAKE_HERDR_CALLS"
+  out=$(desk open) || fail "second open failed: $out"
+  assert_contains "$out" "The desk was already open; nothing changed." "a factory tab labelled otherwise was opened again"
+  assert_no_grep "factory-tab" "$FAKE_HERDR_CALLS" "open-tab ran again for a tab that is open"
+  pass "desk: a factory tab is found by open-tab's record, whatever the layout labels it"
 }
 
 test_install_command_links_starship_and_keeps_a_foreign_one() {
@@ -468,5 +464,5 @@ fm_test_run \
   test_the_sidebar_setting_changes_only_its_own_line \
   test_a_bad_or_missing_layout_stops_with_the_reason \
   test_layout_reads_the_running_desk_back \
-  test_login_start_is_off_until_turned_on \
+  test_a_factory_tab_is_found_by_its_record_whatever_its_label \
   test_install_command_links_starship_and_keeps_a_foreign_one

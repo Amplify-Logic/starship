@@ -10,17 +10,13 @@ config/desk-layout format; this header owns the commands.
 Usage:
   fm-desk.py [open]             open the desk: start or attach, fill in what is
                                 missing, open the missing Terminal views
-  fm-desk.py plan               print what `open` would do now; change nothing
   fm-desk.py layout             print the running session as a desk layout file,
                                 a starting config/desk-layout
-  fm-desk.py login on|off|status
-                                open the desk at login (a LaunchAgent), stop
-                                doing so, or say which
   fm-desk.py install-command    put `starship` on PATH: ~/.local/bin/starship
                                 becomes a link to this script
 
-The layout lives in the home's config/desk-layout. Without one, `open` and
-`plan` stop and say how to write it.
+The layout lives in the home's config/desk-layout. Without one, `open` stops
+and says how to write it.
 
 What `open` does, in this order, re-reading Herdr after every step:
   1. With `sidebar` set, makes Herdr's config start the sidebar that way, before
@@ -36,7 +32,8 @@ What `open` does, in this order, re-reading Herdr after every step:
      shell (Herdr brings plugin panes back as plain shells after a restart).
   5. Opens every missing tab; a factory tab opens through bin/fm-factory.py
      open-tab, and an existing factory tab whose page pane is only an idle
-     shell gets its page started again.
+     shell gets its page started again. A factory tab is the tab open-tab
+     recorded for that factory in this session, else the tab with its label.
   6. Opens Terminal windows until as many Herdr clients show the session as
      the layout names views, each with its Terminal profile and font size.
 It never closes, restarts, moves or renames a pane, tab or workspace, never
@@ -56,8 +53,6 @@ Test seams:
   FM_DESK_PS              process lister printing `pid tty command` lines
                           (default: ps -axo pid=,tty=,command=)
   FM_DESK_OSASCRIPT       AppleScript runner (default: osascript)
-  FM_DESK_LAUNCH_AGENTS   LaunchAgents directory (default ~/Library/LaunchAgents)
-  FM_DESK_LAUNCHCTL       launchctl (default: launchctl)
   FM_DESK_COMMAND_DIR     where install-command links `starship` (default
                           ~/.local/bin)
   FM_DESK_WAIT            seconds to wait for a started server or a new view
@@ -70,7 +65,6 @@ from __future__ import annotations
 
 import json
 import os
-import plistlib
 import re
 import shlex
 import shutil
@@ -83,7 +77,6 @@ ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 SCRIPT = os.path.realpath(__file__)
 ME = "starship"
 SHELLS = {"zsh", "bash", "sh", "fish", "dash", "ksh", "tcsh", "csh", "nu"}
-AGENT_LABEL = "com.firstmate.starship-desk"
 SINGLE_KEYS = ("session", "workspace", "sidebar", "firstmate", "bridge", "factory")
 
 
@@ -349,10 +342,17 @@ def is_factory_pane(pane: Dict[str, Any]) -> bool:
         (bool(FACTORY_TITLE) and pane["label"] == FACTORY_TITLE)
 
 
-def survey(herdr: Herdr, layout: Dict[str, Any]) -> Dict[str, Any]:
-    """Everything the plan needs, read from Herdr and the process list."""
+def factory_tab(tabs: List[Dict[str, Any]], records: Dict[str, str], tab: Dict[str, Any]) -> Optional[str]:
+    """The id of a layout's factory tab among <tabs>: the tab open-tab recorded, else the one with its label."""
+    ids = {t["id"] for t in tabs}
+    recorded = next((tid for tid, fid in records.items() if fid == tab["factory"] and tid in ids), None)
+    return recorded or next((t["id"] for t in tabs if t["label"] == tab["label"]), None)
+
+
+def survey(herdr: Herdr, layout: Dict[str, Any], home: str) -> Dict[str, Any]:
+    """Everything the plan needs, read from Herdr, the factory tab records and the process list."""
     found: Dict[str, Any] = {"running": False, "socket": "", "workspace": None, "tabs": [],
-                             "panes": {}, "clients": herdr_clients(herdr.session)}
+                             "factory_tabs": {}, "panes": {}, "clients": herdr_clients(herdr.session)}
     entry = herdr.session_entry()
     if not entry or not entry.get("running"):
         return found
@@ -368,8 +368,10 @@ def survey(herdr: Herdr, layout: Dict[str, Any]) -> Dict[str, Any]:
                      for t in result_list(herdr.call("tab", "list", "--workspace", found["workspace"]), "tabs")]
     panes = result_list(herdr.call("pane", "list", "--workspace", found["workspace"]), "panes")
     main = found["tabs"][0]["id"] if found["tabs"] else None
-    labels = {t["label"]: t["id"] for t in found["tabs"]}
-    wanted_tabs = {labels[t["label"]] for t in layout["tabs"] if t["factory"] and t["label"] in labels}
+    records = factory_tab_records(home, found["socket"])
+    found["factory_tabs"] = {t["factory"]: factory_tab(found["tabs"], records, t)
+                             for t in layout["tabs"] if t["factory"]}
+    wanted_tabs = set(found["factory_tabs"].values()) - {None}
     first_in_tab: Dict[str, str] = {}
     for pane in panes:
         first_in_tab.setdefault(pane.get("tab_id"), pane.get("pane_id"))
@@ -450,7 +452,7 @@ def plan(layout: Dict[str, Any], found: Dict[str, Any], sidebar_now: Optional[bo
 
     labels = {t["label"]: t["id"] for t in found["tabs"]}
     for tab in layout["tabs"]:
-        tab_id = labels.get(tab["label"])
+        tab_id = found["factory_tabs"].get(tab["factory"]) if tab["factory"] else labels.get(tab["label"])
         if tab_id is None:
             if tab["factory"]:
                 steps.append(step("factory-tab", "open the %s tab" % tab["label"], factory=tab["factory"],
@@ -693,9 +695,11 @@ def settle(ready: Any, limit: Optional[float] = None) -> bool:
         time.sleep(0.3)
 
 
-def tab_page_runs(herdr: Herdr, workspace: str, label: str) -> bool:
-    tabs = result_list(herdr.call("tab", "list", "--workspace", workspace, check=False), "tabs")
-    tab = next((t.get("tab_id") for t in tabs if t.get("label") == label), None)
+def tab_page_runs(herdr: Herdr, found: Dict[str, Any], home: str, wanted: Dict[str, Any]) -> bool:
+    workspace = found["workspace"]
+    tabs = [{"id": t.get("tab_id"), "label": t.get("label") or ""}
+            for t in result_list(herdr.call("tab", "list", "--workspace", workspace, check=False), "tabs")]
+    tab = factory_tab(tabs, factory_tab_records(home, found["socket"]), wanted)
     if not tab:
         return False
     panes = result_list(herdr.call("pane", "list", "--workspace", workspace, check=False), "panes")
@@ -709,12 +713,8 @@ def execute(item: Dict[str, Any], layout: Dict[str, Any], herdr: Herdr, found: D
     if kind == "sidebar":
         write_sidebar(item["collapsed"])
     elif kind == "start":
-        env = base_env()
-        # A server started at login has no Terminal to hand it a locale, and
-        # every pane it starts inherits this one.
-        env.setdefault("LANG", "en_US.UTF-8")
         try:
-            subprocess.Popen([herdr.binary, "--session", herdr.session, "server"], env=env,
+            subprocess.Popen([herdr.binary, "--session", herdr.session, "server"], env=base_env(),
                              stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                              start_new_session=True)
         except OSError as error:
@@ -750,7 +750,8 @@ def execute(item: Dict[str, Any], layout: Dict[str, Any], herdr: Herdr, found: D
         run_script([sys.executable, os.path.join(tools, "fm-factory.py"), "open-tab", item["factory"]],
                    child_env(herdr, found, home), item["text"])
         # Until its page runs, the new tab would read as an idle shell to restart.
-        settle(lambda: tab_page_runs(herdr, found["workspace"], item["label"]))
+        wanted = {"label": item["label"], "factory": item["factory"]}
+        settle(lambda: tab_page_runs(herdr, found, home, wanted))
     elif kind == "tab":
         herdr.call("tab", "create", "--workspace", found["workspace"], "--label", item["label"], "--cwd", home)
     elif kind == "view":
@@ -777,7 +778,7 @@ def cmd_open() -> int:
     # one that still shows as missing afterwards is reported, not repeated.
     pending: List[Dict[str, Any]] = []
     for _ in range(64):
-        found = survey(herdr, layout)
+        found = survey(herdr, layout, home)
         steps, notes = plan(layout, found, read_sidebar())
         pending = [item for item in steps if item["key"] in taken]
         fresh = [item for item in steps if item["key"] not in taken]
@@ -793,7 +794,7 @@ def cmd_open() -> int:
     for item in pending:
         notes.append("asked to %s, but it has not shown up yet" % item["text"])
     if any(item["kind"] in LAYOUT_KINDS for item in done):
-        found = survey(herdr, layout)
+        found = survey(herdr, layout, home)
         if found["tabs"]:
             herdr.call("tab", "focus", found["tabs"][0]["id"], check=False)
     for note in notes:
@@ -802,23 +803,6 @@ def cmd_open() -> int:
         say("The desk is open: %d thing(s) started, everything else was already there." % len(done))
     else:
         say("The desk was already open; nothing changed.")
-    return 0
-
-
-def cmd_plan() -> int:
-    home = home_dir()
-    layout = load_layout(home)
-    herdr = Herdr(layout["session"])
-    found = survey(herdr, layout)
-    steps, notes = plan(layout, found, read_sidebar())
-    if not steps:
-        say("The desk is open; `%s` would change nothing." % ME)
-    else:
-        say("`%s` would:" % ME)
-        for item in steps:
-            say("  - %s" % item["text"])
-    for note in notes:
-        say("  note: %s" % note)
     return 0
 
 
@@ -905,62 +889,8 @@ def cmd_layout() -> int:
 
 
 # --------------------------------------------------------------------------
-# Login start and the `starship` command
+# The `starship` command
 # --------------------------------------------------------------------------
-
-def agents_dir() -> str:
-    return os.environ.get("FM_DESK_LAUNCH_AGENTS") or os.path.expanduser("~/Library/LaunchAgents")
-
-
-def agent_plist() -> str:
-    return os.path.join(agents_dir(), AGENT_LABEL + ".plist")
-
-
-def launchctl(*args: str) -> None:
-    tool = os.environ.get("FM_DESK_LAUNCHCTL") or "launchctl"
-    try:
-        subprocess.run(shlex.split(tool) + list(args), capture_output=True, text=True, timeout=30)
-    except (OSError, subprocess.SubprocessError):
-        pass
-
-
-def cmd_login(action: str) -> int:
-    path = agent_plist()
-    home = home_dir()
-    if action == "status":
-        say("The desk opens at login." if os.path.exists(path) else "The desk does not open at login.")
-        return 0
-    if action == "on":
-        load_layout(home)
-        os.makedirs(agents_dir(), exist_ok=True)
-        os.makedirs(os.path.join(home, "state"), exist_ok=True)
-        log = os.path.join(home, "state", "desk-login.log")
-        herdr = herdr_bin()
-        path_dirs = [os.path.dirname(herdr), os.path.expanduser("~/.local/bin"), "/opt/homebrew/bin",
-                     "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"]
-        record = {
-            "Label": AGENT_LABEL,
-            "ProgramArguments": [sys.executable, SCRIPT, "open"],
-            "EnvironmentVariables": {"FM_HOME": home, "HERDR_BIN_PATH": herdr,
-                                     "PATH": ":".join(dict.fromkeys(path_dirs))},
-            "RunAtLoad": True,
-            "StandardOutPath": log,
-            "StandardErrorPath": log,
-        }
-        temp = path + ".desk-tmp"
-        with open(temp, "wb") as handle:
-            plistlib.dump(record, handle)
-        os.replace(temp, path)
-        say("The desk will open at login (%s)." % path)
-        return 0
-    if action == "off":
-        if os.path.exists(path):
-            launchctl("bootout", "gui/%d/%s" % (os.getuid(), AGENT_LABEL))
-            os.remove(path)
-        say("The desk does not open at login.")
-        return 0
-    raise Refused("login takes on, off or status")
-
 
 def cmd_install_command() -> int:
     folder = os.environ.get("FM_DESK_COMMAND_DIR") or os.path.expanduser("~/.local/bin")
@@ -993,12 +923,8 @@ def main(argv: List[str]) -> int:
             return 0
         if command == "open" and len(argv) <= 1:
             return cmd_open()
-        if command == "plan" and len(argv) == 1:
-            return cmd_plan()
         if command == "layout" and len(argv) == 1:
             return cmd_layout()
-        if command == "login" and len(argv) == 2:
-            return cmd_login(argv[1])
         if command == "install-command" and len(argv) == 1:
             return cmd_install_command()
         usage()

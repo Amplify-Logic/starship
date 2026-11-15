@@ -134,7 +134,6 @@ Each effective `FM_HOME` contains private operational directories.
 - The call recorder's process records, logs, short-lived audio chunks and decision logs under `state/calls/` (`bin/fm-call-lib.sh`; [call-companion.md](call-companion.md)).
 - The meeting intake's check records under `state/meetings/` (`bin/fm-meetings.sh`; [meetings.md](meetings.md)).
 - The Factory pane's cached record, pane activity, last look, who-steers log and opened tabs under `state/factory/` (`bin/fm-factory.py`; [factory-pane.md](factory-pane.md)).
-- The desk's login log `state/desk-login.log` (`bin/fm-desk.py`; [desk.md](desk.md)).
 
 `config/` holds local gitignored operating choices, including explicit extension bindings under `config/extensions.d/`.
 
@@ -1735,6 +1734,7 @@ view = Pro | 10
 - `firstmate` is the command typed into the first tab's idle first-mate pane; without it the desk only notes an idle pane.
 - `bridge` and `factory` are `on` (the default) or `off`, for the bridge strip and the Factory pane in the first tab.
 - Each `tab` line names one tab after the first, in order; `| factory <id>` makes it that factory's page, by its id in the [factory registry](#factory-registry-datafactoriesmd), and a tab without it is a plain shell.
+  A factory tab is named after the factory in the registry; the desk finds it by the tab the Factory pane recorded for it, else by the label.
 - Each `view` line is one Terminal window: a Terminal profile name, then optionally `| <font size>`; an empty profile name uses Terminal's default.
 
 ## Secondmate routes (data/secondmates.md)
