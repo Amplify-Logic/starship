@@ -669,6 +669,7 @@ function commandRoute(args) {
   const handled = new Set(ledger.filter((entry) => entry.final).map((entry) => entry.digest));
   let already = 0;
   let refusedCount = 0;
+  const answeredIds = [];
   for (const error of errors) console.log(`unreadable: ${error}`);
   for (const tap of taps) {
     tap.digest = digestOf({ card: tap.card, identity: tap.identity, choice: tap.choice, option: tap.option, reason: tap.reason, tapped_at: tap.tapped_at });
@@ -715,6 +716,7 @@ function commandRoute(args) {
     console.log(`${result.outcome}: ${tap.id}${result.detail ? `: ${result.detail}` : ""}${chosen ? ` (chose: ${chosen})` : ""}`);
     if (!apply) continue;
     if (!result.final) continue;
+    if (plan.action === "answer" && result.outcome !== "stale") answeredIds.push(tap.id);
     const entry = {
       at: new Date().toISOString(),
       digest: tap.digest,
@@ -736,8 +738,21 @@ function commandRoute(args) {
     if (result.outcome !== "stale") appendLearning(ctx, entry);
   }
   if (already > 0) console.log(`already handled: ${already}`);
+  const roomFailed = settleRoomCalls(ctx, answeredIds);
   console.log(`taps: ${taps.length}${apply ? "" : " (dry run; add --apply to route them)"}`);
-  if (refusedCount > 0 || errors.length > 0) process.exitCode = 1;
+  if (refusedCount > 0 || errors.length > 0 || roomFailed) process.exitCode = 1;
+}
+
+// An answered call that is a request from a Mothership room is carried out in
+// that room by its adapter: accept or decline once, or ask again later. Every
+// other answered id is no room call, and the adapter passes over it. Returns
+// whether a room step failed; the adapter retries it on its next settle.
+function settleRoomCalls(ctx, ids) {
+  if (ids.length === 0) return false;
+  const result = runSync(ctx, "bash", [path.join(ctx.root, "bin/fm-procevent-mothership.sh"), "settle", ...ids]);
+  for (const line of result.stdout.split("\n").filter(Boolean)) console.log(`room: ${line}`);
+  if (result.status !== 0 && !result.stdout.trim()) console.log(`room: failed: ${lastLine(result.stderr) || `exit ${result.status}`}`);
+  return result.status !== 0;
 }
 
 async function commandDefaults(args) {

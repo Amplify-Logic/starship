@@ -39,6 +39,7 @@ At every wake while the page is published, and whenever the captain says they ta
    A tap already routed is skipped, so routing the whole collection again is safe.
 3. Act on each outcome line:
    - `answered` and `dropped`: the decision is recorded; carry out what the answer asks through the normal intake.
+     For a request from a Mothership room, route has already carried it out in the room, and a `room:` line says how; file accepted work through ordinary intake, and report a `room: failed` line in plain words (`bin/fm-procevent-mothership.sh settle` tries it again).
    - `answered, work resumes`: the held work item is released; re-evaluate it with the queued work.
    - `delegated: firstmate decides and acts`: decide it yourself, record why in the task note, and act.
    - `kept`: leave it held; it moves to the page's kept list and never gets the seven-day default.

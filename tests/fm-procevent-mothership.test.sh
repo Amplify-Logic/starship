@@ -21,13 +21,22 @@ mkdir -p "$CLAIMS" "$STUB_BIN"
 # and `err:` lines). With no reply queued, a pull waits out its window and
 # returns the place it was given. A `hang-now` file makes `position --now`
 # never answer, and `hang-rooms` does the same to `rooms`. Every call is logged
-# to `calls`.
+# to `calls`, and each accept or decline, with all its arguments, to `acts`;
+# a `refuse-acts` file makes those fail as an unreachable room.
 cat > "$STUB_BIN/mothership" <<'SH'
 #!/usr/bin/env bash
 set -u
 d=${MS_STUB:?}
 cmd=${1-}
 [ "$#" -eq 0 ] || shift
+case "$cmd" in
+  accept|decline)
+    printf '%s %s\n' "$cmd" "$*" >> "$d/acts"
+    [ ! -e "$d/refuse-acts" ] || { echo "Could not reach the room at https://room.example.test" >&2; exit 3; }
+    echo '{"ok":true}'
+    exit 0
+    ;;
+esac
 room='' now=0 set_pos='' from='' wait=0 max=''
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -83,6 +92,8 @@ ITEM_MSG='{"seq":5,"reason":"spoken to","what":"msg","card":"c6","title":"Pick a
 make_home() {
   local h="$TMP_ROOT/$1"
   mkdir -p "$h/home/config" "$h/home/state" "$h/home/data" "$h/stub/pull.d"
+  fm_test_tasks_toml "$h/home/.tasks.toml"
+  printf '## In flight\n\n## Queued\n\n## Done\n' > "$h/home/data/backlog.md"
   printf 'alpha  https://room.example.test\nbeta  https://other.example.test\n' > "$h/stub/rooms"
   printf '{"position":%s}\n' "$NOW" > "$h/stub/now"
   fm_test_track_procevent_home "$h/home" "$CLAIMS"
@@ -518,6 +529,157 @@ test_read_cleans_room_text() {
   pass "read strips control characters and caps lengths"
 }
 
+# ----- requests as owner calls -----
+
+# ask_item <seq> <card> <title>: a request to the ship on one card.
+ask_item() {
+  printf '%s' "$ITEM_ASK" | jq -c --argjson seq "$1" --arg card "$2" --arg title "$3" '.seq = $seq | .card = $card | .title = $title'
+}
+
+# capture_items <dir> <seq> <from> <to> <item>...: one captured batch.
+capture_items() {
+  local h=$1 seq=$2 from=$3 to=$4 doc
+  shift 4
+  doc="$TMP_ROOT/$(basename "$h").$seq.out"
+  { printf 'schema=fm-mothership-pull.v1\nroom=alpha\nstatus=items\nfrom=%s\nto=%s\nitems=%s\n--\n' "$from" "$to" "$#"
+    printf '%s\n' "$@"; } > "$doc"
+  capture "$h" "$seq" "$doc"
+}
+
+# allow_rooms <dir>: the alpha room allows two projects, the beta room none.
+allow_rooms() {
+  printf '%s\n' '{"default":"alpha","rooms":{"alpha":{"url":"https://room.example.test","allow":[{"project":"alpha-app"},{"project":"studio","tags":["alpha"]},{"project":"alpha-app"}]},"beta":{"url":"https://other.example.test","allow":[]}}}' > "$1/rooms.json"
+}
+
+# Every surface reads the home through these.
+hold_in() { in_home "$1" "$ROOT/bin/fm-captain-hold.sh" "${@:2}"; }
+desk_in() { in_home "$1" "$ROOT/bin/fm-tap-desk.sh" "${@:2}"; }
+show_in() { in_home "$1" "$ROOT/bin/fm-tasks-axi.sh" show "$2" --full; }
+calls_in() {  # <dir>: the task ids held for the owner
+  in_home "$1" "$ROOT/bin/fm-tasks-axi.sh" list --state held --kind captain 2>/dev/null | grep -oE 'ms-[A-Za-z0-9.-]+' | sort -u
+}
+acts_of() { cat "$1/stub/acts" 2>/dev/null; }
+
+# tap_on <dir> <task-id> <option>: the owner taps one option on the phone page.
+tap_on() {
+  local h=$1 id=$2 option=$3 identity
+  identity=$(hold_in "$h" open "$id" --identity) || fail "$id is not waiting on the owner"
+  mkdir -p "$h/taps"
+  jq -n --arg id "$id" --arg identity "$identity" --arg option "$option" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '{id: ("d." + $id), version: 1, data: {card: ("d." + $id), kind: "decision", id: $id, identity: $identity, choice: "option", option: $option, pr: "", reason: "", tapped_at: $at}}' \
+    > "$h/taps/$id.json"
+}
+
+test_a_request_becomes_one_owner_call() {
+  local h out f
+  command -v tasks-axi >/dev/null 2>&1 || { pass "skip: tasks-axi not found"; return 0; }
+  command -v node >/dev/null 2>&1 || { pass "skip: node not found"; return 0; }
+  h=$(make_home calls)
+  allow_rooms "$h"
+  set_position "$h" alpha "$P0"
+  set_told "$h" alpha "$P0"
+  f=$(capture_items "$h" 1 "$P0" "$P1" "$ITEM_ASK" "$ITEM_MSG")
+  out=$(in_home "$h" "$ADAPTER" told "$f" 2>&1) || fail "told failed: $out"
+  assert_contains "$out" 'held: ms-alpha-c6: take on "Pick a colour" from the alpha room?' "the request was held as a call"
+  assert_contains "$out" "told: alpha (2 item(s) in this batch)" "the batch was told"
+  assert_equals "ms-alpha-c6" "$(calls_in "$h")" "exactly one call for one request, none for the message"
+  show_in "$h" ms-alpha-c6 | grep -q 'title: "Take on \\"Pick a colour\\" from the alpha room?"' \
+    || fail "the call does not ask the question: $(show_in "$h" ms-alpha-c6)"
+
+  # A repeat wake for the same request makes no second call: the same batch
+  # told again, the same request in a later capture, and the crash window
+  # where the call was held but the batch never recorded as told.
+  in_home "$h" "$ADAPTER" told "$f" >/dev/null 2>&1 || fail "told again failed"
+  f=$(capture_items "$h" 2 "$P0" "$P1" "$ITEM_ASK")
+  in_home "$h" "$ADAPTER" told "$f" >/dev/null 2>&1 || fail "told on a repeated capture failed"
+  set_told "$h" alpha "$P0"
+  out=$(in_home "$h" "$ADAPTER" told "$f" 2>&1) || fail "told after the crash window failed: $out"
+  case "$out" in *held:*) fail "the crash window held a second call: $out" ;; esac
+  assert_equals "ms-alpha-c6" "$(calls_in "$h")" "a repeat wake makes no second call"
+
+  # It is one of the owner's calls, the count the bridge strip, the Factory
+  # pane and the tap page all show, with the room's projects as its options.
+  out=$(desk_in "$h" export 2>&1) || fail "export failed: $out"
+  assert_contains "$out" "owner's calls: 1" "the call is in the shared count"
+  assert_equals '["Take on under alpha-app","Take on under studio","Decline","Later"]' \
+    "$(jq -c '[.cards[] | select(.id == "ms-alpha-c6") | .options[]]' "$h/home/data/tap-desk/cards.json")" \
+    "the card offers each allowed project, decline and later"
+  out=$(desk_in "$h" shapes ms-alpha-c6) || fail "shapes failed"
+  assert_equals '["Take on under alpha-app","Take on under studio","Decline","Later"]' \
+    "$(printf '%s' "$out" | jq -c '.decisions[0].options')" "the Factory pane reads the same options"
+
+  # A room that allows no project of this Starship can only be put off or left.
+  out=$(in_home "$h" "$ADAPTER" told "$(
+    doc="$TMP_ROOT/calls.beta.out"
+    printf 'schema=fm-mothership-pull.v1\nroom=beta\nstatus=items\nfrom=%s\nto=%s\nitems=1\n--\n%s\n' "$P0" "$P1" "$(ask_item 4 c9 'Fix the form')" > "$doc"
+    inbox="$h/home/state/procevent-inbox"
+    cp "$doc" "$inbox/mothership-beta.1.result"
+    printf 'mothership\n' > "$inbox/mothership-beta.1.adapter"
+    printf '%s' "$inbox/mothership-beta.1.result")" 2>&1) || fail "told for beta failed: $out"
+  out=$(desk_in "$h" shapes ms-beta-c9) || fail "shapes for beta failed"
+  assert_equals '["Later","Leave it"]' "$(printf '%s' "$out" | jq -c '.decisions[0].options')" \
+    "a room that allows nothing offers only later and leave it"
+  [ -z "$(acts_of "$h")" ] || fail "holding a call sent something to the room: $(acts_of "$h")"
+  pass "a request to the ship becomes exactly one owner call in the shared count, whatever repeats"
+}
+
+test_an_answer_runs_the_room_step_once() {
+  local h out f until
+  command -v tasks-axi >/dev/null 2>&1 || { pass "skip: tasks-axi not found"; return 0; }
+  command -v node >/dev/null 2>&1 || { pass "skip: node not found"; return 0; }
+  h=$(make_home answers)
+  allow_rooms "$h"
+  set_position "$h" alpha "$P0"
+  set_told "$h" alpha "$P0"
+  f=$(capture_items "$h" 1 "$P0" "$P1" "$ITEM_ASK" "$(ask_item 5 c7 'Write the notes')" \
+    "$(ask_item 6 c8 "Tidy the board")")
+  in_home "$h" "$ADAPTER" told "$f" >/dev/null 2>&1 || fail "told failed"
+  assert_equals "$(printf 'ms-alpha-c6\nms-alpha-c7\nms-alpha-c8')" "$(calls_in "$h")" "three requests, three calls"
+
+  # A tap on the phone page takes the request on under the chosen project.
+  tap_on "$h" ms-alpha-c6 "Take on under studio"
+  out=$(desk_in "$h" route --taps "$h/taps" --apply 2>&1) || fail "route failed: $out"
+  assert_contains "$out" 'room: accepted: ms-alpha-c6: your ship took on "Pick a colour" in the alpha room under studio' "the tap took it on"
+  assert_equals "accept c6 --room alpha --project studio --cid fm-ms-alpha-c6-accept" "$(acts_of "$h")" "the room's accept ran under that project"
+  desk_in "$h" route --taps "$h/taps" --apply >/dev/null 2>&1 || fail "routing the taps again failed"
+  in_home "$h" "$ADAPTER" settle >/dev/null 2>&1 || fail "settle failed"
+  assert_equals 1 "$(acts_of "$h" | grep -c .)" "the accept ran once"
+
+  # An answer from the Factory pane or chat goes through the same keyed intake.
+  out=$(in_home "$h" "$ADAPTER" answer ms-alpha-c7 decline --source "the Factory pane" 2>&1) || fail "answer failed: $out"
+  assert_contains "$out" 'declined: ms-alpha-c7: your ship declined "Write the notes" in the alpha room' "the answer declined it"
+  show_in "$h" ms-alpha-c7 | grep -q 'state: done' || fail "the answered call is still open"
+  show_in "$h" ms-alpha-c7 | grep -q 'Captain answered this call through the Factory pane' || fail "the answer's source was not recorded"
+  in_home "$h" "$ADAPTER" settle ms-alpha-c7 >/dev/null 2>&1 || fail "settle again failed"
+  assert_equals "decline c7 --room alpha --project alpha-app --cid fm-ms-alpha-c7-decline" "$(acts_of "$h" | sed -n 2p)" "the room's decline ran"
+  assert_equals 2 "$(acts_of "$h" | grep -c .)" "the decline ran once"
+  if in_home "$h" "$ADAPTER" answer ms-alpha-c6 decline >/dev/null 2>&1; then fail "an answered call took a second answer"; fi
+  if out=$(in_home "$h" "$ADAPTER" answer ms-alpha-c8 maybe 2>&1); then fail "an option the call does not offer was accepted"; fi
+  assert_contains "$out" "offers: Take on under alpha-app | Take on under studio | Decline | Later" "the options are named"
+
+  # Later puts the request off to a date as a new call, which leaves the count
+  # until then and is answered like the first.
+  until=$(date -u -r 1800000000 +%Y-%m-%d 2>/dev/null || date -u -d @1800000000 +%Y-%m-%d)
+  out=$(in_home "$h" env FM_MOTHERSHIP_NOW=$((1800000000 - 3 * 86400)) "$ADAPTER" answer ms-alpha-c8 later 2>&1) || fail "later failed: $out"
+  assert_contains "$out" "later: ms-alpha-c8: \"Tidy the board\" from the alpha room is asked again on $until as ms-alpha-c8-2" "later re-held it"
+  show_in "$h" ms-alpha-c8-2 | grep -q "hold_until: $until" || fail "the new call is not held to the date: $(show_in "$h" ms-alpha-c8-2)"
+  out=$(desk_in "$h" export 2>&1) || fail "export failed"
+  assert_contains "$out" "owner's calls: 0" "a call put off to a date is not in the count until then"
+  assert_equals 2 "$(acts_of "$h" | grep -c .)" "later sent nothing to the room"
+
+  # A room that cannot be reached leaves the answer to be carried out later, once.
+  touch "$h/stub/refuse-acts"
+  if out=$(in_home "$h" "$ADAPTER" answer ms-alpha-c8-2 "take on under alpha-app" 2>&1); then fail "an unreachable room counted as told"; fi
+  assert_contains "$out" "failed: ms-alpha-c8-2: the alpha room was not told: Could not reach the room" "the failure is named"
+  rm -f "$h/stub/refuse-acts"
+  out=$(in_home "$h" "$ADAPTER" settle 2>&1) || fail "settle after the room came back failed: $out"
+  assert_contains "$out" "accepted: ms-alpha-c8-2" "the answer was carried out once the room answered"
+  in_home "$h" "$ADAPTER" settle >/dev/null 2>&1 || fail "a last settle failed"
+  assert_equals 2 "$(acts_of "$h" | grep -c 'accept c8')" "the retry used the same client id, and nothing ran after it landed"
+  assert_equals "fm-ms-alpha-c8-2-accept" "$(acts_of "$h" | grep 'accept c8' | sort -u | sed 's/.*--cid //')" "both tries share one client id"
+  pass "an answer from the tap page, the Factory pane or chat runs the room's accept or decline once, and later re-holds with a date"
+}
+
 test_runner_wakes_once_and_keeps_listening() {
   local h out sid polls_before polls
   h=$(make_home runner)
@@ -703,4 +865,6 @@ fm_test_run \
   test_autohandle_and_told \
   test_told_after_a_missed_told \
   test_read_cleans_room_text \
+  test_a_request_becomes_one_owner_call \
+  test_an_answer_runs_the_room_step_once \
   test_runner_wakes_once_and_keeps_listening

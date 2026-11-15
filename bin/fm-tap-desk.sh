@@ -83,7 +83,11 @@
 # reason, and that it came from the captain's tap. Every finished tap is
 # appended to data/tap-desk/ledger.jsonl, so reading the same taps again is a
 # no-op; a refused tap (for example checks still running, or the away record)
-# is not recorded and is tried again on the next route. A finished tap with a reason also appends a
+# is not recorded and is tried again on the next route. Each id a tap answered
+# is then passed to `bin/fm-procevent-mothership.sh settle`, which carries out
+# the answer to a request from a Mothership room in that room once and passes
+# over every other id; its lines are printed with a `room:` prefix, and a room
+# step that failed makes route exit 1. A finished tap with a reason also appends a
 # one-line rule candidate under "## Tap rule candidates" in data/learnings.md.
 # `route` exits 1 when any tap was refused or unreadable.
 #
