@@ -812,6 +812,8 @@ origin = https://github.com/<owner>/starship-addon
 
 `path` is the add-on's checkout, absolute, under `~/`, or relative to the home; `origin` is what `bin/fm-addon.sh install` clones when that checkout is missing.
 With no `config/addon` a home behaves exactly as it does without add-ons.
+The first conversation with a new owner ([`first-voyage`](../.agents/skills/first-voyage/SKILL.md)) gives every home one: `bin/fm-addon.sh create` makes the owner a private repository on their own GitHub account from a minimal starter and writes `config/addon`, and `bin/fm-addon.sh guards` confirms the home cannot publish anything personal by mistake.
+A home that already names an add-on, such as a team's, keeps it.
 
 An add-on keeps this repository's layout, so a tool moves between the two by moving its files:
 

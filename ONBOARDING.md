@@ -21,7 +21,7 @@ After that, [the captain's handbook](docs/handbook.md) explains the whole system
 
 1. **GitHub** - an account that can see your first project: one of your own repositories, which becomes your first project in step 5.
    If a repository shows you a 404, ask its owner to invite you.
-   Starship itself is public, so plain Starship is all you install, with no add-on.
+   Starship itself is public, so you install plain Starship; during setup your first mate also makes you one private repository on this account, for your own changes.
 2. **Claude** - a Claude account with a paid plan (Pro or Max) for Claude Code.
    If your organisation has a Claude workspace, use that account: the connectors it offers (mail, calendar, documents, and so on) then come along into Claude Code.
 
@@ -155,6 +155,13 @@ It writes your answers into your private preferences file (`data/captain.md`) an
 The conversation itself lives in [the first-voyage skill](.agents/skills/first-voyage/SKILL.md), which is what your first mate follows.
 
 You should see: it tells you your answers are written in your preferences file, `data/captain.md`, and that every worker now carries your first rule as you left it.
+
+Before the fourth question, it makes you your own private repository on your GitHub account, your add-on.
+Every change you want to how your first mate works goes there, never into public Starship, so nothing of yours can reach the public repository by mistake.
+It also checks that every push from your home is screened for private words, and starts your private word list (`config/leak-words`), where you add the names that must never appear in public, such as people and customers.
+If GitHub is not signed in yet, it stops and tells you how to sign in; run `gh auth login` again if so, then tell it you're done.
+
+You should see: it names your new private repository, and says every push from your home is now checked.
 
 ---
 
