@@ -319,7 +319,7 @@ case "${1:---json}" in
   --secondmate-home-summary) OUTPUT_MODE=secondmate-home-summary ;;
   --contribution-input) OUTPUT_MODE=contribution-input ;;
   --backlog) OUTPUT_MODE=backlog ;;
-  --axi-backlog) OUTPUT_MODE=axi-backlog ;;
+  --axi-backlog) OUTPUT_MODE='axi-backlog' ;;
   -h|--help) usage; exit 0 ;;
   *) usage >&2; exit 2 ;;
 esac
@@ -415,6 +415,7 @@ first_pr_url_in_file() {  # <file>
 # of a backlog object. The markdown parse below and the adapter read
 # (axi_backlog_json) both end in it, so a hold reads the same whichever way the
 # backlog was read.
+# shellcheck disable=SC2016  # jq program text: its $names are jq variables.
 HOLD_CLASSIFY_JQ_DEFS='
     def timestamp_epoch($d):
       if ($d | type) != "string" then null

@@ -18,7 +18,7 @@ mkdir -p "$BINDIR"
 FACTORY="$ROOT/bin/fm-factory.py"
 PANE="$ROOT/bin/fm-factory-pane.sh"
 NOW=1794643200   # 2026-11-14T08:00:00Z
-export TZ=UTC FM_FACTORY_NOW=$NOW FM_FACTORY_PEEK= FM_SNAPSHOT_NOW=2026-11-14T08:00:00Z
+export TZ=UTC FM_FACTORY_NOW=$NOW FM_FACTORY_PEEK='' FM_SNAPSHOT_NOW=2026-11-14T08:00:00Z
 # The owner's calls read the backlog through the tasks-axi adapter; this
 # stand-in serves each case's fixture backlog (FM_TEST_AXI_BACKLOG).
 fm_install_markdown_tasks_axi "$TMP_ROOT/axibin"
@@ -541,7 +541,17 @@ for key in sys.argv[2:] + ["q"]:
         continue
     os.write(fd, {"ENTER": b"\r", "DOWN": b"\x1b[B", "ESC": b"\x1b"}.get(key, key.encode()))
     drain(0.35)
-os.waitpid(pid, 0)
+# Keep reading the pty while the pane exits, so its last writes never block.
+end = time.time() + 15
+while True:
+    done, _ = os.waitpid(pid, os.WNOHANG)
+    if done:
+        break
+    if time.time() >= end:
+        os.kill(pid, 9)
+        os.waitpid(pid, 0)
+        sys.exit("drive_keys: the pane did not exit after q")
+    drain(0.5)
 PY
 }
 
