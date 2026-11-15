@@ -828,6 +828,7 @@ code_changed() {
   local f
   [ "$(code_print)" != "$CODE_PRINT" ] || return 1
   for f in "${CODE_FILES[@]}"; do
+    [ -e "$f" ] || [ "$f" = "$SELF" ] || continue
     bash -n "$f" 2>/dev/null || return 1
   done
 }

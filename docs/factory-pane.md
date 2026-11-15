@@ -71,8 +71,8 @@ Colour only repeats what the words already say: cyan is where you are, amber is 
 `enter` on a factory, or on something that needs you, opens that factory's tab, or focuses it when it is already open.
 Its page is on the left: the count line, so other factories' questions stay in view, then this factory's NEEDS YOU, its work in order, the rules the crew follows, what it has learned lately, its own feed, and the talk history.
 Its live workers are stacked on the right, at most four, each a read-only copy of that worker's own pane that refreshes every two seconds.
-Only a worker at work gets a copy: one that is `running`, `with Starship`, or `stuck`.
-A parked, held, queued, or finished job gets none, and a copy closes its own pane once its job ends: when the job is gone from the record or in any state but those three, `waiting`, or `no reading`.
+Only a worker at work gets a copy: one that is `running`, `with Starship`, `stuck`, or `waiting on you`.
+A parked, held, queued, or finished job gets none, and a copy closes its own pane only once its job really ends: when the job is gone from the record or `finished`, landed, `ready for you`, `stopped`, `no worker`, parked (`waiting`), or held (`on hold`, `on hold until <date>`, `waits on other work`); it stays open through `no reading`.
 Typing never reaches a worker from there; talking goes through the talk box.
 `esc` goes back to the tab the factory was opened from, and `q` closes the tab with its worker copies.
 Outside Herdr, `enter` opens the same page in place instead.

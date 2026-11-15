@@ -135,11 +135,12 @@ FOCUS_HOLD = 5          # seconds the pane stays focused before it counts as a l
 FOCUS_CAP = 15 * 60     # focus alone keeps a look going this long after it began or the last key
 MIRROR_CAP = 4
 # A factory tab opens a live copy only of a worker at work: busy, asking
-# Starship, or stuck. Parked, held, queued and finished jobs get none.
-MIRROR_STATES = ("running", "with Starship", "stuck")
-# An open copy stays through a declared wait or a moment the fleet cannot be
-# read, and closes its pane once its job is in any other state or gone.
-MIRROR_KEEP = MIRROR_STATES + ("waiting", "no reading")
+# Starship, stuck, or waiting on the owner's answer. Parked, held, queued and
+# finished jobs get none.
+MIRROR_STATES = ("running", "with Starship", "stuck", "waiting on you")
+# An open copy also stays through a moment the fleet cannot be read, and closes
+# its pane once its job really ends: gone from the record or in any other state.
+MIRROR_KEEP = MIRROR_STATES + ("no reading",)
 
 
 # --------------------------------------------------------------------------
@@ -2244,7 +2245,7 @@ def live(pane: Pane) -> None:
     try:
         tty.setraw(fd)
         while True:
-            if watch.changed():
+            if pane.view.talking is None and pane.view.confirm is None and watch.changed():
                 reload = True
                 break
             pane.reload()

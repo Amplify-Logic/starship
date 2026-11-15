@@ -935,6 +935,35 @@ test_a_running_strip_picks_up_changed_code() {
   pass "bridge strip: a running strip reloads in place within a redraw when its script or library changes"
 }
 
+test_a_running_strip_reloads_when_an_update_drops_a_library() {
+  local code out
+  reset_case
+  a_busy_fleet
+  code="$TMP_ROOT/case$CASE/code"
+  out="$TMP_ROOT/case$CASE/frames"
+  code_copy "$code"
+  start_loop "$code" "$out"
+  shows "$out" '■ 1 decision for you' 15 || { stop_loop; fail "the strip did not start: $(plain < "$out")"; }
+  # The update folds the timeout library into the fleet library and deletes it.
+  awk -v lib="$ROOT/bin/fm-timeout-lib.sh" '
+    /^\. "\$_FM_FLEET_LIB_DIR\/fm-timeout-lib.sh"$/ { while ((getline l < lib) > 0) print l; next }
+    { print }
+  ' "$ROOT/bin/fm-fleet-status-lib.sh" > "$code/bin/fm-fleet-status-lib.sh.new"
+  mv "$code/bin/fm-fleet-status-lib.sh.new" "$code/bin/fm-fleet-status-lib.sh"
+  rm "$code/bin/fm-timeout-lib.sh"
+  starts "$out" 2 || { stop_loop; fail "a running strip did not reload after an update dropped a library"; }
+  local from tries=50
+  from=$(($(wc -c < "$out") + 1))
+  until tail -c "+$from" "$out" | plain | grep -qF '■ 1 decision for you'; do
+    tries=$((tries - 1))
+    [ "$tries" -gt 0 ] || { stop_loop; fail "the reloaded strip does not read the crew: $(cat "$out.err")"; }
+    sleep 0.1
+  done
+  kill -0 "$LOOP_PID" 2>/dev/null || fail "the strip's process ended rather than reloading in place"
+  stop_loop
+  pass "bridge strip: a running strip reloads when an update removes a library it used to load"
+}
+
 test_a_strip_that_never_reads_the_crew_says_it_cannot() {
   local out
   reset_case
@@ -1040,6 +1069,7 @@ fm_test_run \
   test_open_is_not_stopped_by_the_same_tab_in_another_session \
   test_a_running_strip_records_its_session \
   test_a_running_strip_picks_up_changed_code \
+  test_a_running_strip_reloads_when_an_update_drops_a_library \
   test_a_strip_that_never_reads_the_crew_says_it_cannot \
   test_open_is_not_stopped_by_a_recycled_pid \
   test_install_links_the_plugin_and_records_the_home \
