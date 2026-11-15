@@ -93,6 +93,9 @@ This step is required: never skip it, and never move on to step 5 without it.
 Making it creates a repository on their own GitHub account, so ask first, in one line that wants only a yes: may you make them a private repository there, where their own changes will live while the Starship they cloned stays the public version?
 That yes is their approval for `bin/fm-addon.sh create` and the checkout it sets up under `projects/`.
 If they decline, do not go on to step 5: say in one line that the first project waits until they agree, and that they can say so any time.
+Asking to skip this step, to do it later, or to go straight to a project is a decline too, even when they name the project in the same message.
+Do not load `project-management`, look the project up, or clone it: keep the address they gave for step 5, give the same one-line reply, and say you will start on that project as soon as the repository exists.
+This holds however firmly they ask, because the repository and its push checks are what keep their own changes out of public Starship from the first day.
 On their yes, run `bin/fm-addon.sh create`, whose help owns what it makes:
 
 - Exit 4 means GitHub is not signed in yet: give the owner the sign-in steps it printed, in plain words, and stop here until they say it is done, then run it again; step 5 needs the same sign-in.
@@ -107,7 +110,10 @@ Once the repository exists, you may load `project-management` and register the a
 
 ## 5. The first job
 
-Ask for the project:
+Start this step only when `bin/fm-addon.sh root` succeeds and `bin/fm-addon.sh guards` prints no `guard problem:` line.
+If either fails, go back to step 4 instead, whatever the owner asked for.
+
+Ask for the project, unless they already gave its address while step 4 was open:
 
 > Last one: the address of one GitHub repository you know well, like github.com/you/your-app.
 > Knowing it well matters: the first job is a report on it, and you're the one who can tell whether I got it right.
