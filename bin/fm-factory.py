@@ -1474,11 +1474,16 @@ class View:
     def footer(self, width: int) -> List[Row]:
         talk = self.talking
         if talk is not None:
-            left = [S(" %s ▸ " % talk["label"], "cyan", True), S(talk["text"], "ice"), S("_", "cyan")]
+            # The label wraps; the typed text keeps a line of its own and, when
+            # longer than the line, shows its end so the cursor stays in sight.
+            room = width - 4
+            typed = talk["text"] if len(talk["text"]) <= room else "…" + talk["text"][-(room - 1):]
+            rows = flow(width, [S(" ")], talk["label"], "cyan", True)
+            rows.append(row(width, [S(" ▸ ", "cyan", True), S(typed, "ice"), S("_", "cyan")]))
             if talk.get("gone"):
-                return [row(width, left),
-                        row(width, [S(" This was settled elsewhere, so nothing will be sent · esc close", "amber")])]
-            return [row(width, left), row(width, [S(" enter send · esc close · Starship hears this too", "faint")])]
+                return rows + [
+                    row(width, [S(" This was settled elsewhere, so nothing will be sent · esc close", "amber")])]
+            return rows + [row(width, [S(" enter send · esc close · Starship hears this too", "faint")])]
         kind, ident = self.at()
         keys = ["↑↓ move"]
         if kind == "need":

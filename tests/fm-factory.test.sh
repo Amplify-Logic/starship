@@ -649,6 +649,23 @@ test_a_small_pane_scrolls_to_everything() {
   pass "factory pane: a small pane scrolls with page keys, the mouse wheel and the highlight"
 }
 
+test_a_narrow_talk_box_always_shows_what_is_typed() {
+  reset_case
+  write_registry
+  write_crowded_world
+  local dir="$TMP_ROOT/case$CASE" screen
+  export FM_FACTORY_TEST_SIZE=40x70
+  # The highlighted question's title is wider than the pane, so the box's
+  # label wraps and the typed text and its cursor keep a line of their own.
+  drive_keys DOWN t "half typed note" "SNAP:$dir/talk" ESC
+  screen=$(screen_of "$dir/talk" 40 70)
+  assert_contains "$screen" "About Packaging: three calls" "the talk box is not about the highlighted question"
+  assert_contains "$screen" "ask about the ribbon colour)" "the talk box cut its label short"
+  assert_contains "$screen" "▸ half typed note_" "the talk box hid what was typed"
+  unset FM_FACTORY_TEST_SIZE
+  pass "factory pane: a narrow talk box wraps a long label and always shows the typed text"
+}
+
 # drive_keys <keys...>: once the first screen is up, press keys in the real
 # live view under a pty (FM_FACTORY_TEST_SIZE rows x columns, default 50x100),
 # one per third of a second, then q. A `SH:<command>` step runs the command
@@ -945,6 +962,7 @@ fm_test_run \
   test_work_no_factory_claims_is_still_shown \
   test_a_small_pane_shows_its_height_and_says_what_is_below \
   test_a_small_pane_scrolls_to_everything \
+  test_a_narrow_talk_box_always_shows_what_is_typed \
   test_writing_keys_go_through_the_inbox_and_act_on_the_highlighted_row \
   test_a_note_reaches_starship_through_the_real_inbox \
   test_the_highlight_and_open_boxes_follow_the_record \
