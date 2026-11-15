@@ -1048,6 +1048,7 @@ def last_look(home: str) -> Optional[int]:
 
 def refresh(home: str) -> Dict[str, Any]:
     now = now_epoch()
+    read_at = time.time()
     snapshot = load_snapshot(home)
     running = [t["id"] for t in snapshot.get("tasks") or []
                if (t.get("current_state") or {}).get("state") == "working"
@@ -1055,6 +1056,7 @@ def refresh(home: str) -> Dict[str, Any]:
     activity = pane_activity(home, running, now, write=True)
     record = build_record(home, now, snapshot, since=last_look(home), activity=activity,
                           notes=inbox_receipts(home), reconciles=reconcile_pending(home))
+    record["read_at"] = read_at
     try:
         write_atomic(os.path.join(pane_dir(home), "record.json"), json.dumps(record, indent=1))
     except OSError:
@@ -1786,6 +1788,8 @@ class Pane:
         self.view = View(record, opened=opened, in_tab=in_tab, item=item)
         self.loaded = mtime(os.path.join(pane_dir(home), "record.json")) or 0
         self.focus_file = os.environ.get("FM_FACTORY_FOCUS_FILE") or ""
+        # Calls asked about from this pane: id -> (the card's since, when asked).
+        self.asked: Dict[str, Tuple[Optional[int], float]] = {}
 
     def take_focus(self) -> bool:
         """Read and remove an item id written to the focus file; True when one came."""
@@ -1814,9 +1818,20 @@ class Pane:
             if record:
                 self.view.adopt(record)
                 self.loaded = stamp
+                self.keep_asked()
         age = now_epoch() - int(self.view.record.get("as_of_epoch") or 0)
         if age > env_int("FM_FACTORY_TTL", 20):
             refresh_in_background(self.home)
+
+    def keep_asked(self) -> None:
+        """A record read before a press here cannot know its request: the card stays checking."""
+        read_at = float(self.view.record.get("read_at") or 0)
+        for ident, (since, asked_at) in list(self.asked.items()):
+            need = self.view.need(ident)
+            if need is None or need.get("since") != since or read_at >= asked_at:
+                del self.asked[ident]
+            else:
+                need["checking"] = True
 
     def factory_of_stop(self) -> Optional[str]:
         if self.view.opened:
@@ -1849,6 +1864,7 @@ class Pane:
             if pending is not None and settled_request_id(fac["id"], need, pending) in sent:
                 self.say("Starship is already checking this.", "amber")
                 return
+        asked_at = time.time()
         requested, why = file_reconcile(self.home, need["id"])
         if requested is None:
             self.say("Not asked: %s" % why, "red", 12)
@@ -1867,6 +1883,7 @@ class Pane:
             self.say("Not sent: %s" % why, "red", 12)
             return
         need["checking"] = True
+        self.asked[need["id"]] = (need.get("since"), asked_at)
         self.say("Asked Starship to check whether %s is already settled." % need["title"], "green")
         refresh_in_background(self.home)
 

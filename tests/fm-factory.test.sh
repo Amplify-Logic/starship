@@ -895,6 +895,32 @@ test_already_settled_retries_a_wake_that_failed() {
   pass "factory pane: a wake note that failed is sent by the next press, and only a sent one blocks a press"
 }
 
+# A refresh already under way when x is pressed read the reconcile requests
+# before this one was filed, and the press cannot start another. The record
+# it writes must not turn the card back to offering x; a record read after
+# the press still decides.
+test_already_settled_outlasts_a_refresh_read_before_the_press() {
+  reset_case
+  write_registry
+  write_world
+  local screen="$TMP_ROOT/case$CASE/screen" stale="$TMP_ROOT/case$CASE/stale.json"
+  local lock="$HOME_FIX/state/factory/refresh.lock"
+  python3 "$FACTORY" --data --fresh >/dev/null || fail "--data failed"
+  cp "$HOME_FIX/state/factory/record.json" "$stale"
+  drive_keys "SH:mkdir '$lock'" x "SH:cp '$stale' '$HOME_FIX/state/factory/record.json'" "SNAP:$screen"
+  assert_contains "$(cat "$screen")" "Starship is re-reading what you said about this" \
+    "the card still reads checking after a record read before the press"
+  assert_not_contains "$(cat "$screen")" "x settled?" "a record read before the press offered x again"
+  # Starship retires the new request at once: the record read after it decides.
+  : > "$HOME_FIX/reconcile.requests"
+  : > "$FM_FACTORY_TEST_NOTES"
+  python3 "$FACTORY" --data --fresh >/dev/null || fail "--data failed"
+  drive_keys x "SH:: > '$HOME_FIX/reconcile.requests'; python3 '$FACTORY' --data --fresh >/dev/null" "SNAP:$screen"
+  assert_contains "$(cat "$screen")" "x settled?" "a record read after the press that has no request offers x again"
+  rmdir "$lock"
+  pass "factory pane: a card stays checking through a refresh that read the requests before the press"
+}
+
 # The same key against the real captain-hold intake, the real inbox and a
 # real backlog: starting the pane binds nothing, installing it binds its
 # source, the request lands, and Starship's reconcile note or evidence close
@@ -1189,6 +1215,7 @@ fm_test_run \
   test_a_note_reaches_starship_through_the_real_inbox \
   test_already_settled_asks_starship_to_recheck_the_call \
   test_already_settled_retries_a_wake_that_failed \
+  test_already_settled_outlasts_a_refresh_read_before_the_press \
   test_already_settled_files_a_real_reconcile_request \
   test_the_highlight_and_open_boxes_follow_the_record \
   test_talking_never_changes_who_steers \
