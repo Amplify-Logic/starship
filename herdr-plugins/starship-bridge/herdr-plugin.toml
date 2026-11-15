@@ -5,7 +5,7 @@ id = "starship.bridge"
 name = "Starship bridge"
 version = "0.1.0"
 min_herdr_version = "0.9.5"
-description = "The STARSHIP wordmark, the crew's lamps and the battery across the top of the workspace"
+description = "The STARSHIP wordmark, the crew's lamps, the most urgent call, a red alert, the night shift and the battery across the top of the workspace"
 platforms = ["linux", "macos"]
 
 [[actions]]

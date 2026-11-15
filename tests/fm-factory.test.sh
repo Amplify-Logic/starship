@@ -512,13 +512,16 @@ test_work_no_factory_claims_is_still_shown() {
 # drive_keys <keys...>: once the first screen is up, press keys in the real
 # live view under a pty, one per third of a second, then q. A `SH:<command>`
 # step runs the command instead and waits for the pane to pick up the
-# refreshed record; a `SNAP:<file>` step saves what the pane draws next.
+# refreshed record; a `SNAP:<file>` step saves what the pane draws next. With
+# DRIVE_PANE=1 the view runs as Herdr starts it, through fm-factory-pane.sh run.
 drive_keys() {
-  python3 - "$FACTORY" "$@" <<'PY'
+  python3 - "$FACTORY" "$PANE" "$@" <<'PY'
 import fcntl, os, pty, select, struct, subprocess, sys, termios, time
 pid, fd = pty.fork()
 if pid == 0:
     fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack("HHHH", 50, 100, 0, 0))
+    if os.environ.get("DRIVE_PANE") == "1":
+        os.execvp("bash", ["bash", sys.argv[2], "run"])
     os.execvp("python3", ["python3", sys.argv[1], "view"])
 def drain(seconds, until=None):
     end, seen = time.time() + seconds, b""
@@ -531,7 +534,7 @@ def drain(seconds, until=None):
                 break
     return seen
 drain(20, until=b"q quit")
-for key in sys.argv[2:] + ["q"]:
+for key in sys.argv[3:] + ["q"]:
     if key.startswith("SH:"):
         subprocess.run(key[3:], shell=True, check=True, stdout=subprocess.DEVNULL)
         drain(3.6)
@@ -749,6 +752,43 @@ test_the_plugin_installs_opens_and_removes() {
   pass "factory pane: install links and records the home, open splits right, remove stops only its own panes"
 }
 
+# The bridge strip opens the pane on one item of NEEDS YOU: a new pane starts
+# its highlight there, and a pane already showing in the tab moves to it.
+test_open_on_an_item_puts_the_highlight_on_it() {
+  local out pid
+  reset_case
+  write_registry
+  write_world
+  export HERDR_BIN_PATH="$BINDIR/herdr" HERDR_TAB_ID=w1:t1 HERDR_SOCKET_PATH=/run/a.sock
+  out=$(HERDR_PANE_ID=w1:p2 bash "$PANE" open --item garden-share 2>&1) || fail "open --item failed: $out"
+  assert_equals "$(tail -n 1 "$CALLS")" "plugin pane open --plugin starship.factory --entrypoint factory --placement split --direction right --target-pane w1:p2 --focus --env FM_HOME=$HOME_FIX --env FM_FACTORY_ITEM=garden-share" \
+    "open --item does not hand the item to the new pane"
+  # Started on the item, keep acts on it with no move: it is the second item.
+  DRIVE_PANE=1 FM_FACTORY_ITEM=garden-share HERDR_PANE_ID=w1:p9 drive_keys k ENTER
+  assert_equals "$(jq -r .request_id "$FM_FACTORY_TEST_NOTES")" \
+    "factory.garden-journal.keep.garden-share.$((NOW - 109 * 60))" "the highlight did not start on the item"
+  : > "$FM_FACTORY_TEST_NOTES"
+  # A pane already showing in this tab moves its highlight; no second pane opens.
+  : > "$CALLS"
+  DRIVE_PANE=1 HERDR_PANE_ID=w1:p9 drive_keys "SH:HERDR_PANE_ID=w1:p3 bash $PANE open --item garden-share" k ENTER
+  assert_no_grep 'plugin pane open' "$CALLS" "a second Factory pane opened in a tab that shows one"
+  assert_equals "$(jq -r .request_id "$FM_FACTORY_TEST_NOTES")" \
+    "factory.garden-journal.keep.garden-share.$((NOW - 109 * 60))" "the open pane did not move to the item"
+  assert_equals "$(find "$FM_FACTORY_TEST_CONFIG/focus" -type f 2>/dev/null | wc -l | tr -d ' ')" "0" \
+    "the pane left the request behind"
+  # Another tab's pane, or a factory's own page, is not this tab's overview.
+  : > "$CALLS"
+  mkdir -p "$FM_FACTORY_TEST_CONFIG/panes"
+  bash -c "exec -a 'fm-factory-pane.sh run --factory sample-shop' sleep 30" &
+  pid=$!
+  printf 'pane=w1:p5\ntab=w1:t1\nsession=/run/a.sock\nview=page\n' > "$FM_FACTORY_TEST_CONFIG/panes/$pid"
+  out=$(HERDR_PANE_ID=w1:p2 bash "$PANE" open --item garden-share 2>&1) || fail "open --item failed: $out"
+  kill "$pid" 2>/dev/null
+  wait "$pid" 2>/dev/null
+  assert_grep 'plugin pane open' "$CALLS" "a factory's page was taken for the overview"
+  pass "factory pane: open on an item starts the highlight there, or moves the pane already in the tab to it"
+}
+
 fm_test_run \
   test_the_record_words_every_state \
   test_the_plain_screen_is_the_record_as_text \
@@ -766,4 +806,5 @@ fm_test_run \
   test_enter_opens_the_factory_tab_with_its_live_workers \
   test_a_live_copy_shows_text_at_the_top_of_a_taller_pane \
   test_open_tab_stops_when_herdr_does_not_name_the_tab \
-  test_the_plugin_installs_opens_and_removes
+  test_the_plugin_installs_opens_and_removes \
+  test_open_on_an_item_puts_the_highlight_on_it
