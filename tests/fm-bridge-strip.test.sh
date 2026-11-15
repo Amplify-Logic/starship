@@ -65,7 +65,12 @@ case "$1 $2 ${3:-}" in
   'pane focus '*)
     [ "$(arg --pane "$@")" = w1:p9 ] && [ "$(arg --direction "$@")" = down ] && printf 'w1:p2' > "$focus"
     ;;
+  'pane neighbor '*)
+    printf '{"result":{"type":"pane_neighbor","neighbor":{"pane_id":"%s","direction":"down","neighbor_pane_id":"w1:p2"}}}\n' \
+      "$(arg --pane "$@")"
+    ;;
   'plugin config-dir starship.bridge') printf '%s\n' "$FM_BRIDGE_TEST_CONFIG" ;;
+  'plugin config-dir starship.factory') printf '%s\n' "$FM_BRIDGE_TEST_CONFIG/factory" ;;
 esac
 exit 0
 SH
@@ -78,15 +83,29 @@ reset_case() {
   FLEET_FIX="$TMP_ROOT/case$CASE/fleet"
   CONFIG_FIX="$TMP_ROOT/case$CASE/config"
   CALLS="$TMP_ROOT/case$CASE/calls"
-  mkdir -p "$HOME_FIX/state" "$HOME_FIX/data" "$FLEET_FIX"
+  mkdir -p "$HOME_FIX/state" "$HOME_FIX/data" "$HOME_FIX/config" "$FLEET_FIX"
   : > "$CALLS"
   export FM_FLEET_FIXTURE="$FLEET_FIX"
   battery_reading ''
 }
 
-task() {  # <id> <canonical line>
-  fm_write_meta "$HOME_FIX/state/$1.meta" kind=crew
-  printf '%s\n' "$2" > "$FLEET_FIX/$1"
+task() {  # <id> <canonical line> [metadata...]
+  local id=$1 line=$2
+  shift 2
+  if [ "$#" -gt 0 ]; then
+    fm_write_meta "$HOME_FIX/state/$id.meta" "$@"
+  else
+    fm_write_meta "$HOME_FIX/state/$id.meta" kind=crew
+  fi
+  printf '%s\n' "$line" > "$FLEET_FIX/$id"
+}
+
+# work <id> <title> [state]: a work item in the home's backlog, as tasks-axi
+# writes it, so a ready task has a title to be named by.
+work() {
+  local file="$HOME_FIX/data/backlog.md"
+  [ -e "$file" ] || printf '## In flight\n\n## Queued\n' > "$file"
+  printf -- '- [ ] %s - %s (repo: sample) (kind: ship)\n' "$1" "$2" >> "$file"
 }
 
 # held <id> <title> [extra metadata]: a decision held for the owner, in the
@@ -117,7 +136,7 @@ on_mains() {  # <percent> <state>
 }
 
 frame() {  # <width> [height]
-  FM_HOME="$HOME_FIX" FM_FLEET_STATE_NO_CACHE="${FM_FLEET_STATE_NO_CACHE:-1}" \
+  TZ=UTC FM_HOME="$HOME_FIX" FM_FLEET_STATE_NO_CACHE="${FM_FLEET_STATE_NO_CACHE:-1}" \
     FM_FLEET_STATE_READER="${READER:-$BINDIR/fake-crew-state}" \
     FM_BRIDGE_STRIP_PMSET="$BINDIR/fake-pmset" FM_BRIDGE_TEST_BATTERY="$BATTERY_FIX" \
     bash "$STRIP" render --width "$1" --height "${2:-1}"
@@ -254,6 +273,208 @@ test_rendering_changes_nothing_in_the_home() {
   after=$(cd "$HOME_FIX" && find . -exec ls -ld {} + | LC_ALL=C sort)
   assert_equals "$after" "$before" "rendering a frame changed the home"
   pass "bridge strip: a frame reads the home and writes nothing to it"
+}
+
+# --- the most urgent call ----------------------------------------------------
+
+test_the_most_urgent_call_is_named_after_the_lamps() {
+  local out row
+  reset_case
+  task green 'state: done · source: run-step · checks passed'
+  work green 'Feedback button'
+  out=$(frame 130)
+  row=$(printf '%s' "$out" | plain)
+  assert_equals "$row" "$(row_of 130 'S T A R S H I P  │  ■ 0 busy   ■ 0 decisions for you   ■ 1 ready to merge  │  ▸ Merge: Feedback button')" \
+    "a merge is named after the lamps"
+  assert_contains "$out" "${CYAN}▸ " "the call is not marked as the way in"
+  # A held decision waits on the owner before work ready to land does.
+  held pick-design 'Which of two designs'
+  assert_contains "$(frame 130 | plain)" '│  ▸ Decide: Which of two designs ' "the decision does not come first"
+  pass "bridge strip: the owner's most urgent call is named, decisions before merges"
+}
+
+test_the_call_only_takes_the_columns_left_over() {
+  reset_case
+  a_busy_fleet
+  on_battery 57 discharging 3:12
+  # 110 columns hold the lamps and the battery with too little left for a name.
+  assert_equals "$(frame 110 | plain)" "$(row_of 110 'S T A R S H I P  │  ■ 2 busy   ■ 1 decision for you   ■ 1 ready to merge' \
+    'battery 57%, 3:12 left')" "the call pushed the strip into a narrower tier"
+  assert_equals "$(frame 125 | plain)" "$(row_of 125 'S T A R S H I P  │  ■ 2 busy   ■ 1 decision for you   ■ 1 ready to merge  │  ▸ Decide: Which of...' \
+    'battery 57%, 3:12 left')" "a name with little room is cut, not dropped"
+  assert_contains "$(frame 160 | plain)" '▸ Decide: Which of two designs   ' "a wide pane shows the whole name"
+  pass "bridge strip: the call takes only the columns the lamps and the battery leave, cut short before it is dropped"
+}
+
+test_a_title_is_shown_as_plain_text() {
+  reset_case
+  task green 'state: done · source: run-step · checks passed'
+  work green $'Fix the \xe2\x80\x9cshare\xe2\x80\x9d sheet \xe2\x80\x94 caf\xc3\xa9 \xf0\x9f\x8e\x89 first'
+  assert_contains "$(frame 140 | plain)" "▸ Merge: Fix the \"share\" sheet - caf? ? first " \
+    "a title with non-ASCII text was not made plain"
+  pass "bridge strip: a call's title is made plain text so its columns can be counted"
+}
+
+# click_strip <label|column> <width>: run the live strip under a pty of 3 rows,
+# click a column of its middle row the way Herdr reports a click to a pane that
+# asked for mouse reports, and save what it drew. `label` clicks the call.
+click_strip() {
+  python3 - "$STRIP" "$1" "$2" "$TMP_ROOT/case$CASE/screen" <<'PY'
+import fcntl, os, pty, re, select, signal, struct, sys, termios, time
+strip, where, width, screen = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4]
+pid, fd = pty.fork()
+if pid == 0:
+    fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack("HHHH", 3, width, 0, 0))
+    os.execvp("bash", ["bash", strip, "run"])
+seen = b""
+def drain(seconds, until=None):
+    global seen
+    end = time.time() + seconds
+    while time.time() < end and not (until and until in seen):
+        r, _, _ = select.select([fd], [], [], 0.1)
+        if r:
+            try:
+                seen += os.read(fd, 65536)
+            except OSError:
+                break
+drain(30, until="▸".encode())
+drain(0.5)
+text = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", seen.decode("utf-8", "replace"))
+middle = [line for line in text.split("\n") if "▸" in line][-1]
+column = middle.index("▸") + 1 if where == "label" else int(where)
+os.write(fd, ("\x1b[<0;%d;2M\x1b[<0;%d;2m" % (column, column)).encode())
+drain(4)
+open(screen, "wb").write(seen)
+os.kill(pid, signal.SIGTERM)
+end = time.time() + 30
+while True:   # keep reading so its last writes drain and it can exit
+    done, _ = os.waitpid(pid, os.WNOHANG)
+    if done:
+        break
+    if time.time() >= end:
+        os.kill(pid, 9)
+        os.waitpid(pid, 0)
+        sys.exit("click_strip: the strip did not exit")
+    drain(0.3)
+PY
+}
+
+# live_click <label|column> <width>: click_strip on this case's home, below
+# pane w1:p9 of a stand-in Herdr. The fleet is read once into the cache the
+# live strip reads, as it does in a real home, so each frame is quick.
+live_click() {
+  herdr_env
+  FM_FLEET_STATE_READER="$BINDIR/fake-crew-state" bash -c '
+    . "$1/bin/fm-fleet-status-lib.sh"
+    _fm_fleet_collect "$2" "$(date +%s)" "$3"
+  ' _ "$ROOT" "$HOME_FIX/state" "$BINDIR/fake-crew-state" > "$HOME_FIX/state/.status-fleet-state" \
+    || fail "the fleet could not be read for the live strip"
+  FM_HOME="$HOME_FIX" FM_FLEET_STATE_TTL=3600 FM_FLEET_STATE_MAX_AGE=3600 \
+    FM_FLEET_STATE_READER="$BINDIR/fake-crew-state" FM_BRIDGE_STRIP_PMSET='' \
+    HERDR_PANE_ID=w1:p9 HERDR_TAB_ID=w1:t1 TZ=UTC click_strip "$@"
+}
+
+test_a_click_on_the_call_opens_the_factory_pane_on_it() {
+  reset_case
+  held pick-design 'Which of two designs'
+  (live_click 3 130) || fail "the live strip could not be driven"
+  assert_no_grep 'plugin pane open' "$CALLS" "a click away from the call opened something"
+  assert_not_contains "$(cat "$TMP_ROOT/case$CASE/screen")" '[<0;' "the strip echoed a mouse report"
+  : > "$CALLS"
+  (live_click label 130) || fail "the live strip could not be driven"
+  assert_grep 'pane neighbor --pane w1:p9 --direction down' "$CALLS" "the strip did not look for the pane below it"
+  assert_grep "plugin pane open --plugin starship.factory --entrypoint factory --placement split --direction right --target-pane w1:p2 --focus --env FM_HOME=$HOME_FIX --env FM_FACTORY_ITEM=pick-design" \
+    "$CALLS" "a click on the call did not open the Factory pane on it beside the pane below"
+  pass "bridge strip: a click on the most urgent call opens the Factory pane on that item, a click elsewhere nothing"
+}
+
+# --- the red alert ------------------------------------------------------------
+
+test_the_red_alert_shows_failed_work_and_stopped_workers_until_they_clear() {
+  local out
+  reset_case
+  on_battery 57 discharging 3:12
+  task broke 'state: failed · source: status-log · the tests would not build'
+  out=$(frame 130)
+  assert_equals "$(printf '%s' "$out" | plain)" \
+    "$(row_of 130 'S T A R S H I P  │  ■ 0 busy   ■ 0 decisions for you   ■ 0 ready to merge' '■ 1 failed   battery 57%, 3:12 left')" \
+    "failed work did not raise the alert"
+  assert_contains "$out" "${RED}${LAMP} 1 failed" "the alert is not red"
+  task lost 'state: parked · source: status-log · needs-decision: which way' kind=ship \
+    "worktree=$TMP_ROOT/case$CASE/gone"
+  assert_contains "$(frame 130 | plain)" '■ 1 failed, 1 stopped   battery' "a stopped worker did not join the alert"
+  # A narrow pane keeps the alert, as it keeps a low battery.
+  assert_equals "$(frame 40 | plain)" "$(row_of 40 '■ 0 ■ 0 ■ 0' '■ 2 broken   57%')" "a narrow pane dropped the alert"
+  assert_equals "$(frame 6 | plain)" '2 brok' "the narrowest pane dropped the alert"
+  task broke 'state: working · source: pane · harness busy'
+  rm -f "$HOME_FIX/state/lost.meta" "$FLEET_FIX/lost"
+  assert_not_contains "$(frame 130 | plain)" 'failed' "the alert stayed after its cause cleared"
+  assert_not_contains "$(frame 130 | plain)" 'stopped' "the alert stayed after its cause cleared"
+  pass "bridge strip: failed work and stopped workers raise a red alert that narrow panes keep and that clears with its cause"
+}
+
+# --- the night shift ----------------------------------------------------------
+
+EVENING=1794686400   # 2026-11-14T20:00:00Z
+NIGHT=1794708000     # 2026-11-15T02:00:00Z
+MORNING=1794729600   # 2026-11-15T08:00:00Z
+AFTERNOON=1794751200 # 2026-11-15T14:00:00Z
+
+night_frame() {  # <now> <width>
+  FM_FLEET_STATE_NOW=$1 frame "$2" | plain
+}
+
+test_the_night_shift_says_when_it_starts_that_it_is_on_and_what_it_did() {
+  reset_case
+  on_mains 90 charged
+  assert_not_contains "$(night_frame "$EVENING" 130)" 'night shift' "a home with no night shift showed one"
+  printf '23:30-07:00\n' > "$HOME_FIX/config/night-shift-window"
+  assert_contains "$(night_frame "$EVENING" 130)" '   night shift from 23:30   battery 90%, full ' "the evening line"
+  assert_contains "$(night_frame "$NIGHT" 130)" '   night shift on   battery 90%, full ' "the line during the window"
+  assert_not_contains "$(night_frame "$MORNING" 130)" 'overnight' "a morning with nothing counted claimed a figure"
+  assert_not_contains "$(night_frame "$AFTERNOON" 130)" 'night shift' "the afternoon showed the night shift"
+
+  # Finished in the window: a scout's report and a ship's ready report, and a
+  # PR seen merged whose task was already cleaned up. Not counted: a ship's
+  # handoff into the checks, and a ready report from before the window.
+  task scout-a 'state: done · source: status-log · report ready' kind=scout
+  printf 'done [at=1794711600]: report ready\n' > "$HOME_FIX/state/scout-a.status"
+  task ship-b 'state: done · source: status-log · PR' kind=ship mode=no-mistakes
+  printf 'done [at=1794704400]: handoff, ready for no-mistakes - x\ndone [at=1794715200]: PR https://github.com/o/r/pull/5 checks green\n' \
+    > "$HOME_FIX/state/ship-b.status"
+  task ship-c 'state: done · source: status-log · PR' kind=ship mode=no-mistakes
+  printf 'done [at=1794704400]: handoff, ready for no-mistakes - x\n' > "$HOME_FIX/state/ship-c.status"
+  task ship-d 'state: done · source: status-log · PR' kind=ship mode=direct-PR
+  printf 'done [at=1794693600]: PR https://github.com/o/r/pull/7\n' > "$HOME_FIX/state/ship-d.status"
+  mkdir -p "$HOME_FIX/data/landed-e" "$HOME_FIX/data/landed-f"
+  printf '{"schema":"fm-contributions.v1","task":"landed-e","records":[{"url":"https://github.com/o/r/pull/8","kind":"pr","checked_at":"2026-11-15T05:00:00Z","observation":{"state":"merged"}}]}\n' \
+    > "$HOME_FIX/data/landed-e/contributions.json"
+  printf '{"schema":"fm-contributions.v1","task":"landed-f","records":[{"url":"https://github.com/o/r/pull/9","kind":"pr","checked_at":"2026-11-14T12:00:00Z","observation":{"state":"merged"}}]}\n' \
+    > "$HOME_FIX/data/landed-f/contributions.json"
+  assert_contains "$(night_frame "$MORNING" 160)" '   3 done overnight   battery 90%, full ' "the morning count"
+  assert_contains "$(FM_FLEET_STATE_NOW=$MORNING frame 160)" "${GREEN}3 done overnight" "the morning count is not green"
+  printf 'nonsense\n' > "$HOME_FIX/config/night-shift-window"
+  assert_not_contains "$(night_frame "$MORNING" 160)" 'overnight' "a window that cannot be read showed a night shift"
+  pass "bridge strip: the night shift says when it starts, that it is on, and in the morning what finished or landed in it"
+}
+
+test_every_width_fills_the_row_with_everything_on_it() {
+  local width row
+  reset_case
+  a_busy_fleet
+  task broke 'state: failed · source: status-log · the tests would not build'
+  printf '23:30-07:00\n' > "$HOME_FIX/config/night-shift-window"
+  on_battery 57 discharging 3:12
+  for width in 1 4 8 12 16 20 24 30 36 44 52 60 70 80 90 100 110 120 130 140 160 200; do
+    row=$(FM_FLEET_STATE_NOW=$EVENING frame "$width" | plain)
+    [ "$(columns "$row")" -eq "$width" ] \
+      || fail "a $width-column pane got a $(columns "$row")-column row: [$row]"
+  done
+  assert_contains "$(FM_FLEET_STATE_NOW=$EVENING frame 200 | plain)" \
+    '▸ Decide: Which of two designs   ' "the widest pane lost the call"
+  assert_contains "$(FM_FLEET_STATE_NOW=$EVENING frame 200 | plain)" \
+    '■ 1 failed   night shift from 23:30   battery 57%, 3:12 left ' "the widest pane lost the alert or the night shift"
+  pass "bridge strip: with the call, the alert and the night shift, every width still gets a row of exactly that width"
 }
 
 # --- the battery --------------------------------------------------------------
@@ -498,6 +719,13 @@ fm_test_run \
   test_a_last_good_reading_is_marked_with_its_age \
   test_a_reading_from_before_the_split_is_not_guessed \
   test_rendering_changes_nothing_in_the_home \
+  test_the_most_urgent_call_is_named_after_the_lamps \
+  test_the_call_only_takes_the_columns_left_over \
+  test_a_title_is_shown_as_plain_text \
+  test_a_click_on_the_call_opens_the_factory_pane_on_it \
+  test_the_red_alert_shows_failed_work_and_stopped_workers_until_they_clear \
+  test_the_night_shift_says_when_it_starts_that_it_is_on_and_what_it_did \
+  test_every_width_fills_the_row_with_everything_on_it \
   test_the_battery_warns_before_it_runs_flat \
   test_every_width_fills_the_row_exactly \
   test_a_narrow_pane_keeps_the_crew_and_a_low_battery \

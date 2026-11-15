@@ -1,14 +1,14 @@
 # Starship bridge strip
 
 A slim strip across the top of a Herdr workspace that makes it read as Starship rather than a plain terminal skin.
-It shows the STARSHIP wordmark, three lamps for the crew, and the Mac's battery.
+It shows the STARSHIP wordmark, three lamps for the crew, the owner's most urgent call by name, a red alert when something breaks, the night shift, and the Mac's battery.
 `bin/fm-bridge-strip.sh` owns the commands and mechanics; read its header before first use.
 `herdr-plugins/starship-bridge/` is the Herdr plugin that carries it.
 
 ## What it shows
 
 ```text
- S T A R S H I P  │  ■ 2 busy   ■ 1 decision for you   ■ 1 ready to merge         battery 57%, 3:12 left
+ S T A R S H I P  │  ■ 2 busy   ■ 1 decision for you   ■ 1 ready to merge  │  ▸ Decide: Harvest chart      ■ 1 failed   night shift from 23:30   battery 57%, 3:12 left
 ```
 
 | Lamp | Colour when lit | Counts |
@@ -32,10 +32,36 @@ On mains power it stays quiet, and a machine with no battery, or one that is not
 
 The colours are the flight deck tokens: the strip is painted in the hull colour, the wordmark is cyan, and each lamp colour means only one thing.
 
+### The most urgent call
+
+After the lamps the strip names the owner's most urgent call: the first of his calls as `fm_owner_calls` lists them, his held decisions before work ready to land.
+A decision reads `Decide: <title>` and work ready to land `Merge: <title>`, with the title of its work item, else the task's recorded outcome, else its id.
+The title is made plain text, so a dash or a quote becomes its plain form and any other character outside plain text becomes `?`.
+Clicking the name opens the [Factory pane](factory-pane.md) beside the pane below the strip with its highlight on that call; a Factory pane already showing in the tab moves its highlight there instead.
+When the pane cannot be opened, the strip says so in place of the name for a few seconds.
+The strip asks the terminal for mouse reports to see the click, so Herdr's own text selection does not work inside the strip.
+
+### The red alert
+
+A red `■ 1 failed, 2 stopped` shows before the battery when work failed or a worker stopped, so trouble shows without the owner looking for it.
+`failed` counts tasks whose current state is failed: a worker's failure or a failed validation run.
+`stopped` is the status bar's figure of the same name: a task whose worker is gone while its record remains.
+It clears as soon as the reading no longer counts either.
+On a narrower pane it reads `■ 3 broken`.
+
+### The night shift
+
+When the home has a [night shift window](configuration.md#night-shift-window-confignight-shift-window), the strip says `night shift from 23:30` in the six hours before it starts and `night shift on` while it runs.
+For six hours after it ends it says, in green, how much finished in it, such as `3 done overnight`.
+That counts each task once: one whose finished report arrived inside the window, which for a ship is its ready report, or whose PR was first seen merged inside it.
+Work that was cleaned up before the reading and left no merged PR record is not counted, so the figure can be short; when nothing was counted the morning shows no figure rather than a zero that might not be true.
+
 ## Read only
 
 The strip never steers, changes, or drains anything.
 Its only writes are its own record of the pane it runs in, kept in the plugin's Herdr config directory, and the shared fleet reading's cache that the status bar also refreshes.
+Its one action is opening the Factory pane when the owner clicks the most urgent call; the pane it opens writes nothing until the owner presses one of its keys.
+The call, the alert, and the night shift's count come from the same cached reading as the lamps, so they never disagree with them and cost the fleet nothing extra.
 
 ## Install, show, and remove
 
@@ -68,8 +94,9 @@ The strip paints every row of its pane in the hull colour and puts its content o
 A strip covers the width of the pane it was opened above, because Herdr has no split across a whole tab.
 
 On a narrow pane it drops words before lamps: the wordmark loses its letter spacing, the lamp words shorten to `decision` or `decisions` and `to merge`, then only the numbers remain.
-A low battery is never dropped while anything else is shown.
+A low battery and the red alert are never dropped while anything else is shown.
+The most urgent call and the night shift only use the columns left over, so they never change how the rest of the row narrows: the call first, cut short with `...` before it is left out, then the night shift when it fits whole.
 
 ## Verification
 
-`tests/fm-bridge-strip.test.sh` renders fixture fleets and fixture battery readings and checks every row word for word and colour by colour, at every width, and checks the Herdr calls behind `open`, `install`, and `remove` against a stand-in Herdr.
+`tests/fm-bridge-strip.test.sh` renders fixture fleets, fixture night shifts and fixture battery readings and checks every row word for word and colour by colour, at every width, clicks the running strip under a pseudo-terminal, and checks the Herdr calls behind the click, `open`, `install`, and `remove` against a stand-in Herdr.

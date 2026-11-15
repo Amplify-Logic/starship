@@ -14,6 +14,7 @@ Start with the directory layout, then use the setting reference for the behavior
 | Supervision and presentation | [Pi supervision branch](#pi-supervision-branch), [supervision host](#supervision-host-configsupervision-host), [Codex native Stop park](#codex-native-stop-park-configcodex-stop-park), [warm-cache compaction](#warm-cache-compaction-configwarm-compact), and [Calm preference](#calm-preference-configcalm) |
 | Persistent secondmates | [Secondmate routes](#secondmate-routes-datasecondmatesmd) |
 | Naming the factories the Factory pane shows | [Factory registry](#factory-registry-datafactoriesmd) |
+| The night shift line on the bridge strip | [Night shift window](#night-shift-window-confignight-shift-window) |
 | Review bots on owned GitHub pull requests | [Contribution review bots](#contribution-review-bots-configcontribution-review-bots) |
 | Starter settings for a new home: which model does which job, transcription words, and how hard the first mate thinks | [Starter settings](#starter-settings-first-launch), [crew dispatch profiles](#crew-dispatch-profiles-configcrew-dispatchjson), [speech-to-text vocabulary](#speech-to-text-vocabulary-configstt-vocabulary), and [primary effort](#primary-effort-configprimary-effort) |
 | Spoken replies | [Desk voice-out](#desk-voice-out-configspeak) |
@@ -1692,6 +1693,19 @@ Learned:
 - `id` is the factory's stable name in the record and the pane's own records; it defaults to the heading turned into lowercase words joined by dashes.
 - `projects` maps work to the factory by each work item's project, as registered in `data/projects.md`, an `alias=` included; work no factory claims shows under `Other work`.
 - `Rules:` and `Learned:` are what the factory page shows under its rules and what it has learned lately; a learned line may start with its date.
+
+## Night shift window (config/night-shift-window)
+
+The optional local `config/night-shift-window` names the hours a home runs its night shift, as one line of local time, start and end:
+
+```text
+23:30-07:00
+```
+
+An end at or before the start is on the next day.
+The [bridge strip](bridge-strip.md#what-it-shows) reads it to say when the night shift starts, that it is on, and in the morning how much finished in it.
+Without the file, or with a line of any other shape, the strip shows no night shift.
+`fm_night_shift_window` in `bin/fm-fleet-status-lib.sh` owns how the window and its evening and morning are read.
 
 ## Secondmate routes (data/secondmates.md)
 

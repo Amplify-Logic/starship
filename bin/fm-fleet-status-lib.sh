@@ -78,6 +78,19 @@
 #               only bin/fm-bridge-strip.sh asks for it, because the strip shows
 #               "decisions for you" and "ready to merge" as two lamps.
 #
+# The bridge strip also asks (fm_fleet_status_counts `strip`) for three readings
+# no other field carries, taken by the same fold so they never disagree with
+# the lamps:
+#   failed      tasks whose current state is failed: a worker's failure or a
+#               failed validation run. Together with stopped it is the strip's
+#               red alert; it is part of attention, never added to it.
+#   night       how much finished in the night shift that ended last, as
+#               <count>@<window-end-epoch>, or `-` when the home has no night
+#               shift window (fm_night_shift_window owns the window and
+#               _fm_fleet_night_done what counts).
+#   first call  the owner's most urgent call, the first line fm_owner_calls
+#               prints, as its kind, its id and a plain one-line title.
+#
 # working and stopped are separate readings of the same fleet rather than two
 # ends of one axis, and a task counts toward NEITHER unless its state was
 # proven: a backend with no recovery classifier, an unreachable remote
@@ -250,11 +263,19 @@ _fm_fleet_bucket() {  # <canonical line> [<meta>]
 # fails when the reader cannot answer. The fold below and fm_owner_calls share
 # this one reading.
 fm_fleet_task_bucket() {  # <state-dir> <id> [reader]
-  local state=$1 id=$2 reader=${3:-${FM_FLEET_STATE_READER:-$_FM_FLEET_LIB_DIR/fm-crew-state.sh}} line
+  local line
+  line=$(_fm_fleet_task_line "$@") || return 1
+  _fm_fleet_bucket "$line" "$1/$2.meta"
+}
+
+# _fm_fleet_task_line: the canonical reader's line for one task, which
+# fm_fleet_task_bucket folds; the fold also reads its state word for <failed>.
+_fm_fleet_task_line() {  # <state-dir> <id> [reader]
+  local id=$2 reader=${3:-${FM_FLEET_STATE_READER:-$_FM_FLEET_LIB_DIR/fm-crew-state.sh}} line
   _fm_fleet_classify_ready || return 1
   line=$("$reader" "$id" </dev/null 2>/dev/null) || return 1
   [ -n "$line" ] || return 1
-  _fm_fleet_bucket "$line" "$state/$id.meta"
+  printf '%s\n' "$line"
 }
 
 # fm_fleet_status_bucket: the same fold for one task, for a view that draws
@@ -344,6 +365,138 @@ _fm_owner_backlog() {  # <state-dir>
   local home
   home=$(CDPATH='' cd -P -- "$1/.." 2>/dev/null && pwd -P) || return 1
   FM_HOME=$home FM_STATE_OVERRIDE=$1 bash "$_FM_FLEET_LIB_DIR/fm-fleet-snapshot.sh" --axi-backlog </dev/null 2>/dev/null
+}
+
+# _fm_fleet_call_title: the plain one-line title of one of the owner's calls:
+# its backlog row's title, else its task's recorded outcome, else its id. It is
+# cut to its first line (the tasks-axi adapter appends a truncation note on a
+# second line) and to printable ASCII, so a renderer can count its columns as
+# characters: common dashes, quotes and the ellipsis become their ASCII forms
+# and any other run of non-ASCII becomes one `?`.
+_fm_fleet_call_title() {  # <state-dir> <backlog-file> <id>
+  local title
+  title=$(jq -r --arg id "$3" \
+    '[(.records // [])[] | select(.id == $id) | .title // empty | strings][0] // empty' \
+    "$2" 2>/dev/null) || title=
+  [ -n "$title" ] || title=$(fm_dod_meta_value "$1/$3.meta" outcome)
+  title=${title%%$'\n'*}
+  title=$(printf '%s' "$title" | LC_ALL=C sed \
+    -e $'s/\xe2\x80[\x90-\x95]/-/g' -e $'s/\xe2\x80[\x98\x99]/\'/g' \
+    -e $'s/\xe2\x80[\x9c\x9d]/"/g' -e $'s/\xe2\x80\xa6/.../g' \
+    -e 's/[^ -~][^ -~]*/?/g' -e 's/  */ /g' -e 's/^ //' -e 's/ $//')
+  [ -n "$title" ] || title=$3
+  printf '%s' "${title:0:160}"
+}
+
+# _fm_fleet_clock: the local hour, minute and second of <epoch>, space
+# separated, from macOS (-r) or GNU (-d @) date.
+_fm_fleet_clock() {  # <epoch>
+  date -r "$1" '+%H %M %S' 2>/dev/null || date -d "@$1" '+%H %M %S' 2>/dev/null
+}
+
+# fm_night_shift_window: where the home's night shift stands at <now>, from its
+# window file (config/night-shift-window: one line `HH:MM-HH:MM`, local time,
+# the start before the end; an end at or before the start is the next day).
+# Prints, tab separated:
+#   <phase> <start HH:MM> <last start epoch> <last end epoch>
+# where the last window is the newest one that has already ended, and <phase>
+# is `on` inside a window, `morning` for six hours after one ends, `evening`
+# for six hours before the next one starts, and `day` otherwise; a morning
+# that runs into the next evening stays morning. It fails, printing nothing,
+# when the file is absent or not that shape, which is how a home says it has
+# no night shift. A day is taken as 86400 seconds, so on the day a clock
+# change happens a window can read an hour off.
+fm_night_shift_window() {  # <window-file> <now>
+  local file=$1 now=$2 text s_m e_m dur clock h m sec midnight d ws we
+  local phase=day last_s='' last_e='' next_s='' span=21600
+  [ -f "$file" ] || return 1
+  text=$(head -n 1 "$file" 2>/dev/null | tr -d '[:space:]')
+  case "$text" in
+    [0-2][0-9]:[0-5][0-9]-[0-2][0-9]:[0-5][0-9]) ;;
+    *) return 1 ;;
+  esac
+  s_m=$((10#${text:0:2} * 60 + 10#${text:3:2}))
+  e_m=$((10#${text:6:2} * 60 + 10#${text:9:2}))
+  [ "$s_m" -lt 1440 ] && [ "$e_m" -lt 1440 ] || return 1
+  dur=$(((e_m - s_m + 1440) % 1440))
+  [ "$dur" -gt 0 ] || return 1
+  clock=$(_fm_fleet_clock "$now") || return 1
+  read -r h m sec <<CLOCK
+$clock
+CLOCK
+  case "$h$m$sec" in ''|*[!0-9]*) return 1 ;; esac
+  midnight=$((now - 10#$h * 3600 - 10#$m * 60 - 10#$sec))
+  for d in -2 -1 0 1; do
+    ws=$((midnight + d * 86400 + s_m * 60))
+    we=$((ws + dur * 60))
+    if [ "$ws" -le "$now" ] && [ "$now" -lt "$we" ]; then
+      phase=on
+    elif [ "$we" -le "$now" ]; then
+      last_s=$ws
+      last_e=$we
+    elif [ -z "$next_s" ]; then
+      next_s=$ws
+    fi
+  done
+  if [ "$phase" != on ]; then
+    if [ -n "$last_e" ] && [ $((now - last_e)) -lt "$span" ]; then
+      phase=morning
+    elif [ -n "$next_s" ] && [ $((next_s - now)) -le "$span" ]; then
+      phase=evening
+    fi
+  fi
+  printf '%s\t%s\t%s\t%s\n' "$phase" "${text:0:5}" "$last_s" "$last_e"
+}
+
+# _fm_fleet_night_done: how many tasks finished or landed between <start> and
+# <end>, each counted once:
+#   - finished: a task record in <state-dir> whose status log has a done line
+#     stamped [at=] inside the window that is its finished report - any done
+#     of a scout or other non-ship task, and a ship's done only when
+#     fm_dod_should_gate_ship_done reads it as the ready report, the same
+#     reading the fold and the Factory pane's feed use;
+#   - landed: a contribution record (data/<task>/contributions.json, which
+#     outlives the task's cleanup) whose PR was first seen merged inside the
+#     window. A merged record is final and never read again, so its checked_at
+#     is when the merge was seen.
+# Work cleaned up before the reading that left neither record is not counted,
+# so the figure can be short but never counts work twice or outside the window.
+_fm_fleet_night_done() {  # <state-dir> <start> <end> <now>
+  local state=$1 ws=$2 we=$3 now=$4 home id file line at kind mode mins
+  home=$(CDPATH='' cd -P -- "$state/.." 2>/dev/null && pwd -P) || return 1
+  _fm_fleet_classify_ready || return 1
+  {
+    while IFS= read -r id; do
+      [ -n "$id" ] || continue
+      file="$state/$id.status"
+      [ -f "$file" ] || continue
+      kind=$(fm_dod_meta_value "$state/$id.meta" kind)
+      mode=$(fm_dod_meta_value "$state/$id.meta" mode)
+      while IFS= read -r line || [ -n "$line" ]; do
+        [ "$(status_line_verb "$line")" = "done" ] || continue
+        at=$(status_line_at_epoch "$line") || continue
+        [ "$at" -ge "$ws" ] && [ "$at" -lt "$we" ] || continue
+        if [ "${kind:-ship}" != ship ] || fm_dod_should_gate_ship_done ship "$mode" "$line"; then
+          printf '%s\n' "$id"
+          break
+        fi
+      done < "$file"
+    done < <(_fm_fleet_ids "$state")
+    # A contribution file seen merged in the window was written at or after it.
+    mins=$(((now - ws) / 60 + 2))
+    if [ -d "$home/data" ] && command -v jq >/dev/null 2>&1; then
+      find "$home/data" -mindepth 2 -maxdepth 2 -name contributions.json -mmin "-$mins" -print 2>/dev/null \
+        | while IFS= read -r file; do
+            jq -r --argjson ws "$ws" --argjson we "$we" '
+              select(.schema == "fm-contributions.v1" and (.task | type) == "string") | .task as $task
+              | (.records // [])[]
+              | select(.kind == "pr" and .observation.state == "merged" and (.checked_at | type) == "string")
+              | (.checked_at | try fromdateiso8601 catch null) as $at
+              | select($at != null and $at >= $ws and $at < $we) | $task
+            ' "$file" 2>/dev/null
+          done
+    fi
+  } | LC_ALL=C sort -u | grep -c .
 }
 
 # _fm_fleet_backend_ready: load bin/fm-backend.sh once, on first use.
@@ -447,13 +600,15 @@ _fm_fleet_liveness() {  # <meta> <busy: 1 when the fold read a busy pane worker>
 # _fm_fleet_collect: fold the canonical reader and the endpoint prober over every
 # ordinary task and print one reading:
 #   <stamp> <working> <stopped> <validating> <paused> <attention> <ready>
-#   <signature> <decisions>
+#   <signature> <decisions> calls <failed> <night> <first-kind> <first-id>
+#   <first-title>
 #
-#   <signature> <decisions> calls
-#
-# <decisions> and the closing `calls` mark come last so a reading written before
-# them still parses for every older field; fm_fleet_status_counts owns how such
-# a reading is treated. <ready> and <decisions> are fm_owner_calls over the
+# <decisions> and the `calls` mark come after the older fields, and the strip's
+# readings (the header's failed, night and first call) after the mark, so a
+# reading written before them still parses for every older field;
+# fm_fleet_status_counts owns how such a reading is treated. An absent first
+# call is `-` in all three of its fields, and the title is last because it may
+# hold spaces; it never holds a tab. <ready> and <decisions> are fm_owner_calls over the
 # buckets this fold read, so they can count a held decision that has no task
 # record at all.
 #
@@ -475,9 +630,10 @@ _fm_fleet_liveness() {  # <meta> <busy: 1 when the fold read a busy pane worker>
 # would swallow the remaining ids and end the loop with asked == answered on a
 # fraction of the fleet. The reader's stdin is detached for the same reason.
 _fm_fleet_collect() {  # <state-dir> <now> <reader> [prober]
-  local state=$1 now=$2 reader=$3 probe=${4:-} id bucket signature life busy
+  local state=$1 now=$2 reader=$3 probe=${4:-} id bucket signature life busy line
   local working=0 stopped=0 validating=0 paused=0 attention=0 ready=0
-  local decisions=0 asked=0 answered=0 calls kind readyfile
+  local decisions=0 asked=0 answered=0 calls kind readyfile backlogfile
+  local failed=0 night=- first_kind=- first_id=- first_title=- window ws we word
   local ids=() ready_ids=()
   [ -n "$probe" ] || probe=${FM_FLEET_STATE_PROBE:-_fm_fleet_probe_default}
   _fm_fleet_classify_ready || return 1
@@ -488,8 +644,11 @@ _fm_fleet_collect() {  # <state-dir> <now> <reader> [prober]
   asked=${#ids[@]}
   signature=$(_fm_fleet_id_stream ${ids[@]+"${ids[@]}"} | _fm_fleet_signature) || return 1
   for id in ${ids[@]+"${ids[@]}"}; do
-    bucket=$(fm_fleet_task_bucket "$state" "$id" "$reader") || continue
+    line=$(_fm_fleet_task_line "$state" "$id" "$reader") || continue
+    bucket=$(_fm_fleet_bucket "$line" "$state/$id.meta")
     answered=$((answered + 1))
+    word=${line#*state: }
+    [ "${word%% *}" != failed ] || failed=$((failed + 1))
     busy=0
     case "$bucket" in
       working) busy=1 ;;
@@ -513,21 +672,51 @@ _fm_fleet_collect() {  # <state-dir> <now> <reader> [prober]
   # The ready tasks go in a file rather than a process substitution, whose
   # descriptor bash may close before the function reading it gets there.
   readyfile=$(mktemp "${TMPDIR:-/tmp}/fm-fleet-ready.XXXXXX") || return 1
+  backlogfile=$(mktemp "${TMPDIR:-/tmp}/fm-fleet-backlog.XXXXXX") || {
+    rm -f "$readyfile"
+    return 1
+  }
   for id in ${ready_ids[@]+"${ready_ids[@]}"}; do printf '%s\tready\n' "$id"; done > "$readyfile"
-  calls=$(fm_owner_calls "$state" "$readyfile") || calls=__failed__
+  # The backlog is read once here, so the first call's title comes from the
+  # same reading as the calls themselves.
+  if _fm_owner_backlog "$state" > "$backlogfile"; then
+    calls=$(fm_owner_calls "$state" "$readyfile" "$backlogfile") || calls=__failed__
+  else
+    calls=__failed__
+  fi
   rm -f "$readyfile"
-  [ "$calls" != __failed__ ] || return 1
-  while IFS=$'\t' read -r kind _; do
+  [ "$calls" != __failed__ ] || {
+    rm -f "$backlogfile"
+    return 1
+  }
+  while IFS=$'\t' read -r kind id; do
     case "$kind" in
       decision) ready=$((ready + 1)); decisions=$((decisions + 1)) ;;
       merge) ready=$((ready + 1)) ;;
+      *) continue ;;
     esac
+    if [ "$first_kind" = - ]; then
+      first_kind=$kind
+      first_id=$id
+      first_title=$(_fm_fleet_call_title "$state" "$backlogfile" "$id")
+    fi
   done <<CALLS
 $calls
 CALLS
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\tcalls' \
+  rm -f "$backlogfile"
+  if window=$(fm_night_shift_window "$state/../config/night-shift-window" "$now"); then
+    IFS=$'\t' read -r _ _ ws we <<WINDOW
+$window
+WINDOW
+    if [ -n "$we" ]; then
+      night=$(_fm_fleet_night_done "$state" "$ws" "$we" "$now")
+      case "$night" in ''|*[!0-9]*) night=- ;; *) night="$night@$we" ;; esac
+    fi
+  fi
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\tcalls\t%s\t%s\t%s\t%s\t%s' \
     "$now" "$working" "$stopped" "$validating" "$paused" "$attention" \
-    "$ready" "$signature" "$decisions"
+    "$ready" "$signature" "$decisions" "$failed" "$night" \
+    "$first_kind" "$first_id" "$first_title"
 }
 
 # _fm_fleet_refresh_detached: start at most ONE bounded refresh and return at
@@ -571,9 +760,12 @@ _fm_fleet_refresh_detached() {  # <cache> <state-dir> <now> <reader>
 }
 
 # _fm_fleet_unknown: the reading a frame gets when the live fields are not known.
-_fm_fleet_unknown() {  # <records> [decisions]
+_fm_fleet_unknown() {  # <records> [decisions|strip]
   printf '%s\t0\t0\t0\t0\t0\t0\t0\t0' "$1"
-  [ "${2:-}" != decisions ] || printf '\t0'
+  case "${2:-}" in
+    decisions) printf '\t0' ;;
+    strip) printf '\t0\t-\t-\t-\t-\t-' ;;
+  esac
 }
 
 # fm_fleet_status_counts: the fleet fields for one frame, as
@@ -585,6 +777,11 @@ _fm_fleet_unknown() {  # <records> [decisions]
 # `calls` mark) cannot be trusted to split <ready>, so with `decisions` it is
 # reported exactly as no reading (<known> 0), and either way a refresh is
 # started at once so the next frame has the field.
+# With the word `strip` instead, the bridge strip's readings follow those ten:
+#   <failed> <night> <first-kind> <first-id> <first-title>
+# as the header and _fm_fleet_collect describe them. Each is `-` when the
+# reading has no such field, as one taken before the strip asked for them does
+# not, and such a reading is refreshed at once; the ten fields stand as above.
 # tab separated. <known> is 1 when the six live fields are a current reading of
 # THIS fleet, 2 when they are the last good reading but no longer current - it
 # aged past its maximum, or the fleet changed since - and 0 when no good reading
@@ -598,10 +795,11 @@ _fm_fleet_unknown() {  # <records> [decisions]
 # can see is old, beside a refresh that keeps being tried, tells him more than a
 # placeholder; unknown is kept for a home that has never had a good reading.
 # Records stay the live count either way, so a dispatch shows up at once.
-fm_fleet_status_counts() {  # <state-dir> [decisions]
+fm_fleet_status_counts() {  # <state-dir> [decisions|strip]
   local state=$1 want=${2:-} now cache reader records ttl max_age
   local cached='' stamp='' working='' stopped='' validating='' paused=''
   local attention='' ready='' signature='' decisions='' mark='' current known age fresh=1
+  local failed='' night='' first_kind='' first_id='' first_title=''
   records=$(_fm_fleet_ids "$state" | grep -c '') || records=0
   now=$(_fm_fleet_now) || {
     _fm_fleet_unknown "$records" "$want"
@@ -621,7 +819,7 @@ fm_fleet_status_counts() {  # <state-dir> [decisions]
 
   if [ -n "$cached" ]; then
     IFS=$'\t' read -r stamp working stopped validating paused attention ready \
-      signature decisions mark <<READING
+      signature decisions mark failed night first_kind first_id first_title <<READING
 $cached
 READING
   fi
@@ -638,9 +836,18 @@ READING
     ''|*[!0-9]*)
       decisions=
       fresh=0
-      [ "$want" != decisions ] || cached=
+      [ "$want" != decisions ] && [ "$want" != strip ] || cached=
       ;;
   esac
+  # The strip's readings are all there or none are.
+  case "$failed" in
+    ''|*[!0-9]*) failed= ;;
+  esac
+  if [ -z "$failed" ] || [ -z "$night" ] || [ -z "$first_kind" ] || [ -z "$first_id" ] \
+    || [ -z "$first_title" ]; then
+    failed=- night=- first_kind=- first_id=- first_title=-
+    [ "$want" != strip ] || fresh=0
+  fi
   [ -n "$cached" ] || fresh=0
   known=1
   if [ -n "$cached" ]; then
@@ -668,5 +875,11 @@ READING
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s' \
     "$records" "$working" "$stopped" "$validating" "$paused" "$attention" \
     "$ready" "$known" "$age"
-  [ "$want" != decisions ] || printf '\t%s' "$decisions"
+  case "$want" in
+    decisions) printf '\t%s' "$decisions" ;;
+    strip)
+      printf '\t%s\t%s\t%s\t%s\t%s\t%s' "$decisions" "$failed" "$night" \
+        "$first_kind" "$first_id" "$first_title"
+      ;;
+  esac
 }

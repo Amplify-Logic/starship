@@ -12,8 +12,11 @@ Usage:
   fm-factory.py --data [--fresh]          print the record as JSON (fm-factory.v1)
   fm-factory.py --plain [--factory ID] [--width N] [--fresh]
                                           print the screen as plain text
-  fm-factory.py view [--factory ID]       the live pane (Herdr runs it through
-                                          bin/fm-factory-pane.sh run)
+  fm-factory.py view [--factory ID] [--item ID]
+                                          the live pane (Herdr runs it through
+                                          bin/fm-factory-pane.sh run); --item
+                                          starts the highlight on that item of
+                                          NEEDS YOU
   fm-factory.py follow <task-id>          a read-only live copy of one worker's
                                           pane, for an opened factory tab
   fm-factory.py open-tab <factory-id>     open, or focus, that factory's Herdr
@@ -56,6 +59,9 @@ Environment:
                               is started (default 20)
   FM_FACTORY_QUIET_MINUTES    minutes without a sign of life before a running
                               job reads as quiet (default 15)
+  FM_FACTORY_FOCUS_FILE       a file the live overview reads and removes: an
+                              item id written there moves the highlight to
+                              that item (bin/fm-factory-pane.sh open --item)
 Test seams:
   FM_FACTORY_SNAPSHOT         a fleet snapshot JSON file used instead of running
                               bin/fm-fleet-snapshot.sh
@@ -1117,14 +1123,23 @@ def asking(need: Dict[str, Any]) -> str:
     return ".".join(str(part) for part in (need.get("key"), need.get("since")) if part) or "0"
 
 
+# How long an item the highlight was asked to go to waits for the record to
+# hold it: the bridge strip can name a call a record or two before the pane has it.
+WANT_SECONDS = 60
+
+
 class View:
     """Draws a record; holds the cursor, the talk box and pending notices."""
 
-    def __init__(self, record: Dict[str, Any], opened: Optional[str] = None, in_tab: bool = False):
+    def __init__(self, record: Dict[str, Any], opened: Optional[str] = None, in_tab: bool = False,
+                 item: Optional[str] = None):
         self.opened = opened
         self.in_tab = in_tab
         self.cursor = 0
         self.selected: Optional[Tuple[str, str]] = None
+        # An item the highlight was asked to go to (--item, or the focus file),
+        # held until the record has it, for at most WANT_SECONDS.
+        self.wanted: Optional[Tuple[str, float]] = (item, time.time()) if item else None
         self.tick = 0
         self.talking: Optional[Dict[str, Any]] = None
         self.confirm: Optional[Dict[str, Any]] = None
@@ -1168,8 +1183,20 @@ class View:
             return [("need", n["id"]) for n in self.needs(self.opened)] or [("factory", self.opened)]
         return [("need", n["id"]) for n in self.needs()] + [("factory", f["id"]) for f in self.ordered()]
 
+    def want(self, item: str) -> None:
+        """Move the highlight to one item of NEEDS YOU, now or once the record has it."""
+        if not self.in_tab:
+            self.opened = None
+        self.wanted = (item, time.time())
+
     def at(self) -> Tuple[str, str]:
         stops = self.stops()
+        if self.wanted:
+            item, asked = self.wanted
+            if ("need", item) in stops:
+                self.selected, self.wanted = ("need", item), None
+            elif time.time() - asked > WANT_SECONDS:
+                self.wanted = None
         if not stops:
             return ("none", "")
         if self.selected in stops:
@@ -1541,13 +1568,30 @@ def record_steer(home: str, fid: str, who: str, now: int) -> None:
 class Pane:
     """The live pane: a View plus the keys, the cache and Herdr."""
 
-    def __init__(self, home: str, opened: Optional[str], in_tab: bool):
+    def __init__(self, home: str, opened: Optional[str], in_tab: bool, item: Optional[str] = None):
         self.home = home
         record = cached(home)
         if record is None:
             record = refresh(home)
-        self.view = View(record, opened=opened, in_tab=in_tab)
+        self.view = View(record, opened=opened, in_tab=in_tab, item=item)
         self.loaded = mtime(os.path.join(pane_dir(home), "record.json")) or 0
+        self.focus_file = os.environ.get("FM_FACTORY_FOCUS_FILE") or ""
+
+    def take_focus(self) -> bool:
+        """Read and remove an item id written to the focus file; True when one came."""
+        if not self.focus_file or not os.path.isfile(self.focus_file):
+            return False
+        item = read_text(self.focus_file, 512).strip().splitlines()[:1]
+        try:
+            os.unlink(self.focus_file)
+        except OSError:
+            pass
+        if not item or not item[0]:
+            return False
+        self.view.want(item[0])
+        if self.view.need(item[0]) is None:
+            refresh_in_background(self.home)
+        return True
 
     def say(self, text: str, colour: str = "green", seconds: int = 8) -> None:
         self.view.notice = (text, colour, time.time() + seconds)
@@ -1743,6 +1787,7 @@ def live(pane: Pane) -> None:
             if time.time() - last_reload > 3:
                 pane.reload()
                 last_reload = time.time()
+            pane.take_focus()
             size = os.get_terminal_size()
             view = pane.view
             if view.notice and time.time() > view.notice[2]:
@@ -1911,6 +1956,7 @@ def main(argv: List[str]) -> int:
     parser.add_argument("--factory")
     parser.add_argument("--width", type=int, default=92)
     parser.add_argument("--origin-tab")
+    parser.add_argument("--item")
     try:
         args = parser.parse_args(argv)
     except SystemExit as stop:
@@ -1936,7 +1982,8 @@ def main(argv: List[str]) -> int:
         if args.command == "view":
             if args.origin_tab:
                 os.environ["FM_FACTORY_ORIGIN_TAB"] = args.origin_tab
-            live(Pane(home, args.factory, in_tab=bool(args.factory and os.environ.get("HERDR_PANE_ID"))))
+            live(Pane(home, args.factory, in_tab=bool(args.factory and os.environ.get("HERDR_PANE_ID")),
+                      item=args.item))
             return 0
         if args.command == "follow" and args.target:
             follow(home, args.target)

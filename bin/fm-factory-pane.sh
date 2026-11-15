@@ -14,13 +14,19 @@
 #   fm-factory-pane.sh remove    stop every running Factory pane and factory tab
 #                                page (their panes close with them) and unlink
 #                                the plugin
-#   fm-factory-pane.sh open [--pane ID]
+#   fm-factory-pane.sh open [--pane ID] [--item ID]
 #                                show the Factory pane to the right of a pane
 #                                (default: the pane this runs in, or the
-#                                focused pane when Herdr runs the plugin action)
+#                                focused pane when Herdr runs the plugin action).
+#                                With --item the highlight goes to that item of
+#                                NEEDS YOU; a Factory pane already showing in
+#                                this tab moves its highlight there instead of
+#                                a second pane opening.
 #   fm-factory-pane.sh run [--factory ID] [--origin-tab ID]
 #                                the pane itself; Herdr starts it. With
 #                                --factory it is that factory's tab page.
+#                                FM_FACTORY_ITEM, which open passes, names the
+#                                item the highlight starts on.
 #   fm-factory-pane.sh follow <task-id>
 #                                a read-only live copy of one worker's pane, for
 #                                a factory tab
@@ -28,6 +34,10 @@
 # `remove` finds running panes only through the records each one keeps in the
 # plugin's Herdr config directory, and stops a recorded process only after
 # checking it is still this script's pane, so it never closes another pane.
+# Those records also name which kind of pane each is (view=overview, page or
+# follow), so `open --item` can find an overview already in its tab; it asks
+# that pane to move its highlight by writing the item id to focus/<pid> in the
+# same directory, which the pane reads and removes.
 #
 # Environment:
 #   FM_HOME                       the home whose factories are shown. Unset, the
@@ -79,14 +89,19 @@ resolve_home() {
   printf '%s' "$ROOT"
 }
 
-# A running pane is recorded as panes/<pid> so `remove` can stop it.
-record_self() {
+# A running pane is recorded as panes/<pid> so `remove` can stop it and `open
+# --item` can find an overview in its tab.
+record_self() {  # <view: overview|page|follow>
   local dir
   dir=$(config_dir) || return 0
   mkdir -p "$dir/panes" 2>/dev/null || return 0
-  printf 'pane=%s\ntab=%s\nsession=%s\n' "${HERDR_PANE_ID:-}" "${HERDR_TAB_ID:-}" \
-    "${HERDR_SOCKET_PATH:-}" > "$dir/panes/$$" 2>/dev/null || return 0
+  printf 'pane=%s\ntab=%s\nsession=%s\nview=%s\n' "${HERDR_PANE_ID:-}" "${HERDR_TAB_ID:-}" \
+    "${HERDR_SOCKET_PATH:-}" "$1" > "$dir/panes/$$" 2>/dev/null || return 0
   printf '%s' "$dir/panes/$$"
+}
+
+record_value() {  # <file> <key>
+  awk -F= -v k="$2" '$1 == k { print substr($0, index($0, "=") + 1); exit }' "$1" 2>/dev/null
 }
 
 # is_pane_pid: the recorded process is still one of this script's panes.
@@ -99,12 +114,21 @@ is_pane_pid() {  # <pid>
 }
 
 cmd_run() {
-  local home record status
+  local home record status view=overview focus='' arg start=()
   home=$(resolve_home)
-  record=$(record_self)
-  FM_HOME=$home python3 "$SCRIPT_DIR/fm-factory.py" view "$@"
+  for arg in "$@"; do
+    [ "$arg" != --factory ] || view=page
+  done
+  record=$(record_self "$view")
+  if [ "$view" = overview ]; then
+    [ -z "${FM_FACTORY_ITEM:-}" ] || start=(--item "$FM_FACTORY_ITEM")
+    [ -z "$record" ] || focus="${record%/panes/*}/focus/$$"
+  fi
+  FM_HOME=$home FM_FACTORY_FOCUS_FILE=$focus python3 "$SCRIPT_DIR/fm-factory.py" view \
+    ${start[@]+"${start[@]}"} "$@"
   status=$?
   [ -z "$record" ] || rm -f "$record" 2>/dev/null
+  [ -z "$focus" ] || rm -f "$focus" 2>/dev/null
   return "$status"
 }
 
@@ -112,7 +136,7 @@ cmd_follow() {
   local home record status
   [ "$#" -eq 1 ] || { usage; exit 2; }
   home=$(resolve_home)
-  record=$(record_self)
+  record=$(record_self follow)
   FM_HOME=$home python3 "$SCRIPT_DIR/fm-factory.py" follow "$1"
   status=$?
   [ -z "$record" ] || rm -f "$record" 2>/dev/null
@@ -120,20 +144,42 @@ cmd_follow() {
 }
 
 cmd_open() {
-  local target=${HERDR_PANE_ID:-} out pane home
+  local target=${HERDR_PANE_ID:-} out pane home item='' dir rec pid tmp
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --pane) target=${2:-}; shift ;;
+      --item) item=${2:-}; shift; [ -n "$item" ] || { usage; exit 2; } ;;
       *) usage; exit 2 ;;
     esac
     shift
   done
+  # An overview already showing in this tab of this Herdr session moves its
+  # highlight to the item rather than a second pane opening beside it.
+  if [ -n "$item" ] && [ -n "${HERDR_TAB_ID:-}" ] && dir=$(config_dir); then
+    for rec in "$dir"/panes/*; do
+      [ -f "$rec" ] || continue
+      pid=$(basename "$rec")
+      is_pane_pid "$pid" || continue
+      [ "$(record_value "$rec" view)" = overview ] || continue
+      [ "$(record_value "$rec" tab)" = "$HERDR_TAB_ID" ] || continue
+      [ "$(record_value "$rec" session)" = "${HERDR_SOCKET_PATH:-}" ] || continue
+      mkdir -p "$dir/focus" 2>/dev/null || break
+      tmp="$dir/focus/.$pid.$$"
+      if ! { printf '%s\n' "$item" > "$tmp" && mv -f "$tmp" "$dir/focus/$pid"; } 2>/dev/null; then
+        rm -f "$tmp" 2>/dev/null
+        break
+      fi
+      printf 'The Factory pane in this tab is showing that item.\n'
+      return 0
+    done
+  fi
   [ -n "$target" ] || die "no pane to show the Factory pane beside; run this inside a Herdr pane or pass --pane"
   command -v jq >/dev/null 2>&1 || die "jq is needed to read Herdr's answer"
   home=$(resolve_home)
   out=$("$(herdr_bin)" plugin pane open --plugin "$PLUGIN_ID" --entrypoint factory \
     --placement split --direction right --target-pane "$target" --focus \
-    --env "FM_HOME=$home" 2>&1) || die "Herdr did not open the Factory pane: $out"
+    --env "FM_HOME=$home" ${item:+--env "FM_FACTORY_ITEM=$item"} 2>&1) \
+    || die "Herdr did not open the Factory pane: $out"
   pane=$(printf '%s' "$out" | jq -r '(.result.plugin_pane.pane.pane_id // .result.pane.pane_id) // empty' 2>/dev/null)
   [ -n "$pane" ] || die "Herdr opened a Factory pane beside pane $target but did not name it"
   printf 'The Factory pane is showing beside this pane.\n'
@@ -170,6 +216,7 @@ cmd_remove() {
       fi
       rm -f "$rec"
     done
+    rm -rf "$dir/focus"
     rm -f "$dir/home"
   fi
   "$herdr" plugin unlink "$PLUGIN_ID" >/dev/null || die "stopped $stopped pane(s), but Herdr did not unlink the plugin"

@@ -1,12 +1,17 @@
 #!/usr/bin/env bash
 # fm-bridge-strip.sh - the Starship bridge: a slim strip across the top of a
-# Herdr workspace with the STARSHIP wordmark, the crew's lamps and the battery.
+# Herdr workspace with the STARSHIP wordmark, the crew's lamps, the owner's most
+# urgent call, a red alert, the night shift and the battery.
 #
 # It is a Herdr plugin pane (herdr-plugins/starship-bridge/). The strip only
-# READS: the crew lamps come from bin/fm-fleet-status-lib.sh, the same cached
-# reading the primary status bar shows, and the battery from `pmset -g batt` on
-# a Mac. It never steers, changes or drains anything. docs/bridge-strip.md owns
-# what the strip shows and why; this header owns the commands.
+# READS: the crew lamps, the most urgent call, the alert and the night shift's
+# count come from bin/fm-fleet-status-lib.sh, the same cached reading the
+# primary status bar shows, the night shift's hours from the home's
+# config/night-shift-window, and the battery from `pmset -g batt` on a Mac. It
+# never steers, changes or drains anything; its one action is that a click on
+# the most urgent call opens the Factory pane on it (bin/fm-factory-pane.sh open
+# --item, beside the pane below the strip). docs/bridge-strip.md owns what the
+# strip shows and why; this header owns the commands.
 #
 # Usage:
 #   fm-bridge-strip.sh install   link the plugin into Herdr, remember this home,
@@ -19,7 +24,8 @@
 #                                this runs in, or the focused pane when Herdr
 #                                runs it as the plugin's action)
 #   fm-bridge-strip.sh run       the pane's own loop, redrawn every 5 seconds;
-#                                Herdr starts it
+#                                Herdr starts it. On a terminal it asks for
+#                                mouse reports and reads the clicks.
 #   fm-bridge-strip.sh render [--width N] [--height N]
 #                                print one frame and exit
 #
@@ -43,7 +49,9 @@
 #                                 for no battery (default: pmset on a Mac only)
 #   FM_BRIDGE_STRIP_CONFIG_DIR    the plugin's config directory, instead of
 #                                 asking Herdr
-#   FM_FLEET_STATE_*              see bin/fm-fleet-status-lib.sh
+#   FM_FLEET_STATE_*              see bin/fm-fleet-status-lib.sh; its
+#                                 FM_FLEET_STATE_NOW also sets the night
+#                                 shift's clock
 # Exit: 0 on success; 1 when a step fails, with the reason on stderr; 2 on a
 # usage error.
 set -u
@@ -89,6 +97,7 @@ UNBOLD="${E}[22m"
 RESET="${E}[0m"
 LAMP=$'\342\226\240'   # U+25A0, the brand's small flat square
 RULE=$'\342\224\202'   # U+2502, a thin divider
+POINTER=$'\342\226\270'   # U+25B8, the pointer before the most urgent call
 
 # Each piece is built into SEG (styled text) and SEG_W (columns it takes).
 # Widths are counted, never measured from bytes: every word is ASCII and each
@@ -113,22 +122,34 @@ BUSY=0
 FOR_YOU=0
 TO_MERGE=0
 READING_AGE=0
+STOPPED=0
+FAILED=-
+NIGHT_DONE=-
+CALL_KIND=-
+CALL_ID=
+CALL_TITLE=
 
-# read_crew: the fleet reading, folded into the three lamps the strip shows.
+# read_crew: the fleet reading, folded into the three lamps the strip shows,
+# plus the red alert, the most urgent call and the night shift's count, which
+# the same fold takes (fm_fleet_status_counts `strip`) so they never disagree
+# with the lamps.
 # Busy is a worker typing plus work the validation pipeline is carrying. The
 # other two lamps are the owner's calls (fm_owner_calls, the same count the
 # Factory pane and the tap page show): decisions for you are his live held
 # decisions, and ready to merge is the rest, a PR or branch ready to land.
 read_crew() {  # <home>
   local reading records working stopped validating paused attention ready
-  local known age decisions
+  local known age decisions failed night kind id title
   READING_KNOWN=0
-  reading=$(fm_fleet_status_counts "$1/state" decisions 2>/dev/null) || return 0
+  FAILED=-
+  NIGHT_DONE=-
+  CALL_KIND=-
+  reading=$(fm_fleet_status_counts "$1/state" strip 2>/dev/null) || return 0
   IFS=$'\t' read -r records working stopped validating paused attention ready \
-    known age decisions <<EOF
+    known age decisions failed night kind id title <<EOF
 $reading
 EOF
-  case "$working$validating$ready$known$age$decisions" in
+  case "$working$stopped$validating$ready$known$age$decisions" in
     ''|*[!0-9]*) return 0 ;;
   esac
   [ "$decisions" -le "$ready" ] || return 0
@@ -137,6 +158,22 @@ EOF
   BUSY=$((working + validating))
   FOR_YOU=$decisions
   TO_MERGE=$((ready - decisions))
+  [ "$known" != 0 ] || return 0
+  # Without the strip's own readings the alert, the call and the night count
+  # stay off rather than guessed.
+  case "$failed" in ''|*[!0-9]*) return 0 ;; esac
+  STOPPED=$stopped
+  FAILED=$failed
+  NIGHT_DONE=${night:--}
+  case "$kind" in
+    decision|merge)
+      [ -z "$id" ] || [ "$id" = - ] || [ -z "$title" ] || {
+        CALL_KIND=$kind
+        CALL_ID=$id
+        CALL_TITLE=$title
+      }
+      ;;
+  esac
 }
 
 age_words() {  # <seconds>
@@ -277,12 +314,91 @@ battery() {  # full|mid|short|none
   fi
 }
 
+# --- the red alert ------------------------------------------------------------
+
+# alert: something broke, so trouble shows without the owner looking for it: a
+# worker whose endpoint is gone (the reading's stopped) or work that failed,
+# a worker's failure or a failed validation run (the reading's failed). It
+# clears when the reading no longer counts either.
+alert() {  # long|short
+  local text total
+  SEG=
+  SEG_W=0
+  case "$FAILED" in ''|*[!0-9]*) return 0 ;; esac
+  total=$((FAILED + STOPPED))
+  [ "$total" -gt 0 ] || return 0
+  if [ "$1" = long ]; then
+    text=
+    [ "$FAILED" -eq 0 ] || text="$FAILED failed"
+    [ "$STOPPED" -eq 0 ] || text="${text:+$text, }$STOPPED stopped"
+  else
+    text="$total broken"
+  fi
+  SEG="${RED}${LAMP} ${text}"
+  SEG_W=$((2 + ${#text}))
+}
+
+alert_shows() { [ "$FAILED" != - ] && [ $((FAILED + STOPPED)) -gt 0 ]; }
+
+# --- the most urgent call -----------------------------------------------------
+
+# call_label: the owner's most urgent call by name, the first of his calls
+# (fm_owner_calls orders his held decisions before work ready to merge).
+call_label() {
+  if [ -n "$NOTICE" ] && [ "$(date +%s)" -lt "$NOTICE_UNTIL" ]; then
+    printf '%s' "$NOTICE"
+    return 0
+  fi
+  NOTICE=
+  case "$CALL_KIND" in
+    merge) printf 'Merge: %s' "$CALL_TITLE" ;;
+    decision) printf 'Decide: %s' "$CALL_TITLE" ;;
+  esac
+}
+
+# --- the night shift ----------------------------------------------------------
+
+NIGHT_TEXT=
+NIGHT_COLOUR=
+
+# read_night: the night shift's line for this minute from the home's window
+# (fm_night_shift_window): when it starts in the evening, that it is on, and in
+# the morning how much finished in it, from the reading's count of the window
+# that ended last. A home with no window shows none, and neither does a morning
+# whose reading does not yet cover the window that just ended, or one in which
+# nothing was counted.
+read_night() {  # <home>
+  local now window phase start _last_start last_end count end
+  NIGHT_TEXT=
+  now=$(_fm_fleet_now) || return 0
+  window=$(fm_night_shift_window "$1/config/night-shift-window" "$now") || return 0
+  IFS=$'\t' read -r phase start _last_start last_end <<EOF
+$window
+EOF
+  case "$phase" in
+    evening) NIGHT_TEXT="night shift from $start"; NIGHT_COLOUR=$MIST ;;
+    on) NIGHT_TEXT='night shift on'; NIGHT_COLOUR=$MIST ;;
+    morning)
+      count=${NIGHT_DONE%@*}
+      end=${NIGHT_DONE#*@}
+      case "$count" in ''|*[!0-9]*) return 0 ;; esac
+      [ "$end" = "$last_end" ] && [ "$count" -gt 0 ] || return 0
+      NIGHT_TEXT="$count done overnight"
+      NIGHT_COLOUR=$GREEN
+      ;;
+  esac
+}
+
 # --- composing a row ----------------------------------------------------------
 
 # The tiers a row tries, widest first. Each names the wordmark, the crew and the
 # battery form. Words go before lamps, and on a very narrow pane the lamps go
-# before the wordmark. A low battery is never dropped while anything else is
-# shown, because it is the one piece that can need the owner within minutes.
+# before the wordmark. A low battery and the red alert are never dropped while
+# anything else is shown, because each can need the owner within minutes; the
+# alert takes its long words beside the long crew and `N broken` otherwise.
+# The most urgent call and the night shift only ever take the columns the
+# chosen tier leaves over, the call first, so they never change which tier a
+# pane gets.
 TIERS='spaced long full
 spaced long mid
 compact long mid
@@ -295,10 +411,27 @@ compact none none
 none none short'
 
 ROW=
+# The columns, counted from 1, that the most urgent call takes on the content
+# row, or 0 when it is not shown; a click there opens the Factory pane on it.
+LINK_FROM=0
+LINK_TO=0
+# The shortest a call's name is cut to before it is left out.
+CALL_MIN=12
+
+# row_need: the columns a row of these widths takes, with one column of margin
+# each side and three between the left and right sides when both are there.
+row_need() {  # <left width> <right width>
+  local gap=0
+  [ "$1" -eq 0 ] || [ "$2" -eq 0 ] || gap=3
+  printf '%s' $((2 + $1 + $2 + gap))
+}
 
 compose() {  # <width>
   local width=$1 mark_form crew_form bat_form mark mark_w crew_s crew_w bat bat_w
-  local left left_w need gap text rest
+  local alert_s alert_w left left_w right right_w text rest label sep room cut
+  local night_s night_w clickable
+  LINK_FROM=0
+  LINK_TO=0
   while read -r mark_form crew_form bat_form; do
     if [ "$bat_form" = none ] && battery_warns; then
       continue
@@ -306,6 +439,8 @@ compose() {  # <width>
     wordmark "$mark_form"; mark=$SEG; mark_w=$SEG_W
     crew "$crew_form"; crew_s=$SEG; crew_w=$SEG_W
     battery "$bat_form"; bat=$SEG; bat_w=$SEG_W
+    if [ "$crew_form" = long ]; then alert long; else alert short; fi
+    alert_s=$SEG; alert_w=$SEG_W
     left=$mark; left_w=$mark_w
     if [ "$mark_w" -gt 0 ] && [ "$crew_w" -gt 0 ]; then
       left="${left}  ${FAINT}${RULE}  ${crew_s}"
@@ -313,22 +448,64 @@ compose() {  # <width>
     elif [ "$crew_w" -gt 0 ]; then
       left=$crew_s; left_w=$crew_w
     fi
-    # One column of margin each side, and at least three between the left
-    # side and the battery when both are there.
-    need=$((2 + left_w + bat_w))
-    gap=0
-    [ "$bat_w" -eq 0 ] || [ "$left_w" -eq 0 ] || gap=3
-    [ $((need + gap)) -le "$width" ] || continue
-    ROW=" ${left}$(printf '%*s' "$((width - need))" '')${bat} "
+    right_w=$alert_w
+    [ "$alert_w" -eq 0 ] || [ "$bat_w" -eq 0 ] || right_w=$((right_w + 3))
+    right_w=$((right_w + bat_w))
+    [ "$(row_need "$left_w" "$right_w")" -le "$width" ] || continue
+
+    # The most urgent call, after the crew, cut to the columns left over.
+    label=$(call_label)
+    clickable=0
+    [ -z "$label" ] || [ "$label" = "$NOTICE" ] || clickable=1
+    if [ -n "$label" ]; then
+      sep=0
+      [ "$left_w" -eq 0 ] || sep=5
+      room=$((width - $(row_need $((left_w + sep + 2)) "$right_w")))
+      cut=${#label}
+      [ "$cut" -le "$CALL_MIN" ] || cut=$CALL_MIN
+      if [ "$room" -ge "$cut" ]; then
+        [ "${#label}" -le "$room" ] || label="${label:0:$((room - 3))}..."
+        [ "$sep" -eq 0 ] || left="${left}  ${FAINT}${RULE}  "
+        if [ "$clickable" = 1 ]; then
+          LINK_FROM=$((2 + left_w + sep))
+          LINK_TO=$((LINK_FROM + 1 + ${#label}))
+        fi
+        left="${left}${CYAN}${POINTER} ${ICE}${label}"
+        left_w=$((left_w + sep + 2 + ${#label}))
+      fi
+    fi
+
+    # The night shift, between the alert and the battery, when it fits whole.
+    night_s=
+    night_w=0
+    if [ -n "$NIGHT_TEXT" ]; then
+      night_w=${#NIGHT_TEXT}
+      [ "$right_w" -eq 0 ] || night_w=$((night_w + 3))
+      if [ "$(row_need "$left_w" $((right_w + night_w)))" -le "$width" ]; then
+        night_s="${NIGHT_COLOUR}${NIGHT_TEXT}"
+      else
+        night_w=0
+      fi
+    fi
+
+    right=$alert_s
+    [ -z "$night_s" ] || right="${right}${right:+   }${night_s}"
+    [ "$bat_w" -eq 0 ] || right="${right}${right:+   }${bat}"
+    right_w=$((right_w + night_w))
+    ROW=" ${left}$(printf '%*s' "$((width - 2 - left_w - right_w))" '')${right} "
     return 0
   done <<EOF
 $TIERS
 EOF
   # Narrower than the smallest tier: whatever fits of a low battery's figure,
-  # else of the bare wordmark.
+  # else of the alert, else of the bare wordmark.
   if battery_warns; then
     text="$BAT_PCT%"
     ROW="$(battery_colour)${text:0:$width}"
+    rest=${#text}
+  elif alert_shows; then
+    text="$((FAILED + STOPPED)) broken"
+    ROW="${RED}${text:0:$width}"
     rest=${#text}
   else
     text=STARSHIP
@@ -339,23 +516,29 @@ EOF
   ROW="${ROW}$(printf '%*s' "$((width - rest))" '')"
 }
 
-# render_frame: the whole pane, row by row. Every row is painted in the hull
-# colour so the strip reads as one raised deck, and the content sits on the
-# middle row of however tall Herdr made the pane.
+# render_frame: the whole pane, row by row, into FRAME. Every row is painted in
+# the hull colour so the strip reads as one raised deck, and the content sits on
+# the middle row (MIDDLE) of however tall Herdr made the pane.
+FRAME=
+MIDDLE=1
 render_frame() {  # <home> <width> <height>
-  local home=$1 width=$2 height=$3 middle row blank
+  local home=$1 width=$2 height=$3 row blank
   read_crew "$home"
+  read_night "$home"
   read_battery
   compose "$width"
   blank="${HULL_BG}$(printf '%*s' "$width" '')${RESET}"
-  middle=$(((height + 1) / 2))
-  for row in $(seq 1 "$height"); do
-    [ "$row" -eq 1 ] || printf '\n'
-    if [ "$row" -eq "$middle" ]; then
-      printf '%s%s%s' "$HULL_BG" "$ROW" "$RESET"
+  MIDDLE=$(((height + 1) / 2))
+  FRAME=
+  row=1
+  while [ "$row" -le "$height" ]; do
+    [ "$row" -eq 1 ] || FRAME="${FRAME}"$'\n'
+    if [ "$row" -eq "$MIDDLE" ]; then
+      FRAME="${FRAME}${HULL_BG}${ROW}${RESET}"
     else
-      printf '%s' "$blank"
+      FRAME="${FRAME}${blank}"
     fi
+    row=$((row + 1))
   done
 }
 
@@ -423,7 +606,7 @@ cmd_render() {
   done
   case "$width$height" in ''|*[!0-9]*) usage; exit 2 ;; esac
   render_frame "$(resolve_home)" "$width" "$height"
-  printf '\n'
+  printf '%s\n' "$FRAME"
 }
 
 # pane_size: the pane's rows and columns from its terminal, or one row of 80
@@ -437,13 +620,98 @@ pane_size() {
   case "$PANE_COLS" in ''|*[!0-9]*|0) PANE_COLS=80 ;; esac
 }
 
+# The terminal settings the pane had, restored on exit, and whether this strip
+# reads clicks (only when its input is a terminal).
+TTY_SAVED=
+CLICKS=0
+
 cleanup() {
   [ -z "$RECORD" ] || rm -f "$RECORD" 2>/dev/null
+  if [ "$CLICKS" = 1 ]; then
+    printf '%s[?1006l%s[?1000l' "$E" "$E"
+    [ -z "$TTY_SAVED" ] || stty "$TTY_SAVED" 2>/dev/null
+  fi
   printf '%s[?7h%s[?25h%s' "$E" "$E" "$RESET"
 }
 
+# read_mouse: the rest of one SGR mouse report after its ESC, as MOUSE_B,
+# MOUSE_X and MOUSE_Y, and MOUSE_PRESS 1 for a press (M) or 0 for a release
+# (m). It fails on anything that is not one, having read only what it saw.
+# Herdr hands a pane that asked for mouse reports the clicks made on it.
+MOUSE_B=
+MOUSE_X=
+MOUSE_Y=
+MOUSE_PRESS=0
+read_mouse() {
+  local ch seq='' n=0
+  IFS= read -rsn1 -t 1 ch && [ "$ch" = '[' ] || return 1
+  IFS= read -rsn1 -t 1 ch && [ "$ch" = '<' ] || return 1
+  while [ "$n" -lt 24 ]; do
+    IFS= read -rsn1 -t 1 ch || return 1
+    case "$ch" in
+      M|m) break ;;
+      [0-9]|';') seq="$seq$ch" ;;
+      *) return 1 ;;
+    esac
+    n=$((n + 1))
+  done
+  case "$ch" in M) MOUSE_PRESS=1 ;; m) MOUSE_PRESS=0 ;; *) return 1 ;; esac
+  IFS=';' read -r MOUSE_B MOUSE_X MOUSE_Y <<EOF
+$seq
+EOF
+  case "$MOUSE_B$MOUSE_X$MOUSE_Y" in ''|*[!0-9]*) return 1 ;; esac
+  [ -n "$MOUSE_B" ] && [ -n "$MOUSE_X" ] && [ -n "$MOUSE_Y" ]
+}
+
+# A short line shown in place of the call when opening it failed, and the
+# epoch it shows until.
+NOTICE=
+NOTICE_UNTIL=0
+
+# open_call: open the Factory pane on the most urgent call, beside the pane
+# below the strip (the pane the strip was opened above), through
+# bin/fm-factory-pane.sh, which shows it in a Factory pane already open in
+# this tab or opens one.
+open_call() {  # <home>
+  local out below now
+  below=
+  if [ -n "${HERDR_PANE_ID:-}" ] && command -v jq >/dev/null 2>&1; then
+    out=$("$(herdr_bin)" pane neighbor --pane "$HERDR_PANE_ID" --direction down 2>/dev/null) || out=
+    below=$(printf '%s' "$out" | jq -r '.result.neighbor.neighbor_pane_id // empty' 2>/dev/null)
+  fi
+  if [ -n "$below" ] && FM_HOME=$1 bash "$SCRIPT_DIR/fm-factory-pane.sh" open --pane "$below" \
+      --item "$CALL_ID" </dev/null >/dev/null 2>&1; then
+    return 0
+  fi
+  now=$(date +%s)
+  NOTICE='the Factory pane did not open'
+  NOTICE_UNTIL=$((now + 5))
+}
+
+# wait_input: the pause between frames, five seconds unless the pane is
+# resized or clicked. A left press on the most urgent call opens it. Each read
+# waits at most a second, because bash 3.2 cannot wait less and a resize does
+# not interrupt it there.
+wait_input() {  # <home>
+  local tick=0 ch
+  while [ "$tick" -lt 5 ] && [ "$RESIZED" = 0 ]; do
+    tick=$((tick + 1))
+    IFS= read -rsn1 -t 1 ch || continue
+    [ "$ch" = "$E" ] || continue
+    read_mouse || continue
+    [ "$MOUSE_PRESS" = 1 ] || continue
+    # A left button press: low two bits clear, and no motion or wheel bit.
+    [ $((MOUSE_B & 227)) -eq 0 ] || continue
+    if [ "$MOUSE_Y" -eq "$MIDDLE" ] && [ "$LINK_FROM" -gt 0 ] \
+      && [ "$MOUSE_X" -ge "$LINK_FROM" ] && [ "$MOUSE_X" -le "$LINK_TO" ]; then
+      open_call "$1"
+      return 0
+    fi
+  done
+}
+
 cmd_run() {
-  local home sleeper frame
+  local home sleeper
   home=$(resolve_home)
   record_self
   trap cleanup EXIT
@@ -452,18 +720,29 @@ cmd_run() {
   # once rather than leaving the old size's rows behind.
   RESIZED=0
   trap 'RESIZED=1' WINCH
+  # Keystrokes and mouse reports are read, never echoed, and the pane asks for
+  # button reports in the SGR form so a click on the most urgent call can open
+  # it. Without a terminal there is nothing to click and the strip only waits.
+  if [ -t 0 ] && TTY_SAVED=$(stty -g 2>/dev/null) && stty -echo -icanon min 1 time 0 2>/dev/null; then
+    CLICKS=1
+  fi
   # Cursor hidden, autowrap off so a row can never spill onto the next.
   printf '%s[?25l%s[?7l%s[2J' "$E" "$E" "$E"
+  [ "$CLICKS" = 0 ] || printf '%s[?1000h%s[?1006h' "$E" "$E"
   while :; do
     pane_size
-    frame=$(render_frame "$home" "$PANE_COLS" "$PANE_ROWS")
+    render_frame "$home" "$PANE_COLS" "$PANE_ROWS"
     [ "$RESIZED" = 0 ] || printf '%s[2J' "$E"
     RESIZED=0
-    printf '%s[H%s' "$E" "$frame"
-    sleep 5 &
-    sleeper=$!
-    wait "$sleeper" 2>/dev/null
-    kill "$sleeper" 2>/dev/null
+    printf '%s[H%s' "$E" "$FRAME"
+    if [ "$CLICKS" = 1 ]; then
+      wait_input "$home"
+    else
+      sleep 5 &
+      sleeper=$!
+      wait "$sleeper" 2>/dev/null
+      kill "$sleeper" 2>/dev/null
+    fi
   done
 }
 
