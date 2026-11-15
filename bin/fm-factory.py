@@ -80,6 +80,13 @@ an answer, keep, ask-for-changes or talk becomes a captain inbox note
 (bin/fm-inbox.sh note) that Starship acts on under its own rules, so the pane
 merges nothing, answers no hold itself and steers no worker. Who steers is a
 recorded choice that Starship is also told about; it grants nothing.
+`x` (Already settled?) on a held question files a reconcile request for it
+through bin/fm-captain-hold.sh reconcile-requests under the pane's bound
+source id `factory-pane` (bin/fm-factory-pane.sh binds it), then wakes
+Starship with an inbox note naming the call. It only asks: Starship re-reads
+the conversation and closes the call with evidence or rewrites it.
+docs/factory-pane.md ("Keys") owns when the card reads `checking` and how
+the wake note is named.
 
 Environment:
   FM_HOME                     the home whose factories are shown (default: this
@@ -102,6 +109,8 @@ Test seams:
   FM_FACTORY_SHAPES           decision shapes command, run with the decision
                               ids as arguments (default bin/fm-tap-desk.sh
                               shapes)
+  FM_FACTORY_CAPTAIN_HOLD     captain-hold command (default
+                              bin/fm-captain-hold.sh)
 Exit: 0 on success; 1 when a step fails, with the reason on stderr; 2 on a usage
 error.
 """
@@ -141,6 +150,10 @@ MIRROR_STATES = ("running", "with Starship", "stuck", "waiting on you")
 # An open copy also stays through a moment the fleet cannot be read, and closes
 # its pane once its job really ends: gone from the record or in any other state.
 MIRROR_KEEP = MIRROR_STATES + ("no reading",)
+
+# The captured-source id the pane files reconcile requests under; installing
+# the pane binds it (bin/fm-factory-pane.sh), which is the owner's opt-in.
+SETTLED_SOURCE = "factory-pane"
 
 
 # --------------------------------------------------------------------------
@@ -622,6 +635,35 @@ def inbox_receipts(home: str) -> List[Dict[str, Any]]:
     return notes
 
 
+def captain_hold_cmd() -> List[str]:
+    seam = os.environ.get("FM_FACTORY_CAPTAIN_HOLD")
+    return shlex.split(seam) if seam else ["bash", os.path.join(BIN, "fm-captain-hold.sh")]
+
+
+def reconcile_pending(home: str) -> Dict[str, int]:
+    """Each pending reconcile request: task id -> when it was requested.
+
+    bin/fm-captain-hold.sh owns the request record and `reconcile list` is its
+    read; a request leaves it when Starship closes the call with evidence,
+    notes it, or records an answer.
+    """
+    try:
+        out = subprocess.run(captain_hold_cmd() + ["reconcile", "list"], capture_output=True, text=True,
+                             timeout=20, stdin=subprocess.DEVNULL, env=dict(os.environ, FM_HOME=home))
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    if out.returncode != 0:
+        return {}
+    pending = {}
+    for line in out.stdout.splitlines():
+        parts = line.split("\t")
+        if len(parts) >= 2 and parts[1].startswith("requested="):
+            at = parse_iso(parts[1][len("requested="):])
+            if at is not None:
+                pending[parts[0]] = at
+    return pending
+
+
 def steer_log(home: str) -> List[Tuple[int, str, str]]:
     rows = []
     for line in read_text(os.path.join(pane_dir(home), "steer.log")).splitlines():
@@ -692,12 +734,19 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
                  activity: Optional[Dict[str, int]] = None, notes: Optional[List[Dict[str, Any]]] = None,
                  backlog: Optional[Dict[str, Any]] = None,
                  known_shapes: Optional[Dict[str, Dict[str, Any]]] = None,
-                 buckets: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+                 buckets: Optional[Dict[str, str]] = None,
+                 reconciles: Optional[Dict[str, int]] = None) -> Dict[str, Any]:
     factories, registry_source = load_registry(home)
     project_rows = load_projects(home)
     quiet_after = env_int("FM_FACTORY_QUIET_MINUTES", 15) * 60
     activity = activity or {}
     notes = notes or []
+    reconciles = reconciles or {}
+    settled_notes: Dict[str, int] = {}
+    for note in notes:
+        named = re.match(r"factory\.[^.]+\.settled\.(.+)\.(\d+)$", note.get("request_id") or "")
+        if named:
+            settled_notes[named.group(1)] = max(settled_notes.get(named.group(1), 0), int(named.group(2)))
     since_from = "last look"
     if since is None:
         since, since_from = now - LOOK_BACK_DEFAULT, "12 hours"
@@ -785,11 +834,17 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
             question = question[:cut.start()] if cut else question
         since_at = (parse_iso(shape.get("held_since")) or parse_iso(row.get("hold_set"))
                     or parse_iso(row.get("since")))
+        # Checking while a reconcile request is pending and it, or a settled
+        # note the pane sent for it, is from since the call was last held.
+        requested = reconciles.get(row["id"])
+        checking = requested is not None and (since_at is None or requested >= since_at
+                                              or settled_notes.get(row["id"], -1) >= since_at)
         return {"id": row["id"], "factory": fid, "kind": "question", "ask": title, "title": title,
                 "why": tidy(question), "options": options,
                 "suggested_by": "Starship" if any(o["suggested"] for o in options) else None,
                 "recommendation": tidy(recommendation, 140) or None,
-                "holds_up": holds_up(row["id"]), "since": since_at, "for": "you", "pr": row.get("pr_url")}
+                "holds_up": holds_up(row["id"]), "since": since_at, "for": "you", "pr": row.get("pr_url"),
+                "checking": checking}
 
     # Live work: every task with metadata whose work item is not queued or done.
     running_ids = []
@@ -837,7 +892,7 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
                               "ask": "%s is ready for you to look at" % title, "title": title, "why": None,
                               "options": [], "suggested_by": None, "recommendation": None,
                               "holds_up": [], "since": done_at[-1] if done_at else None,
-                              "for": "you", "pr": pr})
+                              "for": "you", "pr": pr, "checking": False})
         elif bucket == "finished":
             job.update(state="finished" if "PR merged" in detail else "with Starship")
         elif bucket == "paused":
@@ -989,7 +1044,8 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
                          "word": "took the helm" if who == "you" else "handed back",
                          "text": ("You steer %s now." if who == "you" else "Starship steers %s again.")
                          % by_id[fid]["name"]})
-    note_words = {"answer": "answered", "keep": "asked to keep", "change": "asked for changes", "talk": "said"}
+    note_words = {"answer": "answered", "keep": "asked to keep", "change": "asked for changes", "talk": "said",
+                  "settled": "asked to check"}
     for note in notes:
         parts = (note.get("request_id") or "").split(".")
         if len(parts) < 3 or parts[1] not in by_id:
@@ -1125,6 +1181,7 @@ def refresh(home: str) -> Dict[str, Any]:
     now = now_epoch()
     # Taken before anything is read, so a call that changes meanwhile is caught.
     signal_at_start = calls_signal(home)
+    read_at = time.time()
     snapshot = load_snapshot(home)
     running = [t["id"] for t in snapshot.get("tasks") or []
                if (t.get("current_state") or {}).get("state") == "working"
@@ -1133,8 +1190,9 @@ def refresh(home: str) -> Dict[str, Any]:
     shapes: Dict[str, Dict[str, Any]] = {}
     buckets = buckets_for(live_tasks(snapshot))
     record = build_record(home, now, snapshot, since=last_look(home, now), activity=activity,
-                          notes=inbox_receipts(home), known_shapes=shapes, buckets=buckets)
-    record.update(snapshot_epoch=now, calls_signal=signal_at_start)
+                          notes=inbox_receipts(home), known_shapes=shapes, buckets=buckets,
+                          reconciles=reconcile_pending(home))
+    record.update(snapshot_epoch=now, calls_signal=signal_at_start, read_at=read_at)
     try:
         write_atomic(basis_path(home), json.dumps({"taken_epoch": now, "snapshot": snapshot,
                                                    "activity": activity, "shapes": shapes,
@@ -1207,16 +1265,18 @@ def refresh_calls(home: str) -> Dict[str, Any]:
     if not isinstance(basis, dict) or not isinstance(basis.get("snapshot"), dict):
         return refresh(home)
     signal_at_start = calls_signal(home)
-    backlog, axi, notes = side_by_side(lambda: load_backlog(home), lambda: axi_backlog(home),
-                                       lambda: inbox_receipts(home))
+    read_at = time.time()
+    backlog, axi, notes, reconciles = side_by_side(lambda: load_backlog(home), lambda: axi_backlog(home),
+                                                   lambda: inbox_receipts(home), lambda: reconcile_pending(home))
     snapshot = dict(basis["snapshot"], backlog=backlog)
     activity = {k: v for k, v in (basis.get("activity") or {}).items() if isinstance(v, int)}
     buckets = basis.get("buckets")
     now = now_epoch()
     record = build_record(home, now, snapshot, since=last_look(home, now), activity=activity,
                           notes=notes, backlog=axi, known_shapes=dict(basis.get("shapes") or {}),
-                          buckets=buckets if isinstance(buckets, dict) else None)
-    record.update(snapshot_epoch=int(basis.get("taken_epoch") or 0), calls_signal=signal_at_start)
+                          buckets=buckets if isinstance(buckets, dict) else None, reconciles=reconciles)
+    record.update(snapshot_epoch=int(basis.get("taken_epoch") or 0), calls_signal=signal_at_start,
+                  read_at=read_at)
     newer = cached(home)
     if newer and int(newer.get("snapshot_epoch") or 0) > record["snapshot_epoch"]:
         return newer
@@ -1542,6 +1602,8 @@ class View:
         waited = ("waiting " if question else "ready ") + minutes_words((now - need["since"]) // 60) \
             if need.get("since") else ("waiting" if question else "ready")
         right = [S(waited, "mist")] if full else [S(fac["name"], "mist"), S(" · ", "faint"), S(waited, "mist")]
+        if need.get("checking"):
+            right = [S("checking", "amber"), S(" · ", "faint")] + right
         lead = [S(" "), self.mark("need", need["id"]), S("● ", "red" if question else "green")]
         return lead, need["ask"], right
 
@@ -1579,6 +1641,11 @@ class View:
             if need.get("recommendation"):
                 rows += flow(width, [pad], "Starship suggests: %s" % need["recommendation"], "ice", rest="mist")
             rows.append(row(width, [pad, S("t", "cyan", True), S("  "), S("Talk it through", "ice")]))
+            if need.get("checking"):
+                rows.append(row(width, [pad, S("checking", "amber", True),
+                                        S("  Starship is re-reading what you said about this", "mist")]))
+            else:
+                rows.append(row(width, [pad, S("x", "cyan", True), S("  "), S("Already settled?", "ice")]))
             if need.get("holds_up"):
                 rows += flow(width, [pad, S("holds up ", "faint")], ", ".join(need["holds_up"][:3]), "mist")
         else:
@@ -1733,7 +1800,10 @@ class View:
             need = self.need(ident)
             if need["kind"] == "question" and need["options"]:
                 keys.append("%s answer" % "/".join(o["key"] for o in need["options"]))
-            elif need["kind"] != "question":
+            if need["kind"] == "question":
+                if not need.get("checking"):
+                    keys.append("x settled?")
+            else:
                 keys.append("k keep · c changes")
         if not self.opened or not self.in_tab:
             keys.append("enter open" if not self.opened else "esc back")
@@ -1911,6 +1981,39 @@ def send_note(home: str, request_id: str, body: str) -> Tuple[bool, str]:
     return False, (out.stderr.strip().splitlines() or ["the inbox refused it"])[-1]
 
 
+def file_reconcile(home: str, task_id: str) -> Tuple[Optional[int], str]:
+    """Ask for a held call to be re-checked, through the captain-hold reconcile intake.
+
+    bin/fm-captain-hold.sh reconcile-requests applies its binding and task
+    checks and keeps one request per call; the result is when that request
+    was made, which names the wake note so one request is one note.
+    """
+    try:
+        out = subprocess.run(captain_hold_cmd() + ["reconcile-requests", "--source-id", SETTLED_SOURCE,
+                                                   "--source", "the Factory pane's Already settled? key"],
+                             input=task_id + "\n", capture_output=True, text=True, timeout=60,
+                             env=dict(os.environ, FM_HOME=home))
+    except (OSError, subprocess.SubprocessError) as error:
+        return None, str(error)
+    if out.returncode != 0:
+        lines = (out.stdout + "\n" + out.stderr).strip().splitlines()
+        why = next((l for l in lines if l.startswith("refused:")), lines[-1] if lines else "it was refused")
+        if "is not bound" in why:
+            why = "the pane is not set up to ask this; run bin/fm-factory-pane.sh install"
+        return None, why
+    requested = reconcile_pending(home).get(task_id)
+    if requested is None:
+        return None, "the request did not stay on record"
+    return requested, ""
+
+
+def settled_request_id(fid: str, need: Dict[str, Any], requested: int) -> str:
+    """The wake note's request id: one per request, or per hold when the call was held again since."""
+    held = need.get("since")
+    stamp = held if held is not None and requested < held else requested
+    return "factory.%s.settled.%s.%d" % (fid, need["id"], stamp)
+
+
 def record_steer(home: str, fid: str, who: str, now: int) -> None:
     path = os.path.join(pane_dir(home), "steer.log")
     os.makedirs(pane_dir(home), exist_ok=True)
@@ -1930,6 +2033,8 @@ class Pane:
         self.loaded = self.record_stamp()
         self.calls_checked = 0.0
         self.focus_file = os.environ.get("FM_FACTORY_FOCUS_FILE") or ""
+        # Calls asked about from this pane: id -> (the card's since, when asked).
+        self.asked: Dict[str, Tuple[Optional[int], float]] = {}
         self.focused_since: Optional[float] = None
         self.last_key = 0.0
 
@@ -1995,6 +2100,7 @@ class Pane:
             if record:
                 self.view.adopt(record)
                 self.loaded = stamp
+                self.keep_asked()
         if snapshot_age(self.view.record) > env_int("FM_FACTORY_TTL", 20):
             refresh_in_background(self.home)
 
@@ -2007,6 +2113,16 @@ class Pane:
         signal = calls_signal(self.home)
         if signal and signal != self.view.record.get("calls_signal"):
             refresh_calls_in_background(self.home)
+
+    def keep_asked(self) -> None:
+        """A record read before a press here cannot know its request: the card stays checking."""
+        read_at = float(self.view.record.get("read_at") or 0)
+        for ident, (since, asked_at) in list(self.asked.items()):
+            need = self.view.need(ident)
+            if need is None or need.get("since") != since or read_at >= asked_at:
+                del self.asked[ident]
+            else:
+                need["checking"] = True
 
     def factory_of_stop(self) -> Optional[str]:
         if self.view.opened:
@@ -2029,6 +2145,38 @@ class Pane:
             refresh_in_background(self.home)
         else:
             self.say("Not sent: %s" % why, "red", 12)
+
+    def settled(self, need: Dict[str, Any]) -> None:
+        """File a reconcile request for a held call and wake Starship to re-check it."""
+        fac = self.view.factory(need["factory"])
+        if need.get("checking"):
+            pending = reconcile_pending(self.home).get(need["id"])
+            sent = {note.get("request_id") for note in inbox_receipts(self.home)}
+            if pending is not None and settled_request_id(fac["id"], need, pending) in sent:
+                self.say("Starship is already checking this.", "amber")
+                return
+        asked_at = time.time()
+        requested, why = file_reconcile(self.home, need["id"])
+        if requested is None:
+            self.say("Not asked: %s" % why, "red", 12)
+            return
+        body = ("Already settled? %s\n\n"
+                "The owner thinks this held call is already settled, all or in part, in conversation. "
+                "Re-read the conversation now and record it in this turn: close the call with the evidence "
+                "(fm-captain-hold.sh reconcile close), or rewrite what still stands by retitling it with "
+                "bin/fm-tasks-axi.sh update %s --title '<new title>', then holding it again with "
+                "bin/fm-captain-hold.sh hold %s --reason '<new reason>'. A rewritten call still retires its "
+                "pending request with reconcile note. The reconcile request for it is already filed; the "
+                "captain-hold-lifecycle skill owns both outcomes."
+                "\n\n(from the Factory pane; item %s)" % (need["title"], need["id"], need["id"], need["id"]))
+        ok, why = send_note(self.home, settled_request_id(fac["id"], need, requested), body)
+        if not ok:
+            self.say("Not sent: %s" % why, "red", 12)
+            return
+        need["checking"] = True
+        self.asked[need["id"]] = (need.get("since"), asked_at)
+        self.say("Asked Starship to check whether %s is already settled." % need["title"], "green")
+        refresh_in_background(self.home)
 
     def key(self, key: str) -> bool:
         view = self.view
@@ -2131,6 +2279,8 @@ class Pane:
             view.talking = {"kind": "change", "factory": need["factory"], "text": "", "item": need["id"],
                             "title": need["title"], "pr": need.get("pr"),
                             "label": "What should change in %s" % need["title"]}
+        elif need and need["kind"] == "question" and lower == "x":
+            self.settled(need)
         elif lower == "t":
             fid = self.factory_of_stop()
             if need and need["kind"] == "question":
