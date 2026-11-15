@@ -56,11 +56,9 @@ recorded choice that Starship is also told about; it grants nothing.
 through bin/fm-captain-hold.sh reconcile-requests under the pane's bound
 source id `factory-pane` (bin/fm-factory-pane.sh binds it), then wakes
 Starship with an inbox note naming the call. It only asks: Starship re-reads
-the conversation and closes the call with evidence or rewrites it. The card
-reads `checking` while `fm-captain-hold.sh reconcile list` holds a request for
-the call and either that request or the pane's settled note for it is from
-since the call was last held. A press that finds a request older than that
-names its note after when the call was last held, so it always wakes Starship.
+the conversation and closes the call with evidence or rewrites it.
+docs/factory-pane.md ("Keys") owns when the card reads `checking` and how
+the wake note is named.
 
 Environment:
   FM_HOME                     the home whose factories are shown (default: this
