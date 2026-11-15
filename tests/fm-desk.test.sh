@@ -426,11 +426,16 @@ bridge = st["workspaces"][0]["tabs"][0]["panes"][0]
 bridge["screens"] = ["", "", "Last login: Sun Nov 15 09:12:01 on ttys004\n", "", "lars@mac ~ % \n"]
 json.dump(st, open(sys.argv[1], "w"))
 PY
-  local out
+  : > "$FAKE_PS"
+  local out revive view
   out=$(FM_DESK_WAIT=10 desk open) || fail "open failed: $out"
   assert_contains "$out" "start the Starship bridge again in its pane" "a shell that reached its prompt late was not restarted"
+  revive=$(grep -n "pane run w1:p2 " "$FAKE_HERDR_CALLS" | head -1 | cut -d: -f1)
+  view=$(grep -n "terminal open" "$FAKE_HERDR_CALLS" | head -1 | cut -d: -f1)
+  [ -n "$revive" ] && [ -n "$view" ] && [ "$revive" -lt "$view" ] \
+    || fail "a view opened while a restored shell was still starting"
   assert_not_contains "$out" "the Starship bridge's pane has input waiting" "a shell still starting was given up on"
-  pass "desk: a restored shell is given time to reach its prompt before it is left alone"
+  pass "desk: a restored shell is given time to reach its prompt, and views wait for it"
 }
 
 test_the_sidebar_setting_changes_only_its_own_line() {

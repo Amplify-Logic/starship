@@ -846,16 +846,19 @@ def cmd_open() -> int:
         steps, notes = plan(layout, found, read_sidebar())
         pending = [item for item in steps if item["key"] in taken]
         fresh = [item for item in steps if item["key"] not in taken]
-        if not fresh:
-            # A shell still running its startup shows no prompt yet, and
-            # just after a restart every restored pane starts its shell at
-            # once; give such shells FM_DESK_WAIT to reach their prompt
-            # before leaving them alone.
-            if any(p["idle"] and not p["free"] for panes in found["panes"].values() for p in panes):
-                starting_until = starting_until or time.time() + wait_limit()
-                if time.time() < starting_until:
+        # A shell still running its startup shows no prompt yet, and just
+        # after a restart every restored pane starts its shell at once; give
+        # such shells FM_DESK_WAIT to reach their prompt before leaving them
+        # alone. Views wait too, so nobody can type into a pane through a
+        # view while the desk may still start something in it.
+        if any(p["idle"] and not p["free"] for panes in found["panes"].values() for p in panes):
+            starting_until = starting_until or time.time() + wait_limit()
+            if time.time() < starting_until:
+                fresh = [item for item in fresh if item["kind"] != "view"]
+                if not fresh:
                     time.sleep(1)
                     continue
+        if not fresh:
             break
         taken_count += 1
         if taken_count > 64:
