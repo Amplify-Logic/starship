@@ -211,8 +211,9 @@ test_shapes_reads_each_question_as_its_card_does() {
   # A plain two-way title still gives its two options when the reason names none.
   hold hold two-way --title "Ship the beta now or after the holidays?" --reason "The beta is ready to go." --repo sample >/dev/null
   hold hold slash-way --title "Deploy now / tomorrow or next week?" --reason "The build is green." --repo sample >/dev/null
+  hold hold branch-way --title "Merge fm/login-fix or wait for review?" --reason "The fix is ready." --repo sample >/dev/null
   local out
-  out=$(desk shapes pick-route open-ask three-calls two-way slash-way) || fail "shapes failed"
+  out=$(desk shapes pick-route open-ask three-calls two-way slash-way branch-way) || fail "shapes failed"
   printf '%s' "$out" | node -e '
     let s = ""; process.stdin.on("data", (c) => s += c).on("end", () => {
       const doc = JSON.parse(s);
@@ -227,6 +228,7 @@ test_shapes_reads_each_question_as_its_card_does() {
       check(JSON.stringify(by["three-calls"].options) === "[]", 8);
       check(JSON.stringify(by["two-way"].options) === JSON.stringify(["Ship the beta now", "after the holidays"]), 9);
       check(JSON.stringify(by["slash-way"].options) === "[]", 10);
+      check(JSON.stringify(by["branch-way"].options) === JSON.stringify(["Merge fm/login-fix", "wait for review"]), 11);
     });' || fail "shapes did not read the questions as their cards do"
   desk export >/dev/null || fail "export failed"
   cards_json | node -e '
@@ -243,6 +245,8 @@ test_shapes_reads_each_question_as_its_card_does() {
     && fail "mark took an option split out of a title that lists several calls"
   desk mark slash-way --recommend "Deploy now / tomorrow" >/dev/null 2>&1 \
     && fail "mark took an option split out of a title that names three choices"
+  desk mark branch-way --recommend "wait for review" >/dev/null \
+    || fail "mark without --option refused the options of a two-way title naming a branch"
   pass "shapes reads each held question exactly as its tap card does, a plain question stays plain, and only a plain two-way title gives options"
 }
 

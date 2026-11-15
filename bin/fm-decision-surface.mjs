@@ -169,7 +169,7 @@ function splitAlternatives(value) {
 
 function twoWayTitle(title) {
   const plain = title.trim().replace(/\?$/, "");
-  if (/[,()/]|\bvs\b/i.test(plain)) return [];
+  if (/[,()]|\s\/\s|\bvs\b/i.test(plain)) return [];
   const pieces = plain.split(/\s+or\s+/i).map(cleanOption);
   return pieces.length === 2 && pieces.every((item) => item.length > 1) && pieces[0] !== pieces[1] ? pieces : [];
 }
