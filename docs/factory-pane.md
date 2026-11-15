@@ -21,6 +21,7 @@ The [factory registry](configuration.md#factory-registry-datafactoriesmd) names 
        2  this season
        3  both side by side
        t  Talk it through · by voice
+       x  Already settled?
 
    ● Which payment provider for the shop                         Sample Shop · waiting 9 h
    ● Share a garden page as a picture is ready for you…  Garden Journal · ready 1 h 49 min
@@ -41,7 +42,7 @@ The [factory registry](configuration.md#factory-registry-datafactoriesmd) names 
    12:36    Garden Journal  asked you  Harvest chart needs your call.
    13:57    Garden Journal  PR ready   Share a garden page as a picture has its PR ready.
 
- ↑↓ move · 1/2/3 answer · enter open · t talk (voice) · s who steers · q quit
+ ↑↓ move · 1/2/3 answer · x settled? · enter open · t talk (voice) · s who steers · q quit
 ```
 
 - The count line is the bridge strip's look: running jobs, what needs you, idle factories, and the time.
@@ -95,6 +96,7 @@ Outside Herdr, `enter` opens the same page in place instead.
 | `pgup` `pgdn`, mouse wheel | Scroll the view, without moving the highlight or closing a confirmation or the talk box. |
 | `enter` | Open the highlighted factory's tab. |
 | an option key | Answer the highlighted question with that option, after `enter` confirms it. |
+| `x` | Tell Starship the highlighted question looks already settled, so it re-checks it. |
 | `k` | Keep the highlighted finished work and ask Starship to land it, after `enter` confirms it. |
 | `c` | Ask for changes to the highlighted finished work, in the talk box, typed. |
 | `t` | Talk to the highlighted factory's crew, or talk the highlighted question through: by voice where the desk voice is set up, typed otherwise. |
@@ -114,6 +116,7 @@ The keys line at the bottom turns into the same instruction in the highlight col
      ▸ 2  this season
        3  both side by side
        t  Talk it through · by voice
+       x  Already settled?
    ╭─ Your answer · Harvest chart ───────────────────────────────── not sent yet ─╮
    │                                                                              │
    │  2 this season                                                               │
@@ -141,6 +144,11 @@ An answer, a keep, a change request and anything said in the talk box become a c
 Starship then acts on it under its own rules: it records the answer on the held decision, merges only under its merge rules, and passes words on to the crew.
 A note that was spoken says so, since its words may have been heard wrong.
 The pane itself merges nothing, answers no held decision itself, and types into no worker, which is why the talk box says `Starship hears this too`.
+`x` files a reconcile request for the question through `bin/fm-captain-hold.sh reconcile-requests` under the pane's own source, which installing the pane binds, and wakes Starship with an inbox note naming the call, and it never closes anything itself.
+Only `install` binds that source and only `remove` unbinds it, so a pane installed before the key existed needs `install` once more.
+While the card reads `checking`, the footer leaves `x settled?` out and a press only says `Starship is already checking this`, filing nothing and sending no note, once the inbox holds the note that press would send; if that note never got saved, the press files and sends as usual.
+Starship re-reads the conversation and records it in that turn: it closes the call with the evidence (`reconcile close`), or rewrites it by retitling it with `bin/fm-tasks-axi.sh update <id> --title '<new title>'` and holding it again with `bin/fm-captain-hold.sh hold <id> --reason '<new reason>'`, and a rewritten call still retires its pending request with `reconcile note`.
+The card reads `checking` while that request is pending and either it or the pane's settled note for the call is from since the call was last held; a press that finds a request from before the call was last held names its note after that time, so it always wakes Starship.
 
 Talking never changes who steers; only `s` does.
 `s` records the change in `state/factory/steer.log`, tells Starship through the same inbox, and shows it in the feed.
@@ -160,10 +168,11 @@ The record's schema is `fm-factory.v1`:
 | --- | --- |
 | `as_of`, `since` | When the record was built and the start of SINCE YOU LAST LOOKED, as UTC times and epochs. |
 | `snapshot_epoch`, `calls_signal` | When the workers in it were read, and the owner's calls signal its calls were read under. |
+| `read_at` | When the refresh began reading, in fractional epoch seconds; a pane keeps a card it just asked about checking until a record read after the press arrives. |
 | `since_from` | What that start is: `last look`, or `12 hours` with no look recorded yet, or `48 hours` when the last look is older than that. |
 | `counts`, `count_line` | Running jobs, items that need you, and idle factories. |
 | `queue`, `queue_line` | Every job nobody has started: `total`, `starts_on_its_own`, `in_line`, `on_hold`, `waits_on_you` (which includes the deferred) and `deferred`, and the same as one line of words. |
-| `needs_you[]` | Each of the owner's calls: its `id`, `factory`, `kind` (`question` or `finished work`), `title`, `ask`, `why`, `options[]` (`key`, `label`, `suggested`), `suggested_by`, a `recommendation` that is not one of the options, `holds_up[]`, `since`, `pr`, `for`, the person it waits on, and `sent`, the newest note the owner sent about it since it was asked (`word`, the option `key` of an answer, `text`, `at`, `picked_up`, and Starship's `reply`), or null. |
+| `needs_you[]` | Each of the owner's calls: its `id`, `factory`, `kind` (`question` or `finished work`), `title`, `ask`, `why`, `options[]` (`key`, `label`, `suggested`), `suggested_by`, a `recommendation` that is not one of the options, `holds_up[]`, `since`, `pr`, `for`, the person it waits on, `sent`, the newest note the owner sent about it since it was asked (`word`, the option `key` of an answer, `text`, `at`, `picked_up`, and Starship's `reply`), or null, and `checking`, true while Starship re-checks a question the owner marked already settled. |
 | `factories[]` | Each factory: `id`, `name`, `about`, `projects`, `steered_by`, `state`, `idle_since`, `crew`, `needs` (the ids of its items in `needs_you`), `jobs[]`, `next`, `queue` (its own counts, as above), `rules`, `learned`, and `talk`. |
 | `factories[].jobs[]` | Each job: `id`, `title`, `kind`, `state`, `step`, `started`, `doing` and where it came from, `last_sign_of_life` and where it came from, `quiet`, `until`, `pr`, and `queue`. |
 | `feed[]` | Each event: `at` (or a `date` when only the day is known), `actor`, `factory`, `word`, and `text`. |
@@ -183,6 +192,7 @@ A job nobody has started also says where it stands in the queue: its `queue` is 
 | Each job's state word | `fm_fleet_status_bucket` in `bin/fm-fleet-status-lib.sh`, the same fold the status bar and bridge strip count with |
 | What needs you | `fm_owner_calls` in `bin/fm-fleet-status-lib.sh`, over the backlog as the home's tasks-axi adapter reads it (`bin/fm-fleet-snapshot.sh --axi-backlog`) and those state words |
 | A question's options and suggestion | `bin/fm-tap-desk.sh shapes`, the reading its tap card shows |
+| Whether a question is being re-checked | A request in `bin/fm-captain-hold.sh reconcile list`, made, or followed by the pane's settled inbox note, since the call was last held |
 | Which factory a job belongs to | Its work item's project, through the factory registry |
 | How long a job has run | Its spawn time in the task's metadata |
 | What a job is doing this minute | The worker's stated step, else the checks' own state, else `at work, no step reported yet` |
