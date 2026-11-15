@@ -818,6 +818,9 @@ test_already_settled_asks_starship_to_recheck_the_call() {
     "The owner thinks this held call is already settled" "the wake says the owner thinks it is settled"
   assert_contains "$(jq -r .body "$FM_FACTORY_TEST_NOTES")" "Re-read the conversation now and record it in this turn" \
     "the wake asks Starship to re-read and record now"
+  assert_contains "$(jq -r .body "$FM_FACTORY_TEST_NOTES")" \
+    "retitling it with bin/fm-tasks-axi.sh update garden-chart --title '<new title>', then holding it again with bin/fm-captain-hold.sh hold garden-chart --reason '<new reason>'" \
+    "the wake names the supported route to rewrite the call"
   assert_contains "$(jq -r .body "$FM_FACTORY_TEST_NOTES")" "(from the Factory pane; item garden-chart)" \
     "the wake names the item"
   assert_contains "$(cat "$screen")" "Asked Starship to check whether Harvest chart is already settled." "the pane says so"
@@ -869,7 +872,7 @@ test_already_settled_files_a_real_reconcile_request() {
   reset_case
   write_registry
   (unset FM_FACTORY_CAPTAIN_HOLD FM_FACTORY_INBOX FM_TEST_AXI_BACKLOG
-   local hold="$ROOT/bin/fm-captain-hold.sh" out real_dir
+   local hold="$ROOT/bin/fm-captain-hold.sh" out real_dir held
    real_dir=$(dirname "$REAL_TASKS_AXI")
    export PATH="$real_dir:$PATH" FM_CAPTAIN_HOLD_NOW=2026-11-14T07:30:00Z
    fm_test_tasks_toml "$HOME_FIX/.tasks.toml"
@@ -889,6 +892,24 @@ test_already_settled_files_a_real_reconcile_request() {
      "request_id=factory.garden-journal.settled.chart-range.$((NOW - 1800))" "the wake is a captain inbox note"
    assert_equals "$(python3 "$FACTORY" --data --fresh | jq -r '.needs_you[0] | "\(.id) \(.checking)"')" \
      "chart-range true" "the card reads checking"
+   # Starship acknowledges the wake and only rewords the hold, so the request
+   # stays pending from before the call was last held; a press still wakes it.
+   for note in "$HOME_FIX"/state/inbox/*.note; do
+     bash "$ROOT/bin/fm-inbox.sh" drain --ack "$(basename "$note" .note)" >/dev/null || fail "ack failed"
+   done
+   FM_CAPTAIN_HOLD_NOW=2026-11-14T07:40:00Z bash "$hold" hold chart-range --reason "Season only?" >/dev/null \
+     || fail "reword failed"
+   assert_contains "$(bash "$hold" reconcile list)" "chart-range"$'\t'"requested=2026-11-14T07:30:00Z" \
+     "the reword left the request pending"
+   held=$(python3 "$FACTORY" --data --fresh | jq -r '.needs_you[0] | "\(.id) \(.checking) \(.since)"')
+   assert_equals "${held% *}" "chart-range false" "a call held again since the request offers the key again"
+   [ "${held##* }" -gt $((NOW - 1800)) ] || fail "the reword did not move when the call was held: $held"
+   DRIVE_PANE=1 drive_keys x
+   assert_contains "$(cat "$HOME_FIX"/state/inbox/*.note 2>/dev/null)" \
+     "request_id=factory.garden-journal.settled.chart-range.${held##* }" \
+     "a press on the reworded call is a new wake named for when it was held again"
+   assert_equals "$(python3 "$FACTORY" --data --fresh | jq -r '.needs_you[0] | "\(.id) \(.checking)"')" \
+     "chart-range true" "the reworded call reads checking after the press"
    printf 'Only the season part is still open.\n' > "$HOME_FIX/note.txt"
    bash "$hold" reconcile note chart-range --note-file "$HOME_FIX/note.txt" >/dev/null || fail "reconcile note failed"
    assert_equals "$(python3 "$FACTORY" --data --fresh | jq -r '.needs_you[0] | "\(.id) \(.checking)"')" \

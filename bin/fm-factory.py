@@ -58,7 +58,9 @@ source id `factory-pane` (bin/fm-factory-pane.sh binds it), then wakes
 Starship with an inbox note naming the call. It only asks: Starship re-reads
 the conversation and closes the call with evidence or rewrites it. The card
 reads `checking` while `fm-captain-hold.sh reconcile list` holds a request for
-the call made since it was last held.
+the call and either that request or the pane's settled note for it is from
+since the call was last held. A press that finds a request older than that
+names its note after when the call was last held, so it always wakes Starship.
 
 Environment:
   FM_HOME                     the home whose factories are shown (default: this
@@ -663,6 +665,11 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
     activity = activity or {}
     notes = notes or []
     reconciles = reconciles or {}
+    settled_notes: Dict[str, int] = {}
+    for note in notes:
+        named = re.match(r"factory\.[^.]+\.settled\.(.+)\.(\d+)$", note.get("request_id") or "")
+        if named:
+            settled_notes[named.group(1)] = max(settled_notes.get(named.group(1), 0), int(named.group(2)))
     if since is None:
         since = now - LOOK_BACK_DEFAULT
     since = max(since, now - LOOK_BACK_MAX)
@@ -747,10 +754,11 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
             question = question[:cut.start()] if cut else question
         since_at = (parse_iso(shape.get("held_since")) or parse_iso(row.get("hold_set"))
                     or parse_iso(row.get("since")))
-        # Checking while a reconcile request made since the call was last held
-        # is pending; a call held again with new words is no longer the one asked about.
+        # Checking while a reconcile request is pending and it, or a settled
+        # note the pane sent for it, is from since the call was last held.
         requested = reconciles.get(row["id"])
-        checking = requested is not None and (since_at is None or requested >= since_at)
+        checking = requested is not None and (since_at is None or requested >= since_at
+                                              or settled_notes.get(row["id"], -1) >= since_at)
         return {"id": row["id"], "factory": fid, "kind": "question", "ask": title, "title": title,
                 "why": tidy(question), "options": options,
                 "suggested_by": "Starship" if any(o["suggested"] for o in options) else None,
@@ -1834,11 +1842,15 @@ class Pane:
         body = ("Already settled? %s\n\n"
                 "The owner thinks this held call is already settled, all or in part, in conversation. "
                 "Re-read the conversation now and record it in this turn: close the call with the evidence "
-                "(fm-captain-hold.sh reconcile close), or note what still stands (reconcile note) and hold it "
-                "again with its new title and reason. The reconcile request for it is already filed; the "
+                "(fm-captain-hold.sh reconcile close), or rewrite what still stands by retitling it with "
+                "bin/fm-tasks-axi.sh update %s --title '<new title>', then holding it again with "
+                "bin/fm-captain-hold.sh hold %s --reason '<new reason>'. A rewritten call still retires its "
+                "pending request with reconcile note. The reconcile request for it is already filed; the "
                 "captain-hold-lifecycle skill owns both outcomes."
-                "\n\n(from the Factory pane; item %s)" % (need["title"], need["id"]))
-        rid = "factory.%s.settled.%s.%d" % (fac["id"], need["id"], requested)
+                "\n\n(from the Factory pane; item %s)" % (need["title"], need["id"], need["id"], need["id"]))
+        held = need.get("since")
+        stamp = held if held is not None and requested < held else requested
+        rid = "factory.%s.settled.%s.%d" % (fac["id"], need["id"], stamp)
         ok, why = send_note(self.home, rid, body)
         if not ok:
             self.say("Not sent: %s" % why, "red", 12)

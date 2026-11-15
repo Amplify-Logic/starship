@@ -93,7 +93,9 @@ Every writing key acts on the highlighted row only; the highlight stays on the s
 An answer, a keep, a change request and anything said in the talk box become a captain inbox note (`bin/fm-inbox.sh note`), the existing path for the owner to tell Starship something, saved once under a request id that names the factory and the item; an answer's id also names the question's key and when it was asked, and a keep's id the time the work became ready, so a repeated press is one note but a new or re-asked question or returned work is a new one.
 Starship then acts on it under its own rules: it records the answer on the held decision, merges only under its merge rules, and passes words on to the crew.
 The pane itself merges nothing, answers no held decision itself, and types into no worker, which is why the talk box says `Starship hears this too`.
-`x` files a reconcile request for the question through `bin/fm-captain-hold.sh reconcile-requests` under the pane's own source, which installing the pane binds, and wakes Starship with an inbox note naming the call; the card reads `checking` until Starship closes the call with evidence, notes what still stands, or holds it again with new words, and it never closes anything itself.
+`x` files a reconcile request for the question through `bin/fm-captain-hold.sh reconcile-requests` under the pane's own source, which installing the pane binds, and wakes Starship with an inbox note naming the call, and it never closes anything itself.
+Starship re-reads the conversation and records it in that turn: it closes the call with the evidence (`reconcile close`), or rewrites it by retitling it with `bin/fm-tasks-axi.sh update <id> --title '<new title>'` and holding it again with `bin/fm-captain-hold.sh hold <id> --reason '<new reason>'`, and a rewritten call still retires its pending request with `reconcile note`.
+The card reads `checking` while that request is pending and either it or the pane's settled note for the call is from since the call was last held; a press that finds a request from before the call was last held names its note after that time, so it always wakes Starship.
 
 Talking never changes who steers; only `s` does.
 `s` records the change in `state/factory/steer.log`, tells Starship through the same inbox, and shows it in the feed.
@@ -126,7 +128,7 @@ Every state is a word: a job is `running`, `waiting on you`, `ready for you`, `s
 | Each job's state word | `fm_fleet_status_bucket` in `bin/fm-fleet-status-lib.sh`, the same fold the status bar and bridge strip count with |
 | What needs you | `fm_owner_calls` in `bin/fm-fleet-status-lib.sh`, over the backlog as the home's tasks-axi adapter reads it (`bin/fm-fleet-snapshot.sh --axi-backlog`) and those state words |
 | A question's options and suggestion | `bin/fm-tap-desk.sh shapes`, the reading its tap card shows |
-| Whether a question is being re-checked | A request in `bin/fm-captain-hold.sh reconcile list` made since the call was last held |
+| Whether a question is being re-checked | A request in `bin/fm-captain-hold.sh reconcile list`, made, or followed by the pane's settled inbox note, since the call was last held |
 | Which factory a job belongs to | Its work item's project, through the factory registry |
 | How long a job has run | Its spawn time in the task's metadata |
 | What a job is doing this minute | The worker's stated step, else the checks' own state, else `at work, no step reported yet` |
