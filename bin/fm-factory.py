@@ -25,6 +25,8 @@ Usage:
                                           tab: its page on the left and its live
                                           workers stacked on the right
   fm-factory.py refresh                   rebuild the cached record once
+  fm-factory.py refresh-calls             rebuild it with fresh owner's calls on
+                                          the last full refresh's workers
 
 One record, two readers: every word on screen comes from the record, and every
 state is a word, so an agent reading the pane as text loses nothing.
@@ -44,9 +46,20 @@ whether a running worker's pane text changed since the last reading
 (bin/fm-inbox.sh receipts).
 
 What the pane writes. Its cache and its own records live in state/factory/:
-record.json (the cached record), activity.json (when each worker's pane last
-changed), last-look (when the owner last closed the pane), steer.log (who
-steers each factory), and tabs/ (the factory tabs it opened). Every writing key
+record.json (the cached record), basis.json (the fleet reading the last full
+refresh used), activity.json (when each worker's pane last changed), last-look
+(when the owner last closed the pane), steer.log (who steers each factory), and
+tabs/ (the factory tabs it opened).
+
+How fresh it is. A full refresh reads every worker, which takes seconds, so the
+live pane starts one only once the record's workers are FM_FACTORY_TTL old.
+The owner's calls cannot wait that long: once a second the pane reads the
+owner's calls signal (bin/fm-owner-calls-signal-lib.sh), and when it has moved
+past the one the record was built under it rebuilds the record from basis.json
+with the backlog and the inbox read afresh (refresh-calls), so a decision
+answered, parked, released, closed or added, or a note to Starship, shows in
+NEEDS YOU within a second or two. --data and --plain catch the calls up the same
+way before they print a cached record. Every writing key
 goes through a path Starship already has and acts only on the highlighted row:
 an answer, keep, ask-for-changes or talk becomes a captain inbox note
 (bin/fm-inbox.sh note) that Starship acts on under its own rules, so the pane
@@ -91,6 +104,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -325,6 +339,11 @@ def load_snapshot(home: str) -> Dict[str, Any]:
     return json.loads(out.stdout)
 
 
+def live_tasks(snapshot: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The snapshot's ordinary tasks; second mates are not work."""
+    return [t for t in snapshot.get("tasks") or [] if t.get("kind") != "secondmate" and t.get("id")]
+
+
 def buckets_for(tasks: List[Dict[str, Any]]) -> Dict[str, str]:
     """Each task's field from the status bar's own fold, in one bash call."""
     lines = []
@@ -353,18 +372,8 @@ def buckets_for(tasks: List[Dict[str, Any]]) -> Dict[str, str]:
     return result
 
 
-def owner_calls(home: str, buckets: Dict[str, str]
-                ) -> Tuple[List[str], List[str], List[Dict[str, Any]]]:
-    """The owner's calls, from fm_owner_calls in bin/fm-fleet-status-lib.sh.
-
-    That function is the one definition of what really waits on the owner, the
-    count the bridge strip and the tap page show too: the held decisions that
-    wait on him now, and the PRs and ready branches waiting for his merge word.
-    Its decisions come from the backlog as the home's tasks-axi adapter reads it
-    (`fm-fleet-snapshot.sh --axi-backlog`), read once here and handed over with
-    the buckets the pane already read; those records come back too, so a held
-    decision the markdown snapshot lacks can still be drawn.
-    """
+def axi_backlog(home: str) -> Dict[str, Any]:
+    """The backlog as the home's tasks-axi adapter reads it (`fm-fleet-snapshot.sh --axi-backlog`)."""
     state = os.path.join(home, "state")
     read = subprocess.run(["bash", os.path.join(BIN, "fm-fleet-snapshot.sh"), "--axi-backlog"],
                           capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL,
@@ -375,6 +384,24 @@ def owner_calls(home: str, buckets: Dict[str, str]
         backlog = None
     if not isinstance(backlog, dict):
         raise RuntimeError("could not read what waits on the owner")
+    return backlog
+
+
+def owner_calls(home: str, buckets: Dict[str, str], backlog: Optional[Dict[str, Any]] = None
+                ) -> Tuple[List[str], List[str], List[Dict[str, Any]]]:
+    """The owner's calls, from fm_owner_calls in bin/fm-fleet-status-lib.sh.
+
+    That function is the one definition of what really waits on the owner, the
+    count the bridge strip and the tap page show too: the held decisions that
+    wait on him now, and the PRs and ready branches waiting for his merge word.
+    Its decisions come from the backlog as the home's tasks-axi adapter reads it
+    (axi_backlog, read here unless the caller already did) and handed over with
+    the buckets the pane already read; those records come back too, so a held
+    decision the markdown snapshot lacks can still be drawn.
+    """
+    state = os.path.join(home, "state")
+    if backlog is None:
+        backlog = axi_backlog(home)
     with tempfile.TemporaryDirectory(prefix="fm-factory-calls.") as tmp:
         bucket_file = os.path.join(tmp, "buckets")
         backlog_file = os.path.join(tmp, "backlog.json")
@@ -420,6 +447,29 @@ def decision_shapes(home: str, ids: List[str]) -> Dict[str, Dict[str, Any]]:
     for shape in data.get("decisions") or []:
         if isinstance(shape, dict) and shape.get("id") in ids:
             shapes[shape["id"]] = shape
+    return shapes
+
+
+def shapes_for(home: str, ids: List[str], rows: Dict[str, Dict[str, Any]],
+               known: Optional[Dict[str, Dict[str, Any]]]) -> Dict[str, Dict[str, Any]]:
+    """decision_shapes for <ids>, reusing a shape in <known> while its question is unchanged.
+
+    A shape read for a question is kept only while that question still has the
+    hold stamp it was read under; a question held again reads its shape anew.
+    Shapes read here are added to <known>, so the caller can keep them.
+    """
+    if known is None:
+        return decision_shapes(home, ids)
+    shapes = {}
+    for ident in ids:
+        shape = known.get(ident)
+        held = parse_iso((rows.get(ident) or {}).get("hold_set"))
+        if shape and held is not None and parse_iso(shape.get("held_since")) == held:
+            shapes[ident] = shape
+    missing = [ident for ident in ids if ident not in shapes]
+    fetched = decision_shapes(home, missing)
+    known.update(fetched)
+    shapes.update(fetched)
     return shapes
 
 
@@ -614,8 +664,10 @@ def held_state(row: Dict[str, Any]) -> str:
 
 
 def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[int] = None,
-                 activity: Optional[Dict[str, int]] = None, notes: Optional[List[Dict[str, Any]]] = None
-                 ) -> Dict[str, Any]:
+                 activity: Optional[Dict[str, int]] = None, notes: Optional[List[Dict[str, Any]]] = None,
+                 backlog: Optional[Dict[str, Any]] = None,
+                 known_shapes: Optional[Dict[str, Dict[str, Any]]] = None,
+                 buckets: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     factories, registry_source = load_registry(home)
     project_rows = load_projects(home)
     quiet_after = env_int("FM_FACTORY_QUIET_MINUTES", 15) * 60
@@ -659,15 +711,16 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
         factory.update(steered_by=steering.get(factory["id"], "Starship"), jobs=[], needs=[], talk=[])
 
     rows = [r for r in (snapshot.get("backlog") or {}).get("records") or [] if r.get("structured") and r.get("id")]
-    tasks = [t for t in snapshot.get("tasks") or [] if t.get("kind") != "secondmate" and t.get("id")]
-    buckets = buckets_for(tasks)
+    tasks = live_tasks(snapshot)
+    if buckets is None:
+        buckets = buckets_for(tasks)
     # NEEDS YOU is exactly the owner's calls, the one count the bridge strip and
     # the tap page show; a worker's question, a pause or the checks never are.
-    decision_ids, merge_ids, adapter_rows = owner_calls(home, buckets)
+    decision_ids, merge_ids, adapter_rows = owner_calls(home, buckets, backlog)
     known = {r["id"] for r in rows}
     rows += [r for r in adapter_rows if r.get("hold_bucket") and r["id"] not in known]
     row_of = {r["id"]: r for r in rows}
-    shapes = decision_shapes(home, decision_ids)
+    shapes = shapes_for(home, decision_ids, {r["id"]: r for r in adapter_rows}, known_shapes)
     needs: List[Dict[str, Any]] = []
     feed: List[Dict[str, Any]] = []
     titles: Dict[str, str] = {}
@@ -990,19 +1043,125 @@ def last_look(home: str) -> Optional[int]:
     return int(text) if text.isdigit() else None
 
 
+def calls_signal(home: str) -> str:
+    """The owner's calls signal (bin/fm-owner-calls-signal-lib.sh), or "" when it cannot be read."""
+    script = '. "$1/fm-owner-calls-signal-lib.sh" && fm_owner_calls_signal "$2"'
+    try:
+        out = subprocess.run(["bash", "-c", script, "fm-factory", BIN, os.path.join(home, "state")],
+                             capture_output=True, text=True, timeout=10, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return out.stdout.strip() if out.returncode == 0 else ""
+
+
+def snapshot_age(record: Dict[str, Any]) -> int:
+    """Seconds since the record's slow fleet reading was taken."""
+    return now_epoch() - int(record.get("snapshot_epoch") or record.get("as_of_epoch") or 0)
+
+
+def basis_path(home: str) -> str:
+    return os.path.join(pane_dir(home), "basis.json")
+
+
 def refresh(home: str) -> Dict[str, Any]:
     now = now_epoch()
+    # Taken before anything is read, so a call that changes meanwhile is caught.
+    signal_at_start = calls_signal(home)
     snapshot = load_snapshot(home)
     running = [t["id"] for t in snapshot.get("tasks") or []
                if (t.get("current_state") or {}).get("state") == "working"
                and (t.get("current_state") or {}).get("source") == "pane"]
     activity = pane_activity(home, running, now, write=True)
+    shapes: Dict[str, Dict[str, Any]] = {}
+    buckets = buckets_for(live_tasks(snapshot))
     record = build_record(home, now, snapshot, since=last_look(home), activity=activity,
-                          notes=inbox_receipts(home))
+                          notes=inbox_receipts(home), known_shapes=shapes, buckets=buckets)
+    record.update(snapshot_epoch=now, calls_signal=signal_at_start)
+    try:
+        write_atomic(basis_path(home), json.dumps({"taken_epoch": now, "snapshot": snapshot,
+                                                   "activity": activity, "shapes": shapes,
+                                                   "buckets": buckets}))
+        kept = True
+    except OSError:
+        kept = False
+    # The slow reading took long enough for a call to change under it; catch the
+    # calls up from this same reading rather than publish them behind.
+    if kept and signal_at_start and calls_signal(home) != signal_at_start:
+        try:
+            return refresh_calls(home)
+        except (RuntimeError, OSError, ValueError, subprocess.SubprocessError):
+            pass
     try:
         write_atomic(os.path.join(pane_dir(home), "record.json"), json.dumps(record, indent=1))
     except OSError:
         pass
+    return record
+
+
+def load_backlog(home: str) -> Dict[str, Any]:
+    """The backlog part of a fleet snapshot, read on its own (`fm-fleet-snapshot.sh --backlog`)."""
+    seam = os.environ.get("FM_FACTORY_SNAPSHOT")
+    if seam:
+        with open(seam, encoding="utf-8") as handle:
+            return json.load(handle).get("backlog") or {}
+    out = subprocess.run(["bash", os.path.join(BIN, "fm-fleet-snapshot.sh"), "--backlog"],
+                         capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL,
+                         env=dict(os.environ, FM_HOME=home))
+    if out.returncode != 0:
+        raise RuntimeError("the backlog could not be read")
+    return json.loads(out.stdout)
+
+
+def side_by_side(*reads):
+    """Run each read in its own thread and return their results in order; the first failure is raised."""
+    results: List[Any] = [None] * len(reads)
+    errors: List[BaseException] = []
+
+    def run(index: int) -> None:
+        try:
+            results[index] = reads[index]()
+        except Exception as error:  # handed back to the caller below
+            errors.append(error)
+
+    threads = [threading.Thread(target=run, args=(index,)) for index in range(len(reads))]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    if errors:
+        raise errors[0]
+    return results
+
+
+def refresh_calls(home: str) -> Dict[str, Any]:
+    """Rebuild the record with fresh owner's calls on the last slow fleet reading.
+
+    The slow part of a refresh is reading the workers. A decision answered,
+    parked, released, closed or added, or a note to Starship, changes only the
+    backlog and the inbox, so those are read again (side by side) and the record
+    is rebuilt on the workers as the last full refresh read them: the next call
+    is on screen within a second or two instead of at the next full refresh.
+    """
+    try:
+        basis = json.loads(read_text(basis_path(home), 256_000_000) or "null")
+    except ValueError:
+        basis = None
+    if not isinstance(basis, dict) or not isinstance(basis.get("snapshot"), dict):
+        return refresh(home)
+    signal_at_start = calls_signal(home)
+    backlog, axi, notes = side_by_side(lambda: load_backlog(home), lambda: axi_backlog(home),
+                                       lambda: inbox_receipts(home))
+    snapshot = dict(basis["snapshot"], backlog=backlog)
+    activity = {k: v for k, v in (basis.get("activity") or {}).items() if isinstance(v, int)}
+    buckets = basis.get("buckets")
+    record = build_record(home, now_epoch(), snapshot, since=last_look(home), activity=activity,
+                          notes=notes, backlog=axi, known_shapes=dict(basis.get("shapes") or {}),
+                          buckets=buckets if isinstance(buckets, dict) else None)
+    record.update(snapshot_epoch=int(basis.get("taken_epoch") or 0), calls_signal=signal_at_start)
+    newer = cached(home)
+    if newer and int(newer.get("snapshot_epoch") or 0) > record["snapshot_epoch"]:
+        return newer
+    write_atomic(os.path.join(pane_dir(home), "record.json"), json.dumps(record, indent=1))
     return record
 
 
@@ -1016,13 +1175,17 @@ def cached(home: str) -> Optional[Dict[str, Any]]:
     return None
 
 
-def refresh_in_background(home: str) -> None:
-    """Start one detached refresh unless one is already under way."""
-    lock = os.path.join(pane_dir(home), "refresh.lock")
+def in_background(home: str, command: str, lock_name: str, stale_after: int, keep_lock_on_failure: bool) -> None:
+    """Start one detached `fm-factory.py <command>` unless one is already under way.
+
+    A run that fails can keep its lock until it is <stale_after> seconds old, so
+    a pane that checks every second retries a failing read at that pace instead.
+    """
+    lock = os.path.join(pane_dir(home), lock_name)
     try:
         os.makedirs(pane_dir(home), exist_ok=True)
         age = time.time() - os.stat(lock).st_mtime if os.path.exists(lock) else None
-        if age is not None and age < 180:
+        if age is not None and age < stale_after:
             return
         if age is not None:
             os.rmdir(lock)
@@ -1030,17 +1193,34 @@ def refresh_in_background(home: str) -> None:
     except OSError:
         return
     script = os.path.realpath(__file__)
-    subprocess.Popen(["/bin/sh", "-c", 'python3 "$1" refresh >/dev/null 2>&1; rmdir "$2" 2>/dev/null',
-                      "fm-factory", script, lock],
+    joiner = "&&" if keep_lock_on_failure else ";"
+    subprocess.Popen(["/bin/sh", "-c", 'python3 "$1" "$3" >/dev/null 2>&1 %s rmdir "$2" 2>/dev/null' % joiner,
+                      "fm-factory", script, lock, command],
                      stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                      start_new_session=True, env=dict(os.environ, FM_HOME=home))
+
+
+def refresh_in_background(home: str) -> None:
+    """Start one detached full refresh unless one is already under way."""
+    in_background(home, "refresh", "refresh.lock", 180, False)
+
+
+def refresh_calls_in_background(home: str) -> None:
+    """Start one detached refresh of the owner's calls unless one is already under way."""
+    in_background(home, "refresh-calls", "calls.lock", 15, True)
 
 
 def current_record(home: str, fresh: bool) -> Dict[str, Any]:
     if not fresh:
         record = cached(home)
-        if record and now_epoch() - int(record.get("as_of_epoch") or 0) <= env_int("FM_FACTORY_TTL", 20):
-            return record
+        if record and snapshot_age(record) <= env_int("FM_FACTORY_TTL", 20):
+            signal = calls_signal(home)
+            if not signal or record.get("calls_signal") == signal:
+                return record
+            try:
+                return refresh_calls(home)
+            except (RuntimeError, OSError, ValueError, subprocess.SubprocessError):
+                pass
     return refresh(home)
 
 
@@ -1685,7 +1865,8 @@ class Pane:
         if record is None:
             record = refresh(home)
         self.view = View(record, opened=opened, in_tab=in_tab, item=item)
-        self.loaded = mtime(os.path.join(pane_dir(home), "record.json")) or 0
+        self.loaded = self.record_stamp()
+        self.calls_checked = 0.0
         self.focus_file = os.environ.get("FM_FACTORY_FOCUS_FILE") or ""
 
     def take_focus(self) -> bool:
@@ -1707,17 +1888,31 @@ class Pane:
     def say(self, text: str, colour: str = "green", seconds: int = 8) -> None:
         self.view.notice = (text, colour, time.time() + seconds)
 
+    def record_stamp(self) -> int:
+        try:
+            return os.stat(os.path.join(pane_dir(self.home), "record.json")).st_mtime_ns
+        except OSError:
+            return 0
+
     def reload(self) -> None:
-        path = os.path.join(pane_dir(self.home), "record.json")
-        stamp = mtime(path) or 0
+        stamp = self.record_stamp()
         if stamp != self.loaded:
             record = cached(self.home)
             if record:
                 self.view.adopt(record)
                 self.loaded = stamp
-        age = now_epoch() - int(self.view.record.get("as_of_epoch") or 0)
-        if age > env_int("FM_FACTORY_TTL", 20):
+        if snapshot_age(self.view.record) > env_int("FM_FACTORY_TTL", 20):
             refresh_in_background(self.home)
+
+    def watch_calls(self) -> None:
+        """Rebuild the owner's calls once their signal moves past the record's, checking at most once a second."""
+        now = time.monotonic()
+        if now - self.calls_checked < 1:
+            return
+        self.calls_checked = now
+        signal = calls_signal(self.home)
+        if signal and signal != self.view.record.get("calls_signal"):
+            refresh_calls_in_background(self.home)
 
     def factory_of_stop(self) -> Optional[str]:
         if self.view.opened:
@@ -1914,13 +2109,11 @@ def live(pane: Pane) -> None:
     # The alternate screen, no cursor, no autowrap, and mouse button and wheel
     # reports in SGR form, which Herdr passes to a pane that asks for them.
     out.write("\x1b[?1049h\x1b[?25l\x1b[?7l\x1b[?1000h\x1b[?1006h")
-    last_reload = 0.0
     try:
         tty.setraw(fd)
         while True:
-            if time.time() - last_reload > 3:
-                pane.reload()
-                last_reload = time.time()
+            pane.reload()
+            pane.watch_calls()
             pane.take_focus()
             size = os.get_terminal_size()
             view = pane.view
@@ -2086,7 +2279,7 @@ def follow(home: str, task_id: str) -> None:
 def main(argv: List[str]) -> int:
     parser = argparse.ArgumentParser(prog="fm-factory.py", add_help=True,
                                      description="The Factory pane. See the header of this file.")
-    parser.add_argument("command", nargs="?", choices=["view", "follow", "open-tab", "refresh"])
+    parser.add_argument("command", nargs="?", choices=["view", "follow", "open-tab", "refresh", "refresh-calls"])
     parser.add_argument("target", nargs="?")
     parser.add_argument("--data", action="store_true")
     parser.add_argument("--plain", action="store_true")
@@ -2118,6 +2311,9 @@ def main(argv: List[str]) -> int:
             return 0
         if args.command == "refresh":
             refresh(home)
+            return 0
+        if args.command == "refresh-calls":
+            refresh_calls(home)
             return 0
         if args.command == "view":
             if args.origin_tab:

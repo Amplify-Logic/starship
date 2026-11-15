@@ -52,6 +52,12 @@
 #     this command exists to prevent. Lifecycle transitions refuse the same file.
 # Otherwise the exit status is tasks-axi's own, unless decoding a read fails;
 # in that case the decoder's nonzero status is returned.
+#
+# Every command other than a read (`show`, `view`, `list`, the dashboard and
+# help) may change a call, so once tasks-axi returns it moves the owner's calls
+# signal (bin/fm-owner-calls-signal-lib.sh) of the home that owns the backlog,
+# the data directory's parent: the bridge strip and the Factory pane then show
+# the next call at once, whatever adapter keeps the rows.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -64,6 +70,8 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 . "$SCRIPT_DIR/fm-backlog-transition-lib.sh"
 # shellcheck source=bin/fm-hold-reason-lib.sh disable=SC1091
 . "$SCRIPT_DIR/fm-hold-reason-lib.sh"
+# shellcheck source=bin/fm-owner-calls-signal-lib.sh disable=SC1091
+. "$SCRIPT_DIR/fm-owner-calls-signal-lib.sh"
 
 usage() {
   awk '
@@ -150,5 +158,11 @@ case "${1:-}" in
     tasks-axi ${ARGS[@]+"${ARGS[@]}"} | fm_hold_reason_decode_stream
     exit $?
     ;;
+  ''|-h|--help)
+    exec tasks-axi ${ARGS[@]+"${ARGS[@]}"}
+    ;;
 esac
-exec tasks-axi ${ARGS[@]+"${ARGS[@]}"}
+status=0
+tasks-axi ${ARGS[@]+"${ARGS[@]}"} || status=$?
+fm_owner_calls_touch "$FM_BACKLOG_AXI_ROOT/state"
+exit "$status"
