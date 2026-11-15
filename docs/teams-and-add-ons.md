@@ -34,6 +34,8 @@ If a tool needs such details, the add-on carries the tool and each home names it
 | A tool, skill or hook only your team needs | A change to the team add-on | The add-on's owner, usually the team lead. |
 | Your own preferences, projects or notes | Your own home's private files | You. Nothing leaves your machine. |
 
+Your first mate changes an add-on through workers once the add-on is registered as an ordinary project, which first setup may already have done for your own.
+
 When in doubt, start in the narrowest layer that works and move a tool up a layer only once it is clearly useful more widely.
 An add-on keeps the public repository's layout, so moving a tool between layers means moving its files.
 

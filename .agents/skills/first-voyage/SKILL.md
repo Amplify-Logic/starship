@@ -103,6 +103,7 @@ Then run `bin/fm-addon.sh guards`, which puts the push checks and the private wo
 Repair every `guard problem:` line before step 5; a role that may publish can only come from a file the owner wrote, so ask whether they maintain Starship and remove it only on their word.
 Tell the owner in one line where their private repository is, that changes of their own go there, and that every push from their home is now checked so nothing personal reaches public Starship.
 They put words that must never appear in public, such as people's and customers' names, in their private word list, `config/leak-words`; mention it in that same line.
+Once the repository exists, you may load `project-management` and register the add-on as a project, with the flat `no-mistakes` posture and `+yolo` off, so a change they ask for to how you work lands there from the first day, as a pull request that merges only on their word.
 
 ## 5. The first job
 
@@ -129,7 +130,7 @@ When the report lands, follow `scout-completion` and hand over the findings as f
 Say what that one report just proved, in their words: their GitHub access to the project, a worker starting in its own copy, its sign-in, and the report coming back.
 Close with one line: they are set up, from here they ask for anything, and the handbook (`docs/handbook.md`) has a first-week path when they want it.
 
-The add-on is never a project: it never counts as the first project, and is never registered as one.
+The add-on never counts as the first project, and the project registry rebuild never registers it.
 If the owner has no repository they can see on GitHub yet, say what they need (a repository their account can open, or an invitation from its owner) and stop after step 4, saying they can start the first job any time by giving a repository's address.
 
 ## Recording
@@ -155,7 +156,7 @@ If the owner has no repository they can see on GitHub yet, say what they need (a
 - Never guess a number in anything a customer will read.
 ```
 
-`config/brief-include.md` holds rule 1, as it stands after step 3, in its worker form, `config/addon` and `config/leak-words` hold what step 4's scripts wrote, and `data/projects.md` holds the first project as `project-management` registers it.
+`config/brief-include.md` holds rule 1, as it stands after step 3, in its worker form, `config/addon` and `config/leak-words` hold what step 4's scripts wrote, and `data/projects.md` holds the first project, and the add-on when step 4 registered it, as `project-management` registers them.
 Nothing else is written: no learnings, no backlog item beyond the first job's own, no second file.
 Changes later come the way the handbook says: by telling the first mate.
 

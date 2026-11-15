@@ -824,7 +824,8 @@ An add-on keeps this repository's layout, so a tool moves between the two by mov
 `/updatefirstmate` ("update starship") fast-forwards the add-on from its origin with the same guards as the shared code and relinks its skills, and a remote second mate's home fast-forwards the add-on its own `config/addon` names.
 `bin/fm-home-port.sh` carries `config/addon` to another machine, clones the add-on during its one-command handoff, and fails `verify` while the checkout is missing, and `bin/fm-linux-setup.sh --addon <owner>/<repo>` names one on a new Linux machine.
 Personal tools that serve one home only, such as glasses tools or device configuration staging, live in that home's own add-on rather than here.
-The add-on checkout is never a project: rebuilding the project registry from the clones under `projects/` skips the checkout `bin/fm-addon.sh root` names.
+The add-on is never registered automatically: rebuilding the project registry from the clones under `projects/` skips the checkout `bin/fm-addon.sh root` names.
+Register the add-on as an ordinary project when workers should change it; that is how an owner builds their own changes into it, and first setup may register a new owner's add-on this way.
 The add-on is home-local and is not inherited by secondmate homes, though its `leak-words` list reaches them inside the inherited word list.
 `bin/fm-addon.sh` owns the configuration, the hook points and their contract, and the install.
 
