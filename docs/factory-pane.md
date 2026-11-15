@@ -59,6 +59,7 @@ The [factory registry](configuration.md#factory-registry-datafactoriesmd) names 
 
 When the screen is taller than the pane, the count line stays on top and the keys at the bottom while everything between them scrolls.
 The highlight keeps itself in sight as it moves, `pgup`, `pgdn` and the mouse wheel scroll the view, and the row under the count line and the row above the keys say how many lines are out of sight above or below.
+The pane asks the terminal for mouse reports to see the wheel, so Herdr's own text selection does not work inside it.
 
 Colour only repeats what the words already say: cyan is where you are, amber is work under way, green is done, red is waiting for you.
 
