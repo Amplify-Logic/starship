@@ -222,6 +222,7 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-owner-calls-signal-lib.sh` | The one cheap signal that the owner's calls may have changed, read once a second by the bridge strip and the Factory pane and moved by every command that changes a call (docs/bridge-strip.md) |
 | `fm-bridge-strip.sh`     | Install, show, run, and remove the read-only Starship bridge strip across the top of a Herdr workspace: wordmark, crew lamps, the most urgent call, a red alert, the night shift, and battery (docs/bridge-strip.md) |
 | `fm-factory-pane.sh`     | Install, show, run, and remove the Factory pane, every factory at a glance in a Herdr pane (docs/factory-pane.md) |
+| `fm-desk.py`             | The `starship` desk command: open the owner's whole Herdr workspace and its Terminal views from `config/desk-layout`, and read a running desk back as a layout (docs/desk.md) |
 | `fm-factory.py`          | Build the factory record (`--data`, `--plain`), draw the live Factory pane, and open a factory's own tab with live copies of its workers (docs/factory-pane.md) |
 | `fm-codex-session-metrics-lib.sh` | Supply the Codex companion's real context and provider-quota figures from the exact followed session and the account owner (docs/status-bar.md) |
 | `fm-status-cache-lib.sh` | Shared status-row cache freshness, staleness bounds, and single-refresh claim ownership |

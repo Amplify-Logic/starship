@@ -15,6 +15,7 @@ Start with the directory layout, then use the setting reference for the behavior
 | Persistent secondmates | [Secondmate routes](#secondmate-routes-datasecondmatesmd) |
 | Naming the factories the Factory pane shows | [Factory registry](#factory-registry-datafactoriesmd) |
 | The night shift line on the bridge strip | [Night shift window](#night-shift-window-confignight-shift-window) |
+| What `starship` opens in Herdr: tabs, panes, Terminal windows and the sidebar | [Desk layout](#desk-layout-configdesk-layout) |
 | Review bots on owned GitHub pull requests | [Contribution review bots](#contribution-review-bots-configcontribution-review-bots) |
 | Starter settings for a new home: which model does which job, transcription words, and how hard the first mate thinks | [Starter settings](#starter-settings-first-launch), [crew dispatch profiles](#crew-dispatch-profiles-configcrew-dispatchjson), [speech-to-text vocabulary](#speech-to-text-vocabulary-configstt-vocabulary), and [primary effort](#primary-effort-configprimary-effort) |
 | Spoken replies | [Desk voice-out](#desk-voice-out-configspeak) |
@@ -1710,6 +1711,35 @@ An end at or before the start is on the next day.
 The [bridge strip](bridge-strip.md#what-it-shows) reads it to say when the night shift starts, that it is on, and in the morning how much finished in it.
 Without the file, or with a line of any other shape, the strip shows no night shift.
 `fm_night_shift_window` in `bin/fm-fleet-status-lib.sh` owns how the window and its evening and morning are read.
+
+## Desk layout (config/desk-layout)
+
+The optional local `config/desk-layout` is what the [desk](desk.md) command `starship` opens; without it, `starship` stops and says how to write one.
+`starship layout` prints the running session in this format as a starting file.
+One setting per line as `key = value`; blank lines and lines starting with `#` are ignored, and an unknown key or a bad value stops the command with its line number.
+
+```text
+workspace = starship
+main = Bridge
+sidebar = collapsed
+firstmate = firstmate claude-opus
+tab = Sample Shop | factory sample-shop
+tab = Recipe Box | factory recipe-box
+tab = Scratch
+view = Clear Dark | 14
+view = Pro | 10
+```
+
+The desk always opens Herdr's default session.
+
+- `workspace` is the label of the workspace the desk fills in, `starship` unless set.
+- `main` is the label of the main tab, the one holding the first mate, the bridge strip and the Factory pane, which the desk always shows; without it, or when no tab carries that label, the main tab is the workspace's first tab.
+  The desk never renames a tab that exists; it gives the label only to the first tab of a workspace it creates itself.
+- `sidebar` is `collapsed` or `open`; when set, the desk writes Herdr's `[ui] sidebar_start_collapsed` to match, and leaves Herdr's config alone otherwise.
+- `firstmate` is the command typed into the main tab's idle first-mate pane; without it the desk only notes an idle pane.
+- Each `tab` line names one tab besides the main tab, in order; `| factory <id>` makes it that factory's page, by its id in the [factory registry](#factory-registry-datafactoriesmd), and a tab without it is a plain shell.
+  A factory tab is named after the factory in the registry; the desk finds it by the tab the Factory pane recorded for it, else by the label.
+- Each `view` line is one Terminal window: a Terminal profile name, then optionally `| <font size>`; an empty profile name uses Terminal's default.
 
 ## Secondmate routes (data/secondmates.md)
 
