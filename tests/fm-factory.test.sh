@@ -764,6 +764,93 @@ test_a_note_reaches_starship_through_the_real_inbox() {
   pass "factory pane: an answer is a captain inbox note, saved once per question under its request id"
 }
 
+# park-world <id>: defer a held decision to a date, as firstmate parks it: the
+# fixture backlog row as tasks-axi rewrites it, then the parking command itself
+# through bin/fm-tasks-axi.sh, whose write the stand-in adapter takes as done.
+cat > "$BINDIR/park-world" <<SH
+#!/usr/bin/env bash
+python3 - "\$FM_FACTORY_SNAPSHOT" "\$1" <<'PY'
+import json, sys
+path, ident = sys.argv[1], sys.argv[2]
+world = json.load(open(path))
+for row in world["backlog"]["records"]:
+    if row["id"] == ident:
+        row.update(hold_bucket="dated", hold_until="2099-01-01", captain_actionable=False)
+json.dump(world, open(path, "w"))
+PY
+exec bash "$ROOT/bin/fm-tasks-axi.sh" hold "\$1" --until 2099-01-01 >/dev/null
+SH
+chmod +x "$BINDIR/park-world"
+
+# watch_pane <first> <next> <command>: run the live overview under a pty, and
+# once it shows <first>, run <command> and print how many seconds pass until
+# it shows <next> (or `never`).
+watch_pane() {
+  python3 - "$FACTORY" "$@" <<'PY'
+import fcntl, os, pty, re, select, struct, subprocess, sys, termios, time
+factory, first, nxt, command = sys.argv[1:5]
+pid, fd = pty.fork()
+if pid == 0:
+    fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack("HHHH", 50, 100, 0, 0))
+    os.execvp("python3", ["python3", factory, "view"])
+seen = b""
+def drain(seconds, until=None, start=0):
+    global seen
+    end = time.time() + seconds
+    while time.time() < end:
+        if until and until.encode() in re.sub(rb"\x1b\[[0-9;?]*[A-Za-z]", b"", seen[start:]):
+            return True
+        r, _, _ = select.select([fd], [], [], 0.05)
+        if r:
+            try:
+                seen += os.read(fd, 65536)
+            except OSError:
+                break
+    return False
+result = "no first screen"
+if drain(20, until=first):
+    mark = len(seen)
+    began = time.time()
+    subprocess.run(command, shell=True, check=True)
+    result = "%.1f" % (time.time() - began) if drain(15, until=nxt, start=mark) else "never"
+print(result)
+os.write(fd, b"q")
+end = time.time() + 15
+while True:   # keep reading so its last writes drain and it can exit
+    done, _ = os.waitpid(pid, os.WNOHANG)
+    if done:
+        break
+    if time.time() >= end:
+        os.kill(pid, 9)
+        os.waitpid(pid, 0)
+        break
+    drain(0.3)
+PY
+}
+
+# On 2026-11-15 the owner parked a held decision and it stayed on screen: the
+# pane refreshed its record only every twenty seconds, and a whole refresh
+# reads every worker. A changed call now rebuilds the record on its own.
+test_a_parked_decision_leaves_the_live_pane_within_seconds() {
+  local took
+  reset_case
+  write_registry
+  write_world
+  python3 "$FACTORY" refresh || fail "the first record could not be built"
+  took=$(watch_pane '3 need you' '2 need you' "$BINDIR/park-world garden-chart") \
+    || fail "the live pane could not be driven"
+  case "$took" in
+    never|'no first screen'|'') fail "the live pane still showed the parked decision: $took" ;;
+  esac
+  awk -v t="$took" 'BEGIN { exit !(t < 4.5) }' || fail "the live pane took ${took}s to drop the parked decision"
+  cp "$HOME_FIX/state/factory/record.json" "$TMP_ROOT/case$CASE/record.json" || fail "the pane wrote no record"
+  assert_equals "$(q '[.needs_you[].id] | join(" ")')" "shop-provider garden-share" \
+    "the parked decision is still in the record"
+  assert_equals "$(q '[.factories[] | select(.id == "sample-shop") | .jobs[] | select(.id == "shop-search") | .state] | join("")')" \
+    "running" "the workers were lost from the record"
+  pass "factory pane: a parked decision leaves the live pane within seconds, without a whole refresh (${took}s)"
+}
+
 test_the_highlight_and_open_boxes_follow_the_record() {
   reset_case
   write_registry
@@ -984,6 +1071,7 @@ fm_test_run \
   test_writing_keys_go_through_the_inbox_and_act_on_the_highlighted_row \
   test_a_note_reaches_starship_through_the_real_inbox \
   test_the_highlight_and_open_boxes_follow_the_record \
+  test_a_parked_decision_leaves_the_live_pane_within_seconds \
   test_talking_never_changes_who_steers \
   test_enter_opens_the_factory_tab_with_its_live_workers \
   test_a_live_copy_shows_text_at_the_top_of_a_taller_pane \

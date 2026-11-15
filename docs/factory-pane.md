@@ -101,12 +101,15 @@ Who steers is the owner's stated choice of whether he is working with that crew 
 `bin/fm-factory.py --data` prints the record the screen is drawn from, and `--plain` prints the screen as text, so an agent reading the pane loses nothing.
 `--plain --factory <id>` prints one factory's page, and `--plain --height <rows>` prints only what a pane that tall shows when it opens.
 Both use the cached record while it is younger than 20 seconds and build a fresh one otherwise.
+The owner's calls do not wait for that: when their change signal (`bin/fm-owner-calls-signal-lib.sh`) has moved past the one the record was built under, the record is rebuilt with a fresh read of the backlog and the inbox on the workers as the last full refresh read them, which takes a second or two rather than a full refresh.
+The live pane checks that signal on every frame, so an answered, parked, released, closed or added decision, or a note to Starship, changes NEEDS YOU within about two seconds.
 
 The record's schema is `fm-factory.v1`:
 
 | Field | What it holds |
 | --- | --- |
 | `as_of`, `since` | When the record was built and the start of SINCE YOU LAST LOOKED, as UTC times and epochs. |
+| `snapshot_epoch`, `calls_signal` | When the workers in it were read, and the owner's calls signal its calls were read under. |
 | `counts`, `count_line` | Running jobs, items that need you, and idle factories. |
 | `needs_you[]` | Each of the owner's calls: its `id`, `factory`, `kind` (`question` or `finished work`), `title`, `ask`, `why`, `options[]` (`key`, `label`, `suggested`), `suggested_by`, a `recommendation` that is not one of the options, `holds_up[]`, `since`, `pr`, and `for`, the person it waits on. |
 | `factories[]` | Each factory: `id`, `name`, `about`, `projects`, `steered_by`, `state`, `idle_since`, `crew`, `needs` (the ids of its items in `needs_you`), `jobs[]`, `next`, `rules`, `learned`, and `talk`. |
@@ -131,6 +134,7 @@ Every state is a word: a job is `running`, `waiting on you`, `ready for you`, `s
 | Rules and what it has learned | The factory registry |
 
 The pane text check reads each running worker's pane through `bin/fm-peek.sh` once per record and remembers when it last changed in `state/factory/activity.json`.
+Each full refresh also keeps the fleet reading it was built from in `state/factory/basis.json`, which a rebuild of the owner's calls starts from.
 
 ### Stating the current step
 
@@ -160,5 +164,5 @@ An item the record does not hold yet keeps its place for up to a minute while a 
 
 ## Verification
 
-`tests/fm-factory.test.sh` builds a fixture home of sample factories and a fixture fleet reading, and checks the record and the plain screen word for word, the quiet job, the registry fallback, the writing keys pressed in the real live view, and the Herdr calls behind the factory tab and the plugin against a stand-in Herdr.
+`tests/fm-factory.test.sh` builds a fixture home of sample factories and a fixture fleet reading, and checks the record and the plain screen word for word, the quiet job, the registry fallback, the writing keys pressed in the real live view, how soon a parked decision leaves the live view, and the Herdr calls behind the factory tab and the plugin against a stand-in Herdr.
 `tests/fm-tap-desk.test.sh` checks on one real backlog that the bridge strip, this pane, and the tap page show the same count of the owner's calls, and that the pane shows a question's recorded options.

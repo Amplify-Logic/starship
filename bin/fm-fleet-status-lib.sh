@@ -106,6 +106,12 @@
 # reported as zero to stand in for "not read yet", because zero live workers is
 # a real and meaningful fleet state that the captain must be able to trust.
 #
+# The owner's calls (ready, decisions and the first call) are the exception to
+# that cadence. They are a cheap backlog read, so the moment the owner's calls
+# signal moves they are recomputed on their own and shown in place of the
+# reading's, without waiting for the workers; the block above
+# _fm_fleet_calls_refresh_detached owns how.
+#
 # A cached reading also carries the exact set of tasks it covered. If the fleet
 # has changed since - a task torn down, another dispatched - or the reading is
 # past its maximum age, it is no longer a current statement about this fleet.
@@ -126,6 +132,8 @@
 #                            alive|dead|unknown (default: fm_backend_agent_alive
 #                            from bin/fm-backend.sh)
 #   FM_FLEET_STATE_NO_CACHE  1 to read inline and bypass the cache entirely
+#   FM_FLEET_CALLS_WAIT      wall-clock bound on, and claim for, one refresh of
+#                            the owner's calls on their own (default 20)
 set -u
 
 _FM_FLEET_LIB_DIR=$(CDPATH='' cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
@@ -133,6 +141,8 @@ _FM_FLEET_LIB_DIR=$(CDPATH='' cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")" && pw
 . "$_FM_FLEET_LIB_DIR/fm-status-cache-lib.sh"
 # shellcheck source=bin/fm-timeout-lib.sh
 . "$_FM_FLEET_LIB_DIR/fm-timeout-lib.sh"
+# shellcheck source=bin/fm-owner-calls-signal-lib.sh
+. "$_FM_FLEET_LIB_DIR/fm-owner-calls-signal-lib.sh"
 
 # _fm_fleet_now: current epoch, or failure when it cannot be read.
 _fm_fleet_now() {
@@ -601,20 +611,107 @@ _fm_fleet_liveness() {  # <meta> <busy: 1 when the fold read a busy pane worker>
   printf 'unknown'
 }
 
+# _fm_fleet_calls_fold: the owner's calls folded into the fields a reading
+# carries, tab separated:
+#   <ready> <decisions> <first-kind> <first-id> <first-title>
+# from one backlog read and <ready-list>, the space-separated ids of the tasks
+# whose work reads ready (`-` for none). The full fold and the calls-only
+# refresh below both fold the calls here, so the two never disagree. It fails,
+# printing nothing, when the backlog or the calls cannot be read.
+_fm_fleet_calls_fold() {  # <state-dir> <ready-list>
+  local state=$1 list=$2 readyfile backlogfile calls kind id rc=0
+  local ready=0 decisions=0 first_kind=- first_id=- first_title=-
+  local ids=()
+  [ "$list" = - ] || read -r -a ids <<<"$list"
+  # The ready tasks go in a file rather than a process substitution, whose
+  # descriptor bash may close before the function reading it gets there.
+  readyfile=$(mktemp "${TMPDIR:-/tmp}/fm-fleet-ready.XXXXXX") || return 1
+  backlogfile=$(mktemp "${TMPDIR:-/tmp}/fm-fleet-backlog.XXXXXX") || {
+    rm -f "$readyfile"
+    return 1
+  }
+  for id in ${ids[@]+"${ids[@]}"}; do printf '%s\tready\n' "$id"; done > "$readyfile"
+  # The backlog is read once here, so the first call's title comes from the
+  # same reading as the calls themselves.
+  if _fm_owner_backlog "$state" > "$backlogfile"; then
+    calls=$(fm_owner_calls "$state" "$readyfile" "$backlogfile") || rc=1
+  else
+    rc=1
+  fi
+  if [ "$rc" = 0 ]; then
+    while IFS=$'\t' read -r kind id; do
+      case "$kind" in
+        decision) ready=$((ready + 1)); decisions=$((decisions + 1)) ;;
+        merge) ready=$((ready + 1)) ;;
+        *) continue ;;
+      esac
+      if [ "$first_kind" = - ]; then
+        first_kind=$kind
+        first_id=$id
+        first_title=$(_fm_fleet_call_title "$state" "$backlogfile" "$id")
+      fi
+    done <<CALLS
+$calls
+CALLS
+  fi
+  rm -f "$readyfile" "$backlogfile"
+  [ "$rc" = 0 ] || return 1
+  printf '%s\t%s\t%s\t%s\t%s' "$ready" "$decisions" "$first_kind" "$first_id" "$first_title"
+}
+
+# The owner's calls between full readings. A full reading is slow because of
+# its workers, and it is refreshed only every FM_FLEET_STATE_TTL seconds. The
+# calls are only a backlog read, so whenever the owner's calls signal
+# (bin/fm-owner-calls-signal-lib.sh) has moved past the one a full reading was
+# taken under, they are recomputed on their own, from the same reading's ready
+# tasks, into state/.status-fleet-calls:
+#   <signal> <ready-list> <epoch> <ready> <decisions> <first-kind> <first-id>
+#   <first-title>
+# tab separated. A frame shows those calls in place of the full reading's only
+# while both the signal and the ready tasks still match, so a stale entry is
+# never shown and the slow reading is never refreshed for it.
+
+# _fm_fleet_calls_refresh_detached: start at most ONE bounded calls refresh,
+# claimed exactly as _fm_fleet_refresh_detached claims its fold, and return at
+# once. <signal> is the one the frame just read, so a call that changes while
+# the backlog is read leaves the entry behind the signal and the next frame
+# starts another.
+_fm_fleet_calls_refresh_detached() {  # <state-dir> <now> <ready-list> <signal>
+  local state=$1 now=$2 list=$3 signal=$4 cache bound
+  cache="$state/.status-fleet-calls"
+  bound=$(fm_status_ttl "${FM_FLEET_CALLS_WAIT:-}" 20)
+  fm_status_claim_refresh "$cache.refreshing" "$now" "$bound" || return 0
+  (
+    # shellcheck disable=SC2016 # the INNER shell's positional parameters.
+    calls=$(fm_run_timed "$bound" bash -c '
+      . "$0"
+      _fm_fleet_calls_fold "$1" "$2"
+    ' "$_FM_FLEET_LIB_DIR/fm-fleet-status-lib.sh" "$state" "$list" 2>/dev/null) \
+      || calls=
+    [ -z "$calls" ] || {
+      fm_status_cache_write "$cache" "$(printf '%s\t%s\t%s\t%s' "$signal" "$list" "$now" "$calls")"
+      rm -f "$cache.refreshing" 2>/dev/null || true
+    }
+  ) >/dev/null 2>&1 &
+  return 0
+}
+
 # _fm_fleet_collect: fold the canonical reader and the endpoint prober over every
 # ordinary task and print one reading:
 #   <stamp> <working> <stopped> <validating> <paused> <attention> <ready>
 #   <signature> <decisions> calls <failed> <lost> <night> <first-kind>
-#   <first-id> <first-title>
+#   <first-id> <first-title> <calls-signal> <ready-list>
 #
 # <decisions> and the `calls` mark come after the older fields, and the strip's
 # readings (the header's failed, lost, night and first call) after the mark, so a
 # reading written before them still parses for every older field;
 # fm_fleet_status_counts owns how such a reading is treated. An absent first
-# call is `-` in all three of its fields, and the title is last because it may
-# hold spaces; it never holds a tab. <ready> and <decisions> are fm_owner_calls over the
-# buckets this fold read, so they can count a held decision that has no task
-# record at all.
+# call is `-` in all three of its fields, and the title may hold spaces; it never
+# holds a tab. <ready> and <decisions> are fm_owner_calls over the buckets this
+# fold read, so they can count a held decision that has no task record at all.
+# <calls-signal> is the owner's calls signal taken before the fold, and
+# <ready-list> the ids whose work read ready, which a calls-only refresh folds
+# again (_fm_fleet_calls_fold).
 #
 # Every task field but stopped claims a task for itself: working is a live agent
 # on a task no state field claimed. Done work spends no endpoint probe at all,
@@ -636,12 +733,15 @@ _fm_fleet_liveness() {  # <meta> <busy: 1 when the fold read a busy pane worker>
 _fm_fleet_collect() {  # <state-dir> <now> <reader> [prober]
   local state=$1 now=$2 reader=$3 probe=${4:-} id bucket signature life busy line
   local working=0 stopped=0 validating=0 paused=0 attention=0 ready=0
-  local decisions=0 asked=0 answered=0 calls kind readyfile backlogfile
+  local decisions=0 asked=0 answered=0 calls calls_signal ready_list
   local failed=0 lost=0 night=- first_kind=- first_id=- first_title=- window ws we
   local word
   local ids=() ready_ids=()
   [ -n "$probe" ] || probe=${FM_FLEET_STATE_PROBE:-_fm_fleet_probe_default}
   _fm_fleet_classify_ready || return 1
+  # Taken before anything is read, so a call that changes during the fold
+  # leaves this reading behind the signal rather than passing as current.
+  calls_signal=$(fm_owner_calls_signal "$state")
   while IFS= read -r id; do
     [ -n "$id" ] || continue
     ids+=("$id")
@@ -678,41 +778,15 @@ _fm_fleet_collect() {  # <state-dir> <now> <reader> [prober]
     esac
   done
   [ "$answered" -eq "$asked" ] || return 1
-  # The ready tasks go in a file rather than a process substitution, whose
-  # descriptor bash may close before the function reading it gets there.
-  readyfile=$(mktemp "${TMPDIR:-/tmp}/fm-fleet-ready.XXXXXX") || return 1
-  backlogfile=$(mktemp "${TMPDIR:-/tmp}/fm-fleet-backlog.XXXXXX") || {
-    rm -f "$readyfile"
-    return 1
-  }
-  for id in ${ready_ids[@]+"${ready_ids[@]}"}; do printf '%s\tready\n' "$id"; done > "$readyfile"
-  # The backlog is read once here, so the first call's title comes from the
-  # same reading as the calls themselves.
-  if _fm_owner_backlog "$state" > "$backlogfile"; then
-    calls=$(fm_owner_calls "$state" "$readyfile" "$backlogfile") || calls=__failed__
+  if [ "${#ready_ids[@]}" -gt 0 ]; then
+    ready_list="${ready_ids[*]}"
   else
-    calls=__failed__
+    ready_list=-
   fi
-  rm -f "$readyfile"
-  [ "$calls" != __failed__ ] || {
-    rm -f "$backlogfile"
-    return 1
-  }
-  while IFS=$'\t' read -r kind id; do
-    case "$kind" in
-      decision) ready=$((ready + 1)); decisions=$((decisions + 1)) ;;
-      merge) ready=$((ready + 1)) ;;
-      *) continue ;;
-    esac
-    if [ "$first_kind" = - ]; then
-      first_kind=$kind
-      first_id=$id
-      first_title=$(_fm_fleet_call_title "$state" "$backlogfile" "$id")
-    fi
-  done <<CALLS
+  calls=$(_fm_fleet_calls_fold "$state" "$ready_list") || return 1
+  IFS=$'\t' read -r ready decisions first_kind first_id first_title <<CALLS
 $calls
 CALLS
-  rm -f "$backlogfile"
   if window=$(fm_night_shift_window "$state/../config/night-shift-window" "$now"); then
     IFS=$'\t' read -r _ _ ws we <<WINDOW
 $window
@@ -722,10 +796,10 @@ WINDOW
       case "$night" in ''|*[!0-9]*) night=- ;; *) night="$night@$we" ;; esac
     fi
   fi
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\tcalls\t%s\t%s\t%s\t%s\t%s\t%s' \
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\tcalls\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s' \
     "$now" "$working" "$stopped" "$validating" "$paused" "$attention" \
     "$ready" "$signature" "$decisions" "$failed" "$lost" "$night" \
-    "$first_kind" "$first_id" "$first_title"
+    "$first_kind" "$first_id" "$first_title" "$calls_signal" "$ready_list"
 }
 
 # _fm_fleet_refresh_detached: start at most ONE bounded refresh and return at
@@ -773,7 +847,7 @@ _fm_fleet_unknown() {  # <records> [decisions|strip]
   printf '%s\t0\t0\t0\t0\t0\t0\t0\t0' "$1"
   case "${2:-}" in
     decisions) printf '\t0' ;;
-    strip) printf '\t0\t-\t-\t-\t-\t-\t-' ;;
+    strip) printf '\t0\t-\t-\t-\t-\t-\t-\t-' ;;
   esac
 }
 
@@ -787,10 +861,12 @@ _fm_fleet_unknown() {  # <records> [decisions|strip]
 # reported exactly as no reading (<known> 0), and either way a refresh is
 # started at once so the next frame has the field.
 # With the word `strip` instead, the bridge strip's readings follow those ten:
-#   <failed> <lost> <night> <first-kind> <first-id> <first-title>
+#   <failed> <lost> <night> <first-kind> <first-id> <first-title> <calls-signal>
 # as the header and _fm_fleet_collect describe them. Each is `-` when the
 # reading has no such field, as one taken before the strip asked for them does
 # not, and such a reading is refreshed at once; the ten fields stand as above.
+# <calls-signal> is the owner's calls signal the shown calls were read under,
+# so a renderer that sees the signal move past it knows to draw again.
 # tab separated. <known> is 1 when the six live fields are a current reading of
 # THIS fleet, 2 when they are the last good reading but no longer current - it
 # aged past its maximum, or the fleet changed since - and 0 when no good reading
@@ -809,6 +885,7 @@ fm_fleet_status_counts() {  # <state-dir> [decisions|strip]
   local cached='' stamp='' working='' stopped='' validating='' paused=''
   local attention='' ready='' signature='' decisions='' mark='' current known age fresh=1
   local failed='' lost='' night='' first_kind='' first_id='' first_title=''
+  local calls_signal='' ready_list='' now_signal shown_signal=-
   records=$(_fm_fleet_ids "$state" | grep -c '') || records=0
   now=$(_fm_fleet_now) || {
     _fm_fleet_unknown "$records" "$want"
@@ -828,7 +905,8 @@ fm_fleet_status_counts() {  # <state-dir> [decisions|strip]
 
   if [ -n "$cached" ]; then
     IFS=$'\t' read -r stamp working stopped validating paused attention ready \
-      signature decisions mark failed lost night first_kind first_id first_title <<READING
+      signature decisions mark failed lost night first_kind first_id first_title \
+      calls_signal ready_list <<READING
 $cached
 READING
   fi
@@ -858,6 +936,34 @@ READING
     [ "$want" != strip ] || fresh=0
   fi
   [ -n "$cached" ] || fresh=0
+  # The owner's calls are kept as current as their signal, whatever the age of
+  # the rest of the reading; the block above the refresh helpers owns why.
+  if [ -n "$cached" ] && [ "$failed" != - ]; then
+    if [ -z "$calls_signal" ] || [ -z "$ready_list" ]; then
+      # A reading from before the calls carried their signal cannot be caught
+      # up on its own, so the whole reading is refreshed now.
+      fresh=0
+    elif [ "${FM_FLEET_STATE_NO_CACHE:-}" = 1 ]; then
+      shown_signal=$calls_signal
+    else
+      now_signal=$(fm_owner_calls_signal "$state")
+      if [ "$calls_signal" = "$now_signal" ]; then
+        shown_signal=$calls_signal
+      elif _fm_fleet_calls_current "$state" "$now_signal" "$ready_list"; then
+        ready=$FM_FLEET_CALLS_READY
+        decisions=$FM_FLEET_CALLS_DECISIONS
+        first_kind=$FM_FLEET_CALLS_KIND
+        first_id=$FM_FLEET_CALLS_ID
+        first_title=$FM_FLEET_CALLS_TITLE
+        shown_signal=$now_signal
+      else
+        # The reading's own calls stand until the refresh lands, still marked
+        # with the signal they were read under.
+        shown_signal=$calls_signal
+        _fm_fleet_calls_refresh_detached "$state" "$now" "$ready_list" "$now_signal"
+      fi
+    fi
+  fi
   known=1
   if [ -n "$cached" ]; then
     current=$(_fm_fleet_ids "$state" | _fm_fleet_signature) || current=
@@ -887,8 +993,29 @@ READING
   case "$want" in
     decisions) printf '\t%s' "$decisions" ;;
     strip)
-      printf '\t%s\t%s\t%s\t%s\t%s\t%s\t%s' "$decisions" "$failed" "$lost" "$night" \
-        "$first_kind" "$first_id" "$first_title"
+      printf '\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s' "$decisions" "$failed" "$lost" "$night" \
+        "$first_kind" "$first_id" "$first_title" "$shown_signal"
       ;;
   esac
+}
+
+# _fm_fleet_calls_current: 0 iff state/.status-fleet-calls holds the owner's
+# calls for exactly <signal> and <ready-list>, which it then sets as
+# FM_FLEET_CALLS_READY, _DECISIONS, _KIND, _ID and _TITLE.
+_fm_fleet_calls_current() {  # <state-dir> <signal> <ready-list>
+  local entry signal list stamp ready decisions kind id title
+  entry=$(fm_status_cache_load "$1/.status-fleet-calls") || return 1
+  IFS=$'\t' read -r signal list stamp ready decisions kind id title <<ENTRY
+$entry
+ENTRY
+  [ "$signal" = "$2" ] && [ "$list" = "$3" ] || return 1
+  case "$stamp$ready$decisions" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  [ "$decisions" -le "$ready" ] && [ -n "$kind" ] && [ -n "$id" ] && [ -n "$title" ] || return 1
+  FM_FLEET_CALLS_READY=$ready
+  FM_FLEET_CALLS_DECISIONS=$decisions
+  FM_FLEET_CALLS_KIND=$kind
+  FM_FLEET_CALLS_ID=$id
+  FM_FLEET_CALLS_TITLE=$title
 }
