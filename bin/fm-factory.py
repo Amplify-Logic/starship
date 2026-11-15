@@ -1621,8 +1621,40 @@ class View:
         fid = ident if kind == "factory" else self.opened
         if not fid or not self.has_factory(fid):
             return None
-        job = next((j for j in self.factory(fid)["jobs"] if j.get("read")), None)
+        fac = self.factory(fid)
+        drawn = self.page_jobs(fac)[0] if self.opened else self.overview_jobs(fac)
+        job = next((j for j in drawn if j.get("read")), None)
         return (job["title"], job["read"]) if job else None
+
+    @staticmethod
+    def overview_jobs(fac: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """The jobs a factory shows on the overview: what is moving, and calls on you that have started."""
+        if fac["state"] == "idle":
+            return []
+        return [job for job in fac["jobs"] if job["state"] in ("running", "stuck", "waiting", "stopped", "no worker") or (
+            job["started"] and job["state"] in ("waiting on you", "ready for you"))]
+
+    @staticmethod
+    def page_jobs(fac: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], Dict[str, int]]:
+        """The jobs a factory's own page shows, and the counts of the tail that folds away."""
+        # Everything moving or waiting on you, then the head of the line; the
+        # long tail of the work list folds into two counts.
+        shown: List[Dict[str, Any]] = []
+        shown_line = 0
+        folded = {"in line": 0, "on hold": 0}
+        for job in fac["jobs"]:
+            if job["state"] == "finished":
+                continue
+            if job["state"] in ("next", "later"):
+                shown_line += 1
+                if shown_line > 8:
+                    folded["in line"] += 1
+                    continue
+            elif job["state"].startswith("on hold") or job["state"] == "waits on other work":
+                folded["on hold"] += 1
+                continue
+            shown.append(job)
+        return shown, folded
 
     def ordered(self) -> List[Dict[str, Any]]:
         factories = self.record["factories"]
@@ -1791,10 +1823,8 @@ class View:
         if fac["state"] == "idle":
             return [row(width, head + [S("   " + self.idle_words(fac), "faint")], self.steer(fac), band=band)]
         rows = [row(width, head, self.steer(fac), band=band)]
-        for job in fac["jobs"]:
-            if job["state"] in ("running", "stuck", "waiting", "stopped", "no worker") or (
-                    job["started"] and job["state"] in ("waiting on you", "ready for you")):
-                rows += self.job_rows(width, job, full=False)
+        for job in self.overview_jobs(fac):
+            rows += self.job_rows(width, job, full=False)
         nxt = fac.get("next")
         if nxt:
             text = [S("       next  ", "faint"), S(nxt["title"], "mist")]
@@ -1931,21 +1961,8 @@ class View:
         rows += [row(width, [S(" WORK, IN ORDER", "mist", True)]), row(width)]
         if not fac["jobs"]:
             rows.append(row(width, [S("     Nothing in line.", "faint")]))
-        # Everything moving or waiting on you, then the head of the line; the
-        # long tail of the work list folds into two counts.
-        shown_line = 0
-        folded = {"in line": 0, "on hold": 0}
-        for job in fac["jobs"]:
-            if job["state"] == "finished":
-                continue
-            if job["state"] in ("next", "later"):
-                shown_line += 1
-                if shown_line > 8:
-                    folded["in line"] += 1
-                    continue
-            elif job["state"].startswith("on hold") or job["state"] == "waits on other work":
-                folded["on hold"] += 1
-                continue
+        shown, folded = self.page_jobs(fac)
+        for job in shown:
             rows += self.job_rows(width, job, full=True)
         tail = [plural(count, "more " + word if word == "in line" else word, "more " + word
                        if word == "in line" else word) for word, count in folded.items() if count]

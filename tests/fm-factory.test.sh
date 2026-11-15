@@ -1566,6 +1566,35 @@ SH
   pass "factory pane: r reads the highlighted call and a click reads the Read line it lands on, in the background"
 }
 
+test_r_on_a_factory_reads_only_a_job_it_draws() {
+  reset_case
+  write_registry
+  write_world
+  give_reports
+  mkdir -p "$HOME_FIX/data/recipe-search"
+  printf '# Calmer start screen\n' > "$HOME_FIX/data/recipe-search/report.md"
+  local log="$TMP_ROOT/case$CASE/read.log"
+  cat > "$TMP_ROOT/case$CASE/reader" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$FM_FACTORY_TEST_READ"
+SH
+  chmod +x "$TMP_ROOT/case$CASE/reader"
+  export FM_FACTORY_READ="$TMP_ROOT/case$CASE/reader" FM_FACTORY_TEST_READ="$log"
+  take_record
+  assert_equals "$(q '.factories[] | select(.id == "recipe-box") | .jobs[0] | "\(.state)|\(.read | join(","))"')" \
+    "with Starship|recipe-search" "the idle factory's finished work has a report to read"
+  # The stops run: three calls, then Sample Shop, Garden Journal and Recipe Box.
+  drive_keys DOWN DOWN DOWN DOWN DOWN r
+  [ ! -s "$log" ] || fail "r on an idle factory read a job it draws no Read line for: $(cat "$log")"
+  drive_keys DOWN DOWN DOWN DOWN r
+  assert_equals "$(cat "$log")" "garden-share" "r on a factory did not read the job whose Read line it draws"
+  : > "$log"
+  drive_keys DOWN DOWN DOWN DOWN DOWN $'\r' r
+  assert_equals "$(cat "$log")" "recipe-search" "r on a factory's own page did not read the job the page draws"
+  unset FM_FACTORY_READ FM_FACTORY_TEST_READ
+  pass "factory pane: r on a factory reads only a job the screen draws a Read line for"
+}
+
 fm_test_run \
   test_the_record_words_every_state \
   test_the_plain_screen_is_the_record_as_text \
@@ -1591,6 +1620,7 @@ fm_test_run \
   test_already_settled_files_a_real_reconcile_request \
   test_read_shows_only_where_there_is_something_to_read \
   test_r_and_a_click_read_through_the_reader \
+  test_r_on_a_factory_reads_only_a_job_it_draws \
   test_the_highlight_and_open_boxes_follow_the_record \
   test_a_parked_decision_leaves_the_live_pane_within_seconds \
   test_a_calls_rebuild_on_an_older_reading_keeps_the_newer_record \
