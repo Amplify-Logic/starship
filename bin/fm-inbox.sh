@@ -9,6 +9,8 @@
 #           note survives a crash and is presented at firstmate's next drain.
 #           `announce` may append that same wake for an already-saved note.
 #           These two are the only subcommands that touch firstmate's wake queue.
+#           A new note also moves the owner's calls signal
+#           (bin/fm-owner-calls-signal-lib.sh), so the Factory pane shows it at once.
 #   say     Same as `note`, but the body comes from spoken audio on stdin.
 #           Speech is an INPUT METHOD here, not an architecture: it transcribes
 #           and then takes exactly the `note` path.
@@ -227,6 +229,15 @@ load_wake_lib() {
   FM_INBOX_WAKE_LIB=1
 }
 
+# touch_owner_calls: move the owner's calls signal, when this copy of the
+# script sits beside its library; a lone copy saves notes without it.
+touch_owner_calls() {
+  local lib="$SELF_DIR/fm-owner-calls-signal-lib.sh"
+  [ -r "$lib" ] || return 0
+  # shellcheck source=bin/fm-owner-calls-signal-lib.sh
+  . "$lib" && fm_owner_calls_touch "$STATE"
+}
+
 need_python() {
   command -v python3 >/dev/null 2>&1 || die "python3 is required for machine-readable inbox output"
 }
@@ -400,6 +411,10 @@ ring_primary() {  # <id>
 finish_note_result() {  # <outcome> <id> <request-id> <json> <strict-exit> <summary>
   local outcome=$1 id=$2 request_id=$3 json=$4 strict=$5 summary=$6
   local announced=0 acknowledged=0 path="$INBOX/$id.note" rc=0
+  # A new note, such as an answer or a talk note from the Factory pane, moves
+  # the owner's calls signal so the panes show it at once
+  # (bin/fm-owner-calls-signal-lib.sh).
+  [ "$outcome" != created ] || touch_owner_calls
   announce_note "$id" "$summary" || rc=$?
   case "$rc" in
     0) announced=1 ;;

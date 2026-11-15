@@ -68,7 +68,42 @@
 #   fm-addon.sh run <point> [args]   run every hook of an executable point
 #   fm-addon.sh install              clone origin into path when the checkout is
 #                                    missing; a present checkout is left as it is
+#   fm-addon.sh create [--name <repo>]
+#                                    give a home with no add-on its own: a private
+#                                    repository on the signed-in GitHub account
+#                                    (default name starship-<login>), started from
+#                                    a minimal starter, kept at projects/<repo>,
+#                                    with config/addon naming it; a usable add-on
+#                                    is left as it is. Exits 0 with the add-on
+#                                    ready, 1 when it cannot be made, and 4 when
+#                                    GitHub is not signed in, printing the sign-in
+#                                    steps instead of skipping
+#   fm-addon.sh guards               make sure this home cannot publish anything
+#                                    personal by mistake, one line per guard: the
+#                                    role is user (no publishing to the Starship
+#                                    repository), an add-on is configured, the
+#                                    pre-push leak check is installed on this
+#                                    checkout and the add-on, and config/leak-words
+#                                    exists (written with one comment line when
+#                                    missing). Exits 1 when any guard is not in
+#                                    place, on a `guard problem:` line naming it
+#   fm-addon.sh first-project        whether this home may add a project now:
+#                                    exits 1, naming the private repository as
+#                                    what comes first, when data/projects.md
+#                                    registers no project yet and root fails;
+#                                    exits 0 silently otherwise, and always in a
+#                                    secondmate home. The project-management add
+#                                    and create paths ask it before they clone or
+#                                    register anything, so a new owner's first
+#                                    project never comes before their add-on
 # Exits 2 on misuse. Keeping the add-on current is bin/fm-update.sh's job.
+#
+# STARTER. create starts a new add-on with a README.md saying what goes where
+# and empty .agents/skills/, hooks/ and bin/ folders, each holding a .gitkeep.
+# Every GitHub step goes through the GitHub CLI's own sign-in (gh auth status).
+# The add-on's pre-push leak check is installed before its first push. A
+# repository of that name that already exists is reused, cloned when the
+# checkout is missing, only while it is private; a public one is refused.
 #
 # Environment overrides, for tests and unusual layouts:
 #   FM_HOME, FM_ROOT_OVERRIDE, FM_CONFIG_OVERRIDE, FM_ADDON_HOOK_TIMEOUT
@@ -271,6 +306,217 @@ install_addon() {
   printf 'add-on: cloned %s into %s\n' "$origin" "$ADDON_PATH"
 }
 
+# write_starter <dir>: the minimal add-on a new home starts from.
+write_starter() {
+  local dir=$1 sub
+  for sub in .agents/skills hooks bin; do
+    mkdir -p "$dir/$sub" && : > "$dir/$sub/.gitkeep" || return 1
+  done
+  cat > "$dir/README.md" <<'EOF'
+# Starship add-on
+
+This private repository holds your own changes to Starship: the skills, hooks and scripts that serve only you.
+Starship's shared code stays exactly the public version, and this repository sits on top of it.
+
+- `.agents/skills/<skill>/SKILL.md` - your own skills; each one is linked into your Starship home and loads like a built-in skill.
+- `hooks/<point>/<name>` - your own hooks, run at Starship's hook points; `bin/fm-addon.sh` in Starship lists the points.
+- `bin/` - scripts your skills and hooks use.
+- `leak-words` (optional) - words that must never appear in public Starship, one per line, added to your home's own list.
+
+Keep this repository private.
+To change Starship for yourself, ask your first mate: the change lands here, never in public Starship.
+EOF
+}
+
+# signed_in: whether gh is installed and signed in to github.com; otherwise
+# names the sign-in steps.
+signed_in() {
+  local steps="run gh auth login, press Enter at each question, then gh auth setup-git, and ask again; your own private repository is made on your own GitHub account"
+  if ! command -v gh >/dev/null 2>&1; then
+    note "install the GitHub CLI (gh) and sign in to GitHub first: $steps"
+    return 1
+  fi
+  if ! gh auth status --hostname github.com >/dev/null 2>&1; then
+    note "sign in to GitHub first: $steps"
+    return 1
+  fi
+}
+
+# origin_is <checkout> <owner/repo>: whether the checkout's origin is that
+# repository.
+origin_is() {
+  local url
+  url=$(git -C "$1" remote get-url origin 2>/dev/null) || return 1
+  url=${url%/}
+  url=${url%.git}
+  case "$url" in
+    */"$2" | *:"$2") return 0 ;;
+  esac
+  return 1
+}
+
+# start_checkout <path> <login>: the starter, committed in a new repository.
+start_checkout() {
+  local path=$1 login=$2 id=()
+  write_starter "$path" || { note "cannot write the starter into $path"; return 1; }
+  git init -q -b main "$path" || { note "git init failed in $path"; return 1; }
+  # With no git identity yet, the starter commit is signed with a placeholder
+  # address, because a real one must never sit in this public script.
+  git -C "$path" config user.email >/dev/null 2>&1 \
+    || id=(-c "user.name=$login" -c "user.email=$login@example.invalid")
+  { git -C "$path" add -A && git ${id[@]+"${id[@]}"} -C "$path" commit -q -m "Start the Starship add-on"; } || {
+    note "the first commit in $path failed"
+    return 1
+  }
+}
+
+create_addon() {
+  local name=$1 status=0 login slug rel path visibility
+  resolve_addon || status=$?
+  case "$status" in
+    0)
+      printf 'add-on: present at %s\n' "$ADDON_ROOT"
+      return 0
+      ;;
+    3)
+      if [ -n "$ADDON_PATH" ] && [ ! -e "$ADDON_PATH" ] && [ ! -L "$ADDON_PATH" ] && [ -n "$(config_value origin)" ]; then
+        install_addon
+        return
+      fi
+      note "$ADDON_PROBLEM"
+      return 1
+      ;;
+  esac
+  signed_in || return 4
+  if ! login=$(gh api user --jq .login 2>/dev/null) || [ -z "$login" ]; then
+    note "gh is signed in but cannot read the account name (gh api user); check gh auth status"
+    return 1
+  fi
+  [ -n "$name" ] || name="starship-$(printf '%s' "$login" | tr '[:upper:]' '[:lower:]')"
+  [[ $name =~ ^[A-Za-z0-9._-]+$ ]] || { note "$name is not a GitHub repository name"; return 1; }
+  slug="$login/$name"
+  rel="projects/$name"
+  path="$FM_HOME/$rel"
+
+  if visibility=$(gh repo view "$slug" --json visibility --jq .visibility 2>/dev/null); then
+    if [ "$visibility" != PRIVATE ]; then
+      note "github.com/$slug already exists and is not private, so it cannot be this home's add-on; make it private or pick another name with --name"
+      return 1
+    fi
+    if [ -e "$path" ] || [ -L "$path" ]; then
+      if ! origin_is "$path" "$slug"; then
+        note "$path is in the way: it is not a checkout of github.com/$slug; move it aside or pick another name with --name"
+        return 1
+      fi
+      "$SCRIPT_DIR/fm-leak-prepush.sh" install "$path" addon >&2 || true
+      if ! git -C "$path" push -q -u origin HEAD </dev/null >/dev/null 2>&1; then
+        note "$path could not be pushed to github.com/$slug; push it by hand, then run create again"
+        return 1
+      fi
+    else
+      mkdir -p "$(dirname "$path")" || { note "cannot create $(dirname "$path")"; return 1; }
+      if ! gh repo clone "$slug" "$path" </dev/null >/dev/null 2>&1; then
+        note "cloning github.com/$slug into $path failed; check gh auth status and gh auth setup-git"
+        return 1
+      fi
+    fi
+  else
+    if [ -e "$path" ] || [ -L "$path" ]; then
+      # Only a starter an interrupted create left behind, with no remote yet.
+      if [ ! -d "$path/.git" ] || git -C "$path" remote get-url origin >/dev/null 2>&1; then
+        note "$path is in the way: move it aside or pick another name with --name"
+        return 1
+      fi
+    else
+      start_checkout "$path" "$login" || return 1
+    fi
+    "$SCRIPT_DIR/fm-leak-prepush.sh" install "$path" addon >&2 || true
+    if ! gh repo create "$name" --private --source "$path" --remote origin --push \
+      --description "Private Starship add-on" </dev/null >/dev/null 2>&1; then
+      note "creating the private repository github.com/$slug failed; check gh auth status, then run create again"
+      return 1
+    fi
+  fi
+
+  mkdir -p "$CONFIG" || { note "cannot create $CONFIG"; return 1; }
+  if ! printf 'path = %s\norigin = https://github.com/%s\n' "$rel" "$slug" > "$ADDON_CONFIG"; then
+    note "cannot write $ADDON_CONFIG"
+    return 1
+  fi
+  resolve_addon || { note "$ADDON_PROBLEM"; return 1; }
+  printf 'add-on: ready at %s, from the private repository github.com/%s\n' "$ADDON_ROOT" "$slug"
+}
+
+# push_check <checkout> <kind>: install the pre-push leak check, then confirm it.
+push_check() {
+  local out
+  "$SCRIPT_DIR/fm-leak-prepush.sh" install "$1" "$2" >/dev/null 2>&1 || true
+  if out=$("$SCRIPT_DIR/fm-leak-prepush.sh" status "$1" "$2"); then
+    printf 'guard: the pre-push leak check is installed on %s\n' "$1"
+    return 0
+  fi
+  printf 'guard problem: %s\n' "$out"
+  return 1
+}
+
+check_guards() {
+  local problems=0 role status=0 words="$CONFIG/leak-words"
+  role=$(FM_HOME="$FM_HOME" FM_CONFIG_OVERRIDE="$CONFIG" "$SCRIPT_DIR/fm-role.sh" report 2>/dev/null) || role=
+  case "$role" in
+    "fm-role: user"*)
+      printf 'guard: the role is user, so this home never publishes to the Starship repository on its own\n'
+      ;;
+    *)
+      printf 'guard problem: the role is not user (%s), so this home may publish to the Starship repository; remove %s unless this home maintains Starship\n' \
+        "${role:-unreadable}" "$CONFIG/firstmate-role"
+      problems=1
+      ;;
+  esac
+
+  push_check "$CODE_ROOT" starship || problems=1
+  resolve_addon || status=$?
+  case "$status" in
+    0) push_check "$ADDON_ROOT" addon || problems=1 ;;
+    1)
+      printf 'guard problem: no add-on is configured, so this home has no private place for its own changes; run bin/fm-addon.sh create\n'
+      problems=1
+      ;;
+    *)
+      printf 'guard problem: %s\n' "$ADDON_PROBLEM"
+      problems=1
+      ;;
+  esac
+
+  if [ -f "$words" ]; then
+    printf 'guard: the private word list %s is in place\n' "$words"
+  elif [ -e "$words" ] || [ -L "$words" ]; then
+    printf 'guard problem: %s is not a regular file\n' "$words"
+    problems=1
+  elif mkdir -p "$CONFIG" \
+    && printf '%s\n' "# One word or phrase per line that must never appear in public Starship, such as the names of people, customers and private projects." > "$words"; then
+    printf 'guard: the private word list %s was started, empty\n' "$words"
+  else
+    printf 'guard problem: cannot write %s\n' "$words"
+    problems=1
+  fi
+  return "$problems"
+}
+
+# first_project: refuse a home's first project while it has no usable add-on.
+first_project() {
+  local data="${FM_DATA_OVERRIDE:-$FM_HOME/data}" status=0
+  if [ -e "$FM_HOME/.fm-secondmate-home" ] || [ -L "$FM_HOME/.fm-secondmate-home" ]; then
+    return 0
+  fi
+  if [ -f "$data/projects.md" ] && grep -q '^- ' "$data/projects.md"; then
+    return 0
+  fi
+  resolve_addon || status=$?
+  [ "$status" -ne 0 ] || return 0
+  note "the first project waits for this home's own private repository (first-voyage step 4): with the owner's yes, run bin/fm-addon.sh create, then add the project${ADDON_PROBLEM:+ ($ADDON_PROBLEM)}"
+  return 1
+}
+
 case "${1:-}" in
   root)
     [ "$#" -eq 1 ] || usage
@@ -294,6 +540,29 @@ case "${1:-}" in
   install)
     [ "$#" -eq 1 ] || usage
     install_addon
+    ;;
+  create)
+    shift
+    create_name=
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        --name)
+          [ "$#" -ge 2 ] || usage
+          create_name=$2
+          shift 2
+          ;;
+        *) usage ;;
+      esac
+    done
+    create_addon "$create_name"
+    ;;
+  guards)
+    [ "$#" -eq 1 ] || usage
+    check_guards
+    ;;
+  first-project)
+    [ "$#" -eq 1 ] || usage
+    first_project
     ;;
   -h|--help|help) usage 0 ;;
   *) usage ;;

@@ -23,9 +23,10 @@
 #                                show the strip above a pane (default: the pane
 #                                this runs in, or the focused pane when Herdr
 #                                runs it as the plugin's action)
-#   fm-bridge-strip.sh run       the pane's own loop, redrawn every 5 seconds;
-#                                Herdr starts it. On a terminal it asks for
-#                                mouse reports and reads the clicks.
+#   fm-bridge-strip.sh run       the pane's own loop, redrawn every 5 seconds,
+#                                and within a second of the owner's calls
+#                                changing; Herdr starts it. On a terminal it
+#                                asks for mouse reports and reads the clicks.
 #   fm-bridge-strip.sh render [--width N] [--height N]
 #                                print one frame and exit
 #
@@ -128,6 +129,7 @@ NIGHT_DONE=-
 CALL_KIND=-
 CALL_ID=
 CALL_TITLE=
+CALLS_SIGNAL=-
 
 # read_crew: the fleet reading, folded into the three lamps the strip shows,
 # plus the red alert, the most urgent call and the night shift's count, which
@@ -137,18 +139,22 @@ CALL_TITLE=
 # other two lamps are the owner's calls (fm_owner_calls, the same count the
 # Factory pane and the tap page show): decisions for you are his live held
 # decisions, and ready to merge is the rest, a PR or branch ready to land.
+# CALLS_SIGNAL is the owner's calls signal those calls were read under, which
+# the wait between frames watches.
 read_crew() {  # <home>
   local reading records working stopped validating paused attention ready
-  local known age decisions failed lost night kind id title
+  local known age decisions failed lost night kind id title calls
   READING_KNOWN=0
   FAILED=-
   NIGHT_DONE=-
   CALL_KIND=-
+  CALLS_SIGNAL=-
   reading=$(fm_fleet_status_counts "$1/state" strip 2>/dev/null) || return 0
   IFS=$'\t' read -r records working stopped validating paused attention ready \
-    known age decisions failed lost night kind id title <<EOF
+    known age decisions failed lost night kind id title calls <<EOF
 $reading
 EOF
+  CALLS_SIGNAL=${calls:--}
   case "$working$stopped$validating$ready$known$age$decisions" in
     ''|*[!0-9]*) return 0 ;;
   esac
@@ -690,15 +696,28 @@ open_call() {  # <home>
   NOTICE_UNTIL=$((now + 5))
 }
 
+# calls_moved: 0 when the owner's calls may have changed since the frame on
+# screen read them (bin/fm-owner-calls-signal-lib.sh), so the strip draws again
+# at once rather than at the next frame: an answered or parked decision gives
+# way to the next call within a second or two. A frame with no calls reading
+# keeps the ordinary cadence.
+calls_moved() {  # <home>
+  [ "$CALLS_SIGNAL" != - ] || return 1
+  [ "$(fm_owner_calls_signal "$1/state")" != "$CALLS_SIGNAL" ]
+}
+
 # wait_input: the pause between frames, five seconds unless the pane is
-# resized or clicked. A left press on the most urgent call opens it. Each read
-# waits at most a second, because bash 3.2 cannot wait less and a resize does
-# not interrupt it there.
+# resized or clicked, or the owner's calls move. A left press on the most
+# urgent call opens it. Each read waits at most a second, because bash 3.2
+# cannot wait less and a resize does not interrupt it there.
 wait_input() {  # <home>
   local tick=0 ch
   while [ "$tick" -lt 5 ] && [ "$RESIZED" = 0 ]; do
     tick=$((tick + 1))
-    IFS= read -rsn1 -t 1 ch || continue
+    IFS= read -rsn1 -t 1 ch || {
+      ! calls_moved "$1" || return 0
+      continue
+    }
     [ "$ch" = "$E" ] || continue
     read_mouse || continue
     [ "$MOUSE_PRESS" = 1 ] || continue
@@ -713,7 +732,7 @@ wait_input() {  # <home>
 }
 
 cmd_run() {
-  local home sleeper
+  local home sleeper tick
   home=$(resolve_home)
   record_self
   trap cleanup EXIT
@@ -740,10 +759,15 @@ cmd_run() {
     if [ "$CLICKS" = 1 ]; then
       wait_input "$home"
     else
-      sleep 5 &
-      sleeper=$!
-      wait "$sleeper" 2>/dev/null
-      kill "$sleeper" 2>/dev/null
+      tick=0
+      while [ "$tick" -lt 5 ] && [ "$RESIZED" = 0 ]; do
+        tick=$((tick + 1))
+        sleep 1 &
+        sleeper=$!
+        wait "$sleeper" 2>/dev/null
+        kill "$sleeper" 2>/dev/null
+        ! calls_moved "$home" || break
+      done
     fi
   done
 }

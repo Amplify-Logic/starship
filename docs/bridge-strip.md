@@ -23,7 +23,9 @@ A worker's question, an ask-user review finding, a worker's pause, and an aged, 
 The counts are the status bar's figures: `busy` is its `working` plus `checking`, and `decisions for you` plus `ready to merge` together are its `waiting for you`.
 [status-bar.md](status-bar.md#fleet-fields) owns what each figure means and how the reading is taken.
 The strip reads that same cached reading, so it costs the fleet nothing extra.
-The strip redraws every 5 seconds.
+The strip redraws every 5 seconds, and within a second of the owner's calls changing.
+A decision answered, parked, released, closed or added changes no worker, so the owner's calls do not wait for the slow worker reading: whenever their change signal moves, they are read again on their own and the strip shows the next call within about two seconds.
+`bin/fm-owner-calls-signal-lib.sh` owns that signal and `bin/fm-fleet-status-lib.sh` owns how the calls are read again.
 Before the first reading it says `reading the crew` rather than showing zeros, and a reading that is no longer current carries its age, such as `(10m ago)`.
 
 The battery comes from `pmset -g batt`.
@@ -99,4 +101,4 @@ The most urgent call and the night shift only use the columns left over, so they
 
 ## Verification
 
-`tests/fm-bridge-strip.test.sh` renders fixture fleets, fixture night shifts and fixture battery readings and checks every row word for word and colour by colour, at every width, clicks the running strip under a pseudo-terminal, and checks the Herdr calls behind the click, `open`, `install`, and `remove` against a stand-in Herdr.
+`tests/fm-bridge-strip.test.sh` renders fixture fleets, fixture night shifts and fixture battery readings and checks every row word for word and colour by colour, at every width, clicks the running strip under a pseudo-terminal, parks a held decision under the running strip and times how soon it names the next call, and checks the Herdr calls behind the click, `open`, `install`, and `remove` against a stand-in Herdr.

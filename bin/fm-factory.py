@@ -10,8 +10,10 @@ owns the commands.
 
 Usage:
   fm-factory.py --data [--fresh]          print the record as JSON (fm-factory.v1)
-  fm-factory.py --plain [--factory ID] [--width N] [--fresh]
-                                          print the screen as plain text
+  fm-factory.py --plain [--factory ID] [--width N] [--height N] [--fresh]
+                                          print the screen as plain text; with
+                                          --height, only what a pane that tall
+                                          shows when it opens
   fm-factory.py view [--factory ID] [--item ID]
                                           the live pane (Herdr runs it through
                                           bin/fm-factory-pane.sh run); --item
@@ -27,6 +29,8 @@ Usage:
                                           factory's running workers beside its
                                           page pane, the way open-tab does
   fm-factory.py refresh                   rebuild the cached record once
+  fm-factory.py refresh-calls             rebuild it with fresh owner's calls on
+                                          the last full refresh's workers
 
 One record, two readers: every word on screen comes from the record, and every
 state is a word, so an agent reading the pane as text loses nothing.
@@ -46,9 +50,20 @@ whether a running worker's pane text changed since the last reading
 (bin/fm-inbox.sh receipts).
 
 What the pane writes. Its cache and its own records live in state/factory/:
-record.json (the cached record), activity.json (when each worker's pane last
-changed), last-look (when the owner last closed the pane), steer.log (who
-steers each factory), and tabs/ (the factory tabs it opened). Every writing key
+record.json (the cached record), basis.json (the fleet reading the last full
+refresh used), activity.json (when each worker's pane last changed), last-look
+(when the owner last closed the pane), steer.log (who steers each factory), and
+tabs/ (the factory tabs it opened).
+
+How fresh it is. A full refresh reads every worker, which takes seconds, so the
+live pane starts one only once the record's workers are FM_FACTORY_TTL old.
+The owner's calls cannot wait that long: once a second the pane reads the
+owner's calls signal (bin/fm-owner-calls-signal-lib.sh), and when it has moved
+past the one the record was built under it rebuilds the record from basis.json
+with the backlog and the inbox read afresh (refresh-calls), so a decision
+answered, parked, released, closed or added, or a note to Starship, shows in
+NEEDS YOU within a second or two. --data and --plain catch the calls up the same
+way before they print a cached record. Every writing key
 goes through a path Starship already has and acts only on the highlighted row:
 an answer, keep, ask-for-changes or talk becomes a captain inbox note
 (bin/fm-inbox.sh note) that Starship acts on under its own rules, so the pane
@@ -93,6 +108,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -327,6 +343,11 @@ def load_snapshot(home: str) -> Dict[str, Any]:
     return json.loads(out.stdout)
 
 
+def live_tasks(snapshot: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The snapshot's ordinary tasks; second mates are not work."""
+    return [t for t in snapshot.get("tasks") or [] if t.get("kind") != "secondmate" and t.get("id")]
+
+
 def buckets_for(tasks: List[Dict[str, Any]]) -> Dict[str, str]:
     """Each task's field from the status bar's own fold, in one bash call."""
     lines = []
@@ -355,18 +376,8 @@ def buckets_for(tasks: List[Dict[str, Any]]) -> Dict[str, str]:
     return result
 
 
-def owner_calls(home: str, buckets: Dict[str, str]
-                ) -> Tuple[List[str], List[str], List[Dict[str, Any]]]:
-    """The owner's calls, from fm_owner_calls in bin/fm-fleet-status-lib.sh.
-
-    That function is the one definition of what really waits on the owner, the
-    count the bridge strip and the tap page show too: the held decisions that
-    wait on him now, and the PRs and ready branches waiting for his merge word.
-    Its decisions come from the backlog as the home's tasks-axi adapter reads it
-    (`fm-fleet-snapshot.sh --axi-backlog`), read once here and handed over with
-    the buckets the pane already read; those records come back too, so a held
-    decision the markdown snapshot lacks can still be drawn.
-    """
+def axi_backlog(home: str) -> Dict[str, Any]:
+    """The backlog as the home's tasks-axi adapter reads it (`fm-fleet-snapshot.sh --axi-backlog`)."""
     state = os.path.join(home, "state")
     read = subprocess.run(["bash", os.path.join(BIN, "fm-fleet-snapshot.sh"), "--axi-backlog"],
                           capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL,
@@ -377,6 +388,24 @@ def owner_calls(home: str, buckets: Dict[str, str]
         backlog = None
     if not isinstance(backlog, dict):
         raise RuntimeError("could not read what waits on the owner")
+    return backlog
+
+
+def owner_calls(home: str, buckets: Dict[str, str], backlog: Optional[Dict[str, Any]] = None
+                ) -> Tuple[List[str], List[str], List[Dict[str, Any]]]:
+    """The owner's calls, from fm_owner_calls in bin/fm-fleet-status-lib.sh.
+
+    That function is the one definition of what really waits on the owner, the
+    count the bridge strip and the tap page show too: the held decisions that
+    wait on him now, and the PRs and ready branches waiting for his merge word.
+    Its decisions come from the backlog as the home's tasks-axi adapter reads it
+    (axi_backlog, read here unless the caller already did) and handed over with
+    the buckets the pane already read; those records come back too, so a held
+    decision the markdown snapshot lacks can still be drawn.
+    """
+    state = os.path.join(home, "state")
+    if backlog is None:
+        backlog = axi_backlog(home)
     with tempfile.TemporaryDirectory(prefix="fm-factory-calls.") as tmp:
         bucket_file = os.path.join(tmp, "buckets")
         backlog_file = os.path.join(tmp, "backlog.json")
@@ -422,6 +451,29 @@ def decision_shapes(home: str, ids: List[str]) -> Dict[str, Dict[str, Any]]:
     for shape in data.get("decisions") or []:
         if isinstance(shape, dict) and shape.get("id") in ids:
             shapes[shape["id"]] = shape
+    return shapes
+
+
+def shapes_for(home: str, ids: List[str], rows: Dict[str, Dict[str, Any]],
+               known: Optional[Dict[str, Dict[str, Any]]]) -> Dict[str, Dict[str, Any]]:
+    """decision_shapes for <ids>, reusing a shape in <known> while its question is unchanged.
+
+    A shape read for a question is kept only while that question still has the
+    hold stamp it was read under; a question held again reads its shape anew.
+    Shapes read here are added to <known>, so the caller can keep them.
+    """
+    if known is None:
+        return decision_shapes(home, ids)
+    shapes = {}
+    for ident in ids:
+        shape = known.get(ident)
+        held = parse_iso((rows.get(ident) or {}).get("hold_set"))
+        if shape and held is not None and parse_iso(shape.get("held_since")) == held:
+            shapes[ident] = shape
+    missing = [ident for ident in ids if ident not in shapes]
+    fetched = decision_shapes(home, missing)
+    known.update(fetched)
+    shapes.update(fetched)
     return shapes
 
 
@@ -616,8 +668,10 @@ def held_state(row: Dict[str, Any]) -> str:
 
 
 def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[int] = None,
-                 activity: Optional[Dict[str, int]] = None, notes: Optional[List[Dict[str, Any]]] = None
-                 ) -> Dict[str, Any]:
+                 activity: Optional[Dict[str, int]] = None, notes: Optional[List[Dict[str, Any]]] = None,
+                 backlog: Optional[Dict[str, Any]] = None,
+                 known_shapes: Optional[Dict[str, Dict[str, Any]]] = None,
+                 buckets: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     factories, registry_source = load_registry(home)
     project_rows = load_projects(home)
     quiet_after = env_int("FM_FACTORY_QUIET_MINUTES", 15) * 60
@@ -661,15 +715,16 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
         factory.update(steered_by=steering.get(factory["id"], "Starship"), jobs=[], needs=[], talk=[])
 
     rows = [r for r in (snapshot.get("backlog") or {}).get("records") or [] if r.get("structured") and r.get("id")]
-    tasks = [t for t in snapshot.get("tasks") or [] if t.get("kind") != "secondmate" and t.get("id")]
-    buckets = buckets_for(tasks)
+    tasks = live_tasks(snapshot)
+    if buckets is None:
+        buckets = buckets_for(tasks)
     # NEEDS YOU is exactly the owner's calls, the one count the bridge strip and
     # the tap page show; a worker's question, a pause or the checks never are.
-    decision_ids, merge_ids, adapter_rows = owner_calls(home, buckets)
+    decision_ids, merge_ids, adapter_rows = owner_calls(home, buckets, backlog)
     known = {r["id"] for r in rows}
     rows += [r for r in adapter_rows if r.get("hold_bucket") and r["id"] not in known]
     row_of = {r["id"]: r for r in rows}
-    shapes = decision_shapes(home, decision_ids)
+    shapes = shapes_for(home, decision_ids, {r["id"]: r for r in adapter_rows}, known_shapes)
     needs: List[Dict[str, Any]] = []
     feed: List[Dict[str, Any]] = []
     titles: Dict[str, str] = {}
@@ -696,7 +751,7 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
         labels = [plain_words(o) for o in shape.get("options") or []]
         labels = [label for label in labels if label][:9]
         recommended = plain_words(shape.get("recommended_option"))
-        options = [{"key": str(index + 1), "label": tidy(label, 70), "suggested": label == recommended}
+        options = [{"key": str(index + 1), "label": tidy(label, 240), "suggested": label == recommended}
                    for index, label in enumerate(labels)]
         recommendation = plain_words(shape.get("recommendation"))
         if any(o["suggested"] for o in options) or recommendation in labels:
@@ -992,19 +1047,125 @@ def last_look(home: str) -> Optional[int]:
     return int(text) if text.isdigit() else None
 
 
+def calls_signal(home: str) -> str:
+    """The owner's calls signal (bin/fm-owner-calls-signal-lib.sh), or "" when it cannot be read."""
+    script = '. "$1/fm-owner-calls-signal-lib.sh" && fm_owner_calls_signal "$2"'
+    try:
+        out = subprocess.run(["bash", "-c", script, "fm-factory", BIN, os.path.join(home, "state")],
+                             capture_output=True, text=True, timeout=10, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return out.stdout.strip() if out.returncode == 0 else ""
+
+
+def snapshot_age(record: Dict[str, Any]) -> int:
+    """Seconds since the record's slow fleet reading was taken."""
+    return now_epoch() - int(record.get("snapshot_epoch") or record.get("as_of_epoch") or 0)
+
+
+def basis_path(home: str) -> str:
+    return os.path.join(pane_dir(home), "basis.json")
+
+
 def refresh(home: str) -> Dict[str, Any]:
     now = now_epoch()
+    # Taken before anything is read, so a call that changes meanwhile is caught.
+    signal_at_start = calls_signal(home)
     snapshot = load_snapshot(home)
     running = [t["id"] for t in snapshot.get("tasks") or []
                if (t.get("current_state") or {}).get("state") == "working"
                and (t.get("current_state") or {}).get("source") == "pane"]
     activity = pane_activity(home, running, now, write=True)
+    shapes: Dict[str, Dict[str, Any]] = {}
+    buckets = buckets_for(live_tasks(snapshot))
     record = build_record(home, now, snapshot, since=last_look(home), activity=activity,
-                          notes=inbox_receipts(home))
+                          notes=inbox_receipts(home), known_shapes=shapes, buckets=buckets)
+    record.update(snapshot_epoch=now, calls_signal=signal_at_start)
+    try:
+        write_atomic(basis_path(home), json.dumps({"taken_epoch": now, "snapshot": snapshot,
+                                                   "activity": activity, "shapes": shapes,
+                                                   "buckets": buckets}))
+        kept = True
+    except OSError:
+        kept = False
+    # The slow reading took long enough for a call to change under it; catch the
+    # calls up from this same reading rather than publish them behind.
+    if kept and signal_at_start and calls_signal(home) != signal_at_start:
+        try:
+            return refresh_calls(home)
+        except (RuntimeError, OSError, ValueError, subprocess.SubprocessError):
+            pass
     try:
         write_atomic(os.path.join(pane_dir(home), "record.json"), json.dumps(record, indent=1))
     except OSError:
         pass
+    return record
+
+
+def load_backlog(home: str) -> Dict[str, Any]:
+    """The backlog part of a fleet snapshot, read on its own (`fm-fleet-snapshot.sh --backlog`)."""
+    seam = os.environ.get("FM_FACTORY_SNAPSHOT")
+    if seam:
+        with open(seam, encoding="utf-8") as handle:
+            return json.load(handle).get("backlog") or {}
+    out = subprocess.run(["bash", os.path.join(BIN, "fm-fleet-snapshot.sh"), "--backlog"],
+                         capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL,
+                         env=dict(os.environ, FM_HOME=home))
+    if out.returncode != 0:
+        raise RuntimeError("the backlog could not be read")
+    return json.loads(out.stdout)
+
+
+def side_by_side(*reads):
+    """Run each read in its own thread and return their results in order; the first failure is raised."""
+    results: List[Any] = [None] * len(reads)
+    errors: List[BaseException] = []
+
+    def run(index: int) -> None:
+        try:
+            results[index] = reads[index]()
+        except Exception as error:  # handed back to the caller below
+            errors.append(error)
+
+    threads = [threading.Thread(target=run, args=(index,)) for index in range(len(reads))]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    if errors:
+        raise errors[0]
+    return results
+
+
+def refresh_calls(home: str) -> Dict[str, Any]:
+    """Rebuild the record with fresh owner's calls on the last slow fleet reading.
+
+    The slow part of a refresh is reading the workers. A decision answered,
+    parked, released, closed or added, or a note to Starship, changes only the
+    backlog and the inbox, so those are read again (side by side) and the record
+    is rebuilt on the workers as the last full refresh read them: the next call
+    is on screen within a second or two instead of at the next full refresh.
+    """
+    try:
+        basis = json.loads(read_text(basis_path(home), 256_000_000) or "null")
+    except ValueError:
+        basis = None
+    if not isinstance(basis, dict) or not isinstance(basis.get("snapshot"), dict):
+        return refresh(home)
+    signal_at_start = calls_signal(home)
+    backlog, axi, notes = side_by_side(lambda: load_backlog(home), lambda: axi_backlog(home),
+                                       lambda: inbox_receipts(home))
+    snapshot = dict(basis["snapshot"], backlog=backlog)
+    activity = {k: v for k, v in (basis.get("activity") or {}).items() if isinstance(v, int)}
+    buckets = basis.get("buckets")
+    record = build_record(home, now_epoch(), snapshot, since=last_look(home), activity=activity,
+                          notes=notes, backlog=axi, known_shapes=dict(basis.get("shapes") or {}),
+                          buckets=buckets if isinstance(buckets, dict) else None)
+    record.update(snapshot_epoch=int(basis.get("taken_epoch") or 0), calls_signal=signal_at_start)
+    newer = cached(home)
+    if newer and int(newer.get("snapshot_epoch") or 0) > record["snapshot_epoch"]:
+        return newer
+    write_atomic(os.path.join(pane_dir(home), "record.json"), json.dumps(record, indent=1))
     return record
 
 
@@ -1018,13 +1179,17 @@ def cached(home: str) -> Optional[Dict[str, Any]]:
     return None
 
 
-def refresh_in_background(home: str) -> None:
-    """Start one detached refresh unless one is already under way."""
-    lock = os.path.join(pane_dir(home), "refresh.lock")
+def in_background(home: str, command: str, lock_name: str, stale_after: int, keep_lock_on_failure: bool) -> None:
+    """Start one detached `fm-factory.py <command>` unless one is already under way.
+
+    A run that fails can keep its lock until it is <stale_after> seconds old, so
+    a pane that checks every second retries a failing read at that pace instead.
+    """
+    lock = os.path.join(pane_dir(home), lock_name)
     try:
         os.makedirs(pane_dir(home), exist_ok=True)
         age = time.time() - os.stat(lock).st_mtime if os.path.exists(lock) else None
-        if age is not None and age < 180:
+        if age is not None and age < stale_after:
             return
         if age is not None:
             os.rmdir(lock)
@@ -1032,17 +1197,34 @@ def refresh_in_background(home: str) -> None:
     except OSError:
         return
     script = os.path.realpath(__file__)
-    subprocess.Popen(["/bin/sh", "-c", 'python3 "$1" refresh >/dev/null 2>&1; rmdir "$2" 2>/dev/null',
-                      "fm-factory", script, lock],
+    joiner = "&&" if keep_lock_on_failure else ";"
+    subprocess.Popen(["/bin/sh", "-c", 'python3 "$1" "$3" >/dev/null 2>&1 %s rmdir "$2" 2>/dev/null' % joiner,
+                      "fm-factory", script, lock, command],
                      stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                      start_new_session=True, env=dict(os.environ, FM_HOME=home))
+
+
+def refresh_in_background(home: str) -> None:
+    """Start one detached full refresh unless one is already under way."""
+    in_background(home, "refresh", "refresh.lock", 180, False)
+
+
+def refresh_calls_in_background(home: str) -> None:
+    """Start one detached refresh of the owner's calls unless one is already under way."""
+    in_background(home, "refresh-calls", "calls.lock", 15, True)
 
 
 def current_record(home: str, fresh: bool) -> Dict[str, Any]:
     if not fresh:
         record = cached(home)
-        if record and now_epoch() - int(record.get("as_of_epoch") or 0) <= env_int("FM_FACTORY_TTL", 20):
-            return record
+        if record and snapshot_age(record) <= env_int("FM_FACTORY_TTL", 20):
+            signal = calls_signal(home)
+            if not signal or record.get("calls_signal") == signal:
+                return record
+            try:
+                return refresh_calls(home)
+            except (RuntimeError, OSError, ValueError, subprocess.SubprocessError):
+                pass
     return refresh(home)
 
 
@@ -1067,6 +1249,7 @@ HULL = (13, 21, 36)
 class Row(list):
     band = False
     hull = False
+    stop: Optional[Tuple[str, str]] = None   # the highlight stop this row draws, if any
 
 
 def S(text: Any, colour: str = "ice", bold: bool = False) -> Tuple[str, str, bool]:
@@ -1078,14 +1261,22 @@ def seg_len(segs) -> int:
 
 
 def clip(segs, width: int):
+    """Segments cut to the width, ending in an ellipsis on a whole word where one is near."""
     if seg_len(segs) <= width:
         return list(segs)
     out, room = [], max(width - 1, 0)
     for text, colour, bold in segs:
-        if room <= 0:
-            break
-        out.append((text[:room], colour, bold))
-        room -= len(text[:room])
+        if len(text) <= room:
+            out.append((text, colour, bold))
+            room -= len(text)
+            continue
+        piece = text[:room]
+        if not text[room].isspace():
+            space = piece.rfind(" ")
+            if space >= 0 and len(piece) - space <= 20:
+                piece = piece[:space]
+        out.append((piece.rstrip(), colour, bold))
+        break
     out.append(("…", "faint", False))
     return out
 
@@ -1104,6 +1295,12 @@ def row(width: int, left=(), right=(), band: bool = False) -> Row:
 def wrap(text: str, width: int) -> List[str]:
     lines, line = [], ""
     for word in (text or "").split():
+        # A word wider than the line is broken across lines, never clipped.
+        while len(word) > width:
+            if line:
+                lines.append(line)
+            lines.append(word[:width])
+            line, word = "", word[width:]
         if line and len(line) + 1 + len(word) > width:
             lines.append(line)
             line = word
@@ -1112,6 +1309,31 @@ def wrap(text: str, width: int) -> List[str]:
     if line:
         lines.append(line)
     return lines or [""]
+
+
+def flow(width: int, lead, text: str, colour: str = "ice", bold: bool = False, indent: Optional[int] = None,
+         tail=(), cap: Optional[int] = None, rest: Optional[str] = None) -> List[Row]:
+    """Text wrapped to the width after a lead, its later lines under the text.
+
+    `tail` (a note such as "Starship suggests this") follows the last line, or
+    takes a line of its own when it does not fit; `cap` keeps that many lines,
+    the last ending in an ellipsis; `rest` colours the lines after the first.
+    """
+    lead = list(lead)
+    indent = seg_len(lead) if indent is None else indent
+    lines = wrap(text, max(width - max(seg_len(lead), indent) - 1, 10))
+    if cap and len(lines) > cap:
+        lines = lines[:cap]
+        lines[-1] += "…"
+    lefts = [(lead if index == 0 else [S(" " * indent)])
+             + [S(line, colour if index == 0 or rest is None else rest, bold)]
+             for index, line in enumerate(lines)]
+    tail = [seg for seg in tail if seg[0]]
+    if tail and seg_len(lefts[-1]) + seg_len(tail) < width:
+        lefts[-1] += tail
+    elif tail:
+        lefts.append([S(" " * indent), (tail[0][0].lstrip(), tail[0][1], tail[0][2])] + tail[1:])
+    return [row(width, left) for left in lefts]
 
 
 STATE_COLOUR = {"running": "amber", "waiting on you": "red", "ready for you": "green", "stuck": "amber",
@@ -1148,6 +1370,9 @@ class View:
         self.talking: Optional[Dict[str, Any]] = None
         self.confirm: Optional[Dict[str, Any]] = None
         self.notice: Optional[Tuple[str, str, float]] = None
+        self.top = 0          # the first body row in sight
+        self.follow = True    # keep the highlight in sight; scrolling by hand lets go
+        self.page = 10        # body rows in sight at the last frame
         self.adopt(record)
 
     def adopt(self, record: Dict[str, Any]) -> None:
@@ -1198,7 +1423,8 @@ class View:
         if self.wanted:
             item, asked = self.wanted
             if ("need", item) in stops:
-                self.selected, self.wanted = ("need", item), None
+                # Going to an item brings it into sight, even after a hand scroll.
+                self.selected, self.wanted, self.follow = ("need", item), None, True
             elif time.time() - asked > WANT_SECONDS:
                 self.wanted = None
         if not stops:
@@ -1210,12 +1436,22 @@ class View:
         return self.selected
 
     def move(self, step: int) -> None:
+        """Move the highlight; past the first or last row the view scrolls instead."""
         self.at()
+        if not 0 <= self.cursor + step < len(self.stops()):
+            self.scroll(3 * step)
+            return
         self.cursor += step
         self.selected = None
+        self.follow = True
+
+    def scroll(self, lines: int) -> None:
+        self.top = max(self.top + lines, 0)
+        self.follow = False
 
     def show(self, fid: Optional[str]) -> None:
         self.opened, self.cursor, self.selected = fid, 0, None
+        self.top, self.follow = 0, True
 
     def here(self, kind: str, ident: str) -> bool:
         return self.at() == (kind, ident)
@@ -1243,48 +1479,65 @@ class View:
         line.hull = True
         return [line]
 
-    def need_rows(self, width: int, need: Dict[str, Any], full: bool) -> List[Row]:
+    def need_head(self, need: Dict[str, Any], full: bool):
+        """The lead, title and right-hand words of a need's first row."""
         now = self.now()
         fac = self.factory(need["factory"])
         question = need["kind"] == "question"
         waited = ("waiting " if question else "ready ") + minutes_words((now - need["since"]) // 60) \
             if need.get("since") else ("waiting" if question else "ready")
         right = [S(waited, "mist")] if full else [S(fac["name"], "mist"), S(" · ", "faint"), S(waited, "mist")]
+        lead = [S(" "), self.mark("need", need["id"]), S("● ", "red" if question else "green")]
+        return lead, need["ask"], right
+
+    def need_line(self, width: int, need: Dict[str, Any]) -> Row:
+        """A need folded to one row: its title, shortened on a whole word when it must be."""
+        lead, ask, right = self.need_head(need, full=False)
+        left = lead + [S(ask, "ice", True)]
+        line = row(width, left, right if seg_len(left) + seg_len(right) + 3 <= width else (),
+                   band=self.here("need", need["id"]))
+        line.stop = ("need", need["id"])
+        return line
+
+    def need_rows(self, width: int, need: Dict[str, Any], full: bool) -> List[Row]:
+        """A need opened as a card: every word of its title, why and options, wrapped."""
+        question = need["kind"] == "question"
         band = self.here("need", need["id"])
-        left = [S(" "), self.mark("need", need["id"]), S("● ", "red" if question else "green"),
-                S(need["ask"], "ice", True)]
+        lead, ask, right = self.need_head(need, full)
         pad = S("       ")
-        if seg_len(left) + seg_len(right) + 3 <= width:
-            rows = [row(width, left, right, band=band)]
+        if seg_len(lead) + len(ask) + seg_len(right) + 3 <= width:
+            rows = [row(width, lead + [S(ask, "ice", True)], right, band=band)]
         else:
-            rows = [row(width, left, band=band), row(width, [pad] + right)]
+            rows = flow(width, lead, ask, "ice", True)
+            for line in rows:
+                line.band = band
+            rows.append(row(width, [pad] + right))
         if question:
             if need.get("why"):
-                for line in wrap(need["why"], max(width - 9, 20))[:3 if full else 2]:
-                    rows.append(row(width, [pad, S(line, "mist")]))
+                rows += flow(width, [pad], need["why"], "mist")
             for option in need["options"]:
-                note = ""
+                note = []
                 if option["suggested"]:
-                    note = "  · %s suggests this" % (need.get("suggested_by") or "Starship")
-                rows.append(row(width, [pad, S(option["key"], "cyan", True), S("  "), S(option["label"], "ice"),
-                                        S(note, "mist")]))
+                    note = [S("  · %s suggests this" % (need.get("suggested_by") or "Starship"), "mist")]
+                rows += flow(width, [pad, S(option["key"], "cyan", True), S("  ")], option["label"], "ice",
+                             tail=note)
             if need.get("recommendation"):
-                for index, line in enumerate(wrap("Starship suggests: %s" % need["recommendation"],
-                                                  max(width - 9, 20))[:2]):
-                    rows.append(row(width, [pad, S(line, "mist" if index else "ice")]))
+                rows += flow(width, [pad], "Starship suggests: %s" % need["recommendation"], "ice", rest="mist")
             rows.append(row(width, [pad, S("t", "cyan", True), S("  "), S("Talk it through", "ice")]))
             if need.get("holds_up"):
-                rows.append(row(width, [pad, S("holds up ", "faint"), S(", ".join(need["holds_up"][:3]), "mist")]))
+                rows += flow(width, [pad, S("holds up ", "faint")], ", ".join(need["holds_up"][:3]), "mist")
         else:
             hint = "k  keep it    c  ask for changes" if full or band else "enter shows its factory"
             if need.get("pr") and full:
                 rows.append(row(width, [pad, S("the change ", "faint"), S(need["pr"], "mist")]))
             rows.append(row(width, [pad, S(hint, "faint")]))
+        for line in rows:
+            line.stop = ("need", need["id"])
         return rows
 
-    def track(self, job: Dict[str, Any]):
+    def track(self, job: Dict[str, Any], width: int = 0, links: int = 5):
         current = STEPS.index(job["step"]) if job.get("step") in STEPS else 1
-        lit = self.tick % 5
+        lit = self.tick % links
         segs = []
         for index, step in enumerate(STEPS):
             if index < current:
@@ -1297,14 +1550,16 @@ class View:
                 break
             segs.append(S(" "))
             if index < current:
-                segs.append(S("•••••", "mist"))
+                segs.append(S("•" * links, "mist"))
             elif index > current:
-                segs.append(S("·····", "faint"))
+                segs.append(S("·" * links, "faint"))
             elif job.get("quiet"):
-                segs.append(S("•••••", "ember"))
+                segs.append(S("•" * links, "ember"))
             else:
-                segs += [S("•" * lit, "ember"), S("•", "amber", True), S("•" * (4 - lit), "ember")]
+                segs += [S("•" * lit, "ember"), S("•", "amber", True), S("•" * (links - 1 - lit), "ember")]
             segs.append(S(" "))
+        if width and links > 2 and 7 + seg_len(segs) > width:
+            return self.track(job, width, 2)
         return segs
 
     def job_rows(self, width: int, job: Dict[str, Any], full: bool) -> List[Row]:
@@ -1317,7 +1572,7 @@ class View:
             else:
                 doing = S(job.get("doing") or "at work", "mist")
             return [row(width, [S("     "), S("● ", "amber"), S(job["title"], "ice")], elapsed),
-                    row(width, [S("       ")] + self.track(job)),
+                    row(width, [S("       ")] + self.track(job, width)),
                     row(width, [S("       "), doing])]
         colour = STATE_COLOUR.get(state, "faint")
         words = state
@@ -1343,6 +1598,12 @@ class View:
         return "%s · %s" % (since, "%d in line" % len(line) if line else "nothing in line")
 
     def factory_rows(self, width: int, fac: Dict[str, Any]) -> List[Row]:
+        rows = self.factory_lines(width, fac)
+        for line in rows:
+            line.stop = ("factory", fac["id"])
+        return rows
+
+    def factory_lines(self, width: int, fac: Dict[str, Any]) -> List[Row]:
         band = self.here("factory", fac["id"])
         head = [S(" "), self.mark("factory", fac["id"]), S(fac["name"], "ice", True)]
         if fac["state"] == "idle":
@@ -1384,11 +1645,7 @@ class View:
             if not fid:
                 left.append(S(event["actor"].ljust(names + 2), "mist"))
             left.append(S(event["word"].ljust(words + 2), FEED_COLOUR.get(event["word"].split(" ·")[0], "amber")))
-            used = seg_len(left)
-            lines = wrap(event["text"], max(width - used - 1, 20))
-            rows.append(row(width, left + [S(lines[0], "ice")]))
-            for extra in lines[1:2]:
-                rows.append(row(width, [S(" " * used), S(extra, "ice")]))
+            rows += flow(width, left, event["text"], "ice", cap=2)
         return rows
 
     def notice_rows(self, width: int) -> List[Row]:
@@ -1402,11 +1659,16 @@ class View:
     def footer(self, width: int) -> List[Row]:
         talk = self.talking
         if talk is not None:
-            left = [S(" %s ▸ " % talk["label"], "cyan", True), S(talk["text"], "ice"), S("_", "cyan")]
+            # The label wraps; the typed text keeps a line of its own and, when
+            # longer than the line, shows its end so the cursor stays in sight.
+            room = width - 4
+            typed = talk["text"] if len(talk["text"]) <= room else "…" + talk["text"][-(room - 1):]
+            rows = flow(width, [S(" ")], talk["label"], "cyan", True)
+            rows.append(row(width, [S(" ▸ ", "cyan", True), S(typed, "ice"), S("_", "cyan")]))
             if talk.get("gone"):
-                return [row(width, left),
-                        row(width, [S(" This was settled elsewhere, so nothing will be sent · esc close", "amber")])]
-            return [row(width, left), row(width, [S(" enter send · esc close · Starship hears this too", "faint")])]
+                return rows + [
+                    row(width, [S(" This was settled elsewhere, so nothing will be sent · esc close", "amber")])]
+            return rows + [row(width, [S(" enter send · esc close · Starship hears this too", "faint")])]
         kind, ident = self.at()
         keys = ["↑↓ move"]
         if kind == "need":
@@ -1420,13 +1682,19 @@ class View:
         elif self.in_tab:
             keys.append("esc back")
         keys += ["t talk", "s who steers", "q quit"]
-        return [row(width, [S(" " + " · ".join(keys), "faint")])]
+        lines = [""]
+        for key in keys:
+            joined = "%s · %s" % (lines[-1], key) if lines[-1] else key
+            if lines[-1] and len(joined) + 2 > width:
+                lines.append(key)
+            else:
+                lines[-1] = joined
+        return [row(width, [S(" " + line, "faint")]) for line in lines]
 
     # ---- the two screens -----------------------------------------------------
 
     def overview(self, width: int) -> List[Row]:
-        rows = self.count_line(width) + [row(width)]
-        rows += self.notice_rows(width)
+        rows: List[Row] = []
         needs = self.needs()
         if needs:
             rows += [row(width, [S(" NEEDS YOU", "red", True)]), row(width)]
@@ -1436,7 +1704,7 @@ class View:
                 if index < 2 or self.here("need", need["id"]):
                     rows += self.need_rows(width, need, full=False) + [row(width)]
                 else:
-                    rows += self.need_rows(width, need, full=False)[:1]
+                    rows.append(self.need_line(width, need))
             if len(needs) > 2:
                 rows.append(row(width))
         else:
@@ -1456,7 +1724,7 @@ class View:
 
     def factory_page(self, width: int) -> List[Row]:
         fac = self.factory(self.opened)
-        rows = self.count_line(width) + [row(width)]
+        rows: List[Row] = []
         about = fac.get("about") or ", ".join(fac["projects"]) or ""
         crew = fac["crew"]
         rows += [row(width, [S(" "), S("  " if fac["needs"] else "▸ ", "cyan", True), S(fac["name"], "ice", True)],
@@ -1464,7 +1732,7 @@ class View:
                  row(width, [S("   " + " · ".join(x for x in (about, "%s, %d busy" % (
                      plural(crew["workers"], "worker", "workers"), crew["busy"])) if x), "faint")]),
                  row(width)]
-        rows += self.notice_rows(width)
+        rows[0].stop = ("factory", fac["id"])
         needs = self.needs(fac["id"])
         if needs:
             rows += [row(width, [S(" NEEDS YOU", "red", True)]), row(width)]
@@ -1506,7 +1774,7 @@ class View:
             stamp = ""
             if item.get("when"):
                 stamp = time.strftime("%d %b", time.gmtime(parse_iso(item["when"]) or 0))
-            rows.append(row(width, [S("   "), S(stamp.ljust(8), "faint"), S(item["what"], "mist")]))
+            rows += flow(width, [S("   "), S(stamp.ljust(8), "faint")], item["what"], "mist")
         rows += [row(width)] + self.feed_rows(width, fac["id"], cap=8)
         rows += [row(width), row(width, [S(" TALK", "mist", True)]), row(width)]
         if not fac["talk"]:
@@ -1514,25 +1782,48 @@ class View:
         for line in fac["talk"]:
             you = line["who"] == "you"
             stamp = when_words(line["at"], self.now()) if line.get("at") else ""
-            rows.append(row(width, [S("   "), S(stamp.ljust(9), "faint"),
-                                    S(("you" if you else line["who"]).ljust(10), "cyan" if you else "mist"),
-                                    S(line["said"], "ice" if you else "mist")]))
+            rows += flow(width, [S("   "), S(stamp.ljust(9), "faint"),
+                                 S(("you" if you else line["who"]).ljust(10), "cyan" if you else "mist")],
+                         line["said"], "ice" if you else "mist")
         return rows
 
     def frame(self, width: int, height: Optional[int] = None) -> List[Row]:
+        """The screen: the count line and any notice on top, the keys at the bottom.
+
+        With a height, the body between them is the part in sight: it follows
+        the highlight unless it was scrolled by hand, and the row under the count
+        line and the row above the keys say what is out of sight.
+        """
         width = max(width, 40)
+        head = self.count_line(width)
+        notes = self.notice_rows(width)
         body = self.factory_page(width) if self.opened else self.overview(width)
         foot = self.footer(width)
-        if height:
-            body = body[:max(height - len(foot) - 1, 1)]
-            body += [row(width)] * max(height - len(foot) - len(body), 0)
-        else:
-            body.append(row(width))
-        return body + foot
+        if not height:
+            return head + [row(width)] + notes + body + [row(width)] + foot
+        room = max(height - len(head) - len(notes) - len(foot) - 2, 1)
+        last = max(len(body) - room, 0)
+        if self.follow:
+            mine = [index for index, line in enumerate(body) if line.stop and line.stop == self.selected]
+            if mine and (self.cursor == 0 or mine[0] < self.top):
+                # Up onto a row: show the heading or blank row above it too.
+                self.top = 0 if self.cursor == 0 else max(mine[0] - 2, 0)
+            elif mine and mine[-1] >= self.top + room:
+                self.top = min(mine[-1] + 2 - room, mine[0])
+        self.top = min(max(self.top, 0), last)
+        self.page = room
+        sight = body[self.top:self.top + room]
+        sight += [row(width)] * (room - len(sight))
+        above, below = self.top, len(body) - self.top - room
+        upper = row(width, [S(" ▲ %s above · pgup" % plural(above, "more line", "more lines"), "faint")]) \
+            if above > 0 else row(width)
+        lower = row(width, [S(" ▼ %s below · pgdn" % plural(below, "more line", "more lines"), "faint")]) \
+            if below > 0 else row(width)
+        return head + [upper] + notes + sight + [lower] + foot
 
 
-def plain(view: View, width: int) -> str:
-    return "\n".join("".join(t for t, _, _ in segs).rstrip() for segs in view.frame(width))
+def plain(view: View, width: int, height: Optional[int] = None) -> str:
+    return "\n".join("".join(t for t, _, _ in segs).rstrip() for segs in view.frame(width, height))
 
 
 def paint(segs: Row) -> str:
@@ -1578,7 +1869,8 @@ class Pane:
         if record is None:
             record = refresh(home)
         self.view = View(record, opened=opened, in_tab=in_tab, item=item)
-        self.loaded = mtime(os.path.join(pane_dir(home), "record.json")) or 0
+        self.loaded = self.record_stamp()
+        self.calls_checked = 0.0
         self.focus_file = os.environ.get("FM_FACTORY_FOCUS_FILE") or ""
 
     def take_focus(self) -> bool:
@@ -1600,17 +1892,31 @@ class Pane:
     def say(self, text: str, colour: str = "green", seconds: int = 8) -> None:
         self.view.notice = (text, colour, time.time() + seconds)
 
+    def record_stamp(self) -> int:
+        try:
+            return os.stat(os.path.join(pane_dir(self.home), "record.json")).st_mtime_ns
+        except OSError:
+            return 0
+
     def reload(self) -> None:
-        path = os.path.join(pane_dir(self.home), "record.json")
-        stamp = mtime(path) or 0
+        stamp = self.record_stamp()
         if stamp != self.loaded:
             record = cached(self.home)
             if record:
                 self.view.adopt(record)
                 self.loaded = stamp
-        age = now_epoch() - int(self.view.record.get("as_of_epoch") or 0)
-        if age > env_int("FM_FACTORY_TTL", 20):
+        if snapshot_age(self.view.record) > env_int("FM_FACTORY_TTL", 20):
             refresh_in_background(self.home)
+
+    def watch_calls(self) -> None:
+        """Rebuild the owner's calls once their signal moves past the record's, checking at most once a second."""
+        now = time.monotonic()
+        if now - self.calls_checked < 1:
+            return
+        self.calls_checked = now
+        signal = calls_signal(self.home)
+        if signal and signal != self.view.record.get("calls_signal"):
+            refresh_calls_in_background(self.home)
 
     def factory_of_stop(self) -> Optional[str]:
         if self.view.opened:
@@ -1637,6 +1943,15 @@ class Pane:
     def key(self, key: str) -> bool:
         view = self.view
         now = now_epoch()
+        # Scrolling only moves the view, so it never closes a box or a confirmation.
+        if key in ("pgup", "pgdn"):
+            view.scroll((1 if key == "pgdn" else -1) * max(view.page - 1, 1))
+            return True
+        if key in ("wheel-up", "wheel-down"):
+            view.scroll(3 if key == "wheel-down" else -3)
+            return True
+        if key in ("mouse", "other"):
+            return True
         if view.talking is not None:
             talk = view.talking
             if key == "esc":
@@ -1661,7 +1976,7 @@ class Pane:
                     self.send(rid, body, "Sent to Starship. It passes it on to the %s crew." % fac["name"])
             elif key == "backspace":
                 talk["text"] = talk["text"][:-1]
-            elif key not in KEYS.values():
+            elif key not in NAMED:
                 # Typed keys arrive one at a time; pasted or sent text arrives whole.
                 talk["text"] += "".join(c for c in key if c.isprintable())
             return True
@@ -1759,18 +2074,30 @@ class Pane:
 
 
 KEYS = {b"\x1b[A": "up", b"\x1b[B": "down", b"\x1b[C": "right", b"\x1b[D": "left",
-        b"\x1bOA": "up", b"\x1bOB": "down", b"\x1b": "esc", b"\r": "enter", b"\n": "enter",
+        b"\x1bOA": "up", b"\x1bOB": "down", b"\x1b[5~": "pgup", b"\x1b[6~": "pgdn",
+        b"\x1b": "esc", b"\r": "enter", b"\n": "enter",
         b"\x7f": "backspace", b"\x08": "backspace", b"\x03": "ctrl-c"}
+# Every named key, so none is ever typed into the talk box as text.
+NAMED = set(KEYS.values()) | {"wheel-up", "wheel-down", "mouse", "other"}
+# One read may hold several keys: a held arrow, a turn of the mouse wheel
+# (SGR reports, asked for when the pane starts), or pasted text.
+KEY_RE = re.compile(rb"\x1b\[<(\d+);\d+;\d+[Mm]|\x1b\[[0-9;?]*[ -/]*[@-~]|\x1bO.|\x1b|[^\x1b]+")
 
 
-def read_key(fd: int) -> str:
-    data = os.read(fd, 64)
-    if data in KEYS:
-        return KEYS[data]
-    try:
-        return data.decode()
-    except UnicodeDecodeError:
-        return ""
+def read_keys(fd: int) -> List[str]:
+    keys = []
+    for match in KEY_RE.finditer(os.read(fd, 1024)):
+        data = match.group(0)
+        if match.group(1) is not None:
+            button = int(match.group(1))
+            keys.append({64: "wheel-up", 65: "wheel-down"}.get(button, "mouse"))
+        elif data in KEYS:
+            keys.append(KEYS[data])
+        elif data.startswith(b"\x1b"):
+            keys.append("other")
+        else:
+            keys.append(data.decode("utf-8", errors="ignore"))
+    return keys
 
 
 def live(pane: Pane) -> None:
@@ -1783,14 +2110,14 @@ def live(pane: Pane) -> None:
     signal.signal(signal.SIGWINCH, lambda *_: resized.__setitem__(0, True))
     signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(SystemExit(0)))
     signal.signal(signal.SIGHUP, lambda *_: (_ for _ in ()).throw(SystemExit(0)))
-    out.write("\x1b[?1049h\x1b[?25l\x1b[?7l")
-    last_reload = 0.0
+    # The alternate screen, no cursor, no autowrap, and mouse button and wheel
+    # reports in SGR form, which Herdr passes to a pane that asks for them.
+    out.write("\x1b[?1049h\x1b[?25l\x1b[?7l\x1b[?1000h\x1b[?1006h")
     try:
         tty.setraw(fd)
         while True:
-            if time.time() - last_reload > 3:
-                pane.reload()
-                last_reload = time.time()
+            pane.reload()
+            pane.watch_calls()
             pane.take_focus()
             size = os.get_terminal_size()
             view = pane.view
@@ -1801,7 +2128,10 @@ def live(pane: Pane) -> None:
             if resized[0]:
                 buf.append("\x1b[2J")
                 resized[0] = False
-            buf.append("\r\n".join(paint(segs) + "\x1b[K" for segs in rows[:size.lines]))
+            # Each row is cleared before it is drawn, never after: with autowrap
+            # off the cursor stays on the last column, and clearing from there
+            # would erase the character a full-width row put in it.
+            buf.append("\r\n".join("\x1b[K" + paint(segs) for segs in rows[:size.lines]))
             buf.append("\x1b[?2026l")
             out.write("".join(buf))
             out.flush()
@@ -1813,12 +2143,13 @@ def live(pane: Pane) -> None:
                     break
                 ready, _, _ = select.select([fd], [], [], wait)
                 if ready:
-                    if not pane.key(read_key(fd)):
-                        return
+                    for key in read_keys(fd):
+                        if not pane.key(key):
+                            return
                     break
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, saved)
-        out.write("\x1b[?7h\x1b[?25h\x1b[?1049l")
+        out.write("\x1b[?1006l\x1b[?1000l\x1b[?7h\x1b[?25h\x1b[?1049l")
         out.flush()
         if not pane.view.in_tab:
             try:
@@ -1969,13 +2300,14 @@ def follow(home: str, task_id: str) -> None:
 def main(argv: List[str]) -> int:
     parser = argparse.ArgumentParser(prog="fm-factory.py", add_help=True,
                                      description="The Factory pane. See the header of this file.")
-    parser.add_argument("command", nargs="?", choices=["view", "follow", "open-tab", "workers", "refresh"])
+    parser.add_argument("command", nargs="?", choices=["view", "follow", "open-tab", "workers", "refresh", "refresh-calls"])
     parser.add_argument("target", nargs="?")
     parser.add_argument("--data", action="store_true")
     parser.add_argument("--plain", action="store_true")
     parser.add_argument("--fresh", action="store_true")
     parser.add_argument("--factory")
     parser.add_argument("--width", type=int, default=92)
+    parser.add_argument("--height", type=int)
     parser.add_argument("--origin-tab")
     parser.add_argument("--page")
     parser.add_argument("--item")
@@ -1996,10 +2328,14 @@ def main(argv: List[str]) -> int:
                 if args.factory and not any(f["id"] == args.factory for f in record["factories"]):
                     print("fm-factory: no factory %s" % args.factory, file=sys.stderr)
                     return 1
-                print(plain(View(record, opened=args.factory), max(args.width, 40)))
+                height = max(args.height, 8) if args.height else None
+                print(plain(View(record, opened=args.factory), max(args.width, 40), height))
             return 0
         if args.command == "refresh":
             refresh(home)
+            return 0
+        if args.command == "refresh-calls":
+            refresh_calls(home)
             return 0
         if args.command == "view":
             if args.origin_tab:

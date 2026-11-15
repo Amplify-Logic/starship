@@ -335,6 +335,25 @@ test_bootstrap_installs_on_home_and_addon() {
   pass "leak prepush: session-start bootstrap installs the hook on the home's checkout and its add-on"
 }
 
+test_status_names_whether_the_check_is_installed() {
+  local repo="$TMP_ROOT/status" tree="$TMP_ROOT/status-tree" out rc
+  fm_git_init_commit "$repo"
+  git -C "$repo" worktree add -q --detach "$tree" HEAD
+  out=$("$PREPUSH" status "$repo" starship); rc=$?
+  expect_code 1 "$rc" "status before install"
+  assert_contains "$out" "LEAK_PREPUSH: $repo: the pre-push leak check is not installed" "status did not name the missing check"
+  "$PREPUSH" install "$repo" starship || fail "install failed"
+  out=$("$PREPUSH" status "$repo" starship) || fail "status after install failed: $out"
+  [ -z "$out" ] || fail "status of an installed check printed: $out"
+  "$PREPUSH" status "$tree" starship >/dev/null || fail "status from a task worktree did not see the shared hook"
+  out=$("$PREPUSH" status "$repo" addon); rc=$?
+  expect_code 1 "$rc" "status of the other kind"
+  out=$("$PREPUSH" status "$TMP_ROOT/status-nowhere" starship); rc=$?
+  expect_code 1 "$rc" "status of a path that is no checkout"
+  assert_contains "$out" "not a git checkout" "status did not name a path that is no checkout"
+  pass "leak prepush: status confirms the installed hook of each kind, from the checkout and its task worktrees"
+}
+
 fm_test_run \
   test_hand_push_of_a_new_name_is_refused \
   test_changed_files_get_the_full_scan \
@@ -345,4 +364,5 @@ fm_test_run \
   test_only_new_commits_at_the_checked_out_commit \
   test_addon_keeps_its_own_words \
   test_install_skips_copies_it_does_not_own \
-  test_bootstrap_installs_on_home_and_addon
+  test_bootstrap_installs_on_home_and_addon \
+  test_status_names_whether_the_check_is_installed

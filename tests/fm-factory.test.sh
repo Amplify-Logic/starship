@@ -509,17 +509,176 @@ test_work_no_factory_claims_is_still_shown() {
   pass "factory registry: work no factory claims is shown under Other work"
 }
 
+# write_crowded_world: the sample fleet plus more calls for the owner than a
+# small pane holds: a question whose title lists several calls and whose
+# option is long, a title with no space to break at, and four more plain ones.
+write_crowded_world() {
+  write_world
+  python3 - "$HOME_FIX" "$NOW" <<'PY'
+import json, os, sys, time
+home, now = sys.argv[1], int(sys.argv[2])
+snap_path, shapes_path = os.path.join(home, "snapshot.json"), os.path.join(home, "shapes.json")
+snap, shapes = json.load(open(snap_path)), json.load(open(shapes_path))
+def held(rid, title, repo, minutes_ago, reason):
+    stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - minutes_ago * 60))
+    snap["backlog"]["records"].append({
+        "id": rid, "title": title, "repo": repo, "state": "queued", "structured": True, "kind": "captain",
+        "captain_actionable": True, "hold_kind": "captain", "hold_bucket": "live", "hold_reason": reason,
+        "hold_set": stamp, "hold_until": None, "unresolved_blocker_ids": [], "since": "2026-11-13",
+        "completion": {"verb": None, "date": None}, "pr_url": None})
+    return stamp
+stamp = held("shop-packaging", "Packaging: three calls from the supplier visit (recycled boxes now or after "
+             "the holidays, tell the printer today or on return, ask about the ribbon colour)", "sample-shop", 1,
+             "Three calls from the supplier visit, each small but each holding up the holiday orders.")
+shapes["decisions"].append({
+    "id": "shop-packaging", "identity": stamp + "#0", "title": snap["backlog"]["records"][-1]["title"],
+    "question": snap["backlog"]["records"][-1]["hold_reason"],
+    "options": ["order the recycled boxes now, before the printer closes for the holidays and the price goes up",
+                "wait until January"],
+    "recommended_option": "", "recommendation": "", "held_since": stamp})
+held("shop-rename", "Rename-the-whole-catalogue-to-the-new-house-style-and-redirect-every-old-link", "sample-shop",
+     2, "The catalogue needs one name.")
+for index, title in enumerate(["Which courier for parcels going abroad after the new year",
+                               "Whether the shop shows prices with tax or without it for visitors from abroad",
+                               "Opening hours over the holidays for the shop and the order service",
+                               "A thank-you card in every parcel, or only in the first order"]):
+    held("shop-extra-%d" % index, title, "sample-shop", 3 + index, "Needs your view.")
+json.dump(snap, open(snap_path, "w"), indent=1)
+json.dump(shapes, open(shapes_path, "w"), indent=1)
+PY
+}
+
+# screen_of <capture> <rows> <cols>: what a terminal shows after the last
+# complete frame the pane drew: home, clear, line feeds, erase-in-line and
+# colour codes, with autowrap off as the pane sets it, so a character written
+# in the last column stays under the cursor until something erases it.
+screen_of() {
+  python3 - "$1" "$2" "$3" <<'PY'
+import re, sys
+data = open(sys.argv[1], "rb").read().decode("utf-8", "replace")
+rows, cols = int(sys.argv[2]), int(sys.argv[3])
+frames = re.findall(r"\x1b\[\?2026h(.*?)\x1b\[\?2026l", data, re.S)
+if not frames:
+    sys.exit("screen_of: no complete frame in the capture")
+grid = [[" "] * cols for _ in range(rows)]
+r = c = 0
+for token in re.findall(r"\x1b\[[0-9;?<]*[ -/]*[@-~]|\x1b.|[\s\S]", frames[-1]):
+    if token.startswith("\x1b["):
+        final, params = token[-1], token[2:-1]
+        if final == "H":
+            parts = [int(p) for p in params.split(";") if p.isdigit()] or [1, 1]
+            r, c = parts[0] - 1, (parts[1] - 1 if len(parts) > 1 else 0)
+        elif final == "J" and params == "2":
+            grid = [[" "] * cols for _ in range(rows)]
+        elif final == "K":
+            for x in range(c, cols):
+                grid[r][x] = " "
+    elif token == "\r":
+        c = 0
+    elif token == "\n":
+        r = min(r + 1, rows - 1)
+    elif not token.startswith("\x1b") and token.isprintable():
+        grid[r][c] = token
+        c = min(c + 1, cols - 1)
+print("\n".join("".join(line).rstrip() for line in grid))
+PY
+}
+
+test_a_small_pane_shows_its_height_and_says_what_is_below() {
+  reset_case
+  write_registry
+  write_crowded_world
+  local out widest flat
+  out=$(python3 "$FACTORY" --plain --width 70 --height 40) || fail "--plain --height failed"
+  assert_equals "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" "40" "the screen is the pane's height"
+  widest=$(printf '%s\n' "$out" | python3 -c 'import sys; print(max(len(l.rstrip("\n")) for l in sys.stdin))')
+  [ "$widest" -le 70 ] || fail "a line is wider than the pane ($widest)"$'\n'"$out"
+  assert_contains "$(printf '%s\n' "$out" | tail -1)" "q quit" "the keys stay on the bottom line"
+  assert_contains "$out" "more lines below" "the screen does not say there is more below"
+  assert_not_contains "$out" "more lines above" "the first screen says something is above it"
+  # The opened card shows its whole title and each option in full, wrapped.
+  flat=$(printf '%s\n' "$out" | sed -n '/Packaging/,/Talk it through/p' | tr '\n' ' ' | tr -s ' ')
+  assert_contains "$flat" "Packaging: three calls from the supplier visit (recycled boxes now or after the holidays, tell the printer today or on return, ask about the ribbon colour)" \
+    "the card's title is cut off"
+  assert_contains "$flat" "1 order the recycled boxes now, before the printer closes for the holidays and the price goes up" \
+    "the card's option is cut off"
+  assert_not_contains "$flat" "…" "an opened card cut its words short"
+  # A one-line row ends on a whole word and says it was shortened.
+  has_line "$out" " ● Whether the shop shows prices with tax or without it for…" \
+    "a one-line row is cut mid-word or without an ellipsis"
+  out=$(python3 "$FACTORY" --plain --width 140 --height 80) || fail "--plain at the small font failed"
+  widest=$(printf '%s\n' "$out" | python3 -c 'import sys; print(max(len(l.rstrip("\n")) for l in sys.stdin))')
+  [ "$widest" -le 140 ] || fail "a line is wider than the small-font pane ($widest)"
+  assert_equals "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" "80" "the small-font screen is the pane's height"
+  pass "factory pane: a small pane fits its width and height, wraps an opened card, and says what is below"
+}
+
+test_a_small_pane_scrolls_to_everything() {
+  reset_case
+  write_registry
+  write_crowded_world
+  local dir="$TMP_ROOT/case$CASE" first expected
+  export FM_FACTORY_TEST_SIZE=40x70
+  # Before the pane first closes, so both read the same last look.
+  expected=$(python3 "$FACTORY" --plain --width 70 --height 40)
+  drive_keys "SNAP:$dir/first"
+  first=$(screen_of "$dir/first" 40 70)
+  assert_equals "$first" "$expected" "the live pane does not draw what --plain --height prints"
+  assert_not_contains "$first" "SINCE YOU LAST LOOKED" "the fixture is too small to need scrolling"
+  # Highlighting the title with no space to break at opens its card, which
+  # breaks that title across lines rather than clipping it.
+  drive_keys DOWN DOWN "SNAP:$dir/opened"
+  assert_contains "$(screen_of "$dir/opened" 40 70 | sed -n '/Rename-the/,/Talk it through/p' | sed 's/^ *//' \
+    | tr -d '\n')" "Rename-the-whole-catalogue-to-the-new-house-style-and-redirect-every-old-link" \
+    "an opened card clipped a title with no space in it"
+  drive_keys PGDN PGDN PGDN PGDN PGDN PGDN "SNAP:$dir/paged" PGUP PGUP PGUP PGUP PGUP PGUP "SNAP:$dir/back"
+  assert_contains "$(screen_of "$dir/paged" 40 70)" "SINCE YOU LAST LOOKED" "page down never reached the feed"
+  assert_contains "$(screen_of "$dir/paged" 40 70)" "more lines above" "the screen does not say there is more above"
+  assert_contains "$(screen_of "$dir/back" 40 70)" " NEEDS YOU" "page up never came back to the top"
+  local wheel=() downs=()
+  for _ in $(seq 1 20); do wheel+=(WHEELDOWN); done
+  drive_keys "${wheel[@]}" CLICK "SNAP:$dir/wheeled"
+  assert_contains "$(screen_of "$dir/wheeled" 40 70)" "SINCE YOU LAST LOOKED" "the mouse wheel never reached the feed"
+  # The highlight moving past the bottom scrolls with it, and the arrows keep
+  # scrolling once the last row is highlighted.
+  for _ in $(seq 1 40); do downs+=(DOWN); done
+  drive_keys "${downs[@]:0:10}" "SNAP:$dir/follow" "${downs[@]}" "SNAP:$dir/walked"
+  assert_contains "$(screen_of "$dir/follow" 40 70)" " ▸ " "the highlight scrolled out of sight"
+  assert_contains "$(screen_of "$dir/walked" 40 70)" "SINCE YOU LAST LOOKED" "the arrows never reached the feed"
+  unset FM_FACTORY_TEST_SIZE
+  pass "factory pane: a small pane scrolls with page keys, the mouse wheel and the highlight"
+}
+
+test_a_narrow_talk_box_always_shows_what_is_typed() {
+  reset_case
+  write_registry
+  write_crowded_world
+  local dir="$TMP_ROOT/case$CASE" screen
+  export FM_FACTORY_TEST_SIZE=40x70
+  # The highlighted question's title is wider than the pane, so the box's
+  # label wraps and the typed text and its cursor keep a line of their own.
+  drive_keys DOWN t "half typed note" "SNAP:$dir/talk" ESC
+  screen=$(screen_of "$dir/talk" 40 70)
+  assert_contains "$screen" "About Packaging: three calls" "the talk box is not about the highlighted question"
+  assert_contains "$screen" "ask about the ribbon colour)" "the talk box cut its label short"
+  assert_contains "$screen" "▸ half typed note_" "the talk box hid what was typed"
+  unset FM_FACTORY_TEST_SIZE
+  pass "factory pane: a narrow talk box wraps a long label and always shows the typed text"
+}
+
 # drive_keys <keys...>: once the first screen is up, press keys in the real
-# live view under a pty, one per third of a second, then q. A `SH:<command>`
-# step runs the command instead and waits for the pane to pick up the
-# refreshed record; a `SNAP:<file>` step saves what the pane draws next. With
-# DRIVE_PANE=1 the view runs as Herdr starts it, through fm-factory-pane.sh run.
+# live view under a pty (FM_FACTORY_TEST_SIZE rows x columns, default 50x100),
+# one per third of a second, then q. A `SH:<command>` step runs the command
+# instead and waits for the pane to pick up the refreshed record; a
+# `SNAP:<file>` step saves what the pane draws next. With DRIVE_PANE=1 the view
+# runs as Herdr starts it, through fm-factory-pane.sh run.
 drive_keys() {
   python3 - "$FACTORY" "$PANE" "$@" <<'PY'
 import fcntl, os, pty, select, struct, subprocess, sys, termios, time
 pid, fd = pty.fork()
 if pid == 0:
-    fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack("HHHH", 50, 100, 0, 0))
+    rows, cols = (int(n) for n in os.environ.get("FM_FACTORY_TEST_SIZE", "50x100").split("x"))
+    fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
     if os.environ.get("DRIVE_PANE") == "1":
         os.execvp("bash", ["bash", sys.argv[2], "run"])
     os.execvp("python3", ["python3", sys.argv[1], "view"])
@@ -542,7 +701,9 @@ for key in sys.argv[3:] + ["q"]:
     if key.startswith("SNAP:"):
         open(key[5:], "wb").write(drain(1.0))
         continue
-    os.write(fd, {"ENTER": b"\r", "DOWN": b"\x1b[B", "ESC": b"\x1b"}.get(key, key.encode()))
+    os.write(fd, {"ENTER": b"\r", "DOWN": b"\x1b[B", "UP": b"\x1b[A", "ESC": b"\x1b", "PGDN": b"\x1b[6~",
+                  "PGUP": b"\x1b[5~", "WHEELDOWN": b"\x1b[<65;10;10M", "WHEELUP": b"\x1b[<64;10;10M",
+                  "CLICK": b"\x1b[<0;10;10M\x1b[<0;10;10m"}.get(key, key.encode()))
     drain(0.35)
 # Keep reading the pty while the pane exits, so its last writes never block.
 end = time.time() + 15
@@ -601,6 +762,116 @@ test_a_note_reaches_starship_through_the_real_inbox() {
     "request_id=factory.garden-journal.answer.garden-chart.$((NOW - 600)).2" \
     "the new note names when the question was asked again"
   pass "factory pane: an answer is a captain inbox note, saved once per question under its request id"
+}
+
+# park-world <id>: defer a held decision to a date, as firstmate parks it: the
+# fixture backlog row as tasks-axi rewrites it, then the parking command itself
+# through bin/fm-tasks-axi.sh, whose write the stand-in adapter takes as done.
+cat > "$BINDIR/park-world" <<SH
+#!/usr/bin/env bash
+python3 - "\$FM_FACTORY_SNAPSHOT" "\$1" <<'PY'
+import json, sys
+path, ident = sys.argv[1], sys.argv[2]
+world = json.load(open(path))
+for row in world["backlog"]["records"]:
+    if row["id"] == ident:
+        row.update(hold_bucket="dated", hold_until="2099-01-01", captain_actionable=False)
+json.dump(world, open(path, "w"))
+PY
+exec bash "$ROOT/bin/fm-tasks-axi.sh" hold "\$1" --until 2099-01-01 >/dev/null
+SH
+chmod +x "$BINDIR/park-world"
+
+# watch_pane <first> <next> <command>: run the live overview under a pty, and
+# once it shows <first>, run <command> and print how many seconds pass until
+# it shows <next> (or `never`).
+watch_pane() {
+  python3 - "$FACTORY" "$@" <<'PY'
+import fcntl, os, pty, re, select, struct, subprocess, sys, termios, time
+factory, first, nxt, command = sys.argv[1:5]
+pid, fd = pty.fork()
+if pid == 0:
+    fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack("HHHH", 50, 100, 0, 0))
+    os.execvp("python3", ["python3", factory, "view"])
+seen = b""
+def drain(seconds, until=None, start=0):
+    global seen
+    end = time.time() + seconds
+    while time.time() < end:
+        if until and until.encode() in re.sub(rb"\x1b\[[0-9;?]*[A-Za-z]", b"", seen[start:]):
+            return True
+        r, _, _ = select.select([fd], [], [], 0.05)
+        if r:
+            try:
+                seen += os.read(fd, 65536)
+            except OSError:
+                break
+    return False
+result = "no first screen"
+if drain(20, until=first):
+    mark = len(seen)
+    began = time.time()
+    subprocess.run(command, shell=True, check=True)
+    result = "%.1f" % (time.time() - began) if drain(15, until=nxt, start=mark) else "never"
+print(result)
+os.write(fd, b"q")
+end = time.time() + 15
+while True:   # keep reading so its last writes drain and it can exit
+    done, _ = os.waitpid(pid, os.WNOHANG)
+    if done:
+        break
+    if time.time() >= end:
+        os.kill(pid, 9)
+        os.waitpid(pid, 0)
+        break
+    drain(0.3)
+PY
+}
+
+# On 2026-11-15 the owner parked a held decision and it stayed on screen: the
+# pane refreshed its record only every twenty seconds, and a whole refresh
+# reads every worker. A changed call now rebuilds the record on its own.
+test_a_parked_decision_leaves_the_live_pane_within_seconds() {
+  local took
+  reset_case
+  write_registry
+  write_world
+  python3 "$FACTORY" refresh || fail "the first record could not be built"
+  took=$(watch_pane '3 need you' '2 need you' "$BINDIR/park-world garden-chart") \
+    || fail "the live pane could not be driven"
+  case "$took" in
+    never|'no first screen'|'') fail "the live pane still showed the parked decision: $took" ;;
+  esac
+  awk -v t="$took" 'BEGIN { exit !(t < 4.5) }' || fail "the live pane took ${took}s to drop the parked decision"
+  cp "$HOME_FIX/state/factory/record.json" "$TMP_ROOT/case$CASE/record.json" || fail "the pane wrote no record"
+  assert_equals "$(q '[.needs_you[].id] | join(" ")')" "shop-provider garden-share" \
+    "the parked decision is still in the record"
+  assert_equals "$(q '[.factories[] | select(.id == "sample-shop") | .jobs[] | select(.id == "shop-search") | .state] | join("")')" \
+    "running" "the workers were lost from the record"
+  pass "factory pane: a parked decision leaves the live pane within seconds, without a whole refresh (${took}s)"
+}
+
+# A calls rebuild that read the fleet before a full refresh finished must not
+# put the older workers back over the newer record.
+test_a_calls_rebuild_on_an_older_reading_keeps_the_newer_record() {
+  local basis epoch
+  reset_case
+  basis="$HOME_FIX/state/factory/basis.json"
+  write_registry
+  write_world
+  python3 "$FACTORY" refresh >/dev/null || fail "the first record could not be built"
+  epoch=$(jq -r .snapshot_epoch "$HOME_FIX/state/factory/record.json")
+  if ! { jq '.taken_epoch -= 100
+      | .snapshot.tasks |= map(if .id == "shop-search" then .current_state.state = "unknown" else . end)' \
+    "$basis" > "$basis.old" && mv "$basis.old" "$basis"; }; then
+    fail "the older reading could not be staged"
+  fi
+  python3 "$FACTORY" refresh-calls >/dev/null || fail "the calls could not be rebuilt"
+  cp "$HOME_FIX/state/factory/record.json" "$TMP_ROOT/case$CASE/record.json" || fail "the record is gone"
+  assert_equals "$(q .snapshot_epoch)" "$epoch" "the record went back to the older reading"
+  assert_equals "$(q '[.factories[] | select(.id == "sample-shop") | .jobs[] | select(.id == "shop-search") | .state] | join("")')" \
+    "running" "the older workers replaced the newer ones"
+  pass "factory pane: a calls rebuild on an older reading keeps the newer record"
 }
 
 test_the_highlight_and_open_boxes_follow_the_record() {
@@ -776,6 +1047,24 @@ test_the_plugin_installs_opens_and_removes() {
 
 # The bridge strip opens the pane on one item of NEEDS YOU: a new pane starts
 # its highlight there, and a pane already showing in the tab moves to it.
+# The bridge strip moving the pane to a call brings that call into sight,
+# even after the owner scrolled the pane by hand.
+test_a_scrolled_pane_shows_the_item_it_is_moved_to() {
+  reset_case
+  write_registry
+  write_crowded_world
+  local dir="$TMP_ROOT/case$CASE"
+  export FM_FACTORY_TEST_SIZE=40x70 HERDR_BIN_PATH="$BINDIR/herdr" HERDR_TAB_ID=w1:t1 HERDR_SOCKET_PATH=/run/a.sock
+  DRIVE_PANE=1 HERDR_PANE_ID=w1:p9 drive_keys PGDN PGDN PGDN PGDN PGDN PGDN "SNAP:$dir/paged" \
+    "SH:HERDR_PANE_ID=w1:p3 bash $PANE open --item shop-packaging" "SNAP:$dir/moved"
+  assert_not_contains "$(screen_of "$dir/paged" 40 70)" "● Packaging: three calls" \
+    "the fixture did not scroll the item out of sight"
+  assert_contains "$(screen_of "$dir/moved" 40 70)" "▸ ● Packaging: three calls" \
+    "the pane moved to the item but left it out of sight"
+  unset FM_FACTORY_TEST_SIZE HERDR_BIN_PATH HERDR_TAB_ID HERDR_SOCKET_PATH
+  pass "factory pane: moving a scrolled pane to an item brings that item into sight"
+}
+
 test_open_on_an_item_puts_the_highlight_on_it() {
   local out pid
   reset_case
@@ -821,13 +1110,19 @@ fm_test_run \
   test_a_ship_with_no_mode_still_reports_its_pr_ready \
   test_without_a_registry_each_project_is_a_factory \
   test_work_no_factory_claims_is_still_shown \
+  test_a_small_pane_shows_its_height_and_says_what_is_below \
+  test_a_small_pane_scrolls_to_everything \
+  test_a_narrow_talk_box_always_shows_what_is_typed \
   test_writing_keys_go_through_the_inbox_and_act_on_the_highlighted_row \
   test_a_note_reaches_starship_through_the_real_inbox \
   test_the_highlight_and_open_boxes_follow_the_record \
+  test_a_parked_decision_leaves_the_live_pane_within_seconds \
+  test_a_calls_rebuild_on_an_older_reading_keeps_the_newer_record \
   test_talking_never_changes_who_steers \
   test_enter_opens_the_factory_tab_with_its_live_workers \
   test_a_live_copy_shows_text_at_the_top_of_a_taller_pane \
   test_open_tab_stops_when_herdr_does_not_name_the_tab \
   test_workers_splits_live_copies_beside_a_page_pane \
   test_the_plugin_installs_opens_and_removes \
-  test_open_on_an_item_puts_the_highlight_on_it
+  test_open_on_an_item_puts_the_highlight_on_it \
+  test_a_scrolled_pane_shows_the_item_it_is_moved_to
