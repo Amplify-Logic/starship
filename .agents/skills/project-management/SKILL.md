@@ -28,6 +28,10 @@ Absence from the main `data/projects.md` registry is never evidence that no seco
 If no second mates are registered or no scope fits, continue in the main home.
 If the owning second mate cannot accept the route, report that concrete blocker or obtain an explicit captain redirection rather than silently duplicating the project in the main home.
 
+Before adding, cloning, creating, or registering a project in a home, run `bin/fm-addon.sh first-project`.
+When it refuses, stop: clone, create, and register nothing, and do not look the project up; the home's first project waits for the owner's own private repository, which `first-voyage` step 4 makes, so return there and tell the owner in one line that the first project waits until that repository exists.
+The add-on itself is registered after the repository exists, so the check never holds it back.
+
 Resolve the project name, destination, delivery posture, and autonomy posture before changing local or remote state.
 Keep a newly added clone and its registry entry consistent, and roll back only artifacts created by the incomplete operation when a later initialization step fails and that rollback is safe.
 Do not overwrite or repurpose an existing path.

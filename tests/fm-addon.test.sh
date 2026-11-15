@@ -9,7 +9,11 @@
 # replaces a built-in of the same name, a failing or slow hook never stops the
 # caller or the hooks after it, watcher hooks are sourced into bin/fm-watch.sh
 # rather than run, an unusable config/addon is named with its repair, and
-# install clones a missing checkout from the configured origin.
+# install clones a missing checkout from the configured origin. create gives a
+# home with no add-on its own private repository from the starter, through a
+# stand-in for the GitHub CLI, guards confirms a new home cannot publish
+# anything personal by mistake, and first-project holds a home's first project
+# back until that private repository exists.
 #
 # Every case uses a throwaway home and add-on, so no case reads or writes this
 # home; built-in hooks are exercised in a throwaway code checkout holding a copy
@@ -266,9 +270,278 @@ test_misuse_exits_2() {
   expect_code 2 "$code" "run with no point"
   addon "$home" root extra 2>/dev/null; code=$?
   expect_code 2 "$code" "root with an argument"
+  addon "$home" first-project extra 2>/dev/null; code=$?
+  expect_code 2 "$code" "first-project with an argument"
   addon "$home" --help 2>/dev/null; code=$?
   expect_code 0 "$code" "--help"
   pass "misuse exits 2 and --help exits 0"
+}
+
+# fake_gh <dir>: a stand-in for the GitHub CLI whose account, sign-in and
+# repositories live under <dir>/gh: `signed-in` marks the sign-in, `login`
+# holds the account name, and remotes/<owner>/<repo>.git is a bare repository
+# beside a .visibility file. Every call is logged to <dir>/gh/calls. Echoes the
+# directory to put first on PATH.
+fake_gh() {
+  local dir=$1 bin
+  bin=$(fm_fakebin "$dir")
+  mkdir -p "$dir/gh/remotes"
+  cat > "$bin/gh" <<'EOF'
+#!/usr/bin/env bash
+state=${FAKE_GH_STATE:?}
+printf '%s\n' "$*" >> "$state/calls"
+login=$(cat "$state/login" 2>/dev/null)
+case "$1 $2" in
+  "auth status") [ -e "$state/signed-in" ] ;;
+  "api user") [ -e "$state/signed-in" ] && printf '%s\n' "$login" ;;
+  "repo view")
+    [ -d "$state/remotes/$3.git" ] || { echo "Could not resolve to a Repository" >&2; exit 1; }
+    cat "$state/remotes/$3.visibility"
+    ;;
+  "repo clone") git clone -q "$state/remotes/$3.git" "$4" ;;
+  "repo create")
+    name=$3 source='' visibility=PUBLIC
+    shift 3
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        --private) visibility=PRIVATE ;;
+        --source) source=$2; shift ;;
+      esac
+      shift
+    done
+    remote="$state/remotes/$login/$name.git"
+    mkdir -p "$(dirname "$remote")"
+    git init -q --bare -b main "$remote"
+    printf '%s\n' "$visibility" > "$state/remotes/$login/$name.visibility"
+    git -C "$source" remote add origin "$remote"
+    git -C "$source" push -q -u origin HEAD
+    ;;
+  *) echo "fake gh: unexpected call: $*" >&2; exit 64 ;;
+esac
+EOF
+  chmod +x "$bin/gh"
+  printf '%s\n' "$bin"
+}
+
+# gh_remote <dir> <owner/repo> <visibility>: a repository that already exists
+# on the stand-in GitHub, holding one commit with a README.
+gh_remote() {
+  local remote="$1/gh/remotes/$2.git" seed="$1/seed-${2//\//-}"
+  mkdir -p "$(dirname "$remote")"
+  git init -q --bare -b main "$remote"
+  printf '%s\n' "$3" > "$1/gh/remotes/$2.visibility"
+  git init -q -b main "$seed"
+  printf '# existing\n' > "$seed/README.md"
+  git -C "$seed" add -A
+  git -C "$seed" commit -qm existing
+  git -C "$seed" push -q "$remote" main
+}
+
+# addon_gh <dir> <home> <args...>: this script with the stand-in GitHub of <dir>.
+addon_gh() {
+  local dir=$1 home=$2 bin
+  shift 2
+  bin=$(fm_fakebin "$dir")
+  env -u FM_CONFIG_OVERRIDE -u FM_ROOT_OVERRIDE PATH="$bin:$PATH" FAKE_GH_STATE="$dir/gh" \
+    FM_HOME="$home" "$ADDON" "$@"
+}
+
+test_create_without_github_sign_in_stops_with_the_sign_in_steps() {
+  local dir="$TMP_ROOT/create-no-sign-in" home out code
+  home=$(new_home create-no-sign-in)
+  fake_gh "$dir" >/dev/null
+  printf 'someone\n' > "$dir/gh/login"
+  out=$(addon_gh "$dir" "$home" create 2>&1); code=$?
+  expect_code 4 "$code" "create with GitHub not signed in"
+  assert_contains "$out" "sign in to GitHub first: run gh auth login" "create must name the sign-in steps"
+  assert_absent "$home/config/addon" "create must not write config/addon without a repository"
+  assert_absent "$home/projects" "create must not start a checkout without a repository"
+  assert_not_contains "$(cat "$dir/gh/calls")" "repo create" "create must not try to make a repository"
+  pass "create with GitHub not signed in stops with the sign-in steps and writes nothing"
+}
+
+test_create_makes_a_private_repository_from_the_starter() {
+  local dir="$TMP_ROOT/create-new" home out code checkout remote
+  home=$(new_home create-new)
+  fake_gh "$dir" >/dev/null
+  printf 'Someone\n' > "$dir/gh/login"
+  : > "$dir/gh/signed-in"
+  out=$(addon_gh "$dir" "$home" create 2>&1); code=$?
+  expect_code 0 "$code" "create on a signed-in account with no add-on"
+  checkout="$home/projects/starship-someone"
+  remote="$dir/gh/remotes/Someone/starship-someone.git"
+  assert_equals "$(printf 'path = projects/starship-someone\norigin = https://github.com/Someone/starship-someone')" \
+    "$(cat "$home/config/addon")" "create must name the new checkout and its repository in config/addon"
+  assert_contains "$out" "add-on: ready at $(cd "$checkout" && pwd -P), from the private repository github.com/Someone/starship-someone" \
+    "create must report the ready add-on"
+  assert_equals "PRIVATE" "$(cat "$dir/gh/remotes/Someone/starship-someone.visibility")" "the repository must be private"
+  assert_equals "$(printf '.agents/skills/.gitkeep\nREADME.md\nbin/.gitkeep\nhooks/.gitkeep')" \
+    "$(git -C "$checkout" ls-files | LC_ALL=C sort)" "the starter must hold the README and the three empty folders"
+  assert_contains "$(cat "$checkout/README.md")" "Keep this repository private." "the starter README must say to keep it private"
+  assert_equals "$(git -C "$checkout" rev-parse HEAD)" "$(git -C "$remote" rev-parse main)" \
+    "the starter commit must be pushed to the new repository"
+  "$ROOT/bin/fm-leak-prepush.sh" status "$checkout" addon >/dev/null
+  expect_code 0 "$?" "the add-on's pre-push leak check must be installed"
+  assert_equals "$(cd "$checkout" && pwd -P)" "$(addon "$home" root)" "the new add-on must load"
+
+  out=$(addon_gh "$dir" "$home" create 2>&1); code=$?
+  expect_code 0 "$code" "create with the add-on present"
+  assert_contains "$out" "add-on: present at" "a second create must leave the add-on as it is"
+  assert_equals "1" "$(grep -c '^repo create' "$dir/gh/calls")" "a second create must not make another repository"
+  pass "create makes a private repository from the starter, pushes it, and points config/addon at it"
+}
+
+test_create_reuses_only_a_private_repository_of_that_name() {
+  local dir="$TMP_ROOT/create-existing" home out code
+  home=$(new_home create-existing)
+  fake_gh "$dir" >/dev/null
+  printf 'someone\n' > "$dir/gh/login"
+  : > "$dir/gh/signed-in"
+  gh_remote "$dir" someone/starship-someone PUBLIC
+  out=$(addon_gh "$dir" "$home" create 2>&1); code=$?
+  expect_code 1 "$code" "create over a public repository of that name"
+  assert_contains "$out" "github.com/someone/starship-someone already exists and is not private" \
+    "create must refuse a public repository"
+  assert_absent "$home/config/addon" "a refused create must not write config/addon"
+
+  gh_remote "$dir" someone/my-tools PRIVATE
+  out=$(addon_gh "$dir" "$home" create --name my-tools 2>&1); code=$?
+  expect_code 0 "$code" "create over a private repository of that name"
+  assert_equals "# existing" "$(cat "$home/projects/my-tools/README.md")" "create must clone the existing repository"
+  assert_contains "$(cat "$home/config/addon")" "origin = https://github.com/someone/my-tools" \
+    "config/addon must name the existing repository"
+  assert_not_contains "$(cat "$dir/gh/calls")" "repo create" "create must not make a repository that exists"
+
+  out=$(addon_gh "$dir" "$home" create --name 'bad name' 2>&1); code=$?
+  expect_code 0 "$code" "create with an add-on already present ignores the name"
+  rm "$home/config/addon"
+  out=$(addon_gh "$dir" "$home" create --name 'bad name' 2>&1); code=$?
+  expect_code 1 "$code" "create with a name GitHub cannot take"
+  assert_contains "$out" "is not a GitHub repository name" "a bad name must be named"
+  pass "create clones an existing private repository of that name and refuses a public one"
+}
+
+test_create_checks_a_present_checkout_before_pushing_it() {
+  local dir="$TMP_ROOT/create-present" home out code checkout remote key
+  home=$(new_home create-present)
+  fake_gh "$dir" >/dev/null
+  printf 'someone\n' > "$dir/gh/login"
+  : > "$dir/gh/signed-in"
+  gh_remote "$dir" someone/my-tools PRIVATE
+  remote="$dir/gh/remotes/someone/my-tools.git"
+  checkout="$home/projects/my-tools"
+  mkdir -p "$home/projects"
+  git clone -q "$remote" "$checkout"
+  key="$(printf 'sk')_live_$(printf 's7r%.0s' 1 2 3 4 5 6)"
+  printf 'use %s here\n' "$key" > "$checkout/keys.md"
+  git -C "$checkout" add -A
+  git -C "$checkout" commit -qm keyed
+  out=$(addon_gh "$dir" "$home" create --name my-tools 2>&1); code=$?
+  expect_code 1 "$code" "create over a present checkout holding a key"
+  assert_contains "$out" "could not be pushed to github.com/someone/my-tools" "create must name the refused push"
+  assert_equals "1" "$(git -C "$remote" rev-list --count main)" "the key must never reach the repository"
+  assert_absent "$home/config/addon" "a refused push must not write config/addon"
+
+  git -C "$checkout" reset -q --hard HEAD~1
+  printf 'my own tool\n' > "$checkout/tool.md"
+  git -C "$checkout" add -A
+  git -C "$checkout" commit -qm tool
+  out=$(addon_gh "$dir" "$home" create --name my-tools 2>&1); code=$?
+  expect_code 0 "$code" "create over a present clean checkout"
+  assert_equals "$(git -C "$checkout" rev-parse HEAD)" "$(git -C "$remote" rev-parse main)" \
+    "create must push the present checkout"
+  assert_contains "$(cat "$home/config/addon")" "origin = https://github.com/someone/my-tools" \
+    "config/addon must name the existing repository"
+  pass "create installs the leak check on a present checkout before pushing it"
+}
+
+# new_code_repo <name>: a throwaway Starship checkout, a git main working tree,
+# holding the scripts guards runs; echoes its canonical path.
+new_code_repo() {
+  local code
+  code=$(new_code "$1")
+  cp "$ROOT/bin/fm-role.sh" "$ROOT/bin/fm-role-lib.sh" "$ROOT/bin/fm-leak-prepush.sh" \
+    "$ROOT/bin/fm-leak-shapes.py" "$ROOT/bin/fm_secret_shapes.py" "$code/bin/"
+  git -C "$code" init -q -b main
+  git -C "$code" add -A
+  git -C "$code" commit -qm code
+  printf '%s\n' "$code"
+}
+
+test_guards_confirm_a_new_home_cannot_publish_by_mistake() {
+  local code home addon out rc
+  code=$(new_code_repo guards)
+  home=$(new_home guards)
+  out=$(addon_at "$code" "$home" guards 2>&1); rc=$?
+  expect_code 1 "$rc" "guards with no add-on"
+  assert_contains "$out" "guard problem: no add-on is configured" "guards must name a missing add-on"
+  assert_contains "$out" "guard: the private word list $home/config/leak-words was started, empty" \
+    "guards must start the word list"
+  assert_equals "" "$(grep -v '^#' "$home/config/leak-words")" "the started word list must hold no word"
+
+  addon=$(new_addon "$home")
+  git -C "$addon" init -q -b main
+  addon=$(cd "$addon" && pwd -P)
+  out=$(addon_at "$code" "$home" guards 2>&1); rc=$?
+  expect_code 0 "$rc" "guards on a new home with an add-on"
+  assert_contains "$out" "guard: the role is user" "guards must confirm the user role"
+  assert_contains "$out" "guard: the pre-push leak check is installed on $code" "guards must confirm the Starship check"
+  assert_contains "$out" "guard: the pre-push leak check is installed on $addon" "guards must confirm the add-on check"
+  "$code/bin/fm-leak-prepush.sh" status "$code" starship >/dev/null
+  expect_code 0 "$?" "the Starship checkout's pre-push check must be installed"
+  "$code/bin/fm-leak-prepush.sh" status "$addon" addon >/dev/null
+  expect_code 0 "$?" "the add-on's pre-push check must be installed"
+
+  printf 'kept-word\n' > "$home/config/leak-words"
+  out=$(addon_at "$code" "$home" guards 2>&1); rc=$?
+  expect_code 0 "$rc" "guards a second time"
+  assert_contains "$out" "guard: the private word list $home/config/leak-words is in place" "a present list must be kept"
+  assert_equals "kept-word" "$(cat "$home/config/leak-words")" "guards must never rewrite a word list"
+
+  printf 'maintainer github.com/example/starship\n' > "$home/config/firstmate-role"
+  out=$(addon_at "$code" "$home" guards 2>&1); rc=$?
+  expect_code 1 "$rc" "guards on a home that may publish"
+  assert_contains "$out" "guard problem: the role is not user (fm-role: maintainer github.com/example/starship" \
+    "guards must name a publishing role"
+  pass "guards confirm the user role, install and confirm both pre-push checks, and start the word list"
+}
+
+# The redirect case of first setup: an owner who declines step 4 and asks to go
+# straight to a project ("skip it and add my project <address>"). The add path
+# asks first-project before it clones or registers anything, and on a home
+# with no project yet that answer is no until the private repository exists.
+test_first_project_waits_for_the_private_repository() {
+  local home addon out rc
+  home=$(new_home first-project)
+  printf '# Captain preferences\n' > "$home/data/captain.md"
+  out=$(addon "$home" first-project 2>&1); rc=$?
+  expect_code 1 "$rc" "first-project on a new home with no add-on"
+  assert_contains "$out" "the first project waits for this home's own private repository" \
+    "first-project must name the private repository as what comes first"
+  assert_contains "$out" "bin/fm-addon.sh create" "first-project must name the step that makes it"
+
+  printf '# Projects\n\n' > "$home/data/projects.md"
+  printf 'path = projects/missing\n' > "$home/config/addon"
+  out=$(addon "$home" first-project 2>&1); rc=$?
+  expect_code 1 "$rc" "first-project with an empty registry and an unusable add-on"
+  assert_contains "$out" "the first project waits for this home's own private repository" \
+    "an unusable add-on must hold the first project back too"
+
+  addon=$(new_addon "$home")
+  out=$(addon "$home" first-project 2>&1); rc=$?
+  expect_code 0 "$rc" "first-project once the add-on exists"
+  assert_equals "" "$out" "first-project must stay quiet when the project may be added"
+
+  rm -f "$home/config/addon"
+  printf '%s\n' '- blog [no-mistakes] - the blog (added 2026-11-15)' >> "$home/data/projects.md"
+  out=$(addon "$home" first-project 2>&1); rc=$?
+  expect_code 0 "$rc" "first-project on a home that already has a project"
+
+  home=$(new_home first-project-secondmate)
+  : > "$home/.fm-secondmate-home"
+  out=$(addon "$home" first-project 2>&1); rc=$?
+  expect_code 0 "$rc" "first-project in a secondmate home"
+  pass "first-project holds a home's first project back until its private repository exists"
 }
 
 test_no_addon_means_no_hooks
@@ -279,5 +552,11 @@ test_watcher_hooks_are_sourced_into_the_watcher
 test_unusable_config_is_named_with_its_repair
 test_install_clones_a_missing_checkout
 test_misuse_exits_2
+test_create_without_github_sign_in_stops_with_the_sign_in_steps
+test_create_makes_a_private_repository_from_the_starter
+test_create_reuses_only_a_private_repository_of_that_name
+test_create_checks_a_present_checkout_before_pushing_it
+test_guards_confirm_a_new_home_cannot_publish_by_mistake
+test_first_project_waits_for_the_private_repository
 
 echo "# fm-addon.test.sh: all assertions passed"

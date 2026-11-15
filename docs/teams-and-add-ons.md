@@ -5,16 +5,18 @@ It says where each kind of thing lives, where each kind of change goes, and who 
 
 ## The three layers
 
-Every person's setup is made of up to three layers, and each one has a single job.
+Every person's setup is made of three layers, and each one has a single job.
 
 | Layer | What it is | What lives there |
 | --- | --- | --- |
 | Public Starship | This repository, shared by everyone who uses Starship. | The shared instructions, skills and scripts that are useful to any user. |
-| Private team add-on (optional) | One private repository a team keeps for itself, laid on top of public Starship. | Tools, skills and hooks that only this team needs. |
+| Private add-on | One private repository laid on top of public Starship: your own, made at first setup, or your team's. | Tools, skills, hooks and changes to how your first mate works that only you, or only your team, need. |
 | Your own home | Your own copy of Starship on your own machine, with its private files. | Your settings, task list, projects, notes, sign-ins and private-word list. |
 
 Public Starship holds nothing personal: a fresh copy has only the public files, and everything private stays in the home's gitignored folders.
-A team add-on is described in [Private add-on](configuration.md#private-add-on-configaddon); without one, a home works exactly the same.
+Your first mate makes every new owner their own add-on during first setup, a private repository on their own GitHub account, and will not start a first project without it, so an owner's changes have a private home from the first day and never go near public Starship.
+A teammate whose home already names the team's add-on keeps that one instead.
+[Private add-on](configuration.md#private-add-on-configaddon) owns how an add-on is set up.
 
 ## What a team add-on must never hold
 
@@ -28,8 +30,11 @@ If a tool needs such details, the add-on carries the tool and each home names it
 | The change | Where it goes | Who approves it |
 | --- | --- | --- |
 | A fix or feature useful to any Starship user | A pull request to public Starship | The repository's maintainers merge it. |
+| A tool, skill or hook only you need, or a change to how your first mate works for you | A change to your own add-on | You. |
 | A tool, skill or hook only your team needs | A change to the team add-on | The add-on's owner, usually the team lead. |
 | Your own preferences, projects or notes | Your own home's private files | You. Nothing leaves your machine. |
+
+Your first mate changes an add-on through workers once the add-on is registered as an ordinary project, which first setup may already have done for your own.
 
 When in doubt, start in the narrowest layer that works and move a tool up a layer only once it is clearly useful more widely.
 An add-on keeps the public repository's layout, so moving a tool between layers means moving its files.
@@ -57,7 +62,7 @@ A person who works with two teams keeps a separate home for each, so one team's 
 
 A teammate runs public Starship itself, never a fork of it.
 A fork for daily use drifts: every update then needs a manual catch-up, and a team's own changes end up mixed into the shared code where they are hard to see and easy to lose.
-Team-only tools belong in the team add-on and personal settings in your own home, so the shared code stays exactly the public version.
+Your own changes belong in your own add-on, team-only tools in the team add-on, and personal settings in your own home, so the shared code stays exactly the public version and you never need a fork of your own.
 A fork is only for preparing a pull request, as [CONTRIBUTING.md](../CONTRIBUTING.md) describes.
 
 ## How updates reach a home
