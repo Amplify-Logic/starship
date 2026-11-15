@@ -447,7 +447,9 @@ json.dump(st, open(sys.argv[1], "w"))
 PY
   : > "$FAKE_PS"
   local out revive view
-  out=$(FM_DESK_WAIT=10 desk open) || fail "open failed: $out"
+  # The desk stops waiting as soon as the prompt shows, so a generous limit
+  # costs nothing here and keeps a slow, loaded machine from running it out.
+  out=$(FM_DESK_WAIT=60 desk open) || fail "open failed: $out"
   assert_contains "$out" "start the Starship bridge again in its pane" "a shell that reached its prompt late was not restarted"
   revive=$(grep -n "pane run w1:p2 " "$FAKE_HERDR_CALLS" | head -1 | cut -d: -f1)
   view=$(grep -n "terminal open" "$FAKE_HERDR_CALLS" | head -1 | cut -d: -f1)
