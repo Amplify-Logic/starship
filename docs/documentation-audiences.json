@@ -458,6 +458,10 @@
       "audience": "operator-current"
     },
     {
+      "path": "docs/desk.md",
+      "audience": "operator-current"
+    },
+    {
       "path": "docs/calm-mode-feasibility.md",
       "audience": "maintainer-verification"
     },
