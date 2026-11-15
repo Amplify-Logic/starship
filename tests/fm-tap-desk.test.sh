@@ -212,8 +212,10 @@ test_shapes_reads_each_question_as_its_card_does() {
   hold hold two-way --title "Ship the beta now or after the holidays?" --reason "The beta is ready to go." --repo sample >/dev/null
   hold hold slash-way --title "Deploy now / tomorrow or next week?" --reason "The build is green." --repo sample >/dev/null
   hold hold branch-way --title "Merge fm/login-fix or wait for review?" --reason "The fix is ready." --repo sample >/dev/null
+  hold hold vs-branch --title "Merge fm/vs-code-fix or wait for review?" --reason "The fix is ready." --repo sample >/dev/null
+  hold hold vs-way --title "Run tests vs. skip or ship?" --reason "The build is green." --repo sample >/dev/null
   local out
-  out=$(desk shapes pick-route open-ask three-calls two-way slash-way branch-way) || fail "shapes failed"
+  out=$(desk shapes pick-route open-ask three-calls two-way slash-way branch-way vs-branch vs-way) || fail "shapes failed"
   printf '%s' "$out" | node -e '
     let s = ""; process.stdin.on("data", (c) => s += c).on("end", () => {
       const doc = JSON.parse(s);
@@ -229,6 +231,8 @@ test_shapes_reads_each_question_as_its_card_does() {
       check(JSON.stringify(by["two-way"].options) === JSON.stringify(["Ship the beta now", "after the holidays"]), 9);
       check(JSON.stringify(by["slash-way"].options) === "[]", 10);
       check(JSON.stringify(by["branch-way"].options) === JSON.stringify(["Merge fm/login-fix", "wait for review"]), 11);
+      check(JSON.stringify(by["vs-branch"].options) === JSON.stringify(["Merge fm/vs-code-fix", "wait for review"]), 12);
+      check(JSON.stringify(by["vs-way"].options) === "[]", 13);
     });' || fail "shapes did not read the questions as their cards do"
   desk export >/dev/null || fail "export failed"
   cards_json | node -e '
