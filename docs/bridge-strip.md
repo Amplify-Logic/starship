@@ -45,7 +45,7 @@ The strip asks the terminal for mouse reports to see the click, so Herdr's own t
 
 A red `■ 1 failed, 2 stopped` shows before the battery when work failed or a worker stopped, so trouble shows without the owner looking for it.
 `failed` counts tasks whose current state is failed: a worker's failure or a failed validation run.
-`stopped` is the status bar's figure of the same name: a task whose worker is gone while its record remains.
+`stopped` counts tasks whose worker is gone while their record remains, as the status bar's figure of the same name does, except that a failed task whose worker is gone counts as failed only, so each broken task counts once.
 It clears as soon as the reading no longer counts either.
 On a narrower pane it reads `■ 3 broken`.
 

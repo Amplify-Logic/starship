@@ -360,8 +360,9 @@ PY
 }
 
 # live_click <label|column> <width>: click_strip on this case's home, below
-# pane w1:p9 of a stand-in Herdr. The fleet is read once into the cache the
-# live strip reads, as it does in a real home, so each frame is quick.
+# pane w1:p9 of a stand-in Herdr, which hands the strip its own plugin config
+# directory as Herdr does. The fleet is read once into the cache the live strip
+# reads, as it does in a real home, so each frame is quick.
 live_click() {
   herdr_env
   FM_FLEET_STATE_READER="$BINDIR/fake-crew-state" bash -c '
@@ -371,10 +372,12 @@ live_click() {
     || fail "the fleet could not be read for the live strip"
   FM_HOME="$HOME_FIX" FM_FLEET_STATE_TTL=3600 FM_FLEET_STATE_MAX_AGE=3600 \
     FM_FLEET_STATE_READER="$BINDIR/fake-crew-state" FM_BRIDGE_STRIP_PMSET='' \
-    HERDR_PANE_ID=w1:p9 HERDR_TAB_ID=w1:t1 TZ=UTC click_strip "$@"
+    HERDR_PLUGIN_CONFIG_DIR="$CONFIG_FIX" HERDR_PANE_ID=w1:p9 HERDR_TAB_ID=w1:t1 TZ=UTC \
+    click_strip "$@"
 }
 
 test_a_click_on_the_call_opens_the_factory_pane_on_it() {
+  local pid
   reset_case
   held pick-design 'Which of two designs'
   (live_click 3 130) || fail "the live strip could not be driven"
@@ -385,7 +388,21 @@ test_a_click_on_the_call_opens_the_factory_pane_on_it() {
   assert_grep 'pane neighbor --pane w1:p9 --direction down' "$CALLS" "the strip did not look for the pane below it"
   assert_grep "plugin pane open --plugin starship.factory --entrypoint factory --placement split --direction right --target-pane w1:p2 --focus --env FM_HOME=$HOME_FIX --env FM_FACTORY_ITEM=pick-design" \
     "$CALLS" "a click on the call did not open the Factory pane on it beside the pane below"
-  pass "bridge strip: a click on the most urgent call opens the Factory pane on that item, a click elsewhere nothing"
+  # A Factory overview already in this tab, recorded in the Factory pane's own
+  # config directory, moves its highlight to the call instead.
+  : > "$CALLS"
+  mkdir -p "$CONFIG_FIX/factory/panes"
+  bash -c "exec -a 'fm-factory-pane.sh run' sleep 60" &
+  pid=$!
+  printf 'pane=w1:p4\ntab=w1:t1\nsession=%s\nview=overview\n' "${HERDR_SOCKET_PATH:-}" \
+    > "$CONFIG_FIX/factory/panes/$pid"
+  (live_click label 130) || { kill "$pid" 2>/dev/null; fail "the live strip could not be driven"; }
+  kill "$pid" 2>/dev/null
+  wait "$pid" 2>/dev/null
+  assert_no_grep 'plugin pane open' "$CALLS" "a click opened a second Factory pane in a tab that shows one"
+  assert_equals "$(cat "$CONFIG_FIX/factory/focus/$pid" 2>/dev/null)" pick-design \
+    "the Factory pane already in the tab was not moved to the call"
+  pass "bridge strip: a click on the most urgent call opens the Factory pane on that item, or moves the one in the tab to it; a click elsewhere nothing"
 }
 
 # --- the red alert ------------------------------------------------------------
@@ -400,6 +417,16 @@ test_the_red_alert_shows_failed_work_and_stopped_workers_until_they_clear() {
     "$(row_of 130 'S T A R S H I P  │  ■ 0 busy   ■ 0 decisions for you   ■ 0 ready to merge' '■ 1 failed   battery 57%, 3:12 left')" \
     "failed work did not raise the alert"
   assert_contains "$out" "${RED}${LAMP} 1 failed" "the alert is not red"
+  # A failed task whose worker is gone is one broken task: the alert counts it
+  # as failed only, while the status bar's stopped figure still counts it.
+  task broke 'state: failed · source: status-log · the tests would not build' kind=ship \
+    "worktree=$TMP_ROOT/case$CASE/gone"
+  assert_contains "$(frame 130 | plain)" '■ 1 failed   battery' "a failed task whose worker is gone was counted twice"
+  assert_equals "$(frame 6 | plain)" '1 brok' "the narrowest pane counted a failed task twice"
+  assert_equals "$(FM_FLEET_STATE_NO_CACHE=1 FM_FLEET_STATE_READER="$BINDIR/fake-crew-state" bash -c '
+    . "$1/bin/fm-fleet-status-lib.sh"
+    fm_fleet_status_counts "$2"' _ "$ROOT" "$HOME_FIX/state" | cut -f3)" 1 \
+    "the status bar stopped counting a failed task whose worker is gone"
   task lost 'state: parked · source: status-log · needs-decision: which way' kind=ship \
     "worktree=$TMP_ROOT/case$CASE/gone"
   assert_contains "$(frame 130 | plain)" '■ 1 failed, 1 stopped   battery' "a stopped worker did not join the alert"

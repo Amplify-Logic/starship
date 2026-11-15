@@ -139,14 +139,14 @@ CALL_TITLE=
 # decisions, and ready to merge is the rest, a PR or branch ready to land.
 read_crew() {  # <home>
   local reading records working stopped validating paused attention ready
-  local known age decisions failed night kind id title
+  local known age decisions failed lost night kind id title
   READING_KNOWN=0
   FAILED=-
   NIGHT_DONE=-
   CALL_KIND=-
   reading=$(fm_fleet_status_counts "$1/state" strip 2>/dev/null) || return 0
   IFS=$'\t' read -r records working stopped validating paused attention ready \
-    known age decisions failed night kind id title <<EOF
+    known age decisions failed lost night kind id title <<EOF
 $reading
 EOF
   case "$working$stopped$validating$ready$known$age$decisions" in
@@ -161,8 +161,8 @@ EOF
   [ "$known" != 0 ] || return 0
   # Without the strip's own readings the alert, the call and the night count
   # stay off rather than guessed.
-  case "$failed" in ''|*[!0-9]*) return 0 ;; esac
-  STOPPED=$stopped
+  case "$failed$lost" in ''|*[!0-9]*) return 0 ;; esac
+  STOPPED=$lost
   FAILED=$failed
   NIGHT_DONE=${night:--}
   case "$kind" in
@@ -317,9 +317,10 @@ battery() {  # full|mid|short|none
 # --- the red alert ------------------------------------------------------------
 
 # alert: something broke, so trouble shows without the owner looking for it: a
-# worker whose endpoint is gone (the reading's stopped) or work that failed,
-# a worker's failure or a failed validation run (the reading's failed). It
-# clears when the reading no longer counts either.
+# worker whose endpoint is gone (the reading's lost: stopped, but not failed)
+# or work that failed, a worker's failure or a failed validation run (the
+# reading's failed), so each broken task counts once. It clears when the
+# reading no longer counts either.
 alert() {  # long|short
   local text total
   SEG=
@@ -679,7 +680,8 @@ open_call() {  # <home>
     out=$("$(herdr_bin)" pane neighbor --pane "$HERDR_PANE_ID" --direction down 2>/dev/null) || out=
     below=$(printf '%s' "$out" | jq -r '.result.neighbor.neighbor_pane_id // empty' 2>/dev/null)
   fi
-  if [ -n "$below" ] && FM_HOME=$1 bash "$SCRIPT_DIR/fm-factory-pane.sh" open --pane "$below" \
+  if [ -n "$below" ] && env -u HERDR_PLUGIN_CONFIG_DIR FM_HOME="$1" \
+      bash "$SCRIPT_DIR/fm-factory-pane.sh" open --pane "$below" \
       --item "$CALL_ID" </dev/null >/dev/null 2>&1; then
     return 0
   fi

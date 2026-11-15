@@ -78,12 +78,16 @@
 #               only bin/fm-bridge-strip.sh asks for it, because the strip shows
 #               "decisions for you" and "ready to merge" as two lamps.
 #
-# The bridge strip also asks (fm_fleet_status_counts `strip`) for three readings
+# The bridge strip also asks (fm_fleet_status_counts `strip`) for four readings
 # no other field carries, taken by the same fold so they never disagree with
 # the lamps:
 #   failed      tasks whose current state is failed: a worker's failure or a
-#               failed validation run. Together with stopped it is the strip's
-#               red alert; it is part of attention, never added to it.
+#               failed validation run. It is part of attention, never added to
+#               it.
+#   lost        the stopped tasks that are not also failed, so the strip's red
+#               alert, failed plus lost, counts each broken task once. It is
+#               part of stopped, which keeps counting a failed task whose
+#               worker is gone.
 #   night       how much finished in the night shift that ended last, as
 #               <count>@<window-end-epoch>, or `-` when the home has no night
 #               shift window (fm_night_shift_window owns the window and
@@ -600,11 +604,11 @@ _fm_fleet_liveness() {  # <meta> <busy: 1 when the fold read a busy pane worker>
 # _fm_fleet_collect: fold the canonical reader and the endpoint prober over every
 # ordinary task and print one reading:
 #   <stamp> <working> <stopped> <validating> <paused> <attention> <ready>
-#   <signature> <decisions> calls <failed> <night> <first-kind> <first-id>
-#   <first-title>
+#   <signature> <decisions> calls <failed> <lost> <night> <first-kind>
+#   <first-id> <first-title>
 #
 # <decisions> and the `calls` mark come after the older fields, and the strip's
-# readings (the header's failed, night and first call) after the mark, so a
+# readings (the header's failed, lost, night and first call) after the mark, so a
 # reading written before them still parses for every older field;
 # fm_fleet_status_counts owns how such a reading is treated. An absent first
 # call is `-` in all three of its fields, and the title is last because it may
@@ -633,7 +637,8 @@ _fm_fleet_collect() {  # <state-dir> <now> <reader> [prober]
   local state=$1 now=$2 reader=$3 probe=${4:-} id bucket signature life busy line
   local working=0 stopped=0 validating=0 paused=0 attention=0 ready=0
   local decisions=0 asked=0 answered=0 calls kind readyfile backlogfile
-  local failed=0 night=- first_kind=- first_id=- first_title=- window ws we word
+  local failed=0 lost=0 night=- first_kind=- first_id=- first_title=- window ws we
+  local word
   local ids=() ready_ids=()
   [ -n "$probe" ] || probe=${FM_FLEET_STATE_PROBE:-_fm_fleet_probe_default}
   _fm_fleet_classify_ready || return 1
@@ -648,7 +653,8 @@ _fm_fleet_collect() {  # <state-dir> <now> <reader> [prober]
     bucket=$(_fm_fleet_bucket "$line" "$state/$id.meta")
     answered=$((answered + 1))
     word=${line#*state: }
-    [ "${word%% *}" != failed ] || failed=$((failed + 1))
+    word=${word%% *}
+    [ "$word" != failed ] || failed=$((failed + 1))
     busy=0
     case "$bucket" in
       working) busy=1 ;;
@@ -665,7 +671,10 @@ _fm_fleet_collect() {  # <state-dir> <now> <reader> [prober]
           ''|working) working=$((working + 1)) ;;
         esac
         ;;
-      stopped) stopped=$((stopped + 1)) ;;
+      stopped)
+        stopped=$((stopped + 1))
+        [ "$word" = failed ] || lost=$((lost + 1))
+        ;;
     esac
   done
   [ "$answered" -eq "$asked" ] || return 1
@@ -713,9 +722,9 @@ WINDOW
       case "$night" in ''|*[!0-9]*) night=- ;; *) night="$night@$we" ;; esac
     fi
   fi
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\tcalls\t%s\t%s\t%s\t%s\t%s' \
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\tcalls\t%s\t%s\t%s\t%s\t%s\t%s' \
     "$now" "$working" "$stopped" "$validating" "$paused" "$attention" \
-    "$ready" "$signature" "$decisions" "$failed" "$night" \
+    "$ready" "$signature" "$decisions" "$failed" "$lost" "$night" \
     "$first_kind" "$first_id" "$first_title"
 }
 
@@ -764,7 +773,7 @@ _fm_fleet_unknown() {  # <records> [decisions|strip]
   printf '%s\t0\t0\t0\t0\t0\t0\t0\t0' "$1"
   case "${2:-}" in
     decisions) printf '\t0' ;;
-    strip) printf '\t0\t-\t-\t-\t-\t-' ;;
+    strip) printf '\t0\t-\t-\t-\t-\t-\t-' ;;
   esac
 }
 
@@ -778,7 +787,7 @@ _fm_fleet_unknown() {  # <records> [decisions|strip]
 # reported exactly as no reading (<known> 0), and either way a refresh is
 # started at once so the next frame has the field.
 # With the word `strip` instead, the bridge strip's readings follow those ten:
-#   <failed> <night> <first-kind> <first-id> <first-title>
+#   <failed> <lost> <night> <first-kind> <first-id> <first-title>
 # as the header and _fm_fleet_collect describe them. Each is `-` when the
 # reading has no such field, as one taken before the strip asked for them does
 # not, and such a reading is refreshed at once; the ten fields stand as above.
@@ -799,7 +808,7 @@ fm_fleet_status_counts() {  # <state-dir> [decisions|strip]
   local state=$1 want=${2:-} now cache reader records ttl max_age
   local cached='' stamp='' working='' stopped='' validating='' paused=''
   local attention='' ready='' signature='' decisions='' mark='' current known age fresh=1
-  local failed='' night='' first_kind='' first_id='' first_title=''
+  local failed='' lost='' night='' first_kind='' first_id='' first_title=''
   records=$(_fm_fleet_ids "$state" | grep -c '') || records=0
   now=$(_fm_fleet_now) || {
     _fm_fleet_unknown "$records" "$want"
@@ -819,7 +828,7 @@ fm_fleet_status_counts() {  # <state-dir> [decisions|strip]
 
   if [ -n "$cached" ]; then
     IFS=$'\t' read -r stamp working stopped validating paused attention ready \
-      signature decisions mark failed night first_kind first_id first_title <<READING
+      signature decisions mark failed lost night first_kind first_id first_title <<READING
 $cached
 READING
   fi
@@ -840,12 +849,12 @@ READING
       ;;
   esac
   # The strip's readings are all there or none are.
-  case "$failed" in
+  case "$failed$lost" in
     ''|*[!0-9]*) failed= ;;
   esac
   if [ -z "$failed" ] || [ -z "$night" ] || [ -z "$first_kind" ] || [ -z "$first_id" ] \
     || [ -z "$first_title" ]; then
-    failed=- night=- first_kind=- first_id=- first_title=-
+    failed=- lost=- night=- first_kind=- first_id=- first_title=-
     [ "$want" != strip ] || fresh=0
   fi
   [ -n "$cached" ] || fresh=0
@@ -878,7 +887,7 @@ READING
   case "$want" in
     decisions) printf '\t%s' "$decisions" ;;
     strip)
-      printf '\t%s\t%s\t%s\t%s\t%s\t%s' "$decisions" "$failed" "$night" \
+      printf '\t%s\t%s\t%s\t%s\t%s\t%s\t%s' "$decisions" "$failed" "$lost" "$night" \
         "$first_kind" "$first_id" "$first_title"
       ;;
   esac
