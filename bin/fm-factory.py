@@ -2190,24 +2190,28 @@ def read_keys(fd: int) -> List[str]:
     return keys
 
 
+def code_digest() -> Optional[str]:
+    try:
+        with open(os.path.realpath(__file__), "rb") as handle:
+            return hashlib.sha1(handle.read()).hexdigest()
+    except OSError:
+        return None
+
+
+START_DIGEST = code_digest()
+
+
 class Watcher:
     """Whether this file changed on disk since this process started running it."""
 
     def __init__(self) -> None:
         self.path = os.path.realpath(__file__)
-        self.start = self.digest()
+        self.start = START_DIGEST
         self.bad: Optional[str] = None
-
-    def digest(self) -> Optional[str]:
-        try:
-            with open(self.path, "rb") as handle:
-                return hashlib.sha1(handle.read()).hexdigest()
-        except OSError:
-            return None
 
     def changed(self) -> bool:
         """True when the file changed and compiles; a half-written file waits."""
-        now = self.digest()
+        now = code_digest()
         if now is None or now == self.start or now == self.bad:
             return False
         try:
@@ -2426,7 +2430,7 @@ def follow(home: str, task_id: str) -> None:
                 if job is None or job["state"] not in MIRROR_KEEP:
                     ended = True
                     break
-                if now_epoch() - int(record.get("as_of_epoch") or 0) > env_int("FM_FACTORY_TTL", 20):
+                if snapshot_age(record) > env_int("FM_FACTORY_TTL", 20):
                     refresh_in_background(home)
             size = os.get_terminal_size()
             try:

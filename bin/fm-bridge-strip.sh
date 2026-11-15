@@ -62,7 +62,6 @@
 #                                 for no battery (default: pmset on a Mac only)
 #   FM_BRIDGE_STRIP_CONFIG_DIR    the plugin's config directory, instead of
 #                                 asking Herdr
-#   FM_BRIDGE_STRIP_INTERVAL      seconds between frames of `run` (default 5)
 #   FM_FLEET_STATE_*              see bin/fm-fleet-status-lib.sh; its
 #                                 FM_FLEET_STATE_NOW also sets the night
 #                                 shift's clock
@@ -861,6 +860,7 @@ track_reading() {
 
 cmd_run() {
   local home sleeper interval tick
+  # FM_BRIDGE_STRIP_INTERVAL is a test seam for faster frames, not a setting.
   interval=$(fm_status_ttl "${FM_BRIDGE_STRIP_INTERVAL:-}" 5)
   [ "$interval" -gt 0 ] || interval=5
   READ_GRACE=$(($(fm_status_ttl "${FM_FLEET_STATE_WAIT:-}" 90) + interval))
