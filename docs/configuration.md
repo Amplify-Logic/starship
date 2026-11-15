@@ -986,7 +986,6 @@ beta = off
 ```
 
 - A room not listed, or the file absent, is off; with no file and nothing registered, nothing runs and no state is created.
-- An optional `<room>.name = <display name>` line, such as `alpha.name = Harbour`, names the room the way the owner calls it on the [bridge strip](bridge-strip.md#the-red-alert); without one the room's own name is used.
 - Any other line is reported as a `MOTHERSHIP_MONITOR:` line at session start and treated as off, so a malformed file never switches a room on.
 - `bin/fm-procevent-mothership.sh on <room>` and `off <room>` switch a room and write the file, and the owner can simply ask the first mate to do it; `status` shows each room.
 - `on` refuses a room this Starship has not joined, a Mothership link too old to keep a separate place in the room, with "update the Mothership link first", and a link that does not answer within 20 seconds.

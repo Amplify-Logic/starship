@@ -560,12 +560,11 @@ test_the_red_alert_shows_failed_work_and_stopped_workers_until_they_clear() {
   pass "bridge strip: failed work and stopped workers raise a red alert that narrow panes keep and that clears with its cause"
 }
 
-# unreachable <room> <since> <last> <cause> [name]: the note a room's Mothership
+# unreachable <room> <since> <last> <cause>: the note a room's Mothership
 # listener keeps while it cannot reach the room.
 unreachable() {
   mkdir -p "$HOME_FIX/state/mothership"
-  printf 'since=%s\nlast=%s\ncause=%s\n%s' "$2" "$3" "$4" "${5:+name=$5
-}" > "$HOME_FIX/state/mothership/$1.unreachable"
+  printf 'since=%s\nlast=%s\ncause=%s\n' "$2" "$3" "$4" > "$HOME_FIX/state/mothership/$1.unreachable"
 }
 
 reach_frame() {  # <width>
@@ -579,19 +578,16 @@ test_the_red_alert_says_when_a_mothership_room_cannot_be_reached() {
   reset_case
   on_battery 57 discharging 3:12
   # Under two minutes is a blip, not an alert.
-  unreachable alpha $((NOON - 90)) $((NOON - 30)) room Harbour
+  unreachable alpha $((NOON - 90)) $((NOON - 30)) room
   assert_not_contains "$(reach_frame 130 | plain)" 'answering' "a short blip raised the alert"
-  unreachable alpha $((NOON - 150)) $((NOON - 30)) room Harbour
+  unreachable alpha $((NOON - 150)) $((NOON - 30)) room
   out=$(reach_frame 130)
   assert_equals "$(printf '%s' "$out" | plain)" \
-    "$(row_of 130 'S T A R S H I P  │  ■ 0 busy   ■ 0 decisions for you   ■ 0 ready to merge' '■ The Harbour room is not answering   battery 57%')" \
+    "$(row_of 130 'S T A R S H I P  │  ■ 0 busy   ■ 0 decisions for you   ■ 0 ready to merge' '■ The alpha room is not answering   battery 57%')" \
     "a room not answering did not raise the alert by its name"
-  assert_contains "$out" "${RED}${LAMP} The Harbour room is not answering" "the room alert is not red"
-  # Without a display name the room's own name is used.
-  unreachable alpha $((NOON - 150)) $((NOON - 30)) room
-  assert_contains "$(reach_frame 130 | plain)" '■ The alpha room is not answering' "a room with no display name was not named"
+  assert_contains "$out" "${RED}${LAMP} The alpha room is not answering" "the room alert is not red"
   # Tailscale switched off cuts every room off, so it is the cause shown.
-  unreachable beta $((NOON - 300)) $((NOON - 20)) tailscale Harbour
+  unreachable beta $((NOON - 300)) $((NOON - 20)) tailscale
   assert_contains "$(reach_frame 130 | plain)" '■ Tailscale is off on this Mac   battery' "Tailscale being off was not the alert"
   assert_not_contains "$(reach_frame 130 | plain)" 'answering' "the room alert showed beside Tailscale"
   # It joins broken work, and narrow panes keep it in short words.

@@ -344,13 +344,12 @@ read_reach() {  # <home>
   now=$(_fm_fleet_now) || return 0
   for file in "$1"/state/mothership/*.unreachable; do
     [ -f "$file" ] || continue
-    since='' last='' cause='' name=''
+    since='' last='' cause=''
     while IFS='=' read -r key value; do
       case "$key" in
         since) since=$value ;;
         last) last=$value ;;
         cause) cause=$value ;;
-        name) name=$value ;;
       esac
     done < "$file"
     case "$since" in ''|*[!0-9]*) continue ;; esac
@@ -364,9 +363,8 @@ read_reach() {  # <home>
         ;;
       room)
         [ -z "$REACH_LONG" ] || continue
-        name=$(printf '%s' "$name" | LC_ALL=C tr -cd ' -~')
-        name=${name:0:40}
-        [ -n "$name" ] || { name=${file##*/}; name=${name%.unreachable}; }
+        name=${file##*/}
+        name=${name%.unreachable}
         REACH_LONG="The $name room is not answering"
         REACH_SHORT='room not answering'
         ;;

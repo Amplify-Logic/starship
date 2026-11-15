@@ -19,11 +19,9 @@
 # The setting is config/mothership-monitor, one `<room> = on|off` line per
 # joined room, by the name `mothership rooms` lists; `#` starts a comment. A
 # room not listed, or the file absent, is off, and with no file and no
-# registration nothing runs and no state is created. An optional
-# `<room>.name = <display name>` line names the room the way the owner calls it
-# (up to 40 plain characters); without one the room's own name is used. Any
-# other line is reported and treated as off, so a malformed file never switches
-# anything on. When a room is listed more than once, its last line wins.
+# registration nothing runs and no state is created. Any other line is reported
+# and treated as off, so a malformed file never switches anything on. When a
+# room is listed more than once, its last line wins.
 #
 # on         Check that the room is one this Starship has joined and that the
 #            installed Mothership link supports `position`, seed this monitor's
@@ -99,10 +97,10 @@
 # <room>.unreachable while the room cannot be reached, for the bridge strip's
 # red alert (bin/fm-bridge-strip.sh): `since=<epoch>` (the first failed read in
 # this run of them; a gap of more than 180 seconds since the last one starts a
-# new run), `last=<epoch>` (the latest failed read), `cause=tailscale` (Tailscale
-# is not running on this machine, or the room's name does not resolve) or
-# `cause=room`, and `name=<display name>`. The room answering, `off`, and
-# retiring the room remove it.
+# new run), `last=<epoch>` (the latest failed read), and `cause=tailscale`
+# (Tailscale is installed here and not running, or, with no Tailscale command to
+# ask, the room's name does not resolve) or `cause=room`. The room answering,
+# `off`, and retiring the room remove it.
 #
 # The link is the first of: FM_MOTHERSHIP_BIN; the mothership command on PATH;
 # and projects/mothership/bin/mothership in the home. A path FM_MOTHERSHIP_BIN
@@ -243,7 +241,6 @@ setting_entries() {
       sub(/#.*/, "", line)
       gsub(/^[ \t]+|[ \t]+$/, "", line)
       if (line == "") next
-      if (match(line, /^[A-Za-z0-9][A-Za-z0-9_-]*\.name[ \t]*=/)) next
       if (match(line, /^[A-Za-z0-9][A-Za-z0-9_-]*[ \t]*=[ \t]*[A-Za-z]+$/)) {
         key = line; sub(/[ \t]*=.*/, "", key)
         val = line; sub(/^[^=]*=[ \t]*/, "", val)
@@ -263,29 +260,6 @@ setting_of() {  # <room>: on or off
   local value
   value=$(setting_entries 2>/dev/null | awk -v room="$1" '$1 == room { print $2 }')
   [ "$value" = on ] && printf 'on\n' || printf 'off\n'
-}
-
-# room_label <room>: the room's display name from its `<room>.name` line, the
-# last one winning, kept to plain printable characters; else the room's name.
-room_label() {
-  local name
-  name=''
-  [ ! -f "$SETTING" ] || name=$(LC_ALL=C awk -v key="$1.name" '
-    {
-      line = $0
-      sub(/#.*/, "", line)
-      gsub(/^[ \t]+|[ \t]+$/, "", line)
-      k = line; sub(/[ \t]*=.*/, "", k)
-      if (k != key || index(line, "=") == 0) next
-      v = substr(line, index(line, "=") + 1)
-      gsub(/^[ \t]+/, "", v)
-      gsub(/[^ -~]/, "", v)
-      if (length(v) > 40) v = substr(v, 1, 40)
-      gsub(/[ \t]+$/, "", v)
-      name = v
-    }
-    END { print name }' "$SETTING")
-  printf '%s\n' "${name:-$1}"
 }
 
 # Rewrite the setting with exactly one line for <room>, keeping every other line.
@@ -685,16 +659,21 @@ failures_note() {  # <room>: count one failure, print the count
   printf '%s\n' "$n"
 }
 
-# tailscale_down: Tailscale is installed here and not running. Without the
-# command there is nothing to ask, so it is not counted as down.
-tailscale_down() {
+# tailscale_cut_off <stderr-file>: the room is cut off by Tailscale. When
+# Tailscale is installed here its own answer decides: not running is cut off,
+# running is not. Without the command, a room name that does not resolve is
+# taken as Tailscale's private names being gone.
+tailscale_cut_off() {
   local cmd said
   if [ "${FM_MOTHERSHIP_TAILSCALE+set}" = set ]; then
     cmd=$FM_MOTHERSHIP_TAILSCALE
   else
     cmd=$(command -v tailscale 2>/dev/null || true)
   fi
-  [ -n "$cmd" ] || return 1
+  if [ -z "$cmd" ]; then
+    LC_ALL=C grep -Eq 'ENOTFOUND|EAI_AGAIN|EAI_NONAME' "$1" 2>/dev/null
+    return
+  fi
   said=$(fm_run_timed 5 "$cmd" status --json 2>/dev/null < /dev/null) || return 0
   [ "$(printf '%s' "$said" | jq -r '.BackendState // empty' 2>/dev/null)" != Running ]
 }
@@ -712,13 +691,10 @@ note_unreachable() {  # <room> <stderr-file>
   case "$since" in ''|*[!0-9]*) since=$now ;; esac
   case "$last" in ''|*[!0-9]*) since=$now ;; *) [ $((now - last)) -le 180 ] || since=$now ;; esac
   cause=room
-  if LC_ALL=C grep -Eq 'ENOTFOUND|EAI_AGAIN|EAI_NONAME' "$2" 2>/dev/null || tailscale_down; then
-    cause=tailscale
-  fi
+  ! tailscale_cut_off "$2" || cause=tailscale
   write_file "$file" "since=$since
 last=$now
-cause=$cause
-name=$(room_label "$room")" || true
+cause=$cause" || true
 }
 
 print_stop() {  # <room> <refused|error> <reason>
