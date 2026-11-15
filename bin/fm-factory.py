@@ -2377,7 +2377,7 @@ def open_tab(home: str, fid: str) -> Tuple[bool, str]:
 
 
 def split_workers(home: str, factory: Dict[str, Any], page: str) -> Tuple[bool, str]:
-    """Split a live copy of each running worker of <factory> beside its page pane <page>, stacked on the right."""
+    """Split a live copy of each worker at work (MIRROR_STATES) of <factory> beside its page pane <page>, stacked on the right."""
     workers = [j for j in factory["jobs"] if j["started"] and j["state"] in MIRROR_STATES][:MIRROR_CAP]
     above = None
     for index, job in enumerate(workers):
