@@ -28,7 +28,7 @@ A decision answered, parked, released, closed or added changes no worker, so the
 `bin/fm-owner-calls-signal-lib.sh` owns that signal and `bin/fm-fleet-status-lib.sh` owns how the calls are read again.
 Before the first reading it says `reading the crew` rather than showing zeros, and a reading that is no longer current carries its age, such as `(10m ago)`.
 When no first reading arrives within one bounded refresh, or a reading it had is lost, it says `cannot read the crew (since 09:12)` instead, so a strip that cannot read never looks like one still reading.
-A running strip keeps up with updates: before each frame it checks whether its own script or a library it loads changed, and re-runs itself in place, in the same pane, once the new files parse.
+A running strip keeps up with updates: before each frame it checks whether its own script or a library it loads changed, and re-runs itself in place, in the same pane, once every new file is non-empty and parses.
 
 The battery comes from `pmset -g batt`.
 On battery it turns amber below 25% and red below 10%, where it says `plug in now`.
