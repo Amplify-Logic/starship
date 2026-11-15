@@ -155,8 +155,10 @@ fm_supervision_status "$STATE" "${FM_GUARD_GRACE:-300}"
 [ "$FM_SUP_IN_FLIGHT" -gt 0 ] || exit 0
 LEAD="$FM_SUP_OUTAGE_SUMMARY Failed watcher check: $FAILED_CHECK."
 
-# This hook can be the first surviving process to observe the outage, so it
-# records the durable evidence the host sentinel later alerts on. Marker-only:
+# The prefilter above allows ordinary commands before reaching here, so this
+# hook records the durable evidence the host sentinel later alerts on only
+# when a fleet command (fm-*.sh) runs during the outage; otherwise the marker
+# waits for the scheduled host check. Marker-only:
 # a PreToolUse gate must decide immediately and never wait on external-channel
 # delivery, which the scheduled launchd check owns.
 SENTINEL="$SCRIPT_DIR/fm-supervision-sentinel.sh"
