@@ -814,6 +814,7 @@ origin = https://github.com/<owner>/starship-addon
 With no `config/addon` a home behaves exactly as it does without add-ons.
 The first conversation with a new owner ([`first-voyage`](../.agents/skills/first-voyage/SKILL.md)) gives every home one: `bin/fm-addon.sh create` makes the owner a private repository on their own GitHub account from a minimal starter and writes `config/addon`, and `bin/fm-addon.sh guards` confirms the home cannot publish anything personal by mistake.
 A home that already names an add-on, such as a team's, keeps it.
+`bin/fm-addon.sh first-project` holds back a home's first project until it has an add-on, and adding a project asks it first, so a new owner's own repository always comes before their first project.
 
 An add-on keeps this repository's layout, so a tool moves between the two by moving its files:
 

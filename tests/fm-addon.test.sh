@@ -11,8 +11,9 @@
 # rather than run, an unusable config/addon is named with its repair, and
 # install clones a missing checkout from the configured origin. create gives a
 # home with no add-on its own private repository from the starter, through a
-# stand-in for the GitHub CLI, and guards confirms a new home cannot publish
-# anything personal by mistake.
+# stand-in for the GitHub CLI, guards confirms a new home cannot publish
+# anything personal by mistake, and first-project holds a home's first project
+# back until that private repository exists.
 #
 # Every case uses a throwaway home and add-on, so no case reads or writes this
 # home; built-in hooks are exercised in a throwaway code checkout holding a copy
@@ -269,6 +270,8 @@ test_misuse_exits_2() {
   expect_code 2 "$code" "run with no point"
   addon "$home" root extra 2>/dev/null; code=$?
   expect_code 2 "$code" "root with an argument"
+  addon "$home" first-project extra 2>/dev/null; code=$?
+  expect_code 2 "$code" "first-project with an argument"
   addon "$home" --help 2>/dev/null; code=$?
   expect_code 0 "$code" "--help"
   pass "misuse exits 2 and --help exits 0"
@@ -503,6 +506,44 @@ test_guards_confirm_a_new_home_cannot_publish_by_mistake() {
   pass "guards confirm the user role, install and confirm both pre-push checks, and start the word list"
 }
 
+# The redirect case of first setup: an owner who declines step 4 and asks to go
+# straight to a project ("skip it and add my project <address>"). The add path
+# asks first-project before it clones or registers anything, and on a home
+# with no project yet that answer is no until the private repository exists.
+test_first_project_waits_for_the_private_repository() {
+  local home addon out rc
+  home=$(new_home first-project)
+  printf '# Captain preferences\n' > "$home/data/captain.md"
+  out=$(addon "$home" first-project 2>&1); rc=$?
+  expect_code 1 "$rc" "first-project on a new home with no add-on"
+  assert_contains "$out" "the first project waits for this home's own private repository" \
+    "first-project must name the private repository as what comes first"
+  assert_contains "$out" "bin/fm-addon.sh create" "first-project must name the step that makes it"
+
+  printf '# Projects\n\n' > "$home/data/projects.md"
+  printf 'path = projects/missing\n' > "$home/config/addon"
+  out=$(addon "$home" first-project 2>&1); rc=$?
+  expect_code 1 "$rc" "first-project with an empty registry and an unusable add-on"
+  assert_contains "$out" "the first project waits for this home's own private repository" \
+    "an unusable add-on must hold the first project back too"
+
+  addon=$(new_addon "$home")
+  out=$(addon "$home" first-project 2>&1); rc=$?
+  expect_code 0 "$rc" "first-project once the add-on exists"
+  assert_equals "" "$out" "first-project must stay quiet when the project may be added"
+
+  rm -f "$home/config/addon"
+  printf '%s\n' '- blog [no-mistakes] - the blog (added 2026-11-15)' >> "$home/data/projects.md"
+  out=$(addon "$home" first-project 2>&1); rc=$?
+  expect_code 0 "$rc" "first-project on a home that already has a project"
+
+  home=$(new_home first-project-secondmate)
+  : > "$home/.fm-secondmate-home"
+  out=$(addon "$home" first-project 2>&1); rc=$?
+  expect_code 0 "$rc" "first-project in a secondmate home"
+  pass "first-project holds a home's first project back until its private repository exists"
+}
+
 test_no_addon_means_no_hooks
 test_built_in_hooks_run_with_no_addon
 test_addon_hooks_join_in_name_order_and_replace_built_ins
@@ -516,5 +557,6 @@ test_create_makes_a_private_repository_from_the_starter
 test_create_reuses_only_a_private_repository_of_that_name
 test_create_checks_a_present_checkout_before_pushing_it
 test_guards_confirm_a_new_home_cannot_publish_by_mistake
+test_first_project_waits_for_the_private_repository
 
 echo "# fm-addon.test.sh: all assertions passed"

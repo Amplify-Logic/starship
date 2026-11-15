@@ -96,6 +96,7 @@ If they decline, do not go on to step 5: say in one line that the first project 
 Asking to skip this step, to do it later, or to go straight to a project is a decline too, even when they name the project in the same message.
 Do not load `project-management`, look the project up, or clone it: keep the address they gave for step 5, give the same one-line reply, and say you will start on that project as soon as the repository exists.
 This holds however firmly they ask, because the repository and its push checks are what keep their own changes out of public Starship from the first day.
+`bin/fm-addon.sh first-project`, which `project-management` asks before it adds anything, refuses the first project until the repository exists.
 On their yes, run `bin/fm-addon.sh create`, whose help owns what it makes:
 
 - Exit 4 means GitHub is not signed in yet: give the owner the sign-in steps it printed, in plain words, and stop here until they say it is done, then run it again; step 5 needs the same sign-in.

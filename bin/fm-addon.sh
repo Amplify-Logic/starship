@@ -87,6 +87,15 @@
 #                                    exists (written with one comment line when
 #                                    missing). Exits 1 when any guard is not in
 #                                    place, on a `guard problem:` line naming it
+#   fm-addon.sh first-project        whether this home may add a project now:
+#                                    exits 1, naming the private repository as
+#                                    what comes first, when data/projects.md
+#                                    registers no project yet and root fails;
+#                                    exits 0 silently otherwise, and always in a
+#                                    secondmate home. The project-management add
+#                                    and create paths ask it before they clone or
+#                                    register anything, so a new owner's first
+#                                    project never comes before their add-on
 # Exits 2 on misuse. Keeping the add-on current is bin/fm-update.sh's job.
 #
 # STARTER. create starts a new add-on with a README.md saying what goes where
@@ -351,8 +360,10 @@ start_checkout() {
   local path=$1 login=$2 id=()
   write_starter "$path" || { note "cannot write the starter into $path"; return 1; }
   git init -q -b main "$path" || { note "git init failed in $path"; return 1; }
+  # With no git identity yet, the starter commit is signed with a placeholder
+  # address, because a real one must never sit in this public script.
   git -C "$path" config user.email >/dev/null 2>&1 \
-    || id=(-c "user.name=$login" -c "user.email=$login@users.noreply.github.com")
+    || id=(-c "user.name=$login" -c "user.email=$login@example.invalid")
   { git -C "$path" add -A && git ${id[@]+"${id[@]}"} -C "$path" commit -q -m "Start the Starship add-on"; } || {
     note "the first commit in $path failed"
     return 1
@@ -491,6 +502,21 @@ check_guards() {
   return "$problems"
 }
 
+# first_project: refuse a home's first project while it has no usable add-on.
+first_project() {
+  local data="${FM_DATA_OVERRIDE:-$FM_HOME/data}" status=0
+  if [ -e "$FM_HOME/.fm-secondmate-home" ] || [ -L "$FM_HOME/.fm-secondmate-home" ]; then
+    return 0
+  fi
+  if [ -f "$data/projects.md" ] && grep -q '^- ' "$data/projects.md"; then
+    return 0
+  fi
+  resolve_addon || status=$?
+  [ "$status" -ne 0 ] || return 0
+  note "the first project waits for this home's own private repository (first-voyage step 4): with the owner's yes, run bin/fm-addon.sh create, then add the project${ADDON_PROBLEM:+ ($ADDON_PROBLEM)}"
+  return 1
+}
+
 case "${1:-}" in
   root)
     [ "$#" -eq 1 ] || usage
@@ -533,6 +559,10 @@ case "${1:-}" in
   guards)
     [ "$#" -eq 1 ] || usage
     check_guards
+    ;;
+  first-project)
+    [ "$#" -eq 1 ] || usage
+    first_project
     ;;
   -h|--help|help) usage 0 ;;
   *) usage ;;
