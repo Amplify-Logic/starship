@@ -159,12 +159,19 @@ function splitExplicitOptions(value) {
   return [...new Set(pieces)];
 }
 
-function splitTitleOptions(value) {
+function splitAlternatives(value) {
   const pieces = value
     .split(/\s+\b(?:or|vs\.?)\s+/i)
     .map(cleanOption)
     .filter((item) => item.length > 1);
   return [...new Set(pieces)];
+}
+
+function twoWayTitle(title) {
+  const plain = title.trim().replace(/\?$/, "");
+  if (/[,()]|\s\/\s|\svs\.?\s/i.test(plain)) return [];
+  const pieces = plain.split(/\s+or\s+/i).map(cleanOption);
+  return pieces.length === 2 && pieces.every((item) => item.length > 1) && pieces[0] !== pieces[1] ? pieces : [];
 }
 
 export function optionsFrom(title, reason, recommendation) {
@@ -184,20 +191,18 @@ export function optionsFrom(title, reason, recommendation) {
   }
   const alternativePhrase = reason.match(/\b(?:whether to|alternatives? (?:are|is))\s+([^.;]+?\s+or\s+[^.;]+)/i);
   if (alternativePhrase) {
-    const parsed = splitTitleOptions(alternativePhrase[1]);
+    const parsed = splitAlternatives(alternativePhrase[1]);
     if (parsed.length >= 2) return parsed;
   }
   const versusSentence = sentences(reason).find((sentence) => /\bvs\.?\b/i.test(sentence));
   if (versusSentence) {
     const beforeSemicolon = versusSentence.split(";")[0];
     const afterColon = beforeSemicolon.includes(":") ? beforeSemicolon.slice(beforeSemicolon.indexOf(":") + 1) : beforeSemicolon;
-    const parsed = splitTitleOptions(afterColon);
+    const parsed = splitAlternatives(afterColon);
     if (parsed.length >= 2) return parsed;
   }
-  if (/\b(?:vs\.?|or)\b/i.test(title) || title.includes(" / ")) {
-    const parsed = title.replace(/\?$/, "").split(/\s+\/\s+/).flatMap((part) => splitTitleOptions(part));
-    if (parsed.length >= 2) return [...new Set(parsed)];
-  }
+  const titled = twoWayTitle(title);
+  if (titled.length === 2) return titled;
   return recommendation ? [recommendation] : [];
 }
 
@@ -279,7 +284,7 @@ function loadTasks(home) {
         repo: task.repo,
         group: normalizeRepo(task.repo),
         created: task.created,
-        options: optionsFrom(task.title, task.hold_reason || "", recommendation),
+        options: optionsFrom(task.title || "", task.hold_reason || "", recommendation),
         recommendation,
         origin: identity.origin,
         key: identity.key,
