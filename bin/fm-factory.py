@@ -1761,6 +1761,13 @@ def file_reconcile(home: str, task_id: str) -> Tuple[Optional[int], str]:
     return requested, ""
 
 
+def settled_request_id(fid: str, need: Dict[str, Any], requested: int) -> str:
+    """The wake note's request id: one per request, or per hold when the call was held again since."""
+    held = need.get("since")
+    stamp = held if held is not None and requested < held else requested
+    return "factory.%s.settled.%s.%d" % (fid, need["id"], stamp)
+
+
 def record_steer(home: str, fid: str, who: str, now: int) -> None:
     path = os.path.join(pane_dir(home), "steer.log")
     os.makedirs(pane_dir(home), exist_ok=True)
@@ -1835,14 +1842,17 @@ class Pane:
 
     def settled(self, need: Dict[str, Any]) -> None:
         """File a reconcile request for a held call and wake Starship to re-check it."""
+        fac = self.view.factory(need["factory"])
         if need.get("checking"):
-            self.say("Starship is already checking this.", "amber")
-            return
+            pending = reconcile_pending(self.home).get(need["id"])
+            sent = {note.get("request_id") for note in inbox_receipts(self.home)}
+            if pending is not None and settled_request_id(fac["id"], need, pending) in sent:
+                self.say("Starship is already checking this.", "amber")
+                return
         requested, why = file_reconcile(self.home, need["id"])
         if requested is None:
             self.say("Not asked: %s" % why, "red", 12)
             return
-        fac = self.view.factory(need["factory"])
         body = ("Already settled? %s\n\n"
                 "The owner thinks this held call is already settled, all or in part, in conversation. "
                 "Re-read the conversation now and record it in this turn: close the call with the evidence "
@@ -1852,10 +1862,7 @@ class Pane:
                 "pending request with reconcile note. The reconcile request for it is already filed; the "
                 "captain-hold-lifecycle skill owns both outcomes."
                 "\n\n(from the Factory pane; item %s)" % (need["title"], need["id"], need["id"], need["id"]))
-        held = need.get("since")
-        stamp = held if held is not None and requested < held else requested
-        rid = "factory.%s.settled.%s.%d" % (fac["id"], need["id"], stamp)
-        ok, why = send_note(self.home, rid, body)
+        ok, why = send_note(self.home, settled_request_id(fac["id"], need, requested), body)
         if not ok:
             self.say("Not sent: %s" % why, "red", 12)
             return

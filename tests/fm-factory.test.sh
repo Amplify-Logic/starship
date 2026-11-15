@@ -35,6 +35,10 @@ log="$FM_FACTORY_TEST_NOTES"
 case "$1" in
   note)
     shift
+    if [ -n "${FM_FACTORY_TEST_INBOX_FAIL:-}" ]; then
+      echo "fm-inbox: the inbox is not writable" >&2
+      exit 1
+    fi
     rid=
     while [ "$#" -gt 0 ]; do
       case "$1" in --request-id) rid=$2; shift ;; esac
@@ -867,6 +871,30 @@ test_already_settled_asks_starship_to_recheck_the_call() {
   pass "factory pane: x files a reconcile request for the highlighted call, wakes Starship, and reads checking until settled"
 }
 
+# A wake note that failed to save leaves the request filed and the card
+# checking, but the next press still sends it; only then is a press refused.
+test_already_settled_retries_a_wake_that_failed() {
+  reset_case
+  write_registry
+  write_world
+  local screen="$TMP_ROOT/case$CASE/screen"
+  FM_FACTORY_TEST_INBOX_FAIL=1 drive_keys x "SNAP:$screen"
+  assert_contains "$(cat "$screen")" "Not sent: fm-inbox: the inbox is not writable" "the failed note is reported"
+  assert_equals "$(wc -l < "$HOME_FIX/reconcile.requests" | tr -d ' ')" "1" "the request was filed"
+  assert_equals "$(cat "$FM_FACTORY_TEST_NOTES" 2>/dev/null)" "" "a failed note was saved"
+  take_record
+  assert_equals "$(q '.needs_you[0] | "\(.id) \(.checking)"')" "garden-chart true" "the pending request reads checking"
+  drive_keys x "SNAP:$screen"
+  assert_contains "$(cat "$screen")" "Asked Starship to check whether Harvest chart is already settled." \
+    "a press after the failed note asks again"
+  assert_equals "$(jq -r .request_id "$FM_FACTORY_TEST_NOTES")" \
+    "factory.garden-journal.settled.garden-chart.$((NOW - 3600))" "the retry sends the wake note"
+  drive_keys x "SNAP:$screen"
+  assert_contains "$(cat "$screen")" "Starship is already checking this." "a press once the note is saved says so"
+  assert_equals "$(wc -l < "$FM_FACTORY_TEST_NOTES" | tr -d ' ')" "1" "a press once the note is saved sent another"
+  pass "factory pane: a wake note that failed is sent by the next press, and only a sent one blocks a press"
+}
+
 # The same key against the real captain-hold intake, the real inbox and a
 # real backlog: starting the pane binds nothing, installing it binds its
 # source, the request lands, and Starship's reconcile note or evidence close
@@ -1160,6 +1188,7 @@ fm_test_run \
   test_writing_keys_go_through_the_inbox_and_act_on_the_highlighted_row \
   test_a_note_reaches_starship_through_the_real_inbox \
   test_already_settled_asks_starship_to_recheck_the_call \
+  test_already_settled_retries_a_wake_that_failed \
   test_already_settled_files_a_real_reconcile_request \
   test_the_highlight_and_open_boxes_follow_the_record \
   test_talking_never_changes_who_steers \
