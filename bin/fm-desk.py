@@ -25,8 +25,10 @@ What `open` does, in this order, re-reading Herdr after every step:
      Herdr restores the saved layout itself. Starting the server before any
      view attaches matters: a client attaching to an empty session makes a
      workspace of its own.
-  3. Creates the workspace when no workspace has its label.
-  4. In the workspace's first tab: starts the first mate in a pane that is only
+  3. Creates the workspace when no workspace has its label; with `main` set,
+     names the new workspace's first tab after it.
+  4. In the main tab (the tab labelled `main`, else the workspace's first
+     tab): starts the first mate in a pane that is only
      an idle shell, shows the bridge strip and the Factory pane when missing,
      and restarts either inside its own pane when that pane is only an idle
      shell (Herdr brings plugin panes back as plain shells after a restart).
@@ -36,8 +38,8 @@ What `open` does, in this order, re-reading Herdr after every step:
      recorded for that factory in this session, else the tab with its label.
   6. Opens Terminal windows until as many Herdr clients show the session as
      the layout names views, each with its Terminal profile and font size.
-It never closes, restarts, moves or renames a pane, tab or workspace, never
-starts anything in a pane that runs something other than a shell, and never
+It never closes, restarts or moves a pane, tab or workspace, never renames
+one it did not just create, never starts anything in a pane that runs something other than a shell, and never
 touches any other workspace. A pane counts as an idle shell only when the bare
 shell itself is in its foreground (a shell running a command is not) and Herdr
 records no agent in it.
@@ -77,7 +79,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 SCRIPT = os.path.realpath(__file__)
 ME = "starship"
 SHELLS = {"zsh", "bash", "sh", "fish", "dash", "ksh", "tcsh", "csh", "nu"}
-SINGLE_KEYS = ("session", "workspace", "sidebar", "firstmate", "bridge", "factory")
+SINGLE_KEYS = ("session", "workspace", "main", "sidebar", "firstmate", "bridge", "factory")
 
 
 class Failure(Exception):
@@ -119,7 +121,7 @@ def layout_path(home: str) -> str:
 def parse_layout(text: str, where: str = "config/desk-layout") -> Dict[str, Any]:
     """Read a desk layout. docs/configuration.md "Desk layout" owns the format."""
     layout: Dict[str, Any] = {
-        "session": "default", "workspace": "starship", "sidebar": "", "firstmate": "",
+        "session": "default", "workspace": "starship", "main": "", "sidebar": "", "firstmate": "",
         "bridge": True, "factory": True, "tabs": [], "views": [],
     }
     seen = set()
@@ -142,6 +144,10 @@ def parse_layout(text: str, where: str = "config/desk-layout") -> Dict[str, Any]
             if not value:
                 raise Refused("%s line %d: workspace needs a label" % (where, number))
             layout["workspace"] = value
+        elif key == "main":
+            if not value:
+                raise Refused("%s line %d: main needs a tab label" % (where, number))
+            layout["main"] = value
         elif key == "sidebar":
             if value not in ("collapsed", "open"):
                 raise Refused("%s line %d: sidebar is collapsed or open" % (where, number))
@@ -342,6 +348,12 @@ def is_factory_pane(pane: Dict[str, Any]) -> bool:
         (bool(FACTORY_TITLE) and pane["label"] == FACTORY_TITLE)
 
 
+def main_tab(tabs: List[Dict[str, Any]], label: str) -> Optional[str]:
+    """The id of the desk's main tab among <tabs>: the one labelled <label> when set, else the first."""
+    named = next((t["id"] for t in tabs if label and t["label"] == label), None)
+    return named or (tabs[0]["id"] if tabs else None)
+
+
 def factory_tab(tabs: List[Dict[str, Any]], records: Dict[str, str], tab: Dict[str, Any]) -> Optional[str]:
     """The id of a layout's factory tab among <tabs>: the tab open-tab recorded, else the one with its label."""
     ids = {t["id"] for t in tabs}
@@ -351,7 +363,7 @@ def factory_tab(tabs: List[Dict[str, Any]], records: Dict[str, str], tab: Dict[s
 
 def survey(herdr: Herdr, layout: Dict[str, Any], home: str) -> Dict[str, Any]:
     """Everything the plan needs, read from Herdr, the factory tab records and the process list."""
-    found: Dict[str, Any] = {"running": False, "socket": "", "workspace": None, "tabs": [],
+    found: Dict[str, Any] = {"running": False, "socket": "", "workspace": None, "tabs": [], "main": None,
                              "factory_tabs": {}, "panes": {}, "clients": herdr_clients(herdr.session)}
     entry = herdr.session_entry()
     if not entry or not entry.get("running"):
@@ -367,7 +379,7 @@ def survey(herdr: Herdr, layout: Dict[str, Any], home: str) -> Dict[str, Any]:
     found["tabs"] = [{"id": t.get("tab_id"), "label": t.get("label") or ""}
                      for t in result_list(herdr.call("tab", "list", "--workspace", found["workspace"]), "tabs")]
     panes = result_list(herdr.call("pane", "list", "--workspace", found["workspace"]), "panes")
-    main = found["tabs"][0]["id"] if found["tabs"] else None
+    main = found["main"] = main_tab(found["tabs"], layout["main"])
     records = factory_tab_records(home, found["socket"])
     found["factory_tabs"] = {t["factory"]: factory_tab(found["tabs"], records, t)
                              for t in layout["tabs"] if t["factory"]}
@@ -377,7 +389,7 @@ def survey(herdr: Herdr, layout: Dict[str, Any], home: str) -> Dict[str, Any]:
         first_in_tab.setdefault(pane.get("tab_id"), pane.get("pane_id"))
     for pane in panes:
         tab = pane.get("tab_id")
-        # Only panes the plan may act on are inspected: the first tab's, and
+        # Only panes the plan may act on are inspected: the main tab's, and
         # the panes of factory tabs the layout names.
         if tab != main and tab not in wanted_tabs:
             continue
@@ -424,7 +436,7 @@ def plan(layout: Dict[str, Any], found: Dict[str, Any], sidebar_now: Optional[bo
     label = layout["workspace"]
     if not workspace:
         steps.append(step("workspace", "create the workspace %s" % label, label=label))
-    main = found["tabs"][0]["id"] if workspace and found["tabs"] else None
+    main = found["main"] if workspace else None
     main_panes = found["panes"].get(main, []) if main else []
     bridge = next((p for p in main_panes if is_bridge(p)), None)
     factory = next((p for p in main_panes if is_factory_pane(p)), None)
@@ -434,7 +446,7 @@ def plan(layout: Dict[str, Any], found: Dict[str, Any], sidebar_now: Optional[bo
         if layout["firstmate"]:
             steps.append(step("firstmate", "start the first mate (%s)" % layout["firstmate"], pane=None))
     elif seat is None:
-        notes.append("the first tab of %s has no pane for the first mate; nothing was started" % label)
+        notes.append("the main tab of %s has no pane for the first mate; nothing was started" % label)
     elif seat["idle"]:
         if layout["firstmate"]:
             steps.append(step("firstmate", "start the first mate (%s)" % layout["firstmate"], pane=seat["id"]))
@@ -647,7 +659,7 @@ def child_env(herdr: Herdr, found: Dict[str, Any], home: str, tab: str = "") -> 
         env["HERDR_SOCKET_PATH"] = found["socket"]
     if found.get("workspace"):
         env["HERDR_WORKSPACE_ID"] = found["workspace"]
-    main = tab or (found["tabs"][0]["id"] if found.get("tabs") else "")
+    main = tab or found.get("main") or ""
     if main:
         env["HERDR_TAB_ID"] = main
     return env
@@ -722,7 +734,11 @@ def execute(item: Dict[str, Any], layout: Dict[str, Any], herdr: Herdr, found: D
         wait_running(herdr)
     elif kind == "workspace":
         made = herdr.call("workspace", "create", "--label", item["label"], "--cwd", home, "--no-focus")
-        root = ((made or {}).get("result") or {}).get("root_pane") or {}
+        result = (made or {}).get("result") or {}
+        first = (result.get("tab") or {}).get("tab_id")
+        if layout["main"] and first:
+            herdr.call("tab", "rename", first, layout["main"])
+        root = result.get("root_pane") or {}
         # The first mate starts in the new workspace's first pane, so wait for
         # its shell to be up before reading the desk again.
         if root.get("pane_id"):
@@ -761,7 +777,7 @@ def execute(item: Dict[str, Any], layout: Dict[str, Any], herdr: Herdr, found: D
 
 
 # Steps that change the layout inside the session; after any of them the desk
-# hands focus back to the first tab, since opening a tab focuses it.
+# hands focus back to the main tab, since opening a tab focuses it.
 LAYOUT_KINDS = {"workspace", "firstmate", "bridge", "factory", "bridge-revive", "factory-revive",
                 "page-revive", "factory-tab", "tab"}
 
@@ -795,8 +811,8 @@ def cmd_open() -> int:
         notes.append("asked to %s, but it has not shown up yet" % item["text"])
     if any(item["kind"] in LAYOUT_KINDS for item in done):
         found = survey(herdr, layout, home)
-        if found["tabs"]:
-            herdr.call("tab", "focus", found["tabs"][0]["id"], check=False)
+        if found["main"]:
+            herdr.call("tab", "focus", found["main"], check=False)
     for note in notes:
         say("  note: %s" % note)
     if done:
@@ -847,9 +863,11 @@ def cmd_layout() -> int:
     if chosen is None:
         raise Failure("the %s Herdr session has no workspace to read" % current["session"])
     wsid = chosen.get("workspace_id")
-    tabs = result_list(herdr.call("tab", "list", "--workspace", wsid), "tabs")
+    tabs = [{"id": t.get("tab_id"), "label": t.get("label") or ""}
+            for t in result_list(herdr.call("tab", "list", "--workspace", wsid), "tabs")]
     panes = result_list(herdr.call("pane", "list", "--workspace", wsid), "panes")
-    main = tabs[0].get("tab_id") if tabs else None
+    main = main_tab(tabs, current["main"])
+    main_label = next((t["label"] for t in tabs if t["id"] == main), "")
     main_panes = [{"label": p.get("label") or "", "cmdlines": [], "pane": p} for p in panes if p.get("tab_id") == main]
     bridge = any(is_bridge(p) for p in main_panes)
     factory = any(is_factory_pane(p) for p in main_panes)
@@ -862,6 +880,8 @@ def cmd_layout() -> int:
     lines = ["# The desk `%s` opens (docs/desk.md), read from the running Herdr session." % ME,
              "session = %s" % current["session"],
              "workspace = %s" % chosen.get("label")]
+    if main_label and not main_label.isdigit():
+        lines.append("main = %s" % main_label)
     if sidebar is not None:
         lines.append("sidebar = %s" % ("collapsed" if sidebar else "open"))
     if current["firstmate"]:
@@ -871,9 +891,11 @@ def cmd_layout() -> int:
         lines.append("# firstmate = firstmate <profile>   the first mate's launch command%s" % hint)
     lines.append("bridge = %s" % ("on" if bridge else "off"))
     lines.append("factory = %s" % ("on" if factory else "off"))
-    for tab in tabs[1:]:
-        fid = records.get(tab.get("tab_id"))
-        lines.append("tab = %s%s" % (tab.get("label"), " | factory %s" % fid if fid else ""))
+    for tab in tabs:
+        if tab["id"] == main:
+            continue
+        fid = records.get(tab["id"])
+        lines.append("tab = %s%s" % (tab["label"], " | factory %s" % fid if fid else ""))
     clients = set(herdr_clients(current["session"]))
     listed = osascript(LIST_VIEWS) if clients else ""
     for row in listed.splitlines():

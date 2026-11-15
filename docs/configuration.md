@@ -1717,6 +1717,7 @@ One setting per line as `key = value`; blank lines and lines starting with `#` a
 ```text
 session = default
 workspace = starship
+main = Bridge
 sidebar = collapsed
 firstmate = firstmate claude-opus
 bridge = on
@@ -1730,10 +1731,12 @@ view = Pro | 10
 
 - `session` is the Herdr session, `default` unless set.
 - `workspace` is the label of the workspace the desk fills in, `starship` unless set.
+- `main` is the label of the main tab, the one holding the first mate, the bridge strip and the Factory pane; without it, or when no tab carries that label, the main tab is the workspace's first tab.
+  The desk never renames a tab that exists; it gives the label only to the first tab of a workspace it creates itself.
 - `sidebar` is `collapsed` or `open`; when set, the desk writes Herdr's `[ui] sidebar_start_collapsed` to match, and leaves Herdr's config alone otherwise.
-- `firstmate` is the command typed into the first tab's idle first-mate pane; without it the desk only notes an idle pane.
-- `bridge` and `factory` are `on` (the default) or `off`, for the bridge strip and the Factory pane in the first tab.
-- Each `tab` line names one tab after the first, in order; `| factory <id>` makes it that factory's page, by its id in the [factory registry](#factory-registry-datafactoriesmd), and a tab without it is a plain shell.
+- `firstmate` is the command typed into the main tab's idle first-mate pane; without it the desk only notes an idle pane.
+- `bridge` and `factory` are `on` (the default) or `off`, for the bridge strip and the Factory pane in the main tab.
+- Each `tab` line names one tab besides the main tab, in order; `| factory <id>` makes it that factory's page, by its id in the [factory registry](#factory-registry-datafactoriesmd), and a tab without it is a plain shell.
   A factory tab is named after the factory in the registry; the desk finds it by the tab the Factory pane recorded for it, else by the label.
 - Each `view` line is one Terminal window: a Terminal profile name, then optionally `| <font size>`; an empty profile name uses Terminal's default.
 

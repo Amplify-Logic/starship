@@ -77,6 +77,9 @@ elif cmd == "tab create":
     tab = {"tab_id": new_id("w:t"), "label": opt("--label"), "panes": []}
     tabs_of(opt("--workspace")).append(tab); root = new_pane(tab)
     save(); out({"result": {"tab": {"tab_id": tab["tab_id"]}, "root_pane": {"pane_id": root["pane_id"]}}})
+elif cmd == "tab rename":
+    next(t for t in all_tabs() if t["tab_id"] == args[2])["label"] = args[3]
+    save(); out({"result": {}})
 elif cmd in ("tab focus", "tab get"):
     out({"result": {}})
 elif cmd == "pane list":
@@ -437,6 +440,65 @@ test_a_factory_tab_is_found_by_its_record_whatever_its_label() {
   pass "desk: a factory tab is found by open-tab's record, whatever the layout labels it"
 }
 
+test_a_workspace_the_desk_creates_gets_its_main_tab_named() {
+  new_case lab true
+  layout lab "main = Bridge"
+  local out
+  out=$(desk open) || fail "open failed: $out"
+  assert_grep "tab rename w:t2 Bridge" "$FAKE_HERDR_CALLS" "the new workspace's first tab was not named after main"
+  assert_equals "Bridge|Sample Shop|Recipe Box|Notes" "$(state_query '"|".join(t["label"] for t in st["workspaces"][0]["tabs"])')" \
+    "the main tab is not the first tab, named after main"
+  assert_equals "firstmate claude-opus|Starship bridge|Factories" \
+    "$(state_query '"|".join(p.get("label") or p["cmd"][0] for p in st["workspaces"][0]["tabs"][0]["panes"])')" \
+    "the named main tab is not the first mate, the bridge and the Factory pane"
+  : > "$FAKE_HERDR_CALLS"
+  out=$(desk open) || fail "second open failed: $out"
+  assert_contains "$out" "The desk was already open; nothing changed." "a second run with main set changed something"
+  pass "desk: a workspace the desk creates gets its first tab named after main, and a second run changes nothing"
+}
+
+test_an_existing_tab_is_never_renamed_to_main() {
+  new_case lab true
+  layout lab
+  desk open >/dev/null || fail "first open failed"
+  printf 'main = Bridge\n' >> "$FM_HOME/config/desk-layout"
+  : > "$FAKE_HERDR_CALLS"
+  local out
+  out=$(desk open) || fail "open with main set failed: $out"
+  assert_contains "$out" "The desk was already open; nothing changed." "main set without a tab carrying it did not fall back to the first tab"
+  assert_no_grep "rename" "$FAKE_HERDR_CALLS" "an existing tab was renamed"
+  assert_equals "1" "$(state_query 'st["workspaces"][0]["tabs"][0]["label"]')" "the existing first tab lost its label"
+  pass "desk: main falls back to the first tab and never renames an existing one"
+}
+
+test_a_renamed_main_tab_that_is_not_first_is_found_by_its_label() {
+  new_case default true
+  cat > "$FAKE_HERDR_STATE" <<'JSON'
+{"session": "default", "running": true, "n": 50, "workspaces": [
+ {"workspace_id": "w1", "label": "starship", "tabs": [
+  {"tab_id": "w1:t1", "label": "Scratch", "panes": [
+   {"pane_id": "w1:p1", "tab_id": "w1:t1", "label": null, "cmd": ["-zsh"]}]},
+  {"tab_id": "w1:t2", "label": "Bridge", "panes": [
+   {"pane_id": "w1:p2", "tab_id": "w1:t2", "label": "Starship bridge", "cmd": ["bash ../../bin/fm-bridge-strip.sh run"]},
+   {"pane_id": "w1:p3", "tab_id": "w1:t2", "label": null, "cmd": ["firstmate claude-opus"]},
+   {"pane_id": "w1:p4", "tab_id": "w1:t2", "label": "Factories", "cmd": ["bash ../../bin/fm-factory-pane.sh run"]}]}]}]}
+JSON
+  printf 'session = default\nmain = Bridge\nfirstmate = firstmate claude-opus\ntab = Scratch\n' > "$FM_HOME/config/desk-layout"
+  local out
+  out=$(desk open) || fail "open failed: $out"
+  assert_contains "$out" "The desk was already open; nothing changed." "a renamed main tab that is not first was not found"
+  assert_no_regex ' (run|rename|create) ' "$FAKE_HERDR_CALLS" "the desk acted on a desk that is already open"
+  out=$(desk layout) || fail "layout failed"
+  assert_contains "$out" "main = Bridge" "layout did not name the main tab"
+  assert_contains "$out" "tab = Scratch" "layout did not list the first tab beside the main tab"
+  assert_not_contains "$out" "tab = Bridge" "layout listed the main tab as another tab"
+  printf '%s\n' "$out" > "$FM_HOME/config/desk-layout"
+  : > "$FAKE_HERDR_CALLS"
+  out=$(desk open) || fail "open on the read-back layout failed: $out"
+  assert_contains "$out" "nothing changed" "the read-back layout with main does not describe the running desk"
+  pass "desk: a renamed main tab that is not first is found by its label and read back by layout"
+}
+
 test_install_command_links_starship_and_keeps_a_foreign_one() {
   new_case lab true
   local dir="$C/localbin" out status
@@ -465,4 +527,7 @@ fm_test_run \
   test_a_bad_or_missing_layout_stops_with_the_reason \
   test_layout_reads_the_running_desk_back \
   test_a_factory_tab_is_found_by_its_record_whatever_its_label \
+  test_a_workspace_the_desk_creates_gets_its_main_tab_named \
+  test_an_existing_tab_is_never_renamed_to_main \
+  test_a_renamed_main_tab_that_is_not_first_is_found_by_its_label \
   test_install_command_links_starship_and_keeps_a_foreign_one

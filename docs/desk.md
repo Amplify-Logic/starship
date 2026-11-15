@@ -14,7 +14,7 @@ Run it again and it changes nothing, so it is safe to run whenever you sit down.
 ## What it opens
 
 - Your workspace, made when no workspace carries its label.
-- In the workspace's first tab: the first mate, the [bridge strip](bridge-strip.md) across the top, and the [Factory pane](factory-pane.md) beside the first mate.
+- In the main tab, the one the layout names as `main` or else the workspace's first: the first mate, the [bridge strip](bridge-strip.md) across the top, and the [Factory pane](factory-pane.md) beside the first mate.
 - Every other tab the layout names, in order; a factory tab opens through the Factory pane's own tab opener, so pressing `enter` on that factory later finds the same tab, and the desk finds it again by that opener's record even when its label differs from the layout's.
 - One Terminal window per view, each attached to the same session with its own Terminal profile and font size, until as many Herdr clients show the session as the layout names views.
 - With `sidebar` set, Herdr's sidebar starts collapsed or open in every window the desk opens.
@@ -23,7 +23,7 @@ Each window is a full Herdr client of the same session, so they mirror each othe
 
 ## What it never does
 
-It never closes, restarts, moves or renames a pane, tab or workspace, and never touches another workspace, including the workers' own.
+It never closes, restarts or moves a pane, tab or workspace, never renames one it did not just create, and never touches another workspace, including the workers' own.
 It starts something in a pane only when that pane is an idle shell: the shell itself is waiting there and Herdr records no agent in it.
 A tab or pane running anything else is left as it is and named in a note.
 Tabs it adds go at the end; it does not reorder tabs you moved.
