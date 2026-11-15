@@ -27,6 +27,8 @@ The strip redraws every 5 seconds, and within a second of the owner's calls chan
 A decision answered, parked, released, closed or added changes no worker, so the owner's calls do not wait for the slow worker reading: whenever their change signal moves, they are read again on their own and the strip shows the next call within about two seconds.
 `bin/fm-owner-calls-signal-lib.sh` owns that signal and `bin/fm-fleet-status-lib.sh` owns how the calls are read again.
 Before the first reading it says `reading the crew` rather than showing zeros, and a reading that is no longer current carries its age, such as `(10m ago)`.
+When no first reading arrives within one bounded refresh, or a reading it had is lost, it says `cannot read the crew (since 09:12)` instead, so a strip that cannot read never looks like one still reading.
+A running strip keeps up with updates: before each frame it checks whether its own script or a library it loads changed, and re-runs itself in place, in the same pane, once the new files parse.
 
 The battery comes from `pmset -g batt`.
 On battery it turns amber below 25% and red below 10%, where it says `plug in now`.
@@ -106,4 +108,4 @@ The most urgent call and the night shift only use the columns left over, so they
 
 ## Verification
 
-`tests/fm-bridge-strip.test.sh` renders fixture fleets, fixture night shifts, fixture Mothership reach notes and fixture battery readings and checks every row word for word and colour by colour, at every width, clicks the running strip under a pseudo-terminal, parks a held decision under the running strip and times how soon it names the next call, and checks the Herdr calls behind the click, `open`, `install`, and `remove` against a stand-in Herdr.
+`tests/fm-bridge-strip.test.sh` renders fixture fleets, fixture night shifts, fixture Mothership reach notes and fixture battery readings and checks every row word for word and colour by colour, at every width, clicks the running strip under a pseudo-terminal, parks a held decision under the running strip and times how soon it names the next call, runs the strip's own loop to check that it reloads changed code within a redraw and says when it cannot read the crew, and checks the Herdr calls behind the click, `open`, `install`, and `remove` against a stand-in Herdr.

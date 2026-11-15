@@ -32,6 +32,16 @@
 #   fm-bridge-strip.sh render [--width N] [--height N]
 #                                print one frame and exit
 #
+# Staying current: a running loop keeps the code it started with in memory, so
+# an update would otherwise leave it reading the crew with yesterday's code.
+# Before each frame `run` takes a checksum of this script and every library it
+# sources, and when that changes and the new files parse, it re-executes itself
+# in place: the same process and pane, the new code. Until a first reading
+# arrives the strip says `reading the crew`; when none arrives within one
+# bounded refresh, or a reading it had is lost, it says
+# `cannot read the crew (since HH:MM)`. `render` prints one frame with no
+# history, so it only ever says `reading the crew`.
+#
 # Placement: Herdr splits a pane only right or down, so `open` splits the
 # target pane down, swaps the two panes (a swap trades places and keeps the
 # cells, so the strip moves into the top cell), then shrinks the top cell to
@@ -52,6 +62,7 @@
 #                                 for no battery (default: pmset on a Mac only)
 #   FM_BRIDGE_STRIP_CONFIG_DIR    the plugin's config directory, instead of
 #                                 asking Herdr
+#   FM_BRIDGE_STRIP_INTERVAL      seconds between frames of `run` (default 5)
 #   FM_FLEET_STATE_*              see bin/fm-fleet-status-lib.sh; its
 #                                 FM_FLEET_STATE_NOW also sets the night
 #                                 shift's clock
@@ -67,6 +78,12 @@ ME=fm-bridge-strip.sh
 
 # shellcheck source=bin/fm-fleet-status-lib.sh
 . "$SCRIPT_DIR/fm-fleet-status-lib.sh"
+
+# The code a running loop holds in memory: this script and every library it
+# sources, the fleet library's own three included. code_changed watches them.
+SELF="$SCRIPT_DIR/${BASH_SOURCE[0]##*/}"
+CODE_FILES=("$SELF" "$SCRIPT_DIR/fm-fleet-status-lib.sh" "$SCRIPT_DIR/fm-status-cache-lib.sh"
+  "$SCRIPT_DIR/fm-timeout-lib.sh" "$SCRIPT_DIR/fm-owner-calls-signal-lib.sh")
 
 usage() {
   awk '
@@ -121,6 +138,7 @@ wordmark() {  # spaced|compact|none
 # --- the crew -----------------------------------------------------------------
 
 READING_KNOWN=0
+CANNOT_READ_SINCE=
 BUSY=0
 FOR_YOU=0
 TO_MERGE=0
@@ -214,6 +232,15 @@ crew() {  # long|short|numbers|none
   SEG=
   SEG_W=0
   [ "$mode" = none ] && return 0
+  if [ "$READING_KNOWN" = 0 ] && [ -n "$CANNOT_READ_SINCE" ]; then
+    case "$mode" in
+      long) note="cannot read the crew (since $CANNOT_READ_SINCE)" ;;
+      *) note='cannot read' ;;
+    esac
+    SEG="${MIST}${note}"
+    SEG_W=${#note}
+    return 0
+  fi
   if [ "$READING_KNOWN" = 0 ]; then
     case "$mode" in
       long) note='reading the crew' ;;
@@ -583,12 +610,14 @@ EOF
 
 # render_frame: the whole pane, row by row, into FRAME. Every row is painted in
 # the hull colour so the strip reads as one raised deck, and the content sits on
-# the middle row (MIDDLE) of however tall Herdr made the pane.
+# the middle row (MIDDLE) of however tall Herdr made the pane. track_reading
+# runs before compose so the crew's words match this reading.
 FRAME=
 MIDDLE=1
 render_frame() {  # <home> <width> <height>
   local home=$1 width=$2 height=$3 row blank
   read_crew "$home"
+  track_reading
   read_night "$home"
   read_reach "$home"
   read_battery
@@ -765,13 +794,13 @@ calls_moved() {  # <home>
   [ "$(fm_owner_calls_signal "$1/state")" != "$CALLS_SIGNAL" ]
 }
 
-# wait_input: the pause between frames, five seconds unless the pane is
-# resized or clicked, or the owner's calls move. A left press on the most
-# urgent call opens it. Each read waits at most a second, because bash 3.2
+# wait_input: the pause between frames, <seconds> one-second ticks unless the
+# pane is resized or clicked, or the owner's calls move. A left press on the
+# most urgent call opens it. Each read waits at most a second, because bash 3.2
 # cannot wait less and a resize does not interrupt it there.
-wait_input() {  # <home>
+wait_input() {  # <home> <seconds>
   local tick=0 ch
-  while [ "$tick" -lt 5 ] && [ "$RESIZED" = 0 ]; do
+  while [ "$tick" -lt "$2" ] && [ "$RESIZED" = 0 ]; do
     tick=$((tick + 1))
     IFS= read -rsn1 -t 1 ch || {
       ! calls_moved "$1" || return 0
@@ -790,8 +819,51 @@ wait_input() {  # <home>
   done
 }
 
+code_print() { cksum "${CODE_FILES[@]}" 2>/dev/null; }
+
+# code_changed: the code on disk is no longer the code this loop started with,
+# and every file of it parses, so re-executing cannot swap a working strip for
+# a half-written one. A change that does not parse yet is tried again next frame.
+code_changed() {
+  local f
+  [ "$(code_print)" != "$CODE_PRINT" ] || return 1
+  for f in "${CODE_FILES[@]}"; do
+    bash -n "$f" 2>/dev/null || return 1
+  done
+}
+
+# track_reading: when the strip stops saying it is reading and says it cannot.
+# Before a first reading it allows one bounded refresh (FM_FLEET_STATE_WAIT in
+# bin/fm-fleet-status-lib.sh) and a frame; a reading it had and lost is named at
+# once. Either way the time shown is when the strip last stopped having one.
+# READ_GRACE defaults to that bounded refresh plus one default frame, so
+# `render` has it too; `run` recomputes it with its own interval.
+READ_GRACE=$(($(fm_status_ttl "${FM_FLEET_STATE_WAIT:-}" 90) + 5))
+READ_ONCE=0
+UNREAD_AT=
+UNREAD_CLOCK=
+track_reading() {
+  if [ "$READING_KNOWN" != 0 ]; then
+    READ_ONCE=1
+    UNREAD_AT=
+    CANNOT_READ_SINCE=
+    return 0
+  fi
+  if [ -z "$UNREAD_AT" ]; then
+    UNREAD_AT=$SECONDS
+    UNREAD_CLOCK=$(date +%H:%M)
+  fi
+  if [ "$READ_ONCE" = 1 ] || [ $((SECONDS - UNREAD_AT)) -ge "$READ_GRACE" ]; then
+    CANNOT_READ_SINCE=$UNREAD_CLOCK
+  fi
+}
+
 cmd_run() {
-  local home sleeper tick
+  local home sleeper interval tick
+  interval=$(fm_status_ttl "${FM_BRIDGE_STRIP_INTERVAL:-}" 5)
+  [ "$interval" -gt 0 ] || interval=5
+  READ_GRACE=$(($(fm_status_ttl "${FM_FLEET_STATE_WAIT:-}" 90) + interval))
+  CODE_PRINT=$(code_print)
   home=$(resolve_home)
   record_self
   trap cleanup EXIT
@@ -810,16 +882,23 @@ cmd_run() {
   printf '%s[?25l%s[?7l%s[2J' "$E" "$E" "$E"
   [ "$CLICKS" = 0 ] || printf '%s[?1000h%s[?1006h' "$E" "$E"
   while :; do
+    # Same process, same pane record and pane; only the code is new. The
+    # pane's own terminal settings go back first, so the new process saves
+    # those rather than this one's.
+    if code_changed; then
+      [ "$CLICKS" = 0 ] || [ -z "$TTY_SAVED" ] || stty "$TTY_SAVED" 2>/dev/null
+      exec "$BASH" "$SELF" run
+    fi
     pane_size
     render_frame "$home" "$PANE_COLS" "$PANE_ROWS"
     [ "$RESIZED" = 0 ] || printf '%s[2J' "$E"
     RESIZED=0
     printf '%s[H%s' "$E" "$FRAME"
     if [ "$CLICKS" = 1 ]; then
-      wait_input "$home"
+      wait_input "$home" "$interval"
     else
       tick=0
-      while [ "$tick" -lt 5 ] && [ "$RESIZED" = 0 ]; do
+      while [ "$tick" -lt "$interval" ] && [ "$RESIZED" = 0 ]; do
         tick=$((tick + 1))
         sleep 1 &
         sleeper=$!

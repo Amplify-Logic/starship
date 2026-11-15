@@ -71,6 +71,8 @@ Colour only repeats what the words already say: cyan is where you are, amber is 
 `enter` on a factory, or on something that needs you, opens that factory's tab, or focuses it when it is already open.
 Its page is on the left: the count line, so other factories' questions stay in view, then this factory's NEEDS YOU, its work in order, the rules the crew follows, what it has learned lately, its own feed, and the talk history.
 Its live workers are stacked on the right, at most four, each a read-only copy of that worker's own pane that refreshes every two seconds.
+Only a worker at work gets a copy: one that is `running`, `with Starship`, or `stuck`.
+A parked, held, queued, or finished job gets none, and a copy closes its own pane once its job ends: when the job is gone from the record or in any state but those three, `waiting`, or `no reading`.
 Typing never reaches a worker from there; talking goes through the talk box.
 `esc` goes back to the tab the factory was opened from, and `q` closes the tab with its worker copies.
 Outside Herdr, `enter` opens the same page in place instead.
@@ -106,6 +108,7 @@ Who steers is the owner's stated choice of whether he is working with that crew 
 Both use the cached record while it is younger than 20 seconds and build a fresh one otherwise.
 The owner's calls do not wait for that: when their change signal (`bin/fm-owner-calls-signal-lib.sh`) has moved past the one the record was built under, the record is rebuilt with a fresh read of the backlog and the inbox on the workers as the last full refresh read them, which takes a second or two rather than a full refresh.
 The live pane checks that signal once a second, so an answered, parked, released, closed or added decision, or a note to Starship, changes NEEDS YOU within about two seconds.
+The record is always built by the code on disk, so a running pane or worker copy checks before every frame whether `bin/fm-factory.py` changed, and re-runs itself in place, in the same pane, once the new file compiles.
 
 The record's schema is `fm-factory.v1`:
 
@@ -168,5 +171,5 @@ An item the record does not hold yet keeps its place for up to a minute while a 
 
 ## Verification
 
-`tests/fm-factory.test.sh` builds a fixture home of sample factories and a fixture fleet reading, and checks the record and the plain screen word for word, the quiet job, the registry fallback, the writing keys pressed in the real live view, how soon a parked decision leaves the live view, and the Herdr calls behind the factory tab and the plugin against a stand-in Herdr.
+`tests/fm-factory.test.sh` builds a fixture home of sample factories and a fixture fleet reading, and checks the record and the plain screen word for word, the quiet job, the registry fallback, the writing keys pressed in the real live view, how soon a parked decision leaves the live view, the Herdr calls behind the factory tab and the plugin against a stand-in Herdr, a worker copy closing when its job ends, and a running pane reloading its changed code in place.
 `tests/fm-tap-desk.test.sh` checks on one real backlog that the bridge strip, this pane, and the tap page show the same count of the owner's calls, and that the pane shows a question's recorded options.
