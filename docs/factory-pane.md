@@ -74,7 +74,7 @@ Colour only repeats what the words already say: cyan is where you are, amber is 
 ## Reading the work
 
 A call or job has something to read when its task has a report or a page of its own in the home (`data/<id>/report.md` or `data/<id>/page.html`), or when its hold reason names a report under the home's `data/`; only then does it show `r  Read the report`.
-`r` reads the highlighted call, or on a highlighted factory its first job with something to read, and a click reads the line it lands on.
+`r` reads the highlighted call, or on a highlighted factory the first job the screen shows with that line, and a click reads the line it lands on.
 The pane hands those to `bin/fm-read.sh`, which opens the task's own `page.html` when there is one and otherwise renders the reports into one calm reading page under `.lavish/`, then opens it in Lavish, or in the browser when Lavish is not installed.
 The reader runs in the background, so the pane never waits on it, and when it cannot open the page the pane says why.
 A scout writes that `page.html` beside its report, in whatever form best presents its work.
@@ -99,7 +99,7 @@ Outside Herdr, `enter` opens the same page in place instead.
 | `x` | Tell Starship the highlighted question looks already settled, so it re-checks it. |
 | `k` | Keep the highlighted finished work and ask Starship to land it, after `enter` confirms it. |
 | `c` | Ask for changes to the highlighted finished work, in the talk box. |
-| `r` | Read the highlighted call's report, or on a factory its first job's; a click on a `Read the report` line reads that one. |
+| `r` | Read the highlighted call's report, or on a factory the first shown job's; a click on a `Read the report` line reads that one. |
 | `t` | Talk to the highlighted factory's crew, or talk the highlighted question through. |
 | `s` | Switch who steers the highlighted factory, both ways. |
 | `esc` | Back, or cancel a confirmation or the talk box. |
