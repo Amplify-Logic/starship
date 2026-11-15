@@ -54,11 +54,20 @@ record.json (the cached record), basis.json (the fleet reading the last full
 refresh used), activity.json (when each worker's pane last changed), last-look
 (when the owner last looked: the newest sign of a look on its first line, when
 the look before that ended on its second), steer.log (who steers each factory),
-and tabs/ (the factory tabs it opened). A look is a key pressed in the pane, or
-the pane focused in Herdr for a few seconds (asked with `herdr pane get`); focus
-alone keeps a look going for at most 15 minutes after the focus began or the
-last key press, so a pane left focused does not look forever. A factory's own
-tab records none, since it shows one factory only.
+tabs/ (the factory tabs it opened), and read.log (what the last Read printed). A
+look is a key pressed in the pane, or the pane focused in Herdr for a few seconds
+(asked with `herdr pane get`); focus alone keeps a look going for at most 15
+minutes after the focus began or the last key press, so a pane left focused does
+not look forever. A factory's own tab records none, since it shows one factory
+only.
+
+Read. A call or job has something to read when its task has a report or a page
+of its own (data/<id>/report.md or data/<id>/page.html) or its hold reason names
+a report under the home's data/; its record carries those as `read`, the sources
+bin/fm-read.sh is given, and fm-read.sh owns which page opens. `r` reads the
+highlighted call, or on a factory its first job with something to read, and a
+click on any `r  Read the report` line reads that one; the reader runs in the
+background, so the pane never waits on it.
 
 How fresh it is. A full refresh reads every worker, which takes seconds, so the
 live pane starts one only once the record's workers are FM_FACTORY_TTL old.
@@ -105,6 +114,8 @@ Test seams:
                               shapes)
   FM_FACTORY_CAPTAIN_HOLD     captain-hold command (default
                               bin/fm-captain-hold.sh)
+  FM_FACTORY_READ             reader command, run with the item's read sources
+                              as arguments (default bin/fm-read.sh)
 Exit: 0 on success; 1 when a step fails, with the reason on stderr; 2 on a usage
 error.
 """
@@ -521,6 +532,35 @@ def ready_reports(rows: List[Tuple[str, str, str]]) -> List[bool]:
     return [index < len(answers) and answers[index] == "yes" for index in range(len(rows))]
 
 
+TASK_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+REPORT_PATH_RE = re.compile(r"[~\w./-]+\.md\b")
+
+
+def read_sources(home: str, ident: str, mentions: Tuple[Any, ...] = ()) -> List[str]:
+    """What Read opens for one item: its task id when the task has a report or a
+    page of its own, then each other report under the home's data/ its words name.
+
+    bin/fm-read.sh owns which page that opens: the task's own page.html first,
+    else every source rendered into one reading page.
+    """
+    data = os.path.realpath(os.path.join(home, "data"))
+    sources: List[str] = []
+    seen = set()
+    if TASK_ID_RE.match(ident or ""):
+        folder = os.path.join(data, ident)
+        if os.path.isfile(os.path.join(folder, "report.md")) or os.path.isfile(os.path.join(folder, "page.html")):
+            sources.append(ident)
+            seen.add(os.path.join(folder, "report.md"))
+    for text in mentions:
+        for match in REPORT_PATH_RE.finditer(text if isinstance(text, str) else ""):
+            path = os.path.expanduser(match.group(0))
+            real = os.path.realpath(path if os.path.isabs(path) else os.path.join(home, path))
+            if real.startswith(data + os.sep) and real not in seen and os.path.isfile(real):
+                seen.add(real)
+                sources.append(real)
+    return sources
+
+
 STATUS_RE = re.compile(r"^([a-z][a-z-]*)((?:\s*\[[^\]]*\])*)\s*:\s?(.*)$")
 
 
@@ -830,7 +870,8 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
                 "suggested_by": "Starship" if any(o["suggested"] for o in options) else None,
                 "recommendation": tidy(recommendation, 140) or None,
                 "holds_up": holds_up(row["id"]), "since": since_at, "for": "you", "pr": row.get("pr_url"),
-                "checking": checking}
+                "checking": checking,
+                "read": read_sources(home, row["id"], (row.get("hold_reason"), shape.get("question")))}
 
     # Live work: every task with metadata whose work item is not queued or done.
     running_ids = []
@@ -852,7 +893,8 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
         job: Dict[str, Any] = {"id": task["id"], "title": title, "kind": kind, "state": None, "step": None,
                                "started": started_at(meta), "doing": None, "doing_from": None,
                                "last_sign_of_life": None, "sign_of_life_from": None, "quiet": False,
-                               "until": None, "pr": (task.get("pr") or {}).get("url")}
+                               "until": None, "pr": (task.get("pr") or {}).get("url"),
+                               "read": read_sources(home, task["id"], ((row or {}).get("hold_reason"),))}
         if bucket == "working":
             job.update(state="running", step="planning" if kind == "scout" else "building")
         elif bucket == "validating" or (state.get("state") == "parked" and state.get("source") == "run-step"):
@@ -878,7 +920,8 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
                               "ask": "%s is ready for you to look at" % title, "title": title, "why": None,
                               "options": [], "suggested_by": None, "recommendation": None,
                               "holds_up": [], "since": done_at[-1] if done_at else None,
-                              "for": "you", "pr": pr, "checking": False})
+                              "for": "you", "pr": pr, "checking": False,
+                              "read": read_sources(home, task["id"])})
         elif bucket == "finished":
             job.update(state="finished" if "PR merged" in detail else "with Starship")
         elif bucket == "paused":
@@ -936,7 +979,8 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
         task_factory.setdefault(row["id"], fid)
         job = {"id": row["id"], "title": title, "kind": row.get("kind") or "task", "state": None, "step": None,
                "started": None, "doing": None, "doing_from": None, "last_sign_of_life": None,
-               "sign_of_life_from": None, "quiet": False, "until": None, "pr": row.get("pr_url")}
+               "sign_of_life_from": None, "quiet": False, "until": None, "pr": row.get("pr_url"),
+               "read": read_sources(home, row["id"], (row.get("hold_reason"),))}
         if row["id"] in decision_ids:
             job["state"] = "waiting on you"
             needs.append(hold_need(row, fid))
@@ -1351,6 +1395,7 @@ class Row(list):
     band = False
     hull = False
     stop: Optional[Tuple[str, str]] = None   # the highlight stop this row draws, if any
+    read: Optional[Tuple[str, List[str]]] = None   # the title and sources a click on this row reads
 
 
 def S(text: Any, colour: str = "ice", bold: bool = False) -> Tuple[str, str, bool]:
@@ -1448,6 +1493,13 @@ FEED_COLOUR = {"finished": "green", "PR ready": "green", "landed": "green", "ask
 def asking(need: Dict[str, Any]) -> str:
     """Which asking of a need this is: its decision key and when it was asked, held or became ready."""
     return ".".join(str(part) for part in (need.get("key"), need.get("since")) if part) or "0"
+
+
+def read_row(width: int, lead: str, item: Dict[str, Any]) -> Row:
+    """The `r  Read the report` line of a call or job with something to read; a click on it reads it."""
+    line = row(width, [S(lead), S("r", "cyan", True), S("  "), S("Read the report", "ice")])
+    line.read = (item["title"], list(item["read"]))
+    return line
 
 
 # How long an item the highlight was asked to go to waits for the record to
@@ -1560,6 +1612,18 @@ class View:
     def mark(self, kind: str, ident: str):
         return S("▸ ", "cyan", True) if self.here(kind, ident) else S("  ")
 
+    def readable(self) -> Optional[Tuple[str, List[str]]]:
+        """What `r` reads: the highlighted call, or on a factory its first job with something to read."""
+        kind, ident = self.at()
+        if kind == "need":
+            need = self.need(ident)
+            return (need["title"], need["read"]) if need and need.get("read") else None
+        fid = ident if kind == "factory" else self.opened
+        if not fid or not self.has_factory(fid):
+            return None
+        job = next((j for j in self.factory(fid)["jobs"] if j.get("read")), None)
+        return (job["title"], job["read"]) if job else None
+
     def ordered(self) -> List[Dict[str, Any]]:
         factories = self.record["factories"]
         return [f for f in factories if f["state"] != "idle"] + [f for f in factories if f["state"] == "idle"]
@@ -1626,6 +1690,8 @@ class View:
                              tail=note)
             if need.get("recommendation"):
                 rows += flow(width, [pad], "Starship suggests: %s" % need["recommendation"], "ice", rest="mist")
+            if need.get("read"):
+                rows.append(read_row(width, pad[0], need))
             rows.append(row(width, [pad, S("t", "cyan", True), S("  "), S("Talk it through", "ice")]))
             if need.get("checking"):
                 rows.append(row(width, [pad, S("checking", "amber", True),
@@ -1638,6 +1704,8 @@ class View:
             hint = "k  keep it    c  ask for changes" if full or band else "enter shows its factory"
             if need.get("pr") and full:
                 rows.append(row(width, [pad, S("the change ", "faint"), S(need["pr"], "mist")]))
+            if need.get("read"):
+                rows.append(read_row(width, pad[0], need))
             rows.append(row(width, [pad, S(hint, "faint")]))
         for line in rows:
             line.stop = ("need", need["id"])
@@ -1671,6 +1739,12 @@ class View:
         return segs
 
     def job_rows(self, width: int, job: Dict[str, Any], full: bool) -> List[Row]:
+        rows = self.job_lines(width, job, full)
+        if job.get("read"):
+            rows.append(read_row(width, "       ", job))
+        return rows
+
+    def job_lines(self, width: int, job: Dict[str, Any], full: bool) -> List[Row]:
         now = self.now()
         state = job["state"]
         if state == "running":
@@ -1791,6 +1865,8 @@ class View:
                     keys.append("x settled?")
             else:
                 keys.append("k keep · c changes")
+        if self.readable():
+            keys.append("r read")
         if not self.opened or not self.in_tab:
             keys.append("enter open" if not self.opened else "esc back")
         elif self.in_tab:
@@ -2000,6 +2076,16 @@ def settled_request_id(fid: str, need: Dict[str, Any], requested: int) -> str:
     return "factory.%s.settled.%s.%d" % (fid, need["id"], stamp)
 
 
+def start_reading(home: str, sources: List[str]) -> subprocess.Popen:
+    """Run the reader on <sources> in the background, its words kept in state/factory/read.log."""
+    seam = os.environ.get("FM_FACTORY_READ")
+    cmd = shlex.split(seam) if seam else ["bash", os.path.join(BIN, "fm-read.sh")]
+    os.makedirs(pane_dir(home), exist_ok=True)
+    with open(os.path.join(pane_dir(home), "read.log"), "w", encoding="utf-8") as log:
+        return subprocess.Popen(cmd + list(sources), stdin=subprocess.DEVNULL, stdout=log, stderr=log,
+                                start_new_session=True, env=dict(os.environ, FM_HOME=home))
+
+
 def record_steer(home: str, fid: str, who: str, now: int) -> None:
     path = os.path.join(pane_dir(home), "steer.log")
     os.makedirs(pane_dir(home), exist_ok=True)
@@ -2023,6 +2109,8 @@ class Pane:
         self.asked: Dict[str, Tuple[Optional[int], float]] = {}
         self.focused_since: Optional[float] = None
         self.last_key = 0.0
+        self.drawn: List[Row] = []     # the rows on screen, top first, for clicks
+        self.reading: Optional[Tuple[subprocess.Popen, str]] = None
 
     def take_focus(self) -> bool:
         """Read and remove an item id written to the focus file; True when one came."""
@@ -2124,6 +2212,29 @@ class Pane:
         kind, ident = self.view.at()
         return self.view.need(ident) if kind == "need" else None
 
+    def read(self, item: Optional[Tuple[str, List[str]]]) -> None:
+        """Open what there is to read about one item, without waiting for the reader."""
+        if not item:
+            self.say("Nothing to read here yet.", "mist")
+            return
+        title, sources = item
+        try:
+            self.reading = (start_reading(self.home, sources), title)
+        except OSError as error:
+            self.say("%s did not open: %s" % (title, error), "red", 12)
+            return
+        self.say("Opening %s to read." % title, "cyan")
+
+    def check_reading(self) -> None:
+        """Say so when the reader stopped without opening the page."""
+        if not self.reading or self.reading[0].poll() is None:
+            return
+        proc, title = self.reading
+        self.reading = None
+        if proc.returncode != 0:
+            said = read_text(os.path.join(pane_dir(self.home), "read.log"), 4096).strip().splitlines()
+            self.say("%s did not open: %s" % (title, said[-1] if said else "the reader stopped"), "red", 12)
+
     def send(self, request_id: str, body: str, done: str) -> None:
         ok, why = send_note(self.home, request_id, body)
         if ok:
@@ -2173,6 +2284,13 @@ class Pane:
             return True
         if key in ("wheel-up", "wheel-down"):
             view.scroll(3 if key == "wheel-down" else -3)
+            return True
+        if key.startswith(CLICK):
+            # A click reads the Read line it lands on; anywhere else it does nothing.
+            line = int(key[len(CLICK):])
+            drawn = self.drawn[line - 1] if 0 < line <= len(self.drawn) else None
+            if drawn is not None and drawn.read and view.talking is None and view.confirm is None:
+                self.read(drawn.read)
             return True
         if key in ("mouse", "other"):
             return True
@@ -2267,6 +2385,8 @@ class Pane:
                             "label": "What should change in %s" % need["title"]}
         elif need and need["kind"] == "question" and lower == "x":
             self.settled(need)
+        elif lower == "r":
+            self.read(view.readable())
         elif lower == "t":
             fid = self.factory_of_stop()
             if need and need["kind"] == "question":
@@ -2303,11 +2423,14 @@ KEYS = {b"\x1b[A": "up", b"\x1b[B": "down", b"\x1b[C": "right", b"\x1b[D": "left
         b"\x1bOA": "up", b"\x1bOB": "down", b"\x1b[5~": "pgup", b"\x1b[6~": "pgdn",
         b"\x1b": "esc", b"\r": "enter", b"\n": "enter",
         b"\x7f": "backspace", b"\x08": "backspace", b"\x03": "ctrl-c"}
+# A left-button press, as CLICK and the screen row it landed on (1 is the top).
+# Typed or pasted text never holds an escape, so it can never read as a click.
+CLICK = "\x1bclick "
 # Every named key, so none is ever typed into the talk box as text.
 NAMED = set(KEYS.values()) | {"wheel-up", "wheel-down", "mouse", "other"}
-# One read may hold several keys: a held arrow, a turn of the mouse wheel
-# (SGR reports, asked for when the pane starts), or pasted text.
-KEY_RE = re.compile(rb"\x1b\[<(\d+);\d+;\d+[Mm]|\x1b\[[0-9;?]*[ -/]*[@-~]|\x1bO.|\x1b|[^\x1b]+")
+# One read may hold several keys: a held arrow, a turn of the mouse wheel or a
+# click (SGR reports, asked for when the pane starts), or pasted text.
+KEY_RE = re.compile(rb"\x1b\[<(\d+);\d+;(\d+)([Mm])|\x1b\[[0-9;?]*[ -/]*[@-~]|\x1bO.|\x1b|[^\x1b]+")
 
 
 def read_keys(fd: int) -> List[str]:
@@ -2316,7 +2439,10 @@ def read_keys(fd: int) -> List[str]:
         data = match.group(0)
         if match.group(1) is not None:
             button = int(match.group(1))
-            keys.append({64: "wheel-up", 65: "wheel-down"}.get(button, "mouse"))
+            if button == 0 and match.group(3) == b"M":
+                keys.append(CLICK + match.group(2).decode())
+            else:
+                keys.append({64: "wheel-up", 65: "wheel-down"}.get(button, "mouse"))
         elif data in KEYS:
             keys.append(KEYS[data])
         elif data.startswith(b"\x1b"):
@@ -2349,11 +2475,13 @@ def live(pane: Pane) -> None:
                 pane.check_focus()
                 focus_checked = time.time()
             pane.take_focus()
+            pane.check_reading()
             size = os.get_terminal_size()
             view = pane.view
             if view.notice and time.time() > view.notice[2]:
                 view.notice = None
             rows = view.frame(size.columns, size.lines)
+            pane.drawn = rows[:size.lines]
             buf = ["\x1b[?2026h\x1b[H"]
             if resized[0]:
                 buf.append("\x1b[2J")
@@ -2415,7 +2543,7 @@ def dig(data: Any, *paths: str) -> Optional[str]:
 def pane_command(home: str, *args: str) -> str:
     words = ["exec", "env", "FM_HOME=%s" % home]
     for name in ("HERDR_BIN_PATH", "FM_FACTORY_TTL", "FM_FACTORY_QUIET_MINUTES", "FM_FACTORY_SNAPSHOT",
-                 "FM_FACTORY_PEEK", "FM_FACTORY_INBOX", "FM_FACTORY_PANE_CONFIG_DIR"):
+                 "FM_FACTORY_PEEK", "FM_FACTORY_INBOX", "FM_FACTORY_READ", "FM_FACTORY_PANE_CONFIG_DIR"):
         if name in os.environ:
             words.append("%s=%s" % (name, os.environ[name]))
     words += ["bash", os.path.join(BIN, "fm-factory-pane.sh")] + list(args)

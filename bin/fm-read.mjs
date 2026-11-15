@@ -21,6 +21,8 @@
 // forge the NUL-delimited placeholder markers used for stashed code and tags.
 // It also owns the private page naming: the page is written 0600 under a 0700
 // output directory and its path is printed on stdout.
+// Several sources render in order into one page, separated by a rule, with one
+// set of heading ids across them; the page is named and titled for the first.
 // Invoked as a command it writes that page; imported as a module it exports
 // render(markdown) -> HTML body and touches neither argv nor the filesystem, so
 // bin/fm-chart-room.mjs renders reports through this one Markdown owner.
@@ -286,19 +288,24 @@ th,td{text-align:left;padding:11px 15px;border-bottom:1px solid var(--line);vert
 `;
 export { render };
 
-function main(sourceArg, outputDirArg) {
-  if (!sourceArg || !outputDirArg) {
-    console.error("usage: fm-read.mjs <source.md> <output-dir>");
+function main(...args) {
+  const outputDirArg = args.pop();
+  if (!args.length || !outputDirArg) {
+    console.error("usage: fm-read.mjs <source.md>... <output-dir>");
     process.exit(2);
   }
   try {
-    const source = fs.realpathSync(sourceArg);
-    const body = render(fs.readFileSync(source, "utf8"));
+    const sources = args.map((arg) => fs.realpathSync(arg));
+    const anchorIds = new Set();
+    const body = sources
+      .map((source) => renderBlocks(fs.readFileSync(source, "utf8"), anchorIds))
+      .join("\n<hr>\n");
+    const source = sources[0];
     const stem = path.basename(source, path.extname(source));
     const parent = path.basename(path.dirname(source));
     const label = stem.toLowerCase() === "report" && parent ? parent : stem;
     const slug = label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "report";
-    const digest = crypto.createHash("sha256").update(source).digest("hex").slice(0, 10);
+    const digest = crypto.createHash("sha256").update(sources.join("\n")).digest("hex").slice(0, 10);
     const title = escapeHtml(label.replaceAll("-", " ").replace(/\b\w/g, (letter) => letter.toUpperCase()));
     const html = `<!doctype html>\n<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title><style>${css}</style></head><body><main>\n${body}\n</main></body></html>\n`;
     const outputDir = path.resolve(outputDirArg);

@@ -1129,6 +1129,28 @@ test_scout_completion_write_exception_is_task_scoped() {
   pass "fm-brief.sh: scouts may attest only their own empty inventory through the guarded command"
 }
 
+# A scout's report comes with a page presenting it; a ship brief asks for none.
+test_scout_brief_asks_for_a_page_beside_its_report() {
+  local home scout ship
+  home="$TMP_ROOT/report-page-home"
+  mkdir -p "$home/data"
+  FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
+    "$ROOT/bin/fm-brief.sh" sample-look sample --scout >/dev/null 2>&1 || fail "scout scaffold failed"
+  scout="$home/data/sample-look/brief.md"
+  assert_grep "Then write \`$home/data/sample-look/page.html\` beside it: one self-contained page that shows the same work in the format that best presents it" "$scout" \
+    "scout brief did not ask for a page beside its report"
+  assert_grep "tables for records, side-by-side comparisons for options, a timeline for a sequence of events" "$scout" \
+    "scout brief did not say which formats present the work"
+  assert_grep "\`report.md\` stays the source" "$scout" "scout brief did not keep report.md as the source"
+  assert_grep "write only the report, its page, and the status file below" "$scout" \
+    "scout outside-write rule did not allow the page"
+  FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
+    "$ROOT/bin/fm-brief.sh" sample-fix sample --mode direct-PR >/dev/null 2>&1 || fail "ship scaffold failed"
+  ship="$home/data/sample-fix/brief.md"
+  assert_no_grep "page.html" "$ship" "a ship brief asked for a report page"
+  pass "fm-brief.sh: a scout writes a page presenting its report, and a ship brief is unchanged"
+}
+
 # A scout brief offers the Lavish review loop for every compatible board version,
 # including older builds that use the legacy reply path.
 test_scout_lavish_line_follows_presentation_floor() {
@@ -1787,6 +1809,7 @@ test_ship_and_scout_teach_validation_round_pause
 test_scout_and_secondmate_load_decision_hold_policy
 test_scout_completion_write_exception_is_task_scoped
 test_scout_and_secondmate_scaffold
+test_scout_brief_asks_for_a_page_beside_its_report
 test_scout_lavish_line_follows_presentation_floor
 test_inbox_listing_command_is_safe_on_empty_inbox
 test_workers_wait_without_spending_turns
