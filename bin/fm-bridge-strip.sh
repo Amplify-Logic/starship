@@ -7,8 +7,10 @@
 # READS: the crew lamps, the most urgent call, the alert and the night shift's
 # count come from bin/fm-fleet-status-lib.sh, the same cached reading the
 # primary status bar shows, the night shift's hours from the home's
-# config/night-shift-window, and the battery from `pmset -g batt` on a Mac. It
-# never steers, changes or drains anything; its one action is that a click on
+# config/night-shift-window, a Mothership room this Mac cannot reach from the
+# notes the room's listener keeps (bin/fm-procevent-mothership.sh,
+# state/mothership/<room>.unreachable), and the battery from `pmset -g batt` on
+# a Mac. It never steers, changes or drains anything; its one action is that a click on
 # the most urgent call opens the Factory pane on it (bin/fm-factory-pane.sh open
 # --item, beside the pane below the strip). docs/bridge-strip.md owns what the
 # strip shows and why; this header owns the commands.
@@ -322,30 +324,86 @@ battery() {  # full|mid|short|none
 
 # --- the red alert ------------------------------------------------------------
 
+# A Mothership room this Mac cannot reach, in long and short words, or empty.
+REACH_LONG=
+REACH_SHORT=
+# A room is called unreachable once its listener has failed to reach it for
+# REACH_AFTER seconds, and only while the listener's latest failed read is at
+# most REACH_FRESH seconds old, so a listener that stopped trying leaves no
+# alert behind.
+REACH_AFTER=120
+REACH_FRESH=180
+
+# read_reach: the rooms the home's Mothership listener could not reach. Any
+# room cut off by Tailscale says so, since that is the one cause the owner can
+# fix on this Mac; otherwise the first room not answering is named.
+read_reach() {  # <home>
+  local now file key value since last cause name
+  REACH_LONG=
+  REACH_SHORT=
+  now=$(_fm_fleet_now) || return 0
+  for file in "$1"/state/mothership/*.unreachable; do
+    [ -f "$file" ] || continue
+    since='' last='' cause=''
+    while IFS='=' read -r key value; do
+      case "$key" in
+        since) since=$value ;;
+        last) last=$value ;;
+        cause) cause=$value ;;
+      esac
+    done < "$file"
+    case "$since" in ''|*[!0-9]*) continue ;; esac
+    case "$last" in ''|*[!0-9]*) continue ;; esac
+    [ $((now - since)) -ge "$REACH_AFTER" ] && [ $((now - last)) -le "$REACH_FRESH" ] || continue
+    case "$cause" in
+      tailscale)
+        REACH_LONG='Tailscale is off on this Mac'
+        REACH_SHORT='Tailscale off'
+        return 0
+        ;;
+      room)
+        [ -z "$REACH_LONG" ] || continue
+        name=${file##*/}
+        name=${name%.unreachable}
+        REACH_LONG="The $name room is not answering"
+        REACH_SHORT='room not answering'
+        ;;
+    esac
+  done
+}
+
 # alert: something broke, so trouble shows without the owner looking for it: a
 # worker whose endpoint is gone (the reading's lost: stopped, but not failed)
 # or work that failed, a worker's failure or a failed validation run (the
-# reading's failed), so each broken task counts once. It clears when the
-# reading no longer counts either.
+# reading's failed), so each broken task counts once; and a Mothership room
+# this Mac cannot reach (read_reach). It clears when none of them holds.
+alert_text() {  # long|short
+  local text='' total=0
+  case "$FAILED" in ''|*[!0-9]*) ;; *) total=$((FAILED + STOPPED)) ;; esac
+  if [ "$1" = long ]; then
+    if [ "$total" -gt 0 ]; then
+      [ "$FAILED" -eq 0 ] || text="$FAILED failed"
+      [ "$STOPPED" -eq 0 ] || text="${text:+$text, }$STOPPED stopped"
+    fi
+    [ -z "$REACH_LONG" ] || text="${text:+$text, }$REACH_LONG"
+  else
+    [ "$total" -eq 0 ] || text="$total broken"
+    [ -z "$REACH_SHORT" ] || text="${text:+$text, }$REACH_SHORT"
+  fi
+  printf '%s' "$text"
+}
+
 alert() {  # long|short
-  local text total
+  local text
   SEG=
   SEG_W=0
-  case "$FAILED" in ''|*[!0-9]*) return 0 ;; esac
-  total=$((FAILED + STOPPED))
-  [ "$total" -gt 0 ] || return 0
-  if [ "$1" = long ]; then
-    text=
-    [ "$FAILED" -eq 0 ] || text="$FAILED failed"
-    [ "$STOPPED" -eq 0 ] || text="${text:+$text, }$STOPPED stopped"
-  else
-    text="$total broken"
-  fi
+  text=$(alert_text "$1")
+  [ -n "$text" ] || return 0
   SEG="${RED}${LAMP} ${text}"
   SEG_W=$((2 + ${#text}))
 }
 
-alert_shows() { [ "$FAILED" != - ] && [ $((FAILED + STOPPED)) -gt 0 ]; }
+alert_shows() { [ -n "$(alert_text short)" ]; }
 
 # --- the most urgent call -----------------------------------------------------
 
@@ -511,7 +569,7 @@ EOF
     ROW="$(battery_colour)${text:0:$width}"
     rest=${#text}
   elif alert_shows; then
-    text="$((FAILED + STOPPED)) broken"
+    text=$(alert_text short)
     ROW="${RED}${text:0:$width}"
     rest=${#text}
   else
@@ -532,6 +590,7 @@ render_frame() {  # <home> <width> <height>
   local home=$1 width=$2 height=$3 row blank
   read_crew "$home"
   read_night "$home"
+  read_reach "$home"
   read_battery
   compose "$width"
   blank="${HULL_BG}$(printf '%*s' "$width" '')${RESET}"

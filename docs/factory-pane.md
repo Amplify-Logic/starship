@@ -33,7 +33,7 @@ The [factory registry](configuration.md#factory-registry-datafactoriesmd) names 
 
    Recipe Box   idle since 06:46 · nothing in line                         Starship steers
 
- SINCE YOU LAST LOOKED   since 03:46
+ SINCE YOU LAST LOOKED, 03:46
 
    12:36    Garden Journal  asked you  Harvest chart needs your call.
    13:57    Garden Journal  PR ready   Share a garden page as a picture has its PR ready.
@@ -54,7 +54,10 @@ The [factory registry](configuration.md#factory-registry-datafactoriesmd) names 
   A running job shows its title, how long it has run, the four steps (planning, building, checking, ready for you), and what it is doing this minute.
   A job with no sign of life for 15 minutes says `quiet for N min, no sign of life` instead, and its light stops moving.
   An idle factory is one faint row.
-- SINCE YOU LAST LOOKED is one rolling list since the pane was last closed: the time, who acted (a factory, Starship, or you), one word, and a sentence.
+- SINCE YOU LAST LOOKED is one rolling list since the owner last looked at the pane: the time, who acted (a factory, Starship, or you), one word, and a sentence.
+  A look is a key pressed in the pane, or the pane focused in Herdr for a few seconds; focus alone keeps a look going for at most 15 minutes after the focus began or the last key press, so a pane left focused all day does not hold the list back. Only Herdr saying the pane is not focused ends a focus; a failed or unreadable answer from Herdr changes nothing. A look ends 15 minutes after its last key press or counted focus, and while one is under way the list keeps starting where the look before it ended.
+  Its heading names that time; with no look recorded yet it reads LAST 12 HOURS, and it never reaches back more than two days, reading LAST 48 HOURS when the last look is older.
+  A factory's own tab records no look, since it shows one factory only.
   It holds outcomes (`finished`, `PR ready`, `landed`, `failed`), the owner's own calls as they were held (`asked you`), and what the owner and Starship said; a worker's pause, a blocker, and a question a worker put to Starship never appear.
   A ship's `done` is an outcome only when it is the ready report, so a build handed into the checks is not listed as finished.
 
@@ -118,6 +121,7 @@ The record's schema is `fm-factory.v1`:
 | `as_of`, `since` | When the record was built and the start of SINCE YOU LAST LOOKED, as UTC times and epochs. |
 | `snapshot_epoch`, `calls_signal` | When the workers in it were read, and the owner's calls signal its calls were read under. |
 | `read_at` | When the refresh began reading, in fractional epoch seconds; a pane keeps a card it just asked about checking until a record read after the press arrives. |
+| `since_from` | What that start is: `last look`, or `12 hours` with no look recorded yet, or `48 hours` when the last look is older than that. |
 | `counts`, `count_line` | Running jobs, items that need you, and idle factories. |
 | `needs_you[]` | Each of the owner's calls: its `id`, `factory`, `kind` (`question` or `finished work`), `title`, `ask`, `why`, `options[]` (`key`, `label`, `suggested`), `suggested_by`, a `recommendation` that is not one of the options, `holds_up[]`, `since`, `pr`, `for`, the person it waits on, and `checking`, true while Starship re-checks a question the owner marked already settled. |
 | `factories[]` | Each factory: `id`, `name`, `about`, `projects`, `steered_by`, `state`, `idle_since`, `crew`, `needs` (the ids of its items in `needs_you`), `jobs[]`, `next`, `rules`, `learned`, and `talk`. |
