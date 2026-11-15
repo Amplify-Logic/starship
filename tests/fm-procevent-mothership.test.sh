@@ -89,14 +89,25 @@ make_home() {
   printf '%s\n' "$h"
 }
 
-# in_home <dir> <command...>
+# in_home <dir> <command...>: no Tailscale command unless a case names one.
 in_home() {
   local h=$1
   shift
   FM_HOME="$h/home" FM_PROCEVENT_CLAIM_ROOT="$CLAIMS" MS_STUB="$h/stub" \
     FM_MOTHERSHIP_BIN="$STUB_BIN/mothership" MOTHERSHIP_CONFIG="$h/rooms.json" \
+    FM_MOTHERSHIP_TAILSCALE="${FM_MOTHERSHIP_TAILSCALE-}" \
     FM_MOTHERSHIP_WAIT_SECONDS=1 FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS=2 "$@"
 }
+
+# A stand-in Tailscale: `status --json` reports the backend state in
+# $TS_STATE, or fails when it is `gone` (the app not running).
+cat > "$STUB_BIN/tailscale" <<'SH'
+#!/usr/bin/env bash
+[ "$*" = 'status --json' ] || exit 2
+[ "${TS_STATE:-Running}" != gone ] || { echo 'failed to connect to local Tailscale service' >&2; exit 1; }
+printf '{"BackendState":"%s","Self":{}}\n' "${TS_STATE:-Running}"
+SH
+chmod +x "$STUB_BIN/tailscale"
 
 # queue_reply <dir> <exit-code> <line>...
 queue_reply() {
@@ -338,6 +349,75 @@ test_source_windows() {
   rc=0; out=$(src) || rc=$?
   assert_contains "$out" "status=error" "a missing place stops"
   pass "source: empty and unrelated windows exit 75, items are captured unmoved, failures back off or stop"
+}
+
+test_source_notes_a_room_it_cannot_reach() {
+  local h note rc before since
+  h=$(make_home reach)
+  set_position "$h" alpha "$P0"
+  set_told "$h" alpha "$P0"
+  printf 'alpha = on\nalpha.name = Harbour Team\n' > "$h/home/config/mothership-monitor"
+  note="$h/home/state/mothership/alpha.unreachable"
+  src() { TS_STATE=${1:-Running} FM_MOTHERSHIP_TAILSCALE="$STUB_BIN/tailscale" \
+    in_home "$h" "$ADAPTER" source alpha --bin "$STUB_BIN/mothership" --config "$h/rooms.json" >/dev/null; }
+  field() { sed -n "s/^$1=//p" "$note"; }
+
+  # The room's name does not resolve: Tailscale's private names are gone.
+  queue_reply "$h" 3 "err:Could not reach the room at https://room.example.test: ENOTFOUND"
+  before=$(date +%s)
+  rc=0; src || rc=$?
+  [ "$rc" -eq 75 ] || fail "an unreachable room gave rc=$rc"
+  [ -f "$note" ] || fail "an unreachable room left no note"
+  assert_equals tailscale "$(field cause)" "a name that does not resolve is Tailscale"
+  assert_equals 'Harbour Team' "$(field name)" "the note carries the room's display name"
+  since=$(field since)
+  [ "$since" -ge "$before" ] && [ "$(field last)" -ge "$since" ] || fail "the note's times are wrong: $(cat "$note")"
+
+  # Tailscale running and the room refusing the connection: the room is down.
+  queue_reply "$h" 3 "err:Could not reach the room at https://room.example.test: ECONNREFUSED"
+  src
+  assert_equals room "$(field cause)" "a refused connection with Tailscale on is the room"
+  assert_equals "$since" "$(field since)" "a run of failures kept its first time"
+
+  # Tailscale switched off, or its app not running at all.
+  queue_reply "$h" 3 "err:Could not reach the room at https://room.example.test: ETIMEDOUT"
+  src Stopped
+  assert_equals tailscale "$(field cause)" "Tailscale stopped is the cause"
+  queue_reply "$h" 3 "err:Could not reach the room at https://room.example.test: ETIMEDOUT"
+  src gone
+  assert_equals tailscale "$(field cause)" "a Tailscale that cannot be asked is off"
+
+  # A long gap since the last failure (a sleeping machine) starts a new run.
+  printf 'since=1000\nlast=1100\ncause=room\nname=x\n' > "$note"
+  queue_reply "$h" 3 "err:Could not reach the room at https://room.example.test: ECONNREFUSED"
+  src
+  [ "$(field since)" -ge "$before" ] || fail "an old run of failures was carried on: $(cat "$note")"
+
+  # Without a display name the room's own name stands.
+  printf 'alpha = on\n' > "$h/home/config/mothership-monitor"
+  queue_reply "$h" 3 "err:Could not reach the room at https://room.example.test: ECONNREFUSED"
+  src
+  assert_equals alpha "$(field name)" "a room with no display name is named by its own name"
+
+  # The room answering again clears the note.
+  queue_reply "$h" 0 "out:{\"position\":$P0}"
+  src
+  [ ! -e "$note" ] || fail "the note stayed after the room answered"
+  pass "source: a room it cannot reach is noted with its cause and display name, and the note clears when the room answers"
+}
+
+test_the_display_name_line_is_part_of_the_setting() {
+  local h out
+  h=$(make_home names)
+  printf 'alpha = on\nalpha.name = Harbour\n' > "$h/home/config/mothership-monitor"
+  out=$(in_home "$h" "$ADAPTER" ensure 2>&1) || fail "ensure failed: $out"
+  assert_not_contains "$out" "line 2" "a display name line was reported as malformed"
+  [ -f "$h/home/state/procevent/mothership-alpha.source" ] || fail "a display name line kept the room from being armed"
+  printf 'since=1\nlast=2\ncause=room\nname=Harbour\n' > "$h/home/state/mothership/alpha.unreachable"
+  out=$(in_home "$h" "$ADAPTER" off alpha 2>&1) || fail "off failed: $out"
+  grep -qx 'alpha.name = Harbour' "$h/home/config/mothership-monitor" || fail "off dropped the display name: $(cat "$h/home/config/mothership-monitor")"
+  [ ! -e "$h/home/state/mothership/alpha.unreachable" ] || fail "off left the unreachable note"
+  pass "a <room>.name line is part of the setting and survives switching the room"
 }
 
 test_autohandle_and_told() {
@@ -614,6 +694,8 @@ fm_test_run \
   test_ensure_follows_the_setting \
   test_ensure_bounds_a_room_that_never_answers \
   test_source_windows \
+  test_source_notes_a_room_it_cannot_reach \
+  test_the_display_name_line_is_part_of_the_setting \
   test_autohandle_and_told \
   test_told_after_a_missed_told \
   test_read_cleans_room_text \
