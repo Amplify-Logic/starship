@@ -5,7 +5,7 @@ set -u
 # shellcheck source=tests/lib.sh disable=SC1091
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
-ACTION_REF=f6441c96c352a18b9cadcaef6b6c7017e9ac3970
+ACTION_REF=5732d1ed88a1572fa6115d6ede5d69bfec097946
 TMP_ROOT=$(fm_test_tmproot fm-no-mistakes-required)
 VERIFY="$TMP_ROOT/verify.py"
 OLD_SHA=1111111111111111111111111111111111111111

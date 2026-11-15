@@ -21,7 +21,7 @@ assert_present "$CLEANUP" "bin/fm-herdr-ci-cleanup.sh is missing"
 
 TMP_ROOT=$(fm_test_tmproot fm-install-herdr)
 HERDR_PIN_SHA256=14d9e8bc8b4a9e0118d77c32266f76d461f09b40342eb23752960bd89f59929d
-TREEHOUSE_PIN_SHA256=78c820c5872bf9d9d3eb19bbedd75e4804b9258c862238993fa160cf9d215ed8
+TREEHOUSE_PIN_SHA256=bd6227d909ba8046263ae5d4e072ccbcf43010cac9d7289b1262126510edfeed
 
 # installer_world <name>: a fresh case dir with a fakebin that reports a Linux
 # x86_64 host and serves $FAKE_ASSET for any curl download, logging curl's
@@ -124,27 +124,27 @@ test_herdr_installer_pins_exact_version_and_checksums() {
 test_treehouse_installer_pins_exact_version_and_checksums() {
   local case_dir
   case_dir=$(installer_world treehouse-mismatch)
-  write_fake_treehouse_archive "$case_dir" 3.1.3
+  write_fake_treehouse_archive "$case_dir" 3.1.8
   run_installer "$TREEHOUSE_INSTALL" "$case_dir"
   expect_code 1 "$RUN_RC" "Treehouse installer with an off-pin archive"
-  assert_contains "$RUN_ERR" "checksum mismatch for treehouse-v3.1.3-linux-amd64.tar.gz (expected $TREEHOUSE_PIN_SHA256" \
+  assert_contains "$RUN_ERR" "checksum mismatch for treehouse-v3.1.8-linux-amd64.tar.gz (expected $TREEHOUSE_PIN_SHA256" \
     "Treehouse installer must refuse an archive whose SHA-256 is not the pin"
   assert_absent "$case_dir/dest/treehouse" "Treehouse installer must not install an off-pin archive"
-  assert_equals "https://github.com/kunchenguid/treehouse/releases/download/v3.1.3/treehouse-v3.1.3-linux-amd64.tar.gz" \
+  assert_equals "https://github.com/kunchenguid/treehouse/releases/download/v3.1.8/treehouse-v3.1.8-linux-amd64.tar.gz" \
     "$(grep '^https://' "$case_dir/curl.log")" \
-    "Treehouse installer must fetch the 3.1.3 Linux amd64 archive from kunchenguid/treehouse"
+    "Treehouse installer must fetch the 3.1.8 Linux amd64 archive from kunchenguid/treehouse"
   assert_equals "--max-filesize" "$(grep -x -- '--max-filesize' "$case_dir/curl.log")" \
     "Treehouse installer must bound the download size"
 
   case_dir=$(installer_world treehouse-match)
-  write_fake_treehouse_archive "$case_dir" 3.1.3
+  write_fake_treehouse_archive "$case_dir" 3.1.8
   fake_sha256 "$case_dir" "$TREEHOUSE_PIN_SHA256"
   run_installer "$TREEHOUSE_INSTALL" "$case_dir"
   expect_code 0 "$RUN_RC" "Treehouse installer with the pinned archive: $RUN_ERR"
   [ -x "$case_dir/dest/treehouse" ] || fail "Treehouse installer must install the pinned archive's binary"
-  assert_equals "v3.1.3" "$("$case_dir/dest/treehouse" --version)" \
+  assert_equals "v3.1.8" "$("$case_dir/dest/treehouse" --version)" \
     "Treehouse installer must install the archive's treehouse binary"
-  pass "Treehouse installer fetches the pinned 3.1.3 archive and verifies its checksum"
+  pass "Treehouse installer fetches the pinned 3.1.8 archive and verifies its checksum"
 }
 
 test_cleanup_only_targets_job_owned_lab_sessions() {

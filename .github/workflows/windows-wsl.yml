@@ -98,7 +98,7 @@ jobs:
 
       - name: Install Ubuntu 24.04 in WSL 2
         if: matrix.kind == 'wsl'
-        uses: Vampire/setup-wsl@v7.0.0
+        uses: Vampire/setup-wsl@v7.2.0
         with:
           distribution: Ubuntu-24.04
           wsl-version: 2
