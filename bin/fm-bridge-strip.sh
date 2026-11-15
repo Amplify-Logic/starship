@@ -35,10 +35,10 @@
 # Staying current: a running loop keeps the code it started with in memory, so
 # an update would otherwise leave it reading the crew with yesterday's code.
 # Before each frame `run` takes a checksum of this script and every library it
-# sources, and when that changes and the new files parse, it re-executes itself
-# in place: the same process and pane, the new code. Until a first reading
-# arrives the strip says `reading the crew`; when none arrives within one
-# bounded refresh, or a reading it had is lost, it says
+# sources, and when that changes and the new files are non-empty and parse, it
+# re-executes itself in place: the same process and pane, the new code. Until a
+# first reading arrives the strip says `reading the crew`; when none arrives
+# within one bounded refresh, or a reading it had is lost, it says
 # `cannot read the crew (since HH:MM)`. `render` prints one frame with no
 # history, so it only ever says `reading the crew`.
 #

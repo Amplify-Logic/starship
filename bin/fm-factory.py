@@ -38,8 +38,8 @@ state is a word, so an agent reading the pane as text loses nothing.
 Staying current. A running pane keeps the code it started with in memory, while
 the record it draws is rebuilt by a fresh process with whatever code is on disk.
 So the live pane and each live copy compare this file's checksum before every
-frame, and when it changed and the new file compiles, they re-execute
-themselves in place: the same process and Herdr pane, the new code.
+frame, and when it changed and the new file is non-empty and compiles, they
+re-execute themselves in place: the same process and Herdr pane, the new code.
 
 Where the record comes from. Live work, decisions and the work list come only
 from bin/fm-fleet-snapshot.sh --json, and each task's state word comes from the
