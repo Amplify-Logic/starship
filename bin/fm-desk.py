@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """fm-desk.py - the `starship` desk command: open the owner's whole desk in Herdr.
 
-One command starts Herdr (or attaches to the session already running), fills in
+One command starts Herdr's default session (or attaches to it when it is
+already running), fills in
 whatever the owner's desk layout names that is missing, and opens the Terminal
 windows that show the session. Run it again and it changes nothing.
 docs/desk.md owns what the desk is and why; docs/configuration.md owns the
@@ -13,7 +14,8 @@ Usage:
   fm-desk.py layout             print the running session as a desk layout file,
                                 a starting config/desk-layout
   fm-desk.py install-command    put `starship` on PATH: ~/.local/bin/starship
-                                becomes a link to this script
+                                becomes a link to this script, unless another
+                                `starship` is there or already on PATH
 
 The layout lives in the home's config/desk-layout. Without one, `open` stops
 and says how to write it.
@@ -33,19 +35,25 @@ What `open` does, in this order, re-reading Herdr after every step:
      and restarts either inside its own pane when that pane is only an idle
      shell (Herdr brings plugin panes back as plain shells after a restart).
   5. Opens every missing tab; a factory tab opens through bin/fm-factory.py
-     open-tab, and an existing factory tab whose page pane is only an idle
-     shell gets its page started again. A factory tab is the tab open-tab
+     open-tab. An existing factory tab whose page pane is only an idle shell
+     gets its page started again, its other panes that are only idle shells
+     are closed (they are the worker copies Herdr brought back as plain
+     shells), and bin/fm-factory.py workers splits a fresh live copy of each
+     running worker beside the page. A factory tab is the tab open-tab
      recorded for that factory in this session, else the tab with its label.
   6. Opens Terminal windows until as many Herdr clients show the session as
      the layout names views, each with its Terminal profile and font size.
-It never closes, restarts or moves a pane, tab or workspace, never renames
-one it did not just create, never starts anything in a pane that runs something other than a shell, and never
-touches any other workspace. A pane counts as an idle shell only when the bare
-shell itself is in its foreground (a shell running a command is not) and Herdr
-records no agent in it. The desk types into an idle shell only when its screen
-also shows the shell's prompt as the last line with nothing typed after it. It
-gives a shell still starting up to FM_DESK_WAIT to reach its prompt; one that
-does not, or one holding typed-ahead input, is left alone with a note.
+It never restarts or moves a pane, tab or workspace, never closes one except
+the leftover idle shells of a factory tab whose page it restarts, never renames
+one it did not just create, never starts anything in a pane that runs
+something other than a shell, and never touches any other workspace. A pane
+counts as an idle shell only when the bare shell itself is in its foreground
+(a shell running a command is not) and Herdr records no agent in it. The desk
+types into, or closes, an idle shell only when its screen also shows the
+shell's prompt as the last line with nothing typed after it. It gives such a
+pane still starting up FM_DESK_WAIT to reach its prompt, and opens no view
+meanwhile; one that does not, or one holding typed-ahead input, is left alone
+with a note.
 
 Environment:
   FM_HOME                 the home whose config/desk-layout is read (default:
@@ -61,7 +69,8 @@ Test seams:
   FM_DESK_COMMAND_DIR     where install-command links `starship` (default
                           ~/.local/bin)
   FM_DESK_WAIT            seconds to wait for a started server, a new view, or
-                          a starting shell's prompt (default 30)
+                          the prompt of a starting shell the desk would type
+                          into or close (default 30)
 Exit: 0 on success; 1 when a step fails, with the reason on stderr; 2 on a usage
 error or an unreadable layout.
 """
@@ -82,7 +91,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 SCRIPT = os.path.realpath(__file__)
 ME = "starship"
 SHELLS = {"zsh", "bash", "sh", "fish", "dash", "ksh", "tcsh", "csh", "nu"}
-SINGLE_KEYS = ("session", "workspace", "main", "sidebar", "firstmate", "bridge", "factory")
+SESSION = "default"
+SINGLE_KEYS = ("workspace", "main", "sidebar", "firstmate")
 
 
 class Failure(Exception):
@@ -124,8 +134,7 @@ def layout_path(home: str) -> str:
 def parse_layout(text: str, where: str = "config/desk-layout") -> Dict[str, Any]:
     """Read a desk layout. docs/configuration.md "Desk layout" owns the format."""
     layout: Dict[str, Any] = {
-        "session": "default", "workspace": "starship", "main": "", "sidebar": "", "firstmate": "",
-        "bridge": True, "factory": True, "tabs": [], "views": [],
+        "workspace": "starship", "main": "", "sidebar": "", "firstmate": "", "tabs": [], "views": [],
     }
     seen = set()
     for number, raw in enumerate(text.splitlines(), 1):
@@ -139,11 +148,7 @@ def parse_layout(text: str, where: str = "config/desk-layout") -> Dict[str, Any]
             if key in seen:
                 raise Refused("%s line %d: %s is set twice" % (where, number, key))
             seen.add(key)
-        if key == "session":
-            if not re.match(r"^[A-Za-z0-9][A-Za-z0-9_-]*$", value):
-                raise Refused("%s line %d: session must be letters, digits, _ or -" % (where, number))
-            layout["session"] = value
-        elif key == "workspace":
+        if key == "workspace":
             if not value:
                 raise Refused("%s line %d: workspace needs a label" % (where, number))
             layout["workspace"] = value
@@ -157,10 +162,6 @@ def parse_layout(text: str, where: str = "config/desk-layout") -> Dict[str, Any]
             layout["sidebar"] = value
         elif key == "firstmate":
             layout["firstmate"] = value
-        elif key in ("bridge", "factory"):
-            if value not in ("on", "off"):
-                raise Refused("%s line %d: %s is on or off" % (where, number, key))
-            layout[key] = value == "on"
         elif key == "tab":
             label, _, kind = (part.strip() for part in value.partition("|"))
             if not label:
@@ -212,8 +213,8 @@ def herdr_bin() -> str:
 def base_env() -> Dict[str, str]:
     """This process's environment without the pane identity a Herdr pane hands down.
 
-    The desk names its session explicitly, so a run from inside some other pane
-    never reaches that pane's session by accident.
+    The desk names the default session explicitly, so a run from inside some
+    other pane never reaches that pane's session by accident.
     """
     env = dict(os.environ)
     for name in ("HERDR_SOCKET_PATH", "HERDR_PANE_ID", "HERDR_TAB_ID", "HERDR_WORKSPACE_ID", "HERDR_SESSION"):
@@ -222,8 +223,8 @@ def base_env() -> Dict[str, str]:
 
 
 class Herdr:
-    def __init__(self, session: str):
-        self.session = session
+    def __init__(self) -> None:
+        self.session = SESSION
         self.binary = herdr_bin()
 
     def call(self, *args: str, check: bool = True) -> Any:
@@ -256,9 +257,7 @@ class Herdr:
     def session_entry(self) -> Optional[Dict[str, Any]]:
         data = self.call("session", "list", "--json", check=False) or {}
         for entry in data.get("sessions") or []:
-            if self.session == "default" and entry.get("default"):
-                return entry
-            if entry.get("name") == self.session:
+            if entry.get("default") or entry.get("name") == self.session:
                 return entry
         return None
 
@@ -288,8 +287,8 @@ FACTORY_TITLE = plugin_title(os.path.join(ROOT, "herdr-plugins", "starship-facto
 # Reading the desk as it is
 # --------------------------------------------------------------------------
 
-def herdr_clients(session: str) -> List[str]:
-    """ttys of the Herdr clients showing <session> right now."""
+def herdr_clients() -> List[str]:
+    """ttys of the Herdr clients showing the default session right now."""
     lister = os.environ.get("FM_DESK_PS")
     argv = shlex.split(lister) if lister else ["ps", "-axo", "pid=,tty=,command="]
     try:
@@ -307,12 +306,7 @@ def herdr_clients(session: str) -> List[str]:
             continue
         if not words or os.path.basename(words[0]) != "herdr":
             continue
-        rest = words[1:]
-        if session == "default":
-            wanted = rest in ([], ["--session", "default"], ["session", "attach", "default"])
-        else:
-            wanted = rest in (["--session", session], ["session", "attach", session])
-        if wanted:
+        if words[1:] in ([], ["--session", SESSION], ["session", "attach", SESSION]):
             ttys.append(parts[1])
     return ttys
 
@@ -404,7 +398,7 @@ def factory_tab(tabs: List[Dict[str, Any]], records: Dict[str, str], tab: Dict[s
 def survey(herdr: Herdr, layout: Dict[str, Any], home: str) -> Dict[str, Any]:
     """Everything the plan needs, read from Herdr, the factory tab records and the process list."""
     found: Dict[str, Any] = {"running": False, "socket": "", "workspace": None, "tabs": [], "main": None,
-                             "factory_tabs": {}, "panes": {}, "clients": herdr_clients(herdr.session)}
+                             "factory_tabs": {}, "panes": {}, "clients": herdr_clients()}
     entry = herdr.session_entry()
     if not entry or not entry.get("running"):
         return found
@@ -459,10 +453,17 @@ def view_text(index: int, view: Dict[str, Any]) -> str:
     return "view %d in Terminal%s" % (index + 1, " (%s)" % ", ".join(parts) if parts else "")
 
 
-def plan(layout: Dict[str, Any], found: Dict[str, Any], sidebar_now: Optional[bool]) -> Tuple[List[Dict[str, Any]], List[str]]:
-    """The steps `open` would take from this reading, and notes it can only report."""
+def plan(layout: Dict[str, Any], found: Dict[str, Any],
+         sidebar_now: Optional[bool]) -> Tuple[List[Dict[str, Any]], List[str], bool]:
+    """The steps `open` would take from this reading, notes it can only report, and whether a pane
+    it would type into or close is an idle shell not yet at an empty prompt.
+
+    A step marked held waits while such a pane may still be starting: every view, and a factory
+    page restart whose leftover shells are not all at their prompt yet.
+    """
     steps: List[Dict[str, Any]] = []
     notes: List[str] = []
+    starting = False
     if layout["sidebar"]:
         want = layout["sidebar"] == "collapsed"
         if sidebar_now is not want:
@@ -470,7 +471,7 @@ def plan(layout: Dict[str, Any], found: Dict[str, Any], sidebar_now: Optional[bo
     if not found["running"]:
         steps.append(step("start", "start Herdr"))
         notes.append("the rest of the desk is filled in once Herdr is running")
-        return steps, notes
+        return steps, notes, starting
 
     workspace = found["workspace"]
     label = layout["workspace"]
@@ -494,17 +495,16 @@ def plan(layout: Dict[str, Any], found: Dict[str, Any], sidebar_now: Optional[bo
             steps.append(step("firstmate", "start the first mate (%s)" % layout["firstmate"], pane=seat["id"]))
         else:
             notes.append(busy_note("the first mate"))
+            starting = True
 
-    for kind, wanted, pane, name in (("bridge", layout["bridge"], bridge, "the Starship bridge"),
-                                     ("factory", layout["factory"], factory, "the Factory pane")):
-        if not wanted:
-            continue
+    for kind, pane, name in (("bridge", bridge, "the Starship bridge"), ("factory", factory, "the Factory pane")):
         if pane is None:
             steps.append(step(kind, "show %s" % name, seat=seat["id"] if seat else None))
         elif pane["free"]:
             steps.append(step(kind + "-revive", "start %s again in its pane" % name, pane=pane["id"]))
         elif pane["idle"]:
             notes.append(busy_note(name))
+            starting = True
 
     labels = {t["label"]: t["id"] for t in found["tabs"]}
     for tab in layout["tabs"]:
@@ -523,16 +523,26 @@ def plan(layout: Dict[str, Any], found: Dict[str, Any], sidebar_now: Optional[bo
             continue
         first = next((p for p in panes if p["id"] == found.get("first_in_tab", {}).get(tab_id)), None)
         if first is not None and first["free"]:
-            steps.append(step("page-revive", "start the %s page again in its tab" % tab["label"],
-                              pane=first["id"], factory=tab["factory"], main=main or ""))
+            others = [p for p in panes if p is not first]
+            item = step("page-revive", "start the %s page again in its tab" % tab["label"],
+                        pane=first["id"], factory=tab["factory"], main=main or "",
+                        close=[p["id"] for p in others if p["free"]])
+            item["kept"] = ["a leftover pane in the %s tab is not a shell waiting at an empty prompt; "
+                            "it was left open" % tab["label"] for p in others if not p["free"]]
+            item["held"] = any(p["idle"] and not p["free"] for p in others)
+            starting = starting or item["held"]
+            steps.append(item)
         elif first is not None and first["idle"]:
             notes.append(busy_note("the %s tab" % tab["label"]))
+            starting = True
         else:
             notes.append("the %s tab is showing something else; it was left as it is" % tab["label"])
 
     for index in range(len(found["clients"]), len(layout["views"])):
-        steps.append(step("view", "open " + view_text(index, layout["views"][index]), view=index))
-    return steps, notes
+        item = step("view", "open " + view_text(index, layout["views"][index]), view=index)
+        item["held"] = True
+        steps.append(item)
+    return steps, notes, starting
 
 
 # --------------------------------------------------------------------------
@@ -672,20 +682,13 @@ def osascript(script: str, *args: str) -> str:
     return out.stdout.strip()
 
 
-def attach_command(session: str) -> str:
-    words = [herdr_bin()]
-    if session != "default":
-        words += ["--session", session]
-    return "exec " + " ".join(shlex.quote(w) for w in words)
-
-
 def open_view(layout: Dict[str, Any], index: int) -> None:
     view = layout["views"][index]
-    before = len(herdr_clients(layout["session"]))
-    osascript(OPEN_VIEW, attach_command(layout["session"]), view["profile"], view["size"])
+    before = len(herdr_clients())
+    osascript(OPEN_VIEW, "exec " + shlex.quote(herdr_bin()), view["profile"], view["size"])
     deadline = time.time() + wait_limit()
     while time.time() < deadline:
-        if len(herdr_clients(layout["session"])) > before:
+        if len(herdr_clients()) > before:
             return
         time.sleep(0.3)
     raise Failure("%s opened, but no Herdr client showed up in it" % view_text(index, view))
@@ -808,6 +811,12 @@ def execute(item: Dict[str, Any], layout: Dict[str, Any], herdr: Herdr, found: D
             words += ["--factory", item["factory"], "--origin-tab", item["main"]]
         herdr.call("pane", "run", item["pane"], pane_command(home, herdr, *words))
         settle(lambda: runs(pane_looks(herdr, item["pane"]), script + " run"))
+        if kind == "page-revive":
+            for pane in item["close"]:
+                herdr.call("pane", "close", pane)
+            run_script([sys.executable, os.path.join(tools, "fm-factory.py"), "workers", item["factory"],
+                        "--page", item["pane"]], child_env(herdr, found, home),
+                       "the %s workers' live copies" % item["factory"])
     elif kind == "factory-tab":
         run_script([sys.executable, os.path.join(tools, "fm-factory.py"), "open-tab", item["factory"]],
                    child_env(herdr, found, home), item["text"])
@@ -831,10 +840,11 @@ LAYOUT_KINDS = {"workspace", "firstmate", "bridge", "factory", "bridge-revive", 
 def cmd_open() -> int:
     home = home_dir()
     layout = load_layout(home)
-    herdr = Herdr(layout["session"])
-    done: List[str] = []
+    herdr = Herdr()
+    done: List[Dict[str, Any]] = []
     taken = set()
     notes: List[str] = []
+    kept: List[str] = []
     # One step at a time, reading the desk again after each, so every step
     # acts on what is really there. A step is never taken twice in one run:
     # one that still shows as missing afterwards is reported, not repeated.
@@ -843,18 +853,19 @@ def cmd_open() -> int:
     taken_count = 0
     while True:
         found = survey(herdr, layout, home)
-        steps, notes = plan(layout, found, read_sidebar())
+        steps, notes, starting = plan(layout, found, read_sidebar())
         pending = [item for item in steps if item["key"] in taken]
         fresh = [item for item in steps if item["key"] not in taken]
         # A shell still running its startup shows no prompt yet, and just
         # after a restart every restored pane starts its shell at once; give
-        # such shells FM_DESK_WAIT to reach their prompt before leaving them
-        # alone. Views wait too, so nobody can type into a pane through a
-        # view while the desk may still start something in it.
-        if any(p["idle"] and not p["free"] for panes in found["panes"].values() for p in panes):
+        # the shells the desk would type into or close FM_DESK_WAIT to reach
+        # their prompt before leaving them alone. Held steps wait too: views,
+        # so nobody can type into such a pane through a view meanwhile, and a
+        # factory page restart, so its leftover shells can still be closed.
+        if starting:
             starting_until = starting_until or time.time() + wait_limit()
             if time.time() < starting_until:
-                fresh = [item for item in fresh if item["kind"] != "view"]
+                fresh = [item for item in fresh if not item.get("held")]
                 if not fresh:
                     time.sleep(1)
                     continue
@@ -867,6 +878,7 @@ def cmd_open() -> int:
         execute(item, layout, herdr, found, home)
         taken.add(item["key"])
         done.append(item)
+        kept += item.get("kept", [])
         say("  done: %s" % item["text"])
     for item in pending:
         notes.append("asked to %s, but it has not shown up yet" % item["text"])
@@ -874,7 +886,7 @@ def cmd_open() -> int:
         found = survey(herdr, layout, home)
         if found["main"]:
             herdr.call("tab", "focus", found["main"], check=False)
-    for note in notes:
+    for note in kept + notes:
         say("  note: %s" % note)
     if done:
         say("The desk is open: %d thing(s) started, everything else was already there." % len(done))
@@ -912,17 +924,17 @@ def cmd_layout() -> int:
         current = load_layout(home)
     except Refused:
         current = parse_layout("")
-    herdr = Herdr(current["session"])
+    herdr = Herdr()
     entry = herdr.session_entry()
     if not entry or not entry.get("running"):
-        raise Failure("the %s Herdr session is not running, so there is no layout to read" % current["session"])
+        raise Failure("the default Herdr session is not running, so there is no layout to read")
     socket = str(entry.get("socket_path") or "")
     workspaces = result_list(herdr.call("workspace", "list"), "workspaces")
     chosen = next((w for w in workspaces if w.get("label") == current["workspace"]), None)
     if chosen is None:
         chosen = next((w for w in workspaces if w.get("focused")), workspaces[0] if workspaces else None)
     if chosen is None:
-        raise Failure("the %s Herdr session has no workspace to read" % current["session"])
+        raise Failure("the default Herdr session has no workspace to read")
     wsid = chosen.get("workspace_id")
     tabs = [{"id": t.get("tab_id"), "label": t.get("label") or ""}
             for t in result_list(herdr.call("tab", "list", "--workspace", wsid), "tabs")]
@@ -930,8 +942,6 @@ def cmd_layout() -> int:
     main = main_tab(tabs, current["main"])
     main_label = next((t["label"] for t in tabs if t["id"] == main), "")
     main_panes = [{"label": p.get("label") or "", "cmdlines": [], "pane": p} for p in panes if p.get("tab_id") == main]
-    bridge = any(is_bridge(p) for p in main_panes)
-    factory = any(is_factory_pane(p) for p in main_panes)
     seat = next((p["pane"] for p in main_panes if not is_bridge(p) and not is_factory_pane(p)), None)
     agent = ""
     if seat is not None:
@@ -939,7 +949,6 @@ def cmd_layout() -> int:
     records = factory_tab_records(home, socket)
     sidebar = read_sidebar()
     lines = ["# The desk `%s` opens (docs/desk.md), read from the running Herdr session." % ME,
-             "session = %s" % current["session"],
              "workspace = %s" % chosen.get("label")]
     if main_label and not main_label.isdigit():
         lines.append("main = %s" % main_label)
@@ -950,14 +959,12 @@ def cmd_layout() -> int:
     else:
         hint = " (it runs %s now)" % agent if agent else ""
         lines.append("# firstmate = firstmate <profile>   the first mate's launch command%s" % hint)
-    lines.append("bridge = %s" % ("on" if bridge else "off"))
-    lines.append("factory = %s" % ("on" if factory else "off"))
     for tab in tabs:
         if tab["id"] == main:
             continue
         fid = records.get(tab["id"])
         lines.append("tab = %s%s" % (tab["label"], " | factory %s" % fid if fid else ""))
-    clients = set(herdr_clients(current["session"]))
+    clients = set(herdr_clients())
     listed = osascript(LIST_VIEWS) if clients else ""
     for row in listed.splitlines():
         parts = row.split("\t")
@@ -983,6 +990,10 @@ def cmd_install_command() -> int:
         return 0
     if os.path.lexists(link):
         raise Failure("%s already exists and is something else; it was left as it is" % link)
+    other = shutil.which(ME)
+    if other and os.path.realpath(other) != SCRIPT:
+        raise Failure("another `%s` is already on PATH (%s), such as the starship.rs shell prompt; a link at %s "
+                      "would hide it or be hidden by it, so nothing was linked" % (ME, other, link))
     os.makedirs(folder, exist_ok=True)
     os.symlink(SCRIPT, link)
     say("`%s` now opens the desk (%s -> %s)." % (ME, link, SCRIPT))

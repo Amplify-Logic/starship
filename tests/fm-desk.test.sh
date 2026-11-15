@@ -104,9 +104,16 @@ elif cmd == "pane read":             # a pane's screen: its "screen", else a she
 elif cmd == "pane run":
     p = find_pane(args[2])
     p["cmd"] = [args[3]]; save(); out({"result": {}})
+elif cmd == "pane close":
+    for t in all_tabs():
+        t["panes"] = [p for p in t["panes"] if p["pane_id"] != args[2]]
+    save(); out({"result": {}})
 elif args[0] == "_add-pane":          # fake scripts: <tab> <label> <cmd>
     tab = next(t for t in all_tabs() if t["tab_id"] == args[1])
     new_pane(tab, args[2], args[3]); save()
+elif args[0] == "_split":             # fake scripts: <pane> <cmd>, a new pane in that pane's tab
+    tab = next(t for t in all_tabs() if any(p["pane_id"] == args[1] for p in t["panes"]))
+    new_pane(tab, None, args[2]); save()
 elif args[0] == "_add-tab":           # fake scripts: <workspace> <label> <cmd>
     tab = {"tab_id": new_id("w:t"), "label": args[2], "panes": []}
     tabs_of(args[1]).append(tab); new_pane(tab, None, args[3]); save(); print(tab["tab_id"])
@@ -130,6 +137,16 @@ cat > "$FAKE/tools/fm-factory.py" <<'PY'
 import os, subprocess, sys
 names = dict(line.strip().split("=", 1) for line in open(os.environ["FAKE_FACTORY_NAMES"]) if "=" in line)
 fid = sys.argv[2]
+if sys.argv[1] == "workers":          # workers <fid> --page <pane>: a live copy of each running job
+    page = sys.argv[sys.argv.index("--page") + 1]
+    with open(os.environ["FAKE_HERDR_CALLS"], "a") as log:
+        log.write("factory-workers %s page=%s\n" % (fid, page))
+    for line in open(os.environ["FAKE_FACTORY_JOBS"]):
+        job_fid, _, job = line.strip().partition("=")
+        if job_fid == fid:
+            subprocess.run([os.environ["HERDR_BIN_PATH"], "_split", page,
+                            "bash x/fm-factory-pane.sh follow %s" % job], check=True)
+    sys.exit(0)
 with open(os.environ["FAKE_HERDR_CALLS"], "a") as log:
     log.write("factory-tab %s origin=%s\n" % (fid, os.environ.get("HERDR_TAB_ID", "")))
 tab = subprocess.run([os.environ["HERDR_BIN_PATH"], "_add-tab", os.environ["HERDR_WORKSPACE_ID"], names[fid],
@@ -163,27 +180,27 @@ PY
 chmod +x "$FAKE/bin/osascript"
 
 CASE=0
-new_case() {  # <session> <running:true|false>
+new_case() {  # <running:true|false>
   CASE=$((CASE + 1))
   C="$TMP_ROOT/case$CASE"
   mkdir -p "$C/home/config" "$C/home/state"
   export FM_HOME="$C/home" FAKE_HERDR_STATE="$C/state.json" FAKE_HERDR_CALLS="$C/calls" \
-    FAKE_PS="$C/ps" FAKE_TERMINAL_TABS="$C/terminal" FAKE_FACTORY_NAMES="$C/factories" \
+    FAKE_PS="$C/ps" FAKE_TERMINAL_TABS="$C/terminal" FAKE_FACTORY_NAMES="$C/factories" FAKE_FACTORY_JOBS="$C/jobs" \
     HERDR_BIN_PATH="$FAKE/bin/herdr" HERDR_CONFIG_PATH="$C/herdr-config.toml" \
     FM_DESK_BIN="$FAKE/tools" FM_DESK_PS="cat $C/ps" FM_DESK_OSASCRIPT="$FAKE/bin/osascript" FM_DESK_WAIT=3
   unset HERDR_SOCKET_PATH HERDR_PANE_ID HERDR_TAB_ID HERDR_WORKSPACE_ID HERDR_SESSION
-  printf '{"session": "%s", "running": %s, "workspaces": [], "n": 0}\n' "$1" "$2" > "$FAKE_HERDR_STATE"
-  : > "$FAKE_HERDR_CALLS"; : > "$FAKE_PS"; : > "$FAKE_TERMINAL_TABS"
+  printf '{"session": "default", "running": %s, "workspaces": [], "n": 0}\n' "$1" > "$FAKE_HERDR_STATE"
+  : > "$FAKE_HERDR_CALLS"; : > "$FAKE_PS"; : > "$FAKE_TERMINAL_TABS"; : > "$FAKE_FACTORY_JOBS"
   printf 'sample-shop=Sample Shop\nrecipe-box=Recipe Box\ngarden-journal=Garden Journal\n' > "$FAKE_FACTORY_NAMES"
   printf '[ui]\nwindow_title = "desk"\n\n[theme]\nname = "tokyo-night"\n' > "$HERDR_CONFIG_PATH"
 }
 
-layout() {  # <session> [extra lines]
+layout() {  # [extra lines]
   {
-    printf 'session = %s\nworkspace = starship\nsidebar = collapsed\nfirstmate = firstmate claude-opus\n' "$1"
+    printf 'workspace = starship\nsidebar = collapsed\nfirstmate = firstmate claude-opus\n'
     printf 'tab = Sample Shop | factory sample-shop\ntab = Recipe Box | factory recipe-box\ntab = Notes\n'
     printf 'view = Big Profile | 13\nview = Small Profile | 10\n'
-    [ -z "${2:-}" ] || printf '%s\n' "$2"
+    [ -z "${1:-}" ] || printf '%s\n' "$1"
   } > "$FM_HOME/config/desk-layout"
 }
 
@@ -195,8 +212,8 @@ state_query() {
 }
 
 test_an_empty_session_gets_the_whole_desk_in_order() {
-  new_case lab true
-  layout lab
+  new_case true
+  layout
   local out
   out=$(desk open) || fail "open failed: $out"
   assert_contains "$out" "  done: make Herdr start with the sidebar collapsed
@@ -218,15 +235,15 @@ test_an_empty_session_gets_the_whole_desk_in_order() {
   assert_grep "bridge open --pane w:p3" "$FAKE_HERDR_CALLS" "the bridge was not put above the first mate's pane"
   assert_grep "factory-pane open --pane w:p3" "$FAKE_HERDR_CALLS" "the Factory pane was not put beside the first mate"
   assert_grep "factory-tab sample-shop origin=w:t2" "$FAKE_HERDR_CALLS" "a factory tab did not open through open-tab from the first tab"
-  assert_grep "terminal open exec $FAKE/bin/herdr --session lab|Big Profile|13" "$FAKE_HERDR_CALLS" "view 1 did not open with its profile and size"
-  assert_grep "terminal open exec $FAKE/bin/herdr --session lab|Small Profile|10" "$FAKE_HERDR_CALLS" "view 2 did not open with its profile and size"
+  assert_grep "terminal open exec $FAKE/bin/herdr|Big Profile|13" "$FAKE_HERDR_CALLS" "view 1 did not open with its profile and size"
+  assert_grep "terminal open exec $FAKE/bin/herdr|Small Profile|10" "$FAKE_HERDR_CALLS" "view 2 did not open with its profile and size"
   assert_grep "tab focus w:t2" "$FAKE_HERDR_CALLS" "focus did not go back to the first tab"
   pass "desk: an empty session gets the whole desk, in layout order"
 }
 
 test_a_second_run_changes_nothing() {
-  new_case lab true
-  layout lab
+  new_case true
+  layout
   desk open >/dev/null || fail "first open failed"
   cp "$FAKE_HERDR_STATE" "$C/after-first.json"
   : > "$FAKE_HERDR_CALLS"
@@ -239,19 +256,19 @@ test_a_second_run_changes_nothing() {
   pass "desk: a second run changes nothing"
 }
 
-test_every_herdr_call_names_the_layouts_session() {
-  new_case lab true
-  layout lab
+test_every_herdr_call_names_the_default_session() {
+  new_case true
+  layout
   desk open >/dev/null || fail "open failed"
   local bad
-  bad=$(grep -v -E '^(--session lab |bridge |factory-pane |factory-tab |terminal |_add-)' "$FAKE_HERDR_CALLS" || true)
+  bad=$(grep -v -E '^(--session default |bridge |factory-pane |factory-tab |terminal |_add-)' "$FAKE_HERDR_CALLS" || true)
   [ -z "$bad" ] || fail "a Herdr call did not name the session: $bad"
   : > "$FAKE_HERDR_CALLS"
-  HERDR_SOCKET_PATH=/live.sock HERDR_PANE_ID=w9:p9 HERDR_TAB_ID=w9:t9 desk open >/dev/null \
+  HERDR_SESSION=other HERDR_SOCKET_PATH=/live.sock HERDR_PANE_ID=w9:p9 HERDR_TAB_ID=w9:t9 desk open >/dev/null \
     || fail "a run from inside another pane failed"
-  bad=$(grep -v -E '^--session lab ' "$FAKE_HERDR_CALLS" || true)
+  bad=$(grep -v -E '^--session default ' "$FAKE_HERDR_CALLS" || true)
   [ -z "$bad" ] || fail "a run from inside another pane reached another session: $bad"
-  pass "desk: every Herdr call names the layout's session"
+  pass "desk: every Herdr call names the default session"
 }
 
 # A restart brings the layout back with plain shells where the plugin panes and
@@ -279,8 +296,8 @@ JSON
 }
 
 test_a_restored_session_gets_its_dead_panes_started_in_place() {
-  new_case default true
-  layout default
+  new_case true
+  layout
   restored_session
   printf '1 ttys001 herdr\n2 ttys002 herdr --session default\n3 ?? herdr server\n' > "$FAKE_PS"
   local out
@@ -298,18 +315,20 @@ test_a_restored_session_gets_its_dead_panes_started_in_place() {
   assert_no_grep "pane run w1:p5 " "$FAKE_HERDR_CALLS" "a second pane of a factory tab was typed into"
   assert_no_grep "pane run w1:p6 " "$FAKE_HERDR_CALLS" "a pane running something else was typed into"
   assert_no_grep "w2" "$FAKE_HERDR_CALLS" "another workspace was touched"
-  assert_no_regex ' (create|close) ' "$FAKE_HERDR_CALLS" "a restored session had something created or closed"
+  assert_no_regex ' create ' "$FAKE_HERDR_CALLS" "a restored session had something created"
+  assert_equals "--session default pane close w1:p5" "$(grep ' close ' "$FAKE_HERDR_CALLS")" \
+    "something besides the factory tab's leftover shell was closed"
   assert_no_grep "terminal open" "$FAKE_HERDR_CALLS" "views were opened although two clients already show the session"
   pass "desk: a restored session gets its dead panes started in place, and nothing else"
 }
 
 test_a_session_that_is_not_running_is_started_before_any_view() {
-  new_case lab false
-  layout lab
+  new_case false
+  layout
   local out first_view started
   out=$(desk open) || fail "open failed: $out"
   assert_contains "$out" "  done: start Herdr" "open did not say Herdr was started"
-  started=$(grep -n -- '--session lab server' "$FAKE_HERDR_CALLS" | head -1 | cut -d: -f1)
+  started=$(grep -n -- '--session default server' "$FAKE_HERDR_CALLS" | head -1 | cut -d: -f1)
   first_view=$(grep -n 'terminal open' "$FAKE_HERDR_CALLS" | head -1 | cut -d: -f1)
   [ -n "$started" ] || fail "Herdr was not started"
   [ -n "$first_view" ] && [ "$started" -lt "$first_view" ] || fail "a view opened before Herdr was started"
@@ -318,18 +337,18 @@ test_a_session_that_is_not_running_is_started_before_any_view() {
 }
 
 test_views_count_the_clients_already_showing_the_session() {
-  new_case lab true
-  layout lab
-  printf '7 ttys007 /opt/bin/herdr --session lab\n8 ttys008 herdr --session other\n9 ttys009 herdr\n' > "$FAKE_PS"
+  new_case true
+  layout
+  printf '7 ttys007 /opt/bin/herdr --session default\n8 ttys008 herdr --session other\n9 ?? herdr server\n' > "$FAKE_PS"
   desk open >/dev/null || fail "open failed"
   assert_no_grep "Big Profile" "$FAKE_HERDR_CALLS" "view 1 was opened although a client already shows the session"
-  assert_grep "terminal open exec $FAKE/bin/herdr --session lab|Small Profile|10" "$FAKE_HERDR_CALLS" "the missing second view was not opened"
+  assert_grep "terminal open exec $FAKE/bin/herdr|Small Profile|10" "$FAKE_HERDR_CALLS" "the missing second view was not opened"
   pass "desk: views count only the clients already showing this session"
 }
 
 test_a_busy_first_pane_is_never_typed_into() {
-  new_case lab true
-  layout lab
+  new_case true
+  layout
   desk open >/dev/null || fail "first open failed"
   python3 - "$FAKE_HERDR_STATE" <<'PY'
 import json, sys
@@ -363,8 +382,8 @@ PY
 }
 
 test_a_pane_with_input_typed_after_its_prompt_is_left_alone() {
-  new_case default true
-  layout default
+  new_case true
+  layout
   restored_session
   printf '1 ttys001 herdr\n2 ttys002 herdr --session default\n' > "$FAKE_PS"
   python3 - "$FAKE_HERDR_STATE" <<'PY'
@@ -393,8 +412,8 @@ PY
 }
 
 test_a_shell_still_starting_is_left_alone() {
-  new_case default true
-  layout default
+  new_case true
+  layout
   restored_session
   printf '1 ttys001 herdr\n2 ttys002 herdr --session default\n' > "$FAKE_PS"
   set_screens "w1:p3=" "w1:p4=Last login: Sun Nov 15 09:12:01 on ttys004
@@ -413,8 +432,8 @@ test_a_shell_still_starting_is_left_alone() {
 }
 
 test_a_restored_shell_is_given_time_to_reach_its_prompt() {
-  new_case default true
-  layout default
+  new_case true
+  layout
   restored_session
   printf '1 ttys001 herdr\n2 ttys002 herdr --session default\n' > "$FAKE_PS"
   # Just after a restart every restored shell runs its startup at once: the
@@ -438,9 +457,75 @@ PY
   pass "desk: a restored shell is given time to reach its prompt, and views wait for it"
 }
 
+# open-tab splits a live copy of each running worker beside a factory's page,
+# and Herdr brings those copies back as plain shells after a restart.
+test_a_restored_factory_tab_gets_its_worker_copies_back() {
+  new_case true
+  layout
+  restored_session
+  printf '1 ttys001 herdr\n2 ttys002 herdr --session default\n' > "$FAKE_PS"
+  printf 'sample-shop=shop-search\n' > "$FAKE_FACTORY_JOBS"
+  python3 - "$FAKE_HERDR_STATE" <<'PY'
+import json, sys
+st = json.load(open(sys.argv[1]))
+shop = st["workspaces"][0]["tabs"][1]
+shop["panes"] += [{"pane_id": "w1:p8", "tab_id": "w1:t4", "label": None, "cmd": ["-zsh"]},
+                  {"pane_id": "w1:p9", "tab_id": "w1:t4", "label": None, "cmd": ["-zsh"], "screen": "lars@mac ~ % ls\n"}]
+json.dump(st, open(sys.argv[1], "w"))
+PY
+  local out page closed workers
+  out=$(desk open) || fail "open failed: $out"
+  assert_contains "$out" "start the Sample Shop page again in its tab" "the dead Sample Shop page was not restarted"
+  assert_grep "pane close w1:p5" "$FAKE_HERDR_CALLS" "a leftover idle shell beside the page was not closed"
+  assert_grep "pane close w1:p8" "$FAKE_HERDR_CALLS" "a second leftover idle shell beside the page was not closed"
+  assert_no_grep "pane close w1:p9" "$FAKE_HERDR_CALLS" "a leftover shell holding typed-ahead input was closed"
+  assert_contains "$out" "note: a leftover pane in the Sample Shop tab is not a shell waiting at an empty prompt; it was left open" \
+    "a leftover shell holding typed-ahead input was not reported"
+  page=$(grep -n "pane run w1:p4 " "$FAKE_HERDR_CALLS" | head -1 | cut -d: -f1)
+  closed=$(grep -n "pane close w1:p5" "$FAKE_HERDR_CALLS" | head -1 | cut -d: -f1)
+  workers=$(grep -n "factory-workers sample-shop page=w1:p4" "$FAKE_HERDR_CALLS" | head -1 | cut -d: -f1)
+  [ -n "$page" ] && [ -n "$closed" ] && [ -n "$workers" ] && [ "$page" -lt "$closed" ] && [ "$closed" -lt "$workers" ] \
+    || fail "the page, the leftover shells and the worker copies were not handled in that order"
+  assert_equals "page|-zsh|bash x/fm-factory-pane.sh follow shop-search" \
+    "$(state_query '"|".join("page" if "fm-factory-pane.sh run" in p["cmd"][0] else p["cmd"][0] for p in st["workspaces"][0]["tabs"][1]["panes"])')" \
+    "the Sample Shop tab is not its page, the kept shell and one worker copy"
+  assert_equals "--session default pane close w1:p5
+--session default pane close w1:p8" "$(grep ' close ' "$FAKE_HERDR_CALLS")" "a pane outside the restarted factory tab was closed"
+  : > "$FAKE_HERDR_CALLS"
+  out=$(desk open) || fail "second open failed: $out"
+  assert_contains "$out" "The desk was already open; nothing changed." "a second run after the restart changed something"
+  assert_no_grep "factory-workers" "$FAKE_HERDR_CALLS" "worker copies were added again to a tab whose page runs"
+  pass "desk: a restored factory tab gets its leftover idle shells closed and its worker copies back"
+}
+
+# Only the panes the desk would type into or close are waited for.
+test_a_pane_the_desk_would_not_touch_never_makes_it_wait() {
+  new_case true
+  layout
+  desk open >/dev/null || fail "first open failed"
+  python3 - "$FAKE_HERDR_STATE" <<'PY'
+import json, sys
+st = json.load(open(sys.argv[1]))
+tabs = st["workspaces"][0]["tabs"]
+for tab, pid in ((tabs[0], "x:p1"), (tabs[1], "x:p2")):
+    tab["panes"].append({"pane_id": pid, "tab_id": tab["tab_id"], "label": None, "cmd": ["-zsh"],
+                         "screen": "lars@mac ~ % ls\n"})
+json.dump(st, open(sys.argv[1], "w"))
+PY
+  : > "$FAKE_HERDR_CALLS"
+  local out
+  out=$(FM_DESK_WAIT=20 desk open) || fail "open failed: $out"
+  # Waiting reads the desk again every second; a run that does not wait reads it once.
+  assert_equals "1" "$(grep -c 'session list' "$FAKE_HERDR_CALLS")" \
+    "the desk waited on shells it would neither type into nor close"
+  assert_contains "$out" "The desk was already open; nothing changed." "a shell the desk does not touch changed the run"
+  assert_no_regex ' (run|close) ' "$FAKE_HERDR_CALLS" "a shell holding typed-ahead input was typed into or closed"
+  pass "desk: a shell the desk would not type into or close never makes it wait"
+}
+
 test_the_sidebar_setting_changes_only_its_own_line() {
-  new_case lab true
-  layout lab
+  new_case true
+  layout
   desk open >/dev/null || fail "open failed"
   assert_equals '[ui]
 sidebar_start_collapsed = true
@@ -468,29 +553,29 @@ sidebar_start_collapsed = true' "$(cat "$HERDR_CONFIG_PATH")" "a config without 
 }
 
 test_a_bad_or_missing_layout_stops_with_the_reason() {
-  new_case lab true
+  new_case true
   local out status
   out=$(desk open 2>&1); status=$?
   expect_code 2 "$status" "a missing layout"
   assert_contains "$out" "starship layout >" "a missing layout did not say how to write one"
-  printf 'session = lab\nview = Big | huge\n' > "$FM_HOME/config/desk-layout"
+  printf 'workspace = starship\nview = Big | huge\n' > "$FM_HOME/config/desk-layout"
   out=$(desk open 2>&1); status=$?
   expect_code 2 "$status" "a bad view size"
   assert_contains "$out" "line 2: a view's font size is a whole number" "a bad line was not named"
-  printf 'session = lab\ntab = Sample Shop | page sample-shop\n' > "$FM_HOME/config/desk-layout"
+  printf 'workspace = starship\ntab = Sample Shop | page sample-shop\n' > "$FM_HOME/config/desk-layout"
   out=$(desk open 2>&1); status=$?
   expect_code 2 "$status" "a bad tab"
-  printf 'session = lab\nsession = other\n' > "$FM_HOME/config/desk-layout"
+  printf 'workspace = starship\nworkspace = other\n' > "$FM_HOME/config/desk-layout"
   out=$(desk open 2>&1); status=$?
   expect_code 2 "$status" "a setting given twice"
-  assert_contains "$out" "session is set twice" "a repeated setting was not named"
+  assert_contains "$out" "workspace is set twice" "a repeated setting was not named"
   [ ! -s "$FAKE_HERDR_CALLS" ] || fail "a bad layout still reached Herdr"
   pass "desk: a bad or missing layout stops before Herdr with the reason"
 }
 
 test_layout_reads_the_running_desk_back() {
-  new_case lab true
-  layout lab
+  new_case true
+  layout
   desk open >/dev/null || fail "open failed"
   mkdir -p "$FM_HOME/state/factory/tabs"
   local shop recipes
@@ -498,18 +583,15 @@ test_layout_reads_the_running_desk_back() {
   recipes=$(state_query 'next(t["tab_id"] for t in st["workspaces"][0]["tabs"] if t["label"] == "Recipe Box")')
   # The factory's own tab records name each tab and the session it lives in;
   # a record from another session names the same tab id in vain.
-  printf '%s\n/fake/lab.sock\n' "$shop" > "$FM_HOME/state/factory/tabs/sample-shop"
-  printf '%s\n/fake/lab.sock\n' "$recipes" > "$FM_HOME/state/factory/tabs/recipe-box"
+  printf '%s\n/fake/default.sock\n' "$shop" > "$FM_HOME/state/factory/tabs/sample-shop"
+  printf '%s\n/fake/default.sock\n' "$recipes" > "$FM_HOME/state/factory/tabs/recipe-box"
   printf '%s\n/fake/other.sock\n' "$shop" > "$FM_HOME/state/factory/tabs/garden-journal"
   printf '/dev/ttys100\tBig Profile\t13.0\n/dev/ttys101\tSmall Profile\t10\n/dev/ttys555\tBasic\t11\n' > "$FAKE_TERMINAL_TABS"
   local out
   out=$(desk layout) || fail "layout failed"
-  assert_contains "$out" "session = lab
-workspace = starship
+  assert_contains "$out" "workspace = starship
 sidebar = collapsed
 firstmate = firstmate claude-opus
-bridge = on
-factory = on
 tab = Sample Shop | factory sample-shop
 tab = Recipe Box | factory recipe-box
 tab = Notes
@@ -526,8 +608,8 @@ view = Small Profile | 10" "layout did not read the desk back"
 # open-tab names a factory's tab after the registry, which need not match the
 # layout's label; the tab open-tab recorded is that factory's tab all the same.
 test_a_factory_tab_is_found_by_its_record_whatever_its_label() {
-  new_case lab true
-  printf 'session = lab\nbridge = off\nfactory = off\ntab = Shop | factory sample-shop\n' > "$FM_HOME/config/desk-layout"
+  new_case true
+  printf 'tab = Shop | factory sample-shop\n' > "$FM_HOME/config/desk-layout"
   local out
   out=$(desk open) || fail "first open failed: $out"
   assert_not_contains "$out" "has not shown up yet" "the opened factory tab was not recognised"
@@ -541,8 +623,8 @@ test_a_factory_tab_is_found_by_its_record_whatever_its_label() {
 }
 
 test_a_workspace_the_desk_creates_gets_its_main_tab_named() {
-  new_case lab true
-  layout lab "main = Bridge"
+  new_case true
+  layout "main = Bridge"
   local out
   out=$(desk open) || fail "open failed: $out"
   assert_grep "tab rename w:t2 Bridge" "$FAKE_HERDR_CALLS" "the new workspace's first tab was not named after main"
@@ -558,8 +640,8 @@ test_a_workspace_the_desk_creates_gets_its_main_tab_named() {
 }
 
 test_an_existing_tab_is_never_renamed_to_main() {
-  new_case lab true
-  layout lab
+  new_case true
+  layout
   desk open >/dev/null || fail "first open failed"
   printf 'main = Bridge\n' >> "$FM_HOME/config/desk-layout"
   : > "$FAKE_HERDR_CALLS"
@@ -572,7 +654,7 @@ test_an_existing_tab_is_never_renamed_to_main() {
 }
 
 test_a_renamed_main_tab_that_is_not_first_is_found_by_its_label() {
-  new_case default true
+  new_case true
   cat > "$FAKE_HERDR_STATE" <<'JSON'
 {"session": "default", "running": true, "n": 50, "workspaces": [
  {"workspace_id": "w1", "label": "starship", "tabs": [
@@ -583,7 +665,7 @@ test_a_renamed_main_tab_that_is_not_first_is_found_by_its_label() {
    {"pane_id": "w1:p3", "tab_id": "w1:t2", "label": null, "cmd": ["firstmate claude-opus"]},
    {"pane_id": "w1:p4", "tab_id": "w1:t2", "label": "Factories", "cmd": ["bash ../../bin/fm-factory-pane.sh run"]}]}]}]}
 JSON
-  printf 'session = default\nmain = Bridge\nfirstmate = firstmate claude-opus\ntab = Scratch\n' > "$FM_HOME/config/desk-layout"
+  printf 'main = Bridge\nfirstmate = firstmate claude-opus\ntab = Scratch\n' > "$FM_HOME/config/desk-layout"
   local out
   out=$(desk open) || fail "open failed: $out"
   assert_contains "$out" "The desk was already open; nothing changed." "a renamed main tab that is not first was not found"
@@ -600,25 +682,34 @@ JSON
 }
 
 test_install_command_links_starship_and_keeps_a_foreign_one() {
-  new_case lab true
-  local dir="$C/localbin" out status
-  out=$(FM_DESK_COMMAND_DIR="$dir" desk install-command) || fail "install-command failed: $out"
+  new_case true
+  local dir="$C/localbin" out status py
+  py=$(command -v python3)
+  # Another `starship` on PATH, such as the starship.rs shell prompt, is never
+  # hidden behind the link nor left to hide it.
+  mkdir -p "$C/prompt"; printf '#!/bin/sh\necho prompt\n' > "$C/prompt/starship"; chmod +x "$C/prompt/starship"
+  out=$(PATH="$C/prompt:/usr/bin:/bin" FM_DESK_COMMAND_DIR="$dir" "$py" "$DESK" install-command 2>&1); status=$?
+  expect_code 1 "$status" "another starship on PATH"
+  assert_contains "$out" "is already on PATH ($C/prompt/starship)" "the starship on PATH was not named"
+  [ ! -e "$dir/starship" ] && [ ! -L "$dir/starship" ] || fail "install-command linked over another starship on PATH"
+  out=$(PATH="/usr/bin:/bin" FM_DESK_COMMAND_DIR="$dir" "$py" "$DESK" install-command) || fail "install-command failed: $out"
   [ -L "$dir/starship" ] || fail "install-command made no link"
   assert_equals "$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$DESK")" \
     "$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$dir/starship")" "the link does not point at the desk"
-  out=$(FM_DESK_COMMAND_DIR="$dir" desk install-command) || fail "a second install-command failed"
+  out=$(PATH="$dir:/usr/bin:/bin" FM_DESK_COMMAND_DIR="$dir" "$py" "$DESK" install-command) \
+    || fail "a second install-command failed"
   assert_contains "$out" "already opens the desk" "a second install-command did not see its own link"
   rm "$dir/starship"; printf 'other\n' > "$dir/starship"
-  out=$(FM_DESK_COMMAND_DIR="$dir" desk install-command 2>&1); status=$?
+  out=$(PATH="/usr/bin:/bin" FM_DESK_COMMAND_DIR="$dir" "$py" "$DESK" install-command 2>&1); status=$?
   expect_code 1 "$status" "a foreign starship"
   assert_equals "other" "$(cat "$dir/starship")" "a foreign starship command was replaced"
-  pass "desk: install-command links starship and never replaces another one"
+  pass "desk: install-command links starship and never replaces or shadows another one"
 }
 
 fm_test_run \
   test_an_empty_session_gets_the_whole_desk_in_order \
   test_a_second_run_changes_nothing \
-  test_every_herdr_call_names_the_layouts_session \
+  test_every_herdr_call_names_the_default_session \
   test_a_restored_session_gets_its_dead_panes_started_in_place \
   test_a_session_that_is_not_running_is_started_before_any_view \
   test_views_count_the_clients_already_showing_the_session \
@@ -626,6 +717,8 @@ fm_test_run \
   test_a_pane_with_input_typed_after_its_prompt_is_left_alone \
   test_a_shell_still_starting_is_left_alone \
   test_a_restored_shell_is_given_time_to_reach_its_prompt \
+  test_a_restored_factory_tab_gets_its_worker_copies_back \
+  test_a_pane_the_desk_would_not_touch_never_makes_it_wait \
   test_the_sidebar_setting_changes_only_its_own_line \
   test_a_bad_or_missing_layout_stops_with_the_reason \
   test_layout_reads_the_running_desk_back \
