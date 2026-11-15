@@ -45,9 +45,10 @@ The [factory registry](configuration.md#factory-registry-datafactoriesmd) names 
   It lists exactly the owner's calls, the one count the bridge strip and the tap page also show: each decision held for the owner that waits on him now (not aged, deferred to a date, or waiting on other work), and each PR or ready branch waiting for the merge word whose task carries no open captain hold.
   `fm_owner_calls` in `bin/fm-fleet-status-lib.sh` owns that count.
   A worker's question and an ask-user review finding go to Starship, which answers them or holds them for the owner, so they never appear here; their jobs read `with Starship` or are still in the checks.
-  A question shows its why in one or two lines, the options and suggestion its tap card carries (`bin/fm-tap-desk.sh shapes`, including any recorded with `fm-tap-desk.sh mark`), and what it holds up.
+  A question shows its why, the options and suggestion its tap card carries (`bin/fm-tap-desk.sh shapes`, including any recorded with `fm-tap-desk.sh mark`), and what it holds up.
+  Those options come only from the hold's reason or its recorded marks, never from its title.
   A question with no options recorded shows only its plain words and `Talk it through`.
-  The first two and the highlighted one open in full; the rest stay one line each so a long list still leaves room for the floor.
+  The first two and the highlighted one open in full, every word of the title and each option wrapped to the pane's width; the rest stay one line each, shortened on a whole word with an ellipsis, so a long list still leaves room for the floor.
 - RIGHT NOW lists each factory with who steers it.
   A running job shows its title, how long it has run, the four steps (planning, building, checking, ready for you), and what it is doing this minute.
   A job with no sign of life for 15 minutes says `quiet for N min, no sign of life` instead, and its light stops moving.
@@ -55,6 +56,9 @@ The [factory registry](configuration.md#factory-registry-datafactoriesmd) names 
 - SINCE YOU LAST LOOKED is one rolling list since the pane was last closed: the time, who acted (a factory, Starship, or you), one word, and a sentence.
   It holds outcomes (`finished`, `PR ready`, `landed`, `failed`), the owner's own calls as they were held (`asked you`), and what the owner and Starship said; a worker's pause, a blocker, and a question a worker put to Starship never appear.
   A ship's `done` is an outcome only when it is the ready report, so a build handed into the checks is not listed as finished.
+
+When the screen is taller than the pane, the count line stays on top and the keys at the bottom while everything between them scrolls.
+The highlight keeps itself in sight as it moves, `pgup`, `pgdn` and the mouse wheel scroll the view, and the row under the count line and the row above the keys say how many lines are out of sight above or below.
 
 Colour only repeats what the words already say: cyan is where you are, amber is work under way, green is done, red is waiting for you.
 
@@ -71,7 +75,8 @@ Outside Herdr, `enter` opens the same page in place instead.
 
 | Key | What it does |
 | --- | --- |
-| `↑` `↓` | Move the highlight; it starts on the first thing that needs you. |
+| `↑` `↓` | Move the highlight; it starts on the first thing that needs you, and past the first or last row the view scrolls instead. |
+| `pgup` `pgdn`, mouse wheel | Scroll the view, without moving the highlight or closing a confirmation or the talk box. |
 | `enter` | Open the highlighted factory's tab. |
 | an option key | Answer the highlighted question with that option, after `enter` confirms it. |
 | `k` | Keep the highlighted finished work and ask Starship to land it, after `enter` confirms it. |
@@ -93,7 +98,7 @@ Who steers is the owner's stated choice of whether he is working with that crew 
 ## One record behind the screen
 
 `bin/fm-factory.py --data` prints the record the screen is drawn from, and `--plain` prints the screen as text, so an agent reading the pane loses nothing.
-`--plain --factory <id>` prints one factory's page.
+`--plain --factory <id>` prints one factory's page, and `--plain --height <rows>` prints only what a pane that tall shows when it opens.
 Both use the cached record while it is younger than 20 seconds and build a fresh one otherwise.
 
 The record's schema is `fm-factory.v1`:

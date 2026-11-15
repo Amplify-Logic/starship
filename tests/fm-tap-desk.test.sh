@@ -205,8 +205,11 @@ test_shapes_reads_each_question_as_its_card_does() {
   desk mark pick-route --option "go north" --option "go south" --option "stay" --recommend "go south" >/dev/null \
     || fail "could not mark the route"
   hold hold open-ask --title "How should launch day go" --reason "The launch plan needs your view." --repo sample >/dev/null
+  # A title that lists its calls is no list of options: only the reason names them.
+  hold hold three-calls --title "Garden: owner's calls (plant now or later, tell the neighbours now / on return, ask about the hedge)" \
+    --reason "Three calls from the garden walk: (a) plant the beans now or wait for rain;" --repo sample >/dev/null
   local out
-  out=$(desk shapes pick-route open-ask) || fail "shapes failed"
+  out=$(desk shapes pick-route open-ask three-calls) || fail "shapes failed"
   printf '%s' "$out" | node -e '
     let s = ""; process.stdin.on("data", (c) => s += c).on("end", () => {
       const doc = JSON.parse(s);
@@ -218,14 +221,17 @@ test_shapes_reads_each_question_as_its_card_does() {
       check(by["pick-route"].identity && by["pick-route"].title === "Choose the route", 5);
       check(by["open-ask"].question === "The launch plan needs your view." && by["open-ask"].options.length === 0, 6);
       check(by["open-ask"].recommendation === "" && !/None|null/.test(JSON.stringify(by["open-ask"])), 7);
+      check(JSON.stringify(by["three-calls"].options) === "[]", 8);
     });' || fail "shapes did not read the questions as their cards do"
   desk export >/dev/null || fail "export failed"
   cards_json | node -e '
     let s = ""; process.stdin.on("data", (c) => s += c).on("end", () => {
-      const card = JSON.parse(s).cards.find((c) => c.id === "pick-route");
+      const cards = JSON.parse(s).cards;
+      const card = cards.find((c) => c.id === "pick-route");
       if (JSON.stringify(card.options) !== JSON.stringify(["go north", "go south", "stay"]) || card.recommended_option !== "go south") process.exit(2);
-    });' || fail "the card and shapes disagree"
-  pass "shapes reads each held question exactly as its tap card does, and a plain question stays plain"
+      if (JSON.stringify(cards.find((c) => c.id === "three-calls").options) !== "[]") { console.error(s); process.exit(3); }
+    });' || fail "the card and shapes disagree, or a card split its title into options"
+  pass "shapes reads each held question exactly as its tap card does, a plain question stays plain, and a title is never split into options"
 }
 
 # On 2026-11-14 the bridge strip, the Factory pane and the tap page showed 0 to

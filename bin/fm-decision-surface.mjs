@@ -159,7 +159,7 @@ function splitExplicitOptions(value) {
   return [...new Set(pieces)];
 }
 
-function splitTitleOptions(value) {
+function splitAlternatives(value) {
   const pieces = value
     .split(/\s+\b(?:or|vs\.?)\s+/i)
     .map(cleanOption)
@@ -167,7 +167,7 @@ function splitTitleOptions(value) {
   return [...new Set(pieces)];
 }
 
-export function optionsFrom(title, reason, recommendation) {
+export function optionsFrom(reason, recommendation) {
   let source = "";
   const explicit = reason.match(/\b(?:Options?|Choose|Captain must choose)\s*:\s*(.*)/i);
   if (explicit) source = explicit[1];
@@ -184,20 +184,18 @@ export function optionsFrom(title, reason, recommendation) {
   }
   const alternativePhrase = reason.match(/\b(?:whether to|alternatives? (?:are|is))\s+([^.;]+?\s+or\s+[^.;]+)/i);
   if (alternativePhrase) {
-    const parsed = splitTitleOptions(alternativePhrase[1]);
+    const parsed = splitAlternatives(alternativePhrase[1]);
     if (parsed.length >= 2) return parsed;
   }
   const versusSentence = sentences(reason).find((sentence) => /\bvs\.?\b/i.test(sentence));
   if (versusSentence) {
     const beforeSemicolon = versusSentence.split(";")[0];
     const afterColon = beforeSemicolon.includes(":") ? beforeSemicolon.slice(beforeSemicolon.indexOf(":") + 1) : beforeSemicolon;
-    const parsed = splitTitleOptions(afterColon);
+    const parsed = splitAlternatives(afterColon);
     if (parsed.length >= 2) return parsed;
   }
-  if (/\b(?:vs\.?|or)\b/i.test(title) || title.includes(" / ")) {
-    const parsed = title.replace(/\?$/, "").split(/\s+\/\s+/).flatMap((part) => splitTitleOptions(part));
-    if (parsed.length >= 2) return [...new Set(parsed)];
-  }
+  // A title names the call; it is never read as its options, since one that
+  // lists several calls ("now or later, ... / ...") splits into nonsense.
   return recommendation ? [recommendation] : [];
 }
 
@@ -279,7 +277,7 @@ function loadTasks(home) {
         repo: task.repo,
         group: normalizeRepo(task.repo),
         created: task.created,
-        options: optionsFrom(task.title, task.hold_reason || "", recommendation),
+        options: optionsFrom(task.hold_reason || "", recommendation),
         recommendation,
         origin: identity.origin,
         key: identity.key,

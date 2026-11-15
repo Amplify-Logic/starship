@@ -10,8 +10,10 @@ owns the commands.
 
 Usage:
   fm-factory.py --data [--fresh]          print the record as JSON (fm-factory.v1)
-  fm-factory.py --plain [--factory ID] [--width N] [--fresh]
-                                          print the screen as plain text
+  fm-factory.py --plain [--factory ID] [--width N] [--height N] [--fresh]
+                                          print the screen as plain text; with
+                                          --height, only what a pane that tall
+                                          shows when it opens
   fm-factory.py view [--factory ID] [--item ID]
                                           the live pane (Herdr runs it through
                                           bin/fm-factory-pane.sh run); --item
@@ -692,7 +694,7 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
         labels = [plain_words(o) for o in shape.get("options") or []]
         labels = [label for label in labels if label][:9]
         recommended = plain_words(shape.get("recommended_option"))
-        options = [{"key": str(index + 1), "label": tidy(label, 70), "suggested": label == recommended}
+        options = [{"key": str(index + 1), "label": tidy(label, 240), "suggested": label == recommended}
                    for index, label in enumerate(labels)]
         recommendation = plain_words(shape.get("recommendation"))
         if any(o["suggested"] for o in options) or recommendation in labels:
@@ -1063,6 +1065,7 @@ HULL = (13, 21, 36)
 class Row(list):
     band = False
     hull = False
+    stop: Optional[Tuple[str, str]] = None   # the highlight stop this row draws, if any
 
 
 def S(text: Any, colour: str = "ice", bold: bool = False) -> Tuple[str, str, bool]:
@@ -1074,14 +1077,22 @@ def seg_len(segs) -> int:
 
 
 def clip(segs, width: int):
+    """Segments cut to the width, ending in an ellipsis on a whole word where one is near."""
     if seg_len(segs) <= width:
         return list(segs)
     out, room = [], max(width - 1, 0)
     for text, colour, bold in segs:
-        if room <= 0:
-            break
-        out.append((text[:room], colour, bold))
-        room -= len(text[:room])
+        if len(text) <= room:
+            out.append((text, colour, bold))
+            room -= len(text)
+            continue
+        piece = text[:room]
+        if not text[room].isspace():
+            space = piece.rfind(" ")
+            if space >= 0 and len(piece) - space <= 20:
+                piece = piece[:space]
+        out.append((piece.rstrip(), colour, bold))
+        break
     out.append(("…", "faint", False))
     return out
 
@@ -1108,6 +1119,31 @@ def wrap(text: str, width: int) -> List[str]:
     if line:
         lines.append(line)
     return lines or [""]
+
+
+def flow(width: int, lead, text: str, colour: str = "ice", bold: bool = False, indent: Optional[int] = None,
+         tail=(), cap: Optional[int] = None, rest: Optional[str] = None) -> List[Row]:
+    """Text wrapped to the width after a lead, its later lines under the text.
+
+    `tail` (a note such as "Starship suggests this") follows the last line, or
+    takes a line of its own when it does not fit; `cap` keeps that many lines,
+    the last ending in an ellipsis; `rest` colours the lines after the first.
+    """
+    lead = list(lead)
+    indent = seg_len(lead) if indent is None else indent
+    lines = wrap(text, max(width - max(seg_len(lead), indent) - 1, 10))
+    if cap and len(lines) > cap:
+        lines = lines[:cap]
+        lines[-1] += "…"
+    lefts = [(lead if index == 0 else [S(" " * indent)])
+             + [S(line, colour if index == 0 or rest is None else rest, bold)]
+             for index, line in enumerate(lines)]
+    tail = [seg for seg in tail if seg[0]]
+    if tail and seg_len(lefts[-1]) + seg_len(tail) < width:
+        lefts[-1] += tail
+    elif tail:
+        lefts.append([S(" " * indent), (tail[0][0].lstrip(), tail[0][1], tail[0][2])] + tail[1:])
+    return [row(width, left) for left in lefts]
 
 
 STATE_COLOUR = {"running": "amber", "waiting on you": "red", "ready for you": "green", "stuck": "amber",
@@ -1144,6 +1180,9 @@ class View:
         self.talking: Optional[Dict[str, Any]] = None
         self.confirm: Optional[Dict[str, Any]] = None
         self.notice: Optional[Tuple[str, str, float]] = None
+        self.top = 0          # the first body row in sight
+        self.follow = True    # keep the highlight in sight; scrolling by hand lets go
+        self.page = 10        # body rows in sight at the last frame
         self.adopt(record)
 
     def adopt(self, record: Dict[str, Any]) -> None:
@@ -1206,12 +1245,22 @@ class View:
         return self.selected
 
     def move(self, step: int) -> None:
+        """Move the highlight; past the first or last row the view scrolls instead."""
         self.at()
+        if not 0 <= self.cursor + step < len(self.stops()):
+            self.scroll(3 * step)
+            return
         self.cursor += step
         self.selected = None
+        self.follow = True
+
+    def scroll(self, lines: int) -> None:
+        self.top = max(self.top + lines, 0)
+        self.follow = False
 
     def show(self, fid: Optional[str]) -> None:
         self.opened, self.cursor, self.selected = fid, 0, None
+        self.top, self.follow = 0, True
 
     def here(self, kind: str, ident: str) -> bool:
         return self.at() == (kind, ident)
@@ -1239,48 +1288,65 @@ class View:
         line.hull = True
         return [line]
 
-    def need_rows(self, width: int, need: Dict[str, Any], full: bool) -> List[Row]:
+    def need_head(self, need: Dict[str, Any], full: bool):
+        """The lead, title and right-hand words of a need's first row."""
         now = self.now()
         fac = self.factory(need["factory"])
         question = need["kind"] == "question"
         waited = ("waiting " if question else "ready ") + minutes_words((now - need["since"]) // 60) \
             if need.get("since") else ("waiting" if question else "ready")
         right = [S(waited, "mist")] if full else [S(fac["name"], "mist"), S(" · ", "faint"), S(waited, "mist")]
+        lead = [S(" "), self.mark("need", need["id"]), S("● ", "red" if question else "green")]
+        return lead, need["ask"], right
+
+    def need_line(self, width: int, need: Dict[str, Any]) -> Row:
+        """A need folded to one row: its title, shortened on a whole word when it must be."""
+        lead, ask, right = self.need_head(need, full=False)
+        left = lead + [S(ask, "ice", True)]
+        line = row(width, left, right if seg_len(left) + seg_len(right) + 3 <= width else (),
+                   band=self.here("need", need["id"]))
+        line.stop = ("need", need["id"])
+        return line
+
+    def need_rows(self, width: int, need: Dict[str, Any], full: bool) -> List[Row]:
+        """A need opened as a card: every word of its title, why and options, wrapped."""
+        question = need["kind"] == "question"
         band = self.here("need", need["id"])
-        left = [S(" "), self.mark("need", need["id"]), S("● ", "red" if question else "green"),
-                S(need["ask"], "ice", True)]
+        lead, ask, right = self.need_head(need, full)
         pad = S("       ")
-        if seg_len(left) + seg_len(right) + 3 <= width:
-            rows = [row(width, left, right, band=band)]
+        if seg_len(lead) + len(ask) + seg_len(right) + 3 <= width:
+            rows = [row(width, lead + [S(ask, "ice", True)], right, band=band)]
         else:
-            rows = [row(width, left, band=band), row(width, [pad] + right)]
+            rows = flow(width, lead, ask, "ice", True)
+            for line in rows:
+                line.band = band
+            rows.append(row(width, [pad] + right))
         if question:
             if need.get("why"):
-                for line in wrap(need["why"], max(width - 9, 20))[:3 if full else 2]:
-                    rows.append(row(width, [pad, S(line, "mist")]))
+                rows += flow(width, [pad], need["why"], "mist")
             for option in need["options"]:
-                note = ""
+                note = []
                 if option["suggested"]:
-                    note = "  · %s suggests this" % (need.get("suggested_by") or "Starship")
-                rows.append(row(width, [pad, S(option["key"], "cyan", True), S("  "), S(option["label"], "ice"),
-                                        S(note, "mist")]))
+                    note = [S("  · %s suggests this" % (need.get("suggested_by") or "Starship"), "mist")]
+                rows += flow(width, [pad, S(option["key"], "cyan", True), S("  ")], option["label"], "ice",
+                             tail=note)
             if need.get("recommendation"):
-                for index, line in enumerate(wrap("Starship suggests: %s" % need["recommendation"],
-                                                  max(width - 9, 20))[:2]):
-                    rows.append(row(width, [pad, S(line, "mist" if index else "ice")]))
+                rows += flow(width, [pad], "Starship suggests: %s" % need["recommendation"], "ice", rest="mist")
             rows.append(row(width, [pad, S("t", "cyan", True), S("  "), S("Talk it through", "ice")]))
             if need.get("holds_up"):
-                rows.append(row(width, [pad, S("holds up ", "faint"), S(", ".join(need["holds_up"][:3]), "mist")]))
+                rows += flow(width, [pad, S("holds up ", "faint")], ", ".join(need["holds_up"][:3]), "mist")
         else:
             hint = "k  keep it    c  ask for changes" if full or band else "enter shows its factory"
             if need.get("pr") and full:
                 rows.append(row(width, [pad, S("the change ", "faint"), S(need["pr"], "mist")]))
             rows.append(row(width, [pad, S(hint, "faint")]))
+        for line in rows:
+            line.stop = ("need", need["id"])
         return rows
 
-    def track(self, job: Dict[str, Any]):
+    def track(self, job: Dict[str, Any], width: int = 0, links: int = 5):
         current = STEPS.index(job["step"]) if job.get("step") in STEPS else 1
-        lit = self.tick % 5
+        lit = self.tick % links
         segs = []
         for index, step in enumerate(STEPS):
             if index < current:
@@ -1293,14 +1359,16 @@ class View:
                 break
             segs.append(S(" "))
             if index < current:
-                segs.append(S("•••••", "mist"))
+                segs.append(S("•" * links, "mist"))
             elif index > current:
-                segs.append(S("·····", "faint"))
+                segs.append(S("·" * links, "faint"))
             elif job.get("quiet"):
-                segs.append(S("•••••", "ember"))
+                segs.append(S("•" * links, "ember"))
             else:
-                segs += [S("•" * lit, "ember"), S("•", "amber", True), S("•" * (4 - lit), "ember")]
+                segs += [S("•" * lit, "ember"), S("•", "amber", True), S("•" * (links - 1 - lit), "ember")]
             segs.append(S(" "))
+        if width and links > 2 and 7 + seg_len(segs) > width:
+            return self.track(job, width, 2)
         return segs
 
     def job_rows(self, width: int, job: Dict[str, Any], full: bool) -> List[Row]:
@@ -1313,7 +1381,7 @@ class View:
             else:
                 doing = S(job.get("doing") or "at work", "mist")
             return [row(width, [S("     "), S("● ", "amber"), S(job["title"], "ice")], elapsed),
-                    row(width, [S("       ")] + self.track(job)),
+                    row(width, [S("       ")] + self.track(job, width)),
                     row(width, [S("       "), doing])]
         colour = STATE_COLOUR.get(state, "faint")
         words = state
@@ -1339,6 +1407,12 @@ class View:
         return "%s · %s" % (since, "%d in line" % len(line) if line else "nothing in line")
 
     def factory_rows(self, width: int, fac: Dict[str, Any]) -> List[Row]:
+        rows = self.factory_lines(width, fac)
+        for line in rows:
+            line.stop = ("factory", fac["id"])
+        return rows
+
+    def factory_lines(self, width: int, fac: Dict[str, Any]) -> List[Row]:
         band = self.here("factory", fac["id"])
         head = [S(" "), self.mark("factory", fac["id"]), S(fac["name"], "ice", True)]
         if fac["state"] == "idle":
@@ -1380,11 +1454,7 @@ class View:
             if not fid:
                 left.append(S(event["actor"].ljust(names + 2), "mist"))
             left.append(S(event["word"].ljust(words + 2), FEED_COLOUR.get(event["word"].split(" ·")[0], "amber")))
-            used = seg_len(left)
-            lines = wrap(event["text"], max(width - used - 1, 20))
-            rows.append(row(width, left + [S(lines[0], "ice")]))
-            for extra in lines[1:2]:
-                rows.append(row(width, [S(" " * used), S(extra, "ice")]))
+            rows += flow(width, left, event["text"], "ice", cap=2)
         return rows
 
     def notice_rows(self, width: int) -> List[Row]:
@@ -1416,13 +1486,19 @@ class View:
         elif self.in_tab:
             keys.append("esc back")
         keys += ["t talk", "s who steers", "q quit"]
-        return [row(width, [S(" " + " · ".join(keys), "faint")])]
+        lines = [""]
+        for key in keys:
+            joined = "%s · %s" % (lines[-1], key) if lines[-1] else key
+            if lines[-1] and len(joined) + 2 > width:
+                lines.append(key)
+            else:
+                lines[-1] = joined
+        return [row(width, [S(" " + line, "faint")]) for line in lines]
 
     # ---- the two screens -----------------------------------------------------
 
     def overview(self, width: int) -> List[Row]:
-        rows = self.count_line(width) + [row(width)]
-        rows += self.notice_rows(width)
+        rows: List[Row] = []
         needs = self.needs()
         if needs:
             rows += [row(width, [S(" NEEDS YOU", "red", True)]), row(width)]
@@ -1432,7 +1508,7 @@ class View:
                 if index < 2 or self.here("need", need["id"]):
                     rows += self.need_rows(width, need, full=False) + [row(width)]
                 else:
-                    rows += self.need_rows(width, need, full=False)[:1]
+                    rows.append(self.need_line(width, need))
             if len(needs) > 2:
                 rows.append(row(width))
         else:
@@ -1452,7 +1528,7 @@ class View:
 
     def factory_page(self, width: int) -> List[Row]:
         fac = self.factory(self.opened)
-        rows = self.count_line(width) + [row(width)]
+        rows: List[Row] = []
         about = fac.get("about") or ", ".join(fac["projects"]) or ""
         crew = fac["crew"]
         rows += [row(width, [S(" "), S("  " if fac["needs"] else "▸ ", "cyan", True), S(fac["name"], "ice", True)],
@@ -1460,7 +1536,7 @@ class View:
                  row(width, [S("   " + " · ".join(x for x in (about, "%s, %d busy" % (
                      plural(crew["workers"], "worker", "workers"), crew["busy"])) if x), "faint")]),
                  row(width)]
-        rows += self.notice_rows(width)
+        rows[0].stop = ("factory", fac["id"])
         needs = self.needs(fac["id"])
         if needs:
             rows += [row(width, [S(" NEEDS YOU", "red", True)]), row(width)]
@@ -1502,7 +1578,7 @@ class View:
             stamp = ""
             if item.get("when"):
                 stamp = time.strftime("%d %b", time.gmtime(parse_iso(item["when"]) or 0))
-            rows.append(row(width, [S("   "), S(stamp.ljust(8), "faint"), S(item["what"], "mist")]))
+            rows += flow(width, [S("   "), S(stamp.ljust(8), "faint")], item["what"], "mist")
         rows += [row(width)] + self.feed_rows(width, fac["id"], cap=8)
         rows += [row(width), row(width, [S(" TALK", "mist", True)]), row(width)]
         if not fac["talk"]:
@@ -1510,25 +1586,48 @@ class View:
         for line in fac["talk"]:
             you = line["who"] == "you"
             stamp = when_words(line["at"], self.now()) if line.get("at") else ""
-            rows.append(row(width, [S("   "), S(stamp.ljust(9), "faint"),
-                                    S(("you" if you else line["who"]).ljust(10), "cyan" if you else "mist"),
-                                    S(line["said"], "ice" if you else "mist")]))
+            rows += flow(width, [S("   "), S(stamp.ljust(9), "faint"),
+                                 S(("you" if you else line["who"]).ljust(10), "cyan" if you else "mist")],
+                         line["said"], "ice" if you else "mist")
         return rows
 
     def frame(self, width: int, height: Optional[int] = None) -> List[Row]:
+        """The screen: the count line and any notice on top, the keys at the bottom.
+
+        With a height, the body between them is the part in sight: it follows
+        the highlight unless it was scrolled by hand, and the row under the count
+        line and the row above the keys say what is out of sight.
+        """
         width = max(width, 40)
+        head = self.count_line(width)
+        notes = self.notice_rows(width)
         body = self.factory_page(width) if self.opened else self.overview(width)
         foot = self.footer(width)
-        if height:
-            body = body[:max(height - len(foot) - 1, 1)]
-            body += [row(width)] * max(height - len(foot) - len(body), 0)
-        else:
-            body.append(row(width))
-        return body + foot
+        if not height:
+            return head + [row(width)] + notes + body + [row(width)] + foot
+        room = max(height - len(head) - len(notes) - len(foot) - 2, 1)
+        last = max(len(body) - room, 0)
+        if self.follow:
+            mine = [index for index, line in enumerate(body) if line.stop and line.stop == self.selected]
+            if mine and (self.cursor == 0 or mine[0] < self.top):
+                # Up onto a row: show the heading or blank row above it too.
+                self.top = 0 if self.cursor == 0 else max(mine[0] - 2, 0)
+            elif mine and mine[-1] >= self.top + room:
+                self.top = min(mine[-1] + 2 - room, mine[0])
+        self.top = min(max(self.top, 0), last)
+        self.page = room
+        sight = body[self.top:self.top + room]
+        sight += [row(width)] * (room - len(sight))
+        above, below = self.top, len(body) - self.top - room
+        upper = row(width, [S(" ▲ %s above · pgup" % plural(above, "more line", "more lines"), "faint")]) \
+            if above > 0 else row(width)
+        lower = row(width, [S(" ▼ %s below · pgdn" % plural(below, "more line", "more lines"), "faint")]) \
+            if below > 0 else row(width)
+        return head + [upper] + notes + sight + [lower] + foot
 
 
-def plain(view: View, width: int) -> str:
-    return "\n".join("".join(t for t, _, _ in segs).rstrip() for segs in view.frame(width))
+def plain(view: View, width: int, height: Optional[int] = None) -> str:
+    return "\n".join("".join(t for t, _, _ in segs).rstrip() for segs in view.frame(width, height))
 
 
 def paint(segs: Row) -> str:
@@ -1633,6 +1732,15 @@ class Pane:
     def key(self, key: str) -> bool:
         view = self.view
         now = now_epoch()
+        # Scrolling only moves the view, so it never closes a box or a confirmation.
+        if key in ("pgup", "pgdn"):
+            view.scroll((1 if key == "pgdn" else -1) * max(view.page - 1, 1))
+            return True
+        if key in ("wheel-up", "wheel-down"):
+            view.scroll(3 if key == "wheel-down" else -3)
+            return True
+        if key in ("mouse", "other"):
+            return True
         if view.talking is not None:
             talk = view.talking
             if key == "esc":
@@ -1657,7 +1765,7 @@ class Pane:
                     self.send(rid, body, "Sent to Starship. It passes it on to the %s crew." % fac["name"])
             elif key == "backspace":
                 talk["text"] = talk["text"][:-1]
-            elif key not in KEYS.values():
+            elif key not in NAMED:
                 # Typed keys arrive one at a time; pasted or sent text arrives whole.
                 talk["text"] += "".join(c for c in key if c.isprintable())
             return True
@@ -1755,18 +1863,30 @@ class Pane:
 
 
 KEYS = {b"\x1b[A": "up", b"\x1b[B": "down", b"\x1b[C": "right", b"\x1b[D": "left",
-        b"\x1bOA": "up", b"\x1bOB": "down", b"\x1b": "esc", b"\r": "enter", b"\n": "enter",
+        b"\x1bOA": "up", b"\x1bOB": "down", b"\x1b[5~": "pgup", b"\x1b[6~": "pgdn",
+        b"\x1b": "esc", b"\r": "enter", b"\n": "enter",
         b"\x7f": "backspace", b"\x08": "backspace", b"\x03": "ctrl-c"}
+# Every named key, so none is ever typed into the talk box as text.
+NAMED = set(KEYS.values()) | {"wheel-up", "wheel-down", "mouse", "other"}
+# One read may hold several keys: a held arrow, a turn of the mouse wheel
+# (SGR reports, asked for when the pane starts), or pasted text.
+KEY_RE = re.compile(rb"\x1b\[<(\d+);\d+;\d+[Mm]|\x1b\[[0-9;?]*[ -/]*[@-~]|\x1bO.|\x1b|[^\x1b]+")
 
 
-def read_key(fd: int) -> str:
-    data = os.read(fd, 64)
-    if data in KEYS:
-        return KEYS[data]
-    try:
-        return data.decode()
-    except UnicodeDecodeError:
-        return ""
+def read_keys(fd: int) -> List[str]:
+    keys = []
+    for match in KEY_RE.finditer(os.read(fd, 1024)):
+        data = match.group(0)
+        if match.group(1) is not None:
+            button = int(match.group(1))
+            keys.append({64: "wheel-up", 65: "wheel-down"}.get(button, "mouse"))
+        elif data in KEYS:
+            keys.append(KEYS[data])
+        elif data.startswith(b"\x1b"):
+            keys.append("other")
+        else:
+            keys.append(data.decode("utf-8", errors="ignore"))
+    return keys
 
 
 def live(pane: Pane) -> None:
@@ -1779,7 +1899,9 @@ def live(pane: Pane) -> None:
     signal.signal(signal.SIGWINCH, lambda *_: resized.__setitem__(0, True))
     signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(SystemExit(0)))
     signal.signal(signal.SIGHUP, lambda *_: (_ for _ in ()).throw(SystemExit(0)))
-    out.write("\x1b[?1049h\x1b[?25l\x1b[?7l")
+    # The alternate screen, no cursor, no autowrap, and mouse button and wheel
+    # reports in SGR form, which Herdr passes to a pane that asks for them.
+    out.write("\x1b[?1049h\x1b[?25l\x1b[?7l\x1b[?1000h\x1b[?1006h")
     last_reload = 0.0
     try:
         tty.setraw(fd)
@@ -1797,7 +1919,10 @@ def live(pane: Pane) -> None:
             if resized[0]:
                 buf.append("\x1b[2J")
                 resized[0] = False
-            buf.append("\r\n".join(paint(segs) + "\x1b[K" for segs in rows[:size.lines]))
+            # Each row is cleared before it is drawn, never after: with autowrap
+            # off the cursor stays on the last column, and clearing from there
+            # would erase the character a full-width row put in it.
+            buf.append("\r\n".join("\x1b[K" + paint(segs) for segs in rows[:size.lines]))
             buf.append("\x1b[?2026l")
             out.write("".join(buf))
             out.flush()
@@ -1809,12 +1934,13 @@ def live(pane: Pane) -> None:
                     break
                 ready, _, _ = select.select([fd], [], [], wait)
                 if ready:
-                    if not pane.key(read_key(fd)):
-                        return
+                    for key in read_keys(fd):
+                        if not pane.key(key):
+                            return
                     break
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, saved)
-        out.write("\x1b[?7h\x1b[?25h\x1b[?1049l")
+        out.write("\x1b[?1006l\x1b[?1000l\x1b[?7h\x1b[?25h\x1b[?1049l")
         out.flush()
         if not pane.view.in_tab:
             try:
@@ -1955,6 +2081,7 @@ def main(argv: List[str]) -> int:
     parser.add_argument("--fresh", action="store_true")
     parser.add_argument("--factory")
     parser.add_argument("--width", type=int, default=92)
+    parser.add_argument("--height", type=int)
     parser.add_argument("--origin-tab")
     parser.add_argument("--item")
     try:
@@ -1974,7 +2101,8 @@ def main(argv: List[str]) -> int:
                 if args.factory and not any(f["id"] == args.factory for f in record["factories"]):
                     print("fm-factory: no factory %s" % args.factory, file=sys.stderr)
                     return 1
-                print(plain(View(record, opened=args.factory), max(args.width, 40)))
+                height = max(args.height, 8) if args.height else None
+                print(plain(View(record, opened=args.factory), max(args.width, 40), height))
             return 0
         if args.command == "refresh":
             refresh(home)
