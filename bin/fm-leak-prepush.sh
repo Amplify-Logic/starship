@@ -59,6 +59,12 @@
 #       directory outside the repository's git directory, such as a tracked one
 #       or a user-global one every repository on the Mac shares. Session-start bootstrap
 #       (bin/fm-bootstrap.sh) runs it for the home's checkout and its add-on.
+#   fm-leak-prepush.sh status <checkout> starship|addon
+#       Exits 0, silently, when the hooks directory git uses for <checkout>
+#       (shared with its task worktrees) holds this check's hook of that kind;
+#       otherwise prints one `LEAK_PREPUSH: <checkout>: <problem>` line on
+#       stdout and exits 1. bin/fm-addon.sh guards runs it to confirm a new
+#       home's push check.
 #   fm-leak-prepush.sh check starship|addon <hooks-dir> <remote> <url>
 #       What the installed hook runs: git's ref lines on stdin. Exits 1 to
 #       refuse the push.
@@ -74,6 +80,7 @@ usage() {
   cat >&2 <<'EOF'
 usage:
   fm-leak-prepush.sh install <checkout> starship|addon
+  fm-leak-prepush.sh status <checkout> starship|addon
   fm-leak-prepush.sh check starship|addon <hooks-dir> <remote> <url>
 EOF
   exit 2
@@ -142,6 +149,20 @@ install_hook() {  # <checkout> <kind>
     report "cannot write $hook"
     return 1
   fi
+}
+
+hook_status() {  # <checkout> <kind>
+  local checkout=$1 kind=$2 hooks
+  if ! hooks=$(repo_git -C "$checkout" rev-parse --path-format=absolute --git-path hooks 2>/dev/null); then
+    printf 'LEAK_PREPUSH: %s: not a git checkout, so it has no pre-push leak check\n' "$checkout"
+    return 1
+  fi
+  if [ -x "$hooks/pre-push" ] && grep -qF "$MARKER ($kind)" "$hooks/pre-push" 2>/dev/null; then
+    return 0
+  fi
+  printf 'LEAK_PREPUSH: %s: the pre-push leak check is not installed in %s; run bin/fm-leak-prepush.sh install %s %s\n' \
+    "$checkout" "$hooks" "$checkout" "$kind"
+  return 1
 }
 
 is_zero() { case "$1" in *[!0]*) return 1 ;; *) return 0 ;; esac; }
@@ -266,6 +287,11 @@ case "${1:-}" in
     [ "$#" -eq 3 ] || usage
     case "$3" in starship | addon) ;; *) usage ;; esac
     install_hook "$2" "$3"
+    ;;
+  status)
+    [ "$#" -eq 3 ] || usage
+    case "$3" in starship | addon) ;; *) usage ;; esac
+    hook_status "$2" "$3"
     ;;
   check)
     [ "$#" -eq 5 ] || usage

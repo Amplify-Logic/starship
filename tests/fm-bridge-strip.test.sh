@@ -405,6 +405,126 @@ test_a_click_on_the_call_opens_the_factory_pane_on_it() {
   pass "bridge strip: a click on the most urgent call opens the Factory pane on that item, or moves the one in the tab to it; a click elsewhere nothing"
 }
 
+# --- the next call, as soon as one is settled -------------------------------
+
+# cache_fleet: read the fleet once into the cache the strip reads, as the
+# out-of-band refresh does in a real home.
+cache_fleet() {
+  FM_FLEET_STATE_READER="$BINDIR/fake-crew-state" bash -c '
+    . "$1/bin/fm-fleet-status-lib.sh"
+    _fm_fleet_collect "$2" "$(date +%s)" "$3"
+  ' _ "$ROOT" "$HOME_FIX/state" "$BINDIR/fake-crew-state" > "$HOME_FIX/state/.status-fleet-state" \
+    || fail "the fleet could not be read into the cache"
+}
+
+# cached_frame <width>: a frame from the cache, with the worker reading's own
+# refresh an hour away, so only the owner's calls can move it.
+cached_frame() {
+  FM_FLEET_STATE_NO_CACHE=0 FM_FLEET_STATE_TTL=3600 FM_FLEET_STATE_MAX_AGE=3600 frame "$@"
+}
+
+# park <id>: defer a held decision to a date, the way tasks-axi rewrites its
+# row when firstmate parks it with fm-captain-hold.sh hold --until.
+park() {
+  local file="$HOME_FIX/data/backlog.md"
+  sed "s/^\(- \[ \] $1 - .*\)\$/\1 (hold-until: 2099-01-01)/" "$file" > "$file.new" && mv "$file.new" "$file"
+}
+
+# On 2026-11-15 the owner parked a held decision and the strip went on naming
+# it as the one to decide, because the calls rode the worker reading's two
+# minute refresh and parking changes no worker.
+test_a_parked_decision_gives_way_to_the_next_call() {
+  local out deadline
+  reset_case
+  held pick-colour 'Pick the cup colour'
+  held name-shop 'Name the shop'
+  cache_fleet
+  out=$(cached_frame 130 | plain)
+  assert_contains "$out" '■ 2 decisions for you ' "the two decisions were not counted"
+  assert_contains "$out" '▸ Decide: Pick the cup colour ' "the first decision was not the call"
+  park pick-colour
+  deadline=$(($(date +%s) + 10))
+  while :; do
+    out=$(cached_frame 130 | plain)
+    case "$out" in *'▸ Decide: Name the shop '*) break ;; esac
+    [ "$(date +%s)" -lt "$deadline" ] || break
+    sleep 0.2
+  done
+  assert_contains "$out" '■ 1 decision for you ' "the parked decision was still counted"
+  assert_contains "$out" '▸ Decide: Name the shop ' "the parked decision was still the call"
+  pass "bridge strip: a parked decision gives way to the next call without waiting for the workers' reading"
+}
+
+# watch_park <width> <id> <first> <next>: run the live strip under a pty, and
+# once it names <first>, park decision <id> and print how many seconds pass
+# until it names <next> instead (or `never`).
+watch_park() {
+  python3 - "$STRIP" "$@" "$HOME_FIX/data/backlog.md" <<'PY'
+import fcntl, os, pty, re, select, signal, struct, sys, termios, time
+strip, width, ident, first, nxt, backlog = sys.argv[1], int(sys.argv[2]), *sys.argv[3:7]
+pid, fd = pty.fork()
+if pid == 0:
+    fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack("HHHH", 3, width, 0, 0))
+    os.execvp("bash", ["bash", strip, "run"])
+seen = b""
+def drain(seconds, until=None, start=0):
+    global seen
+    end = time.time() + seconds
+    while time.time() < end:
+        if until and until.encode() in re.sub(rb"\x1b\[[0-9;?]*[A-Za-z]", b"", seen[start:]):
+            return True
+        r, _, _ = select.select([fd], [], [], 0.05)
+        if r:
+            try:
+                seen += os.read(fd, 65536)
+            except OSError:
+                break
+    return False
+result = "no first call"
+if drain(30, until=first):
+    mark = len(seen)
+    lines = open(backlog).read().splitlines()
+    lines = [l + " (hold-until: 2099-01-01)" if l.startswith("- [ ] %s - " % ident) else l for l in lines]
+    began = time.time()
+    with open(backlog + ".new", "w") as handle:
+        handle.write("\n".join(lines) + "\n")
+    os.rename(backlog + ".new", backlog)
+    result = "%.1f" % (time.time() - began) if drain(15, until=nxt, start=mark) else "never"
+print(result)
+os.kill(pid, signal.SIGTERM)
+end = time.time() + 30
+while True:   # keep reading so its last writes drain and it can exit
+    done, _ = os.waitpid(pid, os.WNOHANG)
+    if done:
+        break
+    if time.time() >= end:
+        os.kill(pid, 9)
+        os.waitpid(pid, 0)
+        break
+    drain(0.3)
+PY
+}
+
+test_the_live_strip_draws_the_next_call_within_seconds() {
+  local took
+  reset_case
+  held pick-colour 'Pick the cup colour'
+  held name-shop 'Name the shop'
+  cache_fleet
+  took=$(FM_HOME="$HOME_FIX" FM_FLEET_STATE_TTL=3600 FM_FLEET_STATE_MAX_AGE=3600 \
+    FM_FLEET_STATE_READER="$BINDIR/fake-crew-state" FM_BRIDGE_STRIP_PMSET='' TZ=UTC \
+    watch_park 130 pick-colour 'Decide: Pick the cup colour' 'Decide: Name the shop') \
+    || fail "the live strip could not be driven"
+  case "$took" in
+    never|'no first call'|'') fail "the live strip did not move on from the parked decision: $took" ;;
+  esac
+  # The strip's ordinary frame is five seconds; the next call must not wait
+  # for it.
+  awk -v t="$took" 'BEGIN { exit !(t < 4.5) }' \
+    || fail "the live strip took ${took}s to name the next call"
+  pass "bridge strip: the live strip names the next call within seconds of a decision being parked (${took}s)"
+}
+
 # --- the red alert ------------------------------------------------------------
 
 test_the_red_alert_shows_failed_work_and_stopped_workers_until_they_clear() {
@@ -750,6 +870,8 @@ fm_test_run \
   test_the_call_only_takes_the_columns_left_over \
   test_a_title_is_shown_as_plain_text \
   test_a_click_on_the_call_opens_the_factory_pane_on_it \
+  test_a_parked_decision_gives_way_to_the_next_call \
+  test_the_live_strip_draws_the_next_call_within_seconds \
   test_the_red_alert_shows_failed_work_and_stopped_workers_until_they_clear \
   test_the_night_shift_says_when_it_starts_that_it_is_on_and_what_it_did \
   test_every_width_fills_the_row_with_everything_on_it \

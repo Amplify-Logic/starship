@@ -914,6 +914,105 @@ test_under_load_the_last_good_reading_stands_in_for_unknown() {
   pass "fleet status: under load the last good reading stands in, marked old, and unknown means never read"
 }
 
+# --- the owner's calls between readings ---------------------------------------
+
+calls_signal() {
+  bash -c '. "$1/bin/fm-owner-calls-signal-lib.sh"; fm_owner_calls_signal "$2"' _ "$ROOT" "$STATE"
+}
+
+test_every_command_that_changes_a_call_moves_the_calls_signal() {
+  local home before
+  reset_state
+  home=$(cd "$STATE/.." && pwd)
+  backlog_row '- [ ] pick-a - Pick a colour (repo: r) (kind: captain) (hold: choose red or blue) (hold-kind: captain)'
+  touch "$STATE/.afk"   # the inbox then rings no primary session
+  before=$(calls_signal)
+  FM_HOME="$home" bash "$ROOT/bin/fm-tasks-axi.sh" list >/dev/null || fail "the backlog could not be listed"
+  assert_equals "$(calls_signal)" "$before" "reading the backlog moved the calls signal"
+  FM_HOME="$home" bash "$ROOT/bin/fm-captain-hold.sh" open pick-a >/dev/null 2>&1
+  assert_equals "$(calls_signal)" "$before" "asking whether a call is open moved the calls signal"
+  FM_HOME="$home" bash "$ROOT/bin/fm-tasks-axi.sh" hold pick-a --until 2099-01-01 >/dev/null \
+    || fail "the backlog write failed"
+  [ "$(calls_signal)" != "$before" ] || fail "a backlog write through fm-tasks-axi.sh did not move the calls signal"
+  before=$(calls_signal)
+  # The stand-in adapter is not one the captain-hold contract accepts, so the
+  # hold is refused; a call it may have touched still moves the signal.
+  FM_HOME="$home" bash "$ROOT/bin/fm-captain-hold.sh" hold pick-a --reason 'choose red or blue' >/dev/null 2>&1
+  [ "$(calls_signal)" != "$before" ] || fail "fm-captain-hold.sh hold did not move the calls signal"
+  before=$(calls_signal)
+  FM_HOME="$home" bash "$ROOT/bin/fm-inbox.sh" note "Answer for Pick a colour: red" >/dev/null 2>&1 \
+    || fail "the note could not be saved"
+  [ "$(calls_signal)" != "$before" ] || fail "a note to Starship did not move the calls signal"
+  before=$(calls_signal)
+  backlog_row '- [ ] name-b - Name the shop (repo: r) (kind: captain) (hold: pick a name) (hold-kind: captain)'
+  [ "$(calls_signal)" != "$before" ] || fail "a write straight to the markdown backlog did not move the calls signal"
+  pass "fleet status: every command that changes a call moves the calls signal, and a read does not"
+}
+
+# calls_frame: the strip's frame from the cache, the worker reading's own
+# refresh an hour away and a reader that records any call made to it.
+calls_frame() {
+  FM_FLEET_STATE_TTL=3600 FM_FLEET_STATE_MAX_AGE=3600 \
+    FM_FLEET_STATE_READER="$BINDIR/counting-crew-state" FM_FLEET_TEST_CALLS="$CALLS" \
+    bash -c '. "$1/bin/fm-fleet-status-lib.sh"; fm_fleet_status_counts "$2" strip' _ "$ROOT" "$STATE"
+}
+
+test_the_owners_calls_follow_their_signal_between_readings() {
+  local out reading waited
+  reset_state
+  task green crew 'state: done · source: run-step · checks passed'
+  backlog_row '- [ ] pick-a - Pick a colour (repo: r) (kind: captain) (hold: choose red or blue) (hold-kind: captain)'
+  backlog_row '- [ ] name-b - Name the shop (repo: r) (kind: captain) (hold: pick a name) (hold-kind: captain)'
+  FM_FLEET_STATE_READER="$BINDIR/fake-crew-state" bash -c '
+    . "$1/bin/fm-fleet-status-lib.sh"
+    _fm_fleet_collect "$2" "$(date +%s)" "$3" > "$2/.status-fleet-state"
+  ' _ "$ROOT" "$STATE" "$BINDIR/fake-crew-state" || fail "the fleet could not be read"
+  reading=$(cat "$STATE/.status-fleet-state")
+  : > "$CALLS"
+  out=$(calls_frame)
+  # ... ready known age decisions failed lost night kind id title signal
+  assert_equals "$(printf '%s' "$out" | cut -f7,10,14,15,17 | tr '\t' ' ')" "3 2 decision pick-a $(calls_signal)" \
+    "the reading's own calls"
+  sed "s/^\(- \[ \] pick-a - .*\)\$/\1 (hold-until: 2099-01-01)/" "$STATE/../data/backlog.md" > "$STATE/../backlog.new"
+  mv "$STATE/../backlog.new" "$STATE/../data/backlog.md"
+  out=$(calls_frame)
+  assert_equals "$(printf '%s' "$out" | cut -f14,15 | tr '\t' ' ')" "decision pick-a" \
+    "the reading's calls stand until the calls are read again"
+  [ "$(printf '%s' "$out" | cut -f17)" != "$(calls_signal)" ] \
+    || fail "calls read before the change were marked as current"
+  waited=0
+  while [ ! -s "$STATE/.status-fleet-calls" ] && [ "$waited" -lt 100 ]; do
+    sleep 0.1
+    waited=$((waited + 1))
+  done
+  out=$(calls_frame)
+  assert_equals "$(printf '%s' "$out" | cut -f7,10,14,15,16,17 | tr '\t' ' ')" \
+    "2 1 decision name-b Name the shop $(calls_signal)" "the calls were not caught up on their own"
+  assert_equals "$(cat "$STATE/.status-fleet-state")" "$reading" "the worker reading was refreshed for a call"
+  assert_equals "$(cat "$CALLS")" "" "the canonical reader was asked about a worker for a call"
+  # Calls read for other ready work are never shown for this reading.
+  printf '%s' "$reading" | awk -F'\t' 'BEGIN { OFS = "\t" } { $NF = "green other"; print }' \
+    | tr -d '\n' > "$STATE/.status-fleet-state"
+  assert_equals "$(calls_frame | cut -f14,15 | tr '\t' ' ')" "decision pick-a" \
+    "calls read for other ready work were shown"
+  pass "fleet status: the owner's calls follow their signal between readings, without refreshing the workers"
+}
+
+# The calls-only refresh runs in a fresh shell, and must title the first call
+# just as the full fold does: from the task's recorded outcome when its backlog
+# row has no title.
+test_the_calls_only_fold_titles_a_call_from_its_recorded_outcome() {
+  local out
+  reset_state
+  fm_write_meta "$STATE/green.meta" kind=crew "outcome=Cups sorted by colour"
+  printf '## In flight\n\n## Queued\n\n## Done\n' > "$STATE/../data/backlog.md"
+  out=$(bash -c '. "$1/bin/fm-fleet-status-lib.sh"; _fm_fleet_calls_fold "$2" green' _ "$ROOT" "$STATE") \
+    || fail "the calls could not be folded"
+  assert_equals "$(printf '%s' "$out" | cut -f3-5 | tr '\t' ' ')" "merge green Cups sorted by colour" \
+    "the calls-only fold did not title the call from its outcome"
+  pass "fleet status: the calls-only fold titles a call from its recorded outcome"
+}
+
 test_finished_work_is_neither_working_nor_stopped
 test_under_load_the_last_good_reading_stands_in_for_unknown
 test_a_done_waits_on_the_captain_only_when_it_is_the_ready_report
@@ -940,3 +1039,6 @@ test_a_gone_worktree_is_stopped_without_probing_the_endpoint
 test_unproven_liveness_is_counted_in_neither_figure
 test_a_busy_worker_counts_as_alive_when_the_prober_cannot_answer
 test_a_resolved_pause_is_not_counted_as_paused
+test_every_command_that_changes_a_call_moves_the_calls_signal
+test_the_owners_calls_follow_their_signal_between_readings
+test_the_calls_only_fold_titles_a_call_from_its_recorded_outcome

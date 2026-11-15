@@ -18,6 +18,10 @@
 # All backlog reads and mutations address the active home's configured data
 # directory the way bin/fm-backlog-transition-lib.sh does, which keeps main-home
 # and secondmate-home ownership aligned with the work that discovered the call.
+# Every subcommand that may change a call (hold, answer, answers,
+# reconcile-requests, complete, reconcile) moves the owner's calls signal
+# (bin/fm-owner-calls-signal-lib.sh) as it exits, so the bridge strip and the
+# Factory pane show the next call at once.
 #
 # Usage:
 #   fm-captain-hold.sh hold <task-id> --reason <reason> \
@@ -275,6 +279,9 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 # shellcheck source=bin/fm-afk-contract.sh
 # shellcheck disable=SC1091
 . "$SCRIPT_DIR/fm-afk-contract.sh"
+# shellcheck source=bin/fm-owner-calls-signal-lib.sh
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/fm-owner-calls-signal-lib.sh"
 
 PARENT_HOLD_PUBLISHED=0
 publish_parent_hold() {  # <task-id> <occurrence> <verb> <note> [until-date]
@@ -305,7 +312,10 @@ captain_hold_cleanup() {
     CAPTAIN_CONTROL_LOCK_HELD=0
   fi
   fm_afk_contract_lock_release || true
+  # However it exits; the header names the subcommands.
+  [ "$OWNER_CALLS_MAY_CHANGE" = 0 ] || fm_owner_calls_touch "$STATE"
 }
+OWNER_CALLS_MAY_CHANGE=0
 trap captain_hold_cleanup EXIT
 
 usage() {
@@ -2374,6 +2384,9 @@ command_open() {  # <task-id> [--identity] [--distinguish-absent]
   exit 2
 }
 
+case "${1:-}" in
+  hold|answer|answers|reconcile-requests|complete|reconcile) OWNER_CALLS_MAY_CHANGE=1 ;;
+esac
 case "${1:-}" in
   hold) shift; command_hold "$@" ;;
   answer) shift; command_answer "$@" ;;

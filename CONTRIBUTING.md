@@ -44,7 +44,7 @@ See the [no-mistakes quick start](https://kunchenguid.github.io/no-mistakes/star
 
 ## Teams and add-ons
 
-How public Starship, a private team add-on and each person's own home fit together, and where each kind of change goes, is on [Working with Starship as a team](docs/teams-and-add-ons.md).
+How public Starship, a private add-on (your own or your team's) and each person's own home fit together, and where each kind of change goes, is on [Working with Starship as a team](docs/teams-and-add-ons.md).
 
 ## Agent-driven contributions
 

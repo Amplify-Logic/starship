@@ -80,6 +80,7 @@ A canonical read consults the validation pipeline and costs about a second per t
 So the fold runs out of band: a frame reads the cache and starts at most one detached refresh, under a claim that a second frame cannot take and that a refresher which died without writing releases on its own.
 The endpoint probe rides that same refresh, so it is bounded by the refresh's own wall-clock bound and costs a frame nothing.
 A frame never calls the canonical reader or probes an endpoint itself, and `bin/fm-backend.sh` is loaded only inside the fold rather than at render time.
+The owner's calls behind `waiting for you` are only a backlog read, so they are read again on their own whenever their change signal moves rather than at the fold's own pace.
 `bin/fm-fleet-status-lib.sh`'s header owns the exact cache lifetimes and their environment seams, and `bin/fm-status-cache-lib.sh` owns the cache and freshness mechanics it shares with the Codex metrics supply.
 
 ### The context sample and the handoff axis are separate decisions

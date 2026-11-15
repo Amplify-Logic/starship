@@ -812,6 +812,9 @@ origin = https://github.com/<owner>/starship-addon
 
 `path` is the add-on's checkout, absolute, under `~/`, or relative to the home; `origin` is what `bin/fm-addon.sh install` clones when that checkout is missing.
 With no `config/addon` a home behaves exactly as it does without add-ons.
+The first conversation with a new owner ([`first-voyage`](../.agents/skills/first-voyage/SKILL.md)) gives every home one: `bin/fm-addon.sh create` makes the owner a private repository on their own GitHub account from a minimal starter and writes `config/addon`, and `bin/fm-addon.sh guards` confirms the home cannot publish anything personal by mistake.
+A home that already names an add-on, such as a team's, keeps it.
+`bin/fm-addon.sh first-project` holds back a home's first project until it has an add-on, and adding a project asks it first, so a new owner's own repository always comes before their first project.
 
 An add-on keeps this repository's layout, so a tool moves between the two by moving its files:
 
@@ -822,7 +825,8 @@ An add-on keeps this repository's layout, so a tool moves between the two by mov
 `/updatefirstmate` ("update starship") fast-forwards the add-on from its origin with the same guards as the shared code and relinks its skills, and a remote second mate's home fast-forwards the add-on its own `config/addon` names.
 `bin/fm-home-port.sh` carries `config/addon` to another machine, clones the add-on during its one-command handoff, and fails `verify` while the checkout is missing, and `bin/fm-linux-setup.sh --addon <owner>/<repo>` names one on a new Linux machine.
 Personal tools that serve one home only, such as glasses tools or device configuration staging, live in that home's own add-on rather than here.
-Register the add-on as an ordinary project when workers should change it.
+The add-on is never registered automatically: rebuilding the project registry from the clones under `projects/` skips the checkout `bin/fm-addon.sh root` names.
+Register the add-on as an ordinary project when workers should change it; that is how an owner builds their own changes into it, and first setup may register a new owner's add-on this way.
 The add-on is home-local and is not inherited by secondmate homes, though its `leak-words` list reaches them inside the inherited word list.
 `bin/fm-addon.sh` owns the configuration, the hook points and their contract, and the install.
 
