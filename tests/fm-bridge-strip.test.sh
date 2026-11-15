@@ -14,6 +14,10 @@ set -u
 TMP_ROOT=$(fm_test_tmproot fm-bridge-strip)
 BINDIR="$TMP_ROOT/bin"
 mkdir -p "$BINDIR"
+# The owner's calls read the backlog through the tasks-axi adapter; this
+# stand-in serves the home's markdown rows.
+fm_install_markdown_tasks_axi "$TMP_ROOT/axibin"
+export PATH="$TMP_ROOT/axibin:$PATH"
 STRIP="$ROOT/bin/fm-bridge-strip.sh"
 
 E=$'\033'
@@ -74,7 +78,7 @@ reset_case() {
   FLEET_FIX="$TMP_ROOT/case$CASE/fleet"
   CONFIG_FIX="$TMP_ROOT/case$CASE/config"
   CALLS="$TMP_ROOT/case$CASE/calls"
-  mkdir -p "$HOME_FIX/state" "$FLEET_FIX"
+  mkdir -p "$HOME_FIX/state" "$HOME_FIX/data" "$FLEET_FIX"
   : > "$CALLS"
   export FM_FLEET_FIXTURE="$FLEET_FIX"
   battery_reading ''
@@ -83,6 +87,16 @@ reset_case() {
 task() {  # <id> <canonical line>
   fm_write_meta "$HOME_FIX/state/$1.meta" kind=crew
   printf '%s\n' "$2" > "$FLEET_FIX/$1"
+}
+
+# held <id> <title> [extra metadata]: a decision held for the owner, in the
+# home's backlog the way tasks-axi writes it. Only these light the red lamp.
+held() {
+  local file="$HOME_FIX/data/backlog.md"
+  mkdir -p "$HOME_FIX/data"
+  [ -e "$file" ] || printf '## In flight\n\n## Queued\n' > "$file"
+  printf -- '- [ ] %s - %s (repo: sample) (kind: captain) (hold: choose one) (hold-kind: captain)%s\n' \
+    "$1" "$2" "${3:+ $3}" >> "$file"
 }
 
 battery_reading() {  # <pmset -g batt output, or empty for a machine with none>
@@ -133,6 +147,7 @@ a_busy_fleet() {
   task asking 'state: parked · source: status-log · which of two designs'
   task green 'state: done · source: run-step · checks passed'
   task landed 'state: done · source: run-step · checks green: PR merged (ci monitor ended)'
+  held pick-design 'Which of two designs'
 }
 
 # --- the crew -----------------------------------------------------------------
@@ -157,12 +172,31 @@ test_a_fleet_lights_busy_decision_and_ready_lamps() {
 
 test_the_decision_lamp_counts_in_its_own_words() {
   reset_case
-  task asking 'state: parked · source: status-log · which of two designs'
-  task naming 'state: parked · source: status-log · what to call the release'
+  held pick-design 'Which of two designs'
+  held name-release 'What to call the release'
   assert_contains "$(frame 110 | plain)" '■ 2 decisions for you ' "two decisions in the long form"
   assert_contains "$(frame 60 | plain)" '■ 2 decisions ' "two decisions in the short form"
   assert_not_contains "$(frame 110 | plain)" 'waiting for you' "the strip reused the status bar's words for a different count"
   pass "bridge strip: the red lamp names decisions, never the status bar's waiting for you"
+}
+
+# On 2026-11-14 the strip lit the red lamp for workers' own questions, which
+# firstmate answers, while the owner's held decisions went uncounted. Only a
+# live held decision is his: a worker's question, an ask-user review finding, a
+# worker's pause and a hold deferred to a date light nothing red.
+test_only_the_owners_live_held_decisions_light_the_red_lamp() {
+  local out
+  reset_case
+  task asking 'state: parked · source: status-log · needs-decision: which of two designs'
+  task owed 'state: parked · source: run-step · parked at review: 1 finding(s) · ask-user: authority decision · run: r1'
+  task waiting 'state: paused · source: status-log · waiting on the carrier'
+  held later 'Revisit the release name' '(hold-until: 2099-01-01)'
+  out=$(frame 110 | plain)
+  assert_contains "$out" '■ 0 busy   ■ 0 decisions for you   ■ 0 ready to merge' \
+    "a question that is not the owner's lit the red lamp"
+  held pick-design 'Which of two designs'
+  assert_contains "$(frame 110 | plain)" '■ 1 decision for you ' "the owner's live held decision was not counted"
+  pass "bridge strip: only the owner's live held decisions light the red lamp"
 }
 
 test_an_idle_fleet_shows_unlit_lamps() {
@@ -191,7 +225,7 @@ test_a_last_good_reading_is_marked_with_its_age() {
   local out
   reset_case
   task typing 'state: working · source: pane · harness busy'
-  printf '400\t1\t0\t2\t0\t0\t3\tstale-signature\t1' > "$HOME_FIX/state/.status-fleet-state"
+  printf '400\t1\t0\t2\t0\t0\t3\tstale-signature\t1\tcalls' > "$HOME_FIX/state/.status-fleet-state"
   out=$(FM_FLEET_STATE_NO_CACHE=0 FM_FLEET_STATE_NOW=1000 READER="$BINDIR/absent-reader" frame 110 | plain)
   assert_contains "$out" '■ 3 busy   ■ 1 decision for you   ■ 2 ready to merge (10m ago)' \
     "a reading that is no longer current was not marked with its age"
@@ -458,6 +492,7 @@ test_remove_stops_only_its_own_strips_and_unlinks() {
 fm_test_run \
   test_a_fleet_lights_busy_decision_and_ready_lamps \
   test_the_decision_lamp_counts_in_its_own_words \
+  test_only_the_owners_live_held_decisions_light_the_red_lamp \
   test_an_idle_fleet_shows_unlit_lamps \
   test_an_unread_fleet_says_so_instead_of_zero \
   test_a_last_good_reading_is_marked_with_its_age \

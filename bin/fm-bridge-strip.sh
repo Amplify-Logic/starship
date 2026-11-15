@@ -115,9 +115,10 @@ TO_MERGE=0
 READING_AGE=0
 
 # read_crew: the fleet reading, folded into the three lamps the strip shows.
-# Busy is a worker typing plus work the validation pipeline is carrying,
-# decisions for you are what a human owes, and ready to merge is the rest of
-# what waits on the owner: a PR or branch ready to land.
+# Busy is a worker typing plus work the validation pipeline is carrying. The
+# other two lamps are the owner's calls (fm_owner_calls, the same count the
+# Factory pane and the tap page show): decisions for you are his live held
+# decisions, and ready to merge is the rest, a PR or branch ready to land.
 read_crew() {  # <home>
   local reading records working stopped validating paused attention ready
   local known age decisions

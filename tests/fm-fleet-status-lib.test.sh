@@ -12,6 +12,10 @@ set -u
 TMP_ROOT=$(fm_test_tmproot fm-fleet-status-lib)
 BINDIR="$TMP_ROOT/bin"
 mkdir -p "$BINDIR"
+# The owner's calls read the backlog through the tasks-axi adapter; this
+# stand-in serves each case's markdown rows.
+fm_install_markdown_tasks_axi "$TMP_ROOT/axibin"
+export PATH="$TMP_ROOT/axibin:$PATH"
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 
@@ -94,7 +98,7 @@ reset_state() {
   STATE="$TMP_ROOT/case$FLEET_CASE/state"
   FLEET_FIX="$TMP_ROOT/case$FLEET_CASE/fleet"
   CALLS="$TMP_ROOT/case$FLEET_CASE/calls"
-  mkdir -p "$STATE" "$FLEET_FIX"
+  mkdir -p "$STATE" "$STATE/../data" "$FLEET_FIX"
   export FM_FLEET_FIXTURE="$FLEET_FIX"
 }
 
@@ -594,12 +598,15 @@ test_finished_work_is_neither_working_nor_stopped() {
   pass "fleet status: finished work waits on the captain or on nobody, never working or stopped"
 }
 
-# `parked` alone does not say who owes the answer. Only a status-log
-# needs-decision or a gate carrying the reader's whole human-decision component
-# waits on the captain; every other gate is the worker's or firstmate's turn and
-# reads as working or stopped by liveness alone. Either way a parked task is not
-# done, so a worker lost while it waits is still counted stopped.
-test_only_a_decision_a_human_owes_waits_on_the_captain() {
+# `parked` alone does not say who owes the answer. A status-log needs-decision
+# and a gate carrying the reader's whole human-decision component (an ask-user
+# review finding) are questions put to firstmate, which ask-user-authority gives
+# it to answer, so they need firstmate to act and never wait on the captain: on
+# 2026-11-14 the bridge strip counted them as his decisions. Every other gate is
+# the worker's or firstmate's turn and reads as working or stopped by liveness
+# alone. Either way a parked task is not done, so a worker lost while it waits
+# is still counted stopped.
+test_a_workers_question_needs_firstmate_not_the_captain() {
   local out
   reset_state
   mkdir -p "$TMP_ROOT/case$FLEET_CASE/wt"
@@ -617,46 +624,175 @@ test_only_a_decision_a_human_owes_waits_on_the_captain() {
   out=$(FM_FLEET_STATE_NO_CACHE=1 FM_FLEET_STATE_PROBE="$BINDIR/fake-probe" \
     FM_FLEET_STATE_READER="$BINDIR/fake-crew-state" counts)
   # records working stopped validating paused attention ready known
-  [ "$out" = $'5\t2\t2\t0\t0\t0\t2\t1\t0' ] \
-    || fail "parked gates were not split by who owes the answer: $(printf '%s' "$out" | tr '\t' ' ')"
-  pass "fleet status: only a decision a human owes waits on the captain, and a lost parked worker is stopped"
+  [ "$out" = $'5\t2\t2\t0\t0\t2\t0\t1\t0' ] \
+    || fail "a worker's question was not counted as firstmate's to act on: $(printf '%s' "$out" | tr '\t' ' ')"
+  pass "fleet status: a worker's question or an ask-user finding needs firstmate, never the captain, and a lost parked worker is stopped"
+}
+
+# backlog_row <line>: append one row to this case's backlog, the home that owns
+# $STATE, in the markdown shape tasks-axi writes.
+backlog_row() {
+  local file="$STATE/../data/backlog.md"
+  mkdir -p "$STATE/../data"
+  [ -e "$file" ] || printf '## In flight\n\n## Queued\n\n## Done\n' > "$file"
+  python3 - "$file" "$1" <<'PY2'
+import sys
+path, row = sys.argv[1], sys.argv[2]
+text = open(path).read()
+before, after = text.split("## Done\n", 1)
+if row.startswith("- [x]"):
+    after = after + row + "\n"
+else:
+    before = before.rstrip("\n") + "\n" + row + "\n\n"
+open(path, "w").write(before + "## Done\n" + after)
+PY2
+}
+
+# The owner's calls are one list: every held decision that waits on him now,
+# and every PR or ready branch waiting for the merge word whose task carries no
+# open captain hold and is not finished work. An aged undated hold, a hold
+# deferred to a date and one waiting on other work are never counted, and ready
+# work under any of those holds is no merge call either.
+test_the_owners_calls_are_live_decisions_and_ready_merges() {
+  local out
+  reset_state
+  task green crew 'state: done · source: run-step · checks passed'
+  task gated crew 'state: done · source: run-step · checks passed'
+  task landed crew 'state: done · source: run-step · checks passed'
+  task asked crew 'state: parked · source: status-log · needs-decision: pick a schema'
+  task deferred crew 'state: done · source: run-step · checks passed'
+  backlog_row '- [ ] pick-a - Pick a colour (repo: r) (kind: captain) (hold: choose red or blue) (hold-kind: captain)'
+  backlog_row '- [ ] gated - Gated work (repo: r) (kind: ship) (hold: merge only after the launch call) (hold-kind: captain)'
+  backlog_row '- [ ] later - Revisit later (repo: r) (kind: captain) (hold: later) (hold-kind: captain) (hold-until: 2099-01-01)'
+  backlog_row '- [ ] waits - After other work (repo: r) (kind: captain) (blocked-by: other) (hold: after other) (hold-kind: captain)'
+  backlog_row '- [ ] other - The other work (repo: r) (kind: ship)'
+  backlog_row '- [ ] stale - An old call (repo: r) (kind: captain) (since 2020-01-01) (hold: old) (hold-kind: captain)'
+  backlog_row '- [ ] deferred - Merge after the release (repo: r) (kind: ship) (hold: merge after the release) (hold-kind: captain) (hold-until: 2099-01-01)'
+  backlog_row '- [ ] parked - Parked for later (repo: r) (kind: ship) (hold: someday) (hold-kind: future)'
+  backlog_row '- [x] landed - Landed work (repo: r) (kind: ship) (done 2026-11-01)'
+
+  out=$(FM_FLEET_STATE_READER="$BINDIR/fake-crew-state" \
+    bash -c '. "$1/bin/fm-fleet-status-lib.sh"; fm_owner_calls "$2"' _ "$ROOT" "$STATE") \
+    || fail "the owner's calls could not be read"
+  assert_equals "$(printf 'decision\tpick-a\ndecision\tgated\nmerge\tgreen')" \
+    "$out" "the owner's calls"
+
+  out=$(FM_FLEET_STATE_NO_CACHE=1 FM_FLEET_STATE_READER="$BINDIR/fake-crew-state" \
+    bash -c '. "$1/bin/fm-fleet-status-lib.sh"; fm_fleet_status_counts "$2" decisions' _ "$ROOT" "$STATE")
+  # records working stopped validating paused attention ready known age decisions
+  [ "$out" = $'5\t0\t0\t0\t0\t1\t3\t1\t0\t2' ] \
+    || fail "the fold did not count the owner's calls: $(printf '%s' "$out" | tr '\t' ' ')"
+
+  # A caller that already read the buckets and the backlog passes them in, and
+  # gets the same calls without a second read.
+  printf 'green\tready\ngated\tready\nlanded\tready\ndeferred\tready\nasked\tdecision\n' > "$STATE/../buckets"
+  FM_HOME="$STATE/.." FM_STATE_OVERRIDE="$STATE" bash "$ROOT/bin/fm-fleet-snapshot.sh" --backlog > "$STATE/../backlog.json" \
+    || fail "the backlog snapshot failed"
+  out=$(FM_FLEET_STATE_READER="$BINDIR/no-such-crew-state" \
+    bash -c '. "$1/bin/fm-fleet-status-lib.sh"; fm_owner_calls "$2" "$3" "$4"' _ "$ROOT" "$STATE" \
+    "$STATE/../buckets" "$STATE/../backlog.json") || fail "the owner's calls from given readings failed"
+  assert_equals "$(printf 'decision\tpick-a\ndecision\tgated\nmerge\tgreen')" \
+    "$out" "the owner's calls from given readings"
+
+  # A task the reader cannot answer for makes no list at all.
+  task lost crew 'state: done · source: run-step · checks passed'
+  rm -f "$FLEET_FIX/lost"
+  if FM_FLEET_STATE_READER="$BINDIR/fake-crew-state" \
+    bash -c '. "$1/bin/fm-fleet-status-lib.sh"; fm_owner_calls "$2"' _ "$ROOT" "$STATE" >/dev/null; then
+    fail "a task that could not be read still gave a list of calls"
+  fi
+  pass "fleet status: the owner's calls are his live held decisions and the ready merges no captain hold holds, nothing else"
+}
+
+# A home whose backlog is not markdown (here Beads, answered by a stand-in for
+# tasks-axi) keeps its calls: the held decisions come through the adapter, with
+# the same live rule, and a backlog the adapter cannot read is no list at all.
+test_the_owners_calls_come_through_a_non_markdown_adapter() {
+  local out dir stamp
+  reset_state
+  dir="$TMP_ROOT/case$FLEET_CASE/beads-axi"
+  mkdir -p "$dir"
+  printf 'backend = "beads"\n' > "$STATE/../.tasks.toml"
+  stamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  task green crew 'state: done · source: run-step · checks passed'
+  task held-work crew 'state: done · source: run-step · checks passed'
+  cat > "$dir/tasks-axi" <<SH
+#!/usr/bin/env bash
+[ -z "\${TASKS_AXI_FILE:-}" ] || exit 3
+[ ! -e "$STATE/../list-fails" ] || [ "\$1" != list ] || exit 1
+case "\$1" in
+  list)
+    printf 'count: 5 of 5 total\n'
+    printf 'tasks[5]{id,state,kind,repo,title,hold_kind,hold_reason,hold_until,blocked_by}:\n'
+    printf '  beads-call,queued,captain,r,"Pick a colour, red or blue",captain,"choose red or blue",-,none\n'
+    printf '  held-work,in_flight,ship,r,"Held work",captain,"merge after the call",-,none\n'
+    printf '  old-call,queued,captain,r,"An old call",captain,"old",-,none\n'
+    printf '  waits,queued,captain,r,"After other work",captain,"after other",-,other\n'
+    printf '  other,queued,ship,r,"The other work",-,-,-,none\n'
+    printf 'help[1]:\n  - Run \`tasks-axi show <id> --full\` for full notes on a task\n'
+    ;;
+  show)
+    case "\$2" in
+      old-call) printf 'task:\n  id: old-call\n  created: 2020-01-01\n  body: ""\n' ;;
+      *) printf 'task:\n  id: %s\n  created: 2026-01-01\n  body: "Captain hold set: $stamp\\\\nwhy"\n' "\$2" ;;
+    esac
+    ;;
+esac
+SH
+  chmod +x "$dir/tasks-axi"
+  out=$(PATH="$dir:$PATH" FM_FLEET_STATE_READER="$BINDIR/fake-crew-state" \
+    bash -c '. "$1/bin/fm-fleet-status-lib.sh"; fm_owner_calls "$2"' _ "$ROOT" "$STATE") \
+    || fail "the owner's calls could not be read through a non-markdown adapter"
+  assert_equals "$(printf 'decision\tbeads-call\ndecision\theld-work\nmerge\tgreen')" "$out" \
+    "the owner's calls through a non-markdown adapter"
+  touch "$STATE/../list-fails"
+  if PATH="$dir:$PATH" FM_FLEET_STATE_READER="$BINDIR/fake-crew-state" \
+    bash -c '. "$1/bin/fm-fleet-status-lib.sh"; fm_owner_calls "$2"' _ "$ROOT" "$STATE" >/dev/null; then
+    fail "a backlog the adapter could not read still gave a list of calls"
+  fi
+  pass "fleet status: the owner's calls come through a non-markdown adapter, and an unreadable backlog is no list"
 }
 
 # The bridge strip shows "decisions for you" and "ready to merge" as two lamps, so
 # it asks for the decisions inside ready as a tenth field. The status bar's nine
-# fields are unchanged, and a reading taken before the field existed is never
-# split by guesswork.
+# fields are unchanged, and a reading taken before the owner's calls supplied
+# the split is never split by guesswork.
 test_decisions_are_counted_apart_inside_ready() {
   local out now=1000
   reset_state
   task asked crew 'state: parked · source: status-log · needs-decision: pick a schema'
-  task owed crew 'state: parked · source: run-step · parked at review: 1 finding(s) · ask-user: authority decision · run: r1'
   task green crew 'state: done · source: run-step · checks passed'
+  backlog_row '- [ ] pick-a - Pick a colour (repo: r) (kind: captain) (hold: choose red or blue) (hold-kind: captain)'
 
   out=$(FM_FLEET_STATE_NO_CACHE=1 FM_FLEET_STATE_READER="$BINDIR/fake-crew-state" counts)
-  [ "$out" = $'3\t0\t0\t0\t0\t0\t3\t1\t0' ] \
+  [ "$out" = $'2\t0\t0\t0\t0\t1\t2\t1\t0' ] \
     || fail "the status bar's fields changed shape: $(printf '%s' "$out" | tr '\t' ' ')"
   out=$(FM_FLEET_STATE_NO_CACHE=1 FM_FLEET_STATE_READER="$BINDIR/fake-crew-state" \
     bash -c '. "$1/bin/fm-fleet-status-lib.sh"; fm_fleet_status_counts "$2" decisions' _ "$ROOT" "$STATE")
-  [ "$out" = $'3\t0\t0\t0\t0\t0\t3\t1\t0\t2' ] \
+  [ "$out" = $'2\t0\t0\t0\t0\t1\t2\t1\t0\t1' ] \
     || fail "the decisions inside ready were not counted apart: $(printf '%s' "$out" | tr '\t' ' ')"
 
-  # A cached reading from before the field: still good for the status bar, no
-  # reading at all for a caller that needs the split, and refreshed at once.
-  bash -c '
-    . "$1/bin/fm-fleet-status-lib.sh"
-    printf "%s\t0\t0\t0\t0\t0\t3\t%s" "$3" "$(_fm_fleet_ids "$2" | _fm_fleet_signature)"
-  ' _ "$ROOT" "$STATE" "$now" > "$STATE/.status-fleet-state"
-  out=$(FM_FLEET_STATE_NOW=$now FM_FLEET_STATE_READER="$BINDIR/no-such-crew-state" \
-    bash -c '. "$1/bin/fm-fleet-status-lib.sh"; fm_fleet_status_counts "$2" decisions' _ "$ROOT" "$STATE")
-  [ "$out" = $'3\t0\t0\t0\t0\t0\t0\t0\t0\t0' ] \
-    || fail "a reading from before the split was split by guesswork: $(printf '%s' "$out" | tr '\t' ' ')"
-  [ -e "$STATE/.status-fleet-state.refreshing" ] \
-    || fail "a reading from before the split did not start a refresh"
-  rm -f "$STATE/.status-fleet-state.refreshing"
-  out=$(FM_FLEET_STATE_NOW=$now FM_FLEET_STATE_READER="$BINDIR/no-such-crew-state" counts)
-  [ "$out" = $'3\t0\t0\t0\t0\t0\t3\t1\t0' ] \
-    || fail "a reading from before the split was lost to the status bar: $(printf '%s' "$out" | tr '\t' ' ')"
+  # Cached readings from before the split, and from before the owner's calls
+  # supplied it: still good for the status bar, no reading at all for a caller
+  # that needs the split, and refreshed at once.
+  local old
+  for old in '' $'\t2'; do
+    bash -c '
+      . "$1/bin/fm-fleet-status-lib.sh"
+      printf "%s\t0\t0\t0\t0\t0\t3\t%s%s" "$3" "$(_fm_fleet_ids "$2" | _fm_fleet_signature)" "$4"
+    ' _ "$ROOT" "$STATE" "$now" "$old" > "$STATE/.status-fleet-state"
+    rm -f "$STATE/.status-fleet-state.refreshing"
+    out=$(FM_FLEET_STATE_NOW=$now FM_FLEET_STATE_READER="$BINDIR/no-such-crew-state" \
+      bash -c '. "$1/bin/fm-fleet-status-lib.sh"; fm_fleet_status_counts "$2" decisions' _ "$ROOT" "$STATE")
+    [ "$out" = $'2\t0\t0\t0\t0\t0\t0\t0\t0\t0' ] \
+      || fail "a reading from before the split was split by guesswork: $(printf '%s' "$out" | tr '\t' ' ')"
+    [ -e "$STATE/.status-fleet-state.refreshing" ] \
+      || fail "a reading from before the split did not start a refresh"
+    rm -f "$STATE/.status-fleet-state.refreshing"
+    out=$(FM_FLEET_STATE_NOW=$now FM_FLEET_STATE_READER="$BINDIR/no-such-crew-state" counts)
+    [ "$out" = $'2\t0\t0\t0\t0\t0\t3\t1\t0' ] \
+      || fail "a reading from before the split was lost to the status bar: $(printf '%s' "$out" | tr '\t' ' ')"
+  done
   pass "fleet status: decisions are counted apart inside ready, and an older reading is never split by guesswork"
 }
 
@@ -781,7 +917,9 @@ test_under_load_the_last_good_reading_stands_in_for_unknown() {
 test_finished_work_is_neither_working_nor_stopped
 test_under_load_the_last_good_reading_stands_in_for_unknown
 test_a_done_waits_on_the_captain_only_when_it_is_the_ready_report
-test_only_a_decision_a_human_owes_waits_on_the_captain
+test_a_workers_question_needs_firstmate_not_the_captain
+test_the_owners_calls_are_live_decisions_and_ready_merges
+test_the_owners_calls_come_through_a_non_markdown_adapter
 test_decisions_are_counted_apart_inside_ready
 test_canonical_states_fold_into_the_six_fields
 test_records_are_counted_apart_from_live_workers

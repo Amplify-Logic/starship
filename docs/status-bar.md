@@ -36,9 +36,9 @@ Each word maps to one figure from `bin/fm-fleet-status-lib.sh`:
 | `working` | working | Tasks whose recorded endpoint has an agent running on it right now and that no other figure claims. This is the headline, because it answers how many workers are busy for the captain. |
 | `checking` | validating | Tasks the validation pipeline is carrying. They are progressing, but no worker is typing at them. |
 | `waiting` | paused | Tasks in a declared bounded external wait. |
-| `waiting for you` | ready | Work that waits on the captain: a PR ready for review or merge, a ready branch awaiting the merge word, or a decision a human owes. |
-| `needs a look` | attention | Tasks that need Firstmate to act: a blocker or a failure. |
-| `stopped` | stopped | Records still here whose worker is not: the endpoint is proven dead or absent, or the recorded worktree is gone. Done work is never counted here, because a worker that exits once its work is done is not a lost worker; a decision is not done, so its lost worker is. |
+| `waiting for you` | ready | The owner's calls: decisions held for the captain that wait on him now, plus PRs and ready branches waiting for the merge word. It is the same count the bridge strip, the Factory pane, and the tap page show. |
+| `needs a look` | attention | Tasks that need Firstmate to act: a blocker, a failure, or a question a worker or the checks put to Firstmate. |
+| `stopped` | stopped | Records still here whose worker is not: the endpoint is proven dead or absent, or the recorded worktree is gone. Done work is never counted here, because a worker that exits once its work is done is not a lost worker; a worker waiting on a question is not done, so its lost worker is. |
 
 The library's record count, which counts ordinary task records rather than workers, is shown only when no other count is, as `N tasks, state unknown`, so a record the reading could not classify never reads as an idle fleet.
 
@@ -47,15 +47,16 @@ Counting `state/*.meta` files as running workers, and folding each status log's 
 Folding the reconciled current state fixed what the numbers SAID about the work, and still left the captain without the one number he was asking for: on 2026-09-21 fifteen records rendered while ten of them had a dead endpoint or a worktree that was already gone.
 So the group now leads with the agents that are actually running and gives the records whose worker is gone a figure of their own.
 
-`checking`, `waiting`, `waiting for you`, and `needs a look` come from `bin/fm-crew-state.sh`, the canonical current-state reader, folded by `bin/fm-fleet-status-lib.sh`.
+`checking`, `waiting`, `waiting for you`, and `needs a look` come from `bin/fm-crew-state.sh`, the canonical current-state reader, folded by `bin/fm-fleet-status-lib.sh`; `waiting for you` also reads the backlog's held decisions, through the home's configured tasks-axi adapter, in that library's `fm_owner_calls`, which owns what counts as one of the owner's calls.
 That library selects no run and re-implements no attribution; run selection stays with the canonical reader, and the fold never reads a status log's last line.
 The distinction between a busy worker and `checking` is the reader's SOURCE, not its state word: `working · run-step` is the pipeline carrying a task, and `working · pane` is a worker busy on one.
-`waiting for you` covers a `done` the captain acts on, and a `parked` the reader says a human owes: a status-log needs-decision, or a gate line carrying the reader's whole `ask-user: authority decision` component.
+`waiting for you` covers a captain hold that `bin/fm-fleet-snapshot.sh` classifies as `live` (its `captain_actionable`, the test the bearings Captain's Call uses), and a `done` the captain acts on, unless that task carries any open captain hold or its work item is done.
+A `parked` task whose worker waits on an answer - a status-log needs-decision, or a gate line carrying the reader's whole `ask-user: authority decision` component - is Firstmate's to answer, so it counts in `needs a look`; on 2026-11-14 the bridge strip counted those as the captain's decisions.
 A `done` the captain acts on is a pipeline (`run-step`) verdict on a PR, or a worker's status-log `done` that `fm_dod_should_gate_ship_done` in `bin/fm-dod-lib.sh` reads as the ready report: a green PR, or a ready branch or PR in a mode whose `done` is the delivery itself.
 Any other status-log `done`, such as a scout report Firstmate reads first, is Firstmate's turn and counts in no figure, because no worker is busy on it and nothing waits on the captain: on 2026-10-25 the row read `1 waiting for you` for a ship that had no PR yet.
 A no-mistakes build committed and handed off before validation reads `blocked` from the canonical reader, a handoff waiting for the pipeline trigger, so it counts under `needs a look` as Firstmate's turn and never as `waiting for you`.
 Any other `parked` gate is the worker's or Firstmate's turn and claims no figure, so it counts as `working` or `stopped` by liveness alone; a `done` whose PR was merged or closed waits on nobody and counts in no figure at all.
-`needs a look` covers `blocked` and `failed`, which are the states that need Firstmate rather than time.
+`needs a look` covers `blocked`, `failed`, and a worker's question, which are the states that need Firstmate rather than time.
 
 ### Live agents and stopped records
 
@@ -67,7 +68,7 @@ The order of proof, which `bin/fm-fleet-status-lib.sh` owns in full, is: a remot
 Everything else - an unreadable endpoint, an unverified backend, a record with no endpoint at all - stays unknown and is counted in neither figure, because overstating either side is the failure this whole supply exists to prevent.
 A live agent is still not a busy one: on 2026-10-25 the row read `2 working` while one of the two workers had a green PR and sat idle until the captain gave the merge word.
 So every other figure claims its task first, and `working` counts only a live agent on a task none of them claimed, idle or busy.
-Done work spends no endpoint probe at all, because its worker is never a lost one; a decision is still probed, so a worker lost while it waits is counted `stopped`.
+Done work spends no endpoint probe at all, because its worker is never a lost one; a worker's question is still probed, so a worker lost while it waits is counted `stopped`.
 
 The six live fields are a single reading and share a single fate.
 A reading that is past its maximum age, or taken for a different set of tasks, is the last good reading rather than a current one: its counts are shown followed by a dim age such as `(10m ago)`, and a refresh is started at once.

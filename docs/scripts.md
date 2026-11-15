@@ -218,7 +218,7 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-account-lib.sh`      | Shared named-account resolution, derived `data/accounts/<vendor>/<name>` homes, and the missing/logged-out/wrong-seat launch gate |
 | `fm-status-bar.sh`       | Render the canonical guarded primary status bar on native surfaces and on tmux or herdr companion panes (docs/status-bar.md) |
 | `fm-cursor-statusline.sh` | Opt-in install, status, and exact-restore uninstall of Firstmate's status line in Cursor CLI's own user config (docs/status-bar.md) |
-| `fm-fleet-status-lib.sh`  | Fold `fm-crew-state.sh` and the endpoint classifier into the status row's working/validating/paused/attention/ready/stopped counts, and on request the decisions inside ready, out of band and cached (docs/status-bar.md) |
+| `fm-fleet-status-lib.sh`  | Fold `fm-crew-state.sh` and the endpoint classifier into the status row's working/validating/paused/attention/ready/stopped counts, and on request the decisions inside ready, out of band and cached; `fm_owner_calls` is the one list of the owner's calls behind the status row, the bridge strip, the Factory pane, and the tap page (docs/status-bar.md) |
 | `fm-bridge-strip.sh`     | Install, show, run, and remove the read-only Starship bridge strip across the top of a Herdr workspace: wordmark, crew lamps, and battery (docs/bridge-strip.md) |
 | `fm-factory-pane.sh`     | Install, show, run, and remove the Factory pane, every factory at a glance in a Herdr pane (docs/factory-pane.md) |
 | `fm-factory.py`          | Build the factory record (`--data`, `--plain`), draw the live Factory pane, and open a factory's own tab with live copies of its workers (docs/factory-pane.md) |
@@ -228,7 +228,7 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-startup-memory-budget.sh` | Validate and report the bounded startup-memory allowance and current usage |
 | `fm-backlog-handoff.sh`  | Validate and delegate queued backlog-item moves into a secondmate home               |
 | `fm-decision-surface.sh` | Render, poll, and route the private loopback Lavish surface over captain decisions   |
-| `fm-tap-desk.sh`         | Export held decisions and ready merges as phone tap cards, route the taps through the captain-hold and PR-merge paths, and apply the seven-day easy-to-undo default |
+| `fm-tap-desk.sh`         | Export the owner's calls as phone tap cards, read each held decision's options and recommendation (`shapes`), route the taps through the captain-hold and PR-merge paths, and apply the seven-day easy-to-undo default |
 | `fm-read.sh`             | Render a Markdown path or task report as a private loopback Lavish reading page      |
 | `fm-chart-room.sh`       | Serve the private read-only chart room: fleet home, per-project goal maps, rendered fresh on every request (docs/chart-room.md) |
 | `fm-bridge-view.sh`      | Serve the captain's phone-first fleet glance, the `/deck` Action Deck page, the `/machines` page, photo drop, and hold-to-speak on loopback behind Tailscale Serve (docs/bridge-view.md) |

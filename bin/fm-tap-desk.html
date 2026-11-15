@@ -242,9 +242,12 @@
     host.append(details);
   }
   const when = data.generated_at ? new Date(data.generated_at).toLocaleString() : "";
-  document.getElementById("lede").textContent = cards.length === 0
+  // owner_calls is the one count the bridge strip and the Factory pane show too:
+  // every card here plus each call named under "Not on this page".
+  const calls = Number.isInteger(data.owner_calls) ? data.owner_calls : cards.length + notShown.length;
+  document.getElementById("lede").textContent = calls === 0
     ? "Nothing is waiting on you."
-    : `${merges.length + decisions.length} waiting${when ? ` · cards from ${when}` : ""}. One tap answers a card; a reason is optional.`;
+    : `${calls} waiting on you${when ? ` · cards from ${when}` : ""}. One tap answers a card; a reason is optional.`;
 
   (async () => {
     const timer = setTimeout(() => status("Your earlier taps cannot be read yet; new taps may still save."), 10000);

@@ -18,7 +18,11 @@ mkdir -p "$BINDIR"
 FACTORY="$ROOT/bin/fm-factory.py"
 PANE="$ROOT/bin/fm-factory-pane.sh"
 NOW=1794643200   # 2026-11-14T08:00:00Z
-export TZ=UTC FM_FACTORY_NOW=$NOW FM_FACTORY_PEEK=
+export TZ=UTC FM_FACTORY_NOW=$NOW FM_FACTORY_PEEK='' FM_SNAPSHOT_NOW=2026-11-14T08:00:00Z
+# The owner's calls read the backlog through the tasks-axi adapter; this
+# stand-in serves each case's fixture backlog (FM_TEST_AXI_BACKLOG).
+fm_install_markdown_tasks_axi "$TMP_ROOT/axibin"
+export PATH="$TMP_ROOT/axibin:$PATH"
 
 # A stand-in inbox: `note` records its arguments and body, `receipts` answers
 # with the notes recorded so far, the shape bin/fm-inbox.sh receipts prints.
@@ -73,10 +77,18 @@ exit 0
 SH
 chmod +x "$BINDIR/herdr"
 
-# edit-world drop <task> | rekey <old> <new> | reask <task> <key> <at>: change
-# the fleet while the pane runs (a task leaves, the same task asks a new
-# question, or asks the same question again later), then refresh the record
-# the way the background refresh does.
+# A stand-in for bin/fm-tap-desk.sh shapes: the options and recommendation each
+# held decision's tap card shows, from the case's fixture file.
+cat > "$BINDIR/shapes" <<'SH'
+#!/usr/bin/env bash
+cat "$FM_HOME/shapes.json"
+SH
+chmod +x "$BINDIR/shapes"
+export FM_FACTORY_SHAPES="$BINDIR/shapes"
+
+# edit-world drop <task> | reask <task> <at>: change the fleet while the pane
+# runs (a task leaves, or its held question is held again later), then refresh
+# the record the way the background refresh does.
 cat > "$BINDIR/edit-world" <<SH
 #!/usr/bin/env bash
 python3 - "\$FM_FACTORY_SNAPSHOT" "\$@" <<'PY'
@@ -86,11 +98,17 @@ world = json.load(open(path))
 if how == "drop":
     world["tasks"] = [t for t in world["tasks"] if t["id"] != args[0]]
 elif how == "reask":
-    task = next(t for t in world["tasks"] if t["id"] == args[0])
-    with open(task["paths"]["status_log"]["path"], "a") as log:
-        log.write("needs-decision [at=%s] [key=%s]: asked again\n" % (args[2], args[1]))
-else:
-    world = json.loads(json.dumps(world).replace(args[0], args[1]))
+    import os, time
+    stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(int(args[1])))
+    for row in world["backlog"]["records"]:
+        if row["id"] == args[0]:
+            row["hold_set"] = stamp
+    shapes_path = os.path.join(os.path.dirname(path), "shapes.json")
+    shapes = json.load(open(shapes_path))
+    for shape in shapes["decisions"]:
+        if shape["id"] == args[0]:
+            shape["held_since"], shape["identity"] = stamp, stamp + "#0"
+    json.dump(shapes, open(shapes_path, "w"))
 json.dump(world, open(path, "w"))
 PY
 exec python3 "$FACTORY" refresh
@@ -106,6 +124,7 @@ reset_case() {
   : > "$CALLS"
   export FM_HOME="$HOME_FIX" FM_FACTORY_TEST_CALLS="$CALLS" FM_FACTORY_TEST_NOTES="$TMP_ROOT/case$CASE/notes"
   export FM_FACTORY_SNAPSHOT="$HOME_FIX/snapshot.json" FM_FACTORY_TEST_CONFIG="$TMP_ROOT/case$CASE/config"
+  export FM_TEST_AXI_BACKLOG="$HOME_FIX/snapshot.json"
   unset FM_FACTORY_TEST_NO_TAB FM_FACTORY_TEST_TAB_GONE HERDR_BIN_PATH HERDR_PANE_ID HERDR_TAB_ID \
     HERDR_WORKSPACE_ID HERDR_SOCKET_PATH
 }
@@ -148,7 +167,7 @@ MD
 write_world() {
   write_projects
   python3 - "$HOME_FIX" "$NOW" "${1:-}" <<'PY'
-import json, os, sys
+import json, os, sys, time
 home, now, quiet = sys.argv[1], int(sys.argv[2]), sys.argv[3] == "quiet"
 state = os.path.join(home, "state")
 
@@ -199,20 +218,39 @@ tasks.append(task("shop-images", ("blocked", "status-log"), "cannot reach the im
                   lines=["blocked [at=%d]: cannot reach the image store" % (now - 1200)]))
 rows.append(row("shop-images", "Sharper cup photos", "sample-shop"))
 tasks.append(task("shop-labels", ("paused", "status-log"), "waiting on the carrier until 2026-11-14T09:30Z",
-                  "sample-shop"))
+                  "sample-shop",
+                  lines=["paused [at=%d]: waiting on the carrier until 2026-11-14T09:30Z" % (now - 900)]))
 rows.append(row("shop-labels", "Print shipping labels", "sample-shop"))
+# A review finding the checks put to Starship (ask-user) is the checks' work.
+tasks.append(task("shop-coupons", ("parked", "run-step"),
+                  "parked at review: 1 finding(s) · ask-user: authority decision · run: r7", "sample-shop",
+                  started=now - 20 * 60,
+                  lines=["needs-decision [at=%d] [key=nm-r7-review]: ask-user findings=f1" % (now - 600)]))
+rows.append(row("shop-coupons", "Gift cards at checkout", "sample-shop"))
 tasks.append(task("shop-old", ("unknown", "none"), "worktree gone (torn down?)", "sample-shop"))
 rows.append(row("shop-old", "Old banner swap", "sample-shop"))
 rows.append(row("shop-gift", "Gift wrap at checkout", "sample-shop", "queued"))
 rows.append(row("shop-reviews", "Reviews under each cup", "sample-shop", "queued"))
 rows.append(row("shop-later", "Discount codes", "sample-shop", "queued", hold_kind="future",
                 hold_reason="after the holidays"))
+# The worker asked Starship, and Starship held the question for the owner:
+# only the held decision is his.
 summary = ("The harvest chart can open on this week or this season. "
            "Options: 1 this week (recommended), 2 this season, 3 both side by side. See /tmp/x/report.md")
+asked_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - 3 * 3600))
 tasks.append(task("garden-chart", ("parked", "status-log"), summary, "garden-journal",
-                  lines=["needs-decision [at=%d] [key=chart-range]: %s" % (now - 3 * 3600, summary)],
+                  lines=["needs-decision [at=%d] [key=chart-range]: %s" % (now - 4 * 3600, summary)],
                   decisions=[{"key": "chart-range", "verb": "needs-decision", "summary": summary}]))
-rows.append(row("garden-chart", "Harvest chart", "garden-journal"))
+rows.append(row("garden-chart", "Harvest chart", "garden-journal", captain_actionable=True, hold_kind="captain",
+                hold_bucket="live", hold_set=asked_at, hold_reason=summary))
+# A worker's own question Starship answers: never the owner's.
+tasks.append(task("recipe-search", ("parked", "status-log"), "needs-decision: index titles only?", "recipe-box",
+                  lines=["needs-decision [at=%d] [key=index]: index titles only?" % (now - 1800)],
+                  decisions=[{"key": "index", "verb": "needs-decision", "summary": "index titles only?"}]))
+rows.append(row("recipe-search", "Search recipes", "recipe-box"))
+tasks.append(task("garden-water", ("failed", "status-log"), "the reminder test failed", "garden-journal",
+                  lines=["failed [at=%d]: the reminder test failed" % (now - 40 * 60)]))
+rows.append(row("garden-water", "Garden reminders", "garden-journal"))
 tasks.append(task("garden-share", ("done", "status-log"), "PR https://example.invalid/g/pull/12 ready",
                   "garden-journal", mode="direct-PR", pr="https://example.invalid/g/pull/12",
                   lines=["done [at=%d]: PR https://example.invalid/g/pull/12 ready" % (now - 109 * 60)]))
@@ -223,8 +261,29 @@ rows.append(row("recipe-start", "Calmer start screen", "recipe-box", "done",
                 completion={"verb": "merged", "date": "2026-11-14"}))
 rows.append(row("shop-provider", "Which payment provider for the shop", "sample-shop", "queued", kind="captain",
                 captain_actionable=True, hold_kind="captain", hold_bucket="live", hold_set="2026-11-13T23:00:00Z",
-                hold_reason="Saved cards need a provider. Options: A the current one, B a cheaper new one, "
-                            "C wait until after the holidays."))
+                hold_reason="Saved cards need a provider."))
+# An undated decision past the aging threshold no longer waits on the owner.
+rows.append(row("recipe-units", "Metric or cups in the recipes", "garden-journal", "queued", kind="captain",
+                captain_actionable=False, hold_kind="captain", hold_bucket="aged", hold_set="2026-10-01T09:00:00Z",
+                hold_reason=None))
+# A decision deferred to a date is not the owner's call until then.
+rows.append(row("shop-tax", "Charge tax abroad", "sample-shop", "queued", kind="captain",
+                hold_kind="captain", hold_bucket="dated", hold_set="2026-11-12T09:00:00Z",
+                hold_reason="Ask again next month.", hold_until="2026-12-01"))
+shapes = {"schema": "fm-tap-shapes.v1", "not_shown": [], "decisions": [
+    {"id": "garden-chart", "identity": asked_at + "#0", "title": "Harvest chart", "question": summary,
+     "options": ["this week", "this season", "both side by side"], "recommended_option": "this week",
+     "recommendation": "this week", "held_since": asked_at},
+    # Its options were recorded with fm-tap-desk.sh mark; its reason names none.
+    {"id": "shop-provider", "identity": "2026-11-13T23:00:00Z#0", "title": "Which payment provider for the shop",
+     "question": "Saved cards need a provider.",
+     "options": ["the current one", "a cheaper new one", "wait until after the holidays"],
+     "recommended_option": "", "recommendation": "Stay with the current one until the holidays are over.",
+     "held_since": "2026-11-13T23:00:00Z"},
+    {"id": "recipe-units", "identity": "2026-10-01T09:00:00Z#0", "title": "Metric or cups in the recipes",
+     "question": "", "options": [], "recommended_option": "", "recommendation": "",
+     "held_since": "2026-10-01T09:00:00Z"}]}
+json.dump(shapes, open(os.path.join(home, "shapes.json"), "w"), indent=1)
 json.dump({"schema": "fm-fleet-snapshot.v1", "generated": "2026-11-14T08:00:00Z", "tasks": tasks,
            "backlog": {"records": rows}}, open(os.path.join(home, "snapshot.json"), "w"), indent=1)
 PY
@@ -244,12 +303,16 @@ test_the_record_words_every_state() {
   write_world
   take_record
   assert_equals "$(q .schema)" "fm-factory.v1" "schema"
-  assert_equals "$(q .count_line)" "2 jobs running · 3 need you · 1 idle" "count line"
+  assert_equals "$(q .count_line)" "3 jobs running · 3 need you · 1 idle" "count line"
   assert_equals "$(q '[.factories[] | .name] | join(",")')" "Sample Shop,Garden Journal,Recipe Box" "factories"
   local shop='.factories[] | select(.id == "sample-shop") | .jobs[]'
   assert_equals "$(q "[$shop | \"\(.id)=\(.state)/\(.step // \"-\")\"] | join(\" \")")" \
-    "shop-search=running/building shop-checkout=running/checking shop-provider=waiting on you/- shop-images=stuck/- shop-labels=waiting/- shop-old=stopped/- shop-gift=next/- shop-reviews=later/- shop-later=on hold/-" \
+    "shop-search=running/building shop-checkout=running/checking shop-coupons=running/checking shop-provider=waiting on you/- shop-images=stuck/- shop-labels=waiting/- shop-old=stopped/- shop-gift=next/- shop-reviews=later/- shop-later=on hold/- shop-tax=on hold until 2026-12-01/-" \
     "every shop job state is a word"
+  assert_equals "$(q "$shop | select(.id == \"shop-coupons\") | .doing")" "answering the 1 point the checks found" \
+    "a review finding the checks put to Starship is the checks' work"
+  assert_equals "$(q '.factories[] | select(.id == "recipe-box") | .jobs[] | select(.id == "recipe-search") | .state')" \
+    "with Starship" "a worker's own question is Starship's to answer"
   assert_equals "$(q "$shop | select(.id == \"shop-search\") | .doing")" "running the search tests: 41 of 58 passed" \
     "a stated step is the doing sentence"
   assert_equals "$(q "$shop | select(.id == \"shop-search\") | .sign_of_life_from")" "a turn" "sign of life source"
@@ -257,19 +320,26 @@ test_the_record_words_every_state() {
     "the checks say what they are doing"
   assert_equals "$(q "$shop | select(.id == \"shop-labels\") | .until")" "1794648600" "a wait says when it tries again"
   assert_equals "$(q '[.needs_you[] | "\(.id):\(.kind)"] | join(" ")')" \
-    "garden-chart:question shop-provider:question garden-share:finished work" "needs you, questions first"
+    "garden-chart:question shop-provider:question garden-share:finished work" \
+    "needs you is the owner's calls, questions first"
   assert_equals "$(q '.needs_you[0].options | map("\(.key) \(.label) \(.suggested)") | join("; ")')" \
-    "1 this week true; 2 this season false; 3 both side by side false" "options are parsed with the suggestion"
-  assert_equals "$(q '.needs_you[0].why')" "The harvest chart can open on this week or this season. See" \
-    "the why keeps no path"
-  assert_equals "$(q '.needs_you[0].suggested_by')" "the crew" "a worker's suggestion is the crew's"
-  assert_equals "$(q '.needs_you[1].options | map(.key) | join("")')" "ABC" "lettered options"
+    "1 this week true; 2 this season false; 3 both side by side false" "the card's options with its suggestion"
+  assert_equals "$(q '.needs_you[0].why')" "The harvest chart can open on this week or this season." \
+    "the why keeps no option list and no path"
+  assert_equals "$(q '.needs_you[0].suggested_by')" "Starship" "the suggestion is Starship's"
+  assert_equals "$(q '.needs_you[1].options | map(.label) | join(", ")')" \
+    "the current one, a cheaper new one, wait until after the holidays" "options recorded with the tap desk's mark"
+  assert_equals "$(q '.needs_you[1].recommendation')" "Stay with the current one until the holidays are over." \
+    "a recommendation that is no option is still shown"
+  assert_equals "$(q '[.needs_you[] | select(.id == "recipe-units")] | length')" "0" \
+    "an aged hold is not the owner's call, as the bearings Captain's Call reads it"
   assert_equals "$(q '.needs_you[2].pr')" "https://example.invalid/g/pull/12" "finished work names its change"
   assert_equals "$(q '[.needs_you[].for] | unique | join(",")')" "you" "every waiting item names who it is for"
   assert_equals "$(q '.factories[] | select(.id == "recipe-box") | "\(.state) \(.idle_since)"')" "idle 1794636000" \
     "an idle factory knows since when"
   assert_equals "$(q '[.feed[] | "\(.word)|\(.actor)"] | join(" ")')" \
-    "stuck|Sample Shop finished|Garden Journal finished|Recipe Box asked you|Garden Journal" "the feed, newest first"
+    "failed|Garden Journal PR ready|Garden Journal finished|Recipe Box asked you|Garden Journal landed|Recipe Box asked you|Sample Shop" \
+    "the feed, newest first: outcomes and the owner's calls only"
   pass "factory record: every state is a word, needs you is ordered, the feed reads newest first"
 }
 
@@ -279,10 +349,13 @@ test_the_plain_screen_is_the_record_as_text() {
   write_world
   local out
   out=$(python3 "$FACTORY" --plain --width 92) || fail "--plain failed"
-  assert_contains "$out" " S T A R S H I P  │  2 jobs running  ·  3 need you  ·  1 idle" "count line"
+  assert_contains "$out" " S T A R S H I P  │  3 jobs running  ·  3 need you  ·  1 idle" "count line"
   assert_equals "$(printf '%s\n' "$out" | grep -F ' ▸ ● ' | tr -s ' ')" \
-    " ▸ ● Harvest chart: a question for you Garden Journal · waiting 3 h" "the cursor starts on the first question"
-  assert_contains "$out" "       1  this week  · the crew suggests this" "suggested option"
+    " ▸ ● Harvest chart Garden Journal · waiting 3 h" "the cursor starts on the first question"
+  assert_contains "$out" "       1  this week  · Starship suggests this" "suggested option"
+  assert_contains "$out" "       Starship suggests: Stay with the current one until the holidays are over." \
+    "a recommendation of its own"
+  assert_not_contains "$out" "None" "a missing value printed as None"
   assert_contains "$out" "       t  Talk it through" "talk it through"
   assert_contains "$out" "       ✓ planning ••••• ▸ building •••••   checking ·····   ready for you" "four steps"
   assert_contains "$out" "       running the search tests: 41 of 58 passed" "doing this minute"
@@ -291,12 +364,19 @@ test_the_plain_screen_is_the_record_as_text() {
   has_line "$out" " next Gift wrap at checkout · then 2 more" "next in line"
   has_line "$out" " Recipe Box idle since 06:00 · nothing in line Starship steers" "an idle factory is one row"
   has_line "$out" " 06:00 Recipe Box finished Calmer start screen is finished." "feed row"
+  has_line "$out" " 06:11 Garden Journal PR ready Share a garden page as a picture has its PR ready." "a PR ready row"
+  local feed
+  feed=$(printf '%s\n' "$out" | sed -n '/SINCE YOU LAST LOOKED/,$p')
+  assert_not_contains "$feed" "tries again" "a worker's pause reached the feed"
+  assert_not_contains "$feed" "Search recipes" "a worker's own question reached the feed"
+  assert_not_contains "$feed" "Gift cards" "a review finding Starship decides reached the feed"
+  assert_not_contains "$feed" "stuck" "a blocker reached the feed"
   assert_contains "$out" " ↑↓ move · 1/2/3 answer · enter open · t talk · s who steers · q quit" "keys"
   out=$(python3 "$FACTORY" --plain --width 92 --factory sample-shop) || fail "--plain --factory failed"
   assert_contains "$out" " RULES THIS CREW FOLLOWS" "rules heading"
   assert_contains "$out" "   · Anything that touches payments waits for your yes." "a rule"
   assert_contains "$out" "   12 Nov  Search results read better with the price on the first line." "a lesson"
-  has_line "$out" " · 1 on hold" "held work folds into a count"
+  has_line "$out" " · 2 on hold" "held work folds into a count"
   pass "factory record: the plain screen carries every state as a word"
 }
 
@@ -332,6 +412,78 @@ test_a_changing_pane_is_a_sign_of_life() {
   pass "factory record: a worker's pane text changing is a sign of life; a first sight is not"
 }
 
+# Ready work the owner re-held until a later date is no call of his until then:
+# its job reads as on hold, and it is not under NEEDS YOU.
+test_ready_work_held_until_a_date_is_not_ready_for_you() {
+  reset_case
+  write_registry
+  write_world
+  local snap
+  snap=$(jq '(.backlog.records[] | select(.id == "garden-share")) += {hold_kind: "captain", hold_bucket: "dated",
+    hold_reason: "Merge after the release.", hold_set: "2026-11-13T09:00:00Z", hold_until: "2026-12-01"}' \
+    "$FM_FACTORY_SNAPSHOT") || fail "could not hold the ready work"
+  printf '%s\n' "$snap" > "$FM_FACTORY_SNAPSHOT"
+  take_record
+  assert_equals "$(q '.factories[] | .jobs[] | select(.id == "garden-share") | "\(.state)|\(.step // "-")"')" \
+    "on hold until 2026-12-01|-" "ready work held until a date read as ready for the owner"
+  assert_equals "$(q '[.needs_you[] | select(.id == "garden-share")] | length')" "0" \
+    "ready work held until a date is under NEEDS YOU"
+  assert_equals "$(q .count_line)" "3 jobs running · 2 need you · 1 idle" "count line"
+  pass "factory record: ready work the owner held until a date reads on hold, not ready for you"
+}
+
+# A home whose backlog is not markdown has no rows in the snapshot's markdown
+# read; its held decisions still reach NEEDS YOU through the tasks-axi adapter.
+test_held_decisions_come_through_a_non_markdown_adapter() {
+  reset_case
+  write_registry
+  write_world
+  jq '.backlog' "$FM_FACTORY_SNAPSHOT" > "$HOME_FIX/adapter-backlog.json"
+  jq '.backlog = {path: "data/backlog.md", present: false, records: []}' "$FM_FACTORY_SNAPSHOT" \
+    > "$HOME_FIX/snapshot.next" && mv "$HOME_FIX/snapshot.next" "$FM_FACTORY_SNAPSHOT"
+  export FM_TEST_AXI_BACKLOG="$HOME_FIX/adapter-backlog.json"
+  take_record
+  assert_equals "$(q '[.needs_you[] | "\(.id):\(.kind)"] | join(" ")')" \
+    "garden-chart:question shop-provider:question garden-share:finished work" \
+    "the adapter's held decisions are not under NEEDS YOU"
+  assert_equals "$(q .counts.need_you)" "3" "the adapter's held decisions are not counted"
+  # The adapter backlog may carry no hold time; the tap shapes' held_since,
+  # written with milliseconds, still says how long the decision has waited.
+  jq '(.records[] | select(.id == "shop-provider")) |= del(.hold_set)' "$FM_TEST_AXI_BACKLOG" \
+    > "$HOME_FIX/adapter.next" && mv "$HOME_FIX/adapter.next" "$FM_TEST_AXI_BACKLOG"
+  jq '(.decisions[] | select(.id == "shop-provider")).held_since = "2026-11-13T23:00:00.000Z"' "$HOME_FIX/shapes.json" \
+    > "$HOME_FIX/shapes.next" && mv "$HOME_FIX/shapes.next" "$HOME_FIX/shapes.json"
+  take_record
+  assert_equals "$(q '.needs_you[] | select(.id == "shop-provider") | .since')" "1794610800" \
+    "a held_since with milliseconds lost the decision's waiting time"
+  # Ready work held there until a date reads on hold, exactly as on a markdown home.
+  local held
+  held=$(jq '(.records[] | select(.id == "garden-share")) += {hold_kind: "captain", hold_reason: "Merge after the release.",
+    hold_set: "2026-11-13T09:00:00Z", hold_until: "2026-12-01"}' "$FM_TEST_AXI_BACKLOG") || fail "could not hold the ready work"
+  printf '%s\n' "$held" > "$FM_TEST_AXI_BACKLOG"
+  take_record
+  assert_equals "$(q '.factories[] | .jobs[] | select(.id == "garden-share") | .state')" "on hold until 2026-12-01" \
+    "ready work held until a date on a non-markdown backlog lost its held word"
+  assert_equals "$(q '[.needs_you[] | .id] | join(" ")')" "garden-chart shop-provider" \
+    "ready work held until a date on a non-markdown backlog is under NEEDS YOU"
+  pass "factory record: held decisions on a non-markdown backlog reach NEEDS YOU through the adapter"
+}
+
+# A ship spawned without a mode records no mode= at all; its ready report is
+# still the ready report, read as the status bar reads an empty mode.
+test_a_ship_with_no_mode_still_reports_its_pr_ready() {
+  reset_case
+  write_registry
+  write_world
+  printf 'kind=ship\nyolo=off\nspawn_gen=s%d.1.1\n' $((NOW - 1800)) > "$HOME_FIX/state/garden-share.meta"
+  printf 'done [at=%d]: PR https://example.invalid/g/pull/12 checks green\n' $((NOW - 109 * 60)) \
+    > "$HOME_FIX/state/garden-share.status"
+  take_record
+  assert_equals "$(q '[.feed[] | select(.job == "garden-share") | .word] | join(",")')" "PR ready" \
+    "a ship with no mode lost its ready report"
+  pass "factory feed: a ship with no recorded mode still reports its PR ready"
+}
+
 test_without_a_registry_each_project_is_a_factory() {
   reset_case
   write_world
@@ -352,7 +504,7 @@ test_work_no_factory_claims_is_still_shown() {
   sed -i.bak 's/^projects: garden-journal$/projects: something-else/' "$HOME_FIX/data/factories.md"
   take_record
   assert_equals "$(q '.factories[] | select(.id == "other-work") | [.jobs[].id] | join(",")')" \
-    "garden-chart,garden-share" \
+    "garden-chart,garden-share,garden-water,recipe-units" \
     "unclaimed work lands in Other work"
   pass "factory registry: work no factory claims is shown under Other work"
 }
@@ -389,7 +541,17 @@ for key in sys.argv[2:] + ["q"]:
         continue
     os.write(fd, {"ENTER": b"\r", "DOWN": b"\x1b[B", "ESC": b"\x1b"}.get(key, key.encode()))
     drain(0.35)
-os.waitpid(pid, 0)
+# Keep reading the pty while the pane exits, so its last writes never block.
+end = time.time() + 15
+while True:
+    done, _ = os.waitpid(pid, os.WNOHANG)
+    if done:
+        break
+    if time.time() >= end:
+        os.kill(pid, 9)
+        os.waitpid(pid, 0)
+        sys.exit("drive_keys: the pane did not exit after q")
+    drain(0.5)
 PY
 }
 
@@ -399,7 +561,7 @@ test_writing_keys_go_through_the_inbox_and_act_on_the_highlighted_row() {
   write_world
   drive_keys 2 ENTER
   assert_equals "$(jq -r .request_id "$FM_FACTORY_TEST_NOTES")" \
-    "factory.garden-journal.answer.garden-chart.chart-range.$((NOW - 3 * 3600)).2" \
+    "factory.garden-journal.answer.garden-chart.$((NOW - 3 * 3600)).2" \
     "the answer acts on the highlighted question"
   assert_contains "$(jq -r .body "$FM_FACTORY_TEST_NOTES")" "Answer for Harvest chart: 2 this season" "answer body"
   : > "$FM_FACTORY_TEST_NOTES"
@@ -422,25 +584,19 @@ test_a_note_reaches_starship_through_the_real_inbox() {
   (unset FM_FACTORY_INBOX; drive_keys 2 ENTER)
   local note
   note=$(cat "$HOME_FIX"/state/inbox/*.note 2>/dev/null)
-  assert_contains "$note" "request_id=factory.garden-journal.answer.garden-chart.chart-range.$((NOW - 3 * 3600)).2" \
+  assert_contains "$note" "request_id=factory.garden-journal.answer.garden-chart.$((NOW - 3 * 3600)).2" \
     "the note is saved under its id"
   assert_contains "$note" "Answer for Harvest chart: 2 this season" "the note carries the answer"
   (unset FM_FACTORY_INBOX; drive_keys 2 ENTER)
   assert_equals "$(find "$HOME_FIX/state/inbox" -maxdepth 1 -name '*.note' | wc -l | tr -d ' ')" "1" \
     "the same answer twice is one note"
-  "$BINDIR/edit-world" reask garden-chart chart-range $((NOW - 600)) >/dev/null || fail "edit-world failed"
+  "$BINDIR/edit-world" reask garden-chart $((NOW - 600)) >/dev/null || fail "edit-world failed"
   (unset FM_FACTORY_INBOX; drive_keys 2 ENTER)
   assert_equals "$(find "$HOME_FIX/state/inbox" -maxdepth 1 -name '*.note' | wc -l | tr -d ' ')" "2" \
     "the same question asked again later is a new note"
   assert_contains "$(cat "$HOME_FIX"/state/inbox/*.note)" \
-    "request_id=factory.garden-journal.answer.garden-chart.chart-range.$((NOW - 600)).2" \
+    "request_id=factory.garden-journal.answer.garden-chart.$((NOW - 600)).2" \
     "the new note names when the question was asked again"
-  "$BINDIR/edit-world" rekey chart-range chart-colour >/dev/null || fail "edit-world failed"
-  (unset FM_FACTORY_INBOX; drive_keys 2 ENTER)
-  assert_equals "$(find "$HOME_FIX/state/inbox" -maxdepth 1 -name '*.note' | wc -l | tr -d ' ')" "3" \
-    "a new question from the same task is a new note"
-  assert_contains "$(cat "$HOME_FIX"/state/inbox/*.note)" \
-    "request_id=factory.garden-journal.answer.garden-chart.chart-colour.2" "the new note names the new question"
   pass "factory pane: an answer is a captain inbox note, saved once per question under its request id"
 }
 
@@ -461,7 +617,7 @@ test_the_highlight_and_open_boxes_follow_the_record() {
   assert_absent "$HOME_FIX/state/factory/steer.log" "keys typed into the box never steer"
   assert_contains "$(cat "$screen")" "Bigger picturesq2k" "the pane still runs and the box keeps every typed key"
   assert_contains "$(cat "$screen")" "This was settled elsewhere, so nothing will be sent" "the box says why"
-  drive_keys 2 "SH:$BINDIR/edit-world reask garden-chart chart-range $((NOW - 600))" ENTER
+  drive_keys 2 "SH:$BINDIR/edit-world reask garden-chart $((NOW - 600))" ENTER
   assert_equals "$(cat "$FM_FACTORY_TEST_NOTES")" "" "a pending answer closes when its question is asked again"
   pass "factory pane: the highlight stays on its row; a talk box whose row left keeps its text and sends nothing"
 }
@@ -598,6 +754,9 @@ fm_test_run \
   test_the_plain_screen_is_the_record_as_text \
   test_a_job_with_no_sign_of_life_reads_quiet \
   test_a_changing_pane_is_a_sign_of_life \
+  test_ready_work_held_until_a_date_is_not_ready_for_you \
+  test_held_decisions_come_through_a_non_markdown_adapter \
+  test_a_ship_with_no_mode_still_reports_its_pr_ready \
   test_without_a_registry_each_project_is_a_factory \
   test_work_no_factory_claims_is_still_shown \
   test_writing_keys_go_through_the_inbox_and_act_on_the_highlighted_row \

@@ -13,9 +13,9 @@ The [factory registry](configuration.md#factory-registry-datafactoriesmd) names 
 
  NEEDS YOU
 
- ▸ ● Harvest chart: a question for you                        Garden Journal · waiting 3 h
+ ▸ ● Harvest chart                                            Garden Journal · waiting 3 h
        The harvest chart can open on this week or this season.
-       1  this week  · the crew suggests this
+       1  this week  · Starship suggests this
        2  this season
        3  both side by side
        t  Talk it through
@@ -34,21 +34,27 @@ The [factory registry](configuration.md#factory-registry-datafactoriesmd) names 
 
  SINCE YOU LAST LOOKED   since 03:46
 
-   12:36    Garden Journal  asked you  Harvest chart has a question for you.
-   13:57    Garden Journal  finished   Share a garden page as a picture is finished.
+   12:36    Garden Journal  asked you  Harvest chart needs your call.
+   13:57    Garden Journal  PR ready   Share a garden page as a picture has its PR ready.
 
  ↑↓ move · 1/2/3 answer · enter open · t talk · s who steers · q quit
 ```
 
 - The count line is the bridge strip's look: running jobs, what needs you, idle factories, and the time.
 - NEEDS YOU comes first, across all factories, questions before finished work.
-  A question shows its why in one or two lines, its options when the question wrote them as `Options: 1 ..., 2 ...` or `A ..., B ...`, who suggests one, and what it holds up.
+  It lists exactly the owner's calls, the one count the bridge strip and the tap page also show: each decision held for the owner that waits on him now (not aged, deferred to a date, or waiting on other work), and each PR or ready branch waiting for the merge word whose task carries no open captain hold.
+  `fm_owner_calls` in `bin/fm-fleet-status-lib.sh` owns that count.
+  A worker's question and an ask-user review finding go to Starship, which answers them or holds them for the owner, so they never appear here; their jobs read `with Starship` or are still in the checks.
+  A question shows its why in one or two lines, the options and suggestion its tap card carries (`bin/fm-tap-desk.sh shapes`, including any recorded with `fm-tap-desk.sh mark`), and what it holds up.
+  A question with no options recorded shows only its plain words and `Talk it through`.
   The first two and the highlighted one open in full; the rest stay one line each so a long list still leaves room for the floor.
 - RIGHT NOW lists each factory with who steers it.
   A running job shows its title, how long it has run, the four steps (planning, building, checking, ready for you), and what it is doing this minute.
   A job with no sign of life for 15 minutes says `quiet for N min, no sign of life` instead, and its light stops moving.
   An idle factory is one faint row.
 - SINCE YOU LAST LOOKED is one rolling list since the pane was last closed: the time, who acted (a factory, Starship, or you), one word, and a sentence.
+  It holds outcomes (`finished`, `PR ready`, `landed`, `failed`), the owner's own calls as they were held (`asked you`), and what the owner and Starship said; a worker's pause, a blocker, and a question a worker put to Starship never appear.
+  A ship's `done` is an outcome only when it is the ready report, so a build handed into the checks is not listed as finished.
 
 Colour only repeats what the words already say: cyan is where you are, amber is work under way, green is done, red is waiting for you.
 
@@ -96,7 +102,7 @@ The record's schema is `fm-factory.v1`:
 | --- | --- |
 | `as_of`, `since` | When the record was built and the start of SINCE YOU LAST LOOKED, as UTC times and epochs. |
 | `counts`, `count_line` | Running jobs, items that need you, and idle factories. |
-| `needs_you[]` | Each question or finished work: its `id`, `factory`, `kind`, `title`, `ask`, `why`, `options[]` (`key`, `label`, `suggested`), `suggested_by`, `holds_up[]`, `since`, `pr`, `for`, the person it waits on, and a worker question's decision `key`. |
+| `needs_you[]` | Each of the owner's calls: its `id`, `factory`, `kind` (`question` or `finished work`), `title`, `ask`, `why`, `options[]` (`key`, `label`, `suggested`), `suggested_by`, a `recommendation` that is not one of the options, `holds_up[]`, `since`, `pr`, and `for`, the person it waits on. |
 | `factories[]` | Each factory: `id`, `name`, `about`, `projects`, `steered_by`, `state`, `idle_since`, `crew`, `needs` (the ids of its items in `needs_you`), `jobs[]`, `next`, `rules`, `learned`, and `talk`. |
 | `factories[].jobs[]` | Each job: `id`, `title`, `kind`, `state`, `step`, `started`, `doing` and where it came from, `last_sign_of_life` and where it came from, `quiet`, `until`, and `pr`. |
 | `feed[]` | Each event: `at` (or a `date` when only the day is known), `actor`, `factory`, `word`, and `text`. |
@@ -107,13 +113,15 @@ Every state is a word: a job is `running`, `waiting on you`, `ready for you`, `s
 
 | Part | Source |
 | --- | --- |
-| Jobs, decisions, finished work, the work list | `bin/fm-fleet-snapshot.sh --json`, the canonical fleet reading |
+| Jobs, finished work, the work list | `bin/fm-fleet-snapshot.sh --json`, the canonical fleet reading, plus each captain hold the tasks-axi adapter reads that the snapshot's markdown backlog lacks |
 | Each job's state word | `fm_fleet_status_bucket` in `bin/fm-fleet-status-lib.sh`, the same fold the status bar and bridge strip count with |
+| What needs you | `fm_owner_calls` in `bin/fm-fleet-status-lib.sh`, over the backlog as the home's tasks-axi adapter reads it (`bin/fm-fleet-snapshot.sh --axi-backlog`) and those state words |
+| A question's options and suggestion | `bin/fm-tap-desk.sh shapes`, the reading its tap card shows |
 | Which factory a job belongs to | Its work item's project, through the factory registry |
 | How long a job has run | Its spawn time in the task's metadata |
 | What a job is doing this minute | The worker's stated step, else the checks' own state, else `at work, no step reported yet` |
 | The last sign of life | The newest of the worker's turn times (`state/<id>.busy-state`), its last finished turn, its last status line, its stated step, and the last time its pane text was seen to change |
-| The feed | The `[at=]` times on status lines, completed work items, the who-steers log, and the owner's own notes and Starship's replies from the inbox |
+| The feed | The `[at=]` times on `done` and `failed` status lines, when each of the owner's calls was held, completed work items, the who-steers log, and the owner's own notes and Starship's replies from the inbox |
 | Rules and what it has learned | The factory registry |
 
 The pane text check reads each running worker's pane through `bin/fm-peek.sh` once per record and remembers when it last changed in `state/factory/activity.json`.
@@ -144,3 +152,4 @@ To show the pane beside another pane later, bind the plugin's `starship.factory.
 ## Verification
 
 `tests/fm-factory.test.sh` builds a fixture home of sample factories and a fixture fleet reading, and checks the record and the plain screen word for word, the quiet job, the registry fallback, the writing keys pressed in the real live view, and the Herdr calls behind the factory tab and the plugin against a stand-in Herdr.
+`tests/fm-tap-desk.test.sh` checks on one real backlog that the bridge strip, this pane, and the tap page show the same count of the owner's calls, and that the pane shows a question's recorded options.

@@ -26,6 +26,7 @@ Keep one tap page per home: a private claude.ai artifact whose link is recorded 
 3. Re-export and republish whenever the set of waiting cards changes: a new hold, a PR that became ready, or after routing taps.
    Send the captain the link once, and afterwards only when new cards are waiting, in one plain line rather than a question.
 
+The page carries exactly the owner's calls, the same count the bridge strip and the Factory pane show; a hold that is aged, deferred to a date, or waiting on other work gets no card until it waits on him again (`bin/fm-tap-desk.sh` header owns the rule).
 Only a PR the fleet reader calls ready (green, not validating, not needing attention) gets a merge card. A PR that is ready to merge goes on the page instead of into a chat question; the captain-facing line names the PR's full URL and says it is waiting on the tap page.
 
 ## Reading taps
@@ -52,7 +53,7 @@ A tap with a reason also leaves a rule candidate in `data/learnings.md`; curate 
 ## The seven-day default
 
 Once a day, and at the first heartbeat after a long gap, run `bin/fm-tap-desk.sh defaults`, then `defaults --apply` when it lists anything due.
-It answers only decisions marked easy to undo for the current question that waited seven days and carry a recorded recommendation, and the script refuses the rest, including any the captain deferred with `--until`.
+It answers only decisions the page cards, marked easy to undo for the current question, that waited seven days and carry a recorded recommendation, and the script refuses the rest, including any the captain deferred with `--until`.
 Tell the captain each `defaulted:` line in the next natural reply: what was decided and that it can be undone, so the captain is never surprised by a default.
 
 ## Marking a decision easy to undo

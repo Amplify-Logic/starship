@@ -127,6 +127,10 @@
 # --backlog prints only the canonical backlog object above, with no task, worker,
 # or cross-home reads, for readers such as bin/fm_voice_records.py that need the
 # same role and hold_bucket classification without paying for a full snapshot.
+# --axi-backlog prints that backlog object read through the configured tasks-axi
+# adapter rather than data/backlog.md, with the same classification, for
+# bin/fm-fleet-status-lib.sh fm_owner_calls; it fails when the backlog cannot be
+# read.
 # Compatibility: JSON is the primary machine-readable surface.
 # Human views must render this output instead of parsing state files again.
 set -u
@@ -248,6 +252,7 @@ usage() {
 usage: fm-fleet-snapshot.sh --json
        fm-fleet-snapshot.sh --secondmate-home-summary
        fm-fleet-snapshot.sh --backlog
+       fm-fleet-snapshot.sh --axi-backlog
 
 Print a structured snapshot of the firstmate fleet.
 JSON is the stable machine-readable output contract. The default snapshot
@@ -258,6 +263,11 @@ without worker observations or cross-home collection.
 
 --backlog emits the canonical local backlog object only, with the same
 current_role and hold_bucket classification, and reads no task or other home.
+
+--axi-backlog emits the same backlog object read through the home's configured
+tasks-axi adapter (bin/fm-tasks-axi.sh) instead of data/backlog.md, so a
+non-markdown backlog keeps its rows, with the same hold classification; it
+fails when that backlog cannot be read.
 
 --secondmate-home-summary emits the bounded structured summary used after a
 validated registered-home handoff. It is local-only, skips nested secondmate
@@ -309,6 +319,7 @@ case "${1:---json}" in
   --secondmate-home-summary) OUTPUT_MODE=secondmate-home-summary ;;
   --contribution-input) OUTPUT_MODE=contribution-input ;;
   --backlog) OUTPUT_MODE=backlog ;;
+  --axi-backlog) OUTPUT_MODE='axi-backlog' ;;
   -h|--help) usage; exit 0 ;;
   *) usage >&2; exit 2 ;;
 esac
@@ -399,6 +410,53 @@ first_pr_url_in_file() {  # <file>
   grep -Eo 'https?://[^[:space:])"]+/pull/[0-9]+' "$1" 2>/dev/null | head -1
 }
 
+# The one captain-hold classifier: unresolved blockers, current_role,
+# hold_age_days, hold_bucket, and captain_actionable for every structured record
+# of a backlog object. The markdown parse below and the adapter read
+# (axi_backlog_json) both end in it, so a hold reads the same whichever way the
+# backlog was read.
+# shellcheck disable=SC2016  # jq program text: its $names are jq variables.
+HOLD_CLASSIFY_JQ_DEFS='
+    def timestamp_epoch($d):
+      if ($d | type) != "string" then null
+      elif ($d | test("T")) then try ($d | fromdateiso8601) catch null
+      else try (($d + "T00:00:00Z") | fromdateiso8601) catch null end;
+    def days_between($from; $to):
+      (timestamp_epoch($from)) as $a
+      | (timestamp_epoch($to)) as $b
+      | if $a == null or $b == null then null
+        else (($b - $a) / 86400 | floor) end;
+    def classify_holds($today; $now; $age_days):
+      .records as $records
+      | (reduce ($records[] | select(.structured)) as $record ({};
+           .[$record.id] = ((.[$record.id] // true) and ($record.state == "done")))) as $resolved_ids
+      | .records |= map(
+          if .structured then
+            . as $record
+            | .unresolved_blocker_ids = [
+                $record.blocked_by_ids[] as $blocker
+                | select($resolved_ids[$blocker] != true)
+                | $blocker
+              ]
+            | .current_role =
+                (if .state == "in_flight" and .hold_reason != null and .hold_kind != null then "held"
+                 elif .state == "in_flight" and .kind == "program" then "program"
+                 elif .state == "in_flight" then "worker"
+                 elif .state == "queued" then "queued"
+                 else "done" end)
+            | .requires_child_metadata = (.current_role == "worker")
+            | .hold_age_days = days_between((.hold_set // .since); $now)
+            | .hold_bucket =
+                (if .hold_kind != "captain" or .hold_reason == null or .state == "done" then null
+                 elif (.unresolved_blocker_ids | length) > 0 then "blocked"
+                 elif .hold_until != null and .hold_until > $today then "dated"
+                 elif .hold_until == null and .hold_age_days != null
+                      and .hold_age_days >= $age_days then "aged"
+                 else "live" end)
+            | .captain_actionable = (.hold_bucket == "live")
+          else . end);
+'
+
 # Isolate this read-only projection from the fleet collector's shell state.
 backlog_json() (  # [<backlog-path>] - defaults to this home's $BACKLOG
   local backlog=${1:-$BACKLOG}
@@ -410,17 +468,8 @@ backlog_json() (  # [<backlog-path>] - defaults to this home's $BACKLOG
   set -o pipefail
   # shellcheck disable=SC2094
   jq -Rn --arg path "$backlog" --arg today "$SNAPSHOT_TODAY" --arg now "$SNAPSHOT_NOW" \
-    --argjson age_days "$FM_SNAPSHOT_UNDATED_HOLD_AGE_DAYS" '
+    --argjson age_days "$FM_SNAPSHOT_UNDATED_HOLD_AGE_DAYS" "$HOLD_CLASSIFY_JQ_DEFS"'
     def trim: gsub("^[[:space:]]+|[[:space:]]+$"; "");
-    def timestamp_epoch($d):
-      if ($d | type) != "string" then null
-      elif ($d | test("T")) then try ($d | fromdateiso8601) catch null
-      else try (($d + "T00:00:00Z") | fromdateiso8601) catch null end;
-    def days_between($from; $to):
-      (timestamp_epoch($from)) as $a
-      | (timestamp_epoch($to)) as $b
-      | if $a == null or $b == null then null
-        else (($b - $a) / 86400 | floor) end;
     def section_state:
       if . == "In flight" then "in_flight"
       elif . == "Queued" then "queued"
@@ -561,36 +610,83 @@ backlog_json() (  # [<backlog-path>] - defaults to this home's $BACKLOG
                   end))
           | .body_excerpt = ((.body_lines | join(" "))[:240])
         else . end)
-    | .records as $records
-    | (reduce ($records[] | select(.structured)) as $record ({};
-         .[$record.id] = ((.[$record.id] // true) and ($record.state == "done")))) as $resolved_ids
-    | .records |= map(
-        if .structured then
-          . as $record
-          | .unresolved_blocker_ids = [
-              $record.blocked_by_ids[] as $blocker
-              | select($resolved_ids[$blocker] != true)
-              | $blocker
-            ]
-          | .current_role =
-              (if .state == "in_flight" and .hold_reason != null and .hold_kind != null then "held"
-               elif .state == "in_flight" and .kind == "program" then "program"
-               elif .state == "in_flight" then "worker"
-               elif .state == "queued" then "queued"
-               else "done" end)
-          | .requires_child_metadata = (.current_role == "worker")
-          | .hold_age_days = days_between((.hold_set // .since); $now)
-          | .hold_bucket =
-              (if .hold_kind != "captain" or .hold_reason == null or .state == "done" then null
-               elif (.unresolved_blocker_ids | length) > 0 then "blocked"
-               elif .hold_until != null and .hold_until > $today then "dated"
-               elif .hold_until == null and .hold_age_days != null
-                    and .hold_age_days >= $age_days then "aged"
-               else "live" end)
-          | .captain_actionable = (.hold_bucket == "live")
-        else . end)
+    | classify_holds($today; $now; $age_days)
     | del(.section,.order)
   ' < "$backlog" | fm_hold_reason_decode_stream json
+)
+
+# The backlog object read through the home's configured tasks-axi adapter
+# (bin/fm-tasks-axi.sh), so a home whose backlog is not markdown still has its
+# rows: id, state, kind, title, the hold fields, and the blockers, classified by
+# classify_holds above. Only an undated captain hold needs its body, for the
+# hold-set stamp its age is read from (its created date for a legacy unstamped
+# hold), so only those are shown, up to eight at a time. Rows end at the first
+# line after the table that is not one, such as the help block. It fails, printing nothing, when the listing
+# or any of those rows cannot be read, or the listing is cut short.
+axi_backlog_json() (
+  set -o pipefail
+  local axi=$SCRIPT_DIR/fm-tasks-axi.sh listing rows ids stamps
+  listing=$(FM_HOME=$FM_HOME FM_DATA_OVERRIDE=$DATA "$axi" list --limit 100000 \
+    --fields hold_kind,hold_reason,hold_until,blocked_by </dev/null 2>/dev/null) || return 1
+  rows=$(printf '%s\n' "$listing" | perl -MJSON::PP -e '
+    my $json = JSON::PP->new->allow_nonref;
+    my ($fields, $count, $total, @rows);
+    while (my $line = <STDIN>) {
+      chomp $line;
+      if ($line =~ /^count: (\d+)(?: of (\d+) total)?$/) { ($count, $total) = ($1, $2 // $1); next }
+      if (!$fields && $line =~ /^tasks\[\d+\]\{([^}]*)\}:\s*$/) { $fields = [split /,/, $1]; next }
+      next unless $fields;
+      next if $line eq "";
+      last unless $line =~ /^  \S/;
+      my ($rest, @values) = (substr($line, 2));
+      while (1) {
+        if ($rest =~ s/^("(?:[^"\\]|\\.)*")//) { push @values, $json->decode($1) }
+        else { $rest =~ s/^([^,]*)//; push @values, $1 }
+        last if $rest eq "";
+        $rest =~ s/^,// or die "unreadable row\n";
+      }
+      die "unreadable row\n" unless @values == @$fields;
+      my %row; @row{@$fields} = @values;
+      my $absent = sub { my $v = shift; (!defined $v || $v eq "" || $v eq "-") ? undef : $v };
+      my $blocked = $absent->($row{blocked_by});
+      push @rows, {structured => JSON::PP::true, id => $row{id}, state => $row{state},
+                   kind => $absent->($row{kind}), repo => $absent->($row{repo}), title => $row{title},
+                   hold_kind => $absent->($row{hold_kind}), hold_reason => $absent->($row{hold_reason}),
+                   hold_until => $absent->($row{hold_until}), hold_set => undef, since => undef,
+                   blocked_by_ids => [grep { $_ ne "" && $_ ne "none" } split /\s*,\s*/, ($blocked // "")]};
+    }
+    die "no listing\n" unless $fields && defined $count && $count == $total && @rows == $count;
+    print $json->canonical->encode(\@rows);
+  ') || return 1
+  ids=$(printf '%s' "$rows" | jq -r '.[] | select(.hold_kind == "captain" and .hold_reason != null
+    and .state != "done" and .hold_until == null) | .id') || return 1
+  stamps='{}'
+  if [ -n "$ids" ]; then
+    # shellcheck disable=SC2016
+    stamps=$(printf '%s\n' "$ids" | FM_HOME=$FM_HOME FM_DATA_OVERRIDE=$DATA AXI=$axi STAMP_PL='
+      my $json = JSON::PP->new->allow_nonref;
+      my %task;
+      while (my $line = <STDIN>) {
+        chomp $line;
+        next unless $line =~ /^  ([a-z_]+): (.*)$/;
+        my ($key, $value) = ($1, $2);
+        $task{$key} = $value =~ /^"/ ? $json->decode($value) : $value;
+      }
+      my ($first) = split /\n/, ($task{body} // "");
+      my ($set) = ($first // "") =~ /^Captain hold set:\s*(\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}Z)?)$/;
+      my $created = defined $task{created} && $task{created} ne "-" && $task{created} ne "" ? $task{created} : undef;
+      print $json->encode({id => $ARGV[0], hold_set => $set, since => $created}), "\n";
+    ' \
+      xargs -n 1 -P 8 bash -c 'shown=$("$AXI" show "$1" --full </dev/null 2>/dev/null) || exit 1
+        printf "%s\n" "$shown" | perl -MJSON::PP -e "$STAMP_PL" "$1"' fm-fleet-snapshot \
+      | jq -s 'map({(.id): {hold_set, since}}) | add // {}') || return 1
+  fi
+  jq -n --argjson rows "$rows" --argjson stamps "$stamps" --arg today "$SNAPSHOT_TODAY" \
+    --arg now "$SNAPSHOT_NOW" --argjson age_days "$FM_SNAPSHOT_UNDATED_HOLD_AGE_DAYS" "$HOLD_CLASSIFY_JQ_DEFS"'
+    {path:"tasks-axi", present:true,
+     records:[$rows[] | . + ($stamps[.id] // {})]}
+    | classify_holds($today; $now; $age_days)
+  '
 )
 
 SNAPSHOT_TASK_DIR=
@@ -1997,6 +2093,10 @@ scout_report_lines() {
     | jq -s 'sort_by(.id)'
 }
 
+if [ "$OUTPUT_MODE" = axi-backlog ]; then
+  axi_backlog_json || { echo "fm-fleet-snapshot: backlog read through tasks-axi failed" >&2; exit 1; }
+  exit 0
+fi
 BACKLOG_JSON=$(backlog_json) || { echo "fm-fleet-snapshot: backlog read failed" >&2; exit 1; }
 if [ "$OUTPUT_MODE" = backlog ]; then
   printf '%s\n' "$BACKLOG_JSON"

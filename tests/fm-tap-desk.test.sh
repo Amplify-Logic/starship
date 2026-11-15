@@ -72,6 +72,9 @@ test_export_lists_decisions_and_ready_merges() {
   hold hold work-a --reason "Waiting on the owner" >/dev/null || fail "could not hold the work item"
   tasks add work-later "Later idea" --kind ship --repo sample >/dev/null
   tasks hold work-later --reason "someday" --kind future >/dev/null
+  # A call the owner deferred to a date is not one of his calls.
+  hold hold revisit --title "Revisit the pricing" --reason "Choose: keep; OR raise." --repo sample --until 2999-01-01 >/dev/null \
+    || fail "could not hold the deferred question"
   tasks add ship-pr "Ship the fix" --kind ship --repo sample >/dev/null
   tasks add ship-draft "Draft fix" --kind ship --repo sample >/dev/null
   tasks add ship-merged "Merged fix" --kind ship --repo sample >/dev/null
@@ -129,6 +132,11 @@ EOF
   assert_grep "decisions: 2" "$HOME_DIR/export.out" "export did not count both captain calls"
   assert_grep "merges: 2" "$HOME_DIR/export.out" "export did not count only the ready merges"
   assert_grep "not shown: ship-draft:" "$HOME_DIR/export.out" "a draft PR was not named as not shown"
+  assert_grep "not shown: ship-nopr: it is ready to land but records no pull request" "$HOME_DIR/export.out" \
+    "ready work with no PR was not named as not shown"
+  # Two decisions, two merge cards, and the draft and the PR-less ready work:
+  # the same count the bridge strip and the Factory pane show.
+  assert_grep "owner's calls: 6" "$HOME_DIR/export.out" "export did not report the owner's calls"
   local route_id work_id perms
   route_id=$(identity_of pick-route)
   work_id=$(identity_of work-a)
@@ -143,7 +151,8 @@ EOF
       check(JSON.stringify(by["d.pick-route"].options) === JSON.stringify(["route north", "route south"]), 4);
       check(by["d.pick-route"].closes_on_answer === true && by["d.pick-route"].easy_undo === false, 5);
       check(by["d.work-a"] && by["d.work-a"].identity === workId && by["d.work-a"].closes_on_answer === false, 6);
-      check(!by["d.work-later"], 7);
+      check(!by["d.work-later"] && !by["d.revisit"], 7);
+      check(doc.owner_calls === 6 && !("set_aside" in doc), 14);
       check(by["m.ship-pr"] && by["m.ship-pr"].identity === "a".repeat(40) && by["m.ship-pr"].pr_url === "https://github.com/o/sample/pull/7", 8);
       check(!by["m.ship-draft"] && !by["m.ship-merged"] && !by["m.ship-nopr"], 9);
       check(!by["m.ship-validating"] && !by["m.ship-red"], 10);
@@ -185,6 +194,114 @@ test_mark_records_explicit_fields_and_refuses_unsafe_marks() {
   desk export >/dev/null
   cards_json | grep -q '"easy_undo": true' && fail "marks carried over to a re-held question"
   pass "mark records explicit fields bound to the question and refuses unsafe or invalid marks"
+}
+
+# The Factory pane shows each held decision through `shapes`, so it carries the
+# same options and recommendation as its card, and a question with none
+# recorded comes back plain, with no options and no stand-in text.
+test_shapes_reads_each_question_as_its_card_does() {
+  new_home shapes
+  hold hold pick-route --title "Choose the route" --reason "Choose: route north; OR route south." --repo sample >/dev/null
+  desk mark pick-route --option "go north" --option "go south" --option "stay" --recommend "go south" >/dev/null \
+    || fail "could not mark the route"
+  hold hold open-ask --title "How should launch day go" --reason "The launch plan needs your view." --repo sample >/dev/null
+  local out
+  out=$(desk shapes pick-route open-ask) || fail "shapes failed"
+  printf '%s' "$out" | node -e '
+    let s = ""; process.stdin.on("data", (c) => s += c).on("end", () => {
+      const doc = JSON.parse(s);
+      const by = Object.fromEntries(doc.decisions.map((d) => [d.id, d]));
+      const check = (ok, code) => { if (!ok) { console.error(s); process.exit(code); } };
+      check(doc.schema === "fm-tap-shapes.v1", 2);
+      check(JSON.stringify(by["pick-route"].options) === JSON.stringify(["go north", "go south", "stay"]), 3);
+      check(by["pick-route"].recommended_option === "go south" && by["pick-route"].recommendation === "go south", 4);
+      check(by["pick-route"].identity && by["pick-route"].title === "Choose the route", 5);
+      check(by["open-ask"].question === "The launch plan needs your view." && by["open-ask"].options.length === 0, 6);
+      check(by["open-ask"].recommendation === "" && !/None|null/.test(JSON.stringify(by["open-ask"])), 7);
+    });' || fail "shapes did not read the questions as their cards do"
+  desk export >/dev/null || fail "export failed"
+  cards_json | node -e '
+    let s = ""; process.stdin.on("data", (c) => s += c).on("end", () => {
+      const card = JSON.parse(s).cards.find((c) => c.id === "pick-route");
+      if (JSON.stringify(card.options) !== JSON.stringify(["go north", "go south", "stay"]) || card.recommended_option !== "go south") process.exit(2);
+    });' || fail "the card and shapes disagree"
+  pass "shapes reads each held question exactly as its tap card does, and a plain question stays plain"
+}
+
+# On 2026-11-14 the bridge strip, the Factory pane and the tap page showed 0 to
+# 2, 17 to 36 and 112 calls for the owner at the same moment. All three now
+# show the one count of his calls, and the pane shows each question with the
+# options and recommendation its card carries.
+test_the_strip_the_pane_and_the_page_show_one_count() {
+  new_home onecount
+  hold hold pick-route --title "Choose the route" --reason "Which way should the walk go?" --repo sample >/dev/null
+  desk mark pick-route --option "north" --option "south" --recommend "south" >/dev/null || fail "could not mark"
+  hold hold old-ask --title "Name the newsletter" --reason "Needs a name." --repo sample >/dev/null
+  hold hold revisit --title "Revisit the pricing" --reason "Ask again later." --repo sample --until 2999-01-01 >/dev/null
+  tasks add ship-pr "Ship the fix" --kind ship --repo sample >/dev/null
+  tasks add asking "A worker's question" --kind ship --repo sample >/dev/null
+  tasks add pausing "A worker's pause" --kind ship --repo sample >/dev/null
+  fm_write_meta "$HOME_DIR/state/ship-pr.meta" "kind=ship" "pr=https://github.com/o/sample/pull/7"
+  fm_write_meta "$HOME_DIR/state/asking.meta" "kind=ship"
+  fm_write_meta "$HOME_DIR/state/pausing.meta" "kind=ship"
+  cat > "$FAKEBIN/gh" <<'EOF'
+#!/usr/bin/env bash
+case "$1 $2" in
+  "pr view") echo '{"state":"OPEN","isDraft":false,"title":"Fix","headRefOid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","author":{"login":"me"}}' ;;
+  "api --hostname") case "$*" in *" user "*) echo me ;; *) printf 'src/x.js\n' ;; esac ;;
+  *) exit 1 ;;
+esac
+EOF
+  chmod +x "$FAKEBIN/gh"
+  cat > "$FAKEBIN/reader" <<'EOF'
+#!/usr/bin/env bash
+case "$1" in
+  ship-pr) echo "state: done · source: run-step · passed · run: r1" ;;
+  asking) echo "state: parked · source: status-log · needs-decision: which index?" ;;
+  pausing) echo "state: paused · source: status-log · waiting on the carrier" ;;
+esac
+EOF
+  chmod +x "$FAKEBIN/reader"
+  local out calls strip record
+  out=$(home_env FM_FLEET_STATE_READER="$FAKEBIN/reader" "$DESK" export) || fail "export failed"
+  calls=$(cards_json | node -e 'let s=""; process.stdin.on("data",(c)=>s+=c).on("end",()=>console.log(JSON.parse(s).owner_calls))')
+  assert_equals "3" "$calls" "the page's count of the owner's calls"
+  strip=$(home_env FM_FLEET_STATE_READER="$FAKEBIN/reader" FM_FLEET_STATE_NO_CACHE=1 FM_BRIDGE_STRIP_PMSET= \
+    bash "$ROOT/bin/fm-bridge-strip.sh" render --width 110 | sed $'s/\033\\[[0-9;]*m//g')
+  assert_contains "$strip" "■ 2 decisions for you   ■ 1 ready to merge" "the strip's count of the owner's calls"
+  # The pane reads the same home: its snapshot is the home's own backlog plus
+  # the canonical state of each task, and its questions come from the real
+  # shapes reader rather than a stand-in.
+  home_env FM_HOME="$HOME_DIR" bash "$ROOT/bin/fm-fleet-snapshot.sh" --backlog > "$HOME_DIR/backlog.json" \
+    || fail "the backlog snapshot failed"
+  # shellcheck disable=SC2016 # the ${...} below are JavaScript template literals
+  node -e '
+    const fs = require("node:fs");
+    const [home] = process.argv.slice(1);
+    const line = { "ship-pr": ["done", "run-step", "passed · run: r1"], asking: ["parked", "status-log", "needs-decision: which index?"],
+                   pausing: ["paused", "status-log", "waiting on the carrier"] };
+    const tasks = Object.entries(line).map(([id, [state, source, detail]]) => ({
+      id, kind: "ship", project: "/projects/sample",
+      current_state: { state, source, detail, raw: `state: ${state} · source: ${source} · ${detail}` },
+      paths: { meta: { path: `${home}/state/${id}.meta` }, status_log: { path: `${home}/state/${id}.status` } },
+      hints: { open_decisions: [] }, pr: { url: id === "ship-pr" ? "https://github.com/o/sample/pull/7" : null } }));
+    const backlog = JSON.parse(fs.readFileSync(`${home}/backlog.json`, "utf8"));
+    fs.writeFileSync(`${home}/snapshot.json`, JSON.stringify({ schema: "fm-fleet-snapshot.v1", generated: "", tasks, backlog }));
+  ' "$HOME_DIR"
+  record=$(home_env FM_FACTORY_SNAPSHOT="$HOME_DIR/snapshot.json" FM_FACTORY_PEEK= FM_FACTORY_INBOX=true \
+    python3 "$ROOT/bin/fm-factory.py" --data --fresh) || fail "the pane's record failed"
+  printf '%s' "$record" | node -e '
+    let s = ""; process.stdin.on("data", (c) => s += c).on("end", () => {
+      const record = JSON.parse(s);
+      const by = Object.fromEntries(record.needs_you.map((n) => [n.id, n]));
+      const check = (ok, code) => { if (!ok) { console.error(JSON.stringify(record.needs_you, null, 2)); process.exit(code); } };
+      check(record.counts.need_you === 3 && record.needs_you.length === 3, 2);
+      check(by["pick-route"] && JSON.stringify(by["pick-route"].options.map((o) => [o.label, o.suggested])) === JSON.stringify([["north", false], ["south", true]]), 3);
+      check(by["old-ask"] && by["old-ask"].options.length === 0 && by["old-ask"].why === "Needs a name.", 4);
+      check(by["ship-pr"] && by["ship-pr"].kind === "finished work", 5);
+      check(!by["asking"] && !by["pausing"] && !by["revisit"], 6);
+    });' || fail "the pane did not show the owner's calls as the page does"
+  pass "the bridge strip, the Factory pane and the tap page show one count of the owner's calls"
 }
 
 test_route_answers_keeps_and_saves_reasons() {
@@ -354,14 +471,23 @@ test_defaults_apply_only_marked_easy_old_safe_decisions() {
   hold hold deferred --title "Choose the theme" --reason "Choose: dark; OR light." --repo sample --until 2999-01-01 >/dev/null
   hold hold wordy --title "Choose the layout" --reason "Choose: grid; OR list." --repo sample >/dev/null
   hold hold past-deferred --title "Choose the sidebar" --reason "Choose: left; OR right." --repo sample --until 2020-01-02 >/dev/null
-  local id
-  for id in due-one unmarked kept-one deferred wordy past-deferred; do backdate_hold "$id" 2020-01-01T00:00:00Z; done
+  hold hold stale-one --title "Choose the footer" --reason "Choose: short; OR tall." --repo sample >/dev/null
+  # A hold waiting on other work is no call of the owner's until that work lands.
+  tasks add other-work "The other work" --kind ship --repo sample >/dev/null
+  tasks add blocked-one "Choose the frame" --kind ship --repo sample --blocked-by other-work >/dev/null
+  hold hold blocked-one --reason "Choose: oak; OR pine." >/dev/null || fail "could not hold the blocked question"
+  local id ten_days_ago
+  ten_days_ago=$(node -e 'process.stdout.write(new Date(Date.now() - 10 * 864e5).toISOString().replace(/\.\d+Z$/, "Z"))')
+  for id in due-one unmarked kept-one wordy blocked-one; do backdate_hold "$id" "$ten_days_ago"; done
+  for id in deferred past-deferred stale-one; do backdate_hold "$id" 2020-01-01T00:00:00Z; done
   desk mark due-one --recommend blue --easy-undo >/dev/null || fail "could not mark due-one"
   desk mark young-one --recommend sans --easy-undo >/dev/null || fail "could not mark young-one"
   desk mark kept-one --recommend wide --easy-undo >/dev/null || fail "could not mark kept-one"
   desk mark deferred --recommend dark --easy-undo >/dev/null || fail "could not mark deferred"
   desk mark wordy --recommend grid --easy-undo >/dev/null || fail "could not mark wordy"
   desk mark past-deferred --recommend left --easy-undo >/dev/null || fail "could not mark past-deferred"
+  desk mark stale-one --recommend short --easy-undo >/dev/null || fail "could not mark stale-one"
+  desk mark blocked-one --recommend oak --easy-undo >/dev/null || fail "could not mark blocked-one"
   # A body edit made after marking cannot smuggle a refused class past the default.
   tasks update wordy --title "Choose the layout and delete the old one" >/dev/null
   write_tap "$HOME_DIR/taps" d.kept-one decision kept-one "$(identity_of kept-one)" keep "" ""
@@ -374,11 +500,17 @@ test_defaults_apply_only_marked_easy_old_safe_decisions() {
       const check = (ok, code) => { if (!ok) { console.error(s); process.exit(code); } };
       check(by["due-one"].default_in_days === 0, 2);
       check(by["young-one"].default_in_days === 7, 3);
-      check(by["deferred"].easy_undo === true && by["deferred"].default_in_days === null, 4);
+      // A call deferred to a date that has not come is not one of the owner'"'"'s
+      // calls, so it has no card until that date.
+      check(!by["deferred"], 4);
       check(by["kept-one"].default_in_days === null && by["wordy"].default_in_days === null && by["unmarked"].default_in_days === null, 5);
-      // tasks-axi drops a hold whose --until date has passed from the held
-      // listing, so neither the page nor the default ever reaches it.
-      check(!by["past-deferred"], 6);
+      // Once its date has passed it waits on the owner again and is carded,
+      // but a deferred call is still never given the seven-day default.
+      check(by["past-deferred"] && by["past-deferred"].default_in_days === null, 6);
+      // An undated hold past the aging threshold no longer waits on the owner,
+      // as the bearings Captain'"'"'s Call reads it, so it has no card either.
+      check(!by["stale-one"], 7);
+      check(!by["blocked-one"], 8);
     });' || fail "a card promises a default that defaults would never apply"
   desk defaults > "$HOME_DIR/dry.out" || fail "the defaults dry run failed"
   assert_grep "would default: due-one: blue" "$HOME_DIR/dry.out" "the due decision was not listed"
@@ -394,9 +526,19 @@ test_defaults_apply_only_marked_easy_old_safe_decisions() {
   assert_grep "skipped: kept-one: the owner tapped keep" "$HOME_DIR/apply.out" "the keep skip was not explained"
   assert_equals "queued" "$(field deferred state)" "a deferred decision was defaulted"
   assert_equals "queued" "$(field past-deferred state)" "a decision whose deferral date passed was defaulted"
-  assert_no_grep "past-deferred" "$HOME_DIR/apply.out" "a decision whose deferral date passed was offered a default"
+  # Its date has passed, so it is one of the owner's calls again and defaults
+  # reads it, but only to say why it is never defaulted.
+  assert_no_grep "defaulted: past-deferred" "$HOME_DIR/apply.out" "a decision whose deferral date passed was offered a default"
+  assert_grep "skipped: past-deferred: the owner deferred it until 2020-01-02" "$HOME_DIR/apply.out" \
+    "a decision whose deferral date passed was not named as never defaulted"
   assert_equals "queued" "$(field wordy state)" "a destructive-sounding decision was defaulted"
   assert_grep "skipped: wordy: it reads as destructive" "$HOME_DIR/apply.out" "the class refusal was not explained"
+  # A marked, old hold the page does not card is never answered unseen.
+  for id in stale-one blocked-one; do
+    assert_no_grep "$id" "$HOME_DIR/dry.out" "the dry run offered a default for $id, which has no card"
+    assert_no_grep "$id" "$HOME_DIR/apply.out" "defaults --apply reached $id, which has no card"
+    assert_not_contains "$(field "$id" body)" "Default applied" "$id was defaulted without a card"
+  done
   local rc=0
   desk defaults --days 3 >/dev/null 2>&1 || rc=$?
   expect_code 2 "$rc" "a default window under seven days"
@@ -406,6 +548,8 @@ test_defaults_apply_only_marked_easy_old_safe_decisions() {
 fm_test_run \
   test_export_lists_decisions_and_ready_merges \
   test_mark_records_explicit_fields_and_refuses_unsafe_marks \
+  test_shapes_reads_each_question_as_its_card_does \
+  test_the_strip_the_pane_and_the_page_show_one_count \
   test_route_answers_keeps_and_saves_reasons \
   test_route_refuses_stale_unknown_and_away_releases \
   test_route_merges_only_through_pr_merge \
