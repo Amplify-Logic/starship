@@ -40,7 +40,7 @@ It never reads report bodies, review artifacts, terminal output, or chat.
 | `open` | Read-only check of whether a row is still an open captain call. | [Cleanup never closes a captain call](#cleanup-never-closes-a-captain-call) |
 | `answers` | Channel-agnostic entry point for keyed answers. | [Answer-time resolution](#answer-time-resolution) |
 | `bind`, `unbind`, `binding` | Record that a captured-answer source feeds the keyed-answer intake. | [Source bindings](#source-bindings) |
-| `reconcile-requests` | Internal intake that records a reconcile request from a board selection. | [Reconcile](#reconcile-re-check-reality-never-a-blind-close) |
+| `reconcile-requests` | Internal intake that records a reconcile request from a board selection or the Factory pane's `Already settled?` key. | [Reconcile](#reconcile-re-check-reality-never-a-blind-close) |
 | `reconcile close`, `reconcile note`, `reconcile list` | Retire or list pending reconcile requests. | [Verifying and retiring a request](#verifying-and-retiring-a-request) |
 | `diverged` | Read-only report of a call whose two records disagree. | [Record divergence](#record-divergence) |
 
@@ -317,7 +317,7 @@ The binding-checked `reconcile-requests` command is that internal intake rather 
 ### Verifying and retiring a request
 
 Verification retires a request through one of two outcomes.
-Each outcome requires both the pending board-created request and the operator input that supports its claim:
+Each outcome requires both the pending request and the operator input that supports its claim:
 
 - `reconcile close <task-id> --evidence-file <path>` is the moot outcome.
   It writes a resolution record whose mode is `reconciled` and whose body is the supplied EVIDENCE under a `Reconciliation evidence:` label, then closes the task.
