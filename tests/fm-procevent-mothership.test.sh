@@ -22,7 +22,10 @@ mkdir -p "$CLAIMS" "$STUB_BIN"
 # returns the place it was given. A `hang-now` file makes `position --now`
 # never answer, and `hang-rooms` does the same to `rooms`. Every call is logged
 # to `calls`, and each accept or decline, with all its arguments, to `acts`;
-# a `refuse-acts` file makes those fail as an unreachable room.
+# a `refuse-acts` file makes those fail as an unreachable room. Like the real
+# link, an accept or decline the room's allow-list in $MOTHERSHIP_CONFIG does
+# not let through (its project, and one of the entry's tags when it names any)
+# is refused before it is sent, and is not logged.
 cat > "$STUB_BIN/mothership" <<'SH'
 #!/usr/bin/env bash
 set -u
@@ -31,7 +34,22 @@ cmd=${1-}
 [ "$#" -eq 0 ] || shift
 case "$cmd" in
   accept|decline)
-    printf '%s %s\n' "$cmd" "$*" >> "$d/acts"
+    args="$*" a_room='' a_project='' a_tags='[]'
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        --room) a_room=$2; shift 2 ;;
+        --project) a_project=$2; shift 2 ;;
+        --tag) a_tags=$(printf '%s' "$a_tags" | jq -c --arg t "$2" '. + [$t]'); shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    if ! jq -e --arg r "$a_room" --arg p "$a_project" --argjson t "$a_tags" \
+      'any(.rooms[$r].allow[]?; .project == $p and ((.tags // []) | length == 0 or any(.[]; . as $x | $t | index($x))))' \
+      "${MOTHERSHIP_CONFIG:?}" >/dev/null 2>&1; then
+      echo "Not sent: room $a_room's allow-list does not let this project through." >&2
+      exit 1
+    fi
+    printf '%s %s\n' "$cmd" "$args" >> "$d/acts"
     [ ! -e "$d/refuse-acts" ] || { echo "Could not reach the room at https://room.example.test" >&2; exit 3; }
     echo '{"ok":true}'
     exit 0
@@ -546,9 +564,10 @@ capture_items() {
   capture "$h" "$seq" "$doc"
 }
 
-# allow_rooms <dir>: the alpha room allows two projects, the beta room none.
+# allow_rooms <dir>: the alpha room allows two projects, one only with a tag,
+# the beta room none, and the gamma room one project only under two tags.
 allow_rooms() {
-  printf '%s\n' '{"default":"alpha","rooms":{"alpha":{"url":"https://room.example.test","allow":[{"project":"alpha-app"},{"project":"studio","tags":["alpha"]},{"project":"alpha-app"}]},"beta":{"url":"https://other.example.test","allow":[]}}}' > "$1/rooms.json"
+  printf '%s\n' '{"default":"alpha","rooms":{"alpha":{"url":"https://room.example.test","allow":[{"project":"alpha-app"},{"project":"studio","tags":["alpha"]},{"project":"alpha-app"}]},"beta":{"url":"https://other.example.test","allow":[]},"gamma":{"url":"https://third.example.test","allow":[{"project":"studio","tags":["g2"]},{"project":"studio","tags":["g1"]}]}}}' > "$1/rooms.json"
 }
 
 # Every surface reads the home through these.
@@ -561,13 +580,29 @@ calls_in() {  # <dir>: the task ids held for the owner
 acts_of() { cat "$1/stub/acts" 2>/dev/null; }
 
 # tap_on <dir> <task-id> <option>: the owner taps one option on the phone page.
-tap_on() {
-  local h=$1 id=$2 option=$3 identity
+# tap_choice <dir> <task-id> <choice> [<option>]: the owner taps any choice.
+tap_on() { tap_choice "$1" "$2" option "$3"; }
+tap_choice() {
+  local h=$1 id=$2 choice=$3 option=${4-} identity
   identity=$(hold_in "$h" open "$id" --identity) || fail "$id is not waiting on the owner"
   mkdir -p "$h/taps"
-  jq -n --arg id "$id" --arg identity "$identity" --arg option "$option" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-    '{id: ("d." + $id), version: 1, data: {card: ("d." + $id), kind: "decision", id: $id, identity: $identity, choice: "option", option: $option, pr: "", reason: "", tapped_at: $at}}' \
+  jq -n --arg id "$id" --arg identity "$identity" --arg choice "$choice" --arg option "$option" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '{id: ("d." + $id), version: 1, data: {card: ("d." + $id), kind: "decision", id: $id, identity: $identity, choice: $choice, option: $option, pr: "", reason: "", tapped_at: $at}}' \
     > "$h/taps/$id.json"
+}
+
+# tell_room <dir> <room> <seq> <item>...: capture one batch from <room> and tell it.
+tell_room() {
+  local h=$1 room=$2 seq=$3 doc inbox
+  shift 3
+  doc="$TMP_ROOT/$(basename "$h").$room.$seq.out"
+  { printf 'schema=fm-mothership-pull.v1\nroom=%s\nstatus=items\nfrom=%s\nto=%s\nitems=%s\n--\n' "$room" "$P0" "$P1" "$#"
+    printf '%s\n' "$@"; } > "$doc"
+  inbox="$h/home/state/procevent-inbox"
+  mkdir -p "$inbox"
+  cp "$doc" "$inbox/mothership-$room.$seq.result"
+  printf 'mothership\n' > "$inbox/mothership-$room.$seq.adapter"
+  in_home "$h" "$ADAPTER" told "$inbox/mothership-$room.$seq.result"
 }
 
 test_a_request_becomes_one_owner_call() {
@@ -640,7 +675,7 @@ test_an_answer_runs_the_room_step_once() {
   tap_on "$h" ms-alpha-c6 "Take on under studio"
   out=$(desk_in "$h" route --taps "$h/taps" --apply 2>&1) || fail "route failed: $out"
   assert_contains "$out" 'room: accepted: ms-alpha-c6: your ship took on "Pick a colour" in the alpha room under studio' "the tap took it on"
-  assert_equals "accept c6 --room alpha --project studio --cid fm-ms-alpha-c6-accept" "$(acts_of "$h")" "the room's accept ran under that project"
+  assert_equals "accept c6 --room alpha --project studio --tag alpha --cid fm-ms-alpha-c6-accept" "$(acts_of "$h")" "the room's accept ran under that project, with the tag its allow-list names it under"
   desk_in "$h" route --taps "$h/taps" --apply >/dev/null 2>&1 || fail "routing the taps again failed"
   in_home "$h" "$ADAPTER" settle >/dev/null 2>&1 || fail "settle failed"
   assert_equals 1 "$(acts_of "$h" | grep -c .)" "the accept ran once"
@@ -678,6 +713,56 @@ test_an_answer_runs_the_room_step_once() {
   assert_equals 2 "$(acts_of "$h" | grep -c 'accept c8')" "the retry used the same client id, and nothing ran after it landed"
   assert_equals "fm-ms-alpha-c8-2-accept" "$(acts_of "$h" | grep 'accept c8' | sort -u | sed 's/.*--cid //')" "both tries share one client id"
   pass "an answer from the tap page, the Factory pane or chat runs the room's accept or decline once, and later re-holds with a date"
+}
+
+test_a_room_call_takes_only_the_owners_answer() {
+  local h out f
+  command -v tasks-axi >/dev/null 2>&1 || { pass "skip: tasks-axi not found"; return 0; }
+  command -v node >/dev/null 2>&1 || { pass "skip: node not found"; return 0; }
+  h=$(make_home owneronly)
+  allow_rooms "$h"
+  set_position "$h" alpha "$P0"
+  set_told "$h" alpha "$P0"
+  f=$(capture_items "$h" 1 "$P0" "$P1" "$ITEM_ASK" "$(ask_item 5 c7 'Write the notes')")
+  in_home "$h" "$ADAPTER" told "$f" >/dev/null 2>&1 || fail "told failed"
+
+  # Even with a recommendation marked easy to undo, the card offers no "You
+  # decide" and the seven-day default never answers it.
+  out=$(desk_in "$h" mark ms-alpha-c7 --recommend "Decline" --easy-undo 2>&1) || fail "mark failed: $out"
+  out=$(desk_in "$h" export 2>&1) || fail "export failed: $out"
+  assert_equals '{"owner_only":true,"easy_undo":true,"default_in_days":null}' \
+    "$(jq -c '.cards[] | select(.id == "ms-alpha-c7") | {owner_only, easy_undo, default_in_days}' "$h/home/data/tap-desk/cards.json")" \
+    "a room call's card takes only the owner's answer and is never defaulted"
+
+  # A "you decide" tap that still arrives answers nothing: the call stays held.
+  tap_choice "$h" ms-alpha-c7 you-decide
+  out=$(desk_in "$h" route --taps "$h/taps" --apply 2>&1) || fail "route failed: $out"
+  assert_contains "$out" "held: ms-alpha-c7: a request from a Mothership room needs the owner's own answer, so it stays held for the owner" "the delegated tap was refused"
+  hold_in "$h" open ms-alpha-c7 >/dev/null 2>&1 || fail "the delegated tap closed the call"
+  [ -z "$(acts_of "$h")" ] || fail "a delegated tap sent something to the room: $(acts_of "$h")"
+  out=$(desk_in "$h" route --taps "$h/taps" --apply 2>&1) || fail "routing again failed: $out"
+  assert_contains "$out" "already handled: 1" "the refused tap is not routed twice"
+
+  # The owner's own tap then answers it.
+  tap_on "$h" ms-alpha-c7 "Decline"
+  out=$(desk_in "$h" route --taps "$h/taps" --apply 2>&1) || fail "route of the owner's tap failed: $out"
+  assert_contains "$out" "room: declined: ms-alpha-c7" "the owner's own tap declined it"
+  assert_equals "decline c7 --room alpha --project alpha-app --cid fm-ms-alpha-c7-decline" "$(acts_of "$h")" "the decline ran once"
+
+  # An answer that names none of the options, by any path, is held again.
+  printf 'ms-alpha-c6\tyou decide\tyou decide\n' | hold_in "$h" answers --source "a test" >/dev/null 2>&1 || fail "the answer was not recorded"
+  out=$(in_home "$h" "$ADAPTER" settle 2>&1) || fail "settle failed: $out"
+  assert_contains "$out" "held: ms-alpha-c6: room requests need the owner's own answer" "an off-option answer is refused"
+  assert_contains "$out" "is held for the owner again as ms-alpha-c6-2" "and the call is held again"
+  hold_in "$h" open ms-alpha-c6-2 >/dev/null 2>&1 || fail "the call was not held again"
+  assert_equals 1 "$(acts_of "$h" | grep -c .)" "an off-option answer sent nothing to the room"
+
+  # A project the allow-list names only with tags is taken on or declined with them.
+  out=$(tell_room "$h" gamma 2 "$(ask_item 7 c9 'Fix the form')" 2>&1) || fail "told for gamma failed: $out"
+  out=$(in_home "$h" "$ADAPTER" answer ms-gamma-c9 decline 2>&1) || fail "decline in gamma failed: $out"
+  assert_contains "$out" "declined: ms-gamma-c9" "the decline in a tagged-only room went through"
+  assert_equals "decline c9 --room gamma --project studio --tag g1 --tag g2 --cid fm-ms-gamma-c9-decline" "$(acts_of "$h" | sed -n 2p)" "the decline carried the project's tags"
+  pass "a room call takes only the owner's own answer, and tagged allow-list entries go through"
 }
 
 test_runner_wakes_once_and_keeps_listening() {
@@ -867,4 +952,5 @@ fm_test_run \
   test_read_cleans_room_text \
   test_a_request_becomes_one_owner_call \
   test_an_answer_runs_the_room_step_once \
+  test_a_room_call_takes_only_the_owners_answer \
   test_runner_wakes_once_and_keeps_listening

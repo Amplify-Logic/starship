@@ -11,6 +11,7 @@
 #   fm-procevent-mothership.sh told <result-file>
 #   fm-procevent-mothership.sh answer <task-id> <option> [--source <text>]
 #   fm-procevent-mothership.sh settle [<task-id>...]
+#   fm-procevent-mothership.sh calls
 #   fm-procevent-mothership.sh source <room> --bin <mothership> [--config <file>] [--node-dir <dir>]
 #   fm-procevent-mothership.sh autohandle <source-id> <sequence> <result-file>
 #   fm-procevent-mothership.sh relisten
@@ -63,10 +64,15 @@
 #            is refused with the options named.
 # settle     Carry out the answer to each answered room call, or only the named
 #            ones, once, printing one line per call: accepted, declined, later,
-#            left, unclear, unanswered, failed, and, for a named call still
+#            left, held, unanswered, failed, and, for a named call still
 #            waiting, waiting. Exits 1 when any room step failed; the next
 #            settle tries it again. bin/fm-tap-desk.sh route runs it for every
 #            call a tap answered.
+# calls      Print the task id of each room call still waiting for its answer
+#            to be carried out, one per line. bin/fm-tap-desk.sh reads it so a
+#            room call takes only the owner's own answer: its card offers no
+#            "You decide", and a delegated tap or the seven-day default leaves
+#            it held for the owner.
 # source     The blocking child the runner executes; never run it in a turn.
 # autohandle The runner's seam right after capture: move this monitor's place
 #            forward to the end of the captured batch and acknowledge the
@@ -118,13 +124,16 @@
 # gets a new call. Holding a call sends nothing to the room. Only the owner's
 # answer does, through `settle`: a take-on option runs `mothership accept
 # <card> --project <project>`, Decline runs `mothership decline` under the
-# first allowed project, both with a client id fixed per call so a retry after
-# a crash counts once in the room; Later holds a new call for the same card
-# until three days later (FM_MOTHERSHIP_NOW, an epoch, is the test seam for
-# now); Leave it, a tap's drop, or a call closed as already settled sends
-# nothing. An answer naming none of the options sends nothing either and says
-# so. The chosen option is read from the call's newest recorded resolution
-# (`Chosen option:` from a tap, `Answer:` from the keyed intake).
+# first allowed project, each with a `--tag` for every tag the allow-list
+# names that project with when it never names it without tags, and with a
+# client id fixed per call so a retry after a crash counts once in the room;
+# Later holds a new call for the same card until three days later
+# (FM_MOTHERSHIP_NOW, an epoch, is the test seam for now); Leave it, a tap's
+# drop, or a call closed as already settled sends nothing. A room request
+# takes only the owner's own answer: one naming none of the options sends
+# nothing and holds a new call for the same card for the owner at once. The
+# chosen option is read from the call's newest recorded resolution (`Chosen
+# option:` from a tap, `Answer:` from the keyed intake).
 #
 # Private state, under state/mothership/: <room>.position (this monitor's
 # place), <room>.told (the end of the latest batch told, seeded with the
@@ -716,30 +725,39 @@ call_base_id() {  # <room> <card>
     "$(printf '%s' "$2" | LC_ALL=C tr -c 'A-Za-z0-9.-' '-' | cut -c1-64)"
 }
 
-# The projects the room's allow-list names, in order, once each; only names
-# that can be a registered project's name.
-room_projects() {  # <room>
+# What the room's allow-list lets through, as a JSON array of {project, tags},
+# in order, once per project; only names that can be a registered project's
+# name. A project the list names without tags needs none, so its tags are
+# empty; a project named only with tags carries them all, since the link lets
+# an item through when it names one of them.
+room_allow() {  # <room>
   local file
   file=$(mothership_config_file)
-  [ -f "$file" ] || return 0
-  jq -r --arg room "$1" '
-    (.rooms[$room].allow // []) | if type == "array" then .[] else empty end
-    | objects | .project // empty | strings' "$file" 2>/dev/null \
-    | LC_ALL=C awk '/^[A-Za-z0-9][A-Za-z0-9._-]*$/ && length($0) <= 64 && !seen[$0]++'
+  [ -f "$file" ] || { printf '[]\n'; return 0; }
+  jq -c --arg room "$1" '
+    [(.rooms[$room].allow // []) | if type == "array" then .[] else empty end
+      | objects | select((.project | type) == "string")
+      | select(.project | test("^[A-Za-z0-9][A-Za-z0-9._-]*$") and length <= 64)
+      | {project, tags: ((.tags // []) | if type == "array" then map(strings | select(length > 0 and (test("[[:cntrl:]]") | not))) else [] end)}]
+    | reduce .[] as $e ([];
+        if any(.[]; .project == $e.project)
+        then map(if .project == $e.project
+                 then .tags = (if (.tags | length) == 0 or ($e.tags | length) == 0 then [] else (.tags + $e.tags | unique) end)
+                 else . end)
+        else . + [$e] end)' "$file" 2>/dev/null || printf '[]\n'
 }
 
-# The options one call offers, as a JSON array of {label, action, project}:
-# take it on under each project the room allows, decline, or later. A room that
-# allows no project of this Starship hears nothing from it, so its call offers
-# only later and leave it.
+# The options one call offers, as a JSON array of {label, action, project,
+# tags}: take it on under each project the room allows, decline, or later. A
+# room that allows no project of this Starship hears nothing from it, so its
+# call offers only later and leave it.
 call_options() {  # <room>
-  room_projects "$1" | jq -Rsc '
-    split("\n") | map(select(length > 0)) as $p
-    | if ($p | length) == 0
-      then [{label: "Later", action: "later"}, {label: "Leave it", action: "leave"}]
-      else [$p[] | {label: "Take on under \(.)", action: "accept", project: .}]
-        + [{label: "Decline", action: "decline", project: $p[0]}, {label: "Later", action: "later"}]
-      end'
+  room_allow "$1" | jq -c '
+    if length == 0
+    then [{label: "Later", action: "later"}, {label: "Leave it", action: "leave"}]
+    else [.[] | {label: "Take on under \(.project)", action: "accept", project, tags}]
+      + [{label: "Decline", action: "decline", project: .[0].project, tags: .[0].tags}, {label: "Later", action: "later"}]
+    end'
 }
 
 # Hold one call. The reason ends in the options, so every surface that reads a
@@ -842,14 +860,17 @@ mark_settled() {  # <base-id> <outcome>
 # Run accept or decline for one call in its room. Prints a failed line and
 # fails when the room was not told. The client id makes a retry after a crash
 # count once in the room.
-room_act() {  # <task-id> <action> <room> <card> <project>
-  local task=$1 action=$2 room=$3 card=$4 project=$5 err rc=0
+room_act() {  # <task-id> <action> <room> <card> <project> [<tag>...]
+  local task=$1 action=$2 room=$3 card=$4 project=$5 tag err rc=0
+  local -a args=("$action" "$card" --room "$room" --project "$project")
+  shift 5
+  for tag in "$@"; do args+=(--tag "$tag"); done
   if [ -z "$LINK_BIN" ] && ! resolve_link; then
     printf 'failed: %s: the %s room was not told: %s\n' "$task" "$room" "$LINK_PROBLEM"
     return 1
   fi
   err=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-mothership-err.XXXXXX") || return 1
-  link_run "$action" "$card" --room "$room" --project "$project" --cid "fm-$task-$action" >/dev/null 2>"$err" || rc=$?
+  link_run "${args[@]}" --cid "fm-$task-$action" >/dev/null 2>"$err" || rc=$?
   if [ "$rc" -ne 0 ]; then
     if fm_timed_out "$rc"; then
       printf 'failed: %s: the %s room was not told: %s\n' "$task" "$room" "$(link_timeout_note)"
@@ -862,10 +883,21 @@ room_act() {  # <task-id> <action> <room> <card> <project>
   rm -f -- "$err"
 }
 
+# Hold the call's next generation for the owner, until a date when given, and
+# move its record to it.
+hold_next() {  # <base-id> <room> <title> <generation> [until]
+  local base=$1 room=$2 title=$3 gen=$4 until=${5:-} options
+  options=$(call_options "$room") || return 1
+  hold_call "$base-$((gen + 1))" "$room" "$title" "$options" "$until" || return 1
+  write_call_record "$base" "$(jq -c --arg task "$base-$((gen + 1))" --argjson gen "$((gen + 1))" --argjson options "$options" \
+    '.task = $task | .generation = $gen | .options = $options' "$(call_record "$base")")"
+}
+
 # Do what the owner's answer to one call asks, once. Prints one line.
 SETTLE_NAMED=0
 settle_locked() {  # <base-id>
-  local base=$1 rec room card title task gen rc body decision chosen option action project until next options
+  local base=$1 rec room card title task gen rc body decision chosen option action project until tag
+  local -a tags=()
   rec=$(call_record "$base")
   [ -f "$rec" ] || return 0
   [ "$(jq -r '.settled == null' "$rec" 2>/dev/null)" = true ] || return 0
@@ -894,33 +926,31 @@ settle_locked() {  # <base-id>
       mark_settled "$base" dropped || return 1
       printf 'left: %s: the owner dropped it; nothing was sent to the %s room\n' "$task" "$room"
     else
-      mark_settled "$base" unclear || return 1
-      printf 'unclear: %s: the answer chose none of its options, so nothing was sent to the %s room; take "%s" on or decline it only on the owner'"'"'s word\n' "$task" "$room" "$title"
+      hold_next "$base" "$room" "$title" "$gen" \
+        || { printf 'failed: %s: could not hold the call again for the owner\n' "$task"; return 1; }
+      printf 'held: %s: room requests need the owner'"'"'s own answer and this one chose none of its options, so nothing was sent to the %s room and "%s" is held for the owner again as %s\n' "$task" "$room" "$title" "$base-$((gen + 1))"
     fi
     return 0
   fi
   action=$(printf '%s' "$option" | jq -r .action)
   project=$(printf '%s' "$option" | jq -r '.project // empty')
+  while IFS= read -r tag; do [ -z "$tag" ] || tags+=("$tag"); done < <(printf '%s' "$option" | jq -r '.tags // [] | .[]')
   case "$action" in
     accept)
-      room_act "$task" accept "$room" "$card" "$project" || return 1
+      room_act "$task" accept "$room" "$card" "$project" ${tags[@]+"${tags[@]}"} || return 1
       mark_settled "$base" accepted || return 1
       printf 'accepted: %s: your ship took on "%s" in the %s room under %s; file the work through ordinary intake\n' "$task" "$title" "$room" "$project"
       ;;
     decline)
-      room_act "$task" decline "$room" "$card" "$project" || return 1
+      room_act "$task" decline "$room" "$card" "$project" ${tags[@]+"${tags[@]}"} || return 1
       mark_settled "$base" declined || return 1
       printf 'declined: %s: your ship declined "%s" in the %s room\n' "$task" "$title" "$room"
       ;;
     later)
       until=$(later_date) || return 1
-      next="$base-$((gen + 1))"
-      options=$(call_options "$room") || return 1
-      hold_call "$next" "$room" "$title" "$options" "$until" \
+      hold_next "$base" "$room" "$title" "$gen" "$until" \
         || { printf 'failed: %s: could not hold the call again for later\n' "$task"; return 1; }
-      write_call_record "$base" "$(jq -c --arg task "$next" --argjson gen "$((gen + 1))" --argjson options "$options" \
-        '.task = $task | .generation = $gen | .options = $options' "$rec")" || return 1
-      printf 'later: %s: "%s" from the %s room is asked again on %s as %s\n' "$task" "$title" "$room" "$until" "$next"
+      printf 'later: %s: "%s" from the %s room is asked again on %s as %s\n' "$task" "$title" "$room" "$until" "$base-$((gen + 1))"
       ;;
     leave)
       mark_settled "$base" left || return 1
@@ -964,6 +994,15 @@ cmd_settle() {
     with_call_lock "$base" settle_locked "$base" || failed=1
   done
   return "$failed"
+}
+
+cmd_calls() {
+  local rec
+  [ "$#" -eq 0 ] || usage
+  for rec in "$(calls_dir)"/*.json; do
+    [ -f "$rec" ] || continue
+    jq -r 'select(.settled == null) | .task | strings' "$rec" 2>/dev/null || true
+  done
 }
 
 cmd_answer() {
@@ -1279,6 +1318,7 @@ case "${1-}" in
   told)       shift; cmd_told "$@" ;;
   settle)     shift; cmd_settle "$@" ;;
   answer)     shift; cmd_answer "$@" ;;
+  calls)      shift; cmd_calls "$@" ;;
   source)     shift; cmd_source "$@" ;;
   autohandle) shift; cmd_autohandle "$@" ;;
   relisten)   exit 0 ;;

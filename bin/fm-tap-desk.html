@@ -193,8 +193,9 @@
         const suggested = option === card.recommended_option;
         choices.append(button(option, "option", option, suggested ? "primary tag" : ""));
       }
-      const row = el("div", { class: "row" });
-      row.append(button("Keep", "keep", ""), button("Drop", "drop", ""), button("You decide", "you-decide", ""));
+      const row = el("div", { class: card.owner_only ? "row two" : "row" });
+      row.append(button("Keep", "keep", ""), button("Drop", "drop", ""));
+      if (!card.owner_only) row.append(button("You decide", "you-decide", ""));
       choices.append(row);
     }
     box.append(reasonInput, choices, sentBox);

@@ -38,7 +38,9 @@
 # lifecycle identity, how long it has waited, whether it is marked easy to undo,
 # in how many days the seven-day default answers it (null when it never will),
 # and a keep the captain already tapped on this same question. Its choices are
-# each option, keep, drop, and you decide. A merge card carries the PR URL, the
+# each option, keep, drop, and you decide, except on a request from a
+# Mothership room (`bin/fm-procevent-mothership.sh calls`, card owner_only
+# true), which takes only the owner's own answer and offers no you decide. A merge card carries the PR URL, the
 # live head commit as its identity, who opened it and whether that is another
 # account, and every file it changes among Starship's own rules (the list
 # bin/fm-pr-merge.sh guards), read only for a project that script guards
@@ -65,7 +67,9 @@
 #     option is no longer offered, is stale and records nothing;
 #   - an option answers the call; drop answers it with a drop record and closes
 #     it; you decide applies the recorded recommendation, or records that
-#     firstmate decides when none is recorded; the answer closes a task of kind
+#     firstmate decides when none is recorded, except on a request from a
+#     Mothership room, where it is `held`: nothing is answered and the call
+#     stays held for the owner; the answer closes a task of kind
 #     captain and releases (`answer --release`) a held work item so it resumes,
 #     which fm-captain-hold refuses while the away record exists;
 #   - keep leaves the hold in place and notes the keep and its reason in the
@@ -98,7 +102,8 @@
 # option; with --apply it answers each with that option through the same
 # compare-and-answer path and records the answer as a default, not the
 # captain's tap. A hold that is aged, deferred, or waiting on other work gets
-# no card, so it is never defaulted unseen. It never defaults a call the
+# no card, so it is never defaulted unseen. It never defaults a request from a
+# Mothership room, which takes only the owner's own answer, nor a call the
 # captain deferred with --until, even once that date has passed, or kept, and
 # never one whose words read as destructive, irreversible, security-sensitive,
 # money, outward to people, or a merge; that word check only ever refuses. Firstmate tells the captain each `defaulted:` line.
