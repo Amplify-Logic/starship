@@ -475,7 +475,147 @@ test_runner_wakes_once_and_keeps_listening() {
   pass "through the real runner one item gives one wake, the runner keeps listening, and a refusal ends the source"
 }
 
+# A PATH with no mothership command and no node on it, so the adapter's own
+# fallbacks are what find the link and the node. Any other tool that shares a
+# directory with a node stays reachable through a directory of links.
+BARE_TOOLS="$TMP_ROOT/bare-tools"
+mkdir -p "$BARE_TOOLS"
+PATH_BARE=$(printf '%s' "$PATH" | tr ':' '\n' | while IFS= read -r dir; do
+  [ -n "$dir" ] && [ -d "$dir" ] || continue
+  [ ! -e "$dir/mothership" ] || continue
+  if [ -e "$dir/node" ]; then
+    for tool in "$dir"/*; do
+      case "${tool##*/}" in (node|mothership) continue ;; esac
+      [ -x "$tool" ] && [ ! -e "$BARE_TOOLS/${tool##*/}" ] && ln -s "$tool" "$BARE_TOOLS/${tool##*/}"
+    done
+    continue
+  fi
+  printf '%s:' "$dir"
+done)
+PATH_BARE="${PATH_BARE}$BARE_TOOLS"
+
+# bare_home <dir> <command...>: a home with no link or node named anywhere and
+# none on PATH; PATH_FRONT, when set, goes before that PATH.
+bare_home() {
+  local h=$1
+  shift
+  env -u FM_MOTHERSHIP_BIN -u FM_MOTHERSHIP_NODE PATH="${PATH_FRONT:+$PATH_FRONT:}$PATH_BARE" \
+    NVM_DIR="$h/nvm" FM_HOME="$h/home" FM_PROCEVENT_CLAIM_ROOT="$CLAIMS" MS_STUB="$h/stub" \
+    MOTHERSHIP_CONFIG="$h/rooms.json" FM_MOTHERSHIP_WAIT_SECONDS=1 \
+    FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS=2 "$@"
+}
+
+registered_arg() {  # <dir> <flag>: the value the alpha registration gives <flag>
+  awk -v flag="$2" 'take { print; exit } $0 == flag { take = 1 }' "$1/home/state/procevent/mothership-alpha.source"
+}
+
+joined_config() {  # <dir> <room>...: a Mothership config that has joined these rooms
+  local h=$1
+  shift
+  printf '%s\n' "$@" | jq -R . | jq -s '{default: .[0], rooms: (map({key: ., value: {url: "https://room.example.test"}}) | from_entries)}' > "$h/rooms.json"
+}
+
+test_status_without_the_link() {
+  local h out
+  h=$(make_home nolink)
+  joined_config "$h" alpha
+  out=$(bare_home "$h" "$ADAPTER" status 2>&1) || fail "status failed: $out"
+  assert_not_contains "$out" "no Mothership rooms" "a joined room is not reported as no rooms"
+  assert_contains "$out" "alpha: off, not listening" "the joined room is listed with its monitoring state"
+  assert_contains "$out" "the Mothership link is not installed" "status says plainly that the link is missing"
+
+  rm -f "$h/rooms.json"
+  out=$(bare_home "$h" "$ADAPTER" status 2>&1) || fail "status with no config failed: $out"
+  assert_contains "$out" "no Mothership rooms joined" "no config means no rooms"
+  assert_contains "$out" "the Mothership link is not installed" "and still names the missing link"
+
+  if out=$(bare_home "$h" "$ADAPTER" on alpha 2>&1); then fail "on succeeded with no link"; fi
+  assert_contains "$out" "config/mothership-link" "the refusal names where a link can be set"
+  pass "status lists rooms joined in the Mothership config and says plainly when the link is missing"
+}
+
+test_link_fallbacks() {
+  local h out broken
+  h=$(make_home fallback)
+  printf '{"position":%s}\n' "$P0" > "$h/stub/saved.alpha"
+  mkdir -p "$h/home/projects/mothership/bin"
+  cp "$STUB_BIN/mothership" "$h/home/projects/mothership/bin/mothership"
+  out=$(bare_home "$h" "$ADAPTER" on alpha 2>&1) || fail "on with the link only in the home failed: $out"
+  assert_equals "$h/home/projects/mothership/bin/mothership" "$(registered_arg "$h" --bin)" "the home's projects/mothership link is used"
+  bare_home "$h" "$ADAPTER" off alpha >/dev/null 2>&1 || fail "off failed"
+
+  broken="$h/broken"
+  mkdir -p "$broken" "$h/home/linked"
+  printf '#!/usr/bin/env bash\nexit 1\n' > "$broken/mothership"
+  chmod +x "$broken/mothership"
+  cp "$STUB_BIN/mothership" "$h/home/linked/mothership"
+  printf '# where the Mothership link is\n\nlinked/mothership\n' > "$h/home/config/mothership-link"
+  out=$(PATH_FRONT="$broken" bare_home "$h" "$ADAPTER" on alpha 2>&1) || fail "on with config/mothership-link failed: $out"
+  assert_equals "$h/home/linked/mothership" "$(registered_arg "$h" --bin)" "config/mothership-link wins over PATH and the home, and a relative path is the home's"
+  PATH_FRONT="$broken" bare_home "$h" "$ADAPTER" off alpha >/dev/null 2>&1 || fail "off failed"
+
+  printf '%s/nowhere/mothership\n' "$h" > "$h/home/config/mothership-link"
+  if out=$(bare_home "$h" "$ADAPTER" on alpha 2>&1); then fail "on passed over a configured link that is missing"; fi
+  assert_contains "$out" "$h/nowhere/mothership (from config/mothership-link) cannot be run" "a configured link that is missing is reported"
+  out=$(bare_home "$h" "$ADAPTER" status 2>&1) || fail "status failed: $out"
+  assert_contains "$out" "alpha: off, not listening" "status still lists the room"
+  assert_contains "$out" "(from config/mothership-link) cannot be run" "status names the broken link"
+  pass "the link is found through config/mothership-link, then PATH, then the home's projects/mothership"
+}
+
+test_node_for_a_typescript_link() {
+  local h out v
+  h=$(make_home tsnode)
+  printf '{"position":%s}\n' "$P0" > "$h/stub/saved.alpha"
+  mkdir -p "$h/oldnode" "$h/home/projects/mothership/bin"
+  { printf '#!/usr/bin/env node\n'; sed 1d "$STUB_BIN/mothership"; } > "$h/home/projects/mothership/bin/mothership"
+  chmod +x "$h/home/projects/mothership/bin/mothership"
+  # shellcheck disable=SC2016  # the fake node's own script
+  printf '#!/usr/bin/env bash\n[ "${1-}" = --version ] && { echo v22.13.1; exit 0; }\necho "TypeError [ERR_UNKNOWN_FILE_EXTENSION]: Unknown file extension \".ts\"" >&2\nexit 1\n' > "$h/oldnode/node"
+  chmod +x "$h/oldnode/node"
+  # fake_node <version> <runs|fails>: an nvm node of that version.
+  # shellcheck disable=SC2016  # the fake node's own script
+  fake_node() {
+    local dir="$h/nvm/versions/node/v$1/bin"
+    mkdir -p "$dir"
+    if [ "$2" = runs ]; then
+      printf '#!/usr/bin/env bash\n[ "${1-}" = --version ] && { echo v%s; exit 0; }\nexec bash "$@"\n' "$1" > "$dir/node"
+    else
+      printf '#!/usr/bin/env bash\n[ "${1-}" = --version ] && { echo v%s; exit 0; }\nexit 1\n' "$1" > "$dir/node"
+    fi
+    chmod +x "$dir/node"
+  }
+  fake_node 22.17.0 fails
+  fake_node 24.9.0 runs
+  fake_node 24.10.0 runs
+  out=$(PATH_FRONT="$h/oldnode" bare_home "$h" "$ADAPTER" on alpha 2>&1) || fail "on with an old node first on PATH failed: $out"
+  assert_contains "$out" "on: alpha" "the TypeScript link ran"
+  assert_equals "$h/nvm/versions/node/v24.10.0/bin" "$(registered_arg "$h" --node-dir)" "the newest nvm node that runs TypeScript is chosen over PATH's old one"
+  PATH_FRONT="$h/oldnode" bare_home "$h" "$ADAPTER" off alpha >/dev/null 2>&1 || fail "off failed"
+
+  rm -rf "$h/nvm"
+  fake_node 22.17.0 fails
+  fake_node 22.18.0 runs
+  out=$(PATH_FRONT="$h/oldnode" bare_home "$h" "$ADAPTER" on alpha 2>&1) || fail "on with node 22.18 failed: $out"
+  assert_equals "$h/nvm/versions/node/v22.18.0/bin" "$(registered_arg "$h" --node-dir)" "22.18 is new enough and 22.17 is not"
+  PATH_FRONT="$h/oldnode" bare_home "$h" "$ADAPTER" off alpha >/dev/null 2>&1 || fail "off failed"
+
+  rm -rf "$h/nvm"
+  fake_node 23.5.0 runs
+  if out=$(PATH_FRONT="$h/oldnode" bare_home "$h" "$ADAPTER" on alpha 2>&1); then fail "on accepted a machine with no node that runs TypeScript"; fi
+  assert_contains "$out" "no node on this machine can run the Mothership link's TypeScript" "no usable node is reported"
+  [ ! -e "$h/home/state/procevent/mothership-alpha.source" ] || fail "a link with no usable node was registered"
+
+  v="$h/nvm/versions/node/v23.5.0/bin/node"
+  if out=$(PATH_FRONT="$h/oldnode" bare_home "$h" env FM_MOTHERSHIP_NODE="$v" "$ADAPTER" on alpha 2>&1); then fail "on accepted an old FM_MOTHERSHIP_NODE"; fi
+  assert_contains "$out" "FM_MOTHERSHIP_NODE names $v" "a named node that is too old is reported"
+  pass "a TypeScript link runs with a node that can run it, never just the first node on PATH"
+}
+
 fm_test_run \
+  test_status_without_the_link \
+  test_link_fallbacks \
+  test_node_for_a_typescript_link \
   test_help \
   test_no_setting_runs_nothing \
   test_on_off_status \
