@@ -210,8 +210,9 @@ test_shapes_reads_each_question_as_its_card_does() {
     --reason "Three calls from the garden walk: (a) plant the beans now or wait for rain;" --repo sample >/dev/null
   # A plain two-way title still gives its two options when the reason names none.
   hold hold two-way --title "Ship the beta now or after the holidays?" --reason "The beta is ready to go." --repo sample >/dev/null
+  hold hold slash-way --title "Deploy now / tomorrow or next week?" --reason "The build is green." --repo sample >/dev/null
   local out
-  out=$(desk shapes pick-route open-ask three-calls two-way) || fail "shapes failed"
+  out=$(desk shapes pick-route open-ask three-calls two-way slash-way) || fail "shapes failed"
   printf '%s' "$out" | node -e '
     let s = ""; process.stdin.on("data", (c) => s += c).on("end", () => {
       const doc = JSON.parse(s);
@@ -225,6 +226,7 @@ test_shapes_reads_each_question_as_its_card_does() {
       check(by["open-ask"].recommendation === "" && !/None|null/.test(JSON.stringify(by["open-ask"])), 7);
       check(JSON.stringify(by["three-calls"].options) === "[]", 8);
       check(JSON.stringify(by["two-way"].options) === JSON.stringify(["Ship the beta now", "after the holidays"]), 9);
+      check(JSON.stringify(by["slash-way"].options) === "[]", 10);
     });' || fail "shapes did not read the questions as their cards do"
   desk export >/dev/null || fail "export failed"
   cards_json | node -e '
@@ -237,8 +239,10 @@ test_shapes_reads_each_question_as_its_card_does() {
     });' || fail "the card and shapes disagree, or a card misread its title as options"
   desk mark two-way --recommend "after the holidays" >/dev/null \
     || fail "mark without --option refused the options of a plain two-way title"
-  desk mark three-calls --recommend "plant now" >/dev/null 2>&1 \
+  desk mark three-calls --recommend "later, tell the neighbours now" >/dev/null 2>&1 \
     && fail "mark took an option split out of a title that lists several calls"
+  desk mark slash-way --recommend "Deploy now / tomorrow" >/dev/null 2>&1 \
+    && fail "mark took an option split out of a title that names three choices"
   pass "shapes reads each held question exactly as its tap card does, a plain question stays plain, and only a plain two-way title gives options"
 }
 

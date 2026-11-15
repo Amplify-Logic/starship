@@ -46,7 +46,7 @@ The [factory registry](configuration.md#factory-registry-datafactoriesmd) names 
   `fm_owner_calls` in `bin/fm-fleet-status-lib.sh` owns that count.
   A worker's question and an ask-user review finding go to Starship, which answers them or holds them for the owner, so they never appear here; their jobs read `with Starship` or are still in the checks.
   A question shows its why, the options and suggestion its tap card carries (`bin/fm-tap-desk.sh shapes`, including any recorded with `fm-tap-desk.sh mark`), and what it holds up.
-  Those options come from the hold's recorded marks or its reason; its title gives them only when it is a plain two-way call (`X or Y`, perhaps ending in `?`), never when it holds a comma, a parenthesis or more than two choices.
+  Those options come from the hold's recorded marks or its reason; its title gives them only when it is a plain two-way call (`X or Y`, perhaps ending in `?`), never when it holds a comma, a parenthesis, a slash, `vs` or more than two choices.
   A question with no options recorded shows only its plain words and `Talk it through`.
   The first two and the highlighted one open in full, every word of the title and each option wrapped to the pane's width; the rest stay one line each, shortened on a whole word with an ellipsis, so a long list still leaves room for the floor.
 - RIGHT NOW lists each factory with who steers it.
