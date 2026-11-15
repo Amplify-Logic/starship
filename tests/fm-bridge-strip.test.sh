@@ -848,6 +848,165 @@ test_a_running_strip_records_its_session() {
   pass "bridge strip: a running strip records its tab and Herdr session, and clears them on exit"
 }
 
+# code_copy <dir>: a code root whose bin/ links to this one's, except the strip
+# and the fleet library, which are real copies a case can change under a
+# running strip the way an update rewrites them.
+code_copy() {
+  local f
+  mkdir -p "$1/bin"
+  for f in "$ROOT"/bin/*; do
+    ln -s "$f" "$1/bin/${f##*/}"
+  done
+  rm "$1/bin/fm-bridge-strip.sh" "$1/bin/fm-fleet-status-lib.sh"
+  cp "$ROOT/bin/fm-bridge-strip.sh" "$ROOT/bin/fm-fleet-status-lib.sh" "$1/bin/"
+}
+
+# replace_file <file> <sed expression>: rewrite a file the way git does, as a
+# new file moved into place, never by writing into the one a shell is reading.
+replace_file() {
+  sed "$2" "$1" > "$1.new" && mv "$1.new" "$1"
+}
+
+# start_loop <code root> <output>: the strip's own loop, redrawing every second.
+start_loop() {
+  (herdr_env; FM_HOME="$HOME_FIX" FM_FLEET_STATE_NO_CACHE="${FM_FLEET_STATE_NO_CACHE:-1}" \
+    FM_FLEET_STATE_READER="${READER:-$BINDIR/fake-crew-state}" FM_FLEET_STATE_WAIT=1 \
+    FM_BRIDGE_STRIP_PMSET="$BINDIR/fake-pmset" FM_BRIDGE_TEST_BATTERY="$BATTERY_FIX" \
+    FM_BRIDGE_STRIP_INTERVAL=1 exec bash "$1/bin/fm-bridge-strip.sh" run >"$2" 2>"$2.err") &
+  LOOP_PID=$!
+}
+
+# shows <output> <text> [seconds]: wait until the loop's frames show <text>.
+shows() {
+  local tries=$((${3:-5} * 10))
+  while [ "$tries" -gt 0 ]; do
+    [ -f "$1" ] && plain < "$1" | grep -qF -- "$2" && return 0
+    sleep 0.1
+    tries=$((tries - 1))
+  done
+  return 1
+}
+
+stop_loop() {
+  kill "$LOOP_PID" 2>/dev/null
+  wait "$LOOP_PID" 2>/dev/null
+}
+
+# starts <output> <count> [seconds]: wait until the loop has started <count>
+# times; each start, the first and every reload, hides the cursor once.
+starts() {
+  local tries=$((${3:-3} * 10))
+  while [ "$tries" -gt 0 ]; do
+    [ "$(grep -o $'\033\\[?25l' "$1" 2>/dev/null | grep -c '')" -ge "$2" ] && return 0
+    sleep 0.1
+    tries=$((tries - 1))
+  done
+  return 1
+}
+
+test_a_running_strip_picks_up_changed_code() {
+  local code out
+  reset_case
+  a_busy_fleet
+  code="$TMP_ROOT/case$CASE/code"
+  out="$TMP_ROOT/case$CASE/frames"
+  code_copy "$code"
+  # The strip starts with a fleet library that cannot read the crew, as a strip
+  # started before an update that changed the reading's format would.
+  # shellcheck disable=SC2016 # the stand-in function is written literally
+  printf '\nfm_fleet_status_counts() { _fm_fleet_unknown 0 "${2:-}"; }\n' >> "$code/bin/fm-fleet-status-lib.sh"
+  start_loop "$code" "$out"
+  shows "$out" 'reading the crew' 15 || { stop_loop; fail "the strip did not start: $(plain < "$out")"; }
+  # The update lands: the library that can read the crew replaces it. The loop
+  # redraws every second, so the next frame is the new code's.
+  cp "$ROOT/bin/fm-fleet-status-lib.sh" "$code/bin/fm-fleet-status-lib.sh.new"
+  mv "$code/bin/fm-fleet-status-lib.sh.new" "$code/bin/fm-fleet-status-lib.sh"
+  starts "$out" 2 || { stop_loop; fail "a running strip did not reload within a redraw of its library changing"; }
+  shows "$out" '■ 1 decision for you' 15 \
+    || { stop_loop; fail "a reloaded strip still cannot read the crew: $(plain < "$out" | tail -c 300)"; }
+  # Its own script changes too.
+  replace_file "$code/bin/fm-bridge-strip.sh" 's/S T A R S H I P/S T A R B O A T/'
+  starts "$out" 3 || { stop_loop; fail "a running strip did not reload within a redraw of its script changing"; }
+  shows "$out" 'S T A R B O A T' 15 || { stop_loop; fail "the reloaded strip does not draw its new code"; }
+  kill -0 "$LOOP_PID" 2>/dev/null || fail "the strip's process ended rather than reloading in place"
+  assert_present "$CONFIG_FIX/panes/$LOOP_PID" "the reloaded strip lost its pane record"
+  stop_loop
+  assert_absent "$CONFIG_FIX/panes/$LOOP_PID" "the reloaded strip left its record behind when stopped"
+  pass "bridge strip: a running strip reloads in place within a redraw when its script or library changes"
+}
+
+test_a_running_strip_reloads_when_an_update_drops_a_library() {
+  local code out
+  reset_case
+  a_busy_fleet
+  code="$TMP_ROOT/case$CASE/code"
+  out="$TMP_ROOT/case$CASE/frames"
+  code_copy "$code"
+  start_loop "$code" "$out"
+  shows "$out" '■ 1 decision for you' 15 || { stop_loop; fail "the strip did not start: $(plain < "$out")"; }
+  # The update folds the timeout library into the fleet library and deletes it.
+  awk -v lib="$ROOT/bin/fm-timeout-lib.sh" '
+    /^\. "\$_FM_FLEET_LIB_DIR\/fm-timeout-lib.sh"$/ { while ((getline l < lib) > 0) print l; next }
+    { print }
+  ' "$ROOT/bin/fm-fleet-status-lib.sh" > "$code/bin/fm-fleet-status-lib.sh.new"
+  mv "$code/bin/fm-fleet-status-lib.sh.new" "$code/bin/fm-fleet-status-lib.sh"
+  rm "$code/bin/fm-timeout-lib.sh"
+  starts "$out" 2 || { stop_loop; fail "a running strip did not reload after an update dropped a library"; }
+  local from tries=50
+  from=$(($(wc -c < "$out") + 1))
+  until tail -c "+$from" "$out" | plain | grep -qF '■ 1 decision for you'; do
+    tries=$((tries - 1))
+    [ "$tries" -gt 0 ] || { stop_loop; fail "the reloaded strip does not read the crew: $(cat "$out.err")"; }
+    sleep 0.1
+  done
+  kill -0 "$LOOP_PID" 2>/dev/null || fail "the strip's process ended rather than reloading in place"
+  stop_loop
+  pass "bridge strip: a running strip reloads when an update removes a library it used to load"
+}
+
+test_a_running_strip_waits_while_its_script_is_empty() {
+  local code out
+  reset_case
+  a_busy_fleet
+  code="$TMP_ROOT/case$CASE/code"
+  out="$TMP_ROOT/case$CASE/frames"
+  code_copy "$code"
+  start_loop "$code" "$out"
+  shows "$out" '■ 1 decision for you' 15 || { stop_loop; fail "the strip did not start: $(plain < "$out")"; }
+  # The update has created the new script but not yet written it.
+  : > "$code/bin/fm-bridge-strip.sh.new"
+  mv "$code/bin/fm-bridge-strip.sh.new" "$code/bin/fm-bridge-strip.sh"
+  sleep 3
+  kill -0 "$LOOP_PID" 2>/dev/null || fail "the strip reloaded onto an empty script and ended"
+  [ "$(grep -o $'\033\\[?25l' "$out" | grep -c '')" -eq 1 ] \
+    || { stop_loop; fail "the strip reloaded onto an empty script"; }
+  assert_present "$CONFIG_FIX/panes/$LOOP_PID" "the strip lost its pane record while its script was empty"
+  # The content lands, and the next frame is the new code's.
+  sed 's/S T A R S H I P/S T A R B O A T/' "$ROOT/bin/fm-bridge-strip.sh" > "$code/bin/fm-bridge-strip.sh.new"
+  mv "$code/bin/fm-bridge-strip.sh.new" "$code/bin/fm-bridge-strip.sh"
+  starts "$out" 2 15 || { stop_loop; fail "the strip did not reload once its script was written"; }
+  shows "$out" 'S T A R B O A T' 15 || { stop_loop; fail "the reloaded strip does not draw its new code"; }
+  stop_loop
+  pass "bridge strip: a running strip keeps its code while an update's script is still empty, then reloads"
+}
+
+test_a_strip_that_never_reads_the_crew_says_it_cannot() {
+  local out
+  reset_case
+  task typing 'state: working · source: pane · harness busy'
+  out="$TMP_ROOT/case$CASE/frames"
+  READER="$BINDIR/absent-reader" start_loop "$ROOT" "$out"
+  shows "$out" 'reading the crew' || { stop_loop; fail "the first frame did not say the crew is being read"; }
+  if ! shows "$out" 'cannot read the crew (since ' 8; then
+    stop_loop
+    fail "a strip whose readings keep failing kept saying it is reading: $(plain < "$out" | tail -c 300)"
+  fi
+  stop_loop
+  plain < "$out" | grep -qE 'cannot read the crew \(since [0-9]{2}:[0-9]{2}\)' \
+    || fail "the strip did not say since when it cannot read the crew"
+  pass "bridge strip: readings that keep failing say so, with since when, rather than reading forever"
+}
+
 test_open_is_not_stopped_by_a_recycled_pid() {
   local out editor_pid
   reset_case
@@ -935,6 +1094,10 @@ fm_test_run \
   test_open_does_not_stack_a_second_strip_in_a_tab \
   test_open_is_not_stopped_by_the_same_tab_in_another_session \
   test_a_running_strip_records_its_session \
+  test_a_running_strip_picks_up_changed_code \
+  test_a_running_strip_reloads_when_an_update_drops_a_library \
+  test_a_running_strip_waits_while_its_script_is_empty \
+  test_a_strip_that_never_reads_the_crew_says_it_cannot \
   test_open_is_not_stopped_by_a_recycled_pid \
   test_install_links_the_plugin_and_records_the_home \
   test_remove_stops_only_its_own_strips_and_unlinks

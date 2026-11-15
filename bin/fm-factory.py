@@ -36,6 +36,12 @@ Usage:
 One record, two readers: every word on screen comes from the record, and every
 state is a word, so an agent reading the pane as text loses nothing.
 
+Staying current. A running pane keeps the code it started with in memory, while
+the record it draws is rebuilt by a fresh process with whatever code is on disk.
+So the live pane and each live copy compare this file's checksum before every
+frame, and when it changed and the new file is non-empty and compiles, they
+re-execute themselves in place: the same process and Herdr pane, the new code.
+
 Where the record comes from. Live work, decisions and the work list come only
 from bin/fm-fleet-snapshot.sh --json, and each task's state word comes from the
 same fold the status bar counts with (fm_fleet_status_bucket in
@@ -169,6 +175,14 @@ LOOK_GAP = 15 * 60      # this long without a sign of a look ends the look
 FOCUS_HOLD = 5          # seconds the pane stays focused before it counts as a look
 FOCUS_CAP = 15 * 60     # focus alone keeps a look going this long after it began or the last key
 MIRROR_CAP = 4
+# A factory tab opens a live copy only of a worker at work: busy, asking
+# Starship, stuck, or waiting on the owner's answer. Parked, held, queued and
+# finished jobs get none.
+MIRROR_STATES = ("running", "with Starship", "stuck", "waiting on you")
+# An open copy also stays through a moment the fleet cannot be read, and closes
+# its pane once its job really ends: gone from the record or in any other state.
+MIRROR_KEEP = MIRROR_STATES + ("no reading",)
+
 # The captured-source id the pane files reconcile requests under; installing
 # the pane binds it (bin/fm-factory-pane.sh), which is the owner's opt-in.
 SETTLED_SOURCE = "factory-pane"
@@ -3080,9 +3094,53 @@ def read_keys(fd: int) -> List[str]:
     return keys
 
 
+def code_bytes() -> bytes:
+    try:
+        with open(os.path.realpath(__file__), "rb") as handle:
+            return handle.read()
+    except OSError:
+        return b""
+
+
+START_DIGEST = hashlib.sha1(code_bytes()).hexdigest()
+
+
+class Watcher:
+    """Whether this file changed on disk since this process started running it."""
+
+    def __init__(self) -> None:
+        self.path = os.path.realpath(__file__)
+        self.start = START_DIGEST
+        self.bad: Optional[str] = None
+
+    def changed(self) -> bool:
+        """True when the file changed, is not empty and compiles; anything else waits."""
+        data = code_bytes()
+        if not data:
+            return False
+        now = hashlib.sha1(data).hexdigest()
+        if now == self.start or now == self.bad:
+            return False
+        try:
+            compile(data, self.path, "exec")
+        except Exception:  # anything that stops the new file compiling
+            self.bad = now
+            return False
+        return True
+
+
+def reexec() -> None:
+    """Run this file again in this process: same pid, terminal and pane."""
+    sys.stdout.flush()
+    argv = [sys.executable or "python3", os.path.realpath(__file__)] + sys.argv[1:]
+    os.execvp(argv[0], argv)
+
+
 def live(pane: Pane) -> None:
     import termios
     import tty
+    watch = Watcher()
+    reload = False
     fd = sys.stdin.fileno()
     saved = termios.tcgetattr(fd)
     out = sys.stdout
@@ -3097,6 +3155,12 @@ def live(pane: Pane) -> None:
     try:
         tty.setraw(fd)
         while True:
+            view = pane.view
+            if view.notice and time.time() > view.notice[2]:
+                view.notice = None
+            if view.talking is None and view.confirm is None and view.notice is None and watch.changed():
+                reload = True
+                break
             pane.reload()
             pane.watch_calls()
             if time.time() - focus_checked > 3:
@@ -3105,9 +3169,6 @@ def live(pane: Pane) -> None:
             pane.take_focus()
             pane.voice_tick()
             size = os.get_terminal_size()
-            view = pane.view
-            if view.notice and time.time() > view.notice[2]:
-                view.notice = None
             rows = view.frame(size.columns, size.lines)
             buf = ["\x1b[?2026h\x1b[H"]
             if resized[0]:
@@ -3137,8 +3198,13 @@ def live(pane: Pane) -> None:
     finally:
         pane.close_voice()
         termios.tcsetattr(fd, termios.TCSADRAIN, saved)
-        out.write("\x1b[?1006l\x1b[?1000l\x1b[?7h\x1b[?25h\x1b[?1049l")
-        out.flush()
+        # A reload keeps the screen as it is for the new code to redraw, and
+        # is not the owner closing the pane.
+        if not reload:
+            out.write("\x1b[?1006l\x1b[?1000l\x1b[?7h\x1b[?25h\x1b[?1049l")
+            out.flush()
+    if reload:
+        reexec()
 
 
 # --------------------------------------------------------------------------
@@ -3218,8 +3284,8 @@ def open_tab(home: str, fid: str) -> Tuple[bool, str]:
 
 
 def split_workers(home: str, factory: Dict[str, Any], page: str) -> Tuple[bool, str]:
-    """Split a live copy of each running worker of <factory> beside its page pane <page>, stacked on the right."""
-    workers = [j for j in factory["jobs"] if j["started"] and j["state"] not in ("stopped", "finished")][:MIRROR_CAP]
+    """Split a live copy of each worker at work (MIRROR_STATES) of <factory> beside its page pane <page>, stacked on the right."""
+    workers = [j for j in factory["jobs"] if j["started"] and j["state"] in MIRROR_STATES][:MIRROR_CAP]
     above = None
     for index, job in enumerate(workers):
         target, direction = (page, "right") if index == 0 else (above, "down")
@@ -3241,20 +3307,40 @@ def open_workers(home: str, fid: str, page: str) -> Tuple[bool, str]:
     return split_workers(home, factory, page)
 
 
-def follow(home: str, task_id: str) -> None:
-    """A read-only live copy of one worker's pane, refreshed every 2 seconds."""
-    peek = os.environ.get("FM_FACTORY_PEEK") or os.path.join(BIN, "fm-peek.sh")
-    record = cached(home) or {}
-    title = task_id
+def job_in(record: Dict[str, Any], task_id: str) -> Optional[Dict[str, Any]]:
     for factory in record.get("factories") or []:
         for job in factory.get("jobs") or []:
             if job["id"] == task_id:
-                title = job["title"]
+                return job
+    return None
+
+
+def follow(home: str, task_id: str) -> None:
+    """A read-only live copy of one worker's pane, refreshed every 2 seconds.
+
+    It closes its own pane once the record says its job ended (MIRROR_KEEP).
+    """
+    peek = os.environ.get("FM_FACTORY_PEEK") or os.path.join(BIN, "fm-peek.sh")
+    watch = Watcher()
+    job = job_in(cached(home) or {}, task_id)
+    title = job["title"] if job else task_id
     out = sys.stdout
     out.write("\x1b[?25l\x1b[?7l")
     signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(SystemExit(0)))
+    reload = ended = False
     try:
         while True:
+            if watch.changed():
+                reload = True
+                break
+            record = cached(home)
+            if record is not None:
+                job = job_in(record, task_id)
+                if job is None or job["state"] not in MIRROR_KEEP:
+                    ended = True
+                    break
+                if snapshot_age(record) > env_int("FM_FACTORY_TTL", 20):
+                    refresh_in_background(home)
             size = os.get_terminal_size()
             try:
                 got = subprocess.run(shlex.split(peek) + [task_id, str(max(size.lines - 2, 1))],
@@ -3272,8 +3358,13 @@ def follow(home: str, task_id: str) -> None:
             out.flush()
             time.sleep(2)
     finally:
-        out.write("\x1b[?7h\x1b[?25h")
-        out.flush()
+        if not reload:
+            out.write("\x1b[?7h\x1b[?25h")
+            out.flush()
+    if reload:
+        reexec()
+    if ended and os.environ.get("HERDR_PANE_ID"):
+        herdr(["pane", "close", os.environ["HERDR_PANE_ID"]])
 
 
 # --------------------------------------------------------------------------
