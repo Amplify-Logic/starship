@@ -1158,6 +1158,9 @@ def refresh_calls(home: str) -> Dict[str, Any]:
                           notes=notes, backlog=axi, known_shapes=dict(basis.get("shapes") or {}),
                           buckets=buckets if isinstance(buckets, dict) else None)
     record.update(snapshot_epoch=int(basis.get("taken_epoch") or 0), calls_signal=signal_at_start)
+    newer = cached(home)
+    if newer and int(newer.get("snapshot_epoch") or 0) > record["snapshot_epoch"]:
+        return newer
     write_atomic(os.path.join(pane_dir(home), "record.json"), json.dumps(record, indent=1))
     return record
 

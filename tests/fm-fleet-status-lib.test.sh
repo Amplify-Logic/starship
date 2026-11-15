@@ -998,6 +998,21 @@ test_the_owners_calls_follow_their_signal_between_readings() {
   pass "fleet status: the owner's calls follow their signal between readings, without refreshing the workers"
 }
 
+# The calls-only refresh runs in a fresh shell, and must title the first call
+# just as the full fold does: from the task's recorded outcome when its backlog
+# row has no title.
+test_the_calls_only_fold_titles_a_call_from_its_recorded_outcome() {
+  local out
+  reset_state
+  fm_write_meta "$STATE/green.meta" kind=crew "outcome=Cups sorted by colour"
+  printf '## In flight\n\n## Queued\n\n## Done\n' > "$STATE/../data/backlog.md"
+  out=$(bash -c '. "$1/bin/fm-fleet-status-lib.sh"; _fm_fleet_calls_fold "$2" green' _ "$ROOT" "$STATE") \
+    || fail "the calls could not be folded"
+  assert_equals "$(printf '%s' "$out" | cut -f3-5 | tr '\t' ' ')" "merge green Cups sorted by colour" \
+    "the calls-only fold did not title the call from its outcome"
+  pass "fleet status: the calls-only fold titles a call from its recorded outcome"
+}
+
 test_finished_work_is_neither_working_nor_stopped
 test_under_load_the_last_good_reading_stands_in_for_unknown
 test_a_done_waits_on_the_captain_only_when_it_is_the_ready_report
@@ -1026,3 +1041,4 @@ test_a_busy_worker_counts_as_alive_when_the_prober_cannot_answer
 test_a_resolved_pause_is_not_counted_as_paused
 test_every_command_that_changes_a_call_moves_the_calls_signal
 test_the_owners_calls_follow_their_signal_between_readings
+test_the_calls_only_fold_titles_a_call_from_its_recorded_outcome

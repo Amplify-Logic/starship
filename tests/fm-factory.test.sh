@@ -851,6 +851,27 @@ test_a_parked_decision_leaves_the_live_pane_within_seconds() {
   pass "factory pane: a parked decision leaves the live pane within seconds, without a whole refresh (${took}s)"
 }
 
+# A calls rebuild that read the fleet before a full refresh finished must not
+# put the older workers back over the newer record.
+test_a_calls_rebuild_on_an_older_reading_keeps_the_newer_record() {
+  local basis epoch
+  reset_case
+  basis="$HOME_FIX/state/factory/basis.json"
+  write_registry
+  write_world
+  python3 "$FACTORY" refresh >/dev/null || fail "the first record could not be built"
+  epoch=$(jq -r .snapshot_epoch "$HOME_FIX/state/factory/record.json")
+  jq '.taken_epoch -= 100
+      | .snapshot.tasks |= map(if .id == "shop-search" then .current_state.state = "unknown" else . end)' \
+    "$basis" > "$basis.old" && mv "$basis.old" "$basis" || fail "the older reading could not be staged"
+  python3 "$FACTORY" refresh-calls >/dev/null || fail "the calls could not be rebuilt"
+  cp "$HOME_FIX/state/factory/record.json" "$TMP_ROOT/case$CASE/record.json" || fail "the record is gone"
+  assert_equals "$(q .snapshot_epoch)" "$epoch" "the record went back to the older reading"
+  assert_equals "$(q '[.factories[] | select(.id == "sample-shop") | .jobs[] | select(.id == "shop-search") | .state] | join("")')" \
+    "running" "the older workers replaced the newer ones"
+  pass "factory pane: a calls rebuild on an older reading keeps the newer record"
+}
+
 test_the_highlight_and_open_boxes_follow_the_record() {
   reset_case
   write_registry
@@ -1072,6 +1093,7 @@ fm_test_run \
   test_a_note_reaches_starship_through_the_real_inbox \
   test_the_highlight_and_open_boxes_follow_the_record \
   test_a_parked_decision_leaves_the_live_pane_within_seconds \
+  test_a_calls_rebuild_on_an_older_reading_keeps_the_newer_record \
   test_talking_never_changes_who_steers \
   test_enter_opens_the_factory_tab_with_its_live_workers \
   test_a_live_copy_shows_text_at_the_top_of_a_taller_pane \

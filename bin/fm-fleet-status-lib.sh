@@ -622,6 +622,7 @@ _fm_fleet_calls_fold() {  # <state-dir> <ready-list>
   local state=$1 list=$2 readyfile backlogfile calls kind id rc=0
   local ready=0 decisions=0 first_kind=- first_id=- first_title=-
   local ids=()
+  _fm_fleet_classify_ready || return 1
   [ "$list" = - ] || read -r -a ids <<<"$list"
   # The ready tasks go in a file rather than a process substitution, whose
   # descriptor bash may close before the function reading it gets there.
