@@ -93,9 +93,14 @@ elif cmd == "pane list":
     out({"result": {"panes": panes}})
 elif cmd == "pane process-info":
     p = find_pane(opt("--pane"))
-    out({"result": {"process_info": {"foreground_processes": [{"cmdline": c} for c in p["cmd"]]}}})
+    # A shell whose startup file runs a command directly hands its foreground
+    # to that command until the startup is done.
+    cmds = [p["startup"]["cmd"]] if p.get("startup", {}).get("reads") else p["cmd"]
+    out({"result": {"process_info": {"foreground_processes": [{"cmdline": c} for c in cmds]}}})
 elif cmd == "pane read":             # a pane's screen: its "screen", else a shell prompt
     p = find_pane(args[2])
+    if p.get("startup", {}).get("reads"):  # still in its startup: nothing on screen for that many reads
+        p["startup"]["reads"] -= 1; save(); sys.exit(0)
     if len(p.get("screens") or []) > 1:   # a shell still starting: one screen per read
         p["screen"] = p["screens"].pop(0); save()
     elif p.get("screens"):
@@ -459,6 +464,39 @@ PY
   pass "desk: a restored shell is given time to reach its prompt, and views wait for it"
 }
 
+# A shell whose startup file runs a command directly (a slow tool, a
+# sleep) shows that command, not the shell, in its foreground while the screen
+# is still empty; it is starting too, not busy.
+test_a_restored_shell_running_a_startup_command_is_waited_for() {
+  new_case true
+  layout
+  restored_session
+  python3 - "$FAKE_HERDR_STATE" <<'PY'
+import json, sys
+st = json.load(open(sys.argv[1]))
+main, shop = st["workspaces"][0]["tabs"][0], st["workspaces"][0]["tabs"][1]
+del main["panes"][1]["agent_session"]
+for pane in main["panes"] + shop["panes"][:1]:
+    pane["startup"] = {"cmd": "sleep 6", "reads": 3}
+json.dump(st, open(sys.argv[1], "w"))
+PY
+  : > "$FAKE_PS"
+  local out pane revive view
+  out=$(FM_DESK_WAIT=60 desk open) || fail "open failed: $out"
+  assert_contains "$out" "start the first mate (firstmate claude-opus)" "a first mate pane running its startup was given up on"
+  assert_contains "$out" "start the Starship bridge again in its pane" "a bridge pane running its startup was given up on"
+  assert_contains "$out" "start the Factory pane again in its pane" "a Factory pane running its startup was given up on"
+  assert_contains "$out" "start the Sample Shop page again in its tab" "a factory page running its startup was given up on"
+  assert_not_contains "$out" "has input waiting or no prompt yet" "a pane that finished its startup was reported as left alone"
+  view=$(grep -n "terminal open" "$FAKE_HERDR_CALLS" | head -1 | cut -d: -f1)
+  for pane in w1:p1 w1:p2 w1:p3 w1:p4; do
+    revive=$(grep -n "pane run $pane " "$FAKE_HERDR_CALLS" | head -1 | cut -d: -f1)
+    [ -n "$revive" ] && [ -n "$view" ] && [ "$revive" -lt "$view" ] \
+      || fail "a view opened before $pane finished its startup and was started"
+  done
+  pass "desk: a restored shell running a startup command is waited for, and views wait for it"
+}
+
 # open-tab splits a live copy of each running worker beside a factory's page,
 # and Herdr brings those copies back as plain shells after a restart.
 test_a_restored_factory_tab_gets_its_worker_copies_back() {
@@ -719,6 +757,7 @@ fm_test_run \
   test_a_pane_with_input_typed_after_its_prompt_is_left_alone \
   test_a_shell_still_starting_is_left_alone \
   test_a_restored_shell_is_given_time_to_reach_its_prompt \
+  test_a_restored_shell_running_a_startup_command_is_waited_for \
   test_a_restored_factory_tab_gets_its_worker_copies_back \
   test_a_pane_the_desk_would_not_touch_never_makes_it_wait \
   test_the_sidebar_setting_changes_only_its_own_line \

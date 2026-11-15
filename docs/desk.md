@@ -27,6 +27,7 @@ It never restarts or moves a pane, tab or workspace, never renames one it did no
 It closes only one kind of pane: an idle leftover shell in a factory tab whose page it is starting again after a restart; it never closes any other pane, tab or workspace.
 It starts something in a pane, or closes one, only when that pane is an idle shell: the shell itself is waiting there, Herdr records no agent in it, and the pane's last line is the shell's prompt with nothing typed after it.
 Such a pane still starting up, as every restored pane is just after a restart, gets up to 30 seconds (`FM_DESK_WAIT`) to reach its prompt, and no view opens meanwhile; panes the desk would neither start something in nor close are never waited for.
+A pane with no agent that runs a command but shows nothing on screen yet, as a shell does while its startup file runs a command that has not printed anything yet, counts as still starting up too.
 A pane holding typed-ahead input is left alone, and a tab or pane running anything else is left as it is; both are named in a note.
 Tabs it adds go at the end; it does not reorder tabs you moved.
 

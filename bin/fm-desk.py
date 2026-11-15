@@ -53,7 +53,9 @@ types into, or closes, an idle shell only when its screen also shows the
 shell's prompt as the last line with nothing typed after it. It gives such a
 pane still starting up FM_DESK_WAIT to reach its prompt, and opens no view
 meanwhile; one that does not, or one holding typed-ahead input, is left alone
-with a note.
+with a note. A pane with no agent that runs a command but shows nothing on
+screen yet, as a shell running a command from its startup file does, counts as
+still starting up too.
 
 Environment:
   FM_HOME                 the home whose config/desk-layout is read (default:
@@ -360,9 +362,23 @@ def with_screen(herdr: Herdr, pane: Dict[str, Any]) -> Dict[str, Any]:
     An idle shell still runs its own startup before it shows a prompt, and
     input typed at the prompt waits there unseen by the process check; typing
     into either would mix the desk's command with the owner's.
+
+    A shell whose startup file runs a command directly (a slow tool, a sleep)
+    hands its foreground to that command before it has shown anything, so a
+    pane with no agent, a foreground other than the shell or one of the
+    desk's own scripts, and nothing on screen is marked starting.
     """
-    pane["free"] = bool(pane["idle"]) and at_prompt(herdr.screen(pane["id"]))
+    maybe_starting = not pane["idle"] and not pane["agent"] and bool(pane["cmdlines"]) and \
+        not runs(pane, "fm-bridge-strip.sh") and not runs(pane, "fm-factory-pane.sh")
+    screen = herdr.screen(pane["id"]) if pane["idle"] or maybe_starting else ""
+    pane["free"] = bool(pane["idle"]) and at_prompt(screen)
+    pane["starting"] = maybe_starting and not screen.strip()
     return pane
+
+
+def not_ready(pane: Dict[str, Any]) -> bool:
+    """True for a shell not yet at an empty prompt: still starting, or holding typed-ahead input."""
+    return bool(pane["idle"] and not pane["free"]) or bool(pane["starting"])
 
 
 def busy_note(what: str) -> str:
@@ -488,21 +504,20 @@ def plan(layout: Dict[str, Any], found: Dict[str, Any],
             steps.append(step("firstmate", "start the first mate (%s)" % layout["firstmate"], pane=None))
     elif seat is None:
         notes.append("the main tab of %s has no pane for the first mate; nothing was started" % label)
-    elif seat["idle"]:
-        if not layout["firstmate"]:
-            notes.append("the first mate's pane is an idle shell; name its command as `firstmate =` in the layout")
-        elif seat["free"]:
-            steps.append(step("firstmate", "start the first mate (%s)" % layout["firstmate"], pane=seat["id"]))
-        else:
-            notes.append(busy_note("the first mate"))
-            starting = True
+    elif seat["idle"] and not layout["firstmate"]:
+        notes.append("the first mate's pane is an idle shell; name its command as `firstmate =` in the layout")
+    elif seat["free"]:
+        steps.append(step("firstmate", "start the first mate (%s)" % layout["firstmate"], pane=seat["id"]))
+    elif not_ready(seat) and layout["firstmate"]:
+        notes.append(busy_note("the first mate"))
+        starting = True
 
     for kind, pane, name in (("bridge", bridge, "the Starship bridge"), ("factory", factory, "the Factory pane")):
         if pane is None:
             steps.append(step(kind, "show %s" % name, seat=seat["id"] if seat else None))
         elif pane["free"]:
             steps.append(step(kind + "-revive", "start %s again in its pane" % name, pane=pane["id"]))
-        elif pane["idle"]:
+        elif not_ready(pane):
             notes.append(busy_note(name))
             starting = True
 
@@ -529,10 +544,10 @@ def plan(layout: Dict[str, Any], found: Dict[str, Any],
                         close=[p["id"] for p in others if p["free"]])
             item["kept"] = ["a leftover pane in the %s tab is not a shell waiting at an empty prompt; "
                             "it was left open" % tab["label"] for p in others if not p["free"]]
-            item["held"] = any(p["idle"] and not p["free"] for p in others)
+            item["held"] = any(not_ready(p) for p in others)
             starting = starting or item["held"]
             steps.append(item)
-        elif first is not None and first["idle"]:
+        elif first is not None and not_ready(first):
             notes.append(busy_note("the %s tab" % tab["label"]))
             starting = True
         else:
