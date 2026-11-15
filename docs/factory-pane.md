@@ -94,6 +94,8 @@ An answer, a keep, a change request and anything said in the talk box become a c
 Starship then acts on it under its own rules: it records the answer on the held decision, merges only under its merge rules, and passes words on to the crew.
 The pane itself merges nothing, answers no held decision itself, and types into no worker, which is why the talk box says `Starship hears this too`.
 `x` files a reconcile request for the question through `bin/fm-captain-hold.sh reconcile-requests` under the pane's own source, which installing the pane binds, and wakes Starship with an inbox note naming the call, and it never closes anything itself.
+Only `install` binds that source and only `remove` unbinds it, so a pane installed before the key existed needs `install` once more.
+While the card reads `checking`, the footer leaves `x settled?` out and a press only says `Starship is already checking this`, filing nothing and sending no note.
 Starship re-reads the conversation and records it in that turn: it closes the call with the evidence (`reconcile close`), or rewrites it by retitling it with `bin/fm-tasks-axi.sh update <id> --title '<new title>'` and holding it again with `bin/fm-captain-hold.sh hold <id> --reason '<new reason>'`, and a rewritten call still retires its pending request with `reconcile note`.
 The card reads `checking` while that request is pending and either it or the pane's settled note for the call is from since the call was last held; a press that finds a request from before the call was last held names its note after that time, so it always wakes Starship.
 

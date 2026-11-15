@@ -33,8 +33,8 @@
 #
 # Installing the pane is the owner's opt-in to its Already settled? key, so
 # `install` binds the pane's reconcile source id (`factory-pane`) through
-# bin/fm-captain-hold.sh bind, `run` keeps that binding in place for a pane
-# installed before the key existed, and `remove` unbinds it.
+# bin/fm-captain-hold.sh bind and `remove` unbinds it; nothing else binds it,
+# so a pane installed before the key existed needs one `install` again.
 #
 # `remove` finds running panes only through the records each one keeps in the
 # plugin's Herdr config directory, and stops a recorded process only after
@@ -132,7 +132,6 @@ cmd_run() {
     [ "$arg" != --factory ] || view=page
   done
   record=$(record_self "$view")
-  bind_settled "$home" 2>/dev/null || true
   if [ "$view" = overview ]; then
     [ -z "${FM_FACTORY_ITEM:-}" ] || start=(--item "$FM_FACTORY_ITEM")
     [ -z "$record" ] || focus="${record%/panes/*}/focus/$$"

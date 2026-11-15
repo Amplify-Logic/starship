@@ -833,11 +833,17 @@ test_already_settled_asks_starship_to_recheck_the_call() {
   has_line "$out" " checking Starship is re-reading what you said about this" "the checking row"
   assert_not_contains "$(printf '%s\n' "$out" | sed -n '/Harvest chart/,/Which payment/p')" "x  Already settled?" \
     "a checking card offers the key again"
-  # Pressed again while checking: still one request and one note.
-  drive_keys x
-  assert_equals "$(wc -l < "$HOME_FIX/reconcile.requests" | tr -d ' ')" "1" "a second press filed a second request"
-  assert_equals "$(sort -u "$FM_FACTORY_TEST_NOTES" | jq -r .request_id | sort -u | wc -l | tr -d ' ')" "1" \
-    "a second press made a second wake"
+  assert_contains "$out" " ↑↓ move · 1/2/3 answer · enter open · t talk · s who steers · q quit" \
+    "a checking card leaves x settled? out of the footer"
+  # Pressed again while checking: it says so and files and sends nothing.
+  local calls_before notes_before
+  calls_before=$(wc -l < "$HOME_FIX/captain-hold.calls" | tr -d ' ')
+  notes_before=$(wc -l < "$FM_FACTORY_TEST_NOTES" | tr -d ' ')
+  drive_keys x "SNAP:$screen"
+  assert_contains "$(cat "$screen")" "Starship is already checking this." "a press while checking says so"
+  assert_equals "$(wc -l < "$HOME_FIX/captain-hold.calls" | tr -d ' ')" "$calls_before" \
+    "a press while checking filed a request"
+  assert_equals "$(wc -l < "$FM_FACTORY_TEST_NOTES" | tr -d ' ')" "$notes_before" "a press while checking sent a note"
   # Starship closes or notes the call: its request leaves and checking clears.
   : > "$HOME_FIX/reconcile.requests"
   take_record
@@ -862,8 +868,9 @@ test_already_settled_asks_starship_to_recheck_the_call() {
 }
 
 # The same key against the real captain-hold intake, the real inbox and a
-# real backlog: the pane started as Herdr starts it binds its source, the
-# request lands, and Starship's reconcile note or evidence close clears it.
+# real backlog: starting the pane binds nothing, installing it binds its
+# source, the request lands, and Starship's reconcile note or evidence close
+# clears it.
 test_already_settled_files_a_real_reconcile_request() {
   if [ -z "$REAL_TASKS_AXI" ]; then
     echo "skip: tasks-axi not found; the real reconcile request case did not run"
@@ -884,7 +891,11 @@ test_already_settled_files_a_real_reconcile_request() {
    FM_CAPTAIN_HOLD_NOW=2026-11-14T07:00:00Z bash "$hold" hold chart-range --title "Harvest chart" \
      --reason "Week or season?" --repo garden-journal >/dev/null || fail "hold failed"
    DRIVE_PANE=1 drive_keys x
-   assert_contains "$(bash "$hold" binding factory-pane)" "(any)" "starting the pane bound its source"
+   bash "$hold" binding factory-pane >/dev/null 2>&1 && fail "starting the pane bound its source"
+   assert_not_contains "$(bash "$hold" reconcile list)" "chart-range" "an unbound pane filed a request"
+   out=$(HERDR_BIN_PATH="$BINDIR/herdr" bash "$PANE" install 2>&1) || fail "install failed: $out"
+   assert_contains "$(bash "$hold" binding factory-pane)" "(any)" "installing the pane bound its source"
+   DRIVE_PANE=1 drive_keys x
    out=$(bash "$hold" reconcile list)
    assert_contains "$out" "chart-range"$'\t'"requested=2026-11-14T07:30:00Z" "the request is on record"
    assert_contains "$out" "source=the Factory pane's Already settled? key" "the request names the pane"

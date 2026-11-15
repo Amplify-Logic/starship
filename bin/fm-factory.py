@@ -1555,7 +1555,8 @@ class View:
             if need["kind"] == "question" and need["options"]:
                 keys.append("%s answer" % "/".join(o["key"] for o in need["options"]))
             if need["kind"] == "question":
-                keys.append("x settled?")
+                if not need.get("checking"):
+                    keys.append("x settled?")
             else:
                 keys.append("k keep · c changes")
         if not self.opened or not self.in_tab:
@@ -1834,6 +1835,9 @@ class Pane:
 
     def settled(self, need: Dict[str, Any]) -> None:
         """File a reconcile request for a held call and wake Starship to re-check it."""
+        if need.get("checking"):
+            self.say("Starship is already checking this.", "amber")
+            return
         requested, why = file_reconcile(self.home, need["id"])
         if requested is None:
             self.say("Not asked: %s" % why, "red", 12)
