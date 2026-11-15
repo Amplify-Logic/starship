@@ -91,14 +91,15 @@ the wake note is named.
 
 The talk box. Where this machine has a microphone recorder (mic_command) and
 the home has the desk voice's speech key, t listens at once: the recorder's
-samples are read here, what was heard so far is written down about once a
-second by the desk voice's own command (bin/fm-deepgram-stt.sh) and shown in
-the box, and the note is sent when the speaker stops or presses enter. So the
-microphone's sound goes to that speech service from the first speech on, as
-the desk voice's does. A first typed key drops the recording and types
-instead; without a recorder or the key the box is typed from the start. A
-recording that cannot be written down goes to the desk voice's unsent
-recordings (bin/fm-desk-voice.sh keep).
+samples are read here, the newest few seconds are written down every couple of
+seconds by the desk voice's own command (bin/fm-deepgram-stt.sh) and shown in
+the box, and when the speaker stops or presses enter the whole note is written
+down once and sent (the Voice class owns the bounds). So the microphone's
+sound goes to that speech service from the first speech on, as the desk
+voice's does. A first typed key or esc drops the recording: nothing more of it
+is written down and no file of it stays. Without a recorder or the key the box
+is typed from the start. A recording that cannot be written down goes to the
+desk voice's unsent recordings (bin/fm-desk-voice.sh keep).
 
 Environment:
   FM_HOME                     the home whose factories are shown (default: this
@@ -177,6 +178,10 @@ VOICE_SPEECH = 120        # the quietest level that can be speech, of 32768
 VOICE_QUIET_STOP = 20     # tenths of a second of quiet after speech that end a recording
 VOICE_NO_SPEECH = 120     # tenths of a second without any speech before a recording gives up
 VOICE_MAX = 1800          # the longest recording, in tenths of a second
+VOICE_LIVE_WINDOW = 8     # seconds of the newest sound written down to show the words while speaking
+VOICE_LIVE_EVERY = 2.0    # the least seconds between two of those writings
+VOICE_LIVE_BACKOFF = 4.0  # seconds to wait after one failed, doubling up to VOICE_LIVE_BACKOFF_MAX
+VOICE_LIVE_BACKOFF_MAX = 30.0
 
 
 # --------------------------------------------------------------------------
@@ -775,22 +780,27 @@ def held_state(row: Dict[str, Any], today: str = "") -> str:
     return "on hold"
 
 
-QUEUE_WORDS = ("starts on its own", "in line", "on hold", "waits on you", "deferred")
+QUEUE_WORDS = ("starts on its own", "in line", "on hold", "waits on other work", "waits on you", "older call",
+               "deferred")
 
 
 def queue_word(row: Dict[str, Any], asked: bool, today: str) -> Optional[str]:
     """Where a work item nobody has started stands in the queue, as one of QUEUE_WORDS.
 
-    A decision held for the owner waits on you, or is deferred while its date
-    is still ahead. Anything else starts on its own when it waits on other work
-    or on a date still ahead, is on hold when it is held with neither, and is
-    in line when nothing is set to start it. Work listed as in flight with no
-    worker is not queued.
+    A decision held for the owner waits on you; it is deferred while its date
+    is still ahead, an older call once it has waited undated past the
+    snapshot's age, and it waits on other work while a blocker of it is still
+    open, since it cannot be decided before then. Anything else starts on its
+    own when it waits on other work or on a date still ahead, is on hold when
+    it is held with neither, and is in line when nothing is set to start it.
+    Work listed as in flight with no worker is not queued.
     """
     if asked:
         return "waits on you"
     if row.get("hold_kind") == "captain":
-        return "deferred" if row.get("hold_bucket") == "dated" else "waits on you"
+        if row.get("hold_bucket") == "blocked" or row.get("unresolved_blocker_ids"):
+            return "waits on other work"
+        return {"dated": "deferred", "aged": "older call"}.get(row.get("hold_bucket"), "waits on you")
     if row.get("unresolved_blocker_ids"):
         return "starts on its own"
     if row.get("hold_kind"):
@@ -799,11 +809,12 @@ def queue_word(row: Dict[str, Any], asked: bool, today: str) -> Optional[str]:
 
 
 def queue_counts(jobs: List[Dict[str, Any]]) -> Dict[str, int]:
-    """The queue of these jobs as counts; the ones waiting on you include the deferred."""
+    """The queue of these jobs as counts; the ones waiting on you include the older calls and the deferred."""
     words = [j["queue"] for j in jobs if j.get("queue")]
     return {"total": len(words), "starts_on_its_own": words.count("starts on its own"),
             "in_line": words.count("in line"), "on_hold": words.count("on hold"),
-            "waits_on_you": words.count("waits on you") + words.count("deferred"),
+            "waits_on_other_work": words.count("waits on other work"),
+            "waits_on_you": words.count("waits on you") + words.count("older call") + words.count("deferred"),
             "deferred": words.count("deferred")}
 
 
@@ -819,6 +830,10 @@ def queue_parts(queue: Dict[str, int]) -> List[Tuple[str, str]]:
         parts.append(("in_line", "%d in line" % queue["in_line"]))
     if queue["on_hold"]:
         parts.append(("on_hold", "%d on hold" % queue["on_hold"]))
+    other = queue.get("waits_on_other_work") or 0   # a record from before this was counted has none
+    if other:
+        parts.append(("waits_on_other_work", "1 waits on other work" if other == 1
+                      else "%d wait on other work" % other))
     if wait:
         words = "1 waits on you" if wait == 1 else "%d wait on you" % wait
         if deferred and deferred == wait:
@@ -1196,31 +1211,16 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
                          "word": "replied", "text": tidy(reply["body"], 120)})
     for factory in factories:
         factory["talk"] = sorted(factory["talk"], key=lambda t: t["at"] or 0)[-6:]
-    # What the owner already sent about each call, so a call he answered reads
-    # as answered until Starship has acted on it.
+    # When the owner answered each call, and with which option, so an answered
+    # call reads as answered until Starship has acted on it.
     for need in needs:
         stem = "factory.%s." % need["factory"]
-        sent_ids = {request_id_of("%sanswer.%s.%s.%s" % (stem, need["id"], asking(need), option["key"])):
-                    ("answered", option["key"], "%s %s" % (option["key"], option["label"]))
-                    for option in need["options"]}
-        sent_ids[request_id_of("%skeep.%s.%s" % (stem, need["id"], asking(need)))] = ("asked to keep", None, "keep it")
-        said_ids = {request_id_of("%stalk.%s." % (stem, need["id"])): "said",
-                    request_id_of("%schange.%s." % (stem, need["id"])): "asked for changes"}
-        found: List[Dict[str, Any]] = []
-        for note in notes:
-            rid, at = note.get("request_id") or "", parse_iso(note.get("at"))
-            word, key, text = sent_ids.get(rid, (None, None, None))
-            if word is None and (at or 0) >= (need.get("since") or 0):
-                word = next((w for stem_id, w in said_ids.items() if rid.startswith(stem_id)), None)
-                line = ((note.get("body") or "").strip().splitlines() or [""])[0]
-                lead = next((lead for lead in ("About %s: " % need["title"], "Changes for %s: " % need["title"])
-                             if line.startswith(lead)), "")
-                text = tidy(line[len(lead):], 120)
-            if word:
-                found.append({"word": word, "key": key, "text": text, "at": at,
-                              "picked_up": bool(note.get("handled")),
-                              "reply": tidy((note.get("reply") or {}).get("body"), 140) or None})
-        need["sent"] = max(found, key=lambda item: item["at"] or 0) if found else None
+        answers = {request_id_of("%sanswer.%s.%s.%s" % (stem, need["id"], asking(need), option["key"])): option["key"]
+                   for option in need["options"]}
+        answers[request_id_of("%skeep.%s.%s" % (stem, need["id"], asking(need)))] = None
+        found = [{"at": parse_iso(note.get("at")), "key": answers[note.get("request_id")]}
+                 for note in notes if note.get("request_id") in answers]
+        need["answered"] = max(found, key=lambda item: item["at"] or 0) if found else None
     feed.sort(key=lambda e: (e["at"] if e["at"] is not None else (parse_iso(e["date"]) or 0)), reverse=True)
     feed = feed[:FEED_CAP]
 
@@ -1634,7 +1634,7 @@ class View:
         self.in_tab = in_tab
         self.voice = voice    # whether the talk box can listen on this machine
         # What was sent from this pane and is not in the record yet, by need and asking.
-        self.sent: Dict[Tuple[str, str], Dict[str, Any]] = {}
+        self.answered: Dict[Tuple[str, str], Dict[str, Any]] = {}   # answers sent here a moment ago
         self.cursor = 0
         self.selected: Optional[Tuple[str, str]] = None
         # An item the highlight was asked to go to (--item, or the focus file),
@@ -1666,7 +1666,7 @@ class View:
                 self.notice = ("Not sent: this was settled elsewhere before you confirmed %s." % confirm["what"],
                                "amber", time.time() + 12)
         asked = {(n["id"], asking(n)) for n in record.get("needs_you") or []}
-        self.sent = {key: mark for key, mark in self.sent.items() if key in asked}
+        self.answered = {key: mark for key, mark in self.answered.items() if key in asked}
 
     # ---- record lookups ----------------------------------------------------
 
@@ -1685,9 +1685,9 @@ class View:
     def need(self, ident: str) -> Optional[Dict[str, Any]]:
         return next((n for n in self.record["needs_you"] if n["id"] == ident), None)
 
-    def sent_of(self, need: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """What the owner last sent about a need: from the record, or from this pane a moment ago if newer."""
-        known, here = need.get("sent"), self.sent.get((need["id"], asking(need)))
+    def answered_of(self, need: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """When the owner answered a need, and how: from the record, or from this pane a moment ago if newer."""
+        known, here = need.get("answered"), self.answered.get((need["id"], asking(need)))
         if known and here:
             return here if (here["at"] or 0) >= (known["at"] or 0) else known
         return known or here
@@ -1771,7 +1771,7 @@ class View:
         if not queue:
             return []
         colours = {"total": "ice", "starts_on_its_own": "ice", "in_line": "mist", "on_hold": "faint",
-                   "waits_on_you": "red"}
+                   "waits_on_other_work": "mist", "waits_on_you": "red"}
         parts = queue_parts(queue)
         lines = [[S(lead)]]
         indent = len(lead) + len(parts[0][1])
@@ -1794,13 +1794,13 @@ class View:
         now = self.now()
         fac = self.factory(need["factory"])
         question = need["kind"] == "question"
-        sent = self.sent_of(need)
+        sent = self.answered_of(need)
         waited = ("waiting " if question else "ready ") + minutes_words((now - need["since"]) // 60) \
             if need.get("since") else ("waiting" if question else "ready")
         if sent:
-            # He acted on it; it stays listed until Starship has.
-            waited = "%s %s" % ("answered" if sent["word"] == "answered" else "sent",
-                                when_words(sent["at"], now) if sent.get("at") else "just now")
+            # Answered; it stays listed until Starship has acted on that.
+            waited = "answered %s, waiting for Starship" % (
+                when_words(sent["at"], now) if sent.get("at") else "just now")
         right = [S(waited, "cyan" if sent else "mist")]
         if not full:
             right = [S(fac["name"], "mist"), S(" · ", "faint")] + right
@@ -1829,21 +1829,6 @@ class View:
                 rows.append(row(width))
         return rows + [row(width)]
 
-    def sent_rows(self, width: int, need: Dict[str, Any], pad) -> List[Row]:
-        """What the owner already sent about this need, and whether Starship has picked it up."""
-        sent = self.sent_of(need)
-        if not sent:
-            return []
-        words = {"answered": "You answered: %s", "asked to keep": "You asked Starship to keep it",
-                 "asked for changes": "You asked for changes: %s", "said": "You said: %s"}[sent["word"]]
-        words = words % sent["text"] if "%s" in words else words
-        when = "sent %s" % when_words(sent["at"], self.now()) if sent.get("at") else "sent just now"
-        state = "Starship has picked it up" if sent.get("picked_up") else "Starship has not picked it up yet"
-        rows = flow(width, [pad, S("✓ ", "cyan", True)], "%s · %s · %s" % (words, when, state), "cyan")
-        if sent.get("reply"):
-            rows += flow(width, [pad, S("  ")], "Starship replied: %s" % sent["reply"], "mist")
-        return rows
-
     def need_rows(self, width: int, need: Dict[str, Any], full: bool) -> List[Row]:
         """A need opened as a card: every word of its title, why and options, wrapped."""
         question = need["kind"] == "question"
@@ -1857,9 +1842,8 @@ class View:
             for line in rows:
                 line.band = band
             rows.append(row(width, [pad] + right))
-        rows += self.sent_rows(width, need, pad)
         confirm = self.confirm if self.confirm and self.confirm["item"] == need["id"] else None
-        chosen = (confirm or {}).get("option") or (self.sent_of(need) or {}).get("key")
+        chosen = (confirm or {}).get("option") or (self.answered_of(need) or {}).get("key")
         if question:
             if need.get("why"):
                 rows += flow(width, [pad], need["why"], "mist")
@@ -2229,7 +2213,9 @@ class View:
         names = {"in line": ("more in line", "more in line"),
                  "starts on its own": ("starts on its own", "start on their own"),
                  "on hold": ("on hold", "on hold"),
-                 "waits on you": ("older call waits on you", "older calls wait on you"),
+                 "waits on other work": ("waits on other work", "wait on other work"),
+                 "waits on you": ("more waits on you", "more wait on you"),
+                 "older call": ("older call waits on you", "older calls wait on you"),
                  "deferred": ("deferred to a date", "deferred to a date")}
         tail = [plural(count, *names[word]) for word, count in folded.items() if count]
         if tail:
@@ -2427,13 +2413,22 @@ class Voice:
     The recording ends by itself once VOICE_QUIET_STOP of quiet follows speech,
     when no speech came within VOICE_NO_SPEECH, at VOICE_MAX, or when the
     recorder stops.
+
+    While it listens, only the newest VOICE_LIVE_WINDOW seconds are written
+    down, at most every VOICE_LIVE_EVERY seconds, to show the words; what is
+    sent is one writing down of the whole note when it ends. So what a note
+    costs the speech service grows with its length and no faster. A dropped
+    note is never written down afterwards and leaves no file.
     """
 
     def __init__(self, command: List[str], path: str, home: str):
         self.path = path
         self.home = home
-        self.live = ""                     # what was heard so far, written down while it is still listening
-        self.live_at = 0                   # how many bytes of samples those words cover
+        self.live = ""                     # the newest words heard, written down while it is still listening
+        self.live_at = 0                   # how many bytes of samples had been heard when those were written
+        self.dropped = False               # cancelled: nothing more of it is written down or kept
+        self.stt: Optional[subprocess.Popen] = None   # the writing down under way
+        self.lock = threading.Lock()       # a drop and the start of a writing down never interleave
         self.samples = bytearray()
         self.levels: List[float] = []      # each tenth's loudness, 0 to 1 on a scale that suits a meter
         self.spoken = 0                    # tenths that were speech
@@ -2502,8 +2497,30 @@ class Voice:
                 pass
         self.reader.join(timeout=2)
 
-    def write(self, path: str, size: int) -> Tuple[Optional[str], str]:
-        """Write the first <size> bytes of samples down: the words, or nothing and why."""
+    def hush(self) -> None:
+        """Stop the writing down under way, if any."""
+        proc = self.stt
+        if proc is not None and proc.poll() is None:
+            try:
+                os.killpg(proc.pid, signal.SIGTERM)
+            except OSError:
+                pass
+
+    def write(self, path: str, start: int, size: int) -> Tuple[Optional[str], str]:
+        """Write the samples from byte <start> up to byte <size> down: the words, or nothing and why.
+
+        A dropped note is not written down: nothing starts once it is dropped,
+        and a writing its drop interrupted leaves no file behind.
+        """
+        def gone() -> Tuple[Optional[str], str]:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+            return None, "it was cancelled"
+
+        if self.dropped:
+            return None, "it was cancelled"
         try:
             os.makedirs(os.path.dirname(path), exist_ok=True)
             handle = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)   # the owner's eyes only
@@ -2511,43 +2528,62 @@ class Voice:
                 out.setnchannels(1)
                 out.setsampwidth(2)
                 out.setframerate(VOICE_RATE)
-                out.writeframes(bytes(self.samples[:size // 2 * 2]))
-            done = subprocess.run(stt_command() + [path], capture_output=True, text=True, timeout=900,
-                                  stdin=subprocess.DEVNULL, env=dict(os.environ, FM_HOME=self.home))
+                out.writeframes(bytes(self.samples[start // 2 * 2:size // 2 * 2]))
+            with self.lock:
+                if self.dropped:
+                    return gone()
+                proc = self.stt = subprocess.Popen(
+                    stt_command() + [path], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE, text=True, start_new_session=True,
+                    env=dict(os.environ, FM_HOME=self.home))
+            try:
+                out_text, err_text = proc.communicate(timeout=900)
+            except subprocess.TimeoutExpired:
+                self.hush()
+                out_text, err_text = proc.communicate()
         except (OSError, subprocess.SubprocessError, wave.Error) as error:
-            return None, str(error) or "it could not be read"
-        if done.returncode != 0:
-            return None, (done.stderr.strip().splitlines() or ["the speech service did not answer"])[-1]
-        return " ".join(done.stdout.split()), ""
+            return gone() if self.dropped else (None, str(error) or "it could not be read")
+        if self.dropped:
+            return gone()
+        if proc.returncode != 0:
+            return None, (err_text.strip().splitlines() or ["the speech service did not answer"])[-1]
+        return " ".join(out_text.split()), ""
 
     def follow(self) -> None:
-        """While it listens, write down what was heard so far, a second of new speech at a time.
+        """While it listens, write the newest few seconds down to show the words being said.
 
-        The same command writes the whole recording down at the end, so the
-        words shown while speaking are the words that are sent.
+        Only the last VOICE_LIVE_WINDOW seconds go to the speech service, and
+        no more often than every VOICE_LIVE_EVERY seconds; a writing that
+        failed is tried again only after a wait that doubles each time. An
+        ellipsis leads the words once the note is longer than that window.
         """
         part = self.path + ".part"
-        while not self.over:
+        window = VOICE_LIVE_WINDOW * VOICE_RATE * 2
+        due, wait = 0.0, VOICE_LIVE_BACKOFF
+        while not self.over and not self.dropped:
             size = len(self.samples)
-            if not self.heard or size - self.live_at < VOICE_RATE * 2:
+            if not self.heard or size - self.live_at < VOICE_RATE * 2 or time.monotonic() < due:
                 time.sleep(0.1)
                 continue
-            words, _why = self.write(part, size)
-            if words is not None:
-                self.live, self.live_at = words, size
+            began = time.monotonic()
+            words, _why = self.write(part, max(size - window, 0), size)
+            if words is None:
+                due, wait = began + wait, min(wait * 2, VOICE_LIVE_BACKOFF_MAX)
+                continue
+            due, wait = began + VOICE_LIVE_EVERY, VOICE_LIVE_BACKOFF
+            self.live, self.live_at = ("… " if size > window else "") + words, size
         try:
             os.unlink(part)
         except OSError:
             pass
 
     def write_down(self) -> None:
-        """Write the whole recording down in a thread; `words` or `failed` says when it is done."""
+        """Write the whole recording down once, in a thread; `words` or `failed` says when it is done."""
         def run() -> None:
             self.follower.join()
-            if self.live and self.live_at == len(self.samples):
-                self.words = self.live
-                return
-            self.words, self.failed = self.write(self.path, len(self.samples))
+            if not self.dropped:
+                self.words, self.failed = self.write(self.path, 0, len(self.samples))
+        self.hush()   # the words being shown are no longer needed
         threading.Thread(target=run, daemon=True).start()
 
     def keep(self, home: str, why: str) -> Optional[str]:
@@ -2561,12 +2597,17 @@ class Voice:
         return out.stdout.strip() or None if out.returncode == 0 else None
 
     def drop(self) -> None:
-        """Stop and forget: nothing of the recording stays (follow removes its own part)."""
+        """Stop and forget: nothing more of it is written down, and no file of it stays."""
+        with self.lock:
+            self.dropped = True
+            self.hush()
         self.stop()
-        try:
-            os.unlink(self.path)
-        except OSError:
-            pass
+        self.follower.join(timeout=3)
+        for path in (self.path, self.path + ".part"):
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
 
 
 class Pane:
@@ -2701,7 +2742,7 @@ class Pane:
         return self.view.need(ident) if kind == "need" else None
 
     def send(self, request_id: str, body: str, done: str, mark: Optional[Dict[str, Any]] = None) -> bool:
-        """Send one note to Starship and say whether it went; <mark> is what the card then shows as sent."""
+        """Send one note to Starship and say whether it went; <mark> is the answer its card then shows."""
         ok, why = send_note(self.home, request_id, body)
         if not ok:
             self.not_sent("%s. Nothing reached Starship; press the key again." % why.rstrip("."))
@@ -2710,9 +2751,7 @@ class Pane:
         if mark:
             need = self.view.need(mark["item"])
             if need is not None:
-                self.view.sent[(need["id"], asking(need))] = {
-                    "word": mark["word"], "key": mark.get("key"), "text": mark["text"], "at": now_epoch(),
-                    "picked_up": False, "reply": None}
+                self.view.answered[(need["id"], asking(need))] = {"at": now_epoch(), "key": mark.get("key")}
         refresh_in_background(self.home)
         return True
 
@@ -2728,8 +2767,7 @@ class Pane:
                 need["title"], option["key"], option["label"], need["id"],
                 ", key " + need["key"] if need.get("key") else ""),
             "done": "answer %s, %s (%s)" % (option["key"], option["label"], need["title"]),
-            "mark": {"item": need["id"], "word": "answered", "key": option["key"],
-                     "text": "%s %s" % (option["key"], option["label"])}}
+            "mark": {"item": need["id"], "key": option["key"]}}
 
     def confirm_key(self, key: str) -> bool:
         """A key while a confirmation is open: only enter, esc or another option does anything."""
@@ -2826,7 +2864,6 @@ class Pane:
         text = talk["text"].strip()
         fac = view.factory(talk["factory"])
         source = "spoken into the Factory pane" if spoken else "from the Factory pane"
-        mark = None
         if talk["kind"] == "talk":
             body = "To the %s crew: %s\n\n(%s)" % (fac["name"], text, source)
             rid = "factory.%s.talk.%d" % (fac["id"], now)
@@ -2834,14 +2871,12 @@ class Pane:
             body = "Changes for %s: %s\n\n(%s; item %s%s)" % (
                 talk["title"], text, source, talk["item"], ", " + talk["pr"] if talk.get("pr") else "")
             rid = "factory.%s.change.%s.%d" % (fac["id"], talk["item"], now)
-            mark = {"item": talk["item"], "word": "asked for changes", "text": tidy(text, 120)}
         else:
             body = "About %s: %s\n\n(%s; item %s)" % (talk["title"], text, source, talk["item"])
             rid = "factory.%s.talk.%s.%d" % (fac["id"], talk["item"], now)
-            mark = {"item": talk["item"], "word": "said", "text": tidy(text, 120)}
         said = '%s"%s"%s' % ("(voice) " if spoken else "", tidy(text, 90),
                              ". It passes it on to the %s crew." % fac["name"] if talk["kind"] == "talk" else "")
-        if self.send(rid, body, said, mark):
+        if self.send(rid, body, said):
             view.talking = None
 
     def talk_key(self, key: str) -> bool:
@@ -2977,7 +3012,7 @@ class Pane:
                     need["title"], need["id"],
                     ", " + need["pr"] if need.get("pr") else ""),
                 "done": "keep %s and land it" % need["title"],
-                "mark": {"item": need["id"], "word": "asked to keep", "text": "keep it"}}
+                "mark": {"item": need["id"], "key": None}}
             view.follow = True
         elif need and need["kind"] == "finished work" and lower == "c":
             self.open_talk({"kind": "change", "factory": need["factory"], "item": need["id"],
