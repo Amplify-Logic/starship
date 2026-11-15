@@ -72,10 +72,31 @@ case "$1 $2" in
   'plugin pane')
     printf '{"result":{"plugin_pane":{"plugin_id":"starship.factory","pane":{"pane_id":"w1:p9"}}}}\n' ;;
   'plugin config-dir') printf '%s\n' "$FM_FACTORY_TEST_CONFIG" ;;
+  'pane get')
+    printf '{"result":{"pane":{"pane_id":"%s","focused":%s},"type":"pane_info"}}\n' "$3" \
+      "${FM_FACTORY_TEST_FOCUSED:-false}" ;;
 esac
 exit 0
 SH
 chmod +x "$BINDIR/herdr"
+
+# A test clock for the live pane: with FM_FACTORY_TEST_CLOCK naming a file of
+# seconds, python run with PYTHONPATH=$CLOCK_SITE reads the time that far ahead.
+CLOCK_SITE="$TMP_ROOT/clock-site"
+mkdir -p "$CLOCK_SITE"
+cat > "$CLOCK_SITE/sitecustomize.py" <<'PY'
+import os
+import time
+
+if os.environ.get("FM_FACTORY_TEST_CLOCK"):
+    _real_time, _offset_path = time.time, os.environ["FM_FACTORY_TEST_CLOCK"]
+
+    def _test_time():
+        with open(_offset_path) as handle:
+            return _real_time() + float(handle.read())
+
+    time.time = _test_time
+PY
 
 # A stand-in for bin/fm-tap-desk.sh shapes: the options and recommendation each
 # held decision's tap card shows, from the case's fixture file.
@@ -125,7 +146,7 @@ reset_case() {
   export FM_HOME="$HOME_FIX" FM_FACTORY_TEST_CALLS="$CALLS" FM_FACTORY_TEST_NOTES="$TMP_ROOT/case$CASE/notes"
   export FM_FACTORY_SNAPSHOT="$HOME_FIX/snapshot.json" FM_FACTORY_TEST_CONFIG="$TMP_ROOT/case$CASE/config"
   export FM_TEST_AXI_BACKLOG="$HOME_FIX/snapshot.json"
-  unset FM_FACTORY_TEST_NO_TAB FM_FACTORY_TEST_TAB_GONE HERDR_BIN_PATH HERDR_PANE_ID HERDR_TAB_ID \
+  unset FM_FACTORY_TEST_NO_TAB FM_FACTORY_TEST_TAB_GONE FM_FACTORY_TEST_FOCUSED HERDR_BIN_PATH HERDR_PANE_ID HERDR_TAB_ID \
     HERDR_WORKSPACE_ID HERDR_SOCKET_PATH
 }
 
@@ -619,12 +640,13 @@ test_a_small_pane_scrolls_to_everything() {
   write_crowded_world
   local dir="$TMP_ROOT/case$CASE" first expected
   export FM_FACTORY_TEST_SIZE=40x70
-  # Before the pane first closes, so both read the same last look.
+  # Before any key is pressed, so both read the same last look. The clock
+  # stands still and no look ever ends, so the feed's heading is LAST 12 HOURS.
   expected=$(python3 "$FACTORY" --plain --width 70 --height 40)
   drive_keys "SNAP:$dir/first"
   first=$(screen_of "$dir/first" 40 70)
   assert_equals "$first" "$expected" "the live pane does not draw what --plain --height prints"
-  assert_not_contains "$first" "SINCE YOU LAST LOOKED" "the fixture is too small to need scrolling"
+  assert_not_contains "$first" "LAST 12 HOURS" "the fixture is too small to need scrolling"
   # Highlighting the title with no space to break at opens its card, which
   # breaks that title across lines rather than clipping it.
   drive_keys DOWN DOWN "SNAP:$dir/opened"
@@ -632,19 +654,19 @@ test_a_small_pane_scrolls_to_everything() {
     | tr -d '\n')" "Rename-the-whole-catalogue-to-the-new-house-style-and-redirect-every-old-link" \
     "an opened card clipped a title with no space in it"
   drive_keys PGDN PGDN PGDN PGDN PGDN PGDN "SNAP:$dir/paged" PGUP PGUP PGUP PGUP PGUP PGUP "SNAP:$dir/back"
-  assert_contains "$(screen_of "$dir/paged" 40 70)" "SINCE YOU LAST LOOKED" "page down never reached the feed"
+  assert_contains "$(screen_of "$dir/paged" 40 70)" "LAST 12 HOURS" "page down never reached the feed"
   assert_contains "$(screen_of "$dir/paged" 40 70)" "more lines above" "the screen does not say there is more above"
   assert_contains "$(screen_of "$dir/back" 40 70)" " NEEDS YOU" "page up never came back to the top"
   local wheel=() downs=()
   for _ in $(seq 1 20); do wheel+=(WHEELDOWN); done
   drive_keys "${wheel[@]}" CLICK "SNAP:$dir/wheeled"
-  assert_contains "$(screen_of "$dir/wheeled" 40 70)" "SINCE YOU LAST LOOKED" "the mouse wheel never reached the feed"
+  assert_contains "$(screen_of "$dir/wheeled" 40 70)" "LAST 12 HOURS" "the mouse wheel never reached the feed"
   # The highlight moving past the bottom scrolls with it, and the arrows keep
   # scrolling once the last row is highlighted.
   for _ in $(seq 1 40); do downs+=(DOWN); done
   drive_keys "${downs[@]:0:10}" "SNAP:$dir/follow" "${downs[@]}" "SNAP:$dir/walked"
   assert_contains "$(screen_of "$dir/follow" 40 70)" " ▸ " "the highlight scrolled out of sight"
-  assert_contains "$(screen_of "$dir/walked" 40 70)" "SINCE YOU LAST LOOKED" "the arrows never reached the feed"
+  assert_contains "$(screen_of "$dir/walked" 40 70)" "LAST 12 HOURS" "the arrows never reached the feed"
   unset FM_FACTORY_TEST_SIZE
   pass "factory pane: a small pane scrolls with page keys, the mouse wheel and the highlight"
 }
@@ -670,8 +692,9 @@ test_a_narrow_talk_box_always_shows_what_is_typed() {
 # live view under a pty (FM_FACTORY_TEST_SIZE rows x columns, default 50x100),
 # one per third of a second, then q. A `SH:<command>` step runs the command
 # instead and waits for the pane to pick up the refreshed record; a
-# `SNAP:<file>` step saves what the pane draws next. With DRIVE_PANE=1 the view
-# runs as Herdr starts it, through fm-factory-pane.sh run.
+# `SNAP:<file>` step saves what the pane draws next; a `WAIT:<seconds>` step
+# leaves the pane alone that long. With DRIVE_PANE=1 the view runs as Herdr
+# starts it, through fm-factory-pane.sh run.
 drive_keys() {
   python3 - "$FACTORY" "$PANE" "$@" <<'PY'
 import fcntl, os, pty, select, struct, subprocess, sys, termios, time
@@ -683,8 +706,8 @@ if pid == 0:
         os.execvp("bash", ["bash", sys.argv[2], "run"])
     os.execvp("python3", ["python3", sys.argv[1], "view"])
 def drain(seconds, until=None):
-    end, seen = time.time() + seconds, b""
-    while time.time() < end and not (until and until in seen):
+    end, seen = time.monotonic() + seconds, b""
+    while time.monotonic() < end and not (until and until in seen):
         r, _, _ = select.select([fd], [], [], 0.1)
         if r:
             try:
@@ -701,17 +724,20 @@ for key in sys.argv[3:] + ["q"]:
     if key.startswith("SNAP:"):
         open(key[5:], "wb").write(drain(1.0))
         continue
+    if key.startswith("WAIT:"):
+        drain(float(key[5:]))
+        continue
     os.write(fd, {"ENTER": b"\r", "DOWN": b"\x1b[B", "UP": b"\x1b[A", "ESC": b"\x1b", "PGDN": b"\x1b[6~",
                   "PGUP": b"\x1b[5~", "WHEELDOWN": b"\x1b[<65;10;10M", "WHEELUP": b"\x1b[<64;10;10M",
                   "CLICK": b"\x1b[<0;10;10M\x1b[<0;10;10m"}.get(key, key.encode()))
     drain(0.35)
 # Keep reading the pty while the pane exits, so its last writes never block.
-end = time.time() + 15
+end = time.monotonic() + 15
 while True:
     done, _ = os.waitpid(pid, os.WNOHANG)
     if done:
         break
-    if time.time() >= end:
+    if time.monotonic() >= end:
         os.kill(pid, 9)
         os.waitpid(pid, 0)
         sys.exit("drive_keys: the pane did not exit after q")
@@ -911,7 +937,7 @@ test_talking_never_changes_who_steers() {
     "Starship is told"
   take_record
   assert_equals "$(q '.factories[0].steered_by')" "you" "the record shows who steers"
-  assert_equals "$(q '[.feed[] | select(.actor == "you") | .word] | join(",")')" "took the helm" \
+  assert_equals "$(q '[.feed[] | select(.actor == "you") | .word][0]')" "took the helm" \
     "the change shows in the feed"
   assert_equals "$(q '[.factories[0].talk[] | "\(.who): \(.said)"] | join(" | ")')" \
     "you: Price on the first line" "the talk keeps its history"
@@ -1078,6 +1104,104 @@ test_open_on_an_item_puts_the_highlight_on_it() {
   pass "factory pane: open on an item starts the highlight there, or moves the pane already in the tab to it"
 }
 
+# The look mark as the pane left it, while the pane still runs.
+look_mark() { tr '\n' ' ' < "$HOME_FIX/state/factory/last-look" 2>/dev/null | sed 's/ $//'; }
+
+test_since_you_last_looked_follows_the_owners_last_look() {
+  reset_case
+  write_registry
+  write_world
+  local out mark="$TMP_ROOT/case$CASE/mark"
+  take_record
+  assert_equals "$(q '"\(.since_epoch) \(.since_from)"')" "$((NOW - 12 * 3600)) 12 hours" \
+    "with no look recorded the feed covers the last 12 hours"
+  out=$(python3 "$FACTORY" --plain --width 92) || fail "--plain failed"
+  has_line "$out" " LAST 12 HOURS" "with no look recorded the feed says it is the last 12 hours"
+  assert_not_contains "$out" "SINCE YOU LAST LOOKED" "the feed claimed a look nobody recorded"
+  # The owner presses a key at 06:30 and the pane keeps running.
+  FM_FACTORY_NOW=$((NOW - 5400)) drive_keys DOWN "SH:cp '$HOME_FIX/state/factory/last-look' '$mark'"
+  assert_equals "$(head -n 1 "$mark" 2>/dev/null)" "$((NOW - 5400))" "a key press records a look while the pane runs"
+  take_record
+  assert_equals "$(q '"\(.since_epoch) \(.since_from)"')" "$((NOW - 5400)) last look" \
+    "an hour and a half later the feed starts at the last look"
+  out=$(python3 "$FACTORY" --plain --width 92) || fail "--plain failed"
+  has_line "$out" " SINCE YOU LAST LOOKED, 06:30" "the feed names when the owner last looked"
+  assert_not_contains "$out" "has its PR ready" "an outcome from before the last look is still listed"
+  has_line "$out" " 07:20 Garden Journal failed Garden reminders failed; Starship is on it." \
+    "an outcome after the last look is listed"
+  # Coming back starts a new look; while it lasts the feed keeps its start.
+  drive_keys DOWN
+  assert_equals "$(look_mark)" "$NOW $((NOW - 5400))" "a new look keeps when the one before it ended"
+  FM_FACTORY_NOW=$((NOW + 300)) take_record
+  assert_equals "$(q '"\(.since_epoch) \(.since_from)"')" "$((NOW - 5400)) last look" \
+    "pressing keys while looking does not empty the feed"
+  # A look older than two days is capped and says so.
+  printf '%s\n' "$((NOW - 72 * 3600))" > "$HOME_FIX/state/factory/last-look"
+  take_record
+  assert_equals "$(q '"\(.since_epoch) \(.since_from)"')" "$((NOW - 48 * 3600)) 48 hours" \
+    "a look older than two days is capped at 48 hours"
+  out=$(python3 "$FACTORY" --plain --width 92) || fail "--plain failed"
+  has_line "$out" " LAST 48 HOURS" "a capped feed says it is the last 48 hours"
+  pass "factory pane: SINCE YOU LAST LOOKED starts at the owner's last look, and says when it does not"
+}
+
+test_focusing_the_pane_for_a_while_is_a_look() {
+  reset_case
+  write_registry
+  write_world
+  local mark="$TMP_ROOT/case$CASE/mark"
+  export HERDR_BIN_PATH="$BINDIR/herdr" HERDR_PANE_ID=w1:p9
+  drive_keys "WAIT:9" "SH:cp '$HOME_FIX/state/factory/last-look' '$mark' 2>/dev/null || :"
+  assert_absent "$mark" "an unfocused pane recorded a look"
+  # The look before this one ended at 06:30.
+  printf '%s\n' "$((NOW - 5400))" > "$HOME_FIX/state/factory/last-look"
+  FM_FACTORY_TEST_FOCUSED=true drive_keys "WAIT:9" "SH:cp '$HOME_FIX/state/factory/last-look' '$mark'"
+  assert_equals "$(tr '\n' ' ' < "$mark" 2>/dev/null | sed 's/ $//')" "$NOW $((NOW - 5400))" \
+    "a pane focused for a few seconds records a look"
+  assert_grep 'pane get w1:p9' "$CALLS" "the pane asks Herdr whether it is focused"
+  pass "factory pane: the pane focused for a few seconds counts as a look, an unfocused one does not"
+}
+
+# clock_ahead <seconds>: a drive_keys step that moves the pane's test clock on.
+clock_ahead() {
+  local clock="$TMP_ROOT/case$CASE/clock"
+  printf "SH:awk '{print \$1 + %d}' '%s' > '%s.new' && mv '%s.new' '%s'" "$1" "$clock" "$clock" "$clock" "$clock"
+}
+
+test_focus_alone_keeps_a_look_going_for_15_minutes() {
+  reset_case
+  write_registry
+  write_world
+  local out look="$HOME_FIX/state/factory/last-look" clock="$TMP_ROOT/case$CASE/clock" latest stamp
+  local later="$TMP_ROOT/case$CASE/later" all_day="$TMP_ROOT/case$CASE/all-day"
+  mkdir -p "$HOME_FIX/state/factory"
+  # The look before this one ended at 06:30.
+  printf '%s\n' "$((NOW - 5400))" > "$look"
+  # The pane runs on a test clock that starts at 08:00 and moves on when told.
+  printf '%s\n' "$((NOW - $(date +%s)))" > "$clock"
+  export HERDR_BIN_PATH="$BINDIR/herdr" HERDR_PANE_ID=w1:p9
+  FM_FACTORY_NOW='' FM_FACTORY_TEST_CLOCK="$clock" PYTHONPATH="$CLOCK_SITE" FM_FACTORY_TEST_FOCUSED=true \
+    drive_keys "WAIT:9" "$(clock_ahead 840)" "WAIT:4" "$(clock_ahead 360)" "WAIT:4" "SH:cp '$look' '$later'" \
+    "$(clock_ahead 28800)" "WAIT:4" "SH:cp '$look' '$all_day'"
+  latest=$(head -n 1 "$later" 2>/dev/null)
+  { [ "${latest:-0}" -ge $((NOW + 840)) ] && [ "$latest" -lt $((NOW + 900)) ]; } ||
+    fail "focus alone did not keep recording the look until 15 minutes in (mark: $(tr '\n' ' ' < "$later"))"
+  assert_equals "$(sed -n 2p "$later")" "$((NOW - 5400))" "the focused look keeps when the look before it ended"
+  assert_equals "$(cat "$all_day")" "$(cat "$later")" "a pane left focused all day kept recording a look"
+  cp "$later" "$look"
+  FM_FACTORY_NOW=$((NOW + 1200)) take_record
+  assert_equals "$(q '"\(.since_epoch) \(.since_from)"')" "$((NOW - 5400)) last look" \
+    "twenty minutes into the focus the feed keeps its start"
+  FM_FACTORY_NOW=$((NOW + 8 * 3600)) take_record
+  assert_equals "$(q '"\(.since_epoch) \(.since_from)"')" "$latest last look" \
+    "after a day of focus the feed starts where focus stopped counting"
+  stamp=$(python3 -c 'import sys, time; print(time.strftime("%H:%M", time.gmtime(int(sys.argv[1]))))' "$latest")
+  out=$(FM_FACTORY_NOW=$((NOW + 8 * 3600)) python3 "$FACTORY" --plain --width 92) || fail "--plain failed"
+  has_line "$out" " SINCE YOU LAST LOOKED, $stamp" "the heading moves on to where focus stopped counting"
+  assert_not_contains "$out" "07:20 Garden Journal failed" "an outcome from before the focus is still listed"
+  pass "factory pane: focus alone keeps a look going for 15 minutes, then the heading moves on"
+}
+
 fm_test_run \
   test_the_record_words_every_state \
   test_the_plain_screen_is_the_record_as_text \
@@ -1091,6 +1215,9 @@ fm_test_run \
   test_a_small_pane_shows_its_height_and_says_what_is_below \
   test_a_small_pane_scrolls_to_everything \
   test_a_narrow_talk_box_always_shows_what_is_typed \
+  test_since_you_last_looked_follows_the_owners_last_look \
+  test_focusing_the_pane_for_a_while_is_a_look \
+  test_focus_alone_keeps_a_look_going_for_15_minutes \
   test_writing_keys_go_through_the_inbox_and_act_on_the_highlighted_row \
   test_a_note_reaches_starship_through_the_real_inbox \
   test_the_highlight_and_open_boxes_follow_the_record \

@@ -48,8 +48,13 @@ whether a running worker's pane text changed since the last reading
 What the pane writes. Its cache and its own records live in state/factory/:
 record.json (the cached record), basis.json (the fleet reading the last full
 refresh used), activity.json (when each worker's pane last changed), last-look
-(when the owner last closed the pane), steer.log (who steers each factory), and
-tabs/ (the factory tabs it opened).
+(when the owner last looked: the newest sign of a look on its first line, when
+the look before that ended on its second), steer.log (who steers each factory),
+and tabs/ (the factory tabs it opened). A look is a key pressed in the pane, or
+the pane focused in Herdr for a few seconds (asked with `herdr pane get`); focus
+alone keeps a look going for at most 15 minutes after the focus began or the
+last key press, so a pane left focused does not look forever. A factory's own
+tab records none, since it shows one factory only.
 
 How fresh it is. A full refresh reads every worker, which takes seconds, so the
 live pane starts one only once the record's workers are FM_FACTORY_TTL old.
@@ -115,6 +120,9 @@ STEPS = ["planning", "building", "checking", "ready for you"]
 FEED_CAP = 30
 LOOK_BACK_DEFAULT = 12 * 3600
 LOOK_BACK_MAX = 48 * 3600
+LOOK_GAP = 15 * 60      # this long without a sign of a look ends the look
+FOCUS_HOLD = 5          # seconds the pane stays focused before it counts as a look
+FOCUS_CAP = 15 * 60     # focus alone keeps a look going this long after it began or the last key
 MIRROR_CAP = 4
 
 
@@ -673,9 +681,11 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
     quiet_after = env_int("FM_FACTORY_QUIET_MINUTES", 15) * 60
     activity = activity or {}
     notes = notes or []
+    since_from = "last look"
     if since is None:
-        since = now - LOOK_BACK_DEFAULT
-    since = max(since, now - LOOK_BACK_MAX)
+        since, since_from = now - LOOK_BACK_DEFAULT, "12 hours"
+    if since < now - LOOK_BACK_MAX:
+        since, since_from = now - LOOK_BACK_MAX, "48 hours"
 
     # Project name (and alias) -> factory id.
     alias_of: Dict[str, str] = {}
@@ -1021,6 +1031,7 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
         "as_of_epoch": now,
         "since": iso(since),
         "since_epoch": since,
+        "since_from": since_from,
         "home": home,
         "factories_from": registry_source,
         "counts": {"running": running_total, "need_you": len(needs), "idle": idle_total},
@@ -1038,9 +1049,39 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
 # The cached record
 # --------------------------------------------------------------------------
 
-def last_look(home: str) -> Optional[int]:
-    text = read_text(os.path.join(pane_dir(home), "last-look"), 64).strip()
-    return int(text) if text.isdigit() else None
+def read_looks(home: str) -> Tuple[Optional[int], Optional[int]]:
+    """The newest sign of the owner looking, and when the look before it ended."""
+    lines = read_text(os.path.join(pane_dir(home), "last-look"), 128).split()
+    marks = [int(word) if word.isdigit() else None for word in lines[:2]] + [None, None]
+    return marks[0], marks[1]
+
+
+def last_look(home: str, now: int) -> Optional[int]:
+    """Where SINCE YOU LAST LOOKED starts: the end of the owner's last look.
+
+    While a look is under way that is the end of the look before it, so
+    pressing keys or keeping the pane focused never empties the list being
+    read; once no sign of a look has come for LOOK_GAP, the look is over and
+    its last sign is the start.
+    """
+    latest, previous = read_looks(home)
+    if latest is None:
+        return None
+    return latest if now - latest > LOOK_GAP else previous
+
+
+def note_look(home: str, now: int) -> None:
+    """Record a sign of the owner looking at the pane now."""
+    latest, previous = read_looks(home)
+    if latest is not None and now - latest > LOOK_GAP:
+        previous = latest
+    if latest == now:
+        return
+    lines = "%d\n" % now + ("%d\n" % previous if previous is not None else "")
+    try:
+        write_atomic(os.path.join(pane_dir(home), "last-look"), lines)
+    except OSError:
+        pass
 
 
 def calls_signal(home: str) -> str:
@@ -1074,7 +1115,7 @@ def refresh(home: str) -> Dict[str, Any]:
     activity = pane_activity(home, running, now, write=True)
     shapes: Dict[str, Dict[str, Any]] = {}
     buckets = buckets_for(live_tasks(snapshot))
-    record = build_record(home, now, snapshot, since=last_look(home), activity=activity,
+    record = build_record(home, now, snapshot, since=last_look(home, now), activity=activity,
                           notes=inbox_receipts(home), known_shapes=shapes, buckets=buckets)
     record.update(snapshot_epoch=now, calls_signal=signal_at_start)
     try:
@@ -1154,7 +1195,8 @@ def refresh_calls(home: str) -> Dict[str, Any]:
     snapshot = dict(basis["snapshot"], backlog=backlog)
     activity = {k: v for k, v in (basis.get("activity") or {}).items() if isinstance(v, int)}
     buckets = basis.get("buckets")
-    record = build_record(home, now_epoch(), snapshot, since=last_look(home), activity=activity,
+    now = now_epoch()
+    record = build_record(home, now, snapshot, since=last_look(home, now), activity=activity,
                           notes=notes, backlog=axi, known_shapes=dict(basis.get("shapes") or {}),
                           buckets=buckets if isinstance(buckets, dict) else None)
     record.update(snapshot_epoch=int(basis.get("taken_epoch") or 0), calls_signal=signal_at_start)
@@ -1623,9 +1665,12 @@ class View:
         now = self.now()
         events = [e for e in self.record["feed"] if fid in (None, e["factory"])][:cap]
         since = self.record.get("since_epoch")
-        title = "SINCE YOU LAST LOOKED"
-        rows = [row(width, [S(" " + title, "mist", True)]
-                    + ([S("   since %s" % when_words(since, now), "faint")] if since else [])), row(width)]
+        since_from = self.record.get("since_from")
+        if since_from in ("12 hours", "48 hours"):
+            title = "LAST %s" % since_from.upper()
+        else:
+            title = "SINCE YOU LAST LOOKED" + (", %s" % when_words(since, now) if since else "")
+        rows = [row(width, [S(" " + title, "mist", True)]), row(width)]
         if not events:
             return rows + [row(width, [S("     nothing new", "faint")])]
         names = max(len(e["actor"]) for e in events) if not fid else 0
@@ -1868,6 +1913,8 @@ class Pane:
         self.loaded = self.record_stamp()
         self.calls_checked = 0.0
         self.focus_file = os.environ.get("FM_FACTORY_FOCUS_FILE") or ""
+        self.focused_since: Optional[float] = None
+        self.last_key = 0.0
 
     def take_focus(self) -> bool:
         """Read and remove an item id written to the focus file; True when one came."""
@@ -1884,6 +1931,33 @@ class Pane:
         if self.view.need(item[0]) is None:
             refresh_in_background(self.home)
         return True
+
+    def looked(self) -> None:
+        """A key was pressed: the owner is looking. A factory's tab records no look."""
+        self.last_key = time.time()
+        if not self.view.in_tab:
+            note_look(self.home, now_epoch())
+
+    def check_focus(self) -> None:
+        """The pane focused in Herdr for FOCUS_HOLD seconds is a look.
+
+        Focus alone keeps the look going for at most FOCUS_CAP after the focus
+        began or the last key press, whichever is later; after that only a key
+        press or a new focus does.
+        """
+        pane_id = os.environ.get("HERDR_PANE_ID")
+        if self.view.in_tab or not pane_id:
+            return
+        ok, data = herdr(["pane", "get", pane_id], timeout=2)
+        pane = ((data or {}).get("result") or {}).get("pane") if ok and isinstance(data, dict) else None
+        if not isinstance(pane, dict) or pane.get("pane_id") != pane_id or pane.get("focused") is not True:
+            self.focused_since = None
+            return
+        clock = time.time()
+        if self.focused_since is None:
+            self.focused_since = clock
+        if clock - self.focused_since >= FOCUS_HOLD and clock - max(self.focused_since, self.last_key) <= FOCUS_CAP:
+            note_look(self.home, now_epoch())
 
     def say(self, text: str, colour: str = "green", seconds: int = 8) -> None:
         self.view.notice = (text, colour, time.time() + seconds)
@@ -2109,11 +2183,15 @@ def live(pane: Pane) -> None:
     # The alternate screen, no cursor, no autowrap, and mouse button and wheel
     # reports in SGR form, which Herdr passes to a pane that asks for them.
     out.write("\x1b[?1049h\x1b[?25l\x1b[?7l\x1b[?1000h\x1b[?1006h")
+    focus_checked = 0.0
     try:
         tty.setraw(fd)
         while True:
             pane.reload()
             pane.watch_calls()
+            if time.time() - focus_checked > 3:
+                pane.check_focus()
+                focus_checked = time.time()
             pane.take_focus()
             size = os.get_terminal_size()
             view = pane.view
@@ -2139,6 +2217,7 @@ def live(pane: Pane) -> None:
                     break
                 ready, _, _ = select.select([fd], [], [], wait)
                 if ready:
+                    pane.looked()
                     for key in read_keys(fd):
                         if not pane.key(key):
                             return
@@ -2147,21 +2226,16 @@ def live(pane: Pane) -> None:
         termios.tcsetattr(fd, termios.TCSADRAIN, saved)
         out.write("\x1b[?1006l\x1b[?1000l\x1b[?7h\x1b[?25h\x1b[?1049l")
         out.flush()
-        if not pane.view.in_tab:
-            try:
-                write_atomic(os.path.join(pane_dir(pane.home), "last-look"), "%d\n" % now_epoch())
-            except OSError:
-                pass
 
 
 # --------------------------------------------------------------------------
 # Herdr: the factory tab and its live worker copies
 # --------------------------------------------------------------------------
 
-def herdr(args: List[str]) -> Tuple[bool, Any]:
+def herdr(args: List[str], timeout: int = 20) -> Tuple[bool, Any]:
     binary = shlex.split(os.environ.get("HERDR_BIN_PATH") or "herdr")
     try:
-        out = subprocess.run(binary + args, capture_output=True, text=True, timeout=20)
+        out = subprocess.run(binary + args, capture_output=True, text=True, timeout=timeout)
     except (OSError, subprocess.SubprocessError) as error:
         return False, str(error)
     if out.returncode != 0:
