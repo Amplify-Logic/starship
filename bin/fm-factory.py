@@ -10,10 +10,11 @@ owns the commands.
 
 Usage:
   fm-factory.py --data [--fresh]          print the record as JSON (fm-factory.v1)
-  fm-factory.py --plain [--factory ID] [--width N] [--height N] [--fresh]
+  fm-factory.py --plain [--factory ID] [--item ID] [--width N] [--height N] [--fresh]
                                           print the screen as plain text; with
                                           --height, only what a pane that tall
-                                          shows when it opens
+                                          shows when it opens; with --item, the
+                                          highlight is on that item of NEEDS YOU
   fm-factory.py view [--factory ID] [--item ID]
                                           the live pane (Herdr runs it through
                                           bin/fm-factory-pane.sh run); --item
@@ -38,6 +39,11 @@ bin/fm-fleet-status-lib.sh). NEEDS YOU is exactly fm_owner_calls in that
 library, the count the bridge strip and the tap page show, and each question's
 options and suggestion come from bin/fm-tap-desk.sh shapes, the reading its tap
 card shows, so the pane can never disagree with either.
+The queue is every work item nobody has started, counted in that same pass by
+what will start it (queue_word below); what is held and what still waits on
+other work is read as the backlog's own adapter reads it. A closed work item
+reads as finished work only when landed_delivery in bin/fm-landed-lib.sh finds
+its merged change, landing or report; closed without one, it reads closed.
 The rest are event records the home already keeps: the [at=] times on status
 lines, the turn times in state/<id>.busy-state, state/<id>.turn-ended, the
 optional one-line state/<id>.step a worker may write to say what it is doing,
@@ -50,7 +56,8 @@ record.json (the cached record), basis.json (the fleet reading the last full
 refresh used), activity.json (when each worker's pane last changed), last-look
 (when the owner last looked: the newest sign of a look on its first line, when
 the look before that ended on its second), steer.log (who steers each factory),
-and tabs/ (the factory tabs it opened). A look is a key pressed in the pane, or
+tabs/ (the factory tabs it opened), and talk-<pid>.wav while a spoken note is
+being written down. A look is a key pressed in the pane, or
 the pane focused in Herdr for a few seconds (asked with `herdr pane get`); focus
 alone keeps a look going for at most 15 minutes after the focus began or the
 last key press, so a pane left focused does not look forever. A factory's own
@@ -71,6 +78,17 @@ an answer, keep, ask-for-changes or talk becomes a captain inbox note
 merges nothing, answers no hold itself and steers no worker. Who steers is a
 recorded choice that Starship is also told about; it grants nothing.
 
+The talk box. Where this machine has a microphone recorder (mic_command) and
+the home has the desk voice's speech key, t listens at once: the recorder's
+samples are read here, what was heard so far is written down about once a
+second by the desk voice's own command (bin/fm-deepgram-stt.sh) and shown in
+the box, and the note is sent when the speaker stops or presses enter. So the
+microphone's sound goes to that speech service from the first speech on, as
+the desk voice's does. A first typed key drops the recording and types
+instead; without a recorder or the key the box is typed from the start. A
+recording that cannot be written down goes to the desk voice's unsent
+recordings (bin/fm-desk-voice.sh keep).
+
 Environment:
   FM_HOME                     the home whose factories are shown (default: this
                               code root)
@@ -82,6 +100,11 @@ Environment:
   FM_FACTORY_FOCUS_FILE       a file the live overview reads and removes: an
                               item id written there moves the highlight to
                               that item (bin/fm-factory-pane.sh open --item)
+  FM_FACTORY_MIC              the microphone recorder: a command that writes
+                              16 kHz mono 16-bit little-endian samples to its
+                              standard output until stopped (default: ffmpeg
+                              on the Mac's default input; empty: no voice,
+                              the talk box is typed)
 Test seams:
   FM_FACTORY_SNAPSHOT         a fleet snapshot JSON file used instead of running
                               bin/fm-fleet-snapshot.sh
@@ -92,6 +115,10 @@ Test seams:
   FM_FACTORY_SHAPES           decision shapes command, run with the decision
                               ids as arguments (default bin/fm-tap-desk.sh
                               shapes)
+  FM_FACTORY_STT              the command that writes a recording down, run as
+                              `<cmd> <audio-file>` (default
+                              bin/fm-deepgram-stt.sh); set, it also stands in
+                              for the speech key
 Exit: 0 on success; 1 when a step fails, with the reason on stderr; 2 on a usage
 error.
 """
@@ -99,18 +126,22 @@ error.
 from __future__ import annotations
 
 import argparse
+import array
 import hashlib
 import json
+import math
 import os
 import re
 import select
 import shlex
+import shutil
 import signal
 import subprocess
 import sys
 import tempfile
 import threading
 import time
+import wave
 from typing import Any, Dict, List, Optional, Tuple
 
 SCHEMA = "fm-factory.v1"
@@ -124,6 +155,12 @@ LOOK_GAP = 15 * 60      # this long without a sign of a look ends the look
 FOCUS_HOLD = 5          # seconds the pane stays focused before it counts as a look
 FOCUS_CAP = 15 * 60     # focus alone keeps a look going this long after it began or the last key
 MIRROR_CAP = 4
+VOICE_RATE = 16000        # the talk box's microphone: samples a second, one channel, 16 bits
+VOICE_CHUNK = 1600        # samples heard at a time: a tenth of a second
+VOICE_SPEECH = 120        # the quietest level that can be speech, of 32768
+VOICE_QUIET_STOP = 20     # tenths of a second of quiet after speech that end a recording
+VOICE_NO_SPEECH = 120     # tenths of a second without any speech before a recording gives up
+VOICE_MAX = 1800          # the longest recording, in tenths of a second
 
 
 # --------------------------------------------------------------------------
@@ -505,6 +542,27 @@ def ready_reports(rows: List[Tuple[str, str, str]]) -> List[bool]:
     return [index < len(answers) and answers[index] == "yes" for index in range(len(rows))]
 
 
+def delivered_ids(rows: List[Dict[str, Any]]) -> set:
+    """The closed work items that are deliveries: a merged change, a report, or a local landing.
+
+    landed_delivery in bin/fm-landed-lib.sh owns that reading, the one Recently
+    Landed is selected with. When it cannot be asked, a row's own completion
+    word (merged or reported) is the evidence.
+    """
+    rows = [r for r in rows if r.get("state") == "done" and r.get("id")]
+    if not rows:
+        return set()
+    script = '. "$1/fm-landed-lib.sh" && jq -r "$FM_LANDED_JQ_DEFS .[] | select(landed_delivery) | .id"'
+    try:
+        out = subprocess.run(["bash", "-c", script, "fm-factory", BIN], input=json.dumps(rows),
+                             capture_output=True, text=True, timeout=30)
+        if out.returncode == 0:
+            return set(out.stdout.split("\n")) - {""}
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return {r["id"] for r in rows if (r.get("completion") or {}).get("verb") in ("merged", "reported")}
+
+
 STATUS_RE = re.compile(r"^([a-z][a-z-]*)((?:\s*\[[^\]]*\])*)\s*:\s?(.*)$")
 
 
@@ -662,13 +720,73 @@ def checking_sentence(detail: str) -> str:
     return "running the checks"
 
 
-def held_state(row: Dict[str, Any]) -> str:
+def held_state(row: Dict[str, Any], today: str = "") -> str:
     """The state word for work held back by its hold rather than waiting on the owner."""
-    if row.get("hold_bucket") == "dated" and row.get("hold_until"):
-        return "on hold until %s" % row["hold_until"]
+    until = row.get("hold_until")
+    if until and (row.get("hold_bucket") == "dated" or (row.get("hold_kind") != "captain" and until > today > "")):
+        return "on hold until %s" % until
     if row.get("hold_bucket") == "blocked" or row.get("unresolved_blocker_ids"):
         return "waits on other work"
     return "on hold"
+
+
+QUEUE_WORDS = ("starts on its own", "in line", "on hold", "waits on you", "deferred")
+
+
+def queue_word(row: Dict[str, Any], asked: bool, today: str) -> Optional[str]:
+    """Where a work item nobody has started stands in the queue, as one of QUEUE_WORDS.
+
+    A decision held for the owner waits on you, or is deferred while its date
+    is still ahead. Anything else starts on its own when it waits on other work
+    or on a date still ahead, is on hold when it is held with neither, and is
+    in line when nothing is set to start it. Work listed as in flight with no
+    worker is not queued.
+    """
+    if asked:
+        return "waits on you"
+    if row.get("hold_kind") == "captain":
+        return "deferred" if row.get("hold_bucket") == "dated" else "waits on you"
+    if row.get("unresolved_blocker_ids"):
+        return "starts on its own"
+    if row.get("hold_kind"):
+        return "starts on its own" if (row.get("hold_until") or "") > today else "on hold"
+    return None if row.get("state") == "in_flight" else "in line"
+
+
+def queue_counts(jobs: List[Dict[str, Any]]) -> Dict[str, int]:
+    """The queue of these jobs as counts; the ones waiting on you include the deferred."""
+    words = [j["queue"] for j in jobs if j.get("queue")]
+    return {"total": len(words), "starts_on_its_own": words.count("starts on its own"),
+            "in_line": words.count("in line"), "on_hold": words.count("on hold"),
+            "waits_on_you": words.count("waits on you") + words.count("deferred"),
+            "deferred": words.count("deferred")}
+
+
+def queue_parts(queue: Dict[str, int]) -> List[Tuple[str, str]]:
+    """The queue's counts in words, each with the word it stands for (see queue_counts)."""
+    if not queue.get("total"):
+        return [("total", "nothing queued")]
+    parts = [("total", "%d queued" % queue["total"])]
+    own, wait, deferred = queue["starts_on_its_own"], queue["waits_on_you"], queue["deferred"]
+    if own:
+        parts.append(("starts_on_its_own", "1 starts on its own" if own == 1 else "%d start on their own" % own))
+    if queue["in_line"]:
+        parts.append(("in_line", "%d in line" % queue["in_line"]))
+    if queue["on_hold"]:
+        parts.append(("on_hold", "%d on hold" % queue["on_hold"]))
+    if wait:
+        words = "1 waits on you" if wait == 1 else "%d wait on you" % wait
+        if deferred and deferred == wait:
+            words += ", deferred to a date" if wait == 1 else ", all deferred to a date"
+        elif deferred:
+            words += ", %d of them deferred to a date" % deferred
+        parts.append(("waits_on_you", words))
+    return parts
+
+
+def request_id_of(text: str) -> str:
+    """A captain inbox request id: the characters the inbox takes, at most 128 of them."""
+    return re.sub(r"[^A-Za-z0-9._:-]", "-", text)[:128]
 
 
 def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[int] = None,
@@ -728,8 +846,19 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
     # the tap page show; a worker's question, a pause or the checks never are.
     decision_ids, merge_ids, adapter_rows = owner_calls(home, buckets, backlog)
     known = {r["id"] for r in rows}
+    # The adapter is the backlog's own reading of what is held and what still
+    # waits on other work, the one the owner's calls are counted from. The
+    # markdown reading cannot tell a blocker that was finished and archived
+    # from one still open, so for open work the adapter's reading wins.
+    adapter = {r["id"]: r for r in adapter_rows}
+    for row in rows:
+        read = adapter.get(row["id"])
+        if read and row.get("state") != "done":
+            row.update({key: read[key] for key in ("hold_kind", "hold_until", "hold_bucket",
+                                                   "unresolved_blocker_ids") if key in read})
     rows += [r for r in adapter_rows if r.get("hold_bucket") and r["id"] not in known]
     row_of = {r["id"]: r for r in rows}
+    today = (iso(now) or "")[:10]
     shapes = shapes_for(home, decision_ids, {r["id"]: r for r in adapter_rows}, known_shapes)
     needs: List[Dict[str, Any]] = []
     feed: List[Dict[str, Any]] = []
@@ -794,7 +923,7 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
         job: Dict[str, Any] = {"id": task["id"], "title": title, "kind": kind, "state": None, "step": None,
                                "started": started_at(meta), "doing": None, "doing_from": None,
                                "last_sign_of_life": None, "sign_of_life_from": None, "quiet": False,
-                               "until": None, "pr": (task.get("pr") or {}).get("url")}
+                               "until": None, "pr": (task.get("pr") or {}).get("url"), "queue": None}
         if bucket == "working":
             job.update(state="running", step="planning" if kind == "scout" else "building")
         elif bucket == "validating" or (state.get("state") == "parked" and state.get("source") == "run-step"):
@@ -806,7 +935,7 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
             # brings it to the owner as a held decision.
             job.update(state="with Starship")
         elif bucket == "ready" and task["id"] not in merge_ids and not (row and row["id"] in decision_ids):
-            job["state"] = held_state(row or {})
+            job["state"] = held_state(row or {}, today)
         elif bucket == "ready":
             job.update(state="ready for you", step="ready for you")
             pr = job["pr"]
@@ -878,12 +1007,13 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
         task_factory.setdefault(row["id"], fid)
         job = {"id": row["id"], "title": title, "kind": row.get("kind") or "task", "state": None, "step": None,
                "started": None, "doing": None, "doing_from": None, "last_sign_of_life": None,
-               "sign_of_life_from": None, "quiet": False, "until": None, "pr": row.get("pr_url")}
+               "sign_of_life_from": None, "quiet": False, "until": None, "pr": row.get("pr_url"),
+               "queue": queue_word(row, row["id"] in decision_ids, today)}
         if row["id"] in decision_ids:
             job["state"] = "waiting on you"
             needs.append(hold_need(row, fid))
         elif row.get("hold_kind"):
-            job["state"] = held_state(row)
+            job["state"] = held_state(row, today)
         elif row.get("unresolved_blocker_ids"):
             job["state"] = "waits on other work"
         elif row.get("state") == "in_flight":
@@ -910,6 +1040,7 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
             factory["next"] = {"id": first["id"], "title": first["title"],
                                "once_you_answer": first["state"] == "waiting on you",
                                "then": len(lined) - 1}
+        factory["queue"] = queue_counts(factory["jobs"])
 
     # Since you last looked: outcomes and the owner's own calls, never a
     # worker's pause, a question a worker put to Starship, or a blocker.
@@ -952,20 +1083,29 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
             feed.append({"at": need["since"], "date": None, "actor": by_id[need["factory"]]["name"],
                          "factory": need["factory"], "job": need["id"], "word": "asked you",
                          "text": "%s needs your call." % need["title"]})
-    done_in_feed = {e["job"] for e in feed if e["word"] in ("finished", "PR ready")}
+    # A closed work item is finished work only on the backlog's own evidence:
+    # a merged change or a local landing is in, a report is finished, and one
+    # closed with neither was only closed.
+    finished_in_feed = {e["job"] for e in feed if e["word"] == "finished"}
     since_day = time.strftime("%Y-%m-%d", time.localtime(since))
-    for row in rows:
+    closed = [r for r in rows if r.get("state") == "done" and ((r.get("completion") or {}).get("date") or "") >= since_day]
+    delivered = delivered_ids(closed)
+    for row in closed:
         completion = row.get("completion") or {}
-        date = completion.get("date")
-        if row.get("state") != "done" or not date or date < since_day:
-            continue
-        merged = completion.get("verb") == "merged"
-        if row["id"] in done_in_feed and not merged:
+        title = row.get("title") or row["id"]
+        if row["id"] not in delivered:
+            word = "closed"
+            text = "%s was closed." if "captain" in (row.get("kind"), row.get("hold_kind")) else \
+                "%s was closed; no change or report on record."
+        elif completion.get("verb") == "reported" or (row.get("kind") == "scout" and row.get("report_path")):
+            word, text = "finished", "%s is finished."
+        else:
+            word, text = "landed", "%s is in."
+        if word == "finished" and row["id"] in finished_in_feed:
             continue
         fid = factory_of(row.get("repo"))
-        feed.append({"at": None, "date": date, "actor": by_id[fid]["name"], "factory": fid, "job": row["id"],
-                     "word": "landed" if merged else "finished",
-                     "text": "%s is %s." % (row.get("title") or row["id"], "in" if merged else "done")})
+        feed.append({"at": None, "date": completion["date"], "actor": by_id[fid]["name"], "factory": fid,
+                     "job": row["id"], "word": word, "text": text % title})
     for at, fid, who in steer_log(home):
         if fid in by_id and since <= at <= now:
             feed.append({"at": at, "date": None, "actor": "you", "factory": fid, "job": None,
@@ -997,6 +1137,31 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
                          "word": "replied", "text": tidy(reply["body"], 120)})
     for factory in factories:
         factory["talk"] = sorted(factory["talk"], key=lambda t: t["at"] or 0)[-6:]
+    # What the owner already sent about each call, so a call he answered reads
+    # as answered until Starship has acted on it.
+    for need in needs:
+        stem = "factory.%s." % need["factory"]
+        sent_ids = {request_id_of("%sanswer.%s.%s.%s" % (stem, need["id"], asking(need), option["key"])):
+                    ("answered", option["key"], "%s %s" % (option["key"], option["label"]))
+                    for option in need["options"]}
+        sent_ids[request_id_of("%skeep.%s.%s" % (stem, need["id"], asking(need)))] = ("asked to keep", None, "keep it")
+        said_ids = {request_id_of("%stalk.%s." % (stem, need["id"])): "said",
+                    request_id_of("%schange.%s." % (stem, need["id"])): "asked for changes"}
+        found: List[Dict[str, Any]] = []
+        for note in notes:
+            rid, at = note.get("request_id") or "", parse_iso(note.get("at"))
+            word, key, text = sent_ids.get(rid, (None, None, None))
+            if word is None and (at or 0) >= (need.get("since") or 0):
+                word = next((w for stem_id, w in said_ids.items() if rid.startswith(stem_id)), None)
+                line = ((note.get("body") or "").strip().splitlines() or [""])[0]
+                lead = next((lead for lead in ("About %s: " % need["title"], "Changes for %s: " % need["title"])
+                             if line.startswith(lead)), "")
+                text = tidy(line[len(lead):], 120)
+            if word:
+                found.append({"word": word, "key": key, "text": text, "at": at,
+                              "picked_up": bool(note.get("handled")),
+                              "reply": tidy((note.get("reply") or {}).get("body"), 140) or None})
+        need["sent"] = max(found, key=lambda item: item["at"] or 0) if found else None
     feed.sort(key=lambda e: (e["at"] if e["at"] is not None else (parse_iso(e["date"]) or 0)), reverse=True)
     feed = feed[:FEED_CAP]
 
@@ -1021,6 +1186,7 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
         factories.remove(other)
     running_total = sum(1 for f in factories for j in f["jobs"] if j["state"] == "running")
     idle_total = sum(1 for f in factories if f["state"] == "idle")
+    queue = queue_counts([j for f in factories for j in f["jobs"]])
     count_line = "%s running · %s · %s" % (
         plural(running_total, "job", "jobs"),
         "1 needs you" if len(needs) == 1 else "%d need you" % len(needs),
@@ -1036,9 +1202,12 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
         "factories_from": registry_source,
         "counts": {"running": running_total, "need_you": len(needs), "idle": idle_total},
         "count_line": count_line,
+        "queue": queue,
+        "queue_line": " · ".join(words for _key, words in queue_parts(queue)),
         "needs_you": needs,
         "factories": [{k: f[k] for k in ("id", "name", "about", "projects", "steered_by", "state",
-                                         "idle_since", "crew", "needs", "jobs", "next", "rules", "learned", "talk")}
+                                         "idle_since", "crew", "needs", "jobs", "next", "queue", "rules",
+                                         "learned", "talk")}
                       for f in factories],
         "feed": feed,
         "snapshot": {"generated": snapshot.get("generated"), "schema": snapshot.get("schema")},
@@ -1377,7 +1546,8 @@ def flow(width: int, lead, text: str, colour: str = "ice", bold: bool = False, i
 STATE_COLOUR = {"running": "amber", "waiting on you": "red", "ready for you": "green", "stuck": "amber",
                 "waiting": "amber", "stopped": "faint", "no worker": "faint", "no reading": "faint",
                 "with Starship": "mist", "finished": "green", "next": "mist", "later": "faint"}
-FEED_COLOUR = {"finished": "green", "PR ready": "green", "landed": "green", "asked you": "red", "failed": "amber",
+FEED_COLOUR = {"finished": "green", "PR ready": "green", "landed": "green", "closed": "mist", "asked you": "red",
+               "failed": "amber",
                "took the helm": "cyan", "handed back": "cyan", "replied": "cyan",
                "answered": "cyan", "asked to keep": "cyan", "asked for changes": "cyan", "said": "cyan"}
 
@@ -1396,9 +1566,12 @@ class View:
     """Draws a record; holds the cursor, the talk box and pending notices."""
 
     def __init__(self, record: Dict[str, Any], opened: Optional[str] = None, in_tab: bool = False,
-                 item: Optional[str] = None):
+                 item: Optional[str] = None, voice: bool = False):
         self.opened = opened
         self.in_tab = in_tab
+        self.voice = voice    # whether the talk box can listen on this machine
+        # What was sent from this pane and is not in the record yet, by need and asking.
+        self.sent: Dict[Tuple[str, str], Dict[str, Any]] = {}
         self.cursor = 0
         self.selected: Optional[Tuple[str, str]] = None
         # An item the highlight was asked to go to (--item, or the focus file),
@@ -1427,6 +1600,10 @@ class View:
             need = self.need(confirm["item"])
             if need is None or asking(need) != confirm["asked"]:
                 self.confirm = None
+                self.notice = ("Not sent: this was settled elsewhere before you confirmed %s." % confirm["what"],
+                               "amber", time.time() + 12)
+        asked = {(n["id"], asking(n)) for n in record.get("needs_you") or []}
+        self.sent = {key: mark for key, mark in self.sent.items() if key in asked}
 
     # ---- record lookups ----------------------------------------------------
 
@@ -1444,6 +1621,13 @@ class View:
 
     def need(self, ident: str) -> Optional[Dict[str, Any]]:
         return next((n for n in self.record["needs_you"] if n["id"] == ident), None)
+
+    def sent_of(self, need: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """What the owner last sent about a need: from the record, or from this pane a moment ago if newer."""
+        known, here = need.get("sent"), self.sent.get((need["id"], asking(need)))
+        if known and here:
+            return here if (here["at"] or 0) >= (known["at"] or 0) else known
+        return known or here
 
     def stops(self) -> List[Tuple[str, str]]:
         if self.opened:
@@ -1515,27 +1699,85 @@ class View:
             head = [S(" STARSHIP ", "cyan", True), S(" │  ", "faint")] + summary
         line = row(width, head, [S(time.strftime("%a %H:%M", time.localtime(self.now())), "mist")])
         line.hull = True
-        return [line]
+        return [line] + self.queue_rows(width)
+
+    def queue_rows(self, width: int, queue: Optional[Dict[str, int]] = None, lead: str = " ",
+                   hull: bool = True) -> List[Row]:
+        """The whole queue in one line of counts, wrapped between counts when the pane is narrow."""
+        queue = self.record.get("queue") if queue is None else queue
+        if not queue:
+            return []
+        colours = {"total": "ice", "starts_on_its_own": "ice", "in_line": "mist", "on_hold": "faint",
+                   "waits_on_you": "red"}
+        parts = queue_parts(queue)
+        lines = [[S(lead)]]
+        indent = len(lead) + len(parts[0][1])
+        for index, (key, words) in enumerate(parts):
+            head, comma, tail = words.partition(",")
+            segs = ([S("  ·  ", "faint")] if index else []) + [S(head, colours[key] if queue["total"] else "faint",
+                                                                 key == "total")]
+            if comma:
+                segs.append(S(comma + tail, "mist"))
+            if index and seg_len(lines[-1]) + seg_len(segs) + 1 > width:
+                lines.append([S(" " * indent)])
+            lines[-1] += segs
+        rows = [row(width, segs) for segs in lines]
+        for line in rows:
+            line.hull = hull
+        return rows
 
     def need_head(self, need: Dict[str, Any], full: bool):
         """The lead, title and right-hand words of a need's first row."""
         now = self.now()
         fac = self.factory(need["factory"])
         question = need["kind"] == "question"
+        sent = self.sent_of(need)
         waited = ("waiting " if question else "ready ") + minutes_words((now - need["since"]) // 60) \
             if need.get("since") else ("waiting" if question else "ready")
-        right = [S(waited, "mist")] if full else [S(fac["name"], "mist"), S(" · ", "faint"), S(waited, "mist")]
-        lead = [S(" "), self.mark("need", need["id"]), S("● ", "red" if question else "green")]
+        if sent:
+            # He acted on it; it stays listed until Starship has.
+            waited = "%s %s" % ("answered" if sent["word"] == "answered" else "sent",
+                                when_words(sent["at"], now) if sent.get("at") else "just now")
+        right = [S(waited, "cyan" if sent else "mist")]
+        if not full:
+            right = [S(fac["name"], "mist"), S(" · ", "faint")] + right
+        lead = [S(" "), self.mark("need", need["id"]),
+                S("● ", "cyan" if sent else ("red" if question else "green"))]
         return lead, need["ask"], right
 
-    def need_line(self, width: int, need: Dict[str, Any]) -> Row:
-        """A need folded to one row: its title, shortened on a whole word when it must be."""
-        lead, ask, right = self.need_head(need, full=False)
-        left = lead + [S(ask, "ice", True)]
-        line = row(width, left, right if seg_len(left) + seg_len(right) + 3 <= width else (),
-                   band=self.here("need", need["id"]))
+    def need_line(self, width: int, need: Dict[str, Any], full: bool = False) -> Row:
+        """A need folded to one row: its title, shortened on a whole word when it must be, and how long it waits."""
+        lead, ask, right = self.need_head(need, full)
+        line = row(width, lead + [S(ask, "ice", True)], right, band=self.here("need", need["id"]))
         line.stop = ("need", need["id"])
         return line
+
+    def need_list(self, width: int, needs: List[Dict[str, Any]], full: bool) -> List[Row]:
+        """NEEDS YOU: the highlighted need opens as a card, every other one stays one line."""
+        rows: List[Row] = []
+        for index, need in enumerate(needs):
+            if not self.here("need", need["id"]):
+                rows.append(self.need_line(width, need, full))
+                continue
+            rows += ([row(width)] if index else []) + self.need_rows(width, need, full)
+            if index < len(needs) - 1:
+                rows.append(row(width))
+        return rows + [row(width)]
+
+    def sent_rows(self, width: int, need: Dict[str, Any], pad) -> List[Row]:
+        """What the owner already sent about this need, and whether Starship has picked it up."""
+        sent = self.sent_of(need)
+        if not sent:
+            return []
+        words = {"answered": "You answered: %s", "asked to keep": "You asked Starship to keep it",
+                 "asked for changes": "You asked for changes: %s", "said": "You said: %s"}[sent["word"]]
+        words = words % sent["text"] if "%s" in words else words
+        when = "sent %s" % when_words(sent["at"], self.now()) if sent.get("at") else "sent just now"
+        state = "Starship has picked it up" if sent.get("picked_up") else "Starship has not picked it up yet"
+        rows = flow(width, [pad, S("✓ ", "cyan", True)], "%s · %s · %s" % (words, when, state), "cyan")
+        if sent.get("reply"):
+            rows += flow(width, [pad, S("  ")], "Starship replied: %s" % sent["reply"], "mist")
+        return rows
 
     def need_rows(self, width: int, need: Dict[str, Any], full: bool) -> List[Row]:
         """A need opened as a card: every word of its title, why and options, wrapped."""
@@ -1550,6 +1792,9 @@ class View:
             for line in rows:
                 line.band = band
             rows.append(row(width, [pad] + right))
+        rows += self.sent_rows(width, need, pad)
+        confirm = self.confirm if self.confirm and self.confirm["item"] == need["id"] else None
+        chosen = (confirm or {}).get("option") or (self.sent_of(need) or {}).get("key")
         if question:
             if need.get("why"):
                 rows += flow(width, [pad], need["why"], "mist")
@@ -1557,18 +1802,23 @@ class View:
                 note = []
                 if option["suggested"]:
                     note = [S("  · %s suggests this" % (need.get("suggested_by") or "Starship"), "mist")]
-                rows += flow(width, [pad, S(option["key"], "cyan", True), S("  ")], option["label"], "ice",
-                             tail=note)
+                lead = [pad, S(option["key"], "cyan", True), S("  ")]
+                if option["key"] == chosen:
+                    # The option picked: waiting for enter, or already sent.
+                    lead = [S("     "), S("▸ " if confirm else "✓ ", "amber" if confirm else "cyan", True),
+                            S(option["key"], "amber" if confirm else "cyan", True), S("  ")]
+                rows += flow(width, lead, option["label"], "ice", bold=option["key"] == chosen, tail=note)
             if need.get("recommendation"):
                 rows += flow(width, [pad], "Starship suggests: %s" % need["recommendation"], "ice", rest="mist")
-            rows.append(row(width, [pad, S("t", "cyan", True), S("  "), S("Talk it through", "ice")]))
+            rows.append(row(width, [pad, S("t", "cyan", True), S("  "), S("Talk it through", "ice"),
+                                    S(" · by voice" if self.voice else " · typed", "faint")]))
             if need.get("holds_up"):
                 rows += flow(width, [pad, S("holds up ", "faint")], ", ".join(need["holds_up"][:3]), "mist")
         else:
-            hint = "k  keep it    c  ask for changes" if full or band else "enter shows its factory"
             if need.get("pr") and full:
                 rows.append(row(width, [pad, S("the change ", "faint"), S(need["pr"], "mist")]))
-            rows.append(row(width, [pad, S(hint, "faint")]))
+            rows.append(row(width, [pad, S("k", "cyan", True), S("  keep it    ", "ice"), S("c", "cyan", True),
+                                    S("  ask for changes", "ice")]))
         for line in rows:
             line.stop = ("need", need["id"])
         return rows
@@ -1629,11 +1879,20 @@ class View:
             return [S("you steer", "cyan")]
         return [S("Starship steers", "faint")]
 
+    def queue_brief(self, fac: Dict[str, Any]) -> str:
+        """A factory's own queue: how many of its jobs have not started, and how many of those are in line."""
+        queue = fac.get("queue")
+        if queue is None:   # a record from before the queue was counted
+            line = len([j for j in fac["jobs"] if j["state"] in ("next", "later")])
+            return "%d in line" % line if line else "nothing in line"
+        if not queue["total"]:
+            return "nothing queued"
+        return "%d queued · %s" % (queue["total"], "%d in line" % queue["in_line"] if queue["in_line"]
+                                   else "none in line")
+
     def idle_words(self, fac: Dict[str, Any]) -> str:
-        now = self.now()
-        line = [j for j in fac["jobs"] if j["state"] in ("next", "later")]
-        since = "idle since %s" % when_words(fac["idle_since"], now) if fac.get("idle_since") else "idle"
-        return "%s · %s" % (since, "%d in line" % len(line) if line else "nothing in line")
+        since = "idle since %s" % when_words(fac["idle_since"], self.now()) if fac.get("idle_since") else "idle"
+        return "%s · %s" % (since, self.queue_brief(fac))
 
     def factory_rows(self, width: int, fac: Dict[str, Any]) -> List[Row]:
         rows = self.factory_lines(width, fac)
@@ -1646,7 +1905,7 @@ class View:
         head = [S(" "), self.mark("factory", fac["id"]), S(fac["name"], "ice", True)]
         if fac["state"] == "idle":
             return [row(width, head + [S("   " + self.idle_words(fac), "faint")], self.steer(fac), band=band)]
-        rows = [row(width, head, self.steer(fac), band=band)]
+        rows = [row(width, head + [S("   " + self.queue_brief(fac), "faint")], self.steer(fac), band=band)]
         for job in fac["jobs"]:
             if job["state"] in ("running", "stuck", "waiting", "stopped", "no worker") or (
                     job["started"] and job["state"] in ("waiting on you", "ready for you")):
@@ -1690,26 +1949,125 @@ class View:
         return rows
 
     def notice_rows(self, width: int) -> List[Row]:
-        if self.confirm:
-            return [row(width, [S(" "), S(self.confirm["prompt"], "cyan", True)]),
-                    row(width, [S("   enter sends · esc cancels", "faint")]), row(width)]
+        """What the last writing key did: sent, not sent, or cancelled, in full."""
         if not self.notice:
             return []
-        return [row(width, [S(" "), S(self.notice[0], self.notice[1], True)]), row(width)]
+        rows = flow(width, [S(" ")], self.notice[0], self.notice[1], True)
+        for line in rows:
+            line.band = True
+        return rows + [row(width)]
+
+    def talk_words(self, talk: Dict[str, Any]) -> str:
+        """How the open talk box takes words: by voice, or typed and why."""
+        if talk.get("mode") in ("listening", "writing"):
+            return "by voice"
+        return "typed" if self.voice else "typed · no desk voice"
+
+    def box_rows(self, width: int) -> List[Row]:
+        """The open confirmation or talk box: a floating field, each row exactly as wide as the box.
+
+        Its top edge names what it is about and, in its corner, how it takes
+        words or that nothing is sent yet; inside are the words themselves,
+        always in sight, and the keys that send or cancel them.
+        """
+        confirm, talk = self.confirm, self.talking
+        wide = min(width - 6, 96)
+        inner = wide - 6
+        edge = "amber" if confirm is not None else "cyan"
+        lines: List[List[Tuple[str, str, bool]]] = []
+        hint_colour = "mist"
+        if confirm is not None:
+            title, corner = confirm["title"], "not sent yet"
+            lines = [[S(line, "ice", True)] for line in wrap(confirm["prompt"], inner)[:3]]
+            hint = "enter sends it to Starship · esc cancels%s" % (
+                " · another option key changes it" if confirm.get("option") else "")
+        else:
+            title, mode = talk["about"], talk.get("mode")
+            heard = [[S(line, "ice", True)] for line in wrap(talk.get("live") or "", inner - 1)[-3:]]
+            if mode == "listening":
+                corner = "● listening %d:%02d" % divmod(int(talk.get("seconds") or 0), 60) \
+                    if talk.get("hearing") else "starting the microphone"
+                meter = "".join("▁▂▃▄▅▆▇█"[min(int(level * 8), 7)] for level in talk.get("levels") or [])
+                if talk.get("live"):
+                    heard[-1].append(S("_", "cyan"))
+                lines = (heard if talk.get("live") else [[S("speak now", "faint")]]) + [[S(meter, "amber")]]
+                hint = "sends when you stop speaking, or on enter · esc cancels · type to write it instead"
+            elif mode == "writing":
+                corner = "writing it down"
+                lines = heard if talk.get("live") else [[S("…", "amber", True)]]
+                hint = "it is sent as soon as it is written down · esc cancels"
+            else:
+                # Typed text is shown exactly as typed, broken where the field
+                # ends; its last three lines stay in sight with the cursor.
+                corner = self.talk_words(talk)
+                room = max(inner - 3, 8)
+                typed = [talk["text"][at:at + room] for at in range(0, len(talk["text"]), room)] or [""]
+                if len(typed[-1]) == room:
+                    typed.append("")
+                shown = typed[-3:]
+                lines = [[S("▸ " if index == 0 and len(typed) <= 3 else "  ", "cyan", True), S(line, "ice", True)]
+                         for index, line in enumerate(shown)]
+                lines[-1].append(S("_", "cyan"))
+                hint = "enter sends · esc closes without sending · Starship hears this too"
+                if talk.get("gone"):
+                    hint, hint_colour = "This was settled elsewhere, so nothing will be sent · esc closes", "amber"
+        lines = [[]] + lines + [[]] + [[S(line, hint_colour)] for line in wrap(hint, inner)]
+        room = wide - 8 - len(corner)
+        if len(title) > room:
+            title = title[:room - 1].rstrip() + "…" if room > 0 else ""
+        top = [S("╭─ ", edge), S(title, edge, True), S(" " + "─" * (wide - 8 - len(title) - len(corner)) + " ", edge),
+               S(corner, edge, True), S(" ─╮", edge)]
+        rows = [Row(top)]
+        for line in lines:
+            rows.append(Row([S("│  ", edge)] + line + [S(" " * (wide - 6 - seg_len(line))), S("  │", edge)]))
+        rows.append(Row([S("╰" + "─" * (wide - 2) + "╯", edge)]))
+        return rows
+
+    def float_box(self, width: int, sight: List[Row], under: Optional[int]) -> List[Row]:
+        """Lay the open box over the rows in sight, which dim behind it.
+
+        It goes just under the row it is about (<under>, that row's place in
+        sight) when it fits there, else in the middle. The rows above and
+        below stay readable: the box has an outline and no fill of its own.
+        """
+        box = self.box_rows(width)[:len(sight)]
+        inset = (width - seg_len(box[0])) // 2
+        top = under + 1 if under is not None and under + 1 + len(box) <= len(sight) else \
+            max((len(sight) - len(box)) // 2, 0)
+        out = []
+        for index, line in enumerate(sight):
+            dim = [(text, "faint", False) for text, _, _ in line]
+            if top <= index < top + len(box):
+                dim = [S(" " * inset)] + list(box[index - top]) + [S(" " * (width - inset - seg_len(box[0])))]
+            out.append(Row(dim))
+        return out
+
+    def action_stop(self) -> Optional[Tuple[str, str]]:
+        """The row an open confirmation or talk box is about, while the record still holds it."""
+        if self.confirm is not None:
+            return ("need", self.confirm["item"])
+        if self.talking is not None and not self.talking.get("gone"):
+            return self.talking.get("stop")
+        return None
+
+    def action_keys(self) -> str:
+        """The keys line while a confirmation or the talk box is open: only what sends and what cancels."""
+        talk = self.talking
+        if self.confirm is not None:
+            return "ENTER  send %s to Starship      ESC  cancel" % self.confirm["what"]
+        if talk.get("gone"):
+            return "ESC  close · nothing will be sent"
+        if talk.get("mode") == "listening":
+            return "ENTER  send what you said      ESC  cancel      or type instead"
+        if talk.get("mode") == "writing":
+            return "ESC  cancel"
+        return "ENTER  send      ESC  close without sending"
 
     def footer(self, width: int) -> List[Row]:
-        talk = self.talking
-        if talk is not None:
-            # The label wraps; the typed text keeps a line of its own and, when
-            # longer than the line, shows its end so the cursor stays in sight.
-            room = width - 4
-            typed = talk["text"] if len(talk["text"]) <= room else "…" + talk["text"][-(room - 1):]
-            rows = flow(width, [S(" ")], talk["label"], "cyan", True)
-            rows.append(row(width, [S(" ▸ ", "cyan", True), S(typed, "ice"), S("_", "cyan")]))
-            if talk.get("gone"):
-                return rows + [
-                    row(width, [S(" This was settled elsewhere, so nothing will be sent · esc close", "amber")])]
-            return rows + [row(width, [S(" enter send · esc close · Starship hears this too", "faint")])]
+        if self.confirm is not None or self.talking is not None:
+            keys = row(width, [S(" " + self.action_keys(), "amber", True)])
+            keys.band = True
+            return [keys]
         kind, ident = self.at()
         keys = ["↑↓ move"]
         if kind == "need":
@@ -1722,7 +2080,7 @@ class View:
             keys.append("enter open" if not self.opened else "esc back")
         elif self.in_tab:
             keys.append("esc back")
-        keys += ["t talk", "s who steers", "q quit"]
+        keys += ["t talk (voice)" if self.voice else "t talk (typed)", "s who steers", "q quit"]
         lines = [""]
         for key in keys:
             joined = "%s · %s" % (lines[-1], key) if lines[-1] else key
@@ -1739,15 +2097,7 @@ class View:
         needs = self.needs()
         if needs:
             rows += [row(width, [S(" NEEDS YOU", "red", True)]), row(width)]
-            # The first two and the highlighted one open as cards; the rest
-            # stay one line each, so a long list still leaves room for the floor.
-            for index, need in enumerate(needs):
-                if index < 2 or self.here("need", need["id"]):
-                    rows += self.need_rows(width, need, full=False) + [row(width)]
-                else:
-                    rows.append(self.need_line(width, need))
-            if len(needs) > 2:
-                rows.append(row(width))
+            rows += self.need_list(width, needs, full=False)
         else:
             rows += [row(width, [S(" NOTHING NEEDS YOU", "green", True)]), row(width)]
         rows += [row(width, [S(" RIGHT NOW", "mist", True)]), row(width)]
@@ -1777,31 +2127,40 @@ class View:
         needs = self.needs(fac["id"])
         if needs:
             rows += [row(width, [S(" NEEDS YOU", "red", True)]), row(width)]
-            for need in needs:
-                rows += self.need_rows(width, need, full=True) + [row(width)]
+            rows += self.need_list(width, needs, full=True)
         rows += [row(width, [S(" WORK, IN ORDER", "mist", True)]), row(width)]
         if not fac["jobs"]:
             rows.append(row(width, [S("     Nothing in line.", "faint")]))
-        # Everything moving or waiting on you, then the head of the line; the
-        # long tail of the work list folds into two counts.
+        elif fac.get("queue"):
+            rows += self.queue_rows(width, fac["queue"], lead="     ", hull=False) + [row(width)]
+        # Everything moving or waiting on your answer, then the head of the
+        # line; the rest of the queue folds into one count per queue word.
         shown_line = 0
-        folded = {"in line": 0, "on hold": 0}
+        folded = {word: 0 for word in QUEUE_WORDS}
         for job in fac["jobs"]:
             if job["state"] == "finished":
                 continue
+            word = job.get("queue")
+            if word is None and not job["started"] and (
+                    job["state"].startswith("on hold") or job["state"] == "waits on other work"):
+                word = "on hold"   # a record from before the queue was counted
             if job["state"] in ("next", "later"):
                 shown_line += 1
                 if shown_line > 8:
                     folded["in line"] += 1
                     continue
-            elif job["state"].startswith("on hold") or job["state"] == "waits on other work":
-                folded["on hold"] += 1
+            elif word and job["state"] != "waiting on you":
+                folded[word] += 1
                 continue
             rows += self.job_rows(width, job, full=True)
-        tail = [plural(count, "more " + word if word == "in line" else word, "more " + word
-                       if word == "in line" else word) for word, count in folded.items() if count]
+        names = {"in line": ("more in line", "more in line"),
+                 "starts on its own": ("starts on its own", "start on their own"),
+                 "on hold": ("on hold", "on hold"),
+                 "waits on you": ("older call waits on you", "older calls wait on you"),
+                 "deferred": ("deferred to a date", "deferred to a date")}
+        tail = [plural(count, *names[word]) for word, count in folded.items() if count]
         if tail:
-            rows.append(row(width, [S("     · " + " · ".join(tail), "faint")]))
+            rows += flow(width, [S("     · ", "faint")], " · ".join(tail), "faint")
         rows += [row(width), row(width, [S(" RULES THIS CREW FOLLOWS", "mist", True)]), row(width)]
         if not fac["rules"]:
             rows.append(row(width, [S("     none written down yet", "faint")]))
@@ -1840,7 +2199,13 @@ class View:
         notes = self.notice_rows(width)
         body = self.factory_page(width) if self.opened else self.overview(width)
         foot = self.footer(width)
+        # An open confirmation or talk box floats just under the row it is about.
+        open_box = self.confirm is not None or self.talking is not None
+        about = self.action_stop()
+        under = [index for index, line in enumerate(body) if about and line.stop == about]
         if not height:
+            if open_box:
+                body = self.float_box(width, body + [row(width)] * 12, under[-1] if under else None)
             return head + [row(width)] + notes + body + [row(width)] + foot
         room = max(height - len(head) - len(notes) - len(foot) - 2, 1)
         last = max(len(body) - room, 0)
@@ -1855,6 +2220,9 @@ class View:
         self.page = room
         sight = body[self.top:self.top + room]
         sight += [row(width)] * (room - len(sight))
+        if open_box:
+            seen = [index - self.top for index in under if self.top <= index < self.top + room]
+            sight = self.float_box(width, sight, seen[-1] if seen else None)
         above, below = self.top, len(body) - self.top - room
         upper = row(width, [S(" ▲ %s above · pgup" % plural(above, "more line", "more lines"), "faint")]) \
             if above > 0 else row(width)
@@ -1883,7 +2251,7 @@ def paint(segs: Row) -> str:
 
 def send_note(home: str, request_id: str, body: str) -> Tuple[bool, str]:
     """A captain inbox note: the existing path for the owner to tell Starship."""
-    request_id = re.sub(r"[^A-Za-z0-9._:-]", "-", request_id)[:128]
+    request_id = request_id_of(request_id)
     try:
         out = subprocess.run(inbox_cmd() + ["note", "--request-id", request_id, "--json", "-"], input=body,
                              capture_output=True, text=True, timeout=30, env=dict(os.environ, FM_HOME=home))
@@ -1901,6 +2269,200 @@ def record_steer(home: str, fid: str, who: str, now: int) -> None:
         handle.write("%d\t%s\t%s\n" % (now, fid, who))
 
 
+def mic_command() -> List[str]:
+    """The microphone recorder, or nothing where this machine has none.
+
+    It is a command that writes what the microphone hears to its standard
+    output as raw 16-bit little-endian mono samples at VOICE_RATE until it is
+    stopped. FM_FACTORY_MIC names one (empty turns voice off); otherwise it is
+    ffmpeg reading the Mac's default input, the recorder bin/fm-call-mic.sh
+    also uses.
+    """
+    named = os.environ.get("FM_FACTORY_MIC")
+    if named is not None:
+        return shlex.split(named)
+    if sys.platform != "darwin":
+        return []
+    ffmpeg = shutil.which("ffmpeg") or next(
+        (path for path in ("/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg") if os.access(path, os.X_OK)), None)
+    if not ffmpeg:
+        return []
+    return [ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error", "-f", "avfoundation", "-i", ":default",
+            "-ac", "1", "-ar", str(VOICE_RATE), "-f", "s16le", "-"]
+
+
+def stt_command() -> List[str]:
+    """The command that writes a recording down, run as `<cmd> <audio-file>`: the desk voice's own."""
+    named = os.environ.get("FM_FACTORY_STT")
+    return shlex.split(named) if named else ["bash", os.path.join(BIN, "fm-deepgram-stt.sh")]
+
+
+def voice_ready(home: str) -> bool:
+    """Whether the talk box can listen here: a recorder on this machine and the desk voice's speech key."""
+    if not mic_command():
+        return False
+    if os.environ.get("FM_FACTORY_STT"):
+        return True
+    script = '. "$1/fm-deepgram-lib.sh" && [ -n "$(fm_deepgram_api_key)" ]'
+    try:
+        return subprocess.run(["bash", "-c", script, "fm-factory", BIN], capture_output=True, timeout=10,
+                              stdin=subprocess.DEVNULL, env=dict(os.environ, FM_HOME=home)).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+class Voice:
+    """One spoken note: the microphone heard until the speaker stops, then written down.
+
+    The recorder's samples are read in a thread, a tenth of a second at a time.
+    The room's own level is the quietest recent tenth, taken as quiet until a
+    tenth says otherwise so that speech from the first moment still counts; a
+    tenth three times louder than it, and louder than VOICE_SPEECH, is speech.
+    The recording ends by itself once VOICE_QUIET_STOP of quiet follows speech,
+    when no speech came within VOICE_NO_SPEECH, at VOICE_MAX, or when the
+    recorder stops.
+    """
+
+    def __init__(self, command: List[str], path: str, home: str):
+        self.path = path
+        self.home = home
+        self.live = ""                     # what was heard so far, written down while it is still listening
+        self.live_at = 0                   # how many bytes of samples those words cover
+        self.samples = bytearray()
+        self.levels: List[float] = []      # each tenth's loudness, 0 to 1 on a scale that suits a meter
+        self.spoken = 0                    # tenths that were speech
+        self.quiet = 0                     # tenths of quiet since the last speech
+        self.loudest = 0.0                 # the loudest tenth, of 32768; nothing at all means no microphone
+        self.over = False
+        self.floor = VOICE_SPEECH / 3.0
+        self.words: Optional[str] = None   # what was said, once written down
+        self.failed = ""                   # why it could not be written down
+        self.proc = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                     stderr=subprocess.DEVNULL, start_new_session=True)
+        self.reader = threading.Thread(target=self.read, daemon=True)
+        self.reader.start()
+        self.follower = threading.Thread(target=self.follow, daemon=True)
+        self.follower.start()
+
+    @property
+    def heard(self) -> bool:
+        """Speech, not a click: at least three tenths of a second of it."""
+        return self.spoken >= 3
+
+    def seconds(self) -> float:
+        return len(self.samples) / 2 / VOICE_RATE
+
+    def read(self) -> None:
+        stream = self.proc.stdout
+        while not self.over and stream is not None:
+            data = stream.read(VOICE_CHUNK * 2)
+            if not data:
+                break
+            self.samples += data
+            tenth = array.array("h")
+            tenth.frombytes(data[:len(data) // 2 * 2])
+            if sys.byteorder == "big":
+                tenth.byteswap()
+            level = math.sqrt(sum(x * x for x in tenth) / max(len(tenth), 1))
+            # The floor drops to a quieter tenth at once and creeps up slowly,
+            # so it follows the room and not the voice.
+            self.floor = max(min(level, self.floor * 1.01), 1.0)
+            self.loudest = max(self.loudest, level)
+            if level > max(self.floor * 3, VOICE_SPEECH):
+                self.spoken += 1
+                self.quiet = 0
+            else:
+                self.quiet += 1
+            self.levels.append(min(max(math.log10(max(level, 1.0)) - 1.5, 0.0) / 2.5, 1.0))
+            if (self.heard and self.quiet >= VOICE_QUIET_STOP) or len(self.levels) >= VOICE_MAX or (
+                    not self.heard and len(self.levels) >= VOICE_NO_SPEECH):
+                break
+        self.over = True
+
+    def stop(self) -> None:
+        """Stop the recorder; what was heard so far is kept."""
+        self.over = True
+        if self.proc.poll() is None:
+            try:
+                os.killpg(self.proc.pid, signal.SIGTERM)
+            except OSError:
+                pass
+        try:
+            self.proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(self.proc.pid, signal.SIGKILL)
+            except OSError:
+                pass
+        self.reader.join(timeout=2)
+
+    def write(self, path: str, size: int) -> Tuple[Optional[str], str]:
+        """Write the first <size> bytes of samples down: the words, or nothing and why."""
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            handle = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)   # the owner's eyes only
+            with wave.open(os.fdopen(handle, "wb"), "wb") as out:
+                out.setnchannels(1)
+                out.setsampwidth(2)
+                out.setframerate(VOICE_RATE)
+                out.writeframes(bytes(self.samples[:size // 2 * 2]))
+            done = subprocess.run(stt_command() + [path], capture_output=True, text=True, timeout=900,
+                                  stdin=subprocess.DEVNULL, env=dict(os.environ, FM_HOME=self.home))
+        except (OSError, subprocess.SubprocessError, wave.Error) as error:
+            return None, str(error) or "it could not be read"
+        if done.returncode != 0:
+            return None, (done.stderr.strip().splitlines() or ["the speech service did not answer"])[-1]
+        return " ".join(done.stdout.split()), ""
+
+    def follow(self) -> None:
+        """While it listens, write down what was heard so far, a second of new speech at a time.
+
+        The same command writes the whole recording down at the end, so the
+        words shown while speaking are the words that are sent.
+        """
+        part = self.path + ".part"
+        while not self.over:
+            size = len(self.samples)
+            if not self.heard or size - self.live_at < VOICE_RATE * 2:
+                time.sleep(0.1)
+                continue
+            words, _why = self.write(part, size)
+            if words is not None:
+                self.live, self.live_at = words, size
+        try:
+            os.unlink(part)
+        except OSError:
+            pass
+
+    def write_down(self) -> None:
+        """Write the whole recording down in a thread; `words` or `failed` says when it is done."""
+        def run() -> None:
+            self.follower.join()
+            if self.live and self.live_at == len(self.samples):
+                self.words = self.live
+                return
+            self.words, self.failed = self.write(self.path, len(self.samples))
+        threading.Thread(target=run, daemon=True).start()
+
+    def keep(self, home: str, why: str) -> Optional[str]:
+        """Hand a recording that was not written down to the desk voice's unsent recordings; its new path."""
+        try:
+            out = subprocess.run(["bash", os.path.join(BIN, "fm-desk-voice.sh"), "keep", "--purpose", "dictate",
+                                  "--reason", why, self.path], capture_output=True, text=True, timeout=30,
+                                 stdin=subprocess.DEVNULL, env=dict(os.environ, FM_HOME=home))
+        except (OSError, subprocess.SubprocessError):
+            return None
+        return out.stdout.strip() or None if out.returncode == 0 else None
+
+    def drop(self) -> None:
+        """Stop and forget: nothing of the recording stays (follow removes its own part)."""
+        self.stop()
+        try:
+            os.unlink(self.path)
+        except OSError:
+            pass
+
+
 class Pane:
     """The live pane: a View plus the keys, the cache and Herdr."""
 
@@ -1909,7 +2471,17 @@ class Pane:
         record = cached(home)
         if record is None:
             record = refresh(home)
-        self.view = View(record, opened=opened, in_tab=in_tab, item=item)
+        self.view = View(record, opened=opened, in_tab=in_tab, item=item, voice=voice_ready(home))
+        self.voice: Optional[Voice] = None   # the spoken note being heard or written down
+        # A pane stopped while it listened can leave the part it was writing down.
+        for name in os.listdir(pane_dir(home)) if os.path.isdir(pane_dir(home)) else []:
+            if re.match(r"^talk-\d+\.wav\.part$", name) and name != "talk-%d.wav.part" % os.getpid():
+                part = os.path.join(pane_dir(home), name)
+                try:
+                    if time.time() - os.stat(part).st_mtime > 900:
+                        os.unlink(part)
+                except OSError:
+                    pass
         self.loaded = self.record_stamp()
         self.calls_checked = 0.0
         self.focus_file = os.environ.get("FM_FACTORY_FOCUS_FILE") or ""
@@ -1962,8 +2534,12 @@ class Pane:
         if clock - self.focused_since >= FOCUS_HOLD and clock - max(self.focused_since, self.last_key) <= FOCUS_CAP:
             note_look(self.home, now_epoch())
 
-    def say(self, text: str, colour: str = "green", seconds: int = 8) -> None:
+    def say(self, text: str, colour: str = "green", seconds: int = 12) -> None:
         self.view.notice = (text, colour, time.time() + seconds)
+
+    def not_sent(self, why: str) -> None:
+        """Say plainly that nothing reached Starship; it stays up until the next key or for a minute."""
+        self.say("✗ NOT SENT: %s" % why, "red", 60)
 
     def record_stamp(self) -> int:
         try:
@@ -2005,13 +2581,186 @@ class Pane:
         kind, ident = self.view.at()
         return self.view.need(ident) if kind == "need" else None
 
-    def send(self, request_id: str, body: str, done: str) -> None:
+    def send(self, request_id: str, body: str, done: str, mark: Optional[Dict[str, Any]] = None) -> bool:
+        """Send one note to Starship and say whether it went; <mark> is what the card then shows as sent."""
         ok, why = send_note(self.home, request_id, body)
-        if ok:
-            self.say(done, "green")
-            refresh_in_background(self.home)
+        if not ok:
+            self.not_sent("%s. Nothing reached Starship; press the key again." % why.rstrip("."))
+            return False
+        self.say("✓ SENT to Starship: %s" % done, "green")
+        if mark:
+            need = self.view.need(mark["item"])
+            if need is not None:
+                self.view.sent[(need["id"], asking(need))] = {
+                    "word": mark["word"], "key": mark.get("key"), "text": mark["text"], "at": now_epoch(),
+                    "picked_up": False, "reply": None}
+        refresh_in_background(self.home)
+        return True
+
+    def answer(self, need: Dict[str, Any], option: Dict[str, Any]) -> Dict[str, Any]:
+        """The confirmation an option key opens on a question."""
+        fac = self.view.factory(need["factory"])
+        return {
+            "item": need["id"], "asked": asking(need), "option": option["key"],
+            "what": "answer %s" % option["key"], "title": "Your answer · %s" % need["title"],
+            "prompt": "%s  %s" % (option["key"], option["label"]),
+            "request_id": "factory.%s.answer.%s.%s.%s" % (fac["id"], need["id"], asking(need), option["key"]),
+            "body": "Answer for %s: %s %s\n\n(from the Factory pane; item %s%s)" % (
+                need["title"], option["key"], option["label"], need["id"],
+                ", key " + need["key"] if need.get("key") else ""),
+            "done": "answer %s, %s (%s)" % (option["key"], option["label"], need["title"]),
+            "mark": {"item": need["id"], "word": "answered", "key": option["key"],
+                     "text": "%s %s" % (option["key"], option["label"])}}
+
+    def confirm_key(self, key: str) -> bool:
+        """A key while a confirmation is open: only enter, esc or another option does anything."""
+        view, confirm = self.view, self.view.confirm
+        if key == "ctrl-c":
+            return False
+        if key == "enter":
+            view.confirm = None
+            self.send(confirm["request_id"], confirm["body"], confirm["done"], confirm["mark"])
+        elif key == "esc":
+            view.confirm = None
+            self.say("Not sent: %s was cancelled." % confirm["what"], "amber")
         else:
-            self.say("Not sent: %s" % why, "red", 12)
+            need = view.need(confirm["item"])
+            option = next((o for o in (need or {}).get("options") or []
+                           if confirm.get("option") and o["key"].lower() == key.lower()), None)
+            if option:
+                view.confirm = self.answer(need, option)
+            else:
+                self.say("Press enter to send %s, or esc to cancel." % confirm["what"], "amber")
+        return True
+
+    # ---- the talk box ----------------------------------------------------------
+
+    def open_talk(self, talk: Dict[str, Any], listen: bool) -> None:
+        """Open the talk box under the highlighted row; by voice first where this machine can listen."""
+        talk.update(text="", stop=self.view.at(), mode="typed", live="")
+        self.view.talking = talk
+        if not (listen and self.view.voice):
+            return
+        try:
+            self.voice = Voice(mic_command(), os.path.join(pane_dir(self.home), "talk-%d.wav" % os.getpid()),
+                               self.home)
+            talk["mode"] = "listening"
+        except OSError as error:
+            self.say("The microphone did not start (%s). Type it instead." % error, "amber")
+
+    def close_voice(self) -> None:
+        if self.voice is not None:
+            self.voice.drop()
+            self.voice = None
+
+    def voice_tick(self) -> None:
+        """Move a spoken note on: from listening to written down to sent."""
+        voice, talk = self.voice, self.view.talking
+        if voice is None:
+            return
+        if talk is None:
+            self.close_voice()
+        elif talk["mode"] == "listening":
+            talk.update(levels=voice.levels[-8:], seconds=voice.seconds(), hearing=bool(voice.levels),
+                        live=voice.live)
+            if voice.over:
+                self.heard(by_enter=False)
+        elif talk["mode"] == "writing" and (voice.words is not None or voice.failed):
+            self.written()
+
+    def heard(self, by_enter: bool) -> None:
+        """The recording is over: write it down, or say that nothing was heard."""
+        voice, talk = self.voice, self.view.talking
+        voice.stop()
+        if voice.heard or (by_enter and voice.seconds() >= 0.3):
+            talk["mode"] = "writing"
+            voice.write_down()
+            return
+        silent = voice.loudest < 2
+        self.close_voice()
+        talk["mode"] = "typed"
+        self.not_sent("the microphone gave no sound. Type it instead, or check that this terminal may use the "
+                      "microphone." if silent else "no speech was heard. Type it instead, or press esc.")
+
+    def written(self) -> None:
+        """The recording was written down, or could not be: send the words, or keep the recording."""
+        voice, talk = self.voice, self.view.talking
+        self.voice = None
+        if voice.failed:
+            kept = voice.keep(self.home, voice.failed)
+            talk["mode"] = "typed"
+            self.not_sent("what you said could not be written down (%s). %s Type it instead." % (
+                voice.failed.rstrip("."), "The recording is saved with the desk voice's unsent recordings."
+                if kept else "The recording is at %s." % voice.path))
+            return
+        voice.drop()
+        talk["text"] = voice.words or ""
+        talk["mode"] = "typed"
+        if not talk["text"]:
+            self.not_sent("no words were heard in what you said. Type it instead, or press esc.")
+        elif not talk.get("gone"):
+            self.send_talk(spoken=True)
+
+    def send_talk(self, spoken: bool = False) -> None:
+        """Send what the talk box holds; the box closes once it went, and keeps its words when it did not."""
+        view, talk, now = self.view, self.view.talking, now_epoch()
+        text = talk["text"].strip()
+        fac = view.factory(talk["factory"])
+        source = "spoken into the Factory pane" if spoken else "from the Factory pane"
+        mark = None
+        if talk["kind"] == "talk":
+            body = "To the %s crew: %s\n\n(%s)" % (fac["name"], text, source)
+            rid = "factory.%s.talk.%d" % (fac["id"], now)
+        elif talk["kind"] == "change":
+            body = "Changes for %s: %s\n\n(%s; item %s%s)" % (
+                talk["title"], text, source, talk["item"], ", " + talk["pr"] if talk.get("pr") else "")
+            rid = "factory.%s.change.%s.%d" % (fac["id"], talk["item"], now)
+            mark = {"item": talk["item"], "word": "asked for changes", "text": tidy(text, 120)}
+        else:
+            body = "About %s: %s\n\n(%s; item %s)" % (talk["title"], text, source, talk["item"])
+            rid = "factory.%s.talk.%s.%d" % (fac["id"], talk["item"], now)
+            mark = {"item": talk["item"], "word": "said", "text": tidy(text, 120)}
+        said = '%s"%s"%s' % ("(voice) " if spoken else "", tidy(text, 90),
+                             ". It passes it on to the %s crew." % fac["name"] if talk["kind"] == "talk" else "")
+        if self.send(rid, body, said, mark):
+            view.talking = None
+
+    def talk_key(self, key: str) -> bool:
+        view, talk = self.view, self.view.talking
+        if key == "ctrl-c":
+            self.close_voice()
+            return False
+        if talk["mode"] in ("listening", "writing"):
+            if key == "esc":
+                self.close_voice()
+                view.talking = None
+                self.say("Not sent: what you said was dropped.", "amber")
+            elif talk["mode"] == "listening" and key == "enter":
+                self.heard(by_enter=True)
+            elif talk["mode"] == "listening" and (key == "backspace" or key not in NAMED):
+                # Typing instead: the recording is dropped and the keys are text.
+                self.close_voice()
+                talk["mode"] = "typed"
+                if key not in NAMED:
+                    talk["text"] += "".join(c for c in key if c.isprintable())
+            return True
+        if key == "esc":
+            view.talking = None
+            if talk["text"].strip() and not talk.get("gone"):
+                self.say("Not sent: the box was closed with your words in it.", "amber")
+        elif key == "enter" and talk.get("gone"):
+            pass
+        elif key == "enter":
+            if talk["text"].strip():
+                self.send_talk()
+            else:
+                self.say("Nothing to send yet: type your words, then enter. Esc closes.", "amber")
+        elif key == "backspace":
+            talk["text"] = talk["text"][:-1]
+        elif key not in NAMED:
+            # Typed keys arrive one at a time; pasted or sent text arrives whole.
+            talk["text"] += "".join(c for c in key if c.isprintable())
+        return True
 
     def key(self, key: str) -> bool:
         view = self.view
@@ -2026,38 +2775,12 @@ class Pane:
         if key in ("mouse", "other"):
             return True
         if view.talking is not None:
-            talk = view.talking
-            if key == "esc":
-                view.talking = None
-            elif key == "enter" and talk.get("gone"):
-                pass
-            elif key == "enter":
-                text = talk["text"].strip()
-                view.talking = None
-                if text:
-                    fac = view.factory(talk["factory"])
-                    if talk["kind"] == "talk":
-                        body = "To the %s crew: %s\n\n(from the Factory pane)" % (fac["name"], text)
-                        rid = "factory.%s.talk.%d" % (fac["id"], now)
-                    elif talk["kind"] == "change":
-                        body = "Changes for %s: %s\n\n(from the Factory pane; item %s%s)" % (
-                            talk["title"], text, talk["item"], ", " + talk["pr"] if talk.get("pr") else "")
-                        rid = "factory.%s.change.%s.%d" % (fac["id"], talk["item"], now)
-                    else:
-                        body = "About %s: %s\n\n(from the Factory pane; item %s)" % (talk["title"], text, talk["item"])
-                        rid = "factory.%s.talk.%s.%d" % (fac["id"], talk["item"], now)
-                    self.send(rid, body, "Sent to Starship. It passes it on to the %s crew." % fac["name"])
-            elif key == "backspace":
-                talk["text"] = talk["text"][:-1]
-            elif key not in NAMED:
-                # Typed keys arrive one at a time; pasted or sent text arrives whole.
-                talk["text"] += "".join(c for c in key if c.isprintable())
-            return True
+            return self.talk_key(key)
         if view.confirm is not None:
-            confirm, view.confirm = view.confirm, None
-            if key == "enter":
-                self.send(confirm["request_id"], confirm["body"], confirm["done"])
-            return True
+            return self.confirm_key(key)
+        # A result stays up until the next key says it was read.
+        if view.notice and view.notice[1] == "red":
+            view.notice = None
         lower = key.lower() if len(key) == 1 else key
         need = self.need_at()
         if lower in ("q", "ctrl-c"):
@@ -2090,38 +2813,34 @@ class Pane:
             elif view.opened:
                 view.show(None)
         elif need and need["kind"] == "question" and any(o["key"].lower() == lower for o in need["options"]):
-            option = next(o for o in need["options"] if o["key"].lower() == lower)
-            fac = view.factory(need["factory"])
-            view.confirm = {
-                "item": need["id"], "asked": asking(need),
-                "prompt": "%s: answer %s, %s?" % (need["title"], option["key"], option["label"]),
-                "request_id": "factory.%s.answer.%s.%s.%s" % (fac["id"], need["id"], asking(need), option["key"]),
-                "body": "Answer for %s: %s %s\n\n(from the Factory pane; item %s%s)" % (
-                    need["title"], option["key"], option["label"], need["id"],
-                    ", key " + need["key"] if need.get("key") else ""),
-                "done": "Answer sent to Starship: %s." % option["label"]}
+            view.confirm = self.answer(need, next(o for o in need["options"] if o["key"].lower() == lower))
+            view.follow = True
         elif need and need["kind"] == "finished work" and lower == "k":
             fac = view.factory(need["factory"])
             view.confirm = {
-                "item": need["id"], "asked": asking(need),
-                "prompt": "Keep %s and ask Starship to land it?" % need["title"],
+                "item": need["id"], "asked": asking(need), "what": "keep it",
+                "title": "Keep it · %s" % need["title"],
+                "prompt": "Keep %s and ask Starship to land it." % need["title"],
                 "request_id": "factory.%s.keep.%s.%s" % (fac["id"], need["id"], asking(need)),
                 "body": "Keep %s: please land it.\n\n(from the Factory pane; item %s%s)" % (
                     need["title"], need["id"],
                     ", " + need["pr"] if need.get("pr") else ""),
-                "done": "Sent to Starship: keep it."}
+                "done": "keep %s and land it" % need["title"],
+                "mark": {"item": need["id"], "word": "asked to keep", "text": "keep it"}}
+            view.follow = True
         elif need and need["kind"] == "finished work" and lower == "c":
-            view.talking = {"kind": "change", "factory": need["factory"], "text": "", "item": need["id"],
+            self.open_talk({"kind": "change", "factory": need["factory"], "item": need["id"],
                             "title": need["title"], "pr": need.get("pr"),
-                            "label": "What should change in %s" % need["title"]}
+                            "about": "What should change · %s" % need["title"]}, listen=False)
         elif lower == "t":
             fid = self.factory_of_stop()
             if need and need["kind"] == "question":
-                view.talking = {"kind": "discuss", "factory": need["factory"], "text": "", "item": need["id"],
-                                "title": need["title"], "label": "About %s" % need["title"]}
+                self.open_talk({"kind": "discuss", "factory": need["factory"], "item": need["id"],
+                                "title": need["title"], "about": "Tell Starship · about %s" % need["title"]},
+                               listen=True)
             elif fid:
-                view.talking = {"kind": "talk", "factory": fid, "text": "",
-                                "label": "To the %s crew" % view.factory(fid)["name"]}
+                self.open_talk({"kind": "talk", "factory": fid,
+                                "about": "To the %s crew" % view.factory(fid)["name"]}, listen=True)
         elif lower == "s":
             fid = self.factory_of_stop()
             if fid:
@@ -2196,6 +2915,7 @@ def live(pane: Pane) -> None:
                 pane.check_focus()
                 focus_checked = time.time()
             pane.take_focus()
+            pane.voice_tick()
             size = os.get_terminal_size()
             view = pane.view
             if view.notice and time.time() > view.notice[2]:
@@ -2212,7 +2932,8 @@ def live(pane: Pane) -> None:
             buf.append("\x1b[?2026l")
             out.write("".join(buf))
             out.flush()
-            deadline = time.time() + 0.4
+            # A spoken note's meter and its end are followed more closely.
+            deadline = time.time() + (0.15 if pane.voice else 0.4)
             while True:
                 wait = deadline - time.time()
                 if wait <= 0:
@@ -2226,6 +2947,7 @@ def live(pane: Pane) -> None:
                             return
                     break
     finally:
+        pane.close_voice()
         termios.tcsetattr(fd, termios.TCSADRAIN, saved)
         out.write("\x1b[?1006l\x1b[?1000l\x1b[?7h\x1b[?25h\x1b[?1049l")
         out.flush()
@@ -2384,7 +3106,8 @@ def main(argv: List[str]) -> int:
                     print("fm-factory: no factory %s" % args.factory, file=sys.stderr)
                     return 1
                 height = max(args.height, 8) if args.height else None
-                print(plain(View(record, opened=args.factory), max(args.width, 40), height))
+                view = View(record, opened=args.factory, item=args.item, voice=voice_ready(home))
+                print(plain(view, max(args.width, 40), height))
             return 0
         if args.command == "refresh":
             refresh(home)
