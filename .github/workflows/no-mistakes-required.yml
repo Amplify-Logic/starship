@@ -28,6 +28,6 @@ jobs:
       github.event.pull_request.user.login != 'dependabot[bot]'
     steps:
       - name: Verify no-mistakes signature and pipeline attestation
-        uses: kunchenguid/no-mistakes/.github/actions/require-no-mistakes@f6441c96c352a18b9cadcaef6b6c7017e9ac3970 # v1.80.1
+        uses: kunchenguid/no-mistakes/.github/actions/require-no-mistakes@5732d1ed88a1572fa6115d6ede5d69bfec097946 # v1.106.1
         with:
           exempt-authors: kunchenguid

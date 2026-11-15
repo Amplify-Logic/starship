@@ -1493,7 +1493,7 @@ No reasoning-effort axis was found; `gemini --help` on 0.58.0 exposes no effort,
 ## Herdr
 
 The compatibility floor is protocol 14.
-The required real-Herdr CI lane pins Herdr 0.9.5 protocol 22 and Treehouse 3.1.3 (`bin/fm-install-herdr.sh`, `bin/fm-install-treehouse.sh`).
+The required real-Herdr CI lane pins Herdr 0.9.5 protocol 22 and Treehouse 3.1.8 (`bin/fm-install-herdr.sh`, `bin/fm-install-treehouse.sh`).
 The whole real-Herdr lane's latest active verification uses Herdr 0.9.5 protocol 22 with Treehouse 3.1.3, recorded under "CI pin" below, after earlier whole-lane runs on Herdr 0.7.4 protocol 16 and Herdr 0.8.0 protocol 19 on macOS aarch64, while focused Herdr 0.7.5 protocol 17, earlier protocol-16, protocol-14, and 0.7.3 evidence is retained where it defines current behavior or fallbacks.
 Protocol 17 keeps every protocol-16 feature gate satisfied; the event and workspace-move floors remain 16.
 Default-on presentation projection has its own floor at Herdr 0.8.0, protocol 19, verified below.
