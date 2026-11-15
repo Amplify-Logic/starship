@@ -96,6 +96,10 @@ elif cmd == "pane process-info":
     out({"result": {"process_info": {"foreground_processes": [{"cmdline": c} for c in p["cmd"]]}}})
 elif cmd == "pane read":             # a pane's screen: its "screen", else a shell prompt
     p = find_pane(args[2])
+    if len(p.get("screens") or []) > 1:   # a shell still starting: one screen per read
+        p["screen"] = p["screens"].pop(0); save()
+    elif p.get("screens"):
+        p["screen"] = p["screens"][0]
     sys.stdout.write(p.get("screen", "lars@mac ~ % \n\n" if p["cmd"][0].lstrip("-") in ("zsh", "bash") else "%s\n" % p["cmd"][0]))
 elif cmd == "pane run":
     p = find_pane(args[2])
@@ -408,6 +412,27 @@ test_a_shell_still_starting_is_left_alone() {
   pass "desk: a shell still starting, with no prompt yet, is left alone and reported"
 }
 
+test_a_restored_shell_is_given_time_to_reach_its_prompt() {
+  new_case default true
+  layout default
+  restored_session
+  printf '1 ttys001 herdr\n2 ttys002 herdr --session default\n' > "$FAKE_PS"
+  # Just after a restart every restored shell runs its startup at once: the
+  # bridge's pane shows nothing for its first reads, then its prompt.
+  python3 - "$FAKE_HERDR_STATE" <<'PY'
+import json, sys
+st = json.load(open(sys.argv[1]))
+bridge = st["workspaces"][0]["tabs"][0]["panes"][0]
+bridge["screens"] = ["", "", "Last login: Sun Nov 15 09:12:01 on ttys004\n", "", "lars@mac ~ % \n"]
+json.dump(st, open(sys.argv[1], "w"))
+PY
+  local out
+  out=$(FM_DESK_WAIT=10 desk open) || fail "open failed: $out"
+  assert_contains "$out" "start the Starship bridge again in its pane" "a shell that reached its prompt late was not restarted"
+  assert_not_contains "$out" "the Starship bridge's pane has input waiting" "a shell still starting was given up on"
+  pass "desk: a restored shell is given time to reach its prompt before it is left alone"
+}
+
 test_the_sidebar_setting_changes_only_its_own_line() {
   new_case lab true
   layout lab
@@ -595,6 +620,7 @@ fm_test_run \
   test_a_busy_first_pane_is_never_typed_into \
   test_a_pane_with_input_typed_after_its_prompt_is_left_alone \
   test_a_shell_still_starting_is_left_alone \
+  test_a_restored_shell_is_given_time_to_reach_its_prompt \
   test_the_sidebar_setting_changes_only_its_own_line \
   test_a_bad_or_missing_layout_stops_with_the_reason \
   test_layout_reads_the_running_desk_back \

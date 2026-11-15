@@ -43,9 +43,9 @@ one it did not just create, never starts anything in a pane that runs something 
 touches any other workspace. A pane counts as an idle shell only when the bare
 shell itself is in its foreground (a shell running a command is not) and Herdr
 records no agent in it. The desk types into an idle shell only when its screen
-also shows the shell's prompt as the last line with nothing typed after it; a
-shell still starting, or one holding typed-ahead input, is left alone with a
-note.
+also shows the shell's prompt as the last line with nothing typed after it. It
+gives a shell still starting up to FM_DESK_WAIT to reach its prompt; one that
+does not, or one holding typed-ahead input, is left alone with a note.
 
 Environment:
   FM_HOME                 the home whose config/desk-layout is read (default:
@@ -60,8 +60,8 @@ Test seams:
   FM_DESK_OSASCRIPT       AppleScript runner (default: osascript)
   FM_DESK_COMMAND_DIR     where install-command links `starship` (default
                           ~/.local/bin)
-  FM_DESK_WAIT            seconds to wait for a started server or a new view
-                          (default 30)
+  FM_DESK_WAIT            seconds to wait for a started server, a new view, or
+                          a starting shell's prompt (default 30)
 Exit: 0 on success; 1 when a step fails, with the reason on stderr; 2 on a usage
 error or an unreadable layout.
 """
@@ -839,20 +839,32 @@ def cmd_open() -> int:
     # acts on what is really there. A step is never taken twice in one run:
     # one that still shows as missing afterwards is reported, not repeated.
     pending: List[Dict[str, Any]] = []
-    for _ in range(64):
+    starting_until: Optional[float] = None
+    taken_count = 0
+    while True:
         found = survey(herdr, layout, home)
         steps, notes = plan(layout, found, read_sidebar())
         pending = [item for item in steps if item["key"] in taken]
         fresh = [item for item in steps if item["key"] not in taken]
         if not fresh:
+            # A shell still running its startup shows no prompt yet, and
+            # just after a restart every restored pane starts its shell at
+            # once; give such shells FM_DESK_WAIT to reach their prompt
+            # before leaving them alone.
+            if any(p["idle"] and not p["free"] for panes in found["panes"].values() for p in panes):
+                starting_until = starting_until or time.time() + wait_limit()
+                if time.time() < starting_until:
+                    time.sleep(1)
+                    continue
             break
+        taken_count += 1
+        if taken_count > 64:
+            raise Failure("the desk did not settle after 64 steps")
         item = fresh[0]
         execute(item, layout, herdr, found, home)
         taken.add(item["key"])
         done.append(item)
         say("  done: %s" % item["text"])
-    else:
-        raise Failure("the desk did not settle after 64 steps")
     for item in pending:
         notes.append("asked to %s, but it has not shown up yet" % item["text"])
     if any(item["kind"] in LAYOUT_KINDS for item in done):

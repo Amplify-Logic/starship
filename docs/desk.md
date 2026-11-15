@@ -24,7 +24,8 @@ Each window is a full Herdr client of the same session, so they mirror each othe
 ## What it never does
 
 It never closes, restarts or moves a pane, tab or workspace, never renames one it did not just create, and never touches another workspace, including the workers' own.
-It starts something in a pane only when that pane is an idle shell: the shell itself is waiting there and Herdr records no agent in it.
+It starts something in a pane only when that pane is an idle shell: the shell itself is waiting there, Herdr records no agent in it, and the pane's last line is the shell's prompt with nothing typed after it.
+A shell still starting up, as every restored pane is just after a restart, gets up to 30 seconds (`FM_DESK_WAIT`) to reach its prompt; a pane holding typed-ahead input is left alone.
 A tab or pane running anything else is left as it is and named in a note.
 Tabs it adds go at the end; it does not reorder tabs you moved.
 
