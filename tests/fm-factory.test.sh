@@ -19,6 +19,9 @@ FACTORY="$ROOT/bin/fm-factory.py"
 PANE="$ROOT/bin/fm-factory-pane.sh"
 NOW=1794643200   # 2026-11-14T08:00:00Z
 export TZ=UTC FM_FACTORY_NOW=$NOW FM_FACTORY_PEEK='' FM_SNAPSHOT_NOW=2026-11-14T08:00:00Z
+# The real tasks-axi, when installed, for the case that files a real reconcile
+# request; every other case reads through the stand-in below.
+REAL_TASKS_AXI=$(command -v tasks-axi || true)
 # The owner's calls read the backlog through the tasks-axi adapter; this
 # stand-in serves each case's fixture backlog (FM_TEST_AXI_BACKLOG).
 fm_install_markdown_tasks_axi "$TMP_ROOT/axibin"
@@ -56,6 +59,36 @@ esac
 SH
 chmod +x "$BINDIR/inbox"
 export FM_FACTORY_INBOX="$BINDIR/inbox"
+
+# A stand-in for bin/fm-captain-hold.sh: `reconcile-requests` records its
+# arguments and the task ids on stdin and keeps one request per task in the
+# case's home, and `reconcile list` prints those requests the way the real one
+# does. FM_FACTORY_TEST_UNBOUND makes the intake refuse an unbound source.
+cat > "$BINDIR/captain-hold" <<'SH'
+#!/usr/bin/env bash
+reqs="$FM_HOME/reconcile.requests"
+case "$1 ${2:-}" in
+  'reconcile-requests '*)
+    printf '%s\n' "$*" >> "$FM_HOME/captain-hold.calls"
+    if [ -n "${FM_FACTORY_TEST_UNBOUND:-}" ]; then
+      echo "fm-captain-hold: source factory-pane is not bound; no reconcile requests were created" >&2
+      exit 1
+    fi
+    while IFS= read -r id; do
+      printf 'stdin=%s\n' "$id" >> "$FM_HOME/captain-hold.calls"
+      grep -q "^$id"$'\t' "$reqs" 2>/dev/null \
+        || printf '%s\t%s\n' "$id" "${FM_FACTORY_TEST_REQUESTED:-2026-11-14T07:00:00Z}" >> "$reqs"
+      printf 'reconcile: %s\n' "$id"
+    done
+    ;;
+  'reconcile list')
+    [ ! -f "$reqs" ] || awk -F'\t' '{ print $1 "\trequested=" $2 "\tsource=the pane" }' "$reqs"
+    printf 'reconcile-requests: %s\n' "$( [ -f "$reqs" ] && wc -l < "$reqs" | tr -d ' ' || echo 0)"
+    ;;
+esac
+SH
+chmod +x "$BINDIR/captain-hold"
+export FM_FACTORY_CAPTAIN_HOLD="$BINDIR/captain-hold"
 
 # A fake herdr that records every call and answers with the shapes Herdr 0.9.5
 # returns for the calls the factory tab and the plugin make.
@@ -125,7 +158,7 @@ reset_case() {
   export FM_HOME="$HOME_FIX" FM_FACTORY_TEST_CALLS="$CALLS" FM_FACTORY_TEST_NOTES="$TMP_ROOT/case$CASE/notes"
   export FM_FACTORY_SNAPSHOT="$HOME_FIX/snapshot.json" FM_FACTORY_TEST_CONFIG="$TMP_ROOT/case$CASE/config"
   export FM_TEST_AXI_BACKLOG="$HOME_FIX/snapshot.json"
-  unset FM_FACTORY_TEST_NO_TAB FM_FACTORY_TEST_TAB_GONE HERDR_BIN_PATH HERDR_PANE_ID HERDR_TAB_ID \
+  unset FM_FACTORY_TEST_NO_TAB FM_FACTORY_TEST_TAB_GONE FM_FACTORY_TEST_UNBOUND HERDR_BIN_PATH HERDR_PANE_ID HERDR_TAB_ID \
     HERDR_WORKSPACE_ID HERDR_SOCKET_PATH
 }
 
@@ -357,6 +390,7 @@ test_the_plain_screen_is_the_record_as_text() {
     "a recommendation of its own"
   assert_not_contains "$out" "None" "a missing value printed as None"
   assert_contains "$out" "       t  Talk it through" "talk it through"
+  assert_contains "$out" "       x  Already settled?" "a question offers already settled"
   assert_contains "$out" "       ✓ planning ••••• ▸ building •••••   checking ·····   ready for you" "four steps"
   assert_contains "$out" "       running the search tests: 41 of 58 passed" "doing this minute"
   has_line "$out" " ● Sharper cup photos stuck" "a stuck job"
@@ -371,7 +405,7 @@ test_the_plain_screen_is_the_record_as_text() {
   assert_not_contains "$feed" "Search recipes" "a worker's own question reached the feed"
   assert_not_contains "$feed" "Gift cards" "a review finding Starship decides reached the feed"
   assert_not_contains "$feed" "stuck" "a blocker reached the feed"
-  assert_contains "$out" " ↑↓ move · 1/2/3 answer · enter open · t talk · s who steers · q quit" "keys"
+  assert_contains "$out" " ↑↓ move · 1/2/3 answer · x settled? · enter open · t talk · s who steers · q quit" "keys"
   out=$(python3 "$FACTORY" --plain --width 92 --factory sample-shop) || fail "--plain --factory failed"
   assert_contains "$out" " RULES THIS CREW FOLLOWS" "rules heading"
   assert_contains "$out" "   · Anything that touches payments waits for your yes." "a rule"
@@ -764,6 +798,112 @@ test_a_note_reaches_starship_through_the_real_inbox() {
   pass "factory pane: an answer is a captain inbox note, saved once per question under its request id"
 }
 
+# Already settled? only asks: it files a reconcile request for the highlighted
+# call and wakes Starship with a note naming it, and the card reads checking
+# until Starship closes the call, notes it, or holds it again with new words.
+test_already_settled_asks_starship_to_recheck_the_call() {
+  reset_case
+  write_registry
+  write_world
+  local screen="$TMP_ROOT/case$CASE/screen" out
+  drive_keys x "SNAP:$screen"
+  assert_equals "$(head -n 1 "$HOME_FIX/captain-hold.calls")" \
+    "reconcile-requests --source-id factory-pane --source the Factory pane's Already settled? key" \
+    "the key files through the reconcile intake under the pane's source"
+  assert_equals "$(sed -n 2p "$HOME_FIX/captain-hold.calls")" "stdin=garden-chart" "it names the highlighted call"
+  assert_equals "$(jq -r .request_id "$FM_FACTORY_TEST_NOTES")" \
+    "factory.garden-journal.settled.garden-chart.$((NOW - 3600))" "the wake note is named for the one request"
+  assert_contains "$(jq -r .body "$FM_FACTORY_TEST_NOTES")" "Already settled? Harvest chart" "the wake names the call"
+  assert_contains "$(jq -r .body "$FM_FACTORY_TEST_NOTES")" \
+    "The owner thinks this held call is already settled" "the wake says the owner thinks it is settled"
+  assert_contains "$(jq -r .body "$FM_FACTORY_TEST_NOTES")" "Re-read the conversation now and record it in this turn" \
+    "the wake asks Starship to re-read and record now"
+  assert_contains "$(jq -r .body "$FM_FACTORY_TEST_NOTES")" "(from the Factory pane; item garden-chart)" \
+    "the wake names the item"
+  assert_contains "$(cat "$screen")" "Asked Starship to check whether Harvest chart is already settled." "the pane says so"
+  assert_contains "$(cat "$screen")" "Starship is re-reading what you said about this" "the card reads checking at once"
+  take_record
+  assert_equals "$(q '[.needs_you[] | "\(.id)=\(.checking)"] | join(" ")')" \
+    "garden-chart=true shop-provider=false garden-share=false" "only the asked call is checking"
+  out=$(python3 "$FACTORY" --plain --width 92) || fail "--plain failed"
+  has_line "$out" " ▸ ● Harvest chart checking · Garden Journal · waiting 3 h" "the card head reads checking"
+  has_line "$out" " checking Starship is re-reading what you said about this" "the checking row"
+  assert_not_contains "$(printf '%s\n' "$out" | sed -n '/Harvest chart/,/Which payment/p')" "x  Already settled?" \
+    "a checking card offers the key again"
+  # Pressed again while checking: still one request and one note.
+  drive_keys x
+  assert_equals "$(wc -l < "$HOME_FIX/reconcile.requests" | tr -d ' ')" "1" "a second press filed a second request"
+  assert_equals "$(sort -u "$FM_FACTORY_TEST_NOTES" | jq -r .request_id | sort -u | wc -l | tr -d ' ')" "1" \
+    "a second press made a second wake"
+  # Starship closes or notes the call: its request leaves and checking clears.
+  : > "$HOME_FIX/reconcile.requests"
+  take_record
+  assert_equals "$(q '.needs_you[0].checking')" "false" "checking cleared when the request was retired"
+  # Held again with new words after the request: the card is the new call.
+  drive_keys x
+  "$BINDIR/edit-world" reask garden-chart $((NOW - 600)) >/dev/null || fail "edit-world failed"
+  take_record
+  assert_equals "$(q '.needs_you[0] | "\(.id) \(.checking)"')" "garden-chart false" \
+    "a call held again since the request is not checking"
+  # Finished work has no such key, and a refused request wakes no one.
+  : > "$FM_FACTORY_TEST_NOTES"
+  : > "$HOME_FIX/captain-hold.calls"
+  drive_keys DOWN DOWN x
+  assert_equals "$(cat "$HOME_FIX/captain-hold.calls")" "" "x on finished work filed a request"
+  : > "$HOME_FIX/reconcile.requests"
+  FM_FACTORY_TEST_UNBOUND=1 drive_keys x "SNAP:$screen"
+  assert_equals "$(cat "$FM_FACTORY_TEST_NOTES")" "" "a refused request still woke Starship"
+  assert_contains "$(cat "$screen")" "Not asked: the pane is not set up to ask this; run bin/fm-factory-pane.sh install" \
+    "the refusal says how to fix it"
+  pass "factory pane: x files a reconcile request for the highlighted call, wakes Starship, and reads checking until settled"
+}
+
+# The same key against the real captain-hold intake, the real inbox and a
+# real backlog: the pane started as Herdr starts it binds its source, the
+# request lands, and Starship's reconcile note or evidence close clears it.
+test_already_settled_files_a_real_reconcile_request() {
+  if [ -z "$REAL_TASKS_AXI" ]; then
+    echo "skip: tasks-axi not found; the real reconcile request case did not run"
+    return 0
+  fi
+  reset_case
+  write_registry
+  (unset FM_FACTORY_CAPTAIN_HOLD FM_FACTORY_INBOX FM_TEST_AXI_BACKLOG
+   local hold="$ROOT/bin/fm-captain-hold.sh" out real_dir
+   real_dir=$(dirname "$REAL_TASKS_AXI")
+   export PATH="$real_dir:$PATH" FM_CAPTAIN_HOLD_NOW=2026-11-14T07:30:00Z
+   fm_test_tasks_toml "$HOME_FIX/.tasks.toml"
+   printf '## In flight\n\n## Queued\n\n## Done\n' > "$HOME_FIX/data/backlog.md"
+   printf '{"schema":"fm-fleet-snapshot.v1","generated":"2026-11-14T08:00:00Z","tasks":[],"backlog":{"records":[]}}\n' \
+     > "$FM_FACTORY_SNAPSHOT"
+   printf '{"decisions":[]}\n' > "$HOME_FIX/shapes.json"
+   touch "$HOME_FIX/state/.afk"   # the inbox then rings no primary session
+   FM_CAPTAIN_HOLD_NOW=2026-11-14T07:00:00Z bash "$hold" hold chart-range --title "Harvest chart" \
+     --reason "Week or season?" --repo garden-journal >/dev/null || fail "hold failed"
+   DRIVE_PANE=1 drive_keys x
+   assert_contains "$(bash "$hold" binding factory-pane)" "(any)" "starting the pane bound its source"
+   out=$(bash "$hold" reconcile list)
+   assert_contains "$out" "chart-range"$'\t'"requested=2026-11-14T07:30:00Z" "the request is on record"
+   assert_contains "$out" "source=the Factory pane's Already settled? key" "the request names the pane"
+   assert_contains "$(cat "$HOME_FIX"/state/inbox/*.note)" \
+     "request_id=factory.garden-journal.settled.chart-range.$((NOW - 1800))" "the wake is a captain inbox note"
+   assert_equals "$(python3 "$FACTORY" --data --fresh | jq -r '.needs_you[0] | "\(.id) \(.checking)"')" \
+     "chart-range true" "the card reads checking"
+   printf 'Only the season part is still open.\n' > "$HOME_FIX/note.txt"
+   bash "$hold" reconcile note chart-range --note-file "$HOME_FIX/note.txt" >/dev/null || fail "reconcile note failed"
+   assert_equals "$(python3 "$FACTORY" --data --fresh | jq -r '.needs_you[0] | "\(.id) \(.checking)"')" \
+     "chart-range false" "a reconcile note clears checking and keeps the call"
+   FM_CAPTAIN_HOLD_NOW=2026-11-14T07:45:00Z DRIVE_PANE=1 drive_keys x
+   assert_equals "$(find "$HOME_FIX/state/inbox" -maxdepth 1 -name '*.note' | wc -l | tr -d ' ')" "2" \
+     "a new request after the note is a new wake"
+   printf 'Settled in chat: the week view.\n' > "$HOME_FIX/evidence.txt"
+   bash "$hold" reconcile close chart-range --evidence-file "$HOME_FIX/evidence.txt" >/dev/null \
+     || fail "reconcile close failed"
+   assert_equals "$(python3 "$FACTORY" --data --fresh | jq -r '.needs_you | length')" "0" \
+     "a call closed with evidence leaves NEEDS YOU") || exit 1
+  pass "factory pane: x files a real reconcile request through the bound pane source; a note or close clears it"
+}
+
 test_the_highlight_and_open_boxes_follow_the_record() {
   reset_case
   write_registry
@@ -897,6 +1037,8 @@ test_the_plugin_installs_opens_and_removes() {
   out=$(HERDR_BIN_PATH="$BINDIR/herdr" bash "$PANE" install 2>&1) || fail "install failed: $out"
   assert_grep "plugin link $ROOT/herdr-plugins/starship-factory" "$CALLS" "install links the plugin"
   assert_equals "$(cat "$FM_FACTORY_TEST_CONFIG/home")" "$HOME_FIX" "install records the home"
+  assert_equals "$(bash "$ROOT/bin/fm-captain-hold.sh" binding factory-pane)" "(any)" \
+    "install binds the Already settled? key's source"
   : > "$CALLS"
   out=$(HERDR_BIN_PATH="$BINDIR/herdr" HERDR_PANE_ID=w1:p2 bash "$PANE" open 2>&1) || fail "open failed: $out"
   assert_equals "$(cat "$CALLS")" "plugin pane open --plugin starship.factory --entrypoint factory --placement split --direction right --target-pane w1:p2 --focus --env FM_HOME=$HOME_FIX" \
@@ -910,7 +1052,9 @@ test_the_plugin_installs_opens_and_removes() {
   kill "$pid" 2>/dev/null
   assert_grep 'plugin unlink starship.factory' "$CALLS" "remove unlinks the plugin"
   assert_absent "$FM_FACTORY_TEST_CONFIG/panes/$pid" "the stale record is cleared"
-  pass "factory pane: install links and records the home, open splits right, remove stops only its own panes"
+  bash "$ROOT/bin/fm-captain-hold.sh" binding factory-pane >/dev/null 2>&1 \
+    && fail "remove left the Already settled? key's source bound"
+  pass "factory pane: install links and records the home, binds its reconcile source, open splits right, remove stops only its own panes and unbinds it"
 }
 
 # The bridge strip opens the pane on one item of NEEDS YOU: a new pane starts
@@ -983,6 +1127,8 @@ fm_test_run \
   test_a_narrow_talk_box_always_shows_what_is_typed \
   test_writing_keys_go_through_the_inbox_and_act_on_the_highlighted_row \
   test_a_note_reaches_starship_through_the_real_inbox \
+  test_already_settled_asks_starship_to_recheck_the_call \
+  test_already_settled_files_a_real_reconcile_request \
   test_the_highlight_and_open_boxes_follow_the_record \
   test_talking_never_changes_who_steers \
   test_enter_opens_the_factory_tab_with_its_live_workers \

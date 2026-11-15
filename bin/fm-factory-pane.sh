@@ -31,6 +31,11 @@
 #                                a read-only live copy of one worker's pane, for
 #                                a factory tab
 #
+# Installing the pane is the owner's opt-in to its Already settled? key, so
+# `install` binds the pane's reconcile source id (`factory-pane`) through
+# bin/fm-captain-hold.sh bind, `run` keeps that binding in place for a pane
+# installed before the key existed, and `remove` unbinds it.
+#
 # `remove` finds running panes only through the records each one keeps in the
 # plugin's Herdr config directory, and stops a recorded process only after
 # checking it is still this script's pane, so it never closes another pane.
@@ -66,6 +71,13 @@ usage() {
 }
 
 die() { printf '%s: %s\n' "$ME" "$*" >&2; exit 1; }
+
+# The pane's reconcile source; bin/fm-factory.py files requests under it.
+SETTLED_SOURCE=factory-pane
+
+bind_settled() {  # <home>
+  FM_HOME=$1 bash "$SCRIPT_DIR/fm-captain-hold.sh" bind "$SETTLED_SOURCE" >/dev/null
+}
 
 herdr_bin() { printf '%s' "${HERDR_BIN_PATH:-herdr}"; }
 
@@ -120,6 +132,7 @@ cmd_run() {
     [ "$arg" != --factory ] || view=page
   done
   record=$(record_self "$view")
+  bind_settled "$home" 2>/dev/null || true
   if [ "$view" = overview ]; then
     [ -z "${FM_FACTORY_ITEM:-}" ] || start=(--item "$FM_FACTORY_ITEM")
     [ -z "$record" ] || focus="${record%/panes/*}/focus/$$"
@@ -195,6 +208,7 @@ cmd_install() {
   if ! { mkdir -p "$dir" && printf '%s\n' "$home" > "$dir/home"; }; then
     die "the plugin is linked, but this home could not be recorded in $dir"
   fi
+  bind_settled "$home" || die "the plugin is linked, but its Already settled? key could not be bound"
   printf 'The Factory pane is installed.\n'
   if [ -n "${HERDR_PANE_ID:-}" ]; then
     cmd_open
@@ -206,6 +220,7 @@ cmd_install() {
 cmd_remove() {
   local herdr dir rec pid stopped=0
   herdr=$(herdr_bin)
+  FM_HOME=$(resolve_home) bash "$SCRIPT_DIR/fm-captain-hold.sh" unbind "$SETTLED_SOURCE" >/dev/null 2>&1 || true
   if dir=$(config_dir); then
     for rec in "$dir"/panes/*; do
       [ -f "$rec" ] || continue

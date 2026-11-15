@@ -311,7 +311,7 @@ This captured-source intake records a durable reconcile request under `state/rec
 There is one private record per task, carrying the requesting provenance and a UTC timestamp.
 The record exists so the obligation to re-check cannot be lost between the wake that carried the answer and the turn that acts on it.
 It is idempotent per task: repeating a reconcile keeps one request and its original timestamp.
-The supported creator is the runner carrying the captain's board selection.
+The supported creators are the runner carrying the captain's board selection and the Factory pane's `Already settled?` key, which files under its own bound `factory-pane` source and wakes firstmate with an inbox note naming the call ([`factory-pane.md`](factory-pane.md#keys)).
 The binding-checked `reconcile-requests` command is that internal intake rather than an operator reconciliation outcome.
 
 ### Verifying and retiring a request
