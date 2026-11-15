@@ -28,6 +28,19 @@
 # stdout.
 set -u
 
+PAYLOAD=$(cat 2>/dev/null || true)
+[ -n "$PAYLOAD" ] || exit 0
+
+# Prefilter (transport only; the check still owns what counts as publishing).
+# The check reads only a command whose text holds gh (gh, gh-axi) or
+# no-mistakes, and a JSON string can spell those letters only literally or
+# through a \u escape, so a raw payload with none of the three cannot publish
+# and is allowed before the scope test starts git or the check starts Python.
+case "$PAYLOAD" in
+  *gh*|*no-mistakes*|*'\u'*) ;;
+  *) exit 0 ;;
+esac
+
 SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" 2>/dev/null && pwd -P) || exit 0
 FM_ROOT=$(CDPATH='' cd -- "$SCRIPT_DIR/.." 2>/dev/null && pwd -P) || exit 0
 
@@ -38,8 +51,6 @@ command -v git >/dev/null 2>&1 || exit 0
 fm_primary_root_matches "$FM_ROOT" || exit 0
 command -v python3 >/dev/null 2>&1 || exit 0
 
-PAYLOAD=$(cat 2>/dev/null || true)
-[ -n "$PAYLOAD" ] || exit 0
 # shellcheck source=bin/fm-hook-host-lib.sh
 . "$SCRIPT_DIR/fm-hook-host-lib.sh"
 fm_hook_payload_is_foreign_host "$PAYLOAD" && exit 0

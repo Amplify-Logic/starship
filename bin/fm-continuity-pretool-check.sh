@@ -92,6 +92,41 @@ if [ "$COMMAND_SET" -eq 0 ]; then
 fi
 [ -n "$COMMAND" ] || exit 0
 
+# Strict-superset prefilter (transport only; owns zero classification semantics),
+# run before any library is sourced so an ordinary command pays no scope, lock,
+# or watcher reads. A deny needs a lexed command word whose decoded basename
+# matches ^fm-[A-Za-z0-9._-]+\.sh$ (fleetScript() in
+# bin/fm-continuity-command-policy.mjs), so a command whose bytes cannot spell
+# fm-...sh even after the lexer's cheapest byte normalizations - dropping
+# backslashes, quotes, and newlines, mirrored here - can never be denied and is
+# allowed at once.
+#
+# The fast path may allow ONLY when BOTH hold: (a) the stripped text does not
+# match *fm-*.sh*, AND (b) the raw command carries no quoting-decoder marker - a
+# $ immediately followed by a single quote (ANSI-C $'...') or a double quote
+# (bash locale $"..."), which the lexer decodes and can therefore reconstruct
+# fm-...sh from bytes this byte strip cannot. This marker set is COUPLED to the
+# decoder set of the shared lexer in bin/fm-arm-command-policy.mjs, exactly as
+# bin/fm-arm-pretool-check.sh documents for its own prefilter: adding any new
+# quote/expansion form the lexer decodes REQUIRES extending this marker set in
+# the same change, or the prefilter stops being a strict superset. Otherwise
+# the command always continues to the full check below.
+PREFILTER=$COMMAND
+PREFILTER=${PREFILTER//\\/}
+PREFILTER=${PREFILTER//\"/}
+PREFILTER=${PREFILTER//\'/}
+PREFILTER=${PREFILTER//$'\n'/}
+PREFILTER=${PREFILTER//$'\r'/}
+case "$COMMAND" in
+  *"\$'"*|*'$"'*) ;;
+  *)
+    case "$PREFILTER" in
+      *fm-*.sh*) ;;
+      *) exit 0 ;;
+    esac
+    ;;
+esac
+
 SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" 2>/dev/null && pwd -P) || exit 0
 FM_ROOT=${FM_ROOT_OVERRIDE:-$(CDPATH='' cd -- "$SCRIPT_DIR/.." 2>/dev/null && pwd -P)}
 FM_HOME=${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}

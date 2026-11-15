@@ -86,10 +86,16 @@ fm_is_task_worker() {
 # home. Otherwise only a plain checkout is primary, never a linked task
 # worktree.
 fm_primary_root_matches() {
-  local root=$1 git_dir git_common_dir
+  local root=$1 dirs git_dir git_common_dir
   if ! fm_root_is_secondmate_home "$root"; then
-    git_dir=$(git -C "$root" rev-parse --git-dir 2>/dev/null) || return 1
-    git_common_dir=$(git -C "$root" rev-parse --git-common-dir 2>/dev/null) || return 1
+    # One git process prints both answers, one per line.
+    dirs=$(git -C "$root" rev-parse --git-dir --git-common-dir 2>/dev/null) || return 1
+    case "$dirs" in
+      *$'\n'*) ;;
+      *) return 1 ;;
+    esac
+    git_dir=${dirs%%$'\n'*}
+    git_common_dir=${dirs#*$'\n'}
     [ "$git_dir" = "$git_common_dir" ] || return 1
   fi
   [ -f "$root/AGENTS.md" ] || return 1
