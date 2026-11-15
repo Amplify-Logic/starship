@@ -7,8 +7,8 @@
 # only every so often, because the worker part of each reading is slow. A
 # decision answered, parked, released, closed or added changes none of the
 # workers, so on 2026-11-15 the strip kept naming a decision the owner had just
-# parked as the one to decide next. Both panes now check this signal every
-# frame, and recompute the calls on their own the moment it moves.
+# parked as the one to decide next. Both panes now check this signal once a
+# second, and recompute the calls on their own the moment it moves.
 #
 # The signal is two things, printed as one opaque token:
 #   - the home's state/.owner-calls-changed stamp, which every command that

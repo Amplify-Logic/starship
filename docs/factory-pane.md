@@ -102,7 +102,7 @@ Who steers is the owner's stated choice of whether he is working with that crew 
 `--plain --factory <id>` prints one factory's page, and `--plain --height <rows>` prints only what a pane that tall shows when it opens.
 Both use the cached record while it is younger than 20 seconds and build a fresh one otherwise.
 The owner's calls do not wait for that: when their change signal (`bin/fm-owner-calls-signal-lib.sh`) has moved past the one the record was built under, the record is rebuilt with a fresh read of the backlog and the inbox on the workers as the last full refresh read them, which takes a second or two rather than a full refresh.
-The live pane checks that signal on every frame, so an answered, parked, released, closed or added decision, or a note to Starship, changes NEEDS YOU within about two seconds.
+The live pane checks that signal once a second, so an answered, parked, released, closed or added decision, or a note to Starship, changes NEEDS YOU within about two seconds.
 
 The record's schema is `fm-factory.v1`:
 

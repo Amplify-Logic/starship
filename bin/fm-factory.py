@@ -53,7 +53,7 @@ tabs/ (the factory tabs it opened).
 
 How fresh it is. A full refresh reads every worker, which takes seconds, so the
 live pane starts one only once the record's workers are FM_FACTORY_TTL old.
-The owner's calls cannot wait that long: on every frame the pane reads the
+The owner's calls cannot wait that long: once a second the pane reads the
 owner's calls signal (bin/fm-owner-calls-signal-lib.sh), and when it has moved
 past the one the record was built under it rebuilds the record from basis.json
 with the backlog and the inbox read afresh (refresh-calls), so a decision
@@ -1863,6 +1863,7 @@ class Pane:
             record = refresh(home)
         self.view = View(record, opened=opened, in_tab=in_tab, item=item)
         self.loaded = self.record_stamp()
+        self.calls_checked = 0.0
         self.focus_file = os.environ.get("FM_FACTORY_FOCUS_FILE") or ""
 
     def take_focus(self) -> bool:
@@ -1901,7 +1902,11 @@ class Pane:
             refresh_in_background(self.home)
 
     def watch_calls(self) -> None:
-        """Rebuild the owner's calls the moment their signal moves past the record's."""
+        """Rebuild the owner's calls once their signal moves past the record's, checking at most once a second."""
+        now = time.monotonic()
+        if now - self.calls_checked < 1:
+            return
+        self.calls_checked = now
         signal = calls_signal(self.home)
         if signal and signal != self.view.record.get("calls_signal"):
             refresh_calls_in_background(self.home)
