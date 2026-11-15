@@ -156,7 +156,7 @@ row_of() {  # <width> <left> [right]
 # are counted as one character whatever the ambient locale counts bytes as.
 columns() {  # <plain row>
   local row
-  row=$(printf '%s' "$1" | sed $'s/\342\226\240/#/g; s/\342\224\202/|/g')
+  row=$(printf '%s' "$1" | sed $'s/\342\226\240/#/g; s/\342\224\202/|/g; s/\342\226\270/>/g')
   printf '%s' "${#row}"
 }
 
