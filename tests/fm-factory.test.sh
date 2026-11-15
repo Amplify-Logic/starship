@@ -1212,18 +1212,22 @@ text = open(path).read().replace('"q quit"', '"q leave"')
 open(path + ".new", "w").write(text)
 os.rename(path + ".new", path)
 during = drain(2, b"q leave")
-os.write(fd, b"\x1b")
-after = drain(3, b"q leave")
+os.write(fd, b"\r")
+sent = drain(3, b"Sent to Starship")
+sent += drain(2, b"q leave")
+after = drain(15, b"q leave")
 os.kill(pid, signal.SIGTERM)
 end = time.time() + 5
 while time.time() < end and os.waitpid(pid, os.WNOHANG)[0] == 0:
     drain(0.2, b"\0never")
-print("held=%s after=%s" % (b"q leave" not in during and b"Half a thought" in during, b"q leave" in after))
+print("held=%s told=%s after=%s" % (b"q leave" not in during and b"Half a thought" in during,
+                                    b"Sent to Starship" in sent and b"q leave" not in sent, b"q leave" in after))
 PY
 )
-  assert_equals "$screen" "held=True after=True" \
-    "a Factory pane reloaded under an open talk box, or never reloaded once it closed"
-  pass "factory pane: a reload waits for an open talk box to close, then happens"
+  assert_equals "$screen" "held=True told=True after=True" \
+    "a Factory pane reloaded under an open talk box or its sent notice, or never reloaded after"
+  assert_contains "$(jq -r .body "$FM_FACTORY_TEST_NOTES")" "Half a thought" "the talk box did not send its text"
+  pass "factory pane: a reload waits for an open talk box and its notice, then happens"
 }
 
 test_open_tab_stops_when_herdr_does_not_name_the_tab() {

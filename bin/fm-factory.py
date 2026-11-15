@@ -2245,7 +2245,10 @@ def live(pane: Pane) -> None:
     try:
         tty.setraw(fd)
         while True:
-            if pane.view.talking is None and pane.view.confirm is None and watch.changed():
+            view = pane.view
+            if view.notice and time.time() > view.notice[2]:
+                view.notice = None
+            if view.talking is None and view.confirm is None and view.notice is None and watch.changed():
                 reload = True
                 break
             pane.reload()
@@ -2255,9 +2258,6 @@ def live(pane: Pane) -> None:
                 focus_checked = time.time()
             pane.take_focus()
             size = os.get_terminal_size()
-            view = pane.view
-            if view.notice and time.time() > view.notice[2]:
-                view.notice = None
             rows = view.frame(size.columns, size.lines)
             buf = ["\x1b[?2026h\x1b[H"]
             if resized[0]:
