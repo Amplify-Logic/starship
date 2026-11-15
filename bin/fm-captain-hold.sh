@@ -136,7 +136,7 @@
 # records a durable request under `state/reconcile-requests/`.
 #
 # `reconcile` is the verify-then-decide half. Both outcomes require the pending
-# request created by the captain's board selection. `close` is the moot outcome:
+# request created by the captain's board selection or Factory pane key. `close` is the moot outcome:
 # it requires the evidence that made the call moot, writes a `reconciled` resolution record
 # under a `Reconciliation evidence:` label so it can never read as the
 # captain's words, and closes the task. `note` is the still-active outcome: it

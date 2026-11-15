@@ -40,7 +40,7 @@ It never reads report bodies, review artifacts, terminal output, or chat.
 | `open` | Read-only check of whether a row is still an open captain call. | [Cleanup never closes a captain call](#cleanup-never-closes-a-captain-call) |
 | `answers` | Channel-agnostic entry point for keyed answers. | [Answer-time resolution](#answer-time-resolution) |
 | `bind`, `unbind`, `binding` | Record that a captured-answer source feeds the keyed-answer intake. | [Source bindings](#source-bindings) |
-| `reconcile-requests` | Internal intake that records a reconcile request from a board selection. | [Reconcile](#reconcile-re-check-reality-never-a-blind-close) |
+| `reconcile-requests` | Internal intake that records a reconcile request from a board selection or the Factory pane's `Already settled?` key. | [Reconcile](#reconcile-re-check-reality-never-a-blind-close) |
 | `reconcile close`, `reconcile note`, `reconcile list` | Retire or list pending reconcile requests. | [Verifying and retiring a request](#verifying-and-retiring-a-request) |
 | `diverged` | Read-only report of a call whose two records disagree. | [Record divergence](#record-divergence) |
 
@@ -311,13 +311,13 @@ This captured-source intake records a durable reconcile request under `state/rec
 There is one private record per task, carrying the requesting provenance and a UTC timestamp.
 The record exists so the obligation to re-check cannot be lost between the wake that carried the answer and the turn that acts on it.
 It is idempotent per task: repeating a reconcile keeps one request and its original timestamp.
-The supported creator is the runner carrying the captain's board selection.
+The supported creators are the runner carrying the captain's board selection and the Factory pane's `Already settled?` key, which files under its own bound `factory-pane` source and wakes firstmate with an inbox note naming the call ([`factory-pane.md`](factory-pane.md#keys)).
 The binding-checked `reconcile-requests` command is that internal intake rather than an operator reconciliation outcome.
 
 ### Verifying and retiring a request
 
 Verification retires a request through one of two outcomes.
-Each outcome requires both the pending board-created request and the operator input that supports its claim:
+Each outcome requires both the pending request and the operator input that supports its claim:
 
 - `reconcile close <task-id> --evidence-file <path>` is the moot outcome.
   It writes a resolution record whose mode is `reconciled` and whose body is the supplied EVIDENCE under a `Reconciliation evidence:` label, then closes the task.
