@@ -167,7 +167,14 @@ function splitAlternatives(value) {
   return [...new Set(pieces)];
 }
 
-export function optionsFrom(reason, recommendation) {
+function twoWayTitle(title) {
+  const plain = title.trim().replace(/\?$/, "");
+  if (/[,()]/.test(plain)) return [];
+  const pieces = plain.split(/\s+or\s+/i).map(cleanOption);
+  return pieces.length === 2 && pieces.every((item) => item.length > 1) && pieces[0] !== pieces[1] ? pieces : [];
+}
+
+export function optionsFrom(title, reason, recommendation) {
   let source = "";
   const explicit = reason.match(/\b(?:Options?|Choose|Captain must choose)\s*:\s*(.*)/i);
   if (explicit) source = explicit[1];
@@ -194,8 +201,8 @@ export function optionsFrom(reason, recommendation) {
     const parsed = splitAlternatives(afterColon);
     if (parsed.length >= 2) return parsed;
   }
-  // A title names the call; it is never read as its options, since one that
-  // lists several calls ("now or later, ... / ...") splits into nonsense.
+  const titled = twoWayTitle(title);
+  if (titled.length === 2) return titled;
   return recommendation ? [recommendation] : [];
 }
 
@@ -277,7 +284,7 @@ function loadTasks(home) {
         repo: task.repo,
         group: normalizeRepo(task.repo),
         created: task.created,
-        options: optionsFrom(task.hold_reason || "", recommendation),
+        options: optionsFrom(task.title || "", task.hold_reason || "", recommendation),
         recommendation,
         origin: identity.origin,
         key: identity.key,
