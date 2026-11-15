@@ -971,6 +971,28 @@ test_enter_opens_the_factory_tab_with_its_live_workers() {
   pass "factory tab: enter opens the factory's tab with its page left and live workers right, once"
 }
 
+# The desk restarts a factory page Herdr brought back as a plain shell, then
+# asks for the live worker copies beside it again.
+test_workers_splits_live_copies_beside_a_page_pane() {
+  reset_case
+  write_registry
+  write_world
+  local out
+  out=$(HERDR_BIN_PATH="$BINDIR/herdr" python3 "$FACTORY" workers sample-shop --page w1:p4 2>&1) \
+    || fail "workers failed: $out"
+  assert_equals "$(sed -n 1p "$CALLS")" "pane split w1:p4 --direction right --no-focus" "the first copy beside the page"
+  assert_contains "$(sed -n 2p "$CALLS")" "fm-factory-pane.sh follow shop-search" "a live copy of a worker"
+  assert_equals "$(grep -c 'follow ' "$CALLS")" "4" "each worker with a pane, stopped ones left out"
+  assert_equals "$(grep -c -E '^(tab |pane focus)' "$CALLS")" "0" "workers opened or focused a tab or pane"
+  out=$(HERDR_BIN_PATH="$BINDIR/herdr" python3 "$FACTORY" workers sample-shop 2>&1) \
+    && fail "workers ran without a page pane"
+  if out=$(HERDR_BIN_PATH="$BINDIR/herdr" python3 "$FACTORY" workers no-such --page w1:p4 2>&1); then
+    fail "workers succeeded for an unknown factory"
+  fi
+  assert_contains "$out" "no factory no-such" "the reason"
+  pass "factory tab: workers splits a live copy of each running worker beside a page pane"
+}
+
 test_a_live_copy_shows_text_at_the_top_of_a_taller_pane() {
   reset_case
   write_registry
@@ -1252,6 +1274,7 @@ fm_test_run \
   test_enter_opens_the_factory_tab_with_its_live_workers \
   test_a_live_copy_shows_text_at_the_top_of_a_taller_pane \
   test_open_tab_stops_when_herdr_does_not_name_the_tab \
+  test_workers_splits_live_copies_beside_a_page_pane \
   test_the_plugin_installs_opens_and_removes \
   test_open_on_an_item_puts_the_highlight_on_it \
   test_a_scrolled_pane_shows_the_item_it_is_moved_to

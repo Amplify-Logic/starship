@@ -24,6 +24,10 @@ Usage:
   fm-factory.py open-tab <factory-id>     open, or focus, that factory's Herdr
                                           tab: its page on the left and its live
                                           workers stacked on the right
+  fm-factory.py workers <factory-id> --page <pane-id>
+                                          split a live copy of each of that
+                                          factory's running workers beside its
+                                          page pane, the way open-tab does
   fm-factory.py refresh                   rebuild the cached record once
   fm-factory.py refresh-calls             rebuild it with fresh owner's calls on
                                           the last full refresh's workers
@@ -2300,6 +2304,15 @@ def open_tab(home: str, fid: str) -> Tuple[bool, str]:
     ok, why = herdr(["pane", "run", page, pane_command(home, "run", "--factory", fid, "--origin-tab", origin)])
     if not ok:
         return False, "the tab opened, but its page did not start: %s" % why
+    ok, why = split_workers(home, factory, page)
+    if not ok:
+        return False, "the tab opened, but %s" % why
+    herdr(["pane", "focus", page])
+    return True, ""
+
+
+def split_workers(home: str, factory: Dict[str, Any], page: str) -> Tuple[bool, str]:
+    """Split a live copy of each running worker of <factory> beside its page pane <page>, stacked on the right."""
     workers = [j for j in factory["jobs"] if j["started"] and j["state"] not in ("stopped", "finished")][:MIRROR_CAP]
     above = None
     for index, job in enumerate(workers):
@@ -2307,11 +2320,19 @@ def open_tab(home: str, fid: str) -> Tuple[bool, str]:
         ok, data = herdr(["pane", "split", target, "--direction", direction, "--no-focus"])
         new = dig(data, "result.pane.pane_id", "result.pane.id") if ok else None
         if not new:
-            return False, "the tab opened, but a worker's live view did not: %s" % (data if not ok else "no pane")
+            return False, "a worker's live view did not open: %s" % (data if not ok else "no pane")
         herdr(["pane", "run", new, pane_command(home, "follow", job["id"])])
         above = new
-    herdr(["pane", "focus", page])
     return True, ""
+
+
+def open_workers(home: str, fid: str, page: str) -> Tuple[bool, str]:
+    """The workers command: live copies of one factory's running workers beside its page pane <page>."""
+    record = cached(home) or refresh(home)
+    factory = next((f for f in record["factories"] if f["id"] == fid), None)
+    if factory is None:
+        return False, "no factory %s" % fid
+    return split_workers(home, factory, page)
 
 
 def follow(home: str, task_id: str) -> None:
@@ -2356,7 +2377,7 @@ def follow(home: str, task_id: str) -> None:
 def main(argv: List[str]) -> int:
     parser = argparse.ArgumentParser(prog="fm-factory.py", add_help=True,
                                      description="The Factory pane. See the header of this file.")
-    parser.add_argument("command", nargs="?", choices=["view", "follow", "open-tab", "refresh", "refresh-calls"])
+    parser.add_argument("command", nargs="?", choices=["view", "follow", "open-tab", "workers", "refresh", "refresh-calls"])
     parser.add_argument("target", nargs="?")
     parser.add_argument("--data", action="store_true")
     parser.add_argument("--plain", action="store_true")
@@ -2365,6 +2386,7 @@ def main(argv: List[str]) -> int:
     parser.add_argument("--width", type=int, default=92)
     parser.add_argument("--height", type=int)
     parser.add_argument("--origin-tab")
+    parser.add_argument("--page")
     parser.add_argument("--item")
     try:
         args = parser.parse_args(argv)
@@ -2401,8 +2423,9 @@ def main(argv: List[str]) -> int:
         if args.command == "follow" and args.target:
             follow(home, args.target)
             return 0
-        if args.command == "open-tab" and args.target:
-            ok, why = open_tab(home, args.target)
+        if (args.command == "open-tab" and args.target) or (args.command == "workers" and args.target and args.page):
+            ok, why = open_tab(home, args.target) if args.command == "open-tab" else \
+                open_workers(home, args.target, args.page)
             if not ok:
                 print("fm-factory: %s" % why, file=sys.stderr)
                 return 1
