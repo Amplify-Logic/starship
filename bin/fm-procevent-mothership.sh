@@ -94,14 +94,12 @@
 # place), <room>.contact
 # (when the room last answered), <room>.failures (failures in a row).
 #
-# The link is the first of: FM_MOTHERSHIP_BIN; the path in config/mothership-link
-# (its first line that is not blank or a `#` comment; `~/` is HOME's and a
-# relative path is the home's); the mothership command on PATH; and
-# projects/mothership/bin/mothership in the home. A path named in the first two
-# that cannot be run is reported, never passed over. A link that is a Node
-# script runs with a node that can run TypeScript (22.18+, 23.6+ or 24+):
-# FM_MOTHERSHIP_NODE when set, else the first such node on PATH, else the
-# newest under $NVM_DIR (default ~/.nvm), because the first node on PATH may be
+# The link is the first of: FM_MOTHERSHIP_BIN; the mothership command on PATH;
+# and projects/mothership/bin/mothership in the home. A path FM_MOTHERSHIP_BIN
+# names that cannot be run is reported, never passed over. A link that is a
+# Node script runs with a node that can run TypeScript (22.18+, 23.6+ or 24+):
+# the first such node on PATH, else the newest under $NVM_DIR (default
+# ~/.nvm), because the first node on PATH may be
 # an older one that stops with ERR_UNKNOWN_FILE_EXTENSION ".ts". The Mothership
 # config `status` reads rooms from is $MOTHERSHIP_CONFIG, else
 # ~/.config/mothership/rooms.json.
@@ -282,28 +280,11 @@ setting_write() {  # <room> <on|off>
 
 # ----- the Mothership link -----
 
-LINK_SETTING="$CONFIG/mothership-link"
 LINK_BIN=
 LINK_CONFIG=
 LINK_NODE_DIR=
 LINK_NODE=
 LINK_PROBLEM=
-
-# The link path config/mothership-link names: its first line that is neither
-# blank nor a `#` comment, with `~/` taken from HOME and a relative path from
-# the home. Prints nothing when the file is absent or names nothing.
-link_setting() {
-  local line
-  [ -f "$LINK_SETTING" ] || return 0
-  line=$(LC_ALL=C awk '{ gsub(/^[ \t]+|[ \t]+$/, "") } $0 != "" && !/^#/ { print; exit }' "$LINK_SETTING")
-  case "$line" in
-    '') return 0 ;;
-    \~/*) line="$HOME/${line#\~/}" ;;
-    /*) ;;
-    *) line="$FM_HOME/$line" ;;
-  esac
-  printf '%s\n' "$line"
-}
 
 # Whether <file> is a Node script, by its first line.
 link_is_node() { head -n 1 "$1" 2>/dev/null | LC_ALL=C grep -aq '^#!.*node'; }
@@ -339,36 +320,28 @@ node_candidates() {
 pick_node() {
   local node
   LINK_NODE=
-  if [ -n "${FM_MOTHERSHIP_NODE:-}" ]; then
-    node_runs_typescript "$FM_MOTHERSHIP_NODE" && { LINK_NODE=$FM_MOTHERSHIP_NODE; return 0; }
-    LINK_PROBLEM="FM_MOTHERSHIP_NODE names $FM_MOTHERSHIP_NODE, which cannot run the Mothership link's TypeScript (it needs node 22.18 or newer)"
-    return 1
-  fi
   while IFS= read -r node; do
     node_runs_typescript "$node" && { LINK_NODE=$node; return 0; }
   done < <(node_candidates | awk '!seen[$0]++')
-  LINK_PROBLEM="no node on this machine can run the Mothership link's TypeScript (it needs node 22.18 or newer); install one, or name it in FM_MOTHERSHIP_NODE"
+  LINK_PROBLEM="no node on this machine can run the Mothership link's TypeScript (it needs node 22.18 or newer); install one"
   return 1
 }
 
 # Sets LINK_BIN, LINK_CONFIG and LINK_NODE_DIR, or LINK_PROBLEM and fails. The
-# link is the first of FM_MOTHERSHIP_BIN, config/mothership-link, the
-# mothership command on PATH, and projects/mothership/bin/mothership in the
-# home; a path named in the first two that cannot be run is reported rather
-# than passed over.
+# link is the first of FM_MOTHERSHIP_BIN, the mothership command on PATH, and
+# projects/mothership/bin/mothership in the home; a path FM_MOTHERSHIP_BIN
+# names that cannot be run is reported rather than passed over.
 resolve_link() {
   local bin from node
   LINK_BIN='' LINK_NODE_DIR='' LINK_PROBLEM=''
   if [ -n "${FM_MOTHERSHIP_BIN:-}" ]; then
     bin=$FM_MOTHERSHIP_BIN from=FM_MOTHERSHIP_BIN
-  elif bin=$(link_setting) && [ -n "$bin" ]; then
-    from=config/mothership-link
   elif bin=$(command -v mothership 2>/dev/null) && [ -n "$bin" ]; then
     from=PATH
   elif [ -f "$FM_HOME/projects/mothership/bin/mothership" ]; then
     bin="$FM_HOME/projects/mothership/bin/mothership" from=projects/mothership
   else
-    LINK_PROBLEM="the Mothership link is not installed: there is no mothership command on PATH or at projects/mothership/bin/mothership in this home (name its path in config/mothership-link)"
+    LINK_PROBLEM="the Mothership link is not installed: there is no mothership command on PATH or at projects/mothership/bin/mothership in this home (name its path in FM_MOTHERSHIP_BIN)"
     return 1
   fi
   case "$bin" in /*) ;; *) bin="$(cd "$(dirname "$bin")" 2>/dev/null && pwd)/$(basename "$bin")" ;; esac

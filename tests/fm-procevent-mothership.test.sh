@@ -477,13 +477,13 @@ test_runner_wakes_once_and_keeps_listening() {
 
 # A PATH with no mothership command and no node on it, so the adapter's own
 # fallbacks are what find the link and the node. Any other tool that shares a
-# directory with a node stays reachable through a directory of links.
+# directory with a node or a mothership command stays reachable through a
+# directory of links.
 BARE_TOOLS="$TMP_ROOT/bare-tools"
 mkdir -p "$BARE_TOOLS"
 PATH_BARE=$(printf '%s' "$PATH" | tr ':' '\n' | while IFS= read -r dir; do
   [ -n "$dir" ] && [ -d "$dir" ] || continue
-  [ ! -e "$dir/mothership" ] || continue
-  if [ -e "$dir/node" ]; then
+  if [ -e "$dir/node" ] || [ -e "$dir/mothership" ]; then
     for tool in "$dir"/*; do
       case "${tool##*/}" in (node|mothership) continue ;; esac
       [ -x "$tool" ] && [ ! -e "$BARE_TOOLS/${tool##*/}" ] && ln -s "$tool" "$BARE_TOOLS/${tool##*/}"
@@ -499,7 +499,7 @@ PATH_BARE="${PATH_BARE}$BARE_TOOLS"
 bare_home() {
   local h=$1
   shift
-  env -u FM_MOTHERSHIP_BIN -u FM_MOTHERSHIP_NODE PATH="${PATH_FRONT:+$PATH_FRONT:}$PATH_BARE" \
+  env -u FM_MOTHERSHIP_BIN PATH="${PATH_FRONT:+$PATH_FRONT:}$PATH_BARE" \
     NVM_DIR="$h/nvm" FM_HOME="$h/home" FM_PROCEVENT_CLAIM_ROOT="$CLAIMS" MS_STUB="$h/stub" \
     MOTHERSHIP_CONFIG="$h/rooms.json" FM_MOTHERSHIP_WAIT_SECONDS=1 \
     FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS=2 "$@"
@@ -530,12 +530,12 @@ test_status_without_the_link() {
   assert_contains "$out" "the Mothership link is not installed" "and still names the missing link"
 
   if out=$(bare_home "$h" "$ADAPTER" on alpha 2>&1); then fail "on succeeded with no link"; fi
-  assert_contains "$out" "config/mothership-link" "the refusal names where a link can be set"
+  assert_contains "$out" "FM_MOTHERSHIP_BIN" "the refusal names where a link can be set"
   pass "status lists rooms joined in the Mothership config and says plainly when the link is missing"
 }
 
 test_link_fallbacks() {
-  local h out broken
+  local h out
   h=$(make_home fallback)
   printf '{"position":%s}\n' "$P0" > "$h/stub/saved.alpha"
   mkdir -p "$h/home/projects/mothership/bin"
@@ -544,27 +544,22 @@ test_link_fallbacks() {
   assert_equals "$h/home/projects/mothership/bin/mothership" "$(registered_arg "$h" --bin)" "the home's projects/mothership link is used"
   bare_home "$h" "$ADAPTER" off alpha >/dev/null 2>&1 || fail "off failed"
 
-  broken="$h/broken"
-  mkdir -p "$broken" "$h/home/linked"
-  printf '#!/usr/bin/env bash\nexit 1\n' > "$broken/mothership"
-  chmod +x "$broken/mothership"
-  cp "$STUB_BIN/mothership" "$h/home/linked/mothership"
-  printf '# where the Mothership link is\n\nlinked/mothership\n' > "$h/home/config/mothership-link"
-  out=$(PATH_FRONT="$broken" bare_home "$h" "$ADAPTER" on alpha 2>&1) || fail "on with config/mothership-link failed: $out"
-  assert_equals "$h/home/linked/mothership" "$(registered_arg "$h" --bin)" "config/mothership-link wins over PATH and the home, and a relative path is the home's"
-  PATH_FRONT="$broken" bare_home "$h" "$ADAPTER" off alpha >/dev/null 2>&1 || fail "off failed"
+  mkdir -p "$h/onpath"
+  cp "$STUB_BIN/mothership" "$h/onpath/mothership"
+  out=$(PATH_FRONT="$h/onpath" bare_home "$h" "$ADAPTER" on alpha 2>&1) || fail "on with the link on PATH failed: $out"
+  assert_equals "$h/onpath/mothership" "$(registered_arg "$h" --bin)" "the link on PATH wins over the home's"
+  PATH_FRONT="$h/onpath" bare_home "$h" "$ADAPTER" off alpha >/dev/null 2>&1 || fail "off failed"
 
-  printf '%s/nowhere/mothership\n' "$h" > "$h/home/config/mothership-link"
-  if out=$(bare_home "$h" "$ADAPTER" on alpha 2>&1); then fail "on passed over a configured link that is missing"; fi
-  assert_contains "$out" "$h/nowhere/mothership (from config/mothership-link) cannot be run" "a configured link that is missing is reported"
-  out=$(bare_home "$h" "$ADAPTER" status 2>&1) || fail "status failed: $out"
+  if out=$(PATH_FRONT="$h/onpath" bare_home "$h" env FM_MOTHERSHIP_BIN="$h/nowhere/mothership" "$ADAPTER" on alpha 2>&1); then fail "on passed over a named link that is missing"; fi
+  assert_contains "$out" "$h/nowhere/mothership (from FM_MOTHERSHIP_BIN) cannot be run" "a named link that is missing is reported"
+  out=$(bare_home "$h" env FM_MOTHERSHIP_BIN="$h/nowhere/mothership" "$ADAPTER" status 2>&1) || fail "status failed: $out"
   assert_contains "$out" "alpha: off, not listening" "status still lists the room"
-  assert_contains "$out" "(from config/mothership-link) cannot be run" "status names the broken link"
-  pass "the link is found through config/mothership-link, then PATH, then the home's projects/mothership"
+  assert_contains "$out" "(from FM_MOTHERSHIP_BIN) cannot be run" "status names the broken link"
+  pass "the link is found through FM_MOTHERSHIP_BIN, then PATH, then the home's projects/mothership"
 }
 
 test_node_for_a_typescript_link() {
-  local h out v
+  local h out
   h=$(make_home tsnode)
   printf '{"position":%s}\n' "$P0" > "$h/stub/saved.alpha"
   mkdir -p "$h/oldnode" "$h/home/projects/mothership/bin"
@@ -605,10 +600,6 @@ test_node_for_a_typescript_link() {
   if out=$(PATH_FRONT="$h/oldnode" bare_home "$h" "$ADAPTER" on alpha 2>&1); then fail "on accepted a machine with no node that runs TypeScript"; fi
   assert_contains "$out" "no node on this machine can run the Mothership link's TypeScript" "no usable node is reported"
   [ ! -e "$h/home/state/procevent/mothership-alpha.source" ] || fail "a link with no usable node was registered"
-
-  v="$h/nvm/versions/node/v23.5.0/bin/node"
-  if out=$(PATH_FRONT="$h/oldnode" bare_home "$h" env FM_MOTHERSHIP_NODE="$v" "$ADAPTER" on alpha 2>&1); then fail "on accepted an old FM_MOTHERSHIP_NODE"; fi
-  assert_contains "$out" "FM_MOTHERSHIP_NODE names $v" "a named node that is too old is reported"
   pass "a TypeScript link runs with a node that can run it, never just the first node on PATH"
 }
 
