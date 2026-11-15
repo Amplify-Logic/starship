@@ -30,7 +30,7 @@ You need Starship set up in Ubuntu as [ONBOARDING-windows.md](../ONBOARDING-wind
    ```
 
 The floater appears at the bottom right of your screen, a microphone icon appears in the system tray, and it starts by itself whenever you sign in to Windows.
-If its talk button shows an orange `!` and "Mic off - click !", Windows' privacy settings keep apps off the microphone: click it to open those settings and turn on microphone access for desktop apps.
+If its talk button shows an orange `!` and "Mic off - click !", Windows' privacy settings keep apps off the microphone: click it to open those settings, then turn on **Let apps access your microphone** and, below it, **Let desktop apps access your microphone**.
 
 Install needs no download, no admin rights and no developer tools.
 It builds the floater on your PC with the C# compiler that is part of Windows (it comes with .NET Framework 4), into `%LOCALAPPDATA%\Starship\Floater`, and adds it to your own startup list only.

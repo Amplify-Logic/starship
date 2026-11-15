@@ -51,7 +51,7 @@ claude
 ```
 
 Homebrew asks `Do you want to proceed with the installation? [y/n]` before it installs; press `y`.
-`gh auth login` asks four questions with the answers you want already selected, so press Enter at each: **GitHub.com**, **HTTPS**, **Yes** to authenticate Git, then **Login with a web browser**.
+`gh auth login` asks four questions with the answers you want already selected, so press Enter at each: **GitHub.com**, **Login with a web browser**, **HTTPS**, then **Yes** to authenticate Git.
 `claude` opens a browser login; complete it, then type `/exit`, or press Enter if it asks whether to trust your home folder, which just closes it.
 
 You should see: `gh auth status` says you are logged in to github.com, and `claude --version` prints a version.
@@ -83,7 +83,8 @@ You should see: `Herdr is ready.`
 herdr
 ```
 
-The first time, Herdr may first ask how it should notify you; any answer works, and you can change it later in Herdr's settings (`Ctrl-b`, then `s`).
+The first time, Herdr shows a short welcome; press Enter, and it opens its settings on the agent integrations, where `claude` is already ticked.
+Press Esc to close them; you can open them again later with `Ctrl-b`, then `s`.
 Herdr then shows a shell, with a sidebar on the left.
 
 **Start your first mate:** in that shell, type:
@@ -213,7 +214,7 @@ It explains the whole system in plain words, how to connect your mail, calendar 
 | `Invalid input. Please press 'y' to proceed` | Homebrew is asking yes or no; press `y`. |
 | `command not found: brew` | Run the two `PATH` lines Homebrew printed at the end, then open a new Terminal window. |
 | `command not found: npm` or `claude` | `brew install node`, then `npm install -g @anthropic-ai/claude-code`, then open a new Terminal window. |
-| `gh: not logged in` or `NEEDS_GH_AUTH` | `gh auth login`, answering its four questions with GitHub.com, HTTPS, Yes to authenticate Git, and the web browser. |
+| `gh: not logged in` or `NEEDS_GH_AUTH` | `gh auth login`, answering its four questions with GitHub.com, the web browser, HTTPS, and Yes to authenticate Git. |
 | `bin/fm-primary.sh` refuses to start | `bin/fm-primary.sh opus --preflight` names what is missing without starting anything. |
 | `permission denied` on `bin/fm-primary.sh` | `chmod +x bin/*.sh`, then launch again. |
 | `refuses another live Firstmate session` | One is already running, perhaps in another Herdr space or Terminal window; type `/exit` in the spare one, then launch again. |

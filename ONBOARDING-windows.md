@@ -50,6 +50,7 @@ wsl --install -d Ubuntu-24.04
 Ubuntu then asks `Create a default Unix user account:` with your Windows name filled in.
 Press Enter to keep it, or replace it with a short lowercase name.
 Then it asks for a new password twice: pick one you will remember, because Linux asks for it when it installs software.
+A "Welcome to Windows Subsystem for Linux" window may also open beside it; close it, as nothing in it is needed.
 
 You are now inside Ubuntu, in your Windows folder (`/mnt/c/Users/<name>`).
 Type `exit` to get back to PowerShell, then check:
@@ -100,7 +101,8 @@ It prints nothing.
 ## 5. Use Windows Terminal
 
 Windows Terminal is built in on Windows 11 and in the Microsoft Store on Windows 10.
-Open it, click the small down arrow next to the tab, choose **Settings**, then on **Startup** set **Default profile** to **Ubuntu-24.04**, and click **Save** at the bottom right.
+First close the PowerShell window from the steps above: a Terminal window that was already open before Ubuntu was installed does not list Ubuntu yet.
+Then open Terminal from Start (not as admin), click the small down arrow next to the tab, choose **Settings**, then on **Startup** set **Default profile** to **Ubuntu-24.04**, and click **Save** at the bottom right.
 If you cannot see **Save**, make the window bigger.
 Close Terminal and open it again: every new tab now opens in Ubuntu.
 
@@ -154,8 +156,8 @@ gh auth login
 claude
 ```
 
-`gh auth login` asks four questions; the answers you want are already selected, so press Enter at each: **GitHub.com**, **HTTPS**, **Yes** to authenticate Git, then **Login with a web browser**.
-It shows a one-time code; press Enter, and your Windows browser opens on GitHub, where you paste the code and authorize.
+`gh auth login` asks four questions; the answers you want are already selected, so press Enter at each: **GitHub.com**, **Login with a web browser**, **HTTPS**, then **Yes** to authenticate Git.
+It shows a one-time code and copies it for you; press Enter, and your Windows browser opens on GitHub, where you paste the code and authorize.
 
 `claude` asks for a text style and a login method (**Claude account with subscription**), then opens your browser to sign in.
 Back in Ubuntu, press Enter through its notes.
@@ -172,7 +174,8 @@ In your Ubuntu tab, type:
 herdr
 ```
 
-The first time, Herdr may first ask how it should notify you; any answer works, and you can change it later in Herdr's settings (`Ctrl-b`, then `s`).
+The first time, Herdr shows a short welcome; press Enter, and it opens its settings on the agent integrations, where `claude` is already ticked.
+Press Esc to close them; you can open them again later with `Ctrl-b`, then `s`.
 Herdr then shows a shell, with a sidebar on the left where each worker will appear.
 
 ---
@@ -214,7 +217,7 @@ Hold Right Alt and speak to talk to your first mate: your words go straight into
 Tap Right Ctrl to dictate into whatever has your cursor; in the first mate's chat in Herdr, the dictated words wait there for you to press Enter.
 
 Talking and dictation need a working microphone.
-If the talk button shows an orange `!` and "Mic off - click !", Windows' privacy settings keep apps off the microphone: click it and turn on microphone access for desktop apps.
+If the talk button shows an orange `!` and "Mic off - click !", Windows' privacy settings keep apps off the microphone: click it, then turn on **Let apps access your microphone** and, below it, **Let desktop apps access your microphone**.
 Without a microphone, screenshots still reach your first mate.
 [docs/desk-floater-windows.md](docs/desk-floater-windows.md) has the rest.
 
@@ -248,6 +251,7 @@ Two lighter ways to use Claude work on Windows with no Linux at all:
 | No `Setup finished.` at the end of the setup | Run the setup command again. |
 | `not working: ... interop` for `wslview` or another tool that opens something in Windows | Windows interop is switched off in WSL. Open the file in Ubuntu with `sudo nano /etc/wsl.conf`. If it has an `[interop]` section with `enabled=false`, change it to `enabled=true` or delete that line. Save the file. In Windows PowerShell run `wsl --shutdown`, then reopen Ubuntu and run the setup again. For any other tool marked `not working`, the text after the colon is that tool's own error, so search or ask about that text. |
 | A board link or `localhost` page does not open in Windows | Check `.wslconfig` from step 4, run `wsl --shutdown`, open a new Ubuntu tab, and start again. |
+| `failed to authenticate via web browser: ... (request_failed)` from `gh auth login` | GitHub did not answer that once; run `gh auth login` again. |
 | `command not found: brew`, `claude`, `gh`, or `herdr` after setup | Open a new Ubuntu tab; the old one has the old PATH. |
 | A sign-in opens a Linux Chrome window instead of your normal browser | Open a new Ubuntu tab and sign in again; you can also just finish in that Chrome window. |
 | Everything is slow | Check `pwd`: your project must be under `/home/...`, never `/mnt/c/...`. |

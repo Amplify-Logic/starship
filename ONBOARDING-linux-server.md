@@ -149,7 +149,7 @@ Chrome runs headless here; no desktop is needed for the first mate's browser che
 First log out (`exit`) and log back in with `ssh <you>@<server-ip>`, so the new tools are on your PATH; in the old login, `gh` and `claude` are not found.
 Then do the two sign-ins it prints:
 
-- `gh auth login`: answer its four questions with **GitHub.com**, **HTTPS**, **Yes** to authenticate Git, then **Login with a web browser**.
+- `gh auth login`: answer its four questions with **GitHub.com**, **Login with a web browser**, **HTTPS**, then **Yes** to authenticate Git.
   It prints a code and a link; open the link on your own computer and type the code.
 - `claude`: it prints a link; open it on your own computer, sign in, paste the code it shows back into the server, then type `/exit`.
   If it asks whether you trust your home folder, press Enter on **No, exit**, which just closes it; you stay signed in.
