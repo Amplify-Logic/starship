@@ -964,6 +964,32 @@ test_a_running_strip_reloads_when_an_update_drops_a_library() {
   pass "bridge strip: a running strip reloads when an update removes a library it used to load"
 }
 
+test_a_running_strip_waits_while_its_script_is_empty() {
+  local code out
+  reset_case
+  a_busy_fleet
+  code="$TMP_ROOT/case$CASE/code"
+  out="$TMP_ROOT/case$CASE/frames"
+  code_copy "$code"
+  start_loop "$code" "$out"
+  shows "$out" '■ 1 decision for you' 15 || { stop_loop; fail "the strip did not start: $(plain < "$out")"; }
+  # The update has created the new script but not yet written it.
+  : > "$code/bin/fm-bridge-strip.sh.new"
+  mv "$code/bin/fm-bridge-strip.sh.new" "$code/bin/fm-bridge-strip.sh"
+  sleep 3
+  kill -0 "$LOOP_PID" 2>/dev/null || fail "the strip reloaded onto an empty script and ended"
+  [ "$(grep -o $'\033\\[?25l' "$out" | grep -c '')" -eq 1 ] \
+    || { stop_loop; fail "the strip reloaded onto an empty script"; }
+  assert_present "$CONFIG_FIX/panes/$LOOP_PID" "the strip lost its pane record while its script was empty"
+  # The content lands, and the next frame is the new code's.
+  sed 's/S T A R S H I P/S T A R B O A T/' "$ROOT/bin/fm-bridge-strip.sh" > "$code/bin/fm-bridge-strip.sh.new"
+  mv "$code/bin/fm-bridge-strip.sh.new" "$code/bin/fm-bridge-strip.sh"
+  starts "$out" 2 15 || { stop_loop; fail "the strip did not reload once its script was written"; }
+  shows "$out" 'S T A R B O A T' 15 || { stop_loop; fail "the reloaded strip does not draw its new code"; }
+  stop_loop
+  pass "bridge strip: a running strip keeps its code while an update's script is still empty, then reloads"
+}
+
 test_a_strip_that_never_reads_the_crew_says_it_cannot() {
   local out
   reset_case
@@ -1070,6 +1096,7 @@ fm_test_run \
   test_a_running_strip_records_its_session \
   test_a_running_strip_picks_up_changed_code \
   test_a_running_strip_reloads_when_an_update_drops_a_library \
+  test_a_running_strip_waits_while_its_script_is_empty \
   test_a_strip_that_never_reads_the_crew_says_it_cannot \
   test_open_is_not_stopped_by_a_recycled_pid \
   test_install_links_the_plugin_and_records_the_home \

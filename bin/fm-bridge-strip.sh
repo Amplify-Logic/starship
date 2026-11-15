@@ -821,14 +821,15 @@ wait_input() {  # <home> <seconds>
 code_print() { cksum "${CODE_FILES[@]}" 2>/dev/null; }
 
 # code_changed: the code on disk is no longer the code this loop started with,
-# and every file of it parses, so re-executing cannot swap a working strip for
-# a half-written one. A change that does not parse yet is tried again next frame.
+# and every file of it is non-empty and parses, so re-executing cannot swap a
+# working strip for an empty or half-written one. A change refused here is
+# tried again next frame.
 code_changed() {
   local f
   [ "$(code_print)" != "$CODE_PRINT" ] || return 1
   for f in "${CODE_FILES[@]}"; do
     [ -e "$f" ] || [ "$f" = "$SELF" ] || continue
-    bash -n "$f" 2>/dev/null || return 1
+    [ -s "$f" ] && bash -n "$f" 2>/dev/null || return 1
   done
 }
 

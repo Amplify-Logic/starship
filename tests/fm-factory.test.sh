@@ -1178,6 +1178,52 @@ PY
   pass "factory pane: a running pane reloads in place within a redraw when its code changes"
 }
 
+test_a_factory_pane_waits_while_its_code_is_empty() {
+  reset_case
+  write_registry
+  write_world
+  local code="$TMP_ROOT/case$CASE/code" screen
+  code_copy "$code"
+  screen=$(FM_FACTORY_PANE_CONFIG_DIR="$TMP_ROOT/case$CASE/config" python3 - "$code" <<'PY'
+import fcntl, os, pty, select, signal, struct, sys, termios, time
+code = sys.argv[1]
+pid, fd = pty.fork()
+if pid == 0:
+    fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack("HHHH", 50, 100, 0, 0))
+    os.execvp("bash", ["bash", os.path.join(code, "bin", "fm-factory-pane.sh"), "run"])
+def drain(seconds, until):
+    end, seen = time.time() + seconds, b""
+    while time.time() < end and until not in seen:
+        r, _, _ = select.select([fd], [], [], 0.1)
+        if r:
+            try:
+                seen += os.read(fd, 65536)
+            except OSError:
+                break
+    return seen
+drain(20, b"q quit")
+path = os.path.join(code, "bin", "fm-factory.py")
+text = open(path).read().replace('"q quit"', '"q leave"')
+# The update has created the new file but not yet written it.
+open(path + ".new", "w").close()
+os.rename(path + ".new", path)
+drain(2, b"\0never")
+alive = os.waitpid(pid, os.WNOHANG)[0] == 0
+open(path + ".new", "w").write(text)
+os.rename(path + ".new", path)
+after = drain(3, b"q leave")
+os.kill(pid, signal.SIGTERM)
+end = time.time() + 5
+while time.time() < end and os.waitpid(pid, os.WNOHANG)[0] == 0:
+    drain(0.2, b"\0never")
+print("alive=%s after=%s" % (alive, b"q leave" in after))
+PY
+)
+  assert_equals "$screen" "alive=True after=True" \
+    "a Factory pane reloaded onto an empty file, or never reloaded once it was written"
+  pass "factory pane: a running pane keeps its code while an update's file is still empty, then reloads"
+}
+
 test_a_factory_pane_reloads_code_that_changed_while_it_first_read_the_fleet() {
   reset_case
   write_registry
@@ -1521,6 +1567,7 @@ fm_test_run \
   test_a_factory_tab_opens_no_live_copy_for_parked_held_or_finished_work \
   test_a_live_copy_closes_when_its_job_ends \
   test_a_running_factory_pane_picks_up_changed_code \
+  test_a_factory_pane_waits_while_its_code_is_empty \
   test_a_factory_pane_reloads_code_that_changed_while_it_first_read_the_fleet \
   test_a_factory_pane_waits_for_an_open_talk_box_before_reloading \
   test_open_tab_stops_when_herdr_does_not_name_the_tab \

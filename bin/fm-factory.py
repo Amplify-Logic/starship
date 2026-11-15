@@ -2190,15 +2190,15 @@ def read_keys(fd: int) -> List[str]:
     return keys
 
 
-def code_digest() -> Optional[str]:
+def code_bytes() -> bytes:
     try:
         with open(os.path.realpath(__file__), "rb") as handle:
-            return hashlib.sha1(handle.read()).hexdigest()
+            return handle.read()
     except OSError:
-        return None
+        return b""
 
 
-START_DIGEST = code_digest()
+START_DIGEST = hashlib.sha1(code_bytes()).hexdigest()
 
 
 class Watcher:
@@ -2210,13 +2210,15 @@ class Watcher:
         self.bad: Optional[str] = None
 
     def changed(self) -> bool:
-        """True when the file changed and compiles; a half-written file waits."""
-        now = code_digest()
-        if now is None or now == self.start or now == self.bad:
+        """True when the file changed, is not empty and compiles; anything else waits."""
+        data = code_bytes()
+        if not data:
+            return False
+        now = hashlib.sha1(data).hexdigest()
+        if now == self.start or now == self.bad:
             return False
         try:
-            with open(self.path, "rb") as handle:
-                compile(handle.read(), self.path, "exec")
+            compile(data, self.path, "exec")
         except Exception:  # anything that stops the new file compiling
             self.bad = now
             return False
