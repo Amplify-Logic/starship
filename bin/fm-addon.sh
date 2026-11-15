@@ -397,6 +397,7 @@ create_addon() {
         note "$path is in the way: it is not a checkout of github.com/$slug; move it aside or pick another name with --name"
         return 1
       fi
+      "$SCRIPT_DIR/fm-leak-prepush.sh" install "$path" addon >&2 || true
       if ! git -C "$path" push -q -u origin HEAD </dev/null >/dev/null 2>&1; then
         note "$path could not be pushed to github.com/$slug; push it by hand, then run create again"
         return 1

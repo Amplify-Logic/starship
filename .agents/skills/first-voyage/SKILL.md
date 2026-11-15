@@ -26,7 +26,7 @@ Section 9 of `AGENTS.md` still binds every reply: outcomes, not internals, so ne
 
 ## 0. The opening, and the tools
 
-Say who you are and what the next ten minutes hold: four questions, their own private repository, then one small job, then they are set up.
+Say who you are and what the next ten minutes hold: three questions, their own private repository, then the first project and one small job, then they are set up.
 
 If the digest's bootstrap section printed `MISSING:` lines, the opening also asks the one consent `bootstrap-diagnostics` requires: name each missing tool with its purpose in a few words (treehouse gives each worker its own copy of a project; no-mistakes checks every change before it reaches them) and ask whether to install.
 That is the only ask in that message; question 1 waits for the yes.
@@ -90,8 +90,10 @@ Showing them this is the first small proof that saying something once is enough.
 
 Before any project, the owner gets their own private repository for their own changes to how you work, so nothing of theirs can reach public Starship by mistake.
 This step is required: never skip it, and never move on to step 5 without it.
-Say in one line, without a question, that you are making them a private repository on their own GitHub account, where their own changes will live while the Starship they cloned stays the public version.
-Then run `bin/fm-addon.sh create`, whose help owns what it makes:
+Making it creates a repository on their own GitHub account, so ask first, in one line that wants only a yes: may you make them a private repository there, where their own changes will live while the Starship they cloned stays the public version?
+That yes is their approval for `bin/fm-addon.sh create` and the checkout it sets up under `projects/`.
+If they decline, do not go on to step 5: say in one line that the first project waits until they agree, and that they can say so any time.
+On their yes, run `bin/fm-addon.sh create`, whose help owns what it makes:
 
 - Exit 4 means GitHub is not signed in yet: give the owner the sign-in steps it printed, in plain words, and stop here until they say it is done, then run it again; step 5 needs the same sign-in.
 - Exit 1 names what stood in the way; say it in plain words and settle it with the owner, for example a public repository of the same name, which they make private or replace with another name passed as `--name`.
@@ -127,6 +129,7 @@ When the report lands, follow `scout-completion` and hand over the findings as f
 Say what that one report just proved, in their words: their GitHub access to the project, a worker starting in its own copy, its sign-in, and the report coming back.
 Close with one line: they are set up, from here they ask for anything, and the handbook (`docs/handbook.md`) has a first-week path when they want it.
 
+The add-on is never a project: it never counts as the first project, and is never registered as one.
 If the owner has no repository they can see on GitHub yet, say what they need (a repository their account can open, or an invitation from its owner) and stop after step 4, saying they can start the first job any time by giving a repository's address.
 
 ## Recording
@@ -159,4 +162,4 @@ Changes later come the way the handbook says: by telling the first mate.
 ## Picking it up again
 
 If the session ends before the first report lands and the first answer is already recorded, nothing raises it again at the next session start.
-When the owner says so next time, for example "let's finish setting up", greet them by the recorded address and pick up where it left off: the first step whose answer is not yet recorded (a missing section of `data/captain.md` for steps 1 to 3, no add-on, so `bin/fm-addon.sh root` fails, or a `guard problem:` line for step 4, or no project for step 5), or else the first report, handed over when it lands or proposed again if it never started.
+When the owner says so next time, for example "let's finish setting up", greet them by the recorded address and pick up where it left off: the first step whose answer is not yet recorded (a missing section of `data/captain.md` for steps 1 to 3, no add-on, so `bin/fm-addon.sh root` fails, or a `guard problem:` line for step 4, or no project other than the add-on for step 5), or else the first report, handed over when it lands or proposed again if it never started.

@@ -418,6 +418,40 @@ test_create_reuses_only_a_private_repository_of_that_name() {
   pass "create clones an existing private repository of that name and refuses a public one"
 }
 
+test_create_checks_a_present_checkout_before_pushing_it() {
+  local dir="$TMP_ROOT/create-present" home out code checkout remote key
+  home=$(new_home create-present)
+  fake_gh "$dir" >/dev/null
+  printf 'someone\n' > "$dir/gh/login"
+  : > "$dir/gh/signed-in"
+  gh_remote "$dir" someone/my-tools PRIVATE
+  remote="$dir/gh/remotes/someone/my-tools.git"
+  checkout="$home/projects/my-tools"
+  mkdir -p "$home/projects"
+  git clone -q "$remote" "$checkout"
+  key="$(printf 'sk')_live_$(printf 's7r%.0s' 1 2 3 4 5 6)"
+  printf 'use %s here\n' "$key" > "$checkout/keys.md"
+  git -C "$checkout" add -A
+  git -C "$checkout" commit -qm keyed
+  out=$(addon_gh "$dir" "$home" create --name my-tools 2>&1); code=$?
+  expect_code 1 "$code" "create over a present checkout holding a key"
+  assert_contains "$out" "could not be pushed to github.com/someone/my-tools" "create must name the refused push"
+  assert_equals "1" "$(git -C "$remote" rev-list --count main)" "the key must never reach the repository"
+  assert_absent "$home/config/addon" "a refused push must not write config/addon"
+
+  git -C "$checkout" reset -q --hard HEAD~1
+  printf 'my own tool\n' > "$checkout/tool.md"
+  git -C "$checkout" add -A
+  git -C "$checkout" commit -qm tool
+  out=$(addon_gh "$dir" "$home" create --name my-tools 2>&1); code=$?
+  expect_code 0 "$code" "create over a present clean checkout"
+  assert_equals "$(git -C "$checkout" rev-parse HEAD)" "$(git -C "$remote" rev-parse main)" \
+    "create must push the present checkout"
+  assert_contains "$(cat "$home/config/addon")" "origin = https://github.com/someone/my-tools" \
+    "config/addon must name the existing repository"
+  pass "create installs the leak check on a present checkout before pushing it"
+}
+
 # new_code_repo <name>: a throwaway Starship checkout, a git main working tree,
 # holding the scripts guards runs; echoes its canonical path.
 new_code_repo() {
@@ -480,6 +514,7 @@ test_misuse_exits_2
 test_create_without_github_sign_in_stops_with_the_sign_in_steps
 test_create_makes_a_private_repository_from_the_starter
 test_create_reuses_only_a_private_repository_of_that_name
+test_create_checks_a_present_checkout_before_pushing_it
 test_guards_confirm_a_new_home_cannot_publish_by_mistake
 
 echo "# fm-addon.test.sh: all assertions passed"

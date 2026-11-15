@@ -156,7 +156,8 @@ The conversation itself lives in [the first-voyage skill](.agents/skills/first-v
 
 You should see: it tells you your answers are written in your preferences file, `data/captain.md`, and that every worker now carries your first rule as you left it.
 
-Before the fourth question, it makes you your own private repository on your GitHub account, your add-on.
+Before the fourth question, it asks your yes to make you your own private repository on your GitHub account, your add-on.
+This step is not optional: if you say no, the first project waits until you agree.
 Every change you want to how your first mate works goes there, never into public Starship, so nothing of yours can reach the public repository by mistake.
 It also checks that every push from your home is screened for private words, and starts your private word list (`config/leak-words`), where you add the names that must never appear in public, such as people and customers.
 If GitHub is not signed in yet, it stops and tells you how to sign in; run `gh auth login` again if so, then tell it you're done.
