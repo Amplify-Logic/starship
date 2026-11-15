@@ -625,6 +625,12 @@ test_a_small_pane_scrolls_to_everything() {
   first=$(screen_of "$dir/first" 40 70)
   assert_equals "$first" "$expected" "the live pane does not draw what --plain --height prints"
   assert_not_contains "$first" "SINCE YOU LAST LOOKED" "the fixture is too small to need scrolling"
+  # Highlighting the title with no space to break at opens its card, which
+  # breaks that title across lines rather than clipping it.
+  drive_keys DOWN DOWN "SNAP:$dir/opened"
+  assert_contains "$(screen_of "$dir/opened" 40 70 | sed -n '/Rename-the/,/Talk it through/p' | sed 's/^ *//' \
+    | tr -d '\n')" "Rename-the-whole-catalogue-to-the-new-house-style-and-redirect-every-old-link" \
+    "an opened card clipped a title with no space in it"
   drive_keys PGDN PGDN PGDN PGDN PGDN PGDN "SNAP:$dir/paged" PGUP PGUP PGUP PGUP PGUP PGUP "SNAP:$dir/back"
   assert_contains "$(screen_of "$dir/paged" 40 70)" "SINCE YOU LAST LOOKED" "page down never reached the feed"
   assert_contains "$(screen_of "$dir/paged" 40 70)" "more lines above" "the screen does not say there is more above"

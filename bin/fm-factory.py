@@ -1111,6 +1111,12 @@ def row(width: int, left=(), right=(), band: bool = False) -> Row:
 def wrap(text: str, width: int) -> List[str]:
     lines, line = [], ""
     for word in (text or "").split():
+        # A word wider than the line is broken across lines, never clipped.
+        while len(word) > width:
+            if line:
+                lines.append(line)
+            lines.append(word[:width])
+            line, word = "", word[width:]
         if line and len(line) + 1 + len(word) > width:
             lines.append(line)
             line = word
