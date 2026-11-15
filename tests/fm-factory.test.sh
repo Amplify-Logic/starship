@@ -915,6 +915,24 @@ test_the_plugin_installs_opens_and_removes() {
 
 # The bridge strip opens the pane on one item of NEEDS YOU: a new pane starts
 # its highlight there, and a pane already showing in the tab moves to it.
+# The bridge strip moving the pane to a call brings that call into sight,
+# even after the owner scrolled the pane by hand.
+test_a_scrolled_pane_shows_the_item_it_is_moved_to() {
+  reset_case
+  write_registry
+  write_crowded_world
+  local dir="$TMP_ROOT/case$CASE"
+  export FM_FACTORY_TEST_SIZE=40x70 HERDR_BIN_PATH="$BINDIR/herdr" HERDR_TAB_ID=w1:t1 HERDR_SOCKET_PATH=/run/a.sock
+  DRIVE_PANE=1 HERDR_PANE_ID=w1:p9 drive_keys PGDN PGDN PGDN PGDN PGDN PGDN "SNAP:$dir/paged" \
+    "SH:HERDR_PANE_ID=w1:p3 bash $PANE open --item shop-packaging" "SNAP:$dir/moved"
+  assert_not_contains "$(screen_of "$dir/paged" 40 70)" "● Packaging: three calls" \
+    "the fixture did not scroll the item out of sight"
+  assert_contains "$(screen_of "$dir/moved" 40 70)" "▸ ● Packaging: three calls" \
+    "the pane moved to the item but left it out of sight"
+  unset FM_FACTORY_TEST_SIZE HERDR_BIN_PATH HERDR_TAB_ID HERDR_SOCKET_PATH
+  pass "factory pane: moving a scrolled pane to an item brings that item into sight"
+}
+
 test_open_on_an_item_puts_the_highlight_on_it() {
   local out pid
   reset_case
@@ -971,4 +989,5 @@ fm_test_run \
   test_a_live_copy_shows_text_at_the_top_of_a_taller_pane \
   test_open_tab_stops_when_herdr_does_not_name_the_tab \
   test_the_plugin_installs_opens_and_removes \
-  test_open_on_an_item_puts_the_highlight_on_it
+  test_open_on_an_item_puts_the_highlight_on_it \
+  test_a_scrolled_pane_shows_the_item_it_is_moved_to

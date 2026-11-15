@@ -1239,7 +1239,8 @@ class View:
         if self.wanted:
             item, asked = self.wanted
             if ("need", item) in stops:
-                self.selected, self.wanted = ("need", item), None
+                # Going to an item brings it into sight, even after a hand scroll.
+                self.selected, self.wanted, self.follow = ("need", item), None, True
             elif time.time() - asked > WANT_SECONDS:
                 self.wanted = None
         if not stops:

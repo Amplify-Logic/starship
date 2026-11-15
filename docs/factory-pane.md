@@ -154,7 +154,7 @@ bin/fm-factory-pane.sh remove    # close every Factory pane and factory page, an
 Set `FM_HOME` when installing for a home other than this code root; the pane remembers it.
 To show the pane beside another pane later, bind the plugin's `starship.factory.open` action to a key.
 `bin/fm-factory-pane.sh open --item <id>` opens the pane with its highlight on that item of NEEDS YOU, which is how a click on the [bridge strip](bridge-strip.md#the-most-urgent-call)'s most urgent call opens it.
-When a Factory pane is already showing in the same tab, its highlight moves to the item instead of a second pane opening.
+When a Factory pane is already showing in the same tab, its highlight moves to the item instead of a second pane opening, and the view scrolls to bring it into sight even after a hand scroll.
 An item the record does not hold yet keeps its place for up to a minute while a fresh record is built.
 
 ## Verification
