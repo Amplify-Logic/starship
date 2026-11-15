@@ -36,7 +36,7 @@ The colours are the flight deck tokens: the strip is painted in the hull colour,
 
 After the lamps the strip names the owner's most urgent call: the first of his calls as `fm_owner_calls` lists them, his held decisions before work ready to land.
 A decision reads `Decide: <title>` and work ready to land `Merge: <title>`, with the title of its work item, else the task's recorded outcome, else its id.
-The title is made plain text, so a dash or a quote becomes its plain form and any other character outside plain text becomes `?`.
+The title is made plain text, so a dash, a quote, or an ellipsis becomes its plain form and any other run of characters outside plain text becomes one `?`.
 Clicking the name opens the [Factory pane](factory-pane.md) beside the pane below the strip with its highlight on that call; a Factory pane already showing in the tab moves its highlight there instead.
 When the pane cannot be opened, the strip says so in place of the name for a few seconds.
 The strip asks the terminal for mouse reports to see the click, so Herdr's own text selection does not work inside the strip.
