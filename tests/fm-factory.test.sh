@@ -1268,6 +1268,297 @@ PY
   pass "factory tab: a worker's live copy shows its text even when blank rows follow it"
 }
 
+test_a_factory_tab_opens_no_live_copy_for_parked_held_or_finished_work() {
+  reset_case
+  write_registry
+  write_world
+  # Garden Journal: a worker whose question waits on the owner, a failed
+  # worker, and work ready for the owner. Only the ready work has ended.
+  HERDR_BIN_PATH="$BINDIR/herdr" python3 "$FACTORY" open-tab garden-journal >/dev/null 2>&1 \
+    || fail "open-tab garden-journal failed"
+  assert_equals "$(grep -o 'follow [a-z-]*' "$CALLS" | tr '\n' ' ')" "follow garden-chart follow garden-water " \
+    "a worker waiting on the owner lost its copy, or ready work got one"
+  # Sample Shop with room under the cap: a parked worker gets no copy either.
+  reset_case
+  write_registry
+  write_world
+  "$BINDIR/edit-world" drop shop-search >/dev/null || fail "edit-world failed"
+  "$BINDIR/edit-world" drop shop-checkout >/dev/null || fail "edit-world failed"
+  HERDR_BIN_PATH="$BINDIR/herdr" python3 "$FACTORY" open-tab sample-shop >/dev/null 2>&1 \
+    || fail "open-tab sample-shop failed"
+  assert_equals "$(grep -o 'follow [a-z-]*' "$CALLS" | tr '\n' ' ')" "follow shop-coupons follow shop-images " \
+    "a parked or stopped worker got a live copy"
+  pass "factory tab: live copies open only for workers at work, never for parked, held or finished jobs"
+}
+
+# follow_until_exit <task-id> <seconds> [SH:<command>]: a worker's live copy
+# under a pty; once it draws, run the command, then wait up to <seconds> for the
+# copy to exit, printing what it drew. Exit 3 when it never exited.
+follow_until_exit() {
+  python3 - "$FACTORY" "$@" <<'PY'
+import fcntl, os, pty, select, struct, subprocess, sys, termios, time
+factory, task, seconds = sys.argv[1], sys.argv[2], float(sys.argv[3])
+step = sys.argv[4] if len(sys.argv) > 4 else ""
+pid, fd = pty.fork()
+if pid == 0:
+    fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack("HHHH", 12, 80, 0, 0))
+    os.execvp("python3", ["python3", factory, "follow", task])
+seen, stepped, end, code = b"", False, time.time() + 30, None
+while time.time() < end:
+    r, _, _ = select.select([fd], [], [], 0.1)
+    if r:
+        try:
+            seen += os.read(fd, 65536)
+        except OSError:
+            pass
+    done, status = os.waitpid(pid, os.WNOHANG)
+    if done:
+        code = status
+        break
+    if not stepped and b"live copy" in seen:
+        stepped = True
+        if step.startswith("SH:"):
+            subprocess.run(step[3:], shell=True, check=True, stdout=subprocess.DEVNULL)
+        end = time.time() + seconds
+if code is None:
+    os.kill(pid, 9)
+    os.waitpid(pid, 0)
+sys.stdout.write(seen.decode("utf-8", "replace"))
+sys.exit(3 if code is None else 0)
+PY
+}
+
+test_a_live_copy_closes_when_its_job_ends() {
+  reset_case
+  write_registry
+  write_world
+  python3 "$FACTORY" refresh || fail "refresh failed"
+  local out
+  out=$(HERDR_BIN_PATH="$BINDIR/herdr" HERDR_PANE_ID=w1:p31 \
+    follow_until_exit shop-search 6 "SH:$BINDIR/edit-world drop shop-search") \
+    || fail "a live copy stayed open after its job ended"$'\n'"$out"
+  assert_equals "$(cat "$CALLS")" "pane close w1:p31" "the copy closed its own pane"
+  : > "$CALLS"
+  # A copy opened on work that is already ready for the owner closes at once.
+  out=$(HERDR_BIN_PATH="$BINDIR/herdr" HERDR_PANE_ID=w1:p32 follow_until_exit garden-share 6) \
+    || fail "a live copy of finished work stayed open"$'\n'"$out"
+  assert_equals "$(cat "$CALLS")" "pane close w1:p32" "the finished job's copy closed its pane"
+  # A worker still at work keeps its copy.
+  : > "$CALLS"
+  if HERDR_BIN_PATH="$BINDIR/herdr" HERDR_PANE_ID=w1:p33 follow_until_exit shop-checkout 5 >/dev/null; then
+    fail "a live copy of a worker at work closed"
+  fi
+  assert_equals "$(cat "$CALLS")" "" "a working job's copy closed a pane"
+  pass "factory tab: a live copy closes its pane when its job ends, and stays while the worker works"
+}
+
+# code_copy <dir>: a code root whose bin/ links to this one's, except the
+# Factory pane's two scripts, which are real copies a case can change under a
+# running pane the way an update rewrites them.
+code_copy() {
+  local f
+  mkdir -p "$1/bin"
+  for f in "$ROOT"/bin/*; do
+    ln -s "$f" "$1/bin/${f##*/}"
+  done
+  rm "$1/bin/fm-factory.py" "$1/bin/fm-factory-pane.sh"
+  cp "$ROOT/bin/fm-factory.py" "$ROOT/bin/fm-factory-pane.sh" "$1/bin/"
+}
+
+test_a_running_factory_pane_picks_up_changed_code() {
+  reset_case
+  write_registry
+  write_world
+  local code="$TMP_ROOT/case$CASE/code" screen
+  code_copy "$code"
+  screen=$(FM_FACTORY_PANE_CONFIG_DIR="$TMP_ROOT/case$CASE/config" python3 - "$code" <<'PY'
+import fcntl, os, pty, select, signal, struct, sys, termios, time
+code = sys.argv[1]
+pid, fd = pty.fork()
+if pid == 0:
+    fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack("HHHH", 50, 100, 0, 0))
+    os.execvp("bash", ["bash", os.path.join(code, "bin", "fm-factory-pane.sh"), "run"])
+def drain(seconds, until):
+    end, seen = time.time() + seconds, b""
+    while time.time() < end and until not in seen:
+        r, _, _ = select.select([fd], [], [], 0.1)
+        if r:
+            try:
+                seen += os.read(fd, 65536)
+            except OSError:
+                break
+    return seen
+first = drain(20, b"q quit")
+# The update lands: a new fm-factory.py moved into place, as git writes it.
+path = os.path.join(code, "bin", "fm-factory.py")
+text = open(path).read().replace('"q quit"', '"q leave"')
+open(path + ".new", "w").write(text)
+os.rename(path + ".new", path)
+after = drain(3, b"q leave")
+alive = os.waitpid(pid, os.WNOHANG)[0] == 0
+record = os.path.exists(os.path.join(os.environ["FM_FACTORY_PANE_CONFIG_DIR"], "panes", str(pid)))
+os.kill(pid, signal.SIGTERM)
+end = time.time() + 5
+while time.time() < end and os.waitpid(pid, os.WNOHANG)[0] == 0:
+    drain(0.2, b"\0never")
+print("first=%s after=%s alive=%s record=%s" % (b"q quit" in first, b"q leave" in after, alive, record))
+PY
+)
+  assert_equals "$screen" "first=True after=True alive=True record=True" \
+    "a running Factory pane did not reload its changed code in place"
+  pass "factory pane: a running pane reloads in place within a redraw when its code changes"
+}
+
+test_a_factory_pane_waits_while_its_code_is_empty() {
+  reset_case
+  write_registry
+  write_world
+  local code="$TMP_ROOT/case$CASE/code" screen
+  code_copy "$code"
+  screen=$(FM_FACTORY_PANE_CONFIG_DIR="$TMP_ROOT/case$CASE/config" python3 - "$code" <<'PY'
+import fcntl, os, pty, select, signal, struct, sys, termios, time
+code = sys.argv[1]
+pid, fd = pty.fork()
+if pid == 0:
+    fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack("HHHH", 50, 100, 0, 0))
+    os.execvp("bash", ["bash", os.path.join(code, "bin", "fm-factory-pane.sh"), "run"])
+def drain(seconds, until):
+    end, seen = time.time() + seconds, b""
+    while time.time() < end and until not in seen:
+        r, _, _ = select.select([fd], [], [], 0.1)
+        if r:
+            try:
+                seen += os.read(fd, 65536)
+            except OSError:
+                break
+    return seen
+drain(20, b"q quit")
+path = os.path.join(code, "bin", "fm-factory.py")
+text = open(path).read().replace('"q quit"', '"q leave"')
+# The update has created the new file but not yet written it.
+open(path + ".new", "w").close()
+os.rename(path + ".new", path)
+drain(2, b"\0never")
+alive = os.waitpid(pid, os.WNOHANG)[0] == 0
+open(path + ".new", "w").write(text)
+os.rename(path + ".new", path)
+after = drain(3, b"q leave")
+os.kill(pid, signal.SIGTERM)
+end = time.time() + 5
+while time.time() < end and os.waitpid(pid, os.WNOHANG)[0] == 0:
+    drain(0.2, b"\0never")
+print("alive=%s after=%s" % (alive, b"q leave" in after))
+PY
+)
+  assert_equals "$screen" "alive=True after=True" \
+    "a Factory pane reloaded onto an empty file, or never reloaded once it was written"
+  pass "factory pane: a running pane keeps its code while an update's file is still empty, then reloads"
+}
+
+test_a_factory_pane_reloads_code_that_changed_while_it_first_read_the_fleet() {
+  reset_case
+  write_registry
+  write_world
+  local code="$TMP_ROOT/case$CASE/code" screen
+  code_copy "$code"
+  # No record yet, so the pane reads the fleet before it first draws; the
+  # update lands in the middle of that reading.
+  cat > "$TMP_ROOT/case$CASE/shapes" <<SH
+#!/usr/bin/env bash
+python3 - "$code/bin/fm-factory.py" <<'PY'
+import os, sys
+path = sys.argv[1]
+text = open(path).read()
+if '"q quit"' in text:
+    open(path + ".new", "w").write(text.replace('"q quit"', '"q leave"'))
+    os.rename(path + ".new", path)
+PY
+exec "$BINDIR/shapes" "\$@"
+SH
+  chmod +x "$TMP_ROOT/case$CASE/shapes"
+  screen=$(FM_FACTORY_SHAPES="$TMP_ROOT/case$CASE/shapes" FM_FACTORY_PANE_CONFIG_DIR="$TMP_ROOT/case$CASE/config" \
+    python3 - "$code" <<'PY'
+import fcntl, os, pty, select, signal, struct, sys, termios, time
+code = sys.argv[1]
+pid, fd = pty.fork()
+if pid == 0:
+    fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack("HHHH", 50, 100, 0, 0))
+    os.execvp("bash", ["bash", os.path.join(code, "bin", "fm-factory-pane.sh"), "run"])
+def drain(seconds, until):
+    end, seen = time.time() + seconds, b""
+    while time.time() < end and until not in seen:
+        r, _, _ = select.select([fd], [], [], 0.1)
+        if r:
+            try:
+                seen += os.read(fd, 65536)
+            except OSError:
+                break
+    return seen
+seen = drain(25, b"q leave")
+os.kill(pid, signal.SIGTERM)
+end = time.time() + 5
+while time.time() < end and os.waitpid(pid, os.WNOHANG)[0] == 0:
+    drain(0.2, b"\0never")
+print("reloaded=%s" % (b"q leave" in seen))
+PY
+)
+  assert_equals "$screen" "reloaded=True" \
+    "a Factory pane kept running old code after an update landed while it first read the fleet"
+  pass "factory pane: code that changes while the pane first reads the fleet is still reloaded"
+}
+
+test_a_factory_pane_waits_for_an_open_talk_box_before_reloading() {
+  reset_case
+  write_registry
+  write_world
+  local code="$TMP_ROOT/case$CASE/code" screen
+  code_copy "$code"
+  screen=$(FM_FACTORY_PANE_CONFIG_DIR="$TMP_ROOT/case$CASE/config" python3 - "$code" <<'PY'
+import fcntl, os, pty, select, signal, struct, sys, termios, time
+code = sys.argv[1]
+pid, fd = pty.fork()
+if pid == 0:
+    fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack("HHHH", 50, 100, 0, 0))
+    os.execvp("bash", ["bash", os.path.join(code, "bin", "fm-factory-pane.sh"), "run"])
+def drain(seconds, until):
+    end, seen = time.time() + seconds, b""
+    while time.time() < end and until not in seen:
+        r, _, _ = select.select([fd], [], [], 0.1)
+        if r:
+            try:
+                seen += os.read(fd, 65536)
+            except OSError:
+                break
+    return seen
+drain(20, b"q quit")
+for key in (b"\x1b[B", b"\x1b[B", b"\x1b[B", b"t"):
+    os.write(fd, key)
+    drain(0.3, b"\0never")
+os.write(fd, b"Half a thought")
+drain(3, b"Half a thought")
+path = os.path.join(code, "bin", "fm-factory.py")
+text = open(path).read().replace('"q quit"', '"q leave"')
+open(path + ".new", "w").write(text)
+os.rename(path + ".new", path)
+during = drain(2, b"q leave")
+os.write(fd, b"\r")
+sent = drain(3, b"Sent to Starship")
+sent += drain(2, b"q leave")
+after = drain(15, b"q leave")
+os.kill(pid, signal.SIGTERM)
+end = time.time() + 5
+while time.time() < end and os.waitpid(pid, os.WNOHANG)[0] == 0:
+    drain(0.2, b"\0never")
+print("held=%s told=%s after=%s" % (b"q leave" not in during and b"Half a thought" in during,
+                                    b"Sent to Starship" in sent and b"q leave" not in sent, b"q leave" in after))
+PY
+)
+  assert_equals "$screen" "held=True told=True after=True" \
+    "a Factory pane reloaded under an open talk box or its sent notice, or never reloaded after"
+  assert_contains "$(jq -r .body "$FM_FACTORY_TEST_NOTES")" "Half a thought" "the talk box did not send its text"
+  pass "factory pane: a reload waits for an open talk box and its notice, then happens"
+}
+
 test_open_tab_stops_when_herdr_does_not_name_the_tab() {
   reset_case
   write_registry
@@ -1512,6 +1803,12 @@ fm_test_run \
   test_talking_never_changes_who_steers \
   test_enter_opens_the_factory_tab_with_its_live_workers \
   test_a_live_copy_shows_text_at_the_top_of_a_taller_pane \
+  test_a_factory_tab_opens_no_live_copy_for_parked_held_or_finished_work \
+  test_a_live_copy_closes_when_its_job_ends \
+  test_a_running_factory_pane_picks_up_changed_code \
+  test_a_factory_pane_waits_while_its_code_is_empty \
+  test_a_factory_pane_reloads_code_that_changed_while_it_first_read_the_fleet \
+  test_a_factory_pane_waits_for_an_open_talk_box_before_reloading \
   test_open_tab_stops_when_herdr_does_not_name_the_tab \
   test_workers_splits_live_copies_beside_a_page_pane \
   test_the_plugin_installs_opens_and_removes \
