@@ -94,6 +94,9 @@ elif cmd == "pane list":
 elif cmd == "pane process-info":
     p = find_pane(opt("--pane"))
     out({"result": {"process_info": {"foreground_processes": [{"cmdline": c} for c in p["cmd"]]}}})
+elif cmd == "pane read":             # a pane's screen: its "screen", else a shell prompt
+    p = find_pane(args[2])
+    sys.stdout.write(p.get("screen", "lars@mac ~ % \n\n" if p["cmd"][0].lstrip("-") in ("zsh", "bash") else "%s\n" % p["cmd"][0]))
 elif cmd == "pane run":
     p = find_pane(args[2])
     p["cmd"] = [args[3]]; save(); out({"result": {}})
@@ -338,6 +341,73 @@ PY
   pass "desk: a pane running something other than a shell is never typed into"
 }
 
+# A restored shell counts as a bare shell while it is still starting, and a
+# shell whose owner has typed ahead is still the foreground; only the screen
+# tells them apart from a shell waiting at an empty prompt.
+set_screens() {  # <pane id>=<screen> ...: give panes of the fake session what they show
+  python3 - "$FAKE_HERDR_STATE" "$@" <<'PY'
+import json, sys
+st = json.load(open(sys.argv[1]))
+screens = dict(arg.split("=", 1) for arg in sys.argv[2:])
+for w in st["workspaces"]:
+    for t in w["tabs"]:
+        for p in t["panes"]:
+            if p["pane_id"] in screens:
+                p["screen"] = screens[p["pane_id"]]
+json.dump(st, open(sys.argv[1], "w"))
+PY
+}
+
+test_a_pane_with_input_typed_after_its_prompt_is_left_alone() {
+  new_case default true
+  layout default
+  restored_session
+  printf '1 ttys001 herdr\n2 ttys002 herdr --session default\n' > "$FAKE_PS"
+  python3 - "$FAKE_HERDR_STATE" <<'PY'
+import json, sys
+st = json.load(open(sys.argv[1]))
+del st["workspaces"][0]["tabs"][0]["panes"][1]["agent_session"]
+json.dump(st, open(sys.argv[1], "w"))
+PY
+  set_screens "w1:p1=lars@mac ~ % vim -u NONE
+" "w1:p2=lars@mac ~ % ls
+" "w1:p4=❯ git status
+"
+  local out
+  out=$(desk open) || fail "open failed: $out"
+  assert_no_grep "pane run w1:p1 " "$FAKE_HERDR_CALLS" "the first mate was typed after input waiting in its pane"
+  assert_no_grep "pane run w1:p2 " "$FAKE_HERDR_CALLS" "the bridge was typed after input waiting in its pane"
+  assert_no_grep "pane run w1:p4 " "$FAKE_HERDR_CALLS" "a factory page was typed after input waiting in its pane"
+  assert_contains "$out" "note: the first mate's pane has input waiting or no prompt yet; it was left alone" \
+    "typed-ahead input in the first mate's pane was not reported"
+  assert_contains "$out" "note: the Starship bridge's pane has input waiting or no prompt yet; it was left alone" \
+    "typed-ahead input in the bridge's pane was not reported"
+  assert_contains "$out" "note: the Sample Shop tab's pane has input waiting or no prompt yet; it was left alone" \
+    "typed-ahead input in a factory tab's pane was not reported"
+  assert_grep "pane run w1:p3 " "$FAKE_HERDR_CALLS" "a pane at an empty prompt was not restarted"
+  pass "desk: a pane with input typed after its prompt is left alone and reported"
+}
+
+test_a_shell_still_starting_is_left_alone() {
+  new_case default true
+  layout default
+  restored_session
+  printf '1 ttys001 herdr\n2 ttys002 herdr --session default\n' > "$FAKE_PS"
+  set_screens "w1:p3=" "w1:p4=Last login: Sun Nov 15 09:12:01 on ttys004
+
+"
+  local out
+  out=$(desk open) || fail "open failed: $out"
+  assert_no_grep "pane run w1:p3 " "$FAKE_HERDR_CALLS" "a Factory pane whose shell shows nothing yet was typed into"
+  assert_no_grep "pane run w1:p4 " "$FAKE_HERDR_CALLS" "a factory page whose shell shows no prompt yet was typed into"
+  assert_contains "$out" "note: the Factory pane's pane has input waiting or no prompt yet; it was left alone" \
+    "a Factory pane with no prompt yet was not reported"
+  assert_contains "$out" "note: the Sample Shop tab's pane has input waiting or no prompt yet; it was left alone" \
+    "a factory tab with no prompt yet was not reported"
+  assert_grep "pane run w1:p2 " "$FAKE_HERDR_CALLS" "a pane at an empty prompt was not restarted"
+  pass "desk: a shell still starting, with no prompt yet, is left alone and reported"
+}
+
 test_the_sidebar_setting_changes_only_its_own_line() {
   new_case lab true
   layout lab
@@ -523,6 +593,8 @@ fm_test_run \
   test_a_session_that_is_not_running_is_started_before_any_view \
   test_views_count_the_clients_already_showing_the_session \
   test_a_busy_first_pane_is_never_typed_into \
+  test_a_pane_with_input_typed_after_its_prompt_is_left_alone \
+  test_a_shell_still_starting_is_left_alone \
   test_the_sidebar_setting_changes_only_its_own_line \
   test_a_bad_or_missing_layout_stops_with_the_reason \
   test_layout_reads_the_running_desk_back \

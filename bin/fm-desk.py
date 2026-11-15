@@ -42,7 +42,10 @@ It never closes, restarts or moves a pane, tab or workspace, never renames
 one it did not just create, never starts anything in a pane that runs something other than a shell, and never
 touches any other workspace. A pane counts as an idle shell only when the bare
 shell itself is in its foreground (a shell running a command is not) and Herdr
-records no agent in it.
+records no agent in it. The desk types into an idle shell only when its screen
+also shows the shell's prompt as the last line with nothing typed after it; a
+shell still starting, or one holding typed-ahead input, is left alone with a
+note.
 
 Environment:
   FM_HOME                 the home whose config/desk-layout is read (default:
@@ -240,6 +243,16 @@ class Herdr:
         except ValueError:
             return {}
 
+    def screen(self, pane_id: str) -> str:
+        """The visible text of <pane_id>, or "" when Herdr cannot read it."""
+        argv = [self.binary, "--session", self.session, "pane", "read", pane_id, "--source", "visible"]
+        try:
+            out = subprocess.run(argv, capture_output=True, text=True, timeout=30,
+                                 env=base_env(), stdin=subprocess.DEVNULL)
+        except (OSError, subprocess.SubprocessError):
+            return ""
+        return out.stdout if out.returncode == 0 else ""
+
     def session_entry(self) -> Optional[Dict[str, Any]]:
         data = self.call("session", "list", "--json", check=False) or {}
         for entry in data.get("sessions") or []:
@@ -312,6 +325,17 @@ def bare_shell(cmdline: str) -> bool:
     return all(word in ("-l", "-i", "-il", "-li", "--login") for word in words[1:])
 
 
+# The characters an interactive shell's prompt ends in: zsh %, sh/bash $, a root
+# #, plain >, and the glyphs of common prompt themes.
+PROMPT_ENDS = ("%", "$", "#", ">", "\u276f", "\u279c")
+
+
+def at_prompt(screen: str) -> bool:
+    """True when the last non-blank line of <screen> ends in a shell prompt with nothing typed after it."""
+    lines = [line for line in screen.splitlines() if line.strip()]
+    return bool(lines) and lines[-1].rstrip().endswith(PROMPT_ENDS)
+
+
 def classify(pane: Dict[str, Any], info: Any) -> Dict[str, Any]:
     """What a pane is doing, from its pane list entry and `pane process-info`.
 
@@ -319,7 +343,8 @@ def classify(pane: Dict[str, Any], info: Any) -> Dict[str, Any]:
     process group, so the shell itself is among the foreground processes only
     while it waits at its prompt or runs its own startup. An idle pane is one
     whose foreground holds the bare shell and where Herdr records no agent
-    (Herdr resumes a recorded agent itself after a restart).
+    (Herdr resumes a recorded agent itself after a restart). Whether its
+    prompt is showing is read separately, see with_screen.
     """
     process_info = ((info or {}).get("result") or {}).get("process_info") if info is not None else None
     cmdlines = [str(proc.get("cmdline") or "") for proc in (process_info or {}).get("foreground_processes") or []
@@ -333,6 +358,21 @@ def classify(pane: Dict[str, Any], info: Any) -> Dict[str, Any]:
         "agent": has_agent,
         "idle": not has_agent and any(bare_shell(c) for c in cmdlines),
     }
+
+
+def with_screen(herdr: Herdr, pane: Dict[str, Any]) -> Dict[str, Any]:
+    """<pane> marked free when it is idle and its screen ends at an empty shell prompt.
+
+    An idle shell still runs its own startup before it shows a prompt, and
+    input typed at the prompt waits there unseen by the process check; typing
+    into either would mix the desk's command with the owner's.
+    """
+    pane["free"] = bool(pane["idle"]) and at_prompt(herdr.screen(pane["id"]))
+    return pane
+
+
+def busy_note(what: str) -> str:
+    return "%s's pane has input waiting or no prompt yet; it was left alone" % what
 
 
 def runs(pane: Dict[str, Any], marker: str, without: str = "") -> bool:
@@ -394,7 +434,7 @@ def survey(herdr: Herdr, layout: Dict[str, Any], home: str) -> Dict[str, Any]:
         if tab != main and tab not in wanted_tabs:
             continue
         info = herdr.call("pane", "process-info", "--pane", pane.get("pane_id"), check=False)
-        found["panes"].setdefault(tab, []).append(classify(pane, info))
+        found["panes"].setdefault(tab, []).append(with_screen(herdr, classify(pane, info)))
     found["first_in_tab"] = first_in_tab
     return found
 
@@ -448,10 +488,12 @@ def plan(layout: Dict[str, Any], found: Dict[str, Any], sidebar_now: Optional[bo
     elif seat is None:
         notes.append("the main tab of %s has no pane for the first mate; nothing was started" % label)
     elif seat["idle"]:
-        if layout["firstmate"]:
+        if not layout["firstmate"]:
+            notes.append("the first mate's pane is an idle shell; name its command as `firstmate =` in the layout")
+        elif seat["free"]:
             steps.append(step("firstmate", "start the first mate (%s)" % layout["firstmate"], pane=seat["id"]))
         else:
-            notes.append("the first mate's pane is an idle shell; name its command as `firstmate =` in the layout")
+            notes.append(busy_note("the first mate"))
 
     for kind, wanted, pane, name in (("bridge", layout["bridge"], bridge, "the Starship bridge"),
                                      ("factory", layout["factory"], factory, "the Factory pane")):
@@ -459,8 +501,10 @@ def plan(layout: Dict[str, Any], found: Dict[str, Any], sidebar_now: Optional[bo
             continue
         if pane is None:
             steps.append(step(kind, "show %s" % name, seat=seat["id"] if seat else None))
-        elif pane["idle"]:
+        elif pane["free"]:
             steps.append(step(kind + "-revive", "start %s again in its pane" % name, pane=pane["id"]))
+        elif pane["idle"]:
+            notes.append(busy_note(name))
 
     labels = {t["label"]: t["id"] for t in found["tabs"]}
     for tab in layout["tabs"]:
@@ -478,9 +522,11 @@ def plan(layout: Dict[str, Any], found: Dict[str, Any], sidebar_now: Optional[bo
         if any(runs(p, "fm-factory-pane.sh run") for p in panes):
             continue
         first = next((p for p in panes if p["id"] == found.get("first_in_tab", {}).get(tab_id)), None)
-        if first is not None and first["idle"]:
+        if first is not None and first["free"]:
             steps.append(step("page-revive", "start the %s page again in its tab" % tab["label"],
                               pane=first["id"], factory=tab["factory"], main=main or ""))
+        elif first is not None and first["idle"]:
+            notes.append(busy_note("the %s tab" % tab["label"]))
         else:
             notes.append("the %s tab is showing something else; it was left as it is" % tab["label"])
 
@@ -740,9 +786,9 @@ def execute(item: Dict[str, Any], layout: Dict[str, Any], herdr: Herdr, found: D
             herdr.call("tab", "rename", first, layout["main"])
         root = result.get("root_pane") or {}
         # The first mate starts in the new workspace's first pane, so wait for
-        # its shell to be up before reading the desk again.
+        # its shell's prompt before reading the desk again.
         if root.get("pane_id"):
-            settle(lambda: pane_looks(herdr, root["pane_id"]).get("idle"))
+            settle(lambda: with_screen(herdr, pane_looks(herdr, root["pane_id"]))["free"])
     elif kind == "firstmate":
         pane = item["pane"]
         if pane is None:
