@@ -51,6 +51,11 @@ A red `■ 1 failed, 2 stopped` shows before the battery when work failed or a w
 It clears as soon as the reading no longer counts either.
 On a narrower pane it reads `■ 3 broken`.
 
+When the home listens to a Mothership room ([Mothership monitoring](configuration.md#mothership-monitoring-configmothership-monitor)) and the listener has not reached the room for two minutes, the alert says why: `Tailscale is off on this Mac` when Tailscale is installed and not running, or, on a Mac without Tailscale's command, when the room's name does not resolve; otherwise `The <room> room is not answering`, with the room's own name.
+The alert needs monitoring switched on for that room; a room with monitoring off raises no alert.
+It reads the note the listener keeps while the room cannot be reached, so it costs nothing extra, and it clears as soon as the room answers again, or when the listener has stopped trying for three minutes.
+On a narrower pane it reads `Tailscale off` or `room not answering`, after any `N broken`.
+
 ### The night shift
 
 When the home has a [night shift window](configuration.md#night-shift-window-confignight-shift-window), the strip says `night shift from 23:30` in the six hours before it starts and `night shift on` while it runs.
@@ -63,7 +68,7 @@ Work that was cleaned up before the reading and left no merged PR record is not 
 The strip never steers, changes, or drains anything.
 Its only writes are its own record of the pane it runs in, kept in the plugin's Herdr config directory, and the shared fleet reading's cache that the status bar also refreshes.
 Its one action is opening the Factory pane when the owner clicks the most urgent call; the pane it opens writes nothing until the owner presses one of its keys.
-The call, the alert, and the night shift's count come from the same cached reading as the lamps, so they never disagree with them and cost the fleet nothing extra.
+The call, the alert, and the night shift's count come from the same cached reading as the lamps, so they never disagree with them and cost the fleet nothing extra; a Mothership room's reach comes from its listener's note.
 
 ## Install, show, and remove
 
@@ -101,4 +106,4 @@ The most urgent call and the night shift only use the columns left over, so they
 
 ## Verification
 
-`tests/fm-bridge-strip.test.sh` renders fixture fleets, fixture night shifts and fixture battery readings and checks every row word for word and colour by colour, at every width, clicks the running strip under a pseudo-terminal, parks a held decision under the running strip and times how soon it names the next call, and checks the Herdr calls behind the click, `open`, `install`, and `remove` against a stand-in Herdr.
+`tests/fm-bridge-strip.test.sh` renders fixture fleets, fixture night shifts, fixture Mothership reach notes and fixture battery readings and checks every row word for word and colour by colour, at every width, clicks the running strip under a pseudo-terminal, parks a held decision under the running strip and times how soon it names the next call, and checks the Herdr calls behind the click, `open`, `install`, and `remove` against a stand-in Herdr.

@@ -71,8 +71,9 @@
 #     read from and the place after the batch, then the item lines, exit 0,
 #     without moving the place (autohandle or told moves it after capture);
 #   - the room cannot be reached (pull exit 3, or no answer within the window):
-#     wait out the rest of the window, exit 75, so an offline or sleeping
-#     machine costs one attempt a minute and wakes no one;
+#     note it in <room>.unreachable, wait out the rest of the window, exit 75,
+#     so an offline or sleeping machine costs one attempt a minute and wakes no
+#     one;
 #   - the room refuses the key (pull exit 4): a `status=refused` result, which
 #     is terminal;
 #   - any other failure: wait out the window and exit 75, and after five in a
@@ -92,7 +93,14 @@
 # Private state, under state/mothership/: <room>.position (this monitor's
 # place), <room>.told (the end of the latest batch told, seeded with the
 # place), <room>.contact
-# (when the room last answered), <room>.failures (failures in a row).
+# (when the room last answered), <room>.failures (failures in a row), and
+# <room>.unreachable while the room cannot be reached, for the bridge strip's
+# red alert (bin/fm-bridge-strip.sh): `since=<epoch>` (the first failed read in
+# this run of them; a gap of more than 180 seconds since the last one starts a
+# new run), `last=<epoch>` (the latest failed read), and `cause=tailscale`
+# (Tailscale is installed here and not running, or, with no Tailscale command to
+# ask, the room's name does not resolve) or `cause=room`. The room answering,
+# `off`, and retiring the room remove it.
 #
 # The link is the first of: FM_MOTHERSHIP_BIN; the mothership command on PATH;
 # and projects/mothership/bin/mothership in the home. A path FM_MOTHERSHIP_BIN
@@ -106,7 +114,9 @@
 #
 # Environment: FM_MOTHERSHIP_WAIT_SECONDS (1..55, default 55) is the window;
 # FM_MOTHERSHIP_LINK_TIMEOUT (seconds, default 20) bounds every other link
-# call, and a call that runs past it counts as failed.
+# call, and a call that runs past it counts as failed. FM_MOTHERSHIP_TAILSCALE
+# is the Tailscale command asked `status --json` after a failed read (default:
+# tailscale on PATH; empty for none); it is asked only then, within 5 seconds.
 # docs/configuration.md "Mothership monitoring (config/mothership-monitor)"
 # owns the setting and its operating contract.
 set -u
@@ -163,6 +173,7 @@ position_file() { printf '%s/%s.position\n' "$MS_STATE" "$1"; }
 told_file() { printf '%s/%s.told\n' "$MS_STATE" "$1"; }
 contact_file() { printf '%s/%s.contact\n' "$MS_STATE" "$1"; }
 failures_file() { printf '%s/%s.failures\n' "$MS_STATE" "$1"; }
+unreachable_file() { printf '%s/%s.unreachable\n' "$MS_STATE" "$1"; }
 lock_path() { printf '%s/.%s.lock\n' "$MS_STATE" "$1"; }
 
 state_prepare() {
@@ -648,6 +659,44 @@ failures_note() {  # <room>: count one failure, print the count
   printf '%s\n' "$n"
 }
 
+# tailscale_cut_off <stderr-file>: the room is cut off by Tailscale. When
+# Tailscale is installed here its own answer decides: not running is cut off,
+# running is not. Without the command, a room name that does not resolve is
+# taken as Tailscale's private names being gone.
+tailscale_cut_off() {
+  local cmd said
+  if [ "${FM_MOTHERSHIP_TAILSCALE+set}" = set ]; then
+    cmd=$FM_MOTHERSHIP_TAILSCALE
+  else
+    cmd=$(command -v tailscale 2>/dev/null || true)
+  fi
+  if [ -z "$cmd" ]; then
+    LC_ALL=C grep -Eq 'ENOTFOUND|EAI_AGAIN|EAI_NONAME' "$1" 2>/dev/null
+    return
+  fi
+  said=$(fm_run_timed 5 "$cmd" status --json 2>/dev/null < /dev/null) || return 0
+  [ "$(printf '%s' "$said" | jq -r '.BackendState // empty' 2>/dev/null)" != Running ]
+}
+
+# note_unreachable: record a read that could not reach the room, and why, for
+# the bridge strip's red alert. A run of failures keeps its first time unless
+# the last one is more than 180 seconds old (a sleeping machine, a listener that
+# stopped), when a new run starts.
+note_unreachable() {  # <room> <stderr-file>
+  local room=$1 file now since last cause
+  file=$(unreachable_file "$room")
+  now=$(date +%s)
+  since=$(sed -n 's/^since=//p' "$file" 2>/dev/null | head -n 1)
+  last=$(sed -n 's/^last=//p' "$file" 2>/dev/null | head -n 1)
+  case "$since" in ''|*[!0-9]*) since=$now ;; esac
+  case "$last" in ''|*[!0-9]*) since=$now ;; *) [ $((now - last)) -le 180 ] || since=$now ;; esac
+  cause=room
+  ! tailscale_cut_off "$2" || cause=tailscale
+  write_file "$file" "since=$since
+last=$now
+cause=$cause" || true
+}
+
 print_stop() {  # <room> <refused|error> <reason>
   printf 'schema=%s\n' "$RESULT_SCHEMA"
   printf 'room=%s\n' "$1"
@@ -684,13 +733,14 @@ cmd_source() {
   case "$rc" in
     0) ;;
     3)
+      note_unreachable "$room" "$err"
       rm -f -- "$out" "$err"
       sleep_out "$started"
       return "$EMPTY_WINDOW"
       ;;
     4)
       print_stop "$room" refused "$(tail -n 1 "$err")"
-      rm -f -- "$out" "$err"
+      rm -f -- "$out" "$err" "$(unreachable_file "$room")"
       return 0
       ;;
     *)
@@ -705,7 +755,7 @@ cmd_source() {
       return "$EMPTY_WINDOW"
       ;;
   esac
-  rm -f -- "$err" "$(failures_file "$room")"
+  rm -f -- "$err" "$(failures_file "$room")" "$(unreachable_file "$room")"
   write_file "$(contact_file "$room")" "$(date +%s)" || true
   last=$(tail -n 1 "$out")
   if ! to=$(unwrap_position_line "$last") \
@@ -759,6 +809,7 @@ disarm_room() {  # <room>
   local room=$1
   "$SCRIPT_DIR/fm-procevent.sh" retire "$(source_id "$room")" >/dev/null 2>&1 \
     || { printf 'its source could not be retired\n'; return 1; }
+  rm -f -- "$(unreachable_file "$room")"
   [ -f "$(position_file "$room")" ] || return 0
   if [ -z "$LINK_BIN" ] || ! with_lock "$room" hand_back_locked "$room"; then
     printf 'monitoring stopped, but its place could not be handed back to mothership pull, so a manual pull may repeat items already told\n'
