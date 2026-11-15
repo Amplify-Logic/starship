@@ -1943,14 +1943,17 @@ class Pane:
 
         Focus alone keeps the look going for at most FOCUS_CAP after the focus
         began or the last key press, whichever is later; after that only a key
-        press or a new focus does.
+        press or a new focus does. Only Herdr saying the pane is not focused
+        ends a focus; a failed or unreadable answer leaves it as it was.
         """
         pane_id = os.environ.get("HERDR_PANE_ID")
         if self.view.in_tab or not pane_id:
             return
         ok, data = herdr(["pane", "get", pane_id], timeout=2)
         pane = ((data or {}).get("result") or {}).get("pane") if ok and isinstance(data, dict) else None
-        if not isinstance(pane, dict) or pane.get("pane_id") != pane_id or pane.get("focused") is not True:
+        if not isinstance(pane, dict) or pane.get("pane_id") != pane_id:
+            return
+        if pane.get("focused") is not True:
             self.focused_since = None
             return
         clock = time.time()

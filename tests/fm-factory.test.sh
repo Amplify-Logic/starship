@@ -73,6 +73,7 @@ case "$1 $2" in
     printf '{"result":{"plugin_pane":{"plugin_id":"starship.factory","pane":{"pane_id":"w1:p9"}}}}\n' ;;
   'plugin config-dir') printf '%s\n' "$FM_FACTORY_TEST_CONFIG" ;;
   'pane get')
+    [ ! -e "${FM_FACTORY_TEST_PANE_GET_FAILS:-}" ] || exit 1
     printf '{"result":{"pane":{"pane_id":"%s","focused":%s},"type":"pane_info"}}\n' "$3" \
       "${FM_FACTORY_TEST_FOCUSED:-false}" ;;
 esac
@@ -1202,6 +1203,29 @@ test_focus_alone_keeps_a_look_going_for_15_minutes() {
   pass "factory pane: focus alone keeps a look going for 15 minutes, then the heading moves on"
 }
 
+test_a_failed_focus_reading_does_not_start_a_new_focus() {
+  reset_case
+  write_registry
+  write_world
+  local look="$HOME_FIX/state/factory/last-look" clock="$TMP_ROOT/case$CASE/clock"
+  local fails="$TMP_ROOT/case$CASE/pane-get-fails" capped="$TMP_ROOT/case$CASE/capped" after="$TMP_ROOT/case$CASE/after"
+  mkdir -p "$HOME_FIX/state/factory"
+  printf '%s\n' "$((NOW - 5400))" > "$look"
+  printf '%s\n' "$((NOW - $(date +%s)))" > "$clock"
+  export HERDR_BIN_PATH="$BINDIR/herdr" HERDR_PANE_ID=w1:p9
+  # Focus holds past the 15 minutes focus alone counts, then Herdr fails to
+  # answer for a few seconds and answers focused again.
+  FM_FACTORY_NOW='' FM_FACTORY_TEST_CLOCK="$clock" PYTHONPATH="$CLOCK_SITE" FM_FACTORY_TEST_FOCUSED=true \
+    FM_FACTORY_TEST_PANE_GET_FAILS="$fails" \
+    drive_keys "WAIT:9" "$(clock_ahead 960)" "WAIT:4" "SH:cp '$look' '$capped'" \
+    "SH:touch '$fails'" "WAIT:5" "SH:rm -f '$fails'" "WAIT:10" "SH:cp '$look' '$after'"
+  [ "$(head -n 1 "$capped" 2>/dev/null)" -ge "$NOW" ] 2>/dev/null ||
+    fail "the focused pane recorded no look before the cap (mark: $(tr '\n' ' ' < "$capped"))"
+  assert_grep 'pane get w1:p9' "$CALLS" "the pane asks Herdr whether it is focused"
+  assert_equals "$(cat "$after")" "$(cat "$capped")" "a failed focus reading started a new focus and recorded a look"
+  pass "factory pane: a failed focus reading from Herdr does not start a new focus"
+}
+
 fm_test_run \
   test_the_record_words_every_state \
   test_the_plain_screen_is_the_record_as_text \
@@ -1218,6 +1242,7 @@ fm_test_run \
   test_since_you_last_looked_follows_the_owners_last_look \
   test_focusing_the_pane_for_a_while_is_a_look \
   test_focus_alone_keeps_a_look_going_for_15_minutes \
+  test_a_failed_focus_reading_does_not_start_a_new_focus \
   test_writing_keys_go_through_the_inbox_and_act_on_the_highlighted_row \
   test_a_note_reaches_starship_through_the_real_inbox \
   test_the_highlight_and_open_boxes_follow_the_record \
