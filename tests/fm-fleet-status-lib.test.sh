@@ -731,11 +731,9 @@ case "\$1" in
     printf '  other,queued,ship,r,"The other work",-,-,-,none,2026-01-01,""\n'
     printf 'help[1]:\n  - Run \`tasks-axi show <id> --full\` for full notes on a task\n'
     ;;
-  show)
-    case "\$2" in
-      old-call) printf 'task:\n  id: old-call\n  created: 2020-01-01\n  body: ""\n' ;;
-      *) printf 'task:\n  id: %s\n  created: 2026-01-01\n  body: "Captain hold set: $stamp\\\\nwhy"\n' "\$2" ;;
-    esac
+  *)
+    printf 'unexpected tasks-axi %s: the listing alone carries every field\n' "\$1" >&2
+    exit 9
     ;;
 esac
 SH

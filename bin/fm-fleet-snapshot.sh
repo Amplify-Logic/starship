@@ -622,11 +622,12 @@ backlog_json() (  # [<backlog-path>] - defaults to this home's $BACKLOG
 # The backlog object read through the home's configured tasks-axi adapter
 # (bin/fm-tasks-axi.sh), so a home whose backlog is not markdown still has its
 # rows: id, state, kind, title, the hold fields, and the blockers, classified by
-# classify_holds above. Only an undated captain hold needs its body, for the
-# hold-set stamp its age is read from (its created date for a legacy unstamped
-# hold), so only those are shown, up to eight at a time. Rows end at the first
-# line after the table that is not one, such as the help block. It fails, printing nothing, when the listing
-# or any of those rows cannot be read, or the listing is cut short.
+# classify_holds above. An undated captain hold's age is read from the hold-set
+# stamp on its body's first line (its created date for a legacy unstamped
+# hold), and both come from the same single listing; no row is shown on its
+# own. Rows end at the first line after the table that is not one, such as the
+# help block. It fails, printing nothing, when the listing cannot be read or is
+# cut short.
 axi_backlog_json() (
   set -o pipefail
   local axi=$SCRIPT_DIR/fm-tasks-axi.sh listing rows
