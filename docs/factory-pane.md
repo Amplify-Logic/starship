@@ -104,7 +104,7 @@ routine: Reminder pass, Weekly harvest summary
 ```
 
 - `routine: yes` marks every job of the factory as routine.
-- Otherwise the line lists kinds of jobs, separated by commas: a job is of a kind when its title, or its id, starts with that kind as a whole word, ignoring case (`Reminder pass 07:50`, or an id such as `reminder-pass-0750`).
+- Otherwise the line lists kinds of jobs, separated by commas: a job is of a kind when its title starts with that kind as a whole word, ignoring case (`Reminder pass 07:50`); a job with no title is matched by its id.
 - Without the line, or with `routine: no`, nothing is routine and the pane shows every job as it always has.
 
 Under its factory in RIGHT NOW, each routine kind that ran today, or has a pass under way, is one line:
@@ -119,7 +119,8 @@ Under its factory in RIGHT NOW, each routine kind that ran today, or has a pass 
 - A pass that runs as expected, or waits, folds into that line instead of drawing its own card.
 - A pass that is stuck, quiet with no sign of life, stopped, without a worker, or waiting on you or ready for you keeps its own row as usual.
 - SINCE YOU LAST LOOKED leaves out a routine pass that finished, landed, had its PR ready or was closed, while a failed one and a call it put to you are listed as usual.
-- A routine pass is still a job: the count line counts it while it runs, and a factory's own tab lists it with the rest of its work.
+- A pass folded into that line is not counted as running: the count line, the factory's busy crew and whether the factory is at work leave it out, so a factory whose only work is a folded pass reads idle, since its last pass or outcome.
+- A factory's own tab still lists every routine pass with the rest of its work.
 
 ## A factory's own tab
 

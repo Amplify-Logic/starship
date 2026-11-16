@@ -2706,12 +2706,13 @@ SH
   pass "factory pane: r on a factory reads only a job the screen draws a Read line for"
 }
 
-# add_routine_runs: a day of a recurring reminder pass in Garden Journal, each
-# pass its own job: two finished with a report, one failed, one running now.
+# add_routine_runs [project]: a day of a recurring reminder pass in Garden
+# Journal, or the project named, each pass its own job: two finished with a
+# report, one failed, one running now.
 add_routine_runs() {
-  python3 - "$HOME_FIX" "$NOW" <<'PY'
+  python3 - "$HOME_FIX" "$NOW" "${1:-garden-journal}" <<'PY'
 import json, os, sys
-home, now = sys.argv[1], int(sys.argv[2])
+home, now, project = sys.argv[1], int(sys.argv[2]), sys.argv[3]
 state, path = os.path.join(home, "state"), os.path.join(home, "snapshot.json")
 world = json.load(open(path))
 
@@ -2721,14 +2722,14 @@ def task(tid, cs, detail, started, lines, kind="scout"):
     status = os.path.join(state, tid + ".status")
     open(status, "w").write("\n".join(lines) + "\n")
     os.utime(status, (now - 3600, now - 3600))
-    world["tasks"].append({"id": tid, "kind": kind, "project": "/projects/garden-journal",
+    world["tasks"].append({"id": tid, "kind": kind, "project": "/projects/" + project,
                            "current_state": {"state": cs[0], "source": cs[1], "detail": detail,
                                              "raw": "state: %s · source: %s · %s" % (cs[0], cs[1], detail)},
                            "paths": {"meta": {"path": meta}, "status_log": {"path": status}},
                            "hints": {"open_decisions": []}, "pr": {"url": None}})
 
 def row(rid, title, st="in_flight", **extra):
-    base = {"id": rid, "title": title, "repo": "garden-journal", "state": st, "structured": True, "kind": "scout",
+    base = {"id": rid, "title": title, "repo": project, "state": st, "structured": True, "kind": "scout",
             "captain_actionable": False, "hold_kind": None, "hold_bucket": None, "hold_reason": None,
             "hold_set": None, "hold_until": None, "unresolved_blocker_ids": [], "since": "2026-11-14",
             "completion": {"verb": None, "date": None}, "pr_url": None}
@@ -2750,13 +2751,19 @@ json.dump(world, open(path, "w"), indent=1)
 PY
 }
 
+# mark_routine <project> <value>: give the factory of that project a
+# `routine:` line in the registry.
+mark_routine() {
+  python3 -c 'import sys; p, project, value = sys.argv[1:]; t = open(p).read()
+line = "projects: %s\n" % project
+open(p, "w").write(t.replace(line, line + "routine: %s\n" % value))' "$HOME_FIX/data/factories.md" "$1" "$2"
+}
+
 test_routine_runs_fold_into_one_line_and_stay_out_of_the_feed() {
   reset_case
   write_registry
   # The registry marks Garden Journal's reminder passes as routine.
-  python3 -c 'import sys; p = sys.argv[1]; t = open(p).read()
-open(p, "w").write(t.replace("projects: garden-journal\n", "projects: garden-journal\nroutine: Reminder pass\n"))' \
-    "$HOME_FIX/data/factories.md"
+  mark_routine garden-journal "Reminder pass"
   write_world
   add_routine_runs
   take_record
@@ -2771,7 +2778,8 @@ open(p, "w").write(t.replace("projects: garden-journal\n", "projects: garden-jou
   assert_equals "$(q '[.feed[] | select(.job // "" | startswith("remind-") | not) | "\(.word)|\(.actor)"] | join(" ")')" \
     "failed|Garden Journal PR ready|Garden Journal finished|Recipe Box asked you|Garden Journal landed|Recipe Box asked you|Sample Shop" \
     "the rest of the feed is as before"
-  assert_equals "$(q .count_line)" "4 jobs running · 3 need you · 1 idle" "a running pass is still a running job"
+  assert_equals "$(q .count_line)" "3 jobs running · 3 need you · 1 idle" "a folded pass is not a running job"
+  assert_equals "$(q "$garden | .crew.busy")" "0" "a folded pass does not keep the crew busy"
   local out
   out=$(python3 "$FACTORY" --plain --width 92) || fail "--plain failed"
   has_line "$out" " ↻ Reminder pass 4 runs today · last started 07:50 running" "the routine line"
@@ -2781,6 +2789,47 @@ open(p, "w").write(t.replace("projects: garden-journal\n", "projects: garden-jou
   has_line "$out" " 07:20 Garden Journal failed Reminder pass 0715 failed; Starship is on it." \
     "a failed pass is in the feed"
   pass "factory pane: routine runs fold into one line, and only a failed one reaches the feed"
+}
+
+test_a_factory_with_only_a_folded_pass_reads_idle_since_its_last_pass() {
+  reset_case
+  write_registry
+  mark_routine recipe-box "Reminder pass"
+  write_world
+  add_routine_runs recipe-box
+  take_record
+  local recipe='.factories[] | select(.id == "recipe-box")'
+  assert_equals "$(q "$recipe | .routine_runs[0] | \"\(.last_word)|\(.last)|\(.running)\"")" \
+    "started|1794642600|1" "the routine line: a pass started at 07:50 runs now"
+  assert_equals "$(q "$recipe | \"\(.state)|\(.idle_since)|\(.crew.busy)\"")" "idle|1794642600|0" \
+    "the factory is idle since its last pass, not since an older event in the feed"
+  assert_equals "$(q .count_line)" "3 jobs running · 3 need you · 1 idle" "the folded pass is not a running job"
+  local out
+  out=$(python3 "$FACTORY" --plain --width 92) || fail "--plain failed"
+  assert_contains "$out" "Recipe Box   idle since 07:50" "the idle head names the last pass"
+  has_line "$out" " ↻ Reminder pass 4 runs today · last started 07:50 running" "the routine line under an idle factory"
+  pass "factory pane: a factory with only a folded pass reads idle since its last pass"
+}
+
+test_a_routine_line_is_yes_no_or_title_kinds() {
+  local value want
+  while IFS='|' read -r value want; do
+    reset_case
+    write_registry
+    mark_routine garden-journal "$value"
+    write_world
+    add_routine_runs
+    take_record
+    assert_equals "$(q '[.factories[] | select(.id == "garden-journal") | .jobs[] | select(.routine != null)
+      | "\(.id)=\(.routine)"] | sort | join(" ")')" "$want" "routine: $value"
+  done <<'CASES'
+YES|garden-chart=Routine work garden-share=Routine work garden-water=Routine work recipe-units=Routine work remind-0715=Routine work remind-0750=Routine work
+No|
+true|
+remind|
+reminder PASS, Garden rem, Garden|garden-water=Garden remind-0715=reminder PASS remind-0750=reminder PASS
+CASES
+  pass "factory pane: a routine line is yes, no, or kinds matched by a job's title"
 }
 
 test_without_a_routine_mark_every_run_shows_as_before() {
@@ -2811,6 +2860,8 @@ fm_test_run \
   test_only_the_highlighted_call_opens_as_a_card \
   test_closed_work_reads_closed_and_only_delivered_work_reads_finished \
   test_routine_runs_fold_into_one_line_and_stay_out_of_the_feed \
+  test_a_factory_with_only_a_folded_pass_reads_idle_since_its_last_pass \
+  test_a_routine_line_is_yes_no_or_title_kinds \
   test_without_a_routine_mark_every_run_shows_as_before \
   test_a_job_with_no_sign_of_life_reads_quiet \
   test_a_changing_pane_is_a_sign_of_life \

@@ -389,21 +389,22 @@ ROUTINE_ALL = "Routine work"
 
 def routine_marks(value: str) -> List[str]:
     """A factory's `routine:` field: every job (`yes`), none (`no`), or the job title starts it lists."""
-    if value.strip().lower() in ("yes", "all", "true"):
+    if value.strip().lower() == "yes":
         return [ROUTINE_ALL]
-    if value.strip().lower() in ("", "no", "none", "false"):
+    if value.strip().lower() in ("", "no"):
         return []
     return [kind.strip() for kind in value.split(",") if kind.strip()]
 
 
-def routine_kind(marks: List[str], title: str, ident: str) -> Optional[str]:
-    """Which routine kind a job is in its factory, by its title or id, or None for ordinary work."""
+def routine_kind(marks: List[str], title: str) -> Optional[str]:
+    """Which routine kind a job is in its factory, by its title, or None for ordinary work."""
     if ROUTINE_ALL in marks:
         return ROUTINE_ALL
+    text = (title or "").lower()
     for kind in marks:
-        for text, start in (((title or "").lower(), kind.lower()), ((ident or "").lower(), slug(kind))):
-            if text.startswith(start) and not text[len(start):len(start) + 1].isalpha():
-                return kind
+        start = kind.lower()
+        if text.startswith(start) and not text[len(start):len(start) + 1].isalpha():
+            return kind
     return None
 
 
@@ -1135,7 +1136,7 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
                                "started": started_at(meta), "doing": None, "doing_from": None,
                                "last_sign_of_life": None, "sign_of_life_from": None, "quiet": False,
                                "until": None, "pr": (task.get("pr") or {}).get("url"), "queue": None,
-                               "routine": routine_kind(by_id[fid]["routine"], title, task["id"]),
+                               "routine": routine_kind(by_id[fid]["routine"], title),
                                "read": read_sources(home, task["id"], ((row or {}).get("hold_reason"),))}
         if bucket == "working":
             job.update(state="running", step="planning" if kind == "scout" else "building")
@@ -1223,7 +1224,7 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
                "started": None, "doing": None, "doing_from": None, "last_sign_of_life": None,
                "sign_of_life_from": None, "quiet": False, "until": None, "pr": row.get("pr_url"),
                "queue": queue_word(row, row["id"] in decision_ids, today),
-               "routine": routine_kind(by_id[fid]["routine"], title, row["id"]),
+               "routine": routine_kind(by_id[fid]["routine"], title),
                "read": read_sources(home, row["id"], (row.get("hold_reason"),))}
         if row["id"] in decision_ids:
             job["state"] = "waiting on you"
@@ -1292,7 +1293,7 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
             fid = factory_of((row or {}).get("repo") or os.path.basename((task.get("project") or "").rstrip("/")))
         meta = meta_values(((task.get("paths") or {}).get("meta") or {}).get("path"))
         title = titles.get(task_id) or title_of(task_id, meta)
-        kind = routine_kind(by_id[fid]["routine"], title, task_id)
+        kind = routine_kind(by_id[fid]["routine"], title)
         if kind:
             routine_of[task_id] = kind
         for event in status_events(((task.get("paths") or {}).get("status_log") or {}).get("path")):
@@ -1336,7 +1337,7 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
         completion = row.get("completion") or {}
         title = row.get("title") or row["id"]
         fid = factory_of(row.get("repo"))
-        kind = routine_kind(by_id[fid]["routine"], title, row["id"])
+        kind = routine_kind(by_id[fid]["routine"], title)
         if kind:
             routine_of[row["id"]] = kind
             if completion.get("date") == local_today:
@@ -1407,21 +1408,22 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
                               -(n["since"] or 0)))
     for factory in factories:
         factory["needs"] = [n["id"] for n in needs if n["factory"] == factory["id"]]
-        running = [j for j in factory["jobs"] if j["state"] == "running"]
+        running = [j for j in factory["jobs"] if j["state"] == "running" and not routine_folds(j)]
         if factory["needs"]:
             factory["state"] = "needs you"
         elif running:
             factory["state"] = "at work"
         else:
             factory["state"] = "idle"
-        idle_marks = [e["at"] for e in feed if e["factory"] == factory["id"] and e["at"]]
+        factory["routine_runs"] = routine_lines(factory, runs)
+        idle_marks = [e["at"] for e in feed if e["factory"] == factory["id"] and e["at"]] + \
+            [line["last"] for line in factory["routine_runs"] if line["last"]]
         factory["idle_since"] = max(idle_marks) if factory["state"] == "idle" and idle_marks else None
         factory["crew"] = {"workers": len([j for j in factory["jobs"] if j["started"]]), "busy": len(running)}
-        factory["routine_runs"] = routine_lines(factory, runs)
 
     if other in factories and not other["jobs"] and not other["needs"]:
         factories.remove(other)
-    running_total = sum(1 for f in factories for j in f["jobs"] if j["state"] == "running")
+    running_total = sum(1 for f in factories for j in f["jobs"] if j["state"] == "running" and not routine_folds(j))
     idle_total = sum(1 for f in factories if f["state"] == "idle")
     queue = queue_counts([j for f in factories for j in f["jobs"]])
     count_line = "%s running · %s · %s" % (
