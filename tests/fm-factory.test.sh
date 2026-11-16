@@ -1999,8 +1999,10 @@ test_enter_opens_the_factory_tab_with_its_live_workers() {
   write_world
   local out cmd
   out=$(HERDR_BIN_PATH="$BINDIR/herdr" HERDR_WORKSPACE_ID=w1 HERDR_TAB_ID=w1:t1 HERDR_SOCKET_PATH=/run/a.sock \
-    python3 "$FACTORY" open-tab sample-shop 2>&1) || fail "open-tab failed: $out"
+    FM_FACTORY_MAX_AGE=900 python3 "$FACTORY" open-tab sample-shop 2>&1) || fail "open-tab failed: $out"
   cmd=$(sed -n 2p "$CALLS")
+  assert_contains "$cmd" "FM_FACTORY_MAX_AGE=900 " "the page keeps a custom safety refresh age"
+  assert_contains "$(sed -n 4p "$CALLS")" "FM_FACTORY_MAX_AGE=900 " "a live worker copy keeps a custom safety refresh age"
   assert_equals "$(sed -n 1p "$CALLS")" "tab create --workspace w1 --label Sample Shop --focus" "the tab"
   assert_contains "$cmd" "pane run w1:p20 " "the page runs in the tab's first pane"
   assert_contains "$cmd" "fm-factory-pane.sh run --factory sample-shop --origin-tab w1:t1" "the page command"

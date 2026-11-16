@@ -3603,7 +3603,7 @@ def dig(data: Any, *paths: str) -> Optional[str]:
 
 def pane_command(home: str, *args: str) -> str:
     words = ["exec", "env", "FM_HOME=%s" % home]
-    for name in ("HERDR_BIN_PATH", "FM_FACTORY_TTL", "FM_FACTORY_QUIET_MINUTES", "FM_FACTORY_SNAPSHOT",
+    for name in ("HERDR_BIN_PATH", "FM_FACTORY_TTL", "FM_FACTORY_MAX_AGE", "FM_FACTORY_QUIET_MINUTES", "FM_FACTORY_SNAPSHOT",
                  "FM_FACTORY_PEEK", "FM_FACTORY_INBOX", "FM_FACTORY_READ", "FM_FACTORY_PANE_CONFIG_DIR"):
         if name in os.environ:
             words.append("%s=%s" % (name, os.environ[name]))
