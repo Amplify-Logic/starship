@@ -2806,7 +2806,7 @@ test_a_folded_pass_counts_as_idle_and_hides_no_other_card() {
   assert_equals "$(q .count_line)" "3 jobs running · 3 need you · 1 idle" "the folded pass is not a running job"
   local out
   out=$(python3 "$FACTORY" --plain --width 92) || fail "--plain failed"
-  assert_not_contains "$out" "idle since 07:50" "a factory with a pass running is not drawn as one idle row"
+  assert_contains "$out" "Recipe Box   idle since 07:50" "the factory reads idle since its last pass, as the count line counts it"
   has_line "$out" " ● Reminder pass 0715 stuck" "the stuck pass keeps its row while the next one runs folded"
   has_line "$out" " ↻ Reminder pass 4 runs today · last started 07:50 running" "the routine line"
   assert_not_contains "$out" "Reminder pass 0750" "the running pass folds into the routine line"

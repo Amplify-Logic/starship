@@ -2143,14 +2143,9 @@ class View:
         return (job["title"], job["read"]) if job else None
 
     @staticmethod
-    def drawn_idle(fac: Dict[str, Any]) -> bool:
-        """Whether the overview draws a factory as one idle row: idle, with no job running, folded or not."""
-        return fac["state"] == "idle" and not any(j["state"] == "running" for j in fac["jobs"])
-
-    @staticmethod
     def overview_jobs(fac: Dict[str, Any]) -> List[Dict[str, Any]]:
         """The jobs a factory shows on the overview: what is moving, and calls on you that have started."""
-        if View.drawn_idle(fac):
+        if fac["state"] == "idle" and not any(j["state"] == "running" for j in fac["jobs"]):
             return []
         folded = {ident for line in fac.get("routine_runs") or [] for ident in line["folded"]}
         return [job for job in fac["jobs"] if job["id"] not in folded and (
@@ -2185,7 +2180,7 @@ class View:
 
     def ordered(self) -> List[Dict[str, Any]]:
         factories = self.record["factories"]
-        return [f for f in factories if not self.drawn_idle(f)] + [f for f in factories if self.drawn_idle(f)]
+        return [f for f in factories if f["state"] != "idle"] + [f for f in factories if f["state"] == "idle"]
 
     # ---- pieces --------------------------------------------------------------
 
@@ -2422,13 +2417,14 @@ class View:
     def factory_lines(self, width: int, fac: Dict[str, Any]) -> List[Row]:
         band = self.here("factory", fac["id"])
         head = [S(" "), self.mark("factory", fac["id"]), S(fac["name"], "ice", True)]
-        if self.drawn_idle(fac):
-            return [row(width, head + [S("   " + self.idle_words(fac), "faint")], self.steer(fac), band=band)] + \
-                self.routine_rows(width, fac)
-        rows = [row(width, head + [S("   " + self.queue_brief(fac), "faint")], self.steer(fac), band=band)]
+        idle = fac["state"] == "idle"
+        words = self.idle_words(fac) if idle else self.queue_brief(fac)
+        rows = [row(width, head + [S("   " + words, "faint")], self.steer(fac), band=band)]
         for job in self.overview_jobs(fac):
             rows += self.job_rows(width, job, full=False)
         rows += self.routine_rows(width, fac)
+        if idle:
+            return rows
         nxt = fac.get("next")
         if nxt:
             text = [S("       next  ", "faint"), S(nxt["title"], "mist")]
@@ -2626,10 +2622,10 @@ class View:
         rows += [row(width, [S(" RIGHT NOW", "mist", True)]), row(width)]
         idle_started = False
         for fac in self.ordered():
-            if self.drawn_idle(fac) and not idle_started:
+            if fac["state"] == "idle" and not idle_started:
                 idle_started = True
             rows += self.factory_rows(width, fac)
-            if not self.drawn_idle(fac):
+            if fac["state"] != "idle":
                 rows.append(row(width))
         if idle_started:
             rows.append(row(width))
