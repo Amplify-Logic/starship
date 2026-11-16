@@ -144,6 +144,26 @@ EOF
   pass "a task's card hears that work started, its PR, a blocker and that it landed, each once, and nothing after it landed"
 }
 
+test_a_quoted_ref_is_read() {
+  local h out
+  need_tools || return 0
+  h=$(make_home quoted)
+  add_task "$h" room-q1 sample 'File it with "mothership: alpha/q1".'
+  # shellcheck disable=SC2016 # literal backticks in the body
+  add_task "$h" room-q2 sample 'Taken on for `mothership: alpha/q2`.'
+  add_task "$h" room-q3 sample "Taken on (mothership: alpha/q3)."
+  add_task "$h" room-q4 sample "Taken on as 'mothership: alpha/q4'..."
+  add_task "$h" room-q5 sample "Not a ref: notmothership: alpha/q5"
+  for out in q1 q2 q3 q4; do
+    in_home "$h" "$ADAPTER" report "room-$out" started >/dev/null 2>&1 || fail "report room-$out failed"
+  done
+  out=$(in_home "$h" "$ADAPTER" report room-q5 started 2>&1) || fail "report room-q5 failed: $out"
+  assert_equals "nothing to report: room-q5 serves no room card" "$out" "a ref glued to a word is no ref"
+  assert_equals "$(printf 'q1\nq2\nq3\nq4')" "$(sent_of "$h" | sed -E 's/^progress card=([^ ]*) .*$/\1/')" \
+    "a ref in quotes, backticks or parentheses names its card, without the closing mark or trailing dots"
+  pass "a ref quoted, backticked or parenthesised in the body still tells its card"
+}
+
 test_no_card_sends_nothing() {
   local h out
   need_tools || return 0
@@ -231,6 +251,48 @@ test_blocked_scan_tells_each_new_blocker_once() {
   pass "the blocker scan tells the card about each new blocked line once and stops following a cleaned-up task"
 }
 
+test_blocked_scan_never_waits_on_a_send() {
+  local h lock started elapsed _
+  need_tools || return 0
+  h=$(make_home scan-busy)
+  lock="$h/home/state/mothership/.task-room-t5.lock"
+  add_task "$h" room-t5 sample "mothership: alpha/c10"
+  : > "$h/home/state/room-t5.meta"
+  in_home "$h" "$ADAPTER" report room-t5 started >/dev/null 2>&1 || fail "report started failed"
+
+  # A new blocker while a send to a slow room holds the task's record.
+  touch "$h/stub/slow"
+  printf 'blocked [at=1790000700]: waiting on a login\n' >> "$h/home/state/room-t5.status"
+  in_home "$h" "$ADAPTER" report --detach room-t5 pr --pr "$PR_URL" >/dev/null 2>&1 || fail "a detached report failed"
+  for _ in $(seq 1 50); do { [ -e "$lock" ] || [ -L "$lock" ]; } && break; sleep 0.1; done
+  { [ -e "$lock" ] || [ -L "$lock" ]; } || fail "the detached send never held the task's record"
+  started=$(date +%s)
+  in_home "$h" "$ADAPTER" blocked-scan >/dev/null 2>&1 || fail "a scan beside a send failed"
+  elapsed=$(( $(date +%s) - started ))
+  [ "$elapsed" -le 1 ] || fail "the scan waited ${elapsed}s on a send to the room"
+  wait_for_sent "$h" 2 || fail "the PR send never reached the room: $(sent_of "$h")"
+  rm -f "$h/stub/slow"
+  for _ in $(seq 1 50); do { [ -e "$lock" ] || [ -L "$lock" ]; } || break; sleep 0.1; done
+  in_home "$h" "$ADAPTER" blocked-scan >/dev/null 2>&1 || fail "the next scan failed"
+  wait_for_sent "$h" 3 || fail "the blocker left for the next poll was never told: $(sent_of "$h")"
+  assert_contains "$(sent_of "$h" | sed -n 3p)" "problem card=c10" "the next poll tells the blocker"
+
+  # A cleaned-up task while its landing is still being sent.
+  touch "$h/stub/slow"
+  in_home "$h" "$ADAPTER" report --detach room-t5 merged --pr "$PR_URL" >/dev/null 2>&1 || fail "a detached merged report failed"
+  for _ in $(seq 1 50); do { [ -e "$lock" ] || [ -L "$lock" ]; } && break; sleep 0.1; done
+  rm -f "$h/home/state/room-t5.meta"
+  started=$(date +%s)
+  in_home "$h" "$ADAPTER" blocked-scan >/dev/null 2>&1 || fail "a scan beside the landing send failed"
+  elapsed=$(( $(date +%s) - started ))
+  [ "$elapsed" -le 1 ] || fail "the scan waited ${elapsed}s to stop following a cleaned-up task"
+  wait_for_sent "$h" 4 || fail "the landing never reached the room: $(sent_of "$h")"
+  for _ in $(seq 1 50); do { [ -e "$lock" ] || [ -L "$lock" ]; } || break; sleep 0.1; done
+  in_home "$h" "$ADAPTER" blocked-scan >/dev/null 2>&1 || fail "the scan after the landing failed"
+  [ ! -e "$h/home/state/mothership/tasks/room-t5.json" ] || fail "a cleaned-up task is still followed"
+  pass "the blocker scan never waits on a send that holds a task, and picks the task up on the next poll"
+}
+
 # The real lifecycle steps. Sets PROJ_DIR WT_DIR FAKEBIN for one case home.
 make_lifecycle() {  # <dir> <task-id>
   local h=$1 task=$2
@@ -316,8 +378,10 @@ test_a_local_landing_reports_to_the_card() {
 fm_test_run \
   test_help \
   test_report_tells_the_card_each_event_once \
+  test_a_quoted_ref_is_read \
   test_no_card_sends_nothing \
   test_a_refused_send_tells_the_first_mate \
   test_blocked_scan_tells_each_new_blocker_once \
+  test_blocked_scan_never_waits_on_a_send \
   test_lifecycle_steps_report_to_the_card \
   test_a_local_landing_reports_to_the_card

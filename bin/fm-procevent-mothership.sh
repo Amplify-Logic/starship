@@ -83,7 +83,8 @@
 # blocked-scan
 #            Run report blocked, detached, once for each new blocked: line in
 #            the status log of each task a card follows; bin/fm-watch.sh runs
-#            it on every poll while any task is followed.
+#            it on every poll while any task is followed. It never waits: a
+#            task whose record a send holds is left for the next poll.
 # source     The blocking child the runner executes; never run it in a turn.
 # autohandle The runner's seam right after capture: move this monitor's place
 #            forward to the end of the captured batch and acknowledge the
@@ -1074,11 +1075,12 @@ cmd_answer() {
 tasks_dir() { printf '%s/tasks\n' "$MS_STATE"; }
 task_record() { printf '%s/%s.json\n' "$(tasks_dir)" "$1"; }  # <task-id>
 
-with_task_lock() {  # <task-id> <command...>
-  local lock rc
+with_task_lock() {  # [--try] <task-id> <command...>
+  local acquire=fm_lock_acquire_wait lock rc
+  [ "$1" != --try ] || { acquire=fm_lock_try_acquire; shift; }
   lock="$MS_STATE/.task-$1.lock"
   shift
-  fm_lock_acquire_wait "$lock" || return 1
+  "$acquire" "$lock" || return 1
   rc=0
   "$@" || rc=$?
   fm_lock_release "$lock"
@@ -1111,8 +1113,8 @@ task_card() {  # <task-id>
   body=$(printf '%s\n' "$shown" | sed -n 's/^  body: //p' | head -n 1 \
     | jq -Rr '. as $raw | (try fromjson catch $raw) | if type == "string" then . else tostring end' 2>/dev/null) || return 2
   ref=$(printf '%s\n' "$body" \
-    | LC_ALL=C grep -oE '(^|[[:space:]])mothership: [A-Za-z0-9][A-Za-z0-9_-]{0,47}/[A-Za-z0-9_.-]{1,80}' \
-    | head -n 1 | sed -e 's/^[[:space:]]*mothership: //' -e 's/\.*$//')
+    | LC_ALL=C grep -oE "(^|[[:space:]\"'\`(])mothership: [A-Za-z0-9][A-Za-z0-9_-]{0,47}/[A-Za-z0-9_.-]{1,80}" \
+    | head -n 1 | sed -e 's/^[^m]*mothership: //' -e 's/\.*$//')
   room=${ref%%/*} card=${ref#*/}
   room_valid "$room" && [[ "$card" =~ ^[A-Za-z0-9_.-]{1,80}$ ]] || return 1
   repo=$(printf '%s\n' "$shown" | sed -n 's/^  repo: //p' | head -n 1 \
@@ -1263,14 +1265,14 @@ cmd_blocked_scan() {
     task=${task%.json}
     fm_pr_task_id_valid "$task" || continue
     if [ ! -f "$STATE/$task.meta" ]; then
-      with_task_lock "$task" rm -f -- "$rec" || true
+      with_task_lock --try "$task" rm -f -- "$rec" || true
       continue
     fi
     sig=$(newest_blocked "$task")
     [ -n "$sig" ] || continue
     seen=$(jq -r '.blocked // "" | tostring' "$rec" 2>/dev/null || true)
     [ "$sig" != "$seen" ] || continue
-    with_task_lock "$task" note_blocked "$task" "$sig" || continue
+    with_task_lock --try "$task" note_blocked "$task" "$sig" || continue
     cmd_report --detach "$task" blocked
   done
 }
