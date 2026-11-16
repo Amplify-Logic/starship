@@ -1798,6 +1798,43 @@ SH
   pass "bootstrap arms the rooms config/mothership-monitor switches on and reports a malformed line"
 }
 
+# A switched-on opt-in skill is linked by a full bootstrap run, as
+# bin/fm-opt-in-skills.sh documents: .agents/skills/<skill> -> ../opt-in-skills/<skill>.
+test_opt_in_skill_is_linked_by_bootstrap() {
+  local case_dir fakebin out
+  case_dir="$TMP_ROOT/opt-in-skills"
+  mkdir -p "$case_dir/home/config" "$case_dir/home/data" "$case_dir/home/state" \
+    "$case_dir/home/.agents/skills" "$case_dir/home/.agents/opt-in-skills/adhd"
+  printf '%s\n' manual > "$case_dir/home/config/backlog-backend"
+  printf -- '---\nname: adhd\n---\n' > "$case_dir/home/.agents/opt-in-skills/adhd/SKILL.md"
+  : > "$case_dir/home/config/adhd"
+  fakebin=$(make_fake_toolchain "$case_dir")
+  add_real_jq "$fakebin"
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
+  [ -z "$out" ] || fail "bootstrap with a switched-on opt-in skill printed: $out"
+  assert_equals '../opt-in-skills/adhd' "$(readlink "$case_dir/home/.agents/skills/adhd")" \
+    "bootstrap must link the switched-on opt-in skill"
+  pass "bootstrap links an opt-in skill its home switched on"
+}
+
+# An account registry whose default names no defined account is reported on
+# the documented ACCOUNTS line, even by a detect-only local run.
+test_accounts_registry_is_validated_by_bootstrap() {
+  local case_dir fakebin out
+  case_dir="$TMP_ROOT/accounts"
+  mkdir -p "$case_dir/home/config" "$case_dir/home/data" "$case_dir/home/state"
+  printf '%s\n' manual > "$case_dir/home/config/backlog-backend"
+  printf '{"claude":{"accounts":{"work":{}},"default":"home"}}\n' > "$case_dir/home/config/accounts.json"
+  fakebin=$(make_fake_toolchain "$case_dir")
+  add_real_jq "$fakebin"
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+    FM_BOOTSTRAP_DETECT_ONLY=1 FM_BOOTSTRAP_NETWORK=skip FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
+  assert_equals 'ACCOUNTS: invalid config/accounts.json - default names an account that is not defined: claude:home' \
+    "$out" "bootstrap must report an undefined default account"
+  pass "bootstrap reports an account registry whose default is not defined"
+}
+
 test_preferred_provider_validation() {
   local case_dir fakebin out value key
   case_dir="$TMP_ROOT/preferred-provider"
@@ -2258,5 +2295,7 @@ test_tasks_axi_verdict_handoff_is_consumed_once
 test_crew_dispatch_active_rules_are_verbose_bootstrap_info
 test_pr_health_monitor_arms_only_with_its_flag
 test_mothership_monitor_follows_its_setting
+test_opt_in_skill_is_linked_by_bootstrap
+test_accounts_registry_is_validated_by_bootstrap
 test_preferred_provider_validation
 test_crew_dispatch_validation

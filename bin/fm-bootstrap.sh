@@ -1836,9 +1836,10 @@ local_phase && detect_local_config
 # Read-only checks from bootstrap hooks: this checkout's built-in hooks and this
 # home's private add-on (bin/fm-addon.sh owns the hook points). Each hook owns
 # its own check, and a home whose hooks have nothing to say prints nothing.
+# Each hook gets 40s by default, above the toolchain drift hook's five 5s probes.
 FM_HOME="$FM_HOME" FM_ROOT_OVERRIDE="$FM_ROOT" FM_CONFIG_OVERRIDE="$CONFIG" FM_STATE_OVERRIDE="$STATE" \
   FM_DATA_OVERRIDE="$DATA" FM_PROJECTS_OVERRIDE="$PROJECTS" FM_BOOTSTRAP_NETWORK="$FM_BOOTSTRAP_NETWORK_PHASE" \
-  "$SCRIPT_DIR/fm-addon.sh" run bootstrap
+  FM_ADDON_HOOK_TIMEOUT="${FM_ADDON_HOOK_TIMEOUT:-40}" "$SCRIPT_DIR/fm-addon.sh" run bootstrap
 local_phase && [ -e "$CONFIG/record-hygiene" ] && record_hygiene_report
 
 if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then
@@ -1882,8 +1883,9 @@ if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then
   # x_mode_setup writes local Relay artifacts only and never leaves the machine.
   local_phase && x_mode_setup
   # Local upkeep from bootstrap-sweep hooks, owned like the read-only ones above.
+  # Each hook gets 180s by default, room for several 20s Mothership link calls.
   local_phase && FM_HOME="$FM_HOME" FM_ROOT_OVERRIDE="$FM_ROOT" FM_CONFIG_OVERRIDE="$CONFIG" \
-    FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" FM_ADDON_HOOK_TIMEOUT="${FM_ADDON_HOOK_TIMEOUT:-60}" \
+    FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" FM_ADDON_HOOK_TIMEOUT="${FM_ADDON_HOOK_TIMEOUT:-180}" \
     "$SCRIPT_DIR/fm-addon.sh" run bootstrap-sweep
   # Adopt existing durable contribution links without making a network call.
   # Detection-only startup must never publish a check registration.
