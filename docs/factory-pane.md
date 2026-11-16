@@ -226,6 +226,7 @@ A job nobody has started also says where it stands in the queue: its `queue` is 
 
 The pane text check reads each running worker's pane through `bin/fm-peek.sh` once per record and remembers when it last changed in `state/factory/activity.json`.
 Each full refresh also keeps the fleet reading it was built from in `state/factory/basis.json`, which a rebuild of the owner's calls starts from.
+When that reading is missing or unreadable, the background rebuild of the owner's calls is a full refresh instead, and it waits out and records the same rest as any other.
 
 ### Stating the current step
 

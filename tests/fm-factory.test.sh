@@ -1272,6 +1272,32 @@ test_a_parked_call_leaves_the_pane_within_seconds_after_a_slow_refresh() {
   pass "factory pane: a parked call leaves the pane within seconds after a slow refresh (${took}s)"
 }
 
+# Without a fleet reading to start from, a background rebuild of the owner's
+# calls is a whole refresh, so it waits out the rest after the last one and
+# records its own.
+test_a_calls_rebuild_without_a_reading_rests_like_a_whole_refresh() {
+  local last
+  reset_case
+  last="$HOME_FIX/state/factory/rebuild.last"
+  write_registry
+  write_world
+  export FM_FACTORY_INBOX="$BINDIR/counting-inbox"
+  FM_FACTORY_NOW='' python3 "$FACTORY" refresh >/dev/null || fail "the first record could not be built"
+  rm -f "$HOME_FIX/state/factory/basis.json"
+  printf '{"ended": %s, "took": 90, "failed": false}\n' "$(date +%s)" > "$last" \
+    || fail "the slow refresh could not be recorded"
+  : > "$HOME_FIX/reads"
+  FM_FACTORY_NOW='' python3 "$FACTORY" refresh-calls >/dev/null || fail "the calls rebuild failed"
+  assert_equals "0" "$(grep -c '^start' "$HOME_FIX/reads")" "a calls rebuild without a reading did not wait out the rest"
+  [ ! -e "$HOME_FIX/state/factory/basis.json" ] || fail "a calls rebuild without a reading refreshed during the rest"
+  rm -f "$last"
+  FM_FACTORY_NOW='' python3 "$FACTORY" refresh-calls >/dev/null || fail "the calls rebuild failed"
+  export FM_FACTORY_INBOX="$BINDIR/inbox"
+  [ -s "$HOME_FIX/state/factory/basis.json" ] || fail "a calls rebuild without a reading made none"
+  assert_equals "false" "$(jq -r .failed "$last" 2>/dev/null)" "the whole refresh it ran recorded no rest"
+  pass "factory pane: a calls rebuild without a reading rests like a whole refresh"
+}
+
 # A calls rebuild that read the fleet before a full refresh finished must not
 # put the older workers back over the newer record.
 test_a_calls_rebuild_on_an_older_reading_keeps_the_newer_record() {
@@ -2653,6 +2679,7 @@ fm_test_run \
   test_a_parked_decision_leaves_the_live_pane_within_seconds \
   test_a_parked_call_leaves_the_pane_within_seconds_after_a_slow_refresh \
   test_a_calls_rebuild_on_an_older_reading_keeps_the_newer_record \
+  test_a_calls_rebuild_without_a_reading_rests_like_a_whole_refresh \
   test_an_open_pane_reads_nothing_again_while_nothing_changes \
   test_open_panes_never_rebuild_side_by_side \
   test_a_whole_refresh_waits_for_a_change_in_what_it_reads \

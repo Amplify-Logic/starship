@@ -31,7 +31,9 @@ Usage:
                                           page pane, the way open-tab does
   fm-factory.py refresh                   rebuild the cached record once
   fm-factory.py refresh-calls             rebuild it with fresh owner's calls on
-                                          the last full refresh's workers
+                                          the last full refresh's workers, or,
+                                          with no such reading, refresh it whole
+                                          once the last refresh's rest is over
 
 One record, two readers: every word on screen comes from the record, and every
 state is a word, so an agent reading the pane as text loses nothing.
@@ -1490,6 +1492,10 @@ def side_by_side(*reads):
     return results
 
 
+class NoBasis(RuntimeError):
+    """There is no usable fleet reading (basis.json) to rebuild the owner's calls on."""
+
+
 def refresh_calls(home: str) -> Dict[str, Any]:
     """Rebuild the record with fresh owner's calls on the last slow fleet reading.
 
@@ -1498,13 +1504,15 @@ def refresh_calls(home: str) -> Dict[str, Any]:
     backlog and the inbox, so those are read again (side by side) and the record
     is rebuilt on the workers as the last full refresh read them: the next call
     is on screen within a second or two instead of at the next full refresh.
+    Without a usable reading it raises NoBasis, since only a full refresh can
+    make one.
     """
     try:
         basis = json.loads(read_text(basis_path(home), 256_000_000) or "null")
     except ValueError:
         basis = None
     if not isinstance(basis, dict) or not isinstance(basis.get("snapshot"), dict):
-        return refresh(home)
+        raise NoBasis("no fleet reading to rebuild the owner's calls on")
     signal_at_start = calls_signal(home)
     read_at = time.time()
     backlog, axi, notes, reconciles = side_by_side(lambda: load_backlog(home), lambda: axi_backlog(home),
@@ -3726,8 +3734,12 @@ def main(argv: List[str]) -> int:
         if args.command in ("refresh", "refresh-calls"):
             if args.command == "refresh":
                 run_rebuild(home, refresh, rested=True)
-            else:
+                return 0
+            try:
                 run_rebuild(home, refresh_calls, rested=False)
+            except NoBasis:
+                if rebuild_wait(home) <= 0:
+                    run_rebuild(home, refresh, rested=True)
             return 0
         if args.command == "view":
             if args.origin_tab:
