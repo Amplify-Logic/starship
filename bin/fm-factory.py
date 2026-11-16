@@ -1449,7 +1449,9 @@ def refresh(home: str) -> Dict[str, Any]:
     # calls up from this same reading rather than publish them behind.
     if kept and signal_at_start and calls_signal(home) != signal_at_start:
         try:
-            return refresh_calls(home)
+            caught_up = refresh_calls(home)
+            if caught_up is not None:
+                return caught_up
         except (RuntimeError, OSError, ValueError, subprocess.SubprocessError):
             pass
     try:
@@ -1505,11 +1507,7 @@ def read_basis(home: str) -> Optional[Dict[str, Any]]:
     return basis
 
 
-class NoBasis(RuntimeError):
-    """There is no usable fleet reading (basis.json) to rebuild the owner's calls on."""
-
-
-def refresh_calls(home: str) -> Dict[str, Any]:
+def refresh_calls(home: str) -> Optional[Dict[str, Any]]:
     """Rebuild the record with fresh owner's calls on the last slow fleet reading.
 
     The slow part of a refresh is reading the workers. A decision answered,
@@ -1517,12 +1515,12 @@ def refresh_calls(home: str) -> Dict[str, Any]:
     backlog and the inbox, so those are read again (side by side) and the record
     is rebuilt on the workers as the last full refresh read them: the next call
     is on screen within a second or two instead of at the next full refresh.
-    Without a usable reading it raises NoBasis, since only a full refresh can
+    Without a usable reading it returns None, since only a full refresh can
     make one.
     """
     basis = read_basis(home)
     if basis is None:
-        raise NoBasis("no fleet reading to rebuild the owner's calls on")
+        return None
     signal_at_start = calls_signal(home)
     read_at = time.time()
     backlog, axi, notes, reconciles = side_by_side(lambda: load_backlog(home), lambda: axi_backlog(home),
@@ -1776,7 +1774,9 @@ def current_record(home: str, fresh: bool) -> Dict[str, Any]:
             if not signal or record.get("calls_signal") == signal:
                 return record
             try:
-                return refresh_calls(home)
+                caught_up = refresh_calls(home)
+                if caught_up is not None:
+                    return caught_up
             except (RuntimeError, OSError, ValueError, subprocess.SubprocessError):
                 pass
     return refresh(home)
@@ -3776,11 +3776,8 @@ def main(argv: List[str]) -> int:
             if args.command == "refresh":
                 run_rebuild(home, refresh, rested=True)
                 return 0
-            try:
-                run_rebuild(home, refresh_calls, rested=False)
-            except NoBasis:
-                if rebuild_wait(home) <= 0:
-                    run_rebuild(home, refresh, rested=True)
+            if run_rebuild(home, refresh_calls, rested=False) is None and rebuild_wait(home) <= 0:
+                run_rebuild(home, refresh, rested=True)
             return 0
         if args.command == "view":
             if args.origin_tab:
