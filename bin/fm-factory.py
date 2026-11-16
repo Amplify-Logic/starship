@@ -96,7 +96,9 @@ recorded in no file, so without it the pane would go stale.
 Every pane and live copy of a home starts its rebuilds, full or of the
 owner's calls, under one lock the rebuild holds until it exits, so two never
 run side by side, and after a full refresh the next waits as long as that one
-took, at least a minute on a busy machine (rebuild_wait).
+took, at least a minute on a busy machine (rebuild_wait). A pane that opens
+with no record waits for that lock and builds the first one only if no other
+pane built it meanwhile (first_record).
 The owner's calls cannot wait that long: once a second the pane reads the
 owner's calls signal (bin/fm-owner-calls-signal-lib.sh), and when it has moved
 past the one the record was built under it rebuilds the record from basis.json
@@ -1492,6 +1494,17 @@ def side_by_side(*reads):
     return results
 
 
+def read_basis(home: str) -> Optional[Dict[str, Any]]:
+    """The fleet reading the last full refresh kept (basis.json), or None when it is missing or unreadable."""
+    try:
+        basis = json.loads(read_text(basis_path(home), 256_000_000) or "null")
+    except ValueError:
+        return None
+    if not isinstance(basis, dict) or not isinstance(basis.get("snapshot"), dict):
+        return None
+    return basis
+
+
 class NoBasis(RuntimeError):
     """There is no usable fleet reading (basis.json) to rebuild the owner's calls on."""
 
@@ -1507,11 +1520,8 @@ def refresh_calls(home: str) -> Dict[str, Any]:
     Without a usable reading it raises NoBasis, since only a full refresh can
     make one.
     """
-    try:
-        basis = json.loads(read_text(basis_path(home), 256_000_000) or "null")
-    except ValueError:
-        basis = None
-    if not isinstance(basis, dict) or not isinstance(basis.get("snapshot"), dict):
+    basis = read_basis(home)
+    if basis is None:
         raise NoBasis("no fleet reading to rebuild the owner's calls on")
     signal_at_start = calls_signal(home)
     read_at = time.time()
@@ -1619,13 +1629,14 @@ def refresh_due(home: str, record: Dict[str, Any]) -> bool:
     return read_text(inputs_path(home), 256).strip() != inputs_digest(home)
 
 
-def rebuild_lock(home: str) -> Optional[int]:
-    """Take the home's one rebuild lock without waiting: its descriptor, or None while a rebuild holds it.
+def rebuild_lock(home: str, wait: bool = False) -> Optional[int]:
+    """Take the home's one rebuild lock: its descriptor, or None while a rebuild holds it and not <wait>.
 
     Every pane and live copy of a home starts its rebuilds, whole or of the
     owner's calls only, under this one lock, and the rebuild it starts inherits
     the descriptor and holds the lock until it exits, however long it runs and
-    however it ends, so two never run side by side.
+    however it ends, so two never run side by side. A pane building its first
+    record waits for the lock and holds it itself (first_record).
     """
     try:
         os.makedirs(pane_dir(home), exist_ok=True)
@@ -1633,7 +1644,7 @@ def rebuild_lock(home: str) -> Optional[int]:
     except OSError:
         return None
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fcntl.flock(fd, fcntl.LOCK_EX if wait else fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
         os.close(fd)
         return None
@@ -1672,8 +1683,8 @@ def rebuild_wait(home: str) -> float:
     return ended + rest - time.time()
 
 
-def run_rebuild(home: str, build, rested: bool) -> None:
-    """Run one rebuild, <build>(home), and when it is <rested> record when it ended, how long it took and whether it failed.
+def run_rebuild(home: str, build, rested: bool) -> Dict[str, Any]:
+    """Run one rebuild, <build>(home), return its record, and when it is <rested> record when it ended, how long it took and whether it failed.
 
     A rebuild a pane started holds that pane's rebuild lock (FM_FACTORY_REBUILD_LOCK
     names the inherited descriptor) and stops itself after REBUILD_LIMIT
@@ -1686,8 +1697,9 @@ def run_rebuild(home: str, build, rested: bool) -> None:
         signal.alarm(REBUILD_LIMIT)
     began, failed = time.time(), True
     try:
-        build(home)
+        record = build(home)
         failed = False
+        return record
     finally:
         signal.alarm(0)
         if rested:
@@ -1721,8 +1733,33 @@ def refresh_in_background(home: str) -> None:
 
 
 def refresh_calls_in_background(home: str) -> None:
-    """Start one detached refresh of the owner's calls when no rebuild is under way (in_background)."""
+    """Start one detached refresh of the owner's calls when no rebuild is under way (in_background).
+
+    With no fleet reading to rebuild them on (read_basis), only a full refresh
+    can, so it is asked for instead, under the same rest (refresh_in_background).
+    """
+    if read_basis(home) is None:
+        refresh_in_background(home)
+        return
     in_background(home, "refresh-calls")
+
+
+def first_record(home: str) -> Dict[str, Any]:
+    """The cached record, or one built under the home's rebuild lock when there is none.
+
+    It waits for the lock, so panes opened together on a home with no record
+    build one record between them: each looks at the cache again once it holds
+    the lock, and only the first finds it empty.
+    """
+    record = cached(home)
+    if record is not None:
+        return record
+    fd = rebuild_lock(home, wait=True)
+    try:
+        return cached(home) or run_rebuild(home, refresh, rested=True)
+    finally:
+        if fd is not None:
+            os.close(fd)
 
 
 def current_record(home: str, fresh: bool) -> Dict[str, Any]:
@@ -2914,9 +2951,7 @@ class Pane:
 
     def __init__(self, home: str, opened: Optional[str], in_tab: bool, item: Optional[str] = None):
         self.home = home
-        record = cached(home)
-        if record is None:
-            record = refresh(home)
+        record = first_record(home)
         self.view = View(record, opened=opened, in_tab=in_tab, item=item, voice=voice_ready(home))
         self.voice: Optional[Voice] = None   # the spoken note being heard or written down
         # A pane stopped while it listened can leave the part it was writing down.
@@ -3572,7 +3607,7 @@ def pane_command(home: str, *args: str) -> str:
 
 def open_tab(home: str, fid: str) -> Tuple[bool, str]:
     """Open (or focus) one factory's tab: its page left, its live workers right."""
-    record = cached(home) or refresh(home)
+    record = first_record(home)
     factory = next((f for f in record["factories"] if f["id"] == fid), None)
     if factory is None:
         return False, "no factory %s" % fid
@@ -3625,7 +3660,7 @@ def split_workers(home: str, factory: Dict[str, Any], page: str) -> Tuple[bool, 
 
 def open_workers(home: str, fid: str, page: str) -> Tuple[bool, str]:
     """The workers command: live copies of one factory's running workers beside its page pane <page>."""
-    record = cached(home) or refresh(home)
+    record = first_record(home)
     factory = next((f for f in record["factories"] if f["id"] == fid), None)
     if factory is None:
         return False, "no factory %s" % fid

@@ -1298,6 +1298,47 @@ test_a_calls_rebuild_without_a_reading_rests_like_a_whole_refresh() {
   pass "factory pane: a calls rebuild without a reading rests like a whole refresh"
 }
 
+# While a whole refresh's rest lasts and there is no fleet reading to rebuild
+# the owner's calls on, a pane whose calls moved starts no process at all: it
+# would only find there is nothing it may do yet.
+test_a_pane_with_no_reading_starts_nothing_while_it_rests() {
+  local shim spawns real
+  reset_case
+  write_registry
+  write_world
+  FM_FACTORY_NOW='' python3 "$FACTORY" refresh >/dev/null || fail "the first record could not be built"
+  rm -f "$HOME_FIX/state/factory/basis.json"
+  printf '{"ended": %s, "took": 90, "failed": false}\n' "$(date +%s)" > "$HOME_FIX/state/factory/rebuild.last" \
+    || fail "the slow refresh could not be recorded"
+  date +%s.$$.moved > "$HOME_FIX/state/.owner-calls-changed"
+  shim="$TMP_ROOT/case$CASE/shim" spawns="$TMP_ROOT/case$CASE/spawns" real=$(command -v python3)
+  mkdir -p "$shim" && : > "$spawns"
+  cat > "$shim/python3" <<SH
+#!/bin/sh
+case "\${1:-}" in *fm-factory.py) printf '%s\n' "\${2:-}" >> "$spawns" ;; esac
+exec "$real" "\$@"
+SH
+  chmod +x "$shim/python3"
+  PATH="$shim:$PATH" FM_FACTORY_NOW='' open_panes 1 5 || fail "the pane could not be opened"
+  assert_equals "view" "$(sort -u "$spawns" | tr '\n' ' ' | sed 's/ $//')" "a resting pane with no reading started a rebuild process"
+  pass "factory pane: a pane with no reading starts nothing while it rests"
+}
+
+# Panes opened together on a home with no record build one first record
+# between them, not one each side by side.
+test_panes_opened_with_no_record_build_one_first_record() {
+  local first
+  reset_case
+  write_registry
+  write_world
+  export FM_FACTORY_INBOX="$BINDIR/counting-inbox"
+  FM_FACTORY_NOW='' FM_FACTORY_TEST_READ_SLOW=1 open_panes 3 1 || fail "the panes could not be opened"
+  export FM_FACTORY_INBOX="$BINDIR/inbox"
+  first=$(awk '/^mark$/ { exit } $1 == "start" { n++ } END { print n + 0 }' "$HOME_FIX/reads")
+  assert_equals "1" "$first" "panes opened together built more than one first record"
+  pass "factory pane: panes opened with no record build one first record"
+}
+
 # A calls rebuild that read the fleet before a full refresh finished must not
 # put the older workers back over the newer record.
 test_a_calls_rebuild_on_an_older_reading_keeps_the_newer_record() {
@@ -2680,6 +2721,8 @@ fm_test_run \
   test_a_parked_call_leaves_the_pane_within_seconds_after_a_slow_refresh \
   test_a_calls_rebuild_on_an_older_reading_keeps_the_newer_record \
   test_a_calls_rebuild_without_a_reading_rests_like_a_whole_refresh \
+  test_a_pane_with_no_reading_starts_nothing_while_it_rests \
+  test_panes_opened_with_no_record_build_one_first_record \
   test_an_open_pane_reads_nothing_again_while_nothing_changes \
   test_open_panes_never_rebuild_side_by_side \
   test_a_whole_refresh_waits_for_a_change_in_what_it_reads \
