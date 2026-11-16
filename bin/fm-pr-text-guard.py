@@ -29,14 +29,26 @@
 #
 # WHAT IS CHECKED. Only a Bash command that publishes text: gh or gh-axi
 # `pr|issue create|new|edit|comment|review|close|reopen|merge`, a `gh api` call that sends
-# fields or an input file, and `no-mistakes axi run|respond`, whose intent and
-# answers reach the PR the pipeline writes. Every other command passes
-# untouched, and so does every other tool. The text checked is the whole
+# a body (a -f, -F, --field, --raw-field or --input flag, or a -X/--method other
+# than GET or HEAD), and `no-mistakes axi run|respond`, whose intent and
+# answers reach the PR the pipeline writes. Each gh call is read on its own,
+# between shell operators, so a flag given to another command (`grep -F`,
+# `rm -f`) never makes a read-only `gh api` call publish; a gh call inside a
+# word that holds a command of its own, such as a `bash -c` script, counts too.
+# The body of a quoted heredoc that a plain `cat` writes to a file or prints
+# never runs, so it is left out when finding gh calls and their repositories.
+# A command whose words still cannot be parsed is judged on its whole text.
+# Every other command passes untouched, whatever files it names, and so does
+# every other tool. The text checked is the whole
 # command, so inline titles, bodies, heredocs and variables set earlier in the
 # same command all count, plus every existing file the command names anywhere:
 # a body or input flag, a redirect, a `cat` or `$(cat ...)`, or a pipe into
 # `--body-file -`. A listed word in a path or branch name of such a command is
-# refused too, because a branch name is published. Token shapes are checked
+# refused too, because a branch name is published. The repository a gh call
+# names as its target (a -R/--repo value, a GH_REPO= assignment before gh, a
+# gh api repos/<owner>/<repo> path, or a PR or issue URL given as the target)
+# is where the text goes, not text it publishes, so its own name is blanked
+# before the check; the same name elsewhere in the text still counts. Token shapes are checked
 # only in the command and in the files it sends as content: a --body-file, -F
 # or --input value, an @file value of -f, -F, --field or --raw-field, a
 # `$(cat FILE)`, `$(<FILE)` or backtick `cat FILE` outside single quotes and
@@ -55,10 +67,14 @@
 # or on one whose visibility or name cannot be read; other public repositories
 # may hold them. When the
 # command calls gh or gh-axi as a word of its own, or names a publishing gh
-# form that is not part of a no-mistakes command, those repositories are every
-# --repo/-R value, GH_REPO= value, PR or issue URL argument and
-# repos/<owner>/<repo> path among its words, plus gh's own default for the
-# working directory, which `gh repo view` reads there. A gh form named only
+# form that is not part of a no-mistakes command, those repositories are, for
+# each gh call that publishes, the repositories it names as its target, or
+# gh's own default for the working directory, which `gh repo view` reads
+# there, when it names none, plus any other PR or issue URL among its words
+# and every GH_REPO= value in the command. A command whose words cannot be
+# parsed, or whose publishing gh form cannot be placed in a call, reaches
+# every --repo/-R value, GH_REPO= value, PR or issue URL argument and
+# repos/<owner>/<repo> path among its words plus gh's default. A gh form named only
 # inside quoted text of a no-mistakes command, such as its intent, adds none.
 # For `no-mistakes axi run|respond`, the repository is the owner/repo of the
 # origin remote, whether its host is github.com or a dotless SSH alias; an
@@ -118,6 +134,11 @@ HEREDOC = re.compile(r"<<(-?)\s*(?:'([^'\n]*)'|\"([^\"\n]*)\"|\\?([^\s;&|<>()'\"
 PATHLIKE = re.compile(r"[^\s'\"`()<>|;&=]+")
 REMOTE = re.compile(r"^(?:[a-z+]+://)?(?:[^@/]+@)?([^/:]+)[:/]+(.+?)(?:\.git)?/?$")
 HIT = re.compile(r"^LEAK_HIT: ([a-z-]+): (.*)$")
+NESTED_GH = re.compile(r"(?:^|[\s/;&|(`])gh(?:-axi)?\s")
+DATA_FILE = r"(?:>>?[ \t]*[^\s;&|<>()`$'\"]+[ \t]*)?"
+DATA_HEREDOC = re.compile(r"(?:^|(?<=[\n;&|]))[ \t]*cat[ \t]+" + DATA_FILE
+                          + r"<<(?P<dash>-?)[ \t]*(?:'(?P<q1>[^'\n]+)'|\"(?P<q2>[^\"\n]+)\")[ \t]*" + DATA_FILE + r"(?=\n)")
+TEXT_VERBS = ("create", "new", "edit", "comment", "review", "close", "reopen", "merge")
 
 
 class UnparsedCommand(Exception):
@@ -159,10 +180,234 @@ def opts(argv, names):
     return found
 
 
+def is_operator(word):
+    return bool(word) and set(word) <= set(SEPARATORS)
+
+
+def stages(words):
+    """The words split at each run of shell operators."""
+    out = [[]]
+    for word in words:
+        if is_operator(word):
+            out.append([])
+        else:
+            out[-1].append(word)
+    return out
+
+
+def gh_word(word):
+    return os.path.basename(word.strip("`")) in ("gh", "gh-axi")
+
+
+def repo_flag(args, i):
+    """(the repository a -R/--repo flag at args[i] names, words it takes) or (None, 0)."""
+    word = args[i]
+    if word in ("-R", "--repo"):
+        return (args[i + 1], 2) if i + 1 < len(args) else (None, 1)
+    if word.startswith("--repo="):
+        return word.split("=", 1)[1], 1
+    if word.startswith("-R") and not word.startswith("--") and len(word) > 2:
+        return (word[3:] if word.startswith("-R=") else word[2:]), 1
+    return None, 0
+
+
+def api_sends(args):
+    """Whether gh api args send a body: a field or input flag, or a method other than GET or HEAD."""
+    def method_sends(method):
+        return method.lstrip("=").upper() not in ("GET", "HEAD")
+    for i, word in enumerate(args):
+        flag, eq, value = word.partition("=")
+        if flag in ("--input", "--field", "--raw-field"):
+            return True
+        if flag == "--method":
+            if method_sends(value if eq else (args[i + 1] if i + 1 < len(args) else "")):
+                return True
+        elif word.startswith("-") and not word.startswith("--"):
+            for k, letter in enumerate(word[1:]):
+                if letter in "fF":
+                    return True
+                if letter == "X":
+                    rest = word[k + 2:]
+                    if method_sends(rest or (args[i + 1] if i + 1 < len(args) else "")):
+                        return True
+                    break
+                if letter != "i":
+                    break
+    return False
+
+
+def gh_call(args):
+    """(publishes, explicit repositories, other repositories, whether it is a pr or issue form) for the words
+    after one gh or gh-axi word."""
+    explicit, i = [], 0
+    while i < len(args):
+        repo, used = repo_flag(args, i)
+        if not used:
+            break
+        explicit += [repo] if repo else []
+        i += used
+    sub = args[i] if i < len(args) else ""
+    rest = args[i + 1:]
+    if sub == "api":
+        explicit += [m.group(1) for m in (ENDPOINT_REPO.match(w) for w in rest if not any(c.isspace() for c in w)) if m]
+        return api_sends(rest), explicit, [], False
+    if sub not in ("pr", "issue"):
+        return False, explicit, [], False
+    j = 0
+    while j < len(rest):
+        repo, used = repo_flag(rest, j)
+        if not used:
+            break
+        explicit += [repo] if repo else []
+        j += used
+    verb, rest = (rest[j], rest[j + 1:]) if j < len(rest) else ("", [])
+    k = 0
+    while k < len(rest):
+        _, used = repo_flag(rest, k)
+        if used:
+            k += used
+        elif verb == "review" and rest[k] in ("--approve", "-a", "--request-changes", "-r", "--comment", "-c"):
+            k += 1
+        else:
+            break
+    if k < len(rest) and URL_REPO.fullmatch(rest[k]):
+        explicit.append(URL_REPO.fullmatch(rest[k]).group(1))
+    explicit += [r for r in (repo_flag(rest, n)[0] for n in range(len(rest))) if r]
+    others = [m.group(1) for m in (URL_REPO.fullmatch(w) for w in rest) if m]
+    return verb in TEXT_VERBS, list(dict.fromkeys(explicit)), others, True
+
+
+def gh_calls(words, depth=0):
+    """Each gh or gh-axi call among the words, as gh_call reads it,
+    including one inside a word that holds a command of its own, such as a bash -c script, a $(...) in double
+    quotes or a heredoc line; None when such a word cannot be parsed or nests too deep. A word of a no-mistakes
+    stage is its intent or answer, never a command of its own."""
+    if depth > 8:
+        return None
+    calls = []
+    for stage in stages(words):
+        if not any(os.path.basename(w) == "no-mistakes" for w in stage):
+            for word in stage:
+                if any(c.isspace() for c in word) and NESTED_GH.search(word):
+                    inner = tokens(word)
+                    inner = None if inner is None else gh_calls(inner, depth + 1)
+                    if inner is None:
+                        return None
+                    calls += inner
+        for g, word in enumerate(stage):
+            if gh_word(word):
+                sends, explicit, others, text = gh_call(stage[g + 1:])
+                explicit += [w.split("=", 1)[1] for w in stage[:g] if w.startswith("GH_REPO=")]
+                calls.append((sends, explicit, others, text))
+                break
+    return calls
+
+
+def word_spans(command, words):
+    """The (start, end) of each of the command's words in it, or None when they cannot be lined up with words."""
+    spans, i, n = [], 0, len(command)
+    while i < n:
+        if command[i] in " \t\r":
+            i += 1
+            continue
+        start = i
+        if command[i] in SEPARATORS:
+            while i < n and command[i] in SEPARATORS:
+                i += 1
+        else:
+            quote = None
+            while i < n and (quote or (command[i] not in " \t\r" and command[i] not in SEPARATORS)):
+                c = command[i]
+                if quote == "'":
+                    quote = None if c == "'" else quote
+                elif c == "\\":
+                    i += 1
+                elif quote == '"':
+                    quote = None if c == '"' else quote
+                elif c in "'\"":
+                    quote = c
+                i += 1
+        spans.append((start, min(i, n)))
+    if len(spans) != len(words):
+        return None
+    for (start, end), word in zip(spans, words):
+        raw = command[start:end]
+        if raw != word and (is_operator(word) or tokens(raw) != [word]):
+            return None
+    return spans
+
+
+def without_target_names(command, words):
+    """The command with the repository each gh call names as its target blanked, keeping every line and column:
+    a -R/--repo value, a GH_REPO= assignment before gh, a gh api repos/<owner>/<repo> path and a PR or issue URL
+    given as the target. A repository's own name is where the text goes, not text it publishes."""
+    spans = word_spans(command, words or [])
+    if spans is None:
+        return command
+    out, index = list(command), 0
+    for stage in stages(words):
+        here = list(range(index, index + len(stage)))
+        index += len(stage) + 1
+        g = next((k for k, w in enumerate(stage) if gh_word(w)), None)
+        blank = [k for k, w in enumerate(stage[:g]) if w.startswith("GH_REPO=")]
+        if g is not None:
+            explicit = gh_call(stage[g + 1:])[1]
+            api = stage[g + 1:g + 2] == ["api"]
+            for k in range(g + 1, len(stage)):
+                repo, used = repo_flag(stage, k)
+                if used and repo in explicit:
+                    blank += range(k, k + used)
+                elif api and ENDPOINT_REPO.match(stage[k]) and not any(c.isspace() for c in stage[k]):
+                    blank.append(k)
+                elif not api and URL_REPO.fullmatch(stage[k]) and URL_REPO.fullmatch(stage[k]).group(1) in explicit:
+                    blank.append(k)
+        for k in blank:
+            start, end = spans[here[k]]
+            out[start:end] = [c if c == "\n" else " " for c in command[start:end]]
+    return "".join(out)
+
+
+def script(command):
+    """The command as the shell runs it, for finding its gh calls: the body of a quoted heredoc that a plain cat
+    writes to a file or prints, which is data and never run, blanked, keeping every line."""
+    out, pos = [], 0
+    for m in DATA_HEREDOC.finditer(command):
+        if m.start() < pos:
+            continue
+        dash, delim = m.group("dash"), m.group("q1") if m.group("q1") is not None else m.group("q2")
+        out.append(command[pos:m.end()])
+        i = m.end()
+        while i < len(command):
+            end = command.find("\n", i + 1)
+            end = len(command) if end < 0 else end
+            line = command[i + 1:end]
+            if (line.lstrip("\t") if dash else line) == delim:
+                break
+            out.append("\n" + " " * len(line))
+            i = end
+        pos = i
+    out.append(command[pos:])
+    return "".join(out)
+
+
 def publishes(command):
-    if PR_TEXT.search(command) or PIPELINE.search(command):
+    """Whether the command publishes text: a gh pr or issue form that writes, a gh api call that sends a body,
+    or the pipeline; read per gh call when the command parses, else from the whole command."""
+    if PIPELINE.search(command):
         return True
-    return bool(API.search(command) and API_SENDS.search(command))
+    command = script(command)
+    calls = read_calls(tokens(command))
+    if calls is None:
+        return bool(PR_TEXT.search(command) or (API.search(command) and API_SENDS.search(command)))
+    return any(call[0] for call in calls) or bool(PR_TEXT.search(command))
+
+
+def read_calls(words):
+    """gh_calls(words), or None when the words or a call among them cannot be read."""
+    try:
+        return None if words is None else gh_calls(words)
+    except Exception:  # an unforeseen command shape falls back to the whole-command reading
+        return None
 
 
 def tokens(command):
@@ -394,15 +639,27 @@ def named_repos(words):
     return repos
 
 
-def targets(command, words, cwd):
+def targets(command, cwd):
     """Each (repository for gh repo view or None for gh's default in cwd, name to show) the command could reach."""
+    command = script(command)
+    words = tokens(command)
     gh_form = PR_TEXT.search(command) or (API.search(command) and API_SENDS.search(command))
     pipeline = PIPELINE.search(command)
     if words is None and gh_form:
         raise UnparsedCommand("Starship could not read which repository this gh command publishes to")
     repos = []
-    if any(os.path.basename(w) in ("gh", "gh-axi") for w in words or []) or (gh_form and not pipeline):
-        repos += named_repos(words) + [None]
+    calls = read_calls(words)
+    if calls is None:
+        if any(gh_word(w) for w in words or []) or (gh_form and not pipeline):
+            repos += named_repos(words) + [None]
+    else:
+        sending = [c for c in calls if c[0]]
+        for _, explicit, others, _ in sending:
+            repos += (explicit or [None]) + others
+        if sending:
+            repos += [w.split("=", 1)[1] for w in words if w.startswith("GH_REPO=")]
+        if PR_TEXT.search(command) and not pipeline and not any(c[3] for c in sending):
+            repos += named_repos(words) + [None]
     if pipeline:
         url = subprocess.run(["git", "-C", cwd, "remote", "get-url", "origin"],
                              capture_output=True, text=True, timeout=left()).stdout.strip()
@@ -454,7 +711,7 @@ def cmd_hook(argv):
         words = tokens(command)
         files = named_files(command, words, cwd)
         sent = set(files) if words is None else sent_files(command, words, cwd)
-        pieces, named = [("the command", command)], []
+        pieces, named = [("the command", without_target_names(command, words))], []
         for path in files:
             with open(path, "rb") as f:
                 (pieces if path in sent else named).append((str(path), f.read(FILE_CAP).decode("utf-8", "replace")))
@@ -492,7 +749,7 @@ def cmd_hook(argv):
         own = own_repos() if fresh and not (hits or fill) else set()
         unknown = None
         try:
-            reached = targets(command, words, cwd)
+            reached = targets(command, cwd)
         except UnparsedCommand as e:
             deny("Starship refused this command: the text it would publish %s, and %s, because the command"
                  " could not be read, often because of an unmatched quote in a heredoc or comment."

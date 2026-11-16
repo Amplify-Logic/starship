@@ -495,6 +495,89 @@ test_hook_passes_clean_private_and_unrelated_commands() {
   pass "clean text, private repositories, unrelated commands and a home with no list all pass"
 }
 
+# The repository a gh call names is where its text goes: an explicit -R/--repo
+# or gh api repos/<owner>/<repo> path replaces gh's default for the working
+# directory, and that name is never itself published text.
+test_hook_honours_the_named_target_and_its_name() {
+  export FAKE_GH_PRIVATE=false FAKE_GH_PUBLIC="o/robin-public" FAKE_GH_PRIVATE_REPOS="o/robin-notes"
+  : > "$GH_LOG"
+  expect_allow "$HOME_WORDS" 'gh issue comment 3 -R o/robin-notes --body "thanks Robin"' \
+    "a comment on a private repository named with -R must pass from a public working directory"
+  assert_equals "repo view o/robin-notes --json isPrivate,nameWithOwner --jq .isPrivate, .nameWithOwner" "$(cat "$GH_LOG")" \
+    "only the named repository must be read, never gh's default"
+  expect_allow "$HOME_WORDS" 'gh issue comment 3 --repo=o/robin-notes --body "thanks Robin"' \
+    "a private repository named with --repo= must pass"
+  expect_allow "$HOME_WORDS" 'gh api repos/o/robin-notes/issues/3/comments -f body="thanks Robin"' \
+    "a gh api call to a private repository's path must pass"
+  expect_allow "$HOME_WORDS" 'gh issue comment 3 -R o/robin-public --body "Fixed"' \
+    "a public repository's own name must not count as published text"
+  expect_allow "$HOME_WORDS" 'gh api repos/o/robin-public/issues/3/comments -f body=Fixed' \
+    "a public repository's own name in a gh api path must not count as published text"
+  expect_refuse "$HOME_WORDS" 'gh issue comment 3 -R o/robin-public --body "thanks Robin"' \
+    "a listed word in the text must still be refused on a public repository with such a name"
+  expect_refuse "$HOME_WORDS" 'gh issue comment 3 -R o/public --body "see o/robin-notes"' \
+    "a repository named only in the body text is published text"
+  expect_refuse "$HOME_WORDS" 'gh issue comment 3 -R o/robin-notes --body "thanks Robin"; gh pr comment 7 --body "thanks Robin"' \
+    "a private -R on one call must not hide a later call that reaches gh's default"
+  assert_contains "$REASON" "the repository this command reaches, a public repository" "the refusal must name gh's default"
+  # shellcheck disable=SC2016 # The quoted script runs inside the checked command, not here.
+  expect_refuse "$HOME_WORDS" "bash -c 'gh api repos/o/public/issues/3/comments -f body=\"thanks Robin\"'" \
+    "a gh api call inside a bash -c script must still be checked"
+  expect_refuse "$HOME_WORDS" "bash -c \"gh pr comment 7 --repo o/public --body 'thanks Robin'\"" \
+    "a gh comment inside a bash -c script must still be checked"
+  unset FAKE_GH_PRIVATE FAKE_GH_PUBLIC FAKE_GH_PRIVATE_REPOS
+  pass "an explicit repository replaces gh's default, and its own name is not published text"
+}
+
+# A gh api call that sends no body publishes nothing, and a command that
+# publishes nothing is never refused for a local file it names.
+test_hook_passes_reads_and_local_files() {
+  export FAKE_GH_PRIVATE=false
+  printf 'owner: Robin\n' > "$WORK/local.conf"
+  for command in \
+    'gh api repos/o/public/contents/notes.md -H "Accept: application/vnd.github.raw" > notes.md && grep -F Robin local.conf' \
+    'gh api repos/o/public/contents/notes.md --jq .content > enc.txt && cut -f 1 local.conf > cols.txt' \
+    'rm -f old.json; gh api repos/o/public/pulls/7 --jq .title' \
+    'gh api -X GET repos/o/public/pulls --paginate -q ".[].title" | grep -c Robin' \
+    "python3 - <<'EOF'
+from pathlib import Path
+Path('out.txt').write_text(Path('local.conf').read_text())
+EOF"; do
+    expect_allow "$HOME_WORDS" "$command" "a command that publishes nothing must pass: $command"
+  done
+  expect_refuse "$HOME_WORDS" 'gh api repos/o/public/issues/3/comments -fbody="thanks Robin"' \
+    "a field attached to its flag sends a body"
+  expect_refuse "$HOME_WORDS" 'gh api --method=PATCH repos/o/public/issues/3 --jq "Robin"' \
+    "a PATCH call publishes"
+  expect_refuse "$HOME_WORDS" 'gh api -XPUT repos/o/public/issues/3/labels --jq "Robin"' \
+    "a PUT method attached to -X publishes"
+  expect_refuse "$HOME_WORDS" 'gh api -X GET repos/o/public/issues -f q="Robin"' \
+    "a field counts as sending even beside -X GET"
+  expect_refuse "$HOME_WORDS" 'gh api repos/o/public/pulls/7 | grep -F x; gh pr comment 7 --repo o/public --body "see local.conf"' \
+    "a read beside a publishing call must still check the files the command names"
+  expect_allow "$HOME_WORDS" "cat > notes.txt <<'EOF'
+It's about gh api calls and their -f flags
+EOF
+cut -f 1 local.conf" "a quoted heredoc that cat writes to a file is data, not a gh call"
+  expect_refuse "$HOME_WORDS" "cat <<'EOF' | bash
+it's
+gh api repos/o/public/issues/3/comments -f body=Robin
+EOF" "a quoted heredoc piped into a shell runs, so its gh call must be checked"
+  export FAKE_GH_PRIVATE_REPOS="o/robin-notes"
+  expect_allow "$HOME_WORDS" "cat > reply.md <<'EOF'
+Thanks Robin, it's merged
+EOF
+gh pr comment 7 -R o/robin-notes --body-file reply.md" \
+    "a reply written by cat to a file and sent to a private repository must pass"
+  expect_refuse "$HOME_WORDS" "cat > reply.md <<'EOF'
+Thanks Robin, it's merged
+EOF
+gh pr comment 7 -R o/public --body-file reply.md" \
+    "a reply written by cat to a file and sent to a public repository must be refused"
+  unset FAKE_GH_PRIVATE FAKE_GH_PRIVATE_REPOS
+  pass "read-only gh api calls and commands that publish nothing pass, whatever local files they name"
+}
+
 test_spawn_installs_the_hook() {
   local case_dir="$TMP_ROOT/spawn" home proj wt fakebin settings cmd
   home="$case_dir/home"
@@ -831,6 +914,8 @@ test_hook_reads_body_files_however_they_are_named
 test_hook_finds_the_repository_from_urls_and_gh_repo
 test_hook_refuses_the_pipeline_intent_on_a_public_github_repo
 test_hook_passes_clean_private_and_unrelated_commands
+test_hook_honours_the_named_target_and_its_name
+test_hook_passes_reads_and_local_files
 test_spawn_installs_the_hook
 test_first_and_second_mate_sessions_get_the_hook
 test_ship_brief_tells_the_worker_to_check
