@@ -2262,6 +2262,122 @@ test_a_failed_focus_reading_does_not_start_a_new_focus() {
   pass "factory pane: a failed focus reading from Herdr does not start a new focus"
 }
 
+# give_reports: a report for the finished work, a page with no report for a
+# running job, and a report the provider question's hold reason names beside
+# one outside data/ and one that does not exist.
+give_reports() {
+  mkdir -p "$HOME_FIX/data/garden-share" "$HOME_FIX/data/shop-search" "$HOME_FIX/data/provider-scout"
+  printf '# Share as a picture\n' > "$HOME_FIX/data/garden-share/report.md"
+  printf '<!doctype html><title>Search</title>\n' > "$HOME_FIX/data/shop-search/page.html"
+  printf '# Providers compared\n' > "$HOME_FIX/data/provider-scout/report.md"
+  python3 - "$HOME_FIX/snapshot.json" <<'PY2'
+import json, sys
+path = sys.argv[1]
+snap = json.load(open(path))
+for row in snap["backlog"]["records"]:
+    if row["id"] == "shop-provider":
+        row["hold_reason"] = ("Saved cards need a provider. See data/provider-scout/report.md, "
+                              "/tmp/elsewhere/report.md and data/missing-scout/report.md.")
+json.dump(snap, open(path, "w"), indent=1)
+PY2
+}
+
+test_read_shows_only_where_there_is_something_to_read() {
+  reset_case
+  write_registry
+  write_world
+  local out
+  take_record
+  assert_equals "$(q '[.needs_you[].read[], .factories[].jobs[].read[]] | length')" "0" \
+    "an item with no report had something to read"
+  out=$(python3 "$FACTORY" --plain --width 92) || fail "--plain failed"
+  assert_not_contains "$out" "Read the report" "a Read line showed with no report"
+  give_reports
+  take_record
+  assert_equals "$(q '.needs_you[] | select(.id == "garden-share") | .read | join(",")')" "garden-share" \
+    "finished work with a report reads its task"
+  assert_equals "$(q '.needs_you[] | select(.id == "shop-provider") | .read | join(",")')" \
+    "$(cd "$HOME_FIX/data/provider-scout" && pwd -P)/report.md" \
+    "a question reads the report its hold reason names under data/, and no other"
+  assert_equals "$(q '.needs_you[] | select(.id == "garden-chart") | .read | length')" "0" \
+    "a report named outside the home's data/ was offered"
+  assert_equals "$(q '.factories[].jobs[] | select(.id == "shop-search") | .read | join(",")')" "shop-search" \
+    "a job with only a page of its own has something to read"
+  out=$(python3 "$FACTORY" --plain --width 92) || fail "--plain failed"
+  assert_equals "$(printf '%s\n' "$out" | grep -c '^       r  Read the report$')" "2" \
+    "the search job and the finished work's job each show one Read line under the folded cards"
+  assert_not_contains "$out" "r read" "the keys offered r on a question with nothing to read"
+  out=$(python3 "$FACTORY" --plain --width 92 --item shop-provider) || fail "--plain --item failed"
+  assert_equals "$(printf '%s\n' "$out" | grep -c '^       r  Read the report$')" "3" \
+    "the opened provider card did not show its Read line"
+  assert_contains "$out" "r read" "the keys did not offer r on a question with something to read"
+  pass "factory pane: Read shows only on a card or job with a report or page under the home's data/"
+}
+
+test_r_and_a_click_read_through_the_reader() {
+  reset_case
+  write_registry
+  write_world
+  give_reports
+  local log="$TMP_ROOT/case$CASE/read.log" screen="$TMP_ROOT/case$CASE/screen" line
+  cat > "$TMP_ROOT/case$CASE/reader" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$FM_FACTORY_TEST_READ"
+SH
+  chmod +x "$TMP_ROOT/case$CASE/reader"
+  export FM_FACTORY_READ="$TMP_ROOT/case$CASE/reader" FM_FACTORY_TEST_READ="$log"
+  drive_keys r
+  [ ! -s "$log" ] || fail "r read something for a question with nothing to read: $(cat "$log")"
+  drive_keys DOWN r
+  assert_equals "$(cat "$log")" "$(cd "$HOME_FIX/data/provider-scout" && pwd -P)/report.md" \
+    "r did not read the highlighted question's report"
+  : > "$log"
+  python3 "$FACTORY" --plain --width 100 --height 50 > "$screen" || fail "--plain failed"
+  # The Read line under the search job, which only a click can reach.
+  line=$(awk '/Search that forgives typos/ { job = 1 } job && /^       r  Read the report$/ { print NR; exit }' "$screen")
+  [ -n "$line" ] || fail "no Read line in sight to click"$'\n'"$(cat "$screen")"
+  drive_keys $'\x1b[<0;12;'"$line"$'M\x1b[<0;12;'"$line"'m'
+  assert_equals "$(cat "$log")" "shop-search" "a click on a job's Read line did not read that job"
+  : > "$log"
+  drive_keys $'\x1b[<0;12;3M\x1b[<0;12;3m'
+  [ ! -s "$log" ] || fail "a click off any Read line read something: $(cat "$log")"
+  printf '#!/usr/bin/env bash\necho "no way to open the page" >&2\nexit 1\n' > "$TMP_ROOT/case$CASE/reader"
+  drive_keys DOWN r "SNAP:$screen"
+  assert_contains "$(tr -d '\033' < "$screen")" "did not open: no way to open the page" \
+    "a reader that failed went unsaid"
+  unset FM_FACTORY_READ FM_FACTORY_TEST_READ
+  pass "factory pane: r reads the highlighted call and a click reads the Read line it lands on, in the background"
+}
+
+test_r_on_a_factory_reads_only_a_job_it_draws() {
+  reset_case
+  write_registry
+  write_world
+  give_reports
+  mkdir -p "$HOME_FIX/data/recipe-search"
+  printf '# Calmer start screen\n' > "$HOME_FIX/data/recipe-search/report.md"
+  local log="$TMP_ROOT/case$CASE/read.log"
+  cat > "$TMP_ROOT/case$CASE/reader" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$FM_FACTORY_TEST_READ"
+SH
+  chmod +x "$TMP_ROOT/case$CASE/reader"
+  export FM_FACTORY_READ="$TMP_ROOT/case$CASE/reader" FM_FACTORY_TEST_READ="$log"
+  take_record
+  assert_equals "$(q '.factories[] | select(.id == "recipe-box") | .jobs[0] | "\(.state)|\(.read | join(","))"')" \
+    "with Starship|recipe-search" "the idle factory's finished work has a report to read"
+  # The stops run: three calls, then Sample Shop, Garden Journal and Recipe Box.
+  drive_keys DOWN DOWN DOWN DOWN DOWN r
+  [ ! -s "$log" ] || fail "r on an idle factory read a job it draws no Read line for: $(cat "$log")"
+  drive_keys DOWN DOWN DOWN DOWN r
+  assert_equals "$(cat "$log")" "garden-share" "r on a factory did not read the job whose Read line it draws"
+  : > "$log"
+  drive_keys DOWN DOWN DOWN DOWN DOWN $'\r' r
+  assert_equals "$(cat "$log")" "recipe-search" "r on a factory's own page did not read the job the page draws"
+  unset FM_FACTORY_READ FM_FACTORY_TEST_READ
+  pass "factory pane: r on a factory reads only a job the screen draws a Read line for"
+}
+
 fm_test_run \
   test_the_record_words_every_state \
   test_the_plain_screen_is_the_record_as_text \
@@ -2294,6 +2410,9 @@ fm_test_run \
   test_already_settled_retries_a_wake_that_failed \
   test_already_settled_outlasts_a_refresh_read_before_the_press \
   test_already_settled_files_a_real_reconcile_request \
+  test_read_shows_only_where_there_is_something_to_read \
+  test_r_and_a_click_read_through_the_reader \
+  test_r_on_a_factory_reads_only_a_job_it_draws \
   test_the_highlight_and_open_boxes_follow_the_record \
   test_a_parked_decision_leaves_the_live_pane_within_seconds \
   test_a_calls_rebuild_on_an_older_reading_keeps_the_newer_record \

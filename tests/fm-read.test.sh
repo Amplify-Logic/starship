@@ -282,3 +282,53 @@ assert_contains "$open_out" 'http://127.0.0.1:4491/session/fake' "open did not p
 opened=$(cat "$LOG")
 assert_contains "$opened" "host=127.0.0.1 link=127.0.0.1 port=4491 file=$first" "open did not bind Lavish to IPv4 loopback with the rendered page"
 pass "open launches Lavish on IPv4 loopback and prints its URL"
+
+# Several reports read as one page, in order, with one set of heading ids.
+cat > "$TMP_ROOT/second.md" <<'MD'
+# Findings
+
+## Second report
+MD
+cat > "$TMP_ROOT/first.md" <<'MD'
+# Findings
+
+## First report
+MD
+both=$(FM_HOME="$HOME_DIR" FM_ROOT_OVERRIDE="$ROOT" "$READ" --no-open "$TMP_ROOT/first.md" "$TMP_ROOT/second.md")
+both_flat=$(tr '\n' ' ' < "$both")
+assert_contains "$both_flat" '<h2 id="first-report">First report</h2> <hr> <h1 id="findings-1">Findings</h1>' \
+  "several sources did not render in order into one page with page-wide heading ids"
+assert_contains "$(cat "$both")" "<title>First</title>" "a page of several sources was not titled for the first"
+alone=$(FM_HOME="$HOME_DIR" FM_ROOT_OVERRIDE="$ROOT" "$READ" --no-open "$TMP_ROOT/first.md")
+[ "$alone" != "$both" ] || fail "a page of several sources reused the one-source page's name"
+pass "several sources read as one page, in order, named apart from each one alone"
+
+# A task's own page.html is its view of the work: it opens as it is.
+mkdir -p "$HOME_DIR/data/paged-task"
+printf '# Paged report\n' > "$HOME_DIR/data/paged-task/report.md"
+printf '<!doctype html><title>Designed</title>\n' > "$HOME_DIR/data/paged-task/page.html"
+paged=$(FM_HOME="$HOME_DIR" FM_ROOT_OVERRIDE="$ROOT" "$READ" --no-open paged-task "$TMP_ROOT/first.md")
+[ "$paged" = "$HOME_DIR/data/paged-task/page.html" ] || fail "a task's own page.html was not chosen first: $paged"
+unpaged=$(FM_HOME="$HOME_DIR" FM_ROOT_OVERRIDE="$ROOT" "$READ" --no-open sample-task)
+[ "$unpaged" = "$first" ] || fail "a task without page.html did not render its report: $unpaged"
+pass "a task's own page.html opens first, and a task without one renders its report"
+
+# Without lavish-axi the page opens in the browser.
+BROWSER_LOG="$TMP_ROOT/browser.log"
+cat > "$FAKEBIN/browser" <<'SH'
+#!/usr/bin/env bash
+printf 'file=%s\n' "${1:-}" >> "$FM_READ_TEST_BROWSER_LOG"
+SH
+chmod +x "$FAKEBIN/browser"
+FM_HOME="$HOME_DIR" FM_ROOT_OVERRIDE="$ROOT" FM_LAVISH_BIN="$TMP_ROOT/no-lavish-here" \
+  FM_READ_BROWSER="$FAKEBIN/browser" FM_READ_TEST_BROWSER_LOG="$BROWSER_LOG" "$READ" paged-task \
+  || fail "the browser fallback did not open the page"
+assert_contains "$(cat "$BROWSER_LOG")" "file=$HOME_DIR/data/paged-task/page.html" \
+  "without lavish-axi the page did not open in the browser"
+if FM_HOME="$HOME_DIR" FM_ROOT_OVERRIDE="$ROOT" FM_LAVISH_BIN="$TMP_ROOT/no-lavish-here" \
+  FM_READ_BROWSER="$TMP_ROOT/no-browser-here" "$READ" sample-task >"$TMP_ROOT/no-opener.out" 2>&1; then
+  fail "a page with no way to open it was reported opened"
+fi
+assert_contains "$(cat "$TMP_ROOT/no-opener.out")" "neither lavish-axi nor a browser opener" \
+  "a missing opener was not named"
+pass "without lavish-axi the page opens in the browser, and with neither the reader says so"
