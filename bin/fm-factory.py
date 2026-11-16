@@ -93,6 +93,8 @@ a status, record or backlog file changed since the last one began
 unless the machine is busy (machine_busy). That safety refresh exists because
 a worker's pane activity, a job gone quiet and a change merged elsewhere are
 recorded in no file, so without it the pane would go stale.
+A full refresh reads its slow inputs side by side and keeps the held questions'
+options from the last one while the owner's calls have not moved (kept_shapes).
 Every pane and live copy of a home starts its rebuilds, full or of the
 owner's calls, under one lock the rebuild holds until it exits, so two never
 run side by side, and after a full refresh the next waits as long as that one
@@ -594,6 +596,15 @@ def shapes_for(home: str, ids: List[str], rows: Dict[str, Dict[str, Any]],
     return shapes
 
 
+def read_calls(home: str, buckets: Dict[str, str], backlog: Optional[Dict[str, Any]],
+               known_shapes: Optional[Dict[str, Dict[str, Any]]]
+               ) -> Tuple[List[str], List[str], List[Dict[str, Any]], Dict[str, Dict[str, Any]]]:
+    """owner_calls, plus the shapes of its held decisions (shapes_for)."""
+    decision_ids, merge_ids, adapter_rows = owner_calls(home, buckets, backlog)
+    shapes = shapes_for(home, decision_ids, {r["id"]: r for r in adapter_rows}, known_shapes)
+    return decision_ids, merge_ids, adapter_rows, shapes
+
+
 def ready_reports(rows: List[Tuple[str, str, str]]) -> List[bool]:
     """Whether each ship `done:` line is its ready report, not a handoff to the checks.
 
@@ -718,15 +729,21 @@ def pane_activity(home: str, running_ids: List[str], now: int, write: bool) -> D
         peek = os.path.join(BIN, "fm-peek.sh")
     result: Dict[str, int] = {}
     fresh: Dict[str, Any] = {}
-    for task_id in running_ids:
+
+    def peek_one(task_id: str) -> str:
+        try:
+            out = subprocess.run(shlex.split(peek) + [task_id, "15"], capture_output=True, text=True,
+                                 timeout=10, env=dict(os.environ, FM_HOME=home))
+            return out.stdout if out.returncode == 0 else ""
+        except (OSError, subprocess.SubprocessError):
+            return ""
+
+    # Each peek reads one pane; they run side by side rather than one after another.
+    texts = side_by_side(*[(lambda t=task_id: peek_one(t)) for task_id in running_ids]) if peek else []
+    for index, task_id in enumerate(running_ids):
         old = seen.get(task_id) or {}
         if peek:
-            try:
-                out = subprocess.run(shlex.split(peek) + [task_id, "15"], capture_output=True, text=True,
-                                     timeout=10, env=dict(os.environ, FM_HOME=home))
-                text = out.stdout if out.returncode == 0 else ""
-            except (OSError, subprocess.SubprocessError):
-                text = ""
+            text = texts[index]
             if text:
                 digest = hashlib.sha256(text.encode("utf-8", "replace")).hexdigest()
                 # A first sight says nothing about when the text last changed.
@@ -938,7 +955,12 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
                  backlog: Optional[Dict[str, Any]] = None,
                  known_shapes: Optional[Dict[str, Dict[str, Any]]] = None,
                  buckets: Optional[Dict[str, str]] = None,
-                 reconciles: Optional[Dict[str, int]] = None) -> Dict[str, Any]:
+                 reconciles: Optional[Dict[str, int]] = None,
+                 calls: Optional[Tuple[List[str], List[str], List[Dict[str, Any]], Dict[str, Dict[str, Any]]]] = None
+                 ) -> Dict[str, Any]:
+    """The pane's record. <calls> is read_calls already taken on these same buckets
+    and backlog, so a caller can read it beside other slow reads; without it,
+    it is read here."""
     factories, registry_source = load_registry(home)
     project_rows = load_projects(home)
     quiet_after = env_int("FM_FACTORY_QUIET_MINUTES", 15) * 60
@@ -995,7 +1017,9 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
         buckets = buckets_for(tasks)
     # NEEDS YOU is exactly the owner's calls, the one count the bridge strip and
     # the tap page show; a worker's question, a pause or the checks never are.
-    decision_ids, merge_ids, adapter_rows = owner_calls(home, buckets, backlog)
+    if calls is None:
+        calls = read_calls(home, buckets, backlog, known_shapes)
+    decision_ids, merge_ids, adapter_rows, shapes = calls
     known = {r["id"] for r in rows}
     # The adapter is the backlog's own reading of what is held and what still
     # waits on other work, the one the owner's calls are counted from. The
@@ -1010,7 +1034,6 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
     rows += [r for r in adapter_rows if r.get("hold_bucket") and r["id"] not in known]
     row_of = {r["id"]: r for r in rows}
     today = (iso(now) or "")[:10]
-    shapes = shapes_for(home, decision_ids, {r["id"]: r for r in adapter_rows}, known_shapes)
     needs: List[Dict[str, Any]] = []
     feed: List[Dict[str, Any]] = []
     titles: Dict[str, str] = {}
@@ -1420,26 +1443,59 @@ def basis_path(home: str) -> str:
     return os.path.join(pane_dir(home), "basis.json")
 
 
+def kept_shapes(home: str, signal: str, now: int) -> Tuple[Dict[str, Dict[str, Any]], int]:
+    """The held questions' shapes the last whole refresh read, and when they were read.
+
+    Reading a question's options costs a second or more each, so a whole refresh
+    reuses them while the owner's calls signal is still the one taken before they
+    were read (every command that changes a call moves it, and so does any
+    write to data/backlog.md) and they are younger than FM_FACTORY_MAX_AGE, the
+    same bound as the pane's safety refresh. shapes_for still reads afresh any
+    question held again since. Otherwise it returns no shapes and <now>.
+    """
+    basis = read_basis(home) if signal else None
+    shapes = (basis or {}).get("shapes")
+    read = (basis or {}).get("shapes_epoch")
+    if not isinstance(shapes, dict) or not isinstance(read, int) or basis.get("calls_signal") != signal \
+            or not 0 <= now - read < env_int("FM_FACTORY_MAX_AGE", 300):
+        return {}, now
+    return dict(shapes), read
+
+
 def refresh(home: str) -> Dict[str, Any]:
     now = now_epoch()
     # Taken before anything is read, so a call that changes meanwhile is caught.
     signal_at_start = calls_signal(home)
     inputs = inputs_digest(home)
     read_at = time.time()
-    snapshot = load_snapshot(home)
+    # The reads that do not depend on one another run side by side: the fleet
+    # snapshot, the backlog as its adapter reads it, the inbox and the
+    # reconcile requests; then the panes beside the owner's calls and their
+    # questions, which need the snapshot's buckets.
+    snapshot, backlog, notes, reconciles = side_by_side(
+        lambda: load_snapshot(home), lambda: axi_backlog(home),
+        lambda: inbox_receipts(home), lambda: reconcile_pending(home))
     running = [t["id"] for t in snapshot.get("tasks") or []
                if (t.get("current_state") or {}).get("state") == "working"
                and (t.get("current_state") or {}).get("source") == "pane"]
-    activity = pane_activity(home, running, now, write=True)
-    shapes: Dict[str, Dict[str, Any]] = {}
-    buckets = buckets_for(live_tasks(snapshot))
+    shapes, shapes_epoch = kept_shapes(home, signal_at_start, now)
+
+    def calls_with_buckets():
+        taken = buckets_for(live_tasks(snapshot))
+        return taken, read_calls(home, taken, backlog, shapes)
+
+    activity, (buckets, calls) = side_by_side(lambda: pane_activity(home, running, now, write=True),
+                                              calls_with_buckets)
     record = build_record(home, now, snapshot, since=last_look(home, now), activity=activity,
-                          notes=inbox_receipts(home), known_shapes=shapes, buckets=buckets,
-                          reconciles=reconcile_pending(home))
+                          notes=notes, backlog=backlog, known_shapes=shapes, buckets=buckets,
+                          reconciles=reconciles, calls=calls)
     record.update(snapshot_epoch=now, calls_signal=signal_at_start, read_at=read_at)
     try:
+        held = {ident: shapes[ident] for ident in calls[0] if ident in shapes}
         write_atomic(basis_path(home), json.dumps({"taken_epoch": now, "snapshot": snapshot,
-                                                   "activity": activity, "shapes": shapes,
+                                                   "activity": activity, "shapes": held,
+                                                   "shapes_epoch": shapes_epoch if held else now,
+                                                   "calls_signal": signal_at_start,
                                                    "buckets": buckets}))
         write_atomic(inputs_path(home), inputs + "\n")
         kept = True
@@ -1476,15 +1532,17 @@ def load_backlog(home: str) -> Dict[str, Any]:
 
 
 def side_by_side(*reads):
-    """Run each read in its own thread and return their results in order; the first failure is raised."""
+    """Run each read in its own thread and return their results in order; the
+    failure of the earliest read in the list is raised, so the error does not
+    depend on which thread finished first."""
     results: List[Any] = [None] * len(reads)
-    errors: List[BaseException] = []
+    errors: List[Tuple[int, BaseException]] = []
 
     def run(index: int) -> None:
         try:
             results[index] = reads[index]()
         except Exception as error:  # handed back to the caller below
-            errors.append(error)
+            errors.append((index, error))
 
     threads = [threading.Thread(target=run, args=(index,)) for index in range(len(reads))]
     for thread in threads:
@@ -1492,7 +1550,7 @@ def side_by_side(*reads):
     for thread in threads:
         thread.join()
     if errors:
-        raise errors[0]
+        raise min(errors, key=lambda pair: pair[0])[1]
     return results
 
 
