@@ -34,9 +34,13 @@
 # answers reach the PR the pipeline writes. Each gh call is read on its own,
 # between shell operators, so a flag given to another command (`grep -F`,
 # `rm -f`) never makes a read-only `gh api` call publish; a gh call inside a
-# word that holds a command of its own, such as a `bash -c` script, counts too.
-# The body of a quoted heredoc that a plain `cat` writes to a file or prints
-# never runs, so it is left out when finding gh calls and their repositories.
+# word that holds a command of its own, such as a `bash -c` script, counts too,
+# but the text a gh call publishes (a --body, -b, --title, -t, --comment or -c
+# value, or a gh api field value) is read as a command only where it holds a
+# `$(...)` or backtick substitution. The body of a quoted heredoc that a plain
+# `cat` writes to a file is left out when finding gh calls and their
+# repositories when the command names that file only as a --body-file, -F or
+# --input value or an @file field value, so it never runs.
 # A command whose words still cannot be parsed is judged on its whole text.
 # Every other command passes untouched, whatever files it names, and so does
 # every other tool. The text checked is the whole
@@ -135,10 +139,15 @@ PATHLIKE = re.compile(r"[^\s'\"`()<>|;&=]+")
 REMOTE = re.compile(r"^(?:[a-z+]+://)?(?:[^@/]+@)?([^/:]+)[:/]+(.+?)(?:\.git)?/?$")
 HIT = re.compile(r"^LEAK_HIT: ([a-z-]+): (.*)$")
 NESTED_GH = re.compile(r"(?:^|[\s/;&|(`])gh(?:-axi)?\s")
-DATA_FILE = r"(?:>>?[ \t]*[^\s;&|<>()`$'\"]+[ \t]*)?"
-DATA_HEREDOC = re.compile(r"(?:^|(?<=[\n;&|]))[ \t]*cat[ \t]+" + DATA_FILE
-                          + r"<<(?P<dash>-?)[ \t]*(?:'(?P<q1>[^'\n]+)'|\"(?P<q2>[^\"\n]+)\")[ \t]*" + DATA_FILE + r"(?=\n)")
+DATA_FILE = r"(?:>>?[ \t]*(?P<f%d>[^\s;&|<>()`$'\"]+)[ \t]*)?"
+DATA_HEREDOC = re.compile(r"(?:^|(?<=[\n;&|]))[ \t]*cat[ \t]+" + DATA_FILE % 1
+                          + r"<<(?P<dash>-?)[ \t]*(?:'(?P<q1>[^'\n]+)'|\"(?P<q2>[^\"\n]+)\")[ \t]*" + DATA_FILE % 2
+                          + r"(?=\n)")
 TEXT_VERBS = ("create", "new", "edit", "comment", "review", "close", "reopen", "merge")
+TEXT_FLAGS = {"pr": ("--body", "-b", "--title", "-t", "--comment", "-c"),
+              "issue": ("--body", "-b", "--title", "-t", "--comment", "-c"),
+              "api": ("-f", "-F", "--field", "--raw-field")}
+REVIEW_KINDS = ("--approve", "-a", "--request-changes", "-r", "--comment", "-c")
 
 
 class UnparsedCommand(Exception):
@@ -261,20 +270,45 @@ def gh_call(args):
         explicit += [repo] if repo else []
         j += used
     verb, rest = (rest[j], rest[j + 1:]) if j < len(rest) else ("", [])
-    k = 0
-    while k < len(rest):
-        _, used = repo_flag(rest, k)
-        if used:
-            k += used
-        elif verb == "review" and rest[k] in ("--approve", "-a", "--request-changes", "-r", "--comment", "-c"):
-            k += 1
-        else:
+    bare = REVIEW_KINDS if verb == "review" else ()
+    for k, word in enumerate(rest):
+        flag = rest[k - 1] if k else ""
+        takes = flag.startswith("-") and "=" not in flag and (flag.startswith("--") or len(flag) == 2) and flag not in bare
+        if URL_REPO.fullmatch(word) and not takes:
+            explicit.append(URL_REPO.fullmatch(word).group(1))
             break
-    if k < len(rest) and URL_REPO.fullmatch(rest[k]):
-        explicit.append(URL_REPO.fullmatch(rest[k]).group(1))
     explicit += [r for r in (repo_flag(rest, n)[0] for n in range(len(rest))) if r]
     others = [m.group(1) for m in (URL_REPO.fullmatch(w) for w in rest) if m]
     return verb in TEXT_VERBS, list(dict.fromkeys(explicit)), others, True
+
+
+def text_values(args):
+    """The indexes of the words among the words after one gh or gh-axi word that are text a flag publishes:
+    a --body, -b, --title, -t, --comment or -c value of a pr or issue form, a -f, -F, --field or --raw-field
+    value of gh api."""
+    i = 0
+    while i < len(args):
+        used = repo_flag(args, i)[1]
+        if not used:
+            break
+        i += used
+    flags = TEXT_FLAGS.get(args[i] if i < len(args) else "", ())
+    found = set()
+    for k in range(i + 1, len(args)):
+        word = args[k]
+        if word in flags:
+            found.add(k + 1)
+        elif any(word.startswith(f + "=") if f.startswith("--") else word.startswith(f) for f in flags):
+            found.add(k)
+    return found
+
+
+def commands(stage):
+    """The stage's words without the text its gh call publishes, unless that text holds a $(...) or backtick
+    substitution, which runs."""
+    g = next((k for k, w in enumerate(stage) if gh_word(w)), None)
+    text = set() if g is None else {g + 1 + k for k in text_values(stage[g + 1:])}
+    return [w for n, w in enumerate(stage) if n not in text or "$(" in w or "`" in w]
 
 
 def gh_calls(words, depth=0):
@@ -287,7 +321,7 @@ def gh_calls(words, depth=0):
     calls = []
     for stage in stages(words):
         if not any(os.path.basename(w) == "no-mistakes" for w in stage):
-            for word in stage:
+            for word in commands(stage):
                 if any(c.isspace() for c in word) and NESTED_GH.search(word):
                     inner = tokens(word)
                     inner = None if inner is None else gh_calls(inner, depth + 1)
@@ -367,24 +401,37 @@ def without_target_names(command, words):
     return "".join(out)
 
 
+def only_sent(name, text):
+    """Whether every mention of the file name in the text is the value of a --body-file, -F or --input flag
+    or an @file field value, so the text never runs the file."""
+    base = re.escape(os.path.basename(name))
+    path = r"['\"]?(?:[^\s;&|<>()`'\"=@]*/)?" + base + r"['\"]?(?![^\s;&|)`])"
+    text = re.sub(r"(?:(?<=\s)(?:--body-file|--input|-F)(?:=|[ \t]+)|=@)" + path, " ", text)
+    return not re.search(r"(?<![\w.-])" + base + r"(?![\w.-])", text)
+
+
 def script(command):
     """The command as the shell runs it, for finding its gh calls: the body of a quoted heredoc that a plain cat
-    writes to a file or prints, which is data and never run, blanked, keeping every line."""
+    writes to a file the command only sends as a body or input file, which is data and never run, blanked,
+    keeping every line."""
     out, pos = [], 0
     for m in DATA_HEREDOC.finditer(command):
         if m.start() < pos:
             continue
         dash, delim = m.group("dash"), m.group("q1") if m.group("q1") is not None else m.group("q2")
-        out.append(command[pos:m.end()])
-        i = m.end()
+        name = m.group("f1") or m.group("f2")
+        body, i = [], m.end()
         while i < len(command):
             end = command.find("\n", i + 1)
             end = len(command) if end < 0 else end
             line = command[i + 1:end]
             if (line.lstrip("\t") if dash else line) == delim:
                 break
-            out.append("\n" + " " * len(line))
+            body.append("\n" + " " * len(line))
             i = end
+        if not name or not only_sent(name, command[:m.start()] + command[i:]):
+            continue
+        out += [command[pos:m.end()]] + body
         pos = i
     out.append(command[pos:])
     return "".join(out)
@@ -658,7 +705,8 @@ def targets(command, cwd):
             repos += (explicit or [None]) + others
         if sending:
             repos += [w.split("=", 1)[1] for w in words if w.startswith("GH_REPO=")]
-        if PR_TEXT.search(command) and not pipeline and not any(c[3] for c in sending):
+        unread = " ; ".join(" ".join(commands(stage)) for stage in stages(words))
+        if PR_TEXT.search(unread) and not pipeline and not any(c[3] for c in sending):
             repos += named_repos(words) + [None]
     if pipeline:
         url = subprocess.run(["git", "-C", cwd, "remote", "get-url", "origin"],

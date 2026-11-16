@@ -499,7 +499,7 @@ test_hook_passes_clean_private_and_unrelated_commands() {
 # or gh api repos/<owner>/<repo> path replaces gh's default for the working
 # directory, and that name is never itself published text.
 test_hook_honours_the_named_target_and_its_name() {
-  export FAKE_GH_PRIVATE=false FAKE_GH_PUBLIC="o/robin-public" FAKE_GH_PRIVATE_REPOS="o/robin-notes"
+  export FAKE_GH_PRIVATE=false FAKE_GH_PUBLIC="o/robin-public" FAKE_GH_PRIVATE_REPOS="o/robin-notes github.com/o/robin-notes"
   : > "$GH_LOG"
   expect_allow "$HOME_WORDS" 'gh issue comment 3 -R o/robin-notes --body "thanks Robin"' \
     "a comment on a private repository named with -R must pass from a public working directory"
@@ -525,6 +525,21 @@ test_hook_honours_the_named_target_and_its_name() {
     "a gh api call inside a bash -c script must still be checked"
   expect_refuse "$HOME_WORDS" "bash -c \"gh pr comment 7 --repo o/public --body 'thanks Robin'\"" \
     "a gh comment inside a bash -c script must still be checked"
+  expect_allow "$HOME_WORDS" 'gh issue comment 3 -R o/robin-notes --body "Ran gh issue comment 3 again, thanks Robin"' \
+    "a body that quotes a gh command is text, not a call reaching gh's default"
+  expect_allow "$HOME_WORDS" 'gh pr close 7 --repo o/robin-notes -c "Superseded: gh pr create picked the wrong base, Robin"' \
+    "a closing comment that quotes a gh command is text"
+  expect_allow "$HOME_WORDS" 'gh api repos/o/robin-notes/issues/3/comments -f body="Ran gh pr comment 7, thanks Robin"' \
+    "a gh api field that quotes a gh command is text"
+  # shellcheck disable=SC2016 # The substitution runs inside the checked command, not here.
+  expect_refuse "$HOME_WORDS" 'gh issue comment 3 -R o/robin-notes --body "$(gh api -X POST repos/o/public/issues/3/comments -f body=Robin)"' \
+    "a gh call in a command substitution inside a body still runs and must be checked"
+  printf 'thanks Robin\n' > "$WORK/reply.md"
+  expect_allow "$HOME_WORDS" 'gh pr comment --body-file reply.md https://github.com/o/robin-notes/pull/7' \
+    "a private PR URL after the flags is the target, and its own name is not published text"
+  expect_refuse "$HOME_WORDS" 'gh pr comment 7 --body https://github.com/o/robin-notes/pull/3' \
+    "a URL given as a flag's value is text, not the target"
+  assert_contains "$REASON" "the repository this command reaches, a public repository" "the refusal must name gh's default"
   unset FAKE_GH_PRIVATE FAKE_GH_PUBLIC FAKE_GH_PRIVATE_REPOS
   pass "an explicit repository replaces gh's default, and its own name is not published text"
 }
@@ -574,6 +589,14 @@ Thanks Robin, it's merged
 EOF
 gh pr comment 7 -R o/public --body-file reply.md" \
     "a reply written by cat to a file and sent to a public repository must be refused"
+  # shellcheck disable=SC2016 # The substitution runs inside the checked command, not here.
+  for run in 'bash post.sh' 'sh < post.sh' 'source post.sh' '. ./post.sh' 'chmod +x post.sh && ./post.sh' \
+    'python3 post.sh' 'bash -c "$(cat post.sh)"'; do
+    expect_refuse "$HOME_WORDS" "cat > post.sh <<'EOF'
+gh pr comment 7 --repo o/public --body \"thanks Robin\"
+EOF
+$run" "a quoted heredoc written to a file the command then runs must be checked: $run"
+  done
   unset FAKE_GH_PRIVATE FAKE_GH_PRIVATE_REPOS
   pass "read-only gh api calls and commands that publish nothing pass, whatever local files they name"
 }
