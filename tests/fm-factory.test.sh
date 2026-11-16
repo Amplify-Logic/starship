@@ -1253,6 +1253,25 @@ test_a_parked_decision_leaves_the_live_pane_within_seconds() {
   pass "factory pane: a parked decision leaves the live pane within seconds, without a whole refresh (${took}s)"
 }
 
+# The rest after a whole refresh is for whole refreshes: right after a slow one
+# on a busy machine, a call the owner parks still leaves NEEDS YOU within seconds.
+test_a_parked_call_leaves_the_pane_within_seconds_after_a_slow_refresh() {
+  local took
+  reset_case
+  write_registry
+  write_world
+  python3 "$FACTORY" refresh || fail "the first record could not be built"
+  printf '{"ended": %s, "took": 90, "failed": false}\n' "$(date +%s)" > "$HOME_FIX/state/factory/rebuild.last" \
+    || fail "the slow refresh could not be recorded"
+  took=$(FM_FACTORY_LOADAVG=100000 watch_pane '3 need you' '2 need you' "$BINDIR/park-world garden-chart") \
+    || fail "the live pane could not be driven"
+  case "$took" in
+    never|'no first screen'|'') fail "the live pane still showed the parked call: $took" ;;
+  esac
+  awk -v t="$took" 'BEGIN { exit !(t < 4.5) }' || fail "the live pane took ${took}s to drop the parked call"
+  pass "factory pane: a parked call leaves the pane within seconds after a slow refresh (${took}s)"
+}
+
 # A calls rebuild that read the fleet before a full refresh finished must not
 # put the older workers back over the newer record.
 test_a_calls_rebuild_on_an_older_reading_keeps_the_newer_record() {
@@ -1400,13 +1419,18 @@ test_a_whole_refresh_waits_for_a_change_in_what_it_reads() {
   [ "$(reads_after_mark)" -ge 1 ] || fail "a changed status file did not rebuild the record"
   : > "$HOME_FIX/reads"
   FM_FACTORY_NOW='' FM_FACTORY_TTL=1 FM_FACTORY_MAX_AGE=2 open_panes 1 6 || fail "the pane could not be opened"
-  export FM_FACTORY_INBOX="$BINDIR/inbox"
   [ "$(reads_after_mark)" -ge 1 ] || fail "a record past its longest age was never rebuilt"
-  pass "factory pane: a whole refresh waits for a change in what it reads, or the record's longest age"
+  rm -f "$HOME_FIX/state/factory/rebuild.last"
+  : > "$HOME_FIX/reads"
+  FM_FACTORY_NOW='' FM_FACTORY_TTL=1 FM_FACTORY_MAX_AGE=2 FM_FACTORY_LOADAVG=100000 open_panes 1 6 \
+    || fail "the pane could not be opened"
+  export FM_FACTORY_INBOX="$BINDIR/inbox"
+  assert_equals "0" "$(reads_after_mark)" "a busy machine rebuilt a record only for its age"
+  pass "factory pane: a whole refresh waits for a change in what it reads, or the record's longest age on an idle machine"
 }
 
-# A busy machine gets room: once a rebuild ends, the next one waits at least a
-# minute, however often the calls move.
+# A busy machine gets room: once a whole refresh ends, the next one waits at
+# least a minute, however often the workers' records move.
 test_a_busy_machine_spaces_rebuilds_out() {
   local busy idle
   reset_case
@@ -1414,17 +1438,17 @@ test_a_busy_machine_spaces_rebuilds_out() {
   write_world
   export FM_FACTORY_INBOX="$BINDIR/counting-inbox"
   FM_FACTORY_NOW='' python3 "$FACTORY" refresh >/dev/null || fail "the first record could not be built"
-  local toucher="date +%s.\$\$.\$RANDOM > '$HOME_FIX/state/.owner-calls-changed'"
+  local toucher="touch '$HOME_FIX/state/shop-search.status'"
   : > "$HOME_FIX/reads"
-  FM_FACTORY_NOW='' FM_FACTORY_TEST_READ_SLOW=0.5 open_panes 1 8 "$toucher" \
+  FM_FACTORY_NOW='' FM_FACTORY_TTL=0 open_panes 1 14 "$toucher" \
     || fail "the pane could not be opened"
   idle=$(reads_after_mark)
   : > "$HOME_FIX/reads"
-  FM_FACTORY_NOW='' FM_FACTORY_LOADAVG=100000 FM_FACTORY_TEST_READ_SLOW=0.5 open_panes 1 8 "$toucher" \
+  FM_FACTORY_NOW='' FM_FACTORY_TTL=0 FM_FACTORY_LOADAVG=100000 open_panes 1 8 "$toucher" \
     || fail "the pane could not be opened"
   busy=$(reads_after_mark)
   export FM_FACTORY_INBOX="$BINDIR/inbox"
-  [ "$idle" -ge 2 ] || fail "an idle machine did not keep the calls current ($idle rebuild reads)"
+  [ "$idle" -ge 2 ] || fail "an idle machine did not keep the workers current ($idle rebuild reads)"
   [ "$busy" -le 2 ] || fail "a busy machine still rebuilt $busy times in 8 seconds"
   pass "factory pane: a busy machine spaces rebuilds out ($idle reads idle, $busy busy)"
 }
@@ -2627,6 +2651,7 @@ fm_test_run \
   test_r_on_a_factory_reads_only_a_job_it_draws \
   test_the_highlight_and_open_boxes_follow_the_record \
   test_a_parked_decision_leaves_the_live_pane_within_seconds \
+  test_a_parked_call_leaves_the_pane_within_seconds_after_a_slow_refresh \
   test_a_calls_rebuild_on_an_older_reading_keeps_the_newer_record \
   test_an_open_pane_reads_nothing_again_while_nothing_changes \
   test_open_panes_never_rebuild_side_by_side \

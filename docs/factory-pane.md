@@ -175,11 +175,13 @@ Who steers is the owner's stated choice of whether he is working with that crew 
 
 `bin/fm-factory.py --data` prints the record the screen is drawn from, and `--plain` prints the screen as text, so an agent reading the pane loses nothing.
 `--plain --factory <id>` prints one factory's page, `--plain --item <id>` puts the highlight on that item of NEEDS YOU so its card is the open one, and `--plain --height <rows>` prints only what a pane that tall shows when it opens.
-Both use the cached record while it is younger than 20 seconds, or older but younger than two minutes with no status, record or backlog file written since its last full refresh, and build a fresh one otherwise.
+Both use the cached record while it is younger than 20 seconds, or older with no status, record or backlog file written since its last full refresh, and build a fresh one otherwise.
+Once the record is five minutes old a full refresh comes due even with no such file written, unless the machine is busy: a worker's pane activity, a job gone quiet and a change merged elsewhere are recorded in no file, so without that safety refresh the pane would go stale.
 The owner's calls do not wait for that: when their change signal (`bin/fm-owner-calls-signal-lib.sh`) has moved past the one the record was built under, the record is rebuilt with a fresh read of the backlog and the inbox on the workers as the last full refresh read them, which takes a second or two rather than a full refresh.
 The live pane checks that signal once a second, so an answered, parked, released, closed or added decision, or a note to Starship, changes NEEDS YOU within about two seconds.
-All panes and live copies of one home share one rebuild at a time, full or of the owner's calls only, and after each the next waits at least as long as that one took, so a rebuild that overran leaves the machine that much rest.
-On a busy machine, a one-minute load average of twice the cores or more, the wait is at least a minute.
+All panes and live copies of one home share one rebuild at a time, full or of the owner's calls only.
+After a full refresh the next full refresh waits at least as long as that one took, so a refresh that overran leaves the machine that much rest; on a busy machine, a one-minute load average of twice the cores or more, that wait is at least a minute.
+A rebuild of the owner's calls waits for neither, only for a rebuild already under way, so the calls stay within about two seconds however long the last full refresh took.
 A pane that asks for a rebuild meanwhile starts none and queues none; it asks again at its next check.
 The record is always built by the code on disk, so a running pane or worker copy checks before every frame whether `bin/fm-factory.py` changed, and re-runs itself in place, in the same pane, once the new file is non-empty and compiles.
 The live pane holds that reload while the talk box, a confirmation or a notice is showing, so a draft or a sent or not-sent line is never lost, and reloads on the first frame after.
