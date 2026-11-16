@@ -425,13 +425,13 @@ home_has_records() {
   return 1
 }
 
-# Append "<count> <words>" to fleet_part in <color> when count is nonzero,
+# Append "<count> <noun>" to fleet_part in <color> when count is nonzero,
 # joined by a comma. Args: count color singular-words plural-words
 fleet_phrase() {
   [ "$1" -gt 0 ] 2>/dev/null || return 0
-  local words=$4
-  [ "$1" -ne 1 ] || words=$3
-  fleet_part="${fleet_part:+$fleet_part${D},${X} }${2}${1} ${words}${X}"
+  local noun=$4
+  [ "$1" -ne 1 ] || noun=$3
+  fleet_part="${fleet_part:+$fleet_part${D},${X} }${2}${1} ${noun}${X}"
 }
 
 render_once() {

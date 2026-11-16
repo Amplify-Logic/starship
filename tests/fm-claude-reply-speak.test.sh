@@ -29,7 +29,7 @@ export FAKE_CLAUDE
 install_hook_scripts() {
   local dir=$1 script
   mkdir -p "$dir/bin"
-  for script in fm-claude-reply-speak.sh fm-primary-scope-lib.sh fm-session-lock-lib.sh \
+  for script in fm-claude-reply-speak.sh fm-primary-scope-lib.sh fm-session-lock-lib.sh fm-omp-process-lib.sh \
     fm-hook-host-lib.sh fm-wake-lib.sh fm-path-lib.sh fm-cursor-lib.sh \
     fm-speak.sh fm-deepgram-lib.sh; do
     cp "$ROOT/bin/$script" "$dir/bin/$script"

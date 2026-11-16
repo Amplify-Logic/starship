@@ -529,7 +529,7 @@ test_first_and_second_mate_sessions_get_the_hook() {
   mate="$case_dir/mate"
   task="$case_dir/task"
   mkdir -p "$primary/bin" "$primary/config"
-  for script in fm-pr-text-pretool-check.sh fm-primary-scope-lib.sh fm-session-lock-lib.sh fm-cursor-lib.sh \
+  for script in fm-pr-text-pretool-check.sh fm-primary-scope-lib.sh fm-session-lock-lib.sh fm-omp-process-lib.sh fm-cursor-lib.sh \
     fm-hook-host-lib.sh fm-pr-text-guard.py fm-leak-guard.sh fm-leak-lib.sh fm-leak-shapes.py fm_secret_shapes.py \
     fm-addon.sh fm-timeout-lib.sh; do
     cp "$ROOT/bin/$script" "$primary/bin/"
