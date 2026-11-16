@@ -423,7 +423,7 @@ def only_read(name, text):
 
 def script(command):
     """The command as the shell runs it, for finding its gh calls: the body of a quoted heredoc that a plain cat
-    writes to a file the command only sends as a body or input file, which is data and never run, blanked,
+    writes to a file the command only reads (see only_read), which is data and never run, blanked,
     keeping every line."""
     out, pos = [], 0
     for m in DATA_HEREDOC.finditer(command):
