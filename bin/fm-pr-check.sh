@@ -515,6 +515,11 @@ fi
 # The merge-time re-record is not a new review-ready PR, so it writes nothing.
 [ ! -e "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}/fleet-ledger" ] || [ "${FM_PR_CHECK_MERGE:-}" = 1 ] \
   || FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE "$SCRIPT_DIR/fm-fleet-ledger.sh" pr_ready "$ID" "$URL" || true
+# A Mothership room card this task serves hears that its PR is ready, not on the
+# merge-time re-record (bin/fm-procevent-mothership.sh "OUTCOMES ON THE CARD");
+# a home that keeps no Mothership state costs one directory test.
+[ ! -d "$STATE/mothership" ] || [ "${FM_PR_CHECK_MERGE:-}" = 1 ] \
+  || FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE "$SCRIPT_DIR/fm-procevent-mothership.sh" report --detach "$ID" pr --pr "$URL" >/dev/null 2>&1 || true
 # The contribution observer uses the same authenticated check mechanism and
 # owns verdict freshness, required actors and external feedback separately from
 # the exact merged-state poll. Registration is local and performs no forge read.
