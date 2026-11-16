@@ -5,14 +5,14 @@ A new home needs none of this: [ONBOARDING.md](ONBOARDING.md) already covers it.
 
 New entries go under `## Unreleased` at the top.
 Before a release is cut, that heading becomes the release's name, such as `## starship-2026.11`, or `## starship-2026.11.1` for a fix release, above a fresh empty `## Unreleased`.
-A release's notes are exactly its own section here, and a home on the [release channel](docs/configuration.md#update-channel-configupdate-channel) reads the sections of the releases it moves past.
+A release's notes are exactly its own section here, and a home on the [release channel](docs/fork-configuration.md#update-channel-configupdate-channel) reads the sections of the releases it moves past.
 
 ## Unreleased
 
 - **Your first mate can watch a Mothership room for you.** Nothing changes until you switch a room on: say "turn on Mothership monitoring for <room>", or run `bin/fm-procevent-mothership.sh on <room>`, and a new request to your ship, an answer or a message in that room reaches you within about a minute.
-  It needs a Mothership link new enough to keep its own place in the room; `on` says so when yours needs updating ([configuration](docs/configuration.md#mothership-monitoring-configmothership-monitor)).
+  It needs a Mothership link new enough to keep its own place in the room; `on` says so when yours needs updating ([configuration](docs/fork-configuration.md#mothership-monitoring-configmothership-monitor)).
 - **"update starship" can follow named monthly releases.** By default nothing changes: your home still takes the newest Starship.
-  To move only to a named monthly release with notes, `echo release > ~/starship/config/update-channel`; your next update then moves your home forward onto the latest release, and a home already newer than it stays where it is until a newer release passes it, since an update never moves a home back; `bin/fm-update.sh --step-back` takes it back to the latest release ([configuration](docs/configuration.md#update-channel-configupdate-channel)).
+  To move only to a named monthly release with notes, `echo release > ~/starship/config/update-channel`; your next update then moves your home forward onto the latest release, and a home already newer than it stays where it is until a newer release passes it, since an update never moves a home back; `bin/fm-update.sh --step-back` takes it back to the latest release ([configuration](docs/fork-configuration.md#update-channel-configupdate-channel)).
 - **Thinking level follows your plan.** With no `config/primary-effort`, the first mate now thinks at your plan's level ([ONBOARDING.md step 3](ONBOARDING.md#3-get-starship-and-start-your-first-mate)), so a Pro home drops from `xhigh` to `medium`.
   To keep the old depth, `echo xhigh > ~/starship/config/primary-effort`, then start it again; on Pro that uses your allowance much faster.
 - **Your home may still run in tmux.** Homes set up before Herdr became the default stay on tmux, and the guide's `herdr` steps do not apply to them.

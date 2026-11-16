@@ -30,6 +30,15 @@
 # as 10- sets the order.
 #   bootstrap      executables run by session-start bootstrap among its
 #                  read-only checks; their output lands in the startup digest.
+#   bootstrap-sweep
+#                  executables run by session-start bootstrap's local phase
+#                  outside detect-only, for local upkeep such as relinking or
+#                  arming; they print only problems, which land in the digest.
+#                  For both bootstrap points, bootstrap sets FM_ROOT_OVERRIDE to
+#                  the checkout it checks and FM_CONFIG_OVERRIDE,
+#                  FM_STATE_OVERRIDE and FM_DATA_OVERRIDE to its own resolved
+#                  directories; bootstrap also sets FM_PROJECTS_OVERRIDE and
+#                  FM_BOOTSTRAP_NETWORK (skip, only or all) for its phase.
 #   session-start  executables run where the session-start digest prints the
 #                  operating instructions, on the full and the re-emit path;
 #                  their output is printed under ADD-ON INSTRUCTIONS.
@@ -213,7 +222,7 @@ resolve_addon() {
 
 valid_point() {
   case "$1" in
-    bootstrap|session-start|sentinel|watcher|deck-staging|todo-verbs|todo-page) return 0 ;;
+    bootstrap|bootstrap-sweep|session-start|sentinel|watcher|deck-staging|todo-verbs|todo-page) return 0 ;;
   esac
   return 1
 }
@@ -285,7 +294,7 @@ install_addon() {
       return 0
       ;;
     1)
-      note "no add-on is configured; write $ADDON_CONFIG first (docs/configuration.md \"Private add-on\")"
+      note "no add-on is configured; write $ADDON_CONFIG first (docs/fork-configuration.md \"Private add-on\")"
       return 1
       ;;
   esac

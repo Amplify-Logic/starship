@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Bootstrap-sweep hook (bin/fm-addon.sh): relink this home's opt-in skills, so
+# a switch changed by hand reaches the next session; bin/fm-opt-in-skills.sh
+# owns the switches and the links.
+set -u
+root=${FM_HOOK_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}
+[ -x "$root/bin/fm-opt-in-skills.sh" ] || exit 0
+"$root/bin/fm-opt-in-skills.sh" sync "${FM_ROOT_OVERRIDE:-$root}" || true

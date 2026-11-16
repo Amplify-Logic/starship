@@ -179,7 +179,7 @@
 # truly needed.
 #
 # DIGEST TRIM (opt-in): a home that creates the presence flag
-# config/startup-digest-trim (docs/configuration.md "Startup digest trim")
+# config/startup-digest-trim (docs/fork-configuration.md "Startup digest trim")
 # changes two things, and only these two; without the flag every byte above
 # and below is unchanged.
 #   - The held group of the tasks-axi listing prints counts by hold kind plus
@@ -885,7 +885,7 @@ if [ "$REEMIT" -eq 0 ] && [ "$SESSION_SOURCE" = startup ]; then
   AGENTS_START_HASH=$(hash_file_sha256 "$FM_ROOT/AGENTS.md" 2>/dev/null || true)
 fi
 
-# The home's recorded address and tone (docs/configuration.md "Address and
+# The home's recorded address and tone (docs/fork-configuration.md "Address and
 # tone") governs the very first reply, so it leads the output for the same
 # preview reason as the re-emit cue below: CONTEXT prints last and a spilled
 # digest shows only its head. Bounded to the section's first 15 non-blank

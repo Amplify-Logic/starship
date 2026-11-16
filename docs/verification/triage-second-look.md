@@ -1,7 +1,7 @@
 # Status second look verification
 
 Repeatable evidence for the opt-in second look over the status lines the deterministic wake classifier drops.
-Current behavior and the operator-facing contract are owned by [`../configuration.md`](../configuration.md) ("Status second look"), the invocation and exit codes by [`../../bin/fm-triage-second-look.sh`](../../bin/fm-triage-second-look.sh)'s header, and the request shape, questions, thresholds and tier rule by its engine; this page records evidence only.
+Current behavior and the operator-facing contract are owned by [`../fork-configuration.md`](../fork-configuration.md) ("Status second look"), the invocation and exit codes by [`../../bin/fm-triage-second-look.sh`](../../bin/fm-triage-second-look.sh)'s header, and the request shape, questions, thresholds and tier rule by its engine; this page records evidence only.
 
 Date: 2026-09-17.
 Shell: GNU bash 3.2.57 (macOS 25.5.0, Darwin arm64).

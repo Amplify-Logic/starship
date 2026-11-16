@@ -163,7 +163,7 @@
 #   --account <name> pins this worker to a NAMED VENDOR ACCOUNT: a claude harness
 #   runs on that account's CLAUDE_CONFIG_DIR home, a codex harness on its
 #   CODEX_HOME home, both derived as data/accounts/<vendor>/<name> from local
-#   gitignored config/accounts.json (docs/configuration.md owns that schema).
+#   gitignored config/accounts.json (docs/fork-configuration.md owns that schema).
 #   The resolved name is recorded in meta as account= with account_source=registry,
 #   and only when a pin actually applies, so an unpinned spawn's meta is
 #   unchanged; the source tag keeps a relaunch or secondmate respawn from reading
@@ -3130,7 +3130,7 @@ launch_template() {
   # --append-system-prompt would replace it) with the opt-in concise prompt
   # selected by config/claude-concise-prompt (header above); off, it is empty.
   # CLAUDE_CODE_AUTO_COMPACT_WINDOW=500000 caps this worker's auto-compaction
-  # window at 500k TOKENS (docs/configuration.md "Context window"). The CLI
+  # window at 500k TOKENS (docs/fork-configuration.md "Context window"). The CLI
   # reads the variable directly and it beats the autoCompactWindow user
   # setting, so the cap rides the launch and never touches the captain's
   # global config. The effective threshold is still min(this value, the
@@ -3192,7 +3192,7 @@ launch_template() {
   # (docs/turnend-guard.md, docs/sessionstart-nudge.md, docs/cd-guard.md), so the
   # secondmate launch deliberately keeps hooks on but shares this approval posture.
   # -c model_auto_compact_token_limit=500000 caps this worker's auto-compaction
-  # window at 500k TOKENS (docs/configuration.md "Context window"). It is a
+  # window at 500k TOKENS (docs/fork-configuration.md "Context window"). It is a
   # launch-line config override, so it never touches the captain's or a pinned
   # account's config.toml.
   codex)
@@ -7504,7 +7504,7 @@ BUSY_GEN=
         guard_hook="{\"matcher\":\"Bash\",\"hooks\":[{\"type\":\"command\",\"command\":\"$j_guard\",\"timeout\":15}]}"
       fi
     fi
-    # The worker outward check (bin/fm-outward-check.py, docs/configuration.md
+    # The worker outward check (bin/fm-outward-check.py, docs/fork-configuration.md
     # "Worker outward actions"): a PreToolUse hook on the claude.ai connector
     # and Claude in Chrome tools, the only ones it guards, that refuses an
     # outward action this job or home has not allowed, and a PostToolUse
@@ -7519,7 +7519,7 @@ BUSY_GEN=
     if [ "$KIND" != secondmate ]; then
       command -v python3 >/dev/null 2>&1 \
         || echo "warning: python3 is not installed; $ID's outward check will refuse every connected-account and browser action until it is" >&2
-      # The PR text check (bin/fm-pr-text-guard.py, docs/configuration.md
+      # The PR text check (bin/fm-pr-text-guard.py, docs/fork-configuration.md
       # "Private leak words"): a PreToolUse hook on Bash that refuses a
       # command publishing this home's private words or a token shape to a
       # public repository's PR titles, descriptions, comments or pipeline

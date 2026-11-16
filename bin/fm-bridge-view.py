@@ -902,7 +902,7 @@ def human_line(text: str, fallback: str = "") -> Optional[str]:
 
 def mailbox_config(home: Path) -> Dict[str, str]:
     """The optional config/bridge-mailbox: `key = value` lines naming the
-    voice mailbox hold-to-speak forwards to (docs/configuration.md owns the
+    voice mailbox hold-to-speak forwards to (docs/fork-configuration.md owns the
     keys). Unknown keys and malformed lines are skipped; no file means no
     mailbox."""
     config: Dict[str, str] = {}

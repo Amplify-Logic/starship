@@ -4,7 +4,7 @@ A factory is one segment of the owner's work: a crew with its own work list, rul
 The Factory pane is the glance across all of them, as a Herdr pane beside your work, and `enter` opens one factory's own tab with its live workers beside it.
 `bin/fm-factory.py` owns the record, the screen, the keys and the factory tabs, and `bin/fm-factory-pane.sh` owns installing, showing and removing the pane; read their headers before first use.
 `herdr-plugins/starship-factory/` is the Herdr plugin that carries it.
-The [factory registry](configuration.md#factory-registry-datafactoriesmd) names a home's factories; without one, every registered project is its own factory.
+The [factory registry](fork-configuration.md#factory-registry-datafactoriesmd) names a home's factories; without one, every registered project is its own factory.
 
 ## The overview
 

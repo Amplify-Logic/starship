@@ -13,7 +13,7 @@
 # into the checkout, so a switched-on skill is found at the same path, under the
 # same name, as when it was tracked there.
 #
-# SKILLS AND SWITCHES. docs/configuration.md "Opt-in skills" documents which
+# SKILLS AND SWITCHES. docs/fork-configuration.md "Opt-in skills" documents which
 # config/ presence flag switches each skill on; skill_table below applies it. A
 # switch is a presence flag: any file or link at a skill's path turns it on,
 # whatever it holds. A skill may name several flags separated by |, and any one

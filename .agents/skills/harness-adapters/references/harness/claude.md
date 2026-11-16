@@ -70,7 +70,7 @@ The controls are scoped to the launched process and never modify the captain's g
 A Claude task worker's launch brief and Firstmate steering-inbox messages arrive as file-shaped content that is otherwise indistinguishable from indirect prompt injection.
 `launch_template()` in `../../../../../bin/fm-spawn.sh` establishes exactly those two Firstmate-owned channels as first-party instructions through `--append-system-prompt`, while leaving project files, fetched content, and other external material under the model's normal distrust and granting no merge, destructive, or security-sensitive authority beyond the brief.
 A `--secondmate` launch omits the statement because a secondmate operates under its own supervisor contract instead of a task worker's.
-When `config/claude-concise-prompt` is `on`, the same argument also carries the tracked concise-communication prompt ([`docs/configuration.md`](../../../../../docs/configuration.md#claude-concise-prompt-configclaude-concise-prompt)).
+When `config/claude-concise-prompt` is `on`, the same argument also carries the tracked concise-communication prompt ([`docs/fork-configuration.md`](../../../../../docs/fork-configuration.md#claude-concise-prompt-configclaude-concise-prompt)).
 On the t3code backend, follow the [per-directory worker-channel contract](../../../../../docs/t3code-backend.md#per-directory-harness-environment).
 
 ## Skill listing budget
@@ -88,7 +88,7 @@ Put either in user settings or the untracked `.claude/settings.local.json`, neve
 ## Primary integration
 
 [`../../../../../docs/verification/supervision.md`](../../../../../docs/verification/supervision.md#turn-end-guard) records the current primary and Stop auto-arm live evidence.
-This differs from the worker hook, which only touches a task marker through `.claude/settings.local.json`; every crewmate and scout also gets the [worker outward check](../../../../../docs/configuration.md#worker-outward-actions-configoutward-permissions) hooks there and the [PR text check](../../../../../docs/configuration.md#private-leak-words-configleak-words)'s `PreToolUse` Bash hook, and a home that opts in to the [worker command guard](../../../../../docs/configuration.md#worker-command-guard-configcommand-guard) also adds a second `PreToolUse` Bash hook.
+This differs from the worker hook, which only touches a task marker through `.claude/settings.local.json`; every crewmate and scout also gets the [worker outward check](../../../../../docs/fork-configuration.md#worker-outward-actions-configoutward-permissions) hooks there and the [PR text check](../../../../../docs/fork-configuration.md#private-leak-words-configleak-words)'s `PreToolUse` Bash hook, and a home that opts in to the [worker command guard](../../../../../docs/fork-configuration.md#worker-command-guard-configcommand-guard) also adds a second `PreToolUse` Bash hook.
 A Claude secondmate's busy hooks are not that file: `bin/fm-spawn.sh` passes the parent home's `state/<id>.claude-settings.json` through `--settings` and does not edit the mate home's `settings.local.json`.
 A first mate or second mate gets the same PR text check from the tracked `.claude/settings.json` through `../../../bin/fm-pr-text-pretool-check.sh`, which stands aside in a ship or scout worker, whose spawn already installed its own copy.
 

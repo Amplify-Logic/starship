@@ -126,7 +126,7 @@
 # astra take a codex account, exported as CODEX_HOME. A profile whose vendor has no account concept (pi,
 # opencode, grok, cursor-grok, cursor-grok45) refuses --account rather
 # than ignoring it.
-# Accounts are named in local, gitignored config/accounts.json (docs/configuration.md
+# Accounts are named in local, gitignored config/accounts.json (docs/fork-configuration.md
 # owns that schema) and their homes are DERIVED as data/accounts/<vendor>/<name>,
 # never read from that file. Omitting the flag uses that vendor's default when the
 # file names one. With NO such file there is no pinning at all: every profile's
@@ -692,7 +692,7 @@ install_starter_settings() {
     installed="$installed config/$name"
   done
   [ -z "$installed" ] \
-    || printf 'fm-primary: new home: installed the starter settings%s (docs/configuration.md "Starter settings")\n' "$installed" >&2
+    || printf 'fm-primary: new home: installed the starter settings%s (docs/fork-configuration.md "Starter settings")\n' "$installed" >&2
   return 0
 }
 

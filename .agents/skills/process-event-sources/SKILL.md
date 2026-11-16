@@ -62,7 +62,7 @@ bin/fm-procevent-quota.sh arm [--interval <secs>] [--threshold <percent>] [--pro
 
 It keeps polling through unknown quota and wakes when known quota drops below the configured threshold, runway becomes `exhausted_now`, or polling fails.
 
-When the owner asks to switch Mothership monitoring on or off for a room, run `bin/fm-procevent-mothership.sh on <room>` or `off <room>`, never a hand registration; [`docs/configuration.md`](../../../docs/configuration.md#mothership-monitoring-configmothership-monitor) owns the setting.
+When the owner asks to switch Mothership monitoring on or off for a room, run `bin/fm-procevent-mothership.sh on <room>` or `off <room>`, never a hand registration; [`docs/fork-configuration.md`](../../../docs/fork-configuration.md#mothership-monitoring-configmothership-monitor) owns the setting.
 `on` lists the requests already open for the ship, so relay those too.
 While a room is on, never run `mothership pull` for it, because the monitor already relays everything new and a pull would show it twice; `mothership requests` and `mothership status` stay fine for looking.
 

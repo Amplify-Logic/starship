@@ -18,7 +18,7 @@ Keeping sessions short and rotating before context balloons past roughly half us
 ## Configuration
 
 Local, gitignored `config/primary-handoff` is a JSON object.
-See [`docs/examples/primary-handoff.json`](examples/primary-handoff.json) and the "Primary orchestrator handoff" section of [`configuration.md`](configuration.md).
+See [`docs/examples/primary-handoff.json`](examples/primary-handoff.json) and the "Primary orchestrator handoff" section of [`fork-configuration.md`](fork-configuration.md).
 The quota-rotation example uses `"chain": ["claude-fable", "claude-opus"]` so a Fable primary can hand off directly to Opus.
 Both Claude profiles read the shared general windows (`five_hour`, `seven_day`) of the single `claude` provider, and `claude-fable` also reads its own `model:fable` window, so this chain rotates when either the shared windows or the Fable window crosses the threshold.
 After rotating to `claude-opus` only the shared windows bound it, so no further quota rotation is expected once they are low: `check` reports `handoff: chain exhausted` and stays put quietly instead of failing on every poll, while the context axis can still refresh the same profile.

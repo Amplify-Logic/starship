@@ -34,13 +34,13 @@
 # config/private-projects list is always excluded: its commands are never sent
 # to an additional outside service such as Jev, whatever the gate says; projects
 # named on an `exclude` line are treated the same way. Both match the project's
-# logical directory name, as the registry names it. docs/configuration.md
+# logical directory name, as the registry names it. docs/fork-configuration.md
 # "Worker command guard" owns the operator contract.
 #
 # LOCAL DATABASE LIST FIRST, FOR EVERY PROJECT. Before anything is redacted or
 # sent, database_rule() matches the whole raw command, heredoc and -c bodies
 # included, against its fixed list of commands that reset, push to, repair or
-# delete a live database, listed for operators in docs/configuration.md. A
+# delete a live database, listed for operators in docs/fork-configuration.md. A
 # match is blocked outright with a short notice that live database changes go
 # to firstmate as a blocker. Nothing remote is involved, so it never steps aside:
 # it runs for excluded and private projects too, and a crash in the check
@@ -58,7 +58,7 @@
 # REDACTS KNOWN SECRETS. Only the command text leaves the machine, never the
 # working directory, the task or the environment. Before it is sent, known
 # .env and secret-looking environment values are removed, as described in
-# docs/configuration.md. Redaction is best-effort: known keys, tokens,
+# docs/fork-configuration.md. Redaction is best-effort: known keys, tokens,
 # password arguments, whole quoted or unquoted, credentialed URLs and
 # private-key blocks are replaced; a NAME=value assignment loses its value when
 # the name looks secret or the value looks random. It matches text patterns,

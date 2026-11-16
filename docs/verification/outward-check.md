@@ -1,7 +1,7 @@
 # Worker outward check verification
 
 Repeatable evidence for the worker outward-action check.
-Current behavior and the operator-facing contract are owned by [`../configuration.md`](../configuration.md) ("Worker outward actions"), and the matching rules by [`../../bin/fm-outward-check.py`](../../bin/fm-outward-check.py)'s header; this page records evidence only.
+Current behavior and the operator-facing contract are owned by [`../fork-configuration.md`](../fork-configuration.md) ("Worker outward actions"), and the matching rules by [`../../bin/fm-outward-check.py`](../../bin/fm-outward-check.py)'s header; this page records evidence only.
 
 Date: 2026-10-20; portable suite rerun 2026-10-24 (Python 3.14.8, macOS 14.6, Darwin arm64).
 Python: 3.12.5 (macOS 26.5.1, Darwin arm64).

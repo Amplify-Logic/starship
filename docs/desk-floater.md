@@ -34,7 +34,7 @@ Exactly one fleet brain remains: the primary already running in this home.
    enabled = true
    ```
 
-   This step is optional: replies stay text without it, and [desk voice-out](configuration.md#desk-voice-out-configspeak) explains what spoken replies need.
+   This step is optional: replies stay text without it, and [desk voice-out](fork-configuration.md#desk-voice-out-configspeak) explains what spoken replies need.
 
 3. Launch the floater:
 
@@ -177,7 +177,7 @@ macOS may only notice a new Screen Recording grant after the floater restarts, s
 
 macOS keeps both grants for as long as the floater keeps the same signature, so `bin/fm-desk-floater.sh` signs every floater it launches with the same identity.
 It uses the first "Apple Development" certificate in your keychain, the one Xcode creates when you sign in with an Apple ID, so a rebuilt floater keeps its grants and the badges stay away.
-To use another certificate, put its name or SHA-1 hash on one line in this home's private `config/desk-floater-signing-identity` (see [configuration](configuration.md#desk-floater-signing-identity-configdesk-floater-signing-identity)).
+To use another certificate, put its name or SHA-1 hash on one line in this home's private `config/desk-floater-signing-identity` (see [configuration](fork-configuration.md#desk-floater-signing-identity-configdesk-floater-signing-identity)).
 If that certificate is missing, expired or fails to sign, the launcher says so and falls back to the "Apple Development" one, then to ad-hoc, and the floater still starts.
 Without a certificate the floater stays ad-hoc signed and the launcher says so: macOS then ties each grant to that one build, every rebuild (after any change to its code) asks again, and the badges come back.
 The first signed build is new to macOS too, so it is asked about once more.
@@ -315,7 +315,7 @@ The variable keeps its historical name because it is the published opt-out; it
 has never been a Deepgram gate.
 
 TTS model default: `aura-2-thalia-en` (`DEEPGRAM_TTS_MODEL`, from the environment or this home's gitignored `.env`).
-STT model default: `nova-3` (`DEEPGRAM_STT_MODEL`, from the environment or this home's gitignored `.env`); per-home vocabulary in `config/stt-vocabulary`, see [docs/configuration.md](configuration.md#speech-to-text-vocabulary-configstt-vocabulary).
+STT model default: `nova-3` (`DEEPGRAM_STT_MODEL`, from the environment or this home's gitignored `.env`); per-home vocabulary in `config/stt-vocabulary`, see [docs/fork-configuration.md](fork-configuration.md#speech-to-text-vocabulary-configstt-vocabulary).
 
 ## Non-goals
 

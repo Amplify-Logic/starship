@@ -1529,22 +1529,23 @@ test_portable_serial_packing_budget_boundary() {
   while IFS= read -r script; do
     printf '#!/usr/bin/env bash\nexit 0\n' >"$repo/$script"
   done < <("$RUNNER" --list --all)
-  # The fork registry is packing policy too: it keeps its real-herdr-gated rows
-  # out of the serial lane.
+  # The fork registry and timing overlay are packing policy too: the registry
+  # keeps its real-herdr-gated rows out of the serial lane, and the timing file
+  # sets the shard count and the lanes, and carries the hints seeded below.
   cp "$ROOT/bin/fm-fork-test-registry-lib.sh" "$repo/bin/"
   cp "$ROOT/tests/fork-test-registry.conf" "$repo/tests/"
+  cp "$RUNNER" "$repo/bin/fm-test-run.sh"
 
   for weight in 1200000 1200001; do
-    cp "$RUNNER" "$repo/bin/fm-test-run.sh"
-    python3 - "$repo/bin/fm-test-run.sh" "$weight" <<'PY' \
+    python3 - "$ROOT/tests/fork-test-timing.conf" "$repo/tests/fork-test-timing.conf" "$weight" <<'PY' \
       || fail "could not seed the fixture's measured timing input"
 from pathlib import Path
-import re, sys
-runner = Path(sys.argv[1])
-weight = sys.argv[2]
-text = runner.read_text()
+import sys
+source = Path(sys.argv[1])
+timing = Path(sys.argv[2])
+weight = sys.argv[3]
 scripts = sorted(
-    f"tests/{path.name}" for path in (runner.parent.parent / "tests").glob("*.test.sh")
+    f"tests/{path.name}" for path in (timing.parent).glob("*.test.sh")
 )
 if "tests/fm-watch-triage.test.sh" not in scripts:
     sys.exit("fixture inventory lost tests/fm-watch-triage.test.sh")
@@ -1554,17 +1555,13 @@ lines = [
     f"{script} {weight if script == 'tests/fm-watch-triage.test.sh' else '1'}"
     for script in scripts
 ]
-table = "\n".join(lines)
-new, n = re.subn(
-    r"(portable_serial_weight_hints\(\) \{\n  cat <<'EOF'\n).*?(\nEOF\n)",
-    lambda match: match.group(1) + table + match.group(2),
-    text,
-    count=1,
-    flags=re.S,
-)
-if n != 1:
-    sys.exit("serial hint table not found")
-runner.write_text(new)
+kept = [
+    line for line in source.read_text().splitlines()
+    if not line.startswith("serial-hint ")
+]
+if len(kept) == len(source.read_text().splitlines()):
+    sys.exit("serial hint rows not found")
+timing.write_text("\n".join(kept + [f"serial-hint {line}" for line in lines]) + "\n")
 PY
     out=$(bash "$repo/bin/fm-test-run.sh" --check-coverage 2>&1) && rc=0 || rc=$?
     if [ "$weight" -eq 1200000 ]; then
@@ -1580,6 +1577,62 @@ PY
     fi
   done
   pass "serial packing accepts the exact budget and refuses one millisecond above it"
+}
+
+test_fork_timing_overlay() {
+  local tmp repo out rc baseline
+  tmp=$(fm_test_tmproot fm-test-run-fork-timing)
+  repo="$tmp/repo"
+  mkdir -p "$repo/bin" "$repo/tests"
+  cp "$RUNNER" "$repo/bin/fm-test-run.sh"
+  cp "$ROOT/bin/fm-fork-test-registry-lib.sh" "$repo/bin/"
+  for script in tests/fm-afk-contract.test.sh tests/fm-afk-return.test.sh \
+    tests/fm-aaa-unmeasured.test.sh tests/fm-brief.test.sh tests/fm-lint.test.sh; do
+    printf '#!/usr/bin/env bash\nexit 0\n' >"$repo/$script"
+  done
+
+  # Baseline with no timing file: the runner's own tables decide. The test is
+  # meaningful only while the runner's table measures fm-afk-return above the
+  # unmeasured default, which the unmeasured script would otherwise win on path.
+  baseline=$(bash "$repo/bin/fm-test-run.sh" --list-scheduled \
+    tests/fm-afk-return.test.sh tests/fm-aaa-unmeasured.test.sh) \
+    || fail "baseline --list-scheduled failed"
+  [ "$(printf '%s\n' "$baseline" | head -n 1)" = tests/fm-afk-return.test.sh ] \
+    || fail "fixture assumption broke: the runner no longer measures fm-afk-return above the default; pick another measured script"
+
+  printf '%s\n' \
+    '# fixture' \
+    'serial-shards 5' \
+    'parallel-lane 1 tests/fm-lint.test.sh' \
+    'parallel-lane 1 tests/fm-brief.test.sh' \
+    'serial-hint tests/fm-afk-contract.test.sh 99999999' \
+    >"$repo/tests/fork-test-timing.conf"
+
+  out=$(bash "$repo/bin/fm-test-run.sh" --list-scheduled \
+    tests/fm-afk-return.test.sh tests/fm-aaa-unmeasured.test.sh tests/fm-afk-contract.test.sh) \
+    || fail "--list-scheduled with the overlay failed"
+  [ "$out" = "tests/fm-afk-contract.test.sh
+$baseline" ] || fail "a fork hint must win and the runner's other hints must pass through: $out"
+
+  out=$(bash "$repo/bin/fm-test-run.sh" --list-lanes) || fail "--list-lanes with the overlay failed"
+  assert_contains "$out" "portable-serial-5of5" "serial-shards did not set the shard count"
+  assert_not_contains "$out" "portable-serial-6of" "serial-shards left extra shards"
+  out=$(bash "$repo/bin/fm-test-run.sh" --list --lane portable-parallel-1) \
+    || fail "overlaid parallel lane did not select"
+  [ "$out" = "tests/fm-lint.test.sh
+tests/fm-brief.test.sh" ] || fail "parallel-lane rows must replace the lane in row order: $out"
+
+  printf 'serial-hint tests/fm-brief.test.sh fast\n' >"$repo/tests/fork-test-timing.conf"
+  out=$(bash "$repo/bin/fm-test-run.sh" --list-lanes 2>&1) && rc=0 || rc=$?
+  expect_code 2 "$rc" "a malformed timing row must refuse"
+  assert_contains "$out" "fork-test-timing.conf:1:" "malformed row refusal must name its line"
+
+  printf 'parallel-lane 9 tests/fm-brief.test.sh\n' >"$repo/tests/fork-test-timing.conf"
+  out=$(bash "$repo/bin/fm-test-run.sh" --list-lanes 2>&1) && rc=0 || rc=$?
+  expect_code 2 "$rc" "a lane the runner lacks must refuse"
+  assert_contains "$out" "no portable parallel lane 9" "unknown lane refusal must name the lane"
+  rm -rf "$tmp"
+  pass "the fork timing file overlays hints, lanes and the shard count, and refuses bad rows"
 }
 
 test_portable_serial_shard_lane_refusals() {
@@ -2321,6 +2374,7 @@ test_portable_parallel_lanes_stay_duration_balanced
 test_portable_serial_shards_partition_the_serial_lane
 test_portable_serial_hint_coverage_is_reported_and_bounded
 test_portable_serial_packing_budget_boundary
+test_fork_timing_overlay
 test_portable_serial_shard_lane_refusals
 test_jobs_requires_proven_isolated
 test_jobs_admits_a_concurrent_safe_family

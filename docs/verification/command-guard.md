@@ -1,7 +1,7 @@
 # Worker command guard verification
 
 Repeatable evidence for the opt-in worker command guard.
-Current behavior and the operator-facing contract are owned by [`../configuration.md`](../configuration.md) ("Worker command guard"), and the invocation, questions, criteria, thresholds and redaction by [`../../bin/fm-command-guard.py`](../../bin/fm-command-guard.py)'s header; this page records evidence only.
+Current behavior and the operator-facing contract are owned by [`../fork-configuration.md`](../fork-configuration.md) ("Worker command guard"), and the invocation, questions, criteria, thresholds and redaction by [`../../bin/fm-command-guard.py`](../../bin/fm-command-guard.py)'s header; this page records evidence only.
 
 Date: 2026-09-29.
 Python: 3.12.5 (macOS 25.5.0, Darwin arm64).

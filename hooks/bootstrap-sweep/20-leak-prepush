@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Bootstrap-sweep hook (bin/fm-addon.sh): keep the pre-push leak check on this
+# checkout and the add-on's, so a push typed by hand is checked too;
+# bin/fm-leak-prepush.sh owns the hook.
+# Prints:
+#   "LEAK_PREPUSH: <checkout>: <problem>"
+set -u
+root=${FM_HOOK_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}
+[ -x "$root/bin/fm-leak-prepush.sh" ] || exit 0
+"$root/bin/fm-leak-prepush.sh" install "${FM_ROOT_OVERRIDE:-$root}" starship || true
+if addon_root=$("$root/bin/fm-addon.sh" root 2>/dev/null); then
+  "$root/bin/fm-leak-prepush.sh" install "$addon_root" addon || true
+fi

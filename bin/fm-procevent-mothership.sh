@@ -204,7 +204,7 @@
 # call, and a call that runs past it counts as failed. FM_MOTHERSHIP_TAILSCALE
 # is the Tailscale command asked `status --json` after a failed read (default:
 # tailscale on PATH; empty for none); it is asked only then, within 5 seconds.
-# docs/configuration.md "Mothership monitoring (config/mothership-monitor)"
+# docs/fork-configuration.md "Mothership monitoring (config/mothership-monitor)"
 # owns the setting and its operating contract.
 set -u
 

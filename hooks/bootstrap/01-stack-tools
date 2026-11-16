@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Bootstrap hook (bin/fm-addon.sh): the read-only stack-tool version notice.
+# Prints:
+#   "STACK_TOOLS: behind: <tool> installed <version>, latest|pinned
+#    <version> (small update|quiet-window upgrade); ..."
+#   "STACK_TOOLS: could not check: <tool>, ..."
+#
+# STACK_TOOLS is the read-only network-phase tool-version notice owned
+# by bin/fm-stack-versions.sh notice, which caches its release lookups
+# for a day per home, names a tool it could not check at most once a
+# day, and is otherwise silent unless an installed stack tool is known
+# to be behind. It installs nothing.
+# It runs in bootstrap's network phase only (not with FM_BOOTSTRAP_NETWORK=skip).
+set -u
+root=${FM_HOOK_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}
+[ "${FM_BOOTSTRAP_NETWORK:-all}" != skip ] || exit 0
+[ -x "$root/bin/fm-stack-versions.sh" ] || exit 0
+# The deferred network stage times each of its steps; bin/fm-timing-lib.sh is
+# inert unless FM_TIMING_LOG names a file.
+# shellcheck source=bin/fm-timing-lib.sh disable=SC1091
+. "$root/bin/fm-timing-lib.sh"
+stamp=$(fm_timing_now_ms)
+"$root/bin/fm-stack-versions.sh" notice
+fm_timing_record phase stack-versions "$stamp"

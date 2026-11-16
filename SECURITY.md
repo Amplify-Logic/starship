@@ -20,7 +20,7 @@ The first mate launches Claude Code with its permission prompts turned off, and 
 What keeps it in line are its house rules, written in [AGENTS.md](AGENTS.md) and summed up in [what Starship must never become](docs/never-become.md), plus guard scripts that refuse unsafe steps:
 
 - Workers change your projects only in isolated copies, and nothing merges without your word unless you turn that on for a project.
-- Sending, posting and other outward actions need your permission ([worker outward actions](docs/configuration.md#worker-outward-actions-configoutward-permissions)).
+- Sending, posting and other outward actions need your permission ([worker outward actions](docs/fork-configuration.md#worker-outward-actions-configoutward-permissions)).
 - Destructive, irreversible and security-sensitive steps come back to you.
 
 These are rules an AI follows and checks scripts run, not a sandbox.

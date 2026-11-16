@@ -15,7 +15,7 @@
 #       on stdin. On a refusal it prints the documented PreToolUse deny object
 #       on stdout; on an allow it prints nothing. It always exits 0.
 #
-# docs/configuration.md "Private leak words" owns the operator contract. The
+# docs/fork-configuration.md "Private leak words" owns the operator contract. The
 # word list, its format and where it is found belong to bin/fm-leak-guard.sh,
 # whose --text mode this hook runs with FM_HOME set to DIR from the command's
 # working directory, so the words of the branch checked out there count as

@@ -1,7 +1,7 @@
 # config/speak - spoken replies for this home (bin/fm-speak.sh).
 # Copy this into a local, gitignored config/speak to have the first mate speak
 # its replies out of this Mac's speaker. Without this file it stays silent.
-# `key = value` lines; unknown keys are refused. See docs/configuration.md
+# `key = value` lines; unknown keys are refused. See docs/fork-configuration.md
 # "Desk voice-out" for what it needs: a spoken register owner named below, and
 # either DEEPGRAM_API_KEY in .env or a macOS voice below.
 enabled = true

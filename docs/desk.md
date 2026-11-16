@@ -3,7 +3,7 @@
 The desk is your whole Starship workspace in Herdr, opened by one command: `starship`.
 It starts Herdr's default session or attaches to it when it is already running, fills in whatever your desk layout names that is missing, and opens the Terminal windows that show the session.
 Run it again and it changes nothing, so it is safe to run whenever you sit down.
-`bin/fm-desk.py` owns the commands, and its header is the exact reference; the [desk layout](configuration.md#desk-layout-configdesk-layout) owns what the desk holds.
+`bin/fm-desk.py` owns the commands, and its header is the exact reference; the [desk layout](fork-configuration.md#desk-layout-configdesk-layout) owns what the desk holds.
 
 ## Set it up
 

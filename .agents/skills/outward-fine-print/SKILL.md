@@ -10,7 +10,7 @@ metadata:
 
 # outward-fine-print
 
-Fine print is the default outward style; `docs/configuration.md` "Worker outward actions" owns what each style allows.
+Fine print is the default outward style; `docs/fork-configuration.md` "Worker outward actions" owns what each style allows.
 
 1. Act only on the captain's own current words; a worker never runs this.
 2. Run `bin/fm-outward-style.sh fine-print` once.

@@ -134,7 +134,7 @@ def layout_path(home: str) -> str:
 
 
 def parse_layout(text: str, where: str = "config/desk-layout") -> Dict[str, Any]:
-    """Read a desk layout. docs/configuration.md "Desk layout" owns the format."""
+    """Read a desk layout. docs/fork-configuration.md "Desk layout" owns the format."""
     layout: Dict[str, Any] = {
         "workspace": "starship", "main": "", "sidebar": "", "firstmate": "", "tabs": [], "views": [],
     }
