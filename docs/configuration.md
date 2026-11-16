@@ -15,7 +15,7 @@ Start with the directory layout, then use the setting reference for the behavior
 | Persistent secondmates | [Secondmate routes](#secondmate-routes-datasecondmatesmd) |
 | Naming the factories the Factory pane shows | [Factory registry](#factory-registry-datafactoriesmd) |
 | The night shift line on the bridge strip | [Night shift window](#night-shift-window-confignight-shift-window) |
-| What `starship` opens in Herdr: tabs, panes, Terminal windows and the sidebar | [Desk layout](#desk-layout-configdesk-layout) |
+| What `starship` opens in Herdr: tabs, panes, Terminal or Ghostty windows and the sidebar | [Desk layout](#desk-layout-configdesk-layout) |
 | Review bots on owned GitHub pull requests | [Contribution review bots](#contribution-review-bots-configcontribution-review-bots) |
 | Starter settings for a new home: which model does which job, transcription words, and how hard the first mate thinks | [Starter settings](#starter-settings-first-launch), [crew dispatch profiles](#crew-dispatch-profiles-configcrew-dispatchjson), [speech-to-text vocabulary](#speech-to-text-vocabulary-configstt-vocabulary), and [primary effort](#primary-effort-configprimary-effort) |
 | Spoken replies | [Desk voice-out](#desk-voice-out-configspeak) |
@@ -1804,6 +1804,7 @@ One setting per line as `key = value`; blank lines and lines starting with `#` a
 workspace = starship
 main = Bridge
 sidebar = collapsed
+terminal = Terminal
 firstmate = firstmate claude-opus
 tab = Sample Shop | factory sample-shop
 tab = Recipe Box | factory recipe-box
@@ -1821,7 +1822,8 @@ The desk always opens Herdr's default session.
 - `firstmate` is the command typed into the main tab's idle first-mate pane; without it the desk only notes an idle pane.
 - Each `tab` line names one tab besides the main tab, in order; `| factory <id>` makes it that factory's page, by its id in the [factory registry](#factory-registry-datafactoriesmd), and a tab without it is a plain shell.
   A factory tab is named after the factory in the registry; the desk finds it by the tab the Factory pane recorded for it, else by the label.
-- Each `view` line is one Terminal window: a Terminal profile name, then optionally `| <font size>`; an empty profile name uses Terminal's default.
+- `terminal` is the app the views open in, `Terminal` (the default) or `Ghostty`; pick Ghostty where Terminal cannot show 24-bit color, as on macOS before 26.
+- Each `view` line is one window: a Terminal profile name, then optionally `| <font size>`; an empty profile name uses Terminal's default, and Ghostty uses only the font size, as in `view = | 13`.
 
 ## Secondmate routes (data/secondmates.md)
 
