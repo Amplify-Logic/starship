@@ -931,6 +931,8 @@ test_every_command_that_changes_a_call_moves_the_calls_signal() {
   assert_equals "$(calls_signal)" "$before" "reading the backlog moved the calls signal"
   FM_HOME="$home" bash "$ROOT/bin/fm-captain-hold.sh" open pick-a >/dev/null 2>&1
   assert_equals "$(calls_signal)" "$before" "asking whether a call is open moved the calls signal"
+  FM_HOME="$home" bash "$ROOT/bin/fm-captain-hold.sh" reconcile list >/dev/null 2>&1
+  assert_equals "$(calls_signal)" "$before" "listing the pending reconcile requests moved the calls signal"
   FM_HOME="$home" bash "$ROOT/bin/fm-tasks-axi.sh" hold pick-a --until 2099-01-01 >/dev/null \
     || fail "the backlog write failed"
   [ "$(calls_signal)" != "$before" ] || fail "a backlog write through fm-tasks-axi.sh did not move the calls signal"
