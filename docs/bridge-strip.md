@@ -20,8 +20,7 @@ It shows the STARSHIP wordmark, three lamps for the crew, the owner's most urgen
 A lamp with nothing to count stays unlit, so the row keeps its shape.
 `decisions for you` and `ready to merge` are the owner's calls, the one count the [Factory pane](factory-pane.md) and the tap page also show; `fm_owner_calls` in `bin/fm-fleet-status-lib.sh` owns it.
 A worker's question, an ask-user review finding, a worker's pause, and an aged, deferred, or blocked hold are never counted there.
-The counts are the status bar's figures: `busy` is its `working` plus `checking`, and `decisions for you` plus `ready to merge` together are its `waiting for you`.
-[status-bar.md](status-bar.md#fleet-fields) owns what each figure means and how the reading is taken.
+The counts are the status bar's figures in the status bar's words, and the Factory pane's count line shows the same ones; [status-bar.md](status-bar.md#fleet-words) owns the words, what each figure means, and how the reading is taken.
 The strip reads that same cached reading, so it costs the fleet nothing extra.
 The strip redraws every 5 seconds, and within a second of the owner's calls changing.
 A decision answered, parked, released, closed or added changes no worker, so the owner's calls do not wait for the slow worker reading: whenever their change signal moves, they are read again on their own and the strip shows the next call within about two seconds.
@@ -49,7 +48,7 @@ The strip asks the terminal for mouse reports to see the click, so Herdr's own t
 
 A red `■ 1 failed, 2 stopped` shows before the battery when work failed or a worker stopped, so trouble shows without the owner looking for it.
 `failed` counts tasks whose current state is failed: a worker's failure or a failed validation run.
-`stopped` counts tasks whose worker is gone while their record remains, as the status bar's figure of the same name does, except that a failed task whose worker is gone counts as failed only, so each broken task counts once.
+`stopped` counts tasks whose worker is gone while their record remains, except that a failed task whose worker is gone counts as failed only, so each broken task counts once; the status bar's `failed` and `stopped` are the same two figures.
 It clears as soon as the reading no longer counts either.
 On a narrower pane it reads `■ 3 broken`.
 

@@ -21,7 +21,7 @@ Width-constrained surfaces clip or truncate the canonical line without wrapping 
 | `[account-role]` | A compact role word for the vendor account this primary is running on, attached to the model identity rather than forming its own group. | Omitted entirely when the account is unknown. |
 | `🧠 context` | The integer percentage of the model context window already used. | `--` when the orchestrator does not expose current context use. |
 | `⚡ quota` | The integer percentage of the provider's binding quota window already used, immediately followed by a dim token naming the window or windows that bind it when the adapter knows them. | `--` when the provider or orchestrator does not expose quota, or exposes a figure whose windows cannot all be named. |
-| `workers` | Plain-word counts, in this order and each shown only when nonzero, joined by commas: `N working`, `N checking`, `N waiting`, `N waiting for you`, `N needs a look` (`N need a look` when more than one), and `N stopped`, as in `1 working, 1 waiting for you`. | Dim `workers unknown` only while no good fleet reading exists; a last good reading that is no longer current keeps its words, followed by a dim age such as `(10m ago)`; dim `N tasks, state unknown` (`1 task, state unknown`) when the reading is known, every count is zero, and task records still exist; dim `no workers` only when the reading is known, every count is zero, and no task record exists. |
+| `workers` | Plain-word counts, in this order and each shown only when nonzero, joined by commas: `N busy`, `N waiting`, `N decisions for you` (`1 decision for you`), `N ready to merge`, `N needs a look` (`N need a look` when more than one), `N failed`, and `N stopped`, as in `1 busy, 1 ready to merge`. | Dim `workers unknown` only while no good fleet reading exists; a last good reading that is no longer current keeps its words, followed by a dim age such as `(10m ago)`; dim `N tasks, state unknown` (`1 task, state unknown`) when the reading is known, every count is zero, and task records still exist; dim `no workers` only when the reading is known, every count is zero, and no task record exists. |
 | `👁 supervision` | `watching` while `state/.last-watcher-beat` is under 180 seconds old. | Bright-red `not watching` when the beacon is missing, unreadable, or 180 seconds old or more; dim `idle` instead while the home holds no task or second-mate record and no registered check. |
 | `$ cost` | Cumulative cost in US dollars for the current orchestrator session, rounded to two decimals. | `$--` when the orchestrator does not expose cost. |
 | `💤 AFK` | Whether the Firstmate home is in away mode. | Dim `💤--` when away mode is off. |
@@ -29,16 +29,26 @@ Width-constrained surfaces clip or truncate the canonical line without wrapping 
 ## Fleet fields
 
 The `workers` group speaks plain words because the captain reads this row, and `AGENTS.md` section 9 asks for outcomes rather than internal labels.
-Each word maps to one figure from `bin/fm-fleet-status-lib.sh`:
 
-| Words | Figure | Meaning |
-| --- | --- | --- |
-| `working` | working | Tasks whose recorded endpoint has an agent running on it right now and that no other figure claims. This is the headline, because it answers how many workers are busy for the captain. |
-| `checking` | validating | Tasks the validation pipeline is carrying. They are progressing, but no worker is typing at them. |
-| `waiting` | paused | Tasks in a declared bounded external wait. |
-| `waiting for you` | ready | The owner's calls: decisions held for the captain that wait on him now, plus PRs and ready branches waiting for the merge word. It is the same count the bridge strip, the Factory pane, and the tap page show. |
-| `needs a look` | attention | Tasks that need Firstmate to act: a blocker, a failure, or a question a worker or the checks put to Firstmate. |
-| `stopped` | stopped | Records still here whose worker is not: the endpoint is proven dead or absent, or the recorded worktree is gone. Done work is never counted here, because a worker that exits once its work is done is not a lost worker; a worker waiting on a question is not done, so its lost worker is. |
+### Fleet words
+
+The fleet is shown in three places: this row and the [bridge strip](bridge-strip.md) are the overview, and the [Factory pane](factory-pane.md) is the detail view.
+All three take their figures from one reading, `fm_fleet_status_counts` `overview` in `bin/fm-fleet-status-lib.sh`, so the same moment never shows different numbers, and this table is the one list of the words they use.
+A surface uses a different word only for a thing that is genuinely different; the Factory pane's extra detail words, such as `with Starship`, `no reading`, `next` and `on hold`, name things the overview does not count.
+
+| Word | Figure | Meaning | Where |
+| --- | --- | --- | --- |
+| `busy` | working plus validating | Tasks with an agent running on their recorded endpoint that no other figure claims, plus tasks the validation pipeline is carrying. | The row; the strip's amber lamp; the Factory count line, and a job reading `busy` with its step (`building`, `planning` or `checking`). |
+| `waiting` | paused | Tasks in a declared bounded external wait. | The row; a Factory job. |
+| `decisions for you` | decisions | Decisions held for the captain that wait on him now; `decision for you` when there is one. | The row; the strip's red lamp; the Factory count line, its NEEDS YOU questions, and a job held for one. |
+| `ready to merge` | ready minus decisions | PRs and ready branches waiting for the merge word, unless the task carries an open captain hold. | The row; the strip's green lamp; the Factory count line, its NEEDS YOU finished work, a job, and a job's last step. |
+| `needs a look` | attention minus failed | Tasks that need Firstmate to act: a blocker, or a question a worker or the checks put to Firstmate. | The row; a Factory job. |
+| `failed` | failed | Tasks whose current state is failed: a worker's failure or a failed validation run. | The row; the strip's red alert; a Factory job. |
+| `stopped` | lost | Records still here whose worker is not, and that did not fail: the endpoint is proven dead or absent, or the recorded worktree is gone. Done work is never counted here, because a worker that exits once its work is done is not a lost worker; a worker waiting on a question is not done, so its lost worker is. | The row; the strip's red alert; a Factory job. |
+
+`decisions for you` and `ready to merge` together are the owner's calls, the one count the tap page also shows; `fm_owner_calls` owns it, and the Factory pane's NEEDS YOU lists exactly the calls behind them.
+A failed task counts once, as `failed`, though it is also a blocker for Firstmate and may have lost its worker.
+`tests/fm-fleet-overview.test.sh` renders one fleet on all three surfaces and checks each of these figures there word for word.
 
 The library's record count, which counts ordinary task records rather than workers, is shown only when no other count is, as `N tasks, state unknown`, so a record the reading could not classify never reads as an idle fleet.
 
@@ -47,16 +57,16 @@ Counting `state/*.meta` files as running workers, and folding each status log's 
 Folding the reconciled current state fixed what the numbers SAID about the work, and still left the captain without the one number he was asking for: on 2026-09-21 fifteen records rendered while ten of them had a dead endpoint or a worktree that was already gone.
 So the group now leads with the agents that are actually running and gives the records whose worker is gone a figure of their own.
 
-`checking`, `waiting`, `waiting for you`, and `needs a look` come from `bin/fm-crew-state.sh`, the canonical current-state reader, folded by `bin/fm-fleet-status-lib.sh`; `waiting for you` also reads the backlog's held decisions, through the home's configured tasks-axi adapter, in that library's `fm_owner_calls`, which owns what counts as one of the owner's calls.
+`busy`, `waiting`, `ready to merge`, `needs a look` and `failed` come from `bin/fm-crew-state.sh`, the canonical current-state reader, folded by `bin/fm-fleet-status-lib.sh`; `decisions for you` reads the backlog's held decisions, through the home's configured tasks-axi adapter, in that library's `fm_owner_calls`, which owns what counts as one of the owner's calls.
 That library selects no run and re-implements no attribution; run selection stays with the canonical reader, and the fold never reads a status log's last line.
-The distinction between a busy worker and `checking` is the reader's SOURCE, not its state word: `working · run-step` is the pipeline carrying a task, and `working · pane` is a worker busy on one.
-`waiting for you` covers a captain hold that `bin/fm-fleet-snapshot.sh` classifies as `live` (its `captain_actionable`, the test the bearings Captain's Call uses), and a `done` the captain acts on, unless that task carries any open captain hold or its work item is done.
+Both halves of `busy` are the reader's `working`, told apart by its SOURCE: `working · run-step` is the pipeline carrying a task, and `working · pane` is a worker busy on one; the Factory pane shows which, as the job's `checking` or `building` step.
+`decisions for you` covers a captain hold that `bin/fm-fleet-snapshot.sh` classifies as `live` (its `captain_actionable`, the test the bearings Captain's Call uses), and `ready to merge` covers a `done` the captain acts on, unless that task carries any open captain hold or its work item is done.
 A `parked` task whose worker waits on an answer - a status-log needs-decision, or a gate line carrying the reader's whole `ask-user: authority decision` component - is Firstmate's to answer, so it counts in `needs a look`; on 2026-11-14 the bridge strip counted those as the captain's decisions.
 A `done` the captain acts on is a pipeline (`run-step`) verdict on a PR, or a worker's status-log `done` that `fm_dod_should_gate_ship_done` in `bin/fm-dod-lib.sh` reads as the ready report: a green PR, or a ready branch or PR in a mode whose `done` is the delivery itself.
-Any other status-log `done`, such as a scout report Firstmate reads first, is Firstmate's turn and counts in no figure, because no worker is busy on it and nothing waits on the captain: on 2026-10-25 the row read `1 waiting for you` for a ship that had no PR yet.
-A no-mistakes build committed and handed off before validation reads `blocked` from the canonical reader, a handoff waiting for the pipeline trigger, so it counts under `needs a look` as Firstmate's turn and never as `waiting for you`.
-Any other `parked` gate is the worker's or Firstmate's turn and claims no figure, so it counts as `working` or `stopped` by liveness alone; a `done` whose PR was merged or closed waits on nobody and counts in no figure at all.
-`needs a look` covers `blocked`, `failed`, and a worker's question, which are the states that need Firstmate rather than time.
+Any other status-log `done`, such as a scout report Firstmate reads first, is Firstmate's turn and counts in no figure, because no worker is busy on it and nothing waits on the captain: on 2026-10-25 the row counted a ship that had no PR yet as waiting for the captain.
+A no-mistakes build committed and handed off before validation reads `blocked` from the canonical reader, a handoff waiting for the pipeline trigger, so it counts under `needs a look` as Firstmate's turn and never as `ready to merge`.
+Any other `parked` gate is the worker's or Firstmate's turn and claims no figure, so it counts as `busy` or `stopped` by liveness alone; a `done` whose PR was merged or closed waits on nobody and counts in no figure at all.
+`needs a look` covers `blocked` and a worker's question, and `failed` the failures, which are the states that need Firstmate rather than time.
 
 ### Live agents and stopped records
 
@@ -80,7 +90,7 @@ A canonical read consults the validation pipeline and costs about a second per t
 So the fold runs out of band: a frame reads the cache and starts at most one detached refresh, under a claim that a second frame cannot take and that a refresher which died without writing releases on its own.
 The endpoint probe rides that same refresh, so it is bounded by the refresh's own wall-clock bound and costs a frame nothing.
 A frame never calls the canonical reader or probes an endpoint itself, and `bin/fm-backend.sh` is loaded only inside the fold rather than at render time.
-The owner's calls behind `waiting for you` are only a backlog read, so they are read again on their own whenever their change signal moves rather than at the fold's own pace.
+The owner's calls behind `decisions for you` and `ready to merge` are only a backlog read, so they are read again on their own whenever their change signal moves rather than at the fold's own pace.
 `bin/fm-fleet-status-lib.sh`'s header owns the exact cache lifetimes and their environment seams, and `bin/fm-status-cache-lib.sh` owns the cache and freshness mechanics it shares with the Codex metrics supply.
 
 ### The context sample and the handoff axis are separate decisions
@@ -130,7 +140,7 @@ It is raised only while the home holds a task or second-mate record (`state/*.me
 | Provider quota used | 0 through 69 percent. | 70 through 89 percent. | 90 through 100 percent. |
 | Supervision freshness | Beacon age below 180 seconds. | Not used. | Beacon age of 180 seconds or more, or a missing or unreadable beacon, while any record or registered check exists. |
 
-`working` is bright green, `checking` is bright cyan, `waiting` and `stopped` are bright yellow, `waiting for you` is bright magenta, and `needs a look` is bright red; `workers unknown`, `state unknown`, and `no workers` are dim.
+`busy` is bright green, `waiting` and `stopped` are bright yellow, `decisions for you` and `ready to merge` are bright magenta, and `needs a look` and `failed` are bright red; `workers unknown`, `state unknown`, and `no workers` are dim.
 The active AFK flag is bright cyan.
 Unavailable provider metrics are dim and never silently converted to zero.
 
@@ -469,6 +479,7 @@ Editing `~/.cursor` by hand is still out of scope, and no other file under it is
 Rows captured before 2026-09-12 show the fleet group as `🚢<active> ⏸<paused> ⚠<attention>`, rows captured before 2026-09-21 show it as `🚢<working> 🧪<validating> ⏸<paused> ⚠<attention> 📋<records>`, and rows captured before 2026-10-20 show it as `🚢<alive> 🧪<validating> ⏸<paused> ⚠<attention> 🪦<stopped> 📋<records>`, with supervision as `👁 <seconds>s` or a bright-red `NO-WATCH`.
 Rows captured before 2026-10-25 count every live agent as `working`, including one whose work already waits on the captain, and have no `waiting for you` figure.
 Rows captured on 2026-10-25 before the fix that followed count a worker's pre-validation `done` as `waiting for you`, and render `workers unknown` when a slow refresh let the reading age out.
+Rows captured before 2026-11-15 show the fleet group as `working`, `checking`, `waiting`, `waiting for you`, `needs a look` and `stopped`, where `needs a look` and `stopped` also counted failed work.
 That was the field shape on the day each of those runs was observed; the current shape is the one in the canonical line above, and those older captures are kept as the evidence they were rather than rewritten.
 
 The adapter contract was checked on 2026-07-21 with Claude Code's project status-line payload shape, Pi 0.80.10, Cursor CLI 2026.07.17-3e2a980, and tmux 3.6a.

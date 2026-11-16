@@ -355,28 +355,56 @@ X=$'\033[0m'
 # file as a running ship and fold each status log's last line into paused and
 # attention; both readings turned task RECORDS into apparent live workers. The
 # library now folds the canonical current-state reader and the recovery-grade
-# endpoint classifier instead, so the headline is busy workers, work waiting on
-# the captain is its own figure, the records whose worker is gone carry theirs,
-# and it reports whether its reading is current, the last good one, or absent.
+# endpoint classifier instead, and reports whether its reading is current, the
+# last good one, or absent. The row takes the overview reading, the one the
+# bridge strip and the Factory pane's count line show, so the three never show
+# different numbers for the same moment; docs/status-bar.md "Fleet words" owns
+# the one word for each figure.
 fleet_counts() {
-  local reading
+  local reading records working stopped validating paused attention ready
+  local known age decisions failed lost
   RECORD_COUNT=0
-  WORKING_COUNT=0
-  STOPPED_COUNT=0
-  VALIDATING_COUNT=0
+  BUSY_COUNT=0
   PAUSED_COUNT=0
-  ATTENTION_COUNT=0
-  READY_COUNT=0
+  DECISIONS_COUNT=0
+  MERGE_COUNT=0
+  LOOK_COUNT=0
+  FAILED_COUNT=0
+  STOPPED_COUNT=0
   FLEET_KNOWN=0
   FLEET_AGE=0
-  reading=$(fm_fleet_status_counts "$STATE" 2>/dev/null) || return 0
-  IFS=$'\t' read -r RECORD_COUNT WORKING_COUNT STOPPED_COUNT VALIDATING_COUNT \
-    PAUSED_COUNT ATTENTION_COUNT READY_COUNT FLEET_KNOWN FLEET_AGE <<EOF
+  reading=$(fm_fleet_status_counts "$STATE" overview 2>/dev/null) || return 0
+  IFS=$'\t' read -r records working stopped validating paused attention ready \
+    known age decisions failed lost _ <<EOF
 $reading
 EOF
-  case "$RECORD_COUNT" in ''|*[!0-9]*) RECORD_COUNT=0 ;; esac
-  case "$FLEET_KNOWN" in 1|2) ;; *) FLEET_KNOWN=0 ;; esac
-  case "$FLEET_AGE" in ''|*[!0-9]*) FLEET_AGE=0 ;; esac
+  case "$records" in ''|*[!0-9]*) ;; *) RECORD_COUNT=$records ;; esac
+  case "$known" in 1|2) ;; *) return 0 ;; esac
+  case "$working$stopped$validating$paused$attention$ready$age$decisions" in
+    ''|*[!0-9]*) return 0 ;;
+  esac
+  [ "$decisions" -le "$ready" ] || return 0
+  FLEET_KNOWN=$known
+  FLEET_AGE=$age
+  BUSY_COUNT=$((working + validating))
+  PAUSED_COUNT=$paused
+  DECISIONS_COUNT=$decisions
+  MERGE_COUNT=$((ready - decisions))
+  LOOK_COUNT=$attention
+  STOPPED_COUNT=$stopped
+  # failed is part of attention and of stopped; shown on its own, it leaves
+  # both, so each broken task is counted once, as on the strip. A reading from
+  # before the overview carried it keeps the older two figures until the
+  # refresh it started lands.
+  case "$failed$lost" in
+    ''|*[!0-9]*) ;;
+    *)
+      FAILED_COUNT=$failed
+      LOOK_COUNT=$((attention - failed))
+      [ "$LOOK_COUNT" -ge 0 ] || LOOK_COUNT=0
+      STOPPED_COUNT=$lost
+      ;;
+  esac
 }
 
 # The dim age marker for a last good reading that is no longer current, so the
@@ -483,11 +511,12 @@ render_once() {
     fleet_part="${D}workers unknown${X}"
   else
     fleet_part=
-    fleet_phrase "$WORKING_COUNT" "$G" working working
-    fleet_phrase "$VALIDATING_COUNT" "$C" checking checking
+    fleet_phrase "$BUSY_COUNT" "$G" busy busy
     fleet_phrase "$PAUSED_COUNT" "$Y" waiting waiting
-    fleet_phrase "$READY_COUNT" "$M" 'waiting for you' 'waiting for you'
-    fleet_phrase "$ATTENTION_COUNT" "$R" 'needs a look' 'need a look'
+    fleet_phrase "$DECISIONS_COUNT" "$M" 'decision for you' 'decisions for you'
+    fleet_phrase "$MERGE_COUNT" "$M" 'ready to merge' 'ready to merge'
+    fleet_phrase "$LOOK_COUNT" "$R" 'needs a look' 'need a look'
+    fleet_phrase "$FAILED_COUNT" "$R" failed failed
     fleet_phrase "$STOPPED_COUNT" "$Y" stopped stopped
     if [ -z "$fleet_part" ] && [ "$RECORD_COUNT" -gt 0 ]; then
       fleet_part="${D}${RECORD_COUNT} task$([ "$RECORD_COUNT" -eq 1 ] || printf s), state unknown${X}"

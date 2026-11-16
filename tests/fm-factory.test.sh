@@ -202,6 +202,24 @@ if os.environ.get("FM_FACTORY_TEST_CLOCK"):
     time.time = _test_time
 PY
 
+# The count line is the overview reading the bridge strip and the status bar
+# show (fm_fleet_status_counts). This stand-in for its canonical reader answers
+# each task with the current-state line of the case's fixture snapshot, and the
+# reading is taken inline, so the overview folds exactly the fleet the pane draws.
+cat > "$BINDIR/crew-state" <<'SH'
+#!/usr/bin/env bash
+exec python3 -c '
+import json, sys
+for task in json.load(open(sys.argv[1])).get("tasks") or []:
+    if task.get("id") == sys.argv[2]:
+        print((task.get("current_state") or {}).get("raw") or "state: unknown · source: none · no reading")
+        sys.exit(0)
+sys.exit(1)
+' "$FM_FACTORY_SNAPSHOT" "$1"
+SH
+chmod +x "$BINDIR/crew-state"
+export FM_FLEET_STATE_READER="$BINDIR/crew-state" FM_FLEET_STATE_NO_CACHE=1
+
 # A stand-in for bin/fm-tap-desk.sh shapes: the options and recommendation each
 # held decision's tap card shows, from the case's fixture file.
 cat > "$BINDIR/shapes" <<'SH'
@@ -452,16 +470,16 @@ test_the_record_words_every_state() {
   write_world
   take_record
   assert_equals "$(q .schema)" "fm-factory.v1" "schema"
-  assert_equals "$(q .count_line)" "3 jobs running · 3 need you · 1 idle" "count line"
+  assert_equals "$(q .count_line)" "2 busy · 2 decisions for you · 1 ready to merge · 1 idle" "count line"
   assert_equals "$(q '[.factories[] | .name] | join(",")')" "Sample Shop,Garden Journal,Recipe Box" "factories"
   local shop='.factories[] | select(.id == "sample-shop") | .jobs[]'
   assert_equals "$(q "[$shop | \"\(.id)=\(.state)/\(.step // \"-\")\"] | join(\" \")")" \
-    "shop-search=running/building shop-checkout=running/checking shop-coupons=running/checking shop-provider=waiting on you/- shop-images=stuck/- shop-labels=waiting/- shop-old=stopped/- shop-gift=next/- shop-reviews=later/- shop-later=on hold/- shop-tax=on hold until 2026-12-01/-" \
+    "shop-search=busy/building shop-checkout=busy/checking shop-provider=decision for you/- shop-images=needs a look/- shop-coupons=needs a look/- shop-labels=waiting/- shop-old=stopped/- shop-gift=next/- shop-reviews=later/- shop-later=on hold/- shop-tax=on hold until 2026-12-01/-" \
     "every shop job state is a word"
-  assert_equals "$(q "$shop | select(.id == \"shop-coupons\") | .doing")" "answering the 1 point the checks found" \
-    "a review finding the checks put to Starship is the checks' work"
   assert_equals "$(q '.factories[] | select(.id == "recipe-box") | .jobs[] | select(.id == "recipe-search") | .state')" \
-    "with Starship" "a worker's own question is Starship's to answer"
+    "needs a look" "a worker's own question is Starship's to answer, as the status bar counts it"
+  assert_equals "$(q '.factories[] | select(.id == "garden-journal") | .jobs[] | select(.id == "garden-water") | .state')" \
+    "failed" "failed work reads failed, as the overview names it"
   assert_equals "$(q "$shop | select(.id == \"shop-search\") | .doing")" "running the search tests: 41 of 58 passed" \
     "a stated step is the doing sentence"
   assert_equals "$(q "$shop | select(.id == \"shop-search\") | .sign_of_life_from")" "a turn" "sign of life source"
@@ -503,16 +521,16 @@ test_the_plain_screen_is_the_record_as_text() {
   write_world
   local out
   out=$(python3 "$FACTORY" --plain --width 92) || fail "--plain failed"
-  assert_contains "$out" " S T A R S H I P  │  3 jobs running  ·  3 need you  ·  1 idle" "count line"
+  assert_contains "$out" " STARSHIP  │  2 busy  ·  2 decisions for you  ·  1 ready to merge  ·  1 idle" "count line"
   assert_equals "$(printf '%s\n' "$out" | grep -F ' ▸ ● ' | tr -s ' ')" \
     " ▸ ● Harvest chart Garden Journal · waiting 3 h" "the cursor starts on the first question"
   assert_contains "$out" "       1  this week  · Starship suggests this" "suggested option"
   assert_not_contains "$out" "None" "a missing value printed as None"
   assert_contains "$out" "       t  Talk it through · typed" "talk it through, and how"
   assert_contains "$out" "       x  Already settled?" "a question offers already settled"
-  assert_contains "$out" "       ✓ planning ••••• ▸ building •••••   checking ·····   ready for you" "four steps"
+  assert_contains "$out" "       ✓ planning ••••• ▸ building •••••   checking ·····   ready to merge" "four steps"
   assert_contains "$out" "       running the search tests: 41 of 58 passed" "doing this minute"
-  has_line "$out" " ● Sharper cup photos stuck" "a stuck job"
+  has_line "$out" " ● Sharper cup photos needs a look" "a blocked job"
   has_line "$out" " ● Print shipping labels waiting · tries again 09:30" "a waiting job"
   has_line "$out" " next Gift wrap at checkout · then 2 more" "next in line"
   has_line "$out" " Recipe Box idle since 06:00 · nothing queued Starship steers" "an idle factory is one row"
@@ -523,7 +541,7 @@ test_the_plain_screen_is_the_record_as_text() {
   assert_not_contains "$feed" "tries again" "a worker's pause reached the feed"
   assert_not_contains "$feed" "Search recipes" "a worker's own question reached the feed"
   assert_not_contains "$feed" "Gift cards" "a review finding Starship decides reached the feed"
-  assert_not_contains "$feed" "stuck" "a blocker reached the feed"
+  assert_not_contains "$feed" "Sharper cup photos" "a blocker reached the feed"
   assert_contains "$out" " ↑↓ move · 1/2/3 answer · x settled? · enter open · t talk (typed) · s who steers · q quit" "keys"
   out=$(python3 "$FACTORY" --plain --width 92 --factory sample-shop) || fail "--plain --factory failed"
   assert_contains "$out" " RULES THIS CREW FOLLOWS" "rules heading"
@@ -653,7 +671,7 @@ test_only_the_highlighted_call_opens_as_a_card() {
   # A factory's own page follows the same rule.
   out=$(python3 "$FACTORY" --plain --width 92 --factory garden-journal) || fail "--plain --factory failed"
   assert_contains "$out" "       1  this week  · Starship suggests this" "the page's highlighted call is not open"
-  has_line "$out" " ● Share a garden page as a picture is ready for you to look at ready 1 h 49 min" \
+  has_line "$out" " ● Share a garden page as a picture is ready to merge ready 1 h 49 min" \
     "the page's other call is not one line"
   pass "factory pane: only the highlighted call opens as a card; every other call is one line"
 }
@@ -745,8 +763,8 @@ test_ready_work_held_until_a_date_is_not_ready_for_you() {
     "on hold until 2026-12-01|-" "ready work held until a date read as ready for the owner"
   assert_equals "$(q '[.needs_you[] | select(.id == "garden-share")] | length')" "0" \
     "ready work held until a date is under NEEDS YOU"
-  assert_equals "$(q .count_line)" "3 jobs running · 2 need you · 1 idle" "count line"
-  pass "factory record: ready work the owner held until a date reads on hold, not ready for you"
+  assert_equals "$(q .count_line)" "2 busy · 2 decisions for you · 0 ready to merge · 1 idle" "count line"
+  pass "factory record: ready work the owner held until a date reads on hold, not ready to merge"
 }
 
 # A home whose backlog is not markdown has no rows in the snapshot's markdown
@@ -763,7 +781,7 @@ test_held_decisions_come_through_a_non_markdown_adapter() {
   assert_equals "$(q '[.needs_you[] | "\(.id):\(.kind)"] | join(" ")')" \
     "garden-chart:question shop-provider:question garden-share:finished work" \
     "the adapter's held decisions are not under NEEDS YOU"
-  assert_equals "$(q .counts.need_you)" "3" "the adapter's held decisions are not counted"
+  assert_equals "$(q '"\(.counts.decisions) \(.counts.ready_to_merge)"')" "2 1" "the adapter's held decisions are not counted"
   # The adapter backlog may carry no hold time; the tap shapes' held_since,
   # written with milliseconds, still says how long the decision has waited.
   jq '(.records[] | select(.id == "shop-provider")) |= del(.hold_set)' "$FM_TEST_AXI_BACKLOG" \
@@ -1238,8 +1256,14 @@ test_a_parked_decision_leaves_the_live_pane_within_seconds() {
   reset_case
   write_registry
   write_world
+  # The overview is read from its cache, as a live pane reads it, with the
+  # workers' own refresh an hour away, so only the owner's calls can move it.
+  bash -c '. "$1/bin/fm-fleet-status-lib.sh"; _fm_fleet_collect "$2" "$(date +%s)" "$3"' \
+    _ "$ROOT" "$HOME_FIX/state" "$FM_FLEET_STATE_READER" > "$HOME_FIX/state/.status-fleet-state" \
+    || fail "the overview could not be read into its cache"
+  export FM_FLEET_STATE_NO_CACHE=0 FM_FLEET_STATE_TTL=3600 FM_FLEET_STATE_MAX_AGE=3600
   python3 "$FACTORY" refresh || fail "the first record could not be built"
-  took=$(watch_pane '3 need you' '2 need you' "$BINDIR/park-world garden-chart") \
+  took=$(watch_pane '2 decisions for you' '1 decision for you' "$BINDIR/park-world garden-chart") \
     || fail "the live pane could not be driven"
   case "$took" in
     never|'no first screen'|'') fail "the live pane still showed the parked decision: $took" ;;
@@ -1249,7 +1273,9 @@ test_a_parked_decision_leaves_the_live_pane_within_seconds() {
   assert_equals "$(q '[.needs_you[].id] | join(" ")')" "shop-provider garden-share" \
     "the parked decision is still in the record"
   assert_equals "$(q '[.factories[] | select(.id == "sample-shop") | .jobs[] | select(.id == "shop-search") | .state] | join("")')" \
-    "running" "the workers were lost from the record"
+    "busy" "the workers were lost from the record"
+  export FM_FLEET_STATE_NO_CACHE=1
+  unset FM_FLEET_STATE_TTL FM_FLEET_STATE_MAX_AGE
   pass "factory pane: a parked decision leaves the live pane within seconds, without a whole refresh (${took}s)"
 }
 
@@ -1381,7 +1407,7 @@ test_a_calls_rebuild_on_an_older_reading_keeps_the_newer_record() {
   cp "$HOME_FIX/state/factory/record.json" "$TMP_ROOT/case$CASE/record.json" || fail "the record is gone"
   assert_equals "$(q .snapshot_epoch)" "$epoch" "the record went back to the older reading"
   assert_equals "$(q '[.factories[] | select(.id == "sample-shop") | .jobs[] | select(.id == "shop-search") | .state] | join("")')" \
-    "running" "the older workers replaced the newer ones"
+    "busy" "the older workers replaced the newer ones"
   pass "factory pane: a calls rebuild on an older reading keeps the newer record"
 }
 
@@ -2102,7 +2128,7 @@ test_a_factory_tab_opens_no_live_copy_for_parked_held_or_finished_work() {
   "$BINDIR/edit-world" drop shop-checkout >/dev/null || fail "edit-world failed"
   HERDR_BIN_PATH="$BINDIR/herdr" python3 "$FACTORY" open-tab sample-shop >/dev/null 2>&1 \
     || fail "open-tab sample-shop failed"
-  assert_equals "$(grep -o 'follow [a-z-]*' "$CALLS" | tr '\n' ' ')" "follow shop-coupons follow shop-images " \
+  assert_equals "$(grep -o 'follow [a-z-]*' "$CALLS" | tr '\n' ' ')" "follow shop-images follow shop-coupons " \
     "a parked or stopped worker got a live copy"
   pass "factory tab: live copies open only for workers at work, never for parked, held or finished jobs"
 }

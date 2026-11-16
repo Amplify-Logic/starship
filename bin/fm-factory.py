@@ -44,13 +44,17 @@ So the live pane and each live copy compare this file's checksum before every
 frame, and when it changed and the new file is non-empty and compiles, they
 re-execute themselves in place: the same process and Herdr pane, the new code.
 
-Where the record comes from. Live work, decisions and the work list come only
-from bin/fm-fleet-snapshot.sh --json, and each task's state word comes from the
-same fold the status bar counts with (fm_fleet_status_bucket in
-bin/fm-fleet-status-lib.sh). NEEDS YOU is exactly fm_owner_calls in that
-library, the count the bridge strip and the tap page show, and each question's
-options and suggestion come from bin/fm-tap-desk.sh shapes, the reading its tap
-card shows, so the pane can never disagree with either.
+Where the record comes from. The count line is the overview reading the bridge
+strip and the status bar show (fm_fleet_status_counts `overview` in
+bin/fm-fleet-status-lib.sh), in the same words (docs/status-bar.md "Fleet
+words"), so the three never show different numbers for the same moment. Live
+work, decisions and the work list come only from bin/fm-fleet-snapshot.sh
+--json, and each task's state word comes from the same fold the overview counts
+with (fm_fleet_status_bucket in that library). NEEDS YOU is exactly
+fm_owner_calls in that library over the overview reading's ready work, the
+calls the overview counts and the tap page shows, and each question's options
+and suggestion come from bin/fm-tap-desk.sh shapes, the reading its tap card
+shows, so the pane can never disagree with either.
 The queue is every work item nobody has started, counted in that same pass by
 what will start it (queue_word below); what is held and what still waits on
 other work is read as the backlog's own adapter reads it. A closed work item
@@ -199,7 +203,7 @@ from typing import Any, Dict, List, Optional, Tuple
 SCHEMA = "fm-factory.v1"
 ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 BIN = os.path.join(ROOT, "bin")
-STEPS = ["planning", "building", "checking", "ready for you"]
+STEPS = ["planning", "building", "checking", "ready to merge"]
 FEED_CAP = 30
 LOOK_BACK_DEFAULT = 12 * 3600
 LOOK_BACK_MAX = 48 * 3600
@@ -207,10 +211,10 @@ LOOK_GAP = 15 * 60      # this long without a sign of a look ends the look
 FOCUS_HOLD = 5          # seconds the pane stays focused before it counts as a look
 FOCUS_CAP = 15 * 60     # focus alone keeps a look going this long after it began or the last key
 MIRROR_CAP = 4
-# A factory tab opens a live copy only of a worker at work: busy, asking
-# Starship, stuck, or waiting on the owner's answer. Parked, held, queued and
-# finished jobs get none.
-MIRROR_STATES = ("running", "with Starship", "stuck", "waiting on you")
+# A factory tab opens a live copy only of a worker at work: busy, with
+# Starship, needing a look or failed, or waiting on the owner's decision.
+# Parked, held, queued and finished jobs get none.
+MIRROR_STATES = ("busy", "with Starship", "needs a look", "failed", "decision for you")
 # An open copy also stays through a moment the fleet cannot be read, and closes
 # its pane once its job really ends: gone from the record or in any other state.
 MIRROR_KEEP = MIRROR_STATES + ("no reading",)
@@ -491,6 +495,86 @@ def buckets_for(tasks: List[Dict[str, Any]]) -> Dict[str, str]:
             key, value = line.split("\t", 1)
             result[key] = value.strip()
     return result
+
+
+def overview_reading(home: str) -> Optional[Dict[str, Any]]:
+    """The overview reading the bridge strip and the status bar show.
+
+    It is fm_fleet_status_counts `overview` in bin/fm-fleet-status-lib.sh, a
+    cache read that never waits on the workers. None when it cannot be read;
+    `known` 0 when no good reading exists yet, 2 when it is the last good one
+    but no longer current. `ready_list` is None when the reading predates the
+    list, and otherwise the tasks behind its merges.
+    """
+    script = '. "$1/fm-fleet-status-lib.sh" && fm_fleet_status_counts "$2" overview'
+    try:
+        out = subprocess.run(["bash", "-c", script, "fm-factory", BIN, os.path.join(home, "state")],
+                             capture_output=True, text=True, timeout=20, stdin=subprocess.DEVNULL,
+                             env=dict(os.environ, FM_HOME=home))
+    except (OSError, subprocess.SubprocessError):
+        return None
+    fields = out.stdout.rstrip("\n").split("\t")
+    if out.returncode != 0 or len(fields) < 10:
+        return None
+    try:
+        _records, working, _stopped, validating, _paused, _attention, ready, known, age, decisions = (
+            int(x) for x in fields[:10])
+    except ValueError:
+        return None
+    if known not in (0, 1, 2) or decisions > ready:
+        return None
+    # The list and the calls signal are given together, so a reading with no
+    # signal has no list yet, while one with a signal and `-` has no ready work.
+    ready_list = None
+    if len(fields) >= 18 and fields[10] != "-" and fields[16] != "-":
+        ready_list = sorted(x for x in fields[17].split(" ") if x and x != "-")
+    return {"known": known, "age": age if known else 0, "busy": working + validating,
+            "decisions": decisions, "ready_to_merge": ready - decisions, "ready_list": ready_list}
+
+
+def overview_counts(overview: Optional[Dict[str, Any]], idle: int) -> Dict[str, Any]:
+    """The count line's figures: the overview reading's, plus the idle factories.
+
+    They are only ever the overview's, so the count line never shows a number
+    the bridge strip and the status bar do not; NEEDS YOU is rebuilt when the
+    overview's ready work changes.
+    """
+    if not overview or not overview["known"]:
+        return {"reading": "unknown", "age": 0, "busy": None, "decisions": None, "ready_to_merge": None,
+                "idle": idle}
+    return {"reading": "current" if overview["known"] == 1 else "past", "age": overview["age"],
+            "busy": overview["busy"], "decisions": overview["decisions"],
+            "ready_to_merge": overview["ready_to_merge"], "idle": idle}
+
+
+def age_words(seconds: int) -> str:
+    """The strip's and status bar's words for how old a past reading is."""
+    if seconds < 60:
+        return "a moment ago"
+    if seconds < 3600:
+        return "%dm ago" % (seconds // 60)
+    return "%dh ago" % (seconds // 3600)
+
+
+def count_words(counts: Dict[str, Any], short: bool = False) -> List[Tuple[str, str]]:
+    """The count line as (words, colour) pieces, in the overview's words."""
+    if counts.get("busy") is None:
+        pieces = [("reading the crew", "faint")]
+    else:
+        busy, decisions, merge = counts["busy"], counts["decisions"], counts["ready_to_merge"]
+        decision_words = "decision" if decisions == 1 else "decisions"
+        pieces = [("%d busy" % busy, "amber" if busy else "faint"),
+                  ("%d %s" % (decisions, decision_words if short else decision_words + " for you"),
+                   "red" if decisions else "faint"),
+                  ("%d %s" % (merge, "to merge" if short else "ready to merge"), "green" if merge else "faint")]
+    pieces.append(("%d idle" % counts["idle"], "faint"))
+    if counts.get("reading") == "past" and not short:
+        pieces[-2] = (pieces[-2][0] + " (%s)" % age_words(counts.get("age") or 0), pieces[-2][1])
+    return pieces
+
+
+def count_line_text(counts: Dict[str, Any]) -> str:
+    return " · ".join(words for words, _colour in count_words(counts))
 
 
 def axi_backlog(home: str) -> Dict[str, Any]:
@@ -938,7 +1022,8 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
                  backlog: Optional[Dict[str, Any]] = None,
                  known_shapes: Optional[Dict[str, Dict[str, Any]]] = None,
                  buckets: Optional[Dict[str, str]] = None,
-                 reconciles: Optional[Dict[str, int]] = None) -> Dict[str, Any]:
+                 reconciles: Optional[Dict[str, int]] = None,
+                 overview: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     factories, registry_source = load_registry(home)
     project_rows = load_projects(home)
     quiet_after = env_int("FM_FACTORY_QUIET_MINUTES", 15) * 60
@@ -995,7 +1080,12 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
         buckets = buckets_for(tasks)
     # NEEDS YOU is exactly the owner's calls, the one count the bridge strip and
     # the tap page show; a worker's question, a pause or the checks never are.
-    decision_ids, merge_ids, adapter_rows = owner_calls(home, buckets, backlog)
+    # Its merges are the overview reading's ready work, so the list is the
+    # count the overview shows; this pane's own reading stands in only until
+    # an overview reading with that list exists.
+    ready_list = (overview or {}).get("ready_list") if (overview or {}).get("known") else None
+    call_buckets = {i: "ready" for i in ready_list} if ready_list is not None else buckets
+    decision_ids, merge_ids, adapter_rows = owner_calls(home, call_buckets, backlog)
     known = {r["id"] for r in rows}
     # The adapter is the backlog's own reading of what is held and what still
     # waits on other work, the one the owner's calls are counted from. The
@@ -1083,20 +1173,26 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
                                "last_sign_of_life": None, "sign_of_life_from": None, "quiet": False,
                                "until": None, "pr": (task.get("pr") or {}).get("url"), "queue": None,
                                "read": read_sources(home, task["id"], ((row or {}).get("hold_reason"),))}
+        if task["id"] in merge_ids:
+            bucket = "ready"
         if bucket == "working":
-            job.update(state="running", step="planning" if kind == "scout" else "building")
-        elif bucket == "validating" or (state.get("state") == "parked" and state.get("source") == "run-step"):
-            # A review finding the checks put to Starship (ask-user) is still
-            # the checks' work in progress, answered by Starship, not the owner.
-            job.update(state="running", step="checking", doing=checking_sentence(detail), doing_from="checks")
+            job.update(state="busy", step="planning" if kind == "scout" else "building")
+        elif bucket == "validating" or (not bucket and state.get("state") == "parked"
+                                        and state.get("source") == "run-step"):
+            job.update(state="busy", step="checking", doing=checking_sentence(detail), doing_from="checks")
         elif bucket == "decision":
-            # A worker's own question goes to Starship, which answers it or
-            # brings it to the owner as a held decision.
-            job.update(state="with Starship")
+            # A worker's question, or a review finding the checks put to
+            # Starship (ask-user): Starship answers it or brings it to the owner
+            # as a held decision, so it needs a look from Starship, as the
+            # status bar counts it.
+            job.update(state="needs a look")
         elif bucket == "ready" and task["id"] not in merge_ids and not (row and row["id"] in decision_ids):
-            job["state"] = held_state(row or {}, today)
+            # Held work waits on its hold; otherwise the overview has not read
+            # it as ready yet, so it is no call until it does.
+            job["state"] = held_state(row, today) if row and (row.get("hold_kind") or row.get("hold_bucket")) \
+                else "ready to merge"
         elif bucket == "ready":
-            job.update(state="ready for you", step="ready for you")
+            job.update(state="ready to merge", step="ready to merge")
             pr = job["pr"]
             found = re.search(r"pr=(https?://\S+)", detail)
             if found:
@@ -1105,7 +1201,7 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
                        if e["verb"] == "done" and e["at"]]
             if task["id"] in merge_ids:
                 needs.append({"id": task["id"], "factory": fid, "kind": "finished work",
-                              "ask": "%s is ready for you to look at" % title, "title": title, "why": None,
+                              "ask": "%s is ready to merge" % title, "title": title, "why": None,
                               "options": [], "suggested_by": None, "recommendation": None,
                               "holds_up": [], "since": done_at[-1] if done_at else None,
                               "for": "you", "pr": pr, "checking": False,
@@ -1117,16 +1213,16 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
             found = re.search(r"\buntil (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}Z)", detail)
             job["until"] = parse_iso(found.group(1)) if found else None
         elif bucket == "attention":
-            job.update(state="stuck")
+            job.update(state="failed" if state.get("state") == "failed" else "needs a look")
         elif "gone" in detail or "dead" in detail:
             job.update(state="stopped")
         else:
             job.update(state="no reading")
         if row and row["id"] in decision_ids:
             needs.append(hold_need(row, fid))
-            if job["state"] in ("stopped", "no reading", "with Starship", "ready for you"):
-                job["state"] = "waiting on you"
-        if job["state"] == "running":
+            if job["state"] in ("stopped", "no reading", "with Starship", "ready to merge", "needs a look"):
+                job["state"] = "decision for you"
+        if job["state"] == "busy":
             running_ids.append(task["id"])
         by_id[fid]["jobs"].append(job)
 
@@ -1134,7 +1230,7 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
     seen_pane = activity
     for factory in factories:
         for job in factory["jobs"]:
-            if job["state"] != "running":
+            if job["state"] != "busy":
                 continue
             task = next(t for t in tasks if t["id"] == job["id"])
             status_path = ((task.get("paths") or {}).get("status_log") or {}).get("path")
@@ -1171,7 +1267,7 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
                "queue": queue_word(row, row["id"] in decision_ids, today),
                "read": read_sources(home, row["id"], (row.get("hold_reason"),))}
         if row["id"] in decision_ids:
-            job["state"] = "waiting on you"
+            job["state"] = "decision for you"
             needs.append(hold_need(row, fid))
         elif row.get("hold_kind"):
             job["state"] = held_state(row, today)
@@ -1188,18 +1284,18 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
         queued = [j for j in factory["jobs"] if j["state"] == "queued"]
         for index, job in enumerate(queued):
             job["state"] = "next" if index == 0 else "later"
-        order = {"running": 0, "waiting on you": 1, "ready for you": 2, "stuck": 3, "waiting": 4,
-                 "stopped": 5, "no worker": 5, "no reading": 5, "with Starship": 6, "finished": 6, "next": 7,
-                 "later": 8}
+        order = {"busy": 0, "decision for you": 1, "ready to merge": 2, "failed": 3, "needs a look": 3,
+                 "waiting": 4, "stopped": 5, "no worker": 5, "no reading": 5, "with Starship": 6, "finished": 6,
+                 "next": 7, "later": 8}
         factory["jobs"].sort(key=lambda j: order.get(j["state"], 9))
-        lined = [j for j in factory["jobs"] if j["state"] in ("next", "later", "waiting on you")
+        lined = [j for j in factory["jobs"] if j["state"] in ("next", "later", "decision for you")
                  and not any(n["id"] == j["id"] and n["kind"] == "finished work" for n in needs)]
-        lined = [j for j in lined if j["state"] != "waiting on you" or j["started"] is None]
+        lined = [j for j in lined if j["state"] != "decision for you" or j["started"] is None]
         factory["next"] = None
         if lined:
             first = next((j for j in lined if j["state"] == "next"), lined[0])
             factory["next"] = {"id": first["id"], "title": first["title"],
-                               "once_you_answer": first["state"] == "waiting on you",
+                               "once_you_answer": first["state"] == "decision for you",
                                "then": len(lined) - 1}
         factory["queue"] = queue_counts(factory["jobs"])
 
@@ -1318,7 +1414,7 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
                               -(n["since"] or 0)))
     for factory in factories:
         factory["needs"] = [n["id"] for n in needs if n["factory"] == factory["id"]]
-        running = [j for j in factory["jobs"] if j["state"] == "running"]
+        running = [j for j in factory["jobs"] if j["state"] == "busy"]
         if factory["needs"]:
             factory["state"] = "needs you"
         elif running:
@@ -1331,13 +1427,9 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
 
     if other in factories and not other["jobs"] and not other["needs"]:
         factories.remove(other)
-    running_total = sum(1 for f in factories for j in f["jobs"] if j["state"] == "running")
     idle_total = sum(1 for f in factories if f["state"] == "idle")
     queue = queue_counts([j for f in factories for j in f["jobs"]])
-    count_line = "%s running · %s · %s" % (
-        plural(running_total, "job", "jobs"),
-        "1 needs you" if len(needs) == 1 else "%d need you" % len(needs),
-        "%d idle" % idle_total)
+    counts = overview_counts(overview, idle_total)
     return {
         "schema": SCHEMA,
         "as_of": iso(now),
@@ -1347,8 +1439,9 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
         "since_from": since_from,
         "home": home,
         "factories_from": registry_source,
-        "counts": {"running": running_total, "need_you": len(needs), "idle": idle_total},
-        "count_line": count_line,
+        "counts": counts,
+        "count_line": count_line_text(counts),
+        "ready_list": ready_list,
         "queue": queue,
         "queue_line": " · ".join(words for _key, words in queue_parts(queue)),
         "needs_you": needs,
@@ -1426,6 +1519,7 @@ def refresh(home: str) -> Dict[str, Any]:
     signal_at_start = calls_signal(home)
     inputs = inputs_digest(home)
     read_at = time.time()
+    overview = overview_reading(home)
     snapshot = load_snapshot(home)
     running = [t["id"] for t in snapshot.get("tasks") or []
                if (t.get("current_state") or {}).get("state") == "working"
@@ -1435,7 +1529,7 @@ def refresh(home: str) -> Dict[str, Any]:
     buckets = buckets_for(live_tasks(snapshot))
     record = build_record(home, now, snapshot, since=last_look(home, now), activity=activity,
                           notes=inbox_receipts(home), known_shapes=shapes, buckets=buckets,
-                          reconciles=reconcile_pending(home))
+                          reconciles=reconcile_pending(home), overview=overview)
     record.update(snapshot_epoch=now, calls_signal=signal_at_start, read_at=read_at)
     try:
         write_atomic(basis_path(home), json.dumps({"taken_epoch": now, "snapshot": snapshot,
@@ -1523,6 +1617,7 @@ def refresh_calls(home: str) -> Optional[Dict[str, Any]]:
         return None
     signal_at_start = calls_signal(home)
     read_at = time.time()
+    overview = overview_reading(home)
     backlog, axi, notes, reconciles = side_by_side(lambda: load_backlog(home), lambda: axi_backlog(home),
                                                    lambda: inbox_receipts(home), lambda: reconcile_pending(home))
     snapshot = dict(basis["snapshot"], backlog=backlog)
@@ -1545,7 +1640,8 @@ def refresh_calls(home: str) -> Optional[Dict[str, Any]]:
     now = now_epoch()
     record = build_record(home, now, snapshot, since=last_look(home, now), activity=activity,
                           notes=notes, backlog=axi, known_shapes=known,
-                          buckets=buckets if isinstance(buckets, dict) else None, reconciles=reconciles)
+                          buckets=buckets if isinstance(buckets, dict) else None, reconciles=reconciles,
+                          overview=overview)
     if known != before:
         try:
             write_atomic(learned_path, json.dumps({"taken_epoch": basis.get("taken_epoch"), "shapes": known}))
@@ -1766,12 +1862,28 @@ def first_record(home: str) -> Dict[str, Any]:
             os.close(fd)
 
 
+def follow_overview(record: Dict[str, Any], overview: Optional[Dict[str, Any]]) -> bool:
+    """Show the overview reading's figures on <record>; False when its calls need a rebuild.
+
+    The figures are a cheap cache read, so they follow the overview in place.
+    A different list of ready work changes NEEDS YOU itself, which only a
+    rebuild of the owner's calls can show.
+    """
+    if overview is None:
+        return True
+    counts = overview_counts(overview, int((record.get("counts") or {}).get("idle") or 0))
+    record.update(counts=counts, count_line=count_line_text(counts))
+    wanted = overview.get("ready_list") if overview.get("known") else None
+    return wanted is None or wanted == record.get("ready_list")
+
+
 def current_record(home: str, fresh: bool) -> Dict[str, Any]:
     if not fresh:
         record = cached(home)
         if record and not refresh_due(home, record):
             signal = calls_signal(home)
-            if not signal or record.get("calls_signal") == signal:
+            if follow_overview(record, overview_reading(home)) and (
+                    not signal or record.get("calls_signal") == signal):
                 return record
             try:
                 caught_up = refresh_calls(home)
@@ -1891,7 +2003,8 @@ def flow(width: int, lead, text: str, colour: str = "ice", bold: bool = False, i
     return [row(width, left) for left in lefts]
 
 
-STATE_COLOUR = {"running": "amber", "waiting on you": "red", "ready for you": "green", "stuck": "amber",
+STATE_COLOUR = {"busy": "amber", "decision for you": "red", "ready to merge": "green", "needs a look": "amber",
+                "failed": "amber",
                 "waiting": "amber", "stopped": "faint", "no worker": "faint", "no reading": "faint",
                 "with Starship": "mist", "finished": "green", "next": "mist", "later": "faint"}
 FEED_COLOUR = {"finished": "green", "PR ready": "green", "landed": "green", "closed": "mist", "asked you": "red",
@@ -2055,8 +2168,8 @@ class View:
         """The jobs a factory shows on the overview: what is moving, and calls on you that have started."""
         if fac["state"] == "idle":
             return []
-        return [job for job in fac["jobs"] if job["state"] in ("running", "stuck", "waiting", "stopped", "no worker") or (
-            job["started"] and job["state"] in ("waiting on you", "ready for you"))]
+        return [job for job in fac["jobs"] if job["state"] in ("busy", "needs a look", "failed", "waiting", "stopped", "no worker") or (
+            job["started"] and job["state"] in ("decision for you", "ready to merge"))]
 
     @staticmethod
     def page_jobs(fac: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], Dict[str, int]]:
@@ -2078,7 +2191,7 @@ class View:
                 if shown_line > 8:
                     folded["in line"] += 1
                     continue
-            elif word and job["state"] != "waiting on you":
+            elif word and job["state"] != "decision for you":
                 folded[word] += 1
                 continue
             shown.append(job)
@@ -2092,14 +2205,18 @@ class View:
 
     def count_line(self, width: int) -> List[Row]:
         counts = self.record["counts"]
-        needs = counts["need_you"]
-        summary = [S(plural(counts["running"], "job", "jobs") + " running", "amber" if counts["running"] else "faint"),
-                   S("  ·  ", "faint"),
-                   S("1 needs you" if needs == 1 else "%d need you" % needs, "red" if needs else "faint"),
-                   S("  ·  ", "faint"), S("%d idle" % counts["idle"], "faint")]
-        head = [S(" S T A R S H I P ", "cyan", True), S(" │  ", "faint")] + summary
+
+        def summary(short: bool):
+            segs = []
+            for words, colour in count_words(counts, short):
+                segs += ([S("  ·  ", "faint")] if segs else []) + [S(words, colour)]
+            return segs
+
+        head = [S(" S T A R S H I P ", "cyan", True), S(" │  ", "faint")] + summary(False)
         if seg_len(head) + 10 > width:
-            head = [S(" STARSHIP ", "cyan", True), S(" │  ", "faint")] + summary
+            head = [S(" STARSHIP ", "cyan", True), S(" │  ", "faint")] + summary(False)
+        if seg_len(head) + 10 > width:
+            head = [S(" STARSHIP ", "cyan", True), S(" │  ", "faint")] + summary(True)
         line = row(width, head, [S(time.strftime("%a %H:%M", time.localtime(self.now())), "mist")])
         line.hull = True
         return [line] + self.queue_rows(width)
@@ -2257,7 +2374,7 @@ class View:
     def job_lines(self, width: int, job: Dict[str, Any], full: bool) -> List[Row]:
         now = self.now()
         state = job["state"]
-        if state == "running":
+        if state == "busy":
             elapsed = [S(minutes_words((now - job["started"]) // 60), "mist")] if job.get("started") else []
             if job.get("quiet") and job.get("last_sign_of_life"):
                 doing = S("quiet for %d min, no sign of life" % ((now - job["last_sign_of_life"]) // 60), "amber")
@@ -2270,11 +2387,7 @@ class View:
         words = state
         if state == "waiting" and job.get("until"):
             words = "waiting · tries again %s" % clock(job["until"])
-        if state == "waiting on you":
-            words = "waiting on your answer"
-        if state == "ready for you":
-            words = "ready for you to look at"
-        dot = "● " if state in ("waiting on you", "ready for you", "stuck", "waiting") else "· "
+        dot = "● " if state in ("decision for you", "ready to merge", "needs a look", "failed", "waiting") else "· "
         return [row(width, [S("     "), S(dot, colour), S(job["title"], "ice" if full else "mist")],
                     [S(words, colour)])]
 
@@ -2979,6 +3092,15 @@ class Pane:
         self.last_key = 0.0
         self.drawn: List[Row] = []     # the rows on screen, top first, for clicks
         self.reading: Optional[Tuple[subprocess.Popen, str]] = None
+        # The overview reading is read off the drawing thread, once a second,
+        # so a slow read never holds a frame or a key.
+        self.overview: List[Optional[Dict[str, Any]]] = [None]
+        threading.Thread(target=self.read_overview, daemon=True).start()
+
+    def read_overview(self) -> None:
+        while True:
+            self.overview[0] = overview_reading(self.home)
+            time.sleep(1)
 
     def take_focus(self) -> bool:
         """Read and remove an item id written to the focus file; True when one came."""
@@ -3054,13 +3176,16 @@ class Pane:
                 refresh_in_background(self.home)
 
     def watch_calls(self) -> None:
-        """Rebuild the owner's calls once their signal moves past the record's, checking at most once a second."""
+        """Follow the overview's figures, and rebuild the owner's calls once their
+        signal or the overview's ready work moves past the record's, checking at
+        most once a second."""
         now = time.monotonic()
         if now - self.calls_checked < 1:
             return
         self.calls_checked = now
         signal = calls_signal(self.home)
-        if signal and signal != self.view.record.get("calls_signal"):
+        same_calls = follow_overview(self.view.record, self.overview[0])
+        if not same_calls or (signal and signal != self.view.record.get("calls_signal")):
             refresh_calls_in_background(self.home)
 
     def keep_asked(self) -> None:

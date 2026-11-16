@@ -315,13 +315,14 @@ EOF
     fs.writeFileSync(`${home}/snapshot.json`, JSON.stringify({ schema: "fm-fleet-snapshot.v1", generated: "", tasks, backlog }));
   ' "$HOME_DIR"
   record=$(home_env FM_FACTORY_SNAPSHOT="$HOME_DIR/snapshot.json" FM_FACTORY_PEEK= FM_FACTORY_INBOX=true \
+    FM_FLEET_STATE_READER="$FAKEBIN/reader" FM_FLEET_STATE_NO_CACHE=1 \
     python3 "$ROOT/bin/fm-factory.py" --data --fresh) || fail "the pane's record failed"
   printf '%s' "$record" | node -e '
     let s = ""; process.stdin.on("data", (c) => s += c).on("end", () => {
       const record = JSON.parse(s);
       const by = Object.fromEntries(record.needs_you.map((n) => [n.id, n]));
       const check = (ok, code) => { if (!ok) { console.error(JSON.stringify(record.needs_you, null, 2)); process.exit(code); } };
-      check(record.counts.need_you === 3 && record.needs_you.length === 3, 2);
+      check(record.counts.decisions === 2 && record.counts.ready_to_merge === 1 && record.needs_you.length === 3, 2);
       check(by["pick-route"] && JSON.stringify(by["pick-route"].options.map((o) => [o.label, o.suggested])) === JSON.stringify([["north", false], ["south", true]]), 3);
       check(by["old-ask"] && by["old-ask"].options.length === 0 && by["old-ask"].why === "Needs a name.", 4);
       check(by["ship-pr"] && by["ship-pr"].kind === "finished work", 5);

@@ -265,7 +265,7 @@ test_contract_order_and_fleet_projection() {
   : > "$HOME_FIX/state/.afk"
 
   out=$(render Opus high 42 73 1.235 | strip_ansi)
-  [ "$out" = "⚓ Opus·high │ 🧠42% ⚡73% │ 1 working, 1 checking, 1 waiting, 1 waiting for you, 1 needs a look │ 👁 watching │ \$1.24 │ 💤AFK" ] \
+  [ "$out" = "⚓ Opus·high │ 🧠42% ⚡73% │ 2 busy, 1 waiting, 1 ready to merge, 1 needs a look │ 👁 watching │ \$1.24 │ 💤AFK" ] \
     || fail "canonical fields, order, fleet counts, or formatting drifted: $out"
   pass "status bar: canonical field order and fleet projection are stable"
 }
@@ -291,14 +291,14 @@ test_the_headline_is_live_agents_and_stopped_records_are_visible() {
   : > "$HOME_FIX/state/.last-watcher-beat"
 
   out=$(render Opus high -- -- -- | strip_ansi)
-  assert_contains "$out" '2 working' \
+  assert_contains "$out" '2 busy' \
     "the headline did not count the two endpoints an agent is actually running on"
   assert_contains "$out" '3 stopped' \
     "the three records whose worker is gone are not shown as a distinct figure"
   pass "status bar: the headline is live agents and stopped records carry their own figure"
 }
 
-# The row once read "2 working" while one of the two workers had finished: its
+# The row once read "2 working" (now "busy") while one of the two workers had finished: its
 # PR was green and it sat idle until the captain gave the merge word. A live
 # agent is not a busy one, so work waiting on the captain is its own figure and
 # the working count is only what is left.
@@ -313,7 +313,7 @@ test_finished_work_waiting_on_the_captain_is_not_counted_as_working() {
   : > "$HOME_FIX/state/.last-watcher-beat"
 
   out=$(render Opus high -- -- -- | strip_ansi)
-  assert_contains "$out" '│ 1 working, 1 waiting for you │' \
+  assert_contains "$out" '│ 1 busy, 1 ready to merge │' \
     "a worker whose PR waits for the merge word was still counted as working"
 
   # A decision held for the captain, a ready branch whose worker has exited,
@@ -332,7 +332,7 @@ test_finished_work_waiting_on_the_captain_is_not_counted_as_working() {
   fleet_endpoint_task merged live-2 "$HOME_FIX/wt" \
     'state: done · source: run-step · checks green: PR merged (ci monitor ended)'
   out=$(render Opus high -- -- -- | strip_ansi)
-  assert_contains "$out" '│ 2 waiting for you, 1 needs a look │' \
+  assert_contains "$out" '│ 1 decision for you, 1 ready to merge, 1 needs a look │' \
     "held decisions, ready branches, workers' questions, and merged work were not told apart from working"
 
   # A worker that committed its build and reported done before validation has
@@ -345,7 +345,7 @@ test_finished_work_waiting_on_the_captain_is_not_counted_as_working() {
     'state: done · source: status-log · committed 1a2b3c4 on fm/built'
   printf 'kind=ship\nmode=no-mistakes\n' >> "$HOME_FIX/state/built.meta"
   out=$(render Opus high -- -- -- | strip_ansi)
-  assert_contains "$out" '│ 1 working │' \
+  assert_contains "$out" '│ 1 busy │' \
     "a build handed back before validation was counted as waiting for the captain or as working"
   pass "status bar: finished work waiting on the captain is counted apart from working workers"
 }
@@ -369,7 +369,7 @@ test_a_workers_question_reads_as_needs_a_look() {
   : > "$HOME_FIX/state/.last-watcher-beat"
 
   out=$(render Opus high -- -- -- | strip_ansi)
-  assert_contains "$out" '│ 1 working, 2 need a look, 2 stopped │' \
+  assert_contains "$out" '│ 1 busy, 2 need a look, 2 stopped │' \
     "parked gates were not split by who owes the answer, or a lost parked worker was hidden"
   pass "status bar: a worker's question needs a look rather than waiting for the captain, and a lost parked worker is stopped"
 }
@@ -387,15 +387,17 @@ test_task_records_are_never_counted_as_running_workers() {
   : > "$HOME_FIX/state/.last-watcher-beat"
 
   out=$(render Opus high -- -- -- | strip_ansi)
-  assert_contains "$out" '1 working' "a fleet of one live worker and three records did not report one worker"
-  assert_not_contains "$out" '4 working' "task records were counted as running workers"
+  assert_contains "$out" '1 busy' "a fleet of one live worker and three records did not report one worker"
+  assert_not_contains "$out" '4 busy' "task records were counted as running workers"
   pass "status bar: a task record is never counted as a running worker"
 }
 
 # A pipeline run carrying a task and a worker typing at one are both "working"
-# to the canonical reader; only its SOURCE separates them, and the captain asked
-# to see that difference.
-test_validating_work_is_distinguished_from_a_busy_worker() {
+# to the canonical reader; only its SOURCE separates them. The overview counts
+# both as busy, as the bridge strip's lamp does, so the two surfaces show one
+# number; the Factory pane shows which busy job is in the checks. A gate no
+# human owes is neither.
+test_validating_work_is_busy_like_the_strip() {
   local out
   reset_fleet
   fleet_task typing crew 'state: working · source: pane · harness busy'
@@ -405,10 +407,28 @@ test_validating_work_is_distinguished_from_a_busy_worker() {
   : > "$HOME_FIX/state/.last-watcher-beat"
 
   out=$(render Opus high -- -- -- | strip_ansi)
-  assert_contains "$out" '1 working, 2 checking' "validating work was folded into the busy-worker count"
-  assert_not_contains "$out" 'waiting for you' "a parked gate no human owes was reported as waiting on the captain"
+  assert_contains "$out" '│ 3 busy │' "validating work and a busy worker were not one busy figure"
+  assert_not_contains "$out" 'for you' "a parked gate no human owes was reported as waiting on the captain"
   assert_not_contains "$out" 'needs a look' "a parked gate no human owes was reported as needing attention"
-  pass "status bar: validating work is a separate field from a busy worker"
+  pass "status bar: validating work counts as busy, as on the bridge strip"
+}
+
+# A failed task is part of needs a look, and of stopped when its worker is gone.
+# The row names it failed instead, as the bridge strip's alert does, so each
+# broken task is counted once and the two surfaces show the same figures.
+test_failed_work_is_counted_once_as_on_the_strip() {
+  local out
+  reset_fleet
+  mkdir -p "$HOME_FIX/wt"
+  fleet_endpoint_task broke dead-1 "$HOME_FIX/wt" 'state: failed · source: status-log · tests would not build'
+  fleet_endpoint_task stuck live-1 "$HOME_FIX/wt" 'state: blocked · source: status-log · missing fixture'
+  fleet_endpoint_task lost dead-2 "$HOME_FIX/wt" 'state: unknown · source: none · backend target gone'
+  : > "$HOME_FIX/state/.last-watcher-beat"
+
+  out=$(render Opus high -- -- -- | strip_ansi)
+  assert_contains "$out" '│ 1 needs a look, 1 failed, 1 stopped │' \
+    "a failed task was counted under needs a look or stopped as well as failed"
+  pass "status bar: failed work is counted once, as on the bridge strip"
 }
 
 # Zero live workers is a real fleet state. It must never be what the row shows
@@ -429,11 +449,12 @@ test_unknown_fleet_state_shows_placeholders_and_never_zero() {
 
   # Under load the refresh has not landed in time, but a good reading was taken
   # before: its counts stand in with a dim age rather than workers unknown.
-  printf '400\t1\t0\t2\t0\t0\t1\tstale-signature' > "$HOME_FIX/state/.status-fleet-state"
+  printf '400\t1\t0\t2\t0\t0\t1\tstale-signature\t0\tcalls\t0\t0\t-\tmerge\tone\tOne\tsig\tone' \
+    > "$HOME_FIX/state/.status-fleet-state"
   out=$(FM_FLEET_STATE_NO_CACHE=0 FM_FLEET_STATE_NOW=1000 \
     FM_FLEET_STATE_READER="$FAKEBIN/absent-reader" \
     render Opus high -- -- -- | strip_ansi)
-  assert_contains "$out" '│ 1 working, 2 checking, 1 waiting for you (10m ago) │' \
+  assert_contains "$out" '│ 3 busy, 1 ready to merge (10m ago) │' \
     "a slow refresh under load blanked the last good counts"
 
   # Records the reading could not classify are never an idle fleet: they are
@@ -1829,7 +1850,8 @@ test_the_headline_is_live_agents_and_stopped_records_are_visible
 test_finished_work_waiting_on_the_captain_is_not_counted_as_working
 test_a_workers_question_reads_as_needs_a_look
 test_task_records_are_never_counted_as_running_workers
-test_validating_work_is_distinguished_from_a_busy_worker
+test_validating_work_is_busy_like_the_strip
+test_failed_work_is_counted_once_as_on_the_strip
 test_unknown_fleet_state_shows_placeholders_and_never_zero
 test_threshold_colors_and_placeholders
 test_not_watching_is_bright_red_when_missing_or_stale

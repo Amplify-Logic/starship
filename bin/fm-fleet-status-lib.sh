@@ -74,26 +74,31 @@
 #               him now plus the PRs and ready branches waiting for his merge
 #               word.
 #   decisions   the part of ready that is a held decision rather than work
-#               ready to land. It is a subset of ready, never added to it, and
-#               only bin/fm-bridge-strip.sh asks for it, because the strip shows
-#               "decisions for you" and "ready to merge" as two lamps.
+#               ready to land. It is a subset of ready, never added to it,
+#               because the overview shows "decisions for you" and "ready to
+#               merge" as two figures.
 #
-# The bridge strip also asks (fm_fleet_status_counts `strip`) for four readings
-# no other field carries, taken by the same fold so they never disagree with
-# the lamps:
+# The overview - the bridge strip, the status bar and the Factory pane's count
+# line - also asks (fm_fleet_status_counts `overview`) for the readings no
+# other field carries, taken by the same fold so they never disagree with the
+# counts. docs/status-bar.md "Fleet words" owns the one word each surface
+# shows for each of them:
 #   failed      tasks whose current state is failed: a worker's failure or a
 #               failed validation run. It is part of attention, never added to
 #               it.
-#   lost        the stopped tasks that are not also failed, so the strip's red
-#               alert, failed plus lost, counts each broken task once. It is
-#               part of stopped, which keeps counting a failed task whose
-#               worker is gone.
+#   lost        the stopped tasks that are not also failed, so the overview's
+#               failed and stopped figures, which show failed and lost, count
+#               each broken task once. It is part of stopped, which keeps
+#               counting a failed task whose worker is gone.
 #   night       how much finished in the night shift that ended last, as
 #               <count>@<window-end-epoch>, or `-` when the home has no night
 #               shift window (fm_night_shift_window owns the window and
 #               _fm_fleet_night_done what counts).
 #   first call  the owner's most urgent call, the first line fm_owner_calls
 #               prints, as its kind, its id and a plain one-line title.
+#   ready list  the tasks whose work read ready in the fold, which
+#               fm_owner_calls turned into the merges behind ready, so the
+#               Factory pane lists exactly the calls the overview counts.
 #
 # working and stopped are separate readings of the same fleet rather than two
 # ends of one axis, and a task counts toward NEITHER unless its state was
@@ -156,15 +161,25 @@ _fm_fleet_now() {
 
 # _fm_fleet_ids: the ordinary task ids in <state>, one per line, sorted.
 # Second mates are persistent direct reports rather than work items, so they are
-# excluded here exactly as they were from the count this replaces.
+# excluded here exactly as they were from the count this replaces: a record
+# whose first kind= line says secondmate. One awk reads every record, because
+# every frame of every overview surface lists the fleet, twice.
 _fm_fleet_ids() {  # <state-dir>
-  local meta id kind
+  local meta id mates
+  local metas=()
   for meta in "$1"/*.meta; do
-    [ -e "$meta" ] || continue
-    kind=$(awk -F= '$1 == "kind" { print substr($0, index($0, "=") + 1); exit }' "$meta" 2>/dev/null)
-    [ "$kind" = secondmate ] && continue
-    id=$(basename "$meta" .meta)
-    printf '%s\n' "$id"
+    [ -e "$meta" ] && metas+=("$meta")
+  done
+  [ "${#metas[@]}" -gt 0 ] || return 0
+  mates=$(awk -F= 'FNR == 1 { seen = 0 }
+    !seen && $1 == "kind" { seen = 1; if (substr($0, index($0, "=") + 1) == "secondmate") print FILENAME }' \
+    "${metas[@]}" 2>/dev/null)
+  for meta in "${metas[@]}"; do
+    case $'\n'"$mates"$'\n' in
+      *$'\n'"$meta"$'\n'*) continue ;;
+    esac
+    id=${meta##*/}
+    printf '%s\n' "${id%.meta}"
   done | LC_ALL=C sort
 }
 
@@ -703,7 +718,7 @@ _fm_fleet_calls_refresh_detached() {  # <state-dir> <now> <ready-list> <signal>
 #   <signature> <decisions> calls <failed> <lost> <night> <first-kind>
 #   <first-id> <first-title> <calls-signal> <ready-list>
 #
-# <decisions> and the `calls` mark come after the older fields, and the strip's
+# <decisions> and the `calls` mark come after the older fields, and the overview's
 # readings (the header's failed, lost, night and first call) after the mark, so a
 # reading written before them still parses for every older field;
 # fm_fleet_status_counts owns how such a reading is treated. An absent first
@@ -844,11 +859,11 @@ _fm_fleet_refresh_detached() {  # <cache> <state-dir> <now> <reader>
 }
 
 # _fm_fleet_unknown: the reading a frame gets when the live fields are not known.
-_fm_fleet_unknown() {  # <records> [decisions|strip]
+_fm_fleet_unknown() {  # <records> [decisions|overview]
   printf '%s\t0\t0\t0\t0\t0\t0\t0\t0' "$1"
   case "${2:-}" in
     decisions) printf '\t0' ;;
-    strip) printf '\t0\t-\t-\t-\t-\t-\t-\t-' ;;
+    overview) printf '\t0\t-\t-\t-\t-\t-\t-\t-\t-' ;;
   esac
 }
 
@@ -861,13 +876,16 @@ _fm_fleet_unknown() {  # <records> [decisions|strip]
 # `calls` mark) cannot be trusted to split <ready>, so with `decisions` it is
 # reported exactly as no reading (<known> 0), and either way a refresh is
 # started at once so the next frame has the field.
-# With the word `strip` instead, the bridge strip's readings follow those ten:
+# With the word `overview` instead (`strip` is the older name for it), the
+# overview's readings follow those ten:
 #   <failed> <lost> <night> <first-kind> <first-id> <first-title> <calls-signal>
+#   <ready-list>
 # as the header and _fm_fleet_collect describe them. Each is `-` when the
-# reading has no such field, as one taken before the strip asked for them does
-# not, and such a reading is refreshed at once; the ten fields stand as above.
-# <calls-signal> is the owner's calls signal the shown calls were read under,
-# so a renderer that sees the signal move past it knows to draw again.
+# reading has no such field, as one taken before the overview asked for them
+# does not, and such a reading is refreshed at once; the ten fields stand as
+# above. <calls-signal> is the owner's calls signal the shown calls were read
+# under, so a renderer that sees the signal move past it knows to draw again.
+# <ready-list> is the space-separated ids behind the merges in <ready>.
 # tab separated. <known> is 1 when the six live fields are a current reading of
 # THIS fleet, 2 when they are the last good reading but no longer current - it
 # aged past its maximum, or the fleet changed since - and 0 when no good reading
@@ -881,12 +899,13 @@ _fm_fleet_unknown() {  # <records> [decisions|strip]
 # can see is old, beside a refresh that keeps being tried, tells him more than a
 # placeholder; unknown is kept for a home that has never had a good reading.
 # Records stay the live count either way, so a dispatch shows up at once.
-fm_fleet_status_counts() {  # <state-dir> [decisions|strip]
+fm_fleet_status_counts() {  # <state-dir> [decisions|overview]
   local state=$1 want=${2:-} now cache reader records ttl max_age
   local cached='' stamp='' working='' stopped='' validating='' paused=''
   local attention='' ready='' signature='' decisions='' mark='' current known age fresh=1
   local failed='' lost='' night='' first_kind='' first_id='' first_title=''
-  local calls_signal='' ready_list='' now_signal shown_signal=-
+  local calls_signal='' ready_list='' now_signal shown_signal=- shown_list=-
+  [ "$want" != strip ] || want=overview
   records=$(_fm_fleet_ids "$state" | grep -c '') || records=0
   now=$(_fm_fleet_now) || {
     _fm_fleet_unknown "$records" "$want"
@@ -924,17 +943,17 @@ READING
     ''|*[!0-9]*)
       decisions=
       fresh=0
-      [ "$want" != decisions ] && [ "$want" != strip ] || cached=
+      [ "$want" != decisions ] && [ "$want" != overview ] || cached=
       ;;
   esac
-  # The strip's readings are all there or none are.
+  # The overview's readings are all there or none are.
   case "$failed$lost" in
     ''|*[!0-9]*) failed= ;;
   esac
   if [ -z "$failed" ] || [ -z "$night" ] || [ -z "$first_kind" ] || [ -z "$first_id" ] \
     || [ -z "$first_title" ]; then
     failed=- lost=- night=- first_kind=- first_id=- first_title=-
-    [ "$want" != strip ] || fresh=0
+    [ "$want" != overview ] || fresh=0
   fi
   [ -n "$cached" ] || fresh=0
   # The owner's calls are kept as current as their signal, whatever the age of
@@ -946,7 +965,9 @@ READING
       fresh=0
     elif [ "${FM_FLEET_STATE_NO_CACHE:-}" = 1 ]; then
       shown_signal=$calls_signal
+      shown_list=$ready_list
     else
+      shown_list=$ready_list
       now_signal=$(fm_owner_calls_signal "$state")
       if [ "$calls_signal" = "$now_signal" ]; then
         shown_signal=$calls_signal
@@ -993,9 +1014,9 @@ READING
     "$ready" "$known" "$age"
   case "$want" in
     decisions) printf '\t%s' "$decisions" ;;
-    strip)
-      printf '\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s' "$decisions" "$failed" "$lost" "$night" \
-        "$first_kind" "$first_id" "$first_title" "$shown_signal"
+    overview)
+      printf '\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s' "$decisions" "$failed" "$lost" "$night" \
+        "$first_kind" "$first_id" "$first_title" "$shown_signal" "$shown_list"
       ;;
   esac
 }
