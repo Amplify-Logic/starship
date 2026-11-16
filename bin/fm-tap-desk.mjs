@@ -204,7 +204,17 @@ function currentMarks(task, identity) {
   return { present: true, ...marks };
 }
 
-function decisionShape(task, identity) {
+// A request from a Mothership room takes only the owner's own answer. Its
+// adapter owns which held calls those are.
+const OWNER_ONLY_NOTE = "a request from a Mothership room needs the owner's own answer, so it stays held for the owner";
+
+function ownerOnlyIds(ctx) {
+  const result = runSync(ctx, "bash", [path.join(ctx.root, "bin/fm-procevent-mothership.sh"), "calls"]);
+  if (result.status !== 0) fail(`could not tell which calls are requests from a Mothership room: ${lastLine(result.stderr) || `exit ${result.status}`}`);
+  return new Set(result.stdout.split("\n").filter(Boolean));
+}
+
+function decisionShape(task, identity, ownerOnly = false) {
   const reason = task.hold_reason && task.hold_reason !== "-" ? task.hold_reason : "";
   const marks = currentMarks(task, identity);
   const parsedRecommendation = recommendationFrom(reason);
@@ -221,6 +231,7 @@ function decisionShape(task, identity) {
     recommendationText: recommended || parsedRecommendation,
     easyUndo: Boolean(marks.present && marks.easyUndo),
     staleMarks: Boolean(marks.stale),
+    ownerOnly,
   };
 }
 
@@ -235,6 +246,7 @@ function neverDefaultClass(...texts) {
 // Why a decision never gets the seven-day default, or "" when only its age
 // decides; export and defaults both ask here.
 function defaultRefusal(task, identity, shape, ledger) {
+  if (shape.ownerOnly) return OWNER_ONLY_NOTE;
   if (!shape.easyUndo) return "it is not marked easy to undo";
   if (!shape.recommended) return "no recorded recommendation is one of its options";
   const holdUntil = task.hold_until && task.hold_until !== "-" ? task.hold_until : "";
@@ -373,9 +385,9 @@ async function loadDecisions(ctx, ids) {
   return { decisions, notShown };
 }
 
-function decisionCard(row, ledger, now, days) {
+function decisionCard(row, ledger, now, days, ownerOnly) {
   const { task, identity } = row;
-  const shape = decisionShape(task, identity);
+  const shape = decisionShape(task, identity, ownerOnly.has(task.id));
   const since = heldSince(identity, task.created);
   const ageDays = since ? Math.floor((now - since.getTime()) / DAY_MS) : null;
   const kept = latestOutcome(ledger, "decision", task.id, identity, "kept");
@@ -398,6 +410,7 @@ function decisionCard(row, ledger, now, days) {
     easy_undo: shape.easyUndo,
     default_in_days: defaults ? Math.max(0, days - ageDays) : null,
     closes_on_answer: task.kind === "captain",
+    owner_only: shape.ownerOnly,
     kept: kept ? { at: kept.at, reason: kept.reason || "" } : null,
   };
 }
@@ -488,8 +501,9 @@ async function commandExport(args) {
   const now = Date.now();
   const calls = ownerCalls(ctx);
   const [decisions, merges] = await Promise.all([loadDecisions(ctx, calls.decisions), loadMergeCards(ctx, ledger, calls.merges)]);
+  const ownerOnly = ownerOnlyIds(ctx);
   const decisionCards = decisions.decisions
-    .map((row) => decisionCard(row, ledger, now, days))
+    .map((row) => decisionCard(row, ledger, now, days, ownerOnly))
     .sort((left, right) => (left.held_since || "").localeCompare(right.held_since || "") || left.id.localeCompare(right.id));
   const notShown = [...merges.notShown, ...decisions.notShown];
   const cards = {
@@ -620,14 +634,14 @@ function bodyNote(ctx, id, identity, text) {
   return runSync(ctx, "bash", args);
 }
 
-function planDecision(ctx, tap) {
+function planDecision(ctx, tap, ownerOnly) {
   const open = identitySync(ctx, tap.id);
   if (open.error) return { final: false, outcome: "refused", detail: `could not tell whether it is still waiting: ${open.error}` };
   if (!open.open) return { final: true, outcome: "stale", detail: "it is no longer waiting for the owner" };
   if (open.identity !== tap.identity) return { final: true, outcome: "stale", detail: "the question changed since this card was shown" };
   const task = showTaskSync(ctx, tap.id);
   if (!task) return { final: false, outcome: "refused", detail: "could not read the task" };
-  const shape = decisionShape(task, open.identity);
+  const shape = decisionShape(task, open.identity, ownerOnly.has(tap.id));
   const release = task.kind !== "captain";
   if (tap.choice === "option") {
     if (!shape.options.includes(tap.option)) return { final: true, outcome: "stale", detail: "the chosen option is no longer offered" };
@@ -637,6 +651,7 @@ function planDecision(ctx, tap) {
     return { action: "answer", chosen: "", release: false, label: "dropped", text: decisionText(tap, "", ["Dropped: the owner does not want this."]), identity: open.identity };
   }
   if (tap.choice === "you-decide") {
+    if (shape.ownerOnly) return { final: true, outcome: "held", detail: OWNER_ONLY_NOTE };
     if (shape.recommended) {
       return { action: "answer", chosen: shape.recommended, release, label: release ? "answered with firstmate's pick, work resumes" : "answered with firstmate's pick", text: decisionText(tap, shape.recommended, ["The owner asked firstmate to decide; firstmate's recorded recommendation was applied."]), identity: open.identity };
     }
@@ -669,6 +684,8 @@ function commandRoute(args) {
   const handled = new Set(ledger.filter((entry) => entry.final).map((entry) => entry.digest));
   let already = 0;
   let refusedCount = 0;
+  const answeredIds = [];
+  const ownerOnly = ownerOnlyIds(ctx);
   for (const error of errors) console.log(`unreadable: ${error}`);
   for (const tap of taps) {
     tap.digest = digestOf({ card: tap.card, identity: tap.identity, choice: tap.choice, option: tap.option, reason: tap.reason, tapped_at: tap.tapped_at });
@@ -676,7 +693,7 @@ function commandRoute(args) {
       already += 1;
       continue;
     }
-    const plan = tap.kind === "decision" ? planDecision(ctx, tap) : planMerge(ctx, tap);
+    const plan = tap.kind === "decision" ? planDecision(ctx, tap, ownerOnly) : planMerge(ctx, tap);
     let result;
     let chosen = "";
     if (plan.outcome) {
@@ -715,6 +732,7 @@ function commandRoute(args) {
     console.log(`${result.outcome}: ${tap.id}${result.detail ? `: ${result.detail}` : ""}${chosen ? ` (chose: ${chosen})` : ""}`);
     if (!apply) continue;
     if (!result.final) continue;
+    if (plan.action === "answer" && result.outcome !== "stale") answeredIds.push(tap.id);
     const entry = {
       at: new Date().toISOString(),
       digest: tap.digest,
@@ -733,11 +751,24 @@ function commandRoute(args) {
     };
     appendLedger(ctx, entry);
     ledger.push(entry);
-    if (result.outcome !== "stale") appendLearning(ctx, entry);
+    if (result.outcome !== "stale" && result.outcome !== "held") appendLearning(ctx, entry);
   }
   if (already > 0) console.log(`already handled: ${already}`);
+  const roomFailed = settleRoomCalls(ctx, answeredIds);
   console.log(`taps: ${taps.length}${apply ? "" : " (dry run; add --apply to route them)"}`);
-  if (refusedCount > 0 || errors.length > 0) process.exitCode = 1;
+  if (refusedCount > 0 || errors.length > 0 || roomFailed) process.exitCode = 1;
+}
+
+// An answered call that is a request from a Mothership room is carried out in
+// that room by its adapter: accept or decline once, or ask again later. Every
+// other answered id is no room call, and the adapter passes over it. Returns
+// whether a room step failed; the adapter retries it on its next settle.
+function settleRoomCalls(ctx, ids) {
+  if (ids.length === 0) return false;
+  const result = runSync(ctx, "bash", [path.join(ctx.root, "bin/fm-procevent-mothership.sh"), "settle", ...ids]);
+  for (const line of result.stdout.split("\n").filter(Boolean)) console.log(`room: ${line}`);
+  if (result.status !== 0 && !result.stdout.trim()) console.log(`room: failed: ${lastLine(result.stderr) || `exit ${result.status}`}`);
+  return result.status !== 0;
 }
 
 async function commandDefaults(args) {
@@ -748,12 +779,13 @@ async function commandDefaults(args) {
   const ledger = readLedger(ctx);
   const now = Date.now();
   const { decisions, notShown } = await loadDecisions(ctx, ownerCalls(ctx).decisions);
+  const ownerOnly = ownerOnlyIds(ctx);
   for (const item of notShown) console.log(`not checked: ${item.id}: ${item.reason}`);
   let due = 0;
   let refusedCount = 0;
   for (const row of decisions.sort((left, right) => left.task.id.localeCompare(right.task.id))) {
     const { task, identity } = row;
-    const shape = decisionShape(task, identity);
+    const shape = decisionShape(task, identity, ownerOnly.has(task.id));
     if (!shape.easyUndo) continue;
     const since = heldSince(identity, task.created);
     const age = since ? Math.floor((now - since.getTime()) / DAY_MS) : null;
