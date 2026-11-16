@@ -11,9 +11,7 @@ fm_hermes_process_matches() {  # <args> [pid]
   else
     read -r -a words <<< "$args"
   fi
-  # Stock Bash 3.2 treats an empty array expansion as unbound under set -u.
-  [ "${#words[@]}" -gt 0 ] || return 1
-  for word in "${words[@]}"; do
+  for word in ${words[@]+"${words[@]}"}; do
     if [ "$first" = 1 ]; then
       first=0
       case "${word##*/}" in

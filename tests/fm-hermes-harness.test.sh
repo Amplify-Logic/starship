@@ -33,10 +33,7 @@ done
 for args in 'node /tmp/server.js /opt/hermes-agent/ui-tui/dist/entry.js' 'python3 -c tui_gateway.entry' 'node -e hermes' 'hermes-helper'; do
   ! fm_hermes_process_matches "$args" || fail "false identity: $args"
 done
-# Stock Bash 3.2 under set -u kills the caller on an empty array expansion, so
-# empty args must be a plain non-match rather than a crash.
-empty_out=$( { fm_hermes_process_matches '' && echo match || echo no-match; } 2>/dev/null)
-[ "$empty_out" = no-match ] || fail "empty args must leave the caller running as a non-match, got '$empty_out'"
+! fm_hermes_process_matches '' || fail 'empty args matched under set -u'
 # Use a real interpreter process so kernel-name loss and argv loss are
 # independent regressions, not expectations encoded into a fake harness.
 mkdir -p "$TMP_ROOT/process/tui_gateway"

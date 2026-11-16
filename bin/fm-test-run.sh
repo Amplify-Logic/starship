@@ -438,7 +438,8 @@ family_for_basename() {
     fm-calm-pi-queue-retention-live-e2e.test.sh|\
     fm-herdr-submit-confirm-live-e2e.test.sh|\
     fm-backend-rex-composer-live-e2e.test.sh|\
-    fm-watch-wedge-cap-live.test.sh|fm-read-repetition-live.test.sh)
+    fm-watch-wedge-cap-live.test.sh|fm-read-repetition-live.test.sh|\
+    fm-claude-tool-exclude-live.test.sh)
       printf '%s\n' live-harness-optin
       ;;
     fm-backend-herdr.test.sh|fm-backend-tmux-smoke.test.sh|fm-backend.test.sh|\
@@ -456,7 +457,7 @@ family_for_basename() {
     fm-teardown-endpoint-safety.test.sh)
       printf '%s\n' backend-dispatch
       ;;
-    fm-check-unregister.test.sh|fm-pipeline-spend.test.sh|fm-pr-check-security.test.sh|\
+    fm-check-unregister.test.sh|fm-park.test.sh|fm-pipeline-spend.test.sh|fm-pr-check-security.test.sh|\
     fm-pr-health.test.sh|fm-pr-merge.test.sh|fm-pr-reviewers.test.sh|fm-pr-state.test.sh|\
     fm-review-diff.test.sh|fm-teardown.test.sh|fm-x-mode.test.sh)
       printf '%s\n' pr-forge
@@ -584,6 +585,7 @@ tests/fm-ensure-agents-md.test.sh
 tests/fm-grok-harness.test.sh
 tests/fm-herdr-lab.test.sh
 tests/fm-lint.test.sh
+tests/fm-park.test.sh
 tests/fm-pi-primary-types.test.sh
 tests/fm-pr-merge.test.sh
 tests/fm-review-diff.test.sh
@@ -618,6 +620,7 @@ tests/fm-ensure-agents-md.test.sh 2119
 tests/fm-grok-harness.test.sh 13208
 tests/fm-herdr-lab.test.sh 27303
 tests/fm-lint.test.sh 489352
+tests/fm-park.test.sh 70085
 tests/fm-pi-primary-types.test.sh 29576
 tests/fm-pr-merge.test.sh 675503
 tests/fm-review-diff.test.sh 20116
@@ -654,9 +657,9 @@ list_portable_parallel_1() {
   cat <<'EOF'
 tests/fm-pr-merge.test.sh
 tests/fm-backend-t3code.test.sh
+tests/fm-park.test.sh
 tests/fm-t3-mcp.test.sh
 tests/fm-x-mode.test.sh
-tests/fm-arm-pretool-check.test.sh
 tests/fm-pi-primary-types.test.sh
 tests/fm-brief.test.sh
 tests/fm-spawn-batch.test.sh
@@ -671,6 +674,7 @@ list_portable_parallel_2() {
 tests/fm-captain-hold-lifecycle.test.sh
 tests/fm-crew-state.test.sh
 tests/fm-backend-herdr.test.sh
+tests/fm-arm-pretool-check.test.sh
 tests/fm-composer-lib.test.sh
 tests/fm-herdr-lab.test.sh
 tests/fm-review-diff.test.sh
@@ -857,6 +861,7 @@ tests/fm-claude-reply-speak-live-e2e.test.sh 1069
 tests/fm-claude-reply-speak.test.sh 22058
 tests/fm-claude-stop-autoarm-live-e2e.test.sh 1205
 tests/fm-claude-stop-autoarm.test.sh 95941
+tests/fm-claude-tool-exclude-live.test.sh 75
 tests/fm-claude-trust.test.sh 25662
 tests/fm-cmux-claude-composer-live-e2e.test.sh 1241
 tests/fm-codex-continuity-live-e2e.test.sh 1199
@@ -1936,6 +1941,9 @@ families_for_changed_path() {
       printf '%s\n' __script__:fm-read-repetition-live.test.sh
       printf '%s\n' __script__:fm-pi-primary-types.test.sh
       ;;
+    tests/fixtures/fm-claude-request-capture.py)
+      printf '%s\n' __script__:fm-claude-tool-exclude-live.test.sh
+      ;;
     .pi/extensions/fm-branch-supervision.ts|.pi/extensions/lib/fm-async-exec.ts|\
     .pi/extensions/lib/fm-branch-dispatch.ts|.pi/extensions/lib/fm-native-contract.ts)
       # The portable suites that actually load these files, named one by one.
@@ -1994,7 +2002,7 @@ families_for_changed_path() {
       printf '%s\n' session-bootstrap
       printf '%s\n' live-harness-optin
       ;;
-    bin/fm-extension.mjs|bin/fm-extension.sh|docs/examples/process-event-extension/*)
+    bin/fm-extension*.mjs|bin/fm-extension.sh|docs/examples/process-event-extension/*)
       printf '%s\n' __script__:fm-extension-binding.test.sh
       printf '%s\n' __script__:fm-procevent-extension-errors.test.sh
       ;;

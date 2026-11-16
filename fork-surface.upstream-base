@@ -1,4 +1,4 @@
-# upstream_base = 913bb7a7b6e68a107c2d0ee755ee29c6f9e7b208
+# upstream_base = 427056c4181c41074ad24f051f79919330df0fa5
 .agents/hooks.json
 .agents/skills/afk/SKILL.md
 .agents/skills/agent-skill-trigger-index/SKILL.md
@@ -196,6 +196,7 @@ bin/fm-dod-lib.sh
 bin/fm-ensure-agents-md.sh
 bin/fm-env-lib.sh
 bin/fm-exclude-tools-lib.sh
+bin/fm-extension-deadline.mjs
 bin/fm-extension-launch-barrier.mjs
 bin/fm-extension.mjs
 bin/fm-extension.sh
@@ -259,11 +260,13 @@ bin/fm-merge-authority-lib.sh
 bin/fm-merge-local.sh
 bin/fm-merge-outcome-lib.sh
 bin/fm-nm-run-lib.sh
+bin/fm-omp-process-lib.sh
 bin/fm-omp-profile-lib.sh
 bin/fm-on.sh
 bin/fm-operational-input.sh
 bin/fm-osc7501.sh
 bin/fm-parent-channel-lib.sh
+bin/fm-park.sh
 bin/fm-path-lib.sh
 bin/fm-peek.sh
 bin/fm-pending-reply-lib.sh
@@ -298,6 +301,7 @@ bin/fm-quota-axi-lib.sh
 bin/fm-quota-choose.sh
 bin/fm-record-export.py
 bin/fm-record-export.sh
+bin/fm-record-hygiene-lib.sh
 bin/fm-remote-delta-read.sh
 bin/fm-remote-doctor.sh
 bin/fm-remote-entrypoint.sh
@@ -504,12 +508,15 @@ tests/captures/no-mistakes-v1.70.1/superseded.toon
 tests/captures/no-mistakes-v1.70.1/uninitialized.toon
 tests/cmux-test-safety.sh
 tests/fixtures.sh
+tests/fixtures/fm-claude-request-capture.py
 tests/fixtures/fm-read-repetition-live.mjs
 tests/fixtures/fm-read-repetition-sdk.mjs
 tests/fixtures/opencode-1.18.31-cwd/opencode-1.18.31-busy-wide-abs-cwd.ansi
 tests/fixtures/opencode-1.18.31-cwd/opencode-1.18.31-idle-cwd.ansi
 tests/fixtures/opencode-1.18.31-cwd/opencode-1.18.31-idle-short-cwd.ansi
 tests/fixtures/opencode-1.18.31-cwd/opencode-1.18.31-idle-wide-abs-cwd.ansi
+tests/fixtures/rex-grok-1.0.77/grok-1.0.77-fast-idle-after-interrupt.vt
+tests/fixtures/rex-grok-1.0.77/grok-1.0.77-fast-typed.vt
 tests/fixtures/rex-opencode-1.19.3/opencode-1.19.3-idle-format.vt
 tests/fm-afk-contract.test.sh
 tests/fm-afk-inject-e2e.test.sh
@@ -589,6 +596,7 @@ tests/fm-classify-decision-key.test.sh
 tests/fm-claude-account-quota.test.sh
 tests/fm-claude-stop-autoarm-live-e2e.test.sh
 tests/fm-claude-stop-autoarm.test.sh
+tests/fm-claude-tool-exclude-live.test.sh
 tests/fm-claude-trust.test.sh
 tests/fm-cmux-claude-composer-live-e2e.test.sh
 tests/fm-codex-continuity-live-e2e.test.sh
@@ -688,6 +696,7 @@ tests/fm-opencode-primary-live-e2e.test.sh
 tests/fm-operational-input.test.sh
 tests/fm-osc7501.test.sh
 tests/fm-parent-channel-scan-exclusion.test.sh
+tests/fm-park.test.sh
 tests/fm-peek-remote.test.sh
 tests/fm-pending-reply.test.sh
 tests/fm-pi-branch-extension.test.sh
