@@ -123,8 +123,14 @@ def tenth(peak):
     return b"".join(int(peak * math.sin(i / 5.0)).to_bytes(2, "little", signed=True) for i in range(1600))
 try:
     if mode == "talking":
+        # Twice as fast as a clock, paced by the clock rather than by sleep
+        # alone: a host whose short sleeps run long still gets that speed.
+        loud, began, sent = tenth(8000), time.monotonic(), 0
         while True:
-            out.write(tenth(8000)); out.flush(); time.sleep(0.05)
+            owed = int((time.monotonic() - began) / 0.05) + 1
+            if owed > sent:
+                out.write(loud * (owed - sent)); out.flush(); sent = owed
+            time.sleep(0.05)
     out.write({"speech": tenth(8000) * 10 + tenth(40) * 60, "hum": tenth(40) * 200, "dead": tenth(0) * 200}[mode])
     out.flush()
     time.sleep(120)
@@ -993,7 +999,14 @@ def drain(seconds, until=None):
             except OSError:
                 break
     return seen
-drain(20, until=b"q quit")
+# A busy host can take well over 20 seconds to read the fleet for the first
+# screen. Keys sent before it is up are thrown away when the pane makes its
+# terminal raw, so wait for it, and stop loudly if it never comes.
+if b"q quit" not in drain(120, until=b"q quit"):
+    os.kill(pid, 9)
+    while not os.waitpid(pid, os.WNOHANG)[0]:
+        drain(0.2)
+    sys.exit("drive_keys: the pane drew no first screen within 120 seconds")
 for key in sys.argv[3:] + ["q"]:
     if key.startswith("SH:"):
         subprocess.run(key[3:], shell=True, check=True, stdout=subprocess.DEVNULL)
@@ -1059,7 +1072,7 @@ test_an_answer_is_never_dropped_silently() {
   local dir="$TMP_ROOT/case$CASE" screen out
   drive_keys 2 "SNAP:$dir/asked" x q DOWN "SNAP:$dir/held" 3 "SNAP:$dir/changed" ENTER "SNAP:$dir/sent"
   screen=$(screen_of "$dir/asked" 50 100)
-  assert_contains "$(printf '%s\n' "$screen" | sed -n '/Already settled/{n;p;}' | tr -s '─')" \
+  assert_contains "$(printf '%s\n' "$screen" | sed -n '/Already settled/{n;p;}' | sed -E 's/(─)+/─/g')" \
     "╭─ Your answer · Harvest chart ─ not sent yet ─╮" "no box under the card says the answer is not sent yet"
   assert_contains "$screen" "│  2 this season " "the box does not show the answer picked"
   assert_contains "$screen" "enter sends it to Starship · esc cancels " \
@@ -1615,7 +1628,7 @@ test_a_spoken_note_that_cannot_be_sent_says_so_and_falls_back_to_typing() {
   FM_FACTORY_TEST_MIC=hum drive_keys t "WAIT:2" "SNAP:$dir/quiet" "typed instead" ENTER
   screen=$(screen_of "$dir/quiet" 50 100)
   has_line "$screen" " ✗ NOT SENT: no speech was heard. Type it instead, or press esc." "silence is not said to be unsent"
-  assert_contains "$(printf '%s\n' "$screen" | tr -s '─')" "╭─ Tell Starship · about Harvest chart ─ typed ─╮" \
+  assert_contains "$(printf '%s\n' "$screen" | sed -E 's/(─)+/─/g')" "╭─ Tell Starship · about Harvest chart ─ typed ─╮" \
     "the box did not fall back to typing"
   assert_absent "$FM_FACTORY_TEST_HEARD" "a recording with no speech in it went to the speech service"
   assert_equals "$(jq -r .body "$FM_FACTORY_TEST_NOTES")" \
