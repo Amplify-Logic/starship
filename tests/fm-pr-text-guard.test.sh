@@ -537,6 +537,10 @@ test_hook_honours_the_named_target_and_its_name() {
   printf 'thanks Robin\n' > "$WORK/reply.md"
   expect_allow "$HOME_WORDS" 'gh pr comment --body-file reply.md https://github.com/o/robin-notes/pull/7' \
     "a private PR URL after the flags is the target, and its own name is not published text"
+  expect_allow "$HOME_WORDS" 'gh pr merge --squash --delete-branch https://github.com/o/robin-notes/pull/7' \
+    "a private PR URL after boolean flags is the target"
+  expect_allow "$HOME_WORDS" 'gh pr comment --edit-last https://github.com/o/robin-notes/pull/7 --body "thanks Robin"' \
+    "a private PR URL after a boolean flag is the target of the comment"
   expect_refuse "$HOME_WORDS" 'gh pr comment 7 --body https://github.com/o/robin-notes/pull/3' \
     "a URL given as a flag's value is text, not the target"
   assert_contains "$REASON" "the repository this command reaches, a public repository" "the refusal must name gh's default"
@@ -584,6 +588,11 @@ Thanks Robin, it's merged
 EOF
 gh pr comment 7 -R o/robin-notes --body-file reply.md" \
     "a reply written by cat to a file and sent to a private repository must pass"
+  expect_allow "$HOME_WORDS" "cat > reply.md <<'EOF'
+Ran gh issue comment 3 again, it's merged, thanks Robin
+EOF
+gh issue comment 3 -R o/robin-notes --body-file reply.md; rm -f reply.md" \
+    "a reply file removed after it is sent to a private repository must pass"
   expect_refuse "$HOME_WORDS" "cat > reply.md <<'EOF'
 Thanks Robin, it's merged
 EOF

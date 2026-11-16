@@ -39,8 +39,9 @@
 # value, or a gh api field value) is read as a command only where it holds a
 # `$(...)` or backtick substitution. The body of a quoted heredoc that a plain
 # `cat` writes to a file is left out when finding gh calls and their
-# repositories when the command names that file only as a --body-file, -F or
-# --input value or an @file field value, so it never runs.
+# repositories unless the command runs that file: as a command of its own,
+# the script of a shell, source, an interpreter or a wrapper, or a
+# `$(cat FILE)` given to -c or eval.
 # A command whose words still cannot be parsed is judged on its whole text.
 # Every other command passes untouched, whatever files it names, and so does
 # every other tool. The text checked is the whole
@@ -147,7 +148,7 @@ TEXT_VERBS = ("create", "new", "edit", "comment", "review", "close", "reopen", "
 TEXT_FLAGS = {"pr": ("--body", "-b", "--title", "-t", "--comment", "-c"),
               "issue": ("--body", "-b", "--title", "-t", "--comment", "-c"),
               "api": ("-f", "-F", "--field", "--raw-field")}
-REVIEW_KINDS = ("--approve", "-a", "--request-changes", "-r", "--comment", "-c")
+RUNNERS = r"(?:sudo|exec|command|env|nohup|time|timeout[ \t]+\S+|source|\.|eval|xargs|\S*/?(?:ba|z|da|k)?sh|\S*/?python[\d.]*|\S*/?(?:node|perl|ruby))"
 
 
 class UnparsedCommand(Exception):
@@ -270,11 +271,9 @@ def gh_call(args):
         explicit += [repo] if repo else []
         j += used
     verb, rest = (rest[j], rest[j + 1:]) if j < len(rest) else ("", [])
-    bare = REVIEW_KINDS if verb == "review" else ()
+    held = [f for f in TEXT_FLAGS[sub] + ("--subject",) if verb != "review" or f not in ("--comment", "-c")]
     for k, word in enumerate(rest):
-        flag = rest[k - 1] if k else ""
-        takes = flag.startswith("-") and "=" not in flag and (flag.startswith("--") or len(flag) == 2) and flag not in bare
-        if URL_REPO.fullmatch(word) and not takes:
+        if URL_REPO.fullmatch(word) and (rest[k - 1] if k else "") not in held:
             explicit.append(URL_REPO.fullmatch(word).group(1))
             break
     explicit += [r for r in (repo_flag(rest, n)[0] for n in range(len(rest))) if r]
@@ -401,13 +400,14 @@ def without_target_names(command, words):
     return "".join(out)
 
 
-def only_sent(name, text):
-    """Whether every mention of the file name in the text is the value of a --body-file, -F or --input flag
-    or an @file field value, so the text never runs the file."""
-    base = re.escape(os.path.basename(name))
-    path = r"['\"]?(?:[^\s;&|<>()`'\"=@]*/)?" + base + r"['\"]?(?![^\s;&|)`])"
-    text = re.sub(r"(?:(?<=\s)(?:--body-file|--input|-F)(?:=|[ \t]+)|=@)" + path, " ", text)
-    return not re.search(r"(?<![\w.-])" + base + r"(?![\w.-])", text)
+def runs(name, text):
+    """Whether the text runs the file name: as the first word of a command, the script of a shell, source, .,
+    an interpreter or a wrapper, a < redirect into one, or a $(cat FILE) or $(<FILE) given to -c or eval."""
+    path = r"['\"]?(?:[^\s;&|<>()`'\"=@]*/)?" + re.escape(os.path.basename(name)) + r"['\"]?(?=[\s;&|)`]|$)"
+    first = (r"(?:^|[\n;&|(`]|\$\()[ \t]*(?:" + RUNNERS + r"[ \t]+(?:(?:-\S*|[A-Za-z_]\w*=\S*)[ \t]+)*)*<?[ \t]*"
+             + path)
+    fed = r"(?:-c|eval)[ \t]+['\"]?(?:\$\(|`)[ \t]*(?:cat[ \t]+(?:-\S*[ \t]+)*|<[ \t]*)" + path
+    return bool(re.search(first, text) or re.search(fed, text))
 
 
 def script(command):
@@ -429,7 +429,7 @@ def script(command):
                 break
             body.append("\n" + " " * len(line))
             i = end
-        if not name or not only_sent(name, command[:m.start()] + command[i:]):
+        if not name or runs(name, command[:m.start()] + command[i:]):
             continue
         out += [command[pos:m.end()]] + body
         pos = i
