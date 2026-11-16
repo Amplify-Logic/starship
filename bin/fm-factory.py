@@ -63,7 +63,10 @@ whether a running worker's pane text changed since the last reading
 
 What the pane writes. Its cache and its own records live in state/factory/:
 record.json (the cached record), basis.json (the fleet reading the last full
-refresh used), activity.json (when each worker's pane last changed), last-look
+refresh used), inputs (inputs_digest when it began), shapes.json (questions'
+shapes the calls rebuilds read on that reading), rebuild.lock and rebuild.last
+(the one rebuild under way, and when the last one ended and how long it took),
+activity.json (when each worker's pane last changed), last-look
 (when the owner last looked: the newest sign of a look on its first line, when
 the look before that ended on its second), steer.log (who steers each factory),
 tabs/ (the factory tabs it opened), talk-<pid>.wav while a spoken note is
@@ -82,7 +85,13 @@ read, and a click on any `r  Read the report` line reads that one; the reader ru
 background, so the pane never waits on it.
 
 How fresh it is. A full refresh reads every worker, which takes seconds, so the
-live pane starts one only once the record's workers are FM_FACTORY_TTL old.
+live pane starts one only once the record's workers are FM_FACTORY_TTL old and
+a status, record or backlog file changed since the last one began
+(inputs_digest), or once they are FM_FACTORY_MAX_AGE old whatever changed.
+Every pane and live copy of a home starts its rebuilds, full or of the
+owner's calls, under one lock the rebuild holds until it exits, so two never
+run side by side, and after each the next waits as long as that one took, at
+least a minute on a busy machine (rebuild_wait).
 The owner's calls cannot wait that long: once a second the pane reads the
 owner's calls signal (bin/fm-owner-calls-signal-lib.sh), and when it has moved
 past the one the record was built under it rebuilds the record from basis.json
@@ -121,6 +130,8 @@ Environment:
   HERDR_BIN_PATH              the Herdr binary (default: herdr on PATH)
   FM_FACTORY_TTL              seconds a cached record is used before a refresh
                               is started (default 20)
+  FM_FACTORY_MAX_AGE          seconds after which a refresh is started even
+                              though no file it reads changed (default 120)
   FM_FACTORY_QUIET_MINUTES    minutes without a sign of life before a running
                               job reads as quiet (default 15)
   FM_FACTORY_FOCUS_FILE       a file the live overview reads and removes: an
@@ -135,6 +146,8 @@ Test seams:
   FM_FACTORY_SNAPSHOT         a fleet snapshot JSON file used instead of running
                               bin/fm-fleet-snapshot.sh
   FM_FACTORY_NOW              the current epoch
+  FM_FACTORY_LOADAVG          the one-minute load average, read instead of the
+                              machine's own
   FM_FACTORY_PEEK             pane reader run as `<cmd> <task-id> <lines>`
                               (default bin/fm-peek.sh); empty skips pane reads
   FM_FACTORY_INBOX            inbox command (default bin/fm-inbox.sh)
@@ -157,6 +170,7 @@ from __future__ import annotations
 
 import argparse
 import array
+import fcntl
 import hashlib
 import json
 import math
@@ -206,6 +220,15 @@ VOICE_LIVE_WINDOW = 8     # seconds of the newest sound written down to show the
 VOICE_LIVE_EVERY = 2.0    # the least seconds between two of those writings
 VOICE_LIVE_BACKOFF = 4.0  # seconds to wait after one failed, doubling up to VOICE_LIVE_BACKOFF_MAX
 VOICE_LIVE_BACKOFF_MAX = 30.0
+# Rebuilds of the record: what a whole refresh reads that a file records (each
+# state/<id> file with one of these endings, beside the files inputs_digest
+# names), and how they are spaced out (rebuild_wait).
+INPUT_ENDINGS = (".status", ".meta", ".busy-state", ".turn-ended", ".step")
+REBUILD_CHECK_EVERY = 2   # the least seconds between two checks of whether a whole refresh is due
+BUSY_PER_CORE = 2.0       # a one-minute load average this many times the cores is a busy machine
+BUSY_GAP = 60             # a busy machine gets at least this many seconds between two rebuilds
+FAILED_GAP = 15           # and a rebuild that failed at least this many before the next tries
+REBUILD_LIMIT = 300       # a rebuild still running after this many seconds stops itself
 
 
 # --------------------------------------------------------------------------
@@ -1393,6 +1416,7 @@ def refresh(home: str) -> Dict[str, Any]:
     now = now_epoch()
     # Taken before anything is read, so a call that changes meanwhile is caught.
     signal_at_start = calls_signal(home)
+    inputs = inputs_digest(home)
     read_at = time.time()
     snapshot = load_snapshot(home)
     running = [t["id"] for t in snapshot.get("tasks") or []
@@ -1409,6 +1433,7 @@ def refresh(home: str) -> Dict[str, Any]:
         write_atomic(basis_path(home), json.dumps({"taken_epoch": now, "snapshot": snapshot,
                                                    "activity": activity, "shapes": shapes,
                                                    "buckets": buckets}))
+        write_atomic(inputs_path(home), inputs + "\n")
         kept = True
     except OSError:
         kept = False
@@ -1483,10 +1508,29 @@ def refresh_calls(home: str) -> Dict[str, Any]:
     snapshot = dict(basis["snapshot"], backlog=backlog)
     activity = {k: v for k, v in (basis.get("activity") or {}).items() if isinstance(v, int)}
     buckets = basis.get("buckets")
+    # Shapes read by an earlier calls rebuild on this same reading stand beside
+    # the reading's own, under the same held-stamp rule (shapes_for), so a
+    # question held since the reading has its options read once, not by every
+    # rebuild until the next whole refresh.
+    known = dict(basis.get("shapes") or {})
+    learned_path = os.path.join(pane_dir(home), "shapes.json")
+    try:
+        learned = json.loads(read_text(learned_path, 64_000_000) or "null")
+    except ValueError:
+        learned = None
+    if isinstance(learned, dict) and learned.get("taken_epoch") == basis.get("taken_epoch") \
+            and isinstance(learned.get("shapes"), dict):
+        known.update(learned["shapes"])
+    before = dict(known)
     now = now_epoch()
     record = build_record(home, now, snapshot, since=last_look(home, now), activity=activity,
-                          notes=notes, backlog=axi, known_shapes=dict(basis.get("shapes") or {}),
+                          notes=notes, backlog=axi, known_shapes=known,
                           buckets=buckets if isinstance(buckets, dict) else None, reconciles=reconciles)
+    if known != before:
+        try:
+            write_atomic(learned_path, json.dumps({"taken_epoch": basis.get("taken_epoch"), "shapes": known}))
+        except OSError:
+            pass
     record.update(snapshot_epoch=int(basis.get("taken_epoch") or 0), calls_signal=signal_at_start,
                   read_at=read_at)
     newer = cached(home)
@@ -1506,45 +1550,169 @@ def cached(home: str) -> Optional[Dict[str, Any]]:
     return None
 
 
-def in_background(home: str, command: str, lock_name: str, stale_after: int, keep_lock_on_failure: bool) -> None:
-    """Start one detached `fm-factory.py <command>` unless one is already under way.
+def inputs_path(home: str) -> str:
+    return os.path.join(pane_dir(home), "inputs")
 
-    A run that fails can keep its lock until it is <stale_after> seconds old, so
-    a pane that checks every second retries a failing read at that pace instead.
+
+def inputs_digest(home: str) -> str:
+    """A digest of what a whole refresh reads that a file records.
+
+    That is every worker's status, meta, turn and step record in state/, the
+    owner's calls stamp, the inbox folders, the backlog, project, factory and
+    second-mate registries, the data folder itself, and the pane's own look and
+    steer records. Equal digests mean none of them was written since; reading
+    them is a few hundred stats, cheap enough for a pane to check every couple
+    of seconds where a whole refresh costs seconds of every worker read.
     """
-    lock = os.path.join(pane_dir(home), lock_name)
+    state, data = os.path.join(home, "state"), os.path.join(home, "data")
+    seen: List[str] = []
+
+    def note(path: str) -> None:
+        try:
+            info = os.stat(path)
+        except OSError:
+            return
+        seen.append("%s %d %d" % (path, info.st_mtime_ns, info.st_size))
+
+    try:
+        names = sorted(os.listdir(state))
+    except OSError:
+        names = []
+    for name in names:
+        if name.endswith(INPUT_ENDINGS):
+            note(os.path.join(state, name))
+    for path in (os.path.join(state, ".owner-calls-changed"), os.path.join(state, "inbox"),
+                 os.path.join(state, "inbox", "handled"), os.path.join(state, "inbox", ".replies"), data,
+                 os.path.join(data, "backlog.md"), os.path.join(data, "projects.md"),
+                 os.path.join(data, "factories.md"), os.path.join(data, "secondmates.md"),
+                 os.path.join(pane_dir(home), "last-look"), os.path.join(pane_dir(home), "steer.log")):
+        note(path)
+    return hashlib.sha256("\n".join(seen).encode()).hexdigest()
+
+
+def refresh_due(home: str, record: Dict[str, Any]) -> bool:
+    """Whether a whole refresh of <record> is due.
+
+    It is once the record's workers are FM_FACTORY_TTL old and a file a whole
+    refresh reads changed since the last one began (inputs_digest), and always
+    once they are FM_FACTORY_MAX_AGE old, for what no file records: a worker's
+    pane text, a change merged elsewhere, a job gone quiet.
+    """
+    age = snapshot_age(record)
+    if age <= env_int("FM_FACTORY_TTL", 20):
+        return False
+    if age > env_int("FM_FACTORY_MAX_AGE", 120):
+        return True
+    return read_text(inputs_path(home), 256).strip() != inputs_digest(home)
+
+
+def rebuild_lock(home: str) -> Optional[int]:
+    """Take the home's one rebuild lock without waiting: its descriptor, or None while a rebuild holds it.
+
+    Every pane and live copy of a home starts its rebuilds, whole or of the
+    owner's calls only, under this one lock, and the rebuild it starts inherits
+    the descriptor and holds the lock until it exits, however long it runs and
+    however it ends, so two never run side by side.
+    """
     try:
         os.makedirs(pane_dir(home), exist_ok=True)
-        age = time.time() - os.stat(lock).st_mtime if os.path.exists(lock) else None
-        if age is not None and age < stale_after:
-            return
-        if age is not None:
-            os.rmdir(lock)
-        os.mkdir(lock)
+        fd = os.open(os.path.join(pane_dir(home), "rebuild.lock"), os.O_RDWR | os.O_CREAT, 0o600)
     except OSError:
+        return None
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        os.close(fd)
+        return None
+    return fd
+
+
+def machine_busy() -> bool:
+    """Whether the one-minute load average is BUSY_PER_CORE times the cores or more."""
+    raw = os.environ.get("FM_FACTORY_LOADAVG", "")
+    try:
+        load = float(raw) if raw else os.getloadavg()[0]
+    except (OSError, ValueError):
+        return False
+    return load >= BUSY_PER_CORE * (os.cpu_count() or 1)
+
+
+def rebuild_wait(home: str) -> float:
+    """Seconds still to wait before a pane may start the next rebuild.
+
+    The last rebuild's own time is the least rest after it, so one that overran
+    leaves the machine that much longer; one that failed leaves at least
+    FAILED_GAP, and on a busy machine (machine_busy) the rest is four times the
+    last rebuild's time and at least BUSY_GAP. A pane that asks meanwhile starts
+    nothing and queues nothing: it asks again at its next check.
+    """
+    try:
+        last = json.loads(read_text(os.path.join(pane_dir(home), "rebuild.last"), 4096) or "null")
+        ended, took = float(last["ended"]), max(float(last["took"]), 0.0)
+    except (ValueError, TypeError, KeyError):
+        return 0.0
+    rest = max(took, FAILED_GAP) if last.get("failed") else took
+    if machine_busy():
+        rest = max(4 * took, rest, BUSY_GAP)
+    return ended + rest - time.time()
+
+
+def run_rebuild(home: str, build) -> None:
+    """Run one rebuild, <build>(home), and record when it ended, how long it took and whether it failed.
+
+    A rebuild a pane started holds that pane's rebuild lock (FM_FACTORY_REBUILD_LOCK
+    names the inherited descriptor) and stops itself after REBUILD_LIMIT
+    seconds, so a stuck read can never hold the lock for good.
+    """
+    if os.environ.get("FM_FACTORY_REBUILD_LOCK"):
+        def overran(*_):
+            raise RuntimeError("the rebuild ran past %d seconds" % REBUILD_LIMIT)
+        signal.signal(signal.SIGALRM, overran)
+        signal.alarm(REBUILD_LIMIT)
+    began, failed = time.time(), True
+    try:
+        build(home)
+        failed = False
+    finally:
+        signal.alarm(0)
+        try:
+            write_atomic(os.path.join(pane_dir(home), "rebuild.last"),
+                         json.dumps({"ended": time.time(), "took": round(time.time() - began, 3), "failed": failed}))
+        except OSError:
+            pass
+
+
+def in_background(home: str, command: str) -> None:
+    """Start one detached `fm-factory.py <command>` unless a rebuild runs or the last one asks for rest."""
+    if rebuild_wait(home) > 0:
         return
-    script = os.path.realpath(__file__)
-    joiner = "&&" if keep_lock_on_failure else ";"
-    subprocess.Popen(["/bin/sh", "-c", 'python3 "$1" "$3" >/dev/null 2>&1 %s rmdir "$2" 2>/dev/null' % joiner,
-                      "fm-factory", script, lock, command],
-                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                     start_new_session=True, env=dict(os.environ, FM_HOME=home))
+    fd = rebuild_lock(home)
+    if fd is None:
+        return
+    try:
+        subprocess.Popen(["python3", os.path.realpath(__file__), command], pass_fds=(fd,),
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         start_new_session=True, env=dict(os.environ, FM_HOME=home, FM_FACTORY_REBUILD_LOCK=str(fd)))
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
 
 
 def refresh_in_background(home: str) -> None:
-    """Start one detached full refresh unless one is already under way."""
-    in_background(home, "refresh", "refresh.lock", 180, False)
+    """Start one detached full refresh when no rebuild is under way (in_background)."""
+    in_background(home, "refresh")
 
 
 def refresh_calls_in_background(home: str) -> None:
-    """Start one detached refresh of the owner's calls unless one is already under way."""
-    in_background(home, "refresh-calls", "calls.lock", 15, True)
+    """Start one detached refresh of the owner's calls when no rebuild is under way (in_background)."""
+    in_background(home, "refresh-calls")
 
 
 def current_record(home: str, fresh: bool) -> Dict[str, Any]:
     if not fresh:
         record = cached(home)
-        if record and snapshot_age(record) <= env_int("FM_FACTORY_TTL", 20):
+        if record and not refresh_due(home, record):
             signal = calls_signal(home)
             if not signal or record.get("calls_signal") == signal:
                 return record
@@ -2746,6 +2914,7 @@ class Pane:
                     pass
         self.loaded = self.record_stamp()
         self.calls_checked = 0.0
+        self.refresh_checked = 0.0
         self.focus_file = os.environ.get("FM_FACTORY_FOCUS_FILE") or ""
         # Calls asked about from this pane: id -> (the card's since, when asked).
         self.asked: Dict[str, Tuple[Optional[int], float]] = {}
@@ -2821,8 +2990,11 @@ class Pane:
                 self.view.adopt(record)
                 self.loaded = stamp
                 self.keep_asked()
-        if snapshot_age(self.view.record) > env_int("FM_FACTORY_TTL", 20):
-            refresh_in_background(self.home)
+        now = time.monotonic()
+        if now - self.refresh_checked >= REBUILD_CHECK_EVERY:
+            self.refresh_checked = now
+            if refresh_due(self.home, self.view.record):
+                refresh_in_background(self.home)
 
     def watch_calls(self) -> None:
         """Rebuild the owner's calls once their signal moves past the record's, checking at most once a second."""
@@ -3476,7 +3648,7 @@ def follow(home: str, task_id: str) -> None:
                 if job is None or job["state"] not in MIRROR_KEEP:
                     ended = True
                     break
-                if snapshot_age(record) > env_int("FM_FACTORY_TTL", 20):
+                if refresh_due(home, record):
                     refresh_in_background(home)
             size = os.get_terminal_size()
             try:
@@ -3543,11 +3715,8 @@ def main(argv: List[str]) -> int:
                 view = View(record, opened=args.factory, item=args.item, voice=voice_ready(home))
                 print(plain(view, max(args.width, 40), height))
             return 0
-        if args.command == "refresh":
-            refresh(home)
-            return 0
-        if args.command == "refresh-calls":
-            refresh_calls(home)
+        if args.command in ("refresh", "refresh-calls"):
+            run_rebuild(home, refresh if args.command == "refresh" else refresh_calls)
             return 0
         if args.command == "view":
             if args.origin_tab:
