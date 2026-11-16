@@ -12,6 +12,8 @@
 #   fm-procevent-mothership.sh answer <task-id> <option> [--source <text>]
 #   fm-procevent-mothership.sh settle [<task-id>...]
 #   fm-procevent-mothership.sh calls
+#   fm-procevent-mothership.sh report [--detach] <task-id> started|pr|blocked|merged [--pr <url>]
+#   fm-procevent-mothership.sh blocked-scan
 #   fm-procevent-mothership.sh source <room> --bin <mothership> [--config <file>] [--node-dir <dir>]
 #   fm-procevent-mothership.sh autohandle <source-id> <sequence> <result-file>
 #   fm-procevent-mothership.sh relisten
@@ -73,6 +75,15 @@
 #            room call takes only the owner's own answer: its card offers no
 #            "You decide", and a delegated tap or the seven-day default leaves
 #            it held for the owner.
+# report     Tell the room card a task serves how that task goes (see OUTCOMES
+#            ON THE CARD below), printing one line: told, already told,
+#            nothing to report, or failed. Exits 1 only when the room was not
+#            told. --detach returns at once and sends from a separate process
+#            group, and does nothing in a home that keeps no state/mothership/.
+# blocked-scan
+#            Run report blocked, detached, once for each new blocked: line in
+#            the status log of each task a card follows; bin/fm-watch.sh runs
+#            it on every poll while any task is followed.
 # source     The blocking child the runner executes; never run it in a turn.
 # autohandle The runner's seam right after capture: move this monitor's place
 #            forward to the end of the captured batch and acknowledge the
@@ -133,12 +144,41 @@
 # takes only the owner's own answer: one naming none of the options sends
 # nothing and holds a new call for the same card for the owner at once. The
 # chosen option is read from the call's newest recorded resolution (`Chosen
-# option:` from a tap, `Answer:` from the keyed intake).
+# option:` from a tap, `Answer:` from the keyed intake). An accepted line names
+# the `mothership: <room>/<card>` ref the work's backlog task carries in its
+# body.
+#
+# OUTCOMES ON THE CARD. A backlog task whose body holds `mothership:
+# <room>/<card>` is work the owner took on for that card, and the card hears
+# how it goes, once per event, from the step that owns the event:
+#   started  `mothership progress`, "Work has started.", from bin/fm-spawn.sh
+#            at dispatch (never on a relaunch);
+#   pr       `progress`, "Ready for review: <url>", from bin/fm-pr-check.sh
+#            when a PR is recorded (never the merge-time re-record);
+#   blocked  `problem`, "Held up by a blocker; looking into it.", from
+#            blocked-scan, once for each new blocked: line;
+#   merged   `result`, "Done: the change has landed.", with --link <url> for a
+#            PR, from bin/fm-merge-outcome-lib.sh and bin/fm-merge-local.sh on
+#            a confirmed merge, which settles this ship's part of the card.
+# Each runs in the task's project (its backlog repo), with a --tag for every
+# tag the room's allow-list names that project with when it never names it
+# without tags, so the link's allow-list and private word check apply to it as
+# to everything else the link sends; and with a client id fixed per task and
+# event (and per blocker), so a retry counts once in the room. A task with no
+# ref sends nothing and creates no state. Nothing is sent twice for one event,
+# and nothing but the merged line after it. A send the link refuses or cannot
+# make is not retried: it wakes the first mate with one `check:
+# mothership-report: ...` line naming the task, the event, the reason and the
+# command that sends it again, and it never changes the outcome of the step
+# that asked for it, which calls report --detach and ignores its status.
 #
 # Private state, under state/mothership/: <room>.position (this monitor's
 # place), <room>.told (the end of the latest batch told, seeded with the
 # place), calls/ms-<room>-<card>.json (one room call: its room, card,
 # title, current task, options and whether its answer was carried out),
+# tasks/<task>.json (one task a card follows: its room, card, project, the
+# newest blocker seen and the events told; removed once the task's
+# state/<task>.meta is gone),
 # <room>.contact (when the room last answered), <room>.failures (failures
 # in a row), and <room>.unreachable while the room cannot be reached, for the
 # bridge strip's red alert (bin/fm-bridge-strip.sh): `since=<epoch>` (the first
@@ -939,7 +979,8 @@ settle_locked() {  # <base-id>
     accept)
       room_act "$task" accept "$room" "$card" "$project" ${tags[@]+"${tags[@]}"} || return 1
       mark_settled "$base" accepted || return 1
-      printf 'accepted: %s: your ship took on "%s" in the %s room under %s; file the work through ordinary intake\n' "$task" "$title" "$room" "$project"
+      printf 'accepted: %s: your ship took on "%s" in the %s room under %s; file the work through ordinary intake under %s with "mothership: %s/%s" in its body, so the card hears how it goes\n' \
+        "$task" "$title" "$room" "$project" "$project" "$room" "$card"
       ;;
     decline)
       room_act "$task" decline "$room" "$card" "$project" ${tags[@]+"${tags[@]}"} || return 1
@@ -1024,6 +1065,221 @@ cmd_answer() {
     | "$SCRIPT_DIR/fm-captain-hold.sh" answers --source "$source" 2>&1) || rc=$?
   [ "$rc" -eq 0 ] || die "the answer was not recorded: $(printf '%s\n' "$out" | tail -n 1)"
   cmd_settle "$id"
+}
+
+# ----- outcomes on the card -----
+#
+# The header's OUTCOMES ON THE CARD owns what these do.
+
+tasks_dir() { printf '%s/tasks\n' "$MS_STATE"; }
+task_record() { printf '%s/%s.json\n' "$(tasks_dir)" "$1"; }  # <task-id>
+
+with_task_lock() {  # <task-id> <command...>
+  local lock rc
+  lock="$MS_STATE/.task-$1.lock"
+  shift
+  fm_lock_acquire_wait "$lock" || return 1
+  rc=0
+  "$@" || rc=$?
+  fm_lock_release "$lock"
+  return "$rc"
+}
+
+write_task_record() {  # <task-id> <json>
+  (umask 077; mkdir -p "$(tasks_dir)") || return 1
+  write_file "$(task_record "$1")" "$2"
+}
+
+# The newest blocked: line in the task's status log, as a short signature, or
+# nothing when it has none.
+newest_blocked() {  # <task-id>
+  local file="$STATE/$1.status" line
+  [ -f "$file" ] && [ ! -L "$file" ] || return 0
+  line=$(LC_ALL=C grep -E '^blocked( \[[^]]*\])*:' "$file" 2>/dev/null | tail -n 1)
+  [ -n "$line" ] || return 0
+  printf '%s' "$line" | cksum | awk '{ print $1 }'
+}
+
+# The card a backlog task serves, from the `mothership: <room>/<card>` ref in
+# its body, and its project: prints "<room> <card> <project>" (the project
+# empty when the task names none). Fails 1 when the task serves no card, and 2
+# when the task cannot be read.
+task_card() {  # <task-id>
+  local shown body repo ref room card
+  shown=$("$SCRIPT_DIR/fm-tasks-axi.sh" show "$1" --full 2>/dev/null) || return 2
+  # tasks-axi quotes a value only when it has to, so each is read either way.
+  body=$(printf '%s\n' "$shown" | sed -n 's/^  body: //p' | head -n 1 \
+    | jq -Rr '. as $raw | (try fromjson catch $raw) | if type == "string" then . else tostring end' 2>/dev/null) || return 2
+  ref=$(printf '%s\n' "$body" \
+    | LC_ALL=C grep -oE '(^|[[:space:]])mothership: [A-Za-z0-9][A-Za-z0-9_-]{0,47}/[A-Za-z0-9_.-]{1,80}' \
+    | head -n 1 | sed -e 's/^[[:space:]]*mothership: //' -e 's/\.*$//')
+  room=${ref%%/*} card=${ref#*/}
+  room_valid "$room" && [[ "$card" =~ ^[A-Za-z0-9_.-]{1,80}$ ]] || return 1
+  repo=$(printf '%s\n' "$shown" | sed -n 's/^  repo: //p' | head -n 1 \
+    | jq -Rr '. as $raw | (try fromjson catch $raw) | tostring' 2>/dev/null || true)
+  [[ "$repo" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] || repo=
+  printf '%s %s %s\n' "$room" "$card" "$repo"
+}
+
+# What the card heard happen, in words, for the first mate.
+event_words() {  # <event>
+  case "$1" in
+    started) printf 'work on it started' ;;
+    pr) printf 'its PR is ready' ;;
+    blocked) printf 'it is held up by a blocker' ;;
+    merged) printf 'it landed' ;;
+  esac
+}
+
+# A send that did not reach the room: one line, and one wake for the first mate.
+report_failed() {  # <task-id> <event> <key> <room> <pr> <reason>
+  local task=$1 event=$2 key=$3 room=$4 pr=$5 reason=$6 again
+  again="bin/fm-procevent-mothership.sh report $task $event${pr:+ --pr $pr}"
+  printf 'failed: %s: the %s room was not told that %s: %s\n' "$task" "$room" "$(event_words "$event")" "$reason"
+  fm_wake_append check "mothership-report:$task:$key" \
+    "check: mothership-report: the $room room's card for $task was not told that $(event_words "$event"): $reason; tell the owner, and once that is fixed, $again sends it again" \
+    || printf 'failed: %s: the first mate could not be told either\n' "$task"
+}
+
+report_locked() {  # <task-id> <event> <pr> <room> <card> <project>
+  local task=$1 event=$2 pr=$3 room=$4 card=$5 project=$6 rec key verb text sig tag err rc=0
+  local -a args=()
+  rec=$(task_record "$task")
+  if [ -f "$rec" ]; then
+    write_task_record "$task" "$(jq -c --arg room "$room" --arg card "$card" --arg project "$project" \
+      '.room = $room | .card = $card | .project = $project' "$rec")"
+  else
+    write_task_record "$task" "$(jq -cn --arg room "$room" --arg card "$card" --arg project "$project" \
+      --arg blocked "$(newest_blocked "$task")" \
+      '{room: $room, card: $card, project: $project, blocked: $blocked, sent: []}')"
+  fi || { printf 'failed: %s: cannot keep its record\n' "$task"; return 1; }
+  case "$event" in
+    started) key=started verb=progress text="Work has started." ;;
+    pr) key="pr-$(printf '%s' "$pr" | cksum | awk '{ print $1 }')" verb=progress text="Ready for review: $pr" ;;
+    blocked)
+      sig=$(newest_blocked "$task")
+      [ -n "$sig" ] || { printf 'nothing to report: %s has no blocker\n' "$task"; return 0; }
+      key="blocked-$sig" verb=problem text="Held up by a blocker; looking into it."
+      ;;
+    merged) key=merged verb=result text="Done: the change has landed." ;;
+  esac
+  if jq -e --arg k "$key" '(.sent // []) | index($k) != null' "$rec" >/dev/null 2>&1; then
+    printf 'already told: %s: the %s room already heard that %s\n' "$task" "$room" "$(event_words "$event")"
+    return 0
+  fi
+  if [ "$event" != merged ] && jq -e '(.sent // []) | index("merged") != null' "$rec" >/dev/null 2>&1; then
+    printf 'already told: %s: the %s room already heard that it landed\n' "$task" "$room"
+    return 0
+  fi
+  if [ -z "$project" ]; then
+    report_failed "$task" "$event" "$key" "$room" "$pr" "the task names no project, so the room's allow-list cannot let it through"
+    return 1
+  fi
+  args=("$verb" "$card" --room "$room" --project "$project")
+  while IFS= read -r tag; do
+    [ -z "$tag" ] || args+=(--tag "$tag")
+  done < <(room_allow "$room" | jq -r --arg p "$project" '.[] | select(.project == $p) | .tags[]')
+  [ "$event" != merged ] || [ -z "$pr" ] || args+=(--link "$pr")
+  args+=(--cid "fm-$task-$key" "$text")
+  if [ -z "$LINK_BIN" ] && ! resolve_link; then
+    report_failed "$task" "$event" "$key" "$room" "$pr" "$LINK_PROBLEM"
+    return 1
+  fi
+  err=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-mothership-err.XXXXXX") || return 1
+  link_run "${args[@]}" >/dev/null 2>"$err" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    if fm_timed_out "$rc"; then
+      report_failed "$task" "$event" "$key" "$room" "$pr" "$(link_timeout_note)"
+    else
+      report_failed "$task" "$event" "$key" "$room" "$pr" "$(sanitize_line "$(tail -n 1 "$err")" 300)"
+    fi
+    rm -f -- "$err"
+    return 1
+  fi
+  rm -f -- "$err"
+  write_task_record "$task" "$(jq -c --arg k "$key" '.sent = ((.sent // []) + [$k] | unique)' "$rec")" \
+    || printf 'told, but not recorded: %s: a later report may repeat it, which the room counts once\n' "$task"
+  printf 'told: %s: the %s room heard that %s\n' "$task" "$room" "$(event_words "$event")"
+}
+
+cmd_report() {
+  local detach=0 task event pr='' rec found room card project rc
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --detach) detach=1; shift ;;
+      --pr) [ "$#" -ge 2 ] || usage; pr=$2; shift 2 ;;
+      -*) usage ;;
+      *) break ;;
+    esac
+  done
+  [ "$#" -ge 2 ] || usage
+  task=$1 event=$2
+  shift 2
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --pr) [ "$#" -ge 2 ] || usage; pr=$2; shift 2 ;;
+      *) usage ;;
+    esac
+  done
+  fm_pr_task_id_valid "$task" || die "not a task id: $task"
+  case "$event" in started|pr|blocked|merged) ;; *) die "not an event: $event (started, pr, blocked or merged)" ;; esac
+  [ -z "$pr" ] || [[ "$pr" =~ ^https://[!-~]+$ ]] || die "not a PR address: $pr"
+  [ "$event" != pr ] || [ -n "$pr" ] || die "report pr needs --pr <url>"
+  if [ "$detach" = 1 ]; then
+    [ -d "$MS_STATE" ] || return 0
+    set -- report "$task" "$event"
+    [ -z "$pr" ] || set -- "$@" --pr "$pr"
+    perl -MPOSIX -e 'POSIX::setsid(); exec { $ARGV[0] } @ARGV or exit 127' \
+      "$SCRIPT_DIR/fm-procevent-mothership.sh" "$@" < /dev/null > /dev/null 2>&1 &
+    return 0
+  fi
+  # The task itself is the authority; its record stands in only while the
+  # backlog cannot be read.
+  rec=$(task_record "$task")
+  rc=0
+  found=$(task_card "$task") || rc=$?
+  if [ "$rc" -eq 2 ] && [ -f "$rec" ]; then
+    found=$(jq -er 'select((.room | type) == "string" and (.card | type) == "string")
+      | "\(.room) \(.card) \(.project // "")"' "$rec" 2>/dev/null) && rc=0
+  fi
+  if [ "$rc" -ne 0 ]; then
+    printf 'nothing to report: %s serves no room card\n' "$task"
+    return 0
+  fi
+  read -r room card project <<EOF
+$found
+EOF
+  room_valid "$room" && [[ "$card" =~ ^[A-Za-z0-9_.-]{1,80}$ ]] || die "the record for $task names no card it can tell"
+  state_prepare
+  with_task_lock "$task" report_locked "$task" "$event" "$pr" "$room" "$card" "${project:-}"
+}
+
+cmd_blocked_scan() {
+  local rec task sig seen
+  [ "$#" -eq 0 ] || usage
+  for rec in "$(tasks_dir)"/*.json; do
+    [ -f "$rec" ] || continue
+    task=${rec##*/}
+    task=${task%.json}
+    fm_pr_task_id_valid "$task" || continue
+    if [ ! -f "$STATE/$task.meta" ]; then
+      with_task_lock "$task" rm -f -- "$rec" || true
+      continue
+    fi
+    sig=$(newest_blocked "$task")
+    [ -n "$sig" ] || continue
+    seen=$(jq -r '.blocked // "" | tostring' "$rec" 2>/dev/null || true)
+    [ "$sig" != "$seen" ] || continue
+    with_task_lock "$task" note_blocked "$task" "$sig" || continue
+    cmd_report --detach "$task" blocked
+  done
+}
+
+note_blocked() {  # <task-id> <signature>
+  local rec
+  rec=$(task_record "$1")
+  [ -f "$rec" ] || return 1
+  write_task_record "$1" "$(jq -c --arg s "$2" '.blocked = $s' "$rec")"
 }
 
 # ----- the source -----
@@ -1319,6 +1575,8 @@ case "${1-}" in
   settle)     shift; cmd_settle "$@" ;;
   answer)     shift; cmd_answer "$@" ;;
   calls)      shift; cmd_calls "$@" ;;
+  report)     shift; cmd_report "$@" ;;
+  blocked-scan) shift; cmd_blocked_scan "$@" ;;
   source)     shift; cmd_source "$@" ;;
   autohandle) shift; cmd_autohandle "$@" ;;
   relisten)   exit 0 ;;
