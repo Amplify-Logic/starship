@@ -1020,7 +1020,7 @@ test_a_narrow_talk_box_always_shows_what_is_typed() {
 # leaves the pane alone that long. With DRIVE_PANE=1 the view runs as Herdr
 # starts it, through fm-factory-pane.sh run.
 drive_keys() {
-  python3 - "$FACTORY" "$PANE" "$@" <<'PY'
+  overview_cached python3 - "$FACTORY" "$PANE" "$@" <<'PY'
 import fcntl, os, pty, select, struct, subprocess, sys, termios, time
 pid, fd = pty.fork()
 if pid == 0:
@@ -1205,7 +1205,7 @@ chmod +x "$BINDIR/park-world"
 # once it shows <first>, run <command> and print how many seconds pass until
 # it shows <next> (or `never`).
 watch_pane() {
-  python3 - "$FACTORY" "$@" <<'PY'
+  overview_cached python3 - "$FACTORY" "$@" <<'PY'
 import fcntl, os, pty, re, select, struct, subprocess, sys, termios, time
 factory, first, nxt, command = sys.argv[1:5]
 pid, fd = pty.fork()
@@ -1256,13 +1256,7 @@ test_a_parked_decision_leaves_the_live_pane_within_seconds() {
   reset_case
   write_registry
   write_world
-  # The overview is read from its cache, as a live pane reads it, with the
-  # workers' own refresh an hour away, so only the owner's calls can move it.
-  bash -c '. "$1/bin/fm-fleet-status-lib.sh"; _fm_fleet_collect "$2" "$(date +%s)" "$3"' \
-    _ "$ROOT" "$HOME_FIX/state" "$FM_FLEET_STATE_READER" > "$HOME_FIX/state/.status-fleet-state" \
-    || fail "the overview could not be read into its cache"
-  export FM_FLEET_STATE_NO_CACHE=0 FM_FLEET_STATE_TTL=3600 FM_FLEET_STATE_MAX_AGE=3600
-  python3 "$FACTORY" refresh || fail "the first record could not be built"
+  overview_cached python3 "$FACTORY" refresh || fail "the first record could not be built"
   took=$(watch_pane '2 decisions for you' '1 decision for you' "$BINDIR/park-world garden-chart") \
     || fail "the live pane could not be driven"
   case "$took" in
@@ -1274,8 +1268,6 @@ test_a_parked_decision_leaves_the_live_pane_within_seconds() {
     "the parked decision is still in the record"
   assert_equals "$(q '[.factories[] | select(.id == "sample-shop") | .jobs[] | select(.id == "shop-search") | .state] | join("")')" \
     "busy" "the workers were lost from the record"
-  export FM_FLEET_STATE_NO_CACHE=1
-  unset FM_FLEET_STATE_TTL FM_FLEET_STATE_MAX_AGE
   pass "factory pane: a parked decision leaves the live pane within seconds, without a whole refresh (${took}s)"
 }
 
@@ -2197,6 +2189,17 @@ test_a_live_copy_closes_when_its_job_ends() {
 # code_copy <dir>: a code root whose bin/ links to this one's, except the
 # Factory pane's two scripts, which are real copies a case can change under a
 # running pane the way an update rewrites them.
+# overview_cached <command...>: run <command> the way a live pane reads the
+# overview, from a cache read now with the workers' own refresh an hour away, so
+# the pane's once-a-second overview read stays a cache read and only the owner's
+# calls can move it.
+overview_cached() {
+  bash -c '. "$1/bin/fm-fleet-status-lib.sh"; _fm_fleet_collect "$2" "$(date +%s)" "$3"' \
+    _ "$ROOT" "$HOME_FIX/state" "$FM_FLEET_STATE_READER" > "$HOME_FIX/state/.status-fleet-state" \
+    || { echo "overview_cached: the overview could not be read into its cache" >&2; return 1; }
+  FM_FLEET_STATE_NO_CACHE=0 FM_FLEET_STATE_TTL=3600 FM_FLEET_STATE_MAX_AGE=3600 "$@"
+}
+
 code_copy() {
   local f
   mkdir -p "$1/bin"
@@ -2213,7 +2216,7 @@ test_a_running_factory_pane_picks_up_changed_code() {
   write_world
   local code="$TMP_ROOT/case$CASE/code" screen
   code_copy "$code"
-  screen=$(FM_FACTORY_PANE_CONFIG_DIR="$TMP_ROOT/case$CASE/config" python3 - "$code" <<'PY'
+  screen=$(FM_FACTORY_PANE_CONFIG_DIR="$TMP_ROOT/case$CASE/config" overview_cached python3 - "$code" <<'PY'
 import fcntl, os, pty, select, signal, struct, sys, termios, time
 code = sys.argv[1]
 pid, fd = pty.fork()
@@ -2257,7 +2260,7 @@ test_a_factory_pane_waits_while_its_code_is_empty() {
   write_world
   local code="$TMP_ROOT/case$CASE/code" screen
   code_copy "$code"
-  screen=$(FM_FACTORY_PANE_CONFIG_DIR="$TMP_ROOT/case$CASE/config" python3 - "$code" <<'PY'
+  screen=$(FM_FACTORY_PANE_CONFIG_DIR="$TMP_ROOT/case$CASE/config" overview_cached python3 - "$code" <<'PY'
 import fcntl, os, pty, select, signal, struct, sys, termios, time
 code = sys.argv[1]
 pid, fd = pty.fork()
@@ -2319,7 +2322,7 @@ exec "$BINDIR/shapes" "\$@"
 SH
   chmod +x "$TMP_ROOT/case$CASE/shapes"
   screen=$(FM_FACTORY_SHAPES="$TMP_ROOT/case$CASE/shapes" FM_FACTORY_PANE_CONFIG_DIR="$TMP_ROOT/case$CASE/config" \
-    python3 - "$code" <<'PY'
+    overview_cached python3 - "$code" <<'PY'
 import fcntl, os, pty, select, signal, struct, sys, termios, time
 code = sys.argv[1]
 pid, fd = pty.fork()
@@ -2355,7 +2358,7 @@ test_a_factory_pane_waits_for_an_open_talk_box_before_reloading() {
   write_world
   local code="$TMP_ROOT/case$CASE/code" screen
   code_copy "$code"
-  screen=$(FM_FACTORY_PANE_CONFIG_DIR="$TMP_ROOT/case$CASE/config" python3 - "$code" <<'PY'
+  screen=$(FM_FACTORY_PANE_CONFIG_DIR="$TMP_ROOT/case$CASE/config" overview_cached python3 - "$code" <<'PY'
 import fcntl, os, pty, select, signal, struct, sys, termios, time
 code = sys.argv[1]
 pid, fd = pty.fork()

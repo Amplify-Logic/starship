@@ -3092,15 +3092,18 @@ class Pane:
         self.last_key = 0.0
         self.drawn: List[Row] = []     # the rows on screen, top first, for clicks
         self.reading: Optional[Tuple[subprocess.Popen, str]] = None
-        # The overview reading is read off the drawing thread, once a second,
-        # so a slow read never holds a frame or a key.
+        # The overview reading is read off the drawing thread, about once a
+        # second, so a slow read never holds a frame or a key.
         self.overview: List[Optional[Dict[str, Any]]] = [None]
         threading.Thread(target=self.read_overview, daemon=True).start()
 
     def read_overview(self) -> None:
+        """Read the overview again and again, resting at least as long as the
+        last read took, so a slow read never takes most of the machine."""
         while True:
+            began = time.monotonic()
             self.overview[0] = overview_reading(self.home)
-            time.sleep(1)
+            time.sleep(max(1.0, time.monotonic() - began))
 
     def take_focus(self) -> bool:
         """Read and remove an item id written to the focus file; True when one came."""
