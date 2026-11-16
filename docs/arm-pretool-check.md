@@ -29,6 +29,7 @@ The same relation is passed to `bin/fm-continuity-command-policy.mjs`, which rem
 Only the executed command word is classified, so a direct `bin/fm-bootstrap.sh` remains denied while the `bin/fm-bootstrap.sh` that `bin/fm-session-start.sh` invokes inside its own process is allowed with its composing recovery script.
 `bin/fm-continuity-command-policy.mjs` reuses this document's shell lexer and command-position analysis but owns the recovery-versus-other-fleet classification.
 Malformed transport or opaque dynamic syntax fails open so this narrow gate cannot become a blanket Bash block.
+Before reading any supervision state, the gate fast-allows a command that cannot spell `fm-*.sh` after the same byte normalization and quoting-decoder markers as the watcher prefilter below, matching `*fm-*.sh*` where that prefilter matches `fm-watch`.
 The existing `bin/fm-turnend-guard.sh` Stop integration remains the final backstop; its adapters are unchanged, and its alarm now shares the continuity gate's canonical outage summary as documented in [`watcher-continuity.md`](watcher-continuity.md).
 
 The classifier never executes, sources, evaluates, or expands any part of the submitted command.
