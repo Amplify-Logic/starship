@@ -27,13 +27,17 @@
 # (built-in hooks, for a shared tool that runs at a hook point) and the add-on's
 # hooks/<point>/. An add-on hook with the same name as a built-in replaces it,
 # so a tool never runs twice. Hooks run in name order, so a numeric prefix such
-# as 10- sets the order.
+# as 10- sets the order. bootstrap-sweep is the one built-in-only point: it
+# takes this repository's own hooks only, never an add-on's.
 #   bootstrap      executables run by session-start bootstrap among its
 #                  read-only checks; their output lands in the startup digest.
 #   bootstrap-sweep
-#                  executables run by session-start bootstrap's local phase
-#                  outside detect-only, for local upkeep such as relinking or
-#                  arming; they print only problems, which land in the digest.
+#                  built-in only, not an add-on extension point: Starship's own
+#                  local upkeep (relinking opt-in skills, installing the
+#                  pre-push leak check, arming Mothership rooms), run by
+#                  session-start bootstrap's local phase outside detect-only;
+#                  they print only problems, which land in the digest. An
+#                  add-on's hooks/bootstrap-sweep/ is never listed or run.
 #                  For both bootstrap points, bootstrap sets FM_ROOT_OVERRIDE to
 #                  the checkout it checks and FM_CONFIG_OVERRIDE,
 #                  FM_STATE_OVERRIDE and FM_DATA_OVERRIDE to its own resolved
@@ -244,12 +248,15 @@ is_hook() {
 # list_hooks <point>: <root><TAB><path> per hook in name order, built-ins first
 # considered and replaced by an add-on hook of the same name.
 list_hooks() {
-  local point=$1 rank root entry status=0
-  resolve_addon || status=$?
-  [ "$status" -ne 3 ] || note "$ADDON_PROBLEM"
+  local point=$1 rank root entry status=0 addon_root=
+  if [ "$point" != bootstrap-sweep ]; then
+    resolve_addon || status=$?
+    [ "$status" -ne 3 ] || note "$ADDON_PROBLEM"
+    addon_root=$ADDON_ROOT
+  fi
   {
     rank=0
-    for root in "$CODE_ROOT" ${ADDON_ROOT:+"$ADDON_ROOT"}; do
+    for root in "$CODE_ROOT" ${addon_root:+"$addon_root"}; do
       for entry in "$root/hooks/$point"/*; do
         is_hook "$point" "$entry" || continue
         printf '%s\t%s\t%s\t%s\n' "${entry##*/}" "$rank" "$root" "$entry"

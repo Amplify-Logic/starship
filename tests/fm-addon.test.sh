@@ -7,9 +7,9 @@
 # intake's two hooks, which stay silent until the home switches the intake on.
 # Every other point ships nothing, so a home with no add-on gets no output there.
 # A configured add-on's hooks join the built-ins in name order, an add-on hook
-# replaces a built-in of the same name, a failing or slow hook never stops the
-# caller or the hooks after it, watcher hooks are sourced into bin/fm-watch.sh
-# rather than run, an unusable config/addon is named with its repair, and
+# replaces a built-in of the same name, bootstrap-sweep takes built-in hooks
+# only, a failing or slow hook never stops the caller or the hooks after it,
+# watcher hooks are sourced into bin/fm-watch.sh rather than run, an unusable config/addon is named with its repair, and
 # install clones a missing checkout from the configured origin. create gives a
 # home with no add-on its own private repository from the starter, through a
 # stand-in for the GitHub CLI, guards confirms a new home cannot publish
@@ -143,6 +143,24 @@ test_addon_hooks_join_in_name_order_and_replace_built_ins() {
   assert_equals "$(printf 'first root=%s hook=%s home=%s args=one two\nbuilt-in\nreplaced the built-in' "$code" "$addon" "$home")" \
     "$out" "every hook must run once, in order, with its roots, the home, and the arguments"
   pass "add-on hooks join the built-ins in name order and replace a built-in of the same name"
+}
+
+test_addon_bootstrap_sweep_hooks_never_list_or_run() {
+  local code home addon out
+  code=$(new_code sweep)
+  home=$(new_home sweep)
+  add_hook "$code" bootstrap-sweep 10-built-in 'echo built-in upkeep'
+  addon=$(new_addon "$home")
+  add_hook "$addon" bootstrap-sweep 05-addon 'echo add-on upkeep that must not run'
+  add_hook "$addon" bootstrap-sweep 10-built-in 'echo add-on replacement that must not run'
+  add_hook "$addon" bootstrap 05-addon 'echo add-on bootstrap'
+  assert_equals "$(printf '%s\t%s' "$addon" "$addon/hooks/bootstrap/05-addon")" \
+    "$(addon_at "$code" "$home" hooks bootstrap)" "the add-on itself must still be in use at other points"
+  assert_equals "$(printf '%s\t%s' "$code" "$code/hooks/bootstrap-sweep/10-built-in")" \
+    "$(addon_at "$code" "$home" hooks bootstrap-sweep)" "bootstrap-sweep must list only the code checkout's own hooks"
+  out=$(addon_at "$code" "$home" run bootstrap-sweep 2>&1)
+  assert_equals "built-in upkeep" "$out" "bootstrap-sweep must run only the built-in hook, never an add-on's"
+  pass "an add-on's bootstrap-sweep hooks are neither listed nor run, and never replace a built-in"
 }
 
 test_failing_and_slow_hooks_never_stop_the_caller() {
@@ -558,6 +576,7 @@ test_first_project_waits_for_the_private_repository() {
 test_no_addon_means_no_hooks
 test_built_in_hooks_run_with_no_addon
 test_addon_hooks_join_in_name_order_and_replace_built_ins
+test_addon_bootstrap_sweep_hooks_never_list_or_run
 test_failing_and_slow_hooks_never_stop_the_caller
 test_watcher_hooks_are_sourced_into_the_watcher
 test_unusable_config_is_named_with_its_repair

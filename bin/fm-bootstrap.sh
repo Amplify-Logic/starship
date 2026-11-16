@@ -1883,7 +1883,8 @@ if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then
   local_phase && x_mode_setup
   # Local upkeep from bootstrap-sweep hooks, owned like the read-only ones above.
   local_phase && FM_HOME="$FM_HOME" FM_ROOT_OVERRIDE="$FM_ROOT" FM_CONFIG_OVERRIDE="$CONFIG" \
-    FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" "$SCRIPT_DIR/fm-addon.sh" run bootstrap-sweep
+    FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" FM_ADDON_HOOK_TIMEOUT="${FM_ADDON_HOOK_TIMEOUT:-60}" \
+    "$SCRIPT_DIR/fm-addon.sh" run bootstrap-sweep
   # Adopt existing durable contribution links without making a network call.
   # Detection-only startup must never publish a check registration.
   if local_phase && command -v jq >/dev/null 2>&1 \
