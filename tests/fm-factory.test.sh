@@ -1324,6 +1324,29 @@ SH
   pass "factory pane: a pane with no reading starts nothing while it rests"
 }
 
+# A fleet reading that is there but unreadable is found by the rebuild of the
+# owner's calls itself, which refreshes whole once no rest is owed, so an open
+# pane whose calls moved still gets a reading back.
+test_a_pane_with_an_unreadable_reading_gets_one_back() {
+  local basis
+  reset_case
+  basis="$HOME_FIX/state/factory/basis.json"
+  write_registry
+  write_world
+  FM_FACTORY_NOW='' python3 "$FACTORY" refresh >/dev/null || fail "the first record could not be built"
+  printf 'not a reading\n' > "$basis"
+  rm -f "$HOME_FIX/state/factory/rebuild.last"
+  date +%s.$$.moved > "$HOME_FIX/state/.owner-calls-changed"
+  FM_FACTORY_NOW='' open_panes 1 5 || fail "the pane could not be opened"
+  python3 -c 'import os, sys, time
+end = time.time() + 60
+while not os.path.exists(sys.argv[1]) and time.time() < end:
+    time.sleep(0.2)' "$HOME_FIX/state/factory/rebuild.last"
+  [ -s "$HOME_FIX/state/factory/rebuild.last" ] || fail "the pane never refreshed whole after an unreadable reading"
+  assert_equals "object" "$(jq -r '.snapshot | type' "$basis" 2>/dev/null)" "the unreadable reading was never replaced"
+  pass "factory pane: a pane with an unreadable reading gets one back"
+}
+
 # Panes opened together on a home with no record build one first record
 # between them, not one each side by side.
 test_panes_opened_with_no_record_build_one_first_record() {
@@ -2723,6 +2746,7 @@ fm_test_run \
   test_a_calls_rebuild_without_a_reading_rests_like_a_whole_refresh \
   test_a_pane_with_no_reading_starts_nothing_while_it_rests \
   test_panes_opened_with_no_record_build_one_first_record \
+  test_a_pane_with_an_unreadable_reading_gets_one_back \
   test_an_open_pane_reads_nothing_again_while_nothing_changes \
   test_open_panes_never_rebuild_side_by_side \
   test_a_whole_refresh_waits_for_a_change_in_what_it_reads \

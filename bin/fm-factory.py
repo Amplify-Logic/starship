@@ -1735,10 +1735,16 @@ def refresh_in_background(home: str) -> None:
 def refresh_calls_in_background(home: str) -> None:
     """Start one detached refresh of the owner's calls when no rebuild is under way (in_background).
 
-    With no fleet reading to rebuild them on (read_basis), only a full refresh
-    can, so it is asked for instead, under the same rest (refresh_in_background).
+    With no fleet reading to rebuild them on (basis.json missing or empty, one
+    stat), only a full refresh can, so it is asked for instead, under the same
+    rest (refresh_in_background). A reading that is there but unreadable is
+    found by the rebuild itself, which then refreshes whole under that rest.
     """
-    if read_basis(home) is None:
+    try:
+        has_basis = os.stat(basis_path(home)).st_size > 0
+    except OSError:
+        has_basis = False
+    if not has_basis:
         refresh_in_background(home)
         return
     in_background(home, "refresh-calls")
