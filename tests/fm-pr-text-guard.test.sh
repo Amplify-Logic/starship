@@ -613,7 +613,7 @@ gh pr comment 7 -R o/public --body-file reply.md" \
   for run in 'bash post.sh' 'sh < post.sh' 'source post.sh' '. ./post.sh' 'chmod +x post.sh && ./post.sh' \
     'python3 post.sh' 'bash -c "$(cat post.sh)"' 'cat post.sh | bash' 'bash <(cat post.sh)' '{ ./post.sh; }' \
     'if ./post.sh; then :; fi' 'for i in 1; do ./post.sh; done' 'nice ./post.sh' 'sudo -u me ./post.sh' \
-    'ls post.sh | xargs bash'; do
+    'ls post.sh | xargs bash' 'bash $(ls post.sh)' 'ls post.sh 2>&1 | xargs bash' 'xargs bash <<< $(ls post.sh)'; do
     expect_refuse "$HOME_WORDS" "cat > post.sh <<'EOF'
 gh pr comment 7 --repo o/public --body \"thanks Robin\"
 EOF
