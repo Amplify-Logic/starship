@@ -65,12 +65,14 @@ The [factory registry](configuration.md#factory-registry-datafactoriesmd) names 
   A job with no sign of life for 15 minutes says `quiet for N min, no sign of life` instead, and its light stops moving.
   A job with something to read shows the same `r  Read the report` line.
   An idle factory is one faint row.
+  A factory with [routine work](#routine-work) adds one `↻` line per routine kind under it, idle or not.
 - SINCE YOU LAST LOOKED is one rolling list since the owner last looked at the pane: the time, who acted (a factory, Starship, or you), one word, and a sentence.
   A look is a key pressed in the pane, or the pane focused in Herdr for a few seconds; focus alone keeps a look going for at most 15 minutes after the focus began or the last key press, so a pane left focused all day does not hold the list back. Only Herdr saying the pane is not focused ends a focus; a failed or unreadable answer from Herdr changes nothing. A look ends 15 minutes after its last key press or counted focus, and while one is under way the list keeps starting where the look before it ended.
   Its heading names that time; with no look recorded yet it reads LAST 12 HOURS, and it never reaches back more than two days, reading LAST 48 HOURS when the last look is older.
   A factory's own tab records no look, since it shows one factory only.
   It holds outcomes (`finished`, `PR ready`, `landed`, `closed`, `failed`), the owner's own calls as they were held (`asked you`), and what the owner and Starship said; a worker's pause, a blocker, and a question a worker put to Starship never appear.
   A ship's `done` is an outcome only when it is the ready report, so a build handed into the checks is not listed as finished.
+  A [routine](#routine-work) job's `finished`, `PR ready`, `landed` and `closed` are left out; its `failed` and `asked you` are listed as usual.
   A closed work item reads `landed` only with its merged change or local landing on record and `finished` only with its report; one closed with neither, such as dropped or superseded work or a call that was answered, reads `closed`.
   `landed_delivery` in `bin/fm-landed-lib.sh` owns that reading.
 
@@ -89,6 +91,35 @@ A call or job has something to read when its task has a report or a page of its 
 The pane hands those to `bin/fm-read.sh`, which opens the task's own `page.html` when there is one and otherwise renders the reports into one calm reading page under `.lavish/`, then opens it in Lavish, or in the browser when Lavish is not installed.
 The reader runs in the background, so the pane never waits on it, and when it cannot open the page the pane says why.
 A scout writes that `page.html` beside its report, in whatever form best presents its work.
+
+## Routine work
+
+Some work repeats all day, such as a to-do pass every hour, and each pass is a job of its own that ends with a report.
+A factory's `routine:` line in the [factory registry](configuration.md#factory-registry-datafactoriesmd) marks such work as routine, so its passes do not crowd the overview:
+
+```markdown
+## Garden Journal
+projects: garden-journal
+routine: Reminder pass, Weekly harvest summary
+```
+
+- `routine: yes` marks every job of the factory as routine.
+- Otherwise the line lists kinds of jobs, separated by commas: a job is of a kind when its title, or its id, starts with that kind as a whole word, ignoring case (`Reminder pass 07:50`, or an id such as `reminder-pass-0750`).
+- Without the line, or with `routine: no`, nothing is routine and the pane shows every job as it always has.
+
+Under its factory in RIGHT NOW, each routine kind that ran today, or has a pass under way, is one line:
+
+```text
+     ↻ Reminder pass  4 runs today · last started 07:50                          running
+```
+
+- `runs today` counts each pass that started, finished, failed or was closed today, by the machine's local day.
+- `last` names the newest of those, as `started`, `finished` or `failed`, with its time.
+- The right side says `running` while a pass runs, or `waiting` while one is paused on a wait it declared.
+- A pass that runs as expected, or waits, folds into that line instead of drawing its own card.
+- A pass that is stuck, quiet with no sign of life, stopped, without a worker, or waiting on you or ready for you keeps its own row as usual.
+- SINCE YOU LAST LOOKED leaves out a routine pass that finished, landed, had its PR ready or was closed, while a failed one and a call it put to you are listed as usual.
+- A routine pass is still a job: the count line counts it while it runs, and a factory's own tab lists it with the rest of its work.
 
 ## A factory's own tab
 
@@ -198,8 +229,8 @@ The record's schema is `fm-factory.v1`:
 | `counts`, `count_line` | Running jobs, items that need you, and idle factories. |
 | `queue`, `queue_line` | Every job nobody has started: `total`, `starts_on_its_own`, `in_line`, `on_hold`, `waits_on_other_work`, `waits_on_you` (which includes the older calls and the deferred) and `deferred`, and the same as one line of words. |
 | `needs_you[]` | Each of the owner's calls: its `id`, `factory`, `kind` (`question` or `finished work`), `title`, `ask`, `why`, `options[]` (`key`, `label`, `suggested`), `suggested_by`, a `recommendation` that is not one of the options, `holds_up[]`, `since`, `pr`, `for`, the person it waits on, `answered`, when the owner answered it since it was asked and with which option (`at` and the option `key`, null for a keep), or null, `checking`, true while Starship re-checks a question the owner marked already settled, and `read`, the sources `bin/fm-read.sh` is given (empty when there is nothing to read). |
-| `factories[]` | Each factory: `id`, `name`, `about`, `projects`, `steered_by`, `state`, `idle_since`, `crew`, `needs` (the ids of its items in `needs_you`), `jobs[]`, `next`, `queue` (its own counts, as above), `rules`, `learned`, and `talk`. |
-| `factories[].jobs[]` | Each job: `id`, `title`, `kind`, `state`, `step`, `started`, `doing` and where it came from, `last_sign_of_life` and where it came from, `quiet`, `until`, `pr`, `queue`, and `read`. |
+| `factories[]` | Each factory: `id`, `name`, `about`, `projects`, `steered_by`, `state`, `idle_since`, `crew`, `needs` (the ids of its items in `needs_you`), `jobs[]`, `next`, `queue` (its own counts, as above), `rules`, `learned`, and `talk`, plus `routine` (the [routine](#routine-work) kinds its registry entry names, or `Routine work` for `routine: yes`) and `routine_runs[]`, one per routine kind that ran today or has a pass under way: `kind`, `today`, `last` and `last_word`, `running`, and `folded` (the ids of the jobs the line stands for on the overview). |
+| `factories[].jobs[]` | Each job: `id`, `title`, `kind`, `state`, `step`, `started`, `doing` and where it came from, `last_sign_of_life` and where it came from, `quiet`, `until`, `pr`, `queue`, `routine` (its routine kind, or null), and `read`. |
 | `feed[]` | Each event: `at` (or a `date` when only the day is known), `actor`, `factory`, `word`, and `text`. |
 
 Every state is a word: a job is `running`, `waiting on you`, `ready for you`, `stuck`, `waiting`, `stopped`, `no worker`, `no reading`, `with Starship`, `finished`, `next`, `later`, `on hold`, `on hold until <date>`, or `waits on other work`; a factory is `needs you`, `at work`, or `idle`.
@@ -257,5 +288,5 @@ An item the record does not hold yet keeps its place for up to a minute while a 
 
 ## Verification
 
-`tests/fm-factory.test.sh` builds a fixture home of sample factories and a fixture fleet reading, and checks the record and the plain screen word for word, the queue's counts, closed work against finished work, the quiet job, the registry fallback, the writing keys pressed in the real live view, the Read line and what `r` and a click hand the reader, the talk box listening to a stand-in microphone that writes real samples, what a spoken note hands the speech service and that a cancelled one hands it nothing more, how soon a parked decision leaves the live view, the Herdr calls behind the factory tab and the plugin against a stand-in Herdr, a worker copy closing when its job ends, and a running pane reloading its changed code in place.
+`tests/fm-factory.test.sh` builds a fixture home of sample factories and a fixture fleet reading, and checks the record and the plain screen word for word, the queue's counts, closed work against finished work, the quiet job, routine passes folded into one line and kept out of the feed except a failed one, and every pass shown as before without a routine mark, the registry fallback, the writing keys pressed in the real live view, the Read line and what `r` and a click hand the reader, the talk box listening to a stand-in microphone that writes real samples, what a spoken note hands the speech service and that a cancelled one hands it nothing more, how soon a parked decision leaves the live view, the Herdr calls behind the factory tab and the plugin against a stand-in Herdr, a worker copy closing when its job ends, and a running pane reloading its changed code in place.
 `tests/fm-tap-desk.test.sh` checks on one real backlog that the bridge strip, this pane, and the tap page show the same count of the owner's calls, and that the pane shows a question's recorded options.
