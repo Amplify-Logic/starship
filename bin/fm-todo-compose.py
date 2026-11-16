@@ -19,7 +19,6 @@ if ZONE:
     os.environ['TZ'] = ZONE
     time.tzset()
 RANK = {name: n for n, name in enumerate(('outage', 'urgent', 'deadline', 'obligation'))}
-RETIRED = ('closed', 'dropped')
 # The sort-last sentinel for a partner ask with no recorded ask epoch.
 UNDATED = 253402300799
 

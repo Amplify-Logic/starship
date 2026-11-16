@@ -117,6 +117,35 @@ test_gate_scope_and_recovery_exceptions() {
   pass "continuity gate allows exact recovery and ordinary commands, denies other fleet execution, and leaves external alerts to the host"
 }
 
+# The prefilter answers before any supervision state is read, so it must
+# fast-allow only commands that cannot name a fleet script. The full check
+# records the durable outage marker before it classifies, so during this outage
+# an allow that leaves no marker was answered by the prefilter, while every
+# obfuscated fleet command below must still reach the full check and deny.
+test_prefilter_fast_allows_only_commands_that_cannot_name_a_fleet_script() {
+  local marker="$STATE/.supervision-outage-alarm" command
+  for command in 'ls -la' 'git status --short' 'git -C /tmp log --oneline -5' \
+    "printf '%s\n' fm-send" $'echo one\necho two' 'cat bin/fm-path-lib.md'; do
+    rm -f "$marker"
+    expect_allow "ordinary command ($command)" "$command"
+    [ ! -e "$marker" ] || fail "ordinary command ($command) reached the full check instead of the prefilter"
+  done
+  rm -f "$marker"
+  expect_allow "fleet-script name used as data" "rg -n 'bin/fm-send.sh' docs"
+  [ -e "$marker" ] || fail "a command naming fm-*.sh skipped the full check"
+  # A quoting-decoder marker always reaches the full check, even when the
+  # stripped bytes no longer spell fm-...sh.
+  expect_deny "ANSI-C quote splitting the fleet name" "bin/f\$'m'-crew-state.sh task" 'fm-crew-state.sh'
+  expect_deny "ANSI-C escape spelling the fleet name" "bin/\$'\\x66'm-crew-state.sh task" 'fm-crew-state.sh'
+  expect_deny "locale quote splitting the fleet name" 'bin/f$"m"-crew-state.sh task' 'fm-crew-state.sh'
+  # Quotes, escapes, and line continuations are stripped before the match.
+  expect_deny "double-quoted fleet name" 'bin/fm-"crew"-state.sh task' 'fm-crew-state.sh'
+  expect_deny "single-quoted fleet name" "bin/'fm-crew'-state.sh task" 'fm-crew-state.sh'
+  expect_deny "escaped fleet name" 'bin/fm-cr\ew-state.sh task' 'fm-crew-state.sh'
+  expect_deny "line-continued fleet name" $'bin/fm-crew-st\\\nate.sh task' 'fm-crew-state.sh'
+  pass "continuity prefilter fast-allows ordinary commands and still fully checks quoted, escaped, and decoder-marked fleet names"
+}
+
 # Every deny above ran with no state/.lock at all, the genuine pre-lock case, so
 # each asserted the guidance that names the once-per-session entry point and the
 # "session start recovery" allow above covered the genuine first run. With this
@@ -379,6 +408,7 @@ test_claude_hook_registration_preserves_stop_backstop() {
 }
 
 test_gate_scope_and_recovery_exceptions
+test_prefilter_fast_allows_only_commands_that_cannot_name_a_fleet_script
 test_lock_holding_session_rerun_refused
 test_foreign_lock_holder_session_start_refused
 test_reused_non_harness_pid_first_run_allowed

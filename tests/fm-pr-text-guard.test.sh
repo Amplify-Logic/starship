@@ -574,6 +574,41 @@ test_first_and_second_mate_sessions_get_the_hook() {
   OUT=$(printf '%s' "$payload" | env -u FM_TASK_ID -u FM_HOME PATH="$FAKEBIN:$PATH" FAKE_GH_LOG="$GH_LOG" \
     FAKE_GH_PRIVATE=false CLAUDE_PROJECT_DIR="$primary" bash -c "$cmd")
   assert_equals "" "$OUT" "a payload Cursor delivered must pass, because the check answers only in Claude's shape"
+  # A payload whose raw JSON holds none of gh, no-mistakes, or a \u escape
+  # cannot publish, so the wrapper allows it before starting git or Python.
+  # The shims log every start; the payloads carry no cwd, so a random
+  # temporary path cannot add the letters.
+  local shims="$case_dir/shims" started="$case_dir/started.log" tool real command
+  mkdir -p "$shims"
+  for tool in git python3; do
+    real=$(command -v "$tool") || fail "$tool is required"
+    cat > "$shims/$tool" <<EOF
+#!/bin/sh
+printf '%s\n' "$tool" >> "$started"
+exec "$real" "\$@"
+EOF
+    chmod +x "$shims/$tool"
+  done
+  raw_session() {  # <payload JSON>
+    : > "$started"
+    OUT=$(printf '%s' "$1" | env -u FM_TASK_ID -u FM_HOME PATH="$shims:$FAKEBIN:$PATH" FAKE_GH_LOG="$GH_LOG" \
+      FAKE_GH_PRIVATE=false CLAUDE_PROJECT_DIR="$primary" bash -c "$cmd") || fail "the hook exited nonzero on: $1"
+  }
+  for command in 'ls -la' 'git status --short' "echo 'Robin' > notes.txt"; do
+    raw_session "$(jq -cn --arg c "$command" '{tool_name: "Bash", tool_input: {command: $c}}')"
+    assert_equals "" "$OUT" "an ordinary command must pass: $command"
+    assert_equals "" "$(cat "$started")" "an ordinary command must pass without starting git or Python: $command"
+  done
+  payload=$(jq -cn --arg c "$publish" '{tool_name: "Bash", tool_input: {command: $c}}' | sed 's/"command":"gh /"command":"\\u0067h /')
+  case "$payload" in
+    *'"command":"'"$(printf '\134')"'u0067h pr create'*) ;;
+    *) fail "the escaped payload must spell gh only through a \\u escape (got: $payload)" ;;
+  esac
+  raw_session "$payload"
+  assert_contains "$OUT" '"deny"' "a publishing command whose gh is a \\u escape must still be checked"
+  raw_session "$(jq -cn '{tool_name: "Bash", tool_input: {command: "no-mistakes axi status"}}')"
+  assert_equals "" "$OUT" "a no-mistakes status read does not publish"
+  assert_contains "$(cat "$started")" 'python3' "a command naming no-mistakes must reach the check"
   : > "$primary/config/leak-words"
   session "$primary"
   assert_equals "" "$OUT" "a first mate with no word list must pass a clean command"

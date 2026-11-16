@@ -390,10 +390,6 @@ fm_handoff_rotation_in_progress() {
   esac
 }
 
-fm_handoff_clear_record() {
-  rm -f "$(fm_handoff_state_path)"
-}
-
 # Returns 0 when the session lock is held by a live harness. Sets
 # FM_HANDOFF_LIVE_HOLDER_PID when true (consumed by fm-primary-handoff.sh).
 fm_handoff_session_live_holder() {
