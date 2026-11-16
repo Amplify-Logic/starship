@@ -1183,12 +1183,27 @@ else
 fi
 case "${1:-}" in
   list)
-    jq -r '[.records[] | select(.structured)] as $rows
+    # The extra columns are the --fields asked for, in that order, as real
+    # tasks-axi prints them (default: the hold and blocker columns).
+    fields=hold_kind,hold_reason,hold_until,blocked_by
+    while [ "$#" -gt 0 ]; do
+      case "$1" in --fields) fields=${2:-}; shift ;; esac
+      shift
+    done
+    jq -r --arg fields "$fields" '[.records[] | select(.structured)] as $rows
+      | ($fields | split(",")) as $extra
       | "count: \($rows | length)",
-        "tasks[\($rows | length)]{id,state,kind,repo,title,hold_kind,hold_reason,hold_until,blocked_by}:",
-        ($rows[] | "  " + ([.id, .state, (.kind // "-"), (.repo // "-"), ((.title // "") | @json),
-          (.hold_kind // "-"), ((.hold_reason // "-") | @json), (.hold_until // "-"),
-          (if ((.blocked_by_ids // []) | length) > 0 then (.blocked_by_ids | join(",") | @json) else "none" end)]
+        "tasks[\($rows | length)]{\((["id","state","kind","repo","title"] + $extra) | join(","))}:",
+        ($rows[] | . as $row | "  " + ([.id, .state, (.kind // "-"), (.repo // "-"), ((.title // "") | @json)]
+          + [$extra[] | if . == "hold_kind" then ($row.hold_kind // "-")
+              elif . == "hold_reason" then (($row.hold_reason // "-") | @json)
+              elif . == "hold_until" then ($row.hold_until // "-")
+              elif . == "blocked_by" then (if (($row.blocked_by_ids // []) | length) > 0
+                then ($row.blocked_by_ids | join(",") | @json) else "none" end)
+              elif . == "created" then ($row.since // "-")
+              elif . == "body" then ((($row.body_lines // []) | join("\n")) as $body
+                | if $body == "" and $row.hold_set != null then "Captain hold set: \($row.hold_set)" else $body end | @json)
+              else "-" end]
           | join(","))),
         "help[1]:", "  - Run `tasks-axi show <id> --full` for full notes on a task"' <<<"$backlog"
     ;;
