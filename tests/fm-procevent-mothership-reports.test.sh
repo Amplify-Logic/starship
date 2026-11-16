@@ -220,7 +220,7 @@ test_a_refused_send_tells_the_first_mate() {
 }
 
 test_blocked_scan_tells_each_new_blocker_once() {
-  local h out
+  local h out lock _
   need_tools || return 0
   h=$(make_home blocked)
   add_task "$h" room-t4 sample "mothership: alpha/c9"
@@ -245,6 +245,11 @@ test_blocked_scan_tells_each_new_blocker_once() {
   out=$(sent_of "$h" | grep -c '^problem card=c9 room=alpha project=sample tags= link= cid=fm-room-t4-blocked-')
   assert_equals 2 "$out" "each new blocker is one problem line with its own client id"
 
+  # The detached send records what it told after the room answers, still
+  # holding the task's lock, and a scan leaves a held task for the next poll,
+  # so the cleanup is checked once that send is done.
+  lock="$h/home/state/mothership/.task-room-t4.lock"
+  for _ in $(seq 1 50); do { [ -e "$lock" ] || [ -L "$lock" ]; } || break; sleep 0.1; done
   rm -f "$h/home/state/room-t4.meta"
   in_home "$h" "$ADAPTER" blocked-scan >/dev/null 2>&1 || fail "scan after cleanup failed"
   [ ! -e "$h/home/state/mothership/tasks/room-t4.json" ] || fail "a cleaned-up task is still followed"
