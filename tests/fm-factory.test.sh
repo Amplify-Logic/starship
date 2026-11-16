@@ -21,6 +21,8 @@ FACTORY="$ROOT/bin/fm-factory.py"
 PANE="$ROOT/bin/fm-factory-pane.sh"
 NOW=1794643200   # 2026-11-14T08:00:00Z
 export TZ=UTC FM_FACTORY_NOW=$NOW FM_FACTORY_PEEK='' FM_SNAPSHOT_NOW=2026-11-14T08:00:00Z
+# An idle machine unless a case says otherwise, so the host's own load never spaces rebuilds out.
+export FM_FACTORY_LOADAVG=0
 # The real tasks-axi, when installed, for the case that files a real reconcile
 # request; every other case reads through the stand-in below.
 REAL_TASKS_AXI=$(command -v tasks-axi || true)
@@ -204,10 +206,30 @@ PY
 # held decision's tap card shows, from the case's fixture file.
 cat > "$BINDIR/shapes" <<'SH'
 #!/usr/bin/env bash
+printf '%s\n' "$*" >> "$FM_HOME/shapes.calls"
 cat "$FM_HOME/shapes.json"
 SH
 chmod +x "$BINDIR/shapes"
 export FM_FACTORY_SHAPES="$BINDIR/shapes"
+
+# A counting inbox: every rebuild of the record, whole or of the owner's calls
+# only, reads the inbox receipts once, so each read is logged to
+# $FM_HOME/reads as `start <time> <pid>` and `end <time> <pid>`;
+# FM_FACTORY_TEST_READ_SLOW makes each read take that many seconds.
+cat > "$BINDIR/counting-inbox" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = receipts ]; then
+  stamp() { python3 -c 'import time; print("%.3f" % time.time())'; }
+  printf 'start %s %s\n' "$(stamp)" "$$" >> "$FM_HOME/reads"
+  [ -z "${FM_FACTORY_TEST_READ_SLOW:-}" ] || sleep "$FM_FACTORY_TEST_READ_SLOW"
+  "$(dirname "$0")/inbox" "$@"
+  rc=$?
+  printf 'end %s %s\n' "$(stamp)" "$$" >> "$FM_HOME/reads"
+  exit "$rc"
+fi
+exec "$(dirname "$0")/inbox" "$@"
+SH
+chmod +x "$BINDIR/counting-inbox"
 
 # edit-world drop <task> | reask <task> <at>: change the fleet while the pane
 # runs (a task leaves, or its held question is held again later), then refresh
@@ -1231,6 +1253,115 @@ test_a_parked_decision_leaves_the_live_pane_within_seconds() {
   pass "factory pane: a parked decision leaves the live pane within seconds, without a whole refresh (${took}s)"
 }
 
+# The rest after a whole refresh is for whole refreshes: right after a slow one
+# on a busy machine, a call the owner parks still leaves NEEDS YOU within seconds.
+test_a_parked_call_leaves_the_pane_within_seconds_after_a_slow_refresh() {
+  local took
+  reset_case
+  write_registry
+  write_world
+  python3 "$FACTORY" refresh || fail "the first record could not be built"
+  printf '{"ended": %s, "took": 90, "failed": false}\n' "$(date +%s)" > "$HOME_FIX/state/factory/rebuild.last" \
+    || fail "the slow refresh could not be recorded"
+  took=$(FM_FACTORY_LOADAVG=100000 watch_pane '3 need you' '2 need you' "$BINDIR/park-world garden-chart") \
+    || fail "the live pane could not be driven"
+  case "$took" in
+    never|'no first screen'|'') fail "the live pane still showed the parked call: $took" ;;
+  esac
+  awk -v t="$took" 'BEGIN { exit !(t < 4.5) }' || fail "the live pane took ${took}s to drop the parked call"
+  pass "factory pane: a parked call leaves the pane within seconds after a slow refresh (${took}s)"
+}
+
+# Without a fleet reading to start from, a background rebuild of the owner's
+# calls is a whole refresh, so it waits out the rest after the last one and
+# records its own.
+test_a_calls_rebuild_without_a_reading_rests_like_a_whole_refresh() {
+  local last
+  reset_case
+  last="$HOME_FIX/state/factory/rebuild.last"
+  write_registry
+  write_world
+  export FM_FACTORY_INBOX="$BINDIR/counting-inbox"
+  FM_FACTORY_NOW='' python3 "$FACTORY" refresh >/dev/null || fail "the first record could not be built"
+  rm -f "$HOME_FIX/state/factory/basis.json"
+  printf '{"ended": %s, "took": 90, "failed": false}\n' "$(date +%s)" > "$last" \
+    || fail "the slow refresh could not be recorded"
+  : > "$HOME_FIX/reads"
+  FM_FACTORY_NOW='' python3 "$FACTORY" refresh-calls >/dev/null || fail "the calls rebuild failed"
+  assert_equals "0" "$(grep -c '^start' "$HOME_FIX/reads")" "a calls rebuild without a reading did not wait out the rest"
+  [ ! -e "$HOME_FIX/state/factory/basis.json" ] || fail "a calls rebuild without a reading refreshed during the rest"
+  rm -f "$last"
+  FM_FACTORY_NOW='' python3 "$FACTORY" refresh-calls >/dev/null || fail "the calls rebuild failed"
+  export FM_FACTORY_INBOX="$BINDIR/inbox"
+  [ -s "$HOME_FIX/state/factory/basis.json" ] || fail "a calls rebuild without a reading made none"
+  assert_equals "false" "$(jq -r .failed "$last" 2>/dev/null)" "the whole refresh it ran recorded no rest"
+  pass "factory pane: a calls rebuild without a reading rests like a whole refresh"
+}
+
+# While a whole refresh's rest lasts and there is no fleet reading to rebuild
+# the owner's calls on, a pane whose calls moved starts no process at all: it
+# would only find there is nothing it may do yet.
+test_a_pane_with_no_reading_starts_nothing_while_it_rests() {
+  local shim spawns real
+  reset_case
+  write_registry
+  write_world
+  FM_FACTORY_NOW='' python3 "$FACTORY" refresh >/dev/null || fail "the first record could not be built"
+  rm -f "$HOME_FIX/state/factory/basis.json"
+  printf '{"ended": %s, "took": 90, "failed": false}\n' "$(date +%s)" > "$HOME_FIX/state/factory/rebuild.last" \
+    || fail "the slow refresh could not be recorded"
+  date +%s.$$.moved > "$HOME_FIX/state/.owner-calls-changed"
+  shim="$TMP_ROOT/case$CASE/shim" spawns="$TMP_ROOT/case$CASE/spawns" real=$(command -v python3)
+  mkdir -p "$shim" && : > "$spawns"
+  cat > "$shim/python3" <<SH
+#!/bin/sh
+case "\${1:-}" in *fm-factory.py) printf '%s\n' "\${2:-}" >> "$spawns" ;; esac
+exec "$real" "\$@"
+SH
+  chmod +x "$shim/python3"
+  PATH="$shim:$PATH" FM_FACTORY_NOW='' open_panes 1 5 || fail "the pane could not be opened"
+  assert_equals "view" "$(sort -u "$spawns" | tr '\n' ' ' | sed 's/ $//')" "a resting pane with no reading started a rebuild process"
+  pass "factory pane: a pane with no reading starts nothing while it rests"
+}
+
+# A fleet reading that is there but unreadable is found by the rebuild of the
+# owner's calls itself, which refreshes whole once no rest is owed, so an open
+# pane whose calls moved still gets a reading back.
+test_a_pane_with_an_unreadable_reading_gets_one_back() {
+  local basis
+  reset_case
+  basis="$HOME_FIX/state/factory/basis.json"
+  write_registry
+  write_world
+  FM_FACTORY_NOW='' python3 "$FACTORY" refresh >/dev/null || fail "the first record could not be built"
+  printf 'not a reading\n' > "$basis"
+  rm -f "$HOME_FIX/state/factory/rebuild.last"
+  date +%s.$$.moved > "$HOME_FIX/state/.owner-calls-changed"
+  FM_FACTORY_NOW='' open_panes 1 5 || fail "the pane could not be opened"
+  python3 -c 'import os, sys, time
+end = time.time() + 60
+while not os.path.exists(sys.argv[1]) and time.time() < end:
+    time.sleep(0.2)' "$HOME_FIX/state/factory/rebuild.last"
+  [ -s "$HOME_FIX/state/factory/rebuild.last" ] || fail "the pane never refreshed whole after an unreadable reading"
+  assert_equals "object" "$(jq -r '.snapshot | type' "$basis" 2>/dev/null)" "the unreadable reading was never replaced"
+  pass "factory pane: a pane with an unreadable reading gets one back"
+}
+
+# Panes opened together on a home with no record build one first record
+# between them, not one each side by side.
+test_panes_opened_with_no_record_build_one_first_record() {
+  local first
+  reset_case
+  write_registry
+  write_world
+  export FM_FACTORY_INBOX="$BINDIR/counting-inbox"
+  FM_FACTORY_NOW='' FM_FACTORY_TEST_READ_SLOW=1 open_panes 3 1 || fail "the panes could not be opened"
+  export FM_FACTORY_INBOX="$BINDIR/inbox"
+  first=$(awk '/^mark$/ { exit } $1 == "start" { n++ } END { print n + 0 }' "$HOME_FIX/reads")
+  assert_equals "1" "$first" "panes opened together built more than one first record"
+  pass "factory pane: panes opened with no record build one first record"
+}
+
 # A calls rebuild that read the fleet before a full refresh finished must not
 # put the older workers back over the newer record.
 test_a_calls_rebuild_on_an_older_reading_keeps_the_newer_record() {
@@ -1252,6 +1383,191 @@ test_a_calls_rebuild_on_an_older_reading_keeps_the_newer_record() {
   assert_equals "$(q '[.factories[] | select(.id == "sample-shop") | .jobs[] | select(.id == "shop-search") | .state] | join("")')" \
     "running" "the older workers replaced the newer ones"
   pass "factory pane: a calls rebuild on an older reading keeps the newer record"
+}
+
+# open_panes <count> <seconds> [command]: open <count> live overviews of the
+# case's home side by side, each under its own pty, and once every one shows
+# its first screen write `mark` to $FM_HOME/reads, leave them open <seconds>
+# (running <command> every half second when one is given), then quit them all.
+open_panes() {
+  python3 - "$FACTORY" "$@" <<'PY'
+import fcntl, os, pty, select, struct, subprocess, sys, termios, time
+factory, count, seconds = sys.argv[1], int(sys.argv[2]), float(sys.argv[3])
+command = sys.argv[4] if len(sys.argv) > 4 else ""
+panes = []
+for _ in range(count):
+    pid, fd = pty.fork()
+    if pid == 0:
+        fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack("HHHH", 50, 100, 0, 0))
+        os.execvp("python3", ["python3", factory, "view"])
+    panes.append([pid, fd, b""])
+def drain(seconds):
+    end = time.monotonic() + seconds
+    while True:
+        left = end - time.monotonic()
+        if left <= 0:
+            return
+        ready, _, _ = select.select([p[1] for p in panes], [], [], min(left, 0.1))
+        for pane in panes:
+            if pane[1] in ready:
+                try:
+                    pane[2] = (pane[2] + os.read(pane[1], 65536))[-200000:]
+                except OSError:
+                    pass
+began = time.monotonic()
+while not all(b"q quit" in p[2] for p in panes) and time.monotonic() - began < 120:
+    drain(0.2)
+if not all(b"q quit" in p[2] for p in panes):
+    for pane in panes:
+        os.kill(pane[0], 9)
+    sys.exit("open_panes: a pane drew no first screen within 120 seconds")
+with open(os.path.join(os.environ["FM_HOME"], "reads"), "a") as log:
+    log.write("mark\n")
+end = time.monotonic() + seconds
+while time.monotonic() < end:
+    if command:
+        subprocess.run(command, shell=True, check=True)
+    drain(0.5)
+for pane in panes:
+    try:
+        os.write(pane[1], b"q")
+    except OSError:
+        pass
+end = time.monotonic() + 15
+while panes:
+    for pane in list(panes):
+        if os.waitpid(pane[0], os.WNOHANG)[0]:
+            panes.remove(pane)
+        elif time.monotonic() > end:
+            os.kill(pane[0], 9)
+    drain(0.2)
+PY
+}
+
+# reads_after_mark: how many reads started once the panes were all up.
+reads_after_mark() {
+  awk '/^mark$/ { m = 1; next } m && $1 == "start" { n++ } END { print n + 0 }' "$HOME_FIX/reads"
+}
+
+# most_at_once: the most reads that were under way at the same moment.
+most_at_once() {
+  awk '$1 == "start" || $1 == "end" { print $2, ($1 == "start" ? 1 : -1) }' "$HOME_FIX/reads" | sort -n -k1,1 -k2,2 |
+    awk '{ n += $2; if (n > most) most = n } END { print most + 0 }'
+}
+
+# On 2026-11-16 six open panes kept a laptop's load average above 500. Every
+# rebuild read the pending reconcile requests through
+# `fm-captain-hold.sh reconcile list`, which moved the owner's calls signal as
+# it exited, so each rebuild asked for the next one and an open pane with
+# nothing changing rebuilt for as long as it stayed open.
+test_an_open_pane_reads_nothing_again_while_nothing_changes() {
+  reset_case
+  write_registry
+  write_world
+  export FM_FACTORY_INBOX="$BINDIR/counting-inbox"
+  FM_FACTORY_CAPTAIN_HOLD='' FM_FACTORY_NOW='' python3 "$FACTORY" refresh >/dev/null \
+    || fail "the first record could not be built"
+  FM_FACTORY_CAPTAIN_HOLD='' FM_FACTORY_NOW='' open_panes 1 8 || fail "the pane could not be opened"
+  export FM_FACTORY_INBOX="$BINDIR/inbox"
+  assert_equals "0" "$(reads_after_mark)" "an open pane rebuilt its record while nothing changed"
+  pass "factory pane: an open pane reads nothing again while nothing changes"
+}
+
+# Several panes open on one home share one rebuild at a time, whichever kind,
+# however often they each ask for one.
+test_open_panes_never_rebuild_side_by_side() {
+  reset_case
+  write_registry
+  write_world
+  export FM_FACTORY_INBOX="$BINDIR/counting-inbox"
+  FM_FACTORY_NOW='' python3 "$FACTORY" refresh >/dev/null || fail "the first record could not be built"
+  : > "$HOME_FIX/reads"
+  FM_FACTORY_NOW='' FM_FACTORY_TTL=0 FM_FACTORY_TEST_READ_SLOW=1 open_panes 3 8 \
+    "date +%s.\$\$.\$RANDOM > '$HOME_FIX/state/.owner-calls-changed'; touch '$HOME_FIX/state/shop-search.status'" \
+    || fail "the panes could not be opened"
+  export FM_FACTORY_INBOX="$BINDIR/inbox"
+  [ "$(reads_after_mark)" -ge 1 ] || fail "the panes never rebuilt while their calls and workers changed"
+  assert_equals "1" "$(most_at_once)" "two rebuilds ran at once"
+  pass "factory pane: open panes never rebuild side by side ($(reads_after_mark) rebuild reads)"
+}
+
+# A whole refresh reads every worker, so once the record is old the pane
+# starts one only when a status, record or backlog file changed, or once the
+# record reaches FM_FACTORY_MAX_AGE.
+test_a_whole_refresh_waits_for_a_change_in_what_it_reads() {
+  reset_case
+  write_registry
+  write_world
+  export FM_FACTORY_INBOX="$BINDIR/counting-inbox"
+  FM_FACTORY_NOW='' python3 "$FACTORY" refresh >/dev/null || fail "the first record could not be built"
+  FM_FACTORY_NOW='' FM_FACTORY_TTL=1 FM_FACTORY_MAX_AGE=600 open_panes 1 6 || fail "the pane could not be opened"
+  assert_equals "0" "$(reads_after_mark)" "an old record with nothing changed under it was rebuilt"
+  : > "$HOME_FIX/reads"
+  FM_FACTORY_NOW='' FM_FACTORY_TTL=1 FM_FACTORY_MAX_AGE=600 open_panes 1 6 \
+    "[ -e '$HOME_FIX/touched' ] || { touch '$HOME_FIX/touched' '$HOME_FIX/state/garden-water.status'; }" \
+    || fail "the pane could not be opened"
+  [ "$(reads_after_mark)" -ge 1 ] || fail "a changed status file did not rebuild the record"
+  : > "$HOME_FIX/reads"
+  FM_FACTORY_NOW='' FM_FACTORY_TTL=1 FM_FACTORY_MAX_AGE=2 open_panes 1 6 || fail "the pane could not be opened"
+  [ "$(reads_after_mark)" -ge 1 ] || fail "a record past its longest age was never rebuilt"
+  rm -f "$HOME_FIX/state/factory/rebuild.last"
+  : > "$HOME_FIX/reads"
+  FM_FACTORY_NOW='' FM_FACTORY_TTL=1 FM_FACTORY_MAX_AGE=2 FM_FACTORY_LOADAVG=100000 open_panes 1 6 \
+    || fail "the pane could not be opened"
+  export FM_FACTORY_INBOX="$BINDIR/inbox"
+  assert_equals "0" "$(reads_after_mark)" "a busy machine rebuilt a record only for its age"
+  pass "factory pane: a whole refresh waits for a change in what it reads, or the record's longest age on an idle machine"
+}
+
+# A busy machine gets room: once a whole refresh ends, the next one waits at
+# least a minute, however often the workers' records move.
+test_a_busy_machine_spaces_rebuilds_out() {
+  local busy idle
+  reset_case
+  write_registry
+  write_world
+  export FM_FACTORY_INBOX="$BINDIR/counting-inbox"
+  FM_FACTORY_NOW='' python3 "$FACTORY" refresh >/dev/null || fail "the first record could not be built"
+  local toucher="touch '$HOME_FIX/state/shop-search.status'"
+  : > "$HOME_FIX/reads"
+  FM_FACTORY_NOW='' FM_FACTORY_TTL=0 open_panes 1 14 "$toucher" \
+    || fail "the pane could not be opened"
+  idle=$(reads_after_mark)
+  : > "$HOME_FIX/reads"
+  FM_FACTORY_NOW='' FM_FACTORY_TTL=0 FM_FACTORY_LOADAVG=100000 open_panes 1 8 "$toucher" \
+    || fail "the pane could not be opened"
+  busy=$(reads_after_mark)
+  export FM_FACTORY_INBOX="$BINDIR/inbox"
+  [ "$idle" -ge 2 ] || fail "an idle machine did not keep the workers current ($idle rebuild reads)"
+  [ "$busy" -le 2 ] || fail "a busy machine still rebuilt $busy times in 8 seconds"
+  pass "factory pane: a busy machine spaces rebuilds out ($idle reads idle, $busy busy)"
+}
+
+# A question held since the last whole refresh has its options read once, not
+# again by every rebuild of the owner's calls, and the screen stays the same.
+test_a_question_held_since_the_last_refresh_is_read_once() {
+  local first second later
+  reset_case
+  write_registry
+  write_world
+  python3 "$FACTORY" refresh >/dev/null || fail "the first record could not be built"
+  later=$(date -u -r "$((NOW - 600))" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "@$((NOW - 600))" +%Y-%m-%dT%H:%M:%SZ)
+  jq --arg at "$later" '(.backlog.records[] | select(.id == "garden-chart")).hold_set = $at' \
+    "$FM_FACTORY_SNAPSHOT" > "$FM_FACTORY_SNAPSHOT.new" && mv "$FM_FACTORY_SNAPSHOT.new" "$FM_FACTORY_SNAPSHOT"
+  jq --arg at "$later" '(.decisions[] | select(.id == "garden-chart")) |= (.held_since = $at | .identity = ($at + "#0"))' \
+    "$HOME_FIX/shapes.json" > "$HOME_FIX/shapes.new" && mv "$HOME_FIX/shapes.new" "$HOME_FIX/shapes.json"
+  : > "$HOME_FIX/shapes.calls"
+  python3 "$FACTORY" refresh-calls >/dev/null || fail "the calls could not be rebuilt"
+  first=$(jq -S 'del(.read_at)' "$HOME_FIX/state/factory/record.json") || fail "the record is gone"
+  python3 "$FACTORY" refresh-calls >/dev/null || fail "the calls could not be rebuilt again"
+  second=$(jq -S 'del(.read_at)' "$HOME_FIX/state/factory/record.json") || fail "the record is gone"
+  assert_equals "garden-chart" "$(cat "$HOME_FIX/shapes.calls")" "the question's options were not read exactly once"
+  assert_equals "$first" "$second" "the record changed between two rebuilds of the same records"
+  assert_equals "$((NOW - 600))" "$(printf '%s' "$first" | jq -r '.needs_you[] | select(.id == "garden-chart") | .since')" \
+    "the question held again does not read as held again"
+  assert_equals "this week" "$(printf '%s' "$first" | jq -r '.needs_you[] | select(.id == "garden-chart") | .options[0].label')" \
+    "the question held again lost its options"
+  pass "factory pane: a question held since the last whole refresh has its options read once"
 }
 
 # Already settled? only asks: it files a reconcile request for the highlighted
@@ -1361,10 +1677,19 @@ test_already_settled_outlasts_a_refresh_read_before_the_press() {
   write_registry
   write_world
   local screen="$TMP_ROOT/case$CASE/screen" stale="$TMP_ROOT/case$CASE/stale.json"
-  local lock="$HOME_FIX/state/factory/refresh.lock"
+  local holder
   python3 "$FACTORY" --data --fresh >/dev/null || fail "--data failed"
   cp "$HOME_FIX/state/factory/record.json" "$stale"
-  drive_keys "SH:mkdir '$lock'" x "SH:cp '$stale' '$HOME_FIX/state/factory/record.json'" "SNAP:$screen"
+  # A rebuild under way holds the home's rebuild lock; this one holds it until
+  # the end of the case.
+  python3 -c 'import fcntl, os, sys, time
+fd = os.open(sys.argv[1], os.O_RDWR | os.O_CREAT)
+fcntl.flock(fd, fcntl.LOCK_EX)
+open(sys.argv[2], "w").close()
+time.sleep(600)' "$HOME_FIX/state/factory/rebuild.lock" "$TMP_ROOT/case$CASE/held" &
+  holder=$!
+  while [ ! -e "$TMP_ROOT/case$CASE/held" ]; do sleep 0.1; done
+  drive_keys x "SH:cp '$stale' '$HOME_FIX/state/factory/record.json'" "SNAP:$screen"
   assert_contains "$(cat "$screen")" "Starship is re-reading what you said about this" \
     "the card still reads checking after a record read before the press"
   assert_not_contains "$(cat "$screen")" "x settled?" "a record read before the press offered x again"
@@ -1374,7 +1699,8 @@ test_already_settled_outlasts_a_refresh_read_before_the_press() {
   python3 "$FACTORY" --data --fresh >/dev/null || fail "--data failed"
   drive_keys x "SH:: > '$HOME_FIX/reconcile.requests'; python3 '$FACTORY' --data --fresh >/dev/null" "SNAP:$screen"
   assert_contains "$(cat "$screen")" "x settled?" "a record read after the press that has no request offers x again"
-  rmdir "$lock"
+  kill "$holder" 2>/dev/null
+  wait "$holder" 2>/dev/null
   pass "factory pane: a card stays checking through a refresh that read the requests before the press"
 }
 
@@ -1673,8 +1999,10 @@ test_enter_opens_the_factory_tab_with_its_live_workers() {
   write_world
   local out cmd
   out=$(HERDR_BIN_PATH="$BINDIR/herdr" HERDR_WORKSPACE_ID=w1 HERDR_TAB_ID=w1:t1 HERDR_SOCKET_PATH=/run/a.sock \
-    python3 "$FACTORY" open-tab sample-shop 2>&1) || fail "open-tab failed: $out"
+    FM_FACTORY_MAX_AGE=900 python3 "$FACTORY" open-tab sample-shop 2>&1) || fail "open-tab failed: $out"
   cmd=$(sed -n 2p "$CALLS")
+  assert_contains "$cmd" "FM_FACTORY_MAX_AGE=900 " "the page keeps a custom safety refresh age"
+  assert_contains "$(sed -n 4p "$CALLS")" "FM_FACTORY_MAX_AGE=900 " "a live worker copy keeps a custom safety refresh age"
   assert_equals "$(sed -n 1p "$CALLS")" "tab create --workspace w1 --label Sample Shop --focus" "the tab"
   assert_contains "$cmd" "pane run w1:p20 " "the page runs in the tab's first pane"
   assert_contains "$cmd" "fm-factory-pane.sh run --factory sample-shop --origin-tab w1:t1" "the page command"
@@ -2415,7 +2743,17 @@ fm_test_run \
   test_r_on_a_factory_reads_only_a_job_it_draws \
   test_the_highlight_and_open_boxes_follow_the_record \
   test_a_parked_decision_leaves_the_live_pane_within_seconds \
+  test_a_parked_call_leaves_the_pane_within_seconds_after_a_slow_refresh \
   test_a_calls_rebuild_on_an_older_reading_keeps_the_newer_record \
+  test_a_calls_rebuild_without_a_reading_rests_like_a_whole_refresh \
+  test_a_pane_with_no_reading_starts_nothing_while_it_rests \
+  test_panes_opened_with_no_record_build_one_first_record \
+  test_a_pane_with_an_unreadable_reading_gets_one_back \
+  test_an_open_pane_reads_nothing_again_while_nothing_changes \
+  test_open_panes_never_rebuild_side_by_side \
+  test_a_whole_refresh_waits_for_a_change_in_what_it_reads \
+  test_a_busy_machine_spaces_rebuilds_out \
+  test_a_question_held_since_the_last_refresh_is_read_once \
   test_talking_never_changes_who_steers \
   test_enter_opens_the_factory_tab_with_its_live_workers \
   test_a_live_copy_shows_text_at_the_top_of_a_taller_pane \

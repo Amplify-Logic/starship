@@ -19,9 +19,10 @@
 # directory the way bin/fm-backlog-transition-lib.sh does, which keeps main-home
 # and secondmate-home ownership aligned with the work that discovered the call.
 # Every subcommand that may change a call (hold, answer, answers,
-# reconcile-requests, complete, reconcile) moves the owner's calls signal
-# (bin/fm-owner-calls-signal-lib.sh) as it exits, so the bridge strip and the
-# Factory pane show the next call at once.
+# reconcile-requests, complete, reconcile close and note) moves the owner's
+# calls signal (bin/fm-owner-calls-signal-lib.sh) as it exits, so the bridge
+# strip and the Factory pane show the next call at once; a read such as
+# reconcile list never moves it, because each move makes them read again.
 #
 # Usage:
 #   fm-captain-hold.sh hold <task-id> --reason <reason> \
@@ -2534,7 +2535,8 @@ command_open() {  # <task-id> [--identity] [--distinguish-absent]
 }
 
 case "${1:-}" in
-  hold|answer|answers|reconcile-requests|complete|reconcile) OWNER_CALLS_MAY_CHANGE=1 ;;
+  hold|answer|answers|reconcile-requests|complete) OWNER_CALLS_MAY_CHANGE=1 ;;
+  reconcile) [ "${2:-}" = list ] || OWNER_CALLS_MAY_CHANGE=1 ;;
 esac
 case "${1:-}" in
   hold) shift; command_hold "$@" ;;

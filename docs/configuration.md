@@ -1037,7 +1037,10 @@ A request to the ship becomes one owner call, held for the owner like any other 
 A repeat of the same request makes no second call.
 Only the owner's answer sends anything about it: taking it on runs `mothership accept` under the chosen project, declining runs `mothership decline`, each once and through the room's allow-list as before (with that project's allow-list tags when the list names it only with tags), and Later asks again in three days.
 Such a call takes only the owner's own answer: its tap card offers no "You decide", the seven-day default never answers it, and an answer that names none of its options sends nothing and holds it for the owner again.
-Beyond that, the only thing monitoring sends to a room is the "read by your ship" mark that every `mothership pull` already sends in a room whose allow-list is not empty.
+Work taken on this way is filed with a `mothership: <room>/<card>` ref in its backlog task's body, and the card then hears how it goes without another word from the owner: one short line when the work is dispatched, when its PR is ready (with the PR's address), when it is blocked, and when it lands, which settles this ship's part of the card.
+Each line goes through the room's allow-list under the task's project and through the private word check, like everything else the link sends, so the room hears nothing about a project it does not allow and nothing private; a line the link refuses or cannot send is reported to the first mate and never holds up the work.
+A task with no ref sends nothing.
+Beyond these, the only thing monitoring sends to a room is the "read by your ship" mark that every `mothership pull` already sends in a room whose allow-list is not empty.
 The setting and its records are home-local and are not inherited by secondmate homes.
 `bin/fm-procevent-mothership.sh --help` owns the commands, the result document and the private state files, and the `process-event-sources` skill owns how the first mate relays a capture.
 

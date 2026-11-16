@@ -675,6 +675,7 @@ test_an_answer_runs_the_room_step_once() {
   tap_on "$h" ms-alpha-c6 "Take on under studio"
   out=$(desk_in "$h" route --taps "$h/taps" --apply 2>&1) || fail "route failed: $out"
   assert_contains "$out" 'room: accepted: ms-alpha-c6: your ship took on "Pick a colour" in the alpha room under studio' "the tap took it on"
+  assert_contains "$out" 'file the work through ordinary intake under studio with "mothership: alpha/c6" in its body' "the accepted line names the card ref the work's task carries"
   assert_equals "accept c6 --room alpha --project studio --tag alpha --cid fm-ms-alpha-c6-accept" "$(acts_of "$h")" "the room's accept ran under that project, with the tag its allow-list names it under"
   desk_in "$h" route --taps "$h/taps" --apply >/dev/null 2>&1 || fail "routing the taps again failed"
   in_home "$h" "$ADAPTER" settle >/dev/null 2>&1 || fail "settle failed"
