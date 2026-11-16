@@ -1,7 +1,7 @@
 # Desk
 
 The desk is your whole Starship workspace in Herdr, opened by one command: `starship`.
-It starts Herdr's default session or attaches to it when it is already running, fills in whatever your desk layout names that is missing, and opens the Terminal windows that show the session.
+It starts Herdr's default session or attaches to it when it is already running, fills in whatever your desk layout names that is missing, and opens the windows that show the session, in macOS Terminal or Ghostty.
 Run it again and it changes nothing, so it is safe to run whenever you sit down.
 `bin/fm-desk.py` owns the commands, and its header is the exact reference; the [desk layout](configuration.md#desk-layout-configdesk-layout) owns what the desk holds.
 
@@ -16,7 +16,9 @@ Run it again and it changes nothing, so it is safe to run whenever you sit down.
 - Your workspace, made when no workspace carries its label.
 - In the main tab, the one the layout names as `main` or else the workspace's first: the first mate, the [bridge strip](bridge-strip.md) across the top, and the [Factory pane](factory-pane.md) beside the first mate.
 - Every other tab the layout names, in order; a factory tab opens through the Factory pane's own tab opener, so pressing `enter` on that factory later finds the same tab, and the desk finds it again by that opener's record even when its label differs from the layout's.
-- One Terminal window per view, each attached to the same session with its own Terminal profile and font size, until as many Herdr clients show the session as the layout names views.
+- One window per view, each attached to the same session with its own font size, until as many Herdr clients show the session as the layout names views.
+  The layout's `terminal` picks the app: Terminal by default, where each view also gets its Terminal profile, or Ghostty, where each view is its own Ghostty instance that quits when its window closes.
+  A view never inherits the environment of a Herdr pane you run `starship` from, since a Herdr client that does refuses to start as a nested Herdr.
 - With `sidebar` set, Herdr's sidebar starts collapsed or open in every window the desk opens.
 
 Each window is a full Herdr client of the same session, so they mirror each other and you can switch between them, for example a large font for showing someone the setup and a small one for working.
@@ -40,6 +42,7 @@ It starts the server before any view attaches, because a Herdr client attaching 
 
 ## Limits
 
-- The views open in macOS Terminal; with Terminal's "prefer tabs" setting they open as tabs of one window.
+- The views open in macOS Terminal or Ghostty; with Terminal's "prefer tabs" setting they open as tabs of one window.
+- Terminal shows 24-bit color only from macOS 26 on, so on an older macOS the colored badges of the bridge strip and the Factory pane show as blank boxes; set `terminal = Ghostty` there, and the desk says so in a note when it opens a Terminal view.
 - The desk fills in one workspace, the one the layout names.
 - A view opens only when fewer Herdr clients show the session than the layout names views, whatever app those clients run in.
