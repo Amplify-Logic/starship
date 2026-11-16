@@ -832,6 +832,7 @@ tests/fm-bearings-snapshot.test.sh 194213
 tests/fm-bootstrap-network-parallel.test.sh 98356
 tests/fm-bootstrap.test.sh 159898
 tests/fm-branch-supervision.test.sh 33322
+tests/fm-bridge-strip.test.sh 82863
 tests/fm-bridge-view.test.sh 16588
 tests/fm-browse-session.test.sh 1737
 tests/fm-busy-adapter-wiring.test.sh 176782
@@ -893,6 +894,7 @@ tests/fm-deck.test.sh 14955
 tests/fm-deepgram-desk.test.sh 237197
 tests/fm-desk-floater-windows.test.sh 33336
 tests/fm-desk-voice-claude-draft-live-e2e.test.sh 1256
+tests/fm-desk.test.sh 62759
 tests/fm-devin-harness.test.sh 7071
 tests/fm-devin-signals-live-e2e.test.sh 1093
 tests/fm-dispatch-resolve.test.sh 38772
@@ -901,6 +903,7 @@ tests/fm-documentation-audiences.test.sh 3697
 tests/fm-dod-lib.test.sh 5900
 tests/fm-dropped-threads.test.sh 9224
 tests/fm-extension-binding.test.sh 35558
+tests/fm-factory.test.sh 560697
 tests/fm-fleet-ledger.test.sh 27798
 tests/fm-fleet-snapshot-contribution-input.test.sh 1494
 tests/fm-fleet-snapshot-view.test.sh 30427
@@ -1121,6 +1124,7 @@ tests/fm-supervision-host.test.sh 713537
 tests/fm-supervision-sentinel.test.sh 33422
 tests/fm-supervision-test-isolation.test.sh 19362
 tests/fm-tangle-guard.test.sh 13604
+tests/fm-tap-desk.test.sh 140423
 tests/fm-task-delivery.test.sh 95664
 tests/fm-task-inbox.test.sh 95433
 tests/fm-tasks-axi.test.sh 4535
