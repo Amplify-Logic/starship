@@ -41,8 +41,11 @@
 #                  For both bootstrap points, bootstrap sets FM_ROOT_OVERRIDE to
 #                  the checkout it checks and FM_CONFIG_OVERRIDE,
 #                  FM_STATE_OVERRIDE and FM_DATA_OVERRIDE to its own resolved
-#                  directories; bootstrap also sets FM_PROJECTS_OVERRIDE and
-#                  FM_BOOTSTRAP_NETWORK (skip, only or all) for its phase.
+#                  directories, and, when FM_ADDON_HOOK_TIMEOUT is unset, its
+#                  own larger per-hook bound for each point (bin/fm-bootstrap.sh
+#                  owns it). For bootstrap hooks only, it also sets
+#                  FM_PROJECTS_OVERRIDE and FM_BOOTSTRAP_NETWORK (skip, only or
+#                  all) for its phase.
 #   session-start  executables run where the session-start digest prints the
 #                  operating instructions, on the full and the re-emit path;
 #                  their output is printed under ADD-ON INSTRUCTIONS.
