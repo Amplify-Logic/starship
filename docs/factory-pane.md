@@ -120,7 +120,7 @@ Under its factory in RIGHT NOW, each routine kind that ran today, or has a pass 
 - A pass that is stuck, quiet with no sign of life, stopped, without a worker, or waiting on you or ready for you keeps its own row as usual.
 - SINCE YOU LAST LOOKED leaves out a routine pass that finished, landed, had its PR ready or was closed, while a failed one and a call it put to you are listed as usual.
 - A pass folded into that line is not counted as running: the count line, the factory's busy crew and whether the factory is at work leave it out, so a factory whose only running work is a folded pass counts as idle, since its last pass or outcome.
-- Such a factory reads idle on the overview too, sorted with the idle factories, while any other card it would show, such as a stuck pass, still shows under its head with its routine line; only with nothing running at all is it one idle row.
+- Such a factory reads idle on the overview too, sorted with the idle factories, while any other card it would show, such as a stuck pass, still shows under its head with its routine line; only with nothing running at all does it drop those cards, keeping its idle row and its routine lines.
 - A factory's own tab still lists every routine pass with the rest of its work.
 
 ## A factory's own tab
