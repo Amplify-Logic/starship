@@ -39,9 +39,11 @@
 # value, or a gh api field value) is read as a command only where it holds a
 # `$(...)` or backtick substitution. The body of a quoted heredoc that a plain
 # `cat` writes to a file is left out when finding gh calls and their
-# repositories unless the command runs that file: as a command of its own,
-# the script of a shell, source, an interpreter or a wrapper, or a
-# `$(cat FILE)` given to -c or eval.
+# repositories when the command only reads that file: as a --body-file, -F
+# or --input value, an @file field value, a `$(cat FILE)` or `$(<FILE)` given
+# as a text flag's or field's value, a `cat FILE` piped into a gh call reading
+# `--body-file -` or `--input -`, or an argument of rm, test, [, wc or ls.
+# Any other mention may run it, so the body is read as commands.
 # A command whose words still cannot be parsed is judged on its whole text.
 # Every other command passes untouched, whatever files it names, and so does
 # every other tool. The text checked is the whole
@@ -148,7 +150,6 @@ TEXT_VERBS = ("create", "new", "edit", "comment", "review", "close", "reopen", "
 TEXT_FLAGS = {"pr": ("--body", "-b", "--title", "-t", "--comment", "-c"),
               "issue": ("--body", "-b", "--title", "-t", "--comment", "-c"),
               "api": ("-f", "-F", "--field", "--raw-field")}
-RUNNERS = r"(?:sudo|exec|command|env|nohup|time|timeout[ \t]+\S+|source|\.|eval|xargs|\S*/?(?:ba|z|da|k)?sh|\S*/?python[\d.]*|\S*/?(?:node|perl|ruby))"
 
 
 class UnparsedCommand(Exception):
@@ -400,14 +401,22 @@ def without_target_names(command, words):
     return "".join(out)
 
 
-def runs(name, text):
-    """Whether the text runs the file name: as the first word of a command, the script of a shell, source, .,
-    an interpreter or a wrapper, a < redirect into one, or a $(cat FILE) or $(<FILE) given to -c or eval."""
-    path = r"['\"]?(?:[^\s;&|<>()`'\"=@]*/)?" + re.escape(os.path.basename(name)) + r"['\"]?(?=[\s;&|)`]|$)"
-    first = (r"(?:^|[\n;&|(`]|\$\()[ \t]*(?:" + RUNNERS + r"[ \t]+(?:(?:-\S*|[A-Za-z_]\w*=\S*)[ \t]+)*)*<?[ \t]*"
-             + path)
-    fed = r"(?:-c|eval)[ \t]+['\"]?(?:\$\(|`)[ \t]*(?:cat[ \t]+(?:-\S*[ \t]+)*|<[ \t]*)" + path
-    return bool(re.search(first, text) or re.search(fed, text))
+def only_read(name, text):
+    """Whether every mention of the file name in the text only reads it: a --body-file, -F or --input value, an
+    @file field value, a $(cat FILE) or $(<FILE) given as a text flag's or field's value, a cat FILE piped into
+    a gh call reading --body-file - or --input -, or an argument of rm, test, [, wc or ls."""
+    base = re.escape(os.path.basename(name))
+    path = r"['\"]?(?:[^\s;&|<>()`'\"=@]*/)?" + base + r"['\"]?(?=[\s;&|)`'\"]|$)"
+    start = r"(?:^|(?<=[\n;&|(]))[ \t]*"
+    for form in (r"(?<=\s)(?:--body-file|--input|-F)(?:=|[ \t]+)" + path,
+                 r"=@" + path,
+                 r"(?:(?<=\s)(?:--body|--title|--subject|-b|-t)(?:=|[ \t]+)|(?<=\s)(?:-f|-F|--field|--raw-field)[ \t]+\w+=)"
+                 r"['\"]?\$\((?:cat[ \t]+|<[ \t]*)" + path + r"[ \t]*\)",
+                 start + r"cat[ \t]+" + path + r"[ \t]*\|[ \t]*(?:\S*/)?gh(?:-axi)?[ \t][^\n;&|`()]*?"
+                 r"(?:--body-file|--input|-F)(?:=|[ \t]+)-(?=[\s;&|)]|$)",
+                 start + r"(?:rm|test|\[|wc|ls)(?:[ \t]+[^\s;&|<>()`$]+)*?[ \t]+" + path):
+        text = re.sub(form, " ", text)
+    return not re.search(r"(?<![\w.-])" + base + r"(?![\w.-])", text)
 
 
 def script(command):
@@ -429,7 +438,7 @@ def script(command):
                 break
             body.append("\n" + " " * len(line))
             i = end
-        if not name or runs(name, command[:m.start()] + command[i:]):
+        if not name or not only_read(name, command[:m.start()] + command[i:]):
             continue
         out += [command[pos:m.end()]] + body
         pos = i

@@ -593,6 +593,17 @@ Ran gh issue comment 3 again, it's merged, thanks Robin
 EOF
 gh issue comment 3 -R o/robin-notes --body-file reply.md; rm -f reply.md" \
     "a reply file removed after it is sent to a private repository must pass"
+  # shellcheck disable=SC2016 # The substitution runs inside the checked command, not here.
+  expect_allow "$HOME_WORDS" "cat > reply.md <<'EOF'
+Ran gh issue comment 3 again, it's merged, thanks Robin
+EOF
+test -s reply.md && gh issue comment 3 -R o/robin-notes --body \"\$(<reply.md)\"" \
+    "a reply file read through \$(<FILE) into a private repository's comment must pass"
+  expect_allow "$HOME_WORDS" "cat > reply.md <<'EOF'
+Ran gh issue comment 3 again, it's merged, thanks Robin
+EOF
+cat reply.md | gh issue comment 3 -R o/robin-notes --body-file -" \
+    "a reply file piped into a private repository's comment must pass"
   expect_refuse "$HOME_WORDS" "cat > reply.md <<'EOF'
 Thanks Robin, it's merged
 EOF
@@ -600,7 +611,8 @@ gh pr comment 7 -R o/public --body-file reply.md" \
     "a reply written by cat to a file and sent to a public repository must be refused"
   # shellcheck disable=SC2016 # The substitution runs inside the checked command, not here.
   for run in 'bash post.sh' 'sh < post.sh' 'source post.sh' '. ./post.sh' 'chmod +x post.sh && ./post.sh' \
-    'python3 post.sh' 'bash -c "$(cat post.sh)"'; do
+    'python3 post.sh' 'bash -c "$(cat post.sh)"' 'cat post.sh | bash' 'bash <(cat post.sh)' '{ ./post.sh; }' \
+    'if ./post.sh; then :; fi' 'for i in 1; do ./post.sh; done' 'nice ./post.sh' 'sudo -u me ./post.sh'; do
     expect_refuse "$HOME_WORDS" "cat > post.sh <<'EOF'
 gh pr comment 7 --repo o/public --body \"thanks Robin\"
 EOF
