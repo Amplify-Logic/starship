@@ -42,7 +42,8 @@
 # repositories when the command only reads that file: as a --body-file, -F
 # or --input value, an @file field value, a `$(cat FILE)` or `$(<FILE)` given
 # as a text flag's or field's value, a `cat FILE` piped into a gh call reading
-# `--body-file -` or `--input -`, or an argument of rm, test, [, wc or ls.
+# `--body-file -` or `--input -`, or an argument of rm, test, [, wc or ls
+# whose output is not piped onward.
 # Any other mention may run it, so the body is read as commands.
 # A command whose words still cannot be parsed is judged on its whole text.
 # Every other command passes untouched, whatever files it names, and so does
@@ -404,7 +405,7 @@ def without_target_names(command, words):
 def only_read(name, text):
     """Whether every mention of the file name in the text only reads it: a --body-file, -F or --input value, an
     @file field value, a $(cat FILE) or $(<FILE) given as a text flag's or field's value, a cat FILE piped into
-    a gh call reading --body-file - or --input -, or an argument of rm, test, [, wc or ls."""
+    a gh call reading --body-file - or --input -, or an argument of rm, test, [, wc or ls not piped onward."""
     base = re.escape(os.path.basename(name))
     path = r"['\"]?(?:[^\s;&|<>()`'\"=@]*/)?" + base + r"['\"]?(?=[\s;&|)`'\"]|$)"
     start = r"(?:^|(?<=[\n;&|(]))[ \t]*"
@@ -414,7 +415,7 @@ def only_read(name, text):
                  r"['\"]?\$\((?:cat[ \t]+|<[ \t]*)" + path + r"[ \t]*\)",
                  start + r"cat[ \t]+" + path + r"[ \t]*\|[ \t]*(?:\S*/)?gh(?:-axi)?[ \t][^\n;&|`()]*?"
                  r"(?:--body-file|--input|-F)(?:=|[ \t]+)-(?=[\s;&|)]|$)",
-                 start + r"(?:rm|test|\[|wc|ls)(?:[ \t]+[^\s;&|<>()`$]+)*?[ \t]+" + path):
+                 start + r"(?:rm|test|\[|wc|ls)(?:[ \t]+[^\s;&|<>()`$]+)*?[ \t]+" + path + r"(?![^\n;&|]*\|(?!\|))"):
         text = re.sub(form, " ", text)
     return not re.search(r"(?<![\w.-])" + base + r"(?![\w.-])", text)
 
