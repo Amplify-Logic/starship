@@ -133,7 +133,7 @@ Each effective `FM_HOME` contains private operational directories.
 - The localhost web page's token, pid, port and request log under `state/web/` (`bin/fm-web.sh`; [web.md](web.md)).
 - The call recorder's process records, logs, short-lived audio chunks and decision logs under `state/calls/` (`bin/fm-call-lib.sh`; [call-companion.md](call-companion.md)).
 - The meeting intake's check records under `state/meetings/` (`bin/fm-meetings.sh`; [meetings.md](meetings.md)).
-- The Factory pane's cached record, pane activity, last look, who-steers log and opened tabs under `state/factory/` (`bin/fm-factory.py`; [factory-pane.md](factory-pane.md)).
+- The Factory pane's cached record, pane activity, last look, who-steers log, opened tabs, and a spoken note while it is being written down under `state/factory/` (`bin/fm-factory.py`; [factory-pane.md](factory-pane.md)).
 
 `config/` holds local gitignored operating choices, including explicit extension bindings under `config/extensions.d/`.
 
