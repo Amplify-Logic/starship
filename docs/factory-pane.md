@@ -130,12 +130,12 @@ The keys line at the bottom turns into the same instruction in the highlight col
 ```
 
 While a confirmation is open only `enter` and `esc` do anything; any other key is answered with which key to press, so an answer is never dropped by a stray key.
-What happened is then said on the line under the queue line: `✓ SENT to Starship: ...` in green, `Not sent: answer 2 was cancelled.`, or `✗ NOT SENT: ...` in red with the reason, which stays until the next key.
+What happened is then said on the line under the queue line: `✓ SENT to Starship: ...` in green, `Not sent: answer 2 was cancelled.`, or `✗ NOT SENT: ...` in red with the reason, which stays until the next key or for a minute.
 
 `t` opens the same box as a talk box.
 Where this machine has a microphone recorder and the home has the desk voice's speech key (see the [desk floater](desk-floater.md#enablement)), it listens at once: its corner reads `● listening`, your words appear in the box while you speak, and the note is sent when you stop speaking for two seconds or press `enter`.
 The words shown while you speak come from the newest eight seconds of sound, written down at most every two seconds by the same command that writes the note down, so they arrive in small bursts and an ellipsis leads them once the note is longer than that.
-What is sent is one writing down of the whole note when you finish, so a note costs the speech service about its own length plus those short pieces, and a writing that failed is tried again only after a growing wait.
+What is sent is one writing down of the whole note when you finish, so a note costs the speech service about its own length plus those short pieces, and a short piece that failed is tried again only after a growing wait.
 From your first words on the microphone's sound goes to that speech service, as the desk voice's does.
 The first key you type drops the recording and turns the box into a typed field; `esc` cancels and sends nothing, and a dropped recording is not written down afterwards and leaves no file.
 A recording with no speech in it is not sent, a microphone that gives no sound at all is named as such, and one whose words could not be written down is saved with the desk voice's [unsent recordings](desk-floater.md#recordings-are-never-lost); in each case the box stays open as a typed field.
