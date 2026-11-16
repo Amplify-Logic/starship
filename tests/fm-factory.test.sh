@@ -2791,7 +2791,7 @@ test_routine_runs_fold_into_one_line_and_stay_out_of_the_feed() {
   pass "factory pane: routine runs fold into one line, and only a failed one reaches the feed"
 }
 
-test_a_factory_with_only_a_folded_pass_reads_idle_since_its_last_pass() {
+test_a_folded_pass_counts_as_idle_and_hides_no_other_card() {
   reset_case
   write_registry
   mark_routine recipe-box "Reminder pass"
@@ -2806,9 +2806,11 @@ test_a_factory_with_only_a_folded_pass_reads_idle_since_its_last_pass() {
   assert_equals "$(q .count_line)" "3 jobs running · 3 need you · 1 idle" "the folded pass is not a running job"
   local out
   out=$(python3 "$FACTORY" --plain --width 92) || fail "--plain failed"
-  assert_contains "$out" "Recipe Box   idle since 07:50" "the idle head names the last pass"
-  has_line "$out" " ↻ Reminder pass 4 runs today · last started 07:50 running" "the routine line under an idle factory"
-  pass "factory pane: a factory with only a folded pass reads idle since its last pass"
+  assert_not_contains "$out" "idle since 07:50" "a factory with a pass running is not drawn as one idle row"
+  has_line "$out" " ● Reminder pass 0715 stuck" "the stuck pass keeps its row while the next one runs folded"
+  has_line "$out" " ↻ Reminder pass 4 runs today · last started 07:50 running" "the routine line"
+  assert_not_contains "$out" "Reminder pass 0750" "the running pass folds into the routine line"
+  pass "factory pane: a folded pass counts as idle and hides no other card"
 }
 
 test_a_routine_line_is_yes_no_or_title_kinds() {
@@ -2860,7 +2862,7 @@ fm_test_run \
   test_only_the_highlighted_call_opens_as_a_card \
   test_closed_work_reads_closed_and_only_delivered_work_reads_finished \
   test_routine_runs_fold_into_one_line_and_stay_out_of_the_feed \
-  test_a_factory_with_only_a_folded_pass_reads_idle_since_its_last_pass \
+  test_a_folded_pass_counts_as_idle_and_hides_no_other_card \
   test_a_routine_line_is_yes_no_or_title_kinds \
   test_without_a_routine_mark_every_run_shows_as_before \
   test_a_job_with_no_sign_of_life_reads_quiet \
