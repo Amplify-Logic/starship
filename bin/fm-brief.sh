@@ -175,7 +175,8 @@
 # the home additions included, wins on any conflict and a line forbidding
 # copying the text into PR text, commit messages or the no-mistakes intent. A list item can never be a heading or a "Delivery contract:" line, so
 # the profile cannot shadow the machine-read sections. Rules whose list, one
-# "- " line per item, is over FACTORY_PROFILE_CAP characters are left out
+# "- " line per item, is over the cap fm-factory.py profile reports (the
+# size the Factory pane shows against it) are left out
 # whole, never truncated, with a warning naming the factory; no registry, no
 # claiming factory or no rules leaves the brief byte-for-byte unchanged.
 # Charters never take it.
@@ -476,7 +477,6 @@ fi
 # The optional factory profile is read before anything is written too. Only a
 # present data/factories.md runs the lookup, so a home without one never needs
 # python3 and gets exactly the brief it always did.
-FACTORY_PROFILE_CAP=1500
 FACTORY_PROFILE_NAME=
 FACTORY_PROFILE_BODY=
 if [ "$KIND" != secondmate ] && [ -f "$DATA/factories.md" ]; then
@@ -488,15 +488,21 @@ if [ "$KIND" != secondmate ] && [ -f "$DATA/factories.md" ]; then
     profile_out=
   fi
   if [ -n "$profile_out" ]; then
-    profile_name=${profile_out%%$'\n'*}
+    # The first line carries the size and cap fm-factory.py measures, the
+    # same numbers the Factory pane shows, then the factory's name.
+    read -r profile_size profile_cap profile_name <<< "${profile_out%%$'\n'*}"
     profile_body=$(printf '%s\n' "$profile_out" | sed '1d; s/^/- /')
-    profile_size=$(printf '%s\n' "$profile_body" | python3 -c 'import sys; print(len(sys.stdin.buffer.read().decode("utf-8", "replace")))')
-    if [ "$profile_size" -gt "$FACTORY_PROFILE_CAP" ]; then
-      echo "warning: factory '$profile_name' profile is $profile_size characters, over the $FACTORY_PROFILE_CAP-character cap, so the whole profile was left out of this brief" >&2
-    else
-      FACTORY_PROFILE_NAME=$profile_name
-      FACTORY_PROFILE_BODY=$profile_body
-    fi
+    case "$profile_size$profile_cap" in
+      ''|*[!0-9]*)
+        echo "warning: could not read the factory profile's size from bin/fm-factory.py, so none was added" >&2 ;;
+      *)
+        if [ "$profile_size" -gt "$profile_cap" ]; then
+          echo "warning: factory '$profile_name' profile is $profile_size characters, over the $profile_cap-character cap, so the whole profile was left out of this brief" >&2
+        else
+          FACTORY_PROFILE_NAME=$profile_name
+          FACTORY_PROFILE_BODY=$profile_body
+        fi ;;
+    esac
   fi
 fi
 
