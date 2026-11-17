@@ -212,7 +212,7 @@ Who steers is the owner's stated choice of whether he is working with that crew 
 `--plain --factory <id>` prints one factory's page, `--plain --item <id>` puts the highlight on that item of NEEDS YOU so its card is the open one, and `--plain --height <rows>` prints only what a pane that tall shows when it opens.
 Both use the cached record while it is younger than 20 seconds, or older with no status, record or backlog file written since its last full refresh, and build a fresh one otherwise.
 Once the record is five minutes old a full refresh comes due even with no such file written, unless the machine is busy: a worker's pane activity, a job gone quiet and a change merged elsewhere are recorded in no file, so without that safety refresh the pane would go stale.
-A full refresh reads the fleet, the backlog, the inbox and the workers' panes side by side, and keeps each held question's options from the last full refresh while the owner's calls signal (below) has not moved since they were read, for at most five minutes (`FM_FACTORY_MAX_AGE`); a question held again since is always read afresh.
+A full refresh reads the fleet, the backlog and its held questions' options, the inbox and the workers' panes side by side, and keeps each held question's options from the last full refresh while the owner's calls signal (below) has not moved since they were read, for at most five minutes (`FM_FACTORY_MAX_AGE`); a question held again since is always read afresh.
 The owner's calls do not wait for that: when their change signal (`bin/fm-owner-calls-signal-lib.sh`) has moved past the one the record was built under, the record is rebuilt with a fresh read of the backlog and the inbox on the workers as the last full refresh read them, which takes a second or two rather than a full refresh.
 The live pane checks that signal once a second, so an answered, parked, released, closed or added decision, or a note to Starship, changes NEEDS YOU within about two seconds.
 All panes and live copies of one home share one rebuild at a time, full or of the owner's calls only.
@@ -245,7 +245,7 @@ A job nobody has started also says where it stands in the queue: its `queue` is 
 
 | Part | Source |
 | --- | --- |
-| Jobs, finished work, the work list | `bin/fm-fleet-snapshot.sh --json`, the canonical fleet reading, plus each captain hold the tasks-axi adapter reads that the snapshot's markdown backlog lacks |
+| Jobs, finished work, the work list | `bin/fm-fleet-snapshot.sh --light`, the canonical fleet reading without the parts the pane does not show, plus each captain hold the tasks-axi adapter reads that the snapshot's markdown backlog lacks |
 | What is held, and what still waits on other work | The backlog as the home's tasks-axi adapter reads it, for every open work item it has: a markdown backlog file cannot tell a blocker that was finished and archived from one still open |
 | The queue | Every open work item with no worker, counted in that same pass by what will start it |
 | Whether closed work was finished or only closed | `landed_delivery` in `bin/fm-landed-lib.sh`, the reading Recently Landed is selected with |

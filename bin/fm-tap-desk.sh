@@ -159,9 +159,9 @@ engine() {  # <command> [args...]
   node "$ENGINE" "$command" --home "$FM_HOME" --root "$FM_ROOT" --data "$DATA" --state "$STATE" "$@"
 }
 
-# The engine reads every held decision with its own bin/fm-captain-hold.sh
-# open, and each of those would probe tasks-axi compatibility again; probe once
-# here and hand the verdict over (fm-tasks-axi-lib.sh COMPATIBILITY VERDICT REUSE).
+# The engine reads the held decisions' identities with one bin/fm-captain-hold.sh
+# open-each, which would probe tasks-axi compatibility again; probe once here and
+# hand the verdict over (fm-tasks-axi-lib.sh COMPATIBILITY VERDICT REUSE).
 engine_with_verdict() {  # <command> [args...]
   # shellcheck source=bin/fm-tasks-axi-lib.sh
   # shellcheck disable=SC1091

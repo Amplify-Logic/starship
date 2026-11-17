@@ -255,6 +255,26 @@ test_fixture_snapshot_json() {
   pass "fixture snapshot covers task rows, backlog rows, pointers, stable ordering, and emission-time event age"
 }
 
+# --light is --json with only the fields a reader such as the Factory pane uses:
+# the same schema, generated, home, roots, backlog and tasks, and nothing else.
+test_light_snapshot_is_json_without_the_other_sections() {
+  local home fakebin full light
+  home=$(make_home light)
+  write_fixture "$home"
+  fakebin=$(make_fakebin "$home")
+  full=$(PATH="$fakebin:$PATH" FM_HOME="$home" FM_SNAPSHOT_NOW=2026-07-09T00:00:00Z \
+    FM_SNAPSHOT_NOW_EPOCH=1783555200 "$SNAPSHOT" --json) || fail "--json failed"
+  light=$(PATH="$fakebin:$PATH" FM_HOME="$home" FM_SNAPSHOT_NOW=2026-07-09T00:00:00Z \
+    FM_SNAPSHOT_NOW_EPOCH=1783555200 "$SNAPSHOT" --light) || fail "--light failed"
+  printf '%s' "$light" | jq -e 'keys == ["backlog","fm_home","generated","roots","schema","tasks"]' >/dev/null \
+    || fail "--light printed other fields: $(printf '%s' "$light" | jq -c keys)"
+  [ "$(printf '%s' "$full" | jq -S '{schema, generated, fm_home, roots, backlog, tasks}')" \
+    = "$(printf '%s' "$light" | jq -S .)" ] || fail "--light differs from --json in the fields it keeps"
+  printf '%s' "$light" | jq -e '(.tasks | length) == 4 and (.backlog.records | length) > 0' >/dev/null \
+    || fail "--light lost the fixture's tasks or backlog"
+  pass "--light is --json without the sections the pane does not read"
+}
+
 # R1 owner contract: main_inventory discloses orphan in-flight and unstructured
 # current rows without inventing task rows.
 test_hold_buckets_are_total_and_text_blind() {
@@ -1160,6 +1180,7 @@ EOF
 fm_test_run \
   test_empty_fleet_json \
   test_fixture_snapshot_json \
+  test_light_snapshot_is_json_without_the_other_sections \
   test_home_summary_excludes_secondmate_from_child_inventory \
   test_undated_captain_hold_phrasing_and_aging \
   test_hold_buckets_are_total_and_text_blind \

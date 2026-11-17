@@ -168,6 +168,23 @@ function identitySync(ctx, id) {
   return identityResult(runSync(ctx, captainHold(ctx), ["open", id, "--identity", "--distinguish-absent"]));
 }
 
+// Every named call's identity from one `open-each`, keyed by id; a failed
+// listing leaves each id that read's own error.
+async function identitiesOf(ctx, ids) {
+  const opened = new Map();
+  if (ids.length === 0) return opened;
+  const result = await runAsync(ctx, captainHold(ctx), ["open-each", ...ids]);
+  for (const line of result.status === 0 ? result.stdout.split("\n") : []) {
+    const [id, status, text = ""] = line.split("\t");
+    if (!id || !/^\d+$/.test(status || "")) continue;
+    const code = Number(status);
+    opened.set(id, identityResult({ status: code, stdout: code === 0 ? text : "", stderr: code === 0 ? "" : text }));
+  }
+  const failed = { error: lastLine(result.stderr) || `exit ${result.status}` };
+  for (const id of ids) if (!opened.has(id)) opened.set(id, failed);
+  return opened;
+}
+
 function heldSince(identity, created) {
   const stamp = String(identity || "").split("#")[0];
   const value = stamp || created || "";
@@ -363,13 +380,15 @@ function ownerCalls(ctx) {
 // the page cards; shapes passes the ids it was asked for.
 async function loadDecisions(ctx, ids) {
   const notShown = [];
-  const rows = await pool(ids, 8, async (id) => {
-    const [shown, opened] = await Promise.all([
-      runAsync(ctx, tasksAxi(ctx), ["show", id, "--full"]),
-      runAsync(ctx, captainHold(ctx), ["open", id, "--identity", "--distinguish-absent"]),
-    ]);
+  // One captain-hold process reads every identity, beside the task reads.
+  const [opens, shows] = await Promise.all([
+    identitiesOf(ctx, ids),
+    pool(ids, 8, (id) => runAsync(ctx, tasksAxi(ctx), ["show", id, "--full"])),
+  ]);
+  const rows = ids.map((id, index) => {
+    const shown = shows[index];
     const task = shown.status === 0 ? readShow(shown.stdout) : null;
-    const open = identityResult(opened);
+    const open = opens.get(id);
     if (!task) return { id, error: "could not be read" };
     if (task.hold_kind !== "captain") return null;
     if (open.error) return { id, error: `could not tell whether it is still waiting: ${open.error}` };

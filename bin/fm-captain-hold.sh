@@ -38,6 +38,7 @@
 #   fm-captain-hold.sh complete <origin-id> (--none | <task-id>...)
 #   fm-captain-hold.sh verify <origin-id>
 #   fm-captain-hold.sh open <task-id> [--identity] [--distinguish-absent]
+#   fm-captain-hold.sh open-each <task-id>...
 #   fm-captain-hold.sh diverged
 #   fm-captain-hold.sh reconcile list
 #   fm-captain-hold.sh reconcile close <task-id> --evidence-file <path>
@@ -217,6 +218,12 @@
 # lifecycle without necessarily touching the task's status log, so a consumer
 # that bounds repeated work per call cannot use the task id alone, and
 # `answer --expect-identity` compares against the same value.
+# `open-each` asks `open --identity --distinguish-absent` of every named task
+# in one process, side by side (at most 8 at a time), so a reader of many held calls pays for one start and one
+# compatibility probe. It prints one `<task-id>\t<exit>\t<text>` line per id
+# in argument order, where exit is that task's `open` exit and text is its
+# identity on 0 and otherwise the last line that read wrote to stderr (empty
+# when none); it exits 0 once every line is printed.
 # bin/fm-teardown.sh asks it before its automatic
 # backlog close and, on 0, returns the row to Queued with its deliverable
 # recorded instead (bin/fm-backlog-transition-lib.sh owns that transition), so
@@ -2472,6 +2479,7 @@ EOF
 # as permission to close.
 command_open() {  # <task-id> [--identity] [--distinguish-absent]
   local id='' identity=0 distinguish_absent=0 data state root file backend show shown_body
+  local -a full
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --identity) identity=1 ;;
@@ -2510,15 +2518,15 @@ command_open() {  # <task-id> [--identity] [--distinguish-absent]
     fi
   fi
   fm_tasks_axi_compatible || { printf 'fm-captain-hold: compatible tasks-axi is required\n' >&2; exit 2; }
-  if fm_backlog_row_probe "$data" "$id"; then
+  # With --identity the one read is the full record, so the body the identity
+  # needs comes from the same read.
+  full=()
+  [ "$identity" -eq 0 ] || full=(--full)
+  if fm_backlog_row_probe "$data" "$id" ${full[@]+"${full[@]}"}; then
     state=${FM_BACKLOG_ROW_STATE%% *}
     if [ "$state" != "done" ] && [ "$FM_BACKLOG_ROW_HOLD_KIND" = captain ]; then
       if [ "$identity" -eq 1 ]; then
-        task_show "$id" || {
-          printf 'fm-captain-hold: captain call %s is open but its record could not be read\n' "$id" >&2
-          exit 2
-        }
-        show=$TASK_SHOW_OUTPUT
+        show=$FM_BACKLOG_ROW_SHOWN
         shown_body=$(show_field "$show" body)
         captain_call_identity "$shown_body"
       fi
@@ -2532,6 +2540,48 @@ command_open() {  # <task-id> [--identity] [--distinguish-absent]
   fi
   printf 'fm-captain-hold: %s\n' "$FM_BACKLOG_ROW_ERROR" >&2
   exit 2
+}
+
+# One `open --identity --distinguish-absent` per task, read side by side in this
+# one process (the header's `open-each`).
+command_open_each() {  # <task-id>...
+  local id dir index=0 shown=0 active=0 rc text
+  [ "$#" -gt 0 ] || { usage >&2; exit 2; }
+  for id in "$@"; do
+    case "$id" in
+      ''|-*|*[!A-Za-z0-9._-]*)
+        printf 'fm-captain-hold: task id must be a non-empty privacy-safe slug: %s\n' "$id" >&2
+        exit 2
+        ;;
+    esac
+  done
+  # Probe once here, so every read below reuses the memoised verdict.
+  fm_tasks_axi_compatible || true
+  dir=$(umask 077; mktemp -d "${TMPDIR:-/tmp}/fm-captain-hold-open.XXXXXX") \
+    || fail "could not make a scratch directory"
+  for id in "$@"; do
+    { rc=0
+      ( command_open "$id" --identity --distinguish-absent ) >"$dir/$index.out" 2>"$dir/$index.err" || rc=$?
+      printf '%s\n' "$rc" >"$dir/$index.rc"; } &
+    index=$((index + 1))
+    active=$((active + 1))
+    if [ "$active" -ge 8 ]; then
+      wait
+      active=0
+    fi
+  done
+  wait
+  for id in "$@"; do
+    rc=$(cat "$dir/$shown.rc" 2>/dev/null) || rc=''
+    case "$rc" in
+      0) text=$(sed -n '1p' "$dir/$shown.out") ;;
+      ''|*[!0-9]*) rc=2; text='fm-captain-hold: the read did not finish' ;;
+      *) text=$(sed -n '$p' "$dir/$shown.err") ;;
+    esac
+    printf '%s\t%s\t%s\n' "$id" "$rc" "$(printf '%s' "$text" | tr '\t\n' '  ')"
+    shown=$((shown + 1))
+  done
+  rm -rf -- "$dir"
 }
 
 case "${1:-}" in
@@ -2549,6 +2599,7 @@ case "${1:-}" in
   complete) shift; command_complete "$@" ;;
   verify) shift; command_verify "$@" ;;
   open) shift; command_open "$@" ;;
+  open-each) shift; command_open_each "$@" ;;
   diverged) shift; command_diverged "$@" ;;
   reconcile) shift; command_reconcile "$@" ;;
   pr-policy) shift; command_pr_policy "$@" ;;

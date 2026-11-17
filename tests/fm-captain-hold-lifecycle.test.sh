@@ -4334,6 +4334,52 @@ test_retained_body_keeps_its_utf8_bytes() {
   pass "cleanup preserves every byte of a retained body's non-ASCII characters"
 }
 
+# open-each gives, for every task in one call, exactly what one
+# `open --identity --distinguish-absent` per task gives: its exit and its
+# identity on an open call.
+test_open_each_matches_open_for_every_task() {
+  local home id rc out expected actual ids n
+  home=$(make_home open-each)
+  tasks_in "$home" add each-held "Pick the first card" --kind ship --repo sample >/dev/null \
+    || fail "could not create the held work item"
+  tasks_in "$home" add each-plain "Ordinary work" --kind ship --repo sample >/dev/null \
+    || fail "could not create the unheld work item"
+  tasks_in "$home" add each-answered "Pick the second card" --kind ship --repo sample >/dev/null \
+    || fail "could not create the answered work item"
+  FM_CAPTAIN_HOLD_NOW=2026-06-01T12:00:00Z run_captain "$home" hold each-held \
+    --reason "captain go needed" >/dev/null || fail "could not hold the first card"
+  FM_CAPTAIN_HOLD_NOW=2026-06-02T12:00:00Z run_captain "$home" hold each-answered \
+    --reason "captain pick needed" >/dev/null || fail "could not hold the second card"
+  printf 'Go.\n' > "$home/go.txt"
+  run_captain "$home" answer each-answered --decision-file "$home/go.txt" --release >/dev/null \
+    || fail "could not answer the second card"
+  FM_CAPTAIN_HOLD_NOW=2026-06-03T12:00:00Z run_captain "$home" hold each-answered \
+    --reason "captain pick needed again" >/dev/null || fail "could not hold the second card again"
+
+  # More ids than are read at once, so the answers cross a batch boundary.
+  ids="each-held each-plain each-answered each-absent"
+  for n in 1 2 3 4 5 6 7; do ids="$ids each-absent-$n"; done
+  expected=''
+  for id in $ids; do
+    rc=0
+    out=$(run_captain "$home" open "$id" --identity --distinguish-absent 2>/dev/null) || rc=$?
+    expected="$expected$id	$rc	$out"$'\n'
+  done
+  # shellcheck disable=SC2086  # Each id is its own argument.
+  actual=$(run_captain "$home" open-each $ids) || fail "open-each failed"
+  [ "$actual"$'\n' = "$expected" ] || fail "open-each disagreed with open: got [$actual] want [$expected]"
+  assert_contains "$actual" "each-held	0	2026-06-01T12:00:00Z#0" "the held card's identity was wrong"
+  assert_contains "$actual" "each-answered	0	2026-06-03T12:00:00Z#1" "the re-held card's identity was wrong"
+  assert_contains "$actual" "each-absent-7	3	" "a task after the first batch was not reported absent"
+
+  rc=0
+  run_captain "$home" open-each each-held 'bad id' > "$home/bad.out" 2> "$home/bad.err" || rc=$?
+  [ "$rc" = 2 ] || fail "open-each accepted an id that is not a slug (rc=$rc)"
+  [ ! -s "$home/bad.out" ] || fail "open-each printed lines before refusing a bad id"
+
+  pass "open-each reports every task exactly as open does"
+}
+
 # --expect-identity turns an answer into a compare-and-answer against the
 # exact call the captain was shown: a stale identity records nothing, even when
 # the task was re-held with the very same words, and without the option the
@@ -5398,3 +5444,4 @@ test_captain_hold_mutations_address_the_beads_backend
 test_hold_creates_a_captain_row_when_beads_requires_due_without_custom_type
 test_archived_answered_hold_still_satisfies_the_gate
 test_archived_answer_in_a_user_configured_archive_satisfies_the_gate
+test_open_each_matches_open_for_every_task
