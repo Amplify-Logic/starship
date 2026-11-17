@@ -43,8 +43,9 @@
 #
 # SEND. One send per mate at a time (a per-mate lock, waited for up to
 # FM_DIRECT_LINE_LOCK_WAIT seconds, default 60). When the lock stays busy, a
-# send whose id is already recorded prints that record and exits 4, and one
-# whose id is not prints state busy and exits 2: nothing was recorded or typed
+# send whose id is already recorded prints that record with its own exit code
+# (below; 4 while it is still sending), and one whose id is not prints state
+# busy and exits 2: nothing was recorded or typed
 # for it, so send it again with the same id. The text is at most 8000
 # characters; --answers needs words and --hold-identity, the identity the
 # owner was shown (bin/fm-captain-hold.sh open <task> --identity).
@@ -90,8 +91,9 @@
 # expired, for send only busy (above), and, for delivery only, interrupted
 # (the send stopped before desk-voice claimed the id; send it again with the
 # same id within the resume window). delivery adopts desk-voice's record the same way before it prints,
-# and then, under the per-mate send lock, closes the held call a delivered
-# message names, exactly as a resend of the same id would.
+# and then, when the per-mate send lock is free right away, closes the held
+# call a delivered message names, exactly as a resend of the same id would;
+# when it is busy, the poll never waits and a later poll closes it.
 # Exit: 0 delivered, 1 not delivered (failed or expired), 2 refused, 3
 # delivered but the held call is not answered, 4 the outcome is not known yet
 # (still sending, or stopped while typing): poll delivery, never resend new
@@ -349,13 +351,12 @@ send_lock_acquire() {
   trap 'fm_lock_release "$SEND_LOCK"' EXIT
 }
 
-# The send lock stayed busy: print <client-id>'s record and exit 4 when it is
-# recorded, else a busy document and exit 2.
+# The send lock stayed busy: finish <client-id>'s record when it is recorded,
+# else print a busy document and exit 2.
 send_lock_busy() {  # <client-id>
   printf "fm-direct-line: another direct-line send to '%s' is still running\n" "$MATE_ID" >&2
   if [ -f "$(record_path "$1")" ]; then
-    jq -c 'del(.digest, .text)' "$(record_path "$1")"
-    exit 4
+    finish_and_print "$1"
   fi
   jq -cn --arg schema "$DELIVERY_SCHEMA" --arg mate "$MATE_ID" --arg cid "$1" \
     '{schema:$schema, mate:$mate, client_id:$cid, state:"busy",
@@ -604,7 +605,13 @@ cmd_delivery() {
     typed|typed-unconfirmed|mailbox)
       case "$(record_field "$cid" '.hold.task'):$(record_field "$cid" '.hold.result')" in
         :*|*:answered|*:refused|*:expired) ;;
-        *) ! send_lock_acquire || answer_hold "$cid" || true ;;
+        *)
+          if fm_lock_try_acquire "$(send_lock_path)"; then
+            SEND_LOCK=$(send_lock_path)
+            trap 'fm_lock_release "$SEND_LOCK"' EXIT
+            answer_hold "$cid" || true
+          fi
+          ;;
       esac
       ;;
   esac

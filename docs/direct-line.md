@@ -53,8 +53,8 @@ It then, under a per-mate send lock:
 
 Desk-voice types only into the pane of the session that holds the mate's session lock and runs for the mate's home, under that home's pane-writer lock, and otherwise saves the message to the mate's mailbox.
 While the mailbox still holds an undrained message, later messages go to the mailbox too (`desk-voice send --mailbox`), so they arrive in the order sent.
-A caller whose request timed out polls `bin/fm-direct-line.sh delivery <mate> <client-id>` instead of sending again; both reads adopt desk-voice's own record of the id and close the held call a delivered message names, and a send that stopped before typing is resumed only within a few minutes and otherwise expires.
-A send that finds the per-mate lock still busy after `FM_DIRECT_LINE_LOCK_WAIT` seconds prints the id's record and exits 4 when the id is recorded, and otherwise prints state `busy` and exits 2, with nothing recorded or typed.
+A caller whose request timed out polls `bin/fm-direct-line.sh delivery <mate> <client-id>` instead of sending again; both reads adopt desk-voice's own record of the id and close the held call a delivered message names (a poll does so only when the send lock is free, and never waits for it), and a send that stopped before typing is resumed only within a few minutes and otherwise expires.
+A send that finds the per-mate lock still busy after `FM_DIRECT_LINE_LOCK_WAIT` seconds prints the id's record with that record's own exit code when the id is recorded (4 while it is still sending), and otherwise prints state `busy` and exits 2, with nothing recorded or typed.
 Desk-voice gets `FM_DIRECT_LINE_SEND_TIMEOUT` seconds plus a 60-second grace before it is killed, so words it is already typing get their Enter.
 A caller runs a send detached and polls it rather than killing it; desk-voice finishes the words and their Enter even when its caller is stopped.
 

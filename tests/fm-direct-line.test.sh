@@ -175,7 +175,7 @@ test_timed_out_send_still_submits_its_words() {
 }
 
 test_poll_closes_the_call_a_timed_out_answer_left_open() {
-  local pair parent mate fakebin identity out rc
+  local pair parent mate fakebin identity out rc holder lock started
   command -v tasks-axi >/dev/null 2>&1 || { echo "skip: tasks-axi not found"; return 0; }
   pair=$(typed_fixture slowhold) || { desk_send_skip direct-line-slow-hold; return 0; }
   IFS=$'\t' read -r parent mate <<<"$pair"
@@ -193,6 +193,16 @@ test_poll_closes_the_call_a_timed_out_answer_left_open() {
     --answers mix-call --hold-identity "$identity" -- "Mix B please"); rc=$?
   assert_equals 4 "$rc" "an answer whose send hit its bound is not known yet"
   assert_equals null "$(jq -r .hold.result <<<"$out")" "the timed-out send has not answered the call"
+  sleep 60 & holder=$!
+  lock="$(parent_dl_dir "$parent" music)/.send.lock"
+  mkdir -p "$lock"
+  printf '%s\n' "$holder" > "$lock/pid"
+  started=$(date +%s)
+  out=$(PATH="$fakebin:$PATH" dl "$parent" "$mate" delivery music deck-0031) || fail "delivery read failed: $out"
+  [ "$(( $(date +%s) - started ))" -lt 20 ] || fail "a poll must not wait for a busy send lock"
+  assert_equals null "$(jq -r .hold.result <<<"$out")" "a poll behind a busy send lock leaves the call for a later poll"
+  kill "$holder" 2>/dev/null; wait "$holder" 2>/dev/null
+  rm -rf "$lock"
   out=$(PATH="$fakebin:$PATH" dl "$parent" "$mate" delivery music deck-0031) || fail "delivery read failed: $out"
   assert_equals typed "$(jq -r .state <<<"$out")" "the poll adopts the typed outcome"
   assert_equals answered "$(jq -r .hold.result <<<"$out")" "the poll closes the call the delivered message answers"
@@ -205,7 +215,7 @@ test_poll_closes_the_call_a_timed_out_answer_left_open() {
 }
 
 test_busy_lock_never_reads_as_not_delivered() {
-  local mate parent out rc holder lock
+  local mate parent out rc holder lock rec
   mate=$(new_home busy-mate)
   parent=$(make_parent busy-parent music "$mate")
   seed_mate "$mate" music "$parent"
@@ -215,8 +225,17 @@ test_busy_lock_never_reads_as_not_delivered() {
   mkdir -p "$lock"
   printf '%s\n' "$holder" > "$lock/pid"
   out=$(FM_DIRECT_LINE_LOCK_WAIT=1 dl "$parent" "$mate" send music --client-id deck-0032 -- "first"); rc=$?
-  assert_equals 4 "$rc" "a retry of a recorded id behind a busy lock says poll, not not-delivered"
+  assert_equals 0 "$rc" "a retry of a delivered id behind a busy lock reports it delivered"
   assert_equals mailbox "$(jq -r .state <<<"$out")" "it prints the id's record"
+  rec="$(parent_dl_dir "$parent" music)/deliveries/deck-0032.json"
+  jq -c '.state = "sending"' "$rec" > "$rec.new" && mv "$rec.new" "$rec"
+  out=$(FM_DIRECT_LINE_LOCK_WAIT=1 dl "$parent" "$mate" send music --client-id deck-0032 -- "first"); rc=$?
+  assert_equals 4 "$rc" "a retry of an id still sending behind a busy lock says poll, not not-delivered"
+  assert_equals sending "$(jq -r .state <<<"$out")" "it prints the record still sending"
+  jq -c '.state = "failed"' "$rec" > "$rec.new" && mv "$rec.new" "$rec"
+  out=$(FM_DIRECT_LINE_LOCK_WAIT=1 dl "$parent" "$mate" send music --client-id deck-0032 -- "first"); rc=$?
+  assert_equals 1 "$rc" "a retry of a failed id behind a busy lock reports it not delivered"
+  jq -c '.state = "mailbox"' "$rec" > "$rec.new" && mv "$rec.new" "$rec"
   out=$(FM_DIRECT_LINE_LOCK_WAIT=1 dl "$parent" "$mate" send music --client-id deck-0033 -- "second"); rc=$?
   assert_equals 2 "$rc" "a new id behind a busy lock is refused"
   assert_equals busy "$(jq -r .state <<<"$out")" "the refusal is a busy document"
@@ -230,7 +249,7 @@ test_busy_lock_never_reads_as_not_delivered() {
   assert_equals 1 "$(mailbox_count "$mate")" "nothing more was delivered behind the busy lock"
   out=$(dl "$parent" "$mate" send music --client-id deck-0033 -- "second") || fail "the same id sends once the lock is free: $out"
   assert_equals 2 "$(mailbox_count "$mate")" "the retried id is delivered once"
-  pass "fm-direct-line send: a busy lock reports poll or busy, never not delivered"
+  pass "fm-direct-line send: a busy lock reports the record's own outcome, or busy for a new id"
 }
 
 test_send_refuses_without_every_assertion() {
