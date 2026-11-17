@@ -2164,7 +2164,8 @@ class View:
         self.record = record
         if self.opened and not self.has_factory(self.opened):
             self.opened = None
-        if self.unfolded != self.opened:
+        if self.unfolded and (self.unfolded != self.opened
+                              or not any(self.page_jobs(self.factory(self.unfolded))[1].values())):
             self.unfolded = None
         talk = self.talking
         if talk is not None and not (self.has_factory(talk["factory"]) and (

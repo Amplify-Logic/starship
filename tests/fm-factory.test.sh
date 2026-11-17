@@ -685,6 +685,24 @@ test_a_folded_count_line_opens_on_every_job_it_stands_for() {
   pass "factory pane: enter on a folded count line lists every job it stands for, esc hides them"
 }
 
+test_an_opened_list_closes_when_its_folded_work_is_gone() {
+  reset_case
+  write_registry
+  write_world
+  local dir="$TMP_ROOT/case$CASE" screen
+  # Sample Shop folds one job on hold and one deferred call; both leave while the list is open.
+  DRIVE_FACTORY=sample-shop drive_keys DOWN ENTER "SNAP:$dir/listed" \
+    "SH:jq '.backlog.records |= map(select(.id != \"shop-later\" and .id != \"shop-tax\"))' '$FM_FACTORY_SNAPSHOT' > '$dir/w' && mv '$dir/w' '$FM_FACTORY_SNAPSHOT' && python3 '$FACTORY' refresh" \
+    "SNAP:$dir/emptied" ESC "SNAP:$dir/back"
+  assert_contains "$(screen_of "$dir/listed" 50 100)" "esc hide the list" "the folded list did not open"
+  screen=$(screen_of "$dir/emptied" 50 100)
+  assert_not_contains "$screen" "Charge tax abroad" "the folded work did not leave the page"
+  assert_not_contains "$screen" "esc hide the list" "the keys line offers to hide a list that is gone"
+  assert_contains "$screen" "esc back" "the keys line does not say esc goes back once the list is gone"
+  assert_contains "$(screen_of "$dir/back" 50 100)" "enter open" "the first esc after the list was gone did not go back"
+  pass "factory pane: an opened folded list closes when its folded work is gone, so esc goes back"
+}
+
 # The backlog file cannot tell a blocker that was finished and archived from
 # one still open, so on the owner's backlog ten jobs read as waiting on other
 # work that waited on nothing. The backlog's own reading decides.
@@ -2963,6 +2981,7 @@ fm_test_run \
   test_the_whole_queue_is_counted_in_sight \
   test_parked_work_says_until_when_it_is_parked \
   test_a_folded_count_line_opens_on_every_job_it_stands_for \
+  test_an_opened_list_closes_when_its_folded_work_is_gone \
   test_a_blocker_that_was_finished_and_archived_holds_nothing_up \
   test_only_the_highlighted_call_opens_as_a_card \
   test_closed_work_reads_closed_and_only_delivered_work_reads_finished \
