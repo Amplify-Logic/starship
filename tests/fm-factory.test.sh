@@ -111,8 +111,12 @@ chmod +x "$BINDIR/inbox-down"
 
 # A stand-in microphone: 16 kHz mono 16-bit samples on stdout, as the pane's
 # recorder writes them. FM_FACTORY_TEST_MIC picks what it hears: `speech` (a
-# second of speech, then quiet), `hum` (a quiet room and no speech), `dead`
-# (no sound at all) or `talking` (speech that never stops). It then stays
+# second of speech, then quiet), `soft` (a quiet room, then a second of a soft
+# voice at a level 2.5 times that room's, then the room again), `hum` (seventy
+# seconds of a quiet room and no speech), `waiting` (fifty seconds of it),
+# `dead` (seventy seconds of no sound at all), `room80` and `room150` (seventy
+# seconds of a steady room at that level, of 32768) or `talking` (speech that
+# never stops). It then stays
 # running, so only the pane stopping it ends it; its pid goes to
 # FM_FACTORY_TEST_MIC_PID.
 cat > "$BINDIR/mic" <<'PY'
@@ -133,7 +137,10 @@ try:
             if owed > sent:
                 out.write(loud * (owed - sent)); out.flush(); sent = owed
             time.sleep(0.05)
-    out.write({"speech": tenth(8000) * 10 + tenth(40) * 60, "hum": tenth(40) * 200, "dead": tenth(0) * 200}[mode])
+    out.write({"speech": tenth(8000) * 10 + tenth(40) * 60, "hum": tenth(40) * 700,
+               "soft": tenth(40) * 20 + tenth(100) * 10 + tenth(40) * 60,
+               "room80": tenth(80 * math.sqrt(2)) * 700, "room150": tenth(150 * math.sqrt(2)) * 700,
+               "waiting": tenth(40) * 500, "dead": tenth(0) * 700}[mode])
     out.flush()
     time.sleep(120)
 except BrokenPipeError:
@@ -143,7 +150,8 @@ chmod +x "$BINDIR/mic"
 
 # A stand-in for the speech service, run as the pane runs bin/fm-deepgram-stt.sh:
 # it keeps a copy of the recording it was handed and prints what was said, or
-# fails when FM_FACTORY_TEST_STT_FAILS is set. FM_FACTORY_TEST_STT_LOG gets one
+# fails when FM_FACTORY_TEST_STT_FAILS is set, or prints no words when
+# FM_FACTORY_TEST_STT_EMPTY is set. FM_FACTORY_TEST_STT_LOG gets one
 # line per recording handed over, the seconds of sound in it, and
 # FM_FACTORY_TEST_STT_ANSWERED one line per recording it answered;
 # FM_FACTORY_TEST_STT_SLOW makes it take that many seconds to answer.
@@ -156,6 +164,7 @@ w = wave.open(sys.argv[1]); print("%.1f" % (w.getnframes() / w.getframerate()))'
 [ -z "${FM_FACTORY_TEST_STT_SLOW:-}" ] || sleep "$FM_FACTORY_TEST_STT_SLOW"
 [ -z "${FM_FACTORY_TEST_STT_FAILS:-}" ] || { echo "fm-deepgram-stt: the speech service did not answer" >&2; exit 1; }
 echo answered >> "$FM_FACTORY_TEST_STT_ANSWERED"
+[ -z "${FM_FACTORY_TEST_STT_EMPTY:-}" ] || exit 0
 printf 'ask the supplier   about the ribbon first\n'
 SH
 chmod +x "$BINDIR/stt"
@@ -273,7 +282,7 @@ reset_case() {
   export FM_FACTORY_TEST_MIC_PID="$TMP_ROOT/case$CASE/mic.pid" FM_FACTORY_TEST_HEARD="$TMP_ROOT/case$CASE/heard.wav"
   export FM_FACTORY_TEST_STT_LOG="$TMP_ROOT/case$CASE/stt.log" FM_FACTORY_TEST_STT_ANSWERED="$TMP_ROOT/case$CASE/stt.answered"
   export FM_FACTORY_MIC=''
-  unset FM_FACTORY_TEST_MIC FM_FACTORY_TEST_STT_FAILS FM_FACTORY_TEST_STT_SLOW FM_FACTORY_STT
+  unset FM_FACTORY_TEST_MIC FM_FACTORY_TEST_STT_FAILS FM_FACTORY_TEST_STT_SLOW FM_FACTORY_TEST_STT_EMPTY FM_FACTORY_STT
   unset FM_FACTORY_TEST_NO_TAB FM_FACTORY_TEST_TAB_GONE FM_FACTORY_TEST_UNBOUND FM_FACTORY_TEST_FOCUSED HERDR_BIN_PATH HERDR_PANE_ID HERDR_TAB_ID \
     HERDR_WORKSPACE_ID HERDR_SOCKET_PATH
 }
@@ -1994,6 +2003,14 @@ test_t_listens_first_and_sends_when_speech_stops() {
   assert_equals "$(jq -r .body "$FM_FACTORY_TEST_NOTES" | sed -n 1p)" \
     "About Harvest chart: ask the supplier about the ribbon first" "enter did not send what was said"
   mic_stopped || fail "the recorder was left running after enter"
+  # A soft voice, two and a half times as loud as the room, counts as speech:
+  # it is sent two seconds after it stops, with no key and no minute's wait.
+  : > "$FM_FACTORY_TEST_NOTES"
+  FM_FACTORY_TEST_MIC=soft drive_keys t "WAIT:2"
+  assert_equals "$(jq -r .body "$FM_FACTORY_TEST_NOTES" | sed -n 1p)" \
+    "About Harvest chart: ask the supplier about the ribbon first" "a soft voice was not taken as speech"
+  assert_equals "$(wav_seconds "$FM_FACTORY_TEST_HEARD")" "1 16000 5.0" \
+    "a soft voice did not end two seconds after it stopped"
   # Talking to a crew listens too.
   : > "$FM_FACTORY_TEST_NOTES"
   FM_FACTORY_TEST_MIC=speech drive_keys DOWN DOWN DOWN t "WAIT:2"
@@ -2071,23 +2088,58 @@ test_a_spoken_note_that_cannot_be_sent_says_so_and_falls_back_to_typing() {
   write_world
   local dir="$TMP_ROOT/case$CASE" screen kept
   export FM_FACTORY_MIC="$BINDIR/mic" FM_FACTORY_STT="$BINDIR/stt"
-  # A quiet room and no speech: nothing is sent, and the box stays open for typing.
-  FM_FACTORY_TEST_MIC=hum drive_keys t "WAIT:2" "SNAP:$dir/quiet" "typed instead" ENTER
+  # Fifty seconds without speech does not end it: it is still listening for
+  # someone getting ready or speaking quietly.
+  FM_FACTORY_TEST_MIC=waiting drive_keys t "WAIT:2" "SNAP:$dir/waiting" ESC
+  assert_contains "$(screen_of "$dir/waiting" 50 100)" "● listening 0:5" "it stopped listening before a minute without speech"
+  assert_absent "$FM_FACTORY_TEST_HEARD" "a recording still listening went to the speech service"
+  # After a minute without speech it stops listening and keeps what it
+  # recorded: nothing goes to the speech service until enter asks for it.
+  : > "$FM_FACTORY_TEST_NOTES"
+  FM_FACTORY_TEST_MIC=hum drive_keys t "WAIT:3" "SNAP:$dir/held" ESC
+  screen=$(screen_of "$dir/held" 50 100)
+  assert_contains "$screen" "recorded 1:00" "a minute without speech did not keep the recording"
+  assert_contains "$(printf '%s\n' "$screen" | tr '\n' ' ' | tr -s ' ')" \
+    "Nothing counted as speech. Press enter to write down what was recorded, or type it instead. Esc cancels." \
+    "a recording without speech does not say how to write it down"
+  assert_absent "$FM_FACTORY_TEST_HEARD" "a recording without speech went to the speech service on its own"
+  assert_equals "$(cat "$FM_FACTORY_TEST_NOTES")" "" "a recording without speech was sent on its own"
+  mic_stopped || fail "the recorder was left running after a minute without speech"
+  FM_FACTORY_TEST_MIC=hum drive_keys t "WAIT:3" ENTER "WAIT:2"
+  assert_equals "$(wav_seconds "$FM_FACTORY_TEST_HEARD")" "1 16000 60.0" "enter did not write the kept minute down"
+  assert_equals "$(jq -r .body "$FM_FACTORY_TEST_NOTES" | sed -n 1p)" \
+    "About Harvest chart: ask the supplier about the ribbon first" "the words enter wrote down were not sent"
+  # A steady room loud enough to clear the quietest speech is the room, not
+  # speech: it is held the same way, and nothing leaves the machine.
+  for room in room80 room150; do
+    : > "$FM_FACTORY_TEST_NOTES"
+    rm -f "$FM_FACTORY_TEST_HEARD"
+    FM_FACTORY_TEST_MIC=$room drive_keys t "WAIT:3" "SNAP:$dir/$room" ESC
+    assert_contains "$(screen_of "$dir/$room" 50 100)" "recorded 1:00" "a steady $room was taken as speech"
+    assert_absent "$FM_FACTORY_TEST_HEARD" "a steady $room went to the speech service"
+    assert_equals "$(cat "$FM_FACTORY_TEST_NOTES")" "" "a steady $room was sent"
+  done
+  # When that sound holds no words, nothing is sent and the box stays open for typing.
+  : > "$FM_FACTORY_TEST_NOTES"
+  FM_FACTORY_TEST_STT_EMPTY=1 FM_FACTORY_TEST_MIC=hum drive_keys t "WAIT:3" ENTER "WAIT:2" "SNAP:$dir/quiet" \
+    "typed instead" ENTER
   screen=$(screen_of "$dir/quiet" 50 100)
-  has_line "$screen" " ✗ NOT SENT: no speech was heard. Type it instead, or press esc." "silence is not said to be unsent"
+  has_line "$screen" " ✗ NOT SENT: no words were heard in what you said. Type it instead, or press esc." \
+    "a recording with no words in it is not said to be unsent"
   assert_contains "$(printf '%s\n' "$screen" | sed -E 's/(─)+/─/g')" "╭─ Tell Starship · about Harvest chart ─ typed ─╮" \
     "the box did not fall back to typing"
-  assert_absent "$FM_FACTORY_TEST_HEARD" "a recording with no speech in it went to the speech service"
   assert_equals "$(jq -r .body "$FM_FACTORY_TEST_NOTES")" \
     "$(printf 'About Harvest chart: typed instead\n\n(from the Factory pane; item garden-chart)')" \
     "the typed fallback was not sent as typed"
   mic_stopped || fail "the recorder was left running after it heard nothing"
   # A microphone this terminal may not use gives no sound at all, and says so.
   : > "$FM_FACTORY_TEST_NOTES"
-  FM_FACTORY_TEST_MIC=dead drive_keys t "WAIT:2" "SNAP:$dir/dead" ESC
+  rm -f "$FM_FACTORY_TEST_HEARD"
+  FM_FACTORY_TEST_MIC=dead drive_keys t "WAIT:3" "SNAP:$dir/dead" ESC
   assert_contains "$(screen_of "$dir/dead" 50 100 | tr '\n' ' ' | tr -s ' ')" \
     "✗ NOT SENT: the microphone gave no sound. Type it instead, or check that this terminal may use the microphone." \
     "a silent microphone is not named"
+  assert_absent "$FM_FACTORY_TEST_HEARD" "a recording with no sound in it went to the speech service"
   # Typing while it listens drops the recording and types instead.
   FM_FACTORY_TEST_MIC=talking drive_keys t "WAIT:1" "written, not spoken" ENTER
   assert_equals "$(jq -r .body "$FM_FACTORY_TEST_NOTES")" \

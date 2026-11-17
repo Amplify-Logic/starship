@@ -230,9 +230,11 @@ MIRROR_KEEP = MIRROR_STATES + ("no reading",)
 SETTLED_SOURCE = "factory-pane"
 VOICE_RATE = 16000        # the talk box's microphone: samples a second, one channel, 16 bits
 VOICE_CHUNK = 1600        # samples heard at a time: a tenth of a second
-VOICE_SPEECH = 120        # the quietest level that can be speech, of 32768
+VOICE_SPEECH = 60         # the quietest level that can be speech, of 32768
+VOICE_SETTLE = 5          # first tenths of a second that only measure the room, never speech
+VOICE_LOUDEST_ROOM = 500  # the loudest a room's own level is taken to be while it is measured
 VOICE_QUIET_STOP = 20     # tenths of a second of quiet after speech that end a recording
-VOICE_NO_SPEECH = 120     # tenths of a second without any speech before a recording gives up
+VOICE_NO_SPEECH = 600     # tenths of a second without any speech before a recording stops listening
 VOICE_MAX = 1800          # the longest recording, in tenths of a second
 VOICE_LIVE_WINDOW = 8     # seconds of the newest sound written down to show the words while speaking
 VOICE_LIVE_EVERY = 2.0    # the least seconds between two of those writings
@@ -2673,13 +2675,15 @@ class View:
             title, mode = talk["about"], talk.get("mode")
             heard = [[S(line, "ice", True)] for line in wrap(talk.get("live") or "", inner - 1)[-3:]]
             if mode == "listening":
-                corner = "● listening %d:%02d" % divmod(int(talk.get("seconds") or 0), 60) \
+                corner = "%s %d:%02d" % (("recorded" if talk.get("held") else "● listening",)
+                                         + divmod(int(talk.get("seconds") or 0), 60)) \
                     if talk.get("hearing") else "starting the microphone"
                 meter = "".join("▁▂▃▄▅▆▇█"[min(int(level * 8), 7)] for level in talk.get("levels") or [])
                 if talk.get("live"):
                     heard[-1].append(S("_", "cyan"))
                 lines = (heard if talk.get("live") else [[S("speak now", "faint")]]) + [[S(meter, "amber")]]
-                hint = "sends when you stop speaking, or on enter · esc cancels · type to write it instead"
+                hint = ("enter writes it down and sends it" if talk.get("held") else
+                        "sends when you stop speaking, or on enter") + " · esc cancels · type to write it instead"
             elif mode == "writing":
                 corner = "writing it down"
                 lines = heard if talk.get("live") else [[S("…", "amber", True)]]
@@ -3046,9 +3050,11 @@ class Voice:
     """One spoken note: the microphone heard until the speaker stops, then written down.
 
     The recorder's samples are read in a thread, a tenth of a second at a time.
-    The room's own level is the quietest recent tenth, taken as quiet until a
-    tenth says otherwise so that speech from the first moment still counts; a
-    tenth three times louder than it, and louder than VOICE_SPEECH, is speech.
+    The room's own level is the quietest recent tenth: the first VOICE_SETTLE
+    tenths only measure it, and it is taken as no louder than
+    VOICE_LOUDEST_ROOM so that speech from the first moment still counts once
+    they are over; after them a tenth twice as loud as it, and louder than
+    VOICE_SPEECH, is speech.
     The recording ends by itself once VOICE_QUIET_STOP of quiet follows speech,
     when no speech came within VOICE_NO_SPEECH, at VOICE_MAX, or when the
     recorder stops.
@@ -3074,7 +3080,7 @@ class Voice:
         self.quiet = 0                     # tenths of quiet since the last speech
         self.loudest = 0.0                 # the loudest tenth, of 32768; nothing at all means no microphone
         self.over = False
-        self.floor = VOICE_SPEECH / 3.0
+        self.floor = float(VOICE_LOUDEST_ROOM)
         self.words: Optional[str] = None   # what was said, once written down
         self.failed = ""                   # why it could not be written down
         self.proc = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
@@ -3106,9 +3112,10 @@ class Voice:
             level = math.sqrt(sum(x * x for x in tenth) / max(len(tenth), 1))
             # The floor drops to a quieter tenth at once and creeps up slowly,
             # so it follows the room and not the voice.
-            self.floor = max(min(level, self.floor * 1.01), 1.0)
+            settling = len(self.levels) < VOICE_SETTLE
+            self.floor = max(min(level, self.floor if settling else self.floor * 1.01), 1.0)
             self.loudest = max(self.loudest, level)
-            if level > max(self.floor * 3, VOICE_SPEECH):
+            if not settling and level > max(self.floor * 2, VOICE_SPEECH):
                 self.spoken += 1
                 self.quiet = 0
             else:
@@ -3454,7 +3461,7 @@ class Pane:
 
     def open_talk(self, talk: Dict[str, Any], listen: bool) -> None:
         """Open the talk box under the highlighted row; by voice first where this machine can listen."""
-        talk.update(text="", stop=self.view.at(), mode="typed", live="")
+        talk.update(text="", stop=self.view.at(), mode="typed", live="", held=False)
         self.view.talking = talk
         if not (listen and self.view.voice):
             return
@@ -3480,20 +3487,29 @@ class Pane:
         elif talk["mode"] == "listening":
             talk.update(levels=voice.levels[-8:], seconds=voice.seconds(), hearing=bool(voice.levels),
                         live=voice.live)
-            if voice.over:
+            if voice.over and not talk["held"]:
                 self.heard(by_enter=False)
         elif talk["mode"] == "writing" and (voice.words is not None or voice.failed):
             self.written()
 
     def heard(self, by_enter: bool) -> None:
-        """The recording is over: write it down, or say that nothing was heard."""
+        """The recording is over: write it down, or say that nothing was heard.
+
+        Sound that never counted as speech is not written down on its own: it
+        is held, and enter writes it down.
+        """
         voice, talk = self.voice, self.view.talking
         voice.stop()
+        silent = voice.loudest < 2
         if voice.heard or (by_enter and voice.seconds() >= 0.3):
             talk["mode"] = "writing"
             voice.write_down()
             return
-        silent = voice.loudest < 2
+        if not silent and voice.seconds() >= 0.3:
+            talk["held"] = True
+            self.say("Nothing counted as speech. Press enter to write down what was recorded, or type it instead. "
+                     "Esc cancels.", "amber", 60)
+            return
         self.close_voice()
         talk["mode"] = "typed"
         self.not_sent("the microphone gave no sound. Type it instead, or check that this terminal may use the "
