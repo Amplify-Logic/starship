@@ -717,6 +717,25 @@ outcome: passed
 EOF
 }
 
+run_handed_off() {  # <branch> <pr-url>
+  # Shape pinned from no-mistakes v1.106.1 after `axi handoff`: the ci
+  # monitor ended with checks green, the PR stays open for the merge decision.
+  cat <<EOF
+run:
+  id: "01RUN"
+  branch: $1
+  status: handed_off
+  head: "${FM_FAKE_RUN_HEAD:-abc1234}"
+  pr: "$2"
+  findings: "5 awaiting, 1 info"
+  steps[3]{step,status,findings,duration_ms}:
+    push,completed,0,6611
+    pr,completed,0,24750
+    ci,completed,5,9746974
+outcome: handed-off
+EOF
+}
+
 run_failed() {  # <branch>
   cat <<EOF
 run:
@@ -6157,6 +6176,80 @@ EOF
   pass "a coarse pending ledger word reads unknown"
 }
 
+# A run handed off after checks-passed (`no-mistakes axi handoff`) frees its
+# check slot while the PR waits for the merge decision. The selected-run route
+# must read it like checks-passed while the PR is open, so the idle crew is not
+# treated as stalled, and follow the PR's disposition once merged or closed.
+handed_off_case() {  # <name> <pr-state> <pr-merged> -> crew-state output
+  local d url=https://github.com/o/r/pull/59
+  d=$(new_case "handed-off-$1")
+  make_repo_on_branch "$d/wt" "fm/feat-ho$1"
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/ho$1.meta" "window=fm:fm-ho$1" "worktree=$d/wt" "kind=ship" "harness=claude" "pr=$url"
+  printf 'done: PR %s checks green\n' "$url" > "$d/state/ho$1.status"
+  FM_FAKE_AXI_HOME="count: 1 of 1 total
+runs[1]{id,branch,status,head,pr}:
+  \"01RUN\",fm/feat-ho$1,handed_off,${FM_FAKE_RUN_HEAD:0:8},\"$url\""
+  FM_FAKE_AXI_STATUS="$(run_handed_off "fm/feat-ho$1" "$url")"
+  FM_FAKE_AXI_STATUS_RUN="$FM_FAKE_AXI_STATUS"
+  FM_FAKE_RUNS_LIST="  handed_off fm/feat-ho$1 ${FM_FAKE_RUN_HEAD:0:8}  $(ledger_stamp_minutes_ago 30)  $url"
+  FM_FAKE_PR_STATE=$2
+  FM_FAKE_PR_MERGED=$3
+  FM_FAKE_BUSY=0
+  arm_idle_record "$d/state" "ho$1"
+  run_crew_state "$d" "ho$1"
+}
+
+test_handed_off_run_with_open_pr_reads_ready_for_review() {
+  reset_fakes
+  local out; out=$(handed_off_case open OPEN false)
+  assert_not_contains "$out" "unrecognized run status" "handed_off is a recognized run status"
+  assert_contains "$out" "state: done" "a handed-off run with an open PR is finished work"
+  assert_contains "$out" "checks green: PR ready for review" "it reads exactly like checks-passed"
+  assert_contains "$out" "source: run-step" "the run record answers"
+  pass "a handed-off run with an open PR reads ready for review"
+}
+
+test_handed_off_run_with_merged_pr_reads_merged() {
+  reset_fakes
+  local out; out=$(handed_off_case merged MERGED true)
+  assert_contains "$out" "state: done" "a handed-off run whose PR merged is done"
+  assert_contains "$out" "run passed: PR merged" "the merged disposition is named"
+  pass "a handed-off run with a merged PR reads merged"
+}
+
+test_handed_off_run_with_closed_pr_reads_closed() {
+  reset_fakes
+  local out; out=$(handed_off_case closed CLOSED false)
+  assert_contains "$out" "run passed: PR closed" "the closed disposition is named"
+  assert_not_contains "$out" "ready for review" "a closed PR is not ready for review"
+  pass "a handed-off run with a closed PR reads closed"
+}
+
+test_coarse_handed_off_ledger_word_reads_awaiting_merge_decision() {
+  reset_fakes
+  local d local_short out; d=$(new_case coarse-handed-off)
+  make_repo_on_branch "$d/wt" fm/feat-choff
+  local_short=$(git -C "$d/wt" rev-parse --short=8 HEAD)
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-choff.meta" "window=fm:fm-feat-choff" "worktree=$d/wt" "kind=ship" "harness=claude"
+  printf 'done: PR https://github.com/o/r/pull/7 checks green\n' > "$d/state/feat-choff.status"
+  FM_FAKE_AXI_STATUS="$(run_running fm/other-crew)"
+  FM_FAKE_RUNS_LIST="$(cat <<EOF
+  running    fm/other-crew aaaaaaa  2026-08-23 14:00
+  handed_off fm/feat-choff ${local_short}  2026-08-23 13:53  https://github.com/o/r/pull/7
+EOF
+)"
+  FM_FAKE_BUSY=0
+  arm_idle_record "$d/state" feat-choff
+  out=$(run_crew_state "$d" feat-choff)
+  assert_contains "$out" "state: done" "a handed-off ledger word is finished work"
+  assert_contains "$out" "run handed off: PR awaiting merge decision" "it reads neutrally without a PR read"
+  assert_not_contains "$out" "ready for review" "the coarse route does not claim the PR is still open"
+  assert_contains "$out" "pr=https://github.com/o/r/pull/7" "the ledger row supplies the PR"
+  pass "a coarse handed-off ledger word reads awaiting the merge decision"
+}
+
 # The same anchored selected-run shape with the daemon answering still binds.
 test_selected_run_anchored_continuation_binds_while_daemon_answers() {
   reset_fakes
@@ -7039,6 +7132,10 @@ test_selected_run_anchored_continuation_binds_while_daemon_answers
 test_selected_run_anchored_parked_keeps_its_gate_with_a_dead_daemon
 test_selected_run_dead_daemon_leaves_the_open_decision_open
 test_coarse_pending_ledger_word_reads_unknown
+test_handed_off_run_with_open_pr_reads_ready_for_review
+test_handed_off_run_with_merged_pr_reads_merged
+test_handed_off_run_with_closed_pr_reads_closed
+test_coarse_handed_off_ledger_word_reads_awaiting_merge_decision
 test_unanswered_probe_does_not_turn_a_failed_coarse_record_into_a_gate
 test_selected_route_dead_daemon_names_the_run_once
 test_head_tied_row_reads_the_same_whichever_run_axi_names
