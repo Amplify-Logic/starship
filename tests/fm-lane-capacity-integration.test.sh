@@ -8,17 +8,19 @@
 #
 # Deterministic cases inject their memory reading through the probe seams the
 # unit suites use, so they pass on any host whatever its free memory: on macOS
-# a fake sysctl answers hw.memsize and kern.memorystatus_level (every other key
-# goes to the real sysctl), and on Linux FM_PROC_ROOT_OVERRIDE points at a tree
-# whose meminfo is a fixture and whose other entries link to the real /proc
-# (process ids are left out, so identity checks fall back to ps), and a failing
-# powershell.exe keeps a WSL2 run off the live Windows host view. They also
-# drive power through a fake pmset and a fixture /sys power_supply, and fake
-# getconf (64 cores, so this host's own load never binds) and df (a fixed free
-# disk); the spawn path, the watcher, the lock, and the backlog are real. The
-# idle-reclaim case keeps the real process table and real memory, since it
-# judges real workers and never depends on room. Only the opt-in live case
-# reads this host's real memory for admission.
+# a fake sysctl answers hw.memsize, kern.memorystatus_level and a normal
+# kern.memorystatus_vm_pressure_level (every other key goes to the real sysctl)
+# and a fake vm_stat reports no swap-ins, and on Linux FM_PROC_ROOT_OVERRIDE
+# points at a tree whose meminfo, vmstat and calm pressure stall files are
+# fixtures and whose other entries link to the real /proc (process ids are left
+# out, so identity checks fall back to ps), and a failing powershell.exe keeps
+# a WSL2 run off the live Windows host view. They also drive power through a
+# fake pmset and a fixture /sys power_supply, and fake getconf (64 cores, so
+# this host's own load never binds) and df (a fixed free disk); the spawn path,
+# the watcher, the lock, and the backlog are real. The idle-reclaim case keeps
+# the real process table and real memory, since it judges real workers and
+# never depends on room. Only the opt-in live case reads this host's real
+# memory for admission.
 #
 # Opt-in live cases (FM_TEST_LANE_LIVE_LOAD=1, or FM_LIVE=1) use only real
 # probes: they load this host's CPU with niced busy loops (and optionally a
@@ -142,6 +144,7 @@ SH
 case "\${2:-}" in
   hw.memsize) echo 107374182400 ;;
   kern.memorystatus_level) cat "$case_dir/v/avail_gb" ;;
+  kern.memorystatus_vm_pressure_level) echo 1 ;;
   *) exec /usr/sbin/sysctl "\$@" ;;
 esac
 SH
@@ -150,9 +153,19 @@ SH
   if [ -d /proc ] && [ -r /proc/loadavg ]; then
     for e in /proc/*; do
       n=${e##*/}
-      case "$n" in meminfo|*[!0-9]*) [ "$n" = meminfo ] || ln -s "$e" "$case_dir/proc/$n" 2>/dev/null ;; esac
+      case "$n" in meminfo|pressure|vmstat) ;; *[!0-9]*) ln -s "$e" "$case_dir/proc/$n" 2>/dev/null ;; esac
     done
   fi
+  # A calm host: no pressure stall and no swapping, so a busy host never closes
+  # the memory-pressure, io or swap gates.
+  mkdir -p "$case_dir/proc/pressure"
+  for e in cpu memory io; do
+    printf 'some avg10=0.00 avg60=0.00 avg300=0.00 total=0\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0\n' \
+      > "$case_dir/proc/pressure/$e"
+  done
+  printf 'pswpin 0\npswpout 0\n' > "$case_dir/proc/vmstat"
+  printf '#!/usr/bin/env bash\necho "Swapins:                                  0."\n' > "$fakebin/vm_stat"
+  chmod +x "$fakebin/vm_stat"
   set_mem "$case_dir" 13
   set_power "$case_dir" ac
   printf '%s\n' "$case_dir"
@@ -275,6 +288,10 @@ test_spawn_gate_end_to_end() {
     "room above the memory floor must publish an admitting budget bound by memory: $(doc "$c" '[.verdict, .budget.by]')"
   assert_equals '[11,3]' "$(doc "$c" '[.pressure.avail_gb, .budget.raw]')" \
     "the budget must read the injected 11 GB, not this host's memory, and give exactly 3 lanes above the 4 GB floor"
+  if [ -r /proc/loadavg ]; then
+    assert_equals '[0,0,0]' "$(doc "$c" '[.vitals.psi.io_full10, .vitals.psi.mem_some10, .vitals.swapin_total]')" \
+      "the gates must read the case's calm pressure stall and swap, not this host's"
+  fi
   rc=0; out=$(spawn_ship "$c" task-a) || rc=$?
   assert_admitted "$c" task-a "$rc" "$out" "a spawn with room in the budget"
   set_power "$c" battery
