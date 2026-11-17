@@ -113,6 +113,15 @@ elif cmd == "pane close":
     for t in all_tabs():
         t["panes"] = [p for p in t["panes"] if p["pane_id"] != args[2]]
     save(); out({"result": {}})
+elif cmd == "plugin list":           # not tied to a session, as Herdr's own list is not
+    wanted = opt("--plugin")
+    ids = st.get("plugins", ["starship.bridge", "starship.factory"])
+    out({"result": {"plugins": [{"plugin_id": i} for i in ids if wanted in (None, i)]}})
+elif args[0] == "_add-plugin":        # fake install scripts: <plugin id>
+    ids = st.setdefault("plugins", [])
+    if args[1] not in ids:
+        ids.append(args[1])
+    save()
 elif args[0] == "_add-pane":          # fake scripts: <tab> <label> <cmd>
     tab = next(t for t in all_tabs() if t["tab_id"] == args[1])
     new_pane(tab, args[2], args[3]); save()
@@ -130,12 +139,14 @@ chmod +x "$FAKE/bin/herdr"
 # --- fake bridge, Factory pane and factory tab scripts ----------------------
 cat > "$FAKE/tools/fm-bridge-strip.sh" <<'SH'
 #!/usr/bin/env bash
-echo "bridge $*" >> "$FAKE_HERDR_CALLS"
+echo "bridge $* pane=${HERDR_PANE_ID:-}" >> "$FAKE_HERDR_CALLS"
+[ "$1" != install ] || exec "$HERDR_BIN_PATH" _add-plugin starship.bridge
 "$HERDR_BIN_PATH" _add-pane "$HERDR_TAB_ID" "Starship bridge" "bash ../../bin/fm-bridge-strip.sh run"
 SH
 cat > "$FAKE/tools/fm-factory-pane.sh" <<'SH'
 #!/usr/bin/env bash
-echo "factory-pane $*" >> "$FAKE_HERDR_CALLS"
+echo "factory-pane $* pane=${HERDR_PANE_ID:-}" >> "$FAKE_HERDR_CALLS"
+[ "$1" != install ] || exec "$HERDR_BIN_PATH" _add-plugin starship.factory
 "$HERDR_BIN_PATH" _add-pane "$HERDR_TAB_ID" "Factories" "bash ../../bin/fm-factory-pane.sh run"
 SH
 cat > "$FAKE/tools/fm-factory.py" <<'PY'
@@ -212,7 +223,7 @@ new_case() {  # <running:true|false>
     FAKE_PS="$C/ps" FAKE_TERMINAL_TABS="$C/terminal" FAKE_FACTORY_NAMES="$C/factories" FAKE_FACTORY_JOBS="$C/jobs" \
     HERDR_BIN_PATH="$FAKE/bin/herdr" HERDR_CONFIG_PATH="$C/herdr-config.toml" \
     FM_DESK_BIN="$FAKE/tools" FM_DESK_PS="cat $C/ps" FM_DESK_OSASCRIPT="$FAKE/bin/osascript" FM_DESK_WAIT=3 \
-    FM_DESK_OPEN="$FAKE/bin/open" FM_DESK_MACOS=""
+    FM_DESK_OPEN="$FAKE/bin/open" FM_DESK_MACOS=26.0
   unset HERDR_SOCKET_PATH HERDR_PANE_ID HERDR_TAB_ID HERDR_WORKSPACE_ID HERDR_SESSION HERDR_ENV
   printf '{"session": "default", "running": %s, "workspaces": [], "n": 0}\n' "$1" > "$FAKE_HERDR_STATE"
   : > "$FAKE_HERDR_CALLS"; : > "$FAKE_PS"; : > "$FAKE_TERMINAL_TABS"; : > "$FAKE_FACTORY_JOBS"
@@ -617,7 +628,7 @@ test_a_bad_or_missing_layout_stops_with_the_reason() {
   local out status
   out=$(desk open 2>&1); status=$?
   expect_code 2 "$status" "a missing layout"
-  assert_contains "$out" "starship layout >" "a missing layout did not say how to write one"
+  assert_contains "$out" "starship layout --save" "a missing layout did not say how to write one"
   printf 'workspace = starship\nview = Big | huge\n' > "$FM_HOME/config/desk-layout"
   out=$(desk open 2>&1); status=$?
   expect_code 2 "$status" "a bad view size"
@@ -817,6 +828,74 @@ test_install_command_links_starship_and_keeps_a_foreign_one() {
   pass "desk: install-command links starship and never replaces or shadows another one"
 }
 
+# Off macOS there is no Terminal to ask: layout reads the session without it
+# and lists no Terminal views, where it used to fail on the missing osascript.
+test_layout_off_macos_never_asks_terminal() {
+  new_case true
+  layout
+  desk open >/dev/null || fail "open failed"
+  printf '/dev/ttys100\tBig Profile\t13\n' > "$FAKE_TERMINAL_TABS"
+  local out status
+  out=$(FM_DESK_MACOS="" FM_DESK_OSASCRIPT="$C/no-such-osascript" desk layout 2>&1); status=$?
+  expect_code 0 "$status" "layout off macOS"
+  assert_contains "$out" "workspace = starship
+sidebar = collapsed
+firstmate = firstmate claude-opus" "layout off macOS did not read the session"
+  assert_not_contains "$out" "view =" "layout off macOS listed Terminal views"
+  assert_not_contains "$out" "could not be asked" "layout off macOS still asked Terminal"
+  pass "desk: layout off macOS never asks Terminal"
+}
+
+# `layout --save` writes the layout file only once the reading succeeded, so a
+# failed reading never leaves an empty file the way `layout > file` did.
+test_layout_save_writes_the_file_only_on_success() {
+  new_case false
+  local path="$FM_HOME/config/desk-layout" out status
+  out=$(desk layout --save 2>&1); status=$?
+  expect_code 1 "$status" "saving a layout while Herdr is not running"
+  [ ! -e "$path" ] || fail "a failed layout --save left a file at $path"
+  new_case true
+  layout
+  desk open >/dev/null || fail "open failed"
+  path="$FM_HOME/config/desk-layout"
+  printf 'workspace = starship\nfirstmate = firstmate claude-opus\n' > "$path"
+  out=$(FM_DESK_MACOS="" FM_DESK_OSASCRIPT="$C/no-such-osascript" desk layout --save 2>&1) \
+    || fail "layout --save failed: $out"
+  assert_contains "$out" "$path" "layout --save did not say where it wrote"
+  assert_contains "$(cat "$path")" "workspace = starship
+sidebar = collapsed
+firstmate = firstmate claude-opus
+tab = Sample Shop | factory sample-shop" "layout --save did not write the reading"
+  : > "$FAKE_HERDR_CALLS"
+  out=$(desk open) || fail "open on the saved layout failed"
+  assert_contains "$out" "nothing changed" "the saved layout does not describe the running desk"
+  pass "desk: layout --save writes the file only on success"
+}
+
+# A new home has never linked the bridge or Factory pane plugins into Herdr;
+# the desk installs a missing one before it shows that pane, and only then.
+test_missing_plugins_are_installed_before_their_panes_show() {
+  new_case true
+  layout
+  python3 - "$FAKE_HERDR_STATE" <<'PY'
+import json, sys
+st = json.load(open(sys.argv[1])); st["plugins"] = []; json.dump(st, open(sys.argv[1], "w"))
+PY
+  local out
+  out=$(desk open) || fail "open failed: $out"
+  assert_contains "$out" "  done: install the Starship bridge plugin
+  done: show the Starship bridge
+  done: install the Factory pane plugin
+  done: show the Factory pane" "open did not install each missing plugin before showing its pane"
+  grep -qx "bridge install pane=" "$FAKE_HERDR_CALLS" || fail "the bridge plugin was not installed outside any pane"
+  grep -qx "factory-pane install pane=" "$FAKE_HERDR_CALLS" || fail "the Factory pane plugin was not installed outside any pane"
+  : > "$FAKE_HERDR_CALLS"
+  out=$(desk open) || fail "second open failed"
+  assert_contains "$out" "nothing changed" "a second open did not see the installed plugins"
+  assert_no_grep "install" "$FAKE_HERDR_CALLS" "a second open installed a plugin again"
+  pass "desk: a missing plugin is installed before its pane shows"
+}
+
 fm_test_run \
   test_an_empty_session_gets_the_whole_desk_in_order \
   test_a_second_run_changes_nothing \
@@ -834,6 +913,9 @@ fm_test_run \
   test_the_sidebar_setting_changes_only_its_own_line \
   test_a_bad_or_missing_layout_stops_with_the_reason \
   test_layout_reads_the_running_desk_back \
+  test_layout_off_macos_never_asks_terminal \
+  test_layout_save_writes_the_file_only_on_success \
+  test_missing_plugins_are_installed_before_their_panes_show \
   test_views_open_in_ghostty_with_a_clean_environment \
   test_terminal_without_24_bit_color_is_named_in_a_note \
   test_a_factory_tab_is_found_by_its_record_whatever_its_label \
