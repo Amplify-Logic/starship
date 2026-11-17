@@ -232,7 +232,7 @@ VOICE_RATE = 16000        # the talk box's microphone: samples a second, one cha
 VOICE_CHUNK = 1600        # samples heard at a time: a tenth of a second
 VOICE_SPEECH = 120        # the quietest level that can be speech, of 32768
 VOICE_QUIET_STOP = 20     # tenths of a second of quiet after speech that end a recording
-VOICE_NO_SPEECH = 120     # tenths of a second without any speech before a recording gives up
+VOICE_NO_SPEECH = 600     # tenths of a second without any speech before a recording stops listening
 VOICE_MAX = 1800          # the longest recording, in tenths of a second
 VOICE_LIVE_WINDOW = 8     # seconds of the newest sound written down to show the words while speaking
 VOICE_LIVE_EVERY = 2.0    # the least seconds between two of those writings
@@ -3051,7 +3051,8 @@ class Voice:
     tenth three times louder than it, and louder than VOICE_SPEECH, is speech.
     The recording ends by itself once VOICE_QUIET_STOP of quiet follows speech,
     when no speech came within VOICE_NO_SPEECH, at VOICE_MAX, or when the
-    recorder stops.
+    recorder stops. One that ends without speech but picked up some sound is
+    still written down, since quiet speech can stay under that threshold.
 
     While it listens, only the newest VOICE_LIVE_WINDOW seconds are written
     down, at most every VOICE_LIVE_EVERY seconds, to show the words; what is
@@ -3486,14 +3487,19 @@ class Pane:
             self.written()
 
     def heard(self, by_enter: bool) -> None:
-        """The recording is over: write it down, or say that nothing was heard."""
+        """The recording is over: write it down, or say that nothing was heard.
+
+        Sound that never counted as speech is written down too, so a quiet
+        voice is not lost; only a microphone that gave no sound at all, or a
+        moment too short to hold a word, is dropped.
+        """
         voice, talk = self.voice, self.view.talking
         voice.stop()
-        if voice.heard or (by_enter and voice.seconds() >= 0.3):
+        silent = voice.loudest < 2
+        if voice.heard or (voice.seconds() >= 0.3 and (by_enter or not silent)):
             talk["mode"] = "writing"
             voice.write_down()
             return
-        silent = voice.loudest < 2
         self.close_voice()
         talk["mode"] = "typed"
         self.not_sent("the microphone gave no sound. Type it instead, or check that this terminal may use the "

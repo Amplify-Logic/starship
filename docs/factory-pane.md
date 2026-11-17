@@ -181,11 +181,12 @@ What happened is then said on the line under the queue line: `✓ SENT to Starsh
 
 `t` opens the same box as a talk box.
 Where this machine has a microphone recorder and the home has the desk voice's speech key (see the [desk floater](desk-floater.md#enablement)), it listens at once: its corner reads `● listening`, your words appear in the box while you speak, and the note is sent when you stop speaking for two seconds or press `enter`.
+It waits a minute for your first words; when none counted as speech by then, whatever sound it picked up is still written down and sent, so a quiet voice is not lost.
 The words shown while you speak come from the newest eight seconds of sound, written down at most every two seconds by the same command that writes the note down, so they arrive in small bursts and an ellipsis leads them once the note is longer than that.
 What is sent is one writing down of the whole note when you finish, so a note costs the speech service about its own length plus those short pieces, and a short piece that failed is tried again only after a growing wait.
 From your first words on the microphone's sound goes to that speech service, as the desk voice's does.
 The first key you type drops the recording and turns the box into a typed field; `esc` cancels and sends nothing, and a dropped recording is not written down afterwards and leaves no file.
-A recording with no speech in it is not sent, a microphone that gives no sound at all is named as such, and one whose words could not be written down is saved with the desk voice's [unsent recordings](desk-floater.md#recordings-are-never-lost); in each case the box stays open as a typed field.
+A recording with no words in it is not sent, a microphone that gives no sound at all is named as such, and one whose words could not be written down is saved with the desk voice's [unsent recordings](desk-floater.md#recordings-are-never-lost); in each case the box stays open as a typed field.
 Without a recorder or the key, `t` opens the typed field at once and its corner reads `typed · no desk voice`; the card and the keys line say `typed` or `by voice` before you press it.
 A typed field shows every character with the cursor at its end, on up to three lines.
 The recorder is ffmpeg reading the Mac's default input; `FM_FACTORY_MIC` names another one, or turns voice off when empty (`bin/fm-factory.py`'s header owns the recorder's contract).
