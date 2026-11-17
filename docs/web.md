@@ -44,6 +44,7 @@ The transcript is found under the Claude config directory: `CLAUDE_CONFIG_DIR`, 
 The lock and transcript are re-read on every refresh, so a restarted, cleared or compacted session is followed without restarting the page.
 After `/clear` the page switches to the new conversation right away, starting with the `/clear` itself.
 Only the end of the transcript is parsed, so a very large transcript stays quick; older history stays in the terminal.
+`bin/fm-web.sh conversation` prints the same reading once as versioned JSON, with no server, for another page that shows a home's conversation; [direct-line.md](direct-line.md) lists the other reads such a page uses.
 The page polls about every one and a half seconds while visible.
 
 ## How sending works

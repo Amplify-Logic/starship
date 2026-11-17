@@ -2,11 +2,18 @@
 # fm-control.sh - the CONTROL PLANE for a firstmate-owned agent: allowlisted
 # lifecycle verbs addressed to an exact task id.
 #
-# Usage: fm-control.sh <task-id> interrupt
-#        fm-control.sh <task-id> exit
+# Usage: fm-control.sh <task-id> interrupt [--owner-approved]
+#        fm-control.sh <task-id> exit [--owner-approved]
 #        fm-control.sh <task-id> relaunch [--harness <name>] [--model <name>]
 #                                         [--effort <level>] [--account <entry>]
 #                                         (--note <text> | --note-file <path>)
+#                                         [--owner-approved]
+#
+# A direct-line second mate that is talking with its owner
+# (bin/fm-direct-line-lib.sh) is refused every verb before anything is sent:
+# the first mate never interrupts, stops or relaunches a conversation the
+# owner is having. --owner-approved records that the owner asked for this
+# action and lets it proceed.
 #
 # Why this exists, and how it differs from fm-send.sh. bin/fm-send.sh is the
 # DATA plane: conversational text for the agent to read, always routing-marked
@@ -283,6 +290,7 @@ EFFORT_SET=0
 ACCOUNT_SET=0
 NOTE=
 NOTE_SET=0
+OWNER_APPROVED=0
 control_want_value=
 for control_arg in "$@"; do
   if [ -n "$control_want_value" ]; then
@@ -316,6 +324,7 @@ for control_arg in "$@"; do
     --note) control_want_value=note ;;
     --note=*) NOTE=${control_arg#--note=}; NOTE_SET=1 ;;
     --note-file) control_want_value=note_file ;;
+    --owner-approved) OWNER_APPROVED=1 ;;
     --note-file=*)
       [ -f "${control_arg#--note-file=}" ] || die "--note-file '${control_arg#--note-file=}' is not a readable file"
       NOTE=$(cat "${control_arg#--note-file=}")
@@ -390,6 +399,17 @@ fi
 # instead, using the same `remote_host` signal bin/fm-send.sh routes on.
 if [ -n "$(fm_meta_get "$META" remote_host)" ]; then
   die "task $ID is a remotely placed secondmate on $(fm_meta_get "$META" remote_host); its agent runs outside this home, so no lifecycle action here could verify that it interrupted, stopped, or came back. Drive its lifecycle on that host, and reconcile it through the secondmate recovery path rather than this plane"
+fi
+
+# A direct-line second mate talking with its owner is refused before anything
+# else is read or sent (bin/fm-direct-line-lib.sh owns that state).
+if [ "$(fm_meta_get "$META" kind)" = secondmate ] && [ "$OWNER_APPROVED" = 0 ]; then
+  # shellcheck source=bin/fm-direct-line-lib.sh
+  . "$SCRIPT_DIR/fm-direct-line-lib.sh"
+  MATE_HOME=$(fm_meta_get "$META" home)
+  if fm_direct_line_talking "${MATE_HOME:-$(fm_meta_get "$META" worktree)}"; then
+    die "second mate $ID is talking with its owner on the direct line ($FM_DIRECT_LINE_TALKING_REASON, until epoch $FM_DIRECT_LINE_TALKING_UNTIL); the first mate never interrupts, stops or relaunches that conversation. Pass --owner-approved only when the owner asked for this action"
+  fi
 fi
 
 fm_backend_validate_task_endpoint "$META" "$ID" || exit 1

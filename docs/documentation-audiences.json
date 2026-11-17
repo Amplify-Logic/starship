@@ -542,6 +542,10 @@
       "audience": "operator-current"
     },
     {
+      "path": "docs/direct-line.md",
+      "audience": "operator-current"
+    },
+    {
       "path": "docs/documentation-audiences.md",
       "audience": "maintainer-architecture"
     },

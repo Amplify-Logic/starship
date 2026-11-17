@@ -26,6 +26,13 @@ saved into state/desk-voice/shots/, goes through
 `bin/fm-desk-voice.sh send --source web`, which types into the primary's own
 chat only when that is safe and otherwise uses the durable mailbox.
 
+`fm-web.py conversation --home <home>` prints the same reading as one JSON
+document (schema fm-web-conversation.v1), for another page that shows a
+home's conversation without this server: the Deck reads every local crew home
+this way. Its fields are schema, home, generated_at, session, state (busy,
+idle or offline), note, older, version and items, each item exactly as the
+page receives it, so its html is already escaped and safe to insert.
+
 The fleet panel reuses bin/fm-bridge-view.py's read-only snapshot and
 projection. This process never takes the session lock, never drains wakes,
 and never writes backlog or fleet state.
@@ -1388,6 +1395,29 @@ def command_serve(home: Path, root: Path, port: int) -> None:
         server.server_close()
 
 
+CONVERSATION_SCHEMA = "fm-web-conversation.v1"
+
+
+def command_conversation(home: Path) -> None:
+    """Print one read of <home>'s conversation as versioned JSON."""
+    if not home.is_dir():
+        fail(f"not a home directory: {home}")
+    payload = TranscriptCache(home).get()
+    document = {
+        "schema": CONVERSATION_SCHEMA,
+        "home": str(home),
+        "generated_at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "session": payload.get("session"),
+        "state": payload.get("state"),
+        "note": payload.get("note", ""),
+        "older": bool(payload.get("older")),
+        "version": payload.get("version"),
+        "items": payload.get("items", []),
+    }
+    json.dump(document, sys.stdout, ensure_ascii=False)
+    sys.stdout.write("\n")
+
+
 def main(argv: Optional[List[str]] = None) -> None:
     parser = argparse.ArgumentParser(prog="fm-web.py")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -1397,11 +1427,15 @@ def main(argv: Optional[List[str]] = None) -> None:
     serve.add_argument("--port", type=int, default=DEFAULT_PORT)
     tok = sub.add_parser("token")
     tok.add_argument("--home", required=True)
+    conv = sub.add_parser("conversation")
+    conv.add_argument("--home", required=True)
     args = parser.parse_args(argv)
     if args.command == "serve":
         command_serve(Path(args.home), Path(args.root), args.port)
     elif args.command == "token":
         print(load_or_create_token(Path(args.home)))
+    elif args.command == "conversation":
+        command_conversation(Path(args.home))
 
 
 if __name__ == "__main__":
