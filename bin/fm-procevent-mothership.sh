@@ -76,8 +76,8 @@
 #            "You decide", and a delegated tap or the seven-day default leaves
 #            it held for the owner.
 # report     Tell the room how a task goes (see OUTCOMES IN THE ROOM below);
-#            <event> is started, working, waits, blocked, pr, merged or
-#            dropped. Prints one line: told, already told, nothing to report,
+#            <event> is started, working, waits, blocked, failed, pr, merged
+#            or dropped. Prints one line: told, already told, nothing to report,
 #            or failed. Exits 1 only when the room was not told. --detach
 #            returns at once and sends from a separate process group, and does
 #            nothing in a home with no room link (bin/fm-mothership-report-lib.sh
@@ -85,8 +85,8 @@
 # blocked-scan
 #            For each task the room follows, run report, detached, once for
 #            each new status line it hears about: a card hears each new
-#            blocked: line, and a job each new working:, blocked: or
-#            needs-decision: line. bin/fm-watch.sh runs it on every poll while
+#            blocked: or failed: line, and a job each new working:, resolved:,
+#            blocked:, failed: or needs-decision: line. bin/fm-watch.sh runs it on every poll while
 #            any task is followed. It never waits: a task whose record a send
 #            holds is left for the next poll.
 # source     The blocking child the runner executes; never run it in a turn.
@@ -157,7 +157,7 @@
 # bin/fm-mothership-report-lib.sh, which does nothing in a home with no room
 # link: no Mothership state and no link config. The events come from the step
 # that owns each: started from bin/fm-spawn.sh at dispatch (never on a
-# relaunch); working, waits and blocked from blocked-scan; pr from
+# relaunch); working, waits, blocked and failed from blocked-scan; pr from
 # bin/fm-pr-check.sh when a PR is recorded (never the merge-time re-record);
 # merged from bin/fm-merge-outcome-lib.sh and bin/fm-merge-local.sh on a
 # confirmed merge; dropped from bin/fm-teardown.sh at cleanup. A task of a
@@ -173,6 +173,8 @@
 #            work as about to land;
 #   blocked  `problem`, "Held up by a blocker; looking into it.", once for
 #            each new blocked: line;
+#   failed   `problem`, "Stopped on a failure; looking into it.", once for
+#            each new failed: line;
 #   merged   `result`, "Done: the change has landed.", with --link <url> for a
 #            PR, which settles this ship's part of the card.
 # A card hears nothing of working, waits or dropped. Each runs in the task's project (its backlog repo), with a --tag for every
@@ -201,6 +203,8 @@
 #            needs-decision: line;
 #   blocked  --state error, "Held up by a blocker; looking into it.", for a
 #            new blocked: line;
+#   failed   --state error, "Stopped on a failure; looking into it.", for a
+#            new failed: line;
 #   pr       --state landing, "Built and about to land.", --link <url>;
 #   merged   --state done, "Landed.", with --link <url> for a PR;
 #   dropped  --drop, which takes it off the view, unless it landed, whose
@@ -1133,27 +1137,28 @@ write_task_record() {  # <task-id> <json>
   write_file "$(task_record "$1")" "$2"
 }
 
-# The newest blocked: line in the task's status log, as a short signature, or
-# nothing when it has none.
+# The newest blocked: or failed: line in the task's status log, as
+# "<event> <signature>" (blocked or failed), or nothing when it has none.
 newest_blocked() {  # <task-id>
   local file="$STATE/$1.status" line
   [ -f "$file" ] && [ ! -L "$file" ] || return 0
-  line=$(LC_ALL=C grep -E '^blocked( \[[^]]*\])*:' "$file" 2>/dev/null | tail -n 1)
+  line=$(LC_ALL=C grep -E '^(blocked|failed)( \[[^]]*\])*:' "$file" 2>/dev/null | tail -n 1)
   [ -n "$line" ] || return 0
-  printf '%s' "$line" | cksum | awk '{ print $1 }'
+  printf '%s %s\n' "${line%%[ :]*}" "$(printf '%s' "$line" | cksum | awk '{ print $1 }')"
 }
 
-# The newest working:, resolved:, blocked: or needs-decision: line in the
-# task's status log, as "<event> <signature>" (working, for a working: or
-# resolved: line, blocked or waits), or nothing when it has none.
+# The newest working:, resolved:, blocked:, failed: or needs-decision: line in
+# the task's status log, as "<event> <signature>" (working, for a working: or
+# resolved: line, blocked, failed or waits), or nothing when it has none.
 newest_state() {  # <task-id>
   local file="$STATE/$1.status" line event
   [ -f "$file" ] && [ ! -L "$file" ] || return 0
-  line=$(LC_ALL=C grep -E '^(working|resolved|blocked|needs-decision)( \[[^]]*\])*:' "$file" 2>/dev/null | tail -n 1)
+  line=$(LC_ALL=C grep -E '^(working|resolved|blocked|failed|needs-decision)( \[[^]]*\])*:' "$file" 2>/dev/null | tail -n 1)
   [ -n "$line" ] || return 0
   case "$line" in
     working*|resolved*) event=working ;;
     blocked*) event=blocked ;;
+    failed*) event=failed ;;
     *) event=waits ;;
   esac
   printf '%s %s\n' "$event" "$(printf '%s' "$line" | cksum | awk '{ print $1 }')"
@@ -1230,6 +1235,7 @@ event_words() {  # <event>
     waits) printf 'it is waiting on a decision' ;;
     pr) printf 'it is about to land' ;;
     blocked) printf 'it is held up by a blocker' ;;
+    failed) printf 'it stopped on a failure' ;;
     merged) printf 'it landed' ;;
     dropped) printf 'it was dropped' ;;
   esac
@@ -1275,16 +1281,22 @@ report_locked() {  # <task-id> <event> <pr> <room> <card> <project>
       '.room = $room | .card = $card | .project = $project' "$rec")"
   else
     write_task_record "$task" "$(jq -cn --arg room "$room" --arg card "$card" --arg project "$project" \
-      --arg blocked "$(newest_blocked "$task")" \
+      --arg blocked "$(newest_blocked "$task" | cut -d' ' -f2)" \
       '{room: $room, card: $card, project: $project, blocked: $blocked, sent: []}')"
   fi || { printf 'failed: %s: cannot keep its record\n' "$task"; return 1; }
   case "$event" in
     started) key=started verb=progress text="Work has started." ;;
     pr) key="pr-$(printf '%s' "$pr" | cksum | awk '{ print $1 }')" verb=progress text="Ready for review: $pr" ;;
-    blocked)
+    blocked|failed)
       sig=$(newest_blocked "$task")
-      [ -n "$sig" ] || { printf 'nothing to report: %s has no blocker\n' "$task"; return 0; }
-      key="blocked-$sig" verb=problem text="Held up by a blocker; looking into it."
+      [ -n "$sig" ] && [ "${sig%% *}" = "$event" ] \
+        || { printf 'nothing to report: %s has no newer %s line\n' "$task" "$event"; return 0; }
+      key="$event-${sig#* }" verb=problem
+      if [ "$event" = blocked ]; then
+        text="Held up by a blocker; looking into it."
+      else
+        text="Stopped on a failure; looking into it."
+      fi
       ;;
     merged) key=merged verb=result text="Done: the change has landed." ;;
   esac
@@ -1341,7 +1353,7 @@ job_locked() {  # <task-id> <event> <pr> <project> <title> <rooms>
   fi
   case "$event" in
     started) key=started state=working text="Work has started." ;;
-    working|waits|blocked)
+    working|waits|blocked|failed)
       line=$(newest_state "$task")
       [ -n "$line" ] && [ "${line%% *}" = "$event" ] \
         || { printf 'nothing to report: %s has no newer %s line\n' "$task" "$event"; return 0; }
@@ -1351,6 +1363,7 @@ job_locked() {  # <task-id> <event> <pr> <project> <title> <rooms>
         working) state=working text="Work is under way." ;;
         waits) state=waits text="Waiting on a decision." ;;
         blocked) state=error text="Held up by a blocker; looking into it." ;;
+        failed) state=error text="Stopped on a failure; looking into it." ;;
       esac
       if [ "$line" = "$(jq -r '.line // ""' "$rec")" ]; then
         printf 'already told: %s: the room already heard that %s\n' "$task" "$(event_words "$event")"
@@ -1426,8 +1439,8 @@ cmd_report() {
   done
   fm_pr_task_id_valid "$task" || die "not a task id: $task"
   case "$event" in
-    started|working|waits|blocked|pr|merged|dropped) ;;
-    *) die "not an event: $event (started, working, waits, blocked, pr, merged or dropped)" ;;
+    started|working|waits|blocked|failed|pr|merged|dropped) ;;
+    *) die "not an event: $event (started, working, waits, blocked, failed, pr, merged or dropped)" ;;
   esac
   [ -z "$pr" ] || [[ "$pr" =~ ^https://[!-~]+$ ]] || die "not a PR address: $pr"
   [ "$event" != pr ] || [ -n "$pr" ] || die "report pr needs --pr <url>"
@@ -1461,7 +1474,7 @@ cmd_report() {
     room_valid "$room" && [[ "$card" =~ ^[A-Za-z0-9_.-]{1,80}$ ]] || die "the record for $task names no card it can tell"
     case "$event" in
       working|waits|dropped)
-        printf 'nothing to report: %s serves a room card, which hears only started, pr, blocked and merged\n' "$task"
+        printf 'nothing to report: %s serves a room card, which hears only started, pr, blocked, failed and merged\n' "$task"
         return 0
         ;;
     esac
@@ -1479,7 +1492,7 @@ cmd_report() {
 }
 
 cmd_blocked_scan() {
-  local rec task sig seen line
+  local rec task seen line
   [ "$#" -eq 0 ] || usage
   for rec in "$(tasks_dir)"/*.json; do
     [ -f "$rec" ] || continue
@@ -1505,12 +1518,12 @@ cmd_blocked_scan() {
       with_task_lock --try "$task" rm -f -- "$rec" || true
       continue
     fi
-    sig=$(newest_blocked "$task")
-    [ -n "$sig" ] || continue
+    line=$(newest_blocked "$task")
+    [ -n "$line" ] || continue
     seen=$(jq -r '.blocked // "" | tostring' "$rec" 2>/dev/null || true)
-    [ "$sig" != "$seen" ] || continue
-    with_task_lock --try "$task" note_blocked "$task" "$sig" || continue
-    cmd_report --detach "$task" blocked
+    [ "${line#* }" != "$seen" ] || continue
+    with_task_lock --try "$task" note_blocked "$task" "${line#* }" || continue
+    cmd_report --detach "$task" "${line%% *}"
   done
 }
 

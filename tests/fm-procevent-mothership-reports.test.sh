@@ -481,6 +481,37 @@ EOT
   pass "a resolved line moves a held-up or waiting job back to working, and sends nothing for a job already working"
 }
 
+test_a_failure_is_told_to_the_card_and_the_job() {
+  local h out lock t _ line
+  need_tools || return 0
+  h=$(make_home failed)
+  add_task "$h" room-f1 sample "Taken on for the room. mothership: alpha/f1."
+  add_task "$h" job-x1 studio "Ordinary work for a shared project."
+  for t in room-f1 job-x1; do
+    : > "$h/home/state/$t.meta"
+    in_home "$h" "$ADAPTER" report "$t" started >/dev/null 2>&1 || fail "report started for $t failed"
+  done
+  # A worker that stops writes a failed: line and nothing else.
+  line='failed [at=1790000100]: cannot build the secret-codename target'
+  printf '%s\n' "$line" > "$h/home/state/room-f1.status"
+  printf '%s\n' "$line" > "$h/home/state/job-x1.status"
+  out=$(in_home "$h" "$ADAPTER" report room-f1 blocked 2>&1) || fail "a blocked report beside a failure failed: $out"
+  assert_contains "$out" "nothing to report" "a failure is not told as a blocker"
+  in_home "$h" "$ADAPTER" blocked-scan >/dev/null 2>&1 || fail "scan for the failure failed"
+  wait_for_sent "$h" 4 || fail "the failure was not told: $(sent_of "$h")"
+  for t in room-f1 job-x1; do
+    lock="$h/home/state/mothership/.task-$t.lock"
+    for _ in $(seq 1 50); do { [ -e "$lock" ] || [ -L "$lock" ]; } || break; sleep 0.1; done
+  done
+  in_home "$h" "$ADAPTER" blocked-scan >/dev/null 2>&1 || fail "a second scan failed"
+  sleep 0.5
+  assert_equals "problem card=f1 room=alpha project=sample tags= link= cid=fm-room-f1-failed-$(printf '%s' "$line" | cksum | awk '{ print $1 }') text=Stopped on a failure; looking into it." \
+    "$(sent_of "$h" | grep '^problem ')" "the card hears the failure once as a problem, with a fixed line"
+  assert_equals "error|Room work for job-x1||Stopped on a failure; looking into it." \
+    "$(job_lines "$h" | grep '^error|')" "the job shows the failure once as an error, with a fixed line"
+  pass "a failed: line shows the job as an error and tells the card a problem, each once, with none of the worker's words"
+}
+
 test_no_link_runs_nothing() {
   local h out
   need_tools || return 0
@@ -689,6 +720,7 @@ fm_test_run \
   test_a_dropped_job_leaves_the_view \
   test_a_private_project_tells_no_room \
   test_a_resolved_line_puts_a_job_back_to_work \
+  test_a_failure_is_told_to_the_card_and_the_job \
   test_no_link_runs_nothing \
   test_a_failing_job_report_tells_the_first_mate \
   test_lifecycle_steps_show_a_job \
