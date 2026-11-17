@@ -3,7 +3,7 @@
 # the public-repo leak guard. bin/fm-leak-guard.sh calls it and owns when each
 # check runs; bin/fm-leak-prepush.sh's add-on check is the only other caller,
 # running the shape checks itself with --exempt and --diff or --files.
-# docs/configuration.md "Private leak words" owns the operator contract.
+# docs/fork-configuration.md "Private leak words" owns the operator contract.
 #
 # Usage:
 #   fm-leak-shapes.py [--exempt GLOB]... [--names REPO REV]... [--approved FILE]

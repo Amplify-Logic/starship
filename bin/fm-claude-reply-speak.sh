@@ -78,7 +78,7 @@
 #     home without config/speak pays no settle wait and writes no state;
 #   - a muted home: bin/fm-speak.sh owns the mute and exits 0 without a sound.
 #
-# Recorded address and tone: docs/configuration.md "Address and tone" owns the
+# Recorded address and tone: docs/fork-configuration.md "Address and tone" owns the
 # format. The "## Address and tone" section of the home's own data/captain.md
 # is the only record; its optional "Call me:" bullet replaces "Captain" and its
 # optional "No-news reply:" bullet is one more routine line.

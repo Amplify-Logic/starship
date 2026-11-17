@@ -4,7 +4,7 @@
 # A release is a tag on origin's default branch named starship-YYYY.MM, or
 # starship-YYYY.MM.N for a fix release in a month that already has one
 # (bin/fm-release-lib.sh owns the name and ordering rules). A home on the
-# release channel (docs/configuration.md "Update channel") moves to the newest
+# release channel (docs/fork-configuration.md "Update channel") moves to the newest
 # one on its next "update starship". The usual moment to cut one is right after
 # the month's reviewed upstream catch-up has landed on a green default branch.
 #

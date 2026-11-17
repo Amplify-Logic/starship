@@ -494,7 +494,7 @@ tmux crewmates do not inherit the primary's `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSU
 `bin/backends/tmux.sh` creates the worker with `tmux new-window` and then send-keys, so the pane environment comes from the tmux server, not from the primary process.
 This home runs herdr, not tmux, and the herdr spawn path was not live-tested for this variable.
 From spawn code, `bin/fm-spawn.sh` does not put this variable on the herdr launch line and does not unset it.
-The Claude worker launch prefix sets `CLAUDE_CODE_AUTO_COMPACT_WINDOW=500000` and `CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false` (see `docs/configuration.md` "Context window").
+The Claude worker launch prefix sets `CLAUDE_CODE_AUTO_COMPACT_WINDOW=500000` and `CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false` (see `docs/fork-configuration.md` "Context window").
 A herdr worker pane otherwise inherits the launching environment for `FM_HERDR_PROJECT_*`, which is why spawn pins or clears those two variables, but that is not evidence for this pressure-reap export.
 Whether a herdr crewmate receives the export is therefore untested.
 A Claude secondmate runs its own supervision cycle, so its watcher arm is a tracked background shell of an interactive Claude session and is reapable exactly as the primary's was.
@@ -536,7 +536,11 @@ It still fails the arm and still warns that the host alarm is unavailable, and b
 An explicit `enable` bypasses the cooldown for one real attempt; only a verified registration clears the record, so a failed `enable` preserves the evidence and its escalating count rather than resetting to a first failure.
 The arm path and the session-start banner both read that record through one shared helper (`fm_supervision_arm_failure_status` in `bin/fm-supervision-lib.sh`), which treats a deadline beyond its own recorded window as stale evidence suppressing nothing, so a clock rollback or a restored state volume neither blocks retries forever nor advertises a suppression window that is not enforced.
 The in-harness turn-end and continuity guards keep blocking a blind turn end throughout, so a suppressed host registration degrades the backstop rather than removing it.
-The check reuses `fm_supervision_status` plus `fm_watcher_healthy`, so it requires the existing home-scoped watcher lock, PID identity, watcher path, and fresh beacon rather than trusting a leftover file or live PID alone.
+The check reuses `fm_supervision_status` plus the model-aware `fm_watcher_supervision_verdict` the in-session pull and continuity guards use, so a normal hand-over gap between watcher cycles - a fresh beacon with no watcher holding the lock on a Claude, Cursor or agy primary - is not an outage, while a watcher still missing once the beacon passes the grace is.
+The host check does not take that verdict's mid-turn exemption for a stale beacon (`fm_autoarm_midturn_healthy`): only the in-session guard runs while the primary is provably in a turn, and from launchd an unhandled rewake ledger beside an idle live primary would otherwise hide a real outage indefinitely.
+Because it runs from launchd outside the harness tree, the model is the inspected home's, resolved by `fm_home_supervision_model` from the live harness holding the session lock; with no such holder the model is unknown and the check keeps the strict `fm_watcher_healthy` requirement of the existing home-scoped watcher lock, PID identity, watcher path, and fresh beacon rather than trusting a leftover file or live PID alone.
+The hand-over-aware verdict covers the harnesses that helper classifies: Claude, Cursor and agy as `autoarm`, and Pi, signed Pi and omp as `extension`; every other live harness resolves to `persistent` and keeps the strict check.
+A native Codex Stop-hook park still gets the strict check, and so can still alarm in a hand-over gap, until such a park can be detected from outside the session.
 Lock home and watcher path are compared by physical target, so a checkout reached through a symlinked path component cannot make a live watcher look foreign to a host check that resolved its own root differently; two genuinely different homes still never match.
 Future-dated beacon timestamps are rejected rather than remaining fresh indefinitely after wall-clock rollback or restore.
 With the default 300-second grace, a stale-beacon outage becomes an active alert within at most roughly 360 seconds instead of remaining silent for hours.
@@ -568,7 +572,7 @@ The launchd transport and the real banner it posts are covered by opt-in real-`l
 
 ## Add-on watcher hooks
 
-A watcher hook of the home's private add-on ([configuration](configuration.md#private-add-on-configaddon)) is sourced once when `bin/fm-watch.sh` starts, and hook W1 there owns the two guarded functions such a hook may define.
+A watcher hook of the home's private add-on ([configuration](fork-configuration.md#private-add-on-configaddon)) is sourced once when `bin/fm-watch.sh` starts, and hook W1 there owns the two guarded functions such a hook may define.
 `fm_fork_glasses_file_event_catch_up` runs at the top of every watcher loop before the slow-check cadence test, and `fm_fork_event_wait_or_sleep` replaces the watcher's terminal wait.
 Both are reached through guarded calls, so a home with no such hook runs the watcher's own `event_wait_or_sleep` and its ordinary check cadence.
 A hook runs inside the existing singleton watcher cycle and does not add another watcher, change lock ownership, or alter the one-actionable-reason exit contract.
@@ -653,7 +657,7 @@ It checks that a newly appended keyed decision is classified without rereading e
 - Recovery publication before stale-lock removal.
 - The typed self-eviction failure.
 - Bounded and successor-linked lifecycle rows.
-- Startup-stop resilience: slow post-claim confirmation, typed startup-lock and identity-publication failures, safe-point deadline and signal forwarding, and cleanup of published locks and in-flight staging while preserving foreign owners.
+- Startup-stop resilience: slow post-claim confirmation, typed startup-lock and identity-publication failures, safe-point deadline and signal forwarding, cleanup of published locks and in-flight staging while preserving foreign owners, and a TERM during lock creation whose cleanup never joins an unrelated child (also run under stock `/bin/bash` 3.2 in CI's stock macOS Bash lane).
 - A SIGSTOP counterfactual that distinguishes a live PID from a stale beacon before classifying termination.
 
 ### Claude auto-arm and turn-end guard

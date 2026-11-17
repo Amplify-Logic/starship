@@ -52,14 +52,14 @@ A red `■ 1 failed, 2 stopped` shows before the battery when work failed or a w
 It clears as soon as the reading no longer counts either.
 On a narrower pane it reads `■ 3 broken`.
 
-When the home listens to a Mothership room ([Mothership monitoring](configuration.md#mothership-monitoring-configmothership-monitor)) and the listener has not reached the room for two minutes, the alert says why: `Tailscale is off on this Mac` when Tailscale is installed and not running, or, on a Mac without Tailscale's command, when the room's name does not resolve; otherwise `The <room> room is not answering`, with the room's own name.
+When the home listens to a Mothership room ([Mothership monitoring](fork-configuration.md#mothership-monitoring-configmothership-monitor)) and the listener has not reached the room for two minutes, the alert says why: `Tailscale is off on this Mac` when Tailscale is installed and not running, or, on a Mac without Tailscale's command, when the room's name does not resolve; otherwise `The <room> room is not answering`, with the room's own name.
 The alert needs monitoring switched on for that room; a room with monitoring off raises no alert.
 It reads the note the listener keeps while the room cannot be reached, so it costs nothing extra, and it clears as soon as the room answers again, or when the listener has stopped trying for three minutes.
 On a narrower pane it reads `Tailscale off` or `room not answering`, after any `N broken`.
 
 ### The night shift
 
-When the home has a [night shift window](configuration.md#night-shift-window-confignight-shift-window), the strip says `night shift from 23:30` in the six hours before it starts and `night shift on` while it runs.
+When the home has a [night shift window](fork-configuration.md#night-shift-window-confignight-shift-window), the strip says `night shift from 23:30` in the six hours before it starts and `night shift on` while it runs.
 For six hours after it ends it says, in green, how much finished in it, such as `3 done overnight`.
 That counts each task once: one whose finished report arrived inside the window, which for a ship is its ready report, or whose PR was first seen merged inside it.
 Work that was cleaned up before the reading and left no merged PR record is not counted, so the figure can be short; when nothing was counted the morning shows no figure rather than a zero that might not be true.

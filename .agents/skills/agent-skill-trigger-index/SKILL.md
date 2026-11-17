@@ -36,7 +36,7 @@ These skills are not captain-invocable; load them only at their precise triggers
 
 ## Opt-in skills
 
-These exist only in a home that switched them on with a `config/` presence flag (docs/configuration.md "Opt-in skills", `bin/fm-opt-in-skills.sh`); elsewhere no session lists them.
+These exist only in a home that switched them on with a `config/` presence flag (docs/fork-configuration.md "Opt-in skills", `bin/fm-opt-in-skills.sh`); elsewhere no session lists them.
 
 - `adhd-auto-fire` - load before committing to a genuinely divergent, fuzzy, high-leverage decision (design, architecture, API/schema shape, naming, strategy, approach-selection, hard/ambiguous debugging).
 - `second-opinion-auto-fire` - load before committing to an architectural, security-sensitive, schema/API-contract, or otherwise high-stakes design or decision output.

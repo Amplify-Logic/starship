@@ -31,7 +31,9 @@
 # COMPATIBILITY VERDICT REUSE. fm_tasks_axi_compatible costs three tasks-axi
 # subprocesses, and one session start needs the same verdict twice: once in
 # bin/fm-session-start.sh's backlog listing and once in the bin/fm-bootstrap.sh
-# child it runs. Two reuse layers collapse that to a single probe:
+# child it runs; bin/fm-tap-desk.sh likewise hands one verdict to the
+# bin/fm-captain-hold.sh open-each its engine runs over the held decisions. Two
+# reuse layers collapse that to a single probe:
 #   - Within a process the first probe's answer is memoised, together with the
 #     reason it reached.
 #   - Across ONE process hop, a parent that already holds the verdict passes it

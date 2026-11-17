@@ -10,7 +10,7 @@ metadata:
 
 # outward-broad
 
-`docs/configuration.md` "Worker outward actions" owns what each style and switch allows.
+`docs/fork-configuration.md` "Worker outward actions" owns what each style and switch allows.
 
 1. Act only on the captain's own current words; a worker never runs this.
 2. Turn the captain's words after `/outward-broad`, if any, into the exact switch names: send email, reply to email, respond to invites, change calendar, control browser, use zapier.

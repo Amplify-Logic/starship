@@ -23,7 +23,7 @@
 # classifier has already dropped, and the only thing it can print is a promotion.
 # There is no output that silences a line, so no answer it returns - and no text
 # a worker can write into a status line - can suppress an escalation Firstmate
-# would otherwise make. See docs/configuration.md "Status second look".
+# would otherwise make. See docs/fork-configuration.md "Status second look".
 #
 # The API key is read from the environment, else from the home's gitignored
 # .env, and never appears in argv, stdout, stderr or any state file. The reader

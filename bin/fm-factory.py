@@ -5,8 +5,9 @@ A factory is one segment of the owner's work: a crew with its own work list,
 rules, memory and workers. data/factories.md names a home's factories and maps
 each to its projects; with no registry every registered project in
 data/projects.md is its own factory. docs/factory-pane.md owns what the pane
-shows and why, and docs/configuration.md owns the registry format; this header
-owns the commands.
+shows and why, and the registry's `routine:` line ("Routine work");
+docs/fork-configuration.md owns the rest of the registry format; this header owns
+the commands.
 
 Usage:
   fm-factory.py --data [--fresh]          print the record as JSON (fm-factory.v1)
@@ -29,6 +30,17 @@ Usage:
                                           split a live copy of each of that
                                           factory's running workers beside its
                                           page pane, the way open-tab does
+  fm-factory.py profile <project> [--data-dir DIR]
+                                          print a first line holding the size
+                                          of the rules of the factory that
+                                          claims <project> (by its projects,
+                                          an alias included), the cap and that
+                                          factory's name, space separated, then
+                                          its Rules: lines, one per line;
+                                          nothing when there are none
+                                          (bin/fm-brief.sh adds them to a job's
+                                          instructions when the size is at most
+                                          the cap)
   fm-factory.py refresh                   rebuild the cached record once
   fm-factory.py refresh-calls             rebuild it with fresh owner's calls on
                                           the last full refresh's workers, or,
@@ -49,7 +61,7 @@ strip and the status bar show (fm_fleet_status_counts `overview` in
 bin/fm-fleet-status-lib.sh), in the same words (docs/status-bar.md "Fleet
 words"), so the three never show different numbers for the same moment. Live
 work, decisions and the work list come only from bin/fm-fleet-snapshot.sh
---json, and each task's state word comes from the same fold the overview counts
+--light, and each task's state word comes from the same fold the overview counts
 with (fm_fleet_status_bucket in that library). NEEDS YOU is exactly
 fm_owner_calls in that library over the overview reading's ready work, the
 calls the overview counts and the tap page shows, and each question's options
@@ -97,6 +109,9 @@ a status, record or backlog file changed since the last one began
 unless the machine is busy (machine_busy). That safety refresh exists because
 a worker's pane activity, a job gone quiet and a change merged elsewhere are
 recorded in no file, so without it the pane would go stale.
+A full refresh reads its slow inputs side by side, the held questions' options
+beside the fleet reading since they need only the backlog, and keeps those
+options from the last one while the owner's calls have not moved (kept_shapes).
 Every pane and live copy of a home starts its rebuilds, full or of the
 owner's calls, under one lock the rebuild holds until it exits, so two never
 run side by side, and after a full refresh the next waits as long as that one
@@ -211,6 +226,10 @@ LOOK_GAP = 15 * 60      # this long without a sign of a look ends the look
 FOCUS_HOLD = 5          # seconds the pane stays focused before it counts as a look
 FOCUS_CAP = 15 * 60     # focus alone keeps a look going this long after it began or the last key
 MIRROR_CAP = 4
+# A factory's rules go into each of its jobs' briefs only while their "- " list
+# is at most this many characters (profile_size); bin/fm-brief.sh leaves a
+# larger list out whole. The factory page shows the size against this cap.
+PROFILE_CAP = 1500
 # A factory tab opens a live copy only of a worker at work: busy, with
 # Starship, needing a look or failed, or waiting on the owner's decision.
 # Parked, held, queued and finished jobs get none.
@@ -224,9 +243,11 @@ MIRROR_KEEP = MIRROR_STATES + ("no reading",)
 SETTLED_SOURCE = "factory-pane"
 VOICE_RATE = 16000        # the talk box's microphone: samples a second, one channel, 16 bits
 VOICE_CHUNK = 1600        # samples heard at a time: a tenth of a second
-VOICE_SPEECH = 120        # the quietest level that can be speech, of 32768
+VOICE_SPEECH = 60         # the quietest level that can be speech, of 32768
+VOICE_SETTLE = 5          # first tenths of a second that only measure the room, never speech
+VOICE_LOUDEST_ROOM = 500  # the loudest a room's own level is taken to be while it is measured
 VOICE_QUIET_STOP = 20     # tenths of a second of quiet after speech that end a recording
-VOICE_NO_SPEECH = 120     # tenths of a second without any speech before a recording gives up
+VOICE_NO_SPEECH = 600     # tenths of a second without any speech before a recording stops listening
 VOICE_MAX = 1800          # the longest recording, in tenths of a second
 VOICE_LIVE_WINDOW = 8     # seconds of the newest sound written down to show the words while speaking
 VOICE_LIVE_EVERY = 2.0    # the least seconds between two of those writings
@@ -344,6 +365,16 @@ def plural(count: int, one: str, many: str) -> str:
     return "%d %s" % (count, one if count == 1 else many)
 
 
+def day_words(date: str) -> str:
+    """A YYYY-MM-DD date as "1 Dec", with its year only when that is not this year."""
+    epoch = parse_iso(date)
+    if epoch is None:
+        return date
+    day = time.gmtime(epoch)
+    words = "%d %s" % (day.tm_mday, time.strftime("%b", day))
+    return words if day.tm_year == time.gmtime(now_epoch()).tm_year else "%s %d" % (words, day.tm_year)
+
+
 def meta_values(path: Optional[str]) -> Dict[str, str]:
     values: Dict[str, str] = {}
     for line in read_text(path or "").splitlines():
@@ -360,10 +391,10 @@ def meta_values(path: Optional[str]) -> Dict[str, str]:
 PROJECT_ROW_RE = re.compile(r"^- (.+?)(?: \[([^\]]*)\])?(?: - |$)")
 
 
-def load_projects(home: str) -> List[Dict[str, Any]]:
+def load_projects(home: str, data: Optional[str] = None) -> List[Dict[str, Any]]:
     """data/projects.md rows: name, its label= and alias= tokens, in order."""
     rows = []
-    for line in read_text(os.path.join(home, "data", "projects.md")).splitlines():
+    for line in read_text(os.path.join(data or os.path.join(home, "data"), "projects.md")).splitlines():
         match = PROJECT_ROW_RE.match(line)
         if not match:
             continue
@@ -387,12 +418,38 @@ def display_name(project: str) -> str:
     return project
 
 
-def load_registry(home: str) -> Tuple[List[Dict[str, Any]], str]:
+ROUTINE_ALL = "Routine work"
+
+
+def routine_marks(value: str) -> List[str]:
+    """A factory's `routine:` field: every job (`yes`), none (`no`), or the job title starts it lists."""
+    if value.strip().lower() == "yes":
+        return [ROUTINE_ALL]
+    if value.strip().lower() in ("", "no"):
+        return []
+    return [kind.strip() for kind in value.split(",") if kind.strip()]
+
+
+def routine_kind(marks: List[str], title: str) -> Optional[str]:
+    """Which routine kind a job is in its factory, by its title, or None for ordinary work."""
+    if ROUTINE_ALL in marks:
+        return ROUTINE_ALL
+    text = (title or "").lower()
+    for kind in marks:
+        start = kind.lower()
+        if text.startswith(start) and not text[len(start):len(start) + 1].isalpha():
+            return kind
+    return None
+
+
+def load_registry(home: str, data: Optional[str] = None) -> Tuple[List[Dict[str, Any]], str]:
     """data/factories.md, or one factory per registered project without it.
 
-    Returns the factories and the word for where they came from.
+    Returns the factories and the word for where they came from. <data> is the
+    data directory when it is not the home's own.
     """
-    text = read_text(os.path.join(home, "data", "factories.md"))
+    data = data or os.path.join(home, "data")
+    text = read_text(os.path.join(data, "factories.md"))
     factories: List[Dict[str, Any]] = []
     current: Optional[Dict[str, Any]] = None
     section = None
@@ -400,7 +457,7 @@ def load_registry(home: str) -> Tuple[List[Dict[str, Any]], str]:
         line = raw.rstrip()
         if line.startswith("## "):
             current = {"name": line[3:].strip(), "id": None, "about": None, "projects": [],
-                       "rules": [], "learned": []}
+                       "rules": [], "learned": [], "routine": []}
             factories.append(current)
             section = None
             continue
@@ -422,12 +479,14 @@ def load_registry(home: str) -> Tuple[List[Dict[str, Any]], str]:
                 else:
                     current["learned"].append({"when": None, "what": item})
             continue
-        match = re.match(r"^(id|about|projects):\s*(.*)$", stripped, re.I)
+        match = re.match(r"^(id|about|projects|routine):\s*(.*)$", stripped, re.I)
         if match:
             key, value = match.group(1).lower(), match.group(2).strip()
             section = None
             if key == "projects":
                 current["projects"] = [p.strip() for p in value.split(",") if p.strip()]
+            elif key == "routine":
+                current["routine"] = routine_marks(value)
             elif value:
                 current[key] = value
     if factories:
@@ -440,11 +499,62 @@ def load_registry(home: str) -> Tuple[List[Dict[str, Any]], str]:
                 count += 1
             seen.add(factory["id"])
         return factories, "registry"
-    for row in load_projects(home):
+    for row in load_projects(home, data):
         factories.append({"name": row["label"] or display_name(row["name"]), "id": slug(row["name"]),
                           "about": None, "projects": [row["name"]],
-                          "rules": [], "learned": []})
+                          "rules": [], "learned": [], "routine": []})
     return factories, "projects"
+
+
+def project_owner(factories: List[Dict[str, Any]], project_rows: List[Dict[str, Any]]):
+    """A function from a work item's project word, an alias included, to the id
+    of the factory whose projects name it, or None when no factory does."""
+    alias_of: Dict[str, str] = {}
+    for row in project_rows:
+        for alias in row["aliases"]:
+            alias_of[alias.lower()] = row["name"].lower()
+    owner: Dict[str, str] = {}
+    for factory in factories:
+        for project in factory["projects"]:
+            owner[project.lower()] = factory["id"]
+
+    def owner_of(project: Optional[str]) -> Optional[str]:
+        key = (project or "").strip().lower()
+        key = alias_of.get(key, key)
+        if key in owner:
+            return owner[key]
+        for alias, name in alias_of.items():
+            if name == key and alias in owner:
+                return owner[alias]
+        return None
+    return owner_of
+
+
+def profile_size(rules: List[str]) -> int:
+    """The size of a factory's rules as a brief carries them: characters, not
+    bytes, of one "- " line per rule, each with its newline. PROFILE_CAP is
+    measured against this, by the brief and the factory page alike."""
+    return sum(len("- %s\n" % rule) for rule in rules)
+
+
+def print_profile(data: str, project: str) -> int:
+    """`profile`: the factory that claims <project> and its profile, its Rules:
+    lines (never its Learned: lines).
+
+    Prints the rules' profile_size, PROFILE_CAP and the factory's name on the
+    first line, space separated, and each rule after it, in file order, and
+    nothing at all when there is no registry, no factory claims the project, or
+    that factory has no rules. bin/fm-brief.sh owns what a brief does with it."""
+    if not os.path.isfile(os.path.join(data, "factories.md")):
+        return 0
+    factories, _ = load_registry(data, data)
+    fid = project_owner(factories, load_projects(data, data))(project)
+    factory = next((f for f in factories if f["id"] == fid), None)
+    if factory and factory["rules"]:
+        print(profile_size(factory["rules"]), PROFILE_CAP, factory["name"])
+        for line in factory["rules"]:
+            print(line)
+    return 0
 
 
 # --------------------------------------------------------------------------
@@ -457,7 +567,7 @@ def load_snapshot(home: str) -> Dict[str, Any]:
         with open(seam, encoding="utf-8") as handle:
             return json.load(handle)
     env = dict(os.environ, FM_HOME=home)
-    out = subprocess.run(["bash", os.path.join(BIN, "fm-fleet-snapshot.sh"), "--json"],
+    out = subprocess.run(["bash", os.path.join(BIN, "fm-fleet-snapshot.sh"), "--light"],
                          capture_output=True, text=True, timeout=120, env=env)
     if out.returncode != 0:
         raise RuntimeError("the fleet snapshot failed: %s" % (out.stderr.strip().splitlines() or ["no reason"])[-1])
@@ -530,6 +640,19 @@ def overview_reading(home: str) -> Optional[Dict[str, Any]]:
         ready_list = sorted(x for x in fields[17].split(" ") if x and x != "-")
     return {"known": known, "age": age if known else 0, "busy": working + validating,
             "decisions": decisions, "ready_to_merge": ready - decisions, "ready_list": ready_list}
+
+
+def overview_ready_list(overview: Optional[Dict[str, Any]]) -> Optional[List[str]]:
+    """The overview reading's ready work, or None before a reading that has it."""
+    return (overview or {}).get("ready_list") if (overview or {}).get("known") else None
+
+
+def overview_call_buckets(overview: Optional[Dict[str, Any]], buckets: Dict[str, str]) -> Dict[str, str]:
+    """The buckets the owner's calls are read on: the overview's ready work is
+    the merges, so NEEDS YOU is the count the overview shows; this pane's own
+    buckets stand in only until a reading with that list exists."""
+    ready_list = overview_ready_list(overview)
+    return {ident: "ready" for ident in ready_list} if ready_list is not None else buckets
 
 
 def overview_counts(overview: Optional[Dict[str, Any]], idle: int) -> Dict[str, Any]:
@@ -678,6 +801,15 @@ def shapes_for(home: str, ids: List[str], rows: Dict[str, Dict[str, Any]],
     return shapes
 
 
+def read_calls(home: str, buckets: Dict[str, str], backlog: Optional[Dict[str, Any]],
+               known_shapes: Optional[Dict[str, Dict[str, Any]]]
+               ) -> Tuple[List[str], List[str], List[Dict[str, Any]], Dict[str, Dict[str, Any]]]:
+    """owner_calls, plus the shapes of its held decisions (shapes_for)."""
+    decision_ids, merge_ids, adapter_rows = owner_calls(home, buckets, backlog)
+    shapes = shapes_for(home, decision_ids, {r["id"]: r for r in adapter_rows}, known_shapes)
+    return decision_ids, merge_ids, adapter_rows, shapes
+
+
 def ready_reports(rows: List[Tuple[str, str, str]]) -> List[bool]:
     """Whether each ship `done:` line is its ready report, not a handoff to the checks.
 
@@ -802,15 +934,21 @@ def pane_activity(home: str, running_ids: List[str], now: int, write: bool) -> D
         peek = os.path.join(BIN, "fm-peek.sh")
     result: Dict[str, int] = {}
     fresh: Dict[str, Any] = {}
-    for task_id in running_ids:
+
+    def peek_one(task_id: str) -> str:
+        try:
+            out = subprocess.run(shlex.split(peek) + [task_id, "15"], capture_output=True, text=True,
+                                 timeout=10, env=dict(os.environ, FM_HOME=home))
+            return out.stdout if out.returncode == 0 else ""
+        except (OSError, subprocess.SubprocessError):
+            return ""
+
+    # Each peek reads one pane; they run side by side rather than one after another.
+    texts = side_by_side(*[(lambda t=task_id: peek_one(t)) for task_id in running_ids]) if peek else []
+    for index, task_id in enumerate(running_ids):
         old = seen.get(task_id) or {}
         if peek:
-            try:
-                out = subprocess.run(shlex.split(peek) + [task_id, "15"], capture_output=True, text=True,
-                                     timeout=10, env=dict(os.environ, FM_HOME=home))
-                text = out.stdout if out.returncode == 0 else ""
-            except (OSError, subprocess.SubprocessError):
-                text = ""
+            text = texts[index]
             if text:
                 digest = hashlib.sha256(text.encode("utf-8", "replace")).hexdigest()
                 # A first sight says nothing about when the text last changed.
@@ -948,8 +1086,8 @@ def held_state(row: Dict[str, Any], today: str = "") -> str:
     return "on hold"
 
 
-QUEUE_WORDS = ("starts on its own", "in line", "on hold", "waits on other work", "waits on you", "older call",
-               "deferred")
+QUEUE_WORDS = ("starts on its own", "parked", "in line", "on hold", "waits on other work", "waits on you",
+               "older call", "deferred")
 
 
 def queue_word(row: Dict[str, Any], asked: bool, today: str) -> Optional[str]:
@@ -958,7 +1096,9 @@ def queue_word(row: Dict[str, Any], asked: bool, today: str) -> Optional[str]:
     A decision held for the owner waits on you; it is deferred while its date
     is still ahead, an older call once it has waited undated past the
     snapshot's age, and it waits on other work while a blocker of it is still
-    open, since it cannot be decided before then. Anything else starts on its
+    open, since it cannot be decided before then. Work parked until a date
+    still ahead is parked: it is looked at again on that date and never starts
+    by itself (its date is the job's parked_until). Anything else starts on its
     own when it waits on other work or on a date still ahead, is on hold when
     it is held with neither, and is in line when nothing is set to start it.
     Work listed as in flight with no worker is not queued.
@@ -969,6 +1109,8 @@ def queue_word(row: Dict[str, Any], asked: bool, today: str) -> Optional[str]:
         if row.get("hold_bucket") == "blocked" or row.get("unresolved_blocker_ids"):
             return "waits on other work"
         return {"dated": "deferred", "aged": "older call"}.get(row.get("hold_bucket"), "waits on you")
+    if row.get("hold_kind") == "parked" and (row.get("hold_until") or "") > today:
+        return "parked"
     if row.get("unresolved_blocker_ids"):
         return "starts on its own"
     if row.get("hold_kind"):
@@ -976,17 +1118,33 @@ def queue_word(row: Dict[str, Any], asked: bool, today: str) -> Optional[str]:
     return None if row.get("state") == "in_flight" else "in line"
 
 
-def queue_counts(jobs: List[Dict[str, Any]]) -> Dict[str, int]:
-    """The queue of these jobs as counts; the ones waiting on you include the older calls and the deferred."""
+def queue_counts(jobs: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """The queue of these jobs as counts; the ones waiting on you include the older calls and the deferred.
+
+    The parked are counted once in all and once per date they are parked until, soonest first.
+    """
     words = [j["queue"] for j in jobs if j.get("queue")]
+    dates = sorted(j.get("parked_until") or "" for j in jobs if j.get("queue") == "parked")
     return {"total": len(words), "starts_on_its_own": words.count("starts on its own"),
+            "parked": len(dates),
+            "parked_until": [{"until": date or None, "count": dates.count(date)} for date in sorted(set(dates))],
             "in_line": words.count("in line"), "on_hold": words.count("on hold"),
             "waits_on_other_work": words.count("waits on other work"),
             "waits_on_you": words.count("waits on you") + words.count("older call") + words.count("deferred"),
             "deferred": words.count("deferred")}
 
 
-def queue_parts(queue: Dict[str, int]) -> List[Tuple[str, str]]:
+def parked_words(count: int, dates: List[Optional[str]]) -> str:
+    """The parked as one count: until their one date, or the soonest of their dates."""
+    known = sorted({d for d in dates if d})
+    if not known:
+        return "%d parked" % count
+    if len(set(dates)) == 1:
+        return "%d parked until %s" % (count, day_words(known[0]))
+    return "%d parked, soonest %s" % (count, day_words(known[0]))
+
+
+def queue_parts(queue: Dict[str, Any]) -> List[Tuple[str, str]]:
     """The queue's counts in words, each with the word it stands for (see queue_counts)."""
     if not queue.get("total"):
         return [("total", "nothing queued")]
@@ -994,6 +1152,8 @@ def queue_parts(queue: Dict[str, int]) -> List[Tuple[str, str]]:
     own, wait, deferred = queue["starts_on_its_own"], queue["waits_on_you"], queue["deferred"]
     if own:
         parts.append(("starts_on_its_own", "1 starts on its own" if own == 1 else "%d start on their own" % own))
+    if queue.get("parked"):   # a record from before parked work was counted has none
+        parts.append(("parked", parked_words(queue["parked"], [g["until"] for g in queue["parked_until"]])))
     if queue["in_line"]:
         parts.append(("in_line", "%d in line" % queue["in_line"]))
     if queue["on_hold"]:
@@ -1012,9 +1172,67 @@ def queue_parts(queue: Dict[str, int]) -> List[Tuple[str, str]]:
     return parts
 
 
+# How a factory's page counts the jobs it folds away, per queue word: one and many.
+FOLD_NAMES = {"in line": ("more in line", "more in line"),
+              "starts on its own": ("starts on its own", "start on their own"),
+              "on hold": ("on hold", "on hold"),
+              "waits on other work": ("waits on other work", "wait on other work"),
+              "waits on you": ("more waits on you", "more wait on you"),
+              "older call": ("older call waits on you", "older calls wait on you"),
+              "deferred": ("deferred to a date", "deferred to a date")}
+
+
+def job_queue_words(job: Dict[str, Any]) -> str:
+    """A queued job's queue word as the pane says it: a parked job says until when."""
+    if job.get("queue") == "parked":
+        return "parked until %s" % day_words(job["parked_until"]) if job.get("parked_until") else "parked"
+    return job.get("queue") or "in line"
+
+
+def fold_parts(folded: Dict[str, List[Dict[str, Any]]]) -> List[Tuple[str, List[Dict[str, Any]]]]:
+    """The folded jobs as counts in words, each with the jobs it stands for; the parked soonest first."""
+    parts: List[Tuple[str, List[Dict[str, Any]]]] = []
+    for word, jobs in folded.items():
+        if not jobs:
+            continue
+        if word == "parked":
+            jobs = sorted(jobs, key=lambda j: j.get("parked_until") or "")
+            parts.append((parked_words(len(jobs), [j.get("parked_until") for j in jobs]), jobs))
+            continue
+        parts.append((plural(len(jobs), *FOLD_NAMES[word]), jobs))
+    return parts
+
+
 def request_id_of(text: str) -> str:
     """A captain inbox request id: the characters the inbox takes, at most 128 of them."""
     return re.sub(r"[^A-Za-z0-9._:-]", "-", text)[:128]
+
+
+ROUTINE_QUIET_WORDS = ("finished", "PR ready", "landed", "closed")
+
+
+def routine_folds(job: Dict[str, Any]) -> bool:
+    """Whether a routine job folds into its factory's routine line: only while it runs as expected or waits."""
+    return bool(job.get("routine")) and (job["state"] == "waiting" or (job["state"] == "busy"
+                                                                       and not job.get("quiet")))
+
+
+def routine_lines(factory: Dict[str, Any],
+                  runs: Dict[Tuple[str, str], Dict[str, List[Tuple[int, str]]]]) -> List[Dict[str, Any]]:
+    """One line per routine kind of a factory: its runs today, the last of them, and what it folds."""
+    lines = []
+    for kind in factory["routine"]:
+        today = runs.get((factory["id"], kind), {})
+        folded = [j for j in factory["jobs"] if j.get("routine") == kind and routine_folds(j)]
+        if not today and not folded:
+            continue
+        marks = [mark for task_marks in today.values() for mark in task_marks]
+        last = max(marks) if marks else None
+        lines.append({"kind": kind, "today": len(today),
+                      "last": last[0] if last else None, "last_word": last[1] if last else None,
+                      "running": len([j for j in folded if j["state"] == "busy"]),
+                      "folded": [j["id"] for j in folded]})
+    return lines
 
 
 def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[int] = None,
@@ -1023,7 +1241,13 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
                  known_shapes: Optional[Dict[str, Dict[str, Any]]] = None,
                  buckets: Optional[Dict[str, str]] = None,
                  reconciles: Optional[Dict[str, int]] = None,
-                 overview: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                 overview: Optional[Dict[str, Any]] = None,
+                 calls: Optional[Tuple[List[str], List[str], List[Dict[str, Any]], Dict[str, Dict[str, Any]]]] = None
+                 ) -> Dict[str, Any]:
+    """The pane's record. <calls> is read_calls already taken on these same buckets
+    and backlog, so a caller can read it beside other slow reads; without it,
+    it is read here, on the merges <overview>'s ready work names
+    (overview_call_buckets)."""
     factories, registry_source = load_registry(home)
     project_rows = load_projects(home)
     quiet_after = env_int("FM_FACTORY_QUIET_MINUTES", 15) * 60
@@ -1042,25 +1266,14 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
         since, since_from = now - LOOK_BACK_MAX, "48 hours"
 
     # Project name (and alias) -> factory id.
-    alias_of: Dict[str, str] = {}
-    for row in project_rows:
-        for alias in row["aliases"]:
-            alias_of[alias.lower()] = row["name"].lower()
-    owner: Dict[str, str] = {}
-    for factory in factories:
-        for project in factory["projects"]:
-            owner[project.lower()] = factory["id"]
+    owner_of = project_owner(factories, project_rows)
     other = {"name": "Other work", "id": "other-work", "about": "work no factory claims", "projects": [],
-             "rules": [], "learned": []}
+             "rules": [], "learned": [], "routine": []}
 
     def factory_of(project: Optional[str]) -> str:
-        key = (project or "").strip().lower()
-        key = alias_of.get(key, key)
-        if key in owner:
-            return owner[key]
-        for alias, name in alias_of.items():
-            if name == key and alias in owner:
-                return owner[alias]
+        claimed = owner_of(project)
+        if claimed:
+            return claimed
         if other["id"] not in by_id:
             other.update(steered_by=steering.get(other["id"], "Starship"), jobs=[], needs=[], talk=[])
             factories.append(other)
@@ -1080,12 +1293,11 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
         buckets = buckets_for(tasks)
     # NEEDS YOU is exactly the owner's calls, the one count the bridge strip and
     # the tap page show; a worker's question, a pause or the checks never are.
-    # Its merges are the overview reading's ready work, so the list is the
-    # count the overview shows; this pane's own reading stands in only until
-    # an overview reading with that list exists.
-    ready_list = (overview or {}).get("ready_list") if (overview or {}).get("known") else None
-    call_buckets = {i: "ready" for i in ready_list} if ready_list is not None else buckets
-    decision_ids, merge_ids, adapter_rows = owner_calls(home, call_buckets, backlog)
+    # Its merges are the overview reading's ready work (overview_call_buckets).
+    ready_list = overview_ready_list(overview)
+    if calls is None:
+        calls = read_calls(home, overview_call_buckets(overview, buckets), backlog, known_shapes)
+    decision_ids, merge_ids, adapter_rows, shapes = calls
     known = {r["id"] for r in rows}
     # The adapter is the backlog's own reading of what is held and what still
     # waits on other work, the one the owner's calls are counted from. The
@@ -1100,7 +1312,6 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
     rows += [r for r in adapter_rows if r.get("hold_bucket") and r["id"] not in known]
     row_of = {r["id"]: r for r in rows}
     today = (iso(now) or "")[:10]
-    shapes = shapes_for(home, decision_ids, {r["id"]: r for r in adapter_rows}, known_shapes)
     needs: List[Dict[str, Any]] = []
     feed: List[Dict[str, Any]] = []
     titles: Dict[str, str] = {}
@@ -1172,6 +1383,8 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
                                "started": started_at(meta), "doing": None, "doing_from": None,
                                "last_sign_of_life": None, "sign_of_life_from": None, "quiet": False,
                                "until": None, "pr": (task.get("pr") or {}).get("url"), "queue": None,
+                               "parked_until": None,
+                               "routine": routine_kind(by_id[fid]["routine"], title),
                                "read": read_sources(home, task["id"], ((row or {}).get("hold_reason"),))}
         if task["id"] in merge_ids:
             bucket = "ready"
@@ -1268,7 +1481,11 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
                "started": None, "doing": None, "doing_from": None, "last_sign_of_life": None,
                "sign_of_life_from": None, "quiet": False, "until": None, "pr": row.get("pr_url"),
                "queue": queue_word(row, row["id"] in decision_ids, today),
+               "parked_until": None,
+               "routine": routine_kind(by_id[fid]["routine"], title),
                "read": read_sources(home, row["id"], (row.get("hold_reason"),))}
+        if job["queue"] == "parked":
+            job["parked_until"] = row.get("hold_until")
         if row["id"] in decision_ids:
             job["state"] = "decision for you"
             needs.append(hold_need(row, fid))
@@ -1305,6 +1522,27 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
     # Since you last looked: outcomes and the owner's own calls, never a
     # worker's pause, a question a worker put to Starship, or a blocker.
     done_rows: List[Tuple[Dict[str, Any], str, Dict[str, str]]] = []
+    # A routine job's runs today, per factory and routine kind: each task id
+    # with the times it started, finished or failed.
+    local_today = time.strftime("%Y-%m-%d", time.localtime(now))
+    routine_of: Dict[str, str] = {}
+    runs: Dict[Tuple[str, str], Dict[str, List[Tuple[int, str]]]] = {}
+
+    def is_today(at: Optional[int]) -> bool:
+        return bool(at) and time.strftime("%Y-%m-%d", time.localtime(at)) == local_today
+
+    def note_run(fid: str, kind: str, task_id: str, at: Optional[int] = None, word: str = "") -> None:
+        routine_of[task_id] = kind
+        marks = runs.setdefault((fid, kind), {}).setdefault(task_id, [])
+        if at:
+            marks.append((at, word))
+
+    for factory in factories:
+        for job in factory["jobs"]:
+            if job.get("routine") and job["started"] and is_today(job["started"]):
+                note_run(factory["id"], job["routine"], job["id"], job["started"], "started")
+            elif job.get("routine"):
+                routine_of[job["id"]] = job["routine"]
     for task in snapshot.get("tasks") or []:
         task_id = task.get("id")
         if not task_id or task.get("kind") == "secondmate":
@@ -1315,8 +1553,13 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
             fid = factory_of((row or {}).get("repo") or os.path.basename((task.get("project") or "").rstrip("/")))
         meta = meta_values(((task.get("paths") or {}).get("meta") or {}).get("path"))
         title = titles.get(task_id) or title_of(task_id, meta)
+        kind = routine_kind(by_id[fid]["routine"], title)
+        if kind:
+            routine_of[task_id] = kind
         for event in status_events(((task.get("paths") or {}).get("status_log") or {}).get("path")):
             verb, at = event["verb"], event["at"]
+            if kind and verb in ("done", "failed") and at and at <= now and is_today(at):
+                note_run(fid, kind, task_id, at, "finished" if verb == "done" else "failed")
             if not at or not since <= at <= now:
                 continue
             base = {"at": at, "date": None, "actor": by_id[fid]["name"], "factory": fid, "job": task_id}
@@ -1353,6 +1596,12 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
     for row in closed:
         completion = row.get("completion") or {}
         title = row.get("title") or row["id"]
+        fid = factory_of(row.get("repo"))
+        kind = routine_kind(by_id[fid]["routine"], title)
+        if kind:
+            routine_of[row["id"]] = kind
+            if completion.get("date") == local_today:
+                note_run(fid, kind, row["id"])
         if row["id"] not in delivered:
             word = "closed"
             text = "%s was closed." if "captain" in (row.get("kind"), row.get("hold_kind")) else \
@@ -1363,7 +1612,6 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
             word, text = "landed", "%s is in."
         if word == "finished" and row["id"] in finished_in_feed:
             continue
-        fid = factory_of(row.get("repo"))
         feed.append({"at": None, "date": completion["date"], "actor": by_id[fid]["name"], "factory": fid,
                      "job": row["id"], "word": word, "text": text % title})
     for at, fid, who in steer_log(home):
@@ -1408,6 +1656,9 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
         found = [{"at": parse_iso(note.get("at")), "key": answers[note.get("request_id")]}
                  for note in notes if note.get("request_id") in answers]
         need["answered"] = max(found, key=lambda item: item["at"] or 0) if found else None
+    # A routine job's outcomes fold into its factory's routine line; a failed
+    # run, and a call it put to the owner, still show as usual.
+    feed = [e for e in feed if not (e.get("job") in routine_of and e["word"] in ROUTINE_QUIET_WORDS)]
     feed.sort(key=lambda e: (e["at"] if e["at"] is not None else (parse_iso(e["date"]) or 0)), reverse=True)
     feed = feed[:FEED_CAP]
 
@@ -1417,14 +1668,16 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
                               -(n["since"] or 0)))
     for factory in factories:
         factory["needs"] = [n["id"] for n in needs if n["factory"] == factory["id"]]
-        running = [j for j in factory["jobs"] if j["state"] == "busy"]
+        running = [j for j in factory["jobs"] if j["state"] == "busy" and not routine_folds(j)]
         if factory["needs"]:
             factory["state"] = "needs you"
         elif running:
             factory["state"] = "at work"
         else:
             factory["state"] = "idle"
-        idle_marks = [e["at"] for e in feed if e["factory"] == factory["id"] and e["at"]]
+        factory["routine_runs"] = routine_lines(factory, runs)
+        idle_marks = [e["at"] for e in feed if e["factory"] == factory["id"] and e["at"]] + \
+            [line["last"] for line in factory["routine_runs"] if line["last"]]
         factory["idle_since"] = max(idle_marks) if factory["state"] == "idle" and idle_marks else None
         factory["crew"] = {"workers": len([j for j in factory["jobs"] if j["started"]]), "busy": len(running)}
 
@@ -1450,8 +1703,10 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
         "needs_you": needs,
         "factories": [{k: f[k] for k in ("id", "name", "about", "projects", "steered_by", "state",
                                          "idle_since", "crew", "needs", "jobs", "next", "queue", "rules",
-                                         "learned", "talk")}
+                                         "learned", "talk", "routine", "routine_runs")}
+                      | {"rules_size": profile_size(f["rules"])}
                       for f in factories],
+        "rules_cap": PROFILE_CAP,
         "feed": feed,
         "snapshot": {"generated": snapshot.get("generated"), "schema": snapshot.get("schema")},
     }
@@ -1516,27 +1771,73 @@ def basis_path(home: str) -> str:
     return os.path.join(pane_dir(home), "basis.json")
 
 
+def kept_shapes(home: str, signal: str, now: int) -> Tuple[Dict[str, Dict[str, Any]], int]:
+    """The held questions' shapes the last whole refresh read, and when they were read.
+
+    Reading a question's options costs a second or more each, so a whole refresh
+    reuses them while the owner's calls signal is still the one taken before they
+    were read (every command that changes a call moves it, and so does any
+    write to data/backlog.md) and they are younger than FM_FACTORY_MAX_AGE, the
+    same bound as the pane's safety refresh. shapes_for still reads afresh any
+    question held again since. Otherwise it returns no shapes and <now>.
+    """
+    basis = read_basis(home) if signal else None
+    shapes = (basis or {}).get("shapes")
+    read = (basis or {}).get("shapes_epoch")
+    if not isinstance(shapes, dict) or not isinstance(read, int) or basis.get("calls_signal") != signal \
+            or not 0 <= now - read < env_int("FM_FACTORY_MAX_AGE", 300):
+        return {}, now
+    return dict(shapes), read
+
+
 def refresh(home: str) -> Dict[str, Any]:
     now = now_epoch()
     # Taken before anything is read, so a call that changes meanwhile is caught.
     signal_at_start = calls_signal(home)
     inputs = inputs_digest(home)
     read_at = time.time()
-    overview = overview_reading(home)
-    snapshot = load_snapshot(home)
+    # The reads that do not depend on one another run side by side: the fleet
+    # snapshot, the backlog as its adapter reads it and then its held
+    # questions' shapes (which held decisions are the owner's calls depends on
+    # the backlog alone), the inbox, the reconcile requests and the shared
+    # overview reading; then the panes beside the owner's calls, which need the
+    # snapshot's buckets and the overview's ready work and take the shapes
+    # already read.
+    shapes, shapes_epoch = kept_shapes(home, signal_at_start, now)
+    held_shapes: Dict[str, Dict[str, Any]] = {}
+
+    def backlog_and_shapes():
+        taken = axi_backlog(home)
+        decision_ids, _merges, rows = owner_calls(home, {}, taken)
+        held_shapes.update(shapes_for(home, decision_ids, {r["id"]: r for r in rows}, shapes))
+        return taken
+
+    snapshot, backlog, notes, reconciles, overview = side_by_side(
+        lambda: load_snapshot(home), backlog_and_shapes,
+        lambda: inbox_receipts(home), lambda: reconcile_pending(home),
+        lambda: overview_reading(home))
     running = [t["id"] for t in snapshot.get("tasks") or []
                if (t.get("current_state") or {}).get("state") == "working"
                and (t.get("current_state") or {}).get("source") == "pane"]
-    activity = pane_activity(home, running, now, write=True)
-    shapes: Dict[str, Dict[str, Any]] = {}
-    buckets = buckets_for(live_tasks(snapshot))
+
+    def calls_with_buckets():
+        taken = buckets_for(live_tasks(snapshot))
+        decision_ids, merge_ids, rows = owner_calls(home, overview_call_buckets(overview, taken), backlog)
+        return taken, (decision_ids, merge_ids, rows,
+                       {ident: held_shapes[ident] for ident in decision_ids if ident in held_shapes})
+
+    activity, (buckets, calls) = side_by_side(lambda: pane_activity(home, running, now, write=True),
+                                              calls_with_buckets)
     record = build_record(home, now, snapshot, since=last_look(home, now), activity=activity,
-                          notes=inbox_receipts(home), known_shapes=shapes, buckets=buckets,
-                          reconciles=reconcile_pending(home), overview=overview)
+                          notes=notes, backlog=backlog, known_shapes=shapes, buckets=buckets,
+                          reconciles=reconciles, calls=calls, overview=overview)
     record.update(snapshot_epoch=now, calls_signal=signal_at_start, read_at=read_at)
     try:
+        held = {ident: shapes[ident] for ident in calls[0] if ident in shapes}
         write_atomic(basis_path(home), json.dumps({"taken_epoch": now, "snapshot": snapshot,
-                                                   "activity": activity, "shapes": shapes,
+                                                   "activity": activity, "shapes": held,
+                                                   "shapes_epoch": shapes_epoch if held else now,
+                                                   "calls_signal": signal_at_start,
                                                    "buckets": buckets}))
         write_atomic(inputs_path(home), inputs + "\n")
         kept = True
@@ -1573,15 +1874,17 @@ def load_backlog(home: str) -> Dict[str, Any]:
 
 
 def side_by_side(*reads):
-    """Run each read in its own thread and return their results in order; the first failure is raised."""
+    """Run each read in its own thread and return their results in order; the
+    failure of the earliest read in the list is raised, so the error does not
+    depend on which thread finished first."""
     results: List[Any] = [None] * len(reads)
-    errors: List[BaseException] = []
+    errors: List[Tuple[int, BaseException]] = []
 
     def run(index: int) -> None:
         try:
             results[index] = reads[index]()
         except Exception as error:  # handed back to the caller below
-            errors.append(error)
+            errors.append((index, error))
 
     threads = [threading.Thread(target=run, args=(index,)) for index in range(len(reads))]
     for thread in threads:
@@ -1589,7 +1892,7 @@ def side_by_side(*reads):
     for thread in threads:
         thread.join()
     if errors:
-        raise errors[0]
+        raise min(errors, key=lambda pair: pair[0])[1]
     return results
 
 
@@ -1951,6 +2254,17 @@ def clip(segs, width: int):
     return out
 
 
+def rules_size_words(size: int, cap: int) -> Tuple[str, str]:
+    """A factory's rules size against the cap, and the colour to show it in:
+    marked from nine tenths of the cap, and over it the rules reach no job."""
+    words = "rules {:,} / {:,} characters".format(size, cap)
+    if size > cap:
+        return words + " · over the cap, so its jobs get none of these rules", "red"
+    if size * 10 >= cap * 9:
+        return words + " · near the cap; past it its jobs get none of these rules", "amber"
+    return words, "faint"
+
+
 def row(width: int, left=(), right=(), band: bool = False) -> Row:
     right = list(right)
     if right and seg_len(right) + 16 > width:
@@ -2045,6 +2359,7 @@ class View:
         self.answered: Dict[Tuple[str, str], Dict[str, Any]] = {}   # answers sent here a moment ago
         self.cursor = 0
         self.selected: Optional[Tuple[str, str]] = None
+        self.unfolded: Optional[str] = None   # the factory whose folded jobs are listed
         # An item the highlight was asked to go to (--item, or the focus file),
         # held until the record has it, for at most WANT_SECONDS.
         self.wanted: Optional[Tuple[str, float]] = (item, time.time()) if item else None
@@ -2062,6 +2377,9 @@ class View:
         self.record = record
         if self.opened and not self.has_factory(self.opened):
             self.opened = None
+        if self.unfolded and (self.unfolded != self.opened
+                              or not any(self.page_jobs(self.factory(self.unfolded))[1].values())):
+            self.unfolded = None
         talk = self.talking
         if talk is not None and not (self.has_factory(talk["factory"]) and (
                 "item" not in talk or self.need(talk["item"]))):
@@ -2102,7 +2420,10 @@ class View:
 
     def stops(self) -> List[Tuple[str, str]]:
         if self.opened:
-            return [("need", n["id"]) for n in self.needs(self.opened)] or [("factory", self.opened)]
+            stops = [("need", n["id"]) for n in self.needs(self.opened)] or [("factory", self.opened)]
+            if any(self.page_jobs(self.factory(self.opened))[1].values()):
+                stops.append(("fold", self.opened))   # the line the rest of its queue folds into
+            return stops
         return [("need", n["id"]) for n in self.needs()] + [("factory", f["id"]) for f in self.ordered()]
 
     def want(self, item: str) -> None:
@@ -2143,7 +2464,7 @@ class View:
         self.follow = False
 
     def show(self, fid: Optional[str]) -> None:
-        self.opened, self.cursor, self.selected = fid, 0, None
+        self.opened, self.cursor, self.selected, self.unfolded = fid, 0, None, None
         self.top, self.follow = 0, True
 
     def here(self, kind: str, ident: str) -> bool:
@@ -2169,19 +2490,21 @@ class View:
     @staticmethod
     def overview_jobs(fac: Dict[str, Any]) -> List[Dict[str, Any]]:
         """The jobs a factory shows on the overview: what is moving, and calls on you that have started."""
-        if fac["state"] == "idle":
+        if fac["state"] == "idle" and not any(j["state"] == "busy" for j in fac["jobs"]):
             return []
-        return [job for job in fac["jobs"] if job["state"] in ("busy", "needs a look", "failed", "waiting", "stopped", "no worker") or (
-            job["started"] and job["state"] in ("decision for you", "ready to merge"))]
+        folded = {ident for line in fac.get("routine_runs") or [] for ident in line["folded"]}
+        return [job for job in fac["jobs"] if job["id"] not in folded and (
+            job["state"] in ("busy", "needs a look", "failed", "waiting", "stopped", "no worker") or (
+                job["started"] and job["state"] in ("decision for you", "ready to merge")))]
 
     @staticmethod
-    def page_jobs(fac: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], Dict[str, int]]:
-        """The jobs a factory's own page shows, and the counts per queue word of the rest that folds away."""
+    def page_jobs(fac: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], Dict[str, List[Dict[str, Any]]]]:
+        """The jobs a factory's own page shows, and the rest that folds away, per queue word."""
         # Everything moving or waiting on your answer, then the head of the
         # line; the rest of the queue folds into one count per queue word.
         shown: List[Dict[str, Any]] = []
         shown_line = 0
-        folded = {word: 0 for word in QUEUE_WORDS}
+        folded: Dict[str, List[Dict[str, Any]]] = {word: [] for word in QUEUE_WORDS}
         for job in fac["jobs"]:
             if job["state"] == "finished":
                 continue
@@ -2192,10 +2515,10 @@ class View:
             if job["state"] in ("next", "later"):
                 shown_line += 1
                 if shown_line > 8:
-                    folded["in line"] += 1
+                    folded["in line"].append(job)
                     continue
             elif word and job["state"] != "decision for you":
-                folded[word] += 1
+                folded[word].append(job)
                 continue
             shown.append(job)
         return shown, folded
@@ -2230,8 +2553,8 @@ class View:
         queue = self.record.get("queue") if queue is None else queue
         if not queue:
             return []
-        colours = {"total": "ice", "starts_on_its_own": "ice", "in_line": "mist", "on_hold": "faint",
-                   "waits_on_other_work": "mist", "waits_on_you": "red"}
+        colours = {"total": "ice", "starts_on_its_own": "ice", "parked": "mist", "in_line": "mist",
+                   "on_hold": "faint", "waits_on_other_work": "mist", "waits_on_you": "red"}
         parts = queue_parts(queue)
         lines = [[S(lead)]]
         indent = len(lead) + len(parts[0][1])
@@ -2420,14 +2743,33 @@ class View:
             line.stop = ("factory", fac["id"])
         return rows
 
+    def routine_rows(self, width: int, fac: Dict[str, Any]) -> List[Row]:
+        """A routine kind's runs folded into one line: how many today, the last, and whether one runs now."""
+        rows = []
+        for line in fac.get("routine_runs") or []:
+            words = [plural(line["today"], "run today", "runs today") if line["today"] else "no run today"]
+            if line.get("last"):
+                words.append("last %s %s" % (line["last_word"], when_words(line["last"], self.now())))
+            now = []
+            if line["running"]:
+                now = [S("busy", "amber")]
+            elif line["folded"]:
+                now = [S("waiting", "amber")]
+            rows.append(row(width, [S("     "), S("↻ ", "faint"), S(line["kind"], "mist"),
+                                    S("  " + " · ".join(words), "faint")], now))
+        return rows
+
     def factory_lines(self, width: int, fac: Dict[str, Any]) -> List[Row]:
         band = self.here("factory", fac["id"])
         head = [S(" "), self.mark("factory", fac["id"]), S(fac["name"], "ice", True)]
-        if fac["state"] == "idle":
-            return [row(width, head + [S("   " + self.idle_words(fac), "faint")], self.steer(fac), band=band)]
-        rows = [row(width, head + [S("   " + self.queue_brief(fac), "faint")], self.steer(fac), band=band)]
+        idle = fac["state"] == "idle"
+        words = self.idle_words(fac) if idle else self.queue_brief(fac)
+        rows = [row(width, head + [S("   " + words, "faint")], self.steer(fac), band=band)]
         for job in self.overview_jobs(fac):
             rows += self.job_rows(width, job, full=False)
+        rows += self.routine_rows(width, fac)
+        if idle:
+            return rows
         nxt = fac.get("next")
         if nxt:
             text = [S("       next  ", "faint"), S(nxt["title"], "mist")]
@@ -2502,13 +2844,15 @@ class View:
             title, mode = talk["about"], talk.get("mode")
             heard = [[S(line, "ice", True)] for line in wrap(talk.get("live") or "", inner - 1)[-3:]]
             if mode == "listening":
-                corner = "● listening %d:%02d" % divmod(int(talk.get("seconds") or 0), 60) \
+                corner = "%s %d:%02d" % (("recorded" if talk.get("held") else "● listening",)
+                                         + divmod(int(talk.get("seconds") or 0), 60)) \
                     if talk.get("hearing") else "starting the microphone"
                 meter = "".join("▁▂▃▄▅▆▇█"[min(int(level * 8), 7)] for level in talk.get("levels") or [])
                 if talk.get("live"):
                     heard[-1].append(S("_", "cyan"))
                 lines = (heard if talk.get("live") else [[S("speak now", "faint")]]) + [[S(meter, "amber")]]
-                hint = "sends when you stop speaking, or on enter · esc cancels · type to write it instead"
+                hint = ("enter writes it down and sends it" if talk.get("held") else
+                        "sends when you stop speaking, or on enter") + " · esc cancels · type to write it instead"
             elif mode == "writing":
                 corner = "writing it down"
                 lines = heard if talk.get("live") else [[S("…", "amber", True)]]
@@ -2596,9 +2940,13 @@ class View:
                     keys.append("x settled?")
             else:
                 keys.append("k keep · c changes")
+        if kind == "fold" and self.unfolded != ident:
+            keys.append("enter list them")
         if self.readable():
             keys.append("r read")
-        if not self.opened or not self.in_tab:
+        if self.unfolded:
+            keys.append("esc hide the list")
+        elif not self.opened or not self.in_tab:
             keys.append("enter open" if not self.opened else "esc back")
         elif self.in_tab:
             keys.append("esc back")
@@ -2658,19 +3006,29 @@ class View:
         shown, folded = self.page_jobs(fac)
         for job in shown:
             rows += self.job_rows(width, job, full=True)
-        names = {"in line": ("more in line", "more in line"),
-                 "starts on its own": ("starts on its own", "start on their own"),
-                 "on hold": ("on hold", "on hold"),
-                 "waits on other work": ("waits on other work", "wait on other work"),
-                 "waits on you": ("more waits on you", "more wait on you"),
-                 "older call": ("older call waits on you", "older calls wait on you"),
-                 "deferred": ("deferred to a date", "deferred to a date")}
-        tail = [plural(count, *names[word]) for word, count in folded.items() if count]
-        if tail:
-            rows += flow(width, [S("     · ", "faint")], " · ".join(tail), "faint")
+        parts = fold_parts(folded)
+        if parts:
+            # The rest of the queue, one count per queue word; enter lists every job it stands for.
+            stop = ("fold", fac["id"])
+            fold = flow(width, [S("   "), self.mark(*stop), S("· ", "faint")],
+                        " · ".join(words for words, _jobs in parts), "faint")
+            for line in fold:
+                line.band = self.here(*stop)
+            if self.unfolded == fac["id"]:
+                for words, jobs in parts:
+                    fold += [row(width), row(width, [S("       "), S(words, "mist", True)])]
+                    fold += [row(width, [S("         · ", "faint"), S(job["title"], "ice")],
+                                 [S(job_queue_words(job), "mist")]) for job in jobs]
+            for line in fold:
+                line.stop = stop
+            rows += fold
         rows += [row(width), row(width, [S(" RULES THIS CREW FOLLOWS", "mist", True)]), row(width)]
         if not fac["rules"]:
             rows.append(row(width, [S("     none written down yet", "faint")]))
+        else:
+            words, colour = rules_size_words(fac.get("rules_size", profile_size(fac["rules"])),
+                                             self.record.get("rules_cap", PROFILE_CAP))
+            rows += flow(width, [S("   ")], words, colour) + [row(width)]
         for rule in fac["rules"]:
             for index, line in enumerate(wrap(rule, max(width - 8, 20))):
                 rows.append(row(width, [S("     " if index else "   · ", "faint"), S(line, "mist")]))
@@ -2865,9 +3223,11 @@ class Voice:
     """One spoken note: the microphone heard until the speaker stops, then written down.
 
     The recorder's samples are read in a thread, a tenth of a second at a time.
-    The room's own level is the quietest recent tenth, taken as quiet until a
-    tenth says otherwise so that speech from the first moment still counts; a
-    tenth three times louder than it, and louder than VOICE_SPEECH, is speech.
+    The room's own level is the quietest recent tenth: the first VOICE_SETTLE
+    tenths only measure it, and it is taken as no louder than
+    VOICE_LOUDEST_ROOM so that speech from the first moment still counts once
+    they are over; after them a tenth twice as loud as it, and louder than
+    VOICE_SPEECH, is speech.
     The recording ends by itself once VOICE_QUIET_STOP of quiet follows speech,
     when no speech came within VOICE_NO_SPEECH, at VOICE_MAX, or when the
     recorder stops.
@@ -2893,7 +3253,7 @@ class Voice:
         self.quiet = 0                     # tenths of quiet since the last speech
         self.loudest = 0.0                 # the loudest tenth, of 32768; nothing at all means no microphone
         self.over = False
-        self.floor = VOICE_SPEECH / 3.0
+        self.floor = float(VOICE_LOUDEST_ROOM)
         self.words: Optional[str] = None   # what was said, once written down
         self.failed = ""                   # why it could not be written down
         self.proc = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
@@ -2925,9 +3285,10 @@ class Voice:
             level = math.sqrt(sum(x * x for x in tenth) / max(len(tenth), 1))
             # The floor drops to a quieter tenth at once and creeps up slowly,
             # so it follows the room and not the voice.
-            self.floor = max(min(level, self.floor * 1.01), 1.0)
+            settling = len(self.levels) < VOICE_SETTLE
+            self.floor = max(min(level, self.floor if settling else self.floor * 1.01), 1.0)
             self.loudest = max(self.loudest, level)
-            if level > max(self.floor * 3, VOICE_SPEECH):
+            if not settling and level > max(self.floor * 2, VOICE_SPEECH):
                 self.spoken += 1
                 self.quiet = 0
             else:
@@ -3288,7 +3649,7 @@ class Pane:
 
     def open_talk(self, talk: Dict[str, Any], listen: bool) -> None:
         """Open the talk box under the highlighted row; by voice first where this machine can listen."""
-        talk.update(text="", stop=self.view.at(), mode="typed", live="")
+        talk.update(text="", stop=self.view.at(), mode="typed", live="", held=False)
         self.view.talking = talk
         if not (listen and self.view.voice):
             return
@@ -3314,20 +3675,29 @@ class Pane:
         elif talk["mode"] == "listening":
             talk.update(levels=voice.levels[-8:], seconds=voice.seconds(), hearing=bool(voice.levels),
                         live=voice.live)
-            if voice.over:
+            if voice.over and not talk["held"]:
                 self.heard(by_enter=False)
         elif talk["mode"] == "writing" and (voice.words is not None or voice.failed):
             self.written()
 
     def heard(self, by_enter: bool) -> None:
-        """The recording is over: write it down, or say that nothing was heard."""
+        """The recording is over: write it down, or say that nothing was heard.
+
+        Sound that never counted as speech is not written down on its own: it
+        is held, and enter writes it down.
+        """
         voice, talk = self.voice, self.view.talking
         voice.stop()
+        silent = voice.loudest < 2
         if voice.heard or (by_enter and voice.seconds() >= 0.3):
             talk["mode"] = "writing"
             voice.write_down()
             return
-        silent = voice.loudest < 2
+        if not silent and voice.seconds() >= 0.3:
+            talk["held"] = True
+            self.say("Nothing counted as speech. Press enter to write down what was recorded, or type it instead. "
+                     "Esc cancels.", "amber", 60)
+            return
         self.close_voice()
         talk["mode"] = "typed"
         self.not_sent("the microphone gave no sound. Type it instead, or check that this terminal may use the "
@@ -3483,6 +3853,14 @@ class Pane:
             view.move(-1)
         elif key == "down":
             view.move(1)
+        elif key == "enter" and view.at()[0] == "fold":
+            # The folded count line lists every job it stands for, or hides them again.
+            fid = view.at()[1]
+            view.unfolded = None if view.unfolded == fid else fid
+            view.follow = True
+        elif key == "esc" and view.unfolded:
+            view.unfolded = None
+            view.follow = True
         elif key == "enter":
             fid = self.factory_of_stop()
             if fid and not view.opened:
@@ -3871,7 +4249,8 @@ def follow(home: str, task_id: str) -> None:
 def main(argv: List[str]) -> int:
     parser = argparse.ArgumentParser(prog="fm-factory.py", add_help=True,
                                      description="The Factory pane. See the header of this file.")
-    parser.add_argument("command", nargs="?", choices=["view", "follow", "open-tab", "workers", "refresh", "refresh-calls"])
+    parser.add_argument("command", nargs="?", choices=["view", "follow", "open-tab", "workers", "refresh", "refresh-calls",
+                                                          "profile"])
     parser.add_argument("target", nargs="?")
     parser.add_argument("--data", action="store_true")
     parser.add_argument("--plain", action="store_true")
@@ -3882,6 +4261,7 @@ def main(argv: List[str]) -> int:
     parser.add_argument("--origin-tab")
     parser.add_argument("--page")
     parser.add_argument("--item")
+    parser.add_argument("--data-dir")
     try:
         args = parser.parse_args(argv)
     except SystemExit as stop:
@@ -3916,6 +4296,8 @@ def main(argv: List[str]) -> int:
             live(Pane(home, args.factory, in_tab=bool(args.factory and os.environ.get("HERDR_PANE_ID")),
                       item=args.item))
             return 0
+        if args.command == "profile" and args.target:
+            return print_profile(args.data_dir or os.path.join(home, "data"), args.target)
         if args.command == "follow" and args.target:
             follow(home, args.target)
             return 0

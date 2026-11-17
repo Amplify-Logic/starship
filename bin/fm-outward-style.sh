@@ -24,7 +24,7 @@
 # reads on every action, so a switch holds from every worker's next action
 # without a relaunch. Switching rewrites only the style line, and the broad
 # lines when switches are named; narrow standing permissions and comments are
-# kept, so every switch is undone by running another. docs/configuration.md
+# kept, so every switch is undone by running another. docs/fork-configuration.md
 # "Worker outward actions" owns what each style allows, and
 # bin/fm-outward-check.py's header owns the file mechanics.
 set -eu

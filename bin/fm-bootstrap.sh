@@ -20,25 +20,11 @@
 #                 (only with config/record-hygiene present),
 #                 "BACKLOG_RECONCILE: code-root <file> is not this home's <file>; ...",
 #                 "TANGLE: <remediation>",
-#                 "HOST_ENV: WSL: <problem> - <advice>",
-#                 "HOST_ENV: Linux on <arm arch>: no Chrome is installed ...",
-#                 "BOOTSTRAP_INFO: headless server: <board-access advice>",
 #                 "SECONDMATE_SYNC: secondmate <id>: skipped: <reason>",
 #                 "NUDGE_SECONDMATES: secondmate <id>: send failed: <reason>",
 #                 "BOOTSTRAP_INFO: nudged fm-<id> with '<message>'",
 #                 "SECONDMATE_LIVENESS: secondmate <id>: skipped: <reason>|respawn failed after <cause>: <reason>",
 #                 "SECONDMATE_HANDOFF: secondmate <id>: pending delivery: <n> item(s)",
-#                 "TOOLCHAIN_DRIFT: <runtime> installed <version>, certified
-#                  <version> (<evidence>) - <why>",
-#                 "UPSTREAM: <N> commits behind <remote>/<branch> (<url>)
-#                  [- <R> upstream commits, <D> already delivered here] - <subjects>",
-#                 "UPSTREAM_REPORT: new private report at <path>",
-#                 "UPSTREAM_CATCHUP: catch-up ready to prepare, private report at <path>",
-#                 "STACK_TOOLS: behind: <tool> installed <version>, latest|pinned
-#                  <version> (small update|quiet-window upgrade); ...",
-#                 "STACK_TOOLS: could not check: <tool>, ...",
-#                 "LEAK_PREPUSH: <checkout>: <problem>",
-#                 "MOTHERSHIP_MONITOR: <room|config line>: <problem>",
 #                 "FMX: X mode on ..." or "FMX: X mode off ...",
 #                 "TREEHOUSE_POOL_REPORT: <pool finding or scan summary>" (only when
 #                 the config/treehouse-pool-report presence flag exists).
@@ -106,63 +92,9 @@
 #          guesses at malformed or unsafe existing files, and secondmate homes
 #          await the primary-authoritative inherited value instead of creating
 #          their own.
-#          TOOLCHAIN_DRIFT compares docs/toolchain-manifest.tsv against PATH and
-#          prints one line per runtime whose installed version differs from the
-#          version this repo carries certification evidence for. It reports and
-#          never blocks a launch, never installs, and never pins, because every
-#          certified runtime here self-updates and a strict gate in front of a
-#          self-updating binary is a scheduled outage. It is silent for a
-#          matching runtime, an absent binary (MISSING already owns that), and
-#          an unparseable --version; see bin/fm-toolchain-lib.sh.
-#          HOST_ENV is a read-only local check of the Linux host Firstmate runs
-#          on, silent on macOS and on a desktop Linux session. Inside WSL
-#          (WSL_DISTRO_NAME set) it names the code root, home, projects
-#          directory, or any project that sits on a Windows drive under
-#          /mnt/<letter>/, says when WSL networking is none (no network at
-#          all, where WSL falls back when mirrored networking is unsupported),
-#          and otherwise names a .wslconfig that turns localhost forwarding off
-#          while networking is not mirrored (read through wslinfo, cmd.exe,
-#          and wslpath; silent when they are unavailable or cmd.exe or wslpath
-#          does not answer within 5 seconds).
-#          On Arm Linux (aarch64 or arm64), a server or WSL on a Windows on
-#          Arm PC alike, with no Chrome or Chromium on PATH it says browser
-#          checks are unavailable there, since Google ships no Chrome for Arm
-#          Linux; silent when a browser is installed.
-#          On a headless server (no DISPLAY or WAYLAND_DISPLAY, reached over
-#          SSH) without Tailscale up, it prints one BOOTSTRAP_INFO fact that
-#          review boards and dev servers are reached from the person's own
-#          computer over Tailscale or an SSH port forward, once per home: a
-#          locked run records state/.host-env-headless-advised and stays
-#          silent while it exists. ONBOARDING-windows.md and
-#          ONBOARDING-linux-server.md own the setup each line points at.
-#          UPSTREAM is detect-only and silent when there is no upstream remote,
-#          origin and upstream share a URL (not a fork), the home is a secondmate,
-#          the network is unavailable, or HEAD already contains the upstream tip.
-#          Its count is the raw upstream delta MINUS the commits this fork has
-#          already delivered, derived from port references in the fork's own
-#          commit history plus a reviewable override ledger, so the number falls
-#          as batches land instead of only ever rising; the optional accounting
-#          clause reports the raw and delivered figures whenever the ledger
-#          accounted for anything, and a fully delivered delta is silent.
-#          It never merges and never touches projects/; see bin/fm-upstream-lib.sh.
-#          STACK_TOOLS is the read-only network-phase tool-version notice owned
-#          by bin/fm-stack-versions.sh notice, which caches its release lookups
-#          for a day per home, names a tool it could not check at most once a
-#          day, and is otherwise silent unless an installed stack tool is known
-#          to be behind. It installs nothing.
-#          UPSTREAM_REPORT and UPSTREAM_CATCHUP are the read-only pending-report
-#          check owned by bin/fm-upstream-watch.sh. The weekly job writes only
-#          private data/; acknowledge the report after reading it so later
-#          sessions stay quiet.
-#          Bootstrap hooks (bin/fm-addon.sh) add their own read-only lines,
-#          which the hook's owner documents.
-#          Outside detect-only, the local phase installs or refreshes the
-#          pre-push leak check (bin/fm-leak-prepush.sh) on FM_ROOT and on the
-#          add-on checkout; LEAK_PREPUSH names a checkout it could not install on.
-#          Outside detect-only, the local phase also runs
-#          bin/fm-procevent-mothership.sh ensure when config/mothership-monitor
-#          exists or a Mothership room is registered; MOTHERSHIP_MONITOR names a
-#          room it could not arm or a malformed setting line.
+#          Bootstrap hooks (bin/fm-addon.sh) add their own read-only lines, and
+#          outside detect-only the local phase runs bootstrap-sweep hooks; each
+#          hook's own header documents the lines it prints.
 #          X mode is OPTIONAL and inert unless FM_HOME/.env has a non-empty
 #          FMX_PAIRING_TOKEN. When opted in, bootstrap requires curl+jq, writes
 #          the relay poll shim and 30s cadence config, and prints an FMX line.
@@ -210,16 +142,14 @@
 #                 step. Unrecognized values fall back here on purpose: a typo
 #                 must never silently skip a safety sweep.
 #            skip - every LOCAL step, and none of the network ones. Skips
-#                 `gh auth status`, the STACK_TOOLS notice,
-#                 secondmate_liveness_sweep, secondmate_sync,
+#                 `gh auth status`, secondmate_liveness_sweep, secondmate_sync,
 #                 secondmate_handoff_resume, and fleet_sync.
 #            only - ONLY those network steps and nothing else. No tool detection,
 #                 no version floors, no tangle check, no backlog
 #                 reconciliation, no x_mode_setup: those already ran on the
 #                 local pass.
 #          FM_BOOTSTRAP_DETECT_ONLY composes with it unchanged, so `only` plus
-#          detect-only is the read-only `gh auth status` probe and STACK_TOOLS
-#          notice on their own.
+#          detect-only is the read-only `gh auth status` probe on its own.
 #          bin/fm-startup-network.sh owns the deferral: it runs the `only` phase
 #          in a detached bounded worker and publishes the result. This file stays
 #          the single owner of every sweep, and the split changes only WHEN each
@@ -1018,13 +948,6 @@ missing_tool_diagnostic() {
 # fm_backend_required_tools (bin/fm-backend.sh). So a herdr/zellij/cmux/tern home is
 # never told tmux is missing, and only orca drops treehouse. A backend value with
 # no verified dependency set is reported before the universal checks continue.
-# The fork's read-only drift checks. Both are detect-only and never block a
-# launch, install, pin, or merge; their owners hold the reasoning for why a
-# strict gate is the wrong shape in front of a self-updating binary.
-# shellcheck source=bin/fm-upstream-lib.sh disable=SC1091
-[ ! -r "$SCRIPT_DIR/fm-upstream-lib.sh" ] || . "$SCRIPT_DIR/fm-upstream-lib.sh"
-# shellcheck source=bin/fm-toolchain-lib.sh disable=SC1091
-[ ! -r "$SCRIPT_DIR/fm-toolchain-lib.sh" ] || . "$SCRIPT_DIR/fm-toolchain-lib.sh"
 
 COMMON_TOOLS="node git gh no-mistakes gh-axi chrome-devtools-axi tasks-axi quota-axi"
 BACKEND=$(fm_backend_name)
@@ -1272,83 +1195,6 @@ EOF
   x_mode_write_if_changed "$cadence" "$cadence_body" 600 || { fmx_arm_failed; return 0; }
 
   echo "FMX: X mode on - relay poll armed via state/x-watch.check.sh; 30s watcher cadence in config/x-mode.env"
-}
-
-# Detect-only validation of the optional local account registry. A bad file must
-# never fail a launch here: it reports and returns, exactly like the dispatch
-# profile validator above. An ABSENT file is silent and means no account pinning
-# at all (bin/fm-account-lib.sh; docs/configuration.md).
-accounts_validate() {
-  local file err
-  file="$CONFIG/accounts.json"
-  [ -f "$file" ] || return 0
-  if ! command -v jq >/dev/null 2>&1; then
-    echo "MISSING: jq (install: $(install_cmd jq))"
-    return 0
-  fi
-  if ! jq -e . "$file" >/dev/null 2>&1; then
-    echo "ACCOUNTS: invalid config/accounts.json - malformed JSON"
-    return 0
-  fi
-  err=$(jq -r '
-    def vendors: ["claude", "codex"];
-    # Only claude reports an identity a pinned home can be checked against;
-    # codex login status prints no identity at all, so an expect value there
-    # could never be verified and is refused rather than silently ignored.
-    def expect_vendors: ["claude"];
-    def name_ok($n): ($n | test("^[A-Za-z0-9][A-Za-z0-9._-]*$"));
-    def bad_vendors: [keys[] | . as $k | select(vendors | index($k) | not)];
-    def accounts_of($v): ($v.value.accounts? // {});
-    def bad_names: [to_entries[] | accounts_of(.) | keys[] | select(name_ok(.) | not)] | unique;
-    def unverifiable_expects:
-      [to_entries[] | . as $v
-        | select(expect_vendors | index($v.key) | not)
-        | accounts_of($v) | to_entries[]
-        | select(.value | has("expect"))
-        | "\($v.key):\(.key)"];
-    def bad_defaults:
-      [to_entries[] | . as $v
-        | select($v.value | has("default"))
-        | select((accounts_of($v) | has($v.value.default)) | not)
-        | "\($v.key):\($v.value.default)"];
-    if type != "object" then "top-level value must be an object"
-    elif (bad_vendors | length) > 0 then "unknown vendor: " + (bad_vendors | join(", "))
-    elif ([to_entries[] | select((.value | type) != "object")] | length) > 0 then
-      "each vendor must be an object"
-    elif ([to_entries[] | select(.value | has("accounts")) | select((.value.accounts | type) != "object")] | length) > 0 then
-      "accounts must be an object"
-    elif ([to_entries[] | accounts_of(.) | to_entries[] | select((.value | type) != "object")] | length) > 0 then
-      "each account must be an object"
-    elif (bad_names | length) > 0 then "invalid account name: " + (bad_names | join(", "))
-    elif ([to_entries[] | accounts_of(.) | to_entries[]
-        | select(.value | has("label")) | select((.value.label | type) != "string")] | length) > 0 then
-      "each label must be a string"
-    elif ([to_entries[] | accounts_of(.) | to_entries[] | select(.value | has("expect"))
-        | select((.value.expect | type) != "string" or (.value.expect | length) == 0)] | length) > 0 then
-      "each expect must be a non-empty string"
-    elif (unverifiable_expects | length) > 0 then
-      "expect cannot be verified for this vendor: " + (unverifiable_expects | join(", "))
-    elif ([to_entries[] | select(.value | has("default"))
-        | select((.value.default | type) != "string" or (.value.default | length) == 0)] | length) > 0 then
-      "each default must be a non-empty account name"
-    elif (bad_defaults | length) > 0 then
-      "default names an account that is not defined: " + (bad_defaults | join(", "))
-    else empty
-    end
-  ' "$file" 2>/dev/null || true)
-  if [ -n "$err" ]; then
-    echo "ACCOUNTS: invalid config/accounts.json - $err"
-    return 0
-  fi
-  if [ "${FM_BOOTSTRAP_VERBOSE_FACTS:-0}" = 1 ]; then
-    jq -r '
-      ["BOOTSTRAP_INFO: account pinning active config/accounts.json"]
-      + [to_entries[] | "BOOTSTRAP_INFO: " + .key + " accounts: "
-          + ((.value.accounts? // {} | keys_unsorted) | join(", "))
-          + (if (.value.default? != null) then " (default " + (.value.default | tostring) + ")" else "" end)]
-      | .[]
-    ' "$file"
-  fi
 }
 
 crew_dispatch_validate() {
@@ -1891,89 +1737,12 @@ detect_local_config() {
     echo "MISSING_MANUAL: cursor-agent (instructions: $(manual_install_url cursor-agent))"
   fi
   crew_dispatch_validate
-  accounts_validate
   if [ "${FM_BOOTSTRAP_VERBOSE_FACTS:-0}" = 1 ] \
     && ! fm_backlog_backend_manual "$CONFIG" && fm_tasks_axi_compatible; then
     echo "BOOTSTRAP_INFO: tasks-axi available"
   fi
   detect_code_root_backlog_fork
   detect_home_summary_publication
-}
-
-# Host environment check for Linux homes: WSL on a Windows PC, or a headless
-# server reached over SSH. Read-only and local; the header owns the contract.
-host_env_on_windows_drive() {  # <path>
-  case "$1/" in
-    /mnt/[A-Za-z]/*) return 0 ;;
-  esac
-  return 1
-}
-
-host_env_resolve() {  # <path>: physical path when it exists, else as given
-  (cd -P -- "$1" 2>/dev/null && pwd -P) || printf '%s\n' "$1"
-}
-
-host_env_wslconfig() {  # prints the Windows user's .wslconfig path when readable
-  local profile path
-  command -v cmd.exe >/dev/null 2>&1 && command -v wslpath >/dev/null 2>&1 || return 1
-  profile=$(cd / && fm_run_timed 5 cmd.exe /c 'echo %USERPROFILE%' </dev/null 2>/dev/null | tr -d '\r' | head -n 1)
-  [ -n "$profile" ] || return 1
-  path=$(fm_run_timed 5 wslpath -u "$profile" </dev/null 2>/dev/null)/.wslconfig || return 1
-  [ -r "$path" ] || return 1
-  printf '%s\n' "$path"
-}
-
-# host_env_arm_without_chrome <guide>: Google publishes no Chrome for Arm Linux,
-# so bin/fm-linux-setup.sh skips it there with a warning, on a server and inside
-# WSL on a Windows on Arm PC alike; this line keeps that fact in front of the
-# first mate, whose browser tool otherwise fails with an error that never says so.
-host_env_arm_without_chrome() {
-  case "$(uname -s 2>/dev/null) $(uname -m 2>/dev/null)" in
-    'Linux aarch64'|'Linux arm64')
-      command -v google-chrome >/dev/null 2>&1 || command -v google-chrome-stable >/dev/null 2>&1 \
-        || command -v chromium >/dev/null 2>&1 || command -v chromium-browser >/dev/null 2>&1 \
-        || echo "HOST_ENV: Linux on $(uname -m): no Chrome is installed and Google publishes none for Arm Linux, so browser checks (chrome-devtools-axi) are unavailable on this machine; everything else works, and an x86 machine has them ($1)"
-      ;;
-  esac
-}
-
-detect_host_environment() {
-  local path seen='' wslconfig mode forwarding advised="$STATE/.host-env-headless-advised"
-  # WSL exports WSL_DISTRO_NAME into every process it starts; nothing else does.
-  if [ -n "${WSL_DISTRO_NAME:-}" ]; then
-    host_env_arm_without_chrome ONBOARDING-windows.md
-    for path in "$FM_ROOT" "$FM_HOME" "$PROJECTS" "$PROJECTS"/*; do
-      [ "$path" = "$PROJECTS/*" ] && continue
-      path=$(host_env_resolve "$path")
-      case " $seen " in *" $path "*) continue ;; esac
-      seen="$seen $path"
-      host_env_on_windows_drive "$path" \
-        && echo "HOST_ENV: WSL: $path is on the Windows drive - move it under the Linux home (~); git, file watching and file permissions are slow or broken under /mnt/"
-    done
-    mode=$(wslinfo --networking-mode 2>/dev/null | tr -d '\r' || true)
-    if [ "$mode" = none ]; then
-      echo "HOST_ENV: WSL: Ubuntu has no network (WSL networking mode is none; a Windows that cannot use networkingMode=mirrored normally falls back to NAT, where localhost still works and nothing needs changing, so this is the rarer no-network fallback) - remove the networkingMode=mirrored line from .wslconfig in your Windows user folder, then run wsl --shutdown from Windows (ONBOARDING-windows.md)"
-    elif [ "$mode" != mirrored ] && wslconfig=$(host_env_wslconfig); then
-      forwarding=$(LC_ALL=C awk -F= '
-        /^[[:space:]]*\[/ { section = tolower($0); gsub(/[[:space:]]/, "", section) }
-        section == "[wsl2]" && tolower($1) ~ /^[[:space:]]*localhostforwarding[[:space:]]*$/ {
-          value = tolower($2); gsub(/[[:space:]]/, "", value); last = value
-        }
-        END { print last }' "$wslconfig" 2>/dev/null)
-      [ "$forwarding" = false ] \
-        && echo "HOST_ENV: WSL: localhost forwarding is off in $wslconfig, so review boards and dev servers will not open in the Windows browser - set networkingMode=mirrored under [wsl2] there, then run wsl --shutdown from Windows (ONBOARDING-windows.md)"
-    fi
-    return 0
-  fi
-  [ "$(uname -s 2>/dev/null)" = Linux ] || return 0
-  host_env_arm_without_chrome "ONBOARDING-linux-server.md step 1"
-  [ -z "${DISPLAY:-}" ] && [ -z "${WAYLAND_DISPLAY:-}" ] || return 0
-  [ -n "${SSH_CONNECTION:-}" ] || [ -n "${SSH_TTY:-}" ] || return 0
-  [ -e "$advised" ] && return 0
-  command -v tailscale >/dev/null 2>&1 && tailscale ip -4 >/dev/null 2>&1 && return 0
-  echo "BOOTSTRAP_INFO: headless server: review boards and dev servers listen only on this server - open them from your own computer over Tailscale (recommended) or an SSH port forward (ONBOARDING-linux-server.md); shown once for this home"
-  # A read-only session leaves the record to the session holding the fleet lock.
-  [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" = 1 ] || { [ -d "$STATE" ] && : > "$advised"; } 2>/dev/null || true
 }
 
 # Shadow-backlog check. When this home's data directory is not the code root's,
@@ -2061,32 +1830,16 @@ if network_phase; then
   __fm_timing_stamp=$(fm_timing_now_ms)
   gh auth status >/dev/null 2>&1 || echo "NEEDS_GH_AUTH"
   fm_timing_record phase gh-auth "$__fm_timing_stamp"
-  # Read-only: names stack tools behind their latest release or Herdr's pin, from
-  # a once-a-day cache of the release lookups; bin/fm-stack-versions.sh owns it.
-  __fm_timing_stamp=$(fm_timing_now_ms)
-  FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" "$SCRIPT_DIR/fm-stack-versions.sh" notice
-  fm_timing_record phase stack-versions "$__fm_timing_stamp"
 fi
 local_phase && detect_local_config
-local_phase && detect_host_environment
 
-# Read-only runtime drift check: compares docs/toolchain-manifest.tsv against
-# PATH. Detection only - it reports and never blocks a launch; see
-# bin/fm-toolchain-lib.sh for why a strict gate is the wrong shape here.
-command -v fm_toolchain_check >/dev/null 2>&1 && fm_toolchain_check "$FM_ROOT"
-# Read-only fork drift check: surfaces commits on the configured upstream remote
-# that this home lacks, minus the commits the derived ported ledger accounts for.
-# Silent when not a fork / offline / current. Never merges.
-command -v fm_upstream_check >/dev/null 2>&1 && fm_upstream_check "$FM_ROOT" "$FM_HOME"
-# Read-only pending-report check for the standing private upstream watch.
-# Generation, watermarking, acknowledgement, and path validation remain owned
-# by fm-upstream-watch.sh rather than being reimplemented here.
-[ ! -x "$SCRIPT_DIR/fm-upstream-watch.sh" ] \
-  || "$SCRIPT_DIR/fm-upstream-watch.sh" pending
 # Read-only checks from bootstrap hooks: this checkout's built-in hooks and this
 # home's private add-on (bin/fm-addon.sh owns the hook points). Each hook owns
 # its own check, and a home whose hooks have nothing to say prints nothing.
-FM_HOME="$FM_HOME" FM_CONFIG_OVERRIDE="$CONFIG" "$SCRIPT_DIR/fm-addon.sh" run bootstrap
+# Each hook gets 40s by default, above the toolchain drift hook's five 5s probes.
+FM_HOME="$FM_HOME" FM_ROOT_OVERRIDE="$FM_ROOT" FM_CONFIG_OVERRIDE="$CONFIG" FM_STATE_OVERRIDE="$STATE" \
+  FM_DATA_OVERRIDE="$DATA" FM_PROJECTS_OVERRIDE="$PROJECTS" FM_BOOTSTRAP_NETWORK="$FM_BOOTSTRAP_NETWORK_PHASE" \
+  FM_ADDON_HOOK_TIMEOUT="${FM_ADDON_HOOK_TIMEOUT:-40}" "$SCRIPT_DIR/fm-addon.sh" run bootstrap
 local_phase && [ -e "$CONFIG/record-hygiene" ] && record_hygiene_report
 
 if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then
@@ -2129,19 +1882,11 @@ if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then
   fi
   # x_mode_setup writes local Relay artifacts only and never leaves the machine.
   local_phase && x_mode_setup
-  # Relink this home's opt-in skills, so a switch changed by hand reaches the
-  # next session; bin/fm-opt-in-skills.sh owns the switches and the links.
-  if local_phase && [ -x "$SCRIPT_DIR/fm-opt-in-skills.sh" ]; then
-    FM_HOME="$FM_HOME" FM_CONFIG_OVERRIDE="$CONFIG" "$SCRIPT_DIR/fm-opt-in-skills.sh" sync "$FM_ROOT" || true
-  fi
-  # Keep the pre-push leak check on this checkout and the add-on's, so a push
-  # typed by hand is checked too; bin/fm-leak-prepush.sh owns the hook.
-  if local_phase && [ -x "$SCRIPT_DIR/fm-leak-prepush.sh" ]; then
-    "$SCRIPT_DIR/fm-leak-prepush.sh" install "$FM_ROOT" starship || true
-    if addon_root=$(FM_HOME="$FM_HOME" FM_CONFIG_OVERRIDE="$CONFIG" "$SCRIPT_DIR/fm-addon.sh" root 2>/dev/null); then
-      "$SCRIPT_DIR/fm-leak-prepush.sh" install "$addon_root" addon || true
-    fi
-  fi
+  # Local upkeep from bootstrap-sweep hooks, owned like the read-only ones above.
+  # Each hook gets 180s by default, room for several 20s Mothership link calls.
+  local_phase && FM_HOME="$FM_HOME" FM_ROOT_OVERRIDE="$FM_ROOT" FM_CONFIG_OVERRIDE="$CONFIG" \
+    FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" FM_ADDON_HOOK_TIMEOUT="${FM_ADDON_HOOK_TIMEOUT:-180}" \
+    "$SCRIPT_DIR/fm-addon.sh" run bootstrap-sweep
   # Adopt existing durable contribution links without making a network call.
   # Detection-only startup must never publish a check registration.
   if local_phase && command -v jq >/dev/null 2>&1 \
@@ -2153,13 +1898,6 @@ if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then
     && [ -d "$DATA" ] && [ -x "$SCRIPT_DIR/fm-pr-health.sh" ]; then
     "$SCRIPT_DIR/fm-pr-health.sh" arm >/dev/null \
       || echo "MISSING: the PR health monitor could not be armed; owned PRs are not watched"
-  fi
-  # Arm each room config/mothership-monitor switches on and retire the rest;
-  # bin/fm-procevent-mothership.sh owns the setting and prints only problems.
-  if local_phase && command -v jq >/dev/null 2>&1 && [ -x "$SCRIPT_DIR/fm-procevent-mothership.sh" ] \
-    && { [ -e "$CONFIG/mothership-monitor" ] || ls "$STATE"/procevent/mothership-*.source >/dev/null 2>&1; }; then
-    FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_CONFIG_OVERRIDE="$CONFIG" \
-      "$SCRIPT_DIR/fm-procevent-mothership.sh" ensure 2>&1 || true
   fi
   if [ -n "$fleet_sync_pid" ]; then
     wait "$fleet_sync_pid" || true

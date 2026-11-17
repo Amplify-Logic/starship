@@ -112,7 +112,7 @@ That first launch also sets up your home with Starship's starter settings, with 
 - **Which model does which job.** Opus 5.5 does nearly everything; Sonnet 5.5 and Haiku 5.5 take only small, fully specified chores, so a Claude Pro or Max 5x plan lasts.
 - **How hard your first mate thinks.** It follows your Claude plan: `medium` on Pro, `high` on Max 5x, and `xhigh` only on Max 20x. The launch line names the level and your plan.
   A Team or Enterprise seat does not report a plan Starship can read, so it gets `high` and the launch line says "the default when the Claude plan cannot be read"; that is expected, not an error.
-- **Transcription words** for the desk floater; replies stay text unless you set up [desk voice-out](docs/configuration.md#desk-voice-out-configspeak).
+- **Transcription words** for the desk floater; replies stay text unless you set up [desk voice-out](docs/fork-configuration.md#desk-voice-out-configspeak).
 
 To change how hard your first mate thinks, write one word, then start it again: `echo high > config/primary-effort`.
 The words, from lightest to deepest, are `low`, `medium`, `high`, `xhigh` and `max`; deeper thinking uses your plan's allowance faster, and `rm config/primary-effort` goes back to your plan's level.
@@ -195,7 +195,7 @@ cp -n docs/examples/stt-vocabulary config/stt-vocabulary
 
 - `crew-dispatch.json` decides which Claude model does which job: Opus 5.5 for nearly everything, Sonnet 5.5 for well-specified mechanical work, and Haiku 5.5 for tiny chores, sized for a Pro or Max 5x plan; it uses no other provider or account.
 - `stt-vocabulary` teaches the desk floater's transcription the names you say; add your own below its starter words.
-- Spoken replies are not a starter setting; [desk voice-out](docs/configuration.md#desk-voice-out-configspeak) explains what they need.
+- Spoken replies are not a starter setting; [desk voice-out](docs/fork-configuration.md#desk-voice-out-configspeak) explains what they need.
 
 You should see: after a restart, your first mate dispatches workers on Claude only.
 
@@ -209,7 +209,7 @@ That needs a Deepgram key, the same one the desk floater uses, in your home's pr
 ## Next
 
 To get the latest Starship at any time, tell your first mate "update starship": it pulls the shared Starship and restarts any second mates on it.
-A client or teammate who does not write code can choose a calm, named monthly version instead of the newest changes: `echo release > ~/starship/config/update-channel` ([configuration](docs/configuration.md#update-channel-configupdate-channel)).
+A client or teammate who does not write code can choose a calm, named monthly version instead of the newest changes: `echo release > ~/starship/config/update-channel` ([configuration](docs/fork-configuration.md#update-channel-configupdate-channel)).
 If you set up Starship before, [CHANGELOG.md](CHANGELOG.md) lists what changed for an existing home and what to do.
 
 Read [the captain's handbook](docs/handbook.md).

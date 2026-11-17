@@ -14,7 +14,7 @@ metadata:
 Self-update firstmate in place.
 Firstmate is its own repo, behind the same no-mistakes gate as any project, so new tracked material (`AGENTS.md`, `bin/`, `hooks/`, `.agents/skills/`, and public `skills/`) reaches `main` and then sits there until each running firstmate pulls it.
 Only `AGENTS.md`, `bin/`, `hooks/`, and `.agents/skills/` are a running firstmate instruction surface; public `skills/` is installer-facing and is not loaded by firstmate.
-A home with a private add-on (`config/addon`, docs/configuration.md "Private add-on") also runs that add-on's skills and hooks, so the update brings the add-on along.
+A home with a private add-on (`config/addon`, docs/fork-configuration.md "Private add-on") also runs that add-on's skills and hooks, so the update brings the add-on along.
 This skill performs that pull for the running main firstmate and every secondmate, without disturbing any in-flight work.
 Updating is consumption, not publication: it only pulls from upstream, so every home runs it regardless of role, and the firstmate-repository publication boundary (`firstmate-self-repo`) never applies to it.
 It never brings a fork's upstream work into the home: catching a fork up with its own upstream is a real merge that the `catchup` skill owns.
@@ -53,7 +53,7 @@ This touches only the firstmate repo, its own worktrees, and a configured privat
    - `nudge-secondmates: fm-<id>...|none`
 
    The two second-mate sets are disjoint and the script owns the split; do not re-derive it.
-   A home on the release channel (`config/update-channel`, docs/configuration.md "Update channel") moves forward onto a named release and its lines name that release: `updated <old>..<new> to release <name>` or `already current on release <name>`; a home already past the release, such as a fresh install, is skipped with `already past release <name>` because an update never moves a home back, and a home with its own commits that are not on origin is skipped as diverged exactly as on main.
+   A home on the release channel (`config/update-channel`, docs/fork-configuration.md "Update channel") moves forward onto a named release and its lines name that release: `updated <old>..<new> to release <name>` or `already current on release <name>`; a home already past the release, such as a fresh install, is skipped with `already past release <name>` because an update never moves a home back, and a home with its own commits that are not on origin is skipped as diverged exactly as on main.
    When the captain asks to go back one release, run `bin/fm-update.sh --step-back` instead and continue from step 2 with its summary; relay a refusal's reason in plain words.
    `restart-secondmates:` carries every live mate the pass left on the latest commit, whether it advanced or was already there.
    A mate reaches neither set only because its home was skipped, because it has no live endpoint recorded here, or because its endpoint was positively classified as dead or missing.

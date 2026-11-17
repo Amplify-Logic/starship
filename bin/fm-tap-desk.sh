@@ -159,6 +159,18 @@ engine() {  # <command> [args...]
   node "$ENGINE" "$command" --home "$FM_HOME" --root "$FM_ROOT" --data "$DATA" --state "$STATE" "$@"
 }
 
+# The engine reads the held decisions' identities with one bin/fm-captain-hold.sh
+# open-each, which would probe tasks-axi compatibility again; probe once here and
+# hand the verdict over (fm-tasks-axi-lib.sh COMPATIBILITY VERDICT REUSE).
+engine_with_verdict() {  # <command> [args...]
+  # shellcheck source=bin/fm-tasks-axi-lib.sh
+  # shellcheck disable=SC1091
+  . "$SCRIPT_DIR/fm-tasks-axi-lib.sh"
+  local verdict=0
+  if fm_tasks_axi_compatible; then verdict=1; fi
+  FM_TASKS_AXI_COMPATIBLE=$verdict FM_TASKS_AXI_CHECK_REASON=$FM_TASKS_AXI_CHECK_REASON_MEMO engine "$@"
+}
+
 validate_slug() {  # <label> <value>
   case "$2" in
     ''|*[!A-Za-z0-9._-]*) fail "$1 must be a non-empty privacy-safe slug: $2" ;;
@@ -215,7 +227,7 @@ command_body() {
 }
 
 case "${1:-}" in
-  export) shift; require_runtime; engine export --template "$TEMPLATE" "$@" ;;
+  export) shift; require_runtime; engine_with_verdict export --template "$TEMPLATE" "$@" ;;
   shapes)
     shift
     ids=''
@@ -224,7 +236,7 @@ case "${1:-}" in
       ids="${ids:+$ids,}$id"
     done
     require_runtime
-    engine shapes --ids "$ids"
+    engine_with_verdict shapes --ids "$ids"
     ;;
   route) shift; require_runtime; engine route "$@" ;;
   defaults) shift; require_runtime; engine defaults "$@" ;;

@@ -111,8 +111,12 @@ chmod +x "$BINDIR/inbox-down"
 
 # A stand-in microphone: 16 kHz mono 16-bit samples on stdout, as the pane's
 # recorder writes them. FM_FACTORY_TEST_MIC picks what it hears: `speech` (a
-# second of speech, then quiet), `hum` (a quiet room and no speech), `dead`
-# (no sound at all) or `talking` (speech that never stops). It then stays
+# second of speech, then quiet), `soft` (a quiet room, then a second of a soft
+# voice at a level 2.5 times that room's, then the room again), `hum` (seventy
+# seconds of a quiet room and no speech), `waiting` (fifty seconds of it),
+# `dead` (seventy seconds of no sound at all), `room80` and `room150` (seventy
+# seconds of a steady room at that level, of 32768) or `talking` (speech that
+# never stops). It then stays
 # running, so only the pane stopping it ends it; its pid goes to
 # FM_FACTORY_TEST_MIC_PID.
 cat > "$BINDIR/mic" <<'PY'
@@ -133,7 +137,10 @@ try:
             if owed > sent:
                 out.write(loud * (owed - sent)); out.flush(); sent = owed
             time.sleep(0.05)
-    out.write({"speech": tenth(8000) * 10 + tenth(40) * 60, "hum": tenth(40) * 200, "dead": tenth(0) * 200}[mode])
+    out.write({"speech": tenth(8000) * 10 + tenth(40) * 60, "hum": tenth(40) * 700,
+               "soft": tenth(40) * 20 + tenth(100) * 10 + tenth(40) * 60,
+               "room80": tenth(80 * math.sqrt(2)) * 700, "room150": tenth(150 * math.sqrt(2)) * 700,
+               "waiting": tenth(40) * 500, "dead": tenth(0) * 700}[mode])
     out.flush()
     time.sleep(120)
 except BrokenPipeError:
@@ -143,7 +150,8 @@ chmod +x "$BINDIR/mic"
 
 # A stand-in for the speech service, run as the pane runs bin/fm-deepgram-stt.sh:
 # it keeps a copy of the recording it was handed and prints what was said, or
-# fails when FM_FACTORY_TEST_STT_FAILS is set. FM_FACTORY_TEST_STT_LOG gets one
+# fails when FM_FACTORY_TEST_STT_FAILS is set, or prints no words when
+# FM_FACTORY_TEST_STT_EMPTY is set. FM_FACTORY_TEST_STT_LOG gets one
 # line per recording handed over, the seconds of sound in it, and
 # FM_FACTORY_TEST_STT_ANSWERED one line per recording it answered;
 # FM_FACTORY_TEST_STT_SLOW makes it take that many seconds to answer.
@@ -156,6 +164,7 @@ w = wave.open(sys.argv[1]); print("%.1f" % (w.getnframes() / w.getframerate()))'
 [ -z "${FM_FACTORY_TEST_STT_SLOW:-}" ] || sleep "$FM_FACTORY_TEST_STT_SLOW"
 [ -z "${FM_FACTORY_TEST_STT_FAILS:-}" ] || { echo "fm-deepgram-stt: the speech service did not answer" >&2; exit 1; }
 echo answered >> "$FM_FACTORY_TEST_STT_ANSWERED"
+[ -z "${FM_FACTORY_TEST_STT_EMPTY:-}" ] || exit 0
 printf 'ask the supplier   about the ribbon first\n'
 SH
 chmod +x "$BINDIR/stt"
@@ -291,7 +300,7 @@ reset_case() {
   export FM_FACTORY_TEST_MIC_PID="$TMP_ROOT/case$CASE/mic.pid" FM_FACTORY_TEST_HEARD="$TMP_ROOT/case$CASE/heard.wav"
   export FM_FACTORY_TEST_STT_LOG="$TMP_ROOT/case$CASE/stt.log" FM_FACTORY_TEST_STT_ANSWERED="$TMP_ROOT/case$CASE/stt.answered"
   export FM_FACTORY_MIC=''
-  unset FM_FACTORY_TEST_MIC FM_FACTORY_TEST_STT_FAILS FM_FACTORY_TEST_STT_SLOW FM_FACTORY_STT
+  unset FM_FACTORY_TEST_MIC FM_FACTORY_TEST_STT_FAILS FM_FACTORY_TEST_STT_SLOW FM_FACTORY_TEST_STT_EMPTY FM_FACTORY_STT
   unset FM_FACTORY_TEST_NO_TAB FM_FACTORY_TEST_TAB_GONE FM_FACTORY_TEST_UNBOUND FM_FACTORY_TEST_FOCUSED HERDR_BIN_PATH HERDR_PANE_ID HERDR_TAB_ID \
     HERDR_WORKSPACE_ID HERDR_SOCKET_PATH
 }
@@ -551,6 +560,45 @@ test_the_plain_screen_is_the_record_as_text() {
   pass "factory record: the plain screen carries every state as a word"
 }
 
+# A factory's rules reach its jobs' briefs only while they fit the cap
+# bin/fm-brief.sh applies, so its page shows their size against that cap, in
+# the same count the brief's profile lookup reports: plain under it, marked
+# near it, and said plainly to be left out over it. No rules, no size line.
+test_a_factory_page_shows_its_rules_size_against_the_cap() {
+  reset_case
+  write_projects
+  local near over out
+  near=$(python3 -c 'print("é" * 1497)')
+  over=$(printf '%01498d' 0)
+  {
+    printf '%s\n' '## Sample Shop' 'projects: sample-shop' '' 'Rules:' '- English only.' \
+      '- Anything that touches payments waits for your yes.' ''
+    printf '%s\n' '## Garden Journal' 'projects: garden-journal' '' 'Rules:' "- $near" ''
+    printf '%s\n' '## Recipe Box' 'projects: recipe-box' '' 'Rules:' "- $over" ''
+    printf '%s\n' '## Shop Api' 'projects: shop-api'
+  } > "$HOME_FIX/data/factories.md"
+  write_world
+  take_record
+  assert_equals "$(q '[.factories[] | "\(.id)=\(.rules_size)"] | join(" ")') cap=$(q .rules_cap)" \
+    "sample-shop=69 garden-journal=1500 recipe-box=1501 shop-api=0 cap=1500" "each factory's rules size and the cap"
+  assert_equals "$(python3 "$FACTORY" profile recipe-box --data-dir "$HOME_FIX/data" | head -n 1)" "1501 1500 Recipe Box" \
+    "the brief's profile lookup reports the size the page shows"
+
+  out=$(python3 "$FACTORY" --plain --width 92 --factory sample-shop) || fail "--plain --factory sample-shop failed"
+  has_line "$out" " rules 69 / 1,500 characters" "rules under the cap show their size"
+  assert_not_contains "$out" "the cap" "rules under the cap were marked"
+  out=$(python3 "$FACTORY" --plain --width 92 --factory garden-journal) || fail "--plain --factory garden-journal failed"
+  has_line "$out" " rules 1,500 / 1,500 characters · near the cap; past it its jobs get none of these rules" \
+    "rules at the cap are marked near it"
+  out=$(python3 "$FACTORY" --plain --width 92 --factory recipe-box) || fail "--plain --factory recipe-box failed"
+  has_line "$out" " rules 1,501 / 1,500 characters · over the cap, so its jobs get none of these rules" \
+    "rules over the cap are said to be left out"
+  out=$(python3 "$FACTORY" --plain --width 92 --factory shop-api) || fail "--plain --factory shop-api failed"
+  assert_contains "$out" "none written down yet" "a factory with no rules"
+  assert_not_contains "$out" "characters" "a factory with no rules showed a size"
+  pass "factory page: rules show their size against the brief's cap, marked near it and over it"
+}
+
 # On 2026-11-15 the owner was told the backlog held about a hundred queued jobs
 # and found nothing on the pane that said so: it showed only a per-project
 # "N in line". The whole queue is now counted under the count line, by what
@@ -626,6 +674,99 @@ test_the_whole_queue_is_counted_in_sight() {
   assert_contains "$out" "· 1 waits on other work · 1 more waits on you · 1 older call waits on you · 1 deferred to a date" \
     "the factory page calls every held call an older call"
   pass "factory queue: the whole queue is counted under the count line, by what starts it, and per factory"
+}
+
+# On 2026-11-17 the owner saw "41 start on their own" folded on a factory's
+# page and could open none of them. They were parked until a date: looked at
+# again then, never started by themselves. Parked work now says until when,
+# and the folded count line opens on every job it stands for.
+add_parked_work() {
+  local snap
+  snap=$(jq '.backlog.records += [
+      (.backlog.records[] | select(.id == "shop-gift")
+        | .id = "shop-wrap-paper" | .title = "Wrapping paper samples" | .hold_kind = "parked"
+        | .hold_reason = "Look again next month." | .hold_until = "2026-12-01"),
+      (.backlog.records[] | select(.id == "shop-gift")
+        | .id = "shop-tags" | .title = "Gift tag colours" | .hold_kind = "parked"
+        | .hold_reason = "Look again next month." | .hold_until = "2026-12-01"
+        | .blocked_by_ids = ["shop-gift"] | .unresolved_blocker_ids = ["shop-gift"]),
+      (.backlog.records[] | select(.id == "shop-gift")
+        | .id = "shop-new-year" | .title = "New year banner" | .hold_kind = "parked"
+        | .hold_reason = "Look again after the holidays." | .hold_until = "2027-01-05"),
+      (.backlog.records[] | select(.id == "shop-gift")
+        | .id = "shop-summer" | .title = "Spring sale page" | .hold_kind = "parked"
+        | .hold_reason = "Was to be looked at in September." | .hold_until = "2026-09-01")]' \
+    "$FM_FACTORY_SNAPSHOT") || fail "could not add the parked work"
+  printf '%s\n' "$snap" > "$FM_FACTORY_SNAPSHOT"
+}
+
+test_parked_work_says_until_when_it_is_parked() {
+  reset_case
+  write_registry
+  write_world
+  add_parked_work
+  local out
+  take_record
+  assert_equals "$(q '[.factories[0].jobs[] | select(.id | test("wrap-paper|tags|new-year|shop-summer")) | "\(.id)=\(.queue)/\(.parked_until)"] | join(" ")')" \
+    "shop-wrap-paper=parked/2026-12-01 shop-tags=parked/2026-12-01 shop-new-year=parked/2027-01-05 shop-summer=on hold/null" \
+    "parked work, even parked work that also waits on other work, does not read parked until its date"
+  assert_equals "$(q '.queue | "\(.starts_on_its_own) \(.parked) \([.parked_until[] | "\(.until)=\(.count)"] | join(","))"')" \
+    "0 3 2026-12-01=2,2027-01-05=1" "the queue does not count the parked per date"
+  assert_equals "$(q .queue_line)" \
+    "10 queued · 3 parked, soonest 1 Dec · 2 in line · 2 on hold · 3 wait on you, 1 of them deferred to a date" \
+    "the queue line does not say until when work is parked"
+  assert_not_contains "$(q .queue_line)" "on their own" "parked work reads as starting on its own"
+  out=$(python3 "$FACTORY" --plain --width 120 --factory sample-shop) || fail "--plain --factory failed"
+  has_line "$out" " · 3 parked, soonest 1 Dec · 2 on hold · 1 deferred to a date" \
+    "the folded count line does not say until when work is parked"
+  assert_not_contains "$out" "Wrapping paper samples" "a folded job was listed before its line was opened"
+  pass "factory queue: parked work says until when it is parked, never that it starts on its own"
+}
+
+test_a_folded_count_line_opens_on_every_job_it_stands_for() {
+  reset_case
+  write_registry
+  write_world
+  add_parked_work
+  local dir="$TMP_ROOT/case$CASE" screen
+  # The factory's page has one call for the owner, then the folded line.
+  DRIVE_FACTORY=sample-shop drive_keys DOWN "SNAP:$dir/on-fold" ENTER "SNAP:$dir/listed" ESC "SNAP:$dir/hidden"
+  screen=$(screen_of "$dir/on-fold" 50 100)
+  has_line "$screen" " ▸ · 3 parked, soonest 1 Dec · 2 on hold · 1 deferred to a date" \
+    "the folded count line cannot be highlighted"
+  assert_contains "$screen" "enter list them" "the keys line does not say enter lists the folded jobs"
+  screen=$(screen_of "$dir/listed" 50 100)
+  has_line "$screen" " 3 parked, soonest 1 Dec" "the list has no heading per count"
+  has_line "$screen" " · Wrapping paper samples parked until 1 Dec" "a parked job is not listed with its date"
+  has_line "$screen" " · Gift tag colours parked until 1 Dec" "a parked job that also waits on other work is not listed"
+  has_line "$screen" " · New year banner parked until 5 Jan 2027" "a job parked to another date is not listed"
+  has_line "$screen" " · Spring sale page on hold" "a job on hold is not listed with its queue word"
+  has_line "$screen" " · Charge tax abroad deferred" "a deferred call is not listed with its queue word"
+  assert_contains "$screen" "esc hide the list" "the keys line does not say esc hides the list"
+  assert_not_contains "$screen" "esc back" "the keys line names esc for going back while esc hides the list"
+  screen=$(screen_of "$dir/hidden" 50 100)
+  assert_not_contains "$screen" "Wrapping paper samples" "esc did not hide the list"
+  has_line "$screen" " ▸ · 3 parked, soonest 1 Dec · 2 on hold · 1 deferred to a date" \
+    "esc left the factory's page instead of hiding the list"
+  pass "factory pane: enter on a folded count line lists every job it stands for, esc hides them"
+}
+
+test_an_opened_list_closes_when_its_folded_work_is_gone() {
+  reset_case
+  write_registry
+  write_world
+  local dir="$TMP_ROOT/case$CASE" screen
+  # Sample Shop folds one job on hold and one deferred call; both leave while the list is open.
+  DRIVE_FACTORY=sample-shop drive_keys DOWN ENTER "SNAP:$dir/listed" \
+    "SH:jq '.backlog.records |= map(select(.id != \"shop-later\" and .id != \"shop-tax\"))' '$FM_FACTORY_SNAPSHOT' > '$dir/w' && mv '$dir/w' '$FM_FACTORY_SNAPSHOT' && python3 '$FACTORY' refresh" \
+    "SNAP:$dir/emptied" ESC "SNAP:$dir/back"
+  assert_contains "$(screen_of "$dir/listed" 50 100)" "esc hide the list" "the folded list did not open"
+  screen=$(screen_of "$dir/emptied" 50 100)
+  assert_not_contains "$screen" "Charge tax abroad" "the folded work did not leave the page"
+  assert_not_contains "$screen" "esc hide the list" "the keys line offers to hide a list that is gone"
+  assert_contains "$screen" "esc back" "the keys line does not say esc goes back once the list is gone"
+  assert_contains "$(screen_of "$dir/back" 50 100)" "enter open" "the first esc after the list was gone did not go back"
+  pass "factory pane: an opened folded list closes when its folded work is gone, so esc goes back"
 }
 
 # The backlog file cannot tell a blocker that was finished and archived from
@@ -861,6 +1002,26 @@ test_without_a_registry_each_project_is_a_factory() {
   pass "factory registry: with no registry every registered project is its own factory"
 }
 
+# A brand-new home: no work, no projects, no fixture reading. The pane reads
+# the fleet and the backlog for itself, through the stand-in that answers an
+# empty backlog the way tasks-axi does, and again through the real tasks-axi
+# when it is installed.
+test_a_new_home_with_no_work_opens_empty() {
+  reset_case
+  unset FM_FACTORY_SNAPSHOT FM_TEST_AXI_BACKLOG
+  fm_test_tasks_toml "$HOME_FIX/.tasks.toml"
+  printf '## In flight\n\n## Queued\n\n## Done\n' > "$HOME_FIX/data/backlog.md"
+  local screen path paths=("$PATH")
+  [ -z "$REAL_TASKS_AXI" ] || paths+=("$(dirname "$REAL_TASKS_AXI"):$PATH")
+  for path in "${paths[@]}"; do
+    screen=$(PATH="$path" python3 "$FACTORY" --plain --fresh 2>&1) \
+      || fail "the pane did not open on a new home with $(PATH="$path" command -v tasks-axi): $screen"
+    assert_contains "$screen" "NOTHING NEEDS YOU" "a new home shows an empty pane"
+  done
+  [ -n "$REAL_TASKS_AXI" ] || echo "skip: tasks-axi not found; the new home was read through the stand-in only"
+  pass "factory pane: a brand-new home with no work opens and shows an empty pane"
+}
+
 test_work_no_factory_claims_is_still_shown() {
   reset_case
   write_registry
@@ -1047,7 +1208,8 @@ test_a_narrow_talk_box_always_shows_what_is_typed() {
 # instead and waits for the pane to pick up the refreshed record; a
 # `SNAP:<file>` step saves what the pane draws next; a `WAIT:<seconds>` step
 # leaves the pane alone that long. With DRIVE_PANE=1 the view runs as Herdr
-# starts it, through fm-factory-pane.sh run.
+# starts it, through fm-factory-pane.sh run; with DRIVE_FACTORY=<id> it opens
+# on that factory's page.
 drive_keys() {
   overview_cached python3 - "$FACTORY" "$PANE" "$@" <<'PY'
 import fcntl, os, pty, select, struct, subprocess, sys, termios, time
@@ -1057,7 +1219,8 @@ if pid == 0:
     fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
     if os.environ.get("DRIVE_PANE") == "1":
         os.execvp("bash", ["bash", sys.argv[2], "run"])
-    os.execvp("python3", ["python3", sys.argv[1], "view"])
+    factory = os.environ.get("DRIVE_FACTORY")
+    os.execvp("python3", ["python3", sys.argv[1], "view"] + (["--factory", factory] if factory else []))
 def drain(seconds, until=None):
     end, seen = time.monotonic() + seconds, b""
     while time.monotonic() < end and not (until and until in seen):
@@ -1617,6 +1780,73 @@ test_a_question_held_since_the_last_refresh_is_read_once() {
   pass "factory pane: a question held since the last whole refresh has its options read once"
 }
 
+# The pane reads the fleet with `fm-fleet-snapshot.sh --light`; on a real home
+# it draws exactly the record the whole `--json` snapshot gives it.
+test_the_light_snapshot_gives_the_pane_the_record_the_whole_one_does() {
+  local light whole
+  reset_case
+  write_registry
+  write_projects
+  unset FM_TEST_AXI_BACKLOG
+  cat > "$HOME_FIX/data/backlog.md" <<'MD'
+## In flight
+- [ ] cup-search - Search cups by glaze (repo: sample-shop) (kind: ship) (since 2026-11-13)
+
+## Queued
+- [ ] cup-gift - Gift wrapping at checkout (repo: sample-shop) (kind: ship) (since 2026-11-12) (hold: Wrap by default or as an option?) (hold-kind: captain)
+  Captain hold set: 2026-11-13T09:00:00Z
+- [ ] garden-rows - Rows view for the beds (repo: garden-journal) (kind: ship) (since 2026-11-12)
+
+## Done
+- [x] recipe-print - Print a recipe card (repo: recipe-box) (kind: ship) (merged 2026-11-13)
+MD
+  fm_write_meta "$HOME_FIX/state/cup-search.meta" "project=sample-shop" "harness=claude" "kind=ship" "mode=no-mistakes"
+  printf 'working [at=%s]: wiring the glaze filter\n' "$((NOW - 1200))" > "$HOME_FIX/state/cup-search.status"
+  printf '{"schema":"fm-tap-shapes.v1","decisions":[{"id":"cup-gift","identity":"2026-11-13T09:00:00Z#0","title":"Gift wrapping at checkout","question":"Wrap by default or as an option?","options":["by default","as an option"],"recommended_option":"as an option","recommendation":"as an option","held_since":"2026-11-13T09:00:00Z"}],"not_shown":[]}\n' \
+    > "$HOME_FIX/shapes.json"
+  bash "$ROOT/bin/fm-fleet-snapshot.sh" --json > "$HOME_FIX/whole.json" || fail "the whole snapshot failed"
+  light=$(unset FM_FACTORY_SNAPSHOT; python3 "$FACTORY" --data --fresh) || fail "the pane could not read the light snapshot"
+  whole=$(FM_FACTORY_SNAPSHOT="$HOME_FIX/whole.json" python3 "$FACTORY" --data --fresh) \
+    || fail "the pane could not read the whole snapshot"
+  printf '%s' "$light" | jq -e '([.needs_you[] | select(.id == "cup-gift")] | length) == 1
+    and ([.. | objects | select(.id? == "cup-search")] | length) > 0' >/dev/null \
+    || fail "the light record lost the held question or the running job: $light"
+  assert_equals "$(printf '%s' "$whole" | jq -S 'del(.read_at)')" "$(printf '%s' "$light" | jq -S 'del(.read_at)')" \
+    "the pane drew a different record from the light snapshot"
+  pass "factory pane: the light snapshot gives the pane the record the whole one does"
+}
+
+# A whole refresh reads the held questions' options again only when they may
+# have changed: while the owner's calls signal stands still it keeps the last
+# refresh's, for at most FM_FACTORY_MAX_AGE, and the screen is the same.
+test_a_whole_refresh_reads_the_options_again_only_when_the_calls_moved() {
+  local first second
+  reset_case
+  write_registry
+  write_world
+  export FM_FACTORY_MAX_AGE=300
+  python3 "$FACTORY" refresh >/dev/null || fail "the first record could not be built"
+  first=$(jq -S 'del(.read_at)' "$HOME_FIX/state/factory/record.json") || fail "the record is gone"
+  : > "$HOME_FIX/shapes.calls"
+  python3 "$FACTORY" refresh >/dev/null || fail "the second refresh failed"
+  second=$(jq -S 'del(.read_at)' "$HOME_FIX/state/factory/record.json") || fail "the record is gone"
+  assert_equals "" "$(cat "$HOME_FIX/shapes.calls")" "a refresh with the calls unchanged read the options again"
+  assert_equals "$first" "$second" "the kept options changed the record"
+  bash -c '. "$1/fm-owner-calls-signal-lib.sh" && fm_owner_calls_touch "$2"' _ "$ROOT/bin" "$HOME_FIX/state"
+  python3 "$FACTORY" refresh >/dev/null || fail "the refresh after a call changed failed"
+  grep -q garden-chart "$HOME_FIX/shapes.calls" || fail "a refresh after a call changed kept the old options"
+  assert_equals "1" "$(wc -l < "$HOME_FIX/shapes.calls" | tr -d ' ')" \
+    "a refresh after a call changed read the options more than once"
+  assert_equals "$(printf '%s' "$first" | jq -S 'del(.calls_signal)')" \
+    "$(jq -S 'del(.read_at, .calls_signal)' "$HOME_FIX/state/factory/record.json")" \
+    "options read beside the fleet reading changed the record"
+  : > "$HOME_FIX/shapes.calls"
+  FM_FACTORY_NOW=$((NOW + 300)) python3 "$FACTORY" refresh >/dev/null || fail "the late refresh failed"
+  grep -q garden-chart "$HOME_FIX/shapes.calls" || fail "options older than FM_FACTORY_MAX_AGE were kept"
+  unset FM_FACTORY_MAX_AGE
+  pass "factory pane: a whole refresh reads the options again only when the calls moved"
+}
+
 # Already settled? only asks: it files a reconcile request for the highlighted
 # call and wakes Starship with a note naming it, and the card reads checking
 # until Starship closes the call, notes it, or holds it again with new words.
@@ -1920,6 +2150,14 @@ test_t_listens_first_and_sends_when_speech_stops() {
   assert_equals "$(jq -r .body "$FM_FACTORY_TEST_NOTES" | sed -n 1p)" \
     "About Harvest chart: ask the supplier about the ribbon first" "enter did not send what was said"
   mic_stopped || fail "the recorder was left running after enter"
+  # A soft voice, two and a half times as loud as the room, counts as speech:
+  # it is sent two seconds after it stops, with no key and no minute's wait.
+  : > "$FM_FACTORY_TEST_NOTES"
+  FM_FACTORY_TEST_MIC=soft drive_keys t "WAIT:2"
+  assert_equals "$(jq -r .body "$FM_FACTORY_TEST_NOTES" | sed -n 1p)" \
+    "About Harvest chart: ask the supplier about the ribbon first" "a soft voice was not taken as speech"
+  assert_equals "$(wav_seconds "$FM_FACTORY_TEST_HEARD")" "1 16000 5.0" \
+    "a soft voice did not end two seconds after it stopped"
   # Talking to a crew listens too.
   : > "$FM_FACTORY_TEST_NOTES"
   FM_FACTORY_TEST_MIC=speech drive_keys DOWN DOWN DOWN t "WAIT:2"
@@ -1997,23 +2235,58 @@ test_a_spoken_note_that_cannot_be_sent_says_so_and_falls_back_to_typing() {
   write_world
   local dir="$TMP_ROOT/case$CASE" screen kept
   export FM_FACTORY_MIC="$BINDIR/mic" FM_FACTORY_STT="$BINDIR/stt"
-  # A quiet room and no speech: nothing is sent, and the box stays open for typing.
-  FM_FACTORY_TEST_MIC=hum drive_keys t "WAIT:2" "SNAP:$dir/quiet" "typed instead" ENTER
+  # Fifty seconds without speech does not end it: it is still listening for
+  # someone getting ready or speaking quietly.
+  FM_FACTORY_TEST_MIC=waiting drive_keys t "WAIT:2" "SNAP:$dir/waiting" ESC
+  assert_contains "$(screen_of "$dir/waiting" 50 100)" "● listening 0:5" "it stopped listening before a minute without speech"
+  assert_absent "$FM_FACTORY_TEST_HEARD" "a recording still listening went to the speech service"
+  # After a minute without speech it stops listening and keeps what it
+  # recorded: nothing goes to the speech service until enter asks for it.
+  : > "$FM_FACTORY_TEST_NOTES"
+  FM_FACTORY_TEST_MIC=hum drive_keys t "WAIT:3" "SNAP:$dir/held" ESC
+  screen=$(screen_of "$dir/held" 50 100)
+  assert_contains "$screen" "recorded 1:00" "a minute without speech did not keep the recording"
+  assert_contains "$(printf '%s\n' "$screen" | tr '\n' ' ' | tr -s ' ')" \
+    "Nothing counted as speech. Press enter to write down what was recorded, or type it instead. Esc cancels." \
+    "a recording without speech does not say how to write it down"
+  assert_absent "$FM_FACTORY_TEST_HEARD" "a recording without speech went to the speech service on its own"
+  assert_equals "$(cat "$FM_FACTORY_TEST_NOTES")" "" "a recording without speech was sent on its own"
+  mic_stopped || fail "the recorder was left running after a minute without speech"
+  FM_FACTORY_TEST_MIC=hum drive_keys t "WAIT:3" ENTER "WAIT:2"
+  assert_equals "$(wav_seconds "$FM_FACTORY_TEST_HEARD")" "1 16000 60.0" "enter did not write the kept minute down"
+  assert_equals "$(jq -r .body "$FM_FACTORY_TEST_NOTES" | sed -n 1p)" \
+    "About Harvest chart: ask the supplier about the ribbon first" "the words enter wrote down were not sent"
+  # A steady room loud enough to clear the quietest speech is the room, not
+  # speech: it is held the same way, and nothing leaves the machine.
+  for room in room80 room150; do
+    : > "$FM_FACTORY_TEST_NOTES"
+    rm -f "$FM_FACTORY_TEST_HEARD"
+    FM_FACTORY_TEST_MIC=$room drive_keys t "WAIT:3" "SNAP:$dir/$room" ESC
+    assert_contains "$(screen_of "$dir/$room" 50 100)" "recorded 1:00" "a steady $room was taken as speech"
+    assert_absent "$FM_FACTORY_TEST_HEARD" "a steady $room went to the speech service"
+    assert_equals "$(cat "$FM_FACTORY_TEST_NOTES")" "" "a steady $room was sent"
+  done
+  # When that sound holds no words, nothing is sent and the box stays open for typing.
+  : > "$FM_FACTORY_TEST_NOTES"
+  FM_FACTORY_TEST_STT_EMPTY=1 FM_FACTORY_TEST_MIC=hum drive_keys t "WAIT:3" ENTER "WAIT:2" "SNAP:$dir/quiet" \
+    "typed instead" ENTER
   screen=$(screen_of "$dir/quiet" 50 100)
-  has_line "$screen" " ✗ NOT SENT: no speech was heard. Type it instead, or press esc." "silence is not said to be unsent"
+  has_line "$screen" " ✗ NOT SENT: no words were heard in what you said. Type it instead, or press esc." \
+    "a recording with no words in it is not said to be unsent"
   assert_contains "$(printf '%s\n' "$screen" | sed -E 's/(─)+/─/g')" "╭─ Tell Starship · about Harvest chart ─ typed ─╮" \
     "the box did not fall back to typing"
-  assert_absent "$FM_FACTORY_TEST_HEARD" "a recording with no speech in it went to the speech service"
   assert_equals "$(jq -r .body "$FM_FACTORY_TEST_NOTES")" \
     "$(printf 'About Harvest chart: typed instead\n\n(from the Factory pane; item garden-chart)')" \
     "the typed fallback was not sent as typed"
   mic_stopped || fail "the recorder was left running after it heard nothing"
   # A microphone this terminal may not use gives no sound at all, and says so.
   : > "$FM_FACTORY_TEST_NOTES"
-  FM_FACTORY_TEST_MIC=dead drive_keys t "WAIT:2" "SNAP:$dir/dead" ESC
+  rm -f "$FM_FACTORY_TEST_HEARD"
+  FM_FACTORY_TEST_MIC=dead drive_keys t "WAIT:3" "SNAP:$dir/dead" ESC
   assert_contains "$(screen_of "$dir/dead" 50 100 | tr '\n' ' ' | tr -s ' ')" \
     "✗ NOT SENT: the microphone gave no sound. Type it instead, or check that this terminal may use the microphone." \
     "a silent microphone is not named"
+  assert_absent "$FM_FACTORY_TEST_HEARD" "a recording with no sound in it went to the speech service"
   # Typing while it listens drops the recording and types instead.
   FM_FACTORY_TEST_MIC=talking drive_keys t "WAIT:1" "written, not spoken" ENTER
   assert_equals "$(jq -r .body "$FM_FACTORY_TEST_NOTES")" \
@@ -2764,13 +3037,170 @@ SH
   pass "factory pane: r on a factory reads only a job the screen draws a Read line for"
 }
 
+# add_routine_runs [project]: a day of a recurring reminder pass in Garden
+# Journal, or the project named, each pass its own job: two finished with a
+# report, one failed, one running now.
+add_routine_runs() {
+  python3 - "$HOME_FIX" "$NOW" "${1:-garden-journal}" <<'PY'
+import json, os, sys
+home, now, project = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+state, path = os.path.join(home, "state"), os.path.join(home, "snapshot.json")
+world = json.load(open(path))
+
+def task(tid, cs, detail, started, lines, kind="scout"):
+    meta = os.path.join(state, tid + ".meta")
+    open(meta, "w").write("kind=%s\nmode=no-mistakes\nyolo=off\nspawn_gen=s%d.1.1\n" % (kind, started))
+    status = os.path.join(state, tid + ".status")
+    open(status, "w").write("\n".join(lines) + "\n")
+    os.utime(status, (now - 3600, now - 3600))
+    world["tasks"].append({"id": tid, "kind": kind, "project": "/projects/" + project,
+                           "current_state": {"state": cs[0], "source": cs[1], "detail": detail,
+                                             "raw": "state: %s · source: %s · %s" % (cs[0], cs[1], detail)},
+                           "paths": {"meta": {"path": meta}, "status_log": {"path": status}},
+                           "hints": {"open_decisions": []}, "pr": {"url": None}})
+
+def row(rid, title, st="in_flight", **extra):
+    base = {"id": rid, "title": title, "repo": project, "state": st, "structured": True, "kind": "scout",
+            "captain_actionable": False, "hold_kind": None, "hold_bucket": None, "hold_reason": None,
+            "hold_set": None, "hold_until": None, "unresolved_blocker_ids": [], "since": "2026-11-14",
+            "completion": {"verb": None, "date": None}, "pr_url": None}
+    base.update(extra)
+    world["backlog"]["records"].append(base)
+
+for tid, at in (("remind-0600", now - 7200), ("remind-0700", now - 3600)):
+    task(tid, ("done", "status-log"), "report written", at, ["done [at=%d]: report written" % (at + 600)])
+    row(tid, "Reminder pass %s" % tid[-4:], "done", completion={"verb": "reported", "date": "2026-11-14"})
+task("remind-0715", ("failed", "status-log"), "the weather service did not answer", now - 2700,
+     ["failed [at=%d]: the weather service did not answer" % (now - 2400)])
+row("remind-0715", "Reminder pass 0715")
+task("remind-0750", ("working", "pane"), "harness busy (claude-hook)", now - 600,
+     ["working [at=%d]: set up" % (now - 590)])
+open(os.path.join(state, "remind-0750.busy-state"), "w").write(
+    "v1 gen=g1 seq=2 state=busy source=claude-hook event=user-prompt-submit ts=%d\n" % (now - 60))
+row("remind-0750", "Reminder pass 0750")
+json.dump(world, open(path, "w"), indent=1)
+PY
+}
+
+# mark_routine <project> <value>: give the factory of that project a
+# `routine:` line in the registry.
+mark_routine() {
+  python3 -c 'import sys; p, project, value = sys.argv[1:]; t = open(p).read()
+line = "projects: %s\n" % project
+open(p, "w").write(t.replace(line, line + "routine: %s\n" % value))' "$HOME_FIX/data/factories.md" "$1" "$2"
+}
+
+test_routine_runs_fold_into_one_line_and_stay_out_of_the_feed() {
+  reset_case
+  write_registry
+  # The registry marks Garden Journal's reminder passes as routine.
+  mark_routine garden-journal "Reminder pass"
+  write_world
+  add_routine_runs
+  take_record
+  local garden='.factories[] | select(.id == "garden-journal")'
+  assert_equals "$(q "$garden | .routine | join(\",\")")" "Reminder pass" "the factory's routine mark"
+  assert_equals "$(q "[$garden | .jobs[] | select(.routine != null) | .id] | sort | join(\" \")")" \
+    "remind-0715 remind-0750" "each live reminder pass is routine"
+  assert_equals "$(q "$garden | .routine_runs[0] | \"\(.kind)|\(.today)|\(.last_word)|\(.last)|\(.running)|\(.folded | join(\",\"))\"")" \
+    "Reminder pass|4|started|1794642600|1|remind-0750" "the routine line: runs today, the last, and what it folds"
+  assert_equals "$(q '[.feed[] | select(.job // "" | startswith("remind-")) | "\(.job)=\(.word)"] | join(" ")')" \
+    "remind-0715=failed" "only the failed reminder pass is in the feed"
+  assert_equals "$(q '[.feed[] | select(.job // "" | startswith("remind-") | not) | "\(.word)|\(.actor)"] | join(" ")')" \
+    "failed|Garden Journal PR ready|Garden Journal finished|Recipe Box asked you|Garden Journal landed|Recipe Box asked you|Sample Shop" \
+    "the rest of the feed is as before"
+  assert_equals "$(q .count_line)" "3 jobs running · 3 need you · 1 idle" "a folded pass is not a running job"
+  assert_equals "$(q "$garden | .crew.busy")" "0" "a folded pass does not keep the crew busy"
+  local out
+  out=$(python3 "$FACTORY" --plain --width 92) || fail "--plain failed"
+  has_line "$out" " ↻ Reminder pass 4 runs today · last started 07:50 running" "the routine line"
+  assert_not_contains "$out" "Reminder pass 0750" "the running pass folds into the routine line"
+  assert_not_contains "$out" "Reminder pass 0600" "a finished pass is in the feed"
+  has_line "$out" " ● Reminder pass 0715 stuck" "a failed pass shows as usual"
+  has_line "$out" " 07:20 Garden Journal failed Reminder pass 0715 failed; Starship is on it." \
+    "a failed pass is in the feed"
+  pass "factory pane: routine runs fold into one line, and only a failed one reaches the feed"
+}
+
+test_a_folded_pass_counts_as_idle_and_hides_no_other_card() {
+  reset_case
+  write_registry
+  mark_routine recipe-box "Reminder pass"
+  write_world
+  add_routine_runs recipe-box
+  take_record
+  local recipe='.factories[] | select(.id == "recipe-box")'
+  assert_equals "$(q "$recipe | .routine_runs[0] | \"\(.last_word)|\(.last)|\(.running)\"")" \
+    "started|1794642600|1" "the routine line: a pass started at 07:50 runs now"
+  assert_equals "$(q "$recipe | \"\(.state)|\(.idle_since)|\(.crew.busy)\"")" "idle|1794642600|0" \
+    "the factory is idle since its last pass, not since an older event in the feed"
+  assert_equals "$(q .count_line)" "3 jobs running · 3 need you · 1 idle" "the folded pass is not a running job"
+  local out
+  out=$(python3 "$FACTORY" --plain --width 92) || fail "--plain failed"
+  assert_contains "$out" "Recipe Box   idle since 07:50" "the factory reads idle since its last pass, as the count line counts it"
+  has_line "$out" " ● Reminder pass 0715 stuck" "the stuck pass keeps its row while the next one runs folded"
+  has_line "$out" " ↻ Reminder pass 4 runs today · last started 07:50 running" "the routine line"
+  assert_not_contains "$out" "Reminder pass 0750" "the running pass folds into the routine line"
+  pass "factory pane: a folded pass counts as idle and hides no other card"
+}
+
+test_a_routine_line_is_yes_no_or_title_kinds() {
+  local value want
+  while IFS='|' read -r value want; do
+    reset_case
+    write_registry
+    mark_routine garden-journal "$value"
+    write_world
+    add_routine_runs
+    take_record
+    assert_equals "$(q '[.factories[] | select(.id == "garden-journal") | .jobs[] | select(.routine != null)
+      | "\(.id)=\(.routine)"] | sort | join(" ")')" "$want" "routine: $value"
+  done <<'CASES'
+YES|garden-chart=Routine work garden-share=Routine work garden-water=Routine work recipe-units=Routine work remind-0715=Routine work remind-0750=Routine work
+No|
+true|
+remind|
+reminder PASS, Garden rem, Garden|garden-water=Garden remind-0715=reminder PASS remind-0750=reminder PASS
+CASES
+  pass "factory pane: a routine line is yes, no, or kinds matched by a job's title"
+}
+
+test_without_a_routine_mark_every_run_shows_as_before() {
+  reset_case
+  write_registry
+  write_world
+  add_routine_runs
+  take_record
+  assert_equals "$(q '[.factories[] | .routine_runs | length] | add')" "0" "no routine line without a mark"
+  assert_equals "$(q '[.factories[].jobs[] | select(.routine != null)] | length')" "0" \
+    "no job is routine without a mark"
+  assert_equals "$(q '[.feed[] | select(.job // "" | startswith("remind-")) | "\(.job)=\(.word)"] | join(" ")')" \
+    "remind-0715=failed remind-0700=finished remind-0600=finished remind-0600=closed remind-0700=closed" \
+    "every pass reaches the feed"
+  local out
+  out=$(python3 "$FACTORY" --plain --width 92) || fail "--plain failed"
+  assert_contains "$out" "     ● Reminder pass 0750" "the running pass has its own card"
+  assert_not_contains "$out" "↻" "a routine line without a mark"
+  has_line "$out" " 07:10 Garden Journal finished Reminder pass 0700 is finished." "a finished pass is in the feed"
+  pass "factory pane: without a routine mark every run shows as before"
+}
+
 fm_test_run \
+  test_the_light_snapshot_gives_the_pane_the_record_the_whole_one_does \
   test_the_record_words_every_state \
   test_the_plain_screen_is_the_record_as_text \
+  test_a_factory_page_shows_its_rules_size_against_the_cap \
   test_the_whole_queue_is_counted_in_sight \
+  test_parked_work_says_until_when_it_is_parked \
+  test_a_folded_count_line_opens_on_every_job_it_stands_for \
+  test_an_opened_list_closes_when_its_folded_work_is_gone \
   test_a_blocker_that_was_finished_and_archived_holds_nothing_up \
   test_only_the_highlighted_call_opens_as_a_card \
   test_closed_work_reads_closed_and_only_delivered_work_reads_finished \
+  test_routine_runs_fold_into_one_line_and_stay_out_of_the_feed \
+  test_a_folded_pass_counts_as_idle_and_hides_no_other_card \
+  test_a_routine_line_is_yes_no_or_title_kinds \
+  test_without_a_routine_mark_every_run_shows_as_before \
   test_a_job_with_no_sign_of_life_reads_quiet \
   test_a_changing_pane_is_a_sign_of_life \
   test_ready_work_held_until_a_date_is_not_ready_for_you \
@@ -2778,6 +3208,7 @@ fm_test_run \
   test_held_decisions_come_through_a_non_markdown_adapter \
   test_a_ship_with_no_mode_still_reports_its_pr_ready \
   test_without_a_registry_each_project_is_a_factory \
+  test_a_new_home_with_no_work_opens_empty \
   test_work_no_factory_claims_is_still_shown \
   test_a_small_pane_shows_its_height_and_says_what_is_below \
   test_a_small_pane_scrolls_to_everything \
@@ -2813,6 +3244,7 @@ fm_test_run \
   test_a_whole_refresh_waits_for_a_change_in_what_it_reads \
   test_a_busy_machine_spaces_rebuilds_out \
   test_a_question_held_since_the_last_refresh_is_read_once \
+  test_a_whole_refresh_reads_the_options_again_only_when_the_calls_moved \
   test_talking_never_changes_who_steers \
   test_enter_opens_the_factory_tab_with_its_live_workers \
   test_a_live_copy_shows_text_at_the_top_of_a_taller_pane \

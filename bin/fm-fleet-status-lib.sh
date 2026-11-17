@@ -904,7 +904,7 @@ fm_fleet_status_counts() {  # <state-dir> [decisions|overview]
   local cached='' stamp='' working='' stopped='' validating='' paused=''
   local attention='' ready='' signature='' decisions='' mark='' current known age fresh=1
   local failed='' lost='' night='' first_kind='' first_id='' first_title=''
-  local calls_signal='' ready_list='' now_signal shown_signal=- shown_list=-
+  local calls_signal='' ready_list='' now_signal shown_signal=- shown_list=- _newer
   [ "$want" != strip ] || want=overview
   records=$(_fm_fleet_ids "$state" | grep -c '') || records=0
   now=$(_fm_fleet_now) || {
@@ -923,10 +923,14 @@ fm_fleet_status_counts() {  # <state-dir> [decisions|overview]
     fm_status_cache_read "$cache" "$now" "$ttl" >/dev/null 2>&1 || fresh=0
   fi
 
+  # A saved reading or calls entry is read with one name past the fields this
+  # code knows (_newer), so a field a newer writer adds is dropped rather than
+  # run into the last known one: on 2026-11-15 a strip running older code read
+  # a call's title with the newer reading's signal joined to it.
   if [ -n "$cached" ]; then
     IFS=$'\t' read -r stamp working stopped validating paused attention ready \
       signature decisions mark failed lost night first_kind first_id first_title \
-      calls_signal ready_list <<READING
+      calls_signal ready_list _newer <<READING
 $cached
 READING
   fi
@@ -1025,9 +1029,9 @@ READING
 # calls for exactly <signal> and <ready-list>, which it then sets as
 # FM_FLEET_CALLS_READY, _DECISIONS, _KIND, _ID and _TITLE.
 _fm_fleet_calls_current() {  # <state-dir> <signal> <ready-list>
-  local entry signal list stamp ready decisions kind id title
+  local entry signal list stamp ready decisions kind id title _newer
   entry=$(fm_status_cache_load "$1/.status-fleet-calls") || return 1
-  IFS=$'\t' read -r signal list stamp ready decisions kind id title <<ENTRY
+  IFS=$'\t' read -r signal list stamp ready decisions kind id title _newer <<ENTRY
 $entry
 ENTRY
   [ "$signal" = "$2" ] && [ "$list" = "$3" ] || return 1

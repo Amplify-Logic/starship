@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Bootstrap-sweep hook (bin/fm-addon.sh): arm each room config/mothership-monitor
+# switches on and retire the rest, when that file exists or a Mothership room
+# is registered; bin/fm-procevent-mothership.sh owns the setting and prints
+# only problems.
+# Prints:
+#   "MOTHERSHIP_MONITOR: <room|config line>: <problem>"
+set -u
+root=${FM_HOOK_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}
+CONFIG=${FM_CONFIG_OVERRIDE:-$FM_HOME/config}
+STATE=${FM_STATE_OVERRIDE:-$FM_HOME/state}
+command -v jq >/dev/null 2>&1 && [ -x "$root/bin/fm-procevent-mothership.sh" ] || exit 0
+{ [ -e "$CONFIG/mothership-monitor" ] || ls "$STATE"/procevent/mothership-*.source >/dev/null 2>&1; } || exit 0
+"$root/bin/fm-procevent-mothership.sh" ensure 2>&1 || true

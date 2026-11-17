@@ -163,7 +163,7 @@
 #   --account <name> pins this worker to a NAMED VENDOR ACCOUNT: a claude harness
 #   runs on that account's CLAUDE_CONFIG_DIR home, a codex harness on its
 #   CODEX_HOME home, both derived as data/accounts/<vendor>/<name> from local
-#   gitignored config/accounts.json (docs/configuration.md owns that schema).
+#   gitignored config/accounts.json (docs/fork-configuration.md owns that schema).
 #   The resolved name is recorded in meta as account= with account_source=registry,
 #   and only when a pin actually applies, so an unpinned spawn's meta is
 #   unchanged; the source tag keeps a relaunch or secondmate respawn from reading
@@ -183,8 +183,8 @@
 #   --task-type records an optional capability-learning slug in meta task_type=
 #   (no '|' or newlines); teardown logs it, and absent it falls back to kind.
 #   --outward '<permission>[; <permission>...]' is what this ship or scout job
-#   may do outward on the captain's word (docs/configuration.md "Worker outward
-#   actions"). It is checked and normalized by bin/fm-outward-check.py parse,
+#   may do outward on the captain's word (docs/fork-configuration.md
+#   "Worker outward actions"). It is checked and normalized by bin/fm-outward-check.py parse,
 #   must agree with the brief's "Outward permission:" line (a brief without the
 #   line counts as none), and is recorded in meta outward=; a relaunch reuses
 #   the recorded value, including any bin/fm-outward-grant.sh added, and
@@ -1494,8 +1494,8 @@ else
       exit 1
     }
   fi
-  # A job's outward permission (docs/configuration.md "Worker outward
-  # actions") is normalized by the same parser the brief used, so the
+  # A job's outward permission (docs/fork-configuration.md "Worker
+  # outward actions") is normalized by the same parser the brief used, so the
   # brief-agreement check below compares exact text.
   if [ "$OUTWARD_SET" -eq 1 ]; then
     [ "$KIND" != secondmate ] || {
@@ -3130,7 +3130,7 @@ launch_template() {
   # --append-system-prompt would replace it) with the opt-in concise prompt
   # selected by config/claude-concise-prompt (header above); off, it is empty.
   # CLAUDE_CODE_AUTO_COMPACT_WINDOW=500000 caps this worker's auto-compaction
-  # window at 500k TOKENS (docs/configuration.md "Context window"). The CLI
+  # window at 500k TOKENS (docs/fork-configuration.md "Context window"). The CLI
   # reads the variable directly and it beats the autoCompactWindow user
   # setting, so the cap rides the launch and never touches the captain's
   # global config. The effective threshold is still min(this value, the
@@ -3192,7 +3192,7 @@ launch_template() {
   # (docs/turnend-guard.md, docs/sessionstart-nudge.md, docs/cd-guard.md), so the
   # secondmate launch deliberately keeps hooks on but shares this approval posture.
   # -c model_auto_compact_token_limit=500000 caps this worker's auto-compaction
-  # window at 500k TOKENS (docs/configuration.md "Context window"). It is a
+  # window at 500k TOKENS (docs/fork-configuration.md "Context window"). It is a
   # launch-line config override, so it never touches the captain's or a pinned
   # account's config.toml.
   codex)
@@ -7504,7 +7504,7 @@ BUSY_GEN=
         guard_hook="{\"matcher\":\"Bash\",\"hooks\":[{\"type\":\"command\",\"command\":\"$j_guard\",\"timeout\":15}]}"
       fi
     fi
-    # The worker outward check (bin/fm-outward-check.py, docs/configuration.md
+    # The worker outward check (bin/fm-outward-check.py, docs/fork-configuration.md
     # "Worker outward actions"): a PreToolUse hook on the claude.ai connector
     # and Claude in Chrome tools, the only ones it guards, that refuses an
     # outward action this job or home has not allowed, and a PostToolUse
@@ -7519,7 +7519,7 @@ BUSY_GEN=
     if [ "$KIND" != secondmate ]; then
       command -v python3 >/dev/null 2>&1 \
         || echo "warning: python3 is not installed; $ID's outward check will refuse every connected-account and browser action until it is" >&2
-      # The PR text check (bin/fm-pr-text-guard.py, docs/configuration.md
+      # The PR text check (bin/fm-pr-text-guard.py, docs/fork-configuration.md
       # "Private leak words"): a PreToolUse hook on Bash that refuses a
       # command publishing this home's private words or a token shape to a
       # public repository's PR titles, descriptions, comments or pipeline
@@ -9452,10 +9452,11 @@ SPAWN_ACCOUNT=
 [ -z "$OMP_PROFILE_PIN" ] || SPAWN_ACCOUNT="$SPAWN_ACCOUNT omp_profile=$OMP_PROFILE_PIN"
 # Opt-in fleet activity ledger (docs/fleet-ledger.md); off costs one file test.
 [ ! -e "$CONFIG/fleet-ledger" ] || [ "$RELAUNCH" -eq 1 ] || FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG "$SCRIPT_DIR/fm-fleet-ledger.sh" dispatched "$ID" "$KIND" "${PROJ_ABS##*/}" "$HARNESS" "$MODEL" || true
-# A Mothership room card this task serves hears that work started
-# (bin/fm-procevent-mothership.sh "OUTCOMES ON THE CARD"), without waiting on the
-# room; a home that keeps no Mothership state costs one directory test.
-[ ! -d "$STATE/mothership" ] || [ "$RELAUNCH" -eq 1 ] || FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG "$SCRIPT_DIR/fm-procevent-mothership.sh" report --detach "$ID" started >/dev/null 2>&1 || true
+# The Mothership room hears that work started (bin/fm-procevent-mothership.sh
+# "OUTCOMES IN THE ROOM"), without waiting on the room; a home with no room link
+# costs one directory and one file test.
+# shellcheck source=bin/fm-mothership-report-lib.sh
+[ "$RELAUNCH" -eq 1 ] || { . "$SCRIPT_DIR/fm-mothership-report-lib.sh" && fm_mothership_report "$FM_HOME" "$STATE" "$CONFIG" "$ID" started; } || true
 # Opt-in Herdr project groups (docs/herdr-backend.md "Project groups") tag the
 # new endpoint now rather than at the next watcher poll; off costs one file test.
 [ ! -e "$CONFIG/herdr-project-groups" ] || [ "$BACKEND" != herdr ] || FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG "$SCRIPT_DIR/fm-herdr-groups.sh" sync "$ID" || true

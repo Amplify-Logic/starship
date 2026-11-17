@@ -182,7 +182,11 @@ test_mark_records_explicit_fields_and_refuses_unsafe_marks() {
   expect_code 1 "$rc" "easy-undo on a money decision"
   assert_contains "$out" "money" "the money refusal did not name its class"
   assert_not_contains "$(field pay-call body)" "Tap marks for" "a refused mark still wrote the body"
+  # The Factory pane keeps a question's shape until the owner's calls stamp
+  # moves, whatever adapter keeps the backlog, so a mark must move the stamp.
+  rm -f "$HOME_DIR/state/.owner-calls-changed"
   desk mark pick-route --recommend "route north" --easy-undo >/dev/null || fail "a valid mark was refused"
+  [ -s "$HOME_DIR/state/.owner-calls-changed" ] || fail "a mark left the owner's calls stamp unmoved"
   assert_contains "$(field pick-route body)" "Tap easy to undo: yes" "the easy-to-undo field was not recorded"
   local before
   before=$(identity_of pick-route)

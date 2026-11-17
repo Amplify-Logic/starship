@@ -984,29 +984,19 @@ cmd_ready() {
   fi
 
   # The supervision model belongs to the INSPECTED home, not to whoever ran
-  # this command. An explicit FM_SUPERVISION_MODEL still wins; otherwise
-  # classify the lock-holder pid through fm-harness.sh ancestry. No holder,
-  # or a walk that names nothing, is honest unknown - never the caller's
-  # own harness, and never a durable per-home model record.
-  local resolved_model harness anc
+  # this command; fm_home_supervision_model (bin/fm-wake-lib.sh) owns resolving
+  # it. An explicit FM_SUPERVISION_MODEL still wins.
+  local resolved_model
   resolved_model=${FM_SUPERVISION_MODEL:-}
-  if [ -z "$resolved_model" ] && [ "$lock_state" = held ] && [ -n "$lock_pid" ]; then
-    anc=$("$SELF_DIR/fm-harness.sh" ancestry "$lock_pid" 2>/dev/null || true)
-    harness=${anc#* }
-    case "$harness" in
-      claude|cursor|agy) resolved_model=autoarm ;;
-      pi|pi-signed|omp) resolved_model=extension ;;
-      '') ;;
-      unknown) ;;
-      *) resolved_model=persistent ;;
-    esac
+  if [ -z "$resolved_model" ] && command -v fm_home_supervision_model >/dev/null 2>&1; then
+    resolved_model=$(fm_home_supervision_model "$STATE")
   fi
-  if [ -z "$resolved_model" ]; then
-    consumer_state=unknown
-    consumer_reason="supervision-model-unknown-for-home"
-  elif ! command -v fm_watcher_supervision_verdict >/dev/null 2>&1; then
+  if ! command -v fm_watcher_supervision_verdict >/dev/null 2>&1; then
     consumer_state=unknown
     consumer_reason="no-wake-lib"
+  elif [ -z "$resolved_model" ]; then
+    consumer_state=unknown
+    consumer_reason="supervision-model-unknown-for-home"
   else
     FM_SUPERVISION_MODEL=$resolved_model \
       fm_watcher_supervision_verdict "$STATE" "$watch" "${FM_GUARD_GRACE:-300}" \

@@ -16,7 +16,7 @@ Every person's setup is made of three layers, and each one has a single job.
 Public Starship holds nothing personal: a fresh copy has only the public files, and everything private stays in the home's gitignored folders.
 Your first mate makes every new owner their own add-on during first setup, a private repository on their own GitHub account, and will not start a first project without it, so an owner's changes have a private home from the first day and never go near public Starship.
 A teammate whose home already names the team's add-on keeps that one instead.
-[Private add-on](configuration.md#private-add-on-configaddon) owns how an add-on is set up.
+[Private add-on](fork-configuration.md#private-add-on-configaddon) owns how an add-on is set up.
 
 ## What a team add-on must never hold
 
@@ -46,7 +46,7 @@ A home that only uses Starship has no standing permission to publish to it, so t
 Standing publishing permission is for the repository's maintainers only; [Firstmate role](configuration.md#firstmate-role-configfirstmate-role) owns how that is set.
 
 Before your home raises any pull request to public Starship, put your private-word list in place.
-It is a short local file of the names and words that must never appear in public, such as people, customers and private projects; [Private leak words](configuration.md#private-leak-words-configleak-words) says how to write it.
+It is a short local file of the names and words that must never appear in public, such as people, customers and private projects; [Private leak words](fork-configuration.md#private-leak-words-configleak-words) says how to write it.
 With the list in place, your home checks tracked files against it before each push.
 It also stops customer data such as a phone number, and any name-like word your change adds that has never appeared in public Starship until you approve that word once.
 Pull request text is checked before publishing when a worker drafts it, while text the pipeline publishes is checked by reading it back afterwards.

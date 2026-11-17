@@ -5,9 +5,10 @@
 # background task, so neither process can be the final detector of its own
 # death. On macOS, `arm` registers this script as a home-scoped launchd agent.
 # launchd invokes `scheduled-check` every FM_SENTINEL_INTERVAL_SECS (default 60), outside
-# the harness process tree. A check uses the same in-flight count, watcher-lock
-# identity, and beacon freshness predicates as the turn-end and continuity
-# guards. It writes one durable outage marker and reuses config/wedge-alarm's
+# the harness process tree. A check uses the same in-flight count as the
+# in-session pull and continuity guards and reads the home's supervision model
+# (fm_sentinel_supervised), so a normal hand-over gap between watcher cycles is
+# not an outage while a watcher still missing past the grace is. It writes one durable outage marker and reuses config/wedge-alarm's
 # active channels for a loud notification.
 #
 # A home is worth supervising when a crew task is in flight (FM_SUP_IN_FLIGHT) OR
@@ -859,6 +860,44 @@ fm_sentinel_record_pending() { # <episode-key> <summary>
   return 0
 }
 
+# fm_sentinel_supervised
+# True when this home's supervision is healthy by the home's own supervision
+# model. A live identity-matched watcher always is. Otherwise this accepts only
+# a normal hand-over gap between watcher cycles: a Claude primary's watcher
+# closes on every wake and the next cycle is armed at the hand-over or turn end,
+# so a fresh beacon with no watcher holding the lock is that cycle working, not
+# an outage, and an extension home whose extension owns supervision is read by
+# the same verdict the in-session guards use (fm_watcher_supervision_verdict in
+# bin/fm-wake-lib.sh). An autoarm home is NOT given that verdict's mid-turn
+# exemption: it holds on a stale beacon and only the in-session guard knows the
+# primary is mid-turn, so here a watcher still missing past the grace always
+# alarms. This process runs from launchd outside the harness tree, so the model
+# is the inspected home's (fm_home_supervision_model). An unknown or persistent
+# model keeps the strict live-watcher requirement. Reads FM_SUP_WATCHER_FRESH
+# from the fm_supervision_status call that precedes every use. Sets
+# FM_SENTINEL_HEALTH_DESC for the OK report.
+FM_SENTINEL_HEALTH_DESC=
+fm_sentinel_supervised() {
+  local model
+  if fm_watcher_healthy "$FM_SENTINEL_STATE" "$FM_SENTINEL_WATCH" "$FM_SENTINEL_GRACE" "$FM_HOME"; then
+    FM_SENTINEL_HEALTH_DESC='with a live identity-matched watcher'
+    return 0
+  fi
+  model=$(fm_home_supervision_model "$FM_SENTINEL_STATE")
+  case "$model" in
+    autoarm)
+      [ "$FM_SUP_WATCHER_FRESH" = true ] || return 1
+      ;;
+    extension)
+      FM_SUPERVISION_MODEL=$model fm_watcher_supervision_verdict \
+        "$FM_SENTINEL_STATE" "$FM_SENTINEL_WATCH" "$FM_SENTINEL_GRACE" "$FM_HOME" "$FM_ROOT"
+      [ "$FM_WATCHER_VERDICT_OK" = true ] || return 1
+      ;;
+    *) return 1 ;;
+  esac
+  FM_SENTINEL_HEALTH_DESC="between watcher cycles, healthy by the $model supervision model"
+}
+
 # Marker-only mode for the in-harness turn-end and continuity guards.
 #
 # Those hooks must render their blocking banner immediately: a Stop hook that
@@ -943,11 +982,11 @@ fm_sentinel_check() { # <scheduled|diagnostic|note>
     fi
     return 0
   fi
-  if fm_watcher_healthy "$FM_SENTINEL_STATE" "$FM_SENTINEL_WATCH" "$FM_SENTINEL_GRACE" "$FM_HOME"; then
+  if fm_sentinel_supervised; then
     [ "$clear_on_recovery" -eq 0 ] || fm_sentinel_clear_alarm
     if [ "$report" -eq 1 ]; then
-      printf 'supervision sentinel: OK - %s with a live identity-matched watcher; last beat %s (grace %ss)\n' \
-        "$(fm_sentinel_workload)" "$FM_SUP_BEACON_DESC" "$FM_SENTINEL_GRACE"
+      printf 'supervision sentinel: OK - %s %s; last beat %s (grace %ss)\n' \
+        "$(fm_sentinel_workload)" "$FM_SENTINEL_HEALTH_DESC" "$FM_SUP_BEACON_DESC" "$FM_SENTINEL_GRACE"
       fm_sentinel_report_host_capability
       fm_sentinel_report_arm_state
     fi
@@ -974,7 +1013,7 @@ fm_sentinel_check() { # <scheduled|diagnostic|note>
   # A competing recovery may have landed after the claim. Revalidate before
   # crossing the active-alert boundary, and clear only this claim if healthy.
   fm_supervision_status "$FM_SENTINEL_STATE" "$FM_SENTINEL_GRACE"
-  if fm_sentinel_idle || fm_watcher_healthy "$FM_SENTINEL_STATE" "$FM_SENTINEL_WATCH" "$FM_SENTINEL_GRACE" "$FM_HOME"; then
+  if fm_sentinel_idle || fm_sentinel_supervised; then
     [ -z "$FM_SENTINEL_CLAIM_TOKEN" ] || fm_sentinel_clear_alarm "$FM_SENTINEL_CLAIM_TOKEN"
     return 0
   fi

@@ -3,14 +3,14 @@
 
 One command starts Herdr's default session (or attaches to it when it is
 already running), fills in
-whatever the owner's desk layout names that is missing, and opens the Terminal
-windows that show the session. Run it again and it changes nothing.
+whatever the owner's desk layout names that is missing, and opens the windows
+that show the session, in macOS Terminal or Ghostty. Run it again and it changes nothing.
 docs/desk.md owns what the desk is and why; docs/configuration.md owns the
 config/desk-layout format; this header owns the commands.
 
 Usage:
   fm-desk.py [open]             open the desk: start or attach, fill in what is
-                                missing, open the missing Terminal views
+                                missing, open the missing views
   fm-desk.py layout             print the running session as a desk layout file,
                                 a starting config/desk-layout
   fm-desk.py install-command    put `starship` on PATH: ~/.local/bin/starship
@@ -41,8 +41,13 @@ What `open` does, in this order, re-reading Herdr after every step:
      shells), and bin/fm-factory.py workers splits a fresh live copy of each
      running worker beside the page. A factory tab is the tab open-tab
      recorded for that factory in this session, else the tab with its label.
-  6. Opens Terminal windows until as many Herdr clients show the session as
-     the layout names views, each with its Terminal profile and font size.
+  6. Opens windows until as many Herdr clients show the session as the layout
+     names views, each with its font size, in the layout's `terminal` app:
+     Terminal through AppleScript (with the view's profile), or a new Ghostty
+     instance through `open -na Ghostty --args`. Every view starts with this
+     process's environment minus what a Herdr pane hands down (HERDR_*,
+     TERM_PROGRAM and the like), since a Herdr client that inherits it refuses
+     to start as a nested Herdr.
 It never restarts or moves a pane, tab or workspace, never closes one except
 the leftover idle shells of a factory tab whose page it restarts, never renames
 one it did not just create, never starts anything in a pane that runs
@@ -68,6 +73,9 @@ Test seams:
   FM_DESK_PS              process lister printing `pid tty command` lines
                           (default: ps -axo pid=,tty=,command=)
   FM_DESK_OSASCRIPT       AppleScript runner (default: osascript)
+  FM_DESK_OPEN            macOS app launcher for Ghostty views (default: open)
+  FM_DESK_MACOS           macOS version, for the Terminal color note (default:
+                          this Mac's; empty off macOS)
   FM_DESK_COMMAND_DIR     where install-command links `starship` (default
                           ~/.local/bin)
   FM_DESK_WAIT            seconds to wait for a started server, a new view, or
@@ -81,6 +89,7 @@ from __future__ import annotations
 
 import json
 import os
+import platform
 import re
 import shlex
 import shutil
@@ -94,7 +103,11 @@ SCRIPT = os.path.realpath(__file__)
 ME = "starship"
 SHELLS = {"zsh", "bash", "sh", "fish", "dash", "ksh", "tcsh", "csh", "nu"}
 SESSION = "default"
-SINGLE_KEYS = ("workspace", "main", "sidebar", "firstmate")
+SINGLE_KEYS = ("workspace", "main", "sidebar", "firstmate", "terminal")
+# The apps a view can open in, by the lowercase name the layout may use.
+TERMINALS = {"terminal": "Terminal", "ghostty": "Ghostty"}
+# Terminal shows 24-bit color only from this macOS major version on.
+TERMINAL_TRUECOLOR_MACOS = 26
 
 
 class Failure(Exception):
@@ -134,9 +147,10 @@ def layout_path(home: str) -> str:
 
 
 def parse_layout(text: str, where: str = "config/desk-layout") -> Dict[str, Any]:
-    """Read a desk layout. docs/configuration.md "Desk layout" owns the format."""
+    """Read a desk layout. docs/fork-configuration.md "Desk layout" owns the format."""
     layout: Dict[str, Any] = {
-        "workspace": "starship", "main": "", "sidebar": "", "firstmate": "", "tabs": [], "views": [],
+        "workspace": "starship", "main": "", "sidebar": "", "firstmate": "", "terminal": "Terminal",
+        "tabs": [], "views": [],
     }
     seen = set()
     for number, raw in enumerate(text.splitlines(), 1):
@@ -164,6 +178,10 @@ def parse_layout(text: str, where: str = "config/desk-layout") -> Dict[str, Any]
             layout["sidebar"] = value
         elif key == "firstmate":
             layout["firstmate"] = value
+        elif key == "terminal":
+            if value.lower() not in TERMINALS:
+                raise Refused("%s line %d: terminal is %s" % (where, number, " or ".join(TERMINALS.values())))
+            layout["terminal"] = TERMINALS[value.lower()]
         elif key == "tab":
             label, _, kind = (part.strip() for part in value.partition("|"))
             if not label:
@@ -222,6 +240,19 @@ def base_env() -> Dict[str, str]:
     for name in ("HERDR_SOCKET_PATH", "HERDR_PANE_ID", "HERDR_TAB_ID", "HERDR_WORKSPACE_ID", "HERDR_SESSION"):
         env.pop(name, None)
     return env
+
+
+# What a Herdr pane hands the processes it runs, besides HERDR_*: none of it
+# belongs to a view's own Herdr client, which refuses to start when it looks
+# nested.
+PANE_ENV = ("TERM", "TERM_PROGRAM", "TERM_PROGRAM_VERSION", "TERM_SESSION_ID", "COLORTERM", "TERMINFO")
+
+
+def view_env() -> Dict[str, str]:
+    """The environment a view starts with: this process's, minus everything a Herdr pane hands down."""
+    return {name: value for name, value in os.environ.items()
+            if name == "HERDR_CONFIG_PATH"
+            or (name not in PANE_ENV and not name.startswith(("HERDR_", "FM_HERDR_")))}
 
 
 class Herdr:
@@ -289,28 +320,50 @@ FACTORY_TITLE = plugin_title(os.path.join(ROOT, "herdr-plugins", "starship-facto
 # Reading the desk as it is
 # --------------------------------------------------------------------------
 
-def herdr_clients() -> List[str]:
-    """ttys of the Herdr clients showing the default session right now."""
+def processes() -> List[Tuple[str, List[str]]]:
+    """(tty, command words) of every process running now."""
     lister = os.environ.get("FM_DESK_PS")
     argv = shlex.split(lister) if lister else ["ps", "-axo", "pid=,tty=,command="]
     try:
         out = subprocess.run(argv, capture_output=True, text=True, timeout=10).stdout
     except (OSError, subprocess.SubprocessError):
         return []
-    ttys = []
+    found = []
     for line in out.splitlines():
         parts = line.split(None, 2)
-        if len(parts) < 3 or parts[1] in ("??", "?", "-"):
+        if len(parts) < 3:
             continue
         try:
             words = shlex.split(parts[2])
         except ValueError:
             continue
-        if not words or os.path.basename(words[0]) != "herdr":
+        if words:
+            found.append((parts[1], words))
+    return found
+
+
+def attaches(words: List[str]) -> bool:
+    """True for a Herdr client command line that shows the default session."""
+    return os.path.basename(words[0]) == "herdr" and \
+        words[1:] in ([], ["--session", SESSION], ["session", "attach", SESSION])
+
+
+def herdr_clients() -> List[str]:
+    """ttys of the Herdr clients showing the default session right now."""
+    return [tty for tty, words in processes() if tty not in ("??", "?", "-") and attaches(words)]
+
+
+def ghostty_views() -> List[str]:
+    """The font size of each Ghostty instance the desk opened as a view ("" when it set none)."""
+    sizes = []
+    for _, words in processes():
+        if os.path.basename(words[0]) != "ghostty" or "-e" not in words:
             continue
-        if words[1:] in ([], ["--session", SESSION], ["session", "attach", SESSION]):
-            ttys.append(parts[1])
-    return ttys
+        if not attaches(words[words.index("-e") + 1:] or ["-"]):
+            continue
+        size = next((w.split("=", 1)[1] for w in words if w.startswith("--font-size=")), "")
+        sizes.append(size.split(".")[0])
+    return sizes
 
 
 def bare_shell(cmdline: str) -> bool:
@@ -460,13 +513,24 @@ def step(kind: str, text: str, **extra: Any) -> Dict[str, Any]:
     return item
 
 
-def view_text(index: int, view: Dict[str, Any]) -> str:
+def view_text(index: int, view: Dict[str, Any], terminal: str = "Terminal") -> str:
     parts = []
-    if view["profile"]:
+    if view["profile"] and terminal == "Terminal":
         parts.append("profile %s" % view["profile"])
     if view["size"]:
         parts.append("size %s" % view["size"])
-    return "view %d in Terminal%s" % (index + 1, " (%s)" % ", ".join(parts) if parts else "")
+    return "view %d in %s%s" % (index + 1, terminal, " (%s)" % ", ".join(parts) if parts else "")
+
+
+def macos_major() -> int:
+    """This Mac's macOS major version, 0 when unknown or not on macOS."""
+    raw = os.environ.get("FM_DESK_MACOS")
+    if raw is None:
+        raw = platform.mac_ver()[0]
+    try:
+        return int(raw.split(".")[0])
+    except ValueError:
+        return 0
 
 
 def plan(layout: Dict[str, Any], found: Dict[str, Any],
@@ -553,9 +617,20 @@ def plan(layout: Dict[str, Any], found: Dict[str, Any],
         else:
             notes.append("the %s tab is showing something else; it was left as it is" % tab["label"])
 
+    terminal = layout["terminal"]
     for index in range(len(found["clients"]), len(layout["views"])):
-        item = step("view", "open " + view_text(index, layout["views"][index]), view=index)
+        view = layout["views"][index]
+        item = step("view", "open " + view_text(index, view, terminal), view=index)
         item["held"] = True
+        # Reported once the view opened, like a step's own notes.
+        item["kept"] = []
+        if terminal == "Terminal" and 0 < macos_major() < TERMINAL_TRUECOLOR_MACOS:
+            item["kept"].append("Terminal on this macOS shows no 24-bit color, so the bridge strip's and the "
+                                "Factory pane's colored badges show as blank boxes; `terminal = Ghostty` in "
+                                "the layout opens the views in Ghostty instead")
+        if terminal != "Terminal" and view["profile"]:
+            item["kept"].append("%s has no Terminal profiles; view %d's profile %s is not used"
+                                % (terminal, index + 1, view["profile"]))
         steps.append(item)
     return steps, notes, starting
 
@@ -634,7 +709,7 @@ def write_sidebar(collapsed: bool) -> None:
 
 
 # --------------------------------------------------------------------------
-# Terminal views
+# Views: Terminal windows or Ghostty instances
 # --------------------------------------------------------------------------
 
 OPEN_VIEW = r'''
@@ -684,29 +759,47 @@ end run
 '''
 
 
+def launch(argv: List[str], app: str, script: Optional[str] = None) -> str:
+    """Run an app launcher with the view environment; its output, or a Failure naming <app>."""
+    try:
+        out = subprocess.run(argv, input=script, capture_output=True, text=True, timeout=60, env=view_env())
+    except (OSError, subprocess.SubprocessError) as error:
+        raise Failure("%s could not be asked: %s" % (app, error))
+    if out.returncode != 0:
+        why = (out.stderr.strip() or "no reason given").splitlines()[-1]
+        raise Failure("%s refused: %s" % (app, why))
+    return out.stdout.strip()
+
+
 def osascript(script: str, *args: str) -> str:
     runner = os.environ.get("FM_DESK_OSASCRIPT")
     argv = (shlex.split(runner) if runner else ["osascript"]) + ["-"] + list(args)
-    try:
-        out = subprocess.run(argv, input=script, capture_output=True, text=True, timeout=60)
-    except (OSError, subprocess.SubprocessError) as error:
-        raise Failure("Terminal could not be asked: %s" % error)
-    if out.returncode != 0:
-        why = (out.stderr.strip() or "no reason given").splitlines()[-1]
-        raise Failure("Terminal refused: %s" % why)
-    return out.stdout.strip()
+    return launch(argv, "Terminal", script)
+
+
+def open_ghostty(size: str) -> None:
+    """A new Ghostty instance whose one window is a Herdr client; it quits when that window closes."""
+    runner = os.environ.get("FM_DESK_OPEN")
+    argv = (shlex.split(runner) if runner else ["open"]) + [
+        "-na", "Ghostty", "--args", "--quit-after-last-window-closed=true", "--window-save-state=never"]
+    if size:
+        argv.append("--font-size=%s" % size)
+    launch(argv + ["-e", herdr_bin()], "Ghostty")
 
 
 def open_view(layout: Dict[str, Any], index: int) -> None:
     view = layout["views"][index]
     before = len(herdr_clients())
-    osascript(OPEN_VIEW, "exec " + shlex.quote(herdr_bin()), view["profile"], view["size"])
+    if layout["terminal"] == "Ghostty":
+        open_ghostty(view["size"])
+    else:
+        osascript(OPEN_VIEW, "exec " + shlex.quote(herdr_bin()), view["profile"], view["size"])
     deadline = time.time() + wait_limit()
     while time.time() < deadline:
         if len(herdr_clients()) > before:
             return
         time.sleep(0.3)
-    raise Failure("%s opened, but no Herdr client showed up in it" % view_text(index, view))
+    raise Failure("%s opened, but no Herdr client showed up in it" % view_text(index, view, layout["terminal"]))
 
 
 # --------------------------------------------------------------------------
@@ -901,7 +994,7 @@ def cmd_open() -> int:
         found = survey(herdr, layout, home)
         if found["main"]:
             herdr.call("tab", "focus", found["main"], check=False)
-    for note in kept + notes:
+    for note in dict.fromkeys(kept + notes):
         say("  note: %s" % note)
     if done:
         say("The desk is open: %d thing(s) started, everything else was already there." % len(done))
@@ -969,6 +1062,8 @@ def cmd_layout() -> int:
         lines.append("main = %s" % main_label)
     if sidebar is not None:
         lines.append("sidebar = %s" % ("collapsed" if sidebar else "open"))
+    if current["terminal"] != "Terminal":
+        lines.append("terminal = %s" % current["terminal"])
     if current["firstmate"]:
         lines.append("firstmate = %s" % current["firstmate"])
     else:
@@ -980,7 +1075,10 @@ def cmd_layout() -> int:
         fid = records.get(tab["id"])
         lines.append("tab = %s%s" % (tab["label"], " | factory %s" % fid if fid else ""))
     clients = set(herdr_clients())
-    listed = osascript(LIST_VIEWS) if clients else ""
+    if current["terminal"] == "Ghostty":
+        for size in ghostty_views() if clients else []:
+            lines.append("view =%s" % (" | %s" % size if size else ""))
+    listed = osascript(LIST_VIEWS) if clients and current["terminal"] == "Terminal" else ""
     for row in listed.splitlines():
         parts = row.split("\t")
         if len(parts) < 3:

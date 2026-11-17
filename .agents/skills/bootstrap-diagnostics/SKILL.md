@@ -11,7 +11,7 @@ metadata:
 # bootstrap-diagnostics
 
 Handle each printed line as below, before dispatching work that depends on it.
-The line formats themselves are owned by `bin/fm-bootstrap.sh`'s header; this playbook owns the response to actionable lines.
+The line formats themselves are owned by `bin/fm-bootstrap.sh`'s header, or for a line a built-in bootstrap hook prints (such as `HOST_ENV`, `TOOLCHAIN_DRIFT`, `UPSTREAM`, `STACK_TOOLS`, `ACCOUNTS`, `LEAK_PREPUSH`, or `MOTHERSHIP_MONITOR`) by that hook's header under `hooks/bootstrap/` or `hooks/bootstrap-sweep/`; this playbook owns the response to actionable lines.
 The session-start rules in `session-start-recovery` still bind: detect, then consent, then install or upgrade - never change a tool the captain has not approved in this session - and no work is dispatched until the tools it needs are present and GitHub auth is good.
 When any diagnostic needs captain attention, report the plain consequence and requested action using `AGENTS.md` section 9's captain-facing translation contract; do not name the diagnostic label unless the captain needs to paste it into a command or issue.
 
@@ -80,7 +80,7 @@ When any diagnostic needs captain attention, report the plain consequence and re
   An unsafe-outbox variant requires path and file-type inspection before any retry.
 - `NUDGE_SECONDMATES: secondmate <id>: send failed: <reason>` - secondmate convergence changed a running home's loaded instructions or inherited config, but the deterministic `fm-send.sh fm-<id>` re-read nudge failed.
   Inspect the reason, keep the pending marker under `state/.secondmate-nudge-pending/` intact, and rerun session start after the endpoint or metadata issue is fixed so bootstrap can retry the exact same marked send on the same local or remote route.
-- `ACCOUNTS: invalid config/accounts.json - <reason>` - the optional vendor account registry exists but failed low-cost bootstrap validation; launches that pin no account keep working on the ambient account, an explicit `--account` refuses while the file stays broken, so fix the malformed schema, unknown vendor, unsafe account name, undefined default, or unverifiable `expect` when convenient (`docs/configuration.md` "Vendor account pinning" owns the schema).
+- `ACCOUNTS: invalid config/accounts.json - <reason>` - the optional vendor account registry exists but failed low-cost bootstrap validation; launches that pin no account keep working on the ambient account, an explicit `--account` refuses while the file stays broken, so fix the malformed schema, unknown vendor, unsafe account name, undefined default, or unverifiable `expect` when convenient (`docs/fork-configuration.md` "Vendor account pinning" owns the schema).
 - `PR_CHECK_MIGRATION: canonical polls rebuilt and armed; resume supervision for this home` - the non-executing migration rebuilt canonical task polls from validated metadata, and those polls are already armed.
   Independently verify the private per-task outcome record, then resume the emitted supervision protocol after finishing the session-start wake handling.
 - `PR_CHECK_MIGRATION: validated replacement polls armed; resume supervision for this home` - a retry proved canonical publication provenance, metadata identity binding, and single-link integrity for a replacement poll resolving an earlier ambiguous migration outcome.

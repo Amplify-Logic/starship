@@ -205,8 +205,9 @@ fm_lock_release "$MERGE_PROJECT_LOCK" || true
 MERGE_PROJECT_LOCK=
 # Opt-in fleet activity ledger (docs/fleet-ledger.md); off costs one file test.
 [ ! -e "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}/fleet-ledger" ] || FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE "$SCRIPT_DIR/fm-fleet-ledger.sh" merged "$ID" local || true
-# A Mothership room card this task serves hears that it landed
-# (bin/fm-procevent-mothership.sh "OUTCOMES ON THE CARD"); a home that keeps no
-# Mothership state costs one directory test.
-[ ! -d "$STATE/mothership" ] || FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE "$SCRIPT_DIR/fm-procevent-mothership.sh" report --detach "$ID" merged >/dev/null 2>&1 || true
+# The Mothership room hears that it landed (bin/fm-procevent-mothership.sh
+# "OUTCOMES IN THE ROOM"); a home with no room link costs one directory and one
+# file test.
+# shellcheck source=bin/fm-mothership-report-lib.sh
+{ . "$SCRIPT_DIR/fm-mothership-report-lib.sh" && fm_mothership_report "$FM_HOME" "$STATE" "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}" "$ID" merged; } || true
 echo "merged $BRANCH into local $DEFAULT ($before -> $after) in $PROJ"

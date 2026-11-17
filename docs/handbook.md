@@ -71,7 +71,7 @@ from now on, for project X, you may merge green pull requests yourself
 ```
 
 How it talks to you lives in `data/captain.md` too: what to call you, the tone, emojis or not, and how short.
-It asks once in your first session, uses your answer in every reply, and changes it whenever you say so, for example "call me Partner, be playful, and keep it short" ([address and tone](configuration.md#address-and-tone)).
+It asks once in your first session, uses your answer in every reply, and changes it whenever you say so, for example "call me Partner, be playful, and keep it short" ([address and tone](fork-configuration.md#address-and-tone)).
 
 Good entries are short, specific, and say why when the reason is not obvious.
 A rule with a reason is followed more sensibly at the edges than a bare command.
@@ -122,7 +122,7 @@ Some skills are commands you type:
 | `/updatefirstmate` | Pull the latest shared Starship and restart cleanly |
 | `/catchup` | Catch this home up with its own upstream, on demand or weekly once you opt in; stops for you to approve the merge |
 
-The [README](../README.md#built-in-skills) lists the rest of Firstmate's built-in skills; Starship adds `/outward-fine-print`, `/outward-broad` and `/outward-no-block`, which set how freely workers may act outward for you ([worker outward actions](configuration.md#worker-outward-actions-configoutward-permissions)).
+The [README](../README.md#built-in-skills) lists the rest of Firstmate's built-in skills; Starship adds `/outward-fine-print`, `/outward-broad` and `/outward-no-block`, which set how freely workers may act outward for you ([worker outward actions](fork-configuration.md#worker-outward-actions-configoutward-permissions)).
 Other skills load automatically: the first mate's instructions name the situation for each, such as before starting a worker or when a worker reports a pull request.
 
 **Adding your own skill.**
@@ -229,7 +229,7 @@ Three commands switch the style for every worker in your home:
 - `/outward-broad`: whole kinds of action, such as `send email` or `control browser`, for every worker; name the ones you want, as in `/outward-broad send email`.
 - `/outward-no-block`: the check is off, and workers act outward whenever their instructions say to.
 
-[docs/configuration.md](configuration.md#worker-outward-actions-configoutward-permissions) owns the permissions and styles.
+[docs/fork-configuration.md](fork-configuration.md#worker-outward-actions-configoutward-permissions) owns the permissions and styles.
 
 The check covers only workers: the first mate itself and second mates are not checked, so a connector they use can send, post, or change something without asking you first.
 Your first conversation offered a standing rule for that, that the first mate never sends, posts or replies to anyone outside on your behalf without showing you the draft first, and recorded the version you kept, changed, or dropped ([ONBOARDING step 4](../ONBOARDING.md#4-say-hello-your-first-mate-takes-it-from-here)).
@@ -266,24 +266,24 @@ Ask the first mate to set one up; each owner page lists what it needs.
 | Away and quiet modes (`/afk`, `/quiet`) | Keep routine events off your screen | Nothing extra |
 | Chart room ([chart-room.md](chart-room.md)) | A private local page showing where every project stands | Nothing extra |
 | Desk floater ([Mac](desk-floater.md), [Windows](desk-floater-windows.md)) | Push-to-talk button that types what you say into the first mate | A Deepgram API key, from a paid account at deepgram.com |
-| Spoken replies ([configuration](configuration.md#desk-voice-out-configspeak)) | The first mate reads the start of each reply aloud | An external speech shaper named in `config/speak`, which this repository does not include |
+| Spoken replies ([configuration](fork-configuration.md#desk-voice-out-configspeak)) | The first mate reads the start of each reply aloud | An external speech shaper named in `config/speak`, which this repository does not include |
 | Bridge strip ([bridge-strip.md](bridge-strip.md)) | A strip across the top of the Herdr workspace with the STARSHIP wordmark, the crew's lamps and the battery | Herdr |
-| Desk ([desk.md](desk.md)) | `starship` opens your whole Herdr workspace and its Terminal windows in one go | Herdr and macOS Terminal |
+| Desk ([desk.md](desk.md)) | `starship` opens your whole Herdr workspace and its view windows in one go | Herdr and macOS Terminal or Ghostty |
 | Factory pane ([factory-pane.md](factory-pane.md)) | Every factory at a glance beside your work: what needs you, what each crew is doing this minute, what happened since you last looked, and a tab per factory with its live workers | Herdr |
 | Phone bridge page ([bridge-view.md](bridge-view.md)) | A phone page showing what needs you, with photo drop and hold-to-speak | Tailscale and Python 3.12 |
-| Dropped-threads digest ([configuration](configuration.md#dropped-threads-digest-configdropped-threads)) | A twice-daily "what is left hanging" summary | A scheduled job on this Mac |
+| Dropped-threads digest ([configuration](fork-configuration.md#dropped-threads-digest-configdropped-threads)) | A twice-daily "what is left hanging" summary | A scheduled job on this Mac |
 | Computer use ([macos-computer-use](../.agents/opt-in-skills/macos-computer-use/SKILL.md)) | Lets the agents operate Mac apps and windows | Peekaboo, which the first mate installs, and Mac Accessibility permissions |
 | Activity ledger ([fleet-ledger.md](fleet-ledger.md)) | A file other tools can read to follow the fleet | Nothing extra |
 | Second opinion ([second-opinion.md](second-opinion.md)) | A rival AI model stress-tests a big design or decision before work starts | `config/second-opinion`; each review draws on your Claude plan, and the different-vendor pass on a Cursor plan |
 | Divergent ideas ([adhd.md](adhd.md)) | Fans out many options before a fuzzy, high-stakes choice | The `adhd-agent` CLI and `config/adhd` |
-| Prompt ledger ([configuration](configuration.md#captain-ledger-configcaptain-ledger)) | Writes every prompt you type to disk until the first mate has filed what you decided | `config/captain-ledger` |
+| Prompt ledger ([configuration](fork-configuration.md#captain-ledger-configcaptain-ledger)) | Writes every prompt you type to disk until the first mate has filed what you decided | `config/captain-ledger` |
 | Meeting intake ([meetings.md](meetings.md)) | Turns each recorded call or meeting into a one-line outcome, follow-ups the first mate starts, and items held for your decision | `config/meetings`; the call recorder, or the free Anarlog meeting recorder for the Mac |
 
 ## Keeping it current
 
 Say "update starship" (or "update firstmate", or `/updatefirstmate`) every week or so.
 It pulls the latest shared instructions and scripts and restarts cleanly; your private folders are never touched.
-A home on the [release channel](configuration.md#update-channel-configupdate-channel) moves only to the newest named monthly release, and a home without second mates can step back one release.
+A home on the [release channel](fork-configuration.md#update-channel-configupdate-channel) moves only to the newest named monthly release, and a home without second mates can step back one release.
 It skips your home if a file of yours sits in `~/starship` outside those private folders, or if you changed a Starship file; [CHANGELOG.md](../CHANGELOG.md) says how to clear that and what else changed for an existing home.
 If you use Starship on two of your own machines, [porting.md](porting.md) covers moving your private material between them.
 Porting is for your own machines only: anyone else starts from a fresh clone and builds their own home.

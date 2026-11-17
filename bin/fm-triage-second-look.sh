@@ -75,7 +75,7 @@
 #   TYPESAFE_API_KEY                        wins over the .env; never logged
 #
 # The request shape, the four questions, the thresholds and the tier rule are
-# owned by the engine, bin/fm-triage-second-look.py. docs/configuration.md
+# owned by the engine, bin/fm-triage-second-look.py. docs/fork-configuration.md
 # "Status second look" owns the operator-facing contract.
 set -u
 

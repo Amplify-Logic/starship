@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Bootstrap hook (bin/fm-addon.sh): the standing private upstream watch's
+# read-only pending-report check.
+# Prints:
+#   "UPSTREAM_REPORT: new private report at <path>"
+#   "UPSTREAM_CATCHUP: catch-up ready to prepare, private report at <path>"
+#
+# UPSTREAM_REPORT and UPSTREAM_CATCHUP are the read-only pending-report
+# check owned by bin/fm-upstream-watch.sh. The weekly job writes only
+# private data/; acknowledge the report after reading it so later
+# sessions stay quiet.
+# Generation, watermarking, acknowledgement, and path validation remain owned
+# by bin/fm-upstream-watch.sh rather than being reimplemented here.
+set -u
+root=${FM_HOOK_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}
+[ ! -x "$root/bin/fm-upstream-watch.sh" ] || exec "$root/bin/fm-upstream-watch.sh" pending

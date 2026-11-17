@@ -127,6 +127,10 @@
 # --backlog prints only the canonical backlog object above, with no task, worker,
 # or cross-home reads, for readers such as bin/fm_voice_records.py that need the
 # same role and hold_bucket classification without paying for a full snapshot.
+# --light prints the --json object with only schema, generated, fm_home, roots,
+# backlog and tasks, each exactly as --json prints it; it skips the contribution,
+# scout report, main inventory and second mate collection, the remote reads
+# among them, for readers such as bin/fm-factory.py that use only those fields.
 # --axi-backlog prints that backlog object read through the configured tasks-axi
 # adapter rather than data/backlog.md, with the same classification, for
 # bin/fm-fleet-status-lib.sh fm_owner_calls; it fails when the backlog cannot be
@@ -250,6 +254,7 @@ esac
 usage() {
   cat <<'EOF'
 usage: fm-fleet-snapshot.sh --json
+       fm-fleet-snapshot.sh --light
        fm-fleet-snapshot.sh --secondmate-home-summary
        fm-fleet-snapshot.sh --backlog
        fm-fleet-snapshot.sh --axi-backlog
@@ -260,6 +265,10 @@ refreshes only its parent-side remote-summary cache as an observational side eff
 
 --contribution-input emits the canonical local backlog/tasks ownership pair only,
 without worker observations or cross-home collection.
+
+--light emits the --json object with only schema, generated, fm_home, roots,
+backlog and tasks, each as --json emits it, without the contribution, scout
+report, main inventory or second mate collection.
 
 --backlog emits the canonical local backlog object only, with the same
 current_role and hold_bucket classification, and reads no task or other home.
@@ -320,6 +329,7 @@ EOF
 OUTPUT_MODE=json
 case "${1:---json}" in
   --json) ;;
+  --light) OUTPUT_MODE=light ;;
   --secondmate-home-summary) OUTPUT_MODE=secondmate-home-summary ;;
   --contribution-input) OUTPUT_MODE=contribution-input ;;
   --backlog) OUTPUT_MODE=backlog ;;
@@ -622,16 +632,20 @@ backlog_json() (  # [<backlog-path>] - defaults to this home's $BACKLOG
 # The backlog object read through the home's configured tasks-axi adapter
 # (bin/fm-tasks-axi.sh), so a home whose backlog is not markdown still has its
 # rows: id, state, kind, title, the hold fields, and the blockers, classified by
-# classify_holds above. Only an undated captain hold needs its body, for the
-# hold-set stamp its age is read from (its created date for a legacy unstamped
-# hold), so only those are shown, up to eight at a time. Rows end at the first
-# line after the table that is not one, such as the help block. It fails, printing nothing, when the listing
-# or any of those rows cannot be read, or the listing is cut short.
+# classify_holds above. An undated captain hold's age is read from the hold-set
+# stamp on its body's first line (its created date for a legacy unstamped
+# hold), and both come from the same single listing; no row is shown on its
+# own. Rows end at the first line after the table that is not one, such as the
+# help block; an empty backlog's listing has a count of 0 and no table. It
+# fails, printing nothing, when the listing cannot be read or is cut short.
 axi_backlog_json() (
   set -o pipefail
-  local axi=$SCRIPT_DIR/fm-tasks-axi.sh listing rows ids stamps
+  local axi=$SCRIPT_DIR/fm-tasks-axi.sh listing rows
+  # One listing carries every field, the hold-set stamp and the created date
+  # of each undated captain hold included: its body's first line, which the
+  # listing's body truncation never reaches.
   listing=$(FM_HOME=$FM_HOME FM_DATA_OVERRIDE=$DATA "$axi" list --limit 100000 \
-    --fields hold_kind,hold_reason,hold_until,blocked_by </dev/null 2>/dev/null) || return 1
+    --fields hold_kind,hold_reason,hold_until,blocked_by,created,body </dev/null 2>/dev/null) || return 1
   rows=$(printf '%s\n' "$listing" | perl -MJSON::PP -e '
     my $json = JSON::PP->new->allow_nonref;
     my ($fields, $count, $total, @rows);
@@ -653,42 +667,27 @@ axi_backlog_json() (
       my %row; @row{@$fields} = @values;
       my $absent = sub { my $v = shift; (!defined $v || $v eq "" || $v eq "-") ? undef : $v };
       my $blocked = $absent->($row{blocked_by});
+      my ($hold_set, $since);
+      if (($absent->($row{hold_kind}) // "") eq "captain" && defined $absent->($row{hold_reason})
+          && ($row{state} // "") ne "done" && !defined $absent->($row{hold_until})) {
+        my ($first) = split /\n/, ($row{body} // "");
+        ($hold_set) = ($first // "") =~ /^Captain hold set:\s*(\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}Z)?)$/;
+        $since = defined $row{created} && $row{created} ne "-" && $row{created} ne "" ? $row{created} : undef;
+      }
       push @rows, {structured => JSON::PP::true, id => $row{id}, state => $row{state},
                    kind => $absent->($row{kind}), repo => $absent->($row{repo}), title => $row{title},
                    hold_kind => $absent->($row{hold_kind}), hold_reason => $absent->($row{hold_reason}),
-                   hold_until => $absent->($row{hold_until}), hold_set => undef, since => undef,
+                   hold_until => $absent->($row{hold_until}), hold_set => $hold_set, since => $since,
                    blocked_by_ids => [grep { $_ ne "" && $_ ne "none" } split /\s*,\s*/, ($blocked // "")]};
     }
-    die "no listing\n" unless $fields && defined $count && $count == $total && @rows == $count;
+    # An empty backlog has no table: tasks-axi prints only its count of 0.
+    die "no listing\n" unless defined $count && $count == $total && @rows == $count && ($fields || $count == 0);
     print $json->canonical->encode(\@rows);
   ') || return 1
-  ids=$(printf '%s' "$rows" | jq -r '.[] | select(.hold_kind == "captain" and .hold_reason != null
-    and .state != "done" and .hold_until == null) | .id') || return 1
-  stamps='{}'
-  if [ -n "$ids" ]; then
-    # shellcheck disable=SC2016
-    stamps=$(printf '%s\n' "$ids" | FM_HOME=$FM_HOME FM_DATA_OVERRIDE=$DATA AXI=$axi STAMP_PL='
-      my $json = JSON::PP->new->allow_nonref;
-      my %task;
-      while (my $line = <STDIN>) {
-        chomp $line;
-        next unless $line =~ /^  ([a-z_]+): (.*)$/;
-        my ($key, $value) = ($1, $2);
-        $task{$key} = $value =~ /^"/ ? $json->decode($value) : $value;
-      }
-      my ($first) = split /\n/, ($task{body} // "");
-      my ($set) = ($first // "") =~ /^Captain hold set:\s*(\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}Z)?)$/;
-      my $created = defined $task{created} && $task{created} ne "-" && $task{created} ne "" ? $task{created} : undef;
-      print $json->encode({id => $ARGV[0], hold_set => $set, since => $created}), "\n";
-    ' \
-      xargs -n 1 -P 8 bash -c 'shown=$("$AXI" show "$1" --full </dev/null 2>/dev/null) || exit 1
-        printf "%s\n" "$shown" | perl -MJSON::PP -e "$STAMP_PL" "$1"' fm-fleet-snapshot \
-      | jq -s 'map({(.id): {hold_set, since}}) | add // {}') || return 1
-  fi
-  jq -n --argjson rows "$rows" --argjson stamps "$stamps" --arg today "$SNAPSHOT_TODAY" \
+  jq -n --argjson rows "$rows" --arg today "$SNAPSHOT_TODAY" \
     --arg now "$SNAPSHOT_NOW" --argjson age_days "$FM_SNAPSHOT_UNDATED_HOLD_AGE_DAYS" "$HOLD_CLASSIFY_JQ_DEFS"'
     {path:"tasks-axi", present:true,
-     records:[$rows[] | . + ($stamps[.id] // {})]}
+     records:$rows}
     | classify_holds($today; $now; $age_days)
   '
 )
@@ -2097,18 +2096,15 @@ secondmate_landed_from_current_json() {  # <secondmate-current-json-file> <outpu
 }
 
 scout_report_lines() {
-  local report id
   if [ ! -d "$DATA" ]; then
     jq -n '[]'
     return 0
   fi
+  # One jq for every report: a home keeps hundreds, and a jq per report cost
+  # seconds. The id is the report's folder name.
   LC_ALL=C find "$DATA" -mindepth 2 -maxdepth 2 -type f -name report.md -print \
     | sort \
-    | while IFS= read -r report; do
-      id=$(basename "$(dirname "$report")")
-      jq -n --arg id "$id" --arg path "$report" '{id:$id,path:$path}'
-    done \
-    | jq -s 'sort_by(.id)'
+    | jq -Rn '[inputs | {id:(split("/") | .[-2]),path:.}] | sort_by(.id)'
 }
 
 if [ "$OUTPUT_MODE" = axi-backlog ]; then
@@ -2165,32 +2161,42 @@ printf '%s\n' "$TASKS_JSON" > "$TASKS_JSON_FILE" \
   || { echo "fm-fleet-snapshot: temporary task file write failed" >&2; exit 1; }
 
 CONTRIBUTIONS_JSON_FILE="$JSON_TRANSPORT_DIR/contributions.json"
-CONTRIBUTION_TASKS_JSON=$(contribution_tasks_json) \
-  || { echo "fm-fleet-snapshot: contribution task read failed" >&2; exit 1; }
-printf '%s\n' "$CONTRIBUTION_TASKS_JSON" > "$JSON_TRANSPORT_DIR/contribution-tasks.json" \
-  || { echo "fm-fleet-snapshot: contribution task staging failed" >&2; exit 1; }
-jq -n --slurpfile backlog "$BACKLOG_JSON_FILE" --slurpfile tasks "$JSON_TRANSPORT_DIR/contribution-tasks.json" \
-  '{backlog:$backlog[0],tasks:$tasks[0]}' > "$JSON_TRANSPORT_DIR/contribution-input.json"
-FM_CONTRIBUTIONS_NOW="$SNAPSHOT_NOW" "$SCRIPT_DIR/fm-contributions.sh" snapshot \
-  "$JSON_TRANSPORT_DIR/contribution-input.json" > "$CONTRIBUTIONS_JSON_FILE" \
-  || { echo "fm-fleet-snapshot: contribution coverage unavailable" >&2; exit 1; }
+if [ "$OUTPUT_MODE" = light ]; then
+  # The sections --light leaves out; the one assembly below drops them.
+  for light_file in "$CONTRIBUTIONS_JSON_FILE" "$MAIN_INVENTORY_JSON_FILE" \
+    "$SECONDMATE_CURRENT_JSON_FILE" "$SECONDMATE_LANDED_JSON_FILE"; do
+    printf 'null\n' > "$light_file" || { echo "fm-fleet-snapshot: temporary file write failed" >&2; exit 1; }
+  done
+  printf '[]\n' > "$SCOUT_REPORTS_JSON_FILE" || { echo "fm-fleet-snapshot: temporary file write failed" >&2; exit 1; }
+else
+  CONTRIBUTION_TASKS_JSON=$(contribution_tasks_json) \
+    || { echo "fm-fleet-snapshot: contribution task read failed" >&2; exit 1; }
+  printf '%s\n' "$CONTRIBUTION_TASKS_JSON" > "$JSON_TRANSPORT_DIR/contribution-tasks.json" \
+    || { echo "fm-fleet-snapshot: contribution task staging failed" >&2; exit 1; }
+  jq -n --slurpfile backlog "$BACKLOG_JSON_FILE" --slurpfile tasks "$JSON_TRANSPORT_DIR/contribution-tasks.json" \
+    '{backlog:$backlog[0],tasks:$tasks[0]}' > "$JSON_TRANSPORT_DIR/contribution-input.json"
+  FM_CONTRIBUTIONS_NOW="$SNAPSHOT_NOW" "$SCRIPT_DIR/fm-contributions.sh" snapshot \
+    "$JSON_TRANSPORT_DIR/contribution-input.json" > "$CONTRIBUTIONS_JSON_FILE" \
+    || { echo "fm-fleet-snapshot: contribution coverage unavailable" >&2; exit 1; }
 
-if [ "$OUTPUT_MODE" = secondmate-home-summary ]; then
-  secondmate_home_summary_json "$BACKLOG_JSON_FILE" "$TASKS_JSON_FILE" \
-    || { echo "fm-fleet-snapshot: secondmate home summary failed" >&2; exit 1; }
-  exit 0
+  if [ "$OUTPUT_MODE" = secondmate-home-summary ]; then
+    secondmate_home_summary_json "$BACKLOG_JSON_FILE" "$TASKS_JSON_FILE" \
+      || { echo "fm-fleet-snapshot: secondmate home summary failed" >&2; exit 1; }
+    exit 0
+  fi
+
+  scout_report_lines > "$SCOUT_REPORTS_JSON_FILE" \
+    || { echo "fm-fleet-snapshot: scout report snapshot failed" >&2; exit 1; }
+  main_inventory_json "$BACKLOG_JSON_FILE" "$TASKS_JSON_FILE" > "$MAIN_INVENTORY_JSON_FILE" \
+    || { echo "fm-fleet-snapshot: main inventory summary failed" >&2; exit 1; }
+  secondmate_current_json "$TASKS_JSON_FILE" "$SECONDMATE_CURRENT_JSON_FILE" \
+    || { echo "fm-fleet-snapshot: registered secondmate aggregation failed" >&2; exit 1; }
+  secondmate_landed_from_current_json "$SECONDMATE_CURRENT_JSON_FILE" "$SECONDMATE_LANDED_JSON_FILE" \
+    || { echo "fm-fleet-snapshot: secondmate landed projection failed" >&2; exit 1; }
 fi
 
-scout_report_lines > "$SCOUT_REPORTS_JSON_FILE" \
-  || { echo "fm-fleet-snapshot: scout report snapshot failed" >&2; exit 1; }
-main_inventory_json "$BACKLOG_JSON_FILE" "$TASKS_JSON_FILE" > "$MAIN_INVENTORY_JSON_FILE" \
-  || { echo "fm-fleet-snapshot: main inventory summary failed" >&2; exit 1; }
-secondmate_current_json "$TASKS_JSON_FILE" "$SECONDMATE_CURRENT_JSON_FILE" \
-  || { echo "fm-fleet-snapshot: registered secondmate aggregation failed" >&2; exit 1; }
-secondmate_landed_from_current_json "$SECONDMATE_CURRENT_JSON_FILE" "$SECONDMATE_LANDED_JSON_FILE" \
-  || { echo "fm-fleet-snapshot: secondmate landed projection failed" >&2; exit 1; }
-
 jq -n \
+  --argjson light "$([ "$OUTPUT_MODE" = light ] && printf true || printf false)" \
   --arg generated "$SNAPSHOT_NOW" \
   --arg fm_home "$FM_HOME" \
   --arg fm_root "$FM_ROOT" \
@@ -2229,4 +2235,5 @@ jq -n \
      secondmate_guidance:{
        note:"For kind=secondmate, bearings selects validated structured state from that registered home; parent events and bounded terminal evidence are fallback-only supplements and never current-state authority."
      }
-   }'
+   }
+   | if $light then {schema, generated, fm_home, roots, backlog, tasks} else . end'
