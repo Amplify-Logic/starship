@@ -42,7 +42,10 @@
 # same assertions, so it shows direct_line true only for a mate send accepts.
 #
 # SEND. One send per mate at a time (a per-mate lock, waited for up to
-# FM_DIRECT_LINE_LOCK_WAIT seconds, default 60). The text is at most 8000
+# FM_DIRECT_LINE_LOCK_WAIT seconds, default 60). When the lock stays busy, a
+# send whose id is already recorded prints that record and exits 4, and one
+# whose id is not prints state busy and exits 2: nothing was recorded or typed
+# for it, so send it again with the same id. The text is at most 8000
 # characters; --answers needs words and --hold-identity, the identity the
 # owner was shown (bin/fm-captain-hold.sh open <task> --identity).
 #   1. The client id (8 to 64 letters, digits, dot, underscore, hyphen, first a
@@ -65,7 +68,9 @@
 #      delivery puts the earlier mark back.
 #   4. The words go through bin/fm-desk-voice.sh only (an answer typed after
 #      "[direct line message <id> answers <task>]", so the mate can cite it), bounded by
-#      FM_DIRECT_LINE_SEND_TIMEOUT seconds (default 120), with FM_HOME set to
+#      FM_DIRECT_LINE_SEND_TIMEOUT seconds (default 120) plus 60 seconds for
+#      desk-voice to finish words it is already typing, their Enter, and any
+#      mailbox fallback (it ignores the stop signal), with FM_HOME set to
 #      the mate's home, every home override, pane variable and desk-voice
 #      submit knob cleared, the same --client-id, and --expect-home, so they
 #      are typed only into the pane of the session that holds that mate's lock
@@ -78,12 +83,15 @@
 #      --expect-identity, bounded by 60 seconds). The decision records the
 #      owner's words and that they came by direct line through this client id,
 #      and the record keeps answered_via and answered_at. A refused answer (the
-#      call closed or changed) is final; a failed one is tried again by a resend
-#      of the same id, or by the mate's `answered`, while the record is young.
+#      call closed or changed) is final; a failed one, or one a timed-out send
+#      never reached, is tried again by a resend of the same id, a delivery
+#      poll, or the mate's `answered`, while the record is young.
 # States: sending, typed, typed-unconfirmed, mailbox, failed, unknown,
-# expired, and, for delivery only, interrupted (the send stopped before
-# desk-voice claimed the id; send it again with the same id within the resume
-# window). delivery adopts desk-voice's record the same way before it prints.
+# expired, for send only busy (above), and, for delivery only, interrupted
+# (the send stopped before desk-voice claimed the id; send it again with the
+# same id within the resume window). delivery adopts desk-voice's record the same way before it prints,
+# and then, under the per-mate send lock, closes the held call a delivered
+# message names, exactly as a resend of the same id would.
 # Exit: 0 delivered, 1 not delivered (failed or expired), 2 refused, 3
 # delivered but the held call is not answered, 4 the outcome is not known yet
 # (still sending, or stopped while typing): poll delivery, never resend new
@@ -142,6 +150,7 @@ DELIVERY_SCHEMA=fm-direct-line-delivery.v1
 TALKING_SCHEMA=fm-direct-line-talking.v1
 RESUME_SECS=$(_fm_direct_line_number "${FM_DIRECT_LINE_RESUME_SECS:-}" 300)
 SEND_TIMEOUT=$(_fm_direct_line_number "${FM_DIRECT_LINE_SEND_TIMEOUT:-}" 120)
+SEND_GRACE=60
 HOLD_TIMEOUT=60
 
 now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
@@ -334,10 +343,24 @@ send_lock_acquire() {
   SEND_LOCK=$(send_lock_path)
   deadline=$(( $(date +%s) + wait ))
   until fm_lock_try_acquire "$SEND_LOCK"; do
-    [ "$(date +%s)" -lt "$deadline" ] || { SEND_LOCK=; die "another direct-line send to '$MATE_ID' is still running"; }
+    [ "$(date +%s)" -lt "$deadline" ] || { SEND_LOCK=; return 1; }
     sleep 0.2
   done
   trap 'fm_lock_release "$SEND_LOCK"' EXIT
+}
+
+# The send lock stayed busy: print <client-id>'s record and exit 4 when it is
+# recorded, else a busy document and exit 2.
+send_lock_busy() {  # <client-id>
+  printf "fm-direct-line: another direct-line send to '%s' is still running\n" "$MATE_ID" >&2
+  if [ -f "$(record_path "$1")" ]; then
+    jq -c 'del(.digest, .text)' "$(record_path "$1")"
+    exit 4
+  fi
+  jq -cn --arg schema "$DELIVERY_SCHEMA" --arg mate "$MATE_ID" --arg cid "$1" \
+    '{schema:$schema, mate:$mate, client_id:$cid, state:"busy",
+      detail:"another direct-line send to this mate is still running; nothing was recorded or typed for this id"}'
+  exit 2
 }
 
 state_of_outcome() {  # <desk-voice outcome line>
@@ -456,9 +479,9 @@ deliver_recorded() {  # <client-id> <image-args...>
   done
   set -- --client-id "$cid" --expect-home "$MATE_HOME" --source direct-line "$@"
   [ "$mailbox_pending" -eq 0 ] || set -- --mailbox "$@"
-  outcome=$(fm_run_timed "$SEND_TIMEOUT" "${MATE_ENV[@]}" "$SCRIPT_DIR/fm-desk-voice.sh" send "$@" -- "$text") || rc=$?
+  outcome=$(fm_exec_timed "$SEND_TIMEOUT" "$SEND_GRACE" "${MATE_ENV[@]}" "$SCRIPT_DIR/fm-desk-voice.sh" send "$@" -- "$text") || rc=$?
   outcome=$(printf '%s\n' "$outcome" | tail -n 1)
-  if [ "$rc" -eq 124 ]; then
+  if fm_timed_out "$rc"; then
     outcome="unknown: $cid"
   elif [ "$rc" -ne 0 ] || [ -z "$outcome" ]; then
     outcome="failed: the message could not be delivered"
@@ -515,9 +538,13 @@ cmd_send() {
     [ -n "$text" ] || refuse "--answers needs the owner's words, not only images"
   fi
   resolve_mate "$id"
-  send_lock_acquire
   digest=$(message_digest "$text" "$answers" "$identity" ${image_paths[@]+"${image_paths[@]}"})
   [ -n "$digest" ] || die "cannot digest the message"
+  if ! send_lock_acquire; then
+    [ ! -f "$(record_path "$cid")" ] || [ "$(record_field "$cid" '.digest')" = "$digest" ] \
+      || refuse "client id $cid was already used for a different message; nothing was sent"
+    send_lock_busy "$cid"
+  fi
 
   if [ -f "$(record_path "$cid")" ]; then
     [ "$(record_field "$cid" '.digest')" = "$digest" ] \
@@ -573,6 +600,14 @@ cmd_delivery() {
   fi
   reconcile_record "$cid"
   state=$(record_field "$cid" '.state')
+  case "$state" in
+    typed|typed-unconfirmed|mailbox)
+      case "$(record_field "$cid" '.hold.task'):$(record_field "$cid" '.hold.result')" in
+        :*|*:answered|*:refused|*:expired) ;;
+        *) ! send_lock_acquire || answer_hold "$cid" || true ;;
+      esac
+      ;;
+  esac
   if [ "$state" = sending ] && [ "$DESK_STATE" = unknown-id ]; then
     # Still sending only while a sender holds this mate's send lock.
     if fm_lock_try_acquire "$(send_lock_path)"; then
@@ -654,10 +689,10 @@ cmd_answered() {
   [[ $task =~ $TASK_ID_RE ]] || refuse "not a task id"
   [[ $cid =~ $CLIENT_ID_RE ]] || refuse "not a client id"
   rebind_to_parent
-  send_lock_acquire
   [ -f "$(record_path "$cid")" ] || refuse "no direct-line message $cid reached this mate"
   [ "$(record_field "$cid" '.hold.task')" = "$task" ] \
     || refuse "direct-line message $cid does not answer $task; only the owner's own message naming a call can close it"
+  send_lock_acquire || send_lock_busy "$cid"
   reconcile_record "$cid"
   state=$(record_field "$cid" '.state')
   case "$state" in

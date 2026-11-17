@@ -2,19 +2,18 @@
 # fm-control.sh - the CONTROL PLANE for a firstmate-owned agent: allowlisted
 # lifecycle verbs addressed to an exact task id.
 #
-# Usage: fm-control.sh <task-id> interrupt [--owner-approved]
-#        fm-control.sh <task-id> exit [--owner-approved]
+# Usage: fm-control.sh <task-id> interrupt
+#        fm-control.sh <task-id> exit
 #        fm-control.sh <task-id> relaunch [--harness <name>] [--model <name>]
 #                                         [--effort <level>] [--account <entry>]
 #                                         (--note <text> | --note-file <path>)
-#                                         [--owner-approved]
 #
 # A local second mate's pane-writer lock is held across every send, and a
 # direct-line second mate that is talking with its owner
 # (bin/fm-direct-line-lib.sh) is refused every verb before anything is sent:
 # the first mate never interrupts, stops or relaunches a conversation the
-# owner is having. --owner-approved records that the owner asked for this
-# action, lets it proceed, and leaves an audit line.
+# owner is having. There is no override: the conversation ends only through
+# the mate's own `fm-direct-line.sh waiting --clear` or its bounded lapse.
 #
 # Why this exists, and how it differs from fm-send.sh. bin/fm-send.sh is the
 # DATA plane: conversational text for the agent to read, always routing-marked
@@ -296,7 +295,6 @@ EFFORT_SET=0
 ACCOUNT_SET=0
 NOTE=
 NOTE_SET=0
-OWNER_APPROVED=0
 control_want_value=
 for control_arg in "$@"; do
   if [ -n "$control_want_value" ]; then
@@ -330,7 +328,6 @@ for control_arg in "$@"; do
     --note) control_want_value=note ;;
     --note=*) NOTE=${control_arg#--note=}; NOTE_SET=1 ;;
     --note-file) control_want_value=note_file ;;
-    --owner-approved) OWNER_APPROVED=1 ;;
     --note-file=*)
       [ -f "${control_arg#--note-file=}" ] || die "--note-file '${control_arg#--note-file=}' is not a readable file"
       NOTE=$(cat "${control_arg#--note-file=}")
@@ -411,9 +408,7 @@ fi
 # this plane holds that home's pane-writer lock across everything it sends,
 # waiting up to FM_CONTROL_PANE_WAIT seconds (default 15) for another writer.
 # Under that lock, a direct-line mate talking with its owner is refused before
-# anything else is read or sent (bin/fm-direct-line-lib.sh owns that state);
-# --owner-approved lets the action through and leaves an audit line in
-# state/direct-line/<id>/audit.log.
+# anything else is read or sent (bin/fm-direct-line-lib.sh owns that state).
 if [ "$(fm_meta_get "$META" kind)" = secondmate ]; then
   # shellcheck source=bin/fm-direct-line-lib.sh
   . "$SCRIPT_DIR/fm-direct-line-lib.sh"
@@ -436,16 +431,7 @@ if [ "$(fm_meta_get "$META" kind)" = secondmate ]; then
     done
     [ "$pane_rc" != 0 ] || PANE_WRITER_STATE="$MATE_HOME/state"
     if fm_direct_line_talking "$STATE" "$ID" "$MATE_HOME"; then
-      [ "$OWNER_APPROVED" = 1 ] \
-        || die "second mate $ID is talking with its owner on the direct line ($FM_DIRECT_LINE_TALKING_REASON, until epoch $FM_DIRECT_LINE_TALKING_UNTIL); the first mate never interrupts, stops or relaunches that conversation. Pass --owner-approved only when the owner asked for this action"
-    fi
-    if [ "$OWNER_APPROVED" = 1 ]; then
-      audit_dir=$(fm_direct_line_parent_dir "$STATE" "$ID")
-      if mkdir -p "$audit_dir" 2>/dev/null; then
-        printf '%s owner-approved %s talking=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$VERB" \
-          "${FM_DIRECT_LINE_TALKING_REASON:-no}" >> "$audit_dir/audit.log" || true
-      fi
-      echo "fm-control: $VERB on second mate $ID runs on the owner's word (--owner-approved); recorded in $audit_dir/audit.log" >&2
+      die "second mate $ID is talking with its owner on the direct line ($FM_DIRECT_LINE_TALKING_REASON, until epoch $FM_DIRECT_LINE_TALKING_UNTIL); the first mate never interrupts, stops or relaunches that conversation. It ends when the mate runs 'fm-direct-line.sh waiting --clear' or the talking state lapses"
     fi
   fi
 fi

@@ -147,6 +147,92 @@ test_send_copies_to_the_parent_then_types_once() {
   pass "fm-direct-line send: copies to the parent first, types once per client id, starts the conversation"
 }
 
+# Make <mate-home>'s stand-in pane take <secs> seconds to accept typed text,
+# so a send outlives a short FM_DIRECT_LINE_SEND_TIMEOUT mid-typing.
+slow_pane() {  # <mate-home> <secs>
+  local fb="$1/fixture/bin"
+  mv "$fb/herdr" "$fb/herdr.real"
+  printf '#!/usr/bin/env bash\n[ "${1:-} ${2:-}" != "pane send-text" ] || sleep %s\nexec "$(dirname "$0")/herdr.real" "$@"\n' \
+    "$2" > "$fb/herdr"
+  chmod +x "$fb/herdr"
+}
+
+test_timed_out_send_still_submits_its_words() {
+  local pair parent mate out rc
+  pair=$(typed_fixture slow) || { desk_send_skip direct-line-slow; return 0; }
+  IFS=$'\t' read -r parent mate <<<"$pair"
+  slow_pane "$mate" 3
+  out=$(FM_DIRECT_LINE_SEND_TIMEOUT=1 dl "$parent" "$mate" send music --client-id deck-0030 -- "Print the stems"); rc=$?
+  assert_equals 4 "$rc" "a send past its bound reports the outcome as not known yet"
+  assert_equals unknown "$(jq -r .state <<<"$out")" "the record says unknown, never failed"
+  assert_contains "$(cat "$mate/fixture/submitted" 2>/dev/null)" "Print the stems" \
+    "the words being typed when the bound hit are still submitted with their Enter"
+  assert_equals "" "$(cat "$mate/fixture/draft" 2>/dev/null)" "nothing is left unsubmitted in the composer"
+  out=$(dl "$parent" "$mate" delivery music deck-0030) || fail "delivery read failed: $out"
+  assert_equals typed "$(jq -r .state <<<"$out")" "a poll adopts desk-voice's finished outcome"
+  desk_send_done "$mate"
+  pass "fm-direct-line send: a send stopped by its bound still finishes the words and their Enter"
+}
+
+test_poll_closes_the_call_a_timed_out_answer_left_open() {
+  local pair parent mate fakebin identity out rc
+  command -v tasks-axi >/dev/null 2>&1 || { echo "skip: tasks-axi not found"; return 0; }
+  pair=$(typed_fixture slowhold) || { desk_send_skip direct-line-slow-hold; return 0; }
+  IFS=$'\t' read -r parent mate <<<"$pair"
+  fm_test_tasks_toml "$mate/.tasks.toml"
+  printf '# Backlog\n\n## In flight\n\n## Queued\n\n## Done\n' > "$mate/data/backlog.md"
+  fakebin=$(fm_fakebin "$mate")
+  fm_fake_exit0 "$fakebin" treehouse no-mistakes gh gh-axi
+  PATH="$fakebin:$PATH" FM_HOME="$mate" "$ROOT/bin/fm-captain-hold.sh" hold mix-call \
+    --title "Pick the mix" --reason "captain picks mix A or B" >/dev/null 2>&1 \
+    || fail "could not hold the call in the mate home"
+  identity=$(PATH="$fakebin:$PATH" FM_HOME="$mate" "$ROOT/bin/fm-captain-hold.sh" open mix-call --identity 2>/dev/null) \
+    || fail "the call must be open before the answer"
+  slow_pane "$mate" 3
+  out=$(PATH="$fakebin:$PATH" FM_DIRECT_LINE_SEND_TIMEOUT=1 dl "$parent" "$mate" send music --client-id deck-0031 \
+    --answers mix-call --hold-identity "$identity" -- "Mix B please"); rc=$?
+  assert_equals 4 "$rc" "an answer whose send hit its bound is not known yet"
+  assert_equals null "$(jq -r .hold.result <<<"$out")" "the timed-out send has not answered the call"
+  out=$(PATH="$fakebin:$PATH" dl "$parent" "$mate" delivery music deck-0031) || fail "delivery read failed: $out"
+  assert_equals typed "$(jq -r .state <<<"$out")" "the poll adopts the typed outcome"
+  assert_equals answered "$(jq -r .hold.result <<<"$out")" "the poll closes the call the delivered message answers"
+  assert_equals deck-0031 "$(jq -r .hold.answered_via <<<"$out")" "the record names the message that closed it"
+  if PATH="$fakebin:$PATH" FM_HOME="$mate" "$ROOT/bin/fm-captain-hold.sh" open mix-call >/dev/null 2>&1; then
+    fail "the held call must be closed after the poll"
+  fi
+  desk_send_done "$mate"
+  pass "fm-direct-line delivery: polling a timed-out answer closes the held call by script"
+}
+
+test_busy_lock_never_reads_as_not_delivered() {
+  local mate parent out rc holder lock
+  mate=$(new_home busy-mate)
+  parent=$(make_parent busy-parent music "$mate")
+  seed_mate "$mate" music "$parent"
+  out=$(dl "$parent" "$mate" send music --client-id deck-0032 -- "first") || fail "send failed: $out"
+  sleep 30 & holder=$!
+  lock="$(parent_dl_dir "$parent" music)/.send.lock"
+  mkdir -p "$lock"
+  printf '%s\n' "$holder" > "$lock/pid"
+  out=$(FM_DIRECT_LINE_LOCK_WAIT=1 dl "$parent" "$mate" send music --client-id deck-0032 -- "first"); rc=$?
+  assert_equals 4 "$rc" "a retry of a recorded id behind a busy lock says poll, not not-delivered"
+  assert_equals mailbox "$(jq -r .state <<<"$out")" "it prints the id's record"
+  out=$(FM_DIRECT_LINE_LOCK_WAIT=1 dl "$parent" "$mate" send music --client-id deck-0033 -- "second"); rc=$?
+  assert_equals 2 "$rc" "a new id behind a busy lock is refused"
+  assert_equals busy "$(jq -r .state <<<"$out")" "the refusal is a busy document"
+  assert_equals fm-direct-line-delivery.v1 "$(jq -r .schema <<<"$out")" "the busy document is versioned"
+  out=$(FM_DIRECT_LINE_LOCK_WAIT=1 dl "$parent" "$mate" send music --client-id deck-0032 -- "other words" 2>&1); rc=$?
+  assert_equals 2 "$rc" "a reused id with other words is refused even behind a busy lock"
+  assert_contains "$out" "different message" "the refusal names the reused id"
+  kill "$holder" 2>/dev/null; wait "$holder" 2>/dev/null
+  rm -rf "$lock"
+  [ ! -e "$(parent_dl_dir "$parent" music)/deliveries/deck-0033.json" ] || fail "a busy send records nothing"
+  assert_equals 1 "$(mailbox_count "$mate")" "nothing more was delivered behind the busy lock"
+  out=$(dl "$parent" "$mate" send music --client-id deck-0033 -- "second") || fail "the same id sends once the lock is free: $out"
+  assert_equals 2 "$(mailbox_count "$mate")" "the retried id is delivered once"
+  pass "fm-direct-line send: a busy lock reports poll or busy, never not delivered"
+}
+
 test_send_refuses_without_every_assertion() {
   local mate parent other out
   mate=$(new_home refuse-mate)
@@ -324,12 +410,11 @@ test_control_plane_refuses_a_talking_mate() {
   assert_contains "$out" "talking with its owner" "the refusal names the conversation"
   out=$(FM_HOME="$parent" "$ROOT/bin/fm-control.sh" music relaunch 2>&1) && fail "a talking mate must not be relaunched: $out"
   assert_contains "$out" "talking with its owner" "relaunch is refused too"
-  # With the captain's word the guard steps aside (this fixture's endpoint then
-  # stops it, which is all this case needs to see).
-  out=$(FM_HOME="$parent" "$ROOT/bin/fm-control.sh" music interrupt --owner-approved 2>&1) || true
-  assert_not_contains "$out" "talking with its owner" "--owner-approved passes the conversation guard"
-  assert_contains "$(cat "$(parent_dl_dir "$parent" music)/audit.log")" "owner-approved interrupt talking=waiting-on-owner" \
-    "--owner-approved leaves an audit line"
+  out=$(FM_HOME="$parent" "$ROOT/bin/fm-control.sh" music exit 2>&1) && fail "a talking mate must not be stopped: $out"
+  assert_contains "$out" "talking with its owner" "exit is refused too"
+  out=$(FM_HOME="$parent" "$ROOT/bin/fm-control.sh" music interrupt --owner-approved 2>&1) \
+    && fail "no flag lets the first mate past the conversation: $out"
+  [ ! -e "$(parent_dl_dir "$parent" music)/audit.log" ] || fail "a refused action leaves no override audit"
   [ ! -e "$mate/state/desk-voice/.send.lock" ] || fail "the control plane must release the pane-writer lock"
   # Another writer holds the pane: the control plane waits briefly, then refuses.
   FM_HOME="$mate" "$DL" waiting --clear >/dev/null || fail "waiting --clear failed"
@@ -340,7 +425,7 @@ test_control_plane_refuses_a_talking_mate() {
     && fail "the control plane must not type while another writer holds the pane: $out"
   assert_contains "$out" "another writer is still typing" "the refusal names the busy pane"
   rm -rf "$mate/state/desk-voice/.send.lock"
-  pass "fm-control: refuses a direct-line mate talking with the captain unless the captain asked"
+  pass "fm-control: refuses a direct-line mate talking with the captain, with no override"
 }
 
 test_ids_and_sizes_are_checked_whole() {
@@ -469,6 +554,9 @@ test_talking_is_bounded() {
 }
 
 test_send_copies_to_the_parent_then_types_once
+test_timed_out_send_still_submits_its_words
+test_poll_closes_the_call_a_timed_out_answer_left_open
+test_busy_lock_never_reads_as_not_delivered
 test_send_refuses_without_every_assertion
 test_mailbox_keeps_the_captains_order
 test_typed_send_follows_an_undrained_mailbox
