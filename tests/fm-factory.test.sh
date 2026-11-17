@@ -1570,6 +1570,32 @@ test_a_question_held_since_the_last_refresh_is_read_once() {
   pass "factory pane: a question held since the last whole refresh has its options read once"
 }
 
+# A whole refresh reads the held questions' options again only when they may
+# have changed: while the owner's calls signal stands still it keeps the last
+# refresh's, for at most FM_FACTORY_MAX_AGE, and the screen is the same.
+test_a_whole_refresh_reads_the_options_again_only_when_the_calls_moved() {
+  local first second
+  reset_case
+  write_registry
+  write_world
+  export FM_FACTORY_MAX_AGE=300
+  python3 "$FACTORY" refresh >/dev/null || fail "the first record could not be built"
+  first=$(jq -S 'del(.read_at)' "$HOME_FIX/state/factory/record.json") || fail "the record is gone"
+  : > "$HOME_FIX/shapes.calls"
+  python3 "$FACTORY" refresh >/dev/null || fail "the second refresh failed"
+  second=$(jq -S 'del(.read_at)' "$HOME_FIX/state/factory/record.json") || fail "the record is gone"
+  assert_equals "" "$(cat "$HOME_FIX/shapes.calls")" "a refresh with the calls unchanged read the options again"
+  assert_equals "$first" "$second" "the kept options changed the record"
+  bash -c '. "$1/fm-owner-calls-signal-lib.sh" && fm_owner_calls_touch "$2"' _ "$ROOT/bin" "$HOME_FIX/state"
+  python3 "$FACTORY" refresh >/dev/null || fail "the refresh after a call changed failed"
+  grep -q garden-chart "$HOME_FIX/shapes.calls" || fail "a refresh after a call changed kept the old options"
+  : > "$HOME_FIX/shapes.calls"
+  FM_FACTORY_NOW=$((NOW + 300)) python3 "$FACTORY" refresh >/dev/null || fail "the late refresh failed"
+  grep -q garden-chart "$HOME_FIX/shapes.calls" || fail "options older than FM_FACTORY_MAX_AGE were kept"
+  unset FM_FACTORY_MAX_AGE
+  pass "factory pane: a whole refresh reads the options again only when the calls moved"
+}
+
 # Already settled? only asks: it files a reconcile request for the highlighted
 # call and wakes Starship with a note naming it, and the card reads checking
 # until Starship closes the call, notes it, or holds it again with new words.
@@ -2754,6 +2780,7 @@ fm_test_run \
   test_a_whole_refresh_waits_for_a_change_in_what_it_reads \
   test_a_busy_machine_spaces_rebuilds_out \
   test_a_question_held_since_the_last_refresh_is_read_once \
+  test_a_whole_refresh_reads_the_options_again_only_when_the_calls_moved \
   test_talking_never_changes_who_steers \
   test_enter_opens_the_factory_tab_with_its_live_workers \
   test_a_live_copy_shows_text_at_the_top_of_a_taller_pane \

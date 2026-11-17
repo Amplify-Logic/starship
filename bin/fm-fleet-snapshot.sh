@@ -622,16 +622,20 @@ backlog_json() (  # [<backlog-path>] - defaults to this home's $BACKLOG
 # The backlog object read through the home's configured tasks-axi adapter
 # (bin/fm-tasks-axi.sh), so a home whose backlog is not markdown still has its
 # rows: id, state, kind, title, the hold fields, and the blockers, classified by
-# classify_holds above. Only an undated captain hold needs its body, for the
-# hold-set stamp its age is read from (its created date for a legacy unstamped
-# hold), so only those are shown, up to eight at a time. Rows end at the first
-# line after the table that is not one, such as the help block. It fails, printing nothing, when the listing
-# or any of those rows cannot be read, or the listing is cut short.
+# classify_holds above. An undated captain hold's age is read from the hold-set
+# stamp on its body's first line (its created date for a legacy unstamped
+# hold), and both come from the same single listing; no row is shown on its
+# own. Rows end at the first line after the table that is not one, such as the
+# help block. It fails, printing nothing, when the listing cannot be read or is
+# cut short.
 axi_backlog_json() (
   set -o pipefail
-  local axi=$SCRIPT_DIR/fm-tasks-axi.sh listing rows ids stamps
+  local axi=$SCRIPT_DIR/fm-tasks-axi.sh listing rows
+  # One listing carries every field, the hold-set stamp and the created date
+  # of each undated captain hold included: its body's first line, which the
+  # listing's body truncation never reaches.
   listing=$(FM_HOME=$FM_HOME FM_DATA_OVERRIDE=$DATA "$axi" list --limit 100000 \
-    --fields hold_kind,hold_reason,hold_until,blocked_by </dev/null 2>/dev/null) || return 1
+    --fields hold_kind,hold_reason,hold_until,blocked_by,created,body </dev/null 2>/dev/null) || return 1
   rows=$(printf '%s\n' "$listing" | perl -MJSON::PP -e '
     my $json = JSON::PP->new->allow_nonref;
     my ($fields, $count, $total, @rows);
@@ -653,42 +657,26 @@ axi_backlog_json() (
       my %row; @row{@$fields} = @values;
       my $absent = sub { my $v = shift; (!defined $v || $v eq "" || $v eq "-") ? undef : $v };
       my $blocked = $absent->($row{blocked_by});
+      my ($hold_set, $since);
+      if (($absent->($row{hold_kind}) // "") eq "captain" && defined $absent->($row{hold_reason})
+          && ($row{state} // "") ne "done" && !defined $absent->($row{hold_until})) {
+        my ($first) = split /\n/, ($row{body} // "");
+        ($hold_set) = ($first // "") =~ /^Captain hold set:\s*(\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}Z)?)$/;
+        $since = defined $row{created} && $row{created} ne "-" && $row{created} ne "" ? $row{created} : undef;
+      }
       push @rows, {structured => JSON::PP::true, id => $row{id}, state => $row{state},
                    kind => $absent->($row{kind}), repo => $absent->($row{repo}), title => $row{title},
                    hold_kind => $absent->($row{hold_kind}), hold_reason => $absent->($row{hold_reason}),
-                   hold_until => $absent->($row{hold_until}), hold_set => undef, since => undef,
+                   hold_until => $absent->($row{hold_until}), hold_set => $hold_set, since => $since,
                    blocked_by_ids => [grep { $_ ne "" && $_ ne "none" } split /\s*,\s*/, ($blocked // "")]};
     }
     die "no listing\n" unless $fields && defined $count && $count == $total && @rows == $count;
     print $json->canonical->encode(\@rows);
   ') || return 1
-  ids=$(printf '%s' "$rows" | jq -r '.[] | select(.hold_kind == "captain" and .hold_reason != null
-    and .state != "done" and .hold_until == null) | .id') || return 1
-  stamps='{}'
-  if [ -n "$ids" ]; then
-    # shellcheck disable=SC2016
-    stamps=$(printf '%s\n' "$ids" | FM_HOME=$FM_HOME FM_DATA_OVERRIDE=$DATA AXI=$axi STAMP_PL='
-      my $json = JSON::PP->new->allow_nonref;
-      my %task;
-      while (my $line = <STDIN>) {
-        chomp $line;
-        next unless $line =~ /^  ([a-z_]+): (.*)$/;
-        my ($key, $value) = ($1, $2);
-        $task{$key} = $value =~ /^"/ ? $json->decode($value) : $value;
-      }
-      my ($first) = split /\n/, ($task{body} // "");
-      my ($set) = ($first // "") =~ /^Captain hold set:\s*(\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}Z)?)$/;
-      my $created = defined $task{created} && $task{created} ne "-" && $task{created} ne "" ? $task{created} : undef;
-      print $json->encode({id => $ARGV[0], hold_set => $set, since => $created}), "\n";
-    ' \
-      xargs -n 1 -P 8 bash -c 'shown=$("$AXI" show "$1" --full </dev/null 2>/dev/null) || exit 1
-        printf "%s\n" "$shown" | perl -MJSON::PP -e "$STAMP_PL" "$1"' fm-fleet-snapshot \
-      | jq -s 'map({(.id): {hold_set, since}}) | add // {}') || return 1
-  fi
-  jq -n --argjson rows "$rows" --argjson stamps "$stamps" --arg today "$SNAPSHOT_TODAY" \
+  jq -n --argjson rows "$rows" --arg today "$SNAPSHOT_TODAY" \
     --arg now "$SNAPSHOT_NOW" --argjson age_days "$FM_SNAPSHOT_UNDATED_HOLD_AGE_DAYS" "$HOLD_CLASSIFY_JQ_DEFS"'
     {path:"tasks-axi", present:true,
-     records:[$rows[] | . + ($stamps[.id] // {})]}
+     records:$rows}
     | classify_holds($today; $now; $age_days)
   '
 )
@@ -2097,18 +2085,15 @@ secondmate_landed_from_current_json() {  # <secondmate-current-json-file> <outpu
 }
 
 scout_report_lines() {
-  local report id
   if [ ! -d "$DATA" ]; then
     jq -n '[]'
     return 0
   fi
+  # One jq for every report: a home keeps hundreds, and a jq per report cost
+  # seconds. The id is the report's folder name.
   LC_ALL=C find "$DATA" -mindepth 2 -maxdepth 2 -type f -name report.md -print \
     | sort \
-    | while IFS= read -r report; do
-      id=$(basename "$(dirname "$report")")
-      jq -n --arg id "$id" --arg path "$report" '{id:$id,path:$path}'
-    done \
-    | jq -s 'sort_by(.id)'
+    | jq -Rn '[inputs | {id:(split("/") | .[-2]),path:.}] | sort_by(.id)'
 }
 
 if [ "$OUTPUT_MODE" = axi-backlog ]; then

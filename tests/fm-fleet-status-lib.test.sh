@@ -723,19 +723,17 @@ test_the_owners_calls_come_through_a_non_markdown_adapter() {
 case "\$1" in
   list)
     printf 'count: 5 of 5 total\n'
-    printf 'tasks[5]{id,state,kind,repo,title,hold_kind,hold_reason,hold_until,blocked_by}:\n'
-    printf '  beads-call,queued,captain,r,"Pick a colour, red or blue",captain,"choose red or blue",-,none\n'
-    printf '  held-work,in_flight,ship,r,"Held work",captain,"merge after the call",-,none\n'
-    printf '  old-call,queued,captain,r,"An old call",captain,"old",-,none\n'
-    printf '  waits,queued,captain,r,"After other work",captain,"after other",-,other\n'
-    printf '  other,queued,ship,r,"The other work",-,-,-,none\n'
+    printf 'tasks[5]{id,state,kind,repo,title,hold_kind,hold_reason,hold_until,blocked_by,created,body}:\n'
+    printf '  beads-call,queued,captain,r,"Pick a colour, red or blue",captain,"choose red or blue",-,none,2026-01-01,"Captain hold set: $stamp\\\\nwhy"\n'
+    printf '  held-work,in_flight,ship,r,"Held work",captain,"merge after the call",-,none,2026-01-01,"Captain hold set: $stamp\\\\nwhy"\n'
+    printf '  old-call,queued,captain,r,"An old call",captain,"old",-,none,2020-01-01,""\n'
+    printf '  waits,queued,captain,r,"After other work",captain,"after other",-,other,2026-01-01,"Captain hold set: $stamp\\\\nwhy"\n'
+    printf '  other,queued,ship,r,"The other work",-,-,-,none,2026-01-01,""\n'
     printf 'help[1]:\n  - Run \`tasks-axi show <id> --full\` for full notes on a task\n'
     ;;
-  show)
-    case "\$2" in
-      old-call) printf 'task:\n  id: old-call\n  created: 2020-01-01\n  body: ""\n' ;;
-      *) printf 'task:\n  id: %s\n  created: 2026-01-01\n  body: "Captain hold set: $stamp\\\\nwhy"\n' "\$2" ;;
-    esac
+  *)
+    printf 'unexpected tasks-axi %s: the listing alone carries every field\n' "\$1" >&2
+    exit 9
     ;;
 esac
 SH
