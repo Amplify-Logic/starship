@@ -53,7 +53,7 @@ frame, and when it changed and the new file is non-empty and compiles, they
 re-execute themselves in place: the same process and Herdr pane, the new code.
 
 Where the record comes from. Live work, decisions and the work list come only
-from bin/fm-fleet-snapshot.sh --json, and each task's state word comes from the
+from bin/fm-fleet-snapshot.sh --light, and each task's state word comes from the
 same fold the status bar counts with (fm_fleet_status_bucket in
 bin/fm-fleet-status-lib.sh). NEEDS YOU is exactly fm_owner_calls in that
 library, the count the bridge strip and the tap page show, and each question's
@@ -101,7 +101,8 @@ a status, record or backlog file changed since the last one began
 unless the machine is busy (machine_busy). That safety refresh exists because
 a worker's pane activity, a job gone quiet and a change merged elsewhere are
 recorded in no file, so without it the pane would go stale.
-A full refresh reads its slow inputs side by side and keeps the held questions'
+A full refresh reads its slow inputs side by side, the held questions' options
+beside the fleet reading since they need only the backlog, and keeps those
 options from the last one while the owner's calls have not moved (kept_shapes).
 Every pane and live copy of a home starts its rebuilds, full or of the
 owner's calls, under one lock the rebuild holds until it exits, so two never
@@ -547,7 +548,7 @@ def load_snapshot(home: str) -> Dict[str, Any]:
         with open(seam, encoding="utf-8") as handle:
             return json.load(handle)
     env = dict(os.environ, FM_HOME=home)
-    out = subprocess.run(["bash", os.path.join(BIN, "fm-fleet-snapshot.sh"), "--json"],
+    out = subprocess.run(["bash", os.path.join(BIN, "fm-fleet-snapshot.sh"), "--light"],
                          capture_output=True, text=True, timeout=120, env=env)
     if out.returncode != 0:
         raise RuntimeError("the fleet snapshot failed: %s" % (out.stderr.strip().splitlines() or ["no reason"])[-1])
@@ -1672,20 +1673,32 @@ def refresh(home: str) -> Dict[str, Any]:
     inputs = inputs_digest(home)
     read_at = time.time()
     # The reads that do not depend on one another run side by side: the fleet
-    # snapshot, the backlog as its adapter reads it, the inbox and the
-    # reconcile requests; then the panes beside the owner's calls and their
-    # questions, which need the snapshot's buckets.
+    # snapshot, the backlog as its adapter reads it and then its held
+    # questions' shapes (which held decisions are the owner's calls depends on
+    # the backlog alone), the inbox and the reconcile requests; then the panes
+    # beside the owner's calls, which need the snapshot's buckets and take the
+    # shapes already read.
+    shapes, shapes_epoch = kept_shapes(home, signal_at_start, now)
+    held_shapes: Dict[str, Dict[str, Any]] = {}
+
+    def backlog_and_shapes():
+        taken = axi_backlog(home)
+        decision_ids, _merges, rows = owner_calls(home, {}, taken)
+        held_shapes.update(shapes_for(home, decision_ids, {r["id"]: r for r in rows}, shapes))
+        return taken
+
     snapshot, backlog, notes, reconciles = side_by_side(
-        lambda: load_snapshot(home), lambda: axi_backlog(home),
+        lambda: load_snapshot(home), backlog_and_shapes,
         lambda: inbox_receipts(home), lambda: reconcile_pending(home))
     running = [t["id"] for t in snapshot.get("tasks") or []
                if (t.get("current_state") or {}).get("state") == "working"
                and (t.get("current_state") or {}).get("source") == "pane"]
-    shapes, shapes_epoch = kept_shapes(home, signal_at_start, now)
 
     def calls_with_buckets():
         taken = buckets_for(live_tasks(snapshot))
-        return taken, read_calls(home, taken, backlog, shapes)
+        decision_ids, merge_ids, rows = owner_calls(home, taken, backlog)
+        return taken, (decision_ids, merge_ids, rows,
+                       {ident: held_shapes[ident] for ident in decision_ids if ident in held_shapes})
 
     activity, (buckets, calls) = side_by_side(lambda: pane_activity(home, running, now, write=True),
                                               calls_with_buckets)

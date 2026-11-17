@@ -1694,6 +1694,42 @@ test_a_question_held_since_the_last_refresh_is_read_once() {
   pass "factory pane: a question held since the last whole refresh has its options read once"
 }
 
+# The pane reads the fleet with `fm-fleet-snapshot.sh --light`; on a real home
+# it draws exactly the record the whole `--json` snapshot gives it.
+test_the_light_snapshot_gives_the_pane_the_record_the_whole_one_does() {
+  local light whole
+  reset_case
+  write_registry
+  write_projects
+  unset FM_TEST_AXI_BACKLOG
+  cat > "$HOME_FIX/data/backlog.md" <<'MD'
+## In flight
+- [ ] cup-search - Search cups by glaze (repo: sample-shop) (kind: ship) (since 2026-11-13)
+
+## Queued
+- [ ] cup-gift - Gift wrapping at checkout (repo: sample-shop) (kind: ship) (since 2026-11-12) (hold: Wrap by default or as an option?) (hold-kind: captain)
+  Captain hold set: 2026-11-13T09:00:00Z
+- [ ] garden-rows - Rows view for the beds (repo: garden-journal) (kind: ship) (since 2026-11-12)
+
+## Done
+- [x] recipe-print - Print a recipe card (repo: recipe-box) (kind: ship) (merged 2026-11-13)
+MD
+  fm_write_meta "$HOME_FIX/state/cup-search.meta" "project=sample-shop" "harness=claude" "kind=ship" "mode=no-mistakes"
+  printf 'working [at=%s]: wiring the glaze filter\n' "$((NOW - 1200))" > "$HOME_FIX/state/cup-search.status"
+  printf '{"schema":"fm-tap-shapes.v1","decisions":[{"id":"cup-gift","identity":"2026-11-13T09:00:00Z#0","title":"Gift wrapping at checkout","question":"Wrap by default or as an option?","options":["by default","as an option"],"recommended_option":"as an option","recommendation":"as an option","held_since":"2026-11-13T09:00:00Z"}],"not_shown":[]}\n' \
+    > "$HOME_FIX/shapes.json"
+  bash "$ROOT/bin/fm-fleet-snapshot.sh" --json > "$HOME_FIX/whole.json" || fail "the whole snapshot failed"
+  light=$(unset FM_FACTORY_SNAPSHOT; python3 "$FACTORY" --data --fresh) || fail "the pane could not read the light snapshot"
+  whole=$(FM_FACTORY_SNAPSHOT="$HOME_FIX/whole.json" python3 "$FACTORY" --data --fresh) \
+    || fail "the pane could not read the whole snapshot"
+  printf '%s' "$light" | jq -e '([.needs_you[] | select(.id == "cup-gift")] | length) == 1
+    and ([.. | objects | select(.id? == "cup-search")] | length) > 0' >/dev/null \
+    || fail "the light record lost the held question or the running job: $light"
+  assert_equals "$(printf '%s' "$whole" | jq -S 'del(.read_at)')" "$(printf '%s' "$light" | jq -S 'del(.read_at)')" \
+    "the pane drew a different record from the light snapshot"
+  pass "factory pane: the light snapshot gives the pane the record the whole one does"
+}
+
 # A whole refresh reads the held questions' options again only when they may
 # have changed: while the owner's calls signal stands still it keeps the last
 # refresh's, for at most FM_FACTORY_MAX_AGE, and the screen is the same.
@@ -1713,6 +1749,11 @@ test_a_whole_refresh_reads_the_options_again_only_when_the_calls_moved() {
   bash -c '. "$1/fm-owner-calls-signal-lib.sh" && fm_owner_calls_touch "$2"' _ "$ROOT/bin" "$HOME_FIX/state"
   python3 "$FACTORY" refresh >/dev/null || fail "the refresh after a call changed failed"
   grep -q garden-chart "$HOME_FIX/shapes.calls" || fail "a refresh after a call changed kept the old options"
+  assert_equals "1" "$(wc -l < "$HOME_FIX/shapes.calls" | tr -d ' ')" \
+    "a refresh after a call changed read the options more than once"
+  assert_equals "$(printf '%s' "$first" | jq -S 'del(.calls_signal)')" \
+    "$(jq -S 'del(.read_at, .calls_signal)' "$HOME_FIX/state/factory/record.json")" \
+    "options read beside the fleet reading changed the record"
   : > "$HOME_FIX/shapes.calls"
   FM_FACTORY_NOW=$((NOW + 300)) python3 "$FACTORY" refresh >/dev/null || fail "the late refresh failed"
   grep -q garden-chart "$HOME_FIX/shapes.calls" || fail "options older than FM_FACTORY_MAX_AGE were kept"
@@ -3048,6 +3089,7 @@ test_without_a_routine_mark_every_run_shows_as_before() {
 }
 
 fm_test_run \
+  test_the_light_snapshot_gives_the_pane_the_record_the_whole_one_does \
   test_the_record_words_every_state \
   test_the_plain_screen_is_the_record_as_text \
   test_the_whole_queue_is_counted_in_sight \

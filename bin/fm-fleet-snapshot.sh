@@ -127,6 +127,10 @@
 # --backlog prints only the canonical backlog object above, with no task, worker,
 # or cross-home reads, for readers such as bin/fm_voice_records.py that need the
 # same role and hold_bucket classification without paying for a full snapshot.
+# --light prints the --json object with only schema, generated, fm_home, roots,
+# backlog and tasks, each exactly as --json prints it; it skips the contribution,
+# scout report, main inventory and second mate collection, the remote reads
+# among them, for readers such as bin/fm-factory.py that use only those fields.
 # --axi-backlog prints that backlog object read through the configured tasks-axi
 # adapter rather than data/backlog.md, with the same classification, for
 # bin/fm-fleet-status-lib.sh fm_owner_calls; it fails when the backlog cannot be
@@ -250,6 +254,7 @@ esac
 usage() {
   cat <<'EOF'
 usage: fm-fleet-snapshot.sh --json
+       fm-fleet-snapshot.sh --light
        fm-fleet-snapshot.sh --secondmate-home-summary
        fm-fleet-snapshot.sh --backlog
        fm-fleet-snapshot.sh --axi-backlog
@@ -260,6 +265,10 @@ refreshes only its parent-side remote-summary cache as an observational side eff
 
 --contribution-input emits the canonical local backlog/tasks ownership pair only,
 without worker observations or cross-home collection.
+
+--light emits the --json object with only schema, generated, fm_home, roots,
+backlog and tasks, each as --json emits it, without the contribution, scout
+report, main inventory or second mate collection.
 
 --backlog emits the canonical local backlog object only, with the same
 current_role and hold_bucket classification, and reads no task or other home.
@@ -320,6 +329,7 @@ EOF
 OUTPUT_MODE=json
 case "${1:---json}" in
   --json) ;;
+  --light) OUTPUT_MODE=light ;;
   --secondmate-home-summary) OUTPUT_MODE=secondmate-home-summary ;;
   --contribution-input) OUTPUT_MODE=contribution-input ;;
   --backlog) OUTPUT_MODE=backlog ;;
@@ -2151,32 +2161,42 @@ printf '%s\n' "$TASKS_JSON" > "$TASKS_JSON_FILE" \
   || { echo "fm-fleet-snapshot: temporary task file write failed" >&2; exit 1; }
 
 CONTRIBUTIONS_JSON_FILE="$JSON_TRANSPORT_DIR/contributions.json"
-CONTRIBUTION_TASKS_JSON=$(contribution_tasks_json) \
-  || { echo "fm-fleet-snapshot: contribution task read failed" >&2; exit 1; }
-printf '%s\n' "$CONTRIBUTION_TASKS_JSON" > "$JSON_TRANSPORT_DIR/contribution-tasks.json" \
-  || { echo "fm-fleet-snapshot: contribution task staging failed" >&2; exit 1; }
-jq -n --slurpfile backlog "$BACKLOG_JSON_FILE" --slurpfile tasks "$JSON_TRANSPORT_DIR/contribution-tasks.json" \
-  '{backlog:$backlog[0],tasks:$tasks[0]}' > "$JSON_TRANSPORT_DIR/contribution-input.json"
-FM_CONTRIBUTIONS_NOW="$SNAPSHOT_NOW" "$SCRIPT_DIR/fm-contributions.sh" snapshot \
-  "$JSON_TRANSPORT_DIR/contribution-input.json" > "$CONTRIBUTIONS_JSON_FILE" \
-  || { echo "fm-fleet-snapshot: contribution coverage unavailable" >&2; exit 1; }
+if [ "$OUTPUT_MODE" = light ]; then
+  # The sections --light leaves out; the one assembly below drops them.
+  for light_file in "$CONTRIBUTIONS_JSON_FILE" "$MAIN_INVENTORY_JSON_FILE" \
+    "$SECONDMATE_CURRENT_JSON_FILE" "$SECONDMATE_LANDED_JSON_FILE"; do
+    printf 'null\n' > "$light_file" || { echo "fm-fleet-snapshot: temporary file write failed" >&2; exit 1; }
+  done
+  printf '[]\n' > "$SCOUT_REPORTS_JSON_FILE" || { echo "fm-fleet-snapshot: temporary file write failed" >&2; exit 1; }
+else
+  CONTRIBUTION_TASKS_JSON=$(contribution_tasks_json) \
+    || { echo "fm-fleet-snapshot: contribution task read failed" >&2; exit 1; }
+  printf '%s\n' "$CONTRIBUTION_TASKS_JSON" > "$JSON_TRANSPORT_DIR/contribution-tasks.json" \
+    || { echo "fm-fleet-snapshot: contribution task staging failed" >&2; exit 1; }
+  jq -n --slurpfile backlog "$BACKLOG_JSON_FILE" --slurpfile tasks "$JSON_TRANSPORT_DIR/contribution-tasks.json" \
+    '{backlog:$backlog[0],tasks:$tasks[0]}' > "$JSON_TRANSPORT_DIR/contribution-input.json"
+  FM_CONTRIBUTIONS_NOW="$SNAPSHOT_NOW" "$SCRIPT_DIR/fm-contributions.sh" snapshot \
+    "$JSON_TRANSPORT_DIR/contribution-input.json" > "$CONTRIBUTIONS_JSON_FILE" \
+    || { echo "fm-fleet-snapshot: contribution coverage unavailable" >&2; exit 1; }
 
-if [ "$OUTPUT_MODE" = secondmate-home-summary ]; then
-  secondmate_home_summary_json "$BACKLOG_JSON_FILE" "$TASKS_JSON_FILE" \
-    || { echo "fm-fleet-snapshot: secondmate home summary failed" >&2; exit 1; }
-  exit 0
+  if [ "$OUTPUT_MODE" = secondmate-home-summary ]; then
+    secondmate_home_summary_json "$BACKLOG_JSON_FILE" "$TASKS_JSON_FILE" \
+      || { echo "fm-fleet-snapshot: secondmate home summary failed" >&2; exit 1; }
+    exit 0
+  fi
+
+  scout_report_lines > "$SCOUT_REPORTS_JSON_FILE" \
+    || { echo "fm-fleet-snapshot: scout report snapshot failed" >&2; exit 1; }
+  main_inventory_json "$BACKLOG_JSON_FILE" "$TASKS_JSON_FILE" > "$MAIN_INVENTORY_JSON_FILE" \
+    || { echo "fm-fleet-snapshot: main inventory summary failed" >&2; exit 1; }
+  secondmate_current_json "$TASKS_JSON_FILE" "$SECONDMATE_CURRENT_JSON_FILE" \
+    || { echo "fm-fleet-snapshot: registered secondmate aggregation failed" >&2; exit 1; }
+  secondmate_landed_from_current_json "$SECONDMATE_CURRENT_JSON_FILE" "$SECONDMATE_LANDED_JSON_FILE" \
+    || { echo "fm-fleet-snapshot: secondmate landed projection failed" >&2; exit 1; }
 fi
 
-scout_report_lines > "$SCOUT_REPORTS_JSON_FILE" \
-  || { echo "fm-fleet-snapshot: scout report snapshot failed" >&2; exit 1; }
-main_inventory_json "$BACKLOG_JSON_FILE" "$TASKS_JSON_FILE" > "$MAIN_INVENTORY_JSON_FILE" \
-  || { echo "fm-fleet-snapshot: main inventory summary failed" >&2; exit 1; }
-secondmate_current_json "$TASKS_JSON_FILE" "$SECONDMATE_CURRENT_JSON_FILE" \
-  || { echo "fm-fleet-snapshot: registered secondmate aggregation failed" >&2; exit 1; }
-secondmate_landed_from_current_json "$SECONDMATE_CURRENT_JSON_FILE" "$SECONDMATE_LANDED_JSON_FILE" \
-  || { echo "fm-fleet-snapshot: secondmate landed projection failed" >&2; exit 1; }
-
 jq -n \
+  --argjson light "$([ "$OUTPUT_MODE" = light ] && printf true || printf false)" \
   --arg generated "$SNAPSHOT_NOW" \
   --arg fm_home "$FM_HOME" \
   --arg fm_root "$FM_ROOT" \
@@ -2215,4 +2235,5 @@ jq -n \
      secondmate_guidance:{
        note:"For kind=secondmate, bearings selects validated structured state from that registered home; parent events and bounded terminal evidence are fallback-only supplements and never current-state authority."
      }
-   }'
+   }
+   | if $light then {schema, generated, fm_home, roots, backlog, tasks} else . end'

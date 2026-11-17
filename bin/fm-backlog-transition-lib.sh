@@ -68,6 +68,10 @@ FM_BACKLOG_ROW_ERROR=
 # the row is not held.
 # shellcheck disable=SC2034 # Output global, read by the sourcing caller.
 FM_BACKLOG_ROW_HOLD_KIND=
+# Set by fm_backlog_row_probe on a found row: the whole tasks-axi show output it
+# read, so a caller that probed with --full needs no second read of the row.
+# shellcheck disable=SC2034 # Output global, read by the sourcing caller.
+FM_BACKLOG_ROW_SHOWN=
 # Set by fm_backlog_close_marker_replay: closed | closed_incomplete | retained |
 # retained_incomplete | answered | stale | noop.
 # shellcheck disable=SC2034 # Output global, read by the sourcing caller.
@@ -422,17 +426,19 @@ fm_backlog_row_list() {  # <resolved-data-dir> [flag...]
   fi
 }
 
-fm_backlog_row_probe() {  # <data-dir> <id>
+fm_backlog_row_probe() {  # <data-dir> <id> [show-flag...]
   local data authorized_data=$1 id=$2 out state held blocked hold_kind command_status source_status
-  if ! data=$(fm_backlog_data_absolute "$1"); then
+  shift 2
+  if ! data=$(fm_backlog_data_absolute "$authorized_data"); then
     FM_BACKLOG_ROW_RESULT=error
     FM_BACKLOG_ROW_STATE=
-    FM_BACKLOG_ROW_ERROR="data directory cannot be resolved: $1"
+    FM_BACKLOG_ROW_ERROR="data directory cannot be resolved: $authorized_data"
     return 1
   fi
   FM_BACKLOG_ROW_RESULT=error
   FM_BACKLOG_ROW_STATE=
   FM_BACKLOG_ROW_HOLD_KIND=
+  FM_BACKLOG_ROW_SHOWN=
   FM_BACKLOG_ROW_ERROR=
   fm_backlog_source_present "$data" "$authorized_data"
   source_status=$?
@@ -440,7 +446,7 @@ fm_backlog_row_probe() {  # <data-dir> <id>
     FM_BACKLOG_ROW_ERROR=$FM_BACKLOG_TRANSITION_ERROR
     return "$source_status"
   fi
-  out=$(fm_backlog_row_show "$data" "$id")
+  out=$(fm_backlog_row_show "$data" "$id" "$@")
   command_status=$?
   [ "$command_status" -ne 124 ] || FM_BACKLOG_ROW_SHOW_WEDGED=1
   if [ "$command_status" -ne 0 ]; then
@@ -468,6 +474,7 @@ fm_backlog_row_probe() {  # <data-dir> <id>
   fi
   FM_BACKLOG_ROW_RESULT=found
   FM_BACKLOG_ROW_STATE="$state ${held:-no} ${blocked:-no}"
+  FM_BACKLOG_ROW_SHOWN=$out
   case "$hold_kind" in
     ''|'"-"'|-) FM_BACKLOG_ROW_HOLD_KIND= ;;
     *) FM_BACKLOG_ROW_HOLD_KIND=$hold_kind ;;
