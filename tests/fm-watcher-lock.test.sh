@@ -23,21 +23,24 @@ ARM_FAIL_EXIT_POLLS=400
 TMP_ROOT=$(fm_test_tmproot fm-watcher-lock-tests)
 
 # Execute the actual disposable-checkout guard before any watcher can start.
-lab="$TMP_ROOT/marked-lab"
-foreign_state="$TMP_ROOT/foreign-state"
-checkout="$TMP_ROOT/.no-mistakes/worktrees/guard/bin"
-mkdir -p "$lab" "$foreign_state" "$checkout"
-. "$ROOT/bin/fm-gate-refuse-lib.sh"
-fm_gate_lab_mark "$lab" || fail "could not mark the watcher lab"
-cp "$WATCH_ARM" "$ROOT/bin/fm-gate-refuse-lib.sh" "$checkout/"
-if env -u FM_GATE_REFUSE_BYPASS -u FM_STATE_OVERRIDE FM_HOME="$lab" STATE="$foreign_state" \
-  bash "$checkout/fm-watch-arm.sh" > "$TMP_ROOT/lab-guard.out" 2>&1; then
-  fail "disposable watcher accepted an inherited state outside its lab"
-fi
-grep -q 'refusing to arm from a disposable validation checkout' "$TMP_ROOT/lab-guard.out" \
-  || fail "disposable watcher did not reject the relocated state"
-[ ! -e "$foreign_state/.watch.lock" ] || fail "disposable watcher touched outside state"
-pass "disposable watcher refuses inherited state outside its marked lab"
+test_disposable_watcher_refuses_foreign_state() {
+  local lab foreign_state checkout
+  lab="$TMP_ROOT/marked-lab"
+  foreign_state="$TMP_ROOT/foreign-state"
+  checkout="$TMP_ROOT/.no-mistakes/worktrees/guard/bin"
+  mkdir -p "$lab" "$foreign_state" "$checkout"
+  . "$ROOT/bin/fm-gate-refuse-lib.sh"
+  fm_gate_lab_mark "$lab" || fail "could not mark the watcher lab"
+  cp "$WATCH_ARM" "$ROOT/bin/fm-gate-refuse-lib.sh" "$checkout/"
+  if env -u FM_GATE_REFUSE_BYPASS -u FM_STATE_OVERRIDE FM_HOME="$lab" STATE="$foreign_state" \
+    bash "$checkout/fm-watch-arm.sh" > "$TMP_ROOT/lab-guard.out" 2>&1; then
+    fail "disposable watcher accepted an inherited state outside its lab"
+  fi
+  grep -q 'refusing to arm from a disposable validation checkout' "$TMP_ROOT/lab-guard.out" \
+    || fail "disposable watcher did not reject the relocated state"
+  [ ! -e "$foreign_state/.watch.lock" ] || fail "disposable watcher touched outside state"
+  pass "disposable watcher refuses inherited state outside its marked lab"
+}
 
 drain_and_ack() {  # <state>
   local state=$1 err sequence generation
@@ -1451,6 +1454,47 @@ test_lock_failed_create_discards_owner() {
   pass "failed owner publication discards the staging directory"
 }
 
+# A fatal signal that lands after fm_lock_try_create declares its pending-child
+# locals but before it records the previous $! must not make EXIT cleanup join
+# an unrelated child. The watcher's caffeinate child waits for the watcher
+# itself, so joining it deadlocked cleanup (bash 3.2 leaves a bare `local NAME`
+# set). A DEBUG trap delivers TERM at that exact command, deterministically.
+# Newer bash leaves a bare local unset, so the case also runs under a stock
+# /bin/bash 3.2 when one exists; CI's stock macOS Bash lane runs it there.
+test_lock_create_term_before_pending_record_does_not_join_unrelated_child() {
+  local dir state pid status at sh shells=bash
+  dir=$(make_case lock-create-term-before-pending-record)
+  state="$dir/state"
+  # shellcheck disable=SC2016 # Expanded by the candidate shell, not this one.
+  if [ -x /bin/bash ] && /bin/bash -c '[ "${BASH_VERSINFO[0]}" -lt 4 ]'; then
+    shells="bash /bin/bash"
+  fi
+  for sh in $shells; do
+    # shellcheck disable=SC2016 # Literal command text the DEBUG trap matches.
+    for at in 'FM_LOCK_OWNER_DIR=' '[ "${BASH_VERSINFO'; do
+      FM_STATE_OVERRIDE="$state" "$sh" -c '
+        . "$1" || exit 9
+        me=$$ at=$3
+        trap fm_lock_wait_pending_mutation EXIT
+        trap - TERM
+        ( i=0; while kill -0 "$me" 2>/dev/null && [ "$i" -lt 600 ]; do sleep 0.05; i=$((i + 1)); done ) &
+        set -T
+        trap '"'"'case "$BASH_COMMAND" in "$at"*) trap - DEBUG; kill -TERM "$me" ;; esac'"'"' DEBUG
+        fm_lock_try_create "$2"
+        exit 10
+      ' _ "$LIB" "$state/.contend.lock" "$at" &
+      pid=$!
+      status=0
+      wait_for_exit "$pid" 50 2>/dev/null || status=$?
+      [ "$status" -ne 124 ] \
+        || fail "$sh: cleanup joined an unrelated child after TERM at '$at'"
+      [ "$status" -eq 143 ] \
+        || fail "$sh: TERM at '$at' was not delivered before the pending record (status $status)"
+    done
+  done
+  pass "a TERM before the pending-child record does not join an unrelated child"
+}
+
 test_session_lock_real_directory_residue() {
   python3 - "$ROOT/bin/fm-lock.sh" "$TMP_ROOT" "$(dead_pid)" <<'PY' || fail "session-lock directory recovery/refusal"
 import os
@@ -2821,6 +2865,16 @@ if [ "$#" -gt 0 ]; then
   exit 0
 fi
 
+# CI's stock macOS Bash lane sets FM_TEST_STOCK_BASH=1 to run just the bash-3.2
+# lock-create TERM regression. The rest of this file is not a 3.2 snapshot
+# suite. Adding another stock-bash case means adding it to this list, not to
+# ci.yml.
+if [ -n "${FM_TEST_STOCK_BASH:-}" ]; then
+  fm_test_run test_lock_create_term_before_pending_record_does_not_join_unrelated_child
+  exit 0
+fi
+
+test_disposable_watcher_refuses_foreign_state
 test_lock_tombstone_tracks_reaper_start_time || exit 1
 test_wait_deadline_reaps_a_stopped_child
 test_singleton_start
@@ -2858,6 +2912,7 @@ test_lock_real_directory_permission_refusal
 test_lock_inaccessible_directory_replacement_is_retriable
 test_lock_real_directory_default_wait
 test_lock_failed_create_discards_owner
+test_lock_create_term_before_pending_record_does_not_join_unrelated_child
 test_session_lock_real_directory_residue
 test_lock_empty_pid_uses_minimum_grace
 test_lock_late_claim_loses_after_recreate

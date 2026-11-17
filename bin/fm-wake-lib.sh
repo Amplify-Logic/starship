@@ -867,11 +867,16 @@ fm_lock_wait_pending_mutation() {
 
 fm_lock_try_create() {
   local lockdir=$1 allowed_steal_owner=${2:-} ownerdir=
-  local FM_LOCK_PENDING_PREVIOUS_PID FM_LOCK_PENDING_PID=
+  local FM_LOCK_PENDING_PID=
   FM_LOCK_OWNER_DIR=
+  # FM_LOCK_PENDING_PREVIOUS_PID is declared and assigned in one command.
+  # Bash 3.2 leaves a bare `local NAME` set (empty), so a signal landing
+  # between declaration and assignment would make cleanup join whatever
+  # unrelated child $! names, which may itself wait for this shell to exit.
   if [ "${BASH_VERSINFO[0]}" -lt 4 ]; then
     # This bash also applies nounset to ${!:-}; isolate the safe probe.
-    FM_LOCK_PENDING_PREVIOUS_PID=$(set +u; printf '%s' "$!")
+    # shellcheck disable=SC2155 # The probe cannot fail; see the note above.
+    local FM_LOCK_PENDING_PREVIOUS_PID=$(set +u; printf '%s' "$!")
     # Bash 3.2 defers fatal signals until command substitutions finish, and
     # does not expose a process substitution's pid through $!.
     if ! ownerdir=$(fm_lock_owner_dir "$lockdir"); then
@@ -879,7 +884,7 @@ fm_lock_try_create() {
       return 1
     fi
   else
-    FM_LOCK_PENDING_PREVIOUS_PID=${!:-}
+    local FM_LOCK_PENDING_PREVIOUS_PID=${!:-}
     # Newer bash can enter EXIT before the child finishes. A process
     # substitution exposes its pid even before read returns the owner path.
     if ! IFS= read -r ownerdir < <(fm_lock_owner_dir "$lockdir"); then
