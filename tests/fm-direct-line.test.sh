@@ -152,6 +152,7 @@ test_send_copies_to_the_parent_then_types_once() {
 slow_pane() {  # <mate-home> <secs>
   local fb="$1/fixture/bin"
   mv "$fb/herdr" "$fb/herdr.real"
+  # shellcheck disable=SC2016 # expanded by the generated script
   printf '#!/usr/bin/env bash\n[ "${1:-} ${2:-}" != "pane send-text" ] || sleep %s\nexec "$(dirname "$0")/herdr.real" "$@"\n' \
     "$2" > "$fb/herdr"
   chmod +x "$fb/herdr"
