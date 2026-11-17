@@ -1781,7 +1781,7 @@ Learned:
 - `projects` maps work to the factory by each work item's project, as registered in `data/projects.md`, an `alias=` included; work no factory claims shows under `Other work`.
   A factory with no code project lists the project word its work items use in its `projects:` line.
 - `Rules:` and `Learned:` are what the factory page shows under its rules and what it has learned lately; a learned line may start with its date.
-- `Rules:` is also the factory's profile, such as domain rules, known traps and how its tests run: when a factory has rules, `bin/fm-brief.sh` ends every ship and scout brief for a project that factory claims, by the same mapping, with a `# Factory profile` section holding them in file order, never its `Learned:` lines, under a line saying every other rule in the brief, the home additions included, wins on any conflict and a line forbidding copying the text into PR text, commit messages or the no-mistakes intent.
+- `Rules:` is also the factory's profile, such as domain rules, known traps and how its tests run: when a factory has rules, `bin/fm-brief.sh` ends every ship and scout brief for a project that factory claims, by the same mapping, with a `# Factory profile` section holding them in file order, never its `Learned:` lines, under a line saying every other section of the brief, the home additions included, wins on any conflict and a line forbidding copying the text into PR text, commit messages or the no-mistakes intent.
   A profile adds instructions only: it chooses no model or effort and grants no permission.
   Rules over 1,500 characters, counted as their `- ` lines, are left out whole with a warning naming the factory, and no registry, no claiming factory or no rules leaves the brief unchanged.
 

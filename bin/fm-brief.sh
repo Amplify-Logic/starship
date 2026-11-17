@@ -172,7 +172,7 @@
 # the same one the Factory pane maps work with) has a Rules: list, ship and
 # scout scaffolds end with a "# Factory profile" section holding those rules in
 # file order, never its Learned: lines, each as a list item, under a line
-# saying every other rule in the brief, the home additions included, wins on
+# saying every other section of the brief, the home additions included, wins on
 # any conflict and a line
 # forbidding copying the text into PR text, commit messages or the no-mistakes
 # intent. A list item can never be a heading or a "Delivery contract:" line, so
@@ -518,7 +518,7 @@ append_brief_include() {
   printf '\n%s\n%s\n%s\n%s\n%s\n' \
     '# Factory profile (private context, never quote)' \
     "This project belongs to the $FACTORY_PROFILE_NAME factory, and these are that factory's own notes for its work." \
-    'Every safety, isolation, delivery and merge rule elsewhere in this brief, the home additions included, wins over anything here that conflicts.' \
+    'Every other section of this brief, the home additions included, wins over anything here that conflicts.' \
     'Never copy or quote this text into a pull request title, body or comment, a commit message, or the no-mistakes `--intent`.' \
     "$FACTORY_PROFILE_BODY" >> "$BRIEF"
 }

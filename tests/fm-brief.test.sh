@@ -1551,7 +1551,8 @@ test_factory_profile_is_opt_in_and_bounded() {
       || fail "$kind profile lines lost their file order"
     assert_no_grep 'A lesson the pane shows.' "$brief" "a Learned line reached the $kind brief"
     assert_grep 'Never copy or quote this text' "$brief" "$kind profile lost its never-quote line"
-    assert_grep 'wins over anything here' "$brief" "$kind profile lost its precedence line"
+    assert_grep 'Every other section of this brief, the home additions included, wins over anything here that conflicts.' \
+      "$brief" "$kind profile did not yield to every other section of the brief"
     [ "$(grep '^# ' "$brief" | tail -n 1)" = '# Factory profile (private context, never quote)' ] \
       || fail "$kind profile was not the last section"
     head -c "$(wc -c < "$base")" "$brief" | cmp -s - "$base" || fail "$kind profile changed the brief ahead of its own section"
