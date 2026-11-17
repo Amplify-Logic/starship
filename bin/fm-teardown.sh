@@ -4587,12 +4587,12 @@ retire_busy_state "$STATE" "$ID" "$BUSY_GEN" || exit 1
 # Opt-in fleet activity ledger (docs/fleet-ledger.md), before the status log is
 # retired so its last lines are captured; off costs one file test.
 [ ! -e "$CONFIG/fleet-ledger" ] || FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG "$SCRIPT_DIR/fm-fleet-ledger.sh" cleaned_up "$ID" || true
-# The Mothership room hears that work ending in a report finished, and takes a
-# job that never landed off its Ships view (bin/fm-procevent-mothership.sh
+# The Mothership room hears that a scout's report finished, and takes a job
+# that never landed off its Ships view (bin/fm-procevent-mothership.sh
 # "OUTCOMES IN THE ROOM"); a home with no room link costs one directory and one
 # file test.
 MOTHERSHIP_EVENT=dropped
-if [ "$KIND" != secondmate ] && [ "$FORCE" != "--force" ] && [ -z "$PR_URL" ] && [ -s "$DATA/$ID/report.md" ]; then
+if [ "$KIND" = scout ] && [ "$FORCE" != "--force" ] && [ -s "$DATA/$ID/report.md" ]; then
   MOTHERSHIP_EVENT=finished
 fi
 # shellcheck source=bin/fm-mothership-report-lib.sh

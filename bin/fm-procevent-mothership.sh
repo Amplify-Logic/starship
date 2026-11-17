@@ -160,9 +160,9 @@
 # relaunch); working, waits, blocked and failed from blocked-scan; pr from
 # bin/fm-pr-check.sh when a PR is recorded (never the merge-time re-record);
 # merged from bin/fm-merge-outcome-lib.sh and bin/fm-merge-local.sh on a
-# confirmed merge; finished from bin/fm-teardown.sh at the cleanup of work that
-# ends in a report (data/<task-id>/report.md, no PR, not a --force discard),
-# and dropped from it at any other cleanup. A task of a
+# confirmed merge; finished from bin/fm-teardown.sh at the cleanup of a scout
+# with its report kept (data/<task-id>/report.md, not a --force discard), and
+# dropped from it at any other cleanup, a ship's included. A task of a
 # project in config/private-projects tells no room anything, card or job,
 # whatever a room's allow-list says, and while that list is there but cannot
 # be read no task tells any room anything.
@@ -1508,7 +1508,7 @@ cmd_report() {
     room_valid "$room" && [[ "$card" =~ ^[A-Za-z0-9_.-]{1,80}$ ]] || die "the record for $task names no card it can tell"
     case "$event" in
       working|waits|dropped)
-        printf 'nothing to report: %s serves a room card, which hears only started, pr, blocked, failed and merged\n' "$task"
+        printf 'nothing to report: %s serves a room card, which hears only started, pr, blocked, failed, merged and finished\n' "$task"
         return 0
         ;;
     esac

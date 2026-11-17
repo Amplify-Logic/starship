@@ -770,6 +770,39 @@ test_teardown_tells_the_card_a_report_finished() {
   pass "cleaning up a scout with its report tells the card it finished, sends nothing without a link, and finishes whatever the room does"
 }
 
+test_teardown_of_a_landed_ship_with_a_report_keeps_the_landing() {
+  local h task=room-local2 out
+  need_tools || return 0
+  h=$(make_home lifecycle-local-report)
+  make_lifecycle "$h" "$task"
+  add_task "$h" "$task" sample "mothership: alpha/c16"
+  out=$(in_lifecycle "$h" "$ROOT/bin/fm-spawn.sh" "$task" "$PROJ_DIR" --mode local-only --yolo off 2>&1) \
+    || fail "spawn failed: $out"
+  wait_for_sent "$h" 1 || fail "dispatch did not tell the card: $(sent_of "$h")"
+  printf '# Notes\n' > "$h/home/data/$task/report.md"
+  printf 'done: ready in branch\n' >> "$h/home/state/$task.status"
+  printf 'landed\n' > "$WT_DIR/landed.txt"
+  git -C "$WT_DIR" add landed.txt
+  git -C "$WT_DIR" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -qm 'landed'
+  printf 'local_done_head=%s\n' "$(git -C "$WT_DIR" rev-parse HEAD)" >> "$h/home/state/$task.meta"
+  touch "$h/stub/down"
+  out=$(in_lifecycle "$h" "$ROOT/bin/fm-merge-local.sh" "$task" 2>&1) || fail "local merge failed: $out"
+  for _ in $(seq 1 100); do
+    wakes_of "$h" | grep -q 'not told that it landed' && break
+    sleep 0.1
+  done
+  assert_contains "$(wakes_of "$h")" "report $task merged sends it again" "the failed landing send is reported to the first mate"
+  rm -f "$h/stub/down"
+  out=$(in_lifecycle "$h" "$ROOT/bin/fm-teardown.sh" "$task" 2>&1) || fail "cleanup after the landing failed: $out"
+  sleep 1
+  assert_equals 1 "$(sent_of "$h" | grep -c .)" "cleaning up a landed ship tells its card nothing: $(sent_of "$h")"
+  out=$(in_home "$h" "$ADAPTER" report "$task" merged 2>&1) || fail "sending the landing again failed: $out"
+  assert_equals "told: $task: the alpha room heard that it landed" "$out" "the landing is sent again"
+  assert_equals "result card=c16 room=alpha project=sample tags= link= cid=fm-$task-merged text=Done: the change has landed." \
+    "$(sent_of "$h" | sed -n 2p)" "the card hears that the change landed"
+  pass "cleaning up a landed ship that kept a report never tells its card a report finished, so a re-sent landing still reaches it"
+}
+
 test_lifecycle_without_a_link_or_with_a_failing_room() {
   local h task=job-nl1 out
   need_tools || return 0
@@ -826,4 +859,5 @@ fm_test_run \
   test_lifecycle_steps_show_a_job \
   test_teardown_drops_an_unlanded_job \
   test_teardown_tells_the_card_a_report_finished \
+  test_teardown_of_a_landed_ship_with_a_report_keeps_the_landing \
   test_lifecycle_without_a_link_or_with_a_failing_room
