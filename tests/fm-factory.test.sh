@@ -555,7 +555,7 @@ LOG
     "a second mate's ready PRs need you, named by the mate, in their repository's factory"
   assert_equals "$(q '.needs_you[] | select(.id == "near:garden-notes") | "\(.ask)|\(.pr)"')" \
     "garden-notes is ready for you to look at|https://example.invalid/o/garden-journal/pull/41" "a second mate's PR"
-  assert_equals "$(q .count_line)" "3 jobs running · 5 need you · 1 idle" "the count holds the second mates' PRs"
+  assert_equals "$(q .count_line)" "2 busy · 2 decisions for you · 3 ready to merge · 1 idle" "the count holds the second mates' PRs"
   local out
   out=$(python3 "$FACTORY" --plain --width 120) || fail "--plain failed"
   has_line "$out" " ● garden-notes is ready for you to look at Garden Journal · from near · ready 53 min" \
