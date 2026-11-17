@@ -916,6 +916,26 @@ test_without_a_registry_each_project_is_a_factory() {
   pass "factory registry: with no registry every registered project is its own factory"
 }
 
+# A brand-new home: no work, no projects, no fixture reading. The pane reads
+# the fleet and the backlog for itself, through the stand-in that answers an
+# empty backlog the way tasks-axi does, and again through the real tasks-axi
+# when it is installed.
+test_a_new_home_with_no_work_opens_empty() {
+  reset_case
+  unset FM_FACTORY_SNAPSHOT FM_TEST_AXI_BACKLOG
+  fm_test_tasks_toml "$HOME_FIX/.tasks.toml"
+  printf '## In flight\n\n## Queued\n\n## Done\n' > "$HOME_FIX/data/backlog.md"
+  local screen path paths=("$PATH")
+  [ -z "$REAL_TASKS_AXI" ] || paths+=("$(dirname "$REAL_TASKS_AXI"):$PATH")
+  for path in "${paths[@]}"; do
+    screen=$(PATH="$path" python3 "$FACTORY" --plain --fresh 2>&1) \
+      || fail "the pane did not open on a new home with $(PATH="$path" command -v tasks-axi): $screen"
+    assert_contains "$screen" "NOTHING NEEDS YOU" "a new home shows an empty pane"
+  done
+  [ -n "$REAL_TASKS_AXI" ] || echo "skip: tasks-axi not found; the new home was read through the stand-in only"
+  pass "factory pane: a brand-new home with no work opens and shows an empty pane"
+}
+
 test_work_no_factory_claims_is_still_shown() {
   reset_case
   write_registry
@@ -3047,6 +3067,7 @@ fm_test_run \
   test_held_decisions_come_through_a_non_markdown_adapter \
   test_a_ship_with_no_mode_still_reports_its_pr_ready \
   test_without_a_registry_each_project_is_a_factory \
+  test_a_new_home_with_no_work_opens_empty \
   test_work_no_factory_claims_is_still_shown \
   test_a_small_pane_shows_its_height_and_says_what_is_below \
   test_a_small_pane_scrolls_to_everything \
