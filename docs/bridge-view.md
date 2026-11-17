@@ -8,8 +8,8 @@ The captain's phone-first fleet page.
 A glance of what needs the captain, what is under way, what just finished, and what is waiting.
 It is an observation of durable fleet records, not a place to approve, merge, or spawn.
 Hold-to-speak is a second voice channel into firstmate; it does not answer Needs-you items from this page.
-Outbound jumps are allowlisted GitHub pull-request links plus captain-configured HTTPS pinned links below the header; [`docs/configuration.md`](configuration.md#bridge-pinned-links-configbridge-links) owns the pinned-link schema.
-The same authenticated page also accepts photo drops from the captain's phone, including several photos in one picker session, and a hold-to-speak control that forwards audio into the local voice mailbox that [`config/bridge-mailbox`](configuration.md#bridge-voice-mailbox-configbridge-mailbox) names, when the home has one.
+Outbound jumps are allowlisted GitHub pull-request links plus captain-configured HTTPS pinned links below the header; [`docs/fork-configuration.md`](fork-configuration.md#bridge-pinned-links-configbridge-links) owns the pinned-link schema.
+The same authenticated page also accepts photo drops from the captain's phone, including several photos in one picker session, and a hold-to-speak control that forwards audio into the local voice mailbox that [`config/bridge-mailbox`](fork-configuration.md#bridge-voice-mailbox-configbridge-mailbox) names, when the home has one.
 Those two controls sit at the top of the authenticated page, above the fleet glance, so they are reachable without scrolling on a phone.
 A Machines page beside the glance shows whether the captain's machines and background services are up; it observes and changes no machine.
 
@@ -111,7 +111,7 @@ It rides the same 30-second observation as the buckets above, so it never adds a
 The server reads it from `bin/fm-routing-snapshot.sh --json`, whose header owns the `fm-routing.v1` fields, and joins it to the bearings read the glance already made:
 
 - The model roster is every rule in `config/crew-dispatch.json`, as a short label cut from its `when` text, beside its model and effort, then the default.
-- The decisions are the newest few lines of the local dispatch decision record ([`docs/configuration.md`](configuration.md#typed-dispatch-resolution-env-fm_dispatch_provider-fm_dispatch_model) owns it): outcome, probability, rule, and chosen profile.
+- The decisions are the newest few lines of the local dispatch decision record ([`docs/fork-configuration.md`](fork-configuration.md#decision-record-statedispatch-decisionsjsonl) owns it): outcome, probability, rule, and chosen profile.
 - The live workers are the bearings `in_flight` rows, so they list exactly the work Under way, Waiting, and Needs you already show, each with its record's kind, model, effort, and spawn time.
 - The graph shows the same rows under firstmate, plus each second mate from the bearings `secondmates` rows with its own workers hanging beneath it.
 
@@ -165,7 +165,7 @@ Alerts name a watched machine offline or unreachable, a watched machine whose nu
 Only machines named in the config are watched, so a phone or laptop that sleeps shows offline on its card without raising an alert.
 The map is the hub card for this Mac with its services, then the tailnet machines, any machines reached only over ssh, and the web probes, each group joined to the hub by its link.
 
-[`docs/configuration.md`](configuration.md#bridge-machines-configbridge-machines) owns the optional `config/bridge-machines` file; without it the page still shows the tailnet and this Mac.
+[`docs/fork-configuration.md`](fork-configuration.md#bridge-machines-configbridge-machines) owns the optional `config/bridge-machines` file; without it the page still shows the tailnet and this Mac.
 There is no button on the page that acts on a machine.
 
 ## Writes

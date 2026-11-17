@@ -38,7 +38,7 @@
 #       for broad with SWITCHES, the broad lines) and prints one sentence saying
 #       which style is now on and what it means.
 #
-# docs/configuration.md "Worker outward actions" owns the operator contract:
+# docs/fork-configuration.md "Worker outward actions" owns the operator contract:
 # what counts as outward, the permission words, standing permissions and the
 # outward styles. This header owns the mechanics.
 #

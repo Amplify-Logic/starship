@@ -10,7 +10,7 @@ Implemented means the tracked code exists and its behavior suite passes.
 Active means a device has opted in, installed the schedule and armed the live check.
 They are separate on purpose, and a report about this feature must state both.
 Nothing in this repository activates itself: the gate is inert on every home without an `enabled = true` line, and the schedule refuses to install on a home that has not opted in.
-[`configuration.md`](configuration.md#daily-intake-and-to-do-page-configmorning-intake-configchannel-intake) says how a home turns the three parts on.
+[`fork-configuration.md`](fork-configuration.md#daily-intake-and-to-do-page-configmorning-intake-configchannel-intake) says how a home turns the three parts on.
 
 ## The division of work
 

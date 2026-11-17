@@ -1617,7 +1617,8 @@ test_an_addon_copy_of_the_intake_keeps_running() {
   out=$(FM_HOME="$h" "$ROOT/bin/fm-addon.sh" hooks bootstrap)
   assert_contains "$out" "$addon/hooks/bootstrap/10-morning-intake" 'the add-on morning hook is not listed'
   assert_contains "$out" "$addon/hooks/bootstrap/20-channel-intake" 'the add-on channel hook is not listed'
-  printf '%s\n' "$out" | grep -Fq "$ROOT/hooks/bootstrap/" \
+  printf '%s\n' "$out" | grep -Fq -e "$ROOT/hooks/bootstrap/10-morning-intake" \
+    -e "$ROOT/hooks/bootstrap/20-channel-intake" \
     && fail "a built-in intake hook still runs beside the add-on's: $out"
   # Tools: the live check the add-on armed names its own script, and a
   # session start leaves it that way.

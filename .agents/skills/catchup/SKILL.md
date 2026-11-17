@@ -29,7 +29,7 @@ It needs a checkout with an `upstream` remote that differs from `origin`; a plai
 
 To turn it on:
 
-1. Add `catchup = on` to private `config/upstream-watch`, keeping any `interval_seconds` line; set `interval_seconds = N` there for a cadence other than weekly ([docs/configuration.md](../../../docs/configuration.md#standing-upstream-watch-configupstream-watch)).
+1. Add `catchup = on` to private `config/upstream-watch`, keeping any `interval_seconds` line; set `interval_seconds = N` there for a cadence other than weekly ([docs/fork-configuration.md](../../../docs/fork-configuration.md#standing-upstream-watch-configupstream-watch)).
 2. Save the captain's own words asking for it, verbatim, to `data/upstream-watch/standing-request.md`; a scheduled catch-up quotes them as its captain's intent.
 3. Run `bin/fm-upstream-watch-schedule.sh install` to load the schedule (macOS launchd), and `bin/fm-upstream-watch.sh arm` so a running firstmate hears about a prepared catch-up without waiting for the next session start.
 

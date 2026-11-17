@@ -494,7 +494,7 @@ tmux crewmates do not inherit the primary's `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSU
 `bin/backends/tmux.sh` creates the worker with `tmux new-window` and then send-keys, so the pane environment comes from the tmux server, not from the primary process.
 This home runs herdr, not tmux, and the herdr spawn path was not live-tested for this variable.
 From spawn code, `bin/fm-spawn.sh` does not put this variable on the herdr launch line and does not unset it.
-The Claude worker launch prefix sets `CLAUDE_CODE_AUTO_COMPACT_WINDOW=500000` and `CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false` (see `docs/configuration.md` "Context window").
+The Claude worker launch prefix sets `CLAUDE_CODE_AUTO_COMPACT_WINDOW=500000` and `CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false` (see `docs/fork-configuration.md` "Context window").
 A herdr worker pane otherwise inherits the launching environment for `FM_HERDR_PROJECT_*`, which is why spawn pins or clears those two variables, but that is not evidence for this pressure-reap export.
 Whether a herdr crewmate receives the export is therefore untested.
 A Claude secondmate runs its own supervision cycle, so its watcher arm is a tracked background shell of an interactive Claude session and is reapable exactly as the primary's was.
@@ -572,7 +572,7 @@ The launchd transport and the real banner it posts are covered by opt-in real-`l
 
 ## Add-on watcher hooks
 
-A watcher hook of the home's private add-on ([configuration](configuration.md#private-add-on-configaddon)) is sourced once when `bin/fm-watch.sh` starts, and hook W1 there owns the two guarded functions such a hook may define.
+A watcher hook of the home's private add-on ([configuration](fork-configuration.md#private-add-on-configaddon)) is sourced once when `bin/fm-watch.sh` starts, and hook W1 there owns the two guarded functions such a hook may define.
 `fm_fork_glasses_file_event_catch_up` runs at the top of every watcher loop before the slow-check cadence test, and `fm_fork_event_wait_or_sleep` replaces the watcher's terminal wait.
 Both are reached through guarded calls, so a home with no such hook runs the watcher's own `event_wait_or_sleep` and its ordinary check cadence.
 A hook runs inside the existing singleton watcher cycle and does not add another watcher, change lock ownership, or alter the one-actionable-reason exit contract.

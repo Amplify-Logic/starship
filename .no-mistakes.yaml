@@ -26,7 +26,7 @@ document:
 # The PR step has no instructions setting, so the same public PR text rule
 # reaches the steps whose summaries and findings write the PR title,
 # description and comments: review (every path), document and test.
-# docs/configuration.md "Private leak words" owns the rule and its known gap.
+# docs/fork-configuration.md "Private leak words" owns the rule and its known gap.
 review:
   path_instructions:
     - path: '*'

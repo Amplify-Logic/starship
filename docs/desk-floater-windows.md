@@ -22,7 +22,7 @@ You need Starship set up in Ubuntu as [ONBOARDING-windows.md](../ONBOARDING-wind
 
 1. Put `DEEPGRAM_API_KEY=...` in this home's `.env`, as on a Mac ([desk-floater.md](desk-floater.md#enablement)).
 2. For spoken replies, put `enabled = true` in this home's `config/speak`.
-   This step is optional: replies stay text without it, and [desk voice-out](configuration.md#desk-voice-out-configspeak) explains what spoken replies need.
+   This step is optional: replies stay text without it, and [desk voice-out](fork-configuration.md#desk-voice-out-configspeak) explains what spoken replies need.
 3. In your Ubuntu window, from `~/starship`:
 
    ```sh

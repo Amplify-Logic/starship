@@ -32,7 +32,7 @@
 #     Chrome installed above
 #
 # Inside WSL means WSL_DISTRO_NAME is set, which WSL exports into every process
-# it starts (bin/fm-bootstrap.sh HOST_ENV uses the same signal).
+# it starts (the HOST_ENV bootstrap hook, hooks/bootstrap/02-host-env, uses the same signal).
 #
 # The guides run it as `curl ... | bash`, where bash reads the script itself
 # from standard input. So everything runs from main on the last line, after

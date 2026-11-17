@@ -118,9 +118,9 @@ test_unknown_vendor_and_account_refuse() {
   pass "fm-account: unknown vendors, undefined accounts, and unknown subcommands refuse"
 }
 
-# The name rule has exactly one meaning across the whole feature: what
-# bin/fm-bootstrap.sh's accounts_validate reports as an invalid account name at
-# session start is also refused here, at creation, and at launch. A name that
+# The name rule has exactly one meaning across the whole feature: what the
+# bootstrap ACCOUNTS hook's accounts_validate reports as an invalid account
+# name at session start is also refused here, at creation, and at launch. A name that
 # only the diagnostic rejects would leave a permanent ACCOUNTS complaint about a
 # pin that keeps working.
 test_unsafe_account_names_refuse_everywhere() {

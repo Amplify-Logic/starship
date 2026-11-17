@@ -2,13 +2,14 @@
 # tests/fm-addon.test.sh - bin/fm-addon.sh: a home's private add-on.
 #
 # With no config/addon a home runs only the code checkout's built-in hooks. This
-# checkout ships only the daily intake's two bootstrap hooks, which stay silent
-# until the home switches the intake on, so a home with no add-on gets no
-# output at any point.
+# checkout ships bootstrap and bootstrap-sweep hooks only: the fork's own
+# bootstrap diagnostics and upkeep, each covered by its own suite, and the daily
+# intake's two hooks, which stay silent until the home switches the intake on.
+# Every other point ships nothing, so a home with no add-on gets no output there.
 # A configured add-on's hooks join the built-ins in name order, an add-on hook
-# replaces a built-in of the same name, a failing or slow hook never stops the
-# caller or the hooks after it, watcher hooks are sourced into bin/fm-watch.sh
-# rather than run, an unusable config/addon is named with its repair, and
+# replaces a built-in of the same name, bootstrap-sweep takes built-in hooks
+# only, a failing or slow hook never stops the caller or the hooks after it,
+# watcher hooks are sourced into bin/fm-watch.sh rather than run, an unusable config/addon is named with its repair, and
 # install clones a missing checkout from the configured origin. create gives a
 # home with no add-on its own private repository from the starter, through a
 # stand-in for the GitHub CLI, guards confirms a new home cannot publish
@@ -77,18 +78,28 @@ test_no_addon_means_no_hooks() {
   out=$(addon "$home" root 2>&1); code=$?
   expect_code 1 "$code" "root with no config/addon"
   assert_equals "" "$out" "root with no add-on must print nothing"
-  assert_equals "$(printf '%s\t%s\n%s\t%s' \
-    "$ROOT" "$ROOT/hooks/bootstrap/10-morning-intake" "$ROOT" "$ROOT/hooks/bootstrap/20-channel-intake")" \
-    "$(addon "$home" hooks bootstrap 2>&1)" "a home with no add-on must list only the shipped intake bootstrap hooks"
+  local hook expected=''
+  for hook in 01-stack-tools 02-host-env 03-accounts 04-toolchain-drift 05-upstream-drift \
+    06-upstream-watch 10-morning-intake 20-channel-intake; do
+    expected+="$ROOT"$'\t'"$ROOT/hooks/bootstrap/$hook"$'\n'
+  done
+  assert_equals "${expected%$'\n'}" "$(addon "$home" hooks bootstrap 2>&1)" \
+    "a home with no add-on must list only the shipped bootstrap hooks, in name order"
+  expected=''
+  for hook in 10-opt-in-skills 20-leak-prepush 30-mothership-monitor; do
+    expected+="$ROOT"$'\t'"$ROOT/hooks/bootstrap-sweep/$hook"$'\n'
+  done
+  assert_equals "${expected%$'\n'}" "$(addon "$home" hooks bootstrap-sweep 2>&1)" \
+    "a home with no add-on must list only the shipped bootstrap-sweep hooks, in name order"
   for point in session-start sentinel watcher deck-staging todo-verbs todo-page; do
     assert_equals "" "$(addon "$home" hooks "$point" 2>&1)" "a home with no add-on must list no $point hook"
   done
-  for point in bootstrap session-start sentinel deck-staging todo-page; do
+  for point in session-start sentinel deck-staging todo-page; do
     out=$(addon "$home" run "$point" 2>&1); code=$?
     expect_code 0 "$code" "run $point with nothing to run"
     assert_equals "" "$out" "a home with no add-on must get no $point output"
   done
-  pass "with no config/addon a home gets no hook output at any point, and the shipped intake hooks stay silent"
+  pass "with no config/addon a home runs only the shipped bootstrap hooks and gets no output at any other point"
 }
 
 test_built_in_hooks_run_with_no_addon() {
@@ -132,6 +143,24 @@ test_addon_hooks_join_in_name_order_and_replace_built_ins() {
   assert_equals "$(printf 'first root=%s hook=%s home=%s args=one two\nbuilt-in\nreplaced the built-in' "$code" "$addon" "$home")" \
     "$out" "every hook must run once, in order, with its roots, the home, and the arguments"
   pass "add-on hooks join the built-ins in name order and replace a built-in of the same name"
+}
+
+test_addon_bootstrap_sweep_hooks_never_list_or_run() {
+  local code home addon out
+  code=$(new_code sweep)
+  home=$(new_home sweep)
+  add_hook "$code" bootstrap-sweep 10-built-in 'echo built-in upkeep'
+  addon=$(new_addon "$home")
+  add_hook "$addon" bootstrap-sweep 05-addon 'echo add-on upkeep that must not run'
+  add_hook "$addon" bootstrap-sweep 10-built-in 'echo add-on replacement that must not run'
+  add_hook "$addon" bootstrap 05-addon 'echo add-on bootstrap'
+  assert_equals "$(printf '%s\t%s' "$addon" "$addon/hooks/bootstrap/05-addon")" \
+    "$(addon_at "$code" "$home" hooks bootstrap)" "the add-on itself must still be in use at other points"
+  assert_equals "$(printf '%s\t%s' "$code" "$code/hooks/bootstrap-sweep/10-built-in")" \
+    "$(addon_at "$code" "$home" hooks bootstrap-sweep)" "bootstrap-sweep must list only the code checkout's own hooks"
+  out=$(addon_at "$code" "$home" run bootstrap-sweep 2>&1)
+  assert_equals "built-in upkeep" "$out" "bootstrap-sweep must run only the built-in hook, never an add-on's"
+  pass "an add-on's bootstrap-sweep hooks are neither listed nor run, and never replace a built-in"
 }
 
 test_failing_and_slow_hooks_never_stop_the_caller() {
@@ -547,6 +576,7 @@ test_first_project_waits_for_the_private_repository() {
 test_no_addon_means_no_hooks
 test_built_in_hooks_run_with_no_addon
 test_addon_hooks_join_in_name_order_and_replace_built_ins
+test_addon_bootstrap_sweep_hooks_never_list_or_run
 test_failing_and_slow_hooks_never_stop_the_caller
 test_watcher_hooks_are_sourced_into_the_watcher
 test_unusable_config_is_named_with_its_repair

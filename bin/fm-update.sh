@@ -89,7 +89,7 @@
 # fm-procevent-when.sh rebind-all to republish those bindings against the new
 # bytes; a failure there is swallowed rather than failing the update.
 #
-# Update channel: the home's config/update-channel (docs/configuration.md
+# Update channel: the home's config/update-channel (docs/fork-configuration.md
 # "Update channel"; parsing in bin/fm-release-lib.sh) chooses what this pass
 # follows. Absent or "main" is the behavior above, unchanged. "release" follows
 # the newest release tag on origin's default branch, ignoring names more than a

@@ -1,6 +1,6 @@
 # config/stt-vocabulary - words the desk floater's transcription should hear
 # right (bin/fm-deepgram-stt.sh). Copy this into a local, gitignored
-# config/stt-vocabulary and add the names you say. See docs/configuration.md
+# config/stt-vocabulary and add the names you say. See docs/fork-configuration.md
 # "Speech-to-text vocabulary".
 #
 # A plain line is a key term the recogniser should favour.

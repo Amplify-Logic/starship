@@ -4,8 +4,8 @@
 #
 # Usage: fm-outward-grant.sh <task-id> '<permission>[; <permission>...]'
 #
-# The permission uses the words of docs/configuration.md "Worker outward
-# actions", such as 'send email to a@example.com' or 'accept invites from
+# The permission uses the words of docs/fork-configuration.md "Worker
+# outward actions", such as 'send email to a@example.com' or 'accept invites from
 # @example.org'; bin/fm-outward-check.py parse checks and normalizes it, and a
 # phrase it does not understand changes nothing. The task's existing
 # permissions are kept and the new ones added, then the combined list is

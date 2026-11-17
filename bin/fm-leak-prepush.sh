@@ -192,7 +192,7 @@ check_starship() {
   fi
   (cd "$top" && "$guard" --new-names) >/dev/null || rc=1
   if [ "$rc" -ne 0 ]; then
-    say "push refused: take out each place the LEAK_HIT lines above name and push again; a new name the owner approves is recorded once, as the guard's line says (see \"Private leak words\" in docs/configuration.md)"
+    say "push refused: take out each place the LEAK_HIT lines above name and push again; a new name the owner approves is recorded once, as the guard's line says (see \"Private leak words\" in docs/fork-configuration.md)"
     return 1
   fi
   say "leak check passed: ${#files[@]} changed file(s), and the lines and commit messages this branch adds"

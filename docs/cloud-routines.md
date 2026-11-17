@@ -68,7 +68,7 @@ The routine stays disabled until the captain has done all of these, in order:
 ## Reviewing a report
 
 Each report is the `creator-watch.md` file on `main` of the reports repository, and that repository's history holds every earlier run.
-The laptop check that wakes firstmate when a new report lands is not part of this repository: it lives in the private add-on of the home that reviews the reports (`docs/configuration.md` "Private add-on").
+The laptop check that wakes firstmate when a new report lands is not part of this repository: it lives in the private add-on of the home that reviews the reports (`docs/fork-configuration.md` "Private add-on").
 
 ## Kill switch
 

@@ -70,7 +70,7 @@ Coordinate any workflow rollback with its required-check names so a retired chec
 
 ## Cutting a release
 
-Homes on the [release channel](docs/configuration.md#update-channel-configupdate-channel) move only to named monthly releases.
+Homes on the [release channel](docs/fork-configuration.md#update-channel-configupdate-channel) move only to named monthly releases.
 After the month's reviewed upstream catch-up lands on a green `main`, land a pull request that turns `CHANGELOG.md`'s `## Unreleased` heading into the release's own heading, then run `bin/fm-release.sh --dry-run` and `bin/fm-release.sh` from a maintainer home; its `--help` owns the name, checks, and refusals.
 
 ## Repo conventions
@@ -151,7 +151,7 @@ tmp=$(mktemp -d) && printf 'done: smoke\n' > "$tmp/smoke.status" && FM_STATE_OVE
 
 `bin/fm-test-run.sh` is the single owner of behavior-suite selection, portable CI lane composition, bounded concurrency admission, per-script timing markers, family totals, the coverage guard, and the optional JSON timing artifact.
 Its header and `--help` own the flags, family labels, lanes, and changed-file map; this section only documents the entry points.
-After a local run with failures it may also print advisory `FM_TEST_FAILURE_CAUSE` labels; [`docs/configuration.md`](docs/configuration.md) "Test failure cause" owns when and what is sent.
+After a local run with failures it may also print advisory `FM_TEST_FAILURE_CAUSE` labels; [`docs/fork-configuration.md`](docs/fork-configuration.md) "Test failure cause" owns when and what is sent.
 `bin/fm-test-isolation-proof.sh` remains the single owner of the portable candidate proof and reusable family proof harness; see `docs/fm-test-isolation-proof.md`.
 Portable shard balance evidence lives in `docs/fm-test-portable-shards.md`.
 `bin/fm-test-linux.sh` is optional and never part of CI: on macOS, run it before publishing a branch whose tests depend on `stat`, `date`, or process behavior, because BSD and GNU tools differ.

@@ -49,12 +49,37 @@
 # A missing library or registry is handled by the guarded hooks in the runner
 # and preserves the upstream runner's built-in selection exactly.
 #
+#
+# The optional fork timing file (tests/fork-test-timing.conf) holds the fork's
+# own measured CI duration hints and lane packing. Its rows are
+# whitespace-separated and have one of these exact forms:
+#   serial-shards <count>
+#   parallel-lane <lane> tests/<script>.test.sh
+#   parallel-hint tests/<script>.test.sh <milliseconds>
+#   serial-hint   tests/<script>.test.sh <milliseconds>
+# fork_timing_overlay applies it once, after the runner has defined its own
+# tables, and leaves those tables' text untouched:
+# - serial-shards replaces PORTABLE_SERIAL_SHARDS.
+# - parallel-lane rows replace list_portable_parallel_<lane> for every lane
+#   they name, keeping row order as the lane's stored order. A lane the runner
+#   has no function for is refused, and the runner's coverage guard still
+#   proves the lanes partition the proven-isolated set.
+# - parallel-hint and serial-hint rows overlay portable_parallel_weight_hints
+#   and portable_serial_weight_hints: a fork row wins for its script, and every
+#   upstream row for a script the fork does not measure passes through, so a
+#   hint upstream adds later still reaches the packer.
+# A kind with no rows leaves the runner's own table in force. Blank lines and
+# lines whose first non-whitespace character is # are ignored, and a present
+# malformed file fails closed with an actionable line number. A missing file
+# is no overlay at all.
+#
 # Public functions:
 #   fork_registry_apply <registry-file>
 #   fork_registry_family_for_basename <test-basename>
 #   fork_registry_scripts_for_path <repository-relative-path>
 #   fork_registry_assert_no_shadow <upstream-map-function>
 #   fork_registry_assert_family_confined <upstream-family-function> <known-families-function>
+#   fork_timing_overlay <timing-file>
 
 FORK_REGISTRY_FAMILY_NAMES=()
 FORK_REGISTRY_FAMILY_SCRIPTS=()
@@ -325,5 +350,122 @@ fork_registry_assert_family_confined() { # <upstream-family-function> <known-fam
       'family is confined to listed families and scripts upstream leaves unclassified'
     return 1
   }
+  return 0
+}
+
+# Prints <fork-rows> first, then every row of the runner's own table whose
+# script has no fork row, so each script keeps exactly one hint.
+fork_timing_merge_hints() { # <fork-rows> <upstream-table-function>
+  awk 'NR == FNR { if (NF) { mine[$1] = 1; print }; next } NF && !($1 in mine)' \
+    <(printf '%s\n' "$1") <("$2")
+}
+
+fork_timing_overlay() { # <timing-file>
+  local file=${1:-} line line_no=0 kind a b extra shards='' parallel='' serial='' lane fn
+  local -a lane_ids=() lane_rows=() seen=()
+  [ -n "$file" ] || { fork_registry_error 'timing file path is required'; return 2; }
+  [ -e "$file" ] || return 0
+  [ -r "$file" ] || { fork_registry_error "timing file is not readable: $file"; return 2; }
+
+  while IFS= read -r line || [ -n "$line" ]; do
+    line_no=$((line_no + 1))
+    case "$line" in
+      *[![:space:]]*) ;;
+      *) continue ;;
+    esac
+    a='' b='' extra=''
+    read -r kind a b extra <<< "$line"
+    case "$kind" in
+      \#*) continue ;;
+    esac
+    case "$kind" in
+      serial-shards)
+        if [ -n "$b" ] || ! [[ "$a" =~ ^[1-9][0-9]*$ ]]; then
+          fork_registry_error "$file:$line_no: expected serial-shards <count>"
+          return 2
+        fi
+        [ -z "$shards" ] || {
+          fork_registry_error "$file:$line_no: duplicate serial-shards row"
+          return 2
+        }
+        shards=$a
+        ;;
+      parallel-lane)
+        if [ -n "$extra" ] || ! [[ "$a" =~ ^[1-9][0-9]*$ ]] || ! fork_registry_script_valid "$b"; then
+          fork_registry_error "$file:$line_no: expected parallel-lane <lane> tests/<script>.test.sh"
+          return 2
+        fi
+        case " ${seen[*]+"${seen[*]}"} " in
+          *" lane:$b "*)
+            fork_registry_error "$file:$line_no: $b is already in a parallel lane"
+            return 2
+            ;;
+        esac
+        seen+=("lane:$b")
+        lane=$a
+        if [ -z "${lane_ids[lane]+set}" ]; then
+          lane_ids[lane]=$lane
+          lane_rows[lane]=$b
+        else
+          lane_rows[lane]+=$'\n'$b
+        fi
+        ;;
+      parallel-hint|serial-hint)
+        if [ -n "$extra" ] || ! fork_registry_script_valid "$a" || ! [[ "$b" =~ ^[0-9]+$ ]]; then
+          fork_registry_error "$file:$line_no: expected $kind tests/<script>.test.sh <milliseconds>"
+          return 2
+        fi
+        case " ${seen[*]+"${seen[*]}"} " in
+          *" $kind:$a "*)
+            fork_registry_error "$file:$line_no: duplicate $kind for $a"
+            return 2
+            ;;
+        esac
+        seen+=("$kind:$a")
+        if [ "$kind" = parallel-hint ]; then
+          parallel+="$a $b"$'\n'
+        else
+          serial+="$a $b"$'\n'
+        fi
+        ;;
+      *)
+        fork_registry_error "$file:$line_no: unknown row type: $kind"
+        return 2
+        ;;
+    esac
+  done < "$file"
+
+  for lane in "${lane_ids[@]+"${lane_ids[@]}"}"; do
+    command -v "list_portable_parallel_$lane" >/dev/null 2>&1 || {
+      fork_registry_error "$file: the runner has no portable parallel lane $lane"
+      return 2
+    }
+  done
+  for fn in portable_parallel_weight_hints portable_serial_weight_hints; do
+    command -v "$fn" >/dev/null 2>&1 || {
+      fork_registry_error "$file: the runner has no hint table $fn"
+      return 2
+    }
+  done
+
+  # The runner reads this global after the overlay returns.
+  # shellcheck disable=SC2034
+  [ -z "$shards" ] || PORTABLE_SERIAL_SHARDS=$shards
+  for lane in "${lane_ids[@]+"${lane_ids[@]}"}"; do
+    # The membership is validated above, so it is safe to embed as a literal.
+    eval "list_portable_parallel_$lane() { printf '%s\n' $(printf '%q' "${lane_rows[lane]}"); }"
+  done
+  # Merge once here rather than on every lookup: the packer reads these tables
+  # once per script per shard, so a per-call merge would multiply its cost.
+  if [ -n "$parallel" ]; then
+    FORK_TIMING_PARALLEL_HINTS=$(fork_timing_merge_hints "$parallel" portable_parallel_weight_hints) || return 2
+    # shellcheck disable=SC2329  # replaces the runner's table, called by the runner
+    portable_parallel_weight_hints() { printf '%s\n' "$FORK_TIMING_PARALLEL_HINTS"; }
+  fi
+  if [ -n "$serial" ]; then
+    FORK_TIMING_SERIAL_HINTS=$(fork_timing_merge_hints "$serial" portable_serial_weight_hints) || return 2
+    # shellcheck disable=SC2329  # replaces the runner's table, called by the runner
+    portable_serial_weight_hints() { printf '%s\n' "$FORK_TIMING_SERIAL_HINTS"; }
+  fi
   return 0
 }

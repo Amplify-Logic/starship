@@ -33,10 +33,10 @@ The intake reads finished meetings from the sources `config/meetings` names:
    - Anything that needs your review or more thought, anything outward-facing (an instruction to send, reply, email, message, post, publish, pay, buy, sign, invite or call someone), anything destructive (delete or remove), anything that touches another person's commitment, and anything whose source cannot be found in the meeting is held for your decision.
    - When you say "Firstmate, do it", "Firstmate, build that" or "captain's order" in the meeting, the instruction that goes with it counts as a clear follow-up when the transcript shows you said it: under your `speaker_name` label in the call recorder, or under the speaker Anarlog marks as you.
      It waits for your decision when someone else said it, or when Starship could not tell who said it.
-4. One spoken line on the desk says what the meeting settled and how many follow-ups started and wait for you (only when [desk voice](configuration.md#desk-voice-out-configspeak) is on).
+4. One spoken line on the desk says what the meeting settled and how many follow-ups started and wait for you (only when [desk voice](fork-configuration.md#desk-voice-out-configspeak) is on).
 
 Nothing in this layer sends, replies, invites, pays or publishes anything.
-Starting a follow-up never lands it: merges and outward actions still need your word as usual, under the home's [worker outward actions](configuration.md#worker-outward-actions-configoutward-permissions).
+Starting a follow-up never lands it: merges and outward actions still need your word as usual, under the home's [worker outward actions](fork-configuration.md#worker-outward-actions-configoutward-permissions).
 
 ## Keep some meetings out
 
@@ -60,7 +60,7 @@ If you use Anarlog, keep its automatic meeting detection off, or limited to the 
    4. Under its meeting settings, keep audio recordings for at least a day; with no recording kept there is nothing to run the speaker pass on.
 4. Arm the check: `bin/fm-meetings.sh arm`.
    Meetings that ended before arming are left alone; `bin/fm-meetings.sh intake <id>` takes one in by hand.
-5. Start a new session, so the `meeting-intake` skill is linked in; the presence of `config/meetings` switches it on as an [opt-in skill](configuration.md#opt-in-skills-configadhd-configsecond-opinion).
+5. Start a new session, so the `meeting-intake` skill is linked in; the presence of `config/meetings` switches it on as an [opt-in skill](fork-configuration.md#opt-in-skills-configadhd-configsecond-opinion).
 
 ## Keys, safely
 
@@ -70,7 +70,7 @@ Anarlog's local models need no key either.
 If you choose a cloud transcription provider in Anarlog, such as Deepgram, create the key in that provider's own console and paste it into Anarlog's settings on the Mac yourself.
 Never paste a key into a chat with the first mate, a worker, or any agent: a chat is logged, and a key that has been in one should be treated as leaked and replaced.
 Starship never reads, stores or needs that key; it reads only the transcripts Anarlog has already written.
-The desk floater's own Deepgram key lives in this home's gitignored `.env`, as [configuration.md](configuration.md#desk-voice-out-configspeak) describes, and is unrelated to Anarlog's.
+The desk floater's own Deepgram key lives in this home's gitignored `.env`, as [fork-configuration.md](fork-configuration.md#desk-voice-out-configspeak) describes, and is unrelated to Anarlog's.
 
 ## Use it
 

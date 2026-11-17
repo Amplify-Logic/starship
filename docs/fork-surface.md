@@ -12,7 +12,7 @@
 Every capability also has a distribution scope.
 `core` and `team` capabilities are required and their declared assertions fail CI when they disappear.
 `personal` capabilities remain declared as a public inventory but are optional, so another copy can omit them without weakening required-surface checks.
-They are the tools one home moves into its private add-on ([configuration](configuration.md#private-add-on-configaddon)), and until they move, their hooks sit in this repository's built-in `hooks/`.
+They are the tools one home moves into its private add-on ([configuration](fork-configuration.md#private-add-on-configaddon)), and until they move, their hooks sit in this repository's built-in `hooks/`.
 
 The `topology = herdr-topology` marker is query metadata for the open Herdr topology choice.
 It does not select a topology.
@@ -47,6 +47,7 @@ Failures name the capability and concrete repair instead of modifying the tree.
 Update `fork-surface.conf` in the same commit that adds, moves, or removes a fork-only path.
 Anchors are stable regular expressions chosen by the capability author, not line numbers or hashes.
 A legitimate refactor updates the owned paths and anchors with the implementation.
+A fork setting, script, or home path is documented in the fork's own registries, [fork-configuration.md](fork-configuration.md), [fork-scripts.md](fork-scripts.md), and [fork-layout.md](../.agents/skills/operational-home-layout/fork-layout.md), never as new lines in their upstream counterparts, which keep only one pointer line each so a catch-up does not conflict there.
 
 Retirement is explicit.
 Set `status = retired`, add `retired_reason` and `retired_pr`, and remove all owned paths in the same reviewed change.

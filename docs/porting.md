@@ -86,7 +86,7 @@ That silence is the current tool behavior, not proof those paths are safe to add
 `data/capability-outcomes.log` is not merely unported today.
 It must stay on the machine that produced it.
 
-The log records harness, model, and effort outcomes against that machine's subscriptions and quotas (`docs/configuration.md` "Capability outcome log").
+The log records harness, model, and effort outcomes against that machine's subscriptions and quotas (`docs/fork-configuration.md` "Capability outcome log").
 Copying it onto another machine would actively mislead dispatch there: routes that are cheap or available on the source can be expensive, missing, or forbidden on the destination.
 Each home grows its own log as work on that machine completes.
 
@@ -139,7 +139,7 @@ gh repo clone <owner>/firstmate ~/starship && cd ~/starship && bin/fm-home-port.
 ```
 
 That clones the tracked repo, pulls captain-private portable material from the private transport, creates empty `state/` and `projects/`, and runs bootstrap detection.
-When the pulled material includes `config/addon`, it also clones that home's private add-on from the origin the file names ([configuration](configuration.md#private-add-on-configaddon)), and `bin/fm-home-port.sh verify` fails until the add-on's checkout exists.
+When the pulled material includes `config/addon`, it also clones that home's private add-on from the origin the file names ([configuration](fork-configuration.md#private-add-on-configaddon)), and `bin/fm-home-port.sh verify` fails until the add-on's checkout exists.
 It does **not** log into harness CLIs - those need interactive logins (see below).
 
 After this first pull, follow the model you chose under "Two models after the seed".
@@ -260,7 +260,7 @@ Each harness keeps its own interactive login.
 Expect these, in order, on a fresh machine:
 
 1. **GitHub CLI** - `gh auth login`.
-2. **Claude Code** - run `claude` and complete its login; a second seat is a named account with its own derived home (`bin/fm-account.sh create claude <name>`, then log that home in separately - see `docs/configuration.md` "Vendor account pinning").
+2. **Claude Code** - run `claude` and complete its login; a second seat is a named account with its own derived home (`bin/fm-account.sh create claude <name>`, then log that home in separately - see `docs/fork-configuration.md` "Vendor account pinning").
 3. **Cursor CLI** - run the Cursor agent CLI login for worker dispatch.
 4. **Codex** - run `codex` login when that pool is used.
 5. **Kimi Code** - login when using Kimi workers.
@@ -353,5 +353,5 @@ Detail lives with its owner: [desktop-companion.md](desktop-companion.md).
 - Live portable data entries: `bin/fm-fork-surface.sh port-data-allowlist`
 - Exact port flags, data-file list, and refuse list: `bin/fm-home-port.sh --help` and its header
 - Goal charter format: `docs/chart-room.md`
-- Capability outcome log format: `docs/configuration.md` ("Capability outcome log")
+- Capability outcome log format: `docs/fork-configuration.md` ("Capability outcome log")
 - Desktop companion setup and its verified limits: `docs/desktop-companion.md`

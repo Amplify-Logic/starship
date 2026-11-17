@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Bootstrap hook (bin/fm-addon.sh): the read-only fork drift check.
+# Prints:
+#   "UPSTREAM: <N> commits behind <remote>/<branch> (<url>)
+#    [- <R> upstream commits, <D> already delivered here] - <subjects>"
+#
+# UPSTREAM is detect-only and silent when there is no upstream remote,
+# origin and upstream share a URL (not a fork), the home is a secondmate,
+# the network is unavailable, or HEAD already contains the upstream tip.
+# Its count is the raw upstream delta MINUS the commits this fork has
+# already delivered, derived from port references in the fork's own
+# commit history plus a reviewable override ledger, so the number falls
+# as batches land instead of only ever rising; the optional accounting
+# clause reports the raw and delivered figures whenever the ledger
+# accounted for anything, and a fully delivered delta is silent.
+# It never merges and never touches projects/; see bin/fm-upstream-lib.sh.
+set -u
+root=${FM_HOOK_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}
+# shellcheck source=bin/fm-upstream-lib.sh disable=SC1091
+[ -r "$root/bin/fm-upstream-lib.sh" ] || exit 0
+. "$root/bin/fm-upstream-lib.sh"
+fm_upstream_check "${FM_ROOT_OVERRIDE:-$root}" "$FM_HOME"

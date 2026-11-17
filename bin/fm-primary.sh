@@ -89,8 +89,8 @@
 #
 # Context window (captain's order 2026-09-13: cap every future session at 500k
 # tokens so the orchestrator compacts itself). The exact per-harness mechanism,
-# with the one-sentence evidence for each in docs/configuration.md "Context
-# window":
+# with the one-sentence evidence for each in docs/fork-configuration.md
+# "Context window":
 #   claude-fable / claude-fable52 / claude-opus  export
 #     CLAUDE_CODE_AUTO_COMPACT_WINDOW=500000.
 #     The CLI reads that variable directly and it outranks the autoCompactWindow
@@ -126,7 +126,7 @@
 # astra take a codex account, exported as CODEX_HOME. A profile whose vendor has no account concept (pi,
 # opencode, grok, cursor-grok, cursor-grok45) refuses --account rather
 # than ignoring it.
-# Accounts are named in local, gitignored config/accounts.json (docs/configuration.md
+# Accounts are named in local, gitignored config/accounts.json (docs/fork-configuration.md
 # owns that schema) and their homes are DERIVED as data/accounts/<vendor>/<name>,
 # never read from that file. Omitting the flag uses that vendor's default when the
 # file names one. With NO such file there is no pinning at all: every profile's
@@ -205,8 +205,8 @@
 # crew-dispatch.json (from crew-dispatch-claude-only.json) and stt-vocabulary.
 # Spoken replies are never among them: a home turns them on itself. A file already in config/ is never overwritten, a home that
 # has run before gets nothing, and other profiles never write them, because the
-# routing sends every worker to Claude. docs/configuration.md "Starter
-# settings" owns what each file does. --preflight and FM_PRIMARY_DRY_RUN never
+# routing sends every worker to Claude. docs/fork-configuration.md
+# "Starter settings" owns what each file does. --preflight and FM_PRIMARY_DRY_RUN never
 # write them.
 #
 # --install-shim creates ~/.local/bin/firstmate as a symlink to this command.
@@ -692,7 +692,7 @@ install_starter_settings() {
     installed="$installed config/$name"
   done
   [ -z "$installed" ] \
-    || printf 'fm-primary: new home: installed the starter settings%s (docs/configuration.md "Starter settings")\n' "$installed" >&2
+    || printf 'fm-primary: new home: installed the starter settings%s (docs/fork-configuration.md "Starter settings")\n' "$installed" >&2
   return 0
 }
 

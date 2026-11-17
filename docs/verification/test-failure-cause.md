@@ -1,7 +1,7 @@
 # Test failure cause verification
 
 Repeatable evidence for the advisory failure-cause labels `bin/fm-test-run.sh` prints after a run with failures.
-Current behavior and the operator-facing contract are owned by [`../configuration.md`](../configuration.md) ("Test failure cause"), when it runs and its marker by [`../../bin/fm-test-run.sh`](../../bin/fm-test-run.sh)'s header, and the request shape, questions, size bounds and floor by its engine, [`../../bin/fm-test-failure-cause.py`](../../bin/fm-test-failure-cause.py); this page records evidence only.
+Current behavior and the operator-facing contract are owned by [`../fork-configuration.md`](../fork-configuration.md) ("Test failure cause"), when it runs and its marker by [`../../bin/fm-test-run.sh`](../../bin/fm-test-run.sh)'s header, and the request shape, questions, size bounds and floor by its engine, [`../../bin/fm-test-failure-cause.py`](../../bin/fm-test-failure-cause.py); this page records evidence only.
 
 Date: 2026-09-29.
 Host: macOS, Darwin arm64; Python 3.12.5, git 2.50.1, GNU bash 3.2.57.

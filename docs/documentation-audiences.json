@@ -506,6 +506,10 @@
       "audience": "operator-current"
     },
     {
+      "path": "docs/fork-configuration.md",
+      "audience": "operator-current"
+    },
+    {
       "path": "docs/cursor-harness.md",
       "audience": "maintainer-verification"
     },
@@ -727,6 +731,10 @@
     },
     {
       "path": "docs/scripts.md",
+      "audience": "operator-current"
+    },
+    {
+      "path": "docs/fork-scripts.md",
       "audience": "operator-current"
     },
     {
@@ -979,6 +987,10 @@
     },
     {
       "path": ".agents/skills/operational-home-layout/SKILL.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/operational-home-layout/fork-layout.md",
       "audience": "agent-runtime"
     },
     {

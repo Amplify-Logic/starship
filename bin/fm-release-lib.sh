@@ -11,7 +11,7 @@
 # month, so a mistaken or forged far-future name can never become "the newest".
 #
 # A home chooses what "update starship" (bin/fm-update.sh) follows in its own
-# gitignored config/update-channel; docs/configuration.md "Update channel" owns
+# gitignored config/update-channel; docs/fork-configuration.md "Update channel" owns
 # the operator-facing schema. The file holds one value line (blank lines and
 # full-line # comments ignored):
 #   main               - the default; identical to an absent file

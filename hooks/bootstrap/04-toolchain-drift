@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Bootstrap hook (bin/fm-addon.sh): the read-only runtime drift check.
+# Prints:
+#   "TOOLCHAIN_DRIFT: <runtime> installed <version>, certified
+#    <version> (<evidence>) - <why>"
+#
+# TOOLCHAIN_DRIFT compares docs/toolchain-manifest.tsv against PATH and
+# prints one line per runtime whose installed version differs from the
+# version this repo carries certification evidence for. It reports and
+# never blocks a launch, never installs, and never pins, because every
+# certified runtime here self-updates and a strict gate in front of a
+# self-updating binary is a scheduled outage. It is silent for a
+# matching runtime, an absent binary (MISSING already owns that), and
+# an unparseable --version; see bin/fm-toolchain-lib.sh.
+set -u
+root=${FM_HOOK_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}
+# shellcheck source=bin/fm-toolchain-lib.sh disable=SC1091
+[ -r "$root/bin/fm-toolchain-lib.sh" ] || exit 0
+. "$root/bin/fm-toolchain-lib.sh"
+fm_toolchain_check "${FM_ROOT_OVERRIDE:-$root}"

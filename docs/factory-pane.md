@@ -4,7 +4,7 @@ A factory is one segment of the owner's work: a crew with its own work list, rul
 The Factory pane is the glance across all of them, as a Herdr pane beside your work, and `enter` opens one factory's own tab with its live workers beside it.
 `bin/fm-factory.py` owns the record, the screen, the keys and the factory tabs, and `bin/fm-factory-pane.sh` owns installing, showing and removing the pane; read their headers before first use.
 `herdr-plugins/starship-factory/` is the Herdr plugin that carries it.
-The [factory registry](configuration.md#factory-registry-datafactoriesmd) names a home's factories; without one, every registered project is its own factory.
+The [factory registry](fork-configuration.md#factory-registry-datafactoriesmd) names a home's factories; without one, every registered project is its own factory.
 
 ## The overview
 
@@ -95,7 +95,7 @@ A scout writes that `page.html` beside its report, in whatever form best present
 ## Routine work
 
 Some work repeats all day, such as a to-do pass every hour, and each pass is a job of its own that ends with a report.
-A factory's `routine:` line in the [factory registry](configuration.md#factory-registry-datafactoriesmd) marks such work as routine, so its passes do not crowd the overview:
+A factory's `routine:` line in the [factory registry](fork-configuration.md#factory-registry-datafactoriesmd) marks such work as routine, so its passes do not crowd the overview:
 
 ```markdown
 ## Garden Journal

@@ -89,7 +89,7 @@ The same catch-up added the opt-in live guard `tests/fm-supervision-host-herdr-l
 
 The three parallel lanes use longest-processing-time assignment over those hints.
 [`tests/fm-pi-primary-types.test.sh`](../tests/fm-pi-primary-types.test.sh) owns its typecheck dependencies independently of the lane's installed Pi runtime.
-[`bin/fm-test-run.sh`](../bin/fm-test-run.sh) holds the duration values in `portable_parallel_weight_hints` and the ordered memberships and lane-specific prerequisite constraints beside `list_portable_parallel_1`, `list_portable_parallel_2` and `list_portable_parallel_3`.
+This fork's duration values (`parallel-hint` rows) and ordered lane memberships (`parallel-lane` rows) live in [`tests/fork-test-timing.conf`](../tests/fork-test-timing.conf), which [`bin/fm-test-run.sh`](../bin/fm-test-run.sh) reads as an overlay on its own `portable_parallel_weight_hints` and `list_portable_parallel_<k>` tables; [`bin/fm-fork-test-registry-lib.sh`](../bin/fm-fork-test-registry-lib.sh) owns the row grammar and overlay rules, and the lane's own test header owns any lane-specific prerequisite.
 Read the derived packing estimates with that runner's `--check-coverage`; its header and `--help` own the output fields and the selection-specific `--list-scheduled` weight rules.
 The largest individual hint sets a lower bound on the estimated duration of any split, regardless of how evenly the remaining work is assigned.
 The CI cap follows the three-tier timeout policy in [Timeouts](#timeouts) below.
@@ -97,7 +97,7 @@ The CI cap follows the three-tier timeout policy in [Timeouts](#timeouts) below.
 [`tests/fm-test-run.test.sh`](../tests/fm-test-run.test.sh), in `test_portable_parallel_lanes_stay_duration_balanced`, requires every parallel member to have a hint and the largest and smallest lane sums to differ by no more than five percent of the largest.
 Its scheduling regressions also check stored parallel lane order and preserve serial-weight scheduling for other selections.
 These checks do not detect a script outgrowing an existing hint or establish measured job headroom.
-Refresh `portable_parallel_weight_hints` with the slowest completed `duration_ms` per script from several green CI runs' `fm-test-timing-portable-parallel-*` artifacts whenever the parallel set gains scripts or a member grows materially.
+Refresh the `parallel-hint` rows with the slowest completed `duration_ms` per script from several green CI runs' `fm-test-timing-portable-parallel-*` artifacts whenever the parallel set gains scripts or a member grows materially.
 
 The remote-secondmate lifecycle hint is 1005249 ms, its completed, passing `FM_TEST_END` sample from Ubuntu run [41289019354](https://github.com/kunchenguid/firstmate/actions/runs/41289019354). Rex lifecycle coverage outgrew the previous 345655 ms hint; serial shard 9 then reached the 30-minute job cap while running later tests. Eleven serial shards accommodate the refreshed weight within the unchanged modeled budget and timeout policy. This is a completed-script measurement from a partial run, not a successful whole-shard timing or a guarantee of future headroom.
 
@@ -114,10 +114,10 @@ On [PR 1495](https://github.com/kunchenguid/firstmate/pull/1495), its main step 
 `portable-serial-<k>of<n>` splits it across `n` separate CI runners.
 Each shard is still strictly serial in itself, and separate runners mean no two of these stateful scripts ever share a machine, so the split needs no concurrency isolation proof.
 
-`bin/fm-test-run.sh` owns `n` and refuses any lane whose `of<n>` disagrees with it.
+`bin/fm-test-run.sh` owns `n`, which this fork sets with the `serial-shards` row in `tests/fork-test-timing.conf`, and refuses any lane whose `of<n>` disagrees with it.
 `.github/workflows/ci.yml` derives the same `n` from `strategy.job-total` rather than a literal, so changing the shard count in either file without the other fails the lane loudly instead of leaving part of the required suite unrun.
 
-Assignment is longest-processing-time bin packing over per-script duration hints embedded in `bin/fm-test-run.sh`.
+Assignment is longest-processing-time bin packing over per-script duration hints, this fork's being the `serial-hint` rows in `tests/fork-test-timing.conf`.
 [Verification inputs](#verification-inputs) owns the measurement provenance and exceptions.
 A script with no hint gets the conservative `PORTABLE_SERIAL_DEFAULT_WEIGHT_MS` default.
 Hints only affect balance: the coverage guard keeps the partition complete and disjoint whatever they say, so a stale hint costs a slower shard rather than lost coverage.
@@ -136,14 +136,14 @@ Even so, maxima from five runs do not establish a P95 or guarantee future headro
 Job timeouts remain hang tripwires under the policy in [Timeouts](#timeouts) below; they are not the desired healthy duration.
 `tests/fm-ci-workflow.test.sh` compares the parsed CI matrix to the executable runner lanes, and the runner rejects parallel `--jobs` on a serial lane even when that shard has only one member.
 
-Refresh the CI-derived hints by downloading the per-shard timing artifacts from several green CI runs and replacing the `portable_serial_weight_hints` table in `bin/fm-test-run.sh` with the slowest measured `duration_ms` per `path`:
+Refresh the CI-derived hints by downloading the per-shard timing artifacts from several green CI runs and replacing the `serial-hint` rows in `tests/fork-test-timing.conf` with the slowest measured `duration_ms` per `path`:
 
 ```sh
 for run in <run-id> <run-id> <run-id>; do
   gh-axi run download "$run" -R Amplify-Logic/starship --dir "/tmp/fm-serial/$run"
 done
 jq -r '.scripts[] | select(.exit == 0) | [.path, .duration_ms] | @tsv' /tmp/fm-serial/*/fm-test-timing-portable-serial-*/*.json \
-  | awk -F'\t' '$2 > m[$1] { m[$1] = $2 } END { for (p in m) print p, m[p] }' \
+  | awk -F'\t' '$2 > m[$1] { m[$1] = $2 } END { for (p in m) print "serial-hint", p, m[p] }' \
   | LC_ALL=C sort
 bin/fm-test-run.sh --check-coverage
 ```

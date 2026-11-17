@@ -11,7 +11,7 @@
 # Home paths are DERIVED from vendor and name, never read from the registry, so
 # a registry file can never point a launch at an arbitrary directory.
 #
-# The registry is local, gitignored config/accounts.json; docs/configuration.md
+# The registry is local, gitignored config/accounts.json; docs/fork-configuration.md
 # owns its schema and bin/fm-bootstrap.sh validates it. An ABSENT registry means
 # one thing only: no pinning, every launch uses the ambient vendor home exactly
 # as it did before account pinning existed.
@@ -81,7 +81,7 @@ fm_account_home() {  # <data-dir> <vendor> <name>
 # fm_account_name_ok: an account name is one path segment of safe characters, so
 # it can never escape the derived vendor directory.
 #
-# This is the SAME rule accounts_validate applies in bin/fm-bootstrap.sh
+# This is the SAME rule accounts_validate applies in hooks/bootstrap/03-accounts
 # (^[A-Za-z0-9][A-Za-z0-9._-]*$), deliberately: a name the session-start
 # diagnostic reports as invalid must also be refused at creation and at launch,
 # or the captain gets a permanent ACCOUNTS diagnostic for a pin that keeps

@@ -6,7 +6,7 @@ rules, memory and workers. data/factories.md names a home's factories and maps
 each to its projects; with no registry every registered project in
 data/projects.md is its own factory. docs/factory-pane.md owns what the pane
 shows and why, and the registry's `routine:` line ("Routine work");
-docs/configuration.md owns the rest of the registry format; this header owns
+docs/fork-configuration.md owns the rest of the registry format; this header owns
 the commands.
 
 Usage:

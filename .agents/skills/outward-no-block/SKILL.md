@@ -10,7 +10,7 @@ metadata:
 
 # outward-no-block
 
-`docs/configuration.md` "Worker outward actions" owns what each style allows.
+`docs/fork-configuration.md` "Worker outward actions" owns what each style allows.
 
 1. Act only on the captain's own current words; a worker never runs this, and nothing else implies it.
 2. Run `bin/fm-outward-style.sh no-block` once.

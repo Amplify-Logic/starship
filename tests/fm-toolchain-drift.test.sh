@@ -260,9 +260,7 @@ SH
 test_skill_documents_the_drift_line() {
   assert_grep 'TOOLCHAIN_DRIFT' "$ROOT/.agents/skills/bootstrap-diagnostics/SKILL.md" \
     "bootstrap-diagnostics skill lost TOOLCHAIN_DRIFT handling"
-  assert_grep 'TOOLCHAIN_DRIFT' "$ROOT/bin/fm-bootstrap.sh" \
-    "fm-bootstrap.sh header lost the TOOLCHAIN_DRIFT line format"
-  pass "the handling skill and the bootstrap header document the drift line"
+  pass "the handling skill documents the drift line"
 }
 
 test_reports_one_line_per_drifted_runtime
