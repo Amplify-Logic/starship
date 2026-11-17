@@ -17,8 +17,12 @@
 #       Download the pinned macOS arm64 release, verify its sha256 against the
 #       digest pinned here, unpack it into ~/.local/lib/peekaboo/<pin>/ and link
 #       ~/.local/bin/peekaboo to it. User-level only: no app bundle, no login
-#       item, no LaunchAgent, no privacy prompt. Refuses to replace a
-#       ~/.local/bin/peekaboo that is not its own link. Removal is in
+#       item, no LaunchAgent, no privacy prompt. After a pin bump it upgrades
+#       its own link into ~/.local/lib/peekaboo/<other-version>/peekaboo: the
+#       new copy is verified and unpacked first, then the link is switched and
+#       the old version directory removed, so a failed upgrade leaves the old
+#       copy working. Refuses to replace a ~/.local/bin/peekaboo that is any
+#       other file or link. Removal is in
 #       .agents/opt-in-skills/macos-computer-use/SKILL.md.
 #   fm-computer-use.sh elements --app <app> [--window-title <title>] [--all] [--max <n>] [--screenshot] [--thin <n>] [--from <see.json>]
 #       Read the app's window as its element list, without a screenshot
@@ -98,9 +102,9 @@
 # tell the automation's own input from the captain's.
 set -u
 
-PEEKABOO_PIN=4.5.0
+PEEKABOO_PIN=4.9.8
 PEEKABOO_TARBALL_URL="https://github.com/openclaw/Peekaboo/releases/download/v$PEEKABOO_PIN/peekaboo-macos-arm64.tar.gz"
-PEEKABOO_TARBALL_SHA256=a65323e5c79a0094c860199c86f99248c60955d9803ac2fa7a62b18494186beb
+PEEKABOO_TARBALL_SHA256=5b82b246cd7b257b68d15e136a8234848a8e70a5999cdf5526993fb860685bfe
 
 # Test-only seam: a suite may point the installer at a local tarball and its
 # digest, but only when tests/lib.sh has armed FM_TEST_SEAM.
@@ -150,21 +154,35 @@ sha256_of() {
 }
 
 cmd_install() {
-  local lib bin link tmp got
+  local root lib bin link tmp got target old=""
   if [ "${FM_TEST_SEAM:-}" != 1 ] && { [ "$(uname -s)" != Darwin ] || [ "$(uname -m)" != arm64 ]; }; then
     echo "install: the pinned Peekaboo build is for Apple Silicon macOS only" >&2
     return 4
   fi
-  lib="$HOME/.local/lib/peekaboo/$PEEKABOO_PIN"
+  root="$HOME/.local/lib/peekaboo"
+  lib="$root/$PEEKABOO_PIN"
   bin="$HOME/.local/bin"
   link="$bin/peekaboo"
   if [ -e "$link" ] || [ -L "$link" ]; then
-    if [ "$(readlink "$link" 2>/dev/null)" = "$lib/peekaboo" ] && [ -x "$lib/peekaboo" ]; then
+    target=$(readlink "$link" 2>/dev/null) || target=""
+    if [ "$target" = "$lib/peekaboo" ] && [ -x "$lib/peekaboo" ]; then
       echo "peekaboo $PEEKABOO_PIN already installed at $link"
       return 0
     fi
-    echo "install: $link exists and is not this installer's link; remove or rename it first" >&2
-    return 4
+    # An earlier pin's link: exactly <root>/<one version component>/peekaboo.
+    case "$target" in
+      "$root"/*/peekaboo)
+        old=${target#"$root"/}
+        old=${old%/peekaboo}
+        case "$old" in
+          ''|.|..|*/*) old="" ;;
+        esac
+        ;;
+    esac
+    if [ -z "$old" ] || [ ! -L "$link" ]; then
+      echo "install: $link exists and is not this installer's link; remove or rename it first" >&2
+      return 4
+    fi
   fi
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-peekaboo.XXXXXX") || return 4
   if ! curl -fsSL "$PEEKABOO_TARBALL_URL" -o "$tmp/peekaboo.tar.gz"; then
@@ -187,6 +205,14 @@ cmd_install() {
   cp -R "$tmp/peekaboo-macos-arm64/." "$lib/" || { rm -rf "$tmp"; return 4; }
   chmod 0755 "$lib/peekaboo"
   rm -rf "$tmp"
+  if [ -n "$old" ]; then
+    # Switch the link in one rename so peekaboo is never missing mid-upgrade.
+    ln -s "$lib/peekaboo" "$link.fm-new.$$" || return 4
+    mv -f "$link.fm-new.$$" "$link" || { rm -f "$link.fm-new.$$"; return 4; }
+    [ "$old" = "$PEEKABOO_PIN" ] || rm -rf "${root:?}/$old"
+    echo "installed peekaboo $PEEKABOO_PIN at $link -> $lib/peekaboo (replaced peekaboo $old)"
+    return 0
+  fi
   ln -s "$lib/peekaboo" "$link" || return 4
   echo "installed peekaboo $PEEKABOO_PIN at $link -> $lib/peekaboo"
 }

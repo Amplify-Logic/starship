@@ -15,6 +15,7 @@ set -u
 CU="$ROOT/bin/fm-computer-use.sh"
 FIX="$ROOT/tests/fixtures/computer-use"
 TMP_ROOT=$(fm_test_tmproot fm-computer-use)
+PIN=$("$CU" pin)
 BASE_PATH=${FM_TEST_BASE_PATH:-/usr/bin:/bin:/usr/sbin:/sbin}
 
 command -v python3 >/dev/null 2>&1 || fail "python3 is required"
@@ -44,13 +45,13 @@ run_check() {  # <path-dir> -> prints "rc|output"
 test_check_reports_absent_wrong_and_broken() {
   local d
   d="$TMP_ROOT/check-none"; mkdir -p "$d"
-  assert_equals "1|peekaboo absent - pinned 4.5.0" "$(run_check "$d")" "an absent peekaboo must be reported with the pin"
-  d="$TMP_ROOT/check-pinned"; fake_peekaboo "$d" "Peekaboo 4.5.0 (main/a1d48b28a, built: 2026-09-22T08:33:35-07:00)"
+  assert_equals "1|peekaboo absent - pinned $PIN" "$(run_check "$d")" "an absent peekaboo must be reported with the pin"
+  d="$TMP_ROOT/check-pinned"; fake_peekaboo "$d" "Peekaboo $PIN (main/a1d48b28a, built: 2026-09-22T08:33:35-07:00)"
   assert_equals "0|" "$(run_check "$d")" "the pinned version must pass silently"
-  d="$TMP_ROOT/check-newer"; fake_peekaboo "$d" "Peekaboo 4.6.0 (main/abc, built: 2026-09-26)"
-  assert_equals "1|peekaboo 4.6.0 installed, pinned 4.5.0" "$(run_check "$d")" "another version must be reported, newer included"
+  d="$TMP_ROOT/check-newer"; fake_peekaboo "$d" "Peekaboo 99.6.0 (main/abc, built: 2026-09-26)"
+  assert_equals "1|peekaboo 99.6.0 installed, pinned $PIN" "$(run_check "$d")" "another version must be reported, newer included"
   d="$TMP_ROOT/check-dev"; fake_peekaboo "$d" "peekaboo development build"
-  assert_equals "1|peekaboo unrecognised installed, pinned 4.5.0" "$(run_check "$d")" "an unparseable version must be reported"
+  assert_equals "1|peekaboo unrecognised installed, pinned $PIN" "$(run_check "$d")" "an unparseable version must be reported"
   d="$TMP_ROOT/check-broken"; fake_peekaboo "$d" "dyld[1]: Symbol not found: _swift_initBorrow" 134
   assert_equals "1|peekaboo does not start: dyld[1]: Symbol not found: _swift_initBorrow" "$(run_check "$d")" \
     "a binary that fails to start must be reported with its first error line"
@@ -74,7 +75,7 @@ sha() {
 test_install_verifies_and_links_user_level() {
   local d home out rc digest
   d="$TMP_ROOT/install"; home="$d/home"; mkdir -p "$home"
-  make_archive "$d" "Peekaboo 4.5.0 (fixture)"
+  make_archive "$d" "Peekaboo $PIN (fixture)"
   digest=$(sha "$d/peekaboo.tar.gz")
 
   out=$(HOME="$home" FM_TEST_PEEKABOO_TARBALL_URL="file://$d/peekaboo.tar.gz" \
@@ -87,8 +88,8 @@ test_install_verifies_and_links_user_level() {
   out=$(HOME="$home" FM_TEST_PEEKABOO_TARBALL_URL="file://$d/peekaboo.tar.gz" FM_TEST_PEEKABOO_TARBALL_SHA256="$digest" "$CU" install 2>&1) \
     || fail "a verified archive must install: $out"
   [ -L "$home/.local/bin/peekaboo" ] || fail "install must link ~/.local/bin/peekaboo"
-  assert_equals "$home/.local/lib/peekaboo/4.5.0/peekaboo" "$(readlink "$home/.local/bin/peekaboo")" "the link must point into the versioned directory"
-  [ -f "$home/.local/lib/peekaboo/4.5.0/libswiftCompatibilitySpan.dylib" ] || fail "the bundled library must sit beside the binary"
+  assert_equals "$home/.local/lib/peekaboo/$PIN/peekaboo" "$(readlink "$home/.local/bin/peekaboo")" "the link must point into the versioned directory"
+  [ -f "$home/.local/lib/peekaboo/$PIN/libswiftCompatibilitySpan.dylib" ] || fail "the bundled library must sit beside the binary"
   assert_equals "0|" "$(run_check "$home/.local/bin")" "the installed copy must pass the check"
 
   out=$(HOME="$home" FM_TEST_PEEKABOO_TARBALL_URL="file://$d/missing.tar.gz" "$CU" install 2>&1) \
@@ -103,6 +104,58 @@ test_install_verifies_and_links_user_level() {
   assert_contains "$out" "is not this installer's link" "the refusal must say why"
   assert_equals "mine" "$("$home/.local/bin/peekaboo")" "the foreign copy must be untouched"
   pass "install verifies the pinned digest, links a versioned user-level copy, is idempotent, and never replaces a foreign copy"
+}
+
+# old_install <home> <version>: what an earlier pin's install left behind - a
+# versioned directory and this installer's link into it.
+old_install() {
+  fake_peekaboo "$1/.local/lib/peekaboo/$2" "Peekaboo $2 (old)"
+  printf 'old\n' > "$1/.local/lib/peekaboo/$2/libswiftCompatibilitySpan.dylib"
+  mkdir -p "$1/.local/bin"
+  ln -s "$1/.local/lib/peekaboo/$2/peekaboo" "$1/.local/bin/peekaboo"
+}
+
+test_install_upgrades_its_own_older_link() {
+  local d home out rc digest target
+  d="$TMP_ROOT/upgrade"; mkdir -p "$d"
+  make_archive "$d" "Peekaboo $PIN (fixture)"
+  digest=$(sha "$d/peekaboo.tar.gz")
+
+  home="$d/home"; old_install "$home" 0.0.1
+  assert_equals "1|peekaboo 0.0.1 installed, pinned $PIN" "$(run_check "$home/.local/bin")" "the older copy must be reported before the upgrade"
+  out=$(HOME="$home" FM_TEST_PEEKABOO_TARBALL_URL="file://$d/peekaboo.tar.gz" \
+    FM_TEST_PEEKABOO_TARBALL_SHA256=0000000000000000000000000000000000000000000000000000000000000000 "$CU" install 2>&1)
+  assert_equals 4 "$?" "a digest mismatch must fail the upgrade"
+  assert_equals "$home/.local/lib/peekaboo/0.0.1/peekaboo" "$(readlink "$home/.local/bin/peekaboo")" "a failed upgrade must keep the old link"
+  [ -x "$home/.local/lib/peekaboo/0.0.1/peekaboo" ] || fail "a failed upgrade must keep the old copy"
+  [ ! -e "$home/.local/lib/peekaboo/$PIN" ] || fail "a failed upgrade must leave no new directory"
+
+  out=$(HOME="$home" FM_TEST_PEEKABOO_TARBALL_URL="file://$d/peekaboo.tar.gz" FM_TEST_PEEKABOO_TARBALL_SHA256="$digest" "$CU" install 2>&1) \
+    || fail "install must upgrade its own older link: $out"
+  assert_contains "$out" "replaced peekaboo 0.0.1" "the upgrade must name the version it replaced"
+  assert_equals "$home/.local/lib/peekaboo/$PIN/peekaboo" "$(readlink "$home/.local/bin/peekaboo")" "the link must point at the pinned copy"
+  [ ! -e "$home/.local/lib/peekaboo/0.0.1" ] || fail "the old version directory must be removed"
+  assert_equals "0|" "$(run_check "$home/.local/bin")" "the upgraded copy must pass the check"
+
+  home="$d/dangling"; old_install "$home" 0.0.1; rm -rf "$home/.local/lib/peekaboo/0.0.1"
+  out=$(HOME="$home" FM_TEST_PEEKABOO_TARBALL_URL="file://$d/peekaboo.tar.gz" FM_TEST_PEEKABOO_TARBALL_SHA256="$digest" "$CU" install 2>&1) \
+    || fail "install must replace its own link whose old copy is already gone: $out"
+  assert_equals "0|" "$(run_check "$home/.local/bin")" "the reinstalled copy must pass the check"
+
+  for target in elsewhere/peekaboo .local/lib/peekaboo/0.0.1/nested/peekaboo .local/lib/peekaboo/0.0.1/other \
+    .local/lib/peekaboo/../evil/peekaboo .local/lib/other/0.0.1/peekaboo; do
+    home="$d/foreign-$(printf '%s' "$target" | tr -c 'A-Za-z0-9' _)"
+    mkdir -p "$home/.local/bin" "$(dirname "$home/$target")"
+    printf '#!/bin/sh\necho mine\n' > "$home/$target"; chmod 0755 "$home/$target"
+    ln -s "$home/$target" "$home/.local/bin/peekaboo"
+    out=$(HOME="$home" FM_TEST_PEEKABOO_TARBALL_URL="file://$d/peekaboo.tar.gz" FM_TEST_PEEKABOO_TARBALL_SHA256="$digest" "$CU" install 2>&1)
+    rc=$?
+    assert_equals 4 "$rc" "a link to $target must not be replaced"
+    assert_contains "$out" "is not this installer's link" "the refusal for $target must say why"
+    assert_equals "$home/$target" "$(readlink "$home/.local/bin/peekaboo")" "the link to $target must be untouched"
+    [ -x "$home/$target" ] || fail "the copy at $target must be untouched"
+  done
+  pass "install replaces its own link into an older versioned directory, removes that directory, and still refuses any other link"
 }
 
 test_elements_render_compactly() {
@@ -489,6 +542,7 @@ test_facts_report_desk_transcription() {
 
 test_check_reports_absent_wrong_and_broken
 test_install_verifies_and_links_user_level
+test_install_upgrades_its_own_older_link
 test_elements_render_compactly
 test_elements_read_the_list_without_a_screenshot
 test_elements_take_a_screenshot_only_when_asked_or_thin

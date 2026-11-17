@@ -687,12 +687,14 @@ ROWS
 }
 
 test_peekaboo_reported_only_when_opted_in() {
-  local label opted version mode case_dir fakebin out missing n
-  missing="MISSING: peekaboo (install: \"$ROOT/bin/fm-computer-use.sh\" install  # pinned 4.5.0, user-level in ~/.local/bin; fm-computer-use.sh check says what is wrong)"
+  local label opted version mode case_dir fakebin out missing n pin
+  pin=$("$ROOT/bin/fm-computer-use.sh" pin)
+  missing="MISSING: peekaboo (install: \"$ROOT/bin/fm-computer-use.sh\" install  # pinned $pin, user-level in ~/.local/bin; fm-computer-use.sh check says what is wrong)"
   n=0
   while IFS='^' read -r label opted version mode; do
     [ -n "$label" ] || continue
     n=$((n + 1))
+    [ "$version" != pinned ] || version="Peekaboo $pin (main/a1d48b28a)"
     case_dir="$TMP_ROOT/peekaboo-$n"
     mkdir -p "$case_dir/home/config"
     printf '%s\n' manual > "$case_dir/home/config/backlog-backend"
@@ -708,10 +710,10 @@ test_peekaboo_reported_only_when_opted_in() {
     esac
   done <<'ROWS'
 absent and not opted in stays silent^no^absent^empty
-wrong version and not opted in stays silent^no^Peekaboo 4.6.0 (main/x)^empty
+wrong version and not opted in stays silent^no^Peekaboo 99.6.0 (main/x)^empty
 absent and opted in is reported^yes^absent^missing
-wrong version and opted in is reported^yes^Peekaboo 4.6.0 (main/x)^missing
-pinned version and opted in stays silent^yes^Peekaboo 4.5.0 (main/a1d48b28a)^empty
+wrong version and opted in is reported^yes^Peekaboo 99.6.0 (main/x)^missing
+pinned version and opted in stays silent^yes^pinned^empty
 ROWS
   [ "$n" -eq 5 ] || fail "every peekaboo row must run"
   pass "bootstrap reports a missing or wrongly versioned peekaboo only in a home opted in with config/computer-use"
