@@ -159,10 +159,11 @@ CALLS_SIGNAL=-
 # Factory pane and the tap page show): decisions for you are his live held
 # decisions, and ready to merge is the rest, a PR or branch ready to land.
 # CALLS_SIGNAL is the owner's calls signal those calls were read under, which
-# the wait between frames watches.
+# the wait between frames watches. A field past those (_newer) is dropped, never
+# run into the title or the signal.
 read_crew() {  # <home>
   local reading records working stopped validating paused attention ready
-  local known age decisions failed lost night kind id title calls
+  local known age decisions failed lost night kind id title calls _newer
   READING_KNOWN=0
   FAILED=-
   NIGHT_DONE=-
@@ -170,7 +171,7 @@ read_crew() {  # <home>
   CALLS_SIGNAL=-
   reading=$(fm_fleet_status_counts "$1/state" strip 2>/dev/null) || return 0
   IFS=$'\t' read -r records working stopped validating paused attention ready \
-    known age decisions failed lost night kind id title calls <<EOF
+    known age decisions failed lost night kind id title calls _newer <<EOF
 $reading
 EOF
   CALLS_SIGNAL=${calls:--}
