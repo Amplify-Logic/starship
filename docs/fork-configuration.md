@@ -616,6 +616,7 @@ Learned:
 - `Rules:` is also the factory's profile, such as domain rules, known traps and how its tests run: when a factory has rules, `bin/fm-brief.sh` ends every ship and scout brief for a project that factory claims, by the same mapping, with a `# Factory profile (private context, never quote)` section holding them in file order, never its `Learned:` lines, under a line saying every other section of the brief, the home additions included, wins on any conflict and a line forbidding copying the text into PR text, commit messages or the no-mistakes intent.
   A profile adds instructions only: it chooses no model or effort and grants no permission.
   Rules over 1,500 characters, counted as their `- ` lines, are left out whole with a warning naming the factory, and no registry, no claiming factory or no rules leaves the brief unchanged.
+  The factory page shows that size against the cap under its rules, marked from nine tenths of the cap and said plainly to be left out over it.
 
 The registry is per home: second mate seeding and inherited configuration never copy it, so a profile reaches only this home's own briefs.
 In this fork the profile comes after the [home brief additions](configuration.md#home-brief-include-configbrief-includemd) as the brief's last section: the additions defer to every other section of the brief except the profile, and the profile defers to them.

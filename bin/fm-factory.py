@@ -31,12 +31,16 @@ Usage:
                                           factory's running workers beside its
                                           page pane, the way open-tab does
   fm-factory.py profile <project> [--data-dir DIR]
-                                          print the name of the factory that
+                                          print a first line holding the size
+                                          of the rules of the factory that
                                           claims <project> (by its projects,
-                                          an alias included), then its Rules: lines,
-                                          one per line; nothing when there are
-                                          none (bin/fm-brief.sh adds them to a
-                                          job's instructions)
+                                          an alias included), the cap and that
+                                          factory's name, space separated, then
+                                          its Rules: lines, one per line;
+                                          nothing when there are none
+                                          (bin/fm-brief.sh adds them to a job's
+                                          instructions when the size is at most
+                                          the cap)
   fm-factory.py refresh                   rebuild the cached record once
   fm-factory.py refresh-calls             rebuild it with fresh owner's calls on
                                           the last full refresh's workers, or,
@@ -217,6 +221,10 @@ LOOK_GAP = 15 * 60      # this long without a sign of a look ends the look
 FOCUS_HOLD = 5          # seconds the pane stays focused before it counts as a look
 FOCUS_CAP = 15 * 60     # focus alone keeps a look going this long after it began or the last key
 MIRROR_CAP = 4
+# A factory's rules go into each of its jobs' briefs only while their "- " list
+# is at most this many characters (profile_size); bin/fm-brief.sh leaves a
+# larger list out whole. The factory page shows the size against this cap.
+PROFILE_CAP = 1500
 # A factory tab opens a live copy only of a worker at work: busy, asking
 # Starship, stuck, or waiting on the owner's answer. Parked, held, queued and
 # finished jobs get none.
@@ -517,21 +525,28 @@ def project_owner(factories: List[Dict[str, Any]], project_rows: List[Dict[str, 
     return owner_of
 
 
+def profile_size(rules: List[str]) -> int:
+    """The size of a factory's rules as a brief carries them: characters, not
+    bytes, of one "- " line per rule, each with its newline. PROFILE_CAP is
+    measured against this, by the brief and the factory page alike."""
+    return sum(len("- %s\n" % rule) for rule in rules)
+
+
 def print_profile(data: str, project: str) -> int:
     """`profile`: the factory that claims <project> and its profile, its Rules:
     lines (never its Learned: lines).
 
-    Prints the factory's name on the first line and each rule after it, in
-    file order, and nothing at all when there is no registry, no factory claims
-    the project, or that factory has no rules. bin/fm-brief.sh owns what a
-    brief does with it."""
+    Prints the rules' profile_size, PROFILE_CAP and the factory's name on the
+    first line, space separated, and each rule after it, in file order, and
+    nothing at all when there is no registry, no factory claims the project, or
+    that factory has no rules. bin/fm-brief.sh owns what a brief does with it."""
     if not os.path.isfile(os.path.join(data, "factories.md")):
         return 0
     factories, _ = load_registry(data, data)
     fid = project_owner(factories, load_projects(data, data))(project)
     factory = next((f for f in factories if f["id"] == fid), None)
     if factory and factory["rules"]:
-        print(factory["name"])
+        print(profile_size(factory["rules"]), PROFILE_CAP, factory["name"])
         for line in factory["rules"]:
             print(line)
     return 0
@@ -1581,7 +1596,9 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
         "factories": [{k: f[k] for k in ("id", "name", "about", "projects", "steered_by", "state",
                                          "idle_since", "crew", "needs", "jobs", "next", "queue", "rules",
                                          "learned", "talk", "routine", "routine_runs")}
+                      | {"rules_size": profile_size(f["rules"])}
                       for f in factories],
+        "rules_cap": PROFILE_CAP,
         "feed": feed,
         "snapshot": {"generated": snapshot.get("generated"), "schema": snapshot.get("schema")},
     }
@@ -2095,6 +2112,17 @@ def clip(segs, width: int):
         break
     out.append(("…", "faint", False))
     return out
+
+
+def rules_size_words(size: int, cap: int) -> Tuple[str, str]:
+    """A factory's rules size against the cap, and the colour to show it in:
+    marked from nine tenths of the cap, and over it the rules reach no job."""
+    words = "rules {:,} / {:,} characters".format(size, cap)
+    if size > cap:
+        return words + " · over the cap, so its jobs get none of these rules", "red"
+    if size * 10 >= cap * 9:
+        return words + " · near the cap; past it its jobs get none of these rules", "amber"
+    return words, "faint"
 
 
 def row(width: int, left=(), right=(), band: bool = False) -> Row:
@@ -2856,6 +2884,10 @@ class View:
         rows += [row(width), row(width, [S(" RULES THIS CREW FOLLOWS", "mist", True)]), row(width)]
         if not fac["rules"]:
             rows.append(row(width, [S("     none written down yet", "faint")]))
+        else:
+            words, colour = rules_size_words(fac.get("rules_size", profile_size(fac["rules"])),
+                                             self.record.get("rules_cap", PROFILE_CAP))
+            rows += flow(width, [S("   ")], words, colour) + [row(width)]
         for rule in fac["rules"]:
             for index, line in enumerate(wrap(rule, max(width - 8, 20))):
                 rows.append(row(width, [S("     " if index else "   · ", "faint"), S(line, "mist")]))

@@ -542,6 +542,45 @@ test_the_plain_screen_is_the_record_as_text() {
   pass "factory record: the plain screen carries every state as a word"
 }
 
+# A factory's rules reach its jobs' briefs only while they fit the cap
+# bin/fm-brief.sh applies, so its page shows their size against that cap, in
+# the same count the brief's profile lookup reports: plain under it, marked
+# near it, and said plainly to be left out over it. No rules, no size line.
+test_a_factory_page_shows_its_rules_size_against_the_cap() {
+  reset_case
+  write_projects
+  local near over out
+  near=$(python3 -c 'print("é" * 1497)')
+  over=$(printf '%01498d' 0)
+  {
+    printf '%s\n' '## Sample Shop' 'projects: sample-shop' '' 'Rules:' '- English only.' \
+      '- Anything that touches payments waits for your yes.' ''
+    printf '%s\n' '## Garden Journal' 'projects: garden-journal' '' 'Rules:' "- $near" ''
+    printf '%s\n' '## Recipe Box' 'projects: recipe-box' '' 'Rules:' "- $over" ''
+    printf '%s\n' '## Shop Api' 'projects: shop-api'
+  } > "$HOME_FIX/data/factories.md"
+  write_world
+  take_record
+  assert_equals "$(q '[.factories[] | "\(.id)=\(.rules_size)"] | join(" ")') cap=$(q .rules_cap)" \
+    "sample-shop=69 garden-journal=1500 recipe-box=1501 shop-api=0 cap=1500" "each factory's rules size and the cap"
+  assert_equals "$(python3 "$FACTORY" profile recipe-box --data-dir "$HOME_FIX/data" | head -n 1)" "1501 1500 Recipe Box" \
+    "the brief's profile lookup reports the size the page shows"
+
+  out=$(python3 "$FACTORY" --plain --width 92 --factory sample-shop) || fail "--plain --factory sample-shop failed"
+  has_line "$out" " rules 69 / 1,500 characters" "rules under the cap show their size"
+  assert_not_contains "$out" "the cap" "rules under the cap were marked"
+  out=$(python3 "$FACTORY" --plain --width 92 --factory garden-journal) || fail "--plain --factory garden-journal failed"
+  has_line "$out" " rules 1,500 / 1,500 characters · near the cap; past it its jobs get none of these rules" \
+    "rules at the cap are marked near it"
+  out=$(python3 "$FACTORY" --plain --width 92 --factory recipe-box) || fail "--plain --factory recipe-box failed"
+  has_line "$out" " rules 1,501 / 1,500 characters · over the cap, so its jobs get none of these rules" \
+    "rules over the cap are said to be left out"
+  out=$(python3 "$FACTORY" --plain --width 92 --factory shop-api) || fail "--plain --factory shop-api failed"
+  assert_contains "$out" "none written down yet" "a factory with no rules"
+  assert_not_contains "$out" "characters" "a factory with no rules showed a size"
+  pass "factory page: rules show their size against the brief's cap, marked near it and over it"
+}
+
 # On 2026-11-15 the owner was told the backlog held about a hundred queued jobs
 # and found nothing on the pane that said so: it showed only a per-project
 # "N in line". The whole queue is now counted under the count line, by what
@@ -3050,6 +3089,7 @@ test_without_a_routine_mark_every_run_shows_as_before() {
 fm_test_run \
   test_the_record_words_every_state \
   test_the_plain_screen_is_the_record_as_text \
+  test_a_factory_page_shows_its_rules_size_against_the_cap \
   test_the_whole_queue_is_counted_in_sight \
   test_parked_work_says_until_when_it_is_parked \
   test_a_folded_count_line_opens_on_every_job_it_stands_for \
