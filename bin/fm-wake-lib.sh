@@ -3157,6 +3157,28 @@ fm_wake_queue_prune_task() {  # <state> <task-id> [target]
   fm_lock_release "$lock"
 }
 
+# The newest queued row's reason as a wake line: its payload when the payload
+# already leads with its kind, otherwise "<kind>: <payload>". Prints nothing
+# when the queue holds no usable row. A recovery wake names its event this way
+# (recovery_wake in bin/fm-watch.sh).
+fm_wake_queue_newest_reason() {
+  [ -s "$FM_WAKE_QUEUE" ] || return 0
+  fm_lock_acquire_wait "$FM_WAKE_QUEUE_LOCK" || return 0
+  awk -F '\t' '
+    NF >= 5 && $2 ~ /^[0-9]+$/ && $2 + 0 >= max + 0 \
+      && ($3 == "signal" || $3 == "stale" || $3 == "check" || $3 == "heartbeat") {
+      max = $2; kind = $3; payload = $5
+    }
+    END {
+      if (kind == "") exit
+      if (payload ~ /^(signal|stale|check): ./ || payload ~ /^heartbeat($|:)/) print payload
+      else if (kind == "heartbeat") print "heartbeat"
+      else if (payload != "") print kind ": " payload
+    }
+  ' "$FM_WAKE_QUEUE" 2>/dev/null || true
+  fm_lock_release "$FM_WAKE_QUEUE_LOCK"
+}
+
 # Collapse duplicate rows to the last of each kind+key, except that every BARE
 # heartbeat collapses to one regardless of key: an idle fleet queues nothing but
 # heartbeats and the supervisor wants one. A heartbeat carrying its own key -

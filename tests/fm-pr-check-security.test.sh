@@ -4339,7 +4339,7 @@ test_self_merged_lane_is_still_cleaned_up_by_the_poll() {
   # The merge entrypoint's queued outcome surfaces as a recovery wake first.
   FM_TEST_GH_STATE=MERGED run_watcher_bounded "$dir/home" "$dir/fakebin" >"$dir/recovery.out" 2>"$dir/recovery.err" \
     || fail "self-merge-cleanup: recovery cycle failed: $(cat "$dir/recovery.err")"
-  grep -F 'check: rearm-resurface' "$dir/recovery.out" >/dev/null \
+  grep -Fx "$(recovery_close_reason "$dir/home/state")" "$dir/recovery.out" >/dev/null \
     || fail "self-merge-cleanup: the recorded merge did not surface as a recovery wake: $(cat "$dir/recovery.out")"
   ack_watcher_cycle "$state" || fail "self-merge-cleanup: recovery acknowledgement failed"
   rm -f "$state/.last-check"
@@ -4384,7 +4384,7 @@ test_merged_poll_stays_armed_when_cleanup_queue_fails() {
   FM_TEST_GH_STATE=MERGED run_watcher_bounded "$dir/home" "$dir/fakebin" \
     >"$dir/recovery.out" 2>"$dir/recovery.err" \
     || fail "merge-queue-failure: recovery cycle failed: $(cat "$dir/recovery.err")"
-  grep -F 'check: rearm-resurface' "$dir/recovery.out" >/dev/null \
+  grep -Fx "$(recovery_close_reason "$dir/home/state")" "$dir/recovery.out" >/dev/null \
     || fail "merge-queue-failure: merged result did not surface for recovery"
   ack_watcher_cycle "$state" || fail "merge-queue-failure: recovery acknowledgement failed"
   rm -f "$state/.last-check"
@@ -4651,7 +4651,7 @@ test_retirement_crash_recovery() {
     || fail "could not seed post-queue crash"
   FM_TEST_GH_STATE=MERGED run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/recovery.out" 2> "$dir/recovery.err" \
     || fail "post-queue crash recovery wake failed: $(cat "$dir/recovery.err")"
-  grep -F 'check: rearm-resurface' "$dir/recovery.out" >/dev/null \
+  grep -Fx "$(recovery_close_reason "$dir/home/state")" "$dir/recovery.out" >/dev/null \
     || fail "post-queue crash did not surface its durable recovery first"
   ack_watcher_cycle "$state" || fail "post-queue crash recovery acknowledgement failed"
   set +e
@@ -4750,7 +4750,7 @@ test_retirement_crash_recovery() {
   add_stop_custom_check "$dir"
   FM_TEST_GH_STATE=MERGED run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/template-recovery.out" 2> "$dir/template-recovery.err" \
     || fail "template-update recovery wake failed: $(cat "$dir/template-recovery.err")"
-  grep -F 'check: rearm-resurface' "$dir/template-recovery.out" >/dev/null \
+  grep -Fx "$(recovery_close_reason "$dir/home/state")" "$dir/template-recovery.out" >/dev/null \
     || fail "template-update recovery did not surface its durable wake first"
   ack_watcher_cycle "$state" || fail "template-update recovery acknowledgement failed"
   set +e
