@@ -161,8 +161,9 @@
 # bin/fm-pr-check.sh when a PR is recorded (never the merge-time re-record);
 # merged from bin/fm-merge-outcome-lib.sh and bin/fm-merge-local.sh on a
 # confirmed merge; finished from bin/fm-teardown.sh at the cleanup of a scout
-# with its report kept (data/<task-id>/report.md, not a --force discard), and
-# dropped from it at any other cleanup, a ship's included. A task of a
+# with its report kept (data/<task-id>/report.md, not a --force discard) whose
+# task closes, and dropped from it at any other cleanup, a ship's or a scout's
+# task held open for the captain included. A task of a
 # project in config/private-projects tells no room anything, card or job,
 # whatever a room's allow-list says, and while that list is there but cannot
 # be read no task tells any room anything.

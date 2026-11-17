@@ -770,6 +770,28 @@ test_teardown_tells_the_card_a_report_finished() {
   pass "cleaning up a scout with its report tells the card it finished, sends nothing without a link, and finishes whatever the room does"
 }
 
+test_teardown_of_a_held_scout_leaves_the_card_open() {
+  local h task=room-sc4 out
+  need_tools || return 0
+  h=$(make_home lifecycle-report-held)
+  make_lifecycle "$h" "$task"
+  add_task "$h" "$task" sample "Investigate for the room. mothership: alpha/c17" scout
+  out=$(in_lifecycle "$h" "$ROOT/bin/fm-spawn.sh" "$task" "$PROJ_DIR" --scout 2>&1) || fail "scout spawn failed: $out"
+  wait_for_sent "$h" 1 || fail "dispatch did not tell the card: $(sent_of "$h")"
+  printf '# Findings\n' > "$h/home/data/$task/report.md"
+  printf 'done [at=1790000600]: report written\n' >> "$h/home/state/$task.status"
+  in_lifecycle "$h" "$ROOT/bin/fm-captain-hold.sh" hold "$task" --reason "the captain must choose the follow-up" >/dev/null 2>&1 \
+    || fail "could not hold the scout's task for the captain"
+  in_lifecycle "$h" "$ROOT/bin/fm-captain-hold.sh" complete "$task" --none >/dev/null 2>&1 || fail "the report's completion gate failed"
+  out=$(in_lifecycle "$h" "$ROOT/bin/fm-teardown.sh" "$task" 2>&1) || fail "held scout cleanup failed: $out"
+  in_lifecycle "$h" "$ROOT/bin/fm-captain-hold.sh" open "$task" >/dev/null 2>&1 || fail "cleanup closed the captain-held task: $out"
+  sleep 1
+  assert_equals 1 "$(sent_of "$h" | grep -c .)" "a scout still held for the captain tells its card nothing at cleanup: $(sent_of "$h")"
+  out=$(in_home "$h" "$ADAPTER" report "$task" pr --pr "$PR_URL" 2>&1) || fail "a later report failed: $out"
+  assert_equals "told: $task: the alpha room heard that it is about to land" "$out" "a later report still reaches the card"
+  pass "cleaning up a scout whose task is held for the captain leaves its card open for later reports"
+}
+
 test_teardown_of_a_landed_ship_with_a_report_keeps_the_landing() {
   local h task=room-local2 out
   need_tools || return 0
@@ -859,5 +881,6 @@ fm_test_run \
   test_lifecycle_steps_show_a_job \
   test_teardown_drops_an_unlanded_job \
   test_teardown_tells_the_card_a_report_finished \
+  test_teardown_of_a_held_scout_leaves_the_card_open \
   test_teardown_of_a_landed_ship_with_a_report_keeps_the_landing \
   test_lifecycle_without_a_link_or_with_a_failing_room
