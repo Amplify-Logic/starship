@@ -355,6 +355,9 @@ A repeat of the same request makes no second call.
 Only the owner's answer sends anything about it: taking it on runs `mothership accept` under the chosen project, declining runs `mothership decline`, each once and through the room's allow-list as before (with that project's allow-list tags when the list names it only with tags), and Later asks again in three days.
 Such a call takes only the owner's own answer: its tap card offers no "You decide", the seven-day default never answers it, and an answer that names none of its options sends nothing and holds it for the owner again.
 Work taken on this way is filed with a `mothership: <room>/<card>` ref in its backlog task's body, and the card then hears how it goes without another word from the owner: one short line when the work is dispatched, when its PR is ready (with the PR's address, marked as about to land), when it is blocked or stops on a failure, and when it lands, which settles this ship's part of the card.
+Work that ends in a report instead of a change, such as an investigation, a guide or a draft for someone to send, runs as a scout, and settles the card when the scout is cleaned up with its report kept and its task closes: one fixed line that it finished with a report the owner holds, never the report's own words.
+A scout whose task is still held for the owner to decide when it is cleaned up does not settle its card in this version, even once the owner's answer closes the task: the card stays at "Work has started." until a later change covers reports closed by the owner's answer.
+Only when the task's body also names an address the room may read the report at, as `mothership-report: <https-url>`, does that line carry the address as its link.
 Each line goes through the room's allow-list under the task's project and through the private word check, like everything else the link sends, so the room hears nothing about a project it does not allow and nothing private; a line the link refuses or cannot send is reported to the first mate and never holds up the work.
 
 Any other task shows on the room's Ships view as a job of this ship's own, but only in a room whose allow-list names the task's project, the projects the owner shared with that room: a task of any other project sends nothing.
@@ -608,7 +611,14 @@ Learned:
 
 - `id` is the factory's stable name in the record and the pane's own records; it defaults to the heading turned into lowercase words joined by dashes.
 - `projects` maps work to the factory by each work item's project, as registered in `data/projects.md`, an `alias=` included; work no factory claims shows under `Other work`.
+  A factory with no code project lists the project word its work items use in its `projects:` line.
 - `Rules:` and `Learned:` are what the factory page shows under its rules and what it has learned lately; a learned line may start with its date.
+- `Rules:` is also the factory's profile, such as domain rules, known traps and how its tests run: when a factory has rules, `bin/fm-brief.sh` ends every ship and scout brief for a project that factory claims, by the same mapping, with a `# Factory profile (private context, never quote)` section holding them in file order, never its `Learned:` lines, under a line saying every other section of the brief, the home additions included, wins on any conflict and a line forbidding copying the text into PR text, commit messages or the no-mistakes intent.
+  A profile adds instructions only: it chooses no model or effort and grants no permission.
+  Rules over 1,500 characters, counted as their `- ` lines, are left out whole with a warning naming the factory, and no registry, no claiming factory or no rules leaves the brief unchanged.
+
+The registry is per home: second mate seeding and inherited configuration never copy it, so a profile reaches only this home's own briefs.
+In this fork the profile comes after the [home brief additions](configuration.md#home-brief-include-configbrief-includemd) as the brief's last section: the additions defer to every other section of the brief except the profile, and the profile defers to them.
 
 ## Night shift window (config/night-shift-window)
 

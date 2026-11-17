@@ -53,6 +53,7 @@ state/               runtime records and signals; gitignored
 Each line below replaces the line for the same path in SKILL.md.
 
 ```
+config/brief-include.md  optional standing worker instructions appended verbatim after the standard contract of every ship and scout scaffold, followed only by any factory profile from data/factories.md; LOCAL, gitignored, and not inherited; keep its text out of `## Firstmate spec`; see docs/configuration.md "Home brief include"
 .env                 optional Relay pairing token (presence-gates section 14), mail-plane credentials (schema: docs/configuration.md "Mail plane"), typed dispatch provider, model, and key settings (docs/configuration.md "Typed dispatch resolution"), and optional DEEPGRAM_API_KEY for desk voice (docs/desk-floater.md) and the call recorder's Deepgram engine (docs/call-companion.md); LOCAL, gitignored; never logged
 state/               runtime records and signals; gitignored
   reconcile-requests/ private open obligations to re-check a captain call whose board selection was `reconcile` or that the owner marked already settled in the Factory pane; written only by bin/fm-captain-hold.sh, retired by its verify-then-decide outcomes or a normal answer that settles the call (`process-event-sources` and `captain-hold-lifecycle` skills; docs/captain-hold-lifecycle.md)
