@@ -152,8 +152,9 @@ CALLS_SIGNAL=-
 
 # read_crew: the fleet reading, folded into the three lamps the strip shows,
 # plus the red alert, the most urgent call and the night shift's count, which
-# the same fold takes (fm_fleet_status_counts `strip`) so they never disagree
-# with the lamps.
+# the same fold takes (fm_fleet_status_counts `overview`, the reading the
+# status bar and the Factory pane's count line show too) so they never disagree
+# with the lamps; docs/status-bar.md "Fleet words" owns the words.
 # Busy is a worker typing plus work the validation pipeline is carrying. The
 # other two lamps are the owner's calls (fm_owner_calls, the same count the
 # Factory pane and the tap page show): decisions for you are his live held
@@ -162,15 +163,15 @@ CALLS_SIGNAL=-
 # the wait between frames watches.
 read_crew() {  # <home>
   local reading records working stopped validating paused attention ready
-  local known age decisions failed lost night kind id title calls
+  local known age decisions failed lost night kind id title calls _ready_list
   READING_KNOWN=0
   FAILED=-
   NIGHT_DONE=-
   CALL_KIND=-
   CALLS_SIGNAL=-
-  reading=$(fm_fleet_status_counts "$1/state" strip 2>/dev/null) || return 0
+  reading=$(fm_fleet_status_counts "$1/state" overview 2>/dev/null) || return 0
   IFS=$'\t' read -r records working stopped validating paused attention ready \
-    known age decisions failed lost night kind id title calls <<EOF
+    known age decisions failed lost night kind id title calls _ready_list <<EOF
 $reading
 EOF
   CALLS_SIGNAL=${calls:--}
