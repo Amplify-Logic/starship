@@ -2732,6 +2732,154 @@ SH
   pass "factory pane: r on a factory reads only a job the screen draws a Read line for"
 }
 
+# add_routine_runs [project]: a day of a recurring reminder pass in Garden
+# Journal, or the project named, each pass its own job: two finished with a
+# report, one failed, one running now.
+add_routine_runs() {
+  python3 - "$HOME_FIX" "$NOW" "${1:-garden-journal}" <<'PY'
+import json, os, sys
+home, now, project = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+state, path = os.path.join(home, "state"), os.path.join(home, "snapshot.json")
+world = json.load(open(path))
+
+def task(tid, cs, detail, started, lines, kind="scout"):
+    meta = os.path.join(state, tid + ".meta")
+    open(meta, "w").write("kind=%s\nmode=no-mistakes\nyolo=off\nspawn_gen=s%d.1.1\n" % (kind, started))
+    status = os.path.join(state, tid + ".status")
+    open(status, "w").write("\n".join(lines) + "\n")
+    os.utime(status, (now - 3600, now - 3600))
+    world["tasks"].append({"id": tid, "kind": kind, "project": "/projects/" + project,
+                           "current_state": {"state": cs[0], "source": cs[1], "detail": detail,
+                                             "raw": "state: %s · source: %s · %s" % (cs[0], cs[1], detail)},
+                           "paths": {"meta": {"path": meta}, "status_log": {"path": status}},
+                           "hints": {"open_decisions": []}, "pr": {"url": None}})
+
+def row(rid, title, st="in_flight", **extra):
+    base = {"id": rid, "title": title, "repo": project, "state": st, "structured": True, "kind": "scout",
+            "captain_actionable": False, "hold_kind": None, "hold_bucket": None, "hold_reason": None,
+            "hold_set": None, "hold_until": None, "unresolved_blocker_ids": [], "since": "2026-11-14",
+            "completion": {"verb": None, "date": None}, "pr_url": None}
+    base.update(extra)
+    world["backlog"]["records"].append(base)
+
+for tid, at in (("remind-0600", now - 7200), ("remind-0700", now - 3600)):
+    task(tid, ("done", "status-log"), "report written", at, ["done [at=%d]: report written" % (at + 600)])
+    row(tid, "Reminder pass %s" % tid[-4:], "done", completion={"verb": "reported", "date": "2026-11-14"})
+task("remind-0715", ("failed", "status-log"), "the weather service did not answer", now - 2700,
+     ["failed [at=%d]: the weather service did not answer" % (now - 2400)])
+row("remind-0715", "Reminder pass 0715")
+task("remind-0750", ("working", "pane"), "harness busy (claude-hook)", now - 600,
+     ["working [at=%d]: set up" % (now - 590)])
+open(os.path.join(state, "remind-0750.busy-state"), "w").write(
+    "v1 gen=g1 seq=2 state=busy source=claude-hook event=user-prompt-submit ts=%d\n" % (now - 60))
+row("remind-0750", "Reminder pass 0750")
+json.dump(world, open(path, "w"), indent=1)
+PY
+}
+
+# mark_routine <project> <value>: give the factory of that project a
+# `routine:` line in the registry.
+mark_routine() {
+  python3 -c 'import sys; p, project, value = sys.argv[1:]; t = open(p).read()
+line = "projects: %s\n" % project
+open(p, "w").write(t.replace(line, line + "routine: %s\n" % value))' "$HOME_FIX/data/factories.md" "$1" "$2"
+}
+
+test_routine_runs_fold_into_one_line_and_stay_out_of_the_feed() {
+  reset_case
+  write_registry
+  # The registry marks Garden Journal's reminder passes as routine.
+  mark_routine garden-journal "Reminder pass"
+  write_world
+  add_routine_runs
+  take_record
+  local garden='.factories[] | select(.id == "garden-journal")'
+  assert_equals "$(q "$garden | .routine | join(\",\")")" "Reminder pass" "the factory's routine mark"
+  assert_equals "$(q "[$garden | .jobs[] | select(.routine != null) | .id] | sort | join(\" \")")" \
+    "remind-0715 remind-0750" "each live reminder pass is routine"
+  assert_equals "$(q "$garden | .routine_runs[0] | \"\(.kind)|\(.today)|\(.last_word)|\(.last)|\(.running)|\(.folded | join(\",\"))\"")" \
+    "Reminder pass|4|started|1794642600|1|remind-0750" "the routine line: runs today, the last, and what it folds"
+  assert_equals "$(q '[.feed[] | select(.job // "" | startswith("remind-")) | "\(.job)=\(.word)"] | join(" ")')" \
+    "remind-0715=failed" "only the failed reminder pass is in the feed"
+  assert_equals "$(q '[.feed[] | select(.job // "" | startswith("remind-") | not) | "\(.word)|\(.actor)"] | join(" ")')" \
+    "failed|Garden Journal PR ready|Garden Journal finished|Recipe Box asked you|Garden Journal landed|Recipe Box asked you|Sample Shop" \
+    "the rest of the feed is as before"
+  assert_equals "$(q .count_line)" "3 jobs running · 3 need you · 1 idle" "a folded pass is not a running job"
+  assert_equals "$(q "$garden | .crew.busy")" "0" "a folded pass does not keep the crew busy"
+  local out
+  out=$(python3 "$FACTORY" --plain --width 92) || fail "--plain failed"
+  has_line "$out" " ↻ Reminder pass 4 runs today · last started 07:50 running" "the routine line"
+  assert_not_contains "$out" "Reminder pass 0750" "the running pass folds into the routine line"
+  assert_not_contains "$out" "Reminder pass 0600" "a finished pass is in the feed"
+  has_line "$out" " ● Reminder pass 0715 stuck" "a failed pass shows as usual"
+  has_line "$out" " 07:20 Garden Journal failed Reminder pass 0715 failed; Starship is on it." \
+    "a failed pass is in the feed"
+  pass "factory pane: routine runs fold into one line, and only a failed one reaches the feed"
+}
+
+test_a_folded_pass_counts_as_idle_and_hides_no_other_card() {
+  reset_case
+  write_registry
+  mark_routine recipe-box "Reminder pass"
+  write_world
+  add_routine_runs recipe-box
+  take_record
+  local recipe='.factories[] | select(.id == "recipe-box")'
+  assert_equals "$(q "$recipe | .routine_runs[0] | \"\(.last_word)|\(.last)|\(.running)\"")" \
+    "started|1794642600|1" "the routine line: a pass started at 07:50 runs now"
+  assert_equals "$(q "$recipe | \"\(.state)|\(.idle_since)|\(.crew.busy)\"")" "idle|1794642600|0" \
+    "the factory is idle since its last pass, not since an older event in the feed"
+  assert_equals "$(q .count_line)" "3 jobs running · 3 need you · 1 idle" "the folded pass is not a running job"
+  local out
+  out=$(python3 "$FACTORY" --plain --width 92) || fail "--plain failed"
+  assert_contains "$out" "Recipe Box   idle since 07:50" "the factory reads idle since its last pass, as the count line counts it"
+  has_line "$out" " ● Reminder pass 0715 stuck" "the stuck pass keeps its row while the next one runs folded"
+  has_line "$out" " ↻ Reminder pass 4 runs today · last started 07:50 running" "the routine line"
+  assert_not_contains "$out" "Reminder pass 0750" "the running pass folds into the routine line"
+  pass "factory pane: a folded pass counts as idle and hides no other card"
+}
+
+test_a_routine_line_is_yes_no_or_title_kinds() {
+  local value want
+  while IFS='|' read -r value want; do
+    reset_case
+    write_registry
+    mark_routine garden-journal "$value"
+    write_world
+    add_routine_runs
+    take_record
+    assert_equals "$(q '[.factories[] | select(.id == "garden-journal") | .jobs[] | select(.routine != null)
+      | "\(.id)=\(.routine)"] | sort | join(" ")')" "$want" "routine: $value"
+  done <<'CASES'
+YES|garden-chart=Routine work garden-share=Routine work garden-water=Routine work recipe-units=Routine work remind-0715=Routine work remind-0750=Routine work
+No|
+true|
+remind|
+reminder PASS, Garden rem, Garden|garden-water=Garden remind-0715=reminder PASS remind-0750=reminder PASS
+CASES
+  pass "factory pane: a routine line is yes, no, or kinds matched by a job's title"
+}
+
+test_without_a_routine_mark_every_run_shows_as_before() {
+  reset_case
+  write_registry
+  write_world
+  add_routine_runs
+  take_record
+  assert_equals "$(q '[.factories[] | .routine_runs | length] | add')" "0" "no routine line without a mark"
+  assert_equals "$(q '[.factories[].jobs[] | select(.routine != null)] | length')" "0" \
+    "no job is routine without a mark"
+  assert_equals "$(q '[.feed[] | select(.job // "" | startswith("remind-")) | "\(.job)=\(.word)"] | join(" ")')" \
+    "remind-0715=failed remind-0700=finished remind-0600=finished remind-0600=closed remind-0700=closed" \
+    "every pass reaches the feed"
+  local out
+  out=$(python3 "$FACTORY" --plain --width 92) || fail "--plain failed"
+  assert_contains "$out" "     ● Reminder pass 0750" "the running pass has its own card"
+  assert_not_contains "$out" "↻" "a routine line without a mark"
+  has_line "$out" " 07:10 Garden Journal finished Reminder pass 0700 is finished." "a finished pass is in the feed"
+  pass "factory pane: without a routine mark every run shows as before"
+}
+
 fm_test_run \
   test_the_record_words_every_state \
   test_the_plain_screen_is_the_record_as_text \
@@ -2739,6 +2887,10 @@ fm_test_run \
   test_a_blocker_that_was_finished_and_archived_holds_nothing_up \
   test_only_the_highlighted_call_opens_as_a_card \
   test_closed_work_reads_closed_and_only_delivered_work_reads_finished \
+  test_routine_runs_fold_into_one_line_and_stay_out_of_the_feed \
+  test_a_folded_pass_counts_as_idle_and_hides_no_other_card \
+  test_a_routine_line_is_yes_no_or_title_kinds \
+  test_without_a_routine_mark_every_run_shows_as_before \
   test_a_job_with_no_sign_of_life_reads_quiet \
   test_a_changing_pane_is_a_sign_of_life \
   test_ready_work_held_until_a_date_is_not_ready_for_you \

@@ -5,8 +5,9 @@ A factory is one segment of the owner's work: a crew with its own work list,
 rules, memory and workers. data/factories.md names a home's factories and maps
 each to its projects; with no registry every registered project in
 data/projects.md is its own factory. docs/factory-pane.md owns what the pane
-shows and why, and docs/configuration.md owns the registry format; this header
-owns the commands.
+shows and why, and the registry's `routine:` line ("Routine work");
+docs/configuration.md owns the rest of the registry format; this header owns
+the commands.
 
 Usage:
   fm-factory.py --data [--fresh]          print the record as JSON (fm-factory.v1)
@@ -385,6 +386,30 @@ def display_name(project: str) -> str:
     return project
 
 
+ROUTINE_ALL = "Routine work"
+
+
+def routine_marks(value: str) -> List[str]:
+    """A factory's `routine:` field: every job (`yes`), none (`no`), or the job title starts it lists."""
+    if value.strip().lower() == "yes":
+        return [ROUTINE_ALL]
+    if value.strip().lower() in ("", "no"):
+        return []
+    return [kind.strip() for kind in value.split(",") if kind.strip()]
+
+
+def routine_kind(marks: List[str], title: str) -> Optional[str]:
+    """Which routine kind a job is in its factory, by its title, or None for ordinary work."""
+    if ROUTINE_ALL in marks:
+        return ROUTINE_ALL
+    text = (title or "").lower()
+    for kind in marks:
+        start = kind.lower()
+        if text.startswith(start) and not text[len(start):len(start) + 1].isalpha():
+            return kind
+    return None
+
+
 def load_registry(home: str) -> Tuple[List[Dict[str, Any]], str]:
     """data/factories.md, or one factory per registered project without it.
 
@@ -398,7 +423,7 @@ def load_registry(home: str) -> Tuple[List[Dict[str, Any]], str]:
         line = raw.rstrip()
         if line.startswith("## "):
             current = {"name": line[3:].strip(), "id": None, "about": None, "projects": [],
-                       "rules": [], "learned": []}
+                       "rules": [], "learned": [], "routine": []}
             factories.append(current)
             section = None
             continue
@@ -420,12 +445,14 @@ def load_registry(home: str) -> Tuple[List[Dict[str, Any]], str]:
                 else:
                     current["learned"].append({"when": None, "what": item})
             continue
-        match = re.match(r"^(id|about|projects):\s*(.*)$", stripped, re.I)
+        match = re.match(r"^(id|about|projects|routine):\s*(.*)$", stripped, re.I)
         if match:
             key, value = match.group(1).lower(), match.group(2).strip()
             section = None
             if key == "projects":
                 current["projects"] = [p.strip() for p in value.split(",") if p.strip()]
+            elif key == "routine":
+                current["routine"] = routine_marks(value)
             elif value:
                 current[key] = value
     if factories:
@@ -441,7 +468,7 @@ def load_registry(home: str) -> Tuple[List[Dict[str, Any]], str]:
     for row in load_projects(home):
         factories.append({"name": row["label"] or display_name(row["name"]), "id": slug(row["name"]),
                           "about": None, "projects": [row["name"]],
-                          "rules": [], "learned": []})
+                          "rules": [], "learned": [], "routine": []})
     return factories, "projects"
 
 
@@ -950,6 +977,33 @@ def request_id_of(text: str) -> str:
     return re.sub(r"[^A-Za-z0-9._:-]", "-", text)[:128]
 
 
+ROUTINE_QUIET_WORDS = ("finished", "PR ready", "landed", "closed")
+
+
+def routine_folds(job: Dict[str, Any]) -> bool:
+    """Whether a routine job folds into its factory's routine line: only while it runs as expected or waits."""
+    return bool(job.get("routine")) and (job["state"] == "waiting" or (job["state"] == "running"
+                                                                       and not job.get("quiet")))
+
+
+def routine_lines(factory: Dict[str, Any],
+                  runs: Dict[Tuple[str, str], Dict[str, List[Tuple[int, str]]]]) -> List[Dict[str, Any]]:
+    """One line per routine kind of a factory: its runs today, the last of them, and what it folds."""
+    lines = []
+    for kind in factory["routine"]:
+        today = runs.get((factory["id"], kind), {})
+        folded = [j for j in factory["jobs"] if j.get("routine") == kind and routine_folds(j)]
+        if not today and not folded:
+            continue
+        marks = [mark for task_marks in today.values() for mark in task_marks]
+        last = max(marks) if marks else None
+        lines.append({"kind": kind, "today": len(today),
+                      "last": last[0] if last else None, "last_word": last[1] if last else None,
+                      "running": len([j for j in folded if j["state"] == "running"]),
+                      "folded": [j["id"] for j in folded]})
+    return lines
+
+
 def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[int] = None,
                  activity: Optional[Dict[str, int]] = None, notes: Optional[List[Dict[str, Any]]] = None,
                  backlog: Optional[Dict[str, Any]] = None,
@@ -988,7 +1042,7 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
         for project in factory["projects"]:
             owner[project.lower()] = factory["id"]
     other = {"name": "Other work", "id": "other-work", "about": "work no factory claims", "projects": [],
-             "rules": [], "learned": []}
+             "rules": [], "learned": [], "routine": []}
 
     def factory_of(project: Optional[str]) -> str:
         key = (project or "").strip().lower()
@@ -1105,6 +1159,7 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
                                "started": started_at(meta), "doing": None, "doing_from": None,
                                "last_sign_of_life": None, "sign_of_life_from": None, "quiet": False,
                                "until": None, "pr": (task.get("pr") or {}).get("url"), "queue": None,
+                               "routine": routine_kind(by_id[fid]["routine"], title),
                                "read": read_sources(home, task["id"], ((row or {}).get("hold_reason"),))}
         if bucket == "working":
             job.update(state="running", step="planning" if kind == "scout" else "building")
@@ -1192,6 +1247,7 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
                "started": None, "doing": None, "doing_from": None, "last_sign_of_life": None,
                "sign_of_life_from": None, "quiet": False, "until": None, "pr": row.get("pr_url"),
                "queue": queue_word(row, row["id"] in decision_ids, today),
+               "routine": routine_kind(by_id[fid]["routine"], title),
                "read": read_sources(home, row["id"], (row.get("hold_reason"),))}
         if row["id"] in decision_ids:
             job["state"] = "waiting on you"
@@ -1229,6 +1285,27 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
     # Since you last looked: outcomes and the owner's own calls, never a
     # worker's pause, a question a worker put to Starship, or a blocker.
     done_rows: List[Tuple[Dict[str, Any], str, Dict[str, str]]] = []
+    # A routine job's runs today, per factory and routine kind: each task id
+    # with the times it started, finished or failed.
+    local_today = time.strftime("%Y-%m-%d", time.localtime(now))
+    routine_of: Dict[str, str] = {}
+    runs: Dict[Tuple[str, str], Dict[str, List[Tuple[int, str]]]] = {}
+
+    def is_today(at: Optional[int]) -> bool:
+        return bool(at) and time.strftime("%Y-%m-%d", time.localtime(at)) == local_today
+
+    def note_run(fid: str, kind: str, task_id: str, at: Optional[int] = None, word: str = "") -> None:
+        routine_of[task_id] = kind
+        marks = runs.setdefault((fid, kind), {}).setdefault(task_id, [])
+        if at:
+            marks.append((at, word))
+
+    for factory in factories:
+        for job in factory["jobs"]:
+            if job.get("routine") and job["started"] and is_today(job["started"]):
+                note_run(factory["id"], job["routine"], job["id"], job["started"], "started")
+            elif job.get("routine"):
+                routine_of[job["id"]] = job["routine"]
     for task in snapshot.get("tasks") or []:
         task_id = task.get("id")
         if not task_id or task.get("kind") == "secondmate":
@@ -1239,8 +1316,13 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
             fid = factory_of((row or {}).get("repo") or os.path.basename((task.get("project") or "").rstrip("/")))
         meta = meta_values(((task.get("paths") or {}).get("meta") or {}).get("path"))
         title = titles.get(task_id) or title_of(task_id, meta)
+        kind = routine_kind(by_id[fid]["routine"], title)
+        if kind:
+            routine_of[task_id] = kind
         for event in status_events(((task.get("paths") or {}).get("status_log") or {}).get("path")):
             verb, at = event["verb"], event["at"]
+            if kind and verb in ("done", "failed") and at and at <= now and is_today(at):
+                note_run(fid, kind, task_id, at, "finished" if verb == "done" else "failed")
             if not at or not since <= at <= now:
                 continue
             base = {"at": at, "date": None, "actor": by_id[fid]["name"], "factory": fid, "job": task_id}
@@ -1277,6 +1359,12 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
     for row in closed:
         completion = row.get("completion") or {}
         title = row.get("title") or row["id"]
+        fid = factory_of(row.get("repo"))
+        kind = routine_kind(by_id[fid]["routine"], title)
+        if kind:
+            routine_of[row["id"]] = kind
+            if completion.get("date") == local_today:
+                note_run(fid, kind, row["id"])
         if row["id"] not in delivered:
             word = "closed"
             text = "%s was closed." if "captain" in (row.get("kind"), row.get("hold_kind")) else \
@@ -1287,7 +1375,6 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
             word, text = "landed", "%s is in."
         if word == "finished" and row["id"] in finished_in_feed:
             continue
-        fid = factory_of(row.get("repo"))
         feed.append({"at": None, "date": completion["date"], "actor": by_id[fid]["name"], "factory": fid,
                      "job": row["id"], "word": word, "text": text % title})
     for at, fid, who in steer_log(home):
@@ -1332,6 +1419,9 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
         found = [{"at": parse_iso(note.get("at")), "key": answers[note.get("request_id")]}
                  for note in notes if note.get("request_id") in answers]
         need["answered"] = max(found, key=lambda item: item["at"] or 0) if found else None
+    # A routine job's outcomes fold into its factory's routine line; a failed
+    # run, and a call it put to the owner, still show as usual.
+    feed = [e for e in feed if not (e.get("job") in routine_of and e["word"] in ROUTINE_QUIET_WORDS)]
     feed.sort(key=lambda e: (e["at"] if e["at"] is not None else (parse_iso(e["date"]) or 0)), reverse=True)
     feed = feed[:FEED_CAP]
 
@@ -1341,20 +1431,22 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
                               -(n["since"] or 0)))
     for factory in factories:
         factory["needs"] = [n["id"] for n in needs if n["factory"] == factory["id"]]
-        running = [j for j in factory["jobs"] if j["state"] == "running"]
+        running = [j for j in factory["jobs"] if j["state"] == "running" and not routine_folds(j)]
         if factory["needs"]:
             factory["state"] = "needs you"
         elif running:
             factory["state"] = "at work"
         else:
             factory["state"] = "idle"
-        idle_marks = [e["at"] for e in feed if e["factory"] == factory["id"] and e["at"]]
+        factory["routine_runs"] = routine_lines(factory, runs)
+        idle_marks = [e["at"] for e in feed if e["factory"] == factory["id"] and e["at"]] + \
+            [line["last"] for line in factory["routine_runs"] if line["last"]]
         factory["idle_since"] = max(idle_marks) if factory["state"] == "idle" and idle_marks else None
         factory["crew"] = {"workers": len([j for j in factory["jobs"] if j["started"]]), "busy": len(running)}
 
     if other in factories and not other["jobs"] and not other["needs"]:
         factories.remove(other)
-    running_total = sum(1 for f in factories for j in f["jobs"] if j["state"] == "running")
+    running_total = sum(1 for f in factories for j in f["jobs"] if j["state"] == "running" and not routine_folds(j))
     idle_total = sum(1 for f in factories if f["state"] == "idle")
     queue = queue_counts([j for f in factories for j in f["jobs"]])
     count_line = "%s running · %s · %s" % (
@@ -1377,7 +1469,7 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
         "needs_you": needs,
         "factories": [{k: f[k] for k in ("id", "name", "about", "projects", "steered_by", "state",
                                          "idle_since", "crew", "needs", "jobs", "next", "queue", "rules",
-                                         "learned", "talk")}
+                                         "learned", "talk", "routine", "routine_runs")}
                       for f in factories],
         "feed": feed,
         "snapshot": {"generated": snapshot.get("generated"), "schema": snapshot.get("schema")},
@@ -2111,10 +2203,12 @@ class View:
     @staticmethod
     def overview_jobs(fac: Dict[str, Any]) -> List[Dict[str, Any]]:
         """The jobs a factory shows on the overview: what is moving, and calls on you that have started."""
-        if fac["state"] == "idle":
+        if fac["state"] == "idle" and not any(j["state"] == "running" for j in fac["jobs"]):
             return []
-        return [job for job in fac["jobs"] if job["state"] in ("running", "stuck", "waiting", "stopped", "no worker") or (
-            job["started"] and job["state"] in ("waiting on you", "ready for you"))]
+        folded = {ident for line in fac.get("routine_runs") or [] for ident in line["folded"]}
+        return [job for job in fac["jobs"] if job["id"] not in folded and (
+            job["state"] in ("running", "stuck", "waiting", "stopped", "no worker") or (
+                job["started"] and job["state"] in ("waiting on you", "ready for you")))]
 
     @staticmethod
     def page_jobs(fac: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], Dict[str, int]]:
@@ -2362,14 +2456,33 @@ class View:
             line.stop = ("factory", fac["id"])
         return rows
 
+    def routine_rows(self, width: int, fac: Dict[str, Any]) -> List[Row]:
+        """A routine kind's runs folded into one line: how many today, the last, and whether one runs now."""
+        rows = []
+        for line in fac.get("routine_runs") or []:
+            words = [plural(line["today"], "run today", "runs today") if line["today"] else "no run today"]
+            if line.get("last"):
+                words.append("last %s %s" % (line["last_word"], when_words(line["last"], self.now())))
+            now = []
+            if line["running"]:
+                now = [S("running", "amber")]
+            elif line["folded"]:
+                now = [S("waiting", "amber")]
+            rows.append(row(width, [S("     "), S("↻ ", "faint"), S(line["kind"], "mist"),
+                                    S("  " + " · ".join(words), "faint")], now))
+        return rows
+
     def factory_lines(self, width: int, fac: Dict[str, Any]) -> List[Row]:
         band = self.here("factory", fac["id"])
         head = [S(" "), self.mark("factory", fac["id"]), S(fac["name"], "ice", True)]
-        if fac["state"] == "idle":
-            return [row(width, head + [S("   " + self.idle_words(fac), "faint")], self.steer(fac), band=band)]
-        rows = [row(width, head + [S("   " + self.queue_brief(fac), "faint")], self.steer(fac), band=band)]
+        idle = fac["state"] == "idle"
+        words = self.idle_words(fac) if idle else self.queue_brief(fac)
+        rows = [row(width, head + [S("   " + words, "faint")], self.steer(fac), band=band)]
         for job in self.overview_jobs(fac):
             rows += self.job_rows(width, job, full=False)
+        rows += self.routine_rows(width, fac)
+        if idle:
+            return rows
         nxt = fac.get("next")
         if nxt:
             text = [S("       next  ", "faint"), S(nxt["title"], "mist")]
