@@ -176,7 +176,7 @@ fm_reap_pids_under_roots() {  # <dir>...
   local pids="$cwd_pids
 $arg_pids"
   FM_REAP_PIDS=$(printf '%s\n' "$pids" | grep -E '^[0-9]+$' | sort -un \
-    | grep -Fxv -f <(fm_reap_own_ancestry; printf '%s\n' "$$") || true)
+    | grep -F -x -v -f <(fm_reap_own_ancestry; printf '%s\n' "$$") || true)
 }
 
 fm_reap_log_processes() {  # <prefix> <pid>...
