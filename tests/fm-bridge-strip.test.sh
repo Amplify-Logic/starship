@@ -455,6 +455,46 @@ test_a_parked_decision_gives_way_to_the_next_call() {
   pass "bridge strip: a parked decision gives way to the next call without waiting for the workers' reading"
 }
 
+# strip_reading: the reading the strip takes for a frame from the cache, one
+# field per line.
+strip_reading() {
+  FM_FLEET_STATE_TTL=3600 FM_FLEET_STATE_MAX_AGE=3600 \
+    FM_FLEET_STATE_READER="$BINDIR/fake-crew-state" bash -c '
+      . "$1/bin/fm-fleet-status-lib.sh"
+      fm_fleet_status_counts "$2" strip
+    ' _ "$ROOT" "$HOME_FIX/state" | tr '\t' '\n'
+}
+
+# On 2026-11-15 a strip still running code from before the calls carried their
+# signal read a reading saved by the newer code, and the title, the last field
+# the older code knew, took in the fields saved after it, tab and all: the strip
+# read 'Decide: <title>insights<signal>...'. Each saved reading is read here as
+# a reader meets one saved by newer code, with a field after the ones it knows.
+test_a_title_never_runs_into_fields_a_newer_reading_adds() {
+  local title='What is still open from the life-insights report' signal list
+  reset_case
+  held life-insights "$title"
+  cache_fleet
+  printf '\tnewer-field' >> "$HOME_FIX/state/.status-fleet-state"
+  assert_contains "$(cached_frame 200 | plain)" "▸ Decide: $title   " \
+    "the reading's title ran into a field after it"
+  # The owner's calls refreshed on their own between full readings.
+  cache_fleet
+  list=$(awk -F'\t' '{ print $18 }' "$HOME_FIX/state/.status-fleet-state")
+  printf '\tnewer-field' >> "$HOME_FIX/state/.status-fleet-state"
+  printf 'moved\n' > "$HOME_FIX/state/.owner-calls-changed"
+  signal=$(. "$ROOT/bin/fm-owner-calls-signal-lib.sh"; fm_owner_calls_signal "$HOME_FIX/state")
+  printf '%s\t%s\t%s\t1\t1\tdecision\tlife-insights\t%s\tnewer-field\n' \
+    "$signal" "$list" "$(date +%s)" "$title" > "$HOME_FIX/state/.status-fleet-calls"
+  assert_equals "decision
+life-insights
+$title
+$signal" "$(strip_reading | sed -n '14,17p')" "the refreshed calls' title ran into a field after it"
+  assert_contains "$(cached_frame 200 | plain)" "▸ Decide: $title   " \
+    "the refreshed calls' title was not shown on its own"
+  pass "bridge strip: a call's title never runs into a field a newer reading adds after it"
+}
+
 # watch_park <width> <id> <first> <next>: run the live strip under a pty, and
 # once it names <first>, park decision <id> and print how many seconds pass
 # until it names <next> instead (or `never`).
@@ -1080,6 +1120,7 @@ fm_test_run \
   test_a_title_is_shown_as_plain_text \
   test_a_click_on_the_call_opens_the_factory_pane_on_it \
   test_a_parked_decision_gives_way_to_the_next_call \
+  test_a_title_never_runs_into_fields_a_newer_reading_adds \
   test_the_live_strip_draws_the_next_call_within_seconds \
   test_the_red_alert_shows_failed_work_and_stopped_workers_until_they_clear \
   test_the_red_alert_says_when_a_mothership_room_cannot_be_reached \
