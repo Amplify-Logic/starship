@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
-# Behavioral tests for how a Mothership room card hears about the work the owner
-# took on for it (bin/fm-procevent-mothership.sh "OUTCOMES ON THE CARD"): the
-# adapter's report and blocked-scan, and the real lifecycle steps that call them,
-# bin/fm-spawn.sh (fake tmux, real git worktree), the real watcher through
+# Behavioral tests for how a Mothership room hears about a task
+# (bin/fm-procevent-mothership.sh "OUTCOMES IN THE ROOM"): a card about the work
+# the owner took on for it, and the room's Ships view about a job of a project
+# the owner shared with that room. They drive the adapter's report and
+# blocked-scan, and the real lifecycle steps that call them, bin/fm-spawn.sh
+# (fake tmux, real git worktree), the real watcher through
 # bin/fm-watch-checkpoint.sh, bin/fm-pr-check.sh, the shared PR merge outcome in
-# bin/fm-merge-outcome-lib.sh, and bin/fm-merge-local.sh. A scripted stand-in
-# for the Mothership link records what each send would have told the room; the
-# rooms, projects and cards are invented.
+# bin/fm-merge-outcome-lib.sh, bin/fm-merge-local.sh and bin/fm-teardown.sh. A
+# scripted stand-in for the Mothership link records what each send would have
+# told the room; the rooms, projects and cards are invented.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -21,7 +23,9 @@ mkdir -p "$STUB_BIN"
 
 # The stand-in link. $MS_STUB is its directory. progress, problem and result
 # each append one line to `sent` naming the card, room, project, tags, link,
-# client id and text. Like the real link, a send the room's allow-list in
+# client id and text, a progress --landing as `landing`; job appends one line
+# naming the job id, room, project, tags, title, state, link, client id and
+# text, or `drop` for --drop. Like the real link, a send the room's allow-list in
 # $MOTHERSHIP_CONFIG does not let through (its project, and one of the entry's
 # tags when it names any) stops with "Not sent", and a text holding a line of
 # `words` is refused; neither is recorded. A `down` file makes every send fail
@@ -32,10 +36,10 @@ set -u
 d=${MS_STUB:?}
 cmd=${1-}
 [ "$#" -eq 0 ] || shift
-case "$cmd" in progress|problem|result) ;; *) echo "unexpected command: $cmd" >&2; exit 1 ;; esac
+case "$cmd" in progress|problem|result|job) ;; *) echo "unexpected command: $cmd" >&2; exit 1 ;; esac
 card=$1
 shift
-room='' project='' tags='' link='' cid='' text=''
+room='' project='' tags='' link='' cid='' text='' title='' state='' drop=''
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --room) room=$2; shift 2 ;;
@@ -43,6 +47,11 @@ while [ "$#" -gt 0 ]; do
     --tag) tags="$tags${tags:+,}$2"; shift 2 ;;
     --link) link=$2; shift 2 ;;
     --cid) cid=$2; shift 2 ;;
+    --title) title=$2; shift 2 ;;
+    --state) state=$2; shift 2 ;;
+    --drop) drop=1; shift ;;
+    --landing) [ "$cmd" = progress ] || { echo "--landing on $cmd" >&2; exit 1; }; cmd=landing; shift ;;
+    -*) echo "unexpected option: $1" >&2; exit 1 ;;
     *) text=$1; shift ;;
   esac
 done
@@ -58,8 +67,15 @@ if [ -s "$d/words" ] && printf '%s\n' "$text" | grep -qiFf "$d/words"; then
   exit 1
 fi
 [ ! -e "$d/down" ] || { echo "Could not reach the room at https://room.example.test" >&2; exit 3; }
-printf '%s card=%s room=%s project=%s tags=%s link=%s cid=%s text=%s\n' \
-  "$cmd" "$card" "$room" "$project" "$tags" "$link" "$cid" "$text" >> "$d/sent"
+if [ "$cmd" = job ] && [ -n "$drop" ]; then
+  printf 'drop id=%s room=%s project=%s tags=%s cid=%s\n' "$card" "$room" "$project" "$tags" "$cid" >> "$d/sent"
+elif [ "$cmd" = job ]; then
+  printf 'job id=%s room=%s project=%s tags=%s title=%s state=%s link=%s cid=%s text=%s\n' \
+    "$card" "$room" "$project" "$tags" "$title" "$state" "$link" "$cid" "$text" >> "$d/sent"
+else
+  printf '%s card=%s room=%s project=%s tags=%s link=%s cid=%s text=%s\n' \
+    "$cmd" "$card" "$room" "$project" "$tags" "$link" "$cid" "$text" >> "$d/sent"
+fi
 echo '{"ok":true}'
 SH
 chmod +x "$STUB_BIN/mothership"
@@ -112,8 +128,8 @@ need_tools() {
 test_help() {
   local help
   if help=$("$ADAPTER" --help 2>&1); then fail "help exited zero"; fi
-  assert_contains "$help" "report [--detach] <task-id> started|pr|blocked|merged" "help names report"
-  assert_contains "$help" "OUTCOMES ON THE CARD" "help explains what the card hears"
+  assert_contains "$help" "report [--detach] <task-id> <event>" "help names report"
+  assert_contains "$help" "OUTCOMES IN THE ROOM" "help explains what the room hears"
   pass "help names report and blocked-scan"
 }
 
@@ -135,13 +151,16 @@ test_report_tells_the_card_each_event_once() {
   assert_contains "$out" "already heard that it landed" "nothing but the result after it"
   assert_equals "$(cat <<EOF
 progress card=c6 room=alpha project=studio tags=alpha link= cid=fm-room-t1-started text=Work has started.
-progress card=c6 room=alpha project=studio tags=alpha link= cid=fm-room-t1-pr-$(printf '%s' "$PR_URL" | cksum | awk '{ print $1 }') text=Ready for review: $PR_URL
+landing card=c6 room=alpha project=studio tags=alpha link= cid=fm-room-t1-pr-$(printf '%s' "$PR_URL" | cksum | awk '{ print $1 }') text=Ready for review: $PR_URL
 problem card=c6 room=alpha project=studio tags=alpha link= cid=fm-room-t1-blocked-$(printf 'blocked [at=1790000100]: the build needs a key' | cksum | awk '{ print $1 }') text=Held up by a blocker; looking into it.
 result card=c6 room=alpha project=studio tags=alpha link=$PR_URL cid=fm-room-t1-merged text=Done: the change has landed.
 EOF
 )" "$(sent_of "$h")" "the card heard each event once, in the task's project with its allow-list tag, and none of the blocker's own words"
   [ -z "$(wakes_of "$h")" ] || fail "a told card woke the first mate: $(wakes_of "$h")"
-  pass "a task's card hears that work started, its PR, a blocker and that it landed, each once, and nothing after it landed"
+  out=$(in_home "$h" "$ADAPTER" report room-t1 dropped 2>&1) || fail "a card's drop failed: $out"
+  assert_contains "$out" "nothing to report" "a card hears nothing of a cleanup"
+  assert_equals 4 "$(sent_of "$h" | grep -c .)" "the cleanup sent nothing to the card"
+  pass "a task's card hears that work started, its PR as about to land, a blocker and that it landed, each once, and nothing after it landed"
 }
 
 test_a_quoted_ref_is_read() {
@@ -153,12 +172,12 @@ test_a_quoted_ref_is_read() {
   add_task "$h" room-q2 sample 'Taken on for `mothership: alpha/q2`.'
   add_task "$h" room-q3 sample "Taken on (mothership: alpha/q3)."
   add_task "$h" room-q4 sample "Taken on as 'mothership: alpha/q4'..."
-  add_task "$h" room-q5 sample "Not a ref: notmothership: alpha/q5"
+  add_task "$h" room-q5 private-notes "Not a ref: notmothership: alpha/q5"
   for out in q1 q2 q3 q4; do
     in_home "$h" "$ADAPTER" report "room-$out" started >/dev/null 2>&1 || fail "report room-$out failed"
   done
   out=$(in_home "$h" "$ADAPTER" report room-q5 started 2>&1) || fail "report room-q5 failed: $out"
-  assert_equals "nothing to report: room-q5 serves no room card" "$out" "a ref glued to a word is no ref"
+  assert_equals "nothing to report: room-q5 serves no room card and its project is shared with no room" "$out" "a ref glued to a word is no ref"
   assert_equals "$(printf 'q1\nq2\nq3\nq4')" "$(sent_of "$h" | sed -E 's/^progress card=([^ ]*) .*$/\1/')" \
     "a ref in quotes, backticks or parentheses names its card, without the closing mark or trailing dots"
   pass "a ref quoted, backticked or parenthesised in the body still tells its card"
@@ -168,9 +187,18 @@ test_no_card_sends_nothing() {
   local h out
   need_tools || return 0
   h=$(make_home nocard)
-  add_task "$h" plain-t1 sample "Ordinary work with no room behind it."
+  add_task "$h" plain-t1 private-notes "Ordinary work with no room behind it."
   out=$(in_home "$h" "$ADAPTER" report plain-t1 started 2>&1) || fail "report failed: $out"
-  assert_equals "nothing to report: plain-t1 serves no room card" "$out" "a task with no card has nothing to report"
+  assert_equals "nothing to report: plain-t1 serves no room card and its project is shared with no room" "$out" "a task with no card in an unshared project has nothing to report"
+  for event in working waits blocked merged dropped; do
+    printf 'blocked [at=1790000100]: stuck\n' > "$h/home/state/plain-t1.status"
+    out=$(in_home "$h" "$ADAPTER" report plain-t1 "$event" 2>&1) || fail "report $event failed: $out"
+    assert_contains "$out" "shared with no room" "an unshared project has nothing to report on $event"
+  done
+  out=$(in_home "$h" "$ADAPTER" report plain-t1 pr --pr "$PR_URL" 2>&1) || fail "report pr failed: $out"
+  assert_contains "$out" "shared with no room" "an unshared project has nothing to report on its PR"
+  : > "$h/home/state/plain-t1.meta"
+  in_home "$h" "$ADAPTER" blocked-scan >/dev/null 2>&1 || fail "a scan failed"
   out=$(in_home "$h" "$ADAPTER" report never-filed started 2>&1) || fail "report on an unknown task failed: $out"
   assert_contains "$out" "serves no room card" "a task the backlog does not hold has nothing to report"
   in_home "$h" "$ADAPTER" report --detach plain-t1 started >/dev/null 2>&1 || fail "a detached report failed"
@@ -178,7 +206,7 @@ test_no_card_sends_nothing() {
   [ ! -e "$h/home/state/mothership" ] || fail "a task with no card created state: $(ls -R "$h/home/state/mothership")"
   [ -z "$(sent_of "$h")" ] || fail "a task with no card sent something: $(sent_of "$h")"
   [ -z "$(wakes_of "$h")" ] || fail "a task with no card woke the first mate: $(wakes_of "$h")"
-  pass "a task that serves no room card sends nothing and creates no state"
+  pass "a task that serves no room card, in a project no room is shared, sends nothing and creates no state"
 }
 
 test_a_refused_send_tells_the_first_mate() {
@@ -298,12 +326,244 @@ test_blocked_scan_never_waits_on_a_send() {
   pass "the blocker scan never waits on a send that holds a task, and picks the task up on the next poll"
 }
 
+# job_lines <dir>: what the Ships view heard, without the parts every line of
+# one case shares: "<state>|<title>|<link>|<text>" per send, or "drop".
+job_lines() {
+  sent_of "$1" | sed -E \
+    -e 's/^job id=[^ ]* room=[^ ]* project=[^ ]* tags=[^ ]* title=(.*) state=([^ ]*) link=([^ ]*) cid=[^ ]* text=(.*)$/\2|\1|\3|\4/' \
+    -e 's/^drop id=.*$/drop/'
+}
+
+test_a_shared_job_shows_each_state() {
+  local h out
+  need_tools || return 0
+  h=$(make_home job-states)
+  add_task "$h" job-t1 sample "Ordinary work for a shared project."
+  printf 'working [at=1780000000]: a line from before the room followed it\n' > "$h/home/state/job-t1.status"
+  out=$(in_home "$h" "$ADAPTER" report job-t1 started 2>&1) || fail "report started failed: $out"
+  assert_equals "told: job-t1: the alpha room heard that work on it started" "$out" "started is told"
+  assert_equals "job id=job-t1 room=alpha project=sample tags= title=Room work for job-t1 state=working link= cid=fm-job-t1-started text=Work has started." \
+    "$(sent_of "$h")" "the job shows under its task id, title and project, with a fixed line"
+  out=$(in_home "$h" "$ADAPTER" report job-t1 working 2>&1) || fail "report working failed: $out"
+  assert_contains "$out" "already told" "a line from before the room followed the task is not told"
+
+  printf 'working [at=1790000000]: setup done\n' >> "$h/home/state/job-t1.status"
+  out=$(in_home "$h" "$ADAPTER" report job-t1 working 2>&1) || fail "report working failed: $out"
+  assert_contains "$out" "still working" "a line that leaves the state as it was sends nothing"
+  printf 'needs-decision [at=1790000100]: which of two colours\n' >> "$h/home/state/job-t1.status"
+  in_home "$h" "$ADAPTER" report job-t1 waits >/dev/null 2>&1 || fail "report waits failed"
+  out=$(in_home "$h" "$ADAPTER" report job-t1 waits 2>&1) || fail "report waits again failed: $out"
+  assert_contains "$out" "already told" "a decision is told once"
+  out=$(in_home "$h" "$ADAPTER" report job-t1 blocked 2>&1) || fail "report blocked with no blocker failed: $out"
+  assert_contains "$out" "nothing to report" "a blocked report with a newer decision line tells nothing"
+  printf 'blocked [at=1790000200]: the build needs a key\n' >> "$h/home/state/job-t1.status"
+  in_home "$h" "$ADAPTER" report job-t1 blocked >/dev/null 2>&1 || fail "report blocked failed"
+  printf 'working [at=1790000300]: back at it\n' >> "$h/home/state/job-t1.status"
+  in_home "$h" "$ADAPTER" report job-t1 working >/dev/null 2>&1 || fail "report working after the blocker failed"
+  in_home "$h" "$ADAPTER" report job-t1 pr --pr "$PR_URL" >/dev/null 2>&1 || fail "report pr failed"
+  in_home "$h" "$ADAPTER" report job-t1 merged --pr "$PR_URL" >/dev/null 2>&1 || fail "report merged failed"
+  out=$(in_home "$h" "$ADAPTER" report job-t1 pr --pr https://github.com/acme/sample/pull/8 2>&1) || fail "a late report failed: $out"
+  assert_contains "$out" "already heard that it landed" "nothing but the drop after it landed"
+  out=$(in_home "$h" "$ADAPTER" report job-t1 dropped 2>&1) || fail "report dropped failed: $out"
+  assert_contains "$out" "landing stays in the room" "a landed job is not taken off the view"
+  assert_equals "$(cat <<EOT
+working|Room work for job-t1||Work has started.
+waits|Room work for job-t1||Waiting on a decision.
+error|Room work for job-t1||Held up by a blocker; looking into it.
+working|Room work for job-t1||Work is under way.
+landing|Room work for job-t1|$PR_URL|Built and about to land.
+done|Room work for job-t1|$PR_URL|Landed.
+EOT
+)" "$(job_lines "$h")" "the job moved through each state once, with none of the status log's own words"
+  [ ! -e "$h/home/state/mothership/tasks/job-t1.json" ] || fail "a landed and cleaned-up job is still followed"
+  [ -z "$(wakes_of "$h")" ] || fail "a told job woke the first mate: $(wakes_of "$h")"
+
+  # A project the allow-list names only with tags carries them.
+  add_task "$h" job-t2 studio "Work for the tagged project."
+  in_home "$h" "$ADAPTER" report job-t2 started >/dev/null 2>&1 || fail "report started for the tagged project failed"
+  assert_contains "$(sent_of "$h" | tail -n 1)" "job id=job-t2 room=alpha project=studio tags=alpha " "the job carries the allow-list's tag"
+  pass "a job of a shared project shows on the Ships view as it starts, waits, is blocked, resumes, is about to land and lands"
+}
+
+test_a_dropped_job_leaves_the_view() {
+  local h out long
+  need_tools || return 0
+  h=$(make_home job-drop)
+  add_task "$h" job-d1 sample "Work that will be dropped."
+  in_home "$h" "$ADAPTER" report job-d1 started >/dev/null 2>&1 || fail "report started failed"
+  out=$(in_home "$h" "$ADAPTER" report job-d1 dropped 2>&1) || fail "report dropped failed: $out"
+  assert_equals "told: job-d1: the alpha room heard that it was dropped" "$out" "the drop is told"
+  assert_equals "drop id=job-d1 room=alpha project=sample tags= cid=fm-job-d1-dropped" "$(sent_of "$h" | tail -n 1)" "a dropped job is taken off the view"
+  [ ! -e "$h/home/state/mothership/tasks/job-d1.json" ] || fail "a dropped job is still followed"
+  out=$(in_home "$h" "$ADAPTER" report job-d1 dropped 2>&1) || fail "a second drop failed: $out"
+  assert_contains "$out" "never showed in a room" "nothing follows a drop"
+  assert_equals 2 "$(sent_of "$h" | grep -c .)" "the second drop sent nothing"
+
+  long=job-with-a-very-long-task-id-that-the-room-cannot-take-whole
+  add_task "$h" "$long" sample "Work with a long id."
+  in_home "$h" "$ADAPTER" report "$long" started >/dev/null 2>&1 || fail "report started for a long id failed"
+  out=$(sent_of "$h" | tail -n 1 | sed -E 's/^job id=([^ ]*) .*$/\1/')
+  [ "${#out}" -le 48 ] || fail "a long task id became a job id the room cannot take: $out"
+  assert_contains "$out" "job-with-a-very-long-task-id" "a long job id keeps the start of the task id"
+  pass "a job cleaned up without landing is taken off the view once, and a long task id fits the room"
+}
+
+test_a_private_project_tells_no_room() {
+  local h out event
+  need_tools || return 0
+  h=$(make_home private)
+  # Both projects are on the alpha room's allow-list; only studio stays shareable.
+  printf '# Projects that never leave this machine\n  sample  \n' > "$h/home/config/private-projects"
+  add_task "$h" priv-c1 sample "Taken on for the room. mothership: alpha/p1."
+  add_task "$h" priv-j1 sample "Ordinary work for a private project."
+  add_task "$h" open-j1 studio "Ordinary work for a shared project."
+  printf 'blocked [at=1790000100]: the build needs a key\n' > "$h/home/state/priv-c1.status"
+  printf 'blocked [at=1790000100]: the build needs a key\n' > "$h/home/state/priv-j1.status"
+  for event in started blocked merged; do
+    out=$(in_home "$h" "$ADAPTER" report priv-c1 "$event" 2>&1) || fail "card report $event failed: $out"
+    assert_equals "nothing to report: priv-c1 is private work, which config/private-projects keeps from every room" "$out" "a private card hears nothing of $event"
+    out=$(in_home "$h" "$ADAPTER" report priv-j1 "$event" 2>&1) || fail "job report $event failed: $out"
+    assert_contains "$out" "is private work" "a private job shows nothing on $event"
+  done
+  out=$(in_home "$h" "$ADAPTER" report priv-c1 pr --pr "$PR_URL" 2>&1) || fail "card report pr failed: $out"
+  assert_contains "$out" "is private work" "a private card hears nothing of its landing"
+  [ -z "$(sent_of "$h")" ] || fail "a private project reached the room: $(sent_of "$h")"
+  [ ! -e "$h/home/state/mothership/tasks/priv-c1.json" ] && [ ! -e "$h/home/state/mothership/tasks/priv-j1.json" ] \
+    || fail "a private project left room state"
+  in_home "$h" "$ADAPTER" report open-j1 started >/dev/null 2>&1 || fail "a shared job failed beside a private one"
+  assert_contains "$(sent_of "$h")" "job id=open-j1 room=alpha project=studio" "a project off the private list still shows"
+
+  # A list that is there but cannot be read lets nothing through.
+  rm -f "$h/home/config/private-projects"
+  mkdir "$h/home/config/private-projects"
+  add_task "$h" open-j2 studio "More work for the shared project."
+  out=$(in_home "$h" "$ADAPTER" report open-j2 started 2>&1) || fail "report with an unreadable list failed: $out"
+  assert_contains "$out" "is private work" "an unreadable private list keeps every task from the room"
+  out=$(in_home "$h" "$ADAPTER" report priv-c1 started 2>&1) || fail "card report with an unreadable list failed: $out"
+  assert_contains "$out" "is private work" "an unreadable private list keeps every card from the room"
+  assert_equals 1 "$(sent_of "$h" | grep -c .)" "nothing more was sent while the list could not be read"
+  [ -z "$(wakes_of "$h")" ] || fail "private work woke the first mate: $(wakes_of "$h")"
+  pass "a project in config/private-projects tells no room, card or job, whatever the allow-list says, and an unreadable list tells nothing"
+}
+
+test_a_resolved_line_puts_a_job_back_to_work() {
+  local h out lock _
+  need_tools || return 0
+  h=$(make_home job-resolved)
+  lock="$h/home/state/mothership/.task-job-r1.lock"
+  add_task "$h" job-r1 sample "Work that gets unblocked."
+  : > "$h/home/state/job-r1.meta"
+  in_home "$h" "$ADAPTER" report job-r1 started >/dev/null 2>&1 || fail "report started failed"
+  printf 'blocked [at=1790000100]: the build needs a key\n' >> "$h/home/state/job-r1.status"
+  in_home "$h" "$ADAPTER" blocked-scan >/dev/null 2>&1 || fail "scan for the blocker failed"
+  wait_for_sent "$h" 2 || fail "the blocker was not shown: $(sent_of "$h")"
+  for _ in $(seq 1 50); do { [ -e "$lock" ] || [ -L "$lock" ]; } || break; sleep 0.1; done
+  # The first mate's answer closes the blocker; the worker writes no working: line.
+  printf 'resolved [at=1790000200]: key provided\n' >> "$h/home/state/job-r1.status"
+  in_home "$h" "$ADAPTER" blocked-scan >/dev/null 2>&1 || fail "scan after the answer failed"
+  wait_for_sent "$h" 3 || fail "the resolved blocker left the job held up: $(sent_of "$h")"
+  for _ in $(seq 1 50); do { [ -e "$lock" ] || [ -L "$lock" ]; } || break; sleep 0.1; done
+  printf 'needs-decision [at=1790000300]: which of two colours\n' >> "$h/home/state/job-r1.status"
+  out=$(in_home "$h" "$ADAPTER" report job-r1 waits 2>&1) || fail "report waits failed: $out"
+  printf 'resolved [key=colour] [at=1790000400]: answered: blue\n' >> "$h/home/state/job-r1.status"
+  out=$(in_home "$h" "$ADAPTER" report job-r1 working 2>&1) || fail "report after the decision failed: $out"
+  printf 'resolved [at=1790000500]: a phase ended\n' >> "$h/home/state/job-r1.status"
+  out=$(in_home "$h" "$ADAPTER" report job-r1 working 2>&1) || fail "report for a resolved line while working failed: $out"
+  assert_contains "$out" "still working" "a resolved line while the job works sends nothing"
+
+  # Held up again after its PR is ready: once resolved, it is about to land again.
+  in_home "$h" "$ADAPTER" report job-r1 pr --pr "$PR_URL" >/dev/null 2>&1 || fail "report pr failed"
+  printf 'blocked [at=1790000600]: CI needs a secret\n' >> "$h/home/state/job-r1.status"
+  in_home "$h" "$ADAPTER" report job-r1 blocked >/dev/null 2>&1 || fail "report blocked after the PR failed"
+  printf 'resolved [at=1790000700]: secret added\n' >> "$h/home/state/job-r1.status"
+  out=$(in_home "$h" "$ADAPTER" report job-r1 working 2>&1) || fail "report after the post-PR blocker failed: $out"
+  printf 'working [at=1790000800]: addressing review feedback\n' >> "$h/home/state/job-r1.status"
+  out=$(in_home "$h" "$ADAPTER" report job-r1 working 2>&1) || fail "report for review work failed: $out"
+  assert_contains "$out" "still landing" "work on a ready PR leaves the job about to land"
+  assert_equals "$(cat <<EOT
+working|Room work for job-r1||Work has started.
+error|Room work for job-r1||Held up by a blocker; looking into it.
+working|Room work for job-r1||Work is under way.
+waits|Room work for job-r1||Waiting on a decision.
+working|Room work for job-r1||Work is under way.
+landing|Room work for job-r1|$PR_URL|Built and about to land.
+error|Room work for job-r1||Held up by a blocker; looking into it.
+landing|Room work for job-r1|$PR_URL|Built and about to land.
+EOT
+)" "$(job_lines "$h")" "a resolved blocker or decision puts the job back to working, or to about to land once its PR is ready"
+  pass "a resolved line moves a held-up or waiting job back to working, or back to landing after its PR, and sends nothing when the state stays"
+}
+
+test_a_failure_is_told_to_the_card_and_the_job() {
+  local h out lock t _ line
+  need_tools || return 0
+  h=$(make_home failed)
+  add_task "$h" room-f1 sample "Taken on for the room. mothership: alpha/f1."
+  add_task "$h" job-x1 studio "Ordinary work for a shared project."
+  for t in room-f1 job-x1; do
+    : > "$h/home/state/$t.meta"
+    in_home "$h" "$ADAPTER" report "$t" started >/dev/null 2>&1 || fail "report started for $t failed"
+  done
+  # A worker that stops writes a failed: line and nothing else.
+  line='failed [at=1790000100]: cannot build the secret-codename target'
+  printf '%s\n' "$line" > "$h/home/state/room-f1.status"
+  printf '%s\n' "$line" > "$h/home/state/job-x1.status"
+  out=$(in_home "$h" "$ADAPTER" report room-f1 blocked 2>&1) || fail "a blocked report beside a failure failed: $out"
+  assert_contains "$out" "nothing to report" "a failure is not told as a blocker"
+  in_home "$h" "$ADAPTER" blocked-scan >/dev/null 2>&1 || fail "scan for the failure failed"
+  wait_for_sent "$h" 4 || fail "the failure was not told: $(sent_of "$h")"
+  for t in room-f1 job-x1; do
+    lock="$h/home/state/mothership/.task-$t.lock"
+    for _ in $(seq 1 50); do { [ -e "$lock" ] || [ -L "$lock" ]; } || break; sleep 0.1; done
+  done
+  in_home "$h" "$ADAPTER" blocked-scan >/dev/null 2>&1 || fail "a second scan failed"
+  sleep 0.5
+  assert_equals "problem card=f1 room=alpha project=sample tags= link= cid=fm-room-f1-failed-$(printf '%s' "$line" | cksum | awk '{ print $1 }') text=Stopped on a failure; looking into it." \
+    "$(sent_of "$h" | grep '^problem ')" "the card hears the failure once as a problem, with a fixed line"
+  assert_equals "error|Room work for job-x1||Stopped on a failure; looking into it." \
+    "$(job_lines "$h" | grep '^error|')" "the job shows the failure once as an error, with a fixed line"
+  pass "a failed: line shows the job as an error and tells the card a problem, each once, with none of the worker's words"
+}
+
+test_no_link_runs_nothing() {
+  local h out
+  need_tools || return 0
+  h=$(make_home nolink)
+  rm -f "$h/rooms.json"
+  add_task "$h" job-n1 sample "Work in a home with no room link."
+  # shellcheck disable=SC2016 # expanded by the inner shell
+  in_home "$h" bash -c '. "$1/bin/fm-mothership-report-lib.sh" && fm_mothership_report "$FM_HOME" "$FM_STATE_OVERRIDE" "$FM_CONFIG_OVERRIDE" job-n1 started' \
+    _ "$ROOT" || fail "the lifecycle call failed with no link"
+  in_home "$h" "$ADAPTER" report --detach job-n1 started >/dev/null 2>&1 || fail "a detached report failed with no link"
+  sleep 0.5
+  [ ! -e "$h/home/state/mothership" ] || fail "a home with no room link created state: $(ls -R "$h/home/state/mothership")"
+  [ -z "$(sent_of "$h")" ] || fail "a home with no room link sent something: $(sent_of "$h")"
+  [ -z "$(wakes_of "$h")" ] || fail "a home with no room link woke the first mate: $(wakes_of "$h")"
+  pass "a home with no room link runs no report and creates no state"
+}
+
+test_a_failing_job_report_tells_the_first_mate() {
+  local h out
+  need_tools || return 0
+  h=$(make_home job-down)
+  add_task "$h" job-f1 sample "Work while the room is down."
+  touch "$h/stub/down"
+  if out=$(in_home "$h" "$ADAPTER" report job-f1 started 2>&1); then fail "an unreachable room counted as told"; fi
+  assert_contains "$out" "failed: job-f1: the alpha room was not told that work on it started: Could not reach the room" "the failure is named"
+  assert_contains "$(wakes_of "$h")" "check: mothership-report: the alpha room's Ships view for job-f1 was not told that work on it started" "the first mate is told"
+  rm -f "$h/stub/down"
+  out=$(in_home "$h" "$ADAPTER" report job-f1 started 2>&1) || fail "the send again failed: $out"
+  assert_contains "$out" "told: job-f1" "a failed send goes through when run again"
+  pass "a job send the room cannot take wakes the first mate and goes through when run again"
+}
+
 # The real lifecycle steps. Sets PROJ_DIR WT_DIR FAKEBIN for one case home.
-make_lifecycle() {  # <dir> <task-id>
+make_lifecycle() {  # <dir> <task-id> [no-state]
   local h=$1 task=$2
   PROJ_DIR="$h/sample"
   WT_DIR="$h/wt"
-  mkdir -p "$h/home/data/$task" "$h/home/user-home" "$h/home/state/mothership"
+  mkdir -p "$h/home/data/$task" "$h/home/user-home"
+  [ "${3-}" = no-state ] || mkdir -p "$h/home/state/mothership"
   printf 'claude\n' > "$h/home/config/crew-harness"
   printf '%s\n' "$$" > "$h/home/state/.lock"
   touch "$h/home/state/.last-watcher-beat"
@@ -353,7 +613,7 @@ test_lifecycle_steps_report_to_the_card() {
     _ "$ROOT" "$task" "$PR_URL" 2>&1) || fail "the merge outcome was not recorded: $out"
   wait_for_sent "$h" 4 || fail "the merge was not told: $(sent_of "$h")"
   sleep 0.5
-  assert_equals "$(printf 'progress Work has started.\nproblem Held up by a blocker; looking into it.\nprogress Ready for review: %s\nresult Done: the change has landed. %s' "$PR_URL" "$PR_URL")" \
+  assert_equals "$(printf 'progress Work has started.\nproblem Held up by a blocker; looking into it.\nlanding Ready for review: %s\nresult Done: the change has landed. %s' "$PR_URL" "$PR_URL")" \
     "$(sent_of "$h" | sed -E 's/^([a-z]+) .* link=([^ ]*) cid=[^ ]* text=(.*)$/\1 \3 \2/; s/ $//')" \
     "dispatch, the watcher, the PR registration and the merge each told the card once, and the merge-time re-record told nothing"
   pass "the real dispatch, watcher, PR registration and merge steps tell the card how the work goes"
@@ -380,6 +640,85 @@ test_a_local_landing_reports_to_the_card() {
   pass "a local-only landing tells the card it landed"
 }
 
+test_lifecycle_steps_show_a_job() {
+  local h task=job-pr1 out
+  need_tools || return 0
+  h=$(make_home lifecycle-job)
+  make_lifecycle "$h" "$task" no-state
+  add_task "$h" "$task" sample "Ordinary work for a shared project."
+
+  out=$(in_lifecycle "$h" "$ROOT/bin/fm-spawn.sh" "$task" "$PROJ_DIR" --mode direct-PR --yolo off 2>&1) \
+    || fail "spawn failed: $out"
+  wait_for_sent "$h" 1 || fail "dispatch did not show the job: $(sent_of "$h")"
+  printf 'needs-decision [at=1790000500]: which of two colours\n' >> "$h/home/state/$task.status"
+  out=$(in_lifecycle "$h" env FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 \
+    "$ROOT/bin/fm-watch-checkpoint.sh" --seconds 10 2>&1)
+  wait_for_sent "$h" 2 || fail "the watcher did not show the wait: $(sent_of "$h") ($out)"
+  printf 'done [at=1790000600]: PR %s\n' "$PR_URL" >> "$h/home/state/$task.status"
+  out=$(in_lifecycle "$h" "$ROOT/bin/fm-pr-check.sh" "$task" "$PR_URL" 2>&1) || fail "PR registration failed: $out"
+  wait_for_sent "$h" 3 || fail "the PR was not shown: $(sent_of "$h")"
+  # shellcheck disable=SC2016 # expanded by the inner shell
+  out=$(in_lifecycle "$h" bash -c '. "$1/bin/fm-merge-outcome-lib.sh" && fm_merge_outcome_report "$FM_HOME" "$FM_STATE_OVERRIDE" "$2" "$3" poll' \
+    _ "$ROOT" "$task" "$PR_URL" 2>&1) || fail "the merge outcome was not recorded: $out"
+  wait_for_sent "$h" 4 || fail "the merge was not shown: $(sent_of "$h")"
+  sleep 0.5
+  assert_equals "$(printf 'working|Room work for %s||Work has started.\nwaits|Room work for %s||Waiting on a decision.\nlanding|Room work for %s|%s|Built and about to land.\ndone|Room work for %s|%s|Landed.' \
+    "$task" "$task" "$task" "$PR_URL" "$task" "$PR_URL")" "$(job_lines "$h")" \
+    "dispatch, the watcher, the PR registration and the merge each moved the job on once"
+  pass "the real dispatch, watcher, PR registration and merge steps show a shared job on the Ships view"
+}
+
+test_teardown_drops_an_unlanded_job() {
+  local h task=job-td1 out
+  need_tools || return 0
+  h=$(make_home lifecycle-drop)
+  make_lifecycle "$h" "$task" no-state
+  add_task "$h" "$task" sample "Work that is given up."
+  out=$(in_lifecycle "$h" "$ROOT/bin/fm-spawn.sh" "$task" "$PROJ_DIR" --mode direct-PR --yolo off 2>&1) \
+    || fail "spawn failed: $out"
+  wait_for_sent "$h" 1 || fail "dispatch did not show the job: $(sent_of "$h")"
+  out=$(in_lifecycle "$h" "$ROOT/bin/fm-teardown.sh" "$task" --force 2>&1) || fail "teardown failed: $out"
+  wait_for_sent "$h" 2 || fail "cleanup did not take the job off the view: $(sent_of "$h") ($out)"
+  assert_equals "drop id=$task room=alpha project=sample tags= cid=fm-$task-dropped" "$(sent_of "$h" | sed -n 2p)" \
+    "cleaning up work that never landed takes its job off the view"
+  pass "cleaning up a job that never landed takes it off the Ships view"
+}
+
+test_lifecycle_without_a_link_or_with_a_failing_room() {
+  local h task=job-nl1 out
+  need_tools || return 0
+  h=$(make_home lifecycle-nolink)
+  rm -f "$h/rooms.json"
+  make_lifecycle "$h" "$task" no-state
+  add_task "$h" "$task" sample "Work in a home with no room link."
+  out=$(in_lifecycle "$h" "$ROOT/bin/fm-spawn.sh" "$task" "$PROJ_DIR" --mode direct-PR --yolo off 2>&1) \
+    || fail "spawn with no room link failed: $out"
+  printf 'done [at=1790000600]: PR %s\n' "$PR_URL" >> "$h/home/state/$task.status"
+  out=$(in_lifecycle "$h" "$ROOT/bin/fm-pr-check.sh" "$task" "$PR_URL" 2>&1) || fail "PR registration with no room link failed: $out"
+  sleep 0.5
+  [ ! -e "$h/home/state/mothership" ] || fail "a home with no room link created state: $(ls -R "$h/home/state/mothership")"
+  [ -z "$(sent_of "$h")" ] || fail "a home with no room link sent something: $(sent_of "$h")"
+
+  h=$(make_home lifecycle-down)
+  task=job-dn1
+  make_lifecycle "$h" "$task" no-state
+  add_task "$h" "$task" sample "Work while the room is down."
+  touch "$h/stub/down" "$h/stub/slow"
+  out=$(in_lifecycle "$h" "$ROOT/bin/fm-spawn.sh" "$task" "$PROJ_DIR" --mode direct-PR --yolo off 2>&1) \
+    || fail "spawn failed because the room was down: $out"
+  grep -q '^kind=ship' "$h/home/state/$task.meta" 2>/dev/null || fail "the dispatch did not record its task with the room down"
+  printf 'done [at=1790000600]: PR %s\n' "$PR_URL" >> "$h/home/state/$task.status"
+  out=$(in_lifecycle "$h" "$ROOT/bin/fm-pr-check.sh" "$task" "$PR_URL" 2>&1) || fail "PR registration failed because the room was down: $out"
+  grep -q "^pr=$PR_URL" "$h/home/state/$task.meta" || fail "the PR was not recorded with the room down"
+  for _ in $(seq 1 100); do
+    [ "$(wakes_of "$h" | grep -c 'mothership-report')" -ge 2 ] && break
+    sleep 0.1
+  done
+  assert_contains "$(wakes_of "$h")" "the alpha room's Ships view for $task was not told that it is about to land" "the failed sends are reported to the first mate"
+  [ -z "$(sent_of "$h")" ] || fail "a down room recorded a send: $(sent_of "$h")"
+  pass "with no room link nothing runs, and a room that cannot be reached never changes or fails a step"
+}
+
 fm_test_run \
   test_help \
   test_report_tells_the_card_each_event_once \
@@ -389,4 +728,14 @@ fm_test_run \
   test_blocked_scan_tells_each_new_blocker_once \
   test_blocked_scan_never_waits_on_a_send \
   test_lifecycle_steps_report_to_the_card \
-  test_a_local_landing_reports_to_the_card
+  test_a_local_landing_reports_to_the_card \
+  test_a_shared_job_shows_each_state \
+  test_a_dropped_job_leaves_the_view \
+  test_a_private_project_tells_no_room \
+  test_a_resolved_line_puts_a_job_back_to_work \
+  test_a_failure_is_told_to_the_card_and_the_job \
+  test_no_link_runs_nothing \
+  test_a_failing_job_report_tells_the_first_mate \
+  test_lifecycle_steps_show_a_job \
+  test_teardown_drops_an_unlanded_job \
+  test_lifecycle_without_a_link_or_with_a_failing_room
