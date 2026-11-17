@@ -114,8 +114,9 @@ chmod +x "$BINDIR/inbox-down"
 # second of speech, then quiet), `soft` (a quiet room, then a second of a soft
 # voice at a level 2.5 times that room's, then the room again), `hum` (seventy
 # seconds of a quiet room and no speech), `waiting` (fifty seconds of it),
-# `dead` (seventy seconds of no sound at all) or `talking` (speech that never
-# stops). It then stays
+# `dead` (seventy seconds of no sound at all), `room80` and `room150` (seventy
+# seconds of a steady room at that level, of 32768) or `talking` (speech that
+# never stops). It then stays
 # running, so only the pane stopping it ends it; its pid goes to
 # FM_FACTORY_TEST_MIC_PID.
 cat > "$BINDIR/mic" <<'PY'
@@ -138,6 +139,7 @@ try:
             time.sleep(0.05)
     out.write({"speech": tenth(8000) * 10 + tenth(40) * 60, "hum": tenth(40) * 700,
                "soft": tenth(40) * 20 + tenth(100) * 10 + tenth(40) * 60,
+               "room80": tenth(80 * math.sqrt(2)) * 700, "room150": tenth(150 * math.sqrt(2)) * 700,
                "waiting": tenth(40) * 500, "dead": tenth(0) * 700}[mode])
     out.flush()
     time.sleep(120)
@@ -2107,6 +2109,16 @@ test_a_spoken_note_that_cannot_be_sent_says_so_and_falls_back_to_typing() {
   assert_equals "$(wav_seconds "$FM_FACTORY_TEST_HEARD")" "1 16000 60.0" "enter did not write the kept minute down"
   assert_equals "$(jq -r .body "$FM_FACTORY_TEST_NOTES" | sed -n 1p)" \
     "About Harvest chart: ask the supplier about the ribbon first" "the words enter wrote down were not sent"
+  # A steady room loud enough to clear the quietest speech is the room, not
+  # speech: it is held the same way, and nothing leaves the machine.
+  for room in room80 room150; do
+    : > "$FM_FACTORY_TEST_NOTES"
+    rm -f "$FM_FACTORY_TEST_HEARD"
+    FM_FACTORY_TEST_MIC=$room drive_keys t "WAIT:3" "SNAP:$dir/$room" ESC
+    assert_contains "$(screen_of "$dir/$room" 50 100)" "recorded 1:00" "a steady $room was taken as speech"
+    assert_absent "$FM_FACTORY_TEST_HEARD" "a steady $room went to the speech service"
+    assert_equals "$(cat "$FM_FACTORY_TEST_NOTES")" "" "a steady $room was sent"
+  done
   # When that sound holds no words, nothing is sent and the box stays open for typing.
   : > "$FM_FACTORY_TEST_NOTES"
   FM_FACTORY_TEST_STT_EMPTY=1 FM_FACTORY_TEST_MIC=hum drive_keys t "WAIT:3" ENTER "WAIT:2" "SNAP:$dir/quiet" \

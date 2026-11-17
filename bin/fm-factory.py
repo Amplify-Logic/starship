@@ -231,6 +231,8 @@ SETTLED_SOURCE = "factory-pane"
 VOICE_RATE = 16000        # the talk box's microphone: samples a second, one channel, 16 bits
 VOICE_CHUNK = 1600        # samples heard at a time: a tenth of a second
 VOICE_SPEECH = 60         # the quietest level that can be speech, of 32768
+VOICE_SETTLE = 5          # first tenths of a second that only measure the room, never speech
+VOICE_LOUDEST_ROOM = 500  # the loudest a room's own level is taken to be while it is measured
 VOICE_QUIET_STOP = 20     # tenths of a second of quiet after speech that end a recording
 VOICE_NO_SPEECH = 600     # tenths of a second without any speech before a recording stops listening
 VOICE_MAX = 1800          # the longest recording, in tenths of a second
@@ -3048,9 +3050,11 @@ class Voice:
     """One spoken note: the microphone heard until the speaker stops, then written down.
 
     The recorder's samples are read in a thread, a tenth of a second at a time.
-    The room's own level is the quietest recent tenth, taken as quiet until a
-    tenth says otherwise so that speech from the first moment still counts; a
-    tenth twice as loud as it, and louder than VOICE_SPEECH, is speech.
+    The room's own level is the quietest recent tenth: the first VOICE_SETTLE
+    tenths only measure it, and it is taken as no louder than
+    VOICE_LOUDEST_ROOM so that speech from the first moment still counts once
+    they are over; after them a tenth twice as loud as it, and louder than
+    VOICE_SPEECH, is speech.
     The recording ends by itself once VOICE_QUIET_STOP of quiet follows speech,
     when no speech came within VOICE_NO_SPEECH, at VOICE_MAX, or when the
     recorder stops.
@@ -3076,7 +3080,7 @@ class Voice:
         self.quiet = 0                     # tenths of quiet since the last speech
         self.loudest = 0.0                 # the loudest tenth, of 32768; nothing at all means no microphone
         self.over = False
-        self.floor = VOICE_SPEECH / 2.0
+        self.floor = float(VOICE_LOUDEST_ROOM)
         self.words: Optional[str] = None   # what was said, once written down
         self.failed = ""                   # why it could not be written down
         self.proc = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
@@ -3108,9 +3112,10 @@ class Voice:
             level = math.sqrt(sum(x * x for x in tenth) / max(len(tenth), 1))
             # The floor drops to a quieter tenth at once and creeps up slowly,
             # so it follows the room and not the voice.
-            self.floor = max(min(level, self.floor * 1.01), 1.0)
+            settling = len(self.levels) < VOICE_SETTLE
+            self.floor = max(min(level, self.floor if settling else self.floor * 1.01), 1.0)
             self.loudest = max(self.loudest, level)
-            if level > max(self.floor * 2, VOICE_SPEECH):
+            if not settling and level > max(self.floor * 2, VOICE_SPEECH):
                 self.spoken += 1
                 self.quiet = 0
             else:
