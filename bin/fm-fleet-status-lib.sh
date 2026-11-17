@@ -399,12 +399,16 @@ fm_owner_calls() {  # <state-dir> [<buckets-file> [<backlog-file>]]
 # mate already reports here: its parent channel, state/<mate>.status, which a
 # local mate appends to directly and a remote mate's reply mirror copies into
 # (docs/secondmate-parent-channel.md). Only the lines its scripts write count,
-# never the mate's own prose: a child's PR registration
-# (`[key=child-pr-<child>]: child <child> PR ready: <url>`, bin/fm-pr-check.sh)
-# or ready outcome (`[key=child-outcome-<child>-done-...]: child <child> done:
-# ... pr=<url>`, bin/fm-inactive-reconcile.sh) lists the PR, and its merge
-# (`[key=merged-<child>]: merged <child> <url>`, bin/fm-merge-outcome-lib.sh)
-# drops it. Nothing here reads the mate's home or reaches its machine.
+# never the mate's own prose. A child's done outcome
+# (`[key=child-outcome-<child>-done-...]: child <child> done: ... pr=<url>`,
+# bin/fm-inactive-reconcile.sh) lists the PR, as this home's own work waits
+# for the merge word only once its task reads done; a PR registration alone
+# (`[key=child-pr-<child>]`, bin/fm-pr-check.sh) does not. An outcome carrying
+# `yolo=on` is not listed, because that mate merges green, in-scope work
+# itself (AGENTS.md); its lines carry no mark for the PRs standing yolo never
+# covers. A merge (`[key=merged-<child>]: merged <child> <url>`,
+# bin/fm-merge-outcome-lib.sh) drops the PR for good, even when an outcome for
+# it arrives later. Nothing here reads the mate's home or reaches its machine.
 #
 # A PR closed without merging leaves no line, and a merge can reach the channel
 # late, so each listed PR's own state is also read from its forge
@@ -431,19 +435,21 @@ fm_secondmate_ready_prs() {  # <state-dir>
         note = $0
         sub(/^done( \[[^]]*\])*: /, "", note)
         n = split(note, w, " ")
-        url = ""
-        if (key ~ /^child-pr-/ && w[1] == "child" && w[3] == "PR" && w[4] == "ready:") {
-          child = w[2]; url = w[5]
-        } else if (key ~ /^child-outcome-.*-done-/ && w[1] == "child" && w[3] == "done:") {
-          child = w[2]
-          for (i = 4; i <= n; i++) if (w[i] ~ /^pr=/) url = substr(w[i], 4)
-        } else if (key ~ /^merged-/ && w[1] == "merged") {
-          if (w[3] in ready) delete ready[w[3]]
+        if (key ~ /^merged-/ && w[1] == "merged") {
+          merged[w[3]] = 1
+          delete ready[w[3]]
           next
         }
-        if (url !~ /^https?:\/\/[^ ]+$/) next
-        if (!(url in ready)) order[++count] = url
-        ready[url] = child
+        if (key !~ /^child-outcome-.*-done-/ || w[1] != "child" || w[3] != "done:") next
+        url = ""; yolo = ""
+        for (i = 4; i <= n; i++) {
+          if (w[i] ~ /^pr=/) url = substr(w[i], 4)
+          else if (w[i] ~ /^yolo=/) yolo = substr(w[i], 6)
+        }
+        if (url !~ /^https?:\/\/[^ ]+$/ || (url in merged)) next
+        if (yolo == "on") { delete ready[url]; next }
+        if (!(url in seen)) { seen[url] = 1; order[++count] = url }
+        ready[url] = w[2]
       }
       END { for (i = 1; i <= count; i++) if (order[i] in ready) printf "%s\t%s\n", ready[order[i]], order[i] }
     ' "$state/$mate.status" 2>/dev/null)

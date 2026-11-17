@@ -754,8 +754,9 @@ SH
 # A second mate's PRs are the owner's calls too. They are read from what the mate
 # already reports to this home, its parent channel state/<mate>.status, which a
 # local mate appends to and a remote mate's reply mirror copies into: the lines
-# its scripts write list a child's PR and drop it once merged, the mate's own
-# prose never counts, and a PR its forge reports merged or closed is dropped.
+# its scripts write list a child's PR once it is done and drop it once merged,
+# the mate's own prose never counts, and a PR its forge reports merged or
+# closed is dropped.
 test_a_second_mates_ready_prs_are_the_owners_calls() {
   local out reader forge
   reset_state
@@ -779,7 +780,7 @@ SH
   fm_write_meta "$STATE/near.meta" kind=secondmate mode=secondmate window=tmux:near home=/homes/near
   cat > "$STATE/near.status" <<'LOG'
 working [at=100]: corr=aa11 started child-a and child-b
-done [key=child-pr-child-a] [at=110]: child child-a PR ready: https://github.com/o/r/pull/101 mode=no-mistakes yolo=off
+done [key=child-outcome-child-a-done-0f0e0d0c] [at=110]: child child-a done: checks green pr=https://github.com/o/r/pull/101 mode=no-mistakes yolo=off
 done [key=child-outcome-child-b-done-1a2b3c4d] [at=120]: child child-b done: PR https://github.com/o/r/pull/102 checks green pr=https://github.com/o/r/pull/102 mode=no-mistakes yolo=off
 done [key=child-a] [at=121]: the child-a PR is ready for the owner's merge word: https://github.com/o/r/pull/103
 done [key=merged-child-a] [at=130]: merged child-a https://github.com/o/r/pull/101 external
@@ -788,10 +789,10 @@ LOG
   fm_write_meta "$STATE/far.meta" kind=secondmate mode=secondmate window=remote:far home=/homes/far \
     remote_host=far-host remote_root=/far/firstmate remote_backend=herdr
   cat > "$STATE/far.status" <<'LOG'
-done [key=child-pr-child-c] [at=200]: child child-c PR ready: https://github.com/o/r/pull/68 mode=no-mistakes yolo=off
-done [key=child-pr-child-d] [at=210]: child child-d PR ready: https://github.com/o/r/pull/69 mode=no-mistakes yolo=off
-done [key=child-pr-child-e] [at=220]: child child-e PR ready: https://github.com/o/r/pull/70 mode=no-mistakes yolo=off
-done [key=child-pr-child-f] [at=230]: child child-f PR ready: https://github.com/o/r/pull/71 mode=no-mistakes yolo=off
+done [key=child-outcome-child-c-done-5e6f7a8b] [at=200]: child child-c done: checks green pr=https://github.com/o/r/pull/68 mode=no-mistakes yolo=off
+done [key=child-outcome-child-d-done-5e6f7a8b] [at=210]: child child-d done: checks green pr=https://github.com/o/r/pull/69 mode=no-mistakes yolo=off
+done [key=child-outcome-child-e-done-5e6f7a8b] [at=220]: child child-e done: checks green pr=https://github.com/o/r/pull/70 mode=no-mistakes yolo=off
+done [key=child-outcome-child-f-done-5e6f7a8b] [at=230]: child child-f done: checks green pr=https://github.com/o/r/pull/71 mode=no-mistakes yolo=off
 LOG
 
   out=$(FM_SECONDMATE_PR_READER="$reader" FM_FLEET_STATE_READER="$BINDIR/fake-crew-state" \
@@ -830,6 +831,38 @@ LOG
   assert_equals "$(printf '%s' "$out" | tr '\t' '|')" "3|0|merge|far:child-c|child-c from far" \
     "the strip's first call for a second mate's PR"
   pass "fleet status: a second mate's ready PRs are the owner's calls, local and remote, dropped once merged or closed"
+}
+
+# A second mate's PR waits on the owner only once its child is done, and only
+# when that mate does not merge it itself: a PR registration alone, or a done
+# outcome carrying yolo=on (AGENTS.md: with yolo on, firstmate merges green,
+# in-scope work itself), is not listed, while a yolo=off done outcome is. A
+# merge drops the PR for good: a done outcome for it that reaches this home
+# after the merge does not list it again, and a PR reported done twice is
+# listed once, even when its forge cannot be read.
+test_a_second_mates_pr_waits_on_the_owner_only_when_done_and_not_yolo() {
+  local out reader
+  reset_state
+  reader="$TMP_ROOT/case$FLEET_CASE/pr-reader"
+  printf '#!/usr/bin/env bash\nexit 1\n' > "$reader"
+  chmod +x "$reader"
+  fm_write_meta "$STATE/far.meta" kind=secondmate mode=secondmate window=remote:far home=/homes/far remote_host=far-host
+  cat > "$STATE/far.status" <<'LOG'
+done [key=child-pr-reg] [at=100]: child reg PR ready: https://github.com/o/r/pull/80 mode=no-mistakes yolo=off
+done [key=child-outcome-auto-done-11111111] [at=110]: child auto done: checks green pr=https://github.com/o/r/pull/81 mode=no-mistakes yolo=on
+done [key=child-outcome-held-done-22222222] [at=120]: child held done: checks green pr=https://github.com/o/r/pull/82 mode=no-mistakes yolo=off
+done [key=child-pr-c] [at=130]: child c PR ready: https://github.com/o/r/pull/68 mode=no-mistakes yolo=off
+done [key=merged-c] [at=140]: merged c https://github.com/o/r/pull/68 external
+done [key=child-outcome-c-done-33333333] [at=150]: child c done: checks green pr=https://github.com/o/r/pull/68 mode=no-mistakes yolo=off
+done [key=child-outcome-twice-done-44444444] [at=160]: child twice done: checks green pr=https://github.com/o/r/pull/83 mode=no-mistakes yolo=off
+done [key=child-outcome-twice-done-55555555] [at=170]: child twice done: checks green again pr=https://github.com/o/r/pull/83 mode=no-mistakes yolo=off
+LOG
+  out=$(FM_SECONDMATE_PR_READER="$reader" \
+    bash -c '. "$1/bin/fm-fleet-status-lib.sh"; fm_secondmate_ready_prs "$2"' _ "$ROOT" "$STATE") \
+    || fail "a second mate's ready PRs could not be read"
+  assert_equals "$(printf 'mate-merge\tfar\theld\thttps://github.com/o/r/pull/82\nmate-merge\tfar\ttwice\thttps://github.com/o/r/pull/83')" \
+    "$out" "only a done, yolo=off, unmerged PR is listed, and once"
+  pass "fleet status: a second mate's PR waits on the owner only once done and not under yolo, and a merged one stays dropped"
 }
 
 # The bridge strip shows "decisions for you" and "ready to merge" as two lamps, so
@@ -1101,6 +1134,7 @@ test_a_workers_question_needs_firstmate_not_the_captain
 test_the_owners_calls_are_live_decisions_and_ready_merges
 test_the_owners_calls_come_through_a_non_markdown_adapter
 test_a_second_mates_ready_prs_are_the_owners_calls
+test_a_second_mates_pr_waits_on_the_owner_only_when_done_and_not_yolo
 test_decisions_are_counted_apart_inside_ready
 test_canonical_states_fold_into_the_six_fields
 test_records_are_counted_apart_from_live_workers

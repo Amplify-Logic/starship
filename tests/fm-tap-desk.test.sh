@@ -295,7 +295,7 @@ EOF
   # A remote second mate has a PR ready for the owner's merge word, reported
   # through its mirrored parent channel; the page names it rather than cards it.
   fm_write_meta "$HOME_DIR/state/far.meta" kind=secondmate mode=secondmate window=remote:far remote_host=far-host
-  printf 'done [key=child-pr-far-fix] [at=100]: child far-fix PR ready: https://github.com/o/sample/pull/8 mode=no-mistakes yolo=off\n' \
+  printf 'done [key=child-outcome-far-fix-done-0a0b0c0d] [at=100]: child far-fix done: checks green pr=https://github.com/o/sample/pull/8 mode=no-mistakes yolo=off\n' \
     > "$HOME_DIR/state/far.status"
   printf '#!/usr/bin/env bash\necho open\n' > "$FAKEBIN/pr-reader"
   chmod +x "$FAKEBIN/pr-reader"

@@ -540,14 +540,14 @@ SH
   export FM_SECONDMATE_PR_READER="$TMP_ROOT/case$CASE/pr-reader"
   printf 'kind=secondmate\nmode=secondmate\nwindow=tmux:near\nhome=/homes/near\n' > "$HOME_FIX/state/near.meta"
   cat > "$HOME_FIX/state/near.status" <<'LOG'
-done [key=child-pr-garden-notes] [at=1794640000]: child garden-notes PR ready: https://example.invalid/o/garden-journal/pull/41 mode=no-mistakes yolo=off
-done [key=child-pr-garden-old] [at=1794640100]: child garden-old PR ready: https://example.invalid/o/garden-journal/pull/42 mode=no-mistakes yolo=off
+done [key=child-outcome-garden-notes-done-0a0b0c0d] [at=1794640000]: child garden-notes done: checks green pr=https://example.invalid/o/garden-journal/pull/41 mode=no-mistakes yolo=off
+done [key=child-outcome-garden-old-done-0a0b0c0d] [at=1794640100]: child garden-old done: checks green pr=https://example.invalid/o/garden-journal/pull/42 mode=no-mistakes yolo=off
 done [key=merged-garden-old] [at=1794640200]: merged garden-old https://example.invalid/o/garden-journal/pull/42 external
 LOG
   printf 'kind=secondmate\nmode=secondmate\nwindow=remote:far\nhome=/homes/far\nremote_host=far-host\n' > "$HOME_FIX/state/far.meta"
   cat > "$HOME_FIX/state/far.status" <<'LOG'
-done [key=child-pr-fleet-count] [at=1794640300]: child fleet-count PR ready: https://example.invalid/o/tools/pull/44 mode=no-mistakes yolo=off
-done [key=child-pr-fleet-gone] [at=1794640400]: child fleet-gone PR ready: https://example.invalid/o/tools/pull/45 mode=no-mistakes yolo=off
+done [key=child-outcome-fleet-count-done-0a0b0c0d] [at=1794640300]: child fleet-count done: checks green pr=https://example.invalid/o/tools/pull/44 mode=no-mistakes yolo=off
+done [key=child-outcome-fleet-gone-done-0a0b0c0d] [at=1794640400]: child fleet-gone done: checks green pr=https://example.invalid/o/tools/pull/45 mode=no-mistakes yolo=off
 LOG
   take_record
   assert_equals "$(q '[.needs_you[] | "\(.id):\(.kind):\(.factory):\(.mate // "-")"] | join(" ")')" \
