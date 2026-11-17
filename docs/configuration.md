@@ -110,6 +110,7 @@ Each effective `FM_HOME` contains private operational directories.
 - Inactive terminal-outcome receipts under `state/terminal-outcomes/`.
 - Enabled extension working namespaces under `state/extensions/`.
 - Parent-side remote ledger copies under `state/secondmate-summary-cache/`.
+- The last forge reading of each second mate PR the owner's calls list, under `state/secondmate-prs/` (`bin/fm-fleet-status-lib.sh`).
 - One-shot Bearings reconcile requests under `state/reconcile-notify/`.
 - Private secondmate config-reread generations with their retry and quarantine state.
 - Per-task steering-inbox records under `state/<id>.inbox/` (`bin/fm-task-inbox-lib.sh`).

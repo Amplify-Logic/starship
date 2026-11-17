@@ -365,9 +365,13 @@ async function rulesGuarded(ctx, project) {
 function ownerCalls(ctx) {
   const result = runSync(ctx, "bash", ["-c", '. "$0" && fm_owner_calls "$1"', path.join(ctx.root, "bin/fm-fleet-status-lib.sh"), ctx.state]);
   if (result.status !== 0) fail(`could not read what waits on the owner: ${lastLine(result.stderr) || `exit ${result.status}`}`);
-  const calls = { decisions: [], merges: [] };
+  const calls = { decisions: [], merges: [], mateMerges: [] };
   for (const line of result.stdout.split("\n")) {
-    const [kind, id] = line.split("\t");
+    const [kind, id, child, url] = line.split("\t");
+    if (kind === "mate-merge" && id && child && url) {
+      calls.mateMerges.push({ id: `${id}:${child}`, reason: `${url} is ready on second mate ${id}; Starship merges it on your word` });
+      continue;
+    }
     if (!id || !SLUG.test(id)) continue;
     if (kind === "decision") calls.decisions.push(id);
     else if (kind === "merge") calls.merges.push(id);
@@ -524,7 +528,9 @@ async function commandExport(args) {
   const decisionCards = decisions.decisions
     .map((row) => decisionCard(row, ledger, now, days, ownerOnly))
     .sort((left, right) => (left.held_since || "").localeCompare(right.held_since || "") || left.id.localeCompare(right.id));
-  const notShown = [...merges.notShown, ...decisions.notShown];
+  // A second mate's PR is one of the owner's calls, but its job is not this home's
+  // own, so it has no tap card here; it is named under not_shown instead.
+  const notShown = [...merges.notShown, ...decisions.notShown, ...calls.mateMerges];
   const cards = {
     schema: CARDS_SCHEMA,
     generated_at: new Date(now).toISOString(),

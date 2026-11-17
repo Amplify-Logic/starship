@@ -292,13 +292,23 @@ case "$1" in
 esac
 EOF
   chmod +x "$FAKEBIN/reader"
+  # A remote second mate has a PR ready for the owner's merge word, reported
+  # through its mirrored parent channel; the page names it rather than cards it.
+  fm_write_meta "$HOME_DIR/state/far.meta" kind=secondmate mode=secondmate window=remote:far remote_host=far-host
+  printf 'done [key=child-pr-far-fix] [at=100]: child far-fix PR ready: https://github.com/o/sample/pull/8 mode=no-mistakes yolo=off\n' \
+    > "$HOME_DIR/state/far.status"
+  printf '#!/usr/bin/env bash\necho open\n' > "$FAKEBIN/pr-reader"
+  chmod +x "$FAKEBIN/pr-reader"
   local out calls strip record
-  out=$(home_env FM_FLEET_STATE_READER="$FAKEBIN/reader" "$DESK" export) || fail "export failed"
+  out=$(home_env FM_SECONDMATE_PR_READER="$FAKEBIN/pr-reader" FM_FLEET_STATE_READER="$FAKEBIN/reader" "$DESK" export) \
+    || fail "export failed"
   calls=$(cards_json | node -e 'let s=""; process.stdin.on("data",(c)=>s+=c).on("end",()=>console.log(JSON.parse(s).owner_calls))')
-  assert_equals "3" "$calls" "the page's count of the owner's calls"
-  strip=$(home_env FM_FLEET_STATE_READER="$FAKEBIN/reader" FM_FLEET_STATE_NO_CACHE=1 FM_BRIDGE_STRIP_PMSET= \
+  assert_equals "4" "$calls" "the page's count of the owner's calls"
+  assert_contains "$(cards_json)" '"id": "far:far-fix"' "the page names the second mate's PR"
+  strip=$(home_env FM_SECONDMATE_PR_READER="$FAKEBIN/pr-reader" FM_FLEET_STATE_READER="$FAKEBIN/reader" \
+    FM_FLEET_STATE_NO_CACHE=1 FM_BRIDGE_STRIP_PMSET= \
     bash "$ROOT/bin/fm-bridge-strip.sh" render --width 110 | sed $'s/\033\\[[0-9;]*m//g')
-  assert_contains "$strip" "■ 2 decisions for you   ■ 1 ready to merge" "the strip's count of the owner's calls"
+  assert_contains "$strip" "■ 2 decisions for you   ■ 2 ready to merge" "the strip's count of the owner's calls"
   # The pane reads the same home: its snapshot is the home's own backlog plus
   # the canonical state of each task, and its questions come from the real
   # shapes reader rather than a stand-in.
@@ -318,19 +328,20 @@ EOF
     const backlog = JSON.parse(fs.readFileSync(`${home}/backlog.json`, "utf8"));
     fs.writeFileSync(`${home}/snapshot.json`, JSON.stringify({ schema: "fm-fleet-snapshot.v1", generated: "", tasks, backlog }));
   ' "$HOME_DIR"
-  record=$(home_env FM_FACTORY_SNAPSHOT="$HOME_DIR/snapshot.json" FM_FACTORY_PEEK= FM_FACTORY_INBOX=true \
-    FM_FLEET_STATE_READER="$FAKEBIN/reader" FM_FLEET_STATE_NO_CACHE=1 \
+  record=$(home_env FM_SECONDMATE_PR_READER="$FAKEBIN/pr-reader" FM_FACTORY_SNAPSHOT="$HOME_DIR/snapshot.json" \
+    FM_FACTORY_PEEK= FM_FACTORY_INBOX=true FM_FLEET_STATE_READER="$FAKEBIN/reader" FM_FLEET_STATE_NO_CACHE=1 \
     python3 "$ROOT/bin/fm-factory.py" --data --fresh) || fail "the pane's record failed"
   printf '%s' "$record" | node -e '
     let s = ""; process.stdin.on("data", (c) => s += c).on("end", () => {
       const record = JSON.parse(s);
       const by = Object.fromEntries(record.needs_you.map((n) => [n.id, n]));
       const check = (ok, code) => { if (!ok) { console.error(JSON.stringify(record.needs_you, null, 2)); process.exit(code); } };
-      check(record.counts.decisions === 2 && record.counts.ready_to_merge === 1 && record.needs_you.length === 3, 2);
+      check(record.counts.decisions === 2 && record.counts.ready_to_merge === 2 && record.needs_you.length === 4, 2);
       check(by["pick-route"] && JSON.stringify(by["pick-route"].options.map((o) => [o.label, o.suggested])) === JSON.stringify([["north", false], ["south", true]]), 3);
       check(by["old-ask"] && by["old-ask"].options.length === 0 && by["old-ask"].why === "Needs a name.", 4);
       check(by["ship-pr"] && by["ship-pr"].kind === "finished work", 5);
       check(!by["asking"] && !by["pausing"] && !by["revisit"], 6);
+      check(by["far:far-fix"] && by["far:far-fix"].mate === "far" && by["far:far-fix"].pr === "https://github.com/o/sample/pull/8", 7);
     });' || fail "the pane did not show the owner's calls as the page does"
   pass "the bridge strip, the Factory pane and the tap page show one count of the owner's calls"
 }
