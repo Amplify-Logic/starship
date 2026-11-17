@@ -1473,7 +1473,7 @@ test_a_parked_call_leaves_the_pane_within_seconds_after_a_slow_refresh() {
   python3 "$FACTORY" refresh || fail "the first record could not be built"
   printf '{"ended": %s, "took": 90, "failed": false}\n' "$(date +%s)" > "$HOME_FIX/state/factory/rebuild.last" \
     || fail "the slow refresh could not be recorded"
-  took=$(FM_FACTORY_LOADAVG=100000 watch_pane '3 need you' '2 need you' "$BINDIR/park-world garden-chart") \
+  took=$(FM_FACTORY_LOADAVG=100000 watch_pane '2 decisions for you' '1 decision for you' "$BINDIR/park-world garden-chart") \
     || fail "the live pane could not be driven"
   case "$took" in
     never|'no first screen'|'') fail "the live pane still showed the parked call: $took" ;;
@@ -3030,7 +3030,7 @@ SH
   export FM_FACTORY_READ="$TMP_ROOT/case$CASE/reader" FM_FACTORY_TEST_READ="$log"
   take_record
   assert_equals "$(q '.factories[] | select(.id == "recipe-box") | .jobs[0] | "\(.state)|\(.read | join(","))"')" \
-    "with Starship|recipe-search" "the idle factory's finished work has a report to read"
+    "needs a look|recipe-search" "the idle factory's finished work has a report to read"
   # The stops run: three calls, then Sample Shop, Garden Journal and Recipe Box.
   drive_keys DOWN DOWN DOWN DOWN DOWN r
   [ ! -s "$log" ] || fail "r on an idle factory read a job it draws no Read line for: $(cat "$log")"
@@ -3146,7 +3146,7 @@ test_a_folded_pass_counts_as_idle_and_hides_no_other_card() {
   local out
   out=$(python3 "$FACTORY" --plain --width 92) || fail "--plain failed"
   assert_contains "$out" "Recipe Box   idle since 07:50" "the factory reads idle since its last pass, as the count line counts it"
-  has_line "$out" " ● Reminder pass 0715 failed" "the stuck pass keeps its row while the next one runs folded"
+  has_line "$out" " ● Reminder pass 0715 failed" "the failed pass keeps its row while the next one runs folded"
   has_line "$out" " ↻ Reminder pass 4 runs today · last started 07:50 busy" "the routine line"
   assert_not_contains "$out" "Reminder pass 0750" "the running pass folds into the routine line"
   pass "factory pane: a folded pass counts as idle and hides no other card"
