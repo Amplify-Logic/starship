@@ -11,8 +11,12 @@ config/desk-layout format; this header owns the commands.
 Usage:
   fm-desk.py [open]             open the desk: start or attach, fill in what is
                                 missing, open the missing views
-  fm-desk.py layout             print the running session as a desk layout file,
-                                a starting config/desk-layout
+  fm-desk.py layout [--save]    print the running session as a desk layout file,
+                                a starting config/desk-layout; with --save,
+                                write it to config/desk-layout instead, only
+                                once the reading succeeded. Off macOS it lists
+                                no Terminal views, since there is no Terminal
+                                to ask.
   fm-desk.py install-command    put `starship` on PATH: ~/.local/bin/starship
                                 becomes a link to this script, unless another
                                 `starship` is there or already on PATH
@@ -31,7 +35,8 @@ What `open` does, in this order, re-reading Herdr after every step:
      names the new workspace's first tab after it.
   4. In the main tab (the tab labelled `main`, else the workspace's first
      tab): starts the first mate in a pane that is only
-     an idle shell, shows the bridge strip and the Factory pane when missing,
+     an idle shell, shows the bridge strip and the Factory pane when missing
+     (first installing its Herdr plugin when Herdr lists none by that id),
      and restarts either inside its own pane when that pane is only an idle
      shell (Herdr brings plugin panes back as plain shells after a restart).
   5. Opens every missing tab; a factory tab opens through bin/fm-factory.py
@@ -74,8 +79,9 @@ Test seams:
                           (default: ps -axo pid=,tty=,command=)
   FM_DESK_OSASCRIPT       AppleScript runner (default: osascript)
   FM_DESK_OPEN            macOS app launcher for Ghostty views (default: open)
-  FM_DESK_MACOS           macOS version, for the Terminal color note (default:
-                          this Mac's; empty off macOS)
+  FM_DESK_MACOS           macOS version, for the Terminal color note and
+                          whether there is a Terminal to ask (default: this
+                          Mac's; empty off macOS)
   FM_DESK_COMMAND_DIR     where install-command links `starship` (default
                           ~/.local/bin)
   FM_DESK_WAIT            seconds to wait for a started server, a new view, or
@@ -211,8 +217,8 @@ def load_layout(home: str) -> Dict[str, Any]:
         with open(path, encoding="utf-8") as handle:
             text = handle.read()
     except FileNotFoundError:
-        raise Refused("there is no desk layout at %s yet; start from `%s layout > %s` "
-                         "and see docs/desk.md" % (path, ME, path))
+        raise Refused("there is no desk layout at %s yet; start from `%s layout --save` "
+                      "and see docs/desk.md" % (path, ME))
     return parse_layout(text)
 
 
@@ -314,6 +320,17 @@ def plugin_title(manifest: str) -> str:
 
 BRIDGE_TITLE = plugin_title(os.path.join(ROOT, "herdr-plugins", "starship-bridge", "herdr-plugin.toml"))
 FACTORY_TITLE = plugin_title(os.path.join(ROOT, "herdr-plugins", "starship-factory", "herdr-plugin.toml"))
+# The Herdr plugin behind each plugin pane, and the script whose `install` links it.
+PLUGINS = {"bridge": ("starship.bridge", "fm-bridge-strip.sh", "the Starship bridge plugin"),
+           "factory": ("starship.factory", "fm-factory-pane.sh", "the Factory pane plugin")}
+
+
+def installed_plugins(herdr: "Herdr") -> Optional[set]:
+    """The ids of the plugins Herdr lists, or None when it cannot say."""
+    data = herdr.call("plugin", "list", "--json", check=False)
+    if data is None:
+        return None
+    return {str(p.get("plugin_id")) for p in result_list(data, "plugins")}
 
 
 # --------------------------------------------------------------------------
@@ -467,11 +484,12 @@ def factory_tab(tabs: List[Dict[str, Any]], records: Dict[str, str], tab: Dict[s
 def survey(herdr: Herdr, layout: Dict[str, Any], home: str) -> Dict[str, Any]:
     """Everything the plan needs, read from Herdr, the factory tab records and the process list."""
     found: Dict[str, Any] = {"running": False, "socket": "", "workspace": None, "tabs": [], "main": None,
-                             "factory_tabs": {}, "panes": {}, "clients": herdr_clients()}
+                             "factory_tabs": {}, "panes": {}, "clients": herdr_clients(), "plugins": None}
     entry = herdr.session_entry()
     if not entry or not entry.get("running"):
         return found
     found["running"] = True
+    found["plugins"] = installed_plugins(herdr)
     found["socket"] = str(entry.get("socket_path") or "")
     for workspace in result_list(herdr.call("workspace", "list"), "workspaces"):
         if workspace.get("label") == layout["workspace"]:
@@ -578,6 +596,9 @@ def plan(layout: Dict[str, Any], found: Dict[str, Any],
 
     for kind, pane, name in (("bridge", bridge, "the Starship bridge"), ("factory", factory, "the Factory pane")):
         if pane is None:
+            plugin, _, what = PLUGINS[kind]
+            if found["plugins"] is not None and plugin not in found["plugins"]:
+                steps.append(step("plugin", "install %s" % what, plugin=kind))
             steps.append(step(kind, "show %s" % name, seat=seat["id"] if seat else None))
         elif pane["free"]:
             steps.append(step(kind + "-revive", "start %s again in its pane" % name, pane=pane["id"]))
@@ -906,6 +927,11 @@ def execute(item: Dict[str, Any], layout: Dict[str, Any], herdr: Herdr, found: D
             raise Failure("the new workspace has no pane yet")
         herdr.call("pane", "run", pane, layout["firstmate"])
         settle(lambda: not pane_looks(herdr, pane).get("idle"), limit=min(wait_limit(), 5.0))
+    elif kind == "plugin":
+        # Run outside any pane, so install only links the plugin and shows nothing.
+        _, script, what = PLUGINS[item["plugin"]]
+        run_script(["bash", os.path.join(tools, script), "install"], child_env(herdr, found, home),
+                   "install %s" % what)
     elif kind in ("bridge", "factory"):
         if not item["seat"]:
             raise Failure("there is no pane to put %s beside" % ("the bridge" if kind == "bridge" else "the Factory pane"))
@@ -1026,7 +1052,7 @@ def factory_tab_records(home: str, socket: str) -> Dict[str, str]:
     return records
 
 
-def cmd_layout() -> int:
+def cmd_layout(save: bool = False) -> int:
     home = home_dir()
     try:
         current = load_layout(home)
@@ -1078,7 +1104,9 @@ def cmd_layout() -> int:
     if current["terminal"] == "Ghostty":
         for size in ghostty_views() if clients else []:
             lines.append("view =%s" % (" | %s" % size if size else ""))
-    listed = osascript(LIST_VIEWS) if clients and current["terminal"] == "Terminal" else ""
+    # Off macOS there is no Terminal to ask, so no Terminal view is listed.
+    asks_terminal = clients and current["terminal"] == "Terminal" and macos_major() > 0
+    listed = osascript(LIST_VIEWS) if asks_terminal else ""
     for row in listed.splitlines():
         parts = row.split("\t")
         if len(parts) < 3:
@@ -1087,7 +1115,21 @@ def cmd_layout() -> int:
         if tty in clients:
             size = parts[2].split(".")[0].strip()
             lines.append("view = %s%s" % (parts[1], " | %s" % size if size else ""))
-    say("\n".join(lines))
+    if not save:
+        say("\n".join(lines))
+        return 0
+    # Written only now, after the reading succeeded, and swapped in whole, so a
+    # failed reading never leaves an empty or partial layout behind.
+    path = layout_path(home)
+    temp = path + ".desk-tmp"
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(temp, "w", encoding="utf-8") as handle:
+            handle.write("\n".join(lines) + "\n")
+        os.replace(temp, path)
+    except OSError as error:
+        raise Failure("the layout could not be written to %s: %s" % (path, error))
+    say("The desk layout is saved in %s." % path)
     return 0
 
 
@@ -1130,8 +1172,8 @@ def main(argv: List[str]) -> int:
             return 0
         if command == "open" and len(argv) <= 1:
             return cmd_open()
-        if command == "layout" and len(argv) == 1:
-            return cmd_layout()
+        if command == "layout" and argv[1:] in ([], ["--save"]):
+            return cmd_layout(save=len(argv) == 2)
         if command == "install-command" and len(argv) == 1:
             return cmd_install_command()
         usage()
