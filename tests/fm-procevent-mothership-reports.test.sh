@@ -470,15 +470,28 @@ test_a_resolved_line_puts_a_job_back_to_work() {
   printf 'resolved [at=1790000500]: a phase ended\n' >> "$h/home/state/job-r1.status"
   out=$(in_home "$h" "$ADAPTER" report job-r1 working 2>&1) || fail "report for a resolved line while working failed: $out"
   assert_contains "$out" "still working" "a resolved line while the job works sends nothing"
+
+  # Held up again after its PR is ready: once resolved, it is about to land again.
+  in_home "$h" "$ADAPTER" report job-r1 pr --pr "$PR_URL" >/dev/null 2>&1 || fail "report pr failed"
+  printf 'blocked [at=1790000600]: CI needs a secret\n' >> "$h/home/state/job-r1.status"
+  in_home "$h" "$ADAPTER" report job-r1 blocked >/dev/null 2>&1 || fail "report blocked after the PR failed"
+  printf 'resolved [at=1790000700]: secret added\n' >> "$h/home/state/job-r1.status"
+  out=$(in_home "$h" "$ADAPTER" report job-r1 working 2>&1) || fail "report after the post-PR blocker failed: $out"
+  printf 'working [at=1790000800]: addressing review feedback\n' >> "$h/home/state/job-r1.status"
+  out=$(in_home "$h" "$ADAPTER" report job-r1 working 2>&1) || fail "report for review work failed: $out"
+  assert_contains "$out" "still landing" "work on a ready PR leaves the job about to land"
   assert_equals "$(cat <<EOT
 working|Room work for job-r1||Work has started.
 error|Room work for job-r1||Held up by a blocker; looking into it.
 working|Room work for job-r1||Work is under way.
 waits|Room work for job-r1||Waiting on a decision.
 working|Room work for job-r1||Work is under way.
+landing|Room work for job-r1|$PR_URL|Built and about to land.
+error|Room work for job-r1||Held up by a blocker; looking into it.
+landing|Room work for job-r1|$PR_URL|Built and about to land.
 EOT
-)" "$(job_lines "$h")" "a resolved blocker or decision puts the job back to working"
-  pass "a resolved line moves a held-up or waiting job back to working, and sends nothing for a job already working"
+)" "$(job_lines "$h")" "a resolved blocker or decision puts the job back to working, or to about to land once its PR is ready"
+  pass "a resolved line moves a held-up or waiting job back to working, or back to landing after its PR, and sends nothing when the state stays"
 }
 
 test_a_failure_is_told_to_the_card_and_the_job() {

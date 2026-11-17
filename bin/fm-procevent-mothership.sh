@@ -198,7 +198,8 @@
 # backlog title and a fixed line, never the status log's own words:
 #   started  --state working, "Work has started.";
 #   working  --state working, "Work is under way.", for a new working: or
-#            resolved: line;
+#            resolved: line; once a PR was told, --state landing, "Built and
+#            about to land.", --link <url> instead;
 #   waits    --state waits, "Waiting on a decision.", for a new
 #            needs-decision: line;
 #   blocked  --state error, "Held up by a blocker; looking into it.", for a
@@ -222,8 +223,9 @@
 # tasks/<task>.json (one task a card follows: its room, card, project, the
 # newest blocker seen and the events told, removed once the task's
 # state/<task>.meta is gone; or one job: `job: true`, its project, title,
-# state told, newest status line told and seen and the events told, removed
-# once its drop is told, or a day after its state/<task>.meta is gone),
+# state told, newest status line told and seen, the PR told and the events
+# told, removed once its drop is told, or a day after its state/<task>.meta is
+# gone),
 # <room>.contact (when the room last answered), <room>.failures (failures
 # in a row), and <room>.unreachable while the room cannot be reached, for the
 # bridge strip's red alert (bin/fm-bridge-strip.sh): `since=<epoch>` (the first
@@ -1360,7 +1362,14 @@ job_locked() {  # <task-id> <event> <pr> <project> <title> <rooms>
       line=${line#* }
       key="$event-$line"
       case "$event" in
-        working) state=working text="Work is under way." ;;
+        working)
+          pr=$(jq -r '.pr // ""' "$rec")
+          if [ -n "$pr" ]; then
+            state=landing text="Built and about to land."
+          else
+            state=working text="Work is under way."
+          fi
+          ;;
         waits) state=waits text="Waiting on a decision." ;;
         blocked) state=error text="Held up by a blocker; looking into it." ;;
         failed) state=error text="Stopped on a failure; looking into it." ;;
@@ -1410,8 +1419,9 @@ EOF
   if [ "$event" = dropped ]; then
     rm -f -- "$rec"
   else
-    now=$(jq -c --arg k "$key" --arg s "$state" --arg l "$line" \
-      '.sent = ((.sent // []) + [$k] | unique) | .state = $s | if $l != "" then .line = $l else . end' "$rec")
+    now=$(jq -c --arg k "$key" --arg s "$state" --arg l "$line" --arg p "$pr" \
+      '.sent = ((.sent // []) + [$k] | unique) | .state = $s | if $l != "" then .line = $l else . end
+        | if $p != "" then .pr = $p else . end' "$rec")
     write_task_record "$task" "$now" \
       || printf 'told, but not recorded: %s: a later report may repeat it, which the room counts once\n' "$task"
   fi
