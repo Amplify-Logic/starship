@@ -159,8 +159,7 @@
 # scout scaffolds append its text verbatim after the standard contract as
 # "# Home brief additions", which defers to every other section of the brief
 # except a factory profile below it, which in turn defers to it. It goes at the
-# end
-# because the machine-read `# Task` heading resolves to its first match, so
+# end because the machine-read `# Task` heading resolves to its first match, so
 # appended text can never shadow it; a later scout promotion appends its ship
 # contract below it, which that position-free deference already covers. An
 # absent or blank file changes nothing; a present path that is not a readable
@@ -170,12 +169,11 @@
 # A factory profile comes after it: when data/factories.md exists and the
 # factory that claims <repo-name> (bin/fm-factory.py profile owns that lookup,
 # the same one the Factory pane maps work with) has a Rules: list, ship and
-# scout scaffolds end with a "# Factory profile" section holding those rules in
-# file order, never its Learned: lines, each as a list item, under a line
-# saying every other section of the brief, the home additions included, wins on
-# any conflict and a line
-# forbidding copying the text into PR text, commit messages or the no-mistakes
-# intent. A list item can never be a heading or a "Delivery contract:" line, so
+# scout scaffolds end with a "# Factory profile (private context, never
+# quote)" section holding those rules in file order, never its Learned: lines,
+# each as a list item, under a line saying every other section of the brief,
+# the home additions included, wins on any conflict and a line forbidding
+# copying the text into PR text, commit messages or the no-mistakes intent. A list item can never be a heading or a "Delivery contract:" line, so
 # the profile cannot shadow the machine-read sections. Rules whose list, one
 # "- " line per item, is over FACTORY_PROFILE_CAP characters are left out
 # whole, never truncated, with a warning naming the factory; no registry, no
