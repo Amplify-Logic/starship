@@ -429,7 +429,7 @@ fm_secondmate_ready_prs() {  # <state-dir>
     [ -f "$state/$mate.status" ] || continue
     while IFS=$'\t' read -r child url at; do
       [ -n "$url" ] || continue
-      case "$(_fm_secondmate_pr_state "$state" "$url")" in
+      case "$(_fm_secondmate_pr_state "$state" "$url" "$at")" in
         merged|closed) continue ;;
       esac
       printf 'mate-merge\t%s\t%s\t%s\t%s\n' "$mate" "$child" "$url" "$at"
@@ -468,17 +468,18 @@ fm_secondmate_ready_prs() {  # <state-dir>
 }
 
 # _fm_secondmate_pr_state: open, merged, closed or unknown for one second
-# mate's PR. A merged answer is kept for good in state/secondmate-prs/, one
-# file per PR, and any other, closed included since a closed PR can be
-# reopened, is read again once it is FM_SECONDMATE_PR_TTL seconds old
-# (default 300), so the owner's calls, which are read often, ask the forge at
-# most that often per PR. The forge is
-# read through bin/fm-pr-lib.sh for GitHub and GitLab, bounded to 5 seconds;
-# any other forge, or a read that fails, is unknown.
+# mate's PR. Each answer is kept in state/secondmate-prs/, one file per PR,
+# with when it was read. A merged answer is kept for good. A closed one is too,
+# unless the child reported done on it again after that reading (<reported>,
+# the done outcome's epoch), since a closed PR can be reopened. Any other is
+# read again once it is FM_SECONDMATE_PR_TTL seconds old (default 300), so the
+# owner's calls, which are read often, ask the forge at most that often per PR.
+# The forge is read through bin/fm-pr-lib.sh for GitHub and GitLab, bounded
+# to 5 seconds; any other forge, or a read that fails, is unknown.
 # Test seam: FM_SECONDMATE_PR_READER, a command run as `<reader> <url>` that
 # prints the state in place of the forge read.
-_fm_secondmate_pr_state() {  # <state-dir> <url>
-  local state=$1 url=$2 dir file name now ttl cached at answer
+_fm_secondmate_pr_state() {  # <state-dir> <url> [<reported>]
+  local state=$1 url=$2 reported=${3:-} dir file name now ttl cached at answer
   dir="$state/secondmate-prs"
   name=$(printf '%s' "${url#*://}" | LC_ALL=C tr -c 'A-Za-z0-9._-' '_')
   file="$dir/$name"
@@ -487,6 +488,7 @@ _fm_secondmate_pr_state() {  # <state-dir> <url>
   if [ -f "$file" ] && read -r cached at < "$file" 2>/dev/null; then
     case "$cached" in
       merged) printf '%s' "$cached"; return 0 ;;
+      closed) [ "$reported" -gt "$at" ] 2>/dev/null || { printf '%s' "$cached"; return 0; } ;;
     esac
     case "$at" in
       ''|*[!0-9]*) ;;

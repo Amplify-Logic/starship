@@ -804,9 +804,9 @@ LOG
     "https://github.com/o/r/pull/102 https://github.com/o/r/pull/68 https://github.com/o/r/pull/69 https://github.com/o/r/pull/70 https://github.com/o/r/pull/71 " \
     "the forge reads"
 
-  # The forge is asked again only for a PR not yet merged, and only once its
-  # reading is old; a merged PR is never asked about again, while a closed one
-  # can be reopened, so it is.
+  # The forge is asked again only for a PR still open or unread, and only once
+  # its reading is old; a merged or closed PR is not asked about again, unless
+  # a closed one's child reports done on it again, as it would once reopened.
   : > "$forge"
   FM_SECONDMATE_PR_READER="$reader" FM_FLEET_STATE_READER="$BINDIR/fake-crew-state" \
     bash -c '. "$1/bin/fm-fleet-status-lib.sh"; fm_owner_calls "$2"' _ "$ROOT" "$STATE" >/dev/null \
@@ -816,14 +816,24 @@ LOG
     bash -c '. "$1/bin/fm-fleet-status-lib.sh"; fm_owner_calls "$2"' _ "$ROOT" "$STATE" >/dev/null \
     || fail "the owner's calls could not be read once their readings were old"
   assert_equals "$(LC_ALL=C sort "$forge" | tr '\n' ' ')" \
-    "https://github.com/o/r/pull/102 https://github.com/o/r/pull/68 https://github.com/o/r/pull/69 https://github.com/o/r/pull/71 " \
-    "an old reading was not read again, or a merged one was"
+    "https://github.com/o/r/pull/102 https://github.com/o/r/pull/68 https://github.com/o/r/pull/71 " \
+    "an old reading was not read again, or a merged or closed one was"
   sed -i.bak 's|\*/pull/69) echo closed ;;|*/pull/69) echo open ;;|' "$reader" && rm -f "$reader.bak"
+  : > "$forge"
   out=$(FM_SECONDMATE_PR_TTL=0 FM_SECONDMATE_PR_READER="$reader" FM_FLEET_STATE_READER="$BINDIR/fake-crew-state" \
     bash -c '. "$1/bin/fm-fleet-status-lib.sh"; fm_owner_calls "$2"' _ "$ROOT" "$STATE") \
-    || fail "the owner's calls could not be read once a closed PR was reopened"
-  assert_contains "$out" "$(printf 'mate-merge\tfar\tchild-d\thttps://github.com/o/r/pull/69\t210')" \
-    "a closed PR that was reopened is not listed again"
+    || fail "the owner's calls could not be read with a closed PR reopened"
+  assert_not_contains "$out" "pull/69" "a closed PR was listed again with no new done outcome"
+  assert_not_contains "$(cat "$forge")" "pull/69" "a closed PR was read again with no new done outcome"
+  local again
+  again=$(( $(date +%s) + 1 ))
+  printf 'done [key=child-outcome-child-d-done-9a8b7c6d] [at=%s]: child child-d done: checks green again pr=https://github.com/o/r/pull/69 mode=no-mistakes yolo=off\n' \
+    "$again" >> "$STATE/far.status"
+  out=$(FM_SECONDMATE_PR_TTL=0 FM_SECONDMATE_PR_READER="$reader" FM_FLEET_STATE_READER="$BINDIR/fake-crew-state" \
+    bash -c '. "$1/bin/fm-fleet-status-lib.sh"; fm_owner_calls "$2"' _ "$ROOT" "$STATE") \
+    || fail "the owner's calls could not be read once a reopened PR was reported done again"
+  assert_contains "$out" "$(printf 'mate-merge\tfar\tchild-d\thttps://github.com/o/r/pull/69\t%s' "$again")" \
+    "a closed PR that was reopened and reported done again is not listed again"
   sed -i.bak 's|\*/pull/69) echo open ;;|*/pull/69) echo closed ;;|' "$reader" && rm -f "$reader.bak"
   FM_SECONDMATE_PR_TTL=0 FM_SECONDMATE_PR_READER="$reader" FM_FLEET_STATE_READER="$BINDIR/fake-crew-state" \
     bash -c '. "$1/bin/fm-fleet-status-lib.sh"; fm_owner_calls "$2"' _ "$ROOT" "$STATE" >/dev/null \
