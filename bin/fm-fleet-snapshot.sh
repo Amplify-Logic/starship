@@ -626,8 +626,8 @@ backlog_json() (  # [<backlog-path>] - defaults to this home's $BACKLOG
 # stamp on its body's first line (its created date for a legacy unstamped
 # hold), and both come from the same single listing; no row is shown on its
 # own. Rows end at the first line after the table that is not one, such as the
-# help block. It fails, printing nothing, when the listing cannot be read or is
-# cut short.
+# help block; an empty backlog's listing has a count of 0 and no table. It
+# fails, printing nothing, when the listing cannot be read or is cut short.
 axi_backlog_json() (
   set -o pipefail
   local axi=$SCRIPT_DIR/fm-tasks-axi.sh listing rows
@@ -670,7 +670,8 @@ axi_backlog_json() (
                    hold_until => $absent->($row{hold_until}), hold_set => $hold_set, since => $since,
                    blocked_by_ids => [grep { $_ ne "" && $_ ne "none" } split /\s*,\s*/, ($blocked // "")]};
     }
-    die "no listing\n" unless $fields && defined $count && $count == $total && @rows == $count;
+    # An empty backlog has no table: tasks-axi prints only its count of 0.
+    die "no listing\n" unless defined $count && $count == $total && @rows == $count && ($fields || $count == 0);
     print $json->canonical->encode(\@rows);
   ') || return 1
   jq -n --argjson rows "$rows" --arg today "$SNAPSHOT_TODAY" \

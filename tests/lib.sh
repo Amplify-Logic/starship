@@ -1169,7 +1169,8 @@ SH
 # bin/fm-fleet-snapshot.sh --backlog does; a missing backlog lists nothing.
 # FM_TEST_AXI_BACKLOG names a JSON file holding a backlog object (or a snapshot
 # with one under .backlog) to serve instead. A listing ends with the help block
-# real tasks-axi prints after its table.
+# real tasks-axi prints after its table; an empty listing has no table, only the
+# one line real tasks-axi prints in its place.
 fm_install_markdown_tasks_axi() {
   local fb=$1
   mkdir -p "$fb"
@@ -1193,6 +1194,7 @@ case "${1:-}" in
     jq -r --arg fields "$fields" '[.records[] | select(.structured)] as $rows
       | ($fields | split(",")) as $extra
       | "count: \($rows | length)",
+        if ($rows | length) == 0 then "tasks: 0 tasks in this backlog" else
         "tasks[\($rows | length)]{\((["id","state","kind","repo","title"] + $extra) | join(","))}:",
         ($rows[] | . as $row | "  " + ([.id, .state, (.kind // "-"), (.repo // "-"), ((.title // "") | @json)]
           + [$extra[] | if . == "hold_kind" then ($row.hold_kind // "-")
@@ -1204,7 +1206,7 @@ case "${1:-}" in
               elif . == "body" then ((($row.body_lines // []) | join("\n")) as $body
                 | if $body == "" and $row.hold_set != null then "Captain hold set: \($row.hold_set)" else $body end | @json)
               else "-" end]
-          | join(","))),
+          | join(","))) end,
         "help[1]:", "  - Run `tasks-axi show <id> --full` for full notes on a task"' <<<"$backlog"
     ;;
   show)
