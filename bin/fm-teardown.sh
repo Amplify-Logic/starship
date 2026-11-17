@@ -4587,6 +4587,11 @@ retire_busy_state "$STATE" "$ID" "$BUSY_GEN" || exit 1
 # Opt-in fleet activity ledger (docs/fleet-ledger.md), before the status log is
 # retired so its last lines are captured; off costs one file test.
 [ ! -e "$CONFIG/fleet-ledger" ] || FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG "$SCRIPT_DIR/fm-fleet-ledger.sh" cleaned_up "$ID" || true
+# The Mothership room takes a job that never landed off its Ships view
+# (bin/fm-procevent-mothership.sh "OUTCOMES IN THE ROOM"); a home with no room
+# link costs one directory and one file test.
+# shellcheck source=bin/fm-mothership-report-lib.sh
+{ . "$SCRIPT_DIR/fm-mothership-report-lib.sh" && fm_mothership_report "$FM_HOME" "$STATE" "$CONFIG" "$ID" dropped; } || true
 # Record capability evidence before meta disappears (ship/scout only;
 # best-effort). The steer counter is a volatile state file read here.
 if [ -f "$STATE/$ID.steers" ]; then

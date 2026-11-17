@@ -9452,10 +9452,11 @@ SPAWN_ACCOUNT=
 [ -z "$OMP_PROFILE_PIN" ] || SPAWN_ACCOUNT="$SPAWN_ACCOUNT omp_profile=$OMP_PROFILE_PIN"
 # Opt-in fleet activity ledger (docs/fleet-ledger.md); off costs one file test.
 [ ! -e "$CONFIG/fleet-ledger" ] || [ "$RELAUNCH" -eq 1 ] || FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG "$SCRIPT_DIR/fm-fleet-ledger.sh" dispatched "$ID" "$KIND" "${PROJ_ABS##*/}" "$HARNESS" "$MODEL" || true
-# A Mothership room card this task serves hears that work started
-# (bin/fm-procevent-mothership.sh "OUTCOMES ON THE CARD"), without waiting on the
-# room; a home that keeps no Mothership state costs one directory test.
-[ ! -d "$STATE/mothership" ] || [ "$RELAUNCH" -eq 1 ] || FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG "$SCRIPT_DIR/fm-procevent-mothership.sh" report --detach "$ID" started >/dev/null 2>&1 || true
+# The Mothership room hears that work started (bin/fm-procevent-mothership.sh
+# "OUTCOMES IN THE ROOM"), without waiting on the room; a home with no room link
+# costs one directory and one file test.
+# shellcheck source=bin/fm-mothership-report-lib.sh
+[ "$RELAUNCH" -eq 1 ] || { . "$SCRIPT_DIR/fm-mothership-report-lib.sh" && fm_mothership_report "$FM_HOME" "$STATE" "$CONFIG" "$ID" started; } || true
 # Opt-in Herdr project groups (docs/herdr-backend.md "Project groups") tag the
 # new endpoint now rather than at the next watcher poll; off costs one file test.
 [ ! -e "$CONFIG/herdr-project-groups" ] || [ "$BACKEND" != herdr ] || FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG "$SCRIPT_DIR/fm-herdr-groups.sh" sync "$ID" || true

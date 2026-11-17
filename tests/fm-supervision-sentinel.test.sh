@@ -413,6 +413,112 @@ test_live_identity_matched_watcher_stays_silent() {
   pass "supervision sentinel: live identity-matched watcher with a fresh beacon stays silent"
 }
 
+# start_claude_session_holder <home>: a live process whose ps comm is the Claude
+# harness name holds the home's session lock, the way a running Claude primary
+# does. Lock inspection and fm-harness.sh ancestry both classify it, so the host
+# check resolves the home's own supervision model without any override.
+# Prints the holder pid.
+start_claude_session_holder() {
+  local home=$1 pid i=0
+  perl -e '$0="claude"; sleep 60' >/dev/null 2>&1 &
+  pid=$!
+  while [ "$i" -lt 50 ] && [ "$(ps -o comm= -p "$pid" 2>/dev/null | sed 's#.*/##')" != claude ]; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  printf '%s\n' "$pid" > "$home/state/.lock"
+  printf '%s\n' "$pid"
+}
+
+stop_holder() {
+  kill "$1" 2>/dev/null || true
+  wait "$1" 2>/dev/null || true
+}
+
+# A Claude primary's watcher closes on every wake and the next cycle is armed at
+# the hand-over or the turn end, so between two cycles no watcher holds the lock
+# while the beacon is still fresh. The host check must read that gap the way the
+# in-session guards do (fm_watcher_supervision_verdict), not as an outage.
+test_claude_handover_gap_with_fresh_beacon_stays_silent() {
+  local home="$TMP_ROOT/handover" recorder="$TMP_ROOT/record-handover" log="$TMP_ROOT/handover-alerts.log" holder out
+  make_primary "$home"
+  make_recorder "$recorder" "$log"
+  printf 'project=test\n' > "$home/state/task.meta"
+  holder=$(start_claude_session_holder "$home")
+  touch "$home/state/.last-watcher-beat"
+  [ ! -e "$home/state/.watch.lock" ] || fail "hand-over fixture unexpectedly has a watcher lock"
+
+  run_check "$home" "$recorder"
+  out=$(run_mode "$home" "$recorder" check)
+  local rc=$?
+  stop_holder "$holder"
+  [ ! -e "$log" ] || fail "a normal hand-over gap between watcher cycles fired SUPERVISION DOWN: $(cat "$log")"
+  [ ! -e "$home/state/.supervision-outage-alarm" ] || fail "a normal hand-over gap wrote an outage marker"
+  [ "$rc" -eq 0 ] || fail "the diagnostic check reported a hand-over gap as an outage: $out"
+  assert_contains "$out" 'supervision sentinel: OK - 1 task(s) in flight between watcher cycles' \
+    "the diagnostic did not report the hand-over gap as healthy: $out"
+  pass "supervision sentinel: a Claude hand-over gap with a fresh beacon is healthy, not an outage"
+}
+
+# The same Claude home whose watcher never came back: once the beacon is past
+# the grace the gap is a genuine lapse and the host alarm still fires.
+test_claude_watcher_missing_past_grace_still_alerts() {
+  local home="$TMP_ROOT/handover-dead" recorder="$TMP_ROOT/record-handover-dead" log="$TMP_ROOT/handover-dead-alerts.log" holder
+  make_primary "$home"
+  make_recorder "$recorder" "$log"
+  printf 'project=test\n' > "$home/state/task.meta"
+  holder=$(start_claude_session_holder "$home")
+  touch -t 202001010000 "$home/state/.last-watcher-beat"
+
+  run_check "$home" "$recorder"
+  stop_holder "$holder"
+  [ "$(wc -l < "$log" 2>/dev/null | tr -d '[:space:]')" = 1 ] \
+    || fail "a Claude home whose watcher stayed missing past the grace did not fire exactly one alert"
+  assert_contains "$(cat "$log")" 'SUPERVISION DOWN: 1 task(s) in flight' "the past-grace alert did not name the outage"
+  pass "supervision sentinel: a Claude watcher missing past the grace still fires the host alarm"
+}
+
+# A Claude home whose Stop hook recorded a rewake that was never handled: the
+# primary stays alive and idle, no watcher is armed, and the rewake ledger names
+# the live session and the current recovery token. The in-session pull guard may
+# read that ledger as mid-turn work, but from launchd nothing proves the primary
+# is in a turn, so a beacon past the grace must still raise the host alarm
+# rather than reading as healthy however old it gets.
+test_claude_stale_beacon_with_rewake_ledger_still_alerts() {
+  local home="$TMP_ROOT/handover-rewake" recorder="$TMP_ROOT/record-handover-rewake" log="$TMP_ROOT/handover-rewake-alerts.log" holder
+  make_primary "$home"
+  make_recorder "$recorder" "$log"
+  printf 'project=test\n' > "$home/state/task.meta"
+  holder=$(start_claude_session_holder "$home")
+  touch -t 202001010000 "$home/state/.last-watcher-beat"
+  printf 'pending:handling:tok1\n' > "$home/state/.watcher-down"
+  printf 'epoch=5 owner_pid=%s outcome=rewake session_pid=%s recovery_generation=tok1 updated_at=%s\n' \
+    "$holder" "$holder" "$(date +%s)" > "$home/state/.claude-autoarm-epoch"
+
+  run_check "$home" "$recorder"
+  stop_holder "$holder"
+  [ "$(wc -l < "$log" 2>/dev/null | tr -d '[:space:]')" = 1 ] \
+    || fail "an idle Claude home with an unhandled rewake ledger and a stale beacon did not fire exactly one alert"
+  assert_contains "$(cat "$log")" 'SUPERVISION DOWN: 1 task(s) in flight' "the rewake-ledger alert did not name the outage"
+  pass "supervision sentinel: a stale beacon beside an unhandled rewake ledger still fires the host alarm"
+}
+
+# With no live harness holding the session lock the home's supervision model is
+# unknown, so the host check keeps the strict live-watcher requirement: a fresh
+# leftover beacon alone never reads as healthy.
+test_unknown_home_model_keeps_the_strict_watcher_check() {
+  local home="$TMP_ROOT/handover-unknown" recorder="$TMP_ROOT/record-handover-unknown" log="$TMP_ROOT/handover-unknown-alerts.log"
+  make_primary "$home"
+  make_recorder "$recorder" "$log"
+  printf 'project=test\n' > "$home/state/task.meta"
+  touch "$home/state/.last-watcher-beat"
+
+  run_check "$home" "$recorder"
+  [ "$(wc -l < "$log" 2>/dev/null | tr -d '[:space:]')" = 1 ] \
+    || fail "a home with no live session holder and no watcher did not fire the host alarm"
+  pass "supervision sentinel: an unknown home model keeps the strict live-watcher check"
+}
+
 # install_shift_hook <home>: a sentinel hook as a home's private add-on
 # carries one for a shift, a duty of its own whose events arrive outside crew
 # tasks. The add-on owns what "armed" means; this fixture's hook reports an
@@ -1428,6 +1534,10 @@ test_in_harness_modes_are_marker_only_and_honor_a_durable_disarm
 test_marker_only_evidence_refreshes_a_new_episode_but_never_a_claim
 test_symlinked_home_is_not_reported_as_an_outage
 test_live_identity_matched_watcher_stays_silent
+test_claude_handover_gap_with_fresh_beacon_stays_silent
+test_claude_watcher_missing_past_grace_still_alerts
+test_claude_stale_beacon_with_rewake_ledger_still_alerts
+test_unknown_home_model_keeps_the_strict_watcher_check
 test_armed_shift_with_no_crew_task_is_supervised
 test_addon_sentinel_hook_work_is_supervised
 test_dead_away_daemon_with_a_shift_armed_fires_the_host_alarm

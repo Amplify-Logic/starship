@@ -610,6 +610,99 @@ test_the_whole_queue_is_counted_in_sight() {
   pass "factory queue: the whole queue is counted under the count line, by what starts it, and per factory"
 }
 
+# On 2026-11-17 the owner saw "41 start on their own" folded on a factory's
+# page and could open none of them. They were parked until a date: looked at
+# again then, never started by themselves. Parked work now says until when,
+# and the folded count line opens on every job it stands for.
+add_parked_work() {
+  local snap
+  snap=$(jq '.backlog.records += [
+      (.backlog.records[] | select(.id == "shop-gift")
+        | .id = "shop-wrap-paper" | .title = "Wrapping paper samples" | .hold_kind = "parked"
+        | .hold_reason = "Look again next month." | .hold_until = "2026-12-01"),
+      (.backlog.records[] | select(.id == "shop-gift")
+        | .id = "shop-tags" | .title = "Gift tag colours" | .hold_kind = "parked"
+        | .hold_reason = "Look again next month." | .hold_until = "2026-12-01"
+        | .blocked_by_ids = ["shop-gift"] | .unresolved_blocker_ids = ["shop-gift"]),
+      (.backlog.records[] | select(.id == "shop-gift")
+        | .id = "shop-new-year" | .title = "New year banner" | .hold_kind = "parked"
+        | .hold_reason = "Look again after the holidays." | .hold_until = "2027-01-05"),
+      (.backlog.records[] | select(.id == "shop-gift")
+        | .id = "shop-summer" | .title = "Spring sale page" | .hold_kind = "parked"
+        | .hold_reason = "Was to be looked at in September." | .hold_until = "2026-09-01")]' \
+    "$FM_FACTORY_SNAPSHOT") || fail "could not add the parked work"
+  printf '%s\n' "$snap" > "$FM_FACTORY_SNAPSHOT"
+}
+
+test_parked_work_says_until_when_it_is_parked() {
+  reset_case
+  write_registry
+  write_world
+  add_parked_work
+  local out
+  take_record
+  assert_equals "$(q '[.factories[0].jobs[] | select(.id | test("wrap-paper|tags|new-year|shop-summer")) | "\(.id)=\(.queue)/\(.parked_until)"] | join(" ")')" \
+    "shop-wrap-paper=parked/2026-12-01 shop-tags=parked/2026-12-01 shop-new-year=parked/2027-01-05 shop-summer=on hold/null" \
+    "parked work, even parked work that also waits on other work, does not read parked until its date"
+  assert_equals "$(q '.queue | "\(.starts_on_its_own) \(.parked) \([.parked_until[] | "\(.until)=\(.count)"] | join(","))"')" \
+    "0 3 2026-12-01=2,2027-01-05=1" "the queue does not count the parked per date"
+  assert_equals "$(q .queue_line)" \
+    "10 queued · 3 parked, soonest 1 Dec · 2 in line · 2 on hold · 3 wait on you, 1 of them deferred to a date" \
+    "the queue line does not say until when work is parked"
+  assert_not_contains "$(q .queue_line)" "on their own" "parked work reads as starting on its own"
+  out=$(python3 "$FACTORY" --plain --width 120 --factory sample-shop) || fail "--plain --factory failed"
+  has_line "$out" " · 3 parked, soonest 1 Dec · 2 on hold · 1 deferred to a date" \
+    "the folded count line does not say until when work is parked"
+  assert_not_contains "$out" "Wrapping paper samples" "a folded job was listed before its line was opened"
+  pass "factory queue: parked work says until when it is parked, never that it starts on its own"
+}
+
+test_a_folded_count_line_opens_on_every_job_it_stands_for() {
+  reset_case
+  write_registry
+  write_world
+  add_parked_work
+  local dir="$TMP_ROOT/case$CASE" screen
+  # The factory's page has one call for the owner, then the folded line.
+  DRIVE_FACTORY=sample-shop drive_keys DOWN "SNAP:$dir/on-fold" ENTER "SNAP:$dir/listed" ESC "SNAP:$dir/hidden"
+  screen=$(screen_of "$dir/on-fold" 50 100)
+  has_line "$screen" " ▸ · 3 parked, soonest 1 Dec · 2 on hold · 1 deferred to a date" \
+    "the folded count line cannot be highlighted"
+  assert_contains "$screen" "enter list them" "the keys line does not say enter lists the folded jobs"
+  screen=$(screen_of "$dir/listed" 50 100)
+  has_line "$screen" " 3 parked, soonest 1 Dec" "the list has no heading per count"
+  has_line "$screen" " · Wrapping paper samples parked until 1 Dec" "a parked job is not listed with its date"
+  has_line "$screen" " · Gift tag colours parked until 1 Dec" "a parked job that also waits on other work is not listed"
+  has_line "$screen" " · New year banner parked until 5 Jan 2027" "a job parked to another date is not listed"
+  has_line "$screen" " · Spring sale page on hold" "a job on hold is not listed with its queue word"
+  has_line "$screen" " · Charge tax abroad deferred" "a deferred call is not listed with its queue word"
+  assert_contains "$screen" "esc hide the list" "the keys line does not say esc hides the list"
+  assert_not_contains "$screen" "esc back" "the keys line names esc for going back while esc hides the list"
+  screen=$(screen_of "$dir/hidden" 50 100)
+  assert_not_contains "$screen" "Wrapping paper samples" "esc did not hide the list"
+  has_line "$screen" " ▸ · 3 parked, soonest 1 Dec · 2 on hold · 1 deferred to a date" \
+    "esc left the factory's page instead of hiding the list"
+  pass "factory pane: enter on a folded count line lists every job it stands for, esc hides them"
+}
+
+test_an_opened_list_closes_when_its_folded_work_is_gone() {
+  reset_case
+  write_registry
+  write_world
+  local dir="$TMP_ROOT/case$CASE" screen
+  # Sample Shop folds one job on hold and one deferred call; both leave while the list is open.
+  DRIVE_FACTORY=sample-shop drive_keys DOWN ENTER "SNAP:$dir/listed" \
+    "SH:jq '.backlog.records |= map(select(.id != \"shop-later\" and .id != \"shop-tax\"))' '$FM_FACTORY_SNAPSHOT' > '$dir/w' && mv '$dir/w' '$FM_FACTORY_SNAPSHOT' && python3 '$FACTORY' refresh" \
+    "SNAP:$dir/emptied" ESC "SNAP:$dir/back"
+  assert_contains "$(screen_of "$dir/listed" 50 100)" "esc hide the list" "the folded list did not open"
+  screen=$(screen_of "$dir/emptied" 50 100)
+  assert_not_contains "$screen" "Charge tax abroad" "the folded work did not leave the page"
+  assert_not_contains "$screen" "esc hide the list" "the keys line offers to hide a list that is gone"
+  assert_contains "$screen" "esc back" "the keys line does not say esc goes back once the list is gone"
+  assert_contains "$(screen_of "$dir/back" 50 100)" "enter open" "the first esc after the list was gone did not go back"
+  pass "factory pane: an opened folded list closes when its folded work is gone, so esc goes back"
+}
+
 # The backlog file cannot tell a blocker that was finished and archived from
 # one still open, so on the owner's backlog ten jobs read as waiting on other
 # work that waited on nothing. The backlog's own reading decides.
@@ -1000,7 +1093,8 @@ test_a_narrow_talk_box_always_shows_what_is_typed() {
 # instead and waits for the pane to pick up the refreshed record; a
 # `SNAP:<file>` step saves what the pane draws next; a `WAIT:<seconds>` step
 # leaves the pane alone that long. With DRIVE_PANE=1 the view runs as Herdr
-# starts it, through fm-factory-pane.sh run.
+# starts it, through fm-factory-pane.sh run; with DRIVE_FACTORY=<id> it opens
+# on that factory's page.
 drive_keys() {
   python3 - "$FACTORY" "$PANE" "$@" <<'PY'
 import fcntl, os, pty, select, struct, subprocess, sys, termios, time
@@ -1010,7 +1104,8 @@ if pid == 0:
     fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
     if os.environ.get("DRIVE_PANE") == "1":
         os.execvp("bash", ["bash", sys.argv[2], "run"])
-    os.execvp("python3", ["python3", sys.argv[1], "view"])
+    factory = os.environ.get("DRIVE_FACTORY")
+    os.execvp("python3", ["python3", sys.argv[1], "view"] + (["--factory", factory] if factory else []))
 def drain(seconds, until=None):
     end, seen = time.monotonic() + seconds, b""
     while time.monotonic() < end and not (until and until in seen):
@@ -2884,6 +2979,9 @@ fm_test_run \
   test_the_record_words_every_state \
   test_the_plain_screen_is_the_record_as_text \
   test_the_whole_queue_is_counted_in_sight \
+  test_parked_work_says_until_when_it_is_parked \
+  test_a_folded_count_line_opens_on_every_job_it_stands_for \
+  test_an_opened_list_closes_when_its_folded_work_is_gone \
   test_a_blocker_that_was_finished_and_archived_holds_nothing_up \
   test_only_the_highlighted_call_opens_as_a_card \
   test_closed_work_reads_closed_and_only_delivered_work_reads_finished \
