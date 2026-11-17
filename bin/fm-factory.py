@@ -1187,10 +1187,13 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
             # status bar counts it.
             job.update(state="needs a look")
         elif bucket == "ready" and task["id"] not in merge_ids and not (row and row["id"] in decision_ids):
-            # Held work waits on its hold; otherwise the overview has not read
-            # it as ready yet, so it is no call until it does.
-            job["state"] = held_state(row, today) if row and (row.get("hold_kind") or row.get("hold_bucket")) \
-                else "ready to merge"
+            # Held work waits on its hold; otherwise the shared overview has
+            # not listed it as ready yet, so it stays busy at checking and
+            # becomes ready to merge once the overview lists it.
+            if row and (row.get("hold_kind") or row.get("hold_bucket")):
+                job["state"] = held_state(row, today)
+            else:
+                job.update(state="busy", step="checking")
         elif bucket == "ready":
             job.update(state="ready to merge", step="ready to merge")
             pr = job["pr"]

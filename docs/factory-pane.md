@@ -206,6 +206,7 @@ The record's schema is `fm-factory.v1`:
 | `feed[]` | Each event: `at` (or a `date` when only the day is known), `actor`, `factory`, `word`, and `text`. |
 
 Every state is a word: a job is `busy`, `decision for you`, `ready to merge`, `needs a look`, `failed`, `waiting`, `stopped`, `no worker`, `no reading`, `with Starship`, `finished`, `next`, `later`, `on hold`, `on hold until <date>`, or `waits on other work`; a factory is `needs you`, `at work`, or `idle`.
+A job reads `ready to merge` only once the shared overview reading lists it as ready, so it is counted in the count line's `ready to merge`; until then it stays `busy` at `checking`.
 The words the overview also uses mean what [status-bar.md](status-bar.md#fleet-words) says; `with Starship` is finished work that is Starship's turn, such as a scout report it reads first, and `no reading` a job whose state could not be read.
 A job nobody has started also says where it stands in the queue: its `queue` is `starts on its own`, `in line`, `on hold`, `waits on other work`, `waits on you`, `older call`, or `deferred`, and null for a job with a worker.
 

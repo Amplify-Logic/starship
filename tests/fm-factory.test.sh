@@ -767,6 +767,35 @@ test_ready_work_held_until_a_date_is_not_ready_for_you() {
   pass "factory record: ready work the owner held until a date reads on hold, not ready to merge"
 }
 
+# The pane can read a ship as ready before the shared overview reading lists it
+# ready; until the overview does, the job is busy at checking, not ready to merge.
+test_ready_work_the_overview_has_not_listed_reads_busy() {
+  reset_case
+  write_registry
+  write_world
+  local ready
+  ready=$(cat "$FM_FACTORY_SNAPSHOT")
+  jq '(.tasks[] | select(.id == "garden-share").current_state) |= (.state = "working" | .source = "pane"
+    | .detail = "harness busy (claude-hook)" | .raw = "state: working · source: pane · harness busy (claude-hook)")' \
+    "$FM_FACTORY_SNAPSHOT" > "$HOME_FIX/snapshot.next" && mv "$HOME_FIX/snapshot.next" "$FM_FACTORY_SNAPSHOT"
+  printf '%s\n' "$ready" > "$HOME_FIX/ready.json"
+  overview_cached true || fail "the overview could not be cached before the ship was ready"
+  cp "$HOME_FIX/ready.json" "$FM_FACTORY_SNAPSHOT"
+  FM_FLEET_STATE_NO_CACHE=0 FM_FLEET_STATE_TTL=3600 FM_FLEET_STATE_MAX_AGE=3600 data \
+    > "$TMP_ROOT/case$CASE/record.json" || fail "--data failed"
+  assert_equals "$(q '.factories[] | .jobs[] | select(.id == "garden-share") | "\(.state)|\(.step // "-")"')" \
+    "busy|checking" "ready work the overview has not listed read as ready to merge"
+  assert_equals "$(q '[.needs_you[] | select(.id == "garden-share")] | length')" "0" \
+    "ready work the overview has not listed is under NEEDS YOU"
+  assert_equals "$(q .counts.ready_to_merge)" "0" "the count line counted ready work the overview has not listed"
+  assert_equals "$(q '.count_line | contains("0 ready to merge")')" "true" "count line"
+  take_record
+  assert_equals "$(q '.factories[] | .jobs[] | select(.id == "garden-share") | "\(.state)|\(.step // "-")"')" \
+    "ready to merge|ready to merge" "ready work the overview lists did not read ready to merge"
+  assert_equals "$(q .counts.ready_to_merge)" "1" "the count line missed ready work the overview lists"
+  pass "factory record: ready work reads busy until the shared overview lists it, then ready to merge"
+}
+
 # A home whose backlog is not markdown has no rows in the snapshot's markdown
 # read; its held decisions still reach NEEDS YOU through the tasks-axi adapter.
 test_held_decisions_come_through_a_non_markdown_adapter() {
@@ -2745,6 +2774,7 @@ fm_test_run \
   test_a_job_with_no_sign_of_life_reads_quiet \
   test_a_changing_pane_is_a_sign_of_life \
   test_ready_work_held_until_a_date_is_not_ready_for_you \
+  test_ready_work_the_overview_has_not_listed_reads_busy \
   test_held_decisions_come_through_a_non_markdown_adapter \
   test_a_ship_with_no_mode_still_reports_its_pr_ready \
   test_without_a_registry_each_project_is_a_factory \
