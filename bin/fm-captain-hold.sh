@@ -219,8 +219,7 @@
 # that bounds repeated work per call cannot use the task id alone, and
 # `answer --expect-identity` compares against the same value.
 # `open-each` asks `open --identity --distinguish-absent` of every named task
-# in one process, side by side (at most FM_CAPTAIN_HOLD_OPEN_CONCURRENCY at a
-# time, default 8), so a reader of many held calls pays for one start and one
+# in one process, side by side (at most 8 at a time), so a reader of many held calls pays for one start and one
 # compatibility probe. It prints one `<task-id>\t<exit>\t<text>` line per id
 # in argument order, where exit is that task's `open` exit and text is its
 # identity on 0 and otherwise the last line that read wrote to stderr (empty
@@ -2546,7 +2545,7 @@ command_open() {  # <task-id> [--identity] [--distinguish-absent]
 # One `open --identity --distinguish-absent` per task, read side by side in this
 # one process (the header's `open-each`).
 command_open_each() {  # <task-id>...
-  local id dir index=0 shown=0 active=0 limit rc text
+  local id dir index=0 shown=0 active=0 rc text
   [ "$#" -gt 0 ] || { usage >&2; exit 2; }
   for id in "$@"; do
     case "$id" in
@@ -2556,8 +2555,6 @@ command_open_each() {  # <task-id>...
         ;;
     esac
   done
-  limit=${FM_CAPTAIN_HOLD_OPEN_CONCURRENCY:-8}
-  case "$limit" in ''|*[!0-9]*|0) limit=8 ;; esac
   # Probe once here, so every read below reuses the memoised verdict.
   fm_tasks_axi_compatible || true
   dir=$(umask 077; mktemp -d "${TMPDIR:-/tmp}/fm-captain-hold-open.XXXXXX") \
@@ -2568,7 +2565,7 @@ command_open_each() {  # <task-id>...
       printf '%s\n' "$rc" >"$dir/$index.rc"; } &
     index=$((index + 1))
     active=$((active + 1))
-    if [ "$active" -ge "$limit" ]; then
+    if [ "$active" -ge 8 ]; then
       wait
       active=0
     fi

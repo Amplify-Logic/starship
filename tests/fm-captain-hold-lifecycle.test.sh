@@ -4338,7 +4338,7 @@ test_retained_body_keeps_its_utf8_bytes() {
 # `open --identity --distinguish-absent` per task gives: its exit and its
 # identity on an open call.
 test_open_each_matches_open_for_every_task() {
-  local home id rc out expected actual
+  local home id rc out expected actual ids n
   home=$(make_home open-each)
   tasks_in "$home" add each-held "Pick the first card" --kind ship --repo sample >/dev/null \
     || fail "could not create the held work item"
@@ -4356,18 +4356,21 @@ test_open_each_matches_open_for_every_task() {
   FM_CAPTAIN_HOLD_NOW=2026-06-03T12:00:00Z run_captain "$home" hold each-answered \
     --reason "captain pick needed again" >/dev/null || fail "could not hold the second card again"
 
+  # More ids than are read at once, so the answers cross a batch boundary.
+  ids="each-held each-plain each-answered each-absent"
+  for n in 1 2 3 4 5 6 7; do ids="$ids each-absent-$n"; done
   expected=''
-  for id in each-held each-plain each-answered each-absent; do
+  for id in $ids; do
     rc=0
     out=$(run_captain "$home" open "$id" --identity --distinguish-absent 2>/dev/null) || rc=$?
     expected="$expected$id	$rc	$out"$'\n'
   done
-  actual=$(FM_CAPTAIN_HOLD_OPEN_CONCURRENCY=2 run_captain "$home" open-each \
-    each-held each-plain each-answered each-absent) || fail "open-each failed"
+  # shellcheck disable=SC2086  # Each id is its own argument.
+  actual=$(run_captain "$home" open-each $ids) || fail "open-each failed"
   [ "$actual"$'\n' = "$expected" ] || fail "open-each disagreed with open: got [$actual] want [$expected]"
   assert_contains "$actual" "each-held	0	2026-06-01T12:00:00Z#0" "the held card's identity was wrong"
   assert_contains "$actual" "each-answered	0	2026-06-03T12:00:00Z#1" "the re-held card's identity was wrong"
-  assert_contains "$actual" "each-absent	3	" "the absent task was not reported absent"
+  assert_contains "$actual" "each-absent-7	3	" "a task after the first batch was not reported absent"
 
   rc=0
   run_captain "$home" open-each each-held 'bad id' > "$home/bad.out" 2> "$home/bad.err" || rc=$?
