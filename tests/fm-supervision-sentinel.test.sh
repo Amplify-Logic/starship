@@ -478,6 +478,31 @@ test_claude_watcher_missing_past_grace_still_alerts() {
   pass "supervision sentinel: a Claude watcher missing past the grace still fires the host alarm"
 }
 
+# A Claude home whose Stop hook recorded a rewake that was never handled: the
+# primary stays alive and idle, no watcher is armed, and the rewake ledger names
+# the live session and the current recovery token. The in-session pull guard may
+# read that ledger as mid-turn work, but from launchd nothing proves the primary
+# is in a turn, so a beacon past the grace must still raise the host alarm
+# rather than reading as healthy however old it gets.
+test_claude_stale_beacon_with_rewake_ledger_still_alerts() {
+  local home="$TMP_ROOT/handover-rewake" recorder="$TMP_ROOT/record-handover-rewake" log="$TMP_ROOT/handover-rewake-alerts.log" holder
+  make_primary "$home"
+  make_recorder "$recorder" "$log"
+  printf 'project=test\n' > "$home/state/task.meta"
+  holder=$(start_claude_session_holder "$home")
+  touch -t 202001010000 "$home/state/.last-watcher-beat"
+  printf 'pending:handling:tok1\n' > "$home/state/.watcher-down"
+  printf 'epoch=5 owner_pid=%s outcome=rewake session_pid=%s recovery_generation=tok1 updated_at=%s\n' \
+    "$holder" "$holder" "$(date +%s)" > "$home/state/.claude-autoarm-epoch"
+
+  run_check "$home" "$recorder"
+  stop_holder "$holder"
+  [ "$(wc -l < "$log" 2>/dev/null | tr -d '[:space:]')" = 1 ] \
+    || fail "an idle Claude home with an unhandled rewake ledger and a stale beacon did not fire exactly one alert"
+  assert_contains "$(cat "$log")" 'SUPERVISION DOWN: 1 task(s) in flight' "the rewake-ledger alert did not name the outage"
+  pass "supervision sentinel: a stale beacon beside an unhandled rewake ledger still fires the host alarm"
+}
+
 # With no live harness holding the session lock the home's supervision model is
 # unknown, so the host check keeps the strict live-watcher requirement: a fresh
 # leftover beacon alone never reads as healthy.
@@ -1511,6 +1536,7 @@ test_symlinked_home_is_not_reported_as_an_outage
 test_live_identity_matched_watcher_stays_silent
 test_claude_handover_gap_with_fresh_beacon_stays_silent
 test_claude_watcher_missing_past_grace_still_alerts
+test_claude_stale_beacon_with_rewake_ledger_still_alerts
 test_unknown_home_model_keeps_the_strict_watcher_check
 test_armed_shift_with_no_crew_task_is_supervised
 test_addon_sentinel_hook_work_is_supervised

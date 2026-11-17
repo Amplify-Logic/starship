@@ -5,10 +5,10 @@
 # background task, so neither process can be the final detector of its own
 # death. On macOS, `arm` registers this script as a home-scoped launchd agent.
 # launchd invokes `scheduled-check` every FM_SENTINEL_INTERVAL_SECS (default 60), outside
-# the harness process tree. A check uses the same in-flight count and the same
-# model-aware supervision verdict as the in-session pull and continuity guards
+# the harness process tree. A check uses the same in-flight count as the
+# in-session pull and continuity guards and reads the home's supervision model
 # (fm_sentinel_supervised), so a normal hand-over gap between watcher cycles is
-# not an outage. It writes one durable outage marker and reuses config/wedge-alarm's
+# not an outage while a watcher still missing past the grace is. It writes one durable outage marker and reuses config/wedge-alarm's
 # active channels for a loud notification.
 #
 # A home is worth supervising when a crew task is in flight (FM_SUP_IN_FLIGHT) OR
@@ -862,15 +862,20 @@ fm_sentinel_record_pending() { # <episode-key> <summary>
 
 # fm_sentinel_supervised
 # True when this home's supervision is healthy by the home's own supervision
-# model, the same verdict the in-session pull and continuity guards use
-# (fm_watcher_supervision_verdict in bin/fm-wake-lib.sh). A Claude primary's
-# watcher closes on every wake and the next cycle is armed at the hand-over or
-# turn end, so a fresh beacon with no watcher holding the lock is that cycle
-# working, not an outage; the strict live-watcher check alone alarmed on every
-# such gap. This process runs from launchd outside the harness tree, so the
-# model is the inspected home's (fm_home_supervision_model). An unknown model,
-# such as no live harness holding the session lock, keeps the strict
-# live-watcher requirement. Sets FM_SENTINEL_HEALTH_DESC for the OK report.
+# model. A live identity-matched watcher always is. Otherwise this accepts only
+# a normal hand-over gap between watcher cycles: a Claude primary's watcher
+# closes on every wake and the next cycle is armed at the hand-over or turn end,
+# so a fresh beacon with no watcher holding the lock is that cycle working, not
+# an outage, and an extension home whose extension owns supervision is read by
+# the same verdict the in-session guards use (fm_watcher_supervision_verdict in
+# bin/fm-wake-lib.sh). An autoarm home is NOT given that verdict's mid-turn
+# exemption: it holds on a stale beacon and only the in-session guard knows the
+# primary is mid-turn, so here a watcher still missing past the grace always
+# alarms. This process runs from launchd outside the harness tree, so the model
+# is the inspected home's (fm_home_supervision_model). An unknown or persistent
+# model keeps the strict live-watcher requirement. Reads FM_SUP_WATCHER_FRESH
+# from the fm_supervision_status call that precedes every use. Sets
+# FM_SENTINEL_HEALTH_DESC for the OK report.
 FM_SENTINEL_HEALTH_DESC=
 fm_sentinel_supervised() {
   local model
@@ -879,10 +884,17 @@ fm_sentinel_supervised() {
     return 0
   fi
   model=$(fm_home_supervision_model "$FM_SENTINEL_STATE")
-  [ -n "$model" ] || return 1
-  FM_SUPERVISION_MODEL=$model fm_watcher_supervision_verdict \
-    "$FM_SENTINEL_STATE" "$FM_SENTINEL_WATCH" "$FM_SENTINEL_GRACE" "$FM_HOME" "$FM_ROOT"
-  [ "$FM_WATCHER_VERDICT_OK" = true ] || return 1
+  case "$model" in
+    autoarm)
+      [ "$FM_SUP_WATCHER_FRESH" = true ] || return 1
+      ;;
+    extension)
+      FM_SUPERVISION_MODEL=$model fm_watcher_supervision_verdict \
+        "$FM_SENTINEL_STATE" "$FM_SENTINEL_WATCH" "$FM_SENTINEL_GRACE" "$FM_HOME" "$FM_ROOT"
+      [ "$FM_WATCHER_VERDICT_OK" = true ] || return 1
+      ;;
+    *) return 1 ;;
+  esac
   FM_SENTINEL_HEALTH_DESC="between watcher cycles, healthy by the $model supervision model"
 }
 
