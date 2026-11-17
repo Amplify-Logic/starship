@@ -157,8 +157,9 @@
 # A home may carry standing worker instructions without editing this tracked
 # script: when config/brief-include.md exists under the active home, ship and
 # scout scaffolds append its text verbatim after the standard contract as
-# "# Home brief additions", which defers to every other section of the brief.
-# It goes at the end
+# "# Home brief additions", which defers to every other section of the brief
+# except a factory profile below it, which in turn defers to it. It goes at the
+# end
 # because the machine-read `# Task` heading resolves to its first match, so
 # appended text can never shadow it; a later scout promotion appends its ship
 # contract below it, which that position-free deference already covers. An
@@ -171,7 +172,8 @@
 # the same one the Factory pane maps work with) has a Rules: list, ship and
 # scout scaffolds end with a "# Factory profile" section holding those rules in
 # file order, never its Learned: lines, each as a list item, under a line
-# saying every other section of the brief wins on any conflict and a line
+# saying every other rule in the brief, the home additions included, wins on
+# any conflict and a line
 # forbidding copying the text into PR text, commit messages or the no-mistakes
 # intent. A list item can never be a heading or a "Delivery contract:" line, so
 # the profile cannot shadow the machine-read sections. Rules whose list, one
@@ -504,9 +506,11 @@ fi
 # ship or scout scaffold.
 append_brief_include() {
   if [ -n "$BRIEF_INCLUDE_BODY" ]; then
+    local include_sections='every other section of this brief'
+    [ -z "$FACTORY_PROFILE_BODY" ] || include_sections='every other section of this brief except the factory profile below'
     printf '\n%s\n%s\n%s\n' \
       '# Home brief additions' \
-      "These are this home's standing additions; every other section of this brief takes precedence over anything here that conflicts." \
+      "These are this home's standing additions; $include_sections takes precedence over anything here that conflicts." \
       "$BRIEF_INCLUDE_BODY" >> "$BRIEF"
   fi
   [ -n "$FACTORY_PROFILE_BODY" ] || return 0

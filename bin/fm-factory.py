@@ -33,7 +33,7 @@ Usage:
   fm-factory.py profile <project> [--data-dir DIR]
                                           print the name of the factory that
                                           claims <project> (by its projects,
-                                          else its id), then its Rules: lines,
+                                          an alias included), then its Rules: lines,
                                           one per line; nothing when there are
                                           none (bin/fm-brief.sh adds them to a
                                           job's instructions)
@@ -493,8 +493,7 @@ def load_registry(home: str, data: Optional[str] = None) -> Tuple[List[Dict[str,
 
 def project_owner(factories: List[Dict[str, Any]], project_rows: List[Dict[str, Any]]):
     """A function from a work item's project word, an alias included, to the id
-    of the factory that claims it: the factory whose projects name it, else the
-    factory whose id it is, or None when no factory does."""
+    of the factory whose projects name it, or None when no factory does."""
     alias_of: Dict[str, str] = {}
     for row in project_rows:
         for alias in row["aliases"]:
@@ -512,8 +511,7 @@ def project_owner(factories: List[Dict[str, Any]], project_rows: List[Dict[str, 
         for alias, name in alias_of.items():
             if name == key and alias in owner:
                 return owner[alias]
-        return key if key in ids else None
-    ids = {factory["id"] for factory in factories}
+        return None
     return owner_of
 
 

@@ -1484,9 +1484,11 @@ test_home_brief_include_is_appended_last() {
 }
 
 # A factory's Rules: list is its profile. A ship or scout brief for a project
-# that factory claims, by its projects (an alias included) or its id, gets the
-# rules as its last section, with a precedence line and a never-quote line, and
-# never the factory's Learned: lines; an unclaimed project, a factory with no
+# that factory claims, by its projects (an alias included), gets the rules as
+# its last section, with a precedence line and a never-quote line, and never
+# the factory's Learned: lines; home additions above it defer to every section
+# but the profile, and keep their usual wording without one; an unclaimed
+# project, a factory with no
 # rules, an over-cap profile, or no registry at all leaves the brief
 # byte-for-byte what it was.
 test_factory_profile_is_opt_in_and_bounded() {
@@ -1526,8 +1528,7 @@ test_factory_profile_is_opt_in_and_bounded() {
   # shellcheck disable=SC2016 # Rule text is literal and must never expand at scaffold time.
   printf '%s\n' '## Sample Shop' 'projects: sample-shop' '' 'Rules:' '- Run the shop tests with `make check $(id)`.' \
     '- Prices are stored in cents.' '' 'Learned:' '- 2026-11-12: A lesson the pane shows.' '' \
-    '## Recipe Box' 'projects: recipe-box' '' 'Learned:' '- Another lesson.' '' \
-    '## Notes Desk' 'id: notes-desk' '' 'Rules:' '- Keep each note short.' > "$data/factories.md"
+    '## Recipe Box' 'projects: recipe-box' '' 'Learned:' '- Another lesson.' > "$data/factories.md"
 
   base="$TMP_ROOT/profile-base-ship.md"
   baseline ship loose-notes "$base"
@@ -1537,8 +1538,6 @@ test_factory_profile_is_opt_in_and_bounded() {
   scaffold ship recipe-box
   cmp -s "$base" "$brief" || fail "a factory with no rules changed the brief"
   assert_no_grep 'Another lesson.' "$brief" "a Learned list reached the brief"
-  scaffold ship notes-desk
-  assert_grep '- Keep each note short.' "$brief" "a project word naming a factory id did not get that factory's profile"
 
   for kind in ship scout; do
     base="$TMP_ROOT/profile-base-$kind.md"
@@ -1557,6 +1556,18 @@ test_factory_profile_is_opt_in_and_bounded() {
       || fail "$kind profile was not the last section"
     head -c "$(wc -c < "$base")" "$brief" | cmp -s - "$base" || fail "$kind profile changed the brief ahead of its own section"
   done
+
+  mkdir -p "$home/config"
+  printf '%s\n' 'Ask before sending anything outward.' > "$home/config/brief-include.md"
+  scaffold ship shop
+  [ "$(grep '^# ' "$brief" | tail -n 2 | tr '\n' '|')" = '# Home brief additions|# Factory profile (private context, never quote)|' ] \
+    || fail "the factory profile did not follow the home additions"
+  assert_grep "These are this home's standing additions; every other section of this brief except the factory profile below takes precedence over anything here that conflicts." \
+    "$brief" "the home additions still deferred to the factory profile"
+  scaffold ship loose-notes
+  assert_grep "These are this home's standing additions; every other section of this brief takes precedence over anything here that conflicts." \
+    "$brief" "the home additions changed wording with no factory profile"
+  rm -f "$home/config/brief-include.md"
 
   big=$(printf '%01499d' 0)
   printf '%s\n' '## Sample Shop' 'projects: sample-shop' '' 'Rules:' "- $big" > "$data/factories.md"

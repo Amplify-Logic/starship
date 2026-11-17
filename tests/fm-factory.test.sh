@@ -911,29 +911,12 @@ test_work_no_factory_claims_is_still_shown() {
   reset_case
   write_registry
   write_world
-  sed -i.bak 's/^projects: garden-journal$/projects: something-else/; s/^## Garden Journal$/## Garden Patch/' "$HOME_FIX/data/factories.md"
+  sed -i.bak 's/^projects: garden-journal$/projects: something-else/' "$HOME_FIX/data/factories.md"
   take_record
   assert_equals "$(q '.factories[] | select(.id == "other-work") | [.jobs[].id] | join(",")')" \
     "garden-chart,garden-share,garden-water,recipe-units" \
     "unclaimed work lands in Other work"
   pass "factory registry: work no factory claims is shown under Other work"
-}
-
-# A work item's project word that is a factory's id maps to that factory even
-# when its projects list does not name it, the same mapping a job's factory
-# profile is chosen by (bin/fm-brief.sh).
-test_a_factory_id_claims_its_project_word() {
-  reset_case
-  write_registry
-  write_world
-  sed -i.bak 's/^projects: garden-journal$/projects: something-else/' "$HOME_FIX/data/factories.md"
-  take_record
-  assert_equals "$(q '.factories[] | select(.id == "garden-journal") | [.jobs[].id] | join(",")')" \
-    "garden-chart,garden-share,garden-water,recipe-units" \
-    "work whose project word is a factory id did not land in that factory"
-  assert_equals "$(q '[.factories[] | select(.id == "other-work")] | length')" "0" \
-    "work a factory id claims still showed under Other work"
-  pass "factory registry: a factory's id claims work under that project word"
 }
 
 # write_crowded_world: the sample fleet plus more calls for the owner than a
@@ -3013,7 +2996,6 @@ fm_test_run \
   test_a_ship_with_no_mode_still_reports_its_pr_ready \
   test_without_a_registry_each_project_is_a_factory \
   test_work_no_factory_claims_is_still_shown \
-  test_a_factory_id_claims_its_project_word \
   test_a_small_pane_shows_its_height_and_says_what_is_below \
   test_a_small_pane_scrolls_to_everything \
   test_a_narrow_talk_box_always_shows_what_is_typed \

@@ -1778,9 +1778,10 @@ Learned:
 ```
 
 - `id` is the factory's stable name in the record and the pane's own records; it defaults to the heading turned into lowercase words joined by dashes.
-- `projects` maps work to the factory by each work item's project, as registered in `data/projects.md`, an `alias=` included, and a project word that is a factory's `id` maps to that factory; work no factory claims shows under `Other work`.
+- `projects` maps work to the factory by each work item's project, as registered in `data/projects.md`, an `alias=` included; work no factory claims shows under `Other work`.
+  A factory with no code project lists the project word its work items use in its `projects:` line.
 - `Rules:` and `Learned:` are what the factory page shows under its rules and what it has learned lately; a learned line may start with its date.
-- `Rules:` is also the factory's profile, such as domain rules, known traps and how its tests run: when a factory has rules, `bin/fm-brief.sh` ends every ship and scout brief for a project that factory claims, by the same mapping, with a `# Factory profile` section holding them in file order, never its `Learned:` lines, under a line saying every other rule in the brief wins on any conflict and a line forbidding copying the text into PR text, commit messages or the no-mistakes intent.
+- `Rules:` is also the factory's profile, such as domain rules, known traps and how its tests run: when a factory has rules, `bin/fm-brief.sh` ends every ship and scout brief for a project that factory claims, by the same mapping, with a `# Factory profile` section holding them in file order, never its `Learned:` lines, under a line saying every other rule in the brief, the home additions included, wins on any conflict and a line forbidding copying the text into PR text, commit messages or the no-mistakes intent.
   A profile adds instructions only: it chooses no model or effort and grants no permission.
   Rules over 1,500 characters, counted as their `- ` lines, are left out whole with a warning naming the factory, and no registry, no claiming factory or no rules leaves the brief unchanged.
 
@@ -2332,7 +2333,8 @@ Snapshots and their metadata live under `<home>/.lavish/snapshots/`; `bin/fm-lav
 The optional local, gitignored `config/brief-include.md` adds standing worker instructions to every ship and scout brief.
 This keeps private brief content out of tracked files.
 A new home's first conversation seeds it with the owner's outward-send house rule, as the owner left it, in worker form ([`first-voyage`](../.agents/skills/first-voyage/SKILL.md)).
-When the file exists, `bin/fm-brief.sh` appends its text verbatim after the standard contract as `# Home brief additions`, followed only by any [factory profile](#factory-registry-datafactoriesmd), which defers to every other section of the brief, including the ship contract a later scout promotion appends below it.
+When the file exists, `bin/fm-brief.sh` appends its text verbatim after the standard contract as `# Home brief additions`, followed only by any [factory profile](#factory-registry-datafactoriesmd).
+The additions defer to every other section of the brief, including the ship contract a later scout promotion appends below them, except that profile, which in turn defers to them.
 
 An absent or blank file changes nothing, while a present path that is not a readable regular file, or text carrying its own `Delivery contract: mode=` line, stops the scaffold before anything is written.
 The text is static and never executed or expanded; secondmate charters never take it, and the file is local to each home rather than part of secondmate inherited configuration.
