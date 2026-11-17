@@ -3109,14 +3109,15 @@ test_routine_runs_fold_into_one_line_and_stay_out_of_the_feed() {
   assert_equals "$(q '[.feed[] | select(.job // "" | startswith("remind-") | not) | "\(.word)|\(.actor)"] | join(" ")')" \
     "failed|Garden Journal PR ready|Garden Journal finished|Recipe Box asked you|Garden Journal landed|Recipe Box asked you|Sample Shop" \
     "the rest of the feed is as before"
-  assert_equals "$(q .count_line)" "3 jobs running · 3 need you · 1 idle" "a folded pass is not a running job"
+  assert_equals "$(q .count_line)" "3 busy · 2 decisions for you · 1 ready to merge · 1 idle" \
+    "the count line is not the overview's figures beside the folded pass"
   assert_equals "$(q "$garden | .crew.busy")" "0" "a folded pass does not keep the crew busy"
   local out
   out=$(python3 "$FACTORY" --plain --width 92) || fail "--plain failed"
-  has_line "$out" " ↻ Reminder pass 4 runs today · last started 07:50 running" "the routine line"
+  has_line "$out" " ↻ Reminder pass 4 runs today · last started 07:50 busy" "the routine line"
   assert_not_contains "$out" "Reminder pass 0750" "the running pass folds into the routine line"
   assert_not_contains "$out" "Reminder pass 0600" "a finished pass is in the feed"
-  has_line "$out" " ● Reminder pass 0715 stuck" "a failed pass shows as usual"
+  has_line "$out" " ● Reminder pass 0715 failed" "a failed pass shows as usual"
   has_line "$out" " 07:20 Garden Journal failed Reminder pass 0715 failed; Starship is on it." \
     "a failed pass is in the feed"
   pass "factory pane: routine runs fold into one line, and only a failed one reaches the feed"
@@ -3134,12 +3135,13 @@ test_a_folded_pass_counts_as_idle_and_hides_no_other_card() {
     "started|1794642600|1" "the routine line: a pass started at 07:50 runs now"
   assert_equals "$(q "$recipe | \"\(.state)|\(.idle_since)|\(.crew.busy)\"")" "idle|1794642600|0" \
     "the factory is idle since its last pass, not since an older event in the feed"
-  assert_equals "$(q .count_line)" "3 jobs running · 3 need you · 1 idle" "the folded pass is not a running job"
+  assert_equals "$(q .count_line)" "3 busy · 2 decisions for you · 1 ready to merge · 1 idle" \
+    "the count line is not the overview's figures beside the folded pass"
   local out
   out=$(python3 "$FACTORY" --plain --width 92) || fail "--plain failed"
   assert_contains "$out" "Recipe Box   idle since 07:50" "the factory reads idle since its last pass, as the count line counts it"
-  has_line "$out" " ● Reminder pass 0715 stuck" "the stuck pass keeps its row while the next one runs folded"
-  has_line "$out" " ↻ Reminder pass 4 runs today · last started 07:50 running" "the routine line"
+  has_line "$out" " ● Reminder pass 0715 failed" "the stuck pass keeps its row while the next one runs folded"
+  has_line "$out" " ↻ Reminder pass 4 runs today · last started 07:50 busy" "the routine line"
   assert_not_contains "$out" "Reminder pass 0750" "the running pass folds into the routine line"
   pass "factory pane: a folded pass counts as idle and hides no other card"
 }
