@@ -1451,6 +1451,39 @@ test_lock_failed_create_discards_owner() {
   pass "failed owner publication discards the staging directory"
 }
 
+# A fatal signal that lands after fm_lock_try_create declares its pending-child
+# locals but before it records the previous $! must not make EXIT cleanup join
+# an unrelated child. The watcher's caffeinate child waits for the watcher
+# itself, so joining it deadlocked cleanup (bash 3.2 leaves a bare `local NAME`
+# set). A DEBUG trap delivers TERM at that exact command, deterministically.
+test_lock_create_term_before_pending_record_does_not_join_unrelated_child() {
+  local dir state pid status at
+  dir=$(make_case lock-create-term-before-pending-record)
+  state="$dir/state"
+  # shellcheck disable=SC2016 # Literal command text the DEBUG trap matches.
+  for at in 'FM_LOCK_OWNER_DIR=' '[ "${BASH_VERSINFO'; do
+    FM_STATE_OVERRIDE="$state" bash -c '
+      . "$1" || exit 9
+      me=$$ at=$3
+      trap fm_lock_wait_pending_mutation EXIT
+      trap - TERM
+      ( i=0; while kill -0 "$me" 2>/dev/null && [ "$i" -lt 600 ]; do sleep 0.05; i=$((i + 1)); done ) &
+      set -T
+      trap '"'"'case "$BASH_COMMAND" in "$at"*) trap - DEBUG; kill -TERM "$me" ;; esac'"'"' DEBUG
+      fm_lock_try_create "$2"
+      exit 10
+    ' _ "$LIB" "$state/.contend.lock" "$at" &
+    pid=$!
+    status=0
+    wait_for_exit "$pid" 50 2>/dev/null || status=$?
+    [ "$status" -ne 124 ] \
+      || fail "cleanup joined an unrelated child after TERM at '$at'"
+    [ "$status" -eq 143 ] \
+      || fail "TERM at '$at' was not delivered before the pending record (status $status)"
+  done
+  pass "a TERM before the pending-child record does not join an unrelated child"
+}
+
 test_session_lock_real_directory_residue() {
   python3 - "$ROOT/bin/fm-lock.sh" "$TMP_ROOT" "$(dead_pid)" <<'PY' || fail "session-lock directory recovery/refusal"
 import os
@@ -2858,6 +2891,7 @@ test_lock_real_directory_permission_refusal
 test_lock_inaccessible_directory_replacement_is_retriable
 test_lock_real_directory_default_wait
 test_lock_failed_create_discards_owner
+test_lock_create_term_before_pending_record_does_not_join_unrelated_child
 test_session_lock_real_directory_residue
 test_lock_empty_pid_uses_minimum_grace
 test_lock_late_claim_loses_after_recreate
