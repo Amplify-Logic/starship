@@ -343,6 +343,16 @@ def plural(count: int, one: str, many: str) -> str:
     return "%d %s" % (count, one if count == 1 else many)
 
 
+def day_words(date: str) -> str:
+    """A YYYY-MM-DD date as "1 Dec", with its year only when that is not this year."""
+    epoch = parse_iso(date)
+    if epoch is None:
+        return date
+    day = time.gmtime(epoch)
+    words = "%d %s" % (day.tm_mday, time.strftime("%b", day))
+    return words if day.tm_year == time.gmtime(now_epoch()).tm_year else "%s %d" % (words, day.tm_year)
+
+
 def meta_values(path: Optional[str]) -> Dict[str, str]:
     values: Dict[str, str] = {}
     for line in read_text(path or "").splitlines():
@@ -908,8 +918,8 @@ def held_state(row: Dict[str, Any], today: str = "") -> str:
     return "on hold"
 
 
-QUEUE_WORDS = ("starts on its own", "in line", "on hold", "waits on other work", "waits on you", "older call",
-               "deferred")
+QUEUE_WORDS = ("starts on its own", "parked", "in line", "on hold", "waits on other work", "waits on you",
+               "older call", "deferred")
 
 
 def queue_word(row: Dict[str, Any], asked: bool, today: str) -> Optional[str]:
@@ -918,7 +928,9 @@ def queue_word(row: Dict[str, Any], asked: bool, today: str) -> Optional[str]:
     A decision held for the owner waits on you; it is deferred while its date
     is still ahead, an older call once it has waited undated past the
     snapshot's age, and it waits on other work while a blocker of it is still
-    open, since it cannot be decided before then. Anything else starts on its
+    open, since it cannot be decided before then. Work parked until a date
+    still ahead is parked: it is looked at again on that date and never starts
+    by itself (its date is the job's parked_until). Anything else starts on its
     own when it waits on other work or on a date still ahead, is on hold when
     it is held with neither, and is in line when nothing is set to start it.
     Work listed as in flight with no worker is not queued.
@@ -929,6 +941,8 @@ def queue_word(row: Dict[str, Any], asked: bool, today: str) -> Optional[str]:
         if row.get("hold_bucket") == "blocked" or row.get("unresolved_blocker_ids"):
             return "waits on other work"
         return {"dated": "deferred", "aged": "older call"}.get(row.get("hold_bucket"), "waits on you")
+    if row.get("hold_kind") == "parked" and (row.get("hold_until") or "") > today:
+        return "parked"
     if row.get("unresolved_blocker_ids"):
         return "starts on its own"
     if row.get("hold_kind"):
@@ -936,17 +950,33 @@ def queue_word(row: Dict[str, Any], asked: bool, today: str) -> Optional[str]:
     return None if row.get("state") == "in_flight" else "in line"
 
 
-def queue_counts(jobs: List[Dict[str, Any]]) -> Dict[str, int]:
-    """The queue of these jobs as counts; the ones waiting on you include the older calls and the deferred."""
+def queue_counts(jobs: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """The queue of these jobs as counts; the ones waiting on you include the older calls and the deferred.
+
+    The parked are counted once in all and once per date they are parked until, soonest first.
+    """
     words = [j["queue"] for j in jobs if j.get("queue")]
+    dates = sorted(j.get("parked_until") or "" for j in jobs if j.get("queue") == "parked")
     return {"total": len(words), "starts_on_its_own": words.count("starts on its own"),
+            "parked": len(dates),
+            "parked_until": [{"until": date or None, "count": dates.count(date)} for date in sorted(set(dates))],
             "in_line": words.count("in line"), "on_hold": words.count("on hold"),
             "waits_on_other_work": words.count("waits on other work"),
             "waits_on_you": words.count("waits on you") + words.count("older call") + words.count("deferred"),
             "deferred": words.count("deferred")}
 
 
-def queue_parts(queue: Dict[str, int]) -> List[Tuple[str, str]]:
+def parked_words(count: int, dates: List[Optional[str]]) -> str:
+    """The parked as one count: until their one date, or the soonest of their dates."""
+    known = sorted({d for d in dates if d})
+    if not known:
+        return "%d parked" % count
+    if len(set(dates)) == 1:
+        return "%d parked until %s" % (count, day_words(known[0]))
+    return "%d parked, soonest %s" % (count, day_words(known[0]))
+
+
+def queue_parts(queue: Dict[str, Any]) -> List[Tuple[str, str]]:
     """The queue's counts in words, each with the word it stands for (see queue_counts)."""
     if not queue.get("total"):
         return [("total", "nothing queued")]
@@ -954,6 +984,8 @@ def queue_parts(queue: Dict[str, int]) -> List[Tuple[str, str]]:
     own, wait, deferred = queue["starts_on_its_own"], queue["waits_on_you"], queue["deferred"]
     if own:
         parts.append(("starts_on_its_own", "1 starts on its own" if own == 1 else "%d start on their own" % own))
+    if queue.get("parked"):   # a record from before parked work was counted has none
+        parts.append(("parked", parked_words(queue["parked"], [g["until"] for g in queue["parked_until"]])))
     if queue["in_line"]:
         parts.append(("in_line", "%d in line" % queue["in_line"]))
     if queue["on_hold"]:
@@ -969,6 +1001,37 @@ def queue_parts(queue: Dict[str, int]) -> List[Tuple[str, str]]:
         elif deferred:
             words += ", %d of them deferred to a date" % deferred
         parts.append(("waits_on_you", words))
+    return parts
+
+
+# How a factory's page counts the jobs it folds away, per queue word: one and many.
+FOLD_NAMES = {"in line": ("more in line", "more in line"),
+              "starts on its own": ("starts on its own", "start on their own"),
+              "on hold": ("on hold", "on hold"),
+              "waits on other work": ("waits on other work", "wait on other work"),
+              "waits on you": ("more waits on you", "more wait on you"),
+              "older call": ("older call waits on you", "older calls wait on you"),
+              "deferred": ("deferred to a date", "deferred to a date")}
+
+
+def job_queue_words(job: Dict[str, Any]) -> str:
+    """A queued job's queue word as the pane says it: a parked job says until when."""
+    if job.get("queue") == "parked":
+        return "parked until %s" % day_words(job["parked_until"]) if job.get("parked_until") else "parked"
+    return job.get("queue") or "in line"
+
+
+def fold_parts(folded: Dict[str, List[Dict[str, Any]]]) -> List[Tuple[str, List[Dict[str, Any]]]]:
+    """The folded jobs as counts in words, each with the jobs it stands for; the parked soonest first."""
+    parts: List[Tuple[str, List[Dict[str, Any]]]] = []
+    for word, jobs in folded.items():
+        if not jobs:
+            continue
+        if word == "parked":
+            jobs = sorted(jobs, key=lambda j: j.get("parked_until") or "")
+            parts.append((parked_words(len(jobs), [j.get("parked_until") for j in jobs]), jobs))
+            continue
+        parts.append((plural(len(jobs), *FOLD_NAMES[word]), jobs))
     return parts
 
 
@@ -1159,6 +1222,7 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
                                "started": started_at(meta), "doing": None, "doing_from": None,
                                "last_sign_of_life": None, "sign_of_life_from": None, "quiet": False,
                                "until": None, "pr": (task.get("pr") or {}).get("url"), "queue": None,
+                               "parked_until": None,
                                "routine": routine_kind(by_id[fid]["routine"], title),
                                "read": read_sources(home, task["id"], ((row or {}).get("hold_reason"),))}
         if bucket == "working":
@@ -1247,8 +1311,11 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
                "started": None, "doing": None, "doing_from": None, "last_sign_of_life": None,
                "sign_of_life_from": None, "quiet": False, "until": None, "pr": row.get("pr_url"),
                "queue": queue_word(row, row["id"] in decision_ids, today),
+               "parked_until": None,
                "routine": routine_kind(by_id[fid]["routine"], title),
                "read": read_sources(home, row["id"], (row.get("hold_reason"),))}
+        if job["queue"] == "parked":
+            job["parked_until"] = row.get("hold_until")
         if row["id"] in decision_ids:
             job["state"] = "waiting on you"
             needs.append(hold_need(row, fid))
@@ -2079,6 +2146,7 @@ class View:
         self.answered: Dict[Tuple[str, str], Dict[str, Any]] = {}   # answers sent here a moment ago
         self.cursor = 0
         self.selected: Optional[Tuple[str, str]] = None
+        self.unfolded: Optional[str] = None   # the factory whose folded jobs are listed
         # An item the highlight was asked to go to (--item, or the focus file),
         # held until the record has it, for at most WANT_SECONDS.
         self.wanted: Optional[Tuple[str, float]] = (item, time.time()) if item else None
@@ -2096,6 +2164,9 @@ class View:
         self.record = record
         if self.opened and not self.has_factory(self.opened):
             self.opened = None
+        if self.unfolded and (self.unfolded != self.opened
+                              or not any(self.page_jobs(self.factory(self.unfolded))[1].values())):
+            self.unfolded = None
         talk = self.talking
         if talk is not None and not (self.has_factory(talk["factory"]) and (
                 "item" not in talk or self.need(talk["item"]))):
@@ -2136,7 +2207,10 @@ class View:
 
     def stops(self) -> List[Tuple[str, str]]:
         if self.opened:
-            return [("need", n["id"]) for n in self.needs(self.opened)] or [("factory", self.opened)]
+            stops = [("need", n["id"]) for n in self.needs(self.opened)] or [("factory", self.opened)]
+            if any(self.page_jobs(self.factory(self.opened))[1].values()):
+                stops.append(("fold", self.opened))   # the line the rest of its queue folds into
+            return stops
         return [("need", n["id"]) for n in self.needs()] + [("factory", f["id"]) for f in self.ordered()]
 
     def want(self, item: str) -> None:
@@ -2177,7 +2251,7 @@ class View:
         self.follow = False
 
     def show(self, fid: Optional[str]) -> None:
-        self.opened, self.cursor, self.selected = fid, 0, None
+        self.opened, self.cursor, self.selected, self.unfolded = fid, 0, None, None
         self.top, self.follow = 0, True
 
     def here(self, kind: str, ident: str) -> bool:
@@ -2211,13 +2285,13 @@ class View:
                 job["started"] and job["state"] in ("waiting on you", "ready for you")))]
 
     @staticmethod
-    def page_jobs(fac: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], Dict[str, int]]:
-        """The jobs a factory's own page shows, and the counts per queue word of the rest that folds away."""
+    def page_jobs(fac: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], Dict[str, List[Dict[str, Any]]]]:
+        """The jobs a factory's own page shows, and the rest that folds away, per queue word."""
         # Everything moving or waiting on your answer, then the head of the
         # line; the rest of the queue folds into one count per queue word.
         shown: List[Dict[str, Any]] = []
         shown_line = 0
-        folded = {word: 0 for word in QUEUE_WORDS}
+        folded: Dict[str, List[Dict[str, Any]]] = {word: [] for word in QUEUE_WORDS}
         for job in fac["jobs"]:
             if job["state"] == "finished":
                 continue
@@ -2228,10 +2302,10 @@ class View:
             if job["state"] in ("next", "later"):
                 shown_line += 1
                 if shown_line > 8:
-                    folded["in line"] += 1
+                    folded["in line"].append(job)
                     continue
             elif word and job["state"] != "waiting on you":
-                folded[word] += 1
+                folded[word].append(job)
                 continue
             shown.append(job)
         return shown, folded
@@ -2262,8 +2336,8 @@ class View:
         queue = self.record.get("queue") if queue is None else queue
         if not queue:
             return []
-        colours = {"total": "ice", "starts_on_its_own": "ice", "in_line": "mist", "on_hold": "faint",
-                   "waits_on_other_work": "mist", "waits_on_you": "red"}
+        colours = {"total": "ice", "starts_on_its_own": "ice", "parked": "mist", "in_line": "mist",
+                   "on_hold": "faint", "waits_on_other_work": "mist", "waits_on_you": "red"}
         parts = queue_parts(queue)
         lines = [[S(lead)]]
         indent = len(lead) + len(parts[0][1])
@@ -2651,9 +2725,13 @@ class View:
                     keys.append("x settled?")
             else:
                 keys.append("k keep · c changes")
+        if kind == "fold" and self.unfolded != ident:
+            keys.append("enter list them")
         if self.readable():
             keys.append("r read")
-        if not self.opened or not self.in_tab:
+        if self.unfolded:
+            keys.append("esc hide the list")
+        elif not self.opened or not self.in_tab:
             keys.append("enter open" if not self.opened else "esc back")
         elif self.in_tab:
             keys.append("esc back")
@@ -2713,16 +2791,22 @@ class View:
         shown, folded = self.page_jobs(fac)
         for job in shown:
             rows += self.job_rows(width, job, full=True)
-        names = {"in line": ("more in line", "more in line"),
-                 "starts on its own": ("starts on its own", "start on their own"),
-                 "on hold": ("on hold", "on hold"),
-                 "waits on other work": ("waits on other work", "wait on other work"),
-                 "waits on you": ("more waits on you", "more wait on you"),
-                 "older call": ("older call waits on you", "older calls wait on you"),
-                 "deferred": ("deferred to a date", "deferred to a date")}
-        tail = [plural(count, *names[word]) for word, count in folded.items() if count]
-        if tail:
-            rows += flow(width, [S("     · ", "faint")], " · ".join(tail), "faint")
+        parts = fold_parts(folded)
+        if parts:
+            # The rest of the queue, one count per queue word; enter lists every job it stands for.
+            stop = ("fold", fac["id"])
+            fold = flow(width, [S("   "), self.mark(*stop), S("· ", "faint")],
+                        " · ".join(words for words, _jobs in parts), "faint")
+            for line in fold:
+                line.band = self.here(*stop)
+            if self.unfolded == fac["id"]:
+                for words, jobs in parts:
+                    fold += [row(width), row(width, [S("       "), S(words, "mist", True)])]
+                    fold += [row(width, [S("         · ", "faint"), S(job["title"], "ice")],
+                                 [S(job_queue_words(job), "mist")]) for job in jobs]
+            for line in fold:
+                line.stop = stop
+            rows += fold
         rows += [row(width), row(width, [S(" RULES THIS CREW FOLLOWS", "mist", True)]), row(width)]
         if not fac["rules"]:
             rows.append(row(width, [S("     none written down yet", "faint")]))
@@ -3523,6 +3607,14 @@ class Pane:
             view.move(-1)
         elif key == "down":
             view.move(1)
+        elif key == "enter" and view.at()[0] == "fold":
+            # The folded count line lists every job it stands for, or hides them again.
+            fid = view.at()[1]
+            view.unfolded = None if view.unfolded == fid else fid
+            view.follow = True
+        elif key == "esc" and view.unfolded:
+            view.unfolded = None
+            view.follow = True
         elif key == "enter":
             fid = self.factory_of_stop()
             if fid and not view.opened:
