@@ -115,6 +115,9 @@
 #      (the id-addressed detail read carries step words the overview does not),
 #      awaiting_approval/fix_review -> parked (with gate findings), terminal
 #      passed/checks-passed/passed-with-override/passed-with-skips -> done,
+#      handed-off (`axi handoff` ended the ci monitor after checks passed) ->
+#      done, read like checks-passed while its PR is open and as PR
+#      merged/closed once it is (handed_off_pr_detail),
 #      failed -> failed, cancelled -> unknown (no verdict unless the green
 #      delivery safeguard below applies). A cancelled outcome takes precedence
 #      over an interrupted step's failed status or outstanding gate findings;
@@ -675,6 +678,19 @@ passed_pr_detail() {
       ;;
   esac
 }
+# A run handed off after checks-passed (`no-mistakes axi handoff` ends the ci
+# monitor so the run frees its check slot) left its PR open for the merge
+# decision. While that PR is open, or its disposition cannot be read, it reads
+# exactly like checks-passed; a merged or closed PR keeps the passed-run
+# disposition wording.
+handed_off_pr_detail() {
+  local disposition
+  disposition=$(passed_pr_detail)
+  case "$disposition" in
+    "run passed: PR merged"|"run passed: PR closed") printf '%s' "$disposition" ;;
+    *) printf 'checks green: PR ready for review' ;;
+  esac
+}
 # Finding count from a findings[N]{...} table header; empty when none.
 nm_findings_count() {
   printf '%s\n' "$RUN_OUT" | grep -oE 'findings\[[0-9]+\]' | head -1 | grep -oE '[0-9]+'
@@ -1172,7 +1188,7 @@ if [ "$KIND" = ship ] && [ -n "$CREW_BRANCH" ] && command -v no-mistakes >/dev/n
         selected_detail=
         if [ -n "$reported_id" ] && [ "$reported_branch" = "$CREW_BRANCH" ] \
           && [ "$reported_id" != "$selected_id" ] \
-          && { [ "$selected_status" = completed ] || [ "$selected_status" = cancelled ] || [ "$selected_status" = failed ]; } \
+          && { [ "$selected_status" = completed ] || [ "$selected_status" = cancelled ] || [ "$selected_status" = failed ] || [ "$selected_status" = handed_off ]; } \
           && fm_nm_run_is_active "$RUN_OUT"; then
           case ",$candidate_ids," in
             *,"$reported_id",*|*,\ "$reported_id",*)
@@ -1221,7 +1237,7 @@ if [ "$KIND" = ship ] && [ -n "$CREW_BRANCH" ] && command -v no-mistakes >/dev/n
           emit unknown run-step "selected run unavailable or mismatched; run ids: $candidate_ids"
         fi
         case "$(strip_quotes "$(nm_field status)")" in
-          pending|running|fixing|ci|awaiting_approval|fix_review|completed|failed|cancelled) ;;
+          pending|running|fixing|ci|awaiting_approval|fix_review|completed|failed|cancelled|handed_off) ;;
           *) emit unknown run-step "selected run status unverified; run ids: $candidate_ids" ;;
         esac
         if fm_nm_run_is_active "$RUN_OUT"; then current_class=live; else current_class=terminal; fi
@@ -1327,6 +1343,7 @@ if [ "$HAVE_RUN" = 1 ]; then
     case "$COARSE_STATUS" in
       running) RUN_STATE=working; RUN_DETAIL="validating (background run)" ;;
       completed) RUN_STATE="done";  RUN_DETAIL="run completed" ;;
+      handed_off) RUN_STATE="done"; RUN_DETAIL="run handed off: PR awaiting merge decision" ;;
       failed)
         # The ledger row is terminal but the coarse path has no steps table
         # and no ci log, so the orphaned-monitor shape cannot be recognized
@@ -1365,6 +1382,7 @@ if [ "$HAVE_RUN" = 1 ]; then
         passed|passed-with-override) RUN_STATE="done"; RUN_DETAIL=$(passed_pr_detail) ;;
         passed-with-skips) RUN_STATE="done"; RUN_DETAIL="$(passed_pr_detail) (publication/CI verification skipped)" ;;
         checks-passed) RUN_STATE="done"; RUN_DETAIL="checks green: PR ready for review" ;;
+        handed-off) RUN_STATE="done"; RUN_DETAIL=$(handed_off_pr_detail) ;;
         failed)
           if nm_reclassify_failed_run_as_held_green; then :; else
             RUN_STATE=failed; RUN_DETAIL="run failed"
@@ -1398,6 +1416,7 @@ if [ "$HAVE_RUN" = 1 ]; then
         ci)             RUN_STATE=working; RUN_DETAIL="ci running" ;;
         running|fixing) RUN_STATE=working; RUN_DETAIL="validating ($status)" ;;
         completed)      RUN_STATE="done"; RUN_DETAIL="run completed" ;;
+        handed_off)     RUN_STATE="done"; RUN_DETAIL=$(handed_off_pr_detail) ;;
         failed)
           if nm_reclassify_failed_run_as_held_green; then :; else
             RUN_STATE=failed; RUN_DETAIL="run failed"
@@ -1474,7 +1493,7 @@ if [ "$HAVE_RUN" = 1 ]; then
       fi
       if [ "$RUN_SOURCE" = coarse ]; then
         case "$LEDGER_STATUS" in
-          completed|failed|cancelled) TERMINAL_PR=$NEWEST_PR ;;
+          completed|failed|cancelled|handed_off) TERMINAL_PR=$NEWEST_PR ;;
         esac
       elif [ "$NEWEST_ROW_AGREES" = 1 ] || [ -z "$NEWEST_STATUS" ]; then
         TERMINAL_PR=$RUN_PR
