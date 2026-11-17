@@ -52,6 +52,11 @@ commands:
 # the public PR text rule below and the leak check.
 test:
   instructions: |
+    Scope the local automated suites to the branch's own tests; the hosted CI checks run the wider changed-file selection and the complete suite on every PR and stay the full regression gate.
+    The local set is every `tests/*.test.sh` file the branch adds or changes against this run's base commit (use origin/main when none is given), plus `tests/<name>.test.sh` for each changed script `bin/<name>.<ext>` or `bin/backends/<name>.<ext>` when that test file exists; run the whole set in one call: `bin/fm-test-run.sh <paths>`.
+    Do not add the `--changed` listing, lanes, families, `--all`, or other suites to that run; to prove one case in a long suite, run that case alone rather than the whole file again.
+    Fall back to the full local run, choosing suites by judgment as this step did before this scoping rule, only when the change touches the test runner or its selection data (`bin/fm-test-run.sh`, `bin/fm-test-isolation-proof.sh`, `bin/fm-fork-test-registry-lib.sh`, `tests/fork-test-registry.conf`) or a shared library (`tests/lib.sh`, `tests/fixtures.sh`, `tests/*-helpers.sh`, or a sourced `bin/*-lib.sh`), or when the change touches code but the local set is empty; say in the result line which case applied.
+    Live, end-to-end, and before-and-after checks of the changed behavior are still yours to run beside the local set.
     Run live Herdr scenarios only through bin/fm-herdr-lab.sh with a named non-default fm-lab-* session, following that helper's prepare, provision, run, and teardown contract exactly.
     Never touch the live default Herdr session or fleet panes.
     Prefer a throwaway lab for spawn, long-launch, and Claude-path proofs, and tear it down in the same evidence turn.
