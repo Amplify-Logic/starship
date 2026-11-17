@@ -574,6 +574,12 @@ LOG
   take_record
   assert_equals "$(q '.needs_you[] | select(.id == "far:fleet-count") | "\(.since) \(.answered)"')" "1794641000 null" \
     "a later done outcome is a new asking, not answered by the keep sent for the one before"
+  # A GitLab merge request in a subgroup is filed under its repository's factory.
+  printf 'done [key=child-outcome-garden-lab-done-1a2b3c4d] [at=1794641100]: child garden-lab done: checks green pr=https://gitlab.example.invalid/g/sub/garden-journal/-/merge_requests/5 mode=no-mistakes yolo=off\n' \
+    >> "$HOME_FIX/state/near.status"
+  take_record
+  assert_equals "$(q '.needs_you[] | select(.id == "near:garden-lab") | .factory')" "garden-journal" \
+    "a second mate's GitLab merge request is not filed under its repository's factory"
   unset FM_SECONDMATE_PR_READER
   pass "factory record: a second mate's ready PR needs you, named by the mate, each done outcome a new asking, and a merged or closed one does not"
 }

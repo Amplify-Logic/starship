@@ -468,10 +468,11 @@ fm_secondmate_ready_prs() {  # <state-dir>
 }
 
 # _fm_secondmate_pr_state: open, merged, closed or unknown for one second
-# mate's PR. A merged or closed answer is kept for good in
-# state/secondmate-prs/, one file per PR, and any other is read again once it
-# is FM_SECONDMATE_PR_TTL seconds old (default 300), so the owner's calls,
-# which are read often, ask the forge at most that often per PR. The forge is
+# mate's PR. A merged answer is kept for good in state/secondmate-prs/, one
+# file per PR, and any other, closed included since a closed PR can be
+# reopened, is read again once it is FM_SECONDMATE_PR_TTL seconds old
+# (default 300), so the owner's calls, which are read often, ask the forge at
+# most that often per PR. The forge is
 # read through bin/fm-pr-lib.sh for GitHub and GitLab, bounded to 5 seconds;
 # any other forge, or a read that fails, is unknown.
 # Test seam: FM_SECONDMATE_PR_READER, a command run as `<reader> <url>` that
@@ -485,7 +486,7 @@ _fm_secondmate_pr_state() {  # <state-dir> <url>
   ttl=$(fm_status_ttl "${FM_SECONDMATE_PR_TTL:-}" 300)
   if [ -f "$file" ] && read -r cached at < "$file" 2>/dev/null; then
     case "$cached" in
-      merged|closed) printf '%s' "$cached"; return 0 ;;
+      merged) printf '%s' "$cached"; return 0 ;;
     esac
     case "$at" in
       ''|*[!0-9]*) ;;

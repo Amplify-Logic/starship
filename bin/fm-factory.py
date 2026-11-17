@@ -1454,7 +1454,7 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
     # call too, though the job is the mate's: it is listed beside this home's own, named by the
     # mate, in the factory of the PR's repository.
     for pr in mate_prs:
-        found = re.match(r"https?://[^/]+/(?:[^/]+/)*([^/]+)/(?:pull|-/merge_requests|merge_requests)/\d+",
+        found = re.match(r"https?://[^/]+/(?:[^/]+/)*?([^/]+)/(?:pull|-/merge_requests|merge_requests)/\d+",
                          pr["url"])
         needs.append({"id": "%s:%s" % (pr["mate"], pr["child"]),
                       "factory": factory_of(found.group(1) if found else None), "kind": "finished work", "ask": "%s is ready for you to look at" % pr["child"],

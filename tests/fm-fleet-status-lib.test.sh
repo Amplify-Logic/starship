@@ -804,8 +804,9 @@ LOG
     "https://github.com/o/r/pull/102 https://github.com/o/r/pull/68 https://github.com/o/r/pull/69 https://github.com/o/r/pull/70 https://github.com/o/r/pull/71 " \
     "the forge reads"
 
-  # The forge is asked again only for a PR still open or unread, and only once
-  # its reading is old; a merged or closed PR is never asked about again.
+  # The forge is asked again only for a PR not yet merged, and only once its
+  # reading is old; a merged PR is never asked about again, while a closed one
+  # can be reopened, so it is.
   : > "$forge"
   FM_SECONDMATE_PR_READER="$reader" FM_FLEET_STATE_READER="$BINDIR/fake-crew-state" \
     bash -c '. "$1/bin/fm-fleet-status-lib.sh"; fm_owner_calls "$2"' _ "$ROOT" "$STATE" >/dev/null \
@@ -815,8 +816,18 @@ LOG
     bash -c '. "$1/bin/fm-fleet-status-lib.sh"; fm_owner_calls "$2"' _ "$ROOT" "$STATE" >/dev/null \
     || fail "the owner's calls could not be read once their readings were old"
   assert_equals "$(LC_ALL=C sort "$forge" | tr '\n' ' ')" \
-    "https://github.com/o/r/pull/102 https://github.com/o/r/pull/68 https://github.com/o/r/pull/71 " \
-    "an old reading was not read again, or a merged or closed one was"
+    "https://github.com/o/r/pull/102 https://github.com/o/r/pull/68 https://github.com/o/r/pull/69 https://github.com/o/r/pull/71 " \
+    "an old reading was not read again, or a merged one was"
+  sed -i.bak 's|\*/pull/69) echo closed ;;|*/pull/69) echo open ;;|' "$reader" && rm -f "$reader.bak"
+  out=$(FM_SECONDMATE_PR_TTL=0 FM_SECONDMATE_PR_READER="$reader" FM_FLEET_STATE_READER="$BINDIR/fake-crew-state" \
+    bash -c '. "$1/bin/fm-fleet-status-lib.sh"; fm_owner_calls "$2"' _ "$ROOT" "$STATE") \
+    || fail "the owner's calls could not be read once a closed PR was reopened"
+  assert_contains "$out" "$(printf 'mate-merge\tfar\tchild-d\thttps://github.com/o/r/pull/69\t210')" \
+    "a closed PR that was reopened is not listed again"
+  sed -i.bak 's|\*/pull/69) echo open ;;|*/pull/69) echo closed ;;|' "$reader" && rm -f "$reader.bak"
+  FM_SECONDMATE_PR_TTL=0 FM_SECONDMATE_PR_READER="$reader" FM_FLEET_STATE_READER="$BINDIR/fake-crew-state" \
+    bash -c '. "$1/bin/fm-fleet-status-lib.sh"; fm_owner_calls "$2"' _ "$ROOT" "$STATE" >/dev/null \
+    || fail "the owner's calls could not be read once the PR was closed again"
 
   # The status bar and the bridge strip count them as ready to merge, and the
   # first one is the strip's call when nothing else waits.
