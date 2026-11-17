@@ -28,20 +28,9 @@
 # no-mistakes or database call.
 #
 # Attribution. A task's runs are the runs no-mistakes recorded for the task
-# copy's repository and current branch since that branch was created:
-#   - repository: the `repo:` line `no-mistakes axi` prints from the task copy,
-#     which is the CLI's own resolution (a pooled worker copy resolves to the
-#     registered primary clone), matched exactly against repos.working_path;
-#   - branch: the task copy's current branch, the one bin/fm-crew-state.sh
-#     reads;
-#   - since: the oldest surviving reflog entry of that branch. spawn_gen cannot
-#     bound the task, because a relaunch mints a new one while the same branch
-#     keeps validating. Teardown deletes the branch, so a later task that
-#     reuses the id and branch name starts a fresh reflog and never inherits an
-#     earlier task's runs. With no reflog, every run on the branch counts and
-#     since is null.
-# Two live tasks sharing one branch name in one repository would both count
-# its runs; each record lists run ids, so such an overlap stays visible.
+# copy's repository and current branch since that branch was created;
+# bin/fm-nm-run-lib.sh's fm_nm_task_attribution owns that rule. Each record
+# lists run ids, so two live tasks sharing one branch name stay visible.
 #
 # Counting. Every invocation of those runs counts, whatever its exit status
 # (ok, error, cancelled), and each token field is no-mistakes' own, summed
@@ -119,34 +108,12 @@ command -v python3 >/dev/null 2>&1 || fail "python3 is required to read no-mista
 
 WT=$(meta_value worktree)
 SPAWN_GEN=$(meta_value spawn_gen)
-BRANCH=
-SINCE=
-REPO=
-DB=
-REASON=
-if [ -z "$WT" ] || [ ! -d "$WT" ]; then
-  REASON="the task copy ${WT:-<unrecorded>} is gone"
-elif ! BRANCH=$(git -C "$WT" symbolic-ref --quiet --short HEAD 2>/dev/null) || [ -z "$BRANCH" ]; then
-  BRANCH=
-  REASON="the task copy is not on a branch"
-elif ! command -v no-mistakes >/dev/null 2>&1; then
-  REASON="no-mistakes is not installed"
-else
-  # `--format=%gd --date=unix` prints <branch>@{<epoch>} newest first; the last
-  # line is the oldest surviving entry, normally the branch's creation.
-  SINCE=$(git -C "$WT" reflog show --date=unix --format=%gd "refs/heads/$BRANCH" -- 2>/dev/null \
-    | tail -1 | sed -n 's/.*@{\([0-9][0-9]*\)}$/\1/p') || SINCE=
-  OVERVIEW=$(fm_nm_run_checked "$WT" "$TIMEOUT" axi) || true
-  REPO=$(fm_nm_strip_quotes "$(printf '%s\n' "$OVERVIEW" | sed -n 's/^repo:[[:space:]]*//p' | head -1)")
-  if [ -z "$REPO" ]; then
-    REASON="no-mistakes resolved no repository for the task copy"
-    FIRST_LINE=$(printf '%s\n' "$OVERVIEW" | sed -n '/^error:/{p;q;}')
-    [ -n "$FIRST_LINE" ] || FIRST_LINE=$(printf '%s\n' "$OVERVIEW" | sed -n '/[^[:space:]]/{p;q;}')
-    [ -z "$FIRST_LINE" ] || REASON="$REASON: $FIRST_LINE"
-  else
-    DB=$(fm_nm_state_db "$WT")
-  fi
-fi
+fm_nm_task_attribution "$WT" "$TIMEOUT"
+BRANCH=$FM_NM_TASK_BRANCH
+SINCE=$FM_NM_TASK_SINCE
+REPO=$FM_NM_TASK_REPO
+DB=$FM_NM_TASK_DB
+REASON=$FM_NM_TASK_REASON
 
 [ -d "$DATA" ] || fail "data directory $DATA is missing"
 LEDGER="$DATA/pipeline-spend.jsonl"

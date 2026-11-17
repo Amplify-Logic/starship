@@ -6012,6 +6012,109 @@ test_leaked_tasktmp_process_is_reaped() {
   pass "a leaked descendant process rooted under the task's per-task tasktmp is reaped by teardown too"
 }
 
+# A no-mistakes state database recording validation runs for the case's
+# project. Each row: "<run-id> <branch> <status> <worktree-dir>".
+seed_validation_runs() {  # <case-dir> <row>...
+  local case_dir=$1
+  shift
+  mkdir -p "$case_dir/nm/worktrees/r1"
+  python3 - "$case_dir/nm/state.sqlite" "$case_dir/project" "$(date +%s)" "$@" <<'PY'
+import sqlite3
+import sys
+
+database, project, created = sys.argv[1], sys.argv[2], int(sys.argv[3])
+db = sqlite3.connect(database)
+db.executescript("""
+    CREATE TABLE repos (id TEXT PRIMARY KEY, working_path TEXT NOT NULL UNIQUE);
+    CREATE TABLE runs (id TEXT PRIMARY KEY, repo_id TEXT NOT NULL, branch TEXT NOT NULL,
+                       status TEXT NOT NULL, created_at INTEGER NOT NULL, worktree_dir TEXT);
+""")
+db.execute("INSERT INTO repos VALUES ('r1', ?)", (project,))
+for row in sys.argv[4:]:
+    run_id, branch, status, copy = row.split(" ", 3)
+    db.execute("INSERT INTO runs VALUES (?, 'r1', ?, ?, ?, ?)", (run_id, branch, status, created + 1, copy))
+db.commit()
+PY
+}
+
+# Start a detached process that lives until killed; echoes its pid.
+start_detached() {  # <cwd> <command>...
+  local cwd=$1 pid
+  shift
+  ( cd "$cwd" && exec "$@" ) > /dev/null 2>&1 &
+  pid=$!
+  disown
+  printf '%s\n' "$pid"
+}
+
+# A finished job's validation run left processes behind: a test loop started
+# in its validation copy (which no-mistakes has since deleted), and a server
+# run from a path inside the task copy by a shell that sat elsewhere. Cleanup
+# must stop both, log what it stopped, and leave alone every process of
+# another task's validation copy, of this task's still-running run, a sibling
+# copy whose path only shares a prefix, and a process merely started with the
+# copy as an argument.
+test_leaked_validation_copy_processes_are_reaped() {
+  local case_dir rc copy live_copy other_copy loop server other live sibling dir_arg pid
+  local survivors="" stopped=""
+  case_dir=$(make_case leaked-validation-copy-reap)
+  write_meta "$case_dir" no-mistakes ship
+  mkdir -p "$case_dir/wt/serve"
+  printf 'import time\ntime.sleep(300)\n' > "$case_dir/wt/serve/server.py"
+  git -C "$case_dir/wt" add serve/server.py
+  land_shippable_commit "$case_dir"
+  copy="$case_dir/nm/worktrees/r1/01DONE"
+  live_copy="$case_dir/nm/worktrees/r1/01LIVE"
+  other_copy="$case_dir/nm/worktrees/r1/01OTHER"
+  seed_validation_runs "$case_dir" \
+    "01DONE fm/task-x1 completed $copy" \
+    "01LIVE fm/task-x1 running $live_copy" \
+    "01OTHER fm/task-y2 completed $other_copy"
+  mkdir -p "$copy/tests" "$live_copy" "$other_copy" "$case_dir/wt-sibling" "$case_dir/elsewhere"
+  printf 'while :; do sleep 1; done\n' > "$copy/tests/.tmp-one.test.sh"
+  cp "$case_dir/wt/serve/server.py" "$case_dir/elsewhere/server.py"
+
+  loop=$(start_detached "$copy" bash tests/.tmp-one.test.sh)
+  server=$(start_detached "$case_dir/elsewhere" python3 "$case_dir/wt/serve/server.py")
+  other=$(start_detached "$other_copy" sleep 300)
+  live=$(start_detached "$live_copy" sleep 300)
+  sibling=$(start_detached "$case_dir/elsewhere" python3 "$case_dir/elsewhere/server.py" "$case_dir/wt-sibling/x")
+  dir_arg=$(start_detached "$case_dir/elsewhere" python3 "$case_dir/elsewhere/server.py" "$case_dir/wt")
+  sleep 0.5
+  # no-mistakes removes a finished run's copy; the loop keeps running from it.
+  rm -rf -- "${copy:?}"
+  for pid in "$loop" "$server" "$other" "$live" "$sibling" "$dir_arg"; do
+    kill -0 "$pid" 2>/dev/null || fail "leaked-validation-copy-reap: setup process $pid did not start"
+  done
+
+  rc=0
+  NM_HOME="$case_dir/nm" FM_FAKE_AXI_OVERVIEW="repo: $case_dir/project" \
+    run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+
+  for pid in "$loop" "$server"; do
+    if kill -0 "$pid" 2>/dev/null; then survivors="$survivors $pid"; fi
+  done
+  for pid in "$other" "$live" "$sibling" "$dir_arg"; do
+    kill -0 "$pid" 2>/dev/null || stopped="$stopped $pid"
+  done
+  for pid in "$loop" "$server" "$other" "$live" "$sibling" "$dir_arg"; do
+    pkill -KILL -P "$pid" 2>/dev/null || true
+    kill -KILL "$pid" 2>/dev/null || true
+  done
+  expect_code 0 "$rc" "leaked-validation-copy-reap: teardown should succeed"
+  [ -z "$survivors" ] || fail "leaked-validation-copy-reap: leaked processes survived cleanup:$survivors"
+  [ -z "$stopped" ] || fail "leaked-validation-copy-reap: cleanup stopped processes outside this task's copies:$stopped"
+  assert_grep "reaping leaked validation copy process" "$case_dir/stderr" \
+    "leaked-validation-copy-reap: teardown did not report the validation copy reap"
+  assert_grep "teardown: stopping $loop bash tests/.tmp-one.test.sh" "$case_dir/stderr" \
+    "leaked-validation-copy-reap: teardown did not log the stopped test loop"
+  assert_grep "teardown: stopping $server " "$case_dir/stderr" \
+    "leaked-validation-copy-reap: teardown did not log the stopped server"
+  assert_grep "$case_dir/wt/serve/server.py" "$case_dir/stderr" \
+    "leaked-validation-copy-reap: teardown did not log the stopped server's command"
+  pass "cleanup stops processes left in the task's copy and finished validation copies, and nothing else"
+}
+
 test_lsof_absent_reaps_tmux_process_group() {
   local case_dir rc pid path_without_lsof
   case_dir=$(make_case lsof-absent-process-group-reap)
@@ -7320,6 +7423,7 @@ test_another_branchs_parked_run_is_never_touched
 test_own_autonomous_run_is_left_alone
 test_leaked_worktree_process_is_reaped
 test_leaked_tasktmp_process_is_reaped
+test_leaked_validation_copy_processes_are_reaped
 test_lsof_absent_reaps_tmux_process_group
 test_lsof_error_refuses_before_removal
 test_reused_pid_identity_is_not_force_killed
