@@ -4452,7 +4452,7 @@ Its private records live under `data/tap-desk/`: the card file and page `bin/fm-
 ## Supervision active alert channels (config/wedge-alarm)
 
 When away-mode injection wedges past `FM_MAX_DEFER_SECS`, the sub-supervisor raises a loud, rate-limited alarm.
-The host-level macOS sentinel uses the same channels when a crew task is in flight or a sentinel hook reports work without a healthy identity-matched watcher lock and beacon.
+The host-level macOS sentinel uses the same channels when a crew task is in flight or a sentinel hook reports work while supervision is down by the home's own supervision model, not during a normal hand-over gap between watcher cycles.
 Beyond the durable alarm markers and the tmux status-line flash available to the injection case, these backend-independent alerts can reach the captain even when every pane and its backend status-line is unreadable.
 In-harness turn-end and continuity guards write only the pending marker and return their own loud banner immediately; the independent scheduled host check exclusively owns external-channel delivery.
 `config/wedge-alarm` (local, gitignored) lists channel directives, one per non-empty, non-comment line; every listed non-`off` channel fires, best-effort.
