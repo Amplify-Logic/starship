@@ -558,10 +558,25 @@ LOG
   assert_equals "$(q .count_line)" "3 jobs running · 5 need you · 1 idle" "the count holds the second mates' PRs"
   local out
   out=$(python3 "$FACTORY" --plain --width 120) || fail "--plain failed"
-  has_line "$out" " ● garden-notes is ready for you to look at Garden Journal · from near · ready" \
-    "the screen names the second mate"
-  unset FM_SECONDMATE_PR_READER
-  pass "factory record: a second mate's ready PR needs you, named by the mate, and a merged or closed one does not"
+  has_line "$out" " ● garden-notes is ready for you to look at Garden Journal · from near · ready 53 min" \
+    "the screen names the second mate and how long its PR has been ready"
+  # Each done outcome is its own asking, as this home's own work is: a keep
+  # sent for one does not read as the answer to the next.
+  assert_equals "$(q '.needs_you[] | select(.id == "far:fleet-count") | .since')" "1794640300" \
+    "a second mate's PR became ready when its done outcome was reported"
+  export FM_FACTORY_INBOX="$BINDIR/inbox"
+  printf '{"request_id": "factory.other-work.keep.far:fleet-count.1794640300", "body": "keep", "at": "2026-11-14T07:59:00Z"}\n' \
+    > "$FM_FACTORY_TEST_NOTES"
+  take_record
+  assert_equals "$(q '.needs_you[] | select(.id == "far:fleet-count") | .answered.at')" "$((NOW - 60))" \
+    "a keep on a second mate's PR reads as answered"
+  printf 'done [key=child-outcome-fleet-count-done-6c7d8e9f] [at=1794641000]: child fleet-count done: checks green again pr=https://example.invalid/o/tools/pull/44 mode=no-mistakes yolo=off\n' \
+    >> "$HOME_FIX/state/far.status"
+  take_record
+  assert_equals "$(q '.needs_you[] | select(.id == "far:fleet-count") | "\(.since) \(.answered)"')" "1794641000 null" \
+    "a later done outcome still reads as answered by the keep sent for the one before"
+  unset FM_SECONDMATE_PR_READER FM_FACTORY_INBOX
+  pass "factory record: a second mate's ready PR needs you, named by the mate, each done outcome a new asking, and a merged or closed one does not"
 }
 
 test_the_plain_screen_is_the_record_as_text() {

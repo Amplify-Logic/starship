@@ -753,7 +753,9 @@ def owner_calls(home: str, buckets: Dict[str, str], backlog: Optional[Dict[str, 
         elif len(parts) >= 2 and parts[0] == "merge":
             merges.append(parts[1])
         elif len(parts) >= 4 and parts[0] == "mate-merge":
-            mate_prs.append({"mate": parts[1], "child": parts[2], "url": parts[3]})
+            at = parts[4] if len(parts) >= 5 else ""
+            mate_prs.append({"mate": parts[1], "child": parts[2], "url": parts[3],
+                             "since": int(at) if at.isdigit() else None})
     records = [r for r in backlog.get("records") or [] if r.get("structured") and r.get("id")]
     return decisions, merges, records, mate_prs
 
@@ -1457,7 +1459,7 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
         needs.append({"id": "%s:%s" % (pr["mate"], pr["child"]),
                       "factory": factory_of(found.group(1) if found else None), "kind": "finished work", "ask": "%s is ready for you to look at" % pr["child"],
                       "title": pr["child"], "why": None, "options": [], "suggested_by": None,
-                      "recommendation": None, "holds_up": [], "since": None, "for": "you",
+                      "recommendation": None, "holds_up": [], "since": pr["since"], "for": "you",
                       "pr": pr["url"], "checking": False, "read": [], "mate": pr["mate"]})
 
     activity = dict(activity)

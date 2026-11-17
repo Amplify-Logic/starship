@@ -321,9 +321,10 @@ fm_fleet_status_bucket() {  # <canonical line> [<meta>]
 #
 #   decision<TAB><id>   a decision held for the captain that waits on him now
 #   merge<TAB><id>      a PR or ready branch waiting for his merge word
-#   mate-merge<TAB><mate><TAB><child><TAB><url>
+#   mate-merge<TAB><mate><TAB><child><TAB><url><TAB><at>
 #                       a PR a second mate's child has ready for the
-#                       owner's merge word (fm_secondmate_ready_prs below)
+#                       owner's merge word, and the epoch its done outcome
+#                       was reported at (fm_secondmate_ready_prs below)
 #
 # This is the one definition of that count. The fold below publishes it as
 # <ready> and <decisions>, so the bridge strip and the status bar show it;
@@ -392,8 +393,10 @@ fm_owner_calls() {  # <state-dir> [<buckets-file> [<backlog-file>]]
 }
 
 # fm_secondmate_ready_prs: the PRs this home's second mates have ready for the
-# owner's merge word, one `mate-merge<TAB><mate><TAB><child><TAB><url>` line
-# each, by mate id and then in the order they were reported.
+# owner's merge word, one `mate-merge<TAB><mate><TAB><child><TAB><url><TAB><at>`
+# line each, by mate id and then in the order they were reported. <at> is the
+# `[at=]` epoch of the child's done outcome that lists the PR, empty when that
+# line carries none, so each new done outcome is a new asking of the owner.
 #
 # A second mate's PRs are not this home's tasks, so they are read from what the
 # mate already reports here: its parent channel, state/<mate>.status, which a
@@ -417,19 +420,19 @@ fm_owner_calls() {  # <state-dir> [<buckets-file> [<backlog-file>]]
 # late, so each listed PR's own state is also read from its forge
 # (_fm_secondmate_pr_state) and a merged or closed one is dropped.
 fm_secondmate_ready_prs() {  # <state-dir>
-  local state=$1 meta mate kind child url
+  local state=$1 meta mate kind child url at
   for meta in "$state"/*.meta; do
     [ -f "$meta" ] || continue
     kind=$(awk -F= '$1 == "kind" { print substr($0, index($0, "=") + 1); exit }' "$meta" 2>/dev/null)
     [ "$kind" = secondmate ] || continue
     mate=$(basename "$meta" .meta)
     [ -f "$state/$mate.status" ] || continue
-    while IFS=$'\t' read -r child url; do
+    while IFS=$'\t' read -r child url at; do
       [ -n "$url" ] || continue
       case "$(_fm_secondmate_pr_state "$state" "$url")" in
         merged|closed) continue ;;
       esac
-      printf 'mate-merge\t%s\t%s\t%s\n' "$mate" "$child" "$url"
+      printf 'mate-merge\t%s\t%s\t%s\t%s\n' "$mate" "$child" "$url" "$at"
     done < <(awk '
       function drop(u,  c) { for (c in pr) if (pr[c] == u) delete pr[c] }
       !/^[a-z-]+( \[[^]]*\])*: / { next }
@@ -457,8 +460,9 @@ fm_secondmate_ready_prs() {  # <state-dir>
         drop(url)
         if (!(child in seen)) { seen[child] = 1; order[++count] = child }
         pr[child] = url
+        at[child] = match($0, /\[at=[0-9]+\]/) ? substr($0, RSTART + 4, RLENGTH - 5) : ""
       }
-      END { for (i = 1; i <= count; i++) if (order[i] in pr) printf "%s\t%s\n", order[i], pr[order[i]] }
+      END { for (i = 1; i <= count; i++) if (order[i] in pr) printf "%s\t%s\t%s\n", order[i], pr[order[i]], at[order[i]] }
     ' "$state/$mate.status" 2>/dev/null)
   done
 }

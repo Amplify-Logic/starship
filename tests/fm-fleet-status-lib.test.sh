@@ -798,7 +798,7 @@ LOG
   out=$(FM_SECONDMATE_PR_READER="$reader" FM_FLEET_STATE_READER="$BINDIR/fake-crew-state" \
     bash -c '. "$1/bin/fm-fleet-status-lib.sh"; fm_owner_calls "$2"' _ "$ROOT" "$STATE") \
     || fail "the owner's calls could not be read with second mates"
-  assert_equals "$(printf 'decision\tpick-a\nmerge\tgreen\nmate-merge\tfar\tchild-c\thttps://github.com/o/r/pull/68\nmate-merge\tfar\tchild-f\thttps://github.com/o/r/pull/71\nmate-merge\tnear\tchild-b\thttps://github.com/o/r/pull/102')" \
+  assert_equals "$(printf 'decision\tpick-a\nmerge\tgreen\nmate-merge\tfar\tchild-c\thttps://github.com/o/r/pull/68\t200\nmate-merge\tfar\tchild-f\thttps://github.com/o/r/pull/71\t230\nmate-merge\tnear\tchild-b\thttps://github.com/o/r/pull/102\t120')" \
     "$out" "the owner's calls with second mates' PRs"
   assert_equals "$(LC_ALL=C sort "$forge" | tr '\n' ' ')" \
     "https://github.com/o/r/pull/102 https://github.com/o/r/pull/68 https://github.com/o/r/pull/69 https://github.com/o/r/pull/70 https://github.com/o/r/pull/71 " \
@@ -867,8 +867,8 @@ LOG
   out=$(FM_SECONDMATE_PR_READER="$reader" \
     bash -c '. "$1/bin/fm-fleet-status-lib.sh"; fm_secondmate_ready_prs "$2"' _ "$ROOT" "$STATE") \
     || fail "a second mate's ready PRs could not be read"
-  assert_equals "$(printf 'mate-merge\tfar\theld\thttps://github.com/o/r/pull/82\nmate-merge\tfar\ttwice\thttps://github.com/o/r/pull/83\nmate-merge\tfar\tmoved\thttps://github.com/o/r/pull/86')" \
-    "$out" "only a child's newest done, yolo=off, unmerged PR is listed, and once"
+  assert_equals "$(printf 'mate-merge\tfar\theld\thttps://github.com/o/r/pull/82\t120\nmate-merge\tfar\ttwice\thttps://github.com/o/r/pull/83\t170\nmate-merge\tfar\tmoved\thttps://github.com/o/r/pull/86\t210')" \
+    "$out" "only a child's newest done, yolo=off, unmerged PR is listed, once, with when its newest done outcome was reported"
   pass "fleet status: a second mate's PR waits on the owner only while its child's newest outcome is done and not under yolo, and a merged one stays dropped"
 }
 
