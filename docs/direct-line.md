@@ -1,15 +1,17 @@
 # Direct-line second mates
 
 A direct-line second mate is a local second mate the captain may talk to directly, instead of only through the first mate.
-It is opt-in per charter and off by default.
+It is opt-in per mate and off by default.
 It exists so a page such as a crew chat can show the mate's own conversation and type into it, while the first mate keeps supervising.
 `bin/fm-direct-line.sh` owns the commands and their JSON shapes, `bin/fm-direct-line-lib.sh` owns the opt-in and the "talking with the captain" state, and `bin/fm-pane-writer-lib.sh` owns the pane-writer lock; read their headers before changing them.
 
 ## Opting in
 
-Scaffold the charter with `bin/fm-brief.sh <id> --secondmate --direct-line <projects>` and seed it as usual (the `secondmate-provisioning` skill).
-The charter then holds the exact line `Direct line: on` and the rules below.
-A charter without that line has no direct line, and every direct-line command refuses that mate.
+Opting in takes two records, so a mate can never opt itself in.
+Scaffold the charter with `bin/fm-brief.sh <id> --secondmate --direct-line <projects>` and seed it as usual (the `secondmate-provisioning` skill); the charter then holds the exact line `Direct line: on` and the rules below.
+Then the parent home runs `bin/fm-direct-line.sh enable <id>`, which checks the registry entry, the mate's identity, its local binding to this parent, and its charter before it records the opt-in in the parent's own state.
+`bin/fm-direct-line.sh disable <id>` turns it off again.
+A mate missing either record has no direct line, and every direct-line command refuses it.
 A remote second mate has no direct line yet.
 
 ## The rules a direct-line mate follows
@@ -18,41 +20,53 @@ A remote second mate has no direct line yet.
   Every outcome the parent-channel contract names still goes to the parent channel too, so the first mate's supervision is unchanged ([secondmate-parent-channel.md](secondmate-parent-channel.md)).
 - The captain's word outranks the first mate's.
   When the two conflict, the mate follows the captain and appends a `needs-decision` line naming the conflict.
-- A chat answer to a call held for the captain closes that hold by script, `bin/fm-captain-hold.sh answer`, so a stale card cannot later record a second, different answer.
-  The send path does this itself when the caller names the call with `--answers`; the charter tells the mate to do it for any other chat answer.
+- A call held for the captain closes only through a direct-line message that names it: the caller passes `--answers <task> --hold-identity <identity>`, and the send path closes the call by compare-and-answer, so a call that changed or closed since the captain saw it is never answered.
+  The message reaches the mate after `[direct line message <id> answers <task>]`.
+  The mate never closes a held call from its own reading of the chat; its one way is `bin/fm-direct-line.sh answered <task> --client-id <id>`, which finishes that message's own answer while it is young.
+  An answer given any other way, such as at the pane's keyboard, goes to the first mate as a `needs-decision` line for it to record.
 - While it is talking with the captain, the first mate never nudges, interrupts, or relaunches it.
 
 ## Talking with the captain
 
-A mate is talking with the captain while the captain's last direct-line message is under `FM_DIRECT_LINE_TALK_SECS` old (default 30 minutes), or while the mate has declared that it is waiting on the captain with `bin/fm-direct-line.sh waiting`.
+A mate is talking with the captain while its primary is alive and either the captain's last direct-line message is under `FM_DIRECT_LINE_TALK_SECS` old (default 30 minutes; the stamp lives in the parent home), or the mate has declared that it is waiting on the captain with `bin/fm-direct-line.sh waiting` (at most four hours).
+A stamp from the future is ignored, so neither record can stretch the state past its bound.
 While that lasts:
 
-- the parent's steering-inbox doorbell is deferred and its re-ring ladder does not advance, so a first-mate request waits durably in the inbox;
+- a parent steering-inbox doorbell younger than `FM_DIRECT_LINE_DEFER_MAX_SECS` (default one hour) is deferred and its re-ring ladder does not advance; an older one rings and escalates as usual;
 - the watcher neither nudges the mate to drain its wake queue nor raises a stall for it;
-- `bin/fm-control.sh` refuses interrupt, exit, and relaunch unless `--owner-approved` records that the captain asked;
+- `bin/fm-control.sh` refuses interrupt, exit, and relaunch unless `--owner-approved` says the captain asked, which it records in the parent's `state/direct-line/<id>/audit.log`;
 - the bearings row for the mate carries `talking_with_owner: true` and says so in its summary.
 
-A mate whose pane is dead is not talking, so the ordinary liveness recovery still relaunches it.
+A mate whose primary is dead is not talking, so the ordinary liveness recovery still relaunches it.
 
 ## Sending
 
-`bin/fm-direct-line.sh send` runs from the parent home and resolves the mate only through `data/secondmates.md`.
-Before anything is typed it asserts that the registry entry is local, that the mate's home names the same id and is bound to this parent, and that its charter opts in.
-It then, in order:
+`bin/fm-direct-line.sh send` runs from the parent home and resolves the mate only through `data/secondmates.md`, with the same assertions as `enable` plus the opt-in itself.
+The text is at most 8000 characters.
+It then, under a per-mate send lock:
 
-1. claims the caller's client id in the mate's delivery record, so a retried request is delivered once;
-2. copies the message to the mate's parent channel as a `note:` line, and types nothing if that copy fails;
-3. hands the words to `bin/fm-desk-voice.sh send` with the mate's home, `--client-id`, and `--expect-home`, with every home override and pane variable cleared;
-4. marks the mate as talking with the captain and answers any named held call.
+1. records the caller's client id with a digest of the text, images, and held call, so a retry with the same id is delivered once and a reused id with different words is refused;
+2. copies the message to the mate's parent channel as a `note:` line, and types nothing unless that copy is recorded;
+3. marks the mate as talking with the captain, so no lifecycle action lands between the check and the words, and puts the earlier mark back if delivery fails;
+4. hands the words to `bin/fm-desk-voice.sh send` with the mate's home, the same `--client-id`, and `--expect-home`, with every home override, pane variable, and submit knob cleared;
+5. answers the named held call, if any.
 
 Desk-voice types only into the pane of the session that holds the mate's session lock and runs for the mate's home, under that home's pane-writer lock, and otherwise saves the message to the mate's mailbox.
-While the mailbox still holds an undrained message, later messages go to the mailbox too, so they arrive in the order sent.
-A caller whose request timed out polls `bin/fm-direct-line.sh delivery <mate> <client-id>` for the outcome instead of sending again.
+While the mailbox still holds an undrained message, later messages go to the mailbox too (`desk-voice send --mailbox`), so they arrive in the order sent.
+A caller whose request timed out polls `bin/fm-direct-line.sh delivery <mate> <client-id>` instead of sending again; both reads adopt desk-voice's own record of the id, and a send that stopped before typing is resumed only within a few minutes and otherwise expires.
+A caller runs a send detached and polls it rather than killing it; desk-voice finishes the words and their Enter even when its caller is stopped.
+
+## Words, not keys
+
+Desk-voice types the captain's words as one plain line: every control character, escape included, becomes a space and runs of whitespace collapse, so nothing can submit early or act as a key.
+A line that would start with `!`, `/`, or `#` is typed after `Message: `, so it never reaches the harness as a shell command, a slash command, or a memory note.
+The parent-channel copy is one cleaned line as well, so a message cannot forge a second status line.
 
 ## One lock for every typist
 
-A second mate's pane has several typists: desk-voice in its home (the desk floater, the web page, captain inbox rings, and the direct line) and the parent's steering-inbox doorbell (fm-send, the watcher's re-ring ladder, and its drain nudge).
-Each of them holds the home's pane-writer lock across its check, type, and Enter, and none of them waits for it: desk-voice falls back to the mailbox, a ring leaves its queued wake, and a doorbell is deferred to the next re-ring.
+A second mate's pane has several typists: desk-voice in its home (the desk floater, the web page, captain inbox rings, and the direct line), the parent's steering-inbox doorbell (fm-send, the watcher's re-ring ladder, and its drain nudge), and the parent's control plane.
+Each of them holds the home's pane-writer lock across its check, type, and Enter.
+Desk-voice falls back to the mailbox, a ring leaves its queued wake, and a doorbell is deferred to the next re-ring rather than wait; the control plane waits up to `FM_CONTROL_PANE_WAIT` seconds (default 15) and then refuses.
 The captain typing at the keyboard cannot take a lock; the composer checks each typist already makes cover that case.
 
 ## Reads for a page
@@ -62,16 +76,21 @@ Every read prints one JSON document whose `schema` field names its version:
 | Read | Schema |
 |---|---|
 | `bin/fm-direct-line.sh list` | `fm-direct-line-mates.v1` |
-| `bin/fm-direct-line.sh send` and `delivery` | `fm-direct-line-delivery.v1` |
-| `bin/fm-direct-line.sh talking` and `waiting` | `fm-direct-line-talking.v1` |
+| `bin/fm-direct-line.sh send`, `delivery`, and `answered` | `fm-direct-line-delivery.v1` |
+| `bin/fm-direct-line.sh talking`, `waiting`, `enable`, and `disable` | `fm-direct-line-talking.v1` |
 | `bin/fm-direct-line.sh conversation <mate>`, or `bin/fm-web.sh conversation` for a home | `fm-web-conversation.v1` |
 | `bin/fm-desk-voice.sh delivery <client-id>` | `fm-desk-voice-delivery.v1` |
 | `bin/fm-secondmate-pin.sh show` | `fm-secondmate-pin.v1` |
 
-The conversation read is the web page's own transcript reading ([web.md](web.md)), so its item HTML is already escaped.
-`bin/fm-secondmate-pin.sh set` changes one mate's model pin without hand-editing `config/secondmate-harness`; relaunching the mate is a separate step.
+The conversation read is the web page's own transcript reading ([web.md](web.md)), so its item HTML is already escaped; a page that inserts it should still serve a strict content security policy.
+`bin/fm-secondmate-pin.sh set` changes one mate's model pin without hand-editing `config/secondmate-harness`, and changes nothing unless the new pin reads back exactly; relaunching the mate is a separate step.
+
+## Limits
+
+Any local process that can run scripts as the captain's user can run `send`; the direct line records which message closed a call, not who typed it.
+Delivery records are kept until the mate is removed.
 
 ## Regression coverage
 
 `tests/fm-direct-line.test.sh` drives these commands against lab homes and the real desk-voice, parent-channel, captain-hold, steering-inbox, and control-plane scripts, including a stand-in primary pane for the typed path.
-`tests/fm-deepgram-desk.test.sh` covers desk-voice's client id and home assertion, `tests/fm-secondmate-pin.test.sh` the pin command, and `tests/fm-web.test.sh` the conversation read.
+`tests/fm-deepgram-desk.test.sh` covers desk-voice's client id, home assertion, plain-line typing, and a stopped caller, `tests/fm-secondmate-pin.test.sh` the pin command, and `tests/fm-web.test.sh` the conversation read.

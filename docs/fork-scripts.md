@@ -74,7 +74,7 @@ Each row is one purpose clause only: the script's own header comment is the auth
 | `fm-desk-floater-windows.sh` | From inside WSL 2, build, install, update, start, stop and remove the Windows floater with Windows' own C# compiler, and serve its `bridge` calls through the shared desk-voice, speech-to-text and speak scripts (docs/desk-floater-windows.md) |
 | `fm-desk-play-windows.sh` | afplay stand-in `fm-speak.sh` uses inside WSL 2 once the Windows floater is installed: plays one reply through the Windows speakers and stops on a stop (docs/desk-floater-windows.md) |
 | `fm-web.sh` | Serve the localhost chat page onto the primary first mate: its conversation, a message box that sends through `fm-desk-voice.sh send`, and the bridge glance (docs/web.md) |
-| `fm-direct-line.sh` | The captain's direct line to an opted-in second mate: list, send once per client id, delivery and talking reads, the mate's conversation, and the mate's own `waiting` declaration, all as versioned JSON (docs/direct-line.md) |
+| `fm-direct-line.sh` | The captain's direct line to an opted-in second mate: enable and disable from the parent, list, send once per client id, delivery and talking reads, the mate's conversation, and the mate's own `waiting` and `answered`, all as versioned JSON (docs/direct-line.md) |
 | `fm-direct-line-lib.sh` | A second mate's direct-line opt-in and its "talking with the captain" state (docs/direct-line.md) |
 | `fm-pane-writer-lib.sh` | The per-home pane-writer lock every typist into a primary's pane holds across check, type and Enter (docs/direct-line.md) |
 | `fm-secondmate-pin.sh` | Show, set or clear one second mate's `config/secondmate-harness` line as JSON, refusing an edit that would not resolve (docs/configuration.md) |

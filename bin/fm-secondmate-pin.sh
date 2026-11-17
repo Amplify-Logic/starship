@@ -62,6 +62,7 @@ verb=$1
 shift
 ID=${1:-}
 [ -n "$ID" ] || refuse "usage: fm-secondmate-pin.sh $verb <mate-id> ..."
+case "$ID" in .*|-*|*[!A-Za-z0-9._-]*) refuse "not a second mate id: '$ID'" ;; esac
 shift
 rc=0
 secondmate_registry_line_for_id "$DATA/secondmates.md" "$ID" || rc=$?
@@ -114,8 +115,8 @@ print_pin() {  # <config-dir>
 # the copy, then replace the file under the config lock.
 PIN_LOCK=
 PIN_TMP=
-rewrite() {  # <new-line>
-  local new=$1 out
+rewrite() {  # <new-line> [<harness> <model> <effort>]
+  local new=$1 out got want
   [ ! -L "$PIN_FILE" ] || refuse "$PIN_FILE is a symlink; refusing to rewrite it"
   mkdir -p "$CONFIG" || die "cannot create $CONFIG"
   PIN_LOCK="$CONFIG/.secondmate-harness.lock"
@@ -152,6 +153,15 @@ rewrite() {  # <new-line>
   if ! out=$(resolve "$tmpdir" secondmate 2>&1 >/dev/null); then
     refuse "the changed pin file would not resolve, so nothing was changed: ${out#error: }"
   fi
+  # A set must read back as exactly the harness, model and effort it wrote.
+  if [ -n "$new" ] && [ "${2:-default}" != default ]; then
+    for want in "secondmate:$2" "secondmate-model:$3" "secondmate-effort:$4"; do
+      got=$(resolve "$tmpdir" "${want%%:*}" 2>/dev/null) \
+        || refuse "the changed pin file would not resolve its ${want%%:*}, so nothing was changed"
+      [ "$got" = "${want#*:}" ] \
+        || refuse "the changed pin would read back as '$got', not '${want#*:}', so nothing was changed"
+    done
+  fi
   chmod 600 "$tmpdir/secondmate-harness" 2>/dev/null || true
   mv -f "$tmpdir/secondmate-harness" "$PIN_FILE" || die "cannot replace $PIN_FILE"
   print_pin "$CONFIG"
@@ -171,9 +181,9 @@ case "$verb" in
     harness=$1 model=${2:-} effort=${3:-}
     [ "$harness" = default ] || fm_control_harness_supported "$harness" \
       || refuse "'$harness' is not a harness the control plane can relaunch; one of: default $(fm_control_harnesses | tr '\n' ' ')"
-    case "$model" in *[!A-Za-z0-9._:/@+-]*) refuse "not a model name: $model" ;; esac
+    case "$model" in -*|*[!A-Za-z0-9._:/@+-]*) refuse "not a model name: $model" ;; esac
     case "$effort" in ''|low|medium|high|xhigh|max) ;; *) refuse "effort must be one of low, medium, high, xhigh, max" ;; esac
     [ "$harness" != default ] || [ -z "$model$effort" ] || refuse "a 'default' pin takes no model or effort"
-    rewrite "mate $ID: $harness${model:+ $model}${effort:+ $effort}"
+    rewrite "mate $ID: $harness${model:+ $model}${effort:+ $effort}" "$harness" "$model" "$effort"
     ;;
 esac

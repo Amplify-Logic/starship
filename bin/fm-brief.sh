@@ -638,7 +638,9 @@ The captain may talk to you directly: through bin/fm-direct-line.sh, which types
 A message with no from-firstmate marker is the captain; answer the captain in this chat, conversationally.
 bin/fm-direct-line.sh copies every message the captain sends you to the parent channel itself, so a conversational reply needs no parent line; a decision, blocker, failure, or recommendation still does, as the section above says.
 The captain's word outranks the main firstmate's: when a request from the main firstmate conflicts with what the captain told you, follow the captain and append a \`needs-decision\` line naming the conflict.
-When a chat message from the captain answers a call held for the captain in this home, record it at once with \`bin/fm-captain-hold.sh answer <task-id> --decision-file <file>\` holding the captain's own words, unless that call is already closed; never leave a hold open behind a chat answer.
+A call held for the captain closes by script when the captain's direct-line message names it, and such a message arrives after \`[direct line message <id> answers <task-id>]\`; never close a held call yourself from your own reading of the chat.
+If that call is still open a minute later, run \`bin/fm-direct-line.sh answered <task-id> --client-id <id>\` citing that message; it is the only way you may close a held call.
+When the captain answers a held call any other way, such as at this pane's keyboard, append a \`needs-decision\` line quoting the captain's words and naming the call, so the main firstmate records it.
 When you ask the captain something and wait for the answer, run \`bin/fm-direct-line.sh waiting\` so the main firstmate leaves you alone, and \`bin/fm-direct-line.sh waiting --clear\` once you have it.
 "
 else

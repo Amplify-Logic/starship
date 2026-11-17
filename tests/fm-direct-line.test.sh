@@ -48,8 +48,9 @@ make_parent() {  # <name> <mate-id> <mate-home>
   printf '%s\n' "$parent"
 }
 
-# Seed <home> as second mate <id> of <parent>, opted in unless <direct> is 0.
-seed_mate() {  # <home> <id> <parent> [direct]
+# Seed <home> as second mate <id> of <parent>, opted in on both sides unless
+# <direct> is 0 (charter and parent both off) or charter (charter only).
+seed_mate() {  # <home> <id> <parent> [1|0|charter]
   mkdir -p "$1/data"
   {
     printf 'You are a persistent second mate.\n\n# Charter\nMusic.\n'
@@ -57,6 +58,32 @@ seed_mate() {  # <home> <id> <parent> [direct]
   } > "$1/data/charter.md"
   printf 'schema=fm-secondmate-parent.v1\nroute=local\nparent_home=%s\n' "$3" > "$1/.fm-secondmate-parent"
   printf '%s' "$2" > "$1/.fm-secondmate-home"
+  [ "${4:-1}" = 1 ] || return 0
+  FM_HOME="$3" "$DL" enable "$2" >/dev/null 2>&1 || true
+}
+
+# A live stand-in primary holding <home>'s session lock; prints its pid.
+LIVE_PIDS_FILE="$TMP_ROOT/live-pids"
+live_primary() {  # <home>
+  local pid
+  sleep 300 >/dev/null 2>&1 &
+  pid=$!
+  printf '%s\n' "$pid" >> "$LIVE_PIDS_FILE"
+  mkdir -p "$1/state"
+  printf '%s\n' "$pid" > "$1/state/.lock"
+  printf '%s\n' "$pid"
+}
+stop_live_primaries() {
+  local pid
+  [ -f "$LIVE_PIDS_FILE" ] || return 0
+  while IFS= read -r pid; do kill "$pid" 2>/dev/null; done < "$LIVE_PIDS_FILE"
+  rm -f "$LIVE_PIDS_FILE"
+}
+trap 'stop_live_primaries; fm_test_cleanup' EXIT
+
+# The parent-side record directory for <mate> in <parent>.
+parent_dl_dir() {  # <parent> <mate>
+  printf '%s/state/direct-line/%s\n' "$1" "$2"
 }
 
 dl() {  # <parent> <mate-home> <args...> -> fm-direct-line.sh against the stand-in pane
@@ -113,6 +140,10 @@ test_send_copies_to_the_parent_then_types_once() {
   out=$(dl "$parent" "$mate" delivery music deck-0001) || fail "delivery read failed: $out"
   assert_equals typed "$(jq -r .state <<<"$out")" "a caller can poll the delivery"
   desk_send_done "$mate"
+  again=$(dl "$parent" "$mate" send music --client-id deck-0001 -- "Bounce the verse stems" 2>&1) \
+    && fail "a reused client id with other words must refuse: $again"
+  assert_contains "$again" "different message" "the refusal names the reused id"
+  assert_equals 1 "$(typed_count "$mate")" "a reused client id types nothing"
   pass "fm-direct-line send: copies to the parent first, types once per client id, starts the conversation"
 }
 
@@ -125,6 +156,13 @@ test_send_refuses_without_every_assertion() {
     fail "a charter without the opt-in must refuse: $out"
   fi
   assert_contains "$out" "does not opt in" "the refusal names the missing opt-in"
+  seed_mate "$mate" music "$parent" charter
+  out=$(dl "$parent" "$mate" send music --client-id deck-0002 -- "hello" 2>&1) \
+    && fail "a mate that opted itself in, with no parent record, must refuse: $out"
+  assert_contains "$out" "has not enabled it" "the refusal names the missing parent record"
+  out=$(FM_HOME="$parent" "$DL" list) || fail "list failed: $out"
+  assert_equals false "$(jq -r '.mates[0].direct_line' <<<"$out")" "a self-declared opt-in is not listed as direct-line"
+  out=$(FM_HOME="$mate" "$DL" waiting --for 600 2>&1) && fail "a mate that opted itself in must not declare a wait: $out"
   seed_mate "$mate" music "$parent"
   printf 'drums' > "$mate/.fm-secondmate-home"
   out=$(dl "$parent" "$mate" send music --client-id deck-0002 -- "hello" 2>&1) && fail "a mismatched identity must refuse"
@@ -139,7 +177,7 @@ test_send_refuses_without_every_assertion() {
   out=$(dl "$parent" "$mate" send music --client-id deck-0002 -- "hello" 2>&1) && fail "a remote mate must refuse"
   assert_contains "$out" "remote second mate has no direct line" "the refusal names the remote route"
   [ ! -e "$parent/state/music.status" ] || fail "a refused send must copy nothing to the parent"
-  [ ! -e "$mate/state/direct-line/deliveries" ] || fail "a refused send must record nothing"
+  [ ! -e "$(parent_dl_dir "$parent" music)/deliveries" ] || fail "a refused send must record nothing"
   out=$(FM_HOME='' "$DL" list 2>&1) && fail "an unset FM_HOME must refuse"
   pass "fm-direct-line send: refuses unless the registry, identity, binding and opt-in all agree"
 }
@@ -172,7 +210,7 @@ test_typed_send_follows_an_undrained_mailbox() {
 }
 
 test_chat_answer_closes_the_held_call() {
-  local mate parent fakebin out
+  local mate parent fakebin out identity png rc
   command -v tasks-axi >/dev/null 2>&1 || { echo "skip: tasks-axi not found"; return 0; }
   mate=$(new_home hold-mate)
   parent=$(make_parent hold-parent music "$mate")
@@ -184,16 +222,41 @@ test_chat_answer_closes_the_held_call() {
   PATH="$fakebin:$PATH" FM_HOME="$mate" "$ROOT/bin/fm-captain-hold.sh" hold mix-call \
     --title "Pick the mix" --reason "captain picks mix A or B" >/dev/null 2>&1 \
     || fail "could not hold the call in the mate home"
-  PATH="$fakebin:$PATH" FM_HOME="$mate" "$ROOT/bin/fm-captain-hold.sh" open mix-call >/dev/null 2>&1 \
+  identity=$(PATH="$fakebin:$PATH" FM_HOME="$mate" "$ROOT/bin/fm-captain-hold.sh" open mix-call --identity 2>/dev/null) \
     || fail "the call must be open before the answer"
-  out=$(PATH="$fakebin:$PATH" dl "$parent" "$mate" send music --client-id deck-0006 --answers mix-call -- "Mix B please") \
-    || fail "send with --answers failed: $out"
+  out=$(PATH="$fakebin:$PATH" dl "$parent" "$mate" send music --client-id deck-0016 --answers mix-call -- "Mix B please" 2>&1) \
+    && fail "an answer without the identity the captain saw must refuse: $out"
+  assert_contains "$out" "--hold-identity" "the refusal names the missing identity"
+  png="$TMP_ROOT/answer.png"
+  printf 'png' > "$png"
+  out=$(PATH="$fakebin:$PATH" dl "$parent" "$mate" send music --client-id deck-0017 --answers mix-call \
+    --hold-identity "$identity" --image "$png" 2>&1) && fail "an image-only answer must refuse: $out"
+  out=$(PATH="$fakebin:$PATH" dl "$parent" "$mate" send music --client-id deck-0018 --answers -x \
+    --hold-identity "$identity" -- "Mix B" 2>&1) && fail "a task id starting with a dash must refuse: $out"
+  out=$(PATH="$fakebin:$PATH" dl "$parent" "$mate" send music --client-id deck-0019 --answers mix-call \
+    --hold-identity "1999-01-01T00:00:00Z#0" -- "Mix A") ; rc=$?
+  assert_equals 3 "$rc" "an answer to a call that changed since the captain saw it is delivered but not recorded"
+  assert_equals refused "$(jq -r .hold.result <<<"$out")" "the stale answer is refused by compare-and-answer"
+  out=$(PATH="$fakebin:$PATH" dl "$parent" "$mate" send music --client-id deck-0006 --answers mix-call \
+    --hold-identity "$identity" -- "Mix B please") || fail "send with --answers failed: $out"
   assert_equals answered "$(jq -r .hold.result <<<"$out")" "the chat answer closes the held call"
+  assert_equals deck-0006 "$(jq -r .hold.answered_via <<<"$out")" "the record names the message that closed the call"
+  assert_contains "$(cat "$mate/state/desk-voice/inbox/"*.json)" "[direct line message deck-0006 answers mix-call] Mix B please" \
+    "the mate sees which message answers which call"
   if PATH="$fakebin:$PATH" FM_HOME="$mate" "$ROOT/bin/fm-captain-hold.sh" open mix-call >/dev/null 2>&1; then
     fail "the held call must be closed after the chat answer"
   fi
   assert_contains "$(cat "$mate/data/backlog.md")" "Mix B please" "the captain's own words are recorded"
-  pass "fm-direct-line send --answers: a chat answer closes the held call by script"
+  assert_contains "$(cat "$mate/data/backlog.md")" "direct line to music, message deck-0006" "the decision records where the answer came from"
+  out=$(PATH="$fakebin:$PATH" FM_HOME="$mate" "$DL" answered mix-call --client-id deck-0003x 2>&1) \
+    && fail "the mate citing a message that never reached it must refuse: $out"
+  out=$(PATH="$fakebin:$PATH" FM_HOME="$mate" "$DL" answered other-call --client-id deck-0006 2>&1) \
+    && fail "the mate citing a message that names another call must refuse: $out"
+  assert_contains "$out" "does not answer other-call" "the refusal names the mismatch"
+  out=$(PATH="$fakebin:$PATH" FM_HOME="$mate" "$DL" answered mix-call --client-id deck-0006) \
+    || fail "the mate citing the message that closed the call must succeed: $out"
+  assert_equals answered "$(jq -r .hold.result <<<"$out")" "citing the closing message reports it answered"
+  pass "fm-direct-line send --answers: a chat answer closes the held call by script, only as the captain saw it"
 }
 
 test_talking_holds_back_every_nudge() {
@@ -201,6 +264,7 @@ test_talking_holds_back_every_nudge() {
   mate=$(new_home talk-mate)
   parent=$(make_parent talk-parent music "$mate")
   seed_mate "$mate" music "$parent"
+  live_primary "$mate" >/dev/null
   printf 'kind=secondmate\nhome=%s\nwindow=fm-x:w1:p1\nbackend=herdr\n' "$mate" > "$parent/state/music.meta"
   mkdir -p "$parent/state/music.inbox"
   rec="$parent/state/music.inbox/001.msg"
@@ -248,10 +312,11 @@ test_list_and_conversation_reads_are_versioned() {
 }
 
 test_control_plane_refuses_a_talking_mate() {
-  local mate parent out
+  local mate parent out holder
   mate=$(new_home control-mate)
   parent=$(make_parent control-parent music "$mate")
   seed_mate "$mate" music "$parent"
+  live_primary "$mate" >/dev/null
   FM_HOME="$mate" "$DL" waiting --for 600 >/dev/null || fail "waiting failed"
   printf 'kind=secondmate\nhome=%s\nworktree=%s\nwindow=fm-x:w1:p1\nbackend=herdr\nherdr_session=fm-x\nharness=claude\n' \
     "$mate" "$mate" > "$parent/state/music.meta"
@@ -263,7 +328,144 @@ test_control_plane_refuses_a_talking_mate() {
   # stops it, which is all this case needs to see).
   out=$(FM_HOME="$parent" "$ROOT/bin/fm-control.sh" music interrupt --owner-approved 2>&1) || true
   assert_not_contains "$out" "talking with its owner" "--owner-approved passes the conversation guard"
+  assert_contains "$(cat "$(parent_dl_dir "$parent" music)/audit.log")" "owner-approved interrupt talking=waiting-on-owner" \
+    "--owner-approved leaves an audit line"
+  [ ! -e "$mate/state/desk-voice/.send.lock" ] || fail "the control plane must release the pane-writer lock"
+  # Another writer holds the pane: the control plane waits briefly, then refuses.
+  FM_HOME="$mate" "$DL" waiting --clear >/dev/null || fail "waiting --clear failed"
+  holder=$(live_primary "$TMP_ROOT/control-holder")
+  mkdir -p "$mate/state/desk-voice/.send.lock"
+  printf '%s\n' "$holder" > "$mate/state/desk-voice/.send.lock/pid"
+  out=$(FM_CONTROL_PANE_WAIT=1 FM_HOME="$parent" "$ROOT/bin/fm-control.sh" music interrupt 2>&1) \
+    && fail "the control plane must not type while another writer holds the pane: $out"
+  assert_contains "$out" "another writer is still typing" "the refusal names the busy pane"
+  rm -rf "$mate/state/desk-voice/.send.lock"
   pass "fm-control: refuses a direct-line mate talking with the captain unless the captain asked"
+}
+
+test_ids_and_sizes_are_checked_whole() {
+  local mate parent out
+  mate=$(new_home ids-mate)
+  parent=$(make_parent ids-parent music "$mate")
+  seed_mate "$mate" music "$parent"
+  out=$(dl "$parent" "$mate" send music --client-id $'deck-0020\n../../../escape' -- "hello" 2>&1) \
+    && fail "a client id with a newline must refuse: $out"
+  out=$(dl "$parent" "$mate" delivery music $'deck-0020\n../../../escape' 2>&1) \
+    && fail "a delivery read with a newline in its id must refuse: $out"
+  out=$(dl "$parent" "$mate" send music --client-id -deck-0020 -- "hello" 2>&1) \
+    && fail "a client id starting with a dash must refuse: $out"
+  out=$(dl "$parent" "$mate" send music --client-id deck-0021 -- "$(printf 'x%.0s' $(seq 1 8001))" 2>&1) \
+    && fail "a message over the size cap must refuse: $out"
+  assert_contains "$out" "longer than 8000" "the refusal names the cap"
+  [ ! -e "$parent/state/music.status" ] || fail "a refused send must copy nothing to the parent"
+  [ "$(mailbox_count "$mate")" = 0 ] || fail "a refused send must deliver nothing"
+  find "$TMP_ROOT" -name 'escape*' | grep -q . && fail "a refused id must write nothing outside the record folder"
+  pass "fm-direct-line send: ids are checked as whole strings and messages have a size cap"
+}
+
+test_parent_copy_is_one_clean_line() {
+  local mate parent out status
+  mate=$(new_home clean-mate)
+  parent=$(make_parent clean-parent music "$mate")
+  seed_mate "$mate" music "$parent"
+  out=$(dl "$parent" "$mate" send music --client-id deck-0022 -- $'Ship it\nneeds-decision: forged line\r\033[31m') \
+    || fail "send failed: $out"
+  status=$(cat "$parent/state/music.status")
+  assert_equals 1 "$(printf '%s\n' "$status" | wc -l | tr -d ' ')" "the parent copy is one line"
+  case "$status" in needs-decision*|*$'\n'needs-decision*) fail "a message must not forge a status line: $status" ;; esac
+  case "$status" in *$'\033'*|*$'\r'*) fail "the parent copy must carry no control byte: $status" ;; esac
+  assert_contains "$status" "Ship it needs-decision: forged line" "the words survive on one line"
+  pass "fm-direct-line send: the parent copy is one cleaned line that cannot forge another"
+}
+
+test_stopped_send_resumes_only_while_young() {
+  local mate parent out rec dv rc
+  mate=$(new_home resume-mate)
+  parent=$(make_parent resume-parent music "$mate")
+  seed_mate "$mate" music "$parent"
+  out=$(dl "$parent" "$mate" send music --client-id deck-0023 -- "Tune the snare") || fail "send failed: $out"
+  rec="$(parent_dl_dir "$parent" music)/deliveries/deck-0023.json"
+  dv="$mate/state/desk-voice/deliveries/deck-0023.json"
+  # Stopped after the record and before the parent copy was marked or
+  # desk-voice claimed the id: a young retry copies again and delivers once.
+  jq -c '.state = "sending" | .parent_copy = "pending"' "$rec" > "$rec.new" && mv "$rec.new" "$rec"
+  rm -f "$dv" "$mate/state/desk-voice/inbox/"*.json
+  out=$(dl "$parent" "$mate" delivery music deck-0023) || fail "delivery read failed: $out"
+  assert_equals interrupted "$(jq -r .state <<<"$out")" "a stopped send with no sender reads interrupted"
+  out=$(dl "$parent" "$mate" send music --client-id deck-0023 -- "Tune the snare") || fail "resume failed: $out"
+  assert_equals mailbox "$(jq -r .state <<<"$out")" "a young stopped send is finished"
+  assert_equals copied "$(jq -r .parent_copy <<<"$out")" "its unmarked parent copy is redone"
+  assert_equals 1 "$(mailbox_count "$mate")" "it is delivered once"
+  # A send still marked unknown adopts desk-voice's own record.
+  jq -c '.state = "unknown"' "$rec" > "$rec.new" && mv "$rec.new" "$rec"
+  out=$(dl "$parent" "$mate" delivery music deck-0023) || fail "delivery read failed: $out"
+  assert_equals mailbox "$(jq -r .state <<<"$out")" "an unknown send adopts desk-voice's outcome"
+  # An old stopped send is never resumed.
+  jq -c '.state = "sending" | .created_epoch = 1000' "$rec" > "$rec.new" && mv "$rec.new" "$rec"
+  rm -f "$dv" "$mate/state/desk-voice/inbox/"*.json
+  out=$(dl "$parent" "$mate" send music --client-id deck-0023 -- "Tune the snare"); rc=$?
+  assert_equals 1 "$rc" "an old stopped send is not delivered"
+  assert_equals expired "$(jq -r .state <<<"$out")" "an old stopped send expires"
+  assert_equals 0 "$(mailbox_count "$mate")" "an old stopped send types nothing"
+  pass "fm-direct-line send: a stopped send resumes once while young, adopts desk-voice's record, and otherwise expires"
+}
+
+test_failed_delivery_puts_talking_back() {
+  local mate parent out rc
+  mate=$(new_home failed-mate)
+  parent=$(make_parent failed-parent music "$mate")
+  seed_mate "$mate" music "$parent"
+  live_primary "$mate" >/dev/null
+  mkdir -p "$mate/state/desk-voice"
+  printf 'not a folder\n' > "$mate/state/desk-voice/inbox"
+  out=$(dl "$parent" "$mate" send music --client-id deck-0024 -- "Render it"); rc=$?
+  assert_equals 1 "$rc" "an undeliverable message reports not delivered"
+  assert_equals failed "$(jq -r .state <<<"$out")" "the record says failed"
+  out=$(FM_HOME="$parent" "$DL" talking music) && fail "a failed delivery must not leave the mate talking: $out"
+  assert_contains "$(cat "$parent/state/music.status")" "deck-0024 to music was not delivered" "the parent learns the message did not land"
+  pass "fm-direct-line send: a failed delivery puts the talking mark back"
+}
+
+test_talking_is_bounded() {
+  local mate parent out pid rec rc fakebin
+  mate=$(new_home bound-mate)
+  parent=$(make_parent bound-parent music "$mate")
+  seed_mate "$mate" music "$parent"
+  pid=$(live_primary "$mate")
+  out=$(FM_HOME="$mate" "$DL" waiting --for 999999 2>&1) && fail "a wait past the cap must refuse: $out"
+  assert_contains "$out" "at most 14400" "the refusal names the cap"
+  mkdir -p "$(parent_dl_dir "$parent" music)"
+  printf '%s\n' "$(( $(date +%s) + 86400 ))" > "$(parent_dl_dir "$parent" music)/last-owner-message"
+  out=$(FM_HOME="$parent" "$DL" talking music) && fail "a stamp from the future must not read as talking: $out"
+  mkdir -p "$mate/state/direct-line"
+  printf '%s\n' "$(( $(date +%s) + 86400 ))" > "$mate/state/direct-line/waiting-on-owner"
+  out=$(FM_HOME="$parent" "$DL" talking music) && fail "a wait beyond the cap must not read as talking: $out"
+  printf '08\n' > "$(parent_dl_dir "$parent" music)/last-owner-message"
+  rm -f "$mate/state/direct-line/waiting-on-owner"
+  out=$(FM_HOME="$parent" "$DL" talking music 2>&1) && fail "an old stamp must not read as talking: $out"
+  assert_not_contains "$out" "value too great" "a stamp with a leading zero is read as decimal"
+  FM_HOME="$mate" "$DL" waiting --for 600 >/dev/null || fail "waiting failed"
+  FM_HOME="$parent" "$DL" talking music >/dev/null || fail "a declared wait with a live primary reads as talking"
+  # A steer that has waited past the deferral bound rings and escalates as usual.
+  printf 'kind=secondmate\nhome=%s\nwindow=fm-x:w1:p1\nbackend=herdr\n' "$mate" > "$parent/state/music.meta"
+  mkdir -p "$parent/state/music.inbox"
+  rec="$parent/state/music.inbox/001.msg"
+  printf 'schema=fm-task-inbox.v1\n--\nhello\n' > "$rec"
+  touch -t 202001010000 "$rec"
+  fakebin="$TMP_ROOT/bound-bin"
+  mkdir -p "$fakebin"
+  printf '#!/bin/sh\nexit 1\n' > "$fakebin/herdr"
+  chmod +x "$fakebin/herdr"
+  rc=0
+  ( unset FM_BACKEND_HERDR_BIN; PATH="$fakebin:$PATH"; FM_HOME="$parent" STATE="$parent/state"
+    . "$ROOT/bin/fm-task-inbox-lib.sh"
+    fm_task_inbox_ring herdr fm-x:w1:p1 "$rec" fm-music ) >/dev/null 2>&1 || rc=$?
+  [ "$rc" != 4 ] || fail "a steer past the deferral bound must not be deferred"
+  # A dead primary is not talking, so recovery may relaunch it.
+  kill "$pid" 2>/dev/null
+  for _ in $(seq 1 50); do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
+  out=$(FM_HOME="$parent" "$DL" talking music) && fail "a mate whose primary is dead must not read as talking: $out"
+  pass "fm-direct-line: talking is bounded by caps, ignores future stamps, and ends with the primary"
 }
 
 test_send_copies_to_the_parent_then_types_once
@@ -274,3 +476,8 @@ test_chat_answer_closes_the_held_call
 test_talking_holds_back_every_nudge
 test_list_and_conversation_reads_are_versioned
 test_control_plane_refuses_a_talking_mate
+test_ids_and_sizes_are_checked_whole
+test_parent_copy_is_one_clean_line
+test_stopped_send_resumes_only_while_young
+test_failed_delivery_puts_talking_back
+test_talking_is_bounded

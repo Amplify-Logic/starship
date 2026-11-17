@@ -65,6 +65,8 @@ test_refusals_leave_the_file_untouched() {
   out=$(pin "$home" set music nosuchharness 2>&1) && fail "an unknown harness must refuse"
   out=$(pin "$home" set music claude opus extreme 2>&1) && fail "an unknown effort must refuse"
   out=$(pin "$home" set music default opus 2>&1) && fail "a default pin with a model must refuse"
+  out=$(pin "$home" set music claude -oops 2>&1) && fail "a model starting with a dash must refuse"
+  out=$(pin "$home" set ../music claude 2>&1) && fail "a mate id with a path must refuse"
   assert_equals "$before" "$(cat "$home/config/secondmate-harness")" "no refusal changes the file"
   out=$(FM_HOME='' "$PIN" show music 2>&1) && fail "an unset FM_HOME must refuse"
   pass "fm-secondmate-pin: refusals leave the pin file untouched"

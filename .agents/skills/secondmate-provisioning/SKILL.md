@@ -57,7 +57,7 @@ Retire or clean that home first, and re-scaffold a stale project-bearing charter
 Keep custom charter text focused on the persistent responsibility, available project clones, and genuinely domain-specific hard rules.
 The scaffolded charter, later copied to `data/charter.md`, owns the standard lifecycle and escalation wording.
 Preserve the generated charter sections unless the domain genuinely needs a hard rule.
-Pass `--direct-line` only when the captain asked to talk to that second mate directly, and only for a local route; it is the one carve-out from hard rule 4, and [`docs/direct-line.md`](../../../docs/direct-line.md) owns what it changes.
+Pass `--direct-line` only when the captain asked to talk to that second mate directly, and only for a local route, then run `bin/fm-direct-line.sh enable <id>` from this home once the mate is seeded; it is the one carve-out from hard rule 4, and [`docs/direct-line.md`](../../../docs/direct-line.md) owns what it changes.
 Never add or remove the opt-in line in a seeded charter by hand on your own initiative; re-seed from a re-scaffolded charter at the captain's word.
 
 Provision a local persistent home and registry entry after the charter is filled:

@@ -1592,6 +1592,77 @@ test_desk_voice_send_client_id_never_resends_an_interrupted_send() {
   pass "fm-desk-voice send --client-id: an interrupted send is never re-sent"
 }
 
+test_desk_voice_send_client_id_is_checked_whole() {
+  local home out
+  home=$(new_home send-client-id-whole)
+  out=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" "$DESK" delivery $'deck-msg-0003\n../../escape' 2>&1) \
+    && fail "a client id with a newline must refuse: $out"
+  out=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" "$DESK" send --client-id $'deck-msg-0003\n../../escape' -- "hello" 2>&1) \
+    && fail "a send with a newline in its client id must refuse: $out"
+  [ ! -e "$home/state/escape.json" ] && [ ! -e "$home/escape.json" ] || fail "a refused id must write nothing outside the record folder"
+  [ "$(inbox_count "$home")" = 0 ] || fail "a refused id must deliver nothing"
+  pass "fm-desk-voice: a client id is checked as one whole string"
+}
+
+test_desk_voice_send_types_words_never_keys() {
+  local home out typed
+  home=$(desk_send_fixture send-words-only) || { desk_send_skip send-words-only; return 0; }
+  out=$(desk_send "$home" -- $'!rm -rf build\r\n\033[201~/clear\x7f\xc2\x9b# note') || fail "send failed: $out"
+  assert_contains "$out" "sent: herdr" "the words are typed"
+  typed=$(herdr_calls "$home" pane send-text)
+  assert_equals 1 "$(printf '%s\n' "$typed" | wc -l | tr -d ' ')" "the words are one typed call"
+  assert_contains "$typed" "Message: !rm -rf build [201~/clear # note" "a leading ! is typed after a plain prefix, every control byte becomes a space"
+  case "$typed" in *$'\033'*|*$'\r'*|*$'\x7f'*|*$'\xc2\x9b'*) fail "a control byte reached the pane: $typed" ;; esac
+  out=$(desk_send "$home" -- "/model haiku") || fail "send failed: $out"
+  assert_contains "$(herdr_calls "$home" pane send-text | tail -n 1)" "Message: /model haiku" "a leading / never reaches the harness as a command"
+  out=$(desk_send "$home" -- "#remember this") || fail "send failed: $out"
+  assert_contains "$(herdr_calls "$home" pane send-text | tail -n 1)" "Message: #remember this" "a leading # never reaches the harness as a note"
+  desk_send_done "$home"
+  pass "fm-desk-voice send: words are typed as one plain line that never starts a command"
+}
+
+descendant_pids() {  # <pid> -> every live descendant pid
+  local child
+  for child in $(pgrep -P "$1" 2>/dev/null); do
+    printf '%s\n' "$child"
+    descendant_pids "$child"
+  done
+}
+
+test_desk_voice_send_finishes_when_its_caller_stops_it() {
+  local home pid i submitted
+  home=$(desk_send_fixture send-caller-stops) || { desk_send_skip send-caller-stops; return 0; }
+  : > "$home/fixture/hold-send"
+  desk_send "$home" --client-id deck-msg-0004 "Print the setlist" > "$home/first.out" &
+  pid=$!
+  fm_test_track_pid "$pid"
+  for i in $(seq 1 100); do
+    [ -e "$home/fixture/send-held" ] && break
+    sleep 0.1
+  done
+  [ -e "$home/fixture/send-held" ] || fail "the send never reached the pane"
+  # Stop the send and everything under it, as a caller giving up would.
+  local -a stop_pids=()
+  while IFS= read -r i; do [ -z "$i" ] || stop_pids+=("$i"); done < <(descendant_pids "$pid")
+  kill -TERM ${stop_pids[@]+"${stop_pids[@]}"} "$pid" 2>/dev/null || true
+  : > "$home/fixture/release-send"
+  for i in $(seq 1 100); do
+    submitted=$(cat "$home/fixture/submitted" 2>/dev/null || true)
+    [ -n "$submitted" ] && break
+    sleep 0.1
+  done
+  assert_contains "$submitted" "Print the setlist" "the stopped send still finishes its words and Enter"
+  wait "$pid" 2>/dev/null || true
+  for i in $(seq 1 50); do
+    [ "$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" "$DESK" delivery deck-msg-0004 | jq -r .state)" = sending ] || break
+    sleep 0.1
+  done
+  assert_equals typed "$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" "$DESK" delivery deck-msg-0004 | jq -r .state)" \
+    "the stopped send still records its outcome"
+  desk_send_done "$home"
+  pass "fm-desk-voice send: a caller stopping a send never leaves half a message"
+}
+
 test_desk_voice_send_expect_home_types_only_for_that_home() {
   local home out other
   home=$(DESK_FIXTURE_HOME_ENV=self desk_send_fixture send-expect-home) || { desk_send_skip send-expect-home; return 0; }
@@ -2894,6 +2965,9 @@ test_desk_voice_retries_run_one_at_a_time
 test_desk_voice_send_types_into_the_primary_pane
 test_desk_voice_send_with_a_client_id_is_delivered_once
 test_desk_voice_send_client_id_never_resends_an_interrupted_send
+test_desk_voice_send_client_id_is_checked_whole
+test_desk_voice_send_types_words_never_keys
+test_desk_voice_send_finishes_when_its_caller_stops_it
 test_desk_voice_send_expect_home_types_only_for_that_home
 test_desk_voice_send_falls_back_without_a_live_primary
 test_desk_voice_send_refuses_a_pane_not_hosting_the_primary

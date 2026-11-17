@@ -386,8 +386,9 @@ fm_task_inbox_doorbell_line() {  # <record-path>
 # typed; recovery owns the record), 4 deferred with nothing typed because the
 # target is a local second mate's own pane and either another writer holds that
 # home's pane-writer lock (bin/fm-pane-writer-lib.sh) or the mate is a
-# direct-line mate talking with its owner (bin/fm-direct-line-lib.sh); the
-# watcher re-rings later without counting it. No return value is delivery
+# direct-line mate talking with its owner and the record is still young
+# (bin/fm-direct-line-lib.sh fm_direct_line_record_defers); the watcher re-rings
+# later without counting it. No return value is delivery
 # proof; the acknowledgement move is the only delivery signal.
 # The skip is deliberately narrow: only an exact `pending` verdict can defer,
 # because there our Enter could submit someone's real half-typed content.
@@ -405,7 +406,7 @@ fm_task_inbox_ring() {  # <backend> <target> <record-path> [expected-label]
     _fm_task_inbox_ring_unlocked "$@"
     return
   fi
-  ! fm_direct_line_talking "$home" || return 4
+  ! fm_direct_line_record_defers "$3" || return 4
   fm_pane_writer_try_acquire "$home/state" || rc=$?
   case "$rc" in
     0) ;;

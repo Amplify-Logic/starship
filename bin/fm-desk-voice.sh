@@ -87,6 +87,15 @@
 # sending, typed, typed-unconfirmed, mailbox, not-in-front, failed, unknown.
 # Records older than seven days are pruned when a new id is claimed.
 #
+# send --mailbox skips the pane and saves the message to the mailbox, through
+# the same --client-id record, for a caller keeping a message behind one that
+# is still waiting there (bin/fm-direct-line.sh).
+#
+# A typed line never starts with "!", "/" or "#" (a shell command, a slash
+# command or a memory note to the harness): such a line is typed with a leading
+# "Message: " (composer_safe_line). A send whose caller gives up on it with
+# TERM, INT or HUP while it is typing finishes the words and their Enter first.
+#
 # send --expect-home <dir> also requires the session-lock holder's own
 # environment to name <dir> as its FM_HOME (compared as resolved paths) before
 # its pane counts as proven, so a lock left by another home's primary can never
@@ -381,7 +390,20 @@ ring_mailbox() {  # <path>
 
 # The captain's words as one typed line: every control character (C0, DEL,
 # C1) and Unicode line or paragraph separator becomes a space, then runs of
-# whitespace collapse, so no byte can submit early or act as a key.
+# whitespace collapse, so no byte can submit early or act as a key: ESC
+# (and so every escape sequence's introducer, the bracketed-paste end ESC[201~
+# included) becomes a space before the line reaches any pane.
+# A typed line that starts with "!", "/" or "#" would reach the harness as a
+# shell command, a slash command or a memory note instead of words, so such a
+# line is typed with a leading "Message: ". plain_line has already made it one
+# line, so only its first character can start a composer line.
+composer_safe_line() {  # <line>
+  case "$1" in
+    '!'*|'/'*|'#'*) printf 'Message: %s' "$1" ;;
+    *) printf '%s' "$1" ;;
+  esac
+}
+
 plain_line() {  # <text>
   python3 -c '
 import sys, unicodedata
@@ -940,7 +962,7 @@ PYEOF
 
 delivery() {
   [ "$#" -eq 1 ] || refuse "usage: fm-desk-voice.sh delivery <client-id>"
-  printf '%s' "$1" | grep -Eq "$CLIENT_ID_RE" || refuse "not a client id: $1"
+  [[ $1 =~ $CLIENT_ID_RE ]] || refuse "not a client id: $1"
   delivery_record read "$1"
 }
 
@@ -964,7 +986,7 @@ send() {
     send_once ${rest[@]+"${rest[@]}"}
     return
   fi
-  printf '%s' "$client_id" | grep -Eq "$CLIENT_ID_RE" \
+  [[ $client_id =~ $CLIENT_ID_RE ]] \
     || refuse "--client-id must be 8 to 64 letters, digits, dots, underscores or hyphens: $client_id"
   mkdir -p "$STATE/desk-voice" || die "cannot create $STATE/desk-voice"
   outcome=$(delivery_record claim "$client_id" "$$") || rc=$?
@@ -974,20 +996,28 @@ send() {
     *) die "cannot record delivery $client_id" ;;
   esac
   rc=0
+  # Once the id is claimed, a caller giving up on this send still gets the
+  # send finished and its outcome recorded (see send_once).
+  trap '' TERM INT HUP
   outcome=$(send_once ${rest[@]+"${rest[@]}"}) || rc=$?
   outcome=$(printf '%s\n' "$outcome" | tail -n 1)
   [ "$rc" = 0 ] && [ -n "$outcome" ] || outcome="failed: the message could not be delivered"
   delivery_record finish "$client_id" "$outcome" || note "delivery $client_id was not recorded"
+  trap - TERM INT HUP
   printf '%s\n' "$outcome"
   [ "$rc" = 0 ] || exit "$rc"
 }
 
 send_once() {
   local source text line result='' verdict backend target path image rc=0
-  local composer='empty pending' front_app='' front_tty='' focused=false expect_home=''
+  local composer='empty pending' front_app='' front_tty='' focused=false expect_home='' mailbox_only=0
   local -a image_args=() front=() rest=()
   while [ "$#" -gt 0 ]; do
     case "$1" in
+      --mailbox)
+        mailbox_only=1
+        shift
+        ;;
       --expect-home)
         [ "$#" -ge 2 ] || refuse "--expect-home needs a directory"
         case "$2" in /*) ;; *) refuse "--expect-home needs an absolute path: $2" ;; esac
@@ -1034,11 +1064,20 @@ send_once() {
   text=$ARG_TEXT
   line=$(plain_line "$(message_text)") || die "cannot prepare transcript"
   [ -n "$line" ] || refuse "nothing to deliver"
+  line=$(composer_safe_line "$line")
 
   # Screenshots alone never go past a draft: the captain may be typing.
   [ -n "$text" ] || composer=empty
-  result=$(PRIMARY_SUBMIT_COMPOSER=$composer PRIMARY_SUBMIT_EXPECT_HOME=$expect_home \
-    primary_submit "$line" ${front[@]+"${front[@]}"}) || rc=$?
+  if [ "$mailbox_only" = 1 ]; then
+    rc=1
+  else
+    # A caller giving up on this send (TERM, INT, HUP) never leaves half a
+    # message in the composer: the typing, its Enter, and any mailbox fallback
+    # finish first, and the outcome is still recorded.
+    trap '' TERM INT HUP
+    result=$(PRIMARY_SUBMIT_COMPOSER=$composer PRIMARY_SUBMIT_EXPECT_HOME=$expect_home \
+      primary_submit "$line" ${front[@]+"${front[@]}"}) || rc=$?
+  fi
   if [ "${#front[@]}" -gt 0 ] && [ "$rc" = 1 ]; then
     printf 'not-in-front\n'
     return 0
@@ -1060,7 +1099,7 @@ send_once() {
         return 0
         ;;
     esac
-  else
+  elif [ "$mailbox_only" = 0 ]; then
     note "the primary's chat pane is not reachable; saving to the mailbox instead"
   fi
   for image in ${ARG_IMAGES[@]+"${ARG_IMAGES[@]}"}; do

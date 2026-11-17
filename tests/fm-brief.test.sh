@@ -820,8 +820,8 @@ test_secondmate_direct_line_charter_opts_in() {
     || fail "a --direct-line charter must carry the exact opt-in line the library reads"
   assert_grep "The captain's word outranks the main firstmate's" "$brief" \
     "a direct-line charter must put the captain's word above the main firstmate's"
-  assert_grep 'bin/fm-captain-hold.sh answer <task-id>' "$brief" \
-    "a direct-line charter must close a held call answered in chat"
+  assert_grep 'bin/fm-direct-line.sh answered <task-id> --client-id <id>' "$brief" \
+    "a direct-line charter must close a held call only by citing the captain's message"
   assert_grep 'bin/fm-direct-line.sh waiting' "$brief" \
     "a direct-line charter must declare a wait on the captain"
   assert_grep 'is also one appended line there' "$brief" \

@@ -644,7 +644,7 @@ inbox_steer_busy() {  # <window> <backend> <task> <tail40>
 # Runs for secondmates too: their pane-staleness exemption is about quiet panes
 # being healthy, while an unacknowledged instruction can still be a stuck steer.
 inbox_steer_check() {  # <window> <task>
-  local w=$1 task=$2 action verb rec count tail40 reason='' ring_rc backend agent_state mate_home
+  local w=$1 task=$2 action verb rec count tail40 reason='' ring_rc backend agent_state
   action=$(fm_task_inbox_due_action "$STATE" "$task") || return 0
   verb=${action%% *}
   [ "$verb" != quiet ] || return 0
@@ -660,9 +660,10 @@ inbox_steer_check() {  # <window> <task>
       ;;
   esac
   # A direct-line second mate talking with its owner is never nudged: its
-  # steer stays durable and unrung, and nothing on the ladder advances, until
-  # the conversation lapses (bin/fm-direct-line-lib.sh).
-  if mate_home=$(fm_direct_line_inbox_record_home "$rec") && fm_direct_line_talking "$mate_home"; then
+  # young steer stays durable and unrung, and nothing on the ladder advances,
+  # until the conversation lapses or the steer outgrows the deferral bound
+  # (bin/fm-direct-line-lib.sh fm_direct_line_record_defers).
+  if fm_direct_line_record_defers "$rec"; then
     triage_log "steer-inbox delivery deferred: $task is talking with its owner"
     return 0
   fi
@@ -1109,7 +1110,7 @@ secondmate_wake_stall_tick() {
     [ -n "$home" ] || continue
     [ -f "$home/.fm-secondmate-home" ] && [ ! -L "$home/.fm-secondmate-home" ] || continue
     [ "$(cat "$home/.fm-secondmate-home" 2>/dev/null || true)" = "$task" ] || continue
-    if fm_direct_line_talking "$home"; then
+    if fm_direct_line_talking "$STATE" "$task" "$home"; then
       # Talking with its owner: never nudged, and its idle clock restarts so a
       # lapsed conversation is not read as a stall it never had.
       rm -f "$STATE/.secondmate-wake-progress-$task" "$STATE/.secondmate-wake-ring-$task"
