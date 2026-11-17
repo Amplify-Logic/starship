@@ -111,9 +111,11 @@ fm_merge_outcome_report() {  # <home> <state> <task-id> <pr-url> <origin> [autho
   fm_lock_release "$lock"
   # Opt-in fleet activity ledger (docs/fleet-ledger.md); off costs one file test.
   [ ! -e "${FM_CONFIG_OVERRIDE:-$home/config}/fleet-ledger" ] || [ "$status" -ne 0 ] || FM_HOME=$home FM_STATE_OVERRIDE=$state "$_FM_MERGE_OUTCOME_LIB_DIR/fm-fleet-ledger.sh" merged "$id" pr "$FM_PR_URL" || true
-  # A Mothership room card this task serves hears that it landed
-  # (bin/fm-procevent-mothership.sh "OUTCOMES ON THE CARD"); a home that keeps no
-  # Mothership state costs one directory test.
-  [ ! -d "$state/mothership" ] || [ "$status" -ne 0 ] || FM_HOME=$home FM_STATE_OVERRIDE=$state "$_FM_MERGE_OUTCOME_LIB_DIR/fm-procevent-mothership.sh" report --detach "$id" merged --pr "$FM_PR_URL" >/dev/null 2>&1 || true
+  # The Mothership room hears that it landed (bin/fm-procevent-mothership.sh
+  # "OUTCOMES IN THE ROOM"); a home with no room link costs one directory and one
+  # file test.
+  # shellcheck source=bin/fm-mothership-report-lib.sh
+  [ "$status" -ne 0 ] || { . "$_FM_MERGE_OUTCOME_LIB_DIR/fm-mothership-report-lib.sh" \
+    && fm_mothership_report "$home" "$state" "${FM_CONFIG_OVERRIDE:-$home/config}" "$id" merged --pr "$FM_PR_URL"; } || true
   return "$status"
 }

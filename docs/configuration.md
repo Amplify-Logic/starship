@@ -1037,9 +1037,13 @@ A request to the ship becomes one owner call, held for the owner like any other 
 A repeat of the same request makes no second call.
 Only the owner's answer sends anything about it: taking it on runs `mothership accept` under the chosen project, declining runs `mothership decline`, each once and through the room's allow-list as before (with that project's allow-list tags when the list names it only with tags), and Later asks again in three days.
 Such a call takes only the owner's own answer: its tap card offers no "You decide", the seven-day default never answers it, and an answer that names none of its options sends nothing and holds it for the owner again.
-Work taken on this way is filed with a `mothership: <room>/<card>` ref in its backlog task's body, and the card then hears how it goes without another word from the owner: one short line when the work is dispatched, when its PR is ready (with the PR's address), when it is blocked, and when it lands, which settles this ship's part of the card.
+Work taken on this way is filed with a `mothership: <room>/<card>` ref in its backlog task's body, and the card then hears how it goes without another word from the owner: one short line when the work is dispatched, when its PR is ready (with the PR's address, marked as about to land), when it is blocked, and when it lands, which settles this ship's part of the card.
 Each line goes through the room's allow-list under the task's project and through the private word check, like everything else the link sends, so the room hears nothing about a project it does not allow and nothing private; a line the link refuses or cannot send is reported to the first mate and never holds up the work.
-A task with no ref sends nothing.
+
+Any other task shows on the room's Ships view as a job of this ship's own, but only in a room whose allow-list names the task's project, the projects the owner shared with that room: a task of any other project, every private one among them, sends nothing.
+Its job carries the backlog title and one fixed line, never the work's own words, and moves on by itself when the work is dispatched, when it is under way again, waits on a decision or is blocked, when its PR is ready (about to land), and when it lands; a task cleaned up without landing is taken off the view.
+Like a card's lines, each send goes through the allow-list and the word check, and one that does not get through is reported to the first mate and never holds up the work.
+This needs a Mothership link and nothing else, so it works whether or not monitoring is on; a home with no link config and no Mothership state runs none of it.
 Beyond these, the only thing monitoring sends to a room is the "read by your ship" mark that every `mothership pull` already sends in a room whose allow-list is not empty.
 The setting and its records are home-local and are not inherited by secondmate homes.
 `bin/fm-procevent-mothership.sh --help` owns the commands, the result document and the private state files, and the `process-event-sources` skill owns how the first mate relays a capture.

@@ -4384,9 +4384,9 @@ while :; do
   # Opt-in fleet activity ledger (docs/fleet-ledger.md): pick up newly appended
   # status lines before this cycle can exit on a wake. Off costs one file test.
   [ ! -e "$CONFIG/fleet-ledger" ] || FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG "$SCRIPT_DIR/fm-fleet-ledger.sh" capture || true
-  # Each Mothership room card a task serves hears about each new blocker in that
-  # task's status log (bin/fm-procevent-mothership.sh "OUTCOMES ON THE CARD"),
-  # without waiting on the room. With no task followed this costs one glob.
+  # The Mothership room hears about each new status line it follows in a task's
+  # status log (bin/fm-procevent-mothership.sh "OUTCOMES IN THE ROOM"), without
+  # waiting on the room. With no task followed this costs one glob.
   if compgen -G "$STATE/mothership/tasks/*.json" >/dev/null; then
     FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG "$SCRIPT_DIR/fm-procevent-mothership.sh" blocked-scan >/dev/null 2>&1 || true
   fi

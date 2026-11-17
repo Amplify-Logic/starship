@@ -9,6 +9,8 @@ A release's notes are exactly its own section here, and a home on the [release c
 
 ## Unreleased
 
+- **A home with a Mothership link now shows its work on the room's Ships view.** Work for a project you shared with a room, through that room's allow-list, appears there as it starts, waits, is blocked, is about to land and lands, and leaves the view when it is dropped; work for any other project, and every private one, never leaves your home.
+  Nothing changes for a home with no Mothership link, and to share less, take the project out of that room's allow-list ([configuration](docs/configuration.md#mothership-monitoring-configmothership-monitor)).
 - **Your first mate can watch a Mothership room for you.** Nothing changes until you switch a room on: say "turn on Mothership monitoring for <room>", or run `bin/fm-procevent-mothership.sh on <room>`, and a new request to your ship, an answer or a message in that room reaches you within about a minute.
   It needs a Mothership link new enough to keep its own place in the room; `on` says so when yours needs updating ([configuration](docs/configuration.md#mothership-monitoring-configmothership-monitor)).
 - **"update starship" can follow named monthly releases.** By default nothing changes: your home still takes the newest Starship.

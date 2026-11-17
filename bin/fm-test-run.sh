@@ -1018,7 +1018,7 @@ tests/fm-primary-plan-live-e2e.test.sh 1312
 tests/fm-primary.test.sh 10691
 tests/fm-prime-agent-adapter.test.sh 6998
 tests/fm-procevent-extension-errors.test.sh 103911
-tests/fm-procevent-mothership-reports.test.sh 48000
+tests/fm-procevent-mothership-reports.test.sh 120000
 tests/fm-procevent-mothership.test.sh 40000
 tests/fm-procevent-quota.test.sh 19422
 tests/fm-procevent-when.test.sh 31299

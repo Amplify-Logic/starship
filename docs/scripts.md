@@ -120,7 +120,8 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-procevent.sh`        | Register, supervise, capture, classify, acknowledge, and safely retire built-in or explicitly bound process-event sources |
 | `fm-procevent-remote-reply.sh` | Relay the remote-secondmate status stream through non-destructive process-event deltas |
 | `fm-procevent-quota.sh`  | Wake Firstmate when tracked quota drops below a threshold, is exhausted, or cannot be polled |
-| `fm-procevent-mothership.sh` | Opt-in, per room: wake Firstmate when something new for this Starship arrives in a Mothership room, relay it to the owner, hold each request to the ship as an owner call whose answer it carries out in the room, and tell the card of work taken on when it starts, has a PR, is blocked and lands (see [configuration.md](configuration.md#mothership-monitoring-configmothership-monitor)) |
+| `fm-procevent-mothership.sh` | Opt-in, per room: wake Firstmate when something new for this Starship arrives in a Mothership room, relay it to the owner, hold each request to the ship as an owner call whose answer it carries out in the room, tell the card of work taken on when it starts, has a PR, is blocked and lands, and show other work of a project shared with a room on its Ships view (see [configuration.md](configuration.md#mothership-monitoring-configmothership-monitor)) |
+| `fm-mothership-report-lib.sh` | The one call each lifecycle step makes to tell a Mothership room how a task goes, doing nothing in a home with no room link |
 | `fm-procevent-when.sh`   | Fire a trust-bound deterministic action at most once when its registered condition holds, then wake with the outcome |
 | `fm-gate-refuse-lib.sh`  | Shared gate-context lifecycle boundary for real and lab homes                      |
 | `fm-watch-arm.sh`        | Verified home-scoped watcher arm wrapper with loud cycle endings and bounded lifecycle ledger |
