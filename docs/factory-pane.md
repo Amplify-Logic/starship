@@ -181,7 +181,7 @@ What happened is then said on the line under the queue line: `✓ SENT to Starsh
 
 `t` opens the same box as a talk box.
 Where this machine has a microphone recorder and the home has the desk voice's speech key (see the [desk floater](desk-floater.md#enablement)), it listens at once: its corner reads `● listening`, your words appear in the box while you speak, and the note is sent when you stop speaking for two seconds or press `enter`.
-It waits a minute for your first words; when none counted as speech by then, whatever sound it picked up is still written down and sent, so a quiet voice is not lost.
+It waits a minute for your first words; when none counted as speech by then but it picked up some sound, it stops listening and keeps that recording, its corner reads `recorded`, and `enter` writes it down and sends it.
 The words shown while you speak come from the newest eight seconds of sound, written down at most every two seconds by the same command that writes the note down, so they arrive in small bursts and an ellipsis leads them once the note is longer than that.
 What is sent is one writing down of the whole note when you finish, so a note costs the speech service about its own length plus those short pieces, and a short piece that failed is tried again only after a growing wait.
 From your first words on the microphone's sound goes to that speech service, as the desk voice's does.

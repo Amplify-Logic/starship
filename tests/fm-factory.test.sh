@@ -111,9 +111,11 @@ chmod +x "$BINDIR/inbox-down"
 
 # A stand-in microphone: 16 kHz mono 16-bit samples on stdout, as the pane's
 # recorder writes them. FM_FACTORY_TEST_MIC picks what it hears: `speech` (a
-# second of speech, then quiet), `hum` (seventy seconds of a quiet room and no
-# speech), `waiting` (fifty seconds of it), `dead` (seventy seconds of no sound
-# at all) or `talking` (speech that never stops). It then stays
+# second of speech, then quiet), `soft` (a quiet room, then a second of a soft
+# voice at a level 2.5 times that room's, then the room again), `hum` (seventy
+# seconds of a quiet room and no speech), `waiting` (fifty seconds of it),
+# `dead` (seventy seconds of no sound at all) or `talking` (speech that never
+# stops). It then stays
 # running, so only the pane stopping it ends it; its pid goes to
 # FM_FACTORY_TEST_MIC_PID.
 cat > "$BINDIR/mic" <<'PY'
@@ -135,6 +137,7 @@ try:
                 out.write(loud * (owed - sent)); out.flush(); sent = owed
             time.sleep(0.05)
     out.write({"speech": tenth(8000) * 10 + tenth(40) * 60, "hum": tenth(40) * 700,
+               "soft": tenth(40) * 20 + tenth(100) * 10 + tenth(40) * 60,
                "waiting": tenth(40) * 500, "dead": tenth(0) * 700}[mode])
     out.flush()
     time.sleep(120)
@@ -1998,6 +2001,14 @@ test_t_listens_first_and_sends_when_speech_stops() {
   assert_equals "$(jq -r .body "$FM_FACTORY_TEST_NOTES" | sed -n 1p)" \
     "About Harvest chart: ask the supplier about the ribbon first" "enter did not send what was said"
   mic_stopped || fail "the recorder was left running after enter"
+  # A soft voice, two and a half times as loud as the room, counts as speech:
+  # it is sent two seconds after it stops, with no key and no minute's wait.
+  : > "$FM_FACTORY_TEST_NOTES"
+  FM_FACTORY_TEST_MIC=soft drive_keys t "WAIT:2"
+  assert_equals "$(jq -r .body "$FM_FACTORY_TEST_NOTES" | sed -n 1p)" \
+    "About Harvest chart: ask the supplier about the ribbon first" "a soft voice was not taken as speech"
+  assert_equals "$(wav_seconds "$FM_FACTORY_TEST_HEARD")" "1 16000 5.0" \
+    "a soft voice did not end two seconds after it stopped"
   # Talking to a crew listens too.
   : > "$FM_FACTORY_TEST_NOTES"
   FM_FACTORY_TEST_MIC=speech drive_keys DOWN DOWN DOWN t "WAIT:2"
@@ -2080,17 +2091,26 @@ test_a_spoken_note_that_cannot_be_sent_says_so_and_falls_back_to_typing() {
   FM_FACTORY_TEST_MIC=waiting drive_keys t "WAIT:2" "SNAP:$dir/waiting" ESC
   assert_contains "$(screen_of "$dir/waiting" 50 100)" "● listening 0:5" "it stopped listening before a minute without speech"
   assert_absent "$FM_FACTORY_TEST_HEARD" "a recording still listening went to the speech service"
-  # After a minute without speech, the sound it picked up is still written
-  # down rather than dropped, and the words in it are sent.
+  # After a minute without speech it stops listening and keeps what it
+  # recorded: nothing goes to the speech service until enter asks for it.
   : > "$FM_FACTORY_TEST_NOTES"
-  FM_FACTORY_TEST_MIC=hum drive_keys t "WAIT:3"
-  assert_equals "$(wav_seconds "$FM_FACTORY_TEST_HEARD")" "1 16000 60.0" "a minute of quiet sound was not written down"
-  assert_equals "$(jq -r .body "$FM_FACTORY_TEST_NOTES" | sed -n 1p)" \
-    "About Harvest chart: ask the supplier about the ribbon first" "quiet words were not sent"
+  FM_FACTORY_TEST_MIC=hum drive_keys t "WAIT:3" "SNAP:$dir/held" ESC
+  screen=$(screen_of "$dir/held" 50 100)
+  assert_contains "$screen" "recorded 1:00" "a minute without speech did not keep the recording"
+  assert_contains "$(printf '%s\n' "$screen" | tr '\n' ' ' | tr -s ' ')" \
+    "Nothing counted as speech. Press enter to write down what was recorded, or type it instead. Esc cancels." \
+    "a recording without speech does not say how to write it down"
+  assert_absent "$FM_FACTORY_TEST_HEARD" "a recording without speech went to the speech service on its own"
+  assert_equals "$(cat "$FM_FACTORY_TEST_NOTES")" "" "a recording without speech was sent on its own"
   mic_stopped || fail "the recorder was left running after a minute without speech"
+  FM_FACTORY_TEST_MIC=hum drive_keys t "WAIT:3" ENTER "WAIT:2"
+  assert_equals "$(wav_seconds "$FM_FACTORY_TEST_HEARD")" "1 16000 60.0" "enter did not write the kept minute down"
+  assert_equals "$(jq -r .body "$FM_FACTORY_TEST_NOTES" | sed -n 1p)" \
+    "About Harvest chart: ask the supplier about the ribbon first" "the words enter wrote down were not sent"
   # When that sound holds no words, nothing is sent and the box stays open for typing.
   : > "$FM_FACTORY_TEST_NOTES"
-  FM_FACTORY_TEST_STT_EMPTY=1 FM_FACTORY_TEST_MIC=hum drive_keys t "WAIT:3" "SNAP:$dir/quiet" "typed instead" ENTER
+  FM_FACTORY_TEST_STT_EMPTY=1 FM_FACTORY_TEST_MIC=hum drive_keys t "WAIT:3" ENTER "WAIT:2" "SNAP:$dir/quiet" \
+    "typed instead" ENTER
   screen=$(screen_of "$dir/quiet" 50 100)
   has_line "$screen" " ✗ NOT SENT: no words were heard in what you said. Type it instead, or press esc." \
     "a recording with no words in it is not said to be unsent"
