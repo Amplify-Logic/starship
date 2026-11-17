@@ -28,7 +28,8 @@
 # validating, red, or needing attention is no call and gets no card; a hold
 # that is aged, deferred to a date that has not come, or waiting on other work
 # is no call either; and a call that cannot be carded (no PR, a draft,
-# a PR no longer open, a row that cannot be read) is named under not_shown
+# a PR no longer open, a row that cannot be read, a PR a second mate has
+# ready, whose job is not this home's) is named under not_shown
 # rather than stopping the export, so owner_calls, the cards plus not_shown, is
 # always the shared count. It writes the card file
 # (schema fm-tap-cards.v1, default data/tap-desk/cards.json) and the phone page

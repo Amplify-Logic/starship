@@ -15,7 +15,7 @@ It shows the STARSHIP wordmark, three lamps for the crew, the owner's most urgen
 | --- | --- | --- |
 | `busy` | amber | Workers busy on a task, plus work the validation pipeline is carrying. |
 | `decisions for you` | red | Decisions held for the owner that wait on him now, not aged, deferred to a date, or waiting on other work; `decision for you` when there is one. |
-| `ready to merge` | green | PRs and ready branches waiting for the merge word, unless the task carries an open captain hold. |
+| `ready to merge` | green | PRs and ready branches waiting for the merge word, unless the task carries an open captain hold, plus the PRs a second mate has ready for it. |
 
 A lamp with nothing to count stays unlit, so the row keeps its shape.
 `decisions for you` and `ready to merge` are the owner's calls, the one count the [Factory pane](factory-pane.md) and the tap page also show; `fm_owner_calls` in `bin/fm-fleet-status-lib.sh` owns it.

@@ -524,6 +524,66 @@ test_the_record_words_every_state() {
   pass "factory record: every state is a word, needs you is ordered, the feed reads newest first"
 }
 
+# A PR a second mate has ready for the owner's merge word is listed in NEEDS
+# YOU beside this home's own, named by the mate, in the factory of its
+# repository, from what a local or a remote mate reports to this home; a PR
+# merged or closed is not.
+test_a_second_mates_ready_pr_needs_you() {
+  reset_case
+  write_registry
+  write_world
+  cat > "$TMP_ROOT/case$CASE/pr-reader" <<'SH'
+#!/usr/bin/env bash
+case "$1" in */pull/45) echo closed ;; *) echo open ;; esac
+SH
+  chmod +x "$TMP_ROOT/case$CASE/pr-reader"
+  export FM_SECONDMATE_PR_READER="$TMP_ROOT/case$CASE/pr-reader"
+  printf 'kind=secondmate\nmode=secondmate\nwindow=tmux:near\nhome=/homes/near\n' > "$HOME_FIX/state/near.meta"
+  cat > "$HOME_FIX/state/near.status" <<'LOG'
+done [key=child-outcome-garden-notes-done-0a0b0c0d] [at=1794640000]: child garden-notes done: checks green pr=https://example.invalid/o/garden-journal/pull/41 mode=no-mistakes yolo=off
+done [key=child-outcome-garden-old-done-0a0b0c0d] [at=1794640100]: child garden-old done: checks green pr=https://example.invalid/o/garden-journal/pull/42 mode=no-mistakes yolo=off
+done [key=merged-garden-old] [at=1794640200]: merged garden-old https://example.invalid/o/garden-journal/pull/42 external
+LOG
+  printf 'kind=secondmate\nmode=secondmate\nwindow=remote:far\nhome=/homes/far\nremote_host=far-host\n' > "$HOME_FIX/state/far.meta"
+  cat > "$HOME_FIX/state/far.status" <<'LOG'
+done [key=child-outcome-fleet-count-done-0a0b0c0d] [at=1794640300]: child fleet-count done: checks green pr=https://example.invalid/o/tools/pull/44 mode=no-mistakes yolo=off
+done [key=child-outcome-fleet-gone-done-0a0b0c0d] [at=1794640400]: child fleet-gone done: checks green pr=https://example.invalid/o/tools/pull/45 mode=no-mistakes yolo=off
+LOG
+  take_record
+  assert_equals "$(q '[.needs_you[] | "\(.id):\(.kind):\(.factory):\(.mate // "-")"] | join(" ")')" \
+    "garden-chart:question:garden-journal:- shop-provider:question:sample-shop:- garden-share:finished work:garden-journal:- far:fleet-count:finished work:other-work:far near:garden-notes:finished work:garden-journal:near" \
+    "a second mate's ready PRs need you, named by the mate, in their repository's factory"
+  assert_equals "$(q '.needs_you[] | select(.id == "near:garden-notes") | "\(.ask)|\(.pr)"')" \
+    "garden-notes is ready for you to look at|https://example.invalid/o/garden-journal/pull/41" "a second mate's PR"
+  assert_equals "$(q .count_line)" "2 busy · 2 decisions for you · 3 ready to merge · 1 idle" "the count holds the second mates' PRs"
+  local out
+  out=$(python3 "$FACTORY" --plain --width 120) || fail "--plain failed"
+  has_line "$out" " ● garden-notes is ready for you to look at Garden Journal · from near · ready 53 min" \
+    "the screen names the second mate and how long its PR has been ready"
+  # Each done outcome is its own asking, as this home's own work is: a keep
+  # sent for one does not read as the answer to the next.
+  assert_equals "$(q '.needs_you[] | select(.id == "far:fleet-count") | .since')" "1794640300" \
+    "a second mate's PR became ready when its done outcome was reported"
+  printf '{"request_id": "factory.other-work.keep.far:fleet-count.1794640300", "body": "keep", "at": "2026-11-14T07:59:00Z"}\n' \
+    > "$FM_FACTORY_TEST_NOTES"
+  take_record
+  assert_equals "$(q '.needs_you[] | select(.id == "far:fleet-count") | .answered.at')" "$((NOW - 60))" \
+    "a keep on a second mate's PR reads as answered"
+  printf 'done [key=child-outcome-fleet-count-done-6c7d8e9f] [at=1794641000]: child fleet-count done: checks green again pr=https://example.invalid/o/tools/pull/44 mode=no-mistakes yolo=off\n' \
+    >> "$HOME_FIX/state/far.status"
+  take_record
+  assert_equals "$(q '.needs_you[] | select(.id == "far:fleet-count") | "\(.since) \(.answered)"')" "1794641000 null" \
+    "a later done outcome is a new asking, not answered by the keep sent for the one before"
+  # A GitLab merge request in a subgroup is filed under its repository's factory.
+  printf 'done [key=child-outcome-garden-lab-done-1a2b3c4d] [at=1794641100]: child garden-lab done: checks green pr=https://gitlab.example.invalid/g/sub/garden-journal/-/merge_requests/5 mode=no-mistakes yolo=off\n' \
+    >> "$HOME_FIX/state/near.status"
+  take_record
+  assert_equals "$(q '.needs_you[] | select(.id == "near:garden-lab") | .factory')" "garden-journal" \
+    "a second mate's GitLab merge request is not filed under its repository's factory"
+  unset FM_SECONDMATE_PR_READER
+  pass "factory record: a second mate's ready PR needs you, named by the mate, each done outcome a new asking, and a merged or closed one does not"
+}
+
 test_the_plain_screen_is_the_record_as_text() {
   reset_case
   write_registry
@@ -3196,6 +3256,7 @@ test_without_a_routine_mark_every_run_shows_as_before() {
 fm_test_run \
   test_the_light_snapshot_gives_the_pane_the_record_the_whole_one_does \
   test_the_record_words_every_state \
+  test_a_second_mates_ready_pr_needs_you \
   test_the_plain_screen_is_the_record_as_text \
   test_a_factory_page_shows_its_rules_size_against_the_cap \
   test_the_whole_queue_is_counted_in_sight \

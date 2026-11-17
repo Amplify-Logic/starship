@@ -716,7 +716,7 @@ def axi_backlog(home: str) -> Dict[str, Any]:
 
 
 def owner_calls(home: str, buckets: Dict[str, str], backlog: Optional[Dict[str, Any]] = None
-                ) -> Tuple[List[str], List[str], List[Dict[str, Any]]]:
+                ) -> Tuple[List[str], List[str], List[Dict[str, Any]], List[Dict[str, str]]]:
     """The owner's calls, from fm_owner_calls in bin/fm-fleet-status-lib.sh.
 
     That function is the one definition of what really waits on the owner, the
@@ -725,7 +725,9 @@ def owner_calls(home: str, buckets: Dict[str, str], backlog: Optional[Dict[str, 
     Its decisions come from the backlog as the home's tasks-axi adapter reads it
     (axi_backlog, read here unless the caller already did) and handed over with
     the buckets the pane already read; those records come back too, so a held
-    decision the markdown snapshot lacks can still be drawn.
+    decision the markdown snapshot lacks can still be drawn. Last come the PRs
+    a second mate has ready for the owner's merge word, each as its mate, its child
+    and its URL (fm_secondmate_ready_prs there).
     """
     state = os.path.join(home, "state")
     if backlog is None:
@@ -743,15 +745,19 @@ def owner_calls(home: str, buckets: Dict[str, str], backlog: Optional[Dict[str, 
                               bucket_file, backlog_file], capture_output=True, text=True, timeout=60)
     if out.returncode != 0:
         raise RuntimeError("could not read what waits on the owner")
-    decisions, merges = [], []
+    decisions, merges, mate_prs = [], [], []
     for line in out.stdout.splitlines():
         parts = line.split("\t")
         if len(parts) >= 2 and parts[0] == "decision":
             decisions.append(parts[1])
         elif len(parts) >= 2 and parts[0] == "merge":
             merges.append(parts[1])
+        elif len(parts) >= 4 and parts[0] == "mate-merge":
+            at = parts[4] if len(parts) >= 5 else ""
+            mate_prs.append({"mate": parts[1], "child": parts[2], "url": parts[3],
+                             "since": int(at) if at.isdigit() else None})
     records = [r for r in backlog.get("records") or [] if r.get("structured") and r.get("id")]
-    return decisions, merges, records
+    return decisions, merges, records, mate_prs
 
 
 def decision_shapes(home: str, ids: List[str]) -> Dict[str, Dict[str, Any]]:
@@ -803,11 +809,12 @@ def shapes_for(home: str, ids: List[str], rows: Dict[str, Dict[str, Any]],
 
 def read_calls(home: str, buckets: Dict[str, str], backlog: Optional[Dict[str, Any]],
                known_shapes: Optional[Dict[str, Dict[str, Any]]]
-               ) -> Tuple[List[str], List[str], List[Dict[str, Any]], Dict[str, Dict[str, Any]]]:
+               ) -> Tuple[List[str], List[str], List[Dict[str, Any]], Dict[str, Dict[str, Any]],
+                          List[Dict[str, str]]]:
     """owner_calls, plus the shapes of its held decisions (shapes_for)."""
-    decision_ids, merge_ids, adapter_rows = owner_calls(home, buckets, backlog)
+    decision_ids, merge_ids, adapter_rows, mate_prs = owner_calls(home, buckets, backlog)
     shapes = shapes_for(home, decision_ids, {r["id"]: r for r in adapter_rows}, known_shapes)
-    return decision_ids, merge_ids, adapter_rows, shapes
+    return decision_ids, merge_ids, adapter_rows, shapes, mate_prs
 
 
 def ready_reports(rows: List[Tuple[str, str, str]]) -> List[bool]:
@@ -1242,7 +1249,8 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
                  buckets: Optional[Dict[str, str]] = None,
                  reconciles: Optional[Dict[str, int]] = None,
                  overview: Optional[Dict[str, Any]] = None,
-                 calls: Optional[Tuple[List[str], List[str], List[Dict[str, Any]], Dict[str, Dict[str, Any]]]] = None
+                 calls: Optional[Tuple[List[str], List[str], List[Dict[str, Any]], Dict[str, Dict[str, Any]],
+                                       List[Dict[str, str]]]] = None
                  ) -> Dict[str, Any]:
     """The pane's record. <calls> is read_calls already taken on these same buckets
     and backlog, so a caller can read it beside other slow reads; without it,
@@ -1297,7 +1305,7 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
     ready_list = overview_ready_list(overview)
     if calls is None:
         calls = read_calls(home, overview_call_buckets(overview, buckets), backlog, known_shapes)
-    decision_ids, merge_ids, adapter_rows, shapes = calls
+    decision_ids, merge_ids, adapter_rows, shapes, mate_prs = calls
     known = {r["id"] for r in rows}
     # The adapter is the backlog's own reading of what is held and what still
     # waits on other work, the one the owner's calls are counted from. The
@@ -1441,6 +1449,18 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
         if job["state"] == "busy":
             running_ids.append(task["id"])
         by_id[fid]["jobs"].append(job)
+
+    # A PR a second mate has ready for the owner's merge word is the owner's
+    # call too, though the job is the mate's: it is listed beside this home's own, named by the
+    # mate, in the factory of the PR's repository.
+    for pr in mate_prs:
+        found = re.match(r"https?://[^/]+/(?:[^/]+/)*?([^/]+)/(?:pull|-/merge_requests|merge_requests)/\d+",
+                         pr["url"])
+        needs.append({"id": "%s:%s" % (pr["mate"], pr["child"]),
+                      "factory": factory_of(found.group(1) if found else None), "kind": "finished work", "ask": "%s is ready for you to look at" % pr["child"],
+                      "title": pr["child"], "why": None, "options": [], "suggested_by": None,
+                      "recommendation": None, "holds_up": [], "since": pr["since"], "for": "you",
+                      "pr": pr["url"], "checking": False, "read": [], "mate": pr["mate"]})
 
     activity = dict(activity)
     seen_pane = activity
@@ -1808,7 +1828,7 @@ def refresh(home: str) -> Dict[str, Any]:
 
     def backlog_and_shapes():
         taken = axi_backlog(home)
-        decision_ids, _merges, rows = owner_calls(home, {}, taken)
+        decision_ids, _merges, rows, _mate_prs = owner_calls(home, {}, taken)
         held_shapes.update(shapes_for(home, decision_ids, {r["id"]: r for r in rows}, shapes))
         return taken
 
@@ -1822,9 +1842,9 @@ def refresh(home: str) -> Dict[str, Any]:
 
     def calls_with_buckets():
         taken = buckets_for(live_tasks(snapshot))
-        decision_ids, merge_ids, rows = owner_calls(home, overview_call_buckets(overview, taken), backlog)
+        decision_ids, merge_ids, rows, mate_prs = owner_calls(home, overview_call_buckets(overview, taken), backlog)
         return taken, (decision_ids, merge_ids, rows,
-                       {ident: held_shapes[ident] for ident in decision_ids if ident in held_shapes})
+                       {ident: held_shapes[ident] for ident in decision_ids if ident in held_shapes}, mate_prs)
 
     activity, (buckets, calls) = side_by_side(lambda: pane_activity(home, running, now, write=True),
                                               calls_with_buckets)
@@ -2585,6 +2605,8 @@ class View:
             waited = "answered %s, waiting for Starship" % (
                 when_words(sent["at"], now) if sent.get("at") else "just now")
         right = [S(waited, "cyan" if sent else "mist")]
+        if need.get("mate"):
+            right = [S("from %s" % need["mate"], "mist"), S(" · ", "faint")] + right
         if not full:
             right = [S(fac["name"], "mist"), S(" · ", "faint")] + right
         if need.get("checking"):

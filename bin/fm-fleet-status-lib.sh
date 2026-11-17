@@ -321,6 +321,10 @@ fm_fleet_status_bucket() {  # <canonical line> [<meta>]
 #
 #   decision<TAB><id>   a decision held for the captain that waits on him now
 #   merge<TAB><id>      a PR or ready branch waiting for his merge word
+#   mate-merge<TAB><mate><TAB><child><TAB><url><TAB><at>
+#                       a PR a second mate's child has ready for the
+#                       owner's merge word, and the epoch its done outcome
+#                       was reported at (fm_secondmate_ready_prs below)
 #
 # This is the one definition of that count. The fold below publishes it as
 # <ready> and <decisions>, so the bridge strip and the status bar show it;
@@ -353,7 +357,8 @@ fm_fleet_status_bucket() {  # <canonical line> [<meta>]
 # configured tasks-axi adapter, so a home whose backlog is not markdown keeps
 # its calls. It fails, printing
 # nothing, when the backlog or any task cannot be read, because a short list of
-# calls reads exactly like fewer calls.
+# calls reads exactly like fewer calls. The second mates' PRs come last and
+# never fail it: a PR whose state cannot be read stays listed.
 fm_owner_calls() {  # <state-dir> [<buckets-file> [<backlog-file>]]
   local state=$1 buckets=${2:-} backlog=${3:-} dir id bucket out rc=0
   command -v jq >/dev/null 2>&1 || return 1
@@ -384,6 +389,139 @@ fm_owner_calls() {  # <state-dir> [<buckets-file> [<backlog-file>]]
   rm -rf "$dir"
   [ "$rc" = 0 ] || return 1
   [ -z "$out" ] || printf '%s\n' "$out"
+  fm_secondmate_ready_prs "$state"
+}
+
+# fm_secondmate_ready_prs: the PRs this home's second mates have ready for the
+# owner's merge word, one `mate-merge<TAB><mate><TAB><child><TAB><url><TAB><at>`
+# line each, by mate id and then in the order they were reported. <at> is the
+# `[at=]` epoch of the child's done outcome that lists the PR, empty when that
+# line carries none, so each new done outcome is a new asking of the owner.
+#
+# A second mate's PRs are not this home's tasks, so they are read from what the
+# mate already reports here: its parent channel, state/<mate>.status, which a
+# local mate appends to directly and a remote mate's reply mirror copies into
+# (docs/secondmate-parent-channel.md). Only the lines its scripts write count,
+# never the mate's own prose. A child's done outcome
+# (`[key=child-outcome-<child>-done-...]: child <child> done: ... pr=<url>`,
+# bin/fm-inactive-reconcile.sh) lists the PR, as this home's own work waits
+# for the merge word only once its task reads done; a PR registration alone
+# (`[key=child-pr-<child>]`, bin/fm-pr-check.sh) does not. An outcome carrying
+# `yolo=on` is not listed, because that mate merges green, in-scope work
+# itself (AGENTS.md); its lines carry no mark for the PRs standing yolo never
+# covers. Each child's newest outcome stands: a later outcome that is not done
+# (`failed [key=child-outcome-<child>-failed-...]`) drops its PR, and a later
+# done outcome with another pr= replaces it. A merge
+# (`[key=merged-<child>]: merged <child> <url>`, bin/fm-merge-outcome-lib.sh)
+# drops the PR for good, even when an outcome for it arrives later. Nothing
+# here reads the mate's home or reaches its machine.
+#
+# A PR closed without merging leaves no line, and a merge can reach the channel
+# late, so each listed PR's own state is also read from its forge
+# (_fm_secondmate_pr_state) and a merged or closed one is dropped.
+fm_secondmate_ready_prs() {  # <state-dir>
+  local state=$1 meta mate kind child url at
+  for meta in "$state"/*.meta; do
+    [ -f "$meta" ] || continue
+    kind=$(awk -F= '$1 == "kind" { print substr($0, index($0, "=") + 1); exit }' "$meta" 2>/dev/null)
+    [ "$kind" = secondmate ] || continue
+    mate=$(basename "$meta" .meta)
+    [ -f "$state/$mate.status" ] || continue
+    while IFS=$'\t' read -r child url at; do
+      [ -n "$url" ] || continue
+      case "$(_fm_secondmate_pr_state "$state" "$url" "$at")" in
+        merged|closed) continue ;;
+      esac
+      printf 'mate-merge\t%s\t%s\t%s\t%s\n' "$mate" "$child" "$url" "$at"
+    done < <(awk '
+      function drop(u,  c) { for (c in pr) if (pr[c] == u) delete pr[c] }
+      !/^[a-z-]+( \[[^]]*\])*: / { next }
+      {
+        if (!match($0, /\[key=[^]]*\]/)) next
+        key = substr($0, RSTART + 5, RLENGTH - 6)
+        note = $0
+        sub(/^[a-z-]+( \[[^]]*\])*: /, "", note)
+        n = split(note, w, " ")
+        if (key ~ /^merged-/ && w[1] == "merged") {
+          merged[w[3]] = 1
+          drop(w[3])
+          next
+        }
+        child = w[2]
+        if (w[1] != "child" || index(key, "child-outcome-" child "-") != 1) next
+        delete pr[child]
+        if (w[3] != "done:") next
+        url = ""; yolo = ""
+        for (i = 4; i <= n; i++) {
+          if (w[i] ~ /^pr=/) url = substr(w[i], 4)
+          else if (w[i] ~ /^yolo=/) yolo = substr(w[i], 6)
+        }
+        if (url !~ /^https?:\/\/[^ ]+$/ || (url in merged) || yolo == "on") next
+        drop(url)
+        if (!(child in seen)) { seen[child] = 1; order[++count] = child }
+        pr[child] = url
+        at[child] = match($0, /\[at=[0-9]+\]/) ? substr($0, RSTART + 4, RLENGTH - 5) : ""
+      }
+      END { for (i = 1; i <= count; i++) if (order[i] in pr) printf "%s\t%s\t%s\n", order[i], pr[order[i]], at[order[i]] }
+    ' "$state/$mate.status" 2>/dev/null)
+  done
+}
+
+# _fm_secondmate_pr_state: open, merged, closed or unknown for one second
+# mate's PR. Each answer is kept in state/secondmate-prs/, one file per PR,
+# with when it was read. A merged answer is kept for good. A closed one is too,
+# unless the child reported done on it again after that reading (<reported>,
+# the done outcome's epoch), since a closed PR can be reopened. Any other is
+# read again once it is FM_SECONDMATE_PR_TTL seconds old (default 300), so the
+# owner's calls, which are read often, ask the forge at most that often per PR.
+# The forge is read through bin/fm-pr-lib.sh for GitHub and GitLab, bounded
+# to 5 seconds; any other forge, or a read that fails, is unknown.
+# Test seam: FM_SECONDMATE_PR_READER, a command run as `<reader> <url>` that
+# prints the state in place of the forge read.
+_fm_secondmate_pr_state() {  # <state-dir> <url> [<reported>]
+  local state=$1 url=$2 reported=${3:-} dir file name now ttl cached at answer
+  dir="$state/secondmate-prs"
+  name=$(printf '%s' "${url#*://}" | LC_ALL=C tr -c 'A-Za-z0-9._-' '_')
+  file="$dir/$name"
+  now=$(_fm_fleet_now) || now=0
+  ttl=$(fm_status_ttl "${FM_SECONDMATE_PR_TTL:-}" 300)
+  if [ -f "$file" ] && read -r cached at < "$file" 2>/dev/null; then
+    case "$cached" in
+      merged) printf '%s' "$cached"; return 0 ;;
+      closed) [ "$reported" -gt "$at" ] 2>/dev/null || { printf '%s' "$cached"; return 0; } ;;
+    esac
+    case "$at" in
+      ''|*[!0-9]*) ;;
+      *) if [ $((now - at)) -lt "$ttl" ] && [ "$now" -ge "$at" ]; then printf '%s' "$cached"; return 0; fi ;;
+    esac
+  fi
+  if [ -n "${FM_SECONDMATE_PR_READER:-}" ]; then
+    answer=$($FM_SECONDMATE_PR_READER "$url" 2>/dev/null) || answer=unknown
+  else
+    # shellcheck disable=SC2016 # the INNER shell's positional parameters.
+    answer=$(fm_run_timed 5 bash -c '
+      . "$0" || exit 1
+      fm_pr_url_parse "$1" || exit 1
+      case "$FM_PR_PROVIDER" in
+        github) fm_pr_github_read_record "$FM_PR_HOST" "${FM_PR_PATH%%/*}" "${FM_PR_PATH#*/}" "$FM_PR_NUMBER" || exit 1 ;;
+        gitlab) fm_pr_gitlab_read_record "$FM_PR_HOST" "$FM_PR_PATH" "$FM_PR_NUMBER" || exit 1 ;;
+        *) exit 1 ;;
+      esac
+      if [ "$FM_PR_RECORD_MERGED" = true ]; then echo merged; exit 0; fi
+      case "$FM_PR_RECORD_STATE" in
+        OPEN|open|opened|locked) echo open ;;
+        CLOSED|closed) echo closed ;;
+        *) exit 1 ;;
+      esac
+    ' "$_FM_FLEET_LIB_DIR/fm-pr-lib.sh" "$url" 2>/dev/null) || answer=unknown
+  fi
+  case "$answer" in
+    open|merged|closed) ;;
+    *) answer=unknown ;;
+  esac
+  mkdir -p "$dir" 2>/dev/null && printf '%s %s\n' "$answer" "$now" > "$file.$$" 2>/dev/null \
+    && mv -f "$file.$$" "$file" 2>/dev/null || rm -f "$file.$$" 2>/dev/null || :
+  printf '%s' "$answer"
 }
 
 # _fm_owner_backlog: the backlog object of the home that owns <state-dir>, read
@@ -655,13 +793,20 @@ _fm_fleet_calls_fold() {  # <state-dir> <ready-list>
     rc=1
   fi
   if [ "$rc" = 0 ]; then
-    while IFS=$'\t' read -r kind id; do
+    while IFS=$'\t' read -r kind id child _url; do
       case "$kind" in
         decision) ready=$((ready + 1)); decisions=$((decisions + 1)) ;;
-        merge) ready=$((ready + 1)) ;;
+        merge|mate-merge) ready=$((ready + 1)) ;;
         *) continue ;;
       esac
-      if [ "$first_kind" = - ]; then
+      if [ "$first_kind" = - ] && [ "$kind" = mate-merge ]; then
+        # A second mate's PR: merge work like any other, named by its child
+        # and the mate that has it ready; its id is the Factory pane's.
+        first_kind=merge
+        first_id=$id:$child
+        first_title=$(printf '%s from %s' "$child" "$id" | LC_ALL=C tr -cd ' -~')
+        first_title=${first_title:0:160}
+      elif [ "$first_kind" = - ]; then
         first_kind=$kind
         first_id=$id
         first_title=$(_fm_fleet_call_title "$state" "$backlogfile" "$id")
