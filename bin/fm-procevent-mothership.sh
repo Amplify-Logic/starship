@@ -160,7 +160,10 @@
 # relaunch); working, waits and blocked from blocked-scan; pr from
 # bin/fm-pr-check.sh when a PR is recorded (never the merge-time re-record);
 # merged from bin/fm-merge-outcome-lib.sh and bin/fm-merge-local.sh on a
-# confirmed merge; dropped from bin/fm-teardown.sh at cleanup.
+# confirmed merge; dropped from bin/fm-teardown.sh at cleanup. A task of a
+# project in config/private-projects tells no room anything, card or job,
+# whatever a room's allow-list says, and while that list is there but cannot
+# be read no task tells any room anything.
 #
 # A card. A backlog task whose body holds `mothership: <room>/<card>` is work
 # the owner took on for that card, and the card hears how it goes, once per
@@ -187,12 +190,13 @@
 # A job. Any other task is a job of the ship's own, and it shows on the room's
 # Ships view, through `mothership job`, only in each room whose allow-list
 # names the task's project: the projects the owner shared with that room. A
-# task of a project no room's allow-list names, every private project among
-# them, sends nothing and creates no state. Its job id is the task id
+# task of a project no room's allow-list names, or of a private project, sends
+# nothing and creates no state. Its job id is the task id
 # (shortened with a checksum past 48 characters), and each send carries the
 # backlog title and a fixed line, never the status log's own words:
 #   started  --state working, "Work has started.";
-#   working  --state working, "Work is under way.", for a new working: line;
+#   working  --state working, "Work is under way.", for a new working: or
+#            resolved: line;
 #   waits    --state waits, "Waiting on a decision.", for a new
 #            needs-decision: line;
 #   blocked  --state error, "Held up by a blocker; looking into it.", for a
@@ -1139,16 +1143,16 @@ newest_blocked() {  # <task-id>
   printf '%s' "$line" | cksum | awk '{ print $1 }'
 }
 
-# The newest working:, blocked: or needs-decision: line in the task's status
-# log, as "<event> <signature>" (working, blocked or waits), or nothing when it
-# has none.
+# The newest working:, resolved:, blocked: or needs-decision: line in the
+# task's status log, as "<event> <signature>" (working, for a working: or
+# resolved: line, blocked or waits), or nothing when it has none.
 newest_state() {  # <task-id>
   local file="$STATE/$1.status" line event
   [ -f "$file" ] && [ ! -L "$file" ] || return 0
-  line=$(LC_ALL=C grep -E '^(working|blocked|needs-decision)( \[[^]]*\])*:' "$file" 2>/dev/null | tail -n 1)
+  line=$(LC_ALL=C grep -E '^(working|resolved|blocked|needs-decision)( \[[^]]*\])*:' "$file" 2>/dev/null | tail -n 1)
   [ -n "$line" ] || return 0
   case "$line" in
-    working*) event=working ;;
+    working*|resolved*) event=working ;;
     blocked*) event=blocked ;;
     *) event=waits ;;
   esac
@@ -1178,6 +1182,17 @@ task_info() {  # <task-id>
   title=$(sanitize_line "$title" 120)
   jq -cn --arg room "$room" --arg card "$card" --arg project "$repo" --arg title "$title" \
     '{room: $room, card: $card, project: $project, title: $title}'
+}
+
+# Whether <project> may be told to any room: never for a project in
+# config/private-projects, and never for any project while that list is there
+# but cannot be read.
+project_private() {  # <project>
+  local file="$CONFIG/private-projects"
+  [ -e "$file" ] || [ -L "$file" ] || return 1
+  [ -f "$file" ] && [ -r "$file" ] || return 0
+  [ -n "$1" ] || return 1
+  sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' "$file" | LC_ALL=C grep -Fxq -- "$1"
 }
 
 # The rooms whose allow-list names <project>, one per line: the rooms the owner
@@ -1438,6 +1453,10 @@ cmd_report() {
   [ "$found" = 1 ] || { printf 'nothing to report: %s serves no room card and is no job of a shared project\n' "$task"; return 0; }
   room=$(jq -r '.room' <<<"$info") card=$(jq -r '.card' <<<"$info")
   project=$(jq -r '.project' <<<"$info") title=$(jq -r '.title' <<<"$info")
+  if project_private "$project"; then
+    printf 'nothing to report: %s is private work, which config/private-projects keeps from every room\n' "$task"
+    return 0
+  fi
   if [ -n "$room" ] || [ -n "$card" ]; then
     room_valid "$room" && [[ "$card" =~ ^[A-Za-z0-9_.-]{1,80}$ ]] || die "the record for $task names no card it can tell"
     case "$event" in

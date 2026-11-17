@@ -408,6 +408,79 @@ test_a_dropped_job_leaves_the_view() {
   pass "a job cleaned up without landing is taken off the view once, and a long task id fits the room"
 }
 
+test_a_private_project_tells_no_room() {
+  local h out event
+  need_tools || return 0
+  h=$(make_home private)
+  # Both projects are on the alpha room's allow-list; only studio stays shareable.
+  printf '# Projects that never leave this machine\n  sample  \n' > "$h/home/config/private-projects"
+  add_task "$h" priv-c1 sample "Taken on for the room. mothership: alpha/p1."
+  add_task "$h" priv-j1 sample "Ordinary work for a private project."
+  add_task "$h" open-j1 studio "Ordinary work for a shared project."
+  printf 'blocked [at=1790000100]: the build needs a key\n' > "$h/home/state/priv-c1.status"
+  printf 'blocked [at=1790000100]: the build needs a key\n' > "$h/home/state/priv-j1.status"
+  for event in started blocked merged; do
+    out=$(in_home "$h" "$ADAPTER" report priv-c1 "$event" 2>&1) || fail "card report $event failed: $out"
+    assert_equals "nothing to report: priv-c1 is private work, which config/private-projects keeps from every room" "$out" "a private card hears nothing of $event"
+    out=$(in_home "$h" "$ADAPTER" report priv-j1 "$event" 2>&1) || fail "job report $event failed: $out"
+    assert_contains "$out" "is private work" "a private job shows nothing on $event"
+  done
+  out=$(in_home "$h" "$ADAPTER" report priv-c1 pr --pr "$PR_URL" 2>&1) || fail "card report pr failed: $out"
+  assert_contains "$out" "is private work" "a private card hears nothing of its landing"
+  [ -z "$(sent_of "$h")" ] || fail "a private project reached the room: $(sent_of "$h")"
+  [ ! -e "$h/home/state/mothership/tasks/priv-c1.json" ] && [ ! -e "$h/home/state/mothership/tasks/priv-j1.json" ] \
+    || fail "a private project left room state"
+  in_home "$h" "$ADAPTER" report open-j1 started >/dev/null 2>&1 || fail "a shared job failed beside a private one"
+  assert_contains "$(sent_of "$h")" "job id=open-j1 room=alpha project=studio" "a project off the private list still shows"
+
+  # A list that is there but cannot be read lets nothing through.
+  rm -f "$h/home/config/private-projects"
+  mkdir "$h/home/config/private-projects"
+  add_task "$h" open-j2 studio "More work for the shared project."
+  out=$(in_home "$h" "$ADAPTER" report open-j2 started 2>&1) || fail "report with an unreadable list failed: $out"
+  assert_contains "$out" "is private work" "an unreadable private list keeps every task from the room"
+  out=$(in_home "$h" "$ADAPTER" report priv-c1 started 2>&1) || fail "card report with an unreadable list failed: $out"
+  assert_contains "$out" "is private work" "an unreadable private list keeps every card from the room"
+  assert_equals 1 "$(sent_of "$h" | grep -c .)" "nothing more was sent while the list could not be read"
+  [ -z "$(wakes_of "$h")" ] || fail "private work woke the first mate: $(wakes_of "$h")"
+  pass "a project in config/private-projects tells no room, card or job, whatever the allow-list says, and an unreadable list tells nothing"
+}
+
+test_a_resolved_line_puts_a_job_back_to_work() {
+  local h out lock _
+  need_tools || return 0
+  h=$(make_home job-resolved)
+  lock="$h/home/state/mothership/.task-job-r1.lock"
+  add_task "$h" job-r1 sample "Work that gets unblocked."
+  : > "$h/home/state/job-r1.meta"
+  in_home "$h" "$ADAPTER" report job-r1 started >/dev/null 2>&1 || fail "report started failed"
+  printf 'blocked [at=1790000100]: the build needs a key\n' >> "$h/home/state/job-r1.status"
+  in_home "$h" "$ADAPTER" blocked-scan >/dev/null 2>&1 || fail "scan for the blocker failed"
+  wait_for_sent "$h" 2 || fail "the blocker was not shown: $(sent_of "$h")"
+  for _ in $(seq 1 50); do { [ -e "$lock" ] || [ -L "$lock" ]; } || break; sleep 0.1; done
+  # The first mate's answer closes the blocker; the worker writes no working: line.
+  printf 'resolved [at=1790000200]: key provided\n' >> "$h/home/state/job-r1.status"
+  in_home "$h" "$ADAPTER" blocked-scan >/dev/null 2>&1 || fail "scan after the answer failed"
+  wait_for_sent "$h" 3 || fail "the resolved blocker left the job held up: $(sent_of "$h")"
+  for _ in $(seq 1 50); do { [ -e "$lock" ] || [ -L "$lock" ]; } || break; sleep 0.1; done
+  printf 'needs-decision [at=1790000300]: which of two colours\n' >> "$h/home/state/job-r1.status"
+  out=$(in_home "$h" "$ADAPTER" report job-r1 waits 2>&1) || fail "report waits failed: $out"
+  printf 'resolved [key=colour] [at=1790000400]: answered: blue\n' >> "$h/home/state/job-r1.status"
+  out=$(in_home "$h" "$ADAPTER" report job-r1 working 2>&1) || fail "report after the decision failed: $out"
+  printf 'resolved [at=1790000500]: a phase ended\n' >> "$h/home/state/job-r1.status"
+  out=$(in_home "$h" "$ADAPTER" report job-r1 working 2>&1) || fail "report for a resolved line while working failed: $out"
+  assert_contains "$out" "still working" "a resolved line while the job works sends nothing"
+  assert_equals "$(cat <<EOT
+working|Room work for job-r1||Work has started.
+error|Room work for job-r1||Held up by a blocker; looking into it.
+working|Room work for job-r1||Work is under way.
+waits|Room work for job-r1||Waiting on a decision.
+working|Room work for job-r1||Work is under way.
+EOT
+)" "$(job_lines "$h")" "a resolved blocker or decision puts the job back to working"
+  pass "a resolved line moves a held-up or waiting job back to working, and sends nothing for a job already working"
+}
+
 test_no_link_runs_nothing() {
   local h out
   need_tools || return 0
@@ -614,6 +687,8 @@ fm_test_run \
   test_a_local_landing_reports_to_the_card \
   test_a_shared_job_shows_each_state \
   test_a_dropped_job_leaves_the_view \
+  test_a_private_project_tells_no_room \
+  test_a_resolved_line_puts_a_job_back_to_work \
   test_no_link_runs_nothing \
   test_a_failing_job_report_tells_the_first_mate \
   test_lifecycle_steps_show_a_job \
