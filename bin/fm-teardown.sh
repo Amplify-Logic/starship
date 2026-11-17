@@ -319,20 +319,18 @@
 #     A run already terminal
 #     (an outcome is set) or not parked at a gate is left untouched. Idempotent:
 #     an already-aborted run reads back terminal and is skipped on retry.
-#   Fix 2 - reap leaked descendant processes. A backgrounded/disowned process
-#     started under the worktree (or its per-task tasktmp) does not receive the
-#     SIGHUP/SIGTERM that closing the backend pane sends to its own foreground
-#     process group, so it survives reparented to init (observed 2026-08-03:
-#     two `go test` binaries, deadlines blown past by ~100x, pinning CPU for
-#     hours with no live task meta to attribute them to once teardown had
-#     already removed it). reap_task_worktree_processes finds every process
-#     whose CURRENT WORKING DIRECTORY is this task's own worktree or tasktmp
-#     root via `lsof -a -d cwd` (cheap: bounded by process count, not by
-#     walking the worktree's file tree) and sends TERM, then KILL after a short
-#     grace period to any survivor whose process identity still matches. Both
-#     roots are unique per task and never
-#     shared, so this can never reach another task's or the primary's
-#     processes. Idempotent: nothing left to find is a silent no-op.
+#   Fix 2 - reap leaked processes. A backgrounded/disowned process started
+#     in the worktree, its per-task tasktmp, or a validation copy of one of
+#     the task's finished no-mistakes runs does not receive the hangup that
+#     closing the backend pane sends, so it survives reparented to init and
+#     keeps running after cleanup (observed: `go test` binaries pinning CPU
+#     for hours, and a test loop relaunching a script from a deleted
+#     validation copy every few minutes). bin/fm-task-reap-lib.sh owns which
+#     processes count as inside a copy and how they are stopped; the copies
+#     are this task's alone (bin/fm-nm-run-lib.sh's
+#     fm_nm_task_validation_copies owns which validation copies), so this can
+#     never reach another task's or the primary's processes. Idempotent:
+#     nothing left to find is a silent no-op.
 #   Fix 3 - sweep abandoned remote job workers. A remote job worker started
 #     from a worktree's own bin/ outlives that worktree's removal without
 #     being reachable by Fix 2, because its working directory is wherever it
@@ -422,6 +420,7 @@ for _teardown_source in \
   fm-composer-lib.sh \
   fm-cursor-lib.sh \
   fm-nm-run-lib.sh \
+  fm-task-reap-lib.sh \
   fm-dod-lib.sh \
   fm-wake-lib.sh \
   fm-path-lib.sh \
@@ -454,6 +453,9 @@ unset _teardown_source
 . "$SCRIPT_DIR/fm-secondmate-parent-lib.sh"
 # shellcheck source=bin/fm-nm-run-lib.sh
 . "$SCRIPT_DIR/fm-nm-run-lib.sh"
+# shellcheck source=bin/fm-task-reap-lib.sh
+. "$SCRIPT_DIR/fm-task-reap-lib.sh"
+TEARDOWN_REAP_REFUSAL="preserving the task's copies for manual inspection or retry"
 # The bounded remote-ref refresh is shared with the done-claim gate.
 # shellcheck source=bin/fm-dod-lib.sh
 . "$SCRIPT_DIR/fm-dod-lib.sh"
@@ -2643,88 +2645,6 @@ conclude_task_no_mistakes_run() {  # <worktree>
   return 1
 }
 
-# Fix 2 (see script header): pids of every process whose CURRENT WORKING
-# DIRECTORY is exactly $1 or under it, from one bounded system-wide `lsof -a
-# -d cwd` scan (never the recursive +D file-tree walk, which lsof itself
-# documents as slow). Never $$ (this script's own pid). Empty output when
-# nothing matches; failure means the scan could not establish a safe result.
-pids_with_cwd_under() {  # <dir>
-  local dir=$1 out pid path line
-  [ -n "$dir" ] && [ -d "$dir" ] || return 0
-  dir=$(cd "$dir" && pwd -P) || return 1
-  out=$(lsof -a -d cwd -Fpn 2>/dev/null) || return 1
-  [ -n "$out" ] || return 0
-  pid=
-  while IFS= read -r line; do
-    case "$line" in
-      p*)
-        pid=${line#p}
-        case "$pid" in ''|*[!0-9]*) return 1 ;; esac
-        ;;
-      fcwd) [ -n "$pid" ] || return 1 ;;
-      n*)
-        [ -n "$pid" ] || return 1
-        path=${line#n}
-        case "$path" in
-          "$dir"|"$dir"/*)
-            [ -n "$pid" ] && [ "$pid" != "$$" ] && printf '%s\n' "$pid"
-            ;;
-        esac
-        ;;
-      '') ;;
-      *) return 1 ;;
-    esac
-  done <<EOF
-$out
-EOF
-}
-
-task_process_identity() {  # <pid>
-  local pid=$1 proc_root stat_line starttime value
-  local -a stat_fields
-  proc_root=${FM_PROC_ROOT_OVERRIDE:-/proc}
-  if [ -r "$proc_root/$pid/stat" ]; then
-    stat_line=$(cat "$proc_root/$pid/stat" 2>/dev/null) || return 1
-    read -r -a stat_fields <<< "${stat_line##*)}"
-    [ "${#stat_fields[@]}" -ge 20 ] || return 1
-    starttime=${stat_fields[19]}
-    case "$starttime" in ''|*[!0-9]*) return 1 ;; esac
-    printf 'starttime=%s\n' "$starttime"
-    return 0
-  fi
-  value=$(LC_ALL=C ps -p "$pid" -o lstart= 2>/dev/null) || return 1
-  value=$(fm_nm_trim "$value")
-  [ -n "$value" ] || return 1
-  case "$value" in *$'\n'*|*$'\r'*) return 1 ;; esac
-  printf 'lstart=%s\n' "$value"
-}
-
-task_process_identity_matches() {  # <pid> <identity>
-  local current
-  current=$(task_process_identity "$1") || return 1
-  [ "$current" = "$2" ]
-}
-
-task_pid_list_contains() {  # <pid-list> <pid>
-  printf '%s\n' "$1" | grep -Fxq "$2"
-}
-
-task_pids_under_roots() {  # <dir>...
-  TASK_PIDS=
-  TASK_PIDS_FAILED_DIR=
-  local dir dir_pids pids=""
-  for dir in "$@"; do
-    [ -n "$dir" ] || continue
-    if ! dir_pids=$(pids_with_cwd_under "$dir"); then
-      TASK_PIDS_FAILED_DIR=$dir
-      return 1
-    fi
-    pids="$pids
-$dir_pids"
-  done
-  TASK_PIDS=$(printf '%s\n' "$pids" | grep -E '^[0-9]+$' | sort -un || true)
-}
-
 reap_task_backend_process_group() {  # <label>
   local label=$1 leader leader_start pgid current_pgid own_pgid
   if [ "$BACKEND" != tmux ]; then
@@ -2737,7 +2657,7 @@ reap_task_backend_process_group() {  # <label>
     return 0
     ;;
   esac
-  leader_start=$(task_process_identity "$leader") || {
+  leader_start=$(fm_reap_process_identity "$leader") || {
     echo "warning: lsof is unavailable; cannot identify the tmux pane process group for $ID" >&2
     return 0
   }
@@ -2754,14 +2674,14 @@ reap_task_backend_process_group() {  # <label>
     echo "warning: lsof is unavailable; refusing to signal teardown's own process group for $ID" >&2
     return 0
   fi
-  task_process_identity_matches "$leader" "$leader_start" || return 0
+  fm_reap_process_identity_matches "$leader" "$leader_start" || return 0
   current_pgid=$(ps -o pgid= -p "$leader" 2>/dev/null) || current_pgid=""
   current_pgid=$(printf '%s' "$current_pgid" | tr -d '[:space:]')
   [ "$current_pgid" = "$pgid" ] || return 0
   echo "teardown: reaping leaked $label process group for $ID: $pgid" >&2
   kill -TERM -- "-$pgid" 2>/dev/null || true
   sleep 1
-  if task_process_identity_matches "$leader" "$leader_start" \
+  if fm_reap_process_identity_matches "$leader" "$leader_start" \
      && [ "$(ps -o pgid= -p "$leader" 2>/dev/null | tr -d '[:space:]')" = "$pgid" ] \
      && kill -0 -- "-$pgid" 2>/dev/null; then
     echo "teardown: force-killing leaked $label process group for $ID: $pgid" >&2
@@ -2769,107 +2689,15 @@ reap_task_backend_process_group() {  # <label>
   fi
 }
 
-# Reap every process rooted (by cwd) under this task's own worktree or tasktmp
-# - both unique per task and never shared - before either is removed. TERM
-# first, then KILL after a short grace period for anything still alive; a
-# process that exits on its own between the two passes is simply absent from
-# the recheck. A missing lsof uses the backend process-group fallback; an lsof
-# scan error refuses before destructive teardown.
+# Fix 2 (see script header): stop every process left inside this task's own
+# copies (bin/fm-task-reap-lib.sh owns the match and the stopping). A missing
+# lsof first uses the backend process-group fallback, then the lib's argument
+# match still runs; a scan error refuses before destructive teardown.
 reap_task_worktree_processes() {  # <label> <dir>...
-  local label=$1 pids pid identity current_pids i pass=1 max_passes=3
-  local -a tracked_pids tracked_identities remaining_pids remaining_identities
+  local label=$1
   shift
-  if ! command -v lsof >/dev/null 2>&1; then
-    reap_task_backend_process_group "$label"
-    return 0
-  fi
-  while [ "$pass" -le "$max_passes" ]; do
-    if ! task_pids_under_roots "$@"; then
-      echo "REFUSED: cannot determine leaked processes under ${TASK_PIDS_FAILED_DIR:-<missing>} for $ID (lsof failed); preserving the worktree/tasktmp for manual inspection or retry." >&2
-      return 1
-    fi
-    pids=$TASK_PIDS
-    [ -n "$pids" ] || return 0
-    tracked_pids=()
-    tracked_identities=()
-    while IFS= read -r pid; do
-      [ -n "$pid" ] || continue
-      if ! identity=$(task_process_identity "$pid"); then
-        if ! task_pids_under_roots "$@"; then
-          echo "REFUSED: cannot determine leaked processes under ${TASK_PIDS_FAILED_DIR:-<missing>} for $ID (lsof failed); preserving the worktree/tasktmp for manual inspection or retry." >&2
-          return 1
-        fi
-        if task_pid_list_contains "$TASK_PIDS" "$pid"; then
-          echo "REFUSED: cannot verify leaked process $pid identity for $ID; preserving the worktree/tasktmp for manual inspection or retry." >&2
-          return 1
-        fi
-        continue
-      fi
-      tracked_pids+=("$pid")
-      tracked_identities+=("$identity")
-    done <<EOF
-$pids
-EOF
-    if [ "${#tracked_pids[@]}" -eq 0 ]; then
-      pass=$((pass + 1))
-      continue
-    fi
-    if ! task_pids_under_roots "$@"; then
-      echo "REFUSED: cannot determine leaked processes under ${TASK_PIDS_FAILED_DIR:-<missing>} for $ID (lsof failed); preserving the worktree/tasktmp for manual inspection or retry." >&2
-      return 1
-    fi
-    current_pids=$TASK_PIDS
-    echo "teardown: reaping leaked $label process(es) for $ID: $(printf '%s' "$pids" | tr '\n' ' ')" >&2
-    for i in "${!tracked_pids[@]}"; do
-      pid=${tracked_pids[$i]}
-      identity=${tracked_identities[$i]}
-      if task_pid_list_contains "$current_pids" "$pid" \
-         && task_process_identity_matches "$pid" "$identity"; then
-        kill -TERM "$pid" 2>/dev/null || true
-      fi
-    done
-    sleep 1
-    if ! task_pids_under_roots "$@"; then
-      echo "REFUSED: cannot determine leaked processes under ${TASK_PIDS_FAILED_DIR:-<missing>} for $ID (lsof failed); preserving the worktree/tasktmp for manual inspection or retry." >&2
-      return 1
-    fi
-    current_pids=$TASK_PIDS
-    remaining_pids=()
-    remaining_identities=()
-    for i in "${!tracked_pids[@]}"; do
-      pid=${tracked_pids[$i]}
-      identity=${tracked_identities[$i]}
-      if task_pid_list_contains "$current_pids" "$pid" \
-         && task_process_identity_matches "$pid" "$identity"; then
-        remaining_pids+=("$pid")
-        remaining_identities+=("$identity")
-      fi
-    done
-    if [ "${#remaining_pids[@]}" -gt 0 ]; then
-      echo "teardown: force-killing leaked $label process(es) for $ID: ${remaining_pids[*]}" >&2
-      if ! task_pids_under_roots "$@"; then
-        echo "REFUSED: cannot determine leaked processes under ${TASK_PIDS_FAILED_DIR:-<missing>} for $ID (lsof failed); preserving the worktree/tasktmp for manual inspection or retry." >&2
-        return 1
-      fi
-      current_pids=$TASK_PIDS
-      for i in "${!remaining_pids[@]}"; do
-        pid=${remaining_pids[$i]}
-        identity=${remaining_identities[$i]}
-        if task_pid_list_contains "$current_pids" "$pid" \
-           && task_process_identity_matches "$pid" "$identity"; then
-          kill -KILL "$pid" 2>/dev/null || true
-        fi
-      done
-    fi
-    pass=$((pass + 1))
-  done
-  if ! task_pids_under_roots "$@"; then
-    echo "REFUSED: cannot determine leaked processes under ${TASK_PIDS_FAILED_DIR:-<missing>} for $ID (lsof failed); preserving the worktree/tasktmp for manual inspection or retry." >&2
-    return 1
-  fi
-  [ -z "$TASK_PIDS" ] && return 0
-  echo "REFUSED: leaked $label processes for $ID remain after $max_passes reap attempts; preserving the worktree/tasktmp for manual inspection or retry." >&2
-  return 1
+  command -v lsof >/dev/null 2>&1 || reap_task_backend_process_group "$label"
+  fm_reap_task_processes teardown "$label" "$ID" "$TEARDOWN_REAP_REFUSAL" "$@"
 }
 
 require_orca_worktree_path_match() {
@@ -4319,6 +4147,18 @@ fi
 
 if [ "$KIND" != secondmate ] && teardown_owns_worktree; then
   reap_task_worktree_processes worktree "$WT" "$TASK_TMP"
+  # The task's finished validation runs ran in no-mistakes' own copies, which
+  # a process started there (a test loop, a dev server) outlives.
+  if [ "$KIND" = ship ]; then
+    TEARDOWN_VALIDATION_COPIES=()
+    while IFS= read -r copy; do
+      [ -n "$copy" ] && TEARDOWN_VALIDATION_COPIES+=("$copy")
+    done <<EOF
+$(fm_nm_task_validation_copies "$WT" "$NM_TEARDOWN_TIMEOUT")
+EOF
+    [ "${#TEARDOWN_VALIDATION_COPIES[@]}" -eq 0 ] \
+      || fm_reap_task_processes teardown "validation copy" "$ID" "$TEARDOWN_REAP_REFUSAL" "${TEARDOWN_VALIDATION_COPIES[@]}"
+  fi
 elif [ "$KIND" != secondmate ]; then
   reap_task_worktree_processes tasktmp "$TASK_TMP"
 fi

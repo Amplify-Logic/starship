@@ -182,6 +182,14 @@ SH
 exit 0
 SH
   chmod +x "$fb/sleep"
+  # Hermetic no-mistakes: the bare `axi` overview answers FM_FAKE_AXI_OVERVIEW
+  # (empty by default, so no task runs resolve) and nothing else answers.
+  cat > "$fb/no-mistakes" <<'SH'
+#!/usr/bin/env bash
+[ "${1:-} ${2:-}" = "axi " ] && printf '%s\n' "${FM_FAKE_AXI_OVERVIEW:-}"
+exit 0
+SH
+  chmod +x "$fb/no-mistakes"
   # fm-spawn's launch-binary preflight resolves and `--version`-probes the
   # harness binary before creating the endpoint, so every harness this suite
   # relaunches onto must exist on the fake PATH regardless of what the host has
@@ -398,6 +406,66 @@ test_same_harness_relaunch_keeps_identity_and_reuses_the_endpoint() {
   assert_grep "cd -- '$dir/wt'" "$dir/fake/keys" "the replacement launch must enter the recorded worktree"
   assert_grep "Firstmate operational input waiting: read" "$dir/fake/literal" "the replacement should have been launched"
   pass "fm-control relaunch: a same-harness relaunch replaces the agent in the same endpoint and worktree"
+}
+
+# A finished validation run left a test loop running from its copy, which
+# no-mistakes has since deleted. Relaunch stops it before the replacement
+# starts, and leaves alone a process in the local copy the replacement reuses
+# and one in a run that is still validating.
+test_relaunch_stops_processes_left_in_finished_validation_copies() {
+  local dir out rc done_copy live_copy loop in_wt live pid stopped=""
+  dir=$(new_case validation-reap rl9)
+  add_ship_task "$dir" rl9 claude
+  done_copy="$dir/nm/worktrees/r1/01DONE"
+  live_copy="$dir/nm/worktrees/r1/01LIVE"
+  mkdir -p "$done_copy/tests" "$live_copy"
+  python3 - "$dir/nm/state.sqlite" "$dir/proj" "$(date +%s)" "$done_copy" "$live_copy" <<'PY'
+import sqlite3
+import sys
+
+database, project, created, done_copy, live_copy = sys.argv[1:]
+db = sqlite3.connect(database)
+db.executescript("""
+    CREATE TABLE repos (id TEXT PRIMARY KEY, working_path TEXT NOT NULL UNIQUE);
+    CREATE TABLE runs (id TEXT PRIMARY KEY, repo_id TEXT NOT NULL, branch TEXT NOT NULL,
+                       status TEXT NOT NULL, created_at INTEGER NOT NULL, worktree_dir TEXT);
+""")
+db.execute("INSERT INTO repos VALUES ('r1', ?)", (project,))
+db.execute("INSERT INTO runs VALUES ('01DONE', 'r1', 'task-rl9', 'completed', ?, ?)", (int(created) + 1, done_copy))
+db.execute("INSERT INTO runs VALUES ('01LIVE', 'r1', 'task-rl9', 'running', ?, ?)", (int(created) + 2, live_copy))
+db.commit()
+PY
+  printf 'while :; do /bin/sleep 1; done\n' > "$done_copy/tests/.tmp-one.test.sh"
+  ( cd "$done_copy" && exec bash tests/.tmp-one.test.sh ) > /dev/null 2>&1 &
+  loop=$!
+  ( cd "$dir/wt" && exec /bin/sleep 300 ) > /dev/null 2>&1 &
+  in_wt=$!
+  ( cd "$live_copy" && exec /bin/sleep 300 ) > /dev/null 2>&1 &
+  live=$!
+  disown "$loop" "$in_wt" "$live"
+  /bin/sleep 0.5
+  rm -rf -- "${done_copy:?}"
+  kill -0 "$loop" 2>/dev/null || fail "validation-reap: setup loop did not start"
+
+  out=$(NM_HOME="$dir/nm" FM_FAKE_AXI_OVERVIEW="repo: $dir/proj" \
+    run_control "$dir" rl9 relaunch --note "validation loop left behind"); rc=$?
+
+  local loop_alive=0
+  kill -0 "$loop" 2>/dev/null && loop_alive=1
+  for pid in "$in_wt" "$live"; do
+    kill -0 "$pid" 2>/dev/null || stopped="$stopped $pid"
+  done
+  for pid in "$loop" "$in_wt" "$live"; do
+    pkill -KILL -P "$pid" 2>/dev/null || true
+    kill -KILL "$pid" 2>/dev/null || true
+  done
+  expect_code 0 "$rc" "validation-reap: the relaunch should succeed"$'\n'"$out"
+  [ "$loop_alive" = 0 ] || fail "validation-reap: the loop left in a finished validation copy survived the relaunch"
+  [ -z "$stopped" ] || fail "validation-reap: relaunch stopped processes outside finished validation copies:$stopped"
+  assert_contains "$out" "relaunch: stopping $loop bash tests/.tmp-one.test.sh" \
+    "validation-reap: relaunch did not log what it stopped"
+  assert_contains "$out" "relaunched rl9 harness=claude" "validation-reap: the replacement should still launch"
+  pass "fm-control relaunch: processes left in finished validation copies are stopped, nothing else"
 }
 
 # A lane relaunched after its PR was recorded keeps that PR as its record's
@@ -3501,3 +3569,4 @@ test_herdr_rebind_failure_from_a_plain_shell_names_the_real_cause
 test_relaunch_reverifies_an_already_in_flight_item_instead_of_rewriting_it
 test_relaunch_moves_a_drifted_item_back_in_flight
 test_away_branch_relaunch_accepts_existing_dispatchable_items
+test_relaunch_stops_processes_left_in_finished_validation_copies

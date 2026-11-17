@@ -66,10 +66,12 @@ SH
   ln -s "$ROOT/bin/fm-cursor-lib.sh" "$fake/bin/fm-cursor-lib.sh"
   ln -s "$ROOT/bin/fm-composer-lib.sh" "$fake/bin/fm-composer-lib.sh"
   ln -s "$ROOT/bin/fm-nm-run-lib.sh" "$fake/bin/fm-nm-run-lib.sh"
+  ln -s "$ROOT/bin/fm-task-reap-lib.sh" "$fake/bin/fm-task-reap-lib.sh"
   # fm-lock-lib.sh: teardown sources it for the shared lock-staleness proof.
   ln -s "$ROOT/bin/fm-lock-lib.sh" "$fake/bin/fm-lock-lib.sh"
   # fm-lease-lib.sh: teardown sources it for the supervision lease guard.
   ln -s "$ROOT/bin/fm-lease-lib.sh" "$fake/bin/fm-lease-lib.sh"
+  ln -s "$ROOT/bin/fm-supervision-engine-lib.sh" "$fake/bin/fm-supervision-engine-lib.sh"
   # Lifecycle serialization, status presentation retirement, and shared adapter
   # ownership are sourced by teardown.
   ln -s "$ROOT/bin/fm-control-lib.sh" "$fake/bin/fm-control-lib.sh"
@@ -182,9 +184,11 @@ SH
   ln -s "$ROOT/bin/fm-cursor-lib.sh" "$fake/bin/fm-cursor-lib.sh"
   ln -s "$ROOT/bin/fm-composer-lib.sh" "$fake/bin/fm-composer-lib.sh"
   ln -s "$ROOT/bin/fm-nm-run-lib.sh" "$fake/bin/fm-nm-run-lib.sh"
+  ln -s "$ROOT/bin/fm-task-reap-lib.sh" "$fake/bin/fm-task-reap-lib.sh"
   ln -s "$ROOT/bin/fm-lock-lib.sh" "$fake/bin/fm-lock-lib.sh"
   # fm-lease-lib.sh: teardown sources it for the supervision lease guard.
   ln -s "$ROOT/bin/fm-lease-lib.sh" "$fake/bin/fm-lease-lib.sh"
+  ln -s "$ROOT/bin/fm-supervision-engine-lib.sh" "$fake/bin/fm-supervision-engine-lib.sh"
   ln -s "$ROOT/bin/fm-control-lib.sh" "$fake/bin/fm-control-lib.sh"
   ln -s "$ROOT/bin/fm-classify-lib.sh" "$fake/bin/fm-classify-lib.sh"
   # fm-timeout-lib.sh: the shared hard bound fm-classify-lib.sh sources for the

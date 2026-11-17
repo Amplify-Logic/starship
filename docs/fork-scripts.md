@@ -41,6 +41,7 @@ Each row is one purpose clause only: the script's own header comment is the auth
 | `fm-codex-session-metrics-lib.sh` | Supply the Codex companion's real context and provider-quota figures from the exact followed session and the account owner (docs/status-bar.md) |
 | `fm-status-cache-lib.sh` | Shared status-row cache freshness, staleness bounds, and single-refresh claim ownership |
 | `fm-landed-lib.sh`       | Shared newest-first completion-recency ordering for every capped landed surface       |
+| `fm-task-reap-lib.sh` | Stop the processes a task left running inside its own copies, including its finished validation copies, for cleanup and relaunch |
 | `fm-startup-memory-budget.sh` | Validate and report the bounded startup-memory allowance and current usage |
 | `fm-backlog-handoff.sh`  | Validate and delegate queued backlog-item moves into a secondmate home               |
 | `fm-decision-surface.sh` | Render, poll, and route the private loopback Lavish surface over captain decisions   |

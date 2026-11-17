@@ -103,7 +103,11 @@
 #              secondmate reconciles its own home's records at startup, so its
 #              standing charter is never rewritten.
 #              Records a durable checkpoint and that note, exits the old agent,
-#              then delegates the launch to its single owner,
+#              stops (best effort, warning on failure) any process a ship's
+#              finished validation runs left in their copies, the same step
+#              cleanup takes (bin/fm-teardown.sh "Fix 2"), and never the local
+#              copy the replacement reuses, then delegates the launch to its
+#              single owner,
 #              bin/fm-spawn.sh --relaunch. A failure before publication keeps
 #              the prior durable record in place and reports the concrete
 #              state; it never leaves a half-transitioned task claiming to be
@@ -206,6 +210,10 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 . "$SCRIPT_DIR/fm-omp-profile-lib.sh"
 # shellcheck source=bin/fm-exclude-tools-lib.sh
 . "$SCRIPT_DIR/fm-exclude-tools-lib.sh"
+# shellcheck source=bin/fm-nm-run-lib.sh
+. "$SCRIPT_DIR/fm-nm-run-lib.sh"
+# shellcheck source=bin/fm-task-reap-lib.sh
+. "$SCRIPT_DIR/fm-task-reap-lib.sh"
 
 POLL=${FM_CONTROL_POLL:-0.5}
 SETTLE_WAIT=${FM_CONTROL_SETTLE_WAIT:-5}
@@ -1224,6 +1232,24 @@ record_note() {
   esac
 }
 
+# A process a finished validation run left running (a test loop, a server)
+# outlives the agent that started it. Only finished runs' copies are touched
+# (bin/fm-nm-run-lib.sh's fm_nm_task_validation_copies), never the local copy
+# the endpoint and the replacement live in. Best effort: the old agent is
+# already stopped, so a failure warns rather than blocking its replacement.
+reap_finished_validation_copies() {
+  local copy
+  local -a copies=()
+  while IFS= read -r copy; do
+    [ -n "$copy" ] && copies+=("$copy")
+  done <<EOF
+$(fm_nm_task_validation_copies "$WT" 10)
+EOF
+  [ "${#copies[@]}" -gt 0 ] || return 0
+  fm_reap_task_processes relaunch "validation copy" "$ID" "leaving them running" "${copies[@]}" \
+    || echo "warning: some processes left in $ID's finished validation copies could not be stopped; relaunching anyway" >&2
+}
+
 do_relaunch() {
   local exit_result state note_line
   local -a spawn_args
@@ -1267,6 +1293,7 @@ do_relaunch() {
   journal_write stopping "${CHECKPOINT_LINES[@]}" "$note_line"
   exit_result=$(do_exit)
   journal_write exited "${CHECKPOINT_LINES[@]}" "$note_line" "exit_result=$exit_result"
+  [ "$KIND" != ship ] || reap_finished_validation_copies
 
   # The launch owner (fm-spawn --relaunch) clears the previous incarnation's
   # per-task harness wiring before arming the new one, so nothing to do here.

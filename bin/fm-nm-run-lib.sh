@@ -714,3 +714,111 @@ fm_nm_runs_newest_for_branch() {  # <branch> <runs-list-output>
   done <<< "$list"
   return 0
 }
+
+# A task's no-mistakes runs are the runs no-mistakes recorded for the task
+# copy's repository and current branch since that branch was created:
+#   - repository: the `repo:` line `no-mistakes axi` prints from the task copy,
+#     which is the CLI's own resolution (a pooled worker copy resolves to the
+#     registered primary clone), matched exactly against repos.working_path;
+#   - branch: the task copy's current branch, the one bin/fm-crew-state.sh
+#     reads;
+#   - since: the oldest surviving reflog entry of that branch. spawn_gen cannot
+#     bound the task, because a relaunch mints a new one while the same branch
+#     keeps validating. Teardown deletes the branch, so a later task that
+#     reuses the id and branch name starts a fresh reflog and never inherits an
+#     earlier task's runs. With no reflog, every run on the branch counts and
+#     since is empty.
+# Two live tasks sharing one branch name in one repository would both match.
+# fm_nm_task_attribution sets FM_NM_TASK_BRANCH, FM_NM_TASK_SINCE,
+# FM_NM_TASK_REPO and FM_NM_TASK_DB, or FM_NM_TASK_REASON saying why the runs
+# cannot be attributed (the other fields are then whatever was resolved).
+# Each no-mistakes call is bounded by $2 seconds. Never starts a daemon.
+fm_nm_task_attribution() {  # <worktree> <timeout_secs>
+  local wt=$1 timeout_secs=$2 overview first_line
+  FM_NM_TASK_BRANCH=
+  FM_NM_TASK_SINCE=
+  FM_NM_TASK_REPO=
+  FM_NM_TASK_DB=
+  FM_NM_TASK_REASON=
+  if [ -z "$wt" ] || [ ! -d "$wt" ]; then
+    FM_NM_TASK_REASON="the task copy ${wt:-<unrecorded>} is gone"
+    return 0
+  fi
+  if ! FM_NM_TASK_BRANCH=$(git -C "$wt" symbolic-ref --quiet --short HEAD 2>/dev/null) \
+     || [ -z "$FM_NM_TASK_BRANCH" ]; then
+    FM_NM_TASK_BRANCH=
+    FM_NM_TASK_REASON="the task copy is not on a branch"
+    return 0
+  fi
+  if ! command -v no-mistakes >/dev/null 2>&1; then
+    FM_NM_TASK_REASON="no-mistakes is not installed"
+    return 0
+  fi
+  # `--format=%gd --date=unix` prints <branch>@{<epoch>} newest first; the last
+  # line is the oldest surviving entry, normally the branch's creation.
+  FM_NM_TASK_SINCE=$(git -C "$wt" reflog show --date=unix --format=%gd "refs/heads/$FM_NM_TASK_BRANCH" -- 2>/dev/null \
+    | tail -1 | sed -n 's/.*@{\([0-9][0-9]*\)}$/\1/p') || FM_NM_TASK_SINCE=
+  overview=$(fm_nm_run_checked "$wt" "$timeout_secs" axi) || true
+  FM_NM_TASK_REPO=$(fm_nm_strip_quotes "$(printf '%s\n' "$overview" | sed -n 's/^repo:[[:space:]]*//p' | head -1)")
+  if [ -z "$FM_NM_TASK_REPO" ]; then
+    FM_NM_TASK_REASON="no-mistakes resolved no repository for the task copy"
+    first_line=$(printf '%s\n' "$overview" | sed -n '/^error:/{p;q;}')
+    [ -n "$first_line" ] || first_line=$(printf '%s\n' "$overview" | sed -n '/[^[:space:]]/{p;q;}')
+    [ -z "$first_line" ] || FM_NM_TASK_REASON="$FM_NM_TASK_REASON: $first_line"
+    return 0
+  fi
+  FM_NM_TASK_DB=$(fm_nm_state_db "$wt")
+}
+
+# Validation copies of the task's FINISHED runs (attribution above): the
+# worktree_dir no-mistakes recorded for each run whose status is terminal
+# (fm_nm_run_status_class), one absolute path per line, whether or not the
+# directory still exists - no-mistakes removes a finished run's copy, but a
+# process started there keeps running from the deleted directory. A copy of a
+# run that is still pending or running is never listed: its processes are the
+# pipeline's own live work. Only a path inside the worktrees/ directory beside
+# the state database is listed, so a malformed row can never name anything
+# outside no-mistakes' own copies. Prints nothing when the runs cannot be
+# attributed or read (python3 missing, no database, no worktree_dir column).
+fm_nm_task_validation_copies() {  # <worktree> [timeout_secs]
+  local wt=$1 timeout_secs=${2:-10}
+  command -v python3 >/dev/null 2>&1 || return 0
+  fm_nm_task_attribution "$wt" "$timeout_secs"
+  [ -z "$FM_NM_TASK_REASON" ] || return 0
+  fm_nm_bounded "$wt" "$timeout_secs" python3 - "$FM_NM_TASK_REPO" "$FM_NM_TASK_BRANCH" \
+      "$FM_NM_TASK_SINCE" "$FM_NM_TASK_DB" 2>/dev/null <<'PY' || true
+import os
+import sqlite3
+import sys
+from contextlib import closing
+from pathlib import Path
+
+repo, branch, since, database = sys.argv[1:]
+TERMINAL = ("completed", "failed", "cancelled", "handed_off")
+path = Path(database)
+if not path.is_absolute() or not path.is_file():
+    sys.exit(0)
+root = os.path.join(os.path.dirname(database), "worktrees") + os.sep
+try:
+    with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=30)) as db:
+        columns = {row[1] for row in db.execute("PRAGMA table_info(runs)")}
+        if "worktree_dir" not in columns:
+            sys.exit(0)
+        repo_rows = db.execute("SELECT id FROM repos WHERE working_path = ?", (repo,)).fetchall()
+        if len(repo_rows) != 1:
+            sys.exit(0)
+        rows = db.execute(
+            "SELECT worktree_dir FROM runs WHERE repo_id = ? AND branch = ? AND created_at >= ? AND status IN (%s)"
+            % ",".join("?" * len(TERMINAL)),
+            (repo_rows[0][0], branch, int(since) if since else 0) + TERMINAL,
+        ).fetchall()
+except (OSError, sqlite3.Error, ValueError):
+    sys.exit(0)
+for (copy,) in rows:
+    if not isinstance(copy, str) or "\n" in copy or not os.path.isabs(copy):
+        continue
+    copy = os.path.normpath(copy)
+    if copy.startswith(root) and len(copy) > len(root):
+        print(copy)
+PY
+}
