@@ -103,8 +103,8 @@
 # delivery contract.
 # --outward '<permission>[; <permission>...]' records what this job may do
 # outward through connected accounts or the browser on the captain's word,
-# such as 'send email to a@example.com' (docs/configuration.md "Worker outward
-# actions" owns the words; bin/fm-outward-check.py parse checks them and a
+# such as 'send email to a@example.com' (docs/fork-configuration.md "Worker
+# outward actions" owns the words; bin/fm-outward-check.py parse checks them and a
 # phrase it does not understand stops the scaffold). Ship and scout briefs
 # always carry a "# Outward actions" section whose fixed
 # "Outward permission: <permissions|none>" line bin/fm-spawn.sh requires to

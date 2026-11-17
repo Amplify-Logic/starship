@@ -183,8 +183,8 @@
 #   --task-type records an optional capability-learning slug in meta task_type=
 #   (no '|' or newlines); teardown logs it, and absent it falls back to kind.
 #   --outward '<permission>[; <permission>...]' is what this ship or scout job
-#   may do outward on the captain's word (docs/configuration.md "Worker outward
-#   actions"). It is checked and normalized by bin/fm-outward-check.py parse,
+#   may do outward on the captain's word (docs/fork-configuration.md
+#   "Worker outward actions"). It is checked and normalized by bin/fm-outward-check.py parse,
 #   must agree with the brief's "Outward permission:" line (a brief without the
 #   line counts as none), and is recorded in meta outward=; a relaunch reuses
 #   the recorded value, including any bin/fm-outward-grant.sh added, and
@@ -1494,8 +1494,8 @@ else
       exit 1
     }
   fi
-  # A job's outward permission (docs/configuration.md "Worker outward
-  # actions") is normalized by the same parser the brief used, so the
+  # A job's outward permission (docs/fork-configuration.md "Worker
+  # outward actions") is normalized by the same parser the brief used, so the
   # brief-agreement check below compares exact text.
   if [ "$OUTWARD_SET" -eq 1 ]; then
     [ "$KIND" != secondmate ] || {
