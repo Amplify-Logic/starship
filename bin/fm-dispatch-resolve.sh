@@ -396,8 +396,7 @@ export -n KEY_PRIVATE 2>/dev/null || true
 PRIVATE_PROJECTS=''
 if [ -e "$PRIVATE_PROJECTS_PATH" ] || [ -L "$PRIVATE_PROJECTS_PATH" ]; then
   if [ ! -f "$PRIVATE_PROJECTS_PATH" ] || [ ! -r "$PRIVATE_PROJECTS_PATH" ]; then
-    echo "dispatch-resolve: off (config/private-projects is not a readable regular file; nothing sent)" >&2
-    exit 0
+    resolver_off "config/private-projects is not a readable regular file; nothing sent"
   fi
   PRIVATE_PROJECTS=$(sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e '/^#/d' -e '/^$/d' "$PRIVATE_PROJECTS_PATH" | tr '\n' ' ')
 fi
@@ -408,8 +407,7 @@ for name in "$PROJECT" "$(sed -n 's/^You are in a disposable git worktree of \(.
   [ -n "${name##*/}" ] || continue
   case " $PRIVATE_PROJECTS " in
     *" ${name##*/} "*)
-      echo "dispatch-resolve: off (project ${name##*/} is never sent to an outside service; nothing sent)" >&2
-      exit 0
+      resolver_off "project ${name##*/} is never sent to an outside service; nothing sent"
       ;;
   esac
 done
