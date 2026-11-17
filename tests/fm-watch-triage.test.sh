@@ -4213,7 +4213,7 @@ test_procevent_unacknowledged_result_redrains_until_handled() {
   pid=$!
   wait_for_exit "$pid" 100 \
     || fail "an unacknowledged process-event result was not re-surfaced on re-arm: $(cat "$out")"
-  grep -F 'check: rearm-resurface' "$out" >/dev/null \
+  grep -Fx "$(recovery_close_reason "$state")" "$out" >/dev/null \
     || fail "the successor did not report recovery for the unacknowledged result: $(cat "$out")"
   FM_STATE_OVERRIDE="$state" "$DRAIN" > "$replay_out" 2> "$replay_err" \
     || fail "the successor could not re-drain the unacknowledged process-event result"
@@ -4323,9 +4323,10 @@ test_procevent_launch_failed_episodes_are_each_delivered() {
   # The same key again is what a registration-identity-only key would produce
   # for the next episode: already surfaced, so the process-event surface never
   # delivers it under its headline again. A fresh watcher still recovers the
-  # unacknowledged queue row through the generic `check: rearm-resurface`
-  # path (the contract test_procevent_unacknowledged_result_redrains_until_handled
-  # proves), so what this asserts is the headline, not silence.
+  # unacknowledged queue row through the recovery close that names it,
+  # `check: queued wake: ...` (the contract
+  # test_procevent_unacknowledged_result_redrains_until_handled proves), so
+  # what this asserts is the headline, not silence.
   append_wake "$state" check "procevent:lf-src:launch-failed:1-2-100-7" \
     "check: process-event source lf-src is registered but its launch did not prove it took the claim"
   : > "$out"
@@ -4339,8 +4340,8 @@ test_procevent_launch_failed_episodes_are_each_delivered() {
       # the ordinary surface delivered the repeated key after all, or that
       # something unrelated fired inside the window - and both are failures of
       # exactly what this test guards, so neither may pass as "recovery".
-      grep -F 'check: rearm-resurface' "$out" >/dev/null \
-        || fail "an already-surfaced launch-failed key woke the watcher, and the reason was not the one tolerated recovery path (expected the exact line 'check: rearm-resurface'; if that path was reworded, update this expectation, do not restore the strict silence check): $(cat "$out")"
+      grep -Fx "$(recovery_close_reason "$state")" "$out" >/dev/null \
+        || fail "an already-surfaced launch-failed key woke the watcher, and the reason was not the one tolerated recovery path (expected the exact recovery close naming the queued row; if that path was reworded, update this expectation, do not restore the strict silence check): $(cat "$out")"
       ;;
     *) fail "the watcher failed on an already-surfaced launch-failed key (status $status): $(cat "$out")" ;;
   esac
@@ -4455,7 +4456,7 @@ test_procevent_surface_crash_boundaries() {
   procevent_watch_bg "$dir" "$out.replay"; pid=$!
   wait_for_exit "$pid" 100 \
     || fail "an unacknowledged delivered record was not re-surfaced on re-arm: $(cat "$out.replay")"
-  grep -F 'check: rearm-resurface' "$out.replay" >/dev/null \
+  grep -Fx "$(recovery_close_reason "$state")" "$out.replay" >/dev/null \
     || fail "the successor did not recover the delivered-but-unacknowledged record: $(cat "$out.replay")"
   replay_err="$out.replay.err"
   FM_STATE_OVERRIDE="$state" "$DRAIN" > "$out.replay.drain" 2> "$replay_err" \

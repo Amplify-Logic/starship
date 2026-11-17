@@ -4094,7 +4094,8 @@ watcher_cleanup() {
   if [ "$(cat "$WATCH_LOCK/pid" 2>/dev/null || true)" = "${WATCHER_PID:-}" ]; then
     owns_lock=1
     if [ "${WATCHER_RECOVERY_PENDING:-0}" -eq 1 ] \
-      && [ "${FM_WATCH_DELIVERED_REASON:-}" = "check: rearm-resurface" ]; then
+      && [ -n "${WATCHER_RECOVERY_REASON:-}" ] \
+      && [ "${FM_WATCH_DELIVERED_REASON:-}" = "$WATCHER_RECOVERY_REASON" ]; then
       transition=release-lock-existing
     fi
   fi
@@ -4161,6 +4162,7 @@ startup_lock_failed() {
 # than this baseline even when that check has already announced the episode.
 captain_input_baseline_read || startup_lock_failed "baseline could not be read safely"
 WATCHER_RECOVERY_PENDING=0
+WATCHER_RECOVERY_REASON=
 if [ -n "${FM_LOCK_RECOVERED_PID:-}" ]; then
   WATCHER_RECOVERY_PENDING=1
 fi
@@ -4311,7 +4313,7 @@ resurface_after_downtime() {
     fi
     [ "$FM_RECOVERY_MARKER_ACTION" = recover ] || return 0
     [ "$FM_RECOVERY_MARKER_QUEUED" = 1 ] || return 0
-    wake "check: rearm-resurface"
+    recovery_wake
   fi
   if [ "$WATCHER_RECOVERY_PENDING" -ne 1 ]; then
     if ! fm_recovery_marker_arm_check "$WATCHER_DOWNTIME_MARKER"; then
@@ -4328,7 +4330,26 @@ resurface_after_downtime() {
     WATCHER_RECOVERY_PENDING=0
     return 0
   fi
-  wake "check: rearm-resurface"
+  recovery_wake
+}
+
+# Close a recovery naming the newest queued row's own reason, so a row another
+# producer appended, or one a handling successor queued while nobody was
+# attached to deliver its close, reaches the supervisor as the event it is.
+# The close stays check-kind, so it routes to main exactly as every recovery
+# did: main re-drains the whole queue. Only recovery with nothing usable
+# queued - a genuine outage with work in flight - keeps the generic reason.
+# The EXIT cleanup reads the remembered reason to keep the announced episode
+# instead of republishing downtime.
+recovery_wake() {
+  local queued
+  queued=$(fm_wake_queue_newest_reason)
+  if [ -n "$queued" ]; then
+    WATCHER_RECOVERY_REASON="check: queued wake: $queued"
+  else
+    WATCHER_RECOVERY_REASON="check: rearm-resurface"
+  fi
+  wake "$WATCHER_RECOVERY_REASON"
 }
 
 # What a downtime recovery wake gives the supervisor to act on: a queued row or
