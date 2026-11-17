@@ -833,10 +833,13 @@ LOG
   pass "fleet status: a second mate's ready PRs are the owner's calls, local and remote, dropped once merged or closed"
 }
 
-# A second mate's PR waits on the owner only once its child is done, and only
-# when that mate does not merge it itself: a PR registration alone, or a done
-# outcome carrying yolo=on (AGENTS.md: with yolo on, firstmate merges green,
-# in-scope work itself), is not listed, while a yolo=off done outcome is. A
+# A second mate's PR waits on the owner only while its child's newest outcome
+# is done, and only when that mate does not merge it itself: a PR registration
+# alone, or a done outcome carrying yolo=on (AGENTS.md: with yolo on, firstmate
+# merges green, in-scope work itself), is not listed, while a yolo=off done
+# outcome is. A later failed outcome drops the child's PR, as this home's own
+# work leaves the merge list once its task no longer reads done, and a later
+# done outcome on a new PR replaces the old one rather than listing both. A
 # merge drops the PR for good: a done outcome for it that reaches this home
 # after the merge does not list it again, and a PR reported done twice is
 # listed once, even when its forge cannot be read.
@@ -856,13 +859,17 @@ done [key=merged-c] [at=140]: merged c https://github.com/o/r/pull/68 external
 done [key=child-outcome-c-done-33333333] [at=150]: child c done: checks green pr=https://github.com/o/r/pull/68 mode=no-mistakes yolo=off
 done [key=child-outcome-twice-done-44444444] [at=160]: child twice done: checks green pr=https://github.com/o/r/pull/83 mode=no-mistakes yolo=off
 done [key=child-outcome-twice-done-55555555] [at=170]: child twice done: checks green again pr=https://github.com/o/r/pull/83 mode=no-mistakes yolo=off
+done [key=child-outcome-redo-done-66666666] [at=180]: child redo done: checks green pr=https://github.com/o/r/pull/84 mode=no-mistakes yolo=off
+failed [key=child-outcome-redo-failed-77777777] [at=190]: child redo failed: checks red after the asked change pr=https://github.com/o/r/pull/84 mode=no-mistakes yolo=off
+done [key=child-outcome-moved-done-88888888] [at=200]: child moved done: checks green pr=https://github.com/o/r/pull/85 mode=no-mistakes yolo=off
+done [key=child-outcome-moved-done-99999999] [at=210]: child moved done: checks green on a new PR pr=https://github.com/o/r/pull/86 mode=no-mistakes yolo=off
 LOG
   out=$(FM_SECONDMATE_PR_READER="$reader" \
     bash -c '. "$1/bin/fm-fleet-status-lib.sh"; fm_secondmate_ready_prs "$2"' _ "$ROOT" "$STATE") \
     || fail "a second mate's ready PRs could not be read"
-  assert_equals "$(printf 'mate-merge\tfar\theld\thttps://github.com/o/r/pull/82\nmate-merge\tfar\ttwice\thttps://github.com/o/r/pull/83')" \
-    "$out" "only a done, yolo=off, unmerged PR is listed, and once"
-  pass "fleet status: a second mate's PR waits on the owner only once done and not under yolo, and a merged one stays dropped"
+  assert_equals "$(printf 'mate-merge\tfar\theld\thttps://github.com/o/r/pull/82\nmate-merge\tfar\ttwice\thttps://github.com/o/r/pull/83\nmate-merge\tfar\tmoved\thttps://github.com/o/r/pull/86')" \
+    "$out" "only a child's newest done, yolo=off, unmerged PR is listed, and once"
+  pass "fleet status: a second mate's PR waits on the owner only while its child's newest outcome is done and not under yolo, and a merged one stays dropped"
 }
 
 # The bridge strip shows "decisions for you" and "ready to merge" as two lamps, so

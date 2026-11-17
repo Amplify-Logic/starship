@@ -406,9 +406,12 @@ fm_owner_calls() {  # <state-dir> [<buckets-file> [<backlog-file>]]
 # (`[key=child-pr-<child>]`, bin/fm-pr-check.sh) does not. An outcome carrying
 # `yolo=on` is not listed, because that mate merges green, in-scope work
 # itself (AGENTS.md); its lines carry no mark for the PRs standing yolo never
-# covers. A merge (`[key=merged-<child>]: merged <child> <url>`,
-# bin/fm-merge-outcome-lib.sh) drops the PR for good, even when an outcome for
-# it arrives later. Nothing here reads the mate's home or reaches its machine.
+# covers. Each child's newest outcome stands: a later outcome that is not done
+# (`failed [key=child-outcome-<child>-failed-...]`) drops its PR, and a later
+# done outcome with another pr= replaces it. A merge
+# (`[key=merged-<child>]: merged <child> <url>`, bin/fm-merge-outcome-lib.sh)
+# drops the PR for good, even when an outcome for it arrives later. Nothing
+# here reads the mate's home or reaches its machine.
 #
 # A PR closed without merging leaves no line, and a merge can reach the channel
 # late, so each listed PR's own state is also read from its forge
@@ -428,30 +431,34 @@ fm_secondmate_ready_prs() {  # <state-dir>
       esac
       printf 'mate-merge\t%s\t%s\t%s\n' "$mate" "$child" "$url"
     done < <(awk '
-      !/^done( \[[^]]*\])*: / { next }
+      function drop(u,  c) { for (c in pr) if (pr[c] == u) delete pr[c] }
+      !/^[a-z-]+( \[[^]]*\])*: / { next }
       {
         if (!match($0, /\[key=[^]]*\]/)) next
         key = substr($0, RSTART + 5, RLENGTH - 6)
         note = $0
-        sub(/^done( \[[^]]*\])*: /, "", note)
+        sub(/^[a-z-]+( \[[^]]*\])*: /, "", note)
         n = split(note, w, " ")
         if (key ~ /^merged-/ && w[1] == "merged") {
           merged[w[3]] = 1
-          delete ready[w[3]]
+          drop(w[3])
           next
         }
-        if (key !~ /^child-outcome-.*-done-/ || w[1] != "child" || w[3] != "done:") next
+        child = w[2]
+        if (w[1] != "child" || index(key, "child-outcome-" child "-") != 1) next
+        delete pr[child]
+        if (w[3] != "done:") next
         url = ""; yolo = ""
         for (i = 4; i <= n; i++) {
           if (w[i] ~ /^pr=/) url = substr(w[i], 4)
           else if (w[i] ~ /^yolo=/) yolo = substr(w[i], 6)
         }
-        if (url !~ /^https?:\/\/[^ ]+$/ || (url in merged)) next
-        if (yolo == "on") { delete ready[url]; next }
-        if (!(url in seen)) { seen[url] = 1; order[++count] = url }
-        ready[url] = w[2]
+        if (url !~ /^https?:\/\/[^ ]+$/ || (url in merged) || yolo == "on") next
+        drop(url)
+        if (!(child in seen)) { seen[child] = 1; order[++count] = child }
+        pr[child] = url
       }
-      END { for (i = 1; i <= count; i++) if (order[i] in ready) printf "%s\t%s\n", ready[order[i]], order[i] }
+      END { for (i = 1; i <= count; i++) if (order[i] in pr) printf "%s\t%s\n", order[i], pr[order[i]] }
     ' "$state/$mate.status" 2>/dev/null)
   done
 }
