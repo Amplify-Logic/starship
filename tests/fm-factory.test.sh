@@ -564,7 +564,6 @@ LOG
   # sent for one does not read as the answer to the next.
   assert_equals "$(q '.needs_you[] | select(.id == "far:fleet-count") | .since')" "1794640300" \
     "a second mate's PR became ready when its done outcome was reported"
-  export FM_FACTORY_INBOX="$BINDIR/inbox"
   printf '{"request_id": "factory.other-work.keep.far:fleet-count.1794640300", "body": "keep", "at": "2026-11-14T07:59:00Z"}\n' \
     > "$FM_FACTORY_TEST_NOTES"
   take_record
@@ -574,8 +573,8 @@ LOG
     >> "$HOME_FIX/state/far.status"
   take_record
   assert_equals "$(q '.needs_you[] | select(.id == "far:fleet-count") | "\(.since) \(.answered)"')" "1794641000 null" \
-    "a later done outcome still reads as answered by the keep sent for the one before"
-  unset FM_SECONDMATE_PR_READER FM_FACTORY_INBOX
+    "a later done outcome is a new asking, not answered by the keep sent for the one before"
+  unset FM_SECONDMATE_PR_READER
   pass "factory record: a second mate's ready PR needs you, named by the mate, each done outcome a new asking, and a merged or closed one does not"
 }
 
