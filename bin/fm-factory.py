@@ -966,8 +966,14 @@ def queue_counts(jobs: List[Dict[str, Any]]) -> Dict[str, Any]:
             "deferred": words.count("deferred")}
 
 
-def parked_words(count: int, until: Optional[str]) -> str:
-    return "%d parked until %s" % (count, day_words(until)) if until else "%d parked" % count
+def parked_words(count: int, dates: List[Optional[str]]) -> str:
+    """The parked as one count: until their one date, or the soonest of their dates."""
+    known = sorted({d for d in dates if d})
+    if not known:
+        return "%d parked" % count
+    if len(set(dates)) == 1:
+        return "%d parked until %s" % (count, day_words(known[0]))
+    return "%d parked, soonest %s" % (count, day_words(known[0]))
 
 
 def queue_parts(queue: Dict[str, Any]) -> List[Tuple[str, str]]:
@@ -978,8 +984,8 @@ def queue_parts(queue: Dict[str, Any]) -> List[Tuple[str, str]]:
     own, wait, deferred = queue["starts_on_its_own"], queue["waits_on_you"], queue["deferred"]
     if own:
         parts.append(("starts_on_its_own", "1 starts on its own" if own == 1 else "%d start on their own" % own))
-    for group in queue.get("parked_until") or []:   # a record from before parked work was counted has none
-        parts.append(("parked", parked_words(group["count"], group["until"])))
+    if queue.get("parked"):   # a record from before parked work was counted has none
+        parts.append(("parked", parked_words(queue["parked"], [g["until"] for g in queue["parked_until"]])))
     if queue["in_line"]:
         parts.append(("in_line", "%d in line" % queue["in_line"]))
     if queue["on_hold"]:
@@ -1016,15 +1022,14 @@ def job_queue_words(job: Dict[str, Any]) -> str:
 
 
 def fold_parts(folded: Dict[str, List[Dict[str, Any]]]) -> List[Tuple[str, List[Dict[str, Any]]]]:
-    """The folded jobs as counts in words, each with the jobs it stands for; the parked per date, soonest first."""
+    """The folded jobs as counts in words, each with the jobs it stands for; the parked soonest first."""
     parts: List[Tuple[str, List[Dict[str, Any]]]] = []
     for word, jobs in folded.items():
         if not jobs:
             continue
         if word == "parked":
-            for until in sorted({j.get("parked_until") or "" for j in jobs}):
-                group = [j for j in jobs if (j.get("parked_until") or "") == until]
-                parts.append((parked_words(len(group), until or None), group))
+            jobs = sorted(jobs, key=lambda j: j.get("parked_until") or "")
+            parts.append((parked_words(len(jobs), [j.get("parked_until") for j in jobs]), jobs))
             continue
         parts.append((plural(len(jobs), *FOLD_NAMES[word]), jobs))
     return parts
@@ -2719,11 +2724,13 @@ class View:
                     keys.append("x settled?")
             else:
                 keys.append("k keep · c changes")
-        if kind == "fold":
-            keys.append("esc hide the list" if self.unfolded == ident else "enter list them")
+        if kind == "fold" and self.unfolded != ident:
+            keys.append("enter list them")
         if self.readable():
             keys.append("r read")
-        if not self.opened or not self.in_tab:
+        if self.unfolded:
+            keys.append("esc hide the list")
+        elif not self.opened or not self.in_tab:
             keys.append("enter open" if not self.opened else "esc back")
         elif self.in_tab:
             keys.append("esc back")

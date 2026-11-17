@@ -647,11 +647,11 @@ test_parked_work_says_until_when_it_is_parked() {
   assert_equals "$(q '.queue | "\(.starts_on_its_own) \(.parked) \([.parked_until[] | "\(.until)=\(.count)"] | join(","))"')" \
     "0 3 2026-12-01=2,2027-01-05=1" "the queue does not count the parked per date"
   assert_equals "$(q .queue_line)" \
-    "10 queued · 2 parked until 1 Dec · 1 parked until 5 Jan 2027 · 2 in line · 2 on hold · 3 wait on you, 1 of them deferred to a date" \
+    "10 queued · 3 parked, soonest 1 Dec · 2 in line · 2 on hold · 3 wait on you, 1 of them deferred to a date" \
     "the queue line does not say until when work is parked"
   assert_not_contains "$(q .queue_line)" "on their own" "parked work reads as starting on its own"
   out=$(python3 "$FACTORY" --plain --width 120 --factory sample-shop) || fail "--plain --factory failed"
-  has_line "$out" " · 2 parked until 1 Dec · 1 parked until 5 Jan 2027 · 2 on hold · 1 deferred to a date" \
+  has_line "$out" " · 3 parked, soonest 1 Dec · 2 on hold · 1 deferred to a date" \
     "the folded count line does not say until when work is parked"
   assert_not_contains "$out" "Wrapping paper samples" "a folded job was listed before its line was opened"
   pass "factory queue: parked work says until when it is parked, never that it starts on its own"
@@ -666,20 +666,21 @@ test_a_folded_count_line_opens_on_every_job_it_stands_for() {
   # The factory's page has one call for the owner, then the folded line.
   DRIVE_FACTORY=sample-shop drive_keys DOWN "SNAP:$dir/on-fold" ENTER "SNAP:$dir/listed" ESC "SNAP:$dir/hidden"
   screen=$(screen_of "$dir/on-fold" 50 100)
-  has_line "$screen" " ▸ · 2 parked until 1 Dec · 1 parked until 5 Jan 2027 · 2 on hold · 1 deferred to a date" \
+  has_line "$screen" " ▸ · 3 parked, soonest 1 Dec · 2 on hold · 1 deferred to a date" \
     "the folded count line cannot be highlighted"
   assert_contains "$screen" "enter list them" "the keys line does not say enter lists the folded jobs"
   screen=$(screen_of "$dir/listed" 50 100)
-  has_line "$screen" " 2 parked until 1 Dec" "the list has no heading per count"
+  has_line "$screen" " 3 parked, soonest 1 Dec" "the list has no heading per count"
   has_line "$screen" " · Wrapping paper samples parked until 1 Dec" "a parked job is not listed with its date"
   has_line "$screen" " · Gift tag colours parked until 1 Dec" "a parked job that also waits on other work is not listed"
   has_line "$screen" " · New year banner parked until 5 Jan 2027" "a job parked to another date is not listed"
   has_line "$screen" " · Spring sale page on hold" "a job on hold is not listed with its queue word"
   has_line "$screen" " · Charge tax abroad deferred" "a deferred call is not listed with its queue word"
   assert_contains "$screen" "esc hide the list" "the keys line does not say esc hides the list"
+  assert_not_contains "$screen" "esc back" "the keys line names esc for going back while esc hides the list"
   screen=$(screen_of "$dir/hidden" 50 100)
   assert_not_contains "$screen" "Wrapping paper samples" "esc did not hide the list"
-  has_line "$screen" " ▸ · 2 parked until 1 Dec · 1 parked until 5 Jan 2027 · 2 on hold · 1 deferred to a date" \
+  has_line "$screen" " ▸ · 3 parked, soonest 1 Dec · 2 on hold · 1 deferred to a date" \
     "esc left the factory's page instead of hiding the list"
   pass "factory pane: enter on a folded count line lists every job it stands for, esc hides them"
 }
