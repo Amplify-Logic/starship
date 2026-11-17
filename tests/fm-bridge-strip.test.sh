@@ -480,9 +480,10 @@ test_a_title_never_runs_into_fields_a_newer_reading_adds() {
     "the reading's title ran into a field after it"
   # The owner's calls refreshed on their own between full readings.
   cache_fleet
+  list=$(awk -F'\t' '{ print $18 }' "$HOME_FIX/state/.status-fleet-state")
+  printf '\tnewer-field' >> "$HOME_FIX/state/.status-fleet-state"
   printf 'moved\n' > "$HOME_FIX/state/.owner-calls-changed"
   signal=$(. "$ROOT/bin/fm-owner-calls-signal-lib.sh"; fm_owner_calls_signal "$HOME_FIX/state")
-  list=$(awk -F'\t' '{ print $18 }' "$HOME_FIX/state/.status-fleet-state")
   printf '%s\t%s\t%s\t1\t1\tdecision\tlife-insights\t%s\tnewer-field\n' \
     "$signal" "$list" "$(date +%s)" "$title" > "$HOME_FIX/state/.status-fleet-calls"
   assert_equals "decision
