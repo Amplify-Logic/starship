@@ -6226,7 +6226,7 @@ test_handed_off_run_with_closed_pr_reads_closed() {
   pass "a handed-off run with a closed PR reads closed"
 }
 
-test_coarse_handed_off_ledger_word_reads_ready_for_review() {
+test_coarse_handed_off_ledger_word_reads_awaiting_merge_decision() {
   reset_fakes
   local d local_short out; d=$(new_case coarse-handed-off)
   make_repo_on_branch "$d/wt" fm/feat-choff
@@ -6244,9 +6244,10 @@ EOF
   arm_idle_record "$d/state" feat-choff
   out=$(run_crew_state "$d" feat-choff)
   assert_contains "$out" "state: done" "a handed-off ledger word is finished work"
-  assert_contains "$out" "checks green: PR ready for review" "it reads like checks-passed"
+  assert_contains "$out" "run handed off: PR awaiting merge decision" "it reads neutrally without a PR read"
+  assert_not_contains "$out" "ready for review" "the coarse route does not claim the PR is still open"
   assert_contains "$out" "pr=https://github.com/o/r/pull/7" "the ledger row supplies the PR"
-  pass "a coarse handed-off ledger word reads ready for review"
+  pass "a coarse handed-off ledger word reads awaiting the merge decision"
 }
 
 # The same anchored selected-run shape with the daemon answering still binds.
@@ -7134,7 +7135,7 @@ test_coarse_pending_ledger_word_reads_unknown
 test_handed_off_run_with_open_pr_reads_ready_for_review
 test_handed_off_run_with_merged_pr_reads_merged
 test_handed_off_run_with_closed_pr_reads_closed
-test_coarse_handed_off_ledger_word_reads_ready_for_review
+test_coarse_handed_off_ledger_word_reads_awaiting_merge_decision
 test_unanswered_probe_does_not_turn_a_failed_coarse_record_into_a_gate
 test_selected_route_dead_daemon_names_the_run_once
 test_head_tied_row_reads_the_same_whichever_run_axi_names

@@ -1343,7 +1343,7 @@ if [ "$HAVE_RUN" = 1 ]; then
     case "$COARSE_STATUS" in
       running) RUN_STATE=working; RUN_DETAIL="validating (background run)" ;;
       completed) RUN_STATE="done";  RUN_DETAIL="run completed" ;;
-      handed_off) RUN_STATE="done"; RUN_DETAIL="checks green: PR ready for review" ;;
+      handed_off) RUN_STATE="done"; RUN_DETAIL="run handed off: PR awaiting merge decision" ;;
       failed)
         # The ledger row is terminal but the coarse path has no steps table
         # and no ci log, so the orphaned-monitor shape cannot be recognized
