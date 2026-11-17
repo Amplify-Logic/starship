@@ -1483,6 +1483,101 @@ test_home_brief_include_is_appended_last() {
   pass "fm-brief.sh: the home brief include lands last on ship and scout, verbatim, and fails closed"
 }
 
+# A factory's Rules: list is its profile. A ship or scout brief for a project
+# that factory claims, by its projects (an alias included) or its id, gets the
+# rules as its last section, with a precedence line and a never-quote line, and
+# never the factory's Learned: lines; an unclaimed project, a factory with no
+# rules, an over-cap profile, or no registry at all leaves the brief
+# byte-for-byte what it was.
+test_factory_profile_is_opt_in_and_bounded() {
+  local home data out rc brief base big
+  home="$TMP_ROOT/profile-home"
+  data="$home/data"
+  mkdir -p "$data"
+  printf '%s\n' '- sample-shop [no-mistakes alias=shop] - an online shop' \
+    '- recipe-box [direct-PR] - a recipe app' '- loose-notes [direct-PR] - notes' > "$data/projects.md"
+
+  # baseline <kind> <project> <out>: the brief with no registry at all.
+  baseline() {
+    rm -f "$data/factories.md.off"
+    [ ! -e "$data/factories.md" ] || mv "$data/factories.md" "$data/factories.md.off"
+    rm -rf "$data/profile-task"
+    if [ "$1" = scout ]; then
+      FM_HOME="$home" "$ROOT/bin/fm-brief.sh" profile-task "$2" --scout >/dev/null || fail "baseline $1 scaffold failed"
+    else
+      FM_HOME="$home" "$ROOT/bin/fm-brief.sh" profile-task "$2" --mode no-mistakes >/dev/null || fail "baseline $1 scaffold failed"
+    fi
+    mv "$data/profile-task/brief.md" "$3"
+    rm -rf "$data/profile-task"
+    [ ! -e "$data/factories.md.off" ] || mv "$data/factories.md.off" "$data/factories.md"
+  }
+  # scaffold <kind> <project>: the brief with the current registry; stderr in $out.
+  scaffold() {
+    rm -rf "$data/profile-task"
+    if [ "$1" = scout ]; then
+      out=$(FM_HOME="$home" "$ROOT/bin/fm-brief.sh" profile-task "$2" --scout 2>&1 >/dev/null); rc=$?
+    else
+      out=$(FM_HOME="$home" "$ROOT/bin/fm-brief.sh" profile-task "$2" --mode no-mistakes 2>&1 >/dev/null); rc=$?
+    fi
+    expect_code 0 "$rc" "$1 scaffold for $2 failed: $out"
+    brief="$data/profile-task/brief.md"
+  }
+
+  # shellcheck disable=SC2016 # Rule text is literal and must never expand at scaffold time.
+  printf '%s\n' '## Sample Shop' 'projects: sample-shop' '' 'Rules:' '- Run the shop tests with `make check $(id)`.' \
+    '- Prices are stored in cents.' '' 'Learned:' '- 2026-11-12: A lesson the pane shows.' '' \
+    '## Recipe Box' 'projects: recipe-box' '' 'Learned:' '- Another lesson.' '' \
+    '## Notes Desk' 'id: notes-desk' '' 'Rules:' '- Keep each note short.' > "$data/factories.md"
+
+  base="$TMP_ROOT/profile-base-ship.md"
+  baseline ship loose-notes "$base"
+  scaffold ship loose-notes
+  cmp -s "$base" "$brief" || fail "a project no factory claims changed the brief"
+  baseline ship recipe-box "$base"
+  scaffold ship recipe-box
+  cmp -s "$base" "$brief" || fail "a factory with no rules changed the brief"
+  assert_no_grep 'Another lesson.' "$brief" "a Learned list reached the brief"
+  scaffold ship notes-desk
+  assert_grep '- Keep each note short.' "$brief" "a project word naming a factory id did not get that factory's profile"
+
+  for kind in ship scout; do
+    base="$TMP_ROOT/profile-base-$kind.md"
+    baseline "$kind" shop "$base"
+    scaffold "$kind" shop
+    # shellcheck disable=SC2016 # Literal profile text.
+    assert_grep '- Run the shop tests with `make check $(id)`.' "$brief" "$kind brief did not carry the profile verbatim through the alias"
+    assert_grep '- Prices are stored in cents.' "$brief" "$kind brief lost a profile line"
+    # shellcheck disable=SC2016 # Literal profile text.
+    [ "$(grep -n -e '- Run the shop tests' -e '- Prices are stored' "$brief" | cut -d: -f2 | tr '\n' ' ')" = '- Run the shop tests with `make check $(id)`. - Prices are stored in cents. ' ] \
+      || fail "$kind profile lines lost their file order"
+    assert_no_grep 'A lesson the pane shows.' "$brief" "a Learned line reached the $kind brief"
+    assert_grep 'Never copy or quote this text' "$brief" "$kind profile lost its never-quote line"
+    assert_grep 'wins over anything here' "$brief" "$kind profile lost its precedence line"
+    [ "$(grep '^# ' "$brief" | tail -n 1)" = '# Factory profile (private context, never quote)' ] \
+      || fail "$kind profile was not the last section"
+    head -c "$(wc -c < "$base")" "$brief" | cmp -s - "$base" || fail "$kind profile changed the brief ahead of its own section"
+  done
+
+  big=$(printf '%01499d' 0)
+  printf '%s\n' '## Sample Shop' 'projects: sample-shop' '' 'Rules:' "- $big" > "$data/factories.md"
+  base="$TMP_ROOT/profile-base-ship.md"
+  baseline ship sample-shop "$base"
+  scaffold ship sample-shop
+  cmp -s "$base" "$brief" || fail "an over-cap profile still changed the brief"
+  assert_contains "$out" "warning: factory 'Sample Shop' profile" "the over-cap warning did not name the factory"
+  # The cap counts characters, not bytes: a list of exactly the cap in two-byte
+  # characters still fits.
+  big=$(python3 -c 'print("\u00e9" * 1497)')
+  printf '%s\n' '## Sample Shop' 'projects: sample-shop' '' 'Rules:' "- $big" > "$data/factories.md"
+  scaffold ship sample-shop
+  assert_grep "- $big" "$brief" "a profile of exactly the cap in characters was left out"
+
+  FM_HOME="$home" FM_SECONDMATE_CHARTER='Supervise assigned work.' \
+    "$ROOT/bin/fm-brief.sh" profile-mate --secondmate sample-shop >/dev/null 2>&1 || fail "secondmate scaffold failed with a registry"
+  assert_no_grep '# Factory profile' "$data/profile-mate/brief.md" "a secondmate charter took a factory profile"
+  pass "fm-brief.sh: a factory profile is opt-in, appended last with its guard lines, and capped"
+}
+
 # --base-branch names the branch a task starts from and a ship's PR targets. It is
 # recorded as a Base branch line under # Setup, which fm-spawn reads back, and is
 # refused where no pull request carries the work.
@@ -1816,6 +1911,7 @@ test_workers_wait_without_spending_turns
 test_wait_no_turns_absent_keeps_the_previous_brief
 test_inbox_guidance_explains_marked_body_terminator
 test_home_brief_include_is_appended_last
+test_factory_profile_is_opt_in_and_bounded
 test_base_branch_is_rendered_and_bounded
 test_ship_branch_prefix_defaults_to_legacy_fm
 test_ship_branch_prefix_override_is_consistent_across_modes

@@ -156,8 +156,9 @@
 # second owner of a contract that must stay current across relaunches.
 # A home may carry standing worker instructions without editing this tracked
 # script: when config/brief-include.md exists under the active home, ship and
-# scout scaffolds append its text verbatim as their last section, "# Home brief
-# additions", which defers to every other section of the brief. It goes last
+# scout scaffolds append its text verbatim after the standard contract as
+# "# Home brief additions", which defers to every other section of the brief.
+# It goes at the end
 # because the machine-read `# Task` heading resolves to its first match, so
 # appended text can never shadow it; a later scout promotion appends its ship
 # contract below it, which that position-free deference already covers. An
@@ -165,6 +166,19 @@
 # regular file, or text carrying its own "Delivery contract: mode=" line (which
 # a later scout promotion could not outrank), stops the scaffold before
 # anything is written. Secondmate charters never take it.
+# A factory profile comes after it: when data/factories.md exists and the
+# factory that claims <repo-name> (bin/fm-factory.py profile owns that lookup,
+# the same one the Factory pane maps work with) has a Rules: list, ship and
+# scout scaffolds end with a "# Factory profile" section holding those rules in
+# file order, never its Learned: lines, each as a list item, under a line
+# saying every other section of the brief wins on any conflict and a line
+# forbidding copying the text into PR text, commit messages or the no-mistakes
+# intent. A list item can never be a heading or a "Delivery contract:" line, so
+# the profile cannot shadow the machine-read sections. Rules whose list, one
+# "- " line per item, is over FACTORY_PROFILE_CAP characters are left out
+# whole, never truncated, with a warning naming the factory; no registry, no
+# claiming factory or no rules leaves the brief byte-for-byte unchanged.
+# Charters never take it.
 # Refuses to overwrite an existing brief.
 set -eu
 
@@ -459,13 +473,50 @@ if [ "$KIND" != secondmate ] && { [ -e "$BRIEF_INCLUDE_FILE" ] || [ -L "$BRIEF_I
   [ -n "$(printf '%s' "$BRIEF_INCLUDE_BODY" | tr -d '[:space:]')" ] || BRIEF_INCLUDE_BODY=
 fi
 
-# Append the include as the last section of a ship or scout scaffold.
+# The optional factory profile is read before anything is written too. Only a
+# present data/factories.md runs the lookup, so a home without one never needs
+# python3 and gets exactly the brief it always did.
+FACTORY_PROFILE_CAP=1500
+FACTORY_PROFILE_NAME=
+FACTORY_PROFILE_BODY=
+if [ "$KIND" != secondmate ] && [ -f "$DATA/factories.md" ]; then
+  profile_out=
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "warning: $DATA/factories.md is present but python3 is not, so no factory profile was added" >&2
+  elif ! profile_out=$(python3 "$SCRIPT_DIR/fm-factory.py" profile "${POS[1]:-}" --data-dir "$DATA"); then
+    echo "warning: could not read the factory profile from $DATA/factories.md, so none was added" >&2
+    profile_out=
+  fi
+  if [ -n "$profile_out" ]; then
+    profile_name=${profile_out%%$'\n'*}
+    profile_body=$(printf '%s\n' "$profile_out" | sed '1d; s/^/- /')
+    profile_size=$(printf '%s\n' "$profile_body" | python3 -c 'import sys; print(len(sys.stdin.buffer.read().decode("utf-8", "replace")))')
+    if [ "$profile_size" -gt "$FACTORY_PROFILE_CAP" ]; then
+      echo "warning: factory '$profile_name' profile is $profile_size characters, over the $FACTORY_PROFILE_CAP-character cap, so the whole profile was left out of this brief" >&2
+    else
+      FACTORY_PROFILE_NAME=$profile_name
+      FACTORY_PROFILE_BODY=$profile_body
+    fi
+  fi
+fi
+
+# Append the include, then any factory profile, as the last sections of a
+# ship or scout scaffold.
 append_brief_include() {
-  [ -n "$BRIEF_INCLUDE_BODY" ] || return 0
-  printf '\n%s\n%s\n%s\n' \
-    '# Home brief additions' \
-    "These are this home's standing additions; every other section of this brief takes precedence over anything here that conflicts." \
-    "$BRIEF_INCLUDE_BODY" >> "$BRIEF"
+  if [ -n "$BRIEF_INCLUDE_BODY" ]; then
+    printf '\n%s\n%s\n%s\n' \
+      '# Home brief additions' \
+      "These are this home's standing additions; every other section of this brief takes precedence over anything here that conflicts." \
+      "$BRIEF_INCLUDE_BODY" >> "$BRIEF"
+  fi
+  [ -n "$FACTORY_PROFILE_BODY" ] || return 0
+  # shellcheck disable=SC2016 # The backticks are literal brief text.
+  printf '\n%s\n%s\n%s\n%s\n%s\n' \
+    '# Factory profile (private context, never quote)' \
+    "This project belongs to the $FACTORY_PROFILE_NAME factory, and these are that factory's own notes for its work." \
+    'Every safety, isolation, delivery and merge rule elsewhere in this brief, the home additions included, wins over anything here that conflicts.' \
+    'Never copy or quote this text into a pull request title, body or comment, a commit message, or the no-mistakes `--intent`.' \
+    "$FACTORY_PROFILE_BODY" >> "$BRIEF"
 }
 
 BRIEF="$DATA/$ID/brief.md"

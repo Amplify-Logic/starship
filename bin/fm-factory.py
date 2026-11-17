@@ -30,6 +30,13 @@ Usage:
                                           split a live copy of each of that
                                           factory's running workers beside its
                                           page pane, the way open-tab does
+  fm-factory.py profile <project> [--data-dir DIR]
+                                          print the name of the factory that
+                                          claims <project> (by its projects,
+                                          else its id), then its Rules: lines,
+                                          one per line; nothing when there are
+                                          none (bin/fm-brief.sh adds them to a
+                                          job's instructions)
   fm-factory.py refresh                   rebuild the cached record once
   fm-factory.py refresh-calls             rebuild it with fresh owner's calls on
                                           the last full refresh's workers, or,
@@ -369,10 +376,10 @@ def meta_values(path: Optional[str]) -> Dict[str, str]:
 PROJECT_ROW_RE = re.compile(r"^- (.+?)(?: \[([^\]]*)\])?(?: - |$)")
 
 
-def load_projects(home: str) -> List[Dict[str, Any]]:
+def load_projects(home: str, data: Optional[str] = None) -> List[Dict[str, Any]]:
     """data/projects.md rows: name, its label= and alias= tokens, in order."""
     rows = []
-    for line in read_text(os.path.join(home, "data", "projects.md")).splitlines():
+    for line in read_text(os.path.join(data or os.path.join(home, "data"), "projects.md")).splitlines():
         match = PROJECT_ROW_RE.match(line)
         if not match:
             continue
@@ -420,12 +427,14 @@ def routine_kind(marks: List[str], title: str) -> Optional[str]:
     return None
 
 
-def load_registry(home: str) -> Tuple[List[Dict[str, Any]], str]:
+def load_registry(home: str, data: Optional[str] = None) -> Tuple[List[Dict[str, Any]], str]:
     """data/factories.md, or one factory per registered project without it.
 
-    Returns the factories and the word for where they came from.
+    Returns the factories and the word for where they came from. <data> is the
+    data directory when it is not the home's own.
     """
-    text = read_text(os.path.join(home, "data", "factories.md"))
+    data = data or os.path.join(home, "data")
+    text = read_text(os.path.join(data, "factories.md"))
     factories: List[Dict[str, Any]] = []
     current: Optional[Dict[str, Any]] = None
     section = None
@@ -475,11 +484,57 @@ def load_registry(home: str) -> Tuple[List[Dict[str, Any]], str]:
                 count += 1
             seen.add(factory["id"])
         return factories, "registry"
-    for row in load_projects(home):
+    for row in load_projects(home, data):
         factories.append({"name": row["label"] or display_name(row["name"]), "id": slug(row["name"]),
                           "about": None, "projects": [row["name"]],
                           "rules": [], "learned": [], "routine": []})
     return factories, "projects"
+
+
+def project_owner(factories: List[Dict[str, Any]], project_rows: List[Dict[str, Any]]):
+    """A function from a work item's project word, an alias included, to the id
+    of the factory that claims it: the factory whose projects name it, else the
+    factory whose id it is, or None when no factory does."""
+    alias_of: Dict[str, str] = {}
+    for row in project_rows:
+        for alias in row["aliases"]:
+            alias_of[alias.lower()] = row["name"].lower()
+    owner: Dict[str, str] = {}
+    for factory in factories:
+        for project in factory["projects"]:
+            owner[project.lower()] = factory["id"]
+
+    def owner_of(project: Optional[str]) -> Optional[str]:
+        key = (project or "").strip().lower()
+        key = alias_of.get(key, key)
+        if key in owner:
+            return owner[key]
+        for alias, name in alias_of.items():
+            if name == key and alias in owner:
+                return owner[alias]
+        return key if key in ids else None
+    ids = {factory["id"] for factory in factories}
+    return owner_of
+
+
+def print_profile(data: str, project: str) -> int:
+    """`profile`: the factory that claims <project> and its profile, its Rules:
+    lines (never its Learned: lines).
+
+    Prints the factory's name on the first line and each rule after it, in
+    file order, and nothing at all when there is no registry, no factory claims
+    the project, or that factory has no rules. bin/fm-brief.sh owns what a
+    brief does with it."""
+    if not os.path.isfile(os.path.join(data, "factories.md")):
+        return 0
+    factories, _ = load_registry(data, data)
+    fid = project_owner(factories, load_projects(data, data))(project)
+    factory = next((f for f in factories if f["id"] == fid), None)
+    if factory and factory["rules"]:
+        print(factory["name"])
+        for line in factory["rules"]:
+            print(line)
+    return 0
 
 
 # --------------------------------------------------------------------------
@@ -1096,25 +1151,14 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
         since, since_from = now - LOOK_BACK_MAX, "48 hours"
 
     # Project name (and alias) -> factory id.
-    alias_of: Dict[str, str] = {}
-    for row in project_rows:
-        for alias in row["aliases"]:
-            alias_of[alias.lower()] = row["name"].lower()
-    owner: Dict[str, str] = {}
-    for factory in factories:
-        for project in factory["projects"]:
-            owner[project.lower()] = factory["id"]
+    owner_of = project_owner(factories, project_rows)
     other = {"name": "Other work", "id": "other-work", "about": "work no factory claims", "projects": [],
              "rules": [], "learned": [], "routine": []}
 
     def factory_of(project: Optional[str]) -> str:
-        key = (project or "").strip().lower()
-        key = alias_of.get(key, key)
-        if key in owner:
-            return owner[key]
-        for alias, name in alias_of.items():
-            if name == key and alias in owner:
-                return owner[alias]
+        claimed = owner_of(project)
+        if claimed:
+            return claimed
         if other["id"] not in by_id:
             other.update(steered_by=steering.get(other["id"], "Starship"), jobs=[], needs=[], talk=[])
             factories.append(other)
@@ -4003,7 +4047,8 @@ def follow(home: str, task_id: str) -> None:
 def main(argv: List[str]) -> int:
     parser = argparse.ArgumentParser(prog="fm-factory.py", add_help=True,
                                      description="The Factory pane. See the header of this file.")
-    parser.add_argument("command", nargs="?", choices=["view", "follow", "open-tab", "workers", "refresh", "refresh-calls"])
+    parser.add_argument("command", nargs="?", choices=["view", "follow", "open-tab", "workers", "refresh", "refresh-calls",
+                                                          "profile"])
     parser.add_argument("target", nargs="?")
     parser.add_argument("--data", action="store_true")
     parser.add_argument("--plain", action="store_true")
@@ -4014,6 +4059,7 @@ def main(argv: List[str]) -> int:
     parser.add_argument("--origin-tab")
     parser.add_argument("--page")
     parser.add_argument("--item")
+    parser.add_argument("--data-dir")
     try:
         args = parser.parse_args(argv)
     except SystemExit as stop:
@@ -4048,6 +4094,8 @@ def main(argv: List[str]) -> int:
             live(Pane(home, args.factory, in_tab=bool(args.factory and os.environ.get("HERDR_PANE_ID")),
                       item=args.item))
             return 0
+        if args.command == "profile" and args.target:
+            return print_profile(args.data_dir or os.path.join(home, "data"), args.target)
         if args.command == "follow" and args.target:
             follow(home, args.target)
             return 0
