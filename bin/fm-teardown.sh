@@ -420,6 +420,7 @@ for _teardown_source in \
   fm-composer-lib.sh \
   fm-cursor-lib.sh \
   fm-nm-run-lib.sh \
+  fm-task-reap-lib.sh \
   fm-dod-lib.sh \
   fm-wake-lib.sh \
   fm-path-lib.sh \
@@ -454,6 +455,7 @@ unset _teardown_source
 . "$SCRIPT_DIR/fm-nm-run-lib.sh"
 # shellcheck source=bin/fm-task-reap-lib.sh
 . "$SCRIPT_DIR/fm-task-reap-lib.sh"
+TEARDOWN_REAP_REFUSAL="preserving the task's copies for manual inspection or retry"
 # The bounded remote-ref refresh is shared with the done-claim gate.
 # shellcheck source=bin/fm-dod-lib.sh
 . "$SCRIPT_DIR/fm-dod-lib.sh"
@@ -2695,7 +2697,7 @@ reap_task_worktree_processes() {  # <label> <dir>...
   local label=$1
   shift
   command -v lsof >/dev/null 2>&1 || reap_task_backend_process_group "$label"
-  fm_reap_task_processes teardown "$label" "$ID" "$@"
+  fm_reap_task_processes teardown "$label" "$ID" "$TEARDOWN_REAP_REFUSAL" "$@"
 }
 
 require_orca_worktree_path_match() {
@@ -4155,7 +4157,7 @@ if [ "$KIND" != secondmate ] && teardown_owns_worktree; then
 $(fm_nm_task_validation_copies "$WT" "$NM_TEARDOWN_TIMEOUT")
 EOF
     [ "${#TEARDOWN_VALIDATION_COPIES[@]}" -eq 0 ] \
-      || fm_reap_task_processes teardown "validation copy" "$ID" "${TEARDOWN_VALIDATION_COPIES[@]}"
+      || fm_reap_task_processes teardown "validation copy" "$ID" "$TEARDOWN_REAP_REFUSAL" "${TEARDOWN_VALIDATION_COPIES[@]}"
   fi
 elif [ "$KIND" != secondmate ]; then
   reap_task_worktree_processes tasktmp "$TASK_TMP"

@@ -10,12 +10,12 @@
 # fm_reap_task_processes stops every process that sits inside one of the
 # given copies:
 #   - its current working directory is the copy or under it, read from one
-#     bounded system-wide `lsof -a -d cwd` scan per copy (never the recursive
-#     +D walk). A copy that no longer exists still matches: lsof keeps naming
+#     bounded system-wide `lsof -a -d cwd` scan for all copies (never the
+#     recursive +D walk). A copy that no longer exists still matches: lsof keeps naming
 #     the directory a process was started in after it is deleted (Linux adds a
 #     " (deleted)" suffix, which is stripped);
-#   - or one of its arguments is a path strictly inside the copy (the copy
-#     followed by `/`), read from one `ps` listing per scan. The copy's own
+#   - or one of its whitespace-separated arguments starts with the copy
+#     followed by `/`, read from one `ps` listing per scan. The copy's own
 #     path alone never matches, so a terminal multiplexer or editor that was
 #     merely started with the copy as its directory is not mistaken for a
 #     program running from it.
@@ -28,8 +28,9 @@
 # survivor whose identity (start time) still matches, up to three passes.
 # Every stopped process is logged on stderr with its pid and command line.
 # Without lsof only the argument match runs; the caller decides on any extra
-# fallback. Returns 0 when nothing is left, 1 (with a REFUSED line) when a scan
-# fails or a process survives every pass.
+# fallback. Returns 0 when nothing is left, 1 (with a REFUSED line ending in
+# the caller's consequence text) when a scan fails or a process survives every
+# pass.
 # FM_PROC_ROOT_OVERRIDE points the Linux identity read at a fake /proc (tests).
 
 # Absolute resolved spelling of <dir>, which need not exist: the deepest
@@ -48,10 +49,10 @@ fm_reap_resolve_dir() {  # <dir>
   printf '%s%s\n' "$dir" "$rest"
 }
 
-# Pids whose current working directory is <dir> or under it, from one lsof
-# scan. Failure means the scan could not establish a safe result.
-fm_reap_pids_with_cwd_under() {  # <dir> [resolved-dir]
-  local dir=$1 real=${2:-$1} out pid path line
+# Pids whose current working directory is one of <dir>... or under it, from
+# one lsof scan. Failure means the scan could not establish a safe result.
+fm_reap_pids_with_cwd_under() {  # <dir>...
+  local out pid path line dir
   out=$(lsof -a -d cwd -Fpn 2>/dev/null) || return 1
   [ -n "$out" ] || return 0
   pid=
@@ -66,11 +67,14 @@ fm_reap_pids_with_cwd_under() {  # <dir> [resolved-dir]
         [ -n "$pid" ] || return 1
         path=${line#n}
         path=${path% (deleted)}
-        case "$path" in
-          "$dir"|"$dir"/*|"$real"|"$real"/*)
-            printf '%s\n' "$pid"
-            ;;
-        esac
+        for dir in "$@"; do
+          case "$path" in
+            "$dir"|"$dir"/*)
+              printf '%s\n' "$pid"
+              break
+              ;;
+          esac
+        done
         ;;
       '') ;;
       *) return 1 ;;
@@ -92,8 +96,9 @@ fm_reap_own_ancestry() {
   done
 }
 
-# Pids with an argument that is a path strictly inside one of <dir>..., from
-# one ps listing. Failure means the listing could not be read.
+# Pids with a whitespace-separated argument that starts with one of <dir>...
+# followed by `/`, from one ps listing. Failure means the listing could not be
+# read.
 fm_reap_pids_with_args_under() {  # <dir>...
   local out
   out=$(ps -A -ww -o pid= -o args= 2>/dev/null) || return 1
@@ -106,11 +111,9 @@ fm_reap_pids_with_args_under() {  # <dir>...
     {
       pid = $1
       if (pid !~ /^[0-9]+$/) next
-      args = $0; sub(/^[[:space:]]*[0-9]+/, "", args)
-      for (i = 1; i <= ndirs; i++) {
-        d = dirs[i]
-        if (index(args, " " d) || index(args, "=" d) || index(args, ":" d)) { print pid; next }
-      }
+      for (f = 2; f <= NF; f++)
+        for (i = 1; i <= ndirs; i++)
+          if (index($f, dirs[i]) == 1) { print pid; next }
     }' "$@"
 }
 
@@ -149,32 +152,29 @@ fm_reap_pid_list_contains() {  # <pid-list> <pid>
 fm_reap_pids_under_roots() {  # <dir>...
   FM_REAP_PIDS=
   FM_REAP_FAILED_DIR=
-  local dir real dir_pids pids="" have_lsof=0
-  local -a arg_dirs=()
-  command -v lsof >/dev/null 2>&1 && have_lsof=1
+  local dir real cwd_pids="" arg_pids
+  local -a dirs=()
   for dir in "$@"; do
     [ -n "$dir" ] || continue
     if ! real=$(fm_reap_resolve_dir "$dir"); then
       FM_REAP_FAILED_DIR=$dir
       return 1
     fi
-    arg_dirs+=("$dir")
-    [ "$real" = "$dir" ] || arg_dirs+=("$real")
-    [ "$have_lsof" = 1 ] || continue
-    if ! dir_pids=$(fm_reap_pids_with_cwd_under "$dir" "$real"); then
-      FM_REAP_FAILED_DIR=$dir
-      return 1
-    fi
-    pids="$pids
-$dir_pids"
+    dirs+=("$dir")
+    [ "$real" = "$dir" ] || dirs+=("$real")
   done
-  [ "${#arg_dirs[@]}" -gt 0 ] || return 0
-  if ! dir_pids=$(fm_reap_pids_with_args_under "${arg_dirs[@]}"); then
-    FM_REAP_FAILED_DIR=${arg_dirs[0]}
+  [ "${#dirs[@]}" -gt 0 ] || return 0
+  if command -v lsof >/dev/null 2>&1 \
+     && ! cwd_pids=$(fm_reap_pids_with_cwd_under "${dirs[@]}"); then
+    FM_REAP_FAILED_DIR=${dirs[0]}
     return 1
   fi
-  pids="$pids
-$dir_pids"
+  if ! arg_pids=$(fm_reap_pids_with_args_under "${dirs[@]}"); then
+    FM_REAP_FAILED_DIR=${dirs[0]}
+    return 1
+  fi
+  local pids="$cwd_pids
+$arg_pids"
   FM_REAP_PIDS=$(printf '%s\n' "$pids" | grep -E '^[0-9]+$' | sort -un \
     | grep -Fxv -f <(fm_reap_own_ancestry; printf '%s\n' "$$") || true)
 }
@@ -188,18 +188,19 @@ fm_reap_log_processes() {  # <prefix> <pid>...
   done
 }
 
-fm_reap_scan_refusal() {  # <id>
-  echo "REFUSED: cannot determine leaked processes under ${FM_REAP_FAILED_DIR:-<missing>} for $1 (lsof failed); preserving the task's copies for manual inspection or retry." >&2
+fm_reap_scan_refusal() {  # <id> <consequence>
+  echo "REFUSED: cannot determine leaked processes under ${FM_REAP_FAILED_DIR:-<missing>} for $1 (lsof failed); $2." >&2
 }
 
 # Stop every process inside <dir>... for task <id>; <label> names the copies
-# in log lines and <who> prefixes them (teardown, relaunch).
-fm_reap_task_processes() {  # <who> <label> <id> <dir>...
-  local who=$1 label=$2 id=$3 pids pid identity current_pids i pass=1 max_passes=3
+# in log lines, <who> prefixes them (teardown, relaunch), and <consequence>
+# ends every REFUSED line with what the caller does about a refusal.
+fm_reap_task_processes() {  # <who> <label> <id> <consequence> <dir>...
+  local who=$1 label=$2 id=$3 consequence=$4 pids pid identity current_pids i pass=1 max_passes=3
   local -a tracked_pids tracked_identities remaining_pids remaining_identities
-  shift 3
+  shift 4
   while [ "$pass" -le "$max_passes" ]; do
-    fm_reap_pids_under_roots "$@" || { fm_reap_scan_refusal "$id"; return 1; }
+    fm_reap_pids_under_roots "$@" || { fm_reap_scan_refusal "$id" "$consequence"; return 1; }
     pids=$FM_REAP_PIDS
     [ -n "$pids" ] || return 0
     tracked_pids=()
@@ -207,9 +208,9 @@ fm_reap_task_processes() {  # <who> <label> <id> <dir>...
     while IFS= read -r pid; do
       [ -n "$pid" ] || continue
       if ! identity=$(fm_reap_process_identity "$pid"); then
-        fm_reap_pids_under_roots "$@" || { fm_reap_scan_refusal "$id"; return 1; }
+        fm_reap_pids_under_roots "$@" || { fm_reap_scan_refusal "$id" "$consequence"; return 1; }
         if fm_reap_pid_list_contains "$FM_REAP_PIDS" "$pid"; then
-          echo "REFUSED: cannot verify leaked process $pid identity for $id; preserving the task's copies for manual inspection or retry." >&2
+          echo "REFUSED: cannot verify leaked process $pid identity for $id; $consequence." >&2
           return 1
         fi
         continue
@@ -223,7 +224,7 @@ EOF
       pass=$((pass + 1))
       continue
     fi
-    fm_reap_pids_under_roots "$@" || { fm_reap_scan_refusal "$id"; return 1; }
+    fm_reap_pids_under_roots "$@" || { fm_reap_scan_refusal "$id" "$consequence"; return 1; }
     current_pids=$FM_REAP_PIDS
     echo "$who: reaping leaked $label process(es) for $id: $(printf '%s' "$pids" | tr '\n' ' ')" >&2
     fm_reap_log_processes "$who: stopping" "${tracked_pids[@]}"
@@ -236,7 +237,7 @@ EOF
       fi
     done
     sleep 1
-    fm_reap_pids_under_roots "$@" || { fm_reap_scan_refusal "$id"; return 1; }
+    fm_reap_pids_under_roots "$@" || { fm_reap_scan_refusal "$id" "$consequence"; return 1; }
     current_pids=$FM_REAP_PIDS
     remaining_pids=()
     remaining_identities=()
@@ -251,7 +252,7 @@ EOF
     done
     if [ "${#remaining_pids[@]}" -gt 0 ]; then
       echo "$who: force-killing leaked $label process(es) for $id: ${remaining_pids[*]}" >&2
-      fm_reap_pids_under_roots "$@" || { fm_reap_scan_refusal "$id"; return 1; }
+      fm_reap_pids_under_roots "$@" || { fm_reap_scan_refusal "$id" "$consequence"; return 1; }
       current_pids=$FM_REAP_PIDS
       for i in "${!remaining_pids[@]}"; do
         pid=${remaining_pids[$i]}
@@ -264,8 +265,8 @@ EOF
     fi
     pass=$((pass + 1))
   done
-  fm_reap_pids_under_roots "$@" || { fm_reap_scan_refusal "$id"; return 1; }
+  fm_reap_pids_under_roots "$@" || { fm_reap_scan_refusal "$id" "$consequence"; return 1; }
   [ -z "$FM_REAP_PIDS" ] && return 0
-  echo "REFUSED: leaked $label processes for $id remain after $max_passes reap attempts; preserving the task's copies for manual inspection or retry." >&2
+  echo "REFUSED: leaked $label processes for $id remain after $max_passes reap attempts; $consequence." >&2
   return 1
 }

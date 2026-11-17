@@ -1246,7 +1246,7 @@ reap_finished_validation_copies() {
 $(fm_nm_task_validation_copies "$WT" 10)
 EOF
   [ "${#copies[@]}" -gt 0 ] || return 0
-  fm_reap_task_processes relaunch "validation copy" "$ID" "${copies[@]}" \
+  fm_reap_task_processes relaunch "validation copy" "$ID" "leaving them running" "${copies[@]}" \
     || echo "warning: some processes left in $ID's finished validation copies could not be stopped; relaunching anyway" >&2
 }
 
