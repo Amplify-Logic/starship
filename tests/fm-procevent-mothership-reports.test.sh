@@ -103,8 +103,8 @@ in_home() {
     MS_STUB="$h/stub" FM_MOTHERSHIP_BIN="$STUB_BIN/mothership" MOTHERSHIP_CONFIG="$h/rooms.json" "$@"
 }
 
-add_task() {  # <dir> <task-id> <repo> <body>
-  in_home "$1" "$ROOT/bin/fm-tasks-axi.sh" add "$2" "Room work for $2" --kind ship --repo "$3" --body "$4" >/dev/null \
+add_task() {  # <dir> <task-id> <repo> <body> [kind]
+  in_home "$1" "$ROOT/bin/fm-tasks-axi.sh" add "$2" "Room work for $2" --kind "${5:-ship}" --repo "$3" --body "$4" >/dev/null \
     || fail "could not file $2"
 }
 
@@ -408,6 +408,40 @@ test_a_dropped_job_leaves_the_view() {
   pass "a job cleaned up without landing is taken off the view once, and a long task id fits the room"
 }
 
+test_a_finished_report_settles_the_card() {
+  local h out
+  need_tools || return 0
+  h=$(make_home finished)
+  add_task "$h" room-r1 studio "Look into it for the room. mothership: alpha/r1." scout
+  out=$(in_home "$h" "$ADAPTER" report room-r1 finished 2>&1) || fail "report finished failed: $out"
+  assert_equals "told: room-r1: the alpha room heard that it finished with a report" "$out" "finished is told"
+  out=$(in_home "$h" "$ADAPTER" report room-r1 finished 2>&1) || fail "report finished again failed: $out"
+  assert_contains "$out" "already told" "a repeat is not sent again"
+  out=$(in_home "$h" "$ADAPTER" report room-r1 pr --pr "$PR_URL" 2>&1) || fail "a late report failed: $out"
+  assert_contains "$out" "already heard that it finished with a report" "nothing follows the finished line"
+  out=$(in_home "$h" "$ADAPTER" report room-r1 dropped 2>&1) || fail "a card's drop failed: $out"
+  assert_contains "$out" "nothing to report" "a card hears nothing of a cleanup"
+
+  add_task "$h" room-r2 sample "A guide for the room. mothership: alpha/r2. The room may read it: mothership-report: https://docs.example.test/r2." scout
+  add_task "$h" room-r3 sample "A draft. mothership: alpha/r3. mothership-report: /private/notes/r3.md" scout
+  in_home "$h" "$ADAPTER" report room-r2 finished >/dev/null 2>&1 || fail "report finished with a pointer failed"
+  in_home "$h" "$ADAPTER" report room-r3 finished >/dev/null 2>&1 || fail "report finished with a local pointer failed"
+  assert_equals "$(cat <<'EOF'
+result card=r1 room=alpha project=studio tags=alpha link= cid=fm-room-r1-finished text=Done: finished with a report, which the ship's owner holds.
+result card=r2 room=alpha project=sample tags= link=https://docs.example.test/r2 cid=fm-room-r2-finished text=Done: finished with a report.
+result card=r3 room=alpha project=sample tags= link= cid=fm-room-r3-finished text=Done: finished with a report, which the ship's owner holds.
+EOF
+)" "$(sent_of "$h")" "each card heard one fixed finished line, with a link only for a report the task names for the room"
+  [ -z "$(wakes_of "$h")" ] || fail "a told card woke the first mate: $(wakes_of "$h")"
+
+  add_task "$h" job-r4 sample "A report on shared work, with no card." scout
+  in_home "$h" "$ADAPTER" report job-r4 started >/dev/null 2>&1 || fail "report started for a job failed"
+  out=$(in_home "$h" "$ADAPTER" report job-r4 finished 2>&1) || fail "report finished for a job failed: $out"
+  assert_equals "drop id=job-r4 room=alpha project=sample tags= cid=fm-job-r4-dropped" "$(sent_of "$h" | tail -n 1)" \
+    "a job that finished with a report leaves the Ships view as a cleanup does"
+  pass "a report-only task's card hears one fixed finished line, with a link only when the task names one for the room, and nothing after it"
+}
+
 test_a_private_project_tells_no_room() {
   local h out event
   need_tools || return 0
@@ -419,7 +453,7 @@ test_a_private_project_tells_no_room() {
   add_task "$h" open-j1 studio "Ordinary work for a shared project."
   printf 'blocked [at=1790000100]: the build needs a key\n' > "$h/home/state/priv-c1.status"
   printf 'blocked [at=1790000100]: the build needs a key\n' > "$h/home/state/priv-j1.status"
-  for event in started blocked merged; do
+  for event in started blocked merged finished; do
     out=$(in_home "$h" "$ADAPTER" report priv-c1 "$event" 2>&1) || fail "card report $event failed: $out"
     assert_equals "nothing to report: priv-c1 is private work, which config/private-projects keeps from every room" "$out" "a private card hears nothing of $event"
     out=$(in_home "$h" "$ADAPTER" report priv-j1 "$event" 2>&1) || fail "job report $event failed: $out"
@@ -684,6 +718,58 @@ test_teardown_drops_an_unlanded_job() {
   pass "cleaning up a job that never landed takes it off the Ships view"
 }
 
+test_teardown_tells_the_card_a_report_finished() {
+  local h task=room-sc1 out
+  need_tools || return 0
+  h=$(make_home lifecycle-report)
+  make_lifecycle "$h" "$task"
+  add_task "$h" "$task" sample "Investigate for the room. mothership: alpha/c13" scout
+  out=$(in_lifecycle "$h" "$ROOT/bin/fm-spawn.sh" "$task" "$PROJ_DIR" --scout 2>&1) || fail "scout spawn failed: $out"
+  wait_for_sent "$h" 1 || fail "dispatch did not tell the card: $(sent_of "$h")"
+  printf '# Findings\nSecret detail the room must never read.\n' > "$h/home/data/$task/report.md"
+  printf 'done [at=1790000600]: report written\n' >> "$h/home/state/$task.status"
+  in_lifecycle "$h" "$ROOT/bin/fm-captain-hold.sh" complete "$task" --none >/dev/null 2>&1 || fail "the report's completion gate failed"
+  out=$(in_lifecycle "$h" "$ROOT/bin/fm-teardown.sh" "$task" 2>&1) || fail "scout cleanup failed: $out"
+  wait_for_sent "$h" 2 || fail "cleanup did not tell the card the report finished: $(sent_of "$h") ($out)"
+  sleep 0.5
+  assert_equals "result card=c13 room=alpha project=sample tags= link= cid=fm-$task-finished text=Done: finished with a report, which the ship's owner holds." \
+    "$(sent_of "$h" | sed -n 2p)" "cleaning up a scout with its report tells the card it finished"
+  assert_equals 2 "$(sent_of "$h" | grep -c .)" "the card heard nothing else"
+  if sent_of "$h" | grep -q 'Secret detail'; then fail "the report's own words reached the room"; fi
+
+  h=$(make_home lifecycle-report-nolink)
+  task=room-sc2
+  rm -f "$h/rooms.json"
+  make_lifecycle "$h" "$task" no-state
+  add_task "$h" "$task" sample "Investigate. mothership: alpha/c14" scout
+  out=$(in_lifecycle "$h" "$ROOT/bin/fm-spawn.sh" "$task" "$PROJ_DIR" --scout 2>&1) || fail "scout spawn with no link failed: $out"
+  printf '# Findings\n' > "$h/home/data/$task/report.md"
+  in_lifecycle "$h" "$ROOT/bin/fm-captain-hold.sh" complete "$task" --none >/dev/null 2>&1 || fail "the report's completion gate failed"
+  out=$(in_lifecycle "$h" "$ROOT/bin/fm-teardown.sh" "$task" 2>&1) || fail "scout cleanup with no link failed: $out"
+  sleep 0.5
+  [ ! -e "$h/home/state/mothership" ] || fail "a home with no room link created state: $(ls -R "$h/home/state/mothership")"
+  [ -z "$(sent_of "$h")" ] || fail "a home with no room link sent something: $(sent_of "$h")"
+
+  h=$(make_home lifecycle-report-down)
+  task=room-sc3
+  make_lifecycle "$h" "$task"
+  add_task "$h" "$task" sample "Investigate. mothership: alpha/c15" scout
+  touch "$h/stub/down"
+  out=$(in_lifecycle "$h" "$ROOT/bin/fm-spawn.sh" "$task" "$PROJ_DIR" --scout 2>&1) || fail "scout spawn with the room down failed: $out"
+  printf '# Findings\n' > "$h/home/data/$task/report.md"
+  in_lifecycle "$h" "$ROOT/bin/fm-captain-hold.sh" complete "$task" --none >/dev/null 2>&1 || fail "the report's completion gate failed"
+  touch "$h/stub/slow"
+  out=$(in_lifecycle "$h" "$ROOT/bin/fm-teardown.sh" "$task" 2>&1) || fail "scout cleanup failed because the room was down: $out"
+  [ ! -e "$h/home/state/$task.meta" ] || fail "cleanup did not finish with the room down"
+  for _ in $(seq 1 100); do
+    wakes_of "$h" | grep -q 'not told that it finished with a report' && break
+    sleep 0.1
+  done
+  assert_contains "$(wakes_of "$h")" "the alpha room's card for $task was not told that it finished with a report" "the failed send is reported to the first mate"
+  assert_contains "$(wakes_of "$h")" "report $task finished sends it again" "the wake names how to send it again"
+  pass "cleaning up a scout with its report tells the card it finished, sends nothing without a link, and finishes whatever the room does"
+}
+
 test_lifecycle_without_a_link_or_with_a_failing_room() {
   local h task=job-nl1 out
   need_tools || return 0
@@ -731,6 +817,7 @@ fm_test_run \
   test_a_local_landing_reports_to_the_card \
   test_a_shared_job_shows_each_state \
   test_a_dropped_job_leaves_the_view \
+  test_a_finished_report_settles_the_card \
   test_a_private_project_tells_no_room \
   test_a_resolved_line_puts_a_job_back_to_work \
   test_a_failure_is_told_to_the_card_and_the_job \
@@ -738,4 +825,5 @@ fm_test_run \
   test_a_failing_job_report_tells_the_first_mate \
   test_lifecycle_steps_show_a_job \
   test_teardown_drops_an_unlanded_job \
+  test_teardown_tells_the_card_a_report_finished \
   test_lifecycle_without_a_link_or_with_a_failing_room

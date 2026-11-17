@@ -76,9 +76,9 @@
 #            "You decide", and a delegated tap or the seven-day default leaves
 #            it held for the owner.
 # report     Tell the room how a task goes (see OUTCOMES IN THE ROOM below);
-#            <event> is started, working, waits, blocked, failed, pr, merged
-#            or dropped. Prints one line: told, already told, nothing to report,
-#            or failed. Exits 1 only when the room was not told. --detach
+#            <event> is started, working, waits, blocked, failed, pr, merged,
+#            finished or dropped. Prints one line: told, already told, nothing
+#            to report, or failed. Exits 1 only when the room was not told. --detach
 #            returns at once and sends from a separate process group, and does
 #            nothing in a home with no room link (bin/fm-mothership-report-lib.sh
 #            fm_mothership_linked).
@@ -160,7 +160,9 @@
 # relaunch); working, waits, blocked and failed from blocked-scan; pr from
 # bin/fm-pr-check.sh when a PR is recorded (never the merge-time re-record);
 # merged from bin/fm-merge-outcome-lib.sh and bin/fm-merge-local.sh on a
-# confirmed merge; dropped from bin/fm-teardown.sh at cleanup. A task of a
+# confirmed merge; finished from bin/fm-teardown.sh at the cleanup of work that
+# ends in a report (data/<task-id>/report.md, no PR, not a --force discard),
+# and dropped from it at any other cleanup. A task of a
 # project in config/private-projects tells no room anything, card or job,
 # whatever a room's allow-list says, and while that list is there but cannot
 # be read no task tells any room anything.
@@ -176,14 +178,19 @@
 #   failed   `problem`, "Stopped on a failure; looking into it.", once for
 #            each new failed: line;
 #   merged   `result`, "Done: the change has landed.", with --link <url> for a
-#            PR, which settles this ship's part of the card.
+#            PR, which settles this ship's part of the card;
+#   finished `result`, "Done: finished with a report, which the ship's owner
+#            holds.", which settles it the same way. The report's own words
+#            never go: only when the task's body also names an address for
+#            the room, `mothership-report: <https-url>`, does it say "Done:
+#            finished with a report." with --link <url>.
 # A card hears nothing of working, waits or dropped. Each runs in the task's project (its backlog repo), with a --tag for every
 # tag the room's allow-list names that project with when it never names it
 # without tags, so the link's allow-list and private word check apply to it as
 # to everything else the link sends; and with a client id fixed per task and
 # event (and per blocker), so a retry counts once in the room. A task with no
 # ref is no card's, and is told as a job below. Nothing is sent twice for one event,
-# and nothing but the merged line after it. A send the link refuses or cannot
+# and nothing after the merged or finished line. A send the link refuses or cannot
 # make is not retried: it wakes the first mate with one `check:
 # mothership-report: ...` line naming the task, the event, the reason and the
 # command that sends it again, and it never changes the outcome of the step
@@ -209,7 +216,7 @@
 #   pr       --state landing, "Built and about to land.", --link <url>;
 #   merged   --state done, "Landed.", with --link <url> for a PR;
 #   dropped  --drop, which takes it off the view, unless it landed, whose
-#            landing the room keeps for a day.
+#            landing the room keeps for a day; finished is told as dropped.
 # Status lines from before the room followed the task are not told, and a new
 # line that leaves the job's state as it was sends nothing. The allow-list
 # tags, the word check, the client ids and a failed send work as for a card,
@@ -1167,11 +1174,13 @@ newest_state() {  # <task-id>
 }
 
 # What the backlog says of a task, as one JSON object {room, card, project,
-# title}: the card from the `mothership: <room>/<card>` ref in its body (both
-# empty when it names none), its project (empty when it names none) and its
-# title. Fails 2 when the task cannot be read.
+# title, report}: the card from the `mothership: <room>/<card>` ref in its body
+# (both empty when it names none), its project (empty when it names none), its
+# title, and the address its body names for the room to read its report by,
+# `mothership-report: <https-url>` (empty when it names none). Fails 2 when the
+# task cannot be read.
 task_info() {  # <task-id>
-  local shown body repo title ref room card
+  local shown body repo title ref room card report
   shown=$("$SCRIPT_DIR/fm-tasks-axi.sh" show "$1" --full 2>/dev/null) || return 2
   # tasks-axi quotes a value only when it has to, so each is read either way.
   body=$(printf '%s\n' "$shown" | sed -n 's/^  body: //p' | head -n 1 \
@@ -1181,14 +1190,18 @@ task_info() {  # <task-id>
     | head -n 1 | sed -e 's/^[^m]*mothership: //' -e 's/\.*$//')
   room=${ref%%/*} card=${ref#*/}
   room_valid "$room" && [[ "$card" =~ ^[A-Za-z0-9_.-]{1,80}$ ]] || room='' card=''
+  report=$(printf '%s\n' "$body" \
+    | LC_ALL=C grep -oE "(^|[[:space:]\"'\`(])mothership-report: https://[!-~]+" \
+    | head -n 1 | sed -e 's/^[^m]*mothership-report: //' -e "s/[].,;:!?)\"'\`]*\$//")
+  [[ "$report" =~ ^https://[!-~]+$ ]] && [ "${#report}" -le 500 ] || report=''
   repo=$(printf '%s\n' "$shown" | sed -n 's/^  repo: //p' | head -n 1 \
     | jq -Rr '. as $raw | (try fromjson catch $raw) | tostring' 2>/dev/null || true)
   [[ "$repo" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] || repo=
   title=$(printf '%s\n' "$shown" | sed -n 's/^  title: //p' | head -n 1 \
     | jq -Rr '. as $raw | (try fromjson catch $raw) | tostring' 2>/dev/null || true)
   title=$(sanitize_line "$title" 120)
-  jq -cn --arg room "$room" --arg card "$card" --arg project "$repo" --arg title "$title" \
-    '{room: $room, card: $card, project: $project, title: $title}'
+  jq -cn --arg room "$room" --arg card "$card" --arg project "$repo" --arg title "$title" --arg report "$report" \
+    '{room: $room, card: $card, project: $project, title: $title, report: $report}'
 }
 
 # Whether <project> may be told to any room: never for a project in
@@ -1239,6 +1252,7 @@ event_words() {  # <event>
     blocked) printf 'it is held up by a blocker' ;;
     failed) printf 'it stopped on a failure' ;;
     merged) printf 'it landed' ;;
+    finished) printf 'it finished with a report' ;;
     dropped) printf 'it was dropped' ;;
   esac
 }
@@ -1274,8 +1288,8 @@ link_send() {  # <args...>
   return "$rc"
 }
 
-report_locked() {  # <task-id> <event> <pr> <room> <card> <project>
-  local task=$1 event=$2 pr=$3 room=$4 card=$5 project=$6 rec key verb text sig tag reason
+report_locked() {  # <task-id> <event> <pr> <room> <card> <project> [<report-url>]
+  local task=$1 event=$2 pr=$3 room=$4 card=$5 project=$6 report=${7-} rec key verb text sig tag reason settled
   local -a args=()
   rec=$(task_record "$task")
   if [ -f "$rec" ]; then
@@ -1301,13 +1315,22 @@ report_locked() {  # <task-id> <event> <pr> <room> <card> <project>
       fi
       ;;
     merged) key=merged verb=result text="Done: the change has landed." ;;
+    finished)
+      key=finished verb=result
+      if [ -n "$report" ]; then
+        text="Done: finished with a report."
+      else
+        text="Done: finished with a report, which the ship's owner holds."
+      fi
+      ;;
   esac
   if jq -e --arg k "$key" '(.sent // []) | index($k) != null' "$rec" >/dev/null 2>&1; then
     printf 'already told: %s: the %s room already heard that %s\n' "$task" "$room" "$(event_words "$event")"
     return 0
   fi
-  if [ "$event" != merged ] && jq -e '(.sent // []) | index("merged") != null' "$rec" >/dev/null 2>&1; then
-    printf 'already told: %s: the %s room already heard that it landed\n' "$task" "$room"
+  settled=$(jq -r '(.sent // []) | map(select(. == "merged" or . == "finished")) | .[0] // ""' "$rec" 2>/dev/null || true)
+  if [ -n "$settled" ]; then
+    printf 'already told: %s: the %s room already heard that %s\n' "$task" "$room" "$(event_words "$settled")"
     return 0
   fi
   if [ -z "$project" ]; then
@@ -1320,6 +1343,7 @@ report_locked() {  # <task-id> <event> <pr> <room> <card> <project>
   done < <(room_tags "$room" "$project")
   [ "$event" != pr ] || args+=(--landing)
   [ "$event" != merged ] || [ -z "$pr" ] || args+=(--link "$pr")
+  [ "$event" != finished ] || [ -z "$report" ] || args+=(--link "$report")
   args+=(--cid "fm-$task-$key" "$text")
   if ! reason=$(link_send "${args[@]}"); then
     report_failed "$task" "$event" "$key" "$room" "$pr" "$reason"
@@ -1429,7 +1453,7 @@ EOF
 }
 
 cmd_report() {
-  local detach=0 task event pr='' rec info found=0 room card project title rooms rc
+  local detach=0 task event pr='' rec info found=0 room card project title report rooms rc
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --detach) detach=1; shift ;;
@@ -1449,8 +1473,8 @@ cmd_report() {
   done
   fm_pr_task_id_valid "$task" || die "not a task id: $task"
   case "$event" in
-    started|working|waits|blocked|failed|pr|merged|dropped) ;;
-    *) die "not an event: $event (started, working, waits, blocked, failed, pr, merged or dropped)" ;;
+    started|working|waits|blocked|failed|pr|merged|finished|dropped) ;;
+    *) die "not an event: $event (started, working, waits, blocked, failed, pr, merged, finished or dropped)" ;;
   esac
   [ -z "$pr" ] || [[ "$pr" =~ ^https://[!-~]+$ ]] || die "not a PR address: $pr"
   [ "$event" != pr ] || [ -n "$pr" ] || die "report pr needs --pr <url>"
@@ -1470,12 +1494,12 @@ cmd_report() {
   if [ "$rc" -eq 0 ]; then
     found=1
   elif [ -f "$rec" ]; then
-    info=$(jq -ce '{room: (.room // ""), card: (.card // ""), project: (.project // ""), title: (.title // "")}
+    info=$(jq -ce '{room: (.room // ""), card: (.card // ""), project: (.project // ""), title: (.title // ""), report: ""}
       | select(all(.[]; type == "string"))' "$rec" 2>/dev/null) && found=1
   fi
   [ "$found" = 1 ] || { printf 'nothing to report: %s serves no room card and is no job of a shared project\n' "$task"; return 0; }
   room=$(jq -r '.room' <<<"$info") card=$(jq -r '.card' <<<"$info")
-  project=$(jq -r '.project' <<<"$info") title=$(jq -r '.title' <<<"$info")
+  project=$(jq -r '.project' <<<"$info") title=$(jq -r '.title' <<<"$info") report=$(jq -r '.report' <<<"$info")
   if project_private "$project"; then
     printf 'nothing to report: %s is private work, which config/private-projects keeps from every room\n' "$task"
     return 0
@@ -1489,9 +1513,10 @@ cmd_report() {
         ;;
     esac
     state_prepare
-    with_task_lock "$task" report_locked "$task" "$event" "$pr" "$room" "$card" "$project"
+    with_task_lock "$task" report_locked "$task" "$event" "$pr" "$room" "$card" "$project" "$report"
     return
   fi
+  [ "$event" != finished ] || event=dropped
   # A job of the ship's own goes only to the rooms its project is shared with.
   [[ "$project" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] && rooms=$(shared_rooms "$project") && [ -n "$rooms" ] || {
     printf 'nothing to report: %s serves no room card and its project is shared with no room\n' "$task"
