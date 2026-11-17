@@ -1805,7 +1805,13 @@ MD
   printf '{"schema":"fm-tap-shapes.v1","decisions":[{"id":"cup-gift","identity":"2026-11-13T09:00:00Z#0","title":"Gift wrapping at checkout","question":"Wrap by default or as an option?","options":["by default","as an option"],"recommended_option":"as an option","recommendation":"as an option","held_since":"2026-11-13T09:00:00Z"}],"not_shown":[]}\n' \
     > "$HOME_FIX/shapes.json"
   bash "$ROOT/bin/fm-fleet-snapshot.sh" --json > "$HOME_FIX/whole.json" || fail "the whole snapshot failed"
-  light=$(unset FM_FACTORY_SNAPSHOT; python3 "$FACTORY" --data --fresh) || fail "the pane could not read the light snapshot"
+  # The overview's stand-in reader folds the same fleet in both runs; only the
+  # pane's own snapshot differs.
+  printf '#!/usr/bin/env bash\nFM_FACTORY_SNAPSHOT=%q exec %q "$@"\n' "$HOME_FIX/whole.json" "$BINDIR/crew-state" \
+    > "$TMP_ROOT/case$CASE/crew-state"
+  chmod +x "$TMP_ROOT/case$CASE/crew-state"
+  light=$(unset FM_FACTORY_SNAPSHOT; FM_FLEET_STATE_READER="$TMP_ROOT/case$CASE/crew-state" python3 "$FACTORY" --data --fresh) \
+    || fail "the pane could not read the light snapshot"
   whole=$(FM_FACTORY_SNAPSHOT="$HOME_FIX/whole.json" python3 "$FACTORY" --data --fresh) \
     || fail "the pane could not read the whole snapshot"
   printf '%s' "$light" | jq -e '([.needs_you[] | select(.id == "cup-gift")] | length) == 1
