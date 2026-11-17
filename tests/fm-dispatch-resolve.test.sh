@@ -1461,6 +1461,25 @@ reset_log
 run code out err "$TASK_BRIEF" --project pager
 assert_contains "$err" 'dispatch-resolve: off (' "the keyless run is off"
 assert_equals 'off null' "$(jq -r '"\(.status) \(.profile)"' "$TASK_RECORD")" "an off run records off so fm-spawn accepts the manual intake"
+# A withheld brief is off too, so fm-spawn accepts the manual intake without a hand-written record.
+printf 'pager\n' > "$HOME_DIR/config/private-projects"
+reset_log
+TYPESAFE_API_KEY=$KEY run code out err "$TASK_BRIEF" --project pager
+assert_contains "$err" 'project pager is never sent' "the private-project run is withheld"
+assert_equals 'pager-fix off null' "$(jq -r '"\(.task) \(.status) \(.profile)"' "$TASK_RECORD")" "a private-project run records off"
+rm -f "$HOME_DIR/config/private-projects"
+mkdir "$HOME_DIR/config/private-projects"
+reset_log
+TYPESAFE_API_KEY=$KEY run code out err "$TASK_BRIEF" --project pager
+assert_contains "$err" 'config/private-projects is not a readable regular file' "an unreadable private-projects list is withheld"
+assert_equals 'pager-fix off null' "$(jq -r '"\(.task) \(.status) \(.profile)"' "$TASK_RECORD")" "an unreadable private-projects list records off"
+rmdir "$HOME_DIR/config/private-projects"
+printf 'pager\n' > "$HOME_DIR/config/dispatch-never-send"
+reset_log
+TYPESAFE_API_KEY=$KEY run code out err "$TASK_BRIEF" --project pager
+assert_contains "$err" 'nothing sent)' "the never-send run is withheld"
+assert_equals 'pager-fix off null' "$(jq -r '"\(.task) \(.status) \(.profile)"' "$TASK_RECORD")" "a never-send run records off"
+rm -f "$HOME_DIR/config/dispatch-never-send"
 mv "$RULES" "$RULES.keep"
 printf '{"broken":\n' > "$RULES"
 TYPESAFE_API_KEY=$KEY run code out err "$TASK_BRIEF" --project pager
