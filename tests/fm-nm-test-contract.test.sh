@@ -51,6 +51,7 @@ test_nm_test_instruction_paths_exist() {
   command -v ruby >/dev/null 2>&1 \
     || fail "ruby is required to parse .no-mistakes.yaml for this contract"
   local paths path missing=
+  # shellcheck disable=SC2016
   paths=$(ruby -ryaml -e '
 doc = YAML.load_file(ARGV[0]) || {}
 test = doc["test"].is_a?(Hash) ? doc["test"] : {}
