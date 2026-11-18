@@ -85,7 +85,7 @@ The pane asks the terminal for mouse reports to see the wheel, so Herdr's own te
 The pane asks for mouse button reports too, so a click on a `Read the report` line reads that item; a click anywhere else does nothing.
 
 Colour only repeats what the words already say: cyan is where you are, amber is work under way, green is done or ready to merge, red is a decision for you.
-The pane selects light or dark colours from the terminal background at startup, including the highlighted rows; plain-text output is unchanged.
+The pane and the worker copies in a factory's tab select light or dark colours from the terminal background at startup, including the highlighted rows; plain-text output is unchanged.
 [Terminal theme](fork-configuration.md#terminal-theme-fm_terminal_theme) owns detection, fallback and the override.
 
 ## Reading the work
