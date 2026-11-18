@@ -57,6 +57,8 @@
 #   FM_HOME                       the home whose crew is shown. Unset, the home
 #                                 `install` recorded is used, else this code root.
 #   HERDR_BIN_PATH                the Herdr binary (default: herdr on PATH)
+#   FM_TERMINAL_THEME             auto (default), light or dark; detection is
+#                                 owned by bin/fm_terminal_theme.py
 # Test seams:
 #   FM_BRIDGE_STRIP_PMSET         battery reader run as `<cmd> -g batt`; empty
 #                                 for no battery (default: pmset on a Mac only)
@@ -111,6 +113,24 @@ CYAN=$(fg '116;215;234')
 AMBER=$(fg '255;182;72')
 GREEN=$(fg '98;221;154')
 RED=$(fg '255;122;107')
+
+# Detect once, before reading clicks or drawing, never in render_frame.
+# Keep the original dark colours if Python is unavailable.
+init_colours() {
+  local query='' hull ice mist faint off cyan amber green red
+  [ ! -t 1 ] || query=--query
+  if command -v python3 >/dev/null 2>&1; then
+    {
+      IFS= read -r hull && IFS= read -r ice && IFS= read -r mist \
+        && IFS= read -r faint && IFS= read -r off && IFS= read -r cyan \
+        && IFS= read -r amber && IFS= read -r green && IFS= read -r red
+    } < <(python3 "$SCRIPT_DIR/fm_terminal_theme.py" ${query:+"$query"}) || return 0
+    HULL_BG="${E}[48;2;${hull}m"
+    ICE=$(fg "$ice"); MIST=$(fg "$mist"); FAINT=$(fg "$faint")
+    LAMP_OFF=$(fg "$off"); CYAN=$(fg "$cyan"); AMBER=$(fg "$amber")
+    GREEN=$(fg "$green"); RED=$(fg "$red")
+  fi
+}
 BOLD="${E}[1m"
 UNBOLD="${E}[22m"
 RESET="${E}[0m"
@@ -700,6 +720,7 @@ cmd_render() {
     shift
   done
   case "$width$height" in ''|*[!0-9]*) usage; exit 2 ;; esac
+  init_colours
   render_frame "$(resolve_home)" "$width" "$height"
   printf '%s\n' "$FRAME"
 }
@@ -862,6 +883,7 @@ track_reading() {
 
 cmd_run() {
   local home sleeper interval tick
+  init_colours
   # FM_BRIDGE_STRIP_INTERVAL is a test seam for faster frames, not a setting.
   interval=$(fm_status_ttl "${FM_BRIDGE_STRIP_INTERVAL:-}" 5)
   [ "$interval" -gt 0 ] || interval=5

@@ -590,6 +590,8 @@ test_the_plain_screen_is_the_record_as_text() {
   write_world
   local out
   out=$(python3 "$FACTORY" --plain --width 92) || fail "--plain failed"
+  assert_equals "$(FM_TERMINAL_THEME=light python3 "$FACTORY" --plain --width 92)" "$out" "light leaves plain output unchanged"
+  assert_equals "$(FM_TERMINAL_THEME=dark python3 "$FACTORY" --plain --width 92)" "$out" "dark leaves plain output unchanged"
   assert_contains "$out" " STARSHIP  │  2 busy  ·  2 decisions for you  ·  1 ready to merge  ·  1 idle" "count line"
   assert_equals "$(printf '%s\n' "$out" | grep -F ' ▸ ● ' | tr -s ' ')" \
     " ▸ ● Harvest chart Garden Journal · waiting 3 h" "the cursor starts on the first question"
@@ -3253,7 +3255,88 @@ test_without_a_routine_mark_every_run_shows_as_before() {
   pass "factory pane: without a routine mark every run shows as before"
 }
 
+test_terminal_theme_detection() {
+  python3 - "$ROOT/bin" <<'PY' || fail "terminal theme detection"
+import os, pty, select, sys, termios, time
+sys.path.insert(0, sys.argv[1])
+from fm_terminal_theme import background_theme, select_theme, palette
+
+for colour, expected in [('ffff/ffff/ffff', 'light'), ('00/00/00', 'dark'),
+                         ('f/f/f', 'light'), ('000/FFF/000', 'light'),
+                         ('ff/00/00', 'light'), ('00/00/ff', 'dark'),
+                         ('75/75/75', 'dark'), ('76/76/76', 'light'),
+                         ('fffff/ff/ff', None), ('xx/ff/ff', None)]:
+    for end in (b'\x07', b'\x1b\\'):
+        assert background_theme(b'\x1b]11;rgb:' + colour.encode() + end) == expected, colour
+assert background_theme(b'\x1b]11;rgb:ff/ff/ff') is None
+for setting, fallback, expected in [
+    ('light', '15;0', 'light'), ('dark', '0;15', 'dark'),
+    ('auto', '0;15', 'light'), ('auto', '15;0', 'dark'),
+    ('auto', '0;8', 'dark'), ('auto', '0;7', 'light'),
+    ('auto', '0;0;15', 'light'), ('auto', '', 'dark'),
+    ('invalid', '0;7', 'light'), ('auto', '0;999', 'dark'),
+    ('auto', 'broken', 'dark'),
+]:
+    os.environ.update(FM_TERMINAL_THEME=setting, COLORFGBG=fallback)
+    assert select_theme(query=False) == expected, (setting, fallback)
+
+# Real tty query: fragmented replies, timeout, precedence, and restoration.
+for setting, response, expected in [
+    ('auto', b'\x1b]11;rgb:ffff/ffff/ffff\x1b\\', 'light'),
+    ('auto', b'\x1b]11;rgb:0000/0000/0000\x07', 'dark'),
+    ('auto', b'bad reply', 'light'), ('auto', b'', 'light'),
+    ('dark', b'', 'dark'), ('light', b'', 'light'),
+]:
+    pid, fd = pty.fork()
+    if pid == 0:
+        os.environ.update(FM_TERMINAL_THEME=setting, COLORFGBG='0;15')
+        before = termios.tcgetattr(0)
+        result = select_theme()
+        after = termios.tcgetattr(0)
+        # macOS sets the kernel's pending-input bit on re-entering canonical mode.
+        before[3] &= ~getattr(termios, 'PENDIN', 0)
+        after[3] &= ~getattr(termios, 'PENDIN', 0)
+        print('RESULT=%s RESTORED=%s' % (result, before == after), flush=True)
+        os._exit(0)
+    output, sent = b'', False
+    deadline = time.monotonic() + 3
+    try:
+        while time.monotonic() < deadline:
+            if not select.select([fd], [], [], 0.05)[0]:
+                continue
+            try:
+                chunk = os.read(fd, 4096)
+            except OSError:
+                break
+            if not chunk:
+                break
+            output += chunk
+            if b'\x1b]11;?\x1b\\' in output and not sent:
+                sent = True
+                for byte in response:
+                    os.write(fd, bytes([byte]))
+                    time.sleep(0.001)
+        assert ('RESULT=%s RESTORED=True' % expected).encode() in output, output
+        assert sent == (setting == 'auto'), output
+    finally:
+        os.close(fd)
+        os.waitpid(pid, 0)
+
+# All light text roles have readable contrast on painted rows and white.
+def luminance(rgb):
+    c = [v / 255 for v in rgb]
+    return sum((v / 12.92 if v <= 0.04045 else ((v + 0.055) / 1.055) ** 2.4) * w
+               for v, w in zip(c, (0.2126, 0.7152, 0.0722)))
+light = palette('light')
+for role in ('ice', 'mist', 'faint', 'cyan', 'amber', 'ember', 'green', 'red'):
+    for bg in (light['hull'], light['band'], (255, 255, 255)):
+        assert (luminance(bg) + .05) / (luminance(light[role]) + .05) >= 4.5, role
+PY
+  pass "terminal theme: luminance, override, fallback, OSC query and tty restoration"
+}
+
 fm_test_run \
+  test_terminal_theme_detection \
   test_the_light_snapshot_gives_the_pane_the_record_the_whole_one_does \
   test_the_record_words_every_state \
   test_a_second_mates_ready_pr_needs_you \

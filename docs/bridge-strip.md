@@ -34,6 +34,8 @@ On battery it turns amber below 25% and red below 10%, where it says `plug in no
 On mains power it stays quiet, and a machine with no battery, or one that is not a Mac, shows none.
 
 The colours are the flight deck tokens: the strip is painted in the hull colour, the wordmark is cyan, and each lamp colour means only one thing.
+At startup it selects a light or dark hull and text to match the terminal background, without changing the words or layout.
+[Terminal theme](fork-configuration.md#terminal-theme-fm_terminal_theme) owns detection, fallback and the override.
 
 ### The most urgent call
 

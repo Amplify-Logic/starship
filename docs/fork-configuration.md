@@ -12,6 +12,7 @@ Each setting section keeps the heading it had in configuration.md, so its title 
 | Worker permissions, accounts, or environment (this fork's additions) | [Worker command guard](#worker-command-guard-configcommand-guard), [worker outward actions](#worker-outward-actions-configoutward-permissions), [Claude concise prompt](#claude-concise-prompt-configclaude-concise-prompt), and [vendor account pinning](#vendor-account-pinning-configaccountsjson) |
 | Backlog, preferences, and memory (this fork's additions) | [Startup digest trim](#startup-digest-trim-configstartup-digest-trim) and [address and tone](#address-and-tone) |
 | Naming the factories the Factory pane shows | [Factory registry](#factory-registry-datafactoriesmd) |
+| Light or dark colours in the Factory pane and bridge strip | [Terminal theme](#terminal-theme-fm_terminal_theme) |
 | The night shift line on the bridge strip | [Night shift window](#night-shift-window-confignight-shift-window) |
 | What `starship` opens in Herdr: tabs, panes, Terminal or Ghostty windows and the sidebar | [Desk layout](#desk-layout-configdesk-layout) |
 | Starter settings for a new home: which model does which job, transcription words, and how hard the first mate thinks | [Starter settings](#starter-settings-first-launch), [crew dispatch profiles](configuration.md#crew-dispatch-profiles-configcrew-dispatchjson), [speech-to-text vocabulary](#speech-to-text-vocabulary-configstt-vocabulary), and [primary effort](#primary-effort-configprimary-effort) |
@@ -24,6 +25,17 @@ Each setting section keeps the heading it had in configuration.md, so its title 
 | Which Starship version "update starship" follows | [Update channel](#update-channel-configupdate-channel) |
 | A home's own private tools beside the shared code | [Private add-on](#private-add-on-configaddon) and [opt-in skills](#opt-in-skills-configadhd-configsecond-opinion) |
 | Keeping private names out of this public repository | [Private leak words](#private-leak-words-configleak-words) |
+
+## Terminal theme (`FM_TERMINAL_THEME`)
+
+The Factory pane and bridge strip share `FM_TERMINAL_THEME`: `auto` (default), `light` or `dark`.
+Set it in the environment inherited by the pane process, for example `export FM_TERMINAL_THEME=light` before starting the workspace.
+Invalid values behave as `auto`.
+In automatic mode they query the terminal background with OSC 11 at startup, wait at most 150 ms for an RGB reply and use its relative luminance to select readable colours.
+If the terminal does not answer, the final ANSI background index in `COLORFGBG` is used when available; otherwise the original dark colours remain.
+Redirected output does not query the terminal.
+Detection runs once, not per frame; restart the pane after changing the terminal theme.
+`bin/fm_terminal_theme.py` owns the detection and shared palettes; no other pane or status surface uses this setting.
 
 ## Fork changes to upstream settings
 
