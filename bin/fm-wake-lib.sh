@@ -3192,12 +3192,9 @@ fm_wake_main_recovery_rows() {
 # that cannot be read counts as one row, so uncertainty still recovers.
 fm_wake_main_recovery_count() {
   local rows count
-  if ! rows=$(fm_wake_main_recovery_rows 2>/dev/null; printf x); then
-    printf '1\n'
-    return 0
-  fi
-  rows=${rows%x}
-  count=$(printf '%s' "$rows" | awk 'END { print NR }') || count=1
+  rows=$(fm_wake_main_recovery_rows 2>/dev/null) || { printf '1\n'; return 0; }
+  [ -n "$rows" ] || { printf '0\n'; return 0; }
+  count=$(printf '%s\n' "$rows" | awk 'END { print NR }') || count=1
   case "$count" in ''|*[!0-9]*) count=1 ;; esac
   printf '%s\n' "$count"
 }

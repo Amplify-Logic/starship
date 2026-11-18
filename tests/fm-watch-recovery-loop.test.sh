@@ -627,6 +627,25 @@ test_recovery_wake_does_not_name_a_presented_row() {
   pass "a recovery wake names the unpresented row that caused it, not a row already shown"
 }
 
+# The recovery count's fail-safe: a queue that exists but cannot be read is
+# uncertainty, which counts as one row so the recovery still runs instead of
+# retiring the episode as if nothing were queued.
+test_unreadable_queue_still_counts_for_recovery() {
+  local dir state count
+  if [ "$(id -u)" = 0 ]; then
+    pass "an unreadable queue still counts for recovery (skipped: root reads any file)"
+    return 0
+  fi
+  dir=$(make_case unreadable-queue)
+  state="$dir/state"
+  append_wake "$state" check unread-fixture "check: unread event"
+  chmod 000 "$state/.wake-queue"
+  count=$(FM_STATE_OVERRIDE="$state" bash -c '. "$1"; fm_wake_main_recovery_count' _ "$ROOT/bin/fm-wake-lib.sh")
+  chmod 600 "$state/.wake-queue"
+  [ "$count" = 1 ] || fail "an unreadable queue counted $count rows for recovery instead of 1"
+  pass "an unreadable queue still counts for recovery"
+}
+
 # A /clear starts a new conversation in the same process: the lock keeps its
 # pid and only the recorded session id changes. The presented row was never
 # acknowledged by the new conversation, so it must resurface.
@@ -710,6 +729,7 @@ test_successor_exit_does_not_wake_main_for_a_presented_row
 test_new_session_resurfaces_a_presented_unacknowledged_row
 test_cleared_session_resurfaces_a_presented_unacknowledged_row
 test_recovery_wake_does_not_name_a_presented_row
+test_unreadable_queue_still_counts_for_recovery
 test_genuine_outage_with_queued_rows_resurfaces_once
 test_unacknowledged_recovery_is_announced_once_per_generation
 test_handling_successor_surfaces_a_captain_note_queued_mid_handling
