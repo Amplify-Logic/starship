@@ -507,7 +507,9 @@ test_first_cycle_status_streams_and_owner_options_reach_it() {
   wait_until 100 sh -c '! kill -0 "$1" 2>/dev/null' _ "$stale" || fail "stream: --restart left the old watcher running"
   wait_until 200 host_exited "$home" || append_status "$home" 'second close' 'done'
   wait_until_deadline 60 host_exited "$home" || fail "stream: the restarting host's close did not reach main"
-  assert_re '^(signal: .*demo.status|check: rearm-resurface)$' "$home/host.out" "stream: the restarting host's close must reach main"
+  grep -Eq '^signal: .*demo.status$' "$home/host.out" \
+    || grep -Eq '^check: (rearm-resurface|queued wake: signal: .*demo\.status)$' "$home/host.out" \
+    || fail "stream: the restarting host's close must reach main: $(cat "$home/host.out")"
 
   # That close left an unacknowledged downtime episode; a host the owner starts
   # as the closed arm's successor takes it over as a handling successor

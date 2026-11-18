@@ -388,7 +388,8 @@ test_claude_stop_hook_rewakes_main_for_an_inbox_note_after_a_handled_wake() {
   wait_until_deadline 60 hook_exited "$home" \
     || fail "inbox after handled: the queued inbox note never woke main: $(cat "$home/state/.supervision-host.log"; cat "$home/state/.watcher-down")"
   assert_rewoke_main "$home" "inbox after handled"
-  assert_re '^check: rearm-resurface' "$home/hook.err" "the rewake must carry the recovery close for the queued note"
+  grep -Eq '^check: queued wake: check: captain inbox note [^ ]+ - the captain sent this from Basecamp$' "$home/hook.err" \
+    || fail "the rewake must carry the recovery close for the queued note: $(cat "$home/hook.err")"
   [ "$(handled_count "$home")" -eq 1 ] || fail "inbox after handled: the engine took the main-only inbox close"
   drained=$(main_drain "$home")
   assert_contains "$drained" 'check: captain inbox note' "main's drain must present the queued inbox note"
@@ -613,7 +614,7 @@ test_next_park_takes_over_the_cycle_a_pass_through_left_for_main() {
   ! hook_exited "$home" || fail "takeover: the takeover woke main: $(cat "$home/hook.err")"
   host_owns_the_only_cycle "$home" || fail "takeover: the park did not keep the cycle it took over"
   assert_re '^acked:' "$home/state/.watcher-down" "takeover: the takeover opened a downtime episode"
-  assert_no_re 'rearm-resurface' "$home/state/.supervision-host.log" "takeover: the takeover resurfaced a recovery to main"
+  assert_no_re 'rearm-resurface|queued wake: ' "$home/state/.supervision-host.log" "takeover: the takeover resurfaced a recovery to main"
   append_status "$home" 'which region?' needs-decision
   wait_until_deadline 60 hook_exited "$home" || fail "takeover: the owned cycle did not deliver the next close: $(cat "$home/state/.supervision-host.log")"
   assert_rewoke_main "$home" "takeover (next close)"

@@ -1323,7 +1323,7 @@ fm_recovery_lock_wait() {  # <lockdir> <bound-seconds>
 }
 
 _fm_recovery_marker_arm_check() {
-  local marker=$1 bound=${2:-} lock line quarantine
+  local marker=$1 bound=${2:-} lock line quarantine main_rows
   FM_RECOVERY_MARKER_ACTION='none'
   FM_RECOVERY_MARKER_QUEUED=0
   lock="${marker}.lock"
@@ -1332,10 +1332,13 @@ _fm_recovery_marker_arm_check() {
     fm_lock_release "$FM_WAKE_QUEUE_LOCK"
     return 1
   fi
+  # Rows a live supervision-branch grant holds, and rows the running handling
+  # turn was already shown, never make main recover (fm_wake_main_recovery_count).
+  main_rows=$(fm_wake_main_recovery_count)
   # shellcheck disable=SC2034 # Output read by callers after this function returns.
-  [ ! -s "$FM_WAKE_QUEUE" ] || FM_RECOVERY_MARKER_QUEUED=1
+  [ "$main_rows" -eq 0 ] || FM_RECOVERY_MARKER_QUEUED=1
   if [ ! -e "$marker" ] && [ ! -L "$marker" ]; then
-    if [ -s "$FM_WAKE_QUEUE" ]; then
+    if [ "$main_rows" -gt 0 ]; then
       if ! _fm_recovery_marker_write_locked "$marker" downtime "" announced; then
         fm_lock_release "$lock"
         fm_lock_release "$FM_WAKE_QUEUE_LOCK"
@@ -1384,7 +1387,7 @@ _fm_recovery_marker_arm_check() {
       FM_RECOVERY_MARKER_ACTION='recover'
       ;;
     acked:*)
-      if [ -s "$FM_WAKE_QUEUE" ]; then
+      if [ "$main_rows" -gt 0 ]; then
         if ! _fm_recovery_marker_write_locked "$marker" downtime "" announced; then
           fm_lock_release "$lock"
           fm_lock_release "$FM_WAKE_QUEUE_LOCK"
@@ -1413,7 +1416,7 @@ _fm_recovery_marker_retire_idle() {
     fm_lock_release "$FM_WAKE_QUEUE_LOCK"
     return 1
   fi
-  if [ ! -s "$FM_WAKE_QUEUE" ] && fm_recovery_marker_read "$marker"; then
+  if [ "$(fm_wake_main_recovery_count)" -eq 0 ] && fm_recovery_marker_read "$marker"; then
     case "$FM_RECOVERY_MARKER_TOKEN" in
       announced:downtime:*)
         status=0
@@ -1445,7 +1448,10 @@ _fm_recovery_marker_reopen_announced() {
   fi
   case "$FM_RECOVERY_MARKER_TOKEN" in
     announced:*)
-      if [ -s "$FM_WAKE_QUEUE" ] \
+      # Only a row main has not been shown is buried work: a row the current
+      # handling turn's drain already claimed, or one a live branch grant
+      # holds, is being handled and reopens nothing.
+      if [ "$(fm_wake_main_recovery_count)" -gt 0 ] \
         && ! _fm_recovery_marker_write_locked "$marker" downtime ""; then
         fm_lock_release "$lock"
         fm_lock_release "$FM_WAKE_QUEUE_LOCK"
@@ -3155,6 +3161,109 @@ fm_wake_queue_prune_task() {  # <state> <task-id> [target]
     return 1
   fi
   fm_lock_release "$lock"
+}
+
+# The rows a main recovery acts on: every queued row a live supervision-branch
+# grant does not hold (the branch presents and acknowledges those itself), and
+# none main's own drain already presented to the handling turn that is still
+# running (fm_wake_main_presented_current). Prints those queue rows, keeping a
+# row too damaged to carry a sequence. The recovery count and the recovery
+# wake's reason both read this one filter; read it under the caller's queue
+# lock where a decision depends on it.
+fm_wake_main_recovery_rows() {
+  local grant='' presented=''
+  [ -f "$FM_WAKE_QUEUE" ] || return 0
+  if fm_wake_branch_grant_live "$STATE/.branch-eligible-rows" "$STATE/.branch-eligible-owner"; then
+    grant="$STATE/.branch-eligible-rows"
+  fi
+  if [ -s "$STATE/.main-eligible-rows" ] && fm_wake_main_presented_current; then
+    presented="$STATE/.main-eligible-rows"
+  fi
+  awk -F '\t' -v grant="$grant" -v presented="$presented" '
+    BEGIN {
+      if (grant != "") while ((getline line < grant) > 0) skip[line] = 1
+      if (presented != "") while ((getline line < presented) > 0) skip[line] = 1
+    }
+    NF < 5 || $2 !~ /^[0-9]+$/ || !($2 in skip)
+  ' "$FM_WAKE_QUEUE"
+}
+
+# How many rows a main recovery acts on (fm_wake_main_recovery_rows). A queue
+# that cannot be read counts as one row, so uncertainty still recovers.
+fm_wake_main_recovery_count() {
+  local rows count
+  rows=$(fm_wake_main_recovery_rows 2>/dev/null) || { printf '1\n'; return 0; }
+  [ -n "$rows" ] || { printf '0\n'; return 0; }
+  count=$(printf '%s\n' "$rows" | awk 'END { print NR }') || count=1
+  case "$count" in ''|*[!0-9]*) count=1 ;; esac
+  printf '%s\n' "$count"
+}
+
+# Main's drain records, beside the rows it presents, the recovery generation it
+# named and the session it presented them to: the state/.lock owner pid and the
+# session id recorded in state/.lock-session (a /clear keeps the pid and
+# re-keys only the id). Those rows count as being handled only while the marker
+# still carries that generation and that same live session still holds the
+# lock: a new generation, a new or dead session, or a missing record makes
+# every unacknowledged row recoverable again.
+fm_wake_main_presented_stamp() {  # <generation>
+  local stamp="$STATE/.main-eligible-stamp" owner session tmp
+  owner=$(sed -n '1p' "$STATE/.lock" 2>/dev/null || true)
+  _fm_wake_require_session_lock
+  session=$(fm_session_lock_recorded_session_id "$STATE" 2>/dev/null || true)
+  if [ -z "$1" ] || [ -z "$owner" ] || [ -z "$session" ]; then
+    rm -f -- "$stamp"
+    return 0
+  fi
+  tmp=$(mktemp "$stamp.tmp.XXXXXX") || return 1
+  if ! printf '%s\t%s\t%s\n' "$1" "$owner" "$session" > "$tmp" || ! chmod 0600 "$tmp" \
+    || ! _fm_atomic_replace "$tmp" "$stamp"; then
+    rm -f -- "$tmp"
+    return 1
+  fi
+}
+
+fm_wake_main_presented_current() {
+  local generation owner session lock_pid
+  IFS=$'\t' read -r generation owner session < "$STATE/.main-eligible-stamp" 2>/dev/null || return 1
+  [ -n "$generation" ] && [ -n "$owner" ] && [ -n "$session" ] || return 1
+  fm_recovery_marker_read "$STATE/.watcher-down" || return 1
+  [ "${FM_RECOVERY_MARKER_TOKEN##*:}" = "$generation" ] || return 1
+  lock_pid=$(sed -n '1p' "$STATE/.lock" 2>/dev/null || true)
+  [ "$lock_pid" = "$owner" ] || return 1
+  _fm_wake_require_session_lock
+  [ "$(fm_session_lock_recorded_session_id "$STATE" 2>/dev/null || true)" = "$session" ] || return 1
+  fm_session_pid_alive "$lock_pid"
+}
+
+# The reason a recovery wake names: the newest row the recovery acts on
+# (fm_wake_main_recovery_rows), so the wake never names a row the branch holds
+# or one the running handling turn was already shown, preferring a real event over a bare heartbeat. Its payload when the payload
+# already leads with its kind, otherwise "<kind>: <payload>". Prints nothing
+# when no such row is queued (recovery_wake in bin/fm-watch.sh).
+fm_wake_queue_newest_reason() {
+  [ -s "$FM_WAKE_QUEUE" ] || return 0
+  fm_lock_acquire_wait "$FM_WAKE_QUEUE_LOCK" || return 0
+  fm_wake_main_recovery_rows 2>/dev/null | awk -F '\t' '
+    NF >= 5 && $2 ~ /^[0-9]+$/ \
+      && ($3 == "signal" || $3 == "stale" || $3 == "check" || $3 == "heartbeat") {
+      if ($3 == "heartbeat") {
+        if ($2 + 0 >= hmax + 0) { hmax = $2; hpay = $5 }
+      } else if ($2 + 0 >= max + 0) {
+        max = $2; kind = $3; payload = $5
+      }
+    }
+    END {
+      if (kind == "") {
+        if (hmax == "") exit
+        kind = "heartbeat"; payload = hpay
+      }
+      if (payload ~ /^(signal|stale|check): ./ || payload ~ /^heartbeat($|:)/) print payload
+      else if (kind == "heartbeat") print "heartbeat"
+      else if (payload != "") print kind ": " payload
+    }
+  ' 2>/dev/null || true
+  fm_lock_release "$FM_WAKE_QUEUE_LOCK"
 }
 
 # Collapse duplicate rows to the last of each kind+key, except that every BARE

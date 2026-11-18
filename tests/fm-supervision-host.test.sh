@@ -828,7 +828,7 @@ test_outcome_lookup_failure_is_not_treated_as_silence() {
 # resurfaces the durable queue and main's drain presents it.
 
 test_outcome_after_the_return_survives_a_host_killed_at_the_turn_end() {
-  local home host rc drained
+  local home host rc drained recovery
   home=$(make_home away-return-first away)
   echo return-first > "$home/stub-mode"
   start_host "$home"
@@ -850,8 +850,11 @@ test_outcome_after_the_return_survives_a_host_killed_at_the_turn_end() {
   rm -f "$home/host.rc"
   start_host "$home"
   wait_until_deadline 60 host_exited "$home" || fail "return-first: the next host did not resurface the queued outcome"
-  assert_re '^check: rearm-resurface$' "$home/host.out" "the next host's first cycle must resurface the queue"
-  assert_re '	pass-through	attended	main-only	check: rearm-resurface' "$home/state/.supervision-host.log" "the attended resurface must reach main"
+  recovery='check: queued wake: check: supervision-host outcome 1 for '
+  grep -q "^$recovery" "$home/host.out" \
+    || fail "the next host's first cycle must resurface the queue: $(cat "$home/host.out")"
+  grep -F "$(printf '\tpass-through\tattended\tmain-only\t%s' "$recovery")" "$home/state/.supervision-host.log" >/dev/null \
+    || fail "the attended resurface must reach main"
   drained=$(FM_HOME="$home" "$ROOT/bin/fm-wake-drain.sh" 2>&1)
   assert_contains "$drained" "supervision-host outcome 1 for demo [routine] was recorded after the captain returned" \
     "main's drain must present the outcome the killed host never handed off"
@@ -885,7 +888,8 @@ test_next_host_clears_a_turn_its_killed_predecessor_left() {
     "$home"/state/.supervision-host-descendants.* "$home/state/.supervision-host-turn"; do
     [ -e "$f" ] && fail "the next host left its killed predecessor's turn file behind: $f"
   done
-  assert_re '^check: rearm-resurface$' "$home/host.out" "the next host's first cycle must resurface the queue"
+  grep -q '^check: queued wake: check: supervision-host outcome 1 for ' "$home/host.out" \
+    || fail "the next host's first cycle must resurface the queue: $(cat "$home/host.out")"
   pass "host: a killed predecessor's engine is reaped and the next host removes its turn files"
 }
 
