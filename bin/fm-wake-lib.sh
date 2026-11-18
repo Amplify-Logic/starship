@@ -3166,27 +3166,38 @@ fm_wake_queue_prune_task() {  # <state> <task-id> [target]
 # The rows a main recovery acts on: every queued row a live supervision-branch
 # grant does not hold (the branch presents and acknowledges those itself), and
 # none main's own drain already presented to the handling turn that is still
-# running (fm_wake_main_presented_current). Prints the count; read under the
-# caller's queue lock where a decision depends on it. A queue that cannot be
-# read counts as one row, so uncertainty still recovers.
-fm_wake_main_recovery_count() {
-  local grant='' presented='' count
-  [ -f "$FM_WAKE_QUEUE" ] || { printf '0\n'; return 0; }
+# running (fm_wake_main_presented_current). Prints those queue rows, keeping a
+# row too damaged to carry a sequence. The recovery count and the recovery
+# wake's reason both read this one filter; read it under the caller's queue
+# lock where a decision depends on it.
+fm_wake_main_recovery_rows() {
+  local grant='' presented=''
+  [ -f "$FM_WAKE_QUEUE" ] || return 0
   if fm_wake_branch_grant_live "$STATE/.branch-eligible-rows" "$STATE/.branch-eligible-owner"; then
     grant="$STATE/.branch-eligible-rows"
   fi
   if [ -s "$STATE/.main-eligible-rows" ] && fm_wake_main_presented_current; then
     presented="$STATE/.main-eligible-rows"
   fi
-  count=$(awk -F '\t' -v grant="$grant" -v presented="$presented" '
+  awk -F '\t' -v grant="$grant" -v presented="$presented" '
     BEGIN {
       if (grant != "") while ((getline line < grant) > 0) skip[line] = 1
       if (presented != "") while ((getline line < presented) > 0) skip[line] = 1
     }
-    NF < 5 || $2 !~ /^[0-9]+$/ { n++; next }
-    !($2 in skip) { n++ }
-    END { print n + 0 }
-  ' "$FM_WAKE_QUEUE" 2>/dev/null) || count=1
+    NF < 5 || $2 !~ /^[0-9]+$/ || !($2 in skip)
+  ' "$FM_WAKE_QUEUE"
+}
+
+# How many rows a main recovery acts on (fm_wake_main_recovery_rows). A queue
+# that cannot be read counts as one row, so uncertainty still recovers.
+fm_wake_main_recovery_count() {
+  local rows count
+  if ! rows=$(fm_wake_main_recovery_rows 2>/dev/null; printf x); then
+    printf '1\n'
+    return 0
+  fi
+  rows=${rows%x}
+  count=$(printf '%s' "$rows" | awk 'END { print NR }') || count=1
   case "$count" in ''|*[!0-9]*) count=1 ;; esac
   printf '%s\n' "$count"
 }
@@ -3228,21 +3239,16 @@ fm_wake_main_presented_current() {
   fm_session_pid_alive "$lock_pid"
 }
 
-# The reason a recovery wake names: the newest queued row main would be shown
-# (a row a live supervision-branch grant holds never reaches main's drain),
-# preferring a real event over a bare heartbeat. Its payload when the payload
+# The reason a recovery wake names: the newest row the recovery acts on
+# (fm_wake_main_recovery_rows), so the wake never names a row the branch holds
+# or one the running handling turn was already shown, preferring a real event over a bare heartbeat. Its payload when the payload
 # already leads with its kind, otherwise "<kind>: <payload>". Prints nothing
 # when no such row is queued (recovery_wake in bin/fm-watch.sh).
 fm_wake_queue_newest_reason() {
-  local grant=''
   [ -s "$FM_WAKE_QUEUE" ] || return 0
   fm_lock_acquire_wait "$FM_WAKE_QUEUE_LOCK" || return 0
-  if fm_wake_branch_grant_live "$STATE/.branch-eligible-rows" "$STATE/.branch-eligible-owner"; then
-    grant="$STATE/.branch-eligible-rows"
-  fi
-  awk -F '\t' -v grant="$grant" '
-    BEGIN { if (grant != "") while ((getline line < grant) > 0) held[line] = 1 }
-    NF >= 5 && $2 ~ /^[0-9]+$/ && !($2 in held) \
+  fm_wake_main_recovery_rows 2>/dev/null | awk -F '\t' '
+    NF >= 5 && $2 ~ /^[0-9]+$/ \
       && ($3 == "signal" || $3 == "stale" || $3 == "check" || $3 == "heartbeat") {
       if ($3 == "heartbeat") {
         if ($2 + 0 >= hmax + 0) { hmax = $2; hpay = $5 }
@@ -3259,7 +3265,7 @@ fm_wake_queue_newest_reason() {
       else if (kind == "heartbeat") print "heartbeat"
       else if (payload != "") print kind ": " payload
     }
-  ' "$FM_WAKE_QUEUE" 2>/dev/null || true
+  ' 2>/dev/null || true
   fm_lock_release "$FM_WAKE_QUEUE_LOCK"
 }
 

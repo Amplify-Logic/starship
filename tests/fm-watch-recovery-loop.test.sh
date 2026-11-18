@@ -605,6 +605,28 @@ test_new_session_resurfaces_a_presented_unacknowledged_row() {
   pass "a new session resurfaces a row presented to the previous session but never acknowledged"
 }
 
+# A heartbeat queued after the handling session was shown a real event wakes
+# main, but the wake names the heartbeat that caused it, never the event that
+# session already handled.
+test_recovery_wake_does_not_name_a_presented_row() {
+  local dir state out child rc
+  dir=$(make_case presented-label)
+  state="$dir/state"
+  out="$dir/watch.out"
+  presented_row_then_successor_exit "$dir"
+  append_wake "$state" heartbeat heartbeat heartbeat || fail "fixture: heartbeat append failed"
+  captain_input_watch_bg "$dir" "$out"
+  child=$!
+  rc=0
+  wait_for_exit "$child" 100 || rc=$?
+  [ "$rc" -ne 124 ] || fail "the unpresented heartbeat never woke main: $(cat "$out")"
+  grep -Fx 'check: queued wake: heartbeat' "$out" >/dev/null \
+    || fail "the wake did not name the heartbeat that caused it: $(cat "$out")"
+  ! grep -F 'merge landed' "$out" >/dev/null \
+    || fail "the wake named a row the handling session was already shown: $(cat "$out")"
+  pass "a recovery wake names the unpresented row that caused it, not a row already shown"
+}
+
 # A /clear starts a new conversation in the same process: the lock keeps its
 # pid and only the recorded session id changes. The presented row was never
 # acknowledged by the new conversation, so it must resurface.
@@ -687,6 +709,7 @@ test_presented_rows_do_not_wake_main_again
 test_successor_exit_does_not_wake_main_for_a_presented_row
 test_new_session_resurfaces_a_presented_unacknowledged_row
 test_cleared_session_resurfaces_a_presented_unacknowledged_row
+test_recovery_wake_does_not_name_a_presented_row
 test_genuine_outage_with_queued_rows_resurfaces_once
 test_unacknowledged_recovery_is_announced_once_per_generation
 test_handling_successor_surfaces_a_captain_note_queued_mid_handling
