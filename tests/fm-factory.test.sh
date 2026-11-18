@@ -3279,7 +3279,7 @@ test_without_a_routine_mark_every_run_shows_as_before() {
 
 test_terminal_theme_detection() {
   python3 - "$ROOT/bin" <<'PY' || fail "terminal theme detection"
-import os, pty, select, sys, termios, time
+import os, pty, re, select, sys, termios, time
 sys.path.insert(0, sys.argv[1])
 from fm_terminal_theme import background_theme, select_theme, palette
 
@@ -3319,9 +3319,13 @@ for setting, response, expected in [
         before[3] &= ~getattr(termios, 'PENDIN', 0)
         after[3] &= ~getattr(termios, 'PENDIN', 0)
         print('RESULT=%s RESTORED=%s' % (result, before == after), flush=True)
+        # macOS drops unread pty output once the child exits, so stay until
+        # the parent has read the result and answers with a line.
+        os.read(0, 4096)
         os._exit(0)
-    output, sent = b'', False
-    deadline = time.monotonic() + 3
+    output, sent, acked = b'', False, False
+    # Generous: the loop ends at the child's exit, so this only bounds a hang.
+    deadline = time.monotonic() + 15
     try:
         while time.monotonic() < deadline:
             if not select.select([fd], [], [], 0.05)[0]:
@@ -3335,9 +3339,14 @@ for setting, response, expected in [
             output += chunk
             if b'\x1b]11;?\x1b\\' in output and not sent:
                 sent = True
-                for byte in response:
-                    os.write(fd, bytes([byte]))
-                    time.sleep(0.001)
+                # Split writes without sleeps: the reply still arrives in
+                # fragments, but well inside the 150 ms window on a busy host.
+                third = max(1, len(response) // 3)
+                for start in range(0, len(response), third):
+                    os.write(fd, response[start:start + third])
+            if re.search(rb'RESULT=\S+ RESTORED=\S+\r?\n', output) and not acked:
+                acked = True
+                os.write(fd, b'\n')
         assert ('RESULT=%s RESTORED=True' % expected).encode() in output, output
         assert sent == (setting == 'auto'), output
     finally:
