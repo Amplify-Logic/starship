@@ -502,6 +502,7 @@ test_presented_rows_do_not_wake_main_again() {
   printf 'announced:downtime:hand.1.aaa\n' > "$state/.watcher-down"
   chmod 600 "$state/.watcher-down"
   printf '%s\n' "$$" > "$state/.lock"
+  printf 'session-one\n' > "$state/.lock-session"
   FM_HOME="$dir/home" FM_STATE_OVERRIDE="$state" "$ROOT/bin/fm-wake-drain.sh" > "$dir/drain.out" 2>&1 \
     || fail "fixture: the handling drain failed: $(cat "$dir/drain.out")"
   grep -F 'check: merge landed: fixture' "$dir/drain.out" >/dev/null \
@@ -536,6 +537,7 @@ presented_row_then_successor_exit() {  # <dir>
   printf 'pending:downtime:hand.2.aaa\n' > "$state/.watcher-down"
   chmod 600 "$state/.watcher-down"
   printf '%s\n' "$$" > "$state/.lock"
+  printf 'session-one\n' > "$state/.lock-session"
   FM_HOME="$dir/home" FM_STATE_OVERRIDE="$state" "$ROOT/bin/fm-wake-drain.sh" > "$dir/drain.out" 2>&1 \
     || fail "fixture: the handling drain failed: $(cat "$dir/drain.out")"
   grep -F 'check: merge landed: fixture' "$dir/drain.out" >/dev/null \
@@ -603,6 +605,26 @@ test_new_session_resurfaces_a_presented_unacknowledged_row() {
   pass "a new session resurfaces a row presented to the previous session but never acknowledged"
 }
 
+# A /clear starts a new conversation in the same process: the lock keeps its
+# pid and only the recorded session id changes. The presented row was never
+# acknowledged by the new conversation, so it must resurface.
+test_cleared_session_resurfaces_a_presented_unacknowledged_row() {
+  local dir state out child rc
+  dir=$(make_case cleared-session-presented)
+  state="$dir/state"
+  out="$dir/watch.out"
+  presented_row_then_successor_exit "$dir"
+  printf 'session-two\n' > "$state/.lock-session"
+  captain_input_watch_bg "$dir" "$out"
+  child=$!
+  rc=0
+  wait_for_exit "$child" 100 || rc=$?
+  [ "$rc" -ne 124 ] || fail "a /clear-started session never saw the unacknowledged row resurface: $(cat "$out")"
+  grep -Fx 'check: queued wake: check: merge landed: fixture' "$out" >/dev/null \
+    || fail "the resurfaced wake did not name the unacknowledged row: $(cat "$out")"
+  pass "a session re-keyed by /clear in the same process resurfaces a presented, unacknowledged row"
+}
+
 # A genuine outage that left rows main was never shown resurfaces them once,
 # naming the newest.
 test_genuine_outage_with_queued_rows_resurfaces_once() {
@@ -664,6 +686,7 @@ test_branch_held_rows_do_not_wake_main
 test_presented_rows_do_not_wake_main_again
 test_successor_exit_does_not_wake_main_for_a_presented_row
 test_new_session_resurfaces_a_presented_unacknowledged_row
+test_cleared_session_resurfaces_a_presented_unacknowledged_row
 test_genuine_outage_with_queued_rows_resurfaces_once
 test_unacknowledged_recovery_is_announced_once_per_generation
 test_handling_successor_surfaces_a_captain_note_queued_mid_handling

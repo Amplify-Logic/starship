@@ -3192,19 +3192,23 @@ fm_wake_main_recovery_count() {
 }
 
 # Main's drain records, beside the rows it presents, the recovery generation it
-# named and the session-lock owner it presented them to. Those rows count as
-# being handled only while the marker still carries that generation and that
-# same live session still holds state/.lock: a new generation, a new or dead
-# session, or a missing record makes every unacknowledged row recoverable again.
+# named and the session it presented them to: the state/.lock owner pid and the
+# session id recorded in state/.lock-session (a /clear keeps the pid and
+# re-keys only the id). Those rows count as being handled only while the marker
+# still carries that generation and that same live session still holds the
+# lock: a new generation, a new or dead session, or a missing record makes
+# every unacknowledged row recoverable again.
 fm_wake_main_presented_stamp() {  # <generation>
-  local stamp="$STATE/.main-eligible-stamp" owner tmp
+  local stamp="$STATE/.main-eligible-stamp" owner session tmp
   owner=$(sed -n '1p' "$STATE/.lock" 2>/dev/null || true)
-  if [ -z "$1" ] || [ -z "$owner" ]; then
+  _fm_wake_require_session_lock
+  session=$(fm_session_lock_recorded_session_id "$STATE" 2>/dev/null || true)
+  if [ -z "$1" ] || [ -z "$owner" ] || [ -z "$session" ]; then
     rm -f -- "$stamp"
     return 0
   fi
   tmp=$(mktemp "$stamp.tmp.XXXXXX") || return 1
-  if ! printf '%s\t%s\n' "$1" "$owner" > "$tmp" || ! chmod 0600 "$tmp" \
+  if ! printf '%s\t%s\t%s\n' "$1" "$owner" "$session" > "$tmp" || ! chmod 0600 "$tmp" \
     || ! _fm_atomic_replace "$tmp" "$stamp"; then
     rm -f -- "$tmp"
     return 1
@@ -3212,14 +3216,15 @@ fm_wake_main_presented_stamp() {  # <generation>
 }
 
 fm_wake_main_presented_current() {
-  local generation owner lock_pid
-  IFS=$'\t' read -r generation owner < "$STATE/.main-eligible-stamp" 2>/dev/null || return 1
-  [ -n "$generation" ] && [ -n "$owner" ] || return 1
+  local generation owner session lock_pid
+  IFS=$'\t' read -r generation owner session < "$STATE/.main-eligible-stamp" 2>/dev/null || return 1
+  [ -n "$generation" ] && [ -n "$owner" ] && [ -n "$session" ] || return 1
   fm_recovery_marker_read "$STATE/.watcher-down" || return 1
   [ "${FM_RECOVERY_MARKER_TOKEN##*:}" = "$generation" ] || return 1
   lock_pid=$(sed -n '1p' "$STATE/.lock" 2>/dev/null || true)
   [ "$lock_pid" = "$owner" ] || return 1
   _fm_wake_require_session_lock
+  [ "$(fm_session_lock_recorded_session_id "$STATE" 2>/dev/null || true)" = "$session" ] || return 1
   fm_session_pid_alive "$lock_pid"
 }
 
