@@ -2487,7 +2487,10 @@ test_a_live_copy_follows_the_terminal_theme() {
   light=$(FM_TERMINAL_THEME=light FM_FACTORY_PEEK="$BINDIR/peek$CASE" follow_screen)
   assert_contains "$dark" "live copy" "the dark copy draws"
   assert_contains "$light" "live copy" "the light copy draws"
-  [ "$dark" != "$light" ] || fail "the live copy painted the same colours on a light terminal as on a dark one"
+  assert_contains "$dark" "38;2;116;215;234m" "the dark title is the dark palette's cyan"
+  assert_contains "$light" "38;2;0;99;120m" "the light title is the light palette's cyan"
+  assert_contains "$light" "38;2;86;103;125m" "the light read-only note is the light palette's faint"
+  assert_not_contains "$light" "38;2;116;215;234m" "the light copy still paints the dark cyan"
   pass "factory tab: a worker's live copy paints with the terminal's theme"
 }
 
