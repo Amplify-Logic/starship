@@ -117,6 +117,13 @@ unset WSL_DISTRO_NAME SSH_CONNECTION SSH_TTY SSH_CLIENT DISPLAY WAYLAND_DISPLAY
 # can find the CLI; a case that verifies detection sets these itself.
 unset REX_SESSION REX_BLOCK
 
+# Clear the terminal colour-scheme inputs. bin/fm_terminal_theme.py reads
+# FM_TERMINAL_THEME and falls back to COLORFGBG when stdout is not a tty, so a
+# suite run from a light terminal (or with the override exported) would render
+# the light palette where the bridge-strip and Factory assertions expect dark.
+# A case that verifies theme selection sets these itself.
+unset COLORFGBG FM_TERMINAL_THEME
+
 # Write the tracked default backlog configuration into a fixture home. Never copy
 # "$ROOT/.tasks.toml": an operator's primary checkout keeps a gitignored override
 # there (for example a beads backend at its live backlog), so a copy points the
