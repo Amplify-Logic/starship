@@ -250,9 +250,10 @@ The first recovery marks that generation announced, and later empty-queue arms l
 A non-successor watcher start checks the durable queue and recovery marker under their locks.
 If an announced-but-unacknowledged episode has an empty queue, the arm leaves that generation announced, making repeated empty-queue arms idempotent while a long-poll source is merely alive.
 If a durable row arrived after the announcement, the arm opens a fresh pending downtime generation so buried work still resurfaces once.
-A non-successor watcher about to wake on a downtime episode first checks for something to recover: when the durable queue is empty and no task is in flight (`fm_supervision_status` in `bin/fm-supervision-lib.sh` owns that count), it retires the announced episode as acknowledged and keeps supervising instead of waking for a turn with nothing to do.
+A row main's drain already presented to the episode being handled, or one a live supervision-branch grant holds, is not buried work and reopens nothing; the next main drain re-presents an unacknowledged row, and the branch presents its own (`fm_wake_main_recovery_count` in `bin/fm-wake-lib.sh`).
+A non-successor watcher about to wake on a downtime episode first checks for something to recover: when no queued row is main's to see (none, or only rows a live supervision-branch grant holds) and, with the queue empty, no task is in flight (`fm_supervision_status` in `bin/fm-supervision-lib.sh` owns that count), it retires the announced episode as acknowledged and keeps supervising instead of waking for a turn with nothing to do.
 The retirement re-reads the queue under the queue and marker locks, so a row appended after that check opens a fresh generation that still wakes; anything else that stops the retirement falls back to the wake.
-A recovery wake names the newest queued row's own reason as `check: queued wake: <reason>`, so a row another producer appended, or one a handling successor queued while no arm was attached to deliver its close, reaches the supervisor as that event while still routing to main like every recovery; only a recovery with nothing usable queued, a genuine outage with work in flight, reads `check: rearm-resurface` (`recovery_wake` in `bin/fm-watch.sh`).
+A recovery wake names the newest queued row main would be shown, preferring a real event over a bare heartbeat, as `check: queued wake: <reason>`, so a row another producer appended, or one a handling successor queued while no arm was attached to deliver its close, reaches the supervisor as that event while still routing to main like every recovery; only a recovery with nothing usable queued, a genuine outage with work in flight, reads `check: rearm-resurface` (`recovery_wake` in `bin/fm-watch.sh`).
 A Codex foreground checkpoint skips the announced-episode reopen transition, so an already-announced generation stays announced while the checkpoint continues its bounded supervision.
 Its ordinary arm check still announces a never-announced generation, including one made pending by a durable queue append during the checkpoint.
 
@@ -645,7 +646,7 @@ They also prove that a legacy or handoff-phase watcher marker from an absent rep
 - A handling successor that must surface a real crew event instead of going blind.
 - Captain input queued after a cycle started, surfaced under its own reason by a handling successor and by a cycle whose episode is being handled.
 - A handling successor that resurfaces a row appended between its predecessor's close and its own startup handoff.
-- A recovery wake that names its queued row, a turn-end cycle that delivers an unattended handling successor's recorded reason, and a genuine outage that still resurfaces once under the generic reason.
+- A recovery wake that names its queued row, a turn-end cycle that delivers an unattended handling successor's recorded reason, no wake for rows a live branch grant holds or rows already presented to the turn handling them, and a genuine outage that still resurfaces once.
 
 `tests/fm-watch-triage.test.sh` proves TERM stops a watcher blocked inside a poll's pane capture and still releases its lock and records an acknowledgeable stop.
 It also exercises a single TERM with a live foreign downtime-marker lock holder, retained stale singleton and subsequent arm-style recovery, including decimal `08` and zero `00` cleanup bounds.

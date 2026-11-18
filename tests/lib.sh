@@ -1798,17 +1798,3 @@ fm_test_base_path_sans() {
   done
   printf '%s\n' "$dir"
 }
-
-# recovery_close_reason <state>: the reason line a watcher's recovery close
-# prints for <state>'s current wake queue - the newest queued row named as a
-# queued wake, or the generic outage reason when nothing usable is queued
-# (recovery_wake in bin/fm-watch.sh). Read it before any drain consumes rows.
-recovery_close_reason() {
-  local queued
-  queued=$(FM_STATE_OVERRIDE="$1" bash -c '. "$1"; fm_wake_queue_newest_reason' _ "$ROOT/bin/fm-wake-lib.sh" 2>/dev/null)
-  if [ -n "$queued" ]; then
-    printf 'check: queued wake: %s\n' "$queued"
-  else
-    printf 'check: rearm-resurface\n'
-  fi
-}

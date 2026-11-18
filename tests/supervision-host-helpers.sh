@@ -803,7 +803,7 @@ park_after_stop() {  # <home>
   rm -f "$1/host.rc"
   : > "$1/park.go"
   wait_until_deadline 60 host_exited "$1" || fail "the watcher's downtime resurface did not reach main: $(cat "$1/host.out")"
-  grep -Fx "$(recovery_close_reason "$1/state")" "$1/host.out" >/dev/null \
+  grep -Eq '^check: (rearm-resurface$|queued wake: )' "$1/host.out" \
     || fail "fixture: the first close after the watcher stopped was not its resurface: $(cat "$1/host.out")"
   main_drain_and_ack "$1"
   quiet_pass_through_successor "$1"

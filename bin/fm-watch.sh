@@ -4352,10 +4352,13 @@ recovery_wake() {
   wake "$WATCHER_RECOVERY_REASON"
 }
 
-# What a downtime recovery wake gives the supervisor to act on: a queued row or
-# a task in flight (fm_supervision_status owns that count).
+# What a downtime recovery wake gives the supervisor to act on: a queued row
+# main would be shown, or, with nothing queued at all, a task in flight
+# (fm_supervision_status owns that count). A queue holding only rows a live
+# supervision-branch grant owns is the branch's to handle, not main's.
 downtime_recovery_has_work() {
-  [ ! -s "$FM_WAKE_QUEUE" ] || return 0
+  [ "$(fm_wake_main_recovery_count)" -eq 0 ] || return 0
+  [ ! -s "$FM_WAKE_QUEUE" ] || return 1
   fm_supervision_status "$STATE"
   [ "$FM_SUP_IN_FLIGHT" -ne 0 ]
 }

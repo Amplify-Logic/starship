@@ -850,8 +850,8 @@ test_outcome_after_the_return_survives_a_host_killed_at_the_turn_end() {
   rm -f "$home/host.rc"
   start_host "$home"
   wait_until_deadline 60 host_exited "$home" || fail "return-first: the next host did not resurface the queued outcome"
-  recovery=$(recovery_close_reason "$home/state")
-  grep -Fx "$recovery" "$home/host.out" >/dev/null \
+  recovery='check: queued wake: check: supervision-host outcome 1 for '
+  grep -q "^$recovery" "$home/host.out" \
     || fail "the next host's first cycle must resurface the queue: $(cat "$home/host.out")"
   grep -F "$(printf '\tpass-through\tattended\tmain-only\t%s' "$recovery")" "$home/state/.supervision-host.log" >/dev/null \
     || fail "the attended resurface must reach main"
@@ -888,7 +888,7 @@ test_next_host_clears_a_turn_its_killed_predecessor_left() {
     "$home"/state/.supervision-host-descendants.* "$home/state/.supervision-host-turn"; do
     [ -e "$f" ] && fail "the next host left its killed predecessor's turn file behind: $f"
   done
-  grep -Fx "$(recovery_close_reason "$home/state")" "$home/host.out" >/dev/null \
+  grep -q '^check: queued wake: check: supervision-host outcome 1 for ' "$home/host.out" \
     || fail "the next host's first cycle must resurface the queue: $(cat "$home/host.out")"
   pass "host: a killed predecessor's engine is reaped and the next host removes its turn files"
 }

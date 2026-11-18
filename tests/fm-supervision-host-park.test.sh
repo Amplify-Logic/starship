@@ -508,7 +508,7 @@ test_first_cycle_status_streams_and_owner_options_reach_it() {
   wait_until 200 host_exited "$home" || append_status "$home" 'second close' 'done'
   wait_until_deadline 60 host_exited "$home" || fail "stream: the restarting host's close did not reach main"
   grep -Eq '^signal: .*demo.status$' "$home/host.out" \
-    || grep -Fx "$(recovery_close_reason "$home/state")" "$home/host.out" >/dev/null \
+    || grep -Eq '^check: (rearm-resurface|queued wake: signal: .*demo\.status)$' "$home/host.out" \
     || fail "stream: the restarting host's close must reach main: $(cat "$home/host.out")"
 
   # That close left an unacknowledged downtime episode; a host the owner starts
