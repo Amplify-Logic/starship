@@ -36,7 +36,7 @@
 # back into its text.
 
 desk_send_fixture() {  # <name> [tmux|herdr] [harness] -> home; starts the stand-in primary
-  local name=$1 backend=${2:-herdr} harness=${3:-claude} home dir fb pid i envs marker
+  local name=$1 backend=${2:-herdr} harness=${3:-claude} home dir fb pid envs marker
   local -a pane_env
   home=$(new_home "$name")
   dir="$home/fixture"
@@ -276,7 +276,7 @@ SH
     'out=$1; shift; "$@" >/dev/null 2>&1 & printf "%s\n" "$!" > "$out.tmp"; mv "$out.tmp" "$out"; wait' \
     _ "$dir/holder-pid" "$@" >/dev/null 2>&1 &
   printf '%s\n' "$!" > "$dir/server-pid"
-  for i in $(seq 1 50); do
+  for _ in $(seq 1 50); do
     [ -s "$dir/holder-pid" ] && break
     sleep 0.1
   done
@@ -285,7 +285,7 @@ SH
   # The pane's root process is the stand-in itself unless a case says otherwise.
   printf '%s\n' "$pid" > "$dir/shell-pid"
   : > "$dir/draft"
-  for i in $(seq 1 50); do
+  for _ in $(seq 1 50); do
     if [ -r "/proc/$pid/environ" ]; then
       envs=$(tr '\0' '\n' < "/proc/$pid/environ")
     else

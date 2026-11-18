@@ -816,6 +816,7 @@ test_secondmate_direct_line_charter_opts_in() {
     "$ROOT/bin/fm-brief.sh" music --secondmate --direct-line sample >/dev/null 2>&1; status=$?
   expect_code 0 "$status" "--direct-line secondmate brief should exit 0"
   brief="$home/data/music/brief.md"
+  # shellcheck source=/dev/null
   ( . "$ROOT/bin/fm-direct-line-lib.sh"; grep -qxF "$FM_DIRECT_LINE_CHARTER_LINE" "$brief" ) \
     || fail "a --direct-line charter must carry the exact opt-in line the library reads"
   assert_grep "The captain's word outranks the main firstmate's" "$brief" \

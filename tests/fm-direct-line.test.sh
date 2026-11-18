@@ -562,7 +562,9 @@ test_talking_is_bounded() {
   printf '#!/bin/sh\nexit 1\n' > "$fakebin/herdr"
   chmod +x "$fakebin/herdr"
   rc=0
+  # shellcheck disable=SC2034 # STATE is read by the sourced library.
   ( unset FM_BACKEND_HERDR_BIN; PATH="$fakebin:$PATH"; FM_HOME="$parent" STATE="$parent/state"
+    # shellcheck source=/dev/null
     . "$ROOT/bin/fm-task-inbox-lib.sh"
     fm_task_inbox_ring herdr fm-x:w1:p1 "$rec" fm-music ) >/dev/null 2>&1 || rc=$?
   [ "$rc" != 4 ] || fail "a steer past the deferral bound must not be deferred"
