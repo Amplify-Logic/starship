@@ -4026,10 +4026,14 @@ def reexec() -> None:
     os.execvp(argv[0], argv)
 
 
-def live(pane: Pane) -> None:
+def use_terminal_theme() -> None:
     global PALETTE, BAND, HULL
     PALETTE = palette(select_theme(query=sys.stdout.isatty()))
     BAND, HULL = PALETTE["band"], PALETTE["hull"]
+
+
+def live(pane: Pane) -> None:
+    use_terminal_theme()
     import termios
     import tty
     watch = Watcher()
@@ -4215,6 +4219,7 @@ def follow(home: str, task_id: str) -> None:
 
     It closes its own pane once the record says its job ended (MIRROR_KEEP).
     """
+    use_terminal_theme()
     peek = os.environ.get("FM_FACTORY_PEEK") or os.path.join(BIN, "fm-peek.sh")
     watch = Watcher()
     job = job_in(cached(home) or {}, task_id)

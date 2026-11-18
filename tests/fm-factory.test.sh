@@ -2428,18 +2428,9 @@ test_workers_splits_live_copies_beside_a_page_pane() {
   pass "factory tab: workers splits a live copy of each running worker beside a page pane"
 }
 
-test_a_live_copy_shows_text_at_the_top_of_a_taller_pane() {
-  reset_case
-  write_registry
-  write_world
-  # The worker's pane holds its text on the first line and blank rows below,
-  # the way an inline agent early in its session looks to bin/fm-peek.sh.
-  # shellcheck disable=SC2016 # $(seq 30) must expand when the stub runs
-  printf '#!/usr/bin/env bash\nprintf "waiting for the captain\\n"; for i in $(seq 30); do echo; done\n' \
-    > "$BINDIR/peek$CASE"
-  chmod +x "$BINDIR/peek$CASE"
-  local screen
-  screen=$(FM_FACTORY_PEEK="$BINDIR/peek$CASE" python3 - "$FACTORY" <<'PY'
+# Draw one frame of a worker's live copy in a 12x80 pty and print what it wrote.
+follow_screen() {
+  python3 - "$FACTORY" <<'PY'
 import fcntl, os, pty, select, signal, struct, sys, termios, time
 pid, fd = pty.fork()
 if pid == 0:
@@ -2466,10 +2457,38 @@ while True:   # keep reading so its last writes drain and it can exit
 os.waitpid(pid, 0)
 sys.stdout.write(seen.decode("utf-8", "replace"))
 PY
-)
+}
+
+test_a_live_copy_shows_text_at_the_top_of_a_taller_pane() {
+  reset_case
+  write_registry
+  write_world
+  # The worker's pane holds its text on the first line and blank rows below,
+  # the way an inline agent early in its session looks to bin/fm-peek.sh.
+  # shellcheck disable=SC2016 # $(seq 30) must expand when the stub runs
+  printf '#!/usr/bin/env bash\nprintf "waiting for the captain\\n"; for i in $(seq 30); do echo; done\n' \
+    > "$BINDIR/peek$CASE"
+  chmod +x "$BINDIR/peek$CASE"
+  local screen
+  screen=$(FM_FACTORY_PEEK="$BINDIR/peek$CASE" follow_screen)
   assert_contains "$screen" "live copy" "the copy draws"
   assert_contains "$screen" "waiting for the captain" "the worker's text shows, not the blank rows below it"
   pass "factory tab: a worker's live copy shows its text even when blank rows follow it"
+}
+
+test_a_live_copy_follows_the_terminal_theme() {
+  reset_case
+  write_registry
+  write_world
+  printf '#!/usr/bin/env bash\nprintf "waiting for the captain\\n"\n' > "$BINDIR/peek$CASE"
+  chmod +x "$BINDIR/peek$CASE"
+  local dark light
+  dark=$(FM_TERMINAL_THEME=dark FM_FACTORY_PEEK="$BINDIR/peek$CASE" follow_screen)
+  light=$(FM_TERMINAL_THEME=light FM_FACTORY_PEEK="$BINDIR/peek$CASE" follow_screen)
+  assert_contains "$dark" "live copy" "the dark copy draws"
+  assert_contains "$light" "live copy" "the light copy draws"
+  [ "$dark" != "$light" ] || fail "the live copy painted the same colours on a light terminal as on a dark one"
+  pass "factory tab: a worker's live copy paints with the terminal's theme"
 }
 
 test_a_factory_tab_opens_no_live_copy_for_parked_held_or_finished_work() {
@@ -3400,6 +3419,7 @@ fm_test_run \
   test_talking_never_changes_who_steers \
   test_enter_opens_the_factory_tab_with_its_live_workers \
   test_a_live_copy_shows_text_at_the_top_of_a_taller_pane \
+  test_a_live_copy_follows_the_terminal_theme \
   test_a_factory_tab_opens_no_live_copy_for_parked_held_or_finished_work \
   test_a_live_copy_closes_when_its_job_ends \
   test_a_running_factory_pane_picks_up_changed_code \
