@@ -16,7 +16,7 @@
 # PR instead of shipping a new one).
 # Usage: fm-brief.sh <task-id> <repo-name> --mode <no-mistakes|direct-PR|local-only> [--branch-prefix <prefix>] [--base-branch <branch>] [--forge <none|gerrit|forgejo|external> [--shape squash]] [--pr <auto|manual>] [--outward '<permission>'] [--herdr-lab]
 #        fm-brief.sh <task-id> <repo-name> --scout [--base-branch <branch>] [--outward '<permission>'] [--herdr-lab]
-#        fm-brief.sh <task-id> --secondmate {<project>...|--no-projects}
+#        fm-brief.sh <task-id> --secondmate [--direct-line] {<project>...|--no-projects}
 #   --scout writes the scout contract instead: the deliverable is a report at
 #   data/<task-id>/report.md, presented by a page beside it at
 #   data/<task-id>/page.html (no branch, no push, no PR), and the worktree is scratch.
@@ -31,6 +31,10 @@
 #   firstmate repo itself (its home is a firstmate worktree, its crews take pooled
 #   worktrees of the same repo). It is mutually exclusive with a project list, and
 #   omitting both still fails loudly so an accidental omission is never silent.
+#   --direct-line opts the charter into the direct line (docs/direct-line.md):
+#   the captain may talk to the mate directly, and the charter carries the
+#   exact opt-in line bin/fm-direct-line-lib.sh reads plus its rules. Without
+#   it the charter is off, the default.
 #   Set FM_SECONDMATE_CHARTER='<charter>' to fill the charter text.
 #   Set FM_SECONDMATE_SCOPE='<scope>' to write a routing scope distinct from the charter text.
 #   --herdr-lab is mandatory when the task will issue Herdr lifecycle commands.
@@ -246,6 +250,7 @@ case "$CONFIG" in /*) ;; *) CONFIG="$PWD/$CONFIG" ;; esac
 KIND=ship
 HERDR_LAB=0
 NO_PROJECTS=0
+DIRECT_LINE=0
 MODE=
 MODE_SET=0
 BRANCH_PREFIX=fm/
@@ -291,6 +296,7 @@ for a in "$@"; do
     --secondmate) KIND=secondmate ;;
     --herdr-lab) HERDR_LAB=1 ;;
     --no-projects) NO_PROJECTS=1 ;;
+    --direct-line) DIRECT_LINE=1 ;;
     --mode) want_value=mode ;;
     --mode=*) MODE=${a#--mode=}; MODE_SET=1 ;;
     --branch-prefix) want_value="branch-prefix" ;;
@@ -453,6 +459,10 @@ if [ "$KIND" = secondmate ] && [ "$HERDR_LAB" -eq 1 ]; then
   exit 1
 fi
 
+if [ "$DIRECT_LINE" -eq 1 ] && [ "$KIND" != secondmate ]; then
+  echo "error: --direct-line applies only to --secondmate charters" >&2
+  exit 1
+fi
 if [ "$NO_PROJECTS" -eq 1 ] && [ "$KIND" != secondmate ]; then
   echo "error: --no-projects applies only to --secondmate charters" >&2
   exit 1
@@ -616,6 +626,28 @@ else
   PROJECT_CLONES_BODY=$(printf '%s\n' "$SECONDMATE_PROJECTS" | tr ' ' '\n' | sed 's/^/- /')
   PROJECT_CLONES_NOTE="The projects above are local clones for work you supervise; they are not an exclusive ownership claim."
 fi
+if [ "$DIRECT_LINE" -eq 1 ]; then
+  CHANNEL_OPENING="The main firstmate does not read this chat, and the captain reads it only through the direct line below: the main firstmate sees only what is appended to $STATUS_FILE.
+That file is your parent channel: every outcome the local AGENTS.md tells a firstmate to bring to the captain is also one appended line there, even when you have already told the captain in this chat."
+  # shellcheck source=bin/fm-direct-line-lib.sh
+  . "$SCRIPT_DIR/fm-direct-line-lib.sh"
+  DIRECT_LINE_SECTION="
+# Direct line to the captain
+$FM_DIRECT_LINE_CHARTER_LINE
+The captain may talk to you directly: through bin/fm-direct-line.sh, which types into this pane, or at this pane's own keyboard.
+A message with no from-firstmate marker is the captain; answer the captain in this chat, conversationally.
+bin/fm-direct-line.sh copies every message the captain sends you to the parent channel itself, so a conversational reply needs no parent line; a decision, blocker, failure, or recommendation still does, as the section above says.
+The captain's word outranks the main firstmate's: when a request from the main firstmate conflicts with what the captain told you, follow the captain and append a \`needs-decision\` line naming the conflict.
+A call held for the captain closes by script when the captain's direct-line message names it, and such a message arrives after \`[direct line message <id> answers <task-id>]\`; never close a held call yourself from your own reading of the chat.
+If that call is still open a minute later, run \`bin/fm-direct-line.sh answered <task-id> --client-id <id>\` citing that message; it is the only way you may close a held call.
+When the captain answers a held call any other way, such as at this pane's keyboard, append a \`needs-decision\` line quoting the captain's words and naming the call, so the main firstmate records it.
+When you ask the captain something and wait for the answer, run \`bin/fm-direct-line.sh waiting\` so the main firstmate leaves you alone, and \`bin/fm-direct-line.sh waiting --clear\` once you have it.
+"
+else
+  CHANNEL_OPENING="Nobody reads this chat: the captain and the main firstmate see only what is appended to $STATUS_FILE, and a captain-facing sentence that is not appended there has not been sent.
+That file is your parent channel, and in this home it IS the captain: every sentence you would say to the captain, and every outcome the local AGENTS.md tells a firstmate to bring to the captain, is one appended line there, never chat."
+  DIRECT_LINE_SECTION=
+fi
 cat > "$BRIEF" <<EOF
 You are a persistent second mate managed by the main firstmate. Work on your own; do not wait for a human.
 
@@ -638,11 +670,10 @@ Act only on tasks the main firstmate routes to you.
 Never start a survey, audit, or "find improvements" sweep on your own initiative; that is not your job and it is unwanted.
 
 # The captain and the parent channel
-Nobody reads this chat: the captain and the main firstmate see only what is appended to $STATUS_FILE, and a captain-facing sentence that is not appended there has not been sent.
-That file is your parent channel, and in this home it IS the captain: every sentence you would say to the captain, and every outcome the local AGENTS.md tells a firstmate to bring to the captain, is one appended line there, never chat.
+$CHANNEL_OPENING
 Your own machinery publishes the durable facts about your crew's work for you (\`bin/fm-parent-channel-lib.sh\`): a child's terminal done or failed line with its note and PR on every supervision poll, a PR-ready line when you register a PR, a task you hold for the captain and its answer, a merge, and a child's final line at cleanup all reach the parent channel from the scripts that record them, whether or not you append anything.
 What only you can append is judgement: the answer to a marked request below, a recommendation or caveat on a delivered outcome, a blocker or failure of your own, and anything else you would otherwise say to the captain.
-
+$DIRECT_LINE_SECTION
 # Requests from the main firstmate
 You are a firstmate in your own home, so an incoming message reaches you in your own chat.
 You must distinguish who it is from, because the answer goes to a different place.

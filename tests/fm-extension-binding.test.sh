@@ -551,7 +551,12 @@ if section_enabled coordinator-pass; then
 fi
 
 if section_enabled coordinator-late-pass; then
-  wait_for_file "${FM_EXTENSION_BINDING_COORDINATOR_LANE_PUBLISHED:?}" || exit 90
+  # The sibling lane may start slowly beside the aggregate's concurrent lanes,
+  # so wait out the coordinator's own lane deadline, not a shorter fixed bound.
+  until [ -s "${FM_EXTENSION_BINDING_COORDINATOR_LANE_PUBLISHED:?}" ]; do
+    [ "$(date +%s)" -lt "${FM_EXTENSION_BINDING_LANE_DEADLINE_EPOCH:?}" ] || exit 90
+    sleep 0.05
+  done
   exit 0
 fi
 

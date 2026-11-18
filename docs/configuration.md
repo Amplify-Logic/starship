@@ -1495,6 +1495,7 @@ Without an id they select the default line only; model and effort output is empt
 When the file declares an override, every resolver read validates the whole file, even when no id is supplied or the malformed line concerns another mate.
 Every resolution site that knows which mate it is launching passes that id, so spawn, control-plane relaunch, and secondmate restart all land on one decision.
 `config/crew-harness` remains a bare adapter-name file and is never parsed for a model.
+`bin/fm-secondmate-pin.sh` shows a mate's resolved pin as JSON and sets or clears its one `mate <id>:` line, refusing any edit after which the file would not resolve.
 Changing this pin affects the next secondmate spawn or control-plane relaunch; the relaunch profile rules are owned by [`docs/agent-control.md`](agent-control.md#transactional-relaunch).
 For a separate account choice for one local secondmate, see [per-secondmate account pins](#per-secondmate-account-pins).
 The regression coverage is in [`fm-secondmate-harness.test.sh`](../tests/fm-secondmate-harness.test.sh), [`fm-control-relaunch.test.sh`](../tests/fm-control-relaunch.test.sh), and [`fm-secondmate-restart.test.sh`](../tests/fm-secondmate-restart.test.sh).

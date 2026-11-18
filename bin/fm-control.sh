@@ -8,6 +8,13 @@
 #                                         [--effort <level>] [--account <entry>]
 #                                         (--note <text> | --note-file <path>)
 #
+# A local second mate's pane-writer lock is held across every send, and a
+# direct-line second mate that is talking with its owner
+# (bin/fm-direct-line-lib.sh) is refused every verb before anything is sent:
+# the first mate never interrupts, stops or relaunches a conversation the
+# owner is having. There is no override: the conversation ends only through
+# the mate's own `fm-direct-line.sh waiting --clear` or its bounded lapse.
+#
 # Why this exists, and how it differs from fm-send.sh. bin/fm-send.sh is the
 # DATA plane: conversational text for the agent to read, always routing-marked
 # for a kind=secondmate target so the reply returns through the status path.
@@ -228,6 +235,7 @@ die() {  # <message>
 }
 
 CONTROL_LOCK=
+PANE_WRITER_STATE=
 CONTROL_LOCK_HELD=0
 RELAUNCH_ACTIVE=0
 RELAUNCH_PHASE=start
@@ -242,6 +250,10 @@ control_cleanup() {
   # the next lifecycle command for this task writes the same path.
   if [ -n "${FM_COMPOSER_DIALOG_SINK:-}" ]; then
     rm -f "$FM_COMPOSER_DIALOG_SINK"
+  fi
+  if [ -n "${PANE_WRITER_STATE:-}" ]; then
+    fm_pane_writer_release "$PANE_WRITER_STATE" || true
+    PANE_WRITER_STATE=
   fi
   if [ "$CONTROL_LOCK_HELD" = 1 ]; then
     CONTROL_LOCK_HELD=0
@@ -390,6 +402,38 @@ fi
 # instead, using the same `remote_host` signal bin/fm-send.sh routes on.
 if [ -n "$(fm_meta_get "$META" remote_host)" ]; then
   die "task $ID is a remotely placed secondmate on $(fm_meta_get "$META" remote_host); its agent runs outside this home, so no lifecycle action here could verify that it interrupted, stopped, or came back. Drive its lifecycle on that host, and reconcile it through the secondmate recovery path rather than this plane"
+fi
+
+# A local second mate's pane has other typists (bin/fm-pane-writer-lib.sh), so
+# this plane holds that home's pane-writer lock across everything it sends,
+# waiting up to FM_CONTROL_PANE_WAIT seconds (default 15) for another writer.
+# Under that lock, a direct-line mate talking with its owner is refused before
+# anything else is read or sent (bin/fm-direct-line-lib.sh owns that state).
+if [ "$(fm_meta_get "$META" kind)" = secondmate ]; then
+  # shellcheck source=bin/fm-direct-line-lib.sh
+  . "$SCRIPT_DIR/fm-direct-line-lib.sh"
+  # shellcheck source=bin/fm-pane-writer-lib.sh
+  . "$SCRIPT_DIR/fm-pane-writer-lib.sh"
+  MATE_HOME=$(fm_meta_get "$META" home)
+  [ -n "$MATE_HOME" ] || MATE_HOME=$(fm_meta_get "$META" worktree)
+  if [ -n "$MATE_HOME" ] && [ -d "$MATE_HOME/state" ]; then
+    pane_wait_until=$(( $(date +%s) + $(_fm_direct_line_number "${FM_CONTROL_PANE_WAIT:-}" 15) ))
+    # A lock that cannot be created at all (an unreadable home) is a lock no
+    # other typist can take either; the endpoint checks below then decide.
+    pane_rc=1
+    while [ "$pane_rc" = 1 ]; do
+      pane_rc=0
+      fm_pane_writer_try_acquire "$MATE_HOME/state" || pane_rc=$?
+      [ "$pane_rc" = 1 ] || break
+      [ "$(date +%s)" -lt "$pane_wait_until" ] \
+        || die "another writer is still typing into second mate $ID's pane; nothing was sent"
+      sleep 0.2
+    done
+    [ "$pane_rc" != 0 ] || PANE_WRITER_STATE="$MATE_HOME/state"
+    if fm_direct_line_talking "$STATE" "$ID" "$MATE_HOME"; then
+      die "second mate $ID is talking with its owner on the direct line ($FM_DIRECT_LINE_TALKING_REASON, until epoch $FM_DIRECT_LINE_TALKING_UNTIL); the first mate never interrupts, stops or relaunches that conversation. It ends when the mate runs 'fm-direct-line.sh waiting --clear' or the talking state lapses"
+    fi
+  fi
 fi
 
 fm_backend_validate_task_endpoint "$META" "$ID" || exit 1

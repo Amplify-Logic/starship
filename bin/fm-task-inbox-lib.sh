@@ -102,6 +102,10 @@ _FM_TASK_INBOX_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$_FM_TASK_INBOX_LIB_DIR/fm-wake-lib.sh"
 # shellcheck source=/dev/null
 . "$_FM_TASK_INBOX_LIB_DIR/fm-backend.sh"
+# shellcheck source=bin/fm-pane-writer-lib.sh
+. "$_FM_TASK_INBOX_LIB_DIR/fm-pane-writer-lib.sh"
+# shellcheck source=bin/fm-direct-line-lib.sh
+. "$_FM_TASK_INBOX_LIB_DIR/fm-direct-line-lib.sh"
 
 FM_TASK_INBOX_SCHEMA='fm-task-inbox.v1'
 FM_TASK_INBOX_GRACE_DEFAULT=90
@@ -379,8 +383,13 @@ fm_task_inbox_doorbell_line() {  # <record-path>
 # Returns 0 rang, 1 skipped because the composer PROVENLY holds pending text
 # other than our own doorbell (the watcher re-rings later), 2 the backend send
 # failed, 3 skipped because the endpoint is positively dead or missing (nothing
-# typed; recovery owns the record). No return value is delivery proof; the
-# acknowledgement move is the only delivery signal.
+# typed; recovery owns the record), 4 deferred with nothing typed because the
+# target is a local second mate's own pane and either another writer holds that
+# home's pane-writer lock (bin/fm-pane-writer-lib.sh) or the mate is a
+# direct-line mate talking with its owner and the record is still young
+# (bin/fm-direct-line-lib.sh fm_direct_line_record_defers); the watcher re-rings
+# later without counting it. No return value is delivery
+# proof; the acknowledgement move is the only delivery signal.
 # The skip is deliberately narrow: only an exact `pending` verdict can defer,
 # because there our Enter could submit someone's real half-typed content.
 # `pending-unproven` and `unknown` still ring - the worst outcome is a garbled
@@ -392,6 +401,24 @@ fm_task_inbox_doorbell_line() {  # <record-path>
 # rather than skipped; skipping it would block every later ring. On both paths
 # a lost first Enter gets one confirmed retry.
 fm_task_inbox_ring() {  # <backend> <target> <record-path> [expected-label]
+  local home rc=0
+  if ! home=$(fm_direct_line_inbox_record_home "$3"); then
+    _fm_task_inbox_ring_unlocked "$@"
+    return
+  fi
+  ! fm_direct_line_record_defers "$3" || return 4
+  fm_pane_writer_try_acquire "$home/state" || rc=$?
+  case "$rc" in
+    0) ;;
+    1) return 4 ;;
+    *) return 2 ;;
+  esac
+  _fm_task_inbox_ring_unlocked "$@" || rc=$?
+  fm_pane_writer_release "$home/state"
+  return "$rc"
+}
+
+_fm_task_inbox_ring_unlocked() {  # <backend> <target> <record-path> [expected-label]
   local backend=$1 target=$2 rec=$3 label=${4:-} line cstate verdict
   case "$(fm_backend_agent_state "$backend" "$target" 2>/dev/null || true)" in
     dead|missing) return 3 ;;

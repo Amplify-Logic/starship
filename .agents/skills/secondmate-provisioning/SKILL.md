@@ -44,7 +44,7 @@ The `projects:` field is a non-exclusive clone list, not ownership.
 Scaffold a secondmate charter with:
 
 ```sh
-bin/fm-brief.sh <id> --secondmate {<project>...|--no-projects}
+bin/fm-brief.sh <id> --secondmate [--direct-line] {<project>...|--no-projects}
 ```
 
 The scaffold writes a charter brief instead of a task brief.
@@ -57,6 +57,8 @@ Retire or clean that home first, and re-scaffold a stale project-bearing charter
 Keep custom charter text focused on the persistent responsibility, available project clones, and genuinely domain-specific hard rules.
 The scaffolded charter, later copied to `data/charter.md`, owns the standard lifecycle and escalation wording.
 Preserve the generated charter sections unless the domain genuinely needs a hard rule.
+Pass `--direct-line` only when the captain asked to talk to that second mate directly, and only for a local route, then run `bin/fm-direct-line.sh enable <id>` from this home once the mate is seeded; it is the one carve-out from hard rule 4, and [`docs/direct-line.md`](../../../docs/direct-line.md) owns what it changes.
+Never add or remove the opt-in line in a seeded charter by hand on your own initiative; re-seed from a re-scaffolded charter at the captain's word.
 
 Provision a local persistent home and registry entry after the charter is filled:
 
@@ -224,7 +226,8 @@ An SSH transport failure or unreadable remote endpoint remains unknown and must 
 Respawn re-resolves the secondmate harness from current config, uses the same guarded pre-launch sync, and re-propagates inherited local material, so recovered secondmates converge inherited config items and shared captain preferences whenever their home validates; tracked-file sync remains guarded separately.
 If the secondmate is already running and only inherited local material changed, prefer `bin/fm-config-push.sh` over respawning.
 Before moving a live LOCAL secondmate onto a newly pinned harness, model, or effort, check replacement support in [`docs/agent-control.md`](../../../docs/agent-control.md#fail-closed-boundaries).
-On a supported backend, set `config/secondmate-harness` and relaunch it with `bin/fm-control.sh <id> relaunch`, which re-resolves that pin, stops the agent, and launches the replacement in the same home.
+On a supported backend, set `config/secondmate-harness` (`bin/fm-secondmate-pin.sh set <id> ...` edits that mate's one line safely) and relaunch it with `bin/fm-control.sh <id> relaunch`, which re-resolves that pin, stops the agent, and launches the replacement in the same home.
+That plane refuses a direct-line second mate that is talking with the captain, with no override; that state ends through the mate's own `bin/fm-direct-line.sh waiting --clear` or its bounded lapse ([`docs/direct-line.md`](../../../docs/direct-line.md)).
 The same relaunch and recovery paths honor the durable [per-secondmate account pin](../../../docs/configuration.md#per-secondmate-account-pins).
 That plane refuses a remotely placed secondmate by name, because its agent runs on another host where none of the plane's postconditions can be read.
 Move a REMOTE one with `bin/fm-remote-secondmate-relaunch.sh <id> <harness> <model|default|-> <effort|default|->`, which runs that same control-plane relaunch on its host and then republishes this primary's own route metadata from the identity the host confirmed; pass the profile explicitly and use `default` for an absent pin, because `config/secondmate-harness` is not inherited and the copy on that host belongs to a different home ([`docs/remote-secondmates.md`](../../../docs/remote-secondmates.md)).

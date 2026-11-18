@@ -1528,319 +1528,10 @@ test_desk_voice_retries_run_one_at_a_time() {
 }
 
 # --- desk-voice send: straight into the primary's chat pane ------------------
-#
-# A stand-in primary: a live process whose command line names a harness (a
-# python script under a claude/ directory, or another harness's, which the
-# session-lock identity accepts) and whose environment names a Herdr pane (or
-# a tmux pane). It holds the fixture home's session lock, and runs beneath a
-# stand-in multiplexer server. The herdr and tmux on PATH are fakes that log
-# every call, so no real pane ever receives text or keys.
-#
-# The herdr fake draws Claude's chat box between two rules: the draft file is
-# typed text, the ghost file a dim suggested prompt shown while nothing is
-# typed, and the stash file a draft set aside with Ctrl+S, shown as
-# `› stashed` in the footer. Its keys behave as Claude's do: Ctrl+S stashes a
-# typed draft or pops the stash into an empty box, Ctrl+U clears the box, and
-# Enter submits the box (the suggestion when nothing is typed) to the
-# submitted log, then restores a stash into the box. Knob files bend it: wrap
-# draws the box 40 columns wide, where Ctrl+U deletes one wrapped row;
-# drop-head loses the first typed character; no-marker hides `› stashed`;
-# narrow draws `› stashed` on a footer row of its own, as a narrow pane wraps it;
-# pop-fails refuses the Ctrl+S that pops a stash; refold makes Enter redraw
-# the box as a pasted-text placeholder plus the typed tail without submitting;
-# late-paste holds sent text back from the box for the number of screen reads
-# it names, as a busy Claude draws input late, yet handles it before any key.
-# Text over 800 characters folds as Claude folds it (verified live on claude
-# 2.1.283): a bracketed paste into one `[Pasted text #N]` placeholder, a typed
-# burst into a placeholder plus its literal tail. Enter expands a placeholder
-# back into its text.
 
-desk_send_fixture() {  # <name> [tmux|herdr] [harness] -> home; starts the stand-in primary
-  local name=$1 backend=${2:-herdr} harness=${3:-claude} home dir fb pid i envs marker
-  local -a pane_env
-  home=$(new_home "$name")
-  dir="$home/fixture"
-  fb="$dir/bin"
-  mkdir -p "$fb" "$dir/$harness"
-  # A node linked under the harness's own name is a process whose name the
-  # session-lock identity reads as that harness, as a real `claude` is.
-  # Without node, a python script under the harness's directory stands in.
-  if command -v node >/dev/null 2>&1; then
-    ln -s "$(command -v node)" "$dir/$harness/$harness"
-    set -- "$dir/$harness/$harness" -e 'setTimeout(() => {}, 60000)'
-  else
-    printf 'import time\ntime.sleep(60)\n' > "$dir/$harness/holder.py"
-    set -- python3 "$dir/$harness/holder.py"
-  fi
-  cat > "$fb/herdr" <<'SH'
-#!/usr/bin/env bash
-set -u
-dir=${FM_FAKE_HERDR_DIR:?}
-{ printf 'call'; for a in "$@"; do printf '\x1f%s' "$a"; done; printf '\n'; } >> "$dir/herdr.log"
-draw_queued() {
-  [ -e "$dir/queued" ] || return 0
-  cat "$dir/queued" >> "$dir/draft"
-  rm -f "$dir/queued" "$dir/queued-reads"
-}
-case "${1:-} ${2:-}" in
-  "status --json")
-    printf '{"client":{"version":"0.7.4","protocol":14},"server":{"running":true}}\n' ;;
-  "pane get")
-    if [ -e "$dir/unfocused" ]; then f=false; else f=true; fi
-    printf '{"result":{"pane":{"pane_id":"%s","focused":%s}}}\n' "$3" "$f" ;;
-  "pane process-info")
-    printf '{"result":{"type":"pane_process_info","process_info":{"pane_id":"%s","shell_pid":%s,"foreground_processes":[]}}}\n' \
-      "$4" "$(cat "$dir/shell-pid")" ;;
-  "pane read")
-    if [ -e "$dir/queued" ]; then
-      left=$(( $(cat "$dir/queued-reads") - 1 ))
-      if [ "$left" -le 0 ]; then draw_queued; else printf '%s' "$left" > "$dir/queued-reads"; fi
-    fi
-    case " $* " in *' ansi '*) ansi=1 ;; *) ansi=0 ;; esac
-    if [ -e "$dir/modal" ]; then
-      if [ "$ansi" = 1 ]; then cat "$dir/modal"; else sed $'s/\033\\[[0-9;:]*m//g' "$dir/modal"; fi
-      exit 0
-    fi
-    # The screen is the case's capture, or a bare chat box, with its last
-    # prompt row redrawn from the box's state the way Claude draws it.
-    screen="$dir/screen"
-    if [ ! -e "$screen" ]; then
-      screen="$dir/screen.default"
-      printf '%s\n' '────────────────────────────────────────' '❯' \
-        '────────────────────────────────────────' '  ⏵⏵ auto mode on' > "$screen"
-    fi
-    esc=$'\033'
-    if [ -e "$dir/stale-left" ]; then
-      draft=$(cat "$dir/stale-draft")
-      left=$(( $(cat "$dir/stale-left") - 1 ))
-      if [ "$left" -le 0 ]; then rm -f "$dir/stale-left"; else printf '%s' "$left" > "$dir/stale-left"; fi
-    else
-      draft=$(cat "$dir/draft" 2>/dev/null)
-    fi
-    row="❯"$'\302\240'"${esc}[0m"
-    if [ -n "$draft" ] && [ -e "$dir/wrap" ]; then
-      row+="${esc}[38;2;255;255;255m${draft:0:40}"
-      rest=${draft:40}
-      while [ -n "$rest" ]; do
-        row+='\n  '"${rest:0:40}"
-        rest=${rest:40}
-      done
-      row+="${esc}[0m"
-    elif [ -n "$draft" ]; then
-      row+="${esc}[38;2;255;255;255m${draft}${esc}[0m"
-    elif [ -e "$dir/ghost" ]; then
-      row+="${esc}[2m$(cat "$dir/ghost")${esc}[0m"
-    fi
-    stash=0
-    [ ! -e "$dir/stash" ] || [ -e "$dir/no-marker" ] || stash=1
-    [ "$stash" = 0 ] || [ ! -e "$dir/narrow" ] || stash=2
-    last=$(grep -n '❯' "$screen" | tail -n 1 | cut -d: -f1)
-    awk -v n="$last" -v row="$row" -v stash="$stash" -v rows="$(wc -l < "$screen")" '
-      NR == n { print row "\r"; next }
-      NR == rows && stash == 2 { print; print "                    › stashed\r"; next }
-      NR == rows && stash == 1 { sub(/\r$/, ""); print $0 "    › stashed\r"; next }
-      { print }
-    ' "$screen" > "$dir/screen.now"
-    if [ "$ansi" = 1 ]; then cat "$dir/screen.now"; else sed $'s/\033\\[[0-9;:]*m//g' "$dir/screen.now"; fi ;;
-  "pane send-text")
-    [ ! -e "$dir/send-text-fails" ] || exit 1
-    if [ -e "$dir/hold-send" ]; then
-      : > "$dir/send-held"
-      for _ in $(seq 1 150); do
-        [ -e "$dir/release-send" ] && break
-        sleep 0.1
-      done
-      [ -e "$dir/release-send" ] || exit 1
-    fi
-    if [ -e "$dir/drop-head" ]; then text=${4:1}; else text=$4; fi
-    open=$'\033[200~' close=$'\033[201~'
-    n=$(( $(cat "$dir/pastes" 2>/dev/null || echo 0) + 1 ))
-    if [ "${text#"$open"}" != "$text" ] && [ "${text%"$close"}" != "$text" ]; then
-      text=${text#"$open"}
-      text=${text%"$close"}
-      if [ "${#text}" -gt 800 ]; then
-        printf '%s' "$n" > "$dir/pastes"
-        printf '%s' "$text" > "$dir/paste-$n"
-        text="[Pasted text #$n]"
-      fi
-    else
-      text=${text%"$close"}
-      if [ "${#text}" -gt 800 ]; then
-        printf '%s' "$n" > "$dir/pastes"
-        printf '%s' "${text:0:${#text}-40}" > "$dir/paste-$n"
-        text="[Pasted text #$n]${text: -40}"
-      fi
-    fi
-    if [ -e "$dir/late-paste" ]; then
-      printf '%s' "$text" >> "$dir/queued"
-      cp "$dir/late-paste" "$dir/queued-reads"
-    else
-      printf '%s' "$text" >> "$dir/draft"
-    fi
-    [ ! -e "$dir/type-before-enter" ] || cat "$dir/type-before-enter" >> "$dir/draft" ;;
-  "pane send-keys")
-    draw_queued
-    case "$4" in
-      ctrl+s)
-        [ ! -e "$dir/no-stash" ] || exit 0
-        if [ -s "$dir/draft" ]; then
-          mv "$dir/draft" "$dir/stash"
-          : > "$dir/draft"
-        elif [ -e "$dir/stash" ]; then
-          [ ! -e "$dir/pop-fails" ] || exit 1
-          mv "$dir/stash" "$dir/draft"
-        fi ;;
-      ctrl+u)
-        draft=$(cat "$dir/draft" 2>/dev/null)
-        if [ -e "$dir/wrap" ] && [ "${#draft}" -gt 40 ]; then
-          printf '%s' "${draft:0:$(( (${#draft} - 1) / 40 * 40 ))}" > "$dir/draft"
-        else
-          : > "$dir/draft"
-        fi ;;
-      *)
-        : > "$dir/entered"
-        if [ -e "$dir/swallow-enter-once" ]; then
-          rm "$dir/swallow-enter-once"
-          exit 0
-        fi
-        [ ! -e "$dir/never-works" ] || exit 0
-        if [ -e "$dir/refold" ]; then
-          draft=$(cat "$dir/draft")
-          printf '[Pasted text #2 +3 lines]%s' "${draft: -40}" > "$dir/draft"
-          exit 0
-        fi
-        if [ -s "$dir/draft" ]; then
-          draft=$(cat "$dir/draft")
-          for paste in "$dir"/paste-*; do
-            [ -e "$paste" ] || continue
-            draft=${draft//"[Pasted text #${paste##*-}]"/$(cat "$paste")}
-          done
-          printf '%s\n' "$draft" >> "$dir/submitted"
-          if [ -e "$dir/stale-reads" ]; then
-            printf '%s' "$draft" > "$dir/stale-draft"
-            cp "$dir/stale-reads" "$dir/stale-left"
-          fi
-        elif [ -e "$dir/ghost" ]; then
-          { cat "$dir/ghost"; printf '\n'; } >> "$dir/submitted"
-        fi
-        : > "$dir/draft"
-        [ ! -e "$dir/stash" ] || mv "$dir/stash" "$dir/draft"
-        [ ! -e "$dir/type-after-enter" ] || mv "$dir/type-after-enter" "$dir/draft" ;;
-    esac ;;
-  "agent get")
-    if [ -e "$dir/entered" ] && [ ! -e "$dir/never-works" ] && [ ! -e "$dir/agent-idle" ]; then s=working; else s=idle; fi
-    if [ -e "$dir/agent" ]; then
-      printf '{"result":{"agent":{"agent":"%s","agent_status":"%s"}}}\n' "$(cat "$dir/agent")" "$s"
-    else
-      printf '{"result":{"agent":{"agent_status":"%s"}}}\n' "$s"
-    fi ;;
-esac
-exit 0
-SH
-  # By default the tmux fake answers only the pane and front checks. Ring
-  # race cases opt into the same composer model as Herdr, through tmux's
-  # capture, buffer and key operations.
-  cat > "$fb/tmux" <<'SH'
-#!/usr/bin/env bash
-set -u
-dir=${FM_FAKE_HERDR_DIR:?}
-{ printf 'call'; for a in "$@"; do printf '\x1f%s' "$a"; done; printf '\n'; } >> "$dir/tmux.log"
-case "$*" in
-  *'show-options -gv focus-events'*) cat "$dir/tmux-focus-events" 2>/dev/null || printf 'on\n' ;;
-  *'@fm-focus-since'*) cat "$dir/tmux-focus-since" 2>/dev/null ;;
-  *'#{pane_pid}'*) cat "$dir/shell-pid" ;;
-  *'#{session_id} #{window_active}#{pane_active}'*) cat "$dir/tmux-active" ;;
-  *'#{pane_id}'*) printf '%%9\n' ;;
-  list-clients*) cat "$dir/tmux-clients" 2>/dev/null ;;
-  *)
-    [ -e "$dir/tmux-composer" ] || exit 1
-    case "$1" in
-      capture-pane) "$dir/bin/herdr" pane read --pane w7:p3 --format ansi ;;
-      display-message)
-        case "$*" in *'#{cursor_y}'*) printf '1\n' ;; *) exit 1 ;; esac ;;
-      load-buffer) cat > "$dir/tmux-buffer" ;;
-      paste-buffer) "$dir/bin/herdr" pane send-text w7:p3 "$(cat "$dir/tmux-buffer")" ;;
-      send-keys)
-        case "$4" in
-          -l) "$dir/bin/herdr" pane send-text w7:p3 "$5" ;;
-          Enter) "$dir/bin/herdr" pane send-keys w7:p3 enter ;;
-          *) exit 1 ;;
-        esac ;;
-      *) exit 1 ;;
-    esac ;;
-esac
-SH
-  printf '#!/bin/sh\nexit 0\n' > "$fb/osascript"
-  chmod +x "$fb/herdr" "$fb/tmux" "$fb/osascript"
-  : > "$dir/herdr.log"
-  : > "$dir/tmux.log"
-  if [ "$backend" = tmux ]; then
-    pane_env=(TMUX="$dir/tmux.sock,1,0" TMUX_PANE=%9)
-    marker=TMUX_PANE=%9
-  else
-    pane_env=(HERDR_ENV=1 HERDR_PANE_ID=w7:p3 HERDR_SESSION=fm-desk-send-test
-      HERDR_SOCKET_PATH="$dir/herdr.sock")
-    marker=HERDR_PANE_ID=w7:p3
-  fi
-  # The stand-in server is the stand-in primary's parent, as a multiplexer
-  # server is the parent of the pane that hosts a real primary.
-  # shellcheck disable=SC2016  # expanded by the inner shell
-  env "${pane_env[@]}" bash -c \
-    'out=$1; shift; "$@" >/dev/null 2>&1 & printf "%s\n" "$!" > "$out.tmp"; mv "$out.tmp" "$out"; wait' \
-    _ "$dir/holder-pid" "$@" >/dev/null 2>&1 &
-  printf '%s\n' "$!" > "$dir/server-pid"
-  for i in $(seq 1 50); do
-    [ -s "$dir/holder-pid" ] && break
-    sleep 0.1
-  done
-  pid=$(cat "$dir/holder-pid" 2>/dev/null) || return 1
-  printf '%s\n' "$pid" > "$home/state/.lock"
-  # The pane's root process is the stand-in itself unless a case says otherwise.
-  printf '%s\n' "$pid" > "$dir/shell-pid"
-  : > "$dir/draft"
-  for i in $(seq 1 50); do
-    if [ -r "/proc/$pid/environ" ]; then
-      envs=$(tr '\0' '\n' < "/proc/$pid/environ")
-    else
-      envs=$(ps -E -ww -o command= -p "$pid" 2>/dev/null | tr ' ' '\n')
-    fi
-    case "$envs" in *"$marker"*) break ;; esac
-    sleep 0.1
-  done
-  case "$envs" in
-    *"$marker"*) ;;
-    *) kill "$pid" 2>/dev/null; return 1 ;;
-  esac
-  printf '%s\n' "$home"
-}
-
-# Each case starts its own stand-in; stop it when the case is done.
-desk_send_done() {  # <home>
-  kill "$(cat "$1/fixture/holder-pid")" 2>/dev/null || true
-}
-
-desk_send_skip() {  # <case>
-  printf 'skip: %s: this host does not expose the stand-in primary environment\n' "$1"
-}
-
-desk_send() {  # <home> [--image <png>]... <text> -> stdout of fm-desk-voice.sh send
-  local home=$1 dir="$1/fixture"
-  shift
-  (
-    unset TMUX TMUX_PANE HERDR_ENV HERDR_PANE_ID HERDR_SESSION HERDR_SOCKET_PATH \
-      FM_BACKEND_HERDR_BIN FM_SUPERVISOR_TARGET FM_SUPERVISOR_BACKEND
-    PATH="$dir/bin:$PATH" FM_FAKE_HERDR_DIR="$dir" FM_HOME="$home" \
-      FM_STATE_OVERRIDE="$home/state" FM_BACKEND_HERDR_SUBMIT_MIN_SLEEP=0.1 \
-      "$DESK" send --source test-suite "$@"
-  )
-}
-
-herdr_calls() {  # <home> <subcommand words...> -> matching log lines, readable
-  local home=$1 pattern
-  shift
-  pattern=$(printf '\x1f%s' "$@")
-  grep -F -- "$pattern" "$home/fixture/herdr.log" | tr '\037' ' '
-}
+# shellcheck source=tests/desk-send-fixture.sh
+# shellcheck disable=SC1091
+. "$(dirname "${BASH_SOURCE[0]}")/desk-send-fixture.sh"
 
 inbox_count() {  # <home>
   find "$home/state/desk-voice/inbox" -name '*.json' 2>/dev/null | wc -l | tr -d ' '
@@ -1864,6 +1555,129 @@ test_desk_voice_send_types_into_the_primary_pane() {
   [ ! -s "$home/fixture/tmux.log" ] || fail "talking to a herdr primary must never call tmux: $(cat "$home/fixture/tmux.log")"
   desk_send_done "$home"
   pass "fm-desk-voice send: types the transcript into the primary's own pane and submits it, with no tmux"
+}
+
+test_desk_voice_send_with_a_client_id_is_delivered_once() {
+  local home out again record
+  home=$(desk_send_fixture send-client-id) || { desk_send_skip send-client-id; return 0; }
+  out=$(desk_send "$home" --client-id deck-msg-0001 "Play the second take") || fail "send failed: $out"
+  assert_contains "$out" "sent: herdr fm-desk-send-test:w7:p3" "the first send types into the pane"
+  again=$(desk_send "$home" --client-id deck-msg-0001 "Play the second take") || fail "retry failed: $again"
+  assert_equals "$out" "$again" "a retried client id prints the recorded outcome"
+  [ "$(herdr_calls "$home" pane send-text | wc -l | tr -d ' ')" = 1 ] || fail "a retried client id must type nothing"
+  [ "$(inbox_count "$home")" = 0 ] || fail "a retried client id must not reach the mailbox"
+  record=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" "$DESK" delivery deck-msg-0001) || fail "delivery read failed: $record"
+  assert_equals typed "$(printf '%s' "$record" | jq -r .state)" "the record says typed"
+  assert_equals fm-desk-voice-delivery.v1 "$(printf '%s' "$record" | jq -r .schema)" "the record is versioned"
+  assert_equals "$out" "$(printf '%s' "$record" | jq -r .outcome)" "the record keeps the outcome line"
+  if record=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" "$DESK" delivery deck-msg-9999); then
+    fail "an unknown client id must exit nonzero"
+  fi
+  assert_equals unknown-id "$(printf '%s' "$record" | jq -r .state)" "an unknown client id reads unknown-id"
+  desk_send_done "$home"
+  pass "fm-desk-voice send --client-id: delivered once, outcome recorded and pollable"
+}
+
+test_desk_voice_send_client_id_never_resends_an_interrupted_send() {
+  local home out
+  home=$(desk_send_fixture send-client-crash) || { desk_send_skip send-client-crash; return 0; }
+  mkdir -p "$home/state/desk-voice/deliveries"
+  # A send that stopped after claiming its id: its pid is gone, no outcome.
+  printf '{"schema":"fm-desk-voice-delivery.v1","client_id":"deck-msg-0002","state":"sending","pid":99999999}\n' \
+    > "$home/state/desk-voice/deliveries/deck-msg-0002.json"
+  out=$(desk_send "$home" --client-id deck-msg-0002 "Mute the drums") || fail "send failed: $out"
+  assert_equals "unknown: deck-msg-0002" "$out" "an interrupted send reports unknown"
+  [ -z "$(herdr_calls "$home" pane send-text)" ] || fail "an interrupted send must never be typed again"
+  desk_send_done "$home"
+  pass "fm-desk-voice send --client-id: an interrupted send is never re-sent"
+}
+
+test_desk_voice_send_client_id_is_checked_whole() {
+  local home out
+  home=$(new_home send-client-id-whole)
+  out=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" "$DESK" delivery $'deck-msg-0003\n../../escape' 2>&1) \
+    && fail "a client id with a newline must refuse: $out"
+  out=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" "$DESK" send --client-id $'deck-msg-0003\n../../escape' -- "hello" 2>&1) \
+    && fail "a send with a newline in its client id must refuse: $out"
+  [ ! -e "$home/state/escape.json" ] && [ ! -e "$home/escape.json" ] || fail "a refused id must write nothing outside the record folder"
+  [ "$(inbox_count "$home")" = 0 ] || fail "a refused id must deliver nothing"
+  pass "fm-desk-voice: a client id is checked as one whole string"
+}
+
+test_desk_voice_send_types_words_never_keys() {
+  local home out typed
+  home=$(desk_send_fixture send-words-only) || { desk_send_skip send-words-only; return 0; }
+  out=$(desk_send "$home" -- $'!rm -rf build\r\n\033[201~/clear\x7f\xc2\x9b# note') || fail "send failed: $out"
+  assert_contains "$out" "sent: herdr" "the words are typed"
+  typed=$(herdr_calls "$home" pane send-text)
+  assert_equals 1 "$(printf '%s\n' "$typed" | wc -l | tr -d ' ')" "the words are one typed call"
+  assert_contains "$typed" "Message: !rm -rf build [201~/clear # note" "a leading ! is typed after a plain prefix, every control byte becomes a space"
+  case "$typed" in *$'\033'*|*$'\r'*|*$'\x7f'*|*$'\xc2\x9b'*) fail "a control byte reached the pane: $typed" ;; esac
+  out=$(desk_send "$home" -- "/model haiku") || fail "send failed: $out"
+  assert_contains "$(herdr_calls "$home" pane send-text | tail -n 1)" "Message: /model haiku" "a leading / never reaches the harness as a command"
+  out=$(desk_send "$home" -- "#remember this") || fail "send failed: $out"
+  assert_contains "$(herdr_calls "$home" pane send-text | tail -n 1)" "Message: #remember this" "a leading # never reaches the harness as a note"
+  desk_send_done "$home"
+  pass "fm-desk-voice send: words are typed as one plain line that never starts a command"
+}
+
+descendant_pids() {  # <pid> -> every live descendant pid
+  local child
+  for child in $(pgrep -P "$1" 2>/dev/null); do
+    printf '%s\n' "$child"
+    descendant_pids "$child"
+  done
+}
+
+test_desk_voice_send_finishes_when_its_caller_stops_it() {
+  local home pid i submitted
+  home=$(desk_send_fixture send-caller-stops) || { desk_send_skip send-caller-stops; return 0; }
+  : > "$home/fixture/hold-send"
+  desk_send "$home" --client-id deck-msg-0004 "Print the setlist" > "$home/first.out" &
+  pid=$!
+  fm_test_track_pid "$pid"
+  for i in $(seq 1 100); do
+    [ -e "$home/fixture/send-held" ] && break
+    sleep 0.1
+  done
+  [ -e "$home/fixture/send-held" ] || fail "the send never reached the pane"
+  # Stop the send and everything under it, as a caller giving up would.
+  local -a stop_pids=()
+  while IFS= read -r i; do [ -z "$i" ] || stop_pids+=("$i"); done < <(descendant_pids "$pid")
+  kill -TERM ${stop_pids[@]+"${stop_pids[@]}"} "$pid" 2>/dev/null || true
+  : > "$home/fixture/release-send"
+  for i in $(seq 1 100); do
+    submitted=$(cat "$home/fixture/submitted" 2>/dev/null || true)
+    [ -n "$submitted" ] && break
+    sleep 0.1
+  done
+  assert_contains "$submitted" "Print the setlist" "the stopped send still finishes its words and Enter"
+  wait "$pid" 2>/dev/null || true
+  for i in $(seq 1 50); do
+    [ "$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" "$DESK" delivery deck-msg-0004 | jq -r .state)" = sending ] || break
+    sleep 0.1
+  done
+  assert_equals typed "$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" "$DESK" delivery deck-msg-0004 | jq -r .state)" \
+    "the stopped send still records its outcome"
+  desk_send_done "$home"
+  pass "fm-desk-voice send: a caller stopping a send never leaves half a message"
+}
+
+test_desk_voice_send_expect_home_types_only_for_that_home() {
+  local home out other
+  home=$(DESK_FIXTURE_HOME_ENV=self desk_send_fixture send-expect-home) || { desk_send_skip send-expect-home; return 0; }
+  out=$(desk_send "$home" --expect-home "$home" "Loop bar nine") || fail "send failed: $out"
+  assert_contains "$out" "sent: herdr" "a lock holder running for the expected home is typed into"
+  other=$(new_home send-expect-other)
+  out=$(desk_send "$home" --expect-home "$other" "Loop bar ten") || fail "send failed: $out"
+  case "$out" in mailbox:\ *) ;; *) fail "a lock holder for another home must not be typed into: $out" ;; esac
+  [ "$(herdr_calls "$home" pane send-text | wc -l | tr -d ' ')" = 1 ] || fail "only the matching home may be typed into"
+  desk_send_done "$home"
+  home=$(desk_send_fixture send-expect-nohome) || { desk_send_skip send-expect-nohome; return 0; }
+  out=$(desk_send "$home" --expect-home "$home" "Loop bar eleven") || fail "send failed: $out"
+  case "$out" in mailbox:\ *) ;; *) fail "a lock holder naming no home must not be typed into: $out" ;; esac
+  desk_send_done "$home"
+  pass "fm-desk-voice send --expect-home: types only into a primary running for that home"
 }
 
 test_desk_voice_send_falls_back_without_a_live_primary() {
@@ -3149,6 +2963,12 @@ test_desk_voice_retry_keeps_the_recording_when_the_mailbox_cannot_save
 test_desk_voice_retry_refuses_anything_but_a_saved_recording
 test_desk_voice_retries_run_one_at_a_time
 test_desk_voice_send_types_into_the_primary_pane
+test_desk_voice_send_with_a_client_id_is_delivered_once
+test_desk_voice_send_client_id_never_resends_an_interrupted_send
+test_desk_voice_send_client_id_is_checked_whole
+test_desk_voice_send_types_words_never_keys
+test_desk_voice_send_finishes_when_its_caller_stops_it
+test_desk_voice_send_expect_home_types_only_for_that_home
 test_desk_voice_send_falls_back_without_a_live_primary
 test_desk_voice_send_refuses_a_pane_not_hosting_the_primary
 test_desk_voice_send_falls_back_when_the_pane_refuses_text

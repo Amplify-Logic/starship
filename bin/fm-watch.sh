@@ -659,6 +659,14 @@ inbox_steer_check() {  # <window> <task>
       rec=${rec% *}
       ;;
   esac
+  # A direct-line second mate talking with its owner is never nudged: its
+  # young steer stays durable and unrung, and nothing on the ladder advances,
+  # until the conversation lapses or the steer outgrows the deferral bound
+  # (bin/fm-direct-line-lib.sh fm_direct_line_record_defers).
+  if fm_direct_line_record_defers "$rec"; then
+    triage_log "steer-inbox delivery deferred: $task is talking with its owner"
+    return 0
+  fi
   backend=$(window_backend "$w")
   agent_state=$(fm_backend_agent_state "$backend" "$w" 2>/dev/null || true)
   case "$agent_state" in
@@ -693,6 +701,10 @@ inbox_steer_check() {  # <window> <task>
       ring_rc=0
       FM_COMPOSER_HARNESS=$(window_harness "$w") \
         fm_task_inbox_ring "$backend" "$w" "$rec" "$(window_label "$w")" || ring_rc=$?
+      if [ "$ring_rc" -eq 4 ]; then
+        triage_log "steer-inbox delivery deferred: $task ${rec##*/} pane busy with another writer"
+        return 0
+      fi
       if [ "$ring_rc" -eq 3 ]; then
         inbox_steer_escalate_unavailable "$w" "$task" "$rec"
         return 0
@@ -714,6 +726,10 @@ inbox_steer_check() {  # <window> <task>
       ring_rc=0
       FM_COMPOSER_HARNESS=$(window_harness "$w") \
         fm_task_inbox_ring "$backend" "$w" "$rec" "$(window_label "$w")" || ring_rc=$?
+      if [ "$ring_rc" -eq 4 ]; then
+        triage_log "steer-inbox retry ring deferred: $task ${rec##*/} pane busy with another writer"
+        return 0
+      fi
       if ! fm_task_inbox_clear_retry "$STATE" "$task" "$rec" && [ -f "$rec" ]; then
         reason="stale: $w (steering-inbox retry mark unremovable: ${rec%/*}/.retry-ring cannot be removed, so $rec would ring on every poll - inspect the inbox directory)"
         fm_wake_append stale "$w" "$reason" || exit 1
@@ -1079,7 +1095,7 @@ secondmate_ring_to_drain() {  # <task> <window>
 secondmate_wake_stall_tick() {
   local now=$(( $(date +%s) )) threshold=$SECONDMATE_WAKE_STALL_SECS
   local meta task kind remote_host home queue row epoch seq row_key marker progress_marker ring_marker progress observed_at observed_key
-  local receipt receipt_dir notify_key queued idle reason episode_alerted already_rung w
+  local receipt receipt_dir notify_key queued idle reason episode_alerted already_rung w ring_rc
   # Endpoint metadata admits this queue-loop check; secondmate-liveness owns registered mates whose endpoint is missing or dead.
   for meta in "$STATE"/*.meta; do
     [ -e "$meta" ] || continue
@@ -1094,6 +1110,12 @@ secondmate_wake_stall_tick() {
     [ -n "$home" ] || continue
     [ -f "$home/.fm-secondmate-home" ] && [ ! -L "$home/.fm-secondmate-home" ] || continue
     [ "$(cat "$home/.fm-secondmate-home" 2>/dev/null || true)" = "$task" ] || continue
+    if fm_direct_line_talking "$STATE" "$task" "$home"; then
+      # Talking with its owner: never nudged, and its idle clock restarts so a
+      # lapsed conversation is not read as a stall it never had.
+      rm -f "$STATE/.secondmate-wake-progress-$task" "$STATE/.secondmate-wake-ring-$task"
+      continue
+    fi
     queue="$home/state/.wake-queue"
     row=$(secondmate_oldest_queue_row "$queue")
     marker="$STATE/.secondmate-wake-stall-$task"
@@ -1147,7 +1169,11 @@ EOF
       [ "$(cat "$ring_marker" 2>/dev/null || true)" = "$row_key" ] && already_rung=1
     fi
     if [ "$already_rung" -eq 0 ] && secondmate_idle_ring_safe "$w"; then
-      if secondmate_ring_to_drain "$task" "$w"; then
+      ring_rc=0
+      secondmate_ring_to_drain "$task" "$w" || ring_rc=$?
+      # 4: its drain steer is recorded and the inbox ladder rings it once the
+      # pane's other writer is done, so it counts as rung here.
+      if [ "$ring_rc" -eq 0 ] || [ "$ring_rc" -eq 4 ]; then
         fm_wake_secondmate_ring_marker_write "$task" "$row_key" || return 1
         fm_wake_secondmate_progress_marker_write "$task" "$now" "$row_key" || return 1
         continue

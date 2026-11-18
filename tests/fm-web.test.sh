@@ -279,6 +279,26 @@ PY
   pass "a large transcript is read from its end"
 }
 
+test_conversation_command_prints_versioned_json() {
+  local home out
+  home=$(make_home conversation-json)
+  write_basic_transcript "$(transcript "$home")"
+  out=$(FM_HOME="$home" HOME="$home" CLAUDE_CONFIG_DIR="$home/claude" "$LAUNCHER" conversation) \
+    || fail "conversation command failed: $out"
+  assert_equals fm-web-conversation.v1 "$(jq -r .schema <<<"$out")" "the read names its schema"
+  assert_equals "$SESSION" "$(jq -r .session <<<"$out")" "the read names the live session"
+  case "$(jq -r .state <<<"$out")" in busy|idle) ;; *) fail "a live session reads busy or idle: $out" ;; esac
+  assert_contains "$(jq -r '[.items[] | select(.kind == "user") | .html] | join(" ")' <<<"$out")" \
+    "Hello &lt;script&gt;" "item html is escaped exactly as the page receives it"
+  [ "$(jq '[.items[] | select(.kind == "tool")] | length' <<<"$out")" -ge 1 ] || fail "tool calls collapse as on the page"
+  [ ! -e "$home/state/web/token" ] || fail "the one-shot read must not create the server's token"
+  rm -f "$home/state/.lock-session" "$home/state/.lock"
+  out=$(FM_HOME="$home" HOME="$home" CLAUDE_CONFIG_DIR="$home/claude" "$LAUNCHER" conversation) \
+    || fail "conversation command failed without a session: $out"
+  assert_equals offline "$(jq -r .state <<<"$out")" "a home with no session reads as offline"
+  pass "fm-web conversation: one versioned JSON read of a home's conversation, no server"
+}
+
 test_get_guards_token_cookie_and_host() {
   local home root port cookie token
   home=$(make_home guards)
@@ -392,6 +412,7 @@ test_numbered_lists_keep_their_numbers
 test_idle_offline_and_session_restart
 test_cleared_session_is_followed_through_the_live_registry
 test_tail_reads_only_the_end_of_a_large_transcript
+test_conversation_command_prints_versioned_json
 test_get_guards_token_cookie_and_host
 test_post_guards_never_reach_desk_voice
 test_send_uses_desk_voice_with_saved_images

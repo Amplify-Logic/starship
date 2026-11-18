@@ -3,7 +3,8 @@
 # floater.
 #
 # Usage:
-#   fm-desk-voice.sh send [--source <name>] [--image <png>]... [<transcript text...>]
+#   fm-desk-voice.sh send [--client-id <id>] [--expect-home <dir>] [--source <name>] [--image <png>]... [<transcript text...>]
+#   fm-desk-voice.sh delivery <client-id>
 #   fm-desk-voice.sh send --front-app <pid> --front-tty <tty> [--source <name>] [<text...>]
 #   fm-desk-voice.sh send --front-focused [--source <name>] [<text...>]
 #   fm-desk-voice.sh deliver [--source <name>] [--image <png>]... [<transcript text...>]
@@ -68,6 +69,40 @@
 #                                         captain is typing in; nothing sent
 # A message therefore reaches the primary exactly one way.
 #
+# send --client-id <id> makes a send delivered once, for a caller that may
+# retry after a timeout (the web page, the Deck, bin/fm-direct-line.sh). <id>
+# is 8 to 64 characters of letters, digits, dot, underscore and hyphen, first
+# a letter or digit. The first send with an id claims
+#   $FM_HOME/state/desk-voice/deliveries/<id>.json
+# (schema fm-desk-voice-delivery.v1: client_id, state, outcome, created_at,
+# updated_at) before anything is typed, and records its outcome there. A
+# later send with the same id types nothing and prints the recorded outcome
+# line again, or one of:
+#   pending: <id>                         the first send is still running
+#   unknown: <id>                         the first send stopped before it
+#                                         recorded an outcome; it may have
+#                                         been typed, so it is never re-sent
+# delivery <id> prints that record (exit 1, with state unknown-id, when there
+# is none), so a caller can poll a send whose own call timed out. States:
+# sending, typed, typed-unconfirmed, mailbox, not-in-front, failed, unknown.
+# Records older than seven days are pruned when a new id is claimed.
+#
+# send --mailbox skips the pane and saves the message to the mailbox, through
+# the same --client-id record, for a caller keeping a message behind one that
+# is still waiting there (bin/fm-direct-line.sh).
+#
+# A typed line never starts with "!", "/" or "#" (a shell command, a slash
+# command or a memory note to the harness): such a line is typed with a leading
+# "Message: " (composer_safe_line). A send whose caller gives up on it with
+# TERM, INT or HUP while it is typing finishes the words and their Enter first.
+#
+# send --expect-home <dir> also requires the session-lock holder's own
+# environment to name <dir> as its FM_HOME (compared as resolved paths) before
+# its pane counts as proven, so a lock left by another home's primary can never
+# route the words into that home's chat; an unproven pane means the mailbox, as
+# above. A second mate is always launched with FM_HOME set, so its pane
+# passes; bin/fm-direct-line.sh always passes this.
+#
 # send --front-app <pid> --front-tty <tty> is the floater's dictation path: it
 # sends only when the text box with the cursor is the primary's own chat, and
 # otherwise prints "not-in-front" and delivers nothing, so the floater pastes
@@ -100,8 +135,9 @@
 #   rung: <backend> <target>              typed and submit confirmed
 #   rung-unconfirmed: <backend> <target> (<verdict>)
 #   not-rung                              nothing typed; the queued wake stands
-# Ring and send share a per-home pane-writer lock through inspection, typing,
-# submission and recovery. On contention send uses its mailbox and ring leaves
+# Ring and send share the home's pane-writer lock (bin/fm-pane-writer-lib.sh)
+# through inspection, typing, submission and recovery, as does every other
+# typist into that pane. On contention send uses its mailbox and ring leaves
 # its queued wake alone. Ring leaves a Claude stash alone, and send presses
 # Enter only once over one, as a stash is restored on submission. Before every
 # ring Enter, including retries, the box must still show only the ring's
@@ -191,6 +227,11 @@ UNSENT="$STATE/desk-voice/unsent"
 . "$SCRIPT_DIR/fm-backend.sh"
 # shellcheck source=bin/fm-composer-lib.sh
 . "$SCRIPT_DIR/fm-composer-lib.sh"
+# shellcheck source=bin/fm-pane-writer-lib.sh
+. "$SCRIPT_DIR/fm-pane-writer-lib.sh"
+
+DELIVERIES="$STATE/desk-voice/deliveries"
+CLIENT_ID_RE='^[A-Za-z0-9][A-Za-z0-9._-]{7,63}$'
 
 # The pane environment keys read from the primary's process.
 PANE_ENV_RE='^(TMUX|TMUX_PANE|HERDR_ENV|HERDR_PANE_ID|HERDR_SESSION|HERDR_SOCKET_PATH)='
@@ -349,7 +390,20 @@ ring_mailbox() {  # <path>
 
 # The captain's words as one typed line: every control character (C0, DEL,
 # C1) and Unicode line or paragraph separator becomes a space, then runs of
-# whitespace collapse, so no byte can submit early or act as a key.
+# whitespace collapse, so no byte can submit early or act as a key: ESC
+# (and so every escape sequence's introducer, the bracketed-paste end ESC[201~
+# included) becomes a space before the line reaches any pane.
+# A typed line that starts with "!", "/" or "#" would reach the harness as a
+# shell command, a slash command or a memory note instead of words, so such a
+# line is typed with a leading "Message: ". plain_line has already made it one
+# line, so only its first character can start a composer line.
+composer_safe_line() {  # <line>
+  case "$1" in
+    '!'*|'/'*|'#'*) printf 'Message: %s' "$1" ;;
+    *) printf '%s' "$1" ;;
+  esac
+}
+
 plain_line() {  # <text>
   python3 -c '
 import sys, unicodedata
@@ -372,6 +426,27 @@ holder_pane_env() {  # <pid>
     $0 ~ re { key = $0; sub(/=.*/, "", key); seen[key] = $0 }
     END { for (key in seen) print seen[key] }
   '
+}
+
+# The value of <name> in process <pid>'s own environment, or nothing.
+holder_env_value() {  # <pid> <name>
+  local pid=$1 name=$2
+  if [ -r "/proc/$pid/environ" ]; then
+    tr '\0' '\n' < "/proc/$pid/environ"
+  else
+    ps -E -ww -o command= -p "$pid" 2>/dev/null | tr ' ' '\n'
+  fi | awk -v key="$name=" 'index($0, key) == 1 { value = substr($0, length(key) + 1) } END { if (value != "") print value }'
+}
+
+# 0 when the session-lock holder <pid> runs for home <dir>: its own FM_HOME
+# and <dir> resolve to the same directory.
+holder_home_is() {  # <pid> <dir>
+  local named want got
+  named=$(holder_env_value "$1" FM_HOME)
+  [ -n "$named" ] || return 1
+  want=$(cd "$2" 2>/dev/null && pwd -P) || return 1
+  got=$(cd "$named" 2>/dev/null && pwd -P) || return 1
+  [ "$want" = "$got" ]
 }
 
 # The pid at the root of <target>'s pane. A backend without an arm here cannot
@@ -728,14 +803,20 @@ shown_focused() {  # <backend> <target>
 # proven but not showing its chat input, another writer owns it, or a ring
 # finds a stash; nothing was typed either way. PRIMARY_SUBMIT_COMPOSER lists
 # the composer states that may take the line (default "empty pending"), and
-# PRIMARY_SUBMIT_RING=1 submits it the way ring does. Its subshell scopes the pane environment and writer lock.
+# PRIMARY_SUBMIT_RING=1 submits it the way ring does, and a non-empty
+# PRIMARY_SUBMIT_EXPECT_HOME counts the pane proven only when the lock holder
+# runs for that home (holder_home_is). Its subshell scopes the pane environment and writer lock.
 primary_submit() (  # <line> [<app> <tty> | --focused]
   local lock="$STATE/.lock" pid envs kv backend target root verdict draft claude composer tries
-  local writer_lock="$STATE/desk-voice/.send.lock"
+  local writer_lock
+  writer_lock=$(fm_pane_writer_lock_path "$STATE")
   [ -f "$lock" ] && [ ! -L "$lock" ] || return 1
   pid=$(head -n 1 "$lock" 2>/dev/null) || return 1
   case "$pid" in ''|*[!0-9]*) return 1 ;; esac
   fm_harness_holder_alive "$pid" || return 1
+  if [ -n "${PRIMARY_SUBMIT_EXPECT_HOME:-}" ]; then
+    holder_home_is "$pid" "$PRIMARY_SUBMIT_EXPECT_HOME" || return 1
+  fi
   # Kept now: sourcing a backend resets the session-lock library's flag.
   claude=${FM_HARNESS_IS_CLAUDE:-0}
   envs=$(holder_pane_env "$pid")
@@ -757,8 +838,7 @@ EOF
   elif [ "${2:-}" = --focused ]; then
     shown_focused "$backend" "$target" || return 1
   fi
-  mkdir -p "$STATE/desk-voice" || return 2
-  fm_lock_try_acquire "$writer_lock" || return 2
+  fm_pane_writer_try_acquire "$STATE" || return 2
   trap 'fm_lock_release "$writer_lock"' EXIT
   composer=$(fm_backend_composer_state "$backend" "$target" 2>/dev/null)
   case " ${PRIMARY_SUBMIT_COMPOSER:-empty pending} " in
@@ -784,12 +864,167 @@ EOF
   printf '%s\t%s\t%s\n' "${verdict:-send-failed}" "$backend" "$target"
 )
 
+# The one python helper behind --client-id and delivery (see the header).
+#   delivery_record claim <id> <pid>    exit 0 claimed; exit 3 with the line to
+#                                       print instead when the id is known
+#   delivery_record finish <id> <line>  record the outcome line
+#   delivery_record read <id>           print the record; exit 1 when none
+delivery_record() {
+  python3 - "$DELIVERIES" "$@" <<'PYEOF'
+import datetime, json, os, sys, time
+folder, mode, cid = sys.argv[1], sys.argv[2], sys.argv[3]
+path = os.path.join(folder, cid + ".json")
+SCHEMA = "fm-desk-voice-delivery.v1"
+def now():
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+def load():
+    try:
+        with open(path, encoding="utf-8") as fh:
+            doc = json.load(fh)
+        return doc if isinstance(doc, dict) else {}
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError):
+        return {}
+def store(doc):
+    tmp = path + ".tmp." + str(os.getpid())
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        json.dump(doc, fh, ensure_ascii=False)
+        fh.write("\n")
+    os.replace(tmp, path)
+def alive(pid):
+    try:
+        os.kill(int(pid), 0)
+    except (ProcessLookupError, ValueError, TypeError):
+        return False
+    except PermissionError:
+        return True
+    return True
+STATES = (("sent-unconfirmed:", "typed-unconfirmed"), ("sent:", "typed"),
+          ("mailbox:", "mailbox"), ("not-in-front", "not-in-front"),
+          ("failed:", "failed"))
+if mode == "claim":
+    os.makedirs(folder, mode=0o700, exist_ok=True)
+    os.chmod(folder, 0o700)
+    cutoff = time.time() - 7 * 86400
+    for name in os.listdir(folder):
+        old = os.path.join(folder, name)
+        try:
+            if name.endswith(".json") and os.path.getmtime(old) < cutoff:
+                os.remove(old)
+        except OSError:
+            pass
+    doc = {"schema": SCHEMA, "client_id": cid, "state": "sending",
+           "pid": int(sys.argv[4]), "created_at": now(), "updated_at": now()}
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        known = load() or {}
+        state = known.get("state")
+        if state == "sending" and alive(known.get("pid")):
+            print("pending: " + cid)
+        elif state in (None, "sending", "unknown") or not known.get("outcome"):
+            if state != "unknown":
+                known.update({"schema": SCHEMA, "client_id": cid, "state": "unknown",
+                              "updated_at": now()})
+                known.pop("pid", None)
+                store(known)
+            print("unknown: " + cid)
+        else:
+            print(known["outcome"])
+        sys.exit(3)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        json.dump(doc, fh, ensure_ascii=False)
+        fh.write("\n")
+    sys.exit(0)
+if mode == "finish":
+    line = sys.argv[4]
+    doc = load() or {"schema": SCHEMA, "client_id": cid, "created_at": now()}
+    state = next((name for prefix, name in STATES if line.startswith(prefix)), "failed")
+    doc.update({"state": state, "outcome": line, "updated_at": now()})
+    doc.pop("pid", None)
+    store(doc)
+    sys.exit(0)
+if mode == "read":
+    doc = load()
+    if not doc:
+        print(json.dumps({"schema": SCHEMA, "client_id": cid, "state": "unknown-id"}))
+        sys.exit(1)
+    if doc.get("state") == "sending" and not alive(doc.get("pid")):
+        doc["state"] = "unknown"
+    doc.pop("pid", None)
+    print(json.dumps(doc, ensure_ascii=False))
+    sys.exit(0)
+sys.exit(2)
+PYEOF
+}
+
+delivery() {
+  [ "$#" -eq 1 ] || refuse "usage: fm-desk-voice.sh delivery <client-id>"
+  [[ $1 =~ $CLIENT_ID_RE ]] || refuse "not a client id: $1"
+  delivery_record read "$1"
+}
+
+# send: with --client-id, claim the id, run the send once, and record its
+# outcome (see the header); without it, just the send.
 send() {
+  local client_id='' rc=0 outcome
+  local -a rest=()
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --client-id)
+        [ "$#" -ge 2 ] || refuse "--client-id needs an id"
+        client_id=$2
+        shift 2
+        ;;
+      --) rest+=("$@"); break ;;
+      *) rest+=("$1"); shift ;;
+    esac
+  done
+  if [ -z "$client_id" ]; then
+    send_once ${rest[@]+"${rest[@]}"}
+    return
+  fi
+  [[ $client_id =~ $CLIENT_ID_RE ]] \
+    || refuse "--client-id must be 8 to 64 letters, digits, dots, underscores or hyphens: $client_id"
+  mkdir -p "$STATE/desk-voice" || die "cannot create $STATE/desk-voice"
+  outcome=$(delivery_record claim "$client_id" "$$") || rc=$?
+  case "$rc" in
+    0) ;;
+    3) printf '%s\n' "$outcome"; return 0 ;;
+    *) die "cannot record delivery $client_id" ;;
+  esac
+  rc=0
+  # Once the id is claimed, a caller giving up on this send still gets the
+  # send finished and its outcome recorded (see send_once).
+  trap '' TERM INT HUP
+  outcome=$(send_once ${rest[@]+"${rest[@]}"}) || rc=$?
+  outcome=$(printf '%s\n' "$outcome" | tail -n 1)
+  [ "$rc" = 0 ] && [ -n "$outcome" ] || outcome="failed: the message could not be delivered"
+  delivery_record finish "$client_id" "$outcome" || note "delivery $client_id was not recorded"
+  trap - TERM INT HUP
+  printf '%s\n' "$outcome"
+  [ "$rc" = 0 ] || exit "$rc"
+}
+
+send_once() {
   local source text line result='' verdict backend target path image rc=0
-  local composer='empty pending' front_app='' front_tty='' focused=false
+  local composer='empty pending' front_app='' front_tty='' focused=false expect_home='' mailbox_only=0
   local -a image_args=() front=() rest=()
   while [ "$#" -gt 0 ]; do
     case "$1" in
+      --mailbox)
+        mailbox_only=1
+        shift
+        ;;
+      --expect-home)
+        [ "$#" -ge 2 ] || refuse "--expect-home needs a directory"
+        case "$2" in /*) ;; *) refuse "--expect-home needs an absolute path: $2" ;; esac
+        [ -d "$2" ] || refuse "--expect-home is not a directory: $2"
+        expect_home=$2
+        shift 2
+        ;;
       --front-focused)
         focused=true
         shift
@@ -829,10 +1064,20 @@ send() {
   text=$ARG_TEXT
   line=$(plain_line "$(message_text)") || die "cannot prepare transcript"
   [ -n "$line" ] || refuse "nothing to deliver"
+  line=$(composer_safe_line "$line")
 
   # Screenshots alone never go past a draft: the captain may be typing.
   [ -n "$text" ] || composer=empty
-  result=$(PRIMARY_SUBMIT_COMPOSER=$composer primary_submit "$line" ${front[@]+"${front[@]}"}) || rc=$?
+  if [ "$mailbox_only" = 1 ]; then
+    rc=1
+  else
+    # A caller giving up on this send (TERM, INT, HUP) never leaves half a
+    # message in the composer: the typing, its Enter, and any mailbox fallback
+    # finish first, and the outcome is still recorded.
+    trap '' TERM INT HUP
+    result=$(PRIMARY_SUBMIT_COMPOSER=$composer PRIMARY_SUBMIT_EXPECT_HOME=$expect_home \
+      primary_submit "$line" ${front[@]+"${front[@]}"}) || rc=$?
+  fi
   if [ "${#front[@]}" -gt 0 ] && [ "$rc" = 1 ]; then
     printf 'not-in-front\n'
     return 0
@@ -854,7 +1099,7 @@ send() {
         return 0
         ;;
     esac
-  else
+  elif [ "$mailbox_only" = 0 ]; then
     note "the primary's chat pane is not reachable; saving to the mailbox instead"
   fi
   for image in ${ARG_IMAGES[@]+"${ARG_IMAGES[@]}"}; do
@@ -1187,6 +1432,7 @@ main() {
   case "$1" in
     --help|-h) usage; exit 0 ;;
     send) shift; send "$@" ;;
+    delivery) shift; delivery "$@" ;;
     deliver) shift; deliver "$@" ;;
     ring) shift; ring "$@" ;;
     shot) shift; shot "$@" ;;

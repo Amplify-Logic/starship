@@ -808,6 +808,35 @@ test_secondmate_no_projects_charter() {
   pass "fm-brief.sh: --no-projects scaffolds a project-less charter and guards misuse"
 }
 
+test_secondmate_direct_line_charter_opts_in() {
+  local home brief status
+  home="$TMP_ROOT/direct-line-home"
+  mkdir -p "$home/data"
+  FM_HOME="$home" FM_SECONDMATE_CHARTER='music work' \
+    "$ROOT/bin/fm-brief.sh" music --secondmate --direct-line sample >/dev/null 2>&1; status=$?
+  expect_code 0 "$status" "--direct-line secondmate brief should exit 0"
+  brief="$home/data/music/brief.md"
+  # shellcheck source=/dev/null
+  ( . "$ROOT/bin/fm-direct-line-lib.sh"; grep -qxF "$FM_DIRECT_LINE_CHARTER_LINE" "$brief" ) \
+    || fail "a --direct-line charter must carry the exact opt-in line the library reads"
+  assert_grep "The captain's word outranks the main firstmate's" "$brief" \
+    "a direct-line charter must put the captain's word above the main firstmate's"
+  assert_grep 'bin/fm-direct-line.sh answered <task-id> --client-id <id>' "$brief" \
+    "a direct-line charter must close a held call only by citing the captain's message"
+  assert_grep 'bin/fm-direct-line.sh waiting' "$brief" \
+    "a direct-line charter must declare a wait on the captain"
+  assert_grep 'is also one appended line there' "$brief" \
+    "a direct-line charter must keep outcomes on the parent channel"
+  assert_no_grep 'Nobody reads this chat' "$brief" \
+    "a direct-line charter must not claim nobody reads its chat"
+  FM_HOME="$home" FM_SECONDMATE_CHARTER='other work' \
+    "$ROOT/bin/fm-brief.sh" plain --secondmate sample >/dev/null 2>&1 || fail "plain charter failed"
+  assert_no_grep 'Direct line: on' "$home/data/plain/brief.md" "a charter without --direct-line must stay off"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" ship1 sample --mode no-mistakes --direct-line >/dev/null 2>&1; status=$?
+  expect_code 1 "$status" "--direct-line on a ship brief must be refused"
+  pass "fm-brief.sh --secondmate --direct-line: opts the charter in with its rules; off by default"
+}
+
 test_secondmate_marked_request_reporting_contract() {
   local home brief
   home="$TMP_ROOT/marked-request-reporting-home"
@@ -1909,6 +1938,7 @@ test_herdr_lab_omission_is_loud_for_ship_and_scout
 test_documented_global_replace_leaves_the_herdr_gate_intact
 test_herdr_lab_contract_applies_to_scouts_but_not_secondmates
 test_secondmate_no_projects_charter
+test_secondmate_direct_line_charter_opts_in
 test_secondmate_marked_request_reporting_contract
 test_secondmate_directory_paths_are_absolute_and_output_is_stable
 test_pause_verb_override_renders_all_brief_scaffolds

@@ -171,7 +171,7 @@ remote homes under one shared snapshot budget and may refresh the parent-side ca
 --include-prs additionally performs live GitHub discovery and checks.
 
 Default fields: schema, home, generated, prs, in_flight{id,kind,state,repo,name,doing},
-  secondmates{id,state,doing,provenance,freshness,age_seconds,contradiction,reason},
+  secondmates{id,state,talking_with_owner,doing,provenance,freshness,age_seconds,contradiction,reason},
   secondmate_reconcile{id,spawn_gen,host,kind,ids},
   decisions_open{id,key,verb,summary,question,owner}, decisions_open_total,
   landed{id,what,artifact,owner},
@@ -390,6 +390,14 @@ EOF
   fi
 fi
 
+# Direct-line second mates talking with the captain right now, as
+# {"<id>": "<reason>"} (bin/fm-direct-line.sh list); their rows say so, because
+# such a mate is never nudged or relaunched (docs/direct-line.md).
+TALKING=$(FM_HOME="${FM_HOME:-$(cd "$SCRIPT_DIR/.." && pwd)}" "$SCRIPT_DIR/fm-direct-line.sh" list 2>/dev/null \
+  | jq -c '[.mates[] | select(.talking_with_owner) | {key:.id, value:.talking_reason}] | from_entries' 2>/dev/null) \
+  || TALKING='{}'
+[ -n "$TALKING" ] || TALKING='{}'
+
 # --- projection: canonical snapshot -> fm-bearings.v1 model (JSON) ----------
 BEARINGS_TODAY=${NOW%%T*}
 case "$BEARINGS_TODAY" in
@@ -425,7 +433,8 @@ MODEL=$(printf '%s' "$SNAP" | jq \
   --argjson pr_rows_capped "$PR_ROWS_CAPPED" \
   --argjson pr_rows_min_total "$PR_ROWS_MIN_TOTAL" \
   --argjson return_catchup "$RETURN_CATCHUP" \
-  --argjson candidate_prs "$CANDIDATE_PRS" "$FM_LANDED_JQ_DEFS"'
+  --argjson candidate_prs "$CANDIDATE_PRS" \
+  --argjson talking "$TALKING" "$FM_LANDED_JQ_DEFS"'
   def trunc($n): if . == null then null else
     (tostring | gsub("\\s+"; " ") | if (length > $n) then (.[:$n] + "…") else . end) end;
   def fit($n):
@@ -541,7 +550,9 @@ MODEL=$(printf '%s' "$SNAP" | jq \
        else empty end ]
      + [ $secondmate_views[]
        | {id,state:.bearings_state,
-          doing:((if .bearings_state == "active_child_work" then
+          talking_with_owner:($talking[.id] != null),
+          doing:((if $talking[.id] != null then "Talking with the captain on the direct line; never nudge or relaunch. " else "" end)
+                 + (if .bearings_state == "active_child_work" then
                     ([.active_children[] | .id + ": " + (.doing // .state)] | join("; "))
                   elif .bearings_state == "captain_decision" then
                     ([.bearings_captain_holds[] | .summary] | join("; "))

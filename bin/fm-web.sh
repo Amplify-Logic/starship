@@ -14,6 +14,9 @@
 #   fm-web.sh status               print running/stopped with the port
 #   fm-web.sh url                  print the sign-in URL (carries the token)
 #   fm-web.sh serve [--port <n>]   run in the foreground
+#   fm-web.sh conversation         print this home's conversation once as JSON
+#                                  (schema fm-web-conversation.v1; bin/fm-web.py
+#                                  owns its fields), with no server
 #   fm-web.sh --help
 #
 # The URL carries this home's token from state/web/token (owner-only). The
@@ -165,6 +168,11 @@ case "${1:-}" in
   status) shift; command_status ;;
   url) shift; running_pid >/dev/null || fail "not running; start it with fm-web.sh start"; print_url ;;
   serve) shift; command_serve "$@" ;;
+  conversation)
+    shift
+    [ "$#" -eq 0 ] || { usage >&2; exit 2; }
+    engine conversation --home "$FM_HOME"
+    ;;
   -h|--help) usage ;;
   *) usage >&2; exit 2 ;;
 esac

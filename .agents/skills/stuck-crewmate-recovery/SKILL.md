@@ -32,6 +32,7 @@ A `backend=t3code` worker already runs at T3's `full-access` runtime mode, so th
 
 This procedure covers ordinary `kind=ship` and `kind=scout` direct reports.
 Load `secondmate-provisioning` instead for `kind=secondmate` recovery.
+A direct-line second mate that `bin/fm-direct-line.sh talking <id>` reports as talking with the captain is not stuck: leave it alone and never nudge, interrupt, or relaunch it until that lapses or the captain asks ([`docs/direct-line.md`](../../../docs/direct-line.md)).
 
 For a REMOTE secondmate, `fm-crew-state` and `fm-peek` read the actual remote endpoint over `fm-on.sh`, and `fm-send` reports a delivered-with-pending-confirmation steer as delivered (their headers own the contracts); an `unknown-remote` read or unreachable-host failure means the remote state could not be read, never that the mate is dead or the send failed.
 Recover a genuinely stuck remote mate only through `bin/fm-spawn.sh <id> --secondmate`, never raw herdr pane close/kill surgery, which strands the endpoint binding.
