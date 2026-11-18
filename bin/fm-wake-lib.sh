@@ -1332,8 +1332,8 @@ _fm_recovery_marker_arm_check() {
     fm_lock_release "$FM_WAKE_QUEUE_LOCK"
     return 1
   fi
-  # Rows a live supervision-branch grant holds are the branch's to present, so
-  # they never make main recover (fm_wake_main_recovery_count).
+  # Rows a live supervision-branch grant holds, and rows the running handling
+  # turn was already shown, never make main recover (fm_wake_main_recovery_count).
   main_rows=$(fm_wake_main_recovery_count)
   # shellcheck disable=SC2034 # Output read by callers after this function returns.
   [ "$main_rows" -eq 0 ] || FM_RECOVERY_MARKER_QUEUED=1
@@ -1451,7 +1451,7 @@ _fm_recovery_marker_reopen_announced() {
       # Only a row main has not been shown is buried work: a row the current
       # handling turn's drain already claimed, or one a live branch grant
       # holds, is being handled and reopens nothing.
-      if [ "$(fm_wake_main_recovery_count 1)" -gt 0 ] \
+      if [ "$(fm_wake_main_recovery_count)" -gt 0 ] \
         && ! _fm_recovery_marker_write_locked "$marker" downtime ""; then
         fm_lock_release "$lock"
         fm_lock_release "$FM_WAKE_QUEUE_LOCK"
@@ -3165,17 +3165,17 @@ fm_wake_queue_prune_task() {  # <state> <task-id> [target]
 
 # The rows a main recovery acts on: every queued row a live supervision-branch
 # grant does not hold (the branch presents and acknowledges those itself), and
-# with <exclude-presented> 1 also none main's own drain already claimed, which
-# the current handling turn is handling. Prints the count; read under the
+# none main's own drain already presented to the handling turn that is still
+# running (fm_wake_main_presented_current). Prints the count; read under the
 # caller's queue lock where a decision depends on it. A queue that cannot be
 # read counts as one row, so uncertainty still recovers.
-fm_wake_main_recovery_count() {  # [<exclude-presented 0|1>]
+fm_wake_main_recovery_count() {
   local grant='' presented='' count
   [ -f "$FM_WAKE_QUEUE" ] || { printf '0\n'; return 0; }
   if fm_wake_branch_grant_live "$STATE/.branch-eligible-rows" "$STATE/.branch-eligible-owner"; then
     grant="$STATE/.branch-eligible-rows"
   fi
-  if [ "${1:-0}" = 1 ] && [ -s "$STATE/.main-eligible-rows" ]; then
+  if [ -s "$STATE/.main-eligible-rows" ] && fm_wake_main_presented_current; then
     presented="$STATE/.main-eligible-rows"
   fi
   count=$(awk -F '\t' -v grant="$grant" -v presented="$presented" '
@@ -3189,6 +3189,38 @@ fm_wake_main_recovery_count() {  # [<exclude-presented 0|1>]
   ' "$FM_WAKE_QUEUE" 2>/dev/null) || count=1
   case "$count" in ''|*[!0-9]*) count=1 ;; esac
   printf '%s\n' "$count"
+}
+
+# Main's drain records, beside the rows it presents, the recovery generation it
+# named and the session-lock owner it presented them to. Those rows count as
+# being handled only while the marker still carries that generation and that
+# same live session still holds state/.lock: a new generation, a new or dead
+# session, or a missing record makes every unacknowledged row recoverable again.
+fm_wake_main_presented_stamp() {  # <generation>
+  local stamp="$STATE/.main-eligible-stamp" owner tmp
+  owner=$(sed -n '1p' "$STATE/.lock" 2>/dev/null || true)
+  if [ -z "$1" ] || [ -z "$owner" ]; then
+    rm -f -- "$stamp"
+    return 0
+  fi
+  tmp=$(mktemp "$stamp.tmp.XXXXXX") || return 1
+  if ! printf '%s\t%s\n' "$1" "$owner" > "$tmp" || ! chmod 0600 "$tmp" \
+    || ! _fm_atomic_replace "$tmp" "$stamp"; then
+    rm -f -- "$tmp"
+    return 1
+  fi
+}
+
+fm_wake_main_presented_current() {
+  local generation owner lock_pid
+  IFS=$'\t' read -r generation owner < "$STATE/.main-eligible-stamp" 2>/dev/null || return 1
+  [ -n "$generation" ] && [ -n "$owner" ] || return 1
+  fm_recovery_marker_read "$STATE/.watcher-down" || return 1
+  [ "${FM_RECOVERY_MARKER_TOKEN##*:}" = "$generation" ] || return 1
+  lock_pid=$(sed -n '1p' "$STATE/.lock" 2>/dev/null || true)
+  [ "$lock_pid" = "$owner" ] || return 1
+  _fm_wake_require_session_lock
+  fm_session_pid_alive "$lock_pid"
 }
 
 # The reason a recovery wake names: the newest queued row main would be shown

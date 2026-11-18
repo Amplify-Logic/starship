@@ -501,6 +501,7 @@ test_presented_rows_do_not_wake_main_again() {
   append_wake "$state" check merged-fixture "check: merge landed: fixture"
   printf 'announced:downtime:hand.1.aaa\n' > "$state/.watcher-down"
   chmod 600 "$state/.watcher-down"
+  printf '%s\n' "$$" > "$state/.lock"
   FM_HOME="$dir/home" FM_STATE_OVERRIDE="$state" "$ROOT/bin/fm-wake-drain.sh" > "$dir/drain.out" 2>&1 \
     || fail "fixture: the handling drain failed: $(cat "$dir/drain.out")"
   grep -F 'check: merge landed: fixture' "$dir/drain.out" >/dev/null \
@@ -521,6 +522,85 @@ test_presented_rows_do_not_wake_main_again() {
   grep -Fx 'check: queued wake: check: later event' "$out" >/dev/null \
     || fail "the new row did not wake main under its own reason: $(cat "$out")"
   pass "a row already presented to the current handling turn does not wake main again"
+}
+
+# The Claude hand-over as it runs: main's drain presents the delivered row
+# to the live session, the handling successor then exits through its own
+# cleanup (republishing the handled episode as pending downtime), and the
+# turn-end arm starts a fresh watcher. Leaves the successor's exit marker in
+# the case's state for the caller to arm against.
+presented_row_then_successor_exit() {  # <dir>
+  local dir=$1 state="$1/state" child
+  mkdir -p "$dir/home/data"
+  append_wake "$state" check merged-fixture "check: merge landed: fixture"
+  printf 'pending:downtime:hand.2.aaa\n' > "$state/.watcher-down"
+  chmod 600 "$state/.watcher-down"
+  printf '%s\n' "$$" > "$state/.lock"
+  FM_HOME="$dir/home" FM_STATE_OVERRIDE="$state" "$ROOT/bin/fm-wake-drain.sh" > "$dir/drain.out" 2>&1 \
+    || fail "fixture: the handling drain failed: $(cat "$dir/drain.out")"
+  grep -F 'check: merge landed: fixture' "$dir/drain.out" >/dev/null \
+    || fail "fixture: the drain did not present the row: $(cat "$dir/drain.out")"
+  captain_input_watch_bg "$dir" "$dir/successor.out" FM_WATCH_HANDLING_SUCCESSOR=1
+  child=$!
+  wait_for_lock_holder "$state" "$child" \
+    || { kill -TERM "$child" 2>/dev/null || true; fail "handling successor did not take the lock: $(cat "$dir/successor.out")"; }
+  sleep 1
+  is_live_non_zombie "$child" \
+    || fail "fixture: the handling successor closed on the row it was handed: $(cat "$dir/successor.out")"
+  kill -TERM "$child" 2>/dev/null || true
+  wait "$child" 2>/dev/null || true
+  [ "$(cat "$state/.watcher-down")" = 'pending:downtime:hand.2.aaa' ] \
+    || fail "fixture: the successor's exit did not republish the handled episode as pending downtime: $(cat "$state/.watcher-down")"
+}
+
+# After the successor's exit the presented, unacknowledged row is still being
+# handled by the same session: the turn-end arm must not wake main for it.
+# A row appended afterwards, never presented, still wakes it.
+test_successor_exit_does_not_wake_main_for_a_presented_row() {
+  local dir state out child rc
+  dir=$(make_case successor-exit-presented)
+  state="$dir/state"
+  out="$dir/watch.out"
+  presented_row_then_successor_exit "$dir"
+  captain_input_watch_bg "$dir" "$out"
+  child=$!
+  wait_for_lock_holder "$state" "$child" \
+    || { kill -TERM "$child" 2>/dev/null || true; fail "watcher did not take the lock: $(cat "$out")"; }
+  sleep 3
+  is_live_non_zombie "$child" \
+    || fail "the turn-end arm woke main again for a row its handling turn was already shown: $(cat "$out")"
+  append_wake "$state" check later-fixture "check: later event"
+  rc=0
+  wait_for_exit "$child" 100 || rc=$?
+  [ "$rc" -ne 124 ] || fail "a row appended after the presentation never woke main: $(cat "$out")"
+  grep -Fx 'check: queued wake: check: later event' "$out" >/dev/null \
+    || fail "the new row did not wake main under its own reason: $(cat "$out")"
+  ! grep -F 'merge landed' "$out" >/dev/null \
+    || fail "the already-presented row was named again: $(cat "$out")"
+  pass "a handling successor's exit does not wake main again for a row already presented to that session"
+}
+
+# The same presented row left unacknowledged when a different session takes
+# the session lock was never handled by that session: it must resurface.
+test_new_session_resurfaces_a_presented_unacknowledged_row() {
+  local dir state out child rc holder
+  dir=$(make_case new-session-presented)
+  state="$dir/state"
+  out="$dir/watch.out"
+  presented_row_then_successor_exit "$dir"
+  sleep 60 &
+  holder=$!
+  printf '%s\n' "$holder" > "$state/.lock"
+  captain_input_watch_bg "$dir" "$out"
+  child=$!
+  rc=0
+  wait_for_exit "$child" 100 || rc=$?
+  kill -TERM "$holder" 2>/dev/null || true
+  wait "$holder" 2>/dev/null || true
+  [ "$rc" -ne 124 ] || fail "a new session never saw the unacknowledged row resurface: $(cat "$out")"
+  grep -Fx 'check: queued wake: check: merge landed: fixture' "$out" >/dev/null \
+    || fail "the resurfaced wake did not name the unacknowledged row: $(cat "$out")"
+  pass "a new session resurfaces a row presented to the previous session but never acknowledged"
 }
 
 # A genuine outage that left rows main was never shown resurfaces them once,
@@ -582,6 +662,8 @@ test_turn_end_delivers_an_unattended_successor_reason
 test_genuine_outage_keeps_one_generic_recovery
 test_branch_held_rows_do_not_wake_main
 test_presented_rows_do_not_wake_main_again
+test_successor_exit_does_not_wake_main_for_a_presented_row
+test_new_session_resurfaces_a_presented_unacknowledged_row
 test_genuine_outage_with_queued_rows_resurfaces_once
 test_unacknowledged_recovery_is_announced_once_per_generation
 test_handling_successor_surfaces_a_captain_note_queued_mid_handling
