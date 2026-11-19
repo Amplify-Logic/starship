@@ -165,6 +165,23 @@ A first install on a fresh 8 GB MacBook settled this order:
 > alright merge it
 ```
 
+### Steps you do by hand
+
+Some pages only you can fill in, such as a sign-up form or a settings screen in a web console.
+For those, the first mate opens the page in your browser and floats a card of numbered steps over it, with a Copy button for every value to type and Done and Stuck buttons that answer it in the chat, so you never switch windows to read instructions.
+It writes the steps as a short Markdown file:
+
+```markdown
+# Change the account email
+1. Open Settings, then Account.
+2. New email: `you@example.com`
+```
+
+The card is macOS only and is built on first use from `screen-steps/`.
+The page opens in Arc when it is installed, otherwise in your default browser.
+Done and Stuck reply through the [desk floater's](docs/desk-floater.md) delivery path, so a reply is saved to its mailbox when the chat cannot take it.
+The [`bin/fm-screen-steps.sh`](bin/fm-screen-steps.sh) header owns the steps format and every option.
+
 ### More backends
 
 Setup guides for tmux (the default) and every other supported backend (herdr, zellij, Orca, cmux, Paseo, Rex, T3 Code, tern, hc) are linked in [Documentation](#documentation) below.
