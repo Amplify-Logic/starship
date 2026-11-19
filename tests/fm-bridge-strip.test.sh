@@ -1106,7 +1106,27 @@ test_remove_stops_only_its_own_strips_and_unlinks() {
   pass "bridge strip: remove stops only the strips it recorded, then unlinks the plugin"
 }
 
+test_terminal_theme_colours() {
+  reset_case
+  a_busy_fleet
+  local dark light auto
+  dark=$(FM_TERMINAL_THEME=dark frame 110)
+  light=$(FM_TERMINAL_THEME=light frame 110)
+  auto=$(FM_TERMINAL_THEME=auto COLORFGBG='0;15' frame 110)
+  assert_contains "$dark" "$HULL_BG" "dark keeps the original hull"
+  assert_contains "$light" "${E}[48;2;242;246;251m" "light hull"
+  assert_contains "$light" "${E}[38;2;0;99;120m" "light wordmark"
+  assert_contains "$light" "${E}[38;2;139;78;0m" "light busy lamp"
+  assert_contains "$light" "${E}[38;2;21;108;65m" "light ready lamp"
+  assert_contains "$light" "${E}[38;2;179;43;35m" "light decision lamp"
+  assert_equals "$auto" "$light" "auto uses COLORFGBG off a tty"
+  assert_equals "$(printf '%s' "$dark" | plain)" "$(printf '%s' "$light" | plain)" "theme changes no layout or words"
+  assert_equals "$(FM_TERMINAL_THEME=auto COLORFGBG='' frame 110)" "$dark" "no detection keeps dark"
+  pass "bridge strip: override and auto change only colours"
+}
+
 fm_test_run \
+  test_terminal_theme_colours \
   test_a_fleet_lights_busy_decision_and_ready_lamps \
   test_the_decision_lamp_counts_in_its_own_words \
   test_only_the_owners_live_held_decisions_light_the_red_lamp \

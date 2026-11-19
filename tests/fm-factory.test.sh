@@ -590,6 +590,8 @@ test_the_plain_screen_is_the_record_as_text() {
   write_world
   local out
   out=$(python3 "$FACTORY" --plain --width 92) || fail "--plain failed"
+  assert_equals "$(FM_TERMINAL_THEME=light python3 "$FACTORY" --plain --width 92)" "$out" "light leaves plain output unchanged"
+  assert_equals "$(FM_TERMINAL_THEME=dark python3 "$FACTORY" --plain --width 92)" "$out" "dark leaves plain output unchanged"
   assert_contains "$out" " STARSHIP  │  2 busy  ·  2 decisions for you  ·  1 ready to merge  ·  1 idle" "count line"
   assert_equals "$(printf '%s\n' "$out" | grep -F ' ▸ ● ' | tr -s ' ')" \
     " ▸ ● Harvest chart Garden Journal · waiting 3 h" "the cursor starts on the first question"
@@ -2426,18 +2428,9 @@ test_workers_splits_live_copies_beside_a_page_pane() {
   pass "factory tab: workers splits a live copy of each running worker beside a page pane"
 }
 
-test_a_live_copy_shows_text_at_the_top_of_a_taller_pane() {
-  reset_case
-  write_registry
-  write_world
-  # The worker's pane holds its text on the first line and blank rows below,
-  # the way an inline agent early in its session looks to bin/fm-peek.sh.
-  # shellcheck disable=SC2016 # $(seq 30) must expand when the stub runs
-  printf '#!/usr/bin/env bash\nprintf "waiting for the captain\\n"; for i in $(seq 30); do echo; done\n' \
-    > "$BINDIR/peek$CASE"
-  chmod +x "$BINDIR/peek$CASE"
-  local screen
-  screen=$(FM_FACTORY_PEEK="$BINDIR/peek$CASE" python3 - "$FACTORY" <<'PY'
+# Draw one frame of a worker's live copy in a 12x80 pty and print what it wrote.
+follow_screen() {
+  python3 - "$FACTORY" <<'PY'
 import fcntl, os, pty, select, signal, struct, sys, termios, time
 pid, fd = pty.fork()
 if pid == 0:
@@ -2464,10 +2457,41 @@ while True:   # keep reading so its last writes drain and it can exit
 os.waitpid(pid, 0)
 sys.stdout.write(seen.decode("utf-8", "replace"))
 PY
-)
+}
+
+test_a_live_copy_shows_text_at_the_top_of_a_taller_pane() {
+  reset_case
+  write_registry
+  write_world
+  # The worker's pane holds its text on the first line and blank rows below,
+  # the way an inline agent early in its session looks to bin/fm-peek.sh.
+  # shellcheck disable=SC2016 # $(seq 30) must expand when the stub runs
+  printf '#!/usr/bin/env bash\nprintf "waiting for the captain\\n"; for i in $(seq 30); do echo; done\n' \
+    > "$BINDIR/peek$CASE"
+  chmod +x "$BINDIR/peek$CASE"
+  local screen
+  screen=$(FM_FACTORY_PEEK="$BINDIR/peek$CASE" follow_screen)
   assert_contains "$screen" "live copy" "the copy draws"
   assert_contains "$screen" "waiting for the captain" "the worker's text shows, not the blank rows below it"
   pass "factory tab: a worker's live copy shows its text even when blank rows follow it"
+}
+
+test_a_live_copy_follows_the_terminal_theme() {
+  reset_case
+  write_registry
+  write_world
+  printf '#!/usr/bin/env bash\nprintf "waiting for the captain\\n"\n' > "$BINDIR/peek$CASE"
+  chmod +x "$BINDIR/peek$CASE"
+  local dark light
+  dark=$(FM_TERMINAL_THEME=dark FM_FACTORY_PEEK="$BINDIR/peek$CASE" follow_screen)
+  light=$(FM_TERMINAL_THEME=light FM_FACTORY_PEEK="$BINDIR/peek$CASE" follow_screen)
+  assert_contains "$dark" "live copy" "the dark copy draws"
+  assert_contains "$light" "live copy" "the light copy draws"
+  assert_contains "$dark" "38;2;116;215;234m" "the dark title is the dark palette's cyan"
+  assert_contains "$light" "38;2;0;99;120m" "the light title is the light palette's cyan"
+  assert_contains "$light" "38;2;86;103;125m" "the light read-only note is the light palette's faint"
+  assert_not_contains "$light" "38;2;116;215;234m" "the light copy still paints the dark cyan"
+  pass "factory tab: a worker's live copy paints with the terminal's theme"
 }
 
 test_a_factory_tab_opens_no_live_copy_for_parked_held_or_finished_work() {
@@ -3253,7 +3277,97 @@ test_without_a_routine_mark_every_run_shows_as_before() {
   pass "factory pane: without a routine mark every run shows as before"
 }
 
+test_terminal_theme_detection() {
+  python3 - "$ROOT/bin" <<'PY' || fail "terminal theme detection"
+import os, pty, re, select, sys, termios, time
+sys.path.insert(0, sys.argv[1])
+from fm_terminal_theme import background_theme, select_theme, palette
+
+for colour, expected in [('ffff/ffff/ffff', 'light'), ('00/00/00', 'dark'),
+                         ('f/f/f', 'light'), ('000/FFF/000', 'light'),
+                         ('ff/00/00', 'light'), ('00/00/ff', 'dark'),
+                         ('75/75/75', 'dark'), ('76/76/76', 'light'),
+                         ('fffff/ff/ff', None), ('xx/ff/ff', None)]:
+    for end in (b'\x07', b'\x1b\\'):
+        assert background_theme(b'\x1b]11;rgb:' + colour.encode() + end) == expected, colour
+assert background_theme(b'\x1b]11;rgb:ff/ff/ff') is None
+for setting, fallback, expected in [
+    ('light', '15;0', 'light'), ('dark', '0;15', 'dark'),
+    ('auto', '0;15', 'light'), ('auto', '15;0', 'dark'),
+    ('auto', '0;8', 'dark'), ('auto', '0;7', 'light'),
+    ('auto', '0;0;15', 'light'), ('auto', '', 'dark'),
+    ('invalid', '0;7', 'light'), ('auto', '0;999', 'dark'),
+    ('auto', 'broken', 'dark'),
+]:
+    os.environ.update(FM_TERMINAL_THEME=setting, COLORFGBG=fallback)
+    assert select_theme(query=False) == expected, (setting, fallback)
+
+# Real tty query: fragmented replies, timeout, precedence, and restoration.
+for setting, response, expected in [
+    ('auto', b'\x1b]11;rgb:ffff/ffff/ffff\x1b\\', 'light'),
+    ('auto', b'\x1b]11;rgb:0000/0000/0000\x07', 'dark'),
+    ('auto', b'bad reply', 'light'), ('auto', b'', 'light'),
+    ('dark', b'', 'dark'), ('light', b'', 'light'),
+]:
+    pid, fd = pty.fork()
+    if pid == 0:
+        os.environ.update(FM_TERMINAL_THEME=setting, COLORFGBG='0;15')
+        before = termios.tcgetattr(0)
+        result = select_theme()
+        after = termios.tcgetattr(0)
+        # macOS sets the kernel's pending-input bit on re-entering canonical mode.
+        before[3] &= ~getattr(termios, 'PENDIN', 0)
+        after[3] &= ~getattr(termios, 'PENDIN', 0)
+        print('RESULT=%s RESTORED=%s' % (result, before == after), flush=True)
+        # macOS drops unread pty output once the child exits, so stay until
+        # the parent has read the result and answers with a line.
+        os.read(0, 4096)
+        os._exit(0)
+    output, sent, acked = b'', False, False
+    # Generous: the loop ends at the child's exit, so this only bounds a hang.
+    deadline = time.monotonic() + 15
+    try:
+        while time.monotonic() < deadline:
+            if not select.select([fd], [], [], 0.05)[0]:
+                continue
+            try:
+                chunk = os.read(fd, 4096)
+            except OSError:
+                break
+            if not chunk:
+                break
+            output += chunk
+            if b'\x1b]11;?\x1b\\' in output and not sent:
+                sent = True
+                # Split writes without sleeps: the reply still arrives in
+                # fragments, but well inside the 150 ms window on a busy host.
+                third = max(1, len(response) // 3)
+                for start in range(0, len(response), third):
+                    os.write(fd, response[start:start + third])
+            if re.search(rb'RESULT=\S+ RESTORED=\S+\r?\n', output) and not acked:
+                acked = True
+                os.write(fd, b'\n')
+        assert ('RESULT=%s RESTORED=True' % expected).encode() in output, output
+        assert sent == (setting == 'auto'), output
+    finally:
+        os.close(fd)
+        os.waitpid(pid, 0)
+
+# All light text roles have readable contrast on painted rows and white.
+def luminance(rgb):
+    c = [v / 255 for v in rgb]
+    return sum((v / 12.92 if v <= 0.04045 else ((v + 0.055) / 1.055) ** 2.4) * w
+               for v, w in zip(c, (0.2126, 0.7152, 0.0722)))
+light = palette('light')
+for role in ('ice', 'mist', 'faint', 'cyan', 'amber', 'ember', 'green', 'red'):
+    for bg in (light['hull'], light['band'], (255, 255, 255)):
+        assert (luminance(bg) + .05) / (luminance(light[role]) + .05) >= 4.5, role
+PY
+  pass "terminal theme: luminance, override, fallback, OSC query and tty restoration"
+}
+
 fm_test_run \
+  test_terminal_theme_detection \
   test_the_light_snapshot_gives_the_pane_the_record_the_whole_one_does \
   test_the_record_words_every_state \
   test_a_second_mates_ready_pr_needs_you \
@@ -3317,6 +3431,7 @@ fm_test_run \
   test_talking_never_changes_who_steers \
   test_enter_opens_the_factory_tab_with_its_live_workers \
   test_a_live_copy_shows_text_at_the_top_of_a_taller_pane \
+  test_a_live_copy_follows_the_terminal_theme \
   test_a_factory_tab_opens_no_live_copy_for_parked_held_or_finished_work \
   test_a_live_copy_closes_when_its_job_ends \
   test_a_running_factory_pane_picks_up_changed_code \

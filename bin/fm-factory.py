@@ -154,6 +154,8 @@ Environment:
   FM_HOME                     the home whose factories are shown (default: this
                               code root)
   HERDR_BIN_PATH              the Herdr binary (default: herdr on PATH)
+  FM_TERMINAL_THEME           auto (default), light or dark; see
+                              bin/fm_terminal_theme.py for detection
   FM_FACTORY_TTL              seconds a cached record is used before a refresh
                               is started (default 20)
   FM_FACTORY_MAX_AGE          seconds after which a refresh is started even
@@ -212,6 +214,8 @@ import sys
 import tempfile
 import threading
 import time
+
+from fm_terminal_theme import DARK, palette, select_theme
 import wave
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -2224,18 +2228,9 @@ def current_record(home: str, fresh: bool) -> Dict[str, Any]:
 # Drawing
 # --------------------------------------------------------------------------
 
-PALETTE = {
-    "ice": (232, 238, 247),
-    "mist": (163, 180, 203),
-    "faint": (107, 127, 156),
-    "cyan": (116, 215, 234),
-    "amber": (255, 182, 72),
-    "ember": (150, 110, 58),
-    "green": (98, 221, 154),
-    "red": (255, 122, 107),
-}
-BAND = (38, 53, 78)
-HULL = (13, 21, 36)
+PALETTE = DARK
+BAND = PALETTE["band"]
+HULL = PALETTE["hull"]
 
 
 class Row(list):
@@ -4031,7 +4026,14 @@ def reexec() -> None:
     os.execvp(argv[0], argv)
 
 
+def use_terminal_theme() -> None:
+    global PALETTE, BAND, HULL
+    PALETTE = palette(select_theme(query=sys.stdout.isatty()))
+    BAND, HULL = PALETTE["band"], PALETTE["hull"]
+
+
 def live(pane: Pane) -> None:
+    use_terminal_theme()
     import termios
     import tty
     watch = Watcher()
@@ -4217,6 +4219,7 @@ def follow(home: str, task_id: str) -> None:
 
     It closes its own pane once the record says its job ended (MIRROR_KEEP).
     """
+    use_terminal_theme()
     peek = os.environ.get("FM_FACTORY_PEEK") or os.path.join(BIN, "fm-peek.sh")
     watch = Watcher()
     job = job_in(cached(home) or {}, task_id)
