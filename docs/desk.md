@@ -18,7 +18,7 @@ Run it again and it changes nothing, so it is safe to run whenever you sit down.
   When Herdr has no plugin installed for the bridge strip or the Factory pane, as on a new home, the desk installs it first.
 - Every other tab the layout names, in order; a factory tab opens through the Factory pane's own tab opener, so pressing `enter` on that factory later finds the same tab, and the desk finds it again by that opener's record even when its label differs from the layout's.
 - One window per view, each attached to the same session with its own font size, until as many Herdr clients show the session as the layout names views.
-  The layout's `terminal` picks the app: Terminal by default, where each view also gets its Terminal profile, or Ghostty, where each view is its own Ghostty instance that quits when its window closes.
+  The layout's `terminal` picks the app: Terminal by default, where each view also gets its Terminal profile, or Starship's cream profile while the [workspace theme](fork-configuration.md#workspace-theme-configworkspace-theme) is light and Terminal has it, or Ghostty, where each view is its own Ghostty instance that quits when its window closes.
   A view never inherits the environment of a Herdr pane you run `starship` from, since a Herdr client that does refuses to start as a nested Herdr.
 - With `sidebar` set, Herdr's sidebar starts collapsed or open in every window the desk opens.
 
