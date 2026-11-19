@@ -102,9 +102,9 @@
 # tell the automation's own input from the captain's.
 set -u
 
-PEEKABOO_PIN=4.9.8
+PEEKABOO_PIN=4.9.9
 PEEKABOO_TARBALL_URL="https://github.com/openclaw/Peekaboo/releases/download/v$PEEKABOO_PIN/peekaboo-macos-arm64.tar.gz"
-PEEKABOO_TARBALL_SHA256=5b82b246cd7b257b68d15e136a8234848a8e70a5999cdf5526993fb860685bfe
+PEEKABOO_TARBALL_SHA256=8b1dc2c6970169126aa6dcfdcb1bd622fa3b28c9131baf91c9b871dab19f09a0
 
 # Test-only seam: a suite may point the installer at a local tarball and its
 # digest, but only when tests/lib.sh has armed FM_TEST_SEAM.
