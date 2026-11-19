@@ -3268,9 +3268,7 @@ def screen(view: View) -> Dict[str, Any]:
                 "queue": [words for _key, words in queue_parts(fac["queue"])] if fac["jobs"] and fac.get("queue")
                 else [],
                 "jobs": [job_of(job) for job in shown],
-                # The jobs a factory tab shows a live worker beside, as split_workers picks them.
-                "workers": [job_of(job) for job in fac["jobs"]
-                            if job["started"] and job["state"] in MIRROR_STATES][:MIRROR_CAP],
+                "workers": [job_of(job) for job in tab_workers(fac)],
                 "folded": [{"words": words, "jobs": [{"title": job["title"], "queue": job_queue_words(job)}
                                                      for job in jobs]} for words, jobs in fold_parts(folded)],
                 "rules": list(fac["rules"]), "rules_size": rules_words,
@@ -3307,7 +3305,7 @@ def kept_record(home: str) -> Dict[str, Any]:
     return record
 
 
-ACTIONS = ("answer", "keep", "change", "discuss", "talk", "settled", "steer", "read", "look")
+ACTIONS = ("answer", "keep", "change", "discuss", "talk", "settled", "steer", "read")
 
 
 def act(home: str, ask: Dict[str, Any]) -> Dict[str, Any]:
@@ -3316,7 +3314,7 @@ def act(home: str, ask: Dict[str, Any]) -> Dict[str, Any]:
     <ask> names the action and what it is about: `answer` (item, option),
     `keep` (item), `change` and `discuss` (item, text), `talk` (factory,
     text), `settled` (item), `steer` (factory, who: you or Starship), `read`
-    (item, or factory and job) and `look`. An `asking` beside an item is the
+    (item, or factory and job). An `asking` beside an item is the
     asking the screen showed; when the record's differs the call was settled
     or asked again since, and nothing is sent. The answer says whether it went
     (`ok`) and the words the pane would say (`said`). Every action is a look.
@@ -3326,8 +3324,6 @@ def act(home: str, ask: Dict[str, Any]) -> Dict[str, Any]:
         raise ValueError("unknown action: %s" % action)
     now = now_epoch()
     note_look(home, now)
-    if action == "look":
-        return {"ok": True, "said": ""}
     view = View(first_record(home))
     need = view.need(ask["item"]) if ask.get("item") else None
     if ask.get("item") and action != "read" and (need is None or ask.get("asking") not in (None, asking(need))):
@@ -4506,9 +4502,14 @@ def open_tab(home: str, fid: str) -> Tuple[bool, str]:
     return True, ""
 
 
+def tab_workers(factory: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The jobs of <factory> its tab shows a live worker beside: the started ones at work (MIRROR_STATES), up to MIRROR_CAP."""
+    return [j for j in factory["jobs"] if j["started"] and j["state"] in MIRROR_STATES][:MIRROR_CAP]
+
+
 def split_workers(home: str, factory: Dict[str, Any], page: str) -> Tuple[bool, str]:
     """Split a live copy of each worker at work (MIRROR_STATES) of <factory> beside its page pane <page>, stacked on the right."""
-    workers = [j for j in factory["jobs"] if j["started"] and j["state"] in MIRROR_STATES][:MIRROR_CAP]
+    workers = tab_workers(factory)
     above = None
     for index, job in enumerate(workers):
         target, direction = (page, "right") if index == 0 else (above, "down")

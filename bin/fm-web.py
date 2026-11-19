@@ -90,7 +90,7 @@ STRIP_TIMEOUT_SECONDS = 20
 ACT_BODY_MAX = 32 * 1024
 ACT_TEXT_MAX = 4000
 ACT_TIMEOUT_SECONDS = 120
-ACT_ACTIONS = ("answer", "keep", "change", "discuss", "talk", "settled", "steer", "read", "look")
+ACT_ACTIONS = ("answer", "keep", "change", "discuss", "talk", "settled", "steer", "read")
 ACT_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@/+-]{0,199}$")
 SESSION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{7,80}$")
 IMAGE_MAGIC = (
@@ -2374,14 +2374,7 @@ document.addEventListener('click',e=>{if(!$('settings').hidden&&!e.target.closes
 $('gear').prepend(icon('sliders'));$('settingsClose').appendChild(icon('close'));
 drawSettings();
 
-/* Opening the page, or coming back to it, is a look, as a key press in the pane is. */
-function looked(){
-  if(document.hidden)return;
-  fetch('/api/act',{method:'POST',credentials:'same-origin',
-    headers:{'Content-Type':'application/json','X-FM-CSRF':CSRF},body:JSON.stringify({action:'look'})}).catch(()=>{});
-}
-document.addEventListener('visibilitychange',looked);
-setSide('projects');poll();mirror();looked();
+setSide('projects');poll();mirror();
 })();
 """
 

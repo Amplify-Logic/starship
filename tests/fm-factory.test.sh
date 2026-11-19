@@ -1502,8 +1502,13 @@ test_an_action_from_a_second_screen_says_what_went_and_refuses_what_cannot() {
   write_registry
   write_world
   local out
+  # Opening a second screen is no look; only a button pressed on it is one.
+  printf '{"action":"look"}' | python3 "$FACTORY" act >/dev/null 2>&1
+  assert_equals "$?" "2" "a bare look from a second screen is refused"
+  assert_absent "$HOME_FIX/state/factory/last-look" "a second screen recorded a look without a button pressed"
   out=$(act '{"action":"answer","item":"garden-chart","asking":"'"$((NOW - 3 * 3600))"'","option":"2"}') || fail "act failed"
   assert_equals "$out" '{"ok": true, "said": "✓ SENT to Starship: answer 2, this season (Harvest chart)"}' "what act says"
+  assert_equals "$(head -n 1 "$HOME_FIX/state/factory/last-look" 2>/dev/null)" "$NOW" "a button pressed is a look"
   : > "$FM_FACTORY_TEST_NOTES"
 
   # Nothing is sent for a call that was asked again since the screen drew it,

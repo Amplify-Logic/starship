@@ -36,7 +36,7 @@ The page is another window onto the one primary session, not a second first mate
 
 The band and both project views are drawn from what the terminal's own regions show: `bin/fm-factory.py --screen` for the Factory pane and `bin/fm-bridge-strip.sh fields` for the strip.
 The page chooses no call, counts nothing and orders nothing itself, so it cannot disagree with the terminal.
-It reads them again about every three seconds while visible, and opening the page counts as a look for Since you last looked, as a key press in the pane does.
+It reads them again about every three seconds while visible. Opening the page is not a look for Since you last looked; pressing one of its buttons is, as a key press in the pane is.
 A worker shows the step it is on and the one line it says about what it is doing, not a copy of its terminal.
 
 Words that are already plain are the terminal's own.
@@ -129,7 +129,7 @@ Typing into the chat turns line breaks into spaces, as it does for the floater; 
 - The request log, `state/web/web.log`, records paths only, never the token, and leaves out the page's successful polls.
 - A button reaches the same guards as a send, then only `bin/fm-factory.py act`, with only the fields the pane's keys take; the server writes no note itself.
 - The server never takes the session lock, never drains wakes, and never writes backlog or fleet state.
-  Its only writes are its own `state/web/` files and the pasted images; a button's note, and the look that opening the page records, are written by `bin/fm-factory.py` as they are for the pane.
+  Its only writes are its own `state/web/` files and the pasted images; a button's note, and the look that pressing it records, are written by `bin/fm-factory.py` as they are for the pane.
 
 To revoke access, stop the server, delete `state/web/token`, and start it again; old cookies stop working.
 
