@@ -1436,6 +1436,25 @@ test_a_new_ask_about_an_open_line_joins_it() {
   pass 'a new ask joins the one open line about the same thing, and find names the lines about a key'
 }
 
+test_a_held_decision_never_joins_an_ask() {
+  local h
+  h="$TMP_ROOT/about-held"
+  new_home "$h"
+  printf 'device \\b\\d{6}\\b\n' >"$h/config/todo-about"
+  intake_at "$h" "$T_0900" observe --source C_BRIEF --ref a-1 --digest a --class obligation \
+    --title 'unit 123456 shows a fault' >/dev/null
+  todo_at "$h" "$T_0900" sync >/dev/null
+  printf -- '- [ ] fleet-a - Approve the restore on 123456 (since 2026-09-01) (hold: needs the captain) (hold-kind: captain)\n' \
+    >"$h/backlog.md"
+  todo_at "$h" "$T_1000" sync >/dev/null
+  assert_equals 2 "$(todo_at "$h" "$T_1000" list --state open | grep -c .)" 'a held decision joined the open ask'
+  : >"$h/backlog.md"
+  todo_at "$h" "$T_1100" sync >/dev/null
+  [ "$(field_of "$h" 'shows a fault' 2)" = open ] || fail 'releasing a hold closed the ask it shares a key with'
+  [ "$(field_of "$h" 'Approve the restore' 2)" = closed ] || fail 'a released hold did not close its own line'
+  pass 'a held decision never joins an ask, so releasing it leaves the ask open'
+}
+
 test_the_add_on_refuses_a_line_when_it_would_be_added() {
   local h out
   h="$TMP_ROOT/admit"
@@ -1481,6 +1500,7 @@ test_every_line_has_an_ask_date() {
 test_done_on_a_held_decision_files_a_reconcile_request
 test_the_recheck_rolls_through_every_line_in_three_working_days
 test_a_new_ask_about_an_open_line_joins_it
+test_a_held_decision_never_joins_an_ask
 test_the_add_on_refuses_a_line_when_it_would_be_added
 test_every_line_has_an_ask_date
 test_a_pass_judges_a_record_from_before_the_flag_by_its_aliases
